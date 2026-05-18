@@ -17,6 +17,10 @@ import com.cretas.aims.service.MobileService;
 import com.cretas.aims.service.PermissionService;
 import com.cretas.aims.service.inventory.PurchaseOrderPdfService;
 import com.cretas.aims.service.inventory.PurchaseService;
+import com.cretas.aims.service.workflow.WorkflowEngineService;
+import com.cretas.aims.service.workflow.impl.WorkflowEngineServiceImpl;
+import com.cretas.aims.entity.workflow.ApprovalWorkflowInstance;
+import com.cretas.aims.entity.workflow.ApprovalWorkflowInstance.InstanceStatus;
 import com.cretas.aims.utils.TokenUtils;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -37,6 +41,7 @@ import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import com.cretas.aims.annotation.RequireModule;
 
 @Slf4j
@@ -52,6 +57,22 @@ public class PurchaseController {
     private final MobileService mobileService;
     private final PermissionService permissionService;
     private final UserRepository userRepository;
+
+    /**
+     * Phase 2 issue #13 — workflow-scoped RBAC for {@link #approveOrder}.
+     *
+     * <p>当 PO 有 RUNNING workflow instance 时, approve 改用 {@code canTransition}
+     * 检查当前 active node 的 {@code approverRoles}, 而非静态 {@code procurement:read_write}.
+     * 这允许 {@code finance_manager} 角色 (无 procurement 写权限) 推进 workflow 的财务审批节点.
+     *
+     * <p>注入 impl 类而非 interface 是因为 {@code canTransition} 不在 {@link WorkflowEngineService}
+     * interface 上 (Phase 1 stable API 约束). {@code required=false} 兼容 workflow bean 缺失场景.
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private WorkflowEngineService workflowEngine;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private WorkflowEngineServiceImpl workflowEngineImpl;
 
     // ==================== 采购订单 ====================
 
@@ -210,8 +231,12 @@ public class PurchaseController {
 
     @RequireModule("purchase_order")
     @PostMapping("/orders/{orderId}/approve")
-    @Operation(summary = "审批采购订单")
-    @RequirePermission("procurement:read_write")
+    @Operation(summary = "审批采购订单",
+            description = "RBAC (issue #13): 有 RUNNING workflow instance 时按 active node "
+                    + "approverRoles 授权 (workflow-scoped); 否则回退 procurement:read_write 静态权限. "
+                    + "factory_super_admin 总是放行.")
+    // @RequirePermission removed (issue #13): RBAC moved into method body for workflow-aware check.
+    // Legacy branch (no workflow instance) still enforces procurement:read_write via permissionService.hasPermission.
     public ApiResponse<PurchaseOrder> approveOrder(
             @PathVariable @NotBlank String factoryId,
             @PathVariable @NotBlank String orderId,
@@ -219,8 +244,45 @@ public class PurchaseController {
         // TODO (Phase 2 / Sprint 4): 增加 @RequestParam(required=false) String fromNodeId
         // 让 parallel 场景下前端能精确指定本次审批操作的 active node id.
         // 目前 WorkflowEngineService.transitionNode 从 instance.currentNodeIds[0] 取 fromNode (B.4 简化).
-        Long userId = extractUserId(authorization);
-        PurchaseOrder order = purchaseService.approveOrder(factoryId, orderId, userId);
+        User currentUser = resolveCurrentUser(authorization);
+        if (currentUser == null) {
+            throw new BusinessException(401, "用户未登录或会话已过期");
+        }
+
+        // Phase 2 issue #13 — workflow-scoped RBAC:
+        // 1. 有 RUNNING workflow instance → 检查当前 active node 的 approverRoles (canTransition).
+        // 2. 无 instance → 静态 procurement:read_write (legacy path, 跟其他 PO endpoint 一致).
+        // 3. factory_super_admin 总是放行 (canTransition 内已 cover; legacy 路径走 hasPermission).
+        Optional<ApprovalWorkflowInstance> instanceOpt = (workflowEngine != null)
+                ? workflowEngine.getCurrentInstance(factoryId, "PURCHASE_ORDER", orderId)
+                : Optional.empty();
+
+        if (instanceOpt.isPresent() && instanceOpt.get().getStatus() == InstanceStatus.RUNNING) {
+            // Workflow path — 按 active node approverRoles 授权.
+            boolean allowed = workflowEngineImpl != null
+                    && workflowEngineImpl.canTransition(instanceOpt.get(), currentUser);
+            if (!allowed) {
+                String roleLabel = currentUser.getRoleEnum() == null
+                        ? "未知角色" : currentUser.getRoleEnum().getDisplayName();
+                throw new BusinessException(403,
+                        String.format("您的角色 [%s] 不在当前审批节点的授权列表中", roleLabel))
+                        .withHint("请联系工厂管理员在 Canvas → 审批工作流 中将本角色加入审批节点 approverRoles, "
+                                + "或切换到有权限的账号 (e.g. factory_super_admin) 重试");
+            }
+        } else {
+            // Legacy path — 静态权限 (跟原 @RequirePermission("procurement:read_write") 行为一致).
+            boolean allowed = permissionService.hasPermission(currentUser, "procurement:read_write");
+            if (!allowed) {
+                String roleLabel = currentUser.getRoleEnum() == null
+                        ? "未知角色" : currentUser.getRoleEnum().getDisplayName();
+                throw new BusinessException(403,
+                        String.format("您的角色 [%s] 在 [采购管理] 模块无 [读写] 权限", roleLabel))
+                        .withHint("请联系工厂管理员在 Canvas → 模块权限 矩阵为角色 ["
+                                + roleLabel + "] 开通 [采购管理] 的 [读写] 权限, 或切换到有权限的账号重试");
+            }
+        }
+
+        PurchaseOrder order = purchaseService.approveOrder(factoryId, orderId, currentUser.getId());
         return ApiResponse.success("采购订单已审批", order);
     }
 
