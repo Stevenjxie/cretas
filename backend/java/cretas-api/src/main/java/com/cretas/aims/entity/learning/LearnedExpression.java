@@ -145,7 +145,15 @@ public class LearnedExpression {
      * 768维向量 (768*4=3072 bytes)
      * 使用 GTE-base-zh 模型生成
      */
-    @Column(name = "embedding_vector", columnDefinition = "MEDIUMBLOB")
+    // columnDefinition was "MEDIUMBLOB" (MySQL-only) — PG-equivalent is BYTEA.
+    // Project is PG-only per CLAUDE.md ("已从 MySQL 迁移完成"); prod table is
+    // already BYTEA (created via db/migration-pg-converted/
+    // V2026_01_05_30__expression_learning_tables.sql). The MySQL-typed
+    // columnDefinition blocked Hibernate ddl-auto=update from CREATEing the
+    // table on a fresh PG database (CI), so runtime queries died with
+    // 'relation "ai_learned_expressions" does not exist'. ddl-auto=none envs
+    // (prod) are unaffected — Hibernate never CREATEs / ALTERs there.
+    @Column(name = "embedding_vector", columnDefinition = "BYTEA")
     private byte[] embeddingVector;
 
     /**

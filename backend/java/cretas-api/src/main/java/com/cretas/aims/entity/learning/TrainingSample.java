@@ -104,7 +104,10 @@ public class TrainingSample {
      * Embedding 向量 (可选，用于微调)
      * 768维 * 4字节 = 3072字节
      */
-    @Column(name = "embedding_blob", columnDefinition = "BLOB")
+    // columnDefinition was "BLOB" (MySQL-only) — PG-equivalent is BYTEA. Prod
+    // table already uses BYTEA via db/migration-pg-converted/V2026_01_05_30.
+    // See LearnedExpression.embeddingVector comment for full context.
+    @Column(name = "embedding_blob", columnDefinition = "BYTEA")
     private byte[] embeddingBlob;
 
     /**

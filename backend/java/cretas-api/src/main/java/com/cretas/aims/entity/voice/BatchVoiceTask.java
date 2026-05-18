@@ -166,7 +166,12 @@ public class BatchVoiceTask extends BaseEntity {
     /**
      * 结果JSON (包含每个文件的识别结果)
      */
-    @Column(name = "result_json", columnDefinition = "LONGTEXT")
+    // columnDefinition was "LONGTEXT" (MySQL-only) — PG-equivalent is TEXT
+    // (PG TEXT has no size limit, equivalent capacity). Prod table already
+    // uses TEXT via db/migration-pg-converted/
+    // V2025_12_31_8__voice_recognition_tables.sql. See
+    // LearnedExpression.embeddingVector comment for full context.
+    @Column(name = "result_json", columnDefinition = "TEXT")
     private String resultJson;
 
     /**
