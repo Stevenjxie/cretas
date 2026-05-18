@@ -1,9 +1,11 @@
 package com.cretas.aims.service.workflow.impl;
 
+import com.cretas.aims.entity.User;
 import com.cretas.aims.entity.config.ApprovalChainConfig.DecisionType;
 import com.cretas.aims.entity.config.ApprovalWorkflow;
 import com.cretas.aims.entity.config.ApprovalWorkflowEdge;
 import com.cretas.aims.entity.config.ApprovalWorkflowNode;
+import com.cretas.aims.entity.enums.FactoryUserRole;
 import com.cretas.aims.entity.workflow.ApprovalHistory;
 import com.cretas.aims.entity.workflow.ApprovalHistory.HistoryAction;
 import com.cretas.aims.entity.workflow.ApprovalWorkflowInstance;
@@ -19,7 +21,9 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -157,8 +161,21 @@ public class WorkflowEngineServiceImpl implements WorkflowEngineService {
         GraphIndex graph = indexGraph(nodes, edges);
         String firstActiveNodeId = walkToFirstHumanNode(workflow.getStartNodeId(), graph, instance);
 
-        // 6. 持久化 PG
-        ApprovalWorkflowInstance saved = instanceRepository.save(instance);
+        // 6. 持久化 PG — 捕获 partial-unique-index 冲突 (issue #11):
+        //    同一 (factory, module, business_entity) 已有 RUNNING 实例时, partial
+        //    unique index uq_aw_instances_active 会拒绝 INSERT, 抛 DataIntegrityViolationException.
+        //    Caller 应先 getCurrentInstance(...) 检查; 此处兜底防 race.
+        ApprovalWorkflowInstance saved;
+        try {
+            saved = instanceRepository.save(instance);
+        } catch (DataIntegrityViolationException e) {
+            log.warn("startWorkflow 唯一约束冲突 - factoryId={}, moduleCode={}, " +
+                            "businessEntityId={}, error={}",
+                    factoryId, moduleCode, businessEntityId, e.getMessage());
+            throw new BusinessException(409,
+                    "审批流程已存在, 不能重复启动")
+                    .withHint("该业务单据已有进行中的审批实例, 请先在审批列表中查看或取消现有流程");
+        }
 
         // 7. 写入 Redis (fail-open)
         writeRedis(saved);
@@ -246,8 +263,16 @@ public class WorkflowEngineServiceImpl implements WorkflowEngineService {
                 throw new BusinessException(400, "未知 action — " + action);
         }
 
-        // 6. 保存 PG + Redis
-        ApprovalWorkflowInstance saved = instanceRepository.save(instance);
+        // 6. 保存 PG + Redis — 捕获并发审批冲突 (issue #12)
+        ApprovalWorkflowInstance saved;
+        try {
+            saved = instanceRepository.save(instance);
+        } catch (ObjectOptimisticLockingFailureException e) {
+            log.warn("并发 transition 冲突 - instanceId={}, actor={}, action={}, error={}",
+                    instanceId, actorId, action, e.getMessage());
+            throw new BusinessException(409, "并发审批冲突, 请刷新后重试")
+                    .withHint("另一审批人已操作此实例, 请刷新页面查看最新状态后再继续");
+        }
         writeRedis(saved);
 
         return saved;
@@ -338,7 +363,16 @@ public class WorkflowEngineServiceImpl implements WorkflowEngineService {
         instance.setCompletedAt(LocalDateTime.now());
         instance.setCurrentNodeIds(new ArrayList<>());
 
-        ApprovalWorkflowInstance saved = instanceRepository.save(instance);
+        // Save PG — 捕获并发冲突 (issue #12)
+        ApprovalWorkflowInstance saved;
+        try {
+            saved = instanceRepository.save(instance);
+        } catch (ObjectOptimisticLockingFailureException e) {
+            log.warn("并发 cancel 冲突 - instanceId={}, canceller={}, error={}",
+                    instanceId, cancellerUserId, e.getMessage());
+            throw new BusinessException(409, "并发审批冲突, 请刷新后重试")
+                    .withHint("另一审批人已操作此实例, 请刷新页面查看最新状态后再继续");
+        }
         writeRedis(saved);
 
         log.info("取消 workflow 实例 - instanceId={}, canceller={}, reason={}",
@@ -737,6 +771,99 @@ public class WorkflowEngineServiceImpl implements WorkflowEngineService {
 
         log.info("workflow 实例终态 - instanceId={}, status={}, outcome={}",
                 instance.getId(), terminal, outcome);
+    }
+
+    // ==================== Workflow-scoped RBAC (Phase 2 issue #13) ====================
+
+    /**
+     * 检查用户是否有权限推进 instance 当前 active 节点 (Phase 2 hotfix for issue #13).
+     *
+     * <p>替代 module 静态 permission (e.g. {@code procurement:read_write}), 改读
+     * workflow node {@code config.approverRoles}:
+     * <ol>
+     *   <li>{@code factory_super_admin} — 总是放行 (兜底管理员推工作流)</li>
+     *   <li>instance 非 RUNNING / 无 active node — 拒绝 (无可推进节点)</li>
+     *   <li>active node type != "approval" — 拒绝 (notify/condition/parallel 不接受人工 transition)</li>
+     *   <li>user.roleCode in node.config.approverRoles → 放行</li>
+     *   <li>otherwise → 拒绝</li>
+     * </ol>
+     *
+     * <p>Phase 1 简化: 默认取 {@code currentNodeIds[0]} 作为 active node (mirror
+     * {@link #transitionNode} 行为). Parallel 场景 caller 应明确 fromNodeId
+     * (B.5 frontend 携带, Phase 2 Sprint 4 增加 endpoint 参数).
+     *
+     * <p>Fail-closed: 任何异常 (workflow config missing / node deser fail) → false.
+     *
+     * @param instance RUNNING workflow 实例
+     * @param user 当前调用方
+     * @return true 当且仅当 user 角色在 active approval 节点的 approverRoles 中, 或是 super_admin
+     * @since 2026-05-18 (Phase 2 issue #13)
+     */
+    @SuppressWarnings("unchecked")
+    public boolean canTransition(ApprovalWorkflowInstance instance, User user) {
+        if (instance == null || user == null) {
+            return false;
+        }
+        // factory_super_admin 总是放行 — 兜底, 跟其他模块 RBAC 一致.
+        FactoryUserRole roleEnum = user.getRoleEnum();
+        if (roleEnum == FactoryUserRole.factory_super_admin) {
+            return true;
+        }
+
+        // 仅 RUNNING 实例可推进.
+        if (instance.getStatus() != InstanceStatus.RUNNING) {
+            return false;
+        }
+        List<String> currentNodes = instance.getCurrentNodeIds();
+        if (currentNodes == null || currentNodes.isEmpty()) {
+            return false;
+        }
+
+        String userRole = user.getRoleCode();
+        if (userRole == null || userRole.isBlank()) {
+            return false;
+        }
+
+        try {
+            // 取 active node 的 approverRoles 配置.
+            ApprovalWorkflow workflow = workflowService
+                    .getById(instance.getFactoryId(), instance.getWorkflowId())
+                    .orElse(null);
+            if (workflow == null) {
+                log.warn("canTransition: workflow config 不存在 — instanceId={}, workflowId={}",
+                        instance.getId(), instance.getWorkflowId());
+                return false;
+            }
+            List<ApprovalWorkflowNode> nodes = workflowService
+                    .deserializeNodes(workflow.getNodesJson());
+            Map<String, ApprovalWorkflowNode> byId = new HashMap<>();
+            for (ApprovalWorkflowNode n : nodes) byId.put(n.getId(), n);
+
+            // 检查任一 active approval 节点的 approverRoles 包含 user.roleCode.
+            // 一般 currentNodeIds 只有 1 个 (mirror transitionNode 简化), 但 parallel 场景
+            // 可能有多个 — 任一节点放行即可 (caller 之后只 advance 自己那个).
+            for (String nodeId : currentNodes) {
+                ApprovalWorkflowNode node = byId.get(nodeId);
+                if (node == null || !"approval".equals(node.getType())) {
+                    continue;
+                }
+                Map<String, Object> config = node.getConfig() == null ? Map.of() : node.getConfig();
+                Object roles = config.get("approverRoles");
+                if (!(roles instanceof List<?> roleList)) continue;
+                for (Object roleRaw : roleList) {
+                    if (roleRaw == null) continue;
+                    if (userRole.equals(String.valueOf(roleRaw))) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        } catch (Exception e) {
+            // Fail-closed — config/deser 错误等同 deny.
+            log.warn("canTransition 评估失败 (fail-closed): instanceId={}, userId={}, error={}",
+                    instance.getId(), user.getId(), e.getMessage());
+            return false;
+        }
     }
 
     // ==================== Internal helpers ====================
