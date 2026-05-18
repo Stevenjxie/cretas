@@ -114,6 +114,24 @@ public class ApprovalWorkflowInstance extends BaseEntity {
     @Column(name = "completed_at")
     private LocalDateTime completedAt;
 
+    /**
+     * 乐观锁版本号 (issue #12 Phase 1 follow-up).
+     *
+     * <p>防御并发 APPROVE 重复转换: 2 个 reviewer 同时 transition → 第二个 UPDATE
+     * 命中 stale version, Hibernate 抛 {@link org.springframework.orm.ObjectOptimisticLockingFailureException}.
+     * Service 层捕获后 → {@link com.cretas.aims.exception.BusinessException} 409
+     * "并发审批冲突, 请刷新后重试".
+     *
+     * <p>Migration: {@code V20260519_02__add_version_to_approval_workflow_instances.sql}
+     * 添加 {@code version BIGINT NOT NULL DEFAULT 0} 列.
+     *
+     * @since 2026-05-19 (issue #12 fix)
+     */
+    @Version
+    @Column(name = "version", nullable = false)
+    @Builder.Default
+    private Long version = 0L;
+
     @PrePersist
     protected void onPersistInstance() {
         if (initiatedAt == null) {

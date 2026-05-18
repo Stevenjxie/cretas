@@ -22,6 +22,8 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.orm.ObjectOptimisticLockingFailureException;
 
 import java.util.*;
 
@@ -356,5 +358,100 @@ class WorkflowEngineServiceImplTest {
         BusinessException ex = assertThrows(BusinessException.class,
                 () -> engine.cancel(inst.getId(), 999L, "again"));
         assertTrue(ex.getMessage().contains("CANCELLED") || ex.getMessage().contains("已结束"));
+    }
+
+    // ==================== Phase 1 P1 follow-up — issue #11 / #12 ====================
+
+    @Test
+    @DisplayName("concurrent_approve_throws_409: 第二个 reviewer 触发 OptimisticLockingFailure → BusinessException 409")
+    void concurrent_approve_throws_409() {
+        wireInstanceLookup();
+        ApprovalWorkflow w = buildWorkflow(
+                List.of(
+                        node("start", "start", null),
+                        node("approve1", "approval", approvalCfg()),
+                        node("end_ok", "end", Map.of("outcome", "APPROVED"))),
+                List.of(
+                        edge("e1", "start", "approve1", null, 0, null),
+                        edge("e2", "approve1", "end_ok", null, 0, null)),
+                "start");
+
+        ApprovalWorkflowInstance inst = engine.startWorkflow(
+                FACTORY_ID, "PURCHASE_ORDER", "PO-CONCURRENT", Map.of(), INITIATOR_ID);
+        assertEquals(InstanceStatus.RUNNING, inst.getStatus());
+
+        // Simulate second concurrent UPDATE — first save succeeds (wireInstanceLookup),
+        // second save throws OptimisticLockingFailure (Hibernate would do this on
+        // stale @Version mismatch). Stub the *next* save call to blow up.
+        reset(instanceRepository);
+        when(instanceRepository.findById(anyString())).thenReturn(Optional.of(inst));
+        when(instanceRepository.save(any(ApprovalWorkflowInstance.class)))
+                .thenThrow(new ObjectOptimisticLockingFailureException(
+                        ApprovalWorkflowInstance.class, inst.getId()));
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> engine.transitionNode(inst.getId(), APPROVER_ID, "factory_admin",
+                        HistoryAction.APPROVE, "concurrent approve"));
+        assertEquals(409, ex.getCode());
+        assertTrue(ex.getMessage().contains("并发审批冲突") || ex.getMessage().contains("刷新"),
+                "expect 409 message, got: " + ex.getMessage());
+    }
+
+    @Test
+    @DisplayName("concurrent_cancel_throws_409: 并发 cancel 触发 OptimisticLockingFailure → BusinessException 409")
+    void concurrent_cancel_throws_409() {
+        wireInstanceLookup();
+        ApprovalWorkflow w = buildWorkflow(
+                List.of(
+                        node("start", "start", null),
+                        node("approve1", "approval", approvalCfg()),
+                        node("end_ok", "end", Map.of("outcome", "APPROVED"))),
+                List.of(
+                        edge("e1", "start", "approve1", null, 0, null),
+                        edge("e2", "approve1", "end_ok", null, 0, null)),
+                "start");
+
+        ApprovalWorkflowInstance inst = engine.startWorkflow(
+                FACTORY_ID, "PURCHASE_ORDER", "PO-CONCURRENT-CANCEL", Map.of(), INITIATOR_ID);
+
+        // Reset + stub second save to throw OptimisticLockingFailure
+        reset(instanceRepository);
+        when(instanceRepository.findById(anyString())).thenReturn(Optional.of(inst));
+        when(instanceRepository.save(any(ApprovalWorkflowInstance.class)))
+                .thenThrow(new ObjectOptimisticLockingFailureException(
+                        ApprovalWorkflowInstance.class, inst.getId()));
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> engine.cancel(inst.getId(), 999L, "concurrent cancel"));
+        assertEquals(409, ex.getCode());
+        assertTrue(ex.getMessage().contains("并发审批冲突") || ex.getMessage().contains("刷新"),
+                "expect 409 message, got: " + ex.getMessage());
+    }
+
+    @Test
+    @DisplayName("startWorkflow_unique_violation_throws_409: partial unique index 冲突 → BusinessException 409")
+    void startWorkflow_unique_violation_throws_409() {
+        // 模拟 partial-unique-index uq_aw_instances_active 命中:
+        // INSERT 时 Postgres 23505 violation → Spring 转 DataIntegrityViolationException.
+        ApprovalWorkflow w = buildWorkflow(
+                List.of(
+                        node("start", "start", null),
+                        node("approve1", "approval", approvalCfg()),
+                        node("end_ok", "end", Map.of("outcome", "APPROVED"))),
+                List.of(
+                        edge("e1", "start", "approve1", null, 0, null),
+                        edge("e2", "approve1", "end_ok", null, 0, null)),
+                "start");
+
+        when(instanceRepository.save(any(ApprovalWorkflowInstance.class)))
+                .thenThrow(new DataIntegrityViolationException(
+                        "duplicate key value violates unique constraint \"uq_aw_instances_active\""));
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> engine.startWorkflow(FACTORY_ID, "PURCHASE_ORDER", "PO-DUP",
+                        Map.of(), INITIATOR_ID));
+        assertEquals(409, ex.getCode());
+        assertTrue(ex.getMessage().contains("审批流程已存在") || ex.getMessage().contains("不能重复启动"),
+                "expect 409 message, got: " + ex.getMessage());
     }
 }

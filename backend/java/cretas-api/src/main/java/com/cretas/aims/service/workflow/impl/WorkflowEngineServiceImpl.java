@@ -19,7 +19,9 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -157,8 +159,21 @@ public class WorkflowEngineServiceImpl implements WorkflowEngineService {
         GraphIndex graph = indexGraph(nodes, edges);
         String firstActiveNodeId = walkToFirstHumanNode(workflow.getStartNodeId(), graph, instance);
 
-        // 6. 持久化 PG
-        ApprovalWorkflowInstance saved = instanceRepository.save(instance);
+        // 6. 持久化 PG — 捕获 partial-unique-index 冲突 (issue #11):
+        //    同一 (factory, module, business_entity) 已有 RUNNING 实例时, partial
+        //    unique index uq_aw_instances_active 会拒绝 INSERT, 抛 DataIntegrityViolationException.
+        //    Caller 应先 getCurrentInstance(...) 检查; 此处兜底防 race.
+        ApprovalWorkflowInstance saved;
+        try {
+            saved = instanceRepository.save(instance);
+        } catch (DataIntegrityViolationException e) {
+            log.warn("startWorkflow 唯一约束冲突 - factoryId={}, moduleCode={}, " +
+                            "businessEntityId={}, error={}",
+                    factoryId, moduleCode, businessEntityId, e.getMessage());
+            throw new BusinessException(409,
+                    "审批流程已存在, 不能重复启动")
+                    .withHint("该业务单据已有进行中的审批实例, 请先在审批列表中查看或取消现有流程");
+        }
 
         // 7. 写入 Redis (fail-open)
         writeRedis(saved);
@@ -246,8 +261,16 @@ public class WorkflowEngineServiceImpl implements WorkflowEngineService {
                 throw new BusinessException(400, "未知 action — " + action);
         }
 
-        // 6. 保存 PG + Redis
-        ApprovalWorkflowInstance saved = instanceRepository.save(instance);
+        // 6. 保存 PG + Redis — 捕获并发审批冲突 (issue #12)
+        ApprovalWorkflowInstance saved;
+        try {
+            saved = instanceRepository.save(instance);
+        } catch (ObjectOptimisticLockingFailureException e) {
+            log.warn("并发 transition 冲突 - instanceId={}, actor={}, action={}, error={}",
+                    instanceId, actorId, action, e.getMessage());
+            throw new BusinessException(409, "并发审批冲突, 请刷新后重试")
+                    .withHint("另一审批人已操作此实例, 请刷新页面查看最新状态后再继续");
+        }
         writeRedis(saved);
 
         return saved;
@@ -338,7 +361,16 @@ public class WorkflowEngineServiceImpl implements WorkflowEngineService {
         instance.setCompletedAt(LocalDateTime.now());
         instance.setCurrentNodeIds(new ArrayList<>());
 
-        ApprovalWorkflowInstance saved = instanceRepository.save(instance);
+        // Save PG — 捕获并发冲突 (issue #12)
+        ApprovalWorkflowInstance saved;
+        try {
+            saved = instanceRepository.save(instance);
+        } catch (ObjectOptimisticLockingFailureException e) {
+            log.warn("并发 cancel 冲突 - instanceId={}, canceller={}, error={}",
+                    instanceId, cancellerUserId, e.getMessage());
+            throw new BusinessException(409, "并发审批冲突, 请刷新后重试")
+                    .withHint("另一审批人已操作此实例, 请刷新页面查看最新状态后再继续");
+        }
         writeRedis(saved);
 
         log.info("取消 workflow 实例 - instanceId={}, canceller={}, reason={}",
