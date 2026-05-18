@@ -88,7 +88,7 @@ if ! git diff --quiet 2>/dev/null || ! git diff --cached --quiet 2>/dev/null; th
 fi
 
 # ==================== 配置 ====================
-REPO="j4xie/my-prototype-logistics"
+REPO="Stevenjxie/cretas"
 JAR_NAME="cretas-backend-system-1.0.0.jar"
 SERVER="root@47.100.235.168"
 GATEWAY="root@139.196.165.140"         # Nginx 网关 (Blue-Green upstream 切换)

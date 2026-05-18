@@ -7,7 +7,7 @@
 set -e
 
 # 配置
-REPO="j4xie/my-prototype-logistics"
+REPO="Stevenjxie/cretas"
 JAR_NAME="cretas-backend-system-1.0.0.jar"
 DEPLOY_DIR="/www/wwwroot/cretas"
 VERSION="${1:-latest}"

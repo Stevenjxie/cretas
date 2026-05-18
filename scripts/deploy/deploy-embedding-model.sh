@@ -17,7 +17,7 @@ SERVER="root@47.100.235.168"
 REMOTE_MODEL_DIR="/www/wwwroot/cretas/models"
 MODEL_NAME="gte-base-zh-finetuned-contrastive"
 LOCAL_MODEL_DIR="scripts/finetune/models/$MODEL_NAME"
-REPO="j4xie/my-prototype-logistics"
+REPO="Stevenjxie/cretas"
 VERSION="model-$(date +%Y%m%d_%H%M%S)"
 
 # 临时文件用于追踪哪个方法先完成
