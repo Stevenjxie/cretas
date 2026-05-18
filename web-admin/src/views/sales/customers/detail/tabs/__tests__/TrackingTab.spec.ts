@@ -8,12 +8,25 @@ import { ref } from 'vue';
 import TrackingTab from '../TrackingTab.vue';
 
 const listMock = vi.fn();
-vi.mock('@/api/customerTracking', () => ({
-  listTrackingRecords: (...a: any[]) => listMock(...a),
-  createTrackingRecord: vi.fn(),
-  updateTrackingRecord: vi.fn(),
-  deleteTrackingRecord: vi.fn(),
-}));
+vi.mock('@/api/customerTracking', () => {
+  // Define inside factory because vi.mock is hoisted to top of file
+  const types = [
+    { value: 'PHONE', label: '电话沟通' },
+    { value: 'WECHAT', label: '微信沟通' },
+    { value: 'EMAIL', label: '邮件沟通' },
+    { value: 'VISIT', label: '上门拜访' },
+    { value: 'VIDEO', label: '视频会议' },
+    { value: 'OTHER', label: '其他' },
+  ];
+  return {
+    listTrackingRecords: (...a: any[]) => listMock(...a),
+    createTrackingRecord: vi.fn(),
+    updateTrackingRecord: vi.fn(),
+    deleteTrackingRecord: vi.fn(),
+    TRACKING_TYPES: types,
+    trackingTypeLabel: (t: string) => types.find((x) => x.value === t)?.label || t,
+  };
+});
 
 vi.mock('@/store/modules/auth', () => ({
   useAuthStore: () => ({ factoryId: ref('F999') }),
@@ -53,6 +66,13 @@ const globalStubs = {
     template: '<input :value="modelValue" @input="$emit(\'update:modelValue\', $event.target.value)" />',
     emits: ['update:modelValue'],
   },
+  'el-select': {
+    props: ['modelValue', 'placeholder'],
+    template: '<select :value="modelValue" @change="$emit(\'update:modelValue\', $event.target.value)"><slot /></select>',
+    emits: ['update:modelValue'],
+  },
+  'el-option': { props: ['value', 'label'], template: '<option :value="value">{{ label }}</option>' },
+  'el-tag': { props: ['size', 'type'], template: '<span class="el-tag"><slot /></span>' },
   'el-result': { template: '<div><slot name="extra" /></div>' },
 };
 

@@ -126,8 +126,17 @@ public class CustomerTrackingRecordController {
         r.setContactPhone(body.getContactPhone());
         r.setAddress(body.getAddress());
         r.setRemark(body.getRemark());
+        // R3 trackingType: validate enum membership if provided (frontend dropdown enforces, backend defense)
+        if (body.getTrackingType() != null && !body.getTrackingType().isBlank()) {
+            String tt = body.getTrackingType();
+            if (!java.util.Set.of("PHONE", "WECHAT", "EMAIL", "VISIT", "VIDEO", "OTHER").contains(tt)) {
+                throw new BusinessException(400, "trackingType 必须是 PHONE/WECHAT/EMAIL/VISIT/VIDEO/OTHER 之一");
+            }
+            r.setTrackingType(tt);
+        }
         repository.save(r);
-        log.info("Created tracking record {} for customer {} (factory={})", r.getId(), body.getCustomerId(), factoryId);
+        log.info("Created tracking record {} for customer {} (factory={}) type={}",
+                r.getId(), body.getCustomerId(), factoryId, body.getTrackingType());
         return ResponseEntity.ok(Map.of("success", true, "data", r));
     }
 
@@ -158,6 +167,13 @@ public class CustomerTrackingRecordController {
         if (body.getContactPhone() != null) existing.setContactPhone(body.getContactPhone());
         if (body.getAddress() != null) existing.setAddress(body.getAddress());
         if (body.getRemark() != null) existing.setRemark(body.getRemark());
+        if (body.getTrackingType() != null) {
+            String tt = body.getTrackingType();
+            if (!java.util.Set.of("PHONE", "WECHAT", "EMAIL", "VISIT", "VIDEO", "OTHER").contains(tt)) {
+                throw new BusinessException(400, "trackingType 必须是 PHONE/WECHAT/EMAIL/VISIT/VIDEO/OTHER 之一");
+            }
+            existing.setTrackingType(tt);
+        }
 
         repository.save(existing);
         return ResponseEntity.ok(Map.of("success", true, "data", existing));
@@ -192,6 +208,8 @@ public class CustomerTrackingRecordController {
         private String contactPhone;
         private String address;
         private String remark;
+        /** R3 dropdown enum: PHONE / WECHAT / EMAIL / VISIT / VIDEO / OTHER */
+        private String trackingType;
     }
 
     /** Sprint 4 W1 S-CUSTOMER-TAB-1 PUT body — all fields optional (partial update). */
@@ -202,5 +220,7 @@ public class CustomerTrackingRecordController {
         private String contactPhone;
         private String address;
         private String remark;
+        /** R3 dropdown enum: PHONE / WECHAT / EMAIL / VISIT / VIDEO / OTHER */
+        private String trackingType;
     }
 }

@@ -33,6 +33,14 @@
         <el-table-column label="时间" prop="recordTime" width="170">
           <template #default="{ row }">{{ formatDate(row.recordTime) }}</template>
         </el-table-column>
+        <el-table-column label="类型" prop="trackingType" width="100">
+          <template #default="{ row }">
+            <el-tag v-if="row.trackingType" size="small" :type="typeTagType(row.trackingType)">
+              {{ trackingTypeLabel(row.trackingType) }}
+            </el-tag>
+            <span v-else>—</span>
+          </template>
+        </el-table-column>
         <el-table-column label="跟踪人" prop="recorderName" width="120" />
         <el-table-column label="内容" prop="content" min-width="240" show-overflow-tooltip />
         <el-table-column label="联系人" prop="contactPerson" width="100" />
@@ -66,6 +74,17 @@
       destroy-on-close
     >
       <el-form ref="formRef" :model="form" :rules="rules" label-width="90px">
+        <!-- 防呆 R3 dropdown — 6 options enforced, no free text -->
+        <el-form-item label="跟踪类型" prop="trackingType">
+          <el-select v-model="form.trackingType" placeholder="请选择跟踪类型" style="width: 100%">
+            <el-option
+              v-for="t in TRACKING_TYPES"
+              :key="t.value"
+              :value="t.value"
+              :label="t.label"
+            />
+          </el-select>
+        </el-form-item>
         <el-form-item label="跟踪内容" prop="content">
           <el-input v-model="form.content" type="textarea" :rows="4" placeholder="请输入跟踪记录内容" />
         </el-form-item>
@@ -104,9 +123,12 @@ import {
   createTrackingRecord,
   updateTrackingRecord,
   deleteTrackingRecord,
+  TRACKING_TYPES,
+  trackingTypeLabel,
   type CustomerTrackingRecord,
   type CreateTrackingRecordRequest,
   type UpdateTrackingRecordRequest,
+  type TrackingType,
 } from '@/api/customerTracking';
 import type { Customer } from '@/api/customer';
 
@@ -137,10 +159,12 @@ const form = ref<CreateTrackingRecordRequest>({
   contactPhone: '',
   address: '',
   remark: '',
+  trackingType: 'PHONE',
 });
 
 const rules: FormRules = {
   content: [{ required: true, message: '请输入跟踪内容', trigger: 'blur' }],
+  trackingType: [{ required: true, message: '请选择跟踪类型', trigger: 'change' }],
 };
 
 const dialogTitle = computed(() => {
@@ -154,6 +178,17 @@ const dialogTitle = computed(() => {
 function formatDate(s?: string): string {
   if (!s) return '—';
   return new Date(s).toLocaleString('zh-CN', { hour12: false });
+}
+
+function typeTagType(t?: string): 'success' | 'warning' | 'info' | 'primary' | 'danger' {
+  switch (t) {
+    case 'PHONE': return 'primary';
+    case 'WECHAT': return 'success';
+    case 'EMAIL': return 'info';
+    case 'VISIT': return 'warning';
+    case 'VIDEO': return 'primary';
+    default: return 'info';
+  }
 }
 
 async function fetchList() {
@@ -202,6 +237,7 @@ function openCreateDialog() {
     contactPhone: '',
     address: '',
     remark: '',
+    trackingType: 'PHONE',
   };
   dialogVisible.value = true;
 }
@@ -215,6 +251,7 @@ function openEditDialog(row: CustomerTrackingRecord) {
     contactPhone: row.contactPhone || '',
     address: row.address || '',
     remark: row.remark || '',
+    trackingType: row.trackingType || 'PHONE',
   };
   dialogVisible.value = true;
 }
