@@ -51,7 +51,7 @@
 CREATE TABLE IF NOT EXISTS ai_intent_configs (
     id              VARCHAR(50)  PRIMARY KEY,
     factory_id      VARCHAR(50),
-    intent_code     VARCHAR(100),
+    intent_code     VARCHAR(100) NOT NULL,
     intent_name     VARCHAR(200),
     intent_category VARCHAR(50),
     tool_name       VARCHAR(100),
@@ -60,7 +60,11 @@ CREATE TABLE IF NOT EXISTS ai_intent_configs (
     sensitivity_level VARCHAR(20),
     created_at      TIMESTAMP    DEFAULT NOW(),
     updated_at      TIMESTAMP    DEFAULT NOW(),
-    deleted_at      TIMESTAMP
+    deleted_at      TIMESTAMP,
+    -- Required for ON CONFLICT (intent_code) in V20260513_02 / V20260516_02 /
+    -- V20260516_04 / V20260606_06 etc. Matches @Table uniqueConstraints =
+    -- {@UniqueConstraint(columnNames = {"intent_code"})} on AIIntentConfig.
+    CONSTRAINT uk_ai_intent_configs_intent_code UNIQUE (intent_code)
 );
 
 CREATE TABLE IF NOT EXISTS ai_learned_expressions (
@@ -200,7 +204,10 @@ CREATE TABLE IF NOT EXISTS customers (
     version         BIGINT       NOT NULL DEFAULT 0,
     created_at      TIMESTAMP    DEFAULT NOW(),
     updated_at      TIMESTAMP    DEFAULT NOW(),
-    deleted_at      TIMESTAMP
+    deleted_at      TIMESTAMP,
+    -- Matches @Table uniqueConstraints on Customer. Also enables potential
+    -- ON CONFLICT (factory_id, code) DO NOTHING patterns.
+    CONSTRAINT uk_customers_factory_code UNIQUE (factory_id, code)
 );
 
 -- -----------------------------------------------------------------------------
@@ -241,7 +248,9 @@ CREATE TABLE IF NOT EXISTS suppliers (
     version         BIGINT       NOT NULL DEFAULT 0,
     created_at      TIMESTAMP    DEFAULT NOW(),
     updated_at      TIMESTAMP    DEFAULT NOW(),
-    deleted_at      TIMESTAMP
+    deleted_at      TIMESTAMP,
+    -- Matches @Table uniqueConstraints on Supplier.
+    CONSTRAINT uk_suppliers_factory_code UNIQUE (factory_id, code)
 );
 
 -- -----------------------------------------------------------------------------
@@ -266,7 +275,10 @@ CREATE TABLE IF NOT EXISTS raw_material_types (
     created_by      BIGINT,
     created_at      TIMESTAMP    DEFAULT NOW(),
     updated_at      TIMESTAMP    DEFAULT NOW(),
-    deleted_at      TIMESTAMP
+    deleted_at      TIMESTAMP,
+    -- Required for ON CONFLICT (factory_id, code) in V20260603_01
+    -- (F006 seed) + matches @Table uniqueConstraints on RawMaterialType.
+    CONSTRAINT uk_raw_material_types_factory_code UNIQUE (factory_id, code)
 );
 
 -- -----------------------------------------------------------------------------
@@ -521,10 +533,15 @@ CREATE TABLE IF NOT EXISTS purchase_orders (
     created_by      BIGINT,
     approved_by     BIGINT,
     approved_at     TIMESTAMP,
-    remark          TEXT,
+    remark           TEXT,
+    -- @Version on PurchaseOrder entity; V20260603_01 seed INSERT references it.
+    version         BIGINT       NOT NULL DEFAULT 0,
     created_at      TIMESTAMP    DEFAULT NOW(),
     updated_at      TIMESTAMP    DEFAULT NOW(),
-    deleted_at      TIMESTAMP
+    deleted_at      TIMESTAMP,
+    -- Required for ON CONFLICT (factory_id, order_number) in V20260603_01
+    -- (F006 seed). Mirror of the natural business key.
+    CONSTRAINT uk_purchase_orders_factory_order UNIQUE (factory_id, order_number)
 );
 
 CREATE TABLE IF NOT EXISTS sales_orders (
