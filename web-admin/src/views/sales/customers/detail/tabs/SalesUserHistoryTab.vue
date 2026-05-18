@@ -215,7 +215,9 @@ const rules: FormRules = {
 };
 
 const currentName = computed(() => {
-  // Best-effort display — backend may not resolve user name yet; show id-based fallback.
+  // Sprint 4 W1: prefer backend-resolved Customer.assignedSalesUserName, fall back to ID display.
+  const fromBackend = props.customer?.assignedSalesUserName;
+  if (fromBackend) return fromBackend;
   const id = props.customer?.assignedSalesUserId;
   return id ? `User #${id}` : '';
 });

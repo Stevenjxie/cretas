@@ -53,7 +53,7 @@
         </div>
         <div>
           <span class="label">当前业务员:</span>
-          <strong>{{ assignedSalesUserName || (customer.assignedSalesUserId ? `User ${customer.assignedSalesUserId}` : '未分配') }}</strong>
+          <strong>{{ resolvedSalesUserName }}</strong>
         </div>
       </div>
     </div>
@@ -62,19 +62,31 @@
 </template>
 
 <script setup lang="ts">
+import { computed } from 'vue';
 import { User, Phone, Message } from '@element-plus/icons-vue';
 import { usePermissionStore } from '@/store/modules/permission';
 import { storeToRefs } from 'pinia';
 import type { Customer } from '@/api/customer';
 
-defineProps<{
+const props = defineProps<{
   customer: Customer | null;
   loading?: boolean;
+  /** Optional override — if backend customer.assignedSalesUserName is already populated, prop unused. */
   assignedSalesUserName?: string;
 }>();
 
 const permissionStore = usePermissionStore();
 const { canViewPrice } = storeToRefs(permissionStore);
+
+// Sprint 4 W1 S-CUSTOMER-TAB-1: prefer backend-resolved name from Customer.assignedSalesUserName,
+// fall back to legacy prop, then "User #{id}", then "未分配".
+const resolvedSalesUserName = computed(() => {
+  const fromBackend = props.customer?.assignedSalesUserName;
+  if (fromBackend) return fromBackend;
+  if (props.assignedSalesUserName) return props.assignedSalesUserName;
+  const id = props.customer?.assignedSalesUserId;
+  return id ? `User #${id}` : '未分配';
+});
 
 function formatMoney(v: number | null | undefined): string {
   if (v == null) return '—';

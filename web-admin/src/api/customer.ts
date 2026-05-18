@@ -38,6 +38,8 @@ export interface Customer {
   // Sprint 4 W1 (tab 20)
   assignedSalesUserId?: number | null;
   assignedSalesUserAssignedAt?: string | null;
+  /** Backend-resolved display name (full_name or fallback to username). */
+  assignedSalesUserName?: string | null;
   // audit
   createdAt?: string;
   updatedAt?: string;
