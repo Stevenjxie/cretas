@@ -20,6 +20,4 @@
 ALTER TABLE approval_workflow_instances
     ADD COLUMN IF NOT EXISTS version BIGINT NOT NULL DEFAULT 0;
 
-COMMENT ON COLUMN approval_workflow_instances.version IS
-    'JPA @Version 乐观锁 — 并发 APPROVE/CANCEL 冲突时抛 ObjectOptimisticLockingFailureException, '
-    || 'Service 转 BusinessException 409. issue #12 修复.';
+COMMENT ON COLUMN approval_workflow_instances.version IS 'JPA @Version 乐观锁 — 并发 APPROVE/CANCEL 冲突时抛 ObjectOptimisticLockingFailureException, Service 转 BusinessException 409. issue #12 修复.';
