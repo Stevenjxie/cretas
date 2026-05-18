@@ -6,7 +6,7 @@ set -e
 # 配置
 DEPLOY_DIR="/www/wwwroot/cretas"
 CODE_DIR="/www/wwwroot/cretas/code"
-REPO_URL="https://github.com/j4xie/my-prototype-logistics.git"
+REPO_URL="https://github.com/Stevenjxie/cretas.git"
 BRANCH="${1:-steven}"  # 从参数获取分支，默认 steven
 JAR_NAME="aims-0.0.1-SNAPSHOT.jar"
 

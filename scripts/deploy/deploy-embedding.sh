@@ -9,7 +9,7 @@
 set -e
 
 # 配置
-REPO="j4xie/my-prototype-logistics"
+REPO="Stevenjxie/cretas"
 JAR_NAME="embedding-service-1.0.0.jar"
 VERSION="${1:-embedding-v$(date +%Y%m%d_%H%M%S)}"
 SERVER="root@47.100.235.168"
