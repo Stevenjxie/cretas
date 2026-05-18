@@ -388,6 +388,16 @@ public class PurchaseServiceImpl implements PurchaseService {
             return legacyApproveOrder(factoryId, orderId, approvedBy, order);
         }
 
+        // Phase 1 hotfix 2026-05-18 — pre-check active workflow 存在, 避免 startWorkflow
+        // 的 orElseThrow 路径触发 Spring "Transaction marked rollback-only" 陷阱.
+        // 之前 try/catch IllegalArgumentException 形式即使 catch 也会让外层事务回滚 →
+        // commit 时 UnexpectedRollbackException, F001 等无 workflow 工厂 PO 审批整体失败.
+        if (!workflowEngine.hasActiveWorkflow(factoryId, "PURCHASE_ORDER")) {
+            log.info("No active PURCHASE_ORDER_APPROVAL workflow for factory={}; using legacy path",
+                    factoryId);
+            return legacyApproveOrder(factoryId, orderId, approvedBy, order);
+        }
+
         // Build context for workflow evaluation (SpEL 在 edges 上读 #context.xxx)
         Map<String, Object> context = new HashMap<>();
         context.put("amount", order.getTotalAmount() != null ? order.getTotalAmount() : BigDecimal.ZERO);
@@ -408,15 +418,11 @@ public class PurchaseServiceImpl implements PurchaseService {
                     existing.get().getId(), approvedBy, "factory_super_admin",
                     HistoryAction.APPROVE, "采购订单审批");
         } else {
-            // Start new workflow — factory 无 active workflow 时 fallback legacy
-            try {
-                instance = workflowEngine.startWorkflow(
-                        factoryId, "PURCHASE_ORDER", order.getId(), context, approvedBy);
-            } catch (IllegalArgumentException noWorkflowConfigured) {
-                log.info("No active PURCHASE_ORDER_APPROVAL workflow for factory={}; falling back to legacy ({})",
-                        factoryId, noWorkflowConfigured.getMessage());
-                return legacyApproveOrder(factoryId, orderId, approvedBy, order);
-            }
+            // Start new workflow — pre-check 已确认 hasActiveWorkflow=true, 此处不应抛.
+            // 若仍 IllegalArgumentException (race condition: workflow 刚被 disable), 让异常
+            // 自然往上抛 → controller 返 4xx → 用户重试 (此时 hasActiveWorkflow 返 false → legacy).
+            instance = workflowEngine.startWorkflow(
+                    factoryId, "PURCHASE_ORDER", order.getId(), context, approvedBy);
         }
 
         // Translate workflow instance status to PO status

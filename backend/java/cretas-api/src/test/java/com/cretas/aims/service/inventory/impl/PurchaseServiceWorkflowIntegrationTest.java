@@ -152,12 +152,9 @@ class PurchaseServiceWorkflowIntegrationTest {
     void approve_without_workflow_uses_legacy_fallback() {
         PurchaseOrder po = buildPo(new BigDecimal("5000"));
         when(purchaseOrderRepository.findById(po.getId())).thenReturn(Optional.of(po));
-        // workflowEngine.getCurrentInstance returns empty (no existing)
-        when(workflowEngine.getCurrentInstance(FACTORY_ID, "PURCHASE_ORDER", po.getId()))
-                .thenReturn(Optional.empty());
-        // startWorkflow throws IllegalArgumentException → triggers legacy fallback
-        when(workflowEngine.startWorkflow(eq(FACTORY_ID), eq("PURCHASE_ORDER"), eq(po.getId()), anyMap(), eq(APPROVER_ID)))
-                .thenThrow(new IllegalArgumentException("无 active 审批工作流"));
+        // Phase 1 hotfix 2026-05-18: pre-check via hasActiveWorkflow 替代 startWorkflow throw 路径
+        // (旧 throw 路径会触发 Spring rollback-only 陷阱).
+        when(workflowEngine.hasActiveWorkflow(FACTORY_ID, "PURCHASE_ORDER")).thenReturn(false);
 
         PurchaseOrder result = service.approveOrder(FACTORY_ID, po.getId(), APPROVER_ID);
 
@@ -177,6 +174,7 @@ class PurchaseServiceWorkflowIntegrationTest {
         PurchaseOrder po = buildPo(new BigDecimal("50000"));
         when(purchaseOrderRepository.findById(po.getId())).thenReturn(Optional.of(po));
 
+        when(workflowEngine.hasActiveWorkflow(FACTORY_ID, "PURCHASE_ORDER")).thenReturn(true);
         when(workflowEngine.getCurrentInstance(FACTORY_ID, "PURCHASE_ORDER", po.getId()))
                 .thenReturn(Optional.empty());
 
@@ -226,6 +224,7 @@ class PurchaseServiceWorkflowIntegrationTest {
         PurchaseOrder po = buildPo(new BigDecimal("2000")); // 远低于 30000 阈值
         when(purchaseOrderRepository.findById(po.getId())).thenReturn(Optional.of(po));
 
+        when(workflowEngine.hasActiveWorkflow(FACTORY_ID, "PURCHASE_ORDER")).thenReturn(true);
         when(workflowEngine.getCurrentInstance(FACTORY_ID, "PURCHASE_ORDER", po.getId()))
                 .thenReturn(Optional.empty());
 
@@ -253,6 +252,8 @@ class PurchaseServiceWorkflowIntegrationTest {
         PurchaseOrder po = buildPo(new BigDecimal("80000"));
         po.setStatus(PurchaseOrderStatus.WORKFLOW_RUNNING); // 已经在审批中
         when(purchaseOrderRepository.findById(po.getId())).thenReturn(Optional.of(po));
+
+        when(workflowEngine.hasActiveWorkflow(FACTORY_ID, "PURCHASE_ORDER")).thenReturn(true);
 
         ApprovalWorkflowInstance existing = buildInstance(
                 "inst-exists", InstanceStatus.RUNNING, List.of("approval_finance"));

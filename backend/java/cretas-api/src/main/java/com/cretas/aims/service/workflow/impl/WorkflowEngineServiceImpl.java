@@ -255,6 +255,23 @@ public class WorkflowEngineServiceImpl implements WorkflowEngineService {
 
     @Override
     @Transactional(readOnly = true)
+    public boolean hasActiveWorkflow(String factoryId, String moduleCode) {
+        // Phase 1 hotfix 2026-05-18: 让 caller (PurchaseServiceImpl 等) 预检 active workflow
+        // 存在性, 避免触发 startWorkflow 的 orElseThrow 路径. Spring 在 @Transactional 方法内
+        // 抛 unchecked exception 时即使 caller catch 也会 mark outer 事务 rollback-only,
+        // 导致 PG commit 时 UnexpectedRollbackException. 预检模式避开此陷阱.
+        try {
+            DecisionType dt = lookupDecisionType(moduleCode);
+            return workflowService.getActiveByDecisionType(factoryId, dt).isPresent();
+        } catch (IllegalArgumentException unmappedModuleCode) {
+            // moduleCode 未在 MODULE_TO_DECISION registry 里 — 视为无 workflow, caller 走 legacy.
+            log.debug("hasActiveWorkflow: moduleCode={} 未映射, 视为无 workflow", moduleCode);
+            return false;
+        }
+    }
+
+    @Override
+    @Transactional(readOnly = true)
     public Optional<ApprovalWorkflowInstance> getCurrentInstance(String factoryId,
                                                                  String moduleCode,
                                                                  String businessEntityId) {
