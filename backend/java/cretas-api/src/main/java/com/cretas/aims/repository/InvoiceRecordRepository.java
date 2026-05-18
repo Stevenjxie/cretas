@@ -17,6 +17,10 @@ public interface InvoiceRecordRepository extends JpaRepository<InvoiceRecord, St
 
     Page<InvoiceRecord> findByFactoryIdAndDeletedAtIsNull(String factoryId, Pageable pageable);
 
+    /** Sprint 4 W1 S-CUSTOMER-TAB-1 (tab 15): paginated by customer, newest first, deleted excluded. */
+    Page<InvoiceRecord> findByFactoryIdAndCustomerIdAndDeletedAtIsNullOrderByCreatedAtDesc(
+            String factoryId, String customerId, Pageable pageable);
+
     Page<InvoiceRecord> findByFactoryIdAndStatusAndDeletedAtIsNull(String factoryId, InvoiceStatus status, Pageable pageable);
 
     List<InvoiceRecord> findBySalesOrderIdAndDeletedAtIsNull(String salesOrderId);

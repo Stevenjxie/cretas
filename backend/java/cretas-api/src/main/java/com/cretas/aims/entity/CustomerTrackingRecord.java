@@ -57,4 +57,11 @@ public class CustomerTrackingRecord extends BaseEntity {
 
     @Column(name = "remark", columnDefinition = "TEXT")
     private String remark;
+
+    /**
+     * Sprint 4 W1 S-CUSTOMER-TAB-1 R3 dropdown: 跟踪类型 enum.
+     * Values: PHONE / WECHAT / EMAIL / VISIT / VIDEO / OTHER (validated at controller).
+     */
+    @Column(name = "tracking_type", length = 32)
+    private String trackingType;
 }

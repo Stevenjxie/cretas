@@ -29,6 +29,7 @@ import com.cretas.aims.annotation.RequireModule;
 public class InvoiceController {
 
     private final InvoiceService invoiceService;
+    private final com.cretas.aims.repository.InvoiceRecordRepository invoiceRecordRepository;
 
     @RequireModule("finance_ar")
     @PostMapping("/request")
@@ -147,5 +148,29 @@ public class InvoiceController {
     public ResponseEntity<?> listBySalesOrder(@PathVariable String factoryId, @PathVariable String salesOrderId) {
         return ResponseEntity.ok(Map.of("success", true,
                 "data", invoiceService.listInvoicesBySalesOrder(factoryId, salesOrderId)));
+    }
+
+    /**
+     * Sprint 4 W1 S-CUSTOMER-TAB-1 — tab 15 (开票 by customer).
+     * Paginated, newest first, soft-deleted excluded.
+     */
+    @GetMapping("/by-customer")
+    @RequirePermission({"finance:read_write", "finance:read", "sales:read_write", "sales:read"})
+    public ResponseEntity<?> listByCustomer(
+            @PathVariable String factoryId,
+            @RequestParam String customerId,
+            @RequestParam(defaultValue = "1") int page,
+            @RequestParam(defaultValue = "20") int size) {
+        int safePage = Math.max(1, page);
+        int safeSize = Math.max(1, Math.min(size, 200));
+        var p = invoiceRecordRepository.findByFactoryIdAndCustomerIdAndDeletedAtIsNullOrderByCreatedAtDesc(
+                factoryId, customerId, PageRequest.of(safePage - 1, safeSize));
+        return ResponseEntity.ok(Map.of("success", true, "data", Map.of(
+                "content", p.getContent(),
+                "totalElements", p.getTotalElements(),
+                "totalPages", p.getTotalPages(),
+                "page", safePage,
+                "size", safeSize
+        )));
     }
 }

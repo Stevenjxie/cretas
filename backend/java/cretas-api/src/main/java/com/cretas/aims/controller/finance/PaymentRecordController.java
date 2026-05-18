@@ -28,6 +28,7 @@ import com.cretas.aims.annotation.RequireModule;
 public class PaymentRecordController {
 
     private final PaymentRecordService paymentRecordService;
+    private final com.cretas.aims.repository.PaymentRecordRepository paymentRecordRepository;
 
     // R23 P3 audit (independent reviewer #13): customer payment records settle SO
     // receivables — semantically AR, not AP. Pre-R23 had @RequireModule("finance_ap")
@@ -118,5 +119,29 @@ public class PaymentRecordController {
     public ResponseEntity<?> listBySalesOrder(@PathVariable String factoryId, @PathVariable String salesOrderId) {
         return ResponseEntity.ok(Map.of("success", true,
                 "data", paymentRecordService.listPaymentsBySalesOrder(factoryId, salesOrderId)));
+    }
+
+    /**
+     * Sprint 4 W1 S-CUSTOMER-TAB-1 — tab 16 (收款 by customer).
+     * Paginated, newest first, soft-deleted excluded.
+     */
+    @GetMapping("/by-customer")
+    @RequirePermission({"finance:read_write", "sales:read_write"})
+    public ResponseEntity<?> listByCustomer(
+            @PathVariable String factoryId,
+            @RequestParam String customerId,
+            @RequestParam(defaultValue = "1") int page,
+            @RequestParam(defaultValue = "20") int size) {
+        int safePage = Math.max(1, page);
+        int safeSize = Math.max(1, Math.min(size, 200));
+        var p = paymentRecordRepository.findByFactoryIdAndCustomerIdAndDeletedAtIsNullOrderByCreatedAtDesc(
+                factoryId, customerId, PageRequest.of(safePage - 1, safeSize));
+        return ResponseEntity.ok(Map.of("success", true, "data", Map.of(
+                "content", p.getContent(),
+                "totalElements", p.getTotalElements(),
+                "totalPages", p.getTotalPages(),
+                "page", safePage,
+                "size", safeSize
+        )));
     }
 }

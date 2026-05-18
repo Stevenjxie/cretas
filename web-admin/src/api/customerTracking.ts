@@ -23,8 +23,27 @@ export interface CustomerTrackingRecord {
   contactPhone?: string;
   address?: string;
   remark?: string;
+  /** Sprint 4 W1 R3: tracking type enum */
+  trackingType?: TrackingType;
   createdAt?: string;
   updatedAt?: string;
+}
+
+/** Sprint 4 W1 S-CUSTOMER-TAB-1 R3 dropdown enum (matches backend validation). */
+export type TrackingType = 'PHONE' | 'WECHAT' | 'EMAIL' | 'VISIT' | 'VIDEO' | 'OTHER';
+
+export const TRACKING_TYPES: Array<{ value: TrackingType; label: string }> = [
+  { value: 'PHONE', label: '电话沟通' },
+  { value: 'WECHAT', label: '微信沟通' },
+  { value: 'EMAIL', label: '邮件沟通' },
+  { value: 'VISIT', label: '上门拜访' },
+  { value: 'VIDEO', label: '视频会议' },
+  { value: 'OTHER', label: '其他' },
+];
+
+export function trackingTypeLabel(t?: string): string {
+  if (!t) return '—';
+  return TRACKING_TYPES.find((x) => x.value === t)?.label || t;
 }
 
 export interface CreateTrackingRecordRequest {
@@ -37,15 +56,19 @@ export interface CreateTrackingRecordRequest {
   contactPhone?: string;
   address?: string;
   remark?: string;
+  /** R3 dropdown */
+  trackingType?: TrackingType;
 }
 
-/** PUT body — only content/contactPerson/contactPhone/address/remark are mutable. */
+/** PUT body — only the listed fields are mutable. */
 export interface UpdateTrackingRecordRequest {
   content?: string;
   contactPerson?: string;
   contactPhone?: string;
   address?: string;
   remark?: string;
+  /** R3 dropdown */
+  trackingType?: TrackingType;
 }
 
 export interface TrackingRecordPage {

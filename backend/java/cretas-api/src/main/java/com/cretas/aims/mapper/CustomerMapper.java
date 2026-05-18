@@ -66,6 +66,12 @@ public class CustomerMapper {
         if (customer.getCreatedByUser() != null) {
             dto.setCreatedByName(customer.getCreatedByUser().getFullName());
         }
+        // Sprint 4 W1 S-CUSTOMER-TAB-1: 设置当前业务员姓名 (避免前端显示 "User #100")
+        if (customer.getAssignedSalesUser() != null) {
+            String fullName = customer.getAssignedSalesUser().getFullName();
+            String username = customer.getAssignedSalesUser().getUsername();
+            dto.setAssignedSalesUserName(fullName != null && !fullName.isBlank() ? fullName : username);
+        }
         // TODO: 设置统计信息（订单数量、销售总额、最后订单日期、平均订单价值）
         return dto;
     }

@@ -88,6 +88,8 @@ public class CustomerDTO {
     // Sprint 4 W1 S-CUSTOMER-TAB-1 (tab 20): current assigned sales user
     private Long assignedSalesUserId;
     private LocalDateTime assignedSalesUserAssignedAt;
+    /** Resolved via @ManyToOne join in Mapper — display "张三" instead of "User #100" in UI. */
+    private String assignedSalesUserName;
 
     // ==================== 前端字段别名 ====================
 

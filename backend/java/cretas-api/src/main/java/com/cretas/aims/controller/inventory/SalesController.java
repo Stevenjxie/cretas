@@ -15,6 +15,7 @@ import com.cretas.aims.entity.inventory.SalesDeliveryRecord;
 import com.cretas.aims.entity.inventory.SalesOrder;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.UserRepository;
+import com.cretas.aims.repository.inventory.SalesOrderRepository;
 import com.cretas.aims.service.MobileService;
 import com.cretas.aims.service.PermissionService;
 import com.cretas.aims.service.inventory.SalesService;
@@ -43,6 +44,7 @@ public class SalesController {
     private final MobileService mobileService;
     private final PermissionService permissionService;
     private final UserRepository userRepository;
+    private final SalesOrderRepository salesOrderRepository;
 
     // ==================== 销售订单 ====================
 
@@ -68,6 +70,27 @@ public class SalesController {
             @RequestParam(defaultValue = "1") int page,
             @RequestParam(defaultValue = "20") int size) {
         PageResponse<SalesOrder> result = salesService.getSalesOrders(factoryId, keyword, page, size);
+        return ApiResponse.success("查询成功", result);
+    }
+
+    /**
+     * Sprint 4 W1 S-CUSTOMER-TAB-1 — tab 7 (销售单 by customer).
+     * Paginated, newest first. Repo-backed (bypass service for minimal blast radius).
+     */
+    @GetMapping("/orders/by-customer")
+    @Operation(summary = "客户档案 360° tab 7 销售单 by customer")
+    @RequirePermission({"sales:read_write", "sales:read"})
+    public ApiResponse<PageResponse<SalesOrder>> listOrdersByCustomer(
+            @PathVariable @NotBlank String factoryId,
+            @RequestParam @NotBlank String customerId,
+            @RequestParam(defaultValue = "1") int page,
+            @RequestParam(defaultValue = "20") int size) {
+        int safePage = Math.max(1, page);
+        int safeSize = Math.max(1, Math.min(size, 200));
+        var p = salesOrderRepository.findByFactoryIdAndCustomerIdOrderByCreatedAtDesc(
+                factoryId, customerId,
+                org.springframework.data.domain.PageRequest.of(safePage - 1, safeSize));
+        var result = PageResponse.of(p.getContent(), safePage, safeSize, p.getTotalElements());
         return ApiResponse.success("查询成功", result);
     }
 

@@ -18,6 +18,10 @@ public interface PaymentRecordRepository extends JpaRepository<PaymentRecord, St
 
     Page<PaymentRecord> findByFactoryIdAndStatusAndDeletedAtIsNull(String factoryId, PaymentRecordStatus status, Pageable pageable);
 
+    /** Sprint 4 W1 S-CUSTOMER-TAB-1 (tab 16): paginated by customer, newest first, deleted excluded. */
+    Page<PaymentRecord> findByFactoryIdAndCustomerIdAndDeletedAtIsNullOrderByCreatedAtDesc(
+            String factoryId, String customerId, Pageable pageable);
+
     List<PaymentRecord> findBySalesOrderIdAndDeletedAtIsNull(String salesOrderId);
 
     /** Factory-scoped lookup for sales order tab. */

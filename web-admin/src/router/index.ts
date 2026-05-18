@@ -443,6 +443,19 @@ const businessRoutes: RouteRecordRaw[] = [
             component: () => import('@/views/sales/customers/list.vue'),
             meta: { requiresAuth: true, title: '客户管理', module: 'sales' }
           },
+          // Sprint 4 W1 S-CUSTOMER-TAB-1: customer 360° 21-tab detail view
+          {
+            path: 'customers/:id',
+            name: 'SalesCustomerDetail',
+            component: () => import('@/views/sales/customers/detail.vue'),
+            meta: {
+              requiresAuth: true,
+              title: '客户详情',
+              module: 'sales',
+              hidden: true,
+              activeMenu: '/sales/customers'
+            }
+          },
           // P1 #21 S-CRM-1: customer tracking record Vue UI (backend Sprint 4 W2 #727)
           {
             path: 'customer-tracking',

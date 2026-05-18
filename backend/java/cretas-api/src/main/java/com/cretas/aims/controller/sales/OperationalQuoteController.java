@@ -36,6 +36,7 @@ import com.cretas.aims.annotation.RequireModule;
 public class OperationalQuoteController {
 
     private final OperationalQuoteService quoteService;
+    private final com.cretas.aims.repository.sales.OperationalQuoteRepository quoteRepository;
 
     /** 研发提交报价单 — 由样品驱动 */
     @RequirePermission({"sales:read_write"})
@@ -155,5 +156,29 @@ public class OperationalQuoteController {
             @RequestParam String productTypeId) {
         var quotes = quoteService.getActiveQuotes(factoryId, customerId, productTypeId);
         return ResponseEntity.ok(Map.of("success", true, "data", quotes));
+    }
+
+    /**
+     * Sprint 4 W1 S-CUSTOMER-TAB-1 — tab 9 (报价单 by customer).
+     * Paginated, newest first, soft-deleted excluded.
+     */
+    @GetMapping("/by-customer")
+    public ResponseEntity<?> listByCustomer(
+            @PathVariable String factoryId,
+            @RequestParam String customerId,
+            @RequestParam(defaultValue = "1") int page,
+            @RequestParam(defaultValue = "20") int size) {
+        int safePage = Math.max(1, page);
+        int safeSize = Math.max(1, Math.min(size, 200));
+        var p = quoteRepository.findByFactoryIdAndCustomerIdAndDeletedAtIsNullOrderByCreatedAtDesc(
+                factoryId, customerId,
+                org.springframework.data.domain.PageRequest.of(safePage - 1, safeSize));
+        return ResponseEntity.ok(Map.of("success", true, "data", Map.of(
+                "content", p.getContent(),
+                "totalElements", p.getTotalElements(),
+                "totalPages", p.getTotalPages(),
+                "page", safePage,
+                "size", safeSize
+        )));
     }
 }

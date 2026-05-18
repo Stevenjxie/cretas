@@ -26,6 +26,10 @@ public interface OperationalQuoteRepository extends JpaRepository<OperationalQuo
     Page<OperationalQuote> findByFactoryIdAndStatusAndDeletedAtIsNullOrderByCreatedAtDesc(
             String factoryId, String status, Pageable pageable);
 
+    /** Sprint 4 W1 S-CUSTOMER-TAB-1 (tab 9): paginated by customer, newest first, deleted excluded. */
+    Page<OperationalQuote> findByFactoryIdAndCustomerIdAndDeletedAtIsNullOrderByCreatedAtDesc(
+            String factoryId, String customerId, Pageable pageable);
+
     /** 按工厂分页 (不限状态) */
     Page<OperationalQuote> findByFactoryIdAndDeletedAtIsNullOrderByCreatedAtDesc(
             String factoryId, Pageable pageable);

@@ -31,6 +31,7 @@ public class ReturnOrderController {
 
     private final ReturnOrderService returnOrderService;
     private final MobileService mobileService;
+    private final com.cretas.aims.repository.inventory.ReturnOrderRepository returnOrderRepository;
 
     @PostMapping
     @Operation(summary = "创建退货单")
@@ -112,6 +113,28 @@ public class ReturnOrderController {
             @PathVariable @NotBlank String factoryId) {
         Map<String, Object> stats = returnOrderService.getReturnOrderStatistics(factoryId);
         return ApiResponse.success("查询成功", stats);
+    }
+
+    /**
+     * Sprint 4 W1 S-CUSTOMER-TAB-1 — tab 17 (退货 by customer).
+     * 通过 counterpartyId + returnType=SALES_RETURN 过滤客户的销售退货.
+     * (ReturnOrder 没有 customerId 字段, 用 counterpartyId+returnType 组合标识销售退货.)
+     */
+    @GetMapping("/by-customer")
+    @Operation(summary = "客户档案 360° tab 17 销售退货 by customer")
+    @RequirePermission({"sales:read_write", "sales:read"})
+    public ApiResponse<PageResponse<ReturnOrder>> listReturnsByCustomer(
+            @PathVariable @NotBlank String factoryId,
+            @RequestParam @NotBlank String customerId,
+            @RequestParam(defaultValue = "1") int page,
+            @RequestParam(defaultValue = "20") int size) {
+        int safePage = Math.max(1, page);
+        int safeSize = Math.max(1, Math.min(size, 200));
+        var p = returnOrderRepository.findByFactoryIdAndCounterpartyIdAndReturnTypeOrderByCreatedAtDesc(
+                factoryId, customerId, ReturnType.SALES_RETURN,
+                org.springframework.data.domain.PageRequest.of(safePage - 1, safeSize));
+        var result = PageResponse.of(p.getContent(), safePage, safeSize, p.getTotalElements());
+        return ApiResponse.success("查询成功", result);
     }
 
     private Long extractUserId(String authorization) {

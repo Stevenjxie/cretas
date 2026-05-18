@@ -184,6 +184,11 @@ public class Customer extends BaseEntity {
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "created_by", referencedColumnName = "id", insertable = false, updatable = false)
     private User createdByUser;
+
+    /** Sprint 4 W1 S-CUSTOMER-TAB-1: tab 20 当前业务员 User join (for header / list display). */
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "assigned_sales_user_id", referencedColumnName = "id", insertable = false, updatable = false)
+    private User assignedSalesUser;
     @com.fasterxml.jackson.annotation.JsonIgnore
     @BatchSize(size = 20)
     @OneToMany(mappedBy = "customer", cascade = CascadeType.ALL, fetch = FetchType.LAZY)

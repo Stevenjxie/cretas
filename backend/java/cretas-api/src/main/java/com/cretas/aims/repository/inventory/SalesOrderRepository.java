@@ -33,6 +33,10 @@ public interface SalesOrderRepository extends JpaRepository<SalesOrder, String> 
 
     List<SalesOrder> findByFactoryIdAndCustomerId(String factoryId, String customerId);
 
+    /** Sprint 4 W1 S-CUSTOMER-TAB-1 (tab 7): paginated by customer, newest first. */
+    Page<SalesOrder> findByFactoryIdAndCustomerIdOrderByCreatedAtDesc(
+            String factoryId, String customerId, Pageable pageable);
+
     @Query("SELECT so FROM SalesOrder so WHERE so.factoryId = :factoryId " +
             "AND so.orderDate BETWEEN :startDate AND :endDate ORDER BY so.orderDate DESC")
     List<SalesOrder> findByFactoryIdAndDateRange(
