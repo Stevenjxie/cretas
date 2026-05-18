@@ -23,7 +23,4 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_aw_instances_active
     ON approval_workflow_instances (factory_id, module_code, business_entity_id)
     WHERE status = 'RUNNING' AND deleted_at IS NULL;
 
-COMMENT ON INDEX uq_aw_instances_active IS
-    'Partial unique — 同一 (factory, module, business entity) 只允许 1 个 RUNNING 实例. '
-    || '防御 cancel+resubmit 残留 dup 行触发 IncorrectResultSizeDataAccessException. '
-    || '终态实例 (APPROVED/REJECTED/CANCELLED/TIMEOUT) 不受约束, 可有多行历史.';
+COMMENT ON INDEX uq_aw_instances_active IS 'Partial unique — 同一 (factory, module, business entity) 只允许 1 个 RUNNING 实例. 防御 cancel+resubmit 残留 dup 行触发 IncorrectResultSizeDataAccessException. 终态实例 (APPROVED/REJECTED/CANCELLED/TIMEOUT) 不受约束, 可有多行历史.';
