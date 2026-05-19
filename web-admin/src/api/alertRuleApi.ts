@@ -225,7 +225,8 @@ export interface ApiResponse<T> {
 
 // ==================== API methods ====================
 
-const base = (factoryId: string) => `/api/mobile/${factoryId}/alerts`
+// axios baseURL = '/api/mobile' so caller-side URLs start at /{factoryId}/...
+const base = (factoryId: string) => `/${factoryId}/alerts`
 
 // --- Rules ---
 
