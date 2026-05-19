@@ -37,6 +37,7 @@ const phaseA = [
 // Phase 3 Task 3.4: added '模块权限' Tab for factory-level L2 override
 // Phase 2 Canvas-Alerts (2026-05-19): added '预警规则' Tab for AlertRulesEditor (🚨 to differ from notify 🔔)
 // Phase 3 Canvas-Notify (2026-05-19): added '通知模板' Tab for NotifyTemplate CRUD + Logs
+// Phase 4a (2026-05-18): added '业务规则' Tab for Canvas-Rules business rule engine.
 // Phase 4b (2026-05-18): added '价格策略' Tab for PricingStrategyTab
 // Phase 5 (2026-05-19): added 'Canvas Cron' Tab — DB-driven DynamicScheduler
 // (real cron registration via Spring TaskScheduler + ShedLock, NOT v2 config).
@@ -50,6 +51,7 @@ const phaseB = [
   { key: 'scheduler', icon: '⏰', label: '定时任务 (v2)' },
   { key: 'alerts', icon: '🚨', label: '预警规则' },
   { key: 'notify', icon: '🔔', label: '通知模板' },
+  { key: 'business-rules', icon: '📜', label: '业务规则' },
   { key: 'pricing', icon: '💰', label: '价格策略' },
   { key: 'cron', icon: '⚡', label: 'Canvas Cron' },
 ]

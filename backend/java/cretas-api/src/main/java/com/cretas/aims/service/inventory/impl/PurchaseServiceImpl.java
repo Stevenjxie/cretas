@@ -36,6 +36,7 @@ import com.cretas.aims.event.MaterialReceivedEvent;
 import com.cretas.aims.annotation.Loggable;
 import com.cretas.aims.service.MaterialBatchService;
 import com.cretas.aims.service.inventory.PurchaseService;
+import com.cretas.aims.service.rules.annotation.RuleEvaluate;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.ApplicationEventPublisher;
@@ -334,6 +335,7 @@ public class PurchaseServiceImpl implements PurchaseService {
     }
 
     @Override
+    @RuleEvaluate("ORDER")
     @Transactional
     @Loggable(module = "PURCHASE_ORDER", action = "SUBMIT", entityType = "PurchaseOrder",
               entityIdParam = "orderId")
