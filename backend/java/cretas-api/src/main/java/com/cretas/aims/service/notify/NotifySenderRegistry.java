@@ -59,6 +59,12 @@ public class NotifySenderRegistry {
                 results.add(result != null
                         ? result
                         : new NotifyResult(channel, NotifyStatus.FAILED, "sender.send() 返回 null"));
+            } catch (NotifyAuditException e) {
+                // Audit write failure (Phase 3 review High #2/#3): sender 已 log.error +
+                // throw, 在此 channel 边界捕获标 FAILED, 让 errorMsg 保留 audit-specific 文案,
+                // 但不阻塞其他 channel 的 fan-out (其他 channel 的 audit write 可能正常).
+                log.error("[NotifySenderRegistry] channel={} audit 写入失败: {}", channel, e.getMessage(), e);
+                results.add(new NotifyResult(channel, NotifyStatus.FAILED, e.getMessage()));
             } catch (Exception e) {
                 String errMsg = "Sender 抛异常: " + e.getMessage();
                 log.error("[NotifySenderRegistry] channel={} send 异常: {}", channel, errMsg, e);

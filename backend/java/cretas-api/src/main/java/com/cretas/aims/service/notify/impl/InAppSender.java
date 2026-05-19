@@ -6,6 +6,7 @@ import com.cretas.aims.entity.notify.NotifyStatus;
 import com.cretas.aims.entity.notify.NotifyTemplate;
 import com.cretas.aims.repository.notify.NotifyLogRepository;
 import com.cretas.aims.repository.notify.NotifyTemplateRepository;
+import com.cretas.aims.service.notify.NotifyAuditException;
 import com.cretas.aims.service.notify.NotifyRequest;
 import com.cretas.aims.service.notify.NotifyResult;
 import com.cretas.aims.service.notify.NotifySender;
@@ -84,19 +85,15 @@ public class InAppSender implements NotifySender {
         }
 
         // 2. 对每个 recipient 写一条 SENT log
+        // 写 audit log 失败 → throw NotifyAuditException, 由 NotifySenderRegistry 捕获标 FAILED.
+        // 不再尝试"写一条 FAILED log 替代" — 那条 fallback 也会以同样原因失败, 制造静默 swallow 假象.
         int sentCount = 0;
         if (recipients != null && !recipients.isEmpty()) {
             for (Long uid : recipients) {
-                try {
-                    writeLog(factoryId, templateCode, uid, NotifyStatus.SENT, null);
-                    sentCount++;
-                    log.debug("[InAppSender] 站内信已发: factoryId={}, recipient={}, title={}",
-                            factoryId, uid, renderedTitle);
-                } catch (Exception e) {
-                    String errMsg = "写入 NotifyLog 失败: " + e.getMessage();
-                    log.warn("[InAppSender] {}", errMsg, e);
-                    writeLog(factoryId, templateCode, uid, NotifyStatus.FAILED, errMsg);
-                }
+                writeLog(factoryId, templateCode, uid, NotifyStatus.SENT, null);
+                sentCount++;
+                log.debug("[InAppSender] 站内信已发: factoryId={}, recipient={}, title={}",
+                        factoryId, uid, renderedTitle);
             }
         }
 
@@ -111,22 +108,34 @@ public class InAppSender implements NotifySender {
         return channel == NotifyChannel.IN_APP;
     }
 
+    /**
+     * 写 audit log. 失败 → throw NotifyAuditException 不静默 swallow.
+     *
+     * <p><b>Phase 3 review High #2/#3 fix</b>: 原实现 {@code log.error + swallow} 会让 sender
+     * 返 SENT 但 0 行 audit 落库, 运维无法察觉. 现改为 throw,
+     * 由 {@link com.cretas.aims.service.notify.NotifySenderRegistry#sendAll} 在 channel
+     * 边界捕获标该 channel FAILED, 但不阻塞其他 channel.
+     */
     private void writeLog(String factoryId, String templateCode, Long recipientUserId,
                           NotifyStatus status, String errorMsg) {
+        NotifyLog logEntry = NotifyLog.builder()
+                .factoryId(factoryId)
+                .templateCode(templateCode)
+                .recipientUserId(recipientUserId)
+                .channel(NotifyChannel.IN_APP)
+                .status(status)
+                .errorMsg(errorMsg)
+                .sentAt(LocalDateTime.now())
+                .build();
         try {
-            NotifyLog log = NotifyLog.builder()
-                    .factoryId(factoryId)
-                    .templateCode(templateCode)
-                    .recipientUserId(recipientUserId)
-                    .channel(NotifyChannel.IN_APP)
-                    .status(status)
-                    .errorMsg(errorMsg)
-                    .sentAt(LocalDateTime.now())
-                    .build();
-            logRepository.save(log);
+            logRepository.save(logEntry);
         } catch (Exception e) {
-            // 防御: 写 log 失败不应抛出, 避免影响主流程
-            InAppSender.log.error("[InAppSender] 写 NotifyLog 失败 (吞掉异常避免阻塞): {}", e.getMessage(), e);
+            InAppSender.log.error(
+                    "[InAppSender] Failed to write NotifyLog: factoryId={}, channel={}, recipient={}",
+                    factoryId, NotifyChannel.IN_APP, recipientUserId, e);
+            throw new NotifyAuditException(
+                    "通知发送审计写入失败 — 请联系运维 (channel=IN_APP, recipient="
+                            + recipientUserId + ")", e);
         }
     }
 }

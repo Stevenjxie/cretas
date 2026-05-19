@@ -4,6 +4,7 @@ import com.cretas.aims.entity.notify.NotifyChannel;
 import com.cretas.aims.entity.notify.NotifyLog;
 import com.cretas.aims.entity.notify.NotifyStatus;
 import com.cretas.aims.repository.notify.NotifyLogRepository;
+import com.cretas.aims.service.notify.NotifyAuditException;
 import com.cretas.aims.service.notify.NotifyRequest;
 import com.cretas.aims.service.notify.NotifyResult;
 import com.cretas.aims.service.notify.NotifySender;
@@ -70,20 +71,29 @@ public class EmailSender implements NotifySender {
         return channel == NotifyChannel.EMAIL;
     }
 
+    /**
+     * 写 audit log. 失败 → throw NotifyAuditException 不静默 swallow.
+     * Phase 3 review High #2/#3 fix — 见 {@link NotifyAuditException} javadoc.
+     */
     private void writeLog(String factoryId, String templateCode, Long recipientUserId, String errMsg) {
+        NotifyLog logRow = NotifyLog.builder()
+                .factoryId(factoryId)
+                .templateCode(templateCode)
+                .recipientUserId(recipientUserId)
+                .channel(NotifyChannel.EMAIL)
+                .status(NotifyStatus.FAILED)
+                .errorMsg(errMsg)
+                .sentAt(LocalDateTime.now())
+                .build();
         try {
-            NotifyLog logRow = NotifyLog.builder()
-                    .factoryId(factoryId)
-                    .templateCode(templateCode)
-                    .recipientUserId(recipientUserId)
-                    .channel(NotifyChannel.EMAIL)
-                    .status(NotifyStatus.FAILED)
-                    .errorMsg(errMsg)
-                    .sentAt(LocalDateTime.now())
-                    .build();
             logRepository.save(logRow);
         } catch (Exception e) {
-            log.error("[EmailSender] 写 NotifyLog 失败: {}", e.getMessage(), e);
+            log.error(
+                    "[EmailSender] Failed to write NotifyLog: factoryId={}, channel={}, recipient={}",
+                    factoryId, NotifyChannel.EMAIL, recipientUserId, e);
+            throw new NotifyAuditException(
+                    "通知发送审计写入失败 — 请联系运维 (channel=EMAIL, recipient="
+                            + recipientUserId + ")", e);
         }
     }
 }

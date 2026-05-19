@@ -18,6 +18,7 @@ import java.util.Map;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -32,6 +33,8 @@ import static org.mockito.Mockito.when;
  *   <li>UT-NR-02: 多 channel fan-out → 多个 sender 各被调用 1 次</li>
  *   <li>UT-NR-03: 不支持的 channel → FAILED result + 不调用其他 sender</li>
  *   <li>UT-NR-04: sender 抛异常 → 捕获 + FAILED result, 不阻塞其他 channel</li>
+ *   <li>UT-NR-05: sender 抛 NotifyAuditException → 捕获 + FAILED 文案保留 audit-specific 信息,
+ *       不阻塞其他 channel (Phase 3 review High #2/#3)</li>
  * </ul>
  *
  * @since 2026-05-18 (Phase 3 impl)
@@ -135,6 +138,32 @@ class NotifySenderRegistryTest {
         assertEquals(2, results.size());
         assertEquals(NotifyStatus.FAILED, results.get(0).status());
         assertEquals("Sender 抛异常: DB connection lost", results.get(0).errorMsg());
+        assertEquals(NotifyStatus.SENT, results.get(1).status());
+    }
+
+    @Test
+    @DisplayName("UT-NR-05: NotifyAuditException → audit 文案保留, 不阻塞其他 channel (review High #2/#3)")
+    void senderThrowsNotifyAuditException() {
+        String auditMsg = "通知发送审计写入失败 — 请联系运维 (channel=IN_APP, recipient=1001)";
+        when(inAppSender.send(any())).thenThrow(
+                new NotifyAuditException(auditMsg, new RuntimeException("connection refused")));
+        when(emailSender.send(any())).thenReturn(
+                new NotifyResult(NotifyChannel.EMAIL, NotifyStatus.SENT, null));
+
+        NotifyRequest req = new NotifyRequest(
+                FACTORY_ID, List.of(1001L),
+                List.of(NotifyChannel.IN_APP, NotifyChannel.EMAIL),
+                "T1", Map.of());
+        List<NotifyResult> results = registry.sendAll(req);
+
+        assertEquals(2, results.size());
+        // IN_APP audit-failure: 保留 audit-specific 文案 (不被 wrap 成 "Sender 抛异常: ...")
+        assertEquals(NotifyStatus.FAILED, results.get(0).status());
+        assertEquals(auditMsg, results.get(0).errorMsg(),
+                "应保留 NotifyAuditException.getMessage() 原文, 不 prepend 'Sender 抛异常:'");
+        assertTrue(results.get(0).errorMsg().contains("请联系运维"),
+                "errorMsg 必含 next-action 提示 (per fool-proof-design rule)");
+        // EMAIL 不被 IN_APP audit failure 影响
         assertEquals(NotifyStatus.SENT, results.get(1).status());
     }
 }

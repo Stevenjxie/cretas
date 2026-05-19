@@ -6,6 +6,7 @@ import com.cretas.aims.entity.notify.NotifyStatus;
 import com.cretas.aims.entity.notify.NotifyTemplate;
 import com.cretas.aims.repository.notify.NotifyLogRepository;
 import com.cretas.aims.repository.notify.NotifyTemplateRepository;
+import com.cretas.aims.service.notify.NotifyAuditException;
 import com.cretas.aims.service.notify.NotifyRequest;
 import com.cretas.aims.service.notify.NotifyResult;
 import com.cretas.aims.service.notify.TemplateEngine;
@@ -25,6 +26,7 @@ import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.atLeastOnce;
@@ -40,6 +42,7 @@ import static org.mockito.Mockito.when;
  *   <li>UT-IA-02: happy path — 模板存在 + render OK → SENT, 写 NotifyLog per recipient</li>
  *   <li>UT-IA-03: 模板不存在 → FAILED + 写 1 条 FAILED log</li>
  *   <li>UT-IA-04: render 抛 IAE (缺变量) → FAILED + 每 recipient 写 FAILED log</li>
+ *   <li>UT-IA-05: logRepository.save 抛异常 → NotifyAuditException (Phase 3 review High #2/#3)</li>
  * </ul>
  *
  * @since 2026-05-18 (Phase 3 impl)
@@ -164,5 +167,36 @@ class InAppSenderTest {
                 .filter(l -> l.getStatus() == NotifyStatus.FAILED)
                 .count();
         assertTrue(failedCount >= 2, "应至少 2 条 FAILED log (per recipient), got " + failedCount);
+    }
+
+    @Test
+    @DisplayName("UT-IA-05: logRepository.save 抛异常 → NotifyAuditException (review High #2/#3)")
+    void auditWriteFailureThrowsNotifyAuditException() {
+        NotifyTemplate template = NotifyTemplate.builder()
+                .id(UUID.randomUUID())
+                .factoryId(FACTORY_ID)
+                .templateCode(TEMPLATE_CODE)
+                .title("您有 {{count}} 笔")
+                .bodyTemplate("待审")
+                .channels(List.of(NotifyChannel.IN_APP))
+                .build();
+        when(templateRepository.findByFactoryIdAndTemplateCode(FACTORY_ID, TEMPLATE_CODE))
+                .thenReturn(Optional.of(template));
+        // 模拟 DB save 抛异常 (e.g. PG down / FK constraint / connection lost)
+        when(logRepository.save(any(NotifyLog.class)))
+                .thenThrow(new RuntimeException("connection refused"));
+
+        NotifyRequest request = new NotifyRequest(
+                FACTORY_ID, List.of(1001L), List.of(NotifyChannel.IN_APP),
+                TEMPLATE_CODE, Map.of("count", 1));
+
+        // Phase 3 review fix: 不再静默 swallow, 必须 throw
+        NotifyAuditException ex = assertThrows(NotifyAuditException.class, () -> sender.send(request));
+        assertTrue(ex.getMessage().contains("请联系运维"),
+                "errorMsg 应含 next-action 提示, got: " + ex.getMessage());
+        assertTrue(ex.getMessage().contains("IN_APP"),
+                "errorMsg 应含 channel 信息, got: " + ex.getMessage());
+        assertNotNull(ex.getCause(), "应保留 root cause");
+        assertEquals("connection refused", ex.getCause().getMessage());
     }
 }
