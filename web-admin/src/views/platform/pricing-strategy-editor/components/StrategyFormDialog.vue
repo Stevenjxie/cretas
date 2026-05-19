@@ -180,12 +180,11 @@
         </el-form-item>
         <template v-if="memberMode === 'single'">
           <el-form-item label="会员等级">
-            <el-select v-model="memberRules.membershipTier" placeholder="选择等级" style="width: 100%">
+            <el-select v-model="memberRules.membershipTier" placeholder="选择等级 (匹配 Customer.importance 4 枚举值)" style="width: 100%">
               <el-option label="VIP" value="VIP" />
               <el-option label="IMPORTANT" value="IMPORTANT" />
               <el-option label="NORMAL" value="NORMAL" />
-              <el-option label="A 级" value="A" />
-              <el-option label="B 级" value="B" />
+              <el-option label="LOW" value="LOW" />
             </el-select>
           </el-form-item>
           <el-form-item label="折扣百分比">
