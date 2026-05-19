@@ -23,6 +23,20 @@
 > - **Cretas 已超 HJ 6 patterns**: VueFlow / URL routing / KeepAlive cascade / 操作 ▼ 普及 / DesktopModal / Vue state hidden — 32-doc §E X5 finding.
 > - **真实剩余工时修正**: Round 11 估 ~150d / 3 月 → **Round 12 +183d 新发现 = ~330d / 6.5 月** (新增大客户场景, 仍省 Steve sign-off "9 月" 2.5 月).
 > - **完整 32-doc**: `../04-最终决策/32-DEEP-RE-AUDIT-V2.md` (3096 行, 7 sections §A-§G, 含 647 help articles 引用 + Cretas main multi-synonym grep).
+>
+> 🚀 **2026-05-19 Sprint 5 dispatch (9 PRs in-flight)**:
+> 9 parallel subagents (worktree isolation, 0 main 冲突, 2 agent self-recovery) deliver Sprint 5 MVP slice in **~9h agent time** vs 64d nominal (~98% saving). 9 PRs awaiting Steve review/merge:
+> - **#51 Z** Pre-Spike (4 verify + decisions; M1 #538 已 closed, vflag defer P3, 打印 retarget)
+> - **#52 B** F-TAX-DIRECT-1 spike (百望云 provider 推荐, Sprint 6 W1 7-10d full integration)
+> - **#53 F** Customer 17 tab MVP 88% + Voucher 辅助核算 7 类 backend
+> - **#54 G** RBAC 数据权限 framework + POC (DataScope 5-level + Aspect + 9 tests pass)
+> - **#55 H** decisionType 14→32 + BomVersion/ECN frontend + Attachment.CONTRACT 加
+> - **#56 D** PurchaseRequisition entity + state machine + 7 endpoints + 20 tests pass
+> - **#57 E** 生产→工资 trigger (ProcessingService→WageRecordTriggerService) + 5 tests pass
+> - **#58 C** linkcounter MVP backend+frontend + 打印 21 分类 spec
+> - **#59 A** Personal view backend (2 endpoints + 7 tests) + 1 of 4 sub-views frontend
+> - **后续**: Sprint 6 follow-up ~40d 整合 + 完整化 (per 各 PR body "Sprint 6 follow-up" section)
+> - **完整 Sprint 5 plan**: `../../docs/superpowers/plans/2026-05-19-sprint-5-dispatch.md` (395 行, 8 tracks + 1 pre-spike)
 
 ---
 

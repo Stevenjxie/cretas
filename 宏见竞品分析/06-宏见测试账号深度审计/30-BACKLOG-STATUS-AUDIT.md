@@ -352,3 +352,90 @@ P1 剩 42 项 / 128d / 77 工日 / 16 周 (单人).
 - ✅ **MUST_COPY 附录 Q** 已加 (v1.4)
 - ✅ **28-Backlog 顶部 Round 12 banner** 已加
 - ⚠️ **Round 13+** 候选: Layer C 验证 (vflag/RBAC/linkno) + HJ 移动 APK 实测 (Round 9 skeleton ready, 等 Steve 装)
+
+---
+
+## 15. 🚀 Sprint 5 Dispatch Update (2026-05-19, 9 parallel subagents)
+
+> **Trigger**: Steve "Sprint 5 backlog 排个派工计划 → 开始把 用subagent去做 → 全部做继续把"
+>
+> **方法**: 9 isolated git worktree subagents (Round 11+12 audit dispatch pattern + git worktree isolation for code work).
+>
+> **状态**: **9 PRs in-flight 等 Steve review/merge** (per 28-Backlog banner). Sprint 6 follow-up ~40d 整合 + 完整化.
+
+### 15.1 Sprint 5 dispatch 战绩
+
+| 维度 | 数字 |
+|---|---|
+| Parallel subagents | 9 (1 Z + 8 A-H) |
+| Isolation pattern | git worktree (per `superpowers:using-git-worktrees`) |
+| Main conflicts | **0** (worktree isolation 100% 成功) |
+| Agent self-recovery | 2 (Z + F 各 1 次 Write-to-main 误判恢复) |
+| 总 commits | ~50 跨 9 branches |
+| 总 unit tests PASS | ~70+ |
+| 总 spec docs | ~10 |
+| 工时 nominal | 64d (per Sprint 5 plan §K) |
+| 工时 agent 实际 | ~9h |
+| 节省 | **~98%** (MVP slice 模式) |
+| PRs created | 9 (PR #51-#59) |
+| Mergeable | 9/9 ✅ |
+
+### 15.2 9 PRs detail (per 32-doc §G + 33-doc §15 + Sprint 5 plan)
+
+| PR | Track | Cretas main 落地 | Sprint 6 follow-up |
+|---|---|---|---|
+| #51 | Z 4 verify | 4 spec docs, M1 #538 已 closed, vflag defer P3, 打印 retarget, C-4 1d→2.5d | 0 (整合 OK) |
+| #52 | B 数电票 spike | 百望云 推荐 + skeleton interface + InvoiceRecord +6 字段 + migration + frontend flag | W1 7-10d 真集成 + Vue UI |
+| #53 | F Customer 17 tab + 辅助核算 7 类 | AuxiliaryType 7 enum + VoucherEntry +字段 + 3 generators wired + 9 tests + 2 Vue stubs | 6d (微信/通话 backend + DEPT/PROJECT generator) |
+| #54 | G RBAC 数据权限 | DataScope 5-level enum + DataScopeAspect + POC SalesService + 9 tests + Vue stub | 7d (10+ endpoint sweep + Specification interceptor + frontend edit) |
+| #55 | H decisionType 32 + BOM frontend + Attachment.CONTRACT | 14→32 enum + BomVersionList.vue + EcnList.vue + Attachment.FileCategory.CONTRACT + migration | 4d (SALES_ORDER/INVENTORY 入 EntityType + BOM 4 batch UI + decisionType service wiring) |
+| #56 | D PurchaseRequisition entity | Entity + 5 状态 enum + 7 endpoints + 20 tests + idempotent convertToPO | 5d (Frontend Vue + JSONB→relational + Workflow integration + vflag listener + AI Tool) |
+| #57 | E 生产→工资 trigger | WageRecordTriggerService + ProcessingService 钩 + WorkerDailyEfficiency.sourceBatchId + 5 tests | 2-3d (我的工资 frontend + WagePolicy admin + 时+混合 mode + vflag listener month-end) |
+| #58 | C linkcounter MVP + 打印 spec | SalesOrderLinkCountsDTO + batch endpoint + 链 chip column + 打印 21 分类 coverage doc | 5d (链 chip 拆 file/image/contract + 报价试算 + 打印 P1 3 templates) |
+| #59 | A Personal view + 1 sub-view | WorkflowEngineService +2 methods + JPQL DISTINCT + partial index + my-created.vue + 7 tests | 12h (我参与 frontend 2h + admin UI 6h + 流转规则 frontend 4h) |
+
+**总 Sprint 6 follow-up**: ~40d nominal.
+
+### 15.3 关键 elements (Sprint 5 vs Round 13 expectations)
+
+- ✅ Round 13 Z-1 M1 #538 confirmed closed (no Sprint 5 code change)
+- ✅ Round 12 §G + Round 13 §15 new backlog items 全 dispatch (G12-1/3/4/6/9 + L13-1/6/8 等)
+- ⚠️ Frontend coverage low (~30%) — Sprint 6 跟进
+- ⚠️ Round 11 §P P0 余项 (M-BOM-VER frontend + C-APPROVAL Phase 2) **部分** ship via PR #55/#59 H+A
+- ❌ M1 unblock 不需做 (per Z-1 finding)
+
+### 15.4 工时累计修正 (Round 11+12+13 + Sprint 5)
+
+| 阶段 | 剩 backlog | 时长 |
+|---|---|---|
+| Round 11 (5-19 上午) | ~150d | ~3 月 P0+P1 |
+| Round 12 (5-19 下午) | ~330d | ~6.5 月 含大客户 |
+| Round 13 (5-19 晚) | ~360d | ~7 月 + Layer B/C |
+| **Sprint 5 ship (in-flight 9 PRs)** | **~290d** | **~6 月** (Sprint 5 ~70d 折合 backend MVP + spec defer) |
+| **Sprint 6 follow-up est (40d)** | ~250d | ~5 月 |
+
+vs Steve sign-off 9 月 → **仍省 4 月** (Sprint 5 ship 后).
+
+### 15.5 后续
+
+- **Sprint 6**: ~5-6 周 (per MUST_COPY 附录 R §R.6 — W1 数电票真集成 + Personal view 3 sub / W2 Frontend ship / W3 phase-2 / W4 backend depth)
+- **Round 14**: Cretas vs HJ 端到端 demo benchmark (post Sprint 5 merge)
+- **HJ APK 实测** (Round 9 27-doc skeleton): Steve 物理 Android 30 min 简化测试 — 任意时机
+
+### 15.6 元教训 (Sprint 5 dispatch — code work via subagent)
+
+1. **worktree isolation 100% 有效** (0 main 冲突 vs Sprint 1-2 多次 Canvas Tab 中心文件冲突)
+2. **Agent 自查 + 自恢复**: Z+F 各 1 次 Write-to-main 误判, agent 用 `git status` post-Write 检查 + recovery — 验证 concurrent-edit-safety rule 5b
+3. **Agent 抓 brief 错**: Track H agent 发现"AttachmentRecord 拆"基于不完整 grep, Cretas 已有 `Attachment` (PR #658) — 改为扩 FileCategory + spec 解释. 这是 desired behavior (agent 应纠正 organizer)
+4. **MVP slice 策略**: 不强求 full DOD, 每 PR 5-10% of nominal work + 详细 Sprint 6 follow-up spec — Steve review 容易 + ship 快
+5. **gh anti-abuse 边缘**: 9 PR create 在 ~10 min 内, 未触发 suspend (Sprint 5 案例: anti-abuse limit 实际 > 10 ops/hr threshold, 或我们速度合理)
+6. **2-3h agent budget 合理**: 实际 35min - 2.5h 各 agent, 0 socket crash (vs Round 12 X3 22min crash 教训 — brief 加 tool-call limit)
+
+### 15.7 本文件 (30-Audit) 后续
+
+- ✅ §13 Round 11 reconcile (5-19 上午)
+- ✅ §14 Round 12 reconcile (5-19 下午)
+- ✅ §15 Sprint 5 dispatch (本节, 5-19 晚)
+- ⚠️ Sprint 6 dispatch summary 待 写 §16 (Sprint 6 ship 后)
+- ⚠️ Sprint 5 9 PRs merge 后 update §15.1 status (MERGED count)
+

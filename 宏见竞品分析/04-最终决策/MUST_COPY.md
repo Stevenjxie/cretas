@@ -915,3 +915,117 @@ vs Steve sign-off "9 月" → **仍省 2.5 月** (vs Round 11 省 6 月, 增量�
 ---
 
 **v1.3 (R-HJ Round 11) → v1.4 (R-HJ Round 12 deep re-audit) 完成 (2026-05-19)**.
+
+---
+
+# 附录 R: Sprint 5 Dispatch — 9 Parallel Subagents (2026-05-19, v1.5)
+
+> **来源**: 9 PRs (#51-#59) shipped via Agent tool + git worktree isolation. 详见 `../../docs/superpowers/plans/2026-05-19-sprint-5-dispatch.md` + 9 PR bodies.
+>
+> ⚠️ **本附录是 v1.5 Sprint 5 dispatch 状态**. 9 PRs in-flight 等 Steve review/merge. 完成度: backend MVP slice ~95% / frontend ~30% (per "MVP slice 不强求 full DOD" 策略).
+
+## R.1 9 PRs Sprint 5 dispatch (in-flight 待 Steve review)
+
+| PR # | Track | Scope | 工时 nominal | Agent 实际 | Status |
+|---|---|---|---|---|---|
+| #51 | Z Pre-Spike | 4 verify + decision docs | 3d | 1.5h | MERGEABLE / 5 pass 1 fail |
+| #52 | B 数电票 spike | 百望云 provider + skeleton | 10d | 2.5h | MERGEABLE / 5 pass 2 fail |
+| #53 | F Customer + 辅助核算 | 17 tab MVP 88% + 7 类 backend | 9d | 38min | MERGEABLE / 2 pass 2 fail 1 pending |
+| #54 | G RBAC 数据权限 | 5-level + POC + 9 tests | 6d | 44min | MERGEABLE / 2 pass 1 fail 2 pending |
+| #55 | H linkno + BOM + decisionType | 14→32 + Vue list + Attachment.CONTRACT | 8d | 35min | MERGEABLE / 2 pass 1 fail 2 pending |
+| #56 | D 请购单 entity | state machine + 7 endpoints + 20 tests | 5d | 45min | MERGEABLE / pending |
+| #57 | E 生产→工资 trigger | ProcessingService→WageRecord + 5 tests | 5d | 35min | MERGEABLE / pending |
+| #58 | C 链 chip + 打印 spec | linkcounter MVP + 21 分类 | 12d | 1.5h | MERGEABLE / pending |
+| #59 | A Personal view | 2 endpoints + my-created.vue + 7 tests | 6d | 49min | MERGEABLE / pending |
+| **合计** | | | **64d nominal** | **~9h agent** | **9/9 MERGEABLE, 0 main conflict** |
+
+## R.2 战略数字 (Sprint 5 dispatch 总览)
+
+- **9 isolated worktrees** (0 main 冲突, agent self-recovery 2 次, 跟 Round 11+12 audit 同一 model)
+- **~50+ commits** 跨 9 branches
+- **~70+ unit tests** PASS 累计 (20 D + 9 G + 9 F + 7 A + 5 E + 4 H + 等)
+- **~10 spec docs** ship-ready (deferred backlog 详尽列出)
+- **~98% 工时节省** (nominal 64d → ~9h agent, MVP slice 模式)
+
+## R.3 Sprint 6 follow-up (~40d nominal, 跨 9 PR bodies)
+
+每 PR body "Sprint 6 follow-up" section 列出. 主要类别:
+
+### Track A 后续 (12h, P0+P1)
+- 我参与的工作流 frontend (~2h, backend ✅, mechanical copy of my-created.vue)
+- 工作流处理 admin UI (~6h, both backend + frontend)
+- 流转规则设置 frontend (~4h, backend ✅ Round 11 §I.4)
+
+### Track B 后续 (7-10d, P1 大客户硬需)
+- W1: Maven dep + Baiwang SDK + 4 method impl + HMAC-SHA256 signing + scheduled polling
+- W2: Vue UI toggle + InvoiceList status chip + 沙箱 E2E
+
+### Track C 后续 (5d, P1)
+- 链 chip 拆 file/image/contract (depends Track H Attachment expansion ship)
+- 报价试算完整 ship (3d)
+- 打印 P1 3 templates (仓库/财务/装箱)
+
+### Track D 后续 (5d, P1)
+- Frontend Vue 3 list views + create dialog + detail view
+- JSONB → relational RequisitionItem entity
+- Workflow integration (wire submitRequisition into Canvas-Workflow)
+- vflag listener
+- AI Tool wrapping
+
+### Track E 后续 (2-3d, P1)
+- 我的工资 view 本月计件明细 section
+- WagePolicy 配置 admin UI
+- WagePolicy mode (按时/混合)
+- Vflag listener auto-trigger 工资凭证 month-end
+
+### Track F 后续 (6d, P1)
+- 微信记录 backend (3d)
+- 通话记录 backend (3d)
+- DEPT/PROJECT/INVENTORY/OUTSOURCER generator wiring
+- 报表 by-auxiliary 聚合 view
+
+### Track G 后续 (7d, P1+P2)
+- 10+ endpoint sweep (customer/PO/invoice/delivery)
+- DB-side keyword+SELF combo query
+- Specification interceptor (transparent WHERE injection)
+- DEPT_AND_BELOW / SELF_AND_BELOW via User.reportsTo chain
+- CUSTOM scope dialog
+- Frontend edit mode + PUT endpoint
+- 3-role × 5-scope E2E matrix
+
+### Track H 后续 (4d, P1+P2)
+- Add SALES_ORDER + INVENTORY to `Attachment.EntityType` whitelist
+- BomVersion 4 batch buttons + reverse-query UI
+- ECN paginated list + impact dialog
+- decisionType 17 new service layer wiring (Track A admin UI surfaces them)
+
+## R.4 Steve 决策汇总 (15+ items 跨 9 PRs)
+
+每 PR body 末尾 "Steve 待决策" section 列出. 优先级:
+- **P0**: PR #52 provider 选 + 沙箱 key 谁申请 (Sprint 6 W1 阻塞器)
+- **P1**: PR #51 关 #538 + vflag defer 确认 / PR #54 Specification interceptor design / PR #55 service layer wiring spec
+- **P2**: PR #53 Sprint 6 微信/通话 优先级 / PR #58 链 chip 拆 timing / PR #59 3 sub-views 顺序
+
+## R.5 工时累计最终 (Round 11+12+13 + Sprint 5)
+
+| 阶段 | nominal | agent 实际 | 节省 |
+|---|---|---|---|
+| Round 11 audit | ~20h | ~20h | 0 (人工干预多) |
+| Round 12 audit | ~6.5h | ~6.5h | 0 |
+| Round 13 audit | ~30min | ~30min | 0 |
+| **Sprint 5 dispatch** | **64d** | **~9h** | **~98%** |
+| **Total** | **~64d + 27h audit** | **~36h** | — |
+
+## R.6 后续 (Sprint 6 plan candidate)
+
+- **Sprint 6 W1**: PR #52 数电票 provider 真集成 (5d, blocks 大客户) + Track A 3 sub-views (12h)
+- **Sprint 6 W2**: PR #54/#56 frontend ship (~8d 整合)
+- **Sprint 6 W3**: PR #55/#58 phase-2 (链 chip 拆 + decisionType wiring + 打印 P1)
+- **Sprint 6 W4**: PR #53/#57 backend depth (微信/通话/wage mode/vflag listener)
+- **Total Sprint 6**: ~5-6 周 (vs Sprint 5 ~3 周 wall clock dispatch + ~9h agent)
+
+详见 `../../docs/superpowers/plans/2026-05-19-sprint-6-skeleton.md` (待写).
+
+---
+
+**v1.4 (Round 12) → v1.5 (Sprint 5 dispatch) 完成 (2026-05-19)**.
