@@ -36,6 +36,7 @@ import com.cretas.aims.event.MaterialReceivedEvent;
 import com.cretas.aims.annotation.Loggable;
 import com.cretas.aims.service.MaterialBatchService;
 import com.cretas.aims.service.inventory.PurchaseService;
+import com.cretas.aims.service.rules.annotation.RuleEvaluate;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.ApplicationEventPublisher;
@@ -147,6 +148,21 @@ public class PurchaseServiceImpl implements PurchaseService {
     /** Phase 1 B.6 — 用于查询 active workflow 的 graph 节点 (notifyNextStage 需要). */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private ApprovalWorkflowService approvalWorkflowService;
+
+    /**
+     * Phase 4a follow-up (issue #45) — self-proxy reference for Spring AOP aspect interception.
+     *
+     * <p>Spring CGLIB / JDK proxy only intercepts calls that go THROUGH the proxy. Direct
+     * {@code this.evaluateOrderRules(...)} calls bypass the proxy → aspect does NOT fire.
+     * By calling {@code self.evaluateOrderRules(...)} we route through the proxy, triggering
+     * {@link com.cretas.aims.service.rules.aop.RuleEvaluateAspect}.
+     *
+     * <p>{@code @Lazy} breaks the Spring BeanCurrentlyInCreationException on
+     * self-referencing constructor wiring (well-known pattern, see Spring Framework docs).
+     */
+    @org.springframework.beans.factory.annotation.Autowired
+    @org.springframework.context.annotation.Lazy
+    private PurchaseService self;
 
     public PurchaseServiceImpl(PurchaseOrderRepository purchaseOrderRepository,
                                PurchaseOrderItemRepository purchaseOrderItemRepository,
@@ -334,18 +350,17 @@ public class PurchaseServiceImpl implements PurchaseService {
     }
 
     @Override
-    // Phase 4a follow-up (issue #38 spinoff): @RuleEvaluate("ORDER") was attached here but
-    // submitOrder(String factoryId, String orderId) signature has only String args. The aspect's
-    // extractInputObject heuristic skips String/Number/Boolean — inputObject=null → rule SILENT NO-OP
-    // (per PR #37 review C1 score 95). Removed until refactor: either move annotation to a private
-    // helper that takes loaded `PurchaseOrder order` after getPurchaseOrderById(), OR change signature
-    // to accept PurchaseOrderRequest DTO. MaterialBatchService.createMaterialBatch annotation kept
-    // (target="request" works per pom.xml -parameters flag + RuleEvaluateAspectTest verified).
     @Transactional
     @Loggable(module = "PURCHASE_ORDER", action = "SUBMIT", entityType = "PurchaseOrder",
               entityIdParam = "orderId")
     public PurchaseOrder submitOrder(String factoryId, String orderId) {
         PurchaseOrder order = getPurchaseOrderById(factoryId, orderId);
+        // Phase 4a follow-up (issue #45): Option A wrap. The annotated helper
+        // evaluateOrderRules() must be invoked through the Spring proxy ({@code self}, not
+        // {@code this}) so the @RuleEvaluate aspect intercepts. The helper receives the
+        // loaded PurchaseOrder POJO; aspect binds target="order" parameter name → runs
+        // ORDER scope rules against it.
+        self.evaluateOrderRules(factoryId, order);
         if (order.getStatus() != PurchaseOrderStatus.DRAFT) {
             throw new BusinessException(409, "只有草稿状态的订单可以提交")
                     .withHint("请刷新订单列表查看最新状态");
@@ -353,6 +368,37 @@ public class PurchaseServiceImpl implements PurchaseService {
         order.setStatus(PurchaseOrderStatus.SUBMITTED);
         log.info("提交采购订单: orderId={}, orderNumber={}", orderId, order.getOrderNumber());
         return purchaseOrderRepository.save(order);
+    }
+
+    /**
+     * Phase 4a follow-up (issue #45) — RuleEngine bridge for {@link #submitOrder(String, String)}.
+     *
+     * <p>Why this method exists: the original {@code submitOrder(String, String)} signature has
+     * only String args, so {@code @RuleEvaluate} attached there would no-op (inputObject=null
+     * per aspect's String/Number/Boolean skip). We can't change the public signature without
+     * breaking callers. Solution: load the {@link PurchaseOrder} POJO inside submitOrder, then
+     * call this annotated wrapper via the self-proxy. The aspect's {@code target="order"}
+     * parameter-name binding resolves to our POJO and runs ORDER scope rules against it.
+     *
+     * <p><b>Must be called via {@code self.evaluateOrderRules(...)}</b> (not
+     * {@code this.evaluateOrderRules(...)}) — Spring CGLIB proxy only intercepts external /
+     * proxy-routed calls. Direct {@code this.*} self-invocation bypasses the proxy, leaving
+     * the aspect silent. See the {@code self} field JavaDoc.
+     *
+     * <p>Body is intentionally empty — all logic happens in
+     * {@link com.cretas.aims.service.rules.aop.RuleEvaluateAspect#evaluateRules}:
+     * <ul>
+     *   <li>REJECT → throws {@link com.cretas.aims.service.rules.RuleViolationException}
+     *       (propagates out of submitOrder → caught by GlobalExceptionHandler → HTTP 400)</li>
+     *   <li>MODIFY → mutates {@code order} in-place via BeanWrapper before this method returns
+     *       (changes visible to submitOrder's subsequent {@code order.setStatus(...)} line)</li>
+     *   <li>LOG / TRIGGER_WORKFLOW → side-effect only, returns normally</li>
+     * </ul>
+     */
+    @Override
+    @RuleEvaluate(value = "ORDER", target = "order")
+    public void evaluateOrderRules(String factoryId, PurchaseOrder order) {
+        // Intentionally empty — RuleEvaluateAspect @Around intercepts here.
     }
 
     /**
