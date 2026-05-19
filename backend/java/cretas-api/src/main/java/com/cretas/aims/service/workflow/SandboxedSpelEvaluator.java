@@ -71,6 +71,109 @@ public class SandboxedSpelEvaluator {
     }
 
     /**
+     * 仅校验 SpEL 表达式语法 + 安全约束 (write-time validation), 不依赖业务变量.
+     *
+     * <p>使用场景: Controller 在 POST/PUT 持久化之前调用此方法, 防止恶意 SpEL
+     * (RCE 攻击如 {@code T(java.lang.Runtime).getRuntime().exec(...)}) 被写入数据库.
+     * 等到 scheduler / event listener 触发时才发现 已经为时已晚.
+     *
+     * <p>实现策略 (两层防御):
+     * <ol>
+     *   <li><b>静态 pattern 检查</b>: 拒绝 {@code T(}, {@code new }, {@code getClass},
+     *       {@code getMethod}, {@code getDeclaredMethod}, {@code @beanName}, {@code #root.}
+     *       等已知 RCE / 反射 / Spring bean 访问模式. 即使 SpEL 引擎放过, 静态扫描挡住.</li>
+     *   <li><b>沙箱 dry-run</b>: 用 {@link SimpleEvaluationContext#forReadOnlyDataBinding()}
+     *       parse + 试求值 (空变量). 任何 {@link SpelParseException} 或
+     *       {@link SpelEvaluationException} 都被翻译成友好错误.
+     *       注意: 由于变量为空, {@code #foo.bar} 这种合法表达式会因 null property
+     *       而抛 SpelEvaluationException — 我们 ignore "Property or field ... cannot be found"
+     *       错误, 仅在涉及 forbidden constructs 时才 propagate.</li>
+     * </ol>
+     *
+     * @param spel SpEL 字符串 (caller 应先 null/blank check)
+     * @throws SpelEvaluationFailure 当语法错误 / 安全约束违反时, 携带 user-friendly hint
+     */
+    public void validateSyntax(String spel) throws SpelEvaluationFailure {
+        Objects.requireNonNull(spel, "spel must not be null");
+        // Layer 1: static pattern scan — defense-in-depth, catches RCE attempts
+        // even before SpelExpressionParser sees them.
+        String normalized = spel.replaceAll("\\s+", " ").trim();
+        // T(...) type reference — used for static method access (T(Runtime).getRuntime())
+        if (normalized.matches(".*\\bT\\s*\\(.*")) {
+            throw new SpelEvaluationFailure(spel,
+                    "SpEL 安全检查失败: 禁止使用 T() 类型引用",
+                    "仅支持 #input/#order/#material 等业务字段访问, 禁用 T()/new/反射",
+                    null);
+        }
+        // new ClassName(...) — constructor invocation
+        if (normalized.matches(".*\\bnew\\s+[A-Za-z_].*")) {
+            throw new SpelEvaluationFailure(spel,
+                    "SpEL 安全检查失败: 禁止 new 构造器调用",
+                    "仅支持 #input/#order/#material 等业务字段访问, 禁用 T()/new/反射",
+                    null);
+        }
+        // getClass()/getMethod()/getDeclaredMethod()/getMethods() — reflection escape
+        if (normalized.matches(".*\\.(getClass|getMethod|getMethods|getDeclaredMethod|getDeclaredMethods|getDeclaredField|getDeclaredFields|forName)\\s*\\(.*")) {
+            throw new SpelEvaluationFailure(spel,
+                    "SpEL 安全检查失败: 禁止反射调用 (getClass/getMethod/...)",
+                    "仅支持 #input/#order/#material 等业务字段访问, 禁用 T()/new/反射",
+                    null);
+        }
+        // @beanName — Spring bean reference (BeanFactoryResolver leak)
+        if (normalized.matches(".*@[A-Za-z_].*")) {
+            throw new SpelEvaluationFailure(spel,
+                    "SpEL 安全检查失败: 禁止 @bean 引用",
+                    "仅支持 #input/#order/#material 等业务字段访问, 禁用 T()/new/反射",
+                    null);
+        }
+        // #root — root object access (can leak Context internals)
+        if (normalized.matches(".*#root\\b.*")) {
+            throw new SpelEvaluationFailure(spel,
+                    "SpEL 安全检查失败: 禁止 #root 访问",
+                    "仅支持 #input/#order/#material 等业务字段访问, 禁用 T()/new/反射",
+                    null);
+        }
+
+        // Layer 2: sandbox dry-run — parse + evaluate with empty context.
+        // Catches genuine parse errors that pattern scan missed.
+        SimpleEvaluationContext ctx = SimpleEvaluationContext
+                .forReadOnlyDataBinding()
+                .withInstanceMethods()
+                .build();
+        try {
+            Expression expression = parser.parseExpression(spel);
+            // Dry-run: 空 context + 空变量. 大多数业务表达式 (#order.amount > 100)
+            // 会因变量未注册而抛 SpelEvaluationException "Property or field ...
+            // cannot be found on null" — 这是预期行为, 静默 swallow.
+            // 任何 forbidden construct (T()/new/getClass) 已在 Layer 1 拦截.
+            expression.getValue(ctx);
+        } catch (SpelParseException pe) {
+            throw new SpelEvaluationFailure(spel,
+                    "SpEL 语法错误: " + pe.getSimpleMessage(),
+                    "请检查表达式拼写, 例: #order.amount > 10000",
+                    pe);
+        } catch (SpelEvaluationException ee) {
+            // 空 context 下 "Property or field ... cannot be found" 是预期, swallow.
+            // 其他 evaluation error (e.g. T() / reflection) propagate as failure.
+            String msg = ee.getMessage() == null ? "" : ee.getMessage();
+            if (msg.contains("cannot be found") || msg.contains("on null")
+                    || msg.contains("not assignable")) {
+                // expected when running with empty variables — syntax is OK
+                return;
+            }
+            throw new SpelEvaluationFailure(spel,
+                    "SpEL 安全检查失败: " + ee.getSimpleMessage(),
+                    nextActionHint(ee),
+                    ee);
+        } catch (ParseException | EvaluationException ge) {
+            throw new SpelEvaluationFailure(spel,
+                    "SpEL 错误: " + ge.getMessage(),
+                    "请检查表达式语法",
+                    ge);
+        }
+    }
+
+    /**
      * 求值 SpEL 表达式, 返原始 Object (供 AIChat workflow_variable_test Tool 用).
      *
      * @throws SpelEvaluationFailure 见 above
