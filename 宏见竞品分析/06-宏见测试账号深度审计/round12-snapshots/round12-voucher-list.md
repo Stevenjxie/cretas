@@ -1,0 +1,191 @@
+- generic [active] [ref=e1]:
+  - table [ref=e3]:
+    - rowgroup [ref=e4]:
+      - row "宏见演示苏州李  admin(系统管理员)" [ref=e83]:
+        - cell [ref=e6]:
+          - link [ref=e7] [cursor=pointer]:
+            - /url: http://www.hongjian.com/
+            - img [ref=e8]
+        - cell "宏见演示苏州李" [ref=e9]
+        - cell " admin(系统管理员)" [ref=e10]:
+          - generic [ref=e11]: 
+          - text: admin(系统管理员)
+        - cell [ref=e84]:
+          - iframe [ref=e14] [cursor=pointer]:
+            
+          - generic "微信客服" [ref=e15] [cursor=pointer]:
+            - link [ref=e16]:
+              - /url: javascript:;
+              - img [ref=e17]
+          - generic "返回工作台" [ref=e18] [cursor=pointer]:
+            - img [ref=e19]
+          - generic "消息提醒" [ref=e20] [cursor=pointer]
+          - generic "帮助手册" [ref=e24] [cursor=pointer]:
+            - link [ref=e25]:
+              - /url: javascript:;
+              - img [ref=e26]
+          - generic "退出系统" [ref=e27] [cursor=pointer]:
+            - link [ref=e28]:
+              - /url: javascript:;
+              - img [ref=e29]
+  - generic [ref=e30]:
+    - list:
+      - generic "展开左侧栏" [ref=e31]: 
+      - listitem [ref=e32]:
+        - link "客户管理" [ref=e33] [cursor=pointer]:
+          - /url: "#"
+      - listitem [ref=e34]:
+        - link "销售管理" [ref=e35] [cursor=pointer]:
+          - /url: "#"
+      - listitem [ref=e36]:
+        - link "采购管理" [ref=e37] [cursor=pointer]:
+          - /url: "#"
+      - listitem [ref=e38]:
+        - link "仓库管理" [ref=e39] [cursor=pointer]:
+          - /url: "#"
+      - listitem [ref=e40]:
+        - link "财务管理" [ref=e41] [cursor=pointer]:
+          - /url: "#"
+      - listitem [ref=e42]:
+        - link "生产管理" [ref=e43] [cursor=pointer]:
+          - /url: "#"
+      - listitem [ref=e44]:
+        - link "委外管理" [ref=e45] [cursor=pointer]:
+          - /url: "#"
+      - listitem [ref=e46]:
+        - link "工程管理" [ref=e47] [cursor=pointer]:
+          - /url: "#"
+      - listitem [ref=e48]:
+        - link "品质管理" [ref=e49] [cursor=pointer]:
+          - /url: "#"
+      - listitem [ref=e50]:
+        - link "人力资源" [ref=e51] [cursor=pointer]:
+          - /url: "#"
+      - listitem [ref=e52]:
+        - link "办公自动化" [ref=e53] [cursor=pointer]:
+          - /url: "#"
+      - listitem [ref=e54]:
+        - link "系统管理" [ref=e55] [cursor=pointer]:
+          - /url: "#"
+  - iframe [ref=e57]:
+    - table [ref=f20e2]:
+      - rowgroup [ref=f20e3]:
+        - row " 收支明细   收支明细  账户报表  账户维护  财务管理   账簿管理   报表管理   结账管理   月结对账   应收应付   发票管理   预存款   成本核算   员工借款   费用报销   备用金   固定资产   长期待摊   汇率管理   票据管理   参数设置 " [ref=f20e80]:
+          - cell " 收支明细   收支明细  账户报表  账户维护  财务管理   账簿管理   报表管理   结账管理   月结对账   应收应付   发票管理   预存款   成本核算   员工借款   费用报销   备用金   固定资产   长期待摊   汇率管理   票据管理   参数设置 " [ref=f20e81]:
+            - list [ref=f20e82]:
+              - listitem [ref=f20e83]:
+                - link " 收支明细 " [ref=f20e84] [cursor=pointer]:
+                  - /url: javascript:;
+                - generic [ref=f20e87]
+              - listitem [ref=f20e97]:
+                - link " 财务管理 " [ref=f20e98] [cursor=pointer]:
+                  - /url: javascript:;
+              - listitem [ref=f20e101]:
+                - link " 账簿管理 " [ref=f20e102] [cursor=pointer]:
+                  - /url: javascript:;
+              - listitem [ref=f20e105]:
+                - link " 报表管理 " [ref=f20e106] [cursor=pointer]:
+                  - /url: javascript:;
+              - listitem [ref=f20e109]:
+                - link " 结账管理 " [ref=f20e110] [cursor=pointer]:
+                  - /url: javascript:;
+              - listitem [ref=f20e113]:
+                - link " 月结对账 " [ref=f20e114] [cursor=pointer]:
+                  - /url: javascript:;
+              - listitem [ref=f20e117]:
+                - link " 应收应付 " [ref=f20e118] [cursor=pointer]:
+                  - /url: javascript:;
+              - listitem [ref=f20e121]:
+                - link " 发票管理 " [ref=f20e122] [cursor=pointer]:
+                  - /url: javascript:;
+              - listitem [ref=f20e125]:
+                - link " 预存款 " [ref=f20e126] [cursor=pointer]:
+                  - /url: javascript:;
+              - listitem [ref=f20e129]:
+                - link " 成本核算 " [ref=f20e130] [cursor=pointer]:
+                  - /url: javascript:;
+              - listitem [ref=f20e133]:
+                - link " 员工借款 " [ref=f20e134] [cursor=pointer]:
+                  - /url: javascript:;
+              - listitem [ref=f20e137]:
+                - link " 费用报销 " [ref=f20e138] [cursor=pointer]:
+                  - /url: javascript:;
+              - listitem [ref=f20e141]:
+                - link " 备用金 " [ref=f20e142] [cursor=pointer]:
+                  - /url: javascript:;
+              - listitem [ref=f20e145]:
+                - link " 固定资产 " [ref=f20e146] [cursor=pointer]:
+                  - /url: javascript:;
+              - listitem [ref=f20e149]:
+                - link " 长期待摊 " [ref=f20e150] [cursor=pointer]:
+                  - /url: javascript:;
+              - listitem [ref=f20e153]:
+                - link " 汇率管理 " [ref=f20e154] [cursor=pointer]:
+                  - /url: javascript:;
+              - listitem [ref=f20e157]:
+                - link " 票据管理 " [ref=f20e158] [cursor=pointer]:
+                  - /url: javascript:;
+              - listitem [ref=f20e161]:
+                - link " 参数设置 " [ref=f20e162] [cursor=pointer]:
+                  - /url: javascript:;
+  - generic [ref=e58]:
+    - list [ref=e59]:
+      - listitem [ref=e60] [cursor=pointer]:
+        - text: 工作台
+        - generic [ref=e61]: ဆ
+      - listitem [ref=e71] [cursor=pointer]:
+        - text: 流程图
+        - generic [ref=e72]: ဆ
+      - listitem [ref=e79] [cursor=pointer]:
+        - text: 凭证管理
+        - generic [ref=e80]: ဆ
+    - iframe [ref=e82]:
+      - generic [active] [ref=f33e1]:
+        - generic [ref=f33e2]:
+          - link [ref=f33e3] [cursor=pointer]:
+            - /url: accountlist_pc.jsp?year=2025&month=05&model=detailed
+            - img [ref=f33e4]
+          - textbox [ref=f33e5] [cursor=pointer]: "2026"
+          - text: 年凭证列表
+          - link [ref=f33e6] [cursor=pointer]:
+            - /url: accountlist_pc.jsp?year=2027&month=05&model=detailed
+            - img [ref=f33e7]
+          - button "" [ref=f33e8] [cursor=pointer]:
+            - generic [ref=f33e9]: 
+          - link "录凭证" [ref=f33e10] [cursor=pointer]:
+            - /url: "#"
+        - table [ref=f33e11]:
+          - rowgroup [ref=f33e12]:
+            - row "1月 (0) 2月 (0) 3月 (0) 4月 (0) 5月 (0) 6月 (0) 7月 (0) 8月 (0) 9月 (0) 10月 (0) 11月 (0) 12月 (0)" [ref=f33e13]:
+              - cell "1月 (0) 2月 (0) 3月 (0) 4月 (0) 5月 (0) 6月 (0) 7月 (0) 8月 (0) 9月 (0) 10月 (0) 11月 (0) 12月 (0)" [ref=f33e14]:
+                - list
+        - group "查询条件" [ref=f33e28]:
+          - generic [ref=f33e29]: 查询条件
+          - table [ref=f33e30]:
+            - rowgroup [ref=f33e31]:
+              - row "凭证字： --请选择-- 摘要： 科目编号/名称： 金额： - 辅助类型： --请选择-- 辅助名称： 审核状态： --请选择-- 制单人： 异常状态： --请选择-- 查询 导出 高级" [ref=f33e32]:
+                - cell "凭证字： --请选择-- 摘要： 科目编号/名称： 金额： - 辅助类型： --请选择-- 辅助名称： 审核状态： --请选择-- 制单人： 异常状态： --请选择--" [ref=f33e33]
+                - cell "查询 导出 高级" [ref=f33e55]
+        - generic [ref=f33e62]:
+          - generic [ref=f33e63]:
+            - table [ref=f33e65]:
+              - rowgroup [ref=f33e66]:
+                - row " 凭证字 升序 降序 日期 升序 降序 摘要 科目 借方金额 贷方金额 制单人 凭证状态 操作" [ref=f33e67]
+            - generic [ref=f33e96]:
+              - table:
+                - rowgroup
+              - generic [ref=f33e97]: 无数据
+          - paragraph [ref=f33e100]:
+            - button "批量操作 " [ref=f33e101] [cursor=pointer]:
+              - text: 批量操作
+              - generic [ref=f33e102]: 
+            - text: 总借方金额：0 总贷方金额：0
+  - generic [ref=e66]:
+    - img [ref=e67]
+    - text: 版权所有：
+    - link "广东宏见软件有限公司" [ref=e68] [cursor=pointer]:
+      - /url: http://www.hongjian.com/
+    - text: "售后电话: 0755-36657208 服务代码: 159016"
+    - link "粤ICP备10239503号" [ref=e69] [cursor=pointer]:
+      - /url: http://www.miitbeian.gov.cn
+    - img "升级日志" [ref=e70]

@@ -1,0 +1,106 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e3]:
+    - generic [ref=e4]:
+      - img [ref=e5]
+      - text: 宏见云服务企业管理软件在线帮助文档
+    - list [ref=e6]:
+      - listitem [ref=e7]:
+        - searchbox "搜索关键词、字" [ref=e8]
+        - img [ref=e9]
+  - list [ref=e12]:
+    - listitem [ref=e13]:
+      - generic [ref=e17] [cursor=pointer]: 软件使用
+      - list [ref=e18]:
+        - listitem [ref=e19]:
+          - generic [ref=e24] [cursor=pointer]: 帮助手册使用指南
+        - listitem [ref=e25]:
+          - generic [ref=e30] [cursor=pointer]: 宏见ERP如何登录
+        - listitem [ref=e31]:
+          - generic [ref=e36] [cursor=pointer]: 宏见ERP如何注册
+        - listitem [ref=e37]:
+          - generic [ref=e42] [cursor=pointer]: 宏见ERP登录常见问题
+    - listitem [ref=e43]:
+      - generic [ref=e47] [cursor=pointer]: 客户管理
+    - listitem [ref=e48]:
+      - generic [ref=e52] [cursor=pointer]: 销售管理
+      - list [ref=e110]:
+        - listitem [ref=e111]:
+          - generic [ref=e116] [cursor=pointer]: 销售管理
+          - list [ref=e207]:
+            - listitem [ref=e208]:
+              - generic [ref=e214] [cursor=pointer]: 销售订单
+            - listitem [ref=e215]:
+              - generic [ref=e221] [cursor=pointer]: 一维订单
+            - listitem [ref=e222]:
+              - generic [ref=e228] [cursor=pointer]: 二维订单
+            - listitem [ref=e229]:
+              - generic [ref=e235] [cursor=pointer]: 销售出库列表
+            - listitem [ref=e236]:
+              - generic [ref=e242] [cursor=pointer]: 交货日期查询
+            - listitem [ref=e243]:
+              - generic [ref=e249] [cursor=pointer]: 销售产品需求表
+            - listitem [ref=e250]:
+              - generic [ref=e256] [cursor=pointer]: 发票申请
+            - listitem [ref=e257]:
+              - generic [ref=e263] [cursor=pointer]: 回款计划
+            - listitem [ref=e264]:
+              - generic [ref=e270] [cursor=pointer]: 销售预测单
+            - listitem [ref=e271]:
+              - generic [ref=e277] [cursor=pointer]: 在线订单
+            - listitem [ref=e278]:
+              - generic [ref=e284] [cursor=pointer]: 订单合同
+        - listitem [ref=e117]:
+          - generic [ref=e122] [cursor=pointer]: 报价管理
+        - listitem [ref=e123]:
+          - generic [ref=e128] [cursor=pointer]: 送货管理
+        - listitem [ref=e129]:
+          - generic [ref=e134] [cursor=pointer]: 退货管理
+        - listitem [ref=e135]:
+          - generic [ref=e140] [cursor=pointer]: 客户项目
+        - listitem [ref=e141]:
+          - generic [ref=e146] [cursor=pointer]: 研发项目
+        - listitem [ref=e147]:
+          - generic [ref=e152] [cursor=pointer]: 业绩管理
+        - listitem [ref=e153]:
+          - generic [ref=e158] [cursor=pointer]: 月结对账
+        - listitem [ref=e159]:
+          - generic [ref=e164] [cursor=pointer]: 售后服务
+        - listitem [ref=e165]:
+          - generic [ref=e170] [cursor=pointer]: 租赁服务
+        - listitem [ref=e171]:
+          - generic [ref=e176] [cursor=pointer]: 寄卖管理
+        - listitem [ref=e177]:
+          - generic [ref=e182] [cursor=pointer]: 借出管理
+        - listitem [ref=e183]:
+          - generic [ref=e188] [cursor=pointer]: 样品管理
+        - listitem [ref=e189]:
+          - generic [ref=e194] [cursor=pointer]: 微信网店
+        - listitem [ref=e195]:
+          - generic [ref=e200] [cursor=pointer]: 参数设置
+        - listitem [ref=e201]:
+          - generic [ref=e206] [cursor=pointer]: 常见问题
+    - listitem [ref=e53]:
+      - generic [ref=e57] [cursor=pointer]: 采购管理
+    - listitem [ref=e58]:
+      - generic [ref=e62] [cursor=pointer]: 仓库管理
+    - listitem [ref=e63]:
+      - generic [ref=e67] [cursor=pointer]: 财务管理
+    - listitem [ref=e68]:
+      - generic [ref=e72] [cursor=pointer]: 生产管理
+    - listitem [ref=e73]:
+      - generic [ref=e77] [cursor=pointer]: 委外管理
+    - listitem [ref=e78]:
+      - generic [ref=e82] [cursor=pointer]: 工程管理
+    - listitem [ref=e83]:
+      - generic [ref=e87] [cursor=pointer]: 品质管理
+    - listitem [ref=e88]:
+      - generic [ref=e92] [cursor=pointer]: 人力资源
+    - listitem [ref=e93]:
+      - generic [ref=e97] [cursor=pointer]: 办公自动化
+    - listitem [ref=e98]:
+      - generic [ref=e102] [cursor=pointer]: 系统管理
+    - listitem [ref=e103]:
+      - generic [ref=e107] [cursor=pointer]: 宏见云记账
+  - iframe [ref=e109]:
+    - generic [active]:
+      - table

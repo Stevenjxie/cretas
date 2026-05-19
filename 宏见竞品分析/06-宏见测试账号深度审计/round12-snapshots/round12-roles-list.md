@@ -1,0 +1,264 @@
+- generic [active] [ref=e1]:
+  - table [ref=e3]:
+    - rowgroup [ref=e4]:
+      - row "宏见演示苏州李  admin(系统管理员)" [ref=e92]:
+        - cell [ref=e6]:
+          - link [ref=e7] [cursor=pointer]:
+            - /url: http://www.hongjian.com/
+            - img [ref=e8]
+        - cell "宏见演示苏州李" [ref=e9]
+        - cell " admin(系统管理员)" [ref=e10]:
+          - generic [ref=e11]: 
+          - text: admin(系统管理员)
+        - cell [ref=e93]:
+          - iframe [ref=e14] [cursor=pointer]:
+            
+          - generic "微信客服" [ref=e15] [cursor=pointer]:
+            - link [ref=e16]:
+              - /url: javascript:;
+              - img [ref=e17]
+          - generic "返回工作台" [ref=e18] [cursor=pointer]:
+            - img [ref=e19]
+          - generic "消息提醒" [ref=e20] [cursor=pointer]
+          - generic "帮助手册" [ref=e24] [cursor=pointer]:
+            - link [ref=e25]:
+              - /url: javascript:;
+              - img [ref=e26]
+          - generic "退出系统" [ref=e27] [cursor=pointer]:
+            - link [ref=e28]:
+              - /url: javascript:;
+              - img [ref=e29]
+  - generic [ref=e30]:
+    - list:
+      - generic "展开左侧栏" [ref=e31]: 
+      - listitem [ref=e32]:
+        - link "客户管理" [ref=e33] [cursor=pointer]:
+          - /url: "#"
+      - listitem [ref=e34]:
+        - link "销售管理" [ref=e35] [cursor=pointer]:
+          - /url: "#"
+      - listitem [ref=e36]:
+        - link "采购管理" [ref=e37] [cursor=pointer]:
+          - /url: "#"
+      - listitem [ref=e38]:
+        - link "仓库管理" [ref=e39] [cursor=pointer]:
+          - /url: "#"
+      - listitem [ref=e40]:
+        - link "财务管理" [ref=e41] [cursor=pointer]:
+          - /url: "#"
+      - listitem [ref=e42]:
+        - link "生产管理" [ref=e43] [cursor=pointer]:
+          - /url: "#"
+      - listitem [ref=e44]:
+        - link "委外管理" [ref=e45] [cursor=pointer]:
+          - /url: "#"
+      - listitem [ref=e46]:
+        - link "工程管理" [ref=e47] [cursor=pointer]:
+          - /url: "#"
+      - listitem [ref=e48]:
+        - link "品质管理" [ref=e49] [cursor=pointer]:
+          - /url: "#"
+      - listitem [ref=e50]:
+        - link "人力资源" [ref=e51] [cursor=pointer]:
+          - /url: "#"
+      - listitem [ref=e52]:
+        - link "办公自动化" [ref=e53] [cursor=pointer]:
+          - /url: "#"
+      - listitem [ref=e54]:
+        - link "系统管理" [ref=e55] [cursor=pointer]:
+          - /url: "#"
+  - iframe [ref=e57]:
+    - table [ref=f20e2]:
+      - rowgroup [ref=f20e3]:
+        - row " 员工管理   员工管理  角色管理  特殊授权  离职员工花名册  职务管理  印章签名管理  员工查询  劳动合同   合作伙伴   统计报表   工资管理   考勤管理   外勤管理   请假管理   加班管理   调休管理   出差管理   绩效管理   岗位职位   奖惩管理   员工培训   员工关怀   招聘管理   规章制度   宿舍管理   参数设置 " [ref=f20e165]:
+          - cell " 员工管理   员工管理  角色管理  特殊授权  离职员工花名册  职务管理  印章签名管理  员工查询  劳动合同   合作伙伴   统计报表   工资管理   考勤管理   外勤管理   请假管理   加班管理   调休管理   出差管理   绩效管理   岗位职位   奖惩管理   员工培训   员工关怀   招聘管理   规章制度   宿舍管理   参数设置 " [ref=f20e166]:
+            - list [ref=f20e167]:
+              - listitem [ref=f20e168]:
+                - link " 员工管理 " [ref=f20e169] [cursor=pointer]:
+                  - /url: javascript:;
+                - generic [ref=f20e172]
+              - listitem [ref=f20e194]:
+                - link " 劳动合同 " [ref=f20e195] [cursor=pointer]:
+                  - /url: javascript:;
+              - listitem [ref=f20e198]:
+                - link " 合作伙伴 " [ref=f20e199] [cursor=pointer]:
+                  - /url: javascript:;
+              - listitem [ref=f20e202]:
+                - link " 统计报表 " [ref=f20e203] [cursor=pointer]:
+                  - /url: javascript:;
+              - listitem [ref=f20e206]:
+                - link " 工资管理 " [ref=f20e207] [cursor=pointer]:
+                  - /url: javascript:;
+              - listitem [ref=f20e210]:
+                - link " 考勤管理 " [ref=f20e211] [cursor=pointer]:
+                  - /url: javascript:;
+              - listitem [ref=f20e214]:
+                - link " 外勤管理 " [ref=f20e215] [cursor=pointer]:
+                  - /url: javascript:;
+              - listitem [ref=f20e218]:
+                - link " 请假管理 " [ref=f20e219] [cursor=pointer]:
+                  - /url: javascript:;
+              - listitem [ref=f20e222]:
+                - link " 加班管理 " [ref=f20e223] [cursor=pointer]:
+                  - /url: javascript:;
+              - listitem [ref=f20e226]:
+                - link " 调休管理 " [ref=f20e227] [cursor=pointer]:
+                  - /url: javascript:;
+              - listitem [ref=f20e230]:
+                - link " 出差管理 " [ref=f20e231] [cursor=pointer]:
+                  - /url: javascript:;
+              - listitem [ref=f20e234]:
+                - link " 绩效管理 " [ref=f20e235] [cursor=pointer]:
+                  - /url: javascript:;
+              - listitem [ref=f20e238]:
+                - link " 岗位职位 " [ref=f20e239] [cursor=pointer]:
+                  - /url: javascript:;
+              - listitem [ref=f20e242]:
+                - link " 奖惩管理 " [ref=f20e243] [cursor=pointer]:
+                  - /url: javascript:;
+              - listitem [ref=f20e246]:
+                - link " 员工培训 " [ref=f20e247] [cursor=pointer]:
+                  - /url: javascript:;
+              - listitem [ref=f20e250]:
+                - link " 员工关怀 " [ref=f20e251] [cursor=pointer]:
+                  - /url: javascript:;
+              - listitem [ref=f20e254]:
+                - link " 招聘管理 " [ref=f20e255] [cursor=pointer]:
+                  - /url: javascript:;
+              - listitem [ref=f20e258]:
+                - link " 规章制度 " [ref=f20e259] [cursor=pointer]:
+                  - /url: javascript:;
+              - listitem [ref=f20e262]:
+                - link " 宿舍管理 " [ref=f20e263] [cursor=pointer]:
+                  - /url: javascript:;
+              - listitem [ref=f20e266]:
+                - link " 参数设置 " [ref=f20e267] [cursor=pointer]:
+                  - /url: javascript:;
+  - generic [ref=e58]:
+    - list [ref=e59]:
+      - listitem [ref=e60] [cursor=pointer]:
+        - text: 工作台
+        - generic [ref=e61]: ဆ
+      - listitem [ref=e71] [cursor=pointer]:
+        - text: 流程图
+        - generic [ref=e72]: ဆ
+      - listitem [ref=e79] [cursor=pointer]:
+        - text: 凭证管理
+        - generic [ref=e80]: ဆ
+      - listitem [ref=e88] [cursor=pointer]:
+        - text: 角色管理
+        - generic [ref=e89]: ဆ
+    - iframe [ref=e91]:
+      - generic [active] [ref=f35e1]:
+        - paragraph [ref=f35e2]:
+          - text: 角色管理
+          - link "新增" [ref=f35e3] [cursor=pointer]:
+            - /url: "#"
+          - link "权限反查" [ref=f35e4] [cursor=pointer]:
+            - /url: rolefunreverselist.jsp
+          - link "打印权限项" [ref=f35e5] [cursor=pointer]:
+            - /url: rolefunquery.jsp
+        - table [ref=f35e6]:
+          - rowgroup [ref=f35e7]:
+            - row "角色编号 角色名称 登陆地点范围 拥有该角色的员工 排序值 操作" [ref=f35e8]:
+              - columnheader "角色编号" [ref=f35e9]
+              - columnheader "角色名称" [ref=f35e10]
+              - columnheader "登陆地点范围" [ref=f35e11]
+              - columnheader "拥有该角色的员工" [ref=f35e12]
+              - columnheader "排序值" [ref=f35e13]
+              - columnheader "操作" [ref=f35e14]
+          - rowgroup [ref=f35e15]:
+            - row "admin 系统管理员 任意地点 系统管理员 10 操作 " [ref=f35e16]:
+              - cell "admin" [ref=f35e17]
+              - cell "系统管理员" [ref=f35e18]
+              - cell "任意地点" [ref=f35e19]
+              - cell "系统管理员" [ref=f35e20]:
+                - generic "admin" [ref=f35e21] [cursor=pointer]: 系统管理员
+              - cell "10" [ref=f35e22]
+              - cell "操作 " [ref=f35e23]:
+                - button "操作 " [ref=f35e26] [cursor=pointer]
+            - row "sale 销售人员 任意地点 苗先生 20 操作 " [ref=f35e28]:
+              - cell "sale" [ref=f35e29]
+              - cell "销售人员" [ref=f35e30]
+              - cell "任意地点" [ref=f35e31]
+              - cell "苗先生" [ref=f35e32]:
+                - generic "006" [ref=f35e33] [cursor=pointer]: 苗先生
+              - cell "20" [ref=f35e34]
+              - cell "操作 " [ref=f35e35]:
+                - button "操作 " [ref=f35e38] [cursor=pointer]
+            - row "buy 采购人员 任意地点 高小姐 刘小姐 30 操作 " [ref=f35e40]:
+              - cell "buy" [ref=f35e41]
+              - cell "采购人员" [ref=f35e42]
+              - cell "任意地点" [ref=f35e43]
+              - cell "高小姐 刘小姐" [ref=f35e44]:
+                - generic "003" [ref=f35e45] [cursor=pointer]: 高小姐
+                - generic "004" [ref=f35e46] [cursor=pointer]: 刘小姐
+              - cell "30" [ref=f35e47]
+              - cell "操作 " [ref=f35e48]:
+                - button "操作 " [ref=f35e51] [cursor=pointer]
+            - row "account 财务人员 任意地点 李成成 40 操作 " [ref=f35e53]:
+              - cell "account" [ref=f35e54]
+              - cell "财务人员" [ref=f35e55]
+              - cell "任意地点" [ref=f35e56]
+              - cell "李成成" [ref=f35e57]:
+                - generic "001" [ref=f35e58] [cursor=pointer]: 李成成
+              - cell "40" [ref=f35e59]
+              - cell "操作 " [ref=f35e60]:
+                - button "操作 " [ref=f35e63] [cursor=pointer]
+            - row "stock 仓库人员 任意地点 燕子 50 操作 " [ref=f35e65]:
+              - cell "stock" [ref=f35e66]
+              - cell "仓库人员" [ref=f35e67]
+              - cell "任意地点" [ref=f35e68]
+              - cell "燕子" [ref=f35e69]:
+                - generic "013" [ref=f35e70] [cursor=pointer]: 燕子
+              - cell "50" [ref=f35e71]
+              - cell "操作 " [ref=f35e72]:
+                - button "操作 " [ref=f35e75] [cursor=pointer]
+            - row "production 生产人员 任意地点 60 操作 " [ref=f35e77]:
+              - cell "production" [ref=f35e78]
+              - cell "生产人员" [ref=f35e79]
+              - cell "任意地点" [ref=f35e80]
+              - cell [ref=f35e81]
+              - cell "60" [ref=f35e82]
+              - cell "操作 " [ref=f35e83]:
+                - button "操作 " [ref=f35e86] [cursor=pointer]
+            - row "engineering 工程人员 任意地点 宁宁 吴娟 超哥 蒋厂 70 操作 " [ref=f35e88]:
+              - cell "engineering" [ref=f35e89]
+              - cell "工程人员" [ref=f35e90]
+              - cell "任意地点" [ref=f35e91]
+              - cell "宁宁 吴娟 超哥 蒋厂" [ref=f35e92]:
+                - generic "009" [ref=f35e93] [cursor=pointer]: 宁宁
+                - generic "010" [ref=f35e94] [cursor=pointer]: 吴娟
+                - generic "011" [ref=f35e95] [cursor=pointer]: 超哥
+                - generic "012" [ref=f35e96] [cursor=pointer]: 蒋厂
+              - cell "70" [ref=f35e97]
+              - cell "操作 " [ref=f35e98]:
+                - button "操作 " [ref=f35e101] [cursor=pointer]
+            - row "base 基础角色 任意地点 系统管理员 80 操作 " [ref=f35e103]:
+              - cell "base" [ref=f35e104]
+              - cell "基础角色" [ref=f35e105]
+              - cell "任意地点" [ref=f35e106]
+              - cell "系统管理员" [ref=f35e107]:
+                - generic "admin" [ref=f35e108] [cursor=pointer]: 系统管理员
+              - cell "80" [ref=f35e109]
+              - cell "操作 " [ref=f35e110]:
+                - button "操作 " [ref=f35e113] [cursor=pointer]
+            - row "00000006 研发人员 任意地点 申工 任工 90 操作 " [ref=f35e115]:
+              - cell "00000006" [ref=f35e116]
+              - cell "研发人员" [ref=f35e117]
+              - cell "任意地点" [ref=f35e118]
+              - cell "申工 任工" [ref=f35e119]:
+                - generic "007" [ref=f35e120] [cursor=pointer]: 申工
+                - generic "008" [ref=f35e121] [cursor=pointer]: 任工
+              - cell "90" [ref=f35e122]
+              - cell "操作 " [ref=f35e123]:
+                - button "操作 " [ref=f35e126] [cursor=pointer]
+  - generic [ref=e66]:
+    - img [ref=e67]
+    - text: 版权所有：
+    - link "广东宏见软件有限公司" [ref=e68] [cursor=pointer]:
+      - /url: http://www.hongjian.com/
+    - text: "售后电话: 0755-36657208 服务代码: 159016"
+    - link "粤ICP备10239503号" [ref=e69] [cursor=pointer]:
+      - /url: http://www.miitbeian.gov.cn
+    - img "升级日志" [ref=e70]

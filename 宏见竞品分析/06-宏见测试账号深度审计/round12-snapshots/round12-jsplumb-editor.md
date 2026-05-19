@@ -1,0 +1,28 @@
+- generic [ref=e3]:
+  - generic [ref=e4] [cursor=pointer]:
+    - img [ref=e6]
+    - generic [ref=e7]: 待处理工作流
+  - generic [ref=e8] [cursor=pointer]:
+    - img [ref=e10]
+    - generic [ref=e11]: 工作流设置
+  - generic [ref=e12] [cursor=pointer]:
+    - img [ref=e14]
+    - generic [ref=e15]: 产品参数设置
+  - generic [ref=e16] [cursor=pointer]:
+    - img [ref=e18]
+    - generic [ref=e19]: 资料定制
+  - generic [ref=e20] [cursor=pointer]:
+    - img [ref=e22]
+    - generic [ref=e23]: 企业信息
+  - generic [ref=e24] [cursor=pointer]:
+    - img [ref=e26]
+    - generic [ref=e27]: 产品管理
+  - generic [ref=e28] [cursor=pointer]:
+    - img [ref=e30]
+    - generic [ref=e31]: 安全中心
+  - generic [ref=e32] [cursor=pointer]:
+    - img [ref=e34]
+    - generic [ref=e35]: 微信管理
+  - generic "可查看系统更新日志" [ref=e36] [cursor=pointer]:
+    - img [ref=e38]
+    - generic [ref=e39]: 升级日志

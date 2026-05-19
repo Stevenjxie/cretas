@@ -1,0 +1,342 @@
+- table [ref=e3]:
+  - rowgroup [ref=e4]:
+    - row "提交 保存草稿 审批历史 销售订单 当前节点：销售订单创建" [ref=e5]:
+      - cell "提交 保存草稿 审批历史 销售订单 当前节点：销售订单创建" [ref=e6]:
+        - button "提交" [ref=e7] [cursor=pointer]:
+          - img [ref=e8]
+          - text: 提交
+        - button "保存草稿" [ref=e9] [cursor=pointer]:
+          - img [ref=e10]
+          - text: 保存草稿
+        - button "审批历史" [ref=e11] [cursor=pointer]:
+          - img [ref=e12]
+          - text: 审批历史
+        - text: 销售订单 当前节点：销售订单创建
+    - row "意见 设置常用语 同意" [ref=e13]:
+      - cell "意见" [ref=e14]
+      - cell "设置常用语" [ref=e15]:
+        - textbox "--请选择--" [ref=e19] [cursor=pointer]
+        - link "设置常用语" [ref=e21] [cursor=pointer]:
+          - /url: "###"
+          - img "设置常用语" [ref=e22]
+      - cell "同意" [ref=e23]:
+        - textbox [ref=e24]: 同意
+    - row [ref=e25]:
+      - cell [ref=e26]:
+        - iframe [ref=e27]:
+          - generic [ref=f17e2]:
+            - table [ref=f17e3]:
+              - rowgroup [ref=f17e4]:
+                - 'row "客户: 苏州远野 销售订单  单据编号: 00000060 客户订单号: 币种: 人民币" [ref=f17e5]':
+                  - 'cell "客户: 苏州远野" [ref=f17e6]':
+                    - generic [ref=f17e7]:
+                      - text: "客户:"
+                      - link "苏州远野" [ref=f17e8] [cursor=pointer]:
+                        - /url: https://crm.hongjian.com/crm/custom/clientroute.jsp?id=00000014
+                      - img [ref=f17e9]
+                  - cell "销售订单 " [ref=f17e10]:
+                    - paragraph [ref=f17e11]:
+                      - text: 销售订单
+                      - button "" [ref=f17e12] [cursor=pointer]:
+                        - generic [ref=f17e13]: 
+                  - 'cell "单据编号: 00000060 客户订单号: 币种: 人民币" [ref=f17e14]':
+                    - text: "单据编号: 00000060 客户订单号:"
+                    - textbox [ref=f17e15]
+                    - text: "币种:"
+                    - combobox [ref=f17e16]:
+                      - option "人民币" [selected]
+                      - option "港币"
+                      - option "美元"
+                      - option "欧元"
+                      - option "英镑"
+                      - option "日元"
+                      - option "新台币"
+                      - option "泰国铢"
+                      - option "越南盾"
+                      - option "新加坡元"
+                      - option "澳大利亚元"
+                      - option "加拿大元"
+                      - option "印尼卢比"
+                      - option "林吉特"
+                      - option "菲律宾比索"
+                      - option "韩国元"
+                      - option "印度卢比"
+                      - option "埃及镑"
+                      - option "塔卡"
+                      - option "斯里兰卡卢比"
+                      - option "阿联酋迪拉姆"
+                      - option "卢布"
+                      - option "澳门元"
+                      - option "新土耳其里拉"
+                      - option "巴基斯坦卢比"
+                      - option "墨西哥比索"
+                      - option "瑞士法郎"
+                      - option "刚果法郎"
+                      - option "哈萨克斯坦坚戈"
+                      - option "缅甸元"
+                      - option "秘鲁新索尔"
+            - table [ref=f17e17]:
+              - rowgroup [ref=f17e18]:
+                - 'row "统一交货日期 销售人员: 系统管理员 销售部门: 总经理室 跟单人员: 系统管理员 销售日期: 2026-05-14" [ref=f17e19]':
+                  - cell "统一交货日期" [ref=f17e20]:
+                    - checkbox [ref=f17e21]
+                    - text: 统一交货日期
+                  - 'cell "销售人员: 系统管理员 销售部门: 总经理室 跟单人员: 系统管理员 销售日期: 2026-05-14" [ref=f17e22]':
+                    - text: "销售人员:"
+                    - textbox [ref=f17e23]: 系统管理员
+                    - img [ref=f17e24]
+                    - text: "销售部门:"
+                    - textbox [ref=f17e26] [cursor=pointer]: 总经理室
+                    - text: "跟单人员:"
+                    - textbox [ref=f17e29]: 系统管理员
+                    - img [ref=f17e30]
+                    - text: "销售日期:"
+                    - textbox [ref=f17e31]: 2026-05-14
+            - table [ref=f17e32]:
+              - rowgroup [ref=f17e33]:
+                - row "序号 图片 产品编号 产品名称 规格 销售数量 税前单价 税后单价 发票税率 批量操作 总价 交货日期 备注" [ref=f17e34]:
+                  - columnheader "序号" [ref=f17e35]
+                  - columnheader "图片" [ref=f17e36]
+                  - columnheader "产品编号" [ref=f17e37]
+                  - columnheader "产品名称" [ref=f17e38]
+                  - columnheader "规格" [ref=f17e39]
+                  - columnheader "销售数量" [ref=f17e40]
+                  - columnheader "税前单价" [ref=f17e41]
+                  - columnheader "税后单价" [ref=f17e42]:
+                    - text: 税后单价
+                    - generic "刷新关联价格" [ref=f17e43] [cursor=pointer]:
+                      - img [ref=f17e44]
+                  - columnheader "发票税率 批量操作" [ref=f17e45]:
+                    - text: 发票税率
+                    - img "批量操作" [ref=f17e46]
+                  - columnheader "总价" [ref=f17e47]: 总价
+                  - columnheader "交货日期" [ref=f17e48]
+                  - columnheader "备注" [ref=f17e49]
+                - row "1 Z14736842 密封压盖 材质：42CrMo4+QT 1 PCS 0 0 数电专票 0% 0 2026-05-14 高级" [ref=f17e50]:
+                  - cell "1" [ref=f17e51]:
+                    - text: "1"
+                    - link:
+                      - /url: javascript:;
+                    - link:
+                      - /url: javascript:;
+                  - cell [ref=f17e52]:
+                    - img [ref=f17e53]
+                  - cell "Z14736842" [ref=f17e54]
+                  - cell "密封压盖" [ref=f17e55]
+                  - cell "材质：42CrMo4+QT" [ref=f17e56]:
+                    - generic [ref=f17e57]: 材质：42CrMo4+QT
+                  - cell "1 PCS" [ref=f17e58]:
+                    - generic "主单位" [ref=f17e59] [cursor=pointer]:
+                      - textbox [ref=f17e60]: "1"
+                      - generic [ref=f17e61]: PCS
+                  - cell "0" [ref=f17e62]:
+                    - textbox [ref=f17e63]: "0"
+                  - cell "0" [ref=f17e64]:
+                    - textbox [ref=f17e65]: "0"
+                  - cell "数电专票 0%" [ref=f17e66]:
+                    - combobox [ref=f17e67]:
+                      - option "不开票"
+                      - option "收据"
+                      - option "数电普票"
+                      - option "数电专票" [selected]
+                      - option "电子普票"
+                      - option "电子专票"
+                    - combobox [ref=f17e69]:
+                      - option "0%" [selected]
+                      - option "1%"
+                      - option "2%"
+                      - option "3%"
+                      - option "4%"
+                      - option "5%"
+                      - option "6%"
+                      - option "7%"
+                      - option "8%"
+                      - option "9%"
+                      - option "10%"
+                      - option "11%"
+                      - option "12%"
+                      - option "13%"
+                      - option "14%"
+                      - option "15%"
+                      - option "16%"
+                      - option "17%"
+                  - cell "0" [ref=f17e70]:
+                    - textbox [ref=f17e71]: "0"
+                  - cell "2026-05-14 高级" [ref=f17e72]:
+                    - textbox [ref=f17e73]: 2026-05-14
+                    - img "高级" [ref=f17e74]
+                  - cell [ref=f17e75]:
+                    - textbox [ref=f17e76]
+                - row "2 " [ref=f17e77]:
+                  - cell "2" [ref=f17e78]:
+                    - text: "2"
+                    - link:
+                      - /url: javascript:;
+                    - link:
+                      - /url: javascript:;
+                  - cell [ref=f17e79]
+                  - cell [ref=f17e80]
+                  - cell "" [ref=f17e81]:
+                    - generic [ref=f17e82]:
+                      - textbox [ref=f17e83]
+                      - generic [ref=f17e85]: 
+                  - cell [ref=f17e86]
+                  - cell [ref=f17e87]
+                  - cell [ref=f17e88]
+                  - cell [ref=f17e89]
+                  - cell [ref=f17e90]
+                  - cell [ref=f17e91]
+                  - cell [ref=f17e92]
+                  - cell [ref=f17e93]
+                - row "3 " [ref=f17e94]:
+                  - cell "3" [ref=f17e95]:
+                    - text: "3"
+                    - link:
+                      - /url: javascript:;
+                    - link:
+                      - /url: javascript:;
+                  - cell [ref=f17e96]
+                  - cell [ref=f17e97]
+                  - cell "" [ref=f17e98]:
+                    - generic [ref=f17e99]:
+                      - textbox [ref=f17e100]
+                      - generic [ref=f17e102]: 
+                  - cell [ref=f17e103]
+                  - cell [ref=f17e104]
+                  - cell [ref=f17e105]
+                  - cell [ref=f17e106]
+                  - cell [ref=f17e107]
+                  - cell [ref=f17e108]
+                  - cell [ref=f17e109]
+                  - cell [ref=f17e110]
+                - row "4 " [ref=f17e111]:
+                  - cell "4" [ref=f17e112]:
+                    - text: "4"
+                    - link:
+                      - /url: javascript:;
+                    - link:
+                      - /url: javascript:;
+                  - cell [ref=f17e113]
+                  - cell [ref=f17e114]
+                  - cell "" [ref=f17e115]:
+                    - generic [ref=f17e116]:
+                      - textbox [ref=f17e117]
+                      - generic [ref=f17e119]: 
+                  - cell [ref=f17e120]
+                  - cell [ref=f17e121]
+                  - cell [ref=f17e122]
+                  - cell [ref=f17e123]
+                  - cell [ref=f17e124]
+                  - cell [ref=f17e125]
+                  - cell [ref=f17e126]
+                  - cell [ref=f17e127]
+                - row "5 " [ref=f17e128]:
+                  - cell "5" [ref=f17e129]:
+                    - text: "5"
+                    - link:
+                      - /url: javascript:;
+                    - link:
+                      - /url: javascript:;
+                  - cell [ref=f17e130]
+                  - cell [ref=f17e131]
+                  - cell "" [ref=f17e132]:
+                    - generic [ref=f17e133]:
+                      - textbox [ref=f17e134]
+                      - generic [ref=f17e136]: 
+                  - cell [ref=f17e137]
+                  - cell [ref=f17e138]
+                  - cell [ref=f17e139]
+                  - cell [ref=f17e140]
+                  - cell [ref=f17e141]
+                  - cell [ref=f17e142]
+                  - cell [ref=f17e143]
+                  - cell [ref=f17e144]
+                - row "6 " [ref=f17e145]:
+                  - cell "6" [ref=f17e146]:
+                    - text: "6"
+                    - link:
+                      - /url: javascript:;
+                    - link:
+                      - /url: javascript:;
+                  - cell [ref=f17e147]
+                  - cell [ref=f17e148]
+                  - cell "" [ref=f17e149]:
+                    - generic [ref=f17e150]:
+                      - textbox [ref=f17e151]
+                      - generic [ref=f17e153]: 
+                  - cell [ref=f17e154]
+                  - cell [ref=f17e155]
+                  - cell [ref=f17e156]
+                  - cell [ref=f17e157]
+                  - cell [ref=f17e158]
+                  - cell [ref=f17e159]
+                  - cell [ref=f17e160]
+                  - cell [ref=f17e161]
+              - rowgroup [ref=f17e162]:
+                - row "合计 1 0.00" [ref=f17e163]:
+                  - cell "合计" [ref=f17e164]
+                  - cell [ref=f17e165]
+                  - cell "1" [ref=f17e166]
+                  - cell [ref=f17e167]
+                  - cell "0.00" [ref=f17e168]
+            - table [ref=f17e169]:
+              - rowgroup [ref=f17e170]:
+                - row "备注： 产品金额： 0.00" [ref=f17e171]:
+                  - cell "备注：" [ref=f17e172]
+                  - cell [ref=f17e173]:
+                    - textbox "内容超过3900直接截断，（超过3900的部分！）" [ref=f17e174]
+                  - cell "产品金额：" [ref=f17e175]
+                  - cell "0.00" [ref=f17e176]
+                - row "运 费： 0.00" [ref=f17e177]:
+                  - cell "运 费：" [ref=f17e178]
+                  - cell "0.00" [ref=f17e179]:
+                    - textbox [ref=f17e180]: "0.00"
+                    - img [ref=f17e182]
+                - row "其他费用： 0.00" [ref=f17e183]:
+                  - cell "其他费用：" [ref=f17e184]
+                  - cell "0.00" [ref=f17e185]:
+                    - textbox [ref=f17e186]: "0.00"
+                    - img [ref=f17e188]
+                - row "付款方式： 月结 合计金额： 0.00" [ref=f17e189]:
+                  - cell "付款方式：" [ref=f17e190]
+                  - cell "月结" [ref=f17e191]:
+                    - combobox [ref=f17e192]:
+                      - option "--请选择支付方式--"
+                      - option "现金"
+                      - option "月结" [selected]
+                      - option "银行转账"
+                      - option "POS刷卡"
+                      - option "支票"
+                      - option "微信支付"
+                      - option "支付宝"
+                      - option "快递代收*"
+                      - option "信用证"
+                      - option "PayPal"
+                      - option "西联汇款"
+                      - option "银行承兑汇票"
+                      - option "商业承兑汇票"
+                  - cell "合计金额：" [ref=f17e193]
+                  - cell "0.00" [ref=f17e194]
+            - table [ref=f17e195]:
+              - rowgroup [ref=f17e196]:
+                - row "送货方式： 安装方式：" [ref=f17e197]:
+                  - cell "送货方式：" [ref=f17e198]
+                  - cell [ref=f17e199]:
+                    - combobox [ref=f17e200]:
+                      - option [selected]
+                      - option "快递"
+                      - option "物流"
+                      - option "送货"
+                      - option "自提"
+                  - cell "安装方式：" [ref=f17e201]
+                  - cell [ref=f17e202]:
+                    - combobox [ref=f17e203]:
+                      - option [selected]
+                      - option "上门安装"
+                      - option "自己安装"
+            - table [ref=f17e204]:
+              - rowgroup [ref=f17e205]:
+                - row "收货人：" [ref=f17e206]:
+                  - cell "收货人：" [ref=f17e207]
+                  - cell [ref=f17e208]:
+                    - img [ref=f17e210] [cursor=pointer]
