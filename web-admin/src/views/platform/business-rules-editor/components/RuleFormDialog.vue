@@ -52,13 +52,22 @@
           v-model="form.conditionSpel"
           type="textarea"
           :rows="3"
-          placeholder='例: #order.amount > 100000 and #order.supplier.blacklisted == true'
+          :placeholder="conditionSpelPlaceholder"
         />
         <div class="form-hint">
-          <strong>SpEL 提示</strong>:
-          <code>#order.amount &gt; 100000</code>,
-          <code>#root.customer.tier == 'VIP'</code>,
-          <code>#root.items[0].unitPrice &gt; 100</code>.
+          <strong>SpEL 变量</strong>:
+          <code>#input</code> (通用, 任何 scope 均可用)
+          <span v-if="form.scope === 'ORDER'">+ <code>#order</code> (订单别名, 同 #input)</span>
+          <span v-else-if="form.scope === 'INVENTORY'">+ <code>#inventory</code> (库存别名, 同 #input)</span>
+          <span v-else-if="form.scope === 'CUSTOMER'">+ <code>#customer</code> (客户别名, 同 #input)</span>
+          <span v-else>(CUSTOM scope 只能用 #input)</span>.
+          <br />
+          <strong>示例</strong>:
+          <code v-if="form.scope === 'ORDER'">#order.amount &gt; 100000</code>
+          <code v-else-if="form.scope === 'INVENTORY'">#inventory.quantity &lt; 10</code>
+          <code v-else-if="form.scope === 'CUSTOMER'">#customer.tier == 'VIP'</code>
+          <code v-else>#input.amount &gt; 100</code>,
+          <code>#input['items'][0]['unitPrice'] &gt; 100</code>.
           空条件 = 总是 true (匹配所有 input)。
         </div>
       </el-form-item>
@@ -219,6 +228,21 @@ function actionConfigDefault(t: RuleActionType): Record<string, unknown> {
 
 const actionConfigExample = computed(() => {
   return JSON.stringify(actionConfigDefault(form.value.actionType), null, 2)
+})
+
+// B-BR1 fix: scope-aware placeholder so the example uses the alias that actually resolves.
+const conditionSpelPlaceholder = computed(() => {
+  switch (form.value.scope) {
+    case 'ORDER':
+      return "例: #order.amount > 100000 (#order 是 #input 的别名, 任选其一)"
+    case 'INVENTORY':
+      return "例: #inventory.quantity < 10"
+    case 'CUSTOMER':
+      return "例: #customer.tier == 'VIP'"
+    case 'CUSTOM':
+    default:
+      return "例: #input.amount > 100 (CUSTOM scope 仅 #input 可用)"
+  }
 })
 
 const actionConfigPlaceholder = computed(() => {

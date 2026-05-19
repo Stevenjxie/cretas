@@ -402,4 +402,110 @@ class RuleEngineImplTest {
         verify(ruleRepository, never()).findByFactoryIdAndScopeAndEnabledTrueOrderByPriorityAsc(
                 anyString(), any());
     }
+
+    // ==================== B-BR1 fix: SpEL scope-alias variables ====================
+
+    @Test
+    @DisplayName("B-BR1: ORDER scope condition '#order.totalAmount > X' resolves "
+               + "(scope alias #order points to same object as #input)")
+    void spel_order_alias_resolved_for_order_scope() {
+        OrderInput order = sampleOrder("SO-ORDER-ALIAS", new BigDecimal("150000"));
+        // Rule uses the human-readable #order alias from the dialog hint copy.
+        BusinessRule r = rule("order_alias_match", 10, RuleActionType.LOG,
+                "#order.totalAmount > 100000",
+                Map.of("level", "INFO", "message", "alias-test"));
+        when(ruleRepository.findByFactoryIdAndScopeAndEnabledTrueOrderByPriorityAsc(
+                FACTORY_ID, RuleScope.ORDER)).thenReturn(List.of(r));
+
+        RuleEvaluationResult result = engine.evaluate(FACTORY_ID, RuleScope.ORDER, order);
+
+        assertFalse(result.shouldReject());
+        assertEquals(1, result.executedRules().size(),
+                "#order alias must resolve to inputObject for ORDER scope rules");
+        verify(logRepository, times(1)).save(any());
+    }
+
+    @Test
+    @DisplayName("B-BR1: ORDER scope #input alias still works (legacy backwards compat)")
+    void spel_input_alias_still_works_for_order_scope() {
+        OrderInput order = sampleOrder("SO-INPUT-ALIAS", new BigDecimal("150000"));
+        BusinessRule r = rule("input_alias_match", 10, RuleActionType.LOG,
+                "#input.totalAmount > 100000",
+                Map.of("level", "INFO"));
+        when(ruleRepository.findByFactoryIdAndScopeAndEnabledTrueOrderByPriorityAsc(
+                FACTORY_ID, RuleScope.ORDER)).thenReturn(List.of(r));
+
+        RuleEvaluationResult result = engine.evaluate(FACTORY_ID, RuleScope.ORDER, order);
+
+        assertFalse(result.shouldReject());
+        assertEquals(1, result.executedRules().size(),
+                "#input must remain available alongside #order alias");
+    }
+
+    @Test
+    @DisplayName("B-BR1: CUSTOM scope only has #input, scope aliases NOT bound")
+    void spel_custom_scope_has_only_input_alias() {
+        OrderInput order = sampleOrder("SO-CUSTOM", new BigDecimal("150000"));
+        BusinessRule r = rule("custom_with_order_alias", 10, RuleActionType.LOG,
+                "#order.totalAmount > 100000",  // #order undefined for CUSTOM scope
+                Map.of("level", "INFO"));
+        r.setScope(RuleScope.CUSTOM);
+        when(ruleRepository.findByFactoryIdAndScopeAndEnabledTrueOrderByPriorityAsc(
+                FACTORY_ID, RuleScope.CUSTOM)).thenReturn(List.of(r));
+
+        RuleEvaluationResult result = engine.evaluate(FACTORY_ID, RuleScope.CUSTOM, order);
+
+        // Condition error tolerated — rule should be skipped (not block), audit log written.
+        assertFalse(result.shouldReject());
+        assertEquals(0, result.executedRules().size(),
+                "CUSTOM scope must NOT bind #order alias — rule using it silently fails (or errors out)");
+    }
+
+    @Test
+    @DisplayName("B-BR1: preview() uses scope alias for #order on ORDER-scope rule")
+    void preview_uses_scope_alias_for_order_scope() {
+        OrderInput order = sampleOrder("SO-PREV-ORDER", new BigDecimal("200000"));
+        BusinessRule r = rule("preview_order_alias", 10, RuleActionType.LOG,
+                "#order.totalAmount > 100000",
+                Map.of("level", "INFO"));
+        when(ruleRepository.findById(r.getId())).thenReturn(java.util.Optional.of(r));
+
+        boolean matched = engine.preview(FACTORY_ID, r.getId(), order);
+
+        assertTrue(matched, "preview must bind #order alias on ORDER-scope rule");
+    }
+
+    @Test
+    @DisplayName("B-BR1: INVENTORY scope binds #inventory alias")
+    void spel_inventory_alias_resolved_for_inventory_scope() {
+        OrderInput inv = sampleOrder("INV-001", new BigDecimal("5"));  // reuse OrderInput, totalAmount=qty
+        BusinessRule r = rule("low_stock", 10, RuleActionType.LOG,
+                "#inventory.totalAmount < 10",
+                Map.of("level", "WARN"));
+        r.setScope(RuleScope.INVENTORY);
+        when(ruleRepository.findByFactoryIdAndScopeAndEnabledTrueOrderByPriorityAsc(
+                FACTORY_ID, RuleScope.INVENTORY)).thenReturn(List.of(r));
+
+        RuleEvaluationResult result = engine.evaluate(FACTORY_ID, RuleScope.INVENTORY, inv);
+
+        assertEquals(1, result.executedRules().size(),
+                "#inventory alias must resolve to inputObject for INVENTORY scope rules");
+    }
+
+    @Test
+    @DisplayName("B-BR1: CUSTOMER scope binds #customer alias")
+    void spel_customer_alias_resolved_for_customer_scope() {
+        OrderInput cust = sampleOrder("CUST-001", new BigDecimal("999"));
+        BusinessRule r = rule("vip_customer", 10, RuleActionType.LOG,
+                "#customer.totalAmount > 500",
+                Map.of("level", "INFO"));
+        r.setScope(RuleScope.CUSTOMER);
+        when(ruleRepository.findByFactoryIdAndScopeAndEnabledTrueOrderByPriorityAsc(
+                FACTORY_ID, RuleScope.CUSTOMER)).thenReturn(List.of(r));
+
+        RuleEvaluationResult result = engine.evaluate(FACTORY_ID, RuleScope.CUSTOMER, cust);
+
+        assertEquals(1, result.executedRules().size(),
+                "#customer alias must resolve to inputObject for CUSTOMER scope rules");
+    }
 }
