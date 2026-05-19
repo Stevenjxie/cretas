@@ -51,6 +51,8 @@
           <ToolSkillMatrix v-else-if="activeTab === 'tools'" :factory-id="factoryId" />
           <!-- Round 4 Fix P1-10: Scheduler Panel (legacy v2 config) -->
           <SchedulerPanel v-else-if="activeTab === 'scheduler'" :factory-id="factoryId" />
+          <!-- Phase 2 Canvas-Alerts (2026-05-19): AlertRulesEditor Tab -->
+          <AlertRulesEditor v-else-if="activeTab === 'alerts'" :embedded="true" :factory-id="factoryId" />
           <!-- Phase 3 Canvas-Notify (2026-05-19): NotifyTemplateEditor -->
           <NotifyTemplateEditor v-else-if="activeTab === 'notify'" :factory-id="factoryId" />
           <!-- Phase 4b: Canvas-Pricing 价格策略 Tab -->
@@ -120,6 +122,7 @@ import PermissionMatrix from './components/PermissionMatrix.vue'
 import ModulePermissionMatrix from './components/ModulePermissionMatrix.vue'
 import ToolSkillMatrix from './components/ToolSkillMatrix.vue'
 import SchedulerPanel from './components/SchedulerPanel.vue'
+import AlertRulesEditor from '@/views/platform/alert-rules-editor/index.vue'
 import NotifyTemplateEditor from '@/views/platform/notify-template-editor/index.vue'
 import PricingStrategyTab from '@/views/platform/pricing-strategy-editor/index.vue'
 import ScheduledTaskEditor from '@/views/platform/scheduled-task-editor/index.vue'
