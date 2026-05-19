@@ -26,6 +26,7 @@ import java.util.UUID;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 /**
@@ -93,7 +94,7 @@ class DynamicSchedulerServiceImplTest {
     @Test
     @DisplayName("createTask - 合法 task → save + reload")
     void createTask_valid_savesAndReloads() {
-        when(taskRepository.findByTaskCode("daily-report")).thenReturn(Optional.empty());
+        when(taskRepository.findByFactoryIdAndTaskCode("F001", "daily-report")).thenReturn(Optional.empty());
 
         ScheduledTask result = service.createTask(buildTask("daily-report"));
 
@@ -150,12 +151,64 @@ class DynamicSchedulerServiceImplTest {
     void createTask_duplicateTaskCode_throws() {
         ScheduledTask existing = buildTask("dup-code");
         existing.setId(UUID.randomUUID());
-        when(taskRepository.findByTaskCode("dup-code")).thenReturn(Optional.of(existing));
+        when(taskRepository.findByFactoryIdAndTaskCode("F001", "dup-code")).thenReturn(Optional.of(existing));
 
         BusinessException ex = assertThrows(BusinessException.class,
                 () -> service.createTask(buildTask("dup-code")));
         assertEquals(409, ex.getCode());
         verify(dynamicScheduler, never()).reload();
+    }
+
+    @Test
+    @DisplayName("createTask - 同 taskCode 不同 factoryId scope → 互不冲突 (C1 fix)")
+    void createTask_sameCodeDifferentFactory_ok() {
+        // Existing task in F001 scope, new task in F002 scope, same code — should succeed.
+        // Repository.findByFactoryIdAndTaskCode("F002", "shared-code") returns empty.
+        when(taskRepository.findByFactoryIdAndTaskCode("F002", "shared-code"))
+                .thenReturn(Optional.empty());
+
+        ScheduledTask newTask = buildTask("shared-code");
+        newTask.setFactoryId("F002");
+        ScheduledTask result = service.createTask(newTask);
+
+        assertNotNull(result);
+        assertEquals("F002", result.getFactoryId());
+        verify(taskRepository).save(any(ScheduledTask.class));
+        verify(taskRepository, never()).findByTaskCodeAndFactoryIdIsNull(anyString());
+    }
+
+    @Test
+    @DisplayName("createTask - global scope (factoryId=null) 查 global 索引")
+    void createTask_globalScope_usesGlobalIndex() {
+        when(taskRepository.findByTaskCodeAndFactoryIdIsNull("global-task"))
+                .thenReturn(Optional.empty());
+
+        ScheduledTask globalTask = buildTask("global-task");
+        globalTask.setFactoryId(null);
+        ScheduledTask result = service.createTask(globalTask);
+
+        assertNotNull(result);
+        assertNull(result.getFactoryId());
+        verify(taskRepository).findByTaskCodeAndFactoryIdIsNull("global-task");
+        verify(taskRepository, never()).findByFactoryIdAndTaskCode(anyString(), anyString());
+    }
+
+    @Test
+    @DisplayName("createTask - global scope 重复 → 409 (C1 fix)")
+    void createTask_globalDuplicate_throws() {
+        ScheduledTask existing = buildTask("global-dup");
+        existing.setId(UUID.randomUUID());
+        existing.setFactoryId(null);
+        when(taskRepository.findByTaskCodeAndFactoryIdIsNull("global-dup"))
+                .thenReturn(Optional.of(existing));
+
+        ScheduledTask newTask = buildTask("global-dup");
+        newTask.setFactoryId(null);
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> service.createTask(newTask));
+        assertEquals(409, ex.getCode());
+        assertTrue(ex.getMessage().contains("global"),
+                "Error message should identify scope=global");
     }
 
     // ==================== updateTask ====================
@@ -275,6 +328,9 @@ class DynamicSchedulerServiceImplTest {
         ScheduledTask existing = buildTask("run-1");
         existing.setId(id);
         when(taskRepository.findById(id)).thenReturn(Optional.of(existing));
+        // No recent RUNNING execution → rate limit allows the call through.
+        when(runLogRepository.countByTaskIdAndStatusAndStartedAtAfter(
+                eq(id), eq(TaskRunStatus.RUNNING), any())).thenReturn(0L);
 
         ScheduledTaskRunLog log = ScheduledTaskRunLog.builder()
                 .taskId(id)
@@ -297,6 +353,25 @@ class DynamicSchedulerServiceImplTest {
         BusinessException ex = assertThrows(BusinessException.class,
                 () -> service.runNow(id));
         assertEquals(404, ex.getCode());
+        verify(dynamicScheduler, never()).runNow(any());
+    }
+
+    @Test
+    @DisplayName("runNow - 60s 内有 RUNNING → BusinessException(409) rate limit (I3+I8 fix)")
+    void runNow_recentRunning_rateLimited() {
+        UUID id = UUID.randomUUID();
+        ScheduledTask existing = buildTask("rate-limited");
+        existing.setId(id);
+        when(taskRepository.findById(id)).thenReturn(Optional.of(existing));
+        // Recent RUNNING execution exists → rate limit must reject.
+        when(runLogRepository.countByTaskIdAndStatusAndStartedAtAfter(
+                eq(id), eq(TaskRunStatus.RUNNING), any())).thenReturn(1L);
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> service.runNow(id));
+        assertEquals(409, ex.getCode());
+        assertTrue(ex.getMessage().contains("尚未完成"),
+                "Error message should indicate previous run hasn't completed");
         verify(dynamicScheduler, never()).runNow(any());
     }
 

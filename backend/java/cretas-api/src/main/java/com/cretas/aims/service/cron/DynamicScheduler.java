@@ -46,7 +46,8 @@ import java.util.concurrent.ScheduledFuture;
  * <ol>
  *   <li>INSERT 一行 status=RUNNING + startedAt</li>
  *   <li>handler.execute() success → UPDATE status=SUCCESS, finishedAt, durationMs</li>
- *   <li>handler.execute() throw → UPDATE status=FAILED + errorMsg (stack trace, 截断 2000)</li>
+ *   <li>handler.execute() throw → UPDATE status=FAILED + errorMsg (stack trace, 截断到
+ *       {@value #ERROR_MSG_MAX_LEN} 字符, 末尾追加 "...[truncated]" 标记)</li>
  *   <li>同步更新 scheduled_tasks.last_run_* 字段</li>
  * </ol>
  *
@@ -57,6 +58,18 @@ import java.util.concurrent.ScheduledFuture;
 @Slf4j
 @Component
 public class DynamicScheduler implements SchedulingConfigurer {
+
+    /**
+     * Canonical cap for error_msg / last_run_error persistence. Post-review C2
+     * unified previously-mixed 2000 / 3500 / 4000 callsites to one value with a
+     * trailing "...[truncated]" marker so consumers know they're seeing a tail-cut.
+     *
+     * <p>Both {@code scheduled_tasks.last_run_error} (TEXT) and
+     * {@code scheduled_task_run_logs.error_msg} (TEXT) accept arbitrary length,
+     * but we cap at 4000 for log-readability + index-friendly DB pages.
+     */
+    static final int ERROR_MSG_MAX_LEN = 4000;
+    private static final String TRUNCATION_MARKER = "...[truncated]";
 
     private final ScheduledTaskRepository scheduledTaskRepository;
     private final ScheduledTaskRunLogRepository runLogRepository;
@@ -168,7 +181,15 @@ public class DynamicScheduler implements SchedulingConfigurer {
             try {
                 executeWithLogging(taskId, taskCode, factoryId, handlerBeanName);
             } finally {
-                lock.get().unlock();
+                // Post-review I4: swallow unlock failures — propagating here would
+                // suppress the original task exception (if any) and obscure the real
+                // failure root cause. Worst case: lock auto-releases at lockAtMostFor.
+                try {
+                    lock.get().unlock();
+                } catch (Exception unlockErr) {
+                    log.warn("[Canvas-Cron] ShedLock unlock failed for taskCode={}: {}",
+                            taskCode, unlockErr.getMessage());
+                }
             }
         };
     }
@@ -220,7 +241,7 @@ public class DynamicScheduler implements SchedulingConfigurer {
             finalStatus = TaskRunStatus.SUCCESS;
         } catch (Exception e) {
             finalStatus = TaskRunStatus.FAILED;
-            errorMsg = truncate(stackTraceToString(e), 4000);
+            errorMsg = truncate(stackTraceToString(e), ERROR_MSG_MAX_LEN);
             log.error("[Canvas-Cron] Task FAILED taskCode={}: {}", taskCode, e.getMessage(), e);
         }
 
@@ -245,7 +266,7 @@ public class DynamicScheduler implements SchedulingConfigurer {
                 fresh.setLastRunAt(startedAt);
                 fresh.setLastRunStatus(persistedStatus);
                 fresh.setLastRunError(persistedStatus == TaskRunStatus.FAILED
-                        ? truncate(persistedErrorMsg, 4000)
+                        ? truncate(persistedErrorMsg, ERROR_MSG_MAX_LEN)
                         : null);
                 scheduledTaskRepository.save(fresh);
             });
@@ -320,7 +341,7 @@ public class DynamicScheduler implements SchedulingConfigurer {
             finalStatus = TaskRunStatus.SUCCESS;
         } catch (Exception e) {
             finalStatus = TaskRunStatus.FAILED;
-            errorMsg = truncate(stackTraceToString(e), 4000);
+            errorMsg = truncate(stackTraceToString(e), ERROR_MSG_MAX_LEN);
             log.error("[Canvas-Cron] Manual runNow FAILED taskCode={}: {}",
                     task.getTaskCode(), e.getMessage(), e);
         }
@@ -344,19 +365,40 @@ public class DynamicScheduler implements SchedulingConfigurer {
 
     // ==================== helpers ====================
 
+    /**
+     * Render a Throwable's class + message + frames as a single string. No
+     * inner length cap — {@link #truncate(String, int)} is the single authoritative
+     * truncation point so callers see "...[truncated]" suffix consistently
+     * (post-review C2: removed prior 3500-char early-break that produced
+     * silently-cut strings with no marker).
+     */
     private static String stackTraceToString(Throwable t) {
         if (t == null) return "";
         StringBuilder sb = new StringBuilder();
         sb.append(t.getClass().getName()).append(": ").append(t.getMessage()).append("\n");
         for (StackTraceElement el : t.getStackTrace()) {
             sb.append("\tat ").append(el.toString()).append("\n");
-            if (sb.length() > 3500) break; // safety cap
         }
         return sb.toString();
     }
 
+    /**
+     * Truncate a string to {@code max} characters; if truncated, replace the tail
+     * with {@value #TRUNCATION_MARKER} (post-review C2: explicit marker so
+     * operators know they're seeing a tail-cut, not a complete short message).
+     *
+     * <p>Caller-visible promise: returned string is {@code <= max} characters.
+     * If {@code max < TRUNCATION_MARKER.length()}, output is a hard substring
+     * without marker (degenerate case — never triggered with current cap of 4000).
+     */
     private static String truncate(String s, int max) {
         if (s == null) return null;
-        return s.length() > max ? s.substring(0, max) : s;
+        if (s.length() <= max) return s;
+        int markerLen = TRUNCATION_MARKER.length();
+        if (max <= markerLen) {
+            // Cap is shorter than the marker itself — fall back to hard substring.
+            return s.substring(0, max);
+        }
+        return s.substring(0, max - markerLen) + TRUNCATION_MARKER;
     }
 }

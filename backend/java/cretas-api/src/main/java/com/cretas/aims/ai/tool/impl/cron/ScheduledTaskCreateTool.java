@@ -14,7 +14,7 @@ import java.util.*;
  *
  * <p>Intent: AI 用户说 "每周一早 9 点生成上周库存报表" → LLM 调本 Tool with
  * cronExpression="0 0 9 ? * MON", taskCode="weekly-inventory-report",
- * handlerBeanName="inventoryReportHandler".
+ * handlerBeanName=<bean name returned by GET /api/mobile/scheduled-tasks/handlers>.
  *
  * <p>Phase 5 sister chat fills {@link #doExecute} by delegating to
  * {@code DynamicSchedulerService.createTask()}.
@@ -65,7 +65,8 @@ public class ScheduledTaskCreateTool extends AbstractBusinessTool {
 
         Map<String, Object> handlerBeanName = new HashMap<>();
         handlerBeanName.put("type", "string");
-        handlerBeanName.put("description", "Spring bean 名称, 必须实现 TaskHandler 接口, 如 inventoryReportHandler, echoTaskHandler");
+        handlerBeanName.put("description", "Spring bean 名称, 必须实现 TaskHandler 接口. "
+                + "调用 GET /api/mobile/scheduled-tasks/handlers 查询当前可用的 bean 名称列表 (默认包含 echoTaskHandler).");
         properties.put("handlerBeanName", handlerBeanName);
 
         Map<String, Object> targetFactoryId = new HashMap<>();

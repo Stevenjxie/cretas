@@ -7,14 +7,17 @@ import com.cretas.aims.entity.cron.ScheduledTaskRunLog;
 import com.cretas.aims.repository.cron.ScheduledTaskRepository;
 import com.cretas.aims.repository.cron.ScheduledTaskRunLogRepository;
 import com.cretas.aims.service.cron.DynamicSchedulerService;
+import com.cretas.aims.service.cron.TaskHandler;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.ApplicationContext;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.Arrays;
 import java.util.List;
 import java.util.UUID;
 import java.util.stream.Collectors;
@@ -56,6 +59,7 @@ public class ScheduledTaskController {
     private final DynamicSchedulerService dynamicSchedulerService;
     private final ScheduledTaskRepository taskRepository;
     private final ScheduledTaskRunLogRepository runLogRepository;
+    private final ApplicationContext applicationContext;
 
     @GetMapping
     @Operation(summary = "列出定时任务 (可按 factoryId / enabled 过滤)")
@@ -145,5 +149,23 @@ public class ScheduledTaskController {
     public ApiResponse<Void> refresh() {
         dynamicSchedulerService.reload();
         return ApiResponse.success("DynamicScheduler 已重新加载", null);
+    }
+
+    /**
+     * List handler bean names registered in the Spring context — used by the
+     * Canvas-Cron UI to populate a "handler" dropdown when creating a task,
+     * and by AI Tool callers to discover real handler names (post-review I7:
+     * previously Tool descriptions hard-coded {@code inventoryReportHandler}
+     * which doesn't exist).
+     */
+    @GetMapping("/handlers")
+    @Operation(summary = "列出所有 TaskHandler bean 名称 (用于 UI 选择 + AI Tool 发现)")
+    @RequireRole({"factory_super_admin", "permission_admin"})
+    public ApiResponse<List<String>> listHandlers() {
+        String[] beanNames = applicationContext.getBeanNamesForType(TaskHandler.class);
+        List<String> sorted = Arrays.stream(beanNames)
+                .sorted()
+                .collect(Collectors.toList());
+        return ApiResponse.success("查询成功", sorted);
     }
 }

@@ -64,7 +64,8 @@ public class ScheduledTaskUpdateTool extends AbstractBusinessTool {
 
         Map<String, Object> handlerBeanName = new HashMap<>();
         handlerBeanName.put("type", "string");
-        handlerBeanName.put("description", "新的 handler bean 名称 (可选)");
+        handlerBeanName.put("description", "新的 handler bean 名称 (可选). "
+                + "调用 GET /api/mobile/scheduled-tasks/handlers 查询当前可用的 bean 名称列表.");
         properties.put("handlerBeanName", handlerBeanName);
 
         Map<String, Object> enabled = new HashMap<>();

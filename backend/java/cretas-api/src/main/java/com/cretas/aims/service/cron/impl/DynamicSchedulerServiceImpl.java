@@ -2,6 +2,7 @@ package com.cretas.aims.service.cron.impl;
 
 import com.cretas.aims.entity.cron.ScheduledTask;
 import com.cretas.aims.entity.cron.ScheduledTaskRunLog;
+import com.cretas.aims.entity.cron.TaskRunStatus;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.cron.ScheduledTaskRepository;
 import com.cretas.aims.repository.cron.ScheduledTaskRunLogRepository;
@@ -15,6 +16,7 @@ import org.springframework.scheduling.support.CronExpression;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.LocalDateTime;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -45,6 +47,13 @@ public class DynamicSchedulerServiceImpl implements DynamicSchedulerService {
     private final DynamicScheduler dynamicScheduler;
     private final ApplicationContext applicationContext;
 
+    /**
+     * Manual {@code runNow} rate-limit window. If a RUNNING log row for the same
+     * task started within this window, a new manual run is rejected with HTTP 409
+     * (post-review I3+I8 fix — prevents blue/green double-execute + super-admin DOS).
+     */
+    private static final long RUN_NOW_RATE_LIMIT_SECONDS = 60L;
+
     @Override
     public void reload() {
         dynamicScheduler.reload();
@@ -59,6 +68,19 @@ public class DynamicSchedulerServiceImpl implements DynamicSchedulerService {
         if (taskRepository.findById(taskId).isEmpty()) {
             throw new BusinessException(404, "定时任务不存在: " + taskId)
                     .withHint("请确认 taskId 正确, 或先创建任务");
+        }
+        // Rate-limit guard (post-review I3+I8): reject if a recent execution is
+        // still RUNNING within the rate-limit window. Prevents blue/green double-
+        // execute and limits manual-run DOS surface for super-admins.
+        LocalDateTime threshold = LocalDateTime.now().minusSeconds(RUN_NOW_RATE_LIMIT_SECONDS);
+        long runningRecent = runLogRepository.countByTaskIdAndStatusAndStartedAtAfter(
+                taskId, TaskRunStatus.RUNNING, threshold);
+        if (runningRecent > 0) {
+            log.info("[Canvas-Cron] runNow rate-limited taskId={} recent RUNNING count={}",
+                    taskId, runningRecent);
+            throw new BusinessException(409,
+                    "上次执行尚未完成 (" + RUN_NOW_RATE_LIMIT_SECONDS + " 秒内), 请稍后再试")
+                    .withHint("请查看执行历史等待当前 RUNNING 任务完成后再触发");
         }
         return dynamicScheduler.runNow(taskId);
     }
@@ -75,18 +97,18 @@ public class DynamicSchedulerServiceImpl implements DynamicSchedulerService {
         validateCronExpression(task.getCronExpression());
         validateHandlerBean(task.getHandlerBeanName());
 
-        // Uniqueness guard — explicit 409 with friendlier message than raw constraint
-        Optional<ScheduledTask> existing = taskRepository.findByTaskCode(task.getTaskCode());
+        // Uniqueness guard (post-review C1) — scope-aware lookup. Matches the partial
+        // unique indexes idx_scheduled_tasks_global_code / idx_scheduled_tasks_factory_code.
+        // Distinct scopes (global vs per-factory, or different factoryIds) may reuse the same
+        // taskCode legitimately, so we query only the relevant scope here.
+        Optional<ScheduledTask> existing = findExistingByScope(task.getFactoryId(), task.getTaskCode());
         if (existing.isPresent()) {
             ScheduledTask e = existing.get();
-            // Same scope (both global, or both same factory)
-            boolean sameScope = (e.getFactoryId() == null && task.getFactoryId() == null)
-                    || (e.getFactoryId() != null && e.getFactoryId().equals(task.getFactoryId()));
-            if (sameScope) {
-                throw new BusinessException(409,
-                        "任务代码已存在: " + task.getTaskCode() + " (id=" + e.getId() + ")")
-                        .withHint("请改名或先删除旧任务");
-            }
+            String scopeText = e.getFactoryId() == null ? "global" : ("factory=" + e.getFactoryId());
+            throw new BusinessException(409,
+                    "任务代码已存在: " + task.getTaskCode() + " (scope=" + scopeText
+                            + ", id=" + e.getId() + ")")
+                    .withHint("请改名或先删除旧任务");
         }
 
         if (task.getEnabled() == null) {
@@ -135,6 +157,20 @@ public class DynamicSchedulerServiceImpl implements DynamicSchedulerService {
                 schedulerAffectingChange = true;
             }
             if (patch.getFactoryId() != null && !patch.getFactoryId().equals(existing.getFactoryId())) {
+                // Re-check uniqueness in the destination scope (post-review C1).
+                // Moving a task to a new scope must not collide with an existing taskCode
+                // in that scope.
+                Optional<ScheduledTask> collide = findExistingByScope(
+                        patch.getFactoryId(), existing.getTaskCode());
+                if (collide.isPresent() && !collide.get().getId().equals(existing.getId())) {
+                    ScheduledTask c = collide.get();
+                    String scopeText = c.getFactoryId() == null
+                            ? "global" : ("factory=" + c.getFactoryId());
+                    throw new BusinessException(409,
+                            "目标 scope 已存在同名任务: " + existing.getTaskCode()
+                                    + " (scope=" + scopeText + ", id=" + c.getId() + ")")
+                            .withHint("请先在目标 scope 中改名/删除冲突任务再迁移");
+                }
                 existing.setFactoryId(patch.getFactoryId());
                 // factoryId is rebuilt into Runnable context — treat as scheduler-affecting
                 schedulerAffectingChange = true;
@@ -184,6 +220,23 @@ public class DynamicSchedulerServiceImpl implements DynamicSchedulerService {
     }
 
     // ==================== validation helpers ====================
+
+    /**
+     * Scope-aware uniqueness lookup (post-review C1). Mirrors the partial unique
+     * indexes — global tasks (factoryId NULL) checked via
+     * {@link ScheduledTaskRepository#findByTaskCodeAndFactoryIdIsNull(String)},
+     * per-factory tasks via
+     * {@link ScheduledTaskRepository#findByFactoryIdAndTaskCode(String, String)}.
+     *
+     * <p>Empty/blank factoryId is treated as null (global), matching how the
+     * legacy controller surfaces an empty body parameter.
+     */
+    private Optional<ScheduledTask> findExistingByScope(String factoryId, String taskCode) {
+        if (factoryId == null || factoryId.isBlank()) {
+            return taskRepository.findByTaskCodeAndFactoryIdIsNull(taskCode);
+        }
+        return taskRepository.findByFactoryIdAndTaskCode(factoryId, taskCode);
+    }
 
     private void validateNotBlank(String value, String fieldName) {
         if (value == null || value.isBlank()) {
