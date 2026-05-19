@@ -177,4 +177,28 @@ class SandboxedSpelEvaluatorTest {
         boolean result = evaluator.evaluateBoolean("1 == 1", new HashMap<>());
         assertTrue(result);
     }
+
+    // ==================== validateSyntax bracket indexing ====================
+
+    @Test
+    @DisplayName("validateSyntax: bracket indexing #order['amount'] accepted (Map-friendly syntax)")
+    void testValidateSyntaxAcceptsBracketIndexing() {
+        // Bracket syntax required for Map property access at runtime
+        // (per RuleEngineImpl.buildSpelVariables which binds Map<String,Object>).
+        // Dry-run with null #order emits EL1012E "Cannot index into a null value"
+        // — must be swallowed since syntax itself is valid.
+        assertDoesNotThrow(() -> evaluator.validateSyntax("#order['amount'] > 100"));
+        assertDoesNotThrow(() -> evaluator.validateSyntax("#input['value'] < 10"));
+        assertDoesNotThrow(() -> evaluator.validateSyntax("#inventory['stock'] != 0"));
+    }
+
+    @Test
+    @DisplayName("validateSyntax: bracket indexing still rejects T()/new/reflection")
+    void testValidateSyntaxBracketDoesNotBypassSecurity() {
+        // Bracket indexing must not be an escape hatch for forbidden constructs.
+        assertThrows(SpelEvaluationFailure.class,
+                () -> evaluator.validateSyntax("T(java.lang.Runtime).getRuntime().exec('calc')"));
+        assertThrows(SpelEvaluationFailure.class,
+                () -> evaluator.validateSyntax("#order['amount'] > new java.lang.Integer(0)"));
+    }
 }

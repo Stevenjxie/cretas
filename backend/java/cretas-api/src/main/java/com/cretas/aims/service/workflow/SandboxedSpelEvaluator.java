@@ -157,8 +157,12 @@ public class SandboxedSpelEvaluator {
             // 其他 evaluation error (e.g. T() / reflection) propagate as failure.
             String msg = ee.getMessage() == null ? "" : ee.getMessage();
             if (msg.contains("cannot be found") || msg.contains("on null")
-                    || msg.contains("not assignable")) {
-                // expected when running with empty variables — syntax is OK
+                    || msg.contains("not assignable")
+                    || msg.contains("Cannot index into a null value")) {
+                // expected when running with empty variables — syntax is OK.
+                // "Cannot index into a null value" (EL1012E) fires on bracket indexing
+                // #order['amount'] when #order is null at dry-run; the syntax is valid,
+                // runtime binds Map (per RuleEngineImpl.buildSpelVariables) and resolves correctly.
                 return;
             }
             throw new SpelEvaluationFailure(spel,
