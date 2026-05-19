@@ -9,6 +9,8 @@ import com.cretas.aims.entity.alerts.AlertSeverity;
 import com.cretas.aims.entity.alerts.AlertType;
 import com.cretas.aims.repository.alerts.AlertRuleRepository;
 import com.cretas.aims.service.alerts.AlertEngineService;
+import com.cretas.aims.service.workflow.SandboxedSpelEvaluator;
+import com.cretas.aims.service.workflow.SandboxedSpelEvaluator.SpelEvaluationFailure;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.servlet.http.HttpServletRequest;
@@ -46,6 +48,10 @@ public class CanvasAlertController {
 
     private final AlertRuleRepository ruleRepository;
     private final AlertEngineService alertEngineService;
+    private final SandboxedSpelEvaluator spelEvaluator;
+
+    /** Max length of {@code rule_name} column (AlertRule entity {@code @Column(length=255)}). */
+    private static final int RULE_NAME_MAX_LENGTH = 255;
 
     @GetMapping("/rules")
     @Operation(summary = "列出告警规则", description = "返回工厂全部告警规则 (含 disabled)")
@@ -74,6 +80,13 @@ public class CanvasAlertController {
                 return ApiResponse.errorWithHint(400, "ruleName 必填",
                         "请提供规则名称", null, null);
             }
+            // B-A3 fix: explicit length check produces user-friendly 400 instead of
+            // generic 409 "数据处理异常" from PG VARCHAR(255) overflow at flush time.
+            if (ruleName.length() > RULE_NAME_MAX_LENGTH) {
+                return ApiResponse.errorWithCode(400, "VALIDATION",
+                        "规则名称最长 " + RULE_NAME_MAX_LENGTH + " 字符 (当前 " + ruleName.length() + ")",
+                        "请使用更短的规则名称", "warning");
+            }
             if (alertTypeStr == null || alertTypeStr.isBlank()) {
                 return ApiResponse.errorWithHint(400, "alertType 必填",
                         "请选择告警类型 (8 选 1)", null, null);
@@ -89,6 +102,24 @@ public class CanvasAlertController {
                         null, null);
             }
 
+            // B-A4/A5 fix: empty notifyChannels / notifyRoles makes the rule useless
+            // (no one gets the alert). Reject at write time instead of silent shipping.
+            List<String> notifyChannels = toStringList(body.get("notifyChannels"));
+            List<String> notifyRoles = toStringList(body.get("notifyRoles"));
+            ApiResponse<Map<String, Object>> notifyError = validateNotifyArrays(notifyChannels, notifyRoles);
+            if (notifyError != null) {
+                return notifyError;
+            }
+
+            // B-A7 P0 fix: validate SpEL syntax + reject RCE attempts at write time.
+            // Without this, T(java.lang.Runtime).getRuntime().exec(...) was persisted
+            // raw and could be executed by AlertEngineService at trigger time.
+            String spel = (String) body.get("triggerConditionSpel");
+            ApiResponse<Map<String, Object>> spelError = validateSpel(spel);
+            if (spelError != null) {
+                return spelError;
+            }
+
             Optional<AlertRule> dup = ruleRepository.findByFactoryIdAndRuleName(factoryId, ruleName);
             if (dup.isPresent()) {
                 return ApiResponse.errorWithHint(409,
@@ -100,11 +131,11 @@ public class CanvasAlertController {
                     .factoryId(factoryId)
                     .alertType(type)
                     .ruleName(ruleName)
-                    .triggerConditionSpel((String) body.get("triggerConditionSpel"))
+                    .triggerConditionSpel(spel)
                     .severity(parseSeverity(body.get("severity")))
                     .enabled(parseBoolean(body.get("enabled"), true))
-                    .notifyChannels(toStringList(body.get("notifyChannels")))
-                    .notifyRoles(toStringList(body.get("notifyRoles")))
+                    .notifyChannels(notifyChannels)
+                    .notifyRoles(notifyRoles)
                     .build();
 
             AlertRule saved = ruleRepository.save(rule);
@@ -123,13 +154,41 @@ public class CanvasAlertController {
     public ApiResponse<Map<String, Object>> updateRule(@PathVariable String factoryId,
                                                        @PathVariable String id,
                                                        @RequestBody Map<String, Object> body) {
-        log.info("PUT /alerts/rules/{} factoryId={} body keys={}", id, factoryId, body.keySet());
+        return updateRuleInternal(factoryId, id, body, "PUT");
+    }
+
+    /**
+     * B-A8 fix: PATCH alias for updateRule. Mirrors the canvas-rules PATCH contract
+     * (PR #44 added PATCH alongside PUT for the same partial-update semantics).
+     * Some clients (HTTP libraries, REST playgrounds) default to PATCH for partial
+     * updates; previously returned 405 because only PUT was registered.
+     */
+    @PatchMapping("/rules/{id}")
+    @Operation(summary = "更新告警规则 (PATCH alias of PUT)")
+    @RequireRole({"factory_super_admin", "permission_admin"})
+    public ApiResponse<Map<String, Object>> patchRule(@PathVariable String factoryId,
+                                                      @PathVariable String id,
+                                                      @RequestBody Map<String, Object> body) {
+        return updateRuleInternal(factoryId, id, body, "PATCH");
+    }
+
+    private ApiResponse<Map<String, Object>> updateRuleInternal(String factoryId, String id,
+                                                                Map<String, Object> body,
+                                                                String httpMethod) {
+        log.info("{} /alerts/rules/{} factoryId={} body keys={}",
+                httpMethod, id, factoryId, body.keySet());
         try {
             AlertRule rule = loadRule(factoryId, id);
 
             // PATCH semantics: only update fields present in body.
             if (body.containsKey("ruleName")) {
                 String newName = (String) body.get("ruleName");
+                // B-A3 fix: length check produces specific 400 before PG VARCHAR overflow.
+                if (newName != null && newName.length() > RULE_NAME_MAX_LENGTH) {
+                    return ApiResponse.errorWithCode(400, "VALIDATION",
+                            "规则名称最长 " + RULE_NAME_MAX_LENGTH + " 字符 (当前 " + newName.length() + ")",
+                            "请使用更短的规则名称", "warning");
+                }
                 if (newName != null && !newName.isBlank() && !newName.equals(rule.getRuleName())) {
                     Optional<AlertRule> dup = ruleRepository.findByFactoryIdAndRuleName(factoryId, newName);
                     if (dup.isPresent() && !dup.get().getId().equals(rule.getId())) {
@@ -141,16 +200,39 @@ public class CanvasAlertController {
                 }
             }
             if (body.containsKey("triggerConditionSpel")) {
-                rule.setTriggerConditionSpel((String) body.get("triggerConditionSpel"));
+                // B-A7 P0 fix: validate at write time to block RCE injection on update path.
+                String spel = (String) body.get("triggerConditionSpel");
+                ApiResponse<Map<String, Object>> spelError = validateSpel(spel);
+                if (spelError != null) {
+                    return spelError;
+                }
+                rule.setTriggerConditionSpel(spel);
             }
             if (body.containsKey("severity")) {
                 rule.setSeverity(parseSeverity(body.get("severity")));
             }
-            if (body.containsKey("notifyChannels")) {
-                rule.setNotifyChannels(toStringList(body.get("notifyChannels")));
+            // B-A4/A5 fix: reject empty arrays on update (consistent with create).
+            // If client sends {notifyChannels:[]} explicitly, treat as validation error.
+            // (Omitting the field is OK — PATCH semantics keep current value.)
+            List<String> newChannels = body.containsKey("notifyChannels")
+                    ? toStringList(body.get("notifyChannels")) : null;
+            List<String> newRoles = body.containsKey("notifyRoles")
+                    ? toStringList(body.get("notifyRoles")) : null;
+            if (newChannels != null && newChannels.isEmpty()) {
+                return ApiResponse.errorWithCode(400, "VALIDATION",
+                        "notifyChannels 不可为空",
+                        "至少选择一个通知渠道: EMAIL / SMS / IN_APP / WECHAT", "warning");
             }
-            if (body.containsKey("notifyRoles")) {
-                rule.setNotifyRoles(toStringList(body.get("notifyRoles")));
+            if (newRoles != null && newRoles.isEmpty()) {
+                return ApiResponse.errorWithCode(400, "VALIDATION",
+                        "notifyRoles 不可为空",
+                        "至少选择一个通知接收角色", "warning");
+            }
+            if (newChannels != null) {
+                rule.setNotifyChannels(newChannels);
+            }
+            if (newRoles != null) {
+                rule.setNotifyRoles(newRoles);
             }
             if (body.containsKey("enabled")) {
                 rule.setEnabled(parseBoolean(body.get("enabled"), rule.getEnabled()));
@@ -296,6 +378,52 @@ public class CanvasAlertController {
     }
 
     // ==================== helpers ====================
+
+    /**
+     * B-A4/A5 fix: validate notifyChannels / notifyRoles on create path.
+     * Returns non-null error response when arrays are empty; null when OK.
+     */
+    private ApiResponse<Map<String, Object>> validateNotifyArrays(List<String> notifyChannels,
+                                                                  List<String> notifyRoles) {
+        if (notifyChannels == null || notifyChannels.isEmpty()) {
+            return ApiResponse.errorWithCode(400, "VALIDATION",
+                    "notifyChannels 不可为空",
+                    "至少选择一个通知渠道: EMAIL / SMS / IN_APP / WECHAT", "warning");
+        }
+        if (notifyRoles == null || notifyRoles.isEmpty()) {
+            return ApiResponse.errorWithCode(400, "VALIDATION",
+                    "notifyRoles 不可为空",
+                    "至少选择一个通知接收角色", "warning");
+        }
+        return null;
+    }
+
+    /**
+     * B-A7 P0 fix: validate triggerConditionSpel at write time. Returns non-null
+     * error response when SpEL contains RCE / reflection / forbidden constructs,
+     * or has syntax errors. Returns null when:
+     *   - SpEL is null/blank (allowed — see AlertRule.triggerConditionSpel javadoc:
+     *     NULL means "use built-in default logic for this alert type")
+     *   - SpEL passes sandbox validation
+     */
+    private ApiResponse<Map<String, Object>> validateSpel(String spel) {
+        if (spel == null || spel.isBlank()) {
+            return null;
+        }
+        try {
+            spelEvaluator.validateSyntax(spel);
+            return null;
+        } catch (SpelEvaluationFailure ex) {
+            log.warn("Rejected SpEL at write time: spel={}, reason={}",
+                    spel, ex.getUserMessage());
+            return ApiResponse.errorWithCode(400, "VALIDATION",
+                    "SpEL 表达式语法/安全检查失败: " + ex.getUserMessage(),
+                    ex.getActionHint() != null
+                            ? ex.getActionHint()
+                            : "仅支持 #input/#order/#material 等业务字段访问, 禁用 T()/new/反射",
+                    "warning");
+        }
+    }
 
     private UUID parseEventId(String id) {
         try {
