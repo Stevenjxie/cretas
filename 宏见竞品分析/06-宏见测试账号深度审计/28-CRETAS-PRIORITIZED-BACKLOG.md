@@ -13,6 +13,16 @@
 > - **C-APPROVAL-EDITOR-1 (#5) 严重高估**: 标 20d 实际剩 3-5d (Cretas Track-I 758-line VueFlow + Canvas Phase 1 已 ship, 仅剩 incremental).
 > - **完整 reconcile**: `../04-最终决策/31-DEEP-RE-AUDIT.md` (3517 行, 16 sections, +10 fresh HJ screenshots) + `30-BACKLOG-STATUS-AUDIT.md §13`.
 > - **后续**: 本 doc 下方 Table Status 列待 inline 修正, 当前以 31-doc §P.4 reconcile 表为 truth source. 决策面建议直接读 31-doc §P.
+>
+> 🔥 **2026-05-19 Round 12 deep re-audit 增量 (HJ 帮助手册 + 5 大数据流 + UI/UX patterns)**:
+> - **28 项新 backlog (G12-* 编号)** — 详见 31-doc §P.12 (28-Backlog 之外的额外发现, 主要大客户场景 + RBAC 5 维 + 财务报表三表 + 期间结账 + 数据权限 + 工序工资集成 + 数电票直连)
+> - **vflag 真相修正**: Round 11 推测 4 单状态错, **实测 2x2 维度 (审核 + 异常)**. 详见 32-doc §A.5 X1 + §E.4 X5.
+> - **RBAC 5 维 (Round 11 估 4 维)**: 功能/数据/打印/第三方 + **登陆地点范围** (per Round 12 角色 list 第 3 列). 详见 32-doc §D.1 X4.
+> - **decisionType 真实 14 含 CUSTOM** vs Round 11 估 10 — 11% 覆盖 (vs HJ 126).
+> - **linkno 命名不匹配 HJ baseline 3 类** (Cretas project/free vs HJ file/image/contract) — 32-doc §B.6 X2 finding.
+> - **Cretas 已超 HJ 6 patterns**: VueFlow / URL routing / KeepAlive cascade / 操作 ▼ 普及 / DesktopModal / Vue state hidden — 32-doc §E X5 finding.
+> - **真实剩余工时修正**: Round 11 估 ~150d / 3 月 → **Round 12 +183d 新发现 = ~330d / 6.5 月** (新增大客户场景, 仍省 Steve sign-off "9 月" 2.5 月).
+> - **完整 32-doc**: `../04-最终决策/32-DEEP-RE-AUDIT-V2.md` (3096 行, 7 sections §A-§G, 含 647 help articles 引用 + Cretas main multi-synonym grep).
 
 ---
 

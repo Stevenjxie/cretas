@@ -781,3 +781,137 @@ REPORT / REVIEW / GAPS
 ---
 
 **v1.2 (R-HJ Round 2-9) → v1.3 (R-HJ Round 11 deep re-audit) 完成 (2026-05-19)**.
+
+
+---
+
+# 附录 Q: R-HJ Round 12 deep re-audit 终极整合 (2026-05-19, v1.4)
+
+> **来源**: `06-宏见测试账号深度审计/32-DEEP-RE-AUDIT-V2.md` (3096 行, 7 sections §A-§G) + `31-DEEP-RE-AUDIT.md §P.12` (Round 12 新增 backlog table)
+>
+> **触发**: Steve "用 superpowers 审计, 深入 HJ 帮助手册 + 跨模块数据流 + 全 UI/UX"
+>
+> **方法**: organizer Phase 1 capture (647 help articles batch + 12 模块 sub-menu inventory + 9 fresh UI snaps + jsPlumb editor URL) + 5 parallel subagents synthesis (Agent X1-X5).
+>
+> ⚠️ **本附录是 v1.4 终极, `32-DEEP-RE-AUDIT-V2.md §G` 是 authoritative source**. 主 MUST_COPY (B/C/D 章节) + 附录 N/O/P (Round 1-11) 内的 status 列 + 工时估算大量 stale, 决策面建议直接读 32-doc §F (销售话术) + §G (改进 backlog).
+
+## Q.1 28 G12-* 新 backlog items (Round 12 fresh, 加入主表)
+
+详见 31-doc §P.12 完整 28 项表. 关键 17 项 P0/P1 摘:
+
+### P0 战略级 (1 新)
+| # | Item | 工时 | Sprint |
+|---|---|---|---|
+| C-MENU-PERSONAL-VIEW | 我创建的/我参与的工作流 + 工作流处理 admin UI (per §D.5) | 6d | Sprint 5 W1 |
+
+### P1 战术级 (16 新)
+| # | Item | 工时 | Sprint |
+|---|---|---|---|
+| G12-1 | inline link counter (file/image/contract count per row) | 4d | Sprint 5 |
+| G12-3 | 客户档案 21 主 tabs + 5 sub-tabs (补剩 8) | 5d | Sprint 5 |
+| G12-4 | 辅助核算 7 类 Voucher 关联 | 4d | Sprint 5 |
+| G12-6 | 数据权限维度 (row-level filter) RBAC 第 2 维 | 6d | Sprint 5 大客户 |
+| G12-9 | 报价试算 Sales | 3d | Sprint 5 |
+| G12-10 | 采购需求总表 MRP entry verify | 1d | Sprint 5 |
+| F-TAX-DIRECT-1 | 税局直连数电票 (per §B.5) | 10d | Sprint 5+ |
+| P-REQUISITION-1 | 请购单 entity | 5d | Sprint 5 |
+| C-LINK-11TYPE-1 | linkno 扩 11 类 (Cretas 8 + HJ 3) | 3d | Sprint 5 |
+| M-WAGE-INTEGRATION-1 | 生产工时 → 工资自动 trigger | 5d | Sprint 5 |
+
+### P2 选做 (12 新, ~75d)
+- 序列号管理 (6d) / 产品报废单 (3d) / 线边仓库 (5d) / 设备 lifecycle (10d) / 工序条件路由 (5d 重判) / 作业指导书 (8d) / 报表三表 (12d) / 结账管理 (8d) / 账簿 (6d) / 商机漏斗 (8d) / 业绩 6 项 (5d) / S-REPORTS-PRESETS 14+6 (10d)
+
+### P3 长期 (10 新, ~50d)
+- C-TV-DASHBOARD-1 (15d) / 集团公司 (5d) / help.cretas.com docs 子域 (5d) / 第三方扩展 (8d) / 抄码品 8 字段 (5d) / 报价试算 (4d) / F-VOUCHER-ANOMALY-1 (3d) / S-CRM-CUSTOMTAG-1 (2d) / 等
+
+## Q.2 工时累计修正 (Round 11 → Round 12)
+
+| 类别 | Round 11 附录 P 估剩 | Round 12 新增 (本 Q) | 新合计 |
+|---|---|---|---|
+| P0 战略 剩 | 5d | +6d (C-MENU-PERSONAL-VIEW) | 11d |
+| P0 必修 剩 | 4d | 0 | 4d |
+| P1 战术 剩 | 30d | +52d (G12-1/3/4/6/9/10 + 4 ID') | 82d |
+| P2 选做 | 60d | +75d (12 新 items) | 135d |
+| P3 长期 | 50d | +50d (10 新 items) | 100d |
+| **合计 剩余** | ~150d | **+183d** | **~330d nominal** |
+
+按 Claude 1.7× 加速 + 25% buffer:
+- Round 11 估: ~150d / **~3 月** P0+P1 收口
+- **Round 12 修正**: ~330d nominal / **~6.5 月** P0+P1+P2 (新增大客户场景)
+
+vs Steve sign-off "9 月" → **仍省 2.5 月** (vs Round 11 省 6 月, 增量发现略增工时).
+
+## Q.3 关键 finding 10 条 (Round 12 fresh)
+
+1. **HJ help.hongjian.com 独立子域** + 14 chapters / 780 articles 完整在线手册 → Cretas 应学客户面 docs (新 P3 C-DOCS-DOMAIN-1, 5d)
+2. **vflag 真相**: 2x2 维度 (审核 ✓✗ + 异常 ✓✗), 不是 4 单维 — Round 11 推测错, Round 12 修正
+3. **RBAC 5 维** (功能/数据/打印/第三方 + 登陆地点) — 完整 vs Round 11 估 4 维
+4. **decisionType 真实 14 含 CUSTOM** vs Round 11 估 10 — 11% 覆盖 (vs HJ 126)
+5. **辅助核算 7 类 official** (客户/供应商/部门/职员/项目/存货/委外商) vs HJ docs 2023 article 仍写 6 类 (文档落后产品)
+6. **Cretas linkno 8 类 vs HJ baseline 8 类 命名不匹配 3 类** (Cretas project/free, HJ file/image/contract) — 新 C-LINK-11TYPE-1
+7. **生产工时 → 工资集成断点** (HJ 自动 trigger, Cretas H-WAGE ship 但缺 trigger) — 新 M-WAGE-INTEGRATION-1
+8. **MRP 4 个 entry + 请购单 entity 完全缺** (Cretas 仅 ShortageAnalysis ship) — 新 P-REQUISITION-1
+9. **Cretas 已超 HJ 6 patterns** (VueFlow / URL routing / KeepAlive cascade / 操作 ▼ 普及 / DesktopModal / Vue state hidden) — 32-doc §E
+10. **HJ 帮助手册搜索框 + 蓝色超链接 + 红色注意事项** UX pattern — Cretas in-app help 集成 P3 候选
+
+## Q.4 主 MUST_COPY 受影响项 (P0/P1 必抄章节 inline 修正)
+
+**§B P0 必抄 (Round 11 8 项 → Round 12 新)**:
+- 新增 P0: C-MENU-PERSONAL-VIEW (6d) — 工作流 personal view + admin UI
+- N49 钉钉 (Track-B1 in flight) — 维持 Round 11 status
+
+**§C P0 必修 (无变化)** — Round 11 5 项一致
+
+**§D P1 必抄 (Round 11 10 项 → Round 12 新增 6 项)**:
+- 新增 P1: F-TAX-DIRECT-1 (10d) — 税局直连数电票
+- 新增 P1: P-REQUISITION-1 (5d) — 请购单 entity
+- 新增 P1: C-LINK-11TYPE-1 (3d) — linkno 扩 11 类
+- 新增 P1: M-WAGE-INTEGRATION-1 (5d) — 生产 → 工资 trigger
+- 新增 P1: G12-6 数据权限维度 (6d) — RBAC 第 2 维
+- 新增 P1: G12-1 inline link counter (4d) — 跨模块视觉
+- 新增 P1: G12-9 报价试算 (3d) — 销售试算
+- 新增 P1: G12-3 客户档案补剩 8 tabs (5d) — Round 11 §A.2 62% ship 收尾
+
+## Q.5 销售话术 7 场景升级
+
+详见 32-doc §F (175 行). 关键场景:
+
+1. **创建销售订单**: HJ 12 click + 40 字段 + 3-5 min vs Cretas 1 句话 + 30 sec
+2. **审批流配置**: HJ jsPlumb + SpEL + 多 page vs Cretas Canvas VueFlow 单 Tab (含 N-of-M HJ 没有)
+3. **跨模块查找**: HJ linkno 反查 vs Cretas AIChat 1 句话 (但缺 inline link counter)
+4. **库存查询**: HJ multi-step + 5 page vs Cretas SmartBI 1 句话
+5. **财务凭证生成**: HJ 7 generator + vflag vs Cretas ✅ ship (Sprint3-E PR #693)
+6. **RBAC 配置**: HJ 4 维 + 1591 f_no vs Cretas 单维 (F006 够用, 大客户需扩)
+7. **帮助手册**: HJ 14 chapters / 780 articles 客户面 docs vs Cretas 缺 (P3 C-DOCS-DOMAIN-1)
+
+## Q.6 后续行动 (Steve 决策)
+
+### 必做 (本周)
+- ✅ 本附录 Q 加入 MUST_COPY
+- ✅ 28-Backlog 顶部加 Round 12 banner (已完成)
+- ✅ 30-Audit 加 §14 Round 12 supplement (本 commit)
+- ⚠️ Steve 重新 sign-off "6.5 月 P0+P1+P2" (vs 5-19 上次 sign-off "3 月") — 因 Round 12 揭示更多大客户场景
+
+### 应做 (Sprint 5)
+- C-MENU-PERSONAL-VIEW (P0 6d) — 工作流 personal view + admin UI
+- P-REQUISITION-1 (P1 5d) — 请购单 entity
+- C-LINK-11TYPE-1 (P1 3d) — linkno 扩
+- M-WAGE-INTEGRATION-1 (P1 5d) — 生产 → 工资
+- G12-6 数据权限 RBAC 第 2 维 (P1 6d)
+
+### 可做 (Sprint 5-6)
+- decisionType 扩枚举 (Cretas 14 → 30+) 提高工作流覆盖 11% → 25%
+- vflag 异常状态维度补 (P3 3d)
+- 客户档案补剩 8 tabs (P1 5d)
+
+### 延后 (Sprint 7+ 按客户触发)
+- 大客户财务: F-3REPORT (12d) / F-PERIOD (8d) / 账簿系列 (6d)
+- 大销售: S-OPP-1 完整漏斗+日历 (8d) / 业绩 6 项 (5d)
+- 战略 P3: TV 大屏 (15d) / 集团公司 (5d) / docs 子域 (5d)
+
+### Archive (Cretas 不抄)
+- 委外管理 / 办公自动化邮件短信 / 国际贸易 / 寄卖借入借出 / 模具 / 微信网店 — Round 11+12 一致维持
+
+---
+
+**v1.3 (R-HJ Round 11) → v1.4 (R-HJ Round 12 deep re-audit) 完成 (2026-05-19)**.

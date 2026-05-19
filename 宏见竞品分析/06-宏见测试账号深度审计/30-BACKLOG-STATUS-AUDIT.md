@@ -267,3 +267,88 @@ P1 剩 42 项 / 128d / 77 工日 / 16 周 (单人).
 - ✅ **新 audit truth source**: `31-DEEP-RE-AUDIT.md` (5-19 时点, 16 sections + 10 fresh screenshots)
 - ⚠️ **28-Backlog 应 inline 更新** ship marker (30+ 项 ❌→✅), 见 task #8
 - ⚠️ **MUST_COPY.md 应加附录 P Round 11 amend**, 见 task #9
+
+
+---
+
+## 14. 🔥 Round 12 Update (2026-05-19, organizer + 5 parallel agents)
+
+> **Trigger**: Steve "用 superpowers 审计, 深入 HJ 帮助手册 + 跨模块数据流 + 全 UI/UX"
+>
+> **方法**: organizer Phase 1 Playwright capture + curl batch fetch 647 articles + 5 parallel subagents (Agent X1-X5) synthesis.
+>
+> **完整报告**: `../04-最终决策/32-DEEP-RE-AUDIT-V2.md` (3096 行, 7 sections §A-§G)
+> **Phase 1 captures**: `round12-snapshots/` (647 help articles + full sub-menu 12 模块 + 9 fresh PNGs + 7 live UI snaps)
+> **31-doc §P.12 配套**: 28 G12-* 新 backlog items
+
+### 14.1 Round 12 vs Round 11 增量
+
+| 维度 | Round 11 (§13) | **Round 12 (§14)** |
+|---|---|---|
+| 新增 backlog | 30+ 项 ❌→✅ reconcile | **28 项 G12-* fresh (大客户场景 + 数据流深) ** |
+| 关键 finding 类型 | ship status drift (single-keyword grep 漏判) | **HJ behavior 深: vflag 真相 / RBAC 5 维 / decisionType 14 / linkno 命名不匹配** |
+| 工时增量 | 减 (Round 11 -56d nominal) | **加 (Round 12 +183d, 主要大客户场景)** |
+| 总剩 (含 P2+P3) | ~373d / 7 月 | **~330d Round 11 修 + 183d 增 = ~513d ~ 但实际 P0+P1 仅 +63d Sprint 5+** |
+
+### 14.2 Round 12 关键 finding (10 条, 详见 32-doc §G.6)
+
+1. **HJ help.hongjian.com 独立子域 + 14 chapters / 780 articles** — Cretas 应学客户面 docs (新 P3 C-DOCS-DOMAIN-1 5d)
+2. **vflag 真相修正**: 2x2 维度 (审核 + 异常), 不是 4 单维 — Round 11 推测错
+3. **RBAC 5 维** (功能/数据/打印/第三方 + 登陆地点) — 完整 vs Round 11 估 4 维
+4. **decisionType 真实 14 含 CUSTOM** vs Round 11 估 10 — 11% 覆盖 (vs HJ 126)
+5. **辅助核算 7 类 official** (含委外商) vs HJ docs 2023 article 仍写 6 类
+6. **Cretas linkno 8 类 命名不匹配 HJ 3 类** — 新 C-LINK-11TYPE-1 (3d P1)
+7. **生产工时 → 工资集成断点** — 新 M-WAGE-INTEGRATION-1 (5d P1)
+8. **MRP 4 个 entry + 请购单 entity 缺** — 新 P-REQUISITION-1 (5d P1)
+9. **Cretas 已超 HJ 6 patterns** (VueFlow / URL routing / KeepAlive / 操作 ▼ 普及 / DesktopModal / Vue state hidden)
+10. **HJ 帮助手册 UX** (搜索框 + 蓝色超链接 + 红色注意事项) — Cretas in-app help 集成候选
+
+### 14.3 Sprint 5+ 真实 backlog (Round 12 加进)
+
+按优先级 (详见 31-doc §P.12 + 32-doc §G):
+
+**Sprint 5 W1-W2 P0/P1 (~38d)**:
+- C-MENU-PERSONAL-VIEW (P0 6d) — 工作流 personal view + admin UI
+- F-TAX-DIRECT-1 (P1 10d) — 税局直连数电票
+- P-REQUISITION-1 (P1 5d) — 请购单 entity
+- M-WAGE-INTEGRATION-1 (P1 5d) — 生产 → 工资集成
+- G12-6 数据权限 RBAC 第 2 维 (P1 6d)
+- C-LINK-11TYPE-1 (P1 3d) — linkno 扩 11 类
+- G12-1 inline link counter (P1 4d)
+- G12-9 报价试算 (P1 3d)
+- G12-10 采购需求总表 entry verify (P1 1d)
+- 加 Round 11 §P 剩 P0 ~5d (M-BOM-VER frontend / C-APPROVAL Phase 2 / M1)
+
+**Sprint 6+ P2 (~75d, 按客户触发)**:
+- 序列号管理 6d / 产品报废 3d / 线边仓 5d / 设备 lifecycle 10d / 工序条件路由 5d / 作业指导书 8d / 报表三表 12d / 结账管理 8d / 账簿系列 6d / 商机漏斗 8d / 业绩 6 项 5d / S-REPORTS-PRESETS 14+6 10d
+
+**Sprint 7+ P3 长期 (~50d, Steve sign-off 延后)**:
+- TV 大屏 15d / 集团公司 5d / docs 子域 5d / 第三方扩展 8d / 抄码品 8 字段 5d / 报价试算 + 销售综合月报 4d / vflag 异常状态 3d / 客户自定义标签 2d
+
+### 14.4 Steve sign-off 重新建议
+
+| 项 | Round 11 上次 (§13.5) | **Round 12 建议 (§14)** |
+|---|---|---|
+| P0+P1 总时间 | 3 月 (剩 ~35d) | **3.5 月 P0+P1 收口 (Sprint 5 ~38d 新增项)** |
+| P0+P1+P2 (含大客户) | (未列) | **6.5 月** |
+| 客户群战略 | 食品 + 餐饮维持 | 加: **大客户 = 数电税 + 报表三表 + 数据权限 + 设备 lifecycle 全套** (Sprint 6+ 触发) |
+| 团队规模 | 单人 (Steve) | 维持 (Sprint 5+ 仍可单人) |
+| 后续重点 | 客户深度试用 + bug fix + 新客户 | 维持 + **Sprint 5+ 主线: F-TAX-DIRECT (数电票客户硬需) + P-REQUISITION (请购单 enterprise)** |
+
+### 14.5 Round 12 元教训
+
+1. **Live UI > Help docs**: HJ docs 2023 article 辅助核算只列 6 类, Round 12 UI 实测 7 类. 文档可能落后产品 — 实测优先.
+2. **vflag 单字段 vs 2 维度**: Round 11 凭着 4 状态推测错. Round 12 实测 UI dropdown 显 2 独立维度. **审计推测必复核 UI**.
+3. **RBAC 多维度 vs 单维**: Round 11 估 4 维, Round 12 角色 list 第 3 列 (登陆地点) = 第 5 维. 单 page audit 加 1 cell verify.
+4. **decisionType 实测 14 vs 估 10**: Round 11 grep 不全, Round 12 用 multi-synonym (entity + enum + column + camelCase + lower) 找全. 跟 §O.16 教训一致.
+5. **Cretas 已超 HJ 6 patterns**: 销售话术应突出. Boss 报告应平衡 (不是单纯抄 HJ, 而是双向反工程).
+6. **真 gap 是大客户场景**: Round 11 关注 "ship status drift", Round 12 关注 "大客户 missing feature" (报表三表 / 期间结账 / 数据权限). 客户群进阶 (F006 → 大客户) 是 backlog 增长的根源.
+
+### 14.6 本文件后续
+
+- ✅ **本文件 30-Audit** 保留作为 Round 11 时点 baseline (5-16 + 5-19 §13 Round 11 reconcile + 5-19 §14 Round 12 增量)
+- ✅ **新 audit truth source**: `32-DEEP-RE-AUDIT-V2.md` (5-19, 3096 行)
+- ✅ **31-doc §P.12** Round 12 28 新 backlog 已加
+- ✅ **MUST_COPY 附录 Q** 已加 (v1.4)
+- ✅ **28-Backlog 顶部 Round 12 banner** 已加
+- ⚠️ **Round 13+** 候选: Layer C 验证 (vflag/RBAC/linkno) + HJ 移动 APK 实测 (Round 9 skeleton ready, 等 Steve 装)
