@@ -14,6 +14,7 @@ import com.cretas.aims.service.ProcessingStageRecordService;
 import com.cretas.aims.service.QualityInspectionService;
 import com.cretas.aims.service.AIAnalysisService;
 import com.cretas.aims.service.CacheService;
+import com.cretas.aims.service.WageRecordTriggerService;
 import com.cretas.aims.dto.processing.ProcessingStageRecordDTO;
 import com.cretas.aims.event.BatchCompletedEvent;
 import lombok.RequiredArgsConstructor;
@@ -66,6 +67,8 @@ public class ProcessingServiceImpl implements ProcessingService {
     private final QualityInspectionService qualityInspectionService;
     private final ProductionAlertRepository productionAlertRepository;
     private final ProductionPlanBatchUsageRepository productionPlanBatchUsageRepository;
+    // Sprint 5 Track E (M-WAGE-INTEGRATION-1): 生产→工资 自动 trigger
+    private final WageRecordTriggerService wageRecordTriggerService;
 
     /**
      * 将字符串 batchId 安全转换为 Long。
@@ -378,6 +381,13 @@ public class ProcessingServiceImpl implements ProcessingService {
                         : String.format("班组报工: 产出%d, 良品%d, 不良品%d", output, good, defect));
                 batchWorkSessionRepository.save(session);
                 recordedMembers++;
+
+                // Sprint 5 Track E (M-WAGE-INTEGRATION-1): 生产报工 → 计件工资自动 trigger
+                // 仅当个人产量 > 0 时 trigger (本次班组成员有报产, 才计入计件 efficiency).
+                // 失败不阻塞主流程 (per WageRecordTriggerService 内部已 catch-all).
+                if (output > 0) {
+                    wageRecordTriggerService.recordPieceWage(factoryId, batch, member.getUserId(), output, good);
+                }
             }
         }
 

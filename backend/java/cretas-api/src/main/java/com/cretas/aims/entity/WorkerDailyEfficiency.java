@@ -223,6 +223,16 @@ public class WorkerDailyEfficiency extends BaseEntity {
     @Column(name = "rank_in_team")
     private Integer rankInTeam;
 
+    // ==================== Sprint 5 Track E (M-WAGE-INTEGRATION-1): 生产→工资 trigger linkno ====================
+
+    /**
+     * 来源生产批次 ID (linkno).
+     * 由 ProcessingServiceImpl.submitTeamBatchReport 自动 trigger 写入.
+     * 允许 NULL (向后兼容: 手动创建的 efficiency 记录或非生产场景).
+     */
+    @Column(name = "source_batch_id")
+    private Long sourceBatchId;
+
     // ==================== 其他 ====================
 
     /**
