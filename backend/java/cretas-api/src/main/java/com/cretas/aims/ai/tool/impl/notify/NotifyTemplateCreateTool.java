@@ -1,23 +1,34 @@
 package com.cretas.aims.ai.tool.impl.notify;
 
 import com.cretas.aims.ai.tool.AbstractBusinessTool;
+import com.cretas.aims.entity.notify.NotifyChannel;
+import com.cretas.aims.entity.notify.NotifyTemplate;
+import com.cretas.aims.repository.notify.NotifyTemplateRepository;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 /**
- * AI Tool: 创建通知模板 — Phase 3 Canvas-Notify Step T7 skeleton.
+ * AI Tool: 创建通知模板 — Phase 3 Canvas-Notify Step T7.
  *
  * <p>对应 REST: POST /api/mobile/{factoryId}/notify/templates
+ *
+ * <p>fool-proof Rule 4 (幂等): 同 (factoryId, templateCode) 已存在 → 返 409-style 提示 + existingId.
  *
  * @since 2026-05-18 (Phase 3 skeleton)
  */
 @Slf4j
 @Component
 public class NotifyTemplateCreateTool extends AbstractBusinessTool {
+
+    @Autowired
+    private NotifyTemplateRepository templateRepository;
 
     @Override
     public String getToolName() {
@@ -56,9 +67,68 @@ public class NotifyTemplateCreateTool extends AbstractBusinessTool {
     }
 
     @Override
+    @SuppressWarnings("unchecked")
     protected Map<String, Object> doExecute(String factoryId,
             Map<String, Object> params, Map<String, Object> context) throws Exception {
-        throw new UnsupportedOperationException(
-                "NotifyTemplateCreateTool skeleton — Phase 3 sister chat 实施 NotifyTemplateRepository.save");
+        log.info("[NotifyTemplateCreateTool] factoryId={}, templateCode={}",
+                factoryId, params.get("templateCode"));
+
+        String templateCode = getString(params, "templateCode");
+        String title = getString(params, "title");
+        String bodyTemplate = getString(params, "bodyTemplate");
+
+        // 解析 channels (List<String> → List<NotifyChannel>)
+        Object channelsRaw = params.get("channels");
+        if (!(channelsRaw instanceof List<?>)) {
+            throw new IllegalArgumentException("channels 必须是 array 类型");
+        }
+        List<NotifyChannel> channels = new ArrayList<>();
+        for (Object ch : (List<Object>) channelsRaw) {
+            if (ch == null) continue;
+            try {
+                channels.add(NotifyChannel.valueOf(ch.toString().trim().toUpperCase()));
+            } catch (IllegalArgumentException e) {
+                throw new IllegalArgumentException("无效的渠道名: " + ch + " (可选: WECHAT/DINGTALK/EMAIL/SMS/IN_APP)");
+            }
+        }
+        if (channels.isEmpty()) {
+            throw new IllegalArgumentException("channels 不能为空, 至少选 1 个渠道");
+        }
+
+        // 幂等检查 — (factoryId, templateCode) 已存在 → 返 DUPLICATE + existingId
+        Optional<NotifyTemplate> existing =
+                templateRepository.findByFactoryIdAndTemplateCode(factoryId, templateCode);
+        if (existing.isPresent()) {
+            Map<String, Object> result = new HashMap<>();
+            result.put("status", "DUPLICATE");
+            result.put("message", "通知模板 " + templateCode + " 已存在 (factoryId=" + factoryId + "), 请改用 notify_template_update");
+            result.put("existingId", existing.get().getId().toString());
+            result.put("templateCode", templateCode);
+            result.put("actionHint", "调用 notify_template_update 修改现有模板");
+            return result;
+        }
+
+        // 创建新模板
+        NotifyTemplate template = NotifyTemplate.builder()
+                .factoryId(factoryId)
+                .templateCode(templateCode)
+                .title(title)
+                .bodyTemplate(bodyTemplate)
+                .channels(channels)
+                .variablesSchemaJson(new HashMap<>())
+                .build();
+        NotifyTemplate saved = templateRepository.save(template);
+
+        log.info("[NotifyTemplateCreateTool] 创建成功: id={}, factoryId={}, templateCode={}",
+                saved.getId(), factoryId, templateCode);
+
+        Map<String, Object> result = new HashMap<>();
+        result.put("status", "SUCCESS");
+        result.put("message", "通知模板 " + templateCode + " 创建成功");
+        result.put("id", saved.getId().toString());
+        result.put("templateCode", templateCode);
+        result.put("title", title);
+        result.put("channels", channels);
+        return result;
     }
 }
