@@ -206,7 +206,166 @@ public class WorkflowInstanceController {
         return ApiResponse.success(response);
     }
 
+    /**
+     * Sprint 5 Track A — "我创建的工作流" 列表 (personal view).
+     *
+     * <p>HJ ERP 工作流 6 sub-menu 之一. 列出当前 user 作为 initiator 的 workflow
+     * 实例 (跨 status 跨 module). 用户可看自己起的 RUNNING / APPROVED / REJECTED /
+     * CANCELLED 全状态历史. UI 按 status 显示不同 tag.
+     *
+     * <p>差异 vs {@code /pending}: pending 按 role 过滤 (审批人视角); my-created 按
+     * initiator 过滤 (发起人视角). 同一 user 可能同时是 initiator + approver.
+     *
+     * @param factoryId 工厂 id
+     * @param authorization Bearer JWT
+     * @param page 1-based 页码
+     * @param size 默认 20, 上限 100
+     * @return Page of WorkflowInstancePendingDTO (复用 DTO, status/completedAt 后续 phase 扩)
+     * @since 2026-05-19 (Sprint 5 Track A — C-MENU-PERSONAL-VIEW)
+     */
+    @GetMapping("/my-created")
+    @Operation(summary = "我创建的工作流 — Sprint 5 Track A personal view")
+    public ApiResponse<PageResponse<WorkflowInstancePendingDTO>> getMyCreated(
+            @PathVariable @NotBlank String factoryId,
+            @RequestHeader("Authorization") String authorization,
+            @RequestParam(defaultValue = "1") @Min(1) int page,
+            @RequestParam(defaultValue = "20") @Min(1) @Max(100) int size) {
+
+        User user = resolveCurrentUser(authorization);
+        if (user == null) {
+            throw new BusinessException(401, "未授权 — JWT 解析失败");
+        }
+
+        Pageable pageable = PageRequest.of(page - 1, size);
+        Page<ApprovalWorkflowInstance> instances = workflowEngine.findCreatedBy(
+                factoryId, user.getId(), pageable);
+
+        List<WorkflowInstancePendingDTO> dtos = hydrateInstances(factoryId, instances.getContent());
+
+        PageResponse<WorkflowInstancePendingDTO> response = PageResponse.of(
+                dtos, page, size, instances.getTotalElements());
+        return ApiResponse.success(response);
+    }
+
+    /**
+     * Sprint 5 Track A — "我参与的工作流" 列表 (personal view).
+     *
+     * <p>HJ ERP 工作流 6 sub-menu 之一. 列出当前 user 作为 actor 参与过的 workflow
+     * 实例 (通过 ApprovalHistory). distinct 因同一 user 可能多次操作同一实例.
+     *
+     * <p>差异 vs {@code /my-created}: my-created 按 initiator 过滤 (发起人视角); my-participated
+     * 按 actorId join history 过滤 (审批人视角, 含已完成).
+     *
+     * @param factoryId 工厂 id
+     * @param authorization Bearer JWT
+     * @param page 1-based 页码
+     * @param size 默认 20, 上限 100
+     * @return Page of WorkflowInstancePendingDTO
+     * @since 2026-05-19 (Sprint 5 Track A — C-MENU-PERSONAL-VIEW)
+     */
+    @GetMapping("/my-participated")
+    @Operation(summary = "我参与的工作流 — Sprint 5 Track A personal view")
+    public ApiResponse<PageResponse<WorkflowInstancePendingDTO>> getMyParticipated(
+            @PathVariable @NotBlank String factoryId,
+            @RequestHeader("Authorization") String authorization,
+            @RequestParam(defaultValue = "1") @Min(1) int page,
+            @RequestParam(defaultValue = "20") @Min(1) @Max(100) int size) {
+
+        User user = resolveCurrentUser(authorization);
+        if (user == null) {
+            throw new BusinessException(401, "未授权 — JWT 解析失败");
+        }
+
+        Pageable pageable = PageRequest.of(page - 1, size);
+        Page<ApprovalWorkflowInstance> instances = workflowEngine.findParticipatedBy(
+                factoryId, user.getId(), pageable);
+
+        List<WorkflowInstancePendingDTO> dtos = hydrateInstances(factoryId, instances.getContent());
+
+        PageResponse<WorkflowInstancePendingDTO> response = PageResponse.of(
+                dtos, page, size, instances.getTotalElements());
+        return ApiResponse.success(response);
+    }
+
     // ==================== internal helpers ====================
+
+    /**
+     * 批量 hydrate instance → DTO. 抽取自 {@link #getPendingForUser} 给 Sprint 5
+     * Track A personal view endpoints 复用 (DRY — 避免 PO/user/node label 重复加载逻辑).
+     */
+    private List<WorkflowInstancePendingDTO> hydrateInstances(
+            String factoryId, List<ApprovalWorkflowInstance> instances) {
+        if (instances.isEmpty()) return List.of();
+
+        // 1. 收 PO ids + initiator ids
+        Set<String> poIds = new HashSet<>();
+        Set<Long> initiatorIds = new HashSet<>();
+        for (ApprovalWorkflowInstance inst : instances) {
+            if ("PURCHASE_ORDER".equals(inst.getModuleCode()) && inst.getBusinessEntityId() != null) {
+                poIds.add(inst.getBusinessEntityId());
+            }
+            if (inst.getInitiatedBy() != null) initiatorIds.add(inst.getInitiatedBy());
+        }
+
+        // 2. 批量 fetch PO
+        Map<String, PurchaseOrder> poById = new HashMap<>();
+        if (!poIds.isEmpty() && purchaseOrderRepository != null) {
+            try {
+                purchaseOrderRepository.findAllById(poIds).forEach(po -> poById.put(po.getId(), po));
+            } catch (Exception e) {
+                log.warn("批量加载 PO 失败 (businessSummary 退化为 fallback): {}", e.getMessage());
+            }
+        }
+
+        // 3. 批量 fetch usernames
+        Map<Long, String> usernameById = new HashMap<>();
+        if (!initiatorIds.isEmpty()) {
+            try {
+                userRepository.findAllById(initiatorIds).forEach(
+                        u -> usernameById.put(u.getId(), u.getUsername()));
+            } catch (Exception e) {
+                log.warn("批量加载 initiator username 失败: {}", e.getMessage());
+            }
+        }
+
+        // 4. workflow nodes hydrate (currentNodeLabel) — 缓存按 workflowId
+        Map<String, Map<String, ApprovalWorkflowNode>> wfNodesCache = new HashMap<>();
+
+        // 5. 构造 DTO list
+        List<WorkflowInstancePendingDTO> dtos = new ArrayList<>();
+        for (ApprovalWorkflowInstance inst : instances) {
+            WorkflowInstancePendingDTO dto = WorkflowInstancePendingDTO.builder()
+                    .instanceId(inst.getId())
+                    .moduleCode(inst.getModuleCode())
+                    .businessEntityId(inst.getBusinessEntityId())
+                    .initiatedAt(inst.getInitiatedAt())
+                    .businessSummary(buildBusinessSummary(inst, poById))
+                    .build();
+
+            // currentNodeId + label
+            if (inst.getCurrentNodeIds() != null && !inst.getCurrentNodeIds().isEmpty()) {
+                String nodeId = inst.getCurrentNodeIds().get(0);
+                dto.setCurrentNodeId(nodeId);
+                Map<String, ApprovalWorkflowNode> byId = wfNodesCache.computeIfAbsent(
+                        inst.getWorkflowId(),
+                        wid -> loadNodes(factoryId, wid));
+                ApprovalWorkflowNode node = byId.get(nodeId);
+                if (node != null) {
+                    dto.setCurrentNodeLabel(node.getLabel() != null
+                            ? node.getLabel() : node.getId());
+                }
+            }
+
+            // initiator username
+            if (inst.getInitiatedBy() != null) {
+                dto.setInitiatedByUsername(usernameById.get(inst.getInitiatedBy()));
+            }
+
+            dtos.add(dto);
+        }
+
+        return dtos;
+    }
 
     private String buildBusinessSummary(ApprovalWorkflowInstance inst,
                                         Map<String, PurchaseOrder> poById) {
