@@ -27,6 +27,7 @@ import com.cretas.aims.repository.inventory.PurchaseReceiveRecordRepository;
 import org.springframework.beans.factory.annotation.Autowired;
 import com.cretas.aims.service.FuturePlanMatchingService;
 import com.cretas.aims.service.MaterialBatchService;
+import com.cretas.aims.service.rules.annotation.RuleEvaluate;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.Page;
@@ -182,6 +183,7 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
     }
 
     @Override
+    @RuleEvaluate(value = "INVENTORY", target = "request")
     @Transactional
     public MaterialBatchDTO createMaterialBatch(String factoryId, CreateMaterialBatchRequest request, Long userId) {
         runConfiguredValidation(factoryId, "CREATE", java.util.Map.of(

@@ -6,14 +6,21 @@ import com.cretas.aims.entity.config.ApprovalWorkflow;
 import com.cretas.aims.entity.config.ApprovalWorkflowEdge;
 import com.cretas.aims.entity.config.ApprovalWorkflowNode;
 import com.cretas.aims.entity.enums.FactoryUserRole;
+import com.cretas.aims.entity.notify.NotifyChannel;
+import com.cretas.aims.entity.notify.NotifyLog;
+import com.cretas.aims.entity.notify.NotifyStatus;
 import com.cretas.aims.entity.workflow.ApprovalHistory;
 import com.cretas.aims.entity.workflow.ApprovalHistory.HistoryAction;
 import com.cretas.aims.entity.workflow.ApprovalWorkflowInstance;
 import com.cretas.aims.entity.workflow.ApprovalWorkflowInstance.InstanceStatus;
 import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.repository.notify.NotifyLogRepository;
 import com.cretas.aims.repository.workflow.ApprovalHistoryRepository;
 import com.cretas.aims.repository.workflow.ApprovalWorkflowInstanceRepository;
 import com.cretas.aims.service.ApprovalWorkflowService;
+import com.cretas.aims.service.notify.NotifyRequest;
+import com.cretas.aims.service.notify.NotifyResult;
+import com.cretas.aims.service.notify.NotifySenderRegistry;
 import com.cretas.aims.service.workflow.SandboxedSpelEvaluator;
 import com.cretas.aims.service.workflow.SandboxedSpelEvaluator.SpelEvaluationFailure;
 import com.cretas.aims.service.workflow.WorkflowEngineService;
@@ -95,6 +102,18 @@ public class WorkflowEngineServiceImpl implements WorkflowEngineService {
      * 时为 NULL. 所有 Redis 操作 null-guard, fail-open.
      */
     private final RedisTemplate<String, Object> redisTemplate;
+
+    /**
+     * Phase 3 wire (2026-05-19): real notify sender for {@code case "notify"} node.
+     * Optional via {@code required = false} — when not wired (older tests, test profile
+     * w/o senders) falls back to history-only stub (preserves Phase 1 B.4 behavior).
+     * Field-injected (not constructor) to keep existing test constructor signature.
+     */
+    @Autowired(required = false)
+    private NotifySenderRegistry notifySenderRegistry;
+
+    @Autowired(required = false)
+    private NotifyLogRepository notifyLogRepository;
 
     @Autowired
     public WorkflowEngineServiceImpl(
@@ -675,11 +694,36 @@ public class WorkflowEngineServiceImpl implements WorkflowEngineService {
                 return;
 
             case "notify": {
-                // 写 NOTIFY history (action=AUTO_TRANSITION, notes 描述 channels+recipients).
+                // Phase 3 wire (2026-05-19): 若 NotifySenderRegistry 已 wired,
+                // 真发 notification (fan-out 5 渠道); 否则保留 Phase 1 B.4 history-only
+                // 行为 (兼容 unit test + 测试 profile 无 sender).
                 String notifyDesc = describeNotify(node);
+                String notifyHistoryNotes = "notify: " + notifyDesc;
+                if (notifySenderRegistry != null) {
+                    try {
+                        List<NotifyResult> results = dispatchNotify(instance, node);
+                        // 拼摘要进 history notes 让 audit 看见每个 channel 的 SENT/FAILED.
+                        StringBuilder summary = new StringBuilder("notify dispatched: ");
+                        for (int i = 0; i < results.size(); i++) {
+                            NotifyResult r = results.get(i);
+                            if (i > 0) summary.append(", ");
+                            summary.append(r.channel()).append("=").append(r.status());
+                        }
+                        notifyHistoryNotes = summary.toString();
+                    } catch (Exception e) {
+                        // 通知失败不阻塞 workflow 流转 — log + 标记 history, 继续 advance.
+                        log.error("[notify] dispatch failed - instanceId={}, nodeId={}, err={}",
+                                instance.getId(), nodeId, e.getMessage(), e);
+                        notifyHistoryNotes = "notify dispatch FAILED: " + e.getMessage();
+                    }
+                } else {
+                    log.warn("[notify] NotifySenderRegistry not wired, falling back to "
+                            + "history-only stub (Phase 1 B.4 behavior). instanceId={}",
+                            instance.getId());
+                }
                 writeHistory(instance.getFactoryId(), instance.getId(), nodeId,
                         HistoryAction.AUTO_TRANSITION, null, null,
-                        "notify: " + notifyDesc, null);
+                        notifyHistoryNotes, null);
                 List<ApprovalWorkflowEdge> outs = graph.outgoingByNode.getOrDefault(nodeId, List.of());
                 if (outs.isEmpty()) {
                     log.warn("notify 节点无 outgoing - instanceId={}, nodeId={}",
@@ -1021,6 +1065,116 @@ public class WorkflowEngineServiceImpl implements WorkflowEngineService {
         long delta = java.time.Duration.between(ref, LocalDateTime.now()).getSeconds();
         // Clamp to non-negative.
         return (int) Math.max(0L, delta);
+    }
+
+    /**
+     * Phase 3 (2026-05-19): real notification dispatch for notify node.
+     *
+     * <p>Reads nodeConfig:
+     * <ul>
+     *   <li>{@code templateCode} — required (resolves NotifyTemplate)</li>
+     *   <li>{@code channels} — required, List of channel names ("WECHAT", "EMAIL", ...)</li>
+     *   <li>{@code recipients} — optional, List of user IDs (numeric). If absent, uses [-1L] sentinel.</li>
+     *   <li>{@code params} — optional, Map of {{var}} substitution values.</li>
+     * </ul>
+     *
+     * <p>Fan-out via {@link NotifySenderRegistry#sendAll}, persists 1 NotifyLog row per
+     * (recipient × channel). Failure of individual sender does NOT abort fan-out.
+     *
+     * <p>Note: Full SpEL recipientStrategy (USER_LIST / ROLE / SPEL_EXPRESSION) is the
+     * Phase 3 §8 follow-up. This impl handles the USER_LIST baseline only.
+     *
+     * @return list of NotifyResult, one per channel (or empty if config invalid)
+     */
+    @SuppressWarnings("unchecked")
+    private List<NotifyResult> dispatchNotify(ApprovalWorkflowInstance instance,
+                                              ApprovalWorkflowNode node) {
+        Map<String, Object> config = node.getConfig() == null ? Map.of() : node.getConfig();
+        String templateCode = (String) config.get("templateCode");
+        if (templateCode == null || templateCode.isBlank()) {
+            log.warn("[dispatchNotify] templateCode 未配置 - instanceId={}, nodeId={}",
+                    instance.getId(), node.getId());
+            return List.of();
+        }
+
+        // Channels parsing — accept ["WECHAT","EMAIL"] strings.
+        List<NotifyChannel> channels = new ArrayList<>();
+        Object channelsRaw = config.get("channels");
+        if (channelsRaw instanceof List<?> list) {
+            for (Object c : list) {
+                if (c == null) continue;
+                try {
+                    channels.add(NotifyChannel.valueOf(c.toString()));
+                } catch (IllegalArgumentException ignored) {
+                    log.warn("[dispatchNotify] 未知 channel: {}", c);
+                }
+            }
+        }
+        if (channels.isEmpty()) {
+            log.warn("[dispatchNotify] 无有效 channel - instanceId={}, nodeId={}",
+                    instance.getId(), node.getId());
+            return List.of();
+        }
+
+        // Recipients parsing — accept List<Number>. Empty → sentinel [-1L].
+        List<Long> recipientIds = new ArrayList<>();
+        Object recipientsRaw = config.get("recipients");
+        if (recipientsRaw instanceof List<?> list) {
+            for (Object r : list) {
+                if (r instanceof Number n) {
+                    recipientIds.add(n.longValue());
+                } else if (r != null) {
+                    try {
+                        recipientIds.add(Long.parseLong(r.toString()));
+                    } catch (NumberFormatException ignored) {
+                        log.warn("[dispatchNotify] 非数字 recipient 忽略: {}", r);
+                    }
+                }
+            }
+        }
+        if (recipientIds.isEmpty()) {
+            recipientIds.add(-1L);  // sentinel: "auto recipient resolution not yet implemented"
+        }
+
+        // Params — verbatim from config + injected workflow context (instanceId, factoryId).
+        Map<String, Object> params = new HashMap<>();
+        Object paramsRaw = config.get("params");
+        if (paramsRaw instanceof Map<?, ?> m) {
+            for (Map.Entry<?, ?> e : m.entrySet()) {
+                params.put(String.valueOf(e.getKey()), e.getValue());
+            }
+        }
+        params.putIfAbsent("instanceId", instance.getId());
+        params.putIfAbsent("factoryId", instance.getFactoryId());
+
+        NotifyRequest req = new NotifyRequest(
+                instance.getFactoryId(), recipientIds, channels, templateCode, params);
+        List<NotifyResult> results = notifySenderRegistry.sendAll(req);
+
+        // Persist NotifyLog rows (1 per recipient × channel).
+        if (notifyLogRepository != null) {
+            for (Long recipientId : recipientIds) {
+                for (NotifyResult r : results) {
+                    try {
+                        NotifyLog logRow = NotifyLog.builder()
+                                .factoryId(instance.getFactoryId())
+                                .templateCode(templateCode)
+                                .recipientUserId(recipientId)
+                                .channel(r.channel())
+                                .status(r.status() == null ? NotifyStatus.FAILED : r.status())
+                                .errorMsg(r.errorMsg())
+                                .sentAt(LocalDateTime.now())
+                                .build();
+                        notifyLogRepository.save(logRow);
+                    } catch (Exception logEx) {
+                        // Audit write failure 不阻塞 — log + continue.
+                        log.error("[dispatchNotify] NotifyLog 写入失败 - channel={}, err={}",
+                                r.channel(), logEx.getMessage(), logEx);
+                    }
+                }
+            }
+        }
+        return results;
     }
 
     /**

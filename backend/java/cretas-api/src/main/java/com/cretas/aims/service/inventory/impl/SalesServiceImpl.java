@@ -103,6 +103,19 @@ public class SalesServiceImpl implements SalesService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.service.crm.CustomerCreditCheckService customerCreditCheckService;
 
+    /**
+     * Canvas-Pricing Phase 4b (2026-05-18): 价格策略引擎注入.
+     *
+     * <p>Optional injection — Phase 4b 模块未部署时 (老 jar) 不影响 SO 创建.
+     * 注入存在时, createSalesOrder 在 resolve unitPrice 之后调用 pricingEngine.calculate()
+     * 应用 TIERED / PROMOTION / MEMBER / BUNDLE 策略 (CYCLE 是月底批处理不在此路径).
+     *
+     * <p>Legacy fallback: 注入为 null 时, 走原 priceListService → itemDTO.getUnitPrice() 路径,
+     * 完全向前兼容.
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.pricing.PricingEngine pricingEngine;
+
     @jakarta.persistence.PersistenceContext
     private jakarta.persistence.EntityManager entityManager;
 
@@ -260,6 +273,70 @@ public class SalesServiceImpl implements SalesService {
                     log.info("Issue #793: auto-applied 协议价 — SO={}, customerId={}, productId={}, "
                             + "price={}", order.getOrderNumber(), request.getCustomerId(),
                             itemDTO.getProductTypeId(), contractPrice);
+                }
+            }
+            // Canvas-Pricing Phase 4b (2026-05-18): apply 价格策略 (TIERED / PROMOTION / MEMBER / BUNDLE).
+            // 此处用 calculate() 写 PricingApplicationLog (审计 audit), CYCLE 策略由月底批处理路径处理.
+            // pricingEngine 为 null 时 (老 jar 部署), 完全跳过 — 走原 resolvedUnitPrice (legacy fallback).
+            if (pricingEngine != null
+                    && resolvedUnitPrice != null
+                    && resolvedUnitPrice.signum() > 0
+                    && itemDTO.getQuantity() != null
+                    && itemDTO.getQuantity().signum() > 0) {
+                try {
+                    // 查 productCategory (scope_filter 用)
+                    String productCategory = productTypeRepository.findById(itemDTO.getProductTypeId())
+                            .map(ProductType::getCategory).orElse(null);
+                    // 客户分组 — Customer.importance enum (per Sprint 4 W2 spec)
+                    String customerGroup = customer.getImportance() != null
+                            ? customer.getImportance().name() : null;
+                    // customerId: PricingRequest 期望 Long, Customer.id 是 String (length=191).
+                    // 仅在 ID 为纯数字时 parse, 否则传 null (MEMBER 策略仍可走 customerGroup 路径).
+                    Long customerIdLong = null;
+                    if (request.getCustomerId() != null) {
+                        try {
+                            customerIdLong = Long.parseLong(request.getCustomerId());
+                        } catch (NumberFormatException ignored) {
+                            // Customer.id 是 String hash/UUID — pricingEngine 仅用作 audit log 引用,
+                            // null 不阻断 strategy 应用 (per PricingRequest customerId 字段 javadoc).
+                        }
+                    }
+                    com.cretas.aims.service.pricing.PricingRequest pricingReq =
+                            com.cretas.aims.service.pricing.PricingRequest.builder()
+                                    .factoryId(factoryId)
+                                    .productId(itemDTO.getProductTypeId())
+                                    .quantity(itemDTO.getQuantity().intValue())
+                                    .unitPriceList(resolvedUnitPrice)
+                                    .customerId(customerIdLong)
+                                    .customerGroup(customerGroup)
+                                    .productCategory(productCategory)
+                                    .businessEntityType("SO_LINE")
+                                    .businessEntityId(order.getOrderNumber()
+                                            + "/" + itemDTO.getProductTypeId())
+                                    .build();
+                    com.cretas.aims.service.pricing.PricingResult pricingResult =
+                            pricingEngine.calculate(pricingReq);
+                    if (pricingResult != null && pricingResult.getFinalPrice() != null
+                            && pricingResult.getFinalPrice().signum() >= 0) {
+                        resolvedUnitPrice = pricingResult.getFinalPrice();
+                        log.info("Canvas-Pricing Phase 4b: 应用策略 — SO={}, productId={}, "
+                                + "origPrice={}, finalPrice={}, appliedStrategies={}, warnings={}",
+                                order.getOrderNumber(), itemDTO.getProductTypeId(),
+                                pricingResult.getOriginalPrice(), pricingResult.getFinalPrice(),
+                                pricingResult.getAppliedStrategies() != null
+                                        ? pricingResult.getAppliedStrategies().size() : 0,
+                                pricingResult.getWarnings() != null
+                                        ? pricingResult.getWarnings().size() : 0);
+                    }
+                } catch (UnsupportedOperationException e) {
+                    // Phase 4b skeleton — PricingEngineImpl 抛 UnsupportedOp, 跳过应用走 legacy fallback.
+                    log.debug("Phase 4b skeleton: pricingEngine.calculate 抛 UnsupportedOp, "
+                            + "走 legacy unitPrice — SO={}, error={}", order.getOrderNumber(), e.getMessage());
+                } catch (Exception e) {
+                    // 异常不阻塞 SO 创建 — log warn 走 legacy fallback.
+                    log.warn("Canvas-Pricing Phase 4b: pricingEngine.calculate 失败, "
+                            + "走 legacy unitPrice — SO={}, productId={}, error={}",
+                            order.getOrderNumber(), itemDTO.getProductTypeId(), e.getMessage());
                 }
             }
             item.setUnitPrice(resolvedUnitPrice);
