@@ -77,11 +77,11 @@ public class RuleEvaluateAspect {
             return joinPoint.proceed();
         }
 
-        Object inputObject = extractInputObject(joinPoint);
+        Object inputObject = extractInputObject(joinPoint, ruleEvaluate);
         if (inputObject == null) {
-            log.warn("@RuleEvaluate({}) — no inputObject candidate in args of method={}. "
+            log.warn("@RuleEvaluate({}, target='{}') — no inputObject candidate in args of method={}. "
                   + "Proceeding without rule evaluation.",
-                    scope, joinPoint.getSignature().toShortString());
+                    scope, ruleEvaluate.target(), joinPoint.getSignature().toShortString());
             return joinPoint.proceed();
         }
 
@@ -96,10 +96,17 @@ public class RuleEvaluateAspect {
         }
 
         if (result.shouldReject()) {
-            log.info("Rule {} rejected method={} factory={} reason={}",
+            log.info("Rule {} rejected method={} factory={} reason={} actionHint={} severity={}",
                     result.rejectRuleCode(), joinPoint.getSignature().toShortString(),
-                    factoryId, result.rejectReason());
-            throw new RuleViolationException(result.rejectRuleCode(), result.rejectReason());
+                    factoryId, result.rejectReason(),
+                    result.rejectActionHint(), result.rejectSeverity());
+            // Phase 4a post-review C1: propagate actionHint + severity through the exception
+            // so GlobalExceptionHandler can populate ApiResponse.errorWithCode(...) for FE.
+            throw new RuleViolationException(
+                    result.rejectRuleCode(),
+                    result.rejectReason(),
+                    result.rejectActionHint(),
+                    result.rejectSeverity());
         }
         if (!result.modifications().isEmpty()) {
             log.debug("RuleEngine applied {} modifications to method={} factory={}",
@@ -134,11 +141,43 @@ public class RuleEvaluateAspect {
     }
 
     /**
-     * Pick the first non-primitive, non-String, non-null arg as inputObject. Reflectively
-     * mutated by MODIFY rules via Spring BeanWrapper.
+     * Pick the input object for rule evaluation.
+     *
+     * <p>Phase 4a post-review I2: if {@code @RuleEvaluate(target="paramName")} is set,
+     * bind to that parameter by name (requires {@code -parameters} compiler flag, which
+     * Spring Boot starter enables by default). Otherwise fall back to the legacy "first
+     * non-primitive arg" heuristic.
+     *
+     * <p>Why this matters: methods with 2+ POJO args (e.g.
+     * {@code updateOrder(OrderHeader header, OrderRequest body)}) need explicit selection;
+     * the legacy heuristic would incorrectly pick {@code header} when {@code body} is the
+     * actual write input.
      */
-    private Object extractInputObject(ProceedingJoinPoint joinPoint) {
-        for (Object arg : joinPoint.getArgs()) {
+    private Object extractInputObject(ProceedingJoinPoint joinPoint, RuleEvaluate annotation) {
+        String targetName = annotation.target();
+        Object[] args = joinPoint.getArgs();
+        MethodSignature sig = (MethodSignature) joinPoint.getSignature();
+        String[] paramNames = sig.getParameterNames();
+
+        if (targetName != null && !targetName.isBlank() && paramNames != null) {
+            for (int i = 0; i < paramNames.length; i++) {
+                if (targetName.equals(paramNames[i])) {
+                    if (i >= args.length || args[i] == null) {
+                        log.warn("@RuleEvaluate(target='{}') — argument is null on method={}",
+                                targetName, sig.toShortString());
+                        return null;
+                    }
+                    return args[i];
+                }
+            }
+            log.warn("@RuleEvaluate(target='{}') — parameter not found on method={} (params={}). "
+                  + "Falling back to first non-primitive arg.",
+                    targetName, sig.toShortString(), Arrays.toString(paramNames));
+            // Fall through to legacy heuristic
+        }
+
+        // Legacy heuristic: first non-primitive, non-String, non-null arg.
+        for (Object arg : args) {
             if (arg == null) continue;
             if (arg instanceof String) continue;
             if (arg instanceof Number) continue;

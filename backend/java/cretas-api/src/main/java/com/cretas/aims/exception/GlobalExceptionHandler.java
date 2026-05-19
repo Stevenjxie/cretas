@@ -176,16 +176,26 @@ public class GlobalExceptionHandler {
 
     /**
      * Canvas-Rules Phase 4a — REJECT action raises this. Maps to HTTP 400 with
-     * standard {@code {success, code, message, actionHint}} envelope per fool-proof Rule 5.
+     * {@code errorCode="RULE_VIOLATION"} + admin-configured actionHint + severity per
+     * fool-proof Rule 5 (dead-end → next action).
+     *
+     * <p>Phase 4a post-review (2026-05-19) Critical C1 fix: actionHint + severity now
+     * propagate from {@code rule.actionConfigJson} through {@link RuleEvaluationResult} into
+     * the {@link RuleViolationException} into the FE response. Previously they were written
+     * only to the audit log and the FE saw {@code actionHint=null} regardless of admin config.
      */
     @ExceptionHandler(com.cretas.aims.service.rules.RuleViolationException.class)
-    public org.springframework.http.ResponseEntity<ApiResponse<?>> handleRuleViolation(
+    public org.springframework.http.ResponseEntity<ApiResponse<Void>> handleRuleViolation(
             com.cretas.aims.service.rules.RuleViolationException e) {
-        log.warn("Canvas-Rules REJECT: ruleCode={}, reason={}", e.getRuleCode(), e.getReason());
-        ApiResponse<?> body = ApiResponse.errorWithHint(400, e.getReason(),
-                /* actionHint */ null, "warning", /* hintTarget */ null);
-        // Code marker so frontend can branch UX (vs generic 400). Stash in message header? — use code.
-        body.setCode(400);
+        log.warn("Canvas-Rules REJECT: ruleCode={}, reason={}, actionHint={}, severity={}",
+                e.getRuleCode(), e.getReason(), e.getActionHint(), e.getSeverity());
+        String severity = e.getSeverity() != null ? e.getSeverity() : "warning";
+        ApiResponse<Void> body = ApiResponse.errorWithCode(
+                400,
+                "RULE_VIOLATION",
+                e.getReason(),
+                e.getActionHint(),
+                severity);
         return org.springframework.http.ResponseEntity.status(HttpStatus.BAD_REQUEST).body(body);
     }
 

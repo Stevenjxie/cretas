@@ -31,6 +31,7 @@ import java.util.UUID;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyMap;
@@ -68,6 +69,8 @@ class RuleEngineImplTest {
         private BigDecimal discount;
         private String materialId;
         private boolean blacklisted;
+        /** Phase 4a post-review I3: #input.id auto-fill for TRIGGER_WORKFLOW businessEntityId. */
+        private String id;
     }
 
     private OrderInput sampleOrder(String num, BigDecimal amount) {
@@ -120,7 +123,8 @@ class RuleEngineImplTest {
     // ==================== REJECT (short-circuit) ====================
 
     @Test
-    @DisplayName("REJECT: first match short-circuits — later rules NOT evaluated")
+    @DisplayName("REJECT: first match short-circuits — later rules NOT evaluated, "
+               + "actionHint + severity propagate (Phase 4a post-review C1)")
     void reject_short_circuits() {
         OrderInput order = sampleOrder("PO-001", new BigDecimal("50000"));
         order.setBlacklisted(true);
@@ -128,7 +132,8 @@ class RuleEngineImplTest {
         BusinessRule r1 = rule("po_blacklist", 10, RuleActionType.REJECT,
                 "#input.blacklisted == true",
                 Map.of("reason", "供应商在黑名单",
-                       "actionHint", "/system/suppliers/SUP-001"));
+                       "actionHint", "/system/suppliers/SUP-001",
+                       "severity", "blocking"));
         BusinessRule r2 = rule("po_high_log", 20, RuleActionType.LOG,
                 "#input.totalAmount > 10000",
                 Map.of("level", "INFO", "message", "高额单据"));
@@ -140,10 +145,39 @@ class RuleEngineImplTest {
         assertTrue(result.shouldReject());
         assertEquals("po_blacklist", result.rejectRuleCode());
         assertEquals("供应商在黑名单", result.rejectReason());
+        // Phase 4a post-review C1: admin-configured actionHint + severity propagate to result.
+        assertEquals("/system/suppliers/SUP-001", result.rejectActionHint(),
+                "actionHint must propagate from rule.actionConfigJson to RuleEvaluationResult");
+        assertEquals("blocking", result.rejectSeverity(),
+                "severity must propagate from rule.actionConfigJson to RuleEvaluationResult");
         assertEquals(1, result.executedRules().size(),
                 "Lower-priority rule must NOT execute after REJECT short-circuit");
         // Only the rejecting rule writes an audit log row.
-        verify(logRepository, times(1)).save(any());
+        ArgumentCaptor<RuleExecutionLog> cap = ArgumentCaptor.forClass(RuleExecutionLog.class);
+        verify(logRepository, times(1)).save(cap.capture());
+        // Audit log also carries actionHint + severity for forensics.
+        assertEquals("/system/suppliers/SUP-001", cap.getValue().getResultJson().get("actionHint"));
+        assertEquals("blocking", cap.getValue().getResultJson().get("severity"));
+    }
+
+    @Test
+    @DisplayName("REJECT without actionHint config: result.rejectActionHint() is null, "
+               + "severity defaults to 'warning' (Phase 4a post-review C1)")
+    void reject_without_action_hint_defaults() {
+        OrderInput order = sampleOrder("PO-002", new BigDecimal("50000"));
+        BusinessRule r = rule("simple_reject", 10, RuleActionType.REJECT,
+                "#input.totalAmount > 1000",
+                Map.of("reason", "金额超限"));   // no actionHint, no severity
+        when(ruleRepository.findByFactoryIdAndScopeAndEnabledTrueOrderByPriorityAsc(
+                FACTORY_ID, RuleScope.ORDER)).thenReturn(List.of(r));
+
+        RuleEvaluationResult result = engine.evaluate(FACTORY_ID, RuleScope.ORDER, order);
+
+        assertTrue(result.shouldReject());
+        assertEquals("simple_reject", result.rejectRuleCode());
+        assertNull(result.rejectActionHint(), "Missing actionHint config → null in result");
+        assertEquals("warning", result.rejectSeverity(),
+                "Missing severity config → 'warning' default in result");
     }
 
     // ==================== MODIFY (reflective mutation) ====================
@@ -174,28 +208,79 @@ class RuleEngineImplTest {
     // ==================== TRIGGER_WORKFLOW ====================
 
     @Test
-    @DisplayName("TRIGGER_WORKFLOW: invokes WorkflowEngineFacade with resolved ctx")
+    @DisplayName("TRIGGER_WORKFLOW: invokes WorkflowEngineFacade with explicit businessEntityId from config")
     void trigger_workflow_calls_facade() {
         OrderInput order = sampleOrder("INV-001", new BigDecimal("0"));
         order.setMaterialId("MAT-123");
         BusinessRule r = rule("low_stock_transfer", 40, RuleActionType.TRIGGER_WORKFLOW,
                 "#input.totalAmount == 0",
                 Map.of("workflowCode", "TRANSFER_REQUEST",
+                       "businessEntityId", "MAT-123",
                        "ctx", Map.of("materialId", "#input.materialId")));
         when(ruleRepository.findByFactoryIdAndScopeAndEnabledTrueOrderByPriorityAsc(
                 FACTORY_ID, RuleScope.ORDER)).thenReturn(List.of(r));
         when(workflowEngineFacade.startWorkflow(eq(FACTORY_ID), eq("TRANSFER_REQUEST"),
-                anyString(), anyMap(), any())).thenReturn(null);
+                eq("MAT-123"), anyMap(), any())).thenReturn(null);
 
         RuleEvaluationResult result = engine.evaluate(FACTORY_ID, RuleScope.ORDER, order);
 
         assertFalse(result.shouldReject());
         ArgumentCaptor<Map<String, Object>> ctxCap = ArgumentCaptor.forClass(Map.class);
         verify(workflowEngineFacade, times(1)).startWorkflow(
-                eq(FACTORY_ID), eq("TRANSFER_REQUEST"), anyString(), ctxCap.capture(), any());
+                eq(FACTORY_ID), eq("TRANSFER_REQUEST"), eq("MAT-123"), ctxCap.capture(), any());
         assertEquals("MAT-123", ctxCap.getValue().get("materialId"),
                 "ctx values starting with '#' must be SpEL-resolved against inputObject");
         verify(logRepository, times(1)).save(any());
+    }
+
+    @Test
+    @DisplayName("TRIGGER_WORKFLOW: businessEntityId auto-fills from #input.id when missing in config "
+               + "(Phase 4a post-review I3)")
+    void trigger_workflow_auto_fills_business_entity_id_from_input_id() {
+        OrderInput order = sampleOrder("SO-001", new BigDecimal("0"));
+        order.setId("ORDER-UUID-42");  // SpEL #input.id resolves to this
+        order.setMaterialId("MAT-456");
+        BusinessRule r = rule("auto_id_workflow", 40, RuleActionType.TRIGGER_WORKFLOW,
+                "#input.totalAmount == 0",
+                Map.of("workflowCode", "ORDER_APPROVAL",
+                       // No businessEntityId — engine should auto-fill from #input.id
+                       "ctx", Map.of("materialId", "#input.materialId")));
+        when(ruleRepository.findByFactoryIdAndScopeAndEnabledTrueOrderByPriorityAsc(
+                FACTORY_ID, RuleScope.ORDER)).thenReturn(List.of(r));
+        when(workflowEngineFacade.startWorkflow(eq(FACTORY_ID), eq("ORDER_APPROVAL"),
+                eq("ORDER-UUID-42"), anyMap(), any())).thenReturn(null);
+
+        RuleEvaluationResult result = engine.evaluate(FACTORY_ID, RuleScope.ORDER, order);
+
+        assertFalse(result.shouldReject());
+        verify(workflowEngineFacade, times(1)).startWorkflow(
+                eq(FACTORY_ID), eq("ORDER_APPROVAL"), eq("ORDER-UUID-42"), anyMap(), any());
+    }
+
+    @Test
+    @DisplayName("TRIGGER_WORKFLOW: skips (does NOT invoke facade) when businessEntityId "
+               + "is empty AND #input.id is null — prevents Phase 1 unique constraint collision "
+               + "(Phase 4a post-review I3)")
+    void trigger_workflow_skips_when_no_business_entity_id() {
+        OrderInput order = sampleOrder("SO-002", new BigDecimal("0"));
+        // order.id is null — no auto-fill source
+        BusinessRule r = rule("missing_id_workflow", 40, RuleActionType.TRIGGER_WORKFLOW,
+                "#input.totalAmount == 0",
+                Map.of("workflowCode", "ORDER_APPROVAL"));  // No businessEntityId, no #input.id
+        when(ruleRepository.findByFactoryIdAndScopeAndEnabledTrueOrderByPriorityAsc(
+                FACTORY_ID, RuleScope.ORDER)).thenReturn(List.of(r));
+
+        RuleEvaluationResult result = engine.evaluate(FACTORY_ID, RuleScope.ORDER, order);
+
+        assertFalse(result.shouldReject());
+        // Facade NOT invoked — would have violated uq_aw_instances_active constraint.
+        verify(workflowEngineFacade, never()).startWorkflow(anyString(), anyString(),
+                anyString(), anyMap(), any());
+        // Skip is still audited so admin can spot misconfigured rules.
+        ArgumentCaptor<RuleExecutionLog> cap = ArgumentCaptor.forClass(RuleExecutionLog.class);
+        verify(logRepository, times(1)).save(cap.capture());
+        assertEquals("SKIPPED_NO_BUSINESS_ENTITY_ID",
+                cap.getValue().getResultJson().get("status"));
     }
 
     // ==================== Priority + non-short-circuit cumulative ====================

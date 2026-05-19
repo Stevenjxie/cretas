@@ -32,4 +32,22 @@ import java.lang.annotation.Target;
 public @interface RuleEvaluate {
     /** Scope enum name: ORDER / INVENTORY / CUSTOMER / CUSTOM (case-insensitive). */
     String value();
+
+    /**
+     * Phase 4a post-review I2: optional parameter name to use as the rule input object.
+     *
+     * <p>By default ({@code target=""}), the aspect picks the first non-primitive arg as
+     * inputObject. This is wrong if the method has 2+ POJO args
+     * (e.g. {@code updateOrder(OrderHeader header, OrderRequest body)}).
+     *
+     * <p>Set {@code target="body"} to bind to the parameter named "body" specifically:
+     * <pre>
+     * &#64;RuleEvaluate(value="ORDER", target="body")
+     * public Order update(OrderHeader header, OrderRequest body) { ... }
+     * </pre>
+     *
+     * <p>The target must match a parameter name visible at runtime — requires
+     * {@code -parameters} javac flag (which Spring Boot starter sets by default).
+     */
+    String target() default "";
 }

@@ -114,14 +114,18 @@ public class RuleEngineImpl implements RuleEngine {
                 case REJECT -> {
                     String reason = stringFromConfig(rule, "reason", "规则拒绝: " + rule.getRuleCode());
                     String actionHint = stringFromConfig(rule, "actionHint", null);
+                    // Phase 4a post-review C1: propagate severity to FE via exception → ApiResponse.
+                    String severity = stringFromConfig(rule, "severity", "warning");
                     Map<String, Object> resultJson = new LinkedHashMap<>();
                     resultJson.put("action", "REJECT");
                     resultJson.put("reason", reason);
                     if (actionHint != null) {
                         resultJson.put("actionHint", actionHint);
                     }
+                    resultJson.put("severity", severity);
                     writeExecutionLog(rule, factoryId, inputObject, resultJson);
-                    return RuleEvaluationResult.reject(rule.getRuleCode(), reason, executedRules);
+                    return RuleEvaluationResult.reject(
+                            rule.getRuleCode(), reason, actionHint, severity, executedRules);
                 }
                 case MODIFY -> {
                     RuleModification mod = applyModify(rule, factoryId, inputObject);
@@ -135,7 +139,7 @@ public class RuleEngineImpl implements RuleEngine {
             }
         }
 
-        return new RuleEvaluationResult(false, null, null, modifications, executedRules);
+        return new RuleEvaluationResult(false, null, null, null, null, modifications, executedRules);
     }
 
     @Override
@@ -289,11 +293,40 @@ public class RuleEngineImpl implements RuleEngine {
             }
         }
 
-        String businessEntityId = stringFromConfig(rule, "businessEntityId", "");
+        // Phase 4a post-review I3: businessEntityId="" violates Phase 1 unique constraint
+        // uq_aw_instances_active(factory_id, module_code, business_entity_id) WHERE status='RUNNING'.
+        // Strategy: (1) explicit config value, then (2) SpEL auto-fill from #input.id, then (3) skip.
+        String businessEntityId = stringFromConfig(rule, "businessEntityId", null);
+        if (businessEntityId == null || businessEntityId.isBlank()) {
+            try {
+                Object id = spelEvaluator.evaluate("#input?.id", vars);
+                if (id != null) {
+                    businessEntityId = id.toString();
+                }
+            } catch (Exception ex) {
+                log.debug("TRIGGER_WORKFLOW rule {} #input.id auto-fill failed: {}",
+                        rule.getRuleCode(), ex.getMessage());
+            }
+        }
+        if (businessEntityId == null || businessEntityId.isBlank()) {
+            // Skip — empty businessEntityId would violate Phase 1 unique-active constraint on
+            // concurrent rule firings. Audit the skip so admin can fix the rule config.
+            log.warn("TRIGGER_WORKFLOW rule {} skipped: businessEntityId not provided in "
+                  + "actionConfigJson and #input has no 'id' property", rule.getRuleCode());
+            Map<String, Object> skipResult = new LinkedHashMap<>();
+            skipResult.put("action", "TRIGGER_WORKFLOW");
+            skipResult.put("workflowCode", workflowCode);
+            skipResult.put("ctx", resolvedCtx);
+            skipResult.put("status", "SKIPPED_NO_BUSINESS_ENTITY_ID");
+            skipResult.put("hint", "Set actionConfigJson.businessEntityId or ensure input has 'id' property");
+            writeExecutionLog(rule, factoryId, inputObject, skipResult);
+            return;
+        }
 
         Map<String, Object> resultJson = new LinkedHashMap<>();
         resultJson.put("action", "TRIGGER_WORKFLOW");
         resultJson.put("workflowCode", workflowCode);
+        resultJson.put("businessEntityId", businessEntityId);
         resultJson.put("ctx", resolvedCtx);
 
         try {

@@ -50,11 +50,23 @@ class RuleEvaluateAspectTest {
 
         @RuleEvaluate("ORDER")
         String noFactoryArg(DemoInput input);
+
+        /** Phase 4a post-review I2: multiple POJO args — must select by target. */
+        @RuleEvaluate(value = "ORDER", target = "body")
+        String updateOrder(String factoryId, DemoHeader header, DemoInput body);
+
+        /** Phase 4a post-review I2: target name mismatch → fall back to first non-primitive. */
+        @RuleEvaluate(value = "ORDER", target = "missingParamName")
+        String updateOrderFallback(String factoryId, DemoInput input);
     }
 
     public static class DemoInput {
         public String orderNumber;
         public double totalAmount;
+    }
+
+    public static class DemoHeader {
+        public String orderId;
     }
 
     public static class DemoServiceImpl implements DemoService {
@@ -69,6 +81,14 @@ class RuleEvaluateAspectTest {
         @Override
         public String noFactoryArg(DemoInput input) {
             return "OK_NO_FACTORY:" + input.orderNumber;
+        }
+        @Override
+        public String updateOrder(String factoryId, DemoHeader header, DemoInput body) {
+            return "OK_UPDATE:" + factoryId + ":" + body.orderNumber;
+        }
+        @Override
+        public String updateOrderFallback(String factoryId, DemoInput input) {
+            return "OK_FALLBACK:" + factoryId + ":" + input.orderNumber;
         }
     }
 
@@ -156,5 +176,62 @@ class RuleEvaluateAspectTest {
         input.orderNumber = "SO-Z";
         String result = proxied.submitOrder("F001", input);
         assertEquals("OK:F001:SO-Z", result, "DB outage must not block business flow");
+    }
+
+    @Test
+    @DisplayName("REJECT exception carries actionHint + severity (Phase 4a post-review C1)")
+    void reject_carries_action_hint_and_severity() {
+        when(ruleEngine.evaluate(eq("F001"), eq(RuleScope.ORDER), any()))
+                .thenReturn(RuleEvaluationResult.reject(
+                        "po_blacklist", "供应商在黑名单",
+                        "/system/suppliers/SUP-001", "blocking",
+                        List.of(UUID.randomUUID())));
+
+        DemoInput input = new DemoInput();
+        input.orderNumber = "SO-X";
+
+        RuleViolationException ex = assertThrows(RuleViolationException.class,
+                () -> proxied.submitOrder("F001", input));
+        assertEquals("po_blacklist", ex.getRuleCode());
+        assertEquals("供应商在黑名单", ex.getReason());
+        assertEquals("/system/suppliers/SUP-001", ex.getActionHint(),
+                "actionHint must propagate from RuleEvaluationResult to RuleViolationException");
+        assertEquals("blocking", ex.getSeverity(),
+                "severity must propagate from RuleEvaluationResult to RuleViolationException");
+    }
+
+    @Test
+    @DisplayName("@RuleEvaluate(target='body'): picks named param even when multiple POJO args "
+               + "(Phase 4a post-review I2)")
+    void target_attribute_picks_named_parameter() {
+        DemoHeader header = new DemoHeader();
+        header.orderId = "HDR-1";
+        DemoInput body = new DemoInput();
+        body.orderNumber = "BODY-1";
+
+        when(ruleEngine.evaluate(eq("F001"), eq(RuleScope.ORDER), any(DemoInput.class)))
+                .thenReturn(RuleEvaluationResult.ok(List.of()));
+
+        String result = proxied.updateOrder("F001", header, body);
+        assertEquals("OK_UPDATE:F001:BODY-1", result);
+
+        // Verify the body (not header) was passed to the engine.
+        verify(ruleEngine).evaluate(eq("F001"), eq(RuleScope.ORDER),
+                org.mockito.ArgumentMatchers.argThat(arg -> arg instanceof DemoInput
+                        && "BODY-1".equals(((DemoInput) arg).orderNumber)));
+    }
+
+    @Test
+    @DisplayName("@RuleEvaluate(target='nonexistent'): falls back to first non-primitive arg "
+               + "(Phase 4a post-review I2)")
+    void target_attribute_falls_back_when_param_missing() {
+        DemoInput input = new DemoInput();
+        input.orderNumber = "FB-1";
+
+        when(ruleEngine.evaluate(eq("F001"), eq(RuleScope.ORDER), any(DemoInput.class)))
+                .thenReturn(RuleEvaluationResult.ok(List.of()));
+
+        String result = proxied.updateOrderFallback("F001", input);
+        assertEquals("OK_FALLBACK:F001:FB-1", result);
     }
 }

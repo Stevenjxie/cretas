@@ -2,6 +2,8 @@ package com.cretas.aims.ai.tool.impl.rules;
 
 import com.cretas.aims.ai.tool.AbstractBusinessTool;
 import com.cretas.aims.entity.rules.BusinessRule;
+import com.cretas.aims.entity.rules.RuleActionType;
+import com.cretas.aims.entity.rules.RuleScope;
 import com.cretas.aims.repository.rules.BusinessRuleRepository;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -50,6 +52,16 @@ public class RuleUpdateTool extends AbstractBusinessTool {
         properties.put("conditionSpel", Map.of("type", "string", "description", "可选, 新 SpEL 条件"));
         properties.put("actionConfigJson", Map.of("type", "object", "description", "可选, 新动作配置"));
         properties.put("priority", Map.of("type", "integer", "description", "可选, 新优先级"));
+        // Phase 4a post-review I4: actionType + scope are immutable in normal flow, but admin
+        // workflow occasionally needs to flip e.g. LOG→REJECT after observing log volume, or
+        // re-scope ORDER→INVENTORY after taxonomy correction. Validation against enum below.
+        properties.put("actionType", Map.of("type", "string",
+                "description", "可选, 新动作类型: LOG / REJECT / MODIFY / TRIGGER_WORKFLOW",
+                "enum", Arrays.asList("LOG", "REJECT", "MODIFY", "TRIGGER_WORKFLOW")));
+        properties.put("scope", Map.of("type", "string",
+                "description", "可选, 新作用域: ORDER / INVENTORY / CUSTOMER / CUSTOM",
+                "enum", Arrays.asList("ORDER", "INVENTORY", "CUSTOMER", "CUSTOM")));
+        properties.put("enabled", Map.of("type", "boolean", "description", "可选, 启用/禁用规则"));
 
         Map<String, Object> schema = new HashMap<>();
         schema.put("type", "object");
@@ -92,6 +104,36 @@ public class RuleUpdateTool extends AbstractBusinessTool {
             Integer newPriority = getInteger(params, "priority");
             changes.put("priority", Map.of("old", rule.getPriority(), "new", newPriority));
             rule.setPriority(newPriority);
+        }
+        // Phase 4a post-review I4: actionType + scope mutation with enum validation.
+        if (params.containsKey("actionType") && params.get("actionType") != null) {
+            String raw = getString(params, "actionType");
+            RuleActionType newType;
+            try {
+                newType = RuleActionType.valueOf(raw.toUpperCase());
+            } catch (IllegalArgumentException ex) {
+                throw new IllegalArgumentException(
+                        "actionType 必须为 LOG / REJECT / MODIFY / TRIGGER_WORKFLOW, 不能是 '" + raw + "'");
+            }
+            changes.put("actionType", Map.of("old", rule.getActionType(), "new", newType));
+            rule.setActionType(newType);
+        }
+        if (params.containsKey("scope") && params.get("scope") != null) {
+            String raw = getString(params, "scope");
+            RuleScope newScope;
+            try {
+                newScope = RuleScope.valueOf(raw.toUpperCase());
+            } catch (IllegalArgumentException ex) {
+                throw new IllegalArgumentException(
+                        "scope 必须为 ORDER / INVENTORY / CUSTOMER / CUSTOM, 不能是 '" + raw + "'");
+            }
+            changes.put("scope", Map.of("old", rule.getScope(), "new", newScope));
+            rule.setScope(newScope);
+        }
+        if (params.containsKey("enabled") && params.get("enabled") != null) {
+            Boolean newEnabled = (Boolean) params.get("enabled");
+            changes.put("enabled", Map.of("old", rule.getEnabled(), "new", newEnabled));
+            rule.setEnabled(newEnabled);
         }
 
         if (changes.isEmpty()) {
