@@ -35,12 +35,14 @@ const phaseA = [
 
 // Round 4 Fix P1-10: added '定时任务' Tab for SchedulerPanel
 // Phase 3 Task 3.4: added '模块权限' Tab for factory-level L2 override
+// Phase 3 Canvas-Notify (2026-05-19): added '通知模板' Tab for NotifyTemplate CRUD + Logs
 const phaseB = [
   { key: 'fields', icon: '📋', label: '字段配置' },
   { key: 'permissions', icon: '🛡️', label: '权限矩阵' },
   { key: 'module-permissions', icon: '🔐', label: '模块权限' },
   { key: 'tools', icon: '🔧', label: '工具/技能' },
   { key: 'scheduler', icon: '⏰', label: '定时任务' },
+  { key: 'notify', icon: '🔔', label: '通知模板' },
 ]
 </script>
 
