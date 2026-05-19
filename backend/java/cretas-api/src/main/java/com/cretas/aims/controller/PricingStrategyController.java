@@ -75,6 +75,17 @@ public class PricingStrategyController {
         private Integer quantity;
         private BigDecimal unitPriceList;
         private Long customerId;
+        /** Post-review I7: 必须传, 否则 MEMBER 策略 + scope_filter customerGroups 不生效. */
+        private String customerGroup;
+        /** Post-review I7: 必须传, 否则 scope_filter productCategories 不生效. */
+        private String productCategory;
+        /**
+         * Post-review I7: optional, 可选传 cost estimate 让 engine 触发"below cost"防呆 warning.
+         * NULL = caller 不提供 cost 上下文, 跳过 cost-check 防呆 (per spec §4 + PricingRequest.costEstimate).
+         */
+        private BigDecimal costEstimate;
+        /** Optional region filter (per PricingRequest.region). */
+        private String region;
     }
 
     // ==================== Strategies CRUD ====================
@@ -197,17 +208,26 @@ public class PricingStrategyController {
     // ==================== Simulate (Skeleton — PricingEngineImpl throws) ====================
 
     @PostMapping("/strategies/simulate")
-    @Operation(summary = "模拟计算最终单价 (NOT impl, sister chat 填 PricingEngineImpl)")
+    @Operation(summary = "模拟计算最终单价 (preview, NOT 写日志)")
     @RequireRole({"factory_super_admin", "permission_admin", "sales_manager"})
     public ApiResponse<PricingResult> simulate(
             @PathVariable String factoryId,
             @Valid @RequestBody SimulateRequest req) {
-        PricingResult result = pricingEngine.simulate(
-                factoryId, req.getProductId(),
-                req.getQuantity() != null ? req.getQuantity() : 1,
-                req.getUnitPriceList() != null ? req.getUnitPriceList() : BigDecimal.ZERO,
-                req.getCustomerId()
-        );
+        // Post-review I7: build full PricingRequest so customerGroup / productCategory /
+        // costEstimate / region 都参与 scope_filter + 防呆 cost-check. 旧 5-arg overload 会静默 drop.
+        com.cretas.aims.service.pricing.PricingRequest engineReq =
+                com.cretas.aims.service.pricing.PricingRequest.builder()
+                        .factoryId(factoryId)
+                        .productId(req.getProductId())
+                        .quantity(req.getQuantity() != null ? req.getQuantity() : 1)
+                        .unitPriceList(req.getUnitPriceList() != null ? req.getUnitPriceList() : BigDecimal.ZERO)
+                        .customerId(req.getCustomerId())
+                        .customerGroup(req.getCustomerGroup())
+                        .productCategory(req.getProductCategory())
+                        .region(req.getRegion())
+                        .costEstimate(req.getCostEstimate())
+                        .build();
+        PricingResult result = pricingEngine.simulate(engineReq);
         return ApiResponse.success(result);
     }
 

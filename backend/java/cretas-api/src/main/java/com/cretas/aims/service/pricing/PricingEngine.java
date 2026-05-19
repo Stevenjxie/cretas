@@ -38,13 +38,31 @@ public interface PricingEngine {
      *
      * <p>Canvas UI "模拟" 按钮 + AI Tool {@code pricing_test_calculate} 调用入口.
      *
+     * <p><b>Post-review (2026-05-19) — preferred overload</b>: 接受完整 PricingRequest,
+     * 包含 customerGroup / productCategory / region / costEstimate 等 scope-filter / 防呆相关字段.
+     * 老 5-arg overload 是 backwards-compat wrapper, MEMBER / 按类目过滤 等场景必须用此 overload.
+     *
+     * @param request 完整请求上下文 (含 customerGroup / productCategory / costEstimate / etc.)
+     * @return 仅预览结果, 不写日志
+     */
+    PricingResult simulate(PricingRequest request);
+
+    /**
+     * 模拟计算 — 5-arg backwards-compat overload (delegates to {@link #simulate(PricingRequest)}).
+     *
+     * <p><b>WARNING</b>: This signature drops customerGroup / productCategory — 任何
+     * MEMBER strategy 或 scope_filter_json 过滤都不会生效. 优先使用 {@link #simulate(PricingRequest)}.
+     *
      * @param factoryId 工厂ID
      * @param productId 商品ID
      * @param quantity 数量
      * @param unitPriceList 标价 (商品 master 取)
      * @param customerId 客户ID (可空, 匿名询价)
      * @return 仅预览结果, 不写日志
+     * @deprecated since 2026-05-19 (Phase 4b post-review). Use {@link #simulate(PricingRequest)} —
+     *     this overload 静默 drop customerGroup / productCategory.
      */
+    @Deprecated
     PricingResult simulate(String factoryId, String productId, int quantity,
                            BigDecimal unitPriceList, Long customerId);
 }

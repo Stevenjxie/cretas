@@ -404,6 +404,143 @@ class PricingEngineImplTest {
         verify(logRepo, never()).save(any(PricingApplicationLog.class));
     }
 
+    // ==================== Post-review 2026-05-19: new simulate(PricingRequest) overload ====================
+
+    @Test
+    @DisplayName("simulate(PricingRequest) — preserves customerGroup so MEMBER strategy applies")
+    void simulateRequestOverload_preservesCustomerGroupForMember() {
+        // MEMBER strategy gated on customerGroup=VIP
+        Map<String, Object> memberRules = mapOf("membershipTier", "VIP", "discountPct", new BigDecimal("5"));
+        PricingStrategy member = buildStrategy("MEMBER_VIP_SIM", PricingStrategyType.MEMBER, memberRules, 60);
+        when(strategyRepo.findActiveByFactoryIdOrderByPriorityAsc(eq(FACTORY_ID), any(LocalDate.class)))
+                .thenReturn(List.of(member));
+
+        // PR-25 C1 bug: old 5-arg simulate dropped customerGroup, so MEMBER strategy never matched.
+        // New overload preserves it.
+        PricingRequest req = PricingRequest.builder()
+                .factoryId(FACTORY_ID)
+                .productId("P_VIP")
+                .quantity(10)
+                .unitPriceList(new BigDecimal("100.00"))
+                .customerId(999L)
+                .customerGroup("VIP")
+                .build();
+
+        PricingResult result = engine.simulate(req);
+
+        // 5% off 1000 = 50 discount; final 950
+        assertEquals(new BigDecimal("950.00"), result.getFinalPrice());
+        assertEquals(1, result.getAppliedStrategies().size());
+        assertEquals(PricingStrategyType.MEMBER, result.getAppliedStrategies().get(0).getStrategyType());
+        // Must NOT persist log on simulate path
+        verify(logRepo, never()).save(any(PricingApplicationLog.class));
+    }
+
+    @Test
+    @DisplayName("simulate(PricingRequest) — preserves productCategory so scope_filter applies")
+    void simulateRequestOverload_preservesProductCategoryForScope() {
+        Map<String, Object> rules = mapOf("tiers", List.of(
+                mapOf("minQty", 1, "discountPct", new BigDecimal("10"))));
+        PricingStrategy tiered = buildStrategy("CAT_FROZEN", PricingStrategyType.TIERED, rules, 50);
+        // scope: only productCategories=["frozen"]
+        tiered.setScopeFilterJson(mapOf("productCategories", List.of("frozen")));
+        when(strategyRepo.findActiveByFactoryIdOrderByPriorityAsc(eq(FACTORY_ID), any(LocalDate.class)))
+                .thenReturn(List.of(tiered));
+
+        // Request with matching productCategory — strategy SHOULD apply
+        PricingRequest req = PricingRequest.builder()
+                .factoryId(FACTORY_ID)
+                .productId("P_ICE")
+                .quantity(10)
+                .unitPriceList(new BigDecimal("100.00"))
+                .productCategory("frozen")
+                .build();
+
+        PricingResult result = engine.simulate(req);
+
+        // 10% off 1000 = 100 discount
+        assertEquals(new BigDecimal("900.00"), result.getFinalPrice());
+        assertEquals(1, result.getAppliedStrategies().size());
+    }
+
+    @Test
+    @DisplayName("simulate(PricingRequest) — null request throws IllegalArgumentException")
+    void simulateRequestOverload_nullRequest_throws() {
+        assertThrows(IllegalArgumentException.class, () -> engine.simulate(null));
+    }
+
+    @Test
+    @DisplayName("5-arg simulate (deprecated) — still delegates to new overload (backwards compat)")
+    void simulate5ArgOverload_delegates() {
+        // Empty repo, expect no-op pricing pass-through
+        PricingResult result = engine.simulate(FACTORY_ID, "P-001", 5, new BigDecimal("20.00"), null);
+        assertNotNull(result);
+        assertEquals(new BigDecimal("100.00"), result.getOriginalPrice());
+        assertEquals(new BigDecimal("100.00"), result.getFinalPrice());
+        verify(logRepo, never()).save(any(PricingApplicationLog.class));
+    }
+
+    // ==================== Post-review 2026-05-19: negative finalPrice surfaces warning ====================
+
+    @Test
+    @DisplayName("Negative finalPrice — clamps to 0 AND surfaces warning (NOT silent)")
+    void foolProof_negativeFinalPrice_addsClampWarning() {
+        // Two strategies stacking: TIERED 60% off + PROMOTION 50% off
+        // 60% off 1000 = 600 discount; running 400 (no clamp yet)
+        // 50% off 400 (currentLineTotal!) ... wait no — PROMOTION uses lineTotal = qty*unitPriceList
+        // So PROMOTION applies discountPct 50% on 1000 (qty*unit) = 500 discount
+        // Total discount attempted: 600 + 500 = 1100; original 1000 → finalPrice = -100 → CLAMP
+        Map<String, Object> tieredRules = mapOf("tiers", List.of(
+                mapOf("minQty", 1, "discountPct", new BigDecimal("60"))));
+        Map<String, Object> promoRules = mapOf("discountPct", new BigDecimal("50"));
+
+        PricingStrategy tiered = buildStrategy("AGGR_T", PricingStrategyType.TIERED, tieredRules, 50);
+        PricingStrategy promo = buildStrategy("AGGR_P", PricingStrategyType.PROMOTION, promoRules, 60);
+        when(strategyRepo.findActiveByFactoryIdOrderByPriorityAsc(eq(FACTORY_ID), any(LocalDate.class)))
+                .thenReturn(Arrays.asList(tiered, promo));
+
+        PricingRequest req = baseRequest()
+                .quantity(10)
+                .unitPriceList(new BigDecimal("100.00"))   // line 1000
+                .build();
+
+        PricingResult result = engine.calculate(req);
+
+        // Clamped to 0
+        assertEquals(new BigDecimal("0"), result.getFinalPrice().stripTrailingZeros());
+        // MUST have clamp warning surfaced (post-review I8)
+        assertFalse(result.getWarnings().isEmpty(), "Expected clamp warning, got empty list");
+        assertTrue(result.getWarnings().stream().anyMatch(w -> w.contains("超过原价") || w.contains("调整为 0")),
+                "Expected clamp warning content, got: " + result.getWarnings());
+    }
+
+    // ==================== Post-review 2026-05-19: null strategyType defensive ====================
+
+    @Test
+    @DisplayName("Null strategyType — skipped without NPE")
+    void applyStrategy_nullStrategyType_skipped() {
+        PricingStrategy bad = new PricingStrategy();
+        bad.setId(UUID.randomUUID().toString());
+        bad.setFactoryId(FACTORY_ID);
+        bad.setStrategyCode("BAD_DATA");
+        bad.setStrategyType(null);   // ← corrupt DB row
+        bad.setRulesJson(mapOf("tiers", List.of(mapOf("minQty", 1, "discountPct", new BigDecimal("10")))));
+        bad.setPriority(50);
+        bad.setEnabled(true);
+        when(strategyRepo.findActiveByFactoryIdOrderByPriorityAsc(eq(FACTORY_ID), any(LocalDate.class)))
+                .thenReturn(List.of(bad));
+
+        PricingRequest req = baseRequest()
+                .quantity(10)
+                .unitPriceList(new BigDecimal("100.00"))
+                .build();
+
+        // Should not throw; strategy skipped, no discount
+        PricingResult result = engine.calculate(req);
+        assertEquals(new BigDecimal("1000.00"), result.getFinalPrice());
+        assertEquals(0, result.getAppliedStrategies().size());
+    }
+
     // ==================== Helpers ====================
 
     private PricingStrategy buildStrategy(String code, PricingStrategyType type,

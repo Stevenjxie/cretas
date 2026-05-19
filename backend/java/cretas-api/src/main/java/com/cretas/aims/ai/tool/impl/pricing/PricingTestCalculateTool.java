@@ -52,6 +52,10 @@ public class PricingTestCalculateTool extends AbstractBusinessTool {
                 "description", "客户分组 (可空, MEMBER 策略需要, 如 VIP / A)"));
         properties.put("productCategory", Map.of("type", "string",
                 "description", "商品类目 (可空, scope 过滤用)"));
+        properties.put("region", Map.of("type", "string",
+                "description", "区域 (可空, scope 过滤用, 如 east / north)"));
+        properties.put("costEstimate", Map.of("type", "number",
+                "description", "单位成本 (可空, 用于触发 'below cost' 防呆 warning)"));
         schema.put("properties", properties);
         schema.put("required", Arrays.asList("productId", "quantity"));
         return schema;
@@ -76,8 +80,12 @@ public class PricingTestCalculateTool extends AbstractBusinessTool {
         Long customerId = getLong(params, "customerId");
         String customerGroup = getString(params, "customerGroup");
         String productCategory = getString(params, "productCategory");
+        String region = getString(params, "region");
+        BigDecimal costEstimate = getBigDecimal(params, "costEstimate");
 
         // Build PricingRequest with factoryId (multi-tenant safety).
+        // Post-review C1: 必须用 simulate(PricingRequest) overload — 老 5-arg overload 静默
+        // drop customerGroup / productCategory → MEMBER 策略 + scope 过滤 全失效.
         PricingRequest req = PricingRequest.builder()
                 .factoryId(factoryId)
                 .productId(productId)
@@ -86,12 +94,14 @@ public class PricingTestCalculateTool extends AbstractBusinessTool {
                 .customerId(customerId)
                 .customerGroup(customerGroup)
                 .productCategory(productCategory)
+                .region(region)
+                .costEstimate(costEstimate)
                 // simulate path NEVER writes log → leave businessEntity* null
                 .build();
 
-        // simulate has different signature, use it; engine internally rebuilds request.
-        PricingResult result = pricingEngine.simulate(
-                factoryId, productId, req.getQuantity(), unitPriceList, customerId);
+        // Use the new PricingRequest overload so customerGroup / productCategory / region /
+        // costEstimate all flow into engine. Old 5-arg overload would discard them.
+        PricingResult result = pricingEngine.simulate(req);
 
         log.debug("AI Tool pricing_test_calculate: factoryId={}, productId={}, qty={}, original={}, final={}",
                 factoryId, productId, quantity, result.getOriginalPrice(), result.getFinalPrice());

@@ -86,12 +86,34 @@ public class PricingEngineImpl implements PricingEngine {
         return result;
     }
 
+    /**
+     * Post-review (2026-05-19): preferred simulate overload — accepts full PricingRequest
+     * preserving customerGroup / productCategory / costEstimate / region / businessEntity* fields.
+     * Does NOT persist PricingApplicationLog.
+     */
     @Override
+    public PricingResult simulate(PricingRequest request) {
+        if (request == null) {
+            throw new IllegalArgumentException("PricingRequest 不能为空");
+        }
+        log.debug("PricingEngine.simulate (no persist): factoryId={}, productId={}, qty={}, customerGroup={}, productCategory={}",
+                request.getFactoryId(), request.getProductId(), request.getQuantity(),
+                request.getCustomerGroup(), request.getProductCategory());
+
+        return computeInternal(request);
+    }
+
+    /**
+     * Backwards-compat 5-arg overload — delegates to {@link #simulate(PricingRequest)}.
+     *
+     * <p><b>WARNING</b>: This signature drops customerGroup / productCategory / region /
+     * costEstimate. MEMBER strategies + scope_filter_json category/region 过滤 不会生效.
+     * 新 caller 必须用 {@link #simulate(PricingRequest)}.
+     */
+    @Override
+    @Deprecated
     public PricingResult simulate(String factoryId, String productId, int quantity,
                                    BigDecimal unitPriceList, Long customerId) {
-        log.debug("PricingEngine.simulate (no persist): factoryId={}, productId={}, qty={}, customerId={}",
-                factoryId, productId, quantity, customerId);
-
         PricingRequest req = PricingRequest.builder()
                 .factoryId(factoryId)
                 .productId(productId)
@@ -99,8 +121,7 @@ public class PricingEngineImpl implements PricingEngine {
                 .unitPriceList(unitPriceList != null ? unitPriceList : BigDecimal.ZERO)
                 .customerId(customerId)
                 .build();
-
-        return computeInternal(req);
+        return simulate(req);
     }
 
     // ==================== Internal compute ====================
@@ -150,16 +171,28 @@ public class PricingEngineImpl implements PricingEngine {
             }
         }
 
-        // Step 5: guard finalPrice >= 0 (per spec §3.5)
+        // Step 5: guard finalPrice >= 0 (per spec §3.5) — surface as fool-proof warning per Rule 1
+        // (post-review I8: don't silently clamp, sales manager needs visibility into stack-overflow)
+        List<String> clampWarnings = new ArrayList<>();
         if (finalPrice.compareTo(BigDecimal.ZERO) < 0) {
-            log.warn("Final price computed negative ({}), clamped to 0", finalPrice);
+            BigDecimal totalAttemptedDiscount = originalPrice.subtract(finalPrice);
+            String clampWarning = String.format(
+                    "折扣总额 ¥%s 超过原价 ¥%s, 自动调整为 0 元 — 请检查策略叠加规则",
+                    totalAttemptedDiscount.setScale(2, RoundingMode.HALF_UP).toPlainString(),
+                    originalPrice.setScale(2, RoundingMode.HALF_UP).toPlainString());
+            log.warn(clampWarning);
+            clampWarnings.add(clampWarning);
             finalPrice = BigDecimal.ZERO;
         }
 
         BigDecimal totalDiscount = originalPrice.subtract(finalPrice);
 
-        // Step 6: fool-proof warnings (NOT blocking)
+        // Step 6: fool-proof warnings (NOT blocking) — prepend clamp warning if any
         List<String> warnings = computeWarnings(request, originalPrice, finalPrice, totalDiscount);
+        if (!clampWarnings.isEmpty()) {
+            // Prepend clamp warning so it shows first (most critical) in UI display order
+            warnings.addAll(0, clampWarnings);
+        }
 
         return PricingResult.builder()
                 .originalPrice(originalPrice)
@@ -236,6 +269,12 @@ public class PricingEngineImpl implements PricingEngine {
         Map<String, Object> rules = strategy.getRulesJson();
         if (rules == null) return BigDecimal.ZERO;
 
+        // Post-review I1: defensive null guard — corrupt DB row 不应让 engine NPE
+        if (strategy.getStrategyType() == null) {
+            log.warn("策略 {} 类型为空, 跳过 (DB 数据异常需排查)", strategy.getStrategyCode());
+            return BigDecimal.ZERO;
+        }
+
         switch (strategy.getStrategyType()) {
             case TIERED:
                 return applyTiered(rules, request, unitPriceList);
@@ -311,7 +350,9 @@ public class PricingEngineImpl implements PricingEngine {
             return discountAmount;
         }
         if (discountRate != null) {
-            return lineTotal.multiply(discountRate);
+            // Post-review I3: enforce 2-scale HALF_UP to match percentOf path
+            // (raw multiply would produce e.g. 0.05 * 100.00 = 5.0000 not 5.00)
+            return lineTotal.multiply(discountRate).setScale(2, RoundingMode.HALF_UP);
         }
         if (discountPct != null) {
             return percentOf(lineTotal, discountPct);
@@ -471,9 +512,20 @@ public class PricingEngineImpl implements PricingEngine {
 
             logRepo.save(logEntry);
         } catch (Exception e) {
-            // Best-effort logging — don't fail pricing on log persistence error
-            log.warn("PricingApplicationLog persist failed (non-fatal): factoryId={}, businessEntityId={}, err={}",
-                    request.getFactoryId(), request.getBusinessEntityId(), e.getMessage());
+            // Post-review I6: audit log persist failure is NOT silent.
+            // Per api-response-handling.md 禁止降级处理 — surface to caller via result.warnings.
+            // Pricing itself succeeded (correct discount applied to SO line); only the audit
+            // trail is missing. Don't throw — that would block pricing & lose customer order.
+            // But MUST be visible to ops so finance month-end reconciliation can patch.
+            String strategyId = result.getAppliedStrategies() != null && !result.getAppliedStrategies().isEmpty()
+                    ? result.getAppliedStrategies().get(0).getStrategyId() : null;
+            log.error("PricingApplicationLog persist FAILED: factoryId={}, strategyId={}, businessEntityType={}, businessEntityId={}",
+                    request.getFactoryId(), strategyId,
+                    request.getBusinessEntityType(), request.getBusinessEntityId(), e);
+            if (result.getWarnings() != null) {
+                result.getWarnings().add(
+                        "审计日志写入失败 — 请联系运维核对 (折扣已应用, 但财务月度核算可能缺失记录)");
+            }
         }
     }
 
