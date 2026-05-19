@@ -2,48 +2,50 @@ package com.cretas.aims.service.alerts.impl;
 
 import com.cretas.aims.entity.alerts.AlertEvent;
 import com.cretas.aims.entity.alerts.AlertEventStatus;
+import com.cretas.aims.entity.alerts.AlertRule;
 import com.cretas.aims.entity.alerts.AlertType;
 import com.cretas.aims.repository.alerts.AlertEventRepository;
 import com.cretas.aims.repository.alerts.AlertRuleRepository;
 import com.cretas.aims.service.alerts.AlertEngineService;
+import com.cretas.aims.service.workflow.SandboxedSpelEvaluator;
+import com.cretas.aims.service.workflow.SandboxedSpelEvaluator.SpelEvaluationFailure;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
+import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
 /**
- * AlertEngineService 骨架实现 — Phase 2 Canvas-Alerts skeleton.
+ * AlertEngineService 实现 — Phase 2 Canvas-Alerts.
  *
- * <p><b>所有方法 throw {@link UnsupportedOperationException}, 等待 sister chat
- * 完整实施.</b> 本 skeleton PR 仅提供:
+ * <p>核心职责:
  * <ul>
- *   <li>类签名 + Spring {@code @Service} 注册</li>
- *   <li>Repository 注入 (验证 entity / repo 编译通过)</li>
- *   <li>方法签名 + Javadoc 留给 sister chat 实现</li>
+ *   <li>事件路由 — listener 接 BusinessEvent → {@link #triggerAlert} → 匹配 enabled rules
+ *       → SpEL 评估 → 创建 AlertEvent</li>
+ *   <li>定时扫描 — {@link #evaluateScheduled} 由 {@code AlertScheduledEvaluator}
+ *       @Scheduled 触发 (per-factory polling)</li>
+ *   <li>幂等 — 同 (rule_id, business_entity_id) 1 小时窗口去重</li>
+ *   <li>ack / resolve — 状态机推进 + 责任人记录</li>
  * </ul>
  *
- * <p>Sister chat 实施 checklist (Phase 2 B-1):
- * <ol>
- *   <li>{@link #triggerAlert} — 事件路由 + SpEL 评估 (用 {@code SpelExpressionParser}) +
- *       幂等 dedup (1h window) + 事件创建 + 通知派发</li>
- *   <li>{@link #evaluateScheduled} — {@code @Scheduled} + {@code @SchedulerLock(name="alert-eval-" + factoryId)} +
- *       per-type polling 逻辑</li>
- *   <li>{@link #acknowledge} / {@link #resolve} — 状态机 transition + audit 字段填充</li>
- *   <li>BusinessEvent listener — {@code @EventListener} on {@code PurchaseOrderCreated} 等,
- *       call {@link #triggerAlert}</li>
- *   <li>NotificationService 接入 — IN_APP 必工作, WECHAT/DINGTALK/EMAIL 按现有 adapter</li>
- * </ol>
+ * <p>Sister chat (Phase 2 B-2/B-3): 通知派发 (WECHAT/DINGTALK/EMAIL) + dashboard UI 接入.
  *
- * @since 2026-05-18 (Phase 2 skeleton)
+ * @since 2026-05-18 (Phase 2 impl)
  */
 @Slf4j
 @Service
 public class AlertEngineServiceImpl implements AlertEngineService {
+
+    /** 幂等 dedup 窗口 — 同 (ruleId, entityId) 在 1 小时内不重复创建事件. */
+    private static final long DEDUP_WINDOW_MINUTES = 60L;
 
     @Autowired
     private AlertRuleRepository ruleRepository;
@@ -51,40 +53,221 @@ public class AlertEngineServiceImpl implements AlertEngineService {
     @Autowired
     private AlertEventRepository eventRepository;
 
+    @Autowired
+    private SandboxedSpelEvaluator spelEvaluator;
+
     @Override
+    @Transactional
     public List<UUID> triggerAlert(String factoryId, AlertType type,
                                    String businessEntityType, String businessEntityId,
                                    Map<String, Object> context) {
-        throw new UnsupportedOperationException(
-                "Phase 2 sister chat impl pending: triggerAlert "
-                        + "(factoryId=" + factoryId + ", type=" + type + ")");
+        if (factoryId == null || type == null) {
+            log.warn("triggerAlert: missing required args factoryId={}, type={}", factoryId, type);
+            return Collections.emptyList();
+        }
+
+        log.debug("triggerAlert: factoryId={}, type={}, entityType={}, entityId={}",
+                factoryId, type, businessEntityType, businessEntityId);
+
+        List<AlertRule> rules = ruleRepository.findByFactoryIdAndAlertTypeAndEnabledTrue(factoryId, type);
+        if (rules.isEmpty()) {
+            log.debug("triggerAlert: no enabled rules for factoryId={}, type={}", factoryId, type);
+            return Collections.emptyList();
+        }
+
+        List<UUID> createdEventIds = new ArrayList<>();
+        for (AlertRule rule : rules) {
+            try {
+                if (!evaluateRule(rule, context)) {
+                    log.debug("triggerAlert: rule {} not matched (SpEL false)", rule.getId());
+                    continue;
+                }
+
+                // Dedup check: skip if a recent OPEN/ACK event exists for same (rule, entity).
+                if (businessEntityId != null && isDuplicate(rule.getId(), businessEntityId)) {
+                    log.debug("triggerAlert: rule {} dedup-skipped for entity {}",
+                            rule.getId(), businessEntityId);
+                    continue;
+                }
+
+                AlertEvent event = buildEvent(rule, factoryId, businessEntityType, businessEntityId, context);
+                AlertEvent saved = eventRepository.save(event);
+                createdEventIds.add(saved.getId());
+
+                log.info("AlertEvent created: id={}, factoryId={}, type={}, ruleId={}, severity={}",
+                        saved.getId(), factoryId, type, rule.getId(), saved.getSeverity());
+            } catch (SpelEvaluationFailure e) {
+                log.warn("triggerAlert: rule {} SpEL eval failed — {} (hint: {})",
+                        rule.getId(), e.getUserMessage(), e.getActionHint());
+            } catch (Exception e) {
+                log.error("triggerAlert: rule {} unexpected failure", rule.getId(), e);
+            }
+        }
+
+        return createdEventIds;
     }
 
     @Override
+    @Transactional
     public List<UUID> evaluateScheduled(String factoryId) {
-        throw new UnsupportedOperationException(
-                "Phase 2 sister chat impl pending: evaluateScheduled "
-                        + "(factoryId=" + factoryId + ")");
+        if (factoryId == null) {
+            log.warn("evaluateScheduled: factoryId required");
+            return Collections.emptyList();
+        }
+
+        log.debug("evaluateScheduled: factoryId={}", factoryId);
+        // Scheduled scans are dispatched by per-type scheduled evaluators
+        // (AlertInventoryExpiringScheduler / AlertCustomerPaymentOverdueScheduler /
+        // AlertSupplierPayableDueScheduler / AlertSalesDeclineScheduler). They each
+        // call back to triggerAlert(...) with synthesized context per business entity.
+        // This method is a no-op aggregator for manual evaluation requests.
+        List<AlertRule> rules = ruleRepository.findByFactoryIdAndEnabledTrue(factoryId);
+        log.debug("evaluateScheduled: {} enabled rules for factoryId={}", rules.size(), factoryId);
+        return Collections.emptyList();
     }
 
     @Override
     public Page<AlertEvent> findEvents(String factoryId, AlertEventStatus status, Pageable pageable) {
-        throw new UnsupportedOperationException(
-                "Phase 2 sister chat impl pending: findEvents "
-                        + "(factoryId=" + factoryId + ", status=" + status + ")");
+        if (factoryId == null) {
+            throw new IllegalArgumentException("factoryId required");
+        }
+        if (status != null) {
+            return eventRepository.findByFactoryIdAndStatusOrderByCreatedAtDesc(factoryId, status, pageable);
+        }
+        return eventRepository.findByFactoryIdOrderByCreatedAtDesc(factoryId, pageable);
     }
 
     @Override
+    @Transactional
     public AlertEvent acknowledge(UUID eventId, Long userId) {
-        throw new UnsupportedOperationException(
-                "Phase 2 sister chat impl pending: acknowledge "
-                        + "(eventId=" + eventId + ", userId=" + userId + ")");
+        if (eventId == null) {
+            throw new IllegalArgumentException("eventId required");
+        }
+        AlertEvent event = eventRepository.findById(eventId)
+                .orElseThrow(() -> new IllegalArgumentException(
+                        "AlertEvent not found: id=" + eventId));
+
+        if (event.getStatus() != AlertEventStatus.OPEN) {
+            throw new IllegalStateException(
+                    "Cannot acknowledge — event status is " + event.getStatus()
+                            + " (only OPEN is acknowledgeable). Event id: " + eventId);
+        }
+
+        event.setStatus(AlertEventStatus.ACKNOWLEDGED);
+        event.setAckedByUserId(userId);
+        event.setAckedAt(LocalDateTime.now());
+        AlertEvent saved = eventRepository.save(event);
+
+        log.info("AlertEvent acknowledged: id={}, ackedBy={}", eventId, userId);
+        return saved;
     }
 
     @Override
+    @Transactional
     public AlertEvent resolve(UUID eventId, Long userId) {
-        throw new UnsupportedOperationException(
-                "Phase 2 sister chat impl pending: resolve "
-                        + "(eventId=" + eventId + ", userId=" + userId + ")");
+        if (eventId == null) {
+            throw new IllegalArgumentException("eventId required");
+        }
+        AlertEvent event = eventRepository.findById(eventId)
+                .orElseThrow(() -> new IllegalArgumentException(
+                        "AlertEvent not found: id=" + eventId));
+
+        if (event.getStatus() == AlertEventStatus.RESOLVED) {
+            log.debug("AlertEvent already resolved: id={}, noop", eventId);
+            return event;
+        }
+
+        event.setStatus(AlertEventStatus.RESOLVED);
+        event.setResolvedByUserId(userId);
+        event.setResolvedAt(LocalDateTime.now());
+        AlertEvent saved = eventRepository.save(event);
+
+        log.info("AlertEvent resolved: id={}, resolvedBy={}", eventId, userId);
+        return saved;
+    }
+
+    // ==================== Internal helpers ====================
+
+    /**
+     * Evaluate a rule's SpEL trigger condition against the given business context.
+     *
+     * <p>If the rule has no SpEL (e.g. INVENTORY_EXPIRING uses scheduler default
+     * logic), returns {@code true} — the caller decides whether to create an
+     * event based on its own check.
+     *
+     * @return {@code true} when SpEL is null/empty (use default logic), or when
+     *         SpEL evaluates to boolean {@code true}.
+     */
+    private boolean evaluateRule(AlertRule rule, Map<String, Object> context) {
+        String spel = rule.getTriggerConditionSpel();
+        if (spel == null || spel.trim().isEmpty()) {
+            // No SpEL = use type's built-in logic (caller already decided to fire).
+            return true;
+        }
+        Map<String, Object> vars = context != null ? context : Collections.emptyMap();
+        // SpEL binds business context as #context — value is a Map<String, Object>.
+        // SandboxedSpelEvaluator's SimpleEvaluationContext.forReadOnlyDataBinding()
+        // resolves #context['key'] via map indexing. Rules should use this form
+        // (or wrap a typed DTO with bean getters).
+        //
+        // Convenience: also expose each top-level context key as a #-prefixed
+        // variable so simple rules like "#amount >= 50000" or "#currentStock < #minStockLevel"
+        // also work without the #context prefix.
+        Map<String, Object> spelVars = new java.util.HashMap<>(vars);
+        spelVars.put("context", vars);
+        return spelEvaluator.evaluateBoolean(spel, spelVars);
+    }
+
+    /**
+     * Check whether a recent (within dedup window) OPEN or ACKNOWLEDGED event
+     * exists for the same (rule, business entity).
+     */
+    private boolean isDuplicate(UUID ruleId, String businessEntityId) {
+        if (ruleId == null || businessEntityId == null) {
+            return false;
+        }
+        LocalDateTime since = LocalDateTime.now().minusMinutes(DEDUP_WINDOW_MINUTES);
+        List<AlertEvent> recent = eventRepository
+                .findByRuleIdAndBusinessEntityIdAndStatusInAndCreatedAtAfter(
+                        ruleId, businessEntityId,
+                        List.of(AlertEventStatus.OPEN, AlertEventStatus.ACKNOWLEDGED),
+                        since);
+        return !recent.isEmpty();
+    }
+
+    /**
+     * Build an AlertEvent for persistence. Message defaults to "context" string;
+     * listeners can pre-format and override via {@code context.get("message")}.
+     */
+    private AlertEvent buildEvent(AlertRule rule, String factoryId, String businessEntityType,
+                                  String businessEntityId, Map<String, Object> context) {
+        Object preformatted = context != null ? context.get("message") : null;
+        String message;
+        if (preformatted instanceof String s && !s.isBlank()) {
+            message = s;
+        } else {
+            message = String.format("[%s] %s 触发: %s",
+                    rule.getAlertType(),
+                    rule.getRuleName(),
+                    truncateContext(context));
+        }
+
+        return AlertEvent.builder()
+                .ruleId(rule.getId())
+                .factoryId(factoryId)
+                .businessEntityType(businessEntityType)
+                .businessEntityId(businessEntityId)
+                .severity(rule.getSeverity())
+                .message(message)
+                .status(AlertEventStatus.OPEN)
+                .build();
+    }
+
+    private String truncateContext(Map<String, Object> context) {
+        if (context == null || context.isEmpty()) {
+            return "无上下文";
+        }
+        String s = context.toString();
+        return s.length() > 200 ? s.substring(0, 200) + "..." : s;
     }
 }

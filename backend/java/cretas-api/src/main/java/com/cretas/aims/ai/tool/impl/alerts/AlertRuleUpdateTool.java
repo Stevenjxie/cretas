@@ -1,23 +1,33 @@
 package com.cretas.aims.ai.tool.impl.alerts;
 
 import com.cretas.aims.ai.tool.AbstractBusinessTool;
+import com.cretas.aims.entity.alerts.AlertRule;
+import com.cretas.aims.entity.alerts.AlertSeverity;
+import com.cretas.aims.repository.alerts.AlertRuleRepository;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
 /**
- * AI Tool — 更新告警规则 (Phase 2 Canvas-Alerts skeleton).
+ * AI Tool — 更新告警规则 (Phase 2 Canvas-Alerts).
  *
- * <p>sister chat impl 注意: preview 模式必返当前值 + 新值对比 (per fool-proof Rule 1).
+ * <p>支持字段: ruleName / triggerConditionSpel / severity / notifyChannels /
+ * notifyRoles / enabled. PATCH 语义 (null 不变).
  *
- * @since 2026-05-18 (Phase 2 skeleton)
+ * @since 2026-05-18 (Phase 2 impl)
  */
 @Slf4j
 @Component
 public class AlertRuleUpdateTool extends AbstractBusinessTool {
+
+    @Autowired
+    private AlertRuleRepository ruleRepository;
 
     @Override
     public String getToolName() {
@@ -89,9 +99,140 @@ public class AlertRuleUpdateTool extends AbstractBusinessTool {
     }
 
     @Override
+    protected Map<String, Object> doPreview(String factoryId, Map<String, Object> params,
+                                            Map<String, Object> context) throws Exception {
+        AlertRule existing = loadRule(factoryId, params);
+
+        Map<String, Object> currentValues = new HashMap<>();
+        currentValues.put("ruleName", existing.getRuleName());
+        currentValues.put("triggerConditionSpel", existing.getTriggerConditionSpel());
+        currentValues.put("severity", existing.getSeverity() != null ? existing.getSeverity().name() : null);
+        currentValues.put("notifyChannels", existing.getNotifyChannels());
+        currentValues.put("notifyRoles", existing.getNotifyRoles());
+        currentValues.put("enabled", existing.getEnabled());
+
+        Map<String, Object> newValues = computeChanges(existing, params);
+
+        Map<String, Object> result = new HashMap<>();
+        result.put("status", "PREVIEW");
+        result.put("action", "UPDATE");
+        result.put("ruleId", existing.getId().toString());
+        result.put("currentValues", currentValues);
+        result.put("newValues", newValues);
+        result.put("message", String.format(
+                "即将更新告警规则 %s (id=%s); 共 %d 字段变化",
+                existing.getRuleName(), existing.getId(), newValues.size()));
+        return result;
+    }
+
+    @Override
     protected Map<String, Object> doExecute(String factoryId, Map<String, Object> params,
                                             Map<String, Object> context) throws Exception {
-        throw new UnsupportedOperationException(
-                "Phase 2 sister chat impl pending: alert_rule_update");
+        AlertRule existing = loadRule(factoryId, params);
+
+        String newRuleName = getString(params, "ruleName");
+        if (newRuleName != null && !newRuleName.isBlank() && !newRuleName.equals(existing.getRuleName())) {
+            ruleRepository.findByFactoryIdAndRuleName(factoryId, newRuleName).ifPresent(other -> {
+                if (!other.getId().equals(existing.getId())) {
+                    throw new IllegalArgumentException(
+                            "新规则名称 '" + newRuleName + "' 已被其他规则占用 (id=" + other.getId() + ")");
+                }
+            });
+            existing.setRuleName(newRuleName);
+        }
+
+        if (params.containsKey("triggerConditionSpel")) {
+            existing.setTriggerConditionSpel(getString(params, "triggerConditionSpel"));
+        }
+
+        String severity = getString(params, "severity");
+        if (severity != null && !severity.isBlank()) {
+            existing.setSeverity(AlertSeverity.valueOf(severity.toUpperCase()));
+        }
+
+        if (params.containsKey("notifyChannels")) {
+            existing.setNotifyChannels(parseList(params, "notifyChannels"));
+        }
+        if (params.containsKey("notifyRoles")) {
+            existing.setNotifyRoles(parseList(params, "notifyRoles"));
+        }
+
+        Boolean enabled = getBoolean(params, "enabled");
+        if (enabled != null) {
+            existing.setEnabled(enabled);
+        }
+
+        AlertRule saved = ruleRepository.save(existing);
+        log.info("alert_rule_update: factoryId={}, ruleId={}, ruleName={}",
+                factoryId, saved.getId(), saved.getRuleName());
+
+        Map<String, Object> data = new HashMap<>();
+        data.put("ruleId", saved.getId().toString());
+        data.put("factoryId", factoryId);
+        data.put("ruleName", saved.getRuleName());
+        data.put("severity", saved.getSeverity().name());
+        data.put("enabled", saved.getEnabled());
+
+        return buildSimpleResult(String.format("告警规则 %s (id=%s) 更新成功",
+                saved.getRuleName(), saved.getId()), data);
+    }
+
+    private AlertRule loadRule(String factoryId, Map<String, Object> params) {
+        String ruleIdStr = getString(params, "ruleId");
+        UUID ruleUuid;
+        try {
+            ruleUuid = UUID.fromString(ruleIdStr);
+        } catch (IllegalArgumentException ex) {
+            throw new IllegalArgumentException("ruleId 不是合法 UUID: " + ruleIdStr);
+        }
+        AlertRule rule = ruleRepository.findById(ruleUuid)
+                .orElseThrow(() -> new IllegalArgumentException("告警规则不存在: id=" + ruleIdStr));
+        if (!rule.getFactoryId().equals(factoryId)) {
+            throw new IllegalArgumentException(
+                    "告警规则不属于工厂 " + factoryId + " (实际工厂=" + rule.getFactoryId() + ")");
+        }
+        return rule;
+    }
+
+    private Map<String, Object> computeChanges(AlertRule existing, Map<String, Object> params) {
+        Map<String, Object> changes = new HashMap<>();
+        String newName = getString(params, "ruleName");
+        if (newName != null && !newName.isBlank() && !newName.equals(existing.getRuleName())) {
+            changes.put("ruleName", newName);
+        }
+        if (params.containsKey("triggerConditionSpel")) {
+            changes.put("triggerConditionSpel", getString(params, "triggerConditionSpel"));
+        }
+        String severity = getString(params, "severity");
+        if (severity != null && !severity.isBlank()) {
+            changes.put("severity", severity.toUpperCase());
+        }
+        if (params.containsKey("notifyChannels")) {
+            changes.put("notifyChannels", parseList(params, "notifyChannels"));
+        }
+        if (params.containsKey("notifyRoles")) {
+            changes.put("notifyRoles", parseList(params, "notifyRoles"));
+        }
+        Boolean enabled = getBoolean(params, "enabled");
+        if (enabled != null) {
+            changes.put("enabled", enabled);
+        }
+        return changes;
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<String> parseList(Map<String, Object> params, String key) {
+        Object value = params.get(key);
+        if (value == null) {
+            return new ArrayList<>();
+        }
+        if (value instanceof List) {
+            List<String> out = new ArrayList<>();
+            for (Object o : (List<Object>) value) {
+                if (o != null) out.add(o.toString());
+            }
+            return out;
+        }
+        return new ArrayList<>();
     }
 }
