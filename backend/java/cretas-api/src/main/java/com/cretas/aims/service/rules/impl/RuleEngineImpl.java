@@ -48,13 +48,27 @@ import java.util.UUID;
  * </ol>
  *
  * <h3>SpEL variable binding</h3>
- * The {@code inputObject} is bound to SpEL as {@code #root} (e.g. {@code totalAmount > 100000}
- * references the object's {@code totalAmount} property directly). It is also exposed as
- * {@code #input} for explicit reference (e.g. {@code #input.discount = 0.05}). Factory id
- * is exposed as {@code #factoryId}.
+ * The {@code inputObject} is exposed under the following SpEL variables:
+ * <ul>
+ *   <li>{@code #input} — always available, the raw inputObject (legacy alias kept for backwards compat).</li>
+ *   <li>{@code #order} — only when {@link RuleScope#ORDER}, alias of inputObject. Matches the UX hint copy
+ *       in the Canvas-Rules editor dialog (per fool-proof Rule 3: hint text == reality).</li>
+ *   <li>{@code #inventory} — only when {@link RuleScope#INVENTORY}, alias of inputObject.</li>
+ *   <li>{@code #customer} — only when {@link RuleScope#CUSTOMER}, alias of inputObject.</li>
+ *   <li>{@code #factoryId} — current factoryId String.</li>
+ * </ul>
+ * <p>Note: {@code #root} is NOT bound — {@link SandboxedSpelEvaluator} uses
+ * {@link org.springframework.expression.spel.support.SimpleEvaluationContext#forReadOnlyDataBinding()}
+ * which requires explicit variable references. Use {@code #input.totalAmount} (or {@code #order.totalAmount}
+ * when scope=ORDER), never bare {@code totalAmount}.
+ *
+ * <p>The scope-aliased variable is set to the same object reference as {@code #input}, so
+ * {@code #order.amount} and {@code #input.amount} evaluate identically — admins can pick whichever
+ * reads better in their rule expression. Scopes other than ORDER/INVENTORY/CUSTOMER (e.g. CUSTOM)
+ * get only {@code #input}.
  *
  * @author Cretas Team
- * @version 1.0.0
+ * @version 1.1.0
  * @since 2026-05-18
  */
 @Slf4j
@@ -168,10 +182,33 @@ public class RuleEngineImpl implements RuleEngine {
         if (spel == null || spel.isBlank()) {
             return true;
         }
+        Map<String, Object> vars = buildSpelVariables(rule.getScope(), factoryId, inputObject);
+        return spelEvaluator.evaluateBoolean(spel, vars);
+    }
+
+    /**
+     * Build SpEL variable map keyed by scope. Always includes {@code #input} and {@code #factoryId};
+     * adds a scope-specific alias ({@code #order}/{@code #inventory}/{@code #customer}) pointing
+     * to the same inputObject so admins can use the human-readable alias from the dialog hint.
+     *
+     * <p>B-BR1 fix (2026-05-19): previously only {@code #input} was bound, so admins following the
+     * dialog hint copy "#order.amount > 100000" got silent false (matched=false) because #order was
+     * undefined. Adding scope aliases makes the hint truthful while keeping #input working for
+     * legacy / cross-scope expressions.
+     */
+    private Map<String, Object> buildSpelVariables(RuleScope scope, String factoryId, Object inputObject) {
         Map<String, Object> vars = new HashMap<>();
         vars.put("input", inputObject);
         vars.put("factoryId", factoryId);
-        return spelEvaluator.evaluateBoolean(spel, vars);
+        if (scope != null) {
+            switch (scope) {
+                case ORDER -> vars.put("order", inputObject);
+                case INVENTORY -> vars.put("inventory", inputObject);
+                case CUSTOMER -> vars.put("customer", inputObject);
+                case CUSTOM -> { /* no alias — admin must use #input */ }
+            }
+        }
+        return vars;
     }
 
     // ==================== Action: LOG ====================
@@ -214,9 +251,9 @@ public class RuleEngineImpl implements RuleEngine {
         Object newValue;
         if (cfg.containsKey("valueSpel")) {
             String valueSpel = String.valueOf(cfg.get("valueSpel"));
-            Map<String, Object> vars = new HashMap<>();
-            vars.put("input", inputObject);
-            vars.put("factoryId", factoryId);
+            // B-BR1 fix: use scope-aliased vars so valueSpel can reference #order / #inventory / #customer
+            // consistently with the dialog hint copy. #input is always bound for legacy use.
+            Map<String, Object> vars = buildSpelVariables(rule.getScope(), factoryId, inputObject);
             try {
                 newValue = spelEvaluator.evaluate(valueSpel, vars);
             } catch (Exception e) {
@@ -273,11 +310,11 @@ public class RuleEngineImpl implements RuleEngine {
                 ? (Map<String, Object>) cfg.get("ctx")
                 : new HashMap<>();
         // SpEL-resolve any "#..." values in ctx against inputObject — gives rules a way to pull
-        // dynamic ids from the request (e.g. {"materialId": "#input.materialId"}).
+        // dynamic ids from the request (e.g. {"materialId": "#input.materialId"} or
+        // {"orderId": "#order.id"} when scope=ORDER).
+        // B-BR1 fix: scope-aliased vars so ctx expressions match dialog hint copy.
         Map<String, Object> resolvedCtx = new LinkedHashMap<>();
-        Map<String, Object> vars = new HashMap<>();
-        vars.put("input", inputObject);
-        vars.put("factoryId", factoryId);
+        Map<String, Object> vars = buildSpelVariables(rule.getScope(), factoryId, inputObject);
         for (Map.Entry<String, Object> e : ctxRaw.entrySet()) {
             Object v = e.getValue();
             if (v instanceof String s && s.startsWith("#")) {
