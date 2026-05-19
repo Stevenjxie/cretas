@@ -10,6 +10,7 @@ import com.cretas.aims.repository.pricing.PricingApplicationLogRepository;
 import com.cretas.aims.repository.pricing.PricingStrategyRepository;
 import com.cretas.aims.service.pricing.PricingEngine;
 import com.cretas.aims.service.pricing.PricingResult;
+import com.fasterxml.jackson.annotation.JsonFormat;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
@@ -25,6 +26,8 @@ import org.springframework.web.bind.annotation.*;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -64,7 +67,16 @@ public class PricingStrategyController {
         private Map<String, Object> rulesJson;
         private Integer priority;
         private Boolean enabled;
+        /**
+         * B-P1 fix: pin format to {@code yyyy-MM-dd} so Jackson rejects full-ISO datetime
+         * strings (e.g. {@code "2026-05-01T00:00:00"}) with a date-specific parse error
+         * that {@link com.cretas.aims.exception.GlobalExceptionHandler#handleHttpMessageNotReadableException}
+         * routes to "日期格式不正确（值: ...），请重新选择日期" hint instead of the generic
+         * "请求格式不正确" fallback.
+         */
+        @JsonFormat(pattern = "yyyy-MM-dd")
         private LocalDate validFrom;
+        @JsonFormat(pattern = "yyyy-MM-dd")
         private LocalDate validTo;
     }
 
@@ -106,6 +118,11 @@ public class PricingStrategyController {
     public ApiResponse<PricingStrategy> createStrategy(
             @PathVariable String factoryId,
             @Valid @RequestBody StrategyRequest req) {
+        // QA Round (2026-05-19) B-P2/3/4/5: boundary validators run BEFORE persistence.
+        PricingStrategyType type = parseType(req.getStrategyType());
+        validateDateRange(req);
+        validateRulesByType(type, req.getRulesJson());
+
         Optional<PricingStrategy> existing =
                 strategyRepo.findByFactoryIdAndStrategyCode(factoryId, req.getStrategyCode());
         if (existing.isPresent()) {
@@ -118,7 +135,7 @@ public class PricingStrategyController {
         s.setFactoryId(factoryId);
         s.setStrategyCode(req.getStrategyCode());
         s.setStrategyName(req.getStrategyName());
-        s.setStrategyType(parseType(req.getStrategyType()));
+        s.setStrategyType(type);
         s.setScopeFilterJson(req.getScopeFilterJson());
         s.setRulesJson(req.getRulesJson());
         s.setPriority(req.getPriority() != null ? req.getPriority() : 100);
@@ -139,6 +156,11 @@ public class PricingStrategyController {
             @PathVariable String factoryId,
             @PathVariable String id,
             @Valid @RequestBody StrategyRequest req) {
+        // QA Round (2026-05-19) B-P2/3/4/5: boundary validators run BEFORE persistence.
+        PricingStrategyType type = parseType(req.getStrategyType());
+        validateDateRange(req);
+        validateRulesByType(type, req.getRulesJson());
+
         PricingStrategy s = strategyRepo.findById(id)
                 .orElseThrow(() -> new BusinessException(404, "策略不存在: " + id));
         if (!factoryId.equals(s.getFactoryId())) {
@@ -157,7 +179,7 @@ public class PricingStrategyController {
         }
         s.setStrategyCode(req.getStrategyCode());
         s.setStrategyName(req.getStrategyName());
-        s.setStrategyType(parseType(req.getStrategyType()));
+        s.setStrategyType(type);
         s.setScopeFilterJson(req.getScopeFilterJson());
         s.setRulesJson(req.getRulesJson());
         if (req.getPriority() != null) s.setPriority(req.getPriority());
@@ -264,6 +286,149 @@ public class PricingStrategyController {
                     .withHint("请选择 5 种类型之一")
                     .withSeverity("warning")
                     .withHintTarget("strategyType");
+        }
+    }
+
+    // ==================== Boundary validators (QA 2026-05-19 B-P2/3/4/5) ====================
+
+    /**
+     * B-P5: reject {@code validTo < validFrom}. Null on either side = open-ended interval (allowed).
+     *
+     * <p>Per fool-proof Rule 1 (预先显示边界, 不要事后报错): surface the specific dates so the user
+     * can spot the swap immediately.
+     */
+    private void validateDateRange(StrategyRequest req) {
+        LocalDate from = req.getValidFrom();
+        LocalDate to = req.getValidTo();
+        if (from != null && to != null && to.isBefore(from)) {
+            throw new BusinessException(400,
+                    "validTo 不可早于 validFrom (from=" + from + ", to=" + to + ")")
+                    .withHint("请检查生效区间: from=" + from + " to=" + to)
+                    .withSeverity("warning")
+                    .withHintTarget("validTo");
+        }
+    }
+
+    /**
+     * Dispatch rule-shape validation by strategy type. Currently only TIERED has structural
+     * boundary checks (overlap / negative / &gt;100% on each tier discountPct). Other types
+     * (PROMOTION / MEMBER / BUNDLE / CYCLE) are validated at engine time by
+     * {@link com.cretas.aims.service.pricing.impl.PricingEngineImpl}.
+     */
+    private void validateRulesByType(PricingStrategyType type, Map<String, Object> rulesJson) {
+        if (type == PricingStrategyType.TIERED) {
+            validateTiers(rulesJson);
+        }
+    }
+
+    /**
+     * B-P2/3/4: TIERED tier boundary validators.
+     *
+     * <ul>
+     *   <li>B-P3: each {@code discountPct} must be &gt;= 0 (negative = 涨价, not a discount)</li>
+     *   <li>B-P4: each {@code discountPct} must be &lt;= 100 (over 100% = 倒贴)</li>
+     *   <li>B-P2: tier intervals {@code [minQty, maxQty]} must not overlap</li>
+     * </ul>
+     *
+     * <p>{@code rulesJson} is {@code Map<String, Object>} so Bean Validation can't reach inside —
+     * tier validation must be explicit at controller boundary. Null/missing {@code tiers} is
+     * tolerated for forward-compat (engine returns ZERO discount, no harm).
+     */
+    @SuppressWarnings("unchecked")
+    private void validateTiers(Map<String, Object> rulesJson) {
+        if (rulesJson == null) return;
+        Object tiersObj = rulesJson.get("tiers");
+        if (!(tiersObj instanceof List<?>)) return;
+        List<?> tiersRaw = (List<?>) tiersObj;
+        if (tiersRaw.isEmpty()) return;
+
+        List<TierBounds> bounds = new ArrayList<>(tiersRaw.size());
+        for (int i = 0; i < tiersRaw.size(); i++) {
+            Object t = tiersRaw.get(i);
+            if (!(t instanceof Map)) continue;
+            Map<String, Object> tier = (Map<String, Object>) t;
+
+            BigDecimal discountPct = toDecimal(tier.get("discountPct"));
+            if (discountPct != null) {
+                // B-P3: negative discount = 涨价
+                if (discountPct.compareTo(BigDecimal.ZERO) < 0) {
+                    throw new BusinessException(400,
+                            "折扣率不可为负 (tier[" + i + "].discountPct=" + discountPct
+                                    + ", 负数 = 涨价)")
+                            .withHint("请将折扣率设为 0-100 之间的数值")
+                            .withSeverity("warning")
+                            .withHintTarget("tiers[" + i + "].discountPct");
+                }
+                // B-P4: discount > 100% = 倒贴
+                if (discountPct.compareTo(new BigDecimal("100")) > 0) {
+                    throw new BusinessException(400,
+                            "折扣率不可超过 100% (tier[" + i + "].discountPct=" + discountPct
+                                    + ", 超过 100% = 倒贴)")
+                            .withHint("请将折扣率设为 0-100 之间的数值")
+                            .withSeverity("warning")
+                            .withHintTarget("tiers[" + i + "].discountPct");
+                }
+            }
+
+            BigDecimal minQty = toDecimal(tier.get("minQty"));
+            BigDecimal maxQty = toDecimal(tier.get("maxQty"));
+            if (minQty != null && maxQty != null) {
+                if (maxQty.compareTo(minQty) < 0) {
+                    throw new BusinessException(400,
+                            "阶梯区间无效: tier[" + i + "] maxQty=" + maxQty
+                                    + " < minQty=" + minQty)
+                            .withHint("请确保每个阶梯的 maxQty >= minQty")
+                            .withSeverity("warning")
+                            .withHintTarget("tiers[" + i + "].maxQty");
+                }
+                bounds.add(new TierBounds(i, minQty, maxQty));
+            }
+        }
+
+        // B-P2: overlap detection.
+        // Sort by minQty asc, then assert each tier's minQty > previous tier's maxQty.
+        // 相邻区间允许端点相接但不可重叠 (i.e. prev.maxQty < curr.minQty must hold strictly).
+        bounds.sort(Comparator.comparing(b -> b.minQty));
+        for (int i = 1; i < bounds.size(); i++) {
+            TierBounds prev = bounds.get(i - 1);
+            TierBounds curr = bounds.get(i);
+            if (curr.minQty.compareTo(prev.maxQty) <= 0) {
+                throw new BusinessException(400,
+                        "阶梯区间重叠: tier[" + prev.index + "] ["
+                                + prev.minQty.toPlainString() + "-" + prev.maxQty.toPlainString()
+                                + "] 与 tier[" + curr.index + "] ["
+                                + curr.minQty.toPlainString() + "-" + curr.maxQty.toPlainString() + "]")
+                        .withHint("请调整阶梯, 确保相邻区间不重叠 (prev.maxQty < curr.minQty)")
+                        .withSeverity("warning")
+                        .withHintTarget("tiers[" + curr.index + "].minQty");
+            }
+        }
+    }
+
+    /**
+     * Lenient numeric coercion for JSON-decoded {@code Map<String, Object>} values.
+     * Returns null on absent / unparseable input — caller decides whether that's a hard error.
+     */
+    private static BigDecimal toDecimal(Object v) {
+        if (v == null) return null;
+        if (v instanceof BigDecimal) return (BigDecimal) v;
+        if (v instanceof Number) return new BigDecimal(v.toString());
+        try {
+            return new BigDecimal(v.toString().trim());
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    /** Sorted-pair holder for tier overlap detection. */
+    private static final class TierBounds {
+        final int index;
+        final BigDecimal minQty;
+        final BigDecimal maxQty;
+        TierBounds(int index, BigDecimal minQty, BigDecimal maxQty) {
+            this.index = index;
+            this.minQty = minQty;
+            this.maxQty = maxQty;
         }
     }
 }
