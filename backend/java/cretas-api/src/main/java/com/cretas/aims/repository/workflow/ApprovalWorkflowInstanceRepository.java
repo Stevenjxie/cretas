@@ -51,4 +51,27 @@ public interface ApprovalWorkflowInstanceRepository
      */
     List<ApprovalWorkflowInstance> findByFactoryIdAndWorkflowIdAndStatus(
             String factoryId, String workflowId, InstanceStatus status);
+
+    /**
+     * issue #20 — "我待审" widget query.
+     *
+     * <p>按 (factoryId, status, moduleCode) 过滤, 按 initiatedAt 倒序返. caller
+     * 拿到原始 list 后还要根据 active node 的 approverRoles 二次过滤
+     * (in-memory, 因 approverRoles 在 workflow.nodesJson 里, 不能 SQL filter).
+     *
+     * <p>命中索引 {@code idx_aw_instances_recovery (factory_id, status)}.
+     *
+     * @param factoryId 工厂 id
+     * @param status 通常传 RUNNING
+     * @param moduleCode 可空; 空时不过滤 module
+     * @since 2026-05-18
+     */
+    List<ApprovalWorkflowInstance> findByFactoryIdAndStatusAndModuleCodeOrderByInitiatedAtDesc(
+            String factoryId, InstanceStatus status, String moduleCode);
+
+    /**
+     * issue #20 — "我待审" widget 当 moduleCode=null 时使用 (查全部 module).
+     */
+    List<ApprovalWorkflowInstance> findByFactoryIdAndStatusOrderByInitiatedAtDesc(
+            String factoryId, InstanceStatus status);
 }

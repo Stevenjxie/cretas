@@ -3,6 +3,8 @@ package com.cretas.aims.service.workflow;
 import com.cretas.aims.entity.workflow.ApprovalHistory;
 import com.cretas.aims.entity.workflow.ApprovalHistory.HistoryAction;
 import com.cretas.aims.entity.workflow.ApprovalWorkflowInstance;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 
 import java.util.List;
 import java.util.Map;
@@ -118,6 +120,33 @@ public interface WorkflowEngineService {
      * <p><b>B.4 实现</b> — 设 status=CANCELLED, completedAt=now, 写 CANCEL history.
      */
     ApprovalWorkflowInstance cancel(String instanceId, Long cancellerUserId, String reason);
+
+    /**
+     * issue #20 — 查 user 角色待审的 RUNNING instances.
+     *
+     * <p>过滤逻辑:
+     * <ol>
+     *   <li>SQL filter: factoryId + status=RUNNING + (moduleCode=? 若非空)</li>
+     *   <li>对每个 instance: 取 workflow.nodesJson, 找 currentNodeIds 中
+     *       type=approval 节点, 检查 config.approverRoles 是否含 userRole</li>
+     *   <li>{@code factory_super_admin} 总是匹配全部 (兜底)</li>
+     *   <li>按 initiatedAt DESC 排序 (来自 SQL)</li>
+     *   <li>内存分页 (pageable.offset / pageSize)</li>
+     * </ol>
+     *
+     * <p>性能: in-memory filter 因 workflow.nodesJson 在 JSONB 不便 SQL filter.
+     * Phase 1 数据量预期低 (< 100 实例/工厂/天), 可接受. 后续 Phase 量大时
+     * 可缓存 workflow nodes 或拍平 approver_roles 单表.
+     *
+     * @param factoryId 工厂 id
+     * @param userRole user.roleCode (e.g. "finance_manager")
+     * @param moduleCode 可空 — 过滤业务模块
+     * @param pageable 分页参数 (page from 0)
+     * @return Page of instances sorted by initiatedAt DESC
+     * @since 2026-05-18 (issue #20)
+     */
+    Page<ApprovalWorkflowInstance> findPendingForRole(
+            String factoryId, String userRole, String moduleCode, Pageable pageable);
 
     /**
      * 启动 hook — 从 PG 重建 Redis state.
