@@ -36,7 +36,6 @@ import com.cretas.aims.event.MaterialReceivedEvent;
 import com.cretas.aims.annotation.Loggable;
 import com.cretas.aims.service.MaterialBatchService;
 import com.cretas.aims.service.inventory.PurchaseService;
-import com.cretas.aims.service.rules.annotation.RuleEvaluate;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.ApplicationEventPublisher;
@@ -335,7 +334,13 @@ public class PurchaseServiceImpl implements PurchaseService {
     }
 
     @Override
-    @RuleEvaluate("ORDER")
+    // Phase 4a follow-up (issue #38 spinoff): @RuleEvaluate("ORDER") was attached here but
+    // submitOrder(String factoryId, String orderId) signature has only String args. The aspect's
+    // extractInputObject heuristic skips String/Number/Boolean — inputObject=null → rule SILENT NO-OP
+    // (per PR #37 review C1 score 95). Removed until refactor: either move annotation to a private
+    // helper that takes loaded `PurchaseOrder order` after getPurchaseOrderById(), OR change signature
+    // to accept PurchaseOrderRequest DTO. MaterialBatchService.createMaterialBatch annotation kept
+    // (target="request" works per pom.xml -parameters flag + RuleEvaluateAspectTest verified).
     @Transactional
     @Loggable(module = "PURCHASE_ORDER", action = "SUBMIT", entityType = "PurchaseOrder",
               entityIdParam = "orderId")
