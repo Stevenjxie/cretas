@@ -33,16 +33,21 @@ const phaseA = [
   { key: 'validation', icon: '📐', label: '校验规则' },
 ]
 
-// Round 4 Fix P1-10: added '定时任务' Tab for SchedulerPanel
+// Round 4 Fix P1-10: added '定时任务' Tab for SchedulerPanel (legacy v2 config)
 // Phase 3 Task 3.4: added '模块权限' Tab for factory-level L2 override
 // Phase 3 Canvas-Notify (2026-05-19): added '通知模板' Tab for NotifyTemplate CRUD + Logs
+// Phase 5 (2026-05-19): added 'Canvas Cron' Tab — DB-driven DynamicScheduler
+// (real cron registration via Spring TaskScheduler + ShedLock, NOT v2 config).
+// Legacy 'scheduler' Tab stays for v2 config-only style; sister chat will
+// migrate 24 existing @Scheduled methods to the new pattern.
 const phaseB = [
   { key: 'fields', icon: '📋', label: '字段配置' },
   { key: 'permissions', icon: '🛡️', label: '权限矩阵' },
   { key: 'module-permissions', icon: '🔐', label: '模块权限' },
   { key: 'tools', icon: '🔧', label: '工具/技能' },
-  { key: 'scheduler', icon: '⏰', label: '定时任务' },
+  { key: 'scheduler', icon: '⏰', label: '定时任务 (v2)' },
   { key: 'notify', icon: '🔔', label: '通知模板' },
+  { key: 'cron', icon: '⚡', label: 'Canvas Cron' },
 ]
 </script>
 
