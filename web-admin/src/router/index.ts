@@ -120,6 +120,20 @@ const businessRoutes: RouteRecordRaw[] = [
             meta: { requiresAuth: true, title: '多级 BOM 展开', module: 'production' }
           },
           {
+            // Sprint 5 H-2 MVP: BomVersion 历史版本列表 (M-BOM-VER-1 frontend follow-up)
+            path: 'bom/versions',
+            name: 'BomVersionList',
+            component: () => import('@/views/production/bom/BomVersionList.vue'),
+            meta: { requiresAuth: true, title: 'BOM版本管理', module: 'production' }
+          },
+          {
+            // Sprint 5 H-2 MVP stub: ECN 工程变更通知
+            path: 'bom/ecns',
+            name: 'EcnList',
+            component: () => import('@/views/production/bom/EcnList.vue'),
+            meta: { requiresAuth: true, title: '工程变更通知', module: 'production' }
+          },
+          {
             path: 'approval',
             name: 'ProductionApproval',
             component: () => import('@/views/production/approval/list.vue'),
