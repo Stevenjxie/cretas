@@ -4,6 +4,7 @@ import com.cretas.aims.entity.alerts.AlertRule;
 import com.cretas.aims.entity.alerts.AlertType;
 import com.cretas.aims.repository.alerts.AlertRuleRepository;
 import com.cretas.aims.service.alerts.AlertEngineService;
+import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
 import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -33,6 +34,13 @@ public class AlertInventoryLowScheduler {
 
     @Autowired
     private AlertEngineService alertEngineService;
+
+    @PostConstruct
+    void init() {
+        log.warn("{} registered — DB query impl pending Phase 2 B-3 "
+                + "(MaterialBatchRepository aggregate by material_type vs minStockLevel)",
+                getClass().getSimpleName());
+    }
 
     /** 每 15 分钟. ShedLock 防多实例. */
     @Scheduled(fixedRate = 15L * 60L * 1000L, initialDelay = 60L * 1000L)

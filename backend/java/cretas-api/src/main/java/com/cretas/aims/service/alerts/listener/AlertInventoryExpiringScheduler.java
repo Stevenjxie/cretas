@@ -4,6 +4,7 @@ import com.cretas.aims.entity.alerts.AlertRule;
 import com.cretas.aims.entity.alerts.AlertType;
 import com.cretas.aims.repository.alerts.AlertRuleRepository;
 import com.cretas.aims.service.alerts.AlertEngineService;
+import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
 import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -44,6 +45,13 @@ public class AlertInventoryExpiringScheduler {
 
     @Autowired
     private AlertEngineService alertEngineService;
+
+    @PostConstruct
+    void init() {
+        log.warn("{} registered — DB query impl pending Phase 2 B-3 "
+                + "(MaterialBatchRepository where expiry <= today + warningDays)",
+                getClass().getSimpleName());
+    }
 
     /** 每天 8:00 AM. ShedLock 防多实例重复 (lockAtMostFor PT2H, lockAtLeastFor PT5M). */
     @Scheduled(cron = "0 0 8 * * ?")

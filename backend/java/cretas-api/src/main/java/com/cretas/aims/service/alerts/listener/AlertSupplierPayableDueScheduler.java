@@ -4,6 +4,7 @@ import com.cretas.aims.entity.alerts.AlertRule;
 import com.cretas.aims.entity.alerts.AlertType;
 import com.cretas.aims.repository.alerts.AlertRuleRepository;
 import com.cretas.aims.service.alerts.AlertEngineService;
+import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
 import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -39,6 +40,13 @@ public class AlertSupplierPayableDueScheduler {
 
     @Autowired
     private AlertEngineService alertEngineService;
+
+    @PostConstruct
+    void init() {
+        log.warn("{} registered — DB query impl pending Phase 2 B-3 "
+                + "(PayableRepository dueDate within warningDays threshold)",
+                getClass().getSimpleName());
+    }
 
     @Scheduled(cron = "0 30 9 * * ?")
     @SchedulerLock(name = "AlertSupplierPayableDueScheduler.evaluate",

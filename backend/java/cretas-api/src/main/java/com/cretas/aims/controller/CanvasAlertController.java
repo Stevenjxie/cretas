@@ -11,6 +11,7 @@ import com.cretas.aims.repository.alerts.AlertRuleRepository;
 import com.cretas.aims.service.alerts.AlertEngineService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
@@ -243,7 +244,78 @@ public class CanvasAlertController {
         return ApiResponse.success("操作成功", data);
     }
 
+    @PostMapping("/events/{eventId}/acknowledge")
+    @Operation(summary = "确认告警事件 (OPEN → ACKNOWLEDGED)",
+               description = "用户在 UI 点 ack 时调用. 记录确认人 + 确认时间.")
+    @RequireRole({"factory_super_admin", "permission_admin"})
+    public ApiResponse<Map<String, Object>> acknowledgeEvent(@PathVariable String factoryId,
+                                                             @PathVariable String eventId,
+                                                             HttpServletRequest request) {
+        log.info("POST /alerts/events/{}/acknowledge factoryId={}", eventId, factoryId);
+        try {
+            UUID uuid = parseEventId(eventId);
+            Long userId = getUserId(request);
+            AlertEvent updated = alertEngineService.acknowledge(uuid, userId);
+
+            // factory ownership guard: prevent cross-factory ack via path-param mismatch
+            if (updated != null && !factoryId.equals(updated.getFactoryId())) {
+                return ApiResponse.errorWithHint(403,
+                        "事件不属于工厂 " + factoryId + " (实际工厂=" + updated.getFactoryId() + ")",
+                        "请用正确的 factoryId 路径访问", null, null);
+            }
+
+            return ApiResponse.success("已确认", serializeEvent(updated));
+        } catch (IllegalArgumentException ex) {
+            return ApiResponse.errorWithHint(400, ex.getMessage(), "请检查参数", null, null);
+        }
+    }
+
+    @PostMapping("/events/{eventId}/resolve")
+    @Operation(summary = "解决告警事件 (→ RESOLVED)",
+               description = "用户在 UI 点 resolve / 系统自动 clear 时调用. 记录解决人 + 解决时间.")
+    @RequireRole({"factory_super_admin", "permission_admin"})
+    public ApiResponse<Map<String, Object>> resolveEvent(@PathVariable String factoryId,
+                                                         @PathVariable String eventId,
+                                                         HttpServletRequest request) {
+        log.info("POST /alerts/events/{}/resolve factoryId={}", eventId, factoryId);
+        try {
+            UUID uuid = parseEventId(eventId);
+            Long userId = getUserId(request);
+            AlertEvent updated = alertEngineService.resolve(uuid, userId);
+
+            if (updated != null && !factoryId.equals(updated.getFactoryId())) {
+                return ApiResponse.errorWithHint(403,
+                        "事件不属于工厂 " + factoryId + " (实际工厂=" + updated.getFactoryId() + ")",
+                        "请用正确的 factoryId 路径访问", null, null);
+            }
+
+            return ApiResponse.success("已解决", serializeEvent(updated));
+        } catch (IllegalArgumentException ex) {
+            return ApiResponse.errorWithHint(400, ex.getMessage(), "请检查参数", null, null);
+        }
+    }
+
     // ==================== helpers ====================
+
+    private UUID parseEventId(String id) {
+        try {
+            return UUID.fromString(id);
+        } catch (IllegalArgumentException ex) {
+            throw new IllegalArgumentException("eventId 不是合法 UUID: " + id);
+        }
+    }
+
+    private Long getUserId(HttpServletRequest request) {
+        Object userId = request.getAttribute("userId");
+        if (userId == null) return null;
+        if (userId instanceof Long) return (Long) userId;
+        if (userId instanceof Integer) return ((Integer) userId).longValue();
+        try {
+            return Long.parseLong(userId.toString());
+        } catch (NumberFormatException ex) {
+            return null;
+        }
+    }
 
     private AlertRule loadRule(String factoryId, String id) {
         UUID uuid;
