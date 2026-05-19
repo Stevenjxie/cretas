@@ -1,10 +1,12 @@
 <!--
   Sprint 4 W1 S-CUSTOMER-TAB-1: 客户档案 360° detail view.
+  Sprint 5 F-1: 17 HJ named tab 对齐 (R-HJ Round 13 §1) — 4 缺中 2 真组件 stub (audio/email)
+                + 2 spec backlog (wechat/call, see docs/superpowers/specs/2026-05-19-customer-17tab-spec.md)
 
   21 tabs:
-    - 12 真做 (lazy via defineAsyncComponent, wired in Phase D)
+    - 14 真做 (lazy via defineAsyncComponent) — incl Sprint 5 F-1 audio/email stub
     - 1 integration: priceMemory (Chat B S-PRICE-1, internal fallback to PlaceholderTab)
-    - 8 defer placeholder (R5 next-action button per fool-proof-design.md)
+    - 6 defer placeholder (R5 next-action button per fool-proof-design.md)
 
   Route: /sales/customers/:id?tab=N (flat, browser back to list, URL bookmarkable)
   Lazy load: defineAsyncComponent + KeepAlive (切回不重 fetch; per-tab refresh button manual)
@@ -102,12 +104,11 @@ const TAB_DEFS: TabDef[] = [
   { key: 'sms', label: '短信记录',
     status: 'Sprint 5+ 上线', workaround: '当前请用「跟踪记录」tab 手工补录',
     actionText: '去跟踪记录', actionTabKey: 'tracking' },
+  // Sprint 5 F-1 MVP stub (HJ Round 13 §1 item 16/17): 真组件 + alert banner — Sprint 6 wire backend
   { key: 'audio', label: '谈话录音',
-    status: 'Sprint 6+ 上线', workaround: '当前请用「跟踪记录」tab 手工补录',
-    actionText: '去跟踪记录', actionTabKey: 'tracking' },
+    component: defineAsyncComponent(() => import('./detail/tabs/AudioRecordingsTab.vue')) },
   { key: 'email', label: '邮件列表',
-    status: 'Sprint 5+ 上线', workaround: '当前请用「跟踪记录」tab 手工补录',
-    actionText: '去跟踪记录', actionTabKey: 'tracking' },
+    component: defineAsyncComponent(() => import('./detail/tabs/EmailsTab.vue')) },
   // 7-10 — real
   { key: 'orders', label: '销售单',
     component: defineAsyncComponent(() => import('./detail/tabs/OrdersTab.vue')) },
