@@ -53,6 +53,8 @@
           <SchedulerPanel v-else-if="activeTab === 'scheduler'" :factory-id="factoryId" />
           <!-- Phase 3 Canvas-Notify (2026-05-19): NotifyTemplateEditor -->
           <NotifyTemplateEditor v-else-if="activeTab === 'notify'" :factory-id="factoryId" />
+          <!-- Phase 4b: Canvas-Pricing 价格策略 Tab -->
+          <PricingStrategyTab v-else-if="activeTab === 'pricing'" :factory-id="factoryId" />
           <!-- Phase 5 (2026-05-19): Canvas-Cron Tab (DB-driven DynamicScheduler) -->
           <ScheduledTaskEditor v-else-if="activeTab === 'cron'" :factory-id="factoryId" />
 
@@ -119,6 +121,7 @@ import ModulePermissionMatrix from './components/ModulePermissionMatrix.vue'
 import ToolSkillMatrix from './components/ToolSkillMatrix.vue'
 import SchedulerPanel from './components/SchedulerPanel.vue'
 import NotifyTemplateEditor from '@/views/platform/notify-template-editor/index.vue'
+import PricingStrategyTab from '@/views/platform/pricing-strategy-editor/index.vue'
 import ScheduledTaskEditor from '@/views/platform/scheduled-task-editor/index.vue'
 import AIChatPanel from './components/AIChatPanel.vue'
 import ConfigDiffViewer from './components/ConfigDiffViewer.vue'
