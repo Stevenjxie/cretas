@@ -1,11 +1,15 @@
 package com.cretas.aims.ai.tool.impl.rules;
 
 import com.cretas.aims.ai.tool.AbstractBusinessTool;
+import com.cretas.aims.entity.rules.BusinessRule;
+import com.cretas.aims.repository.rules.BusinessRuleRepository;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.util.Arrays;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -14,8 +18,6 @@ import java.util.Map;
  *
  * Spec: docs/superpowers/specs/2026-05-18-canvas-rules-phase4a-spec.md §5
  *
- * ⚠️ SKELETON: doExecute throws UnsupportedOperationException. Sister chat to wire.
- *
  * @author Cretas Team
  * @version 1.0.0
  * @since 2026-05-18
@@ -23,6 +25,9 @@ import java.util.Map;
 @Slf4j
 @Component
 public class RuleToggleTool extends AbstractBusinessTool {
+
+    @Autowired
+    private BusinessRuleRepository ruleRepository;
 
     @Override
     public String getToolName() {
@@ -55,8 +60,33 @@ public class RuleToggleTool extends AbstractBusinessTool {
     @Override
     protected Map<String, Object> doExecute(String factoryId, Map<String, Object> params,
                                             Map<String, Object> context) throws Exception {
-        throw new UnsupportedOperationException(
-                "RuleToggleTool.doExecute not yet implemented (Phase 4a skeleton). "
-                + "Sister chat: BusinessRuleService.toggle.");
+        String ruleCode = getString(params, "ruleCode");
+        Boolean enabled = getBoolean(params, "enabled");
+        if (enabled == null) {
+            throw new IllegalArgumentException("enabled 参数必须为 true 或 false");
+        }
+
+        BusinessRule rule = ruleRepository.findByFactoryIdAndRuleCode(factoryId, ruleCode)
+                .orElseThrow(() -> new IllegalArgumentException(
+                        "规则 " + ruleCode + " 不存在 (factoryId=" + factoryId + ")"));
+
+        if (Boolean.valueOf(enabled).equals(rule.getEnabled())) {
+            return buildSimpleResult(
+                    "规则 " + ruleCode + " 已是 " + (enabled ? "启用" : "停用") + " 状态, 无需切换",
+                    Map.of("id", String.valueOf(rule.getId()), "enabled", enabled));
+        }
+
+        rule.setEnabled(enabled);
+        BusinessRule saved = ruleRepository.save(rule);
+
+        log.info("rule_toggle - factory={}, ruleCode={}, newEnabled={}",
+                factoryId, ruleCode, enabled);
+
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("id", String.valueOf(saved.getId()));
+        data.put("ruleCode", saved.getRuleCode());
+        data.put("enabled", saved.getEnabled());
+        return buildSimpleResult(
+                "规则 " + ruleCode + " 已" + (enabled ? "启用" : "停用"), data);
     }
 }

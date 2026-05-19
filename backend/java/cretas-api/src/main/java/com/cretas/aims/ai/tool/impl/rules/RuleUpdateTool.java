@@ -1,11 +1,15 @@
 package com.cretas.aims.ai.tool.impl.rules;
 
 import com.cretas.aims.ai.tool.AbstractBusinessTool;
+import com.cretas.aims.entity.rules.BusinessRule;
+import com.cretas.aims.repository.rules.BusinessRuleRepository;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.util.Arrays;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -14,8 +18,8 @@ import java.util.Map;
  *
  * Spec: docs/superpowers/specs/2026-05-18-canvas-rules-phase4a-spec.md §5
  *
- * ⚠️ SKELETON: doExecute throws UnsupportedOperationException. Sister chat to wire to
- * BusinessRuleService.update.
+ * <p>factoryId scoping: lookup is by {@code (factoryId, ruleCode)} so cross-tenant
+ * access is impossible.
  *
  * @author Cretas Team
  * @version 1.0.0
@@ -24,6 +28,9 @@ import java.util.Map;
 @Slf4j
 @Component
 public class RuleUpdateTool extends AbstractBusinessTool {
+
+    @Autowired
+    private BusinessRuleRepository ruleRepository;
 
     @Override
     public String getToolName() {
@@ -56,11 +63,51 @@ public class RuleUpdateTool extends AbstractBusinessTool {
         return Arrays.asList("ruleCode");
     }
 
+    @SuppressWarnings("unchecked")
     @Override
     protected Map<String, Object> doExecute(String factoryId, Map<String, Object> params,
                                             Map<String, Object> context) throws Exception {
-        throw new UnsupportedOperationException(
-                "RuleUpdateTool.doExecute not yet implemented (Phase 4a skeleton). "
-                + "Sister chat: BusinessRuleService.update + return updated entity.");
+        String ruleCode = getString(params, "ruleCode");
+        BusinessRule rule = ruleRepository.findByFactoryIdAndRuleCode(factoryId, ruleCode)
+                .orElseThrow(() -> new IllegalArgumentException(
+                        "规则 " + ruleCode + " 不存在 (factoryId=" + factoryId + ")"));
+
+        Map<String, Object> changes = new LinkedHashMap<>();
+        if (params.containsKey("ruleName") && params.get("ruleName") != null) {
+            String newName = getString(params, "ruleName");
+            changes.put("ruleName", Map.of("old", rule.getRuleName(), "new", newName));
+            rule.setRuleName(newName);
+        }
+        if (params.containsKey("conditionSpel") && params.get("conditionSpel") != null) {
+            String newCond = getString(params, "conditionSpel");
+            changes.put("conditionSpel", Map.of("old", rule.getConditionSpel(), "new", newCond));
+            rule.setConditionSpel(newCond);
+        }
+        if (params.containsKey("actionConfigJson") && params.get("actionConfigJson") instanceof Map cfg) {
+            Map<String, Object> newCfg = new LinkedHashMap<>((Map<String, Object>) cfg);
+            changes.put("actionConfigJson", Map.of("old", rule.getActionConfigJson(), "new", newCfg));
+            rule.setActionConfigJson(newCfg);
+        }
+        if (params.containsKey("priority") && params.get("priority") != null) {
+            Integer newPriority = getInteger(params, "priority");
+            changes.put("priority", Map.of("old", rule.getPriority(), "new", newPriority));
+            rule.setPriority(newPriority);
+        }
+
+        if (changes.isEmpty()) {
+            return buildSimpleResult("规则 " + ruleCode + " 无字段需要更新", Map.of(
+                    "id", String.valueOf(rule.getId()),
+                    "ruleCode", ruleCode));
+        }
+
+        BusinessRule saved = ruleRepository.save(rule);
+        log.info("rule_update success - factory={}, ruleCode={}, id={}, changedFields={}",
+                factoryId, ruleCode, saved.getId(), changes.keySet());
+
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("id", String.valueOf(saved.getId()));
+        data.put("ruleCode", saved.getRuleCode());
+        data.put("changes", changes);
+        return buildSimpleResult("规则 " + ruleCode + " 更新成功", data);
     }
 }

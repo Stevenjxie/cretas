@@ -175,6 +175,21 @@ public class GlobalExceptionHandler {
     }
 
     /**
+     * Canvas-Rules Phase 4a — REJECT action raises this. Maps to HTTP 400 with
+     * standard {@code {success, code, message, actionHint}} envelope per fool-proof Rule 5.
+     */
+    @ExceptionHandler(com.cretas.aims.service.rules.RuleViolationException.class)
+    public org.springframework.http.ResponseEntity<ApiResponse<?>> handleRuleViolation(
+            com.cretas.aims.service.rules.RuleViolationException e) {
+        log.warn("Canvas-Rules REJECT: ruleCode={}, reason={}", e.getRuleCode(), e.getReason());
+        ApiResponse<?> body = ApiResponse.errorWithHint(400, e.getReason(),
+                /* actionHint */ null, "warning", /* hintTarget */ null);
+        // Code marker so frontend can branch UX (vs generic 400). Stash in message header? — use code.
+        body.setCode(400);
+        return org.springframework.http.ResponseEntity.status(HttpStatus.BAD_REQUEST).body(body);
+    }
+
+    /**
      * 处理未找到资源异常
      */
     @ExceptionHandler(ResourceNotFoundException.class)
