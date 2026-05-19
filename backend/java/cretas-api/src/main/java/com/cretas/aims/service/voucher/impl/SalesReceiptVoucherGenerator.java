@@ -1,5 +1,6 @@
 package com.cretas.aims.service.voucher.impl;
 
+import com.cretas.aims.entity.enums.AuxiliaryType;
 import com.cretas.aims.entity.enums.VoucherType;
 import com.cretas.aims.entity.finance.VoucherEntry;
 import com.cretas.aims.entity.inventory.SalesOrder;
@@ -56,8 +57,11 @@ public class SalesReceiptVoucherGenerator extends AbstractVoucherGenerator<Sales
     @Override
     public List<VoucherEntry> buildEntries(SalesOrder order) {
         BigDecimal amount = nullToZero(order.getTotalAmount());
+        String customerId = order.getCustomerId();  // Sprint 5 F-2: 客户辅助核算
         return List.of(
-                debitEntry(1, "1122", "应收账款", amount, "销售收入挂账"),
+                // 应收账款按客户分账 (R-HJ Round 11 §G.1 客户应收明细账)
+                debitEntryWithAuxiliary(1, "1122", "应收账款", amount, "销售收入挂账",
+                        customerId != null ? AuxiliaryType.CUSTOMER : null, customerId),
                 creditEntry(2, "6001", "主营业务收入", amount, "销售订单 " + order.getOrderNumber())
         );
     }

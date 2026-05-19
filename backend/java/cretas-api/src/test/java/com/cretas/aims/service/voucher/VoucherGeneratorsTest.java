@@ -1,8 +1,10 @@
 package com.cretas.aims.service.voucher;
 
 import com.cretas.aims.entity.PayrollRecord;
+import com.cretas.aims.entity.enums.AuxiliaryType;
 import com.cretas.aims.entity.enums.VoucherType;
 import com.cretas.aims.entity.finance.Voucher;
+import com.cretas.aims.entity.finance.VoucherEntry;
 import com.cretas.aims.entity.inventory.InternalTransfer;
 import com.cretas.aims.entity.inventory.PurchaseOrder;
 import com.cretas.aims.entity.inventory.ReturnOrder;
@@ -40,6 +42,7 @@ class VoucherGeneratorsTest {
         order.setOrderNumber("SO-2026-0001");
         order.setOrderDate(LocalDate.of(2026, 5, 16));
         order.setTotalAmount(HUNDRED);
+        order.setCustomerId("cust-99");  // Sprint 5 F-2: 客户辅助核算
 
         Voucher v = gen.generate("F001", order);
         assertEquals(VoucherType.SALES_RECEIPT, v.getVoucherType());
@@ -50,6 +53,12 @@ class VoucherGeneratorsTest {
         assertEquals("6001", v.getEntries().get(1).getSubjectCode());  // 主营业务收入
         assertEquals("SALES_ORDER", v.getSourceBusinessType());
         assertEquals("so-1", v.getSourceBusinessId());
+        // Sprint 5 F-2: 应收账款 line 携带 CUSTOMER 辅助核算
+        VoucherEntry receivableLine = v.getEntries().get(0);
+        assertEquals(AuxiliaryType.CUSTOMER, receivableLine.getAuxiliaryType());
+        assertEquals("cust-99", receivableLine.getAuxiliaryEntityId());
+        // 收入 line 不挂客户 (这是收入科目, 不分客户挂账)
+        assertNull(v.getEntries().get(1).getAuxiliaryType());
     }
 
     // ==================== PurchasePaymentVoucherGenerator ====================
@@ -64,6 +73,7 @@ class VoucherGeneratorsTest {
         order.setOrderNumber("PO-2026-0001");
         order.setOrderDate(LocalDate.of(2026, 5, 16));
         order.setTotalAmount(HUNDRED);
+        order.setSupplierId("sup-77");  // Sprint 5 F-2: 供应商辅助核算
 
         Voucher v = gen.generate("F001", order);
         assertEquals(VoucherType.PURCHASE_PAYMENT, v.getVoucherType());
@@ -71,6 +81,50 @@ class VoucherGeneratorsTest {
         assertEquals(HUNDRED, v.getTotalCredit());
         assertEquals("1405", v.getEntries().get(0).getSubjectCode());  // 库存商品
         assertEquals("2202", v.getEntries().get(1).getSubjectCode());  // 应付账款
+        // Sprint 5 F-2: 应付账款 line 携带 SUPPLIER 辅助核算
+        VoucherEntry payableLine = v.getEntries().get(1);
+        assertEquals(AuxiliaryType.SUPPLIER, payableLine.getAuxiliaryType());
+        assertEquals("sup-77", payableLine.getAuxiliaryEntityId());
+        // 库存 line 不挂供应商 (库存科目可挂 INVENTORY 维度但本 generator 先不分)
+        assertNull(v.getEntries().get(0).getAuxiliaryType());
+    }
+
+    // ==================== Sprint 5 F-2: Auxiliary type 7 类 contract ====================
+
+    @Test
+    void auxiliaryTypeEnumExposes7Categories() {
+        // R-HJ Round 13 §2 实测 — 宏见 ERP 凭证辅助核算 7 类 (含委外商)
+        AuxiliaryType[] values = AuxiliaryType.values();
+        assertEquals(7, values.length, "AuxiliaryType must be exactly 7 per R-HJ Round 13 §2");
+        // Order-sensitive check (alphabetical-ish from spec)
+        assertEquals(AuxiliaryType.CUSTOMER,   values[0]);
+        assertEquals(AuxiliaryType.SUPPLIER,   values[1]);
+        assertEquals(AuxiliaryType.DEPT,       values[2]);
+        assertEquals(AuxiliaryType.EMPLOYEE,   values[3]);
+        assertEquals(AuxiliaryType.PROJECT,    values[4]);
+        assertEquals(AuxiliaryType.INVENTORY,  values[5]);
+        assertEquals(AuxiliaryType.OUTSOURCER, values[6]);
+    }
+
+    @Test
+    void salesReceiptWithoutCustomerIdSkipsAuxiliary() {
+        // Defensive: 老 SO 数据 customerId=null 时, generator 不挂辅助核算 (而非崩溃)
+        SalesReceiptVoucherGenerator gen = new SalesReceiptVoucherGenerator();
+        SalesOrder order = new SalesOrder();
+        order.setId("so-legacy");
+        order.setOrderNumber("SO-LEGACY");
+        order.setOrderDate(LocalDate.of(2026, 5, 16));
+        order.setTotalAmount(HUNDRED);
+        // intentionally NOT setting customerId
+
+        Voucher v = gen.generate("F001", order);
+        // 借贷必平仍然成立
+        assertEquals(HUNDRED, v.getTotalDebit());
+        assertEquals(HUNDRED, v.getTotalCredit());
+        // 应收 line 无辅助核算 (符合成对约束 chk_ve_auxiliary_paired)
+        VoucherEntry receivable = v.getEntries().get(0);
+        assertNull(receivable.getAuxiliaryType());
+        assertNull(receivable.getAuxiliaryEntityId());
     }
 
     // ==================== InventoryTransferVoucherGenerator ====================
@@ -132,6 +186,7 @@ class VoucherGeneratorsTest {
         PayrollRecord r = new PayrollRecord();
         r.setId(123L);
         r.setWorkerName("张三");
+        r.setWorkerId(456L);  // Sprint 5 F-2: 职员辅助核算
         r.setPeriodStart(LocalDate.of(2026, 5, 1));
         r.setTotalWage(HUNDRED);
 
@@ -142,6 +197,10 @@ class VoucherGeneratorsTest {
         assertEquals("2211", v.getEntries().get(0).getSubjectCode());  // 应付职工薪酬
         assertEquals("1002", v.getEntries().get(1).getSubjectCode());  // 银行存款
         assertEquals("123", v.getSourceBusinessId());  // Long → String
+        // Sprint 5 F-2: 应付职工薪酬 line 携带 EMPLOYEE 辅助核算 (workerId String)
+        VoucherEntry wageLine = v.getEntries().get(0);
+        assertEquals(AuxiliaryType.EMPLOYEE, wageLine.getAuxiliaryType());
+        assertEquals("456", wageLine.getAuxiliaryEntityId());
     }
 
     // ==================== ReturnVoucherGenerator ====================
