@@ -35,4 +35,14 @@ public interface BusinessRuleRepository extends JpaRepository<BusinessRule, UUID
     List<BusinessRule> findByFactoryIdOrderByScopeAscPriorityAsc(String factoryId);
 
     List<BusinessRule> findByFactoryIdAndScopeOrderByPriorityAsc(String factoryId, RuleScope scope);
+
+    /** Controller list endpoint — all rules ordered by priority (no scope filter). */
+    List<BusinessRule> findByFactoryIdOrderByPriorityAsc(String factoryId);
+
+    /** Controller list endpoint — filter by enabled only. */
+    List<BusinessRule> findByFactoryIdAndEnabledOrderByPriorityAsc(String factoryId, Boolean enabled);
+
+    /** Controller list endpoint — filter by scope + enabled. */
+    List<BusinessRule> findByFactoryIdAndScopeAndEnabledOrderByPriorityAsc(
+            String factoryId, RuleScope scope, Boolean enabled);
 }
