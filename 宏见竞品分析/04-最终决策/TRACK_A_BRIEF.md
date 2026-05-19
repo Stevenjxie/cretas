@@ -1,5 +1,8 @@
 # TRACK A BRIEF — Phase 0 Canvas 死代码修复
 
+> ⚠️ **DEPRECATED 2026-05-19** — 本文件已 supersede by `31-DEEP-RE-AUDIT.md §P` (Round 11 deep re-audit). Sprint 1+2 track 已全 ship, 决策面 status 请直接看 31-doc + `30-BACKLOG-STATUS-AUDIT.md §13`. 本文件保留作为 historical reference (Sprint 1+2 时点 brief / 计划 / dispatch).
+
+
 > **接收方**: Chat 2 (Track A worker)
 > **派发方**: Chat 1 (Organizer)
 > **派发日期**: 2026-05-14

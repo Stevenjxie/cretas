@@ -178,3 +178,92 @@ P1 剩 42 项 / 128d / 77 工日 / 16 周 (单人).
 - ✅ Blocker 项 (#538 + #622/#623) 独立追踪
 - ⚠️ Track-B1 钉钉 in flight, Day 6 待 ship
 - ✅ Sprint 3 dispatch 6 项 P0 推荐就绪
+
+---
+
+## 13. ⚡ Round 11 Update (2026-05-19, organizer)
+
+> **Trigger**: Steve "目前分析书来的内容不完整, 需要再一次细节的去核对宏见的ERP测试网站, 每一个已经核对过的内容继续深度去抓一次"
+>
+> **方法**: 6 parallel subagents (Agent A-F) 分工 88 项 deep re-audit + organizer Layer B 13 项 Playwright fresh capture (HJ test account lyh01/admin).
+>
+> **完整报告**: `../04-最终决策/31-DEEP-RE-AUDIT.md` (**3517 行, 16 sections §A-§P**)
+> **Fresh screenshots**: `screenshots/round11/` (10 张)
+
+### 13.1 关键发现 — ship 数字大幅修正
+
+| 维度 | 30-Audit (本文件 2026-05-16) | **Round 11 (31-doc 2026-05-19)** |
+|---|---|---|
+| ✅ FULL SHIPPED | 12 of 88 | **~49 of 88** |
+| ⚠️ PARTIAL | 0 | **~7** |
+| 🟡 IN-FLIGHT | 3 | **~3** |
+| ❌ NOT DONE | 73 | **~29** |
+| 真实剩余工时 | 373d nominal / 7 月 | **~150d nominal / ~3 月** |
+
+**Round 11 多发现 ship 37 项**, 原因:
+1. **2026-05-16 之后又 ship 14+ PRs** (PR #690/#693/#763/#770/#773/#822/#823/#831/#832/#834/#844/#862/#863/#870 等)
+2. **本文件 grep 关键字漏判** — 用 `Voucher` 漏 `VoucherFlag` enum + lowercase `vflag` column; 用 `linkListArray|linkno=` 漏 Track-F linkno 实装; 等
+3. **Sprint 4 W1-A bundle (PR #764) + Chat L (PR #727)** 集中 ship 多 quick wins, 本文件没拆分到每 backlog 项
+
+### 13.2 30+ 项 ❌→✅ Reconcile (本文件应更新)
+
+详见 31-DEEP-RE-AUDIT.md §P.4 reconcile 表. 关键修正:
+
+**P0 战略 12 项 (本文件 §2)**:
+| # | 编号 | 本文件标 | **Round 11 修正** | 证据 |
+|---|---|---|---|---|
+| 1 | F-VFLAG-1 | ❌ grep 0 hits | **✅ Sprint3-E PR #693** (7 generator + vflag 4 状态 + 4 listener + 借贷必平 + 2 AIChat Tool) | 31-doc §G.1 |
+| 2 | C-LINKARRAY-1 | ❌ grep 0 hits | **✅ Track-F** | 31-doc §I.3 |
+| 3 | S-LOCK-1 | ❌ grep 0 hits | **✅ PR #690 Sprint3-G** (锁/备/缺 chip + 公式 tooltip) | 31-doc §O.1 |
+| 4 | M-BOM-VER-1 升级 | ❌ grep 0 hits | **⚠️ backend ✅ PR #694 (BomVersion + ECN + 反查 + 4 批量 + PG trigger) + frontend 3d follow-up** | 31-doc §E.1 |
+| 5 | C-APPROVAL-EDITOR-1 | ❌ grep 0 hits | **⚠️ Phase 1 ✅** (Sprint 3 Track-I 758-line VueFlow editor + Canvas PR #862, 4 执行模式含 N-of-M HJ 没有) — 剩 3-5d incremental | 31-doc §I.1 |
+| 6 | C-PRT-EDITOR-1 | ❌ grep 0 hits | **✅ Track-J 3-pane editor** | 31-doc §I.2 |
+
+**P1 战术 47 项 (本文件 §4)**: 累计 ~32 ship (vs 本文件 5). 包括但不限于:
+- CRM/销售域: S-CRM-FULL-1 (#A.1) / S-CUSTOMER-TAB-1 (#A.2, 13/21 active 62%) / S-CRM-1 (#A.3, PR #822) / S-PRICE-1 (#A.4) / S-CREDIT-1 (#A.5, PR #834) / S-INVOICE-CLIENT-1 (#B.1) / S-PROFIT-DETAIL-1 (#B.2) / S-REMIND-1 (#B.3, scanner auto + bell badge 优于 HJ OA 跨域) / S-NEED-1 (#B.4) / S-PAYMENT-DATE-1 (#B.5)
+- 采购/仓库: P-NUCLEAR-1 (PR #824/#30) / P-IMPORT-1 (PR #764 `7a4b2da49`) / W-CLASS-1 (PR #764 `91cdf7897` 扩 13 类 超 HJ 10)
+- 生产/品质: M-WIP-1 / M-PREP-1 / M-DELIVERY-WARN-1 / M-MATTREE-1 (Sprint 4 W2 Chat G #732/#734/#737/#738) + Q-MODE-1 / Q-PROCESS-1 / Q-RETURN-1 (Sprint 4 W1+W2 Chat A+H #729/#733/#735/#764)
+- 财务/HR: F-AR-1 (ArApTransaction) / F-INV-1 (+ENHANCED tax_breakdown JSONB + OCR PR #763) / H-WAGE-FULL (#833/#844/#863/#870) / H-LEAVE-1+OVT+EXP (PR #770)
+- 系统/平台: C-CHECKPOWER-1 / C-LOG-AUDIT-1 / C-EXPORT-CENTER-1 / C-IMPORT-CENTER-1 / C-WIDGET-1 (PR #823, 10 endpoint widget framework) / C-INLINE-CS-1
+- UX 全 11/11 ship: U-NAV-1 (#683/#684) / U-ACT-1 (#678) / U-FOOTER-1 (#681) / U-VIEW-1 / U-NEW-1 / U-ICON-1 / U-MARKER-1 / U-FEED-1 / U-DESKTOP-MODAL-1 / U-DEPT-1 (PR #821 接入) / U-CHIP-MULTI-1 (全 Chat L #727 + W1-A #764 bundle)
+
+### 13.3 真实剩余 ❌ (Sprint 5+)
+
+按优先级排序 (详见 31-doc §P.5):
+
+**Sprint 5+ P0 剩 ~5d**:
+- M-BOM-VER-1 frontend follow-up 3d
+- M1 三价对比刷新 (still blocked by #538) 2d
+- C-APPROVAL-EDITOR Phase 2 收尾 3-5d (WorkflowRule UI / OpinionTemplate dialog / decisionType 扩枚举)
+
+**Sprint 5+ P1 backlog ~30d (按需触发)**: S-REPORTS-PRESETS 9 stub / M-WP-CONDITION-1 / S-COMPLAINT-1 收尾 / C-WF-RULE-1 / C-WF-VAR-1 UI / C-OPINION-1 dialog 等
+
+**Sprint 6+ P2 ~60d (客户群触发)**: F-VOUCHER-2-1 / F-PERIOD-1 / F-3REPORT-1 / C-CUSTOM-1 / H-ATT-FULL 矩阵 / C-STORE-1 / S-STORE-REPLEN-1 等
+
+**Sprint 7+ P3 ~50d (Steve sign-off 延后)**: C-TV-DASHBOARD-1 / C-MENU-ENGINE-1 / C-RBAC-FNO-1 / C-MICROSERVICE-1 / 等
+
+**Archive (不抄)**: S-CALL-STAT-1 / S-COMMISSION-1 / M-MOULD-1 / F-PARTNER-FULL / 委外/办公自动化/mould/wxshop/mail/sms
+
+### 13.4 元教训 (Round 11 抓到, 本文件应吸取)
+
+1. **单关键字 grep 不可靠** — 本文件用 `Voucher` / `vflag` 等漏判 6+ 项 ship. 必须 multi-synonym (entity / enum / column / camelCase / lower). Sister rule 升级 `feedback_brief_must_grep_existing_endpoint_paths.md` HARD.
+2. **Sprint bundle 难 track** — Chat L PR #727 一次 ship 8 UX items / W1-A PR #764 一次 ship 7 quick wins, 本文件按单项 grep 漏判. **未来按 bundle 标 commit ↔ backlog item mapping**.
+3. **Backlog metadata drift 快** — 本文件 5-16 写完, 5-17/18/19 又 ship 14+ PRs, status 立即过时. Daily reconcile 必要.
+4. **真 gap 是 decisionType 覆盖度** (Cretas 10 vs HJ 126 = 8%), 不是单 feature.
+5. **5 处 Cretas 已超 HJ** — S-LOCK-1 chip 颜色+tooltip / M-MATTREE-1 BOM tree + 库存短缺 / W-CLASS-1 13 类 / S-REMIND-1 scanner+bell / decisionType N-of-M. 销售话术应突出.
+
+### 13.5 Steve sign-off 重新建议
+
+| 项 | 原 sign-off (2026-05-16) | **Round 11 建议** |
+|---|---|---|
+| P0+P1 总时间 | 9 月 (66 项 / 252d) | **3 月** (P0 5d 收尾 + P1 30d 按需触发) |
+| 客户群 | 食品 + 餐饮 | 维持 |
+| 团队规模 | 单人 (Steve) | 维持 (真实剩余 ≤ 1 季度) |
+| Sprint 5+ 重点 | 推 backlog | **客户深度试用 + bug fix + 新客户 onboarding** (backlog 已接近完成) |
+
+### 13.6 本文件后续 (取代关系)
+
+- ✅ **本文件 (30-Audit) 保留作为历史 baseline** — 5-16 时点的 ship 数字
+- ✅ **新 audit truth source**: `31-DEEP-RE-AUDIT.md` (5-19 时点, 16 sections + 10 fresh screenshots)
+- ⚠️ **28-Backlog 应 inline 更新** ship marker (30+ 项 ❌→✅), 见 task #8
+- ⚠️ **MUST_COPY.md 应加附录 P Round 11 amend**, 见 task #9

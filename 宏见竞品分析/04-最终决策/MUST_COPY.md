@@ -664,3 +664,120 @@ REPORT / REVIEW / GAPS
 ---
 
 **v1.1 (R-HJ Round 1) → v1.2 (R-HJ Round 2-9 终极整合) 完成 (2026-05-15)**.
+
+---
+
+# 附录 P: R-HJ Round 11 deep re-audit 终极整合 (2026-05-19, v1.3)
+
+> **来源**: `06-宏见测试账号深度审计/31-DEEP-RE-AUDIT.md` (3517 行, 16 sections §A-§P)
+>
+> **触发**: Steve "目前分析书来的内容不完整, 需要再一次细节的去核对宏见的ERP测试网站, 每一个已经核对过的内容继续深度去抓一次"
+>
+> **方法**: 6 parallel subagents (Agent A-F) 分工 88 项 deep re-audit + organizer Layer B 13 项 Playwright fresh capture (HJ test account lyh01/admin).
+>
+> ⚠️ **本附录是 v1.3 终极, `31-DEEP-RE-AUDIT.md §P` 是 authoritative source**. 本主文档 + 附录 N + 附录 O 内的 status 列 + 工时估算大量 stale, 决策面建议直接读 31-doc §P.
+
+## P.1 30+ 项 ❌→✅ Reconcile (本主文档应吸取)
+
+详见 31-doc §P.4 完整列表. 主 MUST_COPY (B/C/D 章节) 受影响的项:
+
+**B. 🔴 P0 必抄 (本文档 §B 8 项)**:
+| # | 项 | 主文档标 | **Round 11 修正** |
+|---|---|---|---|
+| N49 | 钉钉机器人 | 6d 未抄 | 🟡 IN-FLIGHT (Track-B1 code 100% + 46 单测绿, blocked F006 凭证) |
+| N20 | 通用 attachment | 5d 未抄 | ✅ Track-C PR #658 SHIPPED |
+| N24/N25 | 工序管理 + 产品工序 | 5d 未抄 | ✅ Track-D2 PR #650 SHIPPED |
+| N32 | BOM 配方编辑 | 5d 未抄 | ✅ Track-D1 PR #656 SHIPPED |
+| N13 | 抄码品识别 | 2d 未抄 | ✅ Track-B2 PR #649 SHIPPED |
+| N3 | RBAC 仓管隔离 | 2d 未抄 | ✅ PR #661 + k4/k5 follow-ups SHIPPED |
+| N31 | 销售→采购自动分流 | 4d 未抄 | ✅ Sprint2-E PR #682 SHIPPED |
+| N48 | 研发样品→BOM→报价 | 5d 未抄 | ✅ Sprint2-F PR #680 SHIPPED |
+
+**总计 §B 8 项 ASAP 工时 32d → 真实剩 ~6d** (仅 N49 钉钉 in flight).
+
+**C. 🟡 P0 必修 (本文档 §C 5 项)**:
+| # | 项 | 主文档标 | **Round 11 修正** |
+|---|---|---|---|
+| M1 | 三价对比刷新 | 2d 未做 | ⚠️ blocked (#538 F006 test seed) — still pending |
+| M2 | 工序通用关联 | 2d partial | ⚠️ P3 deferred per original author intent (维持) |
+| M3 | PDF + 扫码 RN | 4d half | ✅ Track-B2 PR #653 SHIPPED |
+| M4 | BOM 物料选择器 | 2d spec | ✅ Track-D1 PR #656 SHIPPED |
+| M5 | 单位转换强校验 | 2d spec | ✅ Track-D1 PR #656 SHIPPED |
+
+**总计 §C 5 项 12d → 真实剩 ~4d** (仅 M1 unblock).
+
+**D. 🟠 P1 必抄 (本文档 §D 10 项)**:
+| # | 项 | 主文档标 | **Round 11 修正** |
+|---|---|---|---|
+| P1-1 | 销售订单财务成本核算审核 | 5d | ✅ F-AR-1 ArApTransaction SHIPPED |
+| P1-2 | 采购订单财务 + 三价标红 | 3d | ✅ Sprint2-J P-FIN-1 PR #675 SHIPPED |
+| P1-3 | 开票申请 + 发票回写 + 收款流水 | 8d | ✅ F-INV-1 + ENHANCED tax_breakdown JSONB + OCR PR #763 SHIPPED |
+| P1-4 | 采购订单按供应商拆单 | 5d | ❌ NOT DONE (维持 P2) |
+| P1-5 | 客户记忆价 | 3d | ✅ S-PRICE-1 SHIPPED |
+| P1-6 | 单据打印 5 项 | 6d | ⚠️ 1/5 ship (采购 PDF #413), 4 剩 (销售/报价/生产任务/领料) |
+| P1-7 | 月度考勤可视化矩阵 | 3d | ⚠️ H-ATT-FULL MVP ship, 矩阵 UI 缺 6 周 ×7 天 (~6d 收尾) |
+| P1-8 | 请假/调休/报销 | 12d | ✅ H-LEAVE+OVT+EXP Sprint 4 W2 Chat E PR #770 SHIPPED |
+| P1-9 | 库存流水追溯 UI | 3d | ⚠️ TraceFullTool/TraceBatchTool 后端 ship, UI 暴露待 |
+| P1-10 | 小组长代报工 | 3d | ❌ NOT DONE |
+
+**总计 §D 10 项 40d → 真实剩 ~10d** (主要 P1-4 / P1-6 单据打印 4 项 / P1-9 UI 暴露 / P1-10).
+
+## P.2 真实剩余总工时 (本文档 vs Round 11)
+
+| 优先级 | 本主文档 §I 估算 | 附录 N (Round 1) | 附录 O (Round 2-9) | **附录 P (Round 11) 真实剩** |
+|---|---|---|---|---|
+| Phase 1 (P0 ASAP) | 44d | 82d | 100d | **~5d** (M-BOM-VER frontend + M1 unblock + C-APPROVAL Phase 2 收尾) |
+| Phase 2 (P1) | 51d | 92d | 152d | **~30d** (按需触发) |
+| 总 P0+P1 | 105d | 174d | 252d | **~35d ≈ 7-8 周 ≈ 2 月** |
+| Steve sign-off 9 月 | — | — | 9 月 | **~3 月** (vs sign-off 省 6 月) |
+
+**Round 11 结论**: Cretas backlog 已接近收口, **Sprint 5 可 close P0+P1**, Sprint 6+ 转向客户深度试用 + bug fix + 新客户 onboarding.
+
+## P.3 5 处 Cretas 已超 HJ — 销售话术升级
+
+- ✅ S-LOCK-1 chip 颜色 + tooltip 防呆 vs HJ 纯文本
+- ✅ M-MATTREE-1 BOM tree + 叶子库存短缺 (HJ tree picker 无库存计算)
+- ✅ W-CLASS-1 13 类 vs HJ 10 类
+- ✅ S-REMIND-1 scanner auto + bell badge vs HJ OA 跨域跳
+- ✅ decisionType N-of-M 会签 (HJ 没有)
+
+新销售话术: "Cretas 不只 copy HJ, 多处已优化超 HJ".
+
+## P.4 真 gap 是 decisionType 覆盖度 (不是 feature 单点)
+
+- Cretas decisionType ~10 个 vs HJ 126 工作流定义 = **8% 覆盖率**
+- Sprint 4+ 真 P0 priority 是 **扩 decisionType 枚举** (拓到 30+) + 业务场景 mapping
+
+## P.5 本主文档应吸取的 5 个元教训 (per 31-doc §P.8)
+
+1. **单关键字 grep 不可靠** — `Voucher` 漏 `VoucherFlag` enum + lowercase `vflag` column 等. 必须 multi-synonym (entity / enum / column / camelCase / lower).
+2. **Sprint bundle 难 track** — PR #727 一次 ship 8 UX / PR #764 一次 ship 7 quick wins. Backlog 应按 bundle 标 commit ↔ item mapping.
+3. **Backlog metadata drift 快** — 5-16 audit 后 5-17/18/19 又 ship 14+ PRs, daily reconcile 必要.
+4. **真 gap 是 decisionType 覆盖度** (8% 覆盖) — 不是 feature 单点.
+5. **5 处 Cretas 已超 HJ** — 销售话术升级.
+
+## P.6 后续行动
+
+### 必做 (本周)
+- ✅ 本文档加附录 P (本节)
+- ✅ 30-BACKLOG-STATUS-AUDIT §13 加 Round 11 reconcile
+- ✅ 28-CRETAS-PRIORITIZED-BACKLOG 顶部加 Round 11 banner
+- ⚠️ Steve 重新 sign-off "3 月 P0+P1" (vs 5-16 "9 月")
+
+### 应做 (Sprint 5)
+- M-BOM-VER-1 frontend follow-up 3d
+- C-APPROVAL Phase 2 收尾 3-5d
+- M1 unblock (#538 F006 test seed)
+- Layer B browser 实测 25 项 high/medium priority (1-2 session)
+
+### 可做 (Sprint 5-6)
+- decisionType 扩枚举 (Cretas 10 → 30+) 提高工作流覆盖
+- 客户深度试用 + bug fix + 新客户 onboarding
+
+### 延后 (Sprint 7+, 按客户触发)
+- P2 选做 (F-VOUCHER-2 / F-PERIOD / S-OPP-1 完整 entity / C-CUSTOM 等)
+- P3 长期 (TV 大屏 / 微服务 / RBAC 细粒度)
+
+---
+
+**v1.2 (R-HJ Round 2-9) → v1.3 (R-HJ Round 11 deep re-audit) 完成 (2026-05-19)**.

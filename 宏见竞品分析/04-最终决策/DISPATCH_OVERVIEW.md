@@ -1,5 +1,8 @@
 # Sprint 1 ASAP — 6 Chat 并行调度总览 (v2 更新)
 
+> ⚠️ **DEPRECATED 2026-05-19** — 本文件已 supersede by `31-DEEP-RE-AUDIT.md §P` (Round 11 deep re-audit). Sprint 1+2 track 已全 ship, 决策面 status 请直接看 31-doc + `30-BACKLOG-STATUS-AUDIT.md §13`. 本文件保留作为 historical reference (Sprint 1+2 时点 brief / 计划 / dispatch).
+
+
 > **本文件用途**: Organizer (Chat 1, 这个 chat) 的协调视图
 >
 > **执行机制**: 6 个 worker chat (Chat 2-7) 并行做实现, Chat 1 协调 + review

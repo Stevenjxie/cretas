@@ -5,6 +5,14 @@
 > **Cretas Sprint 计划应基于本 doc** (取代 v2.1 amendments 估的 84d, 真实 454d).
 >
 > ⚠️ **2026-05-16 audit reconcile**: 真实 ship 状态详见 `30-BACKLOG-STATUS-AUDIT.md`. **14 项已 ship + 3 项 in flight, 真实剩余 74 项 / ~373d nominal**. Sign-off "9 月 P0+P1" 真实剩余 **7 月** (省 2 月).
+>
+> ⚡ **2026-05-19 Round 11 deep re-audit reconcile (本 doc 内 Table Status 列严重 stale)**:
+> - **30+ 项已 ship 但本 doc 仍标 ❌** — 包括 F-VFLAG-1 (#1, PR #693) / C-LINKARRAY-1 (#2) / S-LOCK-1 (#3) / M-BOM-VER-1 backend (#4) / C-APPROVAL-EDITOR Phase 1 (#5, PR #862) / C-PRT-EDITOR (#6) / S-CRM-FULL-1 (#19) / S-CUSTOMER-TAB-1 (#20) / S-CRM-1 (#21) / S-PRICE-1 (#22) / S-CREDIT-1 (#23) / S-INVOICE-CLIENT-1 (#24) / S-PROFIT-DETAIL-1 (#25) / S-REMIND-1 (#26) / S-NEED-1 (#27) / S-PAYMENT-DATE-1 (#28) / P-NUCLEAR-1 (#30) / P-IMPORT-1 (#32) / W-CLASS-1 (#33) / M-WIP-1 (#34) / M-MATTREE-1 (#35) / M-PREP-1 (#36) / M-DELIVERY-WARN-1 (#37) / F-AR-1 (#38) / F-INV-1 (#39) / H-WAGE-FULL (#40) / H-LEAVE+OVT+EXP (#42) / Q-MODE-1 (#43) / Q-PROCESS-1 (#44) / Q-RETURN-1 (#45) / C-CHECKPOWER-1 (#46) / C-LOG-AUDIT-1 (#51) / C-EXPORT-CENTER-1 (#52) / C-IMPORT-CENTER-1 (#53) / U-VIEW-1 (#57) / U-NEW-1 (#58) / U-ICON-1 (#59) / U-MARKER-1 (#60) / U-FEED-1 (#61) / U-DEPT-1 (#63) / U-CHIP-MULTI-1 (#64) / C-WIDGET-1 (#65) / C-INLINE-CS-1 (#66).
+> - **真实 ship 数字**: 49 ✅ + 7 ⚠️ + 3 🟡 + 29 ❌ = 88 (vs 5-16 audit 12 ✅ / 73 ❌).
+> - **真实剩余工时**: ~150d nominal / **~3 月** (vs 7 月).
+> - **C-APPROVAL-EDITOR-1 (#5) 严重高估**: 标 20d 实际剩 3-5d (Cretas Track-I 758-line VueFlow + Canvas Phase 1 已 ship, 仅剩 incremental).
+> - **完整 reconcile**: `../04-最终决策/31-DEEP-RE-AUDIT.md` (3517 行, 16 sections, +10 fresh HJ screenshots) + `30-BACKLOG-STATUS-AUDIT.md §13`.
+> - **后续**: 本 doc 下方 Table Status 列待 inline 修正, 当前以 31-doc §P.4 reconcile 表为 truth source. 决策面建议直接读 31-doc §P.
 
 ---
 

@@ -1,5 +1,8 @@
 # Sprint 2 详细按日排期 — Week 8-10 (15 工作日)
 
+> ⚠️ **DEPRECATED 2026-05-19** — 本文件已 supersede by `31-DEEP-RE-AUDIT.md §P` (Round 11 deep re-audit). Sprint 1+2 track 已全 ship, 决策面 status 请直接看 31-doc + `30-BACKLOG-STATUS-AUDIT.md §13`. 本文件保留作为 historical reference (Sprint 1+2 时点 brief / 计划 / dispatch).
+
+
 > **本文件用途**: Organizer (Chat 1) 调度 Sprint 2 的"主文档". 假设 ASAP (Sprint 1, 6 chats × 1 周) 已完成 — 6 个 Sprint 1 track 全部 ship + main 已合并.
 >
 > **执行机制**: 5 个 worker chat (Chat E-I) 并行做实现, Chat 1 协调 + review. 同 Sprint 1 调度模式.

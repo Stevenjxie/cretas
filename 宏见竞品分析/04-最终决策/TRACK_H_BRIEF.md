@@ -1,5 +1,8 @@
 # TRACK H BRIEF — Sprint 2: UX-A2 行末"操作 ▾"下拉
 
+> ⚠️ **DEPRECATED 2026-05-19** — 本文件已 supersede by `31-DEEP-RE-AUDIT.md §P` (Round 11 deep re-audit). Sprint 1+2 track 已全 ship, 决策面 status 请直接看 31-doc + `30-BACKLOG-STATUS-AUDIT.md §13`. 本文件保留作为 historical reference (Sprint 1+2 时点 brief / 计划 / dispatch).
+
+
 > **Sprint 2 chat (基于 Sprint 1 已完成 ASAP)**
 > **Brief 来源**: `SPRINT_2_PLAN.md` §5.4 (Chat H — UX-A2 10d 名义)
 > **接收方**: Chat H (Sprint 2 worker)

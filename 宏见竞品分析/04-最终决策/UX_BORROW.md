@@ -1,5 +1,8 @@
 # 宏见 UI/UX 借鉴清单 (UX_BORROW)
 
+> ⚠️ **DEPRECATED 2026-05-19** — 本文件已 supersede by `31-DEEP-RE-AUDIT.md §P` (Round 11 deep re-audit). Sprint 1+2 track 已全 ship, 决策面 status 请直接看 31-doc + `30-BACKLOG-STATUS-AUDIT.md §13`. 本文件保留作为 historical reference (Sprint 1+2 时点 brief / 计划 / dispatch).
+
+
 > **范围**：**纯 UI/UX + 操作流程**，不讲功能、不讲业务实体、不讲战略。
 >
 > **基于**：UX_AUDIT_A_HONGJIAN.md（63 个独立 UX 模式 / 13 ⭐⭐⭐ ⭐⭐ 真值得抄）+ UX_AUDIT_B_CRETAS.md（Cretas 当前 UX 现状）。

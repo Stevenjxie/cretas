@@ -1,5 +1,8 @@
 # Track B2 — 抄码品识别 + PDF 扫码 RN 端串通 (Chat 6)
 
+> ⚠️ **DEPRECATED 2026-05-19** — 本文件已 supersede by `31-DEEP-RE-AUDIT.md §P` (Round 11 deep re-audit). Sprint 1+2 track 已全 ship, 决策面 status 请直接看 31-doc + `30-BACKLOG-STATUS-AUDIT.md §13`. 本文件保留作为 historical reference (Sprint 1+2 时点 brief / 计划 / dispatch).
+
+
 > **来源**: 从原 TRACK_B_BRIEF.md 拆分 (2026-05-14 dispatch 调整 4→6 chats)
 >
 > **本文件是 self-contained brief**: 你 (接收方 chat) 不需要任何额外的 conversation context, 读完这份文件即可立即上手干活。所有路径都是绝对路径; 所有参考文档都标了 §节号; 所有客户原话都有引用来源。

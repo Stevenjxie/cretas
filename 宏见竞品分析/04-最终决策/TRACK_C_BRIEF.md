@@ -1,5 +1,8 @@
 # Track C 工作 Brief — Attachment + 单据打印 + 三价对比 bug + RBAC 审计
 
+> ⚠️ **DEPRECATED 2026-05-19** — 本文件已 supersede by `31-DEEP-RE-AUDIT.md §P` (Round 11 deep re-audit). Sprint 1+2 track 已全 ship, 决策面 status 请直接看 31-doc + `30-BACKLOG-STATUS-AUDIT.md §13`. 本文件保留作为 historical reference (Sprint 1+2 时点 brief / 计划 / dispatch).
+
+
 > **接收对象**: 4 个并行 Track Chat 中的 Track C (本 chat)
 > **执行机制**: 你 (本 chat) 独立做实现, Organizer Chat 1 协调 + review + merge
 > **工时**: 名义 **11 工作日** / Claude 加速预期 **~6-7 工作日**
