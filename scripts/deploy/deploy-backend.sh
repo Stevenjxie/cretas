@@ -1152,6 +1152,34 @@ deploy_jar() {
         fi
     fi
 
+    # Phase 1 #19 fix 2026-05-19: post-condition systemctl is-active 守门.
+    # 防 deploy 报告成功但 service 实际 inactive 的 silent-kill bug (1.5h prod down 暴露).
+    # bluegreen 模式: 至少一个 {cretas-backend, cretas-backend-green} 必须 active.
+    # inplace / test:  对应 service 必须 active.
+    if [[ "$DEPLOY_ENV" == "prod" || "$DEPLOY_ENV" == "all" ]]; then
+        PROD_SVC_STATUS=$(ssh -o ConnectTimeout=10 $SERVER \
+            "systemctl is-active cretas-backend cretas-backend-green 2>&1" 2>/dev/null || echo "ssh-fail")
+        if ! echo "$PROD_SVC_STATUS" | grep -qx "active"; then
+            echo ""
+            echo "❌ FATAL [Phase 1 #19 gate]: prod deploy 报告完成但 cretas-backend / cretas-backend-green 都未 active!"
+            echo "   systemctl is-active: $PROD_SVC_STATUS"
+            echo "   恢复: ssh $SERVER 'systemctl start cretas-backend  # 或 -green'"
+            exit 1
+        fi
+        echo "   ✓ [Phase 1 #19 gate] prod service is-active (blue-green at least one active)"
+    fi
+    if [[ "$DEPLOY_ENV" == "test" || "$DEPLOY_ENV" == "all" ]]; then
+        TEST_SVC_STATUS=$(ssh -o ConnectTimeout=10 $SERVER \
+            "systemctl is-active cretas-backend-test 2>&1" 2>/dev/null || echo "ssh-fail")
+        if [ "$TEST_SVC_STATUS" != "active" ]; then
+            echo ""
+            echo "❌ FATAL [Phase 1 #19 gate]: test deploy 报告完成但 cretas-backend-test 未 active (status=$TEST_SVC_STATUS)!"
+            echo "   恢复: ssh $SERVER 'systemctl start cretas-backend-test'"
+            exit 1
+        fi
+        echo "   ✓ [Phase 1 #19 gate] cretas-backend-test is-active"
+    fi
+
     echo ""
     echo "=========================================="
     echo "  ✅ 部署完成!"
