@@ -3515,3 +3515,93 @@ Round 11 reconcile 后, **真正"close out 全 P0+P1" 只需 3 月** (vs Steve 2
 ---
 
 <!-- organizer §P FINAL SYNTHESIS END 2026-05-19 -->
+
+
+<!-- §P.12 Round 12 新增 backlog (来自 32-DEEP-RE-AUDIT-V2.md §G) -->
+
+## §P.12 Round 12 deep audit 新增 backlog items (32-doc §G 来源)
+
+> **来源**: `32-DEEP-RE-AUDIT-V2.md` §G (Round 12 organizer + 5 agents 综合提炼).
+> 跟现有 §P.5 真正剩 ❌ 项互补 — §P.5 是 Round 11 reconcile 后真实剩余; §P.12 是 Round 12 fresh capture 新增发现.
+
+### P0 / P1 新增 (Sprint 5+ 候选, ~25-30d)
+
+| # | Item | 32-doc 来源 | 优先级 | 工时 | Sprint |
+|---|---|---|---|---|---|
+| G12-1 | inline link counter (file/image/contract count per row) | §F.3 + §B.6 | P1 | 4d | Sprint 5 W2 |
+| G12-2 | vflag 2 维度 (审核+异常) verify | §F.5 + §E.4 + §A.5 | P2 | 1d verify + 3d 修 | Sprint 5 spot-check |
+| G12-3 | 客户档案 21 主 tabs + 5 sub-tabs cascade load (补剩 8 tabs) | §F.1 + §A.1 | P1 | 5d | Sprint 5 |
+| G12-4 | 辅助核算 7 类 (客户/供应商/部门/职员/项目/存货/委外商) Voucher 关联 | §F.5 + §A.5 | P1 | 4d | Sprint 5 |
+| G12-5 | 复式记账完整收尾 (会计科目树 + 7 辅助核算 FK) | §F.5 + §A.5 | P2 | 8d | Sprint 6+ |
+| G12-6 | 数据权限维度 (row-level filter by client/dept) RBAC 第 2 维 | §F.6 + §D.1 | P1 | 6d | Sprint 5 大客户 |
+| G12-7 | 打印权限维度独立 (从功能权限拆出) | §F.6 + §D.1 | P2 | 3d | Sprint 6+ |
+| G12-8 | 登陆地点范围 (IP whitelist per role) RBAC 第 5 维 | §F.6 + §D.1 | P2 | 3d | Sprint 6+ |
+| G12-9 | 报价试算 Sales | §A.2 | P1 | 3d | Sprint 5 |
+| G12-10 | 采购需求总表 MRP entry verify | §A.3 + §B.2 | P1 verify | 1d | Sprint 5 |
+| **F-VOUCHER-ANOMALY-1** | vflag "异常状态"维度 (per §A.5 X1 finding) | §A.5 X1 | P3 | 3d | Sprint 6+ |
+| **S-CRM-CUSTOMTAG-1** | Customer 加 free-form 标签字段 (per §A.1 X1 finding) | §A.1 X1 | P3 | 2d | Sprint 6+ |
+| **F-TAX-DIRECT-1** | 税局直连数电票 (per §B.5 X2 finding) | §B.5 X2 | P1 | 10d | Sprint 6+ 客户硬需 |
+| **P-REQUISITION-1** | 请购单 entity (per §B.2 X2 finding) | §B.2 X2 | P1 | 5d | Sprint 5 |
+| **C-LINK-11TYPE-1** | linkno 扩 11 类 vs 当前 8 (per §B.6 X2 finding) | §B.6 X2 | P1 | 3d | Sprint 5 |
+| **M-WAGE-INTEGRATION-1** | 生产工时 → 工资自动 trigger (per §C.7 X3) | §C.7 X3 | P1 | 5d | Sprint 5 |
+| **C-MENU-PERSONAL-VIEW** | 我创建的/我参与的工作流 + 工作流处理 admin UI (per §D.5 X4) | §D.5 X4 | P0 | 6d | Sprint 5 W1 |
+
+### P2 新增 (Round 11 漏 / Round 12 fresh, ~50-60d)
+
+| # | Item | 32-doc 来源 | 工时 | 客户群 |
+|---|---|---|---|---|
+| G12-11 | 序列号管理 (追踪 + 列表 + 统计) | §A.4 + §G | 6d | 高单价产品 |
+| G12-12 | 产品报废单 + 失效期预警 | §A.4 + §G | 3d | 食品保质期 |
+| G12-13 | 线边仓库管理 (3 sub) | §A.6 + §C.4 | 5d | 大型工厂 |
+| G12-14 | 设备点检/维修/保养完整 lifecycle (8 sub) | §A.6 + §C.8 | 10d | 工厂 |
+| G12-15 | 工序条件路由 UI (Round 12 修正: 是 product grouping 不是 condition routing) | §C.3 修正 | P2 self-research 5d | 多产品工艺 |
+| G12-16 | 作业指导书 SOP 模板 | §A.6 + §C | 8d | 制造企业 |
+| G12-17 | 报表三表 (资产负债/利润/现金流) F-3REPORT-1 完整 | §F.5 + §A.5 | 12d | 大企业 |
+| G12-18 | 结账管理 (月结/年结 + 反结账) F-PERIOD-1 完整 | §F.5 + §A.5 | 8d | 大企业 |
+| G12-19 | 总账 + 凭证汇总 + 科目余额 + 明细账 | §F.5 + §A.5 | 6d | 大企业 |
+| G12-20 | 商业机会漏斗 + 日历 + 活动日历 (S-OPP-1 完整) | §A.1 | 8d | 大销售 |
+| G12-21 | 业绩管理 6 项 (年度报表/统计口径/未发提成/提成类型/我的) | §A.2 | 5d | 销售管理 |
+| G12-22 | S-REPORTS-PRESETS 完整 14 + 利润 6 报表 | §A.2 | 10d | 通用 |
+
+### P3 战略 / 长期
+
+| # | Item | 32-doc 来源 | 工时 | 备注 |
+|---|---|---|---|---|
+| G12-23 | 大屏看板 C-TV-DASHBOARD-1 confirmed | §A.12 + §G | 15d | 餐饮厨房/工厂车间屏 |
+| G12-24 | 集团公司设置 + 系统备份 | §A.12 | 5d | 集团客户 |
+| G12-25 | help.cretas.com 客户面 docs 子域 | §F.7 | 5d | 提升专业感 |
+| G12-26 | 第三方菜单 + 第三方权限 | §A.12 | 8d | 集成生态 |
+| G12-27 | 抄码品 8 字段 (序列号 + 箱标 + 装箱) | §A.4 + §G | 5d | 协同 N13 W-ABA-1 |
+| G12-28 | 报价试算 + 销售综合月报 Sales presets | §A.2 | 4d | 销售总监 |
+
+### 工时累计修正 (Round 12)
+
+| 类别 | Round 11 §P 估算 | Round 12 新增 (本 §P.12) | 新合计 |
+|---|---|---|---|
+| P0 战略 剩 | 5d | +6d (C-MENU-PERSONAL-VIEW) | 11d |
+| P0 必修 剩 | 4d | 0 | 4d |
+| P1 战术 剩 | 30d | +52d (G12-1/3/4/6/9/10 + F-TAX-DIRECT/P-REQUISITION/C-LINK-11TYPE/M-WAGE-INTEGRATION) | 82d |
+| P2 选做 | 60d | +75d (12 新 P2 items) | 135d |
+| P3 长期 | 50d | +50d (10 新 P3 items) | 100d |
+| **合计 剩余** | ~150d | **+183d** | **~330d nominal** |
+
+按 Claude 1.7× 加速 + 25% buffer:
+- Round 11 估: ~150d / ~3 月
+- **Round 12 修正**: ~330d nominal / **~6.5 月** (Round 12 揭示更多大客户场景需求 — F-TAX-DIRECT/会计深 reporting/RBAC 数据权限)
+
+按 Steve sign-off "9 月":
+- Round 11: 3 月
+- **Round 12 修正**: **6.5 月 P0+P1+P2 含大客户场景**, 仍省 2.5 月
+
+### Round 12 关键 finding 总结 (新发现, 入 31-doc §P 主体外)
+
+1. **HJ 14 chapters / 780 articles** 完整在线帮助手册 (`help.hongjian.com`) — Cretas 应学客户面 docs
+2. **vflag 不是 4 单维 而是 2x2 维度** (审核 ✓✗ + 异常 ✓✗) — §A.5 X1 + §E.4 X5 共同 finding, 修正 Round 11
+3. **RBAC 5 维** (功能/数据/打印/第三方 + 登陆地点) — §D.1 X4 finding, 完整 vs Round 11 估的 4 维
+4. **辅助核算 7 类 official** (Round 12 UI 实测) vs HJ docs 2023 article 写 6 类 — 文档落后于产品
+5. **decisionType 真实 14 (含 CUSTOM)** vs Round 11 估 10 — 11% 覆盖 (vs HJ 126)
+6. **Cretas linkno 8 类 vs HJ baseline 8 类 命名不匹配 3 类** (Cretas project/free, HJ file/image/contract) — §B.6 X2 finding
+7. **生产工时 → 工资集成断点** (HJ 自动 trigger, Cretas H-WAGE ship 但缺 trigger) — §C.7 X3 finding
+8. **MRP 4 个 entry + 请购单 entity 缺** (Cretas 仅 ShortageAnalysis ship) — §B.2 X2 finding
+9. **Cretas 已超 HJ 6 patterns** (jsPlumb→VueFlow 现代 / URL routing / KeepAlive cascade / 操作 ▼ 普及 16-18 site / DesktopModal / Vue state hidden) — §E X5 finding
+10. **HJ 帮助手册搜索框 + 蓝色超链接 + 红色注意事项** — UX pattern Cretas 可借 (in-app help 集成)
