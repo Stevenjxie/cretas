@@ -21,6 +21,7 @@ import com.cretas.aims.service.config.FactoryConfigService;
 import com.cretas.aims.annotation.Loggable;
 import com.cretas.aims.service.factory.WarehouseResolver;
 import com.cretas.aims.service.inventory.SalesService;
+import com.cretas.aims.service.rules.annotation.RuleEvaluate;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.ApplicationEventPublisher;
@@ -139,7 +140,18 @@ public class SalesServiceImpl implements SalesService {
 
     // ==================== 销售订单 ====================
 
+    /**
+     * Phase 4a follow-up (issue #38) — @RuleEvaluate attached to fire ORDER scope rules.
+     *
+     * <p>Method signature has POJO arg {@code request} (CreateSalesOrderRequest), so direct
+     * annotation works (matches MaterialBatchServiceImpl.createMaterialBatch pattern, no
+     * wrap helper needed). Aspect's {@code target="request"} binding resolves to the DTO.
+     *
+     * <p>If REJECT result: {@link com.cretas.aims.service.rules.RuleViolationException}
+     * propagates → caught by GlobalExceptionHandler → HTTP 400 with actionHint + severity.
+     */
     @Override
+    @RuleEvaluate(value = "ORDER", target = "request")
     @Transactional
     @Loggable(module = "SALES_ORDER", action = "CREATE", entityType = "SalesOrder",
               summary = "'创建销售单 客户=' + #request.customerId")
@@ -301,6 +313,22 @@ public class SalesServiceImpl implements SalesService {
                             // null 不阻断 strategy 应用 (per PricingRequest customerId 字段 javadoc).
                         }
                     }
+                    // F3 (Phase 4b follow-up): fool-proof "below cost" warning needs costEstimate.
+                    // Current state: ProductType has NO standardCost / unitCost field
+                    // (grep ProductType.java — only sales-side fields). MaterialBatch.unitCost
+                    // exists but is for raw materials, not finished products + would require
+                    // BOM lookup per SO line (P3 work).
+                    //
+                    // Decision: pass null until proper cost source wired (tracked as follow-up
+                    // issue). PricingEngineImpl.checkWarnings() already short-circuits on
+                    // costEstimate==null (see line 473), so warning is silently disabled,
+                    // pricing path otherwise unaffected.
+                    //
+                    // Future work (P3 enhancement):
+                    //   1. Add ProductType.standardCost (DB migration + entity field), OR
+                    //   2. Compute from BOM: sum(componentMaterial.unitCost * qty per unit), OR
+                    //   3. Pull latest MaterialBatch.unitCost via BOM mapping at query time.
+                    // See: spec §4 "fool-proof below-cost warning" + spec §10 Q1.
                     com.cretas.aims.service.pricing.PricingRequest pricingReq =
                             com.cretas.aims.service.pricing.PricingRequest.builder()
                                     .factoryId(factoryId)
@@ -310,6 +338,7 @@ public class SalesServiceImpl implements SalesService {
                                     .customerId(customerIdLong)
                                     .customerGroup(customerGroup)
                                     .productCategory(productCategory)
+                                    .costEstimate(null)  // F3: gap explicit — see comment above
                                     .businessEntityType("SO_LINE")
                                     .businessEntityId(order.getOrderNumber()
                                             + "/" + itemDTO.getProductTypeId())
