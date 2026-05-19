@@ -10,6 +10,8 @@ import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.rules.BusinessRuleRepository;
 import com.cretas.aims.repository.rules.RuleExecutionLogRepository;
 import com.cretas.aims.service.rules.RuleEngine;
+import com.cretas.aims.service.workflow.SandboxedSpelEvaluator;
+import com.cretas.aims.service.workflow.SandboxedSpelEvaluator.SpelEvaluationFailure;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
@@ -54,6 +56,7 @@ public class CanvasRuleController {
     private final BusinessRuleRepository ruleRepository;
     private final RuleExecutionLogRepository logRepository;
     private final RuleEngine ruleEngine;
+    private final SandboxedSpelEvaluator spelEvaluator;
 
     @Operation(summary = "列出所有业务规则", description = "可按 scope 过滤")
     @RequireRole({"factory_super_admin", "permission_admin"})
@@ -125,6 +128,15 @@ public class CanvasRuleController {
                     "允许值: LOG / REJECT / MODIFY / TRIGGER_WORKFLOW", "warning");
         }
 
+        // B-A7 P0 fix (sister of PR #48): validate SpEL syntax + reject RCE attempts at write time.
+        // Without this, T(java.lang.Runtime).getRuntime().exec(...) was persisted raw and could be
+        // executed by RuleEngine at trigger time. Mirror pattern from CanvasAlertController.
+        String conditionSpel = stringField(body, "conditionSpel");
+        ApiResponse<Map<String, Object>> spelError = validateSpel(conditionSpel);
+        if (spelError != null) {
+            return spelError;
+        }
+
         // fool-proof Rule 4: idempotent — same (factoryId, ruleCode) → 409 with actionHint to jump to existing
         Optional<BusinessRule> dup = ruleRepository.findByFactoryIdAndRuleCode(factoryId, ruleCode);
         if (dup.isPresent()) {
@@ -139,7 +151,7 @@ public class CanvasRuleController {
                 .ruleCode(ruleCode)
                 .ruleName(stringField(body, "ruleName", ruleCode))
                 .scope(scopeEnum)
-                .conditionSpel(stringField(body, "conditionSpel"))
+                .conditionSpel(conditionSpel)
                 .actionType(actionTypeEnum)
                 .actionConfigJson(mapField(body, "actionConfigJson"))
                 .priority(integerField(body, "priority", 100))
@@ -200,7 +212,13 @@ public class CanvasRuleController {
             }
         }
         if (body.containsKey("conditionSpel")) {
-            rule.setConditionSpel(stringField(body, "conditionSpel"));
+            // B-A7 P0 fix (sister of PR #48): validate at write time to block RCE injection on update path.
+            String spelStr = stringField(body, "conditionSpel");
+            ApiResponse<Map<String, Object>> spelError = validateSpel(spelStr);
+            if (spelError != null) {
+                return spelError;
+            }
+            rule.setConditionSpel(spelStr);
         }
         if (body.containsKey("actionType")) {
             String raw = stringField(body, "actionType");
@@ -351,6 +369,33 @@ public class CanvasRuleController {
     }
 
     // ==================== helpers ====================
+
+    /**
+     * B-A7 P0 fix (sister of PR #48): validate conditionSpel at write time. Returns non-null
+     * error response when SpEL contains RCE / reflection / forbidden constructs,
+     * or has syntax errors. Returns null when:
+     *   - SpEL is null/blank (allowed — rule with no condition matches all input,
+     *     equivalent to "always match" semantics)
+     *   - SpEL passes sandbox validation
+     */
+    private ApiResponse<Map<String, Object>> validateSpel(String spel) {
+        if (spel == null || spel.isBlank()) {
+            return null;
+        }
+        try {
+            spelEvaluator.validateSyntax(spel);
+            return null;
+        } catch (SpelEvaluationFailure ex) {
+            log.warn("Rejected SpEL at write time: spel={}, reason={}",
+                    spel, ex.getUserMessage());
+            return ApiResponse.errorWithCode(400, "VALIDATION",
+                    "SpEL 表达式语法/安全检查失败: " + ex.getUserMessage(),
+                    ex.getActionHint() != null
+                            ? ex.getActionHint()
+                            : "仅支持 #input/#order/#inventory/#customer/#material 等业务字段访问, 禁用 T()/new/反射",
+                    "warning");
+        }
+    }
 
     private BusinessRule loadRule(String factoryId, UUID id) {
         BusinessRule rule = ruleRepository.findById(id)
