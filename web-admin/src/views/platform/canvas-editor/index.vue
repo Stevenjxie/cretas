@@ -49,10 +49,12 @@
           <PermissionMatrix v-else-if="activeTab === 'permissions' && selectedModule" :factory-id="factoryId" :module-code="selectedModule" />
           <ModulePermissionMatrix v-else-if="activeTab === 'module-permissions'" :factory-id="factoryId" />
           <ToolSkillMatrix v-else-if="activeTab === 'tools'" :factory-id="factoryId" />
-          <!-- Round 4 Fix P1-10: Scheduler Panel (新增) -->
+          <!-- Round 4 Fix P1-10: Scheduler Panel (legacy v2 config) -->
           <SchedulerPanel v-else-if="activeTab === 'scheduler'" :factory-id="factoryId" />
           <!-- Phase 3 Canvas-Notify (2026-05-19): NotifyTemplateEditor -->
           <NotifyTemplateEditor v-else-if="activeTab === 'notify'" :factory-id="factoryId" />
+          <!-- Phase 5 (2026-05-19): Canvas-Cron Tab (DB-driven DynamicScheduler) -->
+          <ScheduledTaskEditor v-else-if="activeTab === 'cron'" :factory-id="factoryId" />
 
           <!-- Empty state -->
           <div v-else class="empty-state">
@@ -117,6 +119,7 @@ import ModulePermissionMatrix from './components/ModulePermissionMatrix.vue'
 import ToolSkillMatrix from './components/ToolSkillMatrix.vue'
 import SchedulerPanel from './components/SchedulerPanel.vue'
 import NotifyTemplateEditor from '@/views/platform/notify-template-editor/index.vue'
+import ScheduledTaskEditor from '@/views/platform/scheduled-task-editor/index.vue'
 import AIChatPanel from './components/AIChatPanel.vue'
 import ConfigDiffViewer from './components/ConfigDiffViewer.vue'
 import SchemaPreview from './components/SchemaPreview.vue'
