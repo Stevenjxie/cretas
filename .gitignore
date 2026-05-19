@@ -61,6 +61,8 @@ temp*
 !web-admin/src/views/smart-bi/components/Template*.vue
 !backend/python/smartbi/capability/template_status.py
 !backend/python/tests/test_template_status.py
+!backend/java/cretas-api/src/main/java/com/cretas/aims/service/notify/TemplateEngine.java
+!backend/java/cretas-api/src/test/java/com/cretas/aims/service/notify/TemplateEngineTest.java
 .tmp/
 *.tmp
 *.temp
