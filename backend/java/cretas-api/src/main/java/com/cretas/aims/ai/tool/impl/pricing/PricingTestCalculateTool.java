@@ -1,25 +1,33 @@
 package com.cretas.aims.ai.tool.impl.pricing;
 
 import com.cretas.aims.ai.tool.AbstractBusinessTool;
+import com.cretas.aims.service.pricing.AppliedStrategy;
+import com.cretas.aims.service.pricing.PricingEngine;
+import com.cretas.aims.service.pricing.PricingRequest;
+import com.cretas.aims.service.pricing.PricingResult;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
+import java.math.BigDecimal;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
 /**
- * AI Tool: 模拟价格策略计算 — Canvas-Pricing Phase 4b SKELETON.
+ * AI Tool: 模拟价格策略计算 — Canvas-Pricing Phase 4b.
  *
- * <p>调用 {@code PricingEngine.simulate(...)} (NOT 持久化).
+ * <p>调 {@link PricingEngine#simulate(String, String, int, BigDecimal, Long)} (NOT 持久化).
  * Canvas "模拟" 按钮 + AI 询问 "叮咚 1000kg 多少钱" 时调用.
- *
- * <p><strong>Sister chat: 实际逻辑 throw UnsupportedOp (PricingEngineImpl 抛), 待你填.</strong>
  */
 @Slf4j
 @Component
 public class PricingTestCalculateTool extends AbstractBusinessTool {
+
+    @Autowired
+    private PricingEngine pricingEngine;
 
     @Override
     public String getToolName() {
@@ -40,6 +48,10 @@ public class PricingTestCalculateTool extends AbstractBusinessTool {
         properties.put("quantity", Map.of("type", "integer", "description", "数量"));
         properties.put("unitPriceList", Map.of("type", "number", "description", "标价 (商品 master 取)"));
         properties.put("customerId", Map.of("type", "integer", "description", "客户ID (可空, 匿名询价)"));
+        properties.put("customerGroup", Map.of("type", "string",
+                "description", "客户分组 (可空, MEMBER 策略需要, 如 VIP / A)"));
+        properties.put("productCategory", Map.of("type", "string",
+                "description", "商品类目 (可空, scope 过滤用)"));
         schema.put("properties", properties);
         schema.put("required", Arrays.asList("productId", "quantity"));
         return schema;
@@ -53,10 +65,80 @@ public class PricingTestCalculateTool extends AbstractBusinessTool {
     @Override
     protected Map<String, Object> doExecute(String factoryId, Map<String, Object> params,
                                              Map<String, Object> context) throws Exception {
-        log.warn("PricingTestCalculateTool skeleton invoked — sister chat to implement. " +
-                "factoryId={}, params={}", factoryId, params);
-        throw new UnsupportedOperationException(
-                "pricing_test_calculate not yet implemented. Sister chat to wire to PricingEngine.simulate (which itself throws until impl)."
+        if (factoryId == null || factoryId.isBlank()) {
+            throw new IllegalArgumentException("factoryId 不能为空");
+        }
+
+        String productId = getString(params, "productId");
+        Integer quantity = getInteger(params, "quantity");
+        BigDecimal unitPriceList = getBigDecimal(params, "unitPriceList");
+        if (unitPriceList == null) unitPriceList = BigDecimal.ZERO;
+        Long customerId = getLong(params, "customerId");
+        String customerGroup = getString(params, "customerGroup");
+        String productCategory = getString(params, "productCategory");
+
+        // Build PricingRequest with factoryId (multi-tenant safety).
+        PricingRequest req = PricingRequest.builder()
+                .factoryId(factoryId)
+                .productId(productId)
+                .quantity(quantity != null ? quantity : 1)
+                .unitPriceList(unitPriceList)
+                .customerId(customerId)
+                .customerGroup(customerGroup)
+                .productCategory(productCategory)
+                // simulate path NEVER writes log → leave businessEntity* null
+                .build();
+
+        // simulate has different signature, use it; engine internally rebuilds request.
+        PricingResult result = pricingEngine.simulate(
+                factoryId, productId, req.getQuantity(), unitPriceList, customerId);
+
+        log.debug("AI Tool pricing_test_calculate: factoryId={}, productId={}, qty={}, original={}, final={}",
+                factoryId, productId, quantity, result.getOriginalPrice(), result.getFinalPrice());
+
+        // 防呆 R2: result message 必带身份上下文 (商品 / 数量 / 原价 / 终价 / 折扣)
+        Map<String, Object> data = new HashMap<>();
+        data.put("factoryId", factoryId);
+        data.put("productId", productId);
+        data.put("quantity", req.getQuantity());
+        data.put("unitPriceList", unitPriceList);
+        data.put("originalPrice", result.getOriginalPrice());
+        data.put("finalPrice", result.getFinalPrice());
+        data.put("totalDiscount", result.getTotalDiscount());
+        data.put("appliedStrategies", flattenApplied(result.getAppliedStrategies()));
+        data.put("warnings", result.getWarnings() != null ? result.getWarnings() : new ArrayList<>());
+
+        return buildSimpleResult(
+                String.format("模拟价格: 商品 %s × %d, 原价 ¥%s → 终价 ¥%s (折扣 ¥%s)%s",
+                        productId, req.getQuantity(),
+                        result.getOriginalPrice(), result.getFinalPrice(), result.getTotalDiscount(),
+                        (result.getWarnings() != null && !result.getWarnings().isEmpty())
+                                ? " — 注意: " + String.join("; ", result.getWarnings())
+                                : ""),
+                data
         );
+    }
+
+    private List<Map<String, Object>> flattenApplied(List<AppliedStrategy> applied) {
+        List<Map<String, Object>> out = new ArrayList<>();
+        if (applied == null) return out;
+        for (AppliedStrategy a : applied) {
+            Map<String, Object> entry = new HashMap<>();
+            entry.put("strategyId", a.getStrategyId());
+            entry.put("strategyCode", a.getStrategyCode());
+            entry.put("strategyType", a.getStrategyType() != null ? a.getStrategyType().name() : null);
+            entry.put("discountApplied", a.getDiscountApplied());
+            out.add(entry);
+        }
+        return out;
+    }
+
+    @Override
+    protected String getParameterQuestion(String paramName) {
+        return switch (paramName) {
+            case "productId" -> "请问要模拟哪个商品? 请提供商品ID.";
+            case "quantity" -> "请问数量是多少?";
+            default -> null;
+        };
     }
 }

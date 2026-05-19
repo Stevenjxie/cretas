@@ -16,6 +16,9 @@ import java.math.BigDecimal;
  *   <li>{@code customerId} — null = anonymous quote (无客户上下文 MEMBER strategy 不适用)</li>
  *   <li>{@code productCategory} / {@code customerGroup} / {@code region} —
  *       null = scope_filter_json 中对应 key 不参与过滤 (匹配所有)</li>
+ *   <li>{@code costEstimate} — per-unit cost (商品 master {@code standard_cost} 或 RMMA 取).
+ *       NULL = skip fool-proof "below cost" warning (spec §4 + §10 Q1).
+ *       Caller (SalesServiceImpl) 决定 cost source.</li>
  * </ul>
  */
 @Value
@@ -31,4 +34,6 @@ public class PricingRequest {
     String region;            // optional, e.g. "east"
     String businessEntityType;
     String businessEntityId;
+    /** Per-unit cost estimate for fool-proof warning (spec §4). NULL = skip cost check. */
+    BigDecimal costEstimate;
 }
