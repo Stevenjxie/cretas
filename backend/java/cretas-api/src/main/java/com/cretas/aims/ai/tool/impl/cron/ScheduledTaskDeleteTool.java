@@ -1,7 +1,12 @@
 package com.cretas.aims.ai.tool.impl.cron;
 
 import com.cretas.aims.ai.tool.AbstractBusinessTool;
+import com.cretas.aims.entity.cron.ScheduledTask;
+import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.repository.cron.ScheduledTaskRepository;
+import com.cretas.aims.service.cron.DynamicSchedulerService;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.util.*;
@@ -18,6 +23,12 @@ import java.util.*;
 @Slf4j
 @Component
 public class ScheduledTaskDeleteTool extends AbstractBusinessTool {
+
+    @Autowired
+    private DynamicSchedulerService dynamicSchedulerService;
+
+    @Autowired
+    private ScheduledTaskRepository taskRepository;
 
     @Override
     public String getToolName() {
@@ -55,9 +66,45 @@ public class ScheduledTaskDeleteTool extends AbstractBusinessTool {
 
     @Override
     protected Map<String, Object> doExecute(String factoryId, Map<String, Object> params, Map<String, Object> context) throws Exception {
-        // Phase 5 sister chat: delegate to DynamicSchedulerService.deleteTask(taskId).
-        throw new UnsupportedOperationException(
-                "Phase 5 sister chat: implement scheduled_task_delete via DynamicSchedulerService."
-        );
+        UUID taskId = parseUuid(getString(params, "taskId"));
+
+        ScheduledTask existing = taskRepository.findById(taskId)
+                .orElseThrow(() -> new BusinessException(404,
+                        "定时任务不存在: " + taskId).withHint("请检查 taskId 或确认未被删除"));
+        guardFactoryAccess(existing, factoryId);
+
+        String taskCode = existing.getTaskCode();
+        String taskName = existing.getTaskName();
+        dynamicSchedulerService.deleteTask(taskId);
+
+        String message = String.format("定时任务已删除: %s (%s)",
+                taskName != null ? taskName : "(未命名)", taskCode);
+        log.info("[Canvas-Cron Tool] scheduled_task_delete: {}", message);
+        Map<String, Object> deleted = new HashMap<>();
+        deleted.put("taskId", taskId);
+        deleted.put("taskCode", taskCode);
+        deleted.put("taskName", taskName);
+        return buildSimpleResult(message, deleted);
+    }
+
+    private static UUID parseUuid(String s) {
+        if (s == null || s.isBlank()) {
+            throw new BusinessException(400, "taskId 不能为空");
+        }
+        try {
+            return UUID.fromString(s.trim());
+        } catch (IllegalArgumentException e) {
+            throw new BusinessException(400, "taskId 不是有效的 UUID: " + s);
+        }
+    }
+
+    private static void guardFactoryAccess(ScheduledTask task, String callerFactoryId) {
+        if (task.getFactoryId() == null) return;
+        if (callerFactoryId == null || !task.getFactoryId().equals(callerFactoryId)) {
+            throw new BusinessException(403,
+                    "无权删除其它工厂的定时任务 (任务工厂=" + task.getFactoryId()
+                            + ", 调用者工厂=" + callerFactoryId + ")")
+                    .withHint("请联系任务所属工厂管理员处理");
+        }
     }
 }

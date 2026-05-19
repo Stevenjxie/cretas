@@ -1,7 +1,13 @@
 package com.cretas.aims.ai.tool.impl.cron;
 
 import com.cretas.aims.ai.tool.AbstractBusinessTool;
+import com.cretas.aims.entity.cron.ScheduledTask;
+import com.cretas.aims.entity.cron.ScheduledTaskRunLog;
+import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.repository.cron.ScheduledTaskRepository;
+import com.cretas.aims.service.cron.DynamicSchedulerService;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.util.*;
@@ -18,6 +24,12 @@ import java.util.*;
 @Slf4j
 @Component
 public class ScheduledTaskRunNowTool extends AbstractBusinessTool {
+
+    @Autowired
+    private DynamicSchedulerService dynamicSchedulerService;
+
+    @Autowired
+    private ScheduledTaskRepository taskRepository;
 
     @Override
     public String getToolName() {
@@ -60,9 +72,50 @@ public class ScheduledTaskRunNowTool extends AbstractBusinessTool {
 
     @Override
     protected Map<String, Object> doExecute(String factoryId, Map<String, Object> params, Map<String, Object> context) throws Exception {
-        // Phase 5 sister chat: delegate to DynamicSchedulerService.runNow(taskId).
-        throw new UnsupportedOperationException(
-                "Phase 5 sister chat: implement scheduled_task_run_now via DynamicSchedulerService."
-        );
+        UUID taskId = parseUuid(getString(params, "taskId"));
+
+        ScheduledTask existing = taskRepository.findById(taskId)
+                .orElseThrow(() -> new BusinessException(404,
+                        "定时任务不存在: " + taskId).withHint("请检查 taskId"));
+        guardFactoryAccess(existing, factoryId);
+
+        ScheduledTaskRunLog runLog = dynamicSchedulerService.runNow(taskId);
+
+        String statusText = runLog.getStatus().name();
+        String message;
+        if (runLog.getStatus().name().equals("SUCCESS")) {
+            message = String.format("手动执行成功: %s (%s) — 耗时 %d ms",
+                    existing.getTaskName(), existing.getTaskCode(),
+                    runLog.getDurationMs() != null ? runLog.getDurationMs() : -1);
+        } else {
+            String err = runLog.getErrorMsg();
+            String firstLine = err != null ? err.split("\n", 2)[0] : "(no error msg)";
+            message = String.format("手动执行失败: %s (%s) — %s",
+                    existing.getTaskName(), existing.getTaskCode(), firstLine);
+        }
+        log.info("[Canvas-Cron Tool] scheduled_task_run_now: status={} taskCode={} durationMs={}",
+                statusText, existing.getTaskCode(), runLog.getDurationMs());
+        return buildSimpleResult(message, runLog);
+    }
+
+    private static UUID parseUuid(String s) {
+        if (s == null || s.isBlank()) {
+            throw new BusinessException(400, "taskId 不能为空");
+        }
+        try {
+            return UUID.fromString(s.trim());
+        } catch (IllegalArgumentException e) {
+            throw new BusinessException(400, "taskId 不是有效的 UUID: " + s);
+        }
+    }
+
+    private static void guardFactoryAccess(ScheduledTask task, String callerFactoryId) {
+        if (task.getFactoryId() == null) return;
+        if (callerFactoryId == null || !task.getFactoryId().equals(callerFactoryId)) {
+            throw new BusinessException(403,
+                    "无权操作其它工厂的定时任务 (任务工厂=" + task.getFactoryId()
+                            + ", 调用者工厂=" + callerFactoryId + ")")
+                    .withHint("请联系任务所属工厂管理员处理");
+        }
     }
 }

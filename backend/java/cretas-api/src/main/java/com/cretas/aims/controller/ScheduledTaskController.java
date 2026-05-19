@@ -4,16 +4,20 @@ import com.cretas.aims.config.RequireRole;
 import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.entity.cron.ScheduledTask;
 import com.cretas.aims.entity.cron.ScheduledTaskRunLog;
+import com.cretas.aims.repository.cron.ScheduledTaskRepository;
+import com.cretas.aims.repository.cron.ScheduledTaskRunLogRepository;
 import com.cretas.aims.service.cron.DynamicSchedulerService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 /**
  * Canvas-Cron 定时任务管理 (Phase 5 skeleton).
@@ -50,6 +54,8 @@ public class ScheduledTaskController {
             {"factory_super_admin", "permission_admin"};
 
     private final DynamicSchedulerService dynamicSchedulerService;
+    private final ScheduledTaskRepository taskRepository;
+    private final ScheduledTaskRunLogRepository runLogRepository;
 
     @GetMapping
     @Operation(summary = "列出定时任务 (可按 factoryId / enabled 过滤)")
@@ -58,10 +64,25 @@ public class ScheduledTaskController {
             @RequestParam(required = false) String factoryId,
             @RequestParam(required = false) Boolean enabled
     ) {
-        // Phase 5 sister chat: query via Repository with optional filters.
-        throw new UnsupportedOperationException(
-                "Phase 5 sister chat: implement list with optional factoryId / enabled filters."
-        );
+        List<ScheduledTask> tasks;
+        if (factoryId != null && enabled != null && enabled) {
+            tasks = taskRepository.findByFactoryIdAndEnabledTrue(factoryId);
+        } else if (enabled != null && enabled) {
+            tasks = taskRepository.findByEnabledTrue();
+        } else {
+            tasks = taskRepository.findAll();
+            if (factoryId != null) {
+                tasks = tasks.stream()
+                        .filter(t -> factoryId.equals(t.getFactoryId()))
+                        .collect(Collectors.toList());
+            }
+            if (enabled != null) {
+                tasks = tasks.stream()
+                        .filter(t -> enabled.equals(t.getEnabled()))
+                        .collect(Collectors.toList());
+            }
+        }
+        return ApiResponse.success("查询成功", tasks);
     }
 
     @PostMapping
@@ -113,10 +134,9 @@ public class ScheduledTaskController {
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size
     ) {
-        // Phase 5 sister chat: use ScheduledTaskRunLogRepository.findByTaskIdOrderByStartedAtDesc.
-        throw new UnsupportedOperationException(
-                "Phase 5 sister chat: implement paginated run logs query."
-        );
+        Page<ScheduledTaskRunLog> logs = runLogRepository
+                .findByTaskIdOrderByStartedAtDesc(id, PageRequest.of(page, size));
+        return ApiResponse.success("查询成功", logs);
     }
 
     @PostMapping("/refresh")

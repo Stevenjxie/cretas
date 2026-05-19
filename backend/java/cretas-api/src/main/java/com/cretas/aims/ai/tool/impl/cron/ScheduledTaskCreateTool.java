@@ -1,7 +1,10 @@
 package com.cretas.aims.ai.tool.impl.cron;
 
 import com.cretas.aims.ai.tool.AbstractBusinessTool;
+import com.cretas.aims.entity.cron.ScheduledTask;
+import com.cretas.aims.service.cron.DynamicSchedulerService;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.util.*;
@@ -21,6 +24,9 @@ import java.util.*;
 @Slf4j
 @Component
 public class ScheduledTaskCreateTool extends AbstractBusinessTool {
+
+    @Autowired
+    private DynamicSchedulerService dynamicSchedulerService;
 
     @Override
     public String getToolName() {
@@ -85,14 +91,43 @@ public class ScheduledTaskCreateTool extends AbstractBusinessTool {
 
     @Override
     protected Map<String, Object> doExecute(String factoryId, Map<String, Object> params, Map<String, Object> context) throws Exception {
-        // Phase 5 sister chat: delegate to DynamicSchedulerService.createTask().
-        // 1. Build ScheduledTask from params (factoryId from getString(params, "targetFactoryId"), fallback to context factoryId or null=global).
-        // 2. Validate cron via CronExpression.parse() — throw on invalid.
-        // 3. Validate handler bean exists & is TaskHandler.
-        // 4. Save via service, which also calls dynamicScheduler.reload().
-        // 5. Return buildSimpleResult(...).
-        throw new UnsupportedOperationException(
-                "Phase 5 sister chat: implement scheduled_task_create via DynamicSchedulerService."
-        );
+        String taskCode = getString(params, "taskCode");
+        String taskName = getString(params, "taskName", taskCode);
+        String cronExpression = getString(params, "cronExpression");
+        String handlerBeanName = getString(params, "handlerBeanName");
+        Boolean enabled = getBoolean(params, "enabled", Boolean.TRUE);
+
+        // targetFactoryId: optional param. Empty string → global. Missing → fall back to
+        // caller's factoryId from context (per-factory). Explicit "null" / "global" → null=global.
+        String targetFactoryId = getString(params, "targetFactoryId");
+        String resolvedFactoryId;
+        if (targetFactoryId == null) {
+            resolvedFactoryId = factoryId;  // default to caller's scope
+        } else if (targetFactoryId.isBlank()
+                || "null".equalsIgnoreCase(targetFactoryId)
+                || "global".equalsIgnoreCase(targetFactoryId)) {
+            resolvedFactoryId = null;       // explicit global
+        } else {
+            resolvedFactoryId = targetFactoryId;
+        }
+
+        ScheduledTask task = ScheduledTask.builder()
+                .taskCode(taskCode)
+                .taskName(taskName)
+                .cronExpression(cronExpression)
+                .handlerBeanName(handlerBeanName)
+                .factoryId(resolvedFactoryId)
+                .enabled(enabled)
+                .build();
+
+        ScheduledTask saved = dynamicSchedulerService.createTask(task);
+
+        String scopeText = resolvedFactoryId == null ? "全工厂" : ("工厂 " + resolvedFactoryId);
+        String message = String.format("定时任务已创建: %s (%s) — cron='%s', handler='%s', %s, %s",
+                saved.getTaskName(), saved.getTaskCode(), saved.getCronExpression(),
+                saved.getHandlerBeanName(), scopeText,
+                Boolean.TRUE.equals(saved.getEnabled()) ? "已启用" : "未启用");
+        log.info("[Canvas-Cron Tool] scheduled_task_create: {}", message);
+        return buildSimpleResult(message, saved);
     }
 }
