@@ -14,6 +14,7 @@
 import { computed, defineAsyncComponent, defineComponent, h } from 'vue';
 import { useAuthStore } from '@/store/modules/auth';
 import { getDashboardComponent } from '@/components/dashboard';
+import PendingApprovalsWidget from '@/components/dashboard/PendingApprovalsWidget.vue';
 
 const authStore = useAuthStore();
 
@@ -50,6 +51,9 @@ const CurrentDashboard = computed(() => {
 
 <template>
   <div class="dashboard-container">
+    <!-- issue #20: 我待审 widget — Phase 1 final closure for ADR-001 AC-3.
+         自动隐藏 (v-if total=0), 对无待审用户无干扰. -->
+    <PendingApprovalsWidget />
     <component :is="CurrentDashboard" />
   </div>
 </template>

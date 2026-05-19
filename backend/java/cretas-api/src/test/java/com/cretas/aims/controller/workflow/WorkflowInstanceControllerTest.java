@@ -1,0 +1,307 @@
+package com.cretas.aims.controller.workflow;
+
+import com.cretas.aims.dto.common.ApiResponse;
+import com.cretas.aims.dto.common.PageResponse;
+import com.cretas.aims.dto.user.UserDTO;
+import com.cretas.aims.dto.workflow.WorkflowInstancePendingDTO;
+import com.cretas.aims.entity.User;
+import com.cretas.aims.entity.config.ApprovalWorkflow;
+import com.cretas.aims.entity.config.ApprovalWorkflowNode;
+import com.cretas.aims.entity.inventory.PurchaseOrder;
+import com.cretas.aims.entity.workflow.ApprovalWorkflowInstance;
+import com.cretas.aims.entity.workflow.ApprovalWorkflowInstance.InstanceStatus;
+import com.cretas.aims.repository.UserRepository;
+import com.cretas.aims.repository.inventory.PurchaseOrderRepository;
+import com.cretas.aims.service.ApprovalWorkflowService;
+import com.cretas.aims.service.MobileService;
+import com.cretas.aims.service.workflow.WorkflowEngineService;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.test.util.ReflectionTestUtils;
+
+import java.math.BigDecimal;
+import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.UUID;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+
+/**
+ * Tests for {@link WorkflowInstanceController} — issue #20 Phase 1 closure for ADR-001 AC-3.
+ *
+ * <p>Strategy: 不启动 Spring context, 用 Mockito 替换 WorkflowEngineService /
+ * ApprovalWorkflowService / Repos / MobileService. Controller 字段注入的
+ * optional {@code purchaseOrderRepository} 通过 {@link ReflectionTestUtils} 灌入.
+ *
+ * <p>Scenarios:
+ * <ol>
+ *   <li>{@link #finance_mgr_sees_pending_with_finance_node} —
+ *     finance_manager 角色看到含财务审批节点的 PO</li>
+ *   <li>{@link #quality_mgr_sees_zero_pending} —
+ *     quality_manager 不应看到 finance-only workflow</li>
+ *   <li>{@link #factory_super_admin_sees_all} —
+ *     super_admin 看全部 RUNNING 实例 (兜底)</li>
+ *   <li>{@link #pagination_works} —
+ *     分页参数正确传给 service 并返回 PageResponse</li>
+ * </ol>
+ *
+ * @since 2026-05-18 (issue #20)
+ */
+@DisplayName("WorkflowInstanceController — issue #20 我待审 widget")
+@ExtendWith(MockitoExtension.class)
+class WorkflowInstanceControllerTest {
+
+    private static final String FACTORY_ID = "F006";
+    private static final String AUTH_HEADER = "Bearer fake-token";
+
+    @Mock private WorkflowEngineService workflowEngine;
+    @Mock private ApprovalWorkflowService approvalWorkflowService;
+    @Mock private UserRepository userRepository;
+    @Mock private MobileService mobileService;
+    @Mock private PurchaseOrderRepository purchaseOrderRepository;
+
+    @InjectMocks private WorkflowInstanceController controller;
+
+    @BeforeEach
+    void setUp() {
+        // purchaseOrderRepository 在 controller 是 @Autowired(required=false) 字段注入,
+        // @InjectMocks 不会自动注入, 用 ReflectionTestUtils.
+        ReflectionTestUtils.setField(controller, "purchaseOrderRepository", purchaseOrderRepository);
+    }
+
+    // ==================== Fixtures ====================
+
+    private User buildUser(Long id, String username, String roleCode) {
+        User u = new User();
+        u.setId(id);
+        u.setUsername(username);
+        u.setRoleCode(roleCode);
+        u.setIsActive(true);
+        return u;
+    }
+
+    private ApprovalWorkflowInstance buildInstance(String instanceId, String workflowId,
+                                                   String moduleCode, String bizId,
+                                                   List<String> activeNodes, Long initiator) {
+        ApprovalWorkflowInstance inst = ApprovalWorkflowInstance.builder()
+                .id(instanceId)
+                .factoryId(FACTORY_ID)
+                .workflowId(workflowId)
+                .moduleCode(moduleCode)
+                .businessEntityId(bizId)
+                .status(InstanceStatus.RUNNING)
+                .currentNodeIds(new ArrayList<>(activeNodes))
+                .contextJson(new HashMap<>())
+                .initiatedBy(initiator)
+                .initiatedAt(LocalDateTime.now())
+                .build();
+        return inst;
+    }
+
+    private PurchaseOrder buildPo(String id, String orderNum, BigDecimal amount, String supplierName) {
+        PurchaseOrder po = new PurchaseOrder();
+        po.setId(id);
+        po.setFactoryId(FACTORY_ID);
+        po.setOrderNumber(orderNum);
+        po.setTotalAmount(amount);
+        // supplierName 是 @Formula 字段, 测试里用 reflection 直接 set.
+        ReflectionTestUtils.setField(po, "supplierName", supplierName);
+        return po;
+    }
+
+    private void mockAuth(Long userId, String username, String roleCode) {
+        UserDTO dto = new UserDTO();
+        dto.setId(userId);
+        dto.setUsername(username);
+        lenient().when(mobileService.getUserFromToken(anyString())).thenReturn(dto);
+        User user = buildUser(userId, username, roleCode);
+        lenient().when(userRepository.findById(userId)).thenReturn(Optional.of(user));
+    }
+
+    private ApprovalWorkflow buildWorkflow(String id, String label, String approverRole) {
+        ApprovalWorkflow wf = new ApprovalWorkflow();
+        wf.setId(id);
+        wf.setFactoryId(FACTORY_ID);
+        wf.setNodesJson("[]"); // body irrelevant; deserializeNodes mocked
+        // mock per-call return
+        lenient().when(approvalWorkflowService.getById(FACTORY_ID, id))
+                .thenReturn(Optional.of(wf));
+        lenient().when(approvalWorkflowService.deserializeNodes(anyString()))
+                .thenReturn(List.of(
+                        ApprovalWorkflowNode.builder()
+                                .id("approval_finance")
+                                .type("approval")
+                                .label(label)
+                                .config(Map.of("approverRoles", List.of(approverRole)))
+                                .build()));
+        return wf;
+    }
+
+    // ==================== Tests ====================
+
+    @Test
+    @DisplayName("finance_mgr_sees_pending_with_finance_node: finance_manager 看到财务节点 pending PO")
+    void finance_mgr_sees_pending_with_finance_node() {
+        // user
+        mockAuth(100L, "f006_finance_mgr", "finance_manager");
+
+        // 1 RUNNING instance with finance approval node
+        String poId = "po-" + UUID.randomUUID();
+        ApprovalWorkflowInstance inst = buildInstance(
+                "inst-1", "wf-1", "PURCHASE_ORDER", poId,
+                List.of("approval_finance"), 200L);
+
+        Pageable expectedPageable = PageRequest.of(0, 20);
+        Page<ApprovalWorkflowInstance> page = new PageImpl<>(List.of(inst), expectedPageable, 1L);
+        when(workflowEngine.findPendingForRole(eq(FACTORY_ID), eq("finance_manager"),
+                eq(null), any(Pageable.class))).thenReturn(page);
+
+        // workflow + nodes hydration
+        buildWorkflow("wf-1", "财务审批", "finance_manager");
+
+        // PO hydration
+        PurchaseOrder po = buildPo(poId, "PO-20260518-0001",
+                new BigDecimal("40000"), "供应商甲");
+        when(purchaseOrderRepository.findAllById(any())).thenReturn(List.of(po));
+
+        // initiator username hydration
+        User initiator = buildUser(200L, "f006_procurement_mgr", "procurement_manager");
+        when(userRepository.findAllById(any())).thenReturn(List.of(initiator));
+
+        // exec
+        ApiResponse<PageResponse<WorkflowInstancePendingDTO>> resp =
+                controller.getPendingForUser(FACTORY_ID, AUTH_HEADER, null, 1, 20);
+
+        // assert
+        assertTrue(resp.getSuccess());
+        assertNotNull(resp.getData());
+        assertEquals(1, resp.getData().getContent().size());
+        WorkflowInstancePendingDTO dto = resp.getData().getContent().get(0);
+        assertEquals("inst-1", dto.getInstanceId());
+        assertEquals("PURCHASE_ORDER", dto.getModuleCode());
+        assertEquals(poId, dto.getBusinessEntityId());
+        assertEquals("approval_finance", dto.getCurrentNodeId());
+        assertEquals("财务审批", dto.getCurrentNodeLabel());
+        assertEquals("f006_procurement_mgr", dto.getInitiatedByUsername());
+        // businessSummary 应含订单号 + 金额 + 供应商名
+        assertNotNull(dto.getBusinessSummary());
+        assertTrue(dto.getBusinessSummary().contains("PO-20260518-0001"));
+        assertTrue(dto.getBusinessSummary().contains("40000"));
+        assertTrue(dto.getBusinessSummary().contains("供应商甲"));
+
+        // 验证 findPendingForRole 调用参数
+        ArgumentCaptor<Pageable> pageCap = ArgumentCaptor.forClass(Pageable.class);
+        verify(workflowEngine).findPendingForRole(eq(FACTORY_ID), eq("finance_manager"),
+                eq(null), pageCap.capture());
+        assertEquals(0, pageCap.getValue().getPageNumber(), "page 1 → spring 0-based");
+        assertEquals(20, pageCap.getValue().getPageSize());
+    }
+
+    @Test
+    @DisplayName("quality_mgr_sees_zero_pending: 无关角色返空")
+    void quality_mgr_sees_zero_pending() {
+        mockAuth(101L, "f006_quality_mgr", "quality_manager");
+        // service 在它 in-memory filter 阶段把 finance-only instance 过滤掉, 返空 page
+        when(workflowEngine.findPendingForRole(eq(FACTORY_ID), eq("quality_manager"),
+                eq(null), any(Pageable.class)))
+                .thenReturn(new PageImpl<>(List.of(), PageRequest.of(0, 20), 0L));
+
+        ApiResponse<PageResponse<WorkflowInstancePendingDTO>> resp =
+                controller.getPendingForUser(FACTORY_ID, AUTH_HEADER, null, 1, 20);
+
+        assertTrue(resp.getSuccess());
+        assertEquals(0, resp.getData().getContent().size());
+        assertEquals(0L, resp.getData().getTotalElements());
+    }
+
+    @Test
+    @DisplayName("factory_super_admin_sees_all: super_admin 看全部 (兜底)")
+    void factory_super_admin_sees_all() {
+        mockAuth(102L, "f006_admin", "factory_super_admin");
+
+        // mock returning 2 instances regardless of role (service 内部 super_admin 兜底逻辑)
+        ApprovalWorkflowInstance inst1 = buildInstance(
+                "inst-finance", "wf-1", "PURCHASE_ORDER", "po-A",
+                List.of("approval_finance"), 200L);
+        ApprovalWorkflowInstance inst2 = buildInstance(
+                "inst-quality", "wf-2", "PURCHASE_ORDER", "po-B",
+                List.of("approval_quality"), 201L);
+
+        when(workflowEngine.findPendingForRole(eq(FACTORY_ID), eq("factory_super_admin"),
+                eq(null), any(Pageable.class)))
+                .thenReturn(new PageImpl<>(List.of(inst1, inst2),
+                        PageRequest.of(0, 20), 2L));
+
+        // workflow nodes hydration for both (mock returns same nodes for any workflowId)
+        ApprovalWorkflow wf = new ApprovalWorkflow();
+        wf.setId("wf-x");
+        wf.setNodesJson("[]");
+        when(approvalWorkflowService.getById(eq(FACTORY_ID), anyString()))
+                .thenReturn(Optional.of(wf));
+        when(approvalWorkflowService.deserializeNodes(anyString()))
+                .thenReturn(List.of(
+                        ApprovalWorkflowNode.builder()
+                                .id("approval_finance").type("approval").label("财务审批").build(),
+                        ApprovalWorkflowNode.builder()
+                                .id("approval_quality").type("approval").label("质检审批").build()));
+
+        // No PO hydration available — fallback summary used
+        when(purchaseOrderRepository.findAllById(any())).thenReturn(List.of());
+        when(userRepository.findAllById(any())).thenReturn(List.of());
+
+        ApiResponse<PageResponse<WorkflowInstancePendingDTO>> resp =
+                controller.getPendingForUser(FACTORY_ID, AUTH_HEADER, null, 1, 20);
+
+        assertTrue(resp.getSuccess());
+        assertEquals(2, resp.getData().getContent().size());
+        // fallback summary still set
+        assertNotNull(resp.getData().getContent().get(0).getBusinessSummary());
+    }
+
+    @Test
+    @DisplayName("pagination_works: page=2 size=5 → Pageable 0-based offset 5 size 5")
+    void pagination_works() {
+        mockAuth(100L, "f006_finance_mgr", "finance_manager");
+
+        when(workflowEngine.findPendingForRole(eq(FACTORY_ID), eq("finance_manager"),
+                eq("PURCHASE_ORDER"), any(Pageable.class)))
+                .thenReturn(new PageImpl<>(List.of(), PageRequest.of(1, 5), 12L));
+
+        ApiResponse<PageResponse<WorkflowInstancePendingDTO>> resp =
+                controller.getPendingForUser(FACTORY_ID, AUTH_HEADER, "PURCHASE_ORDER", 2, 5);
+
+        assertTrue(resp.getSuccess());
+        assertEquals(12L, resp.getData().getTotalElements());
+        assertEquals(2, resp.getData().getPage());
+        assertEquals(5, resp.getData().getSize());
+
+        ArgumentCaptor<Pageable> pageCap = ArgumentCaptor.forClass(Pageable.class);
+        verify(workflowEngine, times(1)).findPendingForRole(eq(FACTORY_ID),
+                eq("finance_manager"), eq("PURCHASE_ORDER"), pageCap.capture());
+        assertEquals(1, pageCap.getValue().getPageNumber(), "page 2 → spring 1-based");
+        assertEquals(5, pageCap.getValue().getPageSize());
+    }
+}

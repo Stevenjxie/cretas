@@ -22,6 +22,9 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.stereotype.Service;
@@ -378,6 +381,102 @@ public class WorkflowEngineServiceImpl implements WorkflowEngineService {
         log.info("取消 workflow 实例 - instanceId={}, canceller={}, reason={}",
                 instanceId, cancellerUserId, reason);
         return saved;
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    @SuppressWarnings("unchecked")
+    public Page<ApprovalWorkflowInstance> findPendingForRole(
+            String factoryId, String userRole, String moduleCode, Pageable pageable) {
+        Objects.requireNonNull(factoryId, "factoryId must not be null");
+        Objects.requireNonNull(userRole, "userRole must not be null");
+        Objects.requireNonNull(pageable, "pageable must not be null");
+
+        // 1. SQL filter by factory + status (+ optional moduleCode)
+        List<ApprovalWorkflowInstance> raw;
+        if (moduleCode == null || moduleCode.isBlank()) {
+            raw = instanceRepository.findByFactoryIdAndStatusOrderByInitiatedAtDesc(
+                    factoryId, InstanceStatus.RUNNING);
+        } else {
+            raw = instanceRepository.findByFactoryIdAndStatusAndModuleCodeOrderByInitiatedAtDesc(
+                    factoryId, InstanceStatus.RUNNING, moduleCode);
+        }
+
+        // 2. factory_super_admin 兜底放行 — 返全部 (mirror canTransition 语义)
+        boolean isSuperAdmin = FactoryUserRole.factory_super_admin.name().equals(userRole);
+
+        // 3. In-memory filter by approverRoles on active approval node(s)
+        List<ApprovalWorkflowInstance> filtered;
+        if (isSuperAdmin) {
+            filtered = raw;
+        } else {
+            filtered = new ArrayList<>();
+            // workflow id → nodes map cache (避免对同一 workflow 重复 deserialize)
+            Map<String, Map<String, ApprovalWorkflowNode>> wfNodesCache = new HashMap<>();
+            for (ApprovalWorkflowInstance inst : raw) {
+                if (inst.getCurrentNodeIds() == null || inst.getCurrentNodeIds().isEmpty()) {
+                    continue;
+                }
+                Map<String, ApprovalWorkflowNode> byId = wfNodesCache.computeIfAbsent(
+                        inst.getWorkflowId(),
+                        wid -> loadWorkflowNodesById(inst.getFactoryId(), wid));
+                if (byId.isEmpty()) {
+                    // workflow 配置丢失 — 防御性跳过, 不让 widget 爆
+                    continue;
+                }
+                boolean matched = false;
+                for (String nodeId : inst.getCurrentNodeIds()) {
+                    ApprovalWorkflowNode node = byId.get(nodeId);
+                    if (node == null || !"approval".equals(node.getType())) {
+                        continue;
+                    }
+                    Map<String, Object> config = node.getConfig() == null
+                            ? Map.of() : node.getConfig();
+                    Object roles = config.get("approverRoles");
+                    if (!(roles instanceof List<?> roleList)) continue;
+                    for (Object r : roleList) {
+                        if (r != null && userRole.equals(String.valueOf(r))) {
+                            matched = true;
+                            break;
+                        }
+                    }
+                    if (matched) break;
+                }
+                if (matched) {
+                    filtered.add(inst);
+                }
+            }
+        }
+
+        // 4. In-memory pagination
+        int total = filtered.size();
+        int offset = (int) Math.min(pageable.getOffset(), total);
+        int end = Math.min(offset + pageable.getPageSize(), total);
+        List<ApprovalWorkflowInstance> pageContent = filtered.subList(offset, end);
+
+        return new PageImpl<>(pageContent, pageable, total);
+    }
+
+    /**
+     * Load workflow nodes 并按 id 索引 — 失败返空 map (fail-soft).
+     */
+    private Map<String, ApprovalWorkflowNode> loadWorkflowNodesById(String factoryId, String workflowId) {
+        try {
+            ApprovalWorkflow wf = workflowService.getById(factoryId, workflowId).orElse(null);
+            if (wf == null) {
+                log.debug("findPendingForRole: workflow 配置不存在 — factoryId={}, workflowId={}",
+                        factoryId, workflowId);
+                return Map.of();
+            }
+            List<ApprovalWorkflowNode> nodes = workflowService.deserializeNodes(wf.getNodesJson());
+            Map<String, ApprovalWorkflowNode> byId = new HashMap<>();
+            for (ApprovalWorkflowNode n : nodes) byId.put(n.getId(), n);
+            return byId;
+        } catch (Exception e) {
+            log.warn("findPendingForRole: 加载 workflow 失败 (跳过) — workflowId={}, error={}",
+                    workflowId, e.getMessage());
+            return Map.of();
+        }
     }
 
     /**
