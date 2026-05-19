@@ -26,7 +26,7 @@ import java.lang.annotation.Target;
  *
  * Empty array = no role restriction (but still requires authentication).
  */
-@Target(ElementType.METHOD)
+@Target({ElementType.METHOD, ElementType.TYPE})
 @Retention(RetentionPolicy.RUNTIME)
 public @interface RequireRole {
     /** Allowed role codes (lowercase FactoryUserRole enum values). At least one must match. */

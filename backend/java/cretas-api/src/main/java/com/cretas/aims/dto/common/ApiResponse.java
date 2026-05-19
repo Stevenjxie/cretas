@@ -46,6 +46,12 @@ public class ApiResponse<T> implements Serializable {
     @Schema(description = "UI pulse 目标 button label (提示用户点该按钮)")
     private String hintTarget;
 
+    // Phase 4a (2026-05-19): String-valued error category for FE branching.
+    // `code` is Integer HTTP status (400/403/...). errorCode is semantic ("RULE_VIOLATION",
+    // "DUPLICATE", "WORKFLOW_NOT_FOUND") so FE can branch without parsing message.
+    @Schema(description = "语义错误码 (FE 用于分支处理, 如 RULE_VIOLATION/DUPLICATE)")
+    private String errorCode;
+
     // 成功响应
     public static <T> ApiResponse<T> success() {
         return success(null);
@@ -131,6 +137,27 @@ public class ApiResponse<T> implements Serializable {
     public void setSeverity(String severity) { this.severity = severity; }
     public String getHintTarget() { return hintTarget; }
     public void setHintTarget(String hintTarget) { this.hintTarget = hintTarget; }
+    public String getErrorCode() { return errorCode; }
+    public void setErrorCode(String errorCode) { this.errorCode = errorCode; }
+
+    /**
+     * Phase 4a (2026-05-19): error response with semantic errorCode for FE branching.
+     * Use when FE needs to differentiate error category (e.g. RULE_VIOLATION vs generic 400).
+     */
+    public static <T> ApiResponse<T> errorWithCode(Integer code, String errorCode,
+                                                   String message, String actionHint,
+                                                   String severity) {
+        ApiResponse<T> response = new ApiResponse<>();
+        response.setCode(code);
+        response.setErrorCode(errorCode);
+        response.setMessage(message);
+        response.setData(null);
+        response.setTimestamp(LocalDateTime.now());
+        response.setSuccess(false);
+        response.setActionHint(actionHint);
+        response.setSeverity(severity);
+        return response;
+    }
 
     // Manual getters and setters (Lombok @Data not working)
     public Integer getCode() {

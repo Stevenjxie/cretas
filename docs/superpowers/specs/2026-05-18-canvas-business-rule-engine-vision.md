@@ -323,4 +323,234 @@ Phase 5 (2 天):   Canvas-Cron
 
 ---
 
-**下一步**: 把此 vision 拆解为 Phase 1 (Canvas-Workflow) 的 implementation spec, dispatch 给另一个 chat 实施.
+## 11. Architecture Decision Records
+
+每个 Phase 落地时记录关键 trade-off, 留给未来回看「为什么这么选」.
+
+### ADR-001 — Phase 1 实施方式: B 完整一步到位
+
+**Date**: 2026-05-18
+**Status**: ✅ Implemented + Live (2026-05-19, Stevenjxie/cretas main `83b27b105`)
+
+**Context**: Phase 1 PR #862/#23 完成 Step 1-4 (enum + Canvas Tab). Step 5 = PurchaseService 接 workflow. `ApprovalWorkflowExecutor` 当时 `ConcurrentHashMap` 内存版, 不持久化, Java 重启即丢. 3 选项:
+- A. Simplified routing (~2h) — 一次决定, 不上 state machine
+- B. 完整 state machine + Redis 持久化 (5-7d)
+- C. Defer Step 5, UI 不接 service
+
+**Decision**: B 一步到位.
+
+**Rationale**:
+1. 避免 A→B 迁移技术债 (schema 兼容问题)
+2. 避免半成品演示导致客户信任崩塌
+3. Sprint 4 计划本就要做, 提前不丢 scope
+4. F006 客户可等一周看完整 product
+
+**Consequences**: F006 等 1 周 (vs A 当天). 一次性 ship 风险集中, 但 6 子任务清晰 (B.1-B.6).
+
+**B 6 子任务** (全部已 ship):
+- B.1 `approval_history` 表 + Flyway ✅
+- B.2 Redis 持久化 + PG 影子写 ✅
+- B.3 state machine impl ✅
+- B.4 DAG 执行引擎 (7 节点类型) ✅
+- B.5 Canvas UI 节点属性面板 ✅
+- B.6 PurchaseService 集成 + 4 E2E path ✅
+
+**Status Tracking**: All 7 acceptance criteria PASS in prod 2026-05-19.
+
+---
+
+### ADR-002 — Phase 2 Alerts: Hybrid 触发 (4 event + 5 scheduled)
+
+**Date**: 2026-05-18
+**Status**: ✅ Backend complete (PR #24 `1b55ac8dd`), 🟡 frontend pending
+
+**Context**: 8 alert types 触发场景不同. 选 A 纯 event-driven / B 纯 @Scheduled 跑批 / C hybrid.
+
+**Decision**: C hybrid.
+- **Event-driven (4)**: inventory_low / quality_anomaly / po_amount_threshold / so_amount_threshold — 业务实时事件
+- **Scheduled (5)**: inventory_expiring / sales_decline / customer_payment_overdue / supplier_payable_due / inventory_low fallback — 时间窗口或聚合查询
+
+**Rationale**: 实时事件用 Spring `@EventListener` 准实时响应; 时间窗口类型 (过期前 N 天) 必须 cron 跑批; inventory_low **双保** (event-driven 主路径 + 15min @fixedRate fallback) 防 event 未发布漏报.
+
+**Consequences**:
+- 4 业务 service 需 publish event (PurchaseService.createPO 等) — listener 现 @PostConstruct `log.warn` 标 gap, 不阻塞运行
+- 5 scheduled evaluator 各自 query 业务 repo (MaterialBatch / InvoiceRecord / Payable / SO) — sister chat 接
+- SpEL 双绑定 `#context.xxx` + `#xxx` 让简单 rule `#currentStock < #minStockLevel` 无前缀
+
+**Status Tracking**:
+- [x] AlertEngineServiceImpl (5 methods + dedup query)
+- [x] 9 listener 类 (4 event + 4 scheduled + 1 fallback)
+- [x] 6 AI Tools (factoryId 全消费)
+- [x] CanvasAlertController 6 endpoints (BONUS 填实)
+- [x] 22 new tests + 3334 regression PASS
+- [ ] Canvas Vue Tab (sister chat)
+- [ ] 业务 service publish 4 event (Phase 2 follow-up issue)
+
+---
+
+### ADR-003 — Phase 3 Notify: 1 真 4 stub + Graceful FAILED log
+
+**Date**: 2026-05-18
+**Status**: ✅ Backend partial (PR #29 `53c0ab9a2`), 🟡 4 channel SDK + frontend pending
+
+**Context**: 5 channel sender (WeChat/DingTalk/Email/SMS/InApp). 4 外部 channel 需 SDK + creds (`weixin-java-cp` / `aliyun-dysmsapi` / `spring-boot-starter-mail` / DingTalk webhook). Subagent 阶段不加 pom dep (避免 scope creep). Stub pattern: 选 A throw UnsupportedOp / B 写 FAILED `NotifyLog`.
+
+**Decision**: B 写 FAILED NotifyLog + actionable errorMsg.
+
+**Rationale**:
+1. **Graceful fan-out**: multi-channel 时一个 stub 不阻塞其他真 sender (e.g. InApp + Email + WeChat: InApp 成功, Email/WeChat FAILED, audit trail 完整)
+2. **per fool-proof Rule 5** (dead-end → next action): errorMsg 含 "请 Phase 3 follow-up 加 X SDK" — operator 知道下一步
+3. **替换路径平滑**: sister chat 加 SDK + creds 后直接替 stub body, 不动 sender interface
+
+**Consequences**:
+- 4 sender (WeChat/DingTalk/Email/SMS) 真 SDK + creds wire 留 sister chat
+- Phase 1 NotifyNodeHandler wire (注入 NotifySender) 留 Phase 1 follow-up issue (1 行改)
+- **Audit fix critical**: subagent 把 5 Tool factoryId 引用 0 → 42 次, audit script 通过
+
+**Discovery during impl**: `.gitignore line 51 temp*` Windows 大小写不敏感匹配 `Template*` → `TemplateEngine.java` 静默丢失. Subagent 加 `!path/Template*.java` negation 修复. **Org-wide risk**: 所有以 `Temp*` 开头的 Java class 在 Windows 都中招 — 应 file follow-up issue.
+
+**Status Tracking**:
+- [x] TemplateEngine ({{var}} regex + missing var IAE per fool-proof)
+- [x] InAppSender 真 impl
+- [x] 4 stub sender FAILED log + actionable Javadoc
+- [x] NotifySenderRegistry @Component 分发器
+- [x] 5 AI Tools factoryId 全消费 (audit pass)
+- [x] 17 tests PASS
+- [ ] Email/WeChat/DingTalk/SMS real SDK (sister chat)
+- [ ] Canvas Vue Tab (sister chat)
+- [ ] Phase 1 NotifyNodeHandler wire (Phase 1 follow-up 1 行)
+- [ ] Integration test @SpringBootTest (sister chat)
+
+---
+
+### ADR-004 — Phase 4a Rules: AOP + @RuleEvaluate Annotation
+
+**Date**: 2026-05-18
+**Status**: ✅ Backend complete (PR #26 `0e7a92e32`, rebase clean on Phase 1), 🟡 annotation attach + frontend pending
+
+**Context**: 业务规则触发场景: A 业务 service body 显式调用 `ruleEngine.evaluate(scope, input)` / B Spring AOP 注解隐式拦截 `@RuleEvaluate("ORDER")`.
+
+**Decision**: B AOP + `@RuleEvaluate` annotation + RuleEvaluateAspect `@Around("@annotation(ruleEvaluate)")`.
+
+**Rationale**:
+1. **低耦合**: 不改业务 service body, 加 1 个 annotation 即生效
+2. **annotation 即配置**: scope 直接写在注解里 (`@RuleEvaluate("ORDER")` / `("INVENTORY")` / `("CUSTOMER")`)
+3. **fail-open**: aspect engine 异常时 log + proceed 不阻塞业务
+4. **统一异常处理**: REJECT 抛 RuleViolationException → GlobalExceptionHandler → HTTP 400 + `{success:false, message, code:"RULE_VIOLATION", actionHint, severity}` (per fool-proof Rule 5)
+
+**Key defensive design** (WorkflowEngineFacade):
+- `@Autowired(required=false)` 防 Phase 1 service 不在 context 时启动 fail
+- `hasActiveWorkflow()` pre-check 避免 Phase 1 IllegalArgumentException flooding
+
+**Consequences**:
+- @RuleEvaluate 手动 attach 到 PurchaseService/SalesService/InventoryService **留 sister chat** (改 prod service body 高风险, skeleton 阶段不动)
+- MODIFY action 用 BeanWrapper reflection (limit: immutable obj 不动 — javadoc 标)
+
+**Status Tracking**:
+- [x] RuleEngineImpl 4 action types (LOG/REJECT/MODIFY/TRIGGER_WORKFLOW)
+- [x] RuleEvaluateAspect @Order(10) fail-open
+- [x] WorkflowEngineFacade wire Phase 1 (with required=false + pre-check)
+- [x] GlobalExceptionHandler @ExceptionHandler(RuleViolationException) 加
+- [x] 5 AI Tools factoryId 全消费
+- [x] 20 new tests + 117 workflow regression + 125 Tool regression PASS
+- [ ] @RuleEvaluate attach to PurchaseService / SalesService / InventoryService (sister chat)
+- [ ] Canvas Vue Tab (sister chat)
+- [ ] E2E F006 smoke (sister chat)
+
+---
+
+### ADR-005 — Phase 4b Pricing: 4 In-line + CYCLE Deferred to Batch
+
+**Date**: 2026-05-18
+**Status**: ✅ Backend complete (PR #25 `630330cb9`), 🟡 SalesService wire + CYCLE batch + frontend pending
+
+**Context**: 5 strategy type — 4 在 SO 建单时实时算 (TIERED/PROMOTION/MEMBER/BUNDLE), 1 跨周期 (CYCLE 月返点 需查季度历史).
+
+**Decision**: 4 in-line at `calculate()` time + CYCLE 用 `SKIP_CYCLE_INLINE=true` constant skip 在 switch 中, 留 sister chat 实现 month-end batch path.
+
+**Rationale**:
+1. In-line 4 type: SO 建单时直观算价, MEMBER 跟 customer level 绑定方便
+2. CYCLE 跨周期: 每次 SO 都查季度 sales aggregate 性能浪费 → month-end batch + 单独 PricingApplicationLog 写返点更合理
+3. Forward-thinking: `PricingRequest.costEstimate` 字段加好, sister chat wire SalesService 时 0 改 DTO
+
+**Consequences**:
+- `SalesServiceImpl.createOrderLine` 1 行替换 hardcoded price → `pricingEngine.calculate()` **留 sister chat** (改 prod service body 高风险)
+- CYCLE batch path 决定留 sister chat (spec §10 Q2: 月底 cron 跑 + 写 PricingApplicationLog `cycle_rebate` 记录, 客户看下月 invoice 时应用)
+- BUNDLE "single-line approximation" — multi-line cart-aware deferred (spec §9)
+
+**Status Tracking**:
+- [x] PricingEngineImpl 5 strategy type (CYCLE inert stub)
+- [x] scopeFilterJson matching helper
+- [x] PricingApplicationLog 仅 calculate() 写, simulate() 不写
+- [x] 5 AI Tools factoryId 全消费
+- [x] 14 tests PASS (13 unit + 1 @DataJpaTest integration)
+- [ ] SalesServiceImpl.createOrderLine 1 行 wire (sister chat)
+- [ ] CYCLE batch path 实现 (sister chat)
+- [ ] BUNDLE multi-line cart-aware (sister chat)
+- [ ] Canvas Vue Tab (sister chat)
+
+---
+
+### ADR-006 — Phase 5 Cron: Manual LockProvider.lock + Private ThreadPool
+
+**Date**: 2026-05-18
+**Status**: ✅ Backend complete (PR #27 `7b8e5bb0f`), 🟡 现有 @Scheduled migration + frontend pending
+
+**Context**: ShedLock 多实例锁选 A 手动 `LockProvider.lock(LockConfiguration)` per Runnable / B Spring `@SchedulerLock` annotation.
+
+**Decision**: A 手动 LockProvider.lock wrap.
+
+**Rationale**:
+1. `@SchedulerLock` 必须 cron 在 annotation 上静态定义 + method 是 Spring bean. Phase 5 cron 从 DB 动态加载 → annotation 静态不可用
+2. Manual lock at runtime 允许 cron 字符串运行时变 (用户改 DB 然后 reload)
+3. Per task: `lockName=scheduled-task-{taskCode}`, `lockAtMostFor=10min`, `lockAtLeastFor=30s`, contention 静默 debug log skip (per fool-proof)
+
+**Key design** (subagent smart choice):
+- **私有 ThreadPoolTaskScheduler(pool=4)** 不靠 autowire — Spring auto-config 不保证给 `@SchedulingConfigurer` 提供, 与现有 `engine/DynamicSchedulerService` 同 pattern
+- **CopyOnWriteArrayList** 跟踪 `ScheduledFuture` — `reload()` 时 cancel 全部 future + 重新 register (避免 leak)
+- **runNow()** bypass ShedLock — 手动触发只允许单实例 (manual override)
+
+**Consequences**:
+- 现有 24 个 `@Scheduled` 方法迁移到 Canvas-Cron 留 sister chat (high-risk 改 prod service)
+- Phase 2 alerts 5 个 @Scheduled evaluator 迁移到 Canvas-Cron 留 Phase 2 follow-up issue
+- H2 test profile 无 shedlock table → subagent 加 `@TestConfiguration + @Import` in-memory LockProvider (test-only)
+
+**Status Tracking**:
+- [x] DynamicScheduler.configureTasks 真 cron 注册 (subagent verified 23:58:16 EchoTaskHandler in canvas-cron-2 thread, SUCCESS run_log)
+- [x] ShedLock manual wrap with proper lockName/At-most/At-least
+- [x] DynamicSchedulerServiceImpl CRUD methods
+- [x] reload() cancel-on-future + re-register
+- [x] runNow() bypass lock for manual override
+- [x] 5 AI Tools factoryId 全消费 (含 global tasks NULL 路径)
+- [x] ScheduledTaskController list + logs (BONUS 填实)
+- [x] 22 tests PASS (含 1 SpringBootTest 真跑 cron)
+- [ ] 24 现有 @Scheduled migration (sister chat)
+- [ ] Phase 2 alerts 5 @Scheduled 迁移 (Phase 2 follow-up)
+- [ ] Canvas Vue Tab (sister chat)
+
+---
+
+### Reversal Paths
+
+任一 Phase 出问题时回退路径:
+- **Phase 1**: B.3-B.4 超时则砍多节点支持, 退化 1 级审批 + 1 通知 (Sprint 4 复用 B.1/B.2)
+- **Phase 2-5**: skeleton + backend complete 状态可独立 deploy (各自 PR 自包含). 任一 Phase rollback 不影响其他
+- **跨 Phase**: Phase 4a WorkflowEngineFacade `@Autowired(required=false)` 即使 Phase 1 rollback 也不破坏 Phase 4a
+
+---
+
+## 12. 跟踪 — Phase 2-5 Sister Chat 接手清单
+
+| Phase | PR | Backend | Sister chat 接手任务 |
+|---|---|---|---|
+| 2 Alerts | #24 | ✅ | Canvas Vue Tab + 4 业务 service publish event + 5 scheduler DB query body + multi-channel notify fan-out (依赖 Phase 3) |
+| 3 Notify | #29 | ✅* | Canvas Vue Tab + 4 channel real SDK wire (WeChat/DingTalk/Email/SMS) + Phase 1 NotifyNodeHandler wire + Integration @SpringBootTest + `@RequireRole` class-level → method-level fix |
+| 4a Rules | #26 | ✅ | Canvas Vue Tab + `@RuleEvaluate` attach to PurchaseService/SalesService/InventoryService + E2E F006 smoke |
+| 4b Pricing | #25 | ✅ | Canvas Vue Tab + SalesServiceImpl.createOrderLine 1 行 wire + CYCLE batch path + BUNDLE multi-line |
+| 5 Cron | #27 | ✅ | Canvas Vue Tab + 24 现有 @Scheduled migration + Phase 2 alerts 5 @Scheduled 迁移 |
+
+*: Phase 3 InAppSender 真 impl, 其他 4 channel stub-with-FAILED-log graceful pattern.
+
+---
+
+**当前最新状态** (2026-05-19): Phase 1 LIVE in prod. Phase 2-5 backend impl 全 shipped (PR #24/#25/#26/#27/#29 OPEN at Stevenjxie/cretas). 总 ~95 new Java files + ~95 tests PASS (across all 5 phases).

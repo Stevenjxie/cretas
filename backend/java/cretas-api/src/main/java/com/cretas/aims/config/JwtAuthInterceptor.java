@@ -203,7 +203,8 @@ public class JwtAuthInterceptor implements HandlerInterceptor {
                     && !"workflow".equals(factoryId)   // /api/mobile/workflow/* are global endpoints (node-schemas, validate)
                     && !"admin".equals(factoryId)      // /api/mobile/admin/* are cross-factory admin endpoints (cache management etc)
                     && !"smartbi-config".equals(factoryId)  // /api/mobile/smartbi-config/* uses ?factoryId= query param (R21-F4 fix)
-                    && !"system".equals(factoryId)) {  // Issue #836 (2026-05-17): /api/mobile/system/* is global (release-notes/status/info), not factory-scoped
+                    && !"system".equals(factoryId)  // Issue #836 (2026-05-17): /api/mobile/system/* is global (release-notes/status/info), not factory-scoped
+                    && !"scheduled-tasks".equals(factoryId)) {  // Phase 5 Canvas-Cron (2026-05-19): /api/mobile/scheduled-tasks/* is global cron management (per-factory + NULL=global tasks both managed here)
                 return factoryId;
             }
         }
