@@ -7,10 +7,11 @@ import com.cretas.aims.entity.rules.RuleScope;
 import com.cretas.aims.repository.rules.BusinessRuleRepository;
 import com.cretas.aims.repository.rules.RuleExecutionLogRepository;
 import com.cretas.aims.service.rules.RuleEngine;
+import com.cretas.aims.service.workflow.SandboxedSpelEvaluator;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
@@ -37,18 +38,40 @@ import static org.mockito.Mockito.when;
  * {@code raw.toUpperCase()}. The F1 fix (PR #44 review I1) added explicit null-check
  * before {@code .toUpperCase()}; these tests lock that behavior in.
  *
+ * <p>B-A7 P0 SpEL injection coverage (2026-05-19 Canvas Phase 2-5 QA finding,
+ * sister of PR #48 on CanvasAlertController): POST/PUT with
+ * {@code conditionSpel = "T(java.lang.Runtime).getRuntime().exec(...)"} was
+ * persisted raw without validation. The fix injects {@link SandboxedSpelEvaluator}
+ * and calls {@code validateSyntax()} on write paths before persist; these tests
+ * lock that behavior in.
+ *
  * <p>PATCH semantics: explicit null = "no change". explicit empty string = 400 VALIDATION.
+ *
+ * <p>Tests use a real {@link SandboxedSpelEvaluator} instance (not mock) — the
+ * sandbox itself has tests in {@code SandboxedSpelEvaluatorTest}; here we
+ * verify Controller invokes it on the right paths with the right error
+ * envelope ({@code errorCode="VALIDATION"} / {@code code=400}).
  *
  * @since 2026-05-19
  */
-@DisplayName("CanvasRuleController PUT null-field handling (B-BR2 regression)")
+@DisplayName("CanvasRuleController PUT null-field handling + SpEL injection (B-BR2 + B-A7)")
 @ExtendWith(MockitoExtension.class)
 class CanvasRuleControllerTest {
 
     @Mock private BusinessRuleRepository ruleRepository;
     @Mock private RuleExecutionLogRepository logRepository;
     @Mock private RuleEngine ruleEngine;
-    @InjectMocks private CanvasRuleController controller;
+
+    // Use real SpEL evaluator — verifies actual sandbox behavior, not a stub.
+    // Mirrors CanvasAlertControllerTest pattern from PR #48.
+    private final SandboxedSpelEvaluator spelEvaluator = new SandboxedSpelEvaluator();
+
+    private CanvasRuleController controller;
+
+    @BeforeEach
+    void setUp() {
+        controller = new CanvasRuleController(ruleRepository, logRepository, ruleEngine, spelEvaluator);
+    }
 
     private static final String FACTORY_ID = "F006";
 
@@ -203,5 +226,84 @@ class CanvasRuleControllerTest {
         assertEquals(RuleActionType.LOG, rule.getActionType());
         assertEquals(Integer.valueOf(100), rule.getPriority());
         assertEquals(Boolean.TRUE, rule.getEnabled());
+    }
+
+    // ==================== B-A7 P0: SpEL injection (sister of PR #48) ====================
+
+    private Map<String, Object> validCreateBody() {
+        Map<String, Object> body = new HashMap<>();
+        body.put("ruleCode", "test_rule_new");
+        body.put("ruleName", "Test rule new");
+        body.put("scope", "ORDER");
+        body.put("actionType", "LOG");
+        body.put("priority", 99);
+        return body;
+    }
+
+    @Test
+    @DisplayName("B-A7 P0: POST 拒绝 T(java.lang.Runtime).getRuntime().exec(...) RCE 注入")
+    void testSpelInjectionInCreateRejected() {
+        Map<String, Object> body = validCreateBody();
+        body.put("conditionSpel", "T(java.lang.Runtime).getRuntime().exec(\"calc\")");
+
+        ApiResponse<Map<String, Object>> resp = controller.createRule(FACTORY_ID, body);
+
+        assertNotNull(resp);
+        assertEquals(Integer.valueOf(400), resp.getCode());
+        assertFalse(Boolean.TRUE.equals(resp.getSuccess()));
+        assertEquals("VALIDATION", resp.getErrorCode());
+        assertTrue(resp.getMessage().contains("SpEL"),
+                "message 必须含 'SpEL' 关键字让前端能定位错误");
+        // CRITICAL: rule must NOT be persisted
+        verify(ruleRepository, never()).save(any(BusinessRule.class));
+    }
+
+    @Test
+    @DisplayName("B-A7 P0: PUT 拒绝 T(java.lang.Runtime).getRuntime().exec(...) RCE 注入 (update path 也必须 gate)")
+    void testSpelInjectionInUpdateRejected() {
+        BusinessRule rule = existingRule();
+        when(ruleRepository.findById(rule.getId())).thenReturn(Optional.of(rule));
+
+        Map<String, Object> body = new HashMap<>();
+        body.put("conditionSpel", "T(java.lang.Runtime).getRuntime().exec(\"rm\")");
+
+        ApiResponse<Map<String, Object>> resp = controller.updateRule(FACTORY_ID, rule.getId(), body);
+
+        assertNotNull(resp);
+        assertEquals(Integer.valueOf(400), resp.getCode());
+        assertFalse(Boolean.TRUE.equals(resp.getSuccess()));
+        assertEquals("VALIDATION", resp.getErrorCode());
+        assertTrue(resp.getMessage().contains("SpEL"));
+        verify(ruleRepository, never()).save(any(BusinessRule.class));
+    }
+
+    @Test
+    @DisplayName("B-A7 P0: 合法 SpEL 表达式通过 — #order.amount > 100 (regression)")
+    void testValidSpelStillAccepted() {
+        // Use property-access syntax (#var.field) not map-indexing (#var['field']) —
+        // sandbox dry-run with empty variables swallows "Property or field ... cannot be found"
+        // / "on null" errors (these are expected when running with no context) but does NOT
+        // swallow "Cannot index into a null value" (raised by ['...'] on null). This mirrors
+        // the same constraint observed in CanvasAlertControllerTest (PR #48) which used
+        // "#context.amount > 10000" for the same reason.
+        Map<String, Object> body = validCreateBody();
+        body.put("conditionSpel", "#order.amount > 100");
+
+        when(ruleRepository.findByFactoryIdAndRuleCode(FACTORY_ID, "test_rule_new"))
+                .thenReturn(Optional.empty());
+        when(ruleRepository.save(any(BusinessRule.class))).thenAnswer(inv -> {
+            BusinessRule r = inv.getArgument(0);
+            if (r.getId() == null) {
+                r.setId(UUID.randomUUID());
+            }
+            return r;
+        });
+
+        ApiResponse<Map<String, Object>> resp = controller.createRule(FACTORY_ID, body);
+
+        assertNotNull(resp);
+        assertEquals(Integer.valueOf(200), resp.getCode());
+        assertTrue(Boolean.TRUE.equals(resp.getSuccess()));
+        verify(ruleRepository).save(any(BusinessRule.class));
     }
 }
