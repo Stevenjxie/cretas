@@ -51,6 +51,8 @@
           <ToolSkillMatrix v-else-if="activeTab === 'tools'" :factory-id="factoryId" />
           <!-- Round 4 Fix P1-10: Scheduler Panel (新增) -->
           <SchedulerPanel v-else-if="activeTab === 'scheduler'" :factory-id="factoryId" />
+          <!-- Phase 3 Canvas-Notify (2026-05-19): NotifyTemplateEditor -->
+          <NotifyTemplateEditor v-else-if="activeTab === 'notify'" :factory-id="factoryId" />
 
           <!-- Empty state -->
           <div v-else class="empty-state">
@@ -114,6 +116,7 @@ import PermissionMatrix from './components/PermissionMatrix.vue'
 import ModulePermissionMatrix from './components/ModulePermissionMatrix.vue'
 import ToolSkillMatrix from './components/ToolSkillMatrix.vue'
 import SchedulerPanel from './components/SchedulerPanel.vue'
+import NotifyTemplateEditor from '@/views/platform/notify-template-editor/index.vue'
 import AIChatPanel from './components/AIChatPanel.vue'
 import ConfigDiffViewer from './components/ConfigDiffViewer.vue'
 import SchemaPreview from './components/SchemaPreview.vue'
