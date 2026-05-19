@@ -49,6 +49,11 @@ Pods/
 tmp/
 temp/
 temp*
+# Negation: 防止 Windows case-insensitive 误杀 Template* 类文件
+!**/Template*.vue
+!**/Template*.java
+!**/Template*.ts
+!**/template_engine*.go
 !backend/python/smartbi/shared/temporal_comparator.py
 !backend/python/smartbi/services/restaurant/sections/temporal_comparison.py
 !backend/python/smartbi/services/materialized_analytics/templates/

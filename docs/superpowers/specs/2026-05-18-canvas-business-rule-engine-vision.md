@@ -325,6 +325,8 @@ Phase 5 (2 天):   Canvas-Cron
 
 ## 11. Architecture Decision Records
 
+> 🎉 **All ADRs (001-006) LIVE in prod 2026-05-19**. Cretas Canvas business rule engine fully shipped. Sister chat backlog: 9 follow-up issues (#33-#45) at Stevenjxie/cretas.
+
 每个 Phase 落地时记录关键 trade-off, 留给未来回看「为什么这么选」.
 
 ### ADR-001 — Phase 1 实施方式: B 完整一步到位
@@ -362,7 +364,7 @@ Phase 5 (2 天):   Canvas-Cron
 ### ADR-002 — Phase 2 Alerts: Hybrid 触发 (4 event + 5 scheduled)
 
 **Date**: 2026-05-18
-**Status**: ✅ Backend complete (PR #24 `1b55ac8dd`), 🟡 frontend pending
+**Status**: ✅ LIVE prod 2026-05-19 — Blue-Green deploy v20260519_130016 + web-admin 0d4d1cb39
 
 **Context**: 8 alert types 触发场景不同. 选 A 纯 event-driven / B 纯 @Scheduled 跑批 / C hybrid.
 
@@ -391,7 +393,7 @@ Phase 5 (2 天):   Canvas-Cron
 ### ADR-003 — Phase 3 Notify: 1 真 4 stub + Graceful FAILED log
 
 **Date**: 2026-05-18
-**Status**: ✅ Backend partial (PR #29 `53c0ab9a2`), 🟡 4 channel SDK + frontend pending
+**Status**: ✅ LIVE prod 2026-05-19 — Blue-Green deploy v20260519_130016 + web-admin 0d4d1cb39
 
 **Context**: 5 channel sender (WeChat/DingTalk/Email/SMS/InApp). 4 外部 channel 需 SDK + creds (`weixin-java-cp` / `aliyun-dysmsapi` / `spring-boot-starter-mail` / DingTalk webhook). Subagent 阶段不加 pom dep (避免 scope creep). Stub pattern: 选 A throw UnsupportedOp / B 写 FAILED `NotifyLog`.
 
@@ -426,7 +428,7 @@ Phase 5 (2 天):   Canvas-Cron
 ### ADR-004 — Phase 4a Rules: AOP + @RuleEvaluate Annotation
 
 **Date**: 2026-05-18
-**Status**: ✅ Backend complete (PR #26 `0e7a92e32`, rebase clean on Phase 1), 🟡 annotation attach + frontend pending
+**Status**: ✅ LIVE prod 2026-05-19 — Blue-Green deploy v20260519_130016 + web-admin 0d4d1cb39
 
 **Context**: 业务规则触发场景: A 业务 service body 显式调用 `ruleEngine.evaluate(scope, input)` / B Spring AOP 注解隐式拦截 `@RuleEvaluate("ORDER")`.
 
@@ -462,7 +464,7 @@ Phase 5 (2 天):   Canvas-Cron
 ### ADR-005 — Phase 4b Pricing: 4 In-line + CYCLE Deferred to Batch
 
 **Date**: 2026-05-18
-**Status**: ✅ Backend complete (PR #25 `630330cb9`), 🟡 SalesService wire + CYCLE batch + frontend pending
+**Status**: ✅ LIVE prod 2026-05-19 — Blue-Green deploy v20260519_130016 + web-admin 0d4d1cb39
 
 **Context**: 5 strategy type — 4 在 SO 建单时实时算 (TIERED/PROMOTION/MEMBER/BUNDLE), 1 跨周期 (CYCLE 月返点 需查季度历史).
 
@@ -494,7 +496,7 @@ Phase 5 (2 天):   Canvas-Cron
 ### ADR-006 — Phase 5 Cron: Manual LockProvider.lock + Private ThreadPool
 
 **Date**: 2026-05-18
-**Status**: ✅ Backend complete (PR #27 `7b8e5bb0f`), 🟡 现有 @Scheduled migration + frontend pending
+**Status**: ✅ LIVE prod 2026-05-19 — Blue-Green deploy v20260519_130016 + web-admin 0d4d1cb39
 
 **Context**: ShedLock 多实例锁选 A 手动 `LockProvider.lock(LockConfiguration)` per Runnable / B Spring `@SchedulerLock` annotation.
 

@@ -40,6 +40,19 @@ public interface PurchaseService {
 
     PurchaseOrder submitOrder(String factoryId, String orderId);
 
+    /**
+     * Phase 4a follow-up (issue #45) — RuleEngine bridge method, invoked by submitOrder
+     * via self-proxy so {@code @RuleEvaluate} aspect fires.
+     *
+     * <p>Not intended for direct caller use. Visible on the interface only because
+     * Spring AOP proxy interception requires the method to be declared on the interface
+     * (for JDK proxies) or {@code public} (for CGLIB) and routed through a proxy reference.
+     *
+     * @param factoryId tenant scope
+     * @param order     loaded {@link PurchaseOrder} POJO — rules evaluated against this
+     */
+    void evaluateOrderRules(String factoryId, PurchaseOrder order);
+
     PurchaseOrder approveOrder(String factoryId, String orderId, Long approvedBy);
 
     PurchaseOrder cancelOrder(String factoryId, String orderId);

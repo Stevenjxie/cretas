@@ -138,7 +138,9 @@ const pageSize = ref(20)
 const total = ref(0)
 
 const filteredLogs = computed(() => {
-  if (filterStatus.value === null) return logs.value
+  // F5 fix (PR #32 review I2, score 80): strict `=== null` fails when el-select clearable
+  // sets the model to `undefined` (not null). Loose `== null` catches both null and undefined.
+  if (filterStatus.value == null) return logs.value
   return logs.value.filter(l => l.status === filterStatus.value)
 })
 

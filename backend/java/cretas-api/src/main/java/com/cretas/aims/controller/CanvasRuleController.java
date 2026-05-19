@@ -182,12 +182,21 @@ public class CanvasRuleController {
         }
         if (body.containsKey("scope")) {
             String raw = stringField(body, "scope");
-            try {
-                rule.setScope(RuleScope.valueOf(raw.toUpperCase()));
-            } catch (IllegalArgumentException ex) {
-                return ApiResponse.errorWithCode(400, "VALIDATION",
-                        "scope 不合法: " + raw,
-                        "允许值: ORDER / INVENTORY / CUSTOMER / CUSTOM", "warning");
+            // F1 fix: PATCH body {scope: null} returns null here; previous code NPE'd on raw.toUpperCase().
+            // Per PATCH semantics treat explicit null as "no change"; explicit "" → 400.
+            if (raw != null) {
+                if (raw.isBlank()) {
+                    return ApiResponse.errorWithCode(400, "VALIDATION",
+                            "scope 不可为空字符串",
+                            "如不修改 scope 请省略该字段; 否则填 ORDER/INVENTORY/CUSTOMER/CUSTOM", "warning");
+                }
+                try {
+                    rule.setScope(RuleScope.valueOf(raw.toUpperCase()));
+                } catch (IllegalArgumentException ex) {
+                    return ApiResponse.errorWithCode(400, "VALIDATION",
+                            "scope 取值非法: " + raw,
+                            "允许值: ORDER / INVENTORY / CUSTOMER / CUSTOM", "warning");
+                }
             }
         }
         if (body.containsKey("conditionSpel")) {
@@ -195,12 +204,20 @@ public class CanvasRuleController {
         }
         if (body.containsKey("actionType")) {
             String raw = stringField(body, "actionType");
-            try {
-                rule.setActionType(RuleActionType.valueOf(raw.toUpperCase()));
-            } catch (IllegalArgumentException ex) {
-                return ApiResponse.errorWithCode(400, "VALIDATION",
-                        "actionType 不合法: " + raw,
-                        "允许值: LOG / REJECT / MODIFY / TRIGGER_WORKFLOW", "warning");
+            // F1 fix: same NPE risk as scope — explicit null → no change, explicit "" → 400.
+            if (raw != null) {
+                if (raw.isBlank()) {
+                    return ApiResponse.errorWithCode(400, "VALIDATION",
+                            "actionType 不可为空字符串",
+                            "如不修改 actionType 请省略该字段; 否则填 LOG/REJECT/MODIFY/TRIGGER_WORKFLOW", "warning");
+                }
+                try {
+                    rule.setActionType(RuleActionType.valueOf(raw.toUpperCase()));
+                } catch (IllegalArgumentException ex) {
+                    return ApiResponse.errorWithCode(400, "VALIDATION",
+                            "actionType 取值非法: " + raw,
+                            "允许值: LOG / REJECT / MODIFY / TRIGGER_WORKFLOW", "warning");
+                }
             }
         }
         if (body.containsKey("actionConfigJson")) {
@@ -262,16 +279,19 @@ public class CanvasRuleController {
                                                          @RequestBody Map<String, Object> sampleInput) {
         log.info("POST /canvas-rules/{}/test-evaluate factoryId={}", id, factoryId);
 
-        // factoryId + ruleId guard delegated to RuleEngine.preview which throws IllegalArgumentException
-        // if cross-factory access. Catch + 403/404 surface.
+        // F2 fix: clarify guard order — cross-factory check is via loadRule below (throws BusinessException 403
+        // with severity=warning, surfaces as 403 not 500). RuleEngine.preview has its own internal cross-factory
+        // assertion as a defensive 2nd line of defense, but loadRule fires FIRST and is the authoritative gate.
         BusinessRule rule = loadRule(factoryId, id);
         boolean matched;
         try {
             matched = ruleEngine.preview(factoryId, id, sampleInput);
         } catch (IllegalArgumentException ex) {
+            // Reframe: this catch handles SpEL evaluation failures (bad expression, missing fields in sample input),
+            // NOT cross-factory access (loadRule already rejected those with 403).
             return ApiResponse.errorWithCode(400, "PREVIEW_ERROR",
-                    "规则评估失败: " + ex.getMessage(),
-                    "请检查 sampleInput 形态是否匹配 conditionSpel 引用的字段", "warning");
+                    "SpEL 表达式评估失败 — 检查 condition 语法 + sample input 字段是否齐全: " + ex.getMessage(),
+                    "示例: 若 conditionSpel 引用 #input.totalAmount, 请确保 sampleInput 包含 totalAmount 键", "warning");
         }
 
         Map<String, Object> data = new LinkedHashMap<>();

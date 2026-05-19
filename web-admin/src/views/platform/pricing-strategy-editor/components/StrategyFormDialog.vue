@@ -602,8 +602,76 @@ function buildScopeFilter(): Record<string, string[]> {
   return out;
 }
 
+// F4 (PR #40 review I3, score 80): client-side validation for TIERED / BUNDLE / MEMBER multi-tier
+// before submit. Server-side already validates; this catches obvious mistakes early w/ Chinese msg.
+function validateTieredTiers(): string | null {
+  if (form.strategyType !== 'TIERED') return null;
+  if (!tieredTiers.value || tieredTiers.value.length === 0) {
+    return '请至少添加 1 个阶梯';
+  }
+  for (let i = 0; i < tieredTiers.value.length; i++) {
+    const tier = tieredTiers.value[i];
+    if (tier.minQty == null || tier.minQty < 0) {
+      return `阶梯 ${i + 1}: minQty 不可为负数`;
+    }
+    if (tier.maxQty != null && tier.minQty > tier.maxQty) {
+      return `阶梯 ${i + 1}: minQty (${tier.minQty}) 必须 ≤ maxQty (${tier.maxQty})`;
+    }
+    if (tier.discountPct == null || tier.discountPct < 0 || tier.discountPct > 100) {
+      return `阶梯 ${i + 1}: discountPct 必须 0-100`;
+    }
+  }
+  // Overlap check (sort by minQty + verify no overlap)
+  const sorted = [...tieredTiers.value].sort((a, b) => a.minQty - b.minQty);
+  for (let i = 1; i < sorted.length; i++) {
+    const prev = sorted[i - 1];
+    const curr = sorted[i];
+    if (prev.maxQty != null && curr.minQty <= prev.maxQty) {
+      return `阶梯重叠: [${prev.minQty}-${prev.maxQty}] 跟 [${curr.minQty}-${curr.maxQty ?? '∞'}] 区间冲突`;
+    }
+  }
+  return null;
+}
+
+function validateBundle(): string | null {
+  if (form.strategyType !== 'BUNDLE') return null;
+  const validItems = bundleItems.value.filter(i => i.productId && i.productId.trim());
+  if (validItems.length === 0) {
+    return '请至少添加 1 个商品 (productId 不可为空)';
+  }
+  return null;
+}
+
+function validateMemberMulti(): string | null {
+  if (form.strategyType !== 'MEMBER') return null;
+  if (memberMode.value !== 'multi') return null;
+  if (Object.keys(memberTierMap.value).length === 0) {
+    return '多等级映射模式: 请至少添加 1 个等级→折扣映射';
+  }
+  return null;
+}
+
 async function onSubmit() {
   if (!formRef.value) return;
+
+  // F4: pre-validate type-specific rules before el-form rules trigger
+  const tieredErr = validateTieredTiers();
+  if (tieredErr) {
+    ElMessage.error(tieredErr);
+    return;
+  }
+  const bundleErr = validateBundle();
+  if (bundleErr) {
+    ElMessage.error(bundleErr);
+    return;
+  }
+  const memberErr = validateMemberMulti();
+  if (memberErr) {
+    ElMessage.error(memberErr);
+    return;
+  }
+  // CYCLE skip (per spec §10 Q2, batch path TBD).
+
   try {
     await formRef.value.validate();
   } catch {
