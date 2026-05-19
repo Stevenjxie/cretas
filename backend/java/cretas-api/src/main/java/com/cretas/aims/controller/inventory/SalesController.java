@@ -8,12 +8,14 @@ import com.cretas.aims.dto.inventory.CreateSalesOrderRequest;
 import com.cretas.aims.dto.inventory.FinanceCostBreakdown;
 import com.cretas.aims.dto.inventory.FinanceReviewRequest;
 import com.cretas.aims.dto.inventory.UpdateSalesOrderRequest;
+import com.cretas.aims.dto.sales.SalesOrderLinkCountsDTO;
 import com.cretas.aims.entity.User;
 import com.cretas.aims.entity.enums.SalesOrderStatus;
 import com.cretas.aims.entity.inventory.FinishedGoodsBatch;
 import com.cretas.aims.entity.inventory.SalesDeliveryRecord;
 import com.cretas.aims.entity.inventory.SalesOrder;
 import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.repository.BusinessLinkRepository;
 import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.repository.inventory.SalesOrderRepository;
 import com.cretas.aims.service.MobileService;
@@ -45,6 +47,10 @@ public class SalesController {
     private final PermissionService permissionService;
     private final UserRepository userRepository;
     private final SalesOrderRepository salesOrderRepository;
+    private final BusinessLinkRepository businessLinkRepository;
+
+    /** Sprint 5 Track C-2 — owner_type / target_type literal pinned to SalesOrder. */
+    private static final String SO_ENTITY_TYPE = "SALES_ORDER";
 
     // ==================== 销售订单 ====================
 
@@ -92,6 +98,65 @@ public class SalesController {
                 org.springframework.data.domain.PageRequest.of(safePage - 1, safeSize));
         var result = PageResponse.of(p.getContent(), safePage, safeSize, p.getTotalElements());
         return ApiResponse.success("查询成功", result);
+    }
+
+    /**
+     * Sprint 5 Track C-2 (G12-1 inline link counter): batch-fetch BusinessLink
+     * counts for a list of SO ids. Frontend calls this after rendering the
+     * order list to draw the inline {@code 链:N} chip without N+1 queries.
+     *
+     * <p>Source: Round 12 §B.6 X2 — HJ 销售单 list 行内 link counter.
+     * Sprint 5 plan §C item C-2 (P1 4d → MVP).
+     *
+     * <p>POST chosen over GET because the {@code orderIds} list can exceed
+     * URL-length safe limits (200+ rows × 36-char UUIDs).
+     *
+     * @param orderIds list of SalesOrder.id values (size capped at 500 to
+     *                 bound a single SQL IN-clause; caller paginates if more).
+     * @return one DTO per id requested; absent counts default to zero.
+     */
+    @PostMapping("/orders/link-counts")
+    @Operation(summary = "批量查询销售单 BusinessLink 计数 (inline link counter)")
+    @RequirePermission({"sales:read_write", "sales:read"})
+    public ApiResponse<List<SalesOrderLinkCountsDTO>> getOrderLinkCounts(
+            @PathVariable @NotBlank String factoryId,
+            @RequestBody @Valid OrderLinkCountsRequest request) {
+        java.util.List<String> ids = request.getOrderIds() == null
+                ? java.util.Collections.emptyList()
+                : request.getOrderIds();
+        if (ids.isEmpty()) {
+            return ApiResponse.success("查询成功", java.util.Collections.emptyList());
+        }
+        if (ids.size() > 500) {
+            throw new BusinessException(400, "orderIds size > 500, 请分页查询");
+        }
+
+        // Batch query — one round-trip per direction, no N+1.
+        java.util.Map<String, Long> outbound = new java.util.HashMap<>();
+        for (Object[] row : businessLinkRepository.countOutboundByOwners(factoryId, SO_ENTITY_TYPE, ids)) {
+            outbound.put((String) row[0], ((Number) row[1]).longValue());
+        }
+        java.util.Map<String, Long> inbound = new java.util.HashMap<>();
+        for (Object[] row : businessLinkRepository.countInboundByTargets(factoryId, SO_ENTITY_TYPE, ids)) {
+            inbound.put((String) row[0], ((Number) row[1]).longValue());
+        }
+
+        java.util.List<SalesOrderLinkCountsDTO> result = new java.util.ArrayList<>(ids.size());
+        for (String id : ids) {
+            result.add(SalesOrderLinkCountsDTO.builder()
+                    .orderId(id)
+                    .outboundLinkCount(outbound.getOrDefault(id, 0L))
+                    .inboundLinkCount(inbound.getOrDefault(id, 0L))
+                    .build());
+        }
+        return ApiResponse.success("查询成功", result);
+    }
+
+    /** Request body for {@link #getOrderLinkCounts}. */
+    @lombok.Data
+    public static class OrderLinkCountsRequest {
+        @jakarta.validation.constraints.NotNull
+        private java.util.List<String> orderIds;
     }
 
     @GetMapping("/orders/by-status")

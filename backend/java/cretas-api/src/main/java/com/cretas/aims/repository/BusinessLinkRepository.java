@@ -48,4 +48,42 @@ public interface BusinessLinkRepository extends JpaRepository<BusinessLink, Stri
                        @Param("ownerId") String ownerId,
                        @Param("targetType") String targetType,
                        @Param("targetId") String targetId);
+
+    /**
+     * Sprint 5 Track C-2 (inline link counter): batch count of outbound links
+     * grouped by ownerId. Mirrors {@code AttachmentRepository.countByEntities}
+     * shape — returns {@code [ownerId, count]} rows for caller to collect into
+     * a Map. Avoids N+1 list-row queries.
+     *
+     * <p>Use case: list page shows N sales orders; one query yields all
+     * outbound link counts; consumer assembles {@code Map<orderId, count>}
+     * and joins to {@code SalesOrderLinkCountsDTO}.
+     */
+    @Query("""
+            SELECT b.ownerId AS ownerId, COUNT(b) AS cnt
+            FROM BusinessLink b
+            WHERE b.factoryId = :factoryId
+              AND b.ownerType = :ownerType
+              AND b.ownerId IN :ownerIds
+            GROUP BY b.ownerId
+            """)
+    List<Object[]> countOutboundByOwners(@Param("factoryId") String factoryId,
+                                         @Param("ownerType") String ownerType,
+                                         @Param("ownerIds") List<String> ownerIds);
+
+    /**
+     * Sprint 5 Track C-2 (inline link counter): batch count of inbound links
+     * grouped by targetId.
+     */
+    @Query("""
+            SELECT b.targetId AS targetId, COUNT(b) AS cnt
+            FROM BusinessLink b
+            WHERE b.factoryId = :factoryId
+              AND b.targetType = :targetType
+              AND b.targetId IN :targetIds
+            GROUP BY b.targetId
+            """)
+    List<Object[]> countInboundByTargets(@Param("factoryId") String factoryId,
+                                         @Param("targetType") String targetType,
+                                         @Param("targetIds") List<String> targetIds);
 }
