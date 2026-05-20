@@ -912,12 +912,15 @@ const businessRoutes: RouteRecordRaw[] = [
             component: () => import('@/views/system/ai-quota/list.vue'),
             meta: { requiresAuth: true, title: 'AI 配额规则', module: 'system' }
           },
-          {
-            path: 'role-permissions',
-            name: 'SystemRolePermissions',
-            component: () => import('@/views/system/role-permissions/index.vue'),
-            meta: { requiresAuth: true, title: '全局权限矩阵 (L1)', module: 'system' }
-          },
+          // Sprint 8 P0.2 HIDE — index.vue 是 el-empty 占位, 内容未实现.
+          // 后端 API (permissionApi.ts) 已 ship, 仅缺前端实现.
+          // 推 Sprint 9 P1 真做完整 L1/L2 权限矩阵 UI.
+          // {
+          //   path: 'role-permissions',
+          //   name: 'SystemRolePermissions',
+          //   component: () => import('@/views/system/role-permissions/index.vue'),
+          //   meta: { requiresAuth: true, title: '全局权限矩阵 (L1)', module: 'system' }
+          // },
           {
             path: 'settings',
             name: 'SystemSettings',
