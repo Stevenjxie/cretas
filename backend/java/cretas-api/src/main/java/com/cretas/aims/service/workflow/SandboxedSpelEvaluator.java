@@ -209,11 +209,16 @@ public class SandboxedSpelEvaluator {
             String msg = ee.getMessage() == null ? "" : ee.getMessage();
             if (msg.contains("cannot be found") || msg.contains("on null")
                     || msg.contains("not assignable")
-                    || msg.contains("Cannot index into a null value")) {
+                    || msg.contains("Cannot index into a null value")
+                    || msg.contains("is not supported between")) {
                 // expected when running with empty variables — syntax is OK.
                 // "Cannot index into a null value" (EL1012E) fires on bracket indexing
                 // #order['amount'] when #order is null at dry-run; the syntax is valid,
                 // runtime binds Map (per RuleEngineImpl.buildSpelVariables) and resolves correctly.
+                // "is not supported between" (EL1030E) fires on binary operators when both
+                // operands are null at dry-run — legitimate formula like #qty + #price /
+                // #qty * #price MUST be allowed (runtime binds numeric values from formula
+                // evaluator context).
                 return;
             }
             throw new SpelEvaluationFailure(spel,
