@@ -360,6 +360,89 @@ deploy_jar() {
         fi
     fi
 
+    # ----- 0.5. Flyway pre-flight gates -----
+    # 2026-05-20 incident: 8-strike Flyway marathon (3 version dups + uncommitted
+    # WIP from sister chats + target/ orphan files). Each strike: ~4 min mvn
+    # package → ~3 min upload → ~4 min deploy → Spring Flyway boot fail.
+    # Cumulative ~88 min wasted. These gates fail FAST (<2s) before mvn.
+    # Per feedback_flyway_collision_marathon_2026_05_20.md HARD.
+    echo ""
+    echo "🔍 [0.5/4] Flyway pre-flight 审计 (version dups / 未提交 WIP / target 残留)..."
+    FLYWAY_SRC_DIR="backend/java/cretas-api/src/main/resources/db/flyway"
+    FLYWAY_TGT_DIR="backend/java/cretas-api/target/classes/db/flyway"
+
+    if [ ! -d "$FLYWAY_SRC_DIR" ]; then
+        echo "   ⚠️  $FLYWAY_SRC_DIR 不存在 — 跳过 Flyway 预检 (非典型 build context)"
+    else
+        # Gate 1: Flyway version duplicate detection (committed + uncommitted on disk)
+        # `find ... | sort | uniq -d` lists versions that appear ≥2 times.
+        # mvn package will copy ALL of them into JAR → Spring Flyway boot fails with
+        # "Found more than one migration with version X".
+        DUPS=$(find "$FLYWAY_SRC_DIR" -name 'V*.sql' -exec basename {} \; 2>/dev/null \
+            | awk -F'__' '{print $1}' | sort | uniq -d)
+        if [ -n "$DUPS" ]; then
+            echo "   ❌ FATAL: Flyway version collision detected:"
+            while IFS= read -r v; do
+                echo "      Version $v duplicated in:"
+                find "$FLYWAY_SRC_DIR" -name "${v}__*.sql" -exec echo "        {}" \;
+            done <<< "$DUPS"
+            echo ""
+            echo "   Resolution: rename later-merged file to next free version"
+            echo "   Reference: PR #79 / PR #82 (2026-05-20 incident rename pattern)"
+            echo "   Override: FORCE_DEPLOY=1 $0 ... (⚠️ deploy WILL crash on Spring Flyway boot)"
+            if [ "${FORCE_DEPLOY:-}" != "1" ]; then
+                exit 1
+            fi
+            echo "   ⚠️  FORCE_DEPLOY=1 set, continuing despite collision"
+        fi
+
+        # Gate 2: Uncommitted Flyway WIP detection (untracked + newly-added on disk)
+        # mvn packages whatever is on disk regardless of git status. Sister-chat
+        # WIP files that aren't committed yet WILL be baked into the JAR and run
+        # in prod. This was strike #2 in the 2026-05-20 marathon.
+        # Format: `git status --short` emits `?? path` for untracked, `A  path` for added.
+        UNTRACKED_FLY=$(git status --short "$FLYWAY_SRC_DIR/" 2>/dev/null \
+            | awk '/^\?\? / || /^A  / || /^AM / {print $2}')
+        if [ -n "$UNTRACKED_FLY" ]; then
+            echo "   ❌ FATAL: 未提交的 Flyway 文件在工作目录 (mvn 会打进 JAR):"
+            while IFS= read -r f; do
+                echo "      $f"
+            done <<< "$UNTRACKED_FLY"
+            echo ""
+            echo "   Resolution:"
+            echo "     - 提交到分支: git add <file> && git commit"
+            echo "     - 暂存: git stash --include-untracked"
+            echo "     - 删除: git rm / rm <file>"
+            echo "   Override: FORCE_DEPLOY=1 $0 ... (⚠️ JAR 含未审查的 schema 变更)"
+            if [ "${FORCE_DEPLOY:-}" != "1" ]; then
+                exit 1
+            fi
+            echo "   ⚠️  FORCE_DEPLOY=1 set, continuing with untracked Flyway files"
+        fi
+
+        # Gate 3: target/classes/db/flyway orphan detection
+        # `mvn package` (without `clean`) keeps stale resources from prior builds.
+        # After `git mv V_05 V_08`, target/ still has V_05 → JAR contains BOTH →
+        # Spring Flyway boot fails. Strike #4 in 2026-05-20 marathon.
+        # Auto-fix: rm -rf the target Flyway dir → mvn re-copies fresh on next package.
+        if [ -d "$FLYWAY_TGT_DIR" ]; then
+            SRC_FLY_SORTED=$(find "$FLYWAY_SRC_DIR" -name 'V*.sql' -exec basename {} \; 2>/dev/null | sort)
+            TGT_FLY_SORTED=$(find "$FLYWAY_TGT_DIR" -name 'V*.sql' -exec basename {} \; 2>/dev/null | sort)
+            if [ -n "$TGT_FLY_SORTED" ] && [ "$SRC_FLY_SORTED" != "$TGT_FLY_SORTED" ]; then
+                echo "   ⚠️  target/classes/db/flyway 与 src/ 不一致 — 存在 orphan 残留"
+                echo "   Auto-fix: rm -rf $FLYWAY_TGT_DIR (mvn package will re-populate)"
+                rm -rf "$FLYWAY_TGT_DIR" 2>/dev/null || {
+                    echo "   ❌ 无法删除 $FLYWAY_TGT_DIR (target/ 被锁?)"
+                    echo "   手工修复: rm -rf backend/java/cretas-api/target && retry"
+                    exit 1
+                }
+                echo "   ✓ orphan target/ Flyway 已清理"
+            fi
+        fi
+
+        echo "   ✓ Flyway 预检通过 (无 version dup / 无未提交 WIP / target/ 干净)"
+    fi
+
     # ----- 1. 本地 Maven 打包 -----
     # R25: 默认 `clean package` 强制全量重编, 防 incremental cache 漏新 Controller/DTO 签名 (R24 事故教训)
     # 如需保留 incremental build (快, 但不安全), 传 SKIP_CLEAN=1
