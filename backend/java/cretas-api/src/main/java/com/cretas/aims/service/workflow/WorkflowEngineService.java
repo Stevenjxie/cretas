@@ -156,4 +156,34 @@ public interface WorkflowEngineService {
      * Redis fail-open: 重建失败仅 log warning, PG 仍是 source of truth.
      */
     void rebuildRedisFromPg();
+
+    /**
+     * Sprint 5 Track A — "我创建的工作流" personal view.
+     *
+     * <p>查 user 作为 initiator 的 workflow instances. 跨 status 跨 module 返全部.
+     * UI 调用方应根据 status 用不同 tag 显示 (RUNNING 黄 / APPROVED 绿 / REJECTED 红 / CANCELLED 灰).
+     *
+     * @param factoryId 工厂 id
+     * @param userId 当前登录 user.id
+     * @param pageable 分页参数 (page from 0)
+     * @return Page of instances sorted by initiatedAt DESC
+     * @since 2026-05-19
+     */
+    Page<ApprovalWorkflowInstance> findCreatedBy(
+            String factoryId, Long userId, Pageable pageable);
+
+    /**
+     * Sprint 5 Track A — "我参与的工作流" personal view.
+     *
+     * <p>查 user 作为 actor 操作过的 workflow instances (通过 ApprovalHistory).
+     * Distinct 因同一 user 可能多次操作同一实例.
+     *
+     * @param factoryId 工厂 id
+     * @param userId 当前登录 user.id
+     * @param pageable 分页参数 (page from 0)
+     * @return Page of instances sorted by initiatedAt DESC
+     * @since 2026-05-19
+     */
+    Page<ApprovalWorkflowInstance> findParticipatedBy(
+            String factoryId, Long userId, Pageable pageable);
 }

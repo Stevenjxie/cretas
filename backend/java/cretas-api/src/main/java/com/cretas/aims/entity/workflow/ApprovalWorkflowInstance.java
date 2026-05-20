@@ -40,7 +40,10 @@ import java.util.Map;
            @Index(name = "idx_aw_instances_recovery",
                   columnList = "factory_id, status"),
            @Index(name = "idx_aw_instances_workflow_stats",
-                  columnList = "factory_id, workflow_id, status, completed_at")
+                  columnList = "factory_id, workflow_id, status, completed_at"),
+           // Sprint 5 Track A: personal view "我创建的工作流" — V20260625_01 partial index
+           @Index(name = "idx_aw_instances_initiated_by",
+                  columnList = "factory_id, initiated_by")
        })
 @Where(clause = "deleted_at IS NULL")
 @Getter

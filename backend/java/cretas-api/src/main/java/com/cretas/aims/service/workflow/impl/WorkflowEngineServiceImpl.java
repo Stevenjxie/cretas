@@ -498,6 +498,29 @@ public class WorkflowEngineServiceImpl implements WorkflowEngineService {
         }
     }
 
+    // ==================== Sprint 5 Track A — Personal view queries ====================
+
+    @Override
+    @Transactional(readOnly = true)
+    public Page<ApprovalWorkflowInstance> findCreatedBy(
+            String factoryId, Long userId, Pageable pageable) {
+        Objects.requireNonNull(factoryId, "factoryId must not be null");
+        Objects.requireNonNull(userId, "userId must not be null");
+        Objects.requireNonNull(pageable, "pageable must not be null");
+        return instanceRepository.findByFactoryIdAndInitiatedByOrderByInitiatedAtDesc(
+                factoryId, userId, pageable);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public Page<ApprovalWorkflowInstance> findParticipatedBy(
+            String factoryId, Long userId, Pageable pageable) {
+        Objects.requireNonNull(factoryId, "factoryId must not be null");
+        Objects.requireNonNull(userId, "userId must not be null");
+        Objects.requireNonNull(pageable, "pageable must not be null");
+        return instanceRepository.findParticipatedBy(factoryId, userId, pageable);
+    }
+
     /**
      * 启动 hook — 从 PG 拉所有 RUNNING 实例重建 Redis state.
      */

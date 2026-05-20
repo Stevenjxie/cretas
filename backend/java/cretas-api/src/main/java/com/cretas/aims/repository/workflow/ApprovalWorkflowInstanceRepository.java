@@ -2,7 +2,11 @@ package com.cretas.aims.repository.workflow;
 
 import com.cretas.aims.entity.workflow.ApprovalWorkflowInstance;
 import com.cretas.aims.entity.workflow.ApprovalWorkflowInstance.InstanceStatus;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 import java.util.List;
@@ -74,4 +78,53 @@ public interface ApprovalWorkflowInstanceRepository
      */
     List<ApprovalWorkflowInstance> findByFactoryIdAndStatusOrderByInitiatedAtDesc(
             String factoryId, InstanceStatus status);
+
+    /**
+     * Sprint 5 Track A — "我创建的工作流" personal view query.
+     *
+     * <p>列出当前 user 作为 initiator 的所有 workflow 实例 (跨 status 跨 module).
+     * UI 默认按 initiatedAt DESC 排序, 用户可看自己起的 RUNNING / APPROVED / REJECTED /
+     * CANCELLED 全状态历史.
+     *
+     * <p>命中 (factory_id, initiated_by) 复合索引 — V20260608_05 添加.
+     *
+     * @param factoryId 工厂 id
+     * @param initiatedBy user.id
+     * @param pageable 分页参数
+     * @return Page of instances sorted by initiatedAt DESC
+     * @since 2026-05-19 (Sprint 5 Track A)
+     */
+    Page<ApprovalWorkflowInstance> findByFactoryIdAndInitiatedByOrderByInitiatedAtDesc(
+            String factoryId, Long initiatedBy, Pageable pageable);
+
+    /**
+     * Sprint 5 Track A — "我参与的工作流" personal view query.
+     *
+     * <p>列出当前 user 作为 actor 参与过的所有 workflow 实例 (通过 ApprovalHistory join).
+     * Distinct 因为同一 user 可能多次操作同一实例 (APPROVE → DELEGATE 等).
+     *
+     * <p>不限定 status — 用户看自己审批过的所有 (含已完成).
+     * 默认按 initiatedAt DESC 排序 — 实例发起时间, 不是参与时间 (UI 显示一致).
+     *
+     * @param factoryId 工厂 id
+     * @param actorId user.id (history.actor_id)
+     * @param pageable 分页参数
+     * @return Page of instances sorted by initiatedAt DESC
+     * @since 2026-05-19 (Sprint 5 Track A)
+     */
+    @Query(value = "SELECT DISTINCT i FROM ApprovalWorkflowInstance i " +
+                   "WHERE i.factoryId = :factoryId AND i.id IN (" +
+                   "  SELECT h.instanceId FROM com.cretas.aims.entity.workflow.ApprovalHistory h " +
+                   "  WHERE h.factoryId = :factoryId AND h.actorId = :actorId" +
+                   ") " +
+                   "ORDER BY i.initiatedAt DESC",
+           countQuery = "SELECT COUNT(DISTINCT i) FROM ApprovalWorkflowInstance i " +
+                        "WHERE i.factoryId = :factoryId AND i.id IN (" +
+                        "  SELECT h.instanceId FROM com.cretas.aims.entity.workflow.ApprovalHistory h " +
+                        "  WHERE h.factoryId = :factoryId AND h.actorId = :actorId" +
+                        ")")
+    Page<ApprovalWorkflowInstance> findParticipatedBy(
+            @Param("factoryId") String factoryId,
+            @Param("actorId") Long actorId,
+            Pageable pageable);
 }

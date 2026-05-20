@@ -1,0 +1,185 @@
+package com.cretas.aims.service.workflow.impl;
+
+import com.cretas.aims.entity.workflow.ApprovalWorkflowInstance;
+import com.cretas.aims.entity.workflow.ApprovalWorkflowInstance.InstanceStatus;
+import com.cretas.aims.repository.workflow.ApprovalHistoryRepository;
+import com.cretas.aims.repository.workflow.ApprovalWorkflowInstanceRepository;
+import com.cretas.aims.service.ApprovalWorkflowService;
+import com.cretas.aims.service.workflow.SandboxedSpelEvaluator;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+
+import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.List;
+
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.*;
+
+/**
+ * Unit tests for Sprint 5 Track A personal view queries
+ * ({@link WorkflowEngineServiceImpl#findCreatedBy} +
+ *  {@link WorkflowEngineServiceImpl#findParticipatedBy}).
+ *
+ * <p>Verifies:
+ * <ol>
+ *   <li>service delegates to repository with right (factoryId, userId, pageable) args</li>
+ *   <li>null guards reject missing factoryId / userId / pageable</li>
+ *   <li>empty page is propagated faithfully (no NPE on dto build)</li>
+ * </ol>
+ *
+ * @since 2026-05-19 (Sprint 5 Track A)
+ */
+@DisplayName("WorkflowEngineServiceImpl Sprint 5 personal view queries")
+@ExtendWith(MockitoExtension.class)
+class WorkflowEngineServiceImplPersonalViewTest {
+
+    @Mock private ApprovalWorkflowInstanceRepository instanceRepository;
+    @Mock private ApprovalHistoryRepository historyRepository;
+    @Mock private ApprovalWorkflowService workflowService;
+
+    private final SandboxedSpelEvaluator spelEvaluator = new SandboxedSpelEvaluator();
+    private WorkflowEngineServiceImpl engine;
+
+    private static final String FACTORY_ID = "F006";
+    private static final Long USER_ID = 100L;
+
+    @BeforeEach
+    void setUp() {
+        engine = new WorkflowEngineServiceImpl(
+                instanceRepository, historyRepository, workflowService,
+                spelEvaluator, /* redisTemplate = */ null);
+    }
+
+    // ==================== findCreatedBy ====================
+
+    @Test
+    @DisplayName("findCreatedBy: delegates to repo with correct args + returns page")
+    void findCreatedBy_delegates_and_returns_page() {
+        Pageable pageable = PageRequest.of(0, 20);
+        ApprovalWorkflowInstance inst = ApprovalWorkflowInstance.builder()
+                .id("inst-1")
+                .factoryId(FACTORY_ID)
+                .workflowId("wf-1")
+                .moduleCode("PURCHASE_ORDER")
+                .businessEntityId("PO-001")
+                .status(InstanceStatus.RUNNING)
+                .currentNodeIds(new ArrayList<>())
+                .initiatedBy(USER_ID)
+                .initiatedAt(LocalDateTime.now())
+                .build();
+        Page<ApprovalWorkflowInstance> expected = new PageImpl<>(List.of(inst), pageable, 1);
+        when(instanceRepository.findByFactoryIdAndInitiatedByOrderByInitiatedAtDesc(
+                FACTORY_ID, USER_ID, pageable)).thenReturn(expected);
+
+        Page<ApprovalWorkflowInstance> result = engine.findCreatedBy(FACTORY_ID, USER_ID, pageable);
+
+        assertNotNull(result);
+        assertEquals(1, result.getTotalElements());
+        assertEquals("inst-1", result.getContent().get(0).getId());
+        assertEquals(USER_ID, result.getContent().get(0).getInitiatedBy());
+
+        ArgumentCaptor<Long> userCap = ArgumentCaptor.forClass(Long.class);
+        ArgumentCaptor<String> factoryCap = ArgumentCaptor.forClass(String.class);
+        verify(instanceRepository).findByFactoryIdAndInitiatedByOrderByInitiatedAtDesc(
+                factoryCap.capture(), userCap.capture(), any(Pageable.class));
+        assertEquals(FACTORY_ID, factoryCap.getValue());
+        assertEquals(USER_ID, userCap.getValue());
+    }
+
+    @Test
+    @DisplayName("findCreatedBy: returns empty page when user has no initiated instances")
+    void findCreatedBy_empty_page() {
+        Pageable pageable = PageRequest.of(0, 20);
+        when(instanceRepository.findByFactoryIdAndInitiatedByOrderByInitiatedAtDesc(
+                FACTORY_ID, USER_ID, pageable))
+                .thenReturn(new PageImpl<>(List.of(), pageable, 0));
+
+        Page<ApprovalWorkflowInstance> result = engine.findCreatedBy(FACTORY_ID, USER_ID, pageable);
+
+        assertNotNull(result);
+        assertEquals(0, result.getTotalElements());
+        assertTrue(result.getContent().isEmpty());
+    }
+
+    @Test
+    @DisplayName("findCreatedBy: null factoryId throws NullPointerException")
+    void findCreatedBy_null_factoryId_throws() {
+        Pageable pageable = PageRequest.of(0, 20);
+        assertThrows(NullPointerException.class,
+                () -> engine.findCreatedBy(null, USER_ID, pageable));
+        verifyNoInteractions(instanceRepository);
+    }
+
+    @Test
+    @DisplayName("findCreatedBy: null userId throws NullPointerException")
+    void findCreatedBy_null_userId_throws() {
+        Pageable pageable = PageRequest.of(0, 20);
+        assertThrows(NullPointerException.class,
+                () -> engine.findCreatedBy(FACTORY_ID, null, pageable));
+        verifyNoInteractions(instanceRepository);
+    }
+
+    @Test
+    @DisplayName("findCreatedBy: null pageable throws NullPointerException")
+    void findCreatedBy_null_pageable_throws() {
+        assertThrows(NullPointerException.class,
+                () -> engine.findCreatedBy(FACTORY_ID, USER_ID, null));
+        verifyNoInteractions(instanceRepository);
+    }
+
+    // ==================== findParticipatedBy ====================
+
+    @Test
+    @DisplayName("findParticipatedBy: delegates to repo with correct args + returns page")
+    void findParticipatedBy_delegates_and_returns_page() {
+        Pageable pageable = PageRequest.of(0, 20);
+        ApprovalWorkflowInstance inst = ApprovalWorkflowInstance.builder()
+                .id("inst-2")
+                .factoryId(FACTORY_ID)
+                .workflowId("wf-1")
+                .moduleCode("SALES_ORDER")
+                .businessEntityId("SO-002")
+                .status(InstanceStatus.APPROVED)
+                .currentNodeIds(new ArrayList<>())
+                .initiatedBy(999L)  // 不是 USER_ID — 表示别人发起, 我参与
+                .initiatedAt(LocalDateTime.now())
+                .build();
+        Page<ApprovalWorkflowInstance> expected = new PageImpl<>(List.of(inst), pageable, 1);
+        when(instanceRepository.findParticipatedBy(FACTORY_ID, USER_ID, pageable))
+                .thenReturn(expected);
+
+        Page<ApprovalWorkflowInstance> result =
+                engine.findParticipatedBy(FACTORY_ID, USER_ID, pageable);
+
+        assertNotNull(result);
+        assertEquals(1, result.getTotalElements());
+        assertEquals("inst-2", result.getContent().get(0).getId());
+        // verify isolation: initiatedBy not equal to user (this user is a participant only)
+        assertNotEquals(USER_ID, result.getContent().get(0).getInitiatedBy());
+
+        verify(instanceRepository).findParticipatedBy(FACTORY_ID, USER_ID, pageable);
+    }
+
+    @Test
+    @DisplayName("findParticipatedBy: null guards reject missing args")
+    void findParticipatedBy_null_guards() {
+        Pageable pageable = PageRequest.of(0, 20);
+        assertThrows(NullPointerException.class,
+                () -> engine.findParticipatedBy(null, USER_ID, pageable));
+        assertThrows(NullPointerException.class,
+                () -> engine.findParticipatedBy(FACTORY_ID, null, pageable));
+        assertThrows(NullPointerException.class,
+                () -> engine.findParticipatedBy(FACTORY_ID, USER_ID, null));
+        verifyNoInteractions(instanceRepository);
+    }
+}
