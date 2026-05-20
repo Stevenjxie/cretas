@@ -533,6 +533,108 @@ class PricingStrategyControllerTest {
         assertEquals("tiers[0].discountPct", ex.getHintTarget());
     }
 
+    // ==================== AUD-5 B-A3 sister sweep — length pre-check ====================
+
+    @Test
+    @DisplayName("AUD-5 B-A3: strategyCode > 100 字符 → 400 with 4-in-1 hint (非 PG 409)")
+    void testLongStrategyCodeRejected() {
+        // PG column: pricing_strategies.strategy_code VARCHAR(100). Pre-fix, a 101-char
+        // input let the request reach PG and surfaced as DataIntegrityViolationException →
+        // generic 409 "数据处理异常". Pre-check delivers specific 400 with current vs
+        // max length so user can immediately spot the issue.
+        StrategyRequest req = newBaseTieredRequest();
+        req.setStrategyCode("X".repeat(101));   // 101 chars, max is 100
+        req.setRulesJson(tieredRulesJson(tier(0, 100, "10")));
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> controller.createStrategy("F001", req),
+                "101-char strategyCode 必须 reject");
+
+        assertEquals(400, ex.getCode(), "must be 400, not 409 PG overflow");
+        assertTrue(ex.getMessage().contains("策略代码"),
+                "message must reference the field name: " + ex.getMessage());
+        assertTrue(ex.getMessage().contains("100"),
+                "message must include the limit (100): " + ex.getMessage());
+        assertTrue(ex.getMessage().contains("101"),
+                "message must include the current length (101) to aid the user: " + ex.getMessage());
+        assertNotNull(ex.getActionHint(), "4-in-1 UX (a): actionHint required");
+        assertEquals("warning", ex.getSeverity(), "4-in-1 UX (c): severity warning");
+        assertEquals("strategyCode", ex.getHintTarget(),
+                "4-in-1 UX (d): hintTarget must point at strategyCode");
+        verify(strategyRepo, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("AUD-5 B-A3: strategyName > 255 字符 → 400 with 4-in-1 hint")
+    void testLongStrategyNameRejected() {
+        // PG column: pricing_strategies.strategy_name VARCHAR(255).
+        StrategyRequest req = newBaseTieredRequest();
+        req.setStrategyName("名".repeat(256));   // 256 chars, max is 255
+        req.setRulesJson(tieredRulesJson(tier(0, 100, "10")));
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> controller.createStrategy("F001", req));
+
+        assertEquals(400, ex.getCode());
+        assertTrue(ex.getMessage().contains("策略名称"));
+        assertTrue(ex.getMessage().contains("255"));
+        assertTrue(ex.getMessage().contains("256"));
+        assertNotNull(ex.getActionHint());
+        assertEquals("warning", ex.getSeverity());
+        assertEquals("strategyName", ex.getHintTarget());
+        verify(strategyRepo, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("AUD-5 B-A3 boundary: strategyCode at exactly 100 字符 accepted")
+    void testMaxLengthStrategyCodeAccepted() {
+        StrategyRequest req = newBaseTieredRequest();
+        req.setStrategyCode("X".repeat(100));   // exactly at limit
+        req.setStrategyName("名".repeat(255));  // exactly at limit
+        req.setRulesJson(tieredRulesJson(tier(0, 100, "10")));
+
+        when(strategyRepo.findByFactoryIdAndStrategyCode(eq("F001"), anyString()))
+                .thenReturn(Optional.empty());
+        when(strategyRepo.save(any(PricingStrategy.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        controller.createStrategy("F001", req);
+        verify(strategyRepo).save(any(PricingStrategy.class));
+    }
+
+    @Test
+    @DisplayName("AUD-5 B-A3: null strategyName tolerated (nullable column)")
+    void testNullStrategyNameAccepted() {
+        // strategy_name has @Column(length=255) without nullable=false, so null is OK.
+        StrategyRequest req = newBaseTieredRequest();
+        req.setStrategyName(null);
+        req.setRulesJson(tieredRulesJson(tier(0, 100, "10")));
+
+        when(strategyRepo.findByFactoryIdAndStrategyCode(eq("F001"), anyString()))
+                .thenReturn(Optional.empty());
+        when(strategyRepo.save(any(PricingStrategy.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        controller.createStrategy("F001", req);
+        verify(strategyRepo).save(any(PricingStrategy.class));
+    }
+
+    @Test
+    @DisplayName("Rule 16: updateStrategy applies the same AUD-5 length validation as create")
+    void testUpdateAppliesLengthValidation() {
+        StrategyRequest req = newBaseTieredRequest();
+        req.setStrategyCode("X".repeat(200));   // way over 100
+        req.setRulesJson(tieredRulesJson(tier(0, 100, "10")));
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> controller.updateStrategy("F001", "some-id", req),
+                "Rule 16: update path 也必须 reject 长 strategyCode");
+        assertEquals(400, ex.getCode());
+        assertTrue(ex.getMessage().contains("策略代码"));
+        assertEquals("strategyCode", ex.getHintTarget());
+        // Crucially: findById was NEVER called — length validation fires before repo lookup.
+        verify(strategyRepo, never()).findById(anyString());
+        verify(strategyRepo, never()).save(any());
+    }
+
     // ===== AUD-2/3 mirror on update path (Rule 16 entry matrix) =====
 
     @Test

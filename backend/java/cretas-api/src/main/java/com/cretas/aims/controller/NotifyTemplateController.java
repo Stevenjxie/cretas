@@ -47,6 +47,19 @@ public class NotifyTemplateController {
     private final NotifyTemplateRepository templateRepo;
     private final NotifySenderRegistry notifySenderRegistry;
 
+    /**
+     * AUD-5 B-A3 sister sweep: explicit length cap mirrors PG column width in
+     * {@code notify_templates} table (see {@link NotifyTemplate#getTemplateCode()}
+     * {@code @Column(length=100)}).
+     *
+     * <p>Note: CRUD endpoints (create / update / delete) below currently return 501
+     * stubs as their FIRST statement, so any pre-check here would be unreachable code
+     * — those endpoints will gain length validation when Phase 3 sister chat replaces
+     * the stubs with real persistence. The active path needing pre-check now is
+     * {@link #testSend} which actually looks up by {@code templateCode}.
+     */
+    private static final int TEMPLATE_CODE_MAX_LENGTH = 100;
+
     @GetMapping
     @Operation(summary = "列出工厂所有通知模板")
     public ApiResponse<List<NotifyTemplate>> list(@PathVariable String factoryId) {
@@ -99,6 +112,16 @@ public class NotifyTemplateController {
                     "请提供要测试的模板 code (如 PO_APPROVAL_PENDING)", "warning");
         }
         String templateCode = templateCodeRaw.toString();
+        // AUD-5 B-A3 sister sweep: explicit length pre-check. Without this, an
+        // over-length templateCode would silently miss in the repo lookup (returning
+        // 404 "通知模板不存在") which masks the real issue (input violates the
+        // VARCHAR(100) contract). Surface as specific 400 instead.
+        if (templateCode.length() > TEMPLATE_CODE_MAX_LENGTH) {
+            return ApiResponse.errorWithCode(400, "VALIDATION",
+                    "templateCode 最长 " + TEMPLATE_CODE_MAX_LENGTH
+                            + " 字符 (当前 " + templateCode.length() + ")",
+                    "请使用更短的 templateCode", "warning");
+        }
 
         // 2. 查模板
         Optional<NotifyTemplate> templateOpt =

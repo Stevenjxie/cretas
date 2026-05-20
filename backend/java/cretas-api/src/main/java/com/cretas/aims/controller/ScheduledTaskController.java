@@ -4,6 +4,7 @@ import com.cretas.aims.config.RequireRole;
 import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.entity.cron.ScheduledTask;
 import com.cretas.aims.entity.cron.ScheduledTaskRunLog;
+import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.cron.ScheduledTaskRepository;
 import com.cretas.aims.repository.cron.ScheduledTaskRunLogRepository;
 import com.cretas.aims.service.cron.DynamicSchedulerService;
@@ -56,6 +57,18 @@ public class ScheduledTaskController {
     private static final String[] ALLOWED_ROLES =
             {"factory_super_admin", "permission_admin"};
 
+    /**
+     * AUD-5 B-A3 sister sweep: explicit length caps mirror PG column widths in
+     * {@code scheduled_tasks} table (see {@link ScheduledTask} {@code @Column(length=...)}).
+     * Without these, an over-length string lets the request reach PG and surfaces as
+     * {@code DataIntegrityViolationException} → generic 409 "数据处理异常". Pre-check at
+     * controller boundary delivers a specific 400 with a hintTarget instead.
+     */
+    private static final int TASK_CODE_MAX_LENGTH = 100;
+    private static final int TASK_NAME_MAX_LENGTH = 255;
+    private static final int CRON_EXPRESSION_MAX_LENGTH = 100;
+    private static final int HANDLER_BEAN_NAME_MAX_LENGTH = 255;
+
     private final DynamicSchedulerService dynamicSchedulerService;
     private final ScheduledTaskRepository taskRepository;
     private final ScheduledTaskRunLogRepository runLogRepository;
@@ -94,6 +107,9 @@ public class ScheduledTaskController {
     @RequireRole({"factory_super_admin", "permission_admin"})
     public ApiResponse<ScheduledTask> create(@RequestBody ScheduledTask task) {
         // Phase 5 sister chat: replace ScheduledTask with a request DTO + @Valid.
+        // AUD-5 B-A3 sister sweep: length pre-check produces specific 400 BEFORE
+        // dispatching to service layer where PG would surface a generic 409.
+        validateNameLengths(task);
         ScheduledTask created = dynamicSchedulerService.createTask(task);
         return ApiResponse.success("定时任务已创建", created);
     }
@@ -102,6 +118,10 @@ public class ScheduledTaskController {
     @Operation(summary = "修改定时任务 (partial)")
     @RequireRole({"factory_super_admin", "permission_admin"})
     public ApiResponse<ScheduledTask> update(@PathVariable UUID id, @RequestBody ScheduledTask patch) {
+        // AUD-5 B-A3 sister sweep (Rule 16: entry-point matrix — create + update
+        // are independent code paths). PATCH semantics: only validate fields that
+        // are present in the incoming patch (null = "don't touch this field").
+        validateNameLengths(patch);
         ScheduledTask updated = dynamicSchedulerService.updateTask(id, patch);
         return ApiResponse.success("定时任务已更新", updated);
     }
@@ -167,5 +187,59 @@ public class ScheduledTaskController {
                 .sorted()
                 .collect(Collectors.toList());
         return ApiResponse.success("查询成功", sorted);
+    }
+
+    // ==================== Boundary validators (AUD-5 B-A3 sister sweep) ====================
+
+    /**
+     * AUD-5 B-A3 sister sweep (edge audit 2026-05-20): explicit length pre-check for
+     * VARCHAR-bounded fields {@code taskCode} (100), {@code taskName} (255),
+     * {@code cronExpression} (100), {@code handlerBeanName} (255).
+     *
+     * <p>PATCH semantics on update path: only validate fields that the caller actually
+     * sent (non-null). Null = "don't touch this field" — the service layer keeps the
+     * existing value. This mirrors {@code PricingStrategyController.validateNameLengths}.
+     *
+     * <p>Without this, an over-length input lets the request reach PG and surfaces as
+     * {@link org.springframework.dao.DataIntegrityViolationException} caught by the
+     * {@code GlobalExceptionHandler} → generic 409 "数据处理异常" — opaque to users.
+     */
+    private void validateNameLengths(ScheduledTask task) {
+        if (task == null) {
+            return;
+        }
+        String taskCode = task.getTaskCode();
+        if (taskCode != null && taskCode.length() > TASK_CODE_MAX_LENGTH) {
+            throw new BusinessException(400,
+                    "任务代码最长 " + TASK_CODE_MAX_LENGTH + " 字符 (当前 " + taskCode.length() + ")")
+                    .withHint("请使用更短的任务代码")
+                    .withSeverity("warning")
+                    .withHintTarget("taskCode");
+        }
+        String taskName = task.getTaskName();
+        if (taskName != null && taskName.length() > TASK_NAME_MAX_LENGTH) {
+            throw new BusinessException(400,
+                    "任务名称最长 " + TASK_NAME_MAX_LENGTH + " 字符 (当前 " + taskName.length() + ")")
+                    .withHint("请使用更短的任务名称")
+                    .withSeverity("warning")
+                    .withHintTarget("taskName");
+        }
+        String cron = task.getCronExpression();
+        if (cron != null && cron.length() > CRON_EXPRESSION_MAX_LENGTH) {
+            throw new BusinessException(400,
+                    "Cron 表达式最长 " + CRON_EXPRESSION_MAX_LENGTH + " 字符 (当前 " + cron.length() + ")")
+                    .withHint("请使用更短的 Cron 表达式 (Spring 6 字段: 秒 分 时 日 月 周)")
+                    .withSeverity("warning")
+                    .withHintTarget("cronExpression");
+        }
+        String handler = task.getHandlerBeanName();
+        if (handler != null && handler.length() > HANDLER_BEAN_NAME_MAX_LENGTH) {
+            throw new BusinessException(400,
+                    "Handler Bean 名称最长 " + HANDLER_BEAN_NAME_MAX_LENGTH
+                            + " 字符 (当前 " + handler.length() + ")")
+                    .withHint("请使用更短的 Bean 名称")
+                    .withSeverity("warning")
+                    .withHintTarget("handlerBeanName");
+        }
     }
 }

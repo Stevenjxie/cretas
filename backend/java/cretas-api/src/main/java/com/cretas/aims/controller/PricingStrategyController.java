@@ -55,6 +55,16 @@ public class PricingStrategyController {
     private final PricingApplicationLogRepository logRepo;
     private final PricingEngine pricingEngine;
 
+    /**
+     * AUD-5 B-A3 sister sweep: explicit length caps mirror PG column widths in
+     * {@code pricing_strategies} table (see {@link PricingStrategy} {@code @Column(length=...)}).
+     * Without these, an over-length string lets the request reach PG and surfaces as
+     * {@code DataIntegrityViolationException} → generic 409 "数据处理异常". Pre-check at
+     * controller boundary delivers a specific 400 with a hintTarget instead.
+     */
+    private static final int STRATEGY_CODE_MAX_LENGTH = 100;
+    private static final int STRATEGY_NAME_MAX_LENGTH = 255;
+
     // ==================== Request DTOs ====================
 
     @Data
@@ -120,6 +130,9 @@ public class PricingStrategyController {
             @PathVariable String factoryId,
             @Valid @RequestBody StrategyRequest req) {
         // QA Round (2026-05-19) B-P2/3/4/5: boundary validators run BEFORE persistence.
+        // AUD-5 B-A3 sister sweep: length pre-check produces specific 400 BEFORE
+        // type/date/rule validators (which themselves are pre-PG). Order: length → type → date → rules.
+        validateNameLengths(req);
         PricingStrategyType type = parseType(req.getStrategyType());
         validateDateRange(req);
         validateRulesByType(type, req.getRulesJson());
@@ -158,6 +171,9 @@ public class PricingStrategyController {
             @PathVariable String id,
             @Valid @RequestBody StrategyRequest req) {
         // QA Round (2026-05-19) B-P2/3/4/5: boundary validators run BEFORE persistence.
+        // AUD-5 B-A3 sister sweep: length pre-check applies to update path too
+        // (Rule 16: entry-point matrix — create + update independent code paths).
+        validateNameLengths(req);
         PricingStrategyType type = parseType(req.getStrategyType());
         validateDateRange(req);
         validateRulesByType(type, req.getRulesJson());
@@ -291,6 +307,40 @@ public class PricingStrategyController {
     }
 
     // ==================== Boundary validators (QA 2026-05-19 B-P2/3/4/5) ====================
+
+    /**
+     * AUD-5 B-A3 sister sweep (edge audit 2026-05-20): explicit length pre-check for
+     * {@code strategyCode} (PG VARCHAR(100)) and {@code strategyName} (PG VARCHAR(255)).
+     *
+     * <p>Without this, an over-length input lets the request reach PG and surfaces as
+     * {@link org.springframework.dao.DataIntegrityViolationException} caught by the
+     * {@code GlobalExceptionHandler} → generic 409 "数据处理异常" — opaque to users.
+     * Pre-check delivers a specific 400 with the actual vs allowed length so the user
+     * can fix the input immediately. Mirrors PR #48 {@code RULE_NAME_MAX_LENGTH} pattern.
+     *
+     * <p>{@code strategyCode} is {@code @NotBlank} via Bean Validation so null is already
+     * rejected by Spring before reaching here; we only need to bound length.
+     * {@code strategyName} is nullable in the entity ({@code @Column(length=255)} without
+     * {@code nullable=false}), so we tolerate null and only check when present.
+     */
+    private void validateNameLengths(StrategyRequest req) {
+        String code = req.getStrategyCode();
+        if (code != null && code.length() > STRATEGY_CODE_MAX_LENGTH) {
+            throw new BusinessException(400,
+                    "策略代码最长 " + STRATEGY_CODE_MAX_LENGTH + " 字符 (当前 " + code.length() + ")")
+                    .withHint("请使用更短的策略代码")
+                    .withSeverity("warning")
+                    .withHintTarget("strategyCode");
+        }
+        String name = req.getStrategyName();
+        if (name != null && name.length() > STRATEGY_NAME_MAX_LENGTH) {
+            throw new BusinessException(400,
+                    "策略名称最长 " + STRATEGY_NAME_MAX_LENGTH + " 字符 (当前 " + name.length() + ")")
+                    .withHint("请使用更短的策略名称")
+                    .withSeverity("warning")
+                    .withHintTarget("strategyName");
+        }
+    }
 
     /**
      * B-P5: reject {@code validTo < validFrom}. Null on either side = open-ended interval (allowed).
