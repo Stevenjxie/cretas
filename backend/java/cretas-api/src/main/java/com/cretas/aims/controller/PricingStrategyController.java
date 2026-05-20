@@ -25,6 +25,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -322,11 +323,15 @@ public class PricingStrategyController {
     }
 
     /**
-     * B-P2/3/4: TIERED tier boundary validators.
+     * B-P2/3/4 + AUD-2/AUD-3: TIERED tier boundary validators.
      *
      * <ul>
+     *   <li>AUD-3: each {@code discountPct} scale &lt;= 2 (28-digit precision rounds to
+     *       boundary on Jackson Double; reject ambiguous high-scale inputs)</li>
      *   <li>B-P3: each {@code discountPct} must be &gt;= 0 (negative = 涨价, not a discount)</li>
      *   <li>B-P4: each {@code discountPct} must be &lt;= 100 (over 100% = 倒贴)</li>
+     *   <li>AUD-2: {@code minQty} and {@code maxQty} must be &gt;= 0 (Long.MIN_VALUE
+     *       previously persisted; relation-only check left negative hole)</li>
      *   <li>B-P2: tier intervals {@code [minQty, maxQty]} must not overlap</li>
      * </ul>
      *
@@ -350,6 +355,21 @@ public class PricingStrategyController {
 
             BigDecimal discountPct = toDecimal(tier.get("discountPct"));
             if (discountPct != null) {
+                // AUD-3 fix (edge audit 2026-05-20): reject precision overflow that could mask
+                // round-trip boundary attacks. discountPct accepts at most 2 decimal places —
+                // any input with scale > 2 whose value differs from its 2-decimal HALF_UP
+                // rounding is ambiguous (could mean "just below 100" but rounded to "exactly
+                // 100" = free). Fire BEFORE the < 0 / > 100 checks so the actionable hint
+                // surfaces the precision issue, not a downstream symptom.
+                if (discountPct.scale() > 2
+                        && discountPct.compareTo(discountPct.setScale(2, RoundingMode.HALF_UP)) != 0) {
+                    throw new BusinessException(400,
+                            "折扣率精度过高 (tier[" + i + "].discountPct=" + discountPct.toPlainString()
+                                    + "), 最多保留 2 位小数")
+                            .withHint("折扣率请使用 2 位小数, 例: 10.50")
+                            .withSeverity("warning")
+                            .withHintTarget("tiers[" + i + "].discountPct");
+                }
                 // B-P3: negative discount = 涨价
                 if (discountPct.compareTo(BigDecimal.ZERO) < 0) {
                     throw new BusinessException(400,
@@ -372,6 +392,26 @@ public class PricingStrategyController {
 
             BigDecimal minQty = toDecimal(tier.get("minQty"));
             BigDecimal maxQty = toDecimal(tier.get("maxQty"));
+            // AUD-2 fix (edge audit 2026-05-20): reject negative quantities. Pre-fix, a
+            // Long.MIN_VALUE minQty (e.g. crafted curl payload) was persisted because the
+            // existing `maxQty < minQty` check left a hole: -9223372036854775808 < anything
+            // valid means the relation alone never trips, and overlap detection on negative
+            // intervals is meaningless. Surface both indices so the user can spot which
+            // tier carries the offending value.
+            if (minQty != null && minQty.compareTo(BigDecimal.ZERO) < 0) {
+                throw new BusinessException(400,
+                        "阶梯数量不可为负 (tier[" + i + "].minQty=" + minQty.toPlainString() + ")")
+                        .withHint("请使用非负整数, 最小数量从 0 开始")
+                        .withSeverity("warning")
+                        .withHintTarget("tiers[" + i + "].minQty");
+            }
+            if (maxQty != null && maxQty.compareTo(BigDecimal.ZERO) < 0) {
+                throw new BusinessException(400,
+                        "阶梯数量不可为负 (tier[" + i + "].maxQty=" + maxQty.toPlainString() + ")")
+                        .withHint("请使用非负整数, 最大数量从 0 开始")
+                        .withSeverity("warning")
+                        .withHintTarget("tiers[" + i + "].maxQty");
+            }
             if (minQty != null && maxQty != null) {
                 if (maxQty.compareTo(minQty) < 0) {
                     throw new BusinessException(400,

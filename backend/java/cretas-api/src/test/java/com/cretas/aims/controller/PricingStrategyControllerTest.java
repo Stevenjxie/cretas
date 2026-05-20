@@ -343,6 +343,229 @@ class PricingStrategyControllerTest {
         verify(strategyRepo).save(any(PricingStrategy.class));
     }
 
+    // ==================== Edge audit 2026-05-20 — AUD-2 / AUD-3 ====================
+
+    // ===== AUD-2: negative minQty (or maxQty) must be rejected (Long.MIN_VALUE hole) =====
+
+    @Test
+    @DisplayName("AUD-2: minQty=-1 → 400, 4-in-1 hint (sister of B-P3)")
+    void testNegativeMinQtyRejected() {
+        // Pre-fix: existing validator only checked `maxQty < minQty`, so any negative
+        // minQty paired with a (also negative-or-zero) maxQty passed silently.
+        StrategyRequest req = newBaseTieredRequest();
+        req.setRulesJson(tieredRulesJson(tierLong(-1L, 100L, "10")));
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> controller.createStrategy("F001", req),
+                "负 minQty 必须 reject");
+
+        assertEquals(400, ex.getCode());
+        assertTrue(ex.getMessage().contains("阶梯数量不可为负"),
+                "message must say quantity cannot be negative: " + ex.getMessage());
+        assertTrue(ex.getMessage().contains("-1"),
+                "message must include the violating value: " + ex.getMessage());
+        assertNotNull(ex.getActionHint(), "4-in-1 UX (a): actionHint required");
+        assertEquals("warning", ex.getSeverity());
+        assertEquals("tiers[0].minQty", ex.getHintTarget(),
+                "4-in-1 UX (d): hintTarget must point at the violating field path");
+        verify(strategyRepo, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("AUD-2: minQty=Long.MIN_VALUE → 400 (curl attack vector)")
+    void testLongMinValueMinQtyRejected() {
+        // Real attack vector surfaced by edge audit 2026-05-20:
+        // `tiers[0].minQty: -9223372036854775808` was persisted on test env because
+        // the relation-only `maxQty < minQty` check is bypassed when minQty is the
+        // most-negative long (any reasonable maxQty satisfies the relation).
+        StrategyRequest req = newBaseTieredRequest();
+        req.setRulesJson(tieredRulesJson(tierLong(Long.MIN_VALUE, 100L, "10")));
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> controller.createStrategy("F001", req));
+
+        assertEquals(400, ex.getCode());
+        assertTrue(ex.getMessage().contains("阶梯数量不可为负"));
+        assertTrue(ex.getMessage().contains(String.valueOf(Long.MIN_VALUE)),
+                "message must surface the offending Long.MIN_VALUE to aid debugging: " + ex.getMessage());
+        assertEquals("tiers[0].minQty", ex.getHintTarget());
+        verify(strategyRepo, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("AUD-2: maxQty=-1 → 400 (symmetric sister of minQty check)")
+    void testNegativeMaxQtyRejected() {
+        StrategyRequest req = newBaseTieredRequest();
+        req.setRulesJson(tieredRulesJson(tierLong(0L, -1L, "10")));
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> controller.createStrategy("F001", req));
+
+        assertEquals(400, ex.getCode());
+        assertTrue(ex.getMessage().contains("阶梯数量不可为负"));
+        assertTrue(ex.getMessage().contains("-1"));
+        assertEquals("tiers[0].maxQty", ex.getHintTarget());
+        verify(strategyRepo, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("AUD-2 boundary: minQty=0 still accepted (inclusive lower bound)")
+    void testZeroMinQtyAccepted() {
+        StrategyRequest req = newBaseTieredRequest();
+        req.setRulesJson(tieredRulesJson(tier(0, 100, "10")));
+
+        when(strategyRepo.findByFactoryIdAndStrategyCode(eq("F001"), anyString()))
+                .thenReturn(Optional.empty());
+        when(strategyRepo.save(any(PricingStrategy.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        controller.createStrategy("F001", req);
+        verify(strategyRepo).save(any(PricingStrategy.class));
+    }
+
+    // ===== AUD-3: high-precision discountPct that rounds to boundary must be rejected =====
+
+    @Test
+    @DisplayName("AUD-3: 28-digit discountPct 99.99...99 (scale > 2, not 2-decimal-equal) → 400")
+    void testHighPrecisionDiscountRejected() {
+        // Edge audit 2026-05-20 finding: `99.99999999999999999999999999` (28 fractional 9s)
+        // arrives as BigDecimal via test path (or, on the wire, ambiguously as Double
+        // rounded to 100.0 — both routes need rejection for safety). The scale > 2 check
+        // fires regardless of whether the user's intent was just-below-100 or precision
+        // attack; either way `discountPct.scale() == 28` means the value can't be a
+        // legitimate percentage with 2-decimal granularity.
+        StrategyRequest req = newBaseTieredRequest();
+        Map<String, Object> tier = new LinkedHashMap<>();
+        tier.put("minQty", 0);
+        tier.put("maxQty", 100);
+        tier.put("discountPct", new BigDecimal("99.99999999999999999999999999"));
+        req.setRulesJson(tieredRulesJson(tier));
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> controller.createStrategy("F001", req),
+                "28-digit precision discountPct 必须 reject — 不能放进去再被舍入掩盖意图");
+
+        assertEquals(400, ex.getCode());
+        assertTrue(ex.getMessage().contains("折扣率精度过高")
+                        || ex.getMessage().contains("精度过高"),
+                "message must explain the precision overflow: " + ex.getMessage());
+        assertNotNull(ex.getActionHint(), "4-in-1 UX (a): actionHint required");
+        assertEquals("warning", ex.getSeverity());
+        assertEquals("tiers[0].discountPct", ex.getHintTarget(),
+                "4-in-1 UX (d): hintTarget pinpoints precision-overflowed field");
+        verify(strategyRepo, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("AUD-3: trailing-zero high scale (10.5000) is normalised and accepted")
+    void testTrailingZeroScaleAccepted() {
+        // 10.5000 has scale=4 but value-equals 10.50 setScale(2, HALF_UP). Should be
+        // accepted — only TRUE precision overflow (where rounding changes the value)
+        // triggers the new check. This guards against false positives on FE inputs that
+        // post values like "10.5000" through extra serialization steps.
+        StrategyRequest req = newBaseTieredRequest();
+        Map<String, Object> tier = new LinkedHashMap<>();
+        tier.put("minQty", 0);
+        tier.put("maxQty", 100);
+        tier.put("discountPct", new BigDecimal("10.5000"));
+        req.setRulesJson(tieredRulesJson(tier));
+
+        when(strategyRepo.findByFactoryIdAndStrategyCode(eq("F001"), anyString()))
+                .thenReturn(Optional.empty());
+        when(strategyRepo.save(any(PricingStrategy.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        controller.createStrategy("F001", req);
+        verify(strategyRepo).save(any(PricingStrategy.class));
+    }
+
+    @Test
+    @DisplayName("AUD-3 boundary: 99.99 (scale=2) still accepted (existing happy path)")
+    void testTwoDecimalDiscountAccepted() {
+        // Regression guard for B-P4: legitimate 2-decimal-place discount must not be
+        // false-flagged by the new precision check.
+        StrategyRequest req = newBaseTieredRequest();
+        Map<String, Object> tier = new LinkedHashMap<>();
+        tier.put("minQty", 0);
+        tier.put("maxQty", 100);
+        tier.put("discountPct", new BigDecimal("99.99"));
+        req.setRulesJson(tieredRulesJson(tier));
+
+        when(strategyRepo.findByFactoryIdAndStrategyCode(eq("F001"), anyString()))
+                .thenReturn(Optional.empty());
+        when(strategyRepo.save(any(PricingStrategy.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        controller.createStrategy("F001", req);
+        verify(strategyRepo).save(any(PricingStrategy.class));
+    }
+
+    @Test
+    @DisplayName("AUD-3 boundary: 100.0 exactly still accepted; 100.0001 rejected as > 100")
+    void testHundredBoundaryStillInclusive() {
+        // 100.0 (scale=1, equals setScale(2,HALF_UP)=100.00) → AUD-3 check skipped,
+        //                                                       B-P4 > 100 check passes.
+        StrategyRequest req = newBaseTieredRequest();
+        Map<String, Object> okTier = new LinkedHashMap<>();
+        okTier.put("minQty", 0);
+        okTier.put("maxQty", 100);
+        okTier.put("discountPct", new BigDecimal("100.0"));
+        req.setRulesJson(tieredRulesJson(okTier));
+
+        when(strategyRepo.findByFactoryIdAndStrategyCode(eq("F001"), anyString()))
+                .thenReturn(Optional.empty());
+        when(strategyRepo.save(any(PricingStrategy.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        controller.createStrategy("F001", req);
+        verify(strategyRepo).save(any(PricingStrategy.class));
+
+        // 100.0001 (scale=4, value != setScale(2,HALF_UP)=100.00) → AUD-3 fires.
+        StrategyRequest reqOver = newBaseTieredRequest();
+        Map<String, Object> overTier = new LinkedHashMap<>();
+        overTier.put("minQty", 0);
+        overTier.put("maxQty", 100);
+        overTier.put("discountPct", new BigDecimal("100.0001"));
+        reqOver.setRulesJson(tieredRulesJson(overTier));
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> controller.createStrategy("F001", reqOver));
+        // Either AUD-3 (precision) or B-P4 (>100) is acceptable — both surface a 400.
+        // We assert it's NOT silently accepted, and verify the next-action hint is present.
+        assertEquals(400, ex.getCode());
+        assertNotNull(ex.getActionHint());
+        assertEquals("tiers[0].discountPct", ex.getHintTarget());
+    }
+
+    // ===== AUD-2/3 mirror on update path (Rule 16 entry matrix) =====
+
+    @Test
+    @DisplayName("Rule 16: updateStrategy applies the same AUD-2 negative-qty validation as create")
+    void testUpdateAppliesNegativeQtyValidation() {
+        StrategyRequest req = newBaseTieredRequest();
+        req.setRulesJson(tieredRulesJson(tierLong(Long.MIN_VALUE, 100L, "10")));
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> controller.updateStrategy("F001", "some-id", req));
+        assertEquals(400, ex.getCode());
+        assertTrue(ex.getMessage().contains("阶梯数量不可为负"));
+        verify(strategyRepo, never()).findById(anyString());
+        verify(strategyRepo, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("Rule 16: updateStrategy applies the same AUD-3 precision validation as create")
+    void testUpdateAppliesPrecisionValidation() {
+        StrategyRequest req = newBaseTieredRequest();
+        Map<String, Object> tier = new LinkedHashMap<>();
+        tier.put("minQty", 0);
+        tier.put("maxQty", 100);
+        tier.put("discountPct", new BigDecimal("99.99999999999999999999999999"));
+        req.setRulesJson(tieredRulesJson(tier));
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> controller.updateStrategy("F001", "some-id", req));
+        assertEquals(400, ex.getCode());
+        verify(strategyRepo, never()).findById(anyString());
+        verify(strategyRepo, never()).save(any());
+    }
+
     // ==================== Test helpers ====================
 
     private static StrategyRequest newBaseTieredRequest() {
@@ -365,6 +588,18 @@ class PricingStrategyControllerTest {
     }
 
     private static Map<String, Object> tier(int minQty, int maxQty, String discountPct) {
+        Map<String, Object> t = new LinkedHashMap<>();
+        t.put("minQty", minQty);
+        t.put("maxQty", maxQty);
+        t.put("discountPct", new BigDecimal(discountPct));
+        return t;
+    }
+
+    /**
+     * Long-typed variant for AUD-2 tests (Long.MIN_VALUE doesn't fit in int).
+     * Mirrors {@link #tier(int, int, String)} signature, just using long for the qty fields.
+     */
+    private static Map<String, Object> tierLong(long minQty, long maxQty, String discountPct) {
         Map<String, Object> t = new LinkedHashMap<>();
         t.put("minQty", minQty);
         t.put("maxQty", maxQty);
