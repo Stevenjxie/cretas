@@ -591,6 +591,34 @@ const businessRoutes: RouteRecordRaw[] = [
         ]
       },
 
+      // Sprint 7 wave 2 T4: CRM 商机 8 阶段 funnel
+      {
+        path: 'crm',
+        name: 'CRM',
+        redirect: '/crm/opportunity',
+        meta: { requiresAuth: true, title: 'CRM 商机', icon: 'Aim', module: 'sales' },
+        children: [
+          {
+            path: 'opportunity',
+            name: 'CrmOpportunityList',
+            component: () => import('@/views/crm/opportunity/SalesOpportunityList.vue'),
+            meta: { requiresAuth: true, title: '商机列表', module: 'sales' }
+          },
+          {
+            path: 'opportunity/kanban',
+            name: 'CrmOpportunityKanban',
+            component: () => import('@/views/crm/opportunity/SalesOpportunityKanban.vue'),
+            meta: { requiresAuth: true, title: '商机看板', module: 'sales' }
+          },
+          {
+            path: 'opportunity/funnel',
+            name: 'CrmOpportunityFunnel',
+            component: () => import('@/views/crm/opportunity/SalesOpportunityFunnel.vue'),
+            meta: { requiresAuth: true, title: '商机漏斗', module: 'sales' }
+          }
+        ]
+      },
+
       // 人事管理
       {
         path: 'hr',

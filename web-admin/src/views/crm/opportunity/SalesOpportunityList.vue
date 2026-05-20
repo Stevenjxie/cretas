@@ -18,6 +18,9 @@
         <el-button :icon="DataAnalysis" @click="openKanban">
           看板视图
         </el-button>
+        <el-button :icon="DataLine" @click="openFunnel">
+          漏斗报表
+        </el-button>
       </div>
     </div>
 
@@ -335,7 +338,7 @@ import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import type { FormInstance, FormRules } from 'element-plus';
-import { Plus, DataAnalysis } from '@element-plus/icons-vue';
+import { Plus, DataAnalysis, DataLine } from '@element-plus/icons-vue';
 import {
   STAGE_META,
   type OpportunityStage,
@@ -668,10 +671,19 @@ async function onDelete(opp: SalesOpportunity) {
 
 function openKanban() {
   router.push({ name: 'CrmOpportunityKanban' }).catch(() => {
-    // Fallback if route not registered yet — show toast guiding to next step
     ElMessageBox.alert(
-      '看板视图待配置, 商机管理团队 dashboard 计划本 sprint 完成.',
+      '看板视图路由暂不可达, 请检查路由配置.',
       '看板视图',
+      { type: 'info' },
+    );
+  });
+}
+
+function openFunnel() {
+  router.push({ name: 'CrmOpportunityFunnel' }).catch(() => {
+    ElMessageBox.alert(
+      '漏斗报表路由暂不可达, 请检查路由配置.',
+      '漏斗报表',
       { type: 'info' },
     );
   });
