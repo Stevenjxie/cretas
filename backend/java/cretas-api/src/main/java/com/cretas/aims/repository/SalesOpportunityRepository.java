@@ -10,6 +10,7 @@ import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 import java.math.BigDecimal;
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 
@@ -64,5 +65,45 @@ public interface SalesOpportunityRepository extends JpaRepository<SalesOpportuni
         Long getCnt();
         BigDecimal getTotalValue();
         BigDecimal getExpectedValue();
+    }
+
+    // ==================== Sprint 7 wave 2 T5 — 业绩 actual amount aggregation ====================
+
+    /**
+     * 按销售员汇总: stage=CLOSED_WON AND closedAt in [start, end] 的 valueAmount 之和.
+     * 用于业绩目标实际完成额计算.
+     */
+    @Query("SELECT COALESCE(SUM(o.valueAmount), 0) FROM SalesOpportunity o " +
+            "WHERE o.factoryId = :factoryId " +
+            "AND o.ownerId = :ownerId " +
+            "AND o.stage = com.cretas.aims.entity.enums.OpportunityStage.CLOSED_WON " +
+            "AND o.closedAt >= :startInclusive AND o.closedAt < :endExclusive " +
+            "AND o.deletedAt IS NULL")
+    BigDecimal sumClosedWonValueByOwnerAndPeriod(
+            @Param("factoryId") String factoryId,
+            @Param("ownerId") Long ownerId,
+            @Param("startInclusive") LocalDateTime startInclusive,
+            @Param("endExclusive") LocalDateTime endExclusive);
+
+    /**
+     * 按 owner 分组汇总 CLOSED_WON valueAmount in [start, end). 用于 leaderboard 排名.
+     */
+    @Query("SELECT o.ownerId AS ownerId, COALESCE(SUM(o.valueAmount), 0) AS total " +
+            "FROM SalesOpportunity o " +
+            "WHERE o.factoryId = :factoryId " +
+            "AND o.stage = com.cretas.aims.entity.enums.OpportunityStage.CLOSED_WON " +
+            "AND o.closedAt >= :startInclusive AND o.closedAt < :endExclusive " +
+            "AND o.deletedAt IS NULL " +
+            "GROUP BY o.ownerId " +
+            "ORDER BY total DESC")
+    List<OwnerActualStat> aggregateClosedWonByOwner(
+            @Param("factoryId") String factoryId,
+            @Param("startInclusive") LocalDateTime startInclusive,
+            @Param("endExclusive") LocalDateTime endExclusive);
+
+    /** Projection: 每个销售员的实际完成金额 (用于 leaderboard 排序). */
+    interface OwnerActualStat {
+        Long getOwnerId();
+        BigDecimal getTotal();
     }
 }
