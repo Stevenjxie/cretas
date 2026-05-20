@@ -84,6 +84,11 @@ temp*
 !gradle-wrapper.jar
 !backend/java/cretas-api/lib/MvCameraControlWrapper.jar
 target/
+# Negation: web-admin Vue views/api source folders named "target" are not Maven artifacts.
+# Sprint 7 wave 2 T5 (2026-05-20): added web-admin/src/views/sales/target/ for sales target
+# + commission UI. Without this negation, gitignore line 86 (`target/`) silently swallows them.
+!web-admin/src/views/sales/target/
+!web-admin/src/views/sales/target/**
 BOOT-INF/
 
 # Python

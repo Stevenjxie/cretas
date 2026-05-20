@@ -3,12 +3,13 @@ package com.cretas.aims.service;
 import com.cretas.aims.entity.OpportunityStageHistory;
 import com.cretas.aims.entity.SalesOpportunity;
 import com.cretas.aims.entity.enums.OpportunityStage;
+import com.cretas.aims.event.OpportunityClosedWonEvent;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.exception.InvalidStageTransitionException;
 import com.cretas.aims.repository.OpportunityStageHistoryRepository;
 import com.cretas.aims.repository.SalesOpportunityRepository;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
@@ -43,11 +44,37 @@ import java.util.List;
  */
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class SalesOpportunityService {
 
     private final SalesOpportunityRepository repository;
     private final OpportunityStageHistoryRepository historyRepository;
+
+    /**
+     * Sprint 7 wave 2 T5 — CLOSED_WON event publishing for commission auto-calc.
+     * Nullable to keep legacy {@link SalesOpportunityServiceTest} (T4) green
+     * (its 2-arg constructor doesn't supply an event publisher).
+     */
+    private final org.springframework.beans.factory.ObjectProvider<ApplicationEventPublisher>
+            eventPublisherProvider;
+
+    // ==================== Legacy ctor for T4 tests (no event publisher) ====================
+
+    public SalesOpportunityService(SalesOpportunityRepository repository,
+                                     OpportunityStageHistoryRepository historyRepository) {
+        this.repository = repository;
+        this.historyRepository = historyRepository;
+        this.eventPublisherProvider = null;
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public SalesOpportunityService(SalesOpportunityRepository repository,
+                                     OpportunityStageHistoryRepository historyRepository,
+                                     org.springframework.beans.factory.ObjectProvider<ApplicationEventPublisher>
+                                             eventPublisherProvider) {
+        this.repository = repository;
+        this.historyRepository = historyRepository;
+        this.eventPublisherProvider = eventPublisherProvider;
+    }
 
     // ==================== Read ====================
 
@@ -149,6 +176,12 @@ public class SalesOpportunityService {
 
         log.info("Created opportunity {} customer={} stage={} owner={}",
                 saved.getId(), customerId, stage, ownerId);
+
+        // Sprint 7 wave 2 T5 — if created directly in CLOSED_WON state, fire event.
+        if (stage == OpportunityStage.CLOSED_WON) {
+            publishClosedWonEvent(saved);
+        }
+
         return saved;
     }
 
@@ -212,7 +245,44 @@ public class SalesOpportunityService {
 
         log.info("Transitioned opportunity {} {} -> {} by user={} reason={}",
                 opportunityId, fromStage, newStage, changedBy, reason);
+
+        // Sprint 7 wave 2 T5 — Publish CLOSED_WON event for commission auto-calc.
+        if (newStage == OpportunityStage.CLOSED_WON && fromStage != OpportunityStage.CLOSED_WON) {
+            publishClosedWonEvent(saved);
+        }
+
         return saved;
+    }
+
+    /**
+     * Publish OpportunityClosedWonEvent for commission listener. Best-effort: failures
+     * are logged but don't roll back the transaction (per existing Sales event pattern).
+     */
+    private void publishClosedWonEvent(SalesOpportunity opp) {
+        if (eventPublisherProvider == null) {
+            log.debug("eventPublisherProvider not available (legacy ctor) — skip CLOSED_WON event publish");
+            return;
+        }
+        ApplicationEventPublisher publisher = eventPublisherProvider.getIfAvailable();
+        if (publisher == null) {
+            log.debug("ApplicationEventPublisher not available — skip CLOSED_WON event publish");
+            return;
+        }
+        try {
+            publisher.publishEvent(new OpportunityClosedWonEvent(
+                    this,
+                    opp.getFactoryId(),
+                    opp.getId(),
+                    opp.getCustomerId(),
+                    opp.getOwnerId(),
+                    opp.getValueAmount(),
+                    opp.getClosedAt() != null ? opp.getClosedAt() : LocalDateTime.now()
+            ));
+            log.info("Published OpportunityClosedWonEvent: opp={} owner={}",
+                    opp.getId(), opp.getOwnerId());
+        } catch (Exception e) {
+            log.error("Failed to publish OpportunityClosedWonEvent: opp={}", opp.getId(), e);
+        }
     }
 
     /**
