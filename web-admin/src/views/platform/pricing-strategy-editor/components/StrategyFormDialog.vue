@@ -307,7 +307,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, reactive } from 'vue';
+import { ref, computed, watch, reactive, nextTick } from 'vue';
 import { ElMessage } from 'element-plus';
 import type { FormInstance } from 'element-plus';
 import {
@@ -396,7 +396,7 @@ const rules = {
 // Initialize form from editTarget
 watch(
   () => props.editTarget,
-  (target) => {
+  async (target) => {
     if (target) {
       form.strategyCode = target.strategyCode;
       form.strategyName = target.strategyName || '';
@@ -457,6 +457,12 @@ watch(
     } else {
       resetForm();
     }
+    // UX polish (2026-05-20): clear validation residuals from previous open.
+    // Pricing dialogs have lots of conditional sub-forms (TIERED/PROMOTION/MEMBER/BUNDLE/CYCLE);
+    // switching strategyType after a failed save could leave stale red errors on
+    // hidden fields, then re-show them as the user switches back.
+    await nextTick();
+    formRef.value?.clearValidate();
   },
   { immediate: true }
 );

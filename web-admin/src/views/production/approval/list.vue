@@ -4,6 +4,7 @@ import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Check, Close, Refresh } from '@element-plus/icons-vue';
+import { handleCatchError } from '@/utils/errorToast';
 import {
   getPendingApprovals, approveReport, rejectReport, batchApproveReports,
   type ApprovalItem
@@ -42,8 +43,9 @@ async function loadData() {
       tableData.value = (response.data.content || []) as ApprovalItem[];
       pagination.value.total = response.data.totalElements || 0;
     }
-  } catch {
-    ElMessage.error('加载待审批列表失败');
+  } catch (e) {
+    // UX polish (2026-05-20): interceptor toast already covers 4xx/5xx.
+    handleCatchError(e, '加载待审批列表失败,请检查网络');
   } finally {
     loading.value = false;
   }

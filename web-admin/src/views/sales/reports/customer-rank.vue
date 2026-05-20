@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue';
-import { ElMessage } from 'element-plus';
+import { handleCatchError } from '@/utils/errorToast';
 import { fetchCustomerRank, type CustomerRankRow } from '@/api/salesPreset';
 
 const rows = ref<CustomerRankRow[]>([]);
@@ -14,8 +14,9 @@ async function load(): Promise<void> {
     const [start, end] = dateRange.value ?? [undefined, undefined];
     const res = await fetchCustomerRank(start, end, limit.value);
     rows.value = res?.data?.rank ?? [];
-  } catch {
-    ElMessage.error('加载失败');
+  } catch (e) {
+    // UX polish (2026-05-20): interceptor toast already covers 4xx/5xx.
+    handleCatchError(e, '加载失败,请检查网络');
   } finally {
     loading.value = false;
   }
