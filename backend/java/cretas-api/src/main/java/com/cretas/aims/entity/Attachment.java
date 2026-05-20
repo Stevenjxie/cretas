@@ -131,7 +131,22 @@ public class Attachment extends BaseEntity {
     }
 
     /**
-     * 文件分类. 用于列表 / 过滤 / 图标选择.
+     * 文件分类. 用于列表 / 过滤 / 图标选择 / link counter 三分类.
+     *
+     * <p>Sprint 5 H-1 (2026-05-19): 加 {@link #CONTRACT} 用于销售单 list
+     * inline link counter `文件(N) 图片(N) 合同(N)` 三分类 — 对齐 HJ link_type 设计
+     * (Round 12 §B.6 X2). CONTRACT 跟 DOCUMENT 区别:
+     * <ul>
+     *   <li>{@link #DOCUMENT}: 通用 PDF/Word/Excel</li>
+     *   <li>{@link #CONTRACT}: 合同 PDF (法律效力, 触发 vflag 业务流 — 销售合同 → 应收触发)</li>
+     *   <li>{@link #VOUCHER}: 财务凭证扫描件 (跟 Voucher 实体绑定)</li>
+     * </ul>
+     *
+     * <p>新增值时务必同步:
+     * <ol>
+     *   <li>本枚举</li>
+     *   <li>Flyway migration 的 {@code chk_att_category} CHECK constraint</li>
+     * </ol>
      */
     public enum FileCategory {
         PHOTO,
@@ -139,6 +154,8 @@ public class Attachment extends BaseEntity {
         DOCUMENT,
         VOUCHER,
         SIGNATURE,
+        /** Sprint 5 H-1 — 合同 PDF, link counter 第 3 类. */
+        CONTRACT,
         OTHER
     }
 }
