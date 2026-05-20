@@ -59,7 +59,8 @@ public class PurchaseRequisition extends BaseEntity {
     @Column(name = "id", nullable = false, length = 191)
     private String id;
 
-    @PrePersist
+    // @PrePersist moved to onCreateRequisition() (line ~133) — JPA spec forbids
+    // multiple @PrePersist on same class. Bodies merged 2026-05-20 (8th deploy fix).
     void assignUUID() {
         if (id == null) {
             id = UUID.randomUUID().toString();
@@ -132,6 +133,8 @@ public class PurchaseRequisition extends BaseEntity {
 
     @PrePersist
     protected void onCreateRequisition() {
+        // 2026-05-20: merged assignUUID() callback here per JPA single-@PrePersist rule
+        assignUUID();
         if (requestedItems == null) {
             requestedItems = new ArrayList<>();
         }
