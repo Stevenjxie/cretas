@@ -2,10 +2,12 @@ package com.cretas.aims.service.voucher;
 
 import com.cretas.aims.entity.PayrollRecord;
 import com.cretas.aims.entity.enums.AuxiliaryType;
+import com.cretas.aims.entity.enums.ReturnType;
 import com.cretas.aims.entity.enums.VoucherType;
 import com.cretas.aims.entity.finance.Voucher;
 import com.cretas.aims.entity.finance.VoucherEntry;
 import com.cretas.aims.entity.inventory.InternalTransfer;
+import com.cretas.aims.entity.inventory.InternalTransferItem;
 import com.cretas.aims.entity.inventory.PurchaseOrder;
 import com.cretas.aims.entity.inventory.ReturnOrder;
 import com.cretas.aims.entity.inventory.SalesOrder;
@@ -15,6 +17,8 @@ import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -131,6 +135,7 @@ class VoucherGeneratorsTest {
 
     @Test
     void inventoryTransferGeneratorBuildsBalancedVoucher() {
+        // 老 (无 items) 仍工作 — 不挂 INVENTORY 辅助
         InventoryTransferVoucherGenerator gen = new InventoryTransferVoucherGenerator();
         assertTrue(gen.supports("INTERNAL_TRANSFER"));
 
@@ -143,15 +148,67 @@ class VoucherGeneratorsTest {
         t.setTargetFactoryId("F002");
         t.setSourceWarehouseId("WH-A");
         t.setTargetWarehouseId("WH-B");
+        // items 为空 → 不挂 INVENTORY (新行为, 不破)
 
         Voucher v = gen.generate("F001", t);
         assertEquals(VoucherType.INVENTORY_TRANSFER, v.getVoucherType());
         assertEquals(HUNDRED, v.getTotalDebit());
         assertEquals(HUNDRED, v.getTotalCredit());
-        assertEquals("1405", v.getEntries().get(0).getSubjectCode());  // 同科目, cost_center 区分
+        assertEquals("1405", v.getEntries().get(0).getSubjectCode());
         assertEquals("1405", v.getEntries().get(1).getSubjectCode());
         assertTrue(v.getEntries().get(0).getCostCenter().contains("调入"));
         assertTrue(v.getEntries().get(1).getCostCenter().contains("调出"));
+        // 无 items → 无 INVENTORY 辅助
+        assertNull(v.getEntries().get(0).getAuxiliaryType());
+        assertNull(v.getEntries().get(1).getAuxiliaryType());
+    }
+
+    @Test
+    void inventoryTransferGeneratorAttachesInventoryAuxWhenSingleMaterial() {
+        // Sprint 6 W4-A: 单一品类调拨 — 借贷两行都挂 INVENTORY=materialTypeId
+        InventoryTransferVoucherGenerator gen = new InventoryTransferVoucherGenerator();
+        InternalTransfer t = new InternalTransfer();
+        t.setId("tr-2");
+        t.setTransferNumber("TR-SI-001");
+        t.setTransferDate(LocalDate.of(2026, 5, 16));
+        t.setTotalAmount(HUNDRED);
+        t.setSourceFactoryId("F001");
+        t.setTargetFactoryId("F001");
+        InternalTransferItem item1 = new InternalTransferItem();
+        item1.setMaterialTypeId("mat-50");
+        InternalTransferItem item2 = new InternalTransferItem();
+        item2.setMaterialTypeId("mat-50");  // 同一品类
+        t.setItems(List.of(item1, item2));
+
+        Voucher v = gen.generate("F001", t);
+        assertEquals(AuxiliaryType.INVENTORY, v.getEntries().get(0).getAuxiliaryType());
+        assertEquals("mat-50", v.getEntries().get(0).getAuxiliaryEntityId());
+        assertEquals(AuxiliaryType.INVENTORY, v.getEntries().get(1).getAuxiliaryType());
+        assertEquals("mat-50", v.getEntries().get(1).getAuxiliaryEntityId());
+    }
+
+    @Test
+    void inventoryTransferGeneratorSkipsAuxWhenMultipleMaterials() {
+        // Sprint 6 W4-A: 多品类调拨 → 不挂 INVENTORY (避免误导)
+        InventoryTransferVoucherGenerator gen = new InventoryTransferVoucherGenerator();
+        InternalTransfer t = new InternalTransfer();
+        t.setId("tr-3");
+        t.setTransferNumber("TR-MM-001");
+        t.setTransferDate(LocalDate.of(2026, 5, 16));
+        t.setTotalAmount(HUNDRED);
+        t.setSourceFactoryId("F001");
+        t.setTargetFactoryId("F001");
+        InternalTransferItem item1 = new InternalTransferItem();
+        item1.setMaterialTypeId("mat-50");
+        InternalTransferItem item2 = new InternalTransferItem();
+        item2.setMaterialTypeId("mat-51");  // 不同品类
+        t.setItems(List.of(item1, item2));
+
+        Voucher v = gen.generate("F001", t);
+        assertNull(v.getEntries().get(0).getAuxiliaryType());
+        assertNull(v.getEntries().get(1).getAuxiliaryType());
+        // cost_center 仍保留 (仓库维度仍可观察)
+        assertNotNull(v.getEntries().get(0).getCostCenter());
     }
 
     // ==================== ExpenseVoucherGenerator ====================
@@ -167,6 +224,7 @@ class VoucherGeneratorsTest {
         w.setWastageDate(LocalDate.of(2026, 5, 16));
         w.setEstimatedCost(HUNDRED);
         w.setType(WastageRecord.WastageType.EXPIRED);
+        w.setRawMaterialTypeId("rm-99");  // Sprint 6 W4-A: SKU 粒度
 
         Voucher v = gen.generate("F001", w);
         assertEquals(VoucherType.EXPENSE, v.getVoucherType());
@@ -174,6 +232,29 @@ class VoucherGeneratorsTest {
         assertEquals(HUNDRED, v.getTotalCredit());
         assertEquals("6602.01", v.getEntries().get(0).getSubjectCode());  // 管理费用-损耗
         assertEquals("1405", v.getEntries().get(1).getSubjectCode());
+        // Sprint 6 W4-A: 库存 line 挂 INVENTORY 辅助 (无 batchId 时 fallback rawMaterialTypeId)
+        VoucherEntry inv = v.getEntries().get(1);
+        assertEquals(AuxiliaryType.INVENTORY, inv.getAuxiliaryType());
+        assertEquals("rm-99", inv.getAuxiliaryEntityId());
+    }
+
+    @Test
+    void expenseGeneratorPrefersMaterialBatchIdOverRawMaterialType() {
+        // Sprint 6 W4-A: materialBatchId 非空时优先 (批次粒度比 SKU 更细)
+        ExpenseVoucherGenerator gen = new ExpenseVoucherGenerator();
+        WastageRecord w = new WastageRecord();
+        w.setId("w-2");
+        w.setWastageNumber("WST-2026-0002");
+        w.setWastageDate(LocalDate.of(2026, 5, 16));
+        w.setEstimatedCost(HUNDRED);
+        w.setType(WastageRecord.WastageType.SPOILED);
+        w.setRawMaterialTypeId("rm-99");
+        w.setMaterialBatchId("batch-A77");  // 优先
+
+        Voucher v = gen.generate("F001", w);
+        VoucherEntry inv = v.getEntries().get(1);
+        assertEquals(AuxiliaryType.INVENTORY, inv.getAuxiliaryType());
+        assertEquals("batch-A77", inv.getAuxiliaryEntityId());  // batch 胜出
     }
 
     // ==================== WageVoucherGenerator ====================
@@ -207,6 +288,7 @@ class VoucherGeneratorsTest {
 
     @Test
     void returnGeneratorBuildsBalancedVoucherFromReturnOrder() {
+        // Legacy default (returnType=null) — backward compat: 走 SALES_RETURN 行为
         ReturnVoucherGenerator gen = new ReturnVoucherGenerator();
         assertTrue(gen.supports("RETURN_ORDER"));
 
@@ -215,6 +297,7 @@ class VoucherGeneratorsTest {
         r.setReturnNumber("RT-2026-0001");
         r.setReturnDate(LocalDate.of(2026, 5, 16));
         r.setTotalAmount(HUNDRED);
+        // returnType=null → fall through to SALES_RETURN default
 
         Voucher v = gen.generate("F001", r);
         assertEquals(VoucherType.RETURN, v.getVoucherType());
@@ -222,12 +305,64 @@ class VoucherGeneratorsTest {
         assertEquals(HUNDRED, v.getTotalCredit());
         assertEquals("6001", v.getEntries().get(0).getSubjectCode());  // 主营业务收入 (red)
         assertEquals("1122", v.getEntries().get(1).getSubjectCode());  // 应收账款
+        // legacy 无 counterpartyId → 无辅助核算
+        assertNull(v.getEntries().get(1).getAuxiliaryType());
+    }
+
+    @Test
+    void returnGeneratorSalesReturnAttachesCustomerAuxiliary() {
+        // Sprint 6 W4-A: 销售退货, AR 贷方 line 挂 CUSTOMER 辅助
+        ReturnVoucherGenerator gen = new ReturnVoucherGenerator();
+        ReturnOrder r = new ReturnOrder();
+        r.setId("ro-sr");
+        r.setReturnNumber("RT-SR-001");
+        r.setReturnDate(LocalDate.of(2026, 5, 16));
+        r.setTotalAmount(HUNDRED);
+        r.setReturnType(ReturnType.SALES_RETURN);
+        r.setCounterpartyId("cust-200");
+
+        Voucher v = gen.generate("F001", r);
+        assertEquals("6001", v.getEntries().get(0).getSubjectCode());
+        assertEquals("1122", v.getEntries().get(1).getSubjectCode());
+        // AR 贷方挂 CUSTOMER
+        VoucherEntry arLine = v.getEntries().get(1);
+        assertEquals(AuxiliaryType.CUSTOMER, arLine.getAuxiliaryType());
+        assertEquals("cust-200", arLine.getAuxiliaryEntityId());
+        // 收入 line 不挂客户
+        assertNull(v.getEntries().get(0).getAuxiliaryType());
+    }
+
+    @Test
+    void returnGeneratorPurchaseReturnAttachesSupplierAuxiliary() {
+        // Sprint 6 W4-A: 采购退货, 借应付/贷库存, AP 借方 line 挂 SUPPLIER 辅助
+        ReturnVoucherGenerator gen = new ReturnVoucherGenerator();
+        ReturnOrder r = new ReturnOrder();
+        r.setId("ro-pr");
+        r.setReturnNumber("RT-PR-001");
+        r.setReturnDate(LocalDate.of(2026, 5, 16));
+        r.setTotalAmount(HUNDRED);
+        r.setReturnType(ReturnType.PURCHASE_RETURN);
+        r.setCounterpartyId("sup-300");
+
+        Voucher v = gen.generate("F001", r);
+        assertEquals(HUNDRED, v.getTotalDebit());
+        assertEquals(HUNDRED, v.getTotalCredit());
+        // 借应付账款 + 贷库存
+        assertEquals("2202", v.getEntries().get(0).getSubjectCode());
+        assertEquals("1405", v.getEntries().get(1).getSubjectCode());
+        // AP 借方挂 SUPPLIER
+        VoucherEntry apLine = v.getEntries().get(0);
+        assertEquals(AuxiliaryType.SUPPLIER, apLine.getAuxiliaryType());
+        assertEquals("sup-300", apLine.getAuxiliaryEntityId());
+        // 库存 line 不挂供应商 (库存按 batch/SKU 维度独立)
+        assertNull(v.getEntries().get(1).getAuxiliaryType());
     }
 
     // ==================== DepreciationVoucherGenerator ====================
 
     @Test
     void depreciationGeneratorBuildsBalancedVoucherFromMap() {
+        // legacy (无 deptId / projectId) — backward compat: 不挂辅助
         DepreciationVoucherGenerator gen = new DepreciationVoucherGenerator();
         assertTrue(gen.supports("DEPRECATION"));
 
@@ -245,5 +380,74 @@ class VoucherGeneratorsTest {
         assertEquals("6602.02", v.getEntries().get(0).getSubjectCode());  // 管理费用-折旧
         assertEquals("1602", v.getEntries().get(1).getSubjectCode());     // 累计折旧
         assertEquals("DEP-202605", v.getSourceBusinessId());
+        // legacy: 无 deptId/projectId → 无辅助
+        assertNull(v.getEntries().get(0).getAuxiliaryType());
+    }
+
+    @Test
+    void depreciationGeneratorAttachesDeptAuxiliary() {
+        // Sprint 6 W4-A: deptId 输入 → 6602.02 line 挂 DEPT
+        DepreciationVoucherGenerator gen = new DepreciationVoucherGenerator();
+        Map<String, Object> input = new HashMap<>();
+        input.put("businessId", "DEP-202606-DEPT-A");
+        input.put("amount", HUNDRED);
+        input.put("voucherDate", LocalDate.of(2026, 6, 30));
+        input.put("assetCategory", "生产设备");
+        input.put("deptId", "DEPT-100");
+
+        Voucher v = gen.generate("F001", input);
+        VoucherEntry expense = v.getEntries().get(0);
+        assertEquals(AuxiliaryType.DEPT, expense.getAuxiliaryType());
+        assertEquals("DEPT-100", expense.getAuxiliaryEntityId());
+        // 累计折旧 line 不挂部门
+        assertNull(v.getEntries().get(1).getAuxiliaryType());
+    }
+
+    @Test
+    void depreciationGeneratorFallsBackToProjectWhenNoDept() {
+        // Sprint 6 W4-A: 无 deptId 但有 projectId → 挂 PROJECT
+        DepreciationVoucherGenerator gen = new DepreciationVoucherGenerator();
+        Map<String, Object> input = new HashMap<>();
+        input.put("businessId", "DEP-202606-PROJ");
+        input.put("amount", HUNDRED);
+        input.put("voucherDate", LocalDate.of(2026, 6, 30));
+        input.put("projectId", "PRJ-RD-2026");
+
+        Voucher v = gen.generate("F001", input);
+        VoucherEntry expense = v.getEntries().get(0);
+        assertEquals(AuxiliaryType.PROJECT, expense.getAuxiliaryType());
+        assertEquals("PRJ-RD-2026", expense.getAuxiliaryEntityId());
+    }
+
+    @Test
+    void depreciationGeneratorDeptOverridesProject() {
+        // Sprint 6 W4-A: 二者都传 → DEPT 优先 (部门归集 > 项目归集 by spec)
+        DepreciationVoucherGenerator gen = new DepreciationVoucherGenerator();
+        Map<String, Object> input = new HashMap<>();
+        input.put("businessId", "DEP-202606-BOTH");
+        input.put("amount", HUNDRED);
+        input.put("voucherDate", LocalDate.of(2026, 6, 30));
+        input.put("deptId", "DEPT-200");
+        input.put("projectId", "PRJ-RD-2026");
+
+        Voucher v = gen.generate("F001", input);
+        assertEquals(AuxiliaryType.DEPT, v.getEntries().get(0).getAuxiliaryType());
+        assertEquals("DEPT-200", v.getEntries().get(0).getAuxiliaryEntityId());
+    }
+
+    @Test
+    void depreciationGeneratorIgnoresBlankAuxiliaryIds() {
+        // Defensive: 空字符串视为 null (符合 chk_ve_auxiliary_paired)
+        DepreciationVoucherGenerator gen = new DepreciationVoucherGenerator();
+        Map<String, Object> input = new HashMap<>();
+        input.put("businessId", "DEP-202606-BLANK");
+        input.put("amount", HUNDRED);
+        input.put("voucherDate", LocalDate.of(2026, 6, 30));
+        input.put("deptId", "   ");  // blank
+        input.put("projectId", "");  // empty
+
+        Voucher v = gen.generate("F001", input);
+        assertNull(v.getEntries().get(0).getAuxiliaryType());
+        assertNull(v.getEntries().get(0).getAuxiliaryEntityId());
     }
 }
