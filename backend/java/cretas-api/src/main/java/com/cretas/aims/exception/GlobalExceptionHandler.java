@@ -668,12 +668,59 @@ public class GlobalExceptionHandler {
 
     /**
      * 处理请求体解析失败
+     *
+     * <p>AUD-7 / B-P1 follow-up (QA 2026-05-19): PR #49 pinned {@code @JsonFormat(pattern="yyyy-MM-dd")}
+     * on Pricing date fields so {@code "2026"} (incomplete) routes through the date-specific message
+     * branch. But the regex-only detection (text match on {@code e.getMessage()}) misses 3 frequent
+     * pathological inputs because Spring's wrapper {@link HttpMessageNotReadableException#getMessage()}
+     * doesn't always inline the inner {@link java.time.format.DateTimeParseException} class name and
+     * the regex was written for the {@code "could not be parsed at index N"} JSR310 phrasing only:
+     * <ul>
+     *   <li>{@code "2026-05-01T00:00:00"} — T-suffix, JSR310 says {@code "unparsed text found at index 10"}
+     *       (no {@code "at index 0"})</li>
+     *   <li>{@code "2026-05-01+08:00"} — timezone offset, similar phrasing</li>
+     *   <li>{@code "2023-02-29"} — invalid leap day, JSR310 says {@code "Invalid date 'FEBRUARY 29'"}
+     *       (no {@code "could not be parsed at index"} at all)</li>
+     * </ul>
+     *
+     * <p>Fix: walk {@link Throwable#getCause()} chain (deserializer-thrown
+     * {@link java.time.format.DateTimeParseException} or
+     * {@link com.fasterxml.jackson.databind.exc.InvalidFormatException} with
+     * {@code targetType == LocalDate.class}). When detected, classify by the offending value's
+     * shape (T-suffix / TZ offset / proper-format-but-invalid-day / other) and emit a
+     * shape-specific Chinese hint per fool-proof Rule 5 (dead-end → next action).
+     *
+     * <p>Legacy regex branches kept as fallback for cases where the cause chain is GC'd or
+     * the value is buried deeper than walk depth.
      */
     @ExceptionHandler(HttpMessageNotReadableException.class)
     @ResponseStatus(HttpStatus.BAD_REQUEST)
     public ApiResponse<?> handleHttpMessageNotReadableException(HttpMessageNotReadableException e) {
         log.warn("请求体解析失败: {}", e.getMessage());
-        // PR1.5 O4 (revised QA Round 6): broader Jackson date error detection.
+
+        // AUD-7 (2026-05-19): walk cause chain for explicit DateTimeParseException /
+        // InvalidFormatException-targeting-LocalDate BEFORE falling back to regex on e.getMessage().
+        // The wrapper message format is brittle across Spring versions; the cause chain is stable.
+        Throwable cause = e.getCause();
+        int depth = 0;
+        while (cause != null && depth < 10) {
+            if (cause instanceof java.time.format.DateTimeParseException dtpe) {
+                return buildDateError(dtpe.getParsedString(), dtpe.getMessage());
+            }
+            if (cause instanceof com.fasterxml.jackson.databind.exc.InvalidFormatException ife) {
+                Class<?> target = ife.getTargetType();
+                if (target != null && (target == java.time.LocalDate.class
+                        || target == java.time.LocalDateTime.class)) {
+                    Object val = ife.getValue();
+                    return buildDateError(val == null ? "" : val.toString(), ife.getMessage());
+                }
+            }
+            if (cause.getCause() == cause) break;  // self-cycle protection
+            cause = cause.getCause();
+            depth++;
+        }
+
+        // PR1.5 O4 (revised QA Round 6): broader Jackson date error detection (fallback path).
         // Patterns covered:
         //   - "Cannot deserialize value of type `java.time.LocalDate` from String \"TODAY\""
         //   - "JSON parse error: Text 'NOT_A_DATE' could not be parsed at index 0"
@@ -693,8 +740,7 @@ public class GlobalExceptionHandler {
                     .compile("Text '([^']+)' could not be parsed").matcher(msg);
                 if (sq.find()) badValue = sq.group(1);
             }
-            String fieldHint = badValue.isEmpty() ? "" : "（值: \"" + badValue + "\"）";
-            return ApiResponse.error(400, "日期格式不正确" + fieldHint + "，请重新选择日期");
+            return buildDateError(badValue, msg);
         }
         if (msg.contains("Cannot deserialize value of type")) {
             // W-10 fix (Round 12, qa-prompt v2.4 Rule 8): previous message was
@@ -732,6 +778,47 @@ public class GlobalExceptionHandler {
                     fieldName.isEmpty() ? null : fieldName);
         }
         return ApiResponse.error(400, "请求格式不正确，请检查JSON格式");
+    }
+
+    /**
+     * AUD-7 (2026-05-19): classify the offending date string by shape and emit a
+     * shape-specific Chinese hint per fool-proof Rule 5 (dead-end → next action).
+     *
+     * <p>Shapes detected:
+     * <ul>
+     *   <li>contains {@code T} → "请去掉时间部分, 使用纯日期格式 yyyy-MM-dd ... 不要带 T 时间后缀"</li>
+     *   <li>contains {@code +} or {@code Z} (timezone offset) → "请去掉时区偏移..."</li>
+     *   <li>matches {@code \d{4}-\d{2}-\d{2}} but parsed failed (invalid day/month, e.g. leap)
+     *       → "日期值无效, 请检查月份/日期是否合法 (例: 2023-02-29 不是有效日期, 2023 非闰年)"</li>
+     *   <li>fallback → generic "请使用 yyyy-MM-dd 格式 (例: 2026-05-01)"</li>
+     * </ul>
+     *
+     * <p>Emitted via {@link ApiResponse#errorWithCode} with errorCode {@code "VALIDATION"} so FE
+     * interceptor can branch on it (consistent with {@code RULE_VIOLATION} pattern).
+     *
+     * @param value offending date string (e.g. {@code "2026-05-01T00:00:00"}); may be empty
+     *              if extraction failed
+     * @param fallbackHintContext the inner exception's message — used only as a debug log breadcrumb
+     */
+    private ApiResponse<Void> buildDateError(String value, String fallbackHintContext) {
+        String hint;
+        String safeValue = value == null ? "" : value;
+        if (safeValue.contains("T")) {
+            hint = "请去掉时间部分, 使用纯日期格式 yyyy-MM-dd (例: 2026-05-01), 不要带 T 时间后缀";
+        } else if (safeValue.contains("+") || (safeValue.endsWith("Z") && safeValue.length() > 1)) {
+            hint = "请去掉时区偏移, 使用纯日期格式 yyyy-MM-dd (例: 2026-05-01)";
+        } else if (safeValue.matches("\\d{4}-\\d{2}-\\d{2}")) {
+            // looks like proper format but invalid day (e.g. 2023-02-29 leap, 2026-02-30 day-of-month)
+            hint = "日期值无效, 请检查月份/日期是否合法 (例: 2023-02-29 不是有效日期, 2023 非闰年)";
+        } else {
+            hint = "请使用 yyyy-MM-dd 格式 (例: 2026-05-01)";
+        }
+        String fieldHint = safeValue.isEmpty() ? "" : "（值: \"" + safeValue + "\"）";
+        log.debug("Date parse error routed (value=\"{}\", hint=\"{}\", cause=\"{}\")",
+                safeValue, hint, fallbackHintContext);
+        return ApiResponse.errorWithCode(400, "VALIDATION",
+                "日期格式不正确" + fieldHint,
+                hint, "warning");
     }
 
     /**
