@@ -4,6 +4,7 @@ import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.annotation.RequirePermission;
 import com.cretas.aims.entity.warehouse.ReusableContainer;
 import com.cretas.aims.entity.warehouse.ReusableContainerTransaction;
+import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.service.warehouse.ReusableContainerService;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
@@ -30,6 +31,23 @@ public class ReusableContainerController {
 
     private final ReusableContainerService service;
 
+    /**
+     * AUD-5 B-A3 sister sweep batch 3 (edge audit 2026-05-20): explicit length caps mirror PG
+     * column widths in {@code reusable_containers} and {@code reusable_container_transactions}
+     * tables (see {@link ReusableContainer} / {@link ReusableContainerTransaction}
+     * {@code @Column(length=...)}). Without these, over-length input lets the request reach PG
+     * and surfaces as {@code DataIntegrityViolationException} → generic 409 "数据处理异常".
+     * Pre-check at controller boundary delivers a specific 400 with a hintTarget instead.
+     *
+     * <p>Mirrors PR #48 / PR #76 / PR #78 length-pre-check pattern.
+     */
+    private static final int CONTAINER_CODE_MAX_LENGTH = 64;
+    private static final int CONTAINER_NAME_MAX_LENGTH = 128;
+    private static final int SPECIFICATION_MAX_LENGTH = 128;
+    private static final int CONTAINER_REMARK_MAX_LENGTH = 500;
+    private static final int TRANSACTION_CUSTOMER_NAME_MAX_LENGTH = 128;
+    private static final int TRANSACTION_REMARK_MAX_LENGTH = 500;
+
     @GetMapping
     public ApiResponse<Page<ReusableContainer>> list(
             @PathVariable @NotBlank String factoryId,
@@ -50,6 +68,9 @@ public class ReusableContainerController {
     public ApiResponse<ReusableContainer> create(
             @PathVariable @NotBlank String factoryId,
             @RequestBody ReusableContainer dto) {
+        // AUD-5 B-A3 sister sweep batch 3: length pre-check for container code/name/spec/remark
+        // BEFORE dispatching to service layer where PG would surface a generic 409.
+        validateContainerLengths(dto);
         return ApiResponse.success("创建成功", service.createContainer(factoryId, dto));
     }
 
@@ -59,6 +80,8 @@ public class ReusableContainerController {
             @PathVariable @NotBlank String factoryId,
             @PathVariable @NotBlank String id,
             @RequestBody Map<String, Object> body) {
+        // AUD-5 B-A3 sister sweep batch 3: length pre-check for transaction text fields.
+        validateTransactionLengths(body);
         Integer quantity = parseInt(body.get("quantity"));
         return ApiResponse.success("已发出", service.shipOut(factoryId, id, quantity,
                 (String) body.get("customerId"),
@@ -73,6 +96,8 @@ public class ReusableContainerController {
             @PathVariable @NotBlank String factoryId,
             @PathVariable @NotBlank String id,
             @RequestBody Map<String, Object> body) {
+        // AUD-5 B-A3 sister sweep batch 3 (Rule 16: entry-point matrix — return-in path).
+        validateTransactionLengths(body);
         Integer quantity = parseInt(body.get("quantity"));
         return ApiResponse.success("已归还", service.returnIn(factoryId, id, quantity,
                 (String) body.get("customerId"),
@@ -86,6 +111,8 @@ public class ReusableContainerController {
             @PathVariable @NotBlank String factoryId,
             @PathVariable @NotBlank String id,
             @RequestBody Map<String, Object> body) {
+        // AUD-5 B-A3 sister sweep batch 3 (Rule 16: entry-point matrix — loss path).
+        validateTransactionLengths(body);
         Integer quantity = parseInt(body.get("quantity"));
         BigDecimal comp = body.get("compensationAmount") == null ? null
                 : new BigDecimal(body.get("compensationAmount").toString());
@@ -113,5 +140,72 @@ public class ReusableContainerController {
         if (o == null) return null;
         if (o instanceof Number) return ((Number) o).intValue();
         return Integer.parseInt(o.toString());
+    }
+
+    // ==================== Boundary validators (AUD-5 B-A3 sister sweep batch 3) ====================
+
+    /**
+     * AUD-5 B-A3 sister sweep batch 3 (edge audit 2026-05-20): length pre-check for
+     * {@link ReusableContainer} create path. Container code (64), name (128),
+     * specification (128), remark (500) are all PG VARCHAR-bounded user input fields.
+     * Mirrors PR #48 / PR #78 pattern.
+     */
+    private void validateContainerLengths(ReusableContainer dto) {
+        String code = dto.getContainerCode();
+        if (code != null && code.length() > CONTAINER_CODE_MAX_LENGTH) {
+            throw new BusinessException(400,
+                    "周转耗材编号最长 " + CONTAINER_CODE_MAX_LENGTH + " 字符 (当前 " + code.length() + ")")
+                    .withHint("请使用更短的周转耗材编号")
+                    .withSeverity("warning")
+                    .withHintTarget("containerCode");
+        }
+        String name = dto.getContainerName();
+        if (name != null && name.length() > CONTAINER_NAME_MAX_LENGTH) {
+            throw new BusinessException(400,
+                    "周转耗材名称最长 " + CONTAINER_NAME_MAX_LENGTH + " 字符 (当前 " + name.length() + ")")
+                    .withHint("请使用更短的周转耗材名称")
+                    .withSeverity("warning")
+                    .withHintTarget("containerName");
+        }
+        String spec = dto.getSpecification();
+        if (spec != null && spec.length() > SPECIFICATION_MAX_LENGTH) {
+            throw new BusinessException(400,
+                    "规格最长 " + SPECIFICATION_MAX_LENGTH + " 字符 (当前 " + spec.length() + ")")
+                    .withHint("请使用更短的规格说明")
+                    .withSeverity("warning")
+                    .withHintTarget("specification");
+        }
+        String remark = dto.getRemark();
+        if (remark != null && remark.length() > CONTAINER_REMARK_MAX_LENGTH) {
+            throw new BusinessException(400,
+                    "备注最长 " + CONTAINER_REMARK_MAX_LENGTH + " 字符 (当前 " + remark.length() + ")")
+                    .withHint("请使用更短的备注 (上限 500 字符)")
+                    .withSeverity("warning")
+                    .withHintTarget("remark");
+        }
+    }
+
+    /**
+     * AUD-5 B-A3 sister sweep batch 3: length pre-check for {@link ReusableContainerTransaction}
+     * fields {@code customerName} (VARCHAR 128) and {@code remark} (VARCHAR 500) on
+     * ship-out / return-in / loss paths (Rule 16: entry-point matrix). Mirrors PR #78 pattern.
+     */
+    private void validateTransactionLengths(Map<String, Object> body) {
+        Object name = body.get("customerName");
+        if (name instanceof String nameStr && nameStr.length() > TRANSACTION_CUSTOMER_NAME_MAX_LENGTH) {
+            throw new BusinessException(400,
+                    "客户名称最长 " + TRANSACTION_CUSTOMER_NAME_MAX_LENGTH + " 字符 (当前 " + nameStr.length() + ")")
+                    .withHint("请使用更短的客户名称")
+                    .withSeverity("warning")
+                    .withHintTarget("customerName");
+        }
+        Object remark = body.get("remark");
+        if (remark instanceof String remarkStr && remarkStr.length() > TRANSACTION_REMARK_MAX_LENGTH) {
+            throw new BusinessException(400,
+                    "备注最长 " + TRANSACTION_REMARK_MAX_LENGTH + " 字符 (当前 " + remarkStr.length() + ")")
+                    .withHint("请使用更短的备注 (上限 500 字符)")
+                    .withSeverity("warning")
+                    .withHintTarget("remark");
+        }
     }
 }

@@ -38,6 +38,20 @@ public class StocktakingRecordController {
 
     private final StocktakingRecordRepository stocktakingRepository;
 
+    /**
+     * AUD-5 B-A3 sister sweep batch 3 (edge audit 2026-05-20): explicit length caps mirror PG
+     * column widths in {@code stocktaking_records} table (see {@link StocktakingRecord}
+     * {@code @Column(length=...)}). Without these, over-length input lets the request reach PG
+     * and surfaces as {@code DataIntegrityViolationException} → generic 409 "数据处理异常".
+     * Pre-check at controller boundary delivers a specific 400 with a hintTarget instead.
+     *
+     * <p>{@code adjustmentReason} and {@code notes} are {@code @Column(columnDefinition="TEXT")}
+     * (unbounded) so no length check needed for them.
+     *
+     * <p>Mirrors PR #48 / PR #76 / PR #78 length-pre-check pattern.
+     */
+    private static final int UNIT_MAX_LENGTH = 20;
+
     // ==================== 列表查询 ====================
 
     @GetMapping
@@ -81,6 +95,10 @@ public class StocktakingRecordController {
             @RequestAttribute("userId") @Parameter(hidden = true) Long userId,
             @RequestBody @Valid StocktakingRecord record) {
         log.info("创建盘点单: factoryId={}, materialId={}", factoryId, record.getRawMaterialTypeId());
+
+        // AUD-5 B-A3 sister sweep batch 3: length pre-check for unit (VARCHAR 20) BEFORE
+        // dispatching to repository where PG would surface a generic 409.
+        validateEntityLengths(record);
 
         // 检查是否已有该食材的进行中盘点
         if (stocktakingRepository.existsByFactoryIdAndRawMaterialTypeIdAndStatus(
@@ -197,5 +215,31 @@ public class StocktakingRecordController {
         result.put("summary", items);
         result.put("recentRecords", latestRecords);
         return ApiResponse.success(result);
+    }
+
+    // ==================== Boundary validators (AUD-5 B-A3 sister sweep batch 3) ====================
+
+    /**
+     * AUD-5 B-A3 sister sweep batch 3 (edge audit 2026-05-20): length pre-check for
+     * {@code unit} (PG VARCHAR 20) on the create path. Mirrors PR #48 / PR #78
+     * pattern.
+     *
+     * <p>{@code adjustmentReason} (TEXT, unbounded) and {@code notes} (TEXT, unbounded)
+     * are not length-bounded by PG, so no pre-check is needed for them.
+     *
+     * <p>Without this, an over-length {@code unit} input lets the request reach PG and
+     * surfaces as {@link org.springframework.dao.DataIntegrityViolationException} →
+     * generic 409 "数据处理异常". Pre-check delivers a specific 400 with the actual vs
+     * allowed length so the user can immediately fix the input.
+     */
+    private void validateEntityLengths(StocktakingRecord record) {
+        String unit = record.getUnit();
+        if (unit != null && unit.length() > UNIT_MAX_LENGTH) {
+            throw new BusinessException(400,
+                    "计量单位最长 " + UNIT_MAX_LENGTH + " 字符 (当前 " + unit.length() + ")")
+                    .withHint("请使用更短的计量单位 (如 kg / 箱 / 件)")
+                    .withSeverity("warning")
+                    .withHintTarget("unit");
+        }
     }
 }
