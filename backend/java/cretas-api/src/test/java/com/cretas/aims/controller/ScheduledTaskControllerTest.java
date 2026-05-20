@@ -14,6 +14,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.context.ApplicationContext;
 
+import java.util.Optional;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -224,6 +225,101 @@ class ScheduledTaskControllerTest {
         assertNotNull(resp);
         assertEquals(200, resp.getCode());
         verify(dynamicSchedulerService).updateTask(eq(taskId), any(ScheduledTask.class));
+    }
+
+    // ==================== AUD-4 (PR #94 follow-up): explicit version check ====================
+
+    @Test
+    @DisplayName("AUD-4: PUT with stale version (req v=0, db v=1) → 409 with refresh hint")
+    void testStaleVersionRejectedWith409() {
+        // Edge audit 2026-05-20 finding repro: two admins open the same task in 2 tabs,
+        // both see v=1. Admin A saves first (DB now v=2). Admin B clicks save with stale
+        // v=1 snapshot — without this check the DynamicSchedulerService would silently
+        // overwrite Admin A's work because updateTask() does its own findById which reads
+        // the current v=2. The explicit check fires before dispatching to the service so
+        // 409 surfaces instead.
+        UUID taskId = UUID.randomUUID();
+        ScheduledTask existing = newBaseTask();
+        existing.setId(taskId);
+        existing.setVersion(1L);   // DB has been updated by Admin A
+        when(taskRepository.findById(taskId)).thenReturn(Optional.of(existing));
+
+        ScheduledTask patch = new ScheduledTask();
+        patch.setVersion(0L);   // stale client snapshot
+        patch.setTaskName("覆盖尝试");
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> controller.update(taskId, patch),
+                "stale version 必须 reject 不允许 silent overwrite");
+
+        assertEquals(409, ex.getCode(), "must be 409 CONFLICT, not silent 200");
+        assertTrue(ex.getMessage().contains("数据已被其他用户修改"),
+                "message must surface the lost-update semantics: " + ex.getMessage());
+        assertTrue(ex.getMessage().contains("v=1") || ex.getMessage().contains("服务端 v=1"),
+                "message must surface server version (1): " + ex.getMessage());
+        assertTrue(ex.getMessage().contains("v=0") || ex.getMessage().contains("客户端 v=0"),
+                "message must surface client version (0): " + ex.getMessage());
+        assertEquals("请刷新页面查看最新数据后再编辑", ex.getActionHint(),
+                "4-in-1 UX (a): actionHint must direct user to refresh");
+        assertEquals("warning", ex.getSeverity(),
+                "4-in-1 UX (c): severity warning for sticky toast");
+        // CRITICAL: dispatching service NEVER called — stale write blocked before overwriting
+        verify(dynamicSchedulerService, never()).updateTask(eq(taskId), any(ScheduledTask.class));
+    }
+
+    @Test
+    @DisplayName("AUD-4: PUT with current version (req v=1, db v=1) → 200 happy path (regression)")
+    void testCurrentVersionAccepted() {
+        // Companion happy path — when client is up-to-date, the dispatch to
+        // DynamicSchedulerService.updateTask proceeds normally. Guards against the
+        // version check accidentally blocking legitimate updates.
+        UUID taskId = UUID.randomUUID();
+        ScheduledTask existing = newBaseTask();
+        existing.setId(taskId);
+        existing.setVersion(1L);
+        when(taskRepository.findById(taskId)).thenReturn(Optional.of(existing));
+
+        ScheduledTask patch = new ScheduledTask();
+        patch.setVersion(1L);   // matches DB
+        patch.setTaskName("新名字");
+
+        when(dynamicSchedulerService.updateTask(eq(taskId), any(ScheduledTask.class)))
+                .thenAnswer(inv -> {
+                    ScheduledTask updated = newBaseTask();
+                    updated.setId(taskId);
+                    updated.setVersion(2L);   // version bumped on save
+                    updated.setTaskName("新名字");
+                    return updated;
+                });
+
+        ApiResponse<ScheduledTask> resp = controller.update(taskId, patch);
+        assertNotNull(resp);
+        assertEquals(200, resp.getCode());
+        verify(dynamicSchedulerService).updateTask(eq(taskId), any(ScheduledTask.class));
+    }
+
+    @Test
+    @DisplayName("AUD-4: PUT without version (null) → 200 lenient (legacy clients keep working)")
+    void testNullVersionLenientPassthrough() {
+        // AUD-4 is a Lost Update fix — when clients DON'T send version they get the
+        // pre-AUD-4 behavior (last-writer-wins). This lenient path lets AI Tool callers
+        // (e.g. ScheduledTaskTool that doesn't carry version) keep working without
+        // forcing a version round-trip. The repo lookup is also skipped (lazy) since
+        // we have nothing to compare against.
+        UUID taskId = UUID.randomUUID();
+        ScheduledTask patch = new ScheduledTask();
+        // intentionally no version
+        patch.setTaskName("leniency-test");
+
+        when(dynamicSchedulerService.updateTask(eq(taskId), any(ScheduledTask.class)))
+                .thenAnswer(inv -> inv.getArgument(1));
+
+        ApiResponse<ScheduledTask> resp = controller.update(taskId, patch);
+        assertNotNull(resp);
+        assertEquals(200, resp.getCode());
+        verify(dynamicSchedulerService).updateTask(eq(taskId), any(ScheduledTask.class));
+        // Critical: when version is null we don't even need to load existing (lazy path)
+        verify(taskRepository, never()).findById(taskId);
     }
 
     // ==================== Test helpers ====================

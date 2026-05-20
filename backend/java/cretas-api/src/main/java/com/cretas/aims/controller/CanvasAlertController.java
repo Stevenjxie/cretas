@@ -180,6 +180,20 @@ public class CanvasAlertController {
         try {
             AlertRule rule = loadRule(factoryId, id);
 
+            // AUD-4 wiring (PR #94 follow-up): explicit optimistic-lock check fires
+            // BEFORE field updates so JPA optimistic lock actually trips on stale
+            // client version. The findById-then-save pattern reads version=N from DB
+            // on every load, so parallel PUTs with stale `version:0` would both refetch
+            // a "fresh" copy and both save without conflict. Comparing the client's
+            // submitted version (snapshotted when the user opened the edit form) against
+            // the just-loaded DB version surfaces stale-writes as 409 instead of silent
+            // last-writer-wins. Null = lenient (legacy clients keep working).
+            ApiResponse<Map<String, Object>> versionError =
+                    checkVersion(body.get("version"), rule.getVersion());
+            if (versionError != null) {
+                return versionError;
+            }
+
             // PATCH semantics: only update fields present in body.
             if (body.containsKey("ruleName")) {
                 String newName = (String) body.get("ruleName");
@@ -378,6 +392,56 @@ public class CanvasAlertController {
     }
 
     // ==================== helpers ====================
+
+    /**
+     * AUD-4 wiring (PR #94 follow-up): explicit optimistic-lock version check.
+     *
+     * <p>PR #94 added {@code @Version Long version} to {@link AlertRule} + Flyway DDL,
+     * but the controller pattern ({@code findById → setFields → save}) reads the current
+     * DB version on every load, so two parallel PUTs each see "fresh" entities — JPA never
+     * sees a stale version mismatch internally. This helper compares the client-supplied
+     * version (snapshotted when the user opened the edit form) against the just-loaded DB
+     * version. If the user's snapshot is stale, somebody else already saved; return 409
+     * instead of silently overwriting.
+     *
+     * <p>Coercion: body values come from Jackson {@code Map<String, Object>} where numeric
+     * literals deserialize as {@code Integer} / {@code Long} depending on size. Accept any
+     * {@link Number} and compare via {@code longValue()}. Strings that parse cleanly are
+     * also accepted (some HTTP clients stringify numbers). Anything else = lenient skip
+     * (matches null-tolerance for legacy clients).
+     *
+     * <p>4-in-1 UX (per fool-proof Rule 1 + qa-prompt v2.4 Rule 8): specific message
+     * surfacing both versions + actionHint pointing to "refresh page" + severity warning
+     * for sticky toast + 409 status.
+     *
+     * @return non-null error response on stale version; null when version matches or
+     *         client opted out by sending null
+     */
+    private ApiResponse<Map<String, Object>> checkVersion(Object requestVersionRaw,
+                                                          Long currentVersion) {
+        if (requestVersionRaw == null) {
+            return null; // lenient: legacy clients without version field
+        }
+        Long requestVersion;
+        if (requestVersionRaw instanceof Number) {
+            requestVersion = ((Number) requestVersionRaw).longValue();
+        } else {
+            try {
+                requestVersion = Long.parseLong(requestVersionRaw.toString());
+            } catch (NumberFormatException ex) {
+                return null; // lenient: malformed version field treated as not-supplied
+            }
+        }
+        if (!requestVersion.equals(currentVersion)) {
+            return ApiResponse.errorWithHint(409,
+                    "数据已被其他用户修改 (服务端 v=" + currentVersion
+                            + ", 客户端 v=" + requestVersion + ")",
+                    "请刷新页面查看最新数据后再编辑",
+                    "warning",
+                    null);
+        }
+        return null;
+    }
 
     /**
      * B-A4/A5 fix: validate notifyChannels / notifyRoles on create path.
