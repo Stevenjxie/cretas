@@ -69,15 +69,39 @@ public class RuleDeleteTool extends AbstractBusinessTool {
                 .orElseThrow(() -> new IllegalArgumentException(
                         "规则 " + ruleCode + " 不存在 (factoryId=" + factoryId + ")"));
 
-        ruleRepository.delete(rule);  // BaseEntity @SQLDelete → soft delete
-        log.info("rule_delete - factory={}, ruleCode={}, id={}",
-                factoryId, ruleCode, rule.getId());
+        // Bug #4 fix (2026-05-20, sister of CanvasRuleController.deleteRule): use manual
+        // softDelete()+save() instead of repository.delete(). With @Version added to
+        // BusinessRule (V20260626_02), the hard-coded @SQLDelete UPDATE does NOT increment
+        // version → Hibernate's EntityDeleteAction reports a DataIntegrityViolationException
+        // that surfaces as the generic "数据处理异常" 409. The standard UPDATE path
+        // (via save) bumps version correctly and translates conflicts to a specific
+        // ObjectOptimisticLockingFailureException.
+        //
+        // Idempotency (fool-proof Rule 4): re-running rule_delete on an already-deleted
+        // rule returns success with alreadyDeleted=true rather than failing.
+        if (rule.getDeletedAt() != null) {
+            log.info("rule_delete - factory={}, ruleCode={} already deleted at {}, idempotent no-op",
+                    factoryId, ruleCode, rule.getDeletedAt());
+            Map<String, Object> data = new LinkedHashMap<>();
+            data.put("id", String.valueOf(rule.getId()));
+            data.put("ruleCode", ruleCode);
+            data.put("ruleName", rule.getRuleName());
+            data.put("deletedAt", rule.getDeletedAt().toString());
+            data.put("alreadyDeleted", true);
+            return buildSimpleResult("规则 " + ruleCode + " 已是删除状态", data);
+        }
+
+        rule.softDelete();
+        BusinessRule saved = ruleRepository.save(rule);
+        log.info("rule_delete - factory={}, ruleCode={}, id={}, deletedAt={}",
+                factoryId, ruleCode, saved.getId(), saved.getDeletedAt());
 
         Map<String, Object> data = new LinkedHashMap<>();
-        data.put("id", String.valueOf(rule.getId()));
+        data.put("id", String.valueOf(saved.getId()));
         data.put("ruleCode", ruleCode);
-        data.put("ruleName", rule.getRuleName());
-        data.put("deletedAt", java.time.LocalDateTime.now().toString());
+        data.put("ruleName", saved.getRuleName());
+        data.put("deletedAt", saved.getDeletedAt() != null
+                ? saved.getDeletedAt().toString() : null);
         return buildSimpleResult("规则 " + ruleCode + " 已删除 (软删除, 可恢复)", data);
     }
 }

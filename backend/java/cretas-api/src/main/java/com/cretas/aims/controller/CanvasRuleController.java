@@ -335,13 +335,72 @@ public class CanvasRuleController {
     public ApiResponse<Map<String, Object>> deleteRule(@PathVariable String factoryId,
                                                        @PathVariable UUID id) {
         log.info("DELETE /canvas-rules/{} factoryId={}", id, factoryId);
+
+        // Bug #4 fix (2026-05-20): previously called {@code ruleRepository.delete(rule)} which
+        // relies on the entity's {@code @SQLDelete(sql = "UPDATE business_rules SET deleted_at
+        // = NOW() WHERE id = ?")}. That hard-coded UPDATE does NOT touch the {@code version}
+        // column added by V20260626_02 (@Version Long version, AUD-4 P1). Hibernate's
+        // {@code EntityDeleteAction} on a @Version-tracked entity expects the delete UPDATE
+        // to bump the version — when it sees the version unchanged at flush, it can throw
+        // {@link org.springframework.dao.DataIntegrityViolationException} which routes to
+        // {@link GlobalExceptionHandler#handleDataIntegrityViolationException} else-branch
+        // and surfaces the generic "数据处理异常" 409 with no actionHint.
+        //
+        // Mirror the sister CanvasAlertController.deleteRule pattern: call
+        // {@code rule.softDelete()} (sets deletedAt in memory) then {@code save(rule)}.
+        // This runs Hibernate's standard UPDATE with WHERE id=? AND version=? AND increments
+        // version → optimistic lock fires properly on stale snapshots, and "no version
+        // touch" weirdness with @SQLDelete is bypassed entirely.
+        //
+        // Idempotency (fool-proof Rule 4): if the rule is already soft-deleted (caller hit
+        // DELETE twice, or a previously failed call left state half-applied), return 200
+        // with the original deletedAt — don't fail the second call.
         BusinessRule rule = loadRule(factoryId, id);
-        // SQLDelete annotation on BusinessRule entity (@SQLDelete) sets deleted_at on delete()
-        ruleRepository.delete(rule);
-        Map<String, Object> data = new LinkedHashMap<>();
-        data.put("ruleId", rule.getId().toString());
-        data.put("ruleCode", rule.getRuleCode());
-        return ApiResponse.success("规则已删除", data);
+
+        if (rule.getDeletedAt() != null) {
+            log.info("DELETE /canvas-rules/{} idempotent — rule already deleted at {}",
+                    id, rule.getDeletedAt());
+            Map<String, Object> data = new LinkedHashMap<>();
+            data.put("ruleId", rule.getId().toString());
+            data.put("ruleCode", rule.getRuleCode());
+            data.put("deletedAt", rule.getDeletedAt().toString());
+            data.put("alreadyDeleted", true);
+            return ApiResponse.success("规则已是删除状态", data);
+        }
+
+        try {
+            rule.softDelete();
+            BusinessRule saved = ruleRepository.save(rule);
+            Map<String, Object> data = new LinkedHashMap<>();
+            data.put("ruleId", saved.getId().toString());
+            data.put("ruleCode", saved.getRuleCode());
+            data.put("deletedAt", saved.getDeletedAt() != null
+                    ? saved.getDeletedAt().toString() : null);
+            return ApiResponse.success("规则已删除", data);
+        } catch (org.springframework.orm.ObjectOptimisticLockingFailureException
+                | jakarta.persistence.OptimisticLockException ex) {
+            // Concurrent edit: another session modified or deleted this rule between our
+            // load and save. Surface a specific 409 with refresh hint (4位一体: message
+            // 具体 + actionHint + severity warning + sticky on FE side).
+            log.warn("DELETE /canvas-rules/{} optimistic lock conflict: {}",
+                    id, ex.getMessage());
+            return ApiResponse.errorWithCode(409, "CONFLICT",
+                    "规则已被其他用户修改或删除, 无法继续",
+                    "请刷新页面查看最新状态后再尝试删除",
+                    "warning");
+        } catch (org.springframework.dao.DataIntegrityViolationException ex) {
+            // Last-line defensive: catch FK-violation / CHECK-violation / NOT-NULL violation
+            // and emit a specific 409 message instead of the GlobalExceptionHandler generic
+            // "数据处理异常" fallback. The Phase 4a schema has no inbound FK pointing at
+            // business_rules with restricting ON DELETE, but a future migration might add
+            // one and this handler keeps the user-facing message specific.
+            log.warn("DELETE /canvas-rules/{} data integrity violation: {}",
+                    id, ex.getMessage());
+            return ApiResponse.errorWithCode(409, "DATA_INTEGRITY",
+                    "无法删除规则: 数据约束阻止操作",
+                    "请联系管理员检查规则关联数据 (id=" + id + ")",
+                    "warning");
+        }
     }
 
     @Operation(summary = "测试评估单条规则 (dry-run)",
