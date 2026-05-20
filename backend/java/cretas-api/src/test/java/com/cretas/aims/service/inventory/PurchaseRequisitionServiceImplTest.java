@@ -176,6 +176,119 @@ class PurchaseRequisitionServiceImplTest {
         }
     }
 
+    // ==================== deleteDraft (Bug #7 prod QA, 2026-05-20) ====================
+
+    @Nested
+    @DisplayName("deleteDraft (Bug #7 — DELETE DRAFT 草稿)")
+    class DeleteDraft {
+
+        @Test
+        @DisplayName("DRAFT by requester self → softDelete + repo.delete called ✓")
+        void deleteDraftByRequesterAccepted() {
+            PurchaseRequisition pr = buildPr(PurchaseRequisitionStatus.DRAFT, FACTORY);
+            when(repo.findById(PR_ID)).thenReturn(Optional.of(pr));
+
+            service.deleteDraft(FACTORY, PR_ID, REQUESTER_ID);
+
+            verify(repo).delete(pr);
+        }
+
+        @Test
+        @DisplayName("SUBMITTED (PENDING_APPROVAL) → 400 + actionHint 指向 reject")
+        void deleteSubmittedRejected() {
+            PurchaseRequisition pr = buildPr(PurchaseRequisitionStatus.PENDING_APPROVAL, FACTORY);
+            when(repo.findById(PR_ID)).thenReturn(Optional.of(pr));
+
+            BusinessException ex = assertThrows(BusinessException.class,
+                    () -> service.deleteDraft(FACTORY, PR_ID, REQUESTER_ID));
+
+            assertEquals(400, ex.getCode());
+            assertTrue(ex.getMessage().contains("DRAFT"),
+                    "应说明仅 DRAFT 可删, 实际: " + ex.getMessage());
+            assertNotNull(ex.getActionHint(), "应携带 actionHint 指向 reject 操作");
+            assertTrue(ex.getActionHint().contains("reject") || ex.getActionHint().contains("驳回"),
+                    "actionHint 应引导用户使用 reject, 实际: " + ex.getActionHint());
+            verify(repo, never()).delete(any(PurchaseRequisition.class));
+        }
+
+        @Test
+        @DisplayName("APPROVED → 400 (终态前后均拒)")
+        void deleteApprovedRejected() {
+            PurchaseRequisition pr = buildPr(PurchaseRequisitionStatus.APPROVED, FACTORY);
+            when(repo.findById(PR_ID)).thenReturn(Optional.of(pr));
+
+            BusinessException ex = assertThrows(BusinessException.class,
+                    () -> service.deleteDraft(FACTORY, PR_ID, REQUESTER_ID));
+
+            assertEquals(400, ex.getCode());
+            verify(repo, never()).delete(any(PurchaseRequisition.class));
+        }
+
+        @Test
+        @DisplayName("CONVERTED_TO_PO → 400 (终态)")
+        void deleteConvertedRejected() {
+            PurchaseRequisition pr = buildPr(PurchaseRequisitionStatus.CONVERTED_TO_PO, FACTORY);
+            when(repo.findById(PR_ID)).thenReturn(Optional.of(pr));
+
+            BusinessException ex = assertThrows(BusinessException.class,
+                    () -> service.deleteDraft(FACTORY, PR_ID, REQUESTER_ID));
+
+            assertEquals(400, ex.getCode());
+            verify(repo, never()).delete(any(PurchaseRequisition.class));
+        }
+
+        @Test
+        @DisplayName("REJECTED → 400 (终态)")
+        void deleteRejectedTerminalRejected() {
+            PurchaseRequisition pr = buildPr(PurchaseRequisitionStatus.REJECTED, FACTORY);
+            when(repo.findById(PR_ID)).thenReturn(Optional.of(pr));
+
+            BusinessException ex = assertThrows(BusinessException.class,
+                    () -> service.deleteDraft(FACTORY, PR_ID, REQUESTER_ID));
+
+            assertEquals(400, ex.getCode());
+            verify(repo, never()).delete(any(PurchaseRequisition.class));
+        }
+
+        @Test
+        @DisplayName("DRAFT by 非 requester → 403 + actionHint")
+        void deleteDraftByNonRequesterRejected() {
+            PurchaseRequisition pr = buildPr(PurchaseRequisitionStatus.DRAFT, FACTORY);
+            when(repo.findById(PR_ID)).thenReturn(Optional.of(pr));
+
+            BusinessException ex = assertThrows(BusinessException.class,
+                    () -> service.deleteDraft(FACTORY, PR_ID, 999L));
+
+            assertEquals(403, ex.getCode());
+            assertNotNull(ex.getActionHint(), "应携带 actionHint");
+            verify(repo, never()).delete(any(PurchaseRequisition.class));
+        }
+
+        @Test
+        @DisplayName("跨工厂 → 403")
+        void deleteCrossFactoryRejected() {
+            PurchaseRequisition pr = buildPr(PurchaseRequisitionStatus.DRAFT, OTHER_FACTORY);
+            when(repo.findById(PR_ID)).thenReturn(Optional.of(pr));
+
+            BusinessException ex = assertThrows(BusinessException.class,
+                    () -> service.deleteDraft(FACTORY, PR_ID, REQUESTER_ID));
+
+            assertEquals(403, ex.getCode());
+            verify(repo, never()).delete(any(PurchaseRequisition.class));
+        }
+
+        @Test
+        @DisplayName("not found → ResourceNotFoundException (Controller 层映射 404)")
+        void deleteNotFound() {
+            when(repo.findById(PR_ID)).thenReturn(Optional.empty());
+
+            assertThrows(com.cretas.aims.exception.ResourceNotFoundException.class,
+                    () -> service.deleteDraft(FACTORY, PR_ID, REQUESTER_ID));
+
+            verify(repo, never()).delete(any(PurchaseRequisition.class));
+        }
+    }
+
     // ==================== convertToPO ====================
 
     @Nested

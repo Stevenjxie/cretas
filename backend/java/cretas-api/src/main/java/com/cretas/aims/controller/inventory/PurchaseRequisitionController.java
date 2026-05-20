@@ -33,6 +33,7 @@ import java.util.Map;
  *   <li>POST   /api/mobile/{factoryId}/purchase-requisitions/{id}/approve — 审批通过</li>
  *   <li>POST   /api/mobile/{factoryId}/purchase-requisitions/{id}/reject — 审批驳回</li>
  *   <li>POST   /api/mobile/{factoryId}/purchase-requisitions/{id}/convert-to-po — 转 PO</li>
+ *   <li>DELETE /api/mobile/{factoryId}/purchase-requisitions/{id} — 删除草稿 (仅 DRAFT)</li>
  * </ul>
  *
  * @since 2026-05-19
@@ -135,6 +136,28 @@ public class PurchaseRequisitionController {
         String supplierId = body == null ? null : body.get("supplierId");
         return ApiResponse.success("转 PO 成功",
                 requisitionService.convertToPO(factoryId, id, userId, supplierId));
+    }
+
+    /**
+     * Delete DRAFT 请购单 (Bug #7 prod QA — 2026-05-20).
+     *
+     * <p>State machine enforcement: 只允许 DRAFT 状态删除. 非 DRAFT 状态返 400 + actionHint
+     * 引导用户走 reject 流程 (避免之前 "提交+驳回" workaround 产生虚假审批历史).
+     *
+     * <p>软删除 (deletedAt) via BaseEntity {@code @SQLDelete}; {@code @Where(deleted_at IS NULL)}
+     * 自动从后续查询中过滤.
+     */
+    @DeleteMapping("/{id}")
+    @Operation(summary = "删除请购单草稿 (仅 DRAFT)",
+            description = "状态机约束: 仅 DRAFT 可删. 已提交的请购单请使用 reject 流程")
+    @RequirePermission({"procurement:read_write", "procurement:read"})
+    public ApiResponse<Void> delete(
+            @PathVariable @NotBlank String factoryId,
+            @PathVariable @NotBlank String id,
+            @RequestHeader("Authorization") String authorization) {
+        Long userId = extractUserId(authorization);
+        requisitionService.deleteDraft(factoryId, id, userId);
+        return ApiResponse.successMessage("请购单已删除");
     }
 
     private Long extractUserId(String authorization) {
