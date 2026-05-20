@@ -3,6 +3,7 @@ package com.cretas.aims.controller.finance;
 import com.cretas.aims.annotation.RequirePermission;
 import com.cretas.aims.entity.enums.PaymentMethod;
 import com.cretas.aims.entity.enums.PaymentRecordStatus;
+import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.service.finance.PaymentRecordService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.PageRequest;
@@ -30,6 +31,18 @@ public class PaymentRecordController {
     private final PaymentRecordService paymentRecordService;
     private final com.cretas.aims.repository.PaymentRecordRepository paymentRecordRepository;
 
+    /**
+     * AUD-5 B-A3 sister sweep (edge audit 2026-05-20): explicit length caps mirror PG
+     * column widths in {@code payment_records} table (see {@link com.cretas.aims.entity.finance.PaymentRecord}
+     * {@code @Column(length=...)}). Without these, over-length input lets the request reach PG
+     * and surfaces as {@code DataIntegrityViolationException} → generic 409 "数据处理异常".
+     * Pre-check at controller boundary delivers a specific 400 with a hintTarget instead.
+     *
+     * <p>Mirrors PR #48 / PR #76 length-pre-check pattern.
+     */
+    private static final int PAYMENT_REFERENCE_MAX_LENGTH = 200;
+    private static final int RECEIPT_URL_MAX_LENGTH = 500;
+
     // R23 P3 audit (independent reviewer #13): customer payment records settle SO
     // receivables — semantically AR, not AP. Pre-R23 had @RequireModule("finance_ap")
     // which would block AR-only tenants from recording customer payments. Fix matches
@@ -54,6 +67,9 @@ public class PaymentRecordController {
         } catch (IllegalArgumentException e) {
             return ResponseEntity.badRequest().body(Map.of("success", false, "message", "无效的支付方式: " + body.get("paymentMethod")));
         }
+        // AUD-5 B-A3 sister sweep: length pre-check produces specific 400 BEFORE
+        // dispatching to service layer where PG would surface a generic 409.
+        validateNameLengths(body);
         var record = paymentRecordService.recordPayment(
                 factoryId,
                 (String) body.get("salesOrderId"),
@@ -143,5 +159,40 @@ public class PaymentRecordController {
                 "page", safePage,
                 "size", safeSize
         )));
+    }
+
+    // ==================== Boundary validators (AUD-5 B-A3 sister sweep) ====================
+
+    /**
+     * AUD-5 B-A3 sister sweep (edge audit 2026-05-20): explicit length pre-check for
+     * VARCHAR-bounded user-input fields {@code paymentReference} (VARCHAR 200) and
+     * {@code receiptUrl} (VARCHAR 500) in {@code payment_records} table.
+     *
+     * <p>Without this, an over-length input lets the request reach PG and surfaces as
+     * {@link org.springframework.dao.DataIntegrityViolationException} caught by the
+     * {@code GlobalExceptionHandler} → generic 409 "数据处理异常" — opaque to users.
+     * Pre-check delivers a specific 400 with the actual vs allowed length so the user
+     * can immediately fix the input. Mirrors PR #48 {@code RULE_NAME_MAX_LENGTH} pattern.
+     *
+     * <p>{@code remark} is {@code @Column(columnDefinition="TEXT")} (unbounded) so no
+     * length check needed for it.
+     */
+    private void validateNameLengths(Map<String, Object> body) {
+        Object pr = body.get("paymentReference");
+        if (pr instanceof String prStr && prStr.length() > PAYMENT_REFERENCE_MAX_LENGTH) {
+            throw new BusinessException(400,
+                    "银行流水号最长 " + PAYMENT_REFERENCE_MAX_LENGTH + " 字符 (当前 " + prStr.length() + ")")
+                    .withHint("请使用更短的银行流水号/支付凭证号")
+                    .withSeverity("warning")
+                    .withHintTarget("paymentReference");
+        }
+        Object ru = body.get("receiptUrl");
+        if (ru instanceof String ruStr && ruStr.length() > RECEIPT_URL_MAX_LENGTH) {
+            throw new BusinessException(400,
+                    "凭证URL最长 " + RECEIPT_URL_MAX_LENGTH + " 字符 (当前 " + ruStr.length() + ")")
+                    .withHint("请使用更短的凭证 URL (上传文件名可能过长)")
+                    .withSeverity("warning")
+                    .withHintTarget("receiptUrl");
+        }
     }
 }
