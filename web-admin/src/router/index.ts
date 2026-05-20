@@ -706,6 +706,13 @@ const businessRoutes: RouteRecordRaw[] = [
             name: 'HRAnnualSettlement',
             component: () => import('@/views/hr/salaries/annual-settlement.vue'),
             meta: { requiresAuth: true, title: '年度汇算', module: 'hr' }
+          },
+          {
+            // Sprint 6 W4-B — WagePolicy 按时/混合 mode + 月底自动 trigger 工资凭证
+            path: 'wage-policy',
+            name: 'HRWagePolicy',
+            component: () => import('@/views/hr/wage-policy/index.vue'),
+            meta: { requiresAuth: true, title: '工资策略', module: 'hr' }
           }
         ]
       },
