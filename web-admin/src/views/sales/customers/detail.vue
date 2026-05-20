@@ -104,7 +104,7 @@ const TAB_DEFS: TabDef[] = [
   { key: 'sms', label: '短信记录',
     status: 'Sprint 5+ 上线', workaround: '当前请用「跟踪记录」tab 手工补录',
     actionText: '去跟踪记录', actionTabKey: 'tracking' },
-  // Sprint 5 F-1 MVP stub (HJ Round 13 §1 item 16/17): 真组件 + alert banner — Sprint 6 wire backend
+  // Sprint 6 W2-C-2 (2026-05-20): 通话记录 + 录音 backend wired (CallRecord entity + OSS + Whisper async).
   { key: 'audio', label: '谈话录音',
     component: defineAsyncComponent(() => import('./detail/tabs/AudioRecordingsTab.vue')) },
   { key: 'email', label: '邮件列表',

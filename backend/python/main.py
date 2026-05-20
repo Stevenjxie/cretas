@@ -97,6 +97,7 @@ try:
         cost_router as efficiency_cost_router,
         recording_router as efficiency_recording_router,
         scene_router as efficiency_scene_router,
+        whisper_router as efficiency_whisper_router,
     )
     _efficiency_available = True
 except ImportError as e:
@@ -1122,6 +1123,7 @@ if _efficiency_available:
     app.include_router(efficiency_cost_router, prefix="/api/efficiency/cost", tags=["成本监控"])
     app.include_router(efficiency_recording_router, prefix="/api/efficiency/recording", tags=["NVR录像分析"])
     app.include_router(efficiency_scene_router, prefix="/api/efficiency/scene", tags=["场景理解"])
+    app.include_router(efficiency_whisper_router, prefix="/api/efficiency", tags=["Whisper ASR"])
 else:
     logger.warning("Efficiency Recognition routes not registered")
 

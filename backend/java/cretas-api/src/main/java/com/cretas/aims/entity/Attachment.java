@@ -137,6 +137,8 @@ public class Attachment extends BaseEntity {
         INVENTORY,
         /** Sprint 6 W4-C — ECN 工程变更通知附件 (变更说明 / 影响分析报告 / 客户确认书). */
         ECN,
+        /** Sprint 6 W2-C-2 — 通话记录录音附件 (CallRecord audio 文件挂载到附件中心). */
+        CALL_RECORD,
         GENERIC
     }
 
