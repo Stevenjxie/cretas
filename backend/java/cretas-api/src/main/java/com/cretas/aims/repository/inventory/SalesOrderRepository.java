@@ -27,6 +27,46 @@ public interface SalesOrderRepository extends JpaRepository<SalesOrder, String> 
     Page<SalesOrder> findByFactoryIdAndCreatedByOrderByCreatedAtDesc(
             String factoryId, Long createdBy, Pageable pageable);
 
+    /**
+     * Sprint 6 W2-B (RBAC DataScope DEPT_AND_BELOW / SELF_AND_BELOW) — IN list 过滤.
+     * Used when DataScopeContext scope resolves to a chain of subordinate userIds.
+     */
+    Page<SalesOrder> findByFactoryIdAndCreatedByInOrderByCreatedAtDesc(
+            String factoryId, Collection<Long> createdByList, Pageable pageable);
+
+    /**
+     * Sprint 6 W2-B (RBAC DataScope SELF + keyword combo) — DB-side filter, avoid in-memory.
+     * Mirrors {@link #searchByFactoryAndKeyword} + AND so.createdBy = :createdBy.
+     */
+    @Query("SELECT so FROM SalesOrder so LEFT JOIN Customer c ON c.id = so.customerId " +
+            "WHERE so.factoryId = :factoryId AND so.createdBy = :createdBy AND (" +
+            "LOWER(so.orderNumber) LIKE LOWER(CONCAT('%', :keyword, '%')) ESCAPE '\\' OR " +
+            "LOWER(COALESCE(so.salesperson, '')) LIKE LOWER(CONCAT('%', :keyword, '%')) ESCAPE '\\' OR " +
+            "LOWER(COALESCE(c.name, '')) LIKE LOWER(CONCAT('%', :keyword, '%')) ESCAPE '\\' OR " +
+            "LOWER(COALESCE(so.remark, '')) LIKE LOWER(CONCAT('%', :keyword, '%')) ESCAPE '\\'" +
+            ") ORDER BY so.createdAt DESC")
+    Page<SalesOrder> searchByFactoryAndKeywordAndCreatedBy(
+            @Param("factoryId") String factoryId,
+            @Param("keyword") String keyword,
+            @Param("createdBy") Long createdBy,
+            Pageable pageable);
+
+    /**
+     * Sprint 6 W2-B (RBAC DataScope DEPT_AND_BELOW / SELF_AND_BELOW + keyword combo).
+     */
+    @Query("SELECT so FROM SalesOrder so LEFT JOIN Customer c ON c.id = so.customerId " +
+            "WHERE so.factoryId = :factoryId AND so.createdBy IN :createdByList AND (" +
+            "LOWER(so.orderNumber) LIKE LOWER(CONCAT('%', :keyword, '%')) ESCAPE '\\' OR " +
+            "LOWER(COALESCE(so.salesperson, '')) LIKE LOWER(CONCAT('%', :keyword, '%')) ESCAPE '\\' OR " +
+            "LOWER(COALESCE(c.name, '')) LIKE LOWER(CONCAT('%', :keyword, '%')) ESCAPE '\\' OR " +
+            "LOWER(COALESCE(so.remark, '')) LIKE LOWER(CONCAT('%', :keyword, '%')) ESCAPE '\\'" +
+            ") ORDER BY so.createdAt DESC")
+    Page<SalesOrder> searchByFactoryAndKeywordAndCreatedByIn(
+            @Param("factoryId") String factoryId,
+            @Param("keyword") String keyword,
+            @Param("createdByList") Collection<Long> createdByList,
+            Pageable pageable);
+
     Page<SalesOrder> findByFactoryIdAndStatusOrderByCreatedAtDesc(String factoryId, SalesOrderStatus status, Pageable pageable);
 
     /**

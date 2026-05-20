@@ -141,6 +141,29 @@ public interface MaterialBatchRepository extends JpaRepository<MaterialBatch, St
                                         Pageable pageable);
 
     /**
+     * Sprint 6 W2-B (RBAC DataScope SELF/SELF_AND_BELOW/DEPT_AND_BELOW) — by createdBy IN list.
+     * Used when {@link com.cretas.aims.security.DataScopeContext} scope filters by user.
+     */
+    @EntityGraph(attributePaths = {"materialType", "supplier"})
+    Page<MaterialBatch> findByFactoryIdAndCreatedByIn(
+            String factoryId, java.util.Collection<Long> createdByList, Pageable pageable);
+
+    /**
+     * Sprint 6 W2-B — DataScope + keyword combo DB-side filter.
+     */
+    @EntityGraph(attributePaths = {"materialType"})
+    @Query("SELECT m FROM MaterialBatch m " +
+           "LEFT JOIN m.materialType mt " +
+           "WHERE m.factoryId = :factoryId " +
+           "AND m.createdBy IN :createdByList " +
+           "AND (m.batchNumber LIKE CONCAT(:keyword, '%') ESCAPE '\\' " +
+           "OR mt.name LIKE CONCAT('%', :keyword, '%') ESCAPE '\\')")
+    Page<MaterialBatch> searchByKeywordAndCreatedByIn(@Param("factoryId") String factoryId,
+                                                       @Param("keyword") String keyword,
+                                                       @Param("createdByList") java.util.Collection<Long> createdByList,
+                                                       Pageable pageable);
+
+    /**
      * 根据状态查找批次
      */
     List<MaterialBatch> findByFactoryIdAndStatus(String factoryId, MaterialBatchStatus status);

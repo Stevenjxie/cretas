@@ -9,7 +9,14 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
+import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Deque;
+import java.util.HashSet;
+import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * 根据 userId 从 DB 解析当前用户的 {@link DataScope} (RBAC 第 2 维, Sprint 5 Track G).
@@ -111,6 +118,101 @@ public class DataScopeResolver {
                 return DataScope.SELF;
             default:
                 return DataScope.ALL;
+        }
+    }
+
+    // ==================== Sprint 6 W2-B: chain resolution ====================
+
+    /** BFS 最大深度, 防 reportsTo 环 (理论不该有) 或意外深嵌套. */
+    private static final int MAX_CHAIN_DEPTH = 10;
+
+    /**
+     * Sprint 6 W2-B — 给定 DataScopeContext, 解析 created_by IN list 的 user ids.
+     *
+     * <ul>
+     *   <li>SELF → [userId]</li>
+     *   <li>SELF_AND_BELOW → BFS reportsTo chain (含自己)</li>
+     *   <li>DEPT_AND_BELOW → 本部门所有 active user (MVP, Sprint 7 加 sub-department)</li>
+     *   <li>ALL / CUSTOM → empty list (caller 不应调用, defensive)</li>
+     * </ul>
+     *
+     * <p>失败 fallback: 返 [userId] (SELF semantics, fail-closed for scope tightening).
+     */
+    public List<Long> resolveCreatedByChain(DataScopeContext ctx) {
+        if (ctx == null || ctx.getUserId() == null || ctx.getScope() == null) {
+            return Collections.emptyList();
+        }
+        Long selfId = ctx.getUserId();
+        String factoryId = ctx.getFactoryId();
+        switch (ctx.getScope()) {
+            case SELF:
+                return List.of(selfId);
+            case SELF_AND_BELOW:
+                return resolveSelfAndBelowChain(factoryId, selfId);
+            case DEPT_AND_BELOW:
+                return resolveDeptChain(factoryId, ctx.getDepartment(), selfId);
+            case ALL:
+            case CUSTOM:
+            default:
+                return Collections.emptyList();
+        }
+    }
+
+    /**
+     * BFS down reportsTo links 从 selfId 开始, 含 self.
+     * MAX_CHAIN_DEPTH 防御 — 不应有环, 但容错.
+     */
+    private List<Long> resolveSelfAndBelowChain(String factoryId, Long selfId) {
+        Set<Long> visited = new HashSet<>();
+        visited.add(selfId);
+        Deque<Long> frontier = new ArrayDeque<>();
+        frontier.add(selfId);
+        int depth = 0;
+        try {
+            while (!frontier.isEmpty() && depth < MAX_CHAIN_DEPTH) {
+                int levelSize = frontier.size();
+                for (int i = 0; i < levelSize; i++) {
+                    Long mgrId = frontier.poll();
+                    if (mgrId == null) continue;
+                    List<Long> subs = userRepository.findSubordinateIdsByReportsTo(factoryId, mgrId);
+                    for (Long subId : subs) {
+                        if (subId != null && visited.add(subId)) {
+                            frontier.add(subId);
+                        }
+                    }
+                }
+                depth++;
+            }
+        } catch (Exception ex) {
+            log.warn("DataScopeResolver: SELF_AND_BELOW chain resolution failed for user {}: {}, fallback [self]",
+                    selfId, ex.getMessage());
+            return List.of(selfId);
+        }
+        return new ArrayList<>(visited);
+    }
+
+    /**
+     * DEPT_AND_BELOW MVP — 本部门所有 active user, 不递归 sub-department.
+     * department null → fallback [selfId] (SELF semantics).
+     */
+    private List<Long> resolveDeptChain(String factoryId, String department, Long selfId) {
+        if (department == null || department.isEmpty()) {
+            log.debug("DataScopeResolver: DEPT_AND_BELOW with null department for user {}, fallback [self]", selfId);
+            return List.of(selfId);
+        }
+        try {
+            List<Long> deptUsers = userRepository.findUserIdsByDepartment(factoryId, department);
+            // 总会包含 self (self 在自己部门), 但容错: ensure included
+            if (!deptUsers.contains(selfId)) {
+                List<Long> result = new ArrayList<>(deptUsers);
+                result.add(selfId);
+                return result;
+            }
+            return deptUsers;
+        } catch (Exception ex) {
+            log.warn("DataScopeResolver: DEPT_AND_BELOW chain resolution failed for user {} dept {}: {}, fallback [self]",
+                    selfId, department, ex.getMessage());
+            return List.of(selfId);
         }
     }
 }

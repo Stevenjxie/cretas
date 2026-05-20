@@ -11,6 +11,7 @@ import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 import java.time.LocalDate;
+import java.util.Collection;
 
 @Repository
 public interface ReturnOrderRepository extends JpaRepository<ReturnOrder, String> {
@@ -23,6 +24,26 @@ public interface ReturnOrderRepository extends JpaRepository<ReturnOrder, String
 
     Page<ReturnOrder> findByFactoryIdAndReturnTypeAndStatusOrderByCreatedAtDesc(
             String factoryId, ReturnType returnType, ReturnOrderStatus status, Pageable pageable);
+
+    /**
+     * Sprint 6 W2-B (RBAC DataScope) — composite filter with createdBy.
+     * Used when {@link com.cretas.aims.security.DataScopeContext} scope is
+     * SELF / DEPT_AND_BELOW / SELF_AND_BELOW. createdByList already resolved by caller
+     * (single-element list for SELF; chain for DEPT/SELF_AND_BELOW).
+     *
+     * <p>:returnType / :status NULL → 不过滤. createdByList 非 null 必须非空.
+     */
+    @Query("SELECT r FROM ReturnOrder r WHERE r.factoryId = :factoryId " +
+           "AND (CAST(:returnType AS string) IS NULL OR r.returnType = :returnType) " +
+           "AND (CAST(:status AS string) IS NULL OR r.status = :status) " +
+           "AND r.createdBy IN :createdByList " +
+           "ORDER BY r.createdAt DESC")
+    Page<ReturnOrder> findByFactoryIdAndFiltersAndCreatedByIn(
+            @Param("factoryId") String factoryId,
+            @Param("returnType") ReturnType returnType,
+            @Param("status") ReturnOrderStatus status,
+            @Param("createdByList") Collection<Long> createdByList,
+            Pageable pageable);
 
     /**
      * Sprint 4 W1 S-CUSTOMER-TAB-1 (tab 17): paginated by customer counterparty + ReturnType filter,

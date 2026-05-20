@@ -11,7 +11,10 @@ import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.exception.EntityNotFoundException;
 import com.cretas.aims.mapper.CustomerMapper;
 import com.cretas.aims.repository.CustomerRepository;
+import com.cretas.aims.security.DataScopeContext;
+import com.cretas.aims.security.DataScopeResolver;
 import com.cretas.aims.service.CustomerService;
+import com.cretas.aims.annotation.DataScope;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -48,6 +51,10 @@ public class CustomerServiceImpl implements CustomerService {
     /** Sprint 4 W1 S-CUSTOMER-TAB-1: tab 20 业务员变更 history (field injection — constructor manual) */
     @org.springframework.beans.factory.annotation.Autowired
     private com.cretas.aims.repository.CustomerSalesUserHistoryRepository salesUserHistoryRepository;
+
+    /** Sprint 6 W2-B: 数据权限解析器 (optional — 模块未部署时 fallback ALL behavior). */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private DataScopeResolver dataScopeResolver;
 
     // Manual constructor (Lombok @RequiredArgsConstructor not working)
     public CustomerServiceImpl(CustomerRepository customerRepository, CustomerMapper customerMapper,
@@ -172,6 +179,7 @@ public class CustomerServiceImpl implements CustomerService {
     }
 
     @Override
+    @DataScope("created_by")  // Sprint 6 W2-B — RBAC 第 2 维 (数据权限) sweep
     public PageResponse<CustomerDTO> getCustomerList(String factoryId, PageRequest pageRequest, String keyword,
                                                      com.cretas.aims.entity.enums.CustomerStatus customerStatus,
                                                      com.cretas.aims.entity.enums.CustomerImportance importance,
@@ -185,8 +193,13 @@ public class CustomerServiceImpl implements CustomerService {
         String escapedKeyword = (keyword != null && !keyword.trim().isEmpty())
                 ? com.cretas.aims.util.SqlLikeEscaper.escape(keyword.trim())
                 : null;
-        Page<Customer> customerPage = customerRepository.searchByFiltersPaged(
-                factoryId, escapedKeyword, customerStatus, importance, source, pageable);
+
+        // Sprint 6 W2-B: 应用 DataScope filter — SELF / SELF_AND_BELOW / DEPT_AND_BELOW.
+        // ALL scope (默认 / factory_super_admin) 走原 path. DB-side filter, 无 in-memory.
+        DataScopeContext dsCtx = DataScopeContext.current();
+        Page<Customer> customerPage = dispatchByScope(dsCtx, factoryId, escapedKeyword,
+                customerStatus, importance, source, pageable);
+
         List<CustomerDTO> customerDTOs = customerPage.getContent().stream()
                 .map(customerMapper::toDTO)
                 .collect(Collectors.toList());
@@ -199,6 +212,51 @@ public class CustomerServiceImpl implements CustomerService {
         response.setFirst(customerPage.isFirst());
         response.setLast(customerPage.isLast());
         return response;
+    }
+
+    /**
+     * Sprint 6 W2-B — dispatch query based on {@link DataScopeContext} scope:
+     * <ul>
+     *   <li>SELF                → searchByFiltersPagedAndCreatedBy (single createdBy)</li>
+     *   <li>SELF_AND_BELOW /
+     *       DEPT_AND_BELOW      → searchByFiltersPagedAndCreatedByIn (chain)</li>
+     *   <li>ALL / CUSTOM / null → searchByFiltersPaged (legacy 行为)</li>
+     * </ul>
+     */
+    private Page<Customer> dispatchByScope(DataScopeContext dsCtx,
+                                            String factoryId,
+                                            String escapedKeyword,
+                                            com.cretas.aims.entity.enums.CustomerStatus customerStatus,
+                                            com.cretas.aims.entity.enums.CustomerImportance importance,
+                                            com.cretas.aims.entity.enums.CustomerSource source,
+                                            org.springframework.data.domain.PageRequest pageable) {
+        if (dsCtx == null || !dsCtx.isFiltered() || dsCtx.getUserId() == null) {
+            return customerRepository.searchByFiltersPaged(
+                    factoryId, escapedKeyword, customerStatus, importance, source, pageable);
+        }
+        com.cretas.aims.entity.enums.DataScope scope = dsCtx.getScope();
+        if (scope == com.cretas.aims.entity.enums.DataScope.SELF) {
+            log.debug("DataScope SELF for customers: created_by={}", dsCtx.getUserId());
+            return customerRepository.searchByFiltersPagedAndCreatedBy(
+                    factoryId, escapedKeyword, customerStatus, importance, source,
+                    dsCtx.getUserId(), pageable);
+        }
+        if (scope == com.cretas.aims.entity.enums.DataScope.SELF_AND_BELOW
+                || scope == com.cretas.aims.entity.enums.DataScope.DEPT_AND_BELOW) {
+            List<Long> chain = dataScopeResolver != null
+                    ? dataScopeResolver.resolveCreatedByChain(dsCtx)
+                    : List.of(dsCtx.getUserId());
+            if (chain == null || chain.isEmpty()) {
+                chain = List.of(dsCtx.getUserId());
+            }
+            log.debug("DataScope {} for customers: chain size={}", scope, chain.size());
+            return customerRepository.searchByFiltersPagedAndCreatedByIn(
+                    factoryId, escapedKeyword, customerStatus, importance, source,
+                    chain, pageable);
+        }
+        // CUSTOM defer Sprint 7 (whitelist 配置) → 暂 fallback ALL
+        return customerRepository.searchByFiltersPaged(
+                factoryId, escapedKeyword, customerStatus, importance, source, pageable);
     }
 
     @Override

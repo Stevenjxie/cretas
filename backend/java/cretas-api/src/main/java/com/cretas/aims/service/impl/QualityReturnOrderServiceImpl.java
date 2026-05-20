@@ -9,6 +9,9 @@ import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.exception.ResourceNotFoundException;
 import com.cretas.aims.repository.QualityInspectionRepository;
 import com.cretas.aims.repository.QualityReturnOrderRepository;
+import com.cretas.aims.security.DataScopeContext;
+import com.cretas.aims.security.DataScopeResolver;
+import com.cretas.aims.annotation.DataScope;
 import com.cretas.aims.service.QualityReturnOrderService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -44,6 +47,10 @@ public class QualityReturnOrderServiceImpl implements QualityReturnOrderService 
 
     private final QualityReturnOrderRepository returnOrderRepository;
     private final QualityInspectionRepository inspectionRepository;
+
+    /** Sprint 6 W2-B: 数据权限解析器 (optional). */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private DataScopeResolver dataScopeResolver;
 
     @Override
     @Transactional
@@ -175,6 +182,7 @@ public class QualityReturnOrderServiceImpl implements QualityReturnOrderService 
 
     @Override
     @Transactional(readOnly = true)
+    @DataScope("created_by")  // Sprint 6 W2-B — RBAC 第 2 维 (数据权限) sweep
     public PageResponse<QualityReturnOrder> list(String factoryId,
                                                   QualityReturnStatus status,
                                                   QualityReturnTargetType targetType,
@@ -187,7 +195,35 @@ public class QualityReturnOrderServiceImpl implements QualityReturnOrderService 
                 Math.max(0, page - 1),
                 Math.max(1, Math.min(size, 200)),
                 Sort.by(Sort.Direction.DESC, "createdAt"));
-        Page<QualityReturnOrder> result = returnOrderRepository.findByFilters(
+
+        // Sprint 6 W2-B: 应用 DataScope.
+        DataScopeContext dsCtx = DataScopeContext.current();
+        Page<QualityReturnOrder> result;
+        if (dsCtx != null && dsCtx.isFiltered() && dsCtx.getUserId() != null) {
+            com.cretas.aims.entity.enums.DataScope scope = dsCtx.getScope();
+            java.util.List<Long> chain;
+            if (scope == com.cretas.aims.entity.enums.DataScope.SELF) {
+                chain = java.util.List.of(dsCtx.getUserId());
+            } else if (scope == com.cretas.aims.entity.enums.DataScope.SELF_AND_BELOW
+                    || scope == com.cretas.aims.entity.enums.DataScope.DEPT_AND_BELOW) {
+                chain = dataScopeResolver != null
+                        ? dataScopeResolver.resolveCreatedByChain(dsCtx)
+                        : java.util.List.of(dsCtx.getUserId());
+                if (chain == null || chain.isEmpty()) chain = java.util.List.of(dsCtx.getUserId());
+            } else {
+                chain = null;  // CUSTOM defer
+            }
+            if (chain != null) {
+                log.debug("DataScope {} for quality returns: chain size={}", scope, chain.size());
+                result = returnOrderRepository.findByFiltersAndCreatedByIn(
+                        factoryId, status, targetType, qualityInspectionId, targetId,
+                        fromDate, toDate, chain, pageable);
+                return PageResponse.of(result.getContent(), result.getNumber() + 1,
+                        result.getSize(), result.getTotalElements());
+            }
+        }
+
+        result = returnOrderRepository.findByFilters(
                 factoryId, status, targetType, qualityInspectionId, targetId,
                 fromDate, toDate, pageable);
         return PageResponse.of(result.getContent(), result.getNumber() + 1,

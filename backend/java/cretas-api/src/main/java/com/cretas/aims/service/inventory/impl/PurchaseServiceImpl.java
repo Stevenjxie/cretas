@@ -33,7 +33,10 @@ import com.cretas.aims.repository.inventory.PurchaseReceiveRecordRepository;
 import com.cretas.aims.repository.inventory.SalesOrderRepository;
 import com.cretas.aims.entity.inventory.PurchaseOrderApprovalRule;
 import com.cretas.aims.event.MaterialReceivedEvent;
+import com.cretas.aims.annotation.DataScope;
 import com.cretas.aims.annotation.Loggable;
+import com.cretas.aims.security.DataScopeContext;
+import com.cretas.aims.security.DataScopeResolver;
 import com.cretas.aims.service.MaterialBatchService;
 import com.cretas.aims.service.inventory.PurchaseService;
 import com.cretas.aims.service.rules.annotation.RuleEvaluate;
@@ -148,6 +151,10 @@ public class PurchaseServiceImpl implements PurchaseService {
     /** Phase 1 B.6 — 用于查询 active workflow 的 graph 节点 (notifyNextStage 需要). */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private ApprovalWorkflowService approvalWorkflowService;
+
+    /** Sprint 6 W2-B: 数据权限解析器 (optional). */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private DataScopeResolver dataScopeResolver;
 
     /**
      * Phase 4a follow-up (issue #45) — self-proxy reference for Spring AOP aspect interception.
@@ -325,9 +332,37 @@ public class PurchaseServiceImpl implements PurchaseService {
     }
 
     @Override
+    @DataScope("created_by")  // Sprint 6 W2-B — RBAC 第 2 维 (数据权限) sweep
     public PageResponse<PurchaseOrder> getPurchaseOrders(String factoryId, int page, int size) {
         PageRequest pageRequest = PageRequest.of(page - 1, size, Sort.by(Sort.Direction.DESC, "createdAt"));
-        Page<PurchaseOrder> result = purchaseOrderRepository.findByFactoryIdOrderByCreatedAtDesc(factoryId, pageRequest);
+
+        // Sprint 6 W2-B: dispatch on DataScope — SELF / SELF_AND_BELOW / DEPT_AND_BELOW filter
+        // by created_by (single or chain). ALL scope (默认) 走原 path.
+        DataScopeContext dsCtx = DataScopeContext.current();
+        Page<PurchaseOrder> result;
+        if (dsCtx != null && dsCtx.isFiltered() && dsCtx.getUserId() != null) {
+            com.cretas.aims.entity.enums.DataScope scope = dsCtx.getScope();
+            if (scope == com.cretas.aims.entity.enums.DataScope.SELF) {
+                log.debug("DataScope SELF for purchase orders: created_by={}", dsCtx.getUserId());
+                result = purchaseOrderRepository.findByFactoryIdAndCreatedByOrderByCreatedAtDesc(
+                        factoryId, dsCtx.getUserId(), pageRequest);
+            } else if (scope == com.cretas.aims.entity.enums.DataScope.SELF_AND_BELOW
+                    || scope == com.cretas.aims.entity.enums.DataScope.DEPT_AND_BELOW) {
+                List<Long> chain = dataScopeResolver != null
+                        ? dataScopeResolver.resolveCreatedByChain(dsCtx)
+                        : List.of(dsCtx.getUserId());
+                if (chain == null || chain.isEmpty()) chain = List.of(dsCtx.getUserId());
+                log.debug("DataScope {} for purchase orders: chain size={}", scope, chain.size());
+                result = purchaseOrderRepository.findByFactoryIdAndCreatedByInOrderByCreatedAtDesc(
+                        factoryId, chain, pageRequest);
+            } else {
+                // CUSTOM defer Sprint 7
+                result = purchaseOrderRepository.findByFactoryIdOrderByCreatedAtDesc(factoryId, pageRequest);
+            }
+        } else {
+            result = purchaseOrderRepository.findByFactoryIdOrderByCreatedAtDesc(factoryId, pageRequest);
+        }
+
         hydrateSalesOrderNumbers(result.getContent());
         return PageResponse.of(result.getContent(), page, size, result.getTotalElements());
     }

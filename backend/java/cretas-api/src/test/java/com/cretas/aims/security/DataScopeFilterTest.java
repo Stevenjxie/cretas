@@ -175,4 +175,127 @@ class DataScopeFilterTest {
             }
         }
     }
+
+    // ==================== Sprint 6 W2-B: chain resolution tests ====================
+
+    @Test
+    @DisplayName("R10 (Sprint 6 W2-B): SELF scope → resolveCreatedByChain 返 [selfId]")
+    void resolveCreatedByChain_self_returnsSelfOnly() {
+        DataScopeContext ctx = DataScopeContext.builder()
+                .userId(100L).factoryId("F001").scope(DataScope.SELF).build();
+        java.util.List<Long> chain = resolver.resolveCreatedByChain(ctx);
+        assertEquals(java.util.List.of(100L), chain);
+        // SELF 不应触发 reportsTo/department 查询
+        verifyNoInteractions(userRepository);
+    }
+
+    @Test
+    @DisplayName("R11 (Sprint 6 W2-B): SELF_AND_BELOW → BFS reportsTo, 含 self + 全部下属")
+    void resolveCreatedByChain_selfAndBelow_bfsChain() {
+        // 树: 100 → [200, 201]; 200 → [300]; 201 → []; 300 → []
+        when(userRepository.findSubordinateIdsByReportsTo("F001", 100L))
+                .thenReturn(java.util.List.of(200L, 201L));
+        when(userRepository.findSubordinateIdsByReportsTo("F001", 200L))
+                .thenReturn(java.util.List.of(300L));
+        when(userRepository.findSubordinateIdsByReportsTo("F001", 201L))
+                .thenReturn(java.util.List.of());
+        when(userRepository.findSubordinateIdsByReportsTo("F001", 300L))
+                .thenReturn(java.util.List.of());
+
+        DataScopeContext ctx = DataScopeContext.builder()
+                .userId(100L).factoryId("F001").scope(DataScope.SELF_AND_BELOW).build();
+        java.util.List<Long> chain = resolver.resolveCreatedByChain(ctx);
+        assertTrue(chain.contains(100L), "含 self");
+        assertTrue(chain.contains(200L), "含直接下属 200");
+        assertTrue(chain.contains(201L), "含直接下属 201");
+        assertTrue(chain.contains(300L), "含 transitive 下属 300");
+        assertEquals(4, chain.size(), "无重复");
+    }
+
+    @Test
+    @DisplayName("R12 (Sprint 6 W2-B): SELF_AND_BELOW reportsTo 环 → cycle break, no infinite loop")
+    void resolveCreatedByChain_cycleBreak() {
+        // 100 → 200 → 100 (环), 但 visited set 防止重复 add
+        when(userRepository.findSubordinateIdsByReportsTo("F001", 100L))
+                .thenReturn(java.util.List.of(200L));
+        when(userRepository.findSubordinateIdsByReportsTo("F001", 200L))
+                .thenReturn(java.util.List.of(100L));  // 环
+        DataScopeContext ctx = DataScopeContext.builder()
+                .userId(100L).factoryId("F001").scope(DataScope.SELF_AND_BELOW).build();
+        java.util.List<Long> chain = resolver.resolveCreatedByChain(ctx);
+        // 应返 {100, 200} 然后停 (visited set)
+        assertEquals(2, chain.size());
+        assertTrue(chain.contains(100L) && chain.contains(200L));
+    }
+
+    @Test
+    @DisplayName("R13 (Sprint 6 W2-B): DEPT_AND_BELOW → 同 department 全部 active user")
+    void resolveCreatedByChain_dept_returnsAllDeptUsers() {
+        when(userRepository.findUserIdsByDepartment("F001", "sales"))
+                .thenReturn(java.util.List.of(10L, 20L, 30L));
+        DataScopeContext ctx = DataScopeContext.builder()
+                .userId(10L).factoryId("F001").department("sales")
+                .scope(DataScope.DEPT_AND_BELOW).build();
+        java.util.List<Long> chain = resolver.resolveCreatedByChain(ctx);
+        assertEquals(java.util.List.of(10L, 20L, 30L), chain);
+        // SELF_AND_BELOW reportsTo 查询不应触发
+        verify(userRepository, never()).findSubordinateIdsByReportsTo(anyString(), anyLong());
+    }
+
+    @Test
+    @DisplayName("R14 (Sprint 6 W2-B): DEPT_AND_BELOW department=null → fallback [self]")
+    void resolveCreatedByChain_deptNull_fallsBackToSelf() {
+        DataScopeContext ctx = DataScopeContext.builder()
+                .userId(10L).factoryId("F001").department(null)
+                .scope(DataScope.DEPT_AND_BELOW).build();
+        java.util.List<Long> chain = resolver.resolveCreatedByChain(ctx);
+        assertEquals(java.util.List.of(10L), chain);
+        verifyNoInteractions(userRepository);
+    }
+
+    @Test
+    @DisplayName("R15 (Sprint 6 W2-B): DEPT_AND_BELOW DB 查询 self 不在结果 → self 补入")
+    void resolveCreatedByChain_dept_selfAddedIfMissing() {
+        // DB 返不含 self (e.g. self user.isActive=false 或 schema drift)
+        when(userRepository.findUserIdsByDepartment("F001", "sales"))
+                .thenReturn(java.util.List.of(20L, 30L));
+        DataScopeContext ctx = DataScopeContext.builder()
+                .userId(10L).factoryId("F001").department("sales")
+                .scope(DataScope.DEPT_AND_BELOW).build();
+        java.util.List<Long> chain = resolver.resolveCreatedByChain(ctx);
+        assertTrue(chain.contains(10L), "self 自动 ensure 在 chain");
+        assertEquals(3, chain.size());
+    }
+
+    @Test
+    @DisplayName("R16 (Sprint 6 W2-B): ALL / CUSTOM → empty list (caller 跳过 IN filter)")
+    void resolveCreatedByChain_allOrCustom_returnsEmpty() {
+        DataScopeContext ctxAll = DataScopeContext.builder()
+                .userId(1L).scope(DataScope.ALL).build();
+        DataScopeContext ctxCustom = DataScopeContext.builder()
+                .userId(1L).scope(DataScope.CUSTOM).build();
+        assertTrue(resolver.resolveCreatedByChain(ctxAll).isEmpty());
+        assertTrue(resolver.resolveCreatedByChain(ctxCustom).isEmpty());
+        verifyNoInteractions(userRepository);
+    }
+
+    @Test
+    @DisplayName("R17 (Sprint 6 W2-B): null ctx / null userId → empty list (defensive)")
+    void resolveCreatedByChain_nullCtx_returnsEmpty() {
+        assertTrue(resolver.resolveCreatedByChain(null).isEmpty());
+        DataScopeContext ctxNoUser = DataScopeContext.builder()
+                .scope(DataScope.SELF).build();
+        assertTrue(resolver.resolveCreatedByChain(ctxNoUser).isEmpty());
+    }
+
+    @Test
+    @DisplayName("R18 (Sprint 6 W2-B): SELF_AND_BELOW DB exception → fallback [self], 不爆")
+    void resolveCreatedByChain_selfAndBelowDbException_fallsBack() {
+        when(userRepository.findSubordinateIdsByReportsTo("F001", 100L))
+                .thenThrow(new RuntimeException("DB error simulation"));
+        DataScopeContext ctx = DataScopeContext.builder()
+                .userId(100L).factoryId("F001").scope(DataScope.SELF_AND_BELOW).build();
+        java.util.List<Long> chain = resolver.resolveCreatedByChain(ctx);
+        assertEquals(java.util.List.of(100L), chain, "DB 异常 fail-closed to SELF");
+    }
 }

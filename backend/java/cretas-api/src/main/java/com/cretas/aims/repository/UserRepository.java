@@ -74,6 +74,22 @@ public interface UserRepository extends JpaRepository<User, Long> {
      * 根据角色代码查找用户
      */
     List<User> findByFactoryIdAndRoleCode(String factoryId, String roleCode);
+
+    /**
+     * Sprint 6 W2-B (RBAC DataScope SELF_AND_BELOW) — 直接下属 (reports_to = managerUserId).
+     * 用于递归构造下属链. Resolver iterative BFS until 闭合.
+     */
+    @Query("SELECT u.id FROM User u WHERE u.factoryId = :factoryId AND u.reportsTo = :managerUserId AND u.isActive = true")
+    List<Long> findSubordinateIdsByReportsTo(@Param("factoryId") String factoryId,
+                                             @Param("managerUserId") Long managerUserId);
+
+    /**
+     * Sprint 6 W2-B (RBAC DataScope DEPT_AND_BELOW) — 同 department 的所有 user.
+     * DEPT_AND_BELOW MVP: 仅本部门. Sprint 7 再考虑 sub-department 递归.
+     */
+    @Query("SELECT u.id FROM User u WHERE u.factoryId = :factoryId AND u.department = :department AND u.isActive = true")
+    List<Long> findUserIdsByDepartment(@Param("factoryId") String factoryId,
+                                       @Param("department") String department);
     /**
      * 模糊搜索用户
      * 注意：username/phone使用右模糊（可使用索引），fullName使用双向模糊（无法使用索引）
