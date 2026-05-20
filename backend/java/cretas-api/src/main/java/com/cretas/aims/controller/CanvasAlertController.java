@@ -536,6 +536,7 @@ public class CanvasAlertController {
         m.put("enabled", r.getEnabled());
         m.put("notifyChannels", r.getNotifyChannels());
         m.put("notifyRoles", r.getNotifyRoles());
+        m.put("version", r.getVersion());  // AUD-4 wiring (PR #100): FE needs version for stale-check on PUT
         m.put("createdAt", r.getCreatedAt() != null ? r.getCreatedAt().toString() : null);
         m.put("updatedAt", r.getUpdatedAt() != null ? r.getUpdatedAt().toString() : null);
         return m;

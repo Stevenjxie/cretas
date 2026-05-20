@@ -530,6 +530,7 @@ public class CanvasRuleController {
         m.put("actionConfigJson", r.getActionConfigJson());
         m.put("priority", r.getPriority());
         m.put("enabled", r.getEnabled());
+        m.put("version", r.getVersion());  // AUD-4 wiring (PR #100): FE needs version for stale-check on PUT
         m.put("createdAt", r.getCreatedAt() != null ? r.getCreatedAt().toString() : null);
         m.put("updatedAt", r.getUpdatedAt() != null ? r.getUpdatedAt().toString() : null);
         return m;
