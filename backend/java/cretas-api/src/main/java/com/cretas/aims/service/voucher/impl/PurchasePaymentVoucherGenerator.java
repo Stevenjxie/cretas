@@ -1,5 +1,6 @@
 package com.cretas.aims.service.voucher.impl;
 
+import com.cretas.aims.entity.enums.AuxiliaryType;
 import com.cretas.aims.entity.enums.VoucherType;
 import com.cretas.aims.entity.finance.VoucherEntry;
 import com.cretas.aims.entity.inventory.PurchaseOrder;
@@ -56,9 +57,12 @@ public class PurchasePaymentVoucherGenerator extends AbstractVoucherGenerator<Pu
     @Override
     public List<VoucherEntry> buildEntries(PurchaseOrder order) {
         BigDecimal amount = nullToZero(order.getTotalAmount());
+        String supplierId = order.getSupplierId();  // Sprint 5 F-2: 供应商辅助核算
         return List.of(
                 debitEntry(1, "1405", "库存商品", amount, "采购入库 " + order.getOrderNumber()),
-                creditEntry(2, "2202", "应付账款", amount, "供应商应付")
+                // 应付账款按供应商分账 (R-HJ Round 11 §G.1 供应商应付明细账)
+                creditEntryWithAuxiliary(2, "2202", "应付账款", amount, "供应商应付",
+                        supplierId != null ? AuxiliaryType.SUPPLIER : null, supplierId)
         );
     }
 }

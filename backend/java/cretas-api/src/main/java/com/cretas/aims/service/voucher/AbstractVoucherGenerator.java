@@ -1,5 +1,6 @@
 package com.cretas.aims.service.voucher;
 
+import com.cretas.aims.entity.enums.AuxiliaryType;
 import com.cretas.aims.entity.enums.VoucherStatus;
 import com.cretas.aims.entity.finance.Voucher;
 import com.cretas.aims.entity.finance.VoucherEntry;
@@ -117,5 +118,29 @@ public abstract class AbstractVoucherGenerator<T> implements VoucherGenerator<T>
 
     protected BigDecimal nullToZero(BigDecimal v) {
         return v != null ? v : BigDecimal.ZERO;
+    }
+
+    /**
+     * Sprint 5 F-2: 借方分录 + 辅助核算 (e.g. 应收账款按客户分账).
+     */
+    protected VoucherEntry debitEntryWithAuxiliary(int lineNo, String code, String name,
+            BigDecimal amount, String description,
+            AuxiliaryType auxiliaryType, String auxiliaryEntityId) {
+        VoucherEntry entry = debitEntry(lineNo, code, name, amount, description);
+        entry.setAuxiliaryType(auxiliaryType);
+        entry.setAuxiliaryEntityId(auxiliaryEntityId);
+        return entry;
+    }
+
+    /**
+     * Sprint 5 F-2: 贷方分录 + 辅助核算 (e.g. 应付账款按供应商分账).
+     */
+    protected VoucherEntry creditEntryWithAuxiliary(int lineNo, String code, String name,
+            BigDecimal amount, String description,
+            AuxiliaryType auxiliaryType, String auxiliaryEntityId) {
+        VoucherEntry entry = creditEntry(lineNo, code, name, amount, description);
+        entry.setAuxiliaryType(auxiliaryType);
+        entry.setAuxiliaryEntityId(auxiliaryEntityId);
+        return entry;
     }
 }

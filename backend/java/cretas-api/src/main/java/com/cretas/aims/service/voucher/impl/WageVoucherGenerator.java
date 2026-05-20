@@ -1,6 +1,7 @@
 package com.cretas.aims.service.voucher.impl;
 
 import com.cretas.aims.entity.PayrollRecord;
+import com.cretas.aims.entity.enums.AuxiliaryType;
 import com.cretas.aims.entity.enums.VoucherType;
 import com.cretas.aims.entity.finance.VoucherEntry;
 import com.cretas.aims.service.voucher.AbstractVoucherGenerator;
@@ -58,8 +59,11 @@ public class WageVoucherGenerator extends AbstractVoucherGenerator<PayrollRecord
     @Override
     public List<VoucherEntry> buildEntries(PayrollRecord r) {
         BigDecimal amount = nullToZero(r.getTotalWage());
+        String workerId = r.getWorkerId() != null ? r.getWorkerId().toString() : null;
         return List.of(
-                debitEntry(1, "2211", "应付职工薪酬", amount, "支付 " + r.getWorkerName()),
+                // 应付职工薪酬按职员分账 (R-HJ Round 11 §G.1 职员工资明细账)
+                debitEntryWithAuxiliary(1, "2211", "应付职工薪酬", amount, "支付 " + r.getWorkerName(),
+                        workerId != null ? AuxiliaryType.EMPLOYEE : null, workerId),
                 creditEntry(2, "1002", "银行存款", amount, "工资银行划款")
         );
     }
