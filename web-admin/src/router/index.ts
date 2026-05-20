@@ -801,6 +801,13 @@ const businessRoutes: RouteRecordRaw[] = [
             name: 'FinanceVoucherDetail',
             component: () => import('@/views/finance/voucher/VoucherDetail.vue'),
             meta: { requiresAuth: true, title: '凭证详情', module: 'finance' }
+          },
+          // Sprint 7 T2 F-PERIOD — 期间结账管理 (大企业财务月底锁账)
+          {
+            path: 'accounting-period',
+            name: 'FinanceAccountingPeriod',
+            component: () => import('@/views/finance/accounting-period/index.vue'),
+            meta: { requiresAuth: true, title: '期间结账', module: 'finance' }
           }
         ]
       },

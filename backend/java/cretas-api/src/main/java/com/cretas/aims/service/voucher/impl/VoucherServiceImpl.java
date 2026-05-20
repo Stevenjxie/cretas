@@ -20,12 +20,14 @@ import com.cretas.aims.repository.inventory.ReturnOrderRepository;
 import com.cretas.aims.repository.inventory.SalesOrderRepository;
 import com.cretas.aims.repository.restaurant.WastageRecordRepository;
 import com.cretas.aims.service.LinkArrayService;
+import com.cretas.aims.service.finance.AccountingPeriodService;
 import com.cretas.aims.service.voucher.VoucherGenerator;
 import com.cretas.aims.service.voucher.VoucherGeneratorRegistry;
 import com.cretas.aims.service.voucher.VoucherService;
 import jakarta.persistence.EntityNotFoundException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -47,6 +49,16 @@ public class VoucherServiceImpl implements VoucherService {
     private final VoucherRepository voucherRepo;
     private final VoucherGeneratorRegistry registry;
     private final LinkArrayService linkArrayService;
+
+    /**
+     * Sprint 7 T2 F-PERIOD: 期间结账 gate.
+     *
+     * <p>必传 @Autowired(required=false) — T2 ship 后是默认存在的 bean, 但保留 fail-open
+     * 容错性 (测试环境 / module 未启用 finance 时)所需. assertOpen 内 null-check 等价
+     * 于 silently pass (backwards compat — no row → OPEN, no gate enforcement).
+     */
+    @Autowired(required = false)
+    private AccountingPeriodService accountingPeriodService;
 
     // 6 业务单 repo (ProductionPlan 暂不 hook generator, repo 留 batch-补单 用)
     private final SalesOrderRepository salesOrderRepo;
@@ -84,6 +96,9 @@ public class VoucherServiceImpl implements VoucherService {
 
         // 4. Generate (含 validateBalanced 自校验)
         Voucher voucher = generator.generate(factoryId, entity);
+
+        // 4.5. Sprint 7 T2 F-PERIOD: 期间结账 gate — voucherDate 落在 CLOSED 期间则拒
+        assertPeriodOpen(factoryId, voucher.getVoucherDate());
 
         // 5. Assign voucher number + persist
         voucher.setVoucherNumber(generateVoucherNumber(factoryId, voucher.getVoucherDate()));
@@ -137,6 +152,8 @@ public class VoucherServiceImpl implements VoucherService {
         VoucherGenerator generator = registry.findByBusinessType("DEPRECATION")
                 .orElseThrow(() -> new IllegalStateException("无 DEPRECATION generator"));
         Voucher voucher = generator.generate(factoryId, input);
+        // Sprint 7 T2 F-PERIOD: 期间结账 gate
+        assertPeriodOpen(factoryId, voucher.getVoucherDate());
         voucher.setVoucherNumber(generateVoucherNumber(factoryId, voucher.getVoucherDate()));
         return voucherRepo.save(voucher);
     }
@@ -167,6 +184,8 @@ public class VoucherServiceImpl implements VoucherService {
         if (v.getStatus() != VoucherStatus.DRAFT) {
             throw new IllegalStateException("仅 DRAFT 凭证可过账, 当前=" + v.getStatus());
         }
+        // Sprint 7 T2 F-PERIOD: 过账修改 voucher 状态, 走期间结账 gate
+        assertPeriodOpen(v.getFactoryId(), v.getVoucherDate());
         v.setStatus(VoucherStatus.POSTED);
         v.setApprovedBy(userId);
         v.setApprovedAt(LocalDateTime.now());
@@ -178,6 +197,8 @@ public class VoucherServiceImpl implements VoucherService {
     public void voidVoucher(String voucherId, String reason, Long userId) {
         Voucher v = voucherRepo.findById(voucherId)
                 .orElseThrow(() -> new EntityNotFoundException("Voucher 不存在: " + voucherId));
+        // Sprint 7 T2 F-PERIOD: 作废也是修改 voucher 状态, 走期间结账 gate
+        assertPeriodOpen(v.getFactoryId(), v.getVoucherDate());
         v.setStatus(VoucherStatus.VOID);
         v.setApprovedBy(userId);
         v.setApprovedAt(LocalDateTime.now());
@@ -301,5 +322,24 @@ public class VoucherServiceImpl implements VoucherService {
         String year = String.valueOf(voucherDate != null ? voucherDate.getYear() : LocalDate.now().getYear());
         long count = voucherRepo.countByFactoryIdAndYear(factoryId, year);
         return String.format("V-%s-%04d", year, count + 1);
+    }
+
+    /**
+     * Sprint 7 T2 F-PERIOD: 期间结账 gate.
+     *
+     * <p>查 (factoryId, voucherDate.year, voucherDate.month) period.status:
+     * <ul>
+     *   <li>CLOSED → 抛 {@link com.cretas.aims.exception.PeriodClosedException}</li>
+     *   <li>OPEN / PENDING_CLOSE / 无 row → silently pass</li>
+     * </ul>
+     *
+     * <p>{@code accountingPeriodService} null (测试 / 模块未启用) 或 voucherDate null
+     * → silently pass (backwards compat).
+     */
+    private void assertPeriodOpen(String factoryId, LocalDate voucherDate) {
+        if (accountingPeriodService == null || voucherDate == null || factoryId == null) {
+            return;  // backwards compat: 服务未注入 / 数据不全 → 不 gate
+        }
+        accountingPeriodService.assertOpen(factoryId, voucherDate.getYear(), voucherDate.getMonthValue());
     }
 }
