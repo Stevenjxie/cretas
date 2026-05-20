@@ -4,6 +4,7 @@ import com.cretas.aims.annotation.RequirePermission;
 import com.cretas.aims.config.RequireRole;
 import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.entity.config.*;
+import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.config.*;
 import com.cretas.aims.service.config.FactoryConfigService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -35,6 +36,23 @@ public class TriggerChainController {
 
     @Autowired(required = false)
     private com.cretas.aims.service.MobileService mobileService;
+
+    /**
+     * AUD-5 B-A3 sister sweep batch 4a (edge audit 2026-05-20): explicit length caps mirror PG
+     * column widths in {@code factory_trigger_chains} table (see {@link FactoryTriggerChain}
+     * {@code @Column(length=...)}). Without these, over-length input lets the request reach PG
+     * and surfaces as {@code DataIntegrityViolationException} → generic 409 "数据处理异常".
+     * Pre-check at controller boundary delivers a specific 400 with a hintTarget instead.
+     *
+     * <p>{@link FactoryTriggerChain} is accepted as raw {@code @RequestBody} (no DTO wrapper /
+     * no {@code @Size}), so controller-side pre-check is the safety net for
+     * {@code eventType} (100) and {@code errorStrategy} (20). The {@code description} column
+     * is {@code TEXT} (unbounded), so no length check needed for it.
+     *
+     * <p>Mirrors PR #48 / PR #76 / PR #78 / PR #92 length-pre-check pattern.
+     */
+    private static final int EVENT_TYPE_MAX_LENGTH = 100;
+    private static final int ERROR_STRATEGY_MAX_LENGTH = 20;
 
     private Long extractUserId(String authorization) {
         if (authorization == null || mobileService == null) return null;
@@ -130,6 +148,9 @@ public class TriggerChainController {
     public ApiResponse<FactoryTriggerChain> setTriggerChain(
             @PathVariable String factoryId, @PathVariable String chainCode,
             @RequestBody FactoryTriggerChain body) {
+        // AUD-5 B-A3 sister sweep batch 4a: length pre-check for eventType (VARCHAR 100) +
+        // errorStrategy (VARCHAR 20) BEFORE persisting to PG.
+        validateTriggerChainLengths(body);
         FactoryTriggerChain chain = triggerChainRepo.findByFactoryIdAndChainCode(factoryId, chainCode)
                 .orElseGet(() -> {
                     FactoryTriggerChain global = triggerChainRepo.findByFactoryIdAndChainCode(null, chainCode)
@@ -173,5 +194,37 @@ public class TriggerChainController {
         Long operatorId = extractUserId(authorization);
         configService.applyTemplate(factoryId, templateCode, operatorId != null ? operatorId : 0L);
         return ApiResponse.success("模板 " + templateCode + " 已应用到工厂 " + factoryId);
+    }
+
+    // ==================== Boundary validators (AUD-5 B-A3 sister sweep batch 4a) ====================
+
+    /**
+     * AUD-5 B-A3 sister sweep batch 4a (edge audit 2026-05-20): length pre-check for
+     * {@code eventType} (PG VARCHAR 100) and {@code errorStrategy} (PG VARCHAR 20) on
+     * the setTriggerChain PUT path. Mirrors PR #48 / PR #78 / PR #92 pattern.
+     *
+     * <p>Without this, an over-length input lets the request reach PG and surfaces as
+     * {@link org.springframework.dao.DataIntegrityViolationException} → generic 409
+     * "数据处理异常". Pre-check delivers a specific 400 with the actual vs allowed length.
+     *
+     * <p>{@code description} column is {@code TEXT} (unbounded), so no pre-check needed.
+     */
+    private void validateTriggerChainLengths(FactoryTriggerChain body) {
+        String eventType = body.getEventType();
+        if (eventType != null && eventType.length() > EVENT_TYPE_MAX_LENGTH) {
+            throw new BusinessException(400,
+                    "事件类型最长 " + EVENT_TYPE_MAX_LENGTH + " 字符 (当前 " + eventType.length() + ")")
+                    .withHint("请使用更短的事件类型名称 (上限 100 字符)")
+                    .withSeverity("warning")
+                    .withHintTarget("eventType");
+        }
+        String errorStrategy = body.getErrorStrategy();
+        if (errorStrategy != null && errorStrategy.length() > ERROR_STRATEGY_MAX_LENGTH) {
+            throw new BusinessException(400,
+                    "错误处理策略最长 " + ERROR_STRATEGY_MAX_LENGTH + " 字符 (当前 " + errorStrategy.length() + ")")
+                    .withHint("请使用预定义策略 (CONTINUE / STOP / RETRY)")
+                    .withSeverity("warning")
+                    .withHintTarget("errorStrategy");
+        }
     }
 }
