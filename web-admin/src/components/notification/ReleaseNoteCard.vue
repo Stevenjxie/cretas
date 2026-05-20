@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, onMounted } from 'vue';
 import { marked } from 'marked';
+import DOMPurify from 'dompurify';
 import { fetchActiveReleaseNotes, type ReleaseNote } from '@/api/releaseNotes';
 
 /**
@@ -65,7 +66,11 @@ function severityType(s: ReleaseNote['severity']): 'info' | 'success' | 'warning
 
 function renderMarkdown(md: string): string {
   // marked default config; sufficient for our 升级日志 content.
-  return marked.parse(md, { async: false }) as string;
+  // DOMPurify wrap — admin-published note.body may contain <script>/<img onerror>
+  // payloads if write surface (SQL/admin UI) is compromised. Sister sites use
+  // same pattern (AIQuery.vue / FallbackLogAdmin.vue / AlertDashboard.vue).
+  // AUD-6 audit 2026-05-20: P1 stored XSS path identified, mitigation via sanitize.
+  return DOMPurify.sanitize(marked.parse(md, { async: false }) as string);
 }
 </script>
 
