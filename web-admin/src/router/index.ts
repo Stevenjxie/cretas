@@ -794,6 +794,13 @@ const businessRoutes: RouteRecordRaw[] = [
             name: 'FinanceAdjustments',
             component: () => import('@/views/finance/adjustments/list.vue'),
             meta: { requiresAuth: true, title: '调整审批', module: 'finance' }
+          },
+          // Sprint 7 T1 F-VOUCHER-2 Phase D — 凭证详情 借/贷 双栏 + 平衡 ✓ check
+          {
+            path: 'voucher/:id',
+            name: 'FinanceVoucherDetail',
+            component: () => import('@/views/finance/voucher/VoucherDetail.vue'),
+            meta: { requiresAuth: true, title: '凭证详情', module: 'finance' }
           }
         ]
       },
