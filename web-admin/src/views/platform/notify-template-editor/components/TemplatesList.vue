@@ -6,11 +6,30 @@
   fool-proof Rule 4: 创建时 409 提示已存在 + 跳转编辑.
 
   @since 2026-05-19
+  @updated 2026-05-19 (B-N1/B-N2 hotfix) — disable create/edit/delete buttons until
+  Phase 3 backend CRUD ready. NotifyTemplateController POST/PUT/DELETE currently
+  return 501 stubs. List GET + test-send + logs DO work, so keep those visible.
 -->
 <template>
   <div class="templates-list">
+    <el-alert
+      title="通知模板 CRUD 功能开发中"
+      type="info"
+      :closable="false"
+      show-icon
+      class="phase3-banner"
+    >
+      <template #default>
+        Phase 3 即将上线完整的「新建 / 编辑 / 删除」功能 (5 渠道: 企业微信 / 钉钉 /
+        邮件 / 短信 / 站内信). 当前仅支持<strong>查看模板列表</strong>、<strong>测试发送</strong>
+        与<strong>发送日志审计</strong>.
+      </template>
+    </el-alert>
+
     <div class="toolbar">
-      <el-button type="primary" :icon="Plus" @click="openCreate">新建模板</el-button>
+      <el-button type="primary" :icon="Plus" disabled title="Phase 3 即将上线">
+        新建模板
+      </el-button>
       <el-input
         v-model="search"
         placeholder="搜索模板编码 / 标题"
@@ -23,7 +42,7 @@
       v-loading="loading"
       :data="filteredTemplates"
       class="table"
-      empty-text="暂无通知模板, 点击「新建模板」开始配置"
+      empty-text="暂无通知模板 (Phase 3 上线后将开放新建)"
       stripe
     >
       <el-table-column prop="templateCode" label="编码" min-width="180" />
@@ -47,11 +66,11 @@
           {{ formatDate(row.updatedAt) }}
         </template>
       </el-table-column>
-      <el-table-column label="操作" width="200" fixed="right">
+      <el-table-column label="操作" width="120" fixed="right">
         <template #default="{ row }">
-          <el-button type="primary" link size="small" @click="openEdit(row)">编辑</el-button>
-          <el-button type="primary" link size="small" @click="openTestSend(row)">测试发送</el-button>
-          <el-button type="danger" link size="small" @click="handleDelete(row)">删除</el-button>
+          <el-button type="primary" link size="small" @click="openTestSend(row)">
+            测试发送
+          </el-button>
         </template>
       </el-table-column>
     </el-table>
@@ -69,11 +88,9 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus } from '@element-plus/icons-vue'
 import {
   listTemplates,
-  deleteTemplate,
   type NotifyTemplate,
   type NotifyChannel,
   NotifyChannelLabels,
@@ -89,8 +106,10 @@ const loading = ref(false)
 const templates = ref<NotifyTemplate[]>([])
 const search = ref('')
 
+// Dialog still mounted for test-send only — create/edit/delete disabled per
+// B-N1/B-N2 (NotifyTemplateController POST/PUT/DELETE return 501 until Phase 3).
 const dialogOpen = ref(false)
-const dialogMode = ref<'create' | 'edit' | 'test-send'>('create')
+const dialogMode = ref<'create' | 'edit' | 'test-send'>('test-send')
 const editingTemplate = ref<NotifyTemplate | null>(null)
 
 const filteredTemplates = computed(() => {
@@ -116,43 +135,10 @@ async function loadTemplates() {
   }
 }
 
-function openCreate() {
-  editingTemplate.value = null
-  dialogMode.value = 'create'
-  dialogOpen.value = true
-}
-
-function openEdit(row: NotifyTemplate) {
-  editingTemplate.value = { ...row }
-  dialogMode.value = 'edit'
-  dialogOpen.value = true
-}
-
 function openTestSend(row: NotifyTemplate) {
   editingTemplate.value = { ...row }
   dialogMode.value = 'test-send'
   dialogOpen.value = true
-}
-
-async function handleDelete(row: NotifyTemplate) {
-  try {
-    await ElMessageBox.confirm(
-      `确定删除通知模板 ${row.templateCode}? 删除后已绑定的工作流 notify 节点将无法发送.`,
-      '确认删除',
-      { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' },
-    )
-  } catch {
-    return // User cancelled.
-  }
-  try {
-    const res = await deleteTemplate(props.factoryId, row.id!)
-    if (res.success) {
-      ElMessage.success('通知模板已删除')
-      await loadTemplates()
-    }
-  } catch {
-    // Error toast handled by interceptor.
-  }
 }
 
 async function onSaved() {
@@ -195,6 +181,15 @@ onMounted(loadTemplates)
   display: flex;
   flex-direction: column;
   gap: 12px;
+}
+
+.phase3-banner {
+  margin-bottom: 4px;
+}
+
+.phase3-banner :deep(strong) {
+  color: var(--el-color-info-dark-2);
+  font-weight: 600;
 }
 
 .toolbar {
