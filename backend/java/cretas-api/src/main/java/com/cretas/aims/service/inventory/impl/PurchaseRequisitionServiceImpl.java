@@ -144,6 +144,27 @@ public class PurchaseRequisitionServiceImpl implements PurchaseRequisitionServic
     }
 
     @Override
+    @Transactional
+    public void deleteDraft(String factoryId, String requisitionId, Long currentUserId) {
+        PurchaseRequisition pr = loadAndCheckFactory(factoryId, requisitionId);
+        // 状态机约束: 仅 DRAFT 可删 (Bug #7 — 避免 "提交+驳回" workaround 产生虚假审批历史)
+        if (pr.getStatus() != PurchaseRequisitionStatus.DRAFT) {
+            throw new BusinessException(400,
+                    "仅 DRAFT 状态可删除 (当前状态: " + pr.getStatus().getDisplayName() + ")")
+                    .withHint("如需取消已提交的请购单, 请使用 reject (驳回) 操作");
+        }
+        // 仅 requester 本人可删 (MVP — 一致于 submitRequisition)
+        if (!pr.getRequesterId().equals(currentUserId)) {
+            throw new BusinessException(403, "仅请购人本人可删除草稿")
+                    .withHint("当前用户非请购人, 无法删除此请购单");
+        }
+        // 软删除 via BaseEntity @SQLDelete (UPDATE deleted_at = NOW())
+        requisitionRepository.delete(pr);
+        log.info("删除请购单草稿: requisitionId={}, requisitionNumber={}, requesterId={}",
+                requisitionId, pr.getRequisitionNumber(), currentUserId);
+    }
+
+    @Override
     @Transactional(readOnly = true)
     public PurchaseRequisition getById(String factoryId, String requisitionId) {
         return loadAndCheckFactory(factoryId, requisitionId);

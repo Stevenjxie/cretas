@@ -15,6 +15,7 @@ import com.cretas.aims.entity.inventory.PurchaseRequisition;
  *   approveRequisition: PENDING_APPROVAL → APPROVED
  *   rejectRequisition: PENDING_APPROVAL → REJECTED
  *   convertToPO: APPROVED → CONVERTED_TO_PO (creates PurchaseOrder, sets convertedPoId linkno)
+ *   deleteDraft: DRAFT → (soft-deleted via deletedAt) — 仅 DRAFT 可删 (Bug #7, 2026-05-20)
  * </pre>
  *
  * <p>convertToPO 复用 {@link PurchaseService#createPurchaseOrder} — 不重写采购单创建逻辑.
@@ -71,6 +72,21 @@ public interface PurchaseRequisitionService {
      * @return 新创建的 PurchaseOrder
      */
     PurchaseOrder convertToPO(String factoryId, String requisitionId, Long userId, String supplierId);
+
+    /**
+     * 删除请购单草稿 — 仅 DRAFT 可删 (Bug #7 prod QA, 2026-05-20).
+     *
+     * <p>软删除 via {@code BaseEntity.deletedAt} + {@code @SQLDelete}.
+     * 非 DRAFT 状态抛 {@link com.cretas.aims.exception.BusinessException} 400 引导走 reject
+     * (避免之前 "提交+驳回" workaround 产生虚假审批历史).
+     *
+     * <p>仅 requester 本人可删 (MVP, 一致于 submitRequisition 的所有权检查).
+     *
+     * @throws com.cretas.aims.exception.BusinessException 400 if 非 DRAFT 状态
+     * @throws com.cretas.aims.exception.BusinessException 403 if 跨工厂或非 requester
+     * @throws com.cretas.aims.exception.ResourceNotFoundException 404 if 请购单不存在
+     */
+    void deleteDraft(String factoryId, String requisitionId, Long currentUserId);
 
     /**
      * 按 id 查询.
