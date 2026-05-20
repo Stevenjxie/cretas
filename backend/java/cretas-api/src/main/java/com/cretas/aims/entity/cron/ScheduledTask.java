@@ -98,4 +98,33 @@ public class ScheduledTask extends BaseEntity {
 
     @Column(name = "last_run_error", columnDefinition = "TEXT")
     private String lastRunError;
+
+    /**
+     * AUD-4 P1 (edge audit 2026-05-20): JPA optimistic locking version.
+     *
+     * <p>Hibernate manages this column automatically — first save inserts
+     * with {@code version=0}, every subsequent {@code save()} or
+     * {@code merge()} increments it. If two parallel PUT requests load
+     * the same row (both see {@code version=N}), Hibernate's flush detects
+     * the stale snapshot on the loser and throws
+     * {@link org.springframework.orm.ObjectOptimisticLockingFailureException}.
+     * {@link com.cretas.aims.exception.GlobalExceptionHandler} catches it
+     * and surfaces a 409 with the actionHint
+     * "请刷新页面查看最新数据后再编辑" — the user can retry without
+     * silently losing the other user's edits (Lost Update prevention).
+     *
+     * <p>Column is added via Flyway {@code V20260626_02} with
+     * {@code DEFAULT 0 NOT NULL}; backfill is implicit because the migration
+     * runs before any code reads/writes the column.
+     *
+     * <p><b>Note on lastRunAt / lastRunStatus writes</b>: the scheduler
+     * service writes these audit columns after each cron tick. If a parallel
+     * PUT update happens to land between the load and save inside a run-now
+     * flow, the loser will retry; concurrent ticks on the same task are
+     * already serialized by {@code @SchedulerLock} so the optimistic-lock
+     * collision domain is limited to user-driven mutations.
+     */
+    @Version
+    @Column(name = "version", nullable = false)
+    private Long version;
 }

@@ -388,15 +388,29 @@ public class GlobalExceptionHandler {
     }
 
     /**
-     * 处理乐观锁冲突异常 (BUG-047: P5-004)
+     * 处理乐观锁冲突异常 (BUG-047: P5-004 / AUD-4 P1 Canvas Lost Update)
      * 当多个用户同时修改同一条记录时，后提交的会触发此异常
-     * 返回 409 Conflict，提示用户刷新后重试
+     * 返回 409 Conflict，提示用户刷新后重试.
+     *
+     * <p>AUD-4 enrichment (2026-05-20 edge audit): 添加 actionHint + severity 让
+     * 前端拦截器能区分这个 409 跟其他 409 (e.g. duplicate key) 并 surface 一个
+     * specific "刷新页面" 引导, 而不是只显示"操作失败". 4-in-1 UX (per
+     * {@code .claude/rules/fool-proof-design.md} 跨规则铁律 + qa-prompt v2.4
+     * Rule 8): message 具体 + actionHint 含 next action + severity warning 让
+     * 前端 toast 用 sticky duration:0. 适用于 5 Canvas Phase 2-5 entities
+     * (pricing_strategies / alert_rules / business_rules / notify_templates /
+     * scheduled_tasks) — 详情见 V20260626_02 migration.
      */
     @ExceptionHandler({OptimisticLockException.class, ObjectOptimisticLockingFailureException.class})
     @ResponseStatus(HttpStatus.CONFLICT)
     public ApiResponse<?> handleOptimisticLockException(Exception e) {
         log.warn("乐观锁冲突: {}", e.getMessage());
-        return ApiResponse.error(409, "数据已被其他用户修改，请刷新后重试");
+        return ApiResponse.errorWithHint(
+                409,
+                "数据已被其他用户修改，请刷新后重试",
+                "请刷新页面查看最新数据后再编辑",
+                "warning",
+                null);
     }
 
     /**
