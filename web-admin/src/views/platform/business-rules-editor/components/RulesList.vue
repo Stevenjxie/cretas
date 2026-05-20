@@ -193,7 +193,10 @@ async function load() {
       props.factoryId,
       scopeFilter.value === '' ? undefined : (scopeFilter.value as RuleScope),
     )
-    rules.value = (res.data || []) as BusinessRule[]
+    // Backend returns Spring Page object (per AUD-9 fix): { content, totalElements, totalPages, ... }
+    // Defensive: also handle bare array fallback during deploy transition.
+    const payload: any = res.data
+    rules.value = (payload?.content ?? payload ?? []) as BusinessRule[]
   } catch (e) {
     // Interceptor displays specific toast
     console.error('[listBusinessRules]', e)
