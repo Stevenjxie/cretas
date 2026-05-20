@@ -186,4 +186,27 @@ public interface WorkflowEngineService {
      */
     Page<ApprovalWorkflowInstance> findParticipatedBy(
             String factoryId, Long userId, Pageable pageable);
+
+    /**
+     * Sprint 6 W1-B — "工作流处理" admin view (super-admin only).
+     *
+     * <p>列出当前 factory 下所有 RUNNING workflow 实例 (跨 module 跨 initiator
+     * 跨 role). 给 super-admin / platform_admin 看全局视角, 用于:
+     * <ul>
+     *   <li>排查卡住的流程 (谁在审, 多久没动)</li>
+     *   <li>跨部门协调 (找负责人)</li>
+     *   <li>Bulk admin 操作 — Sprint 6 W4+ 加 force-cancel / delegate</li>
+     * </ul>
+     *
+     * <p>注意: 此方法 <b>不做 role-based 过滤</b> — 调用方 controller 必须用
+     * {@code @PreAuthorize("hasAnyRole('FACTORY_SUPER_ADMIN', 'PLATFORM_ADMIN')")}
+     * 守门, 否则普通 user 可看全部 instances 违反 RBAC.
+     *
+     * @param factoryId 工厂 id
+     * @param pageable 分页参数 (page from 0)
+     * @return Page of RUNNING instances sorted by initiatedAt DESC
+     * @since 2026-05-19 (Sprint 6 W1-B)
+     */
+    Page<ApprovalWorkflowInstance> listAllRunning(
+            String factoryId, Pageable pageable);
 }

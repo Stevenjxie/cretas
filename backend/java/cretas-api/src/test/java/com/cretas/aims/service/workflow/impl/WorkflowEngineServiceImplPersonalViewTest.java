@@ -182,4 +182,69 @@ class WorkflowEngineServiceImplPersonalViewTest {
                 () -> engine.findParticipatedBy(FACTORY_ID, USER_ID, null));
         verifyNoInteractions(instanceRepository);
     }
+
+    // ==================== Sprint 6 W1-B: listAllRunning (admin view) ====================
+
+    @Test
+    @DisplayName("listAllRunning: delegates to repo with RUNNING status + returns page")
+    void listAllRunning_delegates_and_returns_page() {
+        Pageable pageable = PageRequest.of(0, 20);
+        ApprovalWorkflowInstance inst = ApprovalWorkflowInstance.builder()
+                .id("inst-admin-1")
+                .factoryId(FACTORY_ID)
+                .workflowId("wf-1")
+                .moduleCode("PURCHASE_ORDER")
+                .businessEntityId("PO-101")
+                .status(InstanceStatus.RUNNING)
+                .currentNodeIds(new ArrayList<>())
+                .initiatedBy(42L)
+                .initiatedAt(LocalDateTime.now())
+                .build();
+        Page<ApprovalWorkflowInstance> expected = new PageImpl<>(List.of(inst), pageable, 1);
+        when(instanceRepository.findByFactoryIdAndStatusOrderByInitiatedAtDesc(
+                FACTORY_ID, InstanceStatus.RUNNING, pageable))
+                .thenReturn(expected);
+
+        Page<ApprovalWorkflowInstance> result = engine.listAllRunning(FACTORY_ID, pageable);
+
+        assertNotNull(result);
+        assertEquals(1, result.getTotalElements());
+        assertEquals("inst-admin-1", result.getContent().get(0).getId());
+        assertEquals(InstanceStatus.RUNNING, result.getContent().get(0).getStatus());
+
+        verify(instanceRepository).findByFactoryIdAndStatusOrderByInitiatedAtDesc(
+                FACTORY_ID, InstanceStatus.RUNNING, pageable);
+    }
+
+    @Test
+    @DisplayName("listAllRunning: returns empty page when factory has no RUNNING instances")
+    void listAllRunning_empty_page() {
+        Pageable pageable = PageRequest.of(0, 20);
+        when(instanceRepository.findByFactoryIdAndStatusOrderByInitiatedAtDesc(
+                FACTORY_ID, InstanceStatus.RUNNING, pageable))
+                .thenReturn(new PageImpl<>(List.of(), pageable, 0));
+
+        Page<ApprovalWorkflowInstance> result = engine.listAllRunning(FACTORY_ID, pageable);
+
+        assertNotNull(result);
+        assertEquals(0, result.getTotalElements());
+        assertTrue(result.getContent().isEmpty());
+    }
+
+    @Test
+    @DisplayName("listAllRunning: null factoryId throws NullPointerException")
+    void listAllRunning_null_factoryId_throws() {
+        Pageable pageable = PageRequest.of(0, 20);
+        assertThrows(NullPointerException.class,
+                () -> engine.listAllRunning(null, pageable));
+        verifyNoInteractions(instanceRepository);
+    }
+
+    @Test
+    @DisplayName("listAllRunning: null pageable throws NullPointerException")
+    void listAllRunning_null_pageable_throws() {
+        assertThrows(NullPointerException.class,
+                () -> engine.listAllRunning(FACTORY_ID, null));
+        verifyNoInteractions(instanceRepository);
+    }
 }

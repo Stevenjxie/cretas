@@ -1039,11 +1039,12 @@ const businessRoutes: RouteRecordRaw[] = [
         ]
       },
 
-      // Sprint 5 Track A (C-MENU-PERSONAL-VIEW) — workflow personal views.
+      // Sprint 5 Track A + Sprint 6 W1-B (C-MENU-PERSONAL-VIEW) — workflow views.
       // Round 12 §D X4: HJ 工作流 6 sub-menu (待处理 / 工作流处理 / 工作流设置 /
       // 流转规则设置 / 我创建的工作流 / 我参与的工作流). Cretas Sprint 3 Track-I +
       // Canvas Phase 1 (PR #862) ships 工作流设置 + 待处理 (PendingApprovalsWidget).
-      // 本 group 加 personal view (initiator + participant 视角).
+      // Sprint 5 Track A ships my-created. Sprint 6 W1-B ships remaining 3:
+      // my-participated / admin-running / rules.
       {
         path: 'workflow',
         name: 'Workflow',
@@ -1055,11 +1056,25 @@ const businessRoutes: RouteRecordRaw[] = [
             name: 'WorkflowMyCreated',
             component: () => import('@/views/workflow/my-created.vue'),
             meta: { requiresAuth: true, title: '我创建的工作流', module: 'workflow' }
+          },
+          {
+            path: 'my-participated',
+            name: 'WorkflowMyParticipated',
+            component: () => import('@/views/workflow/my-participated.vue'),
+            meta: { requiresAuth: true, title: '我参与的工作流', module: 'workflow' }
+          },
+          {
+            path: 'admin-running',
+            name: 'WorkflowAdminRunning',
+            component: () => import('@/views/workflow/admin-running.vue'),
+            meta: { requiresAuth: true, title: '工作流处理', module: 'workflow' }
+          },
+          {
+            path: 'rules',
+            name: 'WorkflowRules',
+            component: () => import('@/views/workflow/rules.vue'),
+            meta: { requiresAuth: true, title: '流转规则设置', module: 'workflow' }
           }
-          // Sprint 5 Track A follow-up (deferred, spec stub):
-          //   - my-participated: GET /workflow/instances/my-participated (backend ship in this PR)
-          //   - admin-running: GET /workflow/instances/admin-running (backend TODO)
-          //   - rules: 流转规则设置 frontend (Round 11 §I.4 backend ship)
         ]
       },
 
