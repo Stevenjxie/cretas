@@ -40,6 +40,21 @@ public class MaterialRequisitionController {
 
     private final MaterialRequisitionRepository requisitionRepository;
 
+    /**
+     * AUD-5 B-A3 sister sweep batch 4b (edge audit 2026-05-20): explicit length caps mirror PG
+     * column widths in {@code material_requisitions} table (see {@link MaterialRequisition}
+     * {@code @Column(length=...)}). Without these, over-length input lets the request reach PG
+     * and surfaces as {@code DataIntegrityViolationException} → generic 409 "数据处理异常".
+     * Pre-check at controller boundary delivers a specific 400 with a hintTarget instead.
+     *
+     * <p>{@code notes} is {@code @Column(columnDefinition="TEXT")} (unbounded) so no length
+     * check needed for it (used as reject reason). {@code productTypeId} / {@code rawMaterialTypeId} /
+     * {@code materialBatchId} (length=191) are UUID/ID references (not free-form text).
+     *
+     * <p>Mirrors PR #48 / PR #76 / PR #78 / PR #92 length-pre-check pattern.
+     */
+    private static final int UNIT_MAX_LENGTH = 20;
+
     // ==================== 列表查询 ====================
 
     @GetMapping
@@ -100,6 +115,10 @@ public class MaterialRequisitionController {
             @RequestAttribute("userId") @Parameter(hidden = true) Long userId,
             @RequestBody @Valid MaterialRequisition requisition) {
         log.info("创建领料单: factoryId={}, type={}, userId={}", factoryId, requisition.getType(), userId);
+
+        // AUD-5 B-A3 sister sweep batch 4b: length pre-check for unit (VARCHAR 20) BEFORE
+        // dispatching to repository where PG would surface a generic 409.
+        validateEntityLengths(requisition);
 
         requisition.setId(null);
         requisition.setFactoryId(factoryId);
@@ -240,5 +259,31 @@ public class MaterialRequisitionController {
         result.put("pendingApproval", pending);
         result.put("approved", approved);
         return ApiResponse.success(result);
+    }
+
+    // ==================== Boundary validators (AUD-5 B-A3 sister sweep batch 4b) ====================
+
+    /**
+     * AUD-5 B-A3 sister sweep batch 4b (edge audit 2026-05-20): length pre-check for
+     * {@code unit} (PG VARCHAR 20) on the create path. Mirrors PR #48 / PR #78 / PR #92
+     * pattern.
+     *
+     * <p>{@code notes} (TEXT, unbounded — used as reject reason) is not length-bounded by
+     * PG, so no pre-check is needed.
+     *
+     * <p>Without this, an over-length {@code unit} input lets the request reach PG and
+     * surfaces as {@link org.springframework.dao.DataIntegrityViolationException} →
+     * generic 409 "数据处理异常". Pre-check delivers a specific 400 with the actual vs
+     * allowed length so the user can immediately fix the input.
+     */
+    private void validateEntityLengths(MaterialRequisition requisition) {
+        String unit = requisition.getUnit();
+        if (unit != null && unit.length() > UNIT_MAX_LENGTH) {
+            throw new BusinessException(400,
+                    "计量单位最长 " + UNIT_MAX_LENGTH + " 字符 (当前 " + unit.length() + ")")
+                    .withHint("请使用更短的计量单位 (如 kg / 箱 / 件)")
+                    .withSeverity("warning")
+                    .withHintTarget("unit");
+        }
     }
 }
