@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, reactive } from 'vue';
+import { useRouter } from 'vue-router';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { get, post, put, del } from '@/api/request';
@@ -52,6 +53,7 @@ const customerExtendedFields: FieldConfig[] = [
 
 const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
+const router = useRouter();
 const factoryId = computed(() => authStore.factoryId);
 const canWrite = computed(() => permissionStore.canWrite('sales'));
 
@@ -182,31 +184,8 @@ function handleAdd() {
 }
 
 function handleView(row: TableRow) {
-  dialogMode.value = 'view';
-  Object.assign(formData, {
-    id: row.id,
-    customerCode: (row.customerCode as string) || '',
-    name: row.name || '',
-    contactPerson: row.contactPerson || '',
-    phone: row.phone || '',
-    shippingAddress: row.shippingAddress || row.address || '',
-    email: row.email || '',
-    type: row.type || '',
-    industry: row.industry || '',
-    notes: row.notes || '',
-    status: (row.status as string) || 'ACTIVE',  // T10
-    // Sprint 4 W2 S-CRM-FULL-1
-    customerStatus: (row.customerStatus as CustomerStatusValue) || 'LEAD',
-    importance: (row.importance as CustomerImportanceValue) || 'NORMAL',
-    source: (row.source as CustomerSourceValue) || '',
-    lastContactedAt: (row.lastContactedAt as string) || null,
-    // Sprint 4 W2 S-INVOICE-CLIENT-1
-    defaultTaxRate: (row.defaultTaxRate as number | null) ?? null,
-    defaultInvoiceType: (row.defaultInvoiceType as InvoiceTypeValue) || '',
-    // P1 #23 S-CREDIT-1
-    creditStatus: (row.creditStatus as CreditStatusValue) || 'NORMAL',
-  });
-  dialogVisible.value = true;
+  // Bug #6 fix: 跳转到 21-tab 客户 360° 详情页, 而非打开 basic dialog
+  router.push({ name: 'SalesCustomerDetail', params: { id: row.id as string } });
 }
 
 function handleEdit(row: TableRow) {
