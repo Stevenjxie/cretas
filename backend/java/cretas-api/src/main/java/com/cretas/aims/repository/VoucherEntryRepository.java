@@ -53,4 +53,56 @@ public interface VoucherEntryRepository extends JpaRepository<VoucherEntry, Stri
             @Param("auxiliaryType") AuxiliaryType auxiliaryType,
             @Param("startDate") LocalDate startDate,
             @Param("endDate") LocalDate endDate);
+
+    /**
+     * Sprint 7 T3 报表三表: 按 subjectCode 聚合 voucher entries 在 [startDate, endDate].
+     *
+     * <p>过滤条件:
+     * <ul>
+     *   <li>voucher.factoryId = :factoryId</li>
+     *   <li>voucher.voucherDate BETWEEN :startDate AND :endDate</li>
+     *   <li>voucher.status != VOID</li>
+     *   <li>voucher.deletedAt IS NULL + entry.deletedAt IS NULL (@Where 双重)</li>
+     * </ul>
+     *
+     * <p>跟 BalanceSheet 不同, IncomeStatement 用本方法 — BalanceSheet 累计期初到月末全部,
+     * IncomeStatement 仅取期间发生. 都用本方法, BalanceSheet 把 startDate 设为远古 (1970-01-01).
+     *
+     * <p>subjectName 取 max(e.subjectName), 避免同 code 在不同 voucher 里 name 抖动导致 GROUP BY 失败.
+     */
+    @Query("SELECT new com.cretas.aims.dto.finance.SubjectAggregateRow(" +
+            "  e.subjectCode, MAX(e.subjectName), " +
+            "  COALESCE(SUM(e.debit), 0), COALESCE(SUM(e.credit), 0), " +
+            "  COUNT(e)) " +
+            "FROM VoucherEntry e JOIN e.voucher v " +
+            "WHERE v.factoryId = :factoryId " +
+            "  AND v.voucherDate BETWEEN :startDate AND :endDate " +
+            "  AND v.status <> com.cretas.aims.entity.enums.VoucherStatus.VOID " +
+            "  AND v.deletedAt IS NULL " +
+            "GROUP BY e.subjectCode " +
+            "ORDER BY e.subjectCode ASC")
+    List<com.cretas.aims.dto.finance.SubjectAggregateRow> aggregateBySubject(
+            @Param("factoryId") String factoryId,
+            @Param("startDate") LocalDate startDate,
+            @Param("endDate") LocalDate endDate);
+
+    /**
+     * Sprint 7 T3 现金流量表: 找出指定现金科目在期间内的 voucher entries + 对手科目列表.
+     *
+     * <p>返回 voucher_id 列表 — caller 拉 voucher 详情找对手 entry.
+     * 比 N+1 query 更优雅的写法: 直接拉 entries 由 caller filter 现金 vs 非现金.
+     *
+     * <p>过滤现金 voucher: voucher 内至少有 1 entry subjectCode IN (...).
+     */
+    @Query("SELECT DISTINCT v.id FROM Voucher v JOIN v.entries e " +
+            "WHERE v.factoryId = :factoryId " +
+            "  AND v.voucherDate BETWEEN :startDate AND :endDate " +
+            "  AND v.status <> com.cretas.aims.entity.enums.VoucherStatus.VOID " +
+            "  AND v.deletedAt IS NULL " +
+            "  AND e.subjectCode IN :cashCodes")
+    List<String> findCashFlowVoucherIds(
+            @Param("factoryId") String factoryId,
+            @Param("startDate") LocalDate startDate,
+            @Param("endDate") LocalDate endDate,
+            @Param("cashCodes") List<String> cashCodes);
 }

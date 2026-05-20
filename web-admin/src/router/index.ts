@@ -836,6 +836,13 @@ const businessRoutes: RouteRecordRaw[] = [
             name: 'FinanceAccountingPeriod',
             component: () => import('@/views/finance/accounting-period/index.vue'),
             meta: { requiresAuth: true, title: '期间结账', module: 'finance' }
+          },
+          // Sprint 7 T3 F-3REPORT — 报表三表 (资产负债 + 利润 + 现金流, 上市公司必看)
+          {
+            path: 'three-statements',
+            name: 'FinanceThreeStatements',
+            component: () => import('@/views/finance/report/index.vue'),
+            meta: { requiresAuth: true, title: '财务三表', module: 'finance' }
           }
         ]
       },
