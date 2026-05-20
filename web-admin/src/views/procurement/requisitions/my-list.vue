@@ -17,6 +17,7 @@ import { Plus, Refresh } from '@element-plus/icons-vue';
 import {
   listRequisitions,
   submitRequisition,
+  deleteRequisition,
   REQUISITION_STATUS_MAP,
   type PurchaseRequisition,
   type PurchaseRequisitionStatus,
@@ -103,6 +104,35 @@ async function handleSubmit(row: PurchaseRequisition) {
     }
   } catch (e) {
     console.error('[提交失败]', e);
+  }
+}
+
+async function handleDelete(row: PurchaseRequisition) {
+  // Fool-proof Rule 2: dialog 含单号 + 行数; Rule 5: backend 仅 DRAFT 可删 → UI 也 hide
+  const lines = Array.isArray(row.requestedItems) ? row.requestedItems.length : 0;
+  try {
+    await ElMessageBox.confirm(
+      `确认删除请购单 ${row.requisitionNumber} (${lines} 行明细)?\n\n此操作不可恢复.`,
+      '删除确认',
+      {
+        type: 'warning',
+        confirmButtonText: '删除',
+        cancelButtonText: '取消',
+      },
+    );
+  } catch {
+    return;
+  }
+  if (!factoryId.value) return;
+  try {
+    const res = await deleteRequisition(factoryId.value, row.id);
+    if (res?.success) {
+      ElMessage.success('请购单已删除');
+      await loadData();
+    }
+  } catch (e) {
+    // Interceptor 已展示 sticky toast (含 backend actionHint); dedupe fallback log
+    if (e !== 'cancel') console.error('[删除失败]', e);
   }
 }
 
@@ -193,7 +223,7 @@ function onCreated() {
             {{ row.createdAt ? String(row.createdAt).replace('T', ' ').slice(0, 16) : '-' }}
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="200" fixed="right" align="center">
+        <el-table-column label="操作" width="240" fixed="right" align="center">
           <template #default="{ row }">
             <el-button type="primary" link size="small" @click="goDetail(row.id)">
               详情
@@ -206,6 +236,15 @@ function onCreated() {
               @click="handleSubmit(row)"
             >
               提交审批
+            </el-button>
+            <el-button
+              v-if="row.status === 'DRAFT' && canWrite"
+              type="danger"
+              link
+              size="small"
+              @click="handleDelete(row)"
+            >
+              删除
             </el-button>
           </template>
         </el-table-column>
