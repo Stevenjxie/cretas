@@ -16,7 +16,10 @@ import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository;
 import com.cretas.aims.repository.inventory.ReturnOrderItemRepository;
 import com.cretas.aims.repository.inventory.ReturnOrderRepository;
+import com.cretas.aims.security.DataScopeContext;
+import com.cretas.aims.security.DataScopeResolver;
 import com.cretas.aims.service.LinkArrayService;
+import com.cretas.aims.annotation.DataScope;
 import com.cretas.aims.service.factory.WarehouseResolver;
 import com.cretas.aims.service.finance.ArApService;
 import com.cretas.aims.service.inventory.ReturnOrderService;
@@ -53,6 +56,10 @@ public class ReturnOrderServiceImpl implements ReturnOrderService {
 
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private WarehouseResolver warehouseResolver;
+
+    /** Sprint 6 W2-B: 数据权限解析器 (optional). */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private DataScopeResolver dataScopeResolver;
 
     /**
      * Issue #795 — PURCHASE_RETURN with-goods 不良品入库.
@@ -209,11 +216,38 @@ public class ReturnOrderServiceImpl implements ReturnOrderService {
     }
 
     @Override
+    @DataScope("created_by")  // Sprint 6 W2-B — RBAC 第 2 维 (数据权限) sweep
     public PageResponse<ReturnOrder> getReturnOrders(String factoryId, ReturnType returnType,
                                                       ReturnOrderStatus status, int page, int size) {
         PageRequest pageRequest = PageRequest.of(page - 1, size, Sort.by(Sort.Direction.DESC, "createdAt"));
-        Page<ReturnOrder> result;
 
+        // Sprint 6 W2-B: 应用 DataScope. 走 unified findByFactoryIdAndFiltersAndCreatedByIn
+        // 当 scope 是 SELF / SELF_AND_BELOW / DEPT_AND_BELOW (DB-side IN list).
+        // ALL scope 保持原 4-branch 行为.
+        DataScopeContext dsCtx = DataScopeContext.current();
+        if (dsCtx != null && dsCtx.isFiltered() && dsCtx.getUserId() != null) {
+            com.cretas.aims.entity.enums.DataScope scope = dsCtx.getScope();
+            List<Long> chain;
+            if (scope == com.cretas.aims.entity.enums.DataScope.SELF) {
+                chain = List.of(dsCtx.getUserId());
+            } else if (scope == com.cretas.aims.entity.enums.DataScope.SELF_AND_BELOW
+                    || scope == com.cretas.aims.entity.enums.DataScope.DEPT_AND_BELOW) {
+                chain = dataScopeResolver != null
+                        ? dataScopeResolver.resolveCreatedByChain(dsCtx)
+                        : List.of(dsCtx.getUserId());
+                if (chain == null || chain.isEmpty()) chain = List.of(dsCtx.getUserId());
+            } else {
+                chain = null; // CUSTOM — fallback ALL
+            }
+            if (chain != null) {
+                log.debug("DataScope {} for return orders: chain size={}", scope, chain.size());
+                Page<ReturnOrder> result = returnOrderRepository.findByFactoryIdAndFiltersAndCreatedByIn(
+                        factoryId, returnType, status, chain, pageRequest);
+                return PageResponse.of(result.getContent(), page, size, result.getTotalElements());
+            }
+        }
+
+        Page<ReturnOrder> result;
         if (returnType != null && status != null) {
             result = returnOrderRepository.findByFactoryIdAndReturnTypeAndStatusOrderByCreatedAtDesc(
                     factoryId, returnType, status, pageRequest);

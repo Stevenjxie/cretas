@@ -18,6 +18,7 @@ import com.cretas.aims.repository.inventory.*;
 import com.cretas.aims.event.SalesOrderConfirmedEvent;
 import com.cretas.aims.event.SalesOrderFinanceApprovedEvent;
 import com.cretas.aims.security.DataScopeContext;
+import com.cretas.aims.security.DataScopeResolver;
 import com.cretas.aims.service.config.FactoryConfigService;
 import com.cretas.aims.annotation.DataScope;
 import com.cretas.aims.annotation.Loggable;
@@ -118,6 +119,10 @@ public class SalesServiceImpl implements SalesService {
      */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.service.pricing.PricingEngine pricingEngine;
+
+    /** Sprint 6 W2-B: 数据权限解析器 (optional). */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private DataScopeResolver dataScopeResolver;
 
     @jakarta.persistence.PersistenceContext
     private jakarta.persistence.EntityManager entityManager;
@@ -439,18 +444,28 @@ public class SalesServiceImpl implements SalesService {
     }
 
     @Override
-    @DataScope("created_by")  // Sprint 5 Track G POC — RBAC 第 2 维 (数据权限)
+    @DataScope("created_by")  // Sprint 5 Track G POC + Sprint 6 W2-B sweep (SELF+keyword DB-side + chain)
     public PageResponse<SalesOrder> getSalesOrders(String factoryId, String keyword, int page, int size) {
         PageRequest pageRequest = PageRequest.of(page - 1, size, Sort.by(Sort.Direction.DESC, "createdAt"));
         Page<SalesOrder> result;
 
-        // Sprint 5 Track G POC: 读 ThreadLocal DataScopeContext, SELF scope 时 filter created_by.
-        // ALL scope (默认 / factory_super_admin) 保持原行为. CUSTOM/DEPT_AND_BELOW/SELF_AND_BELOW
-        // 在 MVP 中 fallback ALL (Sprint 6 sweep 实施).
+        // Sprint 5 POC + Sprint 6 W2-B sweep:
+        // - SELF        → findByCreatedBy / searchByKeywordAndCreatedBy (DB-side, no in-memory)
+        // - SELF_AND_BELOW / DEPT_AND_BELOW → resolveCreatedByChain + IN-list query
+        // - ALL / CUSTOM / no-ctx → 原 path
         DataScopeContext dsCtx = DataScopeContext.current();
-        boolean selfScope = dsCtx != null
-                && dsCtx.getScope() == com.cretas.aims.entity.enums.DataScope.SELF
-                && dsCtx.getUserId() != null;
+        com.cretas.aims.entity.enums.DataScope scope = (dsCtx != null && dsCtx.getUserId() != null)
+                ? dsCtx.getScope() : null;
+        boolean selfScope = scope == com.cretas.aims.entity.enums.DataScope.SELF;
+        boolean chainScope = scope == com.cretas.aims.entity.enums.DataScope.SELF_AND_BELOW
+                || scope == com.cretas.aims.entity.enums.DataScope.DEPT_AND_BELOW;
+        List<Long> chain = null;
+        if (chainScope && dsCtx != null) {
+            chain = dataScopeResolver != null
+                    ? dataScopeResolver.resolveCreatedByChain(dsCtx)
+                    : List.of(dsCtx.getUserId());
+            if (chain == null || chain.isEmpty()) chain = List.of(dsCtx.getUserId());
+        }
 
         if (keyword != null && !keyword.isBlank()) {
             // Bug G + audit H1: escape SQL LIKE wildcards (% _ \) so user-typed wildcards
@@ -459,23 +474,25 @@ public class SalesServiceImpl implements SalesService {
                 .replace("\\", "\\\\")
                 .replace("%", "\\%")
                 .replace("_", "\\_");
-            // 关键字搜索目前不支持 SELF scope 复合 (Sprint 6 加专用 query). MVP: ALL 行为.
-            // TODO Sprint 6: searchByFactoryAndKeywordAndCreatedBy
             if (selfScope) {
-                log.debug("DataScope SELF + keyword: filtering in-memory (Sprint 6 will add DB-side query)");
-            }
-            result = salesOrderRepository.searchByFactoryAndKeyword(factoryId, escaped, pageRequest);
-            if (selfScope) {
-                // 简单 in-memory filter — POC 阶段 acceptable, prod 性能由 Sprint 6 DB query 接.
-                List<SalesOrder> filtered = result.getContent().stream()
-                        .filter(o -> dsCtx.getUserId().equals(o.getCreatedBy()))
-                        .collect(Collectors.toList());
-                return PageResponse.of(filtered, page, size, (long) filtered.size());
+                log.debug("DataScope SELF + keyword (DB-side): created_by={}", dsCtx.getUserId());
+                result = salesOrderRepository.searchByFactoryAndKeywordAndCreatedBy(
+                        factoryId, escaped, dsCtx.getUserId(), pageRequest);
+            } else if (chainScope) {
+                log.debug("DataScope {} + keyword: chain size={}", scope, chain.size());
+                result = salesOrderRepository.searchByFactoryAndKeywordAndCreatedByIn(
+                        factoryId, escaped, chain, pageRequest);
+            } else {
+                result = salesOrderRepository.searchByFactoryAndKeyword(factoryId, escaped, pageRequest);
             }
         } else if (selfScope) {
             log.debug("DataScope SELF: filter sales orders by created_by={}", dsCtx.getUserId());
             result = salesOrderRepository.findByFactoryIdAndCreatedByOrderByCreatedAtDesc(
                     factoryId, dsCtx.getUserId(), pageRequest);
+        } else if (chainScope) {
+            log.debug("DataScope {} for sales orders: chain size={}", scope, chain.size());
+            result = salesOrderRepository.findByFactoryIdAndCreatedByInOrderByCreatedAtDesc(
+                    factoryId, chain, pageRequest);
         } else {
             result = salesOrderRepository.findByFactoryIdOrderByCreatedAtDesc(factoryId, pageRequest);
         }

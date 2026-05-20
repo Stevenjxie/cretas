@@ -25,8 +25,11 @@ import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.repository.factory.FactoryMaterialRequisitionRepository;
 import com.cretas.aims.repository.inventory.PurchaseReceiveRecordRepository;
 import org.springframework.beans.factory.annotation.Autowired;
+import com.cretas.aims.security.DataScopeContext;
+import com.cretas.aims.security.DataScopeResolver;
 import com.cretas.aims.service.FuturePlanMatchingService;
 import com.cretas.aims.service.MaterialBatchService;
+import com.cretas.aims.annotation.DataScope;
 import com.cretas.aims.service.rules.annotation.RuleEvaluate;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -150,6 +153,10 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
     /** D1 双仓流转 (2026-05-10 spec, PR #309 A1=A) — 入库默认 WH-LOG. */
     @Autowired
     private com.cretas.aims.service.factory.WarehouseResolver warehouseResolver;
+
+    /** Sprint 6 W2-B: 数据权限解析器 (optional). */
+    @Autowired(required = false)
+    private DataScopeResolver dataScopeResolver;
 
     // Manual constructor (Lombok @RequiredArgsConstructor not working)
     public MaterialBatchServiceImpl(
@@ -428,6 +435,7 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
      */
     @Override
     @Transactional(readOnly = true)
+    @DataScope("created_by")  // Sprint 6 W2-B — RBAC 第 2 维 (数据权限) sweep
     public PageResponse<MaterialBatchDTO> getMaterialBatchList(String factoryId, PageRequest pageRequest) {
         Sort sort = Sort.by(
                 pageRequest.getSortDirection().equalsIgnoreCase("DESC") ?
@@ -442,17 +450,44 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
                 sort
             );
 
+        // Sprint 6 W2-B: 应用 DataScope chain. SELF / SELF_AND_BELOW / DEPT_AND_BELOW
+        // 走 createdByIn variant. ALL 保持原行为.
+        DataScopeContext dsCtx = DataScopeContext.current();
+        List<Long> chain = null;
+        if (dsCtx != null && dsCtx.isFiltered() && dsCtx.getUserId() != null) {
+            com.cretas.aims.entity.enums.DataScope scope = dsCtx.getScope();
+            if (scope == com.cretas.aims.entity.enums.DataScope.SELF) {
+                chain = List.of(dsCtx.getUserId());
+            } else if (scope == com.cretas.aims.entity.enums.DataScope.SELF_AND_BELOW
+                    || scope == com.cretas.aims.entity.enums.DataScope.DEPT_AND_BELOW) {
+                chain = dataScopeResolver != null
+                        ? dataScopeResolver.resolveCreatedByChain(dsCtx)
+                        : List.of(dsCtx.getUserId());
+                if (chain == null || chain.isEmpty()) chain = List.of(dsCtx.getUserId());
+            }
+            // CUSTOM → chain stays null → fallback ALL
+        }
+
         Page<MaterialBatch> batchPage;
-        
+        boolean hasKeyword = pageRequest.getKeyword() != null && !pageRequest.getKeyword().trim().isEmpty();
+
         // 如果提供了关键词，使用搜索方法；否则使用普通查询
-        if (pageRequest.getKeyword() != null && !pageRequest.getKeyword().trim().isEmpty()) {
+        if (hasKeyword) {
+            String escaped = com.cretas.aims.util.SqlLikeEscaper.escape(pageRequest.getKeyword().trim());
             log.debug("搜索原材料批次: factoryId={}, keyword={}", factoryId, pageRequest.getKeyword());
-            batchPage = materialBatchRepository.searchByKeyword(factoryId,
-                com.cretas.aims.util.SqlLikeEscaper.escape(pageRequest.getKeyword().trim()), pageable);
+            if (chain != null) {
+                batchPage = materialBatchRepository.searchByKeywordAndCreatedByIn(
+                        factoryId, escaped, chain, pageable);
+            } else {
+                batchPage = materialBatchRepository.searchByKeyword(factoryId, escaped, pageable);
+            }
+        } else if (chain != null) {
+            log.debug("DataScope filter for material batches: chain size={}", chain.size());
+            batchPage = materialBatchRepository.findByFactoryIdAndCreatedByIn(factoryId, chain, pageable);
         } else {
             batchPage = materialBatchRepository.findByFactoryId(factoryId, pageable);
         }
-        
+
         List<MaterialBatchDTO> batchDTOs = batchPage.getContent().stream()
                 .map(materialBatchMapper::toDTO)
                 .collect(Collectors.toList());
