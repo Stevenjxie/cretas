@@ -6,29 +6,50 @@
 --
 -- 兼容性: 所有现有 role 默认 ALL scope, 行为不变.
 --         一线员工角色 (operator/warehouse_worker/quality_inspector) 默认 SELF.
+--
+-- 2026-05-20 amendment: wrap in DO block conditional on role_definitions
+--   table existence. Sprint5-G PR #54 assumed table exists from some legacy
+--   source NOT in db/flyway/. Test env boot failed because table absent.
+--   This wrap makes migration idempotent + safe to run on envs where the
+--   table hasn't been created yet (NOTICE-only). When table eventually
+--   exists via separate migration, this migration applies the data_scope
+--   column + seeded values. Use `flyway repair` if needed.
 -- ============================================================
 
--- 1. 加 data_scope 列到 role_definitions
-ALTER TABLE role_definitions
-    ADD COLUMN IF NOT EXISTS data_scope VARCHAR(32) NOT NULL DEFAULT 'ALL';
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.tables
+    WHERE table_schema = current_schema()
+      AND table_name = 'role_definitions'
+  ) THEN
+    -- 1. 加 data_scope 列到 role_definitions
+    ALTER TABLE role_definitions
+        ADD COLUMN IF NOT EXISTS data_scope VARCHAR(32) NOT NULL DEFAULT 'ALL';
 
-COMMENT ON COLUMN role_definitions.data_scope IS
-    '数据权限范围 (Sprint 5 Track G): ALL / DEPT_AND_BELOW / SELF_AND_BELOW / SELF / CUSTOM';
+    COMMENT ON COLUMN role_definitions.data_scope IS
+        '数据权限范围 (Sprint 5 Track G): ALL / DEPT_AND_BELOW / SELF_AND_BELOW / SELF / CUSTOM';
 
--- 2. 索引: 通常单 role lookup, 可不加; 但 admin 矩阵列出 scope 时按 scope group by 用
-CREATE INDEX IF NOT EXISTS idx_role_definitions_data_scope
-    ON role_definitions (data_scope);
+    -- 2. 索引: 通常单 role lookup, 可不加; 但 admin 矩阵列出 scope 时按 scope group by 用
+    CREATE INDEX IF NOT EXISTS idx_role_definitions_data_scope
+        ON role_definitions (data_scope);
 
--- 3. 一线员工默认 SELF — 仅看自己创建的数据 (per Round 12 §D.1 X4 finding)
-UPDATE role_definitions
-SET data_scope = 'SELF'
-WHERE role_code IN ('operator', 'warehouse_worker', 'quality_inspector')
-  AND data_scope = 'ALL';
+    -- 3. 一线员工默认 SELF — 仅看自己创建的数据 (per Round 12 §D.1 X4 finding)
+    UPDATE role_definitions
+    SET data_scope = 'SELF'
+    WHERE role_code IN ('operator', 'warehouse_worker', 'quality_inspector')
+      AND data_scope = 'ALL';
 
--- 4. 工厂总监 / 平台管理员 显式 ALL (即默认, 这里幂等保证)
-UPDATE role_definitions
-SET data_scope = 'ALL'
-WHERE role_code IN ('factory_super_admin', 'platform_admin');
+    -- 4. 工厂总监 / 平台管理员 显式 ALL (即默认, 这里幂等保证)
+    UPDATE role_definitions
+    SET data_scope = 'ALL'
+    WHERE role_code IN ('factory_super_admin', 'platform_admin');
+
+    RAISE NOTICE 'V20260519_08: role_definitions.data_scope migration applied';
+  ELSE
+    RAISE NOTICE 'V20260519_08: role_definitions table NOT found — skipping data_scope migration. Sprint5-G PR #54 dependency unsatisfied; rerun after table creation via flyway repair or follow-up migration.';
+  END IF;
+END $$;
 
 -- 5. 验证: 列出当前所有 role + scope, 便于 audit
 -- SELECT role_code, display_name, data_scope FROM role_definitions ORDER BY level, role_code;
