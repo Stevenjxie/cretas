@@ -4,14 +4,22 @@ import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { get, post } from '@/api/request';
 import { ElMessage, ElMessageBox } from 'element-plus';
+import { QuestionFilled } from '@element-plus/icons-vue';
 import { formatAmount } from '@/utils/tableFormatters';
 import type { TableRow } from '@/types/api';
+// Sprint 6 W3-A — inline 3-chip link counter (文件 / 图片 / 合同).
+import LinkChipCell from '@/components/list/LinkChipCell.vue';
+import { useLinkChipCounts } from '@/composables/useLinkChipCounts';
 
 const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
 const factoryId = computed(() => authStore.factoryId);
 const canWrite = computed(() => permissionStore.canWrite('finance'));
 const canViewPrice = computed(() => permissionStore.canViewPrice);
+
+// Sprint 6 W3-A — inline 3-chip 链接计数 (文件 / 图片 / 合同).
+const { fetchLinkChipCounts, countsFor: linkCountsFor } =
+  useLinkChipCounts(factoryId, 'PAYMENT_VOUCHER');
 
 const loading = ref(false);
 const tableData = ref<TableRow[]>([]);
@@ -80,6 +88,10 @@ async function loadData() {
       }
       tableData.value = rows;
       pagination.value.total = res.data.totalElements || 0;
+
+      // Sprint 6 W3-A — fire-and-forget batch 3-chip counts (文件/图片/合同).
+      // EntityType=PAYMENT_VOUCHER → 收款凭证附件 (银行回单 / 转账截图 / 合同).
+      void fetchLinkChipCounts(rows.map((r: TableRow) => String(r.id)).filter(Boolean));
     }
   } catch { /* axios interceptor already displayed error toast */ }
   finally { loading.value = false; }
@@ -172,6 +184,33 @@ async function handleRecordSubmit() {
         <el-table-column prop="status" label="状态" width="100" align="center">
           <template #default="{ row }">
             <el-tag :type="statusMap[row.status]?.type || 'info'" size="small">{{ statusMap[row.status]?.text || row.status }}</el-tag>
+          </template>
+        </el-table-column>
+        <!--
+          Sprint 6 W3-A — 行内 3-chip 链接计数 (文件 / 图片 / 合同).
+          凭证附件: 转账记录 (DOCUMENT) + 银行回单截图 (PHOTO) + 合同 (CONTRACT).
+          数据源: POST /attachments/batch-3chip-counts (batch, 避免 N+1).
+          注: 'receiptUrl' 列是单图凭证 (老 schema), 跟本列互补.
+        -->
+        <el-table-column label="附件" width="200" align="center">
+          <template #header>
+            <span style="display: inline-flex; align-items: center; gap: 4px;">
+              附件
+              <el-tooltip placement="top">
+                <template #content>
+                  <div style="line-height: 1.6;">
+                    <div><b>文件</b>: 转账记录 / 凭证 (DOCUMENT / OTHER)</div>
+                    <div><b>图片</b>: 银行回单截图 (PHOTO / VIDEO)</div>
+                    <div><b>合同</b>: 关联销售/采购合同 (CONTRACT)</div>
+                    <div style="margin-top: 4px; color: var(--text-color-secondary);">'凭证' 列是单图老 schema, 此列是新多附件</div>
+                  </div>
+                </template>
+                <el-icon style="cursor: help; color: var(--text-color-secondary, #909399); font-size: 12px;"><QuestionFilled /></el-icon>
+              </el-tooltip>
+            </span>
+          </template>
+          <template #default="{ row }">
+            <LinkChipCell :counts="linkCountsFor(row.id)" />
           </template>
         </el-table-column>
         <el-table-column label="操作" width="150" align="center" v-if="canWrite">

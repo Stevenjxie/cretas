@@ -15,6 +15,9 @@ import { useWorkflowStats } from '@/composables/useWorkflowStats';
 import { getBucketPrimaryStatus, getBucketLabel } from '@/types/workflow';
 import { formatAmount } from '@/utils/tableFormatters';
 import { RowActionMenu, ViewModeSwitcher, GridView, KanbanView, TimelinePlaceholder, CalendarPlaceholder, InlineRowIcons, RowMarkerCell } from '@/components/list';
+// Sprint 6 W3-A — inline 3-chip link counter (文件 / 图片 / 合同).
+import LinkChipCell from '@/components/list/LinkChipCell.vue';
+import { useLinkChipCounts } from '@/composables/useLinkChipCounts';
 import { CreateModeSelector, BatchCreateDialog, QuickCreateDialog, BomExpansionDialog } from '@/components/dialog';
 // PR #872 (#860 follow-up) — 转发 / 分享链接 dialog.
 import ForwardShareDialog from '@/components/dialog/ForwardShareDialog.vue';
@@ -351,6 +354,10 @@ function openAiForRow(row: TableRow) {
 
 // U-NAV-1 业务流程图导航 (Sprint 2 Track G + FU Chat 3 bucket-filter)
 const { stats: workflowStats, loading: workflowLoading } = useWorkflowStats(factoryId, 'sales');
+
+// Sprint 6 W3-A — inline 3-chip 链接计数 (文件 / 图片 / 合同).
+const { fetchLinkChipCounts, countsFor: linkCountsFor } =
+  useLinkChipCounts(factoryId, 'SALES_ORDER');
 function handleWorkflowNodeClick(nodeId: string) {
   const primary = getBucketPrimaryStatus('sales', nodeId);
   if (!primary) return;
@@ -574,6 +581,10 @@ async function loadData() {
       }
       tableData.value = rows;
       pagination.value.total = res.data.totalElements || 0;
+
+      // Sprint 6 W3-A — fire-and-forget batch 3-chip counts (文件/图片/合同).
+      // List itself is unaffected by chip request failure; chip falls back to "-".
+      void fetchLinkChipCounts(rows.map((r: TableRow) => String(r.id)).filter(Boolean));
     } else if (res.success === false) {
       ElMessage.error(res.message || '加载订单失败');
     }
@@ -1252,6 +1263,33 @@ async function submitQuickPayment() {
             <el-tag :type="(statusMap[row.status]?.type) || 'info'" size="small">
               {{ statusMap[row.status]?.text || row.status }}
             </el-tag>
+          </template>
+        </el-table-column>
+        <!--
+          Sprint 6 W3-A — 行内 3-chip 链接计数 (文件 / 图片 / 合同).
+          数据源: POST /attachments/batch-3chip-counts (batch, 避免 N+1).
+          替代 Sprint 5 PR #58 unified `链:N` chip per HJ baseline (Round 12 §B.6 X2).
+          EntityType=SALES_ORDER 由 useLinkChipCounts composable 锁定.
+        -->
+        <el-table-column label="附件" width="200" align="center">
+          <template #header>
+            <span style="display: inline-flex; align-items: center; gap: 4px;">
+              附件
+              <el-tooltip placement="top">
+                <template #content>
+                  <div style="line-height: 1.6;">
+                    <div><b>文件</b>: 通用文档 (PDF / Word / Excel / OTHER)</div>
+                    <div><b>图片</b>: 照片 / 视频 (PHOTO / VIDEO)</div>
+                    <div><b>合同</b>: 销售合同 / 法律文件 (CONTRACT)</div>
+                    <div style="margin-top: 4px; color: var(--text-color-secondary);">点详情查看附件清单</div>
+                  </div>
+                </template>
+                <el-icon style="cursor: help; color: var(--text-color-secondary, #909399); font-size: 12px;"><QuestionFilled /></el-icon>
+              </el-tooltip>
+            </span>
+          </template>
+          <template #default="{ row }">
+            <LinkChipCell :counts="linkCountsFor(row.id)" />
           </template>
         </el-table-column>
         <el-table-column label="操作" width="320" fixed="right" align="center">
