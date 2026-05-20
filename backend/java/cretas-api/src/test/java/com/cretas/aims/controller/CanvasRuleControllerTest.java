@@ -610,4 +610,169 @@ class CanvasRuleControllerTest {
         assertTrue(resp.getSuccess(), "missing version field → lenient pass");
         verify(ruleRepository).save(any(BusinessRule.class));
     }
+
+    // ==================== Bug #4 (2026-05-20): DELETE 409 generic → 4位一体 ====================
+    // Root cause: previous deleteRule called ruleRepository.delete(rule) which relies on
+    // @SQLDelete (literal UPDATE business_rules SET deleted_at = NOW() WHERE id = ?). With
+    // @Version added by V20260626_02 (AUD-4 P1), Hibernate's delete path expects version
+    // bump but the @SQLDelete UPDATE doesn't touch the version column → some flush
+    // permutations raise DataIntegrityViolationException → GlobalExceptionHandler's
+    // else-branch surfaces the generic "数据处理异常" 409 with no actionHint. Sister chat
+    // pattern (CanvasAlertController.deleteRule) uses manual softDelete()+save() which
+    // runs standard Hibernate UPDATE WHERE id=? AND version=?, increments version, and
+    // surfaces opt-lock conflicts via ObjectOptimisticLockingFailureException (specific
+    // 409). This block locks in the new behavior.
+
+    @Test
+    @DisplayName("Bug #4: DELETE → 200 + softDelete called + save invoked (no repository.delete)")
+    void testDeleteUsesSoftDeletePlusSavePattern() {
+        BusinessRule rule = existingRule();
+        rule.setVersion(0L);
+        // pre-condition: rule NOT yet soft-deleted
+        assertEquals(null, rule.getDeletedAt(),
+                "test fixture must start with deletedAt=null");
+        when(ruleRepository.findById(rule.getId())).thenReturn(Optional.of(rule));
+        when(ruleRepository.save(any(BusinessRule.class)))
+                .thenAnswer(inv -> inv.getArgument(0));
+
+        ApiResponse<Map<String, Object>> resp = controller.deleteRule(FACTORY_ID, rule.getId());
+
+        assertNotNull(resp);
+        assertTrue(resp.getSuccess(), "happy-path delete must return 200");
+        assertEquals(Integer.valueOf(200), resp.getCode());
+        assertEquals("规则已删除", resp.getMessage());
+        // softDelete() set deletedAt in memory before save was called
+        assertNotNull(rule.getDeletedAt(),
+                "softDelete() must have set deletedAt in-memory");
+        // CRITICAL: verify we go through save() (Hibernate UPDATE w/ version check)
+        // and NOT repository.delete() (which triggers @SQLDelete without version bump).
+        verify(ruleRepository).save(any(BusinessRule.class));
+        verify(ruleRepository, never()).delete(any(BusinessRule.class));
+        // response includes deletedAt for client to display
+        assertNotNull(resp.getData());
+        assertNotNull(resp.getData().get("deletedAt"));
+        assertEquals(rule.getId().toString(), resp.getData().get("ruleId"));
+    }
+
+    @Test
+    @DisplayName("Bug #4: DELETE already-deleted rule → 200 idempotent + alreadyDeleted=true (no save)")
+    void testDeleteAlreadyDeletedIsIdempotent() {
+        // Repro of the "stuck record" scenario from F006 prod: a previous DELETE call
+        // half-completed (e.g. the @SQLDelete UPDATE succeeded but a subsequent flush
+        // raised DataIntegrityViolationException). The row sits in DB with deletedAt
+        // set but visible to admins via direct query. Subsequent DELETE attempts must
+        // NOT 409 — they must idempotently confirm the row is deleted.
+        BusinessRule rule = existingRule();
+        java.time.LocalDateTime priorDeletedAt = java.time.LocalDateTime.now().minusMinutes(5);
+        rule.setDeletedAt(priorDeletedAt);
+        when(ruleRepository.findById(rule.getId())).thenReturn(Optional.of(rule));
+
+        ApiResponse<Map<String, Object>> resp = controller.deleteRule(FACTORY_ID, rule.getId());
+
+        assertNotNull(resp);
+        assertTrue(resp.getSuccess(),
+                "Repeat DELETE on already-deleted rule must return success (idempotent)");
+        assertEquals(Integer.valueOf(200), resp.getCode());
+        assertEquals("规则已是删除状态", resp.getMessage(),
+                "Message must signal idempotent outcome, not pretend the call did work");
+        assertEquals(Boolean.TRUE, resp.getData().get("alreadyDeleted"),
+                "Data envelope must include alreadyDeleted=true so callers can branch");
+        assertEquals(priorDeletedAt.toString(), resp.getData().get("deletedAt"),
+                "deletedAt must echo the ORIGINAL deletion time, not now()");
+        // CRITICAL: no save invoked (don't bump version on no-op)
+        verify(ruleRepository, never()).save(any(BusinessRule.class));
+        verify(ruleRepository, never()).delete(any(BusinessRule.class));
+    }
+
+    @Test
+    @DisplayName("Bug #4: DELETE opt-lock conflict → 409 CONFLICT + specific refresh hint (NOT generic '数据处理异常')")
+    void testDeleteOptimisticLockSurfacedAs409WithHint() {
+        // Repro: parallel session bumped version between our load and save. Hibernate's
+        // save() raises ObjectOptimisticLockingFailureException; controller maps it to
+        // a specific 409 with actionHint instead of letting it bubble to
+        // GlobalExceptionHandler which would emit a vanilla 409 with no actionHint
+        // (caller-side ElMessageBox.confirm would then misclassify as "并发编辑冲突"
+        // dialog instead of the specific delete-failed flow).
+        BusinessRule rule = existingRule();
+        rule.setVersion(0L);
+        when(ruleRepository.findById(rule.getId())).thenReturn(Optional.of(rule));
+        when(ruleRepository.save(any(BusinessRule.class)))
+                .thenThrow(new org.springframework.orm.ObjectOptimisticLockingFailureException(
+                        BusinessRule.class, rule.getId()));
+
+        ApiResponse<Map<String, Object>> resp = controller.deleteRule(FACTORY_ID, rule.getId());
+
+        assertNotNull(resp);
+        assertFalse(Boolean.TRUE.equals(resp.getSuccess()), "must NOT report success");
+        assertEquals(Integer.valueOf(409), resp.getCode(), "must be 409 CONFLICT");
+        assertEquals("CONFLICT", resp.getErrorCode());
+        // 4位一体 (a): message 具体, NOT generic "数据处理异常"
+        assertTrue(resp.getMessage().contains("规则已被其他用户修改或删除"),
+                "Message must be specific to canvas-rule delete conflict, not generic. Got: "
+                        + resp.getMessage());
+        assertFalse(resp.getMessage().contains("数据处理异常"),
+                "Message must NEVER be the generic GlobalExceptionHandler fallback");
+        // 4位一体 (d): actionHint含 next action
+        assertNotNull(resp.getActionHint(), "actionHint must be present (fool-proof Rule 5)");
+        assertTrue(resp.getActionHint().contains("刷新"),
+                "actionHint must direct user to refresh: " + resp.getActionHint());
+        assertEquals("warning", resp.getSeverity(),
+                "4位一体 (c): severity warning for FE sticky toast (duration:0)");
+    }
+
+    @Test
+    @DisplayName("Bug #4: DELETE on FK violation → 409 DATA_INTEGRITY (specific, not generic '数据处理异常')")
+    void testDeleteDataIntegrityViolationSurfacedAs409WithHint() {
+        // Defensive: future migrations may add inbound FK to business_rules with
+        // ON DELETE RESTRICT (e.g. if rule_execution_logs FK switches to NOT NULL +
+        // RESTRICT). With manual softDelete()+save() this branch wouldn't fire today
+        // (UPDATE never triggers FK ON DELETE), but if a CHECK or NOT NULL constraint
+        // is violated by some future schema migration, this exception path catches it
+        // and emits a specific message.
+        BusinessRule rule = existingRule();
+        rule.setVersion(0L);
+        when(ruleRepository.findById(rule.getId())).thenReturn(Optional.of(rule));
+        when(ruleRepository.save(any(BusinessRule.class)))
+                .thenThrow(new org.springframework.dao.DataIntegrityViolationException(
+                        "could not execute statement; SQL [...] constraint violation"));
+
+        ApiResponse<Map<String, Object>> resp = controller.deleteRule(FACTORY_ID, rule.getId());
+
+        assertNotNull(resp);
+        assertFalse(Boolean.TRUE.equals(resp.getSuccess()));
+        assertEquals(Integer.valueOf(409), resp.getCode());
+        assertEquals("DATA_INTEGRITY", resp.getErrorCode());
+        assertTrue(resp.getMessage().contains("无法删除规则"),
+                "Message must be specific to canvas-rule delete: " + resp.getMessage());
+        assertFalse(resp.getMessage().contains("数据处理异常"),
+                "Must NEVER be the generic GlobalExceptionHandler fallback");
+        assertNotNull(resp.getActionHint());
+        assertEquals("warning", resp.getSeverity());
+    }
+
+    @Test
+    @DisplayName("Bug #4 regression: DELETE happy-path success message + data shape preserved")
+    void testDeleteHappyPathDataShape() {
+        // Lock in the response data shape so FE callers continue to find ruleId / ruleCode
+        // at the same keys. This protects against accidental rename during further refactor.
+        BusinessRule rule = existingRule();
+        rule.setVersion(2L);
+        when(ruleRepository.findById(rule.getId())).thenReturn(Optional.of(rule));
+        when(ruleRepository.save(any(BusinessRule.class)))
+                .thenAnswer(inv -> inv.getArgument(0));
+
+        ApiResponse<Map<String, Object>> resp = controller.deleteRule(FACTORY_ID, rule.getId());
+
+        assertTrue(resp.getSuccess());
+        Map<String, Object> data = resp.getData();
+        assertNotNull(data);
+        assertEquals(rule.getId().toString(), data.get("ruleId"));
+        assertEquals(rule.getRuleCode(), data.get("ruleCode"));
+        assertNotNull(data.get("deletedAt"),
+                "deletedAt must be in response so FE can display when row was removed");
+        // alreadyDeleted absent on fresh-delete (only present on idempotent path)
+        assertFalse(data.containsKey("alreadyDeleted")
+                        && Boolean.TRUE.equals(data.get("alreadyDeleted")),
+                "alreadyDeleted=true must NOT be set on fresh delete");
+    }
 }
