@@ -150,4 +150,29 @@ class NotifyTemplateControllerTest {
         assertEquals("VALIDATION", resp.getErrorCode());
         verify(templateRepo, never()).findByFactoryIdAndTemplateCode(anyString(), anyString());
     }
+
+    // ==================== AUD-4 (PR #94 follow-up): stub-status verification ====================
+
+    @Test
+    @DisplayName("AUD-4: PUT still returns 501 stub (Phase 3 sister must honor version check pattern)")
+    void testUpdateStillStubbed() {
+        // NotifyTemplateController.update is a 501 stub awaiting Phase 3 sister chat. PR #94
+        // added @Version Long version on the NotifyTemplate entity + Flyway DDL so the
+        // column is already in place. This PR adds a doc-comment guard pointing future
+        // implementors to the AUD-4 pattern used in the other 4 Canvas PUT handlers
+        // (PricingStrategy / CanvasAlert / CanvasRule / ScheduledTask).
+        //
+        // When Phase 3 lands the real impl, this test should be replaced by:
+        //   - testStaleVersionRejectedWith409 (mirror of sister-controller tests)
+        //   - testCurrentVersionAccepted
+        //   - testNullVersionLenientPassthrough
+        // and the 501 stub assertion should disappear.
+        ApiResponse<?> resp = controller.update(
+                "F001", java.util.UUID.randomUUID(), new com.cretas.aims.entity.notify.NotifyTemplate());
+        assertNotNull(resp);
+        assertEquals(501, resp.getCode(),
+                "PUT remains a 501 stub — Phase 3 sister chat 实施 must honor AUD-4 version check pattern");
+        // Critical: when 501, no DB hits happen (no findById, no save).
+        verify(templateRepo, never()).findByFactoryIdAndTemplateCode(anyString(), anyString());
+    }
 }

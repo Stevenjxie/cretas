@@ -530,4 +530,84 @@ class CanvasRuleControllerTest {
         assertTrue(resp.getSuccess(), "100-char update should pass");
         assertEquals(newName, rule.getRuleName());
     }
+
+    // ==================== AUD-4 (PR #94 follow-up): explicit version check ====================
+
+    @Test
+    @DisplayName("AUD-4: PUT with stale version (req v=0, db v=1) → 409 with refresh hint")
+    void testStaleVersionRejectedWith409() {
+        // Edge audit 2026-05-20 finding repro: two factory admins open the same rule in
+        // 2 tabs, both see v=1. Admin A saves first (DB now v=2). Admin B clicks save
+        // with stale v=1 snapshot — without this check the controller would silently
+        // overwrite Admin A's work because loadRule re-reads v=2 and save just increments
+        // to v=3. The explicit check fires before any field update so 409 surfaces instead.
+        BusinessRule rule = existingRule();
+        rule.setVersion(1L);   // DB has been updated by Admin A
+        when(ruleRepository.findById(rule.getId())).thenReturn(Optional.of(rule));
+
+        Map<String, Object> body = new HashMap<>();
+        body.put("version", 0);   // stale client snapshot
+        body.put("ruleName", "覆盖尝试");
+
+        ApiResponse<Map<String, Object>> resp = controller.updateRule(FACTORY_ID, rule.getId(), body);
+
+        assertNotNull(resp);
+        assertEquals(Integer.valueOf(409), resp.getCode(), "must be 409 CONFLICT, not silent 200");
+        assertEquals("CONFLICT", resp.getErrorCode());
+        assertTrue(resp.getMessage().contains("数据已被其他用户修改"),
+                "message must surface the lost-update semantics: " + resp.getMessage());
+        assertTrue(resp.getMessage().contains("v=1") || resp.getMessage().contains("服务端 v=1"),
+                "message must surface server version (1): " + resp.getMessage());
+        assertTrue(resp.getMessage().contains("v=0") || resp.getMessage().contains("客户端 v=0"),
+                "message must surface client version (0): " + resp.getMessage());
+        assertEquals("请刷新页面查看最新数据后再编辑", resp.getActionHint(),
+                "4-in-1 UX (a): actionHint must direct user to refresh");
+        assertEquals("warning", resp.getSeverity(),
+                "4-in-1 UX (c): severity warning for sticky toast");
+        assertEquals("Test rule", rule.getRuleName(),
+                "ruleName must NOT be mutated when stale version blocks update");
+        // CRITICAL: save NEVER called — stale write blocked before it could overwrite
+        verify(ruleRepository, never()).save(any(BusinessRule.class));
+    }
+
+    @Test
+    @DisplayName("AUD-4: PUT with current version (req v=1, db v=1) → 200 happy path (regression)")
+    void testCurrentVersionAccepted() {
+        // Companion happy path — when client is up-to-date, save proceeds normally.
+        BusinessRule rule = existingRule();
+        rule.setVersion(1L);
+        stubFind(rule);
+
+        Map<String, Object> body = new HashMap<>();
+        body.put("version", 1);   // matches DB
+        body.put("ruleName", "新名字");
+
+        ApiResponse<Map<String, Object>> resp = controller.updateRule(FACTORY_ID, rule.getId(), body);
+
+        assertNotNull(resp);
+        assertTrue(resp.getSuccess(), "matching version → 200");
+        assertEquals("新名字", rule.getRuleName(), "field updates applied normally");
+        verify(ruleRepository).save(any(BusinessRule.class));
+    }
+
+    @Test
+    @DisplayName("AUD-4: PUT without version (null) → 200 lenient (legacy clients keep working)")
+    void testNullVersionLenientPassthrough() {
+        // AUD-4 is a Lost Update fix — when clients DON'T send version they get the
+        // pre-AUD-4 behavior (last-writer-wins). This lenient path lets AI Tool callers
+        // and curl scripts continue working without forcing a version round-trip.
+        BusinessRule rule = existingRule();
+        rule.setVersion(5L);
+        stubFind(rule);
+
+        Map<String, Object> body = new HashMap<>();
+        // intentionally no "version" key
+        body.put("ruleName", "leniency-test");
+
+        ApiResponse<Map<String, Object>> resp = controller.updateRule(FACTORY_ID, rule.getId(), body);
+
+        assertNotNull(resp);
+        assertTrue(resp.getSuccess(), "missing version field → lenient pass");
+        verify(ruleRepository).save(any(BusinessRule.class));
+    }
 }

@@ -122,6 +122,14 @@ public class ScheduledTaskController {
         // are independent code paths). PATCH semantics: only validate fields that
         // are present in the incoming patch (null = "don't touch this field").
         validateNameLengths(patch);
+        // AUD-4 wiring (PR #94 follow-up): explicit optimistic-lock check fires BEFORE
+        // service.updateTask() so JPA optimistic lock actually trips on stale client
+        // version. {@link DynamicSchedulerServiceImpl#updateTask} loads the entity itself
+        // via findById, so parallel PUTs both see "fresh" version — JPA can't observe
+        // mismatch internally. Comparing the client's submitted version against the just-
+        // loaded current version surfaces stale-writes as 409 instead of silent
+        // last-writer-wins. Null = lenient (legacy clients keep working).
+        checkVersion(id, patch);
         ScheduledTask updated = dynamicSchedulerService.updateTask(id, patch);
         return ApiResponse.success("定时任务已更新", updated);
     }
@@ -187,6 +195,42 @@ public class ScheduledTaskController {
                 .sorted()
                 .collect(Collectors.toList());
         return ApiResponse.success("查询成功", sorted);
+    }
+
+    // ==================== AUD-4 wiring (PR #94 follow-up) ====================
+
+    /**
+     * AUD-4 wiring (PR #94 follow-up): explicit optimistic-lock version check fired
+     * BEFORE dispatching to {@link DynamicSchedulerService#updateTask}.
+     *
+     * <p>PR #94 added {@code @Version Long version} to {@link ScheduledTask} + Flyway DDL,
+     * but {@link com.cretas.aims.service.cron.impl.DynamicSchedulerServiceImpl#updateTask}
+     * follows the same {@code findById → setFields → save} pattern that the other 4 Canvas
+     * PUT handlers do, and JPA optimistic-lock can't observe a stale snapshot when every
+     * load reads the current DB version. Comparing the patch body's {@code version} against
+     * the just-loaded current version surfaces stale-writes as 409 with a clear message
+     * + actionHint, before any side effect (taskRepository.save / dynamicScheduler.reload)
+     * fires. Null = lenient (legacy clients keep working).
+     *
+     * <p>This controller throws {@link BusinessException} rather than returning an
+     * {@code ApiResponse} (mirrors {@link #validateNameLengths}), so the {@code GlobalExceptionHandler}
+     * translates to 409 with the 4-in-1 UX envelope.
+     */
+    private void checkVersion(UUID id, ScheduledTask patch) {
+        if (patch == null || patch.getVersion() == null) {
+            return; // lenient: legacy clients without version field
+        }
+        ScheduledTask existing = taskRepository.findById(id)
+                .orElseThrow(() -> new BusinessException(404, "定时任务不存在: " + id));
+        Long requestVersion = patch.getVersion();
+        Long currentVersion = existing.getVersion();
+        if (!requestVersion.equals(currentVersion)) {
+            throw new BusinessException(409,
+                    "数据已被其他用户修改 (服务端 v=" + currentVersion
+                            + ", 客户端 v=" + requestVersion + ")")
+                    .withHint("请刷新页面查看最新数据后再编辑")
+                    .withSeverity("warning");
+        }
     }
 
     // ==================== Boundary validators (AUD-5 B-A3 sister sweep) ====================

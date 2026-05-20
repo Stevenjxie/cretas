@@ -89,6 +89,15 @@ public class PricingStrategyController {
         private LocalDate validFrom;
         @JsonFormat(pattern = "yyyy-MM-dd")
         private LocalDate validTo;
+        /**
+         * AUD-4 (PR #94 follow-up): client-supplied optimistic-lock version. When non-null
+         * on update, controller compares against {@code s.getVersion()} BEFORE save; mismatch
+         * → 409. PR #94 wired {@code @Version Long version} on the entity but the
+         * findById-setFields-save pattern doesn't naturally trip optimistic lock because
+         * findById always reads the current DB version. Explicit check makes the contract
+         * observable. Null = lenient (legacy clients can keep working).
+         */
+        private Long version;
     }
 
     @Data
@@ -183,6 +192,15 @@ public class PricingStrategyController {
         if (!factoryId.equals(s.getFactoryId())) {
             throw new BusinessException(403, "无权修改其他工厂的策略");
         }
+        // AUD-4 wiring (PR #94 follow-up): explicit version check fires before save so JPA
+        // optimistic lock actually trips on stale client version. PR #94 added @Version on
+        // the entity + DDL, but the controller pattern (findById → setFields → save) reads
+        // the version from DB on findById — so two parallel PUTs with stale `version:0` both
+        // refetch the current row (now v=1) and both save (each incrementing to v=2). No
+        // mismatch detected. Explicit pre-save check on the request's version makes the
+        // contract observable. Null version in body = lenient (legacy clients / no-version
+        // CRUD scripts), so we only check when client opts in by sending a version field.
+        checkVersion(req.getVersion(), s.getVersion());
         // strategy_code rename — 唯一性 check
         if (!s.getStrategyCode().equals(req.getStrategyCode())) {
             Optional<PricingStrategy> dup =
@@ -303,6 +321,40 @@ public class PricingStrategyController {
                     .withHint("请选择 5 种类型之一")
                     .withSeverity("warning")
                     .withHintTarget("strategyType");
+        }
+    }
+
+    /**
+     * AUD-4 (PR #94 follow-up): explicit optimistic-lock version check fired BEFORE save.
+     *
+     * <p>PR #94 added {@code @Version Long version} to the entity + Flyway DDL, but the
+     * controller pattern ({@code findById → setFields → save}) reads the current DB
+     * version on every load, so two parallel PUTs each see "fresh" entities — JPA never
+     * sees a stale version mismatch internally. The fix is to compare the client-supplied
+     * version (from the request body, snapshotted when the user opened the edit form)
+     * against the just-loaded DB version. If the user's snapshot is stale, somebody else
+     * already saved; return 409 instead of silently overwriting.
+     *
+     * <p>4-in-1 UX (per fool-proof Rule 1 + qa-prompt v2.4 Rule 8): specific message
+     * surfacing both versions + actionHint pointing to "refresh page" + severity warning
+     * for sticky toast + 409 status.
+     *
+     * <p>Null {@code requestVersion} = lenient: legacy clients (e.g. AI Tool callers that
+     * don't carry a version field, RBAC-test curl scripts pre-AUD-4) keep working. Once
+     * web-admin starts sending version=N in all PUTs, this pattern catches every stale-write
+     * attempt. The lenient null path is intentional: AUD-4 is a Lost Update fix, not a
+     * mandatory contract change.
+     */
+    private void checkVersion(Long requestVersion, Long currentVersion) {
+        if (requestVersion == null) {
+            return; // lenient: legacy clients without version field
+        }
+        if (!requestVersion.equals(currentVersion)) {
+            throw new BusinessException(409,
+                    "数据已被其他用户修改 (服务端 v=" + currentVersion
+                            + ", 客户端 v=" + requestVersion + ")")
+                    .withHint("请刷新页面查看最新数据后再编辑")
+                    .withSeverity("warning");
         }
     }
 

@@ -379,4 +379,93 @@ class CanvasAlertControllerTest {
         assertEquals("VALIDATION", resp.getErrorCode());
         verify(ruleRepository, never()).save(any(AlertRule.class));
     }
+
+    // ==================== AUD-4 (PR #94 follow-up): explicit version check ====================
+
+    @Test
+    @DisplayName("AUD-4: PUT with stale version (req v=0, db v=1) → 409 with refresh hint")
+    void testStaleVersionRejectedWith409() {
+        // Edge audit 2026-05-20 finding repro: two factory admins open the same rule in
+        // 2 tabs, both see v=1. Admin A saves first (DB now v=2). Admin B clicks save
+        // with stale v=1 snapshot — without this check the controller would silently
+        // overwrite Admin A's work because loadRule re-reads v=2 and save just increments
+        // to v=3. The explicit check fires before any field update so 409 surfaces instead.
+        UUID ruleId = UUID.randomUUID();
+        AlertRule existing = new AlertRule();
+        existing.setId(ruleId);
+        existing.setFactoryId("F006");
+        existing.setRuleName("现有规则");
+        existing.setVersion(1L);   // DB has been updated by Admin A
+        when(ruleRepository.findById(ruleId)).thenReturn(Optional.of(existing));
+
+        Map<String, Object> body = new HashMap<>();
+        body.put("version", 0);   // stale client snapshot (Jackson commonly deserializes as Integer)
+        body.put("ruleName", "试图覆盖的名字");
+
+        ApiResponse<Map<String, Object>> resp = controller.updateRule(
+                "F006", ruleId.toString(), body);
+
+        assertNotNull(resp);
+        assertEquals(409, resp.getCode(), "must be 409 CONFLICT, not silent 200");
+        assertTrue(resp.getMessage().contains("数据已被其他用户修改"),
+                "message must surface the lost-update semantics: " + resp.getMessage());
+        assertTrue(resp.getMessage().contains("v=1") || resp.getMessage().contains("服务端 v=1"),
+                "message must surface server version: " + resp.getMessage());
+        assertTrue(resp.getMessage().contains("v=0") || resp.getMessage().contains("客户端 v=0"),
+                "message must surface client version: " + resp.getMessage());
+        assertEquals("请刷新页面查看最新数据后再编辑", resp.getActionHint(),
+                "4-in-1 UX (a): actionHint must direct user to refresh");
+        assertEquals("warning", resp.getSeverity(),
+                "4-in-1 UX (c): severity warning for sticky toast");
+        // CRITICAL: save NEVER called — stale write blocked before it could overwrite
+        verify(ruleRepository, never()).save(any(AlertRule.class));
+    }
+
+    @Test
+    @DisplayName("AUD-4: PUT with current version (req v=1, db v=1) → 200 happy path (regression)")
+    void testCurrentVersionAccepted() {
+        // Companion happy path — when client is up-to-date, save proceeds normally.
+        // Guards against the version check false-positive blocking legitimate updates.
+        UUID ruleId = UUID.randomUUID();
+        AlertRule existing = new AlertRule();
+        existing.setId(ruleId);
+        existing.setFactoryId("F006");
+        existing.setRuleName("现有规则");
+        existing.setVersion(1L);
+        when(ruleRepository.findById(ruleId)).thenReturn(Optional.of(existing));
+        when(ruleRepository.save(any(AlertRule.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        Map<String, Object> body = new HashMap<>();
+        body.put("version", 1);   // matches DB
+        body.put("ruleName", "新名字");
+
+        ApiResponse<Map<String, Object>> resp = controller.updateRule(
+                "F006", ruleId.toString(), body);
+
+        assertNotNull(resp);
+        assertEquals(200, resp.getCode());
+        verify(ruleRepository).save(any(AlertRule.class));
+    }
+
+    @Test
+    @DisplayName("AUD-4: PATCH applies same stale-version check (PUT/PATCH parity, Rule 16)")
+    void testPatchAliasGatesStaleVersion() {
+        UUID ruleId = UUID.randomUUID();
+        AlertRule existing = new AlertRule();
+        existing.setId(ruleId);
+        existing.setFactoryId("F006");
+        existing.setRuleName("现有规则");
+        existing.setVersion(2L);
+        when(ruleRepository.findById(ruleId)).thenReturn(Optional.of(existing));
+
+        Map<String, Object> body = new HashMap<>();
+        body.put("version", 0);   // stale
+
+        ApiResponse<Map<String, Object>> resp = controller.patchRule(
+                "F006", ruleId.toString(), body);
+
+        assertEquals(409, resp.getCode(), "Rule 16: PATCH path also gates stale version");
+        assertEquals("请刷新页面查看最新数据后再编辑", resp.getActionHint());
+        verify(ruleRepository, never()).save(any(AlertRule.class));
+    }
 }

@@ -81,8 +81,22 @@ public class NotifyTemplateController {
             @PathVariable String factoryId,
             @PathVariable UUID id,
             @RequestBody NotifyTemplate body) {
+        // AUD-4 wiring (PR #94 follow-up): forward-compat optimistic-lock check.
+        //
+        // The endpoint currently returns 501 (Phase 3 sister chat will replace with
+        // real persistence). This guard documents the pattern Phase 3 must adopt:
+        //   1. findById(id) → load existing entity
+        //   2. checkVersion(body.getVersion(), existing.getVersion()) → fail 409 on stale
+        //   3. setFields(existing, body)
+        //   4. save(existing)
+        //
+        // PR #94 already added @Version Long version on NotifyTemplate entity + Flyway DDL
+        // so the column is in place. The check itself can't fire today because no row is
+        // ever loaded (501 short-circuits) — but the helper definition + this preserved
+        // comment ensure Phase 3 sister chat sees the contract before writing the real PUT.
+        // If Phase 3 ships without honoring this pattern, AUD-4 stays open on NotifyTemplate.
         return ApiResponse.error(501,
-                "NotifyTemplateController.update skeleton — Phase 3 sister chat 实施");
+                "NotifyTemplateController.update skeleton — Phase 3 sister chat 实施 (must honor AUD-4 version check; see PR #94 + this PR for pattern)");
     }
 
     @DeleteMapping("/{id}")

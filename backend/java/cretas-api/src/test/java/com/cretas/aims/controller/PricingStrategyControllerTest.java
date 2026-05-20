@@ -668,6 +668,97 @@ class PricingStrategyControllerTest {
         verify(strategyRepo, never()).save(any());
     }
 
+    // ==================== AUD-4 (PR #94 follow-up): explicit version check ====================
+
+    @Test
+    @DisplayName("AUD-4: PUT with stale version (req v=0, db v=1) → 409 with refresh hint")
+    void testStaleVersionRejectedWith409() {
+        // Repro of the edge audit 2026-05-20 finding (per project_2026_05_19_canvas_phase_2_5_qa_findings.md
+        // line 113): two factory admins open the same strategy in 2 tabs, both see v=1.
+        // Admin A saves first (DB now v=2). Admin B clicks save with stale v=1 snapshot —
+        // without this check the controller would just overwrite Admin A's work silently
+        // because findById re-reads v=2 and save just increments to v=3. The explicit
+        // check fires before save() and surfaces 409 so the user can refresh and merge.
+        StrategyRequest req = newBaseTieredRequest();
+        req.setRulesJson(tieredRulesJson(tier(0, 100, "10")));
+        req.setVersion(0L);   // stale client snapshot
+
+        PricingStrategy existing = new PricingStrategy();
+        existing.setId("test-id");
+        existing.setFactoryId("F001");
+        existing.setStrategyCode("TEST_TIERED_001");
+        existing.setVersion(1L);   // DB has been updated by Admin A
+        when(strategyRepo.findById(eq("test-id"))).thenReturn(Optional.of(existing));
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> controller.updateStrategy("F001", "test-id", req),
+                "stale version 必须 reject 不允许 silent overwrite");
+
+        assertEquals(409, ex.getCode(), "must be 409 CONFLICT, not silent 200");
+        assertTrue(ex.getMessage().contains("数据已被其他用户修改"),
+                "message must surface the lost-update semantics: " + ex.getMessage());
+        assertTrue(ex.getMessage().contains("v=1") || ex.getMessage().contains("服务端 v=1"),
+                "message must surface server version (1): " + ex.getMessage());
+        assertTrue(ex.getMessage().contains("v=0") || ex.getMessage().contains("客户端 v=0"),
+                "message must surface client version (0): " + ex.getMessage());
+        assertEquals("请刷新页面查看最新数据后再编辑", ex.getActionHint(),
+                "4-in-1 UX (a): actionHint must direct user to refresh");
+        assertEquals("warning", ex.getSeverity(),
+                "4-in-1 UX (c): severity warning for sticky toast");
+        // CRITICAL: save NEVER called — the stale write got blocked before it could overwrite
+        verify(strategyRepo, never()).save(any(PricingStrategy.class));
+    }
+
+    @Test
+    @DisplayName("AUD-4: PUT with current version (req v=1, db v=1) → 200 happy path (regression guard)")
+    void testCurrentVersionAccepted() {
+        // Companion to testStaleVersionRejectedWith409 — when the client is up-to-date,
+        // the check is a no-op and the normal save path runs. This guards against the
+        // version check accidentally blocking legitimate updates.
+        StrategyRequest req = newBaseTieredRequest();
+        req.setRulesJson(tieredRulesJson(tier(0, 100, "10")));
+        req.setVersion(1L);   // matches DB
+
+        PricingStrategy existing = new PricingStrategy();
+        existing.setId("test-id");
+        existing.setFactoryId("F001");
+        existing.setStrategyCode("TEST_TIERED_001");
+        existing.setVersion(1L);   // matching DB version
+        when(strategyRepo.findById(eq("test-id"))).thenReturn(Optional.of(existing));
+        when(strategyRepo.save(any(PricingStrategy.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        var resp = controller.updateStrategy("F001", "test-id", req);
+        assertNotNull(resp);
+        assertTrue(resp.getSuccess());
+        verify(strategyRepo).save(any(PricingStrategy.class));
+    }
+
+    @Test
+    @DisplayName("AUD-4: PUT without version (null) → 200 lenient (legacy clients keep working)")
+    void testNullVersionLenientPassthrough() {
+        // AUD-4 is a Lost Update fix — when clients DON'T send version they get the
+        // pre-AUD-4 behavior (last-writer-wins). This lenient path lets AI Tool callers
+        // and curl scripts continue working without forcing a version round-trip.
+        // Once web-admin uniformly sends version, every stale write is caught — but
+        // we don't break existing callers.
+        StrategyRequest req = newBaseTieredRequest();
+        req.setRulesJson(tieredRulesJson(tier(0, 100, "10")));
+        req.setVersion(null);   // legacy client
+
+        PricingStrategy existing = new PricingStrategy();
+        existing.setId("test-id");
+        existing.setFactoryId("F001");
+        existing.setStrategyCode("TEST_TIERED_001");
+        existing.setVersion(5L);
+        when(strategyRepo.findById(eq("test-id"))).thenReturn(Optional.of(existing));
+        when(strategyRepo.save(any(PricingStrategy.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        var resp = controller.updateStrategy("F001", "test-id", req);
+        assertNotNull(resp);
+        assertTrue(resp.getSuccess());
+        verify(strategyRepo).save(any(PricingStrategy.class));
+    }
+
     // ==================== Test helpers ====================
 
     private static StrategyRequest newBaseTieredRequest() {
