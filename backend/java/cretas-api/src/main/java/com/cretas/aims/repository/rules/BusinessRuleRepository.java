@@ -2,6 +2,8 @@ package com.cretas.aims.repository.rules;
 
 import com.cretas.aims.entity.rules.BusinessRule;
 import com.cretas.aims.entity.rules.RuleScope;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Repository;
 
@@ -45,4 +47,22 @@ public interface BusinessRuleRepository extends JpaRepository<BusinessRule, UUID
     /** Controller list endpoint — filter by scope + enabled. */
     List<BusinessRule> findByFactoryIdAndScopeAndEnabledOrderByPriorityAsc(
             String factoryId, RuleScope scope, Boolean enabled);
+
+    // ==================== AUD-9 P3: Pageable variants ====================
+    // Controller GET /canvas-rules previously returned plain List<BusinessRule>, ignoring
+    // page/size/sort query params. These Pageable variants honor pagination and sort,
+    // matching Page<T> contract used by /pricing/strategies/logs etc.
+
+    /** Page variant of findByFactoryIdOrderByPriorityAsc — sort governed by Pageable. */
+    Page<BusinessRule> findByFactoryId(String factoryId, Pageable pageable);
+
+    /** Page variant — filter by scope. */
+    Page<BusinessRule> findByFactoryIdAndScope(String factoryId, RuleScope scope, Pageable pageable);
+
+    /** Page variant — filter by enabled only. */
+    Page<BusinessRule> findByFactoryIdAndEnabled(String factoryId, Boolean enabled, Pageable pageable);
+
+    /** Page variant — filter by scope + enabled. */
+    Page<BusinessRule> findByFactoryIdAndScopeAndEnabled(
+            String factoryId, RuleScope scope, Boolean enabled, Pageable pageable);
 }

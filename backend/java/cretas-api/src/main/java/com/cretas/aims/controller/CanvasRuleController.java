@@ -19,6 +19,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
+import org.springframework.data.web.PageableDefault;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
 
@@ -58,33 +60,52 @@ public class CanvasRuleController {
     private final RuleEngine ruleEngine;
     private final SandboxedSpelEvaluator spelEvaluator;
 
-    @Operation(summary = "列出所有业务规则", description = "可按 scope 过滤")
+    /**
+     * Max length of {@code rule_name} column (BusinessRule entity {@code @Column(length=255)}).
+     * AUD-5 B-A3 sister sweep (sister of PR #48 on CanvasAlertController): explicit length
+     * pre-check produces a user-friendly 400 instead of generic 409 "数据处理异常" from
+     * PG VARCHAR(255) overflow at flush time.
+     */
+    private static final int RULE_NAME_MAX_LENGTH = 255;
+
+    /**
+     * AUD-9 P3 fix: previously this endpoint returned plain {@code List<BusinessRule>}
+     * ignoring page/size/sort query params; clients calling {@code ?page=0&size=20} got
+     * the full unpaginated array. Now honors pagination + sort. Default sort: priority ASC
+     * (matches the previous {@code OrderByPriorityAsc} ordering, so existing FE callers
+     * see the same logical order plus a Page wrapper).
+     */
+    @Operation(summary = "列出所有业务规则 (分页)", description = "可按 scope / enabled 过滤; 默认按 priority 升序")
     @RequireRole({"factory_super_admin", "permission_admin"})
     @GetMapping
-    public ApiResponse<List<Map<String, Object>>> listRules(
+    public ApiResponse<Page<Map<String, Object>>> listRules(
             @PathVariable String factoryId,
             @RequestParam(required = false) String scope,
-            @RequestParam(required = false) Boolean enabled) {
-        log.debug("GET /canvas-rules factoryId={} scope={} enabled={}", factoryId, scope, enabled);
+            @RequestParam(required = false) Boolean enabled,
+            @PageableDefault(size = 20, sort = "priority", direction = Sort.Direction.ASC) Pageable pageable) {
+        log.debug("GET /canvas-rules factoryId={} scope={} enabled={} pageable={}",
+                factoryId, scope, enabled, pageable);
+
+        // AUD-8 mitigation: cap page size at 100 to prevent abuse (size=999999 etc).
+        // Reuse existing pattern from listLogs() below.
+        Pageable effective = pageable;
+        if (pageable.getPageSize() > 100) {
+            effective = PageRequest.of(pageable.getPageNumber(), 100, pageable.getSort());
+        }
 
         RuleScope scopeEnum = parseScope(scope);
-        List<BusinessRule> rules;
+        Page<BusinessRule> page;
         if (scopeEnum != null && enabled != null) {
-            rules = ruleRepository.findByFactoryIdAndScopeAndEnabledOrderByPriorityAsc(
-                    factoryId, scopeEnum, enabled);
+            page = ruleRepository.findByFactoryIdAndScopeAndEnabled(factoryId, scopeEnum, enabled, effective);
         } else if (scopeEnum != null) {
-            rules = ruleRepository.findByFactoryIdAndScopeOrderByPriorityAsc(factoryId, scopeEnum);
+            page = ruleRepository.findByFactoryIdAndScope(factoryId, scopeEnum, effective);
         } else if (enabled != null) {
-            rules = ruleRepository.findByFactoryIdAndEnabledOrderByPriorityAsc(factoryId, enabled);
+            page = ruleRepository.findByFactoryIdAndEnabled(factoryId, enabled, effective);
         } else {
-            rules = ruleRepository.findByFactoryIdOrderByPriorityAsc(factoryId);
+            page = ruleRepository.findByFactoryId(factoryId, effective);
         }
 
-        List<Map<String, Object>> data = new ArrayList<>();
-        for (BusinessRule r : rules) {
-            data.add(serializeRule(r));
-        }
-        return ApiResponse.success("操作成功", data);
+        return ApiResponse.success("操作成功", page.map(this::serializeRule));
     }
 
     @Operation(summary = "新建业务规则")
@@ -99,6 +120,18 @@ public class CanvasRuleController {
         if (ruleCode == null || ruleCode.isBlank()) {
             return ApiResponse.errorWithCode(400, "VALIDATION",
                     "ruleCode 必填", "请填写规则代码 (factoryId 内唯一)", "warning");
+        }
+        // AUD-5 B-A3 sister sweep fix: explicit length check on ruleName produces a
+        // user-friendly 400 instead of generic 409 "数据处理异常" from PG VARCHAR(255)
+        // overflow at flush time. Mirrors CanvasAlertController (PR #48).
+        // ruleName falls back to ruleCode when omitted (see builder below); only validate
+        // when explicitly provided. ruleCode itself is @Column(length=100) — JPA will
+        // reject overflow but that path is rare (clients usually pick short codes).
+        String ruleName = stringField(body, "ruleName");
+        if (ruleName != null && ruleName.length() > RULE_NAME_MAX_LENGTH) {
+            return ApiResponse.errorWithCode(400, "VALIDATION",
+                    "规则名称最长 " + RULE_NAME_MAX_LENGTH + " 字符 (当前 " + ruleName.length() + ")",
+                    "请使用更短的规则名称", "warning");
         }
         String scopeStr = stringField(body, "scope");
         if (scopeStr == null || scopeStr.isBlank()) {
@@ -149,7 +182,7 @@ public class CanvasRuleController {
         BusinessRule rule = BusinessRule.builder()
                 .factoryId(factoryId)
                 .ruleCode(ruleCode)
-                .ruleName(stringField(body, "ruleName", ruleCode))
+                .ruleName(ruleName != null ? ruleName : ruleCode)
                 .scope(scopeEnum)
                 .conditionSpel(conditionSpel)
                 .actionType(actionTypeEnum)
@@ -190,7 +223,17 @@ public class CanvasRuleController {
             }
         }
         if (body.containsKey("ruleName")) {
-            rule.setRuleName(stringField(body, "ruleName"));
+            // AUD-5 B-A3 sister sweep fix: length check produces specific 400 before
+            // PG VARCHAR(255) overflow. PATCH semantics: null = no change.
+            String newName = stringField(body, "ruleName");
+            if (newName != null && newName.length() > RULE_NAME_MAX_LENGTH) {
+                return ApiResponse.errorWithCode(400, "VALIDATION",
+                        "规则名称最长 " + RULE_NAME_MAX_LENGTH + " 字符 (当前 " + newName.length() + ")",
+                        "请使用更短的规则名称", "warning");
+            }
+            if (newName != null) {
+                rule.setRuleName(newName);
+            }
         }
         if (body.containsKey("scope")) {
             String raw = stringField(body, "scope");
