@@ -17,7 +17,7 @@
  *   - AI Tool wrapping (PurchaseRequisitionTool)
  *   - Canvas-Workflow ApprovalChainConfig integration
  */
-import { get, post } from './request';
+import { get, post, del } from './request';
 import type { ApiResponse } from '@/types/api';
 
 // ============================================================================
@@ -184,6 +184,26 @@ export function convertToPO(
   return post<PurchaseOrderSummary>(
     `/${factoryId}/purchase-requisitions/${requisitionId}/convert-to-po`,
     { supplierId },
+  );
+}
+
+/**
+ * 删除请购单草稿 (仅 DRAFT 可删) — Bug #6 (PR #96 backend, 2026-05-20).
+ *
+ * 状态机约束: 仅 DRAFT 状态可删 (软删除 via deletedAt).
+ * 非 DRAFT 返 400 + actionHint 引导用户走 reject (驳回) 流程.
+ * 仅 requester 本人可删 (一致于 submitRequisition).
+ *
+ * @throws 400 if 非 DRAFT 状态
+ * @throws 403 if 跨工厂或非 requester
+ * @throws 404 if 不存在
+ */
+export function deleteRequisition(
+  factoryId: string,
+  requisitionId: string,
+): Promise<ApiResponse<void>> {
+  return del<void>(
+    `/${factoryId}/purchase-requisitions/${requisitionId}`,
   );
 }
 

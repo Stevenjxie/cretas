@@ -24,6 +24,7 @@ import {
   approveRequisition,
   rejectRequisition,
   convertToPO,
+  deleteRequisition,
   REQUISITION_STATUS_MAP,
   type PurchaseRequisition,
   type PurchaseRequisitionStatus,
@@ -36,6 +37,7 @@ const permissionStore = usePermissionStore();
 
 const factoryId = computed(() => authStore.factoryId);
 const requisitionId = computed(() => route.params.id as string);
+const currentUserId = computed(() => authStore.user?.id ?? null);
 const canWrite = computed(() => permissionStore.canWrite('procurement'));
 
 const loading = ref(false);
@@ -43,6 +45,15 @@ const submitting = ref(false);
 const requisition = ref<PurchaseRequisition | null>(null);
 const notFound = ref(false);
 const notFoundMessage = ref('');
+
+// Bug #6 (PR #96): 仅 DRAFT + requester 本人 可删 (backend 同步 enforce)
+const canDelete = computed(
+  () =>
+    canWrite.value &&
+    requisition.value?.status === 'DRAFT' &&
+    currentUserId.value !== null &&
+    requisition.value?.requesterId === currentUserId.value,
+);
 
 interface Supplier {
   id: string;
@@ -254,6 +265,38 @@ function goPO() {
   }
 }
 
+async function handleDelete() {
+  if (!requisition.value || submitting.value) return;
+  const r = requisition.value;
+  // Fool-proof Rule 2: dialog 含单号 + 行数; Rule 5: backend 仅 DRAFT + requester 本人可删
+  try {
+    await ElMessageBox.confirm(
+      `确认删除请购单 ${r.requisitionNumber} (${lineCount.value} 行明细)?\n\n此操作不可恢复.`,
+      '删除确认',
+      {
+        type: 'warning',
+        confirmButtonText: '删除',
+        cancelButtonText: '取消',
+      },
+    );
+  } catch {
+    return;
+  }
+  submitting.value = true;
+  try {
+    const res = await deleteRequisition(factoryId.value, r.id);
+    if (res?.success) {
+      ElMessage.success('请购单已删除');
+      router.back();
+    }
+  } catch (e) {
+    // Interceptor 已展示 sticky toast (含 backend actionHint); dedupe fallback log
+    if (e !== 'cancel') console.error('[删除失败]', e);
+  } finally {
+    submitting.value = false;
+  }
+}
+
 function goBack() {
   router.back();
 }
@@ -293,6 +336,14 @@ function goBack() {
               @click="handleSubmit"
             >
               提交审批
+            </el-button>
+            <el-button
+              v-if="canDelete"
+              type="danger"
+              :loading="submitting"
+              @click="handleDelete"
+            >
+              删除
             </el-button>
             <el-button
               v-if="requisition.status === 'PENDING_APPROVAL' && canWrite"

@@ -14,10 +14,11 @@ import { ref, computed, onMounted } from 'vue';
 import { useRouter } from 'vue-router';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
-import { ElMessage } from 'element-plus';
+import { ElMessage, ElMessageBox } from 'element-plus';
 import { Plus, Refresh } from '@element-plus/icons-vue';
 import {
   listRequisitions,
+  deleteRequisition,
   REQUISITION_STATUS_MAP,
   type PurchaseRequisition,
   type PurchaseRequisitionStatus,
@@ -29,6 +30,7 @@ const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
 
 const factoryId = computed(() => authStore.factoryId);
+const currentUserId = computed(() => authStore.user?.id ?? null);
 const canWrite = computed(() => permissionStore.canWrite('procurement'));
 
 const tableData = ref<PurchaseRequisition[]>([]);
@@ -91,6 +93,35 @@ function onCreated() {
   ElMessage.success('请购单已创建, 状态为草稿. 请在"我的请购"或本页编辑后提交审批.');
   pagination.value.page = 1;
   loadData();
+}
+
+async function handleDelete(row: PurchaseRequisition) {
+  // Fool-proof Rule 2: dialog 含单号 + 行数; Rule 5: backend 仅 DRAFT + requester 本人可删
+  const lines = Array.isArray(row.requestedItems) ? row.requestedItems.length : 0;
+  try {
+    await ElMessageBox.confirm(
+      `确认删除请购单 ${row.requisitionNumber} (${lines} 行明细)?\n\n此操作不可恢复.`,
+      '删除确认',
+      {
+        type: 'warning',
+        confirmButtonText: '删除',
+        cancelButtonText: '取消',
+      },
+    );
+  } catch {
+    return;
+  }
+  if (!factoryId.value) return;
+  try {
+    const res = await deleteRequisition(factoryId.value, row.id);
+    if (res?.success) {
+      ElMessage.success('请购单已删除');
+      await loadData();
+    }
+  } catch (e) {
+    // Interceptor 已展示 sticky toast (含 backend actionHint); dedupe fallback log
+    if (e !== 'cancel') console.error('[删除失败]', e);
+  }
 }
 </script>
 
@@ -200,10 +231,19 @@ function onCreated() {
             {{ row.createdAt ? String(row.createdAt).replace('T', ' ').slice(0, 16) : '-' }}
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="120" fixed="right" align="center">
+        <el-table-column label="操作" width="160" fixed="right" align="center">
           <template #default="{ row }">
             <el-button type="primary" link size="small" @click="goDetail(row.id)">
               详情
+            </el-button>
+            <el-button
+              v-if="row.status === 'DRAFT' && canWrite && currentUserId !== null && row.requesterId === currentUserId"
+              type="danger"
+              link
+              size="small"
+              @click="handleDelete(row)"
+            >
+              删除
             </el-button>
           </template>
         </el-table-column>
