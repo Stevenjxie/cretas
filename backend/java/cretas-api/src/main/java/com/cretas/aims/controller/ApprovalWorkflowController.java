@@ -9,6 +9,8 @@ import com.cretas.aims.entity.config.ApprovalWorkflow;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.exception.ResourceNotFoundException;
 import com.cretas.aims.service.ApprovalWorkflowService;
+import com.cretas.aims.service.workflow.DecisionTypeMetadata;
+import com.cretas.aims.service.workflow.DecisionTypeMetadataRegistry;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -41,6 +43,7 @@ import java.util.Map;
 public class ApprovalWorkflowController {
 
     private final ApprovalWorkflowService approvalWorkflowService;
+    private final DecisionTypeMetadataRegistry decisionTypeMetadataRegistry;
 
     // ==================== CRUD ====================
 
@@ -182,6 +185,23 @@ public class ApprovalWorkflowController {
     @Operation(summary = "获取所有决策类型 (复用 ApprovalChainConfig.DecisionType enum)")
     public ApiResponse<DecisionType[]> getDecisionTypes(@PathVariable String factoryId) {
         return ApiResponse.success(DecisionType.values());
+    }
+
+    /**
+     * Sprint 6 W3-B (2026-05-19): 返回 32 个 DecisionType 的完整元数据 — 中文名/分类/
+     * 默认审批角色/moduleCode/wired flag. Admin UI dropdown 直接渲染中文标签 +
+     * 显示"已接入业务"badge.
+     *
+     * <p>取代原 {@link #getDecisionTypes} 仅返 enum string 的方式 (admin UI 早期
+     * hardcode 12 个中文 label, Sprint 5 PR #55 H 扩到 32 后 admin UI 漏 20 个).
+     */
+    @GetMapping("/decision-types-meta")
+    @Operation(summary = "获取所有决策类型完整元数据 (Sprint 6 W3-B — 中文名/分类/默认角色)")
+    public ApiResponse<List<DecisionTypeMetadata>> getDecisionTypesMetadata(@PathVariable String factoryId) {
+        log.debug("获取 DecisionType 元数据 - factoryId={}, count={}, wired={}",
+                factoryId, decisionTypeMetadataRegistry.size(), decisionTypeMetadataRegistry.getWiredCount());
+        // 按 enum declaration order 输出 (EnumMap 保 enum order), admin UI 分类 group-by category
+        return ApiResponse.success(List.copyOf(decisionTypeMetadataRegistry.getAll().values()));
     }
 
     // ==================== Wire → entity mappers (Rule 17.1 pattern) ====================

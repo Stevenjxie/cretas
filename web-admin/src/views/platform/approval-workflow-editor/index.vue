@@ -13,15 +13,32 @@
           <el-select
             v-model="selectedDecisionType"
             placeholder="选择决策类型"
-            style="width: 200px"
+            style="width: 260px"
+            filterable
+            :loading="decisionTypeMetaLoading"
             @change="onDecisionTypeChange"
           >
-            <el-option
-              v-for="dt in decisionTypeOptions"
-              :key="dt.value"
-              :label="dt.label"
-              :value="dt.value"
-            />
+            <!-- Sprint 6 W3-B (2026-05-19): 改 dynamic 32 enum, 按 category group + wired badge -->
+            <el-option-group
+              v-for="(items, catLabel) in groupedDecisionTypeOptions"
+              :key="catLabel"
+              :label="catLabel"
+            >
+              <el-option
+                v-for="dt in items"
+                :key="dt.decisionType"
+                :label="`${dt.chineseName} (${dt.decisionType})`"
+                :value="dt.decisionType"
+              >
+                <span style="float: left">{{ dt.chineseName }}</span>
+                <span
+                  style="float: right; font-size: 11px; margin-left: 8px"
+                  :style="{ color: dt.wired ? '#67C23A' : '#909399' }"
+                >
+                  {{ dt.wired ? '已接入' : '未接入' }}
+                </span>
+              </el-option>
+            </el-option-group>
           </el-select>
           <el-select
             v-model="selectedWorkflowId"
@@ -178,6 +195,7 @@ import ConditionRulesPanel from './components/ConditionRulesPanel.vue'
 import type { SimulatorInput } from './composables/useSimulator'
 import {
   getDecisionTypes,
+  getDecisionTypesMetadata,
   getWorkflowsByDecisionType,
   getWorkflowById,
   createWorkflow,
@@ -191,6 +209,7 @@ import {
   type ApprovalWorkflowEdge as ApiEdge,
   type CreateWorkflowRequest,
   type DecisionType,
+  type DecisionTypeMetadataDTO,
   type NodeType,
 } from '@/api/approvalWorkflow'
 
@@ -354,20 +373,37 @@ const nodeSchemas: PaletteSchema[] = [
   { type: 'end',       displayName: '结束',   description: 'APPROVED / REJECTED',    icon: '■', color: '#F56C6C' },
 ]
 
-const decisionTypeOptions: Array<{ value: DecisionType; label: string }> = [
-  { value: 'QUALITY_RELEASE',         label: 'QUALITY_RELEASE 质检放行' },
-  { value: 'FORCE_INSERT',            label: 'FORCE_INSERT 强制插单' },
-  { value: 'QUALITY_EXCEPTION',       label: 'QUALITY_EXCEPTION 质检特批' },
-  { value: 'BATCH_STATUS_CHANGE',     label: 'BATCH_STATUS_CHANGE 批次状态变更' },
-  { value: 'SUPPLIER_APPROVAL',       label: 'SUPPLIER_APPROVAL 供应商准入' },
-  { value: 'SUPPLIER_STATUS_CHANGE',  label: 'SUPPLIER_STATUS_CHANGE 供应商状态' },
-  { value: 'MATERIAL_DISPOSAL',       label: 'MATERIAL_DISPOSAL 物料处置' },
-  { value: 'PRODUCTION_PLAN_CHANGE',  label: 'PRODUCTION_PLAN_CHANGE 生产计划变更' },
-  { value: 'EQUIPMENT_STATUS_CHANGE', label: 'EQUIPMENT_STATUS_CHANGE 设备状态' },
-  { value: 'PURCHASE_ORDER_APPROVAL', label: 'PURCHASE_ORDER_APPROVAL 采购订单审批' },
-  { value: 'SALES_ORDER_APPROVAL',    label: 'SALES_ORDER_APPROVAL 销售订单审批' },
-  { value: 'CUSTOM',                  label: 'CUSTOM 自定义' },
-]
+/**
+ * Sprint 6 W3-B (2026-05-19): DecisionType dropdown 从后端 metadata endpoint 动态加载,
+ * 取代之前 hardcode 的 12 个选项 (Sprint 5 PR #55 H 扩 enum 14→32 后, hardcode 漏 20 项).
+ *
+ * onMounted 时 fetch 一次, 各 decisionType 按 category 分组渲染. wired flag 用 badge 显示.
+ */
+const decisionTypeMetadata = ref<DecisionTypeMetadataDTO[]>([])
+const decisionTypeMetaLoading = ref(false)
+
+/** 后端 Category enum → 中文 group label */
+const CATEGORY_LABELS: Record<string, string> = {
+  PRODUCTION:         '生产 / 工序',
+  QUALITY_MATERIAL:   '质量 / 物料',
+  PURCHASE_SUPPLIER:  '采购 / 供应商',
+  SALES_CUSTOMER:     '销售 / 客户',
+  FINANCE_VOUCHER:    '财务 / 凭证',
+  HR_WAGE:            '人事 / 工资',
+  WAREHOUSE_TRANSFER: '仓储 / 调拨',
+  OTHER:              '其他',
+}
+
+/** 按 category group, label 为中文 group 名, value 为该组 DecisionTypeMetadataDTO[] */
+const groupedDecisionTypeOptions = computed<Record<string, DecisionTypeMetadataDTO[]>>(() => {
+  const grouped: Record<string, DecisionTypeMetadataDTO[]> = {}
+  for (const dt of decisionTypeMetadata.value) {
+    const catLabel = CATEGORY_LABELS[dt.category] ?? dt.category
+    if (!grouped[catLabel]) grouped[catLabel] = []
+    grouped[catLabel].push(dt)
+  }
+  return grouped
+})
 
 // ==================== Computed ====================
 
@@ -742,10 +778,45 @@ async function onWorkflowSelectionChange(id: string | undefined) {
 
 // ==================== Lifecycle ====================
 
+/**
+ * Sprint 6 W3-B (2026-05-19): 拉取 DecisionType 完整元数据 (32 个), 填充 dropdown.
+ * 失败时降级到只显示当前选中的 decisionType (不阻塞编辑器加载, per 防呆 Rule 5 dead-end 改导航).
+ */
+async function loadDecisionTypeMetadata() {
+  if (!factoryId.value) return
+  decisionTypeMetaLoading.value = true
+  try {
+    const res = await getDecisionTypesMetadata(factoryId.value)
+    if (res.success && Array.isArray(res.data)) {
+      decisionTypeMetadata.value = res.data
+    } else {
+      console.warn('[approval-workflow-editor] DecisionType metadata 加载失败:', res.message)
+      // 防呆 Rule 5: 不 dead-end — 至少给当前 selected 一个 fallback entry, 让 dropdown 不为空.
+      decisionTypeMetadata.value = [{
+        decisionType: selectedDecisionType.value,
+        chineseName: selectedDecisionType.value,
+        description: '(后端元数据加载失败, 仅显示当前选中)',
+        category: 'OTHER',
+        defaultApproverRoles: [],
+        moduleCode: null,
+        wired: false,
+      }]
+    }
+  } catch (e) {
+    console.warn('[approval-workflow-editor] DecisionType metadata 请求异常', e)
+  } finally {
+    decisionTypeMetaLoading.value = false
+  }
+}
+
 onMounted(async () => {
   if (!factoryId.value) return
   try {
-    await getDecisionTypes(factoryId.value)
+    // Sprint 6 W3-B: 并行触发 metadata + 旧 enum endpoint (旧 endpoint 仍 ping 一下保 backwards compat)
+    await Promise.all([
+      loadDecisionTypeMetadata(),
+      getDecisionTypes(factoryId.value).catch(() => undefined),
+    ])
     await refreshWorkflowList()
   } catch (e) {
     console.warn('[approval-workflow-editor] 后端未就绪或网络异常', e)
