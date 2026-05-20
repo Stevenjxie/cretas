@@ -135,6 +135,8 @@ public class Attachment extends BaseEntity {
         SALES_ORDER,
         /** Sprint 6 W3-A — 库存批次附件 (入库单据 / 抄码单 / 质检证明). */
         INVENTORY,
+        /** Sprint 6 W4-C — ECN 工程变更通知附件 (变更说明 / 影响分析报告 / 客户确认书). */
+        ECN,
         GENERIC
     }
 

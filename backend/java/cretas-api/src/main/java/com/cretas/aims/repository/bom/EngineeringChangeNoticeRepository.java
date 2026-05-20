@@ -1,7 +1,10 @@
 package com.cretas.aims.repository.bom;
 
 import com.cretas.aims.entity.bom.EngineeringChangeNotice;
+import com.cretas.aims.entity.bom.EngineeringChangeNotice.EcnReason;
 import com.cretas.aims.entity.bom.EngineeringChangeNotice.EcnStatus;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -54,4 +57,21 @@ public interface EngineeringChangeNoticeRepository extends JpaRepository<Enginee
     List<EngineeringChangeNotice> findDueForActivation(@Param("factoryId") String factoryId,
                                                         @Param("status") EcnStatus status,
                                                         @Param("asOf") LocalDate asOf);
+
+    /**
+     * Sprint 6 W4-C — Paginated list of ECNs with optional status / reason filters.
+     *
+     * <p>使用 {@code CAST(:param AS string)} pattern 防 PG could-not-determine-data-type error
+     * (per .claude/rules/database-entity-sync.md). null 参数 = 不过滤.
+     */
+    @Query("SELECT e FROM EngineeringChangeNotice e " +
+           "WHERE e.factoryId = :factoryId " +
+           "AND (CAST(:status AS string) IS NULL OR e.status = :status) " +
+           "AND (CAST(:reason AS string) IS NULL OR e.reason = :reason) " +
+           "AND (CAST(:bomRecipeId AS string) IS NULL OR e.bomRecipeId = :bomRecipeId)")
+    Page<EngineeringChangeNotice> findByFactoryWithFilters(@Param("factoryId") String factoryId,
+                                                            @Param("status") EcnStatus status,
+                                                            @Param("reason") EcnReason reason,
+                                                            @Param("bomRecipeId") String bomRecipeId,
+                                                            Pageable pageable);
 }
