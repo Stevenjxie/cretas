@@ -94,10 +94,10 @@ const TAB_DEFS: TabDef[] = [
   // 1 — real
   { key: 'tracking', label: '跟踪记录',
     component: defineAsyncComponent(() => import('./detail/tabs/TrackingTab.vue')) },
-  // 2-6 — defer (R5 → tracking)
+  // 2 — real (Sprint 6 W2-C-1: 微信手工补录 backend + UI)
   { key: 'wechat', label: '微信记录',
-    status: '暂未对接企微 API', workaround: '当前请用「跟踪记录」tab 手工补录',
-    actionText: '去跟踪记录', actionTabKey: 'tracking' },
+    component: defineAsyncComponent(() => import('./detail/tabs/WechatRecordsTab.vue')) },
+  // 3-6 — defer (R5 → tracking)
   { key: 'call', label: '通话记录',
     status: '暂未对接呼叫中心', workaround: '当前请用「跟踪记录」tab 手工补录',
     actionText: '去跟踪记录', actionTabKey: 'tracking' },
