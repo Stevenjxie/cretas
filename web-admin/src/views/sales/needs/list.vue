@@ -3,6 +3,7 @@ import { ref, onMounted, reactive } from 'vue';
 import { useRouter } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Plus } from '@element-plus/icons-vue';
+import { handleCatchError } from '@/utils/errorToast';
 import {
   listSalesNeeds,
   createSalesNeed,
@@ -48,8 +49,10 @@ async function load(): Promise<void> {
     });
     list.value = res?.data?.content ?? [];
     total.value = res?.data?.totalElements ?? 0;
-  } catch {
-    ElMessage.error('加载失败');
+  } catch (e) {
+    // UX polish (2026-05-20): interceptor already shows specific 4xx/5xx message;
+    // only fire fallback for pure network errors.
+    handleCatchError(e, '加载失败,请检查网络');
   } finally {
     loading.value = false;
   }
@@ -82,9 +85,10 @@ async function submitCreate(): Promise<void> {
     dialogVisible.value = false;
     page.value = 0;
     load();
-  } catch (e: unknown) {
-    const msg = e instanceof Error ? e.message : '创建失败';
-    ElMessage.error(msg);
+  } catch (e) {
+    // UX polish (2026-05-20): interceptor surfaces backend message + actionHint;
+    // local fallback only fires when no HTTP status (pure network error).
+    handleCatchError(e, '创建失败,请检查网络');
   } finally {
     submitting.value = false;
   }

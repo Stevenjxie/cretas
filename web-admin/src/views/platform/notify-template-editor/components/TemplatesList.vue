@@ -27,9 +27,22 @@
     </el-alert>
 
     <div class="toolbar">
-      <el-button type="primary" :icon="Plus" disabled title="Phase 3 即将上线">
-        新建模板
-      </el-button>
+      <!-- UX polish (2026-05-20): wrap disabled button in el-tooltip so users get
+           a styled hint on hover/focus instead of relying on browser native title
+           (which has delayed/inconsistent behavior across browsers + no styling). -->
+      <el-tooltip
+        content="Phase 3 上线后开放新建; 当前可使用「测试发送」验证已存在模板"
+        placement="top"
+        :show-after="200"
+      >
+        <!-- el-tooltip needs a non-disabled wrapper to receive hover events on
+             a disabled child element. Use span. -->
+        <span>
+          <el-button type="primary" :icon="Plus" disabled>
+            新建模板
+          </el-button>
+        </span>
+      </el-tooltip>
       <el-input
         v-model="search"
         placeholder="搜索模板编码 / 标题"

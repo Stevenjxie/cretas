@@ -110,8 +110,11 @@ async function loadFactoryOptions() {
     if (response.success && response.data) {
       factoryOptions.value = response.data;
     }
-  } catch {
-    ElMessage.error('加载工厂选项失败');
+  } catch (e) {
+    // UX polish (2026-05-20): interceptor toast already covers 4xx/5xx; suppress
+    // double toast for this background load — factory dropdown empty is a soft
+    // failure (user can still operate within their default factory).
+    console.error('[加载工厂选项失败]', e);
   }
 }
 

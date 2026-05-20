@@ -18,6 +18,7 @@ import { usePermissionStore } from '@/store/modules/permission';
 import { get, post, put } from '@/api/request';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Plus, Refresh, View } from '@element-plus/icons-vue';
+import { handleCatchError } from '@/utils/errorToast';
 import type { TableRow } from '@/types/api';
 
 const authStore = useAuthStore();
@@ -64,8 +65,10 @@ async function loadData() {
       tableData.value = data.content || [];
       pagination.value.total = data.totalElements || 0;
     }
-  } catch {
-    ElMessage.error('加载物料需求单列表失败');
+  } catch (e) {
+    // UX polish (2026-05-20): interceptor handles 4xx/5xx with backend message;
+    // fallback only for network errors (避免双 toast).
+    handleCatchError(e, '加载物料需求单列表失败,请检查网络');
   } finally {
     loading.value = false;
   }

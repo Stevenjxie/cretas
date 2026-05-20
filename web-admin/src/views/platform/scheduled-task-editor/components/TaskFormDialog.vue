@@ -123,7 +123,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, onMounted } from 'vue'
+import { ref, computed, watch, onMounted, nextTick } from 'vue'
 import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
 import {
   createScheduledTask,
@@ -195,7 +195,7 @@ const rules: FormRules = {
 
 watch(
   () => props.editTask,
-  (t) => {
+  async (t) => {
     if (t) {
       form.value = {
         taskCode: t.taskCode,
@@ -216,6 +216,11 @@ watch(
       factoryIdInput.value = ''
     }
     presetPick.value = ''
+    // UX polish (2026-05-20): clear validation residuals from previous open.
+    // Cron expression validation can leave stale red error if user closed dialog
+    // after a bad cron expression error then re-opened for a new task.
+    await nextTick()
+    formRef.value?.clearValidate()
   },
   { immediate: true },
 )

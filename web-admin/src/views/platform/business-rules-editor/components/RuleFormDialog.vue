@@ -120,7 +120,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch, computed } from 'vue'
+import { ref, watch, computed, nextTick } from 'vue'
 import { ElMessage } from 'element-plus'
 import type { FormInstance, FormRules } from 'element-plus'
 import {
@@ -178,9 +178,13 @@ const dialogTitle = computed(() => {
 })
 
 // Sync incoming prop -> form
+// B-BR3 UX polish (2026-05-20): clear validation residuals from previous open
+// (e.g. user closed dialog after a 409 dup-ruleCode validation error — re-opening
+// shouldn't show stale red errors before user has even typed anything). Uses
+// nextTick because formRef binds AFTER the watch runs on dialog mount.
 watch(
   () => [props.visible, props.rule],
-  () => {
+  async () => {
     if (!props.visible) return
     if (props.rule) {
       form.value = {
@@ -202,6 +206,9 @@ watch(
       form.value = emptyForm()
       actionConfigJsonText.value = JSON.stringify(actionConfigDefault('LOG'), null, 2)
     }
+    // Wait for DOM update so formRef is bound, then clear validation residuals.
+    await nextTick()
+    formRef.value?.clearValidate()
   },
   { immediate: true },
 )

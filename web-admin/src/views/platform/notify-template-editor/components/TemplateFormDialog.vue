@@ -143,7 +143,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, nextTick } from 'vue'
 import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
 import {
   createTemplate,
@@ -276,7 +276,7 @@ function renderLocal(text: string, params: Record<string, unknown>): string {
 
 watch(
   () => [props.open, props.template, props.mode],
-  () => {
+  async () => {
     if (!props.open) return
     if (props.template) {
       form.value = {
@@ -303,6 +303,12 @@ watch(
     testSendParamsText.value = '{}'
     previewTitle.value = ''
     previewBody.value = ''
+    // UX polish (2026-05-20): clear validation residuals from previous open.
+    // Without this, a user who hit a 409 (dup templateCode) on first attempt,
+    // closed the dialog, then re-opened it for a fresh create, would see
+    // stale red error markers before typing anything.
+    await nextTick()
+    formRef.value?.clearValidate()
   },
   { immediate: true },
 )

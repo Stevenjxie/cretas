@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue';
-import { ElMessage } from 'element-plus';
+import { handleCatchError } from '@/utils/errorToast';
 import { fetchMonthlyReport, type MonthlyReport } from '@/api/salesPreset';
 
 const data = ref<MonthlyReport | null>(null);
@@ -13,8 +13,9 @@ async function load(): Promise<void> {
   try {
     const res = await fetchMonthlyReport(selectedMonth.value);
     data.value = res?.data;
-  } catch {
-    ElMessage.error('加载失败');
+  } catch (e) {
+    // UX polish (2026-05-20): interceptor toast already covers 4xx/5xx.
+    handleCatchError(e, '加载失败,请检查网络');
   } finally {
     loading.value = false;
   }
