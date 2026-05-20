@@ -202,6 +202,30 @@ class SandboxedSpelEvaluatorTest {
                 () -> evaluator.validateSyntax("#order['amount'] > new java.lang.Integer(0)"));
     }
 
+    @Test
+    @DisplayName("validateSyntax: binary operators on null variables accepted (EL1030E swallow)")
+    void testValidateSyntaxAcceptsBinaryOpOnNullVars() {
+        // Layer 2 dry-run runs with no variables bound; "#qty + #price" evaluates to
+        // null + null → EL1030E "is not supported between objects of type 'null' and 'null'".
+        // Syntax itself is valid — runtime binds numeric values (e.g. FormulaEngine.evaluate
+        // passes variables map with #qty and #price set). Must be swallowed.
+        assertDoesNotThrow(() -> evaluator.validateSyntax("#qty + #price"));
+        assertDoesNotThrow(() -> evaluator.validateSyntax("#qty * #price"));
+        assertDoesNotThrow(() -> evaluator.validateSyntax("#qty - #price"));
+        assertDoesNotThrow(() -> evaluator.validateSyntax("#qty / #price"));
+        assertDoesNotThrow(() -> evaluator.validateSyntax("#a + #b - #c"));
+    }
+
+    @Test
+    @DisplayName("validateSyntax: binary-op swallow does not bypass security")
+    void testValidateSyntaxBinaryOpDoesNotBypassSecurity() {
+        // Adding "is not supported between" to swallow list MUST NOT open T()/new escape.
+        assertThrows(SpelEvaluationFailure.class,
+                () -> evaluator.validateSyntax("T(java.lang.Runtime).getRuntime() + #x"));
+        assertThrows(SpelEvaluationFailure.class,
+                () -> evaluator.validateSyntax("#x + new java.lang.Integer(0)"));
+    }
+
     // ==================== DoS guards (Layer 0) ====================
 
     @Test
