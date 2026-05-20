@@ -45,6 +45,30 @@ public interface QualityReturnOrderRepository extends JpaRepository<QualityRetur
             Pageable pageable);
 
     /**
+     * Sprint 6 W2-B (RBAC DataScope) — {@link #findByFilters} + createdBy IN list.
+     * Mirrors filters; adds {@code AND r.createdBy IN :createdByList}.
+     * Caller resolves chain (single user for SELF, chain for DEPT/SELF_AND_BELOW).
+     */
+    @Query("SELECT r FROM QualityReturnOrder r WHERE r.factoryId = :factoryId " +
+            "AND (CAST(:status AS string) IS NULL OR r.status = :status) " +
+            "AND (CAST(:targetType AS string) IS NULL OR r.targetType = :targetType) " +
+            "AND (CAST(:qualityInspectionId AS string) IS NULL OR r.qualityInspectionId = :qualityInspectionId) " +
+            "AND (CAST(:targetId AS string) IS NULL OR r.targetId = :targetId) " +
+            "AND (:fromDate IS NULL OR r.createdAt >= :fromDate) " +
+            "AND (:toDate IS NULL OR r.createdAt <= :toDate) " +
+            "AND r.createdBy IN :createdByList")
+    Page<QualityReturnOrder> findByFiltersAndCreatedByIn(
+            @Param("factoryId") String factoryId,
+            @Param("status") QualityReturnStatus status,
+            @Param("targetType") QualityReturnTargetType targetType,
+            @Param("qualityInspectionId") String qualityInspectionId,
+            @Param("targetId") String targetId,
+            @Param("fromDate") LocalDateTime fromDate,
+            @Param("toDate") LocalDateTime toDate,
+            @Param("createdByList") java.util.Collection<Long> createdByList,
+            Pageable pageable);
+
+    /**
      * 计算当日 return_number 序号 (用于自动生成 QR-YYYYMMDD-NNN).
      * 返回当日已生成的退回单数, 调用方 +1 即可得到下一个序号.
      */

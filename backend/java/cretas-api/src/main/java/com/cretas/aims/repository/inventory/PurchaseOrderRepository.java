@@ -18,6 +18,20 @@ public interface PurchaseOrderRepository extends JpaRepository<PurchaseOrder, St
 
     Page<PurchaseOrder> findByFactoryIdOrderByCreatedAtDesc(String factoryId, Pageable pageable);
 
+    /**
+     * Sprint 6 W2-B (RBAC DataScope SELF) — 仅查当前用户创建的采购单.
+     * Used by {@link com.cretas.aims.service.inventory.PurchaseService#getPurchaseOrders} when
+     * {@link com.cretas.aims.security.DataScopeContext#current()} scope is SELF.
+     */
+    Page<PurchaseOrder> findByFactoryIdAndCreatedByOrderByCreatedAtDesc(
+            String factoryId, Long createdBy, Pageable pageable);
+
+    /**
+     * Sprint 6 W2-B (RBAC DataScope DEPT_AND_BELOW / SELF_AND_BELOW) — IN list 过滤.
+     */
+    Page<PurchaseOrder> findByFactoryIdAndCreatedByInOrderByCreatedAtDesc(
+            String factoryId, List<Long> createdByList, Pageable pageable);
+
     Page<PurchaseOrder> findByFactoryIdAndStatusOrderByCreatedAtDesc(String factoryId, PurchaseOrderStatus status, Pageable pageable);
 
     /** W-12 fix: SO detail "关联采购" tab filter. */

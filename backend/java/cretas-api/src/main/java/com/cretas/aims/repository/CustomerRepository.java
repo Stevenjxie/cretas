@@ -93,6 +93,56 @@ public interface CustomerRepository extends JpaRepository<Customer, String> {
             Pageable pageable);
 
     /**
+     * Sprint 6 W2-B (RBAC DataScope sweep) — 同 {@link #searchByFiltersPaged} 加 createdBy filter.
+     *
+     * <p>当 {@link com.cretas.aims.security.DataScopeContext} scope == SELF, 仅查当前用户创建的客户.
+     * SELF_AND_BELOW 时传入 createdByList (resolver 算下属链). DB 端 filter, 避免 SELF + keyword 复合时
+     * 走 in-memory filter (Sprint 5 POC pattern, 性能差).
+     *
+     * <p>:createdBy null = 不过滤 (ALL scope). 非 null = 单 user filter (SELF scope).
+     * SELF_AND_BELOW 用 sister method {@link #searchByFiltersPagedScopedList}.
+     */
+    @Query("SELECT c FROM Customer c WHERE c.factoryId = :factoryId " +
+           "AND (CAST(:keyword AS string) IS NULL " +
+           "     OR c.name LIKE CONCAT('%', CAST(:keyword AS string), '%') ESCAPE '\\' " +
+           "     OR c.customerCode LIKE CONCAT(CAST(:keyword AS string), '%') ESCAPE '\\' " +
+           "     OR c.contactPerson LIKE CONCAT('%', CAST(:keyword AS string), '%') ESCAPE '\\') " +
+           "AND (CAST(:customerStatus AS string) IS NULL OR c.customerStatus = :customerStatus) " +
+           "AND (CAST(:importance AS string) IS NULL OR c.importance = :importance) " +
+           "AND (CAST(:source AS string) IS NULL OR c.source = :source) " +
+           "AND c.createdBy = :createdBy")
+    Page<Customer> searchByFiltersPagedAndCreatedBy(
+            @Param("factoryId") String factoryId,
+            @Param("keyword") String keyword,
+            @Param("customerStatus") com.cretas.aims.entity.enums.CustomerStatus customerStatus,
+            @Param("importance") com.cretas.aims.entity.enums.CustomerImportance importance,
+            @Param("source") com.cretas.aims.entity.enums.CustomerSource source,
+            @Param("createdBy") Long createdBy,
+            Pageable pageable);
+
+    /**
+     * Sprint 6 W2-B (RBAC DataScope DEPT_AND_BELOW / SELF_AND_BELOW) — IN list 过滤.
+     * 调用方传入 resolved chain (e.g. self + 下属 userIds), DB IN 一次过.
+     */
+    @Query("SELECT c FROM Customer c WHERE c.factoryId = :factoryId " +
+           "AND (CAST(:keyword AS string) IS NULL " +
+           "     OR c.name LIKE CONCAT('%', CAST(:keyword AS string), '%') ESCAPE '\\' " +
+           "     OR c.customerCode LIKE CONCAT(CAST(:keyword AS string), '%') ESCAPE '\\' " +
+           "     OR c.contactPerson LIKE CONCAT('%', CAST(:keyword AS string), '%') ESCAPE '\\') " +
+           "AND (CAST(:customerStatus AS string) IS NULL OR c.customerStatus = :customerStatus) " +
+           "AND (CAST(:importance AS string) IS NULL OR c.importance = :importance) " +
+           "AND (CAST(:source AS string) IS NULL OR c.source = :source) " +
+           "AND c.createdBy IN :createdByList")
+    Page<Customer> searchByFiltersPagedAndCreatedByIn(
+            @Param("factoryId") String factoryId,
+            @Param("keyword") String keyword,
+            @Param("customerStatus") com.cretas.aims.entity.enums.CustomerStatus customerStatus,
+            @Param("importance") com.cretas.aims.entity.enums.CustomerImportance importance,
+            @Param("source") com.cretas.aims.entity.enums.CustomerSource source,
+            @Param("createdByList") List<Long> createdByList,
+            Pageable pageable);
+
+    /**
      * Sprint 4 W2 S-CRM-FULL-1: 沉睡客户查询 — 最近接洽 < cutoff.
      * lastContactedAt IS NULL 视为从未接洽 (一并返回), 用 OR 涵盖.
      */
