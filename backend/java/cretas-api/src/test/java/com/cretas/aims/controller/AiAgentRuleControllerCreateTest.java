@@ -4,6 +4,7 @@ import com.cretas.aims.dto.ai.CreateAiAgentRuleRequest;
 import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.entity.smartbi.AiAgentRule;
 import com.cretas.aims.repository.smartbi.AiAgentRuleRepository;
+import com.cretas.aims.service.workflow.SandboxedSpelEvaluator;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
@@ -42,6 +43,17 @@ import static org.mockito.Mockito.when;
 class AiAgentRuleControllerCreateTest {
 
     @Mock AiAgentRuleRepository aiAgentRuleRepository;
+
+    /**
+     * SpEL sandbox evaluator is constructor-injected into the controller
+     * (PR #63 B-A7 P0 fix). Without this @Mock the controller's
+     * {@code validateSpel(...)} path throws NPE when the test sets a
+     * non-null {@code conditionExpression}. Mock default behaviour
+     * (no-op on the {@code void validateSyntax}) is exactly what these
+     * tests need — they cover Rule 17.1 mapper/defaults contract,
+     * not SpEL validation semantics (that's PR #63 / #64 territory).
+     */
+    @Mock SandboxedSpelEvaluator spelEvaluator;
 
     @InjectMocks AiAgentRuleController controller;
 
