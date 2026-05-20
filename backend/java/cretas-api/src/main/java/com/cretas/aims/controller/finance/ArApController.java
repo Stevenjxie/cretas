@@ -6,6 +6,7 @@ import com.cretas.aims.dto.finance.RecordTransactionRequest;
 import com.cretas.aims.entity.enums.CounterpartyType;
 import com.cretas.aims.entity.enums.PaymentMethod;
 import com.cretas.aims.entity.finance.ArApTransaction;
+import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.service.MobileService;
 import com.cretas.aims.service.config.FactoryConfigService;
 import com.cretas.aims.service.finance.ArApService;
@@ -40,6 +41,21 @@ public class ArApController {
     /** R23 audit C4: conditional module check for /adjustment endpoint (counterpartyType-dependent). */
     private final FactoryConfigService factoryConfigService;
 
+    /**
+     * AUD-5 B-A3 sister sweep batch 3 (edge audit 2026-05-20): explicit length caps mirror PG
+     * column widths in {@code ar_ap_transactions} table (see {@link ArApTransaction}
+     * {@code @Column(length=...)}). Without these, over-length input lets the request reach PG
+     * and surfaces as {@code DataIntegrityViolationException} → generic 409 "数据处理异常".
+     * Pre-check at controller boundary delivers a specific 400 with a hintTarget instead.
+     *
+     * <p>{@link RecordTransactionRequest} DTO has no {@code @Size} annotations, so the input
+     * arrives unrestricted from Bean Validation. Controller-side pre-check is the safety net.
+     *
+     * <p>Mirrors PR #48 / PR #76 / PR #78 length-pre-check pattern.
+     */
+    private static final int PAYMENT_REFERENCE_MAX_LENGTH = 100;
+    private static final int REMARK_MAX_LENGTH = 500;
+
     // ==================== 应收（AR） ====================
 
     @RequireModule("finance_ar")
@@ -49,6 +65,8 @@ public class ArApController {
             @PathVariable @NotBlank String factoryId,
             @RequestHeader("Authorization") String authorization,
             @Valid @RequestBody RecordTransactionRequest request) {
+        // AUD-5 B-A3 sister sweep batch 3: length pre-check for paymentReference (100) + remark (500).
+        validateRequestLengths(request);
         Long userId = extractUserId(authorization);
         ArApTransaction transaction = arApService.recordReceivable(
                 factoryId, request.getCounterpartyId(), request.getOrderId(),
@@ -63,6 +81,8 @@ public class ArApController {
             @PathVariable @NotBlank String factoryId,
             @RequestHeader("Authorization") String authorization,
             @Valid @RequestBody RecordTransactionRequest request) {
+        // AUD-5 B-A3 sister sweep batch 3 (Rule 16: entry-point matrix — AR payment path).
+        validateRequestLengths(request);
         Long userId = extractUserId(authorization);
         PaymentMethod method = request.getPaymentMethod() != null
                 ? PaymentMethod.valueOf(request.getPaymentMethod()) : PaymentMethod.BANK_TRANSFER;
@@ -87,6 +107,8 @@ public class ArApController {
             @PathVariable @NotBlank String factoryId,
             @RequestHeader("Authorization") String authorization,
             @Valid @RequestBody RecordTransactionRequest request) {
+        // AUD-5 B-A3 sister sweep batch 3 (Rule 16: entry-point matrix — AP path).
+        validateRequestLengths(request);
         Long userId = extractUserId(authorization);
         ArApTransaction transaction = arApService.recordPayable(
                 factoryId, request.getCounterpartyId(), request.getOrderId(),
@@ -102,6 +124,8 @@ public class ArApController {
             @PathVariable @NotBlank String factoryId,
             @RequestHeader("Authorization") String authorization,
             @Valid @RequestBody RecordTransactionRequest request) {
+        // AUD-5 B-A3 sister sweep batch 3 (Rule 16: entry-point matrix — AP payment path).
+        validateRequestLengths(request);
         Long userId = extractUserId(authorization);
         PaymentMethod method = request.getPaymentMethod() != null
                 ? PaymentMethod.valueOf(request.getPaymentMethod()) : PaymentMethod.BANK_TRANSFER;
@@ -124,6 +148,8 @@ public class ArApController {
             @RequestHeader("Authorization") String authorization,
             @RequestParam CounterpartyType counterpartyType,
             @Valid @RequestBody RecordTransactionRequest request) {
+        // AUD-5 B-A3 sister sweep batch 3 (Rule 16: entry-point matrix — adjustment path).
+        validateRequestLengths(request);
         Long userId = extractUserId(authorization);
         // R23 audit C4 conditional module check: AR adjustment needs finance_ar; AP needs finance_ap.
         String requiredModule = counterpartyType == CounterpartyType.CUSTOMER ? "finance_ar" : "finance_ap";
@@ -302,5 +328,39 @@ public class ArApController {
     private Long extractUserId(String authorization) {
         String token = TokenUtils.extractToken(authorization);
         return mobileService.getUserFromToken(token).getId();
+    }
+
+    // ==================== Boundary validators (AUD-5 B-A3 sister sweep batch 3) ====================
+
+    /**
+     * AUD-5 B-A3 sister sweep batch 3 (edge audit 2026-05-20): length pre-check for
+     * {@code paymentReference} (PG VARCHAR 100) and {@code remark} (PG VARCHAR 500) on
+     * all AR/AP write paths (receivable / receivable-payment / payable / payable-payment /
+     * adjustment). Rule 16 entry-point matrix — all 5 entry points share this validator.
+     *
+     * <p>{@link RecordTransactionRequest} DTO has no {@code @Size} annotations, so without
+     * this pre-check an over-length input reaches PG and surfaces as
+     * {@link org.springframework.dao.DataIntegrityViolationException} → generic 409
+     * "数据处理异常". Pre-check delivers a specific 400 with the actual vs allowed length.
+     *
+     * <p>Mirrors PR #48 / PR #78 pattern.
+     */
+    private void validateRequestLengths(RecordTransactionRequest request) {
+        String paymentReference = request.getPaymentReference();
+        if (paymentReference != null && paymentReference.length() > PAYMENT_REFERENCE_MAX_LENGTH) {
+            throw new BusinessException(400,
+                    "付款凭证号最长 " + PAYMENT_REFERENCE_MAX_LENGTH + " 字符 (当前 " + paymentReference.length() + ")")
+                    .withHint("请使用更短的银行流水号/支付凭证号")
+                    .withSeverity("warning")
+                    .withHintTarget("paymentReference");
+        }
+        String remark = request.getRemark();
+        if (remark != null && remark.length() > REMARK_MAX_LENGTH) {
+            throw new BusinessException(400,
+                    "备注最长 " + REMARK_MAX_LENGTH + " 字符 (当前 " + remark.length() + ")")
+                    .withHint("请使用更短的备注 (上限 500 字符)")
+                    .withSeverity("warning")
+                    .withHintTarget("remark");
+        }
     }
 }
