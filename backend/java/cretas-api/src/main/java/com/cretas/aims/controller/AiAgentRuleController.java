@@ -7,6 +7,8 @@ import com.cretas.aims.annotation.RequirePermission;
 import com.cretas.aims.entity.smartbi.AiAgentRule;
 import com.cretas.aims.repository.smartbi.AiAgentRuleRepository;
 import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.service.workflow.SandboxedSpelEvaluator;
+import com.cretas.aims.service.workflow.SandboxedSpelEvaluator.SpelEvaluationFailure;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -42,6 +44,7 @@ import java.util.Optional;
 public class AiAgentRuleController {
 
     private final AiAgentRuleRepository aiAgentRuleRepository;
+    private final SandboxedSpelEvaluator spelEvaluator;
 
     // ==================== 规则查询 ====================
 
@@ -125,6 +128,16 @@ public class AiAgentRuleController {
             @Parameter(description = "工厂ID") @PathVariable String factoryId,
             @Valid @RequestBody CreateAiAgentRuleRequest request) {
 
+        // B-A7 P0 fix (sister of PR #48 / #50): validate conditionExpression at write time.
+        // SopAgentOrchestratorImpl previously used raw StandardEvaluationContext on whatever
+        // was persisted here — so T(java.lang.Runtime).getRuntime().exec(...) shipped through
+        // POST could RCE on the next SOP-upload event. Reject before persist.
+        ResponseEntity<ApiResponse<AiAgentRule>> spelError =
+                validateSpel(request.getConditionExpression());
+        if (spelError != null) {
+            return spelError;
+        }
+
         AiAgentRule rule = toAiAgentRule(request);
         // 设置工厂ID (always overrides any wire value — defense vs cross-tenant write)
         rule.setFactoryId(factoryId);
@@ -171,6 +184,15 @@ public class AiAgentRuleController {
         }
         if (!factoryId.equals(existingRule.getFactoryId())) {
             throw new BusinessException(403, "无权修改该规则").withSeverity("error");
+        }
+
+        // B-A7 P0 fix (sister of PR #48 / #50): validate conditionExpression at write time
+        // on the update path too. Without this, an attacker who can PUT can still plant
+        // RCE payload even if POST is gated.
+        ResponseEntity<ApiResponse<AiAgentRule>> spelError =
+                validateSpel(request.getConditionExpression());
+        if (spelError != null) {
+            return spelError;
         }
 
         // 更新字段 (preserves prior behaviour: each setter unconditionally applied —
@@ -348,6 +370,46 @@ public class AiAgentRuleController {
         );
 
         return ResponseEntity.ok(ApiResponse.success(tools));
+    }
+
+    /**
+     * B-A7 P0 fix (sister of PR #48 / #50): validate {@code conditionExpression} at write time.
+     * Returns non-null ResponseEntity error when SpEL contains RCE / reflection / forbidden
+     * constructs or has syntax errors. Returns null when:
+     * <ul>
+     *   <li>SpEL is null/blank (allowed — empty condition means "always match",
+     *       per {@link com.cretas.aims.service.impl.SopAgentOrchestratorImpl#evaluateCondition})</li>
+     *   <li>SpEL passes sandbox validation</li>
+     * </ul>
+     *
+     * <p>Note: {@code SopAgentOrchestratorImpl.evaluateCondition} strips a wrapping
+     * {@code #{...}} before parsing — we mirror that here so a valid wrapped expression
+     * isn't rejected at validate-time.
+     */
+    private ResponseEntity<ApiResponse<AiAgentRule>> validateSpel(String spel) {
+        if (spel == null || spel.isBlank()) {
+            return null;
+        }
+        // Mirror SopAgentOrchestratorImpl.evaluateCondition: strip wrapping #{...} if present.
+        String toValidate = spel;
+        if (toValidate.startsWith("#{") && toValidate.endsWith("}")) {
+            toValidate = toValidate.substring(2, toValidate.length() - 1);
+        }
+        try {
+            spelEvaluator.validateSyntax(toValidate);
+            return null;
+        } catch (SpelEvaluationFailure ex) {
+            log.warn("Rejected AI Agent rule SpEL at write time: spel={}, reason={}",
+                    spel, ex.getUserMessage());
+            ApiResponse<AiAgentRule> body = ApiResponse.errorWithCode(
+                    400, "VALIDATION",
+                    "SpEL 表达式语法/安全检查失败: " + ex.getUserMessage(),
+                    ex.getActionHint() != null
+                            ? ex.getActionHint()
+                            : "仅支持 #input/#order/#material/#sopType 等业务字段访问, 禁用 T()/new/反射",
+                    "warning");
+            return ResponseEntity.badRequest().body(body);
+        }
     }
 
     // ===================================================================

@@ -7,15 +7,14 @@ import com.cretas.aims.entity.smartbi.AiAgentRule;
 import com.cretas.aims.event.SopUploadedEvent;
 import com.cretas.aims.repository.smartbi.AiAgentRuleRepository;
 import com.cretas.aims.service.SopAgentOrchestrator;
+import com.cretas.aims.service.workflow.SandboxedSpelEvaluator;
+import com.cretas.aims.service.workflow.SandboxedSpelEvaluator.SpelEvaluationFailure;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.context.event.EventListener;
-import org.springframework.expression.ExpressionParser;
-import org.springframework.expression.spel.standard.SpelExpressionParser;
-import org.springframework.expression.spel.support.StandardEvaluationContext;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 
@@ -47,7 +46,8 @@ public class SopAgentOrchestratorImpl implements SopAgentOrchestrator {
     @Autowired
     private ObjectMapper objectMapper;
 
-    private final ExpressionParser spelParser = new SpelExpressionParser();
+    @Autowired
+    private SandboxedSpelEvaluator spelEvaluator;
 
     /**
      * 监听 SOP 上传事件
@@ -192,27 +192,39 @@ public class SopAgentOrchestratorImpl implements SopAgentOrchestrator {
     }
 
     /**
-     * 评估条件表达式
+     * 评估条件表达式 — Defense-in-depth (B-A7 P0 follow-up to PR #48/#50).
+     *
+     * <p>Before the fix this method used raw {@link org.springframework.expression.spel.support.StandardEvaluationContext}
+     * — that context grants full reflection / Type / static-method / constructor access,
+     * so any rule with a malicious {@code conditionExpression} (e.g.
+     * {@code T(java.lang.Runtime).getRuntime().exec("...")}) RCE'd on every SOP-upload event.
+     * The controller now validates at write time, but data persisted BEFORE the controller
+     * fix still needs runtime protection — and untrusted DB content (per zero-trust) should
+     * not be evaluated in StandardEvaluationContext anyway.
+     *
+     * <p>Now delegates to {@link SandboxedSpelEvaluator} which uses
+     * {@code SimpleEvaluationContext.forReadOnlyDataBinding()} — sandbox blocks
+     * {@code T()}, {@code new}, reflection, assignment, {@code @bean}, {@code #root}.
      */
     private boolean evaluateCondition(String expression, Map<String, Object> context) {
         if (expression == null || expression.trim().isEmpty()) {
             return true; // 无条件则默认满足
         }
 
+        // Mirror previous behaviour: strip wrapping #{...} if present.
+        String spelExpression = expression;
+        if (spelExpression.startsWith("#{") && spelExpression.endsWith("}")) {
+            spelExpression = spelExpression.substring(2, spelExpression.length() - 1);
+        }
+
         try {
-            StandardEvaluationContext evalContext = new StandardEvaluationContext();
-            context.forEach(evalContext::setVariable);
-
-            // 处理 SpEL 表达式
-            String spelExpression = expression;
-            if (spelExpression.startsWith("#{") && spelExpression.endsWith("}")) {
-                spelExpression = spelExpression.substring(2, spelExpression.length() - 1);
-            }
-
-            Boolean result = spelParser.parseExpression(spelExpression)
-                    .getValue(evalContext, Boolean.class);
-
-            return Boolean.TRUE.equals(result);
+            return spelEvaluator.evaluateBoolean(spelExpression, context);
+        } catch (SpelEvaluationFailure ex) {
+            // Pre-fix DB content with T() / new / reflection — sandbox rejects, do NOT
+            // break the event loop. Log + return false so the rule simply doesn't match.
+            log.warn("条件表达式评估被沙箱拒绝 (可能含安全风险): expression={}, reason={}",
+                    expression, ex.getUserMessage());
+            return false;
         } catch (Exception e) {
             log.warn("条件表达式评估失败: expression={}, error={}", expression, e.getMessage());
             return false;

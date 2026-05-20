@@ -201,4 +201,115 @@ class SandboxedSpelEvaluatorTest {
         assertThrows(SpelEvaluationFailure.class,
                 () -> evaluator.validateSyntax("#order['amount'] > new java.lang.Integer(0)"));
     }
+
+    // ==================== DoS guards (Layer 0) ====================
+
+    @Test
+    @DisplayName("DoS guard: validateSyntax rejects 2001-char expression (length cap)")
+    void testValidateSyntaxRejectsLongExpression() {
+        // Build a 2001-char SpEL expression: "#x == '<2000 a's>'" = 7 + 1993 + 1 = 2001 chars.
+        StringBuilder sb = new StringBuilder("#x == '");
+        // Need final length > 2000. "#x == '" = 7 chars, "'" = 1 char, so padding > 1992.
+        while (sb.length() < 2000) {
+            sb.append("a");
+        }
+        sb.append("'");
+        String tooLong = sb.toString();
+        assertTrue(tooLong.length() > 2000, "test setup: expression must exceed 2000 chars");
+
+        SpelEvaluationFailure ex = assertThrows(SpelEvaluationFailure.class,
+                () -> evaluator.validateSyntax(tooLong));
+        assertTrue(ex.getUserMessage().contains("过长") || ex.getUserMessage().contains("长"),
+                "error message must mention length constraint");
+        assertNotNull(ex.getActionHint());
+    }
+
+    @Test
+    @DisplayName("DoS guard: validateSyntax accepts 2000-char expression (edge — at cap)")
+    void testValidateSyntaxAcceptsExactlyMaxLength() {
+        // Construct expression of exactly 2000 chars that's also valid SpEL.
+        StringBuilder sb = new StringBuilder("#x == '");
+        while (sb.length() < 1999) {
+            sb.append("a");
+        }
+        sb.append("'");
+        String exactMax = sb.toString();
+        assertEquals(2000, exactMax.length(), "test setup: expression must be exactly 2000 chars");
+
+        assertDoesNotThrow(() -> evaluator.validateSyntax(exactMax));
+    }
+
+    @Test
+    @DisplayName("DoS guard: validateSyntax rejects 31-level paren nesting (depth cap)")
+    void testValidateSyntaxRejectsDeeplyNested() {
+        // 31 opening + 31 closing parens
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < 31; i++) sb.append("(");
+        sb.append("1 == 1");
+        for (int i = 0; i < 31; i++) sb.append(")");
+        String nested = sb.toString();
+
+        SpelEvaluationFailure ex = assertThrows(SpelEvaluationFailure.class,
+                () -> evaluator.validateSyntax(nested));
+        assertTrue(ex.getUserMessage().contains("嵌套") || ex.getUserMessage().contains("深"),
+                "error message must mention nesting depth");
+    }
+
+    @Test
+    @DisplayName("DoS guard: validateSyntax accepts 30-level paren nesting (edge — at cap)")
+    void testValidateSyntaxAcceptsExactlyMaxDepth() {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < 30; i++) sb.append("(");
+        sb.append("1 == 1");
+        for (int i = 0; i < 30; i++) sb.append(")");
+        String nested = sb.toString();
+
+        assertDoesNotThrow(() -> evaluator.validateSyntax(nested));
+    }
+
+    @Test
+    @DisplayName("DoS guard: validateSyntax rejects 500-level paren (depth cap fires before stack overflow)")
+    void testValidateSyntaxRejectsStackOverflow() {
+        // 500-level nesting — should be rejected by depth cap (Layer 0), never reaching
+        // the StackOverflowError-catch in Layer 2. Both layers protect JVM stability.
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < 500; i++) sb.append("(");
+        sb.append("1 == 1");
+        for (int i = 0; i < 500; i++) sb.append(")");
+        String deepNested = sb.toString();
+
+        SpelEvaluationFailure ex = assertThrows(SpelEvaluationFailure.class,
+                () -> evaluator.validateSyntax(deepNested));
+        // Either depth cap (preferred) or stack-overflow catch — both are friendly failures.
+        assertNotNull(ex.getUserMessage());
+        assertTrue(ex.getUserMessage().contains("嵌套") || ex.getUserMessage().contains("栈"),
+                "error message must mention nesting/stack");
+    }
+
+    @Test
+    @DisplayName("DoS guard: validateSyntax rejects ReDoS-shaped regex (a+)+ in .matches()")
+    void testValidateSyntaxRejectsReDoS() {
+        // Classic catastrophic-backtracking pattern: (a+)+ nested quantifier.
+        // The heuristic catches obvious nested-quantifier shapes inside .matches(...).
+        SpelEvaluationFailure ex = assertThrows(SpelEvaluationFailure.class,
+                () -> evaluator.validateSyntax("#input.matches(\"(a+)+b\")"));
+        assertTrue(ex.getUserMessage().contains("ReDoS") || ex.getUserMessage().contains("正则"),
+                "error message must mention ReDoS / regex");
+    }
+
+    @Test
+    @DisplayName("DoS guard: validateSyntax rejects ReDoS (a+)* shape too")
+    void testValidateSyntaxRejectsReDoSStarShape() {
+        SpelEvaluationFailure ex = assertThrows(SpelEvaluationFailure.class,
+                () -> evaluator.validateSyntax("#text.matches(\"(.+)*end\")"));
+        assertNotNull(ex.getUserMessage());
+    }
+
+    @Test
+    @DisplayName("DoS guard regression: validateSyntax accepts harmless regex in .matches()")
+    void testValidateSyntaxAcceptsSimpleRegex() {
+        // Simple anchored regex without nested quantifiers should still pass.
+        assertDoesNotThrow(() -> evaluator.validateSyntax(
+                "#input.matches(\"^[a-z]+$\")"));
+    }
 }
