@@ -4,6 +4,7 @@ import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Plus, Search, Refresh } from '@element-plus/icons-vue';
+import { handleCatchError } from '@/utils/errorToast';
 import {
   getWorkProcesses, createWorkProcess, updateWorkProcess,
   deleteWorkProcess, toggleWorkProcessStatus,
@@ -68,8 +69,10 @@ async function loadData() {
       tableData.value = response.data.content || [];
       pagination.value.total = response.data.totalElements || 0;
     }
-  } catch {
-    ElMessage.error('加载工序数据失败');
+  } catch (e) {
+    // UX polish (2026-05-20): interceptor handles 4xx/5xx with backend message;
+    // fallback only for network errors (避免双 toast).
+    handleCatchError(e, '加载工序数据失败');
   } finally {
     loading.value = false;
   }

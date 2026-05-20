@@ -17,6 +17,7 @@ import { get, post, put } from '@/api/request';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Plus, Refresh } from '@element-plus/icons-vue';
 import { formatAmount } from '@/utils/tableFormatters';
+import { handleCatchError } from '@/utils/errorToast';
 import type { TableRow } from '@/types/api';
 
 const authStore = useAuthStore();
@@ -86,8 +87,10 @@ async function loadData() {
       tableData.value = data.content || [];
       pagination.value.total = data.totalElements || 0;
     }
-  } catch {
-    ElMessage.error('加载报价列表失败');
+  } catch (e) {
+    // UX polish (2026-05-20): interceptor handles 4xx/5xx with backend message;
+    // fallback only for network errors (避免双 toast).
+    handleCatchError(e, '加载报价列表失败');
   } finally {
     loading.value = false;
   }
@@ -137,8 +140,10 @@ async function handleCreate() {
     } else {
       ElMessage.error(res.message || '创建失败');
     }
-  } catch {
-    ElMessage.error('创建失败, 请检查网络');
+  } catch (e) {
+    // UX polish (2026-05-20): interceptor handles 4xx/5xx with backend message;
+    // fallback only for network errors (避免双 toast).
+    handleCatchError(e, '创建失败, 请检查网络');
   } finally {
     submitting.value = false;
   }

@@ -514,8 +514,10 @@ async function openBatchAllocDialog(deliveryId: string, deliveryNumber: string) 
     }
     batchAllocForm.value = { deliveryId, deliveryNumber, items };
     batchAllocDialogVisible.value = true;
-  } catch {
-    ElMessage.error('加载失败，请检查网络');
+  } catch (e) {
+    // UX polish (2026-05-20): interceptor handles 4xx/5xx with backend message;
+    // fallback only for network errors (避免双 toast).
+    handleCatchError(e, '加载失败，请检查网络');
   } finally {
     batchAllocLoading.value = false;
   }

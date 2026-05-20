@@ -6,6 +6,7 @@ import ConceptDisambiguationAlert from '@/components/common/ConceptDisambiguatio
 import { usePermissionStore } from '@/store/modules/permission';
 import { get, post, put, del } from '@/api/request';
 import { ElMessage, ElMessageBox } from 'element-plus';
+import { handleCatchError } from '@/utils/errorToast';
 import { Plus, Search, Refresh, Download, Upload, Picture, ChatDotRound, Setting, Rank, Delete as DeleteIcon } from '@element-plus/icons-vue';
 import AiEntryDrawer from '@/components/ai-entry/AiEntryDrawer.vue';
 import { PRODUCT_CONFIG } from '@/components/ai-entry/types';
@@ -135,7 +136,9 @@ async function handleAssembleSku() {
       ElMessage.error(res.message || 'SKU创建失败');
     }
   } catch (e: unknown) {
-    ElMessage.error((e instanceof Error ? e.message : null) || '操作失败');
+    // UX polish (2026-05-20): interceptor handles 4xx/5xx with backend message;
+    // fallback only for network errors (避免双 toast).
+    handleCatchError(e, '操作失败');
   } finally {
     skuLoading.value = false;
   }
@@ -424,8 +427,10 @@ async function handleConfigProcesses(row: ProductType) {
     ]);
     availableProcesses.value = (activeRes.success ? (Array.isArray(activeRes.data) ? activeRes.data : []) : []) as WorkProcessItem[];
     linkedProcesses.value = (linkedRes.success ? (Array.isArray(linkedRes.data) ? linkedRes.data : []) : []) as ProductWorkProcessItem[];
-  } catch {
-    ElMessage.error('加载工序配置失败');
+  } catch (e) {
+    // UX polish (2026-05-20): interceptor handles 4xx/5xx with backend message;
+    // fallback only for network errors (避免双 toast).
+    handleCatchError(e, '加载工序配置失败');
   } finally {
     processLoading.value = false;
   }
@@ -452,8 +457,10 @@ async function handleAddProcess(processId: string) {
     } else {
       ElMessage.error(res.message || '关联失败');
     }
-  } catch {
-    ElMessage.error('关联失败');
+  } catch (e) {
+    // UX polish (2026-05-20): interceptor handles 4xx/5xx with backend message;
+    // fallback only for network errors (避免双 toast).
+    handleCatchError(e, '关联失败');
   } finally {
     addingProcessId.value = '';
   }
@@ -482,8 +489,10 @@ async function handleMoveProcess(index: number, direction: 'up' | 'down') {
   try {
     await batchSortProductWorkProcesses(factoryId.value!, sortItems);
     await refreshLinkedProcesses();
-  } catch {
-    ElMessage.error('排序失败');
+  } catch (e) {
+    // UX polish (2026-05-20): interceptor handles 4xx/5xx with backend message;
+    // fallback only for network errors (避免双 toast).
+    handleCatchError(e, '排序失败');
   }
 }
 

@@ -4,6 +4,7 @@ import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Plus, Delete, Rank, Refresh } from '@element-plus/icons-vue';
+import { handleCatchError } from '@/utils/errorToast';
 import {
   getActiveWorkProcesses,
   getProductWorkProcesses,
@@ -59,8 +60,10 @@ async function loadProducts() {
         selectedProductId.value = products.value[0].id;
       }
     }
-  } catch {
-    ElMessage.error('加载产品列表失败');
+  } catch (e) {
+    // UX polish (2026-05-20): interceptor handles 4xx/5xx with backend message;
+    // fallback only for network errors (避免双 toast).
+    handleCatchError(e, '加载产品列表失败');
   } finally {
     productsLoading.value = false;
   }
@@ -86,8 +89,10 @@ async function loadLinkedProcesses() {
     if (res.success && res.data) {
       linkedProcesses.value = Array.isArray(res.data) ? res.data : [];
     }
-  } catch {
-    ElMessage.error('加载关联工序失败');
+  } catch (e) {
+    // UX polish (2026-05-20): interceptor handles 4xx/5xx with backend message;
+    // fallback only for network errors (避免双 toast).
+    handleCatchError(e, '加载关联工序失败');
   } finally {
     linkedLoading.value = false;
   }
@@ -124,7 +129,9 @@ async function handleRemove(item: ProductWorkProcessItem) {
     ElMessage.success('已移除');
     loadLinkedProcesses();
   } catch (e) {
-    if (e !== 'cancel') ElMessage.error('移除失败');
+    // UX polish (2026-05-20): ElMessageBox throws 'cancel' on user dismissal (skip);
+    // interceptor handles 4xx/5xx with backend message — fallback only for network errors.
+    if (e !== 'cancel') handleCatchError(e, '移除失败');
   }
 }
 
@@ -149,8 +156,10 @@ async function saveSortOrder(items: ProductWorkProcessItem[]) {
     await batchSortProductWorkProcesses(factoryId.value, sortItems);
     linkedProcesses.value = items.map((item, i) => ({ ...item, processOrder: i + 1 }));
     ElMessage.success('排序已更新');
-  } catch {
-    ElMessage.error('排序失败');
+  } catch (e) {
+    // UX polish (2026-05-20): interceptor handles 4xx/5xx with backend message;
+    // fallback only for network errors (避免双 toast).
+    handleCatchError(e, '排序失败');
     loadLinkedProcesses();
   }
 }
@@ -181,7 +190,9 @@ async function handleGenerateTasks() {
       ElMessage.error(res.message || '生成失败');
     }
   } catch (e) {
-    if (e !== 'cancel') ElMessage.error('生成失败');
+    // UX polish (2026-05-20): ElMessageBox throws 'cancel' on user dismissal (skip);
+    // interceptor handles 4xx/5xx with backend message — fallback only for network errors.
+    if (e !== 'cancel') handleCatchError(e, '生成失败');
   }
 }
 </script>

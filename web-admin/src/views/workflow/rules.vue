@@ -34,6 +34,7 @@ import { ref, onMounted, computed, reactive } from 'vue';
 import { useAuthStore } from '@/store/modules/auth';
 import { get, post, put, del } from '@/api/request';
 import { ElMessage, ElMessageBox } from 'element-plus';
+import { handleCatchError } from '@/utils/errorToast';
 
 interface ApprovalWorkflow {
   id: string;
@@ -130,8 +131,9 @@ async function loadWorkflows(): Promise<void> {
       ElMessage.error(resp.message || '加载工作流列表失败');
     }
   } catch (e: unknown) {
-    const msg = e instanceof Error ? e.message : '加载工作流列表失败';
-    ElMessage.error(msg);
+    // UX polish (2026-05-20): interceptor handles 4xx/5xx with backend message;
+    // fallback only for network errors (避免双 toast).
+    handleCatchError(e, '加载工作流列表失败');
   } finally {
     workflowsLoading.value = false;
   }
@@ -154,8 +156,9 @@ async function loadRules(): Promise<void> {
       ElMessage.error(resp.message || '加载规则列表失败');
     }
   } catch (e: unknown) {
-    const msg = e instanceof Error ? e.message : '加载规则列表失败';
-    ElMessage.error(msg);
+    // UX polish (2026-05-20): interceptor handles 4xx/5xx with backend message;
+    // fallback only for network errors (避免双 toast).
+    handleCatchError(e, '加载规则列表失败');
   } finally {
     loading.value = false;
   }
@@ -261,8 +264,9 @@ async function handleSubmit(): Promise<void> {
       }
     }
   } catch (e: unknown) {
-    const msg = e instanceof Error ? e.message : '保存失败';
-    ElMessage.error(msg);
+    // UX polish (2026-05-20): interceptor handles 4xx/5xx with backend message;
+    // fallback only for network errors (避免双 toast).
+    handleCatchError(e, '保存失败');
   }
 }
 
@@ -285,8 +289,9 @@ async function handleDelete(rule: WorkflowRule): Promise<void> {
   } catch (e: unknown) {
     // 用户 cancel 是 ElMessageBox 抛 'cancel' 字符串, 不报错
     if (e === 'cancel') return;
-    const msg = e instanceof Error ? e.message : '删除失败';
-    ElMessage.error(msg);
+    // UX polish (2026-05-20): interceptor handles 4xx/5xx with backend message;
+    // fallback only for network errors (避免双 toast).
+    handleCatchError(e, '删除失败');
   }
 }
 
@@ -332,8 +337,9 @@ async function handleTest(rule: WorkflowRule): Promise<void> {
       ElMessage.error(resp.message || '测试失败');
     }
   } catch (e: unknown) {
-    const msg = e instanceof Error ? e.message : '测试失败';
-    ElMessage.error(msg);
+    // UX polish (2026-05-20): interceptor handles 4xx/5xx with backend message;
+    // fallback only for network errors (避免双 toast).
+    handleCatchError(e, '测试失败');
   }
 }
 

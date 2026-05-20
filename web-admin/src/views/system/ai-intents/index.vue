@@ -4,6 +4,7 @@ import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { ElMessage } from 'element-plus';
 import { Search, Refresh, View } from '@element-plus/icons-vue';
+import { handleCatchError } from '@/utils/errorToast';
 import { getIntentList, getIntentCategories, toggleIntentActive, type AIIntentConfig } from '@/api/intent';
 
 const authStore = useAuthStore();
@@ -69,8 +70,10 @@ async function loadCategories() {
       ElMessage.error(response.message || '加载分类失败');
     }
   } catch (error) {
+    // UX polish (2026-05-20): interceptor handles 4xx/5xx with backend message;
+    // fallback only for network errors (避免双 toast).
     console.error('加载分类失败:', error);
-    ElMessage.error('加载分类失败');
+    handleCatchError(error, '加载分类失败');
   }
 }
 
