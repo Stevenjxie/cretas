@@ -1,0 +1,230 @@
+package com.cretas.aims.repository;
+
+import com.cretas.aims.dto.finance.AuxiliaryAggregateRow;
+import com.cretas.aims.entity.enums.AuxiliaryType;
+import com.cretas.aims.entity.enums.VoucherStatus;
+import com.cretas.aims.entity.enums.VoucherType;
+import com.cretas.aims.entity.finance.Voucher;
+import com.cretas.aims.entity.finance.VoucherEntry;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.autoconfigure.domain.EntityScan;
+import org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTestDatabase;
+import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
+import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
+import org.springframework.test.context.ActiveProfiles;
+
+import java.math.BigDecimal;
+import java.time.LocalDate;
+import java.util.List;
+import java.util.UUID;
+
+import static org.junit.jupiter.api.Assertions.*;
+
+/**
+ * Sprint 6 W4-A: 验证 VoucherEntryRepository.aggregateByAuxiliary 聚合 SQL
+ * 正确性 — 按 (auxiliaryType, auxiliaryEntityId) 分组、计算 SUM(debit/credit)、
+ * netBalance、entryCount, 同时尊重 factory_id / voucherDate 范围 / status != VOID
+ * 过滤.
+ *
+ * <p>使用 H2 PG-compat in-memory DB (与 PricingEngineIntegrationTest 同 slice 模式).
+ */
+@DataJpaTest
+@AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
+@ActiveProfiles("test")
+@EntityScan(basePackages = "com.cretas.aims.entity")
+@EnableJpaRepositories(basePackages = "com.cretas.aims.repository")
+@DisplayName("VoucherEntryRepository.aggregateByAuxiliary — JPA slice integration")
+class VoucherEntryAggregateTest {
+
+    private static final String F1 = "F-AGG-1";
+    private static final String F2 = "F-AGG-2";  // different factory; isolation check
+
+    @Autowired private VoucherRepository voucherRepo;
+    @Autowired private VoucherEntryRepository entryRepo;
+
+    @Test
+    @DisplayName("3 客户 × 2-3 凭证 → CUSTOMER 聚合返 3 行, netBalance 正确, factory 隔离")
+    void aggregateByCustomer_groupsCorrectlyAndIsolatesFactory() {
+        // F1 — 客户 A: 2 借方 (应收挂账) + 1 贷方 (收款) → net debit 7000 (3000+5000-1000)
+        persistVoucher(F1, LocalDate.of(2026, 5, 1), VoucherStatus.POSTED,
+                debitAux("1122", "cust-A", "3000"));
+        persistVoucher(F1, LocalDate.of(2026, 5, 2), VoucherStatus.POSTED,
+                debitAux("1122", "cust-A", "5000"));
+        persistVoucher(F1, LocalDate.of(2026, 5, 3), VoucherStatus.DRAFT,
+                creditAux("1122", "cust-A", "1000"));
+
+        // F1 — 客户 B: 1 借方 → net 200
+        persistVoucher(F1, LocalDate.of(2026, 5, 4), VoucherStatus.POSTED,
+                debitAux("1122", "cust-B", "200"));
+
+        // F1 — 客户 C: 1 借方 → net 100 (但被 VOID 排除)
+        persistVoucher(F1, LocalDate.of(2026, 5, 5), VoucherStatus.VOID,
+                debitAux("1122", "cust-C", "100"));
+
+        // F1 — 客户 D: 在期间外 (不应统计)
+        persistVoucher(F1, LocalDate.of(2026, 6, 10), VoucherStatus.POSTED,
+                debitAux("1122", "cust-D", "999"));
+
+        // F2 — 客户 E: 不同 factory (不应统计 F1)
+        persistVoucher(F2, LocalDate.of(2026, 5, 1), VoucherStatus.POSTED,
+                debitAux("1122", "cust-E", "8888"));
+
+        // Aggregate F1 CUSTOMER for May 2026
+        List<AuxiliaryAggregateRow> rows = entryRepo.aggregateByAuxiliary(
+                F1, AuxiliaryType.CUSTOMER, LocalDate.of(2026, 5, 1), LocalDate.of(2026, 5, 31));
+
+        // 应包含 cust-A + cust-B (2 行). cust-C VOID 排除, cust-D 期间外排除, cust-E F2 排除.
+        assertEquals(2, rows.size(), "应只含 cust-A + cust-B (VOID/期间外/跨工厂全排除)");
+
+        // Order by entryCount DESC → cust-A (3 entries) 在前
+        AuxiliaryAggregateRow custA = rows.get(0);
+        assertEquals(AuxiliaryType.CUSTOMER, custA.getAuxiliaryType());
+        assertEquals("cust-A", custA.getAuxiliaryEntityId());
+        assertEquals(0, new BigDecimal("8000").compareTo(custA.getTotalDebit()),
+                "cust-A debit = 3000 + 5000 = 8000");
+        assertEquals(0, new BigDecimal("1000").compareTo(custA.getTotalCredit()),
+                "cust-A credit = 1000");
+        assertEquals(0, new BigDecimal("7000").compareTo(custA.getNetBalance()),
+                "cust-A net = 8000 - 1000 = 7000 (借方余额, 客户欠款)");
+        assertEquals(3L, custA.getEntryCount());
+
+        AuxiliaryAggregateRow custB = rows.get(1);
+        assertEquals("cust-B", custB.getAuxiliaryEntityId());
+        assertEquals(0, new BigDecimal("200").compareTo(custB.getNetBalance()));
+        assertEquals(1L, custB.getEntryCount());
+    }
+
+    @Test
+    @DisplayName("SUPPLIER 聚合 — 应付账款贷方为正余额表'我们欠供应商'")
+    void aggregateBySupplier_creditPositiveMeansWeOwe() {
+        persistVoucher(F1, LocalDate.of(2026, 5, 1), VoucherStatus.POSTED,
+                creditAux("2202", "sup-X", "5000"));
+        persistVoucher(F1, LocalDate.of(2026, 5, 10), VoucherStatus.POSTED,
+                debitAux("2202", "sup-X", "1500"));  // 付款冲减
+
+        List<AuxiliaryAggregateRow> rows = entryRepo.aggregateByAuxiliary(
+                F1, AuxiliaryType.SUPPLIER, LocalDate.of(2026, 5, 1), LocalDate.of(2026, 5, 31));
+
+        assertEquals(1, rows.size());
+        AuxiliaryAggregateRow supX = rows.get(0);
+        assertEquals("sup-X", supX.getAuxiliaryEntityId());
+        assertEquals(0, new BigDecimal("1500").compareTo(supX.getTotalDebit()));
+        assertEquals(0, new BigDecimal("5000").compareTo(supX.getTotalCredit()));
+        // netBalance = debit - credit = 1500 - 5000 = -3500 (贷方余额, 我们欠 3500)
+        assertEquals(0, new BigDecimal("-3500").compareTo(supX.getNetBalance()));
+    }
+
+    @Test
+    @DisplayName("空结果 — 期间无任何凭证返空 list (非 null)")
+    void aggregateReturnsEmptyListWhenNoMatch() {
+        List<AuxiliaryAggregateRow> rows = entryRepo.aggregateByAuxiliary(
+                F1, AuxiliaryType.PROJECT, LocalDate.of(2026, 1, 1), LocalDate.of(2026, 1, 31));
+        assertNotNull(rows);
+        assertTrue(rows.isEmpty(), "无匹配应返空 list");
+    }
+
+    @Test
+    @DisplayName("无辅助核算的分录不参与聚合 (auxiliary_entity_id IS NULL)")
+    void aggregateExcludesUnauxiliariedEntries() {
+        // 一个 voucher: 借方挂 INVENTORY=mat-1, 贷方无辅助 (normal cost_center)
+        Voucher v = makeVoucher(F1, LocalDate.of(2026, 5, 1), VoucherStatus.POSTED);
+        VoucherEntry debit = VoucherEntry.builder()
+                .lineNo(1).subjectCode("1405").subjectName("库存商品")
+                .debit(new BigDecimal("500")).credit(BigDecimal.ZERO)
+                .auxiliaryType(AuxiliaryType.INVENTORY).auxiliaryEntityId("mat-1")
+                .voucher(v).build();
+        VoucherEntry credit = VoucherEntry.builder()
+                .lineNo(2).subjectCode("6602.01").subjectName("管理费用")
+                .debit(BigDecimal.ZERO).credit(new BigDecimal("500"))
+                .voucher(v).build();
+        v.setTotalDebit(new BigDecimal("500"));
+        v.setTotalCredit(new BigDecimal("500"));
+        v.setEntries(List.of(debit, credit));
+        voucherRepo.saveAndFlush(v);
+
+        List<AuxiliaryAggregateRow> rows = entryRepo.aggregateByAuxiliary(
+                F1, AuxiliaryType.INVENTORY, LocalDate.of(2026, 5, 1), LocalDate.of(2026, 5, 31));
+
+        // Only the debit line (mat-1) should appear; credit line ignored
+        assertEquals(1, rows.size());
+        assertEquals("mat-1", rows.get(0).getAuxiliaryEntityId());
+        assertEquals(1L, rows.get(0).getEntryCount());
+        assertEquals(0, new BigDecimal("500").compareTo(rows.get(0).getNetBalance()));
+    }
+
+    // ==================== Helpers ====================
+
+    /** Single-aux debit entry (subject code → 自动选 auxiliary type 按映射约定). */
+    private VoucherEntry debitAux(String subjCode, String auxId, String amount) {
+        return VoucherEntry.builder()
+                .lineNo(1).subjectCode(subjCode).subjectName(subjCode)
+                .debit(new BigDecimal(amount)).credit(BigDecimal.ZERO)
+                .auxiliaryType(auxTypeForSubject(subjCode))
+                .auxiliaryEntityId(auxId)
+                .build();
+    }
+
+    private VoucherEntry creditAux(String subjCode, String auxId, String amount) {
+        return VoucherEntry.builder()
+                .lineNo(1).subjectCode(subjCode).subjectName(subjCode)
+                .debit(BigDecimal.ZERO).credit(new BigDecimal(amount))
+                .auxiliaryType(auxTypeForSubject(subjCode))
+                .auxiliaryEntityId(auxId)
+                .build();
+    }
+
+    /** 1122 应收 → CUSTOMER, 2202 应付 → SUPPLIER, 1405 库存 → INVENTORY, etc. */
+    private AuxiliaryType auxTypeForSubject(String code) {
+        return switch (code) {
+            case "1122" -> AuxiliaryType.CUSTOMER;
+            case "2202" -> AuxiliaryType.SUPPLIER;
+            case "1405" -> AuxiliaryType.INVENTORY;
+            case "2211" -> AuxiliaryType.EMPLOYEE;
+            case "6602.02" -> AuxiliaryType.DEPT;
+            default -> AuxiliaryType.CUSTOMER;
+        };
+    }
+
+    /**
+     * 创建一个 single-entry voucher + 平衡补行 (cost_center, no auxiliary)
+     * 用于聚合测试. saveAndFlush 后 cascade 写 entries.
+     */
+    private void persistVoucher(String factoryId, LocalDate date, VoucherStatus status,
+            VoucherEntry auxEntry) {
+        Voucher v = makeVoucher(factoryId, date, status);
+        auxEntry.setVoucher(v);
+
+        // Balance compensating line (no auxiliary — opposite side)
+        BigDecimal amount = auxEntry.getDebit().compareTo(BigDecimal.ZERO) > 0
+                ? auxEntry.getDebit() : auxEntry.getCredit();
+        boolean auxOnDebit = auxEntry.getDebit().compareTo(BigDecimal.ZERO) > 0;
+        VoucherEntry balance = VoucherEntry.builder()
+                .lineNo(2).subjectCode("6001").subjectName("Balance")
+                .debit(auxOnDebit ? BigDecimal.ZERO : amount)
+                .credit(auxOnDebit ? amount : BigDecimal.ZERO)
+                .voucher(v)
+                .build();
+
+        v.setTotalDebit(amount);
+        v.setTotalCredit(amount);
+        v.setEntries(List.of(auxEntry, balance));
+        voucherRepo.saveAndFlush(v);
+    }
+
+    private Voucher makeVoucher(String factoryId, LocalDate date, VoucherStatus status) {
+        String suffix = UUID.randomUUID().toString().substring(0, 8);
+        return Voucher.builder()
+                .factoryId(factoryId)
+                .voucherNumber("V-AGG-" + suffix)
+                .voucherType(VoucherType.SALES_RECEIPT)
+                .voucherDate(date)
+                .sourceBusinessType("TEST")
+                .sourceBusinessId("test-" + suffix)
+                .status(status)
+                .totalDebit(BigDecimal.ZERO)
+                .totalCredit(BigDecimal.ZERO)
+                .build();
+    }
+}

@@ -1,5 +1,6 @@
 package com.cretas.aims.service.voucher.impl;
 
+import com.cretas.aims.entity.enums.AuxiliaryType;
 import com.cretas.aims.entity.enums.VoucherType;
 import com.cretas.aims.entity.finance.VoucherEntry;
 import com.cretas.aims.service.voucher.AbstractVoucherGenerator;
@@ -14,17 +15,27 @@ import java.util.Objects;
 /**
  * 固定资产折旧凭证 generator.
  *
- * 借: 6602.02 管理费用-折旧
+ * <pre>
+ * 借: 6602.02 管理费用-折旧 — 辅助核算 DEPT=deptId (优先) 或 PROJECT=projectId (备选)
  * 贷: 1602 累计折旧
+ * </pre>
  *
- * 业务: 月底批量计提折旧 (无现成业务单 entity — 通过 Map<String,Object> 输入).
+ * <p>业务: 月底批量计提折旧 (无现成业务单 entity — 通过 Map&lt;String,Object&gt; 输入).
  * 后续 F-DEPRECIATION-SCHEDULE 引入 DepreciationSchedule entity 时切换为 typed.
  *
- * 期望 input Map keys:
- *   - businessId: String (e.g. "DEP-202605" — 月份标识)
- *   - amount: BigDecimal
- *   - voucherDate: LocalDate
- *   - assetCategory: String (描述用)
+ * <p>期望 input Map keys:
+ * <ul>
+ *   <li>businessId: String (e.g. "DEP-202605" — 月份标识)</li>
+ *   <li>amount: BigDecimal</li>
+ *   <li>voucherDate: LocalDate</li>
+ *   <li>assetCategory: String (描述用)</li>
+ *   <li><b>deptId</b>: String (可选, Sprint 6 W4-A) — 部门归集</li>
+ *   <li><b>projectId</b>: String (可选, Sprint 6 W4-A) — 项目归集 (优先级低于 deptId)</li>
+ * </ul>
+ *
+ * <p>Sprint 6 W4-A: 管理费用 line 加 DEPT 辅助核算 (deptId 优先) 或 PROJECT (projectId 备选).
+ * 支持 R-HJ Round 11 §G.1 部门费用账 / 项目核算账.
+ * 二者皆空时不挂辅助 (向后兼容老月底折旧 batch).
  */
 @Component
 public class DepreciationVoucherGenerator extends AbstractVoucherGenerator<Map<String, Object>> {
@@ -70,8 +81,23 @@ public class DepreciationVoucherGenerator extends AbstractVoucherGenerator<Map<S
     public List<VoucherEntry> buildEntries(Map<String, Object> input) {
         BigDecimal amount = toBigDecimal(input.get("amount"));
         String description = extractDescription(input);
+
+        // Sprint 6 W4-A: 部门 / 项目辅助核算 (优先 DEPT, 后 PROJECT, 都空则无)
+        String deptId = stringOrNull(input.get("deptId"));
+        String projectId = stringOrNull(input.get("projectId"));
+        AuxiliaryType auxType = null;
+        String auxId = null;
+        if (deptId != null) {
+            auxType = AuxiliaryType.DEPT;
+            auxId = deptId;
+        } else if (projectId != null) {
+            auxType = AuxiliaryType.PROJECT;
+            auxId = projectId;
+        }
+
         return List.of(
-                debitEntry(1, "6602.02", "管理费用-折旧", amount, description),
+                // 管理费用按部门/项目归集 (R-HJ Round 11 §G.1 部门费用账 / 项目核算账)
+                debitEntryWithAuxiliary(1, "6602.02", "管理费用-折旧", amount, description, auxType, auxId),
                 creditEntry(2, "1602", "累计折旧", amount, "累计折旧增加")
         );
     }
@@ -81,5 +107,11 @@ public class DepreciationVoucherGenerator extends AbstractVoucherGenerator<Map<S
         if (v instanceof BigDecimal bd) return bd;
         if (v instanceof Number n) return BigDecimal.valueOf(n.doubleValue());
         return new BigDecimal(v.toString());
+    }
+
+    private String stringOrNull(Object v) {
+        if (v == null) return null;
+        String s = v.toString().trim();
+        return s.isEmpty() ? null : s;
     }
 }

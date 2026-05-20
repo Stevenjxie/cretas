@@ -1,12 +1,15 @@
 package com.cretas.aims.controller.finance;
 
 import com.cretas.aims.annotation.RequirePermission;
+import com.cretas.aims.dto.finance.AuxiliaryAggregateRow;
 import com.cretas.aims.dto.finance.VoucherBatchGenerateRequest;
 import com.cretas.aims.dto.finance.VoucherGenerateRequest;
 import com.cretas.aims.dto.finance.VoucherVoidRequest;
+import com.cretas.aims.entity.enums.AuxiliaryType;
 import com.cretas.aims.entity.enums.VoucherStatus;
 import com.cretas.aims.entity.enums.VoucherType;
 import com.cretas.aims.entity.finance.Voucher;
+import com.cretas.aims.repository.VoucherEntryRepository;
 import com.cretas.aims.repository.VoucherRepository;
 import com.cretas.aims.service.voucher.VoucherService;
 import jakarta.validation.Valid;
@@ -14,10 +17,13 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
+import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import java.time.LocalDate;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
@@ -43,6 +49,7 @@ public class VoucherController {
 
     private final VoucherService voucherService;
     private final VoucherRepository voucherRepo;
+    private final VoucherEntryRepository voucherEntryRepo;
 
     // ==================== Read ====================
 
@@ -144,5 +151,52 @@ public class VoucherController {
         String reason = (req.getReason() == null || req.getReason().isBlank()) ? "未填写原因" : req.getReason();
         voucherService.voidVoucher(id, reason, userId);
         return ResponseEntity.ok(Map.of("success", true, "message", "凭证已作废"));
+    }
+
+    // ==================== Sprint 6 W4-A: 辅助核算多维度明细账 ====================
+
+    /**
+     * 按辅助核算实体聚合凭证分录, 返每个 entity 在期间内的借/贷/净余额/分录数.
+     *
+     * <p>支持 R-HJ Round 11 §G.1 多维度明细账:
+     * <ul>
+     *   <li>{@code type=CUSTOMER} → 客户应收明细账 (debit 正余额 = 客户欠款)</li>
+     *   <li>{@code type=SUPPLIER} → 供应商应付明细账 (credit 正余额 = 我们欠供应商)</li>
+     *   <li>{@code type=DEPT}     → 部门费用账</li>
+     *   <li>{@code type=PROJECT}  → 项目核算账</li>
+     *   <li>{@code type=INVENTORY}→ 库存商品按 SKU/批次明细账</li>
+     *   <li>{@code type=EMPLOYEE} → 职员工资明细账</li>
+     *   <li>{@code type=OUTSOURCER} → 委外商往来账 (enum 已就绪, generator 待 Sprint 7+)</li>
+     * </ul>
+     *
+     * <p>查询计算 SQL 层: SUM(debit), SUM(credit), debit-credit, COUNT(*) 按
+     * (auxiliaryType, auxiliaryEntityId) 分组, 排序 entryCount DESC.
+     *
+     * <p>排除 VOID 状态凭证. DRAFT / POSTED 都纳入余额 (与 R-HJ ERP 默认行为一致;
+     * 财务希望看到草稿对余额的"潜在影响"). 后续如需仅 POSTED, 加 query param status=POSTED.
+     *
+     * @param factoryId 工厂 ID (path)
+     * @param type      辅助核算类型 (required)
+     * @param from      期间起始 (yyyy-MM-dd, inclusive)
+     * @param to        期间结束 (yyyy-MM-dd, inclusive)
+     * @return 聚合行列表 (按 entryCount DESC)
+     */
+    @GetMapping("/aggregate-by-auxiliary")
+    public ResponseEntity<?> aggregateByAuxiliary(
+            @PathVariable String factoryId,
+            @RequestParam("type") AuxiliaryType type,
+            @RequestParam("from") @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
+            @RequestParam("to") @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to) {
+        if (from.isAfter(to)) {
+            return ResponseEntity.badRequest().body(
+                    Map.of("success", false, "message", "from 不能晚于 to", "code", "INVALID_DATE_RANGE"));
+        }
+        List<AuxiliaryAggregateRow> rows = voucherEntryRepo.aggregateByAuxiliary(factoryId, type, from, to);
+        Map<String, Object> data = new HashMap<>();
+        data.put("auxiliaryType", type);
+        data.put("dateRange", Map.of("from", from, "to", to));
+        data.put("rows", rows);
+        data.put("totalEntities", rows.size());
+        return ResponseEntity.ok(Map.of("success", true, "data", data));
     }
 }

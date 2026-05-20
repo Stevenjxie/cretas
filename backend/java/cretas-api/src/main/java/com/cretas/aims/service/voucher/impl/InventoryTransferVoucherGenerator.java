@@ -1,8 +1,10 @@
 package com.cretas.aims.service.voucher.impl;
 
+import com.cretas.aims.entity.enums.AuxiliaryType;
 import com.cretas.aims.entity.enums.VoucherType;
 import com.cretas.aims.entity.finance.VoucherEntry;
 import com.cretas.aims.entity.inventory.InternalTransfer;
+import com.cretas.aims.entity.inventory.InternalTransferItem;
 import com.cretas.aims.service.voucher.AbstractVoucherGenerator;
 import org.springframework.stereotype.Component;
 
@@ -13,11 +15,17 @@ import java.util.List;
 /**
  * 库存调拨凭证 generator.
  *
- * 借: 1405 库存商品 / cost_center=target_warehouse
- * 贷: 1405 库存商品 / cost_center=source_warehouse
+ * <pre>
+ * 借: 1405 库存商品 / cost_center=target_warehouse — 辅助核算 INVENTORY (仅单一品类时)
+ * 贷: 1405 库存商品 / cost_center=source_warehouse — 辅助核算 INVENTORY (同上)
+ * </pre>
  *
- * 同科目调拨: 借贷同 1405, 通过 cost_center 区分仓库.
+ * <p>同科目调拨: 借贷同 1405, 通过 cost_center 区分仓库.
  * 跨工厂调拨可通过 cost_center 内嵌 factory_id 实现 (此实现先用 warehouse 兼容).
+ *
+ * <p>Sprint 6 W4-A: 当调拨单 items 全部为同一 materialTypeId / productTypeId 时, 借贷两行
+ * 都挂 INVENTORY 辅助核算 (库存科目按 SKU 明细账). 多品类调拨则不挂 (避免误导),
+ * cost_center 继续承担仓库维度.
  */
 @Component
 public class InventoryTransferVoucherGenerator extends AbstractVoucherGenerator<InternalTransfer> {
@@ -57,12 +65,48 @@ public class InventoryTransferVoucherGenerator extends AbstractVoucherGenerator<
     @Override
     public List<VoucherEntry> buildEntries(InternalTransfer t) {
         BigDecimal amount = nullToZero(t.getTotalAmount());
-        VoucherEntry debit = debitEntry(1, "1405", "库存商品", amount, "调入: " + t.getTransferNumber());
-        VoucherEntry credit = creditEntry(2, "1405", "库存商品", amount, "调出: " + t.getTransferNumber());
-        // cost_center 区分调入/调出方
+        // Sprint 6 W4-A: 单一品类调拨时挂 INVENTORY 辅助核算; 多品类则 null (避免误导)
+        String singleItemId = detectSingleItemId(t);
+
+        VoucherEntry debit = debitEntryWithAuxiliary(1, "1405", "库存商品", amount, "调入: " + t.getTransferNumber(),
+                singleItemId != null ? AuxiliaryType.INVENTORY : null, singleItemId);
+        VoucherEntry credit = creditEntryWithAuxiliary(2, "1405", "库存商品", amount, "调出: " + t.getTransferNumber(),
+                singleItemId != null ? AuxiliaryType.INVENTORY : null, singleItemId);
+        // cost_center 仍区分调入/调出方 (仓库维度)
         debit.setCostCenter(buildCostCenter(t.getTargetFactoryId(), t.getTargetWarehouseId(), "调入"));
         credit.setCostCenter(buildCostCenter(t.getSourceFactoryId(), t.getSourceWarehouseId(), "调出"));
         return List.of(debit, credit);
+    }
+
+    /**
+     * Sprint 6 W4-A: 若调拨单 items 全部为单一品类 (同一 materialTypeId 或同一 productTypeId),
+     * 返该 ID; 否则 null. 老调拨单 items=空 也返 null (向后兼容).
+     */
+    private String detectSingleItemId(InternalTransfer t) {
+        List<InternalTransferItem> items = t.getItems();
+        if (items == null || items.isEmpty()) {
+            return null;
+        }
+        // 优先 materialTypeId, 再 productTypeId
+        String firstMat = items.get(0).getMaterialTypeId();
+        String firstProd = items.get(0).getProductTypeId();
+        if (firstMat != null && !firstMat.isBlank()) {
+            for (InternalTransferItem item : items) {
+                if (!firstMat.equals(item.getMaterialTypeId())) {
+                    return null;
+                }
+            }
+            return firstMat;
+        }
+        if (firstProd != null && !firstProd.isBlank()) {
+            for (InternalTransferItem item : items) {
+                if (!firstProd.equals(item.getProductTypeId())) {
+                    return null;
+                }
+            }
+            return firstProd;
+        }
+        return null;
     }
 
     private String buildCostCenter(String factoryId, String warehouseId, String label) {
