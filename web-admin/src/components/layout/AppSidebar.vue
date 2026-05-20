@@ -85,6 +85,9 @@ const financeManagerMenu: MenuItem[] = [
 
 const menuConfig: MenuItem[] = [
   { path: '/dashboard', title: '首页', icon: 'House', module: 'dashboard' },
+  // 🏪 Sprint 8 P1 (2026-05-20) — 销售老板 Workdesk V1 (F006 真场景 demo).
+  // module 借 'sales' 走现有权限 (workdesk 不是 ModuleName).
+  { path: '/workdesk/sales-owner', title: '🏪 销售老板工作台', icon: 'Sell', module: 'sales' },
   {
     // P1-5: restaurants 默认不见 "生产管理" (BOM/批次是 manufacturing 语言,
     // 餐饮用配方/备餐在 /restaurant/recipes)
