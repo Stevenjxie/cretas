@@ -4,7 +4,10 @@ import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { get, post } from '@/api/request';
 import { ElMessage } from 'element-plus';
-import { Search, Refresh, DataAnalysis, Edit, View, Download, Warning, ChatDotRound } from '@element-plus/icons-vue';
+import { Search, Refresh, DataAnalysis, Edit, View, Download, Warning, ChatDotRound, QuestionFilled } from '@element-plus/icons-vue';
+// Sprint 6 W3-A — inline 3-chip link counter (文件 / 图片 / 合同).
+import LinkChipCell from '@/components/list/LinkChipCell.vue';
+import { useLinkChipCounts } from '@/composables/useLinkChipCounts';
 import ConceptDisambiguationAlert from '@/components/common/ConceptDisambiguationAlert.vue';
 import { WorkflowBar } from '@/components/workflow';
 import { useWorkflowStats } from '@/composables/useWorkflowStats';
@@ -25,6 +28,10 @@ const canViewPrice = computed(() => permissionStore.canViewPrice);
 
 // U-NAV-1 业务流程图导航 (Sprint 2 Track G + FU Chat 3 bucket-filter)
 const { stats: workflowStats, loading: workflowLoading } = useWorkflowStats(factoryId, 'inventory');
+
+// Sprint 6 W3-A — inline 3-chip 链接计数 (文件 / 图片 / 合同).
+const { fetchLinkChipCounts, countsFor: linkCountsFor } =
+  useLinkChipCounts(factoryId, 'INVENTORY');
 function handleWorkflowNodeClick(nodeId: string) {
   const primary = getBucketPrimaryStatus('inventory', nodeId);
   if (!primary) return;
@@ -126,8 +133,13 @@ async function loadData() {
 
     const response = await get(`/${factoryId.value}/material-batches`, { params });
     if (response.success && response.data) {
-      tableData.value = response.data.content || [];
+      const rows = response.data.content || [];
+      tableData.value = rows;
       pagination.value.total = response.data.totalElements || 0;
+
+      // Sprint 6 W3-A — fire-and-forget batch 3-chip counts (文件/图片/合同).
+      // EntityType=INVENTORY → 库存批次附件 (入库单据 / 抄码单 / 质检证明).
+      void fetchLinkChipCounts(rows.map((r: TableRow) => String(r.id)).filter(Boolean));
     } else if (response.success === false) {
       ElMessage.error(response.message || '加载数据失败');
     }
@@ -420,6 +432,32 @@ function getStatusText(status: string) {
         <el-table-column label="更新时间" width="170" show-overflow-tooltip>
           <template #default="{ row }">
             {{ row.updatedAt ? row.updatedAt.replace('T', ' ').substring(0, 19) : '-' }}
+          </template>
+        </el-table-column>
+        <!--
+          Sprint 6 W3-A — 行内 3-chip 链接计数 (文件 / 图片 / 合同).
+          库存批次附件: 入库单据 / 抄码单 (DOCUMENT) + 现场照片 (PHOTO) + 质检报告 (CONTRACT).
+          数据源: POST /attachments/batch-3chip-counts (batch, 避免 N+1).
+        -->
+        <el-table-column label="附件" width="200" align="center">
+          <template #header>
+            <span style="display: inline-flex; align-items: center; gap: 4px;">
+              附件
+              <el-tooltip placement="top">
+                <template #content>
+                  <div style="line-height: 1.6;">
+                    <div><b>文件</b>: 入库单据 / 抄码单 (DOCUMENT / OTHER)</div>
+                    <div><b>图片</b>: 现场照片 / 视频 (PHOTO / VIDEO)</div>
+                    <div><b>合同</b>: 质检报告 / 证明 (CONTRACT)</div>
+                    <div style="margin-top: 4px; color: var(--text-color-secondary);">点查看可看附件清单</div>
+                  </div>
+                </template>
+                <el-icon style="cursor: help; color: var(--text-color-secondary, #909399); font-size: 12px;"><QuestionFilled /></el-icon>
+              </el-tooltip>
+            </span>
+          </template>
+          <template #default="{ row }">
+            <LinkChipCell :counts="linkCountsFor(row.id)" />
           </template>
         </el-table-column>
         <el-table-column label="操作" width="150" fixed="right" align="center">

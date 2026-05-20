@@ -7,7 +7,7 @@ import { useBusinessMode } from '@/composables/useBusinessMode';
 import request, { get, post } from '@/api/request';
 // request.patch is used by U-MARKER-1 below; default export already imported.
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { Plus, Search, Refresh, ChatDotRound, Download } from '@element-plus/icons-vue';
+import { Plus, Search, Refresh, ChatDotRound, Download, QuestionFilled } from '@element-plus/icons-vue';
 import AiEntryDrawer from '@/components/ai-entry/AiEntryDrawer.vue';
 import AuditLogDrawer from '@/components/AuditLogDrawer.vue';
 import { PURCHASE_ORDER_CONFIG } from '@/components/ai-entry/types';
@@ -20,6 +20,9 @@ import CanvasAwareWrapper from '@/components/canvas/CanvasAwareWrapper.vue';
 import ConceptDisambiguationAlert from '@/components/common/ConceptDisambiguationAlert.vue';
 import type { TableRow } from '@/types/api';
 import { RowActionMenu, TableFooter, ViewModeSwitcher, GridView, KanbanView, TimelinePlaceholder, CalendarPlaceholder, InlineRowIcons, RowMarkerCell } from '@/components/list';
+// Sprint 6 W3-A — inline 3-chip link counter (文件 / 图片 / 合同).
+import LinkChipCell from '@/components/list/LinkChipCell.vue';
+import { useLinkChipCounts } from '@/composables/useLinkChipCounts';
 import { CreateModeSelector, BatchCreateDialog, QuickCreateDialog, BomExpansionDialog } from '@/components/dialog';
 import CreateReturnOrderDialog from '@/components/dialog/CreateReturnOrderDialog.vue';
 import { copyPurchaseOrder } from '@/api/orderCopy';
@@ -320,6 +323,11 @@ function openAiForRow(row: TableRow) {
 
 // U-NAV-1 业务流程图导航 (Sprint 2 Track G + FU Chat 3 bucket-filter)
 const { stats: workflowStats, loading: workflowLoading } = useWorkflowStats(factoryId, 'purchase');
+
+// Sprint 6 W3-A — inline 3-chip 链接计数 (文件 / 图片 / 合同).
+const { fetchLinkChipCounts, countsFor: linkCountsFor } =
+  useLinkChipCounts(factoryId, 'PURCHASE_ORDER');
+
 function handleWorkflowNodeClick(nodeId: string) {
   const primary = getBucketPrimaryStatus('purchase', nodeId);
   if (!primary) return;
@@ -521,6 +529,10 @@ async function loadData() {
       }
       tableData.value = rows;
       pagination.value.total = response.data.totalElements || 0;
+
+      // Sprint 6 W3-A — fire-and-forget batch 3-chip counts (文件/图片/合同).
+      // List itself is unaffected by chip request failure; chip falls back to "-".
+      void fetchLinkChipCounts(rows.map((r: TableRow) => String(r.id)).filter(Boolean));
     } else if (response.success === false) {
       ElMessage.error(response.message || '加载数据失败');
     }
@@ -872,6 +884,32 @@ function handleAiFill(params: TableRow) {
             <el-tag :type="(statusMap[row.status]?.type) || 'info'" size="small">
               {{ statusMap[row.status]?.text || row.status }}
             </el-tag>
+          </template>
+        </el-table-column>
+        <!--
+          Sprint 6 W3-A — 行内 3-chip 链接计数 (文件 / 图片 / 合同).
+          数据源: POST /attachments/batch-3chip-counts (batch, 避免 N+1).
+          EntityType=PURCHASE_ORDER 由 useLinkChipCounts composable 锁定.
+        -->
+        <el-table-column label="附件" width="200" align="center">
+          <template #header>
+            <span style="display: inline-flex; align-items: center; gap: 4px;">
+              附件
+              <el-tooltip placement="top">
+                <template #content>
+                  <div style="line-height: 1.6;">
+                    <div><b>文件</b>: 通用文档 (PDF / Word / Excel / OTHER)</div>
+                    <div><b>图片</b>: 照片 / 视频 (PHOTO / VIDEO)</div>
+                    <div><b>合同</b>: 采购合同 / 法律文件 (CONTRACT)</div>
+                    <div style="margin-top: 4px; color: var(--text-color-secondary);">点详情查看附件清单</div>
+                  </div>
+                </template>
+                <el-icon style="cursor: help; color: var(--text-color-secondary, #909399); font-size: 12px;"><QuestionFilled /></el-icon>
+              </el-tooltip>
+            </span>
+          </template>
+          <template #default="{ row }">
+            <LinkChipCell :counts="linkCountsFor(row.id)" />
           </template>
         </el-table-column>
         <el-table-column label="操作" width="260" fixed="right" align="center">

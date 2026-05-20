@@ -17,3 +17,7 @@ export { default as RowMarkerCell } from './RowMarkerCell.vue';
 // Sprint 4 W1 U-CHIP-MULTI-1 — 行内多 chip 状态垂直堆 (e.g. 库存/质检/采购/发货 状态).
 export { default as MultiChipStack } from './MultiChipStack.vue';
 export type { ChipDef, ChipType } from './MultiChipStack.vue';
+
+// Sprint 6 W3-A — 行内 3-chip 链接计数 (文件 / 图片 / 合同) per HJ baseline.
+// Used in 4 list (sales/PO/inventory/voucher); wires via useLinkChipCounts composable.
+export { default as LinkChipCell } from './LinkChipCell.vue';

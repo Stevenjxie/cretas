@@ -1,9 +1,12 @@
 package com.cretas.aims.controller;
 
+import com.cretas.aims.dto.attachment.LinkChipCountsDTO;
 import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.entity.Attachment;
 import com.cretas.aims.entity.Attachment.EntityType;
+import com.cretas.aims.entity.Attachment.FileCategory;
 import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.repository.AttachmentRepository;
 import com.cretas.aims.security.AttachmentPermissionResolver;
 import com.cretas.aims.service.attachment.AttachmentService;
 import com.cretas.aims.service.attachment.dto.RegisterAttachmentRequest;
@@ -45,6 +48,7 @@ class AttachmentControllerTest {
 
     @Mock AttachmentService attachmentService;
     @Mock AttachmentPermissionResolver permissionResolver;
+    @Mock AttachmentRepository attachmentRepository;
     @Mock HttpServletRequest request;
     @InjectMocks AttachmentController controller;
 
@@ -215,5 +219,98 @@ class AttachmentControllerTest {
         BusinessException ex = assertThrows(BusinessException.class,
                 () -> controller.getById(FACTORY_ID, ATT_ID, request));
         assertEquals(404, ex.getCode());
+    }
+
+    // ==================== Sprint 6 W3-A — 3-chip batch count ====================
+
+    @Test
+    @DisplayName("✅ POST /attachments/batch-3chip-counts 按 fileCategory 分桶 (DOCUMENT/OTHER → file, PHOTO/VIDEO → image, CONTRACT → contract)")
+    void batch3ChipCounts_groupsCategoriesIntoThreeChips() {
+        // Mock grouped repository response: 2 SO ids × multiple categories.
+        // SO-001: 2 DOCUMENT + 1 OTHER + 3 PHOTO + 1 CONTRACT + 1 VOUCHER (skipped)
+        // SO-002: 2 VIDEO + 0 of everything else
+        List<Object[]> mockGrouped = List.of(
+                new Object[]{"SO-001", FileCategory.DOCUMENT, 2L},
+                new Object[]{"SO-001", FileCategory.OTHER, 1L},
+                new Object[]{"SO-001", FileCategory.PHOTO, 3L},
+                new Object[]{"SO-001", FileCategory.CONTRACT, 1L},
+                new Object[]{"SO-001", FileCategory.VOUCHER, 1L},  // intentionally skipped
+                new Object[]{"SO-002", FileCategory.VIDEO, 2L}
+        );
+        when(attachmentRepository.countByEntitiesGroupedByCategory(
+                eq(FACTORY_ID), eq(EntityType.SALES_ORDER), eq(List.of("SO-001", "SO-002", "SO-003"))))
+                .thenReturn(mockGrouped);
+
+        AttachmentController.Batch3ChipCountRequest req = new AttachmentController.Batch3ChipCountRequest();
+        req.setEntityType(EntityType.SALES_ORDER);
+        req.setEntityIds(List.of("SO-001", "SO-002", "SO-003"));
+
+        ResponseEntity<ApiResponse<List<LinkChipCountsDTO>>> resp =
+                controller.batch3ChipCounts(FACTORY_ID, req, request);
+
+        assertEquals(HttpStatus.OK, resp.getStatusCode());
+        List<LinkChipCountsDTO> data = resp.getBody().getData();
+        assertEquals(3, data.size(), "all 3 ids returned (incl. SO-003 with zeros)");
+
+        // Preserved input order check + category mapping.
+        LinkChipCountsDTO so001 = data.get(0);
+        assertEquals("SO-001", so001.getEntityId());
+        assertEquals(3L, so001.getFileCount(), "DOCUMENT(2) + OTHER(1) → file");
+        assertEquals(3L, so001.getImageCount(), "PHOTO(3) only (no VIDEO) → image");
+        assertEquals(1L, so001.getContractCount(), "CONTRACT(1) → contract");
+        // VOUCHER(1) NOT counted — sum is 7, not 8.
+        assertEquals(7L,
+                so001.getFileCount() + so001.getImageCount() + so001.getContractCount(),
+                "VOUCHER and SIGNATURE NOT in 3-chip total");
+
+        LinkChipCountsDTO so002 = data.get(1);
+        assertEquals("SO-002", so002.getEntityId());
+        assertEquals(0L, so002.getFileCount());
+        assertEquals(2L, so002.getImageCount(), "VIDEO(2) → image");
+        assertEquals(0L, so002.getContractCount());
+
+        LinkChipCountsDTO so003 = data.get(2);
+        assertEquals("SO-003", so003.getEntityId());
+        assertEquals(0L, so003.getFileCount());
+        assertEquals(0L, so003.getImageCount());
+        assertEquals(0L, so003.getContractCount());
+
+        verify(permissionResolver).requireRead(any(), eq(EntityType.SALES_ORDER));
+    }
+
+    @Test
+    @DisplayName("❌ POST /attachments/batch-3chip-counts > 500 ids 抛 BusinessException 400")
+    void batch3ChipCounts_over500Ids_throws400() {
+        AttachmentController.Batch3ChipCountRequest req = new AttachmentController.Batch3ChipCountRequest();
+        req.setEntityType(EntityType.SALES_ORDER);
+        // 501 ids -> over cap
+        List<String> tooMany = new java.util.ArrayList<>(501);
+        for (int i = 0; i < 501; i++) tooMany.add("SO-" + i);
+        req.setEntityIds(tooMany);
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> controller.batch3ChipCounts(FACTORY_ID, req, request));
+        assertEquals(400, ex.getCode());
+        assertTrue(ex.getMessage().contains("500"), "error message mentions cap");
+
+        // Repo never queried for over-cap input.
+        verify(attachmentRepository, never()).countByEntitiesGroupedByCategory(
+                anyString(), any(EntityType.class), anyList());
+    }
+
+    @Test
+    @DisplayName("✅ POST /attachments/batch-3chip-counts 空 entityIds 返空 List, 不查 DB")
+    void batch3ChipCounts_emptyIds_returnsEmptyWithoutDbHit() {
+        AttachmentController.Batch3ChipCountRequest req = new AttachmentController.Batch3ChipCountRequest();
+        req.setEntityType(EntityType.INVENTORY);
+        req.setEntityIds(List.of());
+
+        ResponseEntity<ApiResponse<List<LinkChipCountsDTO>>> resp =
+                controller.batch3ChipCounts(FACTORY_ID, req, request);
+
+        assertEquals(HttpStatus.OK, resp.getStatusCode());
+        assertTrue(resp.getBody().getData().isEmpty());
+        verify(attachmentRepository, never()).countByEntitiesGroupedByCategory(
+                anyString(), any(EntityType.class), anyList());
     }
 }

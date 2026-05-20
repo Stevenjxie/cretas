@@ -1,10 +1,13 @@
 package com.cretas.aims.controller;
 
 import com.cretas.aims.annotation.RequirePermission;
+import com.cretas.aims.dto.attachment.LinkChipCountsDTO;
 import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.entity.Attachment;
 import com.cretas.aims.entity.Attachment.EntityType;
+import com.cretas.aims.entity.Attachment.FileCategory;
 import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.repository.AttachmentRepository;
 import com.cretas.aims.security.AttachmentPermissionResolver;
 import com.cretas.aims.service.attachment.AttachmentService;
 import com.cretas.aims.service.attachment.dto.RegisterAttachmentRequest;
@@ -62,6 +65,10 @@ public class AttachmentController {
 
     private final AttachmentService attachmentService;
     private final AttachmentPermissionResolver permissionResolver;
+    private final AttachmentRepository attachmentRepository;
+
+    /** Sprint 6 W3-A — max ids per batch 3-chip request, bounds a single SQL IN-clause. */
+    private static final int MAX_BATCH_IDS_3CHIP = 500;
 
     // ==================== 1. List by entity ====================
 
@@ -284,6 +291,99 @@ public class AttachmentController {
         return ResponseEntity.ok(ApiResponse.success(counts));
     }
 
+    // ==================== 9. Batch 3-chip count (Sprint 6 W3-A) ====================
+
+    /**
+     * Sprint 6 W3-A — batch-fetch 3-chip (文件/图片/合同) counts for a list of
+     * entity ids. Reusable across 4 list views (sales / procurement /
+     * inventory / voucher) by passing the correct {@link EntityType}.
+     *
+     * <p>Returns one {@link LinkChipCountsDTO} per id requested; absent counts
+     * default to zero. Caller paginates if {@code entityIds.size() > 500}.
+     *
+     * <p>Source: Round 12 §B.6 X2 + Round 13 §3 — HJ baseline 销售单/采购单
+     * list 行内 link counter 是 3 类 (file/image/contract). Replaces the
+     * unified {@code 链:N} chip from Sprint 5 PR #58 with the 3-chip trio.
+     *
+     * <p>POST chosen over GET because the {@code entityIds} list can exceed
+     * URL-length safe limits (200+ rows × 36-char UUIDs).
+     */
+    @PostMapping("/batch-3chip-counts")
+    @RequirePermission(value = {
+            "procurement:read", "procurement:read_write",
+            "sales:read", "sales:read_write",
+            "finance:read", "finance:read_write",
+            "quality:read", "quality:read_write",
+            "production:read", "production:read_write",
+            "warehouse:read", "warehouse:read_write",
+            "hr:read", "hr:read_write",
+            "work_report:read", "work_report:read_write",
+            "restaurant:read", "restaurant:read_write",
+            "rd:read", "rd:read_write",
+            "system:read", "system:read_write"
+    })
+    public ResponseEntity<ApiResponse<List<LinkChipCountsDTO>>> batch3ChipCounts(
+            @PathVariable String factoryId,
+            @Valid @RequestBody Batch3ChipCountRequest req,
+            HttpServletRequest request) {
+        permissionResolver.requireRead(permissionResolver.resolveCurrentUser(request), req.getEntityType());
+        List<String> ids = req.getEntityIds() == null
+                ? java.util.Collections.emptyList()
+                : req.getEntityIds();
+        if (ids.isEmpty()) {
+            return ResponseEntity.ok(ApiResponse.success(java.util.Collections.emptyList()));
+        }
+        if (ids.size() > MAX_BATCH_IDS_3CHIP) {
+            throw new BusinessException(400,
+                    "entityIds size > " + MAX_BATCH_IDS_3CHIP + ", 请分页查询");
+        }
+
+        // One round-trip GROUP BY entityId+fileCategory — no N+1.
+        java.util.Map<String, LinkChipCountsDTO> bucket = new java.util.HashMap<>();
+        for (String id : ids) {
+            bucket.put(id, LinkChipCountsDTO.builder()
+                    .entityId(id)
+                    .fileCount(0L).imageCount(0L).contractCount(0L)
+                    .build());
+        }
+        for (Object[] row : attachmentRepository.countByEntitiesGroupedByCategory(
+                factoryId, req.getEntityType(), ids)) {
+            String entityId = (String) row[0];
+            FileCategory category = (FileCategory) row[1];
+            long count = ((Number) row[2]).longValue();
+            LinkChipCountsDTO dto = bucket.get(entityId);
+            if (dto == null) continue;  // defensive (shouldn't happen given pre-seed)
+            // 3-chip mapping per LinkChipCountsDTO javadoc:
+            // DOCUMENT/OTHER → file, PHOTO/VIDEO → image, CONTRACT → contract;
+            // VOUCHER/SIGNATURE skipped (shown in dedicated columns).
+            switch (category) {
+                case DOCUMENT:
+                case OTHER:
+                    dto.setFileCount(dto.getFileCount() + count);
+                    break;
+                case PHOTO:
+                case VIDEO:
+                    dto.setImageCount(dto.getImageCount() + count);
+                    break;
+                case CONTRACT:
+                    dto.setContractCount(dto.getContractCount() + count);
+                    break;
+                case VOUCHER:
+                case SIGNATURE:
+                default:
+                    // intentionally skipped — not part of 3-chip total
+                    break;
+            }
+        }
+
+        // Preserve caller's input order.
+        List<LinkChipCountsDTO> result = new java.util.ArrayList<>(ids.size());
+        for (String id : ids) {
+            result.add(bucket.get(id));
+        }
+        return ResponseEntity.ok(ApiResponse.success(result));
+    }
+
     // ==================== Request DTOs (inner — only used by this Controller) ====================
 
     @Data
@@ -299,6 +399,19 @@ public class AttachmentController {
 
     @Data
     public static class BatchCountRequest {
+        @NotNull
+        private EntityType entityType;
+        @NotNull
+        private List<String> entityIds;
+    }
+
+    /**
+     * Sprint 6 W3-A — request body for {@link #batch3ChipCounts}. Same shape
+     * as {@link BatchCountRequest} but kept separate so the two endpoints can
+     * evolve independently (e.g. batch-3chip may grow a category filter later).
+     */
+    @Data
+    public static class Batch3ChipCountRequest {
         @NotNull
         private EntityType entityType;
         @NotNull
