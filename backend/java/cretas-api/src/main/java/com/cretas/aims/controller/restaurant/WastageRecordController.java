@@ -40,6 +40,21 @@ public class WastageRecordController {
 
     private final WastageRecordRepository wastageRepository;
 
+    /**
+     * AUD-5 B-A3 sister sweep batch 4b (edge audit 2026-05-20): explicit length caps mirror PG
+     * column widths in {@code wastage_records} table (see {@link WastageRecord}
+     * {@code @Column(length=...)}). Without these, over-length input lets the request reach PG
+     * and surfaces as {@code DataIntegrityViolationException} → generic 409 "数据处理异常".
+     * Pre-check at controller boundary delivers a specific 400 with a hintTarget instead.
+     *
+     * <p>{@code reason} and {@code notes} are {@code @Column(columnDefinition="TEXT")}
+     * (unbounded) so no length check needed for them. {@code rawMaterialTypeId} (length=191)
+     * is a UUID/ID reference (not free-form text), so over-length is unlikely.
+     *
+     * <p>Mirrors PR #48 / PR #76 / PR #78 / PR #92 length-pre-check pattern.
+     */
+    private static final int UNIT_MAX_LENGTH = 20;
+
     // ==================== 列表查询 ====================
 
     @GetMapping
@@ -102,6 +117,10 @@ public class WastageRecordController {
             @RequestBody @Valid WastageRecord record) {
         log.info("创建损耗记录: factoryId={}, type={}, materialId={}",
                 factoryId, record.getType(), record.getRawMaterialTypeId());
+
+        // AUD-5 B-A3 sister sweep batch 4b: length pre-check for unit (VARCHAR 20) BEFORE
+        // dispatching to repository where PG would surface a generic 409.
+        validateEntityLengths(record);
 
         record.setId(null);
         record.setFactoryId(factoryId);
@@ -232,5 +251,31 @@ public class WastageRecordController {
         result.put("byType", typeStats);
         result.put("byMaterial", materialStats);
         return ApiResponse.success(result);
+    }
+
+    // ==================== Boundary validators (AUD-5 B-A3 sister sweep batch 4b) ====================
+
+    /**
+     * AUD-5 B-A3 sister sweep batch 4b (edge audit 2026-05-20): length pre-check for
+     * {@code unit} (PG VARCHAR 20) on the create path. Mirrors PR #48 / PR #78 / PR #92
+     * pattern.
+     *
+     * <p>{@code reason} (TEXT, unbounded) and {@code notes} (TEXT, unbounded) are not
+     * length-bounded by PG, so no pre-check is needed for them.
+     *
+     * <p>Without this, an over-length {@code unit} input lets the request reach PG and
+     * surfaces as {@link org.springframework.dao.DataIntegrityViolationException} →
+     * generic 409 "数据处理异常". Pre-check delivers a specific 400 with the actual vs
+     * allowed length so the user can immediately fix the input.
+     */
+    private void validateEntityLengths(WastageRecord record) {
+        String unit = record.getUnit();
+        if (unit != null && unit.length() > UNIT_MAX_LENGTH) {
+            throw new BusinessException(400,
+                    "计量单位最长 " + UNIT_MAX_LENGTH + " 字符 (当前 " + unit.length() + ")")
+                    .withHint("请使用更短的计量单位 (如 kg / 箱 / 件)")
+                    .withSeverity("warning")
+                    .withHintTarget("unit");
+        }
     }
 }
