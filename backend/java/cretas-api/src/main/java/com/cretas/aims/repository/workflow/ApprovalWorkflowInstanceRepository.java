@@ -127,4 +127,24 @@ public interface ApprovalWorkflowInstanceRepository
             @Param("factoryId") String factoryId,
             @Param("actorId") Long actorId,
             Pageable pageable);
+
+    /**
+     * Sprint 6 W1-B — admin view "工作流处理" query.
+     *
+     * <p>列出当前 factory 下所有指定 status (通常 RUNNING) workflow 实例, 跨 module
+     * 跨 initiator. 给 super-admin / platform_admin 看全局视角, 排查卡住的流程.
+     *
+     * <p><b>调用方必须</b> 通过 controller 层 {@code @PreAuthorize} 守门. 此方法
+     * 本身不做 RBAC 过滤.
+     *
+     * <p>命中索引 {@code idx_aw_instances_recovery (factory_id, status)} (partial index).
+     *
+     * @param factoryId 工厂 id
+     * @param status 通常传 RUNNING
+     * @param pageable 分页参数
+     * @return Page of instances sorted by initiatedAt DESC
+     * @since 2026-05-19 (Sprint 6 W1-B)
+     */
+    Page<ApprovalWorkflowInstance> findByFactoryIdAndStatusOrderByInitiatedAtDesc(
+            String factoryId, InstanceStatus status, Pageable pageable);
 }

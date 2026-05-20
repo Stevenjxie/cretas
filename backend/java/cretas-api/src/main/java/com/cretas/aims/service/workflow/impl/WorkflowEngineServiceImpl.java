@@ -521,6 +521,17 @@ public class WorkflowEngineServiceImpl implements WorkflowEngineService {
         return instanceRepository.findParticipatedBy(factoryId, userId, pageable);
     }
 
+    @Override
+    @Transactional(readOnly = true)
+    public Page<ApprovalWorkflowInstance> listAllRunning(
+            String factoryId, Pageable pageable) {
+        Objects.requireNonNull(factoryId, "factoryId must not be null");
+        Objects.requireNonNull(pageable, "pageable must not be null");
+        // RBAC: 调用方 controller 必须用 @PreAuthorize 守门 — 此方法本身不做 role 过滤.
+        return instanceRepository.findByFactoryIdAndStatusOrderByInitiatedAtDesc(
+                factoryId, InstanceStatus.RUNNING, pageable);
+    }
+
     /**
      * 启动 hook — 从 PG 拉所有 RUNNING 实例重建 Redis state.
      */

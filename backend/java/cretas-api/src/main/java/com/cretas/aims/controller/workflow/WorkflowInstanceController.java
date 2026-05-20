@@ -26,6 +26,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -279,6 +280,56 @@ public class WorkflowInstanceController {
         Pageable pageable = PageRequest.of(page - 1, size);
         Page<ApprovalWorkflowInstance> instances = workflowEngine.findParticipatedBy(
                 factoryId, user.getId(), pageable);
+
+        List<WorkflowInstancePendingDTO> dtos = hydrateInstances(factoryId, instances.getContent());
+
+        PageResponse<WorkflowInstancePendingDTO> response = PageResponse.of(
+                dtos, page, size, instances.getTotalElements());
+        return ApiResponse.success(response);
+    }
+
+    /**
+     * Sprint 6 W1-B — "工作流处理" admin view (super-admin only).
+     *
+     * <p>HJ ERP 工作流 6 sub-menu 之一. 列出当前 factory 下所有 RUNNING workflow
+     * 实例 — 跨 module 跨 initiator 跨 role. 给 super-admin / platform_admin 看全局
+     * 视角, 用于排查卡住的流程、跨部门协调、bulk admin 操作 (W4+ 加 force-cancel /
+     * delegate).
+     *
+     * <p>差异 vs {@code /pending} (按 role 过滤) / {@code /my-created} (按 initiator
+     * 过滤) / {@code /my-participated} (按 actor 过滤): 此 endpoint <b>无过滤</b>,
+     * 返 factory 下全部 RUNNING. 因此必须用 {@code @PreAuthorize} 守门.
+     *
+     * <p>RBAC: 仅 {@code factory_super_admin} 和 {@code platform_admin} 可访问.
+     * 普通审批角色 (finance_manager / quality_manager / ...) 应去 {@code /pending}.
+     *
+     * @param factoryId 工厂 id
+     * @param authorization Bearer JWT (用于 hydrateInstances, 不做 user-level 过滤)
+     * @param page 1-based 页码
+     * @param size 默认 20, 上限 100
+     * @return Page of RUNNING WorkflowInstancePendingDTO
+     * @since 2026-05-19 (Sprint 6 W1-B)
+     */
+    @GetMapping("/admin-running")
+    @PreAuthorize("hasAnyRole('FACTORY_SUPER_ADMIN', 'PLATFORM_ADMIN')")
+    @Operation(summary = "工作流处理 admin 全局视图 — Sprint 6 W1-B (super-admin only)")
+    public ApiResponse<PageResponse<WorkflowInstancePendingDTO>> getAdminRunning(
+            @PathVariable @NotBlank String factoryId,
+            @RequestHeader("Authorization") String authorization,
+            @RequestParam(defaultValue = "1") @Min(1) int page,
+            @RequestParam(defaultValue = "20") @Min(1) @Max(100) int size) {
+
+        // resolve user 仅用于审计日志, 不做过滤 (RBAC 在 @PreAuthorize 拦了非 admin)
+        User user = resolveCurrentUser(authorization);
+        if (user == null) {
+            throw new BusinessException(401, "未授权 — JWT 解析失败");
+        }
+        log.info("admin-running 查询: factoryId={}, admin user={}, page={}, size={}",
+                factoryId, user.getUsername(), page, size);
+
+        Pageable pageable = PageRequest.of(page - 1, size);
+        Page<ApprovalWorkflowInstance> instances = workflowEngine.listAllRunning(
+                factoryId, pageable);
 
         List<WorkflowInstancePendingDTO> dtos = hydrateInstances(factoryId, instances.getContent());
 
