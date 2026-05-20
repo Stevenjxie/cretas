@@ -349,11 +349,11 @@ public class DecisionTypeMetadataRegistry {
         register(DecisionTypeMetadata.builder()
                 .decisionType(DecisionType.WAGE_RECORD_APPROVAL)
                 .chineseName("工资记录审批")
-                .description("月底工资 batch 审批 (Sprint 5 E M-WAGE-INTEGRATION-1)")
+                .description("月底工资 batch 审批 (Sprint 5 E M-WAGE-INTEGRATION-1 + Sprint 6 W4-B PIECE_RATE/HOURLY/MIXED modes)")
                 .category(Category.HR_WAGE)
                 .defaultApproverRoles(List.of("hr_manager", "finance_manager", "factory_super_admin"))
                 .moduleCode("WAGE_RECORD")
-                .wired(false)  // Sprint 6 W4-B 工资 modes 接入
+                .wired(true)  // Sprint 6 W4-B 工资 modes 接入 (WagePolicyController + WageMonthlyScheduler)
                 .build());
 
         register(DecisionTypeMetadata.builder()

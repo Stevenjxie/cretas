@@ -1,15 +1,21 @@
 package com.cretas.aims.service;
 
+import com.cretas.aims.entity.HourlyRateRule;
 import com.cretas.aims.entity.PayrollRecord;
 import com.cretas.aims.entity.PieceRateRule;
 import com.cretas.aims.entity.User;
+import com.cretas.aims.entity.WageCalculation;
+import com.cretas.aims.entity.WagePolicy;
 import com.cretas.aims.entity.WorkerDailyEfficiency;
+import com.cretas.aims.entity.enums.WageMode;
 import com.cretas.aims.repository.PayrollRecordRepository;
 import com.cretas.aims.repository.PieceRateRuleRepository;
 import com.cretas.aims.repository.UserRepository;
+import com.cretas.aims.repository.WageCalculationRepository;
 import com.cretas.aims.repository.WorkerDailyEfficiencyRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -17,6 +23,7 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.YearMonth;
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -49,6 +56,21 @@ public class WageCalculationService {
     private final PayrollRecordRepository payrollRecordRepository;
     private final WorkerDailyEfficiencyRepository workerDailyEfficiencyRepository;
     private final UserRepository userRepository;
+
+    /**
+     * Sprint 6 Track W4-B: optional injection (向后兼容 PR #57 E — 这些 bean 是 Sprint 6 新增).
+     * 通过 @Autowired(required=false) 而非构造函数, 让 PR #57 E unit test 仍然 pass.
+     * 生产环境 Spring 自动注入; 测试用 ReflectionTestUtils.setField 注入 mock.
+     */
+    @Autowired(required = false)
+    private WagePolicyService wagePolicyService;
+
+    @Autowired(required = false)
+    private WageCalculationRepository wageCalculationRepository;
+
+    /** Sprint 6 Track W4-B: WageMonthlyScheduler 调用 calculateMonthlyForFactory 时的 worker query repo. */
+    @Autowired(required = false)
+    private com.cretas.aims.repository.HourlyRateRuleRepository hourlyRateRuleRepository;
 
     // ==================== 常量定义 ====================
 
@@ -817,5 +839,219 @@ public class WageCalculationService {
         return payrollRecordRepository.findTopEarners(
                 factoryId, periodStart, periodEnd,
                 org.springframework.data.domain.PageRequest.of(0, limit));
+    }
+
+    // ==================== Sprint 6 Track W4-B: 按 mode 月度工资计算 ====================
+
+    /**
+     * Sprint 6 Track W4-B: 按 mode 计算员工月度工资.
+     *
+     * <p>分支逻辑:
+     * <ul>
+     *   <li>{@link WageMode#PIECE_RATE}: 沿用 PR #57 E PieceRateRule 阶梯计件 (仅 piece_rate_amount)</li>
+     *   <li>{@link WageMode#HOURLY}: 工时 × baseHourlyRate + 加班工时 × baseHourlyRate × overtimeMultiplier</li>
+     *   <li>{@link WageMode#MIXED}: HOURLY 全额 (含 OT) + PIECE_RATE 全额 (per spec §W4-B 简化求和)</li>
+     * </ul>
+     *
+     * <p>幂等性: 同 (factoryId, employeeId, periodMonth) upsert 已有 WageCalculation 行
+     * (idx_wage_calc_employee_period UNIQUE constraint 保护). 重复 call 仅 update.
+     *
+     * <p>BigDecimal scale=2, ROUND_HALF_UP per CN 财务标准.
+     *
+     * @param factoryId  工厂 ID
+     * @param month      计算月份 (YearMonth, 例 YearMonth.of(2026, 5))
+     * @param employeeId 员工 ID
+     * @return WageCalculation 实体 (含 mode + 各分项 + totalAmount derived)
+     */
+    @Transactional
+    public WageCalculation calculateMonthly(String factoryId, YearMonth month, Long employeeId) {
+        if (wagePolicyService == null) {
+            throw new IllegalStateException(
+                    "WagePolicyService 未注入 — Sprint 6 W4-B feature 需要 wage_policy schema");
+        }
+        if (wageCalculationRepository == null) {
+            throw new IllegalStateException("WageCalculationRepository 未注入");
+        }
+
+        LocalDate monthStart = month.atDay(1);
+        LocalDate monthEnd = month.atEndOfMonth();
+
+        // 1. 解析 mode
+        WageMode mode = wagePolicyService.resolveModeForEmployee(factoryId, employeeId);
+
+        // 2. 员工信息 (用于 employee_name 冗余)
+        Optional<User> workerOpt = userRepository.findById(employeeId);
+        String employeeName = workerOpt
+                .map(u -> u.getFullName() != null ? u.getFullName() : u.getUsername())
+                .orElse("未知员工");
+
+        // 3. 取月度 efficiencies (一次查, 复用)
+        List<WorkerDailyEfficiency> effs = workerDailyEfficiencyRepository
+                .findByWorkerAndDateRange(factoryId, employeeId, monthStart, monthEnd);
+
+        // 4. 月度汇总: 工时 / 件数
+        int totalWorkMinutes = effs.stream()
+                .mapToInt(e -> e.getEffectiveWorkMinutes() != null ? e.getEffectiveWorkMinutes() : 0)
+                .sum();
+        int totalPieceCount = effs.stream()
+                .mapToInt(e -> e.getTotalPieceCount() != null ? e.getTotalPieceCount() : 0)
+                .sum();
+        BigDecimal totalHours = BigDecimal.valueOf(totalWorkMinutes)
+                .divide(BigDecimal.valueOf(60), 2, RoundingMode.HALF_UP);
+        int workDays = effs.size();
+        BigDecimal standardHours = STANDARD_WORK_HOURS_PER_DAY.multiply(BigDecimal.valueOf(workDays));
+        BigDecimal overtimeHours = totalHours.compareTo(standardHours) > 0
+                ? totalHours.subtract(standardHours).setScale(2, RoundingMode.HALF_UP)
+                : BigDecimal.ZERO;
+        BigDecimal regularHours = totalHours.subtract(overtimeHours).setScale(2, RoundingMode.HALF_UP);
+
+        // 5. 计算各分项 (按 mode)
+        BigDecimal hourlyAmount = BigDecimal.ZERO;
+        BigDecimal overtimeAmount = BigDecimal.ZERO;
+        BigDecimal pieceRateAmount = BigDecimal.ZERO;
+        Long hourlyRuleId = null;
+        Long pieceRuleId = null;
+        StringBuilder notesBuilder = new StringBuilder();
+
+        boolean needHourly = (mode == WageMode.HOURLY || mode == WageMode.MIXED);
+        boolean needPieceRate = (mode == WageMode.PIECE_RATE || mode == WageMode.MIXED);
+
+        // 5a. HOURLY / MIXED: 时薪 + 加班
+        if (needHourly) {
+            Optional<HourlyRateRule> hRuleOpt = wagePolicyService
+                    .findEffectiveHourlyRate(factoryId, employeeId, monthStart);
+            if (hRuleOpt.isPresent()) {
+                HourlyRateRule hRule = hRuleOpt.get();
+                hourlyRuleId = hRule.getId();
+                hourlyAmount = regularHours.multiply(hRule.getBaseHourlyRate())
+                        .setScale(2, RoundingMode.HALF_UP);
+                BigDecimal otMultiplier = hRule.getOvertimeMultiplier() != null
+                        ? hRule.getOvertimeMultiplier() : OVERTIME_RATE_MULTIPLIER;
+                overtimeAmount = overtimeHours.multiply(hRule.getBaseHourlyRate())
+                        .multiply(otMultiplier)
+                        .setScale(2, RoundingMode.HALF_UP);
+            } else {
+                log.warn("[calculateMonthly] factory={}, employee={}, month={}: 缺 HourlyRateRule, " +
+                        "hourlyAmount=0", factoryId, employeeId, month);
+                notesBuilder.append("缺 HourlyRateRule(").append(monthStart).append("); ");
+            }
+        }
+
+        // 5b. PIECE_RATE / MIXED: 计件 (per process stage)
+        if (needPieceRate && totalPieceCount > 0) {
+            // 聚合按 process stage 分别计算 (per PR #57 generatePayroll 主路径)
+            Map<String, Integer> piecesByStage = effs.stream()
+                    .filter(e -> e.getProcessStageType() != null && e.getTotalPieceCount() != null
+                            && e.getTotalPieceCount() > 0)
+                    .collect(Collectors.groupingBy(
+                            WorkerDailyEfficiency::getProcessStageType,
+                            Collectors.summingInt(e -> e.getTotalPieceCount())));
+
+            if (!piecesByStage.isEmpty()) {
+                BigDecimal accumPiece = BigDecimal.ZERO;
+                Long firstRuleId = null;
+                for (Map.Entry<String, Integer> entry : piecesByStage.entrySet()) {
+                    String stage = entry.getKey();
+                    int pieces = entry.getValue();
+                    Optional<PieceRateRule> ruleOpt = findApplicableRule(
+                            factoryId, stage, null, monthEnd);
+                    if (ruleOpt.isPresent()) {
+                        PieceRateRule rule = ruleOpt.get();
+                        BigDecimal stageWage = rule.calculateWage(pieces);
+                        accumPiece = accumPiece.add(stageWage);
+                        if (firstRuleId == null) {
+                            firstRuleId = rule.getId();
+                        }
+                    } else {
+                        log.warn("[calculateMonthly] factory={}, employee={}, stage={}: " +
+                                "缺 PieceRateRule, skip", factoryId, employeeId, stage);
+                        notesBuilder.append("缺 PieceRateRule(").append(stage).append("); ");
+                    }
+                }
+                pieceRateAmount = accumPiece.setScale(2, RoundingMode.HALF_UP);
+                pieceRuleId = firstRuleId;
+            }
+        }
+
+        // 6. idempotent upsert
+        WageCalculation calc = wageCalculationRepository
+                .findByFactoryIdAndEmployeeIdAndPeriodMonth(factoryId, employeeId, monthStart)
+                .orElseGet(() -> WageCalculation.builder()
+                        .factoryId(factoryId)
+                        .employeeId(employeeId)
+                        .periodMonth(monthStart)
+                        .build());
+
+        calc.setEmployeeName(employeeName);
+        calc.setMode(mode);
+        calc.setHourlyAmount(hourlyAmount);
+        calc.setOvertimeAmount(overtimeAmount);
+        calc.setPieceRateAmount(pieceRateAmount);
+        calc.setTotalHours(totalHours);
+        calc.setOvertimeHours(overtimeHours);
+        calc.setTotalPieceCount(totalPieceCount);
+        calc.setHourlyRuleId(hourlyRuleId);
+        calc.setPieceRuleId(pieceRuleId);
+        if (notesBuilder.length() > 0) {
+            calc.setNotes(notesBuilder.toString().trim());
+        }
+
+        WageCalculation saved = wageCalculationRepository.save(calc);
+        log.info("[calculateMonthly] factory={}, employee={}, month={}, mode={}, " +
+                        "total={}, hourly={}, ot={}, piece={}",
+                factoryId, employeeId, month, mode,
+                saved.getTotalAmount(), hourlyAmount, overtimeAmount, pieceRateAmount);
+        return saved;
+    }
+
+    /**
+     * Sprint 6 Track W4-B: 工厂级批量月度计算 (月底 WageMonthlyScheduler 调用).
+     *
+     * <p>遍历所有 (worker_daily_efficiency.worker_id) 跑 {@link #calculateMonthly}.
+     * 错误不抛 — 单个员工失败不阻塞其他.
+     *
+     * @return Map containing successCount / failedCount / month / factoryId
+     */
+    @Transactional
+    public Map<String, Object> calculateMonthlyForFactory(String factoryId, YearMonth month) {
+        LocalDate monthStart = month.atDay(1);
+        LocalDate monthEnd = month.atEndOfMonth();
+
+        List<WorkerDailyEfficiency> allEffs = workerDailyEfficiencyRepository
+                .findByDateRange(factoryId, monthStart, monthEnd);
+        Set<Long> workerIds = allEffs.stream()
+                .map(WorkerDailyEfficiency::getWorkerId)
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+
+        int successCount = 0;
+        int failedCount = 0;
+        List<String> failedReasons = new ArrayList<>();
+
+        for (Long workerId : workerIds) {
+            try {
+                calculateMonthly(factoryId, month, workerId);
+                successCount++;
+            } catch (Exception e) {
+                failedCount++;
+                String reason = "employee=" + workerId + ": " + e.getMessage();
+                failedReasons.add(reason);
+                log.error("[calculateMonthlyForFactory] factory={}, employee={}, month={}: 计算失败: {}",
+                        factoryId, workerId, month, e.getMessage(), e);
+            }
+        }
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("factoryId", factoryId);
+        result.put("month", month.toString());
+        result.put("workerCount", workerIds.size());
+        result.put("successCount", successCount);
+        result.put("failedCount", failedCount);
+        if (!failedReasons.isEmpty()) {
+            result.put("failedReasons", failedReasons);
+        }
+
+        log.info("[calculateMonthlyForFactory] factory={}, month={}, workers={}, success={}, failed={}",
+                factoryId, month, workerIds.size(), successCount, failedCount);
+        return result;
     }
 }
