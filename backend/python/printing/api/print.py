@@ -78,6 +78,42 @@ def print_material_requisition(payload: dict[str, Any] = Body(...)) -> Response:
     return _pdf_response(pdf, f"material-requisition-{payload.get('requisitionNumber', 'na')}")
 
 
+# ==================== Sprint 6 W3-C: 3 new P1 endpoints ====================
+
+@router.post("/stock-movement")
+def print_stock_movement(payload: dict[str, Any] = Body(...)) -> Response:
+    """仓库出入库单 PDF (Sprint 6 W3-C P1 — Round 13 §13 + Z-4).
+
+    Java PrintController.printStockMovement → here. movementType in payload
+    decides 入库 vs 出库 title. F006 高频 仓管员场景.
+    """
+    pdf = _render_pdf("stock-movement", payload)
+    return _pdf_response(pdf, f"stock-movement-{payload.get('movementNumber', 'na')}")
+
+
+@router.post("/financial-invoice")
+def print_financial_invoice(payload: dict[str, Any] = Body(...)) -> Response:
+    """财务发票/凭证 PDF (Sprint 6 W3-C P1 — 大客户记账协同).
+
+    invoiceType in payload: VAT_NORMAL / VAT_SPECIAL / VOUCHER.
+    Coordinates with PR #52 数电票 (future: auto-feed apply→queryStatus PDF
+    into this template when 百望 SDK 接通).
+    """
+    pdf = _render_pdf("financial-invoice", payload)
+    return _pdf_response(pdf, f"invoice-{payload.get('invoiceNumber', 'na')}")
+
+
+@router.post("/packing-list")
+def print_packing_list(payload: dict[str, Any] = Body(...)) -> Response:
+    """装箱单 PDF (Sprint 6 W3-C P1 — 跟 N13 W-ABA-1 抄码 配合).
+
+    cartons[].abacaCode 字段承接 weighing 抄码品标签 (per Whisper 易写"超码",
+    严格 exact match '抄码' per .claude rules `reference_abaca_term.md`).
+    """
+    pdf = _render_pdf("packing-list", payload)
+    return _pdf_response(pdf, f"packing-list-{payload.get('packingNumber', 'na')}")
+
+
 @router.post("/preview-template")
 async def preview_template(payload: dict[str, Any] = Body(...)) -> Response:
     """C-PRT-EDITOR-1 — schema-driven print template preview.

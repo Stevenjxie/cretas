@@ -399,10 +399,216 @@ def _kv_table(pairs: list[tuple[str, str]], font: str, col_widths: tuple = None)
     return table
 
 
+# ==================== Sprint 6 W3-C: 3 P1 templates (P1) ====================
+#
+# Sprint 6 W3-C ships 3 new P1 print template categories per Round 13 §13:
+#   - stock-movement (仓库出入库) — F006 高频 仓管员场景
+#   - financial-invoice (财务发票/凭证) — 大客户记账, 跟数电票协同
+#   - packing-list (装箱单) — 跟 N13 W-ABA-1 抄码品配合
+#
+# All 3 follow the existing pattern: data dict in → PDF bytes out, KV header +
+# 明细 table + optional signature line. Java side applies price masking on
+# invoice/stock-movement BEFORE calling here (per PrintController.applyPriceMask).
+
+
+def render_stock_movement(data: dict) -> bytes:
+    """仓库出入库 PDF — 入库单 / 出库单 通用 (movementType 决定标题).
+
+    expected data: {
+      movementNumber, movementType ("IN"|"OUT"), movementDate, warehouseName,
+      sourceRef (源单号 e.g. PO-123 / SO-456),  operator, totalQty,
+      remark, items: [{name, spec, batch, qty, unit, locationCode}]
+    }
+
+    入库 (IN): "仓库入库单" — Receive (source = 采购单 / 生产入库).
+    出库 (OUT): "仓库出库单" — Issue (source = 销售单 / 领料单).
+    """
+    from reportlab.lib.units import cm
+    from reportlab.platypus import Paragraph, Spacer
+
+    s = _get_styles()
+    buffer = io.BytesIO()
+    doc = _make_doc(buffer)
+
+    is_in = (data.get("movementType") or "").upper() == "IN"
+    title_zh = "仓库入库单" if is_in else "仓库出库单"
+    title_en = "Stock Receive" if is_in else "Stock Issue"
+    source_label = "源采购单" if is_in else "源销售单 / 领料单"
+    signature_label = "仓管员入库签名" if is_in else "仓管员出库签名"
+    counterparty_label = "送货员签名" if is_in else "领料人签名"
+
+    story: list[Any] = [
+        Paragraph(data.get("factoryName") or "白垩纪食品", s["small"]),
+        Paragraph(f"{title_zh} · {title_en}", s["title"]),
+        _kv_table([
+            ("单号", data.get("movementNumber", "-")),
+            ("日期", data.get("movementDate", "-")),
+            ("仓库", data.get("warehouseName", "-")),
+            (source_label, data.get("sourceRef", "-")),
+            ("操作员", data.get("operator", "-")),
+            ("总数量", _fmt_qty(data.get("totalQty"))),
+        ], s["font"]),
+        Spacer(1, 0.5 * cm),
+        Paragraph("出入库明细", s["h2"]),
+        _render_items_table(
+            data.get("items") or [],
+            [("物料", "name", "LEFT"), ("规格", "spec", "LEFT"),
+             ("批次", "batch", "LEFT"), ("数量", "qty", "RIGHT"),
+             ("单位", "unit", "CENTER"), ("库位", "locationCode", "LEFT")],
+            s["font"],
+        ),
+    ]
+    if data.get("remark"):
+        story.extend([Spacer(1, 0.5 * cm), Paragraph("备注", s["h2"]),
+                      Paragraph(str(data["remark"]), s["body"])])
+    story.extend([
+        Spacer(1, 1.0 * cm),
+        Paragraph(f"{signature_label}: ____________________________", s["body"]),
+        Paragraph(f"{counterparty_label}: ____________________________", s["body"]),
+    ])
+    doc.build(story)
+    return buffer.getvalue()
+
+
+def render_financial_invoice(data: dict) -> bytes:
+    """财务发票/凭证 PDF — 跟 PR #52 数电票 协同.
+
+    expected data: {
+      invoiceNumber, invoiceType ("VAT_NORMAL"|"VAT_SPECIAL"|"VOUCHER"),
+      invoiceDate, partyName (购买方/收款方), partyTaxId,
+      sellerName, sellerTaxId,
+      items: [{name, spec, qty, unit, unitPrice, taxRate, subtotal, taxAmount}],
+      subtotal, taxAmount, totalAmount, remark, drawer (开票人)
+    }
+
+    invoiceType:
+      VAT_NORMAL  — 增值税普通发票 (普票)
+      VAT_SPECIAL — 增值税专用发票 (专票, 可抵扣)
+      VOUCHER     — 记账凭证 (内部财务用)
+    """
+    from reportlab.lib.units import cm
+    from reportlab.platypus import Paragraph, Spacer
+
+    s = _get_styles()
+    buffer = io.BytesIO()
+    doc = _make_doc(buffer)
+
+    inv_type = (data.get("invoiceType") or "VAT_NORMAL").upper()
+    title_map = {
+        "VAT_NORMAL": ("增值税普通发票", "VAT Invoice"),
+        "VAT_SPECIAL": ("增值税专用发票", "VAT Special Invoice"),
+        "VOUCHER": ("记账凭证", "Accounting Voucher"),
+    }
+    title_zh, title_en = title_map.get(inv_type, ("发票", "Invoice"))
+
+    story: list[Any] = [
+        Paragraph(data.get("factoryName") or "白垩纪食品", s["small"]),
+        Paragraph(f"{title_zh} · {title_en}", s["title"]),
+        _kv_table([
+            ("发票号", data.get("invoiceNumber", "-")),
+            ("开票日期", data.get("invoiceDate", "-")),
+            ("购买方 / 收款方", data.get("partyName", "-")),
+            ("税号", data.get("partyTaxId", "-")),
+            ("销售方", data.get("sellerName", "-")),
+            ("销方税号", data.get("sellerTaxId", "-")),
+        ], s["font"]),
+        Spacer(1, 0.5 * cm),
+        Paragraph("发票明细", s["h2"]),
+        _render_items_table(
+            data.get("items") or [],
+            [("货物 / 服务", "name", "LEFT"), ("规格", "spec", "LEFT"),
+             ("数量", "qty", "RIGHT"), ("单价", "unitPrice", "RIGHT"),
+             ("税率", "taxRate", "CENTER"), ("税额", "taxAmount", "RIGHT"),
+             ("小计", "subtotal", "RIGHT")],
+            s["font"],
+        ),
+        Spacer(1, 0.5 * cm),
+        _kv_table([
+            ("不含税合计", _fmt_money(data.get("subtotal"))),
+            ("税额合计", _fmt_money(data.get("taxAmount"))),
+            ("价税合计", _fmt_money(data.get("totalAmount"))),
+        ], s["font"]),
+    ]
+    if data.get("remark"):
+        story.extend([Spacer(1, 0.5 * cm), Paragraph("备注", s["h2"]),
+                      Paragraph(str(data["remark"]), s["body"])])
+    story.extend([
+        Spacer(1, 1.0 * cm),
+        Paragraph(f"开票人: {data.get('drawer', '-')}", s["body"]),
+        Paragraph("收款人: ____________  复核: ____________", s["body"]),
+    ])
+    doc.build(story)
+    return buffer.getvalue()
+
+
+def render_packing_list(data: dict) -> bytes:
+    """装箱单 PDF — 跟 N13 W-ABA-1 抄码品 配合.
+
+    expected data: {
+      packingNumber, packingDate, salesOrderRef (关联销售单),
+      shipToName, shipToAddress, shipper (发货员),
+      totalCartons, totalNetWeight, totalGrossWeight, weightUnit,
+      cartons: [{cartonNo, productName, spec, qty, unit, netWeight,
+                 grossWeight, abacaCode (抄码)}],
+      remark
+    }
+    """
+    from reportlab.lib.units import cm
+    from reportlab.platypus import Paragraph, Spacer
+
+    s = _get_styles()
+    buffer = io.BytesIO()
+    doc = _make_doc(buffer)
+
+    weight_unit = data.get("weightUnit") or "kg"
+
+    story: list[Any] = [
+        Paragraph(data.get("factoryName") or "白垩纪食品", s["small"]),
+        Paragraph("装箱单 · Packing List", s["title"]),
+        _kv_table([
+            ("装箱单号", data.get("packingNumber", "-")),
+            ("装箱日期", data.get("packingDate", "-")),
+            ("关联销售单", data.get("salesOrderRef", "-")),
+            ("收货方", data.get("shipToName", "-")),
+            ("收货地址", data.get("shipToAddress", "-")),
+            ("发货员", data.get("shipper", "-")),
+            ("总箱数", str(data.get("totalCartons", "-"))),
+            (f"总净重 ({weight_unit})", _fmt_qty(data.get("totalNetWeight"))),
+            (f"总毛重 ({weight_unit})", _fmt_qty(data.get("totalGrossWeight"))),
+        ], s["font"]),
+        Spacer(1, 0.5 * cm),
+        Paragraph("装箱明细", s["h2"]),
+        _render_items_table(
+            data.get("cartons") or [],
+            [("箱号", "cartonNo", "CENTER"), ("产品", "productName", "LEFT"),
+             ("规格", "spec", "LEFT"), ("数量", "qty", "RIGHT"),
+             ("单位", "unit", "CENTER"), (f"净重({weight_unit})", "netWeight", "RIGHT"),
+             (f"毛重({weight_unit})", "grossWeight", "RIGHT"),
+             ("抄码", "abacaCode", "LEFT")],
+            s["font"],
+        ),
+    ]
+    if data.get("remark"):
+        story.extend([Spacer(1, 0.5 * cm), Paragraph("备注", s["h2"]),
+                      Paragraph(str(data["remark"]), s["body"])])
+    story.extend([
+        Spacer(1, 1.0 * cm),
+        Paragraph("发货员签名: ____________________________", s["body"]),
+        Paragraph("承运司机签名: ____________________________", s["body"]),
+        Paragraph("收货方签收: ____________________________", s["body"]),
+    ])
+    doc.build(story)
+    return buffer.getvalue()
+
+
 RENDERERS: dict[str, Any] = {
     "sales-order": render_sales_order,
     "purchase-order": render_purchase_order,
     "quotation": render_quotation,
     "production-task": render_production_task,
     "material-requisition": render_material_requisition,
+    # Sprint 6 W3-C — 3 new P1 templates (Round 13 §13 + Z-4 coverage)
+    "stock-movement": render_stock_movement,
+    "financial-invoice": render_financial_invoice,
+    "packing-list": render_packing_list,
 }
