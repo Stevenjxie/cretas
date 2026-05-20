@@ -21,6 +21,7 @@ import com.cretas.aims.service.ApprovalWorkflowService;
 import com.cretas.aims.service.notify.NotifyRequest;
 import com.cretas.aims.service.notify.NotifyResult;
 import com.cretas.aims.service.notify.NotifySenderRegistry;
+import com.cretas.aims.service.workflow.DecisionTypeMetadataRegistry;
 import com.cretas.aims.service.workflow.SandboxedSpelEvaluator;
 import com.cretas.aims.service.workflow.SandboxedSpelEvaluator.SpelEvaluationFailure;
 import com.cretas.aims.service.workflow.WorkflowEngineService;
@@ -79,10 +80,11 @@ public class WorkflowEngineServiceImpl implements WorkflowEngineService {
     private static final Duration REDIS_TERMINAL_TTL = Duration.ofHours(24);
 
     /**
-     * moduleCode → DecisionType registry.
+     * moduleCode → DecisionType registry (legacy static map).
      *
-     * <p>Phase 1: PURCHASE_ORDER / SALES_ORDER. Phase B+ 扩展时直接加 entry,
-     * 不必触碰 {@link #lookupDecisionType} 方法 body.
+     * <p>Phase 1: PURCHASE_ORDER / SALES_ORDER. Sprint 6 W3-B (2026-05-19):
+     * 改为优先查 {@link DecisionTypeMetadataRegistry} (覆盖全部 32 个), 这里
+     * 的静态 map 仅保留以向后兼容 + 测试场景 (test 无 registry 注入时 fallback).
      */
     private static final Map<String, DecisionType> MODULE_TO_DECISION = Map.of(
             "PURCHASE_ORDER", DecisionType.PURCHASE_ORDER_APPROVAL,
@@ -114,6 +116,15 @@ public class WorkflowEngineServiceImpl implements WorkflowEngineService {
 
     @Autowired(required = false)
     private NotifyLogRepository notifyLogRepository;
+
+    /**
+     * Sprint 6 W3-B (2026-05-19): DecisionType 元数据 registry. Field-injected (not
+     * constructor) to keep existing test constructor signature unchanged. Optional
+     * via {@code required = false} — when not wired (older tests w/o Spring context)
+     * falls back to legacy {@link #MODULE_TO_DECISION} static map.
+     */
+    @Autowired(required = false)
+    private DecisionTypeMetadataRegistry decisionTypeMetadataRegistry;
 
     @Autowired
     public WorkflowEngineServiceImpl(
@@ -1046,14 +1057,33 @@ public class WorkflowEngineServiceImpl implements WorkflowEngineService {
     // ==================== Internal helpers ====================
 
     /**
-     * moduleCode → DecisionType — registry lookup, Phase B+ 加 entry 不必触碰逻辑.
+     * moduleCode → DecisionType — Sprint 6 W3-B (2026-05-19) 改进 lookup 顺序:
+     * <ol>
+     *   <li>优先查 {@link DecisionTypeMetadataRegistry} (覆盖全 32 个 DecisionType)</li>
+     *   <li>fallback 静态 {@link #MODULE_TO_DECISION} (向后兼容 + test 场景 registry
+     *       未注入 fallback)</li>
+     *   <li>仍 null → 抛 IllegalArgumentException</li>
+     * </ol>
+     *
+     * <p>Phase B+ 加 moduleCode 只需在 {@link DecisionTypeMetadataRegistry#init}
+     * 给对应 DecisionType 设 moduleCode, 不必触碰本方法.
      */
     private DecisionType lookupDecisionType(String moduleCode) {
+        // 1. 优先 metadata registry — 覆盖全 32 个 DecisionType.
+        if (decisionTypeMetadataRegistry != null) {
+            DecisionType viaRegistry = decisionTypeMetadataRegistry.lookupByModuleCode(moduleCode);
+            if (viaRegistry != null) {
+                return viaRegistry;
+            }
+        }
+        // 2. fallback 静态 map — 兼容旧 test (无 Spring context 注入 registry).
         DecisionType type = MODULE_TO_DECISION.get(moduleCode);
         if (type == null) {
+            String registered = decisionTypeMetadataRegistry != null
+                    ? "查 metadata registry + " + MODULE_TO_DECISION.keySet() + " fallback"
+                    : "(metadata registry 未注入) " + MODULE_TO_DECISION.keySet();
             throw new IllegalArgumentException(
-                    "未支持的 moduleCode: " + moduleCode +
-                    " (已注册: " + MODULE_TO_DECISION.keySet() + ")");
+                    "未支持的 moduleCode: " + moduleCode + " — " + registered);
         }
         return type;
     }

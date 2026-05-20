@@ -10,19 +10,84 @@ import request from './request'
 
 // ==================== Wire types ====================
 
+/**
+ * DecisionType — Sprint 5 PR #55 H 扩 enum 14→32 + CUSTOM (Round 13 §10 HJ 115+
+ * workflow finding). Sprint 6 W3-B (2026-05-19) admin UI 加入 dropdown 全部 32 项,
+ * 通过 /decision-types-meta endpoint 拿后端元数据 (中文名/分类/默认审批角色).
+ */
 export type DecisionType =
+  // 生产 / 工序 (6)
   | 'FORCE_INSERT'
+  | 'PRODUCTION_PLAN_CHANGE'
+  | 'EQUIPMENT_STATUS_CHANGE'
+  | 'BOM_VERSION_APPROVAL'
+  | 'ECN_APPROVAL'
+  | 'WORK_ORDER_APPROVAL'
+  // 质检 / 物料 (5)
   | 'QUALITY_RELEASE'
   | 'QUALITY_EXCEPTION'
   | 'BATCH_STATUS_CHANGE'
+  | 'MATERIAL_DISPOSAL'
+  | 'MATERIAL_REQUISITION_APPROVAL'
+  // 采购 / 供应商 (5)
   | 'SUPPLIER_APPROVAL'
   | 'SUPPLIER_STATUS_CHANGE'
-  | 'MATERIAL_DISPOSAL'
-  | 'PRODUCTION_PLAN_CHANGE'
-  | 'EQUIPMENT_STATUS_CHANGE'
   | 'PURCHASE_ORDER_APPROVAL'
+  | 'PURCHASE_PAYMENT_APPROVAL'
+  | 'PURCHASE_RETURN_APPROVAL'
+  // 销售 / 客户 (5)
   | 'SALES_ORDER_APPROVAL'
+  | 'SALES_RETURN_APPROVAL'
+  | 'SALES_DISCOUNT_APPROVAL'
+  | 'CUSTOMER_CREDIT_APPROVAL'
+  | 'INVOICE_ISSUANCE_APPROVAL'
+  // 财务 / 凭证 (5)
+  | 'VOUCHER_APPROVAL'
+  | 'EXPENSE_APPROVAL'
+  | 'BUDGET_APPROVAL'
+  | 'PAYMENT_APPROVAL'
+  | 'TAX_FILING_APPROVAL'
+  // 人事 / 工资 (4)
+  | 'LEAVE_APPROVAL'
+  | 'OVERTIME_APPROVAL'
+  | 'WAGE_RECORD_APPROVAL'
+  | 'HIRE_APPROVAL'
+  // 仓储 / 调拨 (3)
+  | 'INVENTORY_TRANSFER_APPROVAL'
+  | 'INVENTORY_ADJUSTMENT_APPROVAL'
+  | 'WASTAGE_APPROVAL'
+  // 其他 (1)
   | 'CUSTOM'
+
+/**
+ * DecisionType 业务分类 — 后端 DecisionTypeMetadata.Category enum 镜像.
+ * Admin UI dropdown 用 category 分组渲染.
+ */
+export type DecisionTypeCategory =
+  | 'PRODUCTION'
+  | 'QUALITY_MATERIAL'
+  | 'PURCHASE_SUPPLIER'
+  | 'SALES_CUSTOMER'
+  | 'FINANCE_VOUCHER'
+  | 'HR_WAGE'
+  | 'WAREHOUSE_TRANSFER'
+  | 'OTHER'
+
+/**
+ * DecisionType 元数据 — 后端 DecisionTypeMetadata DTO 镜像.
+ * Sprint 6 W3-B: 取代 admin UI hardcode 12 个 dropdown 选项的旧方式.
+ */
+export interface DecisionTypeMetadataDTO {
+  decisionType: DecisionType
+  chineseName: string
+  description: string
+  category: DecisionTypeCategory
+  defaultApproverRoles: string[]
+  /** moduleCode null 表示该 DecisionType 不参与 moduleCode lookup (e.g. CUSTOM) */
+  moduleCode: string | null
+  /** Sprint 6 W3-B 是否已 ship backend trigger 接入 — false 表 admin 可配置但 service 未调用 */
+  wired: boolean
+}
 
 export type PublishStatus = 'draft' | 'published' | 'archived'
 
@@ -161,3 +226,10 @@ export const getStatistics = (factoryId: string) =>
 
 export const getDecisionTypes = (factoryId: string) =>
   request.get<ApiResponse<DecisionType[]>>(`${base(factoryId)}/decision-types`)
+
+/**
+ * Sprint 6 W3-B (2026-05-19): 取 32 个 DecisionType 完整元数据 (中文名/分类/默认角色).
+ * Admin UI dropdown 用此, 取代之前 hardcode 12 个选项.
+ */
+export const getDecisionTypesMetadata = (factoryId: string) =>
+  request.get<ApiResponse<DecisionTypeMetadataDTO[]>>(`${base(factoryId)}/decision-types-meta`)
