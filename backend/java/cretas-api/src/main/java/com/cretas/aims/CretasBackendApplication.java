@@ -29,10 +29,21 @@ public class CretasBackendApplication {
     }
 
     /**
-     * 全局 CORS 配置
-     * allowedOriginPatterns("*") with allowCredentials(true) is required
-     * for web admin HttpOnly cookie authentication.
-     * (allowedOrigins("*") would conflict with allowCredentials(true))
+     * 全局 CORS 配置.
+     *
+     * <p>Security HARD requirement: when {@code allowCredentials(true)} is set,
+     * {@code allowedOriginPatterns} must NEVER be {@code "*"} or wildcard-too-broad.
+     * A wildcard + credentials lets any malicious site read authenticated responses
+     * cross-origin (per audit 2026-05-20 AUD-1 P0 finding).
+     *
+     * <p>Legitimate origins:
+     * <ul>
+     *   <li>{@code https://admin.cretaceousfuture.com} — prod web-admin (TLS)</li>
+     *   <li>{@code https://*.cretaceousfuture.com} — prod sub-domains (centerapi etc.)</li>
+     *   <li>{@code http://139.196.165.140:*} — legacy IP-port (test 8097 / prod 8086)</li>
+     *   <li>{@code http://localhost:*} — local Vite dev (5173 / 5174 / 3000)</li>
+     *   <li>{@code http://127.0.0.1:*} — local Vite dev (IPv4 loopback)</li>
+     * </ul>
      */
     @Bean
     public WebMvcConfigurer corsConfigurer() {
@@ -40,7 +51,12 @@ public class CretasBackendApplication {
             @Override
             public void addCorsMappings(CorsRegistry registry) {
                 registry.addMapping("/api/**")
-                        .allowedOriginPatterns("*")
+                        .allowedOriginPatterns(
+                                "https://admin.cretaceousfuture.com",
+                                "https://*.cretaceousfuture.com",
+                                "http://139.196.165.140:*",
+                                "http://localhost:*",
+                                "http://127.0.0.1:*")
                         .allowedMethods("GET", "POST", "PUT", "DELETE", "OPTIONS")
                         .allowedHeaders("*")
                         .allowCredentials(true)
