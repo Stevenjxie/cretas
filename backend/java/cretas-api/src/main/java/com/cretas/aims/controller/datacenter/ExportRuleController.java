@@ -3,6 +3,7 @@ package com.cretas.aims.controller.datacenter;
 import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.entity.datacenter.ExportJob;
 import com.cretas.aims.entity.datacenter.ExportRule;
+import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.service.datacenter.ExportService;
 import com.cretas.aims.utils.SecurityUtils;
 import lombok.RequiredArgsConstructor;
@@ -35,6 +36,25 @@ public class ExportRuleController {
 
     private final ExportService exportService;
 
+    /**
+     * AUD-5 B-A3 sister sweep batch 4a (edge audit 2026-05-20): explicit length caps mirror PG
+     * column widths in {@code export_rules} table (see {@link ExportRule}
+     * {@code @Column(length=...)}). Without these, over-length input lets the request reach PG
+     * and surfaces as {@code DataIntegrityViolationException} → generic 409 "数据处理异常".
+     * Pre-check at controller boundary delivers a specific 400 with a hintTarget instead.
+     *
+     * <p>{@link ExportRule} is accepted as raw {@code @RequestBody} (no DTO wrapper /
+     * no {@code @Size}), so controller-side pre-check is the safety net. The
+     * {@code description} and {@code filter_expression} columns are {@code TEXT}
+     * (unbounded), so no length check needed for them.
+     *
+     * <p>Mirrors PR #48 / PR #76 / PR #78 / PR #92 length-pre-check pattern.
+     */
+    private static final int MODULE_CODE_MAX_LENGTH = 64;
+    private static final int RULE_NAME_MAX_LENGTH = 200;
+    private static final int FORMAT_MAX_LENGTH = 10;
+    private static final int TARGET_ENTITY_MAX_LENGTH = 200;
+
     // ───── Rule CRUD ─────
 
     @GetMapping
@@ -63,6 +83,9 @@ public class ExportRuleController {
     public ResponseEntity<ApiResponse<ExportRule>> create(
             @PathVariable String factoryId,
             @RequestBody ExportRule rule) {
+        // AUD-5 B-A3 sister sweep batch 4a: length pre-check for moduleCode (64) + ruleName (200) +
+        // format (10) + targetEntity (200) BEFORE persisting to PG.
+        validateExportRuleLengths(rule);
         rule.setFactoryId(factoryId);
         return ResponseEntity.ok(ApiResponse.success("规则创建成功", exportService.createRule(rule)));
     }
@@ -73,6 +96,8 @@ public class ExportRuleController {
             @PathVariable String factoryId,
             @PathVariable Long ruleId,
             @RequestBody ExportRule patch) {
+        // AUD-5 B-A3 sister sweep batch 4a (Rule 16: entry-point matrix — update path).
+        validateExportRuleLengths(patch);
         return ResponseEntity.ok(ApiResponse.success("规则更新成功",
                 exportService.updateRule(factoryId, ruleId, patch)));
     }
@@ -158,5 +183,59 @@ public class ExportRuleController {
     private static String extensionFor(String name) {
         int dot = name.lastIndexOf('.');
         return dot < 0 ? "" : name.substring(dot);
+    }
+
+    // ==================== Boundary validators (AUD-5 B-A3 sister sweep batch 4a) ====================
+
+    /**
+     * AUD-5 B-A3 sister sweep batch 4a (edge audit 2026-05-20): length pre-check for
+     * {@code moduleCode} (PG VARCHAR 64), {@code ruleName} (200), {@code format} (10),
+     * {@code targetEntity} (200) on the create + update paths
+     * (Rule 16: entry-point matrix). Mirrors PR #48 / PR #78 / PR #92 pattern.
+     *
+     * <p>Without this, an over-length input lets the request reach PG and surfaces as
+     * {@link org.springframework.dao.DataIntegrityViolationException} → generic 409
+     * "数据处理异常". Pre-check delivers a specific 400 with the actual vs allowed length
+     * so the user can immediately fix the input.
+     *
+     * <p>{@code description} (TEXT, unbounded) and {@code filterExpression} (TEXT, unbounded)
+     * are not length-bounded by PG, so no pre-check is needed for them.
+     */
+    private void validateExportRuleLengths(ExportRule rule) {
+        if (rule == null) {
+            return;
+        }
+        String moduleCode = rule.getModuleCode();
+        if (moduleCode != null && moduleCode.length() > MODULE_CODE_MAX_LENGTH) {
+            throw new BusinessException(400,
+                    "模块代码最长 " + MODULE_CODE_MAX_LENGTH + " 字符 (当前 " + moduleCode.length() + ")")
+                    .withHint("请使用更短的模块代码 (上限 64 字符)")
+                    .withSeverity("warning")
+                    .withHintTarget("moduleCode");
+        }
+        String ruleName = rule.getRuleName();
+        if (ruleName != null && ruleName.length() > RULE_NAME_MAX_LENGTH) {
+            throw new BusinessException(400,
+                    "规则名称最长 " + RULE_NAME_MAX_LENGTH + " 字符 (当前 " + ruleName.length() + ")")
+                    .withHint("请使用更短的规则名称 (上限 200 字符)")
+                    .withSeverity("warning")
+                    .withHintTarget("ruleName");
+        }
+        String format = rule.getFormat();
+        if (format != null && format.length() > FORMAT_MAX_LENGTH) {
+            throw new BusinessException(400,
+                    "导出格式最长 " + FORMAT_MAX_LENGTH + " 字符 (当前 " + format.length() + ")")
+                    .withHint("请使用预定义格式 (XLSX / CSV / PDF)")
+                    .withSeverity("warning")
+                    .withHintTarget("format");
+        }
+        String targetEntity = rule.getTargetEntity();
+        if (targetEntity != null && targetEntity.length() > TARGET_ENTITY_MAX_LENGTH) {
+            throw new BusinessException(400,
+                    "目标实体类名最长 " + TARGET_ENTITY_MAX_LENGTH + " 字符 (当前 " + targetEntity.length() + ")")
+                    .withHint("请使用更短的全限定类名 (上限 200 字符)")
+                    .withSeverity("warning")
+                    .withHintTarget("targetEntity");
+        }
     }
 }
