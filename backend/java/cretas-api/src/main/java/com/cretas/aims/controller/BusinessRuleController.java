@@ -5,9 +5,12 @@ import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.engine.DynamicSchedulerService;
 import com.cretas.aims.entity.config.*;
 import com.cretas.aims.repository.config.*;
+import com.cretas.aims.service.workflow.SandboxedSpelEvaluator;
+import com.cretas.aims.service.workflow.SandboxedSpelEvaluator.SpelEvaluationFailure;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
@@ -19,6 +22,7 @@ import java.util.Map;
  * set validation rules or change scheduler cron — huge production risk (a bad rule can
  * block all saves across a module, and a bad cron can trigger runaway AI workflows).
  */
+@Slf4j
 @RestController
 @RequestMapping("/api/mobile/{factoryId}/config/v2")
 @RequiredArgsConstructor
@@ -51,6 +55,7 @@ public class BusinessRuleController {
     private final FactoryFormulaRepository formulaRepo;
     private final FactorySchedulerConfigRepository schedulerRepo;
     private final DynamicSchedulerService dynamicSchedulerService;
+    private final SandboxedSpelEvaluator spelEvaluator;
 
     @GetMapping("/validation-rules")
     @Operation(summary = "获取工厂校验规则列表")
@@ -68,6 +73,12 @@ public class BusinessRuleController {
     public ApiResponse<FactoryValidationRule> setValidationRule(
             @PathVariable String factoryId, @PathVariable String ruleCode,
             @RequestBody FactoryValidationRule body) {
+        // B-A7 P2 defense-in-depth (sister of PR #48 / #50 / aiAgent fix):
+        // FactoryValidationRule.condition is consumed as SpEL by downstream evaluators
+        // — reject RCE / reflection at write time before persist.
+        ApiResponse<FactoryValidationRule> conditionError = validateSpelFvr(body.getCondition());
+        if (conditionError != null) return conditionError;
+
         FactoryValidationRule rule = validationRuleRepo.findByFactoryIdAndModuleCode(factoryId, body.getModuleCode())
                 .stream().filter(r -> r.getRuleCode().equals(ruleCode)).findFirst()
                 .orElseGet(() -> {
@@ -115,6 +126,15 @@ public class BusinessRuleController {
     @RequireRole({"factory_super_admin", "permission_admin"})
     public ApiResponse<FactoryFormula> setFormula(
             @PathVariable String factoryId, @PathVariable String formulaCode, @RequestBody FactoryFormula body) {
+        // B-A7 P2 defense-in-depth (sister of PR #48 / #50 / aiAgent fix):
+        // FactoryFormula.expression is evaluated by the formula engine; even though the
+        // current engine may use its own parser, treat any user-supplied expression as
+        // untrusted and reject obvious RCE constructs (T() / new / reflection / @bean)
+        // at write time. The SpEL sandbox's static-pattern layer (Layer 1) provides this
+        // defense regardless of which engine eventually consumes the field.
+        ApiResponse<FactoryFormula> expressionError = validateSpelFormula(body.getExpression());
+        if (expressionError != null) return expressionError;
+
         FactoryFormula formula = formulaRepo.findByFactoryIdAndModuleCodeAndFormulaCode(factoryId, body.getModuleCode(), formulaCode)
                 .orElseGet(() -> { FactoryFormula f = new FactoryFormula(); f.setFactoryId(factoryId); f.setFormulaCode(formulaCode); f.setModuleCode(body.getModuleCode()); return f; });
         if (body.getExpression() != null) formula.setExpression(body.getExpression());
@@ -165,5 +185,52 @@ public class BusinessRuleController {
         FactorySchedulerConfig saved = schedulerRepo.save(config);
         dynamicSchedulerService.reloadSchedule(factoryId, taskCode);
         return ApiResponse.success(saved);
+    }
+
+    /**
+     * B-A7 P2 defense-in-depth (sister of PR #48 / #50 / aiAgent fix): validate
+     * SpEL-shaped fields ({@code condition}) on validation-rule PUT.
+     * Returns non-null error response when SpEL contains RCE / reflection / forbidden
+     * constructs. Returns null when null/blank (allowed) or passes sandbox validation.
+     */
+    private ApiResponse<FactoryValidationRule> validateSpelFvr(String spel) {
+        if (spel == null || spel.isBlank()) return null;
+        try {
+            spelEvaluator.validateSyntax(spel);
+            return null;
+        } catch (SpelEvaluationFailure ex) {
+            log.warn("Rejected validation-rule SpEL at write time: spel={}, reason={}",
+                    spel, ex.getUserMessage());
+            return ApiResponse.errorWithCode(400, "VALIDATION",
+                    "SpEL 表达式语法/安全检查失败: " + ex.getUserMessage(),
+                    ex.getActionHint() != null
+                            ? ex.getActionHint()
+                            : "仅支持业务字段访问, 禁用 T()/new/反射",
+                    "warning");
+        }
+    }
+
+    /**
+     * Same as {@link #validateSpelFvr} but returns a {@link FactoryFormula}-typed
+     * ApiResponse so the formula PUT signature is satisfied without a generic.
+     * Note: even if {@code FactoryFormula.expression} is evaluated by a non-SpEL engine,
+     * the static-pattern Layer 1 of {@link SandboxedSpelEvaluator#validateSyntax} still
+     * blocks T() / new / reflection / @bean — defense-in-depth.
+     */
+    private ApiResponse<FactoryFormula> validateSpelFormula(String spel) {
+        if (spel == null || spel.isBlank()) return null;
+        try {
+            spelEvaluator.validateSyntax(spel);
+            return null;
+        } catch (SpelEvaluationFailure ex) {
+            log.warn("Rejected formula expression at write time: spel={}, reason={}",
+                    spel, ex.getUserMessage());
+            return ApiResponse.errorWithCode(400, "VALIDATION",
+                    "公式表达式语法/安全检查失败: " + ex.getUserMessage(),
+                    ex.getActionHint() != null
+                            ? ex.getActionHint()
+                            : "仅支持业务字段引用 + 算术运算, 禁用 T()/new/反射",
+                    "warning");
+        }
     }
 }

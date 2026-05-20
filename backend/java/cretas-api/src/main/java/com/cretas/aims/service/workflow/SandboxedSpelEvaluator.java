@@ -50,6 +50,20 @@ public class SandboxedSpelEvaluator {
 
     private final SpelExpressionParser parser = new SpelExpressionParser();
 
+    /** DoS guard: max SpEL expression length. Anything longer is rejected at validate-time
+     *  before parse. Mirrors typical safe upper bounds for hand-written business expressions —
+     *  practical formulas rarely exceed a few hundred chars. */
+    private static final int MAX_SPEL_LENGTH = 2000;
+
+    /** DoS guard: max parenthesis nesting depth. Anything deeper would either be unreadable
+     *  or be a parser stack-overflow attack vector. */
+    private static final int MAX_PAREN_DEPTH = 30;
+
+    /** Heuristic ReDoS guard: matches {@code .matches("(.+...)+...")} or {@code .matches("(.+...)*")}
+     *  pattern — classic catastrophic-backtracking regex shape. Imperfect but catches obvious cases. */
+    private static final java.util.regex.Pattern REDOS_HEURISTIC =
+            java.util.regex.Pattern.compile("\\.matches\\s*\\(\\s*[\"'][^\"']*\\([^)]*[+*][^)]*\\)\\s*[+*][^\"']*[\"']");
+
     /**
      * 求值 SpEL 表达式, 返 boolean.
      *
@@ -95,6 +109,43 @@ public class SandboxedSpelEvaluator {
      */
     public void validateSyntax(String spel) throws SpelEvaluationFailure {
         Objects.requireNonNull(spel, "spel must not be null");
+
+        // Layer 0: DoS guards — bound input before any parse/eval work.
+        // (a) length cap: protects parser from megabyte payload.
+        if (spel.length() > MAX_SPEL_LENGTH) {
+            throw new SpelEvaluationFailure(spel,
+                    "SpEL 表达式过长 (当前 " + spel.length() + " 字符, 上限 " + MAX_SPEL_LENGTH + ")",
+                    "请缩短表达式至 " + MAX_SPEL_LENGTH + " 字符内, 或拆分为多条规则",
+                    null);
+        }
+        // (b) paren depth cap: protects parser stack from deeply nested input
+        //     (StackOverflowError is otherwise unrecoverable in Layer 2 dry-run).
+        int depth = 0;
+        int maxDepth = 0;
+        for (int i = 0; i < spel.length(); i++) {
+            char c = spel.charAt(i);
+            if (c == '(') {
+                depth++;
+                if (depth > maxDepth) maxDepth = depth;
+            } else if (c == ')') {
+                depth--;
+            }
+        }
+        if (maxDepth > MAX_PAREN_DEPTH) {
+            throw new SpelEvaluationFailure(spel,
+                    "SpEL 表达式嵌套过深 (当前 " + maxDepth + " 层, 上限 " + MAX_PAREN_DEPTH + ")",
+                    "请简化括号嵌套层级, 或拆分为多条简单规则",
+                    null);
+        }
+        // (c) ReDoS heuristic: scan for .matches("(...+)+...") / .matches("(...+)*...") shapes
+        //     that classic regex engines backtrack catastrophically on. Imperfect — only
+        //     catches obvious nested-quantifier patterns, but blocks the textbook attack vector.
+        if (REDOS_HEURISTIC.matcher(spel).find()) {
+            throw new SpelEvaluationFailure(spel,
+                    "SpEL 安全检查失败: 正则表达式存在 ReDoS 风险 (嵌套量词模式)",
+                    "请避免在 .matches() 内使用 (a+)+ 或 (a+)* 等嵌套量词", null);
+        }
+
         // Layer 1: static pattern scan — defense-in-depth, catches RCE attempts
         // even before SpelExpressionParser sees them.
         String normalized = spel.replaceAll("\\s+", " ").trim();
@@ -174,6 +225,15 @@ public class SandboxedSpelEvaluator {
                     "SpEL 错误: " + ge.getMessage(),
                     "请检查表达式语法",
                     ge);
+        } catch (StackOverflowError soe) {
+            // DoS guard (last-resort): Layer 0 paren-depth cap should already have rejected
+            // most pathological input, but the parser may still recurse on non-paren
+            // constructs (e.g. deeply nested ternary, chained method calls). Catching
+            // StackOverflowError keeps the JVM stable — Error not RuntimeException, must
+            // be explicit. Reset the local stack frame; do not re-throw as Error.
+            throw new SpelEvaluationFailure(spel,
+                    "SpEL 表达式嵌套过深, 解析器栈溢出",
+                    "请大幅简化嵌套层级 (推荐 < " + MAX_PAREN_DEPTH + " 层)", soe);
         }
     }
 
