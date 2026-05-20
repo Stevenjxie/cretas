@@ -157,6 +157,68 @@ public class PrintController {
         return proxyToPython("material-requisition", payload, "material-requisition-" + id, authorization);
     }
 
+    // ==================== Sprint 6 W3-C — 3 P1 templates (Round 13 §13) ====================
+    //
+    // 3 new print template categories. HJ baseline 21 categories vs Cretas 6/21 = 29%;
+    // shipping these 3 brings to 9/21 = 43% (still need static / weighing / serial /
+    // 售后 / 委外 / 等 for full parity).
+
+    /**
+     * 仓库出入库单 PDF (Sprint 6 W3-C P1).
+     *
+     * <p>F006 高频 仓管员场景. movementType in overrides decides 入库 vs 出库 title.
+     * 不含金额字段 (qty/spec/batch/location only), 仅 RBAC 门禁即可.
+     */
+    @GetMapping("/stock-movement/{id}")
+    @RequirePermission({"warehouse:read", "warehouse:read_write"})
+    public ResponseEntity<byte[]> printStockMovement(
+            @PathVariable String factoryId,
+            @PathVariable String id,
+            @RequestParam(required = false) Map<String, String> overrides,
+            @RequestHeader(value = "Authorization", required = false) String authorization) {
+        Map<String, Object> payload = buildStockMovementPayload(factoryId, id, overrides);
+        return proxyToPython("stock-movement", payload, "stock-movement-" + id, authorization);
+    }
+
+    /**
+     * 财务发票/凭证 PDF (Sprint 6 W3-C P1) — 跟 PR #52 数电票 协同.
+     *
+     * <p>invoiceType: VAT_NORMAL (普票) / VAT_SPECIAL (专票) / VOUCHER (记账凭证).
+     * 含金额字段 (subtotal/taxAmount/totalAmount + items unitPrice/taxAmount/subtotal),
+     * 必走 priceMaskResolver 防 仓库管理员 等无 procurement:price:view 角色看金额.
+     */
+    @GetMapping("/financial-invoice/{id}")
+    @RequirePermission({"finance:read", "finance:read_write"})
+    public ResponseEntity<byte[]> printFinancialInvoice(
+            @PathVariable String factoryId,
+            @PathVariable String id,
+            @RequestParam(required = false) Map<String, String> overrides,
+            @RequestHeader(value = "Authorization", required = false) String authorization) {
+        Map<String, Object> payload = buildFinancialInvoicePayload(factoryId, id, overrides);
+        applyPriceMask(payload, authorization, "financial-invoice", true);
+        return proxyToPython("financial-invoice", payload, "invoice-" + id, authorization);
+    }
+
+    /**
+     * 装箱单 PDF (Sprint 6 W3-C P1) — 跟 N13 W-ABA-1 抄码品 配合.
+     *
+     * <p>cartons[].abacaCode 承接 weighing 抄码品标签 (per .claude rules
+     * `reference_abaca_term.md` — exact match '抄码' 非 '超码').
+     * 不含金额字段 (重量/箱号/规格 only), 仅 RBAC 门禁即可. 允许 sales / warehouse
+     * 双门 — 销售员发起装箱 + 仓管员复核装箱都得能拉.
+     */
+    @GetMapping("/packing-list/{id}")
+    @RequirePermission({"sales:read", "sales:read_write",
+            "warehouse:read", "warehouse:read_write"})
+    public ResponseEntity<byte[]> printPackingList(
+            @PathVariable String factoryId,
+            @PathVariable String id,
+            @RequestParam(required = false) Map<String, String> overrides,
+            @RequestHeader(value = "Authorization", required = false) String authorization) {
+        Map<String, Object> payload = buildPackingListPayload(factoryId, id, overrides);
+        return proxyToPython("packing-list", payload, "packing-list-" + id, authorization);
+    }
+
     // ==================== C-PRT-EDITOR-1 (Sprint 3 Track-J) ====================
 
     /**
@@ -409,6 +471,65 @@ public class PrintController {
         p.put("workshop", or(overrides, "workshop", "-"));
         p.put("requester", or(overrides, "requester", "-"));
         p.put("items", java.util.List.of());
+        return p;
+    }
+
+    // ==================== Sprint 6 W3-C — 3 P1 payload builders ====================
+    //
+    // MVP stubs (same pattern as 5 existing builders above). 后续 PR 替换为真实
+    // Service 调用 (StockMovementService / InvoiceService / PackingListService).
+
+    private Map<String, Object> buildStockMovementPayload(String factoryId, String id, Map<String, String> overrides) {
+        Map<String, Object> p = new HashMap<>();
+        p.put("factoryName", or(overrides, "factoryName", "白垩纪食品 — " + factoryId));
+        p.put("movementNumber", or(overrides, "movementNumber", id));
+        // movementType in {IN, OUT} — Python render_stock_movement upper()-cases this.
+        p.put("movementType", or(overrides, "movementType", "IN"));
+        p.put("movementDate", or(overrides, "movementDate", java.time.LocalDate.now().toString()));
+        p.put("warehouseName", or(overrides, "warehouseName", "(仓库)"));
+        p.put("sourceRef", or(overrides, "sourceRef", "-"));
+        p.put("operator", or(overrides, "operator", "-"));
+        p.put("totalQty", or(overrides, "totalQty", "0"));
+        p.put("remark", or(overrides, "remark", null));
+        p.put("items", java.util.List.of());
+        return p;
+    }
+
+    private Map<String, Object> buildFinancialInvoicePayload(String factoryId, String id, Map<String, String> overrides) {
+        Map<String, Object> p = new HashMap<>();
+        p.put("factoryName", or(overrides, "factoryName", "白垩纪食品 — " + factoryId));
+        p.put("invoiceNumber", or(overrides, "invoiceNumber", id));
+        // invoiceType in {VAT_NORMAL, VAT_SPECIAL, VOUCHER}.
+        p.put("invoiceType", or(overrides, "invoiceType", "VAT_NORMAL"));
+        p.put("invoiceDate", or(overrides, "invoiceDate", java.time.LocalDate.now().toString()));
+        p.put("partyName", or(overrides, "partyName", "(购买方)"));
+        p.put("partyTaxId", or(overrides, "partyTaxId", "-"));
+        p.put("sellerName", or(overrides, "sellerName", "白垩纪食品 — " + factoryId));
+        p.put("sellerTaxId", or(overrides, "sellerTaxId", "-"));
+        p.put("subtotal", or(overrides, "subtotal", "0"));
+        p.put("taxAmount", or(overrides, "taxAmount", "0"));
+        p.put("totalAmount", or(overrides, "totalAmount", "0"));
+        p.put("remark", or(overrides, "remark", null));
+        p.put("drawer", or(overrides, "drawer", "-"));
+        p.put("items", java.util.List.of());
+        return p;
+    }
+
+    private Map<String, Object> buildPackingListPayload(String factoryId, String id, Map<String, String> overrides) {
+        Map<String, Object> p = new HashMap<>();
+        p.put("factoryName", or(overrides, "factoryName", "白垩纪食品 — " + factoryId));
+        p.put("packingNumber", or(overrides, "packingNumber", id));
+        p.put("packingDate", or(overrides, "packingDate", java.time.LocalDate.now().toString()));
+        p.put("salesOrderRef", or(overrides, "salesOrderRef", "-"));
+        p.put("shipToName", or(overrides, "shipToName", "(收货方)"));
+        p.put("shipToAddress", or(overrides, "shipToAddress", "-"));
+        p.put("shipper", or(overrides, "shipper", "-"));
+        p.put("totalCartons", or(overrides, "totalCartons", "0"));
+        p.put("totalNetWeight", or(overrides, "totalNetWeight", "0"));
+        p.put("totalGrossWeight", or(overrides, "totalGrossWeight", "0"));
+        p.put("weightUnit", or(overrides, "weightUnit", "kg"));
+        p.put("remark", or(overrides, "remark", null));
+        p.put("cartons", java.util.List.of());
         return p;
     }
 

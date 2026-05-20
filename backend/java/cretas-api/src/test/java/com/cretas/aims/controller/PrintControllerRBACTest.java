@@ -133,4 +133,104 @@ class PrintControllerRBACTest {
 
         assertEquals("—", payload.get("totalAmount"));
     }
+
+    // ==================== Sprint 6 W3-C — 3 P1 templates (Round 13 §13) ====================
+
+    @Test
+    @DisplayName("✅ financial-invoice (Sprint 6 W3-C) — 仓库管理员 mask: subtotal/taxAmount/totalAmount + items unitPrice/taxAmount/subtotal 全 '—'")
+    @SuppressWarnings("unchecked")
+    void financialInvoice_warehouseManager_priceFieldsMasked() {
+        when(priceMaskResolver.shouldMaskPrice("Bearer fake-warehouse-token")).thenReturn(true);
+
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("invoiceNumber", "INV-001");
+        payload.put("partyName", "测试客户");
+        payload.put("subtotal", "9500.00");
+        payload.put("taxAmount", "500.00");
+        payload.put("totalAmount", "10000.00");
+        List<Map<String, Object>> items = new ArrayList<>();
+        Map<String, Object> line1 = new HashMap<>();
+        line1.put("name", "冷冻肉");
+        line1.put("qty", 100);
+        line1.put("unitPrice", "50.00");
+        line1.put("taxAmount", "250.00");
+        line1.put("subtotal", "5000.00");
+        items.add(line1);
+        payload.put("items", items);
+
+        controller.applyPriceMask(payload, "Bearer fake-warehouse-token", "financial-invoice", true);
+
+        assertEquals("—", payload.get("subtotal"));
+        assertEquals("—", payload.get("taxAmount"));
+        assertEquals("—", payload.get("totalAmount"));
+        List<Map<String, Object>> maskedItems = (List<Map<String, Object>>) payload.get("items");
+        assertEquals("—", maskedItems.get(0).get("unitPrice"));
+        assertEquals("—", maskedItems.get(0).get("taxAmount"));
+        assertEquals("—", maskedItems.get(0).get("subtotal"));
+        // 非金额字段保留
+        assertEquals("INV-001", payload.get("invoiceNumber"));
+        assertEquals("测试客户", payload.get("partyName"));
+        assertEquals("冷冻肉", maskedItems.get(0).get("name"));
+    }
+
+    @Test
+    @DisplayName("✅ stock-movement (Sprint 6 W3-C) — 无金额字段, mask 不影响 qty/batch/location")
+    @SuppressWarnings("unchecked")
+    void stockMovement_nonMonetaryDoc_qtyFieldsUntouched() {
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("movementNumber", "STK-IN-001");
+        payload.put("movementType", "IN");
+        payload.put("warehouseName", "1号冷库");
+        payload.put("totalQty", "1000");
+        List<Map<String, Object>> items = new ArrayList<>();
+        Map<String, Object> line1 = new HashMap<>();
+        line1.put("name", "猪肉");
+        line1.put("batch", "B202605190001");
+        line1.put("qty", 500);
+        line1.put("locationCode", "A-01-03");
+        items.add(line1);
+        payload.put("items", items);
+
+        // hasMonetaryFields = false → resolver 不调用, 全字段保留
+        controller.applyPriceMask(payload, "Bearer any-token", "stock-movement", false);
+
+        assertEquals("STK-IN-001", payload.get("movementNumber"));
+        assertEquals("IN", payload.get("movementType"));
+        assertEquals("1000", payload.get("totalQty"));
+        List<Map<String, Object>> rows = (List<Map<String, Object>>) payload.get("items");
+        assertEquals(500, rows.get(0).get("qty"));
+        assertEquals("B202605190001", rows.get(0).get("batch"));
+        org.mockito.Mockito.verifyNoInteractions(priceMaskResolver);
+    }
+
+    @Test
+    @DisplayName("✅ packing-list (Sprint 6 W3-C) — 无金额字段, 抄码 / 净重 / 毛重 全保留 (跟 N13 W-ABA-1 抄码品)")
+    @SuppressWarnings("unchecked")
+    void packingList_nonMonetaryDoc_weightAndAbacaUntouched() {
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("packingNumber", "PK-001");
+        payload.put("totalCartons", "10");
+        payload.put("totalNetWeight", "850.50");
+        payload.put("totalGrossWeight", "950.00");
+        payload.put("weightUnit", "kg");
+        List<Map<String, Object>> cartons = new ArrayList<>();
+        Map<String, Object> c1 = new HashMap<>();
+        c1.put("cartonNo", "1");
+        c1.put("productName", "卤猪蹄");
+        c1.put("netWeight", "85.5");
+        c1.put("grossWeight", "95.0");
+        c1.put("abacaCode", "ABACA-202605190001");  // 抄码 (not '超码')
+        cartons.add(c1);
+        payload.put("cartons", cartons);
+
+        controller.applyPriceMask(payload, "Bearer any-token", "packing-list", false);
+
+        assertEquals("PK-001", payload.get("packingNumber"));
+        assertEquals("850.50", payload.get("totalNetWeight"));
+        assertEquals("950.00", payload.get("totalGrossWeight"));
+        List<Map<String, Object>> rows = (List<Map<String, Object>>) payload.get("cartons");
+        assertEquals("85.5", rows.get(0).get("netWeight"));
+        assertEquals("ABACA-202605190001", rows.get(0).get("abacaCode"));
+        org.mockito.Mockito.verifyNoInteractions(priceMaskResolver);
+    }
 }
