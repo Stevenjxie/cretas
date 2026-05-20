@@ -1,20 +1,29 @@
 <script setup lang="ts">
 /**
- * ECN 工程变更通知 — Sprint 5 Track-H H-2 MVP stub.
+ * ECN 工程变更通知 — Sprint 6 W4-C paginated list + impact report.
  *
- * Backend: EcnController (M-BOM-VER-1, Sprint 3 Track-H ship PR #694).
- *
- * MVP scope: 单条 ECN 查询 + 创建 dialog. 后端没有 list/page endpoint, Sprint 6
- * 需补 GET /ecns (paginated + filter) + cascade BomVersion 审批 UI + 影响报告
- * dialog.
+ * Backend: EcnController (M-BOM-VER-1).
+ * - GET /bom/ecns                  — paginated list (Sprint 6 W4-C 新)
+ * - GET /bom/ecns/{id}             — single detail
+ * - POST /bom/ecns                 — create DRAFT
+ * - POST /bom/ecns/{id}/submit     — DRAFT → SUBMITTED
+ * - POST /bom/ecns/{id}/approve    — SUBMITTED → APPROVED (cascade BomVersion)
+ * - POST /bom/ecns/{id}/reject     — SUBMITTED → REJECTED
+ * - POST /bom/ecns/calculate-impact — read-only impact analysis
  *
  * Permissions: write 需 production:read_write / rd:read_write / finance:read_write.
+ *
+ * 防呆 (per fool-proof-design.md):
+ * - Rule 2 context: dialog header "ECN-{number} — {title} (影响 N 个 BomVersion)"
+ * - Rule 3 reason dropdown (5 标准选项)
+ * - Rule 5 dead-end: 无 ECN 工作流配置时 ElMessageBox.confirm → 跳工作流设计器
  */
-import { ref, computed } from 'vue';
+import { ref, computed, onMounted } from 'vue';
+import { useRouter } from 'vue-router';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { Plus, Search, Check, Close } from '@element-plus/icons-vue';
+import { Plus, Search, Check, Close, View, DataAnalysis } from '@element-plus/icons-vue';
 import {
   ecnApi,
   ECN_REASON_LABEL,
@@ -22,7 +31,10 @@ import {
   type EngineeringChangeNotice,
   type EcnReason,
   type EcnStatus,
+  type EcnImpactReport,
 } from '@/api/ecn';
+
+const router = useRouter();
 
 const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
@@ -38,6 +50,22 @@ const canWrite = computed(
 const loading = ref(false);
 const queryEcnId = ref('');
 const ecnDetail = ref<EngineeringChangeNotice | null>(null);
+
+// Sprint 6 W4-C — paginated list state
+const listLoading = ref(false);
+const listData = ref<EngineeringChangeNotice[]>([]);
+const totalElements = ref(0);
+const currentPage = ref(1);
+const pageSize = ref(20);
+const filterStatus = ref<EcnStatus | undefined>(undefined);
+const filterReason = ref<EcnReason | undefined>(undefined);
+const filterBomRecipeId = ref('');
+
+// Sprint 6 W4-C — impact report dialog state
+const impactDialogVisible = ref(false);
+const impactReport = ref<EcnImpactReport | null>(null);
+const impactLoading = ref(false);
+const impactSourceEcn = ref<EngineeringChangeNotice | null>(null);
 
 const statusTag: Record<EcnStatus, '' | 'success' | 'warning' | 'info' | 'danger'> = {
   DRAFT: 'info',
@@ -210,6 +238,105 @@ function formatDate(d?: string | null): string {
   if (!d) return '-';
   return d.length > 10 ? d.substring(0, 10) : d;
 }
+
+// ============== Sprint 6 W4-C — Paginated list ==============
+
+async function loadList() {
+  if (!factoryId.value) {
+    ElMessage.warning('未识别 factoryId, 请重新登录');
+    return;
+  }
+  listLoading.value = true;
+  try {
+    const r = await ecnApi.list(factoryId.value, {
+      page: currentPage.value,
+      size: pageSize.value,
+      status: filterStatus.value,
+      reason: filterReason.value,
+      bomRecipeId: filterBomRecipeId.value || undefined,
+    });
+    if (r.success && r.data) {
+      listData.value = r.data.content ?? [];
+      totalElements.value = r.data.totalElements ?? 0;
+    } else {
+      listData.value = [];
+      totalElements.value = 0;
+    }
+  } catch (e) {
+    const err = e as { actionHint?: string } | undefined;
+    if (!err?.actionHint) ElMessage.error('加载 ECN 列表失败');
+  } finally {
+    listLoading.value = false;
+  }
+}
+
+function onPageChange(page: number) {
+  currentPage.value = page;
+  loadList();
+}
+
+function onSizeChange(size: number) {
+  pageSize.value = size;
+  currentPage.value = 1;
+  loadList();
+}
+
+function resetFilters() {
+  filterStatus.value = undefined;
+  filterReason.value = undefined;
+  filterBomRecipeId.value = '';
+  currentPage.value = 1;
+  loadList();
+}
+
+async function viewDetailFromList(row: EngineeringChangeNotice) {
+  queryEcnId.value = row.id;
+  ecnDetail.value = row;
+}
+
+// ============== Sprint 6 W4-C — Impact report dialog ==============
+
+async function openImpactReport(ecn: EngineeringChangeNotice) {
+  if (!factoryId.value) return;
+  impactSourceEcn.value = ecn;
+  impactLoading.value = true;
+  impactDialogVisible.value = true;
+  impactReport.value = null;
+  try {
+    const r = await ecnApi.calculateImpact(factoryId.value, ecn.bomRecipeId, ecn.changeContext ?? {});
+    if (r.success && r.data) {
+      impactReport.value = r.data;
+    }
+  } catch (e) {
+    const err = e as { actionHint?: string } | undefined;
+    if (!err?.actionHint) ElMessage.error('影响分析失败');
+  } finally {
+    impactLoading.value = false;
+  }
+}
+
+/** 防呆 Rule 5 — workflow 未配置 → 跳工作流设计器, 不让用户卡死. */
+function gotoWorkflowConfig() {
+  ElMessageBox.confirm(
+    'ECN 审批工作流未配置, 是否前去工作流设计器配置?',
+    '工作流未配置',
+    {
+      confirmButtonText: '去配置',
+      cancelButtonText: '取消',
+      type: 'warning',
+    },
+  )
+    .then(() => {
+      router.push('/workflow/admin?entityType=ECN');
+    })
+    .catch(() => {
+      // user cancelled - noop
+    });
+}
+
+onMounted(() => {
+  loadList();
+});
 </script>
 
 <template>
@@ -218,17 +345,117 @@ function formatDate(d?: string | null): string {
       <template #header>
         <div class="header">
           <span>工程变更通知 (ECN)</span>
-          <el-tag size="small" type="info">Sprint 5 H-2 MVP stub</el-tag>
+          <el-tag size="small" type="success">Sprint 6 W4-C 分页+影响报告</el-tag>
         </div>
       </template>
 
-      <el-alert
-        type="info"
-        :closable="false"
-        title="MVP stub: 仅按 ECN ID 查询 + 创建. Sprint 6 follow-up: 分页 list + 影响报告 dialog + cascade BomVersion 审批面板."
-        style="margin-bottom: 12px"
-      />
+      <!-- 分页 list 过滤栏 -->
+      <el-form inline @submit.prevent="loadList">
+        <el-form-item label="状态">
+          <el-select v-model="filterStatus" placeholder="全部" clearable style="width: 140px">
+            <el-option
+              v-for="(label, val) in ECN_STATUS_LABEL"
+              :key="val"
+              :label="label"
+              :value="val"
+            />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="原因">
+          <el-select v-model="filterReason" placeholder="全部" clearable style="width: 140px">
+            <el-option
+              v-for="(label, val) in ECN_REASON_LABEL"
+              :key="val"
+              :label="label"
+              :value="val"
+            />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="BOM Recipe">
+          <el-input
+            v-model="filterBomRecipeId"
+            placeholder="可选过滤"
+            clearable
+            style="width: 220px"
+          />
+        </el-form-item>
+        <el-form-item>
+          <el-button type="primary" :icon="Search" :loading="listLoading" @click="loadList">
+            查询
+          </el-button>
+          <el-button @click="resetFilters">重置</el-button>
+          <el-button v-if="canWrite" :icon="Plus" type="success" @click="openCreate">
+            新建 ECN
+          </el-button>
+        </el-form-item>
+      </el-form>
 
+      <!-- 分页 list table -->
+      <el-table v-loading="listLoading" :data="listData" stripe @row-click="viewDetailFromList">
+        <el-table-column prop="ecnNumber" label="ECN 编号" width="180" />
+        <el-table-column prop="bomRecipeId" label="BOM Recipe" min-width="180" show-overflow-tooltip />
+        <el-table-column label="原因" width="120">
+          <template #default="{ row }">
+            <el-tag :type="reasonTag[row.reason as EcnReason]" size="small">
+              {{ ECN_REASON_LABEL[row.reason as EcnReason] }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="状态" width="100">
+          <template #default="{ row }">
+            <el-tag :type="statusTag[row.status as EcnStatus]" size="small">
+              {{ ECN_STATUS_LABEL[row.status as EcnStatus] }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column prop="fromVersion" label="From" width="70" />
+        <el-table-column prop="toVersion" label="To" width="70" />
+        <el-table-column label="计划生效" width="120">
+          <template #default="{ row }">{{ formatDate(row.effectiveDate) }}</template>
+        </el-table-column>
+        <el-table-column label="创建时间" width="160">
+          <template #default="{ row }">{{ formatDate(row.createdAt) }}</template>
+        </el-table-column>
+        <el-table-column label="操作" width="200" fixed="right">
+          <template #default="{ row }">
+            <el-button size="small" link :icon="View" type="primary" @click.stop="viewDetailFromList(row)">
+              详情
+            </el-button>
+            <el-button
+              size="small"
+              link
+              :icon="DataAnalysis"
+              type="warning"
+              @click.stop="openImpactReport(row)"
+            >
+              影响报告
+            </el-button>
+          </template>
+        </el-table-column>
+        <template #empty>
+          <el-empty description="暂无 ECN 数据">
+            <el-button v-if="canWrite" type="primary" @click="openCreate">新建第一个 ECN</el-button>
+          </el-empty>
+        </template>
+      </el-table>
+
+      <el-pagination
+        v-model:current-page="currentPage"
+        v-model:page-size="pageSize"
+        :total="totalElements"
+        :page-sizes="[10, 20, 50, 100]"
+        layout="total, sizes, prev, pager, next, jumper"
+        @current-change="onPageChange"
+        @size-change="onSizeChange"
+        style="margin-top: 12px; justify-content: flex-end; display: flex"
+      />
+    </el-card>
+
+    <!-- 单条详情查询区 (兼容旧用法) -->
+    <el-card style="margin-top: 12px">
+      <template #header>
+        <span>按 ECN ID 查询单条详情</span>
+      </template>
       <el-form inline @submit.prevent="loadDetail">
         <el-form-item label="ECN ID">
           <el-input v-model="queryEcnId" placeholder="UUID" clearable style="width: 320px" />
@@ -236,9 +463,6 @@ function formatDate(d?: string | null): string {
         <el-form-item>
           <el-button type="primary" :icon="Search" :loading="loading" @click="loadDetail">
             查询
-          </el-button>
-          <el-button v-if="canWrite" :icon="Plus" type="success" @click="openCreate">
-            新建 ECN
           </el-button>
         </el-form-item>
       </el-form>
@@ -298,6 +522,73 @@ function formatDate(d?: string | null): string {
         </el-button>
       </div>
     </el-card>
+
+    <!-- Sprint 6 W4-C — Impact report dialog -->
+    <el-dialog
+      v-model="impactDialogVisible"
+      :title="impactSourceEcn ? `影响报告 — ${impactSourceEcn.ecnNumber}` : '影响报告'"
+      width="640px"
+    >
+      <div v-loading="impactLoading">
+        <div v-if="impactSourceEcn" style="margin-bottom: 12px">
+          <!-- 防呆 Rule 2: context (ECN 编号 + 标题 + BomRecipe + 影响 N 个) -->
+          <el-descriptions :column="1" border size="small">
+            <el-descriptions-item label="ECN">
+              <el-tag>{{ impactSourceEcn.ecnNumber }}</el-tag>
+            </el-descriptions-item>
+            <el-descriptions-item label="BOM Recipe">
+              {{ impactSourceEcn.bomRecipeId }}
+            </el-descriptions-item>
+            <el-descriptions-item label="变更原因">
+              <el-tag :type="reasonTag[impactSourceEcn.reason]" size="small">
+                {{ ECN_REASON_LABEL[impactSourceEcn.reason] }}
+              </el-tag>
+            </el-descriptions-item>
+            <el-descriptions-item label="From / To 版本">
+              v{{ impactSourceEcn.fromVersion ?? '-' }} → v{{ impactSourceEcn.toVersion ?? '-' }}
+            </el-descriptions-item>
+          </el-descriptions>
+        </div>
+
+        <el-divider>影响范围分析</el-divider>
+
+        <div v-if="impactReport">
+          <el-descriptions :column="2" border>
+            <el-descriptions-item label="影响物料数">
+              {{ impactReport.impactedMaterialCount }}
+            </el-descriptions-item>
+            <el-descriptions-item label="影响成品 SKU 数">
+              {{ impactReport.impactedSkuCount }}
+            </el-descriptions-item>
+            <el-descriptions-item v-if="impactReport.impactedPurchaseOrderCount != null" label="影响未结 PO 数">
+              {{ impactReport.impactedPurchaseOrderCount }}
+            </el-descriptions-item>
+            <el-descriptions-item v-if="impactReport.estimatedCostDelta != null" label="预估成本差异">
+              <span :class="{ 'text-danger': (impactReport.estimatedCostDelta || 0) > 0 }">
+                {{ (impactReport.estimatedCostDelta || 0) >= 0 ? '+' : '' }}¥{{ impactReport.estimatedCostDelta }}
+              </span>
+            </el-descriptions-item>
+          </el-descriptions>
+
+          <div v-if="impactReport.details" style="margin-top: 12px">
+            <el-collapse>
+              <el-collapse-item title="完整 details JSON" name="details">
+                <pre style="max-height: 200px; overflow: auto; font-size: 12px">{{ JSON.stringify(impactReport.details, null, 2) }}</pre>
+              </el-collapse-item>
+            </el-collapse>
+          </div>
+        </div>
+
+        <el-empty v-else-if="!impactLoading" description="无影响数据" />
+      </div>
+
+      <template #footer>
+        <el-button @click="impactDialogVisible = false">关闭</el-button>
+        <el-button v-if="canWrite" type="warning" @click="gotoWorkflowConfig">
+          工作流未配置? 去配置
+        </el-button>
+      </template>
+    </el-dialog>
 
     <el-dialog v-model="createDialogVisible" title="新建 ECN" width="600px">
       <el-form :model="createForm" label-width="120px">

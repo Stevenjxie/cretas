@@ -1,11 +1,11 @@
 /**
- * ECN (工程变更通知) API — Sprint 5 Track-H H-2 MVP stub.
+ * ECN (工程变更通知) API — Sprint 6 W4-C extended.
  *
  * 对应后端 EcnController (M-BOM-VER-1, Sprint 3 Track-H ship PR #694).
  * Base: /api/mobile/{factoryId}/bom/ecns (request baseURL='/api/mobile').
  *
- * MVP scope: 仅 getById + 创建 + 5-reason 枚举. Sprint 6 follow-up: ECN list 反查 API
- * + 编辑器 dialog + cascade BomVersion 审批 UI.
+ * Sprint 6 W4-C 加: paginated list + impact report. ECN list 分页查询 + 影响报告
+ * dialog + cascade BomVersion 审批 UI.
  */
 import { get, post } from './request';
 
@@ -73,7 +73,35 @@ export interface EcnImpactReport {
 
 const base = (factoryId: string) => `/${factoryId}/bom/ecns`;
 
+/** Sprint 6 W4-C — Paginated ECN list response. */
+export interface EcnPageResponse {
+  content: EngineeringChangeNotice[];
+  page: number;
+  size: number;
+  totalElements: number;
+  totalPages: number;
+  first: boolean;
+  last: boolean;
+  number: number; // 0-based alias (compat)
+  empty: boolean;
+}
+
+/** Sprint 6 W4-C — Paginated list filter params. */
+export interface EcnListParams {
+  page?: number;
+  size?: number;
+  sortBy?: string;
+  sortDirection?: 'ASC' | 'DESC';
+  status?: EcnStatus;
+  reason?: EcnReason;
+  bomRecipeId?: string;
+}
+
 export const ecnApi = {
+  /** Sprint 6 W4-C — Paginated list (默认 page=1 size=20). */
+  list: (factoryId: string, params?: EcnListParams) =>
+    get<EcnPageResponse>(base(factoryId), { params }),
+
   /** 创建 ECN DRAFT (auto generateEcnNumber ECN-YYYY-NNNN). */
   create: (factoryId: string, req: EcnCreateRequest) =>
     post<EngineeringChangeNotice>(base(factoryId), req),

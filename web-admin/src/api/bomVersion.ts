@@ -59,7 +59,106 @@ export interface RejectBomVersionRequest {
   rejectionReason: string;
 }
 
+/** Sprint 6 W4-C — ECN reason 枚举 (mirror of Java EngineeringChangeNotice.EcnReason). */
+export type BomBatchEcnReason =
+  | 'CUSTOMER_REQUEST'
+  | 'MATERIAL_DISCONTINUED'
+  | 'COST_OPTIMIZATION'
+  | 'QUALITY_DEFECT'
+  | 'PROCESS_IMPROVEMENT';
+
+/** Sprint 6 W4-C — Common fields for all 4 batch operations. */
+interface BatchCommon {
+  /** Either allInFactory=true OR explicit recipeIds list. */
+  allInFactory?: boolean;
+  recipeIds?: string[];
+  ecnReason: BomBatchEcnReason;
+  ecnReasonDetail?: string;
+  /** ISO date YYYY-MM-DD. */
+  effectiveDate?: string;
+  createdBy: number;
+}
+
+/** Sprint 6 W4-C — 批量修改请求 (多 BOM 同一物料 standardQuantity 改). */
+export interface BatchModifyRequest extends BatchCommon {
+  materialId: string;
+  newStandardQuantity: number;
+  newUnit?: string;
+}
+
+/** Sprint 6 W4-C — 批量替换请求 (物料 A → B 跨多 BOM). */
+export interface BatchReplaceRequest extends BatchCommon {
+  oldMaterialId: string;
+  newMaterialId: string;
+  /** 默认 true: 保留原 quantity / unit, 仅换 material 引用. */
+  preserveQuantity?: boolean;
+}
+
+/** Sprint 6 W4-C — 批量删除请求. */
+export interface BatchDeleteRequest extends BatchCommon {
+  materialId: string;
+}
+
+/** Sprint 6 W4-C — 批量新增请求. */
+export interface BatchAddRequest extends BatchCommon {
+  materialId: string;
+  standardQuantity: number;
+  yieldRate?: number;
+  unit: string;
+  materialCategory?: string;
+  /** 默认 true: recipe 已含此 material 跳过. */
+  skipIfAlreadyPresent?: boolean;
+}
+
+/** Sprint 6 W4-C — 批量操作返回 (含 ECN DRAFT id + N BomVersion DRAFT ids). */
+export interface BatchResult {
+  operation: 'MODIFY' | 'REPLACE' | 'DELETE' | 'ADD';
+  ecnId: string;
+  ecnNumber: string;
+  affectedRecipeIds: string[];
+  /** recipeId → versionId. */
+  draftVersionIds: Record<string, string>;
+  /** recipeId → 跳过原因 (e.g. "recipe contains no item for material XXX"). */
+  skippedRecipes: Record<string, string>;
+  warnings: string[];
+}
+
+/** Sprint 6 W4-C — BomRecipe (subset used by reverse query). */
+export interface BomRecipe {
+  id: string;
+  factoryId: string;
+  recipeCode?: string;
+  productTypeId?: string;
+  productName?: string;
+  version?: number;
+  isCurrent?: boolean;
+  unit?: string;
+  status?: string;
+}
+
+/** Sprint 6 W4-C — Per-item usage row of reverse query. */
+export interface BomItemUsage {
+  recipeId: string;
+  recipeCode?: string;
+  productTypeId?: string;
+  productName?: string;
+  version?: number;
+  isCurrent?: boolean;
+  itemId?: number;
+  standardQuantity?: number;
+  yieldRate?: number;
+  actualQuantity?: number;
+  unit?: string;
+  materialCategory?: string;
+  isOptional?: boolean;
+  substituteGroup?: string;
+  itemCost?: number;
+  unitPrice?: number;
+}
+
 const base = (factoryId: string) => `/${factoryId}/bom/versions`;
+const batchBase = (factoryId: string) => `/${factoryId}/bom/batch`;
+const reverseBase = (factoryId: string) => `/${factoryId}/bom/reverse-query`;
 
 export const bomVersionApi = {
   /** 创建 DRAFT (snapshot 自动 from 当前 BomRecipe). */
@@ -98,4 +197,43 @@ export const bomVersionApi = {
   /** 拒绝 (PENDING_APPROVAL → REJECTED, terminal). */
   reject: (factoryId: string, versionId: string, req: RejectBomVersionRequest) =>
     post<BomVersion>(`${base(factoryId)}/${versionId}/reject`, req),
+};
+
+/**
+ * Sprint 6 W4-C — 批量操作 API.
+ *
+ * 4 批量操作 (modify / replace / delete / add) 每个产生 1 ECN DRAFT + N BomVersion DRAFT.
+ * 不直接 mutate BomRecipe / BomRecipeItem — 走 ECN 审批后才 apply.
+ */
+export const bomBatchApi = {
+  /** 批量修改 — 多 BOM 同一物料 standardQuantity 全改. */
+  batchModify: (factoryId: string, req: BatchModifyRequest) =>
+    post<BatchResult>(`${batchBase(factoryId)}/modify`, req),
+
+  /** 批量替换 — 物料 A → B 跨多 BOM. */
+  batchReplace: (factoryId: string, req: BatchReplaceRequest) =>
+    post<BatchResult>(`${batchBase(factoryId)}/replace`, req),
+
+  /** 批量删除 — 多 BOM 同一物料 item 全删. */
+  batchDelete: (factoryId: string, req: BatchDeleteRequest) =>
+    post<BatchResult>(`${batchBase(factoryId)}/delete`, req),
+
+  /** 批量新增 — 多 BOM 同时加一物料 item. */
+  batchAdd: (factoryId: string, req: BatchAddRequest) =>
+    post<BatchResult>(`${batchBase(factoryId)}/add`, req),
+};
+
+/**
+ * Sprint 6 W4-C — 反查 API.
+ *
+ * 物料 → BOM 反查: 哪些 BOM 用了某物料 + 替换影响分析.
+ */
+export const bomReverseQueryApi = {
+  /** 哪些 BOM 用了这个物料 (distinct BomRecipes). */
+  findRecipesByMaterial: (factoryId: string, materialId: string) =>
+    get<BomRecipe[]>(`${reverseBase(factoryId)}/by-material/${materialId}`),
+
+  /** 哪些 BOM 用了这个物料 — 含 BomRecipeItem 用量 / 出成率 / 成本明细. */
+  findUsageByMaterial: (factoryId: string, materialId: string) =>
+    get<BomItemUsage[]>(`${reverseBase(factoryId)}/by-material/${materialId}/usage`),
 };

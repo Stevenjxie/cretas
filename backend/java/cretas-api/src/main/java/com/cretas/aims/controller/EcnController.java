@@ -8,9 +8,14 @@ import com.cretas.aims.dto.bom.EcnImpactCalculateRequest;
 import com.cretas.aims.dto.bom.EcnImpactReport;
 import com.cretas.aims.dto.bom.EcnRejectRequest;
 import com.cretas.aims.dto.common.ApiResponse;
+import com.cretas.aims.dto.common.PageRequest;
+import com.cretas.aims.dto.common.PageResponse;
 import com.cretas.aims.entity.bom.EngineeringChangeNotice;
+import com.cretas.aims.entity.bom.EngineeringChangeNotice.EcnReason;
+import com.cretas.aims.entity.bom.EngineeringChangeNotice.EcnStatus;
 import com.cretas.aims.service.bom.ECNService;
 import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -123,5 +128,24 @@ public class EcnController {
             @PathVariable String factoryId) {
         int count = ecnService.activateDueApprovedEcns(factoryId);
         return ApiResponse.success(count);
+    }
+
+    /**
+     * Sprint 6 W4-C — Paginated ECN list with optional filters.
+     * 防呆 Rule 5: 默认 page=1 size=20, 前端可不传分页参数. status / reason / bomRecipeId 都可选.
+     */
+    @GetMapping
+    @Operation(summary = "ECN paginated list (Sprint 6 W4-C)",
+            description = "分页查询 ECN, 支持 status / reason / bomRecipeId 过滤. 默认 size=20.")
+    public ApiResponse<PageResponse<EngineeringChangeNotice>> listEcns(
+            @PathVariable String factoryId,
+            @Valid PageRequest pageRequest,
+            @Parameter(description = "可选 status 过滤")
+            @RequestParam(required = false) EcnStatus status,
+            @Parameter(description = "可选 reason 过滤")
+            @RequestParam(required = false) EcnReason reason,
+            @Parameter(description = "可选 BOM Recipe ID 过滤 (查某 BOM 的全部 ECN)")
+            @RequestParam(required = false) String bomRecipeId) {
+        return ApiResponse.success(ecnService.listEcns(factoryId, pageRequest, status, reason, bomRecipeId));
     }
 }

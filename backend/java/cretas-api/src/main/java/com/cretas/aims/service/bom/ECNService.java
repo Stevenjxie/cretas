@@ -2,7 +2,11 @@ package com.cretas.aims.service.bom;
 
 import com.cretas.aims.dto.bom.EcnCreateRequest;
 import com.cretas.aims.dto.bom.EcnImpactReport;
+import com.cretas.aims.dto.common.PageRequest;
+import com.cretas.aims.dto.common.PageResponse;
 import com.cretas.aims.entity.bom.EngineeringChangeNotice;
+import com.cretas.aims.entity.bom.EngineeringChangeNotice.EcnReason;
+import com.cretas.aims.entity.bom.EngineeringChangeNotice.EcnStatus;
 
 import java.util.Map;
 
@@ -61,4 +65,17 @@ public interface ECNService {
      * Returns count of transitions. Intended for nightly cron / startup hook.
      */
     int activateDueApprovedEcns(String factoryId);
+
+    /**
+     * Sprint 6 W4-C — Paginated list of ECNs with optional status / reason / bomRecipeId filters.
+     *
+     * @param factoryId   factory scope
+     * @param pageRequest 分页参数 (page, size, sortBy, sortDirection)
+     * @param status      可选 status 过滤 (null = all)
+     * @param reason      可选 reason 过滤 (null = all)
+     * @param bomRecipeId 可选 BOM recipe id 过滤 (null = all)
+     */
+    PageResponse<EngineeringChangeNotice> listEcns(String factoryId, PageRequest pageRequest,
+                                                    EcnStatus status, EcnReason reason,
+                                                    String bomRecipeId);
 }

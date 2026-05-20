@@ -2,9 +2,12 @@ package com.cretas.aims.service.bom.impl;
 
 import com.cretas.aims.dto.bom.EcnCreateRequest;
 import com.cretas.aims.dto.bom.EcnImpactReport;
+import com.cretas.aims.dto.common.PageRequest;
+import com.cretas.aims.dto.common.PageResponse;
 import com.cretas.aims.entity.Notification;
 import com.cretas.aims.entity.bom.BomVersion;
 import com.cretas.aims.entity.bom.EngineeringChangeNotice;
+import com.cretas.aims.entity.bom.EngineeringChangeNotice.EcnReason;
 import com.cretas.aims.entity.bom.EngineeringChangeNotice.EcnStatus;
 import com.cretas.aims.entity.enums.FactoryUserRole;
 import com.cretas.aims.entity.enums.NotificationType;
@@ -17,6 +20,8 @@ import com.cretas.aims.service.bom.ECNService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -274,5 +279,32 @@ public class ECNServiceImpl implements ECNService {
             }
         }
         return null;
+    }
+
+    // ================== Sprint 6 W4-C ==================
+
+    @Override
+    @Transactional(readOnly = true)
+    public PageResponse<EngineeringChangeNotice> listEcns(String factoryId, PageRequest pageRequest,
+                                                            EcnStatus status, EcnReason reason,
+                                                            String bomRecipeId) {
+        Sort.Direction direction = "ASC".equalsIgnoreCase(pageRequest.getSortDirection())
+                ? Sort.Direction.ASC : Sort.Direction.DESC;
+        String sortBy = pageRequest.getSortBy() != null ? pageRequest.getSortBy() : "createdAt";
+        // page from 1, Spring Data Pageable from 0
+        org.springframework.data.domain.PageRequest pageable =
+                org.springframework.data.domain.PageRequest.of(
+                        pageRequest.getPage() - 1,
+                        pageRequest.getSize(),
+                        Sort.by(direction, sortBy));
+
+        Page<EngineeringChangeNotice> page =
+                ecnRepo.findByFactoryWithFilters(factoryId, status, reason, bomRecipeId, pageable);
+
+        return PageResponse.of(
+                page.getContent(),
+                pageRequest.getPage(),
+                pageRequest.getSize(),
+                page.getTotalElements());
     }
 }

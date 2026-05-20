@@ -21,12 +21,24 @@ import { ref, computed, onMounted, watch } from 'vue';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { Refresh, Check, Close, Document, Edit } from '@element-plus/icons-vue';
+import { Refresh, Check, Close, Document, Edit, Plus, Delete, Switch } from '@element-plus/icons-vue';
 import {
   bomVersionApi,
+  bomBatchApi,
+  type BomBatchEcnReason,
   type BomVersion,
   type BomVersionStatus,
+  type BatchResult,
 } from '@/api/bomVersion';
+
+/** Sprint 6 W4-C — 防呆 Rule 3 reason dropdown (5 标准 + "其他"). */
+const ECN_REASON_OPTIONS: Array<{ value: BomBatchEcnReason; label: string }> = [
+  { value: 'CUSTOMER_REQUEST', label: '客户要求' },
+  { value: 'MATERIAL_DISCONTINUED', label: '物料停产' },
+  { value: 'COST_OPTIMIZATION', label: '成本优化' },
+  { value: 'QUALITY_DEFECT', label: '质量缺陷' },
+  { value: 'PROCESS_IMPROVEMENT', label: '工艺改进' },
+];
 
 const props = defineProps<{
   /** Optional initial bomRecipeId. If absent, user must input it. */
@@ -208,6 +220,166 @@ function snapshotPreview(snapshot: Record<string, unknown>): string {
   const count = Array.isArray(itemsField) ? itemsField.length : 0;
   return `${recipeName}${recipeName ? ' / ' : ''}${count} 项物料`;
 }
+
+// ================== Sprint 6 W4-C — 4 批量操作 dialog ==================
+
+/** 选中的 row (V4 接收 selection-change). */
+const selectedRows = ref<BomVersion[]>([]);
+
+/** 4 批量 dialog 通用 state. */
+type BatchType = 'MODIFY' | 'REPLACE' | 'DELETE' | 'ADD' | null;
+const batchDialogType = ref<BatchType>(null);
+const batchSubmitLoading = ref(false);
+const batchResultDialog = ref<BatchResult | null>(null);
+
+/** Batch form. 全 mode 共用 — 不同 type 不同字段 enabled. */
+const batchForm = ref({
+  materialId: '',
+  newStandardQuantity: 0,
+  newUnit: '',
+  oldMaterialId: '',
+  newMaterialId: '',
+  preserveQuantity: true,
+  standardQuantity: 0,
+  yieldRate: 100,
+  unit: '',
+  materialCategory: 'RAW',
+  skipIfAlreadyPresent: true,
+  ecnReason: 'CUSTOMER_REQUEST' as BomBatchEcnReason,
+  ecnReasonDetail: '',
+  effectiveDate: '',
+});
+
+const selectedRecipeIds = computed(() =>
+  // 4 批量是按 recipe 而不是按 version, 但 UI 走 BomVersion 行选;
+  // 取 versions 对应的 distinct bomRecipeId.
+  Array.from(new Set(selectedRows.value.map((v) => v.bomRecipeId))),
+);
+
+function openBatchDialog(type: Exclude<BatchType, null>) {
+  if (!canWrite.value) {
+    ElMessage.warning('权限不足: 需要 production:read_write / rd:read_write / finance:read_write');
+    return;
+  }
+  if (selectedRecipeIds.value.length === 0) {
+    ElMessage.warning('请先选中至少一行 BomVersion (对应 N 个 BomRecipe)');
+    return;
+  }
+  // Reset form
+  batchForm.value = {
+    materialId: '',
+    newStandardQuantity: 0,
+    newUnit: '',
+    oldMaterialId: '',
+    newMaterialId: '',
+    preserveQuantity: true,
+    standardQuantity: 0,
+    yieldRate: 100,
+    unit: '',
+    materialCategory: 'RAW',
+    skipIfAlreadyPresent: true,
+    ecnReason: 'CUSTOMER_REQUEST',
+    ecnReasonDetail: '',
+    effectiveDate: '',
+  };
+  batchDialogType.value = type;
+}
+
+const batchDialogTitle = computed(() => {
+  switch (batchDialogType.value) {
+    case 'MODIFY': return `批量修改 — 影响 ${selectedRecipeIds.value.length} 个 BomRecipe`;
+    case 'REPLACE': return `批量替换 — 影响 ${selectedRecipeIds.value.length} 个 BomRecipe`;
+    case 'DELETE': return `批量删除 — 影响 ${selectedRecipeIds.value.length} 个 BomRecipe`;
+    case 'ADD': return `批量新增 — 影响 ${selectedRecipeIds.value.length} 个 BomRecipe`;
+    default: return '';
+  }
+});
+
+async function submitBatch() {
+  if (!factoryId.value || !userId.value) {
+    ElMessage.warning('未登录');
+    return;
+  }
+  const type = batchDialogType.value;
+  if (!type) return;
+
+  const f = batchForm.value;
+  const common = {
+    recipeIds: selectedRecipeIds.value,
+    allInFactory: false,
+    ecnReason: f.ecnReason,
+    ecnReasonDetail: f.ecnReasonDetail || undefined,
+    effectiveDate: f.effectiveDate || undefined,
+    createdBy: userId.value,
+  };
+
+  // 防呆 Rule 1 / 3: 各 mode 必填校验
+  try {
+    batchSubmitLoading.value = true;
+    let result;
+    if (type === 'MODIFY') {
+      if (!f.materialId || !f.newStandardQuantity) {
+        ElMessage.warning('物料 ID + 新数量 必填');
+        return;
+      }
+      const r = await bomBatchApi.batchModify(factoryId.value, {
+        ...common,
+        materialId: f.materialId,
+        newStandardQuantity: f.newStandardQuantity,
+        newUnit: f.newUnit || undefined,
+      });
+      result = r;
+    } else if (type === 'REPLACE') {
+      if (!f.oldMaterialId || !f.newMaterialId) {
+        ElMessage.warning('旧物料 + 新物料 必填');
+        return;
+      }
+      const r = await bomBatchApi.batchReplace(factoryId.value, {
+        ...common,
+        oldMaterialId: f.oldMaterialId,
+        newMaterialId: f.newMaterialId,
+        preserveQuantity: f.preserveQuantity,
+      });
+      result = r;
+    } else if (type === 'DELETE') {
+      if (!f.materialId) {
+        ElMessage.warning('物料 ID 必填');
+        return;
+      }
+      const r = await bomBatchApi.batchDelete(factoryId.value, {
+        ...common,
+        materialId: f.materialId,
+      });
+      result = r;
+    } else if (type === 'ADD') {
+      if (!f.materialId || !f.standardQuantity || !f.unit) {
+        ElMessage.warning('物料 + 数量 + 单位 必填');
+        return;
+      }
+      const r = await bomBatchApi.batchAdd(factoryId.value, {
+        ...common,
+        materialId: f.materialId,
+        standardQuantity: f.standardQuantity,
+        yieldRate: f.yieldRate,
+        unit: f.unit,
+        materialCategory: f.materialCategory,
+        skipIfAlreadyPresent: f.skipIfAlreadyPresent,
+      });
+      result = r;
+    }
+    if (result && result.success && result.data) {
+      ElMessage.success(`已创建 ECN ${result.data.ecnNumber} + ${Object.keys(result.data.draftVersionIds).length} 个 BomVersion DRAFT`);
+      batchResultDialog.value = result.data;
+      batchDialogType.value = null;
+      loadHistory();
+    }
+  } catch (e) {
+    const err = e as { actionHint?: string } | undefined;
+    if (!err?.actionHint) ElMessage.error('批量操作失败');
+  } finally {
+    batchSubmitLoading.value = false;
+  }
+}
 </script>
 
 <template>
@@ -270,11 +442,65 @@ function snapshotPreview(snapshot: Record<string, unknown>): string {
       </el-descriptions>
     </el-card>
 
+    <!-- Sprint 6 W4-C — 4 批量操作工具栏 -->
+    <el-card v-if="canWrite" style="margin-top: 12px">
+      <template #header>
+        <span>批量操作 (Sprint 6 W4-C)</span>
+      </template>
+      <el-alert
+        type="info"
+        :closable="false"
+        title="先勾选下方版本行 (按 BomRecipe 分组), 然后选择批量操作. 每个操作产生 1 个 ECN DRAFT + N 个 BomVersion DRAFT, 走审批后才落地."
+        style="margin-bottom: 12px"
+      />
+      <div class="batch-toolbar">
+        <el-tag type="info">已选 {{ selectedRecipeIds.length }} 个 BomRecipe</el-tag>
+        <el-button
+          type="primary"
+          :icon="Edit"
+          :disabled="selectedRecipeIds.length === 0"
+          @click="openBatchDialog('MODIFY')"
+        >
+          批量修改
+        </el-button>
+        <el-button
+          type="warning"
+          :icon="Switch"
+          :disabled="selectedRecipeIds.length === 0"
+          @click="openBatchDialog('REPLACE')"
+        >
+          批量替换
+        </el-button>
+        <el-button
+          type="danger"
+          :icon="Delete"
+          :disabled="selectedRecipeIds.length === 0"
+          @click="openBatchDialog('DELETE')"
+        >
+          批量删除
+        </el-button>
+        <el-button
+          type="success"
+          :icon="Plus"
+          :disabled="selectedRecipeIds.length === 0"
+          @click="openBatchDialog('ADD')"
+        >
+          批量新增
+        </el-button>
+      </div>
+    </el-card>
+
     <el-card style="margin-top: 12px">
       <template #header>
         <span>历史版本 ({{ versions.length }} 条)</span>
       </template>
-      <el-table v-loading="loading" :data="versions" stripe>
+      <el-table
+        v-loading="loading"
+        :data="versions"
+        stripe
+        @selection-change="(rows: BomVersion[]) => (selectedRows = rows)"
+      >
+        <el-table-column v-if="canWrite" type="selection" width="48" />
         <el-table-column prop="versionNumber" label="版本号" width="80">
           <template #default="{ row }">v{{ row.versionNumber }}</template>
         </el-table-column>
@@ -358,6 +584,163 @@ function snapshotPreview(snapshot: Record<string, unknown>): string {
         </template>
       </el-table>
     </el-card>
+
+    <!-- Sprint 6 W4-C — 批量操作 dialog (4 modes 共用) -->
+    <el-dialog
+      v-model="batchDialogType"
+      :title="batchDialogTitle"
+      width="640px"
+      :close-on-click-modal="false"
+      :before-close="(done: () => void) => { batchDialogType = null; done(); }"
+    >
+      <el-form :model="batchForm" label-width="140px">
+        <!-- MODIFY: materialId + newStandardQuantity + newUnit -->
+        <template v-if="batchDialogType === 'MODIFY'">
+          <el-form-item label="物料 ID" required>
+            <el-input v-model="batchForm.materialId" placeholder="目标物料 UUID" />
+          </el-form-item>
+          <el-form-item label="新数量 (per 单位)" required>
+            <el-input-number v-model="batchForm.newStandardQuantity" :min="0" :precision="4" />
+          </el-form-item>
+          <el-form-item label="新单位 (可选)">
+            <el-input v-model="batchForm.newUnit" placeholder="g/kg/L 等 (空 = 保留)" />
+          </el-form-item>
+        </template>
+
+        <!-- REPLACE: oldMaterialId + newMaterialId + preserveQuantity -->
+        <template v-else-if="batchDialogType === 'REPLACE'">
+          <el-form-item label="旧物料 ID" required>
+            <el-input v-model="batchForm.oldMaterialId" placeholder="将被替换的物料 UUID" />
+          </el-form-item>
+          <el-form-item label="新物料 ID" required>
+            <el-input v-model="batchForm.newMaterialId" placeholder="替换后物料 UUID" />
+          </el-form-item>
+          <el-form-item label="保留原数量/单位">
+            <el-switch v-model="batchForm.preserveQuantity" />
+            <span class="form-hint">默认开 — 仅切换 material 引用, 不改 quantity/unit</span>
+          </el-form-item>
+        </template>
+
+        <!-- DELETE: materialId -->
+        <template v-else-if="batchDialogType === 'DELETE'">
+          <el-form-item label="物料 ID" required>
+            <el-input v-model="batchForm.materialId" placeholder="将被删除的物料 UUID" />
+          </el-form-item>
+          <el-alert
+            type="warning"
+            :closable="false"
+            title="批量删除会从所选 BOM 移除此物料 item. 走 ECN 审批后才真删, draft 阶段仅 snapshot."
+          />
+        </template>
+
+        <!-- ADD: materialId + standardQuantity + yieldRate + unit + materialCategory + skipIfAlreadyPresent -->
+        <template v-else-if="batchDialogType === 'ADD'">
+          <el-form-item label="物料 ID" required>
+            <el-input v-model="batchForm.materialId" placeholder="将新增的物料 UUID" />
+          </el-form-item>
+          <el-form-item label="数量 (per 单位)" required>
+            <el-input-number v-model="batchForm.standardQuantity" :min="0" :precision="4" />
+          </el-form-item>
+          <el-form-item label="单位" required>
+            <el-input v-model="batchForm.unit" placeholder="g/kg/L 等" />
+          </el-form-item>
+          <el-form-item label="出成率 (%)">
+            <el-input-number v-model="batchForm.yieldRate" :min="0" :max="100" :precision="2" />
+          </el-form-item>
+          <el-form-item label="物料类型">
+            <el-select v-model="batchForm.materialCategory" style="width: 100%">
+              <el-option label="原料 (RAW)" value="RAW" />
+              <el-option label="辅料 (AUXILIARY)" value="AUXILIARY" />
+              <el-option label="包装 (PACKAGING)" value="PACKAGING" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="已有此物料时跳过">
+            <el-switch v-model="batchForm.skipIfAlreadyPresent" />
+            <span class="form-hint">默认开 — 防误重复加</span>
+          </el-form-item>
+        </template>
+
+        <!-- Common: ecnReason / ecnReasonDetail / effectiveDate -->
+        <el-divider>ECN 字段 (自动 create DRAFT)</el-divider>
+        <el-form-item label="变更原因" required>
+          <el-select v-model="batchForm.ecnReason" style="width: 100%">
+            <el-option
+              v-for="opt in ECN_REASON_OPTIONS"
+              :key="opt.value"
+              :label="opt.label"
+              :value="opt.value"
+            />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="原因详情">
+          <el-input
+            v-model="batchForm.ecnReasonDetail"
+            type="textarea"
+            :rows="3"
+            placeholder="(可选) 补充说明"
+          />
+        </el-form-item>
+        <el-form-item label="计划生效日">
+          <el-date-picker
+            v-model="batchForm.effectiveDate"
+            type="date"
+            value-format="YYYY-MM-DD"
+            style="width: 100%"
+          />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="batchDialogType = null">取消</el-button>
+        <el-button type="primary" :loading="batchSubmitLoading" @click="submitBatch">
+          创建 ECN + DRAFTs
+        </el-button>
+      </template>
+    </el-dialog>
+
+    <!-- Sprint 6 W4-C — 批量结果 dialog -->
+    <el-dialog
+      v-model="batchResultDialog"
+      :title="batchResultDialog ? `批量 ${batchResultDialog.operation} 完成` : ''"
+      width="640px"
+    >
+      <div v-if="batchResultDialog">
+        <el-descriptions :column="1" border>
+          <el-descriptions-item label="ECN 编号">
+            <el-tag type="success">{{ batchResultDialog.ecnNumber }}</el-tag>
+          </el-descriptions-item>
+          <el-descriptions-item label="影响 BomRecipe">
+            {{ batchResultDialog.affectedRecipeIds.length }} 个
+          </el-descriptions-item>
+          <el-descriptions-item label="生成 DRAFT 版本">
+            {{ Object.keys(batchResultDialog.draftVersionIds).length }} 个
+          </el-descriptions-item>
+          <el-descriptions-item label="跳过 recipe">
+            {{ Object.keys(batchResultDialog.skippedRecipes).length }} 个
+          </el-descriptions-item>
+        </el-descriptions>
+        <div v-if="Object.keys(batchResultDialog.skippedRecipes).length > 0" style="margin-top: 12px">
+          <el-alert type="warning" :closable="false">
+            <template #title>跳过明细</template>
+            <ul>
+              <li v-for="(reason, rid) in batchResultDialog.skippedRecipes" :key="rid">
+                {{ rid }}: {{ reason }}
+              </li>
+            </ul>
+          </el-alert>
+        </div>
+        <div v-if="batchResultDialog.warnings.length > 0" style="margin-top: 12px">
+          <el-alert type="warning" :closable="false">
+            <template #title>警告</template>
+            <ul>
+              <li v-for="(w, i) in batchResultDialog.warnings" :key="i">{{ w }}</li>
+            </ul>
+          </el-alert>
+        </div>
+      </div>
+      <template #footer>
+        <el-button @click="batchResultDialog = null">关闭</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -385,5 +768,16 @@ function snapshotPreview(snapshot: Record<string, unknown>): string {
 }
 .text-danger {
   color: var(--el-color-danger, #f56c6c);
+}
+.batch-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.form-hint {
+  margin-left: 8px;
+  color: var(--el-text-color-secondary, #909399);
+  font-size: 12px;
 }
 </style>
