@@ -108,6 +108,10 @@ public class Attachment extends BaseEntity {
      *   <li>本枚举</li>
      *   <li>Flyway migration 的 {@code chk_att_entity_type} CHECK constraint</li>
      * </ol>
+     *
+     * <p>Sprint 6 W3-A (2026-05-19): 加 {@link #SALES_ORDER} 和 {@link #INVENTORY}
+     * 用于 inline link counter (4 list 行内 3-chip 显示). 详见
+     * {@code docs/superpowers/specs/2026-05-19-sprint5-h1-attachment-linkcounter-spec.md §3.4}.
      */
     public enum EntityType {
         CUSTOMER,
@@ -127,6 +131,10 @@ public class Attachment extends BaseEntity {
         EXPENSE_REPORT,
         LEAVE_REQUEST,
         TIMECLOCK_PHOTO,
+        /** Sprint 6 W3-A — 销售订单附件 (inline link counter 文件/图片/合同 3-chip). */
+        SALES_ORDER,
+        /** Sprint 6 W3-A — 库存批次附件 (入库单据 / 抄码单 / 质检证明). */
+        INVENTORY,
         GENERIC
     }
 
