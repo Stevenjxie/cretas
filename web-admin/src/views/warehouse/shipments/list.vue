@@ -6,6 +6,7 @@ import { get, post, put } from '@/api/request';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Plus, Search, Refresh, Ship, Check, Close } from '@element-plus/icons-vue';
 import { formatDateTime } from '@/utils/dateFormat';
+import { handleCatchError } from '@/utils/errorToast';
 import { emptyCell } from '@/utils/tableFormatters';
 import ConceptDisambiguationAlert from '@/components/common/ConceptDisambiguationAlert.vue';
 import type { TableRow } from '@/types/api';
@@ -124,8 +125,10 @@ async function openConfirmDialog(row: TableRow) {
     }));
     confirmDialogVisible.value = true;
   } catch (e) {
+    // UX polish (2026-05-20): interceptor handles 4xx/5xx with backend message;
+    // fallback only for network errors (避免双 toast).
     console.error('加载发货单明细失败:', e);
-    ElMessage.error('加载发货单明细失败');
+    handleCatchError(e, '加载发货单明细失败');
   }
 }
 
@@ -225,8 +228,10 @@ async function loadCustomers() {
       ElMessage.error(response.message || '加载客户列表失败');
     }
   } catch (error) {
+    // UX polish (2026-05-20): interceptor handles 4xx/5xx with backend message;
+    // fallback only for network errors (避免双 toast).
     console.error('加载客户列表失败:', error);
-    ElMessage.error('加载客户列表失败');
+    handleCatchError(error, '加载客户列表失败');
   }
 }
 
@@ -242,8 +247,10 @@ async function loadProductBatches() {
       ElMessage.error(response.message || '加载产品批次失败');
     }
   } catch (error) {
+    // UX polish (2026-05-20): interceptor handles 4xx/5xx with backend message;
+    // fallback only for network errors (避免双 toast).
     console.error('加载产品批次失败:', error);
-    ElMessage.error('加载产品批次失败');
+    handleCatchError(error, '加载产品批次失败');
   }
 }
 

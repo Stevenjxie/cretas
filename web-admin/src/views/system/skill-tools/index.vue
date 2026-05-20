@@ -4,6 +4,7 @@ import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Search, Refresh, Plus, Delete, View } from '@element-plus/icons-vue';
+import { handleCatchError } from '@/utils/errorToast';
 import {
   listSkills, getSkillDetail, createSkill, toggleSkill, deleteSkill,
   getRecommendations, getPatterns,
@@ -73,7 +74,9 @@ async function loadSkills() {
       skills.value = res.data;
     }
   } catch (e) {
-    ElMessage.error('加载 Skill 列表失败');
+    // UX polish (2026-05-20): interceptor handles 4xx/5xx with backend message;
+    // fallback only for network errors (避免双 toast).
+    handleCatchError(e, '加载 Skill 列表失败');
   } finally {
     loading.value = false;
   }
@@ -164,8 +167,10 @@ async function loadRecommendations() {
     if (res.success && res.data) {
       recommendations.value = res.data;
     }
-  } catch {
-    ElMessage.error('加载推荐失败');
+  } catch (e) {
+    // UX polish (2026-05-20): interceptor handles 4xx/5xx with backend message;
+    // fallback only for network errors (避免双 toast).
+    handleCatchError(e, '加载推荐失败');
   } finally {
     recLoading.value = false;
   }
@@ -204,8 +209,10 @@ async function loadPatterns() {
     if (res.success && res.data) {
       patterns.value = res.data;
     }
-  } catch {
-    ElMessage.error('加载模式失败');
+  } catch (e) {
+    // UX polish (2026-05-20): interceptor handles 4xx/5xx with backend message;
+    // fallback only for network errors (避免双 toast).
+    handleCatchError(e, '加载模式失败');
   } finally {
     patLoading.value = false;
   }

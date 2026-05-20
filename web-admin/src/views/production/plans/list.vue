@@ -7,6 +7,7 @@ import { get, post } from '@/api/request';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Plus, Search, Refresh, VideoPlay, VideoPause, CircleCheck, CircleClose, Download, Upload, ChatDotRound } from '@element-plus/icons-vue';
 import { formatDateTimeCell } from '@/utils/tableFormatters';
+import { handleCatchError } from '@/utils/errorToast';
 import ConceptDisambiguationAlert from '@/components/common/ConceptDisambiguationAlert.vue';
 import {
   downloadImportTemplate,
@@ -128,8 +129,10 @@ async function loadSelectableSalesOrders() {
     } else if (res.success === false) {
       ElMessage.error(res.message || '加载销售订单失败');
     }
-  } catch {
-    ElMessage.error('加载销售订单失败');
+  } catch (e) {
+    // UX polish (2026-05-20): interceptor handles 4xx/5xx with backend message;
+    // fallback only for network errors (避免双 toast).
+    handleCatchError(e, '加载销售订单失败');
   } finally {
     salesOrdersLoading.value = false;
   }
