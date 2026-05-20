@@ -12,11 +12,19 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
@@ -26,6 +34,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -305,5 +314,220 @@ class CanvasRuleControllerTest {
         assertEquals(Integer.valueOf(200), resp.getCode());
         assertTrue(Boolean.TRUE.equals(resp.getSuccess()));
         verify(ruleRepository).save(any(BusinessRule.class));
+    }
+
+    // ==================== AUD-9 P3: GET pagination + sort ====================
+
+    /**
+     * Helper: build N rules so we can verify pagination shape (totalElements / totalPages /
+     * page / size all surface on the Page<Map> wrapper).
+     */
+    private List<BusinessRule> buildRules(int n) {
+        List<BusinessRule> list = new ArrayList<>();
+        for (int i = 0; i < n; i++) {
+            list.add(BusinessRule.builder()
+                    .id(UUID.randomUUID())
+                    .factoryId(FACTORY_ID)
+                    .ruleCode("rule_" + i)
+                    .ruleName("Rule " + i)
+                    .scope(RuleScope.ORDER)
+                    .conditionSpel("#input.amount > " + i)
+                    .actionType(RuleActionType.LOG)
+                    .actionConfigJson(new HashMap<>())
+                    .priority(i)
+                    .enabled(true)
+                    .build());
+        }
+        return list;
+    }
+
+    @Test
+    @DisplayName("AUD-9: GET /canvas-rules returns Page envelope (content + totalElements + totalPages)")
+    void testListReturnsPageObject() {
+        List<BusinessRule> rules = buildRules(5);
+        Pageable expected = PageRequest.of(0, 20, Sort.by(Sort.Direction.ASC, "priority"));
+        when(ruleRepository.findByFactoryId(eq(FACTORY_ID), any(Pageable.class)))
+                .thenReturn(new PageImpl<>(rules, expected, 5));
+
+        ApiResponse<Page<Map<String, Object>>> resp =
+                controller.listRules(FACTORY_ID, null, null, expected);
+
+        assertNotNull(resp);
+        assertTrue(resp.getSuccess());
+        assertEquals(Integer.valueOf(200), resp.getCode());
+
+        Page<Map<String, Object>> page = resp.getData();
+        assertNotNull(page, "Page envelope must not be null");
+        assertEquals(5, page.getContent().size(), "content size == rules count");
+        assertEquals(5L, page.getTotalElements(), "totalElements surfaces");
+        assertEquals(1, page.getTotalPages(), "totalPages calculated");
+        assertEquals(0, page.getNumber(), "page number (0-indexed)");
+        assertEquals(20, page.getSize(), "page size echo");
+        // Each content item is a serialized map (NOT raw entity)
+        Map<String, Object> first = page.getContent().get(0);
+        assertEquals("rule_0", first.get("ruleCode"));
+        assertEquals("Rule 0", first.get("ruleName"));
+    }
+
+    @Test
+    @DisplayName("AUD-9: pagination request reaches repository — verify Pageable propagation")
+    void testPaginationRespected() {
+        // Client asks for page=1, size=2 — controller should forward exactly that.
+        List<BusinessRule> page2Rules = buildRules(2);
+        Pageable requested = PageRequest.of(1, 2, Sort.by(Sort.Direction.ASC, "priority"));
+        when(ruleRepository.findByFactoryId(eq(FACTORY_ID), any(Pageable.class)))
+                .thenReturn(new PageImpl<>(page2Rules, requested, 10));
+
+        ApiResponse<Page<Map<String, Object>>> resp =
+                controller.listRules(FACTORY_ID, null, null, requested);
+
+        assertTrue(resp.getSuccess());
+        Page<Map<String, Object>> result = resp.getData();
+        assertEquals(2, result.getContent().size());
+        assertEquals(10L, result.getTotalElements());
+        assertEquals(5, result.getTotalPages(), "10 elements / 2 per page = 5 pages");
+        assertEquals(1, result.getNumber(), "echoes requested page=1");
+        assertEquals(2, result.getSize(), "echoes requested size=2");
+
+        // Verify the repository was called with the user's Pageable (size==2, page==1).
+        ArgumentCaptor<Pageable> captor = ArgumentCaptor.forClass(Pageable.class);
+        verify(ruleRepository).findByFactoryId(eq(FACTORY_ID), captor.capture());
+        Pageable actual = captor.getValue();
+        assertEquals(1, actual.getPageNumber(), "page propagated");
+        assertEquals(2, actual.getPageSize(), "size propagated");
+    }
+
+    @Test
+    @DisplayName("AUD-9: sort=ruleCode,DESC respected (Pageable Sort propagated to repository)")
+    void testSortRespected() {
+        Pageable requested = PageRequest.of(0, 20, Sort.by(Sort.Direction.DESC, "ruleCode"));
+        when(ruleRepository.findByFactoryId(eq(FACTORY_ID), any(Pageable.class)))
+                .thenReturn(new PageImpl<>(new ArrayList<>(), requested, 0));
+
+        controller.listRules(FACTORY_ID, null, null, requested);
+
+        ArgumentCaptor<Pageable> captor = ArgumentCaptor.forClass(Pageable.class);
+        verify(ruleRepository).findByFactoryId(eq(FACTORY_ID), captor.capture());
+        Sort actualSort = captor.getValue().getSort();
+        Sort.Order ruleCodeOrder = actualSort.getOrderFor("ruleCode");
+        assertNotNull(ruleCodeOrder, "ruleCode sort order present in Pageable forwarded to repo");
+        assertEquals(Sort.Direction.DESC, ruleCodeOrder.getDirection(),
+                "DESC direction propagated");
+    }
+
+    @Test
+    @DisplayName("AUD-9 + scope/enabled filter: filter params route to the correct repo method")
+    void testListRoutesFilteredFiltersToCorrectRepoMethod() {
+        Pageable requested = PageRequest.of(0, 20, Sort.by(Sort.Direction.ASC, "priority"));
+        // both scope + enabled → findByFactoryIdAndScopeAndEnabled
+        when(ruleRepository.findByFactoryIdAndScopeAndEnabled(
+                eq(FACTORY_ID), eq(RuleScope.INVENTORY), eq(true), any(Pageable.class)))
+                .thenReturn(new PageImpl<>(buildRules(1), requested, 1));
+
+        ApiResponse<Page<Map<String, Object>>> resp =
+                controller.listRules(FACTORY_ID, "INVENTORY", true, requested);
+
+        assertTrue(resp.getSuccess());
+        assertEquals(1L, resp.getData().getTotalElements());
+        // No fallback method called
+        verify(ruleRepository, never()).findByFactoryId(any(), any(Pageable.class));
+        verify(ruleRepository, never()).findByFactoryIdAndScope(any(), any(), any(Pageable.class));
+        verify(ruleRepository, never()).findByFactoryIdAndEnabled(any(), any(), any(Pageable.class));
+    }
+
+    @Test
+    @DisplayName("AUD-8 mitigation: size > 100 capped to 100 before reaching repository")
+    void testPageSizeCappedAt100() {
+        // Client attempts size=999999 → controller must cap at 100.
+        Pageable requested = PageRequest.of(0, 999999, Sort.by(Sort.Direction.ASC, "priority"));
+        when(ruleRepository.findByFactoryId(eq(FACTORY_ID), any(Pageable.class)))
+                .thenReturn(new PageImpl<>(new ArrayList<>(), PageRequest.of(0, 100), 0));
+
+        controller.listRules(FACTORY_ID, null, null, requested);
+
+        ArgumentCaptor<Pageable> captor = ArgumentCaptor.forClass(Pageable.class);
+        verify(ruleRepository).findByFactoryId(eq(FACTORY_ID), captor.capture());
+        assertEquals(100, captor.getValue().getPageSize(),
+                "abusive size=999999 must be clamped to 100");
+    }
+
+    // ==================== AUD-5 / B-A3 sister: ruleName length pre-check ====================
+
+    @Test
+    @DisplayName("AUD-5/B-A3 sister: POST with 256-char ruleName returns 400 VALIDATION (NOT 409)")
+    void testRuleNameLengthRejectedOnCreate() {
+        Map<String, Object> body = validCreateBody();
+        // 256 chars — one past entity @Column(length=255)
+        body.put("ruleName", "x".repeat(256));
+
+        ApiResponse<Map<String, Object>> resp = controller.createRule(FACTORY_ID, body);
+
+        assertNotNull(resp);
+        assertFalse(Boolean.TRUE.equals(resp.getSuccess()));
+        assertEquals(Integer.valueOf(400), resp.getCode());
+        assertEquals("VALIDATION", resp.getErrorCode());
+        assertTrue(resp.getMessage().contains("255"),
+                "Error message should cite the max length (255)");
+        assertTrue(resp.getMessage().contains("256"),
+                "Error message should cite the user's actual length (256)");
+        // Critical: no persist + no duplicate check (length precedes ruleCode lookup)
+        verify(ruleRepository, never()).save(any(BusinessRule.class));
+    }
+
+    @Test
+    @DisplayName("AUD-5/B-A3 sister: POST with 255-char ruleName (boundary) accepted")
+    void testRuleNameBoundary255Accepted() {
+        Map<String, Object> body = validCreateBody();
+        body.put("ruleName", "x".repeat(255));  // exactly at max
+
+        when(ruleRepository.findByFactoryIdAndRuleCode(FACTORY_ID, "test_rule_new"))
+                .thenReturn(Optional.empty());
+        when(ruleRepository.save(any(BusinessRule.class))).thenAnswer(inv -> {
+            BusinessRule r = inv.getArgument(0);
+            if (r.getId() == null) r.setId(UUID.randomUUID());
+            return r;
+        });
+
+        ApiResponse<Map<String, Object>> resp = controller.createRule(FACTORY_ID, body);
+
+        assertNotNull(resp);
+        assertTrue(Boolean.TRUE.equals(resp.getSuccess()), "255-char boundary must pass");
+        assertEquals(Integer.valueOf(200), resp.getCode());
+        verify(ruleRepository).save(any(BusinessRule.class));
+    }
+
+    @Test
+    @DisplayName("AUD-5/B-A3 sister: PUT with 256-char ruleName returns 400 (regression on update path)")
+    void testRuleNameLengthRejectedOnUpdate() {
+        BusinessRule rule = existingRule();
+        when(ruleRepository.findById(rule.getId())).thenReturn(Optional.of(rule));
+        Map<String, Object> body = new HashMap<>();
+        body.put("ruleName", "y".repeat(256));
+
+        ApiResponse<Map<String, Object>> resp = controller.updateRule(FACTORY_ID, rule.getId(), body);
+
+        assertNotNull(resp);
+        assertFalse(Boolean.TRUE.equals(resp.getSuccess()));
+        assertEquals(Integer.valueOf(400), resp.getCode());
+        assertEquals("VALIDATION", resp.getErrorCode());
+        assertTrue(resp.getMessage().contains("255"));
+        assertEquals("Test rule", rule.getRuleName(),
+                "ruleName must NOT be mutated when validation fails");
+        verify(ruleRepository, never()).save(any(BusinessRule.class));
+    }
+
+    @Test
+    @DisplayName("AUD-5/B-A3 sister: PUT with 100-char ruleName accepted (regression)")
+    void testValidRuleNameUpdateAccepted() {
+        BusinessRule rule = existingRule();
+        stubFind(rule);
+        Map<String, Object> body = new HashMap<>();
+        String newName = "z".repeat(100);
+        body.put("ruleName", newName);
+
+        ApiResponse<Map<String, Object>> resp = controller.updateRule(FACTORY_ID, rule.getId(), body);
+
+        assertTrue(resp.getSuccess(), "100-char update should pass");
+        assertEquals(newName, rule.getRuleName());
     }
 }
