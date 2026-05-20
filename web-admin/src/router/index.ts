@@ -386,6 +386,38 @@ const businessRoutes: RouteRecordRaw[] = [
               module: 'procurement',
               roles: ['factory_super_admin', 'permission_admin', 'procurement_manager', 'finance_manager']
             }
+          },
+          // Sprint 6 W2-A — 请购单 (Material Requisition).
+          // 后端: Sprint 5 Track D PR #56 (entity + state machine + 7 endpoints).
+          // 3 个 list view + 1 个 detail view, 共用 CreateRequisitionDialog.
+          {
+            path: 'requisitions/my',
+            name: 'MyPurchaseRequisitions',
+            component: () => import('@/views/procurement/requisitions/my-list.vue'),
+            meta: { requiresAuth: true, title: '我的请购', module: 'procurement' }
+          },
+          {
+            path: 'requisitions/pending-approval',
+            name: 'PendingApprovalRequisitions',
+            component: () => import('@/views/procurement/requisitions/pending-approval.vue'),
+            meta: {
+              requiresAuth: true,
+              title: '待审批请购',
+              module: 'procurement',
+              roles: ['factory_super_admin', 'platform_admin', 'procurement_manager', 'department_admin', 'permission_admin']
+            }
+          },
+          {
+            path: 'requisitions',
+            name: 'PurchaseRequisitions',
+            component: () => import('@/views/procurement/requisitions/list.vue'),
+            meta: { requiresAuth: true, title: '全部请购单', module: 'procurement' }
+          },
+          {
+            path: 'requisitions/:id',
+            name: 'PurchaseRequisitionDetail',
+            component: () => import('@/views/procurement/requisitions/detail.vue'),
+            meta: { requiresAuth: true, title: '请购单详情', module: 'procurement', hidden: true }
           }
         ]
       },
