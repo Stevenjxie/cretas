@@ -33,6 +33,18 @@ const viewingRole = ref<TableRow | null>(null);
 const rolePermissions = ref<TableRow[]>([]);
 const permissionsLoading = ref(false);
 
+// Sprint 5 Track G: 数据权限 tab (read-only stub, edit defer Sprint 6)
+const viewTab = ref<'function' | 'data'>('function');
+// 默认 stub 值: 一线员工 SELF, 其他 ALL — backend V20260519_05 实际写入 role_definitions
+function deriveDataScope(roleName: string): string {
+  if (['operator', 'warehouse_worker', 'warehouse_operator', 'quality_inspector'].includes(roleName)) {
+    return 'SELF';
+  }
+  return 'ALL';
+}
+// 用普通 ref + watch viewingRole 更新, 而非 computed (radio v-model 需 writable)
+const dataScopeStub = ref<string>('ALL');
+
 // Edit dialog
 const editDialogVisible = ref(false);
 const editingRole = ref<TableRow | null>(null);
@@ -46,6 +58,8 @@ const editSubmitting = ref(false);
 async function handleViewPermissions(row: TableRow) {
   viewingRole.value = row;
   viewDialogVisible.value = true;
+  viewTab.value = 'function';  // 默认显功能权限 tab
+  dataScopeStub.value = deriveDataScope(row.name);  // Sprint 5 Track G stub
   permissionsLoading.value = true;
   try {
     const res = await get(`/${factoryId.value}/roles/${row.name}/permissions`);
@@ -327,17 +341,50 @@ onMounted(loadRoleUserCounts);
     </el-card>
 
     <!-- 查看权限 Dialog -->
-    <el-dialog v-model="viewDialogVisible" :title="`${viewingRole?.displayName} — 权限详情`" width="500px" destroy-on-close>
-      <el-table :data="rolePermissions" v-loading="permissionsLoading" stripe border>
-        <el-table-column prop="label" label="功能模块" width="140" />
-        <el-table-column prop="access" label="权限" width="120" align="center">
-          <template #default="{ row }">
-            <el-tag :type="getAccessTag(row.access).type" size="small">
-              {{ getAccessTag(row.access).label }}
-            </el-tag>
-          </template>
-        </el-table-column>
-      </el-table>
+    <el-dialog v-model="viewDialogVisible" :title="`${viewingRole?.displayName} — 权限详情`" width="600px" destroy-on-close>
+      <el-tabs v-model="viewTab" type="border-card">
+        <!-- Tab 1: 功能权限 (existing) -->
+        <el-tab-pane label="功能权限" name="function">
+          <el-table :data="rolePermissions" v-loading="permissionsLoading" stripe border>
+            <el-table-column prop="label" label="功能模块" width="140" />
+            <el-table-column prop="access" label="权限" width="120" align="center">
+              <template #default="{ row }">
+                <el-tag :type="getAccessTag(row.access).type" size="small">
+                  {{ getAccessTag(row.access).label }}
+                </el-tag>
+              </template>
+            </el-table-column>
+          </el-table>
+        </el-tab-pane>
+
+        <!-- Tab 2: 数据权限 (Sprint 5 Track G stub — backend live, frontend Sprint 6 sweep) -->
+        <el-tab-pane label="数据权限" name="data">
+          <el-alert
+            title="Sprint 5 Track G — RBAC 数据权限维度 MVP"
+            type="info"
+            :closable="false"
+            description="后端 framework 已上线 (5 级 scope: ALL/DEPT_AND_BELOW/SELF_AND_BELOW/SELF/CUSTOM). 当前角色 default scope 见下表; 自定义编辑功能 Sprint 6 上线 (跟 §G 全 sweep 同步)."
+            style="margin-bottom: 16px"
+          />
+          <el-form label-width="100px" disabled>
+            <el-form-item label="数据范围">
+              <el-radio-group v-model="dataScopeStub">
+                <el-radio value="ALL">全工厂 (默认)</el-radio>
+                <el-radio value="DEPT_AND_BELOW">本部门 + 下属部门</el-radio>
+                <el-radio value="SELF_AND_BELOW">自己 + 下属</el-radio>
+                <el-radio value="SELF">仅自己创建</el-radio>
+                <el-radio value="CUSTOM">自定义 (Sprint 6)</el-radio>
+              </el-radio-group>
+            </el-form-item>
+            <el-form-item label="生效说明">
+              <el-text type="info" size="small">
+                销售单 list 已实施 POC (SELF scope 仅看自己创建的订单).
+                Sprint 6 sweep 时扩 customer/PO/invoice/delivery 等 10+ 接口.
+              </el-text>
+            </el-form-item>
+          </el-form>
+        </el-tab-pane>
+      </el-tabs>
       <template #footer>
         <el-button @click="viewDialogVisible = false">关闭</el-button>
       </template>

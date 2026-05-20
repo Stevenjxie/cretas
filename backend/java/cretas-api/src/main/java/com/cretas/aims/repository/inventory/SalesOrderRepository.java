@@ -19,6 +19,14 @@ public interface SalesOrderRepository extends JpaRepository<SalesOrder, String> 
 
     Page<SalesOrder> findByFactoryIdOrderByCreatedAtDesc(String factoryId, Pageable pageable);
 
+    /**
+     * Sprint 5 Track G (RBAC DataScope SELF) — 仅查当前用户创建的销售单.
+     * Used by {@link com.cretas.aims.service.inventory.SalesService#getSalesOrders} when
+     * {@link com.cretas.aims.security.DataScopeContext#current()} scope is SELF.
+     */
+    Page<SalesOrder> findByFactoryIdAndCreatedByOrderByCreatedAtDesc(
+            String factoryId, Long createdBy, Pageable pageable);
+
     Page<SalesOrder> findByFactoryIdAndStatusOrderByCreatedAtDesc(String factoryId, SalesOrderStatus status, Pageable pageable);
 
     /**
