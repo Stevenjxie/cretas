@@ -102,6 +102,31 @@ public class OssServiceImpl implements OssService {
     }
 
     @Override
+    public String uploadBytes(byte[] bytes, String category, String factoryId,
+            String filename, String contentType) {
+        try {
+            String objectKey = buildObjectKey(category, factoryId,
+                    filename != null && !filename.isBlank() ? filename : "doc");
+
+            ObjectMetadata metadata = new ObjectMetadata();
+            metadata.setContentLength(bytes.length);
+            metadata.setContentType(contentType != null ? contentType : "application/octet-stream");
+
+            ossClient.putObject(ossConfig.getMediaBucket(), objectKey,
+                    new ByteArrayInputStream(bytes), metadata);
+
+            String url = ossConfig.getMediaUrlPrefix() + "/" + objectKey;
+            log.info("字节流上传成功: bucket={}, key={}, size={}, contentType={}",
+                    ossConfig.getMediaBucket(), objectKey, bytes.length, contentType);
+            return url;
+        } catch (Exception e) {
+            log.error("字节流上传失败: category={}, factoryId={}, filename={}",
+                    category, factoryId, filename, e);
+            throw new RuntimeException("字节流上传失败: " + e.getMessage());
+        }
+    }
+
+    @Override
     public String uploadFile(MultipartFile file, String category, String factoryId) {
         String contentType = file.getContentType();
 

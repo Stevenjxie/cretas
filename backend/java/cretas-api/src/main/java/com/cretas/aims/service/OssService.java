@@ -66,6 +66,22 @@ public interface OssService {
      */
     String uploadFile(MultipartFile file, String category, String factoryId);
 
+    /**
+     * 上传任意字节数组到 media bucket (主要场景: PDF/Excel 等服务端生成的文档).
+     *
+     * <p>Sprint 9 P1.2 监管上报 PDF 用. caller 自行决定 contentType (e.g. "application/pdf").
+     *
+     * @param bytes       原始字节
+     * @param category    分类 (e.g. "regulatory-reports", "purchase-orders-pdf")
+     * @param factoryId   工厂ID
+     * @param filename    原始文件名 (e.g. "RECALL-20260521-001.pdf") — 仅用于 OSS object key 后缀
+     * @param contentType MIME type (e.g. "application/pdf")
+     * @return OSS URL; null if OSS service is unavailable (NoOp impl 直接抛
+     *         {@link UnsupportedOperationException}, caller 应 try/catch)
+     */
+    String uploadBytes(byte[] bytes, String category, String factoryId,
+            String filename, String contentType);
+
     // ==================== 文件删除 ====================
 
     /**
