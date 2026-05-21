@@ -10,6 +10,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.time.LocalDate;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -165,7 +166,7 @@ public class SupplierCanOrderCheckTool extends AbstractBusinessTool {
         for (SupplierQualification q : all) {
             if (!"EXPIRING".equals(q.getStatus()) && !"VALID".equals(q.getStatus())) continue;
             if (q.getExpiryDate() == null) continue;
-            long days = today.until(q.getExpiryDate()).getDays();
+            long days = ChronoUnit.DAYS.between(today, q.getExpiryDate());
             if (days >= 0 && days <= 7) {
                 Map<String, Object> warn = new LinkedHashMap<>();
                 warn.put("qualificationType", q.getQualificationType());

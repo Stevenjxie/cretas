@@ -12,6 +12,7 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 import java.time.LocalDate;
+import java.time.temporal.ChronoUnit;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -153,7 +154,7 @@ public class SupplierQualificationExpiryScheduler {
     }
 
     private void notifyUrgent(SupplierQualification q) {
-        long days = LocalDate.now().until(q.getExpiryDate()).getDays();
+        long days = ChronoUnit.DAYS.between(LocalDate.now(), q.getExpiryDate());
         String title = String.format("🔴 紧急: 供应商资质 %d 天内过期 — %s",
                 days, q.getQualificationType());
         String body = String.format(
@@ -171,7 +172,7 @@ public class SupplierQualificationExpiryScheduler {
     }
 
     private void notifyWarning(SupplierQualification q) {
-        long days = LocalDate.now().until(q.getExpiryDate()).getDays();
+        long days = ChronoUnit.DAYS.between(LocalDate.now(), q.getExpiryDate());
         String title = String.format("🟡 供应商资质 %d 天内过期 — %s",
                 days, q.getQualificationType());
         String body = String.format(

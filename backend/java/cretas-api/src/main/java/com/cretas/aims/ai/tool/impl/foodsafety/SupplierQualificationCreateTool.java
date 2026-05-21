@@ -13,6 +13,7 @@ import org.springframework.stereotype.Component;
 
 import java.time.LocalDate;
 import java.time.format.DateTimeParseException;
+import java.time.temporal.ChronoUnit;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -211,15 +212,16 @@ public class SupplierQualificationCreateTool extends AbstractBusinessTool {
             return result;
         }
         String initialStatus = computeInitialStatus(expiryDate);
+        long daysUntilExpiry = ChronoUnit.DAYS.between(LocalDate.now(), expiryDate);
         result.put("initialStatus", initialStatus);
         result.put("expiryDate", expiryDate.toString());
-        result.put("daysUntilExpiry", LocalDate.now().until(expiryDate).getDays());
+        result.put("daysUntilExpiry", daysUntilExpiry);
 
         result.put("canDo", true);
         result.put("message", String.format(
                 "✅ 登记 → 供应商 %s 的 %s (证号 %s), 有效期至 %s (初始 status=%s, 距过期 %d 天)",
                 sup.getName(), qualType, certNumber, expiryDate, initialStatus,
-                LocalDate.now().until(expiryDate).getDays()));
+                daysUntilExpiry));
         return result;
     }
 
@@ -303,7 +305,7 @@ public class SupplierQualificationCreateTool extends AbstractBusinessTool {
         data.put("issueDate", issueDate.toString());
         data.put("expiryDate", expiryDate.toString());
         data.put("status", initialStatus);
-        data.put("daysUntilExpiry", LocalDate.now().until(expiryDate).getDays());
+        data.put("daysUntilExpiry", ChronoUnit.DAYS.between(LocalDate.now(), expiryDate));
         data.put("actionHint", "/quality/supplier-qualifications?supplierId=" + supplierId);
 
         String message = String.format(
@@ -318,7 +320,7 @@ public class SupplierQualificationCreateTool extends AbstractBusinessTool {
         if (expiryDate.isBefore(today)) {
             return "EXPIRED";
         }
-        long daysUntilExpiry = today.until(expiryDate).getDays();
+        long daysUntilExpiry = ChronoUnit.DAYS.between(today, expiryDate);
         if (daysUntilExpiry <= 30) {
             return "EXPIRING";
         }

@@ -10,6 +10,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.time.LocalDate;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -113,7 +114,7 @@ public class SupplierQualificationQueryExpiringTool extends AbstractBusinessTool
         List<Map<String, Object>> urgentList = new ArrayList<>();  // 7 days
         List<Map<String, Object>> warningList = new ArrayList<>(); // 30 days
         for (SupplierQualification q : expiring) {
-            long days = today.until(q.getExpiryDate()).getDays();
+            long days = ChronoUnit.DAYS.between(today, q.getExpiryDate());
             String severity = days <= 7 ? "URGENT" : "WARNING";
             Map<String, Object> row = buildRow(q, today, severity);
             if (days <= 7) {
@@ -155,7 +156,7 @@ public class SupplierQualificationQueryExpiringTool extends AbstractBusinessTool
         row.put("issuingAuthority", q.getIssuingAuthority());
         row.put("expiryDate", q.getExpiryDate() != null ? q.getExpiryDate().toString() : null);
         long daysUntilExpiry = q.getExpiryDate() != null
-                ? today.until(q.getExpiryDate()).getDays() : 0;
+                ? ChronoUnit.DAYS.between(today, q.getExpiryDate()) : 0;
         row.put("daysUntilExpiry", daysUntilExpiry);
         row.put("status", q.getStatus());
         row.put("severity", severity);

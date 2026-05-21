@@ -10,6 +10,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.time.LocalDate;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -124,7 +125,7 @@ public class SupplierQualificationLookupTool extends AbstractBusinessTool {
             row.put("issueDate", q.getIssueDate() != null ? q.getIssueDate().toString() : null);
             row.put("expiryDate", q.getExpiryDate() != null ? q.getExpiryDate().toString() : null);
             long days = q.getExpiryDate() != null
-                    ? today.until(q.getExpiryDate()).getDays() : 0;
+                    ? ChronoUnit.DAYS.between(today, q.getExpiryDate()) : 0;
             row.put("daysUntilExpiry", days);
             row.put("status", q.getStatus());
             row.put("attachmentOssUrl", q.getAttachmentOssUrl());
