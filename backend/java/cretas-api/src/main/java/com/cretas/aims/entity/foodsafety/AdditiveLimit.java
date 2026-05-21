@@ -1,6 +1,7 @@
 package com.cretas.aims.entity.foodsafety;
 
 import com.cretas.aims.entity.BaseEntity;
+import io.hypersistence.utils.hibernate.type.json.JsonBinaryType;
 import jakarta.persistence.*;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
@@ -8,9 +9,11 @@ import lombok.Data;
 import lombok.EqualsAndHashCode;
 import lombok.NoArgsConstructor;
 import lombok.experimental.SuperBuilder;
+import org.hibernate.annotations.Type;
 import org.hibernate.annotations.Where;
 
 import java.math.BigDecimal;
+import java.util.List;
 
 /**
  * GB 2760-2014 食品添加剂限量库 — Sprint 8 P3 Phase A.
@@ -81,4 +84,15 @@ public class AdditiveLimit extends BaseEntity {
     @Column(name = "active", nullable = false)
     @Builder.Default
     private boolean active = true;
+
+    /**
+     * 添加剂俗名 / 化学名 / 英文名 — JSONB list&lt;String&gt;.
+     *
+     * <p>Sprint 9 P2.F V2 新增. 支持 Tool fuzzy 匹配 (用户用俗名输入时自动找到 INS code).
+     * <p>e.g. {@code ["亚硝酸钠", "硝酸钠", "Sodium Nitrite"]}.
+     * <p>历史 V1 entries 默认 NULL, 通过 V20260821_39 回填常用 entries.
+     */
+    @Type(JsonBinaryType.class)
+    @Column(name = "aliases", columnDefinition = "jsonb")
+    private List<String> aliases;
 }
