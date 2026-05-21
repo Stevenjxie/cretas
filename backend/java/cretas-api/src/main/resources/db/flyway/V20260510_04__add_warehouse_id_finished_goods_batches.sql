@@ -33,7 +33,7 @@ BEGIN
 END $$;
 
 -- Step 1: Add column nullable
-ALTER TABLE finished_goods_batches ADD COLUMN warehouse_id VARCHAR(64);
+ALTER TABLE finished_goods_batches ADD COLUMN IF NOT EXISTS warehouse_id VARCHAR(64);
 
 -- Step 2: Backfill — 成品默认归 WH-WKS (车间仓)
 UPDATE finished_goods_batches fgb
