@@ -29,7 +29,8 @@ import org.hibernate.annotations.Where;
        indexes = {
            @Index(name = "idx_inspection_factory", columnList = "factory_id"),
            @Index(name = "idx_inspection_batch", columnList = "production_batch_id"),
-           @Index(name = "idx_inspection_date", columnList = "inspection_date")
+           @Index(name = "idx_inspection_date", columnList = "inspection_date"),
+           @Index(name = "idx_inspection_material_batch", columnList = "material_batch_id")
        }
 )
 @Where(clause = "deleted_at IS NULL")
@@ -41,6 +42,16 @@ public class QualityInspection extends BaseEntity {
     private String factoryId;
     @Column(name = "production_batch_id", nullable = false)
     private Long productionBatchId;
+
+    /**
+     * Sprint 9 P1.1 Fix 2: 关联 {@link MaterialBatch#getId()} (String, length 191, UUID).
+     * Nullable for backwards-compat — 历史记录仅通过 {@code production_batch_id} 关联
+     * {@link ProductionBatch}, 新记录可选用 material_batch_id 直接关联 MaterialBatch
+     * (供 {@code QualityCheckSummaryTool} 按 batch_number 直查).
+     */
+    @Column(name = "material_batch_id", length = 191)
+    private String materialBatchId;
+
     @Column(name = "inspector_id", nullable = false)
     private Long inspectorId;
     @Column(name = "inspection_date", nullable = false)
@@ -138,6 +149,12 @@ public class QualityInspection extends BaseEntity {
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "production_batch_id", referencedColumnName = "id", insertable = false, updatable = false)
     private ProductionBatch productionBatch;
+
+    /** Sprint 9 P1.1 Fix 2: optional MaterialBatch 关联. */
+    @JsonIgnore
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "material_batch_id", referencedColumnName = "id", insertable = false, updatable = false)
+    private MaterialBatch materialBatch;
 
     @JsonIgnore
     @ManyToOne(fetch = FetchType.LAZY)
