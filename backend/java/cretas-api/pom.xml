@@ -65,6 +65,13 @@
             <version>3.17.4</version>
         </dependency>
 
+        <!-- Aliyun SMS (dysmsapi 2017-05-25) - Sprint 9 P1.2 真 SMS gateway -->
+        <dependency>
+            <groupId>com.aliyun</groupId>
+            <artifactId>dysmsapi20170525</artifactId>
+            <version>3.0.0</version>
+        </dependency>
+
         <!-- Spring Boot Data JPA -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
