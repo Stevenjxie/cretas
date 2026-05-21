@@ -37,8 +37,12 @@ DECLARE
 BEGIN
     RAISE NOTICE '=== Sprint 9 P0.1 RCA: WORKDESK intents with tool_name=NULL ===';
     FOR rec IN
+        -- 2026-05-21 hotfix: keywords is jsonb; cast to text for LENGTH().
+        -- LENGTH(jsonb) does not exist in PG; original sister chat migration
+        -- broke prod blue startup 14:18 today. Cast keeps diagnostic semantics
+        -- (string length of JSON representation).
         SELECT intent_code, intent_name, intent_category, tool_name,
-               LENGTH(COALESCE(keywords, '[]')) AS kw_len
+               LENGTH(COALESCE(keywords::text, '[]')) AS kw_len
         FROM ai_intent_configs
         WHERE intent_category = 'WORKDESK'
           AND tool_name IS NULL
