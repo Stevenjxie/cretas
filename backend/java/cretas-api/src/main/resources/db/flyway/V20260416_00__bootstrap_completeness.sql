@@ -508,25 +508,295 @@ CREATE TABLE IF NOT EXISTS unit_of_measurements (
 );
 
 -- =============================================================================
--- BOOTSTRAP-TABLE COLUMN GAP FIXES
+-- BOOTSTRAP-TABLE COLUMN GAP FIXES — comprehensive entity-vs-bootstrap diff
 -- =============================================================================
 -- Some V20260415_99 bootstrap tables also lack Hibernate-supplied columns that
--- downstream Flyway migrations reference. PR #117's per-migration DO $$ IF EXISTS
--- guards were a stopgap; this section fills the column gap directly so guarded
--- migrations can run cleanly (and we can simplify by removing the guards).
+-- downstream Flyway migrations reference (or could once reference). Reactive
+-- single-column patching failed 3 times in CI; this section is the result of
+-- a systematic entity-vs-bootstrap diff for every bootstrap table the entity
+-- file actually owns.
 --
 -- Pattern: ALTER TABLE … ADD COLUMN IF NOT EXISTS — idempotent on prod/test
 -- where Hibernate already supplied these columns, while populating fresh CI DBs.
+--
+-- METHOD: Each @Column in the entity was diffed against V20260415_99's CREATE
+-- TABLE block. Columns added by a later V*.sql ALTER (e.g. abaca, vflag, OCR,
+-- tax_direct, with_goods, marker_color, settlement_date, customer_status,
+-- vehicle_number/driver_*, lock columns, embedding) are EXCLUDED here.
+--
+-- Tables omitted (NOT referenced by any later migration DML/DDL, so Hibernate
+-- ddl-auto=update can keep filling them post-Flyway with no Flyway error):
+--   - smart_bi_datasource, factory_module_configs, ai_learned_expressions,
+--     intent_match_records (the only ALTERs are pgvector adds covered already),
+--     bom_items (already matched by bootstrap; entity wholly contained),
+--     factory_equipment / equipment_alerts / equipment_maintenance /
+--     batch_equipment_usage / suppliers / raw_material_types / material_batches
+--     (all already match bootstrap or are covered by existing later ALTERs).
+-- Latent risk for these tables falls back to ddl-auto=update on first boot,
+-- which has not been a CI blocker historically (no Flyway script depends on
+-- those entity-only columns).
 
--- ---------- invoice_records (referenced by V20260419_01) ----------
--- Source: entity/finance/InvoiceRecord.java:56 + :128
--- V20260415_99 created invoice_records (lines 717-733 of bootstrap) WITHOUT
--- these two columns; Hibernate ddl-auto=update supplied them in prod/test.
+-- ---------- invoice_records (3 migrations) ----------
+-- Source: entity/finance/InvoiceRecord.java
+-- Bootstrap (V20260415_99:717-733) created 15 columns. Entity declares 38.
+-- Already covered elsewhere: OCR 7 cols (V20260606_03), tax_direct 6 cols (V20260519_01).
+-- Bootstrap diverges: bootstrap has related_order_id/issue_date/notes/created_by
+-- but entity has none of those; missing columns Hibernate filled in prod:
 ALTER TABLE invoice_records
-    ADD COLUMN IF NOT EXISTS sales_order_id VARCHAR(191);
+    ADD COLUMN IF NOT EXISTS sales_order_id    VARCHAR(191),
+    ADD COLUMN IF NOT EXISTS customer_name     VARCHAR(200),
+    ADD COLUMN IF NOT EXISTS amount            NUMERIC(15, 2),
+    ADD COLUMN IF NOT EXISTS tax_breakdown     JSONB,
+    ADD COLUMN IF NOT EXISTS requested_by      BIGINT,
+    ADD COLUMN IF NOT EXISTS requested_at      TIMESTAMP,
+    ADD COLUMN IF NOT EXISTS reviewed_by       BIGINT,
+    ADD COLUMN IF NOT EXISTS reviewed_at       TIMESTAMP,
+    ADD COLUMN IF NOT EXISTS review_notes      TEXT,
+    ADD COLUMN IF NOT EXISTS issued_at         TIMESTAMP,
+    ADD COLUMN IF NOT EXISTS invoice_pdf_url   VARCHAR(500),
+    ADD COLUMN IF NOT EXISTS invoice_file_name VARCHAR(255),
+    ADD COLUMN IF NOT EXISTS remark            TEXT;
 
-ALTER TABLE invoice_records
-    ADD COLUMN IF NOT EXISTS requested_at TIMESTAMP;
+-- ---------- sales_orders (10 migrations) ----------
+-- Source: entity/inventory/SalesOrder.java
+-- Bootstrap (V20260415_99:547-565) created 15 columns. Entity declares 38+.
+-- Already covered: salesperson_id (V20260423_01 then V20260425_09 cast to BIGINT),
+-- version (V20260424_07), default_tax_rate / default_invoice_type (V20260516_14),
+-- marker_color (V20260516_11), vflag (V20260602_01).
+ALTER TABLE sales_orders
+    ADD COLUMN IF NOT EXISTS salesperson           VARCHAR(100),
+    ADD COLUMN IF NOT EXISTS shipping_included     BOOLEAN,
+    ADD COLUMN IF NOT EXISTS shipping_fee          NUMERIC(15, 2),
+    ADD COLUMN IF NOT EXISTS extra_fees            JSONB,
+    ADD COLUMN IF NOT EXISTS actual_shipped_amount NUMERIC(15, 2),
+    ADD COLUMN IF NOT EXISTS finance_reviewed_by   BIGINT,
+    ADD COLUMN IF NOT EXISTS finance_reviewed_at   TIMESTAMP,
+    ADD COLUMN IF NOT EXISTS finance_review_notes  TEXT,
+    ADD COLUMN IF NOT EXISTS estimated_cost        NUMERIC(15, 2),
+    ADD COLUMN IF NOT EXISTS estimated_profit      NUMERIC(15, 2),
+    ADD COLUMN IF NOT EXISTS invoice_status        VARCHAR(32),
+    ADD COLUMN IF NOT EXISTS invoiced_amount       NUMERIC(15, 2),
+    ADD COLUMN IF NOT EXISTS settlement_flag       BOOLEAN,
+    ADD COLUMN IF NOT EXISTS paid_amount           NUMERIC(15, 2),
+    ADD COLUMN IF NOT EXISTS quote_id              VARCHAR(191),
+    ADD COLUMN IF NOT EXISTS transport_plan_status VARCHAR(32),
+    ADD COLUMN IF NOT EXISTS delivery_reminder_date DATE,
+    ADD COLUMN IF NOT EXISTS box_quantity          NUMERIC(15, 2),
+    ADD COLUMN IF NOT EXISTS contract_file_url     VARCHAR(500),
+    ADD COLUMN IF NOT EXISTS contract_file_name    VARCHAR(255);
+
+-- ---------- purchase_orders (9 migrations) ----------
+-- Source: entity/inventory/PurchaseOrder.java
+-- Already covered: version (V20260424_07), is_imported (V20260606_05),
+-- sales_order_id (V20260424_03), marker_color (V20260516_11), vflag (V20260602_01),
+-- inquiry_quote_id (V20260606_17).
+ALTER TABLE purchase_orders
+    ADD COLUMN IF NOT EXISTS finance_reviewed_by  BIGINT,
+    ADD COLUMN IF NOT EXISTS finance_reviewed_at  TIMESTAMP,
+    ADD COLUMN IF NOT EXISTS finance_review_notes TEXT;
+
+-- ---------- customers (8 migrations) ----------
+-- Source: entity/Customer.java
+-- Already covered: version (V20260424_05), customer_status/importance/source/
+-- last_contacted_at (V20260516_13), default_tax_rate/default_invoice_type
+-- (V20260516_14), assigned_sales_user_id (V20260605_02), settlement_date
+-- (V20260606_05), credit_period_days/credit_status (V20260606_20).
+-- Only assigned_sales_user_assigned_at remains as Hibernate-only.
+ALTER TABLE customers
+    ADD COLUMN IF NOT EXISTS assigned_sales_user_assigned_at TIMESTAMP;
+
+-- ---------- sales_order_items (3 migrations) ----------
+-- Source: entity/inventory/SalesOrderItem.java
+-- Already covered: source_warehouse_code (V20260514_01), locked_qty/reserved_qty
+-- (V20260603_06). Hibernate-only columns:
+ALTER TABLE sales_order_items
+    ADD COLUMN IF NOT EXISTS cost_unit_price NUMERIC(15, 4),
+    ADD COLUMN IF NOT EXISTS tax_rate        NUMERIC(5, 2),
+    ADD COLUMN IF NOT EXISTS specification   VARCHAR(200),
+    ADD COLUMN IF NOT EXISTS box_quantity    NUMERIC(15, 2);
+
+-- ---------- production_plans (3 migrations) ----------
+-- Source: entity/ProductionPlan.java
+-- Already covered: planned_date (V20260424_02), is_locked/lock_reason/locked_at/
+-- locked_by (V20260606_02), vflag (V20260602_01).
+-- Bootstrap (V20260415_99:327-343) creates a thin 14-col table; entity has 40+.
+ALTER TABLE production_plans
+    ADD COLUMN IF NOT EXISTS expected_completion_date    DATE,
+    ADD COLUMN IF NOT EXISTS plan_type                   VARCHAR(32),
+    ADD COLUMN IF NOT EXISTS customer_order_number       VARCHAR(100),
+    ADD COLUMN IF NOT EXISTS priority                    INTEGER,
+    ADD COLUMN IF NOT EXISTS allocated_quantity          NUMERIC(10, 2),
+    ADD COLUMN IF NOT EXISTS is_fully_matched            BOOLEAN,
+    ADD COLUMN IF NOT EXISTS estimated_material_cost     NUMERIC(10, 2),
+    ADD COLUMN IF NOT EXISTS actual_material_cost        NUMERIC(10, 2),
+    ADD COLUMN IF NOT EXISTS estimated_labor_cost        NUMERIC(10, 2),
+    ADD COLUMN IF NOT EXISTS actual_labor_cost           NUMERIC(10, 2),
+    ADD COLUMN IF NOT EXISTS estimated_equipment_cost    NUMERIC(10, 2),
+    ADD COLUMN IF NOT EXISTS actual_equipment_cost       NUMERIC(10, 2),
+    ADD COLUMN IF NOT EXISTS estimated_other_cost        NUMERIC(10, 2),
+    ADD COLUMN IF NOT EXISTS actual_other_cost           NUMERIC(10, 2),
+    ADD COLUMN IF NOT EXISTS suggested_production_line_id VARCHAR(36),
+    ADD COLUMN IF NOT EXISTS estimated_workers           INTEGER,
+    ADD COLUMN IF NOT EXISTS assigned_supervisor_id      BIGINT,
+    ADD COLUMN IF NOT EXISTS source_type                 VARCHAR(30),
+    ADD COLUMN IF NOT EXISTS source_order_id             VARCHAR(50),
+    ADD COLUMN IF NOT EXISTS source_order_item_id        VARCHAR(50),
+    ADD COLUMN IF NOT EXISTS source_customer_name        VARCHAR(100),
+    ADD COLUMN IF NOT EXISTS process_name                VARCHAR(200),
+    ADD COLUMN IF NOT EXISTS batch_date                  DATE,
+    ADD COLUMN IF NOT EXISTS ai_confidence               INTEGER,
+    ADD COLUMN IF NOT EXISTS forecast_reason             VARCHAR(255),
+    ADD COLUMN IF NOT EXISTS cr_value                    NUMERIC(5, 2),
+    ADD COLUMN IF NOT EXISTS is_mixed_batch              BOOLEAN,
+    ADD COLUMN IF NOT EXISTS mixed_batch_type            VARCHAR(30),
+    ADD COLUMN IF NOT EXISTS related_orders              TEXT,
+    ADD COLUMN IF NOT EXISTS current_probability         NUMERIC(5, 4),
+    ADD COLUMN IF NOT EXISTS probability_updated_at      TIMESTAMP,
+    ADD COLUMN IF NOT EXISTS is_force_inserted           BOOLEAN,
+    ADD COLUMN IF NOT EXISTS requires_approval           BOOLEAN,
+    ADD COLUMN IF NOT EXISTS approval_status             VARCHAR(20),
+    ADD COLUMN IF NOT EXISTS approver_id                 BIGINT,
+    ADD COLUMN IF NOT EXISTS approver_name               VARCHAR(50),
+    ADD COLUMN IF NOT EXISTS approved_at                 TIMESTAMP,
+    ADD COLUMN IF NOT EXISTS approval_comment            VARCHAR(500),
+    ADD COLUMN IF NOT EXISTS force_insert_reason         VARCHAR(500),
+    ADD COLUMN IF NOT EXISTS force_insert_by             BIGINT,
+    ADD COLUMN IF NOT EXISTS force_inserted_at           TIMESTAMP;
+
+-- ---------- return_orders (2 migrations) ----------
+-- Source: entity/inventory/ReturnOrder.java
+-- Bootstrap has return_type/return_date/reason/status/total_amount/created_by.
+-- It has related_order_id whereas entity uses counterparty_id + source_order_id.
+-- Already covered: with_goods (V20260514_03), vflag (V20260602_01).
+ALTER TABLE return_orders
+    ADD COLUMN IF NOT EXISTS counterparty_id VARCHAR(191),
+    ADD COLUMN IF NOT EXISTS source_order_id VARCHAR(191),
+    ADD COLUMN IF NOT EXISTS approved_by     BIGINT,
+    ADD COLUMN IF NOT EXISTS approved_at     TIMESTAMP,
+    ADD COLUMN IF NOT EXISTS remark          TEXT,
+    ADD COLUMN IF NOT EXISTS version         BIGINT;
+
+-- ---------- internal_transfers (1 migration) ----------
+-- Source: entity/inventory/InternalTransfer.java
+-- Bootstrap uses factory_id but entity has source_factory_id + target_factory_id.
+-- Already covered: vflag (V20260602_01). Wide column gap follows.
+ALTER TABLE internal_transfers
+    ADD COLUMN IF NOT EXISTS transfer_type         VARCHAR(32),
+    ADD COLUMN IF NOT EXISTS source_factory_id     VARCHAR(191),
+    ADD COLUMN IF NOT EXISTS target_factory_id     VARCHAR(191),
+    ADD COLUMN IF NOT EXISTS expected_arrival_date DATE,
+    ADD COLUMN IF NOT EXISTS total_amount          NUMERIC(15, 2),
+    ADD COLUMN IF NOT EXISTS requested_by          BIGINT,
+    ADD COLUMN IF NOT EXISTS requested_at          TIMESTAMP,
+    ADD COLUMN IF NOT EXISTS approved_by           BIGINT,
+    ADD COLUMN IF NOT EXISTS approved_at           TIMESTAMP,
+    ADD COLUMN IF NOT EXISTS shipped_at            TIMESTAMP,
+    ADD COLUMN IF NOT EXISTS received_at           TIMESTAMP,
+    ADD COLUMN IF NOT EXISTS confirmed_at          TIMESTAMP,
+    ADD COLUMN IF NOT EXISTS reject_reason         VARCHAR(500),
+    ADD COLUMN IF NOT EXISTS remark                TEXT,
+    ADD COLUMN IF NOT EXISTS production_plan_id    VARCHAR(191);
+
+-- ---------- wastage_records (1 migration) ----------
+-- Source: entity/restaurant/WastageRecord.java
+-- Bootstrap has item_id/item_type but entity uses raw_material_type_id +
+-- material_batch_id. Bootstrap missing many entity columns.
+-- Already covered: vflag (V20260602_01).
+ALTER TABLE wastage_records
+    ADD COLUMN IF NOT EXISTS wastage_number       VARCHAR(50),
+    ADD COLUMN IF NOT EXISTS type                 VARCHAR(32),
+    ADD COLUMN IF NOT EXISTS status               VARCHAR(32),
+    ADD COLUMN IF NOT EXISTS raw_material_type_id VARCHAR(191),
+    ADD COLUMN IF NOT EXISTS material_batch_id    VARCHAR(191),
+    ADD COLUMN IF NOT EXISTS estimated_cost       NUMERIC(15, 2),
+    ADD COLUMN IF NOT EXISTS reported_by          BIGINT,
+    ADD COLUMN IF NOT EXISTS approved_by          BIGINT,
+    ADD COLUMN IF NOT EXISTS approved_at          TIMESTAMP;
+
+-- ---------- factory_trigger_chains (2 migrations) ----------
+-- Source: entity/config/FactoryTriggerChain.java
+-- Bootstrap created chain_name/trigger_event/config but entity has chain_code/
+-- event_type/steps/error_strategy/description. V20260421_03 references chain_code
+-- — this is the critical gap.
+-- Already covered: last_executed_at/last_execution_status/last_execution_error/
+-- execution_count (V20260416_02).
+ALTER TABLE factory_trigger_chains
+    ADD COLUMN IF NOT EXISTS chain_code     VARCHAR(64),
+    ADD COLUMN IF NOT EXISTS event_type     VARCHAR(100),
+    ADD COLUMN IF NOT EXISTS steps          JSONB,
+    ADD COLUMN IF NOT EXISTS error_strategy VARCHAR(20),
+    ADD COLUMN IF NOT EXISTS description    TEXT;
+
+-- ---------- factory_scheduler_configs (1 migration) ----------
+-- Source: entity/config/FactorySchedulerConfig.java
+-- Bootstrap created scheduler_name/cron_expression/config but entity has
+-- task_code/tool_or_method/params/description.
+-- Already covered: last_executed_at/_status/_error/execution_count (V20260416_04).
+ALTER TABLE factory_scheduler_configs
+    ADD COLUMN IF NOT EXISTS task_code      VARCHAR(64),
+    ADD COLUMN IF NOT EXISTS tool_or_method VARCHAR(100),
+    ADD COLUMN IF NOT EXISTS params         JSONB,
+    ADD COLUMN IF NOT EXISTS description    TEXT;
+
+-- ---------- finished_goods_batches (1 migration) ----------
+-- Source: entity/inventory/FinishedGoodsBatch.java — bootstrap covers almost all.
+-- Hibernate-only: version (@Version).
+ALTER TABLE finished_goods_batches
+    ADD COLUMN IF NOT EXISTS version BIGINT;
+
+-- ---------- ar_ap_transactions (1 migration) ----------
+-- Source: entity/finance/ArApTransaction.java
+-- Bootstrap has thin 13-col table; entity has many more.
+-- Already covered: approval_status/approved_by/approved_at (V20260426_01).
+ALTER TABLE ar_ap_transactions
+    ADD COLUMN IF NOT EXISTS transaction_number VARCHAR(50),
+    ADD COLUMN IF NOT EXISTS counterparty_name  VARCHAR(200),
+    ADD COLUMN IF NOT EXISTS sales_order_id     VARCHAR(191),
+    ADD COLUMN IF NOT EXISTS purchase_order_id  VARCHAR(191),
+    ADD COLUMN IF NOT EXISTS pos_order_sync_id  BIGINT,
+    ADD COLUMN IF NOT EXISTS balance_after      NUMERIC(15, 2),
+    ADD COLUMN IF NOT EXISTS payment_method     VARCHAR(32),
+    ADD COLUMN IF NOT EXISTS payment_reference  VARCHAR(100),
+    ADD COLUMN IF NOT EXISTS due_date           DATE,
+    ADD COLUMN IF NOT EXISTS operated_by        BIGINT,
+    ADD COLUMN IF NOT EXISTS remark             VARCHAR(500);
+
+-- ---------- notifications (1 migration) ----------
+-- Source: entity/Notification.java — bootstrap covers core columns.
+-- Already covered: target_role (V20260416_01).
+-- Hibernate-only columns:
+ALTER TABLE notifications
+    ADD COLUMN IF NOT EXISTS read_at    TIMESTAMP,
+    ADD COLUMN IF NOT EXISTS source     VARCHAR(50),
+    ADD COLUMN IF NOT EXISTS source_id  VARCHAR(100),
+    ADD COLUMN IF NOT EXISTS action_url VARCHAR(500);
+
+-- ---------- payroll_records (1 migration) ----------
+-- Source: entity/PayrollRecord.java
+-- Bootstrap has 8 columns; entity declares 25+. Entity uses worker_id (not user_id),
+-- period_start/period_end (not pay_period). Most are Hibernate-only.
+-- Already covered: vflag (V20260602_01).
+ALTER TABLE payroll_records
+    ADD COLUMN IF NOT EXISTS worker_id          BIGINT,
+    ADD COLUMN IF NOT EXISTS worker_name        VARCHAR(50),
+    ADD COLUMN IF NOT EXISTS period_start       DATE,
+    ADD COLUMN IF NOT EXISTS period_end         DATE,
+    ADD COLUMN IF NOT EXISTS period_type        VARCHAR(20),
+    ADD COLUMN IF NOT EXISTS total_piece_count  INTEGER,
+    ADD COLUMN IF NOT EXISTS piece_rate_wage    NUMERIC(12, 2),
+    ADD COLUMN IF NOT EXISTS piece_rule_id      BIGINT,
+    ADD COLUMN IF NOT EXISTS overtime_wage      NUMERIC(12, 2),
+    ADD COLUMN IF NOT EXISTS overtime_hours     NUMERIC(8, 2),
+    ADD COLUMN IF NOT EXISTS bonus_amount       NUMERIC(12, 2),
+    ADD COLUMN IF NOT EXISTS deduction_amount   NUMERIC(12, 2),
+    ADD COLUMN IF NOT EXISTS total_wage         NUMERIC(12, 2),
+    ADD COLUMN IF NOT EXISTS average_efficiency NUMERIC(8, 2),
+    ADD COLUMN IF NOT EXISTS total_work_hours   NUMERIC(8, 2),
+    ADD COLUMN IF NOT EXISTS efficiency_rating  VARCHAR(1),
+    ADD COLUMN IF NOT EXISTS status             VARCHAR(20),
+    ADD COLUMN IF NOT EXISTS approved_by        BIGINT,
+    ADD COLUMN IF NOT EXISTS approved_at        TIMESTAMP,
+    ADD COLUMN IF NOT EXISTS paid_at            TIMESTAMP;
 
 -- =============================================================================
 -- End of V20260416_00 bootstrap completeness migration.
