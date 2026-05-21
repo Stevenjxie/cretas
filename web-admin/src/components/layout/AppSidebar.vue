@@ -91,6 +91,9 @@ const menuConfig: MenuItem[] = [
   // 💼 Sprint 8 P2 (2026-05-20) — 财务主管 Workdesk (monthly close + 三表 + 应收账龄).
   // module 借 'finance' 走现有权限 (workdesk 不是 ModuleName).
   { path: '/workdesk/finance-manager', title: '💼 财务主管工作台', icon: 'Money', module: 'finance' },
+  // 🚨 Sprint 8 P3 (2026-05-20) — 质量主管 Workdesk (食品安全召回闭环 — Boss 演示杀手锏).
+  // food-safety-recall Skill 串 8 Tool. module 借 'quality' 走现有权限.
+  { path: '/workdesk/quality-manager', title: '🚨 质量主管工作台', icon: 'Warning', module: 'quality' },
   {
     // P1-5: restaurants 默认不见 "生产管理" (BOM/批次是 manufacturing 语言,
     // 餐饮用配方/备餐在 /restaurant/recipes)
