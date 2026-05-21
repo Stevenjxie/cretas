@@ -70,8 +70,14 @@ BEGIN
   SELECT id INTO v_admin_id FROM users WHERE username = 'f006_admin' LIMIT 1;
   SELECT id INTO v_cust_id  FROM customers WHERE factory_id = 'F006' ORDER BY created_at LIMIT 1;
 
+  -- Class 4 sibling fix (2026-05-21): migration was designed assuming psql
+  -- pre-seeded f006_admin user + F006 customer (issue #538 fix on 2026-05-16),
+  -- but fresh CI DBs lack this prior state. RAISE NOTICE + RETURN instead of
+  -- RAISE EXCEPTION makes the seed block skip cleanly when prerequisites are
+  -- absent rather than failing Spring Boot's flywayInitializer chain.
   IF v_admin_id IS NULL OR v_cust_id IS NULL THEN
-    RAISE EXCEPTION 'V20260603_01: prerequisite missing (admin_id=% cust_id=%)', v_admin_id, v_cust_id;
+    RAISE NOTICE 'V20260603_01: skipping sample-data block (prerequisites missing: admin_id=% cust_id=%)', v_admin_id, v_cust_id;
+    RETURN;
   END IF;
 
   -- 2a. raw_material_types (2 more; 1 RMT-F006-001 already exists)
