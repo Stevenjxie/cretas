@@ -11,20 +11,41 @@
 
 -- Step 1: 清理现有历史 duplicate REQUESTED invoices — 只保留每 SO 最新的 1 张
 -- 其他 REQUESTED 标 REJECTED + 审计备注 (软处理, 不删数据)
-WITH dupes AS (
-    SELECT id,
-           ROW_NUMBER() OVER (
-               PARTITION BY factory_id, sales_order_id
-               ORDER BY requested_at DESC, id DESC
-           ) AS rn
-    FROM invoice_records
-    WHERE status = 'REQUESTED' AND deleted_at IS NULL
-)
-UPDATE invoice_records ir
-SET status = 'REJECTED',
-    remark = COALESCE(remark, '') || ' [V20260419_01 auto-reject: duplicate REQUESTED before unique constraint]'
-FROM dupes
-WHERE ir.id = dupes.id AND dupes.rn > 1;
+--
+-- Guard added 2026-05-21 (PR fix: unblock recurring e2e-pr-gate Flyway failure):
+-- requested_at column was historically added by Hibernate ddl-auto=update, not by
+-- any Flyway migration. On long-lived prod/test DBs Hibernate supplied the column
+-- long ago, so the IF EXISTS branch matches pre-guard behavior identically. On
+-- fresh CI DBs (baseline-version=20260416.99 skips bootstrap V20260415_99) the
+-- column is absent at this step → ELSE branch safely skips dedup (a fresh DB
+-- with empty invoice_records has no duplicates to clean). Pattern mirrors
+-- V20260416_05__prepayment_records_items_parent_id_to_varchar.sql:24-39.
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name   = 'invoice_records'
+          AND column_name  = 'requested_at'
+    ) THEN
+        WITH dupes AS (
+            SELECT id,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY factory_id, sales_order_id
+                       ORDER BY requested_at DESC, id DESC
+                   ) AS rn
+            FROM invoice_records
+            WHERE status = 'REQUESTED' AND deleted_at IS NULL
+        )
+        UPDATE invoice_records ir
+        SET status = 'REJECTED',
+            remark = COALESCE(remark, '') || ' [V20260419_01 auto-reject: duplicate REQUESTED before unique constraint]'
+        FROM dupes
+        WHERE ir.id = dupes.id AND dupes.rn > 1;
+    ELSE
+        RAISE NOTICE 'V20260419_01 Step 1 skipped — requested_at column not yet present (fresh DB baseline; no duplicates to clean since invoice_records is empty at this migration step)';
+    END IF;
+END $$;
 
 -- Step 2: Partial unique index — 只锁 REQUESTED 防并发重复提交
 CREATE UNIQUE INDEX IF NOT EXISTS uk_invoice_records_pending_per_so
