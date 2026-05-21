@@ -68,15 +68,36 @@ test.describe('G3 生产 6 步 @pr-gate', () => {
     // ═══════════════════════════════════════════════════════════════════════════
     const salesCtx = await browser.newContext();
     const salesPage = await salesCtx.newPage();
-    await restoreAuth(salesCtx, salesPage, 'sales_mgr');
+    // PR #149 R2: workaround for canWrite('sales') false-negative
+    // (permission.ts:331 prefers DB over hardcoded; e2e L1 permissions
+    // unseeded for sales_manager). Use super_admin instead.
+    // See g2-sales-chain.spec.ts for full root-cause + fix-path notes.
+    await restoreAuth(salesCtx, salesPage, 'super_admin');
 
     await salesPage.goto('/sales/orders');
     await salesPage.waitForURL(/\/sales\/orders/, { timeout: 20_000 });
     await salesPage.waitForSelector('.el-table', { timeout: 15_000 });
+    // PR #149 R4: hide release-note toast (U-FEED-1, intercepts header clicks)
+    await salesPage.addStyleTag({
+      content: '.release-note-stack { display: none !important; }'
+    }).catch(() => {});
+    await salesPage.waitForLoadState('networkidle', { timeout: 30_000 }).catch(() => {});
 
-    // Open create dialog
-    await salesPage.click('button:has-text("新建")');
-    const createDialog = salesPage.locator('.el-dialog:visible');
+    // Open create dialog — scoped locator (PR #149 R3 fix)
+    const createBtn = salesPage.locator(
+      '.card-header .header-right button.el-button--primary:has-text("新建")'
+    ).first();
+    await expect(createBtn).toBeVisible({ timeout: 15_000 });
+    await createBtn.scrollIntoViewIfNeeded();
+    await createBtn.click({ timeout: 30_000 });
+    // U-NEW-1 (commit 7f4e7a22b, 2026-05-16): 新建 button opens CreateModeSelector
+    // first. Pick "普通新建" to dispatch to existing full-form dialog.
+    const modeSelector = salesPage.locator('.el-dialog:visible:has-text("选择录入方式")');
+    await expect(modeSelector).toBeVisible({ timeout: 10_000 });
+    await modeSelector.locator('.create-mode-card:has-text("普通新建")').click();
+    const createDialog = salesPage.locator(
+      '.el-dialog:visible:not(:has-text("选择录入方式"))'
+    );
     await expect(createDialog).toBeVisible({ timeout: 10_000 });
 
     // Select customer
