@@ -4,7 +4,6 @@ import com.cretas.aims.entity.BaseEntity;
 import com.cretas.aims.security.PriceSensitive;
 import com.cretas.aims.entity.enums.InvoiceStatus;
 import com.cretas.aims.entity.enums.InvoiceType;
-import com.cretas.aims.entity.enums.TaxDirectStatus;
 import lombok.*;
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
@@ -187,31 +186,4 @@ public class InvoiceRecord extends BaseEntity {
 
     @Column(name = "ocr_parsed_at")
     private LocalDateTime ocrParsedAt;
-
-    // ==================== 数电票税局直连 (F-TAX-DIRECT-1 Sprint 5 spike 2026-05-19) ====================
-    // 大客户硬需 (会计师事务所 / 上市公司 / 政府), HJ 不支持. Sprint 6 W1 真集成.
-    // spec: docs/superpowers/specs/2026-05-19-tax-direct-spike.md
-
-    /** 直连税局状态 (NOT_REQUESTED / REQUESTED / SUCCESS / FAILED) */
-    @Enumerated(EnumType.STRING)
-    @Column(name = "tax_direct_status", length = 20)
-    private TaxDirectStatus taxDirectStatus;
-
-    /** Provider 标识 (BAIWANG / NUONUO / RUIHONG), null 表示未走直连 */
-    @Column(name = "tax_direct_provider", length = 30)
-    private String taxDirectProvider;
-
-    /** Provider 内部 ID (Cretas 通过这个 ID 调 queryStatus / downloadInvoicePdf / cancel) */
-    @Column(name = "tax_direct_provider_id", length = 100)
-    private String taxDirectProviderId;
-
-    @Column(name = "tax_direct_requested_at")
-    private LocalDateTime taxDirectRequestedAt;
-
-    @Column(name = "tax_direct_succeeded_at")
-    private LocalDateTime taxDirectSucceededAt;
-
-    /** Provider 失败原因 (FAILED 时填充) */
-    @Column(name = "tax_direct_error_message", columnDefinition = "TEXT")
-    private String taxDirectErrorMessage;
 }
