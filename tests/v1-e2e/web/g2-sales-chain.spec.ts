@@ -78,9 +78,17 @@ test.describe('G2 销售→采购→入库 @pr-gate', () => {
     await salesPage.goto('/sales/orders');
     await salesPage.waitForURL(/\/sales\/orders/, { timeout: 20_000 });
     await salesPage.waitForSelector('.el-table', { timeout: 15_000 });
+    // PR #149 R3: wait for page to settle before clicking — Sprint 9 WorkflowBar /
+    // ConceptDisambiguationAlert / Canvas-dynamic init may briefly cover the button.
+    await salesPage.waitForLoadState('networkidle', { timeout: 30_000 }).catch(() => {});
 
-    // Open create dialog
-    await salesPage.click('button:has-text("新建")');
+    // Open create dialog — use scoped locator (card header) to avoid matching dialog title text
+    const salesCreateBtn = salesPage.locator(
+      '.card-header .header-right button.el-button--primary:has-text("新建")'
+    ).first();
+    await expect(salesCreateBtn).toBeVisible({ timeout: 15_000 });
+    await salesCreateBtn.scrollIntoViewIfNeeded();
+    await salesCreateBtn.click({ timeout: 30_000 });
     // U-NEW-1 (commit 7f4e7a22b, 2026-05-16): 新建 button now opens
     // CreateModeSelector first. Pick "普通新建" (mode=normal) to dispatch
     // to the existing full-form dialog.
@@ -178,9 +186,15 @@ test.describe('G2 销售→采购→入库 @pr-gate', () => {
     await purchasePage.goto('/procurement/orders');
     await purchasePage.waitForURL(/\/procurement\/orders/, { timeout: 20_000 });
     await purchasePage.waitForSelector('.el-table', { timeout: 15_000 });
+    await purchasePage.waitForLoadState('networkidle', { timeout: 30_000 }).catch(() => {});
 
-    // Open create PO dialog
-    await purchasePage.click('button:has-text("新建")');
+    // Open create PO dialog — scoped locator (PR #149 R3 fix)
+    const poCreateBtn = purchasePage.locator(
+      '.card-header .header-right button.el-button--primary:has-text("新建")'
+    ).first();
+    await expect(poCreateBtn).toBeVisible({ timeout: 15_000 });
+    await poCreateBtn.scrollIntoViewIfNeeded();
+    await poCreateBtn.click({ timeout: 30_000 });
     // U-NEW-1: procurement/orders/list.vue:782 also uses CreateModeSelector.
     const poModeSelector = purchasePage.locator(
       '.el-dialog:visible:has-text("选择录入方式")'

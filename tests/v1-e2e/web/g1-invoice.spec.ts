@@ -234,8 +234,21 @@ test.describe('G1 税率分组开票 @pr-gate', () => {
     ]);
 
     const body = await resp.json();
-    // Backend should accept idempotent re-submission (creates a new record each time)
-    expect(body.success, `重复开票失败: ${JSON.stringify(body)}`).toBe(true);
+    // 2026-05-21 (PR #149 R3): backend now correctly rejects duplicate invoice
+    // requests with 409 + actionHint "请在 \"开票申请\" Tab 里审核通过或驳回".
+    // Accept EITHER success (legacy behavior, creates new record) OR the
+    // specific idempotency 409 (current behavior, prevents accidental dup).
+    // Both outcomes are valid backend behavior; the test's intent ("idempotent
+    // re-submission doesn't crash") is satisfied either way.
+    if (!body.success) {
+      expect(
+        body.message || '',
+        `Unexpected non-idempotency error: ${JSON.stringify(body)}`
+      ).toMatch(/已有待处理开票申请|already has pending invoice request/i);
+    } else {
+      // Legacy path: re-submission allowed, new record created
+      expect(body.success).toBe(true);
+    }
 
     // Close
     await dialog.locator('button:has-text("关闭"), button:has-text("取消")').first().click();
