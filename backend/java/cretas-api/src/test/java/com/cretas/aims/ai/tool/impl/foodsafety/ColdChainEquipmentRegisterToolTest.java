@@ -131,8 +131,6 @@ class ColdChainEquipmentRegisterToolTest {
     @Test
     @DisplayName("UT-CCER-05: R3 temp range tempMin >= tempMax → BusinessException 400")
     void executeBadRange() {
-        when(equipmentRepository.findByFactoryIdAndEquipmentCode(anyString(), anyString()))
-                .thenReturn(Optional.empty());
         Map<String, Object> params = Map.of(
                 "equipmentCode", CODE,
                 "equipmentName", "n",
