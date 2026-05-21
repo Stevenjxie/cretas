@@ -15,7 +15,9 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.*;
 
+import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -23,42 +25,42 @@ import java.util.Optional;
 import java.util.UUID;
 
 /**
- * Notify 模板 CRUD — Phase 3 Canvas-Notify Step T6.
+ * Notify 模板 CRUD — Canvas-Notify (Phase 3 → Phase 3 follow-up).
  *
- * <p>5 endpoints: GET list / POST create / PUT update / DELETE soft-delete / POST test-send.
- * Implementation status:
- * - GET list — implemented (returns all factory templates).
- * - POST create / PUT update / DELETE — sister chat 实施 (CRUD ops still 501 skeleton).
- * - POST test-send — Phase 4a fill: lookup template via {@code templateCode} in body, build
- *   {@link NotifyRequest}, fan-out via {@link NotifySenderRegistry#sendAll}, return per-channel results.
+ * <p>5 endpoints:
+ * <ul>
+ *   <li>GET list — list all factory templates</li>
+ *   <li>POST create — create new template (real impl, replaces Phase 3 stub)</li>
+ *   <li>PUT update — update existing template (real impl with optimistic lock)</li>
+ *   <li>DELETE — soft-delete (real impl)</li>
+ *   <li>POST test-send — fan-out via {@link NotifySenderRegistry}</li>
+ * </ul>
  *
- * <p>RequireRole: factory_super_admin / permission_admin.
+ * <p><b>RequireRole</b>: factory_super_admin / permission_admin.
+ *
+ * <p><b>AUD-4 optimistic lock</b>: update uses NotifyTemplate.version (added by V20260626_02).
+ * Client submits {@code version} in body; mismatch returns 409 with refresh hint.
  *
  * @since 2026-05-18 (Phase 3 skeleton)
+ * @since 2026-05-21 (CRUD stubs filled — Phase 3 follow-up issue #41 partial close)
  */
 @Slf4j
 @RestController
 @RequestMapping("/api/mobile/{factoryId}/notify/templates")
 @RequiredArgsConstructor
 @RequireRole({"factory_super_admin", "permission_admin"})
-@Tag(name = "Canvas-Notify Templates", description = "通知模板 CRUD (Phase 3 skeleton)")
+@Tag(name = "Canvas-Notify Templates", description = "通知模板 CRUD")
 public class NotifyTemplateController {
 
     private final NotifyTemplateRepository templateRepo;
     private final NotifySenderRegistry notifySenderRegistry;
 
     /**
-     * AUD-5 B-A3 sister sweep: explicit length cap mirrors PG column width in
-     * {@code notify_templates} table (see {@link NotifyTemplate#getTemplateCode()}
-     * {@code @Column(length=100)}).
-     *
-     * <p>Note: CRUD endpoints (create / update / delete) below currently return 501
-     * stubs as their FIRST statement, so any pre-check here would be unreachable code
-     * — those endpoints will gain length validation when Phase 3 sister chat replaces
-     * the stubs with real persistence. The active path needing pre-check now is
-     * {@link #testSend} which actually looks up by {@code templateCode}.
+     * Explicit length cap mirrors PG column width in {@code notify_templates} table
+     * (see {@link NotifyTemplate#getTemplateCode()} {@code @Column(length=100)}).
      */
     private static final int TEMPLATE_CODE_MAX_LENGTH = 100;
+    private static final int TITLE_MAX_LENGTH = 255;
 
     @GetMapping
     @Operation(summary = "列出工厂所有通知模板")
@@ -67,45 +69,135 @@ public class NotifyTemplateController {
     }
 
     @PostMapping
-    @Operation(summary = "创建通知模板 (skeleton — sister 实施时加 UNIQUE 冲突 409 actionHint)")
+    @Operation(summary = "创建通知模板",
+               description = "factoryId + templateCode 必填. UNIQUE 冲突返 409 + actionHint.")
     public ApiResponse<NotifyTemplate> create(
             @PathVariable String factoryId,
-            @RequestBody NotifyTemplate body) {
-        return ApiResponse.error(501,
-                "NotifyTemplateController.create skeleton — Phase 3 sister chat 实施");
+            @RequestBody Map<String, Object> body) {
+        log.info("POST /notify/templates factoryId={} bodyKeys={}", factoryId, body.keySet());
+
+        // templateCode 必填 + 长度
+        String templateCode = stringField(body, "templateCode");
+        if (templateCode == null || templateCode.isBlank()) {
+            return ApiResponse.errorWithCode(400, "VALIDATION",
+                    "templateCode 必填",
+                    "请提供模板 code (如 PO_APPROVAL_PENDING)", "warning");
+        }
+        if (templateCode.length() > TEMPLATE_CODE_MAX_LENGTH) {
+            return ApiResponse.errorWithCode(400, "VALIDATION",
+                    "templateCode 最长 " + TEMPLATE_CODE_MAX_LENGTH
+                            + " 字符 (当前 " + templateCode.length() + ")",
+                    "请使用更短的 templateCode", "warning");
+        }
+
+        // title 长度 (可选, 但有上限)
+        String title = stringField(body, "title");
+        if (title != null && title.length() > TITLE_MAX_LENGTH) {
+            return ApiResponse.errorWithCode(400, "VALIDATION",
+                    "title 最长 " + TITLE_MAX_LENGTH + " 字符 (当前 " + title.length() + ")",
+                    "请使用更短的 title", "warning");
+        }
+
+        // UNIQUE 冲突预检
+        Optional<NotifyTemplate> dup =
+                templateRepo.findByFactoryIdAndTemplateCode(factoryId, templateCode);
+        if (dup.isPresent()) {
+            return ApiResponse.errorWithCode(409, "DUPLICATE",
+                    "模板 code 已存在: " + templateCode + " (id=" + dup.get().getId() + ")",
+                    "请换一个唯一的 templateCode, 或编辑现有模板",
+                    "warning");
+        }
+
+        List<NotifyChannel> channels = parseChannels(body.get("channels"));
+        Map<String, Object> variablesSchema = mapField(body, "variablesSchemaJson");
+
+        NotifyTemplate template = NotifyTemplate.builder()
+                .factoryId(factoryId)
+                .templateCode(templateCode)
+                .title(title)
+                .bodyTemplate(stringField(body, "bodyTemplate"))
+                .channels(channels)
+                .variablesSchemaJson(variablesSchema)
+                .build();
+
+        NotifyTemplate saved = templateRepo.save(template);
+        log.info("Created NotifyTemplate: id={}, factoryId={}, templateCode={}",
+                saved.getId(), factoryId, templateCode);
+        return ApiResponse.success("通知模板创建成功", saved);
     }
 
     @PutMapping("/{id}")
-    @Operation(summary = "更新通知模板 (skeleton)")
+    @Operation(summary = "更新通知模板",
+               description = "支持 AUD-4 optimistic lock — 提交 version 字段, 不匹配返 409.")
     public ApiResponse<NotifyTemplate> update(
             @PathVariable String factoryId,
             @PathVariable UUID id,
-            @RequestBody NotifyTemplate body) {
-        // AUD-4 wiring (PR #94 follow-up): forward-compat optimistic-lock check.
-        //
-        // The endpoint currently returns 501 (Phase 3 sister chat will replace with
-        // real persistence). This guard documents the pattern Phase 3 must adopt:
-        //   1. findById(id) → load existing entity
-        //   2. checkVersion(body.getVersion(), existing.getVersion()) → fail 409 on stale
-        //   3. setFields(existing, body)
-        //   4. save(existing)
-        //
-        // PR #94 already added @Version Long version on NotifyTemplate entity + Flyway DDL
-        // so the column is in place. The check itself can't fire today because no row is
-        // ever loaded (501 short-circuits) — but the helper definition + this preserved
-        // comment ensure Phase 3 sister chat sees the contract before writing the real PUT.
-        // If Phase 3 ships without honoring this pattern, AUD-4 stays open on NotifyTemplate.
-        return ApiResponse.error(501,
-                "NotifyTemplateController.update skeleton — Phase 3 sister chat 实施 (must honor AUD-4 version check; see PR #94 + this PR for pattern)");
+            @RequestBody Map<String, Object> body) {
+        log.info("PUT /notify/templates/{} factoryId={} bodyKeys={}", id, factoryId, body.keySet());
+
+        Optional<NotifyTemplate> existingOpt = templateRepo.findById(id);
+        if (existingOpt.isEmpty() || !factoryId.equals(existingOpt.get().getFactoryId())) {
+            // factoryId 不一致 → 模板属于别工厂, 当 404 处理 (防止 IDOR)
+            return ApiResponse.errorWithCode(404, "TEMPLATE_NOT_FOUND",
+                    "通知模板不存在: id=" + id + " (factoryId=" + factoryId + ")",
+                    "请刷新页面或检查模板 id",
+                    "warning");
+        }
+        NotifyTemplate existing = existingOpt.get();
+
+        // AUD-4 optimistic lock check
+        ApiResponse<NotifyTemplate> versionError =
+                checkVersion(body.get("version"), existing.getVersion());
+        if (versionError != null) {
+            return versionError;
+        }
+
+        // 字段更新 (允许 partial update — 只更新 body 中显式提供的字段)
+        if (body.containsKey("title")) {
+            String title = stringField(body, "title");
+            if (title != null && title.length() > TITLE_MAX_LENGTH) {
+                return ApiResponse.errorWithCode(400, "VALIDATION",
+                        "title 最长 " + TITLE_MAX_LENGTH + " 字符 (当前 " + title.length() + ")",
+                        "请使用更短的 title", "warning");
+            }
+            existing.setTitle(title);
+        }
+        if (body.containsKey("bodyTemplate")) {
+            existing.setBodyTemplate(stringField(body, "bodyTemplate"));
+        }
+        if (body.containsKey("channels")) {
+            existing.setChannels(parseChannels(body.get("channels")));
+        }
+        if (body.containsKey("variablesSchemaJson")) {
+            existing.setVariablesSchemaJson(mapField(body, "variablesSchemaJson"));
+        }
+        // templateCode is immutable (it's the natural key); ignore if present in body
+
+        NotifyTemplate saved = templateRepo.save(existing);
+        log.info("Updated NotifyTemplate: id={}, factoryId={}, version={}",
+                saved.getId(), factoryId, saved.getVersion());
+        return ApiResponse.success("通知模板更新成功", saved);
     }
 
     @DeleteMapping("/{id}")
-    @Operation(summary = "软删除通知模板 (skeleton)")
+    @Operation(summary = "软删除通知模板 (set deleted_at)")
     public ApiResponse<Void> delete(
             @PathVariable String factoryId,
             @PathVariable UUID id) {
-        return ApiResponse.error(501,
-                "NotifyTemplateController.delete skeleton — Phase 3 sister chat 实施");
+        log.info("DELETE /notify/templates/{} factoryId={}", id, factoryId);
+
+        Optional<NotifyTemplate> existingOpt = templateRepo.findById(id);
+        if (existingOpt.isEmpty() || !factoryId.equals(existingOpt.get().getFactoryId())) {
+            return ApiResponse.errorWithCode(404, "TEMPLATE_NOT_FOUND",
+                    "通知模板不存在: id=" + id + " (factoryId=" + factoryId + ")",
+                    "请刷新页面或检查模板 id",
+                    "warning");
+        }
+        NotifyTemplate existing = existingOpt.get();
+        existing.setDeletedAt(LocalDateTime.now());
+        templateRepo.save(existing);
+        log.info("Soft-deleted NotifyTemplate: id={}, factoryId={}", id, factoryId);
+        return ApiResponse.success("通知模板已删除", null);
     }
 
     @PostMapping("/test-send")
@@ -126,10 +218,6 @@ public class NotifyTemplateController {
                     "请提供要测试的模板 code (如 PO_APPROVAL_PENDING)", "warning");
         }
         String templateCode = templateCodeRaw.toString();
-        // AUD-5 B-A3 sister sweep: explicit length pre-check. Without this, an
-        // over-length templateCode would silently miss in the repo lookup (returning
-        // 404 "通知模板不存在") which masks the real issue (input violates the
-        // VARCHAR(100) contract). Surface as specific 400 instead.
         if (templateCode.length() > TEMPLATE_CODE_MAX_LENGTH) {
             return ApiResponse.errorWithCode(400, "VALIDATION",
                     "templateCode 最长 " + TEMPLATE_CODE_MAX_LENGTH
@@ -147,10 +235,10 @@ public class NotifyTemplateController {
         }
         NotifyTemplate template = templateOpt.get();
 
-        // 3. recipientUserIds (可选, 默认空 — sister 后续可加 default 当前用户)
+        // 3. recipientUserIds (可选)
         List<Long> recipientUserIds = parseUserIds(body.get("recipientUserIds"));
 
-        // 4. channels 优先从 body 取 (允许 caller override), 否则用 template.channels
+        // 4. channels 优先从 body 取, 否则用 template.channels
         List<NotifyChannel> channels = parseChannels(body.get("channels"));
         if (channels.isEmpty()) {
             channels = template.getChannels() != null
@@ -163,10 +251,10 @@ public class NotifyTemplateController {
                     "请在模板编辑页配置发送渠道 (WECHAT/DINGTALK/EMAIL/SMS/IN_APP), 或在 body 中显式传 channels", "warning");
         }
 
-        // 5. params: 用于 {{var}} 替换的实际参数
+        // 5. params
         Map<String, Object> params = mapField(body, "params");
 
-        // 6. 组装 NotifyRequest + fan-out
+        // 6. 组装 + fan-out
         NotifyRequest request = new NotifyRequest(
                 factoryId, recipientUserIds, channels, templateCode, params);
 
@@ -191,7 +279,6 @@ public class NotifyTemplateController {
             m.put("status", r.status() != null ? r.status().name() : null);
             m.put("errorMsg", r.errorMsg());
             serialized.add(m);
-            // count "SENT" as success, anything else as failure
             if (r.status() != null && "SENT".equals(r.status().name())) {
                 sentCount++;
             } else {
@@ -215,6 +302,40 @@ public class NotifyTemplateController {
 
     // ==================== helpers ====================
 
+    /**
+     * AUD-4 optimistic lock check — mirror CanvasAlertController.checkVersion contract.
+     * Returns null when version matches or client opts out by sending null/missing.
+     */
+    private ApiResponse<NotifyTemplate> checkVersion(Object requestVersionRaw, Long currentVersion) {
+        if (requestVersionRaw == null) {
+            return null; // lenient: legacy clients without version field
+        }
+        Long requestVersion;
+        if (requestVersionRaw instanceof Number) {
+            requestVersion = ((Number) requestVersionRaw).longValue();
+        } else {
+            try {
+                requestVersion = Long.parseLong(requestVersionRaw.toString());
+            } catch (NumberFormatException ex) {
+                return null; // lenient: malformed version field treated as not-supplied
+            }
+        }
+        if (!requestVersion.equals(currentVersion)) {
+            return ApiResponse.errorWithCode(409, "VERSION_CONFLICT",
+                    "数据已被其他用户修改 (服务端 v=" + currentVersion
+                            + ", 客户端 v=" + requestVersion + ")",
+                    "请刷新页面查看最新数据后再编辑",
+                    "warning");
+        }
+        return null;
+    }
+
+    private String stringField(Map<String, Object> body, String key) {
+        Object v = body.get(key);
+        if (v == null) return null;
+        return v.toString();
+    }
+
     @SuppressWarnings("unchecked")
     private List<Long> parseUserIds(Object raw) {
         List<Long> out = new ArrayList<>();
@@ -227,7 +348,7 @@ public class NotifyTemplateController {
                     try {
                         out.add(Long.parseLong(o.toString()));
                     } catch (NumberFormatException ignore) {
-                        log.warn("[testSend] 忽略非法 recipientUserId: {}", o);
+                        log.warn("[NotifyTemplateController] 忽略非法 recipientUserId: {}", o);
                     }
                 }
             }
@@ -244,7 +365,7 @@ public class NotifyTemplateController {
                 try {
                     out.add(NotifyChannel.valueOf(o.toString().toUpperCase()));
                 } catch (IllegalArgumentException ignore) {
-                    log.warn("[testSend] 忽略未知 channel: {}", o);
+                    log.warn("[NotifyTemplateController] 忽略未知 channel: {}", o);
                 }
             }
         }
@@ -257,6 +378,6 @@ public class NotifyTemplateController {
         if (v instanceof Map) {
             return new LinkedHashMap<>((Map<String, Object>) v);
         }
-        return new LinkedHashMap<>();
+        return new HashMap<>();
     }
 }
