@@ -603,6 +603,127 @@ public class SkillRegistryImpl implements SkillRegistry {
                 .build());
         count++;
 
+        // Sprint 8 P3 — 质量主管 Workdesk 食品安全召回闭环 (2026-05-20)
+        // ===== Skill 1: HACCP 检查点管理 =====
+        // 单 Tool 流程: 用户问 "X 批次 HACCP 通过吗" → haccp_checkpoint_review →
+        // LLM 输出通过/不通过 + 偏离建议
+        registerWithSource(SkillDefinition.builder()
+                .name("haccp-checkpoint-management")
+                .displayName("HACCP 关键控制点审查")
+                .description("HACCP CCP 审查 — 查指定批次的全部 CCP 监控记录, 标记 deviation 偏离 + " +
+                             "提供 correctiveAction 建议. 食品安全召回前置审计步骤.")
+                .version("1.0.0")
+                .category("QUALITY")
+                .priority(60)
+                .triggers(java.util.Arrays.asList(
+                        "HACCP", "CCP", "关键控制点", "危害控制",
+                        "今天 CCP 监控", "X 批次 HACCP 通过吗", "HACCP 通过",
+                        "查 CCP 监控", "HACCP 记录"))
+                .tools(java.util.Arrays.asList("haccp_checkpoint_review"))
+                .contextNeeded(java.util.Arrays.asList("factoryId"))
+                .promptTemplate(
+                        "你是食品质量管理助手. 基于 haccp_checkpoint_review Tool 输出, 给出 HACCP 通过判定:\n" +
+                        "- 如果 records 为空: 警告 '无 HACCP 监控记录, 无法验证食品安全'\n" +
+                        "- 如果 deviationCount = 0: 输出 '✅ HACCP 全部通过' + 监控项数\n" +
+                        "- 如果 deviationCount > 0: 逐项列出 deviation (CCP 名称 + 测量值 + 限值范围 + " +
+                        "correctiveAction 建议)\n" +
+                        "- 末尾给出: 处置建议 (是否需要进一步召回 / 隔离批次 / 加强监控)\n\n" +
+                        "工厂 ID: ${factoryId}. 用户问题: ${userQuery}")
+                .source("default")
+                .enabled(true)
+                .build());
+        count++;
+
+        // ===== Skill 2: 食品添加剂合规 =====
+        // 用户问 "X 批次添加剂合规吗" → additive_compliance_check →
+        // LLM 输出合规清单 + 超限警告 + 营养标签草稿
+        registerWithSource(SkillDefinition.builder()
+                .name("food-additive-compliance")
+                .displayName("食品添加剂合规校验")
+                .description("GB 2760-2014 食品添加剂限量校验 — 查指定批次 ingredients 的添加剂限量, " +
+                             "标记超限项 + 营养标签草稿. 合规风险预警 + 客户提供合规标签.")
+                .version("1.0.0")
+                .category("QUALITY")
+                .priority(60)
+                .triggers(java.util.Arrays.asList(
+                        "添加剂", "GB 2760", "添加剂合规", "添加剂限量", "亚硝酸盐",
+                        "防腐剂", "X 批次添加剂超限了吗", "营养标签", "添加剂校验",
+                        "合规标签", "GB 2760 合规"))
+                .tools(java.util.Arrays.asList("additive_compliance_check"))
+                .contextNeeded(java.util.Arrays.asList("factoryId"))
+                .promptTemplate(
+                        "你是食品质量合规助手. 基于 additive_compliance_check Tool 输出, " +
+                        "给出 GB 2760-2014 合规判定:\n" +
+                        "- 如果 mode = REFERENCE (无 ingredients 传入): 输出该食品类目的限量参考表, " +
+                        "提示用户哪些添加剂可使用 + 最大限量\n" +
+                        "- 如果 mode = VALIDATION 且 exceededCount = 0: 输出 '✅ 添加剂全部合规' + 合规项数\n" +
+                        "- 如果 exceededCount > 0: 逐项列出超限添加剂 (名称 + 实际用量 + GB 限量 + 超限值) + " +
+                        "纠偏建议 (减少用量 / 替换添加剂 / 重新生产)\n" +
+                        "- 如果 unknownCount > 0: 提示 X 项 GB 2760 未收录, 需人工核对\n" +
+                        "- 末尾建议: 营养标签草稿可用本批次数据 (referenceCount 或 compliant 列表)\n\n" +
+                        "工厂 ID: ${factoryId}. 用户问题: ${userQuery}")
+                .source("default")
+                .enabled(true)
+                .build());
+        count++;
+
+        // ===== Skill 3: 食品安全召回闭环 (主 Skill 串 8 Tool) =====
+        // 用户说 "启动召回 X 批次" / "X 客户吃了拉肚子启动召回" → 完整 6 步召回流程
+        // step 1-4 顺序依赖, step 5 (freeze + notify + report) 并行, step 6 聚合损失
+        // 整体输出: 召回行动方案 + 4 个一键执行按钮
+        registerWithSource(SkillDefinition.builder()
+                .name("food-safety-recall")
+                .displayName("食品安全召回闭环")
+                .description("食品召回 6 步闭环编排 (Cretas vs 竞品差异化护城河) — " +
+                             "客户日期反查批次 → 完整追溯原料/影响客户 → HACCP 审计 → 添加剂合规复查 → " +
+                             "(并行: 冻结库存 preview + 通知客户 preview + 监管文件生成) → 损失预估. " +
+                             "1 分钟完成 HJ 30 分钟手工工作.")
+                .version("1.0.0")
+                .category("QUALITY")
+                .priority(40)
+                .triggers(java.util.Arrays.asList(
+                        "启动召回", "食品召回", "拉肚子", "客户投诉", "出问题",
+                        "召回 X 批次", "召回 B-", "召回流程", "食品安全事件",
+                        "需要召回", "客户中毒", "客户不舒服", "食源性"))
+                .tools(java.util.Arrays.asList(
+                        "batch_trace_by_customer_date",
+                        "batch_full_trace",
+                        "haccp_checkpoint_review",
+                        "additive_compliance_check",
+                        "inventory_freeze",
+                        "customer_notify_batch",
+                        "regulatory_report_generate",
+                        "recall_loss_estimate"))
+                .contextNeeded(java.util.Arrays.asList("factoryId", "userId"))
+                .promptTemplate(
+                        "你是食品安全召回助手, 基于客户投诉触发完整召回 SOP. 串 8 Tool 输出:\n\n" +
+                        "**追溯阶段** (step 1-4 顺序):\n" +
+                        "- batch_trace_by_customer_date: 按客户 + 投诉日期反查 root batch_number\n" +
+                        "- batch_full_trace: 完整追溯 (原料 + 供应商 + 影响客户列表)\n" +
+                        "- haccp_checkpoint_review: HACCP CCP 全记录 + deviation 偏离\n" +
+                        "- additive_compliance_check: GB 2760 添加剂合规复查\n\n" +
+                        "**行动阶段** (step 5 并行 — 3 个 preview 同时显):\n" +
+                        "- inventory_freeze (preview, BLOCKING): 冻结涉事批次库存\n" +
+                        "- customer_notify_batch (preview): 群发召回通知给影响客户\n" +
+                        "- regulatory_report_generate: 生成监管上报文件\n\n" +
+                        "**总结阶段** (step 6):\n" +
+                        "- recall_loss_estimate: 聚合冻结库存价值 + 退货 + 行政 + 品牌损失\n\n" +
+                        "**输出格式 (markdown)**:\n" +
+                        "🔍 **追溯**: 客户 X 在 YYYY-MM-DD 收到批次 [B-XXX], 涉及 N 家客户\n" +
+                        "🔬 **HACCP**: ✅ 通过 / 🚨 N 项 deviation (列出每项 + 建议)\n" +
+                        "🧪 **添加剂**: ✅ 全合规 / 🚨 N 项超 GB 2760 (列出)\n" +
+                        "📦 **影响**: N 家客户, M 笔出货, K 个批次\n" +
+                        "💰 **预估损失**: ¥X (冻结 + 退货 + 行政 + 品牌损失)\n\n" +
+                        "**🚨 召回行动方案 (4 个一键执行按钮)**:\n" +
+                        "[🔒 冻结库存 (N 批次)]  [📱 通知客户 (M 家)]  " +
+                        "[📄 生成监管文件]  [✅ 关闭召回事件]\n\n" +
+                        "末尾提示: '此召回基于 Cretas 食品溯源数据自动追溯, 1 分钟完成手工 30 分钟工作'\n\n" +
+                        "工厂 ID: ${factoryId}. 用户问题: ${userQuery}")
+                .source("default")
+                .enabled(true)
+                .build());
+        count++;
+
         return count;
     }
 
