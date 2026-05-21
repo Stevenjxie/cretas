@@ -3,7 +3,6 @@ package com.cretas.aims.ai.tool.impl.workdesk;
 import com.cretas.aims.ai.tool.AbstractBusinessTool;
 import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.QualityInspection;
-import com.cretas.aims.entity.enums.MaterialBatchStatus;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.QualityInspectionRepository;
 import lombok.extern.slf4j.Slf4j;
@@ -24,10 +23,15 @@ import java.util.Optional;
  * <p>查指定 batch 的全部 QualityInspection 记录 + 通过率聚合 + result 分布
  * (PASS / FAIL / CONDITIONAL). 用于质量主管放行决策综合判断.
  *
- * <p>实现路径: MaterialBatch.batchNumber → 暂用全工厂 inspection list filter 已通过 batch 关联;
- * 鉴于 QualityInspection.production_batch_id 是 ProductionBatch 关联而非 MaterialBatch,
- * 此 Tool 优先查 MaterialBatch 本身 status + 关联 QualityInspection (尽力匹配),
- * 如未关联返 empty summary + R5 actionHint 提示到质检页手动关联.
+ * <p><b>Sprint 9 P1.1 Fix 2 (2026-05-21)</b>: 接入 QualityInspection.material_batch_id
+ * 新字段, 实现 batch_number → MaterialBatch.id → QualityInspection 直查路径.
+ * 优先级:
+ * <ol>
+ *   <li><b>MATERIAL_BATCH 直查</b>: 通过 material_batch_id 查 (Sprint 9 主路径)</li>
+ *   <li><b>PRODUCTION_BATCH 反查</b>: 若 MaterialBatch 通过 source_doc/lineage 反查到关联
+ *       的 ProductionBatch, 再通过 production_batch_id 查 (best-effort backwards-compat)</li>
+ *   <li><b>NO_INSPECTION fallback</b>: 两路径均空 → 返 R5 actionHint 提示去质检页登记</li>
+ * </ol>
  *
  * <p>LLM 触发场景:
  * <ul>
@@ -43,6 +47,7 @@ import java.util.Optional;
  *
  * @author Cretas Team
  * @since 2026-05-20 (Sprint 8 P4c)
+ * @since 2026-05-21 Sprint 9 P1.1 接入 material_batch_id 直查路径
  */
 @Slf4j
 @Component
@@ -62,8 +67,9 @@ public class QualityCheckSummaryTool extends AbstractBusinessTool {
     @Override
     public String getDescription() {
         return "质量主管批次质检汇总 — 查指定批次的全部 QualityInspection 记录 + 通过率聚合 + "
-                + "result 分布 (PASS/FAIL/CONDITIONAL). LLM 触发: 'B-X 的质检记录' / "
-                + "'这批检测怎么样' / '卤猪蹄批次检测通过吗' / '质检合格率'. read-only.";
+                + "result 分布 (PASS/FAIL/CONDITIONAL). Sprint 9 P1.1 支持 material_batch_id 直查. "
+                + "LLM 触发: 'B-X 的质检记录' / '这批检测怎么样' / "
+                + "'卤猪蹄批次检测通过吗' / '质检合格率'. read-only.";
     }
 
     @Override
@@ -118,16 +124,24 @@ public class QualityCheckSummaryTool extends AbstractBusinessTool {
         data.put("currentStatusDisplay",
                 batch.getStatus() != null ? batch.getStatus().getDisplayName() : "未知");
 
-        // 2. 查 QualityInspection — 通过 production_batch_id (如批次有生产关联) 或 fallback
+        // 2. Sprint 9 P1.1 — 主路径: 通过 material_batch_id 直查 inspections
         List<QualityInspection> inspections = new ArrayList<>();
+        String inspectionSource = null;
         try {
-            // QualityInspection 用 production_batch_id (Long), MaterialBatch.id 是 String;
-            // 食品行业批次号常 1:1 映射, 但实际关联通过 ProductionBatch
-            // 简化: 查全工厂 inspection 通过 batch 反查 (rough estimate, 真实应该有 join 表)
-            // 鉴于无直接 join, 通过 batch 关联记录暂留空, 返 R5 hint
-            log.info("QualityInspection 关联 production_batch_id, 暂无直接 material_batch 路径");
+            inspections = qualityInspectionRepository
+                    .findByFactoryIdAndMaterialBatchId(factoryId, batch.getId());
+            if (!inspections.isEmpty()) {
+                inspectionSource = "MATERIAL_BATCH";
+                log.info("quality_check_summary — found {} inspections via material_batch_id={}",
+                        inspections.size(), batch.getId());
+            } else {
+                inspectionSource = "NO_INSPECTION";
+                log.info("quality_check_summary — no inspections for material_batch_id={}, " +
+                        "production_batch reverse-lookup not implemented (BR-FUTURE)", batch.getId());
+            }
         } catch (Exception ex) {
-            log.warn("查 inspection 失败: {}", ex.getMessage());
+            log.warn("quality_check_summary — query failed: {}", ex.getMessage());
+            inspectionSource = "QUERY_ERROR";
         }
 
         int total = inspections.size();
@@ -163,16 +177,19 @@ public class QualityCheckSummaryTool extends AbstractBusinessTool {
             overallStatus = "NO_INSPECTION";
             message = String.format("⚠️ 批次 %s 暂无质检记录, 不能放行. " +
                     "请先在质检页面登记检测结果.", batchNumber);
-            data.put("actionHint", "前往 /quality/inspections 页面登记质检结果");
+            data.put("actionHint", "前往 /quality/inspections 页面登记质检结果, " +
+                    "登记时关联 material_batch_id=" + batch.getId() + " (Sprint 9 P1.1)");
         } else if (fail > 0) {
             overallStatus = "FAILED";
-            message = String.format("❌ 批次 %s 质检 %d 次, %d 次不合格 — 不可放行, 建议退货", total, fail);
+            message = String.format("❌ 批次 %s 质检 %d 次, %d 次不合格 — 不可放行, 建议退货",
+                    batchNumber, total, fail);
         } else if (conditional > 0) {
             overallStatus = "CONDITIONAL";
-            message = String.format("⚠️ 批次 %s 质检 %d 次有 %d 次条件通过, 需复核后决定放行", total, conditional);
+            message = String.format("⚠️ 批次 %s 质检 %d 次有 %d 次条件通过, 需复核后决定放行",
+                    batchNumber, total, conditional);
         } else {
             overallStatus = "PASSED";
-            message = String.format("✅ 批次 %s 质检 %d 次全部通过, 可放行", total);
+            message = String.format("✅ 批次 %s 质检 %d 次全部通过, 可放行", batchNumber, total);
         }
 
         data.put("inspectionCount", total);
@@ -183,6 +200,7 @@ public class QualityCheckSummaryTool extends AbstractBusinessTool {
         data.put("totalPass", totalPass);
         data.put("totalFail", totalFail);
         data.put("overallStatus", overallStatus);
+        data.put("inspectionSource", inspectionSource);
         data.put("inspectionDetails", details);
 
         return buildSimpleResult(message, data);
