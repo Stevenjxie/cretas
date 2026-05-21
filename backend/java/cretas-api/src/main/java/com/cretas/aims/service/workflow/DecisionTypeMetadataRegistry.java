@@ -296,11 +296,11 @@ public class DecisionTypeMetadataRegistry {
         register(DecisionTypeMetadata.builder()
                 .decisionType(DecisionType.BUDGET_APPROVAL)
                 .chineseName("预算审批")
-                .description("年度 / 季度 / 月度预算 + 超预算授权")
+                .description("年度 / 季度 / 月度预算 + 超预算授权 + 期间结账审批 (Sprint 7 T2 AccountingPeriodServiceImpl.requestClose 触发)")
                 .category(Category.FINANCE_VOUCHER)
                 .defaultApproverRoles(List.of("finance_manager", "factory_super_admin"))
                 .moduleCode("BUDGET")
-                .wired(false)
+                .wired(true)  // Sprint 8 P2 follow-up: AccountingPeriodServiceImpl 是首个 wired caller
                 .build());
 
         register(DecisionTypeMetadata.builder()

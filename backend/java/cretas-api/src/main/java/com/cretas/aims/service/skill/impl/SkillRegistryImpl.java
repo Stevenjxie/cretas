@@ -550,6 +550,59 @@ public class SkillRegistryImpl implements SkillRegistry {
                 .build());
         count++;
 
+        // Sprint 8 P2 — 财务主管 Workdesk (2026-05-20)
+        // Skill: monthly-financial-close — 月度财务复盘 + 经营摘要编排.
+        // 串 7 个 read-only Tool 给 LLM aggregate 出 "月度经营摘要" (期间状态 + 三表 + 工资 +
+        // 漏斗 + 应付提成 + 应收账龄).
+        registerWithSource(SkillDefinition.builder()
+                .name("monthly-financial-close")
+                .displayName("月度财务复盘")
+                .description("财务主管月末经营摘要编排 — 聚合期间状态 + 三表 + 工资成本 + 商机漏斗 + " +
+                             "待付提成 + 应收账龄, 输出可执行的经营复盘报告")
+                .version("1.0.0")
+                .category("FINANCE")
+                .priority(50)
+                .triggers(java.util.Arrays.asList(
+                        "本月经营", "月度复盘", "X 月经营", "经营怎么样",
+                        "本月财务", "月底总结", "月度经营摘要", "财务主管工作台",
+                        "经营摘要", "月度报告", "财务月报"))
+                .tools(java.util.Arrays.asList(
+                        "period_status_query",
+                        "balance_sheet_query",
+                        "income_statement_query",
+                        "cashflow_statement_query",
+                        "wage_cost_summary",
+                        "opportunity_funnel_stats",
+                        "commission_pending_total",
+                        "accounts_receivable_aging"))
+                .contextNeeded(java.util.Arrays.asList("factoryId", "userId"))
+                .promptTemplate(
+                        "你是财务主管工作台助手. 根据以下 8 个 Tool 输出聚合的 '月度经营摘要':\n" +
+                        "- period_status_query: 本月期间结账状态 (OPEN/PENDING_CLOSE/CLOSED)\n" +
+                        "- balance_sheet_query: 期末资产负债表 (总资产/负债/所有者权益 + balanceCheck)\n" +
+                        "- income_statement_query: 本月利润表 (营业收入/成本/毛利/营业利润/净利润)\n" +
+                        "- cashflow_statement_query: 本月现金流量表 (经营/投资/筹资三类活动)\n" +
+                        "- wage_cost_summary: 本月工资成本 (按件/按时/混合 mode 拆分)\n" +
+                        "- opportunity_funnel_stats: 商机漏斗 8 阶段统计 (活跃 + 加权预期值)\n" +
+                        "- commission_pending_total: 待付提成总额 + 按销售员拆分\n" +
+                        "- accounts_receivable_aging: 应收账龄 6 桶 (60+ 天高风险标记)\n\n" +
+                        "输出格式 (markdown):\n" +
+                        "📊 期间状态: {OPEN/PENDING_CLOSE/CLOSED} {未结账警告(若适用)}\n" +
+                        "💰 营业收入: ¥X (vs 上月 ±Y%)\n" +
+                        "💸 营业成本: ¥X (vs 上月 ±Y%)\n" +
+                        "💵 净利润: ¥X (利润率 Y%)\n" +
+                        "💼 工资成本: ¥X (按件 ¥A + 按时 ¥B + 加班 ¥C)\n" +
+                        "🎯 商机漏斗: 活跃 N 个 (¥X 预估 / ¥Y 加权)\n" +
+                        "📑 三表已生成 [资产负债表] [利润表] [现金流量表] (点击跳转 /finance/three-statements)\n" +
+                        "🔔 警告: 应收账龄超 60 天 X 家客户 ¥Y / 待付提成 ¥Z\n" +
+                        "💡 建议: {根据数据给 2-3 条 actionable 建议, 例: 紧急催收 60+ 天客户 / " +
+                        "确认关账前先 POST 全部 DRAFT 凭证 / 下月控制工资成本占比}\n\n" +
+                        "工厂 ID: ${factoryId}. 用户问题: ${userQuery}")
+                .source("default")
+                .enabled(true)
+                .build());
+        count++;
+
         return count;
     }
 
