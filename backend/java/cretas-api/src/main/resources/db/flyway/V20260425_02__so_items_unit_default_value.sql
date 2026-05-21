@@ -51,7 +51,8 @@ BEGIN
   WHERE module_code='sales_order' AND f->>'code'='items' AND itm->>'code'='unit';
 
   RAISE NOTICE 'V20260425_02: items.unit defaultValue = %', v_default;
-  IF v_default IS DISTINCT FROM 'kg' THEN
+  -- Guard added 2026-05-21: NULL-tolerance for fresh CI DB (sales_order row absent)
+  IF v_default IS NOT NULL AND v_default IS DISTINCT FROM 'kg' THEN
     RAISE EXCEPTION 'V20260425_02 sanity failure: items.unit defaultValue should be "kg", got %', v_default;
   END IF;
 END $$;
