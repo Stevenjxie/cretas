@@ -265,6 +265,24 @@ public class IntentExecutionOrchestrator {
                 log.info("[Branch:Skill] Skill 优先匹配成功: total={}", count);
                 return skillResponse;
             }
+
+            // Sprint 9 P0.1 fix (2026-05-21): Sprint 8 WORKDESK intents (DAILY_CUSTOMER_FOLLOWUP /
+            // MONTHLY_FINANCIAL_CLOSE / FOOD_SAFETY_RECALL 等) bind tool_name=NULL + 依赖 Skill 路由.
+            // 但 trySkillRoute 用 Skill 自己 keywords 匹用户原文 — 若 LLM 已正确识别 intent
+            // 但用户原文不含 Skill triggers (例如 "客户跟进" 在 intent keywords 但 Skill triggers
+            // 是 "今天跟谁" / "今日跟进"), trySkillRoute 返 null → fall through 到
+            // buildNoToolResponse → 报 "暂不支持此类型的意图执行: WORKDESK". P0 阻塞性 bug.
+            //
+            // Fix: 当 intent 已识别且 tool_name=NULL 时, 用 intent_code (UPPER_SNAKE) →
+            // skill_name (lower-kebab) 直接 lookup Skill, 绕过 keyword 匹配.
+            IntentExecuteResponse explicitSkillResponse = dynamicToolSelectionService
+                    .tryExplicitSkillRouteForIntent(intent, request.getUserInput(), factoryId, userId);
+            if (explicitSkillResponse != null) {
+                long count = branchSkill.incrementAndGet();
+                log.info("[Branch:Skill] 显式 Skill 路由 (by intent_code) 成功: intentCode={}, total={}",
+                        intent.getIntentCode(), count);
+                return explicitSkillResponse;
+            }
         }
 
         // 3.6. Slot Filling
@@ -308,9 +326,21 @@ public class IntentExecutionOrchestrator {
             response = dynamicToolSelectionService.executeWithDynamicToolSelection(
                     factoryId, request, intent, matchResult, userId, userRole);
         } else {
-            long count = branchNoMatch.incrementAndGet();
-            log.warn("[Branch:NoMatch] 无路由匹配: intentCode={}, total={}", intent.getIntentCode(), count);
-            response = toolDispatchService.buildNoToolResponse(intent);
+            // Sprint 9 P0.1 fix (2026-05-21): 最终 fallback 前再尝试一次显式 Skill 路由
+            // (覆盖 dynamicToolSelectionService.isSkillsEnabled() = false 但 SkillRouter
+            // 仍可用 / Skill 已注册但 keyword 没匹的 corner case).
+            IntentExecuteResponse explicitSkillFallback = dynamicToolSelectionService
+                    .tryExplicitSkillRouteForIntent(intent, request.getUserInput(), factoryId, userId);
+            if (explicitSkillFallback != null) {
+                long count = branchSkill.incrementAndGet();
+                log.info("[Branch:Skill] 显式 Skill 路由 (NoMatch fallback) 成功: intentCode={}, total={}",
+                        intent.getIntentCode(), count);
+                response = explicitSkillFallback;
+            } else {
+                long count = branchNoMatch.incrementAndGet();
+                log.warn("[Branch:NoMatch] 无路由匹配: intentCode={}, total={}", intent.getIntentCode(), count);
+                response = toolDispatchService.buildNoToolResponse(intent);
+            }
         }
 
         // 路由分支统计
@@ -394,7 +424,16 @@ public class IntentExecutionOrchestrator {
                 response = toolDispatchService.buildNoToolResponse(intent);
             }
         } else {
-            response = toolDispatchService.buildNoToolResponse(intent);
+            // Sprint 9 P0.1 fix (2026-05-21): explicit intent path 同 execute() 一样需 Skill fallback.
+            // 显式传 intent_code 走这分支 (e.g. Workdesk 前端按钮直接 POST intent_code).
+            IntentExecuteResponse explicitSkillFallback = dynamicToolSelectionService
+                    .tryExplicitSkillRouteForIntent(intent, request.getUserInput(), factoryId, userId);
+            if (explicitSkillFallback != null) {
+                log.info("[Explicit-Intent] 显式 Skill 路由成功: intentCode={}", intent.getIntentCode());
+                response = explicitSkillFallback;
+            } else {
+                response = toolDispatchService.buildNoToolResponse(intent);
+            }
         }
 
         if ("NEED_MORE_INFO".equals(response.getStatus())) {
