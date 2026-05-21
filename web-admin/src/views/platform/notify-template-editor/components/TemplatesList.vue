@@ -1,48 +1,37 @@
 <!--
-  TemplatesList — Phase 3 Canvas-Notify, list view + edit/delete actions.
+  TemplatesList — Canvas-Notify, list view + create/edit/delete + test-send actions.
 
   fool-proof Rule 2: dialog header 显示 templateCode + 模板名.
   fool-proof Rule 3: channels 多选 checkbox (不让用户自由文本输入).
   fool-proof Rule 4: 创建时 409 提示已存在 + 跳转编辑.
 
   @since 2026-05-19
-  @updated 2026-05-19 (B-N1/B-N2 hotfix) — disable create/edit/delete buttons until
-  Phase 3 backend CRUD ready. NotifyTemplateController POST/PUT/DELETE currently
-  return 501 stubs. List GET + test-send + logs DO work, so keep those visible.
+  @updated 2026-05-19 (B-N1/B-N2) — disable until backend CRUD ready
+  @updated 2026-05-21 — RE-ENABLE CRUD. PR #146 (Email SDK + Controller real impl)
+                        merged + prod live, 4 channels (Email/WeChat/DingTalk/SMS)
+                        + InApp registered in NotifySenderRegistry. CRUD real.
 -->
 <template>
   <div class="templates-list">
     <el-alert
-      title="通知模板 CRUD 功能开发中"
-      type="info"
-      :closable="false"
+      v-if="showInfoBanner"
+      title="通知模板 5 channel 可用"
+      type="success"
+      closable
       show-icon
       class="phase3-banner"
     >
       <template #default>
-        Phase 3 即将上线完整的「新建 / 编辑 / 删除」功能 (5 渠道: 企业微信 / 钉钉 /
-        邮件 / 短信 / 站内信). 当前仅支持<strong>查看模板列表</strong>、<strong>测试发送</strong>
-        与<strong>发送日志审计</strong>.
+        5 渠道全可用 (企业微信 / 钉钉 / 邮件 / 短信 / 站内信).
+        SMTP / WeChat / DingTalk / Aliyun SMS credentials 在 env vars 配置后真发,
+        未配置时进入 MOCK 模式 + 写 audit log.
       </template>
     </el-alert>
 
     <div class="toolbar">
-      <!-- UX polish (2026-05-20): wrap disabled button in el-tooltip so users get
-           a styled hint on hover/focus instead of relying on browser native title
-           (which has delayed/inconsistent behavior across browsers + no styling). -->
-      <el-tooltip
-        content="Phase 3 上线后开放新建; 当前可使用「测试发送」验证已存在模板"
-        placement="top"
-        :show-after="200"
-      >
-        <!-- el-tooltip needs a non-disabled wrapper to receive hover events on
-             a disabled child element. Use span. -->
-        <span>
-          <el-button type="primary" :icon="Plus" disabled>
-            新建模板
-          </el-button>
-        </span>
-      </el-tooltip>
+      <el-button type="primary" :icon="Plus" @click="openCreate">
+        新建模板
+      </el-button>
       <el-input
         v-model="search"
         placeholder="搜索模板编码 / 标题"
@@ -79,10 +68,16 @@
           {{ formatDate(row.updatedAt) }}
         </template>
       </el-table-column>
-      <el-table-column label="操作" width="120" fixed="right">
+      <el-table-column label="操作" width="240" fixed="right">
         <template #default="{ row }">
           <el-button type="primary" link size="small" @click="openTestSend(row)">
             测试发送
+          </el-button>
+          <el-button type="primary" link size="small" @click="openEdit(row)">
+            编辑
+          </el-button>
+          <el-button type="danger" link size="small" @click="handleDelete(row)">
+            删除
           </el-button>
         </template>
       </el-table-column>
@@ -101,13 +96,16 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus } from '@element-plus/icons-vue'
 import {
   listTemplates,
+  deleteTemplate,
   type NotifyTemplate,
   type NotifyChannel,
   NotifyChannelLabels,
 } from '@/api/notifyTemplateApi'
+import { handleCatchError } from '@/utils/errorToast'
 import TemplateFormDialog from './TemplateFormDialog.vue'
 
 interface Props {
@@ -118,11 +116,11 @@ const props = defineProps<Props>()
 const loading = ref(false)
 const templates = ref<NotifyTemplate[]>([])
 const search = ref('')
+const showInfoBanner = ref(true)
 
-// Dialog still mounted for test-send only — create/edit/delete disabled per
-// B-N1/B-N2 (NotifyTemplateController POST/PUT/DELETE return 501 until Phase 3).
+// 2026-05-21: CRUD re-enabled per PR #146 NotifyTemplateController real impl
 const dialogOpen = ref(false)
-const dialogMode = ref<'create' | 'edit' | 'test-send'>('test-send')
+const dialogMode = ref<'create' | 'edit' | 'test-send'>('create')
 const editingTemplate = ref<NotifyTemplate | null>(null)
 
 const filteredTemplates = computed(() => {
@@ -152,6 +150,35 @@ function openTestSend(row: NotifyTemplate) {
   editingTemplate.value = { ...row }
   dialogMode.value = 'test-send'
   dialogOpen.value = true
+}
+
+function openCreate() {
+  editingTemplate.value = null
+  dialogMode.value = 'create'
+  dialogOpen.value = true
+}
+
+function openEdit(row: NotifyTemplate) {
+  editingTemplate.value = { ...row }
+  dialogMode.value = 'edit'
+  dialogOpen.value = true
+}
+
+async function handleDelete(row: NotifyTemplate) {
+  try {
+    await ElMessageBox.confirm(
+      `确认删除通知模板 "${row.templateCode}" (${row.title || ''})? 此操作不可恢复.`,
+      '删除确认',
+      { confirmButtonText: '删除', cancelButtonText: '取消', type: 'warning' },
+    )
+    await deleteTemplate(props.factoryId, row.id)
+    ElMessage.success('通知模板已删除')
+    await loadTemplates()
+  } catch (e) {
+    if (e !== 'cancel') {
+      handleCatchError(e, '删除失败')
+    }
+  }
 }
 
 async function onSaved() {
