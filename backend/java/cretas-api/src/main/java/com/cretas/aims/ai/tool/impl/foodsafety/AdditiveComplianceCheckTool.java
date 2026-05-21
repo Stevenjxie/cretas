@@ -50,6 +50,13 @@ public class AdditiveComplianceCheckTool extends AbstractBusinessTool {
     @Autowired
     private AdditiveLimitRepository additiveLimitRepository;
 
+    /**
+     * Sprint 9 P2.F V2 — smart match fallback (when strict additiveCode lookup misses,
+     * 自动用 fuzzy match 找最接近的 GB 2760 entry).
+     */
+    @Autowired(required = false)
+    private AdditiveSmartMatchTool smartMatchTool;
+
     @Override
     public String getToolName() {
         return "additive_compliance_check";
@@ -158,13 +165,28 @@ public class AdditiveComplianceCheckTool extends AbstractBusinessTool {
             Optional<AdditiveLimit> limitOpt = additiveLimitRepository
                     .findByAdditiveCodeAndFoodCategoryAndActiveTrue(additiveCode, foodCategory);
 
+            // Sprint 9 P2.F V2 fallback: strict lookup miss → 尝试 fuzzy match
+            // (用户用俗名 / 英文输入 additiveCode 时, 自动找到 GB 2760 entry)
+            boolean fuzzyMatched = false;
+            if (limitOpt.isEmpty()) {
+                AdditiveLimit fuzzy = trySmartFallback(additiveCode, foodCategory);
+                if (fuzzy != null) {
+                    limitOpt = Optional.of(fuzzy);
+                    fuzzyMatched = true;
+                }
+            }
+
             Map<String, Object> row = new LinkedHashMap<>();
             row.put("additiveCode", additiveCode);
             row.put("usageAmount", usageAmount);
             row.put("usageUnit", unit);
+            if (fuzzyMatched) {
+                row.put("smartMatched", true);
+                row.put("matchedCode", limitOpt.get().getAdditiveCode());
+            }
 
             if (limitOpt.isEmpty()) {
-                row.put("reason", "GB 2760 未收录 (" + foodCategory + ")");
+                row.put("reason", "GB 2760 未收录 (" + foodCategory + "). 建议用 additive_smart_match 查找类似");
                 unknownList.add(row);
                 continue;
             }
@@ -227,6 +249,48 @@ public class AdditiveComplianceCheckTool extends AbstractBusinessTool {
         try {
             return new BigDecimal(v.toString());
         } catch (NumberFormatException ex) {
+            return null;
+        }
+    }
+
+    /**
+     * Sprint 9 P2.F V2 — fuzzy fallback when strict additiveCode/category lookup misses.
+     *
+     * <p>Strategies (在指定 foodCategory 内优先):
+     * <ol>
+     *   <li>精确 additiveCode 跨类目查找 (用户传 INS code 但 category 配错)</li>
+     *   <li>精确 additiveName 匹配 (用户用 name 而非 INS code) — 限定 category</li>
+     *   <li>aliases JSONB 匹配 (用户用俗名 / 英文 — e.g. "VC" → INS 300) — 限定 category</li>
+     * </ol>
+     *
+     * <p>返 null 表示真的未收录 (调用方走 unknown 分支).
+     */
+    private AdditiveLimit trySmartFallback(String query, String foodCategory) {
+        if (query == null || query.isBlank()) return null;
+        try {
+            // 1. 精确 code 跨类目 (用户给对 INS code 但 category 配错)
+            List<AdditiveLimit> byCode = additiveLimitRepository.findByAdditiveCodeAndActiveTrue(query);
+            for (AdditiveLimit l : byCode) {
+                if (l.getFoodCategory().equals(foodCategory)) return l;
+            }
+            // 同 code 但不同 category — 返第一个 (作为参考)
+            if (!byCode.isEmpty()) return byCode.get(0);
+
+            // 2. 精确 name (限定 category)
+            List<AdditiveLimit> byName = additiveLimitRepository.findByAdditiveNameAndActiveTrue(query);
+            for (AdditiveLimit l : byName) {
+                if (l.getFoodCategory().equals(foodCategory)) return l;
+            }
+
+            // 3. aliases (限定 category)
+            List<AdditiveLimit> byAlias = additiveLimitRepository.findByAliasContaining(query);
+            for (AdditiveLimit l : byAlias) {
+                if (l.getFoodCategory().equals(foodCategory)) return l;
+            }
+
+            return null;
+        } catch (Exception e) {
+            log.warn("trySmartFallback failed for query={}: {}", query, e.getMessage());
             return null;
         }
     }
