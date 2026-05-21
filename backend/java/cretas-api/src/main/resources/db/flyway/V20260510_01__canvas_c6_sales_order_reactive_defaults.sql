@@ -29,11 +29,27 @@
 -- F001 sales_order=DYNAMIC 是主要受益者 (PR #173 I-3 documented limitation 解锁).
 
 -- Pre-flight check: 验证 sales_order schema 包含 items field, 且 items 在 fields[8] 位置 (0-indexed)
+-- Class 4 Flyway gap fix (2026-05-21): sales_order seed V20260409_02 lives in
+-- legacy db/migration/ dir (NOT Flyway-scanned). Fresh DBs (CI) lack the row.
+-- Mirror V20260425_01 lenient pattern: skip assert when row absent, UPDATE below
+-- naturally no-ops via WHERE module_code='sales_order'. Canvas seed service /
+-- Hibernate handles bootstrap on prod first-boot.
 DO $$
 DECLARE
+  has_row BOOLEAN;
   has_items BOOLEAN;
   items_idx INTEGER;
 BEGIN
+  -- Skip entirely if sales_order row absent (fresh DB, seed-not-applied env)
+  SELECT EXISTS (
+    SELECT 1 FROM module_schemas WHERE module_code = 'sales_order'
+  ) INTO has_row;
+
+  IF NOT has_row THEN
+    RAISE NOTICE 'V20260510_01 skipped pre-flight assert: sales_order row absent (fresh DB / unprovisioned)';
+    RETURN;
+  END IF;
+
   -- 找 items field 位置
   SELECT idx - 1 INTO items_idx
   FROM module_schemas, jsonb_array_elements(field_schema->'fields') WITH ORDINALITY AS arr(elem, idx)
@@ -44,7 +60,7 @@ BEGIN
   has_items := items_idx IS NOT NULL;
 
   IF NOT has_items THEN
-    RAISE EXCEPTION 'sales_order schema 缺 items field, V20260409_02 seed 未应用或被改';
+    RAISE EXCEPTION 'sales_order schema 缺 items field (row exists but items missing, schema corruption)';
   END IF;
 
   -- 验证 items 是 line_items type
@@ -138,12 +154,24 @@ WHERE module_code = 'sales_order';
 
 -- Post-verify: 应能查到 productTypeId.referenceConfig.projectFields.boxConversionCoefficient
 -- = '_boxConversionCoefficient' 且 itemSchema.fields 末尾有 boxQuantity computed
+-- Class 4 fix (2026-05-21): post-verify also skipped on fresh-DB / unprovisioned envs.
+-- UPDATE above no-ops via WHERE module_code='sales_order' when row absent.
 DO $$
 DECLARE
+  has_row BOOLEAN;
   has_project_fields BOOLEAN;
   has_box_quantity BOOLEAN;
   has_specification_shadow BOOLEAN;
 BEGIN
+  SELECT EXISTS (
+    SELECT 1 FROM module_schemas WHERE module_code = 'sales_order'
+  ) INTO has_row;
+
+  IF NOT has_row THEN
+    RAISE NOTICE 'V20260510_01 skipped post-verify: sales_order row absent (no-op UPDATE)';
+    RETURN;
+  END IF;
+
   SELECT EXISTS (
     SELECT 1
     FROM module_schemas,
