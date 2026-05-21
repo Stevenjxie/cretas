@@ -63,12 +63,19 @@
           <span v-else>(CUSTOM scope 只能用 #input)</span>.
           <br />
           <strong>示例</strong>:
-          <code v-if="form.scope === 'ORDER'">#order.amount &gt; 100000</code>
-          <code v-else-if="form.scope === 'INVENTORY'">#inventory.quantity &lt; 10</code>
-          <code v-else-if="form.scope === 'CUSTOMER'">#customer.tier == 'VIP'</code>
-          <code v-else>#input.amount &gt; 100</code>,
+          <code v-if="form.scope === 'ORDER'">#order['amount'] &gt; 100000</code>
+          <code v-else-if="form.scope === 'INVENTORY'">#inventory['quantity'] &lt; 10</code>
+          <code v-else-if="form.scope === 'CUSTOMER'">#customer['tier'] == 'VIP'</code>
+          <code v-else>#input['amount'] &gt; 100</code>,
           <code>#input['items'][0]['unitPrice'] &gt; 100</code>.
           空条件 = 总是 true (匹配所有 input)。
+          <br />
+          <span class="warning-text">
+            ⚠️ <strong>必须用 bracket 语法</strong> <code>['fieldName']</code> 访问字段:
+            运行时 input 是 Map (JSON 反序列化结果), dot 语法 <code>#order.amount</code>
+            在 Map 上返 null → 规则永远 matched=false 静默失效。
+            bracket 是 Map 字段访问的必需写法 (ORDER/INVENTORY/CUSTOMER/CUSTOM 全部 scope 均适用)。
+          </span>
         </div>
       </el-form-item>
 
@@ -237,18 +244,22 @@ const actionConfigExample = computed(() => {
   return JSON.stringify(actionConfigDefault(form.value.actionType), null, 2)
 })
 
-// B-BR1 fix: scope-aware placeholder so the example uses the alias that actually resolves.
+// B-BR1 fix (UX hint copy 2026-05-21): scope-aware placeholder so the example uses
+// bracket notation that actually resolves. Runtime binds input as Map<String,Object>
+// (per RuleEngineImpl.buildSpelVariables + SimpleEvaluationContext.forReadOnlyDataBinding),
+// and SpEL dot-access (e.g. `#order.amount`) returns null on a Map, causing rules to
+// silently never match. bracket access (`#order['amount']`) is the required syntax.
 const conditionSpelPlaceholder = computed(() => {
   switch (form.value.scope) {
     case 'ORDER':
-      return "例: #order.amount > 100000 (#order 是 #input 的别名, 任选其一)"
+      return "例: #order['amount'] > 100000 (#order 是 #input 的别名, 任选其一; 必须用 bracket 语法)"
     case 'INVENTORY':
-      return "例: #inventory.quantity < 10"
+      return "例: #inventory['quantity'] < 10 (必须用 bracket 语法 — Map 字段访问)"
     case 'CUSTOMER':
-      return "例: #customer.tier == 'VIP'"
+      return "例: #customer['tier'] == 'VIP' (必须用 bracket 语法 — Map 字段访问)"
     case 'CUSTOM':
     default:
-      return "例: #input.amount > 100 (CUSTOM scope 仅 #input 可用)"
+      return "例: #input['amount'] > 100 (CUSTOM scope 仅 #input 可用; 必须用 bracket 语法)"
   }
 })
 
