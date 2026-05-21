@@ -95,6 +95,20 @@ const businessRoutes: RouteRecordRaw[] = [
           module: 'finance'
         }
       },
+      // Sprint 8 P3 — 质量主管工作台 (QualityManagerWorkdesk) 食品安全召回闭环
+      // food-safety-recall Skill 串 8 Tool: batch 追溯 + HACCP audit + GB 2760 + 召回行动
+      // Boss 演示弹药 #3 — HJ vs Cretas 杀手锏 (HJ 30 min vs Cretas < 2 min)
+      {
+        path: 'workdesk/quality-manager',
+        name: 'QualityManagerWorkdesk',
+        component: () => import('@/views/workdesk/QualityManagerWorkdesk.vue'),
+        meta: {
+          requiresAuth: true,
+          title: '质量主管工作台',
+          icon: 'Warning',
+          module: 'quality'
+        }
+      },
 
       // 生产管理
       {
