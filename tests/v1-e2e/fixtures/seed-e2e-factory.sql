@@ -115,9 +115,16 @@ INSERT INTO factory_warehouses (
     id, factory_id, code, name, type, is_active,
     created_at, updated_at
 )
+-- 2026-05-21 (PR #149 R5): codes changed from WH_LOGISTICS / WH_WORKSHOP
+-- (underscore) to WH-LOG / WH-WKS (hyphen) to match backend lookups in
+-- SalesController, SalesDeliveryBatchAllocationController, CreateDeliveryRequest,
+-- CreateMaterialBatchRequest, MaterialBatchDTO, FactoryWarehouse (D1 双仓流转
+-- PR #309). Backend hard-codes these literal codes for the source-warehouse
+-- selection logic. With underscores, the e2e PO-receipt step fails with 500
+-- "Factory [F_E2E_TEST] 缺少 warehouse seed [WH-LOG]".
 VALUES
-    ('e2e-wh-logistics-00000000000001', 'F_E2E_TEST', 'WH_LOGISTICS', '物流仓', 'LOGISTICS', true, NOW(), NOW()),
-    ('e2e-wh-workshop-00000000000001',  'F_E2E_TEST', 'WH_WORKSHOP',  '鲜棉仓', 'WORKSHOP',  true, NOW(), NOW())
+    ('e2e-wh-logistics-00000000000001', 'F_E2E_TEST', 'WH-LOG', '物流仓', 'LOGISTICS', true, NOW(), NOW()),
+    ('e2e-wh-workshop-00000000000001',  'F_E2E_TEST', 'WH-WKS', '鲜棉仓', 'WORKSHOP',  true, NOW(), NOW())
 ON CONFLICT (factory_id, code) DO NOTHING;
 
 -- ─────────────────────────────────────────────────────────────────────────────
