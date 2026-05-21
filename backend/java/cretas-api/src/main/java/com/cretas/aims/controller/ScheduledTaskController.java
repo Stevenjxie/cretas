@@ -20,6 +20,7 @@ import org.springframework.web.bind.annotation.*;
 
 import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
@@ -115,12 +116,19 @@ public class ScheduledTaskController {
     }
 
     @PutMapping("/{id}")
-    @Operation(summary = "修改定时任务 (partial)")
+    @Operation(summary = "修改定时任务 (PATCH — null/absent = don't touch)")
     @RequireRole({"factory_super_admin", "permission_admin"})
-    public ApiResponse<ScheduledTask> update(@PathVariable UUID id, @RequestBody ScheduledTask patch) {
-        // AUD-5 B-A3 sister sweep (Rule 16: entry-point matrix — create + update
-        // are independent code paths). PATCH semantics: only validate fields that
-        // are present in the incoming patch (null = "don't touch this field").
+    public ApiResponse<ScheduledTask> update(@PathVariable UUID id, @RequestBody Map<String, Object> body) {
+        // Bug #2 fix (matrix 2026-05-21 P1): take raw Map body so we can distinguish
+        // "field absent from body" vs "field present with null". Previously
+        // @RequestBody ScheduledTask used the entity's `Boolean enabled = true` field
+        // initializer + @Builder.Default. Jackson's no-args ctor preserves the field
+        // initializer; when a partial PUT body omits `enabled`, the deserialized patch
+        // carries `enabled=true` regardless. DynamicSchedulerServiceImpl line 155 then
+        // sees a non-null value and silently re-enables a disabled task. The Map-based
+        // body lets buildPatchFromBody only populate fields the caller actually sent.
+        // Mirrors NotifyTemplateController PATCH pattern.
+        ScheduledTask patch = buildPatchFromBody(body);
         validateNameLengths(patch);
         // AUD-4 wiring (PR #94 follow-up): explicit optimistic-lock check fires BEFORE
         // service.updateTask() so JPA optimistic lock actually trips on stale client
@@ -132,6 +140,71 @@ public class ScheduledTaskController {
         checkVersion(id, patch);
         ScheduledTask updated = dynamicSchedulerService.updateTask(id, patch);
         return ApiResponse.success("定时任务已更新", updated);
+    }
+
+    /**
+     * Bug #2 fix (matrix 2026-05-21 P1): build a sparse {@link ScheduledTask} patch
+     * containing ONLY the fields the caller explicitly sent. Fields absent from
+     * {@code body} stay null on the patch — service-layer null-guards in
+     * {@link com.cretas.aims.service.cron.impl.DynamicSchedulerServiceImpl#updateTask}
+     * skip them, preserving the existing entity values.
+     *
+     * <p>This sidesteps Lombok's {@code @Builder.Default} field initializer
+     * (e.g. {@code Boolean enabled = true}) which Jackson preserves on no-args ctor
+     * deserialization. With the entity-typed body, an absent {@code enabled} field
+     * looked identical to {@code enabled: true} to the service — silent re-enable.
+     */
+    private ScheduledTask buildPatchFromBody(Map<String, Object> body) {
+        ScheduledTask patch = new ScheduledTask();
+        // No-args ctor runs the `Boolean enabled = true` field initializer.
+        // Explicit null override so service null-guard correctly treats "absent" as "no change".
+        patch.setEnabled(null);
+        if (body == null) {
+            return patch;
+        }
+        if (body.containsKey("taskCode")) {
+            patch.setTaskCode(stringOrNull(body.get("taskCode")));
+        }
+        if (body.containsKey("taskName")) {
+            patch.setTaskName(stringOrNull(body.get("taskName")));
+        }
+        if (body.containsKey("cronExpression")) {
+            patch.setCronExpression(stringOrNull(body.get("cronExpression")));
+        }
+        if (body.containsKey("handlerBeanName")) {
+            patch.setHandlerBeanName(stringOrNull(body.get("handlerBeanName")));
+        }
+        if (body.containsKey("factoryId")) {
+            patch.setFactoryId(stringOrNull(body.get("factoryId")));
+        }
+        if (body.containsKey("enabled")) {
+            Object v = body.get("enabled");
+            if (v == null) {
+                patch.setEnabled(null);
+            } else if (v instanceof Boolean) {
+                patch.setEnabled((Boolean) v);
+            } else {
+                // Lenient coercion: "true"/"false" string or 0/1 number.
+                patch.setEnabled(Boolean.parseBoolean(String.valueOf(v)));
+            }
+        }
+        if (body.containsKey("version")) {
+            Object v = body.get("version");
+            if (v instanceof Number) {
+                patch.setVersion(((Number) v).longValue());
+            } else if (v != null) {
+                try {
+                    patch.setVersion(Long.parseLong(String.valueOf(v)));
+                } catch (NumberFormatException ignore) {
+                    // Malformed version field treated as not-supplied (legacy clients).
+                }
+            }
+        }
+        return patch;
+    }
+
+    private static String stringOrNull(Object v) {
+        return v == null ? null : v.toString();
     }
 
     @PostMapping("/{id}/toggle")
