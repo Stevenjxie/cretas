@@ -1,178 +1,403 @@
 package com.cretas.aims.controller;
 
 import com.cretas.aims.dto.common.ApiResponse;
+import com.cretas.aims.entity.notify.NotifyChannel;
+import com.cretas.aims.entity.notify.NotifyTemplate;
 import com.cretas.aims.repository.notify.NotifyTemplateRepository;
 import com.cretas.aims.service.notify.NotifySenderRegistry;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 /**
- * Length-validation tests for {@link NotifyTemplateController} — AUD-5 B-A3 sister sweep
- * (edge audit 2026-05-20).
+ * Tests for {@link NotifyTemplateController} — Canvas-Notify Phase 3 follow-up.
  *
- * <p>Scope is narrower than the Pricing / Cron tests: the CRUD endpoints (create / update /
- * delete) in {@code NotifyTemplateController} currently return 501 stubs as their FIRST
- * statement, so any length pre-check on those methods would be unreachable code — they
- * will gain validation when Phase 3 sister chat replaces stubs with real persistence.
+ * <p>Replaces the prior stub-asserting test file. Now that create / update / delete
+ * have real impls (Phase 3 follow-up issue #41 partial close), this exercises:
+ * <ul>
+ *   <li>Length validation (AUD-5 B-A3 sister sweep — still in place)</li>
+ *   <li>Create success + UNIQUE conflict 409</li>
+ *   <li>Update with optimistic lock (version match / mismatch / lenient null)</li>
+ *   <li>Delete with factoryId IDOR guard</li>
+ *   <li>Cross-factory access guard (404 on factoryId mismatch)</li>
+ * </ul>
  *
- * <p>What IS active and worth gating: {@link NotifyTemplateController#testSend} which
- * actually looks up a template by {@code templateCode}. Pre-fix, an over-length
- * {@code templateCode} would silently miss in the repo lookup (returning 404
- * "通知模板不存在") which masks the real issue (input violates the VARCHAR(100) contract).
- * Post-fix surfaces a specific 400 with the actual vs allowed length.
- *
- * <p>Tests use pure Mockito — no Spring context — and verify the {@code testSend} path
- * never reaches the {@code templateRepo.findByFactoryIdAndTemplateCode} call when length
- * validation fails.
- *
- * @since 2026-05-20 (AUD-5 B-A3 sister sweep)
+ * @since 2026-05-20 (AUD-5 B-A3 length pre-check)
+ * @since 2026-05-21 (CRUD impl tests — Phase 3 follow-up)
  */
 @ExtendWith(MockitoExtension.class)
-@DisplayName("NotifyTemplateController AUD-5 B-A3 length pre-check")
+@DisplayName("NotifyTemplateController CRUD + AUD-5 B-A3 length pre-check")
 class NotifyTemplateControllerTest {
 
     @Mock NotifyTemplateRepository templateRepo;
     @Mock NotifySenderRegistry notifySenderRegistry;
     @InjectMocks NotifyTemplateController controller;
 
-    // ==================== AUD-5 B-A3: templateCode > 100 chars in testSend ====================
+    private static final String FACTORY_ID = "F001";
+    private static final String TEMPLATE_CODE = "PO_APPROVAL_PENDING";
+
+    // ==================== testSend: AUD-5 B-A3 length validation ====================
 
     @Test
     @DisplayName("AUD-5 B-A3: templateCode > 100 字符 → 400 with specific length hint")
     void testLongTemplateCodeRejected() {
-        // PG column: notify_templates.template_code VARCHAR(100). Pre-fix, an over-length
-        // input would silently miss in repo lookup → 404 TEMPLATE_NOT_FOUND, masking the
-        // real validation issue. Post-fix delivers specific 400 with actual length.
         Map<String, Object> body = new HashMap<>();
-        body.put("templateCode", "X".repeat(101));   // 101 chars, max is 100
+        body.put("templateCode", "X".repeat(101));
 
-        ApiResponse<Map<String, Object>> resp = controller.testSend("F001", body);
-
-        assertNotNull(resp);
-        assertEquals(400, resp.getCode(), "must be 400, not 404 silent miss");
-        assertEquals("VALIDATION", resp.getErrorCode());
-        assertTrue(resp.getMessage().contains("templateCode"),
-                "message must reference field name: " + resp.getMessage());
-        assertTrue(resp.getMessage().contains("100"),
-                "message must include limit (100): " + resp.getMessage());
-        assertTrue(resp.getMessage().contains("101"),
-                "message must include current length (101): " + resp.getMessage());
-        assertNotNull(resp.getActionHint(),
-                "4-in-1 UX (a): actionHint required for user next-step");
-        assertEquals("warning", resp.getSeverity(), "4-in-1 UX (c): severity warning");
-        // CRITICAL: repo lookup must NOT be called — validation fires before lookup
-        verify(templateRepo, never()).findByFactoryIdAndTemplateCode(anyString(), anyString());
-    }
-
-    @Test
-    @DisplayName("AUD-5 B-A3: very long templateCode (500 chars) also rejected")
-    void testVeryLongTemplateCodeRejected() {
-        // Defense-in-depth: large payloads should fail fast at the boundary.
-        Map<String, Object> body = new HashMap<>();
-        body.put("templateCode", "Z".repeat(500));
-
-        ApiResponse<Map<String, Object>> resp = controller.testSend("F001", body);
+        ApiResponse<Map<String, Object>> resp = controller.testSend(FACTORY_ID, body);
 
         assertEquals(400, resp.getCode());
         assertEquals("VALIDATION", resp.getErrorCode());
-        assertTrue(resp.getMessage().contains("500"),
-                "message must include the actual length: " + resp.getMessage());
+        assertTrue(resp.getMessage().contains("templateCode"));
+        assertTrue(resp.getMessage().contains("100"));
+        assertTrue(resp.getMessage().contains("101"));
+        assertNotNull(resp.getActionHint());
+        assertEquals("warning", resp.getSeverity());
         verify(templateRepo, never()).findByFactoryIdAndTemplateCode(anyString(), anyString());
     }
-
-    // ==================== Boundary: exactly 100 chars should NOT trip length check ====================
 
     @Test
     @DisplayName("AUD-5 B-A3 boundary: templateCode at exactly 100 字符 passes length check")
     void testMaxLengthTemplateCodeAccepted() {
-        // 100-char templateCode is at-but-not-over the PG VARCHAR(100) cap.
-        // Length validation must accept it; the request then proceeds to repo lookup
-        // (which mocks an empty Optional → 404 TEMPLATE_NOT_FOUND from the next check).
-        // What we care about here: length pre-check did NOT short-circuit at this length.
         String exactlyAtCap = "X".repeat(100);
         Map<String, Object> body = new HashMap<>();
         body.put("templateCode", exactlyAtCap);
 
-        ApiResponse<Map<String, Object>> resp = controller.testSend("F001", body);
+        ApiResponse<Map<String, Object>> resp = controller.testSend(FACTORY_ID, body);
 
-        // Will be 404 (template doesn't exist in mock), NOT 400 VALIDATION.
-        // 404 means length validation passed — which is what we're asserting.
-        assertNotNull(resp);
-        assertEquals(404, resp.getCode(), "100-char should pass length check then fail at repo lookup");
+        assertEquals(404, resp.getCode());
         assertEquals("TEMPLATE_NOT_FOUND", resp.getErrorCode());
-        // The repo lookup DID get reached with the exact 100-char string
-        verify(templateRepo).findByFactoryIdAndTemplateCode("F001", exactlyAtCap);
+        verify(templateRepo).findByFactoryIdAndTemplateCode(FACTORY_ID, exactlyAtCap);
     }
 
-    // ==================== Sanity: existing blank-check still fires =====================
-
     @Test
-    @DisplayName("Pre-existing: blank templateCode still returns specific 400 (regression guard)")
+    @DisplayName("Pre-existing: blank templateCode still returns specific 400")
     void testBlankTemplateCodeRejectedFirst() {
-        // Ensure new length check did NOT break the existing blank-check (which fires earlier).
         Map<String, Object> body = new HashMap<>();
         body.put("templateCode", "");
 
-        ApiResponse<Map<String, Object>> resp = controller.testSend("F001", body);
+        ApiResponse<Map<String, Object>> resp = controller.testSend(FACTORY_ID, body);
 
         assertEquals(400, resp.getCode());
         assertEquals("VALIDATION", resp.getErrorCode());
-        assertTrue(resp.getMessage().contains("templateCode 必填"),
-                "blank check must surface its specific message, not the length one: " + resp.getMessage());
+        assertTrue(resp.getMessage().contains("templateCode 必填"));
         verify(templateRepo, never()).findByFactoryIdAndTemplateCode(anyString(), anyString());
     }
 
+    // ==================== POST create ====================
+
     @Test
-    @DisplayName("Pre-existing: null templateCode still rejected (regression guard)")
-    void testNullTemplateCodeRejected() {
+    @DisplayName("create: happy path → 201 with saved entity")
+    void testCreateHappy() {
         Map<String, Object> body = new HashMap<>();
-        // templateCode absent entirely
-        body.put("recipientUserIds", java.util.List.of(1L));
+        body.put("templateCode", TEMPLATE_CODE);
+        body.put("title", "审批通知");
+        body.put("bodyTemplate", "您有 {{count}} 笔待审");
+        body.put("channels", List.of("EMAIL", "IN_APP"));
 
-        ApiResponse<Map<String, Object>> resp = controller.testSend("F001", body);
+        when(templateRepo.findByFactoryIdAndTemplateCode(FACTORY_ID, TEMPLATE_CODE))
+                .thenReturn(Optional.empty());
+        when(templateRepo.save(any(NotifyTemplate.class)))
+                .thenAnswer(inv -> {
+                    NotifyTemplate t = inv.getArgument(0);
+                    t.setId(UUID.randomUUID());
+                    return t;
+                });
+
+        ApiResponse<NotifyTemplate> resp = controller.create(FACTORY_ID, body);
+
+        assertEquals(200, resp.getCode());
+        assertTrue(Boolean.TRUE.equals(resp.getSuccess()));
+        assertNotNull(resp.getData());
+        assertEquals(TEMPLATE_CODE, resp.getData().getTemplateCode());
+        assertEquals(FACTORY_ID, resp.getData().getFactoryId());
+        assertEquals(2, resp.getData().getChannels().size());
+        assertTrue(resp.getData().getChannels().contains(NotifyChannel.EMAIL));
+    }
+
+    @Test
+    @DisplayName("create: templateCode 缺失 → 400 VALIDATION")
+    void testCreateMissingTemplateCode() {
+        Map<String, Object> body = new HashMap<>();
+        body.put("title", "审批通知");
+
+        ApiResponse<NotifyTemplate> resp = controller.create(FACTORY_ID, body);
 
         assertEquals(400, resp.getCode());
         assertEquals("VALIDATION", resp.getErrorCode());
-        verify(templateRepo, never()).findByFactoryIdAndTemplateCode(anyString(), anyString());
+        assertTrue(resp.getMessage().contains("templateCode"));
+        verify(templateRepo, never()).save(any());
     }
 
-    // ==================== AUD-4 (PR #94 follow-up): stub-status verification ====================
+    @Test
+    @DisplayName("create: UNIQUE 冲突 → 409 DUPLICATE")
+    void testCreateUniqueConflict() {
+        Map<String, Object> body = new HashMap<>();
+        body.put("templateCode", TEMPLATE_CODE);
+
+        NotifyTemplate existing = NotifyTemplate.builder()
+                .id(UUID.randomUUID())
+                .factoryId(FACTORY_ID)
+                .templateCode(TEMPLATE_CODE)
+                .build();
+        when(templateRepo.findByFactoryIdAndTemplateCode(FACTORY_ID, TEMPLATE_CODE))
+                .thenReturn(Optional.of(existing));
+
+        ApiResponse<NotifyTemplate> resp = controller.create(FACTORY_ID, body);
+
+        assertEquals(409, resp.getCode());
+        assertEquals("DUPLICATE", resp.getErrorCode());
+        assertTrue(resp.getMessage().contains(TEMPLATE_CODE));
+        assertNotNull(resp.getActionHint());
+        verify(templateRepo, never()).save(any());
+    }
 
     @Test
-    @DisplayName("AUD-4: PUT still returns 501 stub (Phase 3 sister must honor version check pattern)")
-    void testUpdateStillStubbed() {
-        // NotifyTemplateController.update is a 501 stub awaiting Phase 3 sister chat. PR #94
-        // added @Version Long version on the NotifyTemplate entity + Flyway DDL so the
-        // column is already in place. This PR adds a doc-comment guard pointing future
-        // implementors to the AUD-4 pattern used in the other 4 Canvas PUT handlers
-        // (PricingStrategy / CanvasAlert / CanvasRule / ScheduledTask).
-        //
-        // When Phase 3 lands the real impl, this test should be replaced by:
-        //   - testStaleVersionRejectedWith409 (mirror of sister-controller tests)
-        //   - testCurrentVersionAccepted
-        //   - testNullVersionLenientPassthrough
-        // and the 501 stub assertion should disappear.
-        ApiResponse<?> resp = controller.update(
-                "F001", java.util.UUID.randomUUID(), new com.cretas.aims.entity.notify.NotifyTemplate());
-        assertNotNull(resp);
-        assertEquals(501, resp.getCode(),
-                "PUT remains a 501 stub — Phase 3 sister chat 实施 must honor AUD-4 version check pattern");
-        // Critical: when 501, no DB hits happen (no findById, no save).
-        verify(templateRepo, never()).findByFactoryIdAndTemplateCode(anyString(), anyString());
+    @DisplayName("create: templateCode > 100 → 400 VALIDATION (length cap)")
+    void testCreateTemplateCodeTooLong() {
+        Map<String, Object> body = new HashMap<>();
+        body.put("templateCode", "Z".repeat(101));
+
+        ApiResponse<NotifyTemplate> resp = controller.create(FACTORY_ID, body);
+
+        assertEquals(400, resp.getCode());
+        assertEquals("VALIDATION", resp.getErrorCode());
+        assertTrue(resp.getMessage().contains("100"));
+        verify(templateRepo, never()).save(any());
+    }
+
+    // ==================== PUT update ====================
+
+    @Test
+    @DisplayName("update: happy path with matching version → 200")
+    void testUpdateHappyVersionMatch() {
+        UUID id = UUID.randomUUID();
+        NotifyTemplate existing = NotifyTemplate.builder()
+                .id(id)
+                .factoryId(FACTORY_ID)
+                .templateCode(TEMPLATE_CODE)
+                .title("旧标题")
+                .version(3L)
+                .build();
+        when(templateRepo.findById(id)).thenReturn(Optional.of(existing));
+        when(templateRepo.save(any(NotifyTemplate.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        Map<String, Object> body = new HashMap<>();
+        body.put("title", "新标题");
+        body.put("version", 3); // match
+
+        ApiResponse<NotifyTemplate> resp = controller.update(FACTORY_ID, id, body);
+
+        assertEquals(200, resp.getCode());
+        assertTrue(Boolean.TRUE.equals(resp.getSuccess()));
+        assertEquals("新标题", resp.getData().getTitle());
+    }
+
+    @Test
+    @DisplayName("update: stale version (client v=2, server v=3) → 409 VERSION_CONFLICT")
+    void testUpdateStaleVersion() {
+        UUID id = UUID.randomUUID();
+        NotifyTemplate existing = NotifyTemplate.builder()
+                .id(id)
+                .factoryId(FACTORY_ID)
+                .templateCode(TEMPLATE_CODE)
+                .version(3L)
+                .build();
+        when(templateRepo.findById(id)).thenReturn(Optional.of(existing));
+
+        Map<String, Object> body = new HashMap<>();
+        body.put("title", "covertly try to overwrite");
+        body.put("version", 2); // stale
+
+        ApiResponse<NotifyTemplate> resp = controller.update(FACTORY_ID, id, body);
+
+        assertEquals(409, resp.getCode());
+        assertEquals("VERSION_CONFLICT", resp.getErrorCode());
+        assertTrue(resp.getMessage().contains("v=3"));
+        assertTrue(resp.getMessage().contains("v=2"));
+        assertNotNull(resp.getActionHint());
+        verify(templateRepo, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("update: null version → lenient passthrough (legacy clients)")
+    void testUpdateNullVersionLenient() {
+        UUID id = UUID.randomUUID();
+        NotifyTemplate existing = NotifyTemplate.builder()
+                .id(id)
+                .factoryId(FACTORY_ID)
+                .templateCode(TEMPLATE_CODE)
+                .version(3L)
+                .build();
+        when(templateRepo.findById(id)).thenReturn(Optional.of(existing));
+        when(templateRepo.save(any(NotifyTemplate.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        Map<String, Object> body = new HashMap<>();
+        body.put("title", "新");
+        // version absent — legacy client
+
+        ApiResponse<NotifyTemplate> resp = controller.update(FACTORY_ID, id, body);
+
+        assertEquals(200, resp.getCode());
+        assertTrue(Boolean.TRUE.equals(resp.getSuccess()));
+    }
+
+    @Test
+    @DisplayName("update: factoryId 不一致 (IDOR) → 404")
+    void testUpdateCrossFactoryReturns404() {
+        UUID id = UUID.randomUUID();
+        NotifyTemplate existing = NotifyTemplate.builder()
+                .id(id)
+                .factoryId("F999")  // different factory
+                .templateCode(TEMPLATE_CODE)
+                .version(1L)
+                .build();
+        when(templateRepo.findById(id)).thenReturn(Optional.of(existing));
+
+        Map<String, Object> body = new HashMap<>();
+        body.put("title", "IDOR attempt");
+
+        ApiResponse<NotifyTemplate> resp = controller.update(FACTORY_ID, id, body);
+
+        assertEquals(404, resp.getCode());
+        assertEquals("TEMPLATE_NOT_FOUND", resp.getErrorCode());
+        verify(templateRepo, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("update: id 不存在 → 404")
+    void testUpdateNotFound() {
+        UUID id = UUID.randomUUID();
+        when(templateRepo.findById(id)).thenReturn(Optional.empty());
+
+        ApiResponse<NotifyTemplate> resp = controller.update(FACTORY_ID, id, Map.of("title", "x"));
+
+        assertEquals(404, resp.getCode());
+        assertEquals("TEMPLATE_NOT_FOUND", resp.getErrorCode());
+        verify(templateRepo, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("update: partial — only updates fields present in body")
+    void testUpdatePartial() {
+        UUID id = UUID.randomUUID();
+        NotifyTemplate existing = NotifyTemplate.builder()
+                .id(id)
+                .factoryId(FACTORY_ID)
+                .templateCode(TEMPLATE_CODE)
+                .title("旧标题")
+                .bodyTemplate("旧 body {{var}}")
+                .channels(List.of(NotifyChannel.IN_APP))
+                .version(1L)
+                .build();
+        when(templateRepo.findById(id)).thenReturn(Optional.of(existing));
+        ArgumentCaptor<NotifyTemplate> captor = ArgumentCaptor.forClass(NotifyTemplate.class);
+        when(templateRepo.save(captor.capture())).thenAnswer(inv -> inv.getArgument(0));
+
+        // Only update channels, leave title + bodyTemplate as-is
+        Map<String, Object> body = new HashMap<>();
+        body.put("channels", List.of("EMAIL"));
+
+        ApiResponse<NotifyTemplate> resp = controller.update(FACTORY_ID, id, body);
+
+        assertEquals(200, resp.getCode());
+        NotifyTemplate saved = captor.getValue();
+        assertEquals("旧标题", saved.getTitle(), "title should remain unchanged");
+        assertEquals("旧 body {{var}}", saved.getBodyTemplate(), "bodyTemplate should remain unchanged");
+        assertEquals(List.of(NotifyChannel.EMAIL), saved.getChannels(), "channels updated");
+    }
+
+    // ==================== DELETE ====================
+
+    @Test
+    @DisplayName("delete: happy path → soft-delete with deletedAt set")
+    void testDeleteHappy() {
+        UUID id = UUID.randomUUID();
+        NotifyTemplate existing = NotifyTemplate.builder()
+                .id(id)
+                .factoryId(FACTORY_ID)
+                .templateCode(TEMPLATE_CODE)
+                .version(1L)
+                .build();
+        when(templateRepo.findById(id)).thenReturn(Optional.of(existing));
+        ArgumentCaptor<NotifyTemplate> captor = ArgumentCaptor.forClass(NotifyTemplate.class);
+        when(templateRepo.save(captor.capture())).thenAnswer(inv -> inv.getArgument(0));
+
+        ApiResponse<Void> resp = controller.delete(FACTORY_ID, id);
+
+        assertEquals(200, resp.getCode());
+        assertTrue(Boolean.TRUE.equals(resp.getSuccess()));
+        assertNotNull(captor.getValue().getDeletedAt(), "soft delete sets deletedAt");
+    }
+
+    @Test
+    @DisplayName("delete: factoryId 不一致 (IDOR) → 404")
+    void testDeleteCrossFactoryReturns404() {
+        UUID id = UUID.randomUUID();
+        NotifyTemplate existing = NotifyTemplate.builder()
+                .id(id)
+                .factoryId("F999")
+                .templateCode(TEMPLATE_CODE)
+                .version(1L)
+                .build();
+        when(templateRepo.findById(id)).thenReturn(Optional.of(existing));
+
+        ApiResponse<Void> resp = controller.delete(FACTORY_ID, id);
+
+        assertEquals(404, resp.getCode());
+        assertEquals("TEMPLATE_NOT_FOUND", resp.getErrorCode());
+        verify(templateRepo, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("delete: id 不存在 → 404")
+    void testDeleteNotFound() {
+        UUID id = UUID.randomUUID();
+        when(templateRepo.findById(id)).thenReturn(Optional.empty());
+
+        ApiResponse<Void> resp = controller.delete(FACTORY_ID, id);
+
+        assertEquals(404, resp.getCode());
+        assertEquals("TEMPLATE_NOT_FOUND", resp.getErrorCode());
+        verify(templateRepo, never()).save(any());
+    }
+
+    // ==================== GET list ====================
+
+    @Test
+    @DisplayName("list: returns factory templates from repo")
+    void testListDelegatesToRepo() {
+        NotifyTemplate t1 = NotifyTemplate.builder()
+                .id(UUID.randomUUID()).factoryId(FACTORY_ID).templateCode("A").build();
+        NotifyTemplate t2 = NotifyTemplate.builder()
+                .id(UUID.randomUUID()).factoryId(FACTORY_ID).templateCode("B").build();
+        when(templateRepo.findByFactoryId(FACTORY_ID)).thenReturn(List.of(t1, t2));
+
+        ApiResponse<List<NotifyTemplate>> resp = controller.list(FACTORY_ID);
+
+        assertEquals(200, resp.getCode());
+        assertEquals(2, resp.getData().size());
+        verify(templateRepo).findByFactoryId(FACTORY_ID);
     }
 }

@@ -117,6 +117,12 @@
             <artifactId>spring-boot-starter-validation</artifactId>
         </dependency>
 
+        <!-- Spring Mail (EMAIL channel for Canvas-Notify Phase 3) -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-mail</artifactId>
+        </dependency>
+
         <!-- Lombok (Optional, for reducing boilerplate code) -->
         <dependency>
             <groupId>org.projectlombok</groupId>
