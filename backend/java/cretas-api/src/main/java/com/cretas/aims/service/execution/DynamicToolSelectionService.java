@@ -212,6 +212,109 @@ public class DynamicToolSelectionService {
     }
 
     /**
+     * 通过 intent_code → skill_name 显式映射执行 Skill (绕过 keyword 匹配).
+     *
+     * <p>Sprint 9 P0.1 fix (2026-05-21) — Sprint 8 WORKDESK intents (`DAILY_CUSTOMER_FOLLOWUP`
+     * / `MONTHLY_FINANCIAL_CLOSE` / `FOOD_SAFETY_RECALL` 等) 用 `tool_name=NULL` + 依赖
+     * `trySkillRoute` 的 keyword match. 但若用户查询不包含 Skill triggers 中的关键字
+     * (如 "今日跟进" 不在 keywords 但意图识别 LLM 路径仍能匹到 `DAILY_CUSTOMER_FOLLOWUP`),
+     * `trySkillRoute` 返回 null → 路由 fall through 到 `buildNoToolResponse`
+     * → 输出 "暂不支持此类型的意图执行: WORKDESK".
+     *
+     * <p>此方法 by-intent-code 直接查 Skill (跳过 keyword 匹配), 用 naming convention
+     * UPPER_SNAKE → kebab-lowercase. 当 intent 已被识别但 `tool_name=NULL` 时调用.
+     *
+     * @param intent    已识别的 intent (intent_code 不能为 null)
+     * @param userQuery 用户查询文本 (作为 Skill prompt 上下文)
+     * @param factoryId 工厂 ID
+     * @param userId    用户 ID (可空)
+     * @return IntentExecuteResponse if explicit skill matched and executed, null otherwise
+     */
+    public IntentExecuteResponse tryExplicitSkillRouteForIntent(AIIntentConfig intent,
+                                                                  String userQuery,
+                                                                  String factoryId,
+                                                                  Long userId) {
+        if (skillRouterService == null || !skillRouterService.isSkillsEnabled()) {
+            return null;
+        }
+        if (intent == null || intent.getIntentCode() == null) {
+            return null;
+        }
+        try {
+            String skillName = intentCodeToSkillName(intent.getIntentCode());
+            log.info("尝试显式 Skill 路由 (by intent_code): intentCode={}, skillName={}",
+                    intent.getIntentCode(), skillName);
+
+            com.cretas.aims.dto.skill.SkillContext skillContext = com.cretas.aims.dto.skill.SkillContext.builder()
+                    .factoryId(factoryId)
+                    .userId(userId != null ? userId.toString() : null)
+                    .userQuery(userQuery)
+                    .extractedParams(new HashMap<>())
+                    .build();
+
+            SkillResult skillResult = skillRouterService.executeSkill(skillName, skillContext);
+            if (skillResult == null) {
+                log.warn("显式 Skill 路由: executeSkill 返回 null, skillName={}", skillName);
+                return null;
+            }
+
+            // SkillResult.success=false 含 "未找到Skill: xxx" message — Skill 不存在,
+            // 走 fallback 的下游 (动态选择 / buildNoToolResponse).
+            String msg = skillResult.getMessage();
+            if (!skillResult.isSuccess() && msg != null && msg.contains("未找到")) {
+                log.warn("显式 Skill 路由: Skill 不存在 skillName={}, message={}", skillName, msg);
+                return null;
+            }
+
+            if (skillResult.isSuccess()) {
+                IntentExecuteResponse response = new IntentExecuteResponse();
+                response.setIntentRecognized(true);
+                response.setIntentCode(intent.getIntentCode());
+                response.setIntentName(intent.getIntentName());
+                response.setIntentCategory(intent.getIntentCategory());
+                response.setStatus("SUCCESS");
+                String skillFormattedText = formatSkillResult(skillResult);
+                String skillMessage = skillResult.getMessage();
+                if (skillMessage == null || skillMessage.isEmpty()
+                        || skillMessage.startsWith("DAG execution")) {
+                    skillMessage = skillFormattedText;
+                }
+                if (skillMessage == null || skillMessage.isEmpty()) {
+                    skillMessage = "Skill 执行成功: " + skillResult.getSkillName();
+                }
+                response.setMessage(skillMessage);
+                response.setResultData(skillResult.getData());
+                response.setFormattedText(skillFormattedText);
+                response.setExecutedAt(LocalDateTime.now());
+                return response;
+            }
+
+            log.warn("显式 Skill 路由: 执行失败 skill={}, message={}",
+                    skillResult.getSkillName(), skillResult.getMessage());
+            return null;
+        } catch (Exception e) {
+            log.warn("显式 Skill 路由异常 intentCode={}: {}", intent.getIntentCode(), e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * 把 intent_code (UPPER_SNAKE_CASE) 转 skill name (lower-kebab-case).
+     *
+     * <p>e.g. {@code DAILY_CUSTOMER_FOLLOWUP} → {@code daily-customer-followup}
+     *
+     * <p>Convention established by Sprint 8 P1/P2/P3 — registered skill names in
+     * {@link com.cretas.aims.service.skill.impl.SkillRegistryImpl#initializeDefaultSkills()}
+     * follow this naming.
+     */
+    static String intentCodeToSkillName(String intentCode) {
+        if (intentCode == null || intentCode.isEmpty()) {
+            return "";
+        }
+        return intentCode.toLowerCase().replace('_', '-');
+    }
+
+    /**
      * 检查 SkillRouter 是否可用且已启用
      */
     public boolean isSkillsEnabled() {

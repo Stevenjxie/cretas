@@ -147,6 +147,18 @@ public interface QualityInspectionRepository extends JpaRepository<QualityInspec
      */
     List<QualityInspection> findByFactoryIdAndProductionBatchId(String factoryId, Long productionBatchId);
 
+    // ========== Sprint 9 P1.1 Fix 2: MaterialBatch 直查路径 ==========
+
+    /**
+     * Sprint 9 P1.1: 根据工厂ID和 MaterialBatch ID (UUID String) 查所有质检记录.
+     * 用于 QualityCheckSummaryTool 按 batch_number → MaterialBatch.id 直查路径.
+     *
+     * @param factoryId 工厂ID
+     * @param materialBatchId MaterialBatch.id (UUID String)
+     * @return 关联此 MaterialBatch 的质检记录列表
+     */
+    List<QualityInspection> findByFactoryIdAndMaterialBatchId(String factoryId, String materialBatchId);
+
     // ========== 统计查询方法 ==========
 
     /**

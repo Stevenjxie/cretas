@@ -7,6 +7,8 @@ import com.cretas.aims.entity.foodsafety.RecallEvent;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.foodsafety.RecallActionRepository;
 import com.cretas.aims.repository.foodsafety.RecallEventRepository;
+import com.cretas.aims.service.OssService;
+import com.cretas.aims.service.foodsafety.RegulatoryReportPdfService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
@@ -50,6 +52,12 @@ public class RegulatoryReportGenerateTool extends AbstractBusinessTool {
 
     @Autowired
     private RecallActionRepository recallActionRepository;
+
+    @Autowired
+    private RegulatoryReportPdfService regulatoryReportPdfService;
+
+    @Autowired
+    private OssService ossService;
 
     @Override
     public String getToolName() {
@@ -156,6 +164,35 @@ public class RegulatoryReportGenerateTool extends AbstractBusinessTool {
         md.append("---\n");
         md.append("*本报告由 Cretas 食品溯源系统自动生成.*\n");
 
+        // Sprint 9 P1.2 Fix 2 — 真 PDF 生成 + OSS 上传 (graceful: OSS 不可达保持 markdown)
+        String pdfUrl = null;
+        String pdfStatus = "GENERATED";
+        Integer pdfBytes = null;
+        try {
+            byte[] pdfBytesArr = regulatoryReportPdfService.generatePdf(event, actions);
+            pdfBytes = pdfBytesArr.length;
+            String filename = event.getEventCode() + ".pdf";
+            try {
+                pdfUrl = ossService.uploadBytes(pdfBytesArr,
+                        "regulatory-reports", factoryId, filename, "application/pdf");
+                pdfStatus = "UPLOADED";
+            } catch (UnsupportedOperationException ossDisabled) {
+                // OSS 未启用 (NoOpOssServiceImpl 抛此异常) — PDF 已生成但不可托管
+                log.warn("OSS 未启用, PDF 已生成 ({} bytes) 但未上传; eventCode={}",
+                        pdfBytesArr.length, event.getEventCode());
+                pdfStatus = "GENERATED_OSS_UNAVAILABLE";
+            } catch (Exception ossErr) {
+                log.error("PDF 已生成但上传 OSS 失败; eventCode={}: {}",
+                        event.getEventCode(), ossErr.getMessage(), ossErr);
+                pdfStatus = "GENERATED_UPLOAD_FAILED";
+            }
+        } catch (Exception pdfErr) {
+            // PDF 生成失败也不阻断 — markdown 已可用 (caller 可降级显示)
+            log.error("PDF 生成失败 eventCode={}, 继续保留 markdown 报告: {}",
+                    event.getEventCode(), pdfErr.getMessage(), pdfErr);
+            pdfStatus = "FAILED";
+        }
+
         // 记 RecallAction
         RecallAction reportAction = RecallAction.builder()
                 .recallEventId(recallEventId)
@@ -165,8 +202,11 @@ public class RegulatoryReportGenerateTool extends AbstractBusinessTool {
                 .status("COMPLETED")
                 .executedAt(LocalDateTime.now())
                 .executionNotes(String.format(
-                        "监管上报文件生成: report length=%d chars, by user=%d",
-                        md.length(), userId))
+                        "监管上报文件生成: report=%d chars, pdf=%s (status=%s), by user=%d",
+                        md.length(),
+                        pdfBytes != null ? pdfBytes + " bytes" : "-",
+                        pdfStatus,
+                        userId))
                 .build();
         recallActionRepository.save(reportAction);
 
@@ -181,16 +221,20 @@ public class RegulatoryReportGenerateTool extends AbstractBusinessTool {
         data.put("eventCode", event.getEventCode());
         data.put("reportMarkdown", md.toString());
         data.put("reportLength", md.length());
-        // Phase B — markdown only. Phase C: 接 PrintService 生成 PDF + R2/OSS 上传
-        data.put("pdfUrl", null);
-        data.put("pdfStatus", "PENDING_PHASE_C");
+        data.put("pdfUrl", pdfUrl);
+        data.put("pdfStatus", pdfStatus);
+        data.put("pdfBytes", pdfBytes);
         data.put("recallActionId", reportAction.getId());
         data.put("actionHint", "/quality/recall/" + recallEventId + "?tab=report");
 
+        String pdfMsg = pdfUrl != null
+                ? String.format("PDF 已生成 (%d bytes) → %s", pdfBytes, pdfUrl)
+                : ("UPLOADED".equals(pdfStatus)
+                        ? "PDF 已上传"
+                        : "PDF 状态: " + pdfStatus);
         String message = String.format(
-                "📄 已生成召回上报文件 → %s (%d 字符). RecallEvent #%d 状态 → REPORTED. " +
-                "PDF 生成 Phase C 接入",
-                event.getEventCode(), md.length(), recallEventId);
+                "📄 已生成召回上报文件 → %s (%d 字符). RecallEvent #%d 状态 → REPORTED. %s",
+                event.getEventCode(), md.length(), recallEventId, pdfMsg);
         return buildSimpleResult(message, data);
     }
 }

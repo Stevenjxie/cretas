@@ -57,6 +57,14 @@ public class NoOpOssServiceImpl implements OssService {
     }
 
     @Override
+    public String uploadBytes(byte[] bytes, String category, String factoryId,
+            String filename, String contentType) {
+        log.warn("OSS 未启用，无法上传字节流: category={}, filename={}, size={}",
+                category, filename, bytes != null ? bytes.length : 0);
+        throw new UnsupportedOperationException("OSS 服务未启用");
+    }
+
+    @Override
     public boolean deleteFile(String ossUrl) {
         log.warn("OSS 未启用，无法删除文件: {}", ossUrl);
         return false;
