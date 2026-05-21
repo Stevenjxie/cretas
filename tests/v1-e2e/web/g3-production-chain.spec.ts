@@ -76,7 +76,14 @@ test.describe('G3 生产 6 步 @pr-gate', () => {
 
     // Open create dialog
     await salesPage.click('button:has-text("新建")');
-    const createDialog = salesPage.locator('.el-dialog:visible');
+    // U-NEW-1 (commit 7f4e7a22b, 2026-05-16): 新建 button opens CreateModeSelector
+    // first. Pick "普通新建" to dispatch to existing full-form dialog.
+    const modeSelector = salesPage.locator('.el-dialog:visible:has-text("选择录入方式")');
+    await expect(modeSelector).toBeVisible({ timeout: 10_000 });
+    await modeSelector.locator('.create-mode-card:has-text("普通新建")').click();
+    const createDialog = salesPage.locator(
+      '.el-dialog:visible:not(:has-text("选择录入方式"))'
+    );
     await expect(createDialog).toBeVisible({ timeout: 10_000 });
 
     // Select customer

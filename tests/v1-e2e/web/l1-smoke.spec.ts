@@ -23,12 +23,15 @@ const MAIN_MENUS: Array<{
   { name: '首页',    firstChildPath: '/dashboard',              urlContains: /\/dashboard/,    isLeaf: true },
   { name: '销售管理', firstChildPath: '/sales/orders',           urlContains: /\/sales/ },
   { name: '采购管理', firstChildPath: '/procurement/orders',     urlContains: /\/procurement/ },
+  // UX P2-5 (commit c07680547, 2026-04-24): 研发管理 (1-item group) merged into 生产管理
+  // as 研发样品 sub-item. /rd/samples still routable but no longer a top-level sidebar entry.
   { name: '生产管理', firstChildPath: '/production/batches',     urlContains: /\/production/ },
   { name: '仓储管理', firstChildPath: '/warehouse/materials',    urlContains: /\/warehouse/ },
-  { name: '研发管理', firstChildPath: '/rd/samples',             urlContains: /\/rd/ },
   { name: '质量管理', firstChildPath: '/quality/inspections',    urlContains: /\/quality/ },
   { name: '财务管理', firstChildPath: '/finance/costs',          urlContains: /\/finance/ },
-  { name: '数据分析', firstChildPath: '/analytics/overview',     urlContains: /\/analytics/ },
+  // UX Round 4 (commit c07680547, 2026-04-24): "数据分析" → "经营报表" (固定报表 vs
+  // 智能分析的 AI 探索) disambiguation. /analytics/* URLs unchanged.
+  { name: '经营报表', firstChildPath: '/analytics/overview',     urlContains: /\/analytics/ },
   { name: '系统管理', firstChildPath: '/system/users',           urlContains: /\/system/ },
 ];
 
