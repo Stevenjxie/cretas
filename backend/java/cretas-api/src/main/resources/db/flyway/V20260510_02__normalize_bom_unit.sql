@@ -61,7 +61,7 @@ END $$;
 -- Permanent rollback safety net per A4 marching order. The column is retained
 -- post-migration (NOT dropped) so per-row reverts stay possible if customer
 -- triage flags '套' or other values as miscategorized.
-ALTER TABLE bom_items ADD COLUMN unit_pre_migration VARCHAR(50);
+ALTER TABLE bom_items ADD COLUMN IF NOT EXISTS unit_pre_migration VARCHAR(50);
 
 UPDATE bom_items SET unit_pre_migration = unit;
 

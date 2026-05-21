@@ -35,7 +35,7 @@ BEGIN
 END $$;
 
 -- Step 1: Add column nullable
-ALTER TABLE material_batches ADD COLUMN warehouse_id VARCHAR(64);
+ALTER TABLE material_batches ADD COLUMN IF NOT EXISTS warehouse_id VARCHAR(64);
 
 -- Step 2: Backfill — 所有现有 batch 默认归 WH-LOG (物流仓)
 UPDATE material_batches mb

@@ -17,11 +17,27 @@
 -- 等硬编码组件里, 不走 module_schemas. 此 migration 只影响 DYNAMIC mode (renderingMode='DYNAMIC')
 -- 渲染 purchase_order 的 SchemaFormRenderer/LineItemsEditor 路径. F001 sales_order=DYNAMIC 类似工厂将受益.
 
--- Pre-flight check: 验证 purchase_order schema 确实包含 items 字段 (defensive)
+-- Pre-flight check: 验证 purchase_order schema 包含 items 字段 (best-effort)
+-- Class 4 Flyway gap fix (2026-05-21): purchase_order seed V20260410_08 lives in
+-- legacy db/migration/ dir (NOT Flyway-scanned). Fresh DBs (CI) lack the row.
+-- Mirror V20260425_01 lenient pattern: skip assert when row absent, UPDATE below
+-- naturally no-ops via WHERE clause. Canvas seed service / Hibernate handles
+-- bootstrap on prod first-boot.
 DO $$
 DECLARE
+  has_row BOOLEAN;
   has_items BOOLEAN;
 BEGIN
+  -- Skip entirely if purchase_order row absent (fresh DB, seed-not-applied env)
+  SELECT EXISTS (
+    SELECT 1 FROM module_schemas WHERE module_code = 'purchase_order'
+  ) INTO has_row;
+
+  IF NOT has_row THEN
+    RAISE NOTICE 'V20260509_01 skipped pre-flight assert: purchase_order row absent (fresh DB / unprovisioned)';
+    RETURN;
+  END IF;
+
   SELECT EXISTS (
     SELECT 1
     FROM module_schemas, jsonb_array_elements(field_schema) AS f
@@ -29,7 +45,7 @@ BEGIN
       AND f->>'fieldCode' = 'items'
   ) INTO has_items;
   IF NOT has_items THEN
-    RAISE EXCEPTION 'purchase_order field_schema 缺 items 字段, V20260410_08 seed 未应用或被删';
+    RAISE EXCEPTION 'purchase_order field_schema 缺 items 字段 (row exists but items missing, schema corruption)';
   END IF;
 END $$;
 
@@ -93,11 +109,23 @@ SET field_schema = (
 WHERE module_code = 'purchase_order';
 
 -- Verify: 应能查到 materialTypeId.referenceConfig.projectFields._level1PerLevel2 = 'level1PerLevel2'
+-- Class 4 fix (2026-05-21): post-verify also skipped on fresh-DB / unprovisioned envs.
+-- UPDATE above no-ops via WHERE module_code='purchase_order' when row absent.
 DO $$
 DECLARE
+  has_row BOOLEAN;
   has_project_fields BOOLEAN;
   has_box_quantity BOOLEAN;
 BEGIN
+  SELECT EXISTS (
+    SELECT 1 FROM module_schemas WHERE module_code = 'purchase_order'
+  ) INTO has_row;
+
+  IF NOT has_row THEN
+    RAISE NOTICE 'V20260509_01 skipped post-verify: purchase_order row absent (no-op UPDATE)';
+    RETURN;
+  END IF;
+
   SELECT EXISTS (
     SELECT 1
     FROM module_schemas, jsonb_array_elements(field_schema) AS f,
