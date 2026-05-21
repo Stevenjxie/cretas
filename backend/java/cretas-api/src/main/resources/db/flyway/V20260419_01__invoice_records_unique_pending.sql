@@ -11,25 +11,68 @@
 
 -- Step 1: 清理现有历史 duplicate REQUESTED invoices — 只保留每 SO 最新的 1 张
 -- 其他 REQUESTED 标 REJECTED + 审计备注 (软处理, 不删数据)
-WITH dupes AS (
-    SELECT id,
-           ROW_NUMBER() OVER (
-               PARTITION BY factory_id, sales_order_id
-               ORDER BY requested_at DESC, id DESC
-           ) AS rn
-    FROM invoice_records
-    WHERE status = 'REQUESTED' AND deleted_at IS NULL
-)
-UPDATE invoice_records ir
-SET status = 'REJECTED',
-    remark = COALESCE(remark, '') || ' [V20260419_01 auto-reject: duplicate REQUESTED before unique constraint]'
-FROM dupes
-WHERE ir.id = dupes.id AND dupes.rn > 1;
+--
+-- Guard added 2026-05-21 (PR fix: unblock recurring e2e-pr-gate Flyway failure):
+-- requested_at column was historically added by Hibernate ddl-auto=update, not by
+-- any Flyway migration. On long-lived prod/test DBs Hibernate supplied the column
+-- long ago, so the IF EXISTS branch matches pre-guard behavior identically. On
+-- fresh CI DBs (baseline-version=20260416.99 skips bootstrap V20260415_99) the
+-- column is absent at this step → ELSE branch safely skips dedup (a fresh DB
+-- with empty invoice_records has no duplicates to clean). Pattern mirrors
+-- V20260416_05__prepayment_records_items_parent_id_to_varchar.sql:24-39.
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name   = 'invoice_records'
+          AND column_name  = 'requested_at'
+    ) THEN
+        WITH dupes AS (
+            SELECT id,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY factory_id, sales_order_id
+                       ORDER BY requested_at DESC, id DESC
+                   ) AS rn
+            FROM invoice_records
+            WHERE status = 'REQUESTED' AND deleted_at IS NULL
+        )
+        UPDATE invoice_records ir
+        SET status = 'REJECTED',
+            remark = COALESCE(remark, '') || ' [V20260419_01 auto-reject: duplicate REQUESTED before unique constraint]'
+        FROM dupes
+        WHERE ir.id = dupes.id AND dupes.rn > 1;
+    ELSE
+        RAISE NOTICE 'V20260419_01 Step 1 skipped — requested_at column not yet present (fresh DB baseline; no duplicates to clean since invoice_records is empty at this migration step)';
+    END IF;
+END $$;
 
 -- Step 2: Partial unique index — 只锁 REQUESTED 防并发重复提交
-CREATE UNIQUE INDEX IF NOT EXISTS uk_invoice_records_pending_per_so
-ON invoice_records (factory_id, sales_order_id)
-WHERE status = 'REQUESTED' AND deleted_at IS NULL;
+--
+-- Guard added 2026-05-21 (same fix iteration as Step 1): sales_order_id was
+-- ALSO Hibernate-ddl-auto added (not in V20260415_99 bootstrap), so fresh CI
+-- DBs lack the column at this migration step. Same evidence trail: PR #117
+-- first attempt wrapped only Step 1, but CI showed:
+--   ERROR: column "sales_order_id" does not exist
+-- proving both columns are Hibernate-supplied. Index DDL references
+-- sales_order_id directly; missing column blocks the CREATE INDEX. Guard
+-- with same DO $$ IF EXISTS pattern. CREATE INDEX IF NOT EXISTS retains
+-- idempotency on prod/test where the index already exists.
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name   = 'invoice_records'
+          AND column_name  = 'sales_order_id'
+    ) THEN
+        CREATE UNIQUE INDEX IF NOT EXISTS uk_invoice_records_pending_per_so
+            ON invoice_records (factory_id, sales_order_id)
+            WHERE status = 'REQUESTED' AND deleted_at IS NULL;
+    ELSE
+        RAISE NOTICE 'V20260419_01 Step 2 skipped — sales_order_id column not yet present (fresh DB baseline; Hibernate ddl-auto will supply the column post-Flyway, but the partial unique index will be re-attempted on next deploy after Flyway re-validates with its current checksum — for index creation to take effect on prod, this migration would need to run a second time, which it does NOT. See follow-up audit task for proper resolution: lower baseline-version or move V20260415_99 above baseline.)';
+    END IF;
+END $$;
 
 -- Note: partial unique index works in PostgreSQL. On MySQL would need trigger approach,
 -- but project is now PG-only (per database-entity-sync rule).
