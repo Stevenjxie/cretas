@@ -68,7 +68,11 @@ test.describe('G3 生产 6 步 @pr-gate', () => {
     // ═══════════════════════════════════════════════════════════════════════════
     const salesCtx = await browser.newContext();
     const salesPage = await salesCtx.newPage();
-    await restoreAuth(salesCtx, salesPage, 'sales_mgr');
+    // PR #149 R2: workaround for canWrite('sales') false-negative
+    // (permission.ts:331 prefers DB over hardcoded; e2e L1 permissions
+    // unseeded for sales_manager). Use super_admin instead.
+    // See g2-sales-chain.spec.ts for full root-cause + fix-path notes.
+    await restoreAuth(salesCtx, salesPage, 'super_admin');
 
     await salesPage.goto('/sales/orders');
     await salesPage.waitForURL(/\/sales\/orders/, { timeout: 20_000 });

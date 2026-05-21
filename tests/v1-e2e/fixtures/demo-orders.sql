@@ -197,7 +197,14 @@ VALUES (
     -- whitelist tightened to {FINANCE_APPROVED, PROCESSING, PARTIAL_DELIVERED,
     -- COMPLETED}. CONFIRMED was removed. G1 invoice test creates an invoice
     -- against DEMO_SO_G1, so seed status must satisfy the new whitelist.
-    'FINANCE_APPROVED',
+    --
+    -- v2 (PR #149 R2): UI button "税率分组开票" (list.vue:1322) is shown only
+    -- for status in {CONFIRMED, PROCESSING, SHIPPED, COMPLETED}. FINANCE_APPROVED
+    -- is in backend whitelist but NOT in UI button visibility, so the test
+    -- couldn't find the button to click. Intersection of both lists is
+    -- {PROCESSING, COMPLETED}. PROCESSING reflects the most realistic "actively
+    -- in fulfillment" state where invoice generation is expected.
+    'PROCESSING',
     (SELECT id FROM users WHERE username = 'e2e_super_admin' AND factory_id = 'F_E2E_TEST'),
     0.00,
     NOW() - INTERVAL '1 day',

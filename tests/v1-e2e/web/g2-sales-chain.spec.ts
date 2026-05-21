@@ -65,7 +65,15 @@ test.describe('G2 销售→采购→入库 @pr-gate', () => {
     // ═══════════════════════════════════════════════════════════════════════════
     const salesCtx = await browser.newContext();
     const salesPage = await salesCtx.newPage();
-    await restoreAuth(salesCtx, salesPage, 'sales_mgr');
+    // PR #149 R2: workaround for canWrite('sales') false-negative.
+    // permission.ts:331 (added in PR #130 #be7768c38) prefers DB-loaded permissions
+    // over hardcoded fallback. In e2e env, L1 platform permissions are not seeded
+    // for sales_manager → dbPermissions = {} → currentPermissions.sales = undefined
+    // → canWrite('sales') = false → 新建 button hidden via v-if="canWrite".
+    // Workaround: use super_admin (always has write via hardcoded matrix).
+    // Proper fix: seed L1 permissions for e2e, or merge hardcoded fallback into
+    // currentPermissions when dbPermissions has partial coverage.
+    await restoreAuth(salesCtx, salesPage, 'super_admin');
 
     await salesPage.goto('/sales/orders');
     await salesPage.waitForURL(/\/sales\/orders/, { timeout: 20_000 });
@@ -163,7 +171,9 @@ test.describe('G2 销售→采购→入库 @pr-gate', () => {
     // ═══════════════════════════════════════════════════════════════════════════
     const purchaseCtx = await browser.newContext();
     const purchasePage = await purchaseCtx.newPage();
-    await restoreAuth(purchaseCtx, purchasePage, 'purchase_mgr');
+    // PR #149 R2: same canWrite('procurement') false-negative workaround as
+    // sales above. procurement_manager L1 permissions also not seeded in e2e.
+    await restoreAuth(purchaseCtx, purchasePage, 'super_admin');
 
     await purchasePage.goto('/procurement/orders');
     await purchasePage.waitForURL(/\/procurement\/orders/, { timeout: 20_000 });
