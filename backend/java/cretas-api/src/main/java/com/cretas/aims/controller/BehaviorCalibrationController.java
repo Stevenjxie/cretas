@@ -10,6 +10,7 @@ import com.cretas.aims.entity.calibration.ToolReliabilityStats;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.calibration.ToolCallRecordRepository;
 import com.cretas.aims.service.calibration.BehaviorCalibrationService;
+import com.cretas.aims.service.intent.impl.IntentMetricsDumpService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -60,6 +61,7 @@ public class BehaviorCalibrationController {
 
     private final BehaviorCalibrationService behaviorCalibrationService;
     private final ToolCallRecordRepository toolCallRecordRepository;
+    private final IntentMetricsDumpService intentMetricsDumpService;
 
     // ==================== 仪表盘 API ====================
 
@@ -427,6 +429,51 @@ public class BehaviorCalibrationController {
         } catch (Exception e) {
             log.error("获取平均综合得分失败: {}", e.getMessage(), e);
             throw new BusinessException(500, "获取平均综合得分失败: " + ErrorSanitizer.sanitize(e), e);
+        }
+    }
+
+    // ==================== Intent Architecture Metrics API (Phase 0) ====================
+
+    /**
+     * 获取意图识别各层命中统计 (Phase 0 instrumentation)
+     *
+     * <p>返回 {@code intent.match.stage.hit} Micrometer 计数器在当前 JVM 进程内的累计值,
+     * 按 stage (EXACT / PHRASE_MATCH / SEMANTIC / LLM / NONE 等) 分组。用于驱动 Sprint N+2
+     * 之后的意图架构简化决策 — 数据足够前不做架构动作。
+     *
+     * <p>注意: stage hit 计数是 <b>JVM 启动后累计值</b>, 不是区间增量。重启清零, 用
+     * {@code jvmStartedAt} 字段判定 series reset。持久化由 {@link IntentMetricsDumpService}
+     * 按配置间隔写 JSONL 备份 (默认 5 分钟, 受 {@code cretas.intent.metrics-dump.*} 控制),
+     * 默认路径含 {@code ${server.port}} 后缀避免 Blue/Green deploy 写冲突。
+     *
+     * <p>响应示例:
+     * <pre>
+     * {
+     *   "success": true,
+     *   "data": {
+     *     "timestamp": "2026-05-20T18:45:00-04:00",
+     *     "jvmStartedAt": "2026-05-20T16:30:15-04:00",
+     *     "stageHits": {"PHRASE_MATCH": 1203, "SEMANTIC": 4821, "LLM": 312, "NONE": 42},
+     *     "total": 6378
+     *   }
+     * }
+     * </pre>
+     *
+     * <p>详细架构决策见 {@code docs/superpowers/specs/2026-05-20-intent-architecture-3-layer-redesign.md}。
+     */
+    @GetMapping("/metrics/intent-layers")
+    @Operation(summary = "获取意图识别各层命中统计",
+               description = "Phase 0 instrumentation - 返回 intent.match.stage.hit 计数器快照,驱动后续架构简化决策(仅平台管理员)")
+    @RequireRole({"platform_admin", "super_admin", "developer"})
+    public ApiResponse<Map<String, Object>> getIntentLayerMetrics() {
+        log.info("API调用: 获取意图识别各层命中统计");
+        try {
+            return ApiResponse.success(intentMetricsDumpService.snapshot());
+        } catch (BusinessException be) {
+            throw be;
+        } catch (Exception e) {
+            log.error("获取意图层命中统计失败: {}", e.getMessage(), e);
+            throw new BusinessException(500, "获取意图层命中统计失败: " + ErrorSanitizer.sanitize(e), e);
         }
     }
 
