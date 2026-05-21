@@ -77,6 +77,10 @@ test.describe('G3 生产 6 步 @pr-gate', () => {
     await salesPage.goto('/sales/orders');
     await salesPage.waitForURL(/\/sales\/orders/, { timeout: 20_000 });
     await salesPage.waitForSelector('.el-table', { timeout: 15_000 });
+    // PR #149 R4: hide release-note toast (U-FEED-1, intercepts header clicks)
+    await salesPage.addStyleTag({
+      content: '.release-note-stack { display: none !important; }'
+    }).catch(() => {});
     await salesPage.waitForLoadState('networkidle', { timeout: 30_000 }).catch(() => {});
 
     // Open create dialog — scoped locator (PR #149 R3 fix)

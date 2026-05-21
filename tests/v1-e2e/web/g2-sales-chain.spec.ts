@@ -78,6 +78,13 @@ test.describe('G2 销售→采购→入库 @pr-gate', () => {
     await salesPage.goto('/sales/orders');
     await salesPage.waitForURL(/\/sales\/orders/, { timeout: 20_000 });
     await salesPage.waitForSelector('.el-table', { timeout: 15_000 });
+    // PR #149 R4: hide release-note toast (U-FEED-1 component, mounted in AppLayout.vue).
+    // The toast appears with `<div class="release-note-stack">` overlay-style and
+    // intercepts pointer events on header buttons. Hide via CSS — it's display:none
+    // so it can't receive events. Test intent is workflow, not release-note rendering.
+    await salesPage.addStyleTag({
+      content: '.release-note-stack { display: none !important; }'
+    }).catch(() => {});
     // PR #149 R3: wait for page to settle before clicking — Sprint 9 WorkflowBar /
     // ConceptDisambiguationAlert / Canvas-dynamic init may briefly cover the button.
     await salesPage.waitForLoadState('networkidle', { timeout: 30_000 }).catch(() => {});
@@ -186,6 +193,9 @@ test.describe('G2 销售→采购→入库 @pr-gate', () => {
     await purchasePage.goto('/procurement/orders');
     await purchasePage.waitForURL(/\/procurement\/orders/, { timeout: 20_000 });
     await purchasePage.waitForSelector('.el-table', { timeout: 15_000 });
+    await purchasePage.addStyleTag({
+      content: '.release-note-stack { display: none !important; }'
+    }).catch(() => {});
     await purchasePage.waitForLoadState('networkidle', { timeout: 30_000 }).catch(() => {});
 
     // Open create PO dialog — scoped locator (PR #149 R3 fix)

@@ -250,7 +250,16 @@ test.describe('G1 税率分组开票 @pr-gate', () => {
       expect(body.success).toBe(true);
     }
 
-    // Close
+    // PR #149 R4: dismiss ElMessageBox that backend triggers on 409 idempotency
+    // (axios interceptor → ElMessageBox.alert("开票申请已存在")). The box's
+    // overlay intercepts subsequent pointer events on the outer dialog's
+    // 关闭/取消 button. Click 确定 to close MessageBox before outer dialog.
+    const messageBoxBtn = page.locator('.el-message-box__btns button.el-button--primary');
+    if (await messageBoxBtn.count() > 0) {
+      await messageBoxBtn.first().click({ timeout: 5_000 }).catch(() => {});
+    }
+
+    // Close outer dialog
     await dialog.locator('button:has-text("关闭"), button:has-text("取消")').first().click();
   });
 });
