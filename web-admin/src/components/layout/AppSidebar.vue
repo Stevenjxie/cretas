@@ -88,6 +88,9 @@ const menuConfig: MenuItem[] = [
   // 🏪 Sprint 8 P1 (2026-05-20) — 销售老板 Workdesk V1 (F006 真场景 demo).
   // module 借 'sales' 走现有权限 (workdesk 不是 ModuleName).
   { path: '/workdesk/sales-owner', title: '🏪 销售老板工作台', icon: 'Sell', module: 'sales' },
+  // 💼 Sprint 8 P2 (2026-05-20) — 财务主管 Workdesk (monthly close + 三表 + 应收账龄).
+  // module 借 'finance' 走现有权限 (workdesk 不是 ModuleName).
+  { path: '/workdesk/finance-manager', title: '💼 财务主管工作台', icon: 'Money', module: 'finance' },
   {
     // P1-5: restaurants 默认不见 "生产管理" (BOM/批次是 manufacturing 语言,
     // 餐饮用配方/备餐在 /restaurant/recipes)

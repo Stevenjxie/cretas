@@ -82,6 +82,19 @@ const businessRoutes: RouteRecordRaw[] = [
           module: 'sales'
         }
       },
+      // Sprint 8 P2 — 财务主管工作台 (FinanceManagerWorkdesk)
+      // monthly-financial-close Skill 串 8 Tool 输出经营摘要 + 三表跳转 + 应收账龄警告
+      {
+        path: 'workdesk/finance-manager',
+        name: 'FinanceManagerWorkdesk',
+        component: () => import('@/views/workdesk/FinanceManagerWorkdesk.vue'),
+        meta: {
+          requiresAuth: true,
+          title: '财务主管工作台',
+          icon: 'Money',
+          module: 'finance'
+        }
+      },
 
       // 生产管理
       {
