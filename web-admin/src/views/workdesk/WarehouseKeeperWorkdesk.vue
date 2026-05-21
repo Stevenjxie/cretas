@@ -321,13 +321,24 @@
             (至 {{ scanTaskDialog.task.expiresAt }})</p>
         </template>
         <template #extra>
-          <div class="qr-payload-box">
-            <el-text size="small" type="info">QR Payload (PDA 扫描此 URL):</el-text>
-            <pre class="qr-payload-text">{{ scanTaskDialog.task.qrPayload }}</pre>
+          <div class="qr-display-box">
+            <QrCodeDisplay
+              :value="scanTaskDialog.task.qrPayload"
+              :size="220"
+              :show-label="false"
+              error-correction-level="M" />
+            <el-text size="small" type="info" class="qr-payload-hint">
+              用 PDA 摄像头 / 手机微信扫一扫扫描上方二维码
+            </el-text>
+            <details class="qr-payload-details">
+              <summary>
+                <el-text size="small" type="info">展开原始 URL (备用)</el-text>
+              </summary>
+              <pre class="qr-payload-text">{{ scanTaskDialog.task.qrPayload }}</pre>
+            </details>
           </div>
           <el-text size="small">
-            <strong>下一步</strong>: 用 PDA / 手机扫码 app 扫描上面的 URL,
-            任务会自动加载. 扫码完成后一键提交即转入入库流程.
+            <strong>下一步</strong>: 扫码后任务会自动加载. 扫码完成后一键提交即转入入库流程.
           </el-text>
         </template>
       </el-result>
@@ -341,6 +352,7 @@ import { ElMessage } from 'element-plus';
 import { Refresh, Loading } from '@element-plus/icons-vue';
 import request from '@/api/request';
 import { useAuthStore } from '@/store/modules/auth';
+import QrCodeDisplay from '@/components/common/QrCodeDisplay.vue';
 
 interface ReceivingRow {
   poId: string;
@@ -815,12 +827,31 @@ onMounted(() => {
   font-size: 12px;
 }
 
-.qr-payload-box {
+.qr-display-box {
   margin: 12px 0;
-  padding: 12px;
+  padding: 16px;
   background: #f5f7fa;
   border-radius: 4px;
-  text-align: left;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+
+.qr-payload-hint {
+  margin-top: 4px;
+  text-align: center;
+}
+
+.qr-payload-details {
+  width: 100%;
+  margin-top: 4px;
+}
+
+.qr-payload-details summary {
+  cursor: pointer;
+  padding: 4px 0;
+  user-select: none;
 }
 
 .qr-payload-text {
