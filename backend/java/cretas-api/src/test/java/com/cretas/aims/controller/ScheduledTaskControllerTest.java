@@ -14,6 +14,8 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.context.ApplicationContext;
 
+import java.util.HashMap;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -181,8 +183,12 @@ class ScheduledTaskControllerTest {
     @DisplayName("Rule 16: update applies same AUD-5 taskCode validation as create")
     void testUpdateAppliesTaskCodeValidation() {
         UUID taskId = UUID.randomUUID();
-        ScheduledTask patch = new ScheduledTask();
-        patch.setTaskCode("X".repeat(200));   // way over 100
+        // PR #149 R7: controller.update body signature changed from ScheduledTask
+        // to Map<String,Object> in commit 4a5fc46f6 (matrix 2026-05-21 P1 Bug #2
+        // PATCH semantics fix). Replace direct entity arg with raw Map mirroring
+        // the JSON body the controller's buildPatchFromBody() expects.
+        Map<String, Object> patch = new HashMap<>();
+        patch.put("taskCode", "X".repeat(200));   // way over 100
 
         BusinessException ex = assertThrows(BusinessException.class,
                 () -> controller.update(taskId, patch),
@@ -198,8 +204,8 @@ class ScheduledTaskControllerTest {
     @DisplayName("Rule 16: update applies same AUD-5 taskName validation as create")
     void testUpdateAppliesTaskNameValidation() {
         UUID taskId = UUID.randomUUID();
-        ScheduledTask patch = new ScheduledTask();
-        patch.setTaskName("名".repeat(300));   // way over 255
+        Map<String, Object> patch = new HashMap<>();
+        patch.put("taskName", "名".repeat(300));   // way over 255
 
         BusinessException ex = assertThrows(BusinessException.class,
                 () -> controller.update(taskId, patch));
@@ -214,9 +220,10 @@ class ScheduledTaskControllerTest {
         // Partial-update semantics: caller may PATCH only one field. Null fields
         // mean "don't change this", so they must NOT trigger length validation.
         UUID taskId = UUID.randomUUID();
-        ScheduledTask patch = new ScheduledTask();
-        // All length-checked fields left null — only `enabled` set, hypothetically.
-        patch.setEnabled(false);
+        Map<String, Object> patch = new HashMap<>();
+        // All length-checked fields absent from body — only `enabled` present.
+        // Map-based body lets buildPatchFromBody distinguish absent vs null-valued field.
+        patch.put("enabled", false);
 
         when(dynamicSchedulerService.updateTask(eq(taskId), any(ScheduledTask.class)))
                 .thenAnswer(inv -> inv.getArgument(1));
@@ -244,9 +251,9 @@ class ScheduledTaskControllerTest {
         existing.setVersion(1L);   // DB has been updated by Admin A
         when(taskRepository.findById(taskId)).thenReturn(Optional.of(existing));
 
-        ScheduledTask patch = new ScheduledTask();
-        patch.setVersion(0L);   // stale client snapshot
-        patch.setTaskName("覆盖尝试");
+        Map<String, Object> patch = new HashMap<>();
+        patch.put("version", 0L);   // stale client snapshot
+        patch.put("taskName", "覆盖尝试");
 
         BusinessException ex = assertThrows(BusinessException.class,
                 () -> controller.update(taskId, patch),
@@ -279,9 +286,9 @@ class ScheduledTaskControllerTest {
         existing.setVersion(1L);
         when(taskRepository.findById(taskId)).thenReturn(Optional.of(existing));
 
-        ScheduledTask patch = new ScheduledTask();
-        patch.setVersion(1L);   // matches DB
-        patch.setTaskName("新名字");
+        Map<String, Object> patch = new HashMap<>();
+        patch.put("version", 1L);   // matches DB
+        patch.put("taskName", "新名字");
 
         when(dynamicSchedulerService.updateTask(eq(taskId), any(ScheduledTask.class)))
                 .thenAnswer(inv -> {
@@ -307,9 +314,9 @@ class ScheduledTaskControllerTest {
         // forcing a version round-trip. The repo lookup is also skipped (lazy) since
         // we have nothing to compare against.
         UUID taskId = UUID.randomUUID();
-        ScheduledTask patch = new ScheduledTask();
-        // intentionally no version
-        patch.setTaskName("leniency-test");
+        Map<String, Object> patch = new HashMap<>();
+        // intentionally no version key
+        patch.put("taskName", "leniency-test");
 
         when(dynamicSchedulerService.updateTask(eq(taskId), any(ScheduledTask.class)))
                 .thenAnswer(inv -> inv.getArgument(1));
