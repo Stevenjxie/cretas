@@ -123,6 +123,21 @@ const businessRoutes: RouteRecordRaw[] = [
           module: 'inventory'
         }
       },
+      // Sprint 8 P4b — 采购员工作台 (PurchaserWorkdesk)
+      // 5 Tool: stock_alert + sales_forecast_7day + supplier_delivery_eta + price_history_query +
+      // requisition_create (WRITE + Preview 灵魂 Tool, R1+R2+R4)
+      // 采购员小赵场景 (F006): "下周采购什么? 系统直接告诉我" — 1 屏 30 秒 vs HJ 4 菜单
+      {
+        path: 'workdesk/purchaser',
+        name: 'PurchaserWorkdesk',
+        component: () => import('@/views/workdesk/PurchaserWorkdesk.vue'),
+        meta: {
+          requiresAuth: true,
+          title: '采购员工作台',
+          icon: 'ShoppingCart',
+          module: 'inventory'
+        }
+      },
 
       // 生产管理
       {
