@@ -276,6 +276,24 @@ public class SseStreamingService {
                         emitter.complete();
                         return;
                     }
+
+                    // Sprint 9 P0.1 fix (2026-05-21): tool_name=NULL intent (WORKDESK 等)
+                    // 当 trySkillRoute (keyword 匹用户原文) 失败时, 用 intent_code 显式查 Skill.
+                    String streamBoundToolName = intent.getToolName();
+                    if (streamBoundToolName == null || streamBoundToolName.isBlank()) {
+                        IntentExecuteResponse explicitSkillResp = dynamicToolSelectionService
+                                .tryExplicitSkillRouteForIntent(intent, request.getUserInput(), factoryId, userId);
+                        if (explicitSkillResp != null) {
+                            sendSseEvent(emitter, "result", explicitSkillResp);
+                            sendSseEvent(emitter, "complete", Map.of(
+                                    "status", explicitSkillResp.getStatus(),
+                                    "cacheHit", false,
+                                    "totalLatencyMs", System.currentTimeMillis() - startTime
+                            ));
+                            emitter.complete();
+                            return;
+                        }
+                    }
                 } catch (Exception e) {
                     log.warn("[SSE] Skill 路由异常，回退到 Tool: {}", e.getMessage());
                 }
@@ -390,8 +408,18 @@ public class SseStreamingService {
                 response = toolDispatchService.buildNoToolResponse(intent);
             }
         } else {
-            log.warn("[SSE] 无 Tool 绑定: intentCode={}", intent.getIntentCode());
-            response = toolDispatchService.buildNoToolResponse(intent);
+            // Sprint 9 P0.1 fix (2026-05-21): tool_name=NULL — 走 explicit Skill fallback (cover
+            // 7a Skill route 已尝试但仍 fall through 到 executeAndStreamResult 的 corner case).
+            IntentExecuteResponse explicitSkillFallback = dynamicToolSelectionService
+                    .tryExplicitSkillRouteForIntent(intent, request.getUserInput(), factoryId, userId);
+            if (explicitSkillFallback != null) {
+                log.info("[SSE] 显式 Skill 路由 (executeAndStreamResult fallback) 成功: intentCode={}",
+                        intent.getIntentCode());
+                response = explicitSkillFallback;
+            } else {
+                log.warn("[SSE] 无 Tool 绑定 + 无 Skill 匹配: intentCode={}", intent.getIntentCode());
+                response = toolDispatchService.buildNoToolResponse(intent);
+            }
         }
 
         // 格式化结果
