@@ -511,6 +511,45 @@ public class SkillRegistryImpl implements SkillRegistry {
                 .build());
         count++;
 
+        // Sprint 8 P1 — 卤味老板 Workdesk V1 (2026-05-20)
+        // Skill: daily-customer-followup — 销售员每日跟进任务编排.
+        // 串 5 个 Tool 给 LLM aggregate 出 "今日跟进清单" (🔴🟡🟢 三档).
+        registerWithSource(SkillDefinition.builder()
+                .name("daily-customer-followup")
+                .displayName("今日客户跟进")
+                .description("销售员/老板每日客户跟进编排 — 聚合客户优先级 + 近期微信 + missed call + 商机预警 + 收入趋势, 输出 🔴🟡🟢 三档排序清单")
+                .version("1.0.0")
+                .category("SALES")
+                .priority(50)
+                .triggers(java.util.Arrays.asList(
+                        "今天跟谁", "今日跟进", "我的客户跟进", "今天该跟谁",
+                        "跟进列表", "客户跟进清单", "今天打谁电话",
+                        "今日要跟进哪些客户", "我的销售工作台"))
+                .tools(java.util.Arrays.asList(
+                        "customer_priority_query",
+                        "wechat_record_recent_query",
+                        "call_record_followup_pending",
+                        "opportunity_stage_alert",
+                        "customer_revenue_trend"))
+                .contextNeeded(java.util.Arrays.asList("factoryId", "userId"))
+                .promptTemplate(
+                        "你是销售员/老板的工作台助手. 根据以下 5 个 Tool 输出聚合的 '今日跟进清单':\n" +
+                        "- customer_priority_query: 按客户重要性 + 商机阶段排序的客户清单\n" +
+                        "- wechat_record_recent_query: 近 7 天微信跟进记录\n" +
+                        "- call_record_followup_pending: 近 7 天 MISSED 通话待回访\n" +
+                        "- opportunity_stage_alert: 商机超 21 天未推进警告\n" +
+                        "- customer_revenue_trend: 客户收入近 2 月趋势\n\n" +
+                        "输出格式 (markdown):\n" +
+                        "🔴 高优先 (客户 X): 理由 (VIP + 商机停滞 N 天 + missed call) — 建议: ABC\n" +
+                        "🟡 中优先 (客户 Y): 理由 — 建议: XYZ\n" +
+                        "🟢 低优先 (客户 Z): 理由\n\n" +
+                        "末尾加: '今日共 N 个客户值得跟进, 推荐先打 [客户 X] 的电话'.\n" +
+                        "工厂 ID: ${factoryId}. 用户问题: ${userQuery}")
+                .source("default")
+                .enabled(true)
+                .build());
+        count++;
+
         return count;
     }
 

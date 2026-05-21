@@ -70,6 +70,19 @@ const businessRoutes: RouteRecordRaw[] = [
         meta: { requiresAuth: true, title: '自定义看板', icon: 'Grid', module: 'dashboard' }
       },
 
+      // 🏪 我的工作台 (Sprint 8 — AI Workdesk demos)
+      {
+        path: 'workdesk/sales-owner',
+        name: 'SalesOwnerWorkdesk',
+        component: () => import('@/views/workdesk/SalesOwnerWorkdesk.vue'),
+        meta: {
+          requiresAuth: true,
+          title: '销售老板工作台',
+          icon: 'Sell',
+          module: 'sales'
+        }
+      },
+
       // 生产管理
       {
         path: 'production',
