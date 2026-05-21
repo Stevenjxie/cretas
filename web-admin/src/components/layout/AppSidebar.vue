@@ -94,6 +94,9 @@ const menuConfig: MenuItem[] = [
   // 🚨 Sprint 8 P3 (2026-05-20) — 质量主管 Workdesk (食品安全召回闭环 — Boss 演示杀手锏).
   // food-safety-recall Skill 串 8 Tool. module 借 'quality' 走现有权限.
   { path: '/workdesk/quality-manager', title: '🚨 质量主管工作台', icon: 'Warning', module: 'quality' },
+  // 🏭 Sprint 8 P4a (2026-05-20) — 仓管员 Workdesk (R1 max + 一键扫码 + 临期建议).
+  // 客户原话 (F006 张权): "告诉他要收多少就行". module 借 'inventory' 走现有权限.
+  { path: '/workdesk/warehouse-keeper', title: '🏭 仓管员工作台', icon: 'Box', module: 'inventory' },
   {
     // P1-5: restaurants 默认不见 "生产管理" (BOM/批次是 manufacturing 语言,
     // 餐饮用配方/备餐在 /restaurant/recipes)

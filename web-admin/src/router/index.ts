@@ -109,6 +109,20 @@ const businessRoutes: RouteRecordRaw[] = [
           module: 'quality'
         }
       },
+      // Sprint 8 P4a — 仓管员工作台 (WarehouseKeeperWorkdesk)
+      // material_today_receiving_query Tool + R1 max preview + 一键扫码
+      // 客户原话 (F006 张权): "告诉他要收多少就行" — 防呆护城河
+      {
+        path: 'workdesk/warehouse-keeper',
+        name: 'WarehouseKeeperWorkdesk',
+        component: () => import('@/views/workdesk/WarehouseKeeperWorkdesk.vue'),
+        meta: {
+          requiresAuth: true,
+          title: '仓管员工作台',
+          icon: 'Box',
+          module: 'inventory'
+        }
+      },
 
       // 生产管理
       {
