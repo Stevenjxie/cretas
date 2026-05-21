@@ -20,5 +20,4 @@ CREATE INDEX IF NOT EXISTS idx_inspection_material_batch
     WHERE material_batch_id IS NOT NULL;
 
 COMMENT ON COLUMN quality_inspections.material_batch_id IS
-    'Sprint 9 P1.1: optional MaterialBatch.id (UUID String) 关联. Nullable for backwards-compat — '
-    || '历史记录仅 production_batch_id, 新记录可直接关联 MaterialBatch 供按 batch_number 直查';
+    'Sprint 9 P1.1: optional MaterialBatch.id (UUID String) 关联. Nullable for backwards-compat — 历史记录仅 production_batch_id, 新记录可直接关联 MaterialBatch 供按 batch_number 直查';
