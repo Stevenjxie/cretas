@@ -100,6 +100,9 @@ const menuConfig: MenuItem[] = [
   // 🛒 Sprint 8 P4b (2026-05-20) — 采购员 Workdesk (5 品类预警 + 一键请购).
   // 采购员小赵场景 (F006): "下周采购什么? 系统直接告诉我". module 借 'inventory'.
   { path: '/workdesk/purchaser', title: '🛒 采购员工作台', icon: 'ShoppingCart', module: 'inventory' },
+  // 🔬 Sprint 8 P4c (2026-05-20) — 质量主管 Workdesk (4 项综合 audit + 一键放行/退货).
+  // 质量主管李工程师场景 (F006): "这批卤猪蹄能放行吗?". module 借 'quality' 走现有权限.
+  { path: '/workdesk/quality-chief', title: '🔬 质量主管工作台', icon: 'Aim', module: 'quality' },
   {
     // P1-5: restaurants 默认不见 "生产管理" (BOM/批次是 manufacturing 语言,
     // 餐饮用配方/备餐在 /restaurant/recipes)

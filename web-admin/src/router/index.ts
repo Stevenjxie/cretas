@@ -138,6 +138,21 @@ const businessRoutes: RouteRecordRaw[] = [
           module: 'inventory'
         }
       },
+      // Sprint 8 P4c — 质量主管工作台 (QualityChiefWorkdesk)
+      // 5 Tool: quality_check_summary + haccp_status_query + additive_compliance_check_quality
+      // + customer_quality_standard + release_decision (WRITE + Preview 灵魂 Tool)
+      // 质量主管李工程师场景 (F006): "这批卤猪蹄能放行吗?" — 1 页面综合判断 vs HJ 4 菜单
+      {
+        path: 'workdesk/quality-chief',
+        name: 'QualityChiefWorkdesk',
+        component: () => import('@/views/workdesk/QualityChiefWorkdesk.vue'),
+        meta: {
+          requiresAuth: true,
+          title: '质量主管工作台',
+          icon: 'Aim',
+          module: 'quality'
+        }
+      },
 
       // 生产管理
       {
