@@ -151,5 +151,18 @@ export default defineConfig({
       fullyParallel: false,
       workers: 1,
     },
+    // Sprint 10 Loop 2 — 入库/收货 AI 闭环 E2E (2026-05-21).
+    // Self-injects auth via e2e-auth-helper using f006_admin / 123456.
+    // Run via:
+    //   E2E_BASE_URL=http://139.196.165.140:8086 \
+    //   E2E_API_BASE=http://47.100.235.168:10010/api/mobile \
+    //   E2E_USER=f006_admin E2E_PASS=123456 E2E_FACTORY_ID=F006 \
+    //   npx playwright test --project sprint10-loop-2-receive
+    {
+      name: 'sprint10-loop-2-receive',
+      testMatch: 'tests/e2e-closed-loop/loop-2-receive.spec.ts',
+      fullyParallel: false,
+      workers: 1,
+    },
   ],
 });
