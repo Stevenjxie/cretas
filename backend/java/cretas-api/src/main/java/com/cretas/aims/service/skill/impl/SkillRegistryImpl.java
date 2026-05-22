@@ -724,6 +724,42 @@ public class SkillRegistryImpl implements SkillRegistry {
                 .build());
         count++;
 
+        // Sprint 10 Loop 5 — 生产经理 Workdesk (2026-05-21)
+        // Skill: production-demand-analysis — 订单缺产分析 + 推荐起产 编排.
+        // 单 Tool 编排 (production_demand_query): WORKDESK intent 入口 — 把 LLM
+        // 路由到 Tool, 避免 buildNoToolResponse 报 "暂不支持此类型的意图执行: WORKDESK".
+        // intent_code = PRODUCTION_DEMAND_ANALYSIS → kebab = production-demand-analysis.
+        registerWithSource(SkillDefinition.builder()
+                .name("production-demand-analysis")
+                .displayName("订单缺产分析")
+                .description("生产经理 Workdesk 入口 — 分析待产订单 (SO 总量 - 已发已产) > 0 的 productId 列表 + " +
+                             "推荐起产量 + 推荐生产线. 输出可一键起产的产品清单.")
+                .version("1.0.0")
+                .category("PRODUCTION")
+                .priority(50)
+                .triggers(java.util.Arrays.asList(
+                        "订单缺产", "今天要起产什么", "排产建议", "什么订单缺货要做",
+                        "该生产什么", "今天该排产什么", "今日排产", "起产建议",
+                        "缺货生产", "订单缺货要做", "缺货排产"))
+                .tools(java.util.Arrays.asList(
+                        "production_demand_query"))
+                .contextNeeded(java.util.Arrays.asList("factoryId", "userId"))
+                .promptTemplate(
+                        "你是生产经理工作台助手. 根据 production_demand_query 输出 (按净缺量排序的产品清单)" +
+                        "聚合 '今日排产建议':\n\n" +
+                        "**输出格式 (markdown)**:\n" +
+                        "🔴 高优先 (缺 ≥100): productName — 缺 X kg, 推荐起产 X kg, 推荐产线 ABC\n" +
+                        "🟡 中优先 (缺 20-99): productName — ...\n" +
+                        "🟢 低优先 (缺 <20): productName — ...\n\n" +
+                        "末尾加: '共 N 个产品待排产, 推荐先排 [productName] (净缺 X kg)'.\n\n" +
+                        "**一键起产按钮 (前端 Workdesk 渲染)**:\n" +
+                        "每行附 [🚀 一键起产] button → 触发 production_batch_create Tool (WRITE + Preview).\n\n" +
+                        "工厂 ID: ${factoryId}. 用户问题: ${userQuery}")
+                .source("default")
+                .enabled(true)
+                .build());
+        count++;
+
         return count;
     }
 

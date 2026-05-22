@@ -202,6 +202,181 @@
         </el-button>
       </div>
     </el-card>
+
+    <!-- Sprint 10 Loop 4 — 审批闭环 panel (付款/开票/调价/采购/销售订单 通用) -->
+    <el-card class="approval-card" shadow="never" data-testid="approval-loop-panel">
+      <template #header>
+        <div class="card-header">
+          <span>✅ 待我审批 (Loop 4 AI 闭环)</span>
+          <div>
+            <el-tag :type="approvalPendingCount > 0 ? 'warning' : 'info'" size="small">
+              {{ approvalPendingCount }} 项待审
+            </el-tag>
+            <el-button
+              size="small"
+              type="primary"
+              link
+              :loading="approvalLoading"
+              @click="loadPendingApprovals"
+              data-testid="approval-refresh-btn">
+              🔄 刷新
+            </el-button>
+          </div>
+        </div>
+      </template>
+
+      <!-- 空 / 加载状态 (R5 dead-end nav fix) -->
+      <div v-if="approvalLoading" class="approval-empty">
+        <el-icon class="is-loading"><Loading /></el-icon>
+        正在查询待审清单...
+      </div>
+      <div v-else-if="approvalError" class="approval-empty">
+        <el-alert
+          :title="approvalError"
+          type="error"
+          show-icon
+          :closable="false" />
+      </div>
+      <div v-else-if="approvalPendingCount === 0" class="approval-empty">
+        <span class="empty-icon">✅</span>
+        <div>暂无待您审批的工作流</div>
+        <div class="empty-hint">提示: AI 问 "我该批什么" / "今日待审" 可触发查询</div>
+      </div>
+
+      <!-- 待审列表 (Rule 2 context: 必带 businessSummary / nodeLabel / initiator) -->
+      <el-table
+        v-else
+        :data="approvalPendingItems"
+        size="small"
+        stripe
+        data-testid="approval-pending-table">
+        <el-table-column prop="businessSummary" label="单据" min-width="220">
+          <template #default="scope">
+            <el-tag size="small" type="info">{{ scope.row.moduleCode }}</el-tag>
+            <span class="business-summary" style="margin-left: 6px;">
+              {{ scope.row.businessSummary }}
+            </span>
+          </template>
+        </el-table-column>
+        <el-table-column prop="currentNodeLabel" label="当前节点" width="120">
+          <template #default="scope">
+            <el-tag type="warning" size="small">{{ scope.row.currentNodeLabel || '审批中' }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column prop="initiatedByUsername" label="发起人" width="100">
+          <template #default="scope">
+            {{ scope.row.initiatedByUsername || '系统' }}
+          </template>
+        </el-table-column>
+        <el-table-column prop="initiatedAt" label="发起时间" width="140" />
+        <el-table-column label="操作" width="200" fixed="right">
+          <template #default="scope">
+            <el-button
+              size="small"
+              type="success"
+              @click="openApprovalDialog(scope.row, 'APPROVE')"
+              data-testid="approval-approve-btn">
+              批准
+            </el-button>
+            <el-button
+              size="small"
+              type="danger"
+              @click="openApprovalDialog(scope.row, 'REJECT')"
+              data-testid="approval-reject-btn">
+              拒绝
+            </el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+    </el-card>
+
+    <!-- Approval Dialog (Fool-proof R1 confirm + R2 context + R3 dropdown reason) -->
+    <el-dialog
+      v-model="approvalDialogVisible"
+      :title="approvalDialogTitle"
+      width="540px"
+      :close-on-click-modal="false"
+      data-testid="approval-dialog">
+      <div v-if="approvalDialogTarget">
+        <!-- R2: context display 单据 + 当前节点 + 发起人 -->
+        <el-descriptions :column="1" border size="small">
+          <el-descriptions-item label="业务模块">
+            <el-tag size="small" type="info">{{ approvalDialogTarget.moduleCode }}</el-tag>
+          </el-descriptions-item>
+          <el-descriptions-item label="单据">
+            {{ approvalDialogTarget.businessSummary }}
+          </el-descriptions-item>
+          <el-descriptions-item label="当前节点">
+            {{ approvalDialogTarget.currentNodeLabel || '审批中' }}
+          </el-descriptions-item>
+          <el-descriptions-item label="发起人">
+            {{ approvalDialogTarget.initiatedByUsername || '系统' }}
+          </el-descriptions-item>
+          <el-descriptions-item label="发起时间">
+            {{ approvalDialogTarget.initiatedAt }}
+          </el-descriptions-item>
+        </el-descriptions>
+
+        <el-divider />
+
+        <!-- R3: reason dropdown enum + "其他" → textarea -->
+        <el-form
+          :model="approvalForm"
+          label-width="90px"
+          size="small"
+          style="margin-top: 8px;">
+          <el-form-item label="决定">
+            <el-radio-group v-model="approvalForm.action" data-testid="approval-action-radio">
+              <el-radio value="APPROVE">✅ 批准</el-radio>
+              <el-radio value="REJECT">❌ 拒绝</el-radio>
+            </el-radio-group>
+          </el-form-item>
+
+          <el-form-item label="原因">
+            <el-select
+              v-model="approvalForm.reasonOption"
+              placeholder="选择审批意见模板"
+              style="width: 100%;"
+              data-testid="approval-reason-select">
+              <el-option-group v-if="approvalForm.action === 'APPROVE'" label="批准理由">
+                <el-option label="符合预算 / 流程合规" value="符合预算 / 流程合规" />
+                <el-option label="紧急业务 / 优先处理" value="紧急业务 / 优先处理" />
+                <el-option label="审核无异常" value="审核无异常" />
+                <el-option label="其他 (自定义)" value="OTHER" />
+              </el-option-group>
+              <el-option-group v-else label="拒绝原因">
+                <el-option label="金额超限 / 预算不足" value="金额超限 / 预算不足" />
+                <el-option label="资料不完整 / 缺凭证" value="资料不完整 / 缺凭证" />
+                <el-option label="供应商资质问题" value="供应商资质问题" />
+                <el-option label="单据信息有误" value="单据信息有误" />
+                <el-option label="其他 (自定义)" value="OTHER" />
+              </el-option-group>
+            </el-select>
+          </el-form-item>
+
+          <el-form-item v-if="approvalForm.reasonOption === 'OTHER'" label="备注">
+            <el-input
+              v-model="approvalForm.notes"
+              type="textarea"
+              :rows="2"
+              placeholder="请补充审批理由"
+              data-testid="approval-notes-textarea" />
+          </el-form-item>
+        </el-form>
+      </div>
+
+      <template #footer>
+        <el-button @click="approvalDialogVisible = false">取消</el-button>
+        <el-button
+          :type="approvalForm.action === 'APPROVE' ? 'success' : 'danger'"
+          :loading="approvalSubmitting"
+          :disabled="!isApprovalFormValid"
+          @click="submitApproval"
+          data-testid="approval-submit-btn">
+          {{ approvalForm.action === 'APPROVE' ? '确认批准' : '确认拒绝' }}
+        </el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -250,6 +425,61 @@ const pendingCommissionAmount = ref(0);
 const funnelActiveCount = ref(0);
 const funnelTotalValue = ref(0);
 const funnelExpectedValue = ref(0);
+
+// Sprint 10 Loop 4 — approval state
+interface ApprovalPendingItem {
+  instanceId: string;
+  moduleCode: string;
+  businessEntityId: string;
+  businessSummary: string;
+  currentNodeId?: string;
+  currentNodeLabel?: string;
+  initiatedByUsername?: string;
+  initiatedAt?: string;
+  actionUrl?: string;
+}
+
+interface PendingQueryResultData {
+  count?: number;
+  returned?: number;
+  page?: number;
+  size?: number;
+  items?: ApprovalPendingItem[];
+  userRole?: string;
+  moduleCodeFilter?: string | null;
+  message?: string;
+}
+
+const approvalLoading = ref(false);
+const approvalError = ref('');
+const approvalPendingCount = ref(0);
+const approvalPendingItems = ref<ApprovalPendingItem[]>([]);
+const approvalDialogVisible = ref(false);
+const approvalDialogTarget = ref<ApprovalPendingItem | null>(null);
+const approvalSubmitting = ref(false);
+const approvalForm = ref<{
+  action: 'APPROVE' | 'REJECT';
+  reasonOption: string;
+  notes: string;
+}>({
+  action: 'APPROVE',
+  reasonOption: '',
+  notes: '',
+});
+
+const approvalDialogTitle = computed(() => {
+  if (!approvalDialogTarget.value) return '审批';
+  const verb = approvalForm.value.action === 'APPROVE' ? '批准' : '拒绝';
+  const summary = approvalDialogTarget.value.businessSummary || approvalDialogTarget.value.businessEntityId;
+  return `${verb} — ${approvalDialogTarget.value.moduleCode} (${summary})`;
+});
+
+const isApprovalFormValid = computed(() => {
+  if (!approvalForm.value.action) return false;
+  if (!approvalForm.value.reasonOption) return false;
+  if (approvalForm.value.reasonOption === 'OTHER' && !approvalForm.value.notes.trim()) return false;
+  return true;
+});
 
 const factoryId = computed(() => authStore.factoryId || 'F006');
 
@@ -459,9 +689,123 @@ function gotoFunnel() {
   router.push('/crm/opportunity/funnel');
 }
 
+// ==================== Sprint 10 Loop 4 — 审批闭环 ====================
+
+async function loadPendingApprovals() {
+  approvalLoading.value = true;
+  approvalError.value = '';
+  try {
+    const response = await callIntentExecute('我该批什么', 'APPROVAL_PENDING_QUERY');
+    const data = (response.resultData as Record<string, unknown> | undefined) || {};
+    const inner = (data['data'] as PendingQueryResultData) || (data as PendingQueryResultData);
+    approvalPendingCount.value = typeof inner.count === 'number' ? inner.count : 0;
+    approvalPendingItems.value = Array.isArray(inner.items) ? inner.items : [];
+  } catch (err: unknown) {
+    const msg = extractErrorMessage(err);
+    approvalError.value = `查询待审清单失败: ${msg}`;
+    ElMessage({
+      message: approvalError.value,
+      type: 'error',
+      duration: 0,
+      showClose: true,
+    });
+  } finally {
+    approvalLoading.value = false;
+  }
+}
+
+function openApprovalDialog(target: ApprovalPendingItem, action: 'APPROVE' | 'REJECT') {
+  approvalDialogTarget.value = target;
+  approvalForm.value = {
+    action,
+    reasonOption: '',
+    notes: '',
+  };
+  approvalDialogVisible.value = true;
+}
+
+async function submitApproval() {
+  if (!approvalDialogTarget.value) return;
+  if (!isApprovalFormValid.value) {
+    ElMessage({
+      message: '请选择审批意见 (若选 "其他" 需填写备注)',
+      type: 'warning',
+      duration: 3000,
+    });
+    return;
+  }
+
+  approvalSubmitting.value = true;
+  try {
+    const notesText = approvalForm.value.reasonOption === 'OTHER'
+      ? approvalForm.value.notes.trim()
+      : approvalForm.value.reasonOption;
+
+    // 直接调 ai-intents/execute 触发 APPROVAL_ACTION_EXECUTE (Tool)
+    // userInput 内含 instanceId + action + notes 让 LLM 提参; 同时 context 也带 fallback.
+    const actionVerb = approvalForm.value.action === 'APPROVE' ? '批准' : '拒绝';
+    const userMsg = `${actionVerb}审批 instanceId=${approvalDialogTarget.value.instanceId} action=${approvalForm.value.action} notes=${notesText}`;
+    const response = await callIntentExecuteWithParams(
+      userMsg,
+      'APPROVAL_ACTION_EXECUTE',
+      {
+        instanceId: approvalDialogTarget.value.instanceId,
+        action: approvalForm.value.action,
+        notes: notesText,
+      },
+    );
+
+    // 成功: 用 sticky info toast 显示后端 message (4 位一体)
+    const replyMsg = response.message
+      || (response.resultData && (response.resultData as Record<string, unknown>)['message'] as string | undefined)
+      || (approvalForm.value.action === 'APPROVE' ? '已批准' : '已拒绝');
+    ElMessage({
+      message: String(replyMsg),
+      type: 'success',
+      duration: 5000,
+      showClose: true,
+    });
+
+    approvalDialogVisible.value = false;
+    // 重新加载列表
+    await loadPendingApprovals();
+  } catch (err: unknown) {
+    const msg = extractErrorMessage(err);
+    ElMessage({
+      message: `审批失败: ${msg}`,
+      type: 'error',
+      duration: 0,
+      showClose: true,
+    });
+  } finally {
+    approvalSubmitting.value = false;
+  }
+}
+
+/**
+ * 直调指定 intent + 参数 — 用于 dialog 提交场景, bypass LLM 参数提取.
+ * IntentExecuteRequest.context 透传给 Tool 的 doExecute params, skipSlotFilling=true 跳过 NEED_MORE_INFO.
+ */
+async function callIntentExecuteWithParams(
+  input: string,
+  intentCode: string,
+  toolParams: Record<string, unknown>,
+): Promise<ExecuteResponse> {
+  const body: Record<string, unknown> = {
+    userInput: input,
+    intentCode,
+    context: toolParams,
+    skipSlotFilling: true,
+  };
+  const res = await request.post<ExecuteResponse>(
+    `/${factoryId.value}/ai-intents/execute`, body);
+  return (res as { data: ExecuteResponse }).data;
+}
+
 // Auto-trigger on mount
 onMounted(() => {
   void triggerMonthlyClose();
+  void loadPendingApprovals();
 });
 </script>
 
@@ -619,5 +963,34 @@ onMounted(() => {
 .alert-hint {
   font-size: 13px;
   color: #606266;
+}
+
+/* Sprint 10 Loop 4 — approval panel */
+.approval-card {
+  border-left: 3px solid #67c23a;
+}
+
+.approval-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 24px;
+  color: #909399;
+  font-size: 14px;
+}
+
+.empty-icon {
+  font-size: 32px;
+}
+
+.empty-hint {
+  font-size: 12px;
+  color: #c0c4cc;
+}
+
+.business-summary {
+  font-size: 13px;
+  color: #303133;
 }
 </style>

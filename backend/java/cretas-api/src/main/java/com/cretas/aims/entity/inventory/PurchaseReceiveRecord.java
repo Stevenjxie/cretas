@@ -7,13 +7,16 @@ import com.cretas.aims.entity.User;
 import com.cretas.aims.entity.enums.PurchaseReceiveStatus;
 import com.cretas.aims.security.PriceSensitive;
 import com.fasterxml.jackson.annotation.JsonIgnore;
+import io.hypersistence.utils.hibernate.type.json.JsonBinaryType;
 import lombok.*;
+import org.hibernate.annotations.Type;
 
 import jakarta.persistence.*;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import org.hibernate.annotations.Formula;
 import org.hibernate.annotations.Where;
@@ -125,4 +128,13 @@ public class PurchaseReceiveRecord extends BaseEntity {
 
     @OneToMany(mappedBy = "receiveRecord", cascade = CascadeType.ALL, orphanRemoval = true, fetch = FetchType.LAZY)
     private List<PurchaseReceiveItem> items = new ArrayList<>();
+
+    /**
+     * Sprint 10 AI invocation source tag — set when Workdesk AI 1-click create.
+     * Schema: {source: "sprint-10-loop-2", testRun: bool, createdAt: iso}.
+     * NULL = manual UI create.
+     */
+    @Type(JsonBinaryType.class)
+    @Column(name = "ai_invocation_metadata", columnDefinition = "jsonb")
+    private Map<String, Object> aiInvocationMetadata;
 }
