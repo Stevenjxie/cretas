@@ -209,7 +209,7 @@ onMounted(load);
         <el-table-column label="操作" width="120">
           <template #default="scope">
             <el-button size="small" @click="handleDismiss(asOutlier(scope.row))">
-              ✓ 非异常
+              非异常
             </el-button>
           </template>
         </el-table-column>

@@ -174,7 +174,7 @@ describe('printSchemaTypes', () => {
       ]);
     });
 
-    it('includes the F006 weighing slip ⭐', () => {
+    it('includes the F006 weighing slip ', () => {
       expect(ENTITY_TYPES.some(e => e.code === 'PRINT_WEIGHING_SLIP')).toBe(true);
     });
 

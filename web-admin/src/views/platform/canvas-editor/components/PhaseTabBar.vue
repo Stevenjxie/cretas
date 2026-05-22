@@ -27,10 +27,10 @@ import { useCanvasEditor } from '../composables/useCanvasEditor'
 const { activeTab } = useCanvasEditor()
 
 const phaseA = [
-  { key: 'workflow', icon: '🔄', label: '状态机' },
-  { key: 'approval', icon: '✅', label: '审批工作流' },
-  { key: 'triggers', icon: '🔗', label: '触发链' },
-  { key: 'validation', icon: '📐', label: '校验规则' },
+  { key: 'workflow', icon: '', label: '状态机' },
+  { key: 'approval', icon: '', label: '审批工作流' },
+  { key: 'triggers', icon: '', label: '触发链' },
+  { key: 'validation', icon: '', label: '校验规则' },
 ]
 
 // Round 4 Fix P1-10: added '定时任务' Tab for SchedulerPanel (legacy v2 config)
@@ -44,16 +44,16 @@ const phaseA = [
 // Legacy 'scheduler' Tab stays for v2 config-only style; sister chat will
 // migrate 24 existing @Scheduled methods to the new pattern.
 const phaseB = [
-  { key: 'fields', icon: '📋', label: '字段配置' },
-  { key: 'permissions', icon: '🛡️', label: '权限矩阵' },
-  { key: 'module-permissions', icon: '🔐', label: '模块权限' },
-  { key: 'tools', icon: '🔧', label: '工具/技能' },
-  { key: 'scheduler', icon: '⏰', label: '定时任务 (v2)' },
-  { key: 'alerts', icon: '🚨', label: '预警规则' },
-  { key: 'notify', icon: '🔔', label: '通知模板' },
-  { key: 'business-rules', icon: '📜', label: '业务规则' },
-  { key: 'pricing', icon: '💰', label: '价格策略' },
-  { key: 'cron', icon: '⚡', label: 'Canvas Cron' },
+  { key: 'fields', icon: '', label: '字段配置' },
+  { key: 'permissions', icon: '', label: '权限矩阵' },
+  { key: 'module-permissions', icon: '', label: '模块权限' },
+  { key: 'tools', icon: '', label: '工具/技能' },
+  { key: 'scheduler', icon: '', label: '定时任务 (v2)' },
+  { key: 'alerts', icon: '', label: '预警规则' },
+  { key: 'notify', icon: '', label: '通知模板' },
+  { key: 'business-rules', icon: '', label: '业务规则' },
+  { key: 'pricing', icon: '', label: '价格策略' },
+  { key: 'cron', icon: '', label: 'Canvas Cron' },
 ]
 </script>
 

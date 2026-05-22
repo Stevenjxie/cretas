@@ -47,7 +47,7 @@
       <!-- Chart container — ECharts mounts into this DOM id from script-side composable callbacks. -->
       <div :id="containerId" class="chart-container"></div>
       <div v-if="miniInsight" class="chart-mini-insight">
-        <span class="mini-insight-icon">📊</span>
+        <span class="mini-insight-icon"></span>
         <span class="mini-insight-text">{{ miniInsight }}</span>
       </div>
       <div v-if="totalItems" class="chart-view-more">

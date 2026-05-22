@@ -17,7 +17,7 @@
     <!-- Header -->
     <div class="workdesk-header">
       <div class="header-title">
-        <span class="emoji">🏪</span>
+        <span class="emoji"></span>
         <span class="title-text">销售老板工作台</span>
         <el-tag size="small" type="info">Sprint 8 P1 (2026-05-20)</el-tag>
       </div>
@@ -32,7 +32,7 @@
     <el-card class="chat-card" shadow="never">
       <template #header>
         <div class="card-header">
-          <span>💬 与 AI 对话</span>
+          <span>与 AI 对话</span>
           <span class="header-hint">默认查询: "今天该跟谁?" — 也可输入其他问题</span>
         </div>
       </template>
@@ -75,7 +75,7 @@
     <el-card v-if="formattedText" class="result-card" shadow="never">
       <template #header>
         <div class="card-header">
-          <span>📋 今日跟进清单</span>
+          <span>今日跟进清单</span>
           <span class="header-hint" v-if="lastQueryTime">
             {{ lastQueryTime }} 生成
           </span>
@@ -88,7 +88,7 @@
     <el-card v-if="customers.length > 0" class="customers-card" shadow="never">
       <template #header>
         <div class="card-header">
-          <span>👥 客户优先级清单 ({{ customers.length }})</span>
+          <span>客户优先级清单 ({{ customers.length }})</span>
         </div>
       </template>
       <div class="customers-grid">
@@ -124,13 +124,13 @@
           </div>
           <div class="customer-actions">
             <el-button size="small" type="primary" @click="openWechatDialog(c)">
-              📱 补录微信
+              补录微信
             </el-button>
             <el-button size="small" @click="gotoCustomerDetail(c)">
-              📞 查看详情
+              查看详情
             </el-button>
             <el-button size="small" type="warning" @click="openOpportunityDialog(c)">
-              🎯 更新商机
+              更新商机
             </el-button>
           </div>
         </div>
@@ -141,7 +141,7 @@
     <el-card v-if="staleOpportunities.length > 0" class="alerts-card" shadow="never">
       <template #header>
         <div class="card-header">
-          <span>⚠️ 商机超 SLA 警告 ({{ staleOpportunities.length }})</span>
+          <span>商机超 SLA 警告 ({{ staleOpportunities.length }})</span>
           <span class="header-hint">超 21 天未推进, 建议立即跟进</span>
         </div>
       </template>
@@ -383,9 +383,9 @@ function priorityClass(score: number) {
 }
 
 function priorityEmoji(score: number) {
-  if (score >= 50) return '🔴';
-  if (score >= 25) return '🟡';
-  return '🟢';
+  if (score >= 50) return '';
+  if (score >= 25) return '';
+  return '';
 }
 
 function importanceTagType(imp?: string): 'danger' | 'warning' | 'info' | '' {

@@ -55,7 +55,7 @@
             </el-form-item>
 
             <el-button type="primary" :loading="loading" @click="onSimulate">
-              {{ loading ? '计算中...' : '🔍 模拟计算' }}
+              {{ loading ? '计算中...' : '模拟计算' }}
             </el-button>
             <el-button @click="onReset">重置</el-button>
           </el-form>

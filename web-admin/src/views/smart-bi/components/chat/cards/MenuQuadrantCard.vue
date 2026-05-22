@@ -82,7 +82,7 @@ const summary = computed<Record<string, number>>(() => {
       </div>
       <div class="quadrant-cell cell-dog">
         <div class="cell-header">
-          <span class="cell-symbol">✗</span>
+          <span class="cell-symbol"></span>
           <span class="cell-title">Dog · 淘汰候选</span>
           <span class="cell-count">{{ quadrants.dog.length }}</span>
         </div>

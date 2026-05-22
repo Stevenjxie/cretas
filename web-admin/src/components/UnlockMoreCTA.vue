@@ -17,7 +17,7 @@ function handleUpload() {
 <template>
   <el-card v-if="visibleSuggestions.length > 0" class="unlock-cta">
     <template #header>
-      <span>✨ 解锁更多分析</span>
+      <span>解锁更多分析</span>
     </template>
 
     <p class="current-state">

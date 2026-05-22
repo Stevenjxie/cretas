@@ -71,7 +71,7 @@ const resolvedCard = computed(() => {
     </span>
   </div>
   <div v-else class="section-failed">
-    <span class="failed-icon">✗</span>
+    <span class="failed-icon"></span>
     <span>{{ section.sectionName }} 分析失败</span>
   </div>
 </template>

@@ -252,7 +252,7 @@ function formatPercent(num: number): string {
         <el-col :xs="24" :sm="12" :md="8" :lg="4">
           <el-card class="stat-card equipment" shadow="hover" @click="$router.push('/smart-bi/query?q=最近30天领料最多的食材和损耗情况')">
             <div class="card-header"><el-icon class="module-icon"><DataAnalysis /></el-icon><span>AI 深度分析</span></div>
-            <div class="stat-value" style="font-size:18px;cursor:pointer">🤖 点击</div>
+            <div class="stat-value" style="font-size:18px;cursor:pointer">点击</div>
             <div class="stat-label">问 AI 领料/损耗/盘点</div>
             <div class="stat-footer"><span style="color:#409eff">基于 Gold 数据秒回</span></div>
           </el-card>
@@ -298,7 +298,7 @@ function formatPercent(num: number): string {
             </div>
             <div style="display:flex;gap:8px">
               <el-button size="small" type="primary" @click.stop="$router.push('/restaurant/analytics/gross-margin')">查看毛利排行</el-button>
-              <el-button size="small" @click.stop="$router.push('/smart-bi/query?q=哪道菜毛利最高 top 10')">🤖 AI 分析</el-button>
+              <el-button size="small" @click.stop="$router.push('/smart-bi/query?q=哪道菜毛利最高 top 10')">AI 分析</el-button>
             </div>
           </el-card>
         </el-col>
@@ -323,7 +323,7 @@ function formatPercent(num: number): string {
         <template #title>关于本页面</template>
         <div style="font-size:13px">
           数据来自 <b>Gold 运营层聚合</b> (agg_restaurant_daily_*). 每次打开自动加载近 30 天.
-          如需自定义问答, 点顶部 "🤖 AI 深度分析" 卡片或侧边栏 "AI 问答".
+          如需自定义问答, 点顶部 "AI 深度分析" 卡片或侧边栏 "AI 问答".
           生产/质量/仓储等制造业模块对餐饮租户已隐藏 — 本页只显示餐饮日常指标.
         </div>
       </el-alert>

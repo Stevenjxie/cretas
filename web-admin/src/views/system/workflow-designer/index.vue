@@ -88,10 +88,10 @@
                   {{ stateTypeLabel(data.stateType) }}
                 </div>
                 <div v-if="data.assignedRoles?.length" class="node-roles-badge">
-                  👤 {{ data.assignedRoles.length }} 角色
+                  {{ data.assignedRoles.length }} 角色
                 </div>
                 <div v-if="data.timeLimitMinutes" class="node-sla-badge">
-                  ⏱ {{ data.timeLimitMinutes }}min
+                  {{ data.timeLimitMinutes }}min
                 </div>
               </div>
             </div>
@@ -822,7 +822,7 @@ function stateTypeLabel(type: string) {
 
 function nodeIcon(category: string) {
   const map: Record<string, string> = {
-    '计划': '📋', '执行': '⚙️', '质量': '🔍', '审批': '✅', '完工': '🏁', '控制': '🔀', default: '📦'
+    '计划': '', '执行': '', '质量': '', '审批': '', '完工': '', '控制': '', default: ''
   }
   return map[category] || map.default
 }

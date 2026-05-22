@@ -358,7 +358,7 @@ function modeTagType(m: WageMode): '' | 'success' | 'warning' | 'info' {
         <el-tab-pane label="时薪规则" name="hourly">
           <div class="tab-toolbar">
             <el-button type="primary" :icon="Plus" @click="openHourlyDialog(null)">新增时薪规则</el-button>
-            <span class="hint">⚠️ 时薪上限 ¥{{ MAX_HOURLY_RATE }}/h (防呆 Rule 1)</span>
+            <span class="hint">时薪上限 ¥{{ MAX_HOURLY_RATE }}/h (防呆 Rule 1)</span>
           </div>
           <el-table :data="hourlyRules" v-loading="loading" border>
             <el-table-column prop="id" label="ID" width="80" />
@@ -522,7 +522,7 @@ function modeTagType(m: WageMode): '' | 'success' | 'warning' | 'info' {
             style="width: 240px"
           />
           <span :class="['hint', hourlyOverLimit ? 'hint-error' : '']" style="margin-left: 8px">
-            ⚠️ 时薪上限 ¥{{ MAX_HOURLY_RATE }}/h, 防误输 (防呆 Rule 1)
+            时薪上限 ¥{{ MAX_HOURLY_RATE }}/h, 防误输 (防呆 Rule 1)
           </span>
         </el-form-item>
         <el-form-item label="加班倍率">

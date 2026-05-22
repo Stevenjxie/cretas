@@ -8,7 +8,7 @@
             <span class="data-count">共 {{ pagination.total }} 条</span>
           </div>
           <div class="header-right">
-            <el-button type="info" plain @click="handleAiAnalyze">🤖 AI 分析</el-button>
+            <el-button type="info" plain @click="handleAiAnalyze">AI 分析</el-button>
             <el-button :icon="Download" @click="handleExport">导出</el-button>
             <el-button v-if="canWrite" type="primary" :icon="Plus" @click="handleCreate">新建损耗记录</el-button>
           </div>

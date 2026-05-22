@@ -211,7 +211,7 @@ watch(
 
     <!-- Mask hint for users without price permission -->
     <div v-if="!canViewPrice" class="ph-mask-hint">
-      🔒 当前角色无 <strong>价格查看</strong> 权限, 表格中 单价 / 总额 字段已被隐藏 (仅显示时间 / 订单号).
+      当前角色无 <strong>价格查看</strong> 权限, 表格中 单价 / 总额 字段已被隐藏 (仅显示时间 / 订单号).
     </div>
 
     <el-table

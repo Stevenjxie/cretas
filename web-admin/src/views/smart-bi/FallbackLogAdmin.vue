@@ -258,12 +258,12 @@ watch(activeTab, async () => {
         <div class="stat-sub">条</div>
       </div>
       <div class="stat-card success">
-        <div class="stat-label">👍 有用</div>
+        <div class="stat-label">有用</div>
         <div class="stat-value">{{ stats.thumbsUp }}</div>
         <div class="stat-sub">{{ thumbsUpPct }}%</div>
       </div>
       <div class="stat-card danger">
-        <div class="stat-label">👎 待改进</div>
+        <div class="stat-label">待改进</div>
         <div class="stat-value">{{ stats.thumbsDown }}</div>
         <div class="stat-sub">{{ thumbsDownPct }}%</div>
       </div>
@@ -302,8 +302,8 @@ watch(activeTab, async () => {
           <el-table-column prop="factoryId" label="工厂" width="130" />
           <el-table-column label="反馈" width="90" align="center">
             <template #default="{ row }">
-              <el-tag v-if="row.userFeedback === 1" type="success" size="small">👍</el-tag>
-              <el-tag v-else-if="row.userFeedback === -1" type="danger" size="small">👎</el-tag>
+              <el-tag v-if="row.userFeedback === 1" type="success" size="small"></el-tag>
+              <el-tag v-else-if="row.userFeedback === -1" type="danger" size="small"></el-tag>
               <span v-else class="muted">—</span>
             </template>
           </el-table-column>
@@ -328,12 +328,12 @@ watch(activeTab, async () => {
       <el-tab-pane name="issues">
         <template #label>
           <span>
-            👎 待改进
+            待改进
             <el-badge v-if="issuesRows.length > 0" :value="issuesRows.length" :max="99" />
           </span>
         </template>
         <div v-if="issuesRows.length === 0" class="empty-state">
-          <p>👏 暂无差评记录, 答案质量良好。</p>
+          <p>暂无差评记录, 答案质量良好。</p>
         </div>
         <el-table v-else :data="issuesRows" stripe border size="small" max-height="500">
           <el-table-column prop="id" label="#" width="60" />
@@ -408,8 +408,8 @@ watch(activeTab, async () => {
           </el-table-column>
           <el-table-column label="反馈" width="80" align="center">
             <template #default="{ row }">
-              <el-tag v-if="row.userFeedback === 1" type="success" size="small">👍</el-tag>
-              <el-tag v-else-if="row.userFeedback === -1" type="danger" size="small">👎</el-tag>
+              <el-tag v-if="row.userFeedback === 1" type="success" size="small"></el-tag>
+              <el-tag v-else-if="row.userFeedback === -1" type="danger" size="small"></el-tag>
               <span v-else class="muted">—</span>
             </template>
           </el-table-column>
@@ -438,8 +438,8 @@ watch(activeTab, async () => {
           <span>{{ formatTime(detailRow.createdAt) }}</span>
           <span>工厂 {{ detailRow.factoryId }}</span>
           <span>耗时 {{ (detailRow.totalWallMs / 1000).toFixed(1) }}s</span>
-          <el-tag v-if="detailRow.userFeedback === 1" type="success" size="small">👍</el-tag>
-          <el-tag v-else-if="detailRow.userFeedback === -1" type="danger" size="small">👎</el-tag>
+          <el-tag v-if="detailRow.userFeedback === 1" type="success" size="small"></el-tag>
+          <el-tag v-else-if="detailRow.userFeedback === -1" type="danger" size="small"></el-tag>
         </div>
         <h4 class="detail-h4">用户问题</h4>
         <div class="detail-query">{{ detailRow.query }}</div>

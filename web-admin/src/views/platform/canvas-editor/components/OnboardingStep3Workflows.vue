@@ -7,7 +7,7 @@
       <div v-for="mod in modules" :key="mod" class="workflow-card">
         <div class="wf-header">
           <span class="wf-name">{{ moduleNames[mod] || mod }}</span>
-          <el-tag size="small" type="success">✅ 就绪</el-tag>
+          <el-tag size="small" type="success">就绪</el-tag>
         </div>
         <div class="wf-preview">
           <span v-for="(state, i) in getStates(mod)" :key="i" class="wf-state">

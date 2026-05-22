@@ -42,12 +42,12 @@ export interface InlineIconDef {
 }
 
 export const INLINE_ICONS: readonly InlineIconDef[] = [
-  { id: 'copy', icon: '📑', label: '复制', inlineOnly: false },
-  { id: 'mark', icon: '🏷️', label: '标记', inlineOnly: true },
-  { id: 'lock', icon: '🔒', label: '锁定', inlineOnly: false },
+  { id: 'copy', icon: '', label: '复制', inlineOnly: false },
+  { id: 'mark', icon: '', label: '标记', inlineOnly: true },
+  { id: 'lock', icon: '', label: '锁定', inlineOnly: false },
   { id: 'forward', icon: '↗️', label: '转发', inlineOnly: true },
-  { id: 'delete', icon: '🗑️', label: '删除', inlineOnly: false, danger: true, requiresConfirm: true },
-  { id: 'audit', icon: '🔎', label: '审计', inlineOnly: true },
+  { id: 'delete', icon: '', label: '删除', inlineOnly: false, danger: true, requiresConfirm: true },
+  { id: 'audit', icon: '', label: '审计', inlineOnly: true },
 ];
 
 export interface InlineIconState {

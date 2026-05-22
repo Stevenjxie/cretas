@@ -1981,7 +1981,7 @@ onUnmounted(() => {
       :closable="false"
       show-icon
       class="gold-cta"
-      title="🆕 Gold 数据层预览"
+      title="Gold 数据层预览"
     >
       <template #default>
         <div class="gold-cta-row">

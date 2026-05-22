@@ -1052,7 +1052,7 @@ async function submitQuickPayment() {
   >
     <template #header>
       <div style="display: flex; align-items: center; gap: 8px; font-weight: 600;">
-        <span>🧾 POS 交易概览</span>
+        <span>POS 交易概览</span>
         <el-tag size="small" type="success">Gold · finance_summary</el-tag>
         <span v-if="goldSummaryRangeLabel" style="color: #909399; font-size: 12px; margin-left: auto;">
           {{ goldSummaryRangeLabel }}
@@ -1224,7 +1224,7 @@ async function submitQuickPayment() {
           (聚合 items[]). NOT @PriceSensitive — inventory 数据非价格 (跟 canViewPrice 解耦,
           所有角色可见).
           chip 垂直堆叠: 缺料 > 0 红色高亮, 一眼识别要不要催生产.
-          Issue #746: header 加 ❓ tooltip 解释含义 (客户手测 img 34 反馈 chip 含义不清).
+          Issue #746: header 加 tooltip 解释含义 (客户手测 img 34 反馈 chip 含义不清).
         -->
         <el-table-column label="锁/备/缺" width="130" align="center">
           <template #header>

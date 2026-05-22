@@ -45,14 +45,14 @@
 
     <!-- Empty: code was in some upload but not this one -->
     <div v-else-if="status === 'missing'" class="tpl-empty">
-      <div class="tpl-empty-icon">📭</div>
+      <div class="tpl-empty-icon"></div>
       <div class="tpl-empty-title">该数据集不包含 [{{ title }}] 所需字段</div>
       <div class="tpl-empty-hint">上传含 {{ requiredFields }} 的文件后将自动生成</div>
     </div>
 
     <!-- Empty: code never materialized for this factory -->
     <div v-else-if="status === 'never'" class="tpl-empty">
-      <div class="tpl-empty-icon">📄</div>
+      <div class="tpl-empty-icon"></div>
       <div class="tpl-empty-title">尚未为该工厂生成过 [{{ title }}]</div>
       <div class="tpl-empty-hint">上传含 {{ requiredFields }} 的数据文件</div>
       <!-- UX P2-10: 空工厂 onboarding — CTA 直接跳上传 -->
@@ -67,7 +67,7 @@
 
     <!-- Footer: 数据来源 + 生成时间 (P2-17: 从标题挪到这里,不挤占卡片标题行) -->
     <div v-if="uploadLabel && status === 'loaded'" class="tpl-footer">
-      <span :title="`文件: ${uploadLabel}`">📎 {{ formattedDate }}</span>
+      <span :title="`文件: ${uploadLabel}`">{{ formattedDate }}</span>
     </div>
   </el-card>
 </template>

@@ -93,7 +93,7 @@ describe('computeInlineIconStates', () => {
     // COMMON_ACTIONS.COPY is now marked pending; simulate the action arriving
     // from useRowActions with pending=true.
     const states = computeInlineIconStates([
-      { id: 'copy', icon: '📑', label: '复制', pending: true } as RowAction,
+      { id: 'copy', icon: '', label: '复制', pending: true } as RowAction,
     ]);
     const cpy = states.find((s) => s.def.id === 'copy')!;
     expect(cpy.enabled).toBe(true);

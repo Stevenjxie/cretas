@@ -92,7 +92,7 @@
           <strong>示例配置</strong>:
           <pre class="json-example">{{ actionConfigExample }}</pre>
           <span v-if="form.actionType === 'TRIGGER_WORKFLOW'" class="warning-text">
-            ⚠️ TRIGGER_WORKFLOW 依赖 Phase 1 Canvas-Workflow 合并后才能实际触发。当前可保存规则，执行时会失败。
+            TRIGGER_WORKFLOW 依赖 Phase 1 Canvas-Workflow 合并后才能实际触发。当前可保存规则，执行时会失败。
           </span>
         </div>
       </el-form-item>

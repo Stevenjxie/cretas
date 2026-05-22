@@ -56,7 +56,7 @@ async function loadRestaurantAlerts() {
           value: `${(rate * 100).toFixed(2)}%`,
           threshold: '> 5%',
           action: '检查过期/变质食材管理',
-          link: '/restaurant/wastage', icon: '🔴',
+          link: '/restaurant/wastage', icon: '',
         })
       } else if (rate > 0.02) {
         alerts.push({
@@ -65,7 +65,7 @@ async function loadRestaurantAlerts() {
           value: `${(rate * 100).toFixed(2)}%`,
           threshold: '> 2%',
           action: '关注损耗趋势',
-          link: '/restaurant/wastage', icon: '🟠',
+          link: '/restaurant/wastage', icon: '',
         })
       }
     }
@@ -79,7 +79,7 @@ async function loadRestaurantAlerts() {
           value: `${(rate * 100).toFixed(2)}%`,
           threshold: '> 5%',
           action: '立即核查库存管理流程',
-          link: '/restaurant/stocktaking', icon: '🔴',
+          link: '/restaurant/stocktaking', icon: '',
         })
       } else if (rate > 0.03) {
         alerts.push({
@@ -88,7 +88,7 @@ async function loadRestaurantAlerts() {
           value: `${(rate * 100).toFixed(2)}%`,
           threshold: '> 3%',
           action: '加强盘点频率',
-          link: '/restaurant/stocktaking', icon: '🟠',
+          link: '/restaurant/stocktaking', icon: '',
         })
       }
     }
@@ -101,7 +101,7 @@ async function loadRestaurantAlerts() {
         value: `${activeDays} 天`,
         threshold: '近30天',
         action: '建议日常录入领料/损耗',
-        link: '/restaurant/requisitions', icon: '🔵',
+        link: '/restaurant/requisitions', icon: '',
       })
     }
     restaurantAlerts.value = alerts

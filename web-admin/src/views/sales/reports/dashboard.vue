@@ -17,20 +17,20 @@ interface Card {
 }
 
 const cards: Card[] = [
-  { id: 'daily', title: '销售额日报', desc: '当日订单数/销售额/收款', icon: '📅', active: true, route: '/sales/reports/daily' },
-  { id: 'monthly', title: '销售额月报', desc: '当月销售额 + 按日明细', icon: '📊', active: true, route: '/sales/reports/monthly' },
-  { id: 'yearly', title: '销售额年报', desc: '当年销售额 + 按月明细', icon: '📈', active: true, route: '/sales/reports/yearly' },
-  { id: 'customer-rank', title: '客户销售排行 top 20', desc: '按销售额客户排名', icon: '🏆', active: true, route: '/sales/reports/customer-rank' },
-  { id: 'product-rank', title: '产品销售排行 top 20', desc: '按销售额产品排名', icon: '🥇', active: true, route: '/sales/reports/product-rank' },
-  { id: 'salesperson-performance', title: '业绩 by 业务员', desc: '业务员销售业绩对比', icon: '👤', active: false },
-  { id: 'aging', title: '应收账龄', desc: '30/60/90/120/180+ 天分布', icon: '⏰', active: false },
-  { id: 'collection-rate', title: '客户回款率', desc: '回款金额/应收金额', icon: '💰', active: false },
+  { id: 'daily', title: '销售额日报', desc: '当日订单数/销售额/收款', icon: '', active: true, route: '/sales/reports/daily' },
+  { id: 'monthly', title: '销售额月报', desc: '当月销售额 + 按日明细', icon: '', active: true, route: '/sales/reports/monthly' },
+  { id: 'yearly', title: '销售额年报', desc: '当年销售额 + 按月明细', icon: '', active: true, route: '/sales/reports/yearly' },
+  { id: 'customer-rank', title: '客户销售排行 top 20', desc: '按销售额客户排名', icon: '', active: true, route: '/sales/reports/customer-rank' },
+  { id: 'product-rank', title: '产品销售排行 top 20', desc: '按销售额产品排名', icon: '', active: true, route: '/sales/reports/product-rank' },
+  { id: 'salesperson-performance', title: '业绩 by 业务员', desc: '业务员销售业绩对比', icon: '', active: false },
+  { id: 'aging', title: '应收账龄', desc: '30/60/90/120/180+ 天分布', icon: '', active: false },
+  { id: 'collection-rate', title: '客户回款率', desc: '回款金额/应收金额', icon: '', active: false },
   { id: 'return-rate', title: '退货率', desc: '退货金额/销售金额', icon: '↩️', active: false },
-  { id: 'gross-margin', title: '销售毛利率 by 产品', desc: '产品级毛利率排名', icon: '💹', active: false },
-  { id: 'purchase-frequency', title: '客户购买频次', desc: '客户回购周期分析', icon: '🔁', active: false },
-  { id: 'growth-rate', title: '月度增长率', desc: 'MoM/YoY 增长指标', icon: '📐', active: false },
-  { id: 'regional-comparison', title: '区域销售对比', desc: '区域销售分布', icon: '🗺️', active: false },
-  { id: 'customer-tier', title: '客户分级销售贡献', desc: 'A/B/C/D 分级贡献率', icon: '⭐', active: false },
+  { id: 'gross-margin', title: '销售毛利率 by 产品', desc: '产品级毛利率排名', icon: '', active: false },
+  { id: 'purchase-frequency', title: '客户购买频次', desc: '客户回购周期分析', icon: '', active: false },
+  { id: 'growth-rate', title: '月度增长率', desc: 'MoM/YoY 增长指标', icon: '', active: false },
+  { id: 'regional-comparison', title: '区域销售对比', desc: '区域销售分布', icon: '', active: false },
+  { id: 'customer-tier', title: '客户分级销售贡献', desc: 'A/B/C/D 分级贡献率', icon: '', active: false },
 ];
 
 async function open(card: Card): Promise<void> {

@@ -158,12 +158,12 @@
               v-model="notifyChannels"
               @change="(v: string[]) => syncConfig({ channels: v })"
             >
-              <el-checkbox label="wechat">📱 微信</el-checkbox>
-              <el-checkbox label="dingtalk">🔔 钉钉</el-checkbox>
-              <el-checkbox label="email">✉ 邮件</el-checkbox>
+              <el-checkbox label="wechat">微信</el-checkbox>
+              <el-checkbox label="dingtalk">钉钉</el-checkbox>
+              <el-checkbox label="email">邮件</el-checkbox>
             </el-checkbox-group>
             <div v-if="notifyChannels.length === 0" class="hint warn">
-              ⚠ 未选渠道, 通知不会发送
+              未选渠道, 通知不会发送
             </div>
             <div v-else class="hint">已选 {{ notifyChannels.length }} 个渠道</div>
           </el-form-item>

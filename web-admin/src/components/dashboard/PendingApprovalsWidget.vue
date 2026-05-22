@@ -102,7 +102,7 @@ onMounted(() => {
     <template #header>
       <div class="widget-header">
         <span class="title">
-          <span class="icon">📋</span>
+          <span class="icon"></span>
           我待审
           <el-badge :value="total" class="count-badge" type="danger" />
         </span>

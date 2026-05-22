@@ -21,7 +21,7 @@
           <el-button v-if="step < 4" type="primary" :disabled="!canNext" @click="nextStep">
             下一步 →
           </el-button>
-          <el-button v-if="step === 4" type="success" @click="finish">提交发布 🚀</el-button>
+          <el-button v-if="step === 4" type="success" @click="finish">提交发布 </el-button>
         </div>
       </div>
 

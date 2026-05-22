@@ -32,7 +32,7 @@
     </div>
 
     <el-alert type="info" :closable="false" show-icon style="margin: 8px 0">
-      <strong>灰斜体</strong> = 继承平台默认 (L1) · <strong>加粗</strong> = 本工厂覆盖 (L2) · 点 🔄 清除覆盖, 恢复 L1.
+      <strong>灰斜体</strong> = 继承平台默认 (L1) · <strong>加粗</strong> = 本工厂覆盖 (L2) · 点 清除覆盖, 恢复 L1.
       全平台默认权限由平台管理员在 <a href="#/system/role-permissions" target="_blank">/system/role-permissions</a> 维护.
     </el-alert>
 
@@ -65,7 +65,7 @@
               size="small"
               title="清除覆盖, 恢复 L1 默认"
               @click="resetOverride(row.role, m)"
-            >🔄</el-button>
+            ></el-button>
           </div>
         </template>
       </el-table-column>

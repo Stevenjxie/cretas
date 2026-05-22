@@ -15,7 +15,7 @@
         <div class="tpl-desc">{{ tpl.description }}</div>
       </div>
       <div class="template-card" :class="{ selected: selected === 'BLANK' }" @click="$emit('update:selected', 'BLANK')">
-        <div class="tpl-icon">📄</div>
+        <div class="tpl-icon"></div>
         <div class="tpl-name">空白配置</div>
         <div class="tpl-industry">自定义</div>
         <div class="tpl-desc">从零开始，手动配置所有模块</div>
@@ -32,7 +32,7 @@ const props = defineProps<{ factoryId: string; selected: string | null }>()
 defineEmits<{ 'update:selected': [code: string] }>()
 
 const templates = ref<any[]>([])
-const icons: Record<string, string> = { FOOD_PROCESSING: '🏭', BAKERY: '🍞', RESTAURANT: '🍽️', AQUACULTURE: '🐟' }
+const icons: Record<string, string> = { FOOD_PROCESSING: '', BAKERY: '', RESTAURANT: '', AQUACULTURE: '' }
 
 onMounted(async () => {
   try {
@@ -41,7 +41,7 @@ onMounted(async () => {
     // caller's factoryId (which backend *can* authorize). If templates are truly
     // meant to be global, that's a backend API design change, not a frontend hack.
     const res = await getTemplates(props.factoryId)
-    templates.value = (res.data || []).map((t: any) => ({ ...t, icon: icons[t.templateCode] || '📦' }))
+    templates.value = (res.data || []).map((t: any) => ({ ...t, icon: icons[t.templateCode] || '' }))
   } catch { /* use empty */ }
 })
 </script>

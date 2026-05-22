@@ -68,34 +68,34 @@ export interface RowActionAIContext {
 export const COMMON_ACTIONS = {
   CONVERT_TO_PRODUCTION: {
     id: 'convert-to-production',
-    icon: '📋',
+    icon: '',
     label: '转生产任务',
     aiHint: '我要把这单转成生产',
   },
   CONVERT_TO_PURCHASE: {
     id: 'convert-to-purchase',
-    icon: '🛒',
+    icon: '',
     label: '转采购单',
     aiHint: '我要采购这些料',
   },
   CONVERT_TO_OUTSOURCE: {
     id: 'convert-to-outsource',
-    icon: '📦',
+    icon: '',
     label: '转外购',
     aiHint: '我要找外购',
   },
   RETURN: { id: 'return', icon: '↩️', label: '退货', aiHint: '我要退这单' },
-  TRANSFER: { id: 'transfer', icon: '🔄', label: '调拨', aiHint: '我要调拨' },
-  PRINT_PDF: { id: 'print-pdf', icon: '📄', label: '打印 PDF', aiHint: '打印这单' },
-  COPY: { id: 'copy', icon: '📑', label: '复制', aiHint: '复制这单' },
-  LOCK: { id: 'lock', icon: '🔒', label: '锁定', aiHint: '锁住这单不让人改' },
-  UNLOCK: { id: 'unlock', icon: '🔓', label: '解锁', aiHint: '解锁这单' },
-  EDIT: { id: 'edit', icon: '✏️', label: '编辑', aiHint: '修改这单' },
-  SUBMIT: { id: 'submit', icon: '📤', label: '提交审核', aiHint: '提交审核' },
-  APPROVE: { id: 'approve', icon: '✅', label: '通过', aiHint: '审批通过' },
+  TRANSFER: { id: 'transfer', icon: '', label: '调拨', aiHint: '我要调拨' },
+  PRINT_PDF: { id: 'print-pdf', icon: '', label: '打印 PDF', aiHint: '打印这单' },
+  COPY: { id: 'copy', icon: '', label: '复制', aiHint: '复制这单' },
+  LOCK: { id: 'lock', icon: '', label: '锁定', aiHint: '锁住这单不让人改' },
+  UNLOCK: { id: 'unlock', icon: '', label: '解锁', aiHint: '解锁这单' },
+  EDIT: { id: 'edit', icon: '', label: '编辑', aiHint: '修改这单' },
+  SUBMIT: { id: 'submit', icon: '', label: '提交审核', aiHint: '提交审核' },
+  APPROVE: { id: 'approve', icon: '', label: '通过', aiHint: '审批通过' },
   REJECT: {
     id: 'reject',
-    icon: '❌',
+    icon: '',
     label: '驳回',
     danger: true,
     aiHint: '驳回这单',
@@ -110,7 +110,7 @@ export const COMMON_ACTIONS = {
   },
   CANCEL: {
     id: 'cancel',
-    icon: '🚫',
+    icon: '',
     label: '取消订单',
     danger: true,
     requiresConfirm: true,
@@ -118,7 +118,7 @@ export const COMMON_ACTIONS = {
   },
   DELETE: {
     id: 'delete',
-    icon: '🗑️',
+    icon: '',
     label: '删除',
     danger: true,
     requiresConfirm: true,
@@ -126,14 +126,14 @@ export const COMMON_ACTIONS = {
   },
   EDIT_PRICE: {
     id: 'edit-price',
-    icon: '💲',
+    icon: '',
     label: '修改单价',
     priceRelated: true,
     aiHint: '改这单的价格',
   },
   VIEW_PRICE_HISTORY: {
     id: 'view-price-history',
-    icon: '📈',
+    icon: '',
     label: '价格历史',
     priceRelated: true,
     aiHint: '看这单价格历史',
@@ -141,7 +141,7 @@ export const COMMON_ACTIONS = {
     // PriceHistoryDialog wired in 成品库存视图. Other entityTypes (salesOrder PENDING_APPROVAL,
     // purchaseOrder SUBMITTED/PENDING_APPROVAL) still pending wiring.
   },
-  VIEW_DETAIL: { id: 'view-detail', icon: '🔍', label: '查看详情', aiHint: '看这单详情' },
+  VIEW_DETAIL: { id: 'view-detail', icon: '', label: '查看详情', aiHint: '看这单详情' },
 } as const satisfies Record<string, Omit<RowAction, never>>;
 
 export type CommonActionId = (typeof COMMON_ACTIONS)[keyof typeof COMMON_ACTIONS]['id'];

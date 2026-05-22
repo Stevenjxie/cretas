@@ -215,9 +215,9 @@ function formatPercent(value: number) {
             的当日汇总 (近 30 天).
           </p>
           <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
-            <el-button size="small" @click="router.push('/smart-bi/query?q=最近30天损耗最多的食材和类型占比')">🤖 损耗分析</el-button>
-            <el-button size="small" @click="router.push('/smart-bi/query?q=哪个食材盘亏最严重')">🤖 盘亏分析</el-button>
-            <el-button size="small" @click="router.push('/smart-bi/query?q=最近30天领料趋势 top 10 食材')">🤖 领料趋势</el-button>
+            <el-button size="small" @click="router.push('/smart-bi/query?q=最近30天损耗最多的食材和类型占比')">损耗分析</el-button>
+            <el-button size="small" @click="router.push('/smart-bi/query?q=哪个食材盘亏最严重')">盘亏分析</el-button>
+            <el-button size="small" @click="router.push('/smart-bi/query?q=最近30天领料趋势 top 10 食材')">领料趋势</el-button>
             <el-button size="small" @click="router.push('/smart-bi/restaurant-v2')">餐饮综合分析 V2 →</el-button>
           </div>
         </div>

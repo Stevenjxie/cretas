@@ -15,7 +15,7 @@
 
     <h4 style="margin:16px 0 8px">完整性检查</h4>
     <div v-for="check in checks" :key="check.name" class="check-row">
-      <span :class="check.passed ? 'check-pass' : 'check-fail'">{{ check.passed ? '✅' : '❌' }}</span>
+      <span :class="check.passed ? 'check-pass' : 'check-fail'">{{ check.passed ? '' : '' }}</span>
       <span>{{ check.name }}</span>
       <span class="check-msg">{{ check.message }}</span>
     </div>

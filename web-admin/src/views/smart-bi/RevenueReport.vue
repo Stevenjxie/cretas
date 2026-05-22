@@ -632,7 +632,7 @@ function fmtDuration(ms: number | null | undefined) {
             </div>
 
             <div style="margin-top:12px;color:#86909c;font-size:13px">
-              💡 仅显示前 10 行；点 "下载 Excel" 获取完整报表 (含 客单人数分析 4 表全部数据)
+              仅显示前 10 行；点 "下载 Excel" 获取完整报表 (含 客单人数分析 4 表全部数据)
             </div>
           </div>
         </section>

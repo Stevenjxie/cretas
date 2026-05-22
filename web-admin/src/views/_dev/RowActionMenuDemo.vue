@@ -66,7 +66,7 @@ function handleAITrigger(row: { id: string; code: string }) {
 <template>
   <div class="demo-root">
     <h2>RowActionMenu 演示 — UX-A2 Track H Day 2</h2>
-    <p class="demo-note">列表行末"操作 ▾", 收纳次要动作 + 顶部 "💬 跟 AI 说" 入口</p>
+    <p class="demo-note">列表行末"操作 ▾", 收纳次要动作 + 顶部 "跟 AI 说" 入口</p>
 
     <div class="demo-toggles">
       <el-checkbox v-model="aiOn" label="显示 AI 入口" size="small" />

@@ -9,7 +9,7 @@
     <template #footer>
       <el-button @click="$emit('cancel')">取消</el-button>
       <el-button :type="mode === 'approve' ? 'success' : 'danger'" :disabled="mode === 'reject' && !notes.trim()" @click="$emit('confirm', notes)">
-        {{ mode === 'approve' ? '✅ 确认通过' : '❌ 确认驳回' }}
+        {{ mode === 'approve' ? '确认通过' : '确认驳回' }}
       </el-button>
     </template>
   </el-dialog>

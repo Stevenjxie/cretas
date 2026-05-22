@@ -122,15 +122,15 @@ async function handleDelete(att: Attachment): Promise<void> {
 function categoryIcon(c: AttachmentFileCategory): string {
   switch (c) {
     case 'VIDEO':
-      return '🎬';
+      return '';
     case 'DOCUMENT':
-      return '📄';
+      return '';
     case 'VOUCHER':
-      return '🧾';
+      return '';
     case 'SIGNATURE':
-      return '✍️';
+      return '';
     default:
-      return '📎';
+      return '';
   }
 }
 

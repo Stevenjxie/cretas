@@ -17,9 +17,9 @@
     </div>
 
     <div class="mode-description">
-      <template v-if="mode === 'autopilot'">🤖 全自动模式: 描述需求，AI 自动完成配置</template>
-      <template v-else-if="mode === 'plan'">📋 计划模式: AI 生成变更方案，逐项审核后应用</template>
-      <template v-else>⚡ 操作模式: 手动操作时，AI 实时提示关联影响</template>
+      <template v-if="mode === 'autopilot'">全自动模式: 描述需求，AI 自动完成配置</template>
+      <template v-else-if="mode === 'plan'">计划模式: AI 生成变更方案，逐项审核后应用</template>
+      <template v-else>操作模式: 手动操作时，AI 实时提示关联影响</template>
     </div>
 
     <div class="chat-messages" ref="messagesRef">
@@ -68,9 +68,9 @@ const emit = defineEmits<{
 // Autopilot mode is now explicit via data-mode="autopilot" button.
 const mode = ref<AIAgentMode>('plan')
 const modes: { label: string; value: AIAgentMode }[] = [
-  { label: '🤖 Autopilot', value: 'autopilot' },
-  { label: '📋 Plan', value: 'plan' },
-  { label: '⚡ Action', value: 'action' },
+  { label: 'Autopilot', value: 'autopilot' },
+  { label: 'Plan', value: 'plan' },
+  { label: 'Action', value: 'action' },
 ]
 
 const messages = ref<AIMessage[]>([

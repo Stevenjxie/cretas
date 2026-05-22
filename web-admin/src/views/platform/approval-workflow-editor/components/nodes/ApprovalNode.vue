@@ -2,27 +2,27 @@
   <div class="wf-node approval-node" :class="{ selected, 'co-sign': requiredApprovers > 1 }">
     <Handle type="target" :position="Position.Top" />
     <div class="node-header">
-      <span class="node-icon">✓</span>
+      <span class="node-icon"></span>
       <span class="node-title">{{ data?.label || '审批节点' }}</span>
     </div>
     <div class="node-body">
       <div v-if="approverRoles.length" class="badge roles">
-        👤 {{ approverRoles.join(' / ') }}
+        {{ approverRoles.join(' / ') }}
       </div>
       <div v-if="departmentIds.length" class="badge depts">
-        🏢 {{ departmentIds.length }} 个部门
+        {{ departmentIds.length }} 个部门
       </div>
       <div v-if="requiredApprovers > 1" class="badge cosign">
         会签 {{ requiredApprovers }} 人
       </div>
       <div v-if="timeoutMinutes > 0" class="badge sla">
-        ⏱ {{ timeoutMinutes }} 分钟
+        {{ timeoutMinutes }} 分钟
       </div>
       <div v-if="delegateUserId" class="badge delegate">
-        👥 委托: {{ delegateUserId }}
+        委托: {{ delegateUserId }}
       </div>
       <div v-if="autoApprove" class="badge auto">
-        ⚡ 自动审批
+        自动审批
       </div>
     </div>
     <Handle type="source" :position="Position.Bottom" />

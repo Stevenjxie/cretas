@@ -388,9 +388,9 @@ watch(() => props.tableId, () => {
               <label class="cfp__form-label">图标风格</label>
               <el-select v-model="editForm.iconSet!.type" style="width: 100%">
                 <el-option label="箭头 ↑→↓" value="arrows" />
-                <el-option label="红绿灯 🟢🟡🔴" value="traffic" />
-                <el-option label="星级 ⭐" value="stars" />
-                <el-option label="旗帜 🏴🏳️⚑" value="flags" />
+                <el-option label="红绿灯 " value="traffic" />
+                <el-option label="星级 " value="stars" />
+                <el-option label="旗帜 " value="flags" />
               </el-select>
             </div>
             <div class="cfp__form-group">

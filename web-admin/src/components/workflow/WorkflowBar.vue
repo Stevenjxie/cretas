@@ -21,7 +21,7 @@ const props = withDefaults(
     loading: false,
     emptyHint: '暂无工作流数据',
     aiTriggerEnabled: false,
-    aiTriggerLabel: '💬 跟 AI 说',
+    aiTriggerLabel: '跟 AI 说',
   },
 );
 

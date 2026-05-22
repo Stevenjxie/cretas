@@ -86,7 +86,7 @@ async function onTest() {
       ruleType: string
     }>
     if (resp.success && resp.data) {
-      resultText.value = resp.data.result ? '✓ 规则命中 (true)' : '✗ 规则未命中 (false)'
+      resultText.value = resp.data.result ? '规则命中 (true)' : '规则未命中 (false)'
       resultType.value = resp.data.result ? 'success' : 'warning'
       resultDetail.value = `ruleType=${resp.data.ruleType}, expression=${resp.data.expression}`
     } else {

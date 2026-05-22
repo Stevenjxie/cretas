@@ -91,7 +91,7 @@ function renderMarkdown(md: string): string {
             <span class="release-note-title">{{ note.title }}</span>
           </div>
           <el-button text :icon="undefined" size="small" @click="dismiss(note.id)">
-            ✕
+            
           </el-button>
         </div>
       </template>

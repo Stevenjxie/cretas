@@ -2,7 +2,7 @@
   <section class="tpl-grid-section">
     <header class="tpl-grid-header">
       <div class="tpl-grid-title">
-        <span class="tpl-grid-icon">📊</span>
+        <span class="tpl-grid-icon"></span>
         <span class="tpl-grid-title-text">模板分析</span>
         <span class="tpl-grid-subtitle">AI 自动为本次上传生成的 {{ codes.length }} 项分析</span>
       </div>

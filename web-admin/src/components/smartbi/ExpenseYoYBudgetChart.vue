@@ -220,7 +220,7 @@ function buildOption() {
           show: true,
           position: 'top',
           formatter: (p: { value: number }) =>
-            p.value >= 100 ? `${p.value}% ✓` : `${p.value}%`,
+            p.value >= 100 ? `${p.value}% ` : `${p.value}%`,
           fontSize: 11,
           color: (p: { value: number }) => p.value >= 100 ? '#36B37E' : '#2D8B57',
         },

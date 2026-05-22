@@ -412,7 +412,7 @@ async function sendFeedback(msg: ChatMessage, value: 1 | -1) {
     msg.feedbackValue = prevValue;
     ElMessage.warning('反馈提交失败, 请稍后重试');
   } else {
-    ElMessage.success(value === 1 ? '感谢反馈 👍' : '已记录, 我们会改进');
+    ElMessage.success(value === 1 ? '感谢反馈 ' : '已记录, 我们会改进');
   }
   msg.feedbackPending = false;
 }
@@ -1440,7 +1440,7 @@ function handleNewTopic() {
   chatHistory.value.push({
     id: `topic-reset-${Date.now()}`,
     role: 'assistant',
-    content: '✨ 已开新话题，下一句提问不再引用前文上下文（前文记录保留可见）',
+    content: '已开新话题，下一句提问不再引用前文上下文（前文记录保留可见）',
     timestamp: new Date()
   });
   scrollToBottom(true);
@@ -1691,13 +1691,13 @@ function handleKeydown(event: KeyboardEvent) {
                     :type="message.feedbackValue === 1 ? 'success' : 'default'"
                     plain
                     @click="sendFeedback(message, 1)"
-                  >👍 有用</el-button>
+                  >有用</el-button>
                   <el-button
                     size="small"
                     :type="message.feedbackValue === -1 ? 'danger' : 'default'"
                     plain
                     @click="sendFeedback(message, -1)"
-                  >👎 不准确</el-button>
+                  >不准确</el-button>
                 </div>
               </template>
             </div>
@@ -1785,7 +1785,7 @@ function handleKeydown(event: KeyboardEvent) {
           <template #default="{ item }">
             <div class="suggestion-item">
               <span class="suggestion-text">{{ item.value }}</span>
-              <span class="suggestion-tag">⚡ 秒回</span>
+              <span class="suggestion-tag">秒回</span>
             </div>
           </template>
         </el-autocomplete>
