@@ -5,15 +5,16 @@
 -- 3 intents 注册:
 --   1. APPROVAL_PENDING_QUERY  (Tool, QUERY)    — "我该批什么" / "今日待审" / "待审批"
 --   2. APPROVAL_ACTION_EXECUTE (Tool, DATA_OP)  — 批准 / 拒绝 / 通过 / 驳回
---   3. MY_APPROVAL_WORKDESK    (WORKDESK, NULL) — Workdesk path A 入口 (LLM 路由到 approval_pending_query)
+--   3. MY_APPROVAL_WORKDESK    (WORKDESK, tool_name=approval_pending_query) — Workdesk 入口
+--      Mirror Sprint 10 Loop 1 V20260822_03 pattern: WORKDESK intent 直绑 Tool 避免 Skill registry miss.
 --
--- Pattern mirrors V20260820_01 (Sprint 8 P1 proven), V20260820_09 (P4b).
+-- Pattern mirrors V20260822_03 (Sprint 10 Loop 1 shipment, proven).
 -- ON CONFLICT (intent_code) DO UPDATE — idempotent re-run safe.
 --
 -- 3-strike preflight compliance:
 --   - NO `||` in COMMENT (single string literal only — per PR #17/#18 PG syntax fixes)
---   - JSONB literal (keywords) stored as plain '[...]' JSON string (Hibernate auto-cast)
---   - WORKDESK intent has tool_name=NULL (routes via Skill registry, NOT direct Tool)
+--   - `::jsonb` explicit cast on keywords (per V20260821_36 hotfix convention)
+--   - WORKDESK intent 直绑 Tool 而非 Skill (Loop 1 proven pattern)
 
 -- ===== 1. WORKDESK-level intent (path A 入口, auto-trigger on Workdesk mount) =====
 
@@ -27,7 +28,7 @@ VALUES (
     'MY_APPROVAL_WORKDESK',
     '我的审批工作台',
     'WORKDESK',
-    NULL,
+    'approval_pending_query',  -- 直绑 Tool (Loop 1 V20260822_03 proven pattern; 无 Skill registry miss)
     'LOW',
     '["我该批什么","等我审批的有哪些","我的审批","审批工作台","待我审批","今日审批清单","当前节点待批","我有多少要审","等我批的"]'::jsonb,
     'Sprint 10 Loop 4 审批工作台入口 — Workdesk auto-trigger 或用户主动问 "我该批什么". 路由到 approval_pending_query Tool 列出当前 role 待审 RUNNING workflow 实例.',
