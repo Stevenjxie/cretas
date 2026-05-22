@@ -537,16 +537,35 @@ public class DynamicToolSelectionService {
         }
     }
 
+    /**
+     * <p>Sprint 11 Round 4 P1 fix (Bug 2) — surface diagnostic info instead of
+     * generic "暂不支持此类型的意图执行: RESTAURANT_OPS". Mirrors
+     * {@link ToolDispatchService#buildNoToolResponse(AIIntentConfig)}.
+     */
     private IntentExecuteResponse buildNoToolResponse(AIIntentConfig intent) {
-        String msg = "暂不支持此类型的意图执行: " + intent.getIntentCategory();
+        String intentName = intent.getIntentName() != null ? intent.getIntentName()
+                : intent.getIntentCode();
+        String boundTool = intent.getToolName();
+        String diagnostic;
+        if (boundTool != null && !boundTool.isBlank()) {
+            diagnostic = String.format(
+                "意图\"%s\"(%s)已识别，但配置的 Tool [%s] 未注册。"
+                + "请联系管理员检查 Tool 注册或意图配置。",
+                intentName, intent.getIntentCode(), boundTool);
+        } else {
+            diagnostic = String.format(
+                "意图\"%s\"(%s)已识别，但暂未配置执行器（类别: %s）。"
+                + "请联系管理员配置 Tool 或 Skill，或尝试更具体的提问方式。",
+                intentName, intent.getIntentCode(), intent.getIntentCategory());
+        }
         return IntentExecuteResponse.builder()
                 .intentRecognized(true)
                 .intentCode(intent.getIntentCode())
                 .intentName(intent.getIntentName())
                 .intentCategory(intent.getIntentCategory())
                 .status("FAILED")
-                .message(msg)
-                .formattedText(msg)
+                .message(diagnostic)
+                .formattedText(diagnostic)
                 .executedAt(LocalDateTime.now())
                 .build();
     }
