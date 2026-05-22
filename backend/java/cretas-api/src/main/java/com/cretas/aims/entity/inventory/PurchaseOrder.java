@@ -8,8 +8,10 @@ import com.cretas.aims.entity.enums.PurchaseOrderStatus;
 import com.cretas.aims.entity.enums.PurchaseType;
 import com.cretas.aims.security.PriceSensitive;
 import com.fasterxml.jackson.annotation.JsonIgnore;
+import io.hypersistence.utils.hibernate.type.json.JsonBinaryType;
 import lombok.*;
 import org.hibernate.annotations.Formula;
+import org.hibernate.annotations.Type;
 import org.hibernate.annotations.Where;
 
 import jakarta.persistence.*;
@@ -19,6 +21,7 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 /**
@@ -227,4 +230,13 @@ public class PurchaseOrder extends BaseEntity {
                 item.getReceivedQuantity() != null &&
                         item.getReceivedQuantity().compareTo(item.getQuantity()) >= 0);
     }
+
+    /**
+     * Sprint 10 AI invocation source tag — set when Workdesk AI 1-click create PO draft.
+     * Schema: {source: "sprint-10-loop-3", testRun: bool, createdAt: iso}.
+     * NULL = manual UI create.
+     */
+    @Type(JsonBinaryType.class)
+    @Column(name = "ai_invocation_metadata", columnDefinition = "jsonb")
+    private Map<String, Object> aiInvocationMetadata;
 }

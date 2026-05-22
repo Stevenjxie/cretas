@@ -127,27 +127,13 @@ interface QuickSalesOrderRow {
 function quickSalesOrderFactory(): QuickSalesOrderRow {
   return { customerId: '', requiredDeliveryDate: '', remark: '' };
 }
-async function submitQuickSalesOrder(row: QuickSalesOrderRow): Promise<void> {
-  if (!row.customerId) {
-    throw new Error('请选择客户');
-  }
-  const payload = {
-    customerId: row.customerId,
-    salesperson: '',
-    requiredDeliveryDate: row.requiredDeliveryDate || null,
-    remark: row.remark || '',
-    shippingIncluded: false,
-    shippingFee: 0,
-    extraFees: [],
-    items: [],
-    customFields: {},
-  };
-  const res = await post(`/${factoryId.value}/sales/orders`, payload);
-  if (!res?.success) {
-    throw new Error(res?.message || '创建失败');
-  }
-  // Refresh list after each submit so user sees the new row immediately.
-  await loadData();
+async function submitQuickSalesOrder(_row: QuickSalesOrderRow): Promise<void> {
+  // P0 hotfix 2026-05-22: 销售订单后端要求至少 1 项明细 (SalesOrderService.createOrder
+  // 校验 items.isEmpty → 400 "订单行项目不能为空"). Quick 模式 (P1 #58) 设计为 header-only
+  // 录入, 跟 SO 强制 items 契约冲突 → 用户提交即报错. 改 fool-proof Rule 1 预先告知 +
+  // 引导切到 BOM/标准模式 (它们有 items 编辑 UI).
+  // Per fool-proof-design.md Rule 5 — 不让用户卡死, 给 next action.
+  throw new Error('销售订单需要至少 1 项明细 — 快速模式不支持 header-only 创建。请改用 "BOM 展开" 或 "标准新建" 模式来填写明细行。');
 }
 
 // P1 #58 — BOM expansion (BOM 展开): parent SO + child items from selected product template.
@@ -766,7 +752,26 @@ async function handleCreate() {
     const res = await post(`/${factoryId.value}/sales/orders`, form.value);
     if (res.success) { ElMessage.success('创建成功'); dialogVisible.value = false; loadData(); }
     else { ElMessage.error(res.message || '创建失败'); }
-  } catch { /* axios interceptor already displayed error toast */ }
+  } catch (e: unknown) {
+    // 2026-05-22 hotfix (Steve P0): 409 dedup / 乐观锁 was being silently swallowed.
+    // axios interceptor for vanilla 409 (no actionHint) suppresses toast on assumption
+    // caller handles it — but this catch was empty. Now: surface message + reload list
+    // so user knows what's happening.
+    // Per fool-proof-design.md Rule 4 (写操作幂等防重复) + 4 位一体 (d): 必含 next action.
+    const err = e as { status?: number; message?: string; response?: { data?: { message?: string; actionHint?: string } } };
+    const status = err.status || err.response?.status;
+    if (status === 409) {
+      const msg = err.message || err.response?.data?.message || '同客户/同日期/同明细已有订单 (5 分钟防重) — 请刷新列表查看, 或修改任意字段重试';
+      ElMessage({
+        message: msg,
+        type: 'warning',
+        duration: 0,
+        showClose: true,
+      });
+      loadData();
+    }
+    // 其他 status — axios interceptor already displayed (per existing behavior)
+  }
 }
 
 async function handleAction(orderId: string, action: string) {
@@ -1496,10 +1501,10 @@ async function submitQuickPayment() {
         <div class="item-row item-header">
           <span style="width: 200px">品名</span>
           <span style="width: 120px">规格</span>
-          <span style="width: 100px">下单数量</span>
+          <span style="width: 130px">下单数量</span>
           <span style="width: 80px">单位</span>
-          <span style="width: 100px">单价</span>
-          <span style="width: 80px">箱数</span>
+          <span style="width: 130px">单价</span>
+          <span style="width: 130px">箱数</span>
           <span style="width: 90px" title="税率 (开票 G1 按此分组): 9=原料, 13=加工, 6=服务">税率(%)</span>
           <!-- T4-D1 (issue #525): 来源仓库 — F006 客户反馈 "成品会调回总仓, 总仓再安排发货".
                Customer wants to record per-line source warehouse (WH-LOG 总仓 / WH-WKS 线边仓). -->
@@ -1511,12 +1516,12 @@ async function submitQuickPayment() {
             <el-option v-for="p in products" :key="p.id" :label="p.name" :value="p.id" />
           </el-select>
           <el-input v-model="item.specification" placeholder="规格" style="width: 120px" @change="calcBox(item)" />
-          <el-input-number v-model="item.quantity" :min="1" style="width: 100px" @change="() => calcBox(item)" />
+          <el-input-number v-model="item.quantity" :min="1" style="width: 130px" @change="() => calcBox(item)" />
           <el-input v-model="item.unit" style="width: 80px" />
           <!-- Sprint 4 W2 S-PRICE-1 R1: unitPrice + 上次成交价 hint chip (一键采纳) -->
           <!-- Issue #793: 客户协议价 hint (CUSTOMER 自动覆盖, GLOBAL 仅提示) -->
           <div class="unit-price-wrap">
-            <el-input-number v-model="item.unitPrice" :min="0" :precision="2" style="width: 100px" />
+            <el-input-number v-model="item.unitPrice" :min="0" :precision="2" style="width: 130px" />
             <el-tooltip
               v-if="item.contractPriceHint"
               :content="`${item.contractPriceHint.source === 'CUSTOMER' ? '协议价' : '全局价'} ¥${item.contractPriceHint.price} · ${item.contractPriceHint.priceListName}${item.contractPriceHint.source === 'CUSTOMER' ? ' · 已自动应用' : ' · 点击采用'}`"
@@ -1549,8 +1554,9 @@ async function submitQuickPayment() {
             </el-tooltip>
           </div>
           <!-- P1-3 R2 fix: el-tag 替换 inline-styled div, 跟随 Element Plus 主题 -->
-          <el-tag v-if="isAbacaItem(item)" type="warning" effect="light" size="default" style="width: 80px; text-align: center;">抄码品</el-tag>
-          <el-input-number v-else v-model="item.boxQuantity" :min="0" :precision="2" style="width: 80px" placeholder="箱" />
+          <!-- 2026-05-22 hotfix: 箱数 80→130px — Steve 客户报 -/+ 按钮挤掉数字看不见 -->
+          <el-tag v-if="isAbacaItem(item)" type="warning" effect="light" size="default" style="width: 130px; text-align: center;">抄码品</el-tag>
+          <el-input-number v-else v-model="item.boxQuantity" :min="0" :precision="2" style="width: 130px" placeholder="箱" />
           <el-select v-model="item.taxRate" placeholder="税率" style="width: 90px" size="default">
             <el-option :value="0" label="0% 免税" />
             <el-option :value="3" label="3% 小规模" />

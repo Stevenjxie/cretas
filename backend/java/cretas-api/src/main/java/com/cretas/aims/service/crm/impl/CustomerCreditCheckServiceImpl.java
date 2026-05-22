@@ -5,6 +5,8 @@ import com.cretas.aims.entity.Customer;
 import com.cretas.aims.entity.enums.CreditStatus;
 import com.cretas.aims.exception.ResourceNotFoundException;
 import com.cretas.aims.repository.CustomerRepository;
+import com.cretas.aims.service.canvas.ThresholdKeys;
+import com.cretas.aims.service.canvas.ThresholdResolverService;
 import com.cretas.aims.service.crm.CustomerCreditCheckService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -32,13 +34,20 @@ public class CustomerCreditCheckServiceImpl implements CustomerCreditCheckServic
 
     private static final Logger log = LoggerFactory.getLogger(CustomerCreditCheckServiceImpl.class);
 
-    /** 接近预警阈值 80% (used / limit) */
-    private static final BigDecimal WARNING_RATIO = new BigDecimal("0.80");
+    /** 接近预警阈值 80% (used / limit) — fallback default; 实际值通过 thresholdResolver 读取. */
+    private static final BigDecimal FALLBACK_WARNING_RATIO = new BigDecimal("0.80");
 
     private final CustomerRepository customerRepository;
+    private final ThresholdResolverService thresholdResolver;
 
-    public CustomerCreditCheckServiceImpl(CustomerRepository customerRepository) {
+    public CustomerCreditCheckServiceImpl(CustomerRepository customerRepository,
+                                          ThresholdResolverService thresholdResolver) {
         this.customerRepository = customerRepository;
+        this.thresholdResolver = thresholdResolver;
+    }
+
+    private BigDecimal warningRatio(String factoryId) {
+        return thresholdResolver.getBigDecimal(factoryId, ThresholdKeys.CREDIT_WARNING_RATIO, FALLBACK_WARNING_RATIO);
     }
 
     @Override
@@ -103,7 +112,7 @@ public class CustomerCreditCheckServiceImpl implements CustomerCreditCheckServic
             BigDecimal overBy = afterRequest.subtract(limit).setScale(2, RoundingMode.HALF_UP);
             suggestedAction = "客户 " + customer.getName() + " 本次下单将超出信用额度 ¥" + overBy
                     + " (限额 ¥" + limit + ", 已用 ¥" + used + "). 建议先收款或调高信用额度.";
-        } else if (utilization.compareTo(WARNING_RATIO) >= 0) {
+        } else if (utilization.compareTo(warningRatio(factoryId)) >= 0) {
             severity = "yellow";
             suggestedAction = "客户 " + customer.getName() + " 信用已使用 "
                     + utilization.multiply(BigDecimal.valueOf(100)).setScale(0, RoundingMode.HALF_UP)
