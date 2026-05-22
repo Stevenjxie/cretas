@@ -104,4 +104,17 @@ public class RecallEvent extends BaseEntity {
     /** 预估损失金额 (库存价值 + 退货 + 监管罚款 + 品牌损失等). */
     @Column(name = "estimated_loss", precision = 19, scale = 2)
     private BigDecimal estimatedLoss;
+
+    /**
+     * AUD-4 P1 Lost Update prevention (Canvas Phase A Food Safety Hub, 2026-05-21).
+     *
+     * <p>召回事件状态流转 (INVESTIGATING → COMPLETED) 多人协作风险高 — 食品安全主管 +
+     * 仓管 + 客户主管同时更新 status / completed_at / estimated_loss 时, JPA 乐观锁
+     * 防 Lost Update.
+     *
+     * <p>Column added via Flyway {@code V20260823_02} with {@code DEFAULT 0 NOT NULL}.
+     */
+    @Version
+    @Column(name = "version", nullable = false)
+    private Long version;
 }
