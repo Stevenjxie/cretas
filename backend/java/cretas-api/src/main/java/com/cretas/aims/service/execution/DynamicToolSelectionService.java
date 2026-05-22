@@ -258,10 +258,13 @@ public class DynamicToolSelectionService {
                 return null;
             }
 
-            // SkillResult.success=false 含 "未找到Skill: xxx" message — Skill 不存在,
-            // 走 fallback 的下游 (动态选择 / buildNoToolResponse).
+            // SkillResult.success=false 且 message 是 "Skill not found" / "未找到Skill" — Skill 不存在,
+            // 返 null 让 caller 走 fallback 的下游 (动态选择 / buildNoToolResponse).
+            // Sprint 9 P0.2 fix (2026-05-22): SkillRouterServiceImpl.executeSkill 返英文 "Skill not found: xxx",
+            // 原来的 `msg.contains("未找到")` 漏掉这一 case 导致 caller 把所有 skill 失败都当成 "skill 存在但执行失败".
             String msg = skillResult.getMessage();
-            if (!skillResult.isSuccess() && msg != null && msg.contains("未找到")) {
+            if (!skillResult.isSuccess() && msg != null
+                    && (msg.contains("未找到") || msg.startsWith("Skill not found"))) {
                 log.warn("显式 Skill 路由: Skill 不存在 skillName={}, message={}", skillName, msg);
                 return null;
             }
@@ -289,9 +292,29 @@ public class DynamicToolSelectionService {
                 return response;
             }
 
+            // Sprint 9 P0.2 fix (2026-05-22): Skill 存在但执行失败 (e.g. LLM call timeout / validateContext failure
+            // 缺 userId / tool not available 等). 原来返 null → caller fall through 到 buildNoToolResponse
+            // → 用户看 "暂不支持此类型的意图执行: WORKDESK", 没有 actionable 信息 (root cause #1 of P0.2 audit).
+            // 改为: 返 status=FAILED 的 response 带实际错误 message + 提示用户重试或 fall back.
+            //
+            // 这避免误把 transient failure (LLM 429 / DB lock) 当成 "intent 不支持". 用户看到的 message 是
+            // "Skill 执行失败: ${actual reason}" 而非 generic "暂不支持".
             log.warn("显式 Skill 路由: 执行失败 skill={}, message={}",
                     skillResult.getSkillName(), skillResult.getMessage());
-            return null;
+
+            IntentExecuteResponse failResponse = new IntentExecuteResponse();
+            failResponse.setIntentRecognized(true);
+            failResponse.setIntentCode(intent.getIntentCode());
+            failResponse.setIntentName(intent.getIntentName());
+            failResponse.setIntentCategory(intent.getIntentCategory());
+            failResponse.setStatus("FAILED");
+            String failMessage = "工作台数据准备失败: "
+                    + (skillResult.getMessage() != null ? skillResult.getMessage() : "未知错误")
+                    + ". 请稍后重试或联系系统管理员.";
+            failResponse.setMessage(failMessage);
+            failResponse.setFormattedText(failMessage);
+            failResponse.setExecutedAt(LocalDateTime.now());
+            return failResponse;
         } catch (Exception e) {
             log.warn("显式 Skill 路由异常 intentCode={}: {}", intent.getIntentCode(), e.getMessage());
             return null;
