@@ -277,7 +277,9 @@ const menuConfig: MenuItem[] = [
       { path: '/analytics/production-report', title: '车间实时生产报表', icon: '', module: 'analytics',
         hideForFactoryTypes: ['RESTAURANT'] },
       { path: '/analytics/alert-dashboard', title: '异常预警', icon: '', module: 'analytics' },
-      { path: '/analytics/supply-chain', title: '进销存闭环总览', icon: '', module: 'analytics' }
+      { path: '/analytics/supply-chain', title: '进销存闭环总览', icon: '', module: 'analytics' },
+      // Phase 1 Track B.3 (2026-05-22): 指标中心 UI 入口 — surfaces Phase 1 backend (PR #155)
+      { path: '/indicator-center', title: '指标中心', icon: 'Histogram', module: 'analytics' }
     ]
   },
   {
