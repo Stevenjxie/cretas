@@ -80,4 +80,18 @@ public class IndicatorVersion extends BaseEntity {
     /** 计算源标识 (例如 PYTHON_ENDPOINT:/api/smartbi/analysis/factory/yield-rate) */
     @Column(name = "compute_source", length = 500)
     private String computeSource;
+
+    /**
+     * 防止物理删除 — append-only 审计实体。
+     *
+     * <p>本实体无 {@code @Where(deleted_at IS NULL)}, 故 {@code repo.delete(entity)}
+     * 会触发 {@link BaseEntity#softDelete()} 默认 {@code @SQLDelete} 软删除,
+     * 但快照已 emit (业务时间窗 + 计算时刻) 不应被任何方式遮盖。
+     * {@code @PreRemove} 在物理 DELETE / 软删 DELETE 触发前抛错, 显式阻止。
+     */
+    @PreRemove
+    protected void preventRemove() {
+        throw new UnsupportedOperationException(
+                "IndicatorVersion is append-only audit; physical removal not allowed");
+    }
 }

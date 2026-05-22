@@ -100,4 +100,18 @@ public class BatchLineageEdge extends BaseEntity {
     @Type(JsonBinaryType.class)
     @Column(name = "meta", columnDefinition = "jsonb")
     private Map<String, Object> meta = new HashMap<>();
+
+    /**
+     * 防止物理删除 — forensic lineage 记录。
+     *
+     * <p>本实体无 {@code @Where(deleted_at IS NULL)}, 客户投诉追溯必须看到完整链路即便相关
+     * 批次被软删。意外 {@code repo.delete(entity)} 会触发 {@link BaseEntity} 的
+     * {@code @SQLDelete} 软删除, 但 lineage 不应被任何方式遮盖。
+     * {@code @PreRemove} 显式阻止。
+     */
+    @PreRemove
+    protected void preventRemove() {
+        throw new UnsupportedOperationException(
+                "BatchLineageEdge is append-only audit; physical removal not allowed");
+    }
 }

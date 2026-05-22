@@ -72,4 +72,18 @@ public class BatchLineageClosure extends BaseEntity {
     /** 0=self / 1=直接边 / >1=多跳 */
     @Column(name = "depth", nullable = false)
     private Integer depth = 0;
+
+    /**
+     * 防止物理删除 — append-only forensic 闭包记录。
+     *
+     * <p>闭包行由 {@code fn_maintain_lineage_closure} 触发器自动维护, 应用层永不调用
+     * delete。意外 {@code repo.delete(entity)} 会触发 {@link BaseEntity} 的
+     * {@code @SQLDelete} 软删除, 但闭包不应被任何方式遮盖。
+     * {@code @PreRemove} 显式阻止。
+     */
+    @PreRemove
+    protected void preventRemove() {
+        throw new UnsupportedOperationException(
+                "BatchLineageClosure is append-only audit; physical removal not allowed");
+    }
 }
