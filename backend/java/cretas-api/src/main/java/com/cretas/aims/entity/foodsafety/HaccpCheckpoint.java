@@ -107,4 +107,18 @@ public class HaccpCheckpoint extends BaseEntity {
     @Column(name = "active", nullable = false)
     @Builder.Default
     private boolean active = true;
+
+    /**
+     * AUD-4 P1 Lost Update prevention (Canvas Phase A Food Safety Hub, 2026-05-21).
+     *
+     * <p>JPA @Version optimistic locking. Hibernate auto-increments on each save() and
+     * throws {@link org.springframework.orm.ObjectOptimisticLockingFailureException}
+     * if the loaded version differs from the DB version at flush time. Parallel PUT
+     * attempts trip the lock — loser sees 409 with refresh hint.
+     *
+     * <p>Column added via Flyway {@code V20260823_02} with {@code DEFAULT 0 NOT NULL}.
+     */
+    @Version
+    @Column(name = "version", nullable = false)
+    private Long version;
 }
