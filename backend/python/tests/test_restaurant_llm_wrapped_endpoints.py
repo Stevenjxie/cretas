@@ -14,14 +14,18 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
 from smartbi.services.restaurant_llm_formatter import WHITELIST
 
 
-def _make_app_with_router(router, role: str = "factory_super_admin", factory_id: str = "RES_3101_009", prefix: str = "/api/smartbi"):
+def _make_app_with_router(
+    router,
+    role: str = "factory_super_admin",
+    factory_id: str = "RES_3101_009",
+    prefix: str = "/api/smartbi",
+):
     app = FastAPI()
 
     @app.middleware("http")

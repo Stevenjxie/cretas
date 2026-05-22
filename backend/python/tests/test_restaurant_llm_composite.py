@@ -14,7 +14,6 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, patch
 
-import pytest
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
@@ -23,7 +22,10 @@ from smartbi.services.restaurant_llm_formatter import WHITELIST
 
 # ── Test-app factory ────────────────────────────────────────────────────────
 
-def _make_test_app(role: str | None = "factory_super_admin", factory_id: str = "RES_3101_009") -> FastAPI:
+def _make_test_app(
+    role: str | None = "factory_super_admin",
+    factory_id: str = "RES_3101_009",
+) -> FastAPI:
     from smartbi.api.restaurant_llm_composite import router
 
     app = FastAPI()
@@ -110,19 +112,37 @@ def test_composite_strict_whitelist_response_shape():
     cm, _ = _make_fake_conn(fake_rows)
     fake_pool = _make_fake_pool(cm)
 
+    def _mod(mid, name, count, cov):
+        return {
+            "id": mid, "name": name, "recordCount": count,
+            "coverage": cov, "windowDays": 30, "hasData": True,
+            "lastUpdated": None, "missingHints": [],
+        }
+
     fake_completeness = {
         "factoryId": "RES_3101_009",
         "factoryAgeDays": 365,
         "modules": [
-            {"id": "pos_sales", "name": "POS 销售数据", "recordCount": 100, "coverage": 90, "windowDays": 30, "hasData": True, "lastUpdated": None, "missingHints": []},
-            {"id": "menu_recipe", "name": "菜品配方", "recordCount": 20, "coverage": 80, "windowDays": 30, "hasData": True, "lastUpdated": None, "missingHints": []},
-            {"id": "requisition", "name": "领料记录", "recordCount": 30, "coverage": 100, "windowDays": 30, "hasData": True, "lastUpdated": None, "missingHints": []},
-            {"id": "wastage", "name": "损耗记录", "recordCount": 10, "coverage": 70, "windowDays": 30, "hasData": True, "lastUpdated": None, "missingHints": []},
-            {"id": "stocktaking", "name": "盘点记录", "recordCount": 4, "coverage": 60, "windowDays": 30, "hasData": True, "lastUpdated": None, "missingHints": []},
-            {"id": "review", "name": "顾客评价", "recordCount": 5, "coverage": 70, "windowDays": 30, "hasData": True, "lastUpdated": None, "missingHints": []},
+            _mod("pos_sales", "POS 销售数据", 100, 90),
+            _mod("menu_recipe", "菜品配方", 20, 80),
+            _mod("requisition", "领料记录", 30, 100),
+            _mod("wastage", "损耗记录", 10, 70),
+            _mod("stocktaking", "盘点记录", 4, 60),
+            _mod("review", "顾客评价", 5, 70),
         ],
         "overallCompleteness": 78,
     }
+
+    def _fake_module_response(mid, stat, w):
+        fallback = {
+            "id": mid, "name": mid, "recordCount": 0, "coverage": 0,
+            "windowDays": w, "hasData": False, "lastUpdated": None,
+            "missingHints": [],
+        }
+        return next(
+            (m for m in fake_completeness["modules"] if m["id"] == mid),
+            fallback,
+        )
 
     with patch(
         "smartbi.config.get_pg_pool", new_callable=AsyncMock, return_value=fake_pool,
@@ -137,9 +157,7 @@ def test_composite_strict_whitelist_response_shape():
         new_callable=AsyncMock, return_value={},
     ), patch(
         "smartbi.api.restaurant_completeness._build_module_response",
-        side_effect=lambda mid, stat, w: next(
-            (m for m in fake_completeness["modules"] if m["id"] == mid), {"id": mid, "name": mid, "recordCount": 0, "coverage": 0, "windowDays": w, "hasData": False, "lastUpdated": None, "missingHints": []}
-        ),
+        side_effect=_fake_module_response,
     ):
         resp = client.get(
             "/api/smartbi/restaurant/llm-composite",

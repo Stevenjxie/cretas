@@ -10,18 +10,11 @@ All tests are pure (no DB, no HTTP) — they feed crafted raw dicts directly.
 """
 from __future__ import annotations
 
-from typing import Any, Dict
-
-import pytest
-
 from smartbi.services.restaurant_llm_formatter import (
     DEFAULT_WINDOW_DAYS,
     FALLBACK_WINDOW_DAYS,
     WHITELIST,
     _build_evidence,
-    _build_recommendations,
-    _build_summary,
-    _check_data_available,
     _extract_top_items,
     _has_business_data,
     to_llm_format,
