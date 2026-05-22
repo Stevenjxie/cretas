@@ -258,10 +258,13 @@ public class DynamicToolSelectionService {
                 return null;
             }
 
-            // SkillResult.success=false 含 "未找到Skill: xxx" message — Skill 不存在,
-            // 走 fallback 的下游 (动态选择 / buildNoToolResponse).
+            // SkillResult.success=false 且 message 是 "Skill not found" / "未找到Skill" — Skill 不存在,
+            // 返 null 让 caller 走 fallback 的下游 (动态选择 / buildNoToolResponse).
+            // Sprint 9 P0.2 fix (2026-05-22): SkillRouterServiceImpl.executeSkill 返英文 "Skill not found: xxx",
+            // 原来的 `msg.contains("未找到")` 漏掉这一 case 导致 caller 把所有 skill 失败都当成 "skill 存在但执行失败".
             String msg = skillResult.getMessage();
-            if (!skillResult.isSuccess() && msg != null && msg.contains("未找到")) {
+            if (!skillResult.isSuccess() && msg != null
+                    && (msg.contains("未找到") || msg.startsWith("Skill not found"))) {
                 log.warn("显式 Skill 路由: Skill 不存在 skillName={}, message={}", skillName, msg);
                 return null;
             }
@@ -289,15 +292,12 @@ public class DynamicToolSelectionService {
                 return response;
             }
 
-            // Sprint 10.5 P0 #1 fix (2026-05-22, per 2026-05-22 Workdesk AI audit):
-            // Previously returned null on Skill non-success → orchestrator fell back to
-            // buildNoToolResponse → user saw generic "暂不支持此类型的意图执行: WORKDESK".
-            // Generic message masks the real Skill failure reason (e.g. period unavailable,
-            // Tool exception) and made customer demos look broken even though intent +
-            // routing worked correctly.
-            //
-            // Fix: surface the actual Skill error message in a structured FAILED response
-            // so user sees "Skill 执行失败: [真实原因]" instead of "暂不支持 WORKDESK".
+            // Sprint 10.5 P0 #1 + Sprint 9 P0.2 (merged 2026-05-22): Skill 存在但执行失败
+            // (LLM timeout / validateContext 缺 userId / tool not available 等). 原来返
+            // null → caller fall through 到 buildNoToolResponse → 用户看 "暂不支持此类型
+            // 的意图执行: WORKDESK" generic message. 改为返结构化 FAILED response 带 Skill
+            // 实际错误原因, 用户看 "Skill 执行失败: ${actual reason}" 而非 generic 暂不支持.
+            // Reuses buildSkillFailureResponse helper (Sprint 10.5 P0 #1 PR #182).
             log.warn("显式 Skill 路由: 执行失败 skill={}, message={}",
                     skillResult.getSkillName(), skillResult.getMessage());
             return buildSkillFailureResponse(intent, skillResult.getMessage());
