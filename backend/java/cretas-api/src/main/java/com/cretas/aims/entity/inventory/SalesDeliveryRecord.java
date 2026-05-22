@@ -6,7 +6,9 @@ import com.cretas.aims.entity.Factory;
 import com.cretas.aims.entity.User;
 import com.cretas.aims.entity.enums.SalesDeliveryStatus;
 import com.fasterxml.jackson.annotation.JsonIgnore;
+import io.hypersistence.utils.hibernate.type.json.JsonBinaryType;
 import lombok.*;
+import org.hibernate.annotations.Type;
 
 import jakarta.persistence.*;
 import java.math.BigDecimal;
@@ -14,6 +16,7 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import org.hibernate.annotations.Where;
 
@@ -137,4 +140,13 @@ public class SalesDeliveryRecord extends BaseEntity {
 
     @OneToMany(mappedBy = "deliveryRecord", cascade = CascadeType.ALL, orphanRemoval = true, fetch = FetchType.LAZY)
     private List<SalesDeliveryItem> items = new ArrayList<>();
+
+    /**
+     * Sprint 10 AI invocation source tag — set when Workdesk AI 1-click create.
+     * Schema: {source: "sprint-10-loop-1", testRun: bool, createdAt: iso}.
+     * NULL = manual UI create (传统菜单 path).
+     */
+    @Type(JsonBinaryType.class)
+    @Column(name = "ai_invocation_metadata", columnDefinition = "jsonb")
+    private Map<String, Object> aiInvocationMetadata;
 }

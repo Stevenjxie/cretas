@@ -153,6 +153,22 @@ const businessRoutes: RouteRecordRaw[] = [
           module: 'quality'
         }
       },
+      // Sprint 10 Loop 5 — 生产经理工作台 (ProductionManagerWorkdesk)
+      // 3 Tool: production_demand_query (READ) + production_batch_create (WRITE+Preview 灵魂 Tool)
+      // + (PRODUCTION_DEMAND_ANALYSIS WORKDESK intent → Skill 编排)
+      // 生产经理张工程师场景 (F006): "今天要起产什么?" — AI 5s 出排产清单 + 一键起产
+      // 防呆 R1 max + R2 context + R3 productionLine dropdown + R4 5min dedup
+      {
+        path: 'workdesk/production-manager',
+        name: 'ProductionManagerWorkdesk',
+        component: () => import('@/views/workdesk/ProductionManagerWorkdesk.vue'),
+        meta: {
+          requiresAuth: true,
+          title: '生产经理工作台',
+          icon: 'Operation',
+          module: 'production'
+        }
+      },
 
       // 生产管理
       {

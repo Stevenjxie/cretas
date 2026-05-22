@@ -1414,6 +1414,11 @@ public class ResultFormatterServiceImpl implements ResultFormatterService {
 
     /**
      * 从 data Map 的键值生成摘要文本，避免通用 "暂无数据" 回复
+     *
+     * 2026-05-22 hotfix (Steve P0 finance Workdesk): 过滤 `_*` 前缀的 internal metadata keys
+     * (_toolCount / _executionOrder / _reasoning 等). 之前这些被当业务字段 dump 给用户看,
+     * 出现 "查询完成 - _toolCount: 5" 这种垃圾输出. Per fool-proof-design.md — 不让 internal
+     * metadata leak 到用户 UI.
      */
     private String formatDataSummary(String prefix, Map<String, Object> data) {
         if (data == null || data.isEmpty()) return prefix + "，当前暂无相关数据记录。";
@@ -1421,20 +1426,34 @@ public class ResultFormatterServiceImpl implements ResultFormatterService {
         StringBuilder sb = new StringBuilder(prefix).append("\n");
         int numericCount = 0;
         int listCount = 0;
+        boolean anyShown = false;
         for (Map.Entry<String, Object> entry : data.entrySet()) {
+            // Skip internal metadata (_toolCount, _executionOrder, _reasoning, ...)
+            if (entry.getKey() != null && entry.getKey().startsWith("_")) continue;
             Object val = entry.getValue();
             if (val instanceof Number && numericCount < 5) {
                 sb.append("- ").append(humanizeKey(entry.getKey())).append(": ")
                   .append(QUANTITY_FORMATTER.format(((Number) val).doubleValue())).append("\n");
                 numericCount++;
+                anyShown = true;
             } else if (val instanceof List && listCount < 2) {
                 sb.append("- ").append(humanizeKey(entry.getKey())).append(": ")
                   .append(((List<?>) val).size()).append("条\n");
                 listCount++;
+                anyShown = true;
             }
         }
-        if (numericCount == 0 && listCount == 0) {
-            sb.append("包含 ").append(data.size()).append(" 项数据指标，可在报表模块查看详情。");
+        if (!anyShown) {
+            // 全部是 _* metadata OR 嵌套 Map 结构 (典型: Skill orchestration 返多 Tool 结果)
+            // 用 business key count 而不是 raw map size, 避免 "包含 8 项" 实际 6 项是 _* metadata
+            long businessKeyCount = data.keySet().stream()
+                    .filter(k -> k != null && !k.startsWith("_"))
+                    .count();
+            if (businessKeyCount > 0) {
+                sb.append("包含 ").append(businessKeyCount).append(" 项数据指标 — 详情请查看下方数据卡片或对应报表模块。");
+            } else {
+                sb.append("执行完成 — 详情请查看下方数据卡片。");
+            }
         }
         return sb.toString().trim();
     }
