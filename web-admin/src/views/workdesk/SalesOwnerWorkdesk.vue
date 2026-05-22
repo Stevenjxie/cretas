@@ -166,6 +166,160 @@
       </el-table>
     </el-card>
 
+    <!-- Sprint 10 Loop 1 — 今日待发清单 (AI 闭环发货入口) -->
+    <el-card class="shipment-card" shadow="never">
+      <template #header>
+        <div class="card-header">
+          <span>📦 今日待发清单 ({{ pendingShipments.length }})</span>
+          <div>
+            <el-button
+              size="small"
+              :loading="shipmentLoading"
+              :icon="Refresh"
+              data-testid="sprint10-refresh-pending-btn"
+              @click="loadTodayPendingShipments">
+              刷新待发
+            </el-button>
+            <span class="header-hint" style="margin-left: 8px;">Sprint 10 Loop 1 — AI 闭环发货</span>
+          </div>
+        </div>
+      </template>
+      <div v-if="!shipmentLoading && pendingShipments.length === 0" class="empty-shipment">
+        <el-empty description="今日暂无待发销售订单" :image-size="60" />
+      </div>
+      <el-table
+        v-if="pendingShipments.length > 0"
+        :data="pendingShipments"
+        size="small"
+        data-testid="sprint10-pending-shipments-table"
+        style="width: 100%">
+        <el-table-column prop="orderNumber" label="订单号" min-width="170" />
+        <el-table-column prop="customerName" label="客户" min-width="140">
+          <template #default="{ row }">
+            {{ row.customerName || '(未命名)' }}
+          </template>
+        </el-table-column>
+        <el-table-column prop="statusDisplay" label="状态" width="120">
+          <template #default="{ row }">
+            <el-tag size="small" :type="statusTagType(row.status)">
+              {{ row.statusDisplay }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column prop="requiredDeliveryDate" label="要求交货" width="120">
+          <template #default="{ row }">
+            <span v-if="row.requiredDeliveryDate">{{ row.requiredDeliveryDate }}</span>
+            <el-tag v-else size="small" type="info">未指定</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column prop="itemCount" label="待发行数" width="100" align="center" />
+        <el-table-column label="操作" width="160" fixed="right">
+          <template #default="{ row }">
+            <el-button
+              size="small"
+              type="primary"
+              data-testid="sprint10-confirm-shipment-btn"
+              @click="openShipmentDialog(row)">
+              一键确认发货
+            </el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+    </el-card>
+
+    <!-- Sprint 10 Loop 1 — 确认发货 Dialog (R1 max + R2 context + R4 idempotent) -->
+    <el-dialog
+      v-model="shipmentDialog.visible"
+      :title="`确认发货 — ${shipmentDialog.customerName || '客户'} (${shipmentDialog.orderNumber || ''})`"
+      width="720px"
+      data-testid="sprint10-shipment-dialog"
+      @close="resetShipmentDialog">
+      <el-alert
+        type="info"
+        :closable="false"
+        show-icon
+        class="dialog-hint">
+        <template #title>
+          R1 提示: 每行最多发剩余可发数量, 超额 disable 提交.
+        </template>
+      </el-alert>
+      <el-table
+        :data="shipmentDialog.itemForms"
+        size="small"
+        style="margin-top: 12px; width: 100%">
+        <el-table-column prop="productName" label="品名" min-width="180">
+          <template #default="{ row }">
+            {{ row.productName || row.productTypeId }}
+          </template>
+        </el-table-column>
+        <el-table-column prop="orderedQuantity" label="订单量" width="80" align="right" />
+        <el-table-column prop="deliveredQuantity" label="已发" width="80" align="right" />
+        <el-table-column label="剩余可发" width="110" align="right">
+          <template #default="{ row }">
+            <span style="color: #67c23a; font-weight: 600;">{{ row.pendingQuantity }}</span>
+            {{ row.unit }}
+          </template>
+        </el-table-column>
+        <el-table-column label="本次发货量" width="200">
+          <template #default="{ row }">
+            <el-input-number
+              v-model="row.actualQty"
+              :min="0"
+              :max="Number(row.pendingQuantity)"
+              :step="1"
+              :precision="2"
+              size="small"
+              controls-position="right"
+              :data-testid="`sprint10-actualqty-input-${row.salesOrderItemId}`"
+              style="width: 140px" />
+          </template>
+        </el-table-column>
+      </el-table>
+      <el-form label-width="100px" style="margin-top: 16px;">
+        <el-form-item label="发货日期">
+          <el-date-picker
+            v-model="shipmentDialog.deliveryDate"
+            type="date"
+            value-format="YYYY-MM-DD"
+            placeholder="默认今天"
+            data-testid="sprint10-delivery-date-picker" />
+        </el-form-item>
+        <el-form-item label="备注">
+          <el-input
+            v-model="shipmentDialog.remark"
+            placeholder="(可选) 司机/物流单号等"
+            maxlength="200"
+            show-word-limit />
+        </el-form-item>
+      </el-form>
+      <el-alert
+        v-if="shipmentDialog.feedback"
+        :type="shipmentFeedbackType(shipmentDialog.feedback)"
+        :closable="false"
+        show-icon
+        class="dialog-hint"
+        style="margin-top: 12px;"
+        data-testid="sprint10-shipment-feedback">
+        <template #title>{{ shipmentDialog.feedback.message }}</template>
+        <template v-if="shipmentDialog.feedback.actionHint" #default>
+          <div style="margin-top: 6px; color: #606266;">
+            提示: {{ shipmentDialog.feedback.actionHint }}
+          </div>
+        </template>
+      </el-alert>
+      <template #footer>
+        <el-button @click="shipmentDialog.visible = false">取消</el-button>
+        <el-button
+          type="primary"
+          :loading="shipmentDialog.submitting"
+          :disabled="!shipmentCanSubmit"
+          data-testid="sprint10-shipment-submit-btn"
+          @click="submitShipment">
+          确认提交发货
+        </el-button>
+      </template>
+    </el-dialog>
+
     <!-- 微信补录 Dialog (R1 max + R2 context + R3 dropdown + R4 dedup) -->
     <el-dialog
       v-model="wechatDialog.visible"
@@ -749,9 +903,222 @@ async function executeOpportunityTransition() {
   }
 }
 
+// ===== Sprint 10 Loop 1 — 发货闭环 =====
+
+interface PendingShipmentItem {
+  salesOrderItemId: number;
+  productTypeId: string;
+  productName?: string;
+  unit: string;
+  orderedQuantity: number;
+  deliveredQuantity: number;
+  pendingQuantity: number;
+}
+
+interface PendingShipmentOrder {
+  salesOrderId: string;
+  orderNumber: string;
+  customerId: string;
+  customerName?: string;
+  requiredDeliveryDate?: string;
+  status: string;
+  statusDisplay: string;
+  itemCount: number;
+  items: PendingShipmentItem[];
+}
+
+interface ShipmentItemForm extends PendingShipmentItem {
+  actualQty: number;
+}
+
+interface ShipmentFeedback {
+  status?: string;
+  message: string;
+  actionHint?: string;
+  deliveryNumber?: string;
+  printPath?: string;
+}
+
+const pendingShipments = ref<PendingShipmentOrder[]>([]);
+const shipmentLoading = ref(false);
+
+const shipmentDialog = reactive({
+  visible: false,
+  salesOrderId: '',
+  orderNumber: '',
+  customerName: '',
+  itemForms: [] as ShipmentItemForm[],
+  deliveryDate: '',
+  remark: '',
+  totalPending: 0,
+  submitting: false,
+  feedback: null as ShipmentFeedback | null,
+});
+
+const shipmentCanSubmit = computed(() => {
+  if (shipmentDialog.itemForms.length === 0) return false;
+  let hasPositive = false;
+  for (const it of shipmentDialog.itemForms) {
+    if (it.actualQty == null || isNaN(Number(it.actualQty))) return false;
+    if (Number(it.actualQty) < 0) return false;
+    if (Number(it.actualQty) > Number(it.pendingQuantity)) return false;
+    if (Number(it.actualQty) > 0) hasPositive = true;
+  }
+  return hasPositive;
+});
+
+function statusTagType(status?: string): 'success' | 'warning' | 'info' | 'danger' | '' {
+  if (!status) return '';
+  if (status === 'FINANCE_APPROVED') return 'success';
+  if (status === 'CONFIRMED') return 'info';
+  if (status === 'PROCESSING') return 'warning';
+  if (status === 'PARTIAL_DELIVERED') return 'warning';
+  return '';
+}
+
+function shipmentFeedbackType(f: ShipmentFeedback): 'success' | 'warning' | 'error' | 'info' {
+  if (f.status === 'CREATED') return 'success';
+  if (f.status === 'IDEMPOTENT_HIT') return 'warning';
+  if (f.status === 'ERROR') return 'error';
+  return 'info';
+}
+
+async function loadTodayPendingShipments() {
+  shipmentLoading.value = true;
+  try {
+    const res = await request.post<ExecuteResponse>(
+      `/${factoryId.value}/ai-intents/execute`,
+      {
+        userInput: '今日 SO 待发',
+        intentCode: 'SPRINT10_SHIPMENT_PENDING_TODAY',
+        parameters: {},
+      });
+    const data = (res as { data: ExecuteResponse }).data;
+    const resultData = (data.resultData || {}) as Record<string, unknown>;
+    const orders = (resultData['orders'] as PendingShipmentOrder[] | undefined) || [];
+    pendingShipments.value = Array.isArray(orders) ? orders : [];
+  } catch (err) {
+    pendingShipments.value = [];
+    ElMessage({
+      message: `今日待发查询失败: ${extractErrorMessage(err)}`,
+      type: 'error',
+      duration: 0,
+      showClose: true,
+    });
+  } finally {
+    shipmentLoading.value = false;
+  }
+}
+
+function openShipmentDialog(order: PendingShipmentOrder) {
+  shipmentDialog.visible = true;
+  shipmentDialog.salesOrderId = order.salesOrderId;
+  shipmentDialog.orderNumber = order.orderNumber;
+  shipmentDialog.customerName = order.customerName || '';
+  shipmentDialog.deliveryDate = '';
+  shipmentDialog.remark = '';
+  shipmentDialog.feedback = null;
+  shipmentDialog.itemForms = order.items.map((it) => ({
+    ...it,
+    actualQty: Number(it.pendingQuantity), // R1 default = max (一键)
+  }));
+  shipmentDialog.totalPending = order.items.reduce(
+      (s, it) => s + Number(it.pendingQuantity || 0), 0);
+}
+
+function resetShipmentDialog() {
+  shipmentDialog.salesOrderId = '';
+  shipmentDialog.orderNumber = '';
+  shipmentDialog.customerName = '';
+  shipmentDialog.itemForms = [];
+  shipmentDialog.deliveryDate = '';
+  shipmentDialog.remark = '';
+  shipmentDialog.feedback = null;
+  shipmentDialog.totalPending = 0;
+}
+
+async function submitShipment() {
+  if (!shipmentCanSubmit.value) {
+    ElMessage.warning('请检查发货数量 (≥1 行 > 0 且不超过剩余可发)');
+    return;
+  }
+  shipmentDialog.submitting = true;
+  shipmentDialog.feedback = null;
+
+  // 仅传 actualQty > 0 的行
+  const itemsPayload = shipmentDialog.itemForms
+      .filter((it) => Number(it.actualQty) > 0)
+      .map((it) => ({
+        salesOrderItemId: it.salesOrderItemId,
+        actualQty: Number(it.actualQty),
+      }));
+
+  try {
+    const res = await request.post<ExecuteResponse>(
+      `/${factoryId.value}/ai-intents/execute`,
+      {
+        userInput: '确认发货',
+        intentCode: 'SHIPMENT_CONFIRM_CREATE',
+        parameters: {
+          salesOrderId: shipmentDialog.salesOrderId,
+          items: itemsPayload,
+          deliveryDate: shipmentDialog.deliveryDate || undefined,
+          remark: shipmentDialog.remark || undefined,
+          testRun: false,
+        },
+      });
+    const data = (res as { data: ExecuteResponse }).data;
+    const resultData = (data.resultData || {}) as Record<string, unknown>;
+    const status = String(resultData['status'] || '');
+    const msg = String(resultData['message'] || data.message || '操作完成');
+    const actionHint = (resultData['actionHint'] as string | undefined) || '';
+    const printPath = (resultData['printPath'] as string | undefined) || '';
+    const deliveryNumber = (resultData['deliveryNumber'] as string | undefined) || '';
+
+    shipmentDialog.feedback = {
+      status,
+      message: msg,
+      actionHint,
+      deliveryNumber,
+      printPath,
+    };
+
+    if (status === 'CREATED') {
+      ElMessage({
+        message: msg,
+        type: 'success',
+        duration: 5000,
+        showClose: true,
+      });
+      // Refresh pending list
+      await loadTodayPendingShipments();
+      // Keep dialog open for user to see feedback + print link (R5 dead-end avoid)
+    } else if (status === 'IDEMPOTENT_HIT') {
+      ElMessage({
+        message: msg,
+        type: 'warning',
+        duration: 0,
+        showClose: true,
+      });
+    }
+  } catch (err) {
+    const msg = extractErrorMessage(err);
+    shipmentDialog.feedback = { status: 'ERROR', message: msg };
+    ElMessage({
+      message: `发货失败: ${msg}`,
+      type: 'error',
+      duration: 0,
+      showClose: true,
+    });
+  } finally {
+    shipmentDialog.submitting = false;
+  }
+}
+
 // Auto-trigger on mount
 onMounted(() => {
   void triggerFollowupQuery();
+  void loadTodayPendingShipments();
 });
 </script>
 
