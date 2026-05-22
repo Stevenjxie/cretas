@@ -147,10 +147,17 @@
             <PriceMiniChart :data="priceTrendByMaterial[row.materialTypeId] || []" />
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="160" fixed="right">
+        <el-table-column label="操作" width="240" fixed="right">
           <template #default="{ row }">
             <el-button size="small" type="primary" @click="openRequisitionDialog(row)">
               一键请购
+            </el-button>
+            <el-button
+              size="small"
+              type="warning"
+              data-testid="loop3-procurement-create-btn"
+              @click="openProcurementDialog(row)">
+              一键采购下单
             </el-button>
           </template>
         </el-table-column>
@@ -281,6 +288,136 @@
           :loading="requisitionDialog.submitting"
           :disabled="!requisitionDialog.canSubmit"
           @click="executeRequisition">
+          确认提交
+        </el-button>
+      </template>
+    </el-dialog>
+
+    <!-- ===== Sprint 10 Loop 3 — 一键采购下单 Dialog ===== -->
+    <el-dialog
+      v-model="procurementDialog.visible"
+      :title="procurementDialogTitle"
+      width="680px"
+      data-testid="loop3-procurement-dialog"
+      @close="resetProcurementDialog">
+      <el-form :model="procurementDialog.form" label-width="120px">
+        <el-form-item label="物料 (R2 context)">
+          <el-input :value="procurementDialog.row?.materialName || ''" disabled />
+          <el-text size="small" class="form-hint">
+            编码 {{ procurementDialog.row?.materialCode || procurementDialog.row?.materialTypeId }}
+          </el-text>
+        </el-form-item>
+        <el-form-item label="当前库存">
+          <el-text>
+            {{ formatQty(procurementDialog.row?.currentStock) }}{{ procurementDialog.row?.unit }}
+            / 安全 {{ formatQty(procurementDialog.row?.safetyStock) }}{{ procurementDialog.row?.unit }}
+            (缺 {{ formatQty(procurementDialog.row?.gap) }}{{ procurementDialog.row?.unit }})
+          </el-text>
+        </el-form-item>
+        <el-form-item label="推荐供应商" required>
+          <el-select
+            v-model="procurementDialog.form.supplierId"
+            placeholder="请选择供应商 (Top 3 ranked by last-PO + price)"
+            style="width: 100%"
+            data-testid="loop3-supplier-select"
+            @change="onSupplierChange">
+            <el-option
+              v-for="s in procurementDialog.suppliers"
+              :key="s.supplierId"
+              :label="`${s.supplierName}${s.recommendReason ? ' — ' + s.recommendReason : ''}${s.deliveryDays ? ' (交期 ' + s.deliveryDays + 'd)' : ''}`"
+              :value="s.supplierId" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="采购数量" required>
+          <el-input-number
+            v-model="procurementDialog.form.quantity"
+            :min="0.01"
+            :max="procurementDialog.maxQuantity || undefined"
+            :precision="2"
+            :step="1"
+            placeholder="输入采购数量"
+            data-testid="loop3-quantity-input"
+            style="width: 220px" />
+          <el-text size="small" class="form-hint">
+            {{ procurementDialog.row?.unit || '' }}
+            <span v-if="procurementDialog.maxQuantity">
+              — 上限 {{ formatQty(procurementDialog.maxQuantity) }} (月均 × 3)
+            </span>
+          </el-text>
+        </el-form-item>
+        <el-form-item label="期望到货日">
+          <el-date-picker
+            v-model="procurementDialog.form.expectedDeliveryDate"
+            type="date"
+            placeholder="可选 — 默认下单后 7 天"
+            value-format="YYYY-MM-DD"
+            :disabled-date="disablePastDates"
+            style="width: 220px" />
+        </el-form-item>
+        <el-form-item label="备注">
+          <el-input
+            v-model="procurementDialog.form.remark"
+            placeholder="(可选) 例如: 低库存补货"
+            maxlength="200"
+            show-word-limit />
+        </el-form-item>
+        <el-alert
+          v-if="procurementDialog.preview"
+          :type="procurementPreviewAlertType(procurementDialog.preview)"
+          :closable="false"
+          show-icon
+          class="preview-alert"
+          data-testid="loop3-preview-alert">
+          <template #title>
+            <span>{{ procurementDialog.preview.message }}</span>
+          </template>
+          <template #default>
+            <div v-if="procurementDialog.preview.canDo">
+              <p v-if="procurementDialog.preview.estimatedBudget != null" class="preview-line">
+                💰 预算 ¥{{ formatQty(procurementDialog.preview.estimatedBudget) }}
+                <el-text v-if="procurementDialog.preview.estimatedUnitPrice" size="small" type="info">
+                  (¥{{ formatQty(procurementDialog.preview.estimatedUnitPrice) }}/单位 × {{ formatQty(procurementDialog.form.quantity) }})
+                </el-text>
+              </p>
+              <p v-if="procurementDialog.preview.supplierName" class="preview-line">
+                🏢 供应商: {{ procurementDialog.preview.supplierName }}
+                <el-text v-if="procurementDialog.preview.supplierDeliveryDays" size="small" type="info">
+                  — 主数据交期 {{ procurementDialog.preview.supplierDeliveryDays }} 天
+                </el-text>
+              </p>
+              <p v-if="procurementDialog.preview.monthlyAvgUsage" class="preview-line">
+                📊 月均用量 {{ formatQty(procurementDialog.preview.monthlyAvgUsage) }}{{ procurementDialog.row?.unit }}
+                — 上限 {{ formatQty(procurementDialog.preview.maxQuantity) }}{{ procurementDialog.row?.unit }} (× 3 月 buffer)
+              </p>
+              <p v-if="procurementDialog.preview.approvalChainHint" class="preview-line">
+                📝 {{ procurementDialog.preview.approvalChainHint }}
+              </p>
+            </div>
+            <div v-else>
+              <p v-if="procurementDialog.preview.nextActionUrl" class="preview-line">
+                <el-link type="primary" @click="gotoPreviewNextAction(procurementDialog.preview.nextActionUrl)">
+                  前往: {{ procurementDialog.preview.nextActionUrl }}
+                </el-link>
+              </p>
+            </div>
+          </template>
+        </el-alert>
+      </el-form>
+      <template #footer>
+        <el-button @click="procurementDialog.visible = false">取消</el-button>
+        <el-button
+          :loading="procurementDialog.previewing"
+          :disabled="!canPreviewProcurement"
+          data-testid="loop3-preview-btn"
+          @click="previewProcurement">
+          预览
+        </el-button>
+        <el-button
+          type="primary"
+          :loading="procurementDialog.submitting"
+          :disabled="!procurementDialog.canSubmit"
+          data-testid="loop3-submit-btn"
+          @click="executeProcurement">
           确认提交
         </el-button>
       </template>
@@ -663,6 +800,269 @@ async function executeRequisition() {
     });
   } finally {
     requisitionDialog.submitting = false;
+  }
+}
+
+// ===== Sprint 10 Loop 3 — Procurement Order Create Dialog =====
+
+interface SupplierOption {
+  supplierId: string;
+  supplierName: string;
+  lastUsed?: string | null;
+  avgPrice?: number | null;
+  deliveryDays?: number | null;
+  recommendReason?: string | null;
+}
+
+interface ProcurementPreview {
+  status?: string;
+  canDo?: boolean;
+  message?: string;
+  materialId?: string;
+  materialName?: string;
+  materialCode?: string;
+  unit?: string;
+  quantity?: number;
+  expectedDeliveryDate?: string;
+  supplierId?: string;
+  supplierName?: string;
+  supplierDeliveryDays?: number | null;
+  monthlyAvgUsage?: number;
+  maxQuantity?: number;
+  quantityWithinMax?: boolean;
+  estimatedUnitPrice?: number;
+  estimatedBudget?: number;
+  priceSource?: string;
+  recommendedSuppliers?: SupplierOption[];
+  approvalChainHint?: string;
+  nextActionUrl?: string;
+  existingPoId?: string;
+  existingOrderNumber?: string;
+}
+
+const procurementDialog = reactive<{
+  visible: boolean;
+  row: LowStockRow | null;
+  suppliers: SupplierOption[];
+  maxQuantity: number | null;
+  form: {
+    supplierId: string;
+    quantity: number | null;
+    expectedDeliveryDate: string;
+    remark: string;
+    testRun: boolean;
+  };
+  preview: ProcurementPreview | null;
+  previewing: boolean;
+  submitting: boolean;
+  canSubmit: boolean;
+}>({
+  visible: false,
+  row: null,
+  suppliers: [],
+  maxQuantity: null,
+  form: {
+    supplierId: '',
+    quantity: null,
+    expectedDeliveryDate: '',
+    remark: '',
+    testRun: false,
+  },
+  preview: null,
+  previewing: false,
+  submitting: false,
+  canSubmit: false,
+});
+
+const procurementDialogTitle = computed(() => {
+  const r = procurementDialog.row;
+  return r
+    ? `采购下单 — ${r.materialName} (${r.materialCode || r.materialTypeId})`
+    : '一键采购下单';
+});
+
+const canPreviewProcurement = computed(() => {
+  const f = procurementDialog.form;
+  return !!f.supplierId
+      && f.quantity != null && f.quantity > 0;
+});
+
+async function openProcurementDialog(row: LowStockRow) {
+  procurementDialog.visible = true;
+  procurementDialog.row = row;
+  procurementDialog.form.quantity = row.recommendedReplenishQty || row.gap || null;
+  procurementDialog.form.supplierId = row.preferredSupplier?.id || '';
+  procurementDialog.form.expectedDeliveryDate = '';
+  procurementDialog.form.remark = '低库存补货 — Loop 3 一键采购下单';
+  procurementDialog.form.testRun = false;
+  procurementDialog.preview = null;
+  procurementDialog.canSubmit = false;
+  procurementDialog.suppliers = [];
+  procurementDialog.maxQuantity = null;
+
+  // Preload supplier recommendations + max via initial preview without submit
+  await loadProcurementContext(row);
+}
+
+async function loadProcurementContext(row: LowStockRow) {
+  if (!row.materialTypeId) return;
+  // Use preview with default fields to extract recommendedSuppliers + maxQuantity
+  // even if supplierId is empty, server returns recommended list when MATERIAL valid.
+  try {
+    // Use existing preferredSupplier if any, else fallback to first attempt with empty
+    const initialSupplier = row.preferredSupplier?.id || '';
+    if (!initialSupplier) {
+      // Try fetching context with a dummy supplier — server returns recommendedSuppliers
+      // in PREVIEW even when SUPPLIER_NOT_FOUND if MATERIAL valid (defensive: just continue)
+    }
+    const response = await callIntentExecute(
+      '预览采购下单',
+      'PROCUREMENT_ORDER_CREATE',
+      {
+        materialId: row.materialTypeId,
+        supplierId: initialSupplier || '__placeholder__',
+        quantity: row.recommendedReplenishQty || row.gap || 1,
+      },
+      true,
+    );
+    const previewData = (response.resultData || {}) as ProcurementPreview;
+    if (Array.isArray(previewData.recommendedSuppliers)) {
+      procurementDialog.suppliers = previewData.recommendedSuppliers;
+    }
+    if (previewData.maxQuantity != null) {
+      procurementDialog.maxQuantity = Number(previewData.maxQuantity);
+    }
+  } catch (err) {
+    // Defensive: dialog still usable even if context load fails
+    console.warn('Procurement context preload failed:', err);
+  }
+}
+
+function onSupplierChange() {
+  // Reset preview when supplier changes
+  procurementDialog.preview = null;
+  procurementDialog.canSubmit = false;
+}
+
+function resetProcurementDialog() {
+  procurementDialog.row = null;
+  procurementDialog.suppliers = [];
+  procurementDialog.maxQuantity = null;
+  procurementDialog.form.supplierId = '';
+  procurementDialog.form.quantity = null;
+  procurementDialog.form.expectedDeliveryDate = '';
+  procurementDialog.form.remark = '';
+  procurementDialog.form.testRun = false;
+  procurementDialog.preview = null;
+  procurementDialog.canSubmit = false;
+}
+
+function procurementPreviewAlertType(preview: ProcurementPreview): 'warning' | 'info' | 'success' | 'error' {
+  if (!preview.canDo) return 'warning';
+  if (preview.status === 'PREVIEW') return 'success';
+  return 'info';
+}
+
+function gotoPreviewNextAction(url: string) {
+  if (url && url.startsWith('/')) {
+    window.location.href = url;
+  }
+}
+
+async function previewProcurement() {
+  if (!procurementDialog.row || !canPreviewProcurement.value) {
+    ElMessage.warning('请选供应商 + 填数量');
+    return;
+  }
+  procurementDialog.previewing = true;
+  try {
+    const response = await callIntentExecute(
+      '预览采购下单',
+      'PROCUREMENT_ORDER_CREATE',
+      {
+        materialId: procurementDialog.row.materialTypeId,
+        supplierId: procurementDialog.form.supplierId,
+        quantity: procurementDialog.form.quantity,
+        expectedDeliveryDate: procurementDialog.form.expectedDeliveryDate || undefined,
+        remark: procurementDialog.form.remark,
+      },
+      true,
+    );
+    const previewData = (response.resultData || {}) as ProcurementPreview;
+    procurementDialog.preview = previewData;
+    procurementDialog.canSubmit = previewData.canDo === true
+        && previewData.status === 'PREVIEW';
+    if (Array.isArray(previewData.recommendedSuppliers) && procurementDialog.suppliers.length === 0) {
+      procurementDialog.suppliers = previewData.recommendedSuppliers;
+    }
+    if (previewData.maxQuantity != null) {
+      procurementDialog.maxQuantity = Number(previewData.maxQuantity);
+    }
+  } catch (err) {
+    ElMessage({
+      message: `预览失败: ${extractErrorMessage(err)}`,
+      type: 'error',
+      duration: 0,
+      showClose: true,
+    });
+  } finally {
+    procurementDialog.previewing = false;
+  }
+}
+
+async function executeProcurement() {
+  if (!procurementDialog.canSubmit) {
+    ElMessage.warning('请先点击 [预览] 验证可提交');
+    return;
+  }
+  if (!procurementDialog.row) return;
+  procurementDialog.submitting = true;
+  try {
+    const response = await callIntentExecute(
+      '创建采购订单',
+      'PROCUREMENT_ORDER_CREATE',
+      {
+        materialId: procurementDialog.row.materialTypeId,
+        supplierId: procurementDialog.form.supplierId,
+        quantity: procurementDialog.form.quantity,
+        expectedDeliveryDate: procurementDialog.form.expectedDeliveryDate || undefined,
+        remark: procurementDialog.form.remark,
+        testRun: procurementDialog.form.testRun,
+      },
+    );
+    const resultData = (response.resultData || {}) as Record<string, unknown>;
+    const data = (resultData['data'] as Record<string, unknown>) || resultData;
+    const status = (data['status'] || resultData['status']) as string | undefined;
+    // R4 idempotent — backend returns DUPLICATE with existingPoId
+    if (status === 'DUPLICATE') {
+      const existingOrder = (data['existingOrderNumber'] || data['existingPoId']) as string;
+      const url = (data['nextActionUrl'] || '/purchase/orders') as string;
+      ElMessage({
+        message: response.message || `已有近期采购单 ${existingOrder}`,
+        type: 'warning',
+        duration: 0,
+        showClose: true,
+      });
+      // Soft navigate hint
+      setTimeout(() => {
+        if (url) window.location.href = url;
+      }, 1500);
+      procurementDialog.visible = false;
+      return;
+    }
+    ElMessage.success(response.message || '采购单已创建');
+    procurementDialog.visible = false;
+    // 刷新主表
+    await triggerWeeklyPlan();
+  } catch (err) {
+    ElMessage({
+      message: `提交失败: ${extractErrorMessage(err)}`,
+      type: 'error',
+      duration: 0,
+      showClose: true,
+    });
+  } finally {
+    procurementDialog.submitting = false;
   }
 }
 

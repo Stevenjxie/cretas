@@ -62,6 +62,14 @@
           <!-- Phase 5 (2026-05-19): Canvas-Cron Tab (DB-driven DynamicScheduler) -->
           <ScheduledTaskEditor v-else-if="activeTab === 'cron'" :factory-id="factoryId" />
 
+          <!-- Phase A P0 (2026-05-21): 3 new hubs from 六扇门 audit -->
+          <!-- Slot for subagent #1 — Thresholds Hub (Flyway V20260823_01) -->
+          <ThresholdsHubEditor v-else-if="activeTab === 'thresholds'" :factory-id="factoryId" />
+          <!-- Slot for subagent #2 — Food Safety Hub (Flyway V20260823_02 — wraps 15 existing Sprint 8/9 entities) -->
+          <FoodSafetyHubEditor v-else-if="activeTab === 'food-safety'" :factory-id="factoryId" />
+          <!-- Slot for subagent #3 — Indicator Center (Flyway V20260823_03 — wraps Phase 1 already-shipped backend) -->
+          <IndicatorCenterEditor v-else-if="activeTab === 'indicators'" :factory-id="factoryId" />
+
           <!-- Empty state -->
           <div v-else class="empty-state">
             <el-empty description="请在左侧选择模块" />
@@ -129,6 +137,11 @@ import NotifyTemplateEditor from '@/views/platform/notify-template-editor/index.
 import BusinessRulesEditor from '@/views/platform/business-rules-editor/index.vue'
 import PricingStrategyTab from '@/views/platform/pricing-strategy-editor/index.vue'
 import ScheduledTaskEditor from '@/views/platform/scheduled-task-editor/index.vue'
+// Phase A P0 (2026-05-21): 3 new hubs from 六扇门 audit — pre-registered placeholders
+// Subagents replace each stub with the real editor in their own worktree branch.
+import ThresholdsHubEditor from '@/views/platform/thresholds-hub-editor/index.vue'
+import FoodSafetyHubEditor from '@/views/platform/food-safety-hub-editor/index.vue'
+import IndicatorCenterEditor from '@/views/platform/indicator-center-editor/index.vue'
 import AIChatPanel from './components/AIChatPanel.vue'
 import ConfigDiffViewer from './components/ConfigDiffViewer.vue'
 import SchemaPreview from './components/SchemaPreview.vue'

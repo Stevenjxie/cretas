@@ -5,6 +5,8 @@ import com.cretas.aims.dto.ai.ProcessingMode;
 import com.cretas.aims.dto.ai.QueryFeatures;
 import com.cretas.aims.service.ComplexityClassifier;
 import com.cretas.aims.service.ComplexityRouter;
+import com.cretas.aims.service.canvas.ThresholdKeys;
+import com.cretas.aims.service.canvas.ThresholdResolverService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
@@ -35,10 +37,33 @@ public class ComplexityRouterImpl implements ComplexityRouter {
     @Autowired(required = false)
     private ComplexityClassifier classifier;
 
-    // 复杂度阈值
-    private static final double FAST_THRESHOLD = 0.3;
-    private static final double ANALYSIS_THRESHOLD = 0.6;
-    private static final double MULTI_AGENT_THRESHOLD = 0.8;
+    /**
+     * Canvas-Thresholds resolver (Phase A) — overlays FALLBACK_* defaults with per-factory config.
+     * factoryId 取自 AnalysisContext.factoryId, 缺失时退回到 GLOBAL fallback。
+     */
+    @Autowired(required = false)
+    private ThresholdResolverService thresholdResolver;
+
+    // 复杂度阈值 fallback 默认值
+    private static final double FALLBACK_FAST_THRESHOLD = 0.3;
+    private static final double FALLBACK_ANALYSIS_THRESHOLD = 0.6;
+    private static final double FALLBACK_MULTI_AGENT_THRESHOLD = 0.8;
+
+    private double fastThreshold(String factoryId) {
+        if (thresholdResolver == null) return FALLBACK_FAST_THRESHOLD;
+        return thresholdResolver.getDouble(factoryId,
+                ThresholdKeys.AI_COMPLEXITY_FAST_THRESHOLD, FALLBACK_FAST_THRESHOLD);
+    }
+    private double analysisThreshold(String factoryId) {
+        if (thresholdResolver == null) return FALLBACK_ANALYSIS_THRESHOLD;
+        return thresholdResolver.getDouble(factoryId,
+                ThresholdKeys.AI_COMPLEXITY_ANALYSIS_THRESHOLD, FALLBACK_ANALYSIS_THRESHOLD);
+    }
+    private double multiAgentThreshold(String factoryId) {
+        if (thresholdResolver == null) return FALLBACK_MULTI_AGENT_THRESHOLD;
+        return thresholdResolver.getDouble(factoryId,
+                ThresholdKeys.AI_COMPLEXITY_MULTI_AGENT_THRESHOLD, FALLBACK_MULTI_AGENT_THRESHOLD);
+    }
 
     // 边界区间阈值 (用于判断是否需要 LLM 辅助)
     private static final double AMBIGUOUS_LOWER = 0.25;
@@ -103,13 +128,17 @@ public class ComplexityRouterImpl implements ComplexityRouter {
             }
         }
 
-        // Step 4: 规则判断 (Phase 1 - 兜底)
+        // Step 4: 规则判断 (Phase 1 - 兜底). Canvas-Thresholds Phase A: 工厂级阈值 override.
+        String factoryId = context != null ? context.getFactoryId() : null;
+        double fast = fastThreshold(factoryId);
+        double analysis = analysisThreshold(factoryId);
+        double multiAgent = multiAgentThreshold(factoryId);
         ProcessingMode mode;
-        if (ruleComplexity < FAST_THRESHOLD) {
+        if (ruleComplexity < fast) {
             mode = ProcessingMode.FAST;
-        } else if (ruleComplexity < ANALYSIS_THRESHOLD) {
+        } else if (ruleComplexity < analysis) {
             mode = ProcessingMode.ANALYSIS;
-        } else if (ruleComplexity < MULTI_AGENT_THRESHOLD) {
+        } else if (ruleComplexity < multiAgent) {
             mode = ProcessingMode.MULTI_AGENT;
         } else {
             mode = ProcessingMode.DEEP_REASONING;

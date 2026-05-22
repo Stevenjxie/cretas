@@ -13,6 +13,8 @@ import com.cretas.aims.entity.enums.MaterialBatchStatus;
 import com.cretas.aims.repository.MaterialBatchAdjustmentRepository;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.MaterialConsumptionRepository;
+import com.cretas.aims.service.canvas.ThresholdKeys;
+import com.cretas.aims.service.canvas.ThresholdResolverService;
 import com.cretas.aims.service.smartbi.InventoryHealthAnalysisService;
 import com.cretas.aims.service.smartbi.MetricCalculatorService;
 import lombok.RequiredArgsConstructor;
@@ -53,34 +55,81 @@ public class InventoryHealthAnalysisServiceImpl implements InventoryHealthAnalys
     private final MaterialConsumptionRepository materialConsumptionRepository;
     private final MaterialBatchAdjustmentRepository adjustmentRepository;
     private final MetricCalculatorService metricCalculatorService;
+    /**
+     * Canvas-Thresholds resolver (Phase A) — overlays the FALLBACK_* defaults below with
+     * per-factory configured values from {@code factory_thresholds} table. Hard-coded
+     * fallbacks remain as the last-resort default if no DB row + no global default exists,
+     * so the service still runs correctly even before the migration is applied.
+     */
+    private final ThresholdResolverService thresholdResolver;
 
     // 计算精度配置
     private static final int SCALE = 4;
     private static final int DISPLAY_SCALE = 2;
     private static final RoundingMode ROUNDING_MODE = RoundingMode.HALF_UP;
 
-    // 预警阈值配置
-    /** 周转率红色预警阈值（次/年）*/
-    private static final BigDecimal TURNOVER_RED_THRESHOLD = new BigDecimal("6");
-    /** 周转率黄色预警阈值（次/年）*/
-    private static final BigDecimal TURNOVER_YELLOW_THRESHOLD = new BigDecimal("12");
-    /** 临期风险率红色预警阈值 */
-    private static final BigDecimal EXPIRY_RED_THRESHOLD = new BigDecimal("15");
-    /** 临期风险率黄色预警阈值 */
-    private static final BigDecimal EXPIRY_YELLOW_THRESHOLD = new BigDecimal("10");
-    /** 损耗率红色预警阈值 */
-    private static final BigDecimal LOSS_RED_THRESHOLD = new BigDecimal("5");
-    /** 损耗率黄色预警阈值 */
-    private static final BigDecimal LOSS_YELLOW_THRESHOLD = new BigDecimal("2");
+    // ==================== 预警阈值 fallback 默认值 ====================
+    // 以下 static final 常量是 hard-coded baseline; 实际取值通过 thresholdXxx(factoryId)
+    // helpers 从 ThresholdResolverService 读取, 仅 DB row 不存在时 fallback 到这里.
 
-    // 库龄分段（天）
-    private static final int AGING_FRESH = 30;
-    private static final int AGING_NORMAL = 60;
-    private static final int AGING_WARNING = 90;
+    /** 周转率红色预警 fallback 默认值（次/年）*/
+    private static final BigDecimal FALLBACK_TURNOVER_RED = new BigDecimal("6");
+    /** 周转率黄色预警 fallback 默认值（次/年）*/
+    private static final BigDecimal FALLBACK_TURNOVER_YELLOW = new BigDecimal("12");
+    /** 临期风险率红色预警 fallback 默认值 */
+    private static final BigDecimal FALLBACK_EXPIRY_RED = new BigDecimal("15");
+    /** 临期风险率黄色预警 fallback 默认值 */
+    private static final BigDecimal FALLBACK_EXPIRY_YELLOW = new BigDecimal("10");
+    /** 损耗率红色预警 fallback 默认值 */
+    private static final BigDecimal FALLBACK_LOSS_RED = new BigDecimal("5");
+    /** 损耗率黄色预警 fallback 默认值 */
+    private static final BigDecimal FALLBACK_LOSS_YELLOW = new BigDecimal("2");
 
-    // 临期预警天数
-    private static final int DEFAULT_EXPIRY_WARNING_DAYS = 30;
-    private static final int HIGH_RISK_EXPIRY_DAYS = 7;
+    // 库龄分段 fallback 默认值（天）
+    private static final int FALLBACK_AGING_FRESH = 30;
+    private static final int FALLBACK_AGING_NORMAL = 60;
+    private static final int FALLBACK_AGING_WARNING = 90;
+
+    // 临期预警 fallback 默认值（天）
+    private static final int FALLBACK_DEFAULT_EXPIRY_WARNING_DAYS = 30;
+    private static final int FALLBACK_HIGH_RISK_EXPIRY_DAYS = 7;
+
+    // ==================== Threshold resolver shortcuts ====================
+    // 这些方法把"读 DB 阈值 + fallback default"封装为一行调用, 业务代码 readable.
+
+    private BigDecimal turnoverRedThreshold(String factoryId) {
+        return thresholdResolver.getBigDecimal(factoryId, ThresholdKeys.INVENTORY_TURNOVER_RED, FALLBACK_TURNOVER_RED);
+    }
+    private BigDecimal turnoverYellowThreshold(String factoryId) {
+        return thresholdResolver.getBigDecimal(factoryId, ThresholdKeys.INVENTORY_TURNOVER_YELLOW, FALLBACK_TURNOVER_YELLOW);
+    }
+    private BigDecimal expiryRedThreshold(String factoryId) {
+        return thresholdResolver.getBigDecimal(factoryId, ThresholdKeys.INVENTORY_EXPIRY_RED, FALLBACK_EXPIRY_RED);
+    }
+    private BigDecimal expiryYellowThreshold(String factoryId) {
+        return thresholdResolver.getBigDecimal(factoryId, ThresholdKeys.INVENTORY_EXPIRY_YELLOW, FALLBACK_EXPIRY_YELLOW);
+    }
+    private BigDecimal lossRedThreshold(String factoryId) {
+        return thresholdResolver.getBigDecimal(factoryId, ThresholdKeys.INVENTORY_LOSS_RED, FALLBACK_LOSS_RED);
+    }
+    private BigDecimal lossYellowThreshold(String factoryId) {
+        return thresholdResolver.getBigDecimal(factoryId, ThresholdKeys.INVENTORY_LOSS_YELLOW, FALLBACK_LOSS_YELLOW);
+    }
+    private int agingFreshDays(String factoryId) {
+        return thresholdResolver.getInteger(factoryId, ThresholdKeys.INVENTORY_AGING_FRESH, FALLBACK_AGING_FRESH);
+    }
+    private int agingNormalDays(String factoryId) {
+        return thresholdResolver.getInteger(factoryId, ThresholdKeys.INVENTORY_AGING_NORMAL, FALLBACK_AGING_NORMAL);
+    }
+    private int agingWarningDays(String factoryId) {
+        return thresholdResolver.getInteger(factoryId, ThresholdKeys.INVENTORY_AGING_WARNING, FALLBACK_AGING_WARNING);
+    }
+    private int expiryWarningDays(String factoryId) {
+        return thresholdResolver.getInteger(factoryId, ThresholdKeys.INVENTORY_EXPIRY_WARNING_DAYS, FALLBACK_DEFAULT_EXPIRY_WARNING_DAYS);
+    }
+    private int highRiskExpiryDays(String factoryId) {
+        return thresholdResolver.getInteger(factoryId, ThresholdKeys.INVENTORY_HIGH_RISK_EXPIRY_DAYS, FALLBACK_HIGH_RISK_EXPIRY_DAYS);
+    }
 
     // ==================== 库存健康概览 ====================
 
@@ -112,8 +161,8 @@ public class InventoryHealthAnalysisServiceImpl implements InventoryHealthAnalys
         }
 
         // 生成排名
-        List<RankingItem> expiringRanking = getExpiringBatchesRanking(factoryId, DEFAULT_EXPIRY_WARNING_DAYS);
-        List<RankingItem> agingRanking = getLongAgingBatchesRanking(factoryId, AGING_NORMAL);
+        List<RankingItem> expiringRanking = getExpiringBatchesRanking(factoryId, expiryWarningDays(factoryId));
+        List<RankingItem> agingRanking = getLongAgingBatchesRanking(factoryId, agingNormalDays(factoryId));
         Map<String, List<RankingItem>> rankings = new LinkedHashMap<>();
         rankings.put("expiring", expiringRanking);
         rankings.put("aging", agingRanking);
@@ -122,7 +171,7 @@ public class InventoryHealthAnalysisServiceImpl implements InventoryHealthAnalys
         List<AIInsight> aiInsights = generateAiInsights(allBatches, metricResults, factoryId);
 
         // 生成建议
-        List<String> suggestions = generateSuggestions(allBatches, metricResults);
+        List<String> suggestions = generateSuggestions(allBatches, metricResults, factoryId);
 
         return DashboardResponse.builder()
                 .kpiCards(kpiCards)
@@ -176,7 +225,7 @@ public class InventoryHealthAnalysisServiceImpl implements InventoryHealthAnalys
                 .value(turnoverRate.setScale(DISPLAY_SCALE, ROUNDING_MODE))
                 .formattedValue(String.format("%.1f 次/年", turnoverRate.doubleValue()))
                 .unit("次/年")
-                .alertLevel(determineTurnoverAlertLevel(turnoverRate).name())
+                .alertLevel(determineTurnoverAlertLevel(factoryId, turnoverRate).name())
                 .build());
 
         // 计算库存天数 = 365 / 周转率
@@ -211,8 +260,8 @@ public class InventoryHealthAnalysisServiceImpl implements InventoryHealthAnalys
 
         List<MetricResult> metrics = new ArrayList<>();
         LocalDate today = LocalDate.now();
-        LocalDate warningDate = today.plusDays(DEFAULT_EXPIRY_WARNING_DAYS);
-        LocalDate highRiskDate = today.plusDays(HIGH_RISK_EXPIRY_DAYS);
+        LocalDate warningDate = today.plusDays(expiryWarningDays(factoryId));
+        LocalDate highRiskDate = today.plusDays(highRiskExpiryDays(factoryId));
 
         // 获取所有可用批次
         List<MaterialBatch> allBatches = materialBatchRepository.findByFactoryIdAndStatus(factoryId, MaterialBatchStatus.AVAILABLE);
@@ -241,7 +290,7 @@ public class InventoryHealthAnalysisServiceImpl implements InventoryHealthAnalys
                 .value(expiryRiskRate.setScale(DISPLAY_SCALE, ROUNDING_MODE))
                 .formattedValue(String.format("%.1f%%", expiryRiskRate.doubleValue()))
                 .unit("%")
-                .alertLevel(determineExpiryRiskAlertLevel(expiryRiskRate).name())
+                .alertLevel(determineExpiryRiskAlertLevel(factoryId, expiryRiskRate).name())
                 .description(String.format("30天内临期库存占比"))
                 .build());
 
@@ -310,7 +359,7 @@ public class InventoryHealthAnalysisServiceImpl implements InventoryHealthAnalys
                     batch.getUnitPrice() != null ? batch.getUnitPrice() : BigDecimal.ZERO);
 
             String alertLevel;
-            if (daysUntilExpiry <= HIGH_RISK_EXPIRY_DAYS) {
+            if (daysUntilExpiry <= highRiskExpiryDays(factoryId)) {
                 alertLevel = MetricResult.AlertLevel.RED.name();
             } else if (daysUntilExpiry <= 15) {
                 alertLevel = MetricResult.AlertLevel.YELLOW.name();
@@ -448,7 +497,7 @@ public class InventoryHealthAnalysisServiceImpl implements InventoryHealthAnalys
                 .value(lossRate.setScale(DISPLAY_SCALE, ROUNDING_MODE))
                 .formattedValue(String.format("%.2f%%", lossRate.doubleValue()))
                 .unit("%")
-                .alertLevel(determineLossRateAlertLevel(lossRate).name())
+                .alertLevel(determineLossRateAlertLevel(factoryId, lossRate).name())
                 .build());
 
         // 分项损耗
@@ -487,11 +536,14 @@ public class InventoryHealthAnalysisServiceImpl implements InventoryHealthAnalys
             }
 
             long ageDays = ChronoUnit.DAYS.between(receiptDate, today);
-            if (ageDays <= AGING_FRESH) {
+            int fresh = agingFreshDays(factoryId);
+            int normal = agingNormalDays(factoryId);
+            int warning = agingWarningDays(factoryId);
+            if (ageDays <= fresh) {
                 agingDistribution.merge("0-30天", value, BigDecimal::add);
-            } else if (ageDays <= AGING_NORMAL) {
+            } else if (ageDays <= normal) {
                 agingDistribution.merge("31-60天", value, BigDecimal::add);
-            } else if (ageDays <= AGING_WARNING) {
+            } else if (ageDays <= warning) {
                 agingDistribution.merge("61-90天", value, BigDecimal::add);
             } else {
                 agingDistribution.merge("90天以上", value, BigDecimal::add);
@@ -532,10 +584,11 @@ public class InventoryHealthAnalysisServiceImpl implements InventoryHealthAnalys
 
         BigDecimal totalValue = calculateTotalInventoryValue(allBatches);
 
-        // 计算呆滞库存（90天以上）
+        // 计算呆滞库存（>warning阈值, 默认90天以上）
+        int warningDays = agingWarningDays(factoryId);
         BigDecimal slowMovingValue = allBatches.stream()
                 .filter(b -> b.getReceiptDate() != null)
-                .filter(b -> ChronoUnit.DAYS.between(b.getReceiptDate(), today) > AGING_WARNING)
+                .filter(b -> ChronoUnit.DAYS.between(b.getReceiptDate(), today) > warningDays)
                 .map(b -> b.getCurrentQuantity().multiply(
                         b.getUnitPrice() != null ? b.getUnitPrice() : BigDecimal.ZERO))
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
@@ -604,7 +657,7 @@ public class InventoryHealthAnalysisServiceImpl implements InventoryHealthAnalys
             String alertLevel;
             if (ageDays > 120) {
                 alertLevel = MetricResult.AlertLevel.RED.name();
-            } else if (ageDays > AGING_WARNING) {
+            } else if (ageDays > agingWarningDays(factoryId)) {
                 alertLevel = MetricResult.AlertLevel.YELLOW.name();
             } else {
                 alertLevel = MetricResult.AlertLevel.GREEN.name();
@@ -640,9 +693,9 @@ public class InventoryHealthAnalysisServiceImpl implements InventoryHealthAnalys
 
         if (turnoverRate != null && turnoverRate.getValue() != null) {
             BigDecimal rate = turnoverRate.getValue();
-            if (rate.compareTo(TURNOVER_YELLOW_THRESHOLD) >= 0) {
+            if (rate.compareTo(turnoverYellowThreshold(factoryId)) >= 0) {
                 healthScore = healthScore.add(new BigDecimal("30"));
-            } else if (rate.compareTo(TURNOVER_RED_THRESHOLD) >= 0) {
+            } else if (rate.compareTo(turnoverRedThreshold(factoryId)) >= 0) {
                 healthScore = healthScore.add(new BigDecimal("20"));
             } else {
                 healthScore = healthScore.add(new BigDecimal("10"));
@@ -657,9 +710,9 @@ public class InventoryHealthAnalysisServiceImpl implements InventoryHealthAnalys
 
         if (expiryRisk != null && expiryRisk.getValue() != null) {
             BigDecimal rate = expiryRisk.getValue();
-            if (rate.compareTo(EXPIRY_YELLOW_THRESHOLD) < 0) {
+            if (rate.compareTo(expiryYellowThreshold(factoryId)) < 0) {
                 healthScore = healthScore.add(new BigDecimal("30"));
-            } else if (rate.compareTo(EXPIRY_RED_THRESHOLD) < 0) {
+            } else if (rate.compareTo(expiryRedThreshold(factoryId)) < 0) {
                 healthScore = healthScore.add(new BigDecimal("20"));
             } else {
                 healthScore = healthScore.add(new BigDecimal("10"));
@@ -676,9 +729,9 @@ public class InventoryHealthAnalysisServiceImpl implements InventoryHealthAnalys
 
         if (lossRate != null && lossRate.getValue() != null) {
             BigDecimal rate = lossRate.getValue();
-            if (rate.compareTo(LOSS_YELLOW_THRESHOLD) < 0) {
+            if (rate.compareTo(lossYellowThreshold(factoryId)) < 0) {
                 healthScore = healthScore.add(new BigDecimal("20"));
-            } else if (rate.compareTo(LOSS_RED_THRESHOLD) < 0) {
+            } else if (rate.compareTo(lossRedThreshold(factoryId)) < 0) {
                 healthScore = healthScore.add(new BigDecimal("12"));
             } else {
                 healthScore = healthScore.add(new BigDecimal("5"));
@@ -844,14 +897,14 @@ public class InventoryHealthAnalysisServiceImpl implements InventoryHealthAnalys
 
         if (expiryRisk != null && expiryRisk.getValue() != null) {
             BigDecimal rate = expiryRisk.getValue();
-            if (rate.compareTo(EXPIRY_RED_THRESHOLD) > 0) {
+            if (rate.compareTo(expiryRedThreshold(factoryId)) > 0) {
                 insights.add(AIInsight.builder()
                         .level("RED")
                         .category("临期风险")
                         .message(String.format("临期风险率高达 %.1f%%，需要立即处理", rate.doubleValue()))
                         .actionSuggestion("建议优先消耗临期库存，考虑促销或转让处理")
                         .build());
-            } else if (rate.compareTo(EXPIRY_YELLOW_THRESHOLD) > 0) {
+            } else if (rate.compareTo(expiryYellowThreshold(factoryId)) > 0) {
                 insights.add(AIInsight.builder()
                         .level("YELLOW")
                         .category("临期风险")
@@ -868,14 +921,14 @@ public class InventoryHealthAnalysisServiceImpl implements InventoryHealthAnalys
 
         if (turnover != null && turnover.getValue() != null) {
             BigDecimal rate = turnover.getValue();
-            if (rate.compareTo(TURNOVER_RED_THRESHOLD) < 0) {
+            if (rate.compareTo(turnoverRedThreshold(factoryId)) < 0) {
                 insights.add(AIInsight.builder()
                         .level("RED")
                         .category("周转效率")
                         .message(String.format("库存周转率仅 %.1f 次/年，库存积压严重", rate.doubleValue()))
                         .actionSuggestion("建议减少采购量，加快库存消化，优化安全库存设置")
                         .build());
-            } else if (rate.compareTo(TURNOVER_YELLOW_THRESHOLD) < 0) {
+            } else if (rate.compareTo(turnoverYellowThreshold(factoryId)) < 0) {
                 insights.add(AIInsight.builder()
                         .level("YELLOW")
                         .category("周转效率")
@@ -908,11 +961,12 @@ public class InventoryHealthAnalysisServiceImpl implements InventoryHealthAnalys
     /**
      * 生成建议
      */
-    private List<String> generateSuggestions(List<MaterialBatch> batches, List<MetricResult> kpiCards) {
+    private List<String> generateSuggestions(List<MaterialBatch> batches, List<MetricResult> kpiCards,
+                                              String factoryId) {
         List<String> suggestions = new ArrayList<>();
 
         // 基于临期批次数生成建议
-        LocalDate warningDate = LocalDate.now().plusDays(DEFAULT_EXPIRY_WARNING_DAYS);
+        LocalDate warningDate = LocalDate.now().plusDays(expiryWarningDays(factoryId));
         long expiringCount = batches.stream()
                 .filter(b -> b.getExpireDate() != null && !b.getExpireDate().isAfter(warningDate))
                 .count();
@@ -925,7 +979,7 @@ public class InventoryHealthAnalysisServiceImpl implements InventoryHealthAnalys
         LocalDate today = LocalDate.now();
         long longAgingCount = batches.stream()
                 .filter(b -> b.getReceiptDate() != null)
-                .filter(b -> ChronoUnit.DAYS.between(b.getReceiptDate(), today) > AGING_WARNING)
+                .filter(b -> ChronoUnit.DAYS.between(b.getReceiptDate(), today) > agingWarningDays(factoryId))
                 .count();
 
         if (longAgingCount > 0) {
@@ -938,7 +992,7 @@ public class InventoryHealthAnalysisServiceImpl implements InventoryHealthAnalys
                 .findFirst().orElse(null);
 
         if (turnover != null && turnover.getValue() != null
-                && turnover.getValue().compareTo(TURNOVER_YELLOW_THRESHOLD) < 0) {
+                && turnover.getValue().compareTo(turnoverYellowThreshold(factoryId)) < 0) {
             suggestions.add("库存周转率偏低，建议优化安全库存设置，减少不必要的采购");
         }
 
@@ -1020,11 +1074,11 @@ public class InventoryHealthAnalysisServiceImpl implements InventoryHealthAnalys
     /**
      * 确定周转率预警级别
      */
-    private MetricResult.AlertLevel determineTurnoverAlertLevel(BigDecimal turnoverRate) {
-        if (turnoverRate.compareTo(TURNOVER_RED_THRESHOLD) < 0) {
+    private MetricResult.AlertLevel determineTurnoverAlertLevel(String factoryId, BigDecimal turnoverRate) {
+        if (turnoverRate.compareTo(turnoverRedThreshold(factoryId)) < 0) {
             return MetricResult.AlertLevel.RED;
         }
-        if (turnoverRate.compareTo(TURNOVER_YELLOW_THRESHOLD) < 0) {
+        if (turnoverRate.compareTo(turnoverYellowThreshold(factoryId)) < 0) {
             return MetricResult.AlertLevel.YELLOW;
         }
         return MetricResult.AlertLevel.GREEN;
@@ -1046,11 +1100,11 @@ public class InventoryHealthAnalysisServiceImpl implements InventoryHealthAnalys
     /**
      * 确定临期风险预警级别
      */
-    private MetricResult.AlertLevel determineExpiryRiskAlertLevel(BigDecimal expiryRiskRate) {
-        if (expiryRiskRate.compareTo(EXPIRY_RED_THRESHOLD) > 0) {
+    private MetricResult.AlertLevel determineExpiryRiskAlertLevel(String factoryId, BigDecimal expiryRiskRate) {
+        if (expiryRiskRate.compareTo(expiryRedThreshold(factoryId)) > 0) {
             return MetricResult.AlertLevel.RED;
         }
-        if (expiryRiskRate.compareTo(EXPIRY_YELLOW_THRESHOLD) > 0) {
+        if (expiryRiskRate.compareTo(expiryYellowThreshold(factoryId)) > 0) {
             return MetricResult.AlertLevel.YELLOW;
         }
         return MetricResult.AlertLevel.GREEN;
@@ -1059,11 +1113,11 @@ public class InventoryHealthAnalysisServiceImpl implements InventoryHealthAnalys
     /**
      * 确定损耗率预警级别
      */
-    private MetricResult.AlertLevel determineLossRateAlertLevel(BigDecimal lossRate) {
-        if (lossRate.compareTo(LOSS_RED_THRESHOLD) > 0) {
+    private MetricResult.AlertLevel determineLossRateAlertLevel(String factoryId, BigDecimal lossRate) {
+        if (lossRate.compareTo(lossRedThreshold(factoryId)) > 0) {
             return MetricResult.AlertLevel.RED;
         }
-        if (lossRate.compareTo(LOSS_YELLOW_THRESHOLD) > 0) {
+        if (lossRate.compareTo(lossYellowThreshold(factoryId)) > 0) {
             return MetricResult.AlertLevel.YELLOW;
         }
         return MetricResult.AlertLevel.GREEN;

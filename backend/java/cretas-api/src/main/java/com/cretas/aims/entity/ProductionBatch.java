@@ -364,4 +364,13 @@ public class ProductionBatch extends BaseEntity {
         map.put("fullName", supervisorName != null ? supervisorName : "");
         return map;
     }
+
+    /**
+     * Sprint 10 AI invocation source tag — set when Workdesk AI 1-click create production batch.
+     * Schema: {source: "sprint-10-loop-5", testRun: bool, createdAt: iso}.
+     * NULL = manual UI create.
+     */
+    @Type(JsonBinaryType.class)
+    @Column(name = "ai_invocation_metadata", columnDefinition = "jsonb")
+    private Map<String, Object> aiInvocationMetadata;
 }
