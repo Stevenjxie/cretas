@@ -1273,6 +1273,16 @@ const businessRoutes: RouteRecordRaw[] = [
         ]
       },
 
+      // Phase 1 Track B.3 (2026-05-22): 指标中心 — Phase 1 backend (PR #155) UI.
+      // Customer-facing dashboard for indicators / tree / thresholds / history.
+      // 入口路由 /indicator-center 直接展示 IndicatorCenterDashboard.
+      {
+        path: 'indicator-center',
+        name: 'IndicatorCenter',
+        component: () => import('@/views/indicator-center/IndicatorCenterDashboard.vue'),
+        meta: { requiresAuth: true, title: '指标中心', icon: 'Histogram', module: 'analytics' }
+      },
+
       // 行为校准管理
       {
         path: 'calibration',
