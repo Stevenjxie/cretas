@@ -529,15 +529,111 @@ After PM merges + deploys this Round 4 branch:
 
 ---
 
-## Round 5 (TBD)
+## Round 5 (2026-05-22) — §8.2 技术 PASS + Goal 硬验证 deeper bug found
 
-Per depth-first-e2e §8.2 + spec §2.11 Phase 3 DOD: ≥5 rounds, P0=0 P1≤2 收尾.
+### Status
 
-Current state after Round 4 (pre-deploy): all 3 P1 fixes shipped. Post-deploy + Round 5 re-run should verify §8.2 exit criteria.
+- **§8.2 technical exit criteria**: PASS (≥5 rounds, P0=0, P1≤2 after Round 4 fixes deployed)
+- **Goal hard verification** (literal "帮我看上月损溢异常" must really route to RESTAURANT_ECONOMICS_ANALYSIS): **FAIL**
+- Bug 1 (literal keyword 路由) deeper root cause found below
 
-Updated Round 5 priorities:
-- **Re-run E2E** with Round 4 deployed: expect 10/10 PASS + new deep test per Rule 2
-- **Phase 4 customer dry-run** if Round 5 ≥80% PASS
+### Bug 1 finding — recognition pipeline LLM tier overrides DB keywords
+
+- `/ai-intents/recognize-all` (DB-driven only) returns `RESTAURANT_ECONOMICS_ANALYSIS` ✅ (V20260522_51 keywords work)
+- `/recognize` (multi-stage incl. LLM tier) → LLM picks `ALERT_ACTIVE` (confidence 0.78) ❌
+- `/execute` uses `/recognize` pipeline → still hits ALERT_ACTIVE → role-level perm denied
+
+**Root cause**: `IntentKnowledgeBase.phraseToIntentMapping` (Java hardcoded ~30 entries) sits at Layer 1 (PHRASE_MATCH) of the pipeline, BEFORE the LLM tier. Since `RESTAURANT_ECONOMICS_ANALYSIS` had ZERO entries in this map, Layer 1 never short-circuited the LLM tier — letting LLM's keyword "异常" weighting toward `ALERT_ACTIVE.keywords` win.
+
+V20260522_51 DB keywords help the keyword-scoring layer but NOT the LLM tier.
+
+### Round 6 priority (handed to next subagent)
+
+Add `RESTAURANT_ECONOMICS_ANALYSIS` phrase mappings into `IntentKnowledgeBase` so Layer 1 fires before the LLM tier can misroute.
+
+---
+
+## Round 6 (2026-05-22) — Bug 1 deeper fix + spec tightening
+
+### Status
+
+- **Branch**: `feat/sprint11-round6-fixes-2026-05-22` (worktree-isolated)
+- **Java tests**: 8/8 PASS (new `IntentKnowledgeBaseTest` class — covers literal spec phrase + variants + no-regression guards)
+- **Deploy**: NOT done (PM responsibility per task brief)
+- **PR**: NOT opened (PM responsibility)
+
+### Bug 1 deeper fix — phraseToIntentMapping entries
+
+**File**: `backend/java/cretas-api/src/main/java/com/cretas/aims/config/IntentKnowledgeBase.java`
+
+**Approach**: Added 8 phrase mappings to BOTH `phraseToIntentMapping` (factory map) AND `restaurantPhraseMapping` (restaurant map). This bypasses the LLM tier ambiguity since `matchPhrase(input, businessDomain)` consults business-specific map FIRST at Layer 1.
+
+**Phrases added** (all net-new, no collision with existing mappings):
+```
+帮我看上月损溢异常    → RESTAURANT_ECONOMICS_ANALYSIS  (spec §2.11 Phase 4 DOD #1 literal)
+帮我看上月损溢        → RESTAURANT_ECONOMICS_ANALYSIS
+损溢异常              → RESTAURANT_ECONOMICS_ANALYSIS
+损溢分析              → RESTAURANT_ECONOMICS_ANALYSIS
+损益分析              → RESTAURANT_ECONOMICS_ANALYSIS
+损益异常              → RESTAURANT_ECONOMICS_ANALYSIS
+哪个菜亏钱            → RESTAURANT_ECONOMICS_ANALYSIS  (singular — note plural form 哪些菜亏钱 kept routing to RESTAURANT_DISH_COST_ANALYSIS, no regression)
+菜品损溢              → RESTAURANT_ECONOMICS_ANALYSIS
+```
+
+**Phrases SKIPPED** (collision with existing mappings — would regress):
+- `成本分析` → already `COST_TREND_ANALYSIS` (factory) / `RESTAURANT_DISH_COST_ANALYSIS` (restaurant). Not overridden.
+- `食材损耗` → already `RESTAURANT_WASTAGE_SUMMARY`. Not overridden.
+- `损耗异常` → already `RESTAURANT_WASTAGE_ANOMALY`. Not overridden.
+
+### Bug 1 routing-path note (organizer attention)
+
+The brief mentioned `IntentKnowledgeBase` in `service/`; actual file is in `config/` (`backend/.../config/IntentKnowledgeBase.java`). Path was located via grep — no time lost.
+
+The brief mentioned editing only `phraseToIntentMapping`. Investigation showed `matchPhrase(input, businessDomain)` consults `restaurantPhraseMapping` first for RESTAURANT factories. Adding to ONLY the factory map would miss the actual customer path for RES_3101_009. Fix adds to both maps to cover factory + restaurant users uniformly.
+
+### Spec tightening (Task 2) — T1 strict assertion
+
+**File**: `web-admin/tests/e2e-closed-loop/loop-6-restaurant-ai.spec.ts`
+
+**Old (Round 5 permissive)**:
+```typescript
+if (result.status === 403) { ... document P0 ... } else { ... soft check ... }
+```
+
+**New (Round 6 strict, Goal 硬验证)**:
+```typescript
+expect(result.status, 'T1 should be 200').toBe(200);
+expect(data?.intentCode, 'T1 should route to RESTAURANT_ECONOMICS_ANALYSIS').toBe('RESTAURANT_ECONOMICS_ANALYSIS');
+```
+
+T2-R3 untouched. The whitelist 5-field assertion in T3 stays as is.
+
+### Task 3 (Tool gap) — DEFERRED
+
+Tool `restaurant_ops_requisition_trend` is not implemented in Java (intent code from `backend/python/smartbi/database/migrations/2026_04_25_restaurant_ops_intents_seed.sql`). Deferred per brief's "defer if time" guidance: Round 6 primary scope is the Goal hard verification literal-keyword routing fix, which is unaffected by this tool gap. Recommend separate follow-up PR with either:
+- Implement `RestaurantOpsRequisitionTrendTool` (Tool-Skill architecture, mirrors python `restaurant_ops_router._OPS_PATTERNS`), or
+- Add Flyway `V20260522_53__disable_unimplemented_restaurant_ops_intents.sql` setting `is_active=false` on RESTAURANT_OPS_REQUISITION_TREND (and likely 4 sister intents — they share the same code-vs-data gap).
+
+### Verification plan (next chat / post-deploy)
+
+After deploy, run:
+```
+QHJ_PASSWORD=123456 npx playwright test --project loop-6-restaurant-ai
+```
+Expected: 10/10 PASS, with T1 newly hard-asserting `intentCode === RESTAURANT_ECONOMICS_ANALYSIS`.
+
+Direct sanity (no Playwright):
+```
+POST /api/mobile/RES_3101_009/ai-intents/recognize {"userInput":"帮我看上月损溢异常"}
+expect → body.data.intentCode === 'RESTAURANT_ECONOMICS_ANALYSIS'
+```
+
+### Files Touched in Round 6
+
+- `backend/java/cretas-api/src/main/java/com/cretas/aims/config/IntentKnowledgeBase.java` (+40 lines — 8 economicsPhrases array → put into both phraseToIntentMapping + restaurantPhraseMapping at end of `initPhraseMappingsPart2()`)
+- `backend/java/cretas-api/src/test/java/com/cretas/aims/config/IntentKnowledgeBaseTest.java` (NEW — 8 tests, POJO-style)
+- `web-admin/tests/e2e-closed-loop/loop-6-restaurant-ai.spec.ts` (T1 strict assertion, ~10 lines)
+- `docs/superpowers/handoffs/2026-05-22-mealclaw-e2e-rounds.md` (this file) — Round 5 + Round 6 reports
 
 ---
 
