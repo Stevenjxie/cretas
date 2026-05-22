@@ -1,0 +1,207 @@
+
+# WORKDESK AI Output Quality Audit — 2026-05-22
+
+| Workdesk | Path | Query | Status | Len | Verdict | Negative hits | Chinese-run | Domain-kw |
+|---|---|---|---|---|---|---|---|---|
+| finance-manager | pathA | `本月经营怎么样?` | FAILED | 22 | **FAIL** | 暂不支持 | ✗ | `✗` |
+| finance-manager | pathB | `这个月业绩如何` | COMPLETED | 721 | **PASS** | — | ✓ | `¥0` |
+| purchaser | pathA | `下周采购什么?` | SUCCESS | 37 | **FAIL** | bare-template-N项数据指标 | ✓ | `✗` |
+| purchaser | pathB | `下周需要进货吗` | NEED_CLARIFICATION | 25 | **FAIL** | — | ✓ | `✗` |
+| quality-chief | pathA | `今天哪些批次待放行?` | FAILED | 22 | **FAIL** | 暂不支持 | ✗ | `✗` |
+| quality-chief | pathB | `今天有什么批次需要审批放行` | SUCCESS | 123 | **PASS** | — | ✓ | `质检` |
+| quality-manager | pathA | `今天 HACCP 监控全通过吗?` | SUCCESS | 37 | **FAIL** | _toolCount, _executionOrder, _freeze(underscore-key), _revie | ✓ | `✗` |
+| quality-manager | pathB | `今天质量监控有问题吗` | SUCCESS | 27 | **PASS** | — | ✓ | `告警` |
+| sales-owner | pathA | `今天该跟谁?` | SUCCESS | 37 | **FAIL** | _toolCount, _executionOrder, _query(underscore-key), _toolCo | ✓ | `✗` |
+| sales-owner | pathB | `今天哪些客户需要拜访` | SUCCESS | 5989 | **FAIL** | _toolCount, _executionOrder, _query(underscore-key), _toolCo | ✓ | `客户` |
+| warehouse-keeper | pathA | `今天要收什么货?` | SUCCESS | 35 | **PASS** | — | ✓ | `今天` |
+| warehouse-keeper | pathB | `今天有什么入库` | SUCCESS | 141 | **FAIL** | — | ✓ | `✗` |
+
+## Per-test detail (raw user_text + preview)
+
+### finance-manager-pathA — VERDICT: FAIL
+  query: 本月经营怎么样?
+  intentCode sent: MONTHLY_FINANCIAL_CLOSE
+  intentCode returned: MONTHLY_FINANCIAL_CLOSE
+  status: FAILED
+  intentRecognized: True
+  content_len: 22
+  formattedText preview (first 500c):
+    暂不支持此类型的意图执行: WORKDESK
+  negatives: ['暂不支持']
+  chinese_run_ok: False
+  domain_keyword: None
+
+### finance-manager-pathB — VERDICT: PASS
+  query: 这个月业绩如何
+  intentCode sent: None
+  intentCode returned: None
+  status: COMPLETED
+  intentRecognized: False
+  content_len: 721
+  formattedText preview (first 500c):
+    根据最新的运营分析报告，2026年4月21日至5月21日期间，贵公司的食品加工企业完全没有进行任何实质性的生产活动。具体表现为：
+
+- **总产量**：0 kg/吨
+- **产品种类**：0 种
+- **总成本**：¥0
+- **日均产量**：0.00
+
+这表明在整整一个月的时间里，工厂没有产出任何产品，也没有发生任何变动成本。这种情况非常不正常，可能的原因包括计划性停产、系统故障或业务终止。
+
+### 关键问题与风险
+1. **财务数据失真**：虽然报表显示总成本为0，但实际上企业仍在承担固定成本（如租金、人工、设备折旧等），导致实际亏损。
+2. **供应链与库存危机**：原材料可能已经过期或积压，需要立即核查并处理。
+3. **合规与审计风险**：连续30天无生产记录可能引发市场监管部门的处罚。
+4. **设备维护问题**：长期停机会导致设备老化和故障，重启前需进行全面检查和维护。
+
+### 建议措施
+1. **核实系统状态**：立即检查MES/ERP系统，确认是否数据上传失败或物理生产状态确实未启动。
+2. **冻结采购与付款**：暂停所有非紧急原材料采购，审核应付账款，减少现金
+    [... truncated, total 721 chars]
+  negatives: []
+  chinese_run_ok: True
+  domain_keyword: ¥0
+
+### purchaser-pathA — VERDICT: FAIL
+  query: 下周采购什么?
+  intentCode sent: PURCHASER_WEEKLY_PLAN
+  intentCode returned: PURCHASER_WEEKLY_PLAN
+  status: SUCCESS
+  intentRecognized: True
+  content_len: 37
+  formattedText preview (first 500c):
+    查询完成
+包含 2 项数据指标 — 详情请查看下方数据卡片或对应报表模块。
+  negatives: ['bare-template-N项数据指标']
+  chinese_run_ok: True
+  domain_keyword: None
+
+### purchaser-pathB — VERDICT: FAIL
+  query: 下周需要进货吗
+  intentCode sent: None
+  intentCode returned: SHIPMENT_STATS
+  status: NEED_CLARIFICATION
+  intentRecognized: True
+  content_len: 25
+  formattedText preview (first 500c):
+    您的请求可能匹配多个操作，请确认您想要执行的操作：
+  negatives: []
+  chinese_run_ok: True
+  domain_keyword: None
+
+### quality-chief-pathA — VERDICT: FAIL
+  query: 今天哪些批次待放行?
+  intentCode sent: QUALITY_CHIEF_WORKDESK
+  intentCode returned: QUALITY_CHIEF_WORKDESK
+  status: FAILED
+  intentRecognized: True
+  content_len: 22
+  formattedText preview (first 500c):
+    暂不支持此类型的意图执行: WORKDESK
+  negatives: ['暂不支持']
+  chinese_run_ok: False
+  domain_keyword: None
+
+### quality-chief-pathB — VERDICT: PASS
+  query: 今天有什么批次需要审批放行
+  intentCode sent: None
+  intentCode returned: QUALITY_CHECK_QUERY
+  status: SUCCESS
+  intentRecognized: True
+  content_len: 123
+  formattedText preview (first 500c):
+    查询到 3 条质检记录，第 1 页
+
+1. 合格 | 等级 D | 合格率 67.0% | 05月17日
+2. 合格 | 等级 D | 合格率 57.0% | 05月18日
+3. 未检验 | 等级 A | 合格率 100.0% | 05月18日
+
+  negatives: []
+  chinese_run_ok: True
+  domain_keyword: 质检
+
+### quality-manager-pathA — VERDICT: FAIL
+  query: 今天 HACCP 监控全通过吗?
+  intentCode sent: FOOD_SAFETY_RECALL
+  intentCode returned: FOOD_SAFETY_RECALL
+  status: SUCCESS
+  intentRecognized: True
+  content_len: 37
+  formattedText preview (first 500c):
+    查询完成
+包含 5 项数据指标 — 详情请查看下方数据卡片或对应报表模块。
+  negatives: ['_toolCount', '_executionOrder', '_freeze(underscore-key)', '_review(underscore-key)', '_date(underscore-key)', '_check(underscore-key)', '_toolCount(underscore-key)', '_trace(underscore-key)', '_executionOrder(underscore-key)', 'bare-template-N项数据指标']
+  chinese_run_ok: True
+  domain_keyword: None
+
+### quality-manager-pathB — VERDICT: PASS
+  query: 今天质量监控有问题吗
+  intentCode sent: None
+  intentCode returned: ALERT_ACTIVE
+  status: SUCCESS
+  intentRecognized: True
+  content_len: 27
+  formattedText preview (first 500c):
+    告警检查完成：当前没有未处理的告警，所有设备运行正常。
+  negatives: []
+  chinese_run_ok: True
+  domain_keyword: 告警
+
+### sales-owner-pathA — VERDICT: FAIL
+  query: 今天该跟谁?
+  intentCode sent: DAILY_CUSTOMER_FOLLOWUP
+  intentCode returned: DAILY_CUSTOMER_FOLLOWUP
+  status: SUCCESS
+  intentRecognized: True
+  content_len: 37
+  formattedText preview (first 500c):
+    查询完成
+包含 5 项数据指标 — 详情请查看下方数据卡片或对应报表模块。
+  negatives: ['_toolCount', '_executionOrder', '_query(underscore-key)', '_toolCount(underscore-key)', '_trend(underscore-key)', '_alert(underscore-key)', '_pending(underscore-key)', '_executionOrder(underscore-key)', 'bare-template-N项数据指标']
+  chinese_run_ok: True
+  domain_keyword: None
+
+### sales-owner-pathB — VERDICT: FAIL
+  query: 今天哪些客户需要拜访
+  intentCode sent: None
+  intentCode returned: DAILY_CUSTOMER_FOLLOWUP
+  status: SUCCESS
+  intentRecognized: True
+  content_len: 5989
+  formattedText preview (first 500c):
+    {"customer_priority_query":{"data":{"data":{"limit":50,"count":16,"customers":[{"highestStage":null,"importance":"VIP","importanceDisplay":"VIP","customerId":"3215df20-abe3-461e-9436-ece1a0cb2567","priorityScore":40,"customerCode":"CUS-1779346596217-10CC","contactPerson":"","activeOpportunityCount":0,"highestStageDisplay":null,"contactPhone":"","customerName":"叮咚-上海松江涞坊路冷藏仓"},{"highestStage":null,"importance":"VIP","importanceDisplay":"VIP","customerId":"effff17e-97ea-4d49-8a05-dedba1c292a2","pr
+    [... truncated, total 5989 chars]
+  negatives: ['_toolCount', '_executionOrder', '_query(underscore-key)', '_toolCount(underscore-key)', '_trend(underscore-key)', '_alert(underscore-key)', '_pending(underscore-key)', '_executionOrder(underscore-key)']
+  chinese_run_ok: True
+  domain_keyword: 客户
+
+### warehouse-keeper-pathA — VERDICT: PASS
+  query: 今天要收什么货?
+  intentCode sent: WAREHOUSE_KEEPER_TODAY_TASKS
+  intentCode returned: WAREHOUSE_KEEPER_TODAY_TASKS
+  status: SUCCESS
+  intentRecognized: True
+  content_len: 35
+  formattedText preview (first 500c):
+    今天 (~1 天内) 1 个采购单共 1 行待入库, 请按清单核对实物
+  negatives: []
+  chinese_run_ok: True
+  domain_keyword: 今天
+
+### warehouse-keeper-pathB — VERDICT: FAIL
+  query: 今天有什么入库
+  intentCode sent: None
+  intentCode returned: MATERIAL_BATCH_QUERY
+  status: SUCCESS
+  intentRecognized: True
+  content_len: 141
+  formattedText preview (first 500c):
+    查询到 3 条原料记录：
+
+1. MT-20260507-7640 | 冻猪蹄 ?kg | AVAILABLE
+2. MT-20260507-2061 | 冻猪蹄 ?kg | AVAILABLE
+3. MT-20260502-1365 | 牛肉前腱子 ?箱 | AVAILABLE
+
+  negatives: []
+  chinese_run_ok: True
+  domain_keyword: None
