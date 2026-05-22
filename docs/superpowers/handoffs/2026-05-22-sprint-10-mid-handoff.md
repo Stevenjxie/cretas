@@ -18,10 +18,17 @@
 
 ## What needs verification (next chat task #1)
 
-Run Playwright spec for Loop 2/3/4/5 sequentially:
+Run Playwright spec for Loop 2/3/4/5 sequentially. **MUST pass env vars** (prod 10010 blocked from local — use public gateway):
+
 ```bash
 cd web-admin
-# Loop 2
+export E2E_BASE_URL=https://admin.cretaceousfuture.com
+export E2E_API_BASE=https://admin.cretaceousfuture.com/api/mobile
+export E2E_USER=f006_admin
+export E2E_PASS=123456
+export E2E_FACTORY_ID=F006
+
+# Loop 2 (already tried — see "Known spec bugs" below)
 npx playwright test --config=playwright.config.ts --project sprint10-loop-2-receive
 # Loop 3
 npx playwright test --config=playwright.config.ts --project loop-3-procurement
@@ -30,6 +37,16 @@ npx playwright test --config=playwright.config.ts --project sprint10-loop-4-appr
 # Loop 5
 npx playwright test --config=playwright.config.ts --project loop-5-production
 ```
+
+### Known spec bugs from this session's attempt
+
+**Loop 2 (sprint10-loop-2-receive)**: I tried it. With env vars above:
+- L2-01 + L2-02 FAILED: `formattedVisible toBeTruthy` assertion. Spec selector didn't find AI response element on `WarehouseKeeperWorkdesk.vue`. The AI input/output element selector in the spec doesn't match actual Vue DOM. Need: open snapshot, find real selector, fix spec.
+- L2-03/04/05: skipped (deps on L2-01).
+
+Likely same pattern for Loop 3/4/5 specs — subagents wrote selectors based on assumed DOM, never ran them on prod. Each spec needs selector debugging.
+
+**Loop 2 internal `e2e-auth-helper.ts` hardcoded 47.100.235.168:10010** — env var override works. Don't modify the helper, just always pass env vars per shell export above.
 
 Each should pass with screenshots written to its respective `docs/audits/sprint-10-demos/loop-N-*/`. After each, SQL verify:
 ```bash
