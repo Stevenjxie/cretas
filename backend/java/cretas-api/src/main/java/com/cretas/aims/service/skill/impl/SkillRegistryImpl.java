@@ -724,6 +724,48 @@ public class SkillRegistryImpl implements SkillRegistry {
                 .build());
         count++;
 
+        // Sprint 9 P0.2 (2026-05-22) — 质量主管 Workdesk Skill 补全.
+        // Skill: quality-chief-workdesk — 批次放行综合审查 编排.
+        // 之前 V20260820_10 intent QUALITY_CHIEF_WORKDESK (tool_name=NULL) 没对应 Skill,
+        // tryExplicitSkillRouteForIntent 找不到 skill → 用户看 "暂不支持此类型的意图执行: WORKDESK".
+        // 此 Skill 串 4 Tool 输出 "今日待放行综合判断" (供仓管员综合参考).
+        registerWithSource(SkillDefinition.builder()
+                .name("quality-chief-workdesk")
+                .displayName("质量主管工作台")
+                .description("质量主管批次放行综合审查 — 串 4 Tool 输出 (质检合格率 + HACCP 状态 + " +
+                             "添加剂合规 + 客户标准对比). 1 屏综合判断该批次能否放行.")
+                .version("1.0.0")
+                .category("QUALITY")
+                .priority(40)
+                .triggers(java.util.Arrays.asList(
+                        "今天哪些批次待放行", "待放行", "质量主管工作台", "批次放行",
+                        "放行 audit", "质检综合", "卤猪蹄能放行吗", "今天放行"))
+                .tools(java.util.Arrays.asList(
+                        "quality_check_summary",
+                        "haccp_status_query",
+                        "additive_compliance_check_quality",
+                        "customer_quality_standard"))
+                .contextNeeded(java.util.Arrays.asList("factoryId", "userId"))
+                .promptTemplate(
+                        "你是质量主管工作台助手. 根据 4 个 Tool 输出汇总 '今日待放行批次综合判断':\n\n" +
+                        "- quality_check_summary: 批次质检综合 (合格率 / result 分布)\n" +
+                        "- haccp_status_query: HACCP 状态 (整体通过 + 偏离点 + releaseHint)\n" +
+                        "- additive_compliance_check_quality: 添加剂合规判定 (超限项)\n" +
+                        "- customer_quality_standard: 客户质量标准对比\n\n" +
+                        "输出格式 (markdown):\n" +
+                        "✅/🔴 综合判断: 可以放行 / 需要拒收 / 需追加检测\n" +
+                        "📊 质检: 合格率 N% (基于 X 条记录)\n" +
+                        "🔬 HACCP: ✅通过 / 🚨 N 项 deviation (列出每项)\n" +
+                        "🧪 添加剂: ✅合规 / 🚨 N 项超 GB 2760 (列出)\n" +
+                        "📋 客户标准: 满足/不满足 (列出客户要求 vs 实际差异)\n" +
+                        "💡 建议: {基于 4 项 audit 给出 1-2 条 actionable 建议}\n\n" +
+                        "若 4 项数据均为空 (该批次尚未质检), 提示 '该批次暂无质检记录, 请先安排取样'.\n" +
+                        "工厂 ID: ${factoryId}. 用户问题: ${userQuery}")
+                .source("default")
+                .enabled(true)
+                .build());
+        count++;
+
         // Sprint 10 Loop 5 — 生产经理 Workdesk (2026-05-21)
         // Skill: production-demand-analysis — 订单缺产分析 + 推荐起产 编排.
         // 单 Tool 编排 (production_demand_query): WORKDESK intent 入口 — 把 LLM
