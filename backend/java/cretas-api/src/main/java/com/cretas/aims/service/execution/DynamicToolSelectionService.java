@@ -289,13 +289,44 @@ public class DynamicToolSelectionService {
                 return response;
             }
 
+            // Sprint 10.5 P0 #1 fix (2026-05-22, per 2026-05-22 Workdesk AI audit):
+            // Previously returned null on Skill non-success → orchestrator fell back to
+            // buildNoToolResponse → user saw generic "暂不支持此类型的意图执行: WORKDESK".
+            // Generic message masks the real Skill failure reason (e.g. period unavailable,
+            // Tool exception) and made customer demos look broken even though intent +
+            // routing worked correctly.
+            //
+            // Fix: surface the actual Skill error message in a structured FAILED response
+            // so user sees "Skill 执行失败: [真实原因]" instead of "暂不支持 WORKDESK".
             log.warn("显式 Skill 路由: 执行失败 skill={}, message={}",
                     skillResult.getSkillName(), skillResult.getMessage());
-            return null;
+            return buildSkillFailureResponse(intent, skillResult.getMessage());
         } catch (Exception e) {
             log.warn("显式 Skill 路由异常 intentCode={}: {}", intent.getIntentCode(), e.getMessage());
-            return null;
+            return buildSkillFailureResponse(intent, "Skill 执行异常: " + e.getMessage());
         }
+    }
+
+    /**
+     * Build a FAILED IntentExecuteResponse with a meaningful Skill failure message.
+     *
+     * <p>Sprint 10.5 P0 #1 helper. Replaces previous "return null → buildNoToolResponse →
+     * generic 暂不支持 WORKDESK" fall-through with explicit per-Skill error surface.
+     */
+    private IntentExecuteResponse buildSkillFailureResponse(AIIntentConfig intent, String skillErrorMessage) {
+        String reason = skillErrorMessage != null && !skillErrorMessage.isBlank()
+                ? skillErrorMessage : "未知错误";
+        String msg = "Skill 执行失败: " + reason;
+        return IntentExecuteResponse.builder()
+                .intentRecognized(true)
+                .intentCode(intent.getIntentCode())
+                .intentName(intent.getIntentName())
+                .intentCategory(intent.getIntentCategory())
+                .status("FAILED")
+                .message(msg)
+                .formattedText(msg)
+                .executedAt(LocalDateTime.now())
+                .build();
     }
 
     /**
