@@ -233,7 +233,11 @@ class DynamicToolSelectionServiceWorkdeskRouteTest {
     }
 
     @Test
-    void tryExplicitSkillRouteForIntent_skillExecutionThrows_returnsNull() {
+    void tryExplicitSkillRouteForIntent_skillExecutionThrows_surfacesFailedResponse() {
+        // PR #182 (Sprint 10.5 P0 #1) changed Skill exception behavior — now surfaces
+        // the real error to the user via FAILED IntentExecuteResponse instead of
+        // returning null (which previously routed to the misleading
+        // "暂不支持此类型的意图执行: WORKDESK" message). Test renamed + assertion updated.
         when(mockSkillRouter.isSkillsEnabled()).thenReturn(true);
         when(mockSkillRouter.executeSkill(any(), any(SkillContext.class)))
                 .thenThrow(new RuntimeException("boom"));
@@ -246,7 +250,11 @@ class DynamicToolSelectionServiceWorkdeskRouteTest {
         IntentExecuteResponse response = service.tryExplicitSkillRouteForIntent(
                 intent, "今日跟谁", "F006", 100L);
 
-        assertThat(response).isNull();
+        assertThat(response).isNotNull();
+        assertThat(response.getStatus()).isEqualTo("FAILED");
+        assertThat(response.getIntentCode()).isEqualTo("DAILY_CUSTOMER_FOLLOWUP");
+        assertThat(response.getMessage()).contains("boom");
+        assertThat(response.getFormattedText()).contains("boom");
     }
 
     @Test
