@@ -164,5 +164,16 @@ export default defineConfig({
       fullyParallel: false,
       workers: 1,
     },
+    // Sprint 10 Loop 4 — 审批闭环 E2E (top-level spec file convention from Loop 1)
+    // Run via:
+    //   E2E_API_URL=http://47.100.235.168:10010/api/mobile \
+    //   E2E_USER=f006_admin E2E_PASS=123456 E2E_FACTORY_ID=F006 \
+    //   npx playwright test --project sprint10-loop-4-approval
+    {
+      name: 'sprint10-loop-4-approval',
+      testMatch: 'sprint10-loop-4-approval.spec.ts',
+      fullyParallel: false,
+      workers: 1,
+    },
   ],
 });
