@@ -153,7 +153,12 @@ public class AIIntentConfigController {
 
     // ==================== 意图识别 ====================
 
-    @RequirePermission({"system:read_write"})
+    // Sprint 11 Round 2 (2026-05-22): removed @RequirePermission({"system:read_write"}).
+    // Intent recognition is read-only diagnostic — gated by JWT auth alone.
+    // Per-intent sensitivity is enforced by AIIntentService.hasPermission() in
+    // IntentExecutionOrchestrator (line 240) — controller-level system:read_write
+    // was blocking ALL non-super-admin roles (e.g. qhj_warehouse_mgr) from even
+    // PROBING what they can do. See docs/superpowers/handoffs/2026-05-22-mealclaw-e2e-rounds.md
     @PostMapping("/recognize")
     @Operation(summary = "测试意图识别", description = "输入文本测试意图识别结果（支持操作类型检测）")
     public ResponseEntity<ApiResponse<IntentRecognitionResult>> recognizeIntent(
@@ -188,7 +193,7 @@ public class AIIntentConfigController {
         return ResponseEntity.ok(ApiResponse.success(result));
     }
 
-    @RequirePermission({"system:read_write"})
+    // Sprint 11 Round 2: removed @RequirePermission({"system:read_write"}) — read-only diagnostic.
     @PostMapping("/recognize-all")
     @Operation(summary = "识别所有匹配意图", description = "获取所有可能匹配的意图列表")
     public ResponseEntity<ApiResponse<List<AIIntentConfig>>> recognizeAllIntents(
@@ -201,7 +206,14 @@ public class AIIntentConfigController {
 
     // ==================== 意图执行 ====================
 
-    @RequirePermission({"system:read_write"})
+    // Sprint 11 Round 2 (2026-05-22): removed @RequirePermission({"system:read_write"}).
+    // Was a P0 — qhj_warehouse_mgr / qhj_finance_mgr / qhj_sales_mgr / qhj_operator (all
+    // RES_3101_009 spec'd accounts) blocked at the controller before ever reaching the
+    // intent-level permission check. Per-intent sensitivity + required_roles is now the
+    // sole permission gate (enforced in IntentExecutionOrchestrator.execute line 240
+    // via aiIntentService.hasPermission(intentCode, userRole) → returns FORBIDDEN
+    // response when role not in intent's required_roles JSON array; intents with
+    // sensitivity_level=LOW + empty required_roles allow all authenticated users).
     @PostMapping("/execute")
     @Operation(summary = "执行AI意图", description = "识别用户输入的意图并执行对应操作")
     @RateLimit(count = 20, period = 60, limitType = LimitType.USER, message = "AI请求过于频繁，请稍后再试")
@@ -225,7 +237,7 @@ public class AIIntentConfigController {
         return ResponseEntity.ok(ApiResponse.success(response));
     }
 
-    @RequirePermission({"system:read_write"})
+    // Sprint 11 Round 2: removed @RequirePermission({"system:read_write"}) — same rationale as /execute.
     @PostMapping("/execute/multi")
     @Operation(summary = "执行多意图 (Multi-Label Classification)",
                description = "使用 Sigmoid-based 多标签分类识别并执行多个意图")
@@ -250,7 +262,7 @@ public class AIIntentConfigController {
         return ResponseEntity.ok(ApiResponse.success(response));
     }
 
-    @RequirePermission({"system:read_write"})
+    // Sprint 11 Round 2: removed @RequirePermission({"system:read_write"}) — same rationale as /execute.
     @PostMapping(value = "/execute/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     @Operation(summary = "流式执行AI意图 (SSE)", description = "通过 Server-Sent Events 实时返回执行进度")
     @RateLimit(count = 20, period = 60, limitType = LimitType.USER, message = "AI请求过于频繁，请稍后再试")
@@ -273,7 +285,7 @@ public class AIIntentConfigController {
         return intentExecutorService.executeStream(factoryId, request, userId, userRole);
     }
 
-    @RequirePermission({"system:read_write"})
+    // Sprint 11 Round 2: removed @RequirePermission({"system:read_write"}) — preview is read-only.
     @PostMapping("/preview")
     @Operation(summary = "预览AI意图执行结果", description = "识别意图并预览执行结果，不实际执行")
     public ResponseEntity<ApiResponse<IntentExecuteResponse>> previewIntent(
@@ -291,7 +303,10 @@ public class AIIntentConfigController {
         return ResponseEntity.ok(ApiResponse.success(response));
     }
 
-    @RequirePermission({"system:read_write"})
+    // Sprint 11 Round 2: removed @RequirePermission({"system:read_write"}). The confirm step
+    // is the second half of preview/confirm pair — perm gate (if any) belongs on the original
+    // preview which already established intent permission. Intent-level perm via tokenized
+    // confirmToken still enforces the original requestor's role.
     @PostMapping("/confirm/{confirmToken}")
     @Operation(summary = "确认执行预览的意图", description = "确认执行之前预览的意图操作")
     public ResponseEntity<ApiResponse<IntentExecuteResponse>> confirmIntent(
@@ -311,7 +326,9 @@ public class AIIntentConfigController {
 
     // ==================== 参数确认和规则学习 ====================
 
-    @RequirePermission({"system:read_write"})
+    // Sprint 11 Round 2: removed @RequirePermission({"system:read_write"}). Parameter learning
+    // is per-user-per-intent. If executeAfterConfirm=true, the intent-level perm gate in
+    // IntentExecutionOrchestrator still applies.
     @PostMapping("/params/confirm")
     @Operation(summary = "确认参数并学习规则",
                description = "用户确认 LLM 提取的参数后，系统学习提取规则，下次可直接使用规则提取（无需调用 LLM）")
@@ -531,7 +548,9 @@ public class AIIntentConfigController {
 
     // ==================== 反馈记录 ====================
 
-    @RequirePermission({"system:read_write"})
+    // Sprint 11 Round 2: removed @RequirePermission({"system:read_write"}). Feedback is
+    // per-user signal data — every authenticated user who can use AI must be able to
+    // submit feedback (positive/negative). JWT auth alone is sufficient.
     @PostMapping("/feedback/positive")
     @Operation(summary = "记录正向反馈", description = "当用户确认意图匹配正确时调用，用于关键词效果追踪")
     public ResponseEntity<ApiResponse<Void>> recordPositiveFeedback(
@@ -549,7 +568,7 @@ public class AIIntentConfigController {
         return ResponseEntity.ok(ApiResponse.successMessage("正向反馈已记录"));
     }
 
-    @RequirePermission({"system:read_write"})
+    // Sprint 11 Round 2: removed @RequirePermission({"system:read_write"}) — feedback path.
     @PostMapping("/feedback/negative")
     @Operation(summary = "记录负向反馈", description = "当用户拒绝匹配结果并选择其他意图时调用")
     public ResponseEntity<ApiResponse<Void>> recordNegativeFeedback(
@@ -573,7 +592,7 @@ public class AIIntentConfigController {
      * 意图识别反馈接口
      * 用户可以纠正错误的意图识别结果，系统自动学习
      */
-    @RequirePermission({"system:read_write"})
+    // Sprint 11 Round 2: removed @RequirePermission({"system:read_write"}) — feedback path.
     @PostMapping("/feedback")
     @Operation(summary = "提交意图识别反馈", description = "用户可以纠正错误的意图识别结果，系统自动学习")
     public ResponseEntity<ApiResponse<Void>> submitIntentFeedback(

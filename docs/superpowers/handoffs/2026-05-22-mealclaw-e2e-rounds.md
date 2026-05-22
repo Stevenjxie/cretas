@@ -198,16 +198,104 @@ The same pattern (perm gate at controller level vs. intent-level perm derivation
 
 ---
 
-## Round 2 (TODO)
+## Round 2 (2026-05-22) — Fix branch shipped, awaiting PM merge + deploy
+
+### Status
+
+- **Branch**: `feat/sprint11-round2-fixes-2026-05-22` (worktree-isolated, pushed)
+- **Java tests**: 3/3 PASS for new `AIIntentConfigControllerTest`, 5/5 PASS for existing `RestaurantEconomicsAnalysisToolTest`
+- **Python tests**: 8/8 PASS for `test_restaurant_llm_composite.py` (including new `test_composite_path_b2_pos_fallback_when_agg_empty_at_365d`), 34/34 total restaurant_llm_* tests pass
+- **Round 1 spec upgrades**: T1/R1/R2 no longer assert 403 (instead: must NOT be 403 with module=system), E2 asserts `topItems > 0` when Path B2 fires
+- **Deploy**: NOT done in this subagent (PM responsibility — JAR + Python need rebuilds)
+- **PR**: NOT opened (PM responsibility per task brief)
+
+### P0 fix — controller perm gate (Approach A: remove redundant gate)
+
+**File**: `backend/java/cretas-api/src/main/java/com/cretas/aims/controller/AIIntentConfigController.java`
+
+**Approach**: Removed `@RequirePermission({"system:read_write"})` from 11 read-only / AI-execution / feedback endpoints. **Kept** it on 11 admin-only management endpoints (CRUD, cleanup, cache, rollback) — all of which also carry `@PreAuthorize("hasAnyRole('FACTORY_SUPER_ADMIN', 'FACTORY_ADMIN')")` for double-defense.
+
+**Endpoints opened to JWT-auth-only** (per-intent permission still enforced):
+- `executeIntent` / `executeMultiIntent` / `executeIntentStream`
+- `previewIntent` / `confirmIntent`
+- `recognizeIntent` / `recognizeAllIntents`
+- `confirmParameters`
+- `recordPositiveFeedback` / `recordNegativeFeedback` / `submitIntentFeedback`
+
+**Endpoints that KEEP system:read_write + super_admin role gate**:
+- `createIntent` / `updateIntent` / `setIntentActive` / `deleteIntent`
+- `cleanupLowEffectivenessKeywords` / `deleteExtractionRule` / `cleanupLowSuccessRules`
+- `rollbackIntent` / `rollbackAllIntents`
+- `refreshCache` / `clearCache`
+
+**Why this is correct (not a security regression)**:
+1. `IntentExecutionOrchestrator.execute()` line 240 already calls `aiIntentService.hasPermission(intentCode, userRole)` — intents with `required_roles=["super_admin"]` or `sensitivity_level=CRITICAL` still get denied at the orchestrator layer.
+2. Sister controller `GenericAIChatController` (`/api/mobile/ai/chat`) has **zero** `@RequirePermission` — relies only on JWT auth + intent-level perm. Sprint 11 Round 2 brings `AIIntentConfigController` to the same pattern for its execution endpoints.
+3. The 4 RES_3101_009 spec'd accounts (qhj_warehouse_mgr / qhj_finance_mgr / qhj_sales_mgr / qhj_operator) now reach the spec'd happy path "帮我看上月损溢异常" — Phase 4 customer acceptance criterion unlocked.
+
+**Test verification** (`AIIntentConfigControllerTest`):
+- T1: `executeIntent` MUST NOT have `@RequirePermission({"system:read_write"})` — PASS
+- T2: ALL 11 AI user-facing methods scanned via reflection, none retain system:read_write gate — PASS
+- T3: ALL 11 admin-only methods STILL retain system:read_write gate (regression prevention) — PASS
+
+### P1.1 fix — Path B2 POS-source fallback
+
+**Files**: `backend/python/smartbi/api/restaurant_llm_composite.py`
+
+**Approach**: Added third-tier fallback `_fetch_top_pos_items()` that queries `fact_pos_item JOIN fact_pos_transaction JOIN dim_product` directly. Chain becomes:
+
+1. 30d query on `agg_restaurant_daily_ops` (preferred — pre-aggregated)
+2. **Path B**: widen to 365d on `agg_restaurant_daily_ops` (handle stale agg windows)
+3. **Path B2 (NEW)**: when 365d agg also empty, fall back to raw `fact_pos_item` 365d → returns top-10 dishes by revenue
+
+When Path B2 fires:
+- Returns dishes from `dim_product` (e.g. "卤猪蹄 200g") instead of ingredients from `dim_ingredient`
+- `dataAvailable.posData = true` + `dataAvailable.overall = true` (LLM understands data IS available)
+- `evidence.source = "restaurant-llm-composite-pos-source"` (transparency)
+- Summary suffix `"(注: 数据源 fact_pos_item 原始 POS, agg_restaurant_daily_ops ETL 尚未为本工厂运行)"` (per Steve 决策 1 — explicit source transparency)
+
+**Test verification** (`test_composite_path_b2_pos_fallback_when_agg_empty_at_365d`):
+- Mock conn.fetch returns []/[]/<populated>: confirms 3-tier fallback chain
+- topItems[0].name == "卤猪蹄 200g" (Round 1 P1 fix verified — non-empty when POS source available)
+- evidence.source contains "pos-source"
+- dataAvailable.posData == true
+- summary contains "fact_pos_item"
+
+### P1.2 — Login rate limit (NOT addressed in Round 2)
+
+Per task brief Round 2 task 3: "推荐: 不动 — Round 1 spec 处理已 OK". The Round 1 spec uses module-level `tokenCache` to cache tokens across tests, which is sufficient work-around. Adjusting server-side rate limit is out of scope.
+
+### Same-cause sweep candidates (PM follow-up backlog)
+
+Round 1 handoff identified 30 controllers with `@RequirePermission({"system:read_write"})`. Sweep candidates that may have the same perm-gate-too-tight issue:
+
+- `IntentAnalysisController` — likely has similar AI-execution endpoints
+- `AIRuleController` — rule listing/preview probably read-only
+- `AIQuotaConfigController` — quota query likely read-only
+- `ActiveLearningController` — training feedback may be user-facing
+
+Recommend a follow-up audit subagent to apply the same "remove on read+execute, keep on CRUD+admin" pattern. NOT done in this Round 2 fix (out of scope, focus is the Round 1 P0/P1).
+
+### Round 3 priorities
+
+After PM merges + deploys this Round 2 branch:
+
+1. **Re-run loop-6** with the new T1/R1/R2/E2 assertions — expect 10/10 PASS
+2. **New T4 deep test**: customer-keyword variation matrix (10-15 phrasings → intent classifier coverage)
+3. **Optional ETL backfill** for RES_3101_009 — if `agg_restaurant_daily_ops` gets populated, both Path B and Path B2 should give consistent results
+4. **Frontend chat UI smoke** (deferred to Sprint 11 polish)
+5. **Same-cause sweep** for the 4 sister AI controllers above
+
+---
+
+## Round 2 LATER (post-Round 3)
 
 PM next steps:
 
-1. **Fix P0** (controller perm gate) — likely 1-2hr Java change + Flyway intent perm metadata or controller-level annotation tweak
-2. **Fix P1** (topItems empty on fallback) — Python query window fix
-3. **Re-run Round 1 suite** — expect 10/10 PASS with NEW deep assertions checking Java 200 + non-empty topItems
-4. **Add Round 2 deep test** — frontend chat UI smoke (page renders, keyword input, response renders)
-5. **Same-cause sweep** for other `@RequirePermission({"system:read_write"})` controllers on AI/intent paths
-6. **Open PR** with bundle of fixes + Round 2 evidence
+1. **Re-run Round 1 suite** post-deploy — expect 10/10 PASS with NEW deep assertions
+2. **Add Round 3 deep test** — frontend chat UI smoke OR customer keyword variation matrix
+3. **Same-cause sweep** for other `@RequirePermission({"system:read_write"})` AI controllers
+4. **Update Round 2 PR description** with E2E results once deployed
 
 ---
 
