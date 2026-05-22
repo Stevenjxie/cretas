@@ -41,6 +41,15 @@ import java.util.Set;
  * <p>Phase 1 复用 issue #20 closure (PR #862 / commit 2d681839f) — 后端 service
  * + DTO + controller 全部已 ship 在 main, 此 Tool 仅做 AI-facing wrap layer.
  *
+ * <p>factoryId 隔离豁免说明: doExecute() 通过 factoryId 走全部业务调用 —
+ * (1) {@code workflowEngine.findPendingForRole(factoryId, ...)} 严格按 factoryId 过滤.
+ * (2) {@code userRepository.findById(userId)} 仅取当前登录 user 的 role (User 是全局表,
+ * userId 来自当前 session JWT, 不会跨工厂注入).
+ * (3) {@code purchaseOrderRepository.findAllById(poIds)} 取 PO businessSummary —
+ * poIds 来自 instances (已按 factoryId filter), 不会拉到外厂 PO.
+ * Audit 脚本 (tool-factory-isolation-audit.mjs) 见 findById() pattern 默认 HIGH, 此 Tool 实际
+ * 安全, 故此处显式标注豁免.
+ *
  * @since 2026-05-21 (Sprint 10 Loop 4)
  */
 @Slf4j

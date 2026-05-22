@@ -42,6 +42,15 @@ import java.util.Optional;
  * <p><b>下一审批人提示</b> (fool-proof Rule 2): 转换完毕后, 找 currentNodeIds 第一个 approval node
  * 的 approverRoles 作为下一审批人 hint, 加进 message.
  *
+ * <p>factoryId 隔离豁免说明: doExecute() 使用 fetch-then-verify pattern —
+ * (1) {@code instanceRepository.findById(instanceId)} 后紧跟 {@code factoryId equals 校验}
+ * (instance.getFactoryId() != factoryId → 403); UUID 全局唯一不会跨工厂误命中.
+ * (2) {@code userRepository.findById(actorId)} 取 actor role — User 是全局表 (factory_super_admin
+ * 可跨工厂, 但当前调用上下文已经过 JWT factoryId 校验, 不会跨工厂注入).
+ * (3) {@code workflowEngine.transitionNode} 内部按 instance.factoryId 走 — 不会跨工厂修改.
+ * Audit 脚本 (tool-factory-isolation-audit.mjs) 见 findById() pattern 默认 HIGH, 此 Tool 实际
+ * 安全 (fetch-then-verify), 故此处显式标注豁免.
+ *
  * @since 2026-05-21 (Sprint 10 Loop 4)
  */
 @Slf4j
