@@ -147,9 +147,13 @@ function assertWhitelistShape(body: Record<string, unknown> | null, testId: stri
 test.describe('Loop 6 Golden Path — Restaurant Economics Analysis', () => {
   test.setTimeout(120_000);
 
-  test('T1: login + intent dispatch happy path (P0 candidate: perm check)', async ({ request }) => {
-    // depth: deep — login + intent dispatch + permission check + response shape probe
-    // This documents the broken happy-path: customer-facing keyword routing 完全不可达 by spec'd roles.
+  test('T1: literal spec keyword routes to RESTAURANT_ECONOMICS_ANALYSIS (Round 6 hard verify)', async ({ request }) => {
+    // depth: deep — Round 6 tightening: spec §2.11 Phase 4 DOD #1 demands
+    //   literal "帮我看上月损溢异常" route to RESTAURANT_ECONOMICS_ANALYSIS.
+    // Round 1 P0 fixed by PR #188 (controller perm gate removed).
+    // Round 5 surfaced LLM-tier misroute → ALERT_ACTIVE for this literal phrase.
+    // Round 6 fix: added 8 phrase mappings into IntentKnowledgeBase phraseToIntentMapping
+    //   + restaurantPhraseMapping so phrase-match layer fires BEFORE the LLM tier.
     const token = await loginAs(request, 'warehouse');
     expect(token, 'T1: warehouse_mgr login token').toBeTruthy();
 
@@ -160,23 +164,16 @@ test.describe('Loop 6 Golden Path — Restaurant Economics Analysis', () => {
     console.log(`T1 result: status=${result.status} elapsedMs=${result.elapsedMs}`);
     console.log('T1 body snippet:', JSON.stringify(result.body).slice(0, 500));
 
-    // SECURITY-CORRECT (current state): 403 because warehouse_manager lacks system:read_write
-    // SPEC-INTENT (broken): should be 200 with whitelist response for the spec'd happy path
-    // ⚠️ This test PASSES if 403 (current behavior) — round 1 documents the P0 finding,
-    //     round 2 (after PM fix) should expect 200.
-    if (result.status === 403) {
-      // Document the P0 — warehouse_manager cannot reach the spec'd path
-      const code = (result.body as { code?: unknown })?.code;
-      const msg = (result.body as { message?: string })?.message;
-      expect(code).toBe('FORBIDDEN');
-      expect(msg).toContain('系统管理');
-      console.log('T1 P0 DOCUMENTED: warehouse_mgr can NOT reach /ai-intents/execute (system:read_write required)');
-    } else {
-      // If fixed (200), validate shape
-      expect(result.status).toBe(200);
-      const data = (result.body as { data?: Record<string, unknown> })?.data;
-      expect(data, 'T1: data envelope').toBeTruthy();
-    }
+    // STRICT (Round 6): MUST be HTTP 200 (controller perm gate gone since PR #188)
+    expect(result.status, 'T1 should be 200 (no controller-level 403, perm gate removed in PR #188)').toBe(200);
+
+    // STRICT (Round 6): MUST route to RESTAURANT_ECONOMICS_ANALYSIS (Goal 硬验证)
+    const data = (result.body as { data?: { intentCode?: string; status?: string; message?: string } })?.data;
+    expect(data, 'T1: data envelope present').toBeTruthy();
+    expect(data?.intentCode, 'T1 should route to RESTAURANT_ECONOMICS_ANALYSIS (not ALERT_ACTIVE — Round 5 misroute regression)')
+      .toBe('RESTAURANT_ECONOMICS_ANALYSIS');
+
+    console.log(`T1 Round 6 PASS — intentCode=${data?.intentCode} status=${data?.status}`);
   });
 
   test('T2: intent dispatch — first paint < 30s (using authoritative path)', async ({ request }) => {

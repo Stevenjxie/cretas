@@ -7361,6 +7361,46 @@ public class IntentKnowledgeBase {
         phraseToIntentMapping.put("审核采购单", "PURCHASE_FINANCE_APPROVE");
         commonPhraseMapping.put("采购财务审核", "PURCHASE_FINANCE_APPROVE");
 
+        // ========== Sprint 11 Round 6 — RESTAURANT_ECONOMICS_ANALYSIS phrase mappings ==========
+        //
+        // Round 5 root cause: LLM tier of /recognize multi-stage pipeline picks ALERT_ACTIVE
+        // (confidence 0.78) for literal "帮我看上月损溢异常" because the keyword "异常" matches
+        // ALERT_ACTIVE.keywords broader list. RESTAURANT_ECONOMICS_ANALYSIS had ZERO phrase
+        // entries before this change — so phrase-match layer never short-circuited the LLM
+        // tier, leaving the misroute live.
+        //
+        // V20260522_51 already seeded the DB keywords; this Java-side mapping bypasses the
+        // LLM tier ambiguity by hitting Layer 1 phrase match earlier in the pipeline.
+        //
+        // Scope: ONLY phrases that do NOT collide with existing intent mappings.
+        //   - "成本分析" already → COST_TREND_ANALYSIS (factory) / RESTAURANT_DISH_COST_ANALYSIS
+        //     (restaurant) — NOT overridden here to avoid factory regression
+        //   - "食材损耗" → RESTAURANT_WASTAGE_SUMMARY, "损耗异常" → RESTAURANT_WASTAGE_ANOMALY
+        //     — NOT overridden (wastage is a separate intent)
+        //   - "哪些菜亏钱" → RESTAURANT_DISH_COST_ANALYSIS — kept; "哪个菜亏钱" (singular) is
+        //     net-new and routed to economics-analysis per spec §2.11 Phase 4 DOD #1
+        //
+        // Added to BOTH phraseToIntentMapping (factory map) AND restaurantPhraseMapping
+        // (restaurant map) because matchPhrase(input, businessDomain) routes by factory type
+        // — RES_3101_009 is RESTAURANT, F006 super_admin testing is FACTORY.
+        //
+        // 验收 (Phase 4 DOD #1): qhj_warehouse_mgr 输入 "帮我看上月损溢异常" →
+        //   intentCode === RESTAURANT_ECONOMICS_ANALYSIS (no longer ALERT_ACTIVE).
+        String[] economicsPhrases = {
+                "帮我看上月损溢异常",
+                "帮我看上月损溢",
+                "损溢异常",
+                "损溢分析",
+                "损益分析",
+                "损益异常",
+                "哪个菜亏钱",
+                "菜品损溢"
+        };
+        for (String phrase : economicsPhrases) {
+            phraseToIntentMapping.put(phrase, "RESTAURANT_ECONOMICS_ANALYSIS");
+            restaurantPhraseMapping.put(phrase, "RESTAURANT_ECONOMICS_ANALYSIS");
+        }
+
         log.debug("v33 公共短语映射初始化完成，共 {} 条映射", commonPhraseMapping.size());
     }
 
