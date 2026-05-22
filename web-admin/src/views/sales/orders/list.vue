@@ -127,27 +127,13 @@ interface QuickSalesOrderRow {
 function quickSalesOrderFactory(): QuickSalesOrderRow {
   return { customerId: '', requiredDeliveryDate: '', remark: '' };
 }
-async function submitQuickSalesOrder(row: QuickSalesOrderRow): Promise<void> {
-  if (!row.customerId) {
-    throw new Error('请选择客户');
-  }
-  const payload = {
-    customerId: row.customerId,
-    salesperson: '',
-    requiredDeliveryDate: row.requiredDeliveryDate || null,
-    remark: row.remark || '',
-    shippingIncluded: false,
-    shippingFee: 0,
-    extraFees: [],
-    items: [],
-    customFields: {},
-  };
-  const res = await post(`/${factoryId.value}/sales/orders`, payload);
-  if (!res?.success) {
-    throw new Error(res?.message || '创建失败');
-  }
-  // Refresh list after each submit so user sees the new row immediately.
-  await loadData();
+async function submitQuickSalesOrder(_row: QuickSalesOrderRow): Promise<void> {
+  // P0 hotfix 2026-05-22: 销售订单后端要求至少 1 项明细 (SalesOrderService.createOrder
+  // 校验 items.isEmpty → 400 "订单行项目不能为空"). Quick 模式 (P1 #58) 设计为 header-only
+  // 录入, 跟 SO 强制 items 契约冲突 → 用户提交即报错. 改 fool-proof Rule 1 预先告知 +
+  // 引导切到 BOM/标准模式 (它们有 items 编辑 UI).
+  // Per fool-proof-design.md Rule 5 — 不让用户卡死, 给 next action.
+  throw new Error('销售订单需要至少 1 项明细 — 快速模式不支持 header-only 创建。请改用 "BOM 展开" 或 "标准新建" 模式来填写明细行。');
 }
 
 // P1 #58 — BOM expansion (BOM 展开): parent SO + child items from selected product template.
