@@ -5,6 +5,8 @@ import com.cretas.aims.dto.orchestration.MaterialCheckResult;
 import com.cretas.aims.dto.orchestration.MaterialRequirement;
 import com.cretas.aims.dto.orchestration.MaterialShortfall;
 import com.cretas.aims.dto.orchestration.StockCheckResult;
+import com.cretas.aims.service.canvas.ThresholdKeys;
+import com.cretas.aims.service.canvas.ThresholdResolverService;
 import com.cretas.aims.service.orchestration.BomExpansionService;
 import com.cretas.aims.service.orchestration.InventoryMatchingService;
 import com.cretas.aims.service.shortage.ShortageAnalysisService;
@@ -47,11 +49,23 @@ public class ShortageAnalysisServiceImpl implements ShortageAnalysisService {
 
     private static final Logger log = LoggerFactory.getLogger(ShortageAnalysisServiceImpl.class);
 
-    /** 生产建议默认 lead time (天) — 实际值 Day 3 由 Track D2 工序链推算。 */
-    private static final int DEFAULT_PRODUCTION_LEAD_DAYS = 7;
+    /**
+     * 生产建议默认 lead time fallback (天) — 实际值通过 thresholdResolver 读取, DB 未配置时 fallback 到此处.
+     * Day 3 由 Track D2 工序链推算; Canvas Phase A 引入工厂级 override.
+     */
+    private static final int FALLBACK_PRODUCTION_LEAD_DAYS = 7;
 
     private final InventoryMatchingService inventoryMatchingService;
     private final BomExpansionService bomExpansionService;
+    /**
+     * Canvas-Thresholds resolver (Phase A) — overlays FALLBACK_PRODUCTION_LEAD_DAYS with per-factory config.
+     */
+    private final ThresholdResolverService thresholdResolver;
+
+    private int productionLeadDays(String factoryId) {
+        return thresholdResolver.getInteger(factoryId,
+                ThresholdKeys.SHORTAGE_DEFAULT_PRODUCTION_LEAD_DAYS, FALLBACK_PRODUCTION_LEAD_DAYS);
+    }
 
     @Override
     @Transactional(readOnly = true)
@@ -116,9 +130,9 @@ public class ShortageAnalysisServiceImpl implements ShortageAnalysisService {
             return Collections.emptyList();
         }
 
-        // Day 2 MVP: 默认 lead time = 7 天, workProcess 留空 (Day 3 接入 Track D2)。
+        // Day 2 MVP: 默认 lead time 7 天 (Canvas Phase A 可配置), workProcess 留空 (Day 3 接入 Track D2)。
         LocalDate start = LocalDate.now();
-        LocalDate end = start.plusDays(DEFAULT_PRODUCTION_LEAD_DAYS);
+        LocalDate end = start.plusDays(productionLeadDays(factoryId));
 
         List<ProductionPlanSuggestion> suggestions = new ArrayList<>();
         for (LineItemMatch lim : report.getFinishedGoodsLineItems()) {
