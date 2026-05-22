@@ -12,7 +12,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.expression.Expression;
 import org.springframework.expression.ExpressionParser;
 import org.springframework.expression.spel.standard.SpelExpressionParser;
-import org.springframework.expression.spel.support.StandardEvaluationContext;
+import org.springframework.expression.spel.support.SimpleEvaluationContext;
 import org.springframework.stereotype.Component;
 
 import java.io.ByteArrayOutputStream;
@@ -137,9 +137,22 @@ public class ExportExecutor {
         return result;
     }
 
+    /**
+     * SECURITY (2026-05-22 Sprint 10 P0 #5 hotfix per BI audit):
+     * <p>Previously used {@link org.springframework.expression.spel.support.StandardEvaluationContext}
+     * which exposes full Java reflection (T(Runtime).getRuntime().exec() RCE etc.) to ANY
+     * admin who can set ExportRule.filterExpression. Replaced with
+     * {@link SimpleEvaluationContext} (read-only data binding) — restricts SpEL to property
+     * reads on the supplied row/params, blocks T(...), constructors, static methods, and
+     * arbitrary bean references.
+     * <p>Pattern mirrors {@link com.cretas.aims.engine.SpelConditionEvaluator} Round 5 SEC-2 fix.
+     * <p>Other unsafe SpEL sites flagged by audit (StateMachineServiceImpl, MetricFormulaServiceImpl,
+     * LoggableAspect) tracked as Sprint 11 follow-up — each has distinct attacker-surface
+     * analysis and is out of this hotfix scope.
+     */
     static boolean evalFilter(Expression expr, Map<String, Object> row, Map<String, Object> runtimeParams) {
         try {
-            StandardEvaluationContext ctx = new StandardEvaluationContext();
+            SimpleEvaluationContext ctx = SimpleEvaluationContext.forReadOnlyDataBinding().build();
             ctx.setVariable("row", row);
             if (runtimeParams != null) {
                 runtimeParams.forEach(ctx::setVariable);
