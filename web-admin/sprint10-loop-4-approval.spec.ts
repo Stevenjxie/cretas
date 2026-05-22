@@ -94,6 +94,16 @@ async function findOrCreateSupplier(): Promise<string> {
   throw new Error(`Cannot find or create supplier: ${JSON.stringify(create.json)}`);
 }
 
+async function findMaterialTypeId(): Promise<string> {
+  const list = await apiCall('GET', `/raw-material-types?page=1&size=10`);
+  if (list.status === 200 && list.json?.data?.content?.length > 0) {
+    const mat = list.json.data.content[0];
+    console.log(`[setup] using existing material type ${mat.id} (${mat.name})`);
+    return mat.id;
+  }
+  throw new Error(`No raw material type available in F006 — please seed one first`);
+}
+
 test.describe.serial('Sprint 10 Loop 4 — 审批闭环 E2E', () => {
   test.setTimeout(180_000);  // 3min per test
 
@@ -104,26 +114,28 @@ test.describe.serial('Sprint 10 Loop 4 — 审批闭环 E2E', () => {
 
   /**
    * Step 1: Setup — create PO with amount>30000 → submit-approve to trigger workflow start.
-   * Uses /api/mobile/F006/purchase/orders POST + /orders/{id}/approve (creator approves)
-   * → PurchaseServiceImpl.approveOrder kicks workflowEngine.startWorkflow.
+   * Uses /api/mobile/F006/purchase/orders POST + /orders/{id}/submit + /orders/{id}/approve
+   * → PurchaseServiceImpl.approveOrder kicks workflowEngine.startWorkflow when amount > 30000.
    */
-  test('S1: setup — create + approve PO to trigger workflow start', async () => {
+  test('S1: setup — create + submit + approve PO to trigger workflow start', async () => {
     createdSupplierId = await findOrCreateSupplier();
+    const materialTypeId = await findMaterialTypeId();
 
     // create order. amount > 30000 to trigger F006 workflow `cond_1: #context.amount > 30000`
     const orderBody = {
       supplierId: createdSupplierId,
-      orderType: 'NORMAL',
-      expectedDate: new Date(Date.now() + 86400000 * 7).toISOString().slice(0, 10),
+      purchaseType: 'DIRECT',
+      orderDate: new Date().toISOString().slice(0, 10),
+      expectedDeliveryDate: new Date(Date.now() + 86400000 * 7).toISOString().slice(0, 10),
       remark: `Sprint10 Loop4 test ${RUN_TAG}`,
       items: [
         {
+          materialTypeId,
           materialName: `Loop4 测试物料 ${RUN_TAG}`,
-          materialCode: `M-LOOP4-${Date.now()}`,
           unit: 'kg',
           quantity: 100,
           unitPrice: 500,
-          totalAmount: 50000,  // amount > 30000 triggers workflow
+          taxRate: 0,
         },
       ],
     };
@@ -137,16 +149,19 @@ test.describe.serial('Sprint 10 Loop 4 — 审批闭环 E2E', () => {
     createdOrderId = createRes.json.data.id;
     console.log(`[S1] PO created: orderId=${createdOrderId}, totalAmount=${createRes.json.data.totalAmount}`);
 
-    // approve to trigger workflow (factory_super_admin direct approve)
+    // submit to move DRAFT → SUBMITTED
+    const submitRes = await apiCall('POST', `/purchase/orders/${createdOrderId}/submit`);
+    console.log(`[S1] PO submit response: status=${submitRes.status}, new_status=${submitRes.json?.data?.status}`);
+    expect(submitRes.status).toBe(200);
+
+    // approve to trigger workflow (factory_super_admin)
     const approveRes = await apiCall('POST', `/purchase/orders/${createdOrderId}/approve`);
     console.log(`[S1] PO approve response: status=${approveRes.status}, status_data=${approveRes.json?.data?.status}`);
     if (approveRes.status !== 200) {
-      // 某些 workflow path 可能返 202 / 异步 status (PENDING_FINANCE_REVIEW), 也算成功
-      console.warn('[S1] PO approve non-200 — checking if workflow started anyway:', JSON.stringify(approveRes.json));
+      console.warn('[S1] PO approve non-200:', JSON.stringify(approveRes.json));
     }
 
     // 验证 workflow instance 已创建
-    // 直接查 pending list (factory_super_admin 兜底返全部 RUNNING)
     const pending = await apiCall('GET', '/workflow/instances/pending?moduleCode=PURCHASE_ORDER&size=50');
     expect(pending.status).toBe(200);
     const items = pending.json?.data?.content || [];
