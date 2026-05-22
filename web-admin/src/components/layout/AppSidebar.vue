@@ -103,6 +103,9 @@ const menuConfig: MenuItem[] = [
   // 🔬 Sprint 8 P4c (2026-05-20) — 质量主管 Workdesk (4 项综合 audit + 一键放行/退货).
   // 质量主管李工程师场景 (F006): "这批卤猪蹄能放行吗?". module 借 'quality' 走现有权限.
   { path: '/workdesk/quality-chief', title: '🔬 质量主管工作台', icon: 'Aim', module: 'quality' },
+  // 🏭 Sprint 10 Loop 5 (2026-05-21) — 生产经理 Workdesk (排产建议 + 一键起产).
+  // 防呆 R1 max+R2 context+R3 dropdown+R4 5min dedup. module 借 'production' 走现有权限.
+  { path: '/workdesk/production-manager', title: '🏭 生产经理工作台', icon: 'Operation', module: 'production' },
   {
     // P1-5: restaurants 默认不见 "生产管理" (BOM/批次是 manufacturing 语言,
     // 餐饮用配方/备餐在 /restaurant/recipes)
