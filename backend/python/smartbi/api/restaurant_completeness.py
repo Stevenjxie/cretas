@@ -410,6 +410,7 @@ def _build_module_response(
 async def get_completeness(
     request: Request,
     factoryId: str = Query(..., description="Factory ID to query completeness for"),
+    format: str = Query("default", description="`default` | `llm` (Sprint 11 LLM wrapper)"),
 ) -> Dict[str, Any]:
     """Return completeness metrics for all 6 restaurant data modules.
 
@@ -459,7 +460,7 @@ async def get_completeness(
     if cached is not None:
         cached_at_ts, cached_body = cached
         if now_ts - cached_at_ts < _CACHE_TTL_S:
-            return cached_body
+            return _maybe_llm_wrap(cached_body, format, factoryId)
 
     # ── Acquire pools lazily (avoid circular import from main) ───────────────
     try:
@@ -510,4 +511,37 @@ async def get_completeness(
     # ── Store in cache ────────────────────────────────────────────────────
     _cache[factoryId] = (now_ts, body)
 
-    return body
+    return _maybe_llm_wrap(body, format, factoryId)
+
+
+# ---------------------------------------------------------------------------
+# Sprint 11 MealClaw Response — LLM wrapper hook (Path B)
+# ---------------------------------------------------------------------------
+
+def _maybe_llm_wrap(body: Dict[str, Any], format: str, factory_id: str) -> Dict[str, Any]:
+    """If ``format=llm``, transform the response into the strict 5-field whitelist.
+
+    The completeness endpoint already returns a derived shape, so no Path B
+    windowing is needed here (window is computed from factoryAgeDays). When
+    overall coverage is 0 the LLM wrapper will still surface that via
+    `dataAvailable.overall=False` and a recommendation list driven by per-module
+    `missingHints`.
+    """
+    if format != "llm":
+        return body
+
+    from smartbi.services.restaurant_llm_formatter import to_llm_format
+    # window_days is derived per-module above; surface the first module's window
+    # (all modules share the same window).
+    first_window = 30
+    if body.get("modules"):
+        first_window = int(body["modules"][0].get("windowDays") or 30)
+
+    return to_llm_format(
+        body,
+        requested_days=first_window,
+        actual_days=first_window,
+        fallback=False,
+        factory_id=factory_id,
+        source_label="restaurant-completeness",
+    )

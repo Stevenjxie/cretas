@@ -1072,6 +1072,16 @@ app.include_router(
     tags=["Restaurant Completeness"],
 )
 
+# Sprint 11 MealClaw Response (2026-05-22) — composite LLM endpoint
+# Strict whitelist response (summary / topItems / recommendations / evidence /
+# dataAvailable) for AI chat layer. See restaurant_llm_composite.py docstring.
+from smartbi.api import restaurant_llm_composite  # noqa: E402
+app.include_router(
+    restaurant_llm_composite.router,
+    prefix="/api/smartbi",
+    tags=["Restaurant LLM Composite"],
+)
+
 # Restaurant outliers API (餐饮 Phase B-1 Task 7 — outlier detection + dismissal)
 from smartbi.api import restaurant_outliers  # noqa: E402
 app.include_router(
