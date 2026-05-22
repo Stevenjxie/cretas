@@ -38,15 +38,22 @@ public class CustomerCreditCheckServiceImpl implements CustomerCreditCheckServic
     private static final BigDecimal FALLBACK_WARNING_RATIO = new BigDecimal("0.80");
 
     private final CustomerRepository customerRepository;
-    private final ThresholdResolverService thresholdResolver;
+    /**
+     * Optional injection (CI test compatibility): tests that pre-date Thresholds Hub
+     * (CustomerCreditCheckServiceImplTest et al.) construct this service without a
+     * ThresholdResolverService. Mirror the ComplexityRouterImpl pattern — @Autowired
+     * (required=false) + null-check fallback to FALLBACK_WARNING_RATIO. Same approach
+     * keeps all 6 Thresholds Hub refactor sites consistent.
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private ThresholdResolverService thresholdResolver;
 
-    public CustomerCreditCheckServiceImpl(CustomerRepository customerRepository,
-                                          ThresholdResolverService thresholdResolver) {
+    public CustomerCreditCheckServiceImpl(CustomerRepository customerRepository) {
         this.customerRepository = customerRepository;
-        this.thresholdResolver = thresholdResolver;
     }
 
     private BigDecimal warningRatio(String factoryId) {
+        if (thresholdResolver == null) return FALLBACK_WARNING_RATIO;
         return thresholdResolver.getBigDecimal(factoryId, ThresholdKeys.CREDIT_WARNING_RATIO, FALLBACK_WARNING_RATIO);
     }
 

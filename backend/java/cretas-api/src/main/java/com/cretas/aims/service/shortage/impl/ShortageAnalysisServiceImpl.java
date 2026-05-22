@@ -59,10 +59,18 @@ public class ShortageAnalysisServiceImpl implements ShortageAnalysisService {
     private final BomExpansionService bomExpansionService;
     /**
      * Canvas-Thresholds resolver (Phase A) — overlays FALLBACK_PRODUCTION_LEAD_DAYS with per-factory config.
+     *
+     * <p>Optional injection (CI test compatibility): tests that pre-date Thresholds Hub
+     * construct this service via Mockito @InjectMocks without a ThresholdResolverService.
+     * Mirror ComplexityRouterImpl pattern — @Autowired(required=false) + null-check
+     * fallback to FALLBACK_PRODUCTION_LEAD_DAYS keeps existing tests passing while
+     * allowing prod injection. NOT `final` so Lombok @RequiredArgsConstructor skips it.
      */
-    private final ThresholdResolverService thresholdResolver;
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private ThresholdResolverService thresholdResolver;
 
     private int productionLeadDays(String factoryId) {
+        if (thresholdResolver == null) return FALLBACK_PRODUCTION_LEAD_DAYS;
         return thresholdResolver.getInteger(factoryId,
                 ThresholdKeys.SHORTAGE_DEFAULT_PRODUCTION_LEAD_DAYS, FALLBACK_PRODUCTION_LEAD_DAYS);
     }
