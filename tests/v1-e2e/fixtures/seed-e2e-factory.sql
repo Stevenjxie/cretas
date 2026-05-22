@@ -339,6 +339,49 @@ WHERE NOT EXISTS (
 );
 
 -- ─────────────────────────────────────────────────────────────────────────────
+-- 8.5. MATERIAL BATCH INVENTORY (R10 — G3 production-chain seed)
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 2026-05-21 (PR #149 R10): G3 test (生产 6 步) calls "开始生产" which triggers
+-- backend BOM validation. Backend checks that material_batches has enough
+-- AVAILABLE inventory for each BOM ingredient × planned quantity. Without
+-- seeded batches, R9 surfaced 409:
+--   "原料库存不足: 酸菜 需要 2.4kg 可用 0kg ..."
+--
+-- Seed 6 BOM materials for SKU_SCY500 (酸菜鱼 500g) × 30 units worth of
+-- inventory. Quantities deliberately oversized so G3 doesn't deplete on
+-- 30 units and tests can re-run within same DB session.
+--
+-- All batches go to WH-LOG (logistics/main warehouse). Status AVAILABLE so
+-- production reservation finds them. inbound_date in past, expire_date well
+-- in future. Idempotent via ON CONFLICT DO NOTHING.
+INSERT INTO material_batches (
+    id, factory_id, batch_number, material_type_id, warehouse_id,
+    inbound_date, expire_date,
+    receipt_quantity, quantity_unit, used_quantity, reserved_quantity,
+    status, inbound_type,
+    created_at, updated_at
+)
+SELECT
+    v.id, v.factory_id, v.batch_number,
+    (SELECT id FROM raw_material_types WHERE factory_id = v.factory_id AND code = v.material_code),
+    'e2e-wh-logistics-00000000000001',  -- WH-LOG warehouse id
+    CURRENT_DATE - INTERVAL '7 days',
+    CURRENT_DATE + INTERVAL '180 days',
+    v.qty, v.unit, 0, 0,
+    'AVAILABLE', 'PURCHASE',
+    NOW(), NOW()
+FROM (VALUES
+    -- All ingredients for SKU_SCY500 BOM × 30 units. Oversized for re-runs.
+    ('e2e-batch-mat-f001-001', 'F_E2E_TEST', 'E2E-BATCH-MAT-F001-001', 'MAT_F001', 100.0::numeric, '公斤'),
+    ('e2e-batch-mat-s001-001', 'F_E2E_TEST', 'E2E-BATCH-MAT-S001-001', 'MAT_S001',  50.0::numeric, '公斤'),
+    ('e2e-batch-mat-s003-001', 'F_E2E_TEST', 'E2E-BATCH-MAT-S003-001', 'MAT_S003',  10.0::numeric, '公斤'),
+    ('e2e-batch-mat-s007-001', 'F_E2E_TEST', 'E2E-BATCH-MAT-S007-001', 'MAT_S007',  20.0::numeric, '公斤'),
+    ('e2e-batch-mat-p001-001', 'F_E2E_TEST', 'E2E-BATCH-MAT-P001-001', 'MAT_P001', 500.0::numeric, '个'),
+    ('e2e-batch-mat-p005-001', 'F_E2E_TEST', 'E2E-BATCH-MAT-P005-001', 'MAT_P005', 100.0::numeric, '个')
+) AS v(id, factory_id, batch_number, material_code, qty, unit)
+ON CONFLICT (id) DO NOTHING;
+
+-- ─────────────────────────────────────────────────────────────────────────────
 -- 9. VERIFICATION QUERY
 -- ─────────────────────────────────────────────────────────────────────────────
 DO $$
