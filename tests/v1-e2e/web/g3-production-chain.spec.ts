@@ -43,7 +43,14 @@ const PRODUCT_NAME = '酸菜鱼 500g';      // SKU_SCY500
 const CUSTOMER_NAME = '鼎鲜火锅义乌分公司';
 
 const PLAN_QTY = 30;
-const PLAN_DATE = '2026-04-20';
+// PR #149 R9 (2026-05-21): backend now rejects past dates with 400
+// "计划日期不能是过去". Was hardcoded '2026-04-20' (since 2026-04). Compute
+// dynamically at test runtime so it stays valid regardless of when CI runs.
+const PLAN_DATE = (() => {
+  const d = new Date();
+  d.setDate(d.getDate() + 7);  // 7 days out — safely in future
+  return d.toISOString().slice(0, 10);  // 'YYYY-MM-DD'
+})();
 
 // ─── Suite ────────────────────────────────────────────────────────────────────
 
