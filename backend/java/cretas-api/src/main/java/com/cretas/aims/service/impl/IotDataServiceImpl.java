@@ -12,6 +12,8 @@ import com.cretas.aims.repository.IotDeviceDataRepository;
 import com.cretas.aims.repository.IotDeviceRepository;
 import com.cretas.aims.service.EquipmentAlertsService;
 import com.cretas.aims.service.IotDataService;
+import com.cretas.aims.service.canvas.ThresholdKeys;
+import com.cretas.aims.service.canvas.ThresholdResolverService;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -45,23 +47,47 @@ public class IotDataServiceImpl implements IotDataService {
     private final EquipmentRepository equipmentRepository;
     private final EquipmentAlertsService equipmentAlertsService;
     private final ObjectMapper objectMapper;
+    /**
+     * Canvas-Thresholds resolver (Phase A) — overlays hard-coded fallback defaults
+     * with per-factory configured values from {@code factory_thresholds} table.
+     */
+    private final ThresholdResolverService thresholdResolver;
 
-    // ==================== 温湿度阈值常量 ====================
+    // ==================== 温湿度阈值 fallback 默认值 ====================
+    // 以下 static final 为 hard-coded baseline; 实际值通过 xxxThreshold(factoryId) 读取.
 
-    /** 冷链温度上限 (°C) */
-    private static final double COLD_CHAIN_TEMP_MAX = -18.0;
+    /** 冷链温度上限 fallback 默认值 (°C) */
+    private static final double FALLBACK_COLD_CHAIN_TEMP_MAX = -18.0;
 
-    /** 常温温度下限 (°C) */
-    private static final double NORMAL_TEMP_MIN = 0.0;
+    /** 常温温度下限 fallback 默认值 (°C) */
+    private static final double FALLBACK_NORMAL_TEMP_MIN = 0.0;
 
-    /** 常温温度上限 (°C) */
-    private static final double NORMAL_TEMP_MAX = 25.0;
+    /** 常温温度上限 fallback 默认值 (°C) */
+    private static final double FALLBACK_NORMAL_TEMP_MAX = 25.0;
 
-    /** 湿度下限 (%) */
-    private static final double HUMIDITY_MIN = 40.0;
+    /** 湿度下限 fallback 默认值 (%) */
+    private static final double FALLBACK_HUMIDITY_MIN = 40.0;
 
-    /** 湿度上限 (%) */
-    private static final double HUMIDITY_MAX = 70.0;
+    /** 湿度上限 fallback 默认值 (%) */
+    private static final double FALLBACK_HUMIDITY_MAX = 70.0;
+
+    // ==================== Threshold resolver shortcuts ====================
+
+    private double coldChainTempMax(String factoryId) {
+        return thresholdResolver.getDouble(factoryId, ThresholdKeys.IOT_COLD_CHAIN_TEMP_MAX, FALLBACK_COLD_CHAIN_TEMP_MAX);
+    }
+    private double normalTempMin(String factoryId) {
+        return thresholdResolver.getDouble(factoryId, ThresholdKeys.IOT_NORMAL_TEMP_MIN, FALLBACK_NORMAL_TEMP_MIN);
+    }
+    private double normalTempMax(String factoryId) {
+        return thresholdResolver.getDouble(factoryId, ThresholdKeys.IOT_NORMAL_TEMP_MAX, FALLBACK_NORMAL_TEMP_MAX);
+    }
+    private double humidityMin(String factoryId) {
+        return thresholdResolver.getDouble(factoryId, ThresholdKeys.IOT_HUMIDITY_MIN, FALLBACK_HUMIDITY_MIN);
+    }
+    private double humidityMax(String factoryId) {
+        return thresholdResolver.getDouble(factoryId, ThresholdKeys.IOT_HUMIDITY_MAX, FALLBACK_HUMIDITY_MAX);
+    }
 
     // ==================== 设备数据管理 ====================
 
@@ -209,23 +235,26 @@ public class IotDataServiceImpl implements IotDataService {
         DeviceAlertLevel alertLevel = DeviceAlertLevel.WARNING;
 
         if (isColdChain) {
-            // 冷链设备: 温度高于 -18°C 触发告警
-            if (temperature > COLD_CHAIN_TEMP_MAX) {
+            // 冷链设备: 温度高于阈值 (默认 -18°C) 触发告警
+            double coldMax = coldChainTempMax(factoryId);
+            if (temperature > coldMax) {
                 alertMessage = String.format("冷链温度异常: 当前温度 %.1f°C，超过阈值 %.1f°C",
-                        temperature, COLD_CHAIN_TEMP_MAX);
-                if (temperature > COLD_CHAIN_TEMP_MAX + 5) {
+                        temperature, coldMax);
+                if (temperature > coldMax + 5) {
                     alertLevel = DeviceAlertLevel.CRITICAL;
                 }
             }
         } else {
-            // 常温设备: 温度低于 0°C 或高于 25°C 触发告警
-            if (temperature < NORMAL_TEMP_MIN) {
+            // 常温设备: 温度低于下限或高于上限 (默认 0-25°C) 触发告警
+            double tmin = normalTempMin(factoryId);
+            double tmax = normalTempMax(factoryId);
+            if (temperature < tmin) {
                 alertMessage = String.format("温度过低: 当前温度 %.1f°C，低于阈值 %.1f°C",
-                        temperature, NORMAL_TEMP_MIN);
-            } else if (temperature > NORMAL_TEMP_MAX) {
+                        temperature, tmin);
+            } else if (temperature > tmax) {
                 alertMessage = String.format("温度过高: 当前温度 %.1f°C，超过阈值 %.1f°C",
-                        temperature, NORMAL_TEMP_MAX);
-                if (temperature > NORMAL_TEMP_MAX + 10) {
+                        temperature, tmax);
+                if (temperature > tmax + 10) {
                     alertLevel = DeviceAlertLevel.CRITICAL;
                 }
             }
@@ -244,13 +273,15 @@ public class IotDataServiceImpl implements IotDataService {
         String alertMessage = null;
         DeviceAlertLevel alertLevel = DeviceAlertLevel.WARNING;
 
-        if (humidity < HUMIDITY_MIN) {
+        double hmin = humidityMin(factoryId);
+        double hmax = humidityMax(factoryId);
+        if (humidity < hmin) {
             alertMessage = String.format("湿度过低: 当前湿度 %.1f%%，低于阈值 %.1f%%",
-                    humidity, HUMIDITY_MIN);
-        } else if (humidity > HUMIDITY_MAX) {
+                    humidity, hmin);
+        } else if (humidity > hmax) {
             alertMessage = String.format("湿度过高: 当前湿度 %.1f%%，超过阈值 %.1f%%",
-                    humidity, HUMIDITY_MAX);
-            if (humidity > HUMIDITY_MAX + 10) {
+                    humidity, hmax);
+            if (humidity > hmax + 10) {
                 alertLevel = DeviceAlertLevel.CRITICAL;
             }
         }

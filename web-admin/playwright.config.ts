@@ -151,5 +151,33 @@ export default defineConfig({
       fullyParallel: false,
       workers: 1,
     },
+    // Sprint 10 Loop 2 — 入库/收货 AI 闭环 E2E
+    {
+      name: 'sprint10-loop-2-receive',
+      testMatch: 'tests/e2e-closed-loop/loop-2-receive.spec.ts',
+      fullyParallel: false,
+      workers: 1,
+    },
+    // Sprint 10 Loop 4 — 审批闭环 E2E
+    {
+      name: 'sprint10-loop-4-approval',
+      testMatch: 'sprint10-loop-4-approval.spec.ts',
+      fullyParallel: false,
+      workers: 1,
+    },
+    // Sprint 10 Loop 3 — 采购下单 AI 闭环
+    {
+      name: 'loop-3-procurement',
+      testMatch: 'tests/e2e-closed-loop/loop-3-procurement.spec.ts',
+      fullyParallel: false,
+      workers: 1,
+    },
+    // Sprint 10 Loop 5 — 生产任务创建 AI 闭环
+    {
+      name: 'loop-5-production',
+      testMatch: 'tests/e2e-closed-loop/loop-5-production.spec.ts',
+      fullyParallel: false,
+      workers: 1,
+    },
   ],
 });

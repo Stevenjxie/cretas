@@ -9,6 +9,8 @@ import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.service.BomService;
+import com.cretas.aims.service.canvas.ThresholdKeys;
+import com.cretas.aims.service.canvas.ThresholdResolverService;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -49,13 +51,24 @@ public class RecursiveBomExpansionService {
     private static final Logger log = LoggerFactory.getLogger(RecursiveBomExpansionService.class);
     private static final BigDecimal HUNDRED = new BigDecimal("100");
 
-    /** 防御性递归深度上限, 避免极端配置导致栈溢出 (实际生产 BOM 极少超过 5 级). */
-    private static final int MAX_DEPTH = 10;
+    /**
+     * 防御性递归深度上限 fallback 默认值, 避免极端配置导致栈溢出 (实际生产 BOM 极少超过 5 级).
+     * 通过 {@link #maxDepth(String)} 读取实际值, DB 未配置时 fallback 到此处.
+     */
+    private static final int FALLBACK_MAX_DEPTH = 10;
 
     private final BomService bomService;
     private final MaterialBatchRepository materialBatchRepository;
     private final ProductTypeRepository productTypeRepository;
     private final RawMaterialTypeRepository rawMaterialTypeRepository;
+    /**
+     * Canvas-Thresholds resolver (Phase A) — overlays FALLBACK_MAX_DEPTH with per-factory config.
+     */
+    private final ThresholdResolverService thresholdResolver;
+
+    private int maxDepth(String factoryId) {
+        return thresholdResolver.getInteger(factoryId, ThresholdKeys.BOM_MAX_DEPTH, FALLBACK_MAX_DEPTH);
+    }
 
     /**
      * 入口方法: 展开指定产品的多级 BOM 树.
@@ -159,8 +172,9 @@ public class RecursiveBomExpansionService {
         }
 
         // 深度上限
-        if (level > MAX_DEPTH) {
-            log.warn("[M-MATTREE-1] 达到 MAX_DEPTH={} 切断展开: typeId={}", MAX_DEPTH, typeId);
+        int depthLimit = maxDepth(factoryId);
+        if (level > depthLimit) {
+            log.warn("[M-MATTREE-1] 达到 MAX_DEPTH={} 切断展开: typeId={}", depthLimit, typeId);
             return buildLeaf(factoryId, typeId, name, quantity, level, unit, wastageRate);
         }
 

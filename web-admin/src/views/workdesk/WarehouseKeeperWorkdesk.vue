@@ -156,10 +156,17 @@
             <span v-else>{{ row.expectedDeliveryDate }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="100" fixed="right">
+        <el-table-column label="操作" width="180" fixed="right">
           <template #default="{ row }">
-            <el-button size="small" type="primary" @click="openReceiveDialog(row)">
+            <el-button size="small" @click="openReceiveDialog(row)">
               快速收货
+            </el-button>
+            <el-button
+              size="small"
+              type="primary"
+              data-testid="confirm-receive-btn"
+              @click="openConfirmReceiveDialog(row)">
+              确认收货
             </el-button>
           </template>
         </el-table-column>
@@ -300,6 +307,112 @@
           :loading="receiveDialog.submitting"
           :disabled="!receiveDialog.canSubmit || isOverLimit"
           @click="executeReceive">
+          确认提交
+        </el-button>
+      </template>
+    </el-dialog>
+
+    <!-- ===== Sprint 10 Loop 2 确认收货 Dialog (R1 max + R2 context + R3 status + R4 idempotent) ===== -->
+    <el-dialog
+      v-model="confirmReceiveDialog.visible"
+      :title="confirmReceiveDialogTitle"
+      width="600px"
+      data-testid="confirm-receive-dialog"
+      @close="resetConfirmReceiveDialog">
+      <el-form :model="confirmReceiveDialog.form" label-width="120px">
+        <!-- R2: 供应商 + PO 单号 + 物料 必显 (Context) -->
+        <el-form-item label="PO 单号">
+          <el-input :value="confirmReceiveDialog.row?.orderNumber || ''" disabled />
+        </el-form-item>
+        <el-form-item label="供应商">
+          <el-input :value="confirmReceiveDialog.row?.supplierName || ''" disabled />
+        </el-form-item>
+        <el-form-item label="物料">
+          <el-input :value="confirmReceiveDialog.row?.materialName || ''" disabled />
+        </el-form-item>
+        <!-- R1: 已订 / 已收 / 还可入 (边界 max) -->
+        <el-form-item label="已订 / 已收">
+          <el-text>
+            {{ formatQty(confirmReceiveDialog.row?.orderedQuantity) }}{{ confirmReceiveDialog.row?.unit }}
+            / {{ formatQty(confirmReceiveDialog.row?.receivedQuantity) }}{{ confirmReceiveDialog.row?.unit }}
+          </el-text>
+        </el-form-item>
+        <el-form-item label="还可入">
+          <div class="qty-hint-block">
+            <el-text size="small">
+              还要收 <b>{{ formatQty(confirmReceiveDialog.row?.pendingQuantity) }}</b>
+              {{ confirmReceiveDialog.row?.unit }}
+              · 30% 超收上限 = {{ formatQty(confirmReceiveDialog.row?.remainingCap) }}{{ confirmReceiveDialog.row?.unit }}
+            </el-text>
+          </div>
+        </el-form-item>
+        <el-form-item label="本次实收" required>
+          <el-input-number
+            v-model="confirmReceiveDialog.form.receivedQty"
+            :min="0"
+            :max="confirmMaxAllowedReceive"
+            :precision="2"
+            :step="1"
+            placeholder="输入本次实收数量"
+            data-testid="confirm-received-qty-input"
+            style="width: 220px" />
+          <el-text size="small" class="form-hint">
+            {{ confirmReceiveDialog.row?.unit || '' }} (上限 {{ formatQty(confirmMaxAllowedReceive) }})
+          </el-text>
+        </el-form-item>
+        <!-- R3: 收货状态 dropdown (标准枚举, 不让仓管员自由文本) -->
+        <el-form-item label="收货状态" required>
+          <el-select
+            v-model="confirmReceiveDialog.form.receiveStatus"
+            data-testid="receive-status-select"
+            style="width: 220px">
+            <el-option label="PASS — 全数完好" value="PASS" />
+            <el-option label="PARTIAL_LOST — 数量短少" value="PARTIAL_LOST" />
+            <el-option label="DAMAGED — 包装破损" value="DAMAGED" />
+            <el-option label="OTHER — 其他 (备注详述)" value="OTHER" />
+          </el-select>
+        </el-form-item>
+        <!-- 验签 checkbox -->
+        <el-form-item label="现场验签">
+          <el-checkbox
+            v-model="confirmReceiveDialog.form.signatureConfirmed"
+            data-testid="signature-confirmed-checkbox">
+            已现场签收/验签
+          </el-checkbox>
+        </el-form-item>
+        <el-form-item label="备注">
+          <el-input
+            v-model="confirmReceiveDialog.form.remark"
+            placeholder="(可选) 例如: 到货 OK / 部分破损 / 验签人: 张师傅"
+            maxlength="200"
+            show-word-limit />
+        </el-form-item>
+        <el-alert
+          v-if="confirmReceiveDialog.preview"
+          :type="previewAlertType(confirmReceiveDialog.preview)"
+          :closable="false"
+          show-icon
+          class="preview-alert">
+          <template #title>
+            <span data-testid="confirm-preview-message">{{ confirmReceiveDialog.preview.message }}</span>
+          </template>
+        </el-alert>
+      </el-form>
+      <template #footer>
+        <el-button @click="confirmReceiveDialog.visible = false">取消</el-button>
+        <el-button
+          :loading="confirmReceiveDialog.previewing"
+          :disabled="!canPreviewConfirm"
+          data-testid="confirm-preview-btn"
+          @click="previewConfirmReceive">
+          预览边界
+        </el-button>
+        <el-button
+          type="primary"
+          :loading="confirmReceiveDialog.submitting"
+          :disabled="!confirmReceiveDialog.canSubmit || isConfirmOverLimit"
+          data-testid="confirm-submit-btn"
+          @click="executeConfirmReceive">
           确认提交
         </el-button>
       </template>
@@ -713,6 +826,153 @@ async function generateScanTask() {
       duration: 0,
       showClose: true,
     });
+  }
+}
+
+// ===== Sprint 10 Loop 2 — Confirm Receive Dialog (R3 status dropdown + R4 idempotent) =====
+
+interface ConfirmReceivePreview extends PreviewState {
+  existingId?: string;
+  existingReceiveNumber?: string;
+  actionHint?: string;
+}
+
+const confirmReceiveDialog = reactive<{
+  visible: boolean;
+  row: ReceivingRow | null;
+  form: {
+    receivedQty: number | null;
+    receiveStatus: 'PASS' | 'PARTIAL_LOST' | 'DAMAGED' | 'OTHER';
+    signatureConfirmed: boolean;
+    remark: string;
+  };
+  preview: ConfirmReceivePreview | null;
+  previewing: boolean;
+  submitting: boolean;
+  canSubmit: boolean;
+}>({
+  visible: false,
+  row: null,
+  form: {
+    receivedQty: null,
+    receiveStatus: 'PASS',
+    signatureConfirmed: false,
+    remark: '',
+  },
+  preview: null,
+  previewing: false,
+  submitting: false,
+  canSubmit: false,
+});
+
+const confirmReceiveDialogTitle = computed(() => {
+  const r = confirmReceiveDialog.row;
+  return r
+    ? `确认收货 — ${r.supplierName ?? ''} (${r.orderNumber})`
+    : '确认收货';
+});
+
+const confirmMaxAllowedReceive = computed(() =>
+  confirmReceiveDialog.row?.remainingCap ?? 0);
+
+const isConfirmOverLimit = computed(() => {
+  const qty = confirmReceiveDialog.form.receivedQty;
+  if (qty == null) return false;
+  return qty > (confirmReceiveDialog.row?.remainingCap ?? 0);
+});
+
+const canPreviewConfirm = computed(() => {
+  const qty = confirmReceiveDialog.form.receivedQty;
+  return qty != null && qty > 0
+    && !!confirmReceiveDialog.form.receiveStatus;
+});
+
+function openConfirmReceiveDialog(row: ReceivingRow) {
+  confirmReceiveDialog.visible = true;
+  confirmReceiveDialog.row = row;
+  confirmReceiveDialog.form.receivedQty = row.pendingQuantity;  // default 全收
+  confirmReceiveDialog.form.receiveStatus = 'PASS';
+  confirmReceiveDialog.form.signatureConfirmed = false;
+  confirmReceiveDialog.form.remark = '';
+  confirmReceiveDialog.preview = null;
+  confirmReceiveDialog.canSubmit = false;
+}
+
+function resetConfirmReceiveDialog() {
+  confirmReceiveDialog.row = null;
+  confirmReceiveDialog.form.receivedQty = null;
+  confirmReceiveDialog.form.receiveStatus = 'PASS';
+  confirmReceiveDialog.form.signatureConfirmed = false;
+  confirmReceiveDialog.form.remark = '';
+  confirmReceiveDialog.preview = null;
+  confirmReceiveDialog.canSubmit = false;
+}
+
+async function previewConfirmReceive() {
+  if (!confirmReceiveDialog.row || confirmReceiveDialog.form.receivedQty == null) {
+    ElMessage.warning('请填写实收数量');
+    return;
+  }
+  confirmReceiveDialog.previewing = true;
+  try {
+    const response = await callIntentExecute('预览确认收货', 'RECEIVE_CONFIRM_CREATE', {
+      poId: confirmReceiveDialog.row.poId,
+      lineId: confirmReceiveDialog.row.lineId,
+      receivedQty: confirmReceiveDialog.form.receivedQty,
+      receiveStatus: confirmReceiveDialog.form.receiveStatus,
+      signatureConfirmed: confirmReceiveDialog.form.signatureConfirmed,
+      remark: confirmReceiveDialog.form.remark,
+      // testRun is added by Playwright via window override (see executeConfirmReceive)
+    }, true);
+    const previewData = (response.resultData || {}) as ConfirmReceivePreview;
+    confirmReceiveDialog.preview = previewData;
+    confirmReceiveDialog.canSubmit = previewData.canDo === true
+        && previewData.status === 'PREVIEW';
+  } catch (err) {
+    ElMessage({
+      message: `预览失败: ${extractErrorMessage(err)}`,
+      type: 'error',
+      duration: 0,
+      showClose: true,
+    });
+  } finally {
+    confirmReceiveDialog.previewing = false;
+  }
+}
+
+async function executeConfirmReceive() {
+  if (!confirmReceiveDialog.canSubmit) {
+    ElMessage.warning('请先点击 [预览边界] 验证可提交');
+    return;
+  }
+  if (!confirmReceiveDialog.row || confirmReceiveDialog.form.receivedQty == null) return;
+  confirmReceiveDialog.submitting = true;
+  try {
+    // Playwright 通过 window.__SPRINT10_TEST_RUN__ = true 触发 testRun 标记
+    const testRun = typeof window !== 'undefined'
+      && (window as unknown as { __SPRINT10_TEST_RUN__?: boolean }).__SPRINT10_TEST_RUN__ === true;
+    const response = await callIntentExecute('确认收货 (Sprint 10 Loop 2)', 'RECEIVE_CONFIRM_CREATE', {
+      poId: confirmReceiveDialog.row.poId,
+      lineId: confirmReceiveDialog.row.lineId,
+      receivedQty: confirmReceiveDialog.form.receivedQty,
+      receiveStatus: confirmReceiveDialog.form.receiveStatus,
+      signatureConfirmed: confirmReceiveDialog.form.signatureConfirmed,
+      remark: confirmReceiveDialog.form.remark,
+      testRun,
+    });
+    ElMessage.success(response.message || '✅ 入库成功');
+    confirmReceiveDialog.visible = false;
+    // 刷新今日清单
+    await triggerTodayQuery();
+  } catch (err) {
+    ElMessage({
+      message: `提交失败: ${extractErrorMessage(err)}`,
+      type: 'error',
+      duration: 0,
+      showClose: true,
+    });
+  } finally {
+    confirmReceiveDialog.submitting = false;
   }
 }
 
