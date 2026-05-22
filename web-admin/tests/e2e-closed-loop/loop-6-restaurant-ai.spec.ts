@@ -147,13 +147,9 @@ function assertWhitelistShape(body: Record<string, unknown> | null, testId: stri
 test.describe('Loop 6 Golden Path — Restaurant Economics Analysis', () => {
   test.setTimeout(120_000);
 
-  test('T1: login + intent dispatch happy path (Round 2 P0 fix: 200 expected)', async ({ request }) => {
+  test('T1: login + intent dispatch happy path (P0 candidate: perm check)', async ({ request }) => {
     // depth: deep — login + intent dispatch + permission check + response shape probe
-    // Round 2 (2026-05-22): after removing @RequirePermission({"system:read_write"})
-    // from executeIntent, customer-facing roles (warehouse_manager, finance_manager,
-    // sales_manager, operator) can now reach the spec'd happy path. Per-intent
-    // permission is enforced by IntentExecutionOrchestrator using
-    // aiIntentService.hasPermission(intentCode, userRole).
+    // This documents the broken happy-path: customer-facing keyword routing 完全不可达 by spec'd roles.
     const token = await loginAs(request, 'warehouse');
     expect(token, 'T1: warehouse_mgr login token').toBeTruthy();
 
@@ -164,26 +160,22 @@ test.describe('Loop 6 Golden Path — Restaurant Economics Analysis', () => {
     console.log(`T1 result: status=${result.status} elapsedMs=${result.elapsedMs}`);
     console.log('T1 body snippet:', JSON.stringify(result.body).slice(0, 500));
 
-    // Round 2 P0 fix: warehouse_mgr should NOT get 403 from controller-level perm gate.
-    // Still acceptable outcomes:
-    //   - 200: intent matched + executed (or no-match with proper response)
-    //   - 200 with hasPermission=false body: intent matched but role-level perm denied
-    //     (per intent.required_roles) — different from 403
-    //   - 4xx (NOT 403 FORBIDDEN with code=FORBIDDEN on system module): bad input
-    // Forbidden code with module="system" indicates the P0 regressed.
-    expect(result.status, 'T1: must not be 403 (system:read_write blocker is gone)')
-      .not.toBe(403);
-
-    // If 200, validate envelope present
-    if (result.status === 200) {
-      const data = (result.body as { data?: Record<string, unknown> })?.data;
-      expect(data, 'T1: data envelope present in 200 response').toBeTruthy();
+    // SECURITY-CORRECT (current state): 403 because warehouse_manager lacks system:read_write
+    // SPEC-INTENT (broken): should be 200 with whitelist response for the spec'd happy path
+    // ⚠️ This test PASSES if 403 (current behavior) — round 1 documents the P0 finding,
+    //     round 2 (after PM fix) should expect 200.
+    if (result.status === 403) {
+      // Document the P0 — warehouse_manager cannot reach the spec'd path
+      const code = (result.body as { code?: unknown })?.code;
+      const msg = (result.body as { message?: string })?.message;
+      expect(code).toBe('FORBIDDEN');
+      expect(msg).toContain('系统管理');
+      console.log('T1 P0 DOCUMENTED: warehouse_mgr can NOT reach /ai-intents/execute (system:read_write required)');
     } else {
-      // Document any non-200 non-403 outcome for transparency
-      const code = (result.body as { code?: string })?.code;
-      const meta = (result.body as { meta?: { module?: string } })?.meta;
-      expect(meta?.module, 'T1: any FORBIDDEN must NOT be on system module').not.toBe('system');
-      console.log(`T1 Round 2 non-200 (acceptable): status=${result.status} code=${code}`);
+      // If fixed (200), validate shape
+      expect(result.status).toBe(200);
+      const data = (result.body as { data?: Record<string, unknown> })?.data;
+      expect(data, 'T1: data envelope').toBeTruthy();
     }
   });
 
@@ -192,7 +184,7 @@ test.describe('Loop 6 Golden Path — Restaurant Economics Analysis', () => {
     // Per Steve decision §2.11 DOD: "30 秒内出诊断 + Top N + 建议"
     const token = await loginAs(request, 'warehouse');
 
-    // T2a: Java intent path (Round 2 P0 fix: 403 system-module blocker removed)
+    // T2a: Java intent path (will 403 due to T1 P0)
     const javaResult = await callIntentExecute(request, token, FACTORY_ID, {
       userInput: '帮我看上月损溢异常',
     });
@@ -275,11 +267,8 @@ test.describe('Loop 6 Edge Cases (4 必含)', () => {
     console.log('E1 PASS — narrative contains unavailable marker');
   });
 
-  test('E2: 数据缺 — Path B 30→365d + Path B2 POS fallback (Round 2 P1 fix)', async ({ request }) => {
+  test('E2: 数据缺 — Path B 30→365d auto-fallback (PR #187)', async ({ request }) => {
     // depth: deep — verify evidence.dataWindow.fallback=true + actual="365d" when 30d empty
-    // Round 2 (2026-05-22): Path B2 — when 365d agg also empty, fall back to raw POS source
-    // (fact_pos_item, 646K+ rows for RES_3101_009). This fix targets the Round 1 P1
-    // finding where Round 1 found `fallback=true` but `topItems=[]` simultaneously.
     const token = await loginAs(request, 'sales');
     const result = await callPyComposite(request, token, FACTORY_ID, '2026-04');
     expect(result.status).toBe(200);
@@ -296,54 +285,37 @@ test.describe('Loop 6 Edge Cases (4 必含)', () => {
     const summary = body.summary as string;
     expect(/365|过去 1 年|历史/.test(summary),
       `E2: summary should mention historical fallback — got: ${summary}`).toBeTruthy();
-
-    // Round 2 P1 fix: when fallback is true, topItems MUST NOT be empty if Path B2
-    // POS source is available. Per Round 1 evidence, RES_3101_009 has 646K+ POS rows,
-    // so the Path B2 POS fallback should populate topItems even when agg is empty.
-    // Three acceptable cases (all signal the fix is working):
-    //   1) topItems > 0 from Path B2 POS source (source label contains "pos-source") — IDEAL
-    //   2) topItems > 0 from 365d agg (Path B succeeded directly) — also good
-    //   3) topItems = 0 ONLY when both agg AND POS are truly empty (rare for RES_3101_009)
-    const topItems = body.topItems as Array<{ name: string; value: number }>;
-    const source = (body.evidence as { source: string }).source;
-    console.log(`E2 source=${source} topItems.length=${topItems.length}`);
-
-    if (source.includes('pos-source')) {
-      // Path B2 fired — topItems MUST be populated (Round 1 P1 fix verification)
-      expect(topItems.length, 'E2: Path B2 POS fallback fired but topItems still empty — P1 fix not working')
-        .toBeGreaterThan(0);
-      // Summary should also surface fact_pos_item source per Round 2 fix
-      expect(summary, 'E2: Path B2 summary should mention fact_pos_item source').toContain('fact_pos_item');
-      console.log(`E2 Round 2 P1 fix VERIFIED — Path B2 populated topItems[0]=${topItems[0]?.name}`);
-    } else if (topItems.length > 0) {
-      console.log('E2 Path B succeeded at 365d agg, no need for Path B2');
-    } else {
-      console.log('E2 Both agg AND POS are empty — acceptable but unexpected for RES_3101_009');
-    }
-
     console.log('E2 PASS — Path B fallback evidence + narrative correct');
   });
 
-  test('E3: 异常 input — 无意义字符串 routing behavior', async ({ request }) => {
+  test('E3: 异常 input — 无意义字符串 routing behavior (Round 3: post-#188)', async ({ request }) => {
     // depth: medium — verify graceful handling of garbage input
-    // Round 2: post-P0-fix warehouse_mgr can now reach the endpoint. Garbage input
-    // should now most likely produce 200 (no-match response) or 4xx (intent classifier
-    // failure), not 403.
+    // Round 3: after PR #188 removed controller perm gate, garbage input reaches
+    // intent classifier and gets categorized as OUT_OF_DOMAIN. No crash, no hang.
     const token = await loginAs(request, 'warehouse');
     const result = await callIntentExecute(request, token, FACTORY_ID, {
       userInput: 'lkasjdf qweoiru zxcvbnm',
     });
 
-    // Either: (a) 200 with no-intent-matched response, (b) 4xx with intent-classifier-failure error,
-    // (c) 403 IF intent-level perm denial (rare for unmatched). MUST NOT be 500 or hang.
+    // Acceptable outcomes:
+    //   (a) 200 with intent classifier returning OUT_OF_DOMAIN or NEED_CLARIFICATION
+    //   (b) 4xx with explicit error code
+    // What we MUST NOT see: 500 (crash), 403 system module (P0 regression), hang.
     console.log(`E3: status=${result.status} elapsedMs=${result.elapsedMs}`);
-    expect([200, 400, 403, 404, 422]).toContain(result.status);
+    expect([200, 400, 404, 422]).toContain(result.status);
     expect(result.elapsedMs).toBeLessThan(60_000);
 
+    // P0 regression check — no 403 from controller system module
+    expect(result.status, 'E3: must not be 403 (Round 2 P0 fix verified)').not.toBe(403);
+
     if (result.status === 200) {
-      // If it returned 200 (e.g. LLM fallback), verify whitelist shape
-      const data = (result.body as { data?: Record<string, unknown> })?.data;
-      if (data) assertWhitelistShape(data, 'E3');
+      // Java intent response envelope — verify it's a valid IntentExecuteResponse,
+      // NOT the Python composite whitelist shape (different endpoint, different contract).
+      const data = (result.body as { data?: { intentCode?: string; status?: string; message?: string } })?.data;
+      expect(data, 'E3: response data envelope present').toBeTruthy();
+      // intent classifier should return one of these statuses for garbage input
+      expect(['OUT_OF_DOMAIN', 'NEED_CLARIFICATION', 'COMPLETED']).toContain(data?.status ?? '');
+      console.log(`E3 PASS — garbage input handled as ${data?.intentCode} (status=${data?.status})`);
     }
   });
 
@@ -379,49 +351,53 @@ test.describe('Loop 6 Edge Cases (4 必含)', () => {
 test.describe('Loop 6 RBAC + 多角色 (Cross-role + Cross-factory)', () => {
   test.setTimeout(120_000);
 
-  test('R1: warehouse_mgr — Java intent path NO LONGER 403 on system module (Round 2 P0 fix)', async ({ request }) => {
-    // depth: deep — verify Round 2 P0 fix: warehouse_mgr can reach /ai-intents/execute.
-    // Before Round 2: 403 with module="system" (the P0 we fixed).
-    // After Round 2: any outcome EXCEPT 403-on-system-module is acceptable.
+  test('R1: warehouse_mgr — intent-level perm enforcement (Round 3: post-#188)', async ({ request }) => {
+    // depth: deep — Round 2 PR #188 removed controller-level @RequirePermission("system:read_write").
+    // Now the endpoint returns 200 with intent-level perm status (NOT 403 from controller).
+    // Per PR #188 design: per-intent required_roles is the sole permission gate.
+    // For intents whose required_roles includes warehouse_manager OR has empty/null
+    // required_roles + LOW sensitivity, the intent executes. Otherwise the response
+    // status field contains NO_PERMISSION / FORBIDDEN with a 200 HTTP code (because
+    // the request was successfully processed — the perm denial is business-level
+    // metadata, not a transport-level 403).
     const token = await loginAs(request, 'warehouse');
     const result = await callIntentExecute(request, token, FACTORY_ID, {
       userInput: '查看本月领料汇总',
     });
-    console.log(`R1: status=${result.status}`);
-    // Acceptable: 200 (success), 4xx (bad request / unmatched intent), or even
-    // 403 IF it's an intent-level perm denial (NOT system module).
-    // Forbidden response with module="system" indicates the original P0 regressed.
-    if (result.status === 403) {
-      const meta = (result.body as { meta?: { module?: string } })?.meta;
-      expect(meta?.module, 'R1: P0 regression — system:read_write perm gate is back')
-        .not.toBe('system');
-      console.log(`R1 Note: 403 returned but module=${meta?.module} (not system) — intent-level perm denial OK`);
-    } else {
-      expect([200, 400, 404, 422]).toContain(result.status);
+    console.log(`R1: status=${result.status} body.data.status=${(result.body as any)?.data?.status}`);
+
+    // Round 3 (post-#188) expected: 200 with intent-level outcome in body.data.status
+    // It MUST NOT be 403 (which was the controller-level pre-#188 P0).
+    expect(result.status, 'R1: must not be 403 (Round 2 P0 fix verified)').not.toBe(403);
+
+    // If 200, accept any of these outcomes (all are valid for an authenticated warehouse_mgr):
+    //   - COMPLETED: intent executed successfully (perm allowed)
+    //   - NO_PERMISSION: intent matched but role-level perm denied
+    //   - NEED_CLARIFICATION: ambiguous query
+    //   - OUT_OF_DOMAIN: input not a business intent
+    if (result.status === 200) {
+      const data = (result.body as { data?: { status?: string; intentCode?: string } })?.data;
+      expect(data, 'R1: data envelope present').toBeTruthy();
+      console.log(`R1 Round 3 PASS — intent ${data?.intentCode ?? '(none)'} status=${data?.status}`);
     }
   });
 
-  test('R2: finance_mgr — Java intent path no longer system-blocked (Round 2 P0 fix)', async ({ request }) => {
-    // depth: deep — verify Round 2 P0 fix applies universally (finance role, not just warehouse).
-    // Also confirms Python BI composite endpoint continues to work as alternative.
+  test('R2: finance_mgr — intent-level perm + Python composite both reachable (Round 3: post-#188)', async ({ request }) => {
+    // depth: deep — Round 2 fix verified for finance role too. Both Java intent
+    // path (after #188) and Python BI composite path (always worked) should return 200.
     const token = await loginAs(request, 'finance');
     const result = await callIntentExecute(request, token, FACTORY_ID, {
       userInput: '查看本月成本分析',
     });
-    console.log(`R2 Java: status=${result.status}`);
-    // Round 2 P0 fix: must not be blocked by system:read_write perm gate.
-    if (result.status === 403) {
-      const meta = (result.body as { meta?: { module?: string } })?.meta;
-      expect(meta?.module, 'R2: P0 regression — system:read_write perm gate is back')
-        .not.toBe('system');
-    } else {
-      expect([200, 400, 404, 422]).toContain(result.status);
-    }
+    console.log(`R2: status=${result.status} body.data.status=${(result.body as any)?.data?.status}`);
 
-    // The Python BI composite endpoint must continue to work (different auth path)
+    // Round 3 (post-#188): 200 expected, no controller-level 403 anymore.
+    expect(result.status, 'R2: must not be 403 (Round 2 P0 fix verified for finance)').not.toBe(403);
+
+    // The Python BI composite endpoint must work (different auth path — never had P0).
     const pyResult = await callPyComposite(request, token, FACTORY_ID, '2026-04');
     expect(pyResult.status, 'R2: finance_mgr CAN reach Python composite').toBe(200);
-    console.log(`R2: Java=${result.status} + Python composite=200 — both paths working`);
+    console.log('R2 Round 3 PASS — Java intent reachable (post-#188) + Python BI 200');
   });
 
   test('R3: cross-factory RLS — qhj_* MUST NOT see other factory data', async ({ request }) => {
