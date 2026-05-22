@@ -179,5 +179,12 @@ export default defineConfig({
       fullyParallel: false,
       workers: 1,
     },
+    // Sprint 11 Loop 6 — Restaurant Economics Analysis AI 闭环 (MealClaw Response)
+    {
+      name: 'loop-6-restaurant-ai',
+      testMatch: 'tests/e2e-closed-loop/loop-6-restaurant-ai.spec.ts',
+      fullyParallel: false,
+      workers: 1,
+    },
   ],
 });

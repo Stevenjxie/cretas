@@ -322,3 +322,95 @@ def test_composite_graceful_when_top_items_fetch_raises():
     assert set(body.keys()) == set(WHITELIST)
     assert body["dataAvailable"]["overall"] is False
     assert body["topItems"] == []
+
+
+def test_composite_path_b2_pos_fallback_when_agg_empty_at_365d():
+    """Sprint 11 Round 2 — Path B2 POS-source fallback.
+
+    Round 1 P1 finding: RES_3101_009 has 646K+ POS rows in fact_pos_item but
+    0 rows in agg_restaurant_daily_ops, so the original Path B fallback widened
+    30d → 365d on the empty agg table, still returning topItems=[]. The fix:
+    when agg is empty at BOTH 30d AND 365d, fall back to raw fact_pos_item.
+
+    Tests this by making the fake conn.fetch return:
+    - 1st call (30d agg): []
+    - 2nd call (365d agg): []
+    - 3rd call (365d POS): populated POS rows
+    Then asserts:
+    - topItems is non-empty (Round 1 P1 fix verified)
+    - dataAvailable.posData is True
+    - summary mentions "fact_pos_item" data source
+    - evidence.source contains "pos-source" label
+    """
+    app = _make_test_app()
+    client = TestClient(app, raise_server_exceptions=False)
+
+    populated_pos_rows = [
+        _FakeRow({
+            "product_id": 1, "name": "卤猪蹄 200g", "category": "卤味",
+            "unit": None, "total_value": 12500,
+        }),
+        _FakeRow({
+            "product_id": 2, "name": "麻辣牛肉", "category": "卤味",
+            "unit": None, "total_value": 8800,
+        }),
+    ]
+
+    call_count = {"n": 0}
+
+    async def fetch_with_b2_fallback(*args, **kwargs):
+        call_count["n"] += 1
+        # 1st: 30d agg empty → 2nd: 365d agg empty → 3rd: 365d POS populated
+        if call_count["n"] <= 2:
+            return []
+        return populated_pos_rows
+
+    conn = AsyncMock()
+    conn.execute = AsyncMock(return_value=None)
+    conn.fetch = AsyncMock(side_effect=fetch_with_b2_fallback)
+    cm = AsyncMock()
+    cm.__aenter__ = AsyncMock(return_value=conn)
+    cm.__aexit__ = AsyncMock(return_value=None)
+    fake_pool = _make_fake_pool(cm)
+
+    with patch(
+        "smartbi.config.get_pg_pool", new_callable=AsyncMock, return_value=fake_pool,
+    ), patch(
+        "smartbi.config.get_cretas_pool", new_callable=AsyncMock, return_value=None,
+    ):
+        resp = client.get(
+            "/api/smartbi/restaurant/llm-composite",
+            params={"factory_id": "RES_3101_009", "days": 30},
+        )
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    # Whitelist still enforced
+    assert set(body.keys()) == set(WHITELIST)
+
+    # Core Round 1 P1 fix verification — topItems non-empty
+    assert len(body["topItems"]) > 0, \
+        f"Path B2 should populate topItems from POS; got {body['topItems']}"
+    assert body["topItems"][0]["name"] == "卤猪蹄 200g"
+    assert body["topItems"][0]["value"] == 12500.0
+
+    # Path B (window widening) flagged + Path B2 (POS source) signaled
+    ev = body["evidence"]
+    assert ev["dataWindow"]["fallback"] is True
+    assert ev["dataWindow"]["actual"] == "365d"
+    assert "pos-source" in ev["source"], \
+        f"Path B2 source label should reflect POS fallback; got source={ev['source']!r}"
+
+    # dataAvailable upgraded to True when POS fallback produces data
+    assert body["dataAvailable"]["posData"] is True, \
+        "Path B2 should mark posData=true since fact_pos_item has data"
+    assert body["dataAvailable"]["overall"] is True
+
+    # Summary surfaces the source explicitly per Steve 决策 1 (failure isolation /
+    # transparency — LLM must know data source)
+    assert "fact_pos_item" in body["summary"], \
+        f"Summary should mention fact_pos_item source; got: {body['summary']}"
+
+    # Confirm the fallback chain actually ran (3 fetches: 30d agg, 365d agg, 365d POS)
+    assert call_count["n"] == 3, \
+        f"Expected 3 fetches (30d agg, 365d agg, 365d POS); got {call_count['n']}"

@@ -131,6 +131,7 @@ async def restaurant_llm_composite(
             return {}
 
     async def _fetch_top_items(window_days: int):
+        """Query agg_restaurant_daily_ops (aggregated by ETL)."""
         from smartbi.config import get_pg_pool
         pool = await get_pg_pool()
         if pool is None:
@@ -155,7 +156,51 @@ async def restaurant_llm_composite(
                 factory_id, kpi_kind, window_days,
             )
 
+    async def _fetch_top_pos_items(window_days: int):
+        """Sprint 11 Round 2 Path B2 — POS-level fallback.
+
+        When agg_restaurant_daily_ops is empty (ETL not run for this factory),
+        query the raw fact_pos_item table directly. Per Round 1 evidence:
+        RES_3101_009 has 646K+ POS rows in fact_pos_item but 0 rows in
+        agg_restaurant_daily_ops, causing the original Path B fallback to
+        return empty topItems despite advertising "365d historical data".
+
+        Returns top-10 dishes by revenue from fact_pos_item.
+        """
+        from smartbi.config import get_pg_pool
+        pool = await get_pg_pool()
+        if pool is None:
+            return None
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "SELECT set_config('app.factory_id', $1, true)", factory_id
+            )
+            return await conn.fetch(
+                """
+                SELECT p.product_id, p.name, p.category, NULL::text AS unit,
+                       SUM(i.amount)::NUMERIC(18,4) AS total_value
+                  FROM fact_pos_item i
+                  JOIN fact_pos_transaction t ON t.id = i.transaction_id
+                  JOIN dim_product p ON p.product_id = i.product_id
+                 WHERE i.factory_id = $1 AND t.factory_id = $1 AND p.factory_id = $1
+                   AND t.date >= CURRENT_DATE - ($2::int)
+                 GROUP BY p.product_id, p.name, p.category
+                 ORDER BY total_value DESC NULLS LAST
+                 LIMIT 10
+                """,
+                factory_id, window_days,
+            )
+
     async def _fetch_top_items_with_path_b() -> Dict[str, Any]:
+        """Path B + Path B2 fallback chain.
+
+        1. Try aggregated 30d query (preferred — pre-aggregated, fast)
+        2. Path B: widen to 365d on agg table
+        3. Path B2 (Sprint 11 Round 2): when 365d agg ALSO empty, fall back to
+           raw fact_pos_item (POS source) at 365d. This handles the case where
+           ETL hasn't yet populated agg_restaurant_daily_ops for the factory
+           but raw POS data is available.
+        """
         nonlocal actual_days, fallback
         try:
             rows = await _fetch_top_items(days)
@@ -175,6 +220,44 @@ async def restaurant_llm_composite(
                     rows = []
                 actual_days = FALLBACK_WINDOW_DAYS
                 fallback = True
+
+                # Path B2 (Sprint 11 Round 2 fix): when agg table is ALSO empty
+                # at 365d, fall back to raw POS source. This is the actual fix
+                # for the Round 1 P1 finding where Round 1 found
+                # fallback=true but topItems=[] despite 646K+ POS rows present.
+                if len(rows) == 0:
+                    logger.info(
+                        "[llm-composite] Path B2 POS fallback (agg empty 365d) for factory=%s",
+                        factory_id,
+                    )
+                    try:
+                        pos_rows = await _fetch_top_pos_items(FALLBACK_WINDOW_DAYS)
+                        if pos_rows:
+                            items = [
+                                {
+                                    "ingredient_id": f"product:{r['product_id']}",
+                                    "name": r["name"],
+                                    "category": r["category"],
+                                    "unit": r["unit"],
+                                    "value": float(r["total_value"]) if r["total_value"] is not None else 0.0,
+                                    "rank": idx + 1,
+                                }
+                                for idx, r in enumerate(pos_rows)
+                            ]
+                            logger.info(
+                                "[llm-composite] Path B2 returned %d POS items for factory=%s",
+                                len(items), factory_id,
+                            )
+                            # Note: _pathB2 stripped by WHITELIST in formatter — kept
+                            # in upstream raw dict for evidence-builder source labeling.
+                            return {"success": True, "data": items, "_pathB2": True}
+                    except Exception as pos_exc:
+                        logger.warning(
+                            "[llm-composite] Path B2 POS fallback failed for factory=%s: %s",
+                            factory_id, pos_exc,
+                        )
+                        # Fall through to empty agg result rather than 500.
+
             items = [
                 {
                     "ingredient_id": r["ingredient_id"],
@@ -226,6 +309,15 @@ async def restaurant_llm_composite(
         # _check_data_available already inspects modules; this is a no-op safety
         pass
 
+    # Sprint 11 Round 2: when Path B2 (POS fallback) fired, the raw POS source
+    # IS available — surface posData=True so the LLM understands historical data
+    # is present even though aggregation hasn't run.
+    used_path_b2 = bool(raw_top_items.get("_pathB2"))
+    if used_path_b2:
+        data_available["posData"] = True
+        # overall reflects whether ANY data is now available
+        data_available["overall"] = True
+
     summary_text = _build_summary(
         merged,
         requested_days=days,
@@ -236,6 +328,17 @@ async def restaurant_llm_composite(
     )
     # Prefix month label to make the summary self-describing
     summary_text = f"{factory_id} {month} 餐饮经营 AI 概览: {summary_text}"
+    # Sprint 11 Round 2: when Path B2 fired, append explicit source note so the
+    # LLM does not pretend the data is from the agg layer.
+    if used_path_b2:
+        summary_text = (
+            f"{summary_text} (注: 数据源 fact_pos_item 原始 POS, "
+            f"agg_restaurant_daily_ops ETL 尚未为本工厂运行)"
+        )
+
+    # Source label reflects which path served the data.
+    source_label = "restaurant-llm-composite-pos-source" if used_path_b2 \
+        else "restaurant-llm-composite"
 
     body = {
         "summary": summary_text,
@@ -244,7 +347,7 @@ async def restaurant_llm_composite(
             merged, data_available, fallback, days
         ),
         "evidence": _build_evidence(
-            merged, days, actual_days, fallback, source_label="restaurant-llm-composite"
+            merged, days, actual_days, fallback, source_label=source_label
         ),
         "dataAvailable": data_available,
     }
