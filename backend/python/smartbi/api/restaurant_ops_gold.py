@@ -7,6 +7,15 @@ Plan C Phase 3. Exposes:
 
 All endpoints are tenant-scoped (factory_id from JWT via auth middleware) and
 read from Gold agg tables for sub-100ms response times.
+
+Sprint 11 MealClaw Response (2026-05-22):
+- Added `?format=llm` query param on /etl + /top-ingredients (default off,
+  backward-compatible). When format=llm, returns the strict 5-field whitelist
+  shape from smartbi.services.restaurant_llm_formatter — used by the AI Chat
+  layer to feed clean context into the LLM without metadata leaks.
+- Path B windowing: top-ingredients auto-fallbacks 30d → 365d when empty, with
+  a fallback flag in the LLM `evidence` block. Existing JSON shape unchanged
+  for non-LLM callers.
 """
 from __future__ import annotations
 
@@ -25,7 +34,10 @@ def _get_factory_id(request: Request) -> Optional[str]:
 
 
 @router.post("/restaurant-ops/etl")
-async def trigger_etl(request: Request) -> Dict[str, Any]:
+async def trigger_etl(
+    request: Request,
+    format: str = Query("default", description="`default` | `llm` (Sprint 11 LLM wrapper)"),
+) -> Dict[str, Any]:
     """Run the full ETL pipeline for the current tenant.
 
     Intended for admin / on-demand refresh. Production should run a cron job
@@ -55,7 +67,7 @@ async def trigger_etl(request: Request) -> Dict[str, Any]:
         finally:
             await cretas_pool.close()
 
-        return {
+        raw_response = {
             "success": len(stats.errors) == 0,
             "data": {
                 "dim_ingredient_upserted": stats.dim_ingredient_upserted,
@@ -69,9 +81,27 @@ async def trigger_etl(request: Request) -> Dict[str, Any]:
                 "errors": stats.errors,
             },
         }
+        if format == "llm":
+            from smartbi.services.restaurant_llm_formatter import to_llm_format
+            return to_llm_format(
+                raw_response,
+                requested_days=1,  # ETL is a point-in-time op, not a windowed query
+                actual_days=1,
+                fallback=False,
+                factory_id=factory_id,
+                source_label="restaurant-ops-etl",
+            )
+        return raw_response
     except Exception as e:
         logger.exception("[etl-endpoint] failed for %s", factory_id)
-        return {"success": False, "message": f"ETL failed: {e}"}
+        err = {"success": False, "message": f"ETL failed: {e}"}
+        if format == "llm":
+            from smartbi.services.restaurant_llm_formatter import to_llm_format
+            return to_llm_format(
+                err, requested_days=1, actual_days=1, fallback=False,
+                factory_id=factory_id, source_label="restaurant-ops-etl",
+            )
+        return err
 
 
 @router.get("/restaurant-ops/top-ingredients")
@@ -80,37 +110,79 @@ async def top_ingredients(
     kpi_kind: str = Query("requisition_cost", description="requisition_qty | requisition_cost | wastage_cost"),
     top_n: int = Query(10, ge=1, le=100),
     days: int = Query(30, ge=1, le=365, description="Rolling window"),
+    format: str = Query("default", description="`default` | `llm` (Sprint 11 LLM wrapper)"),
 ) -> Dict[str, Any]:
     """Top N ingredients by a given KPI in the last N days.
 
     Returns [{ingredient_id, name, category, value, rank}].
+
+    Sprint 11 MealClaw Response — Path B:
+    When format=llm and the requested window returns zero rows, the endpoint
+    automatically widens to 365d (SmartBI Gold has 646K+ rows of 2025 POS data
+    per BI subagent #1) and surfaces the fallback explicitly via the LLM
+    `evidence` block.
     """
     factory_id = _get_factory_id(request)
     if not factory_id:
-        return {"success": False, "message": "missing factory context"}
+        err = {"success": False, "message": "missing factory context"}
+        if format == "llm":
+            from smartbi.services.restaurant_llm_formatter import to_llm_format
+            return to_llm_format(
+                err, requested_days=days, actual_days=days,
+                fallback=False, factory_id=factory_id,
+            )
+        return err
 
     from smartbi.config import get_pg_pool
     pool = await get_pg_pool()
     if pool is None:
-        return {"success": False, "message": "db pool unavailable"}
+        err = {"success": False, "message": "db pool unavailable"}
+        if format == "llm":
+            from smartbi.services.restaurant_llm_formatter import to_llm_format
+            return to_llm_format(
+                err, requested_days=days, actual_days=days,
+                fallback=False, factory_id=factory_id,
+            )
+        return err
 
-    async with pool.acquire() as conn:
-        await conn.execute("SELECT set_config('app.factory_id', $1, true)", factory_id)
-        rows = await conn.fetch(
-            """
-            SELECT i.ingredient_id, i.name, i.category, i.unit,
-                   SUM(a.value_num)::NUMERIC(18,4) AS total_value
-              FROM agg_restaurant_daily_ops a
-              JOIN dim_ingredient i ON a.dim_value_id = i.ingredient_id
-             WHERE a.factory_id = $1
-               AND a.kpi_kind = $2
-               AND a.date >= CURRENT_DATE - ($3::int)
-             GROUP BY i.ingredient_id, i.name, i.category, i.unit
-             ORDER BY total_value DESC NULLS LAST
-             LIMIT $4
-            """,
-            factory_id, kpi_kind, days, top_n,
+    async def _query(window_days: int):
+        async with pool.acquire() as conn:
+            await conn.execute("SELECT set_config('app.factory_id', $1, true)", factory_id)
+            return await conn.fetch(
+                """
+                SELECT i.ingredient_id, i.name, i.category, i.unit,
+                       SUM(a.value_num)::NUMERIC(18,4) AS total_value
+                  FROM agg_restaurant_daily_ops a
+                  JOIN dim_ingredient i ON a.dim_value_id = i.ingredient_id
+                 WHERE a.factory_id = $1
+                   AND a.kpi_kind = $2
+                   AND a.date >= CURRENT_DATE - ($3::int)
+                 GROUP BY i.ingredient_id, i.name, i.category, i.unit
+                 ORDER BY total_value DESC NULLS LAST
+                 LIMIT $4
+                """,
+                factory_id, kpi_kind, window_days, top_n,
+            )
+
+    rows = await _query(days)
+    actual_days = days
+    fallback = False
+
+    # Path B: when LLM-facing AND the requested window has no data, widen to 365d
+    # to surface the SmartBI Gold historical baseline. Default (non-LLM) callers
+    # see the original empty result so dashboards don't silently rewrite the
+    # window the user asked for.
+    from smartbi.services.restaurant_llm_formatter import (
+        FALLBACK_WINDOW_DAYS,
+    )
+    if format == "llm" and len(rows) == 0 and days < FALLBACK_WINDOW_DAYS:
+        logger.info(
+            "[top-ingredients] Path B fallback %dd → %dd for factory=%s kpi=%s",
+            days, FALLBACK_WINDOW_DAYS, factory_id, kpi_kind,
         )
+        rows = await _query(FALLBACK_WINDOW_DAYS)
+        actual_days = FALLBACK_WINDOW_DAYS
+        fallback = True
 
     items = [
         {
@@ -123,7 +195,19 @@ async def top_ingredients(
         }
         for idx, r in enumerate(rows)
     ]
-    return {"success": True, "data": items}
+    raw_response = {"success": True, "data": items}
+
+    if format == "llm":
+        from smartbi.services.restaurant_llm_formatter import to_llm_format
+        return to_llm_format(
+            raw_response,
+            requested_days=days,
+            actual_days=actual_days,
+            fallback=fallback,
+            factory_id=factory_id,
+            source_label="smartbi-gold-top-ingredients",
+        )
+    return raw_response
 
 
 @router.get("/restaurant-ops/daily-trend")
