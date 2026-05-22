@@ -7,7 +7,7 @@
       class="phase-tab" :class="{ active: activeTab === tab.key }"
       @click="activeTab = tab.key"
     >
-      <span>{{ tab.icon }}</span> {{ tab.label }}
+      <span v-if="tab.icon">{{ tab.icon }}</span>{{ tab.label }}
     </div>
     <div class="phase-separator" />
     <!-- Phase B: details & permissions -->
@@ -16,7 +16,7 @@
       class="phase-tab" :class="{ active: activeTab === tab.key }"
       @click="activeTab = tab.key"
     >
-      <span>{{ tab.icon }}</span> {{ tab.label }}
+      <span v-if="tab.icon">{{ tab.icon }}</span>{{ tab.label }}
     </div>
   </div>
 </template>
@@ -26,11 +26,14 @@ import { useCanvasEditor } from '../composables/useCanvasEditor'
 
 const { activeTab } = useCanvasEditor()
 
+// 2026-05-21: 清除全部 Tab emoji (per feedback_no_emoji_in_b_end_ui.md HARD —
+// B 端用户对 emoji 厌恶度高, 用纯文本 label 更清晰). icon 字段保留为空串,
+// template `v-if="tab.icon"` 自动跳过渲染.
 const phaseA = [
-  { key: 'workflow', icon: '🔄', label: '状态机' },
-  { key: 'approval', icon: '✅', label: '审批工作流' },
-  { key: 'triggers', icon: '🔗', label: '触发链' },
-  { key: 'validation', icon: '📐', label: '校验规则' },
+  { key: 'workflow', icon: '', label: '状态机' },
+  { key: 'approval', icon: '', label: '审批工作流' },
+  { key: 'triggers', icon: '', label: '触发链' },
+  { key: 'validation', icon: '', label: '校验规则' },
 ]
 
 // Round 4 Fix P1-10: added '定时任务' Tab for SchedulerPanel (legacy v2 config)
@@ -43,17 +46,25 @@ const phaseA = [
 // (real cron registration via Spring TaskScheduler + ShedLock, NOT v2 config).
 // Legacy 'scheduler' Tab stays for v2 config-only style; sister chat will
 // migrate 24 existing @Scheduled methods to the new pattern.
+// Phase A P0 (2026-05-21, post 六扇门 4 次会议 audit): 3 new hubs pre-registered
+// so 3 parallel subagents can each fill their slot without rebasing central files.
+// Each Tab maps to a stub component below — subagents replace the stub with the
+// real editor in their own worktree-isolated branch.
 const phaseB = [
-  { key: 'fields', icon: '📋', label: '字段配置' },
-  { key: 'permissions', icon: '🛡️', label: '权限矩阵' },
-  { key: 'module-permissions', icon: '🔐', label: '模块权限' },
-  { key: 'tools', icon: '🔧', label: '工具/技能' },
-  { key: 'scheduler', icon: '⏰', label: '定时任务 (v2)' },
-  { key: 'alerts', icon: '🚨', label: '预警规则' },
-  { key: 'notify', icon: '🔔', label: '通知模板' },
-  { key: 'business-rules', icon: '📜', label: '业务规则' },
-  { key: 'pricing', icon: '💰', label: '价格策略' },
-  { key: 'cron', icon: '⚡', label: 'Canvas Cron' },
+  { key: 'fields', icon: '', label: '字段配置' },
+  { key: 'permissions', icon: '', label: '权限矩阵' },
+  { key: 'module-permissions', icon: '', label: '模块权限' },
+  { key: 'tools', icon: '', label: '工具/技能' },
+  { key: 'scheduler', icon: '', label: '定时任务 (v2)' },
+  { key: 'alerts', icon: '', label: '预警规则' },
+  { key: 'notify', icon: '', label: '通知模板' },
+  { key: 'business-rules', icon: '', label: '业务规则' },
+  { key: 'pricing', icon: '', label: '价格策略' },
+  { key: 'cron', icon: '', label: 'Canvas Cron' },
+  // Phase A P0 新增 — Tab placeholder (subagent 填充内容)
+  { key: 'thresholds', icon: '', label: '阈值参数' },
+  { key: 'food-safety', icon: '', label: '食品安全' },
+  { key: 'indicators', icon: '', label: '指标中心' },
 ]
 </script>
 
