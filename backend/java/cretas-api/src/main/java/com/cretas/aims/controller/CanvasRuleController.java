@@ -307,7 +307,13 @@ public class CanvasRuleController {
             rule.setEnabled(booleanField(body, "enabled", rule.getEnabled()));
         }
 
-        BusinessRule saved = ruleRepository.save(rule);
+        // P3-2 fix (matrix 2026-05-21 subagent E finding): saveAndFlush forces
+        // Hibernate to issue the UPDATE + increment @Version BEFORE serializeRule
+        // reads saved.getVersion(). Without flush, save() leaves the in-memory entity
+        // at version N until the @Transactional commit later, so the response body
+        // ships a stale version that would trigger a false 409 on the client's next
+        // PUT if it round-tripped the value. Mirror pattern for toggle/delete below.
+        BusinessRule saved = ruleRepository.saveAndFlush(rule);
         log.info("Updated BusinessRule id={} factoryId={} ruleCode={}",
                 saved.getId(), factoryId, saved.getRuleCode());
         return ApiResponse.success("规则更新成功", serializeRule(saved));
@@ -322,7 +328,8 @@ public class CanvasRuleController {
         log.info("POST /canvas-rules/{}/toggle factoryId={}", id, factoryId);
         BusinessRule rule = loadRule(factoryId, id);
         rule.setEnabled(!Boolean.TRUE.equals(rule.getEnabled()));
-        BusinessRule saved = ruleRepository.save(rule);
+        // P3-2 fix: saveAndFlush so serializeRule sees the post-flush version.
+        BusinessRule saved = ruleRepository.saveAndFlush(rule);
         return ApiResponse.success(
                 Boolean.TRUE.equals(saved.getEnabled()) ? "规则已启用" : "规则已禁用",
                 serializeRule(saved));
@@ -370,7 +377,9 @@ public class CanvasRuleController {
 
         try {
             rule.softDelete();
-            BusinessRule saved = ruleRepository.save(rule);
+            // P3-2 fix: saveAndFlush forces version increment before reading the
+            // response data so re-DELETE callers see the up-to-date version.
+            BusinessRule saved = ruleRepository.saveAndFlush(rule);
             Map<String, Object> data = new LinkedHashMap<>();
             data.put("ruleId", saved.getId().toString());
             data.put("ruleCode", saved.getRuleCode());
