@@ -11,10 +11,13 @@ import com.cretas.aims.entity.Supplier;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.SupplierRepository;
+import com.cretas.aims.service.canvas.ThresholdKeys;
+import com.cretas.aims.service.canvas.ThresholdResolverService;
 import com.cretas.aims.service.smartbi.MetricCalculatorService;
 import com.cretas.aims.service.smartbi.ProcurementAnalysisService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -52,24 +55,49 @@ public class ProcurementAnalysisServiceImpl implements ProcurementAnalysisServic
     private final SupplierRepository supplierRepository;
     private final MetricCalculatorService metricCalculatorService;
 
+    /** Canvas-Thresholds resolver (Phase A P0-3) — overlays FALLBACK_* defaults below
+     * with per-factory configured values from {@code factory_thresholds} table. */
+    @Autowired(required = false)
+    private ThresholdResolverService thresholdResolver;
+
     // 计算精度配置
     private static final int SCALE = 4;
     private static final int DISPLAY_SCALE = 2;
     private static final RoundingMode ROUNDING_MODE = RoundingMode.HALF_UP;
 
-    // 预警阈值配置
-    /** 准时交付率红色预警阈值 */
-    private static final BigDecimal ON_TIME_RED_THRESHOLD = new BigDecimal("70");
-    /** 准时交付率黄色预警阈值 */
-    private static final BigDecimal ON_TIME_YELLOW_THRESHOLD = new BigDecimal("85");
-    /** 质量合格率红色预警阈值 */
-    private static final BigDecimal QUALITY_RED_THRESHOLD = new BigDecimal("90");
-    /** 质量合格率黄色预警阈值 */
-    private static final BigDecimal QUALITY_YELLOW_THRESHOLD = new BigDecimal("95");
-    /** 供应商集中度红色预警阈值（单一供应商占比超过60%） */
-    private static final BigDecimal CONCENTRATION_RED_THRESHOLD = new BigDecimal("60");
-    /** 供应商集中度黄色预警阈值 */
-    private static final BigDecimal CONCENTRATION_YELLOW_THRESHOLD = new BigDecimal("40");
+    // ==================== 预警阈值 fallback 默认值 ====================
+    // 通过 thresholdResolver.getBigDecimal(factoryId, KEY, FALLBACK) 读取，仅 DB row 不存在时使用 fallback.
+
+    /** 质量合格率红色预警 fallback 默认值 */
+    private static final BigDecimal FALLBACK_QUALITY_RED_THRESHOLD = new BigDecimal("90");
+    /** 质量合格率黄色预警 fallback 默认值 */
+    private static final BigDecimal FALLBACK_QUALITY_YELLOW_THRESHOLD = new BigDecimal("95");
+    /** 供应商集中度红色预警 fallback 默认值（单一供应商占比超过60%） */
+    private static final BigDecimal FALLBACK_CONCENTRATION_RED_THRESHOLD = new BigDecimal("60");
+    /** 供应商集中度黄色预警 fallback 默认值 */
+    private static final BigDecimal FALLBACK_CONCENTRATION_YELLOW_THRESHOLD = new BigDecimal("40");
+
+    // ==================== Threshold resolver shortcuts ====================
+
+    private BigDecimal resolveQualityRedThreshold(String factoryId) {
+        if (thresholdResolver == null) return FALLBACK_QUALITY_RED_THRESHOLD;
+        return thresholdResolver.getBigDecimal(factoryId, ThresholdKeys.PROCUREMENT_QUALITY_RED, FALLBACK_QUALITY_RED_THRESHOLD);
+    }
+
+    private BigDecimal resolveQualityYellowThreshold(String factoryId) {
+        if (thresholdResolver == null) return FALLBACK_QUALITY_YELLOW_THRESHOLD;
+        return thresholdResolver.getBigDecimal(factoryId, ThresholdKeys.PROCUREMENT_QUALITY_YELLOW, FALLBACK_QUALITY_YELLOW_THRESHOLD);
+    }
+
+    private BigDecimal resolveConcentrationRedThreshold(String factoryId) {
+        if (thresholdResolver == null) return FALLBACK_CONCENTRATION_RED_THRESHOLD;
+        return thresholdResolver.getBigDecimal(factoryId, ThresholdKeys.PROCUREMENT_CONCENTRATION_RED, FALLBACK_CONCENTRATION_RED_THRESHOLD);
+    }
+
+    private BigDecimal resolveConcentrationYellowThreshold(String factoryId) {
+        if (thresholdResolver == null) return FALLBACK_CONCENTRATION_YELLOW_THRESHOLD;
+        return thresholdResolver.getBigDecimal(factoryId, ThresholdKeys.PROCUREMENT_CONCENTRATION_YELLOW, FALLBACK_CONCENTRATION_YELLOW_THRESHOLD);
+    }
 
     // ==================== 采购概览 ====================
 
@@ -101,12 +129,12 @@ public class ProcurementAnalysisServiceImpl implements ProcurementAnalysisServic
         }
 
         // 生成排名
-        List<RankingItem> supplierRankings = calculateSupplierRankingFromData(batches);
+        List<RankingItem> supplierRankings = calculateSupplierRankingFromData(factoryId, batches);
         Map<String, List<RankingItem>> rankings = new LinkedHashMap<>();
         rankings.put("supplier", supplierRankings);
 
         // 生成 AI 洞察
-        List<AIInsight> aiInsights = generateAiInsights(batches, metricResults);
+        List<AIInsight> aiInsights = generateAiInsights(factoryId, batches, metricResults);
 
         // 生成建议
         List<String> suggestions = generateSuggestions(batches, metricResults);
@@ -176,7 +204,7 @@ public class ProcurementAnalysisServiceImpl implements ProcurementAnalysisServic
 
         // 供应商集中度
         BigDecimal concentration = calculateSupplierConcentration(batches);
-        String concentrationAlert = determineConcentrationAlertLevel(concentration);
+        String concentrationAlert = determineConcentrationAlertLevel(factoryId, concentration);
         kpiCards.add(MetricResult.builder()
                 .metricCode(SUPPLIER_CONCENTRATION)
                 .metricName("供应商集中度")
@@ -287,7 +315,7 @@ public class ProcurementAnalysisServiceImpl implements ProcurementAnalysisServic
     /**
      * 从数据构建供应商排名
      */
-    private List<RankingItem> calculateSupplierRankingFromData(List<MaterialBatch> batches) {
+    private List<RankingItem> calculateSupplierRankingFromData(String factoryId, List<MaterialBatch> batches) {
         Map<String, BigDecimal> supplierValues = batches.stream()
                 .filter(b -> b.getSupplierId() != null)
                 .collect(Collectors.groupingBy(
@@ -337,7 +365,7 @@ public class ProcurementAnalysisServiceImpl implements ProcurementAnalysisServic
                     .value(value.setScale(DISPLAY_SCALE, ROUNDING_MODE))
                     .target(new BigDecimal(batchCount))
                     .completionRate(percentage.setScale(DISPLAY_SCALE, ROUNDING_MODE))
-                    .alertLevel(determineQualityAlertLevel(qualityRate).name())
+                    .alertLevel(determineQualityAlertLevel(factoryId, qualityRate).name())
                     .build());
         }
 
@@ -517,7 +545,7 @@ public class ProcurementAnalysisServiceImpl implements ProcurementAnalysisServic
     /**
      * 生成 AI 洞察
      */
-    private List<AIInsight> generateAiInsights(List<MaterialBatch> batches, List<MetricResult> kpiCards) {
+    private List<AIInsight> generateAiInsights(String factoryId, List<MaterialBatch> batches, List<MetricResult> kpiCards) {
         List<AIInsight> insights = new ArrayList<>();
 
         // 检查供应商集中度
@@ -528,7 +556,7 @@ public class ProcurementAnalysisServiceImpl implements ProcurementAnalysisServic
 
         if (concentrationMetric != null && concentrationMetric.getValue() != null) {
             BigDecimal concentration = concentrationMetric.getValue();
-            if (concentration.compareTo(CONCENTRATION_RED_THRESHOLD) > 0) {
+            if (concentration.compareTo(resolveConcentrationRedThreshold(factoryId)) > 0) {
                 insights.add(AIInsight.builder()
                         .level("RED")
                         .category("供应商风险")
@@ -536,7 +564,7 @@ public class ProcurementAnalysisServiceImpl implements ProcurementAnalysisServic
                                 concentration.doubleValue()))
                         .actionSuggestion("建议开发备选供应商，分散采购风险")
                         .build());
-            } else if (concentration.compareTo(CONCENTRATION_YELLOW_THRESHOLD) > 0) {
+            } else if (concentration.compareTo(resolveConcentrationYellowThreshold(factoryId)) > 0) {
                 insights.add(AIInsight.builder()
                         .level("YELLOW")
                         .category("供应商风险")
@@ -686,11 +714,11 @@ public class ProcurementAnalysisServiceImpl implements ProcurementAnalysisServic
     /**
      * 确定质量合格率预警级别
      */
-    private MetricResult.AlertLevel determineQualityAlertLevel(BigDecimal qualityRate) {
-        if (qualityRate.compareTo(QUALITY_RED_THRESHOLD) < 0) {
+    private MetricResult.AlertLevel determineQualityAlertLevel(String factoryId, BigDecimal qualityRate) {
+        if (qualityRate.compareTo(resolveQualityRedThreshold(factoryId)) < 0) {
             return MetricResult.AlertLevel.RED;
         }
-        if (qualityRate.compareTo(QUALITY_YELLOW_THRESHOLD) < 0) {
+        if (qualityRate.compareTo(resolveQualityYellowThreshold(factoryId)) < 0) {
             return MetricResult.AlertLevel.YELLOW;
         }
         return MetricResult.AlertLevel.GREEN;
@@ -699,11 +727,11 @@ public class ProcurementAnalysisServiceImpl implements ProcurementAnalysisServic
     /**
      * 确定供应商集中度预警级别
      */
-    private String determineConcentrationAlertLevel(BigDecimal concentration) {
-        if (concentration.compareTo(CONCENTRATION_RED_THRESHOLD) > 0) {
+    private String determineConcentrationAlertLevel(String factoryId, BigDecimal concentration) {
+        if (concentration.compareTo(resolveConcentrationRedThreshold(factoryId)) > 0) {
             return MetricResult.AlertLevel.RED.name();
         }
-        if (concentration.compareTo(CONCENTRATION_YELLOW_THRESHOLD) > 0) {
+        if (concentration.compareTo(resolveConcentrationYellowThreshold(factoryId)) > 0) {
             return MetricResult.AlertLevel.YELLOW.name();
         }
         return MetricResult.AlertLevel.GREEN.name();

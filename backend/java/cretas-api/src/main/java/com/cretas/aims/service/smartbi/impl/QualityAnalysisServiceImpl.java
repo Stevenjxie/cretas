@@ -6,9 +6,12 @@ import com.cretas.aims.dto.smartbi.DashboardResponse;
 import com.cretas.aims.dto.smartbi.KPICard;
 import com.cretas.aims.dto.smartbi.MetricResult;
 import com.cretas.aims.dto.smartbi.RankingItem;
+import com.cretas.aims.service.canvas.ThresholdKeys;
+import com.cretas.aims.service.canvas.ThresholdResolverService;
 import com.cretas.aims.service.smartbi.QualityAnalysisService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -49,26 +52,78 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class QualityAnalysisServiceImpl implements QualityAnalysisService {
 
+    /** Canvas-Thresholds resolver (Phase A P0-3) — overlays FALLBACK_* defaults below
+     * with per-factory configured values from {@code factory_thresholds} table. */
+    @Autowired(required = false)
+    private ThresholdResolverService thresholdResolver;
+
     // 计算精度配置
     private static final int SCALE = 4;
     private static final int DISPLAY_SCALE = 2;
     private static final RoundingMode ROUNDING_MODE = RoundingMode.HALF_UP;
 
-    // FPY 预警阈值配置
-    private static final BigDecimal FPY_RED_THRESHOLD = new BigDecimal("95");
-    private static final BigDecimal FPY_YELLOW_THRESHOLD = new BigDecimal("98");
+    // ==================== 预警阈值 fallback 默认值 ====================
+    // 通过 thresholdResolver.getBigDecimal(factoryId, KEY, FALLBACK) 读取，仅 DB row 不存在时使用 fallback.
 
-    // 不良率预警阈值
-    private static final BigDecimal DEFECT_RATE_RED_THRESHOLD = new BigDecimal("5");
-    private static final BigDecimal DEFECT_RATE_YELLOW_THRESHOLD = new BigDecimal("2");
+    // FPY 预警阈值 fallback
+    private static final BigDecimal FALLBACK_FPY_RED_THRESHOLD = new BigDecimal("95");
+    private static final BigDecimal FALLBACK_FPY_YELLOW_THRESHOLD = new BigDecimal("98");
 
-    // 质量成本率预警阈值
-    private static final BigDecimal QUALITY_COST_RED_THRESHOLD = new BigDecimal("3");
-    private static final BigDecimal QUALITY_COST_YELLOW_THRESHOLD = new BigDecimal("1.5");
+    // 不良率预警阈值 fallback
+    private static final BigDecimal FALLBACK_DEFECT_RATE_RED_THRESHOLD = new BigDecimal("5");
+    private static final BigDecimal FALLBACK_DEFECT_RATE_YELLOW_THRESHOLD = new BigDecimal("2");
 
-    // 返工率预警阈值
-    private static final BigDecimal REWORK_RATE_RED_THRESHOLD = new BigDecimal("20");
-    private static final BigDecimal REWORK_RATE_YELLOW_THRESHOLD = new BigDecimal("10");
+    // 质量成本率预警阈值 fallback
+    private static final BigDecimal FALLBACK_QUALITY_COST_RED_THRESHOLD = new BigDecimal("3");
+    private static final BigDecimal FALLBACK_QUALITY_COST_YELLOW_THRESHOLD = new BigDecimal("1.5");
+
+    // 返工率预警阈值 fallback
+    private static final BigDecimal FALLBACK_REWORK_RATE_RED_THRESHOLD = new BigDecimal("20");
+    private static final BigDecimal FALLBACK_REWORK_RATE_YELLOW_THRESHOLD = new BigDecimal("10");
+
+    // ==================== Threshold resolver shortcuts ====================
+
+    private BigDecimal resolveFpyRedThreshold(String factoryId) {
+        if (thresholdResolver == null) return FALLBACK_FPY_RED_THRESHOLD;
+        return thresholdResolver.getBigDecimal(factoryId, ThresholdKeys.QUALITY_FPY_RED, FALLBACK_FPY_RED_THRESHOLD);
+    }
+
+    private BigDecimal resolveFpyYellowThreshold(String factoryId) {
+        if (thresholdResolver == null) return FALLBACK_FPY_YELLOW_THRESHOLD;
+        return thresholdResolver.getBigDecimal(factoryId, ThresholdKeys.QUALITY_FPY_YELLOW, FALLBACK_FPY_YELLOW_THRESHOLD);
+    }
+
+    private BigDecimal resolveDefectRateRedThreshold(String factoryId) {
+        if (thresholdResolver == null) return FALLBACK_DEFECT_RATE_RED_THRESHOLD;
+        return thresholdResolver.getBigDecimal(factoryId, ThresholdKeys.QUALITY_DEFECT_RATE_RED, FALLBACK_DEFECT_RATE_RED_THRESHOLD);
+    }
+
+    private BigDecimal resolveDefectRateYellowThreshold(String factoryId) {
+        if (thresholdResolver == null) return FALLBACK_DEFECT_RATE_YELLOW_THRESHOLD;
+        return thresholdResolver.getBigDecimal(factoryId, ThresholdKeys.QUALITY_DEFECT_RATE_YELLOW, FALLBACK_DEFECT_RATE_YELLOW_THRESHOLD);
+    }
+
+    @SuppressWarnings("unused")  // wired for Canvas Thresholds Hub (Phase A); future quality-cost insight path will consume
+    private BigDecimal resolveQualityCostRedThreshold(String factoryId) {
+        if (thresholdResolver == null) return FALLBACK_QUALITY_COST_RED_THRESHOLD;
+        return thresholdResolver.getBigDecimal(factoryId, ThresholdKeys.QUALITY_COST_RED, FALLBACK_QUALITY_COST_RED_THRESHOLD);
+    }
+
+    @SuppressWarnings("unused")  // wired for Canvas Thresholds Hub (Phase A); future quality-cost insight path will consume
+    private BigDecimal resolveQualityCostYellowThreshold(String factoryId) {
+        if (thresholdResolver == null) return FALLBACK_QUALITY_COST_YELLOW_THRESHOLD;
+        return thresholdResolver.getBigDecimal(factoryId, ThresholdKeys.QUALITY_COST_YELLOW, FALLBACK_QUALITY_COST_YELLOW_THRESHOLD);
+    }
+
+    private BigDecimal resolveReworkRateRedThreshold(String factoryId) {
+        if (thresholdResolver == null) return FALLBACK_REWORK_RATE_RED_THRESHOLD;
+        return thresholdResolver.getBigDecimal(factoryId, ThresholdKeys.QUALITY_REWORK_RATE_RED, FALLBACK_REWORK_RATE_RED_THRESHOLD);
+    }
+
+    private BigDecimal resolveReworkRateYellowThreshold(String factoryId) {
+        if (thresholdResolver == null) return FALLBACK_REWORK_RATE_YELLOW_THRESHOLD;
+        return thresholdResolver.getBigDecimal(factoryId, ThresholdKeys.QUALITY_REWORK_RATE_YELLOW, FALLBACK_REWORK_RATE_YELLOW_THRESHOLD);
+    }
 
     // ==================== 质量概览 ====================
 
@@ -99,13 +154,13 @@ public class QualityAnalysisServiceImpl implements QualityAnalysisService {
         // 生成排名
         Map<String, List<RankingItem>> rankings = new LinkedHashMap<>();
         rankings.put("defect_type", calculateDefectTypeRankingFromData(qualityData));
-        rankings.put("product_line", calculateProductLineQualityRankingFromData(qualityData));
+        rankings.put("product_line", calculateProductLineQualityRankingFromData(factoryId, qualityData));
 
         // 生成 AI 洞察
-        List<AIInsight> aiInsights = generateQualityInsights(qualityData, metricResults);
+        List<AIInsight> aiInsights = generateQualityInsights(factoryId, qualityData, metricResults);
 
         // 生成建议
-        List<String> suggestions = generateQualitySuggestions(qualityData, metricResults);
+        List<String> suggestions = generateQualitySuggestions(factoryId, qualityData, metricResults);
 
         return DashboardResponse.builder()
                 .period("CUSTOM")
@@ -159,7 +214,7 @@ public class QualityAnalysisServiceImpl implements QualityAnalysisService {
                 .value(defectRate.setScale(DISPLAY_SCALE, ROUNDING_MODE))
                 .formattedValue(String.format("%.2f%%", defectRate.doubleValue()))
                 .unit("%")
-                .alertLevel(determineDefectRateAlertLevel(defectRate))
+                .alertLevel(determineDefectRateAlertLevel(factoryId, defectRate))
                 .build());
 
         // 按不良类型统计
@@ -282,7 +337,7 @@ public class QualityAnalysisServiceImpl implements QualityAnalysisService {
                 .value(reworkRate.setScale(DISPLAY_SCALE, ROUNDING_MODE))
                 .formattedValue(String.format("%.1f%%", reworkRate.doubleValue()))
                 .unit("%")
-                .alertLevel(determineReworkRateAlertLevel(reworkRate))
+                .alertLevel(determineReworkRateAlertLevel(factoryId, reworkRate))
                 .description("返工数 / 不良总数")
                 .build());
 
@@ -430,7 +485,7 @@ public class QualityAnalysisServiceImpl implements QualityAnalysisService {
                 .value(fpy.setScale(DISPLAY_SCALE, ROUNDING_MODE))
                 .formattedValue(String.format("%.2f%%", fpy.doubleValue()))
                 .unit("%")
-                .alertLevel(determineFPYAlertLevel(fpy))
+                .alertLevel(determineFPYAlertLevel(factoryId, fpy))
                 .description("首次检验通过数 / 总检验数")
                 .build());
 
@@ -449,7 +504,7 @@ public class QualityAnalysisServiceImpl implements QualityAnalysisService {
                 .value(defectRate.setScale(DISPLAY_SCALE, ROUNDING_MODE))
                 .formattedValue(String.format("%.2f%%", defectRate.doubleValue()))
                 .unit("%")
-                .alertLevel(determineDefectRateAlertLevel(defectRate))
+                .alertLevel(determineDefectRateAlertLevel(factoryId, defectRate))
                 .description("不良品数 / 总检验数")
                 .build());
 
@@ -600,11 +655,12 @@ public class QualityAnalysisServiceImpl implements QualityAnalysisService {
     /**
      * 计算产线质量排名
      */
-    private List<RankingItem> calculateProductLineQualityRankingFromData(List<Map<String, Object>> qualityData) {
+    private List<RankingItem> calculateProductLineQualityRankingFromData(String factoryId, List<Map<String, Object>> qualityData) {
         Map<String, List<Map<String, Object>>> groupedByLine = qualityData.stream()
                 .collect(Collectors.groupingBy(d -> (String) d.get("productionLine")));
 
         List<RankingItem> rankings = new ArrayList<>();
+        BigDecimal fpyYellow = resolveFpyYellowThreshold(factoryId);
 
         for (Map.Entry<String, List<Map<String, Object>>> entry : groupedByLine.entrySet()) {
             String lineName = entry.getKey();
@@ -625,10 +681,10 @@ public class QualityAnalysisServiceImpl implements QualityAnalysisService {
             rankings.add(RankingItem.builder()
                     .name(lineName)
                     .value(fpy.setScale(DISPLAY_SCALE, ROUNDING_MODE))
-                    .target(FPY_YELLOW_THRESHOLD)
-                    .completionRate(fpy.divide(FPY_YELLOW_THRESHOLD, SCALE, ROUNDING_MODE)
+                    .target(fpyYellow)
+                    .completionRate(fpy.divide(fpyYellow, SCALE, ROUNDING_MODE)
                             .multiply(new BigDecimal("100")).setScale(DISPLAY_SCALE, ROUNDING_MODE))
-                    .alertLevel(determineFPYAlertLevel(fpy))
+                    .alertLevel(determineFPYAlertLevel(factoryId, fpy))
                     .build());
         }
 
@@ -854,7 +910,8 @@ public class QualityAnalysisServiceImpl implements QualityAnalysisService {
     /**
      * 生成质量洞察
      */
-    private List<AIInsight> generateQualityInsights(List<Map<String, Object>> qualityData,
+    private List<AIInsight> generateQualityInsights(String factoryId,
+                                                     List<Map<String, Object>> qualityData,
                                                      List<MetricResult> kpiCards) {
         List<AIInsight> insights = new ArrayList<>();
 
@@ -866,14 +923,14 @@ public class QualityAnalysisServiceImpl implements QualityAnalysisService {
 
         if (fpyMetric != null && fpyMetric.getValue() != null) {
             BigDecimal fpy = fpyMetric.getValue();
-            if (fpy.compareTo(FPY_RED_THRESHOLD) < 0) {
+            if (fpy.compareTo(resolveFpyRedThreshold(factoryId)) < 0) {
                 insights.add(AIInsight.builder()
                         .level("RED")
                         .category("FPY")
                         .message(String.format("首次通过率仅为 %.2f%%，低于目标 95%%", fpy.doubleValue()))
                         .actionSuggestion("建议立即分析主要不良类型，进行根本原因分析 (RCA)")
                         .build());
-            } else if (fpy.compareTo(FPY_YELLOW_THRESHOLD) < 0) {
+            } else if (fpy.compareTo(resolveFpyYellowThreshold(factoryId)) < 0) {
                 insights.add(AIInsight.builder()
                         .level("YELLOW")
                         .category("FPY")
@@ -942,7 +999,8 @@ public class QualityAnalysisServiceImpl implements QualityAnalysisService {
     /**
      * 生成质量建议
      */
-    private List<String> generateQualitySuggestions(List<Map<String, Object>> qualityData,
+    private List<String> generateQualitySuggestions(String factoryId,
+                                                     List<Map<String, Object>> qualityData,
                                                      List<MetricResult> kpiCards) {
         List<String> suggestions = new ArrayList<>();
 
@@ -977,13 +1035,13 @@ public class QualityAnalysisServiceImpl implements QualityAnalysisService {
                     .divide(new BigDecimal(defectCount), SCALE, ROUNDING_MODE)
                     .multiply(new BigDecimal("100"));
 
-            if (reworkRate.compareTo(REWORK_RATE_YELLOW_THRESHOLD) > 0) {
+            if (reworkRate.compareTo(resolveReworkRateYellowThreshold(factoryId)) > 0) {
                 suggestions.add("返工率较高，建议评估返工工艺，考虑是否可通过工艺改进降低返工率");
             }
         }
 
         // 基于产线差异建议
-        List<RankingItem> lineRankings = calculateProductLineQualityRankingFromData(qualityData);
+        List<RankingItem> lineRankings = calculateProductLineQualityRankingFromData(factoryId, qualityData);
         if (lineRankings.size() >= 2) {
             RankingItem best = lineRankings.get(0);
             RankingItem worst = lineRankings.get(lineRankings.size() - 1);
@@ -1029,31 +1087,31 @@ public class QualityAnalysisServiceImpl implements QualityAnalysisService {
 
     // ==================== 工具方法 ====================
 
-    private String determineFPYAlertLevel(BigDecimal fpy) {
-        if (fpy.compareTo(FPY_RED_THRESHOLD) < 0) {
+    private String determineFPYAlertLevel(String factoryId, BigDecimal fpy) {
+        if (fpy.compareTo(resolveFpyRedThreshold(factoryId)) < 0) {
             return MetricResult.AlertLevel.RED.name();
         }
-        if (fpy.compareTo(FPY_YELLOW_THRESHOLD) < 0) {
+        if (fpy.compareTo(resolveFpyYellowThreshold(factoryId)) < 0) {
             return MetricResult.AlertLevel.YELLOW.name();
         }
         return MetricResult.AlertLevel.GREEN.name();
     }
 
-    private String determineDefectRateAlertLevel(BigDecimal defectRate) {
-        if (defectRate.compareTo(DEFECT_RATE_RED_THRESHOLD) > 0) {
+    private String determineDefectRateAlertLevel(String factoryId, BigDecimal defectRate) {
+        if (defectRate.compareTo(resolveDefectRateRedThreshold(factoryId)) > 0) {
             return MetricResult.AlertLevel.RED.name();
         }
-        if (defectRate.compareTo(DEFECT_RATE_YELLOW_THRESHOLD) > 0) {
+        if (defectRate.compareTo(resolveDefectRateYellowThreshold(factoryId)) > 0) {
             return MetricResult.AlertLevel.YELLOW.name();
         }
         return MetricResult.AlertLevel.GREEN.name();
     }
 
-    private String determineReworkRateAlertLevel(BigDecimal reworkRate) {
-        if (reworkRate.compareTo(REWORK_RATE_RED_THRESHOLD) > 0) {
+    private String determineReworkRateAlertLevel(String factoryId, BigDecimal reworkRate) {
+        if (reworkRate.compareTo(resolveReworkRateRedThreshold(factoryId)) > 0) {
             return MetricResult.AlertLevel.RED.name();
         }
-        if (reworkRate.compareTo(REWORK_RATE_YELLOW_THRESHOLD) > 0) {
+        if (reworkRate.compareTo(resolveReworkRateYellowThreshold(factoryId)) > 0) {
             return MetricResult.AlertLevel.YELLOW.name();
         }
         return MetricResult.AlertLevel.GREEN.name();
