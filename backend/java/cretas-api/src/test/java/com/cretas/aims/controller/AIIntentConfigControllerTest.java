@@ -1,10 +1,13 @@
 package com.cretas.aims.controller;
 
 import com.cretas.aims.annotation.RequirePermission;
+import jakarta.servlet.http.HttpServletRequest;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.web.bind.annotation.RequestHeader;
 
 import java.lang.reflect.Method;
+import java.lang.reflect.Parameter;
 import java.util.Arrays;
 import java.util.List;
 import java.util.stream.Collectors;
@@ -150,5 +153,101 @@ class AIIntentConfigControllerTest {
     /** Helper: check if an annotation's value array contains "system:read_write". */
     private boolean containsSystemReadWrite(String[] perms) {
         return Stream.of(perms).anyMatch("system:read_write"::equals);
+    }
+
+    // ====================================================================
+    // Sprint 11.5 P0 fix (2026-05-23) — Cookie-auth 500 bug verification.
+    // ====================================================================
+    //
+    // Q7/Q8 Playwright subagent (PR #226 audit) found:
+    //   Bearer curl → HTTP 200 + JSON business data
+    //   Cookie HttpOnly UI → HTTP 500 "系统处理异常 (追踪码: XXX)"
+    //
+    // Root cause (confirmed via prod log trace [C62DA8C6]):
+    //   org.springframework.web.bind.MissingRequestHeaderException:
+    //   Required request header 'Authorization' for method parameter type String is not present
+    //
+    // All 9 AI intent execution endpoints used @RequestHeader("Authorization")
+    // which is mandatory by Spring default. Web admin sends cookie-only requests
+    // (no Authorization header) → Spring throws MissingRequestHeaderException
+    // BEFORE the controller method runs → falls to GlobalExceptionHandler's
+    // generic RuntimeException handler → HTTP 500 with sanitized trace code.
+    //
+    // Fix: use HttpServletRequest + cookie-aware extractToken() helper that
+    // mirrors JwtAuthInterceptor.extractToken (Bearer-first, cookie-fallback).
+    //
+    // These tests verify the contract structurally via reflection — the methods
+    // must NOT have @RequestHeader("Authorization") and MUST take HttpServletRequest.
+
+    /** Methods that MUST use HttpServletRequest (not @RequestHeader Authorization)
+     *  to support both Bearer (mobile) and cookie (web admin) auth paths. */
+    private static final List<String> COOKIE_AWARE_METHODS = List.of(
+            "executeIntent",
+            "executeMultiIntent",
+            "executeIntentStream",
+            "previewIntent",
+            "confirmIntent",
+            "confirmParameters",
+            "rollbackIntent",
+            "rollbackAllIntents",
+            "submitIntentFeedback"
+    );
+
+    @Test
+    @DisplayName("Sprint 11.5 P0 fix: executeIntent MUST NOT use @RequestHeader(\"Authorization\")")
+    void executeIntent_must_not_use_request_header_authorization() {
+        Method m = findMethod("executeIntent");
+        assertNotNull(m, "executeIntent method exists");
+        for (Parameter p : m.getParameters()) {
+            RequestHeader rh = p.getAnnotation(RequestHeader.class);
+            if (rh != null && "Authorization".equalsIgnoreCase(rh.value())) {
+                fail("executeIntent still has @RequestHeader(\"Authorization\")! "
+                        + "Web admin cookie-only requests hit MissingRequestHeaderException → HTTP 500. "
+                        + "Use HttpServletRequest + extractToken() helper instead. "
+                        + "See Sprint 11.5 P0 root cause: prod log trace [C62DA8C6] "
+                        + "MissingRequestHeaderException at GlobalExceptionHandler.handleRuntimeException.");
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("Sprint 11.5 P0 sweep: all 9 AI execution methods MUST take HttpServletRequest")
+    void all_cookie_aware_methods_must_take_http_servlet_request() {
+        List<String> stillUsingHeader = COOKIE_AWARE_METHODS.stream()
+                .filter(name -> {
+                    Method m = findMethod(name);
+                    if (m == null) return false;
+                    // Must NOT have @RequestHeader("Authorization") AND must have HttpServletRequest param
+                    boolean hasAuthHeader = Arrays.stream(m.getParameters())
+                            .map(p -> p.getAnnotation(RequestHeader.class))
+                            .anyMatch(rh -> rh != null && "Authorization".equalsIgnoreCase(rh.value()));
+                    boolean hasHttpRequest = Arrays.stream(m.getParameterTypes())
+                            .anyMatch(HttpServletRequest.class::isAssignableFrom);
+                    return hasAuthHeader || !hasHttpRequest;
+                })
+                .collect(Collectors.toList());
+
+        if (!stillUsingHeader.isEmpty()) {
+            fail("Sprint 11.5 P0 REGRESSION: the following methods either still have "
+                    + "@RequestHeader(\"Authorization\") OR do not take HttpServletRequest: "
+                    + stillUsingHeader
+                    + ". Web admin cookie-only requests will fail with HTTP 500 "
+                    + "(MissingRequestHeaderException → generic 500 trace). Fix: replace "
+                    + "@RequestHeader(\"Authorization\") String authorization with "
+                    + "HttpServletRequest httpRequest, then call extractToken(httpRequest).");
+        }
+    }
+
+    @Test
+    @DisplayName("Sprint 11.5 P0: extractToken helper method exists on controller")
+    void extract_token_helper_exists() {
+        Method m = Arrays.stream(AIIntentConfigController.class.getDeclaredMethods())
+                .filter(method -> method.getName().equals("extractToken"))
+                .findFirst()
+                .orElse(null);
+        assertNotNull(m, "extractToken(HttpServletRequest) helper must exist for cookie-aware auth");
+        assertTrue(Arrays.stream(m.getParameterTypes())
+                        .anyMatch(HttpServletRequest.class::isAssignableFrom),
+                "extractToken must take HttpServletRequest parameter");
     }
 }
