@@ -31,7 +31,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -55,6 +55,17 @@ _running_jobs: Dict[str, Dict[str, Any]] = {}
 
 class TriggerRequest(BaseModel):
     factoryId: str
+
+
+class FinanceEtlTriggerRequest(BaseModel):
+    """Sprint 11.5 Phase D — finance ETL trigger payload.
+
+    Both startDate / endDate optional — defaults to last 90 days when omitted
+    (per restaurant_finance_etl.DEFAULT_BACKFILL_DAYS).
+    """
+    factoryId: str
+    startDate: Optional[date] = None
+    endDate: Optional[date] = None
 
 
 # ---------------------------------------------------------------------------
@@ -108,6 +119,76 @@ async def _run_job(job_id: str, factory_id: str) -> None:
         _running_jobs[job_id]["status"] = "error"
         _running_jobs[job_id]["error"] = str(exc)
         logger.warning(f"[etl-admin] job {job_id} factory={factory_id} failed: {exc}")
+    finally:
+        _running_jobs[job_id]["finished_at"] = datetime.now(timezone.utc).isoformat()
+
+
+async def _enqueue_finance_job(
+    job_id: str,
+    factory_id: str,
+    start_date: Optional[date],
+    end_date: Optional[date],
+) -> None:
+    """Spawn the finance ETL background task (Sprint 11.5 Phase D)."""
+    task = asyncio.create_task(
+        _run_finance_job(job_id, factory_id, start_date, end_date)
+    )
+    if job_id in _running_jobs:
+        _running_jobs[job_id]["_task"] = task
+
+
+async def _run_finance_job(
+    job_id: str,
+    factory_id: str,
+    start_date: Optional[date],
+    end_date: Optional[date],
+) -> None:
+    """Execute run_full_finance_etl_with_retry in the background.
+
+    Sprint 11.5 Phase D — populates smart_bi_finance_data REVENUE + COST
+    rows from POS / wastage / recipe-COGS sources.
+    """
+    _running_jobs[job_id]["status"] = "running"
+    _running_jobs[job_id]["started_at"] = datetime.now(timezone.utc).isoformat()
+
+    try:
+        from smartbi.config import get_pg_pool, get_cretas_pool
+        from smartbi.gold.restaurant_finance_etl import (
+            run_full_finance_etl_with_retry,
+        )
+
+        smartbi_pool = await get_pg_pool()
+        if smartbi_pool is None:
+            raise RuntimeError("SmartBI pool unavailable — check POSTGRES_URL setting")
+
+        cretas_pool = await get_cretas_pool()
+        if cretas_pool is None:
+            raise RuntimeError(
+                "Cretas pool unavailable — check FOOD_KB_DB_URL setting"
+            )
+
+        stats = await run_full_finance_etl_with_retry(
+            cretas_pool, smartbi_pool, factory_id, start_date, end_date,
+        )
+
+        _running_jobs[job_id]["status"] = "success"
+        _running_jobs[job_id]["stats"] = {
+            "revenueUpserted": stats.revenue_upserted,
+            "costWastageUpserted": stats.cost_wastage_upserted,
+            "costPosRecipeUpserted": stats.cost_pos_recipe_upserted,
+            "posDishResolved": stats.pos_dish_resolved,
+            "posDishUnresolved": stats.pos_dish_unresolved,
+            "errors": stats.errors,
+        }
+        logger.info(
+            f"[finance-etl-admin] job {job_id} factory={factory_id} completed: {stats}"
+        )
+    except Exception as exc:
+        _running_jobs[job_id]["status"] = "error"
+        _running_jobs[job_id]["error"] = str(exc)
+        logger.warning(
+            f"[finance-etl-admin] job {job_id} factory={factory_id} failed: {exc}"
+        )
     finally:
         _running_jobs[job_id]["finished_at"] = datetime.now(timezone.utc).isoformat()
 
@@ -371,3 +452,66 @@ async def all_status_etl(request: Request):
         factories = []
 
     return {"factories": factories}
+
+
+# ---------------------------------------------------------------------------
+# Sprint 11.5 Phase D — finance ETL trigger
+# ---------------------------------------------------------------------------
+
+@router.post("/finance-etl/trigger")
+async def trigger_finance_etl(request: Request, body: FinanceEtlTriggerRequest):
+    """Trigger finance ETL pipeline — populate smart_bi_finance_data.
+
+    Sprint 11.5 Phase D — populate REVENUE + COST rows from POS / wastage /
+    POS×recipe COGS sources (per spec
+    docs/superpowers/specs/2026-05-23-sprint11.5-etl-design.md §3.1).
+
+    Defaults to last 90 days when startDate / endDate omitted.
+
+    Requires admin-tier role (factory_super_admin / platform_admin /
+    permission_admin).
+
+    Returns jobId for /status polling.
+    """
+    require_admin(request, action_name="餐饮 Finance ETL 触发")
+
+    factory_id = body.factoryId.strip()
+    if not factory_id:
+        raise HTTPException(status_code=400, detail="factoryId 不能为空")
+
+    if (
+        body.startDate is not None
+        and body.endDate is not None
+        and body.endDate < body.startDate
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail=f"endDate ({body.endDate}) 早于 startDate ({body.startDate})",
+        )
+
+    job_id = str(uuid.uuid4())
+
+    _running_jobs[job_id] = {
+        "factory_id": factory_id,
+        "status": "queued",
+        "started_at": None,
+        "finished_at": None,
+        "error": None,
+        "kind": "finance",
+        "startDate": body.startDate.isoformat() if body.startDate else None,
+        "endDate": body.endDate.isoformat() if body.endDate else None,
+    }
+
+    await _enqueue_finance_job(job_id, factory_id, body.startDate, body.endDate)
+
+    # Estimate ETA: finance ETL is smaller than full ops ETL — ~20-60s
+    eta_seconds = 30
+
+    return {
+        "jobId": job_id,
+        "status": _running_jobs[job_id]["status"],
+        "factoryId": factory_id,
+        "startDate": body.startDate.isoformat() if body.startDate else None,
+        "endDate": body.endDate.isoformat() if body.endDate else None,
+        "etaSeconds": eta_seconds,
+    }
