@@ -42,13 +42,13 @@
           type="textarea"
           :rows="2"
           placeholder="例如: 今天该跟谁? / 哪些商机超过 21 天没推进? / 今日产能"
-          @keydown.enter.ctrl="sendQuery"
+          @keydown.enter.ctrl="sendQuery()"
         />
         <el-button
           type="primary"
           :loading="loading"
           :disabled="!userInput.trim()"
-          @click="sendQuery">
+          @click="sendQuery()">
           发送 (Ctrl+Enter)
         </el-button>
       </div>
@@ -566,13 +566,55 @@ function previewAlertType(preview: { status?: string }): 'warning' | 'info' | 's
   return 'info';
 }
 
-async function callIntentExecute(input: string, intentCode?: string)
-    : Promise<ExecuteResponse> {
+async function callIntentExecute(input: string, intentCode?: string,
+    context?: Record<string, unknown>): Promise<ExecuteResponse> {
   const body: Record<string, unknown> = { userInput: input };
   if (intentCode) body.intentCode = intentCode;
+  // Sprint 11 Q6 Option B (2026-05-24): pass context so backend Tools can disambiguate
+  // period-bounded P&L / loss / cost queries. SalesOwnerWorkdesk is the canonical
+  // entry point for the 12-cell customer-journey audit (PR #235) — without context
+  // backend BERT classifier misroutes ambiguous restaurant-economics phrases.
+  if (context) body.context = context;
   const res = await request.post<ExecuteResponse>(
     `/${factoryId.value}/ai-intents/execute`, body);
   return (res as { data: ExecuteResponse }).data;
+}
+
+/**
+ * Parse month from user input. Returns canonical "YYYY-MM" or undefined.
+ * Mirror logic in WarehouseKeeperWorkdesk.vue (kept inline rather than extracted
+ * to a shared helper to keep this PR diff narrow per Q6 Option B scope).
+ */
+function parseMonthFromInput(input: string): string | undefined {
+  if (!input) return undefined;
+  const isoMatch = input.match(/(\d{4})[-/](\d{1,2})/);
+  if (isoMatch) return `${isoMatch[1]}-${String(isoMatch[2]).padStart(2, '0')}`;
+  const cnYearMatch = input.match(/(\d{4})年(\d{1,2})月/);
+  if (cnYearMatch) return `${cnYearMatch[1]}-${String(cnYearMatch[2]).padStart(2, '0')}`;
+  if (input.includes('本月') || input.includes('这个月') || input.includes('当月')) {
+    const now = new Date();
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  }
+  if (input.includes('上月') || input.includes('上个月') || input.includes('上一个月')) {
+    const now = new Date();
+    const prev = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    return `${prev.getFullYear()}-${String(prev.getMonth() + 1).padStart(2, '0')}`;
+  }
+  const cnMonthMatch = input.match(/(?<![\d年])(\d{1,2})月(?:份)?/);
+  if (cnMonthMatch) {
+    const now = new Date();
+    return `${now.getFullYear()}-${String(cnMonthMatch[1]).padStart(2, '0')}`;
+  }
+  return undefined;
+}
+
+function looksLikeRestaurantEconomicsQuery(input: string): boolean {
+  if (!input) return false;
+  const economicsKeywords = [
+    '损溢', '损益', '亏', '利润', '毛利', '成本',
+    '盈利', '赚', 'P&L', 'p&l', '经营',
+  ];
+  return economicsKeywords.some((k) => input.includes(k));
 }
 
 async function triggerFollowupQuery() {
@@ -590,7 +632,18 @@ async function sendQuery(forceFollowup = false) {
 
   try {
     const intentCode = forceFollowup ? 'DAILY_CUSTOMER_FOLLOWUP' : undefined;
-    const response = await callIntentExecute(userInput.value, intentCode);
+    // Sprint 11 Q6 Option B: attach context.month for restaurant-economics queries
+    // (default "上月" per customer's most common ask).
+    let context: Record<string, unknown> | undefined;
+    if (!forceFollowup && looksLikeRestaurantEconomicsQuery(userInput.value)) {
+      const month = parseMonthFromInput(userInput.value) ?? (() => {
+        const now = new Date();
+        const prev = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+        return `${prev.getFullYear()}-${String(prev.getMonth() + 1).padStart(2, '0')}`;
+      })();
+      context = { month };
+    }
+    const response = await callIntentExecute(userInput.value, intentCode, context);
     formattedText.value = response.formattedText || response.message
         || '(无输出)';
     lastQueryTime.value = new Date().toLocaleTimeString('zh-CN');

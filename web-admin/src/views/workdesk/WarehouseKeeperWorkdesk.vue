@@ -49,13 +49,13 @@
           type="textarea"
           :rows="2"
           placeholder="例如: 今天要收什么货? / 临期物料建议 / 今天哪些要质检?"
-          @keydown.enter.ctrl="sendQuery"
+          @keydown.enter.ctrl="sendQuery()"
         />
         <el-button
           type="primary"
           :loading="loading"
           :disabled="!userInput.trim()"
-          @click="sendQuery">
+          @click="sendQuery()">
           发送 (Ctrl+Enter)
         </el-button>
       </div>
@@ -553,14 +553,87 @@ const selectedRows = ref<ReceivingRow[]>([]);
 const factoryId = computed(() => authStore.factoryId || 'F006');
 
 async function callIntentExecute(input: string, intentCode?: string,
-    parameters?: Record<string, unknown>, preview = false): Promise<ExecuteResponse> {
+    parameters?: Record<string, unknown>, preview = false,
+    context?: Record<string, unknown>): Promise<ExecuteResponse> {
   const body: Record<string, unknown> = { userInput: input };
   if (intentCode) body.intentCode = intentCode;
   if (parameters) body.parameters = parameters;
   if (preview) body.preview = true;
+  // Sprint 11 Q6 Option B (2026-05-24): pass context so backend can disambiguate
+  // period-bounded P&L / loss / cost queries from text-only "哪个菜亏钱" inputs.
+  // Without context, BERT classifier (no role/factoryType signal) tends to misroute
+  // ambiguous restaurant-economics phrases on warehouse-keeper Workdesk →
+  // MATERIAL_TODAY_RECEIVING_QUERY. context.month gives downstream Tool the period
+  // bound it needs to produce real P&L output.
+  if (context) body.context = context;
   const res = await request.post<ExecuteResponse>(
     `/${factoryId.value}/ai-intents/execute`, body);
   return (res as { data: ExecuteResponse }).data;
+}
+
+/**
+ * Parse month from user input. Supports:
+ *   - "2025-12" / "2025/12"  → "2025-12"
+ *   - "2025年12月" / "2025年12月份" → "2025-12"
+ *   - "12月" / "12月份" → current-year + 12 month (e.g. "2026-12")
+ *   - "本月" / "这个月" → current calendar month
+ *   - "上月" / "上个月" → previous calendar month
+ *   - (none of above) → undefined (let backend default)
+ *
+ * Returns canonical "YYYY-MM" string or undefined.
+ */
+function parseMonthFromInput(input: string): string | undefined {
+  if (!input) return undefined;
+  // Explicit YYYY-MM or YYYY/MM
+  const isoMatch = input.match(/(\d{4})[-/](\d{1,2})/);
+  if (isoMatch) {
+    const y = isoMatch[1];
+    const m = String(isoMatch[2]).padStart(2, '0');
+    return `${y}-${m}`;
+  }
+  // YYYY年M月
+  const cnYearMatch = input.match(/(\d{4})年(\d{1,2})月/);
+  if (cnYearMatch) {
+    const y = cnYearMatch[1];
+    const m = String(cnYearMatch[2]).padStart(2, '0');
+    return `${y}-${m}`;
+  }
+  // 本月 / 这个月
+  if (input.includes('本月') || input.includes('这个月') || input.includes('当月')) {
+    const now = new Date();
+    const m = String(now.getMonth() + 1).padStart(2, '0');
+    return `${now.getFullYear()}-${m}`;
+  }
+  // 上月 / 上个月 / 上一个月
+  if (input.includes('上月') || input.includes('上个月') || input.includes('上一个月')) {
+    const now = new Date();
+    const prev = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    const m = String(prev.getMonth() + 1).padStart(2, '0');
+    return `${prev.getFullYear()}-${m}`;
+  }
+  // M月 (current year inferred). Avoid matching incidental digits — require explicit "月".
+  const cnMonthMatch = input.match(/(?<![\d年])(\d{1,2})月(?:份)?/);
+  if (cnMonthMatch) {
+    const now = new Date();
+    const m = String(cnMonthMatch[1]).padStart(2, '0');
+    return `${now.getFullYear()}-${m}`;
+  }
+  return undefined;
+}
+
+/**
+ * Heuristic: is the input asking about period-bounded P&L / cost / loss?
+ * Used to decide whether to attach context.month for the free-text path.
+ * Keep deliberately narrow to avoid sending month context for non-restaurant
+ * questions (e.g. "今天要收什么货?" should NOT carry month context).
+ */
+function looksLikeRestaurantEconomicsQuery(input: string): boolean {
+  if (!input) return false;
+  const economicsKeywords = [
+    '损溢', '损益', '亏', '利润', '毛利', '成本',
+    '盈利', '赚', 'P&L', 'p&l', '经营',
+  ];
+  return economicsKeywords.some((k) => input.includes(k));
 }
 
 async function triggerTodayQuery() {
@@ -582,7 +655,22 @@ async function sendQuery(autoTrigger = false) {
   try {
     // 1. 今日待收 (主路径)
     const intentCode = autoTrigger ? 'MATERIAL_TODAY_RECEIVING_QUERY' : undefined;
-    const response = await callIntentExecute(userInput.value, intentCode);
+    // Sprint 11 Q6 Option B: for free-text (non auto-trigger), if input looks like a
+    // restaurant economics query (损溢/损益/亏/利润/成本/...), attach context.month so
+    // backend Tools have the period bound. Default to "上月" when no explicit period
+    // word is found — matches customer's most common ask "上月损溢" pattern.
+    let context: Record<string, unknown> | undefined;
+    if (!autoTrigger && looksLikeRestaurantEconomicsQuery(userInput.value)) {
+      const month = parseMonthFromInput(userInput.value) ?? (() => {
+        // default 上月
+        const now = new Date();
+        const prev = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+        return `${prev.getFullYear()}-${String(prev.getMonth() + 1).padStart(2, '0')}`;
+      })();
+      context = { month };
+    }
+    const response = await callIntentExecute(userInput.value, intentCode,
+        undefined, false, context);
     formattedText.value = response.formattedText || response.message || '(无输出)';
     lastQueryTime.value = new Date().toLocaleTimeString('zh-CN');
 
