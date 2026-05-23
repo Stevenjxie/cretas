@@ -8,11 +8,14 @@ import com.cretas.aims.dto.smartbi.MetricResult;
 import com.cretas.aims.dto.smartbi.RankingItem;
 import com.cretas.aims.entity.smartbi.SmartBiSalesData;
 import com.cretas.aims.repository.smartbi.SmartBiSalesDataRepository;
+import com.cretas.aims.service.canvas.ThresholdKeys;
+import com.cretas.aims.service.canvas.ThresholdResolverService;
 import com.cretas.aims.service.smartbi.GoldDashboardBuilder;
 import com.cretas.aims.service.smartbi.MetricCalculatorService;
 import com.cretas.aims.service.smartbi.SalesAnalysisService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -60,18 +63,57 @@ public class SalesAnalysisServiceImpl implements SalesAnalysisService {
     @Value("${smartbi.gold.read-primary.enabled:false}")
     private boolean goldReadPrimaryEnabled;
 
+    /** Canvas-Thresholds resolver (Phase A P0-3) — overlays FALLBACK_* defaults below
+     * with per-factory configured values from {@code factory_thresholds} table. */
+    @Autowired(required = false)
+    private ThresholdResolverService thresholdResolver;
+
     // 计算精度配置
     private static final int SCALE = 4;
     private static final int DISPLAY_SCALE = 2;
     private static final RoundingMode ROUNDING_MODE = RoundingMode.HALF_UP;
 
-    // 预警阈值配置
-    private static final BigDecimal TARGET_RED_THRESHOLD = new BigDecimal("60");
-    private static final BigDecimal TARGET_YELLOW_THRESHOLD = new BigDecimal("85");
-    private static final BigDecimal MARGIN_RED_THRESHOLD = new BigDecimal("15");
-    private static final BigDecimal MARGIN_YELLOW_THRESHOLD = new BigDecimal("25");
-    private static final BigDecimal GROWTH_RED_THRESHOLD = new BigDecimal("-20");
-    private static final BigDecimal GROWTH_YELLOW_THRESHOLD = new BigDecimal("-5");
+    // ==================== 预警阈值 fallback 默认值 ====================
+    // 通过 thresholdResolver.getBigDecimal(factoryId, KEY, FALLBACK) 读取，仅 DB row 不存在时使用 fallback.
+
+    private static final BigDecimal FALLBACK_TARGET_RED_THRESHOLD = new BigDecimal("60");
+    private static final BigDecimal FALLBACK_TARGET_YELLOW_THRESHOLD = new BigDecimal("85");
+    private static final BigDecimal FALLBACK_MARGIN_RED_THRESHOLD = new BigDecimal("15");
+    private static final BigDecimal FALLBACK_MARGIN_YELLOW_THRESHOLD = new BigDecimal("25");
+    private static final BigDecimal FALLBACK_GROWTH_RED_THRESHOLD = new BigDecimal("-20");
+    private static final BigDecimal FALLBACK_GROWTH_YELLOW_THRESHOLD = new BigDecimal("-5");
+
+    // ==================== Threshold resolver shortcuts ====================
+
+    private BigDecimal resolveTargetRedThreshold(String factoryId) {
+        if (thresholdResolver == null) return FALLBACK_TARGET_RED_THRESHOLD;
+        return thresholdResolver.getBigDecimal(factoryId, ThresholdKeys.SALES_TARGET_RED, FALLBACK_TARGET_RED_THRESHOLD);
+    }
+
+    private BigDecimal resolveTargetYellowThreshold(String factoryId) {
+        if (thresholdResolver == null) return FALLBACK_TARGET_YELLOW_THRESHOLD;
+        return thresholdResolver.getBigDecimal(factoryId, ThresholdKeys.SALES_TARGET_YELLOW, FALLBACK_TARGET_YELLOW_THRESHOLD);
+    }
+
+    private BigDecimal resolveMarginRedThreshold(String factoryId) {
+        if (thresholdResolver == null) return FALLBACK_MARGIN_RED_THRESHOLD;
+        return thresholdResolver.getBigDecimal(factoryId, ThresholdKeys.SALES_MARGIN_RED, FALLBACK_MARGIN_RED_THRESHOLD);
+    }
+
+    private BigDecimal resolveMarginYellowThreshold(String factoryId) {
+        if (thresholdResolver == null) return FALLBACK_MARGIN_YELLOW_THRESHOLD;
+        return thresholdResolver.getBigDecimal(factoryId, ThresholdKeys.SALES_MARGIN_YELLOW, FALLBACK_MARGIN_YELLOW_THRESHOLD);
+    }
+
+    private BigDecimal resolveGrowthRedThreshold(String factoryId) {
+        if (thresholdResolver == null) return FALLBACK_GROWTH_RED_THRESHOLD;
+        return thresholdResolver.getBigDecimal(factoryId, ThresholdKeys.SALES_GROWTH_RED, FALLBACK_GROWTH_RED_THRESHOLD);
+    }
+
+    private BigDecimal resolveGrowthYellowThreshold(String factoryId) {
+        if (thresholdResolver == null) return FALLBACK_GROWTH_YELLOW_THRESHOLD;
+        return thresholdResolver.getBigDecimal(factoryId, ThresholdKeys.SALES_GROWTH_YELLOW, FALLBACK_GROWTH_YELLOW_THRESHOLD);
+    }
 
     // ==================== 销售概览 ====================
 
@@ -228,7 +270,7 @@ public class SalesAnalysisServiceImpl implements SalesAnalysisService {
                 .build());
 
         BigDecimal completionRate = calculateCompletionRate(totalSales, totalTarget);
-        String completionAlertLevel = determineCompletionAlertLevel(completionRate);
+        String completionAlertLevel = determineCompletionAlertLevel(factoryId, completionRate);
         kpiCards.add(MetricResult.builder()
                 .metricCode(MetricCalculatorService.TARGET_COMPLETION)
                 .metricName("目标完成率")
@@ -256,7 +298,7 @@ public class SalesAnalysisServiceImpl implements SalesAnalysisService {
                     .unit("%")
                     .changePercent(momGrowth)
                     .changeDirection(determineChangeDirection(momGrowth))
-                    .alertLevel(determineGrowthAlertLevel(momGrowth))
+                    .alertLevel(determineGrowthAlertLevel(factoryId, momGrowth))
                     .build());
         }
 
@@ -392,7 +434,7 @@ public class SalesAnalysisServiceImpl implements SalesAnalysisService {
                     .value(amount.setScale(DISPLAY_SCALE, ROUNDING_MODE))
                     .target(target.setScale(DISPLAY_SCALE, ROUNDING_MODE))
                     .completionRate(completionRate.setScale(DISPLAY_SCALE, ROUNDING_MODE))
-                    .alertLevel(determineCompletionAlertLevel(completionRate))
+                    .alertLevel(determineCompletionAlertLevel(factoryId, completionRate))
                     .build());
         }
 
@@ -442,7 +484,7 @@ public class SalesAnalysisServiceImpl implements SalesAnalysisService {
         BigDecimal totalTarget = sumField(salesData, SmartBiSalesData::getMonthlyTarget);
         BigDecimal completionRate = calculateCompletionRate(totalAmount, totalTarget);
         metrics.add(MetricResult.of(MetricCalculatorService.TARGET_COMPLETION, "目标完成率",
-                completionRate, "%", determineCompletionAlertLevelEnum(completionRate)));
+                completionRate, "%", determineCompletionAlertLevelEnum(factoryId, completionRate)));
 
         // 客户数
         long customerCount = salesData.stream()
@@ -463,7 +505,7 @@ public class SalesAnalysisServiceImpl implements SalesAnalysisService {
                 ? grossProfit.divide(totalAmount, SCALE, ROUNDING_MODE).multiply(new BigDecimal("100"))
                 : BigDecimal.ZERO;
         metrics.add(MetricResult.of(MetricCalculatorService.GROSS_MARGIN, "毛利率",
-                grossMargin, "%", determineMarginAlertLevelEnum(grossMargin)));
+                grossMargin, "%", determineMarginAlertLevelEnum(factoryId, grossMargin)));
 
         // 计算环比增长（需要上一期数据）
         LocalDate previousStart = startDate.minusMonths(1);
@@ -837,11 +879,11 @@ public class SalesAnalysisServiceImpl implements SalesAnalysisService {
     /**
      * 确定完成率预警级别
      */
-    private String determineCompletionAlertLevel(BigDecimal completionRate) {
-        if (completionRate.compareTo(TARGET_RED_THRESHOLD) < 0) {
+    private String determineCompletionAlertLevel(String factoryId, BigDecimal completionRate) {
+        if (completionRate.compareTo(resolveTargetRedThreshold(factoryId)) < 0) {
             return MetricResult.AlertLevel.RED.name();
         }
-        if (completionRate.compareTo(TARGET_YELLOW_THRESHOLD) < 0) {
+        if (completionRate.compareTo(resolveTargetYellowThreshold(factoryId)) < 0) {
             return MetricResult.AlertLevel.YELLOW.name();
         }
         return MetricResult.AlertLevel.GREEN.name();
@@ -850,11 +892,11 @@ public class SalesAnalysisServiceImpl implements SalesAnalysisService {
     /**
      * 确定完成率预警级别枚举
      */
-    private MetricResult.AlertLevel determineCompletionAlertLevelEnum(BigDecimal completionRate) {
-        if (completionRate.compareTo(TARGET_RED_THRESHOLD) < 0) {
+    private MetricResult.AlertLevel determineCompletionAlertLevelEnum(String factoryId, BigDecimal completionRate) {
+        if (completionRate.compareTo(resolveTargetRedThreshold(factoryId)) < 0) {
             return MetricResult.AlertLevel.RED;
         }
-        if (completionRate.compareTo(TARGET_YELLOW_THRESHOLD) < 0) {
+        if (completionRate.compareTo(resolveTargetYellowThreshold(factoryId)) < 0) {
             return MetricResult.AlertLevel.YELLOW;
         }
         return MetricResult.AlertLevel.GREEN;
@@ -863,11 +905,11 @@ public class SalesAnalysisServiceImpl implements SalesAnalysisService {
     /**
      * 确定毛利率预警级别枚举
      */
-    private MetricResult.AlertLevel determineMarginAlertLevelEnum(BigDecimal margin) {
-        if (margin.compareTo(MARGIN_RED_THRESHOLD) < 0) {
+    private MetricResult.AlertLevel determineMarginAlertLevelEnum(String factoryId, BigDecimal margin) {
+        if (margin.compareTo(resolveMarginRedThreshold(factoryId)) < 0) {
             return MetricResult.AlertLevel.RED;
         }
-        if (margin.compareTo(MARGIN_YELLOW_THRESHOLD) < 0) {
+        if (margin.compareTo(resolveMarginYellowThreshold(factoryId)) < 0) {
             return MetricResult.AlertLevel.YELLOW;
         }
         return MetricResult.AlertLevel.GREEN;
@@ -876,11 +918,11 @@ public class SalesAnalysisServiceImpl implements SalesAnalysisService {
     /**
      * 确定增长率预警级别
      */
-    private String determineGrowthAlertLevel(BigDecimal growth) {
-        if (growth.compareTo(GROWTH_RED_THRESHOLD) < 0) {
+    private String determineGrowthAlertLevel(String factoryId, BigDecimal growth) {
+        if (growth.compareTo(resolveGrowthRedThreshold(factoryId)) < 0) {
             return MetricResult.AlertLevel.RED.name();
         }
-        if (growth.compareTo(GROWTH_YELLOW_THRESHOLD) < 0) {
+        if (growth.compareTo(resolveGrowthYellowThreshold(factoryId)) < 0) {
             return MetricResult.AlertLevel.YELLOW.name();
         }
         return MetricResult.AlertLevel.GREEN.name();
