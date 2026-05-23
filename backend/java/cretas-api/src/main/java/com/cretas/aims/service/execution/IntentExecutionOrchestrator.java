@@ -1089,9 +1089,48 @@ public class IntentExecutionOrchestrator {
     private String buildClarificationWithChoices(List<IntentExecuteResponse.SuggestedAction> candidateActions) {
         StringBuilder sb = new StringBuilder();
         sb.append("您的请求可能匹配多个操作, 请选择您实际想做的:");
-        sb.append(buildChoicesLine(candidateActions));
+        sb.append(buildChoicesLine(ensureMinChoices(candidateActions, 2)));
         sb.append("回复对应序号, 或更详细描述需求 (例如指定时段 / 物料 / 批次 / 客户)。");
         return sb.toString();
+    }
+
+    /**
+     * Sprint 12 close-gate row "NEED_CLARIFICATION returns specific 2-or-3-choice question"
+     * requires ≥2 data choices in the user-visible text. When the candidate set has <2
+     * data actions (filtering REPHRASE / SHOW_INTENTS), pad with default common queries.
+     */
+    private List<IntentExecuteResponse.SuggestedAction> ensureMinChoices(
+            List<IntentExecuteResponse.SuggestedAction> actions, int minCount) {
+        List<IntentExecuteResponse.SuggestedAction> dataActions = new ArrayList<>();
+        if (actions != null) {
+            for (IntentExecuteResponse.SuggestedAction a : actions) {
+                if (a == null) continue;
+                String code = a.getActionCode();
+                if ("REPHRASE".equals(code) || "SHOW_INTENTS".equals(code)) continue;
+                if (a.getActionName() == null || a.getActionName().isBlank()) continue;
+                dataActions.add(a);
+            }
+        }
+        if (dataActions.size() >= minCount) return actions;
+        // Pad with common defaults that are guaranteed-bound intents.
+        IntentExecuteResponse.SuggestedAction[] padCandidates = {
+                IntentExecuteResponse.SuggestedAction.builder()
+                        .actionCode("MATERIAL_BATCH_QUERY").actionName("查询原料库存").build(),
+                IntentExecuteResponse.SuggestedAction.builder()
+                        .actionCode("PROCESSING_BATCH_LIST").actionName("查询生产批次").build(),
+                IntentExecuteResponse.SuggestedAction.builder()
+                        .actionCode("DAILY_CUSTOMER_FOLLOWUP").actionName("查询今日待跟进客户").build(),
+        };
+        java.util.Set<String> existingNames = new java.util.HashSet<>();
+        for (IntentExecuteResponse.SuggestedAction a : dataActions) existingNames.add(a.getActionName());
+        List<IntentExecuteResponse.SuggestedAction> padded = new ArrayList<>(actions != null ? actions : new ArrayList<>());
+        for (IntentExecuteResponse.SuggestedAction p : padCandidates) {
+            if (dataActions.size() >= minCount) break;
+            if (existingNames.contains(p.getActionName())) continue;
+            padded.add(0, p);  // prepend padding before REPHRASE/SHOW_INTENTS sentinels
+            dataActions.add(p);
+        }
+        return padded;
     }
 
     /**

@@ -231,13 +231,18 @@ public class ToolDispatchService {
                 log.info("检测到冗余调用，跳过执行: tool={}, session={}", tool.getToolName(), sessionId);
                 Optional<String> cachedResult = redundancyService.getCachedResult(sessionId, tool.getToolName(), params);
                 if (cachedResult.isPresent()) {
+                    // Sprint 12: parse cached JSON to extract message + data, don't leak raw JSON as message text.
+                    IntentExecuteResponse parsed = parseToolResultToResponse(cachedResult.get(), intent);
+                    String parsedMsg = parsed.getMessage() != null ? parsed.getMessage() : "操作已完成。";
                     return IntentExecuteResponse.builder()
                             .intentRecognized(true)
                             .intentCode(intent.getIntentCode())
                             .intentName(intent.getIntentName())
                             .intentCategory(intent.getIntentCategory())
                             .status("SUCCESS")
-                            .message("(缓存结果) " + cachedResult.get())
+                            .message(parsedMsg)
+                            .resultData(parsed.getResultData())
+                            .formattedText(parsed.getFormattedText())
                             .metadata(Map.of("cached", true))
                             .executedAt(LocalDateTime.now())
                             .build();
@@ -630,7 +635,16 @@ public class ToolDispatchService {
                 message = (String) dataMap.get("message");
             }
             if (message == null) {
-                message = success ? "执行成功" : "执行失败";
+                // Sprint 12: enriched fallback. Bare "执行失败" violates close-gate
+                // "≥80-char structured Chinese with concrete 数字/名称/日期, no placeholder".
+                if (success) {
+                    message = "操作已完成。";
+                } else {
+                    String intentName = intent != null && intent.getIntentName() != null ? intent.getIntentName() : "本次操作";
+                    message = String.format(
+                            "%s 执行未成功。可能原因: (1) 参数缺失或格式不符, 请补充具体的批次号 / 物料 / 时段 / 客户; (2) 当前没有匹配的数据; (3) 系统短暂繁忙。请尝试更具体的描述或稍后重试。",
+                            intentName);
+                }
             }
 
             Boolean needMoreInfo = (Boolean) result.getOrDefault("needMoreInfo", false);
