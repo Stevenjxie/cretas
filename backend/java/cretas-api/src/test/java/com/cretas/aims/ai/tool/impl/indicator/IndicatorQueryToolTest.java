@@ -90,11 +90,12 @@ class IndicatorQueryToolTest {
                         buildVersion(new BigDecimal("96.20"), LocalDate.now().minusDays(1)),
                         latest));
 
-        IndicatorThreshold green = buildThreshold("GREEN", "GTE", new BigDecimal("95"));
-        IndicatorThreshold yellow = buildThreshold("YELLOW", "GTE", new BigDecimal("93"));
+        // Thresholds 表达"bad zone" 语义 — 命中即触告警, GREEN 是默认无命中状态.
+        // YELLOW LT 95 + RED LT 90 表示: 90-95 为黄区, < 90 为红区, ≥ 95 默认绿.
+        IndicatorThreshold yellow = buildThreshold("YELLOW", "LT", new BigDecimal("95"));
         IndicatorThreshold red = buildThreshold("RED", "LT", new BigDecimal("90"));
         when(thresholdRepository.findByIndicatorIdAndIsActiveTrue(INDICATOR_ID))
-                .thenReturn(List.of(green, yellow, red));
+                .thenReturn(List.of(yellow, red));
 
         Map<String, Object> result = invoke(FACTORY_ID, Map.of("indicator_code", CODE));
         Map<String, Object> data = (Map<String, Object>) result.get("data");

@@ -1,6 +1,7 @@
 package com.cretas.aims.ai.tool.impl.indicator;
 
 import com.cretas.aims.ai.tool.AbstractBusinessTool;
+import com.cretas.aims.ai.tool.ToolExecutor;
 import com.cretas.aims.entity.indicator.Indicator;
 import com.cretas.aims.entity.indicator.IndicatorThreshold;
 import com.cretas.aims.entity.indicator.IndicatorVersion;
@@ -56,6 +57,16 @@ public class IndicatorAlertTool extends AbstractBusinessTool {
     @Override
     public String getToolName() {
         return "indicator_alert";
+    }
+
+    /**
+     * Override convention-based default — `indicator_alert` 名字含 "_alert" 默认会被
+     * {@link AbstractBusinessTool#getActionType()} 推为 NOTIFY, 但本 Tool 实际是 READ
+     * (扫描查询当前 breach 状态, 不发送通知). 显式 override.
+     */
+    @Override
+    public ToolExecutor.ActionType getActionType() {
+        return ToolExecutor.ActionType.READ;
     }
 
     @Override
