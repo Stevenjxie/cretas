@@ -268,7 +268,8 @@ public class FactorySchedulingConfig {
     private Integer adaptationCount = 0;
 
     /**
-     * AUD-4 P1 JPA 乐观锁 version (mirror Canvas Phase A pattern). 由 Flyway 默认 0 NOT NULL.
+     * AUD-4 P1 JPA 乐观锁 version (Canvas P3-batch2 PR #198 + Canvas Phase B PR #201 共用).
+     * 由 Flyway 默认 0 NOT NULL. Hibernate 自动 increment on save() — Lost Update prevention.
      */
     @Version
     @Column(name = "version", nullable = false)
