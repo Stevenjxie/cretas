@@ -68,15 +68,22 @@
       </el-tree>
     </div>
 
-    <!-- 树统计信息 -->
+    <!-- 树统计信息 — Sprint 11 BI deep-audit Finding-3 P2 fix:
+         old labels (正常/关注/告警) misleading because tree API doesn't carry alertLevel.
+         use honest 已计算/未计算 based on lastValue presence. -->
     <div v-if="!loading && treeData.length > 0" class="tree-stats">
       <span>共 {{ totalNodes }} 个节点 / {{ maxDepth }} 层深度</span>
       <span class="stats-divider">|</span>
       <span>
-        <span class="dot dot-green" /> 正常 {{ alertCounts.green }}
-        <span class="dot dot-yellow" /> 关注 {{ alertCounts.yellow }}
-        <span class="dot dot-red" /> 告警 {{ alertCounts.red }}
+        <span class="dot dot-green" /> 已计算 {{ valueStats.computed }}
+        <span class="dot dot-yellow" /> 待配置 {{ valueStats.uncomputed }}
       </span>
+      <el-tooltip
+        content="树视图节点状态显示数据可用性 (已计算 vs 待配置). 红黄绿告警状态见'指标列表'视图各 card."
+        placement="top"
+      >
+        <el-icon class="stats-hint"><InfoFilled /></el-icon>
+      </el-tooltip>
     </div>
   </div>
 </template>
@@ -90,7 +97,7 @@
  */
 import { ref, computed, watch, onMounted, nextTick } from 'vue';
 import { ElTree } from 'element-plus';
-import { Search, Refresh, Expand, Fold } from '@element-plus/icons-vue';
+import { Search, Refresh, Expand, Fold, InfoFilled } from '@element-plus/icons-vue';
 import { getIndicatorTree, type IndicatorTreeNodeResponse } from '@/api/indicator';
 
 interface Props {
@@ -194,6 +201,18 @@ const alertCounts = computed(() => {
     else if (n.alertLevel === 'RED') counts.red++;
   });
   return counts;
+});
+
+// Sprint 11 BI deep-audit Finding-3 P2 fix: tree node alertLevel is always null,
+// so use hasValue (lastValue presence) for honest 已计算/待配置 stats.
+const valueStats = computed(() => {
+  let computedCount = 0;
+  let uncomputed = 0;
+  flatNodes.value.forEach(n => {
+    if (hasValue(n)) computedCount++;
+    else uncomputed++;
+  });
+  return { computed: computedCount, uncomputed };
 });
 
 // ============ helpers ============
@@ -322,6 +341,13 @@ defineExpose({ loadTree });
   padding: 8px 12px;
   background: var(--el-fill-color-light);
   border-radius: 4px;
+}
+
+.stats-hint {
+  margin-left: 6px;
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+  cursor: help;
 }
 
 .stats-divider {
