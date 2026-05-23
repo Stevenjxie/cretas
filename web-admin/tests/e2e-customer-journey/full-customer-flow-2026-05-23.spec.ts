@@ -55,8 +55,14 @@ const PHRASES = [
   '哪个菜亏钱',
 ];
 
-const OUT_DIR = path.resolve(process.cwd(), '..', 'docs', 'audits', 'sprint-11-ux-audit', 'screenshots');
-const JSON_OUT = path.resolve(process.cwd(), '..', 'docs', 'audits', 'sprint-11-ux-audit', 'ui-text-12.json');
+// Sprint 12 P3 re-run target — write to sprint-12-routing-fix dir for diff vs Sprint 11
+// (env override allows re-pointing back at sprint-11 for ad-hoc verification)
+const OUT_DIR = process.env.UX_AUDIT_DIR
+    ? path.resolve(process.env.UX_AUDIT_DIR)
+    : path.resolve(process.cwd(), '..', 'docs', 'audits', 'sprint-12-routing-fix', 'screenshots-after');
+const JSON_OUT = process.env.UX_AUDIT_JSON
+    ? path.resolve(process.env.UX_AUDIT_JSON)
+    : path.resolve(process.cwd(), '..', 'docs', 'audits', 'sprint-12-routing-fix', 'ui-text-12-after.json');
 
 // Per-case capture container
 type CaseCapture = {

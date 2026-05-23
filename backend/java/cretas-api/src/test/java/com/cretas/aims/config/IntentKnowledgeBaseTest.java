@@ -180,4 +180,77 @@ class IntentKnowledgeBaseTest {
         assertTrue(result.isPresent());
         assertEquals("RESTAURANT_ECONOMICS_ANALYSIS", result.get());
     }
+
+    // ========== Sprint 12 P0 (2026-05-23) — NL Routing Root-Cause Fix ==========
+    //
+    // Per AI 工厂 chat Goal v5 UI audit (docs/audits/sprint-11-ux-audit/), 12/12 UI cases
+    // misrouted to DAILY_CUSTOMER_FOLLOWUP-style output. Root cause: orchestrator phrase
+    // shortcut was UNREACHABLE for CONVERSATIONAL-classified inputs. Fix moves shortcut
+    // to position #0.25 BEFORE handleEarlyQuestionTypeDetection. This test pins 12+ NL
+    // phrase variations to RESTAURANT_ECONOMICS_ANALYSIS to prevent regression.
+
+    @Test
+    @DisplayName("Sprint 12 P0 — 12+ NL phrase variations route to RESTAURANT_ECONOMICS_ANALYSIS")
+    void sprint12NlVariationsRoute() {
+        String[] phrases = {
+                // Period variants (none collide with existing mappings)
+                "上月亏", "上月赚多少", "本月亏", "这个月亏",
+                "本月赚多少", "上月赔多少",
+                // 利润 / 损益 / 损溢 variants
+                "利润分析", "利润情况", "损溢报告", "损溢情况",
+                // 哪个/哪些菜 variants (NOT 哪些菜亏钱 — Round 6 reserves for dish_cost)
+                "哪些菜赔钱", "哪个菜赔钱", "哪个菜在亏",
+                // 经营 phrases
+                "经营诊断", "经营分析", "经营情况怎么样",
+                // 餐厅经营 phrases
+                "餐厅经营", "门店经营", "今天生意怎么样", "店面经营",
+                // 餐厅/门店成本 phrases (NOT generic "成本分析")
+                "餐饮成本", "餐厅成本", "厨房成本",
+        };
+        for (String phrase : phrases) {
+            Optional<String> result = kb.matchPhrase(phrase, "RESTAURANT");
+            assertTrue(result.isPresent(),
+                    "Sprint 12 phrase '" + phrase + "' must produce a match");
+            assertEquals("RESTAURANT_ECONOMICS_ANALYSIS", result.get(),
+                    "Sprint 12 phrase '" + phrase
+                            + "' must route to RESTAURANT_ECONOMICS_ANALYSIS, NOT misroute "
+                            + "to DAILY_CUSTOMER_FOLLOWUP / RESTAURANT_DISH_COST_ANALYSIS / etc.");
+        }
+    }
+
+    @Test
+    @DisplayName("Sprint 12 P0 — Sprint 12 additions don't collide with Round 6 distinguished cases")
+    void sprint12NoCollisionWithRound6Distinguished() {
+        // CRITICAL regression test: Sprint 12 added many NL variations to RESTAURANT_ECONOMICS_ANALYSIS.
+        // Must NOT pollute existing distinguished mappings:
+        // - "哪些菜亏钱" remains RESTAURANT_DISH_COST_ANALYSIS (Round 6 dish_cost reserves)
+        // - "成本分析" remains COST_TREND_ANALYSIS for FACTORY / RESTAURANT_DISH_COST_ANALYSIS for RESTAURANT
+
+        Optional<String> dishCostPhrase = kb.matchPhrase("哪些菜亏钱", "RESTAURANT");
+        assertEquals("RESTAURANT_DISH_COST_ANALYSIS", dishCostPhrase.orElse(""),
+                "'哪些菜亏钱' must remain dish_cost (Sprint 12 must NOT collide)");
+
+        Optional<String> factoryCost = kb.matchPhrase("成本分析", "FACTORY");
+        assertEquals("COST_TREND_ANALYSIS", factoryCost.orElse(""),
+                "'成本分析' FACTORY must remain COST_TREND_ANALYSIS (Sprint 12 must NOT collide)");
+
+        Optional<String> restaurantCost = kb.matchPhrase("成本分析", "RESTAURANT");
+        assertEquals("RESTAURANT_DISH_COST_ANALYSIS", restaurantCost.orElse(""),
+                "'成本分析' RESTAURANT must remain RESTAURANT_DISH_COST_ANALYSIS (Sprint 12 must NOT collide)");
+    }
+
+    @Test
+    @DisplayName("Sprint 12 P0 — Round 6 keywords still route (regression test)")
+    void sprint12NoRegressionFromRound6() {
+        // Make sure new additions don't break Round 6 entries
+        Optional<String> r1 = kb.matchPhrase("帮我看上月损溢异常", "RESTAURANT");
+        assertEquals("RESTAURANT_ECONOMICS_ANALYSIS", r1.orElse(""));
+
+        Optional<String> r2 = kb.matchPhrase("损益分析", "RESTAURANT");
+        assertEquals("RESTAURANT_ECONOMICS_ANALYSIS", r2.orElse(""));
+
+        Optional<String> r3 = kb.matchPhrase("食材损耗", "RESTAURANT");
+        assertEquals("RESTAURANT_WASTAGE_SUMMARY", r3.orElse(""),
+                "Round 6 '食材损耗' must NOT regress to economics");
+    }
 }
