@@ -67,4 +67,11 @@ public class PurchaseOrderApprovalRule extends BaseEntity {
 
     @Column(name = "enabled", nullable = false)
     private Boolean enabled = true;
+
+    /**
+     * AUD-4 P1 JPA 乐观锁 version (mirror Canvas Phase A pattern). 由 Flyway 默认 0 NOT NULL.
+     */
+    @Version
+    @Column(name = "version", nullable = false)
+    private Long version = 0L;
 }
