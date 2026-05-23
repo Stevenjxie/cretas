@@ -193,5 +193,19 @@ export default defineConfig({
       fullyParallel: false,
       workers: 1,
     },
+    // Sprint 11 全流程 UX 审计 (2026-05-23) — 12 cases (4 phrase × 3 accounts)
+    // Real UI: login + nav SalesOwnerWorkdesk + type phrase + screenshot result.
+    // Output: 12 PNG + 1 video .webm + ui-text-12.json
+    {
+      name: 'full-customer-flow-2026-05-23',
+      testMatch: 'tests/e2e-customer-journey/full-customer-flow-2026-05-23.spec.ts',
+      fullyParallel: false,
+      workers: 1,
+      use: {
+        headless: true,
+        video: 'on',
+        viewport: { width: 1440, height: 900 },
+      },
+    },
   ],
 });
