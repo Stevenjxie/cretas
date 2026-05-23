@@ -113,6 +113,22 @@ public class Supplier extends BaseEntity {
     @Version
     @Column(name = "version", nullable = false)
     private Long version;
+
+    /**
+     * Canvas-P3: 准入审核状态 PENDING/APPROVED/REJECTED/SUSPENDED.
+     * 默认 APPROVED 兼容历史数据 (per V20260824_04).
+     */
+    @Column(name = "admission_status", length = 20)
+    private String admissionStatus = "APPROVED";
+
+    /** Canvas-P3: 准入审核时间. */
+    @Column(name = "admission_reviewed_at")
+    private java.time.LocalDateTime admissionReviewedAt;
+
+    /** Canvas-P3: 准入审核人 user_id. */
+    @Column(name = "admission_reviewer_id")
+    private Long admissionReviewerId;
+
     // 关联关系
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "factory_id", referencedColumnName = "id", insertable = false, updatable = false)
