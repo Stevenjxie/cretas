@@ -307,7 +307,12 @@ public class CanvasRuleController {
             rule.setEnabled(booleanField(body, "enabled", rule.getEnabled()));
         }
 
-        BusinessRule saved = ruleRepository.save(rule);
+        // Use saveAndFlush so @Version increment + UPDATE statement fire BEFORE
+        // serializeRule reads saved.getVersion(). Without flush, Spring Data JPA
+        // defers the UPDATE to @Transactional commit (after method return), so the
+        // synchronously-built response Map captures pre-flush version (stale). Client
+        // round-tripping that stale version on the next PUT would hit a false 409.
+        BusinessRule saved = ruleRepository.saveAndFlush(rule);
         log.info("Updated BusinessRule id={} factoryId={} ruleCode={}",
                 saved.getId(), factoryId, saved.getRuleCode());
         return ApiResponse.success("规则更新成功", serializeRule(saved));
@@ -322,7 +327,8 @@ public class CanvasRuleController {
         log.info("POST /canvas-rules/{}/toggle factoryId={}", id, factoryId);
         BusinessRule rule = loadRule(factoryId, id);
         rule.setEnabled(!Boolean.TRUE.equals(rule.getEnabled()));
-        BusinessRule saved = ruleRepository.save(rule);
+        // saveAndFlush so serializeRule below sees post-flush @Version increment.
+        BusinessRule saved = ruleRepository.saveAndFlush(rule);
         return ApiResponse.success(
                 Boolean.TRUE.equals(saved.getEnabled()) ? "规则已启用" : "规则已禁用",
                 serializeRule(saved));
@@ -370,7 +376,9 @@ public class CanvasRuleController {
 
         try {
             rule.softDelete();
-            BusinessRule saved = ruleRepository.save(rule);
+            // saveAndFlush so deletedAt UPDATE + @Version increment fires before
+            // we read saved.getDeletedAt() / getId() in the response map.
+            BusinessRule saved = ruleRepository.saveAndFlush(rule);
             Map<String, Object> data = new LinkedHashMap<>();
             data.put("ruleId", saved.getId().toString());
             data.put("ruleCode", saved.getRuleCode());

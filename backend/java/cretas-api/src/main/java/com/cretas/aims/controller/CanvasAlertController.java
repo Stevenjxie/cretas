@@ -252,7 +252,10 @@ public class CanvasAlertController {
                 rule.setEnabled(parseBoolean(body.get("enabled"), rule.getEnabled()));
             }
 
-            AlertRule saved = ruleRepository.save(rule);
+            // saveAndFlush forces @Version increment + UPDATE before serializeRule
+            // reads in-memory entity (per HARD rule — `final` + serializeRule pattern
+            // captures pre-flush state otherwise, shipping stale version to client).
+            AlertRule saved = ruleRepository.saveAndFlush(rule);
             return ApiResponse.success("告警规则更新成功", serializeRule(saved));
         } catch (IllegalArgumentException ex) {
             return ApiResponse.errorWithHint(400, ex.getMessage(), "请检查参数", null, null);
@@ -269,7 +272,8 @@ public class CanvasAlertController {
             AlertRule rule = loadRule(factoryId, id);
             boolean current = Boolean.TRUE.equals(rule.getEnabled());
             rule.setEnabled(!current);
-            AlertRule saved = ruleRepository.save(rule);
+            // saveAndFlush so serializeRule sees post-flush version.
+            AlertRule saved = ruleRepository.saveAndFlush(rule);
             return ApiResponse.success(
                     saved.getEnabled() ? "告警规则已启用" : "告警规则已禁用",
                     serializeRule(saved));
@@ -287,7 +291,9 @@ public class CanvasAlertController {
         try {
             AlertRule rule = loadRule(factoryId, id);
             rule.softDelete();
-            AlertRule saved = ruleRepository.save(rule);
+            // saveAndFlush so deletedAt UPDATE + version increment fires before
+            // we read saved.getDeletedAt() into the response map.
+            AlertRule saved = ruleRepository.saveAndFlush(rule);
             Map<String, Object> data = new HashMap<>();
             data.put("ruleId", saved.getId().toString());
             data.put("deletedAt", saved.getDeletedAt() != null ? saved.getDeletedAt().toString() : null);
