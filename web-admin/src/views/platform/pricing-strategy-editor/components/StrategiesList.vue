@@ -177,11 +177,11 @@ function typeLabel(type: PricingStrategyType): string {
 
 function typeIcon(type: PricingStrategyType): string {
   const map: Record<PricingStrategyType, string> = {
-    TIERED: '📊',
-    PROMOTION: '🎉',
-    MEMBER: '💎',
-    BUNDLE: '📦',
-    CYCLE: '🔁',
+ TIERED: '',
+ PROMOTION: '',
+ MEMBER: '',
+ BUNDLE: '',
+ CYCLE: '',
   };
   return map[type] || 'ⓘ';
 }

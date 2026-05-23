@@ -17,7 +17,7 @@
     <!-- Header -->
     <div class="workdesk-header">
       <div class="header-title">
-        <span class="emoji">💼</span>
+ <span class="emoji"></span>
         <span class="title-text">财务主管工作台</span>
         <el-tag size="small" type="info">Sprint 8 P2 (2026-05-20)</el-tag>
       </div>
@@ -32,7 +32,7 @@
     <el-card class="chat-card" shadow="never">
       <template #header>
         <div class="card-header">
-          <span>💬 与 AI 对话</span>
+ <span> 与 AI 对话</span>
           <span class="header-hint">默认查询: "本月经营怎么样?" — 也可输入其他问题</span>
         </div>
       </template>
@@ -75,7 +75,7 @@
     <el-card v-if="formattedText" class="result-card" shadow="never">
       <template #header>
         <div class="card-header">
-          <span>📋 月度经营摘要</span>
+ <span> 月度经营摘要</span>
           <span class="header-hint" v-if="lastQueryTime">
             {{ lastQueryTime }} 生成
           </span>
@@ -87,7 +87,7 @@
     <!-- 关键指标卡 (R2: 含 period status + 三大数字) -->
     <div v-if="hasKeyMetrics" class="metrics-grid">
       <el-card class="metric-card" shadow="hover">
-        <div class="metric-label">📊 期间状态 ({{ periodLabel }})</div>
+ <div class="metric-label"> 期间状态 ({{ periodLabel }})</div>
         <div class="metric-value" :class="periodStatusClass">
           {{ periodStatusDisplay }}
         </div>
@@ -99,7 +99,7 @@
       </el-card>
 
       <el-card class="metric-card" shadow="hover">
-        <div class="metric-label">💰 营业收入</div>
+ <div class="metric-label"> 营业收入</div>
         <div class="metric-value">¥{{ formatAmount(totalRevenue) }}</div>
         <div class="metric-hint" v-if="grossMarginPercent !== null">
           毛利率 {{ grossMarginPercent }}%
@@ -107,14 +107,14 @@
       </el-card>
 
       <el-card class="metric-card" shadow="hover">
-        <div class="metric-label">💵 净利润</div>
+ <div class="metric-label"> 净利润</div>
         <div class="metric-value" :class="netProfit >= 0 ? 'positive' : 'negative'">
           ¥{{ formatAmount(netProfit) }}
         </div>
       </el-card>
 
       <el-card class="metric-card" shadow="hover">
-        <div class="metric-label">💼 工资成本</div>
+ <div class="metric-label"> 工资成本</div>
         <div class="metric-value">¥{{ formatAmount(wageTotalAmount) }}</div>
         <div class="metric-hint" v-if="wageEmployeeCount > 0">
           {{ wageEmployeeCount }} 员工
@@ -126,7 +126,7 @@
     <el-card v-if="hasKeyMetrics" class="reports-card" shadow="never">
       <template #header>
         <div class="card-header">
-          <span>📑 三大报表 (点击跳转)</span>
+ <span> 三大报表 (点击跳转)</span>
           <span class="header-hint">Sprint 7 T3 ship · 期末快照 + 期间累计</span>
         </div>
       </template>
@@ -136,21 +136,21 @@
           size="large"
           plain
           @click="gotoReport('balance-sheet')">
-          📊 资产负债表
+ 资产负债表
         </el-button>
         <el-button
           type="success"
           size="large"
           plain
           @click="gotoReport('income-statement')">
-          💰 利润表
+ 利润表
         </el-button>
         <el-button
           type="warning"
           size="large"
           plain
           @click="gotoReport('cashflow')">
-          💵 现金流量表
+ 现金流量表
         </el-button>
       </div>
     </el-card>
@@ -159,7 +159,7 @@
     <el-card v-if="highRiskARCount > 0" class="alert-card" shadow="never">
       <template #header>
         <div class="card-header">
-          <span>🔔 应收账龄警告 — 60+ 天高风险</span>
+ <span> 应收账龄警告 — 60+ 天高风险</span>
           <el-tag type="danger" size="small">{{ highRiskARCount }} 客户</el-tag>
         </div>
       </template>
@@ -176,7 +176,7 @@
     <el-card v-if="pendingCommissionAmount > 0" class="alert-card" shadow="never">
       <template #header>
         <div class="card-header">
-          <span>💸 待付提成</span>
+ <span> 待付提成</span>
           <el-tag type="warning" size="small">{{ pendingCommissionCount }} 笔</el-tag>
         </div>
       </template>
@@ -190,7 +190,7 @@
     <el-card v-if="funnelActiveCount > 0" class="alert-card" shadow="never">
       <template #header>
         <div class="card-header">
-          <span>🎯 商机漏斗摘要</span>
+ <span> 商机漏斗摘要</span>
           <el-tag type="info" size="small">{{ funnelActiveCount }} 活跃</el-tag>
         </div>
       </template>
@@ -207,7 +207,7 @@
     <el-card class="approval-card" shadow="never" data-testid="approval-loop-panel">
       <template #header>
         <div class="card-header">
-          <span>✅ 待我审批 (Loop 4 AI 闭环)</span>
+ <span> 待我审批 (Loop 4 AI 闭环)</span>
           <div>
             <el-tag :type="approvalPendingCount > 0 ? 'warning' : 'info'" size="small">
               {{ approvalPendingCount }} 项待审
@@ -219,7 +219,7 @@
               :loading="approvalLoading"
               @click="loadPendingApprovals"
               data-testid="approval-refresh-btn">
-              🔄 刷新
+ 刷新
             </el-button>
           </div>
         </div>
@@ -238,7 +238,7 @@
           :closable="false" />
       </div>
       <div v-else-if="approvalPendingCount === 0" class="approval-empty">
-        <span class="empty-icon">✅</span>
+ <span class="empty-icon"></span>
         <div>暂无待您审批的工作流</div>
         <div class="empty-hint">提示: AI 问 "我该批什么" / "今日待审" 可触发查询</div>
       </div>
@@ -327,8 +327,8 @@
           style="margin-top: 8px;">
           <el-form-item label="决定">
             <el-radio-group v-model="approvalForm.action" data-testid="approval-action-radio">
-              <el-radio value="APPROVE">✅ 批准</el-radio>
-              <el-radio value="REJECT">❌ 拒绝</el-radio>
+ <el-radio value="APPROVE"> 批准</el-radio>
+ <el-radio value="REJECT"> 拒绝</el-radio>
             </el-radio-group>
           </el-form-item>
 

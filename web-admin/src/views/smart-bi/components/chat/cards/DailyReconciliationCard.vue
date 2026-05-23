@@ -37,7 +37,7 @@
       </el-table-column>
     </el-table>
     <div v-if="alerts.length" class="alerts">
-      <p v-for="(a, i) in alerts" :key="i" class="alert-item">⚠ {{ a }}</p>
+ <p v-for="(a, i) in alerts" :key="i" class="alert-item"> {{ a }}</p>
     </div>
   </div>
 </template>

@@ -28,7 +28,7 @@
     <!-- Header -->
     <div class="workdesk-header">
       <div class="header-title">
-        <span class="emoji">🏭</span>
+ <span class="emoji"></span>
         <span class="title-text">生产经理工作台</span>
         <el-tag size="small" type="info">Sprint 10 Loop 5 (2026-05-21)</el-tag>
       </div>
@@ -43,7 +43,7 @@
     <el-card class="chat-card" shadow="never">
       <template #header>
         <div class="card-header">
-          <span>💬 与 AI 对话</span>
+ <span> 与 AI 对话</span>
           <span class="header-hint">默认: "今天要起产什么?" — 或输入其他问题</span>
         </div>
       </template>
@@ -86,7 +86,7 @@
     <el-card v-if="formattedText" class="result-card" shadow="never">
       <template #header>
         <div class="card-header">
-          <span>📋 排产建议清单</span>
+ <span> 排产建议清单</span>
           <span class="header-hint" v-if="lastQueryTime">
             {{ lastQueryTime }} 生成
           </span>
@@ -99,7 +99,7 @@
     <el-card v-if="demands.length > 0" class="demands-card" shadow="never">
       <template #header>
         <div class="card-header">
-          <span>🎯 待产产品清单 ({{ demands.length }})</span>
+ <span> 待产产品清单 ({{ demands.length }})</span>
           <span class="header-hint">净缺量 = 订单总量 - 已发货 - 在产</span>
         </div>
       </template>
@@ -140,10 +140,10 @@
           </div>
           <div class="demand-actions">
             <el-button size="small" type="primary" @click="openCreateBatchDialog(d)">
-              🚀 一键起产
+ 一键起产
             </el-button>
             <el-button size="small" @click="gotoOrderList(d)">
-              📋 查涉及订单
+ 查涉及订单
             </el-button>
           </div>
         </div>
@@ -325,9 +325,9 @@ function urgencyClass(net: number) {
 }
 
 function urgencyEmoji(net: number) {
-  if (net >= 100) return '🔴';
-  if (net >= 20) return '🟡';
-  return '🟢';
+ if (net >= 100) return '';
+ if (net >= 20) return '';
+ return '';
 }
 
 function formatNum(v: number | undefined | null): string {

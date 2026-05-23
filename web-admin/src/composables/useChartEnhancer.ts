@@ -294,7 +294,7 @@ export function enhanceChartDefaults(opts: Record<string, unknown>): void {
         const numVal = Number(val);
         const base = `${p.marker || ''}${p.seriesName}: <b>${numVal.toLocaleString()}</b>`;
         if (Math.abs(numVal) > stats.median * 10) {
-          return `${p.name}<br/>${base}<br/><span style="color:#ff6b35;font-size:11px">⚠ 离群值 (${(numVal / stats.median).toFixed(0)}x 中位数)</span>`;
+ return `${p.name}<br/>${base}<br/><span style="color:#ff6b35;font-size:11px"> 离群值 (${(numVal / stats.median).toFixed(0)}x 中位数)</span>`;
         }
         return `${p.name}<br/>${base}`;
       };

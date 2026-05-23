@@ -55,7 +55,7 @@ export function useCanvasEditor() {
     const v = configVersion.value
     if (!v) return ''
     const icons: Record<ConfigStatus, string> = {
-      DRAFT: '📝', PENDING_REVIEW: '🔍', APPROVED: '⏰', PUBLISHED: '✅', REJECTED: '❌'
+ DRAFT: '', PENDING_REVIEW: '', APPROVED: '⏰', PUBLISHED: '', REJECTED: ''
     }
     const labels: Record<ConfigStatus, string> = {
       DRAFT: '草稿', PENDING_REVIEW: '待审核', APPROVED: '已审核', PUBLISHED: '已发布', REJECTED: '已驳回'

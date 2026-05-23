@@ -24,7 +24,7 @@
     <!-- Header -->
     <div class="workdesk-header">
       <div class="header-title">
-        <span class="emoji">🏭</span>
+ <span class="emoji"></span>
         <span class="title-text">仓管员工作台</span>
         <el-tag size="small" type="info">Sprint 8 P4a (2026-05-20)</el-tag>
       </div>
@@ -39,7 +39,7 @@
     <el-card class="chat-card" shadow="never">
       <template #header>
         <div class="card-header">
-          <span>💬 与 AI 对话</span>
+ <span> 与 AI 对话</span>
           <span class="header-hint">默认查询: "今天要收什么货?" — 也可输入其他问题</span>
         </div>
       </template>
@@ -82,7 +82,7 @@
     <el-card v-if="formattedText" class="result-card" shadow="never">
       <template #header>
         <div class="card-header">
-          <span>📋 今日待收清单</span>
+ <span> 今日待收清单</span>
           <span class="header-hint" v-if="lastQueryTime">
             {{ lastQueryTime }} 生成
           </span>
@@ -95,7 +95,7 @@
     <el-card v-if="receivingRows.length > 0" class="receiving-card" shadow="never">
       <template #header>
         <div class="card-header">
-          <span>📦 待收行项目 ({{ receivingRows.length }})</span>
+ <span> 待收行项目 ({{ receivingRows.length }})</span>
           <span class="header-hint">已订/已收/还可入 直接告诉你要收多少</span>
         </div>
         <div class="header-actions-inline">
@@ -104,7 +104,7 @@
             type="primary"
             :disabled="selectedRows.length === 0"
             @click="generateScanTask">
-            📲 一键扫码 ({{ selectedRows.length }})
+ 一键扫码 ({{ selectedRows.length }})
           </el-button>
         </div>
       </template>
@@ -177,7 +177,7 @@
     <el-card v-if="disposalRecommendations.length > 0" class="disposal-card" shadow="never">
       <template #header>
         <div class="card-header">
-          <span>⚠️ 临期物料处置建议 ({{ disposalRecommendations.length }})</span>
+ <span>️ 临期物料处置建议 ({{ disposalRecommendations.length }})</span>
           <span class="header-hint">系统按规则给出推荐行动</span>
         </div>
       </template>
@@ -207,7 +207,7 @@
     <el-card v-if="qcInspecting.length > 0" class="qc-card" shadow="never">
       <template #header>
         <div class="card-header">
-          <span>🔬 待质检批次 ({{ qcInspecting.length }})</span>
+ <span> 待质检批次 ({{ qcInspecting.length }})</span>
           <span class="header-hint">通知质量主管尽快验收</span>
         </div>
       </template>
@@ -421,7 +421,7 @@
     <!-- ===== PDA 扫码任务 Dialog ===== -->
     <el-dialog
       v-model="scanTaskDialog.visible"
-      title="📲 PDA / 手机扫码任务"
+ title=" PDA / 手机扫码任务"
       width="540px">
       <el-result
         v-if="scanTaskDialog.task"
@@ -960,7 +960,7 @@ async function executeConfirmReceive() {
       remark: confirmReceiveDialog.form.remark,
       testRun,
     });
-    ElMessage.success(response.message || '✅ 入库成功');
+ ElMessage.success(response.message || ' 入库成功');
     confirmReceiveDialog.visible = false;
     // 刷新今日清单
     await triggerTodayQuery();

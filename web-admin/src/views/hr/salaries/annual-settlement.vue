@@ -212,7 +212,7 @@ async function handleReport(row: AnnualTaxSettlement) {
   try {
     await ElMessageBox.confirm(
       `标记 ${row.taxYear} 年度汇算已申报税局 [用户 ${row.userId} / ${formatRefundOwed(row.refundOwed)}]\n\n` +
-      `⚠️ 申报后将锁住, 不可再次计算或修改, 是否继续?`,
+ `️ 申报后将锁住, 不可再次计算或修改, 是否继续?`,
       '申报税局',
       {
         confirmButtonText: '已申报税局',

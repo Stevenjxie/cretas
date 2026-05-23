@@ -477,7 +477,7 @@ onUnmounted(() => {
     <el-card v-show="goldTrend" class="chart-card gold-trend-card" style="margin-bottom: 16px; border-top: 3px solid #67C23A;">
       <template #header>
         <div style="display: flex; align-items: center; gap: 8px; font-weight: 600; flex-wrap: wrap;">
-          <span>📈 POS 营收趋势</span>
+ <span> POS 营收趋势</span>
           <el-tag size="small" type="success">Gold · daily_trend</el-tag>
           <el-tag v-if="trendGranularity === 'weekly'" size="small" type="info" effect="plain"
                   title="范围 90-365 天时,自动按周聚合以减少视觉噪音">按周聚合</el-tag>

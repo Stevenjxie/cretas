@@ -88,7 +88,7 @@
             placeholder="如: #amount > 10000 && #department == 'finance'"
             @change="(v: string | number) => updateExpr({ spel: String(v) })"
           />
-          <div class="hint">⚠ 受 sandbox 保护; 拒绝 T()/Runtime/Process/Class/@/new</div>
+ <div class="hint"> 受 sandbox 保护; 拒绝 T()/Runtime/Process/Class/@/new</div>
         </el-form-item>
       </template>
 

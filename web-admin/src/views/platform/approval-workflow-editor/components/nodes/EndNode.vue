@@ -20,10 +20,10 @@ const outcome = computed(() => String(props.data?.config?.outcome ?? 'APPROVED')
 const outcomeClass = computed(() => outcome.value.toLowerCase())
 const outcomeIcon = computed(() => {
   switch (outcome.value) {
-    case 'REJECTED': return '✕'
+ case 'REJECTED': return ''
     case 'TIMEOUT': return '⏱'
     case 'CANCELLED': return '⊘'
-    default: return '✓'
+ default: return ''
   }
 })
 const outcomeLabel = computed(() => {

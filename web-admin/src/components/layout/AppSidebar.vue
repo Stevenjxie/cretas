@@ -87,25 +87,25 @@ const menuConfig: MenuItem[] = [
   { path: '/dashboard', title: '首页', icon: 'House', module: 'dashboard' },
   // 🏪 Sprint 8 P1 (2026-05-20) — 销售老板 Workdesk V1 (F006 真场景 demo).
   // module 借 'sales' 走现有权限 (workdesk 不是 ModuleName).
-  { path: '/workdesk/sales-owner', title: '🏪 销售老板工作台', icon: 'Sell', module: 'sales' },
+ { path: '/workdesk/sales-owner', title: ' 销售老板工作台', icon: 'Sell', module: 'sales' },
   // 💼 Sprint 8 P2 (2026-05-20) — 财务主管 Workdesk (monthly close + 三表 + 应收账龄).
   // module 借 'finance' 走现有权限 (workdesk 不是 ModuleName).
-  { path: '/workdesk/finance-manager', title: '💼 财务主管工作台', icon: 'Money', module: 'finance' },
+ { path: '/workdesk/finance-manager', title: ' 财务主管工作台', icon: 'Money', module: 'finance' },
   // 🚨 Sprint 8 P3 (2026-05-20) — 质量主管 Workdesk (食品安全召回闭环 — Boss 演示杀手锏).
   // food-safety-recall Skill 串 8 Tool. module 借 'quality' 走现有权限.
-  { path: '/workdesk/quality-manager', title: '🚨 质量主管工作台', icon: 'Warning', module: 'quality' },
+ { path: '/workdesk/quality-manager', title: ' 质量主管工作台', icon: 'Warning', module: 'quality' },
   // 🏭 Sprint 8 P4a (2026-05-20) — 仓管员 Workdesk (R1 max + 一键扫码 + 临期建议).
   // 客户原话 (F006 张权): "告诉他要收多少就行". module 借 'inventory' 走现有权限.
-  { path: '/workdesk/warehouse-keeper', title: '🏭 仓管员工作台', icon: 'Box', module: 'inventory' },
+ { path: '/workdesk/warehouse-keeper', title: ' 仓管员工作台', icon: 'Box', module: 'inventory' },
   // 🛒 Sprint 8 P4b (2026-05-20) — 采购员 Workdesk (5 品类预警 + 一键请购).
   // 采购员小赵场景 (F006): "下周采购什么? 系统直接告诉我". module 借 'inventory'.
-  { path: '/workdesk/purchaser', title: '🛒 采购员工作台', icon: 'ShoppingCart', module: 'inventory' },
+ { path: '/workdesk/purchaser', title: ' 采购员工作台', icon: 'ShoppingCart', module: 'inventory' },
   // 🔬 Sprint 8 P4c (2026-05-20) — 质量主管 Workdesk (4 项综合 audit + 一键放行/退货).
   // 质量主管李工程师场景 (F006): "这批卤猪蹄能放行吗?". module 借 'quality' 走现有权限.
-  { path: '/workdesk/quality-chief', title: '🔬 质量主管工作台', icon: 'Aim', module: 'quality' },
+ { path: '/workdesk/quality-chief', title: ' 质量主管工作台', icon: 'Aim', module: 'quality' },
   // 🏭 Sprint 10 Loop 5 (2026-05-21) — 生产经理 Workdesk (排产建议 + 一键起产).
   // 防呆 R1 max+R2 context+R3 dropdown+R4 5min dedup. module 借 'production' 走现有权限.
-  { path: '/workdesk/production-manager', title: '🏭 生产经理工作台', icon: 'Operation', module: 'production' },
+ { path: '/workdesk/production-manager', title: ' 生产经理工作台', icon: 'Operation', module: 'production' },
   {
     // P1-5: restaurants 默认不见 "生产管理" (BOM/批次是 manufacturing 语言,
     // 餐饮用配方/备餐在 /restaurant/recipes)

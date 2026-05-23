@@ -28,7 +28,7 @@ defineProps<{
           </div>
           <div class="tracking-timeline-content">{{ record.content }}</div>
           <div v-if="record.address" class="tracking-timeline-meta">
-            📍 {{ record.address }}
+ {{ record.address }}
           </div>
           <div v-if="record.remark" class="tracking-timeline-meta">
             备注: {{ record.remark }}

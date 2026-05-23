@@ -254,7 +254,7 @@ onMounted(() => {
             size="large"
             :icon="Check"
           >
-            ✓ 借贷平衡
+ 借贷平衡
           </el-tag>
           <el-tag
             v-else
@@ -263,7 +263,7 @@ onMounted(() => {
             size="large"
             :icon="Close"
           >
-            ✗ 借贷不平衡
+ 借贷不平衡
           </el-tag>
         </div>
       </div>

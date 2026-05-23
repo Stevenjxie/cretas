@@ -47,8 +47,8 @@ const failureDialogRows = ref<EtlFailure[]>([]);
 
 function statusLabel(status: EtlStatusResponse['lastStatus'] | undefined): string {
   switch (status) {
-    case 'success': return '✅ 成功';
-    case 'failed':  return '❌ 失败';
+ case 'success': return ' 成功';
+ case 'failed': return ' 失败';
     case 'running': return '⏳ 运行中';
     case 'queued':  return '⏳ 排队中';
     case 'never_ran': return '— 未运行';

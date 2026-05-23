@@ -23,7 +23,7 @@
     <!-- Header -->
     <div class="workdesk-header">
       <div class="header-title">
-        <span class="emoji">🛒</span>
+ <span class="emoji"></span>
         <span class="title-text">采购员工作台</span>
         <el-tag size="small" type="info">Sprint 8 P4b (2026-05-20)</el-tag>
       </div>
@@ -38,7 +38,7 @@
     <el-card class="chat-card" shadow="never">
       <template #header>
         <div class="card-header">
-          <span>💬 与 AI 对话</span>
+ <span> 与 AI 对话</span>
           <span class="header-hint">默认查询: "下周采购什么?" — 也可问其他</span>
         </div>
       </template>
@@ -81,7 +81,7 @@
     <el-card v-if="formattedText" class="result-card" shadow="never">
       <template #header>
         <div class="card-header">
-          <span>📋 下周采购计划</span>
+ <span> 下周采购计划</span>
           <span class="header-hint" v-if="lastQueryTime">
             {{ lastQueryTime }} 生成
           </span>
@@ -94,7 +94,7 @@
     <el-card v-if="lowStockRows.length > 0" class="low-stock-card" shadow="never">
       <template #header>
         <div class="card-header">
-          <span>📦 低库存清单 ({{ lowStockRows.length }})</span>
+ <span> 低库存清单 ({{ lowStockRows.length }})</span>
           <span class="header-hint">已附推荐补货量, 一键创建请购单</span>
         </div>
       </template>
@@ -168,7 +168,7 @@
     <el-card v-if="forecastRows.length > 0" class="forecast-card" shadow="never">
       <template #header>
         <div class="card-header">
-          <span>📈 7 天销售预测 ({{ forecastRows.length }})</span>
+ <span> 7 天销售预测 ({{ forecastRows.length }})</span>
           <span class="header-hint">最近 14 天 AVG × 7 × 1.1 buffer</span>
         </div>
       </template>
@@ -260,16 +260,16 @@
           <template #default>
             <div v-if="requisitionDialog.preview.canDo">
               <p v-if="requisitionDialog.preview.estimatedBudget != null" class="preview-line">
-                💰 预算 ¥{{ formatQty(requisitionDialog.preview.estimatedBudget) }}
+ 预算 ¥{{ formatQty(requisitionDialog.preview.estimatedBudget) }}
                 (按 ¥{{ formatQty(requisitionDialog.preview.estimatedUnitPrice) }}/单位)
                 <el-text size="small" type="info">— {{ requisitionDialog.preview.priceSource }}</el-text>
               </p>
               <p v-if="requisitionDialog.preview.supplierName" class="preview-line">
-                🏢 建议供应商: {{ requisitionDialog.preview.supplierName }}
+ 建议供应商: {{ requisitionDialog.preview.supplierName }}
                 (主数据交期 {{ requisitionDialog.preview.supplierDeliveryDays || '?' }} 天)
               </p>
               <p v-if="requisitionDialog.preview.approvalChainHint" class="preview-line">
-                📝 {{ requisitionDialog.preview.approvalChainHint }}
+ {{ requisitionDialog.preview.approvalChainHint }}
               </p>
             </div>
           </template>
@@ -374,23 +374,23 @@
           <template #default>
             <div v-if="procurementDialog.preview.canDo">
               <p v-if="procurementDialog.preview.estimatedBudget != null" class="preview-line">
-                💰 预算 ¥{{ formatQty(procurementDialog.preview.estimatedBudget) }}
+ 预算 ¥{{ formatQty(procurementDialog.preview.estimatedBudget) }}
                 <el-text v-if="procurementDialog.preview.estimatedUnitPrice" size="small" type="info">
                   (¥{{ formatQty(procurementDialog.preview.estimatedUnitPrice) }}/单位 × {{ formatQty(procurementDialog.form.quantity) }})
                 </el-text>
               </p>
               <p v-if="procurementDialog.preview.supplierName" class="preview-line">
-                🏢 供应商: {{ procurementDialog.preview.supplierName }}
+ 供应商: {{ procurementDialog.preview.supplierName }}
                 <el-text v-if="procurementDialog.preview.supplierDeliveryDays" size="small" type="info">
                   — 主数据交期 {{ procurementDialog.preview.supplierDeliveryDays }} 天
                 </el-text>
               </p>
               <p v-if="procurementDialog.preview.monthlyAvgUsage" class="preview-line">
-                📊 月均用量 {{ formatQty(procurementDialog.preview.monthlyAvgUsage) }}{{ procurementDialog.row?.unit }}
+ 月均用量 {{ formatQty(procurementDialog.preview.monthlyAvgUsage) }}{{ procurementDialog.row?.unit }}
                 — 上限 {{ formatQty(procurementDialog.preview.maxQuantity) }}{{ procurementDialog.row?.unit }} (× 3 月 buffer)
               </p>
               <p v-if="procurementDialog.preview.approvalChainHint" class="preview-line">
-                📝 {{ procurementDialog.preview.approvalChainHint }}
+ {{ procurementDialog.preview.approvalChainHint }}
               </p>
             </div>
             <div v-else>

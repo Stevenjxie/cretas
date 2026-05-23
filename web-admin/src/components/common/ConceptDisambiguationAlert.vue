@@ -51,7 +51,7 @@ const router = useRouter();
     </template>
     <template #default>
       <span style="font-size: 13px">
-        ⚠️ 如果你想录入的是<strong>{{ other }}</strong>，请到
+ ️ 如果你想录入的是<strong>{{ other }}</strong>，请到
         <el-link
           type="primary"
           :underline="false"

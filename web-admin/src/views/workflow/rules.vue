@@ -328,8 +328,8 @@ async function handleTest(rule: WorkflowRule): Promise<void> {
       const hit = resp.data?.result;
       ElMessage({
         message: hit
-          ? `规则命中 ✓ — 将路由到 trueTargetNodeId`
-          : `规则未命中 ✗ — 将路由到 falseTargetNodeId 或下一规则`,
+ ? `规则命中 — 将路由到 trueTargetNodeId`
+ : `规则未命中 — 将路由到 falseTargetNodeId 或下一规则`,
         type: hit ? 'success' : 'info',
         duration: 5000,
       });

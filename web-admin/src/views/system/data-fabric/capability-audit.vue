@@ -137,8 +137,8 @@ function refresh() {
           </el-table-column>
           <el-table-column label="状态" width="120">
             <template #default="{ row }">
-              <el-tag v-if="row.satisfied" type="success">✓ 满足</el-tag>
-              <el-tag v-else type="warning">✗ 缺 {{ row.missing.length }}</el-tag>
+ <el-tag v-if="row.satisfied" type="success"> 满足</el-tag>
+ <el-tag v-else type="warning"> 缺 {{ row.missing.length }}</el-tag>
             </template>
           </el-table-column>
           <el-table-column label="缺失字段">
