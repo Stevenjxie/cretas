@@ -16,7 +16,7 @@ UPDATE ai_intent_configs SET negative_keywords = jsonb_build_array(
     '良品率怎么样', '客单价', '食安通过率', '翻台率', '菜品毛利',
     '损耗率', '指标', '指标走势', '指标趋势', '指标现状',
     '今天客单价'
-)::text WHERE intent_code = 'REPORT_QUALITY';
+) WHERE intent_code ='REPORT_QUALITY';
 
 -- ============================================================================
 -- SKU_GROSS_MARGIN — yield 菜品毛利 indicator queries to INDICATOR_QUERY
@@ -25,7 +25,7 @@ UPDATE ai_intent_configs SET negative_keywords = jsonb_build_array(
 UPDATE ai_intent_configs SET negative_keywords = jsonb_build_array(
     '客单价', '良品率', '食安', '翻台率', '菜品毛利',
     '损耗率', '指标', '今天', '怎么样'
-)::text WHERE intent_code = 'SKU_GROSS_MARGIN';
+) WHERE intent_code ='SKU_GROSS_MARGIN';
 
 -- ============================================================================
 -- BATCH_CONSUMPTION_QUERY — yield 原料追溯 queries to LINEAGE_QUERY
@@ -34,7 +34,7 @@ UPDATE ai_intent_configs SET negative_keywords = jsonb_build_array(
 UPDATE ai_intent_configs SET negative_keywords = jsonb_build_array(
     '哪些原料', '原料流向', '批次溯源', '召回', '溯源',
     '上游下游', '流向了哪些'
-)::text WHERE intent_code = 'BATCH_CONSUMPTION_QUERY';
+) WHERE intent_code ='BATCH_CONSUMPTION_QUERY';
 
 -- ============================================================================
 -- Verify
