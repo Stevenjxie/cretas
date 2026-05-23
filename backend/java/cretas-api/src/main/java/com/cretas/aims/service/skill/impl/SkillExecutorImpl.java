@@ -136,12 +136,25 @@ public class SkillExecutorImpl implements SkillExecutor {
             log.debug("Prepared prompt for skill {}: length={}", skill.getName(), prompt.length());
 
             // 5. Call LLM to get parameters and execution plan
-            String llmResponse = callLlm(prompt, context.getUserQuery());
-            log.debug("LLM response for skill {}: length={}", skill.getName(),
-                    llmResponse != null ? llmResponse.length() : 0);
-
-            // 6. Parse LLM response and extract parameters
-            Map<String, Object> params = extractParams(llmResponse, context);
+            Map<String, Object> params;
+            try {
+                String llmResponse = callLlm(prompt, context.getUserQuery());
+                log.debug("LLM response for skill {}: length={}", skill.getName(),
+                        llmResponse != null ? llmResponse.length() : 0);
+                // 6. Parse LLM response and extract parameters
+                params = extractParams(llmResponse, context);
+            } catch (RuntimeException llmEx) {
+                // LLM unavailable (timeout / rate-limit / network) — degrade to deterministic
+                // tool-list execution instead of failing the whole Skill. Each Tool gets the
+                // context's factoryId/userId but no LLM-determined params; Tools that can
+                // execute with defaults will succeed. Avoids "Skill 执行失败" UX regression.
+                log.warn("Skill {} LLM unavailable ({}), falling back to default-tool execution",
+                        skill.getName(), llmEx.getMessage());
+                params = new HashMap<>();
+                if (context.getFactoryId() != null) params.put("factoryId", context.getFactoryId());
+                if (context.getUserId() != null) params.put("userId", context.getUserId());
+                params.put("_llmFallback", "deterministic_no_llm");
+            }
             context.setExtractedParams(params);
             log.info("Extracted {} parameters for skill {}", params.size(), skill.getName());
 
