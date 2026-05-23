@@ -71,6 +71,22 @@
       :closable="false"
       class="error-alert" />
 
+    <!-- Sprint 11 D7 — 经营指标卡片 (BI Tool indicator_query) -->
+    <el-card class="indicators-card" shadow="never">
+      <template #header>
+        <div class="card-header">
+          <span>经营指标</span>
+          <span class="header-hint">来源: BI IndicatorQueryTool · F006 真数据</span>
+        </div>
+      </template>
+      <div class="indicators-grid">
+        <IndicatorCard :factory-id="factoryId" indicator-code="AVG_TICKET_PRICE" display-name="客单价" unit="元" />
+        <IndicatorCard :factory-id="factoryId" indicator-code="TABLE_TURNOVER" display-name="翻台率" unit="倍" />
+        <IndicatorCard :factory-id="factoryId" indicator-code="FOOD_SAFETY_PASS_RATE" display-name="食安通过率" unit="%" />
+        <IndicatorCard :factory-id="factoryId" indicator-code="DISH_GROSS_MARGIN" display-name="菜品毛利" unit="%" />
+      </div>
+    </el-card>
+
     <!-- AI 输出 -->
     <el-card v-if="formattedText" class="result-card" shadow="never">
       <template #header>
@@ -465,6 +481,7 @@ import { ElMessage } from 'element-plus';
 import { Refresh, Loading } from '@element-plus/icons-vue';
 import request from '@/api/request';
 import { useAuthStore } from '@/store/modules/auth';
+import IndicatorCard from '@/components/workdesk/IndicatorCard.vue';
 
 interface CustomerItem {
   customerId: string;
@@ -1195,6 +1212,17 @@ onMounted(() => {
 .customers-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 12px;
+}
+
+/* Sprint 11 D7 — Indicators grid (4 BI Tool cards) */
+.indicators-card {
+  margin-top: 12px;
+}
+
+.indicators-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
   gap: 12px;
 }
 
