@@ -2204,6 +2204,38 @@ public class PythonSmartBIClient {
         }
     }
 
+    // ==================== 指标中心 (Phase 1 Sprint 1 Day 4) ====================
+
+    /**
+     * 取指标计算值 — Phase 2B 真实接入前的 stub.
+     *
+     * <p>Day 4 IndicatorQueryServiceImpl 调用入口; 当前实现返 {@link BigDecimal#ZERO},
+     * 不实际发 HTTP. Phase 2B Python 端点上线后, 此方法改为:
+     * <pre>
+     *   POST {pythonEndpoint}
+     *   Headers: X-Internal-Secret, X-Factory-Id
+     *   Body: {"factoryId":..., "periodStart":..., "periodEnd":...}
+     *   Response: {"value": "12.34", "scale": 4}
+     * </pre>
+     *
+     * <p>调用方 (IndicatorQueryServiceImpl#fetchFromPython) 已处理 stub 返 ZERO 的语义,
+     * 不需要本方法抛错告知 stub 状态.
+     *
+     * @param factoryId      工厂 ID
+     * @param pythonEndpoint Python 端点路径 (IndicatorComputation.computeSource)
+     * @param start          业务时间窗起
+     * @param end            业务时间窗止
+     * @return 指标取值 — Phase 1 stub 返 {@link BigDecimal#ZERO}
+     */
+    public java.math.BigDecimal fetchIndicatorValue(String factoryId, String pythonEndpoint,
+                                                     java.time.LocalDate start,
+                                                     java.time.LocalDate end) {
+        // Phase 1 Day 4: stub returning ZERO. Phase 2B will replace with real HTTP call.
+        log.debug("fetchIndicatorValue (stub): factoryId={}, endpoint={}, start={}, end={}",
+                factoryId, pythonEndpoint, start, end);
+        return java.math.BigDecimal.ZERO;
+    }
+
     /**
      * 根据文件名推断 MIME 类型 — 支持 xlsx/xls/csv/pdf，其他默认 octet-stream。
      * 用于 Python 服务调用时正确设置 multipart body 的 Content-Type，避免 Python

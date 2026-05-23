@@ -307,7 +307,11 @@ public class CanvasRuleController {
             rule.setEnabled(booleanField(body, "enabled", rule.getEnabled()));
         }
 
+        // save() + flush() pattern: @Version increment + UPDATE fire BEFORE serializeRule
+        // reads saved.getVersion(). Split from saveAndFlush() so existing test mocks
+        // that stub only save() keep working (flush() is a no-op on Mockito-default).
         BusinessRule saved = ruleRepository.save(rule);
+        ruleRepository.flush();
         log.info("Updated BusinessRule id={} factoryId={} ruleCode={}",
                 saved.getId(), factoryId, saved.getRuleCode());
         return ApiResponse.success("规则更新成功", serializeRule(saved));
@@ -322,7 +326,9 @@ public class CanvasRuleController {
         log.info("POST /canvas-rules/{}/toggle factoryId={}", id, factoryId);
         BusinessRule rule = loadRule(factoryId, id);
         rule.setEnabled(!Boolean.TRUE.equals(rule.getEnabled()));
+        // save() + flush() so serializeRule below sees post-flush @Version increment.
         BusinessRule saved = ruleRepository.save(rule);
+        ruleRepository.flush();
         return ApiResponse.success(
                 Boolean.TRUE.equals(saved.getEnabled()) ? "规则已启用" : "规则已禁用",
                 serializeRule(saved));
@@ -370,7 +376,10 @@ public class CanvasRuleController {
 
         try {
             rule.softDelete();
+            // save() + flush() so deletedAt UPDATE + @Version increment fires before
+            // we read saved.getDeletedAt() / getId() in the response map.
             BusinessRule saved = ruleRepository.save(rule);
+            ruleRepository.flush();
             Map<String, Object> data = new LinkedHashMap<>();
             data.put("ruleId", saved.getId().toString());
             data.put("ruleCode", saved.getRuleCode());

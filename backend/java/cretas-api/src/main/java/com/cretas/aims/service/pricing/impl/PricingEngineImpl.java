@@ -5,12 +5,15 @@ import com.cretas.aims.entity.pricing.PricingStrategy;
 import com.cretas.aims.entity.pricing.PricingStrategyType;
 import com.cretas.aims.repository.pricing.PricingApplicationLogRepository;
 import com.cretas.aims.repository.pricing.PricingStrategyRepository;
+import com.cretas.aims.service.canvas.ThresholdKeys;
+import com.cretas.aims.service.canvas.ThresholdResolverService;
 import com.cretas.aims.service.pricing.AppliedStrategy;
 import com.cretas.aims.service.pricing.PricingEngine;
 import com.cretas.aims.service.pricing.PricingRequest;
 import com.cretas.aims.service.pricing.PricingResult;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -60,8 +63,17 @@ public class PricingEngineImpl implements PricingEngine {
     private final PricingStrategyRepository strategyRepo;
     private final PricingApplicationLogRepository logRepo;
 
-    /** Fool-proof rule (per spec §4): warn if totalDiscount > 50% of original. */
-    private static final BigDecimal DEEP_DISCOUNT_PCT_THRESHOLD = new BigDecimal("0.50");
+    /**
+     * Canvas-Thresholds resolver — read per-factory deep-discount ratio override when present,
+     * otherwise fall back to the hard-coded 0.50 constant. Optional injection
+     * (required=false) keeps existing unit tests that bypass Spring DI working:
+     * resolver==null branch returns the fallback constant.
+     */
+    @Autowired(required = false)
+    private ThresholdResolverService thresholdResolver;
+
+    /** Fool-proof rule (per spec §4): fallback default when ThresholdResolverService is unavailable. */
+    private static final BigDecimal FALLBACK_DEEP_DISCOUNT_RATIO = new BigDecimal("0.50");
 
     /** Whether to skip CYCLE strategies inline (per spec §3 step 4: CYCLE = month-end rebate). */
     private static final boolean SKIP_CYCLE_INLINE = true;
@@ -481,13 +493,30 @@ public class PricingEngineImpl implements PricingEngine {
 
         if (originalPrice.compareTo(BigDecimal.ZERO) > 0) {
             BigDecimal discountRatio = totalDiscount.divide(originalPrice, 4, RoundingMode.HALF_UP);
-            if (discountRatio.compareTo(DEEP_DISCOUNT_PCT_THRESHOLD) > 0) {
-                warnings.add(String.format("deep discount — 折扣 %s%% 超过 50%% 阈值",
+            BigDecimal threshold = resolveDeepDiscountRatio(request.getFactoryId());
+            if (discountRatio.compareTo(threshold) > 0) {
+                BigDecimal thresholdPct = threshold.multiply(BigDecimal.valueOf(100))
+                        .setScale(0, RoundingMode.HALF_UP);
+                warnings.add(String.format("deep discount — 折扣 %s%% 超过 %s%% 阈值",
                         discountRatio.multiply(BigDecimal.valueOf(100))
-                                .setScale(1, RoundingMode.HALF_UP).toPlainString()));
+                                .setScale(1, RoundingMode.HALF_UP).toPlainString(),
+                        thresholdPct.toPlainString()));
             }
         }
         return warnings;
+    }
+
+    /**
+     * Resolve the deep-discount warning ratio for the given factory.
+     * Falls back to {@link #FALLBACK_DEEP_DISCOUNT_RATIO} (0.50) when the resolver bean
+     * is not present in the application context (e.g. unit tests).
+     */
+    private BigDecimal resolveDeepDiscountRatio(String factoryId) {
+        if (thresholdResolver == null) {
+            return FALLBACK_DEEP_DISCOUNT_RATIO;
+        }
+        return thresholdResolver.getBigDecimal(
+                factoryId, ThresholdKeys.PRICING_DEEP_DISCOUNT_RATIO, FALLBACK_DEEP_DISCOUNT_RATIO);
     }
 
     // ==================== Persistence ====================
