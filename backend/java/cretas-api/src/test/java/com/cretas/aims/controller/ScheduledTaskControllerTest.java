@@ -14,6 +14,8 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.context.ApplicationContext;
 
+import java.util.HashMap;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -181,11 +183,11 @@ class ScheduledTaskControllerTest {
     @DisplayName("Rule 16: update applies same AUD-5 taskCode validation as create")
     void testUpdateAppliesTaskCodeValidation() {
         UUID taskId = UUID.randomUUID();
-        ScheduledTask patch = new ScheduledTask();
-        patch.setTaskCode("X".repeat(200));   // way over 100
+        Map<String, Object> body = new HashMap<>();
+        body.put("taskCode", "X".repeat(200));   // way over 100
 
         BusinessException ex = assertThrows(BusinessException.class,
-                () -> controller.update(taskId, patch),
+                () -> controller.update(taskId, body),
                 "Rule 16: update path 也必须 reject");
         assertEquals(400, ex.getCode());
         assertTrue(ex.getMessage().contains("任务代码"));
@@ -198,11 +200,11 @@ class ScheduledTaskControllerTest {
     @DisplayName("Rule 16: update applies same AUD-5 taskName validation as create")
     void testUpdateAppliesTaskNameValidation() {
         UUID taskId = UUID.randomUUID();
-        ScheduledTask patch = new ScheduledTask();
-        patch.setTaskName("名".repeat(300));   // way over 255
+        Map<String, Object> body = new HashMap<>();
+        body.put("taskName", "名".repeat(300));   // way over 255
 
         BusinessException ex = assertThrows(BusinessException.class,
-                () -> controller.update(taskId, patch));
+                () -> controller.update(taskId, body));
         assertEquals(400, ex.getCode());
         assertEquals("taskName", ex.getHintTarget());
         verify(dynamicSchedulerService, never()).updateTask(eq(taskId), any());
@@ -214,14 +216,14 @@ class ScheduledTaskControllerTest {
         // Partial-update semantics: caller may PATCH only one field. Null fields
         // mean "don't change this", so they must NOT trigger length validation.
         UUID taskId = UUID.randomUUID();
-        ScheduledTask patch = new ScheduledTask();
+        Map<String, Object> body = new HashMap<>();
         // All length-checked fields left null — only `enabled` set, hypothetically.
-        patch.setEnabled(false);
+        body.put("enabled", false);
 
         when(dynamicSchedulerService.updateTask(eq(taskId), any(ScheduledTask.class)))
                 .thenAnswer(inv -> inv.getArgument(1));
 
-        ApiResponse<ScheduledTask> resp = controller.update(taskId, patch);
+        ApiResponse<ScheduledTask> resp = controller.update(taskId, body);
         assertNotNull(resp);
         assertEquals(200, resp.getCode());
         verify(dynamicSchedulerService).updateTask(eq(taskId), any(ScheduledTask.class));
@@ -244,12 +246,12 @@ class ScheduledTaskControllerTest {
         existing.setVersion(1L);   // DB has been updated by Admin A
         when(taskRepository.findById(taskId)).thenReturn(Optional.of(existing));
 
-        ScheduledTask patch = new ScheduledTask();
-        patch.setVersion(0L);   // stale client snapshot
-        patch.setTaskName("覆盖尝试");
+        Map<String, Object> body = new HashMap<>();
+        body.put("version", 0L);   // stale client snapshot
+        body.put("taskName", "覆盖尝试");
 
         BusinessException ex = assertThrows(BusinessException.class,
-                () -> controller.update(taskId, patch),
+                () -> controller.update(taskId, body),
                 "stale version 必须 reject 不允许 silent overwrite");
 
         assertEquals(409, ex.getCode(), "must be 409 CONFLICT, not silent 200");
@@ -279,9 +281,9 @@ class ScheduledTaskControllerTest {
         existing.setVersion(1L);
         when(taskRepository.findById(taskId)).thenReturn(Optional.of(existing));
 
-        ScheduledTask patch = new ScheduledTask();
-        patch.setVersion(1L);   // matches DB
-        patch.setTaskName("新名字");
+        Map<String, Object> body = new HashMap<>();
+        body.put("version", 1L);   // matches DB
+        body.put("taskName", "新名字");
 
         when(dynamicSchedulerService.updateTask(eq(taskId), any(ScheduledTask.class)))
                 .thenAnswer(inv -> {
@@ -292,7 +294,7 @@ class ScheduledTaskControllerTest {
                     return updated;
                 });
 
-        ApiResponse<ScheduledTask> resp = controller.update(taskId, patch);
+        ApiResponse<ScheduledTask> resp = controller.update(taskId, body);
         assertNotNull(resp);
         assertEquals(200, resp.getCode());
         verify(dynamicSchedulerService).updateTask(eq(taskId), any(ScheduledTask.class));
@@ -307,14 +309,14 @@ class ScheduledTaskControllerTest {
         // forcing a version round-trip. The repo lookup is also skipped (lazy) since
         // we have nothing to compare against.
         UUID taskId = UUID.randomUUID();
-        ScheduledTask patch = new ScheduledTask();
+        Map<String, Object> body = new HashMap<>();
         // intentionally no version
-        patch.setTaskName("leniency-test");
+        body.put("taskName", "leniency-test");
 
         when(dynamicSchedulerService.updateTask(eq(taskId), any(ScheduledTask.class)))
                 .thenAnswer(inv -> inv.getArgument(1));
 
-        ApiResponse<ScheduledTask> resp = controller.update(taskId, patch);
+        ApiResponse<ScheduledTask> resp = controller.update(taskId, body);
         assertNotNull(resp);
         assertEquals(200, resp.getCode());
         verify(dynamicSchedulerService).updateTask(eq(taskId), any(ScheduledTask.class));
