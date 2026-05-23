@@ -36,6 +36,8 @@ $ curl -s http://139.196.165.140:8086/ | sha256sum
 
 **Hash 一致** — served = disk file = fresh build (mtime May 23 11:52)。Sister chat 已部署 (P3 skip)。
 
+> **Update (2026-05-23 post-PR #234)**: Hash updated `23903bdb0a5d...` → `6d96b071e213192fcac8b5b2315b553588159b6d1a7de1c40817618bfa5f38d6` after BI 4-B band-aid deploy (B2BRealDataSection 接入 + 7 mirror codes filter + 大字 banner). Current prod 8086 served hash matches this post-#234 value. See `sprint-11-bi-4b-real-data-fix.md` for full re-deploy context.
+
 ### DOD (c) audit doc — 本文件 merged to main
 
 ### DOD (d) Playwright spec + 4 PNG + 录屏

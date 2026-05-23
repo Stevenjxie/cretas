@@ -94,8 +94,15 @@ public class WorkdeskOutputSummarizer {
 
         String summary = tryLlmSummarize(resultData, response);
         if (summary == null || summary.isBlank()) {
-            log.debug("WorkdeskOutputSummarizer: LLM unavailable, keeping existing template");
-            return;
+            // LLM unavailable (DashScope quota / network / timeout) — degrade gracefully
+            // to a deterministic Java-side strip-and-template summary instead of keeping
+            // dirty _toolCount / raw-JSON text. Better than nothing for B-end users.
+            summary = buildDeterministicFallback(resultData, response);
+            if (summary == null || summary.isBlank()) {
+                log.debug("WorkdeskOutputSummarizer: LLM unavailable AND fallback empty; keeping existing template");
+                return;
+            }
+            log.info("WorkdeskOutputSummarizer: LLM unavailable, applied deterministic fallback ({} chars)", summary.length());
         }
 
         if (ftDirty) {
@@ -110,6 +117,78 @@ public class WorkdeskOutputSummarizer {
                     message != null ? message.length() : 0);
             response.setMessage(summary);
         }
+    }
+
+    /**
+     * Deterministic Java-side fallback when LLM is unavailable. Strips
+     * underscore-prefixed metadata keys and emits a structured summary
+     * (top-level key list + leaf counts). Output is plain text, no emoji.
+     *
+     * <p>Goal: pass the {@link #isDirty} check (no underscore keys, not
+     * brace-heavy, not bare template) even when DashScope is rate-limited.
+     */
+    @SuppressWarnings("unchecked")
+    String buildDeterministicFallback(Object resultData, IntentExecuteResponse response) {
+        if (resultData == null) return null;
+        Object cleaned = stripUnderscoreKeys(resultData);
+        if (!(cleaned instanceof Map)) return null;
+        Map<String, Object> cleanedMap = (Map<String, Object>) cleaned;
+        if (cleanedMap.isEmpty()) return null;
+
+        String intentName = response.getIntentName() != null
+                ? response.getIntentName() : "工作台";
+
+        StringBuilder sb = new StringBuilder();
+        sb.append(intentName).append(" 数据摘要 (LLM 暂不可用, 显示结构化结果):\n\n");
+
+        for (Map.Entry<String, Object> e : cleanedMap.entrySet()) {
+            String key = e.getKey();
+            Object value = e.getValue();
+            sb.append("- ").append(key).append(": ");
+            sb.append(describeLeaf(value));
+            sb.append("\n");
+        }
+        sb.append("\n详细数据请在工作台查看对应模块.\n");
+
+        String result = sb.toString();
+        if (result.length() > maxChars) {
+            result = result.substring(0, maxChars) + "...";
+        }
+        return result;
+    }
+
+    /**
+     * Render a leaf value as a short Chinese description (count / size / scalar),
+     * never JSON-dumping nested structure.
+     */
+    @SuppressWarnings("unchecked")
+    private String describeLeaf(Object value) {
+        if (value == null) return "无数据";
+        if (value instanceof Map) {
+            Map<String, Object> m = (Map<String, Object>) value;
+            // Look for common count fields
+            for (String countKey : new String[]{"count", "total", "size", "totalCount", "rowCount"}) {
+                if (m.containsKey(countKey)) {
+                    Object cv = m.get(countKey);
+                    if (cv != null) return cv + " 项";
+                }
+            }
+            return m.size() + " 个字段";
+        }
+        if (value instanceof Iterable) {
+            int n = 0;
+            for (Object ignored : (Iterable<?>) value) n++;
+            return n + " 项";
+        }
+        if (value instanceof Number) {
+            return value.toString();
+        }
+        if (value instanceof Boolean) {
+            return ((Boolean) value) ? "是" : "否";
+        }
+        String s = value.toString();
+        if (s.length() > 100) s = s.substring(0, 100) + "...";
+        return s;
     }
 
     /**
@@ -231,8 +310,9 @@ public class WorkdeskOutputSummarizer {
                 + "2. 用 markdown 结构: 短标题 + 要点列表. 不要输出 JSON 原文.\n"
                 + "3. 对每个 tool 返回的关键指标都要提及 (人, 客户, 批次, 金额, 数量, 库存, 告警等).\n"
                 + "4. 若数据为空或全 0, 明确说明 '当前暂无 XX' 而非编造.\n"
-                + "5. 若发现风险 (库存预警 / 应收过期 / 合规问题 / 告警), 在末尾列 '⚠️ 风险提示'.\n"
+                + "5. 若发现风险 (库存预警 / 应收过期 / 合规问题 / 告警), 在末尾列 '风险提示' 段落 (不要用 emoji / 装饰符号).\n"
                 + "6. 不要输出 _toolCount / _executionOrder / 内部 metadata 字段.\n"
-                + "7. 输出不超过 800 字.\n";
+                + "7. 不要使用任何 emoji 或 Unicode 装饰符号 (B 端用户偏好纯文本).\n"
+                + "8. 输出不超过 800 字.\n";
     }
 }

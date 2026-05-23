@@ -207,7 +207,7 @@ public class SsopMonthlyAuditReportTool extends AbstractBusinessTool {
         data.put("actionHint", "/foodsafety/ssop/audit-report?yearMonth=" + ym);
 
         String message = String.format(
-                "📊 %s 工厂 %s SSOP 月度审计: 共 %d 项 records (完成 %d + 跳过 %d = 完成率 %s%%), " +
+                "%s 工厂 %s SSOP 月度审计: 共 %d 项 records (完成 %d + 跳过 %d = 完成率 %s%%), " +
                 "阻产 %d 次, 涉及 %d 个 active 模板. %s",
                 factoryId, ym, total, statusBreakdown.get("COMPLETED"), statusBreakdown.get("SKIPPED"),
                 completionRate, gateRows.size(), totalProcedures,

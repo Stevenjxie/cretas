@@ -18,12 +18,14 @@ import com.cretas.aims.service.ParameterExtractionLearningService;
 import com.cretas.aims.service.impl.IntentConfigRollbackService;
 import com.cretas.aims.entity.learning.ParameterExtractionRule;
 import com.cretas.aims.entity.config.AIIntentConfigHistory;
+import com.cretas.aims.utils.CookieAuthHelper;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import com.cretas.aims.annotation.RateLimit;
 import com.cretas.aims.annotation.RateLimit.LimitType;
 import com.cretas.aims.exception.BusinessException;
+import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.MediaType;
@@ -61,6 +63,34 @@ public class AIIntentConfigController {
     private final IntentConfigRollbackService rollbackService;
     private final ParameterExtractionLearningService parameterExtractionLearningService;
     private final JwtUtil jwtUtil;
+
+    /**
+     * Sprint 11.5 P0 fix (2026-05-23): Extract JWT token from request supporting BOTH
+     * Bearer header (mobile clients) AND HttpOnly cookie (web admin clients).
+     *
+     * <p>Pre-fix: all 9 endpoints used {@code @RequestHeader("Authorization") String authorization}
+     * which is mandatory by Spring default. Web admin sends cookie-only requests (no Authorization
+     * header) → Spring throws {@code MissingRequestHeaderException} → falls to generic
+     * {@link com.cretas.aims.exception.GlobalExceptionHandler#handleRuntimeException} → HTTP 500
+     * "系统处理异常 (追踪码: XXX)". 100% of web-admin UI clients hitting AI intent endpoints
+     * saw cryptic 500. {@link com.cretas.aims.config.JwtAuthInterceptor#extractToken} already
+     * supports both paths for authentication; the controller-level header dependency was the gap.
+     *
+     * <p>Post-fix: this helper mirrors {@link com.cretas.aims.config.JwtAuthInterceptor#extractToken}.
+     * Bearer header takes priority (no behavior change for mobile); cookie fallback unlocks web admin.
+     *
+     * @return token string, or null if neither header nor cookie present (caller should treat as auth failure)
+     */
+    private String extractToken(HttpServletRequest request) {
+        String authorization = request.getHeader("Authorization");
+        if (authorization != null && authorization.startsWith("Bearer ")) {
+            String token = authorization.substring(7).trim();
+            if (!token.isEmpty()) {
+                return token;
+            }
+        }
+        return CookieAuthHelper.extractCookieValue(request, CookieAuthHelper.ACCESS_TOKEN_COOKIE);
+    }
 
     // ==================== 意图查询 ====================
 
@@ -220,10 +250,10 @@ public class AIIntentConfigController {
     public ResponseEntity<ApiResponse<IntentExecuteResponse>> executeIntent(
             @Parameter(description = "工厂ID") @PathVariable String factoryId,
             @RequestBody IntentExecuteRequest request,
-            @RequestHeader("Authorization") String authorization) {
+            HttpServletRequest httpRequest) {
 
-        // 从JWT获取用户信息
-        String token = authorization.replace("Bearer ", "");
+        // Sprint 11.5 P0 (2026-05-23): extract token via cookie-aware helper (was @RequestHeader only)
+        String token = extractToken(httpRequest);
         Long userId = jwtUtil.getUserIdFromToken(token);
         String userRole = jwtUtil.getRoleFromToken(token);
 
@@ -245,10 +275,10 @@ public class AIIntentConfigController {
     public ResponseEntity<ApiResponse<IntentExecuteResponse>> executeMultiIntent(
             @Parameter(description = "工厂ID") @PathVariable String factoryId,
             @RequestBody IntentExecuteRequest request,
-            @RequestHeader("Authorization") String authorization) {
+            HttpServletRequest httpRequest) {
 
-        // 从JWT获取用户信息
-        String token = authorization.replace("Bearer ", "");
+        // Sprint 11.5 P0 (2026-05-23): cookie-aware token extraction
+        String token = extractToken(httpRequest);
         Long userId = jwtUtil.getUserIdFromToken(token);
         String userRole = jwtUtil.getRoleFromToken(token);
 
@@ -269,10 +299,10 @@ public class AIIntentConfigController {
     public SseEmitter executeIntentStream(
             @Parameter(description = "工厂ID") @PathVariable String factoryId,
             @RequestBody IntentExecuteRequest request,
-            @RequestHeader("Authorization") String authorization) {
+            HttpServletRequest httpRequest) {
 
-        // 从JWT获取用户信息
-        String token = authorization.replace("Bearer ", "");
+        // Sprint 11.5 P0 (2026-05-23): cookie-aware token extraction
+        String token = extractToken(httpRequest);
         Long userId = jwtUtil.getUserIdFromToken(token);
         String userRole = jwtUtil.getRoleFromToken(token);
 
@@ -291,9 +321,10 @@ public class AIIntentConfigController {
     public ResponseEntity<ApiResponse<IntentExecuteResponse>> previewIntent(
             @Parameter(description = "工厂ID") @PathVariable String factoryId,
             @RequestBody IntentExecuteRequest request,
-            @RequestHeader("Authorization") String authorization) {
+            HttpServletRequest httpRequest) {
 
-        String token = authorization.replace("Bearer ", "");
+        // Sprint 11.5 P0 (2026-05-23): cookie-aware token extraction
+        String token = extractToken(httpRequest);
         Long userId = jwtUtil.getUserIdFromToken(token);
         String userRole = jwtUtil.getRoleFromToken(token);
 
@@ -312,9 +343,10 @@ public class AIIntentConfigController {
     public ResponseEntity<ApiResponse<IntentExecuteResponse>> confirmIntent(
             @Parameter(description = "工厂ID") @PathVariable String factoryId,
             @Parameter(description = "确认Token") @PathVariable String confirmToken,
-            @RequestHeader("Authorization") String authorization) {
+            HttpServletRequest httpRequest) {
 
-        String token = authorization.replace("Bearer ", "");
+        // Sprint 11.5 P0 (2026-05-23): cookie-aware token extraction
+        String token = extractToken(httpRequest);
         Long userId = jwtUtil.getUserIdFromToken(token);
         String userRole = jwtUtil.getRoleFromToken(token);
 
@@ -335,9 +367,10 @@ public class AIIntentConfigController {
     public ResponseEntity<ApiResponse<IntentExecuteResponse>> confirmParameters(
             @Parameter(description = "工厂ID") @PathVariable String factoryId,
             @RequestBody ParameterConfirmationRequest request,
-            @RequestHeader("Authorization") String authorization) {
+            HttpServletRequest httpRequest) {
 
-        String token = authorization.replace("Bearer ", "");
+        // Sprint 11.5 P0 (2026-05-23): cookie-aware token extraction
+        String token = extractToken(httpRequest);
         Long userId = jwtUtil.getUserIdFromToken(token);
         String userRole = jwtUtil.getRoleFromToken(token);
 
@@ -496,9 +529,10 @@ public class AIIntentConfigController {
             @Parameter(description = "工厂ID") @PathVariable String factoryId,
             @Parameter(description = "意图代码") @PathVariable String intentCode,
             @RequestBody RollbackRequest request,
-            @RequestHeader("Authorization") String authorization) {
+            HttpServletRequest httpRequest) {
 
-        String token = authorization.replace("Bearer ", "");
+        // Sprint 11.5 P0 (2026-05-23): cookie-aware token extraction
+        String token = extractToken(httpRequest);
         Long userId = jwtUtil.getUserIdFromToken(token);
         String username = jwtUtil.getUsernameFromToken(token);
 
@@ -533,9 +567,10 @@ public class AIIntentConfigController {
     public ResponseEntity<ApiResponse<java.util.Map<String, Object>>> rollbackAllIntents(
             @Parameter(description = "工厂ID") @PathVariable String factoryId,
             @RequestBody RollbackRequest request,
-            @RequestHeader("Authorization") String authorization) {
+            HttpServletRequest httpRequest) {
 
-        String token = authorization.replace("Bearer ", "");
+        // Sprint 11.5 P0 (2026-05-23): cookie-aware token extraction
+        String token = extractToken(httpRequest);
         Long userId = jwtUtil.getUserIdFromToken(token);
         String username = jwtUtil.getUsernameFromToken(token);
 
@@ -598,9 +633,10 @@ public class AIIntentConfigController {
     public ResponseEntity<ApiResponse<Void>> submitIntentFeedback(
             @Parameter(description = "工厂ID") @PathVariable String factoryId,
             @RequestBody IntentFeedbackRequest request,
-            @RequestHeader("Authorization") String authorization) {
+            HttpServletRequest httpRequest) {
 
-        String token = authorization.replace("Bearer ", "");
+        // Sprint 11.5 P0 (2026-05-23): cookie-aware token extraction
+        String token = extractToken(httpRequest);
         Long userId = jwtUtil.getUserIdFromToken(token);
 
         log.info("提交意图反馈: factoryId={}, userId={}, input='{}', matched={}, correct={}, isCorrect={}",

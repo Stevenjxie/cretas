@@ -92,6 +92,11 @@ public final class ThresholdKeys {
     /** Quantity overshoot tolerance: 累计完工 / plannedQuantity 上限. Hard-coded default = 1.10 (110%). */
     public static final String PRODUCTION_OVERSHOOT_TOLERANCE = "production.quantity.overshoot_tolerance";
 
+    // ==================== 采购订单审批 (PURCHASE) ====================
+
+    /** Purchase price variance alert threshold (%). Hard-coded default = 10. Per-factory override via PurchaseOrderApprovalRule.priceVarianceThreshold takes precedence; this is final fallback. */
+    public static final String PURCHASE_PRICE_ALERT_RATIO = "purchase.price_alert.ratio";
+
     // ==================== 采购分析 (PROCUREMENT) ====================
 
     /** 质量合格率红色预警阈值 (%). Hard-coded default = 90. */

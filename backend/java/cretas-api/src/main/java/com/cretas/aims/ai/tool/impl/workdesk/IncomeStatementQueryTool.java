@@ -140,7 +140,7 @@ public class IncomeStatementQueryTool extends AbstractBusinessTool {
                 : String.format("%d-%02d 至 %d-%02d", startYear, startMonth, endYear, endMonth);
 
         String message = String.format(
-                "💰 %s 利润表: 营业收入 ¥%s / 营业成本 ¥%s / 毛利 ¥%s / 营业利润 ¥%s / 净利润 ¥%s",
+                "%s 利润表: 营业收入 ¥%s / 营业成本 ¥%s / 毛利 ¥%s / 营业利润 ¥%s / 净利润 ¥%s",
                 periodLabel,
                 dto.getTotalRevenue(), dto.getTotalCost(), dto.getGrossProfit(),
                 dto.getOperatingProfit(), dto.getNetProfit());

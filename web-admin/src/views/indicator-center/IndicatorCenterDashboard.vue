@@ -21,6 +21,12 @@
       </template>
     </el-alert>
 
+    <!-- Sprint 11 BI 4-B fix — 真业务数据 B2B section (前端 compute, Sprint 12 接 backend) -->
+    <B2BRealDataSection
+      v-if="!isMockFactory && hasMirroredIndicators"
+      :factory-id="factoryId || ''"
+    />
+
     <!-- 头部 -->
     <div class="page-header">
       <div class="title-block">
@@ -224,6 +230,7 @@ import {
 import IndicatorValueCard from '@/components/indicator/IndicatorValueCard.vue';
 import IndicatorTreeViewer from './IndicatorTreeViewer.vue';
 import IndicatorDetailDrawer from './IndicatorDetailDrawer.vue';
+import B2BRealDataSection from './B2BRealDataSection.vue';
 
 const authStore = useAuthStore();
 const factoryId = computed(() => authStore.factoryId);
@@ -232,6 +239,25 @@ const factoryId = computed(() => authStore.factoryId);
 const isMockFactory = computed(() =>
   factoryId.value === 'F999_MOCK' || factoryId.value?.endsWith('_MOCK') || false
 );
+
+// Sprint 11 PR #220 BLOCKER fix — detect F999_MOCK-mirrored codes on non-mock factory
+// Per sister chat #220 audit Item 1: F006 indicators 100% mirrored from F999_MOCK,
+// UI must label "示例数据" not real business data.
+const MIRRORED_CODES = [
+  'AVG_TICKET_PRICE', 'TABLE_TURNOVER', 'DISH_GROSS_MARGIN',
+  'RAW_WASTAGE_RATE', 'FOOD_SAFETY_PASS_RATE',
+  'FACTORY_YIELD_RATE', 'FACTORY_PLAN_ACHIEVE_RATE',
+];
+
+const mirroredIndicatorsPresent = computed(() => {
+  if (isMockFactory.value) return [];
+  return indicators.value
+    .filter(i => MIRRORED_CODES.includes(i.code))
+    .map(i => i.code);
+});
+
+const hasMirroredIndicators = computed(() => mirroredIndicatorsPresent.value.length > 0);
+const mirroredCodeList = computed(() => mirroredIndicatorsPresent.value.join(', '));
 
 const indicators = ref<IndicatorListResponse[]>([]);
 const loading = ref(false);
@@ -266,6 +292,13 @@ const stats = computed(() => {
 
 const filteredIndicators = computed(() => {
   let list = indicators.value;
+  // Sprint 11 BI 4-B fix: 非 mock 工厂下隐藏 F999_MOCK mirror codes
+  // 这些 codes 业态错配 (餐饮 codes 在 F006 工厂场景没意义) + 数值是 mirror 不是真算
+  // B2BRealDataSection 替代提供真业务数据 cards
+  // Sprint 12 backend 真接业务表后, 删除本 filter + 删除 V_23_11 mirror migration
+  if (!isMockFactory.value) {
+    list = list.filter(i => !MIRRORED_CODES.includes(i.code));
+  }
   if (searchKey.value) {
     const v = searchKey.value.toLowerCase();
     list = list.filter(

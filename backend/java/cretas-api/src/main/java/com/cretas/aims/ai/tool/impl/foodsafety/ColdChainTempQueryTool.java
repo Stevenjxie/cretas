@@ -223,7 +223,7 @@ public class ColdChainTempQueryTool extends AbstractBusinessTool {
                     equipment.getEquipmentCode(), equipment.getEquipmentName(), hours);
         } else {
             message = String.format(
-                    "📊 %s (%s, %s) 最近 %d h 共 %d 条读数: min=%s°C, max=%s°C, " +
+                    "%s (%s, %s) 最近 %d h 共 %d 条读数: min=%s°C, max=%s°C, " +
                     "avg=%s°C. 目标 %s ~ %s°C. 偏离 %d 次%s",
                     equipment.getEquipmentCode(), equipment.getEquipmentName(),
                     equipment.getType(), hours, readings.size(),

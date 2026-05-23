@@ -9,6 +9,8 @@ import com.cretas.aims.entity.ml.WorkerAllocationFeedback;
 import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.repository.WorkerAllocationFeedbackRepository;
 import com.cretas.aims.service.IndividualEfficiencyService;
+import com.cretas.aims.service.canvas.ThresholdKeys;
+import com.cretas.aims.service.canvas.ThresholdResolverService;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -41,12 +43,34 @@ public class IndividualEfficiencyServiceImpl implements IndividualEfficiencyServ
     private final PythonSmartBIClient pythonClient;
     private final PythonSmartBIConfig pythonConfig;
 
-    // 默认效率值 (当数据不足时使用)
-    private static final BigDecimal DEFAULT_EFFICIENCY = new BigDecimal("1.0");
+    /**
+     * Canvas-Thresholds resolver (Phase A P0-3) — overlays FALLBACK_* with per-factory config.
+     * Optional injection so Mockito @InjectMocks tests without resolver still construct.
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private ThresholdResolverService thresholdResolver;
 
-    // 效率值范围
-    private static final BigDecimal MIN_EFFICIENCY = new BigDecimal("0.1");
-    private static final BigDecimal MAX_EFFICIENCY = new BigDecimal("2.0");
+    // 默认效率值 fallback (当数据不足时使用)
+    private static final BigDecimal FALLBACK_DEFAULT_EFFICIENCY = new BigDecimal("1.0");
+
+    // 效率值范围 fallback
+    private static final BigDecimal FALLBACK_MIN_EFFICIENCY = new BigDecimal("0.1");
+    private static final BigDecimal FALLBACK_MAX_EFFICIENCY = new BigDecimal("2.0");
+
+    private BigDecimal resolveDefaultEfficiency(String factoryId) {
+        if (thresholdResolver == null) return FALLBACK_DEFAULT_EFFICIENCY;
+        return thresholdResolver.getBigDecimal(factoryId, ThresholdKeys.EFFICIENCY_DEFAULT, FALLBACK_DEFAULT_EFFICIENCY);
+    }
+
+    private BigDecimal resolveMinEfficiency(String factoryId) {
+        if (thresholdResolver == null) return FALLBACK_MIN_EFFICIENCY;
+        return thresholdResolver.getBigDecimal(factoryId, ThresholdKeys.EFFICIENCY_MIN, FALLBACK_MIN_EFFICIENCY);
+    }
+
+    private BigDecimal resolveMaxEfficiency(String factoryId) {
+        if (thresholdResolver == null) return FALLBACK_MAX_EFFICIENCY;
+        return thresholdResolver.getBigDecimal(factoryId, ThresholdKeys.EFFICIENCY_MAX, FALLBACK_MAX_EFFICIENCY);
+    }
 
     @Override
     public Map<Long, BigDecimal> calculateIndividualEfficiency(
@@ -121,7 +145,7 @@ public class IndividualEfficiencyServiceImpl implements IndividualEfficiencyServ
                 reward = feedback.getActualEfficiency();
             }
             if (reward == null) {
-                reward = DEFAULT_EFFICIENCY;
+                reward = resolveDefaultEfficiency(factoryId);
             }
             b[j] = reward.doubleValue();
         }
@@ -140,9 +164,10 @@ public class IndividualEfficiencyServiceImpl implements IndividualEfficiencyServ
             Long workerId = workerIdList.get(i);
             double efficiency = x[i];
 
-            // 限制效率值范围
-            efficiency = Math.max(MIN_EFFICIENCY.doubleValue(),
-                    Math.min(MAX_EFFICIENCY.doubleValue(), efficiency));
+            // 限制效率值范围 (per-factory override via Canvas Thresholds Hub)
+            double minEff = resolveMinEfficiency(factoryId).doubleValue();
+            double maxEff = resolveMaxEfficiency(factoryId).doubleValue();
+            efficiency = Math.max(minEff, Math.min(maxEff, efficiency));
 
             result.put(workerId, BigDecimal.valueOf(efficiency)
                     .setScale(4, RoundingMode.HALF_UP));
@@ -510,7 +535,9 @@ public class IndividualEfficiencyServiceImpl implements IndividualEfficiencyServ
             // 检查NaN或Inf
             if (Double.isNaN(x[i]) || Double.isInfinite(x[i])) {
                 log.warn("求解结果包含无效值: index={}, value={}", i, x[i]);
-                x[i] = DEFAULT_EFFICIENCY.doubleValue();
+                // Math NaN/Inf fallback — use system default, not per-factory (this is a solver
+                // safety net, not a business config override).
+                x[i] = FALLBACK_DEFAULT_EFFICIENCY.doubleValue();
             }
         }
 

@@ -966,9 +966,13 @@ public class IntentExecutionOrchestrator {
         AIIntentConfig matchedIntent = matchResult.getBestMatch();
         List<IntentExecuteResponse.SuggestedAction> candidateActions = buildCandidateActions(matchResult, factoryId);
 
+        // Sprint 12: enrich clarification message with inline candidate intent names so the
+        // formattedText itself carries the choices (not just suggestedActions UI buttons).
+        // Audit gate requires NEED_CLARIFICATION to include specific 2+ choice question
+        // visible in formattedText / message — bare "请确认您想要执行的操作" fails.
         String clarificationMessage = matchResult.getClarificationQuestion();
         if (clarificationMessage == null || clarificationMessage.isEmpty()) {
-            clarificationMessage = "您的请求可能匹配多个操作，请确认您想要执行的操作：";
+            clarificationMessage = buildClarificationWithChoices(candidateActions);
         }
 
         Map<String, Object> metadata = new HashMap<>();
@@ -1009,7 +1013,9 @@ public class IntentExecutionOrchestrator {
 
         if (matchResult.getTopCandidates() != null && !matchResult.getTopCandidates().isEmpty()) {
             List<IntentExecuteResponse.SuggestedAction> candidateActions = buildCandidateActions(matchResult, factoryId);
-            String weakSignalMsg = "我不太确定您想执行什么操作，请从以下选项中选择或更详细地描述您的需求：";
+            // Sprint 12: enrich weak-signal message with inline candidate intent names.
+            String weakSignalMsg = "我不太确定您想执行什么操作。" + buildChoicesLine(candidateActions)
+                    + "请回复对应序号, 或更详细地描述您的需求 (例如指定时段 / 物料 / 批次)。";
             IntentExecuteResponse.IntentExecuteResponseBuilder builder = IntentExecuteResponse.builder()
                     .intentRecognized(false).status("NEED_CLARIFICATION")
                     .message(weakSignalMsg).formattedText(weakSignalMsg)
@@ -1069,6 +1075,52 @@ public class IntentExecutionOrchestrator {
     }
 
     // ==================== 工具方法 ====================
+
+    /**
+     * Sprint 12 Task 2 — build clarification message with inline choices so
+     * formattedText carries the 2+ choice question (not just suggestedActions UI metadata).
+     *
+     * <p>Audit close-gate row "NEED_CLARIFICATION contains specific 2+ choices" requires
+     * the user-facing text to enumerate the candidate intents inline.
+     */
+    private String buildClarificationWithChoices(List<IntentExecuteResponse.SuggestedAction> candidateActions) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("您的请求可能匹配多个操作, 请选择您实际想做的:");
+        sb.append(buildChoicesLine(candidateActions));
+        sb.append("回复对应序号, 或更详细描述需求 (例如指定时段 / 物料 / 批次 / 客户)。");
+        return sb.toString();
+    }
+
+    /**
+     * Render top candidate intents as a "1. X 2. Y 3. Z" choice line.
+     * Skips REPHRASE / SHOW_INTENTS placeholders (they're UI affordances, not data choices).
+     */
+    private String buildChoicesLine(List<IntentExecuteResponse.SuggestedAction> candidateActions) {
+        if (candidateActions == null || candidateActions.isEmpty()) {
+            return "\n暂无候选操作可建议。\n";
+        }
+        StringBuilder sb = new StringBuilder("\n");
+        int idx = 1;
+        for (IntentExecuteResponse.SuggestedAction action : candidateActions) {
+            if (action == null) continue;
+            String code = action.getActionCode();
+            if ("REPHRASE".equals(code) || "SHOW_INTENTS".equals(code)) continue;
+            String name = action.getActionName();
+            if (name == null || name.isBlank()) continue;
+            sb.append(idx++).append(". ").append(name);
+            String desc = action.getDescription();
+            if (desc != null && !desc.isBlank() && !desc.startsWith("置信度")) {
+                sb.append(" — ").append(desc);
+            }
+            sb.append("\n");
+            if (idx > 3) break;  // cap at top 3 data choices
+        }
+        if (idx == 1) {
+            // No data choices found, only UI affordances
+            sb.append("暂无候选操作可建议。\n");
+        }
+        return sb.toString();
+    }
 
     private List<IntentExecuteResponse.SuggestedAction> buildCandidateActions(IntentMatchResult matchResult, String factoryId) {
         List<IntentExecuteResponse.SuggestedAction> actions = new ArrayList<>();

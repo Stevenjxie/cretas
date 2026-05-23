@@ -15,6 +15,13 @@
         <el-tag v-if="indicator.category" size="small" class="category-tag">
           {{ categoryText }}
         </el-tag>
+        <!-- Sprint 11 BI deep-audit Finding-2 P1: mark F999_MOCK mirror codes -->
+        <el-tag v-if="isMirrored" type="warning" size="small" class="source-tag" effect="plain">
+          示例
+        </el-tag>
+        <el-tag v-else-if="isUnconfigured" type="info" size="small" class="source-tag" effect="plain">
+          待配置
+        </el-tag>
       </div>
       <el-tag
         v-if="indicator.alertLevel"
@@ -89,6 +96,19 @@ const props = withDefaults(defineProps<Props>(), {
   clickable: true,
   loading: false,
 });
+
+// Sprint 11 BI deep-audit Finding-2 P1: F999_MOCK mirror code detection.
+// per V_23_11 migration list (matches IndicatorCenterDashboard.MIRRORED_CODES).
+const MIRRORED_CODES = [
+  'AVG_TICKET_PRICE', 'TABLE_TURNOVER', 'DISH_GROSS_MARGIN',
+  'RAW_WASTAGE_RATE', 'FOOD_SAFETY_PASS_RATE',
+  'FACTORY_YIELD_RATE', 'FACTORY_PLAN_ACHIEVE_RATE',
+];
+const isMirrored = computed(() => MIRRORED_CODES.includes(props.indicator.code));
+const isUnconfigured = computed(() =>
+  !isMirrored.value &&
+  (props.indicator.lastValue === null || props.indicator.lastValue === undefined)
+);
 
 const emit = defineEmits<{
   (e: 'click', code: string): void;
@@ -229,6 +249,13 @@ function relativeTime(iso: string): string {
 
 .category-tag {
   flex-shrink: 0;
+}
+
+/* Sprint 11 BI deep-audit Finding-2 P1: source-tag styles */
+.source-tag {
+  flex-shrink: 0;
+  font-size: 10px !important;
+  padding: 0 4px !important;
 }
 
 .card-body {

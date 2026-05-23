@@ -276,7 +276,7 @@ public class ToolPatternDiscoveryTool extends AbstractBusinessTool {
     private String formatTrendsMessage(List<ToolHealthMonitor.ToolUsageTrend> declining,
                                         List<ToolHealthMonitor.ToolUsageTrend> surging, int days) {
         StringBuilder sb = new StringBuilder();
-        sb.append(String.format("📊 最近 %d 天工具使用趋势：\n\n", days));
+        sb.append(String.format("最近 %d 天工具使用趋势：\n\n", days));
 
         if (!surging.isEmpty()) {
             sb.append(String.format("📈 **爆发中** (%d 个):\n", surging.size()));
@@ -324,7 +324,7 @@ public class ToolPatternDiscoveryTool extends AbstractBusinessTool {
             return String.format("最近 %d 天的工具使用模式已被现有 Skill 完全覆盖，暂无新推荐。", days);
         }
         StringBuilder sb = new StringBuilder();
-        sb.append(String.format("📊 最近 %d 天发现 %d 个可组合为 Skill 的模式：\n\n", days, actionable.size()));
+        sb.append(String.format("最近 %d 天发现 %d 个可组合为 Skill 的模式：\n\n", days, actionable.size()));
         int shown = Math.min(5, actionable.size());
         for (int i = 0; i < shown; i++) {
             SkillRecommendation r = actionable.get(i);

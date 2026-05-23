@@ -130,7 +130,7 @@ public class CashflowStatementQueryTool extends AbstractBusinessTool {
                 : String.format("%d-%02d 至 %d-%02d", startYear, startMonth, endYear, endMonth);
 
         String message = String.format(
-                "💵 %s 现金流: 经营 ¥%s / 投资 ¥%s / 筹资 ¥%s / 净增加 ¥%s",
+                "%s 现金流: 经营 ¥%s / 投资 ¥%s / 筹资 ¥%s / 净增加 ¥%s",
                 periodLabel,
                 dto.getOperatingNetCashFlow(), dto.getInvestingNetCashFlow(),
                 dto.getFinancingNetCashFlow(), dto.getNetIncreaseInCash());

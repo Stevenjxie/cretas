@@ -212,7 +212,7 @@ public class PriceHistoryQueryTool extends AbstractBusinessTool {
             }
         } else {
             message = String.format(
-                    "💰 %s 最近 %d 个月价格历史: %d 月数据, 加权均价 %s%s%s",
+                    "%s 最近 %d 个月价格历史: %d 月数据, 加权均价 %s%s%s",
                     materialName != null ? materialName : materialTypeId,
                     monthsBack, monthlyPrices.size(),
                     overallAvg != null ? overallAvg.toPlainString() : "?",
