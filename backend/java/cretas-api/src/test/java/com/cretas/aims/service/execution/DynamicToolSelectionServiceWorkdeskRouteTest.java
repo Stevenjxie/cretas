@@ -257,6 +257,96 @@ class DynamicToolSelectionServiceWorkdeskRouteTest {
         assertThat(response.getFormattedText()).contains("boom");
     }
 
+    /**
+     * Sprint 9 P0.2 (2026-05-22): SkillRouterServiceImpl.executeSkill returns English
+     * "Skill not found: xxx", not "未找到Skill: xxx". Test ensures we catch both forms.
+     */
+    @Test
+    void tryExplicitSkillRouteForIntent_englishSkillNotFound_returnsNull() {
+        when(mockSkillRouter.isSkillsEnabled()).thenReturn(true);
+        when(mockSkillRouter.executeSkill(any(), any(SkillContext.class)))
+                .thenReturn(SkillResult.builder()
+                        .success(false)
+                        .skillName("nonexistent-skill")
+                        .message("Skill not found: nonexistent-skill")
+                        .build());
+
+        AIIntentConfig intent = AIIntentConfig.builder()
+                .intentCode("NONEXISTENT_INTENT")
+                .intentCategory("WORKDESK")
+                .toolName(null)
+                .build();
+
+        IntentExecuteResponse response = service.tryExplicitSkillRouteForIntent(
+                intent, "随便", "F006", 100L);
+
+        assertThat(response).isNull();
+    }
+
+    /**
+     * Sprint 9 P0.2 (2026-05-22) regression fix — Skill exists but execution failed
+     * (LLM timeout / validateContext missing userId / tool unavailable etc.) should NOT return null
+     * (which would fall through to "暂不支持此类型的意图执行: WORKDESK"). Instead return FAILED
+     * response with actionable message.
+     */
+    @Test
+    void tryExplicitSkillRouteForIntent_skillExistsButExecutionFailed_returnsFailedResponseNotNull() {
+        when(mockSkillRouter.isSkillsEnabled()).thenReturn(true);
+        when(mockSkillRouter.executeSkill(any(), any(SkillContext.class)))
+                .thenReturn(SkillResult.builder()
+                        .success(false)
+                        .skillName("monthly-financial-close")
+                        .message("Missing required context fields: userId")  // not "未找到" / not "Skill not found"
+                        .build());
+
+        AIIntentConfig intent = AIIntentConfig.builder()
+                .intentCode("MONTHLY_FINANCIAL_CLOSE")
+                .intentName("月度财务复盘")
+                .intentCategory("WORKDESK")
+                .toolName(null)
+                .build();
+
+        IntentExecuteResponse response = service.tryExplicitSkillRouteForIntent(
+                intent, "本月经营怎么样", "F006", 200L);
+
+        assertThat(response).isNotNull();  // 关键: 不是 null!
+        assertThat(response.getStatus()).isEqualTo("FAILED");
+        assertThat(response.getIntentCode()).isEqualTo("MONTHLY_FINANCIAL_CLOSE");
+        assertThat(response.getMessage()).contains("Missing required context fields: userId");
+        // 不再 fall-through 到 "暂不支持"
+        assertThat(response.getMessage()).doesNotContain("暂不支持");
+    }
+
+    /**
+     * Sprint 9 P0.2 (2026-05-22) — Skill exists but execution failed with LLM timeout
+     * (DashScope 429 / connection refused). Same treatment: return FAILED response.
+     */
+    @Test
+    void tryExplicitSkillRouteForIntent_skillExistsButLlmTimeout_returnsFailedResponse() {
+        when(mockSkillRouter.isSkillsEnabled()).thenReturn(true);
+        when(mockSkillRouter.executeSkill(any(), any(SkillContext.class)))
+                .thenReturn(SkillResult.builder()
+                        .success(false)
+                        .skillName("monthly-financial-close")
+                        .message("Failed to call LLM: 429 Too Many Requests")
+                        .build());
+
+        AIIntentConfig intent = AIIntentConfig.builder()
+                .intentCode("MONTHLY_FINANCIAL_CLOSE")
+                .intentName("月度财务复盘")
+                .intentCategory("WORKDESK")
+                .toolName(null)
+                .build();
+
+        IntentExecuteResponse response = service.tryExplicitSkillRouteForIntent(
+                intent, "本月经营", "F006", 200L);
+
+        assertThat(response).isNotNull();
+        assertThat(response.getStatus()).isEqualTo("FAILED");
+        assertThat(response.getMessage()).contains("LLM");
+        assertThat(response.getFormattedText()).doesNotContain("暂不支持");
+    }
+
     @Test
     void tryExplicitSkillRouteForIntent_nullUserId_passesNullToContext() {
         when(mockSkillRouter.isSkillsEnabled()).thenReturn(true);

@@ -80,6 +80,9 @@ public class IntentExecutionOrchestrator {
     private ResultFormatterService resultFormatterService;
 
     @Autowired(required = false)
+    private WorkdeskOutputSummarizer workdeskOutputSummarizer;
+
+    @Autowired(required = false)
     private PreviewTokenService previewTokenService;
 
     @Autowired(required = false)
@@ -1013,6 +1016,19 @@ public class IntentExecutionOrchestrator {
         // Ultimate fallback
         if (response.getFormattedText() == null && response.getMessage() != null && !response.getMessage().isEmpty()) {
             response.setFormattedText(response.getMessage());
+        }
+
+        // Sprint 9 P0.2 (2026-05-22) — Terminal LLM-summarize gate for Workdesk / Skill orchestration
+        // outputs. Detects underscore-prefixed metadata leaks (_toolCount / _executionOrder),
+        // raw JSON dumps (5989-char sales-owner case), and bare templates ("包含 N 项数据指标").
+        // Pipes through DashScopeClient.chatFast() for Chinese natural-language summary.
+        // Opt-out via cretas.ai.workdesk-summarizer.enabled=false.
+        if (workdeskOutputSummarizer != null) {
+            try {
+                workdeskOutputSummarizer.apply(response);
+            } catch (Exception e) {
+                log.warn("WorkdeskOutputSummarizer 应用失败 (non-blocking): {}", e.getMessage());
+            }
         }
     }
 
