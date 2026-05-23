@@ -115,17 +115,31 @@ public class PurchaseServiceImpl implements PurchaseService {
     private com.cretas.aims.service.factory.WarehouseResolver warehouseResolver;
 
     /**
-     * 三价对比偏差预警阈值兜底值 (10%).
+     * 三价对比偏差预警阈值最终兜底值 (10%).
      *
-     * <p>Sprint2-J 之后: 优先从 {@link PurchaseOrderApprovalRule#getPriceVarianceThreshold}
-     * 取 per-factory 阈值. 仅当 factory 无 enabled rule 时回落到这个兜底.
-     * Flyway V20260517_01 为每家 factory 播种了默认 10% / 10万元 规则.
+     * <p>Resolution chain: PurchaseOrderApprovalRule.priceVarianceThreshold (per-factory rule) →
+     * ThresholdResolverService (Canvas Thresholds Hub per-factory config) → this hard-coded fallback.
+     * Sprint2-J seeded default 10%/10万元 rules; Phase A P0-3 wired Canvas Thresholds Hub override.
      */
-    private static final BigDecimal PRICE_ALERT_THRESHOLD = new BigDecimal("10");
+    private static final BigDecimal FALLBACK_PRICE_ALERT_THRESHOLD = new BigDecimal("10");
 
     /** Sprint2-J P-FIN-1: per-factory 可配置审核规则. required=false 兼容老 ApplicationContext (启动顺序). */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private PurchaseOrderApprovalRuleRepository approvalRuleRepository;
+
+    /**
+     * Canvas-Thresholds resolver (Phase A P0-3) — overlays FALLBACK_PRICE_ALERT_THRESHOLD with
+     * per-factory config when no PurchaseOrderApprovalRule.priceVarianceThreshold is set.
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.canvas.ThresholdResolverService thresholdResolver;
+
+    private BigDecimal resolvePriceAlertThreshold(String factoryId) {
+        if (thresholdResolver == null) return FALLBACK_PRICE_ALERT_THRESHOLD;
+        return thresholdResolver.getBigDecimal(factoryId,
+                com.cretas.aims.service.canvas.ThresholdKeys.PURCHASE_PRICE_ALERT_RATIO,
+                FALLBACK_PRICE_ALERT_THRESHOLD);
+    }
 
     /**
      * Sprint2-J follow-up: 通用通知服务 (P1-5).
@@ -610,7 +624,7 @@ public class PurchaseServiceImpl implements PurchaseService {
             PurchaseOrderApprovalRule rule = resolveActiveRule(factoryId);
             BigDecimal threshold = rule != null && rule.getPriceVarianceThreshold() != null
                     ? rule.getPriceVarianceThreshold()
-                    : PRICE_ALERT_THRESHOLD;
+                    : resolvePriceAlertThreshold(factoryId);
             List<PurchaseOrderItem> items = purchaseOrderItemRepository.findByPurchaseOrderId(order.getId());
             int count = 0;
             for (PurchaseOrderItem item : items) {
@@ -696,7 +710,7 @@ public class PurchaseServiceImpl implements PurchaseService {
         PurchaseOrderApprovalRule rule = resolveActiveRule(factoryId);
         BigDecimal priceThreshold = rule != null && rule.getPriceVarianceThreshold() != null
                 ? rule.getPriceVarianceThreshold()
-                : PRICE_ALERT_THRESHOLD;
+                : resolvePriceAlertThreshold(factoryId);
         BigDecimal amountThreshold = rule != null ? rule.getAmountThreshold() : null;
 
         // 总金额触发 (先判, 不需要查每行三价)
@@ -1241,7 +1255,7 @@ public class PurchaseServiceImpl implements PurchaseService {
         // Sprint2-J: 取 factory 当前规则一次, 转给每行 — 避免行级 N+1 规则查询
         PurchaseOrderApprovalRule rule = resolveActiveRule(factoryId);
         BigDecimal threshold = rule != null && rule.getPriceVarianceThreshold() != null
-                ? rule.getPriceVarianceThreshold() : PRICE_ALERT_THRESHOLD;
+                ? rule.getPriceVarianceThreshold() : resolvePriceAlertThreshold(factoryId);
 
         return items.stream()
                 .map(item -> buildPriceComparison(factoryId, item.getMaterialTypeId(),
@@ -1259,7 +1273,7 @@ public class PurchaseServiceImpl implements PurchaseService {
         }
         PurchaseOrderApprovalRule rule = resolveActiveRule(factoryId);
         BigDecimal threshold = rule != null && rule.getPriceVarianceThreshold() != null
-                ? rule.getPriceVarianceThreshold() : PRICE_ALERT_THRESHOLD;
+                ? rule.getPriceVarianceThreshold() : resolvePriceAlertThreshold(factoryId);
         return buildPriceComparison(factoryId, materialTypeId, materialType.getName(), currentPrice, threshold);
     }
 
@@ -1275,7 +1289,7 @@ public class PurchaseServiceImpl implements PurchaseService {
     private MaterialPriceComparisonDTO buildPriceComparison(String factoryId, String materialTypeId,
                                                              String materialName, BigDecimal currentPrice,
                                                              BigDecimal alertThreshold) {
-        BigDecimal effectiveThreshold = alertThreshold != null ? alertThreshold : PRICE_ALERT_THRESHOLD;
+        BigDecimal effectiveThreshold = alertThreshold != null ? alertThreshold : resolvePriceAlertThreshold(factoryId);
         // 1. 查询原料类型获取移动平均价和基础信息
         RawMaterialType materialType = materialTypeRepository.findById(materialTypeId).orElse(null);
         BigDecimal movingAvgPrice = materialType != null ? materialType.getMovingAvgPrice() : null;
