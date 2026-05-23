@@ -9,7 +9,7 @@
  * If Tool returns NEED_MORE_INFO / FAILED / null → shows "暂无数据" not fake number.
  */
 import { ref, onMounted, computed } from 'vue';
-import axios from 'axios';
+import request from '@/api/request';
 
 const props = defineProps<{
   indicatorCode: string;
@@ -59,8 +59,8 @@ const queryIndicator = async () => {
   errorMessage.value = '';
   try {
     const sessionId = `indicator-card-${props.indicatorCode}-${Date.now()}`;
-    const resp = await axios.post(
-      `/api/mobile/${props.factoryId}/ai-intents/execute`,
+    const resp: { data?: Record<string, unknown> } = await request.post(
+      `/${props.factoryId}/ai-intents/execute`,
       {
         userInput: `查询指标 ${props.indicatorCode}`,
         intentCode: 'INDICATOR_QUERY',
@@ -69,7 +69,8 @@ const queryIndicator = async () => {
         skipSlotFilling: true,
       },
     );
-    const data = resp.data?.data || {};
+    // request wrapper unwraps { code, data: { ... } } — resp.data IS the inner data
+    const data = (resp.data || resp) as Record<string, unknown>;
     if (data.status !== 'SUCCESS') {
       currentValue.value = '暂无数据';
       message.value = data.message || '';
