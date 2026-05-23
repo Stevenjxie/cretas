@@ -31,7 +31,7 @@ BARE_DONE_RE = re.compile(r'^查询完成[\s。\.]*$')
 JSON_BRACE_RATIO_THRESHOLD = 0.05
 ALL_CHINESE_RE = re.compile(r'[一-鿿]')
 DOMAIN_KEYWORDS_RE = re.compile(
-    r'¥\s*\d|N件|N个|本月|今日|订单|批次|客户|供应商|今天|昨天|本周|本季|去年|同比|环比|应收|应付|采购|入库|出库|质检|跟进|商机|经营|月度|周度|日度|采购单|放行|HACCP|告警|微信|通话|销售|入库单|物料|批号|追溯'
+    r'¥\s*\d|N件|N个|本月|今日|订单|批次|客户|供应商|今天|昨天|本周|本季|去年|同比|环比|应收|应付|采购|入库|出库|质检|跟进|商机|经营|月度|周度|日度|采购单|放行|HACCP|告警|微信|通话|销售|入库单|物料|批号|追溯|季度|上季|下季|营收|业绩|利润|毛利|净利|KPI|OEE|生产率|合格率|交付|生产批次|进行中|产量|今日产量|kg'
 )
 BARE_TEMPLATE_RE = re.compile(r'^查询完成\s*\n?\s*包含\s*\d+\s*项数据指标')
 
@@ -47,6 +47,39 @@ PATH_CATEGORIES = {
     "Bd-period": "boundary",
     "Bd-cross-fac": "boundary",
     "Bd-vague": "boundary",
+    # Real-data paths (runner-data.sh)
+    "rd-today": "real-data",
+    "rd-month": "real-data",
+    "rd-quarter": "real-data",
+    "rd-alert": "real-data",
+    "rd-golden-pass": "real-data",
+    "rd-named": "real-data",
+    "rd-opp": "real-data",
+    "rd-renew": "real-data",
+    "rd-rank": "real-data",
+    "rd-stuck": "real-data",
+    "rd-payable": "real-data",
+    "rd-invoice": "real-data",
+    "rd-cashflow": "real-data",
+    "rd-cost": "real-data",
+    "rd-margin": "real-data",
+    "rd-trace": "real-data",
+    "rd-supplier": "real-data",
+    "rd-defect": "real-data",
+    "rd-rework": "real-data",
+    "rd-cert": "real-data",
+    "rd-inventory": "real-data",
+    "rd-aging": "real-data",
+    "rd-loss": "real-data",
+    "rd-pending": "real-data",
+    "rd-price": "real-data",
+    "rd-savings": "real-data",
+    "rd-overdue": "real-data",
+    "rd-trend": "real-data",
+    "rd-haccp": "real-data",
+    "rd-deviation": "real-data",
+    "rd-corrective": "real-data",
+    "rd-audit": "real-data",
 }
 
 WORKDESKS = ["sales-owner", "finance-manager", "quality-manager",
