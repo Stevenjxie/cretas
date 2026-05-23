@@ -6,9 +6,12 @@ import com.cretas.aims.dto.smartbi.DashboardResponse;
 import com.cretas.aims.dto.smartbi.KPICard;
 import com.cretas.aims.dto.smartbi.MetricResult;
 import com.cretas.aims.dto.smartbi.RankingItem;
+import com.cretas.aims.service.canvas.ThresholdKeys;
+import com.cretas.aims.service.canvas.ThresholdResolverService;
 import com.cretas.aims.service.smartbi.ProductionAnalysisService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -48,26 +51,76 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class ProductionAnalysisServiceImpl implements ProductionAnalysisService {
 
+    /** Canvas-Thresholds resolver (Phase A P0-3) — overlays FALLBACK_* defaults below
+     * with per-factory configured values from {@code factory_thresholds} table. */
+    @Autowired(required = false)
+    private ThresholdResolverService thresholdResolver;
+
     // 计算精度配置
     private static final int SCALE = 4;
     private static final int DISPLAY_SCALE = 2;
     private static final RoundingMode ROUNDING_MODE = RoundingMode.HALF_UP;
 
-    // OEE 预警阈值配置
-    private static final BigDecimal OEE_RED_THRESHOLD = new BigDecimal("65");
-    private static final BigDecimal OEE_YELLOW_THRESHOLD = new BigDecimal("85");
+    // ==================== 预警阈值 fallback 默认值 ====================
+    // 通过 thresholdResolver.getBigDecimal(factoryId, KEY, FALLBACK) 读取，仅 DB row 不存在时使用 fallback.
 
-    // 可用性预警阈值
-    private static final BigDecimal AVAILABILITY_RED_THRESHOLD = new BigDecimal("80");
-    private static final BigDecimal AVAILABILITY_YELLOW_THRESHOLD = new BigDecimal("90");
+    // OEE 预警阈值 fallback
+    private static final BigDecimal FALLBACK_OEE_RED_THRESHOLD = new BigDecimal("65");
+    private static final BigDecimal FALLBACK_OEE_YELLOW_THRESHOLD = new BigDecimal("85");
 
-    // 性能预警阈值
-    private static final BigDecimal PERFORMANCE_RED_THRESHOLD = new BigDecimal("75");
-    private static final BigDecimal PERFORMANCE_YELLOW_THRESHOLD = new BigDecimal("90");
+    // 可用性预警阈值 fallback
+    private static final BigDecimal FALLBACK_AVAILABILITY_RED_THRESHOLD = new BigDecimal("80");
+    private static final BigDecimal FALLBACK_AVAILABILITY_YELLOW_THRESHOLD = new BigDecimal("90");
 
-    // 质量率预警阈值
-    private static final BigDecimal QUALITY_RED_THRESHOLD = new BigDecimal("95");
-    private static final BigDecimal QUALITY_YELLOW_THRESHOLD = new BigDecimal("98");
+    // 性能预警阈值 fallback
+    private static final BigDecimal FALLBACK_PERFORMANCE_RED_THRESHOLD = new BigDecimal("75");
+    private static final BigDecimal FALLBACK_PERFORMANCE_YELLOW_THRESHOLD = new BigDecimal("90");
+
+    // 质量率预警阈值 fallback
+    private static final BigDecimal FALLBACK_QUALITY_RED_THRESHOLD = new BigDecimal("95");
+    private static final BigDecimal FALLBACK_QUALITY_YELLOW_THRESHOLD = new BigDecimal("98");
+
+    // ==================== Threshold resolver shortcuts ====================
+
+    private BigDecimal resolveOeeRedThreshold(String factoryId) {
+        if (thresholdResolver == null) return FALLBACK_OEE_RED_THRESHOLD;
+        return thresholdResolver.getBigDecimal(factoryId, ThresholdKeys.PRODUCTION_OEE_RED, FALLBACK_OEE_RED_THRESHOLD);
+    }
+
+    private BigDecimal resolveOeeYellowThreshold(String factoryId) {
+        if (thresholdResolver == null) return FALLBACK_OEE_YELLOW_THRESHOLD;
+        return thresholdResolver.getBigDecimal(factoryId, ThresholdKeys.PRODUCTION_OEE_YELLOW, FALLBACK_OEE_YELLOW_THRESHOLD);
+    }
+
+    private BigDecimal resolveAvailabilityRedThreshold(String factoryId) {
+        if (thresholdResolver == null) return FALLBACK_AVAILABILITY_RED_THRESHOLD;
+        return thresholdResolver.getBigDecimal(factoryId, ThresholdKeys.PRODUCTION_AVAILABILITY_RED, FALLBACK_AVAILABILITY_RED_THRESHOLD);
+    }
+
+    private BigDecimal resolveAvailabilityYellowThreshold(String factoryId) {
+        if (thresholdResolver == null) return FALLBACK_AVAILABILITY_YELLOW_THRESHOLD;
+        return thresholdResolver.getBigDecimal(factoryId, ThresholdKeys.PRODUCTION_AVAILABILITY_YELLOW, FALLBACK_AVAILABILITY_YELLOW_THRESHOLD);
+    }
+
+    private BigDecimal resolvePerformanceRedThreshold(String factoryId) {
+        if (thresholdResolver == null) return FALLBACK_PERFORMANCE_RED_THRESHOLD;
+        return thresholdResolver.getBigDecimal(factoryId, ThresholdKeys.PRODUCTION_PERFORMANCE_RED, FALLBACK_PERFORMANCE_RED_THRESHOLD);
+    }
+
+    private BigDecimal resolvePerformanceYellowThreshold(String factoryId) {
+        if (thresholdResolver == null) return FALLBACK_PERFORMANCE_YELLOW_THRESHOLD;
+        return thresholdResolver.getBigDecimal(factoryId, ThresholdKeys.PRODUCTION_PERFORMANCE_YELLOW, FALLBACK_PERFORMANCE_YELLOW_THRESHOLD);
+    }
+
+    private BigDecimal resolveQualityRedThreshold(String factoryId) {
+        if (thresholdResolver == null) return FALLBACK_QUALITY_RED_THRESHOLD;
+        return thresholdResolver.getBigDecimal(factoryId, ThresholdKeys.PRODUCTION_QUALITY_RED, FALLBACK_QUALITY_RED_THRESHOLD);
+    }
+
+    private BigDecimal resolveQualityYellowThreshold(String factoryId) {
+        if (thresholdResolver == null) return FALLBACK_QUALITY_YELLOW_THRESHOLD;
+        return thresholdResolver.getBigDecimal(factoryId, ThresholdKeys.PRODUCTION_QUALITY_YELLOW, FALLBACK_QUALITY_YELLOW_THRESHOLD);
+    }
 
     // ==================== OEE 概览 ====================
 
@@ -96,14 +149,14 @@ public class ProductionAnalysisServiceImpl implements ProductionAnalysisService 
 
         // 生成排名
         Map<String, List<RankingItem>> rankings = new LinkedHashMap<>();
-        rankings.put("equipment", calculateEquipmentRankingFromData(productionData));
-        rankings.put("production_line", calculateProductionLineRankingFromData(productionData));
+        rankings.put("equipment", calculateEquipmentRankingFromData(factoryId, productionData));
+        rankings.put("production_line", calculateProductionLineRankingFromData(factoryId, productionData));
 
         // 生成 AI 洞察
-        List<AIInsight> aiInsights = generateOEEInsights(productionData, metricResults);
+        List<AIInsight> aiInsights = generateOEEInsights(factoryId, productionData, metricResults);
 
         // 生成建议
-        List<String> suggestions = generateOEESuggestions(productionData, metricResults);
+        List<String> suggestions = generateOEESuggestions(factoryId, productionData, metricResults);
 
         return DashboardResponse.builder()
                 .period("CUSTOM")
@@ -133,7 +186,7 @@ public class ProductionAnalysisServiceImpl implements ProductionAnalysisService 
             return Collections.emptyList();
         }
 
-        return calculateOEEDetailedMetrics(productionData);
+        return calculateOEEDetailedMetrics(factoryId, productionData);
     }
 
     // ==================== 生产效率分析 ====================
@@ -165,7 +218,7 @@ public class ProductionAnalysisServiceImpl implements ProductionAnalysisService 
                 .value(capacityUtilization.setScale(DISPLAY_SCALE, ROUNDING_MODE))
                 .formattedValue(String.format("%.1f%%", capacityUtilization.doubleValue()))
                 .unit("%")
-                .alertLevel(determinePerformanceAlertLevel(capacityUtilization))
+                .alertLevel(determinePerformanceAlertLevel(factoryId, capacityUtilization))
                 .build());
 
         // 计算平均节拍时间
@@ -199,7 +252,7 @@ public class ProductionAnalysisServiceImpl implements ProductionAnalysisService 
                 .value(achievementRate.setScale(DISPLAY_SCALE, ROUNDING_MODE))
                 .formattedValue(String.format("%.1f%%", achievementRate.doubleValue()))
                 .unit("%")
-                .alertLevel(determineOEEAlertLevel(achievementRate))
+                .alertLevel(determineOEEAlertLevel(factoryId, achievementRate))
                 .build());
 
         return metrics;
@@ -211,7 +264,7 @@ public class ProductionAnalysisServiceImpl implements ProductionAnalysisService 
         log.info("获取产线效率排名: factoryId={}, startDate={}, endDate={}", factoryId, startDate, endDate);
 
         List<Map<String, Object>> productionData = generateMockProductionData(factoryId, startDate, endDate);
-        return calculateProductionLineRankingFromData(productionData);
+        return calculateProductionLineRankingFromData(factoryId, productionData);
     }
 
     // ==================== 设备利用率分析 ====================
@@ -243,7 +296,7 @@ public class ProductionAnalysisServiceImpl implements ProductionAnalysisService 
                 .value(utilization.setScale(DISPLAY_SCALE, ROUNDING_MODE))
                 .formattedValue(String.format("%.1f%%", utilization.doubleValue()))
                 .unit("%")
-                .alertLevel(determineAvailabilityAlertLevel(utilization))
+                .alertLevel(determineAvailabilityAlertLevel(factoryId, utilization))
                 .build());
 
         // 停机时间
@@ -307,7 +360,7 @@ public class ProductionAnalysisServiceImpl implements ProductionAnalysisService 
         log.info("获取设备排名: factoryId={}, startDate={}, endDate={}", factoryId, startDate, endDate);
 
         List<Map<String, Object>> productionData = generateMockProductionData(factoryId, startDate, endDate);
-        return calculateEquipmentRankingFromData(productionData);
+        return calculateEquipmentRankingFromData(factoryId, productionData);
     }
 
     @Override
@@ -448,7 +501,7 @@ public class ProductionAnalysisServiceImpl implements ProductionAnalysisService 
                 .value(oee.setScale(DISPLAY_SCALE, ROUNDING_MODE))
                 .formattedValue(String.format("%.1f%%", oee.doubleValue()))
                 .unit("%")
-                .alertLevel(determineOEEAlertLevel(oee))
+                .alertLevel(determineOEEAlertLevel(factoryId, oee))
                 .description("OEE = 可用性 x 性能 x 质量")
                 .build());
 
@@ -459,7 +512,7 @@ public class ProductionAnalysisServiceImpl implements ProductionAnalysisService 
                 .value(availability.setScale(DISPLAY_SCALE, ROUNDING_MODE))
                 .formattedValue(String.format("%.1f%%", availability.doubleValue()))
                 .unit("%")
-                .alertLevel(determineAvailabilityAlertLevel(availability))
+                .alertLevel(determineAvailabilityAlertLevel(factoryId, availability))
                 .description("实际运行时间 / 计划运行时间")
                 .build());
 
@@ -470,7 +523,7 @@ public class ProductionAnalysisServiceImpl implements ProductionAnalysisService 
                 .value(performance.setScale(DISPLAY_SCALE, ROUNDING_MODE))
                 .formattedValue(String.format("%.1f%%", performance.doubleValue()))
                 .unit("%")
-                .alertLevel(determinePerformanceAlertLevel(performance))
+                .alertLevel(determinePerformanceAlertLevel(factoryId, performance))
                 .description("实际产量 / 理论产量")
                 .build());
 
@@ -481,7 +534,7 @@ public class ProductionAnalysisServiceImpl implements ProductionAnalysisService 
                 .value(quality.setScale(DISPLAY_SCALE, ROUNDING_MODE))
                 .formattedValue(String.format("%.1f%%", quality.doubleValue()))
                 .unit("%")
-                .alertLevel(determineQualityAlertLevel(quality))
+                .alertLevel(determineQualityAlertLevel(factoryId, quality))
                 .description("良品数 / 总产量")
                 .build());
 
@@ -491,7 +544,7 @@ public class ProductionAnalysisServiceImpl implements ProductionAnalysisService 
     /**
      * 计算 OEE 详细指标
      */
-    private List<MetricResult> calculateOEEDetailedMetrics(List<Map<String, Object>> productionData) {
+    private List<MetricResult> calculateOEEDetailedMetrics(String factoryId, List<Map<String, Object>> productionData) {
         List<MetricResult> metrics = new ArrayList<>();
 
         // 计划运行时间
@@ -512,8 +565,8 @@ public class ProductionAnalysisServiceImpl implements ProductionAnalysisService 
                         .multiply(new BigDecimal("100"))
                 : BigDecimal.ZERO;
         metrics.add(MetricResult.of(AVAILABILITY, "可用性", availability, "%",
-                availability.compareTo(AVAILABILITY_RED_THRESHOLD) < 0 ? MetricResult.AlertLevel.RED :
-                        (availability.compareTo(AVAILABILITY_YELLOW_THRESHOLD) < 0 ? MetricResult.AlertLevel.YELLOW : MetricResult.AlertLevel.GREEN)));
+                availability.compareTo(resolveAvailabilityRedThreshold(factoryId)) < 0 ? MetricResult.AlertLevel.RED :
+                        (availability.compareTo(resolveAvailabilityYellowThreshold(factoryId)) < 0 ? MetricResult.AlertLevel.YELLOW : MetricResult.AlertLevel.GREEN)));
 
         // 理论产量
         BigDecimal totalTheoreticalOutput = sumField(productionData, "theoreticalOutput");
@@ -529,8 +582,8 @@ public class ProductionAnalysisServiceImpl implements ProductionAnalysisService 
                         .multiply(new BigDecimal("100"))
                 : BigDecimal.ZERO;
         metrics.add(MetricResult.of(PERFORMANCE, "性能", performance, "%",
-                performance.compareTo(PERFORMANCE_RED_THRESHOLD) < 0 ? MetricResult.AlertLevel.RED :
-                        (performance.compareTo(PERFORMANCE_YELLOW_THRESHOLD) < 0 ? MetricResult.AlertLevel.YELLOW : MetricResult.AlertLevel.GREEN)));
+                performance.compareTo(resolvePerformanceRedThreshold(factoryId)) < 0 ? MetricResult.AlertLevel.RED :
+                        (performance.compareTo(resolvePerformanceYellowThreshold(factoryId)) < 0 ? MetricResult.AlertLevel.YELLOW : MetricResult.AlertLevel.GREEN)));
 
         // 良品数
         long totalGoodUnits = productionData.stream()
@@ -547,15 +600,15 @@ public class ProductionAnalysisServiceImpl implements ProductionAnalysisService 
                         .multiply(new BigDecimal("100"))
                 : BigDecimal.ZERO;
         metrics.add(MetricResult.of(QUALITY_RATE, "质量率", quality, "%",
-                quality.compareTo(QUALITY_RED_THRESHOLD) < 0 ? MetricResult.AlertLevel.RED :
-                        (quality.compareTo(QUALITY_YELLOW_THRESHOLD) < 0 ? MetricResult.AlertLevel.YELLOW : MetricResult.AlertLevel.GREEN)));
+                quality.compareTo(resolveQualityRedThreshold(factoryId)) < 0 ? MetricResult.AlertLevel.RED :
+                        (quality.compareTo(resolveQualityYellowThreshold(factoryId)) < 0 ? MetricResult.AlertLevel.YELLOW : MetricResult.AlertLevel.GREEN)));
 
         // OEE
         BigDecimal oee = availability.multiply(performance).multiply(quality)
                 .divide(new BigDecimal("10000"), SCALE, ROUNDING_MODE);
         metrics.add(MetricResult.of(OEE, "综合设备效率 (OEE)", oee, "%",
-                oee.compareTo(OEE_RED_THRESHOLD) < 0 ? MetricResult.AlertLevel.RED :
-                        (oee.compareTo(OEE_YELLOW_THRESHOLD) < 0 ? MetricResult.AlertLevel.YELLOW : MetricResult.AlertLevel.GREEN)));
+                oee.compareTo(resolveOeeRedThreshold(factoryId)) < 0 ? MetricResult.AlertLevel.RED :
+                        (oee.compareTo(resolveOeeYellowThreshold(factoryId)) < 0 ? MetricResult.AlertLevel.YELLOW : MetricResult.AlertLevel.GREEN)));
 
         return metrics;
     }
@@ -614,11 +667,12 @@ public class ProductionAnalysisServiceImpl implements ProductionAnalysisService 
     /**
      * 计算设备排名
      */
-    private List<RankingItem> calculateEquipmentRankingFromData(List<Map<String, Object>> productionData) {
+    private List<RankingItem> calculateEquipmentRankingFromData(String factoryId, List<Map<String, Object>> productionData) {
         Map<String, List<Map<String, Object>>> groupedByEquipment = productionData.stream()
                 .collect(Collectors.groupingBy(d -> (String) d.get("equipment")));
 
         List<RankingItem> rankings = new ArrayList<>();
+        BigDecimal oeeYellow = resolveOeeYellowThreshold(factoryId);
 
         for (Map.Entry<String, List<Map<String, Object>>> entry : groupedByEquipment.entrySet()) {
             String equipmentName = entry.getKey();
@@ -634,10 +688,10 @@ public class ProductionAnalysisServiceImpl implements ProductionAnalysisService 
             rankings.add(RankingItem.builder()
                     .name(equipmentName)
                     .value(oee.setScale(DISPLAY_SCALE, ROUNDING_MODE))
-                    .target(OEE_YELLOW_THRESHOLD)
-                    .completionRate(oee.divide(OEE_YELLOW_THRESHOLD, SCALE, ROUNDING_MODE)
+                    .target(oeeYellow)
+                    .completionRate(oee.divide(oeeYellow, SCALE, ROUNDING_MODE)
                             .multiply(new BigDecimal("100")).setScale(DISPLAY_SCALE, ROUNDING_MODE))
-                    .alertLevel(determineOEEAlertLevel(oee))
+                    .alertLevel(determineOEEAlertLevel(factoryId, oee))
                     .build());
         }
 
@@ -653,7 +707,7 @@ public class ProductionAnalysisServiceImpl implements ProductionAnalysisService 
     /**
      * 计算产线排名
      */
-    private List<RankingItem> calculateProductionLineRankingFromData(List<Map<String, Object>> productionData) {
+    private List<RankingItem> calculateProductionLineRankingFromData(String factoryId, List<Map<String, Object>> productionData) {
         Map<String, List<Map<String, Object>>> groupedByLine = productionData.stream()
                 .collect(Collectors.groupingBy(d -> (String) d.get("productionLine")));
 
@@ -676,7 +730,7 @@ public class ProductionAnalysisServiceImpl implements ProductionAnalysisService 
                     .value(efficiency.setScale(DISPLAY_SCALE, ROUNDING_MODE))
                     .target(new BigDecimal("100"))
                     .completionRate(efficiency.setScale(DISPLAY_SCALE, ROUNDING_MODE))
-                    .alertLevel(determineOEEAlertLevel(efficiency))
+                    .alertLevel(determineOEEAlertLevel(factoryId, efficiency))
                     .build());
         }
 
@@ -831,7 +885,8 @@ public class ProductionAnalysisServiceImpl implements ProductionAnalysisService 
     /**
      * 生成 OEE 洞察
      */
-    private List<AIInsight> generateOEEInsights(List<Map<String, Object>> productionData,
+    private List<AIInsight> generateOEEInsights(String factoryId,
+                                                 List<Map<String, Object>> productionData,
                                                  List<MetricResult> kpiCards) {
         List<AIInsight> insights = new ArrayList<>();
 
@@ -843,14 +898,14 @@ public class ProductionAnalysisServiceImpl implements ProductionAnalysisService 
 
         if (oeeMetric != null && oeeMetric.getValue() != null) {
             BigDecimal oee = oeeMetric.getValue();
-            if (oee.compareTo(OEE_RED_THRESHOLD) < 0) {
+            if (oee.compareTo(resolveOeeRedThreshold(factoryId)) < 0) {
                 insights.add(AIInsight.builder()
                         .level("RED")
                         .category("OEE")
                         .message(String.format("综合设备效率仅为 %.1f%%，低于行业标准 65%%", oee.doubleValue()))
                         .actionSuggestion("建议立即分析可用性、性能、质量三个维度，找出主要损失原因")
                         .build());
-            } else if (oee.compareTo(OEE_YELLOW_THRESHOLD) < 0) {
+            } else if (oee.compareTo(resolveOeeYellowThreshold(factoryId)) < 0) {
                 insights.add(AIInsight.builder()
                         .level("YELLOW")
                         .category("OEE")
@@ -875,7 +930,7 @@ public class ProductionAnalysisServiceImpl implements ProductionAnalysisService 
 
         if (availabilityMetric != null && availabilityMetric.getValue() != null) {
             BigDecimal availability = availabilityMetric.getValue();
-            if (availability.compareTo(AVAILABILITY_RED_THRESHOLD) < 0) {
+            if (availability.compareTo(resolveAvailabilityRedThreshold(factoryId)) < 0) {
                 insights.add(AIInsight.builder()
                         .level("RED")
                         .category("可用性")
@@ -893,7 +948,7 @@ public class ProductionAnalysisServiceImpl implements ProductionAnalysisService 
 
         if (qualityMetric != null && qualityMetric.getValue() != null) {
             BigDecimal quality = qualityMetric.getValue();
-            if (quality.compareTo(QUALITY_RED_THRESHOLD) < 0) {
+            if (quality.compareTo(resolveQualityRedThreshold(factoryId)) < 0) {
                 insights.add(AIInsight.builder()
                         .level("RED")
                         .category("质量")
@@ -909,7 +964,8 @@ public class ProductionAnalysisServiceImpl implements ProductionAnalysisService 
     /**
      * 生成 OEE 建议
      */
-    private List<String> generateOEESuggestions(List<Map<String, Object>> productionData,
+    private List<String> generateOEESuggestions(String factoryId,
+                                                 List<Map<String, Object>> productionData,
                                                  List<MetricResult> kpiCards) {
         List<String> suggestions = new ArrayList<>();
 
@@ -941,13 +997,15 @@ public class ProductionAnalysisServiceImpl implements ProductionAnalysisService 
         }
 
         // 基于各指标建议
+        BigDecimal availabilityYellow = resolveAvailabilityYellowThreshold(factoryId);
+        BigDecimal performanceYellow = resolvePerformanceYellowThreshold(factoryId);
         for (MetricResult metric : kpiCards) {
             if (AVAILABILITY.equals(metric.getMetricCode()) &&
-                    metric.getValue().compareTo(AVAILABILITY_YELLOW_THRESHOLD) < 0) {
+                    metric.getValue().compareTo(availabilityYellow) < 0) {
                 suggestions.add("可用性偏低，建议优化换型时间、减少计划外停机");
             }
             if (PERFORMANCE.equals(metric.getMetricCode()) &&
-                    metric.getValue().compareTo(PERFORMANCE_YELLOW_THRESHOLD) < 0) {
+                    metric.getValue().compareTo(performanceYellow) < 0) {
                 suggestions.add("性能指标偏低，建议检查设备速度设定、消除微停机");
             }
         }
@@ -1004,41 +1062,41 @@ public class ProductionAnalysisServiceImpl implements ProductionAnalysisService 
                 : BigDecimal.ZERO;
     }
 
-    private String determineOEEAlertLevel(BigDecimal oee) {
-        if (oee.compareTo(OEE_RED_THRESHOLD) < 0) {
+    private String determineOEEAlertLevel(String factoryId, BigDecimal oee) {
+        if (oee.compareTo(resolveOeeRedThreshold(factoryId)) < 0) {
             return MetricResult.AlertLevel.RED.name();
         }
-        if (oee.compareTo(OEE_YELLOW_THRESHOLD) < 0) {
+        if (oee.compareTo(resolveOeeYellowThreshold(factoryId)) < 0) {
             return MetricResult.AlertLevel.YELLOW.name();
         }
         return MetricResult.AlertLevel.GREEN.name();
     }
 
-    private String determineAvailabilityAlertLevel(BigDecimal availability) {
-        if (availability.compareTo(AVAILABILITY_RED_THRESHOLD) < 0) {
+    private String determineAvailabilityAlertLevel(String factoryId, BigDecimal availability) {
+        if (availability.compareTo(resolveAvailabilityRedThreshold(factoryId)) < 0) {
             return MetricResult.AlertLevel.RED.name();
         }
-        if (availability.compareTo(AVAILABILITY_YELLOW_THRESHOLD) < 0) {
+        if (availability.compareTo(resolveAvailabilityYellowThreshold(factoryId)) < 0) {
             return MetricResult.AlertLevel.YELLOW.name();
         }
         return MetricResult.AlertLevel.GREEN.name();
     }
 
-    private String determinePerformanceAlertLevel(BigDecimal performance) {
-        if (performance.compareTo(PERFORMANCE_RED_THRESHOLD) < 0) {
+    private String determinePerformanceAlertLevel(String factoryId, BigDecimal performance) {
+        if (performance.compareTo(resolvePerformanceRedThreshold(factoryId)) < 0) {
             return MetricResult.AlertLevel.RED.name();
         }
-        if (performance.compareTo(PERFORMANCE_YELLOW_THRESHOLD) < 0) {
+        if (performance.compareTo(resolvePerformanceYellowThreshold(factoryId)) < 0) {
             return MetricResult.AlertLevel.YELLOW.name();
         }
         return MetricResult.AlertLevel.GREEN.name();
     }
 
-    private String determineQualityAlertLevel(BigDecimal quality) {
-        if (quality.compareTo(QUALITY_RED_THRESHOLD) < 0) {
+    private String determineQualityAlertLevel(String factoryId, BigDecimal quality) {
+        if (quality.compareTo(resolveQualityRedThreshold(factoryId)) < 0) {
             return MetricResult.AlertLevel.RED.name();
         }
-        if (quality.compareTo(QUALITY_YELLOW_THRESHOLD) < 0) {
+        if (quality.compareTo(resolveQualityYellowThreshold(factoryId)) < 0) {
             return MetricResult.AlertLevel.YELLOW.name();
         }
         return MetricResult.AlertLevel.GREEN.name();
