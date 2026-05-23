@@ -120,4 +120,12 @@ public class HrInsuranceConfig extends BaseEntity {
 
     @Column(name = "created_by")
     private Long createdBy;
+
+    /**
+     * Canvas-P3 AUD-4 P1: JPA @Version 乐观锁 (per Flyway V20260824_06).
+     */
+    @Version
+    @Column(name = "opt_lock_version", nullable = false)
+    @Builder.Default
+    private Long optLockVersion = 0L;
 }

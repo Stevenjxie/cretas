@@ -162,6 +162,15 @@ public class EncodingRule extends BaseEntity {
     private Long createdBy;
 
     /**
+     * Canvas-P3 AUD-4 P1: JPA @Version 乐观锁 (Long).
+     * 与业务 version (Integer 配置版本号) 互不干扰; Flyway V20260824_05 加列默认 0.
+     */
+    @jakarta.persistence.Version
+    @Column(name = "opt_lock_version", nullable = false)
+    @Builder.Default
+    private Long optLockVersion = 0L;
+
+    /**
      * 获取下一个序列号并递增
      * @return 下一个序列号
      */
