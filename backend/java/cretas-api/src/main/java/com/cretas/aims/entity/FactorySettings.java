@@ -217,6 +217,15 @@ public class FactorySettings extends BaseEntity {
      */
     @Column(name = "last_modified_at")
     private LocalDateTime lastModifiedAt;
+
+    /**
+     * AUD-4 JPA @Version optimistic lock — Canvas Phase B Factory Config Hub (2026-05-22).
+     */
+    @Version
+    @Column(name = "version", nullable = false)
+    @Builder.Default
+    private Long version = 0L;
+
     // 关联关系
     @OneToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "factory_id", referencedColumnName = "id", insertable = false, updatable = false)

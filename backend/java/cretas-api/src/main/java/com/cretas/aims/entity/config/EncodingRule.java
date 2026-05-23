@@ -149,7 +149,8 @@ public class EncodingRule extends BaseEntity {
     private Boolean enabled = true;
 
     /**
-     * 版本号
+     * 业务版本号 (用于规则变更追踪, 手动 incrementVersion 递增).
+     * 注意: 不是 JPA @Version optimistic lock — 后者使用 optLockVersion 字段.
      */
     @Column(name = "version")
     @Builder.Default
@@ -164,6 +165,7 @@ public class EncodingRule extends BaseEntity {
     /**
      * Canvas-P3 AUD-4 P1: JPA @Version 乐观锁 (Long).
      * 与业务 version (Integer 配置版本号) 互不干扰; Flyway V20260824_05 加列默认 0.
+     * Phase B (PR #201) uses {@code getOptLockVersion()} as the canonical accessor.
      */
     @jakarta.persistence.Version
     @Column(name = "opt_lock_version", nullable = false)

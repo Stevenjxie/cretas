@@ -81,4 +81,12 @@ public class WagePolicy extends BaseEntity {
      */
     @Column(name = "notes", columnDefinition = "TEXT")
     private String notes;
+
+    /**
+     * AUD-4 JPA @Version optimistic lock — Canvas Phase B Factory Config Hub (2026-05-22).
+     */
+    @Version
+    @Column(name = "version", nullable = false)
+    @Builder.Default
+    private Long version = 0L;
 }
