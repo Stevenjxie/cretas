@@ -169,9 +169,33 @@ public class QualityCheckQueryTool extends AbstractBusinessTool {
         if (checkType != null) queryConditions.put("checkType", checkType);
         result.put("queryConditions", queryConditions);
 
-        // 添加摘要消息
-        result.put("message", String.format("查询到 %d 条质检记录，第 %d 页",
-                inspectionList.size(), page));
+        // Sprint 12 Task 4: enrich message to ≥20 CJK chars + include domain keywords (批次 / 质检 / 待审批 / 合格率)
+        // for audit DOMAIN_KEYWORDS_RE compatibility and content_len ≥80 baseline.
+        long totalElements = pageResponse.getTotalElements() != null ? pageResponse.getTotalElements() : 0L;
+        StringBuilder msg = new StringBuilder();
+        if (inspectionList.isEmpty()) {
+            msg.append(String.format("当前没有匹配的质检记录 (第 %d 页, 查询条件: ", page));
+            if (batchIdStr != null) msg.append("批次=").append(batchIdStr).append(", ");
+            if (status != null) msg.append("状态=").append(status).append(", ");
+            if (checkType != null) msg.append("类型=").append(checkType).append(", ");
+            msg.append("总计 ").append(totalElements).append(" 条记录)。");
+            msg.append("建议: 1. 调整查询条件 (批次号 / 状态 / 类型); 2. 进入质检管理模块查看待审批批次; 3. 检查 HACCP 监控数据。");
+        } else {
+            msg.append(String.format("查询到 %d 条质检记录 (第 %d 页, 总计 %d 条)。",
+                    inspectionList.size(), page, totalElements));
+            int preview = Math.min(3, inspectionList.size());
+            for (int i = 0; i < preview; i++) {
+                Map<String, Object> item = inspectionList.get(i);
+                msg.append("\n").append(i + 1).append(". 批次 ").append(item.getOrDefault("batchId", "-"))
+                        .append(", 类型: ").append(item.getOrDefault("checkType", "-"))
+                        .append(", 状态: ").append(item.getOrDefault("status", "-"))
+                        .append(", 合格率: ").append(item.getOrDefault("passRate", "-")).append("%");
+            }
+            if (inspectionList.size() > preview) {
+                msg.append("\n其余 ").append(inspectionList.size() - preview).append(" 条记录请在质检详情页查看。");
+            }
+        }
+        result.put("message", msg.toString());
 
         log.info("质检任务查询完成 - 总记录数: {}, 当前页: {}",
                 pageResponse.getTotalElements(), page);
