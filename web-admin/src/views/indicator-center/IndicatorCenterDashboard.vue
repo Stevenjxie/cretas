@@ -1,5 +1,26 @@
 <template>
   <div class="indicator-center">
+    <!-- Sprint 11 D6 — Mock 数据 banner (per goal anti-goal) -->
+    <el-alert
+      v-if="isMockFactory"
+      type="warning"
+      :closable="false"
+      show-icon
+      class="mock-banner"
+    >
+      <template #title>
+        <span class="mock-title">
+          模拟数据 — F999_MOCK 工厂 30 天 × 7 指标 = 210 行 mock snapshots
+        </span>
+      </template>
+      <template #default>
+        <span class="mock-detail">
+          数据由 Sprint 11 D2 生成器 ({{ '`scripts/mock/generate-f006-indicator-data.py`' }})
+          落库。Sprint 12 切回 prod F006 真数据后 UI 业务逻辑不变。
+        </span>
+      </template>
+    </el-alert>
+
     <!-- 头部 -->
     <div class="page-header">
       <div class="title-block">
@@ -207,6 +228,11 @@ import IndicatorDetailDrawer from './IndicatorDetailDrawer.vue';
 const authStore = useAuthStore();
 const factoryId = computed(() => authStore.factoryId);
 
+// Sprint 11 D6 — Mock factory detection (per goal anti-goal: 必标"模拟数据")
+const isMockFactory = computed(() =>
+  factoryId.value === 'F999_MOCK' || factoryId.value?.endsWith('_MOCK') || false
+);
+
 const indicators = ref<IndicatorListResponse[]>([]);
 const loading = ref(false);
 const activeView = ref<'list' | 'tree'>('list');
@@ -311,6 +337,19 @@ onMounted(() => {
   display: flex;
   flex-direction: column;
   gap: 16px;
+}
+
+/* Sprint 11 D6 — Mock data banner */
+.mock-banner {
+  border-left: 4px solid var(--el-color-warning);
+}
+.mock-title {
+  font-weight: 600;
+  font-size: 14px;
+}
+.mock-detail {
+  font-size: 12px;
+  color: var(--el-text-color-regular);
 }
 
 .page-header {
