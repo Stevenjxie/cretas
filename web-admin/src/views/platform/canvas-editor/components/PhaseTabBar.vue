@@ -65,6 +65,17 @@ const phaseB = [
   { key: 'thresholds', icon: '', label: '阈值参数' },
   { key: 'food-safety', icon: '', label: '食品安全' },
   { key: 'indicators', icon: '', label: '指标中心' },
+  // Phase B P1 (2026-05-22) — 客户面差异化卖点
+  { key: 'factory-config', icon: '', label: '工厂配置' },
+  { key: 'sales-target', icon: '', label: '销售目标' },
+  // Phase C P2 — 内部防呆 dropdown 集中
+  { key: 'enum-dictionary', icon: '', label: '枚举字典' },
+  // P3 半-Canvas-ed (entity 已存, 单 Tab 即可)
+  { key: 'supplier-admission', icon: '', label: '供应商准入' },
+  { key: 'encoding-rule', icon: '', label: '编码规则' },
+  { key: 'hr-insurance', icon: '', label: '五险一金' },
+  { key: 'factory-scheduling', icon: '', label: '排班配置' },
+  { key: 'purchase-order-approval', icon: '', label: '采购审批' },
 ]
 </script>
 
