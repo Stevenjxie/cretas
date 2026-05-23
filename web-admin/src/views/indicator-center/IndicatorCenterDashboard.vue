@@ -21,27 +21,11 @@
       </template>
     </el-alert>
 
-    <!-- Sprint 11 PR #220 BLOCKER fix — F006 100% mirror 警告 -->
-    <el-alert
-      v-if="hasMirroredIndicators"
-      type="warning"
-      :closable="false"
-      show-icon
-      class="mock-banner"
-    >
-      <template #title>
-        <span class="mock-title">
-          示例数据警告 — 部分指标为 F999_MOCK 镜像 (非 {{ factoryId }} 真业务计算)
-        </span>
-      </template>
-      <template #default>
-        <span class="mock-detail">
-          以下 codes 为 Sprint 11 V_23_11 mirror 从 F999_MOCK 复制: {{ mirroredCodeList }}。
-          数值仅供 UI demo, 实际值待 Sprint 12 接 prod data sources 真算。
-          Per audit doc <code>docs/audits/2026-05-23-ai-factory-validation-session-retro.md</code> Item 1 BLOCKER。
-        </span>
-      </template>
-    </el-alert>
+    <!-- Sprint 11 BI 4-B fix — 真业务数据 B2B section (前端 compute, Sprint 12 接 backend) -->
+    <B2BRealDataSection
+      v-if="!isMockFactory && hasMirroredIndicators"
+      :factory-id="factoryId || ''"
+    />
 
     <!-- 头部 -->
     <div class="page-header">
@@ -246,6 +230,7 @@ import {
 import IndicatorValueCard from '@/components/indicator/IndicatorValueCard.vue';
 import IndicatorTreeViewer from './IndicatorTreeViewer.vue';
 import IndicatorDetailDrawer from './IndicatorDetailDrawer.vue';
+import B2BRealDataSection from './B2BRealDataSection.vue';
 
 const authStore = useAuthStore();
 const factoryId = computed(() => authStore.factoryId);
@@ -307,6 +292,13 @@ const stats = computed(() => {
 
 const filteredIndicators = computed(() => {
   let list = indicators.value;
+  // Sprint 11 BI 4-B fix: 非 mock 工厂下隐藏 F999_MOCK mirror codes
+  // 这些 codes 业态错配 (餐饮 codes 在 F006 工厂场景没意义) + 数值是 mirror 不是真算
+  // B2BRealDataSection 替代提供真业务数据 cards
+  // Sprint 12 backend 真接业务表后, 删除本 filter + 删除 V_23_11 mirror migration
+  if (!isMockFactory.value) {
+    list = list.filter(i => !MIRRORED_CODES.includes(i.code));
+  }
   if (searchKey.value) {
     const v = searchKey.value.toLowerCase();
     list = list.filter(
