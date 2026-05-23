@@ -20,6 +20,7 @@ import org.springframework.web.bind.annotation.*;
 
 import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
@@ -117,21 +118,73 @@ public class ScheduledTaskController {
     @PutMapping("/{id}")
     @Operation(summary = "修改定时任务 (partial)")
     @RequireRole({"factory_super_admin", "permission_admin"})
-    public ApiResponse<ScheduledTask> update(@PathVariable UUID id, @RequestBody ScheduledTask patch) {
-        // AUD-5 B-A3 sister sweep (Rule 16: entry-point matrix — create + update
-        // are independent code paths). PATCH semantics: only validate fields that
-        // are present in the incoming patch (null = "don't touch this field").
+    public ApiResponse<ScheduledTask> update(@PathVariable UUID id,
+                                             @RequestBody Map<String, Object> body) {
+        // PATCH safety (per concurrent-edit-safety feedback_java_entity_as_patch_body_silent_re_enable.md HARD):
+        // Accept body as Map<String, Object> so Jackson does NOT run no-args ctor on
+        // ScheduledTask. The entity has {@code @Builder.Default private Boolean enabled = true},
+        // and Lombok @NoArgsConstructor still applies the field initializer — so a PATCH body
+        // that omits {@code enabled} would silently re-enable a disabled task. By building the
+        // patch from {@code body.containsKey(...)}, omitted keys stay null and the service
+        // layer's "null = don't touch" merge logic in {@link DynamicSchedulerServiceImpl#updateTask}
+        // works correctly.
+        ScheduledTask patch = buildPatchFromBody(body);
         validateNameLengths(patch);
         // AUD-4 wiring (PR #94 follow-up): explicit optimistic-lock check fires BEFORE
         // service.updateTask() so JPA optimistic lock actually trips on stale client
-        // version. {@link DynamicSchedulerServiceImpl#updateTask} loads the entity itself
-        // via findById, so parallel PUTs both see "fresh" version — JPA can't observe
-        // mismatch internally. Comparing the client's submitted version against the just-
-        // loaded current version surfaces stale-writes as 409 instead of silent
-        // last-writer-wins. Null = lenient (legacy clients keep working).
+        // version. Null = lenient (legacy clients keep working).
         checkVersion(id, patch);
         ScheduledTask updated = dynamicSchedulerService.updateTask(id, patch);
         return ApiResponse.success("定时任务已更新", updated);
+    }
+
+    /**
+     * Builds a {@link ScheduledTask} patch from a raw JSON body map.
+     *
+     * <p>Critical: only fields present in {@code body.keySet()} are populated.
+     * Lombok @Builder.Default re-applies field initializers (notably {@code enabled = true})
+     * inside the no-args ctor; we explicitly set {@code enabled = null} after construction
+     * so the service's null-guarded merge logic skips fields the client did NOT send.
+     *
+     * @param body raw JSON body parsed by Jackson into a Map.
+     * @return patch object with only the present fields populated; absent fields are null.
+     */
+    private ScheduledTask buildPatchFromBody(Map<String, Object> body) {
+        ScheduledTask patch = new ScheduledTask();
+        // Explicitly null-out fields whose @Builder.Default initializer would otherwise
+        // re-apply (Lombok's @NoArgsConstructor still runs Java field initializers).
+        patch.setEnabled(null);
+        if (body == null) {
+            return patch;
+        }
+        if (body.containsKey("taskCode")) {
+            patch.setTaskCode((String) body.get("taskCode"));
+        }
+        if (body.containsKey("taskName")) {
+            patch.setTaskName((String) body.get("taskName"));
+        }
+        if (body.containsKey("cronExpression")) {
+            patch.setCronExpression((String) body.get("cronExpression"));
+        }
+        if (body.containsKey("handlerBeanName")) {
+            patch.setHandlerBeanName((String) body.get("handlerBeanName"));
+        }
+        if (body.containsKey("factoryId")) {
+            patch.setFactoryId((String) body.get("factoryId"));
+        }
+        if (body.containsKey("enabled")) {
+            Object v = body.get("enabled");
+            if (v instanceof Boolean) {
+                patch.setEnabled((Boolean) v);
+            }
+        }
+        if (body.containsKey("version")) {
+            Object v = body.get("version");
+            if (v instanceof Number) {
+                patch.setVersion(((Number) v).longValue());
+            }
+        }
+        return patch;
     }
 
     @PostMapping("/{id}/toggle")
