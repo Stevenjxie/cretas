@@ -7386,7 +7386,26 @@ public class IntentKnowledgeBase {
         //
         // 验收 (Phase 4 DOD #1): qhj_warehouse_mgr 输入 "帮我看上月损溢异常" →
         //   intentCode === RESTAURANT_ECONOMICS_ANALYSIS (no longer ALERT_ACTIVE).
+        //
+        // ========== Sprint 11 Round 7 — Prod-confirmed misroute sweep (2026-05-23) ==========
+        // Round 6 shipped phrase mappings BUT prod /execute still misroutes 3/4 phrases:
+        //   - "帮我看上月损溢异常" → RESTAURANT_WASTAGE_ANOMALY (LLM, 0.95) — BUG
+        //   - "损益分析"          → RESTAURANT_OPS_GROSS_MARGIN          — BUG (sister)
+        //   - "上月成本"          → RESTAURANT_INGREDIENT_COST_TREND     — NO mapping at all
+        //   - "哪个菜亏钱"        → RESTAURANT_ECONOMICS_ANALYSIS        — OK (only one works)
+        //
+        // Root cause: /recognize hits v33.1-EarlyPhrase short-circuit and returns
+        // RESTAURANT_ECONOMICS_ANALYSIS correctly. /execute somehow bypasses the EarlyPhrase
+        // tier and hits LLM at the end. Defense-in-depth fix lives in
+        // IntentExecutionOrchestrator (pre-recognition phrase shortcut), this entry just
+        // ensures the phrase data is complete.
+        //
+        // Round 7 additions: "上月成本" / "本月成本" / "上月损益" / "上月损溢" prefix variants
+        // that customer naturally uses to ask about period-bounded P&L diagnostics. None of
+        // these prefix variants collide with existing 成本-class intents because the existing
+        // mappings are unprefixed ("成本") or differently-prefixed ("本月成本控制").
         String[] economicsPhrases = {
+                // Round 6 entries
                 "帮我看上月损溢异常",
                 "帮我看上月损溢",
                 "损溢异常",
@@ -7394,7 +7413,14 @@ public class IntentKnowledgeBase {
                 "损益分析",
                 "损益异常",
                 "哪个菜亏钱",
-                "菜品损溢"
+                "菜品损溢",
+                // Round 7 additions — prod-confirmed missing
+                "上月成本",
+                "本月成本",
+                "上月损益",
+                "上月损溢",
+                "本月损益",
+                "本月损溢"
         };
         for (String phrase : economicsPhrases) {
             phraseToIntentMapping.put(phrase, "RESTAURANT_ECONOMICS_ANALYSIS");

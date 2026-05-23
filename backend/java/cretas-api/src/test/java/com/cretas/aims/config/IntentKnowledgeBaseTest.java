@@ -119,4 +119,65 @@ class IntentKnowledgeBaseTest {
         assertEquals("RESTAURANT_DISH_COST_ANALYSIS", restaurantResult.get(),
                 "Restaurant '成本分析' must remain RESTAURANT_DISH_COST_ANALYSIS");
     }
+
+    // ========== Sprint 11 Round 7 (2026-05-23) — prod-confirmed misroute fix ==========
+    //
+    // Background: Prod (jar built from main `1ad950937`) confirmed 3/4 of the spec'd
+    // happy-path phrases STILL misroute via /execute endpoint, despite Round 6 phrase
+    // additions. Round 7 expanded the phrase list AND added defense-in-depth at the
+    // orchestrator layer. These tests pin the new Round 7 phrase additions.
+
+    @Test
+    @DisplayName("Round 7 — '上月成本' routes to RESTAURANT_ECONOMICS_ANALYSIS (prod-confirmed missing)")
+    void shangyueChengbenRoutes() {
+        Optional<String> result = kb.matchPhrase("上月成本", "RESTAURANT");
+        assertTrue(result.isPresent(),
+                "Phrase '上月成本' must produce a match (Round 7 addition)");
+        assertEquals("RESTAURANT_ECONOMICS_ANALYSIS", result.get(),
+                "Phrase '上月成本' must route to RESTAURANT_ECONOMICS_ANALYSIS, "
+                        + "not RESTAURANT_INGREDIENT_COST_TREND (prod 2026-05-23 misroute)");
+    }
+
+    @Test
+    @DisplayName("Round 7 — '本月成本' routes to RESTAURANT_ECONOMICS_ANALYSIS (Round 7 addition)")
+    void benyueChengbenRoutes() {
+        Optional<String> result = kb.matchPhrase("本月成本", "RESTAURANT");
+        assertTrue(result.isPresent());
+        assertEquals("RESTAURANT_ECONOMICS_ANALYSIS", result.get(),
+                "Phrase '本月成本' must route to RESTAURANT_ECONOMICS_ANALYSIS (Round 7 addition)");
+    }
+
+    @Test
+    @DisplayName("Round 7 — '上月损益' / '上月损溢' both route to RESTAURANT_ECONOMICS_ANALYSIS")
+    void shangyueSunyiRoutes() {
+        Optional<String> sunyi = kb.matchPhrase("上月损益", "RESTAURANT");
+        assertTrue(sunyi.isPresent(), "上月损益 must match");
+        assertEquals("RESTAURANT_ECONOMICS_ANALYSIS", sunyi.get());
+
+        Optional<String> sunyiAlt = kb.matchPhrase("上月损溢", "RESTAURANT");
+        assertTrue(sunyiAlt.isPresent(), "上月损溢 must match");
+        assertEquals("RESTAURANT_ECONOMICS_ANALYSIS", sunyiAlt.get());
+    }
+
+    @Test
+    @DisplayName("Round 7 — '损益分析' (Round 6) still routes to RESTAURANT_ECONOMICS_ANALYSIS (regression)")
+    void sunyiFenxiStillRoutes() {
+        // Round 6 added this. Prod said /execute misrouted it to RESTAURANT_OPS_GROSS_MARGIN.
+        // Phrase map test passes (proving Round 6 phrase data is correct) — orchestrator
+        // shortcut in Round 7 ensures it actually fires at execute time.
+        Optional<String> result = kb.matchPhrase("损益分析", "RESTAURANT");
+        assertTrue(result.isPresent());
+        assertEquals("RESTAURANT_ECONOMICS_ANALYSIS", result.get(),
+                "Phrase '损益分析' must route to RESTAURANT_ECONOMICS_ANALYSIS, "
+                        + "not RESTAURANT_OPS_GROSS_MARGIN (prod 2026-05-23 misroute)");
+    }
+
+    @Test
+    @DisplayName("Round 7 — Factory '本月成本' / '上月成本' also route to RESTAURANT_ECONOMICS_ANALYSIS")
+    void monthlyCostAlsoRoutesForFactory() {
+        // Defensive: Round 7 added to BOTH maps; factory-mode workdesk queries also need it.
+        Optional<String> result = kb.matchPhrase("上月成本", "FACTORY");
+        assertTrue(result.isPresent());
+        assertEquals("RESTAURANT_ECONOMICS_ANALYSIS", result.get());
+    }
 }

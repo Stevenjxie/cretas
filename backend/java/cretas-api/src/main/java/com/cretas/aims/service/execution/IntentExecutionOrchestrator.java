@@ -200,13 +200,35 @@ public class IntentExecutionOrchestrator {
         }
 
         // 1. 识别意图
-        IntentMatchResult matchResult;
-        try {
-            matchResult = aiIntentService.recognizeIntentWithConfidence(
-                    request.getUserInput(), factoryId, 3, userId, userRole, request.getSessionId());
-        } catch (LlmSchemaValidationException e) {
-            log.warn("LLM Schema 验证失败: type={}, message={}", e.getFailureType(), e.getMessage());
-            return buildValidationFailureResponse(factoryId, request.getUserInput(), e);
+        //
+        // Sprint 11 Round 7 (2026-05-23) — Pre-recognition phrase shortcut (defense-in-depth)
+        //
+        // Prod 2026-05-23 verified that /recognize endpoint correctly resolves
+        // "帮我看上月损溢异常" → RESTAURANT_ECONOMICS_ANALYSIS via v33.1-EarlyPhrase short-circuit
+        // inside IntentRecognitionPipelineServiceImpl.recognizeIntentWithConfidence (line 443+).
+        // However /execute for the SAME input bypasses EarlyPhrase and hits LLM tier
+        // (matchMethod=LLM, confidence=0.95), misrouting to RESTAURANT_WASTAGE_ANOMALY /
+        // RESTAURANT_OPS_GROSS_MARGIN / RESTAURANT_INGREDIENT_COST_TREND. Why /execute bypasses
+        // the inner pipeline's EarlyPhrase tier is unclear (same call site, same method —
+        // possibly classloader/proxy related), but the customer-facing impact is real.
+        //
+        // Fix: explicit phrase shortcut here at the orchestrator layer ensures phrase-matched
+        // intents always win over LLM tier, regardless of what the inner pipeline does. This
+        // is a strict safety net — phrase matches always have confidence ≥ 0.96 (same as inner
+        // pipeline), so this shortcut never demotes a stronger downstream match.
+        IntentMatchResult matchResult = null;
+        if (userInput != null && !userInput.isEmpty()) {
+            matchResult = tryOrchestratorPhraseShortcut(userInput, factoryId);
+        }
+
+        if (matchResult == null) {
+            try {
+                matchResult = aiIntentService.recognizeIntentWithConfidence(
+                        request.getUserInput(), factoryId, 3, userId, userRole, request.getSessionId());
+            } catch (LlmSchemaValidationException e) {
+                log.warn("LLM Schema 验证失败: type={}, message={}", e.getFailureType(), e.getMessage());
+                return buildValidationFailureResponse(factoryId, request.getUserInput(), e);
+            }
         }
 
         // 2. 二次确认
@@ -705,6 +727,74 @@ public class IntentExecutionOrchestrator {
             }
         } catch (Exception e) {
             log.warn("语义缓存查询失败: {}", e.getMessage());
+        }
+    }
+
+    /**
+     * Sprint 11 Round 7 (2026-05-23) — Pre-recognition phrase shortcut.
+     *
+     * <p>Returns a PHRASE_MATCH IntentMatchResult if userInput exactly matches a phrase in
+     * {@link IntentKnowledgeBase}'s phrase mapping (business-domain aware). Returns null
+     * if no phrase match — caller falls through to normal recognition pipeline.
+     *
+     * <p>This is a defense-in-depth safety net at the orchestrator layer. The inner pipeline
+     * also has v33.1-EarlyPhrase (line 443 of IntentRecognitionPipelineServiceImpl) but prod
+     * 2026-05-23 confirmed /execute can bypass it (root cause unclear). This orchestrator-
+     * level check guarantees phrase-mapped intents always win.
+     *
+     * <p>Confidence 0.96 matches the inner EarlyPhrase confidence to avoid behavioral
+     * divergence between /recognize and /execute endpoints.
+     *
+     * @param userInput user's raw input (will be normalized to lowercase + trimmed)
+     * @param factoryId factory ID, used to resolve business domain (RESTAURANT vs FACTORY)
+     * @return phrase-matched IntentMatchResult, or null if no phrase match
+     */
+    private IntentMatchResult tryOrchestratorPhraseShortcut(String userInput, String factoryId) {
+        try {
+            String normalized = userInput.toLowerCase().trim();
+            // resolveBusinessDomain returns "RESTAURANT" or "FACTORY". Fail-soft: if config
+            // service hiccups, treat as FACTORY (the default in matchPhrase signature).
+            String businessDomain = null;
+            try {
+                businessDomain = aiIntentService.getAllIntents(factoryId).stream()
+                        .findFirst()
+                        .map(i -> i.getIntentCategory())
+                        .orElse(null);
+                // Prefer the explicit IntentKnowledgeBase routing.
+                // matchPhrase(input, "RESTAURANT") falls back to commonPhraseMapping if no
+                // restaurant-specific hit; matchPhrase(input, "FACTORY") goes the other way.
+                businessDomain = (factoryId != null && factoryId.startsWith("RES_")) ? "RESTAURANT" : "FACTORY";
+            } catch (Exception ignored) {
+                businessDomain = (factoryId != null && factoryId.startsWith("RES_")) ? "RESTAURANT" : "FACTORY";
+            }
+
+            Optional<String> phraseMatch = knowledgeBase.matchPhrase(normalized, businessDomain);
+            if (phraseMatch.isEmpty()) {
+                return null;
+            }
+
+            String matchedCode = phraseMatch.get();
+            Optional<AIIntentConfig> intentOpt = aiIntentService.getIntentByCode(factoryId, matchedCode);
+            if (intentOpt.isEmpty()) {
+                // Phrase mapped to a code that doesn't exist in this factory's intent config —
+                // skip the shortcut and let the normal pipeline decide.
+                log.debug("[Round7-EarlyPhrase] phrase matched {} but intent not configured for factory {} — falling through",
+                        matchedCode, factoryId);
+                return null;
+            }
+
+            AIIntentConfig phraseIntent = intentOpt.get();
+            log.info("[Round7-EarlyPhrase] Orchestrator phrase shortcut: input='{}', intentCode={}, domain={}",
+                    userInput, matchedCode, businessDomain);
+            return IntentMatchResult.builder()
+                    .userInput(userInput)
+                    .bestMatch(phraseIntent)
+                    .confidence(0.96)
+                    .matchMethod(IntentMatchResult.MatchMethod.PHRASE_MATCH)
+                    .build();
+        } catch (Exception e) {
+            log.debug("[Round7-EarlyPhrase] shortcut failed (fall through): {}", e.getMessage());
+            return null;
         }
     }
 
