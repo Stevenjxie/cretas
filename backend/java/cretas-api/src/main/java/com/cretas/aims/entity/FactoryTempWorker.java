@@ -101,6 +101,13 @@ public class FactoryTempWorker {
     @Column(name = "updated_at")
     private LocalDateTime updatedAt;
 
+    /**
+     * AUD-4 JPA @Version optimistic lock — Canvas Phase B Factory Config Hub (2026-05-22).
+     */
+    @Version
+    @Column(name = "version", nullable = false)
+    private Long version = 0L;
+
     @PrePersist
     protected void onCreate() {
         createdAt = LocalDateTime.now();

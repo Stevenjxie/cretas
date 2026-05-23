@@ -123,6 +123,7 @@ public class HrInsuranceConfig extends BaseEntity {
 
     /**
      * Canvas-P3 AUD-4 P1: JPA @Version 乐观锁 (per Flyway V20260824_06).
+     * Phase B (PR #201) uses {@code getOptLockVersion()} as the canonical accessor.
      */
     @Version
     @Column(name = "opt_lock_version", nullable = false)

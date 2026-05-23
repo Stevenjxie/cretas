@@ -1,14 +1,18 @@
 package com.cretas.aims.entity;
 
 import com.fasterxml.jackson.annotation.JsonIgnore;
+import io.hypersistence.utils.hibernate.type.json.JsonBinaryType;
 import jakarta.persistence.*;
 import lombok.*;
 import lombok.experimental.SuperBuilder;
 import org.hibernate.annotations.SQLDelete;
+import org.hibernate.annotations.Type;
 import org.hibernate.annotations.Where;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 /**
@@ -91,6 +95,44 @@ public class CommissionRule extends BaseEntity {
     /** 创建人. */
     @Column(name = "created_by", nullable = false)
     private Long createdBy;
+
+    // ==================== Phase B Canvas Sales Target Hub (2026-05-22) ====================
+
+    /**
+     * AUD-4 JPA @Version optimistic lock — Canvas Phase B (2026-05-22).
+     */
+    @Version
+    @Column(name = "version", nullable = false)
+    private Long version;
+
+    /**
+     * 提成阶梯配置 (可选). JSONB array of {minAmount, maxAmount, rate}.
+     *
+     * <p>Example:
+     * <pre>{@code
+     * [{"minAmount": 0,      "maxAmount": 100000, "rate": 5.0},
+     *  {"minAmount": 100000, "maxAmount": 500000, "rate": 7.0},
+     *  {"minAmount": 500000, "maxAmount": null,   "rate": 10.0}]
+     * }</pre>
+     *
+     * <p>NULL = 用 flat {@code percentage} 列 (向后兼容).
+     */
+    @Type(JsonBinaryType.class)
+    @Column(name = "tier_config", columnDefinition = "jsonb")
+    private List<Map<String, Object>> tierConfig;
+
+    /**
+     * 提成周期类型: MONTHLY (默认) / QUARTERLY.
+     */
+    @Column(name = "period_type", length = 20, nullable = false)
+    private String periodType;
+
+    /**
+     * 排行榜公式 hint (UI 显, 不参与执行).
+     * 例: "SUM(amount)" / "SUM(amount) * rate" / "COUNT(orders)".
+     */
+    @Column(name = "leaderboard_formula", length = 500)
+    private String leaderboardFormula;
 
     // ==================== Relations ====================
 
