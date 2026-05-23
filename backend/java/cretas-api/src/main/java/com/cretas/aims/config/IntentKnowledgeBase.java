@@ -7420,7 +7420,35 @@ public class IntentKnowledgeBase {
                 "上月损益",
                 "上月损溢",
                 "本月损益",
-                "本月损溢"
+                "本月损溢",
+                // Sprint 12 P0 (2026-05-23) — 30+ NL variations per UI audit feedback.
+                // Per AI 工厂 Goal v5 verdict 9/12 cases misrouted to DAILY_CUSTOMER_FOLLOWUP
+                // via LLM conversational fallback. Adding NL coverage that customers naturally
+                // type to ensure phrase shortcut catches them before LLM fallback.
+                //
+                // EXCLUDED to avoid regression on existing mappings:
+                //   - "成本分析" (FACTORY: COST_TREND_ANALYSIS, RESTAURANT: RESTAURANT_DISH_COST_ANALYSIS)
+                //   - "哪些菜亏钱" (Round 6 owns → RESTAURANT_DISH_COST_ANALYSIS)
+                //   - "成本情况" / "菜品成本分析" / "损耗情况" / "毛利分析" / "毛利率" (potential collisions)
+                //
+                // "上月/这个月/本月/上周/本周" period variants
+                "上月亏", "上月赚多少", "上月亏多少", "上月赔多少", "上月经营",
+                "本月亏", "本月赚多少", "本月经营", "本月亏多少",
+                "这个月亏", "这个月赚多少", "这个月成本",
+                "上个月损益", "上个月成本", "上个月亏",
+                "上周损益", "本周损益",
+                // 损溢/损益/利润 variants
+                "损溢报告", "损溢情况", "损益情况", "损益报表",
+                "利润分析", "利润情况", "利润报告",
+                // 哪个/哪些菜 variants (NOT 哪些菜亏钱 - Round 6 owns)
+                "哪个菜在亏", "哪个菜赔钱", "哪些菜赔钱", "哪些菜不赚钱",
+                "哪个菜成本最高", "哪个菜利润最低", "哪个菜毛利低", "哪些菜毛利低",
+                // 经营分析 phrases
+                "经营分析", "经营诊断", "经营情况怎么样", "门店经营情况",
+                "餐厅经营", "店面经营", "本店经营", "餐厅经营分析", "店铺经营",
+                "今天生意怎么样", "门店经营",
+                // 餐厅/门店 成本/毛利 specific phrases (avoid generic "成本分析" / "毛利率")
+                "餐饮成本", "餐厅成本", "厨房成本", "门店成本"
         };
         for (String phrase : economicsPhrases) {
             phraseToIntentMapping.put(phrase, "RESTAURANT_ECONOMICS_ANALYSIS");

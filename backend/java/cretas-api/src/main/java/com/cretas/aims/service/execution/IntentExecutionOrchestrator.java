@@ -184,8 +184,38 @@ public class IntentExecutionOrchestrator {
             }
         }
 
-        // 0.3. 早期问题类型检测
+        // 0.25. Sprint 12 P0 — Pre-detection phrase shortcut (moved from former position #1).
+        //
+        // Per AI 工厂 chat Goal v5 UI audit (docs/audits/sprint-11-ux-audit/), Sprint 11 Round 7
+        // (PR #204) added tryOrchestratorPhraseShortcut at the OLD position (after early question
+        // type detection at #0.3 below). UI test prove it was UNREACHABLE for "帮我X" / 5W1H
+        // inputs because handleEarlyQuestionTypeDetection caught them first as CONVERSATIONAL /
+        // GENERAL_QUESTION and short-circuited to LLM generateConversationalResponse (line ~700).
+        //
+        // Fix: run phrase shortcut BEFORE early question type detection. Phrase mappings come
+        // from IntentKnowledgeBase.phraseToIntentMapping + restaurantPhraseMapping. If a phrase
+        // matches AND the resolved intent exists in this factory's ai_intent_configs, route via
+        // executeWithExplicitIntent. Phrase confidence is 0.96 (matching v33.1 EarlyPhrase tier).
         String userInput = request.getUserInput();
+        if (userInput != null && !userInput.isEmpty()) {
+            IntentMatchResult earlyPhraseMatch = tryOrchestratorPhraseShortcut(userInput, factoryId);
+            if (earlyPhraseMatch != null && earlyPhraseMatch.hasMatch()) {
+                AIIntentConfig phraseIntent = earlyPhraseMatch.getBestMatch();
+                log.info("[Sprint12-EarlyPhrase] Pre-detection phrase shortcut: input='{}', intentCode={}",
+                        userInput, phraseIntent.getIntentCode());
+                IntentExecuteRequest phraseRequest = IntentExecuteRequest.builder()
+                        .userInput(userInput)
+                        .intentCode(phraseIntent.getIntentCode())
+                        .sessionId(request.getSessionId())
+                        .enableThinking(request.getEnableThinking())
+                        .thinkingBudget(request.getThinkingBudget())
+                        .context(request.getContext())
+                        .build();
+                return executeWithExplicitIntent(factoryId, phraseRequest, userId, userRole);
+            }
+        }
+
+        // 0.3. 早期问题类型检测
         if (userInput != null && !userInput.isEmpty()) {
             IntentExecuteResponse earlyRouteResponse = handleEarlyQuestionTypeDetection(
                     factoryId, userInput, request, userId, userRole);
@@ -199,27 +229,9 @@ public class IntentExecutionOrchestrator {
             handleSemanticCache(factoryId, userInput, request);
         }
 
-        // 1. 识别意图
-        //
-        // Sprint 11 Round 7 (2026-05-23) — Pre-recognition phrase shortcut (defense-in-depth)
-        //
-        // Prod 2026-05-23 verified that /recognize endpoint correctly resolves
-        // "帮我看上月损溢异常" → RESTAURANT_ECONOMICS_ANALYSIS via v33.1-EarlyPhrase short-circuit
-        // inside IntentRecognitionPipelineServiceImpl.recognizeIntentWithConfidence (line 443+).
-        // However /execute for the SAME input bypasses EarlyPhrase and hits LLM tier
-        // (matchMethod=LLM, confidence=0.95), misrouting to RESTAURANT_WASTAGE_ANOMALY /
-        // RESTAURANT_OPS_GROSS_MARGIN / RESTAURANT_INGREDIENT_COST_TREND. Why /execute bypasses
-        // the inner pipeline's EarlyPhrase tier is unclear (same call site, same method —
-        // possibly classloader/proxy related), but the customer-facing impact is real.
-        //
-        // Fix: explicit phrase shortcut here at the orchestrator layer ensures phrase-matched
-        // intents always win over LLM tier, regardless of what the inner pipeline does. This
-        // is a strict safety net — phrase matches always have confidence ≥ 0.96 (same as inner
-        // pipeline), so this shortcut never demotes a stronger downstream match.
+        // 1. 识别意图 (former phrase shortcut moved up to position #0.25; this branch is now
+        //    only the normal recognition pipeline)
         IntentMatchResult matchResult = null;
-        if (userInput != null && !userInput.isEmpty()) {
-            matchResult = tryOrchestratorPhraseShortcut(userInput, factoryId);
-        }
 
         if (matchResult == null) {
             try {
@@ -681,8 +693,14 @@ public class IntentExecutionOrchestrator {
             }
         }
 
-        // OUT_OF_DOMAIN / CONTEXT_CONTINUE intercept
-        Optional<String> conversationalPhraseMatch = knowledgeBase.matchPhrase(userInput);
+        // Sprint 12 P0 defense-in-depth — any phrase match WITH configured intent should win
+        // over LLM conversational fallback. Without this, the LLM at line ~700 hijacks all
+        // "帮我X / 怎么X / 哪个X" inputs that lack OUT_OF_DOMAIN/CONTEXT_CONTINUE wiring.
+        // (Fix 1 at execute() #0.25 catches most cases; this is the safety net if a request
+        // somehow bypasses the earlier check — e.g. via explicit GENERAL_QUESTION classification
+        // path while phrase shortcut returned null due to factory-scoped intent absence.)
+        String businessDomain = (factoryId != null && factoryId.startsWith("RES_")) ? "RESTAURANT" : "FACTORY";
+        Optional<String> conversationalPhraseMatch = knowledgeBase.matchPhrase(userInput, businessDomain);
         if (conversationalPhraseMatch.isPresent()) {
             String matchedIntent = conversationalPhraseMatch.get();
             if ("OUT_OF_DOMAIN".equals(matchedIntent) || "CONTEXT_CONTINUE".equals(matchedIntent)) {
@@ -692,6 +710,19 @@ public class IntentExecutionOrchestrator {
                         .sessionId(request.getSessionId())
                         .build();
                 return execute(factoryId, interceptRequest, userId, userRole);
+            }
+            // Sprint 12 P0 — any other phrase-matched intent that exists in this factory
+            // should route to executeWithExplicitIntent (NOT fall through to LLM conversational).
+            Optional<AIIntentConfig> existingIntent = aiIntentService.getIntentByCode(factoryId, matchedIntent);
+            if (existingIntent.isPresent()) {
+                log.info("[Sprint12-DefenseInDepth] handleEarlyQuestionTypeDetection phrase route: input='{}', intentCode={}",
+                        userInput, matchedIntent);
+                IntentExecuteRequest phraseRequest = IntentExecuteRequest.builder()
+                        .userInput(userInput)
+                        .intentCode(matchedIntent)
+                        .sessionId(request.getSessionId())
+                        .build();
+                return executeWithExplicitIntent(factoryId, phraseRequest, userId, userRole);
             }
         }
 
