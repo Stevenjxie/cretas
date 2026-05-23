@@ -138,13 +138,33 @@ public class StockAlertWorkdeskTool extends AbstractBusinessTool {
         data.put("categoryFilter", materialCategory);
         data.put("warnings", filtered);
 
-        String message = filtered.isEmpty()
-                ? (materialCategory != null
+        String message;
+        if (filtered.isEmpty()) {
+            message = materialCategory != null
                     ? String.format("品类 [%s] 暂无低库存物料, 采购计划可专注其他品类", materialCategory)
-                    : "当前没有低库存预警, 所有物料库存充足")
-                : String.format("共 %d 种物料需要补货%s, 已附推荐补货量 + 缺口排序",
-                        filtered.size(),
-                        materialCategory != null ? " (品类 [" + materialCategory + "])" : "");
+                    : "当前没有低库存预警, 所有物料库存充足。建议保持现有采购节奏, 持续关注消耗趋势。";
+        } else {
+            // Sprint 12 Task 1: enrich beyond bare summary — include top-N materials so audit
+            // domain-keyword + content_len thresholds pass without ambiguity. Lists up to 3
+            // items with displayHint; truncates rest with count if more.
+            StringBuilder sb = new StringBuilder();
+            sb.append(String.format("共 %d 种物料需要补货%s, 已附推荐补货量 + 缺口排序。",
+                    filtered.size(),
+                    materialCategory != null ? " (品类 [" + materialCategory + "])" : ""));
+            int previewCount = Math.min(3, filtered.size());
+            for (int i = 0; i < previewCount; i++) {
+                Map<String, Object> item = filtered.get(i);
+                Object hint = item.get("displayHint");
+                if (hint != null) {
+                    sb.append("\n").append(i + 1).append(". ").append(hint.toString());
+                }
+            }
+            if (filtered.size() > previewCount) {
+                sb.append("\n其余 ").append(filtered.size() - previewCount).append(" 项物料缺口请在采购计划详情查看。");
+            }
+            sb.append("\n建议优先按缺口大小排序处理, 重点品类 (海鲜 / 调味料 / 包装) 提前联系供应商。");
+            message = sb.toString();
+        }
         return buildSimpleResult(message, data);
     }
 
