@@ -3,6 +3,7 @@ package com.cretas.aims.entity;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 import lombok.AllArgsConstructor;
+import org.hibernate.annotations.Where;
 
 import jakarta.persistence.*;
 import java.time.LocalDateTime;
@@ -16,12 +17,15 @@ import java.time.LocalDateTime;
  * 2. 支持临时工和正式工的不同处理策略
  * 3. 参数可以基于反馈自动调整
  * 4. 支持SKU/产品复杂度的动态适配
+ *
+ * Canvas P3 batch 2 (2026-05-22): 增加 @Version 乐观锁 + soft-delete (deletedAt + @Where)
  */
 @Data
 @Entity
 @NoArgsConstructor
 @AllArgsConstructor
 @Table(name = "factory_scheduling_config")
+@Where(clause = "deleted_at IS NULL")
 public class FactorySchedulingConfig {
 
     @Id
@@ -262,6 +266,20 @@ public class FactorySchedulingConfig {
      */
     @Column(name = "adaptation_count")
     private Integer adaptationCount = 0;
+
+    /**
+     * AUD-4 P1 JPA 乐观锁 version (mirror Canvas Phase A pattern). 由 Flyway 默认 0 NOT NULL.
+     */
+    @Version
+    @Column(name = "version", nullable = false)
+    private Long version = 0L;
+
+    /**
+     * 软删除时间戳 (Canvas P3 batch 2 加入).
+     * NULL = 未删除. 配合 partial-unique index uk_fsc_factory_active.
+     */
+    @Column(name = "deleted_at")
+    private LocalDateTime deletedAt;
 
     @PrePersist
     protected void onCreate() {
