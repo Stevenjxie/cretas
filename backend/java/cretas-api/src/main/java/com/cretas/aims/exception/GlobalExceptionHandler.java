@@ -14,6 +14,7 @@ import org.springframework.validation.BindException;
 import org.springframework.validation.FieldError;
 import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.web.bind.MissingRequestHeaderException;
 import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.ResponseStatus;
@@ -665,6 +666,52 @@ public class GlobalExceptionHandler {
     public ApiResponse<?> handleMissingServletRequestParameterException(MissingServletRequestParameterException e) {
         log.warn("缺少请求参数: {}", e.getParameterName());
         return ApiResponse.error(400, "缺少必要参数: " + e.getParameterName());
+    }
+
+    /**
+     * Sprint 11.5 P0 fix (2026-05-23): handle MissingRequestHeaderException explicitly.
+     *
+     * <p>Pre-fix: Spring's {@code MissingRequestHeaderException} (extends
+     * {@code ServletRequestBindingException} → {@code RuntimeException}) fell to
+     * {@link #handleRuntimeException} → HTTP 500 "系统处理异常 (追踪码: XXX)".
+     *
+     * <p>Concrete trigger: 29 controllers use {@code @RequestHeader("Authorization")
+     * String authorization} which is mandatory by Spring default. Web admin clients
+     * authenticate via HttpOnly cookie (no Authorization header) → Spring throws
+     * {@code MissingRequestHeaderException} BEFORE the controller method runs. The
+     * generic 500 misled users into thinking the server crashed when it's actually
+     * a missing-header configuration gap.
+     *
+     * <p>Post-fix:
+     * <ul>
+     *   <li>{@code Authorization} header missing → 401 "请重新登录" with actionHint
+     *       (most likely cookie expired / web client not sending credentials).
+     *   <li>Other headers missing → 400 generic missing-header message.
+     * </ul>
+     *
+     * <p>The proper long-term fix is in each controller — use
+     * {@link com.cretas.aims.config.JwtAuthInterceptor}'s already-extracted request
+     * attributes (set whether Bearer header or cookie was used). See
+     * {@link com.cretas.aims.controller.AIIntentConfigController#extractToken} for
+     * the canonical pattern. This handler is defense-in-depth.
+     */
+    @ExceptionHandler(MissingRequestHeaderException.class)
+    public org.springframework.http.ResponseEntity<ApiResponse<?>> handleMissingRequestHeaderException(
+            MissingRequestHeaderException e) {
+        String headerName = e.getHeaderName();
+        log.warn("缺少请求头: {}", headerName);
+        if ("Authorization".equalsIgnoreCase(headerName)) {
+            // 401 — likely a cookie-only web client hitting a controller that requires Bearer header.
+            // Symptom: pre-fix UI saw 500 "系统处理异常"; post-fix UI sees 401 "请重新登录" + sticky toast.
+            ApiResponse<?> resp = ApiResponse.error(401, "未授权，请重新登录");
+            resp.setActionHint("会话已过期或未登录, 请重新登录");
+            resp.setSeverity("error");
+            return org.springframework.http.ResponseEntity
+                    .status(HttpStatus.UNAUTHORIZED).body(resp);
+        }
+        return org.springframework.http.ResponseEntity
+                .status(HttpStatus.BAD_REQUEST)
+                .body(ApiResponse.error(400, "缺少必要请求头: " + headerName));
     }
 
     /**
