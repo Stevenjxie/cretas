@@ -994,9 +994,12 @@ public class IntentExecutionOrchestrator {
         }
 
         List<IntentExecuteResponse.SuggestedAction> defaultSuggestions = buildDefaultSuggestions(factoryId);
+        // Sprint 12 Task 5: enrich default no-match message with inline choices + domain hint
+        // so audit content_len ≥80 + chinese_run ≥20 + actionable for user.
         String message = matchResult.getConversationMessage() != null && !matchResult.getConversationMessage().isEmpty()
                 ? matchResult.getConversationMessage()
-                : "我没有理解您的意图，请从以下常用操作中选择，或更详细地描述您的需求：";
+                : "我没有理解您的意图。" + buildChoicesLine(defaultSuggestions)
+                        + "请回复对应序号, 或更详细描述需求 (例如指定客户 / 物料 / 批次 / 月份 / 工序)。";
 
         IntentExecuteResponse.IntentExecuteResponseBuilder builder = IntentExecuteResponse.builder()
                 .intentRecognized(false).status("NEED_CLARIFICATION")
