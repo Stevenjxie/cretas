@@ -5,10 +5,12 @@ import com.cretas.aims.ai.dto.ChatCompletionResponse;
 import com.cretas.aims.ai.dto.ChatMessage;
 import com.cretas.aims.ai.dto.Tool;
 import com.cretas.aims.ai.dto.ToolCall;
+import com.cretas.aims.dev.faultinjection.DashScopeFaultInjector;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import okhttp3.*;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
@@ -51,6 +53,13 @@ public class PythonLLMClient {
     private final String baseUrl;
     private final OkHttpClient httpClient;
     private final ObjectMapper objectMapper;
+
+    /**
+     * F3 fault-injection hook (optional). Bean exists only under
+     * {@code dev-fault-injection} Spring profile; remains {@code null} in prod.
+     */
+    @Autowired(required = false)
+    private DashScopeFaultInjector dashScopeFaultInjector;
 
     private static final MediaType JSON_MEDIA = MediaType.get("application/json; charset=utf-8");
 
@@ -542,6 +551,11 @@ public class PythonLLMClient {
     private <T> T post(String path, Object body, Class<T> responseType) throws Exception {
         String jsonBody = objectMapper.writeValueAsString(body);
         log.debug("PythonLLMClient POST {}: {}", path, jsonBody);
+
+        // F3 fault-injection (dev-fault-injection profile only): simulate DashScope timeout
+        if (dashScopeFaultInjector != null) {
+            dashScopeFaultInjector.maybeDelay();
+        }
 
         Request httpRequest = new Request.Builder()
                 .url(baseUrl + path)

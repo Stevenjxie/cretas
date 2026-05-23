@@ -7,6 +7,7 @@ import com.cretas.aims.ai.dto.ToolCall;
 import com.cretas.aims.ai.tool.ToolExecutor;
 import com.cretas.aims.ai.tool.ToolRegistry;
 import com.cretas.aims.config.TimeNormalizationRules;
+import com.cretas.aims.dev.faultinjection.ToolExecutionFaultInjector;
 import com.cretas.aims.dto.ai.IntentExecuteRequest;
 import com.cretas.aims.dto.ai.IntentExecuteResponse;
 import com.cretas.aims.dto.ai.PreprocessedQuery;
@@ -59,6 +60,15 @@ public class ToolDispatchService {
 
     @Autowired(required = false)
     private PreviewTokenService previewTokenService;
+
+    /**
+     * F5 fault-injection hook (optional). Bean exists only under
+     * {@code dev-fault-injection} Spring profile; remains {@code null} in prod.
+     * When active, {@link #executeWithTool} throws RuntimeException for tool
+     * names listed in {@code MOCK_TOOL_THROW} env var (comma-separated).
+     */
+    @Autowired(required = false)
+    private ToolExecutionFaultInjector toolExecutionFaultInjector;
 
     // ==================== 公开方法 ====================
 
@@ -260,6 +270,14 @@ public class ToolDispatchService {
                 try {
                     log.debug("执行 Tool (尝试 {}/{}): name={}, arguments={}",
                             attempt, MAX_RETRIES, tool.getToolName(), argumentsJson);
+
+                    // F5 fault-injection (dev-fault-injection profile only):
+                    // throw RuntimeException for tools in MOCK_TOOL_THROW list.
+                    // Throws inside the try-block so it follows existing retry +
+                    // CRITIC correction loop, mirroring a real Tool failure.
+                    if (toolExecutionFaultInjector != null) {
+                        toolExecutionFaultInjector.maybeThrow(tool.getToolName());
+                    }
 
                     long startTime = System.currentTimeMillis();
                     resultJson = tool.execute(toolCall, context);
