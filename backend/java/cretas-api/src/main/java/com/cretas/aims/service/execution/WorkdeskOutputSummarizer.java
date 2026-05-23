@@ -94,8 +94,15 @@ public class WorkdeskOutputSummarizer {
 
         String summary = tryLlmSummarize(resultData, response);
         if (summary == null || summary.isBlank()) {
-            log.debug("WorkdeskOutputSummarizer: LLM unavailable, keeping existing template");
-            return;
+            // LLM unavailable (DashScope quota / network / timeout) — degrade gracefully
+            // to a deterministic Java-side strip-and-template summary instead of keeping
+            // dirty _toolCount / raw-JSON text. Better than nothing for B-end users.
+            summary = buildDeterministicFallback(resultData, response);
+            if (summary == null || summary.isBlank()) {
+                log.debug("WorkdeskOutputSummarizer: LLM unavailable AND fallback empty; keeping existing template");
+                return;
+            }
+            log.info("WorkdeskOutputSummarizer: LLM unavailable, applied deterministic fallback ({} chars)", summary.length());
         }
 
         if (ftDirty) {
@@ -110,6 +117,78 @@ public class WorkdeskOutputSummarizer {
                     message != null ? message.length() : 0);
             response.setMessage(summary);
         }
+    }
+
+    /**
+     * Deterministic Java-side fallback when LLM is unavailable. Strips
+     * underscore-prefixed metadata keys and emits a structured summary
+     * (top-level key list + leaf counts). Output is plain text, no emoji.
+     *
+     * <p>Goal: pass the {@link #isDirty} check (no underscore keys, not
+     * brace-heavy, not bare template) even when DashScope is rate-limited.
+     */
+    @SuppressWarnings("unchecked")
+    String buildDeterministicFallback(Object resultData, IntentExecuteResponse response) {
+        if (resultData == null) return null;
+        Object cleaned = stripUnderscoreKeys(resultData);
+        if (!(cleaned instanceof Map)) return null;
+        Map<String, Object> cleanedMap = (Map<String, Object>) cleaned;
+        if (cleanedMap.isEmpty()) return null;
+
+        String intentName = response.getIntentName() != null
+                ? response.getIntentName() : "工作台";
+
+        StringBuilder sb = new StringBuilder();
+        sb.append(intentName).append(" 数据摘要 (LLM 暂不可用, 显示结构化结果):\n\n");
+
+        for (Map.Entry<String, Object> e : cleanedMap.entrySet()) {
+            String key = e.getKey();
+            Object value = e.getValue();
+            sb.append("- ").append(key).append(": ");
+            sb.append(describeLeaf(value));
+            sb.append("\n");
+        }
+        sb.append("\n详细数据请在工作台查看对应模块.\n");
+
+        String result = sb.toString();
+        if (result.length() > maxChars) {
+            result = result.substring(0, maxChars) + "...";
+        }
+        return result;
+    }
+
+    /**
+     * Render a leaf value as a short Chinese description (count / size / scalar),
+     * never JSON-dumping nested structure.
+     */
+    @SuppressWarnings("unchecked")
+    private String describeLeaf(Object value) {
+        if (value == null) return "无数据";
+        if (value instanceof Map) {
+            Map<String, Object> m = (Map<String, Object>) value;
+            // Look for common count fields
+            for (String countKey : new String[]{"count", "total", "size", "totalCount", "rowCount"}) {
+                if (m.containsKey(countKey)) {
+                    Object cv = m.get(countKey);
+                    if (cv != null) return cv + " 项";
+                }
+            }
+            return m.size() + " 个字段";
+        }
+        if (value instanceof Iterable) {
+            int n = 0;
+            for (Object ignored : (Iterable<?>) value) n++;
+            return n + " 项";
+        }
+        if (value instanceof Number) {
+            return value.toString();
+        }
+        if (value instanceof Boolean) {
+            return ((Boolean) value) ? "是" : "否";
+        }
+        String s = value.toString();
+        if (s.length() > 100) s = s.substring(0, 100) + "...";
+        return s;
     }
 
     /**
