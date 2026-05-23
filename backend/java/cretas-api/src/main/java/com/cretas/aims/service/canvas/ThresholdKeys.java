@@ -81,4 +81,9 @@ public final class ThresholdKeys {
     public static final String AI_COMPLEXITY_ANALYSIS_THRESHOLD = "ai.complexity.analysis_threshold";
     /** Multi-agent mode 阈值. Hard-coded default = 0.8. */
     public static final String AI_COMPLEXITY_MULTI_AGENT_THRESHOLD = "ai.complexity.multi_agent_threshold";
+
+    // ==================== 价格策略 (PRICING) ====================
+
+    /** Fool-proof rule warning threshold: totalDiscount / originalPrice. Hard-coded default = 0.50 (50%). */
+    public static final String PRICING_DEEP_DISCOUNT_RATIO = "pricing.warning.deep_discount_ratio";
 }
