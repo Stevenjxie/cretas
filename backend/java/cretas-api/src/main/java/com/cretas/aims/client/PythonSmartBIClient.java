@@ -1,6 +1,7 @@
 package com.cretas.aims.client;
 
 import com.cretas.aims.config.smartbi.PythonSmartBIConfig;
+import com.cretas.aims.dev.faultinjection.PythonClientFaultInjector;
 import com.cretas.aims.dto.python.*;
 import com.cretas.aims.dto.python.ClassifierRequest;
 import com.cretas.aims.dto.python.ClassifierResponse;
@@ -16,6 +17,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import okhttp3.*;
 import org.slf4j.MDC;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Component;
 import org.springframework.web.multipart.MultipartFile;
@@ -58,6 +60,14 @@ public class PythonSmartBIClient {
     private final ObjectMapper objectMapper;
     private final PythonServiceCircuitBreaker circuitBreaker;
 
+    /**
+     * F4 fault-injection hook (optional). Bean exists only under
+     * {@code dev-fault-injection} Spring profile; remains {@code null} in prod.
+     * Referenced inside the OkHttp interceptor below.
+     */
+    @Autowired(required = false)
+    private PythonClientFaultInjector pythonClientFaultInjector;
+
     // 服务可用性状态
     private final AtomicBoolean serviceAvailable = new AtomicBoolean(false);
     private final AtomicLong lastHealthCheck = new AtomicLong(0);
@@ -80,6 +90,15 @@ public class PythonSmartBIClient {
                 .writeTimeout(config.getTimeout(), TimeUnit.MILLISECONDS)
                 .addInterceptor(chain -> {
                     Request original = chain.request();
+                    // F4 fault-injection (dev-fault-injection profile only):
+                    // throw IOException to simulate Python unreachable.
+                    // Field-read inside lambda is fine because @Autowired field
+                    // is set by Spring before any HTTP call fires (the bean is
+                    // wrapped in a CGLIB proxy and httpClient is not called until
+                    // post-construction).
+                    if (pythonClientFaultInjector != null) {
+                        pythonClientFaultInjector.maybeThrowUnreachable(original.url().encodedPath());
+                    }
                     Request.Builder builder = original.newBuilder()
                             .header("X-Internal-Secret", System.getenv().getOrDefault("INTERNAL_API_SECRET", "cretas-internal-2026"));
                     // Propagate correlation ID from MDC to outgoing Python calls
