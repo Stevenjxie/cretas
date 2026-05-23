@@ -127,6 +127,8 @@ audit-screenshots/
 !platform/assets/images/**/*.png
 !frontend/CretasFoodTrace/assets/**/*.png
 !frontend/CretasFoodTrace/android/app/src/main/res/**/*.png
+# 审计证据截图 (Sprint 11 MealClaw 等)
+!docs/audits/**/*.png
 !frontend/CretasFoodTrace/ios/**/*.png
 !MallCenter/**/public/**/*.png
 !MallCenter/**/src/assets/**/*.png
