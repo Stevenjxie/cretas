@@ -192,7 +192,9 @@ class WorkdeskOutputSummarizerTest {
     }
 
     @Test
-    void apply_llmFailure_keepsExistingText() {
+    void apply_llmFailure_appliesDeterministicFallback() {
+        // 2026-05-23: PR #218 changes contract — when LLM unavailable but resultData
+        // is non-empty Map, apply deterministic strip-and-template fallback (not keep dirty).
         IntentExecuteResponse response = new IntentExecuteResponse();
         String original = "查询完成\n包含 5 项数据指标 — 详情请查看下方数据卡片或对应报表模块。";
         response.setFormattedText(original);
@@ -204,7 +206,30 @@ class WorkdeskOutputSummarizerTest {
 
         summarizer.apply(response);
 
-        // LLM failed → keep original (不能 throw, 不能 replace with empty)
+        // LLM failed → deterministic fallback applied (text now clean, contains intent name + structured key)
+        assertThat(response.getFormattedText()).isNotEqualTo(original);
+        assertThat(response.getFormattedText()).contains("test 数据摘要");
+        assertThat(response.getFormattedText()).contains("foo");
+        assertThat(summarizer.isDirty(response.getFormattedText())).isFalse();
+        // message likewise replaced (was dirty same as formattedText)
+        assertThat(response.getMessage()).isNotEqualTo(original);
+        assertThat(summarizer.isDirty(response.getMessage())).isFalse();
+    }
+
+    @Test
+    void apply_llmFailureWithNullResultData_keepsExistingText() {
+        // Edge: when LLM fails AND resultData null/empty → fallback returns null →
+        // existing dirty text is kept (last-resort no-regression behavior).
+        IntentExecuteResponse response = new IntentExecuteResponse();
+        String original = "查询完成\n包含 5 项数据指标 — 详情请查看下方数据卡片或对应报表模块。";
+        response.setFormattedText(original);
+        response.setMessage(original);
+        response.setResultData(null);  // no data to template
+        response.setIntentName("test");
+
+        // LLM not even called because tryLlmSummarize returns null on null resultData
+        summarizer.apply(response);
+
         assertThat(response.getFormattedText()).isEqualTo(original);
         assertThat(response.getMessage()).isEqualTo(original);
     }

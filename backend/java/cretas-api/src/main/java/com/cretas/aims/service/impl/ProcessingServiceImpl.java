@@ -15,6 +15,8 @@ import com.cretas.aims.service.QualityInspectionService;
 import com.cretas.aims.service.AIAnalysisService;
 import com.cretas.aims.service.CacheService;
 import com.cretas.aims.service.WageRecordTriggerService;
+import com.cretas.aims.service.canvas.ThresholdKeys;
+import com.cretas.aims.service.canvas.ThresholdResolverService;
 import com.cretas.aims.dto.processing.ProcessingStageRecordDTO;
 import com.cretas.aims.event.BatchCompletedEvent;
 import lombok.RequiredArgsConstructor;
@@ -69,6 +71,13 @@ public class ProcessingServiceImpl implements ProcessingService {
     private final ProductionPlanBatchUsageRepository productionPlanBatchUsageRepository;
     // Sprint 5 Track E (M-WAGE-INTEGRATION-1): 生产→工资 自动 trigger
     private final WageRecordTriggerService wageRecordTriggerService;
+
+    /**
+     * Canvas-Thresholds resolver (Phase A P0-3) — overlays FALLBACK_* with per-factory config.
+     * Optional injection so Mockito @InjectMocks tests without resolver still construct.
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private ThresholdResolverService thresholdResolver;
 
     /**
      * 将字符串 batchId 安全转换为 Long。
@@ -605,15 +614,25 @@ public class ProcessingServiceImpl implements ProcessingService {
     }
     // ========== 质量检验 ==========
     /**
-     * PASS 阈值 (合格率 >=) — 与 {@link QualityInspection#getQualityGrade()} A 级阈值对齐.
-     * Issue #813 (2026-05-17).
+     * PASS 阈值 fallback (合格率 >=) — 与 {@link QualityInspection#getQualityGrade()} A 级阈值对齐.
+     * Issue #813 (2026-05-17). Per-factory override via ThresholdKeys.PROCESSING_PASS_THRESHOLD.
      */
-    private static final BigDecimal PASS_THRESHOLD = new BigDecimal("95");
+    private static final BigDecimal FALLBACK_PASS_THRESHOLD = new BigDecimal("95");
     /**
-     * FAIL 阈值 (合格率 <) — 与 QualityInspection.getQualityGrade() C/D 分界对齐.
-     * Issue #813 (2026-05-17).
+     * FAIL 阈值 fallback (合格率 <) — 与 QualityInspection.getQualityGrade() C/D 分界对齐.
+     * Issue #813 (2026-05-17). Per-factory override via ThresholdKeys.PROCESSING_FAIL_THRESHOLD.
      */
-    private static final BigDecimal FAIL_THRESHOLD = new BigDecimal("70");
+    private static final BigDecimal FALLBACK_FAIL_THRESHOLD = new BigDecimal("70");
+
+    private BigDecimal resolvePassThreshold(String factoryId) {
+        if (thresholdResolver == null) return FALLBACK_PASS_THRESHOLD;
+        return thresholdResolver.getBigDecimal(factoryId, ThresholdKeys.PROCESSING_PASS_THRESHOLD, FALLBACK_PASS_THRESHOLD);
+    }
+
+    private BigDecimal resolveFailThreshold(String factoryId) {
+        if (thresholdResolver == null) return FALLBACK_FAIL_THRESHOLD;
+        return thresholdResolver.getBigDecimal(factoryId, ThresholdKeys.PROCESSING_FAIL_THRESHOLD, FALLBACK_FAIL_THRESHOLD);
+    }
 
     public Map<String, Object> submitInspection(String factoryId, String batchId, Map<String, Object> inspection) {
         log.info("提交质检记录: factoryId={}, batchId={}", factoryId, batchId);
@@ -646,7 +665,7 @@ public class ProcessingServiceImpl implements ProcessingService {
         BigDecimal passRate = passCount
                 .divide(sampleSize, 2, RoundingMode.HALF_UP)
                 .multiply(new BigDecimal(100));
-        validateResultVsPassRate(resultStr, passRate);
+        validateResultVsPassRate(factoryId, resultStr, passRate);
         QualityInspection qualityInspection = new QualityInspection();
         qualityInspection.setFactoryId(factoryId);
         qualityInspection.setProductionBatchId(parseBatchId(batchId));
@@ -690,7 +709,7 @@ public class ProcessingServiceImpl implements ProcessingService {
      * 不在白名单的字符串 (大小写不敏感) 抛 BusinessException —
      * 避免诡异值如 result="UNKNOWN" 静默落库.
      */
-    private void validateResultVsPassRate(String result, BigDecimal passRate) {
+    private void validateResultVsPassRate(String factoryId, String result, BigDecimal passRate) {
         if (result == null) return;  // 上游已 null-check
         String r = result.toUpperCase(Locale.ROOT);
         // 允许 "PENDING" (待复检) 无视 passRate
@@ -702,19 +721,21 @@ public class ProcessingServiceImpl implements ProcessingService {
             throw new com.cretas.aims.exception.BusinessException(
                     "无效的检验结果 [" + result + "], 需为 PASS / FAIL / CONDITIONAL / PENDING 之一");
         }
-        if ("PASS".equals(r) && passRate.compareTo(PASS_THRESHOLD) < 0) {
+        BigDecimal passThreshold = resolvePassThreshold(factoryId);
+        BigDecimal failThreshold = resolveFailThreshold(factoryId);
+        if ("PASS".equals(r) && passRate.compareTo(passThreshold) < 0) {
             throw new com.cretas.aims.exception.BusinessException(
-                    "合格率 " + passRate + "% < " + PASS_THRESHOLD + "% 不能判为 PASS, 请选择 CONDITIONAL 或 FAIL");
+                    "合格率 " + passRate + "% < " + passThreshold + "% 不能判为 PASS, 请选择 CONDITIONAL 或 FAIL");
         }
-        if ("FAIL".equals(r) && passRate.compareTo(FAIL_THRESHOLD) >= 0) {
+        if ("FAIL".equals(r) && passRate.compareTo(failThreshold) >= 0) {
             throw new com.cretas.aims.exception.BusinessException(
-                    "合格率 " + passRate + "% >= " + FAIL_THRESHOLD + "% 不能判为 FAIL, 请选择 CONDITIONAL 或 PASS");
+                    "合格率 " + passRate + "% >= " + failThreshold + "% 不能判为 FAIL, 请选择 CONDITIONAL 或 PASS");
         }
         if ("CONDITIONAL".equals(r)
-                && (passRate.compareTo(FAIL_THRESHOLD) < 0
-                    || passRate.compareTo(PASS_THRESHOLD) >= 0)) {
+                && (passRate.compareTo(failThreshold) < 0
+                    || passRate.compareTo(passThreshold) >= 0)) {
             throw new com.cretas.aims.exception.BusinessException(
-                    "合格率 " + passRate + "% 不在 CONDITIONAL 区间 [" + FAIL_THRESHOLD + "%, " + PASS_THRESHOLD + "%), 请选择 PASS 或 FAIL");
+                    "合格率 " + passRate + "% 不在 CONDITIONAL 区间 [" + failThreshold + "%, " + passThreshold + "%), 请选择 PASS 或 FAIL");
         }
     }
 

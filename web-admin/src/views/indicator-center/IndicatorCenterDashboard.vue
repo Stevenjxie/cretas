@@ -21,6 +21,28 @@
       </template>
     </el-alert>
 
+    <!-- Sprint 11 PR #220 BLOCKER fix — F006 100% mirror 警告 -->
+    <el-alert
+      v-if="hasMirroredIndicators"
+      type="warning"
+      :closable="false"
+      show-icon
+      class="mock-banner"
+    >
+      <template #title>
+        <span class="mock-title">
+          示例数据警告 — 部分指标为 F999_MOCK 镜像 (非 {{ factoryId }} 真业务计算)
+        </span>
+      </template>
+      <template #default>
+        <span class="mock-detail">
+          以下 codes 为 Sprint 11 V_23_11 mirror 从 F999_MOCK 复制: {{ mirroredCodeList }}。
+          数值仅供 UI demo, 实际值待 Sprint 12 接 prod data sources 真算。
+          Per audit doc <code>docs/audits/2026-05-23-ai-factory-validation-session-retro.md</code> Item 1 BLOCKER。
+        </span>
+      </template>
+    </el-alert>
+
     <!-- 头部 -->
     <div class="page-header">
       <div class="title-block">
@@ -232,6 +254,25 @@ const factoryId = computed(() => authStore.factoryId);
 const isMockFactory = computed(() =>
   factoryId.value === 'F999_MOCK' || factoryId.value?.endsWith('_MOCK') || false
 );
+
+// Sprint 11 PR #220 BLOCKER fix — detect F999_MOCK-mirrored codes on non-mock factory
+// Per sister chat #220 audit Item 1: F006 indicators 100% mirrored from F999_MOCK,
+// UI must label "示例数据" not real business data.
+const MIRRORED_CODES = [
+  'AVG_TICKET_PRICE', 'TABLE_TURNOVER', 'DISH_GROSS_MARGIN',
+  'RAW_WASTAGE_RATE', 'FOOD_SAFETY_PASS_RATE',
+  'FACTORY_YIELD_RATE', 'FACTORY_PLAN_ACHIEVE_RATE',
+];
+
+const mirroredIndicatorsPresent = computed(() => {
+  if (isMockFactory.value) return [];
+  return indicators.value
+    .filter(i => MIRRORED_CODES.includes(i.code))
+    .map(i => i.code);
+});
+
+const hasMirroredIndicators = computed(() => mirroredIndicatorsPresent.value.length > 0);
+const mirroredCodeList = computed(() => mirroredIndicatorsPresent.value.join(', '));
 
 const indicators = ref<IndicatorListResponse[]>([]);
 const loading = ref(false);

@@ -199,5 +199,12 @@ export default defineConfig({
         trace: 'on',
       },
     },
+    // Sprint 11 D7 — SalesOwner Workdesk 4 IndicatorCards depth test
+    {
+      name: 'sprint-11-d7-salesowner',
+      testMatch: 'tests/e2e-closed-loop/sprint-11-d7-salesowner.spec.ts',
+      fullyParallel: false,
+      workers: 1,
+    },
   ],
 });

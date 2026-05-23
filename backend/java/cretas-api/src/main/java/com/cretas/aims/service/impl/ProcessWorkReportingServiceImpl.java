@@ -10,6 +10,8 @@ import com.cretas.aims.exception.ResourceNotFoundException;
 import com.cretas.aims.repository.ProcessTaskRepository;
 import com.cretas.aims.repository.ProductionReportRepository;
 import com.cretas.aims.service.ProcessWorkReportingService;
+import com.cretas.aims.service.canvas.ThresholdKeys;
+import com.cretas.aims.service.canvas.ThresholdResolverService;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -37,6 +39,10 @@ public class ProcessWorkReportingServiceImpl implements ProcessWorkReportingServ
     private com.cretas.aims.engine.ValidationRuleEvaluator validationRuleEvaluator;
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.engine.DynamicFieldService dynamicFieldService;
+
+    /** Canvas-Thresholds: per-factory production overshoot tolerance (1.10 = 110% cap default). */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private ThresholdResolverService thresholdResolver;
 
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private org.springframework.context.ApplicationEventPublisher applicationEventPublisher;
@@ -460,7 +466,18 @@ public class ProcessWorkReportingServiceImpl implements ProcessWorkReportingServ
      * 拒绝同步 → 409 (10% 容忍工业实际超产). approve/batchApprove 调用方 @Transactional 会
      * rollback report 状态保持一致.
      */
-    private static final BigDecimal QUANTITY_OVERSHOOT_TOLERANCE = new BigDecimal("1.10");
+    /** Fallback overshoot tolerance when ThresholdResolverService is unavailable (e.g. unit tests). */
+    private static final BigDecimal FALLBACK_QUANTITY_OVERSHOOT_TOLERANCE = new BigDecimal("1.10");
+
+    private BigDecimal resolveOvershootTolerance(String factoryId) {
+        if (thresholdResolver == null) {
+            return FALLBACK_QUANTITY_OVERSHOOT_TOLERANCE;
+        }
+        return thresholdResolver.getBigDecimal(
+                factoryId,
+                ThresholdKeys.PRODUCTION_OVERSHOOT_TOLERANCE,
+                FALLBACK_QUANTITY_OVERSHOOT_TOLERANCE);
+    }
 
     private void syncQuantitiesToTask(String taskId, BigDecimal quantity, boolean approved) {
         ProcessTask task = taskRepository.findById(taskId).orElse(null);
@@ -480,7 +497,8 @@ public class ProcessWorkReportingServiceImpl implements ProcessWorkReportingServ
 
             // R70-FIX-D guard 2: 超出 plannedQuantity * 110% 拒绝
             if (planned != null && planned.compareTo(BigDecimal.ZERO) > 0) {
-                BigDecimal cap = planned.multiply(QUANTITY_OVERSHOOT_TOLERANCE);
+                BigDecimal tolerance = resolveOvershootTolerance(task.getFactoryId());
+                BigDecimal cap = planned.multiply(tolerance);
                 if (newCompleted.compareTo(cap) > 0) {
                     throw new BusinessException(409,
                             String.format("本次报工 %s 会让累计完工 %s 超出计划 %s 的 110%% 上限 (cap=%s)",
