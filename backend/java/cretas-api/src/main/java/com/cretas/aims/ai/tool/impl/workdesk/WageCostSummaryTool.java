@@ -151,7 +151,7 @@ public class WageCostSummaryTool extends AbstractBusinessTool {
         data.put("actionHint", "/hr/salaries?year=" + year + "&month=" + month);
 
         String message = String.format(
-                "💼 %d-%02d 工资成本汇总: 共 %d 员工, 总金额 ¥%s (按件 ¥%s + 按时 ¥%s + 加班 ¥%s)",
+                "%d-%02d 工资成本汇总: 共 %d 员工, 总金额 ¥%s (按件 ¥%s + 按时 ¥%s + 加班 ¥%s)",
                 year, month, all.size(),
                 grandTotal.setScale(2, RoundingMode.HALF_UP),
                 totalPieceRate.setScale(2, RoundingMode.HALF_UP),

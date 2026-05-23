@@ -114,7 +114,7 @@ public class PeriodStatusQueryTool extends AbstractBusinessTool {
             data.put("approvalWorkflowInstanceId", p.getApprovalWorkflowInstanceId());
         });
 
-        String message = String.format("📊 %d-%02d 期间状态: %s%s",
+        String message = String.format("%d-%02d 期间状态: %s%s",
                 year, month, displayName(status),
                 opt.isEmpty() ? " (无记录, backwards compat 默认 OPEN)" : "");
 
