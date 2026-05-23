@@ -22,3 +22,8 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Sprint 11 D7 — MCP Playwright snapshot files (auto-saved by browser_evaluate)
+indicator-center-snapshot.yml
+*.snapshot.yml
+.playwright-mcp/
