@@ -186,5 +186,18 @@ export default defineConfig({
       fullyParallel: false,
       workers: 1,
     },
+    // Sprint 11 MealClaw Audit Q7/Q8 — UI-level customer journey screenshot + video
+    // Reproduces customer-visible "部分数据不可用" error dump via real browser.
+    // Output: docs/audits/sprint-11-mealclaw-screenshots/*.png + *.webm
+    {
+      name: 'mealclaw-customer-ui',
+      testMatch: 'tests/e2e-customer-journey/mealclaw-customer.spec.ts',
+      fullyParallel: false,
+      workers: 1,
+      use: {
+        video: 'on',
+        trace: 'on',
+      },
+    },
   ],
 });
