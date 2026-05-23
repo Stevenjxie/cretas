@@ -13,10 +13,13 @@ import com.cretas.aims.entity.smartbi.SmartBiSalesData;
 import com.cretas.aims.entity.smartbi.enums.RecordType;
 import com.cretas.aims.repository.smartbi.SmartBiFinanceDataRepository;
 import com.cretas.aims.repository.smartbi.SmartBiSalesDataRepository;
+import com.cretas.aims.service.canvas.ThresholdKeys;
+import com.cretas.aims.service.canvas.ThresholdResolverService;
 import com.cretas.aims.service.smartbi.FinanceAnalysisService;
 import com.cretas.aims.service.smartbi.MetricCalculatorService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
@@ -100,11 +103,40 @@ public class FinanceAnalysisServiceImpl implements FinanceAnalysisService {
                 .collect(Collectors.toList());
     }
 
-    // 预警阈值
-    private static final double AGING_90_RED_THRESHOLD = 20.0;
-    private static final double AGING_90_YELLOW_THRESHOLD = 10.0;
-    private static final double BUDGET_EXECUTION_RED_THRESHOLD = 120.0;
-    private static final double BUDGET_EXECUTION_YELLOW_THRESHOLD = 100.0;
+    /** Canvas-Thresholds resolver (Phase A P0-3) — overlays FALLBACK_* defaults below
+     * with per-factory configured values from {@code factory_thresholds} table. */
+    @Autowired(required = false)
+    private ThresholdResolverService thresholdResolver;
+
+    // ==================== 预警阈值 fallback 默认值 ====================
+    // 通过 thresholdResolver.getDouble(factoryId, KEY, FALLBACK) 读取，仅 DB row 不存在时使用 fallback.
+
+    private static final double FALLBACK_AGING_90_RED_THRESHOLD = 20.0;
+    private static final double FALLBACK_AGING_90_YELLOW_THRESHOLD = 10.0;
+    private static final double FALLBACK_BUDGET_EXECUTION_RED_THRESHOLD = 120.0;
+    private static final double FALLBACK_BUDGET_EXECUTION_YELLOW_THRESHOLD = 100.0;
+
+    // ==================== Threshold resolver shortcuts ====================
+
+    private double resolveAging90RedThreshold(String factoryId) {
+        if (thresholdResolver == null) return FALLBACK_AGING_90_RED_THRESHOLD;
+        return thresholdResolver.getDouble(factoryId, ThresholdKeys.FINANCE_AGING_90_RED, FALLBACK_AGING_90_RED_THRESHOLD);
+    }
+
+    private double resolveAging90YellowThreshold(String factoryId) {
+        if (thresholdResolver == null) return FALLBACK_AGING_90_YELLOW_THRESHOLD;
+        return thresholdResolver.getDouble(factoryId, ThresholdKeys.FINANCE_AGING_90_YELLOW, FALLBACK_AGING_90_YELLOW_THRESHOLD);
+    }
+
+    private double resolveBudgetExecutionRedThreshold(String factoryId) {
+        if (thresholdResolver == null) return FALLBACK_BUDGET_EXECUTION_RED_THRESHOLD;
+        return thresholdResolver.getDouble(factoryId, ThresholdKeys.FINANCE_BUDGET_EXECUTION_RED, FALLBACK_BUDGET_EXECUTION_RED_THRESHOLD);
+    }
+
+    private double resolveBudgetExecutionYellowThreshold(String factoryId) {
+        if (thresholdResolver == null) return FALLBACK_BUDGET_EXECUTION_YELLOW_THRESHOLD;
+        return thresholdResolver.getDouble(factoryId, ThresholdKeys.FINANCE_BUDGET_EXECUTION_YELLOW, FALLBACK_BUDGET_EXECUTION_YELLOW_THRESHOLD);
+    }
 
     // ==================== 财务概览 ====================
 
@@ -671,9 +703,9 @@ public class FinanceAnalysisServiceImpl implements FinanceAnalysisService {
         BigDecimal aging90Ratio = totalForRatio.compareTo(BigDecimal.ZERO) > 0
                 ? over90.divide(totalForRatio, SCALE, ROUNDING_MODE).multiply(new BigDecimal("100"))
                 : BigDecimal.ZERO;
-        String aging90AlertLevel = aging90Ratio.doubleValue() > AGING_90_RED_THRESHOLD
+        String aging90AlertLevel = aging90Ratio.doubleValue() > resolveAging90RedThreshold(factoryId)
                 ? MetricResult.AlertLevel.RED.name()
-                : (aging90Ratio.doubleValue() > AGING_90_YELLOW_THRESHOLD
+                : (aging90Ratio.doubleValue() > resolveAging90YellowThreshold(factoryId)
                         ? MetricResult.AlertLevel.YELLOW.name()
                         : MetricResult.AlertLevel.GREEN.name());
         metrics.add(MetricResult.builder()
@@ -1023,10 +1055,11 @@ public class FinanceAnalysisServiceImpl implements FinanceAnalysisService {
     /**
      * 判断预算执行预警级别
      */
-    private String determineBudgetAlertLevel(BigDecimal executionRate) {
+    @SuppressWarnings("unused")  // wired for Canvas Thresholds Hub (Phase A); future budget execution insight path will consume
+    private String determineBudgetAlertLevel(String factoryId, BigDecimal executionRate) {
         double v = executionRate.doubleValue();
-        if (v > BUDGET_EXECUTION_RED_THRESHOLD) return MetricResult.AlertLevel.RED.name();
-        if (v > BUDGET_EXECUTION_YELLOW_THRESHOLD) return MetricResult.AlertLevel.YELLOW.name();
+        if (v > resolveBudgetExecutionRedThreshold(factoryId)) return MetricResult.AlertLevel.RED.name();
+        if (v > resolveBudgetExecutionYellowThreshold(factoryId)) return MetricResult.AlertLevel.YELLOW.name();
         return MetricResult.AlertLevel.GREEN.name();
     }
 
