@@ -109,7 +109,7 @@ public class BalanceSheetQueryTool extends AbstractBusinessTool {
         data.put("actionHint", "/finance/three-statements?type=balance-sheet&year=" + year + "&month=" + month);
 
         StringBuilder msg = new StringBuilder();
-        msg.append(String.format("📊 %d-%02d 资产负债表: 总资产 ¥%s / 总负债 ¥%s / 所有者权益 ¥%s",
+        msg.append(String.format("%d-%02d 资产负债表: 总资产 ¥%s / 总负债 ¥%s / 所有者权益 ¥%s",
                 year, month,
                 dto.getTotalAssets(),
                 dto.getTotalLiabilities(),

@@ -198,7 +198,7 @@ public class RecallLossEstimateTool extends AbstractBusinessTool {
         data.put("actionHint", "/quality/recall/" + recallEventId);
 
         String message = String.format(
-                "💰 召回 %s 预估损失: ¥%s (冻结库存 ¥%s + 退货 ¥%s + 行政 ¥%s + 品牌损失 ¥%s)",
+                "召回 %s 预估损失: ¥%s (冻结库存 ¥%s + 退货 ¥%s + 行政 ¥%s + 品牌损失 ¥%s)",
                 event.getEventCode(), totalLoss,
                 frozenInventoryValue.setScale(2, RoundingMode.HALF_UP),
                 customerReturnEstimate.setScale(2, RoundingMode.HALF_UP),
