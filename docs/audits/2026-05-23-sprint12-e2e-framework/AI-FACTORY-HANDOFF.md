@@ -20,7 +20,7 @@ These cannot be fixed by enriching the formatter (the routed Tool returns its ac
 
 ---
 
-## 6 Routing Bugs — Evidence
+## 9 Routing Bugs — Evidence
 
 | # | User input | WRONG intent classified | Correct intent | Severity |
 |---|---|---|---|---|
@@ -30,6 +30,9 @@ These cannot be fixed by enriching the formatter (the routed Tool returns its ac
 | 4 | `本日待入库` | **`MATERIAL_BATCH_CREATE` (WRITE op!)** | `WAREHOUSE_KEEPER_TODAY_TASKS` | **CRITICAL — write-on-read** |
 | 5 | `上月入库统计` | `REPORT_DASHBOARD_OVERVIEW` (catch-all) | Inventory statistics intent | HIGH |
 | 6 | `入库` | **`MATERIAL_BATCH_CREATE` (WRITE op!)** | `NEED_CLARIFICATION` (vague single noun) | **CRITICAL — single-word noun → WRITE** |
+| 7 | `下周采购建议` | `ORDER_LIST` returns "当前暂无订单数据" | `PURCHASER_WEEKLY_PLAN` | HIGH |
+| 8 | `下周补货清单` | `RESTAURANT_PROCUREMENT_SUGGESTION` (descr leak) | `PURCHASER_WEEKLY_PLAN` | HIGH |
+| 9 | `采购` (bare noun) | `ORDER_LIST` returns "当前暂无订单数据" | `NEED_CLARIFICATION` (vague) | HIGH |
 
 ### Raw response excerpts (from `runs/20260523_125132/raw-*.json`)
 
