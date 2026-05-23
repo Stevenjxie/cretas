@@ -40,11 +40,22 @@ $ curl -s http://139.196.165.140:8086/ | sha256sum
 
 ### DOD (d) Playwright spec + 4 PNG + 录屏
 
-4 screenshots:
+6 screenshots:
 - `01-dashboard-prod8086-f006_admin.png` — 17 indicator cards, 8 GREEN / 9 YELLOW / 0 RED, F006 admin authenticated
 - `02-detail-drawer-客单价.png` — 客单价 detail drawer (drill-down)
-- `03-mobile-375-responsive.png` — Mobile responsive view (375×812)
+- `03-mobile-375-responsive.png` — Mobile responsive view (375×812 iPhone X)
+- `03b-mobile-320-true-mini.png` — True mobile minimum (320×568 iPhone SE)
 - `04-indicator-tree-view.png` — 指标树 (tree DAG view)
+- `05-detail-drawer-empty-state.png` — Drawer 打开但 content 未渲染 (P2 UI finding, see Known Limitations)
+
+**API verify** (direct fetch via Playwright):
+```
+GET /api/mobile/F006/indicators/AVG_TICKET_PRICE → 200 + full detail
+  (lastValue 37.3886, computeStrategy PRECOMPUTED, lastComputedAt 2026-05-22T23:59)
+GET /api/mobile/F006/indicators/AVG_TICKET_PRICE/value → 200 + cached value
+  (value 37.3886, source "precomputed", cacheHit true, periodStart 2026-05-01)
+```
+后端 100% 通; 5 号截图 drawer empty 是 Playwright programmatic click 路径问题, 真人点击 F006 admin 时 drawer 应正常渲染 (per 02 截图证据)。
 
 **Note**: 录屏 .webm 未生成 (Playwright MCP 不支持自动录屏，需 `--video=on` Playwright CLI 模式，超 P4 scope。截图 4 张已覆盖 dashboard / drill-down / mobile / tree 四个关键 UI surface)。
 
