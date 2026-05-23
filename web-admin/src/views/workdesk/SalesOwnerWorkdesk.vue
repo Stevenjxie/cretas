@@ -71,21 +71,11 @@
       :closable="false"
       class="error-alert" />
 
-    <!-- Sprint 11 D7 — 经营指标卡片 (BI Tool indicator_query) -->
-    <el-card class="indicators-card" shadow="never">
-      <template #header>
-        <div class="card-header">
-          <span>经营指标</span>
-          <span class="header-hint">来源: BI IndicatorQueryTool · F006 真数据</span>
-        </div>
-      </template>
-      <div class="indicators-grid">
-        <IndicatorCard :factory-id="factoryId" indicator-code="AVG_TICKET_PRICE" display-name="客单价" unit="元" />
-        <IndicatorCard :factory-id="factoryId" indicator-code="TABLE_TURNOVER" display-name="翻台率" unit="倍" />
-        <IndicatorCard :factory-id="factoryId" indicator-code="FOOD_SAFETY_PASS_RATE" display-name="食安通过率" unit="%" />
-        <IndicatorCard :factory-id="factoryId" indicator-code="DISH_GROSS_MARGIN" display-name="菜品毛利" unit="%" />
-      </div>
-    </el-card>
+    <!-- Sprint 11 BI 4-B band-aid Workdesk fix (PR #243 audit Dim 1 — P0.5):
+         Old: 4 mirror IndicatorCards (AVG_TICKET_PRICE 等 V_23_11 mirror) + 撒谎 header "F006 真数据"
+         Fix: B2BRealDataSection 真接 sales_orders 算 ¥1.22M avg + 大字 banner "客户演示模式 · Sprint 12 接 backend"
+         Sprint 12 backend rewrite 接 sister AI 工厂 chat, 见 docs/sprint-12-backlog/indicator-service-rewrite.md -->
+    <B2BRealDataSection :factory-id="factoryId" />
 
     <!-- AI 输出 -->
     <el-card v-if="formattedText" class="result-card" shadow="never">
@@ -481,7 +471,7 @@ import { ElMessage } from 'element-plus';
 import { Refresh, Loading } from '@element-plus/icons-vue';
 import request from '@/api/request';
 import { useAuthStore } from '@/store/modules/auth';
-import IndicatorCard from '@/components/workdesk/IndicatorCard.vue';
+import B2BRealDataSection from '@/views/indicator-center/B2BRealDataSection.vue';
 
 interface CustomerItem {
   customerId: string;
