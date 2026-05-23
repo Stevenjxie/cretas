@@ -8,6 +8,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
@@ -39,4 +40,32 @@ public interface IndicatorVersionRepository extends JpaRepository<IndicatorVersi
 
     /** 最新一条 (current value)。 */
     Optional<IndicatorVersion> findFirstByIndicatorIdOrderByComputedAtDesc(String indicatorId);
+
+    /**
+     * Versions whose business window {@code [period_start, period_end]} overlaps the
+     * given window. Added 2026-05-22 to support
+     * {@link com.cretas.aims.controller.IndicatorController}'s {@code /versions} endpoint
+     * (cherry-pick fallout from PR #200). Overlap = NOT (a.end &lt; b.start OR a.start &gt; b.end).
+     */
+    @Query("SELECT v FROM IndicatorVersion v " +
+            "WHERE v.indicatorId = :indicatorId " +
+            "AND v.factoryId = :factoryId " +
+            "AND v.periodEnd >= :windowStart " +
+            "AND v.periodStart <= :windowEnd " +
+            "ORDER BY v.computedAt DESC")
+    List<IndicatorVersion> findByIndicatorIdAndFactoryIdAndPeriodOverlap(
+            @Param("indicatorId") String indicatorId,
+            @Param("factoryId") String factoryId,
+            @Param("windowStart") LocalDate windowStart,
+            @Param("windowEnd") LocalDate windowEnd);
+
+    /**
+     * Recent versions for a factory across all indicators (DESC by computedAt).
+     * Added 2026-05-22 to support {@link com.cretas.aims.controller.IndicatorController}'s
+     * fallback non-windowed history fetch (cherry-pick fallout from PR #200).
+     */
+    @Query("SELECT v FROM IndicatorVersion v " +
+            "WHERE v.factoryId = :factoryId " +
+            "ORDER BY v.computedAt DESC")
+    List<IndicatorVersion> findRecentByFactoryId(@Param("factoryId") String factoryId);
 }

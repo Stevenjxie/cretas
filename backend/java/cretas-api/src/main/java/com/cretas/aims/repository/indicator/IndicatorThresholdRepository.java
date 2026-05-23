@@ -17,4 +17,11 @@ public interface IndicatorThresholdRepository extends JpaRepository<IndicatorThr
 
     /** 工厂内全部阈值 (admin 视角列表)。 */
     List<IndicatorThreshold> findByFactoryIdAndIsActiveTrue(String factoryId);
+
+    /**
+     * Active thresholds for one indicator within a factory (multi-tenant scope).
+     * Added 2026-05-22 to support {@link com.cretas.aims.controller.IndicatorController}
+     * (cherry-pick fallout from PR #200).
+     */
+    List<IndicatorThreshold> findActiveByIndicatorIdAndFactoryId(String indicatorId, String factoryId);
 }
