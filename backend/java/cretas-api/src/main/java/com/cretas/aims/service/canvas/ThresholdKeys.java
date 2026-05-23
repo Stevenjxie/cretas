@@ -86,4 +86,9 @@ public final class ThresholdKeys {
 
     /** Fool-proof rule warning threshold: totalDiscount / originalPrice. Hard-coded default = 0.50 (50%). */
     public static final String PRICING_DEEP_DISCOUNT_RATIO = "pricing.warning.deep_discount_ratio";
+
+    // ==================== 生产报工 (PRODUCTION) ====================
+
+    /** Quantity overshoot tolerance: 累计完工 / plannedQuantity 上限. Hard-coded default = 1.10 (110%). */
+    public static final String PRODUCTION_OVERSHOOT_TOLERANCE = "production.quantity.overshoot_tolerance";
 }
