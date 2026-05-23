@@ -181,7 +181,7 @@ onMounted(load);
           :image-size="120"
         >
           <template #image>
-            <span style="font-size: 64px; color: #c0c4cc;">⚠️</span>
+ <span style="font-size: 64px; color: #c0c4cc;">️</span>
           </template>
           <div class="error-hint">
             如需重新获取链接, 请联系发送方.

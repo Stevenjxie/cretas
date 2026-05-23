@@ -71,7 +71,7 @@
           空条件 = 总是 true (匹配所有 input)。
           <br />
           <span class="warning-text">
-            ⚠️ <strong>必须用 bracket 语法</strong> <code>['fieldName']</code> 访问字段:
+ ️ <strong>必须用 bracket 语法</strong> <code>['fieldName']</code> 访问字段:
             运行时 input 是 Map (JSON 反序列化结果), dot 语法 <code>#order.amount</code>
             在 Map 上返 null → 规则永远 matched=false 静默失效。
             bracket 是 Map 字段访问的必需写法 (ORDER/INVENTORY/CUSTOMER/CUSTOM 全部 scope 均适用)。
@@ -99,7 +99,7 @@
           <strong>示例配置</strong>:
           <pre class="json-example">{{ actionConfigExample }}</pre>
           <span v-if="form.actionType === 'TRIGGER_WORKFLOW'" class="warning-text">
-            ⚠️ TRIGGER_WORKFLOW 依赖 Phase 1 Canvas-Workflow 合并后才能实际触发。当前可保存规则，执行时会失败。
+ ️ TRIGGER_WORKFLOW 依赖 Phase 1 Canvas-Workflow 合并后才能实际触发。当前可保存规则，执行时会失败。
           </span>
         </div>
       </el-form-item>

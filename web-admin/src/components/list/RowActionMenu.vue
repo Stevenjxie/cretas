@@ -27,7 +27,7 @@ const props = withDefaults(
   }>(),
   {
     aiTriggerEnabled: true,
-    aiTriggerLabel: '💬 跟 AI 说...',
+ aiTriggerLabel: ' 跟 AI 说...',
     buttonLabel: '操作',
     size: 'small',
   }

@@ -8,11 +8,11 @@
             <span class="data-count">共 {{ pagination.total }} 条</span>
           </div>
           <div class="header-right">
-            <el-button type="info" plain @click="handleAiAnalyze">🤖 AI 分析</el-button>
-            <el-button v-if="canWrite" type="primary" plain @click="aiDraftDialog = true">🧠 AI 录配方</el-button>
-            <el-button v-if="canWrite" type="primary" @click="openAiBatchDraftDialog">🚀 AI 批量录配方 <el-badge v-if="unmatchedCount > 0" :value="unmatchedCount" type="warning" /></el-button>
-            <el-button v-if="canWrite" type="warning" plain @click="batchImportDialog = true">📥 批量导入</el-button>
-            <el-button v-if="canWrite" type="success" plain @click="openAliasPanel">🔗 菜名对齐 <el-badge v-if="unmatchedCount > 0" :value="unmatchedCount" type="warning" /></el-button>
+ <el-button type="info" plain @click="handleAiAnalyze"> AI 分析</el-button>
+ <el-button v-if="canWrite" type="primary" plain @click="aiDraftDialog = true"> AI 录配方</el-button>
+ <el-button v-if="canWrite" type="primary" @click="openAiBatchDraftDialog"> AI 批量录配方 <el-badge v-if="unmatchedCount > 0" :value="unmatchedCount" type="warning" /></el-button>
+ <el-button v-if="canWrite" type="warning" plain @click="batchImportDialog = true"> 批量导入</el-button>
+ <el-button v-if="canWrite" type="success" plain @click="openAliasPanel"> 菜名对齐 <el-badge v-if="unmatchedCount > 0" :value="unmatchedCount" type="warning" /></el-button>
             <el-button :icon="Download" @click="handleExport">导出</el-button>
             <el-button v-if="canWrite" type="primary" :icon="Plus" @click="handleCreate">新增配方</el-button>
           </div>
@@ -177,7 +177,7 @@
     </el-drawer>
 
     <!-- P0-1: 批量导入配方 Dialog -->
-    <el-dialog v-model="batchImportDialog" title="📥 批量导入配方" width="640px">
+ <el-dialog v-model="batchImportDialog" title=" 批量导入配方" width="640px">
       <div style="line-height: 1.8">
         <p><b>1. 下载模板</b> — Excel/CSV 格式, 6 列: 菜品名称 / 食材名称 / 用量 / 单位 / 食材单价 / 是否主料</p>
         <el-button type="primary" plain size="small" @click="downloadTemplate">下载 CSV 模板</el-button>
@@ -203,7 +203,7 @@
         <el-alert v-if="importResult" :type="importResult.success ? 'success' : 'error'" :closable="false" style="margin-top: 12px">
           <template #title>
             <div v-if="importResult.success">
-              ✓ 导入完成: 新增菜品 {{ importResult.data.dishesCreated }} / 新增食材 {{ importResult.data.ingredientsCreated }} / 新增配方 {{ importResult.data.recipesCreated }}
+ 导入完成: 新增菜品 {{ importResult.data.dishesCreated }} / 新增食材 {{ importResult.data.ingredientsCreated }} / 新增配方 {{ importResult.data.recipesCreated }}
               <span v-if="importResult.data.errorCount > 0" style="color: var(--el-color-warning)"> · {{ importResult.data.errorCount }} 条行错误 (见下方)</span>
             </div>
             <div v-else>导入失败: {{ importResult.message }}</div>
@@ -216,7 +216,7 @@
     </el-dialog>
 
     <!-- P0-2: 菜名对齐 (未匹配菜品面板) -->
-    <el-dialog v-model="aliasDialog" title="🔗 菜名对齐 — POS 菜名 → 配方菜品" width="900px">
+ <el-dialog v-model="aliasDialog" title=" 菜名对齐 — POS 菜名 → 配方菜品" width="900px">
       <div v-if="unmatchedData" style="margin-bottom: 12px">
         <el-alert type="info" :closable="false">
           <template #title>
@@ -259,14 +259,14 @@
           标记为"非菜品"(噪音) ({{ selectedUnmatched.length }})
         </el-button>
         <span style="font-size: 12px; color: #909399; flex: 1">
-          💡 绑定完成后点 <el-link type="primary" href="/restaurant/analytics/gross-margin" :underline="false">毛利分析页 ⚡立即同步</el-link> 刷新覆盖率.
+ 绑定完成后点 <el-link type="primary" href="/restaurant/analytics/gross-margin" :underline="false">毛利分析页 立即同步</el-link> 刷新覆盖率.
           "非菜品"的条目 (如 打包盒/餐具/广告词) 会从覆盖率分母中剔除.
         </span>
       </div>
     </el-dialog>
 
     <!-- P2-7 批量版: AI 批量录配方 (覆盖 top N 未录菜品) -->
-    <el-dialog v-model="aiBatchDraftDialog" title="🚀 AI 批量录配方 — 按营收从高到低录 Top N" width="1100px" top="5vh">
+ <el-dialog v-model="aiBatchDraftDialog" title=" AI 批量录配方 — 按营收从高到低录 Top N" width="1100px" top="5vh">
       <div v-if="!batchDraftResults">
         <el-alert type="info" :closable="false" style="margin-bottom: 12px">
           <template #title>
@@ -287,7 +287,7 @@
           <el-input v-model="batchDraftHint" placeholder="如 川菜 / 粤菜 / 日料 / 面食" size="small" style="width: 240px" />
         </div>
         <el-button type="primary" size="large" :loading="batchDraftLoading" @click="runBatchDraft" style="margin-top: 12px">
-          <span v-if="!batchDraftLoading">🚀 开始 AI 批量生成</span>
+ <span v-if="!batchDraftLoading"> 开始 AI 批量生成</span>
           <span v-else>AI 并发生成中 ({{ batchDraftStatus }}) ...</span>
         </el-button>
       </div>
@@ -302,7 +302,7 @@
         </el-alert>
         <div style="display: flex; gap: 10px; margin-bottom: 10px">
           <el-button type="success" size="large" :loading="batchSaving" @click="batchSaveAll">
-            ✅ 一键采纳全部 {{ selectedDraftCount }} 道菜 (生成 {{ selectedRecipeLineCount }} 条配方行)
+ 一键采纳全部 {{ selectedDraftCount }} 道菜 (生成 {{ selectedRecipeLineCount }} 条配方行)
           </el-button>
           <el-button plain size="large" @click="batchDraftResults = null; batchDraftLoading = false">清空重来</el-button>
         </div>
@@ -324,7 +324,7 @@
                 <el-input-number v-model="ing.qty" :precision="4" :step="0.01" :min="0" size="small" :controls="false" style="width: 80px" />
                 <el-input v-model="ing.unit" size="small" style="width: 50px" />
                 <el-input-number v-if="canViewPrice" v-model="ing.suggested_unit_price" :precision="2" :step="1" :min="0" size="small" :controls="false" placeholder="单价" style="width: 80px" />
-                <el-button type="danger" link size="small" @click="row.ingredients.splice(i, 1)">✖</el-button>
+ <el-button type="danger" link size="small" @click="row.ingredients.splice(i, 1)"></el-button>
               </div>
             </template>
           </el-table-column>
@@ -343,7 +343,7 @@
     </el-dialog>
 
     <!-- P2-7: AI 智能录配方 dialog -->
-    <el-dialog v-model="aiDraftDialog" title="🧠 AI 智能录配方" width="720px">
+ <el-dialog v-model="aiDraftDialog" title=" AI 智能录配方" width="720px">
       <div style="line-height: 1.8">
         <p><b>1. 输入菜品名</b> — AI 会根据菜名生成 3-5 食材的配方草稿 (川菜成本率 25-40%)</p>
         <el-input v-model="draftDishName" placeholder="如: 宫保鸡丁 / 麻婆豆腐 / 青椒肉丝" size="large" style="margin-bottom: 8px">
@@ -391,15 +391,15 @@
             </el-table-column>
           </el-table>
           <el-button size="small" plain @click="draftResult!.data.ingredients.push({ name: '', qty: 0.1, unit: 'kg', is_main: false, price: 0 })">+ 添加食材</el-button>
-          <div v-if="draftResult.data.notes" style="font-size: 12px; color: #909399; margin-top: 10px">💬 AI 备注: {{ draftResult.data.notes }}</div>
+ <div v-if="draftResult.data.notes" style="font-size: 12px; color: #909399; margin-top: 10px"> AI 备注: {{ draftResult.data.notes }}</div>
           <div style="margin-top: 16px">
-            <el-button type="success" :loading="savingDraft" @click="saveDraftRecipe">✓ 保存为配方 (一键创建菜品 + 食材 + 配方行)</el-button>
+ <el-button type="success" :loading="savingDraft" @click="saveDraftRecipe"> 保存为配方 (一键创建菜品 + 食材 + 配方行)</el-button>
             <el-button plain @click="draftResult = null">清空重来</el-button>
           </div>
         </div>
         <el-alert v-else-if="draftResult && !draftResult.success" type="error" :closable="false" :title="draftResult.message || 'AI 生成失败'" />
         <div v-else style="color: #909399; font-size: 13px; padding: 20px 0; text-align: center">
-          💡 输入菜名 + 点 "AI 生成草稿". 草稿只是建议, 保存前可自由修改食材 / 用量 / 单价.
+ 输入菜名 + 点 "AI 生成草稿". 草稿只是建议, 保存前可自由修改食材 / 用量 / 单价.
         </div>
       </div>
     </el-dialog>

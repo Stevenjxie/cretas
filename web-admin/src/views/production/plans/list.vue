@@ -515,7 +515,7 @@ async function handleCreateBatch(row: TableRow) {
     await ElMessageBox.confirm(
       `确定将计划 "${row.planNumber}" 转为生产批次？\n\n` +
       `转换后将自动创建批次并开始生产流程。\n\n` +
-      `⚠️ 流程提示：\n` +
+ `️ 流程提示：\n` +
       `• 如果仓库尚未收到所需原料 → 请先点 "生成调拨单"，等仓库审批/出库后再转批次。\n` +
       `• 如果原料已就位 → 直接转批次即可。\n` +
       `• 转批次 = 开始生产；之后在 APP 报工审批，或在 PC 端"完成"录入实际产量。`,

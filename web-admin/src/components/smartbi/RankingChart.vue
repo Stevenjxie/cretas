@@ -63,7 +63,7 @@ const chartInstance = ref<ECharts | null>(null);
 let resizeObserver: ResizeObserver | null = null;
 let rafId = 0;
 
-const MEDAL_ICONS = ['🥇', '🥈', '🥉'];
+const MEDAL_ICONS = ['', '', ''];
 
 // Process data for display
 const processedData = computed(() => {

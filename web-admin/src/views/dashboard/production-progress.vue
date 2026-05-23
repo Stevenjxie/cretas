@@ -199,7 +199,7 @@ onBeforeUnmount(() => {
     </div>
 
     <div v-else-if="!loading && data" class="empty-state">
-      <div class="empty-icon">📊</div>
+ <div class="empty-icon"></div>
       <div class="empty-text">当天暂无生产计划</div>
     </div>
 

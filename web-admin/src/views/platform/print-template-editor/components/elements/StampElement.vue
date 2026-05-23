@@ -1,7 +1,7 @@
 <template>
   <div class="el-print-stamp" :style="containerStyle">
     <div class="ring" :style="ringStyle">
-      <div class="star">★</div>
+ <div class="star"></div>
       <div class="caption">企业印章</div>
     </div>
   </div>

@@ -365,11 +365,11 @@ interface PaletteSchema {
 
 const nodeSchemas: PaletteSchema[] = [
   { type: 'start',     displayName: '开始',   description: '工作流入口',            icon: '▶', color: '#67C23A' },
-  { type: 'approval',  displayName: '审批',   description: '单签 / 会签节点',       icon: '✓', color: '#409EFF' },
+ { type: 'approval', displayName: '审批', description: '单签 / 会签节点', icon: '', color: '#409EFF' },
   { type: 'condition', displayName: '条件',   description: 'SpEL 分支判断',          icon: '?', color: '#E6A23C' },
   { type: 'parallel',  displayName: '并行',   description: '同时启动多分支',         icon: '⇉', color: '#909399' },
   { type: 'join',      displayName: '汇聚',   description: 'ALL / N_OF_M / ANY',     icon: '⇇', color: '#909399' },
-  { type: 'notify',    displayName: '通知',   description: '推 InAppNotification',   icon: '✉', color: '#909399' },
+ { type: 'notify', displayName: '通知', description: '推 InAppNotification', icon: '', color: '#909399' },
   { type: 'end',       displayName: '结束',   description: 'APPROVED / REJECTED',    icon: '■', color: '#F56C6C' },
 ]
 

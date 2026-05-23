@@ -514,7 +514,7 @@ function getStatusText(status: string) {
             </strong>
           </div>
           <div class="form-tip" style="color: #909399; font-size: 12px; margin-top: 4px;">
-            ⚠ "当前数量"在对话框打开时读取，若有其他用户同时调整，实际结果可能偏差。如需保证一致性请先刷新列表。
+ "当前数量"在对话框打开时读取，若有其他用户同时调整，实际结果可能偏差。如需保证一致性请先刷新列表。
           </div>
         </el-form-item>
         <el-form-item label="调整原因" required>

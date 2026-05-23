@@ -292,18 +292,18 @@ function getAnomalies(chartType: string): string[] {
 // kpi_scorecard → 经营驾驶舱, expense_yoy_budget → 财务分析-成本, gross_margin_trend → 财务分析-利润,
 // product_ranking → 销售分析+驾驶舱, ar_aging → 财务分析-应收, variance_analysis → 财务分析-预算
 const chartTypes = [
-  { key: 'budget_achievement',      label: '预算达成分析',   icon: '📊', group: '核心财务', order: 1 },
-  { key: 'yoy_mom_comparison',      label: '同环比分析',     icon: '📈', group: '核心财务', order: 2 },
-  { key: 'pnl_waterfall',           label: '损益表瀑布图',   icon: '🌊', group: '核心财务', order: 3 },
-  { key: 'category_yoy_comparison', label: '品类同期对比',   icon: '📊', group: '品类与渠道', order: 4 },
-  { key: 'category_structure_donut',label: '产品结构',       icon: '🎯', group: '品类与渠道', order: 5 },
-  { key: 'channel_analysis',        label: '渠道分析',       icon: '🏪', group: '品类与渠道', order: 6 },
-  { key: 'cash_flow_waterfall',     label: '现金流量瀑布图', icon: '💵', group: '现金流与成本', order: 7 },
-  { key: 'cashflow_trend',          label: '现金流趋势',     icon: '💹', group: '现金流与成本', order: 8 },
-  { key: 'cost_flow_sankey',        label: '成本流向桑基图', icon: '🔀', group: '现金流与成本', order: 9 },
-  { key: 'bullet_chart',            label: '目标达成进度',   icon: '🎯', group: '运营专项', order: 10 },
-  { key: 'hr_cost_analysis',        label: '人力成本分析',   icon: '👥', group: '运营专项', order: 11 },
-  { key: 'small_multiples',         label: '多维度对比矩阵', icon: '📋', group: '运营专项', order: 12 },
+ { key: 'budget_achievement', label: '预算达成分析', icon: '', group: '核心财务', order: 1 },
+ { key: 'yoy_mom_comparison', label: '同环比分析', icon: '', group: '核心财务', order: 2 },
+ { key: 'pnl_waterfall', label: '损益表瀑布图', icon: '', group: '核心财务', order: 3 },
+ { key: 'category_yoy_comparison', label: '品类同期对比', icon: '', group: '品类与渠道', order: 4 },
+ { key: 'category_structure_donut',label: '产品结构', icon: '', group: '品类与渠道', order: 5 },
+ { key: 'channel_analysis', label: '渠道分析', icon: '', group: '品类与渠道', order: 6 },
+ { key: 'cash_flow_waterfall', label: '现金流量瀑布图', icon: '', group: '现金流与成本', order: 7 },
+ { key: 'cashflow_trend', label: '现金流趋势', icon: '', group: '现金流与成本', order: 8 },
+ { key: 'cost_flow_sankey', label: '成本流向桑基图', icon: '', group: '现金流与成本', order: 9 },
+ { key: 'bullet_chart', label: '目标达成进度', icon: '', group: '运营专项', order: 10 },
+ { key: 'hr_cost_analysis', label: '人力成本分析', icon: '', group: '运营专项', order: 11 },
+ { key: 'small_multiples', label: '多维度对比矩阵', icon: '', group: '运营专项', order: 12 },
 ];
 
 const chartsByGroup = computed(() => {
@@ -1444,7 +1444,7 @@ onBeforeUnmount(() => {
             size="small"
           />
           <el-button size="small" @click="toggleDarkMode" :title="isDarkMode ? '切换亮色' : '切换暗色'">
-            {{ isDarkMode ? '☀️' : '🌙' }}
+ {{ isDarkMode ? '️' : '' }}
           </el-button>
           <el-select
             v-model="autoRefreshInterval"
@@ -1501,13 +1501,13 @@ onBeforeUnmount(() => {
             <template #dropdown>
               <el-dropdown-menu>
                 <el-dropdown-item command="ppt" :disabled="isExportingPPT">
-                  📊 导出PPT演示文稿
+ 导出PPT演示文稿
                 </el-dropdown-item>
                 <el-dropdown-item command="pdf" :disabled="isExportingPDF">
-                  📄 导出PDF报告
+ 导出PDF报告
                 </el-dropdown-item>
                 <el-dropdown-item command="excel" :disabled="isExportingExcel">
-                  📈 导出Excel数据
+ 导出Excel数据
                 </el-dropdown-item>
               </el-dropdown-menu>
             </template>
@@ -1518,7 +1518,7 @@ onBeforeUnmount(() => {
 
     <!-- Interaction tips -->
     <div v-if="dashboardResponse && !isGenerating" class="interaction-tips">
-      <span>💡 <b>单击</b>交叉过滤 | <b>双击</b>添加标注 | <b>方向键</b>卡片导航 | <b>Shift+滚轮</b>缩放 | 图表间<b>Tooltip联动</b></span>
+ <span> <b>单击</b>交叉过滤 | <b>双击</b>添加标注 | <b>方向键</b>卡片导航 | <b>Shift+滚轮</b>缩放 | 图表间<b>Tooltip联动</b></span>
     </div>
 
     <!-- Fix 72: Global Slicer / Filter bar (Power BI style) -->
@@ -1598,7 +1598,7 @@ onBeforeUnmount(() => {
       >
         <template #header>
           <div class="chart-card-header">
-            <span>🌊 成本流向图</span>
+ <span> 成本流向图</span>
             <el-button
               size="small"
               text
@@ -1651,7 +1651,7 @@ onBeforeUnmount(() => {
                 class="anomaly-badge"
                 :title="getAnomalies(ct.key).join('\n')"
               >
-                ⚠ {{ getAnomalies(ct.key).length }}
+ {{ getAnomalies(ct.key).length }}
               </el-tag>
             </div>
             <div style="display: flex; align-items: center; gap: 4px">
@@ -1662,7 +1662,7 @@ onBeforeUnmount(() => {
                 title="聚焦放大"
                 @click="enterSpotlight(ct.key)"
               >
-                🔍
+ 
               </el-button>
               <el-button
                 v-if="annotations[ct.key]?.length"
@@ -1857,7 +1857,7 @@ onBeforeUnmount(() => {
             :class="{ active: activeTab === 'conclusions' }"
             @click="activeTab = 'conclusions'"
           >
-            <span class="nav-icon">📝</span>
+ <span class="nav-icon"></span>
             <span class="nav-label">分析结论与建议</span>
             <span class="nav-order">19</span>
           </div>
@@ -1871,7 +1871,7 @@ onBeforeUnmount(() => {
           <el-card shadow="hover">
             <template #header>
               <div class="chart-card-header">
-                <span>📝 分析结论与建议</span>
+ <span> 分析结论与建议</span>
                 <el-button size="small" type="primary" :loading="conclusionsLoading" @click="generateConclusions">
                   {{ conclusionsText ? '重新生成' : '生成结论' }}
                 </el-button>
@@ -1936,11 +1936,11 @@ onBeforeUnmount(() => {
                     class="anomaly-badge"
                     :title="getAnomalies(activeTab).join('\n')"
                   >
-                    ⚠ {{ getAnomalies(activeTab).length }}
+ {{ getAnomalies(activeTab).length }}
                   </el-tag>
                 </div>
                 <div style="display: flex; align-items: center; gap: 4px">
-                  <el-button size="small" text title="聚焦放大" @click="enterSpotlight(activeTab)">🔍</el-button>
+ <el-button size="small" text title="聚焦放大" @click="enterSpotlight(activeTab)"></el-button>
                   <el-button
                     v-if="annotations[activeTab]?.length"
                     size="small"
@@ -2122,7 +2122,7 @@ onBeforeUnmount(() => {
     >
       <template #header>
         <div class="chart-card-header">
-          <span>🔲 维度对比 (Small Multiples)</span>
+ <span> 维度对比 (Small Multiples)</span>
           <el-select
             v-model="smallMultiplesDimension"
             size="small"
@@ -2216,7 +2216,7 @@ onBeforeUnmount(() => {
         <div class="spotlight-container">
           <div class="spotlight-header">
             <span>{{ chartTypes.find(c => c.key === spotlightChart)?.icon }} {{ chartTypes.find(c => c.key === spotlightChart)?.label }}</span>
-            <el-button size="small" text @click="exitSpotlight">✕ 退出聚焦</el-button>
+ <el-button size="small" text @click="exitSpotlight"> 退出聚焦</el-button>
           </div>
           <div
             :ref="(el) => { if (spotlightChart) setChartDomRef(spotlightChart, el as Element | null) }"

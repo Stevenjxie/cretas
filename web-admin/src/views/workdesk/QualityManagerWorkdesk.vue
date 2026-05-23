@@ -19,13 +19,13 @@
     <!-- Header -->
     <div class="workdesk-header">
       <div class="header-title">
-        <span class="emoji">🚨</span>
+ <span class="emoji"></span>
         <span class="title-text">质量主管工作台</span>
         <el-tag size="small" type="danger">Sprint 8 P3 (2026-05-20)</el-tag>
       </div>
       <div class="header-actions">
         <el-button type="danger" :icon="Warning" @click="openRecallStartDialog">
-          🚨 启动召回
+ 启动召回
         </el-button>
         <el-button :loading="loading" :icon="Refresh" @click="triggerHaccpQuery">
           重新查询
@@ -37,7 +37,7 @@
     <el-card class="chat-card" shadow="never">
       <template #header>
         <div class="card-header">
-          <span>💬 与 AI 对话</span>
+ <span> 与 AI 对话</span>
           <span class="header-hint">默认: "今天 HACCP 监控全通过吗?" — 或输入其他食品安全问题</span>
         </div>
       </template>
@@ -80,7 +80,7 @@
     <el-card v-if="formattedText" class="result-card" shadow="never">
       <template #header>
         <div class="card-header">
-          <span>📋 召回分析结果</span>
+ <span> 召回分析结果</span>
           <span class="header-hint" v-if="lastQueryTime">
             {{ lastQueryTime }} 生成
           </span>
@@ -93,7 +93,7 @@
     <el-card v-if="recallContext.batchNumber" class="trace-card" shadow="never">
       <template #header>
         <div class="card-header">
-          <span>🔗 原料追溯 — {{ recallContext.batchNumber }}</span>
+ <span> 原料追溯 — {{ recallContext.batchNumber }}</span>
           <el-tag v-if="recallContext.productName" size="small" type="info">
             {{ recallContext.productName }}
           </el-tag>
@@ -119,7 +119,7 @@
     <el-card v-if="haccpRecords.length > 0" class="haccp-card" shadow="never">
       <template #header>
         <div class="card-header">
-          <span>🌡️ HACCP 监控审查 ({{ haccpRecords.length }} 记录)</span>
+ <span>️ HACCP 监控审查 ({{ haccpRecords.length }} 记录)</span>
           <el-tag v-if="haccpDeviationCount > 0" type="danger" size="small">
             {{ haccpDeviationCount }} 偏差
           </el-tag>
@@ -149,7 +149,7 @@
         <el-table-column label="状态" width="80">
           <template #default="{ row }">
             <el-tag :type="row.isDeviation ? 'danger' : 'success'" size="small">
-              {{ row.isDeviation ? '⚠️ 偏差' : '✅ 达标' }}
+ {{ row.isDeviation ? '️ 偏差' : ' 达标' }}
             </el-tag>
           </template>
         </el-table-column>
@@ -160,7 +160,7 @@
     <el-card v-if="additiveChecks.length > 0" class="additive-card" shadow="never">
       <template #header>
         <div class="card-header">
-          <span>🧪 GB 2760 添加剂合规 ({{ additiveChecks.length }} 项)</span>
+ <span> GB 2760 添加剂合规 ({{ additiveChecks.length }} 项)</span>
           <el-tag v-if="additiveExceedCount > 0" type="danger" size="small">
             {{ additiveExceedCount }} 超限
           </el-tag>
@@ -185,7 +185,7 @@
         <el-table-column label="状态" width="80">
           <template #default="{ row }">
             <el-tag :type="row.isExceed ? 'danger' : 'success'" size="small">
-              {{ row.isExceed ? '🔴 超限' : '✅ 合规' }}
+ {{ row.isExceed ? ' 超限' : ' 合规' }}
             </el-tag>
           </template>
         </el-table-column>
@@ -196,7 +196,7 @@
     <el-card v-if="affectedCustomers.length > 0" class="customers-card" shadow="never">
       <template #header>
         <div class="card-header">
-          <span>👥 影响客户清单 ({{ affectedCustomers.length }})</span>
+ <span> 影响客户清单 ({{ affectedCustomers.length }})</span>
           <span class="header-hint">建议立即通知, 防止次生事故</span>
         </div>
       </template>
@@ -217,7 +217,7 @@
     <el-card v-if="lossEstimate.totalLoss > 0" class="loss-card" shadow="hover">
       <template #header>
         <div class="card-header">
-          <span>💸 召回损失预估</span>
+ <span> 召回损失预估</span>
         </div>
       </template>
       <div class="loss-grid">
@@ -244,7 +244,7 @@
     <el-card v-if="recallContext.batchNumber || recallContext.recallEventId" class="actions-card" shadow="never">
       <template #header>
         <div class="card-header">
-          <span>⚡ 召回行动 — 一键执行</span>
+ <span> 召回行动 — 一键执行</span>
           <span class="header-hint">每按钮先 preview 后执行 · 全程 < 2 min</span>
         </div>
       </template>
@@ -254,28 +254,28 @@
           size="large"
           :icon="Box"
           @click="openInventoryFreezeDialog">
-          🧊 冻结库存
+ 冻结库存
         </el-button>
         <el-button
           type="warning"
           size="large"
           :icon="Bell"
           @click="openCustomerNotifyDialog">
-          📱 通知客户
+ 通知客户
         </el-button>
         <el-button
           type="info"
           size="large"
           :icon="Document"
           @click="openRegulatoryReportDialog">
-          📑 生成监管文件
+ 生成监管文件
         </el-button>
         <el-button
           type="success"
           size="large"
           :icon="CircleCheck"
           @click="openCloseEventDialog">
-          ✅ 关闭事件
+ 关闭事件
         </el-button>
       </div>
     </el-card>
@@ -283,7 +283,7 @@
     <!-- ===== Dialog 1: 启动召回 (R2: 输入投诉信息 → 触发 food-safety-recall Skill) ===== -->
     <el-dialog
       v-model="recallStartDialog.visible"
-      title="🚨 启动食品安全召回 — 输入投诉信息"
+ title=" 启动食品安全召回 — 输入投诉信息"
       width="640px"
       @close="resetRecallStartDialog">
       <el-form :model="recallStartDialog.form" label-width="120px">
@@ -326,7 +326,7 @@
     <!-- ===== Dialog 2: 冻结库存 (R1: 预览数量 + R2: 含批次号) ===== -->
     <el-dialog
       v-model="freezeDialog.visible"
-      :title="`🧊 冻结库存 — 召回事件 #${recallContext.recallEventId || '未创建'} / 批次 ${recallContext.batchNumber || ''}`"
+ :title="` 冻结库存 — 召回事件 #${recallContext.recallEventId || '未创建'} / 批次 ${recallContext.batchNumber || ''}`"
       width="560px"
       @close="resetFreezeDialog">
       <el-form :model="freezeDialog.form" label-width="100px">
@@ -373,7 +373,7 @@
     <!-- ===== Dialog 3: 通知客户 (R1: 预览短信草稿 + 影响客户数) ===== -->
     <el-dialog
       v-model="notifyDialog.visible"
-      :title="`📱 通知客户 — 召回事件 #${recallContext.recallEventId || '未创建'} / 批次 ${recallContext.batchNumber || ''}`"
+ :title="` 通知客户 — 召回事件 #${recallContext.recallEventId || '未创建'} / 批次 ${recallContext.batchNumber || ''}`"
       width="640px"
       @close="resetNotifyDialog">
       <el-form :model="notifyDialog.form" label-width="100px">
@@ -429,7 +429,7 @@
     <!-- ===== Dialog 4: 生成监管文件 (输出 markdown + 下载) ===== -->
     <el-dialog
       v-model="reportDialog.visible"
-      :title="`📑 生成监管上报文件 — 召回事件 #${recallContext.recallEventId || '未创建'}`"
+ :title="` 生成监管上报文件 — 召回事件 #${recallContext.recallEventId || '未创建'}`"
       width="720px"
       @close="resetReportDialog">
       <el-form :model="reportDialog.form" label-width="100px">
@@ -439,7 +439,7 @@
         <el-alert v-if="!recallContext.recallEventId"
           type="warning" show-icon :closable="false" class="preview-alert">
           <template #title>
-            <span>⚠️ 未创建召回事件 ID. 请先在 召回 Skill 中初始化事件后再生成监管文件.</span>
+ <span>️ 未创建召回事件 ID. 请先在 召回 Skill 中初始化事件后再生成监管文件.</span>
           </template>
         </el-alert>
         <el-input
@@ -463,7 +463,7 @@
           v-if="reportDialog.markdownContent"
           type="success"
           @click="downloadReport">
-          📥 下载 Markdown
+ 下载 Markdown
         </el-button>
       </template>
     </el-dialog>
@@ -471,7 +471,7 @@
     <!-- ===== Dialog 5: 关闭召回事件 (R2: 含事件号 + 总结) ===== -->
     <el-dialog
       v-model="closeDialog.visible"
-      :title="`✅ 关闭召回事件 #${recallContext.recallEventId || '未创建'}`"
+ :title="` 关闭召回事件 #${recallContext.recallEventId || '未创建'}`"
       width="560px"
       @close="resetCloseDialog">
       <el-form :model="closeDialog.form" label-width="100px">

@@ -3,7 +3,7 @@
 
   F006 真场景 (Boss 演示弹药 #5): 质量主管李工程师早上打开 Cretas, 说
   "这批卤猪蹄能放行吗?" → AI 综合 质检 + HACCP + 添加剂合规 + 客户标准
-  → 4 项 icon ✓/✗ + [一键放行] / [退货]
+ → 4 项 icon / + [一键放行] / [退货]
 
   vs HJ: 质量主管要点 4 菜单 (质检记录 / HACCP / 添加剂 / 客户标准) + 手工综合
   Cretas: 1 页面 AI 综合判断 + 一键决策
@@ -23,7 +23,7 @@
     <!-- Header -->
     <div class="workdesk-header">
       <div class="header-title">
-        <span class="emoji">🔬</span>
+ <span class="emoji"></span>
         <span class="title-text">质量主管工作台</span>
         <el-tag size="small" type="primary">Sprint 8 P4c (2026-05-20)</el-tag>
       </div>
@@ -38,7 +38,7 @@
     <el-card class="chat-card" shadow="never">
       <template #header>
         <div class="card-header">
-          <span>💬 与 AI 对话 — 批次放行综合决策</span>
+ <span> 与 AI 对话 — 批次放行综合决策</span>
           <span class="header-hint">默认查待放行批次, 或输入 "卤猪蹄 B-X 能放行吗?"</span>
         </div>
       </template>
@@ -81,7 +81,7 @@
     <el-card v-if="formattedText" class="result-card" shadow="never">
       <template #header>
         <div class="card-header">
-          <span>🤖 AI 综合建议</span>
+ <span> AI 综合建议</span>
           <span class="header-hint" v-if="lastQueryTime">{{ lastQueryTime }} 生成</span>
         </div>
       </template>
@@ -92,7 +92,7 @@
     <el-card v-if="pendingBatches.length > 0" class="batches-card" shadow="never">
       <template #header>
         <div class="card-header">
-          <span>📦 待放行批次 ({{ pendingBatches.length }} 条)</span>
+ <span> 待放行批次 ({{ pendingBatches.length }} 条)</span>
           <span class="header-hint">每批显综合 audit + 一键放行/退货</span>
         </div>
       </template>
@@ -106,16 +106,16 @@
             </div>
             <div class="batch-audit">
               <span class="audit-item" :class="batch.qualityCheck ? 'ok' : 'fail'">
-                {{ batch.qualityCheck ? '✅' : '❌' }} 质检
+ {{ batch.qualityCheck ? '' : '' }} 质检
               </span>
               <span class="audit-item" :class="batch.haccp ? 'ok' : 'fail'">
-                {{ batch.haccp ? '✅' : '❌' }} HACCP
+ {{ batch.haccp ? '' : '' }} HACCP
               </span>
               <span class="audit-item" :class="batch.additive ? 'ok' : 'fail'">
-                {{ batch.additive ? '✅' : '❌' }} 添加剂
+ {{ batch.additive ? '' : '' }} 添加剂
               </span>
               <span class="audit-item" :class="batch.customerStandard ? 'ok' : 'fail'">
-                {{ batch.customerStandard ? '✅' : '❌' }} 客户标准
+ {{ batch.customerStandard ? '' : '' }} 客户标准
               </span>
             </div>
           </div>
@@ -129,14 +129,14 @@
               :icon="CircleCheck"
               :disabled="!batch.canRelease"
               @click="openReleaseDialog(batch, 'RELEASED')">
-              ✅ 一键放行
+ 一键放行
             </el-button>
             <el-button
               type="danger"
               size="default"
               :icon="CircleClose"
               @click="openReleaseDialog(batch, 'REJECTED')">
-              ❌ 退货
+ 退货
             </el-button>
             <el-button
               size="default"
@@ -153,7 +153,7 @@
     <el-card v-if="currentBatchDetail.show" class="detail-card" shadow="never">
       <template #header>
         <div class="card-header">
-          <span>🔍 批次详细 audit — {{ currentBatchDetail.batchNumber }}</span>
+ <span> 批次详细 audit — {{ currentBatchDetail.batchNumber }}</span>
           <el-tag v-if="currentBatchDetail.materialName" size="small" type="info">
             {{ currentBatchDetail.materialName }}
           </el-tag>
@@ -486,14 +486,14 @@ async function queryBatchDetail(batchNumber: string) {
         const total = hd['totalRecords'] as number;
         const dev = hd['deviationCount'] as number;
         currentBatchDetail.haccpStatus = total === 0 ? '无监控记录'
-          : passed ? `✅ ${total} 项通过` : `🚨 ${dev}/${total} 偏离`;
+ : passed ? ` ${total} 项通过` : ` ${dev}/${total} 偏离`;
       }
       if (additiveRes.status === 'fulfilled') {
         const ad = (additiveRes.value.resultData?.['data'] as Record<string, unknown>) || {};
         const compliant = ad['compliant'] as boolean | null;
         const violations = ad['violationCount'] as number;
         currentBatchDetail.additiveStatus = compliant === null ? '无 BOM 数据'
-          : compliant ? '✅ 全部合规' : `🚨 ${violations} 项超限`;
+ : compliant ? ' 全部合规' : ` ${violations} 项超限`;
       }
       if (custRes.status === 'fulfilled') {
         const cd = (custRes.value.resultData?.['data'] as Record<string, unknown>) || {};
@@ -535,7 +535,7 @@ const releaseDialog = reactive({
 });
 
 const releaseDialogTitle = computed(() => {
-  const action = releaseDialog.decision === 'RELEASED' ? '✅ 放行批次' : '❌ 退货批次';
+ const action = releaseDialog.decision === 'RELEASED' ? ' 放行批次' : ' 退货批次';
   return `${action} — ${releaseDialog.batchNumber} (${releaseDialog.materialName || '物料'})`;
 });
 

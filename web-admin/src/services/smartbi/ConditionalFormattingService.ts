@@ -62,9 +62,9 @@ export interface CellStyle {
 
 const ICON_SETS: Record<string, string[]> = {
   arrows: ['↑', '→', '↓'],          // 3 levels: up, flat, down
-  traffic: ['🟢', '🟡', '🔴'],       // 3 levels: green, yellow, red
+ traffic: ['', '', ''], // 3 levels: green, yellow, red
   stars: ['⭐⭐⭐', '⭐⭐', '⭐'],    // 3 levels
-  flags: ['🏴', '🏳️', '⚑'],        // 3 levels
+ flags: ['', '️', ''], // 3 levels
 };
 
 // ==================== Color Interpolation ====================

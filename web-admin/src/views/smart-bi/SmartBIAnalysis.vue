@@ -928,12 +928,12 @@ interface ChartGroup {
 }
 
 const CHART_GROUP_RULES: Array<{ label: string; icon: string; patterns: RegExp[] }> = [
-  { label: '收入与销售', icon: '📊', patterns: [/收入|营收|销售|revenue|sales|金额|成交|GMV/i] },
-  { label: '成本与费用', icon: '💰', patterns: [/成本|费用|支出|cost|expense|开支/i] },
-  { label: '利润与效率', icon: '📈', patterns: [/利润|毛利|净利|profit|margin|效率|ROI|回报/i] },
-  { label: '趋势与时间', icon: '📅', patterns: [/趋势|月|季|年|时间|日期|trend|monthly|daily|weekly/i] },
-  { label: '分布与占比', icon: '🔵', patterns: [/占比|分布|比例|构成|distribution|proportion|结构/i] },
-  { label: '排名与对比', icon: '🏆', patterns: [/排名|排行|TOP|对比|比较|rank|comparison/i] },
+ { label: '收入与销售', icon: '', patterns: [/收入|营收|销售|revenue|sales|金额|成交|GMV/i] },
+ { label: '成本与费用', icon: '', patterns: [/成本|费用|支出|cost|expense|开支/i] },
+ { label: '利润与效率', icon: '', patterns: [/利润|毛利|净利|profit|margin|效率|ROI|回报/i] },
+ { label: '趋势与时间', icon: '', patterns: [/趋势|月|季|年|时间|日期|trend|monthly|daily|weekly/i] },
+ { label: '分布与占比', icon: '', patterns: [/占比|分布|比例|构成|distribution|proportion|结构/i] },
+ { label: '排名与对比', icon: '', patterns: [/排名|排行|TOP|对比|比较|rank|comparison/i] },
 ];
 
 const getGroupedCharts = (sheet: SheetResult): ChartGroup[] => {
@@ -941,7 +941,7 @@ const getGroupedCharts = (sheet: SheetResult): ChartGroup[] => {
   if (charts.length <= 3) return []; // Too few to group
 
   const groups: Map<string, ChartGroup> = new Map();
-  const ungrouped: ChartGroup = { label: '其他分析', icon: '📋', charts: [] };
+ const ungrouped: ChartGroup = { label: '其他分析', icon: '', charts: [] };
 
   for (let i = 0; i < charts.length; i++) {
     const chart = charts[i];
@@ -965,7 +965,7 @@ const getGroupedCharts = (sheet: SheetResult): ChartGroup[] => {
     if (!matched && chartType === 'pie') {
       const distLabel = '分布与占比';
       if (!groups.has(distLabel)) {
-        groups.set(distLabel, { label: distLabel, icon: '🔵', charts: [] });
+ groups.set(distLabel, { label: distLabel, icon: '', charts: [] });
       }
       groups.get(distLabel)!.charts.push({ chart, originalIndex: i });
       matched = true;
@@ -1959,7 +1959,7 @@ const enhanceChartOption = (opts: Record<string, unknown>, displayNameMap?: Reco
         const numVal = Number(val);
         const base = `${p.marker || ''}${p.seriesName}: <b>${numVal.toLocaleString()}</b>`;
         if (Math.abs(numVal) > stats.median * 10) {
-          return `${p.name}<br/>${base}<br/><span style="color:#ff6b35;font-size:11px">⚠ 离群值 (${(numVal / stats.median).toFixed(0)}x 中位数)</span>`;
+ return `${p.name}<br/>${base}<br/><span style="color:#ff6b35;font-size:11px"> 离群值 (${(numVal / stats.median).toFixed(0)}x 中位数)</span>`;
         }
         return `${p.name}<br/>${base}`;
       };

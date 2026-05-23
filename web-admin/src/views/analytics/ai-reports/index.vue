@@ -144,47 +144,47 @@ function getSeverityType(severity: string) {
     <!-- Apr 24 Plan C Phase 8: restaurant AI shortcuts -->
     <el-card v-if="isRestaurant" class="restaurant-ai-shortcuts" shadow="never" style="margin-bottom:16px">
       <template #header>
-        <span style="font-weight:600">🤖 餐饮运营 AI 快捷分析</span>
+ <span style="font-weight:600"> 餐饮运营 AI 快捷分析</span>
         <span style="font-size:12px;color:#909399;margin-left:12px">点击直接进入 AI 问答,基于 Gold 数据秒回</span>
       </template>
       <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px">
         <div class="ai-shortcut" @click="$router.push('/smart-bi/query?q=哪道菜毛利最高 top 10')">
-          <div class="ai-shortcut-icon">💰</div>
+ <div class="ai-shortcut-icon"></div>
           <div>
             <div class="ai-shortcut-title">菜品毛利分析</div>
             <div class="ai-shortcut-desc">POS × 配方 找出最赚钱的菜</div>
           </div>
         </div>
         <div class="ai-shortcut" @click="$router.push('/smart-bi/query?q=哪家店最赚钱 门店毛利排行')">
-          <div class="ai-shortcut-icon">🏪</div>
+ <div class="ai-shortcut-icon"></div>
           <div>
             <div class="ai-shortcut-title">门店毛利对比</div>
             <div class="ai-shortcut-desc">连锁店毛利率排名 + 找低效店</div>
           </div>
         </div>
         <div class="ai-shortcut" @click="$router.push('/smart-bi/query?q=最近30天损耗最多的食材和类型占比')">
-          <div class="ai-shortcut-icon">🔥</div>
+ <div class="ai-shortcut-icon"></div>
           <div>
             <div class="ai-shortcut-title">损耗深度分析</div>
             <div class="ai-shortcut-desc">过期/变质/破损 类型拆解</div>
           </div>
         </div>
         <div class="ai-shortcut" @click="$router.push('/smart-bi/query?q=哪个食材盘亏最严重')">
-          <div class="ai-shortcut-icon">📉</div>
+ <div class="ai-shortcut-icon"></div>
           <div>
             <div class="ai-shortcut-title">盘亏 Top 分析</div>
             <div class="ai-shortcut-desc">找出库存流失重点食材</div>
           </div>
         </div>
         <div class="ai-shortcut" @click="$router.push('/smart-bi/query?q=最近30天领料趋势 top 10 食材')">
-          <div class="ai-shortcut-icon">📊</div>
+ <div class="ai-shortcut-icon"></div>
           <div>
             <div class="ai-shortcut-title">领料趋势+Top</div>
             <div class="ai-shortcut-desc">食材用量排名 + 30天趋势</div>
           </div>
         </div>
         <div class="ai-shortcut" @click="$router.push('/restaurant/analytics/gross-margin')">
-          <div class="ai-shortcut-icon">📈</div>
+ <div class="ai-shortcut-icon"></div>
           <div>
             <div class="ai-shortcut-title">专属毛利 Dashboard</div>
             <div class="ai-shortcut-desc">每道菜 revenue/cost/profit 详表</div>

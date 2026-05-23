@@ -74,7 +74,7 @@ async function goConfigure() {
           frameborder="0"
         />
         <div v-else class="inline-cs__empty">
-          <div class="inline-cs__empty-icon">💬</div>
+ <div class="inline-cs__empty-icon"></div>
           <div class="inline-cs__empty-title">客服系统尚未配置</div>
           <div class="inline-cs__empty-desc">
             请管理员在系统设置中接入第三方客服 (商务通 / 美洽 / 网易七鱼 等),

@@ -68,7 +68,7 @@ function pick(color: RowMarkerColor | null): void {
         aria-label="清除标记"
         @click="pick(null)"
       >
-        ✕
+ 
       </button>
     </div>
   </el-popover>

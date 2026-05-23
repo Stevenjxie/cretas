@@ -1720,7 +1720,7 @@ onUnmounted(() => {
         <span class="subtitle">智能数据分析 · 业务经营一站式洞察</span>
       </div>
       <div class="header-right">
-        <el-button size="small" @click="toggleDarkMode" :title="isDarkMode ? '切换亮色' : '切换暗色'" :aria-label="isDarkMode ? '切换亮色模式' : '切换暗色模式'">{{ isDarkMode ? '☀️' : '🌙' }}</el-button>
+ <el-button size="small" @click="toggleDarkMode" :title="isDarkMode ? '切换亮色' : '切换暗色'" :aria-label="isDarkMode ? '切换亮色模式' : '切换暗色模式'">{{ isDarkMode ? '️' : '' }}</el-button>
         <el-button type="primary" :icon="Refresh" @click="handleRefresh" :loading="loading">刷新数据</el-button>
         <el-button type="success" :icon="ChatDotRound" @click="goToAIQuery()">AI 问答</el-button>
         <el-button type="info" plain @click="$router.push('/smart-bi/gold-preview')">Gold 预览</el-button>

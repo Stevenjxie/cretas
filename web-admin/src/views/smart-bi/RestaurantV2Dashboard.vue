@@ -647,16 +647,16 @@ watch(
 );
 
 function modeLabel(mode?: string): string {
-  if (mode === 'yoy') return '📅 同比 (YoY)';
-  if (mode === 'qoq') return '📅 环比 (QoQ)';
-  if (mode === 'mom') return '📅 月环比 (MoM)';
+ if (mode === 'yoy') return ' 同比 (YoY)';
+ if (mode === 'qoq') return ' 环比 (QoQ)';
+ if (mode === 'mom') return ' 月环比 (MoM)';
   return '—';
 }
 
 function trendIcon(trend?: string): string {
-  if (trend === 'up') return '📈';
-  if (trend === 'down') return '📉';
-  return '➡️';
+ if (trend === 'up') return '';
+ if (trend === 'down') return '';
+ return '️';
 }
 
 // W5.2 — BOM 数据录入 dialog state
@@ -678,10 +678,10 @@ function headlineColorToTag(color?: string): string {
 }
 
 function trendDirectionLabel(direction?: string): string {
-  if (direction === 'sharp_decline') return '🔴 急剧下滑';
-  if (direction === 'declining') return '🟡 缓慢下滑';
-  if (direction === 'rising') return '📈 上升';
-  if (direction === 'stable') return '✅ 稳定';
+ if (direction === 'sharp_decline') return ' 急剧下滑';
+ if (direction === 'declining') return ' 缓慢下滑';
+ if (direction === 'rising') return ' 上升';
+ if (direction === 'stable') return ' 稳定';
   return '—';
 }
 
@@ -993,7 +993,7 @@ function formatCurrency(v?: number): string {
             重新分析
           </el-button>
           <span v-if="errorActionHint" style="color: #909399; font-size: 13px;">
-            💡 {{ errorActionHint }}
+ {{ errorActionHint }}
           </span>
         </div>
       </template>
@@ -1127,12 +1127,12 @@ function formatCurrency(v?: number): string {
         </template>
         <div v-for="(a, idx) in benchmarkAlerts" :key="idx" class="alert-item">
           <el-tag :type="severityTagType(a.severity)" size="small">
-            {{ a.severity === 'red' ? '🔴 严重' : a.severity === 'yellow' ? '🟡 警戒' : 'ℹ️ 信息' }}
+ {{ a.severity === 'red' ? ' 严重' : a.severity === 'yellow' ? ' 警戒' : 'ℹ️ 信息' }}
           </el-tag>
           <div class="alert-content">
             <div class="alert-message">{{ a.messageZh }}</div>
             <div v-if="a.estimatedYearlyImpact" class="alert-impact">
-              💰 估算年度影响: <strong>{{ formatCurrency(Math.abs(a.estimatedYearlyImpact)) }}</strong>
+ 估算年度影响: <strong>{{ formatCurrency(Math.abs(a.estimatedYearlyImpact)) }}</strong>
             </div>
             <div v-if="a.actionHint" class="alert-action">建议: {{ a.actionHint }}</div>
           </div>
@@ -1271,7 +1271,7 @@ function formatCurrency(v?: number): string {
 
         <el-row :gutter="16" style="margin-top: 16px">
           <el-col :span="12">
-            <h5>🔥 TOP 5 高峰时段</h5>
+ <h5> TOP 5 高峰时段</h5>
             <ul class="period-list">
               <li v-for="(p, idx) in diningHeatmap.topPeakHours" :key="'peak-' + idx">
                 {{ p.emoji }} {{ p.dayLabel }} {{ p.hour }}:00 —
@@ -1281,7 +1281,7 @@ function formatCurrency(v?: number): string {
             </ul>
           </el-col>
           <el-col :span="12">
-            <h5>💤 TOP 5 低谷时段</h5>
+ <h5> TOP 5 低谷时段</h5>
             <ul class="period-list">
               <li v-for="(p, idx) in diningHeatmap.bottomOffPeakHours" :key="'off-' + idx">
                 {{ p.emoji }} {{ p.dayLabel }} {{ p.hour }}:00 —
@@ -1333,10 +1333,10 @@ function formatCurrency(v?: number): string {
           </el-col>
         </el-row>
         <ul v-if="storedValueDependency.warnings.length > 0" class="sv-warnings">
-          <li v-for="(w, idx) in storedValueDependency.warnings" :key="idx">⚠️ {{ w }}</li>
+ <li v-for="(w, idx) in storedValueDependency.warnings" :key="idx">️ {{ w }}</li>
         </ul>
         <ul v-if="storedValueDependency.recommendations.length > 0" class="sv-recs">
-          <li v-for="(r, idx) in storedValueDependency.recommendations" :key="idx">📋 {{ r }}</li>
+ <li v-for="(r, idx) in storedValueDependency.recommendations" :key="idx"> {{ r }}</li>
         </ul>
       </el-card>
 
@@ -1422,7 +1422,7 @@ function formatCurrency(v?: number): string {
 
         <el-row :gutter="16" style="margin-top: 12px">
           <el-col :span="12">
-            <h5>🌟 TOP 客户口中的招牌 (真正的好菜)</h5>
+ <h5> TOP 客户口中的招牌 (真正的好菜)</h5>
             <ul class="dish-list">
               <li v-for="d in reviewAnalysis.topPraisedDishes" :key="'p-' + d.dishName">
                 <strong>{{ d.dishName }}</strong> —
@@ -1432,7 +1432,7 @@ function formatCurrency(v?: number): string {
             </ul>
           </el-col>
           <el-col :span="12">
-            <h5>👎 差评集中 (需检查/下架)</h5>
+ <h5> 差评集中 (需检查/下架)</h5>
             <ul class="dish-list">
               <li v-for="d in reviewAnalysis.topComplainedDishes" :key="'c-' + d.dishName">
                 <strong>{{ d.dishName }}</strong> —
@@ -1444,7 +1444,7 @@ function formatCurrency(v?: number): string {
         </el-row>
 
         <div v-if="reviewAnalysis.hiddenGems && reviewAnalysis.hiddenGems.length > 0">
-          <h5>💎 潜力菜 (低曝光高好评)</h5>
+ <h5> 潜力菜 (低曝光高好评)</h5>
           <ul class="dish-list">
             <li v-for="d in reviewAnalysis.hiddenGems" :key="'g-' + d.dishName">
               <strong>{{ d.dishName }}</strong> —
@@ -1520,7 +1520,7 @@ function formatCurrency(v?: number): string {
 
         <el-row :gutter="16" style="margin-top: 16px">
           <el-col :span="12">
-            <h5>🌟 TOP 5 Champions (最佳客户)</h5>
+ <h5> TOP 5 Champions (最佳客户)</h5>
             <ul class="member-list">
               <li v-for="m in memberRfm.topChampions.slice(0, 5)" :key="'ch-' + m.memberId">
                 <strong>{{ m.memberId }}</strong> —
@@ -1531,7 +1531,7 @@ function formatCurrency(v?: number): string {
             </ul>
           </el-col>
           <el-col :span="12">
-            <h5>⚠️ TOP 5 At Risk (召回候选)</h5>
+ <h5>️ TOP 5 At Risk (召回候选)</h5>
             <ul class="member-list">
               <li v-for="m in memberRfm.atRiskMembers.slice(0, 5)" :key="'ar-' + m.memberId">
                 <strong>{{ m.memberId }}</strong> —

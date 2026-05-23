@@ -39,9 +39,9 @@ const isNewFactory = computed(() => {
 });
 
 const onboardingSteps = [
-  { title: '上传 Excel 数据', desc: '财务/销售/采购报表导入 AI 分析', route: '/smart-bi/analysis', icon: '📤' },
-  { title: '配置工厂模块', desc: '按业务启用/禁用功能模块', route: '/system/features', icon: '⚙️' },
-  { title: '添加员工账号', desc: '邀请团队成员登录协作', route: '/system/users', icon: '👥' },
+ { title: '上传 Excel 数据', desc: '财务/销售/采购报表导入 AI 分析', route: '/smart-bi/analysis', icon: '' },
+ { title: '配置工厂模块', desc: '按业务启用/禁用功能模块', route: '/system/features', icon: '️' },
+ { title: '添加员工账号', desc: '邀请团队成员登录协作', route: '/system/users', icon: '' },
 ];
 
 // 统计卡片 - 管理员看全部
@@ -184,7 +184,7 @@ function navigateTo(route: string) {
     <!-- UX Round 5: 新工厂 onboarding 引导卡 (仅当所有 KPI=0 时显示) -->
     <el-card v-if="isNewFactory" class="onboarding-card" shadow="always">
       <div class="onboarding-header">
-        <span class="onboarding-icon">🚀</span>
+ <span class="onboarding-icon"></span>
         <div>
           <h3>快速开始 3 步, 激活您的 AI 工厂</h3>
           <p>当前工厂暂无数据。跟着这 3 步上手, 几分钟见 AI 分析效果.</p>

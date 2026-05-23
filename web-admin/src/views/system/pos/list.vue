@@ -159,9 +159,9 @@ async function handleSync(id: string) {
             </div>
           </div>
           <div class="brand-faq">
-            <div>📌 需要在 POS 厂商后台申请 App Key / App Secret 凭证</div>
-            <div>📌 集成后每 15 分钟自动同步, 也可手动触发"同步"按钮</div>
-            <div>📌 如未看到你用的 POS 品牌, 请提工单支持对接</div>
+ <div> 需要在 POS 厂商后台申请 App Key / App Secret 凭证</div>
+ <div> 集成后每 15 分钟自动同步, 也可手动触发"同步"按钮</div>
+ <div> 如未看到你用的 POS 品牌, 请提工单支持对接</div>
           </div>
         </div>
       </div>

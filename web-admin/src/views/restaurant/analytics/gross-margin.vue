@@ -214,9 +214,9 @@ function marginRateTag(rate: number) {
               <el-option label="近 365 天" :value="365" />
             </el-select>
             <el-tooltip content="刚录完配方? 点此立即同步 Gold 毛利表 (无需等 1 小时 cron)" placement="top">
-              <el-button type="success" plain :loading="syncing" @click="syncEtl">⚡ 立即同步</el-button>
+ <el-button type="success" plain :loading="syncing" @click="syncEtl"> 立即同步</el-button>
             </el-tooltip>
-            <el-button type="info" plain @click="handleAiAnalyze">🤖 AI 分析</el-button>
+ <el-button type="info" plain @click="handleAiAnalyze"> AI 分析</el-button>
             <el-button :icon="Download" @click="exportCsv">导出 CSV</el-button>
             <el-button :icon="Refresh" @click="loadData">刷新</el-button>
           </div>
@@ -226,7 +226,7 @@ function marginRateTag(rate: number) {
       <template v-if="canViewPrice">
       <!-- 加速 E: 估算/精确切换 toggle -->
       <div v-if="totals.dishCount > 0 && totals.withCost < totals.dishCount" class="estimate-toggle" style="margin-bottom: 12px; display: flex; align-items: center; gap: 12px; padding: 10px 14px; background: linear-gradient(135deg, #fff8e6, #ffeecc); border-radius: 6px; border: 1px solid #f0d8a0;">
-        <span style="font-size: 13px; font-weight: 600">📊 显示模式:</span>
+ <span style="font-size: 13px; font-weight: 600"> 显示模式:</span>
         <el-radio-group v-model="showEstimated" size="small">
           <el-radio-button :value="false">仅精确 (有配方菜)</el-radio-button>
           <el-radio-button :value="true">含估算 (按行业默认 {{ (totals.industryDefault * 100).toFixed(0) }}% 成本率)</el-radio-button>
@@ -254,12 +254,12 @@ function marginRateTag(rate: number) {
           </div>
           <div class="coverage-target">
             <span>目标 {{ (coverageTarget * 100).toFixed(0) }}%</span>
-            <span v-if="totals.coverageRev >= coverageTarget" class="cov-ok">✓ 已达标</span>
+ <span v-if="totals.coverageRev >= coverageTarget" class="cov-ok"> 已达标</span>
             <span v-else class="cov-gap">还差 {{ ((coverageTarget - totals.coverageRev) * 100).toFixed(1) }}%</span>
           </div>
         </div>
         <div v-if="totals.coverageRev < coverageTarget" class="coverage-hint">
-          💡 按 POS 营收从高到低录配方, 建议优先录营收 top {{ suggestedTopN }} 的未录菜品, 即可达 {{ (coverageTarget * 100).toFixed(0) }}% 目标. <el-link type="primary" :underline="false" href="/restaurant/recipes">去配方管理</el-link>
+ 按 POS 营收从高到低录配方, 建议优先录营收 top {{ suggestedTopN }} 的未录菜品, 即可达 {{ (coverageTarget * 100).toFixed(0) }}% 目标. <el-link type="primary" :underline="false" href="/restaurant/recipes">去配方管理</el-link>
         </div>
       </el-card>
 

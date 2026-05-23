@@ -2,17 +2,17 @@
   <div class="wf-node notify-node" :class="{ selected }">
     <Handle type="target" :position="Position.Top" />
     <div class="node-content">
-      <div class="node-icon">✉</div>
+ <div class="node-icon"></div>
       <div class="node-label">{{ data?.label || '通知' }}</div>
       <div v-if="notifyRoles.length" class="node-roles">
         → {{ notifyRoles.join(', ') }}
       </div>
       <div v-if="channels.length" class="node-channels">
-        <span v-if="channels.includes('wechat')" title="微信">📱</span>
-        <span v-if="channels.includes('dingtalk')" title="钉钉">🔔</span>
-        <span v-if="channels.includes('email')" title="邮件">✉</span>
+ <span v-if="channels.includes('wechat')" title="微信"></span>
+ <span v-if="channels.includes('dingtalk')" title="钉钉"></span>
+ <span v-if="channels.includes('email')" title="邮件"></span>
       </div>
-      <div v-else class="node-channels warn" title="未配置通知渠道">⚠</div>
+ <div v-else class="node-channels warn" title="未配置通知渠道"></div>
     </div>
     <Handle type="source" :position="Position.Bottom" />
   </div>
