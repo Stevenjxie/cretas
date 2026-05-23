@@ -70,6 +70,18 @@
           <!-- Slot for subagent #3 — Indicator Center (Flyway V20260823_03 — wraps Phase 1 already-shipped backend) -->
           <IndicatorCenterEditor v-else-if="activeTab === 'indicators'" :factory-id="factoryId" />
 
+          <!-- Phase B P1 (2026-05-22) — 客户面差异化卖点 -->
+          <FactoryConfigHubEditor v-else-if="activeTab === 'factory-config'" :factory-id="factoryId" />
+          <SalesTargetHubEditor v-else-if="activeTab === 'sales-target'" :factory-id="factoryId" />
+          <!-- Phase C P2 — 内部防呆 dropdown 集中 -->
+          <EnumDictionaryEditor v-else-if="activeTab === 'enum-dictionary'" :factory-id="factoryId" />
+          <!-- P3 半-Canvas-ed (entity 已存) -->
+          <SupplierAdmissionEditor v-else-if="activeTab === 'supplier-admission'" :factory-id="factoryId" />
+          <EncodingRuleEditor v-else-if="activeTab === 'encoding-rule'" :factory-id="factoryId" />
+          <HrInsuranceEditor v-else-if="activeTab === 'hr-insurance'" :factory-id="factoryId" />
+          <FactorySchedulingEditor v-else-if="activeTab === 'factory-scheduling'" :factory-id="factoryId" />
+          <PurchaseOrderApprovalEditor v-else-if="activeTab === 'purchase-order-approval'" :factory-id="factoryId" />
+
           <!-- Empty state -->
           <div v-else class="empty-state">
             <el-empty description="请在左侧选择模块" />
@@ -142,6 +154,15 @@ import ScheduledTaskEditor from '@/views/platform/scheduled-task-editor/index.vu
 import ThresholdsHubEditor from '@/views/platform/thresholds-hub-editor/index.vue'
 import FoodSafetyHubEditor from '@/views/platform/food-safety-hub-editor/index.vue'
 import IndicatorCenterEditor from '@/views/platform/indicator-center-editor/index.vue'
+// Phase B/C/P3 (2026-05-22): 8 new Tab placeholders — subagents fill stubs
+import FactoryConfigHubEditor from '@/views/platform/factory-config-hub-editor/index.vue'
+import SalesTargetHubEditor from '@/views/platform/sales-target-hub-editor/index.vue'
+import EnumDictionaryEditor from '@/views/platform/enum-dictionary-editor/index.vue'
+import SupplierAdmissionEditor from '@/views/platform/supplier-admission-editor/index.vue'
+import EncodingRuleEditor from '@/views/platform/encoding-rule-editor/index.vue'
+import HrInsuranceEditor from '@/views/platform/hr-insurance-editor/index.vue'
+import FactorySchedulingEditor from '@/views/platform/factory-scheduling-editor/index.vue'
+import PurchaseOrderApprovalEditor from '@/views/platform/purchase-order-approval-editor/index.vue'
 import AIChatPanel from './components/AIChatPanel.vue'
 import ConfigDiffViewer from './components/ConfigDiffViewer.vue'
 import SchemaPreview from './components/SchemaPreview.vue'
