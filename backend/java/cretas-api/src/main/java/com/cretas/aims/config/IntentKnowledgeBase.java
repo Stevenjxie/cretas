@@ -734,6 +734,63 @@ public class IntentKnowledgeBase {
      * <p>更长、更具体的短语应该排在前面</p>
      */
     private void initPhraseMappingsPart1() {
+        // === Sprint 12 P0 — 7 routing bug overrides (longer-phrase-first wins) ===
+        // These phrases displace earlier shorter mappings (e.g. "销售业绩" -> dashboard).
+        // Each entry has length > the competing shorter phrase, so sortedEntries (descending)
+        // matches these first. See docs/audits/2026-05-23-sprint12-e2e-framework/AI-FACTORY-HANDOFF.md
+        // for bug evidence and root cause analysis.
+        //
+        // Bug #1: "这个月业绩如何" mis-routed to REPORT_DASHBOARD_OVERVIEW (catch-all)
+        phraseToIntentMapping.put("这个月业绩如何", "MONTHLY_FINANCIAL_CLOSE");
+        phraseToIntentMapping.put("本月业绩如何", "MONTHLY_FINANCIAL_CLOSE");
+        phraseToIntentMapping.put("本月经营怎么样", "MONTHLY_FINANCIAL_CLOSE");
+        phraseToIntentMapping.put("这个月经营", "MONTHLY_FINANCIAL_CLOSE");
+        phraseToIntentMapping.put("本月业绩", "MONTHLY_FINANCIAL_CLOSE");
+
+        // Bug #4: "本日待入库" mis-routed to MATERIAL_BATCH_CREATE (WRITE on read query)
+        phraseToIntentMapping.put("本日待入库", "WAREHOUSE_KEEPER_TODAY_TASKS");
+        phraseToIntentMapping.put("今日待入库", "WAREHOUSE_KEEPER_TODAY_TASKS");
+        phraseToIntentMapping.put("今日入库清单", "WAREHOUSE_KEEPER_TODAY_TASKS");
+        phraseToIntentMapping.put("今天有什么入库", "WAREHOUSE_KEEPER_TODAY_TASKS");
+        phraseToIntentMapping.put("今天有什么入库单", "WAREHOUSE_KEEPER_TODAY_TASKS");
+        phraseToIntentMapping.put("今日收货清单", "WAREHOUSE_KEEPER_TODAY_TASKS");
+        phraseToIntentMapping.put("今天要收什么货", "WAREHOUSE_KEEPER_TODAY_TASKS");
+        phraseToIntentMapping.put("待入库清单", "WAREHOUSE_KEEPER_TODAY_TASKS");
+
+        // Bug #5: "上月入库统计" mis-routed to REPORT_DASHBOARD_OVERVIEW
+        phraseToIntentMapping.put("上月入库统计", "REPORT_INVENTORY");
+        phraseToIntentMapping.put("本月入库统计", "REPORT_INVENTORY");
+        phraseToIntentMapping.put("入库统计", "REPORT_INVENTORY");
+        phraseToIntentMapping.put("入库流水", "REPORT_INVENTORY");
+        phraseToIntentMapping.put("入库汇总", "REPORT_INVENTORY");
+
+        // Bug #7 #8: "下周采购建议" / "下周补货清单" mis-routed to ORDER_LIST / RESTAURANT
+        phraseToIntentMapping.put("下周采购建议", "PURCHASER_WEEKLY_PLAN");
+        phraseToIntentMapping.put("下周补货清单", "PURCHASER_WEEKLY_PLAN");
+        phraseToIntentMapping.put("下周补货", "PURCHASER_WEEKLY_PLAN");
+        phraseToIntentMapping.put("本周缺料分析", "PURCHASER_WEEKLY_PLAN");
+        phraseToIntentMapping.put("下周需要进货吗", "PURCHASER_WEEKLY_PLAN");
+        phraseToIntentMapping.put("下周采购什么", "PURCHASER_WEEKLY_PLAN");
+
+        // Sprint 12 additional surfaced bugs from real-data run
+        phraseToIntentMapping.put("今天该跟谁拜访", "DAILY_CUSTOMER_FOLLOWUP");
+        phraseToIntentMapping.put("今天该跟谁", "DAILY_CUSTOMER_FOLLOWUP");
+        phraseToIntentMapping.put("今天哪些客户需要拜访", "DAILY_CUSTOMER_FOLLOWUP");
+        phraseToIntentMapping.put("今天有逾期未跟进的客户吗", "DAILY_CUSTOMER_FOLLOWUP");
+
+        phraseToIntentMapping.put("今天哪些批次待放行", "QUALITY_CHIEF_WORKDESK");
+        phraseToIntentMapping.put("今天有什么批次需要审批放行", "QUALITY_CHIEF_WORKDESK");
+        phraseToIntentMapping.put("今日待放行批次", "QUALITY_CHIEF_WORKDESK");
+        phraseToIntentMapping.put("今日待审批批次", "QUALITY_CHIEF_WORKDESK");
+        phraseToIntentMapping.put("本日批次审批列表", "QUALITY_CHIEF_WORKDESK");
+
+        phraseToIntentMapping.put("今天 haccp 全部通过吗", "FOOD_SAFETY_RECALL");
+        phraseToIntentMapping.put("今天haccp全部通过吗", "FOOD_SAFETY_RECALL");
+        phraseToIntentMapping.put("今日 haccp 状态", "FOOD_SAFETY_RECALL");
+        phraseToIntentMapping.put("今日haccp状态", "FOOD_SAFETY_RECALL");
+        phraseToIntentMapping.put("今天 haccp 监控全通过吗", "FOOD_SAFETY_RECALL");
+        phraseToIntentMapping.put("近三年所有 haccp 监控", "FOOD_SAFETY_RECALL");
+
         // === v12.7: 长句核心短语映射（优先级最高）===
         // 这些短语用于从长句中提取核心意图
         // 报告/效率相关
