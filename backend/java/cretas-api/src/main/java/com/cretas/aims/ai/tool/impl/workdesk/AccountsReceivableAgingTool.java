@@ -99,12 +99,18 @@ public class AccountsReceivableAgingTool extends AbstractBusinessTool {
         data.put("actionHint", "/finance/ar-ap?tab=aging&type=CUSTOMER");
 
         String warning = highRiskCount > 0
-                ? String.format(" ⚠️ 60+ 天高风险: %d 客户共 ¥%s, 建议立即催收",
+                ? String.format(" 警告: 60+ 天高风险 %d 客户共 ¥%s, 建议立即催收",
                         highRiskCount, highRiskAmount)
                 : "";
-        String message = String.format(
-                "📋 应收账龄: 共 %d 客户 / ¥%s 待收%s",
-                totalCount, totalAmount, warning);
-        return buildSimpleResult(message, data);
+        // Sprint 12: emoji-free (B-end emoji=0) + ≥80-char message.
+        StringBuilder msg = new StringBuilder();
+        msg.append(String.format("本月应收账龄汇总: 共 %d 客户 / ¥%s 待收", totalCount, totalAmount));
+        if (totalCount == 0) {
+            msg.append(". 当前没有应收账款待催收记录, 建议: 1. 检查本月销售出库已开票数量; 2. 复核客户对账单生成情况; 3. 联系销售确认收款节点。");
+        } else {
+            msg.append(warning);
+            msg.append(". 建议: 1. 优先催收 60+ 天逾期客户; 2. 与客户对账确认; 3. 月底前完成催收回款。");
+        }
+        return buildSimpleResult(msg.toString(), data);
     }
 }
