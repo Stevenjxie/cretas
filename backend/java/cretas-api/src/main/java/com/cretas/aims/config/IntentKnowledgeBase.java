@@ -791,6 +791,12 @@ public class IntentKnowledgeBase {
         phraseToIntentMapping.put("今天 haccp 监控全通过吗", "FOOD_SAFETY_RECALL");
         phraseToIntentMapping.put("近三年所有 haccp 监控", "FOOD_SAFETY_RECALL");
 
+        // Sprint 12 bare-noun WRITE-on-read safety overrides: route bare entity nouns
+        // to the safest READ default for that domain instead of WRITE intents.
+        // Audit confirmed "入库" alone → MATERIAL_BATCH_CREATE causing data hazard.
+        phraseToIntentMapping.put("入库", "WAREHOUSE_KEEPER_TODAY_TASKS");
+        phraseToIntentMapping.put("采购", "PURCHASER_WEEKLY_PLAN");
+
         // === v12.7: 长句核心短语映射（优先级最高）===
         // 这些短语用于从长句中提取核心意图
         // 报告/效率相关
