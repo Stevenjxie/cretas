@@ -120,6 +120,30 @@ public interface WastageRecordRepository extends JpaRepository<WastageRecord, St
             @Param("endDate") LocalDate endDate);
 
     /**
+     * 按食材类别统计 APPROVED 损耗 (Sprint 12 Phase B — Shrinkage Composite wiring).
+     *
+     * <p>JOIN raw_material_types 取 category 字段 (e.g. 水产/肉类/蔬菜/豆制品),
+     * 作为 Python {@code shrinkage_analysis} section 的 {@code department} 维度.
+     *
+     * @return List of [category(String), count(Long), sumCost(BigDecimal)] tuples
+     *         ordered by sumCost DESC.
+     */
+    @Query("SELECT rmt.category, COUNT(w), COALESCE(SUM(w.estimatedCost), 0) " +
+            "FROM WastageRecord w " +
+            "JOIN com.cretas.aims.entity.RawMaterialType rmt " +
+            "  ON rmt.id = w.rawMaterialTypeId AND rmt.factoryId = w.factoryId " +
+            "WHERE w.factoryId = :factoryId " +
+            "  AND w.status = 'APPROVED' " +
+            "  AND w.wastageDate BETWEEN :startDate AND :endDate " +
+            "  AND rmt.category IS NOT NULL " +
+            "GROUP BY rmt.category " +
+            "ORDER BY SUM(w.estimatedCost) DESC")
+    List<Object[]> getStatisticsByIngredientCategory(
+            @Param("factoryId") String factoryId,
+            @Param("startDate") LocalDate startDate,
+            @Param("endDate") LocalDate endDate);
+
+    /**
      * 统计生成单号：当天该工厂的损耗单数量
      */
     @Query("SELECT COUNT(w) FROM WastageRecord w " +
