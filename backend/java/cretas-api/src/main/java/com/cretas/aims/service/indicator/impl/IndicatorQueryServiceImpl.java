@@ -208,15 +208,23 @@ public class IndicatorQueryServiceImpl implements IndicatorQueryService {
      *
      * <p>Sprint 12 Phase B: 调用方从 {@link FetchOutcome#sourceLabel()} 传 compute_source,
      * 按主策略类型 (JPA_AGGREGATE / PYTHON_ENDPOINT / UNKNOWN) 区分, 满足 Rule 21 mock-vs-real 隔离.
+     *
+     * <p>Sprint 12 Phase B step 3 hotfix: {@code period_start}/{@code period_end} DB schema 是
+     * NOT NULL, scheduler 跟 HTTP caller 都可能传 null (REAL_BUSINESS strategies 用自己 default
+     * MTD / instant snapshot, 不依赖 caller period). 默认 null → 今日, 让 version 行能落库,
+     * "today/today" 单日窗口反映 "this is the point-in-time captured value", 跟 strategy
+     * 的内部 MTD/instant 语义 reconcile 的责任留给 downstream 趋势分析.
      */
     void saveVersion(Indicator ind, String factoryId, BigDecimal value,
                      LocalDate start, LocalDate end, LocalDateTime computedAt,
                      String computeSourceLabel) {
+        LocalDate effectiveStart = start != null ? start : LocalDate.now();
+        LocalDate effectiveEnd = end != null ? end : LocalDate.now();
         IndicatorVersion version = new IndicatorVersion();
         version.setFactoryId(factoryId);
         version.setIndicatorId(ind.getId());
-        version.setPeriodStart(start);
-        version.setPeriodEnd(end);
+        version.setPeriodStart(effectiveStart);
+        version.setPeriodEnd(effectiveEnd);
         version.setValue(value);
         version.setComputedAt(computedAt);
         version.setComputeSource(computeSourceLabel);
