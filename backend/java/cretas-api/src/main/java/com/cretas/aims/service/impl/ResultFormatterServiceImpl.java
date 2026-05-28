@@ -1223,24 +1223,42 @@ public class ResultFormatterServiceImpl implements ResultFormatterService {
     private String formatSupplierRanking(Map<String, Object> data) {
         List<Map<String, Object>> ranking = getList(data, "ranking");
         if (ranking == null || ranking.isEmpty()) {
-            return "供应商排名查询完成，暂无可排名的供应商数据。请先录入供应商订单信息。";
+            // Sprint 12: ≥80-char empty-state with diagnostic suggestions.
+            return "供应商排名查询完成 — 当前没有可排名的供应商数据。诊断建议: 1. 检查本月是否已录入供应商订单信息;"
+                    + " 2. 确认供应商基础资料是否齐全; 3. 联系采购部门复核供应商档案完整性。";
         }
 
         StringBuilder sb = new StringBuilder();
-        sb.append(String.format("供应商排名（TOP %d）\n\n", ranking.size()));
+        sb.append(String.format("供应商排名 (TOP %d) — 本期评分排序: ", ranking.size()));
         int idx = 0;
         for (Map<String, Object> item : ranking) {
             if (idx >= 10) break;
+            // Sprint 12: SupplierRankingTool nests supplier info under "supplier" key, not flat.
             String name = getString(item, "name");
+            if (name == null) {
+                Map<String, Object> sup = asMap(item.get("supplier"));
+                if (sup != null) {
+                    name = getString(sup, "name");
+                    if (name == null) name = getString(sup, "supplierName");
+                    if (name == null) name = getString(sup, "companyName");
+                }
+            }
             Integer totalOrders = getInteger(item, "totalOrders");
             BigDecimal totalAmount = getBigDecimal(item, "totalAmount");
             Integer rating = getInteger(item, "rating");
+            if (rating == null) {
+                Map<String, Object> sup = asMap(item.get("supplier"));
+                if (sup != null) rating = getInteger(sup, "rating");
+            }
 
-            sb.append(String.format("%d. %s", ++idx, name != null ? name : "未知"));
-            if (totalAmount != null) sb.append(" | 总金额: ¥").append(AMOUNT_FORMATTER.format(totalAmount));
-            if (totalOrders != null) sb.append(" | 订单数: ").append(totalOrders);
-            if (rating != null) sb.append(" | 评分: ").append(rating);
-            sb.append("\n");
+            if (idx > 0) sb.append(" / ");
+            sb.append(String.format("%d. %s", ++idx, name != null ? name : "未命名供应商"));
+            if (totalAmount != null) sb.append(" 金额¥").append(AMOUNT_FORMATTER.format(totalAmount));
+            if (totalOrders != null) sb.append(" 订单").append(totalOrders).append("单");
+            if (rating != null) sb.append(" 评分").append(rating);
+        }
+        if (idx > 0) {
+            sb.append(". 建议: 优先与高评分供应商续签长期合作, 跟进低评分供应商改进表现。");
         }
         return sb.toString();
     }
