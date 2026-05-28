@@ -186,5 +186,82 @@ export default defineConfig({
       fullyParallel: false,
       workers: 1,
     },
+    // Sprint 11 MealClaw Audit Q7/Q8 — UI-level customer journey screenshot + video
+    // Per .claude/rules/playwright-headed-mode.md: 强制 headed + zh-CN locale +
+    // 1920x1080 viewport so 中文 font renders真 + 客户演示截图价值. Multi-chat
+    // coexistence: set PLAYWRIGHT_PORT (9222/9223/9224) + PLAYWRIGHT_CHAT_ID per chat.
+    // Output: docs/audits/sprint-11-mealclaw-screenshots/*.png + *.webm
+    {
+      name: 'mealclaw-customer-ui',
+      testMatch: 'tests/e2e-customer-journey/mealclaw-customer.spec.ts',
+      fullyParallel: false,
+      workers: 1,
+      use: {
+        headless: false,
+        viewport: { width: 1920, height: 1080 },
+        launchOptions: {
+          args: [
+            `--remote-debugging-port=${Number(process.env.PLAYWRIGHT_PORT) || 9224}`,
+            `--user-data-dir=./.pw-cache-${process.env.PLAYWRIGHT_CHAT_ID || 'mealclaw'}/`,
+            '--lang=zh-CN',
+            '--font-render-hinting=none',
+            '--disable-blink-features=AutomationControlled',
+            '--window-position=1000,0',
+            '--window-size=1920,1080',
+          ],
+          slowMo: 100,
+        },
+        video: 'on',
+        trace: 'on',
+        screenshot: 'on',
+      },
+    },
+    // Sprint 11 Round 4 — B.5 explicit-month customer evidence (headed per rule)
+    {
+      name: 'mealclaw-customer-r4',
+      testMatch: 'tests/e2e-customer-journey/mealclaw-customer-r4-explicit-month.spec.ts',
+      fullyParallel: false,
+      workers: 1,
+      use: {
+        headless: false,
+        viewport: { width: 1920, height: 1080 },
+        launchOptions: {
+          args: [
+            `--remote-debugging-port=${Number(process.env.PLAYWRIGHT_PORT) || 9224}`,
+            `--user-data-dir=./.pw-cache-${process.env.PLAYWRIGHT_CHAT_ID || 'mealclaw'}/`,
+            '--lang=zh-CN',
+            '--font-render-hinting=none',
+            '--disable-blink-features=AutomationControlled',
+            '--window-position=1000,0',
+            '--window-size=1920,1080',
+          ],
+          slowMo: 100,
+        },
+        video: 'on',
+        trace: 'on',
+        screenshot: 'on',
+      },
+    },
+    // Sprint 11 D7 — SalesOwner Workdesk 4 IndicatorCards depth test
+    {
+      name: 'sprint-11-d7-salesowner',
+      testMatch: 'tests/e2e-closed-loop/sprint-11-d7-salesowner.spec.ts',
+      fullyParallel: false,
+      workers: 1,
+    },
+    // Sprint 11 全流程 UX 审计 (2026-05-23) — 12 cases (4 phrase × 3 accounts)
+    // Real UI: login + nav SalesOwnerWorkdesk + type phrase + screenshot result.
+    // Output: 12 PNG + 1 video .webm + ui-text-12.json
+    {
+      name: 'full-customer-flow-2026-05-23',
+      testMatch: 'tests/e2e-customer-journey/full-customer-flow-2026-05-23.spec.ts',
+      fullyParallel: false,
+      workers: 1,
+      use: {
+        headless: true,
+        video: 'on',
+        viewport: { width: 1440, height: 900 },
+      },
+    },
   ],
 });

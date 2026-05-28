@@ -733,7 +733,8 @@ async function sendQuery(autoTrigger = false) {
     }
     const response = await callIntentExecute(userInput.value, intentCode,
         undefined, false, context);
-    formattedText.value = response.formattedText || response.message || '(无输出)';
+    formattedText.value = cleanCachedFormattedText(
+      response.formattedText || response.message || '(无输出)');
     lastQueryTime.value = new Date().toLocaleTimeString('zh-CN');
 
     const resultData = (response.resultData || {}) as Record<string, unknown>;
@@ -797,6 +798,35 @@ function formatPnlAmount(amount: number | null | undefined): string {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   }).format(amount);
+}
+
+/**
+ * Sprint 11 Q6 Option B.6 (2026-05-28): clean "(缓存结果) {raw JSON}" pattern
+ * that backend cache wrapper produces. Mirror logic from AIQuery.vue:629-661.
+ *
+ * Backend behavior: on cache hit, message = "(缓存结果) " + JSON.stringify(toolData).
+ * Without this cleaner, customers see raw JSON dump like
+ *   `(缓存结果) {"data":{"data":{"today":...}},"success":true}`
+ * which 普通用户 (warehouse keepers) cannot read. Steve MCP audit caught this.
+ *
+ * Strategy: detect "(缓存结果)" prefix, parse JSON tail, extract user-facing
+ * message field (parsed.data.message or parsed.message). Fall back to raw
+ * text if JSON parse fails (defensive — never break render).
+ */
+function cleanCachedFormattedText(raw: string): string {
+  if (!raw) return '(无输出)';
+  // Fast path: not a cached response.
+  if (!raw.includes('(缓存结果)') && !raw.startsWith('{')) return raw;
+  const jsonStart = raw.indexOf('{');
+  if (jsonStart === -1 || !raw.trim().endsWith('}')) return raw;
+  try {
+    const parsed = JSON.parse(raw.substring(jsonStart));
+    const cleanMsg = parsed?.data?.message ?? parsed?.message;
+    if (typeof cleanMsg === 'string' && cleanMsg.trim()) return cleanMsg;
+    return raw;
+  } catch {
+    return raw;
+  }
 }
 
 function extractReceivingRows(resultData: Record<string, unknown>) {
