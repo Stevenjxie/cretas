@@ -1,0 +1,16 @@
+[Unit]
+Description=Trigger Cretas restaurant finance ETL daily at 02:00 CST
+Documentation=https://github.com/Stevenjxie/cretas/blob/main/scripts/ops/run-finance-etl-daily.sh
+
+[Timer]
+# 02:00 CST = 18:00 UTC the previous day. systemd timers use system local time
+# by default; install server runs in Asia/Shanghai, so 02:00 means 02:00 CST.
+OnCalendar=*-*-* 02:00:00
+# If we missed the run (server reboot etc), run within 30 min of next boot.
+Persistent=true
+# Add up to 5 min random jitter to avoid load spikes across deployments.
+RandomizedDelaySec=300
+Unit=cretas-finance-etl-daily.service
+
+[Install]
+WantedBy=timers.target

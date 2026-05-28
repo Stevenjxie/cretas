@@ -1,0 +1,23 @@
+[Unit]
+Description=Cretas restaurant finance ETL nightly bulk run (Sprint 12 Phase D)
+Documentation=https://github.com/Stevenjxie/cretas/blob/main/scripts/ops/run-finance-etl-daily.sh
+After=network-online.target cretas-backend.service cretas-python.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/www/wwwroot/cretas/code
+ExecStart=/www/wwwroot/cretas/code/scripts/ops/run-finance-etl-daily.sh
+
+# Log to journal under tag cretas-finance-etl-daily
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=cretas-finance-etl-daily
+
+# Resource limits — ETL is light, set defensive caps
+TimeoutStartSec=600
+MemoryHigh=512M
+
+[Install]
+WantedBy=multi-user.target
