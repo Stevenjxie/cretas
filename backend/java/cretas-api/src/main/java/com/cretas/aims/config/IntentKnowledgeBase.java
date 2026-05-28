@@ -832,6 +832,14 @@ public class IntentKnowledgeBase {
         phraseToIntentMapping.put("本月生产成本占比", "INCOME_STATEMENT_QUERY");
         phraseToIntentMapping.put("生产成本占比", "INCOME_STATEMENT_QUERY");
 
+        // Sprint 12 sales-owner residue fixes (rd-month / rd-golden-pass dashboard misroute)
+        phraseToIntentMapping.put("本月销售业绩排名前 5 的客户", "REPORT_KPI");
+        phraseToIntentMapping.put("本月销售业绩排名前5的客户", "REPORT_KPI");
+        phraseToIntentMapping.put("销售业绩排名", "REPORT_KPI");
+        phraseToIntentMapping.put("销售冠军", "REPORT_KPI");
+        phraseToIntentMapping.put("本月销售冠军是谁", "REPORT_KPI");
+        phraseToIntentMapping.put("销售排名", "REPORT_KPI");
+        phraseToIntentMapping.put("六腾门科技这个客户最近怎么样", "DAILY_CUSTOMER_FOLLOWUP");
 
         // === v12.7: 长句核心短语映射（优先级最高）===
         // 这些短语用于从长句中提取核心意图
