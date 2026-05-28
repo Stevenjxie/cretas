@@ -78,6 +78,46 @@
       :closable="false"
       class="error-alert" />
 
+    <!-- Sprint 11 Q6 Option B.6 (2026-05-24): Restaurant P&L card render
+         when RESTAURANT_ECONOMICS_ANALYSIS intent returns dataAvailable=true.
+         Without this card, customer only saw "部分数据不可用" message and never
+         saw the ¥1,935,193 number that backend already computed. -->
+    <el-card v-if="restaurantPnl" class="restaurant-pnl-card" shadow="never">
+      <template #header>
+        <div class="card-header">
+          <span>餐厅经营分析 — {{ restaurantPnl.storeName }}{{ restaurantPnl.period ? ' (' + restaurantPnl.period + ')' : '' }}</span>
+          <span class="header-hint" v-if="lastQueryTime">
+            {{ lastQueryTime }} 生成
+          </span>
+        </div>
+      </template>
+      <div class="pnl-headline" :class="'pnl-headline-' + restaurantPnl.headlineColor">
+        {{ restaurantPnl.headline }}
+      </div>
+      <el-table :data="restaurantPnl.pnlLines" stripe size="small" class="pnl-table">
+        <el-table-column prop="label" label="项目" min-width="120" />
+        <el-table-column label="金额 ¥" min-width="140" align="right">
+          <template #default="{ row }">
+            {{ formatPnlAmount(row.amount) }}
+          </template>
+        </el-table-column>
+        <el-table-column label="占营收 %" min-width="100" align="right">
+          <template #default="{ row }">
+            {{ row.pctOfRevenue != null ? (row.pctOfRevenue * 100).toFixed(2) + '%' : '—' }}
+          </template>
+        </el-table-column>
+        <el-table-column prop="statusEmoji" label="状态" width="80" align="center">
+          <template #default="{ row }">{{ row.statusEmoji || '' }}</template>
+        </el-table-column>
+        <el-table-column prop="note" label="备注" min-width="160">
+          <template #default="{ row }">
+            <span v-if="row.note">{{ row.note }}</span>
+            <span v-else class="cell-empty">—</span>
+          </template>
+        </el-table-column>
+      </el-table>
+    </el-card>
+
     <!-- AI 输出 -->
     <el-card v-if="formattedText" class="result-card" shadow="never">
       <template #header>
@@ -550,6 +590,27 @@ const disposalRecommendations = ref<DisposalRow[]>([]);
 const qcInspecting = ref<QcRow[]>([]);
 const selectedRows = ref<ReceivingRow[]>([]);
 
+// Sprint 11 Q6 Option B.6 (2026-05-24): render real P&L card when
+// RESTAURANT_ECONOMICS_ANALYSIS intent returns store_pnl_one_pager data.
+// Without this, customer only sees the summary message ("部分数据不可用...")
+// and never sees the ¥1,935,193 number that's already in the API response.
+interface PnlLine {
+  label: string;
+  amount: number;
+  pctOfRevenue: number | null;
+  statusEmoji: string | null;
+  note: string | null;
+}
+interface RestaurantPnl {
+  headline: string;
+  headlineColor: string;
+  pnlLines: PnlLine[];
+  storeName: string;
+  period: string;
+  subSector: string;
+}
+const restaurantPnl = ref<RestaurantPnl | null>(null);
+
 const factoryId = computed(() => authStore.factoryId || 'F006');
 
 async function callIntentExecute(input: string, intentCode?: string,
@@ -650,6 +711,7 @@ async function sendQuery(autoTrigger = false) {
     receivingRows.value = [];
     disposalRecommendations.value = [];
     qcInspecting.value = [];
+    restaurantPnl.value = null;
   }
 
   try {
@@ -676,6 +738,7 @@ async function sendQuery(autoTrigger = false) {
 
     const resultData = (response.resultData || {}) as Record<string, unknown>;
     extractReceivingRows(resultData);
+    extractRestaurantPnl(response.intentCode, resultData);
 
     // 2. 自动 trigger 时, 并发拉临期建议 + 待质检
     if (autoTrigger) {
@@ -696,6 +759,44 @@ async function sendQuery(autoTrigger = false) {
   } finally {
     loading.value = false;
   }
+}
+
+/**
+ * Sprint 11 Q6 Option B.6: extract restaurant P&L from RESTAURANT_ECONOMICS_ANALYSIS
+ * Composite Tool response so UI can render the real headline + pnlLines.
+ *
+ * API shape (RestaurantEconomicsAnalysisTool → store_pnl_one_pager):
+ *   resultData.summary.data.data.{headline, headlineColor, pnlLines, storeName, period, subSector}
+ * When dataAvailable=false (no Phase F.1 data for month), restaurantPnl stays null
+ * and we fall back to the formattedText-only render.
+ */
+function extractRestaurantPnl(intentCode: string | undefined,
+    resultData: Record<string, unknown>) {
+  restaurantPnl.value = null;
+  if (intentCode !== 'RESTAURANT_ECONOMICS_ANALYSIS') return;
+  const summary = resultData['summary'] as Record<string, unknown> | undefined;
+  if (!summary || summary['dataAvailable'] !== true) return;
+  const outer = summary['data'] as Record<string, unknown> | undefined;
+  const inner = outer?.['data'] as Record<string, unknown> | undefined;
+  if (!inner || typeof inner['headline'] !== 'string') return;
+  const lines = inner['pnlLines'];
+  if (!Array.isArray(lines)) return;
+  restaurantPnl.value = {
+    headline: inner['headline'] as string,
+    headlineColor: (inner['headlineColor'] as string) || 'gray',
+    pnlLines: lines as PnlLine[],
+    storeName: (inner['storeName'] as string) || '本店',
+    period: (inner['period'] as string) || '',
+    subSector: (inner['subSector'] as string) || '',
+  };
+}
+
+function formatPnlAmount(amount: number | null | undefined): string {
+  if (amount == null) return '—';
+  return new Intl.NumberFormat('zh-CN', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(amount);
 }
 
 function extractReceivingRows(resultData: Record<string, unknown>) {
@@ -1143,6 +1244,41 @@ onMounted(() => {
   line-height: 1.8;
   color: #303133;
   white-space: pre-wrap;
+}
+
+/* Sprint 11 Q6 Option B.6 — restaurant P&L card styles */
+.restaurant-pnl-card {
+  margin-bottom: 16px;
+  border: 1px solid #e0e6ed;
+}
+.pnl-headline {
+  font-size: 20px;
+  font-weight: 600;
+  padding: 12px 8px;
+  margin-bottom: 12px;
+  border-radius: 4px;
+}
+.pnl-headline-green {
+  background-color: #f0f9eb;
+  color: #67c23a;
+}
+.pnl-headline-red {
+  background-color: #fef0f0;
+  color: #f56c6c;
+}
+.pnl-headline-yellow {
+  background-color: #fdf6ec;
+  color: #e6a23c;
+}
+.pnl-headline-gray {
+  background-color: #f4f4f5;
+  color: #909399;
+}
+.pnl-table {
+  margin-top: 8px;
+}
+.cell-empty {
+  color: #c0c4cc;
 }
 
 .spec-tag {
