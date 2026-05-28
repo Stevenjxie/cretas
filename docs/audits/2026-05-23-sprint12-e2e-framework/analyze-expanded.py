@@ -88,7 +88,19 @@ WORKDESKS = ["sales-owner", "finance-manager", "quality-manager",
 
 def analyze_file(path):
     with open(path, 'r', encoding='utf-8') as f:
-        body = json.load(f)
+        try:
+            body = json.load(f)
+        except json.JSONDecodeError:
+            return {
+                "status": None,
+                "content_len": 0,
+                "preview": "",
+                "negatives": ["html-error-response"],
+                "chinese_run_ok": False,
+                "domain_kw": None,
+                "strict_verdict": "FAIL",
+                "operational_verdict": "FAIL",
+            }
     data = body.get("data") or {}
     status = data.get("status")
     formattedText = data.get("formattedText") or ""
