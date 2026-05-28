@@ -2393,7 +2393,8 @@ public class IntentKnowledgeBase {
         // v26g: 补充2字短输入 + 写入操作短语
         phraseToIntentMapping.put("成本", "COST_TREND_ANALYSIS");
         phraseToIntentMapping.put("效率", "REPORT_EFFICIENCY");
-        phraseToIntentMapping.put("采购", "ORDER_LIST");
+        // Sprint 12: bare "采购" override at line ~798 takes precedence (PURCHASER_WEEKLY_PLAN, READ default).
+        // phraseToIntentMapping.put("采购", "ORDER_LIST");  // REMOVED — ORDER_LIST sales-side, not purchasing
         phraseToIntentMapping.put("出勤表", "ATTENDANCE_STATS");
         phraseToIntentMapping.put("考勤表", "ATTENDANCE_STATS");
         phraseToIntentMapping.put("产了多少", "REPORT_PRODUCTION");
@@ -6122,8 +6123,9 @@ public class IntentKnowledgeBase {
         phraseToIntentMapping.put("出库50箱", "MATERIAL_BATCH_CONSUME");
         phraseToIntentMapping.put("应该是出库", "MATERIAL_BATCH_CONSUME");
         phraseToIntentMapping.put("消耗一批", "MATERIAL_BATCH_CONSUME");
-        // MATERIAL_BATCH_CREATE (1)
-        phraseToIntentMapping.put("入库", "MATERIAL_BATCH_CREATE");
+        // MATERIAL_BATCH_CREATE (1) — Sprint 12: bare "入库" override at line ~797 takes precedence.
+        // Keep only verb-prefixed write triggers here so phrase matcher doesn't bind bare noun to WRITE.
+        // phraseToIntentMapping.put("入库", "MATERIAL_BATCH_CREATE");  // REMOVED — bare noun is read-shaped
         // MATERIAL_BATCH_QUERY (17)
         phraseToIntentMapping.put("100kg的原料", "MATERIAL_BATCH_QUERY");
         phraseToIntentMapping.put("50到100公斤", "MATERIAL_BATCH_QUERY");
