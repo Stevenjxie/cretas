@@ -97,13 +97,11 @@ const props = withDefaults(defineProps<Props>(), {
   loading: false,
 });
 
-// Sprint 11 BI deep-audit Finding-2 P1: F999_MOCK mirror code detection.
-// per V_23_11 migration list (matches IndicatorCenterDashboard.MIRRORED_CODES).
-const MIRRORED_CODES = [
-  'AVG_TICKET_PRICE', 'TABLE_TURNOVER', 'DISH_GROSS_MARGIN',
-  'RAW_WASTAGE_RATE', 'FOOD_SAFETY_PASS_RATE',
-  'FACTORY_YIELD_RATE', 'FACTORY_PLAN_ACHIEVE_RATE',
-];
+// Sprint 12 Phase A: V_23_11 mirror is being deleted via V20260825_01 migration.
+// After deploy, the indicator codes that used to mirror F999_MOCK no longer exist,
+// so isMirrored is always false. Kept wired (empty array) so isUnconfigured logic
+// remains stable while Phase B installs real-business indicators.
+const MIRRORED_CODES: string[] = [];
 const isMirrored = computed(() => MIRRORED_CODES.includes(props.indicator.code));
 const isUnconfigured = computed(() =>
   !isMirrored.value &&

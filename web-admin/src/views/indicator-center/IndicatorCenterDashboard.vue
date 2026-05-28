@@ -240,14 +240,11 @@ const isMockFactory = computed(() =>
   factoryId.value === 'F999_MOCK' || factoryId.value?.endsWith('_MOCK') || false
 );
 
-// Sprint 11 PR #220 BLOCKER fix — detect F999_MOCK-mirrored codes on non-mock factory
-// Per sister chat #220 audit Item 1: F006 indicators 100% mirrored from F999_MOCK,
-// UI must label "示例数据" not real business data.
-const MIRRORED_CODES = [
-  'AVG_TICKET_PRICE', 'TABLE_TURNOVER', 'DISH_GROSS_MARGIN',
-  'RAW_WASTAGE_RATE', 'FOOD_SAFETY_PASS_RATE',
-  'FACTORY_YIELD_RATE', 'FACTORY_PLAN_ACHIEVE_RATE',
-];
+// Sprint 12 Phase A: V_23_11 mirror is being deleted via V20260825_01 migration.
+// After deploy, no indicators carry these codes anymore, so the filter becomes a no-op.
+// Kept as an empty array (rather than removing the wiring) so the banner conditional
+// `hasMirroredIndicators` stays well-defined while Phase D rewrites banner UX.
+const MIRRORED_CODES: string[] = [];
 
 const mirroredIndicatorsPresent = computed(() => {
   if (isMockFactory.value) return [];
