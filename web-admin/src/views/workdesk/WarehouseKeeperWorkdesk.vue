@@ -49,13 +49,13 @@
           type="textarea"
           :rows="2"
           placeholder="例如: 今天要收什么货? / 临期物料建议 / 今天哪些要质检?"
-          @keydown.enter.ctrl="sendQuery"
+          @keydown.enter.ctrl="sendQuery()"
         />
         <el-button
           type="primary"
           :loading="loading"
           :disabled="!userInput.trim()"
-          @click="sendQuery">
+          @click="sendQuery()">
           发送 (Ctrl+Enter)
         </el-button>
       </div>
@@ -77,6 +77,46 @@
       show-icon
       :closable="false"
       class="error-alert" />
+
+    <!-- Sprint 11 Q6 Option B.6 (2026-05-24): Restaurant P&L card render
+         when RESTAURANT_ECONOMICS_ANALYSIS intent returns dataAvailable=true.
+         Without this card, customer only saw "部分数据不可用" message and never
+         saw the ¥1,935,193 number that backend already computed. -->
+    <el-card v-if="restaurantPnl" class="restaurant-pnl-card" shadow="never">
+      <template #header>
+        <div class="card-header">
+          <span>餐厅经营分析 — {{ restaurantPnl.storeName }}{{ restaurantPnl.period ? ' (' + restaurantPnl.period + ')' : '' }}</span>
+          <span class="header-hint" v-if="lastQueryTime">
+            {{ lastQueryTime }} 生成
+          </span>
+        </div>
+      </template>
+      <div class="pnl-headline" :class="'pnl-headline-' + restaurantPnl.headlineColor">
+        {{ restaurantPnl.headline }}
+      </div>
+      <el-table :data="restaurantPnl.pnlLines" stripe size="small" class="pnl-table">
+        <el-table-column prop="label" label="项目" min-width="120" />
+        <el-table-column label="金额 ¥" min-width="140" align="right">
+          <template #default="{ row }">
+            {{ formatPnlAmount(row.amount) }}
+          </template>
+        </el-table-column>
+        <el-table-column label="占营收 %" min-width="100" align="right">
+          <template #default="{ row }">
+            {{ row.pctOfRevenue != null ? (row.pctOfRevenue * 100).toFixed(2) + '%' : '—' }}
+          </template>
+        </el-table-column>
+        <el-table-column prop="statusEmoji" label="状态" width="80" align="center">
+          <template #default="{ row }">{{ row.statusEmoji || '' }}</template>
+        </el-table-column>
+        <el-table-column prop="note" label="备注" min-width="160">
+          <template #default="{ row }">
+            <span v-if="row.note">{{ row.note }}</span>
+            <span v-else class="cell-empty">—</span>
+          </template>
+        </el-table-column>
+      </el-table>
+    </el-card>
 
     <!-- AI 输出 -->
     <el-card v-if="formattedText" class="result-card" shadow="never">
@@ -550,17 +590,111 @@ const disposalRecommendations = ref<DisposalRow[]>([]);
 const qcInspecting = ref<QcRow[]>([]);
 const selectedRows = ref<ReceivingRow[]>([]);
 
+// Sprint 11 Q6 Option B.6 (2026-05-24): render real P&L card when
+// RESTAURANT_ECONOMICS_ANALYSIS intent returns store_pnl_one_pager data.
+// Without this, customer only sees the summary message ("部分数据不可用...")
+// and never sees the ¥1,935,193 number that's already in the API response.
+interface PnlLine {
+  label: string;
+  amount: number;
+  pctOfRevenue: number | null;
+  statusEmoji: string | null;
+  note: string | null;
+}
+interface RestaurantPnl {
+  headline: string;
+  headlineColor: string;
+  pnlLines: PnlLine[];
+  storeName: string;
+  period: string;
+  subSector: string;
+}
+const restaurantPnl = ref<RestaurantPnl | null>(null);
+
 const factoryId = computed(() => authStore.factoryId || 'F006');
 
 async function callIntentExecute(input: string, intentCode?: string,
-    parameters?: Record<string, unknown>, preview = false): Promise<ExecuteResponse> {
+    parameters?: Record<string, unknown>, preview = false,
+    context?: Record<string, unknown>): Promise<ExecuteResponse> {
   const body: Record<string, unknown> = { userInput: input };
   if (intentCode) body.intentCode = intentCode;
   if (parameters) body.parameters = parameters;
   if (preview) body.preview = true;
+  // Sprint 11 Q6 Option B (2026-05-24): pass context so backend can disambiguate
+  // period-bounded P&L / loss / cost queries from text-only "哪个菜亏钱" inputs.
+  // Without context, BERT classifier (no role/factoryType signal) tends to misroute
+  // ambiguous restaurant-economics phrases on warehouse-keeper Workdesk →
+  // MATERIAL_TODAY_RECEIVING_QUERY. context.month gives downstream Tool the period
+  // bound it needs to produce real P&L output.
+  if (context) body.context = context;
   const res = await request.post<ExecuteResponse>(
     `/${factoryId.value}/ai-intents/execute`, body);
   return (res as { data: ExecuteResponse }).data;
+}
+
+/**
+ * Parse month from user input. Supports:
+ *   - "2025-12" / "2025/12"  → "2025-12"
+ *   - "2025年12月" / "2025年12月份" → "2025-12"
+ *   - "12月" / "12月份" → current-year + 12 month (e.g. "2026-12")
+ *   - "本月" / "这个月" → current calendar month
+ *   - "上月" / "上个月" → previous calendar month
+ *   - (none of above) → undefined (let backend default)
+ *
+ * Returns canonical "YYYY-MM" string or undefined.
+ */
+function parseMonthFromInput(input: string): string | undefined {
+  if (!input) return undefined;
+  // Explicit YYYY-MM or YYYY/MM
+  const isoMatch = input.match(/(\d{4})[-/](\d{1,2})/);
+  if (isoMatch) {
+    const y = isoMatch[1];
+    const m = String(isoMatch[2]).padStart(2, '0');
+    return `${y}-${m}`;
+  }
+  // YYYY年M月
+  const cnYearMatch = input.match(/(\d{4})年(\d{1,2})月/);
+  if (cnYearMatch) {
+    const y = cnYearMatch[1];
+    const m = String(cnYearMatch[2]).padStart(2, '0');
+    return `${y}-${m}`;
+  }
+  // 本月 / 这个月
+  if (input.includes('本月') || input.includes('这个月') || input.includes('当月')) {
+    const now = new Date();
+    const m = String(now.getMonth() + 1).padStart(2, '0');
+    return `${now.getFullYear()}-${m}`;
+  }
+  // 上月 / 上个月 / 上一个月
+  if (input.includes('上月') || input.includes('上个月') || input.includes('上一个月')) {
+    const now = new Date();
+    const prev = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    const m = String(prev.getMonth() + 1).padStart(2, '0');
+    return `${prev.getFullYear()}-${m}`;
+  }
+  // M月 (current year inferred). Avoid matching incidental digits — require explicit "月".
+  const cnMonthMatch = input.match(/(?<![\d年])(\d{1,2})月(?:份)?/);
+  if (cnMonthMatch) {
+    const now = new Date();
+    const m = String(cnMonthMatch[1]).padStart(2, '0');
+    return `${now.getFullYear()}-${m}`;
+  }
+  return undefined;
+}
+
+/**
+ * Heuristic: is the input asking about period-bounded P&L / cost / loss?
+ * Used to decide whether to attach context.month for the free-text path.
+ * Keep deliberately narrow to avoid sending month context for non-restaurant
+ * questions (e.g. "今天要收什么货?" should NOT carry month context).
+ */
+function looksLikeRestaurantEconomicsQuery(input: string): boolean {
+  if (!input) return false;
+  const economicsKeywords = [
+    '损溢', '损益', '亏', '利润', '毛利', '成本',
+    '盈利', '赚', 'P&L', 'p&l', '经营',
+  ];
+  return economicsKeywords.some((k) => input.includes(k));
 }
 
 async function triggerTodayQuery() {
@@ -577,17 +711,34 @@ async function sendQuery(autoTrigger = false) {
     receivingRows.value = [];
     disposalRecommendations.value = [];
     qcInspecting.value = [];
+    restaurantPnl.value = null;
   }
 
   try {
     // 1. 今日待收 (主路径)
     const intentCode = autoTrigger ? 'MATERIAL_TODAY_RECEIVING_QUERY' : undefined;
-    const response = await callIntentExecute(userInput.value, intentCode);
+    // Sprint 11 Q6 Option B: for free-text (non auto-trigger), if input looks like a
+    // restaurant economics query (损溢/损益/亏/利润/成本/...), attach context.month so
+    // backend Tools have the period bound. Default to "上月" when no explicit period
+    // word is found — matches customer's most common ask "上月损溢" pattern.
+    let context: Record<string, unknown> | undefined;
+    if (!autoTrigger && looksLikeRestaurantEconomicsQuery(userInput.value)) {
+      const month = parseMonthFromInput(userInput.value) ?? (() => {
+        // default 上月
+        const now = new Date();
+        const prev = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+        return `${prev.getFullYear()}-${String(prev.getMonth() + 1).padStart(2, '0')}`;
+      })();
+      context = { month };
+    }
+    const response = await callIntentExecute(userInput.value, intentCode,
+        undefined, false, context);
     formattedText.value = response.formattedText || response.message || '(无输出)';
     lastQueryTime.value = new Date().toLocaleTimeString('zh-CN');
 
     const resultData = (response.resultData || {}) as Record<string, unknown>;
     extractReceivingRows(resultData);
+    extractRestaurantPnl(response.intentCode, resultData);
 
     // 2. 自动 trigger 时, 并发拉临期建议 + 待质检
     if (autoTrigger) {
@@ -608,6 +759,44 @@ async function sendQuery(autoTrigger = false) {
   } finally {
     loading.value = false;
   }
+}
+
+/**
+ * Sprint 11 Q6 Option B.6: extract restaurant P&L from RESTAURANT_ECONOMICS_ANALYSIS
+ * Composite Tool response so UI can render the real headline + pnlLines.
+ *
+ * API shape (RestaurantEconomicsAnalysisTool → store_pnl_one_pager):
+ *   resultData.summary.data.data.{headline, headlineColor, pnlLines, storeName, period, subSector}
+ * When dataAvailable=false (no Phase F.1 data for month), restaurantPnl stays null
+ * and we fall back to the formattedText-only render.
+ */
+function extractRestaurantPnl(intentCode: string | undefined,
+    resultData: Record<string, unknown>) {
+  restaurantPnl.value = null;
+  if (intentCode !== 'RESTAURANT_ECONOMICS_ANALYSIS') return;
+  const summary = resultData['summary'] as Record<string, unknown> | undefined;
+  if (!summary || summary['dataAvailable'] !== true) return;
+  const outer = summary['data'] as Record<string, unknown> | undefined;
+  const inner = outer?.['data'] as Record<string, unknown> | undefined;
+  if (!inner || typeof inner['headline'] !== 'string') return;
+  const lines = inner['pnlLines'];
+  if (!Array.isArray(lines)) return;
+  restaurantPnl.value = {
+    headline: inner['headline'] as string,
+    headlineColor: (inner['headlineColor'] as string) || 'gray',
+    pnlLines: lines as PnlLine[],
+    storeName: (inner['storeName'] as string) || '本店',
+    period: (inner['period'] as string) || '',
+    subSector: (inner['subSector'] as string) || '',
+  };
+}
+
+function formatPnlAmount(amount: number | null | undefined): string {
+  if (amount == null) return '—';
+  return new Intl.NumberFormat('zh-CN', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(amount);
 }
 
 function extractReceivingRows(resultData: Record<string, unknown>) {
@@ -1055,6 +1244,41 @@ onMounted(() => {
   line-height: 1.8;
   color: #303133;
   white-space: pre-wrap;
+}
+
+/* Sprint 11 Q6 Option B.6 — restaurant P&L card styles */
+.restaurant-pnl-card {
+  margin-bottom: 16px;
+  border: 1px solid #e0e6ed;
+}
+.pnl-headline {
+  font-size: 20px;
+  font-weight: 600;
+  padding: 12px 8px;
+  margin-bottom: 12px;
+  border-radius: 4px;
+}
+.pnl-headline-green {
+  background-color: #f0f9eb;
+  color: #67c23a;
+}
+.pnl-headline-red {
+  background-color: #fef0f0;
+  color: #f56c6c;
+}
+.pnl-headline-yellow {
+  background-color: #fdf6ec;
+  color: #e6a23c;
+}
+.pnl-headline-gray {
+  background-color: #f4f4f5;
+  color: #909399;
+}
+.pnl-table {
+  margin-top: 8px;
+}
+.cell-empty {
+  color: #c0c4cc;
 }
 
 .spec-tag {
