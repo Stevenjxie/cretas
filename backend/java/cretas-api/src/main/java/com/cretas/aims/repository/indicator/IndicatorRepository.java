@@ -6,6 +6,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
@@ -107,4 +108,14 @@ public interface IndicatorRepository extends JpaRepository<Indicator, String> {
             "WHERE i.factoryId = :factoryId AND i.isActive = TRUE " +
             "ORDER BY i.category")
     List<String> findDistinctCategories(@Param("factoryId") String factoryId);
+
+    // ============================================================
+    // Sprint 12 Phase B step 3 — DailyIndicatorRecomputeScheduler 入口
+    // ============================================================
+
+    /**
+     * 按 code 列表查全部启用 indicators (跨工厂) — scheduler 单次查询拿所有 (factory, code) 对.
+     * 用于 DailyIndicatorRecomputeScheduler 遍历 REAL_BUSINESS strategies 在所有 factory 上重算.
+     */
+    List<Indicator> findByCodeInAndIsActiveTrueAndDeletedAtIsNull(Collection<String> codes);
 }
