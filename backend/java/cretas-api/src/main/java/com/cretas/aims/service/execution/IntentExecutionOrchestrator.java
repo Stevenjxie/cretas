@@ -175,33 +175,39 @@ public class IntentExecutionOrchestrator {
             return executeWithExplicitIntent(factoryId, request, userId, userRole);
         }
 
-        // 0.3. 多轮对话延续
-        if (request.getSessionId() != null && !request.getSessionId().isEmpty()) {
-            IntentExecuteResponse conversationResponse = handleConversationContinuation(
-                    factoryId, request, userId, userRole);
-            if (conversationResponse != null) {
-                return conversationResponse;
-            }
-        }
-
-        // 0.25. Sprint 12 P0 — Pre-detection phrase shortcut (moved from former position #1).
+        // 0.2. Sprint 12 cache-fix Phase C — Phrase shortcut moved AHEAD of conversation
+        //      continuation to defeat auto-mount inheritance bug.
         //
-        // Per AI 工厂 chat Goal v5 UI audit (docs/audits/sprint-11-ux-audit/), Sprint 11 Round 7
-        // (PR #204) added tryOrchestratorPhraseShortcut at the OLD position (after early question
-        // type detection at #0.3 below). UI test prove it was UNREACHABLE for "帮我X" / 5W1H
-        // inputs because handleEarlyQuestionTypeDetection caught them first as CONVERSATIONAL /
-        // GENERAL_QUESTION and short-circuited to LLM generateConversationalResponse (line ~700).
+        // PRIOR STATE (Sprint 11 Round 7 + Sprint 12 PR #246):
+        //   #0.3 conversation continuation ran FIRST. When a Vue Workdesk auto-mounted with
+        //   intentCode=DAILY_CUSTOMER_FOLLOWUP, the response set conversation status=COMPLETED
+        //   bound to that intent. When the user then typed a phrase ("帮我看上月损溢异常" etc.),
+        //   handleConversationContinuation (line 576-580) detected isCompleted + non-null
+        //   intentCode → setIntentCode(DAILY_CUSTOMER_FOLLOWUP) + forceExecute → routed via
+        //   executeWithExplicitIntent. Phrase shortcut at the old #0.25 position never ran.
+        //   This is the 9/12 misroute mechanism per AI 工厂 5/28 audit gh issue #277 H2 hypothesis.
         //
-        // Fix: run phrase shortcut BEFORE early question type detection. Phrase mappings come
-        // from IntentKnowledgeBase.phraseToIntentMapping + restaurantPhraseMapping. If a phrase
-        // matches AND the resolved intent exists in this factory's ai_intent_configs, route via
-        // executeWithExplicitIntent. Phrase confidence is 0.96 (matching v33.1 EarlyPhrase tier).
+        // CURRENT FIX (Sprint 12 cache-fix Phase C):
+        //   Phrase shortcut at #0.2 runs FIRST when userInput is non-empty. If the user's input
+        //   matches a known phrase AND resolves to a configured (or platform-level) intent, the
+        //   shortcut takes over — user-intent always wins over inherited conversation state.
+        //   Conversation continuation still runs at #0.3 for the cases shortcut declines to handle
+        //   (one-word answers, clarification responses, anything not in the phrase map).
+        //
+        // Safety: tryOrchestratorPhraseShortcut returns null when no phrase matches, so non-phrase
+        // inputs fall through unchanged to continuation → identical behavior for clarification flows.
+        // executeWithExplicitIntent does NOT route through continuation (sessionId is passed through
+        // but conversationService is only consulted for in-progress sessions — explicit intent
+        // bypasses the inheritance path).
+        //
+        // Phrase confidence is 0.96 (matching v33.1 EarlyPhrase tier so /recognize and /execute
+        // produce consistent routing).
         String userInput = request.getUserInput();
         if (userInput != null && !userInput.isEmpty()) {
             IntentMatchResult earlyPhraseMatch = tryOrchestratorPhraseShortcut(userInput, factoryId);
             if (earlyPhraseMatch != null && earlyPhraseMatch.hasMatch()) {
                 AIIntentConfig phraseIntent = earlyPhraseMatch.getBestMatch();
-                log.info("[Sprint12-EarlyPhrase] Pre-detection phrase shortcut: input='{}', intentCode={}",
+                log.info("[Sprint12-CacheFix-EarlyPhrase] Pre-continuation phrase shortcut: input='{}', intentCode={}",
                         userInput, phraseIntent.getIntentCode());
                 IntentExecuteRequest phraseRequest = IntentExecuteRequest.builder()
                         .userInput(userInput)
@@ -212,6 +218,15 @@ public class IntentExecutionOrchestrator {
                         .context(request.getContext())
                         .build();
                 return executeWithExplicitIntent(factoryId, phraseRequest, userId, userRole);
+            }
+        }
+
+        // 0.3. 多轮对话延续 (runs AFTER phrase shortcut per Sprint 12 cache-fix Phase C)
+        if (request.getSessionId() != null && !request.getSessionId().isEmpty()) {
+            IntentExecuteResponse conversationResponse = handleConversationContinuation(
+                    factoryId, request, userId, userRole);
+            if (conversationResponse != null) {
+                return conversationResponse;
             }
         }
 
