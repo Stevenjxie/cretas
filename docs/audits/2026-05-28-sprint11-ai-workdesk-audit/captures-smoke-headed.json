@@ -1,0 +1,33 @@
+[
+  {
+    "caseId": "core_qhj_warehouse_mgr__phrase1",
+    "depth": "deep",
+    "account": "qhj_warehouse_mgr",
+    "factoryId": "RES_3101_009",
+    "workdesk": "SalesOwner",
+    "route": "workdesk/sales-owner",
+    "phrase": "帮我看上月损溢异常",
+    "status": "PASS",
+    "consoleErrors": [],
+    "executeReqBody": "{\"userInput\":\"今日 SO 待发\",\"intentCode\":\"SPRINT10_SHIPMENT_PENDING_TODAY\",\"parameters\":{}}",
+    "executeRespStatus": 200,
+    "executeRespBody": "{\"code\":200,\"message\":\"操作成功\",\"data\":{\"intentRecognized\":true,\"intentCode\":\"DAILY_CUSTOMER_FOLLOWUP\",\"intentName\":\"今日客户跟进\",\"intentCategory\":\"WORKDESK\",\"sensitivityLevel\":null,\"confidence\":null,\"matchMethod\":null,\"status\":\"SUCCESS\",\"message\":\"### 今日客户跟进摘要\\n\\n- **客户优先级查询**: 当前暂无高优先级客户需要特别关注.\\n- **近期微信记录查询**: 当前没有新的微信沟通记录更新, 说明可能与客户的线上互动较少.\\n- **待跟进电话记录**: 暂时没有待处理的电话回访任务, 表明所有既定的电话跟进工作已完成.\\n- **商机阶段告警**: 目前没有任何商机进入预警状态, 说明所有潜在交易都在正常推进中.\\n- **客户收入趋势分析**: 对主要客户的收入趋势进行了分析, 但数据显示当前时间段内没有显著变化或异常波动, 收入保持稳定.\\n\\n### 风险提示\\n\\n- 根据现有数据, 未发现明显的库存预警、应收款项过期或者合规性问题。但请注意, 由于部分工具返回空值, 建议进一步核实实际情况, 确保没有遗漏任何重要信息。\",\"formattedText\":\"### 今日客户跟进摘要\\n\\n- **客户优先级查询**: 当前暂无高优先级客户需要特别关注.\\n- **近期微信记录查询**: 当前没有新的微信沟通记录更新, 说明可能与客户的线上互动较少.\\n- **待跟进电话记录**: 暂时没有待处理的电话回访任务, 表明所有既定的电话跟进工作已完成.\\n- **商机阶段告警**: 目前没有任何商机进入预警状态, 说明所有潜在交易都在正常推进中.\\n- **客户收入趋势分析**: 对主要客户的收入趋势进行了分析, 但数据显示当前时间段内没有显著变化或异常波动, 收入保持稳定.\\n\\n### 风险提示\\n\\n- 根据现有数据, 未发现明显的库存预警、应收款项过期或者合规性问题。但请注意, 由于部分工具返回空值, 建议进一步核实实际情况, 确保没有遗漏任何重要信息。\",\"clarificationQuestions\":null,\"missingParameters\":null,\"quotaCost\":null,\"validationViolations\":null,\"recommendations\":null,\"resultData\":{\"customer_priority_query\":{\"data\":{\"data\":{\"limit\":50,\"count\":0,\"customers\":[]},\"message\":\"未找到符合条件的客户\"},\"success\":true},\"wechat_record_recent_query\":{\"data\":{\"data\":{\"records\":[],\"customerId\":null,\"count\":0,\"daysSince\":7},\"message\":\"近 7 天暂无微信记录\"},\"success\":true},\"call_record_followup_pending\":{\"data\":{\"data\":{\"records\":[],\"count\":0,\"daysSince\":7,\"callType\":\"MISSED\"},\"message\":\"近 7 天暂无 漏接 类型通话需要跟进\"},\"success\":true},\"opportunity_stage_alert\":{\"data\":{\"data\":{\"slaDays\":21,\"count\":0,\"ownerId\":null,\"opportunities\":[]},\"message\":\"没有商机停滞超过 21 天\"},\"success\":true},\"customer_revenue_trend\":{\"data\":{\"data\":{\"series\":[{\"month\":\"2026-03\",\"totalAmount\":0,\"orderCount\":0,\"changeFromPrevMonth\":null,\"pctChangeFromPrevMonth\":null},{\"month\":\"2026-04\",\"totalAmount\":0,\"orderCount\":0,\"changeFromPrevMonth\":null,\"pctChangeFromPrevMonth\":null},{\"month\":\"2026-05\",\"totalAmount\":0,\"orderCount\":0,\"changeFr",
+    "resultCardPresent": true,
+    "formattedTextInnerText": "### 今日客户跟进摘要\n\n- **客户优先级查询**: 当前暂无高优先级客户需要特别关注.\n- **近期微信记录查询**: 当前没有新的微信沟通记录更新, 说明可能与客户的线上互动较少.\n- **待跟进电话记录**: 暂时没有待处理的电话回访任务, 表明所有既定的电话跟进工作已完成.\n- **商机阶段告警**: 目前没有任何商机进入预警状态, 说明所有潜在交易都在正常推进中.\n- **客户收入趋势分析**: 对主要客户的收入趋势进行了分析, 但数据显示当前时间段内没有显著变化或异常波动, 收入保持稳定.\n\n### 风险提示\n\n- 根据现有数据, 未发现明显的库存预警、应收款项过期或者合规性问题。但请注意, 由于部分工具返回空值, 建议进一步核实实际情况, 确保没有遗漏任何重要信息。",
+    "toastLog": [],
+    "leaks": [
+      {
+        "code": "A2_sprint_version",
+        "count": 9,
+        "sample": "Sprint 8 P1"
+      },
+      {
+        "code": "A5_mock_marker",
+        "count": 1,
+        "sample": "F999_MOCK"
+      }
+    ],
+    "leakPngPath": "C:\\Users\\Steve\\my-prototype-logistics-sprint11-indicator\\docs\\audits\\2026-05-28-sprint11-ai-workdesk-audit\\screenshots\\LEAK-core_qhj_warehouse_mgr__phrase1.png",
+    "pngPath": "C:\\Users\\Steve\\my-prototype-logistics-sprint11-indicator\\docs\\audits\\2026-05-28-sprint11-ai-workdesk-audit\\screenshots\\core_qhj_warehouse_mgr__phrase1.png"
+  }
+]

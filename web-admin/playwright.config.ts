@@ -220,5 +220,36 @@ export default defineConfig({
         viewport: { width: 1440, height: 900 },
       },
     },
+    // Sprint 11 AI Workdesk Full E2E + UX Audit (2026-05-28) — 22 cases
+    // Core 12 happy (SalesOwner × 4 phrase × 3 accounts) + Breadth 6 (其他 Workdesks) + Error 4
+    // Per qa-prompt v2.4: MutationObserver + 四位一体 + Rule 11 roundtrip + Rule 9 抽检
+    // Per Steve 5/28 expanded brief: HEADED mode (中文字体/CSS/客户演示真实) + 15 类 anti-pattern leak sweep
+    // Output: 22 PNG + 1 video .webm + captures.json + leak-*.png
+    // CHAT_ID: ai-factory (PORT 9222, window-position 0,0)
+    {
+      name: 'sprint11-ai-workdesk-full',
+      testMatch: 'tests/e2e-customer-journey/sprint11-ai-workdesk-full.spec.ts',
+      fullyParallel: false,
+      workers: 1,
+      use: {
+        // ⭐ HEADED — 真弹 chromium window, 客户演示价值
+        headless: false,
+        viewport: { width: 1920, height: 1080 },
+        locale: 'zh-CN',
+        timezoneId: 'Asia/Shanghai',
+        launchOptions: {
+          args: [
+            '--lang=zh-CN',
+            '--font-render-hinting=none',
+            '--disable-blink-features=AutomationControlled',
+            '--window-position=0,0',           // AI 工厂 chat 左
+            '--window-size=1920,1080',
+          ],
+          slowMo: 100,
+        },
+        screenshot: { mode: 'on', fullPage: true },
+        video: { mode: 'on', size: { width: 1920, height: 1080 } },
+      },
+    },
   ],
 });

@@ -1,0 +1,612 @@
+[
+  {
+    "caseId": "core_qhj_warehouse_mgr__phrase1",
+    "depth": "deep",
+    "account": "qhj_warehouse_mgr",
+    "factoryId": "RES_3101_009",
+    "workdesk": "SalesOwner",
+    "route": "workdesk/sales-owner",
+    "phrase": "帮我看上月损溢异常",
+    "status": "PASS",
+    "consoleErrors": [],
+    "executeReqBody": "{\"userInput\":\"今日 SO 待发\",\"intentCode\":\"SPRINT10_SHIPMENT_PENDING_TODAY\",\"parameters\":{}}",
+    "executeRespStatus": 200,
+    "executeRespBody": "{\"code\":200,\"message\":\"操作成功\",\"data\":{\"intentRecognized\":true,\"intentCode\":\"DAILY_CUSTOMER_FOLLOWUP\",\"intentName\":\"今日客户跟进\",\"intentCategory\":\"WORKDESK\",\"sensitivityLevel\":null,\"confidence\":null,\"matchMethod\":null,\"status\":\"SUCCESS\",\"message\":\"今日客户跟进 数据摘要 (LLM 暂不可用, 显示结构化结果):\\n\\n- customer_priority_query: 2 项\\n- wechat_record_recent_query: 2 项\\n- call_record_followup_pending: 2 项\\n- opportunity_stage_alert: 2 项\\n- customer_revenue_trend: 2 项\\n\\n详细数据请在工作台查看对应模块.\\n\",\"formattedText\":\"今日客户跟进 数据摘要 (LLM 暂不可用, 显示结构化结果):\\n\\n- customer_priority_query: 2 项\\n- wechat_record_recent_query: 2 项\\n- call_record_followup_pending: 2 项\\n- opportunity_stage_alert: 2 项\\n- customer_revenue_trend: 2 项\\n\\n详细数据请在工作台查看对应模块.\\n\",\"clarificationQuestions\":null,\"missingParameters\":null,\"quotaCost\":null,\"validationViolations\":null,\"recommendations\":null,\"resultData\":{\"customer_priority_query\":{\"data\":{\"data\":{\"limit\":50,\"count\":0,\"customers\":[]},\"message\":\"未找到符合条件的客户\"},\"success\":true},\"wechat_record_recent_query\":{\"data\":{\"data\":{\"records\":[],\"customerId\":null,\"count\":0,\"daysSince\":7},\"message\":\"近 7 天暂无微信记录\"},\"success\":true},\"call_record_followup_pending\":{\"data\":{\"data\":{\"records\":[],\"count\":0,\"daysSince\":7,\"callType\":\"MISSED\"},\"message\":\"近 7 天暂无 漏接 类型通话需要跟进\"},\"success\":true},\"opportunity_stage_alert\":{\"data\":{\"data\":{\"slaDays\":21,\"count\":0,\"ownerId\":null,\"opportunities\":[]},\"message\":\"没有商机停滞超过 21 天\"},\"success\":true},\"customer_revenue_trend\":{\"data\":{\"data\":{\"series\":[{\"month\":\"2026-03\",\"totalAmount\":0,\"orderCount\":0,\"changeFromPrevMonth\":null,\"pctChangeFromPrevMonth\":null},{\"month\":\"2026-04\",\"totalAmount\":0,\"orderCount\":0,\"changeFromPrevMonth\":null,\"pctChangeFromPrevMonth\":null},{\"month\":\"2026-05\",\"totalAmount\":0,\"orderCount\":0,\"changeFromPrevMonth\":null,\"pctChangeFromPrevMonth\":null}],\"customerId\":null,\"periodMonths\":2,\"customerName\":null},\"message\":\"全 factory 客户 近 2 个月销售趋势 (共 3 个月数据点)\"},\"success\":true},\"_executionOrder\":\"sequential\",\"_toolCount\":5},\"affectedEntities\":null,\"executedAt\":\"2026-05-28",
+    "resultCardPresent": true,
+    "formattedTextInnerText": "今日客户跟进 数据摘要 (LLM 暂不可用, 显示结构化结果):\n\n- customer_priority_query: 2 项\n- wechat_record_recent_query: 2 项\n- call_record_followup_pending: 2 项\n- opportunity_stage_alert: 2 项\n- customer_revenue_trend: 2 项\n\n详细数据请在工作台查看对应模块.\n",
+    "toastLog": [],
+    "leaks": [
+      {
+        "code": "A2_sprint_version",
+        "count": 9,
+        "sample": "Sprint 8 P1"
+      },
+      {
+        "code": "A5_mock_marker",
+        "count": 1,
+        "sample": "F999_MOCK"
+      }
+    ],
+    "leakPngPath": "C:\\Users\\Steve\\my-prototype-logistics-sprint11-indicator\\docs\\audits\\2026-05-28-sprint11-ai-workdesk-audit\\screenshots\\LEAK-core_qhj_warehouse_mgr__phrase1.png",
+    "pngPath": "C:\\Users\\Steve\\my-prototype-logistics-sprint11-indicator\\docs\\audits\\2026-05-28-sprint11-ai-workdesk-audit\\screenshots\\core_qhj_warehouse_mgr__phrase1.png"
+  },
+  {
+    "caseId": "core_qhj_warehouse_mgr__phrase2",
+    "depth": "medium",
+    "account": "qhj_warehouse_mgr",
+    "factoryId": "RES_3101_009",
+    "workdesk": "SalesOwner",
+    "route": "workdesk/sales-owner",
+    "phrase": "损益分析",
+    "status": "PASS",
+    "consoleErrors": [],
+    "executeReqBody": "{\"userInput\":\"今日 SO 待发\",\"intentCode\":\"SPRINT10_SHIPMENT_PENDING_TODAY\",\"parameters\":{}}",
+    "executeRespStatus": 200,
+    "executeRespBody": "{\"code\":200,\"message\":\"操作成功\",\"data\":{\"intentRecognized\":true,\"intentCode\":\"DAILY_CUSTOMER_FOLLOWUP\",\"intentName\":\"今日客户跟进\",\"intentCategory\":\"WORKDESK\",\"sensitivityLevel\":null,\"confidence\":null,\"matchMethod\":null,\"status\":\"SUCCESS\",\"message\":\"### 今日客户跟进概览\\n\\n- **优先级客户查询**: 当前暂无优先级客户需要特别关注。\\n- **近期微信沟通记录**: 暂无新的微信沟通记录更新。\\n- **待跟进电话记录**: 无待处理的电话跟进任务。\\n- **商机阶段提醒**: 目前没有处于关键阶段需特别注意的商机。\\n- **客户收入趋势分析**:\\n  - 最近几期的客户收入数据均显示为零, 表明可能在所选时间段内没有相关交易发生或数据尚未录入系统。\\n\\n### 风险提示\\n\\n- 根据现有数据, 存在潜在的风险点: 客户收入趋势数据显示连续多期为零, 建议核查是否因数据录入延迟或其他原因导致, 并及时采取措施以确保信息准确性。同时, 缺乏活跃的客户互动(如微信、电话)及重要商机进展, 可能影响业务发展, 建议加强与客户的联系和机会挖掘工作。\",\"formattedText\":\"### 今日客户跟进概览\\n\\n- **优先级客户查询**: 当前暂无优先级客户需要特别关注。\\n- **近期微信沟通记录**: 暂无新的微信沟通记录更新。\\n- **待跟进电话记录**: 无待处理的电话跟进任务。\\n- **商机阶段提醒**: 目前没有处于关键阶段需特别注意的商机。\\n- **客户收入趋势分析**:\\n  - 最近几期的客户收入数据均显示为零, 表明可能在所选时间段内没有相关交易发生或数据尚未录入系统。\\n\\n### 风险提示\\n\\n- 根据现有数据, 存在潜在的风险点: 客户收入趋势数据显示连续多期为零, 建议核查是否因数据录入延迟或其他原因导致, 并及时采取措施以确保信息准确性。同时, 缺乏活跃的客户互动(如微信、电话)及重要商机进展, 可能影响业务发展, 建议加强与客户的联系和机会挖掘工作。\",\"clarificationQuestions\":null,\"missingParameters\":null,\"quotaCost\":null,\"validationViolations\":null,\"recommendations\":null,\"resultData\":{\"customer_priority_query\":{\"data\":{\"data\":{\"limit\":50,\"count\":0,\"customers\":[]},\"message\":\"未找到符合条件的客户\"},\"success\":true},\"wechat_record_recent_query\":{\"data\":{\"data\":{\"records\":[],\"customerId\":null,\"count\":0,\"daysSince\":7},\"message\":\"近 7 天暂无微信记录\"},\"success\":true},\"call_record_followup_pending\":{\"data\":{\"data\":{\"records\":[],\"count\":0,\"daysSince\":7,\"callType\":\"MISSED\"},\"message\":\"近 7 天暂无 漏接 类型通话需要跟进\"},\"success\":true},\"opportunity_stage_alert\":{\"data\":{\"data\":{\"slaDays\":21,\"count\":0,\"ownerId\":null,\"opportunities\":[]},\"message\":\"没有商机停滞超过 21 天\"},\"success\":true},\"customer_revenue_trend\":{\"data\":{\"data\":{\"series\":[{\"month\":\"2026-03\",\"totalAmount\":0,\"orderCount\":0,\"changeFromPrevMonth\":null,\"pctChangeFromPrevMonth\":null},{\"month\":\"2026-04\",\"totalAmount\":0,\"orderCount\":0,\"changeFromPrevMonth\":null,\"pctChangeFromPrevMonth\":null},{\"month\":\"2026-05\",\"totalAmount\":0,\"orderCount\"",
+    "resultCardPresent": true,
+    "formattedTextInnerText": "### 今日客户跟进概览\n\n- **优先级客户查询**: 当前暂无优先级客户需要特别关注。\n- **近期微信沟通记录**: 暂无新的微信沟通记录更新。\n- **待跟进电话记录**: 无待处理的电话跟进任务。\n- **商机阶段提醒**: 目前没有处于关键阶段需特别注意的商机。\n- **客户收入趋势分析**:\n  - 最近几期的客户收入数据均显示为零, 表明可能在所选时间段内没有相关交易发生或数据尚未录入系统。\n\n### 风险提示\n\n- 根据现有数据, 存在潜在的风险点: 客户收入趋势数据显示连续多期为零, 建议核查是否因数据录入延迟或其他原因导致, 并及时采取措施以确保信息准确性。同时, 缺乏活跃的客户互动(如微信、电话)及重要商机进展, 可能影响业务发展, 建议加强与客户的联系和机会挖掘工作。",
+    "toastLog": [],
+    "leaks": [
+      {
+        "code": "A2_sprint_version",
+        "count": 9,
+        "sample": "Sprint 8 P1"
+      },
+      {
+        "code": "A5_mock_marker",
+        "count": 1,
+        "sample": "F999_MOCK"
+      }
+    ],
+    "leakPngPath": "C:\\Users\\Steve\\my-prototype-logistics-sprint11-indicator\\docs\\audits\\2026-05-28-sprint11-ai-workdesk-audit\\screenshots\\LEAK-core_qhj_warehouse_mgr__phrase2.png",
+    "pngPath": "C:\\Users\\Steve\\my-prototype-logistics-sprint11-indicator\\docs\\audits\\2026-05-28-sprint11-ai-workdesk-audit\\screenshots\\core_qhj_warehouse_mgr__phrase2.png"
+  },
+  {
+    "caseId": "core_qhj_warehouse_mgr__phrase3",
+    "depth": "medium",
+    "account": "qhj_warehouse_mgr",
+    "factoryId": "RES_3101_009",
+    "workdesk": "SalesOwner",
+    "route": "workdesk/sales-owner",
+    "phrase": "上月成本",
+    "status": "PASS",
+    "consoleErrors": [],
+    "executeReqBody": "{\"userInput\":\"今日 SO 待发\",\"intentCode\":\"SPRINT10_SHIPMENT_PENDING_TODAY\",\"parameters\":{}}",
+    "executeRespStatus": 200,
+    "executeRespBody": "{\"code\":200,\"message\":\"操作成功\",\"data\":{\"intentRecognized\":true,\"intentCode\":\"DAILY_CUSTOMER_FOLLOWUP\",\"intentName\":\"今日客户跟进\",\"intentCategory\":\"WORKDESK\",\"sensitivityLevel\":null,\"confidence\":null,\"matchMethod\":null,\"status\":\"SUCCESS\",\"message\":\"### 今日客户跟进摘要\\n\\n- **优先级客户查询**: 当前暂无高优先级客户需要特别关注。\\n- **近期微信沟通记录**: 未发现有新的微信沟通记录更新, 暂无客户通过微信渠道提出新需求或问题。\\n- **待处理的电话回访**: 没有待处理的电话回访任务, 所有计划内的电话联系均已按时完成。\\n- **商机阶段预警**: 目前所有跟踪中的商机均处于正常推进状态, 无停滞或倒退现象。\\n- **客户收入趋势分析**: 近期客户收入趋势数据为空, 无法提供具体的增长或下降百分比。这可能意味着最近没有新的交易发生, 或者数据上传存在延迟。\\n\\n### 风险提示\\n\\n- 由于缺乏最新的客户互动记录 (包括微信和电话) 以及收入趋势信息, 建议主动联系部分重要客户, 了解他们当前的需求变化, 以防止潜在的机会流失。\\n- 商机虽无明显停滞, 但考虑到整体活动度较低, 应加强对现有项目的监控, 确保不会错过任何进展信号。\",\"formattedText\":\"### 今日客户跟进摘要\\n\\n- **优先级客户查询**: 当前暂无高优先级客户需要特别关注。\\n- **近期微信沟通记录**: 未发现有新的微信沟通记录更新, 暂无客户通过微信渠道提出新需求或问题。\\n- **待处理的电话回访**: 没有待处理的电话回访任务, 所有计划内的电话联系均已按时完成。\\n- **商机阶段预警**: 目前所有跟踪中的商机均处于正常推进状态, 无停滞或倒退现象。\\n- **客户收入趋势分析**: 近期客户收入趋势数据为空, 无法提供具体的增长或下降百分比。这可能意味着最近没有新的交易发生, 或者数据上传存在延迟。\\n\\n### 风险提示\\n\\n- 由于缺乏最新的客户互动记录 (包括微信和电话) 以及收入趋势信息, 建议主动联系部分重要客户, 了解他们当前的需求变化, 以防止潜在的机会流失。\\n- 商机虽无明显停滞, 但考虑到整体活动度较低, 应加强对现有项目的监控, 确保不会错过任何进展信号。\",\"clarificationQuestions\":null,\"missingParameters\":null,\"quotaCost\":null,\"validationViolations\":null,\"recommendations\":null,\"resultData\":{\"customer_priority_query\":{\"data\":{\"data\":{\"limit\":50,\"count\":0,\"customers\":[]},\"message\":\"未找到符合条件的客户\"},\"success\":true},\"wechat_record_recent_query\":{\"data\":{\"data\":{\"records\":[],\"customerId\":null,\"count\":0,\"daysSince\":7},\"message\":\"近 7 天暂无微信记录\"},\"success\":true},\"call_record_followup_pending\":{\"data\":{\"data\":{\"records\":[],\"count\":0,\"daysSince\":7,\"callType\":\"MISSED\"},\"message\":\"近 7 天暂无 漏接 类型通话需要跟进\"},\"success\":true},\"opportunity_stage_alert\":{\"data\":{\"data\":{\"slaDays\":21,\"count\":0,\"ownerId\":null,\"opportunities\":[]},\"message\":\"没有商机停滞超过 21 天\"},\"success\":true},\"customer_revenue_trend\":{\"data\":{\"data\":{\"series\":[{\"month\":\"2026-03\",\"totalAmount\":0,\"orderCount\":0,\"changeFromPrevMonth\":null,\"pctChangeFromPrevMonth\":null},{\"month\":\"2026-04\",\"totalAmount\":0,\"orderCount\"",
+    "resultCardPresent": false,
+    "toastLog": [],
+    "leaks": [
+      {
+        "code": "A2_sprint_version",
+        "count": 9,
+        "sample": "Sprint 8 P1"
+      },
+      {
+        "code": "A5_mock_marker",
+        "count": 1,
+        "sample": "F999_MOCK"
+      }
+    ],
+    "leakPngPath": "C:\\Users\\Steve\\my-prototype-logistics-sprint11-indicator\\docs\\audits\\2026-05-28-sprint11-ai-workdesk-audit\\screenshots\\LEAK-core_qhj_warehouse_mgr__phrase3.png",
+    "pngPath": "C:\\Users\\Steve\\my-prototype-logistics-sprint11-indicator\\docs\\audits\\2026-05-28-sprint11-ai-workdesk-audit\\screenshots\\core_qhj_warehouse_mgr__phrase3.png"
+  },
+  {
+    "caseId": "core_qhj_warehouse_mgr__phrase4",
+    "depth": "medium",
+    "account": "qhj_warehouse_mgr",
+    "factoryId": "RES_3101_009",
+    "workdesk": "SalesOwner",
+    "route": "workdesk/sales-owner",
+    "phrase": "哪个菜亏钱",
+    "status": "PASS",
+    "consoleErrors": [],
+    "executeReqBody": "{\"userInput\":\"今日 SO 待发\",\"intentCode\":\"SPRINT10_SHIPMENT_PENDING_TODAY\",\"parameters\":{}}",
+    "executeRespStatus": 200,
+    "executeRespBody": "{\"code\":200,\"message\":\"操作成功\",\"data\":{\"intentRecognized\":true,\"intentCode\":\"DAILY_CUSTOMER_FOLLOWUP\",\"intentName\":\"今日客户跟进\",\"intentCategory\":\"WORKDESK\",\"sensitivityLevel\":null,\"confidence\":null,\"matchMethod\":null,\"status\":\"SUCCESS\",\"message\":\"### 今日客户跟进概要\\n\\n- **优先级客户查询**: 当前暂无高优先级客户需要特别关注。\\n- **最近微信沟通记录**: 暂无最新的微信沟通记录更新, 说明近期与客户的微信互动较少或未通过微信进行跟进。\\n- **待跟进电话记录**: 无待处理的电话回访任务, 表明所有计划内的电话跟进都已经完成。\\n- **商机阶段告警**: 未发现任何处于风险状态的商机, 所有项目均按预期进展。\\n- **客户收入趋势**: 缺乏具体数据, 无法提供有关客户收入变化的趋势分析。\\n\\n### 风险提示\\n\\n- 根据现有信息, 未检测到直接的业务风险, 但建议定期检查客户沟通渠道以确保及时响应客户需求。同时, 应持续监控收入趋势, 一旦获取最新数据即刻分析潜在波动原因。\",\"formattedText\":\"### 今日客户跟进概要\\n\\n- **优先级客户查询**: 当前暂无高优先级客户需要特别关注。\\n- **最近微信沟通记录**: 暂无最新的微信沟通记录更新, 说明近期与客户的微信互动较少或未通过微信进行跟进。\\n- **待跟进电话记录**: 无待处理的电话回访任务, 表明所有计划内的电话跟进都已经完成。\\n- **商机阶段告警**: 未发现任何处于风险状态的商机, 所有项目均按预期进展。\\n- **客户收入趋势**: 缺乏具体数据, 无法提供有关客户收入变化的趋势分析。\\n\\n### 风险提示\\n\\n- 根据现有信息, 未检测到直接的业务风险, 但建议定期检查客户沟通渠道以确保及时响应客户需求。同时, 应持续监控收入趋势, 一旦获取最新数据即刻分析潜在波动原因。\",\"clarificationQuestions\":null,\"missingParameters\":null,\"quotaCost\":null,\"validationViolations\":null,\"recommendations\":null,\"resultData\":{\"customer_priority_query\":{\"data\":{\"data\":{\"limit\":50,\"count\":0,\"customers\":[]},\"message\":\"未找到符合条件的客户\"},\"success\":true},\"wechat_record_recent_query\":{\"data\":{\"data\":{\"records\":[],\"customerId\":null,\"count\":0,\"daysSince\":7},\"message\":\"近 7 天暂无微信记录\"},\"success\":true},\"call_record_followup_pending\":{\"data\":{\"data\":{\"records\":[],\"count\":0,\"daysSince\":7,\"callType\":\"MISSED\"},\"message\":\"近 7 天暂无 漏接 类型通话需要跟进\"},\"success\":true},\"opportunity_stage_alert\":{\"data\":{\"data\":{\"slaDays\":21,\"count\":0,\"ownerId\":null,\"opportunities\":[]},\"message\":\"没有商机停滞超过 21 天\"},\"success\":true},\"customer_revenue_trend\":{\"data\":{\"data\":{\"series\":[{\"month\":\"2026-03\",\"totalAmount\":0,\"orderCount\":0,\"changeFromPrevMonth\":null,\"pctChangeFromPrevMonth\":null},{\"month\":\"2026-04\",\"totalAmount\":0,\"orderCount\":0,\"changeFromPrevMonth\":null,\"pctChangeFromPrevMonth\":null},{\"month\":\"2026-05\",\"totalAmount\":0,\"orderCount\":0,\"changeFromPrevMonth\":null,\"pctChangeFromPrevMo",
+    "resultCardPresent": true,
+    "formattedTextInnerText": "### 今日客户跟进概要\n\n- **优先级客户查询**: 当前暂无高优先级客户需要特别关注。\n- **最近微信沟通记录**: 暂无最新的微信沟通记录更新, 说明近期与客户的微信互动较少或未通过微信进行跟进。\n- **待跟进电话记录**: 无待处理的电话回访任务, 表明所有计划内的电话跟进都已经完成。\n- **商机阶段告警**: 未发现任何处于风险状态的商机, 所有项目均按预期进展。\n- **客户收入趋势**: 缺乏具体数据, 无法提供有关客户收入变化的趋势分析。\n\n### 风险提示\n\n- 根据现有信息, 未检测到直接的业务风险, 但建议定期检查客户沟通渠道以确保及时响应客户需求。同时, 应持续监控收入趋势, 一旦获取最新数据即刻分析潜在波动原因。",
+    "toastLog": [],
+    "leaks": [
+      {
+        "code": "A2_sprint_version",
+        "count": 9,
+        "sample": "Sprint 8 P1"
+      },
+      {
+        "code": "A5_mock_marker",
+        "count": 1,
+        "sample": "F999_MOCK"
+      }
+    ],
+    "leakPngPath": "C:\\Users\\Steve\\my-prototype-logistics-sprint11-indicator\\docs\\audits\\2026-05-28-sprint11-ai-workdesk-audit\\screenshots\\LEAK-core_qhj_warehouse_mgr__phrase4.png",
+    "pngPath": "C:\\Users\\Steve\\my-prototype-logistics-sprint11-indicator\\docs\\audits\\2026-05-28-sprint11-ai-workdesk-audit\\screenshots\\core_qhj_warehouse_mgr__phrase4.png"
+  },
+  {
+    "caseId": "core_f006_admin__phrase1",
+    "depth": "deep",
+    "account": "f006_admin",
+    "factoryId": "F006",
+    "workdesk": "SalesOwner",
+    "route": "workdesk/sales-owner",
+    "phrase": "帮我看上月损溢异常",
+    "status": "PASS",
+    "consoleErrors": [],
+    "executeReqBody": "{\"userInput\":\"今日 SO 待发\",\"intentCode\":\"SPRINT10_SHIPMENT_PENDING_TODAY\",\"parameters\":{}}",
+    "executeRespStatus": 200,
+    "executeRespBody": "{\"code\":200,\"message\":\"操作成功\",\"data\":{\"intentRecognized\":true,\"intentCode\":\"DAILY_CUSTOMER_FOLLOWUP\",\"intentName\":\"今日客户跟进\",\"intentCategory\":\"WORKDESK\",\"sensitivityLevel\":null,\"confidence\":null,\"matchMethod\":null,\"status\":\"SUCCESS\",\"message\":\"### 今日客户跟进概览\\n\\n- **优先级客户查询**:\\n  - 当前暂无优先级客户数据\\n- **近期微信记录查询**:\\n  - 当前暂无微信记录数据\\n- **待跟进电话记录**:\\n  - 当前暂无待跟进电话记录\\n- **商机阶段告警**:\\n  - 当前暂无商机阶段告警\\n- **客户收入趋势**:\\n  - 当前暂无客户收入趋势数据\\n\\n### 风险提示\\n\\n- 当前所有工具返回的数据均为空，建议检查数据源或联系技术支持确认是否有数据同步问题。\",\"formattedText\":\"### 今日客户跟进概览\\n\\n- **优先级客户查询**:\\n  - 当前暂无优先级客户数据\\n- **近期微信记录查询**:\\n  - 当前暂无微信记录数据\\n- **待跟进电话记录**:\\n  - 当前暂无待跟进电话记录\\n- **商机阶段告警**:\\n  - 当前暂无商机阶段告警\\n- **客户收入趋势**:\\n  - 当前暂无客户收入趋势数据\\n\\n### 风险提示\\n\\n- 当前所有工具返回的数据均为空，建议检查数据源或联系技术支持确认是否有数据同步问题。\",\"clarificationQuestions\":null,\"missingParameters\":null,\"quotaCost\":null,\"validationViolations\":null,\"recommendations\":null,\"resultData\":{\"customer_priority_query\":{\"data\":{\"data\":{\"limit\":50,\"count\":16,\"customers\":[{\"highestStage\":null,\"importance\":\"VIP\",\"importanceDisplay\":\"VIP\",\"customerId\":\"3215df20-abe3-461e-9436-ece1a0cb2567\",\"priorityScore\":40,\"customerCode\":\"CUS-1779346596217-10CC\",\"contactPerson\":\"\",\"activeOpportunityCount\":0,\"highestStageDisplay\":null,\"contactPhone\":\"\",\"customerName\":\"叮咚-上海松江涞坊路冷藏仓\"},{\"highestStage\":null,\"importance\":\"VIP\",\"importanceDisplay\":\"VIP\",\"customerId\":\"effff17e-97ea-4d49-8a05-dedba1c292a2\",\"priorityScore\":40,\"customerCode\":\"CUS-1779346545543-5D3B\",\"contactPerson\":\"\",\"activeOpportunityCount\":0,\"highestStageDisplay\":null,\"contactPhone\":\"\",\"customerName\":\"叮咚-上海松江叶发公路冷藏仓\"},{\"highestStage\":null,\"importance\":\"VIP\",\"importanceDisplay\":\"VIP\",\"customerId\":\"ccfede76-0a9d-4e13-bb22-8627b416a6eb\",\"priorityScore\":40,\"customerCode\":\"CUS-1779346641766-6067\",\"contactPerson\":\"\",\"activeOpportunityCount\":0,\"highestStageDisplay\":null,\"contactPhone\":\"\",\"customerName\":\"叮咚-昆山巴城毛许路冷藏仓\"},{\"highestStage\":null,\"importance\":\"VIP\",\"importanceDisplay\":\"VIP\",\"customerId\":\"4d3307e7-c749-4765-a3ec-7f9919aec0ee\",\"priorityScore\":40,\"customerCode",
+    "resultCardPresent": true,
+    "formattedTextInnerText": "### 今日客户跟进概览\n\n- **优先级客户查询**:\n  - 当前暂无优先级客户数据\n- **近期微信记录查询**:\n  - 当前暂无微信记录数据\n- **待跟进电话记录**:\n  - 当前暂无待跟进电话记录\n- **商机阶段告警**:\n  - 当前暂无商机阶段告警\n- **客户收入趋势**:\n  - 当前暂无客户收入趋势数据\n\n### 风险提示\n\n- 当前所有工具返回的数据均为空，建议检查数据源或联系技术支持确认是否有数据同步问题。",
+    "toastLog": [],
+    "leaks": [
+      {
+        "code": "A2_sprint_version",
+        "count": 9,
+        "sample": "Sprint 8 P1"
+      },
+      {
+        "code": "A5_mock_marker",
+        "count": 1,
+        "sample": "F999_MOCK"
+      }
+    ],
+    "leakPngPath": "C:\\Users\\Steve\\my-prototype-logistics-sprint11-indicator\\docs\\audits\\2026-05-28-sprint11-ai-workdesk-audit\\screenshots\\LEAK-core_f006_admin__phrase1.png",
+    "pngPath": "C:\\Users\\Steve\\my-prototype-logistics-sprint11-indicator\\docs\\audits\\2026-05-28-sprint11-ai-workdesk-audit\\screenshots\\core_f006_admin__phrase1.png"
+  },
+  {
+    "caseId": "core_f006_admin__phrase2",
+    "depth": "medium",
+    "account": "f006_admin",
+    "factoryId": "F006",
+    "workdesk": "SalesOwner",
+    "route": "workdesk/sales-owner",
+    "phrase": "损益分析",
+    "status": "PASS",
+    "consoleErrors": [],
+    "executeReqBody": "{\"userInput\":\"今日 SO 待发\",\"intentCode\":\"SPRINT10_SHIPMENT_PENDING_TODAY\",\"parameters\":{}}",
+    "executeRespStatus": 200,
+    "executeRespBody": "{\"code\":200,\"message\":\"操作成功\",\"data\":{\"intentRecognized\":true,\"intentCode\":\"DAILY_CUSTOMER_FOLLOWUP\",\"intentName\":\"今日客户跟进\",\"intentCategory\":\"WORKDESK\",\"sensitivityLevel\":null,\"confidence\":null,\"matchMethod\":null,\"status\":\"SUCCESS\",\"message\":\"### 今日客户跟进摘要\\n\\n- **客户优先级查询**:\\n  - 当前暂无客户优先级信息。\\n\\n- **近期微信记录查询**:\\n  - 当前暂无微信记录信息。\\n\\n- **待跟进电话记录**:\\n  - 当前暂无待跟进的电话记录。\\n\\n- **商机阶段告警**:\\n  - 当前暂无商机阶段告警信息。\\n\\n- **客户收入趋势**:\\n  - 当前暂无客户收入趋势数据。\\n\\n### 风险提示\\n- 当前没有发现任何库存预警、应收过期、合规问题或告警。\",\"formattedText\":\"### 今日客户跟进摘要\\n\\n- **客户优先级查询**:\\n  - 当前暂无客户优先级信息。\\n\\n- **近期微信记录查询**:\\n  - 当前暂无微信记录信息。\\n\\n- **待跟进电话记录**:\\n  - 当前暂无待跟进的电话记录。\\n\\n- **商机阶段告警**:\\n  - 当前暂无商机阶段告警信息。\\n\\n- **客户收入趋势**:\\n  - 当前暂无客户收入趋势数据。\\n\\n### 风险提示\\n- 当前没有发现任何库存预警、应收过期、合规问题或告警。\",\"clarificationQuestions\":null,\"missingParameters\":null,\"quotaCost\":null,\"validationViolations\":null,\"recommendations\":null,\"resultData\":{\"customer_priority_query\":{\"data\":{\"data\":{\"limit\":50,\"count\":16,\"customers\":[{\"highestStage\":null,\"importance\":\"VIP\",\"importanceDisplay\":\"VIP\",\"customerId\":\"3215df20-abe3-461e-9436-ece1a0cb2567\",\"priorityScore\":40,\"customerCode\":\"CUS-1779346596217-10CC\",\"contactPerson\":\"\",\"activeOpportunityCount\":0,\"highestStageDisplay\":null,\"contactPhone\":\"\",\"customerName\":\"叮咚-上海松江涞坊路冷藏仓\"},{\"highestStage\":null,\"importance\":\"VIP\",\"importanceDisplay\":\"VIP\",\"customerId\":\"effff17e-97ea-4d49-8a05-dedba1c292a2\",\"priorityScore\":40,\"customerCode\":\"CUS-1779346545543-5D3B\",\"contactPerson\":\"\",\"activeOpportunityCount\":0,\"highestStageDisplay\":null,\"contactPhone\":\"\",\"customerName\":\"叮咚-上海松江叶发公路冷藏仓\"},{\"highestStage\":null,\"importance\":\"VIP\",\"importanceDisplay\":\"VIP\",\"customerId\":\"ccfede76-0a9d-4e13-bb22-8627b416a6eb\",\"priorityScore\":40,\"customerCode\":\"CUS-1779346641766-6067\",\"contactPerson\":\"\",\"activeOpportunityCount\":0,\"highestStageDisplay\":null,\"contactPhone\":\"\",\"customerName\":\"叮咚-昆山巴城毛许路冷藏仓\"},{\"highestStage\":null,\"importance\":\"VIP\",\"importanceDisplay\":\"VIP\",\"customerId\":\"4d3307e7-c749-4765-a3ec-7f9919aec0ee\",\"priorityScore\":40,\"customerCode\":",
+    "resultCardPresent": true,
+    "formattedTextInnerText": "### 今日客户跟进摘要\n\n- **客户优先级查询**:\n  - 当前暂无客户优先级信息。\n\n- **近期微信记录查询**:\n  - 当前暂无微信记录信息。\n\n- **待跟进电话记录**:\n  - 当前暂无待跟进的电话记录。\n\n- **商机阶段告警**:\n  - 当前暂无商机阶段告警信息。\n\n- **客户收入趋势**:\n  - 当前暂无客户收入趋势数据。\n\n### 风险提示\n- 当前没有发现任何库存预警、应收过期、合规问题或告警。",
+    "toastLog": [],
+    "leaks": [
+      {
+        "code": "A2_sprint_version",
+        "count": 9,
+        "sample": "Sprint 8 P1"
+      },
+      {
+        "code": "A5_mock_marker",
+        "count": 1,
+        "sample": "F999_MOCK"
+      }
+    ],
+    "leakPngPath": "C:\\Users\\Steve\\my-prototype-logistics-sprint11-indicator\\docs\\audits\\2026-05-28-sprint11-ai-workdesk-audit\\screenshots\\LEAK-core_f006_admin__phrase2.png",
+    "pngPath": "C:\\Users\\Steve\\my-prototype-logistics-sprint11-indicator\\docs\\audits\\2026-05-28-sprint11-ai-workdesk-audit\\screenshots\\core_f006_admin__phrase2.png"
+  },
+  {
+    "caseId": "core_f006_admin__phrase3",
+    "depth": "medium",
+    "account": "f006_admin",
+    "factoryId": "F006",
+    "workdesk": "SalesOwner",
+    "route": "workdesk/sales-owner",
+    "phrase": "上月成本",
+    "status": "PASS",
+    "consoleErrors": [],
+    "executeReqBody": "{\"userInput\":\"上月成本\",\"context\":{\"month\":\"2026-04\"}}",
+    "executeRespStatus": 200,
+    "executeRespBody": "{\"code\":200,\"message\":\"操作成功\",\"data\":{\"intentRecognized\":true,\"intentCode\":\"RESTAURANT_ECONOMICS_ANALYSIS\",\"intentName\":\"餐厅经营分析\",\"intentCategory\":\"SMARTBI\",\"sensitivityLevel\":null,\"confidence\":null,\"matchMethod\":null,\"status\":\"SUCCESS\",\"message\":\"部分数据不可用: P&L 一页纸 / 档口损溢 / 成本刚性. 已基于可用数据生成分析, 不可用部分需明确标注.\",\"formattedText\":\"部分数据不可用: P&L 一页纸 / 档口损溢 / 成本刚性. 已基于可用数据生成分析, 不可用部分需明确标注.\",\"clarificationQuestions\":null,\"missingParameters\":null,\"quotaCost\":null,\"validationViolations\":null,\"recommendations\":null,\"resultData\":{\"dataAvailable\":false,\"summary\":{\"source\":\"store_pnl_one_pager\",\"dataAvailable\":false,\"message\":\"P&L 一页纸数据获取失败: 暂无法生成「store_pnl_one_pager」分析：未提供 financial_metrics (需 DiagnosticsHandler 先运行或直接传入)\\n\\n请先上传相关数据或补充所需参数后重试。\"},\"topItems\":{\"source\":\"shrinkage_analysis\",\"dataAvailable\":false,\"message\":\"档口损溢数据获取失败: 暂无法生成「shrinkage_analysis」分析：未提供 shrinkage_rows 参数 (需要各档口的 standard_cost 和 actual_cost)\\n\\n请先上传相关数据或补充所需参数后重试。\"},\"recommendations\":{\"source\":\"cost_rigidity\",\"dataAvailable\":false,\"message\":\"成本刚性数据获取失败: 暂无法生成「cost_rigidity」分析：未提供 financial_data.current\\n\\n请先上传相关数据或补充所需参数后重试。\"},\"evidence\":[{\"section\":\"store_pnl_one_pager\",\"dataAvailable\":false,\"error\":\"暂无法生成「store_pnl_one_pager」分析：未提供 financial_metrics (需 DiagnosticsHandler 先运行或直接传入)\\n\\n请先上传相关数据或补充所需参数后重试。\"},{\"section\":\"shrinkage_analysis\",\"dataAvailable\":false,\"error\":\"暂无法生成「shrinkage_analysis」分析：未提供 shrinkage_rows 参数 (需要各档口的 standard_cost 和 actual_cost)\\n\\n请先上传相关数据或补充所需参数后重试。\"},{\"section\":\"cost_rigidity\",\"dataAvailable\":false,\"error\":\"暂无法生成「cost_rigidity」分析：未提供 financial_data.current\\n\\n请先上传相关数据或补充所需参数后重试。\"}],\"message\":\"部分数据不可用: P&L 一页纸 / 档口损溢 / 成本刚性. 已基于可用数据生成分析, 不可用部分需明确标注.\"},\"affectedEntities\":null,\"executedAt\":\"2026-05-28T11:57:38.361924024\",\"requiresApproval\":null,\"approvalRequestId\":null,\"approvalChainId\":null,\"suggestedActions\":null,\"confirmableAction\":null,\"metadata\":{\"toolName\":\"restaurant_economics_analysis\"},\"fromCache\":null,\"cacheHitType\":null,\"sessionId\":null,\"conversationRound\":null,\"maxConversat",
+    "resultCardPresent": true,
+    "formattedTextInnerText": "部分数据不可用: P&L 一页纸 / 档口损溢 / 成本刚性. 已基于可用数据生成分析, 不可用部分需明确标注.",
+    "toastLog": [],
+    "leaks": [
+      {
+        "code": "A2_sprint_version",
+        "count": 9,
+        "sample": "Sprint 8 P1"
+      },
+      {
+        "code": "A5_mock_marker",
+        "count": 1,
+        "sample": "F999_MOCK"
+      }
+    ],
+    "leakPngPath": "C:\\Users\\Steve\\my-prototype-logistics-sprint11-indicator\\docs\\audits\\2026-05-28-sprint11-ai-workdesk-audit\\screenshots\\LEAK-core_f006_admin__phrase3.png",
+    "pngPath": "C:\\Users\\Steve\\my-prototype-logistics-sprint11-indicator\\docs\\audits\\2026-05-28-sprint11-ai-workdesk-audit\\screenshots\\core_f006_admin__phrase3.png"
+  },
+  {
+    "caseId": "core_f006_admin__phrase4",
+    "depth": "medium",
+    "account": "f006_admin",
+    "factoryId": "F006",
+    "workdesk": "SalesOwner",
+    "route": "workdesk/sales-owner",
+    "phrase": "哪个菜亏钱",
+    "status": "PASS",
+    "consoleErrors": [],
+    "executeReqBody": "{\"userInput\":\"今日 SO 待发\",\"intentCode\":\"SPRINT10_SHIPMENT_PENDING_TODAY\",\"parameters\":{}}",
+    "executeRespStatus": 200,
+    "executeRespBody": "{\"code\":200,\"message\":\"操作成功\",\"data\":{\"intentRecognized\":true,\"intentCode\":\"DAILY_CUSTOMER_FOLLOWUP\",\"intentName\":\"今日客户跟进\",\"intentCategory\":\"WORKDESK\",\"sensitivityLevel\":null,\"confidence\":null,\"matchMethod\":null,\"status\":\"SUCCESS\",\"message\":\"### 今日客户跟进概览\\n\\n- **客户优先级查询**:\\n  - 当前暂无高优先级客户信息.\\n- **近期微信记录查询**:\\n  - 当前暂无客户的微信沟通记录.\\n- **待跟进电话记录**:\\n  - 当前暂无需要跟进的电话记录.\\n- **商机阶段告警**:\\n  - 当前没有处于关键阶段或需特别关注的商机.\\n- **客户收入趋势**:\\n  - 当前暂无客户收入趋势数据.\\n\\n### 风险提示\\n- 当前所有工具返回的数据为空, 请检查数据源是否正常更新或联系技术支持.\",\"formattedText\":\"### 今日客户跟进概览\\n\\n- **客户优先级查询**:\\n  - 当前暂无高优先级客户信息.\\n- **近期微信记录查询**:\\n  - 当前暂无客户的微信沟通记录.\\n- **待跟进电话记录**:\\n  - 当前暂无需要跟进的电话记录.\\n- **商机阶段告警**:\\n  - 当前没有处于关键阶段或需特别关注的商机.\\n- **客户收入趋势**:\\n  - 当前暂无客户收入趋势数据.\\n\\n### 风险提示\\n- 当前所有工具返回的数据为空, 请检查数据源是否正常更新或联系技术支持.\",\"clarificationQuestions\":null,\"missingParameters\":null,\"quotaCost\":null,\"validationViolations\":null,\"recommendations\":null,\"resultData\":{\"customer_priority_query\":{\"data\":{\"data\":{\"limit\":50,\"count\":16,\"customers\":[{\"highestStage\":null,\"importance\":\"VIP\",\"importanceDisplay\":\"VIP\",\"customerId\":\"3215df20-abe3-461e-9436-ece1a0cb2567\",\"priorityScore\":40,\"customerCode\":\"CUS-1779346596217-10CC\",\"contactPerson\":\"\",\"activeOpportunityCount\":0,\"highestStageDisplay\":null,\"contactPhone\":\"\",\"customerName\":\"叮咚-上海松江涞坊路冷藏仓\"},{\"highestStage\":null,\"importance\":\"VIP\",\"importanceDisplay\":\"VIP\",\"customerId\":\"effff17e-97ea-4d49-8a05-dedba1c292a2\",\"priorityScore\":40,\"customerCode\":\"CUS-1779346545543-5D3B\",\"contactPerson\":\"\",\"activeOpportunityCount\":0,\"highestStageDisplay\":null,\"contactPhone\":\"\",\"customerName\":\"叮咚-上海松江叶发公路冷藏仓\"},{\"highestStage\":null,\"importance\":\"VIP\",\"importanceDisplay\":\"VIP\",\"customerId\":\"ccfede76-0a9d-4e13-bb22-8627b416a6eb\",\"priorityScore\":40,\"customerCode\":\"CUS-1779346641766-6067\",\"contactPerson\":\"\",\"activeOpportunityCount\":0,\"highestStageDisplay\":null,\"contactPhone\":\"\",\"customerName\":\"叮咚-昆山巴城毛许路冷藏仓\"},{\"highestStage\":null,\"importance\":\"VIP\",\"importanceDisplay\":\"VIP\",\"customerId\":\"4d3307e7-c749-4765-a3ec-7f9919aec0ee\",\"priorit",
+    "resultCardPresent": true,
+    "formattedTextInnerText": "### 今日客户跟进概览\n\n- **客户优先级查询**:\n  - 当前暂无高优先级客户信息.\n- **近期微信记录查询**:\n  - 当前暂无客户的微信沟通记录.\n- **待跟进电话记录**:\n  - 当前暂无需要跟进的电话记录.\n- **商机阶段告警**:\n  - 当前没有处于关键阶段或需特别关注的商机.\n- **客户收入趋势**:\n  - 当前暂无客户收入趋势数据.\n\n### 风险提示\n- 当前所有工具返回的数据为空, 请检查数据源是否正常更新或联系技术支持.",
+    "toastLog": [],
+    "leaks": [
+      {
+        "code": "A2_sprint_version",
+        "count": 9,
+        "sample": "Sprint 8 P1"
+      },
+      {
+        "code": "A5_mock_marker",
+        "count": 1,
+        "sample": "F999_MOCK"
+      }
+    ],
+    "leakPngPath": "C:\\Users\\Steve\\my-prototype-logistics-sprint11-indicator\\docs\\audits\\2026-05-28-sprint11-ai-workdesk-audit\\screenshots\\LEAK-core_f006_admin__phrase4.png",
+    "pngPath": "C:\\Users\\Steve\\my-prototype-logistics-sprint11-indicator\\docs\\audits\\2026-05-28-sprint11-ai-workdesk-audit\\screenshots\\core_f006_admin__phrase4.png"
+  },
+  {
+    "caseId": "core_warehouse_mgr1_F001__phrase1",
+    "depth": "deep",
+    "account": "warehouse_mgr1_F001",
+    "factoryId": "F001",
+    "workdesk": "SalesOwner",
+    "route": "workdesk/sales-owner",
+    "phrase": "帮我看上月损溢异常",
+    "status": "PASS",
+    "consoleErrors": [],
+    "executeReqBody": "{\"userInput\":\"帮我看上月损溢异常\",\"context\":{\"month\":\"2026-04\"}}",
+    "executeRespStatus": 200,
+    "executeRespBody": "{\"code\":200,\"message\":\"操作成功\",\"data\":{\"intentRecognized\":true,\"intentCode\":\"RESTAURANT_ECONOMICS_ANALYSIS\",\"intentName\":\"餐厅经营分析\",\"intentCategory\":\"SMARTBI\",\"sensitivityLevel\":null,\"confidence\":null,\"matchMethod\":null,\"status\":\"SUCCESS\",\"message\":\"部分数据不可用: 档口损溢 / 成本刚性. 已基于可用数据生成分析, 不可用部分需明确标注.\",\"formattedText\":\"部分数据不可用: 档口损溢 / 成本刚性. 已基于可用数据生成分析, 不可用部分需明确标注.\",\"clarificationQuestions\":null,\"missingParameters\":null,\"quotaCost\":null,\"validationViolations\":null,\"recommendations\":null,\"resultData\":{\"dataAvailable\":false,\"summary\":{\"source\":\"store_pnl_one_pager\",\"dataAvailable\":true,\"data\":{\"success\":true,\"section\":\"store_pnl_one_pager\",\"data\":{\"storeName\":\"本店\",\"period\":\"current\",\"subSector\":\"火锅\",\"headline\":\"本店 current 盈利 ¥1,186,926 (8.36%)\",\"headlineColor\":\"green\",\"pnlLines\":[{\"label\":\"营业收入\",\"amount\":14205428.3,\"pctOfRevenue\":1.0,\"changePct\":null,\"statusEmoji\":\"➖\",\"note\":null},{\"label\":\"其他成本\",\"amount\":3974022.1,\"pctOfRevenue\":0.2798,\"changePct\":null,\"statusEmoji\":\"➖\",\"note\":null},{\"label\":\"净利润\",\"amount\":1186926.5,\"pctOfRevenue\":0.0836,\"changePct\":null,\"statusEmoji\":\"\\uD83D\\uDFE2\",\"note\":\"盈利 8.36%\"}],\"kpiFoodCostRatio\":null,\"kpiLaborCostRatio\":null,\"kpiCostRigidity\":null,\"kpiNetMargin\":8.36,\"topDiagnostics\":[],\"topChannels\":[],\"temporalSummary\":null,\"recommendations\":[],\"generatedAt\":\"2026-05-28T11:59:23\",\"dataSourcesUsed\":[\"financial\"],\"controllable_profit\":{\"revenue\":14205428.3,\"total_cost\":3974022.1,\"financial_profit\":10231406.200000001,\"controllable_cost\":3974022.1,\"non_controllable_cost\":0.0,\"controllable_profit\":10231406.200000001,\"controllable_margin_pct\":72.0,\"breakdown\":[{\"item\":\"other_cost\",\"amount\":3974022.1,\"controllable\":true}]}},\"followUpChips\":[]}},\"topItems\":{\"source\":\"shrinkage_analysis\",\"dataAvailable\":false,\"message\":\"档口损溢数据获取失败: 暂无法生成「shrinkage_analysis」分析：未提供 shrinkage_rows 参数 (需要各档口的 standard_cost 和 actual_cost)\\n\\n请先上传相关数据或补充所需参数后重试。\"},\"recommendations\":{\"source\":\"cost_rigidity\",\"dataAvailable\":false,\"message\":\"成本刚性数据获取失败: 暂无法生成「cost_rigidity」分析：未提供 fi",
+    "resultCardPresent": true,
+    "formattedTextInnerText": "部分数据不可用: 档口损溢 / 成本刚性. 已基于可用数据生成分析, 不可用部分需明确标注.",
+    "toastLog": [],
+    "leaks": [
+      {
+        "code": "A2_sprint_version",
+        "count": 9,
+        "sample": "Sprint 8 P1"
+      },
+      {
+        "code": "A5_mock_marker",
+        "count": 1,
+        "sample": "F999_MOCK"
+      }
+    ],
+    "leakPngPath": "C:\\Users\\Steve\\my-prototype-logistics-sprint11-indicator\\docs\\audits\\2026-05-28-sprint11-ai-workdesk-audit\\screenshots\\LEAK-core_warehouse_mgr1_F001__phrase1.png",
+    "pngPath": "C:\\Users\\Steve\\my-prototype-logistics-sprint11-indicator\\docs\\audits\\2026-05-28-sprint11-ai-workdesk-audit\\screenshots\\core_warehouse_mgr1_F001__phrase1.png"
+  },
+  {
+    "caseId": "core_warehouse_mgr1_F001__phrase2",
+    "depth": "medium",
+    "account": "warehouse_mgr1_F001",
+    "factoryId": "F001",
+    "workdesk": "SalesOwner",
+    "route": "workdesk/sales-owner",
+    "phrase": "损益分析",
+    "status": "PASS",
+    "consoleErrors": [],
+    "executeReqBody": "{\"userInput\":\"今日 SO 待发\",\"intentCode\":\"SPRINT10_SHIPMENT_PENDING_TODAY\",\"parameters\":{}}",
+    "executeRespStatus": 200,
+    "executeRespBody": "{\"code\":200,\"message\":\"操作成功\",\"data\":{\"intentRecognized\":true,\"intentCode\":\"DAILY_CUSTOMER_FOLLOWUP\",\"intentName\":\"今日客户跟进\",\"intentCategory\":\"WORKDESK\",\"sensitivityLevel\":null,\"confidence\":null,\"matchMethod\":null,\"status\":\"SUCCESS\",\"message\":\"### 今日客户跟进概览\\n\\n- **客户优先级查询**:\\n  - 当前暂无高优先级客户需要特别关注。\\n  \\n- **近期微信沟通记录**:\\n  - 暂无新的微信沟通记录。\\n\\n- **待处理的电话跟进记录**:\\n  - 暂无待处理的电话跟进事项。\\n\\n- **商机阶段告警**:\\n  - 没有处于风险阶段的商机, 所有商机状态正常。\\n\\n- **客户收入趋势**:\\n  - 未检测到显著的收入变化趋势, 无具体数值波动报告。\\n\\n### 风险提示\\n- 当前数据中未发现明显的业务风险, 包括但不限于库存预警、应收款项过期或合规性问题。请继续保持对日常运营的关注, 以预防潜在风险的发生。\",\"formattedText\":\"### 今日客户跟进概览\\n\\n- **客户优先级查询**:\\n  - 当前暂无高优先级客户需要特别关注。\\n  \\n- **近期微信沟通记录**:\\n  - 暂无新的微信沟通记录。\\n\\n- **待处理的电话跟进记录**:\\n  - 暂无待处理的电话跟进事项。\\n\\n- **商机阶段告警**:\\n  - 没有处于风险阶段的商机, 所有商机状态正常。\\n\\n- **客户收入趋势**:\\n  - 未检测到显著的收入变化趋势, 无具体数值波动报告。\\n\\n### 风险提示\\n- 当前数据中未发现明显的业务风险, 包括但不限于库存预警、应收款项过期或合规性问题。请继续保持对日常运营的关注, 以预防潜在风险的发生。\",\"clarificationQuestions\":null,\"missingParameters\":null,\"quotaCost\":null,\"validationViolations\":null,\"recommendations\":null,\"resultData\":{\"customer_priority_query\":{\"data\":{\"data\":{\"limit\":50,\"count\":47,\"customers\":[{\"highestStage\":null,\"importance\":null,\"importanceDisplay\":null,\"customerId\":\"073abfd2-6c15-4aa3-9317-ef1a41113468\",\"priorityScore\":0,\"customerCode\":\"CUS-1775191710991-4725\",\"contactPerson\":\"Debug\",\"activeOpportunityCount\":0,\"highestStageDisplay\":null,\"contactPhone\":\"13800000099\",\"customerName\":\"DS-Debug-Customer-2\"},{\"highestStage\":null,\"importance\":null,\"importanceDisplay\":null,\"customerId\":\"cf156cb9-f14b-4011-8249-0f6dc5c907b2\",\"priorityScore\":0,\"customerCode\":\"CUS-1775191748035-E36D\",\"contactPerson\":\"E2E Robot\",\"activeOpportunityCount\":0,\"highestStageDisplay\":null,\"contactPhone\":\"13800000001\",\"customerName\":\"DS-Rerun-Customer-1775191747924\"},{\"highestStage\":null,\"importance\":null,\"importanceDisplay\":null,\"customerId\":\"CUS-F001-002\",\"priorityScore\":0,\"customerCode\":\"CUS002\",\"contactPerson\":\"李经理\",\"activeOpportunityCount\":0,\"highestStageDisplay\":null,\"contactPhone\":\"13700137002\",\"customerName\":\"",
+    "resultCardPresent": true,
+    "formattedTextInnerText": "### 今日客户跟进概览\n\n- **客户优先级查询**:\n  - 当前暂无高优先级客户需要特别关注。\n  \n- **近期微信沟通记录**:\n  - 暂无新的微信沟通记录。\n\n- **待处理的电话跟进记录**:\n  - 暂无待处理的电话跟进事项。\n\n- **商机阶段告警**:\n  - 没有处于风险阶段的商机, 所有商机状态正常。\n\n- **客户收入趋势**:\n  - 未检测到显著的收入变化趋势, 无具体数值波动报告。\n\n### 风险提示\n- 当前数据中未发现明显的业务风险, 包括但不限于库存预警、应收款项过期或合规性问题。请继续保持对日常运营的关注, 以预防潜在风险的发生。",
+    "toastLog": [],
+    "leaks": [
+      {
+        "code": "A2_sprint_version",
+        "count": 9,
+        "sample": "Sprint 8 P1"
+      },
+      {
+        "code": "A5_mock_marker",
+        "count": 1,
+        "sample": "F999_MOCK"
+      }
+    ],
+    "leakPngPath": "C:\\Users\\Steve\\my-prototype-logistics-sprint11-indicator\\docs\\audits\\2026-05-28-sprint11-ai-workdesk-audit\\screenshots\\LEAK-core_warehouse_mgr1_F001__phrase2.png",
+    "pngPath": "C:\\Users\\Steve\\my-prototype-logistics-sprint11-indicator\\docs\\audits\\2026-05-28-sprint11-ai-workdesk-audit\\screenshots\\core_warehouse_mgr1_F001__phrase2.png"
+  },
+  {
+    "caseId": "core_warehouse_mgr1_F001__phrase3",
+    "depth": "medium",
+    "account": "warehouse_mgr1_F001",
+    "factoryId": "F001",
+    "workdesk": "SalesOwner",
+    "route": "workdesk/sales-owner",
+    "phrase": "上月成本",
+    "status": "PASS",
+    "consoleErrors": [],
+    "executeReqBody": "{\"userInput\":\"上月成本\",\"context\":{\"month\":\"2026-04\"}}",
+    "executeRespStatus": 200,
+    "executeRespBody": "{\"code\":200,\"message\":\"操作成功\",\"data\":{\"intentRecognized\":true,\"intentCode\":\"RESTAURANT_ECONOMICS_ANALYSIS\",\"intentName\":\"餐厅经营分析\",\"intentCategory\":\"SMARTBI\",\"sensitivityLevel\":null,\"confidence\":null,\"matchMethod\":null,\"status\":\"SUCCESS\",\"message\":\"(缓存结果) {\\\"data\\\":{\\\"dataAvailable\\\":false,\\\"summary\\\":{\\\"source\\\":\\\"store_pnl_one_pager\\\",\\\"dataAvailable\\\":false,\\\"message\\\":\\\"P&L 一页纸数据获取失败: 暂无法生成「store_pnl_one_pager」分析：未提供 financial_metrics (需 DiagnosticsHandler 先运行或直接传入)\\\\n\\\\n请先上传相关数据或补充所需参数后重试。\\\"},\\\"topItems\\\":{\\\"source\\\":\\\"shrinkage_analysis\\\",\\\"dataAvailable\\\":false,\\\"message\\\":\\\"档口损溢数据获取失败: 暂无法生成「shrinkage_analysis」分析：未提供 shrinkage_rows 参数 (需要各档口的 standard_cost 和 actual_cost)\\\\n\\\\n请先上传相关数据或补充所需参数后重试。\\\"},\\\"recommendations\\\":{\\\"source\\\":\\\"cost_rigidity\\\",\\\"dataAvailable\\\":false,\\\"message\\\":\\\"成本刚性数据获取失败: 暂无法生成「cost_rigidity」分析：未提供 financial_data.current\\\\n\\\\n请先上传相关数据或补充所需参数后重试。\\\"},\\\"evidence\\\":[{\\\"section\\\":\\\"store_pnl_one_pager\\\",\\\"dataAvailable\\\":false,\\\"error\\\":\\\"暂无法生成「store_pnl_one_pager」分析：未提供 financial_metrics (需 DiagnosticsHandler 先运行或直接传入)\\\\n\\\\n请先上传相关数据或补充所需参数后重试。\\\"},{\\\"section\\\":\\\"shrinkage_analysis\\\",\\\"dataAvailable\\\":false,\\\"error\\\":\\\"暂无法生成「shrinkage_analysis」分析：未提供 shrinkage_rows 参数 (需要各档口的 standard_cost 和 actual_cost)\\\\n\\\\n请先上传相关数据或补充所需参数后重试。\\\"},{\\\"section\\\":\\\"cost_rigidity\\\",\\\"dataAvailable\\\":false,\\\"error\\\":\\\"暂无法生成「cost_rigidity」分析：未提供 financial_data.current\\\\n\\\\n请先上传相关数据或补充所需参数后重试。\\\"}],\\\"message\\\":\\\"部分数据不可用: P&L 一页纸 / 档口损溢 / 成本刚性. 已基于可用数据生成分析, 不可用部分需明确标注.\\\"},\\\"success\\\":true}\",\"formattedText\":\"(缓存结果) {\\\"data\\\":{\\\"dataAvailable\\\":false,\\\"summary\\\":{\\\"source\\\":\\\"store_pnl_one_pager\\\",\\\"dataAvailable\\\":false,\\\"message\\\":\\\"P&L 一页纸数据获取失败: 暂无法生成「store_pnl_one_pager」分析：未提供 financial_metrics (需 DiagnosticsHandler 先运行或直接传入)\\\\n\\\\n请先上传相关数据或补充所需参数后重试。\\\"},\\\"topItems\\\":{\\\"source\\\":\\\"shrinkage_analysis\\\",\\\"dataAvailable\\\":false,\\\"message\\\":\\\"档口损溢数据获取失败: 暂无法生成「shrinkage_analysis」分析：未提供 shrinkage_rows 参数 (需要各档口的 standard_cost 和 actual_cost)\\\\n\\\\n请先上传相关数据或补充所需参数后重试。\\\"},\\",
+    "resultCardPresent": true,
+    "formattedTextInnerText": "(缓存结果) {\"data\":{\"dataAvailable\":false,\"summary\":{\"source\":\"store_pnl_one_pager\",\"dataAvailable\":false,\"message\":\"P&L 一页纸数据获取失败: 暂无法生成「store_pnl_one_pager」分析：未提供 financial_metrics (需 DiagnosticsHandler 先运行或直接传入)\\n\\n请先上传相关数据或补充所需参数后重试。\"},\"topItems\":{\"source\":\"shrinkage_analysis\",\"dataAvailable\":false,\"message\":\"档口损溢数据获取失败: 暂无法生成「shrinkage_analysis」分析：未提供 shrinkage_rows 参数 (需要各档口的 standard_cost 和 actual_cost)\\n\\n请先上传相关数据或补充所需参数后重试。\"},\"recommendations\":{\"source\":\"cost_rigidity\",\"dataAvailable\":false,\"message\":\"成本刚性数据获取失败: 暂无法生成「cost_rigidity」分析：未提供 financial_data.current\\n\\n请先上传相关数据或补充所需参数后重试。\"},\"evidence\":[{\"section\":\"store_pnl_one_pager\",\"dataAvailable\":false,\"error\":\"暂无法生成「store_pnl_one_pager」分析：未提供 financial_metrics (需 DiagnosticsHandler 先运行或直接传入)\\n\\n请先上传相关数据或补充所需参数后重试。\"},{\"section\":\"shrinkage_analysis\",\"dataAvailable\":false,\"error\":\"暂无法生成「shrinkage_analysis」分析：未提供 shrinkage_rows 参数 (需要各档口的 standard_cost 和 actual_cost)\\n\\n请先上传相关数据或补充所需参数后重试。\"},{\"section\":\"cost_rigidity\",\"dataAvailable\":false,\"error\":\"暂无法生成「cost_rigidity」分析：未提供 financial_data.current\\n\\n请先上传相关数据或补充所需参数后重试。\"}],\"message\":\"部分数据不可用: P&L 一页纸 / 档口损溢 / 成本刚性. 已基于可用数据生成分析, 不可用部分需明确标注.\"},\"success\":true}",
+    "toastLog": [],
+    "leaks": [
+      {
+        "code": "A1_cache_state",
+        "count": 1,
+        "sample": "(缓存结果"
+      },
+      {
+        "code": "A2_sprint_version",
+        "count": 9,
+        "sample": "Sprint 8 P1"
+      },
+      {
+        "code": "A5_mock_marker",
+        "count": 1,
+        "sample": "F999_MOCK"
+      },
+      {
+        "code": "B1_json_dump",
+        "count": 1,
+        "sample": " across all orders\n数据时间: 2026/5/28 12:01:19\n|\n样本: 最近 111 个销售订单\n今日跟进清单\n12:01:38 生成\n(缓存结果) {\"data\":"
+      },
+      {
+        "code": "C1_camelCase_field",
+        "count": 8,
+        "sample": "dataAvailable\":"
+      }
+    ],
+    "leakPngPath": "C:\\Users\\Steve\\my-prototype-logistics-sprint11-indicator\\docs\\audits\\2026-05-28-sprint11-ai-workdesk-audit\\screenshots\\LEAK-core_warehouse_mgr1_F001__phrase3.png",
+    "pngPath": "C:\\Users\\Steve\\my-prototype-logistics-sprint11-indicator\\docs\\audits\\2026-05-28-sprint11-ai-workdesk-audit\\screenshots\\core_warehouse_mgr1_F001__phrase3.png"
+  },
+  {
+    "caseId": "core_warehouse_mgr1_F001__phrase4",
+    "depth": "medium",
+    "account": "warehouse_mgr1_F001",
+    "factoryId": "F001",
+    "workdesk": "SalesOwner",
+    "route": "workdesk/sales-owner",
+    "phrase": "哪个菜亏钱",
+    "status": "PASS",
+    "consoleErrors": [],
+    "executeReqBody": "{\"userInput\":\"今日 SO 待发\",\"intentCode\":\"SPRINT10_SHIPMENT_PENDING_TODAY\",\"parameters\":{}}",
+    "executeRespStatus": 200,
+    "executeRespBody": "{\"code\":200,\"message\":\"操作成功\",\"data\":{\"intentRecognized\":true,\"intentCode\":\"DAILY_CUSTOMER_FOLLOWUP\",\"intentName\":\"今日客户跟进\",\"intentCategory\":\"WORKDESK\",\"sensitivityLevel\":null,\"confidence\":null,\"matchMethod\":null,\"status\":\"SUCCESS\",\"message\":\"### 今日客户跟进摘要\\n\\n- **客户优先级查询**: 当前暂无数据\\n- **近期微信记录查询**: 当前暂无数据\\n- **待跟进电话记录**: 当前暂无数据\\n- **商机阶段告警**: 当前暂无数据\\n- **客户收入趋势**: 当前暂无数据\\n\\n### 风险提示\\n\\n- 当前未发现任何风险, 但建议定期检查以确保及时跟进客户情况.\",\"formattedText\":\"### 今日客户跟进摘要\\n\\n- **客户优先级查询**: 当前暂无数据\\n- **近期微信记录查询**: 当前暂无数据\\n- **待跟进电话记录**: 当前暂无数据\\n- **商机阶段告警**: 当前暂无数据\\n- **客户收入趋势**: 当前暂无数据\\n\\n### 风险提示\\n\\n- 当前未发现任何风险, 但建议定期检查以确保及时跟进客户情况.\",\"clarificationQuestions\":null,\"missingParameters\":null,\"quotaCost\":null,\"validationViolations\":null,\"recommendations\":null,\"resultData\":{\"customer_priority_query\":{\"data\":{\"data\":{\"limit\":50,\"count\":47,\"customers\":[{\"highestStage\":null,\"importance\":null,\"importanceDisplay\":null,\"customerId\":\"073abfd2-6c15-4aa3-9317-ef1a41113468\",\"priorityScore\":0,\"customerCode\":\"CUS-1775191710991-4725\",\"contactPerson\":\"Debug\",\"activeOpportunityCount\":0,\"highestStageDisplay\":null,\"contactPhone\":\"13800000099\",\"customerName\":\"DS-Debug-Customer-2\"},{\"highestStage\":null,\"importance\":null,\"importanceDisplay\":null,\"customerId\":\"cf156cb9-f14b-4011-8249-0f6dc5c907b2\",\"priorityScore\":0,\"customerCode\":\"CUS-1775191748035-E36D\",\"contactPerson\":\"E2E Robot\",\"activeOpportunityCount\":0,\"highestStageDisplay\":null,\"contactPhone\":\"13800000001\",\"customerName\":\"DS-Rerun-Customer-1775191747924\"},{\"highestStage\":null,\"importance\":null,\"importanceDisplay\":null,\"customerId\":\"CUS-F001-002\",\"priorityScore\":0,\"customerCode\":\"CUS002\",\"contactPerson\":\"李经理\",\"activeOpportunityCount\":0,\"highestStageDisplay\":null,\"contactPhone\":\"13700137002\",\"customerName\":\"盒马鲜生\"},{\"highestStage\":null,\"importance\":null,\"importanceDisplay\":null,\"customerId\":\"CUS-F001-003\",\"priorityScore\":0,\"customerCode\":\"CUS003\",\"contactPerson\":\"赵经理\",\"activeOpportunityCount\":0,\"highestStageDisplay\":null,\"contactPhone\":\"13700137003\",\"customerName\":\"",
+    "resultCardPresent": true,
+    "formattedTextInnerText": "### 今日客户跟进摘要\n\n- **客户优先级查询**: 当前暂无数据\n- **近期微信记录查询**: 当前暂无数据\n- **待跟进电话记录**: 当前暂无数据\n- **商机阶段告警**: 当前暂无数据\n- **客户收入趋势**: 当前暂无数据\n\n### 风险提示\n\n- 当前未发现任何风险, 但建议定期检查以确保及时跟进客户情况.",
+    "toastLog": [],
+    "leaks": [
+      {
+        "code": "A2_sprint_version",
+        "count": 9,
+        "sample": "Sprint 8 P1"
+      },
+      {
+        "code": "A5_mock_marker",
+        "count": 1,
+        "sample": "F999_MOCK"
+      }
+    ],
+    "leakPngPath": "C:\\Users\\Steve\\my-prototype-logistics-sprint11-indicator\\docs\\audits\\2026-05-28-sprint11-ai-workdesk-audit\\screenshots\\LEAK-core_warehouse_mgr1_F001__phrase4.png",
+    "pngPath": "C:\\Users\\Steve\\my-prototype-logistics-sprint11-indicator\\docs\\audits\\2026-05-28-sprint11-ai-workdesk-audit\\screenshots\\core_warehouse_mgr1_F001__phrase4.png"
+  },
+  {
+    "caseId": "breadth_FinanceManager",
+    "depth": "breadth-smoke",
+    "account": "qhj_warehouse_mgr",
+    "factoryId": "RES_3101_009",
+    "workdesk": "FinanceManager",
+    "route": "workdesk/finance-manager",
+    "phrase": "本月财务情况",
+    "status": "TIMEOUT",
+    "consoleErrors": [],
+    "error": "page.waitForSelector: Timeout 20000ms exceeded.\nCall log:\n\u001b[2m  - waiting for locator('.chat-input textarea') to be visible\u001b[22m\n"
+  },
+  {
+    "caseId": "breadth_ProductionManager",
+    "depth": "breadth-smoke",
+    "account": "qhj_warehouse_mgr",
+    "factoryId": "RES_3101_009",
+    "workdesk": "ProductionManager",
+    "route": "workdesk/production-manager",
+    "phrase": "本月生产计划完成",
+    "status": "TIMEOUT",
+    "consoleErrors": [],
+    "error": "page.waitForSelector: Timeout 20000ms exceeded.\nCall log:\n\u001b[2m  - waiting for locator('.chat-input textarea') to be visible\u001b[22m\n"
+  },
+  {
+    "caseId": "breadth_Purchaser",
+    "depth": "breadth-smoke",
+    "account": "qhj_warehouse_mgr",
+    "factoryId": "RES_3101_009",
+    "workdesk": "Purchaser",
+    "route": "workdesk/purchaser",
+    "phrase": "本月采购订单",
+    "status": "PASS",
+    "consoleErrors": [],
+    "executeReqBody": "{\"userInput\":\"7 天销售预测\",\"intentCode\":\"SALES_FORECAST_7DAY\"}",
+    "executeRespStatus": 200,
+    "executeRespBody": "{\"code\":200,\"message\":\"操作成功\",\"data\":{\"intentRecognized\":true,\"intentCode\":\"SALES_FORECAST_7DAY\",\"intentName\":\"7 天销售预测\",\"intentCategory\":\"ANALYSIS\",\"sensitivityLevel\":null,\"confidence\":null,\"matchMethod\":null,\"status\":\"SUCCESS\",\"message\":\"(缓存结果) {\\\"data\\\":{\\\"data\\\":{\\\"forecastDays\\\":7,\\\"windowStart\\\":\\\"2026-05-14\\\",\\\"bufferMultiplier\\\":1.1,\\\"windowEnd\\\":\\\"2026-05-27\\\",\\\"lookbackDays\\\":14,\\\"forecasts\\\":[]},\\\"message\\\":\\\"最近 14 天无销售订单, 无法预测. 请确认 SO 录入正常.\\\"},\\\"success\\\":true}\",\"formattedText\":\"(缓存结果) {\\\"data\\\":{\\\"data\\\":{\\\"forecastDays\\\":7,\\\"windowStart\\\":\\\"2026-05-14\\\",\\\"bufferMultiplier\\\":1.1,\\\"windowEnd\\\":\\\"2026-05-27\\\",\\\"lookbackDays\\\":14,\\\"forecasts\\\":[]},\\\"message\\\":\\\"最近 14 天无销售订单, 无法预测. 请确认 SO 录入正常.\\\"},\\\"success\\\":true}\",\"clarificationQuestions\":null,\"missingParameters\":null,\"quotaCost\":null,\"validationViolations\":null,\"recommendations\":null,\"resultData\":null,\"affectedEntities\":null,\"executedAt\":\"2026-05-28T12:04:23.754764258\",\"requiresApproval\":null,\"approvalRequestId\":null,\"approvalChainId\":null,\"suggestedActions\":null,\"confirmableAction\":null,\"metadata\":{\"cached\":true},\"fromCache\":null,\"cacheHitType\":null,\"sessionId\":null,\"conversationRound\":null,\"maxConversationRounds\":null,\"multiIntentResult\":null,\"subResults\":null,\"validationResultInfo\":null},\"timestamp\":\"2026-05-28T12:04:23.754788549\",\"success\":true,\"actionHint\":null,\"severity\":null,\"hintTarget\":null,\"errorCode\":null}",
+    "resultCardPresent": true,
+    "formattedTextInnerText": "当前没有低库存预警, 所有物料库存充足。建议保持现有采购节奏, 持续关注消耗趋势。",
+    "toastLog": [],
+    "leaks": [
+      {
+        "code": "A2_sprint_version",
+        "count": 4,
+        "sample": "Sprint 8 P4b"
+      }
+    ],
+    "leakPngPath": "C:\\Users\\Steve\\my-prototype-logistics-sprint11-indicator\\docs\\audits\\2026-05-28-sprint11-ai-workdesk-audit\\screenshots\\LEAK-breadth_Purchaser.png",
+    "pngPath": "C:\\Users\\Steve\\my-prototype-logistics-sprint11-indicator\\docs\\audits\\2026-05-28-sprint11-ai-workdesk-audit\\screenshots\\breadth_Purchaser.png"
+  },
+  {
+    "caseId": "breadth_QualityChief",
+    "depth": "breadth-smoke",
+    "account": "qhj_warehouse_mgr",
+    "factoryId": "RES_3101_009",
+    "workdesk": "QualityChief",
+    "route": "workdesk/quality-chief",
+    "phrase": "本月质量异常",
+    "status": "TIMEOUT",
+    "consoleErrors": [],
+    "error": "page.waitForSelector: Timeout 20000ms exceeded.\nCall log:\n\u001b[2m  - waiting for locator('.chat-input textarea') to be visible\u001b[22m\n"
+  },
+  {
+    "caseId": "breadth_QualityManager",
+    "depth": "breadth-smoke",
+    "account": "qhj_warehouse_mgr",
+    "factoryId": "RES_3101_009",
+    "workdesk": "QualityManager",
+    "route": "workdesk/quality-manager",
+    "phrase": "本月质量检验",
+    "status": "TIMEOUT",
+    "consoleErrors": [],
+    "error": "page.waitForSelector: Timeout 20000ms exceeded.\nCall log:\n\u001b[2m  - waiting for locator('.chat-input textarea') to be visible\u001b[22m\n"
+  },
+  {
+    "caseId": "breadth_WarehouseKeeper",
+    "depth": "breadth-smoke",
+    "account": "qhj_warehouse_mgr",
+    "factoryId": "RES_3101_009",
+    "workdesk": "WarehouseKeeper",
+    "route": "workdesk/warehouse-keeper",
+    "phrase": "本月库存情况",
+    "status": "PASS",
+    "consoleErrors": [],
+    "executeReqBody": "{\"userInput\":\"本月库存情况\"}",
+    "executeRespStatus": 200,
+    "executeRespBody": "{\"code\":200,\"message\":\"操作成功\",\"data\":{\"intentRecognized\":true,\"intentCode\":\"RESTAURANT_INGREDIENT_STOCK\",\"intentName\":\"食材库存查询\",\"intentCategory\":\"RESTAURANT\",\"sensitivityLevel\":null,\"confidence\":null,\"matchMethod\":null,\"status\":\"SUCCESS\",\"message\":\"使用 stock_alert 工具来查询本月低于安全库存水平的原材料及其推荐补货量。\",\"formattedText\":\"使用 stock_alert 工具来查询本月低于安全库存水平的原材料及其推荐补货量。\",\"clarificationQuestions\":null,\"missingParameters\":null,\"quotaCost\":null,\"validationViolations\":null,\"recommendations\":null,\"resultData\":{\"data\":{\"data\":{\"total\":0,\"categoryFilter\":null,\"warnings\":[]},\"message\":\"当前没有低库存预警, 所有物料库存充足。建议保持现有采购节奏, 持续关注消耗趋势。\"},\"success\":true},\"affectedEntities\":null,\"executedAt\":\"2026-05-28T12:05:57.725397859\",\"requiresApproval\":null,\"approvalRequestId\":null,\"approvalChainId\":null,\"suggestedActions\":null,\"confirmableAction\":null,\"metadata\":null,\"fromCache\":null,\"cacheHitType\":null,\"sessionId\":null,\"conversationRound\":null,\"maxConversationRounds\":null,\"multiIntentResult\":null,\"subResults\":null,\"validationResultInfo\":null},\"timestamp\":\"2026-05-28T12:05:57.72543696\",\"success\":true,\"actionHint\":null,\"severity\":null,\"hintTarget\":null,\"errorCode\":null}",
+    "resultCardPresent": true,
+    "formattedTextInnerText": "今天 (~1 天内) 暂无待收货, 仓库可专注盘点 / 整理库位",
+    "toastLog": [],
+    "leaks": [
+      {
+        "code": "A2_sprint_version",
+        "count": 4,
+        "sample": "Sprint 8 P4a"
+      }
+    ],
+    "leakPngPath": "C:\\Users\\Steve\\my-prototype-logistics-sprint11-indicator\\docs\\audits\\2026-05-28-sprint11-ai-workdesk-audit\\screenshots\\LEAK-breadth_WarehouseKeeper.png",
+    "pngPath": "C:\\Users\\Steve\\my-prototype-logistics-sprint11-indicator\\docs\\audits\\2026-05-28-sprint11-ai-workdesk-audit\\screenshots\\breadth_WarehouseKeeper.png"
+  },
+  {
+    "caseId": "error_E1_empty_input",
+    "depth": "error-deep",
+    "account": "qhj_warehouse_mgr",
+    "factoryId": "RES_3101_009",
+    "workdesk": "SalesOwner",
+    "route": "workdesk/sales-owner",
+    "phrase": "",
+    "status": "PASS",
+    "consoleErrors": [],
+    "executeReqBody": "{\"userInput\":\"今日 SO 待发\",\"intentCode\":\"SPRINT10_SHIPMENT_PENDING_TODAY\",\"parameters\":{}}",
+    "executeRespStatus": 200,
+    "executeRespBody": "{\"code\":200,\"message\":\"操作成功\",\"data\":{\"intentRecognized\":true,\"intentCode\":\"DAILY_CUSTOMER_FOLLOWUP\",\"intentName\":\"今日客户跟进\",\"intentCategory\":\"WORKDESK\",\"sensitivityLevel\":null,\"confidence\":null,\"matchMethod\":null,\"status\":\"SUCCESS\",\"message\":\"### 今日客户跟进摘要\\n\\n- **客户优先级查询**: 当前暂无数据\\n- **最近微信记录查询**: 当前暂无数据\\n- **待跟进电话记录**: 当前暂无数据\\n- **商机阶段告警**: 当前暂无数据\\n- **客户收入趋势**:\\n  - 最近一段时间内, 客户收入数据为空, 无法展示具体趋势变化\\n\\n### 风险提示\\n\\n- 根据现有数据, 暂未发现任何关于库存预警、应收过期或合规问题的风险。但请注意, 因为多处关键信息显示为空, 建议进一步核实相关业务活动是否正常进行, 以确保没有遗漏重要事项。\",\"formattedText\":\"### 今日客户跟进摘要\\n\\n- **客户优先级查询**: 当前暂无数据\\n- **最近微信记录查询**: 当前暂无数据\\n- **待跟进电话记录**: 当前暂无数据\\n- **商机阶段告警**: 当前暂无数据\\n- **客户收入趋势**:\\n  - 最近一段时间内, 客户收入数据为空, 无法展示具体趋势变化\\n\\n### 风险提示\\n\\n- 根据现有数据, 暂未发现任何关于库存预警、应收过期或合规问题的风险。但请注意, 因为多处关键信息显示为空, 建议进一步核实相关业务活动是否正常进行, 以确保没有遗漏重要事项。\",\"clarificationQuestions\":null,\"missingParameters\":null,\"quotaCost\":null,\"validationViolations\":null,\"recommendations\":null,\"resultData\":{\"customer_priority_query\":{\"data\":{\"data\":{\"limit\":50,\"count\":0,\"customers\":[]},\"message\":\"未找到符合条件的客户\"},\"success\":true},\"wechat_record_recent_query\":{\"data\":{\"data\":{\"records\":[],\"customerId\":null,\"count\":0,\"daysSince\":7},\"message\":\"近 7 天暂无微信记录\"},\"success\":true},\"call_record_followup_pending\":{\"data\":{\"data\":{\"records\":[],\"count\":0,\"daysSince\":7,\"callType\":\"MISSED\"},\"message\":\"近 7 天暂无 漏接 类型通话需要跟进\"},\"success\":true},\"opportunity_stage_alert\":{\"data\":{\"data\":{\"slaDays\":21,\"count\":0,\"ownerId\":null,\"opportunities\":[]},\"message\":\"没有商机停滞超过 21 天\"},\"success\":true},\"customer_revenue_trend\":{\"data\":{\"data\":{\"series\":[{\"month\":\"2026-03\",\"totalAmount\":0,\"orderCount\":0,\"changeFromPrevMonth\":null,\"pctChangeFromPrevMonth\":null},{\"month\":\"2026-04\",\"totalAmount\":0,\"orderCount\":0,\"changeFromPrevMonth\":null,\"pctChangeFromPrevMonth\":null},{\"month\":\"2026-05\",\"totalAmount\":0,\"orderCount\":0,\"changeFromPrevMonth\":null,\"pctChangeFromPrevMonth\":null}],\"customerId\":null,\"periodMonths\":2,\"customerName\":null},\"message\":\"全 factory 客户 近 2 个月销售趋势 (共 3 个月数据点)\"},\"success\":true},\"_executionOrder\":\"",
+    "resultCardPresent": true,
+    "formattedTextInnerText": "### 今日客户跟进摘要\n\n- **客户优先级查询**: 当前暂无数据\n- **最近微信记录查询**: 当前暂无数据\n- **待跟进电话记录**: 当前暂无数据\n- **商机阶段告警**: 当前暂无数据\n- **客户收入趋势**:\n  - 最近一段时间内, 客户收入数据为空, 无法展示具体趋势变化\n\n### 风险提示\n\n- 根据现有数据, 暂未发现任何关于库存预警、应收过期或合规问题的风险。但请注意, 因为多处关键信息显示为空, 建议进一步核实相关业务活动是否正常进行, 以确保没有遗漏重要事项。",
+    "toastLog": [],
+    "leaks": [
+      {
+        "code": "A2_sprint_version",
+        "count": 9,
+        "sample": "Sprint 8 P1"
+      },
+      {
+        "code": "A5_mock_marker",
+        "count": 1,
+        "sample": "F999_MOCK"
+      }
+    ],
+    "leakPngPath": "C:\\Users\\Steve\\my-prototype-logistics-sprint11-indicator\\docs\\audits\\2026-05-28-sprint11-ai-workdesk-audit\\screenshots\\LEAK-error_E1_empty_input.png",
+    "pngPath": "C:\\Users\\Steve\\my-prototype-logistics-sprint11-indicator\\docs\\audits\\2026-05-28-sprint11-ai-workdesk-audit\\screenshots\\error_E1_empty_input.png",
+    "fourInOneVerdict": {
+      "backendMessageMatches": false,
+      "toastSticky": false,
+      "toastShowClose": false,
+      "hasActionHint": false
+    }
+  },
+  {
+    "caseId": "error_E2_forced_misroute",
+    "depth": "error-deep",
+    "account": "qhj_warehouse_mgr",
+    "factoryId": "RES_3101_009",
+    "workdesk": "SalesOwner",
+    "route": "workdesk/sales-owner",
+    "phrase": "随便聊聊",
+    "status": "PASS",
+    "consoleErrors": [],
+    "executeReqBody": "{\"userInput\":\"随便聊聊\"}",
+    "executeRespStatus": 200,
+    "executeRespBody": "{\"code\":200,\"message\":\"操作成功\",\"data\":{\"intentRecognized\":false,\"intentCode\":null,\"intentName\":null,\"intentCategory\":null,\"sensitivityLevel\":null,\"confidence\":null,\"matchMethod\":null,\"status\":\"COMPLETED\",\"message\":\"你好呀！白垩纪真是个有趣的时期，恐龙还在地球上漫步呢。你对这个时期的哪些事情感兴趣？我们可以聊聊恐龙、当时的气候，或者其他任何你想知道的事情哦！\",\"formattedText\":\"你好呀！白垩纪真是个有趣的时期，恐龙还在地球上漫步呢。你对这个时期的哪些事情感兴趣？我们可以聊聊恐龙、当时的气候，或者其他任何你想知道的事情哦！\",\"clarificationQuestions\":null,\"missingParameters\":null,\"quotaCost\":null,\"validationViolations\":null,\"recommendations\":null,\"resultData\":null,\"affectedEntities\":null,\"executedAt\":\"2026-05-28T12:07:39.873680282\",\"requiresApproval\":null,\"approvalRequestId\":null,\"approvalChainId\":null,\"suggestedActions\":null,\"confirmableAction\":null,\"metadata\":null,\"fromCache\":null,\"cacheHitType\":null,\"sessionId\":null,\"conversationRound\":null,\"maxConversationRounds\":null,\"multiIntentResult\":null,\"subResults\":null,\"validationResultInfo\":null},\"timestamp\":\"2026-05-28T12:07:39.873688322\",\"success\":true,\"actionHint\":null,\"severity\":null,\"hintTarget\":null,\"errorCode\":null}",
+    "resultCardPresent": true,
+    "formattedTextInnerText": "你好呀！白垩纪真是个有趣的时期，恐龙还在地球上漫步呢。你对这个时期的哪些事情感兴趣？我们可以聊聊恐龙、当时的气候，或者其他任何你想知道的事情哦！",
+    "toastLog": [],
+    "leaks": [
+      {
+        "code": "A2_sprint_version",
+        "count": 9,
+        "sample": "Sprint 8 P1"
+      },
+      {
+        "code": "A5_mock_marker",
+        "count": 1,
+        "sample": "F999_MOCK"
+      }
+    ],
+    "leakPngPath": "C:\\Users\\Steve\\my-prototype-logistics-sprint11-indicator\\docs\\audits\\2026-05-28-sprint11-ai-workdesk-audit\\screenshots\\LEAK-error_E2_forced_misroute.png",
+    "pngPath": "C:\\Users\\Steve\\my-prototype-logistics-sprint11-indicator\\docs\\audits\\2026-05-28-sprint11-ai-workdesk-audit\\screenshots\\error_E2_forced_misroute.png",
+    "fourInOneVerdict": {
+      "backendMessageMatches": false,
+      "toastSticky": false,
+      "toastShowClose": false,
+      "hasActionHint": true
+    }
+  },
+  {
+    "caseId": "error_E3_composite_old_month",
+    "depth": "error-deep",
+    "account": "qhj_warehouse_mgr",
+    "factoryId": "RES_3101_009",
+    "workdesk": "SalesOwner",
+    "route": "workdesk/sales-owner",
+    "phrase": "哪个菜亏钱",
+    "contextMonth": "2024-01",
+    "status": "PASS",
+    "consoleErrors": [],
+    "executeReqBody": "{\"userInput\":\"今日 SO 待发\",\"intentCode\":\"SPRINT10_SHIPMENT_PENDING_TODAY\",\"parameters\":{}}",
+    "executeRespStatus": 200,
+    "executeRespBody": "{\"code\":200,\"message\":\"操作成功\",\"data\":{\"intentRecognized\":true,\"intentCode\":\"DAILY_CUSTOMER_FOLLOWUP\",\"intentName\":\"今日客户跟进\",\"intentCategory\":\"WORKDESK\",\"sensitivityLevel\":null,\"confidence\":null,\"matchMethod\":null,\"status\":\"SUCCESS\",\"message\":\"### 今日客户跟进摘要\\n\\n- **客户优先级查询**: 当前暂无数据\\n- **最近微信记录查询**: 当前暂无数据\\n- **待跟进电话记录**: 当前暂无数据\\n- **商机阶段告警**: 当前暂无数据\\n- **客户收入趋势**: \\n  - 近期没有客户收入数据更新, 暂无具体数值变化可参考\\n\\n### 风险提示\\n\\n- 由于所有工具返回的数据为空或全0, 目前无法识别具体的业务风险。建议密切关注客户动态及沟通记录, 以及时发现潜在问题。\",\"formattedText\":\"### 今日客户跟进摘要\\n\\n- **客户优先级查询**: 当前暂无数据\\n- **最近微信记录查询**: 当前暂无数据\\n- **待跟进电话记录**: 当前暂无数据\\n- **商机阶段告警**: 当前暂无数据\\n- **客户收入趋势**: \\n  - 近期没有客户收入数据更新, 暂无具体数值变化可参考\\n\\n### 风险提示\\n\\n- 由于所有工具返回的数据为空或全0, 目前无法识别具体的业务风险。建议密切关注客户动态及沟通记录, 以及时发现潜在问题。\",\"clarificationQuestions\":null,\"missingParameters\":null,\"quotaCost\":null,\"validationViolations\":null,\"recommendations\":null,\"resultData\":{\"customer_priority_query\":{\"data\":{\"data\":{\"limit\":50,\"count\":0,\"customers\":[]},\"message\":\"未找到符合条件的客户\"},\"success\":true},\"wechat_record_recent_query\":{\"data\":{\"data\":{\"records\":[],\"customerId\":null,\"count\":0,\"daysSince\":7},\"message\":\"近 7 天暂无微信记录\"},\"success\":true},\"call_record_followup_pending\":{\"data\":{\"data\":{\"records\":[],\"count\":0,\"daysSince\":7,\"callType\":\"MISSED\"},\"message\":\"近 7 天暂无 漏接 类型通话需要跟进\"},\"success\":true},\"opportunity_stage_alert\":{\"data\":{\"data\":{\"slaDays\":21,\"count\":0,\"ownerId\":null,\"opportunities\":[]},\"message\":\"没有商机停滞超过 21 天\"},\"success\":true},\"customer_revenue_trend\":{\"data\":{\"data\":{\"series\":[{\"month\":\"2026-03\",\"totalAmount\":0,\"orderCount\":0,\"changeFromPrevMonth\":null,\"pctChangeFromPrevMonth\":null},{\"month\":\"2026-04\",\"totalAmount\":0,\"orderCount\":0,\"changeFromPrevMonth\":null,\"pctChangeFromPrevMonth\":null},{\"month\":\"2026-05\",\"totalAmount\":0,\"orderCount\":0,\"changeFromPrevMonth\":null,\"pctChangeFromPrevMonth\":null}],\"customerId\":null,\"periodMonths\":2,\"customerName\":null},\"message\":\"全 factory 客户 近 2 个月销售趋势 (共 3 个月数据点)\"},\"success\":true},\"_executionOrder\":\"sequential\",\"_toolCount\":5},\"affectedEntities\":null,\"executedA",
+    "resultCardPresent": true,
+    "formattedTextInnerText": "### 今日客户跟进摘要\n\n- **客户优先级查询**: 当前暂无数据\n- **最近微信记录查询**: 当前暂无数据\n- **待跟进电话记录**: 当前暂无数据\n- **商机阶段告警**: 当前暂无数据\n- **客户收入趋势**: \n  - 近期没有客户收入数据更新, 暂无具体数值变化可参考\n\n### 风险提示\n\n- 由于所有工具返回的数据为空或全0, 目前无法识别具体的业务风险。建议密切关注客户动态及沟通记录, 以及时发现潜在问题。",
+    "toastLog": [],
+    "leaks": [
+      {
+        "code": "A2_sprint_version",
+        "count": 9,
+        "sample": "Sprint 8 P1"
+      },
+      {
+        "code": "A5_mock_marker",
+        "count": 1,
+        "sample": "F999_MOCK"
+      }
+    ],
+    "leakPngPath": "C:\\Users\\Steve\\my-prototype-logistics-sprint11-indicator\\docs\\audits\\2026-05-28-sprint11-ai-workdesk-audit\\screenshots\\LEAK-error_E3_composite_old_month.png",
+    "pngPath": "C:\\Users\\Steve\\my-prototype-logistics-sprint11-indicator\\docs\\audits\\2026-05-28-sprint11-ai-workdesk-audit\\screenshots\\error_E3_composite_old_month.png",
+    "fourInOneVerdict": {
+      "backendMessageMatches": false,
+      "toastSticky": false,
+      "toastShowClose": false,
+      "hasActionHint": false
+    }
+  },
+  {
+    "caseId": "error_E4_wrong_workdesk",
+    "depth": "error-deep",
+    "account": "qhj_warehouse_mgr",
+    "factoryId": "RES_3101_009",
+    "workdesk": "QualityChief",
+    "route": "workdesk/quality-chief",
+    "phrase": "帮我看上月损溢异常",
+    "status": "TIMEOUT",
+    "consoleErrors": [],
+    "error": "page.waitForSelector: Timeout 20000ms exceeded.\nCall log:\n\u001b[2m  - waiting for locator('.chat-input textarea') to be visible\u001b[22m\n"
+  }
+]
