@@ -559,7 +559,7 @@ public class ResultFormatterServiceImpl implements ResultFormatterService {
         if (netProfit != null) sb.append("净利润 ¥").append(AMOUNT_FORMATTER.format(netProfit));
         if (grossMargin != null) sb.append(" (毛利率 ").append(grossMargin).append("%)");
         if (revenue == null && cost == null && grossProfit == null) {
-            sb.append("本月暂无利润表数据, 建议: 1. 检查记账凭证是否已审核; 2. 确认期间已结账; 3. 查看月度财务月报。");
+            sb.append("本月暂无利润表数据 (营业收入 / 营业成本 / 毛利 / 营业利润 / 净利润均为空)。诊断建议: 1. 检查本期记账凭证是否已全部审核入账; 2. 确认会计期间状态是否已结账; 3. 查看月度经营月报或联系财务主管复核三大报表生成情况。");
         }
         return sb.toString();
     }
@@ -583,7 +583,7 @@ public class ResultFormatterServiceImpl implements ResultFormatterService {
         if (currentAssets != null) sb.append(" / 流动资产 ¥").append(AMOUNT_FORMATTER.format(currentAssets));
         if (accountsPayable != null) sb.append(" / 应付账款 ¥").append(AMOUNT_FORMATTER.format(accountsPayable));
         if (totalAssets == null && totalLiabilities == null) {
-            sb.append("本月暂无资产负债表数据, 建议: 1. 确认期初余额已录入; 2. 检查记账凭证审核状态; 3. 联系财务复核账目。");
+            sb.append("本月暂无资产负债表数据 (总资产 / 总负债 / 所有者权益均为空)。诊断建议: 1. 确认本期期初余额已录入会计科目; 2. 检查记账凭证是否已全部审核入账; 3. 联系财务主管复核账目并生成报表。");
         }
         return sb.toString();
     }
@@ -607,7 +607,7 @@ public class ResultFormatterServiceImpl implements ResultFormatterService {
         if (financingInflow != null) sb.append("筹资流入 ¥").append(AMOUNT_FORMATTER.format(financingInflow)).append(" / ");
         if (netCashFlow != null) sb.append("现金净增加 ¥").append(AMOUNT_FORMATTER.format(netCashFlow));
         if (operatingInflow == null && operatingOutflow == null) {
-            sb.append("本月暂无现金流量数据, 建议: 1. 确认收付款凭证已录入; 2. 检查银行流水勾兑情况; 3. 联系出纳复核现金账。");
+            sb.append("本月暂无现金流量数据 (经营 / 投资 / 筹资活动现金流均为空)。诊断建议: 1. 确认本期收付款凭证已全部录入并审核; 2. 检查银行流水勾兑及现金账核对情况; 3. 联系出纳或财务主管复核现金账并生成现金流量表。");
         }
         return sb.toString();
     }
