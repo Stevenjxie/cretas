@@ -1,0 +1,502 @@
+{
+  "results": [
+    {
+      "caseId": "A1",
+      "scenario": "login render",
+      "account": "f006_admin",
+      "factoryId": "F006",
+      "depth": "smoke",
+      "status": "PASS",
+      "evidence": {
+        "png": "C:\\Users\\Steve\\my-prototype-logistics-sprint11-d5\\docs\\audits\\sprint-11-bi-screenshots\\full-a1-login-render.png",
+        "title": "指标中心 - 白垩纪AI Agent"
+      },
+      "consoleErrors": [],
+      "networkErrors": []
+    },
+    {
+      "caseId": "A2",
+      "scenario": "B2B 3 KPI real values",
+      "account": "f006_admin",
+      "factoryId": "F006",
+      "depth": "deep",
+      "status": "PASS",
+      "evidence": {
+        "png": "C:\\Users\\Steve\\my-prototype-logistics-sprint11-d5\\docs\\audits\\sprint-11-bi-screenshots\\full-a2-b2b-real-data.png",
+        "bodyHas": [
+          "B2B 销售真业务数据",
+          "订单总数",
+          "平均订单金额",
+          "销售总额",
+          "¥1,225,510"
+        ]
+      },
+      "toastLog": []
+    },
+    {
+      "caseId": "A3",
+      "scenario": "mirror filter",
+      "account": "f006_admin",
+      "factoryId": "F006",
+      "depth": "deep",
+      "status": "FAIL",
+      "evidence": {
+        "png": "C:\\Users\\Steve\\my-prototype-logistics-sprint11-d5\\docs\\audits\\sprint-11-bi-screenshots\\full-a3-mirror-hidden.png",
+        "apiMirrorCount": 7,
+        "uiVisibleCount": 10,
+        "visibleCardNames": [
+          "食材损耗率",
+          "翻台率",
+          "平均客单价",
+          "菜品毛利率",
+          "食品安全检查通过率",
+          "库存总价值",
+          "库存周转率",
+          "月度销售额",
+          "质检不合格率",
+          "HACCP 违规次数"
+        ],
+        "mirrorLabelsFound": 1,
+        "allMirrorOrRelated": 4,
+        "leakedLabels": [
+          "翻台率"
+        ]
+      },
+      "error": "1 mirror label(s) leaked through filter: 翻台率"
+    },
+    {
+      "caseId": "A4",
+      "scenario": "big banner readability",
+      "account": "f006_admin",
+      "factoryId": "F006",
+      "depth": "medium",
+      "status": "PASS",
+      "evidence": {
+        "png": "C:\\Users\\Steve\\my-prototype-logistics-sprint11-d5\\docs\\audits\\sprint-11-bi-screenshots\\full-a4-banner.png",
+        "bannerText": "客户演示模式 · Sprint 12 接 backend 真算法\n\n下方 B2B 卡片为 web-admin 前端实时计算自 sales_orders 表 (F006 真业务数据)。 其他卡片为 F9",
+        "style": {
+          "fontSize": "14px",
+          "color": "rgb(144, 147, 153)",
+          "background": "rgb(236, 245, 255)",
+          "borderWidth": "2px"
+        }
+      }
+    },
+    {
+      "caseId": "A5",
+      "scenario": "17 indicator mid+end抽检",
+      "account": "f006_admin",
+      "factoryId": "F006",
+      "depth": "deep",
+      "status": "PASS",
+      "evidence": {
+        "total": 17,
+        "mid": "QUALITY_REJECT_RATE",
+        "end1": "TABLE_TURNOVER",
+        "end2": "SALES_MONTHLY_REVENUE",
+        "midName": "质检不合格率"
+      }
+    },
+    {
+      "caseId": "A6",
+      "scenario": "tree honest labels",
+      "account": "f006_admin",
+      "factoryId": "F006",
+      "depth": "medium",
+      "status": "PASS",
+      "evidence": {
+        "png": "C:\\Users\\Steve\\my-prototype-logistics-sprint11-d5\\docs\\audits\\sprint-11-bi-screenshots\\full-a6-tree-honest.png",
+        "statsText": "共 6 个节点 / 3 层深度\n|\n 已计算 0  待配置 6"
+      }
+    },
+    {
+      "caseId": "A7",
+      "scenario": "detail drawer drill-down",
+      "account": "f006_admin",
+      "factoryId": "F006",
+      "depth": "medium",
+      "status": "PASS",
+      "evidence": {
+        "png": "C:\\Users\\Steve\\my-prototype-logistics-sprint11-d5\\docs\\audits\\sprint-11-bi-screenshots\\full-a7-detail-drawer.png",
+        "drawerVisible": true
+      }
+    },
+    {
+      "caseId": "A8",
+      "scenario": "cross-module SO → B2B card roundtrip",
+      "account": "f006_admin",
+      "factoryId": "F006",
+      "depth": "deep",
+      "status": "FAIL",
+      "evidence": {
+        "png": "C:\\Users\\Steve\\my-prototype-logistics-sprint11-d5\\docs\\audits\\sprint-11-bi-screenshots\\full-a8-roundtrip.png",
+        "beforeCount": 5,
+        "afterCount": 5,
+        "diff": 0,
+        "createOk": false,
+        "createStatus": 400,
+        "silentDrop": false,
+        "createBodyShort": "{\"error\":\"{\\\"code\\\":400,\\\"message\\\":\\\"客户ID不能为空, 产品ID不能为空\\\",\\\"data\\\":null,\\\"timestamp\\\":\\\"2026-05-28T12:00:01.61159222\\\",\\\"success\\\":false,\\\"actionHint\\\":null,\\\"severity\\\":null,\\\"hintTarget\\\":null,\\\"errorCode\\\":null}\"}"
+      },
+      "error": "POST failed, expected likely validation rejection"
+    },
+    {
+      "caseId": "A9",
+      "scenario": "error-deep 404 indicator",
+      "account": "f006_admin",
+      "factoryId": "F006",
+      "depth": "error-deep",
+      "status": "PASS",
+      "evidence": {
+        "png": "C:\\Users\\Steve\\my-prototype-logistics-sprint11-d5\\docs\\audits\\sprint-11-bi-screenshots\\full-a9-error-deep-404.png",
+        "verdict": {
+          "networkMessage": "指标不存在: code=NON_EXISTENT_CODE_XYZ_999, factoryId=F006",
+          "networkStatus": 404,
+          "uiHasGracefulEmpty": false,
+          "toastsTriggered": 0,
+          "stickyCheckPending": true
+        }
+      },
+      "toastLog": []
+    },
+    {
+      "caseId": "A10",
+      "scenario": "date range filter",
+      "account": "f006_admin",
+      "factoryId": "F006",
+      "depth": "smoke",
+      "status": "PASS",
+      "evidence": {
+        "png": "C:\\Users\\Steve\\my-prototype-logistics-sprint11-d5\\docs\\audits\\sprint-11-bi-screenshots\\full-a10-date-range.png",
+        "datePickerExists": false
+      }
+    },
+    {
+      "caseId": "B-320-mini-1",
+      "scenario": "indicator-center viewport",
+      "account": "f006_admin",
+      "factoryId": "F006",
+      "viewport": {
+        "width": 320,
+        "height": 568
+      },
+      "depth": "smoke",
+      "status": "PASS",
+      "evidence": {
+        "png": "C:\\Users\\Steve\\my-prototype-logistics-sprint11-d5\\docs\\audits\\sprint-11-bi-screenshots\\full-b-320-mini-indicator-center.png",
+        "sectionVisible": true
+      }
+    },
+    {
+      "caseId": "B-320-mini-2",
+      "scenario": "workdesk viewport",
+      "account": "f006_admin",
+      "factoryId": "F006",
+      "viewport": {
+        "width": 320,
+        "height": 568
+      },
+      "depth": "smoke",
+      "status": "PASS",
+      "evidence": {
+        "png": "C:\\Users\\Steve\\my-prototype-logistics-sprint11-d5\\docs\\audits\\sprint-11-bi-screenshots\\full-b-320-mini-workdesk.png"
+      }
+    },
+    {
+      "caseId": "B-1440-laptop-1",
+      "scenario": "indicator-center viewport",
+      "account": "f006_admin",
+      "factoryId": "F006",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "depth": "smoke",
+      "status": "PASS",
+      "evidence": {
+        "png": "C:\\Users\\Steve\\my-prototype-logistics-sprint11-d5\\docs\\audits\\sprint-11-bi-screenshots\\full-b-1440-laptop-indicator-center.png",
+        "sectionVisible": true
+      }
+    },
+    {
+      "caseId": "B-1440-laptop-2",
+      "scenario": "workdesk viewport",
+      "account": "f006_admin",
+      "factoryId": "F006",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "depth": "smoke",
+      "status": "PASS",
+      "evidence": {
+        "png": "C:\\Users\\Steve\\my-prototype-logistics-sprint11-d5\\docs\\audits\\sprint-11-bi-screenshots\\full-b-1440-laptop-workdesk.png"
+      }
+    },
+    {
+      "caseId": "B-1920-desktop-1",
+      "scenario": "indicator-center viewport",
+      "account": "f006_admin",
+      "factoryId": "F006",
+      "viewport": {
+        "width": 1920,
+        "height": 1080
+      },
+      "depth": "smoke",
+      "status": "PASS",
+      "evidence": {
+        "png": "C:\\Users\\Steve\\my-prototype-logistics-sprint11-d5\\docs\\audits\\sprint-11-bi-screenshots\\full-b-1920-desktop-indicator-center.png",
+        "sectionVisible": true
+      }
+    },
+    {
+      "caseId": "B-1920-desktop-2",
+      "scenario": "workdesk viewport",
+      "account": "f006_admin",
+      "factoryId": "F006",
+      "viewport": {
+        "width": 1920,
+        "height": 1080
+      },
+      "depth": "smoke",
+      "status": "PASS",
+      "evidence": {
+        "png": "C:\\Users\\Steve\\my-prototype-logistics-sprint11-d5\\docs\\audits\\sprint-11-bi-screenshots\\full-b-1920-desktop-workdesk.png"
+      }
+    },
+    {
+      "caseId": "C1",
+      "scenario": "superAdmin same view",
+      "account": "factory_super_admin (F006 对照)",
+      "factoryId": "F006",
+      "depth": "medium",
+      "status": "SKIP",
+      "evidence": {},
+      "error": "account may not exist: auth fail status=401 body={\"code\":401,\"message\":\"用户名或密码错误\",\"data\":null,\"timestamp\":\"2026-05-28T12:01:31.327601436\",\"success\":false,\"actionHint\":\"请检查用户名和密码后重试\",\"severity\":\"error\",\"hintTarget\":\"password\",\"errorCode\":null}"
+    },
+    {
+      "caseId": "C2",
+      "scenario": "F001 sister factory",
+      "account": "warehouse_mgr1 (F001 sister)",
+      "factoryId": "F001",
+      "depth": "medium",
+      "status": "PASS",
+      "evidence": {
+        "png": "C:\\Users\\Steve\\my-prototype-logistics-sprint11-d5\\docs\\audits\\sprint-11-bi-screenshots\\full-c2-warehouse-f001.png",
+        "hasError": false,
+        "bodyFirst300": "白垩纪 AI Agent\n正在加载应用…"
+      }
+    },
+    {
+      "caseId": "C3",
+      "scenario": "cross-factory RBAC",
+      "account": "warehouse_mgr1 (F001 sister)",
+      "factoryId": "F006 (cross)",
+      "depth": "error-deep",
+      "status": "PASS",
+      "evidence": {
+        "authRejected": true,
+        "message": "auth fail status=401 body={\"code\":401,\"message\":\"用户名或密码错误\",\"data\":null,\"timestamp\":\"2026-05-28T12:01:39.960412572\",\"success\":false,\"actionHint\":\"请检查用户名和密码后重试\",\"severity\":\"error\",\"hintTarget\":\"password"
+      }
+    },
+    {
+      "caseId": "D1",
+      "scenario": "workdesk uses B2B",
+      "account": "f006_admin",
+      "factoryId": "F006",
+      "depth": "medium",
+      "status": "PASS",
+      "evidence": {
+        "png": "C:\\Users\\Steve\\my-prototype-logistics-sprint11-d5\\docs\\audits\\sprint-11-bi-screenshots\\full-d1-workdesk-b2b.png"
+      }
+    },
+    {
+      "caseId": "D2",
+      "scenario": "no lying header",
+      "account": "f006_admin",
+      "factoryId": "F006",
+      "depth": "medium",
+      "status": "PASS",
+      "evidence": {
+        "png": "C:\\Users\\Steve\\my-prototype-logistics-sprint11-d5\\docs\\audits\\sprint-11-bi-screenshots\\full-d2-workdesk-no-lying.png"
+      }
+    },
+    {
+      "caseId": "D3",
+      "scenario": "chat input present",
+      "account": "f006_admin",
+      "factoryId": "F006",
+      "depth": "smoke",
+      "status": "PASS",
+      "evidence": {
+        "png": "C:\\Users\\Steve\\my-prototype-logistics-sprint11-d5\\docs\\audits\\sprint-11-bi-screenshots\\full-d3-workdesk-chat.png",
+        "textareaCount": 1
+      }
+    },
+    {
+      "caseId": "D4",
+      "scenario": "other workdesks mirror sweep",
+      "account": "f006_admin",
+      "factoryId": "F006",
+      "depth": "medium",
+      "status": "PASS",
+      "evidence": {
+        "png": "C:\\Users\\Steve\\my-prototype-logistics-sprint11-d5\\docs\\audits\\sprint-11-bi-screenshots\\full-d4-other-workdesks-last.png",
+        "findings": [
+          {
+            "desk": "finance-manager",
+            "hasMirrorValue": false,
+            "hasMirrorLabel": false
+          },
+          {
+            "desk": "quality-chief",
+            "hasMirrorValue": false,
+            "hasMirrorLabel": false
+          },
+          {
+            "desk": "production-manager",
+            "hasMirrorValue": false,
+            "hasMirrorLabel": false
+          },
+          {
+            "desk": "warehouse-keeper",
+            "hasMirrorValue": false,
+            "hasMirrorLabel": false
+          },
+          {
+            "desk": "purchaser",
+            "hasMirrorValue": false,
+            "hasMirrorLabel": false
+          }
+        ]
+      }
+    },
+    {
+      "caseId": "F-indicator-center",
+      "scenario": "sweep /indicator-center",
+      "account": "f006_admin",
+      "factoryId": "F006",
+      "depth": "medium",
+      "status": "PASS",
+      "evidence": {
+        "path": "/indicator-center",
+        "findingsCount": 0,
+        "categoriesHit": [],
+        "topFindings": []
+      }
+    },
+    {
+      "caseId": "F-workdesk-sales-owner",
+      "scenario": "sweep /workdesk/sales-owner",
+      "account": "f006_admin",
+      "factoryId": "F006",
+      "depth": "medium",
+      "status": "PASS",
+      "evidence": {
+        "path": "/workdesk/sales-owner",
+        "findingsCount": 0,
+        "categoriesHit": [],
+        "topFindings": []
+      }
+    },
+    {
+      "caseId": "F-workdesk-finance",
+      "scenario": "sweep /workdesk/finance-manager",
+      "account": "f006_admin",
+      "factoryId": "F006",
+      "depth": "medium",
+      "status": "PASS",
+      "evidence": {
+        "path": "/workdesk/finance-manager",
+        "findingsCount": 0,
+        "categoriesHit": [],
+        "topFindings": []
+      }
+    },
+    {
+      "caseId": "F-workdesk-quality",
+      "scenario": "sweep /workdesk/quality-chief",
+      "account": "f006_admin",
+      "factoryId": "F006",
+      "depth": "medium",
+      "status": "PASS",
+      "evidence": {
+        "path": "/workdesk/quality-chief",
+        "findingsCount": 0,
+        "categoriesHit": [],
+        "topFindings": []
+      }
+    },
+    {
+      "caseId": "F-workdesk-production",
+      "scenario": "sweep /workdesk/production-manager",
+      "account": "f006_admin",
+      "factoryId": "F006",
+      "depth": "medium",
+      "status": "PASS",
+      "evidence": {
+        "path": "/workdesk/production-manager",
+        "findingsCount": 0,
+        "categoriesHit": [],
+        "topFindings": []
+      }
+    },
+    {
+      "caseId": "F-workdesk-warehouse",
+      "scenario": "sweep /workdesk/warehouse-keeper",
+      "account": "f006_admin",
+      "factoryId": "F006",
+      "depth": "medium",
+      "status": "PASS",
+      "evidence": {
+        "path": "/workdesk/warehouse-keeper",
+        "findingsCount": 0,
+        "categoriesHit": [],
+        "topFindings": []
+      }
+    },
+    {
+      "caseId": "F-workdesk-purchaser",
+      "scenario": "sweep /workdesk/purchaser",
+      "account": "f006_admin",
+      "factoryId": "F006",
+      "depth": "medium",
+      "status": "PASS",
+      "evidence": {
+        "path": "/workdesk/purchaser",
+        "findingsCount": 0,
+        "categoriesHit": [],
+        "topFindings": []
+      }
+    },
+    {
+      "caseId": "F-dashboard-root",
+      "scenario": "sweep /dashboard",
+      "account": "f006_admin",
+      "factoryId": "F006",
+      "depth": "medium",
+      "status": "PASS",
+      "evidence": {
+        "path": "/dashboard",
+        "findingsCount": 0,
+        "categoriesHit": [],
+        "topFindings": []
+      }
+    },
+    {
+      "caseId": "E1",
+      "scenario": "console + network observability",
+      "account": "f006_admin",
+      "factoryId": "F006",
+      "depth": "deep",
+      "status": "PASS",
+      "evidence": {
+        "png": "C:\\Users\\Steve\\my-prototype-logistics-sprint11-d5\\docs\\audits\\sprint-11-bi-screenshots\\full-e1-console-network.png"
+      },
+      "consoleErrors": [],
+      "networkErrors": []
+    }
+  ],
+  "total": 32,
+  "schemaV2": true
+}
