@@ -693,9 +693,13 @@ onMounted(async () => {
     try {
       const dr = await getGoldDataRange(factoryId.value);
       if (dr.minDate && dr.maxDate) {
-        // 设 dateRange → /executive/custom 全量区间; 日期选择器 (v-model) 直接显示
-        // "2025-01-01 至 2025-12-31", 用户一眼看到默认区间 (防呆透明)。
-        dateRange.value = [dr.minDate, dr.maxDate];
+        // 默认显示「最近有数据的年」(per Steve May 29 2026): max date 所在年的 1-1
+        // 到 max, 不跨年把多个部分样本混在一起 (e.g. 2025 + 2026 → ¥6370万 混样)。
+        // max=2026-04-30 → [2026-01-01, 2026-04-30]; 老板第一眼看最新最完整的一年。
+        // 日期选择器 (v-model=dateRange) 直接显示该区间 (防呆透明), 可手动改回全量。
+        const yearStart = `${dr.maxDate.slice(0, 4)}-01-01`;
+        const startDate = yearStart > dr.minDate ? yearStart : dr.minDate;
+        dateRange.value = [startDate, dr.maxDate];
         selectedDataSource.value = 'system';
         await loadDashboardData();
         return;
