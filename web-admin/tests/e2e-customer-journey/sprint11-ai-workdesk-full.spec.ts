@@ -69,7 +69,12 @@ type CaseCapture = {
   contextMonth?: string;
   status: 'PASS' | 'FAIL' | 'AUTH_FAIL' | 'TIMEOUT';
   // Network observations
+  // executeReqBody = filtered body of the user-click POST (body contains the test `phrase`).
+  // executeReqBodyLast = race-prone last-wins capture, kept for debug / empty-phrase case.
+  // Per feedback_playwright_capture_race_for_auto_mount_vue HARD rule (Sprint 12).
   executeReqBody?: string;
+  executeReqBodyLast?: string;
+  executeReqBodyCount?: number; // total POST count to /ai-intents/execute observed
   executeRespStatus?: number;
   executeRespBody?: string;
   // UI observations
@@ -169,11 +174,39 @@ async function readToastLog(page: Page) {
   return page.evaluate(() => (window as any).__toastLog || []);
 }
 
-// Install request capture (Rule 11 wire audit)
-function captureExecuteRequests(page: Page, cap: CaseCapture) {
+// Install request capture (Rule 11 wire audit).
+//
+// Sprint 12 fix per feedback_playwright_capture_race_for_auto_mount_vue HARD rule:
+// SalesOwnerWorkdesk (and sibling Workdesks) trigger auto-mount queries on mount
+// (triggerFollowupQuery / triggerShipmentPendingQuery / etc.) that fire POSTs to
+// /ai-intents/execute BEFORE the user click. A plain page.on('request') that
+// overwrites executeReqBody on every POST captures the LAST POST — typically an
+// auto-mount one, NOT the user's click. The spec then asserts on the wrong body
+// and silently mis-evaluates routing.
+//
+// Fix: filter by expectedPhrase. Auto-mount POST bodies do not contain the test
+// phrase, so the filter eliminates them. The last POST whose body DOES contain
+// the test phrase is the user-click POST.
+//
+// For empty-phrase cases (E1 validation), phrase filter is bypassed and we fall
+// back to last-wins (no user POST is expected anyway — button should be disabled).
+//
+// `executeReqBodyLast` always tracks the most recent POST regardless of filter,
+// for debug and for empty-phrase paths.
+function captureExecuteRequests(page: Page, cap: CaseCapture, expectedPhrase: string) {
+  cap.executeReqBodyCount = 0;
   page.on('request', req => {
     if (req.url().includes('/ai-intents/execute') && req.method() === 'POST') {
-      cap.executeReqBody = req.postData() || '';
+      const body = req.postData() || '';
+      cap.executeReqBodyLast = body;
+      cap.executeReqBodyCount = (cap.executeReqBodyCount || 0) + 1;
+      // Phrase-filter assigns executeReqBody only for user-click POST (body contains test phrase).
+      // Empty phrase = no filter possible; fall back to last-wins (E1 validation case).
+      if (!expectedPhrase) {
+        cap.executeReqBody = body;
+      } else if (body.includes(expectedPhrase)) {
+        cap.executeReqBody = body;
+      }
     }
   });
   page.on('response', async resp => {
@@ -184,6 +217,47 @@ function captureExecuteRequests(page: Page, cap: CaseCapture) {
       } catch {}
     }
   });
+}
+
+/**
+ * Wait for a POST /ai-intents/execute whose body contains the given phrase AND fires
+ * AFTER the given timestamp. Use BEFORE calling sendBtn.click() to obtain a promise
+ * resolved by the user-click POST specifically (not an auto-mount POST).
+ *
+ * Per feedback_playwright_capture_race_for_auto_mount_vue HARD rule (Sprint 12).
+ *
+ * @param page Playwright Page
+ * @param phrase test phrase the user will type (must be non-empty)
+ * @param afterTimestamp Date.now() captured just before sendBtn.click(), used to reject
+ *                      late-firing auto-mount POSTs whose body happens to contain phrase substring
+ * @param timeoutMs how long to wait before resolving null
+ */
+async function waitForUserClickExecutePost(
+  page: Page,
+  phrase: string,
+  afterTimestamp: number,
+  timeoutMs = 30_000
+): Promise<{ body: string; firedAt: number } | null> {
+  if (!phrase) return null;
+  try {
+    const req = await page.waitForRequest(
+      r => {
+        if (!r.url().includes('/ai-intents/execute')) return false;
+        if (r.method() !== 'POST') return false;
+        const body = r.postData() || '';
+        // Strict filter: body MUST contain the test phrase to count as user-click POST.
+        // afterTimestamp filter is a soft hint (Playwright doesn't expose request fire time
+        // pre-resolution); the phrase filter alone is sufficient since auto-mount POSTs
+        // don't carry our injected phrase.
+        return body.includes(phrase);
+      },
+      { timeout: timeoutMs }
+    );
+    return { body: req.postData() || '', firedAt: Date.now() };
+  } catch {
+    // timeout — no user-click POST observed (e.g. button truly disabled, or backend down)
+    return null;
+  }
 }
 
 // Install console error capture (Rule 5)
@@ -197,8 +271,8 @@ function captureConsoleErrors(page: Page, cap: CaseCapture) {
 }
 
 async function runWorkdeskCase(page: Page, cap: CaseCapture, acct: Account, route: string, phrase: string, contextMonth?: string) {
-  // Capture wires
-  captureExecuteRequests(page, cap);
+  // Capture wires — phrase passed so user-click POST filter works (Sprint 12 HARD rule fix).
+  captureExecuteRequests(page, cap, phrase);
   captureConsoleErrors(page, cap);
 
   // Step 1: Auth
@@ -234,12 +308,25 @@ async function runWorkdeskCase(page: Page, cap: CaseCapture, acct: Account, rout
   }
   await page.waitForTimeout(500); // v-model settle
 
-  // Step 5: Click send (force fallback if button disabled due to validation)
+  // Step 5: Click send (force fallback if button disabled due to validation).
+  //
+  // Sprint 12 fix per feedback_playwright_capture_race_for_auto_mount_vue HARD rule:
+  // set up waitForRequest BEFORE click so we capture the user-click POST specifically,
+  // not a late-firing auto-mount POST. The page.on('request') handler in
+  // captureExecuteRequests provides backup phrase-filtered capture; this waitForRequest
+  // is the primary path that DETERMINISTICALLY resolves to the right POST.
   const sendBtn = page.locator('.chat-input button:has-text("发送")').first();
+  const clickTimestamp = Date.now();
+  const userPostPromise = waitForUserClickExecutePost(page, phrase, clickTimestamp, 30_000);
   try {
     await sendBtn.click({ timeout: 10_000 });
   } catch {
     try { await sendBtn.click({ force: true, timeout: 5_000 }); } catch { /* button truly disabled */ }
+  }
+  // Resolve user-click POST (or null if button truly disabled / backend down).
+  const userPost = await userPostPromise;
+  if (userPost) {
+    cap.executeReqBody = userPost.body;
   }
 
   // Step 6: Wait for response or error/empty validation

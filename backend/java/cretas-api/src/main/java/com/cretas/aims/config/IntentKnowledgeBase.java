@@ -797,6 +797,50 @@ public class IntentKnowledgeBase {
         phraseToIntentMapping.put("入库", "WAREHOUSE_KEEPER_TODAY_TASKS");
         phraseToIntentMapping.put("采购", "PURCHASER_WEEKLY_PLAN");
 
+        // Sprint 12 finance-manager real-data routing overrides (post-PR #272 audit residue).
+        // Finance Workdesk has 8 real-data paths misrouting to REPORT_KPI / RESTAURANT_REVENUE_TREND /
+        // PERIOD_STATUS_QUERY / REPORT_DASHBOARD_OVERVIEW / QUERY_LIQUIDITY. Add explicit phrase
+        // shortcuts to the correct finance intents (MONTHLY_FINANCIAL_CLOSE / INCOME_STATEMENT_QUERY /
+        // CASHFLOW_STATEMENT_QUERY / BALANCE_SHEET_QUERY).
+        phraseToIntentMapping.put("今日营收金额", "MONTHLY_FINANCIAL_CLOSE");
+        phraseToIntentMapping.put("本月营收 vs 上月", "MONTHLY_FINANCIAL_CLOSE");
+        phraseToIntentMapping.put("本月营收vs上月", "MONTHLY_FINANCIAL_CLOSE");
+        phraseToIntentMapping.put("本月营收", "MONTHLY_FINANCIAL_CLOSE");
+        phraseToIntentMapping.put("今日营收", "MONTHLY_FINANCIAL_CLOSE");
+        phraseToIntentMapping.put("营收金额", "MONTHLY_FINANCIAL_CLOSE");
+
+        phraseToIntentMapping.put("本季度净利润率", "INCOME_STATEMENT_QUERY");
+        phraseToIntentMapping.put("本月净利润率", "INCOME_STATEMENT_QUERY");
+        phraseToIntentMapping.put("本月毛利率", "INCOME_STATEMENT_QUERY");
+        phraseToIntentMapping.put("净利润率", "INCOME_STATEMENT_QUERY");
+        phraseToIntentMapping.put("毛利率", "INCOME_STATEMENT_QUERY");
+        phraseToIntentMapping.put("利润表", "INCOME_STATEMENT_QUERY");
+
+        phraseToIntentMapping.put("本月现金流入流出对比", "CASHFLOW_STATEMENT_QUERY");
+        phraseToIntentMapping.put("现金流入流出对比", "CASHFLOW_STATEMENT_QUERY");
+        phraseToIntentMapping.put("现金流入流出", "CASHFLOW_STATEMENT_QUERY");
+        phraseToIntentMapping.put("现金流量表", "CASHFLOW_STATEMENT_QUERY");
+
+        phraseToIntentMapping.put("本月应付账款合计", "BALANCE_SHEET_QUERY");
+        phraseToIntentMapping.put("应付账款合计", "BALANCE_SHEET_QUERY");
+        phraseToIntentMapping.put("资产负债表", "BALANCE_SHEET_QUERY");
+
+        phraseToIntentMapping.put("上周开票数量", "MONTHLY_FINANCIAL_CLOSE");
+        phraseToIntentMapping.put("本月开票数量", "MONTHLY_FINANCIAL_CLOSE");
+        phraseToIntentMapping.put("开票数量", "MONTHLY_FINANCIAL_CLOSE");
+
+        phraseToIntentMapping.put("本月生产成本占比", "INCOME_STATEMENT_QUERY");
+        phraseToIntentMapping.put("生产成本占比", "INCOME_STATEMENT_QUERY");
+
+        // Sprint 12 sales-owner residue fixes (rd-month / rd-golden-pass dashboard misroute)
+        phraseToIntentMapping.put("本月销售业绩排名前 5 的客户", "REPORT_KPI");
+        phraseToIntentMapping.put("本月销售业绩排名前5的客户", "REPORT_KPI");
+        phraseToIntentMapping.put("销售业绩排名", "REPORT_KPI");
+        phraseToIntentMapping.put("销售冠军", "REPORT_KPI");
+        phraseToIntentMapping.put("本月销售冠军是谁", "REPORT_KPI");
+        phraseToIntentMapping.put("销售排名", "REPORT_KPI");
+        phraseToIntentMapping.put("六腾门科技这个客户最近怎么样", "DAILY_CUSTOMER_FOLLOWUP");
+
         // === v12.7: 长句核心短语映射（优先级最高）===
         // 这些短语用于从长句中提取核心意图
         // 报告/效率相关

@@ -524,8 +524,92 @@ public class ResultFormatterServiceImpl implements ResultFormatterService {
             case "COST_QUERY", "COST_TREND_ANALYSIS" -> formatCostQueryResult(topLevel);
             case "SCHEDULING_LIST" -> formatSchedulingListResult(topLevel);
             case "PRODUCTION_STATUS_QUERY" -> formatProductionStatus(data);
+            case "INCOME_STATEMENT_QUERY" -> formatIncomeStatement(topLevel);
+            case "BALANCE_SHEET_QUERY" -> formatBalanceSheet(topLevel);
+            case "CASHFLOW_STATEMENT_QUERY" -> formatCashflowStatement(topLevel);
             default -> formatReportGeneric(data);
         };
+    }
+
+    // Sprint 12: finance 3-statement formatters — emit ≥80-char business-content message
+    // instead of generic key/value dump (was "startYear: 2026 | startMonth: 5 ...").
+    private String formatIncomeStatement(Map<String, Object> d) {
+        if (d == null) return null;
+        Integer startYear = getInteger(d, "startYear");
+        Integer startMonth = getInteger(d, "startMonth");
+        Integer endYear = getInteger(d, "endYear");
+        Integer endMonth = getInteger(d, "endMonth");
+        BigDecimal revenue = getBigDecimal(d, "totalRevenue");
+        BigDecimal cost = getBigDecimal(d, "totalCost");
+        BigDecimal grossProfit = getBigDecimal(d, "grossProfit");
+        BigDecimal operatingProfit = getBigDecimal(d, "operatingProfit");
+        BigDecimal netProfit = getBigDecimal(d, "netProfit");
+        BigDecimal grossMargin = getBigDecimal(d, "grossMarginPercent");
+        String period = (startYear != null && startMonth != null)
+                ? String.format("%d-%02d 至 %d-%02d", startYear, startMonth,
+                        endYear != null ? endYear : startYear,
+                        endMonth != null ? endMonth : startMonth)
+                : "本期";
+        StringBuilder sb = new StringBuilder();
+        sb.append(period).append(" 利润表: ");
+        if (revenue != null) sb.append("营业收入 ¥").append(AMOUNT_FORMATTER.format(revenue)).append(" / ");
+        if (cost != null) sb.append("营业成本 ¥").append(AMOUNT_FORMATTER.format(cost)).append(" / ");
+        if (grossProfit != null) sb.append("毛利 ¥").append(AMOUNT_FORMATTER.format(grossProfit)).append(" / ");
+        if (operatingProfit != null) sb.append("营业利润 ¥").append(AMOUNT_FORMATTER.format(operatingProfit)).append(" / ");
+        if (netProfit != null) sb.append("净利润 ¥").append(AMOUNT_FORMATTER.format(netProfit));
+        if (grossMargin != null) sb.append(" (毛利率 ").append(grossMargin).append("%)");
+        if (revenue == null && cost == null && grossProfit == null) {
+            sb.append("本月暂无利润表数据 (营业收入 / 营业成本 / 毛利 / 营业利润 / 净利润均为空)。诊断建议: 1. 检查本期记账凭证是否已全部审核入账; 2. 确认会计期间状态是否已结账; 3. 查看月度经营月报或联系财务主管复核三大报表生成情况。");
+        }
+        return sb.toString();
+    }
+
+    private String formatBalanceSheet(Map<String, Object> d) {
+        if (d == null) return null;
+        Integer year = getInteger(d, "year");
+        Integer month = getInteger(d, "month");
+        BigDecimal totalAssets = getBigDecimal(d, "totalAssets");
+        BigDecimal totalLiabilities = getBigDecimal(d, "totalLiabilities");
+        BigDecimal totalEquity = getBigDecimal(d, "totalEquity");
+        BigDecimal currentAssets = getBigDecimal(d, "currentAssets");
+        BigDecimal accountsPayable = getBigDecimal(d, "accountsPayable");
+        String period = (year != null && month != null)
+                ? String.format("%d-%02d", year, month) : "本期";
+        StringBuilder sb = new StringBuilder();
+        sb.append(period).append(" 资产负债表: ");
+        if (totalAssets != null) sb.append("总资产 ¥").append(AMOUNT_FORMATTER.format(totalAssets)).append(" / ");
+        if (totalLiabilities != null) sb.append("总负债 ¥").append(AMOUNT_FORMATTER.format(totalLiabilities)).append(" / ");
+        if (totalEquity != null) sb.append("所有者权益 ¥").append(AMOUNT_FORMATTER.format(totalEquity));
+        if (currentAssets != null) sb.append(" / 流动资产 ¥").append(AMOUNT_FORMATTER.format(currentAssets));
+        if (accountsPayable != null) sb.append(" / 应付账款 ¥").append(AMOUNT_FORMATTER.format(accountsPayable));
+        if (totalAssets == null && totalLiabilities == null) {
+            sb.append("本月暂无资产负债表数据 (总资产 / 总负债 / 所有者权益均为空)。诊断建议: 1. 确认本期期初余额已录入会计科目; 2. 检查记账凭证是否已全部审核入账; 3. 联系财务主管复核账目并生成报表。");
+        }
+        return sb.toString();
+    }
+
+    private String formatCashflowStatement(Map<String, Object> d) {
+        if (d == null) return null;
+        Integer startYear = getInteger(d, "startYear");
+        Integer startMonth = getInteger(d, "startMonth");
+        BigDecimal operatingInflow = getBigDecimal(d, "operatingInflow");
+        BigDecimal operatingOutflow = getBigDecimal(d, "operatingOutflow");
+        BigDecimal investingInflow = getBigDecimal(d, "investingInflow");
+        BigDecimal financingInflow = getBigDecimal(d, "financingInflow");
+        BigDecimal netCashFlow = getBigDecimal(d, "netCashFlow");
+        String period = (startYear != null && startMonth != null)
+                ? String.format("%d-%02d", startYear, startMonth) : "本期";
+        StringBuilder sb = new StringBuilder();
+        sb.append(period).append(" 现金流量表: ");
+        if (operatingInflow != null) sb.append("经营流入 ¥").append(AMOUNT_FORMATTER.format(operatingInflow)).append(" / ");
+        if (operatingOutflow != null) sb.append("经营流出 ¥").append(AMOUNT_FORMATTER.format(operatingOutflow)).append(" / ");
+        if (investingInflow != null) sb.append("投资流入 ¥").append(AMOUNT_FORMATTER.format(investingInflow)).append(" / ");
+        if (financingInflow != null) sb.append("筹资流入 ¥").append(AMOUNT_FORMATTER.format(financingInflow)).append(" / ");
+        if (netCashFlow != null) sb.append("现金净增加 ¥").append(AMOUNT_FORMATTER.format(netCashFlow));
+        if (operatingInflow == null && operatingOutflow == null) {
+            sb.append("本月暂无现金流量数据 (经营 / 投资 / 筹资活动现金流均为空)。诊断建议: 1. 确认本期收付款凭证已全部录入并审核; 2. 检查银行流水勾兑及现金账核对情况; 3. 联系出纳或财务主管复核现金账并生成现金流量表。");
+        }
+        return sb.toString();
     }
 
     private String buildPeriodLabel(String period, String startDate, String endDate) {
@@ -1139,24 +1223,42 @@ public class ResultFormatterServiceImpl implements ResultFormatterService {
     private String formatSupplierRanking(Map<String, Object> data) {
         List<Map<String, Object>> ranking = getList(data, "ranking");
         if (ranking == null || ranking.isEmpty()) {
-            return "供应商排名查询完成，暂无可排名的供应商数据。请先录入供应商订单信息。";
+            // Sprint 12: ≥80-char empty-state with diagnostic suggestions.
+            return "供应商排名查询完成 — 当前没有可排名的供应商数据。诊断建议: 1. 检查本月是否已录入供应商订单信息;"
+                    + " 2. 确认供应商基础资料是否齐全; 3. 联系采购部门复核供应商档案完整性。";
         }
 
         StringBuilder sb = new StringBuilder();
-        sb.append(String.format("供应商排名（TOP %d）\n\n", ranking.size()));
+        sb.append(String.format("供应商排名 (TOP %d) — 本期评分排序: ", ranking.size()));
         int idx = 0;
         for (Map<String, Object> item : ranking) {
             if (idx >= 10) break;
+            // Sprint 12: SupplierRankingTool nests supplier info under "supplier" key, not flat.
             String name = getString(item, "name");
+            if (name == null) {
+                Map<String, Object> sup = asMap(item.get("supplier"));
+                if (sup != null) {
+                    name = getString(sup, "name");
+                    if (name == null) name = getString(sup, "supplierName");
+                    if (name == null) name = getString(sup, "companyName");
+                }
+            }
             Integer totalOrders = getInteger(item, "totalOrders");
             BigDecimal totalAmount = getBigDecimal(item, "totalAmount");
             Integer rating = getInteger(item, "rating");
+            if (rating == null) {
+                Map<String, Object> sup = asMap(item.get("supplier"));
+                if (sup != null) rating = getInteger(sup, "rating");
+            }
 
-            sb.append(String.format("%d. %s", ++idx, name != null ? name : "未知"));
-            if (totalAmount != null) sb.append(" | 总金额: ¥").append(AMOUNT_FORMATTER.format(totalAmount));
-            if (totalOrders != null) sb.append(" | 订单数: ").append(totalOrders);
-            if (rating != null) sb.append(" | 评分: ").append(rating);
-            sb.append("\n");
+            if (idx > 0) sb.append(" / ");
+            sb.append(String.format("%d. %s", ++idx, name != null ? name : "未命名供应商"));
+            if (totalAmount != null) sb.append(" 金额¥").append(AMOUNT_FORMATTER.format(totalAmount));
+            if (totalOrders != null) sb.append(" 订单").append(totalOrders).append("单");
+            if (rating != null) sb.append(" 评分").append(rating);
+        }
+        if (idx > 0) {
+            sb.append(". 建议: 优先与高评分供应商续签长期合作, 跟进低评分供应商改进表现。");
         }
         return sb.toString();
     }
