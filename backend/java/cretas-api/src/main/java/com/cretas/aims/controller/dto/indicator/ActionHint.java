@@ -2,6 +2,8 @@ package com.cretas.aims.controller.dto.indicator;
 
 import io.swagger.v3.oas.annotations.media.Schema;
 
+import java.util.Map;
+
 /**
  * 指标卡片 next-action 提示 — Sprint 12 Phase B step 4 (Issue #265).
  *
@@ -26,4 +28,24 @@ public record ActionHint(
         String label,
         @Schema(description = "前端 router 目标", example = "/sales/orders?status=ACTIVE")
         String route
-) {}
+) {
+
+    /**
+     * 从 indicator.config jsonb 取 actionHint nested 对象 — 列表 + 详情 DTO 共用 (Sprint 12 #265).
+     * 期望 shape: {@code {"actionHint": {"label": "...", "route": "..."}}}.
+     * shape 不符 / 解析异常 / label 空 → 返 null (不抛, 老板不应因 config 错配看不到 KPI).
+     */
+    @SuppressWarnings("unchecked")
+    public static ActionHint fromConfig(Map<String, Object> config) {
+        if (config == null) return null;
+        Object raw = config.get("actionHint");
+        if (!(raw instanceof Map)) return null;
+        Map<String, Object> map = (Map<String, Object>) raw;
+        Object labelObj = map.get("label");
+        Object routeObj = map.get("route");
+        String label = labelObj instanceof String s && !s.isBlank() ? s : null;
+        String route = routeObj instanceof String s && !s.isBlank() ? s : null;
+        if (label == null) return null;   // route 可空 (按钮可只显示)
+        return new ActionHint(label, route);
+    }
+}

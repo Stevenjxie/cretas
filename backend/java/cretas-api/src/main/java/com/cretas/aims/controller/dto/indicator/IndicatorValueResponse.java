@@ -112,28 +112,16 @@ public class IndicatorValueResponse {
     }
 
     /**
-     * 从 indicator.config jsonb 取 actionHint nested 对象.
-     * 期望 shape: {@code {"actionHint": {"label": "...", "route": "..."}}}.
-     * 任何 shape 不符 / 解析异常 → 返 null (不抛错, 老板不应该因为 config 错配看不到 KPI).
+     * 从 indicator.config jsonb 取 actionHint — 委托 {@link ActionHint#fromConfig} (Sprint 12 #265
+     * 列表+详情共用). 异常吞掉返 null (老板不应因 config 错配看不到 KPI).
      */
-    @SuppressWarnings("unchecked")
     static ActionHint extractActionHint(Indicator ind) {
-        if (ind == null || ind.getConfig() == null) return null;
+        if (ind == null) return null;
         try {
-            Object raw = ind.getConfig().get("actionHint");
-            if (!(raw instanceof Map)) return null;
-            Map<String, Object> map = (Map<String, Object>) raw;
-            String label = stringOrNull(map.get("label"));
-            String route = stringOrNull(map.get("route"));
-            if (label == null) return null;   // route 可空 (按钮可以只显示, 后续 wire)
-            return new ActionHint(label, route);
+            return ActionHint.fromConfig(ind.getConfig());
         } catch (Exception ex) {
             log.warn("extractActionHint failed for code={}: {}", ind.getCode(), ex.getMessage());
             return null;
         }
-    }
-
-    static String stringOrNull(Object v) {
-        return v instanceof String s && !s.isBlank() ? s : null;
     }
 }

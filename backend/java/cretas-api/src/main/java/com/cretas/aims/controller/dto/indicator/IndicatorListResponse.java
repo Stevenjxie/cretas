@@ -59,6 +59,13 @@ public class IndicatorListResponse {
     private Boolean isActive;
 
     /**
+     * Sprint 12 #265: KPI 卡片 next-action 提示 (从 config jsonb extract), nullable.
+     * 前端 IndicatorValueCard 渲 next-action button (dead-end → next-action, fool-proof Rule 5).
+     */
+    @Schema(description = "next-action 提示 (可空)")
+    private ActionHint actionHint;
+
+    /**
      * 从实体投影 DTO.
      */
     public static IndicatorListResponse fromEntity(Indicator ind) {
@@ -74,6 +81,7 @@ public class IndicatorListResponse {
                 .lastComputedAt(ind.getLastComputedAt())
                 .displayOrder(ind.getDisplayOrder())
                 .isActive(ind.getIsActive())
+                .actionHint(ActionHint.fromConfig(ind.getConfig()))
                 .build();
     }
 }
