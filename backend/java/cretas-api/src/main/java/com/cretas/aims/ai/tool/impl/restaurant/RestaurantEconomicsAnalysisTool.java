@@ -15,8 +15,11 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * Sprint 11 — Restaurant Economics Composite Tool (MealClaw Response).
@@ -40,6 +43,14 @@ import java.util.Objects;
 @Slf4j
 @Component
 public class RestaurantEconomicsAnalysisTool extends AbstractBusinessTool {
+
+    /**
+     * Absolute "YYYY年M月" / "YYYY-MM" / "YYYY/M月" found ANYWHERE in the NL query
+     * (search, not full-match — the query carries trailing text like "哪个菜亏钱").
+     * Month is constrained to 1-12 to avoid matching unrelated digit runs.
+     */
+    private static final Pattern NL_ABSOLUTE_MONTH = Pattern.compile(
+            "(\\d{4})\\s*[年/\\-]\\s*(1[0-2]|0?[1-9])\\s*月?");
 
     private final RestaurantStorePnlOnePagerTool storePnlTool;
     private final RestaurantShrinkageAnalysisTool shrinkageTool;
@@ -89,6 +100,12 @@ public class RestaurantEconomicsAnalysisTool extends AbstractBusinessTool {
         uploadId.put("description", "数据上传 ID, 可选");
         properties.put("upload_id", uploadId);
 
+        Map<String, Object> month = new HashMap<>();
+        month.put("type", "string");
+        month.put("description", "分析月份, 支持 '上月' / '本月' / 'YYYY-MM' / 'YYYY年M月'. "
+                + "客户问历史月份 (如 '2025年12月哪个菜亏钱') 时必须传该月份, 不传默认 '上月'");
+        properties.put("month", month);
+
         schema.put("properties", properties);
         schema.put("required", Collections.emptyList());
         return schema;
@@ -110,6 +127,18 @@ public class RestaurantEconomicsAnalysisTool extends AbstractBusinessTool {
 
         // Build sub-Tool dispatch params (forward original params to each sub-Tool)
         Map<String, Object> subParams = new HashMap<>(params);
+
+        // Sprint 12 (#302): resolve a single analysis period and forward it to ALL 3
+        // sub-Tools (each reads the "month" param), so a historical query like
+        // "2025年12月哪个菜亏钱" scopes to that month instead of silently defaulting to
+        // 上月. Without this, the composite schema never exposed "month" and
+        // TimeNormalizationRules has no absolute "YYYY年MM月" rule, so the owner asking
+        // about a past month got near-empty current-ish data.
+        String resolvedMonth = resolveCompositeMonth(params);
+        if (resolvedMonth != null) {
+            subParams.put("month", resolvedMonth);
+            log.info("RestaurantEconomicsAnalysisTool: resolved analysis period month='{}'", resolvedMonth);
+        }
 
         // Invoke 3 sub-Tools, collect status per Steve 决策 1 (failures isolated, no fabrication)
         SubToolOutcome pnlOutcome = invokeSubTool(
@@ -180,6 +209,56 @@ public class RestaurantEconomicsAnalysisTool extends AbstractBusinessTool {
         }
 
         return result;
+    }
+
+    /**
+     * Resolve the analysis period (as a "month" label the sub-Tool fetchers understand)
+     * from the available signals, so all 3 sub-Tools scope to the SAME period.
+     * Precedence:
+     * <ol>
+     *   <li>explicit {@code month} param (LLM-extracted from the schema / caller-supplied)</li>
+     *   <li>preprocessed {@code startDate} (ISO {@code yyyy-MM-dd} from TimeNormalization) → {@code yyyy-MM}</li>
+     *   <li>absolute "YYYY年M月" / "YYYY-MM" parsed from the raw NL query ({@code userInput})</li>
+     *   <li>relative "本月" / "上月" mentioned in the NL query</li>
+     * </ol>
+     * Returns {@code null} when no period signal exists — the sub-Tools then apply their
+     * own default ("上月"). The downstream fetchers
+     * ({@code RestaurantFinancialMetricsFetcher} / {@code RestaurantShrinkageDataFetcher})
+     * accept both {@code yyyy-MM} and the "上月"/"本月" labels.
+     */
+    String resolveCompositeMonth(Map<String, Object> params) {
+        if (params == null) {
+            return null;
+        }
+        // 1) Explicit month param wins (LLM extraction via schema, or caller-supplied).
+        Object explicit = params.get("month");
+        if (explicit instanceof String && !((String) explicit).trim().isEmpty()) {
+            return ((String) explicit).trim();
+        }
+        // 2) Preprocessed startDate (ISO yyyy-MM-dd) → yyyy-MM. Set by ToolDispatchService
+        //    step 2.6 when TimeNormalizationRules matched a RELATIVE phrase.
+        Object startDate = params.get("startDate");
+        if (startDate instanceof String && ((String) startDate).length() >= 7) {
+            return ((String) startDate).substring(0, 7);
+        }
+        // 3) Parse the raw NL query for an absolute / relative month reference.
+        Object userInput = params.get("userInput");
+        if (userInput instanceof String) {
+            String q = (String) userInput;
+            Matcher m = NL_ABSOLUTE_MONTH.matcher(q);
+            if (m.find()) {
+                int year = Integer.parseInt(m.group(1));
+                int monthNum = Integer.parseInt(m.group(2));
+                return String.format(Locale.ROOT, "%04d-%02d", year, monthNum);
+            }
+            if (q.contains("本月") || q.contains("这个月") || q.contains("当月")) {
+                return "本月";
+            }
+            if (q.contains("上月") || q.contains("上个月")) {
+                return "上月";
+            }
+        }
+        return null;
     }
 
     /**

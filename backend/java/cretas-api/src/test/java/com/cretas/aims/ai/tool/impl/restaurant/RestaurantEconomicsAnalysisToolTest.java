@@ -9,6 +9,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
@@ -19,6 +20,7 @@ import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
@@ -231,7 +233,83 @@ class RestaurantEconomicsAnalysisToolTest {
         assertThat(evidence).allMatch(e -> e.get("error") != null);
     }
 
+    @Test
+    @DisplayName("UT-REA-06: #302 — NL 'YYYY年M月' query scopes ALL 3 sub-Tools to that month")
+    void nlHistoricalMonth_propagatesMonthToSubTools() throws Exception {
+        when(storePnlTool.getToolName()).thenReturn("restaurant_store_pnl_one_pager");
+        when(shrinkageTool.getToolName()).thenReturn("restaurant_shrinkage_analysis");
+        when(costRigidityTool.getToolName()).thenReturn("restaurant_cost_rigidity_analysis");
+
+        when(storePnlTool.execute(any(ToolCall.class), any()))
+                .thenReturn(buildSuccessJson(Map.of(
+                        "success", true, "section", "store_pnl_one_pager",
+                        "data", Map.of("营收", 1935193),
+                        "warnings", List.of(), "followUpChips", List.of())));
+        when(shrinkageTool.execute(any(ToolCall.class), any()))
+                .thenReturn(buildSuccessJson(Map.of(
+                        "success", true, "section", "shrinkage_analysis",
+                        "data", Map.of("topOffenders", List.of("凉菜档")),
+                        "warnings", List.of(), "followUpChips", List.of())));
+        when(costRigidityTool.execute(any(ToolCall.class), any()))
+                .thenReturn(buildSuccessJson(Map.of(
+                        "success", true, "section", "cost_rigidity",
+                        "data", Map.of("costRigidity", 0.9),
+                        "warnings", List.of(), "followUpChips", List.of())));
+
+        // Owner asks about a historical month — the period must NOT silently fall back to 上月.
+        Map<String, Object> params = new HashMap<>();
+        params.put("userInput", "2025年12月哪个菜亏钱");
+        tool.doExecute(FACTORY_ID, params, ctx());
+
+        // All 3 sub-Tools receive the resolved month=2025-12 in their ToolCall arguments.
+        ArgumentCaptor<ToolCall> pnlCaptor = ArgumentCaptor.forClass(ToolCall.class);
+        ArgumentCaptor<ToolCall> shrinkCaptor = ArgumentCaptor.forClass(ToolCall.class);
+        ArgumentCaptor<ToolCall> costCaptor = ArgumentCaptor.forClass(ToolCall.class);
+        verify(storePnlTool).execute(pnlCaptor.capture(), any());
+        verify(shrinkageTool).execute(shrinkCaptor.capture(), any());
+        verify(costRigidityTool).execute(costCaptor.capture(), any());
+
+        assertThat(monthArg(pnlCaptor)).isEqualTo("2025-12");
+        assertThat(monthArg(shrinkCaptor)).isEqualTo("2025-12");
+        assertThat(monthArg(costCaptor)).isEqualTo("2025-12");
+    }
+
+    @Test
+    @DisplayName("UT-REA-07: #302 — resolveCompositeMonth precedence (param > startDate > NL absolute > NL relative)")
+    void resolveCompositeMonth_precedence() {
+        // explicit month param wins over NL hints
+        assertThat(tool.resolveCompositeMonth(Map.of("month", "2025-03", "userInput", "本月营收")))
+                .isEqualTo("2025-03");
+        // preprocessed startDate ISO → yyyy-MM
+        assertThat(tool.resolveCompositeMonth(Map.of("startDate", "2025-12-01", "userInput", "哪个菜亏钱")))
+                .isEqualTo("2025-12");
+        // NL absolute "YYYY年M月"
+        assertThat(tool.resolveCompositeMonth(Map.of("userInput", "2025年12月哪个菜亏钱")))
+                .isEqualTo("2025-12");
+        // NL absolute "YYYY-MM" embedded mid-sentence
+        assertThat(tool.resolveCompositeMonth(Map.of("userInput", "看一下 2025-12 的损益")))
+                .isEqualTo("2025-12");
+        // single-digit month zero-padded
+        assertThat(tool.resolveCompositeMonth(Map.of("userInput", "2025年3月成本")))
+                .isEqualTo("2025-03");
+        // NL relative
+        assertThat(tool.resolveCompositeMonth(Map.of("userInput", "上月成本分析"))).isEqualTo("上月");
+        assertThat(tool.resolveCompositeMonth(Map.of("userInput", "本月哪个菜亏钱"))).isEqualTo("本月");
+        // no signal → null (sub-Tools then apply their own 上月 default)
+        assertThat(tool.resolveCompositeMonth(Map.of("userInput", "哪个菜亏钱"))).isNull();
+        assertThat(tool.resolveCompositeMonth(Map.of())).isNull();
+        assertThat(tool.resolveCompositeMonth(null)).isNull();
+    }
+
     // ---------- helpers ----------
+
+    /** Parse the captured sub-Tool {@link ToolCall} arguments and return the {@code month} value (or null). */
+    private String monthArg(ArgumentCaptor<ToolCall> captor) throws Exception {
+        ToolCall call = captor.getValue();
+        Map<?, ?> args = objectMapper.readValue(call.getFunction().getArguments(), Map.class);
+        Object month = args.get("month");
+        return month == null ? null : month.toString();
+    }
 
     /**
      * Build the JSON envelope that {@link com.cretas.aims.ai.tool.AbstractTool#buildSuccessResult}
