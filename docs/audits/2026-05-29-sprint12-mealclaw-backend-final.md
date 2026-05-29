@@ -110,15 +110,19 @@ to prove the Phase D orchestrator runs multi-factory, but is NOT copied to creta
 
 ---
 
-## Close-gate (reworded per Steve decisions + data reality)
+## Close-gate (reworded per Steve decisions + data reality) — VERIFIED on prod 2026-05-29
 
-| DOD | Original | Closed as |
+| DOD | Original | Closed as (with prod evidence) |
 |---|---|---|
-| (a) ≥3 factory ETL_REAL ≥30 rows | impossible (data) | **2 factory ≥30** (RES_3101_009 + F001 = 365 each in smartbi_prod_db, `upload_id=0`) **+ 2 present** (R_GML_DEMO / R_XMX_CHAIN = 1, single-day demo) — documented |
-| (b) A.3 integration test + shipdebt doc | ✅ | 4-test Composite integration (`6d52ccb22`) + shipdebt doc (`39a9ce088`) |
-| (c) cache sync + Composite new data | drift-blocked | cache purge wired+tested (`b301454b5`); **COPY RES_3101_009 smartbi→cretas** so Composite shows real ¥-data; F001 skipped (manufacturing precedence); final Composite end-to-end left to **unified verify chat** per Rule 19 |
-| (d) PR merged main + prod deploy + notify organizer | — | (in progress — see below) |
-| (e) MEMORY.md close entry | — | (in progress) |
+| (a) ≥3 factory ETL_REAL ≥30 rows | impossible (data) | **2 factory ≥30** — bulk backfill (jobId `0e024ebe`, range 2025-01-01→2026-12-31) → smartbi_prod_db `upload_id=0`: **RES_3101_009 = 365 REVENUE (¥20,639,885) + 371 COST (¥4.06M)**, **F001 = 365 REVENUE**. **+ 2 present**: R_GML_DEMO = 1, R_XMX_CHAIN = 1 REVENUE + 4 COST (single-day demo POS) — documented |
+| (b) A.3 integration test + shipdebt doc | ✅ | 4-test Composite integration (`6d52ccb22`, 4/4 PASS) + shipdebt doc (`39a9ce088`) |
+| (c) cache sync + Composite new data | drift-blocked | cache purge wired + 7 tests (`b301454b5`); **COPY'd RES_3101_009 REVENUE+COST smartbi→cretas_prod_db** (705 new rows via anti-join, cretas now = 365 REVENUE ¥20.6M + 371 COST ¥4.06M) so Composite shows real complete P&L; F001 NOT copied (manufacturing `uploadId>0` wins `filterToLatestUpload`); `semantic_cache` empty (verified) → Composite reads fresh; final Composite end-to-end left to **unified verify chat** per Rule 19 |
+| (d) PR merged main + prod deploy + notify organizer | — | **PR #291 MERGED main** (squash, 01:26Z); Python prod deployed (8083, Phase D/E live); Java prod deploy (Phase B) in progress; cache/purge endpoint live on prod (401 probe). Notify organizer below. |
+| (e) MEMORY.md close entry | — | (final step) |
+
+### COST_FOOD note (resolves shipdebt 0-row via re-run)
+
+The bulk re-run produced **371 COST rows** for RES_3101_009 (365 食材成本 recipe-COGS ¥4.06M + 6 食材损耗 wastage ¥498) — the shipdebt "0 COST rows" was a prior-run artifact (PR #242 + Phase F.1 COPY only brought REVENUE). Re-running the ETL (shipdebt Step 2, H1/H2/H3 path) resolved the 0-row; both REVENUE + COST were COPY'd to cretas. The **architectural drift fix** (ETL write-target = cretas vs smartbi) remains handed off to Sprint 13 — this is a data-stopgap, not an architecture change.
 
 ---
 
