@@ -580,16 +580,71 @@ public class DynamicToolSelectionService {
         try {
             if (skillResult.getData() instanceof Map) {
                 Map<String, Object> dataMap = (Map<String, Object>) skillResult.getData();
+
+                // Sprint 12: collect sub-tool clean messages + detect all-needMoreInfo composites.
+                // Previously this fell through to writeValueAsString() → raw JSON dump of the
+                // whole map (incl. _toolCount / _executionOrder), leaking through to the user
+                // (quality-chief rd-alert/rd-haccp 1013/293-char _toolCount leaks). Now we NEVER
+                // emit raw JSON: collapse to a clean clarification or join sub-tool messages.
+                List<String> cleanMessages = new ArrayList<>();
+                List<String> clarifications = new ArrayList<>();
+                int subToolCount = 0;
+                int needMoreInfoCount = 0;
+                for (Map.Entry<String, Object> entry : dataMap.entrySet()) {
+                    if (entry.getKey().startsWith("_")) continue;
+                    if (!(entry.getValue() instanceof Map)) continue;
+                    Map<String, Object> toolResult = (Map<String, Object>) entry.getValue();
+                    subToolCount++;
+                    boolean needMoreInfo = Boolean.TRUE.equals(toolResult.get("needMoreInfo"));
+                    if (needMoreInfo) {
+                        needMoreInfoCount++;
+                        Object cq = toolResult.get("clarificationQuestions");
+                        if (cq instanceof List) {
+                            for (Object q : (List<?>) cq) {
+                                if (q != null && !clarifications.contains(q.toString())) {
+                                    clarifications.add(q.toString());
+                                }
+                            }
+                        }
+                    } else {
+                        Object msg = toolResult.get("message");
+                        if (msg != null && !msg.toString().isBlank()) {
+                            cleanMessages.add(msg.toString());
+                        }
+                    }
+                }
+
+                // All sub-tools need clarification → collapse to ONE clean question block.
+                if (subToolCount > 0 && needMoreInfoCount == subToolCount && !clarifications.isEmpty()) {
+                    StringBuilder sb = new StringBuilder("为完成本次查询，还需要您补充以下信息：");
+                    int i = 1;
+                    for (String q : clarifications) {
+                        sb.append("\n").append(i++).append(". ").append(q);
+                    }
+                    sb.append("\n请直接回复对应信息 (如批次号 / 物料 / 时段 / 客户), 我来帮您继续处理。");
+                    return sb.toString();
+                }
+
+                // Otherwise join the clean sub-tool messages (real data).
+                if (!cleanMessages.isEmpty()) {
+                    return String.join("\n", cleanMessages);
+                }
+
+                // Fall back to first available sub-tool message (even if needMoreInfo).
                 for (Map.Entry<String, Object> entry : dataMap.entrySet()) {
                     if (entry.getKey().startsWith("_")) continue;
                     if (entry.getValue() instanceof Map) {
-                        Map<String, Object> toolResult = (Map<String, Object>) entry.getValue();
-                        Object msg = toolResult.get("message");
-                        if (msg != null) return msg.toString();
+                        Object msg = ((Map<String, Object>) entry.getValue()).get("message");
+                        if (msg != null && !msg.toString().isBlank()) return msg.toString();
                     }
                 }
             }
-            return objectMapper.writeValueAsString(skillResult.getData());
+            // NEVER dump raw JSON. Prefer the skill message, else a safe generic (≥80 char).
+            String m = skillResult.getMessage();
+            if (m != null && !m.isEmpty() && !m.startsWith("DAG execution")) {
+                return m;
+            }
+            return "本次查询已完成。详细数据请在对应工作台模块查看。如需更精确的结果, 请补充具体的批次号 / 物料 / 时段 / 客户后重新查询。";
         } catch (Exception e) {
             return skillResult.getMessage();
         }
