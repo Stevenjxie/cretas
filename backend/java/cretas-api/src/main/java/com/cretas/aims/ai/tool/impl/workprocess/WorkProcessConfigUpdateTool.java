@@ -127,22 +127,31 @@ public class WorkProcessConfigUpdateTool extends AbstractBusinessTool {
             String factoryId, Map<String, Object> params, Map<String, Object> context) {
         Resolution resolution = resolve(factoryId, params);
 
-        // 1. 清空现有绑定
+        // 1. 清空现有绑定. 先按 workProcessId 收旧绑定 —— 修 P0-A: REPLACE 不能静默清零
+        //    用户先前配的 unitOverride/estimatedMinutesOverride (违反 fool-proof Rule 1 静默丢数据).
         List<ProductWorkProcess> existing = productWorkProcessRepository
                 .findByFactoryIdAndProductTypeIdOrderByProcessOrderAsc(
                         factoryId, resolution.productTypeId);
+        Map<String, ProductWorkProcess> oldByWorkProcessId = existing.stream()
+                .collect(Collectors.toMap(
+                        ProductWorkProcess::getWorkProcessId,
+                        pwp -> pwp,
+                        (a, b) -> a));
         for (ProductWorkProcess pwp : existing) {
             productWorkProcessService.delete(factoryId, pwp.getId());
         }
 
-        // 2. 按列表顺序新建
+        // 2. 按列表顺序新建. 若同 workProcessId 命中旧绑定, carry-over override (P0-A).
         List<ProductWorkProcessDTO> created = new ArrayList<>();
         for (int i = 0; i < resolution.workProcesses.size(); i++) {
             WorkProcess wp = resolution.workProcesses.get(i);
+            ProductWorkProcess old = oldByWorkProcessId.get(wp.getId());
             ProductWorkProcessDTO dto = ProductWorkProcessDTO.builder()
                     .productTypeId(resolution.productTypeId)
                     .workProcessId(wp.getId())
                     .processOrder(i)
+                    .unitOverride(old != null ? old.getUnitOverride() : null)
+                    .estimatedMinutesOverride(old != null ? old.getEstimatedMinutesOverride() : null)
                     .isActive(true)
                     .build();
             created.add(productWorkProcessService.create(factoryId, dto));
