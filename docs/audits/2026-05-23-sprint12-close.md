@@ -8,21 +8,33 @@
 
 ## TL;DR (FINAL, post-PR #299 — clean verified re-audit)
 
-**Sprint 12 final combined strict: 93.3% (112/120) — close-gate ≥80% PASS, reopen-trigger ≥89% EXCEEDED.**
+**Sprint 12 final combined strict: 97.5% (117/120) — close-gate ≥80% PASS, reopen-trigger ≥89% EXCEEDED.**
 
-Clean 120-path audit (run `20260529_102033` + `20260529_102046_data`, 0 HTTP-502, 0 rate-limited after sequential reruns) on the post-cache-fix jar with all 7 session PRs live:
+Clean 120-path audit (run `20260529_125055_post308` + `..._data`, **0 None / 0 empty / 0 retries / 0 HTTP-502** — fully sequential robust runner `runner-combined-robust.sh`, 16s spacing, jar mtime 12:28:40 / NRestarts=0 throughout) on the post-#308 jar with all follow-up PRs (#301/#303/#308) live:
 
 | Workdesk | Baseline 60 | Real-data 60 | Combined 120 |
 |---|---:|---:|---:|
 | sales-owner | 100% | 100% | **100%** (20/20) |
-| finance-manager | 80% | 100% | **90%** (18/20) |
+| finance-manager | 100% | 100% | **100%** (20/20) |
 | quality-manager | 100% | 100% | **100%** (20/20) |
 | warehouse-keeper | 100% | 90% | **95%** (19/20) |
 | purchaser | 100% | 100% | **100%** (20/20) |
-| quality-chief | 80% | 70% | **75%** (15/20) |
-| **TOTAL** | | | **93.3%** (112/120) ✅ |
+| quality-chief | 100% | 80% | **90%** (18/20) |
+| **TOTAL** | | | **97.5%** (117/120) ✅ |
 
-Strict progression: 58% → 80% (#239) → 80.8% (#252) → 83.3% (#272) → 89.2% (#283) → 87.5% (#289) → **93.3% (#299)**.
+Strict progression: 58% → 80% (#239) → 80.8% (#252) → 83.3% (#272) → 89.2% (#283) → 87.5% (#289) → 93.3% (#299) → **97.5% (#301/#303/#308)**.
+
+**Core deliverable "WorkdeskOutputSummarizer clean: 0 `_toolCount` / 0 underscore / 0 raw-JSON" = 100% across all 120 paths** (the leak that capped quality-chief at 75% is fully eliminated). 4/6 Workdesks at 100%, all ≥90%.
+
+### The 3 remaining strict fails (2.5%) — precisely characterized, all real-data category
+
+| Path | Input | Outcome | Class |
+|---|---|---|---|
+| quality-chief rd-deviation | "本月偏差报告数量" | misrouted to trend-analysis tool → English-key terse output (`materialTrend: 0条`, <20 Chinese chars) | misroute + formatter |
+| quality-chief rd-quarter | "本季度放行通过率" | misrouted to 执行审批操作 (approval WRITE asking for workflow UUID) — a read analytics query sent to a write tool | misroute |
+| warehouse-keeper rd-inventory | "原料 **X** 当前库存量" | "X" is a literal test placeholder (no such material) → legitimate no-match → status=FAILED with a correct 4-element error | synthetic-input edge |
+
+#2 and #1 are genuine routing bugs (read query → wrong tool); #3 is a test-artifact placeholder. None are the leak. Routing-fix attempt for #1/#2 below.
 
 ### This session (post-#284) — sister cache-fix merge + 7 Canvas PRs
 
