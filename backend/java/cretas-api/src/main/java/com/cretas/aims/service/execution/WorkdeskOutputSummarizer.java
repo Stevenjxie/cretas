@@ -93,16 +93,32 @@ public class WorkdeskOutputSummarizer {
         }
 
         String summary = tryLlmSummarize(resultData, response);
+        // Sprint 12 fix: the LLM can echo the raw resultData back (incl. underscore
+        // metadata keys / JSON braces), producing a summary that is ITSELF dirty.
+        // Previously we accepted any non-blank LLM summary, so a dirty LLM output
+        // replaced the dirty original → _toolCount / _executionOrder still leaked
+        // (2637-char finance composite, 1013-char quality-chief composite). Now we
+        // re-validate and fall through to the deterministic (guaranteed-clean) path.
+        if (summary != null && !summary.isBlank() && isDirty(summary)) {
+            log.warn("WorkdeskOutputSummarizer: LLM summary still dirty ({} chars) — discarding, using deterministic fallback",
+                    summary.length());
+            summary = null;
+        }
         if (summary == null || summary.isBlank()) {
-            // LLM unavailable (DashScope quota / network / timeout) — degrade gracefully
-            // to a deterministic Java-side strip-and-template summary instead of keeping
-            // dirty _toolCount / raw-JSON text. Better than nothing for B-end users.
+            // LLM unavailable (DashScope quota / network / timeout) OR returned dirty —
+            // degrade gracefully to a deterministic Java-side strip-and-template summary
+            // instead of keeping dirty _toolCount / raw-JSON text.
             summary = buildDeterministicFallback(resultData, response);
+            // Defensive: if even the deterministic fallback is somehow dirty, hard-strip
+            // underscore-key JSON fragments so the user never sees raw metadata.
+            if (summary != null && isDirty(summary)) {
+                summary = hardStripDirty(summary);
+            }
             if (summary == null || summary.isBlank()) {
                 log.debug("WorkdeskOutputSummarizer: LLM unavailable AND fallback empty; keeping existing template");
                 return;
             }
-            log.info("WorkdeskOutputSummarizer: LLM unavailable, applied deterministic fallback ({} chars)", summary.length());
+            log.info("WorkdeskOutputSummarizer: applied deterministic fallback ({} chars)", summary.length());
         }
 
         if (ftDirty) {
@@ -189,6 +205,30 @@ public class WorkdeskOutputSummarizer {
         String s = value.toString();
         if (s.length() > 100) s = s.substring(0, 100) + "...";
         return s;
+    }
+
+    /**
+     * Sprint 12 last-resort cleaner — strips raw-JSON / underscore-key fragments
+     * so the user never sees metadata leaks even if both LLM and deterministic
+     * fallback failed to produce clean text. Removes JSON-object fragments and
+     * underscore-prefixed key:value pairs, collapses whitespace, and if nothing
+     * usable remains returns a safe generic Chinese message.
+     */
+    String hardStripDirty(String text) {
+        if (text == null) return null;
+        String cleaned = text
+                // drop "_key": value, fragments (underscore metadata)
+                .replaceAll("\"_[a-zA-Z][a-zA-Z0-9]*\"\\s*:\\s*[^,}\\n]+,?", "")
+                // drop residual JSON braces/brackets
+                .replaceAll("[{}\\[\\]]", "")
+                // drop bare "key": leftovers
+                .replaceAll("\"[a-zA-Z_][a-zA-Z0-9_]*\"\\s*:", "")
+                .replaceAll("\\s+", " ")
+                .trim();
+        if (cleaned.length() < MIN_USEFUL_CHARS || isDirty(cleaned)) {
+            return "本次查询已完成，但结果格式化遇到问题。建议: 1. 重新发起查询; 2. 换用更具体的描述 (指定时段 / 物料 / 客户); 3. 如持续出现请联系管理员检查该功能配置。";
+        }
+        return cleaned;
     }
 
     /**
