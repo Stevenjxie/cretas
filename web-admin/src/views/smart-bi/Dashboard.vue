@@ -183,6 +183,9 @@ const kpiData = computed(() => {
     return {
       totalRevenue: goldRev.rawValue ?? null,
       revenueGrowth: null as number | null,
+      // 用后端 KPICard title (「总营收」) 而非模板默认「本月销售额」—— 餐厅默认全量
+      // 区间下「本月」措辞不准 (May 29 2026, Gold 分支原先漏设此 label)。
+      revenueLabel: goldRev.title ?? '营业额',
       totalProfit: goldAvg.rawValue ?? null,
       profitGrowth: null as number | null,
       profitLabel: '客单价',
