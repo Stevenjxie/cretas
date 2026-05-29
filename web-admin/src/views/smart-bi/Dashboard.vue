@@ -15,6 +15,7 @@ import {
   type UploadHistoryItem,
   type DynamicAnalysisResponse,
 } from '@/api/smartbi';
+import { getGoldDataRange } from '@/api/smartbi/dataRange';
 import { ElMessage } from 'element-plus';
 import {
   TrendCharts,
@@ -696,6 +697,30 @@ onMounted(async () => {
       return;
     }
     // Remembered upload no longer exists — fall through to default
+  }
+
+  // 餐饮业态默认全量出图 (May 29 2026):
+  // 制造业的 period=month 默认对餐饮无意义 — 餐厅历史营收数据沉淀在过去月份
+  // (e.g. 青花椒全年 2025 数据), 本月 (2026-05) 无新数据 → KPI 全 0 + 空趋势图。
+  // 无记忆区间时, 探测 Gold (agg_daily) 真实数据区间 [min,max], 默认显示全部
+  // 已有数据, 而非空的当月。这样餐饮老板登录即见全量图表, 不需先上传/选时间。
+  // 业态门控: 仅 RESTAURANT 启用, FACTORY 保持 period=month 现状, 不回归。
+  if (isRestaurantTenant.value && factoryId.value) {
+    try {
+      const dr = await getGoldDataRange(factoryId.value);
+      if (dr.minDate && dr.maxDate) {
+        // 设 dateRange → 走 /executive/custom 全量区间 + 日期选择器 (v-model=dateRange)
+        // 直接显示 "2025-01-01 至 2025-12-31", 用户一眼看到默认区间 (防呆透明)。
+        dateRange.value = [dr.minDate, dr.maxDate];
+        selectedDataSource.value = 'system';
+        await loadDashboardData();
+        return;
+      }
+      // dr 为空 (该餐厅 Gold 尚无数据) → 落到下方默认, 现有 fallback ladder +
+      // 空状态 CTA (上传引导) 处理, 不伪造区间。
+    } catch {
+      // 探测失败 (网络/后端) → 不阻塞, 落到下方默认 period=month + ladder。
+    }
   }
 
   // Default to system data

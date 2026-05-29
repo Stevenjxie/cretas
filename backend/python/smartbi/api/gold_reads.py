@@ -25,6 +25,7 @@ from smartbi.config import get_pg_pool
 from smartbi.gold import (
     channel_breakdown,
     daily_trend,
+    data_range,
     discount_breakdown,
     finance_summary,
     kpi_summary,
@@ -447,4 +448,23 @@ async def get_kpi_summary(
         return _apply_rbac_strip(result, _get_role(request))
     except Exception as e:
         logger.exception("kpi-summary failed: %s", e)
+        raise HTTPException(status_code=500, detail=f"Gold query failed: {e}")
+
+
+@router.get("/data-range")
+async def get_data_range(
+    request: Request,
+    factory_id: Optional[str] = Query(None),
+):
+    """Actual [min,max] date span of a factory's Gold data (agg_daily).
+
+    Dashboard uses this to default a restaurant tenant's date picker to its
+    real data window instead of the empty current month. No money fields →
+    no RBAC strip needed."""
+    fid = _resolve_tenant(factory_id)
+    pool = await get_pg_pool()
+    try:
+        return await data_range(pool, fid)
+    except Exception as e:
+        logger.exception("data-range failed: %s", e)
         raise HTTPException(status_code=500, detail=f"Gold query failed: {e}")

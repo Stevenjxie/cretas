@@ -361,6 +361,39 @@ async def kpi_summary(
     }
 
 
+async def data_range(
+    pool: asyncpg.Pool,
+    factory_id: str,
+) -> Dict[str, Any]:
+    """Actual date span of a factory's materialized Gold data (agg_daily).
+
+    Lets the dashboard default a restaurant tenant's date picker to its real
+    data window (e.g. 2025-01-01 ~ 2025-12-31) instead of the empty current
+    month. Returns null dates when the factory has no Gold rows yet — an
+    honest empty, never a fabricated range (no-fake-data rule).
+    """
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT
+              MIN(date)            AS min_date,
+              MAX(date)            AS max_date,
+              COUNT(DISTINCT date) AS day_count
+            FROM agg_daily
+            WHERE factory_id = $1
+            """,
+            factory_id,
+        )
+    min_date = row["min_date"] if row else None
+    max_date = row["max_date"] if row else None
+    return {
+        "factory_id": factory_id,
+        "min_date": min_date.isoformat() if min_date else None,
+        "max_date": max_date.isoformat() if max_date else None,
+        "day_count": int(row["day_count"]) if row and row["day_count"] else 0,
+    }
+
+
 async def finance_summary(
     pool: asyncpg.Pool,
     factory_id: str,
