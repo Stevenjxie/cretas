@@ -8,7 +8,7 @@
 - topItems       — shrinkage_analysis 档口损溢 Top-N 异常品 (含 source + dataAvailable + data | message)
 - recommendations — cost_rigidity 成本刚性建议 (含 source + dataAvailable + data | message)
 - evidence       — sub-Tool 警告 + 章节诊断证据列表
-- dataAvailable  — 顶层全可用标志 (true = 3 维度全可用, false = ≥1 不可用)
+- dataAvailable  — 顶层可用标志 (Sprint 13 S13-001 起: true = ≥1 维度有数据, false = 3 维度全部无数据). 是否"全部可用"请逐一看各 section 的 dataAvailable, 不要仅凭顶层 true 就说"3 项全部完成".
 
 # ⛔ 严格规则 (per brief §2.5 决策 1+2)
 
