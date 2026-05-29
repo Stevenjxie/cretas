@@ -34,7 +34,15 @@ Strict progression: 58% → 80% (#239) → 80.8% (#252) → 83.3% (#272) → 89.
 | quality-chief rd-quarter | "本季度放行通过率" | misrouted to 执行审批操作 (approval WRITE asking for workflow UUID) — a read analytics query sent to a write tool | misroute |
 | warehouse-keeper rd-inventory | "原料 **X** 当前库存量" | "X" is a literal test placeholder (no such material) → legitimate no-match → status=FAILED with a correct 4-element error | synthetic-input edge |
 
-#2 and #1 are genuine routing bugs (read query → wrong tool); #3 is a test-artifact placeholder. None are the leak. Routing-fix attempt for #1/#2 below.
+#2 and #1 are genuine routing bugs (read query → wrong tool); #3 is a test-artifact placeholder. None are the leak.
+
+**Routing-fix investigation (#1/#2) — target tools identified, fix deferred (deploy unsafe under active concurrency):**
+
+- **#2 "本季度放行通过率"** → should route to `QualityStatsQueryTool` / `QualityDispositionEvaluateTool` (pass-rate / disposition read), NOT 执行审批操作 (workflow approval WRITE). Fix = additive `IntentKnowledgeBase` phrase shortcut `放行通过率 / 本季度放行通过率 → QUALITY_STATS_QUERY` (same pattern as #294). On F006 this read tool returns a ≥20-Chinese-char stats report (or the gate-passing "当前暂无质检统计数据…" empty-state), flipping FAIL→PASS.
+- **#1 "本月偏差报告数量"** → misrouted to generic trend-analysis (English-key terse). Fix = phrase shortcut `偏差报告数量 / 本月偏差 → QUALITY_STATS_QUERY` (deviation count) OR Chinese-label the trend formatter (`materialTrend→物料趋势`, `productionTrend→生产趋势`, ≥20 Chinese chars).
+- **#3** is correct behavior (no material named "X" → FAILED + 4-element error); only a synthetic test input would hit it.
+
+These are 1-line additive shortcuts (very low code risk), but **deploying them now is unsafe**: the shared test jar (47:10011) is being continuously swapped by concurrent sister-chat audits, and a deploy would (a) interrupt their in-flight runs and (b) risk the documented fixed-R2-path last-write-wins jar collision. Estimated post-fix ceiling = **99.2% (119/120)** (only the synthetic-X edge remains). Carried to Sprint 13 as a precise, ready-to-apply routing item — not a vague backlog entry.
 
 ### This session (post-#284) — sister cache-fix merge + 7 Canvas PRs
 
