@@ -151,10 +151,23 @@ public class RestaurantEconomicsAnalysisTool extends AbstractBusinessTool {
         // Compose final result (Map structure, LLM-friendly)
         Map<String, Object> result = new LinkedHashMap<>();
 
+        // Sprint 13 (S13-001): top-level dataAvailable reflects PARTIAL availability per
+        // Steve 决策 1 ("失败 sub-Tool 不进 narrative; 其他维度照说"). Previously this was
+        // pnl && shrinkage && costRigidity, so a single scoped-out sub-Tool (e.g.
+        // cost_rigidity has no data for the period) forced the WHOLE result to
+        // dataAvailable=false — a consumer keying on the top-level flag would then hide the
+        // ¥ P&L even though financial/shrinkage data existed. Now: ANY dimension with data
+        // → dataAvailable=true; failed dimensions stay marked unavailable in their own
+        // section + listed in the message, without dragging the whole result down.
+        // (allDataAvailable retained for the message branch so the verified partial-
+        // degradation template stays byte-identical.)
         boolean allDataAvailable = pnlOutcome.dataAvailable
                 && shrinkageOutcome.dataAvailable
                 && costRigidityOutcome.dataAvailable;
-        result.put("dataAvailable", allDataAvailable);
+        boolean anyDataAvailable = pnlOutcome.dataAvailable
+                || shrinkageOutcome.dataAvailable
+                || costRigidityOutcome.dataAvailable;
+        result.put("dataAvailable", anyDataAvailable);
 
         // summary — from store_pnl_one_pager (if available)
         Map<String, Object> summary = new LinkedHashMap<>();
@@ -196,8 +209,16 @@ public class RestaurantEconomicsAnalysisTool extends AbstractBusinessTool {
         addEvidence(evidence, "cost_rigidity", costRigidityOutcome);
         result.put("evidence", evidence);
 
-        // Top-level message (LLM hint)
-        if (!allDataAvailable) {
+        // Top-level message (LLM hint). Three cases:
+        //  - all available  → 全维度可用
+        //  - partial (some) → 部分数据不可用 (byte-identical to the pre-S13-001 template,
+        //                     which the Sprint-12 verify report matched char-for-char) —
+        //                     analysis IS produced from the available dimensions.
+        //  - none available → 均无数据 (distinct from partial; dataAvailable is now false
+        //                     only in this case).
+        if (allDataAvailable) {
+            result.put("message", "餐厅经营分析完成: 损益 + 找根因 + 建议 全维度可用.");
+        } else if (anyDataAvailable) {
             List<String> failed = new ArrayList<>();
             if (!pnlOutcome.dataAvailable) failed.add("P&L 一页纸");
             if (!shrinkageOutcome.dataAvailable) failed.add("档口损溢");
@@ -205,7 +226,7 @@ public class RestaurantEconomicsAnalysisTool extends AbstractBusinessTool {
             result.put("message", "部分数据不可用: " + String.join(" / ", failed)
                     + ". 已基于可用数据生成分析, 不可用部分需明确标注.");
         } else {
-            result.put("message", "餐厅经营分析完成: 损益 + 找根因 + 建议 全维度可用.");
+            result.put("message", "餐厅经营分析数据暂不可用: 损益 / 档口损溢 / 成本刚性 均无数据.");
         }
 
         return result;

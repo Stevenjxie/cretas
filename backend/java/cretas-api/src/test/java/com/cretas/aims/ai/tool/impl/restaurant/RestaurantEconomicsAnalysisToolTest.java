@@ -30,9 +30,11 @@ import static org.mockito.Mockito.when;
  * <ul>
  *   <li>Metadata (toolName / description)</li>
  *   <li>Happy path: all 3 sub-Tools succeed → dataAvailable=true + full evidence</li>
- *   <li>Steve 决策 1 (failure isolation): each sub-Tool can fail independently
- *       → dataAvailable=false + message contains "数据获取失败"</li>
- *   <li>Partial failure: 1 sub-Tool fails → others still produce data, evidence captures error</li>
+ *   <li>Steve 决策 1 (failure isolation): each sub-Tool can fail independently; its data
+ *       does NOT enter the narrative + message marks "X 数据获取失败"</li>
+ *   <li>Sprint 13 (S13-001) partial-available: ≥1 sub-Tool has data → top-level
+ *       dataAvailable=true (per-section flags still reflect each sub-Tool); only ALL-fail
+ *       → dataAvailable=false</li>
  *   <li>Throw path: sub-Tool throws Exception → caught, not propagated</li>
  * </ul>
  */
@@ -121,8 +123,8 @@ class RestaurantEconomicsAnalysisToolTest {
     }
 
     @Test
-    @DisplayName("UT-REA-03: Steve 决策 1 — store_pnl 失败 → top dataAvailable=false + 失败标注")
-    void storePnlFails_dataAvailableFalse() throws Exception {
+    @DisplayName("UT-REA-03: S13-001 — store_pnl 失败 + 其他有数据 → top dataAvailable=true (partial) + 失败标注")
+    void storePnlFails_partialAvailable() throws Exception {
         when(storePnlTool.getToolName()).thenReturn("restaurant_store_pnl_one_pager");
         when(shrinkageTool.getToolName()).thenReturn("restaurant_shrinkage_analysis");
         when(costRigidityTool.getToolName()).thenReturn("restaurant_cost_rigidity_analysis");
@@ -149,10 +151,12 @@ class RestaurantEconomicsAnalysisToolTest {
 
         Map<String, Object> result = tool.doExecute(FACTORY_ID, Map.of(), ctx());
 
-        // Top-level dataAvailable should be false (one sub-Tool failed)
-        assertThat(result).containsEntry("dataAvailable", false);
+        // Sprint 13 (S13-001): one sub-Tool failing does NOT drag top-level dataAvailable
+        // to false when other dimensions have data (partial-available per Steve 决策 1).
+        // Pre-S13-001 this asserted false — the bug that hid the whole ¥ P&L.
+        assertThat(result).containsEntry("dataAvailable", true);
 
-        // summary should mark dataAvailable=false + carry message
+        // summary (store_pnl) still marks dataAvailable=false + carries its failure message
         Map<?, ?> summary = (Map<?, ?>) result.get("summary");
         assertThat(summary.get("dataAvailable")).isEqualTo(false);
         assertThat(summary.get("message").toString()).contains("P&L 一页纸数据获取失败");
@@ -172,8 +176,8 @@ class RestaurantEconomicsAnalysisToolTest {
     }
 
     @Test
-    @DisplayName("UT-REA-04: shrinkage throws Exception → caught + dataAvailable=false + others continue")
-    void shrinkageThrows_dataAvailableFalse() throws Exception {
+    @DisplayName("UT-REA-04: shrinkage throws Exception → caught + partial dataAvailable=true + others continue")
+    void shrinkageThrows_partialAvailable() throws Exception {
         when(storePnlTool.getToolName()).thenReturn("restaurant_store_pnl_one_pager");
         when(shrinkageTool.getToolName()).thenReturn("restaurant_shrinkage_analysis");
         when(costRigidityTool.getToolName()).thenReturn("restaurant_cost_rigidity_analysis");
@@ -193,7 +197,9 @@ class RestaurantEconomicsAnalysisToolTest {
 
         Map<String, Object> result = tool.doExecute(FACTORY_ID, Map.of(), ctx());
 
-        assertThat(result).containsEntry("dataAvailable", false);
+        // Sprint 13 (S13-001): shrinkage throwing does NOT drag top-level to false —
+        // store + cost_rigidity have data → partial-available.
+        assertThat(result).containsEntry("dataAvailable", true);
 
         Map<?, ?> topItems = (Map<?, ?>) result.get("topItems");
         assertThat(topItems.get("dataAvailable")).isEqualTo(false);
@@ -207,7 +213,7 @@ class RestaurantEconomicsAnalysisToolTest {
     }
 
     @Test
-    @DisplayName("UT-REA-05: all 3 sub-Tools fail → dataAvailable=false + 3 failure markers in evidence")
+    @DisplayName("UT-REA-05: S13-001 — ALL 3 sub-Tools fail → dataAvailable=false + 均无数据 + 3 failure markers")
     void allSubToolsFail() throws Exception {
         when(storePnlTool.getToolName()).thenReturn("restaurant_store_pnl_one_pager");
         when(shrinkageTool.getToolName()).thenReturn("restaurant_shrinkage_analysis");
@@ -224,13 +230,49 @@ class RestaurantEconomicsAnalysisToolTest {
 
         Map<String, Object> result = tool.doExecute(FACTORY_ID, Map.of(), ctx());
 
+        // Only when ALL dimensions fail is top-level dataAvailable false (S13-001).
         assertThat(result).containsEntry("dataAvailable", false);
+        assertThat(result.get("message").toString()).contains("均无数据");
 
         @SuppressWarnings("unchecked")
         List<Map<String, Object>> evidence = (List<Map<String, Object>>) result.get("evidence");
         assertThat(evidence).hasSize(3);
         assertThat(evidence).allMatch(e -> Boolean.FALSE.equals(e.get("dataAvailable")));
         assertThat(evidence).allMatch(e -> e.get("error") != null);
+    }
+
+    @Test
+    @DisplayName("UT-REA-08: S13-001 prod case — only store_pnl has data (financial only) → top dataAvailable=true")
+    void onlyStorePnlAvailable_partialDataAvailableTrue() throws Exception {
+        // Real RES_3101_009 2025-12 prod scenario: financial P&L available (¥1.94M revenue)
+        // but shrinkage + cost_rigidity scoped out. Top-level MUST be true so a consumer
+        // keying on it does not hide the ¥ P&L (the S13-001 bug).
+        when(storePnlTool.getToolName()).thenReturn("restaurant_store_pnl_one_pager");
+        when(shrinkageTool.getToolName()).thenReturn("restaurant_shrinkage_analysis");
+        when(costRigidityTool.getToolName()).thenReturn("restaurant_cost_rigidity_analysis");
+
+        when(storePnlTool.execute(any(ToolCall.class), any()))
+                .thenReturn(buildSuccessJson(Map.of(
+                        "success", true, "section", "store_pnl_one_pager",
+                        "data", Map.of("headline", "本店盈利 ¥1,541,082", "营收", 1935193),
+                        "warnings", List.of(), "followUpChips", List.of())));
+        when(shrinkageTool.execute(any(ToolCall.class), any()))
+                .thenReturn(buildSuccessJson(Map.of(
+                        "success", false, "message", "档口损溢数据不足")));
+        when(costRigidityTool.execute(any(ToolCall.class), any()))
+                .thenReturn(buildSuccessJson(Map.of(
+                        "success", false, "message", "成本刚性数据不足")));
+
+        Map<String, Object> result = tool.doExecute(FACTORY_ID, Map.of(), ctx());
+
+        // Partial available: top-level true, summary (the ¥ P&L) true, failed dims listed.
+        assertThat(result).containsEntry("dataAvailable", true);
+        Map<?, ?> summary = (Map<?, ?>) result.get("summary");
+        assertThat(summary.get("dataAvailable")).isEqualTo(true);
+        assertThat(result.get("message").toString())
+                .contains("部分数据不可用")
+                .contains("档口损溢")
+                .contains("成本刚性");
     }
 
     @Test
