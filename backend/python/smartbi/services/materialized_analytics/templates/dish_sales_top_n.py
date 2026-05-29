@@ -15,7 +15,7 @@ from smartbi.capability.contract import RequiresSpec
 
 from ..compute.base import ComputeBackend
 from ..restaurant.action_rec_formatter import format_action_rec
-from ..restaurant.dish_classifier import classify_dish
+from ..restaurant.dish_classifier import is_staple_or_surcharge
 from ..restaurant.dish_name_normalizer import normalize_dish_name
 from ..restaurant.item_parser import parse_items
 from ..schema import DataSchema, Domain
@@ -24,12 +24,6 @@ from .registry import register
 
 _TOP_N = 20
 _SAMPLE_ROWS = 500_000
-
-# May 30 2026: staples/surcharge items distort the "畅销菜品" ranking — 米饭/
-# 面/打包盒/餐位费 sell in huge volume but are not menu dishes a chef would
-# promote. Exclude these inferred categories from the Top-N so the ranking
-# surfaces real signature dishes (招牌青花椒鱼 etc.) instead of 米饭.
-_EXCLUDED_CATEGORIES = ("主食", "调料/附加")
 
 
 @register
@@ -85,10 +79,11 @@ class DishSalesTopN(AnalysisTemplate):
                 # into the parent dish name so the Top-N ranking treats
                 # 招牌青花椒鱼(一吃) and 招牌青花椒鱼(二吃) as one dish.
                 name = normalize_dish_name(item["name"])
-                # May 30 2026: drop staples (米饭/面/粉) + surcharge items
-                # (打包盒/餐位费) — they swamp the畅销ranking but aren't菜品.
-                category = classify_dish(name, item.get("is_signature", False))
-                if category in _EXCLUDED_CATEGORIES:
+                # May 30 2026: drop staples (米饭/面/粉/扬州炒饭/牛肉面) + surcharge
+                # items (打包盒/餐位费) — they swamp the 畅销 ranking but aren't
+                # 菜品 a chef would promote. is_staple_or_surcharge does a
+                # staple-FIRST scan so protein-named noodles (牛肉面) are caught.
+                if is_staple_or_surcharge(name):
                     excluded_count += 1
                     continue
                 qty_counter[name] += item["quantity"]

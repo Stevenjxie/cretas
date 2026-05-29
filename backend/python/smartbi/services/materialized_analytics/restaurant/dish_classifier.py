@@ -39,3 +39,29 @@ def classify_dish(name: str, is_signature: bool = False) -> str:
 def get_categories() -> List[str]:
     """All known categories in display order."""
     return list(_DEFAULT_CATEGORIES.keys()) + ["其他"]
+
+
+# May 30 2026: dedicated staple/surcharge check for the 畅销菜品 Top-N filter.
+# classify_dish() puts 主菜 (含 牛肉/鸡肉…) BEFORE 主食, so 牛肉面/鸡丝凉面 would
+# be mis-categorised as 主菜 and slip past a category-based exclusion. This
+# helper does a STAPLE-FIRST keyword scan so noodle/rice dishes that contain a
+# protein word are still recognised as staples. It does NOT alter classify_dish
+# (dish_category_breakdown keeps its existing 主菜-first semantics).
+_STAPLE_KEYWORDS = _DEFAULT_CATEGORIES["主食"]            # 饭/面/粉/饼/米线/...
+_SURCHARGE_KEYWORDS = _DEFAULT_CATEGORIES["调料/附加"]     # 打包盒/餐位费/外卖包装费
+
+
+def is_staple_or_surcharge(name: str) -> bool:
+    """True if a dish is a staple (米饭/面/粉/...) or a surcharge/packaging item.
+
+    Used to drop non-菜品 entries from the 畅销菜品 Top-N ranking. Staple match
+    is checked directly (not via classify_dish) so 牛肉面/扬州炒饭 are caught even
+    though they contain a protein keyword.
+    """
+    if not name:
+        return False
+    if any(kw in name for kw in _SURCHARGE_KEYWORDS):
+        return True
+    if any(kw in name for kw in _STAPLE_KEYWORDS):
+        return True
+    return False
