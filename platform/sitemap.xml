@@ -3,56 +3,40 @@
   <!-- 首页 -->
   <url>
     <loc>https://cretaceousfuture.com/</loc>
-    <lastmod>2026-01-26</lastmod>
+    <lastmod>2026-05-30</lastmod>
     <changefreq>weekly</changefreq>
     <priority>1.0</priority>
   </url>
 
-  <!-- SmartBI 智能分析 -->
+  <!-- 餐饮经营演示 -->
   <url>
-    <loc>https://cretaceousfuture.com/ai-bi.html</loc>
-    <lastmod>2026-01-26</lastmod>
-    <changefreq>monthly</changefreq>
-    <priority>0.9</priority>
-  </url>
-
-  <!-- 实时驾驶舱演示 -->
-  <url>
-    <loc>https://cretaceousfuture.com/dashboard.html</loc>
-    <lastmod>2026-01-26</lastmod>
+    <loc>https://cretaceousfuture.com/restaurantbi-example/</loc>
+    <lastmod>2026-05-30</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
   </url>
 
-  <!-- AI 调度系统 -->
+  <!-- 工厂生产演示 -->
   <url>
-    <loc>https://cretaceousfuture.com/ai-scheduling.html</loc>
-    <lastmod>2026-01-26</lastmod>
+    <loc>https://cretaceousfuture.com/factorybi-example/</loc>
+    <lastmod>2026-05-30</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
   </url>
 
-  <!-- AI 校准系统 -->
+  <!-- 预约演示 / 商务合作 -->
   <url>
-    <loc>https://cretaceousfuture.com/ai-calibration.html</loc>
-    <lastmod>2026-01-26</lastmod>
-    <changefreq>monthly</changefreq>
-    <priority>0.8</priority>
-  </url>
-
-  <!-- AI 意图引擎 -->
-  <url>
-    <loc>https://cretaceousfuture.com/ai-intent/</loc>
-    <lastmod>2026-01-26</lastmod>
-    <changefreq>monthly</changefreq>
-    <priority>0.8</priority>
-  </url>
-
-  <!-- AI 架构介绍 -->
-  <url>
-    <loc>https://cretaceousfuture.com/ai-architecture/</loc>
-    <lastmod>2026-01-26</lastmod>
+    <loc>https://cretaceousfuture.com/client-request/</loc>
+    <lastmod>2026-05-30</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.7</priority>
+  </url>
+
+  <!-- 隐私政策 -->
+  <url>
+    <loc>https://cretaceousfuture.com/privacy.html</loc>
+    <lastmod>2026-05-30</lastmod>
+    <changefreq>yearly</changefreq>
+    <priority>0.3</priority>
   </url>
 </urlset>
