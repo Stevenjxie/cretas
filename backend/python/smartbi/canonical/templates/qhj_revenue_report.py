@@ -70,15 +70,20 @@ def _pct_ratio(curr, prev) -> Optional[float]:
 class RevenueReportParams:
     """Inputs for compute_qhj_revenue_report.
 
-    Spec §6.1. include_yoy is hardcoded False first phase (§11.2);
-    Phase 2 will populate after 2024 historical data is loaded.
+    Spec §6.1. include_yoy was hardcoded False first phase (§11.2) because
+    only one year of data existed. As of 2026-05-30 both 2025 (full) and
+    2026 data are loaded, so YoY (报表区间的前一年同期) is enabled by default.
+    Block 1 compares against the SAME calendar range shifted back one year:
+      2026-Q1 report → prev = 2025-Q1; 2025-Q1 report → prev = 2024-Q1.
+    When the prev-year range has no data (e.g. 2024 not loaded), the LEFT
+    JOIN yields total=0 → _pct_ratio returns None → UI renders '—'.
     """
     factory_id: str
     store_ids: list[int]
     date_from: date
     date_to: date
     meal_periods: Optional[list[str]] = None  # None / [] = all shifts
-    include_yoy: bool = False
+    include_yoy: bool = True
 
 
 async def compute_qhj_revenue_report(
@@ -102,6 +107,21 @@ async def compute_qhj_revenue_report(
         _compute_block4_diner_dist(pool, params, block4_sem),
     )
 
+    # YoY availability: include_yoy enabled AND the prev-year same period
+    # actually has data (≥1 store with a non-null prev_total > 0). When the
+    # prev year (e.g. 2024) was never loaded, every prev_total is 0 → ratios
+    # all None → report '—' with an honest note rather than a false claim.
+    prev_year = params.date_from.year - 1
+    has_prev_data = params.include_yoy and any(
+        (r.get("prev_total") or 0) > 0 for r in block1
+    )
+    if not params.include_yoy:
+        yoy_note = "同比未启用"
+    elif has_prev_data:
+        yoy_note = f"同比基准: {prev_year}年同期"
+    else:
+        yoy_note = f"缺少 {prev_year} 年同期数据,同比列显示 —"
+
     return TemplateResult(
         code="qhj_revenue_report",
         title="收入管理报表",
@@ -113,10 +133,8 @@ async def compute_qhj_revenue_report(
             "meta": {
                 "date_from": params.date_from.isoformat(),
                 "date_to": params.date_to.isoformat(),
-                "yoy_available": params.include_yoy,
-                "yoy_note": (
-                    None if params.include_yoy else "需要 2024 同期数据"
-                ),
+                "yoy_available": has_prev_data,
+                "yoy_note": yoy_note,
             },
         },
         applies=True,
@@ -128,8 +146,12 @@ async def compute_qhj_revenue_report(
 async def _compute_block1_yoy(pool, params: RevenueReportParams) -> list[dict]:
     """Block 1: 可比同比 (year-over-year).
 
-    include_yoy=False (first phase, spec §11.2) skips the prev-period query
-    and emits prev_*/ratio_* = None. UI renders these as '—'.
+    prev period = the SAME calendar range shifted back exactly one year
+    (报表区间的前一年同期). When the prev-year range has no rows the LEFT
+    JOIN yields total=0, _pct_ratio returns None, and the UI renders '—'.
+
+    include_yoy=False skips the prev-period query entirely and emits
+    prev_*/ratio_* = None.
     """
     if params.include_yoy:
         prev_from = params.date_from.replace(year=params.date_from.year - 1)

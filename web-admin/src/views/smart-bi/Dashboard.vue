@@ -15,6 +15,7 @@ import {
   type UploadHistoryItem,
   type DynamicAnalysisResponse,
 } from '@/api/smartbi';
+import { getGoldDataRange } from '@/api/smartbi/dataRange';
 import { ElMessage } from 'element-plus';
 import {
   TrendCharts,
@@ -42,6 +43,7 @@ import SmartBIEmptyState from '@/components/smartbi/SmartBIEmptyState.vue';
 import ChartSkeleton from '@/components/smartbi/ChartSkeleton.vue';
 import { enhanceChartDefaults } from '@/composables/useChartEnhancer';
 import TemplateGrid from './components/TemplateGrid.vue';
+import RestaurantGoldGrid from './components/RestaurantGoldGrid.vue';
 // Day 8 数据织网 Sub-Project A: capability-driven card visibility
 import { useCapability } from '@/composables/useCapability';
 import CapabilityGate from '@/components/CapabilityGate.vue';
@@ -182,6 +184,9 @@ const kpiData = computed(() => {
     return {
       totalRevenue: goldRev.rawValue ?? null,
       revenueGrowth: null as number | null,
+      // 用后端 KPICard title (「总营收」) 而非模板默认「本月销售额」—— 餐厅默认全量
+      // 区间下「本月」措辞不准 (May 29 2026, Gold 分支原先漏设此 label)。
+      revenueLabel: goldRev.title ?? '营业额',
       totalProfit: goldAvg.rawValue ?? null,
       profitGrowth: null as number | null,
       profitLabel: '客单价',
@@ -672,8 +677,40 @@ onMounted(async () => {
     return;
   }
 
-  // FIX-12: restore last-selected data source from localStorage so 刷新 doesn't reset to 'system'
+  // FIX-12: last-selected data source — used by both the 餐饮 default-range
+  // branch and the restore-source branches below.
   const remembered = factoryId.value ? localStorage.getItem(savedSourceKey(factoryId.value)) : null;
+
+  // 餐饮业态默认全量出图 (May 29 2026):
+  // 制造业的 period=month 默认对餐饮无意义 — 餐厅历史营收数据沉淀在过去月份
+  // (e.g. 青花椒全年 2025), 本月无新数据 → KPI 全 0 + 空趋势图。无显式区间且未锁定
+  // 具体上传时, 探测 Gold (agg_daily) 真实区间 [min,max] 默认显示全部已有数据,
+  // 餐饮老板登录即见全量图表, 不需先上传/选时间。
+  // 业态门控: 仅 RESTAURANT, FACTORY 保持 period=month 不回归。优先于
+  // remembered==='system' (那只是"上次在系统视图", 无具体区间), 但不覆盖用户
+  // 显式锁定的某次上传 (remembered 为具体 uploadId)。
+  if (isRestaurantTenant.value && factoryId.value && (!remembered || remembered === 'system')) {
+    try {
+      const dr = await getGoldDataRange(factoryId.value);
+      if (dr.minDate && dr.maxDate) {
+        // 默认显示「最近有数据的年」(per Steve May 29 2026): max date 所在年的 1-1
+        // 到 max, 不跨年把多个部分样本混在一起 (e.g. 2025 + 2026 → ¥6370万 混样)。
+        // max=2026-04-30 → [2026-01-01, 2026-04-30]; 老板第一眼看最新最完整的一年。
+        // 日期选择器 (v-model=dateRange) 直接显示该区间 (防呆透明), 可手动改回全量。
+        const yearStart = `${dr.maxDate.slice(0, 4)}-01-01`;
+        const startDate = yearStart > dr.minDate ? yearStart : dr.minDate;
+        dateRange.value = [startDate, dr.maxDate];
+        selectedDataSource.value = 'system';
+        await loadDashboardData();
+        return;
+      }
+      // dr 为空 (该餐厅 Gold 无数据) → 落到下方现有 ladder + 空状态 CTA, 不伪造区间。
+    } catch {
+      // 探测失败 → 不阻塞, 落到下方默认 period=month + ladder。
+    }
+  }
+
+  // FIX-12: restore last-selected data source from localStorage so 刷新 doesn't reset to 'system'
   if (remembered === 'system') {
     selectedDataSource.value = 'system';
     if (factoryId.value) {
@@ -2186,8 +2223,16 @@ onUnmounted(() => {
       </el-col>
     </el-row>
 
+    <!-- 餐饮业态: Gold 全量营收分析 (门店排行 + 渠道占比), 取代通用 schema-driven
+         模板卡 — 后者对青花椒误选"星级分"显示累计 SUM bug 且老板不关心 (May 29 2026,
+         per 合理性分析: 营收类指标老板每天必看, 星级评价稀疏过时降级)。制造业仍用模板卡。 -->
+    <RestaurantGoldGrid
+      v-if="isRestaurantTenant"
+      :factory-id="factoryId || ''"
+      :date-range="dateRange"
+    />
     <!-- Week 6 Template Surfacing: show analysis results for this page -->
-    <TemplateGrid page-key="dashboard" :factory-id="factoryId || ''" />
+    <TemplateGrid v-else page-key="dashboard" :factory-id="factoryId || ''" />
 
     <!-- Day 8 数据织网 Sub-Project A: bottom CTA prompting users to unlock
          capability-gated cards by uploading more comprehensive data -->

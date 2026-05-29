@@ -68,6 +68,30 @@ def _is_discount_column(col_name: str) -> bool:
     return bool(_DISCOUNT_MARKER_RE.search(col_name))
 
 
+# meal_period (班次/市段) normalization. The qhj 订单销售明细表 export uses
+# operational shift labels (中班/晚班) for ~8.6% of rows that the
+# fact_pos_transaction.chk_meal_period CHECK does NOT accept — those rows
+# would either violate the constraint or be coerced out. Map shift labels to
+# the canonical meal-period buckets the CHECK allows (V20260513_01: 午市/晚市
+# /早餐/午餐/下午茶/晚餐/其他/未分类). 中班 (mid shift) → 午市, 晚班 (night
+# shift) → 晚市. Anything already canonical (午市/晚市/...) passes through.
+# (2026-05-30 — second of the two qhj ETL bugs; the first was the 外部单号
+# alias clobber, see aliases.py.)
+_MEAL_PERIOD_NORMALIZE = {
+    "中班": "午市",
+    "晚班": "晚市",
+}
+
+
+def _normalize_meal_period(raw: Optional[str]) -> Optional[str]:
+    if raw is None:
+        return None
+    s = str(raw).strip()
+    if not s:
+        return None
+    return _MEAL_PERIOD_NORMALIZE.get(s, s)
+
+
 # EAV payment columns — qhj exports one column per payment method. For each
 # row, any of these columns with a non-zero decimal value becomes a
 # fact_pos_payment entry. Everything else we don't know about stays in
@@ -289,6 +313,18 @@ def _build_canonical_row(
             if unmapped_key not in unknown_out:
                 unknown_out.append(unmapped_key)
             continue
+        # Defensive non-empty guard: when two source columns alias to the
+        # same canonical attr (e.g. historically 账单号 + 外部单号 → source_bill_no),
+        # dict iteration order would let a later EMPTY column clobber an
+        # earlier real value. Never overwrite an already-set, non-empty attr
+        # with an empty/None value. This makes source_bill_no robust against
+        # alias ordering regardless of which column comes first in row_data.
+        if attr in attrs:
+            existing = attrs[attr]
+            existing_nonempty = existing is not None and str(existing).strip() != ""
+            new_empty = value is None or str(value).strip() == ""
+            if existing_nonempty and new_empty:
+                continue
         attrs[attr] = value
 
     # Required field typing + validation
@@ -314,8 +350,10 @@ def _build_canonical_row(
         table_no=(str(attrs["table_no"]) if attrs.get("table_no") else None),
         order_type=(str(attrs["order_type"]) if attrs.get("order_type") else None),
         channel_origin=(str(attrs["channel_origin"]) if attrs.get("channel_origin") else None),
-        # meal_period (Task C4) — .strip() per spec §5.5 writer-side normalization.
-        meal_period=(str(attrs["meal_period"]).strip() if attrs.get("meal_period") else None),
+        # meal_period (Task C4) — .strip() per spec §5.5 writer-side normalization
+        # + 班次 shift-label → canonical bucket mapping (中班→午市, 晚班→晚市) so
+        # rows pass the chk_meal_period CHECK instead of being lost.
+        meal_period=_normalize_meal_period(attrs.get("meal_period")),
         customer_count=_parse_int(attrs.get("customer_count")),
         gross_amount=_parse_decimal(attrs.get("gross_amount")),
         discount_amount=_parse_decimal(attrs.get("discount_amount")),

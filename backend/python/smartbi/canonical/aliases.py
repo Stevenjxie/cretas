@@ -36,7 +36,16 @@ ALIAS_TO_ATTR: Dict[str, str] = {
     "单号": "source_bill_no",
     "账单号": "source_bill_no",
     "结账号": "source_bill_no",
-    "外部单号": "source_bill_no",
+    # NOTE: 外部单号 (external platform order id, e.g. 美团/饿了么 delivery id) is
+    # DELIBERATELY *not* mapped to source_bill_no. It only exists for takeout
+    # (外卖) bills and is EMPTY for ~53% of dine-in (堂食) bills. Because
+    # _build_canonical_row iterates row_data in column order and 外部单号
+    # appears at column ~229 (after 账单号 at column 6), mapping it here caused
+    # the empty value to overwrite the real 账单号 → bill_no became empty →
+    # the whole dine-in row was dropped at the _REQUIRED_ATTRS check. This
+    # silently lost ~30% of qhj 2025 revenue (the dine-in half). 账单号 is the
+    # canonical, always-present bill key — confirmed 0 rows have empty 账单号 +
+    # filled 外部单号 across the full 200k-row 2025 dataset. (2026-05-30)
 
     # date
     "date": "date",

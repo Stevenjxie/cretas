@@ -14,6 +14,7 @@ from ..restaurant.action_rec_formatter import (
     dim_aware_top_n_action_rec,
     format_action_rec,
 )
+from ..restaurant.schema_helpers import aggregation_for_measure
 from ..schema import DataSchema
 from .base import AnalysisTemplate, TemplateResult
 from .registry import register
@@ -49,6 +50,10 @@ class TopNByDim(AnalysisTemplate):
     def compute(self, backend: ComputeBackend, schema: DataSchema) -> TemplateResult:
         import re as _re
         measure = schema.primary_measure
+        # May 30 2026: intensive measures (星级分/评分/率) rank by AVG per dim,
+        # not SUM (a store's total accumulated star points is meaningless;
+        # its average rating is what users want to compare).
+        agg = aggregation_for_measure(measure)
         # Apr 26 2026 phase 6 (UX/F4 fix): skip dimensions whose top labels
         # look like numbers. xmx 4228 (4月付款报表) had pandas-renamed
         # duplicate 支付类型/.1/.2 columns where each "label" was actually a
@@ -70,7 +75,7 @@ class TopNByDim(AnalysisTemplate):
         # Run on every dimension; pick the one with the most variation as "primary dim"
         by_dim = {}
         for dim in schema.dimensions[:4]:  # cap to avoid combinatorial blow-up
-            top = backend.top_n(dim, measure, self.TOP_N)
+            top = backend.top_n(dim, measure, self.TOP_N, agg=agg)
             if len(top) >= 2:  # skip single-label dims (useless chart)
                 if _dim_has_numeric_labels(top):
                     continue  # F4 fix: don't expose numeric labels as dim

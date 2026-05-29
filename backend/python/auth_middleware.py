@@ -144,6 +144,13 @@ class JWTAuthMiddleware:
             scope["state"]["factory_id"] = internal_factory
             scope["state"]["user_id"] = None
             scope["state"]["auth_method"] = "internal"
+            # May 29 2026: forward the originating user's role so RBAC money-strip
+            # (_apply_rbac_strip) respects price-view permission on internal
+            # Java→Python calls. Absent header → None → money stripped (safe
+            # default). Java GoldFinanceClient sets X-User-Role from the request
+            # SecurityContext. Fixes 总营收 ¥0 on restaurant dashboards (the Java
+            # dashboard build called finance-summary with no role → all money nulled).
+            scope["state"]["role"] = headers.get("x-user-role") or None
             try:
                 from smartbi.tenant_ctx import set_factory_id, reset_factory_id
                 tenant_token = set_factory_id(internal_factory)

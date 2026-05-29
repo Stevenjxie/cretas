@@ -344,3 +344,69 @@ def is_revenue_measure(col: Optional[str]) -> bool:
     # Conservative default: if name doesn't match either, allow (avoids
     # over-aggressive filtering on novel column names)
     return True
+
+
+# May 30 2026: semantic aggregation per measure. The generic dashboard cards
+# (monthly_trend / top_n_by_dim / category_distribution) historically SUM the
+# primary_measure unconditionally. For an average-semantic measure like 星级分
+# (1-5 stars) or a 率/% column, SUM produces nonsense ("星级分 累计 6.23万 分").
+# qhj 评价下载 upload picked 星级分 as primary_measure → 星级趋势卡 showed an
+# accumulating total instead of the meaningful ~4.8 average.
+#
+# Rule: revenue / count / quantity measures aggregate with SUM (additive);
+# rating / score / rate / ratio / average measures aggregate with AVG (intensive).
+_AVG_MEASURE_PATTERNS = (
+    '星级', '评分', '分数', '打分', '得分', '评价分',  # ratings (intensive)
+    '环境分', '服务分', '口味分',                        # 大众点评 review sub-scores
+    '率', '比率', '占比', '百分比',                      # rates / ratios
+    '均价', '客单', '平均', '人均',                      # per-unit averages
+)
+
+# Count-semantic measures: additive (SUM) but the unit is 个/份/次, not 元.
+_COUNT_MEASURE_PATTERNS = (
+    '销量', '销售数量', '数量', '笔数', '份数', '件数',
+    '次数', '单数', '人次', '台数', '桌数',
+)
+
+
+def aggregation_for_measure(col: Optional[str]) -> str:
+    """Return 'sum' or 'avg' — the correct aggregation for a measure column.
+
+    'avg' for intensive measures (星级分/评分/率/客单价/人均) where summing is
+    meaningless; 'sum' for additive measures (营业额/销量/笔数/数量) and as the
+    conservative default. Answers HOW to aggregate (distinct from
+    is_revenue_measure which answers WHETHER it is revenue).
+    """
+    if not col:
+        return "sum"
+    # AVG patterns (rating/rate/per-unit) take precedence — a 率/客单价 column
+    # would otherwise hit is_revenue_measure's conservative True and be summed.
+    if any(p in col for p in _AVG_MEASURE_PATTERNS):
+        return "avg"
+    # Explicit additive money (总额/营业额/销售额) sums.
+    if is_revenue_measure(col):
+        return "sum"
+    # Conservative default: additive.
+    return "sum"
+
+
+def measure_unit(col: Optional[str]) -> str:
+    """Short display unit for a measure: '元' (money), '分' (rating), '' otherwise.
+
+    Used by trend/summary insight_text so a star-rating measure is never
+    mislabelled with the money unit '元'.
+    """
+    if not col:
+        return ""
+    if any(p in col for p in ('星级', '评分', '分数', '打分', '得分', '评价分',
+                              '环境分', '服务分', '口味分')):
+        return "分"
+    if any(p in col for p in ('率', '比率', '占比', '百分比')):
+        return "%"
+    # Count measures (additive but not money) — use a neutral count unit so a
+    # 销量/笔数 trend is never mislabelled "X 元".
+    if any(p in col for p in _COUNT_MEASURE_PATTERNS):
+        return "份" if any(p in col for p in ('销量', '销售数量', '份数', '件数', '数量')) else "次"
+    if is_revenue_measure(col):
+        return "元"
+    return ""

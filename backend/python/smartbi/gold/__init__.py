@@ -28,6 +28,7 @@ from smartbi.gold.pipeline import PipelineStats, ingest_and_materialize
 from smartbi.gold.queries import (
     channel_breakdown,
     daily_trend,
+    data_range,
     discount_breakdown,
     finance_summary,
     kpi_summary,
@@ -55,6 +56,7 @@ __all__ = [
     "UploadCompleteTrigger",
     "channel_breakdown",
     "daily_trend",
+    "data_range",
     "diff_results",
     "discount_breakdown",
     "finance_summary",
