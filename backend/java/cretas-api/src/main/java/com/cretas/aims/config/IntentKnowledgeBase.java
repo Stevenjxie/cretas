@@ -1450,6 +1450,10 @@ public class IntentKnowledgeBase {
         phraseToIntentMapping.put("偏差报告数量", "QUALITY_STATS");    // deviation count = a quality stat
         phraseToIntentMapping.put("偏差报告", "QUALITY_STATS");
         phraseToIntentMapping.put("当前库存量", "REPORT_INVENTORY");  // material stock → inventory report (never FAILED)
+        // 2nd audit (run 20260529_140556) surfaced LLM-variance fail: "未来一年采购计划" → RESTAURANT_PROCUREMENT_SUGGESTION
+        // (cross-business-type misroute on a factory) leaking English "Fallback selection based on similarity"
+        // (ToolRouterServiceImpl:490 toolChainDescription). Pin factory procurement-plan phrase deterministic.
+        phraseToIntentMapping.put("采购计划", "PURCHASER_WEEKLY_PLAN");
         // v7.3新增：带批次的质检统计查询
         phraseToIntentMapping.put("质检不合格的批次", "QUALITY_STATS");
         phraseToIntentMapping.put("不合格的批次", "QUALITY_STATS");
