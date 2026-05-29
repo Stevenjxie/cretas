@@ -86,15 +86,24 @@ public abstract class AbstractRestaurantDiagnosticTool extends AbstractBusinessT
         String storeId = getString(params, "store_id");
         String uploadId = getString(params, "upload_id");
         String storeName = getString(params, "store_name");
+        // #302: when an analysis month is resolved upstream (e.g. composite parses
+        // "2025年12月" → month=2025-12), surface it as the Python `period` display label
+        // so the P&L one-pager header matches the queried month instead of showing the
+        // default "current". Absent month → keep the "current" default (no behavior change).
+        String month = getString(params, "month");
 
-        PythonRestaurantSectionRequest request = PythonRestaurantSectionRequest.builder()
-            .factoryId(factoryId)
-            .uploadId(uploadId)
-            .subSector(subSector)
-            .storeId(storeId)
-            .storeName(storeName)
-            .params(buildSectionParams(factoryId, params, context))
-            .build();
+        PythonRestaurantSectionRequest.PythonRestaurantSectionRequestBuilder builder =
+            PythonRestaurantSectionRequest.builder()
+                .factoryId(factoryId)
+                .uploadId(uploadId)
+                .subSector(subSector)
+                .storeId(storeId)
+                .storeName(storeName)
+                .params(buildSectionParams(factoryId, params, context));
+        if (month != null && !month.trim().isEmpty()) {
+            builder.period(month.trim());
+        }
+        PythonRestaurantSectionRequest request = builder.build();
 
         Optional<PythonRestaurantSectionResponse> responseOpt =
             pythonClient.callRestaurantSection(getSectionName(), request);
