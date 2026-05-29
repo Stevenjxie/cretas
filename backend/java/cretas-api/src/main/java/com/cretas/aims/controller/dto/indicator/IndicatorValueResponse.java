@@ -1,15 +1,18 @@
 package com.cretas.aims.controller.dto.indicator;
 
+import com.cretas.aims.entity.indicator.Indicator;
 import com.cretas.aims.service.indicator.dto.IndicatorValueResult;
 import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.util.Map;
 
 /**
  * 指标取值响应 DTO — wraps {@link IndicatorValueResult} for HTTP.
@@ -19,6 +22,7 @@ import java.time.LocalDateTime;
  * @author Cretas Team
  * @since 2026-05-22 (Phase 1 Sprint 1 Day 5)
  */
+@Slf4j
 @Data
 @Builder
 @NoArgsConstructor
@@ -54,8 +58,21 @@ public class IndicatorValueResponse {
     private LocalDate periodEnd;
 
     /**
-     * 从 service 计算结果 + 指标元信息构造 DTO.
+     * Sprint 12 Phase B step 4: KPI 卡片 next-action 提示 (Issue #265).
+     * null 表示该 indicator 暂无 actionHint (老 PRECOMPUTED/PYTHON_ENDPOINT indicators
+     * 大部分无, REAL_BUSINESS strategies 通过 V_04 seed 配置).
      */
+    @Schema(description = "next-action 提示 (fool-proof-design Rule 5, 可空)")
+    private ActionHint actionHint;
+
+    /**
+     * 从 service 计算结果 + 指标元信息构造 DTO.
+     *
+     * @deprecated Sprint 12 Phase B step 4 — 用 {@link #fromWithIndicator} 取代,
+     *             这样能从 indicator.config jsonb 读 actionHint. 老 controller 调用如果继续
+     *             用本方法 actionHint 会缺失.
+     */
+    @Deprecated
     public static IndicatorValueResponse from(String code, String name, String unit,
                                               IndicatorValueResult result,
                                               LocalDate periodStart, LocalDate periodEnd) {
@@ -70,5 +87,53 @@ public class IndicatorValueResponse {
                 .periodStart(periodStart)
                 .periodEnd(periodEnd)
                 .build();
+    }
+
+    /**
+     * Sprint 12 Phase B step 4: 推荐入口 — 从 indicator entity 直接构造, 自动 extract
+     * actionHint from {@code config} jsonb.
+     */
+    public static IndicatorValueResponse fromWithIndicator(Indicator ind,
+                                                            IndicatorValueResult result,
+                                                            LocalDate periodStart,
+                                                            LocalDate periodEnd) {
+        return IndicatorValueResponse.builder()
+                .code(ind.getCode())
+                .name(ind.getName())
+                .unit(ind.getUnit())
+                .value(result.value())
+                .computedAt(result.computedAt())
+                .cacheHit(result.cacheHit())
+                .source(result.source())
+                .periodStart(periodStart)
+                .periodEnd(periodEnd)
+                .actionHint(extractActionHint(ind))
+                .build();
+    }
+
+    /**
+     * 从 indicator.config jsonb 取 actionHint nested 对象.
+     * 期望 shape: {@code {"actionHint": {"label": "...", "route": "..."}}}.
+     * 任何 shape 不符 / 解析异常 → 返 null (不抛错, 老板不应该因为 config 错配看不到 KPI).
+     */
+    @SuppressWarnings("unchecked")
+    static ActionHint extractActionHint(Indicator ind) {
+        if (ind == null || ind.getConfig() == null) return null;
+        try {
+            Object raw = ind.getConfig().get("actionHint");
+            if (!(raw instanceof Map)) return null;
+            Map<String, Object> map = (Map<String, Object>) raw;
+            String label = stringOrNull(map.get("label"));
+            String route = stringOrNull(map.get("route"));
+            if (label == null) return null;   // route 可空 (按钮可以只显示, 后续 wire)
+            return new ActionHint(label, route);
+        } catch (Exception ex) {
+            log.warn("extractActionHint failed for code={}: {}", ind.getCode(), ex.getMessage());
+            return null;
+        }
+    }
+
+    static String stringOrNull(Object v) {
+        return v instanceof String s && !s.isBlank() ? s : null;
     }
 }

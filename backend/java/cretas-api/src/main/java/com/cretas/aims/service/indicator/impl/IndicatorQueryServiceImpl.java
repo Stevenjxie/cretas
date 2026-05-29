@@ -10,10 +10,14 @@ import com.cretas.aims.repository.indicator.IndicatorRepository;
 import com.cretas.aims.repository.indicator.IndicatorVersionRepository;
 import com.cretas.aims.service.indicator.IndicatorQueryService;
 import com.cretas.aims.service.indicator.dto.IndicatorValueResult;
+import com.cretas.aims.service.indicator.strategy.IndicatorComputationStrategy;
+import com.cretas.aims.service.indicator.strategy.IndicatorComputationStrategyRegistry;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+
+import java.util.Optional;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -45,6 +49,7 @@ public class IndicatorQueryServiceImpl implements IndicatorQueryService {
     private final IndicatorVersionRepository indicatorVersionRepository;
     private final IndicatorComputationRepository indicatorComputationRepository;
     private final PythonSmartBIClient pythonSmartBIClient;
+    private final IndicatorComputationStrategyRegistry strategyRegistry;
 
     /** {@inheritDoc} */
     @Override
@@ -99,13 +104,17 @@ public class IndicatorQueryServiceImpl implements IndicatorQueryService {
     /**
      * REALTIME — 每次都调 Python, 不读 cache 也不写 lastValue (保留 lastValue 给 scheduler).
      * 仍落 version 快照, 用于审计 / 趋势.
+     *
+     * <p>Phase B step 5: ratio strategies 无样本返 null → skip saveVersion (column NOT NULL).
      */
     IndicatorValueResult computeRealtime(Indicator ind, String factoryId,
                                           LocalDate start, LocalDate end) {
-        BigDecimal fresh = fetchFromPython(ind, factoryId, start, end);
+        FetchOutcome outcome = fetchFromPython(ind, factoryId, start, end);
         LocalDateTime computedAt = LocalDateTime.now();
-        saveVersion(ind, factoryId, fresh, start, end, computedAt);
-        return new IndicatorValueResult(fresh, computedAt, false, "python");
+        if (outcome.value() != null) {
+            saveVersion(ind, factoryId, outcome.value(), start, end, computedAt, outcome.sourceLabel());
+        }
+        return new IndicatorValueResult(outcome.value(), computedAt, false, "python");
     }
 
     /**
@@ -138,54 +147,95 @@ public class IndicatorQueryServiceImpl implements IndicatorQueryService {
             return new IndicatorValueResult(lastValue, lastComputed, true, "cache");
         }
 
-        // Cache miss / 过期: fetch Python + 更新 lastValue + 落 version
-        BigDecimal fresh = fetchFromPython(ind, factoryId, start, end);
+        // Cache miss / 过期: fetch + 更新 lastValue + 落 version
+        // Phase B step 5: ratio strategies 无样本返 null → skip persistence
+        // (column NOT NULL + Rule 21 honest data 让 UI 渲 "—" 而非 "0%" 误导)
+        FetchOutcome outcome = fetchFromPython(ind, factoryId, start, end);
         LocalDateTime computedAt = LocalDateTime.now();
-        ind.setLastValue(fresh);
-        ind.setLastComputedAt(computedAt);
-        indicatorRepository.save(ind);
-        saveVersion(ind, factoryId, fresh, start, end, computedAt);
-        return new IndicatorValueResult(fresh, computedAt, false, "python");
+        if (outcome.value() != null) {
+            ind.setLastValue(outcome.value());
+            ind.setLastComputedAt(computedAt);
+            indicatorRepository.save(ind);
+            saveVersion(ind, factoryId, outcome.value(), start, end, computedAt, outcome.sourceLabel());
+        }
+        return new IndicatorValueResult(outcome.value(), computedAt, false, "python");
     }
+
+    /**
+     * 单次 fetch 返回结果 — value + compute_source label (避免 saveVersion 重复查 repo).
+     */
+    record FetchOutcome(BigDecimal value, String sourceLabel) {}
 
     /**
      * 调 Python 端点取值 — 走 IndicatorComputation 主策略 (priority 最低的启用条目).
      *
-     * <p>若没有启用策略 / 主策略不是 PYTHON_ENDPOINT, 返 ZERO 并 log warn — 不抛错。
-     * (避免一个指标配置错误 cascade 影响其他指标。)
+     * <p>Sprint 12 Phase B: 新增 {@code JPA_AGGREGATE} 分支, 走
+     * {@link IndicatorComputationStrategyRegistry} 找 Java strategy 真接业务表 SQL aggregate.
+     * 跟 PYTHON_ENDPOINT 平级 — Registry 找不到 strategy 返 ZERO stub 不抛错.
+     *
+     * <p>若没有启用策略 / 主策略类型未识别, 返 ZERO 并 log warn — 不抛错.
+     * (避免一个指标配置错误 cascade 影响其他指标.)
      */
-    BigDecimal fetchFromPython(Indicator ind, String factoryId,
-                                LocalDate start, LocalDate end) {
+    FetchOutcome fetchFromPython(Indicator ind, String factoryId,
+                                  LocalDate start, LocalDate end) {
         List<IndicatorComputation> strategies = indicatorComputationRepository
                 .findByIndicatorIdAndIsActiveTrueAndDeletedAtIsNull(ind.getId());
         if (strategies.isEmpty()) {
             log.warn("fetchFromPython: no active computation for indicator id={}, code={}",
                     ind.getId(), ind.getCode());
-            return BigDecimal.ZERO;
+            return new FetchOutcome(BigDecimal.ZERO, "UNKNOWN:" + ind.getCode());
         }
         IndicatorComputation primary = strategies.get(0);
-        if (!"PYTHON_ENDPOINT".equals(primary.getComputeType())) {
-            log.warn("fetchFromPython: primary strategy is {} not PYTHON_ENDPOINT for code={} — returning ZERO stub",
-                    primary.getComputeType(), ind.getCode());
-            return BigDecimal.ZERO;
+        String type = primary.getComputeType();
+
+        // Sprint 12 Phase B: JPA_AGGREGATE 走 Java strategy 真接业务表
+        if ("JPA_AGGREGATE".equals(type)) {
+            Optional<IndicatorComputationStrategy> strategyOpt = strategyRegistry.find(ind.getCode());
+            if (strategyOpt.isEmpty()) {
+                log.warn("fetchFromPython: JPA_AGGREGATE configured but no strategy registered for code={} — returning ZERO stub",
+                        ind.getCode());
+                return new FetchOutcome(BigDecimal.ZERO, "REAL_BUSINESS_MISSING:" + ind.getCode());
+            }
+            BigDecimal value = strategyOpt.get().compute(factoryId, start, end);
+            return new FetchOutcome(value, "REAL_BUSINESS:" + ind.getCode());
         }
-        return pythonSmartBIClient.fetchIndicatorValue(
-                factoryId, primary.getComputeSource(), start, end);
+
+        if ("PYTHON_ENDPOINT".equals(type)) {
+            BigDecimal value = pythonSmartBIClient.fetchIndicatorValue(
+                    factoryId, primary.getComputeSource(), start, end);
+            return new FetchOutcome(value, "PYTHON_ENDPOINT:" + ind.getCode());
+        }
+
+        log.warn("fetchFromPython: unrecognized computeType={} for code={} — returning ZERO stub",
+                type, ind.getCode());
+        return new FetchOutcome(BigDecimal.ZERO, "UNKNOWN:" + ind.getCode());
     }
 
     /**
      * 持久化历史快照 — append-only.
+     *
+     * <p>Sprint 12 Phase B: 调用方从 {@link FetchOutcome#sourceLabel()} 传 compute_source,
+     * 按主策略类型 (JPA_AGGREGATE / PYTHON_ENDPOINT / UNKNOWN) 区分, 满足 Rule 21 mock-vs-real 隔离.
+     *
+     * <p>Sprint 12 Phase B step 3 hotfix: {@code period_start}/{@code period_end} DB schema 是
+     * NOT NULL, scheduler 跟 HTTP caller 都可能传 null (REAL_BUSINESS strategies 用自己 default
+     * MTD / instant snapshot, 不依赖 caller period). 默认 null → 今日, 让 version 行能落库,
+     * "today/today" 单日窗口反映 "this is the point-in-time captured value", 跟 strategy
+     * 的内部 MTD/instant 语义 reconcile 的责任留给 downstream 趋势分析.
      */
     void saveVersion(Indicator ind, String factoryId, BigDecimal value,
-                     LocalDate start, LocalDate end, LocalDateTime computedAt) {
+                     LocalDate start, LocalDate end, LocalDateTime computedAt,
+                     String computeSourceLabel) {
+        LocalDate effectiveStart = start != null ? start : LocalDate.now();
+        LocalDate effectiveEnd = end != null ? end : LocalDate.now();
         IndicatorVersion version = new IndicatorVersion();
         version.setFactoryId(factoryId);
         version.setIndicatorId(ind.getId());
-        version.setPeriodStart(start);
-        version.setPeriodEnd(end);
+        version.setPeriodStart(effectiveStart);
+        version.setPeriodEnd(effectiveEnd);
         version.setValue(value);
         version.setComputedAt(computedAt);
-        version.setComputeSource("PYTHON_ENDPOINT:" + ind.getCode());
+        version.setComputeSource(computeSourceLabel);
         indicatorVersionRepository.save(version);
     }
 }

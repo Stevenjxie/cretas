@@ -4,7 +4,9 @@
 # 核心特性:
 #   - Blue-Green 生产部署 (零中断, 默认): 启动 idle 实例 → nginx upstream 切换 → 停旧 active
 #   - in-place 部署 (test 环境或 --mode=inplace): 替换 jar + systemctl restart
-#   - 自动检测 private repo / rsync 健康 / 多通道并行上传 (OSS 加速 / R2 备份)
+#   - SSH 直传策略: rsync (主, 更长久更快) + rsync+compress + scp (兜底)
+#   - ~/.bashrc 去掉 SKIP_RSYNC=1 启用 rsync; scp 任何环境都能跑 (实测 10.85 MB/s)
+#   - R2/OSS/GitHub 默认禁用 (Steve 2026-05-28); ENABLE_R2=1 紧急 opt-in
 #   - 部署后通过 nginx upstream 验证 (不直接打端口, BG 兼容)
 #
 # 常用命令:
@@ -202,19 +204,18 @@ while [[ $# -gt 0 ]]; do
             echo "  inplace    替换 jar + systemctl restart cretas-backend (60s 中断, 紧急回退用)"
             echo "  注意: test 环境始终 in-place (test 没有 Green 实例)"
             echo ""
-            echo "上传策略:"
-            echo "  [阶段1] GitHub 并行 (直连 + 5镜像同时竞争)"
-            echo "          超时: 60秒"
-            echo "  [阶段2] Fallback (GitHub 失败时启用)"
-            echo "          - SCP 直接上传"
-            echo "          - SCP + gzip 压缩传输"
-            echo "          - OSS 全球加速 + 内网下载"
-            echo "          - Cloudflare R2 中转"
+            echo "上传策略 (Steve 2026-05-28 SSH 直传, 全部 SSH-based 谁快谁赢):"
+            echo "  [主通道] rsync + rsync+compress (~/.bashrc 去 SKIP_RSYNC=1 启用)"
+            echo "           — 更长久更快, 增量同步对常规 deploy 有优势"
+            echo "  [兜底]   scp 直传 (单 SSH stream, 实测 10.85 MB/s, 任何环境都可用)"
+            echo "  [禁用]   R2 / OSS / GitHub (代码保留, ENABLE_R2=1 可紧急 opt-in)"
+            echo "          超时: 15 分钟 (163MB @ ~10 MB/s ≈ 16s scp, rsync 通常更快)"
             echo ""
             echo "环境变量:"
-            echo "  SKIP_RSYNC=1              永久禁用 rsync 通道 (本地 SSH 链路不稳时建议)"
+            echo "  SKIP_RSYNC=1              禁用 rsync 加速通道 (默认 ~/.bashrc 设置)"
             echo "  SKIP_BUILD=1              跳过本地 Maven 打包 (使用 target/ 已有 jar)"
-            echo "  R2_ACCESS_KEY_ID/SECRET   启用 Cloudflare R2 备份通道"
+            echo "  ENABLE_R2=1               紧急 rollback: 启用 R2 通道 (scp 全失败时)"
+            echo "  R2_ACCESS_KEY_ID/SECRET   R2 凭证 (配合 ENABLE_R2=1 使用)"
             echo ""
             echo "示例:"
             echo "  ./deploy-backend.sh              # JAR 部署到生产"
@@ -315,12 +316,15 @@ deploy_jar() {
 
     # 统计可用方式
     local METHODS=()
-    [ "$HAS_RSYNC" = "true" ] && METHODS+=("rsync" "rsync+compress")
+    # 上传策略 (Steve 2026-05-28): rsync 优先 (更长久更快) → scp 兜底
+    # 三个通道全部 SSH-based, 不依赖云存储. 谁先 MD5 verify 谁赢.
+    [ "$HAS_RSYNC" = "true" ] && METHODS+=("rsync(主)" "rsync+compress")
+    METHODS+=("scp(兜底)")
     if [ "$HAS_GH" = "true" ] && [ "$IS_PRIVATE_REPO" != "true" ]; then
         METHODS+=("GitHub+镜像" "GitHub直连")
     fi
-    # OSS 上传已禁用 (PUT 收费), 但仍显示工具可用状态给诊断用
-    [ "$HAS_R2" = "true" ] && METHODS+=("R2(主)")
+    # R2 / OSS 默认禁用, 仅诊断显示
+    [ "$HAS_R2" = "true" ] && METHODS+=("R2(禁用-opt-in ENABLE_R2=1)")
     [ "$HAS_OSS" = "true" ] && METHODS+=("OSS(禁用-PUT收费)")
 
     echo "=========================================="
@@ -611,7 +615,29 @@ deploy_jar() {
         fi
     }
 
-    # === Fallback 方法3: OSS 全球加速 ===
+    # === Fallback 方法3: SCP 兜底 (Steve 2026-05-28) ===
+    # 单 SSH stream 直传 — rsync 不可用时的最低门槛兜底.
+    # 不依赖云存储 / rsync 二进制. 上传完 verify_and_claim 做 MD5 + rename.
+    # 实测 10.85 MB/s (163M 文件 15s 完成).
+    upload_scp() {
+        check_winner && return 0
+        local TMP_FILE="${JAR_NAME}.scp"
+        local ERR_LOG="$UPLOAD_STATUS_DIR/scp.err"
+        echo "   [scp] 开始 SSH 直传..."
+        if scp -o ConnectTimeout=10 -o ServerAliveInterval=30 "$JAR_PATH" "$SERVER:$REMOTE_TMP/$TMP_FILE" 2> "$ERR_LOG"; then
+            if ! check_winner; then
+                verify_and_claim "$TMP_FILE" "scp"
+            fi
+        else
+            if ! check_winner; then
+                local ERR
+                ERR=$(head -2 "$ERR_LOG" 2>/dev/null | tr '\n' ' ' | sed 's/  */ /g')
+                echo "   [scp] ✗ 失败${ERR:+: $ERR}"
+            fi
+        fi
+    }
+
+    # === Fallback 方法4: OSS 全球加速 ===
     upload_oss_accelerate() {
         [ "$HAS_OSS" != "true" ] && return 1
         check_winner && return 0
@@ -650,7 +676,8 @@ deploy_jar() {
         fi
     }
 
-    # === Fallback 方法4: Cloudflare R2 ===
+    # === Fallback 方法6: Cloudflare R2 (默认禁用 — Steve 2026-05-28 改 scp 直传) ===
+    # 保留代码 + 用 ENABLE_R2=1 显式 opt-in. 紧急 rollback 用 (scp + rsync 都失败时).
     upload_r2() {
         [ "$HAS_R2" != "true" ] && return 1
         check_winner && return 0
@@ -802,21 +829,26 @@ deploy_jar() {
         # 杀掉服务器上残留的 GitHub 下载 curl 进程
         ssh -o ConnectTimeout=5 $SERVER "pkill -f 'curl.*$JAR_NAME' 2>/dev/null; true" 2>/dev/null || true
 
-        # 启动 Fallback 方式 (按工具可用性决定)
-        # R2 优先 — Cloudflare R2 上传免费 (PUT/GET 均免费 egress)
-        # OSS 上传已禁用 — 阿里云 OSS PUT 收费,部署频繁时累积可观
-        # 如需恢复 OSS: 取消下面注释即可,upload_oss_accelerate 函数仍保留
-        [ "$HAS_R2"    = "true" ] && { upload_r2 & UPLOAD_PIDS+=($!); }
+        # 启动 Fallback 方式 (按工具可用性决定) — Steve 2026-05-28 SSH 直传策略
+        # 通道顺序 (并行 race, 谁先 MD5 verify 谁赢):
+        #   1. rsync (主)        — ~/.bashrc 去 SKIP_RSYNC=1 即启用, 更长久更快
+        #   2. rsync+compress    — 同上, 高压缩对 jar 收益小但偶尔最快
+        #   3. scp (兜底)        — 单 stream SSH, 任何环境都可用 (实测 10.85 MB/s)
+        # R2 / OSS / GitHub 默认禁用, 代码保留供紧急 opt-in (ENABLE_R2=1)
         [ "$HAS_RSYNC" = "true" ] && { upload_rsync & UPLOAD_PIDS+=($!); }
         [ "$HAS_RSYNC" = "true" ] && { upload_rsync_compress & UPLOAD_PIDS+=($!); }
-        # [ "$HAS_OSS" = "true" ] && { upload_oss_accelerate & UPLOAD_PIDS+=($!); }  # 禁用: OSS PUT 收费
+        { upload_scp & UPLOAD_PIDS+=($!); }
+        # 紧急 rollback 通道 (默认禁用 — Steve 2026-05-28):
+        # [ "$HAS_R2" = "true" ] && { upload_r2 & UPLOAD_PIDS+=($!); }                  # 禁用: 改 scp 直传
+        # [ "$HAS_OSS" = "true" ] && { upload_oss_accelerate & UPLOAD_PIDS+=($!); }     # 禁用: OSS PUT 收费
+        [ "${ENABLE_R2:-0}" = "1" ] && [ "$HAS_R2" = "true" ] && { upload_r2 & UPLOAD_PIDS+=($!); echo "   [R2] opt-in 紧急通道启用 (ENABLE_R2=1)"; }
 
         if [ "${#UPLOAD_PIDS[@]}" -eq 0 ]; then
-            echo "   ❌ 没有可用的 Fallback 方式 (rsync/oss/r2 均不可用)"
+            echo "   ❌ 没有可用的 Fallback 方式 (scp/rsync/r2 均不可用)"
         fi
 
-        # 等待 Fallback 完成 (默认5分钟; 163MB jar 在慢 ISP 下 R2 上传需 ~6.5min,
-        # 用 FALLBACK_TIMEOUT 环境变量放宽, 如 FALLBACK_TIMEOUT=900)
+        # 等待 Fallback 完成. scp 主通道实测 15s (163MB @ 10.85 MB/s) → 默认 300s 足够;
+        # 慢 ISP / rsync 单线程 可用 FALLBACK_TIMEOUT 环境变量放宽 (如 FALLBACK_TIMEOUT=900).
         FALLBACK_TIMEOUT="${FALLBACK_TIMEOUT:-300}"
         echo "   等待 Fallback 完成 (超时: ${FALLBACK_TIMEOUT}s)..."
         ELAPSED=0
@@ -877,7 +909,7 @@ deploy_jar() {
     fi
 
     # 清理服务器上的临时文件 (保留 winner 的 $JAR_NAME)
-    ssh -o ConnectTimeout=5 $SERVER "rm -f $REMOTE_TMP/${JAR_NAME}.rsync $REMOTE_TMP/${JAR_NAME}.rsync_z $REMOTE_TMP/${JAR_NAME}.oss $REMOTE_TMP/${JAR_NAME}.r2 $REMOTE_TMP/${JAR_NAME}.github_direct $REMOTE_TMP/${JAR_NAME}.gh_* 2>/dev/null; true" 2>/dev/null || true
+    ssh -o ConnectTimeout=5 $SERVER "rm -f $REMOTE_TMP/${JAR_NAME}.scp $REMOTE_TMP/${JAR_NAME}.rsync $REMOTE_TMP/${JAR_NAME}.rsync_z $REMOTE_TMP/${JAR_NAME}.oss $REMOTE_TMP/${JAR_NAME}.r2 $REMOTE_TMP/${JAR_NAME}.github_direct $REMOTE_TMP/${JAR_NAME}.gh_* 2>/dev/null; true" 2>/dev/null || true
 
     if [ -z "$WINNER" ]; then
         # 最后的兜底: 即使本地 winner flag 缺失, 远程 jar 若存在且 MD5 匹配, 视为上传成功

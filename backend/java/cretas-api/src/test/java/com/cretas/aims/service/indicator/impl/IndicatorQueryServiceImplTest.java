@@ -9,6 +9,7 @@ import com.cretas.aims.repository.indicator.IndicatorComputationRepository;
 import com.cretas.aims.repository.indicator.IndicatorRepository;
 import com.cretas.aims.repository.indicator.IndicatorVersionRepository;
 import com.cretas.aims.service.indicator.dto.IndicatorValueResult;
+import com.cretas.aims.service.indicator.strategy.IndicatorComputationStrategyRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -72,6 +73,11 @@ class IndicatorQueryServiceImplTest {
 
     @Mock
     private PythonSmartBIClient pythonSmartBIClient;
+
+    /** Sprint 12 Phase B: 新增 JPA_AGGREGATE 路由依赖. 现有测试场景都是 PYTHON_ENDPOINT
+     *  或 non-PYTHON_ENDPOINT default 分支, registry.find() 不会被调用 (Mockito 默认 empty). */
+    @Mock
+    private IndicatorComputationStrategyRegistry strategyRegistry;
 
     @InjectMocks
     private IndicatorQueryServiceImpl service;
