@@ -684,6 +684,13 @@ public class ResultFormatterServiceImpl implements ResultFormatterService {
         }
 
         if (!hasMetrics) return null;
+        // Sprint 12: ensure ≥80-char actionable output. When the report is terse
+        // (e.g. zero-value period like "本月入库总量" with no inbound), append入库/库存
+        // guidance so the user gets a useful next-step instead of a 43-char stub.
+        if (sb.length() < 80) {
+            sb.append("。提示: 如需查看本月入库明细/入库总量, 可进入库存管理模块按时段筛选;"
+                    + " 当前库存价值或种类为 0 时, 请确认入库单已审核且原料批次已正确登记。");
+        }
         return sb.toString();
     }
 
