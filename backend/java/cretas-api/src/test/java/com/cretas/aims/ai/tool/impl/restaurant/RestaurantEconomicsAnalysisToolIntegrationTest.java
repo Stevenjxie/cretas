@@ -139,8 +139,10 @@ class RestaurantEconomicsAnalysisToolIntegrationTest {
 
         Map<String, Object> result = tool.doExecute(FACTORY, new HashMap<>(), ctx());
 
-        // Steve 决策 1: top-level flips false, failed section carries message, others survive.
-        assertThat(result.get("dataAvailable")).isEqualTo(false);
+        // Steve 决策 1 + S13-001 (#312): top-level reflects PARTIAL availability — summary +
+        // topItems have data, so dataAvailable=true; the failed cost_rigidity dimension stays
+        // marked unavailable in its own section + listed in the message (was AND-of-all pre-#312).
+        assertThat(result.get("dataAvailable")).isEqualTo(true);
         assertSectionAvailable(result, "summary");
         assertSectionAvailable(result, "topItems");
 
@@ -165,7 +167,9 @@ class RestaurantEconomicsAnalysisToolIntegrationTest {
         // Must NOT throw — exception is isolated to the shrinkage section.
         Map<String, Object> result = tool.doExecute(FACTORY, new HashMap<>(), ctx());
 
-        assertThat(result.get("dataAvailable")).isEqualTo(false);
+        // S13-001 (#312): partial availability — summary + recommendations have data → dataAvailable=true;
+        // the thrown shrinkage dimension stays marked unavailable in its own section.
+        assertThat(result.get("dataAvailable")).isEqualTo(true);
         assertSectionAvailable(result, "summary");
         assertSectionAvailable(result, "recommendations");
 
@@ -186,9 +190,11 @@ class RestaurantEconomicsAnalysisToolIntegrationTest {
 
         Map<String, Object> result = tool.doExecute(FACTORY, new HashMap<>(), ctx());
 
+        // S13-001 (#312): NONE available is the only case that stays dataAvailable=false, and it
+        // uses the distinct "均无数据" template (not the partial "部分数据不可用" failed-list).
         assertThat(result.get("dataAvailable")).isEqualTo(false);
         assertThat(result.get("message").toString())
-                .contains("P&L 一页纸").contains("档口损溢").contains("成本刚性");
+                .contains("数据暂不可用").contains("档口损溢").contains("成本刚性").contains("均无数据");
     }
 
     @SuppressWarnings("unchecked")

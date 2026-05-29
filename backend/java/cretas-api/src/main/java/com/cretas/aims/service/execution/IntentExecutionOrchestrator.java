@@ -94,6 +94,11 @@ public class IntentExecutionOrchestrator {
     @Autowired(required = false)
     private com.cretas.aims.config.IntentSlotConfiguration intentSlotConfiguration;
 
+    // Sprint 13 #305 业态门控: shared business-type gate (RESTAURANT vs FACTORY). Reused by the
+    // explicit-intent flow + SseStreamingService so all paths gate identically.
+    @Autowired
+    private BusinessTypeGate businessTypeGate;
+
     // ===== Route counters =====
     private final AtomicLong branchToolDirect = new AtomicLong();
     private final AtomicLong branchSkill = new AtomicLong();
@@ -298,6 +303,14 @@ public class IntentExecutionOrchestrator {
             return buildApprovalResponse(intent);
         }
 
+        // 业态门控 (Sprint 13 #305): a domain-exclusive intent (business_type RESTAURANT/FACTORY)
+        // matched on a mismatched factory.type → honest "本厂非该业态" empty-state + appropriate
+        // next-action, instead of executing a tool that returns a misleading half-broken "数据不可用".
+        IntentExecuteResponse businessTypeGate = checkBusinessTypeGate(factoryId, intent);
+        if (businessTypeGate != null) {
+            return businessTypeGate;
+        }
+
         // Drools 验证
         if (validationEnabled) {
             ValidationResult validationResult = validateWithDrools(factoryId, intent, request, userId, userRole);
@@ -446,6 +459,16 @@ public class IntentExecutionOrchestrator {
 
         if (intent.needsApproval() && !Boolean.TRUE.equals(request.getForceExecute())) {
             return buildApprovalResponse(intent);
+        }
+
+        // 业态门控 (Sprint 13 #305): this explicit-intent path is reached for an explicit
+        // intentCode AND for phrase-shortcut matches (execute() #0 / #0.2 delegate here),
+        // bypassing the gate in the main matching flow. Gate here too so a domain-exclusive
+        // intent (e.g. RESTAURANT_ECONOMICS_ANALYSIS) on a mismatched factory.type returns the
+        // honest "本厂非该业态" empty-state instead of executing a tool with no data.
+        IntentExecuteResponse businessTypeGate = checkBusinessTypeGate(factoryId, intent);
+        if (businessTypeGate != null) {
+            return businessTypeGate;
         }
 
         // Preview mode
@@ -975,6 +998,27 @@ public class IntentExecutionOrchestrator {
                 .validationViolations(validationResult.getViolations())
                 .recommendations(validationResult.getRecommendations())
                 .executedAt(LocalDateTime.now()).build();
+    }
+
+    /**
+     * Sprint 13 #305 业态门控 — gate domain-exclusive intents to the matching factory.type.
+     *
+     * <p>Cretas serves 2 customer types: RESTAURANT (餐厅, e.g. RES_3101_009) and FACTORY
+     * (制造厂, e.g. F006 六膳门卤味). A RESTAURANT-exclusive intent (business_type=RESTAURANT,
+     * e.g. {@code RESTAURANT_ECONOMICS_ANALYSIS}) triggered on a FACTORY-type factory has no
+     * data to operate on → previously returned a misleading half-broken "数据不可用". This gate
+     * returns an honest "本厂非餐厅业态" message + a domain-appropriate next-action instead
+     * (per {@code .claude/rules/fool-proof-design.md} Rule 5: dead-end → next action).
+     *
+     * <p>Only DOMAIN-EXCLUSIVE intents gate; {@code COMMON}/null business_type are universal
+     * and always pass (anti-goal: 不挡通用 intent). Fail-soft: any domain-lookup error → pass.
+     *
+     * @return honest empty-state response on业态 mismatch; {@code null} to proceed with execution.
+     */
+    private IntentExecuteResponse checkBusinessTypeGate(String factoryId, AIIntentConfig intent) {
+        // Delegates to the shared BusinessTypeGate so the main execute() flow, the explicit-intent
+        // flow, and SseStreamingService all gate identically (Sprint 13 #305).
+        return businessTypeGate.check(factoryId, intent).orElse(null);
     }
 
     IntentExecuteResponse buildClarificationResponse(IntentMatchResult matchResult, String factoryId) {
