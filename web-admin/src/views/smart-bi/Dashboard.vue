@@ -673,8 +673,36 @@ onMounted(async () => {
     return;
   }
 
-  // FIX-12: restore last-selected data source from localStorage so 刷新 doesn't reset to 'system'
+  // FIX-12: last-selected data source — used by both the 餐饮 default-range
+  // branch and the restore-source branches below.
   const remembered = factoryId.value ? localStorage.getItem(savedSourceKey(factoryId.value)) : null;
+
+  // 餐饮业态默认全量出图 (May 29 2026):
+  // 制造业的 period=month 默认对餐饮无意义 — 餐厅历史营收数据沉淀在过去月份
+  // (e.g. 青花椒全年 2025), 本月无新数据 → KPI 全 0 + 空趋势图。无显式区间且未锁定
+  // 具体上传时, 探测 Gold (agg_daily) 真实区间 [min,max] 默认显示全部已有数据,
+  // 餐饮老板登录即见全量图表, 不需先上传/选时间。
+  // 业态门控: 仅 RESTAURANT, FACTORY 保持 period=month 不回归。优先于
+  // remembered==='system' (那只是"上次在系统视图", 无具体区间), 但不覆盖用户
+  // 显式锁定的某次上传 (remembered 为具体 uploadId)。
+  if (isRestaurantTenant.value && factoryId.value && (!remembered || remembered === 'system')) {
+    try {
+      const dr = await getGoldDataRange(factoryId.value);
+      if (dr.minDate && dr.maxDate) {
+        // 设 dateRange → /executive/custom 全量区间; 日期选择器 (v-model) 直接显示
+        // "2025-01-01 至 2025-12-31", 用户一眼看到默认区间 (防呆透明)。
+        dateRange.value = [dr.minDate, dr.maxDate];
+        selectedDataSource.value = 'system';
+        await loadDashboardData();
+        return;
+      }
+      // dr 为空 (该餐厅 Gold 无数据) → 落到下方现有 ladder + 空状态 CTA, 不伪造区间。
+    } catch {
+      // 探测失败 → 不阻塞, 落到下方默认 period=month + ladder。
+    }
+  }
+
+  // FIX-12: restore last-selected data source from localStorage so 刷新 doesn't reset to 'system'
   if (remembered === 'system') {
     selectedDataSource.value = 'system';
     if (factoryId.value) {
@@ -697,30 +725,6 @@ onMounted(async () => {
       return;
     }
     // Remembered upload no longer exists — fall through to default
-  }
-
-  // 餐饮业态默认全量出图 (May 29 2026):
-  // 制造业的 period=month 默认对餐饮无意义 — 餐厅历史营收数据沉淀在过去月份
-  // (e.g. 青花椒全年 2025 数据), 本月 (2026-05) 无新数据 → KPI 全 0 + 空趋势图。
-  // 无记忆区间时, 探测 Gold (agg_daily) 真实数据区间 [min,max], 默认显示全部
-  // 已有数据, 而非空的当月。这样餐饮老板登录即见全量图表, 不需先上传/选时间。
-  // 业态门控: 仅 RESTAURANT 启用, FACTORY 保持 period=month 现状, 不回归。
-  if (isRestaurantTenant.value && factoryId.value) {
-    try {
-      const dr = await getGoldDataRange(factoryId.value);
-      if (dr.minDate && dr.maxDate) {
-        // 设 dateRange → 走 /executive/custom 全量区间 + 日期选择器 (v-model=dateRange)
-        // 直接显示 "2025-01-01 至 2025-12-31", 用户一眼看到默认区间 (防呆透明)。
-        dateRange.value = [dr.minDate, dr.maxDate];
-        selectedDataSource.value = 'system';
-        await loadDashboardData();
-        return;
-      }
-      // dr 为空 (该餐厅 Gold 尚无数据) → 落到下方默认, 现有 fallback ladder +
-      // 空状态 CTA (上传引导) 处理, 不伪造区间。
-    } catch {
-      // 探测失败 (网络/后端) → 不阻塞, 落到下方默认 period=month + ladder。
-    }
   }
 
   // Default to system data
