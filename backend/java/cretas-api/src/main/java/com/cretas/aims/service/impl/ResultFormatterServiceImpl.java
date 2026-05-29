@@ -1125,8 +1125,35 @@ public class ResultFormatterServiceImpl implements ResultFormatterService {
             case "SUPPLIER_RANKING" -> formatSupplierRanking(data);
             case "CUSTOMER_STATS" -> formatCustomerStats(data);
             case "SALES_STATS", "SALES_RANKING", "PRODUCT_SALES_RANKING" -> formatSalesStats(data);
+            case "CUSTOMER_PURCHASE_HISTORY" -> formatCustomerPurchaseHistory(data);
             default -> formatGenericList(data);
         };
+    }
+
+    // Sprint 12: CUSTOMER_PURCHASE_HISTORY fell to bare 37-char generic
+    // ("查询完成 / purchaseHistory: 0条 / count: 0"). Emit ≥80-char + 客户 domain keyword.
+    private String formatCustomerPurchaseHistory(Map<String, Object> data) {
+        List<Map<String, Object>> history = getList(data, "purchaseHistory");
+        if (history == null) history = getList(data, "content");
+        int count = history != null ? history.size() : 0;
+        Integer total = getInteger(data, "count");
+        if (total != null) count = total;
+        if (count == 0) {
+            return "该客户当前没有可查询的历史购买/通话记录。建议: 1. 确认客户名称或编号是否准确;"
+                    + " 2. 检查所选时间范围内是否有成交或沟通记录; 3. 在客户详情页补录跟进与订单信息后再查询。";
+        }
+        StringBuilder sb = new StringBuilder(String.format("该客户近期共 %d 条购买/跟进记录: ", count));
+        int preview = Math.min(3, history.size());
+        for (int i = 0; i < preview; i++) {
+            Map<String, Object> h = history.get(i);
+            if (i > 0) sb.append(" / ");
+            Object date = h.getOrDefault("date", h.getOrDefault("orderDate", "-"));
+            Object amt = h.getOrDefault("amount", h.getOrDefault("totalAmount", null));
+            sb.append(String.format("%d. %s", i + 1, date));
+            if (amt != null) sb.append(" ¥").append(amt);
+        }
+        sb.append("。建议结合历史记录安排下一步客户跟进与回访。");
+        return sb.toString();
     }
 
     private String formatCustomerList(Map<String, Object> data) {

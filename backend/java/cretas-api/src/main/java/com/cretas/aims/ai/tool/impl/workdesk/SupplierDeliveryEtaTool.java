@@ -114,7 +114,9 @@ public class SupplierDeliveryEtaTool extends AbstractBusinessTool {
                 Map<String, Object> empty = new HashMap<>();
                 empty.put("eta", Collections.emptyList());
                 return buildSimpleResult(
-                        String.format("⚠️ 供应商 %s 不存在或非本工厂", filterSupplierId), empty);
+                        String.format("供应商 %s 不存在或不属于本工厂。建议: 1. 核对供应商编号是否正确;"
+                                + " 2. 在供应商管理中确认该供应商已录入并归属本工厂; 3. 改用不带编号的查询查看全部供应商交期。",
+                                filterSupplierId), empty);
             }
             suppliers = List.of(opt.get());
         } else if (filterMaterialTypeId != null && !filterMaterialTypeId.isBlank()) {
@@ -147,10 +149,26 @@ public class SupplierDeliveryEtaTool extends AbstractBusinessTool {
         data.put("supplierFilter", filterSupplierId);
         data.put("eta", etaList);
 
-        String message = etaList.isEmpty()
-                ? "无匹配供应商. 请确认 supplier 数据已维护."
-                : String.format("📅 %d 个供应商交期 ETA (基于 supplier.deliveryDays + 最近 %d 天历史 AVG)",
-                        etaList.size(), HISTORY_LOOKBACK_DAYS);
+        // Sprint 12: emoji-free (B-end emoji=0) + ≥80-char with top-3 supplier preview.
+        String message;
+        if (etaList.isEmpty()) {
+            message = "未找到匹配的供应商交期数据。建议: 1. 确认供应商基础资料 (含 deliveryDays) 已维护;"
+                    + " 2. 检查最近 90 天是否有采购订单历史用于计算平均交期; 3. 联系采购部门补充供应商档案。";
+        } else {
+            StringBuilder sb = new StringBuilder();
+            sb.append(String.format("共 %d 个供应商交期 ETA (基于供应商约定交期 + 最近 %d 天采购历史平均): ",
+                    etaList.size(), HISTORY_LOOKBACK_DAYS));
+            int preview = Math.min(3, etaList.size());
+            for (int i = 0; i < preview; i++) {
+                Map<String, Object> e = etaList.get(i);
+                if (i > 0) sb.append(" / ");
+                Object name = e.getOrDefault("supplierName", e.getOrDefault("supplierId", "供应商"));
+                Object days = e.get("recommendedEtaDays");
+                sb.append(String.format("%d. %s 预计 %s 天", i + 1, name, days != null ? days.toString() : "-"));
+            }
+            sb.append("。建议优先安排交期短的供应商以保障生产排程。");
+            message = sb.toString();
+        }
         return buildSimpleResult(message, data);
     }
 
