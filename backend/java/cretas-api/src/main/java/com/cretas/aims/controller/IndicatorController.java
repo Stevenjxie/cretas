@@ -88,6 +88,24 @@ public class IndicatorController {
     private final IndicatorThresholdRepository indicatorThresholdRepository;
     private final IndicatorVersionRepository indicatorVersionRepository;
 
+    /**
+     * Sprint 12 Phase D (#266): 统一构造 "指标不存在" 404 异常, 满足 4 位一体.
+     *
+     * <p>消息 specific (code + factoryId), 带 actionHint + hintTarget + severity=warning,
+     * GlobalExceptionHandler 会 propagate 到前端, axios interceptor 404 分支看到 actionHint
+     * 时用 showRichError 渲 sticky notification + "返回指标中心" 跳转按钮 (而非之前 silent fail).
+     *
+     * <p>替换原 5 处 inline {@code new BusinessException(404, "指标不存在...")} — 之前那些
+     * 没 actionHint, 前端只 showMessage 不引导 next-action.
+     */
+    private BusinessException indicatorNotFound(String code, String factoryId) {
+        return new BusinessException(404,
+                "指标不存在: code=" + code + ", factoryId=" + factoryId)
+                .withHint("该指标可能尚未配置，请返回指标中心查看可用指标")
+                .withHintTarget("/indicator-center")
+                .withSeverity("warning");
+    }
+
     // ============================================================
     // 1. List indicators by factory + optional category
     // ============================================================
@@ -195,8 +213,7 @@ public class IndicatorController {
         log.debug("getByCode: factoryId={}, code={}", factoryId, code);
         Indicator ind = indicatorRepository
                 .findByCodeAndFactoryIdAndDeletedAtIsNull(code, factoryId)
-                .orElseThrow(() -> new BusinessException(404,
-                        "指标不存在: code=" + code + ", factoryId=" + factoryId));
+                .orElseThrow(() -> indicatorNotFound(code, factoryId));
         List<IndicatorThreshold> thresholds = indicatorThresholdRepository
                 .findActiveByIndicatorIdAndFactoryId(ind.getId(), factoryId);
         return ApiResponse.success(IndicatorDetailResponse.fromEntity(ind, thresholds));
@@ -240,8 +257,7 @@ public class IndicatorController {
         // Service throws if not found. We still need name/unit for the response.
         Indicator ind = indicatorRepository
                 .findByCodeAndFactoryIdAndDeletedAtIsNull(code, factoryId)
-                .orElseThrow(() -> new BusinessException(404,
-                        "指标不存在: code=" + code + ", factoryId=" + factoryId));
+                .orElseThrow(() -> indicatorNotFound(code, factoryId));
 
         IndicatorValueResult result = indicatorQueryService.computeForCode(code, factoryId, start, end);
         IndicatorValueResponse resp = IndicatorValueResponse.fromWithIndicator(
@@ -301,8 +317,7 @@ public class IndicatorController {
 
         Indicator ind = indicatorRepository
                 .findByCodeAndFactoryIdAndDeletedAtIsNull(code, factoryId)
-                .orElseThrow(() -> new BusinessException(404,
-                        "指标不存在: code=" + code + ", factoryId=" + factoryId));
+                .orElseThrow(() -> indicatorNotFound(code, factoryId));
 
         List<IndicatorVersion> all;
         if (windowStart != null && windowEnd != null) {
@@ -348,8 +363,7 @@ public class IndicatorController {
         log.debug("getThresholds: factoryId={}, code={}", factoryId, code);
         Indicator ind = indicatorRepository
                 .findByCodeAndFactoryIdAndDeletedAtIsNull(code, factoryId)
-                .orElseThrow(() -> new BusinessException(404,
-                        "指标不存在: code=" + code + ", factoryId=" + factoryId));
+                .orElseThrow(() -> indicatorNotFound(code, factoryId));
         List<IndicatorThreshold> thresholds = indicatorThresholdRepository
                 .findActiveByIndicatorIdAndFactoryId(ind.getId(), factoryId);
         List<ThresholdResponse> result = thresholds.stream()
@@ -398,8 +412,7 @@ public class IndicatorController {
 
         Indicator ind = indicatorRepository
                 .findByCodeAndFactoryIdAndDeletedAtIsNull(code, factoryId)
-                .orElseThrow(() -> new BusinessException(404,
-                        "指标不存在: code=" + code + ", factoryId=" + factoryId));
+                .orElseThrow(() -> indicatorNotFound(code, factoryId));
 
         // Force cache miss by clearing lastComputedAt; for PRECOMPUTED also clear lastValue
         // so the service falls through to Python fetch (PRECOMPUTED strategy normally returns

@@ -314,7 +314,22 @@ request.interceptors.response.use(
       const friendly = isSpringDefault || !backendMsg
         ? `请求的接口不存在 (${method} ${url})。可能是后端未上线该功能,或当前账号无权访问。`
         : backendMsg;
-      if (!originalRequest._silent) showMessage(friendly, 'error');
+      // Sprint 12 Phase D (#266): business-level 404 (e.g. 指标不存在) carries actionHint +
+      // hintTarget — render rich notification with next-action button instead of plain toast.
+      // This fixes audit A9 silent-failure: 指标 404 was 4-位一体 incomplete (no next-action).
+      // Generic Spring 404s (no actionHint) fall through to the existing friendly showMessage.
+      const rich404 = (error.response?.data as unknown as Record<string, string | null>) || {};
+      if (!originalRequest._silent) {
+        if (rich404.actionHint) {
+          showRichError(friendly, {
+            actionHint: rich404.actionHint,
+            severity: rich404.severity || 'warning',
+            hintTarget: rich404.hintTarget,
+          });
+        } else {
+          showMessage(friendly, 'error');
+        }
+      }
       return Promise.reject(new ApiError(friendly, 'NOT_FOUND', 404));
     }
 
