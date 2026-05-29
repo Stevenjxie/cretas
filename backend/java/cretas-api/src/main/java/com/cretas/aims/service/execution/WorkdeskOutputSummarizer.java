@@ -114,6 +114,16 @@ public class WorkdeskOutputSummarizer {
             if (summary != null && isDirty(summary)) {
                 summary = hardStripDirty(summary);
             }
+            // Sprint 12 fix: buildDeterministicFallback returns null when resultData
+            // is a shape it can't map (e.g. QUALITY_CHIEF_WORKDESK composite where a
+            // sub-tool returned needMoreInfo → raw merged JSON). Previously apply()
+            // returned here, KEEPING the dirty raw-JSON formattedText (rd-alert/rd-haccp
+            // 1013/293-char _toolCount leaks). Final guarantee: hard-strip the original
+            // dirty text so the user never sees raw JSON / underscore metadata.
+            if (summary == null || summary.isBlank()) {
+                String dirtySource = ftDirty ? formattedText : message;
+                summary = hardStripDirty(dirtySource);
+            }
             if (summary == null || summary.isBlank()) {
                 log.debug("WorkdeskOutputSummarizer: LLM unavailable AND fallback empty; keeping existing template");
                 return;
