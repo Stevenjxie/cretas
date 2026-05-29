@@ -1,22 +1,18 @@
 <template>
   <div class="b2b-real-section">
-    <!-- 大字 banner: 老板能用度的关键 -->
+    <!-- 老板能用度: 简洁说明数据来源, 无技术术语 (per fool-proof-design + 无 emoji) -->
     <el-alert
-      type="info"
+      type="success"
       :closable="false"
       show-icon
       class="big-banner"
     >
       <template #title>
-        <span class="big-banner-title">
-          客户演示模式 · Sprint 12 接 backend 真算法
-        </span>
+        <span class="big-banner-title">B2B 销售实时数据</span>
       </template>
       <template #default>
         <span class="big-banner-detail">
-          下方 B2B 卡片为 web-admin 前端实时计算自 <code>sales_orders</code> 表 (F006 真业务数据)。
-          其他卡片为 F999_MOCK 镜像示例 (Sprint 11 临时方案), 数值不代表真实业绩。
-          完整业务指标 (业态匹配的 B2B 工厂指标) 将在 Sprint 12 由 backend IndicatorQueryService 真接业务表计算。
+          下方卡片是贵厂销售订单的实时统计，反映真实经营数据，并非示例。
         </span>
       </template>
     </el-alert>
@@ -30,11 +26,8 @@
             <div>
               <h3 class="section-title">B2B 销售真业务数据</h3>
               <p class="section-subtitle">
-                来源: F006 <code>sales_orders</code> 表 ·
-                <el-tag size="small" type="success" effect="plain">前端实时计算</el-tag>
-                <el-tag size="small" type="warning" effect="plain" style="margin-left:6px">
-                  临时方案 — Sprint 12 接 backend
-                </el-tag>
+                来源: 销售订单 ·
+                <el-tag size="small" type="success" effect="plain">实时统计</el-tag>
               </p>
             </div>
           </div>
@@ -63,7 +56,7 @@
               <div class="b2b-card-label">订单总数</div>
               <div class="b2b-card-value">{{ stats.count }}</div>
               <div class="b2b-card-unit">单</div>
-              <div class="b2b-card-source">F006.sales_orders 行数</div>
+              <div class="b2b-card-source">销售订单数量</div>
             </div>
           </el-col>
           <el-col :xs="24" :sm="12" :md="8">
@@ -71,7 +64,11 @@
               <div class="b2b-card-label">平均订单金额 (B2B)</div>
               <div class="b2b-card-value">¥ {{ formatMoney(stats.avgAmount) }}</div>
               <div class="b2b-card-unit">元/单</div>
-              <div class="b2b-card-source">sum(totalAmount) / count</div>
+              <!-- #270: 样本小时均值波动大, 提示老板谨慎解读 -->
+              <div v-if="stats.count < 30" class="b2b-card-source b2b-card-warn">
+                样本较小 (n={{ stats.count }})，单笔大单会明显影响均值
+              </div>
+              <div v-else class="b2b-card-source">销售总额 / 订单数</div>
             </div>
           </el-col>
           <el-col :xs="24" :sm="12" :md="8">
@@ -79,7 +76,7 @@
               <div class="b2b-card-label">销售总额 (累计)</div>
               <div class="b2b-card-value">¥ {{ formatMoney(stats.totalAmount) }}</div>
               <div class="b2b-card-unit">元</div>
-              <div class="b2b-card-source">sum(totalAmount) across all orders</div>
+              <div class="b2b-card-source">全部订单金额累计</div>
             </div>
           </el-col>
         </el-row>
@@ -302,7 +299,12 @@ defineExpose({ loadData });
   font-size: 11px;
   color: var(--el-text-color-placeholder);
   margin-top: 8px;
-  font-family: var(--el-font-family-monospace, monospace);
+}
+
+/* #270 样本小提示 — warning 色, 非 monospace, 老板可读 */
+.b2b-card-warn {
+  color: var(--el-color-warning);
+  font-size: 11px;
 }
 
 .data-footer {
