@@ -86,7 +86,7 @@
     <el-card v-if="formattedText" class="result-card" shadow="never">
       <template #header>
         <div class="card-header">
- <span> 排产建议清单</span>
+ <span> {{ resultTitle }}</span>
           <span class="header-hint" v-if="lastQueryTime">
             {{ lastQueryTime }} 生成
           </span>
@@ -306,6 +306,10 @@ const errorMessage = ref('');
 const formattedText = ref('');
 const demands = ref<ProductDemand[]>([]);
 const lastQueryTime = ref('');
+// Sprint 13 #304: dynamic result-card header — reflects the answered intent for user
+// queries instead of always showing the auto-mount "排产建议清单" label.
+const DEFAULT_RESULT_TITLE = '排产建议清单';
+const resultTitle = ref(DEFAULT_RESULT_TITLE);
 
 const factoryId = computed(() => authStore.factoryId || 'F006');
 
@@ -383,6 +387,10 @@ async function sendQuery(forceDemand = false) {
     formattedText.value = response.formattedText || response.message
         || '(无输出)';
     lastQueryTime.value = new Date().toLocaleTimeString('zh-CN');
+    // Sprint 13 #304: title reflects the answered intent for user queries.
+    resultTitle.value = forceDemand
+        ? DEFAULT_RESULT_TITLE
+        : (response.intentName || '查询结果');
 
     // 解析 resultData
     extractDemandsFromResult(response.resultData || {});

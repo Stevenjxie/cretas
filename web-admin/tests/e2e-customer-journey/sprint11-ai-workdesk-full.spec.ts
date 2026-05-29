@@ -77,6 +77,17 @@ type CaseCapture = {
   executeReqBodyCount?: number; // total POST count to /ai-intents/execute observed
   executeRespStatus?: number;
   executeRespBody?: string;
+  // Sprint 13 #304: honest-verdict instrumentation (per feedback_ui_false_pass_auto_mount_masks_user_input).
+  // autoMountSettled — did the onMounted auto-trigger query finish before we typed? If false,
+  //   the send button was still :loading (disabled) at click time → user POST cannot fire →
+  //   the "PASS" would be on stale auto-mount content (the exact false-PASS root cause).
+  // userPostFired — did the user-click POST (body contains phrase) actually fire? For a
+  //   non-empty phrase this MUST be true; false ⇒ FAIL, not PASS.
+  // userIntentCode — intentCode parsed from the user-click response (ground truth, not auto-mount).
+  autoMountSettled?: boolean;
+  userPostFired?: boolean;
+  userIntentCode?: string;
+  expectedIntentCode?: string;
   // UI observations
   resultCardPresent?: boolean;
   formattedTextInnerText?: string;
@@ -290,12 +301,23 @@ async function runWorkdeskCase(page: Page, cap: CaseCapture, acct: Account, rout
   // Step 2.5: Install MutationObserver per Rule 7 (BEFORE any action)
   await installToastObserver(page);
 
-  // Step 3: Wait for auto-mount initial query to settle
-  await page.waitForFunction(() => {
+  // Step 3: Wait for auto-mount initial query to FULLY settle.
+  //
+  // Sprint 13 #304 honest-verdict fix (per feedback_ui_false_pass_auto_mount_masks_user_input):
+  // The previous version swallowed this timeout silently. On the rate-limited 22-case run the
+  // 5-tool auto-mount aggregation routinely exceeded 90s; the spec then typed + clicked on a
+  // STILL-:loading (disabled) send button, the user POST never fired, and the weak
+  // resultCardPresent gate reported PASS on the stale auto-mount card. We now (a) also wait for
+  // the loading-card to disappear and (b) RECORD whether settle succeeded so the verdict can FAIL
+  // instead of silently passing.
+  cap.autoMountSettled = await page.waitForFunction(() => {
     const btn = document.querySelector('.chat-input button.el-button--primary');
     if (!btn) return false;
-    return !btn.classList.contains('is-loading');
-  }, { timeout: 90_000 }).catch(() => { /* WARN: initial query never settled */ });
+    if (btn.classList.contains('is-loading')) return false;
+    // Also require the global loading-card gone (it is shown while loading===true).
+    if (document.querySelector('.loading-card')) return false;
+    return true;
+  }, { timeout: 120_000 }).then(() => true).catch(() => false);
 
   // Step 4: Fill phrase + (optional contextMonth via dialog/inject if applicable)
   const textarea = page.locator('.chat-input textarea').first();
@@ -327,6 +349,9 @@ async function runWorkdeskCase(page: Page, cap: CaseCapture, acct: Account, rout
   const userPost = await userPostPromise;
   if (userPost) {
     cap.executeReqBody = userPost.body;
+    cap.userPostFired = true;
+  } else {
+    cap.userPostFired = false;
   }
 
   // Step 6: Wait for response or error/empty validation
@@ -420,7 +445,41 @@ async function runWorkdeskCase(page: Page, cap: CaseCapture, acct: Account, rout
   await page.screenshot({ path: pngPath, fullPage: true, timeout: 60_000 }).catch(() => {});
   cap.pngPath = pngPath;
 
-  cap.status = 'PASS';
+  // Step 11: HONEST VERDICT (Sprint 13 #304, per feedback_ui_false_pass_auto_mount_masks_user_input).
+  //
+  // The previous unconditional `cap.status = 'PASS'` plus the weak resultCardPresent gate let the
+  // auto-mount card masquerade as a passing user query. We now compute status from whether the
+  // USER's query actually exercised the backend:
+  //   - empty phrase (E1 validation): button should be disabled, no user POST → PASS when no POST fired.
+  //   - non-empty phrase: the user-click POST MUST fire (userPostFired) AND, when an
+  //     expectedIntentCode is declared, the response intentCode MUST match it (strong assert,
+  //     not resultCardPresent). If auto-mount never settled, the click hit a disabled button →
+  //     FAIL with a clear reason (the exact false-PASS condition this spec used to hide).
+  cap.userIntentCode = (() => {
+    try {
+      const parsed = JSON.parse(cap.executeRespBody || '{}');
+      return parsed?.data?.intentCode || parsed?.intentCode || undefined;
+    } catch { return undefined; }
+  })();
+
+  if (!phrase) {
+    // Empty-input validation case: success = the disabled button blocked a user POST.
+    cap.status = cap.userPostFired ? 'FAIL' : 'PASS';
+    if (cap.userPostFired) cap.error = 'empty input still produced a POST (validation did not block)';
+  } else if (!cap.autoMountSettled) {
+    cap.status = 'FAIL';
+    cap.error = 'auto-mount never settled within 120s → send button still :loading at click time, '
+      + 'user POST could not fire (this is the #304 false-PASS condition, not a real pass)';
+  } else if (!cap.userPostFired) {
+    cap.status = 'FAIL';
+    cap.error = `user-click POST never fired for phrase "${phrase}" (executeReqBody=None). `
+      + 'The rendered card is auto-mount content, not the user query answer.';
+  } else if (cap.expectedIntentCode && cap.userIntentCode !== cap.expectedIntentCode) {
+    cap.status = 'FAIL';
+    cap.error = `misroute: expected intentCode=${cap.expectedIntentCode}, got ${cap.userIntentCode}`;
+  } else {
+    cap.status = 'PASS';
+  }
 }
 
 test.beforeAll(() => {
@@ -448,6 +507,9 @@ test.describe.serial('Sprint 11 AI Workdesk Full E2E + UX Audit — 22 cases', (
           caseId, depth, account: acct.label, factoryId: acct.factoryId,
           workdesk: 'SalesOwner', route: 'workdesk/sales-owner', phrase,
           status: 'FAIL',
+          // Sprint 13 #304: all 4 core phrases must route to RESTAURANT_ECONOMICS_ANALYSIS
+          // (per FACTORY-AI-VERIFY-REPORT 12/12). Strong-assert it instead of resultCardPresent.
+          expectedIntentCode: 'RESTAURANT_ECONOMICS_ANALYSIS',
         };
         try {
           await runWorkdeskCase(page, cap, acct, 'workdesk/sales-owner', phrase);

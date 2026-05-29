@@ -75,7 +75,7 @@
     <el-card v-if="formattedText" class="result-card" shadow="never">
       <template #header>
         <div class="card-header">
- <span> 月度经营摘要</span>
+ <span> {{ resultTitle }}</span>
           <span class="header-hint" v-if="lastQueryTime">
             {{ lastQueryTime }} 生成
           </span>
@@ -410,6 +410,10 @@ const loading = ref(false);
 const errorMessage = ref('');
 const formattedText = ref('');
 const lastQueryTime = ref('');
+// Sprint 13 #304: dynamic result-card header — reflects the answered intent for user
+// queries instead of always showing the auto-mount "月度经营摘要" label.
+const DEFAULT_RESULT_TITLE = '月度经营摘要';
+const resultTitle = ref(DEFAULT_RESULT_TITLE);
 
 // Key metrics (extracted from Skill result)
 const periodStatus = ref<'OPEN' | 'PENDING_CLOSE' | 'CLOSED' | ''>('');
@@ -547,6 +551,10 @@ async function sendQuery(forceMonthlyClose = false) {
     const response = await callIntentExecute(userInput.value, intentCode);
     formattedText.value = response.formattedText || response.message || '(无输出)';
     lastQueryTime.value = new Date().toLocaleTimeString('zh-CN');
+    // Sprint 13 #304: title reflects the answered intent for user queries.
+    resultTitle.value = forceMonthlyClose
+        ? DEFAULT_RESULT_TITLE
+        : (response.intentName || '查询结果');
 
     const resultData = response.resultData || {};
     extractKeyMetrics(resultData);
