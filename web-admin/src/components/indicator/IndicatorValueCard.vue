@@ -62,6 +62,19 @@
       <el-icon><InfoFilled /></el-icon>
       <span>未计算</span>
     </div>
+
+    <!-- Sprint 12 #265: next-action button (dead-end → 跳 actionable 页, fool-proof Rule 5) -->
+    <div v-if="actionHint && actionHint.route" class="card-action">
+      <el-button
+        text
+        type="primary"
+        size="small"
+        @click.stop="goAction"
+      >
+        {{ actionHint.label }}
+        <el-icon class="action-arrow"><ArrowRight /></el-icon>
+      </el-button>
+    </div>
   </el-card>
 </template>
 
@@ -72,7 +85,14 @@
  * Dashboard / Tree / List 共用. 点击 emit 'click' 让父组件打开 detail drawer.
  */
 import { computed } from 'vue';
-import { Clock, InfoFilled } from '@element-plus/icons-vue';
+import { useRouter } from 'vue-router';
+import { Clock, InfoFilled, ArrowRight } from '@element-plus/icons-vue';
+
+/** Sprint 12 #265: KPI 卡片 next-action 提示 (后端 config.actionHint extract). */
+interface ActionHint {
+  label: string;
+  route?: string | null;
+}
 
 interface CardData {
   code: string;
@@ -84,6 +104,7 @@ interface CardData {
   lastComputedAt?: string | null;
   computeStrategy?: string;
   alertLevel?: 'GREEN' | 'YELLOW' | 'RED' | null;
+  actionHint?: ActionHint | null;
 }
 
 interface Props {
@@ -112,10 +133,21 @@ const emit = defineEmits<{
   (e: 'click', code: string): void;
 }>();
 
+const router = useRouter();
+
 function onClick() {
   if (props.clickable) {
     emit('click', props.indicator.code);
   }
+}
+
+// Sprint 12 #265: next-action button — dead-end → 跳到 actionable 页面 (fool-proof Rule 5).
+// @click.stop 防止冒泡触发卡片的 detail drawer.
+const actionHint = computed(() => props.indicator.actionHint || null);
+
+function goAction() {
+  const route = actionHint.value?.route;
+  if (route) router.push(route);
 }
 
 const hasValue = computed(() =>
@@ -304,5 +336,17 @@ function relativeTime(iso: string): string {
 
 .card-footer-empty {
   color: var(--el-text-color-placeholder);
+}
+
+/* Sprint 12 #265: next-action button (dead-end → 跳 actionable 页) */
+.card-action {
+  margin-top: 8px;
+  padding-top: 6px;
+  border-top: 1px dashed var(--el-border-color-lighter);
+  text-align: right;
+}
+.action-arrow {
+  margin-left: 2px;
+  font-size: 12px;
 }
 </style>

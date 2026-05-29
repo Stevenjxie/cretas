@@ -353,6 +353,8 @@ function indicatorToCardData(ind: IndicatorListResponse) {
     computeStrategy: ind.computeStrategy,
     // list 接口不返回 alertLevel; 点击详情时从 /value 获取真值
     alertLevel: null as AlertLevel,
+    // Sprint 12 #265: next-action 提示 (后端 config.actionHint extract)
+    actionHint: (ind as { actionHint?: { label: string; route?: string | null } | null }).actionHint ?? null,
   };
 }
 
