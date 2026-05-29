@@ -32,10 +32,22 @@ public interface IndicatorComputationStrategy {
     /**
      * 计算指标值.
      *
+     * <p>Sprint 12 Phase B step 5 convention 升级:
+     * <ul>
+     *   <li><b>Counter strategies</b> (COUNT/SUM): 无业务事件返 {@link BigDecimal#ZERO}
+     *       — "今日 0 单" 是真业务事实, 0 是 valid count.</li>
+     *   <li><b>Ratio strategies</b> (AVG/percentages/rates): 无样本/无分母返 {@code null}
+     *       — "0% reject" 误导成 "perfect quality", 应该让 UI 显示 "—" 而非 "0%".</li>
+     * </ul>
+     *
+     * <p>Caller (IndicatorQueryServiceImpl) 对 null 的处理: skip saveVersion + skip
+     * lastValue update, IndicatorValueResult.value 还是 null, 前端 IndicatorValueCard
+     * 渲 "—" + 配合 actionHint 引导老板做下一步 (per fool-proof-design Rule 5).
+     *
      * @param factoryId 工厂 ID
      * @param periodStart 业务时间窗起点 (caller 传, 可为 null — strategy 决定 default, e.g. MTD)
      * @param periodEnd 业务时间窗终点 (caller 传, 可为 null)
-     * @return 计算结果. 若数据为空 (e.g. 当月无订单), 返 {@link BigDecimal#ZERO} 而不是 null.
+     * @return 计算结果, 或 {@code null} 表示该 ratio strategy 在该 period 无有效样本.
      */
     BigDecimal compute(String factoryId, LocalDate periodStart, LocalDate periodEnd);
 }

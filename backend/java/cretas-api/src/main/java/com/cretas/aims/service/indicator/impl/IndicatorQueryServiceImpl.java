@@ -104,12 +104,16 @@ public class IndicatorQueryServiceImpl implements IndicatorQueryService {
     /**
      * REALTIME — 每次都调 Python, 不读 cache 也不写 lastValue (保留 lastValue 给 scheduler).
      * 仍落 version 快照, 用于审计 / 趋势.
+     *
+     * <p>Phase B step 5: ratio strategies 无样本返 null → skip saveVersion (column NOT NULL).
      */
     IndicatorValueResult computeRealtime(Indicator ind, String factoryId,
                                           LocalDate start, LocalDate end) {
         FetchOutcome outcome = fetchFromPython(ind, factoryId, start, end);
         LocalDateTime computedAt = LocalDateTime.now();
-        saveVersion(ind, factoryId, outcome.value(), start, end, computedAt, outcome.sourceLabel());
+        if (outcome.value() != null) {
+            saveVersion(ind, factoryId, outcome.value(), start, end, computedAt, outcome.sourceLabel());
+        }
         return new IndicatorValueResult(outcome.value(), computedAt, false, "python");
     }
 
@@ -143,13 +147,17 @@ public class IndicatorQueryServiceImpl implements IndicatorQueryService {
             return new IndicatorValueResult(lastValue, lastComputed, true, "cache");
         }
 
-        // Cache miss / 过期: fetch Python + 更新 lastValue + 落 version
+        // Cache miss / 过期: fetch + 更新 lastValue + 落 version
+        // Phase B step 5: ratio strategies 无样本返 null → skip persistence
+        // (column NOT NULL + Rule 21 honest data 让 UI 渲 "—" 而非 "0%" 误导)
         FetchOutcome outcome = fetchFromPython(ind, factoryId, start, end);
         LocalDateTime computedAt = LocalDateTime.now();
-        ind.setLastValue(outcome.value());
-        ind.setLastComputedAt(computedAt);
-        indicatorRepository.save(ind);
-        saveVersion(ind, factoryId, outcome.value(), start, end, computedAt, outcome.sourceLabel());
+        if (outcome.value() != null) {
+            ind.setLastValue(outcome.value());
+            ind.setLastComputedAt(computedAt);
+            indicatorRepository.save(ind);
+            saveVersion(ind, factoryId, outcome.value(), start, end, computedAt, outcome.sourceLabel());
+        }
         return new IndicatorValueResult(outcome.value(), computedAt, false, "python");
     }
 
