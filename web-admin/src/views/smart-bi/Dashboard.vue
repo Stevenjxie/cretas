@@ -43,6 +43,7 @@ import SmartBIEmptyState from '@/components/smartbi/SmartBIEmptyState.vue';
 import ChartSkeleton from '@/components/smartbi/ChartSkeleton.vue';
 import { enhanceChartDefaults } from '@/composables/useChartEnhancer';
 import TemplateGrid from './components/TemplateGrid.vue';
+import RestaurantGoldGrid from './components/RestaurantGoldGrid.vue';
 // Day 8 数据织网 Sub-Project A: capability-driven card visibility
 import { useCapability } from '@/composables/useCapability';
 import CapabilityGate from '@/components/CapabilityGate.vue';
@@ -2218,8 +2219,16 @@ onUnmounted(() => {
       </el-col>
     </el-row>
 
+    <!-- 餐饮业态: Gold 全量营收分析 (门店排行 + 渠道占比), 取代通用 schema-driven
+         模板卡 — 后者对青花椒误选"星级分"显示累计 SUM bug 且老板不关心 (May 29 2026,
+         per 合理性分析: 营收类指标老板每天必看, 星级评价稀疏过时降级)。制造业仍用模板卡。 -->
+    <RestaurantGoldGrid
+      v-if="isRestaurantTenant"
+      :factory-id="factoryId || ''"
+      :date-range="dateRange"
+    />
     <!-- Week 6 Template Surfacing: show analysis results for this page -->
-    <TemplateGrid page-key="dashboard" :factory-id="factoryId || ''" />
+    <TemplateGrid v-else page-key="dashboard" :factory-id="factoryId || ''" />
 
     <!-- Day 8 数据织网 Sub-Project A: bottom CTA prompting users to unlock
          capability-gated cards by uploading more comprehensive data -->
