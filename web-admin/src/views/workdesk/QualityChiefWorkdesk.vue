@@ -81,7 +81,7 @@
     <el-card v-if="formattedText" class="result-card" shadow="never">
       <template #header>
         <div class="card-header">
- <span> AI 综合建议</span>
+ <span> {{ resultTitle }}</span>
           <span class="header-hint" v-if="lastQueryTime">{{ lastQueryTime }} 生成</span>
         </div>
       </template>
@@ -317,6 +317,10 @@ const loading = ref(false);
 const errorMessage = ref('');
 const formattedText = ref('');
 const lastQueryTime = ref('');
+// Sprint 13 #304: dynamic result-card header — reflects the answered intent for user
+// queries instead of always showing the auto-mount "AI 综合建议" label.
+const DEFAULT_RESULT_TITLE = 'AI 综合建议';
+const resultTitle = ref(DEFAULT_RESULT_TITLE);
 
 const pendingBatches = ref<PendingBatch[]>([]);
 
@@ -395,6 +399,12 @@ async function sendQuery() {
     const response = await callIntentExecute(userInput.value);
     formattedText.value = response.formattedText || response.message || '(无输出)';
     lastQueryTime.value = new Date().toLocaleTimeString('zh-CN');
+    // Sprint 13 #304: title reflects the answered intent. triggerPendingQuery resets
+    // userInput to the default phrase before calling, so the default ask still maps to
+    // the canonical 待放行 query and shows the default title via the intentName fallback.
+    resultTitle.value = userInput.value === '今天哪些批次待放行?'
+        ? DEFAULT_RESULT_TITLE
+        : (response.intentName || DEFAULT_RESULT_TITLE);
     extractBatchesFromResult(response.resultData || {});
   } catch (err: unknown) {
     const msg = extractErrorMessage(err);

@@ -80,7 +80,7 @@
     <el-card v-if="formattedText" class="result-card" shadow="never">
       <template #header>
         <div class="card-header">
- <span> 召回分析结果</span>
+ <span> {{ resultTitle }}</span>
           <span class="header-hint" v-if="lastQueryTime">
             {{ lastQueryTime }} 生成
           </span>
@@ -586,6 +586,10 @@ const loading = ref(false);
 const errorMessage = ref('');
 const formattedText = ref('');
 const lastQueryTime = ref('');
+// Sprint 13 #304: dynamic result-card header — reflects the answered intent for user
+// queries instead of always showing the auto-mount "召回分析结果" label.
+const DEFAULT_RESULT_TITLE = '召回分析结果';
+const resultTitle = ref(DEFAULT_RESULT_TITLE);
 
 const recallContext = reactive<RecallContext>({
   batchNumber: '',
@@ -700,6 +704,12 @@ async function sendQuery() {
     const response = await callIntentExecute(userInput.value);
     formattedText.value = response.formattedText || response.message || '(无输出)';
     lastQueryTime.value = new Date().toLocaleTimeString('zh-CN');
+    // Sprint 13 #304: title reflects the answered intent. triggerHaccpQuery resets
+    // userInput to the default phrase before calling, so the default ask keeps the
+    // canonical 召回分析结果 title.
+    resultTitle.value = userInput.value === '今天 HACCP 监控全通过吗?'
+        ? DEFAULT_RESULT_TITLE
+        : (response.intentName || DEFAULT_RESULT_TITLE);
     extractRecallDataFromResult(response.resultData || {});
   } catch (err: unknown) {
     const msg = extractErrorMessage(err);

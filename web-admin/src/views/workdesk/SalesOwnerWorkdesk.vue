@@ -77,11 +77,54 @@
          Sprint 12 backend rewrite 接 sister AI 工厂 chat, 见 docs/sprint-12-backlog/indicator-service-rewrite.md -->
     <B2BRealDataSection :factory-id="factoryId" />
 
+    <!-- Sprint 13 #304: Restaurant P&L card render when RESTAURANT_ECONOMICS_ANALYSIS
+         intent returns dataAvailable=true. Mirrors WarehouseKeeperWorkdesk Q6 Option B.6
+         pattern so the user's economics query (e.g. "哪个菜亏钱") produces an INDEPENDENT
+         structured card (separate from the auto-mount 今日跟进清单), and the real ¥ P&L
+         numbers render once backend RESTAURANT_ECONOMICS_ANALYSIS data wiring (S13-001)
+         lands. When dataAvailable=false the card stays hidden and formattedText carries
+         the honest "部分数据不可用" degradation message. -->
+    <el-card v-if="restaurantPnl" class="restaurant-pnl-card" shadow="never">
+      <template #header>
+        <div class="card-header">
+          <span>餐厅经营分析 — {{ restaurantPnl.storeName }}{{ restaurantPnl.period ? ' (' + restaurantPnl.period + ')' : '' }}</span>
+          <span class="header-hint" v-if="lastQueryTime">
+            {{ lastQueryTime }} 生成
+          </span>
+        </div>
+      </template>
+      <div class="pnl-headline" :class="'pnl-headline-' + restaurantPnl.headlineColor">
+        {{ restaurantPnl.headline }}
+      </div>
+      <el-table :data="restaurantPnl.pnlLines" stripe size="small" class="pnl-table">
+        <el-table-column prop="label" label="项目" min-width="120" />
+        <el-table-column label="金额 ¥" min-width="140" align="right">
+          <template #default="{ row }">
+            {{ formatPnlAmount(row.amount) }}
+          </template>
+        </el-table-column>
+        <el-table-column label="占营收 %" min-width="100" align="right">
+          <template #default="{ row }">
+            {{ row.pctOfRevenue != null ? (row.pctOfRevenue * 100).toFixed(2) + '%' : '—' }}
+          </template>
+        </el-table-column>
+        <el-table-column prop="statusEmoji" label="状态" width="80" align="center">
+          <template #default="{ row }">{{ row.statusEmoji || '' }}</template>
+        </el-table-column>
+        <el-table-column prop="note" label="备注" min-width="160">
+          <template #default="{ row }">
+            <span v-if="row.note">{{ row.note }}</span>
+            <span v-else class="cell-empty">—</span>
+          </template>
+        </el-table-column>
+      </el-table>
+    </el-card>
+
     <!-- AI 输出 -->
     <el-card v-if="formattedText" class="result-card" shadow="never">
       <template #header>
         <div class="card-header">
- <span> 今日跟进清单</span>
+ <span> {{ resultTitle }}</span>
           <span class="header-hint" v-if="lastQueryTime">
             {{ lastQueryTime }} 生成
           </span>
@@ -514,6 +557,23 @@ interface ExecuteResponse {
   resultData?: Record<string, unknown>;
 }
 
+// Sprint 13 #304: restaurant P&L shape (mirror WarehouseKeeperWorkdesk Q6 Option B.6)
+interface PnlLine {
+  label: string;
+  amount: number;
+  pctOfRevenue: number | null;
+  statusEmoji: string | null;
+  note: string | null;
+}
+interface RestaurantPnl {
+  headline: string;
+  headlineColor: string;
+  pnlLines: PnlLine[];
+  storeName: string;
+  period: string;
+  subSector: string;
+}
+
 const router = useRouter();
 const authStore = useAuthStore();
 
@@ -524,6 +584,12 @@ const formattedText = ref('');
 const customers = ref<CustomerItem[]>([]);
 const staleOpportunities = ref<StaleOpportunity[]>([]);
 const lastQueryTime = ref('');
+// Sprint 13 #304: result-card header reflects the actual answered intent instead of a
+// hardcoded "今日跟进清单" (which mislabels e.g. a 餐厅经营分析 answer). Default keeps the
+// auto-mount title; user queries show the recognized intent's display name.
+const DEFAULT_RESULT_TITLE = '今日跟进清单';
+const resultTitle = ref(DEFAULT_RESULT_TITLE);
+const restaurantPnl = ref<RestaurantPnl | null>(null);
 
 const factoryId = computed(() => authStore.factoryId || 'F006');
 
@@ -629,6 +695,7 @@ async function sendQuery(forceFollowup = false) {
   formattedText.value = '';
   customers.value = [];
   staleOpportunities.value = [];
+  restaurantPnl.value = null;
 
   try {
     const intentCode = forceFollowup ? 'DAILY_CUSTOMER_FOLLOWUP' : undefined;
@@ -647,11 +714,17 @@ async function sendQuery(forceFollowup = false) {
     formattedText.value = response.formattedText || response.message
         || '(无输出)';
     lastQueryTime.value = new Date().toLocaleTimeString('zh-CN');
+    // Sprint 13 #304: title reflects the answered intent for user queries; auto-mount
+    // (forceFollowup) keeps the canonical 今日跟进清单 label.
+    resultTitle.value = forceFollowup
+        ? DEFAULT_RESULT_TITLE
+        : (response.intentName || '查询结果');
 
     // 解析 resultData (Skill aggregate 后的多 Tool 结果)
     const resultData = response.resultData || {};
     extractCustomersFromResult(resultData);
     extractStaleOpportunitiesFromResult(resultData);
+    extractRestaurantPnl(response.intentCode, resultData);
   } catch (err: unknown) {
     const msg = extractErrorMessage(err);
     errorMessage.value = `查询失败: ${msg}`;
@@ -691,6 +764,43 @@ function extractStaleOpportunitiesFromResult(resultData: Record<string, unknown>
       staleOpportunities.value = list;
     }
   }
+}
+
+/**
+ * Sprint 13 #304: extract restaurant P&L from RESTAURANT_ECONOMICS_ANALYSIS Composite
+ * Tool response so the user's economics query renders an independent structured card.
+ * Mirrors WarehouseKeeperWorkdesk.extractRestaurantPnl — same backend shape:
+ *   resultData.summary.data.data.{headline, headlineColor, pnlLines, storeName, period}
+ * When dataAvailable=false (no data for month — current S13-001 backend gap), restaurantPnl
+ * stays null and the formattedText-only render carries the honest degradation message.
+ */
+function extractRestaurantPnl(intentCode: string | undefined,
+    resultData: Record<string, unknown>) {
+  restaurantPnl.value = null;
+  if (intentCode !== 'RESTAURANT_ECONOMICS_ANALYSIS') return;
+  const summary = resultData['summary'] as Record<string, unknown> | undefined;
+  if (!summary || summary['dataAvailable'] !== true) return;
+  const outer = summary['data'] as Record<string, unknown> | undefined;
+  const inner = outer?.['data'] as Record<string, unknown> | undefined;
+  if (!inner || typeof inner['headline'] !== 'string') return;
+  const lines = inner['pnlLines'];
+  if (!Array.isArray(lines)) return;
+  restaurantPnl.value = {
+    headline: inner['headline'] as string,
+    headlineColor: (inner['headlineColor'] as string) || 'gray',
+    pnlLines: lines as PnlLine[],
+    storeName: (inner['storeName'] as string) || '本店',
+    period: (inner['period'] as string) || '',
+    subSector: (inner['subSector'] as string) || '',
+  };
+}
+
+function formatPnlAmount(amount: number | null | undefined): string {
+  if (amount == null) return '—';
+  return new Intl.NumberFormat('zh-CN', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(amount);
 }
 
 function extractErrorMessage(err: unknown): string {
@@ -1250,6 +1360,41 @@ onMounted(() => {
   line-height: 1.8;
   color: #303133;
   white-space: pre-wrap;
+}
+
+/* Sprint 13 #304 — restaurant P&L card styles (mirror WarehouseKeeperWorkdesk) */
+.restaurant-pnl-card {
+  margin-bottom: 16px;
+  border: 1px solid #e0e6ed;
+}
+.pnl-headline {
+  font-size: 20px;
+  font-weight: 600;
+  padding: 12px 8px;
+  margin-bottom: 12px;
+  border-radius: 4px;
+}
+.pnl-headline-green {
+  background-color: #f0f9eb;
+  color: #67c23a;
+}
+.pnl-headline-red {
+  background-color: #fef0f0;
+  color: #f56c6c;
+}
+.pnl-headline-yellow {
+  background-color: #fdf6ec;
+  color: #e6a23c;
+}
+.pnl-headline-gray {
+  background-color: #f4f4f5;
+  color: #909399;
+}
+.pnl-table {
+  margin-top: 8px;
+}
+.cell-empty {
+  color: #c0c4cc;
 }
 
 .customers-grid {
