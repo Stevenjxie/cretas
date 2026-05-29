@@ -74,17 +74,25 @@ AI 工厂 chat 中老板提到指标/溯源相关问题时, 智能选择最合�
 
 ## 指标编码映射
 
-中文 → 编码 (大写下划线):
+中文 → 编码 (大写下划线). Sprint 12 更新: V_23_11 mirror codes (AVG_TICKET_PRICE/TABLE_TURNOVER/
+FACTORY_YIELD_RATE 等) 已删, 改 map 到 Phase B/C 真接业务表的 REAL_BUSINESS codes:
 
-| 中文 | 编码 |
-|---|---|
-| 客单价 | AVG_TICKET_PRICE |
-| 翻台率 | TABLE_TURNOVER |
-| 食材损耗率 / 损耗率 | RAW_WASTAGE_RATE |
-| 良品率 / 工厂良品率 | FACTORY_YIELD_RATE |
-| 食安通过率 / 食安合格率 | FOOD_SAFETY_PASS_RATE |
-| 计划达成率 / 完成率 | FACTORY_PLAN_ACHIEVE_RATE |
-| 菜品毛利 / 毛利率 | DISH_GROSS_MARGIN |
+| 中文 | 编码 | 数据源 |
+|---|---|---|
+| 客单价 / 平均订单金额 | B2B_AVG_ORDER_VALUE | sales_orders |
+| 销售额 / 本月营收 | B2B_TOTAL_REVENUE_MTD | sales_orders |
+| 订单数 / 本月订单 | B2B_ORDER_COUNT_MTD | sales_orders |
+| 库存价值 / 库存 | FACTORY_INVENTORY_VALUE | material_batches |
+| 不合格率 / 质检不合格 | FACTORY_QUALITY_REJECT_RATE | quality_inspections |
+| HACCP违规 / 违规次数 | FACTORY_HACCP_VIOLATIONS_MTD | haccp_monitoring_records |
+| 出品率 | FACTORY_LU_YIELD_RATE | production_batches |
+| 单位成本 / 成本 | FACTORY_LU_UNIT_COST | production_batches |
+| 日均产量 / 产量 | FACTORY_LU_DAILY_OUTPUT | production_batches |
+| 原料周转 / 周转天数 | FACTORY_LU_MATERIAL_TURNOVER_DAYS | material_batches |
+| 真空包装合格率 / 真空包装 | FACTORY_LU_VACUUM_PACK_PASS_RATE | quality_inspections |
+
+注: 卤味工厂 (F006) 不再用餐饮 codes (翻台率/菜品毛利). 若数据为空指标返 "—" (null-preserve),
+属正常 — 等老板录入生产/质检数据后自动填.
 
 ## 输出格式
 
@@ -98,12 +106,12 @@ AI 工厂 chat 中老板提到指标/溯源相关问题时, 智能选择最合�
 }
 ```
 
-例 1 — 单查良品率:
+例 1 — 单查出品率:
 ```json
 {
   "tool": "indicator_query",
-  "params": { "indicator_code": "FACTORY_YIELD_RATE" },
-  "reasoning": "用户明确问良品率, 单一指标查询"
+  "params": { "indicator_code": "FACTORY_LU_YIELD_RATE" },
+  "reasoning": "用户明确问出品率, 单一指标查询"
 }
 ```
 
@@ -111,7 +119,7 @@ AI 工厂 chat 中老板提到指标/溯源相关问题时, 智能选择最合�
 ```json
 {
   "tool": "indicator_comparison",
-  "params": { "indicator_codes": ["AVG_TICKET_PRICE", "TABLE_TURNOVER", "FOOD_SAFETY_PASS_RATE"] },
+  "params": { "indicator_codes": ["B2B_AVG_ORDER_VALUE", "FACTORY_INVENTORY_VALUE", "FACTORY_LU_UNIT_COST"] },
   "reasoning": "用户列出 3 个指标横向比"
 }
 ```
@@ -136,6 +144,13 @@ AI 工厂 chat 中老板提到指标/溯源相关问题时, 智能选择最合�
 
 ## 数据源说明
 
-Sprint 11 D2 已 seed F999_MOCK 7 indicator × 30 天 = 210 行 indicator_versions
-(mock 数据, 见 docs/sprint-11/data-source-decision.md). UI 必标注 "模拟数据 —
-实际接入待 Sprint 12". 4 Tools 共用同一数据源, 切回 prod 后业务逻辑不变.
+Sprint 12 (Phase A-C) 已把 F999_MOCK mirror 删除, 改为真接业务表:
+- B2B_* ← sales_orders (真销售数据)
+- FACTORY_INVENTORY_VALUE ← material_batches
+- FACTORY_QUALITY_REJECT_RATE ← quality_inspections (无数据返 "—")
+- FACTORY_HACCP_VIOLATIONS_MTD ← haccp_monitoring_records (无数据返 "—")
+- FACTORY_LU_* (卤味业态) ← production_batches / quality_inspections (无数据返 "—")
+
+ratio/百分比类指标无数据时返 null → UI "—" (null-preserve, 诚实不伪造).
+indicator_query Tool 通过 IndicatorComputationStrategy 真算, compute_source='REAL_BUSINESS:<code>'.
+不再有 "模拟数据" 标注 — 数字都是真业务 (或诚实的 "—").
