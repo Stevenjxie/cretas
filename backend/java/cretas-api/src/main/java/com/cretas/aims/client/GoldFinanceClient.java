@@ -1,10 +1,10 @@
 package com.cretas.aims.client;
 
 import com.cretas.aims.config.smartbi.PythonSmartBIConfig;
-import com.cretas.aims.entity.User;
-import com.cretas.aims.repository.UserRepository;
-import com.cretas.aims.utils.SecurityUtils;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import jakarta.servlet.http.HttpServletRequest;
+import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.context.request.ServletRequestAttributes;
 import lombok.extern.slf4j.Slf4j;
 import okhttp3.HttpUrl;
 import okhttp3.OkHttpClient;
@@ -43,7 +43,6 @@ import java.util.concurrent.TimeUnit;
 public class GoldFinanceClient {
 
     private final PythonSmartBIConfig config;
-    private final UserRepository userRepository;
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final OkHttpClient http;
 
@@ -55,9 +54,8 @@ public class GoldFinanceClient {
     private String internalSecret = System.getenv("INTERNAL_API_SECRET") != null
             ? System.getenv("INTERNAL_API_SECRET") : "";
 
-    public GoldFinanceClient(PythonSmartBIConfig config, UserRepository userRepository) {
+    public GoldFinanceClient(PythonSmartBIConfig config) {
         this.config = config;
-        this.userRepository = userRepository;
         this.http = new OkHttpClient.Builder()
                 .connectTimeout(config.getConnectTimeout(), TimeUnit.MILLISECONDS)
                 .readTimeout(config.getTimeout(), TimeUnit.MILLISECONDS)
@@ -65,26 +63,28 @@ public class GoldFinanceClient {
     }
 
     /**
-     * Resolve the current request user's role_code from the SecurityContext so
-     * the internal Java→Python call can forward it as X-User-Role. Python's
-     * RBAC money-strip (_apply_rbac_strip) needs the real role — price-view
-     * roles (factory_super_admin / finance_manager / sales_manager / ...) see
-     * revenue; everyone else gets money fields nulled.
+     * Resolve the current request user's role so the internal Java→Python call
+     * can forward it as X-User-Role. Python's RBAC money-strip
+     * (_apply_rbac_strip) needs the real role — price-view roles
+     * (factory_super_admin / finance_manager / sales_manager / ...) see revenue;
+     * everyone else gets money fields nulled.
      *
-     * Returns null when there is no user context (e.g. a scheduled job) — Python
-     * then strips money, which is the safe default. Mirrors the
-     * SecurityUtils.getCurrentUserId() + UserRepository pattern used by
-     * DataScopeResolver. One PK lookup per call (cheap, request-thread cached).
+     * Reads the {@code role} request attribute set by
+     * {@link com.cretas.aims.config.JwtAuthInterceptor} from the JWT claim
+     * (Cretas auth is request-attribute based, NOT Spring SecurityContext — see
+     * AttachmentPermissionResolver). Returns null when there is no request
+     * context (e.g. a scheduled job) — Python then strips money, the safe
+     * default. No DB lookup: the role is already on the request.
      */
     private String currentUserRole() {
         try {
-            Long userId = SecurityUtils.getCurrentUserId();
-            if (userId == null) {
-                return null;
+            var attrs = RequestContextHolder.getRequestAttributes();
+            if (attrs instanceof ServletRequestAttributes servletAttrs) {
+                HttpServletRequest req = servletAttrs.getRequest();
+                Object role = req.getAttribute("role");
+                return role != null ? role.toString() : null;
             }
-            return userRepository.findById(userId)
-                    .map(User::getRoleCode)
-                    .orElse(null);
+            return null;
         } catch (Exception e) {
             log.debug("currentUserRole resolve failed: {}", e.getMessage());
             return null;
