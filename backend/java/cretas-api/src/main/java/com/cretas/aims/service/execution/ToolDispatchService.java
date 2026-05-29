@@ -88,7 +88,13 @@ public class ToolDispatchService {
             // returns a clear error instead of silently running.
             if (toolRegistry != null && !toolRegistry.isToolEnabledForFactory(factoryId, tool.getToolName())) {
                 log.warn("Tool disabled for factory: tool={}, factoryId={}", tool.getToolName(), factoryId);
-                String disabledMsg = "该功能已被工厂管理员禁用: " + intent.getIntentName();
+                // Sprint 12: 4-element error UX (≥80-char). Covers both genuine admin-disable
+                // and cross-factory cases (e.g. F999 not configured → tool not enabled).
+                String disabledMsg = String.format(
+                        "「%s」功能当前在工厂 %s 不可用。可能原因: 1. 该功能已被工厂管理员在功能配置中关闭;"
+                        + " 2. 当前工厂 (%s) 未开通此模块或工厂编号不存在; 3. 您的角色暂无此功能权限。"
+                        + "建议: 联系工厂管理员在「功能配置」中开启, 或确认已切换到正确的工厂。",
+                        intent.getIntentName(), factoryId, factoryId);
                 return IntentExecuteResponse.builder()
                         .intentRecognized(true)
                         .intentCode(intent.getIntentCode())
@@ -104,7 +110,12 @@ public class ToolDispatchService {
             // 1. 权限检查
             if (tool.requiresPermission() && !tool.hasPermission(userRole)) {
                 log.warn("Tool 权限不足: tool={}, userRole={}", tool.getToolName(), userRole);
-                String permDeniedMsg = "您没有权限执行此操作: " + intent.getIntentName();
+                // Sprint 12: 4-element error UX (≥80-char) for permission-denied case.
+                String permDeniedMsg = String.format(
+                        "您当前的角色 (%s) 没有权限执行「%s」操作。可能原因: 1. 此操作需要更高的角色权限;"
+                        + " 2. 您所在的部门未被授权该功能; 3. 该操作涉及敏感数据需额外审批。"
+                        + "建议: 联系工厂管理员申请对应权限, 或改用您有权限的查询功能。",
+                        userRole != null ? userRole : "未知", intent.getIntentName());
                 return IntentExecuteResponse.builder()
                         .intentRecognized(true)
                         .intentCode(intent.getIntentCode())
