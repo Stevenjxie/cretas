@@ -217,9 +217,15 @@ class WorkdeskOutputSummarizerTest {
     }
 
     @Test
-    void apply_llmFailureWithNullResultData_keepsExistingText() {
-        // Edge: when LLM fails AND resultData null/empty → fallback returns null →
-        // existing dirty text is kept (last-resort no-regression behavior).
+    void apply_llmFailureWithNullResultData_dirtyBareTemplateReplacedWithSafeMessage() {
+        // Edge: LLM not called (resultData null) AND buildDeterministicFallback returns
+        // null (no data to template). Contract changed by #299 ("summarizer never keeps
+        // dirty text — final hard-strip guarantee"): the dirty bare template is NOT kept.
+        // It carries no JSON/underscore fragments to strip, so hardStripDirty cannot
+        // salvage it and substitutes a clean, actionable last-resort message. Pre-#299
+        // this asserted the bare template was kept verbatim ("no-regression"); that
+        // behavior was intentionally superseded — keeping a known-dirty bare template
+        // re-introduces the very leak WorkdeskOutputSummarizer exists to eliminate.
         IntentExecuteResponse response = new IntentExecuteResponse();
         String original = "查询完成\n包含 5 项数据指标 — 详情请查看下方数据卡片或对应报表模块。";
         response.setFormattedText(original);
@@ -230,8 +236,13 @@ class WorkdeskOutputSummarizerTest {
         // LLM not even called because tryLlmSummarize returns null on null resultData
         summarizer.apply(response);
 
-        assertThat(response.getFormattedText()).isEqualTo(original);
-        assertThat(response.getMessage()).isEqualTo(original);
+        // Dirty bare template replaced (never kept) with a clean last-resort message.
+        assertThat(response.getFormattedText()).isNotEqualTo(original);
+        assertThat(response.getMessage()).isNotEqualTo(original);
+        assertThat(summarizer.isDirty(response.getFormattedText())).isFalse();
+        assertThat(summarizer.isDirty(response.getMessage())).isFalse();
+        assertThat(response.getFormattedText()).contains("本次查询已完成");
+        assertThat(response.getMessage()).contains("本次查询已完成");
     }
 
     @Test
