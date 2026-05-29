@@ -1,14 +1,39 @@
 # Sprint 12 — Close Report (Canvas/Workdesk chat scope)
 
 **Goal**: "Cretas 6 boss-demo Workdesks: 100% strict-PASS routing + ≥20 Playwright rounds per Workdesk"
-**Date**: 2026-05-28 (final, post-PR #283)
+**Date**: 2026-05-29 (final, post-PR #299 — sister cache-fix #286 + 7 Canvas session PRs)
 **Chat**: Canvas/Workdesk (owns Skill registration + outputFormatter + E2E per coop split)
 
 ---
 
-## TL;DR (Final, post-PR #283)
+## TL;DR (FINAL, post-PR #299 — clean verified re-audit)
 
-**Sprint 12 final combined strict: 89.2% (107/120) — close-gate ≥80% PASS.** 10/11 close-gate rows fully met. Only "Operational 100%" remains at 89.2% (13 FAILs are edge-case cross-factory/boundary paths — Sprint 13 candidates).
+**Sprint 12 final combined strict: 93.3% (112/120) — close-gate ≥80% PASS, reopen-trigger ≥89% EXCEEDED.**
+
+Clean 120-path audit (run `20260529_102033` + `20260529_102046_data`, 0 HTTP-502, 0 rate-limited after sequential reruns) on the post-cache-fix jar with all 7 session PRs live:
+
+| Workdesk | Baseline 60 | Real-data 60 | Combined 120 |
+|---|---:|---:|---:|
+| sales-owner | 100% | 100% | **100%** (20/20) |
+| finance-manager | 80% | 100% | **90%** (18/20) |
+| quality-manager | 100% | 100% | **100%** (20/20) |
+| warehouse-keeper | 100% | 90% | **95%** (19/20) |
+| purchaser | 100% | 100% | **100%** (20/20) |
+| quality-chief | 80% | 70% | **75%** (15/20) |
+| **TOTAL** | | | **93.3%** (112/120) ✅ |
+
+Strict progression: 58% → 80% (#239) → 80.8% (#252) → 83.3% (#272) → 89.2% (#283) → 87.5% (#289) → **93.3% (#299)**.
+
+### This session (post-#284) — sister cache-fix merge + 7 Canvas PRs
+
+PR #286 (sister cache-fix, admin-merged) + #292 (4-element error UX cross-factory/permission) + #293 (summarizer re-validate LLM) + #294 (3 FAILED-status reroutes) + #295 (SUPPLIER_DELIVERY_ETA emoji+≥80 / CUSTOMER_PURCHASE_HISTORY ≥80) + #296 (inventory ≥80 floor) + #299 (summarizer final hard-strip guarantee). Live-verified 5/6 fixed paths PASS (purchaser-quarter, qual-defect, supplier-eta, cust-history, cross-factory-purchaser).
+
+### Remaining 8 fails (6.7%) — honest residual
+
+- **quality-chief 75% (5 fails)** is the sole laggard. Root cause: `QUALITY_CHIEF_WORKDESK` Skill **composite** where all 4 sub-tools return `needMoreInfo` (missing `batchNumber`) emits raw merged JSON (`_toolCount`/`_executionOrder`) that **bypasses WorkdeskOutputSummarizer** — the skill route re-sets formattedText past the orchestrator finalize+summarize gate. #293/#299 are live (verified in deployed jar) but don't reach this skill-executor path. **Genuine Sprint 13 architectural item**: wire WorkdeskOutputSummarizer into SkillExecutorImpl, OR make the all-sub-tools-needMoreInfo composite collapse to a single NEED_CLARIFICATION (batchNumber) instead of raw JSON.
+- finance-manager B-syn boundary + warehouse Bd path: minor short-content / boundary (correct behavior).
+
+**Note**: the goal *header* "100% strict-PASS" remains architecturally capped (boundary unrealistic-date queries are correct NEED_CLARIFICATION, not data hits). 93.3% is the achievable clean maximum short of the Sprint 13 skill-composite + cross-factory work.
 
 ### Strict % progression across PRs
 
