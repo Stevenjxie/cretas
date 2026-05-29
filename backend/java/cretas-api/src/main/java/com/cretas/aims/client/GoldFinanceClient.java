@@ -1,6 +1,9 @@
 package com.cretas.aims.client;
 
 import com.cretas.aims.config.smartbi.PythonSmartBIConfig;
+import com.cretas.aims.entity.User;
+import com.cretas.aims.repository.UserRepository;
+import com.cretas.aims.utils.SecurityUtils;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import okhttp3.HttpUrl;
@@ -40,6 +43,7 @@ import java.util.concurrent.TimeUnit;
 public class GoldFinanceClient {
 
     private final PythonSmartBIConfig config;
+    private final UserRepository userRepository;
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final OkHttpClient http;
 
@@ -51,12 +55,40 @@ public class GoldFinanceClient {
     private String internalSecret = System.getenv("INTERNAL_API_SECRET") != null
             ? System.getenv("INTERNAL_API_SECRET") : "";
 
-    public GoldFinanceClient(PythonSmartBIConfig config) {
+    public GoldFinanceClient(PythonSmartBIConfig config, UserRepository userRepository) {
         this.config = config;
+        this.userRepository = userRepository;
         this.http = new OkHttpClient.Builder()
                 .connectTimeout(config.getConnectTimeout(), TimeUnit.MILLISECONDS)
                 .readTimeout(config.getTimeout(), TimeUnit.MILLISECONDS)
                 .build();
+    }
+
+    /**
+     * Resolve the current request user's role_code from the SecurityContext so
+     * the internal Java→Python call can forward it as X-User-Role. Python's
+     * RBAC money-strip (_apply_rbac_strip) needs the real role — price-view
+     * roles (factory_super_admin / finance_manager / sales_manager / ...) see
+     * revenue; everyone else gets money fields nulled.
+     *
+     * Returns null when there is no user context (e.g. a scheduled job) — Python
+     * then strips money, which is the safe default. Mirrors the
+     * SecurityUtils.getCurrentUserId() + UserRepository pattern used by
+     * DataScopeResolver. One PK lookup per call (cheap, request-thread cached).
+     */
+    private String currentUserRole() {
+        try {
+            Long userId = SecurityUtils.getCurrentUserId();
+            if (userId == null) {
+                return null;
+            }
+            return userRepository.findById(userId)
+                    .map(User::getRoleCode)
+                    .orElse(null);
+        } catch (Exception e) {
+            log.debug("currentUserRole resolve failed: {}", e.getMessage());
+            return null;
+        }
     }
 
     @PostConstruct
@@ -109,6 +141,12 @@ public class GoldFinanceClient {
         if (!internalSecret.isEmpty()) {
             reqBuilder.addHeader("X-Internal-Secret", internalSecret);
             reqBuilder.addHeader("X-Factory-Id", factoryId);
+            // Forward the request user's role so Python RBAC money-strip respects
+            // price-view permission (else total_revenue/avg_bill_value get nulled).
+            String userRole = currentUserRole();
+            if (userRole != null && !userRole.isEmpty()) {
+                reqBuilder.addHeader("X-User-Role", userRole);
+            }
         }
         Request req = reqBuilder.build();
 
@@ -170,6 +208,12 @@ public class GoldFinanceClient {
         if (!internalSecret.isEmpty()) {
             reqBuilder.addHeader("X-Internal-Secret", internalSecret);
             reqBuilder.addHeader("X-Factory-Id", factoryId);
+            // Forward the request user's role so Python RBAC money-strip respects
+            // price-view permission (else total_revenue/avg_bill_value get nulled).
+            String userRole = currentUserRole();
+            if (userRole != null && !userRole.isEmpty()) {
+                reqBuilder.addHeader("X-User-Role", userRole);
+            }
         }
         Request req = reqBuilder.build();
 
@@ -238,6 +282,12 @@ public class GoldFinanceClient {
         if (!internalSecret.isEmpty()) {
             reqBuilder.addHeader("X-Internal-Secret", internalSecret);
             reqBuilder.addHeader("X-Factory-Id", factoryId);
+            // Forward the request user's role so Python RBAC money-strip respects
+            // price-view permission (else total_revenue/avg_bill_value get nulled).
+            String userRole = currentUserRole();
+            if (userRole != null && !userRole.isEmpty()) {
+                reqBuilder.addHeader("X-User-Role", userRole);
+            }
         }
         Request req = reqBuilder.build();
 
