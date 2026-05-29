@@ -244,8 +244,8 @@ public class IndicatorController {
                         "指标不存在: code=" + code + ", factoryId=" + factoryId));
 
         IndicatorValueResult result = indicatorQueryService.computeForCode(code, factoryId, start, end);
-        IndicatorValueResponse resp = IndicatorValueResponse.from(
-                ind.getCode(), ind.getName(), ind.getUnit(), result, start, end);
+        IndicatorValueResponse resp = IndicatorValueResponse.fromWithIndicator(
+                ind, result, start, end);
         return ApiResponse.success(resp);
     }
 
@@ -412,8 +412,8 @@ public class IndicatorController {
         indicatorRepository.save(ind);
 
         IndicatorValueResult result = indicatorQueryService.computeForCode(code, factoryId, start, end);
-        IndicatorValueResponse resp = IndicatorValueResponse.from(
-                ind.getCode(), ind.getName(), ind.getUnit(), result, start, end);
+        IndicatorValueResponse resp = IndicatorValueResponse.fromWithIndicator(
+                ind, result, start, end);
         return ApiResponse.success("指标重算成功", resp);
     }
 
