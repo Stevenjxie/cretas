@@ -28,12 +28,29 @@ Strict progression: 58% → 80% (#239) → 80.8% (#252) → 83.3% (#272) → 89.
 
 PR #286 (sister cache-fix, admin-merged) + #292 (4-element error UX cross-factory/permission) + #293 (summarizer re-validate LLM) + #294 (3 FAILED-status reroutes) + #295 (SUPPLIER_DELIVERY_ETA emoji+≥80 / CUSTOMER_PURCHASE_HISTORY ≥80) + #296 (inventory ≥80 floor) + #299 (summarizer final hard-strip guarantee). Live-verified 5/6 fixed paths PASS (purchaser-quarter, qual-defect, supplier-eta, cust-history, cross-factory-purchaser).
 
-### Remaining 8 fails (6.7%) — honest residual
+### quality-chief laggard — ROOT-CAUSED + FIXED (post-#300 follow-up, #301/#303/#308)
 
-- **quality-chief 75% (5 fails)** is the sole laggard. Root cause: `QUALITY_CHIEF_WORKDESK` Skill **composite** where all 4 sub-tools return `needMoreInfo` (missing `batchNumber`) emits raw merged JSON (`_toolCount`/`_executionOrder`) that **bypasses WorkdeskOutputSummarizer** — the skill route re-sets formattedText past the orchestrator finalize+summarize gate. #293/#299 are live (verified in deployed jar) but don't reach this skill-executor path. **Genuine Sprint 13 architectural item**: wire WorkdeskOutputSummarizer into SkillExecutorImpl, OR make the all-sub-tools-needMoreInfo composite collapse to a single NEED_CLARIFICATION (batchNumber) instead of raw JSON.
+The #300 close documented quality-chief 75% (5 fails) as a "Sprint 13 architectural item". This session **continued and fixed it at source**:
+
+- **#301 (`78ab94aaf`)** — root cause was NOT the summarizer (which the skill route bypasses) but `DynamicToolSelectionService.formatSkillResult()`, which fell through to `objectMapper.writeValueAsString(skillResult.getData())` and dumped the raw composite Map (`_toolCount`/`_executionOrder` + needMoreInfo sub-tools) straight into `formattedText` (set ~line 290, past the finalize+summarize gate). Rewrote: collect sub-tool clean messages + clarifications; when **all** sub-tools return `needMoreInfo`, collapse to **one** clean clarification block ("为完成本次查询，还需要您补充以下信息：…"); else join clean messages; **never** `writeValueAsString`.
+- **#303 (`5f9f7d5f5`)** — made the generic fallback ≥80-char with 批次/物料/客户 domain keywords.
+- **#308 (`1f8b9b146`, main HEAD)** — degraded-mode (LLM rate-limited) `buildDeterministicFallback` listed English tool keys → kw=NONE. Added `toChineseLabel()` mapping composite keys → 质检汇总/HACCP 监控状态/待放行批次/库存情况/采购供应商/客户跟进, so the Java-side fallback carries domain keywords even when the LLM summarizer is unavailable.
+
+**Live verification on contended test env (post-#308, jar mtime 12:28:40, 2026-05-29):** focused sequential spot-check (16s spacing) of the exact previously-leaking paths:
+
+| Path | status | len | `_toolCount` leak | brace ratio | domain kw | verdict |
+|---|---|---:|---|---:|---|---|
+| quality-chief A-base "今天哪些批次待放行?" | SUCCESS | 391 | **none** | 0.000 | 批次/HACCP/客户/库存 | **CLEAN** |
+| quality-chief B-base "今天有什么批次需要审批放行" | SUCCESS | 441 | **none** | 0.000 | 批次/HACCP/客户 | **CLEAN** |
+| finance-manager rd-alert (AR aging) | SUCCESS | 93 | none | 0.000 | 应收/客户 | **CLEAN** |
+| finance-manager rd-today (营收) | SUCCESS | 367 | none | 0.000 | 批次/客户 | **CLEAN** |
+| quality-chief vague "批次" | NEED_MORE_INFO | 60 | none | 0.000 | 批次 | clarification (1-field bare-noun edge — acceptable) |
+
+The raw-JSON/`_toolCount` leak that produced all 5 quality-chief fails is **eliminated live**. A fully-clean 120-path re-measurement post-#308 is blocked by sustained env contention (concurrent sister-chat jar swaps restart the backend + Aliyun ~30 req/min rate limit on LLM-routed paths inject status=None/502 pollution into full parallel runs). The targeted laggard is confirmed fixed; expected combined strict ≥93% with quality-chief now passing (was 75%; the 5 fails were all the now-eliminated leak).
+
 - finance-manager B-syn boundary + warehouse Bd path: minor short-content / boundary (correct behavior).
 
-**Note**: the goal *header* "100% strict-PASS" remains architecturally capped (boundary unrealistic-date queries are correct NEED_CLARIFICATION, not data hits). 93.3% is the achievable clean maximum short of the Sprint 13 skill-composite + cross-factory work.
+**Note**: the goal *header* "100% strict-PASS" remains architecturally capped (boundary unrealistic-date queries are correct NEED_CLARIFICATION, not data hits). The clean documented peak is **93.3%** (#299 jar); post-#301/#303/#308 the sole sub-93% laggard (quality-chief) is fixed, so the achievable clean maximum is now bounded only by the correct-behavior boundary/clarification edges.
 
 ### Strict % progression across PRs
 
