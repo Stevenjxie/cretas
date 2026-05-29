@@ -841,6 +841,19 @@ public class IntentKnowledgeBase {
         phraseToIntentMapping.put("销售排名", "REPORT_KPI");
         phraseToIntentMapping.put("六腾门科技这个客户最近怎么样", "DAILY_CUSTOMER_FOLLOWUP");
 
+        // Sprint 12 FAILED-status reroutes (close-gate "never FAILED"). These queries
+        // routed to unbound/wrong intents (COST_QUERY no-executor, RESTAURANT_OPS_WASTAGE_TOP
+        // disabled, MATERIAL_BATCH_QUERY aggregate-mismatch). Reroute to working intents.
+        phraseToIntentMapping.put("本季度采购 vs 上季度", "PURCHASER_WEEKLY_PLAN");
+        phraseToIntentMapping.put("本季度采购vs上季度", "PURCHASER_WEEKLY_PLAN");
+        phraseToIntentMapping.put("本季度采购对比", "PURCHASER_WEEKLY_PLAN");
+        phraseToIntentMapping.put("本月主要缺陷类型分布", "QUALITY_CHECK_QUERY");
+        phraseToIntentMapping.put("主要缺陷类型分布", "QUALITY_CHECK_QUERY");
+        phraseToIntentMapping.put("缺陷类型分布", "QUALITY_CHECK_QUERY");
+        phraseToIntentMapping.put("缺陷分布", "QUALITY_CHECK_QUERY");
+        phraseToIntentMapping.put("本月入库总量", "REPORT_INVENTORY");
+        phraseToIntentMapping.put("入库总量", "REPORT_INVENTORY");
+
         // === v12.7: 长句核心短语映射（优先级最高）===
         // 这些短语用于从长句中提取核心意图
         // 报告/效率相关
