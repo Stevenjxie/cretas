@@ -17,6 +17,7 @@ import com.cretas.aims.dto.intent.IntentValidationFact;
 import com.cretas.aims.dto.intent.ValidationResult;
 import com.cretas.aims.entity.AIAnalysisResult;
 import com.cretas.aims.entity.config.AIIntentConfig;
+import com.cretas.aims.service.intent.IntentConfigManagementService;
 import com.cretas.aims.entity.conversation.ConversationSession;
 import com.cretas.aims.exception.LlmSchemaValidationException;
 import com.cretas.aims.repository.AIAnalysisResultRepository;
@@ -93,6 +94,12 @@ public class IntentExecutionOrchestrator {
 
     @Autowired(required = false)
     private com.cretas.aims.config.IntentSlotConfiguration intentSlotConfiguration;
+
+    // Sprint 13 #305 业态门控: resolve factory business domain (RESTAURANT vs FACTORY).
+    // @Lazy mirrors aiIntentService — defensive against constructor-init cycles in this area.
+    @Autowired
+    @Lazy
+    private IntentConfigManagementService intentConfigManagementService;
 
     // ===== Route counters =====
     private final AtomicLong branchToolDirect = new AtomicLong();
@@ -296,6 +303,14 @@ public class IntentExecutionOrchestrator {
         // 审批检查
         if (intent.needsApproval() && !Boolean.TRUE.equals(request.getForceExecute())) {
             return buildApprovalResponse(intent);
+        }
+
+        // 业态门控 (Sprint 13 #305): a domain-exclusive intent (business_type RESTAURANT/FACTORY)
+        // matched on a mismatched factory.type → honest "本厂非该业态" empty-state + appropriate
+        // next-action, instead of executing a tool that returns a misleading half-broken "数据不可用".
+        IntentExecuteResponse businessTypeGate = checkBusinessTypeGate(factoryId, intent);
+        if (businessTypeGate != null) {
+            return businessTypeGate;
         }
 
         // Drools 验证
@@ -975,6 +990,63 @@ public class IntentExecutionOrchestrator {
                 .validationViolations(validationResult.getViolations())
                 .recommendations(validationResult.getRecommendations())
                 .executedAt(LocalDateTime.now()).build();
+    }
+
+    /**
+     * Sprint 13 #305 业态门控 — gate domain-exclusive intents to the matching factory.type.
+     *
+     * <p>Cretas serves 2 customer types: RESTAURANT (餐厅, e.g. RES_3101_009) and FACTORY
+     * (制造厂, e.g. F006 六膳门卤味). A RESTAURANT-exclusive intent (business_type=RESTAURANT,
+     * e.g. {@code RESTAURANT_ECONOMICS_ANALYSIS}) triggered on a FACTORY-type factory has no
+     * data to operate on → previously returned a misleading half-broken "数据不可用". This gate
+     * returns an honest "本厂非餐厅业态" message + a domain-appropriate next-action instead
+     * (per {@code .claude/rules/fool-proof-design.md} Rule 5: dead-end → next action).
+     *
+     * <p>Only DOMAIN-EXCLUSIVE intents gate; {@code COMMON}/null business_type are universal
+     * and always pass (anti-goal: 不挡通用 intent). Fail-soft: any domain-lookup error → pass.
+     *
+     * @return honest empty-state response on业态 mismatch; {@code null} to proceed with execution.
+     */
+    private IntentExecuteResponse checkBusinessTypeGate(String factoryId, AIIntentConfig intent) {
+        String intentBiz = intent.getBusinessType();
+        if (intentBiz == null || intentBiz.isBlank() || "COMMON".equalsIgnoreCase(intentBiz)) {
+            return null; // universal intent — never gated
+        }
+        String factoryDomain;
+        try {
+            factoryDomain = intentConfigManagementService.resolveBusinessDomain(factoryId);
+        } catch (Exception e) {
+            log.warn("[业态门控] resolveBusinessDomain failed for factoryId={} — skipping gate: {}",
+                    factoryId, e.getMessage());
+            return null; // fail-soft: never block execution on a lookup hiccup
+        }
+        if (factoryDomain == null || intentBiz.equalsIgnoreCase(factoryDomain)) {
+            return null; // domain matches (or unknown) — proceed
+        }
+        // Mismatch: a domain-exclusive intent on the wrong factory type → honest gate.
+        String name = (intent.getIntentName() != null && !intent.getIntentName().isBlank())
+                ? intent.getIntentName() : intent.getIntentCode();
+        String msg;
+        if ("RESTAURANT".equalsIgnoreCase(intentBiz)) {
+            msg = "本厂为制造(工厂)业态，无餐饮经营数据，「" + name + "」餐饮分析不适用。"
+                + "工厂经营分析请使用：库存查询 / 采购建议 / 质检报告 / 生产出品率 等功能。";
+        } else { // FACTORY-exclusive intent on a RESTAURANT-type factory
+            msg = "本店为餐饮业态，「" + name + "」工厂制造分析不适用。"
+                + "餐饮经营分析请使用：损益分析 / 客单价 / 翻台率 / 菜品销售排行 等功能。";
+        }
+        log.info("[业态门控] gated intent={} (business_type={}) on factory={} (domain={}) → honest empty-state",
+                intent.getIntentCode(), intentBiz, factoryId, factoryDomain);
+        return IntentExecuteResponse.builder()
+                .intentRecognized(true)
+                .intentCode(intent.getIntentCode())
+                .intentName(intent.getIntentName())
+                .intentCategory(intent.getIntentCategory())
+                .sensitivityLevel(intent.getSensitivityLevel())
+                .status("NOT_APPLICABLE")
+                .message(msg)
+                .formattedText(msg)
+                .executedAt(LocalDateTime.now())
+                .build();
     }
 
     IntentExecuteResponse buildClarificationResponse(IntentMatchResult matchResult, String factoryId) {
