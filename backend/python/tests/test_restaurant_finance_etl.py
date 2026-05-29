@@ -690,3 +690,562 @@ async def test_finance_etl_trigger_rejects_non_admin():
     )
 
     assert resp.status_code == 403
+
+
+# ─── Sprint 12 Phase D — multi-factory orchestrator tests ─────────────
+
+
+def test_restaurant_factory_backfill_list_excludes_f006():
+    """Per Q2: F006 has 0 POS data, must NOT be in default backfill list.
+    Confirms Sprint 12 scope decision is encoded in the constant."""
+    from smartbi.gold.restaurant_finance_etl import RESTAURANT_FACTORY_BACKFILL_LIST
+    assert "F006" not in RESTAURANT_FACTORY_BACKFILL_LIST
+    assert "RES_3101_009" in RESTAURANT_FACTORY_BACKFILL_LIST
+    assert "F001" in RESTAURANT_FACTORY_BACKFILL_LIST
+    assert "R_GML_DEMO" in RESTAURANT_FACTORY_BACKFILL_LIST
+    assert "R_XMX_CHAIN" in RESTAURANT_FACTORY_BACKFILL_LIST
+    assert len(RESTAURANT_FACTORY_BACKFILL_LIST) == 4
+
+
+def test_bulk_stats_aggregation():
+    """BulkFinanceEtlStats.total_* properties sum across per_factory entries."""
+    from smartbi.gold.restaurant_finance_etl import (
+        BulkFinanceEtlStats,
+        FinanceEtlStats,
+    )
+    bulk = BulkFinanceEtlStats(
+        per_factory={
+            "A": FinanceEtlStats(
+                revenue_upserted=10, cost_wastage_upserted=2, cost_pos_recipe_upserted=5
+            ),
+            "B": FinanceEtlStats(
+                revenue_upserted=20, cost_wastage_upserted=3, cost_pos_recipe_upserted=8
+            ),
+        },
+        succeeded=["A", "B"],
+    )
+    assert bulk.total_revenue_upserted == 30
+    assert bulk.total_cost_wastage_upserted == 5
+    assert bulk.total_cost_pos_recipe_upserted == 13
+
+
+@pytest.mark.asyncio
+async def test_run_full_finance_etl_for_factories_aggregates_success():
+    """All factories succeed → succeeded list complete, failed empty."""
+    from smartbi.gold.restaurant_finance_etl import (
+        FinanceEtlStats,
+        run_full_finance_etl_for_factories,
+    )
+
+    async def fake_with_retry(_cretas, _smartbi, factory_id, _s, _e):
+        # Each factory returns predictable per-factory stats
+        return FinanceEtlStats(
+            revenue_upserted=10 + len(factory_id),
+            cost_wastage_upserted=1,
+            cost_pos_recipe_upserted=2,
+        )
+
+    with patch(
+        "smartbi.gold.restaurant_finance_etl.run_full_finance_etl_with_retry",
+        side_effect=fake_with_retry,
+    ):
+        bulk = await run_full_finance_etl_for_factories(
+            cretas_pool=MagicMock(),
+            smartbi_pool=MagicMock(),
+            factory_ids=["F001", "RES_3101_009"],
+            start_date=date(2026, 4, 1),
+            end_date=date(2026, 4, 30),
+        )
+
+    assert bulk.succeeded == ["F001", "RES_3101_009"]
+    assert bulk.failed == []
+    assert bulk.total_cost_wastage_upserted == 2
+    assert bulk.total_cost_pos_recipe_upserted == 4
+    assert bulk.per_factory["F001"].revenue_upserted == 14  # 10 + len("F001")
+    assert bulk.per_factory["RES_3101_009"].revenue_upserted == 22
+
+
+@pytest.mark.asyncio
+async def test_run_full_finance_etl_for_factories_isolates_failures():
+    """One factory crashes — others still complete + failed list captures it."""
+    from smartbi.gold.restaurant_finance_etl import (
+        FinanceEtlStats,
+        run_full_finance_etl_for_factories,
+    )
+
+    async def fake_with_retry(_cretas, _smartbi, factory_id, _s, _e):
+        if factory_id == "R_XMX_CHAIN":
+            raise RuntimeError("simulated POS table missing")
+        return FinanceEtlStats(revenue_upserted=5)
+
+    with patch(
+        "smartbi.gold.restaurant_finance_etl.run_full_finance_etl_with_retry",
+        side_effect=fake_with_retry,
+    ):
+        bulk = await run_full_finance_etl_for_factories(
+            cretas_pool=MagicMock(),
+            smartbi_pool=MagicMock(),
+            factory_ids=["F001", "R_XMX_CHAIN", "RES_3101_009"],
+        )
+
+    assert bulk.succeeded == ["F001", "RES_3101_009"]
+    assert bulk.failed == ["R_XMX_CHAIN"]
+    # Only succeeded factories contribute to per_factory aggregates
+    assert "R_XMX_CHAIN" not in bulk.per_factory
+    assert bulk.total_revenue_upserted == 10
+
+
+@pytest.mark.asyncio
+async def test_run_full_finance_etl_for_factories_defaults_to_constant_list():
+    """factory_ids=None → uses RESTAURANT_FACTORY_BACKFILL_LIST."""
+    from smartbi.gold.restaurant_finance_etl import (
+        FinanceEtlStats,
+        RESTAURANT_FACTORY_BACKFILL_LIST,
+        run_full_finance_etl_for_factories,
+    )
+
+    invoked: list[str] = []
+
+    async def fake_with_retry(_cretas, _smartbi, factory_id, _s, _e):
+        invoked.append(factory_id)
+        return FinanceEtlStats()
+
+    with patch(
+        "smartbi.gold.restaurant_finance_etl.run_full_finance_etl_with_retry",
+        side_effect=fake_with_retry,
+    ):
+        bulk = await run_full_finance_etl_for_factories(
+            cretas_pool=MagicMock(),
+            smartbi_pool=MagicMock(),
+            factory_ids=None,
+        )
+
+    assert invoked == list(RESTAURANT_FACTORY_BACKFILL_LIST)
+    assert bulk.succeeded == list(RESTAURANT_FACTORY_BACKFILL_LIST)
+
+
+@pytest.mark.asyncio
+async def test_finance_etl_trigger_bulk_default_list():
+    """POST /finance-etl/trigger-bulk with no factoryIds returns default list."""
+    from fastapi import FastAPI, Request
+    from fastapi.testclient import TestClient
+
+    from smartbi.api.restaurant_etl_admin import router
+    from smartbi.gold.restaurant_finance_etl import RESTAURANT_FACTORY_BACKFILL_LIST
+
+    app = FastAPI()
+
+    @app.middleware("http")
+    async def inject_state(request: Request, call_next):
+        request.state.role = "platform_admin"
+        request.state.factory_id = "F001"
+        request.state.auth_method = "jwt"
+        return await call_next(request)
+
+    app.include_router(router, prefix="/api/smartbi/restaurant/etl")
+
+    with patch(
+        "smartbi.api.restaurant_etl_admin._enqueue_finance_bulk_job",
+        new_callable=AsyncMock,
+    ):
+        client = TestClient(app, raise_server_exceptions=False)
+        resp = client.post(
+            "/api/smartbi/restaurant/etl/finance-etl/trigger-bulk",
+            json={},   # no factoryIds → default list
+        )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "jobId" in body
+    assert body["factoryIds"] == list(RESTAURANT_FACTORY_BACKFILL_LIST)
+    assert body["etaSeconds"] == 30 * len(RESTAURANT_FACTORY_BACKFILL_LIST)
+
+
+@pytest.mark.asyncio
+async def test_finance_etl_trigger_bulk_explicit_factories():
+    """Explicit factoryIds list returned verbatim."""
+    from fastapi import FastAPI, Request
+    from fastapi.testclient import TestClient
+
+    from smartbi.api.restaurant_etl_admin import router
+
+    app = FastAPI()
+
+    @app.middleware("http")
+    async def inject_state(request: Request, call_next):
+        request.state.role = "platform_admin"
+        request.state.factory_id = "F001"
+        request.state.auth_method = "jwt"
+        return await call_next(request)
+
+    app.include_router(router, prefix="/api/smartbi/restaurant/etl")
+
+    with patch(
+        "smartbi.api.restaurant_etl_admin._enqueue_finance_bulk_job",
+        new_callable=AsyncMock,
+    ):
+        client = TestClient(app, raise_server_exceptions=False)
+        resp = client.post(
+            "/api/smartbi/restaurant/etl/finance-etl/trigger-bulk",
+            json={
+                "factoryIds": ["F001", "R_GML_DEMO"],
+                "startDate": "2026-04-01",
+                "endDate": "2026-04-30",
+            },
+        )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["factoryIds"] == ["F001", "R_GML_DEMO"]
+    assert body["startDate"] == "2026-04-01"
+    assert body["endDate"] == "2026-04-30"
+
+
+@pytest.mark.asyncio
+async def test_finance_etl_trigger_bulk_rejects_inverted_date_range():
+    """endDate < startDate → 400."""
+    from fastapi import FastAPI, Request
+    from fastapi.testclient import TestClient
+
+    from smartbi.api.restaurant_etl_admin import router
+
+    app = FastAPI()
+
+    @app.middleware("http")
+    async def inject_state(request: Request, call_next):
+        request.state.role = "platform_admin"
+        request.state.factory_id = "F001"
+        request.state.auth_method = "jwt"
+        return await call_next(request)
+
+    app.include_router(router, prefix="/api/smartbi/restaurant/etl")
+    client = TestClient(app, raise_server_exceptions=False)
+
+    resp = client.post(
+        "/api/smartbi/restaurant/etl/finance-etl/trigger-bulk",
+        json={
+            "factoryIds": ["F001"],
+            "startDate": "2026-04-30",
+            "endDate": "2026-04-01",
+        },
+    )
+
+    assert resp.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_finance_etl_trigger_bulk_rejects_non_admin():
+    """role='operator' → 403."""
+    from fastapi import FastAPI, Request
+    from fastapi.testclient import TestClient
+
+    from smartbi.api.restaurant_etl_admin import router
+
+    app = FastAPI()
+
+    @app.middleware("http")
+    async def inject_state(request: Request, call_next):
+        request.state.role = "operator"
+        request.state.factory_id = "F001"
+        request.state.auth_method = "jwt"
+        return await call_next(request)
+
+    app.include_router(router, prefix="/api/smartbi/restaurant/etl")
+    client = TestClient(app, raise_server_exceptions=False)
+
+    resp = client.post(
+        "/api/smartbi/restaurant/etl/finance-etl/trigger-bulk",
+        json={},
+    )
+
+    assert resp.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_finance_etl_trigger_bulk_rejects_all_blank_ids():
+    """factoryIds=['  ', ''] (all blank after strip) → 400 not silent default."""
+    from fastapi import FastAPI, Request
+    from fastapi.testclient import TestClient
+
+    from smartbi.api.restaurant_etl_admin import router
+
+    app = FastAPI()
+
+    @app.middleware("http")
+    async def inject_state(request: Request, call_next):
+        request.state.role = "platform_admin"
+        request.state.factory_id = "F001"
+        request.state.auth_method = "jwt"
+        return await call_next(request)
+
+    app.include_router(router, prefix="/api/smartbi/restaurant/etl")
+    client = TestClient(app, raise_server_exceptions=False)
+
+    resp = client.post(
+        "/api/smartbi/restaurant/etl/finance-etl/trigger-bulk",
+        json={"factoryIds": ["  ", ""]},
+    )
+
+    assert resp.status_code == 400
+
+
+# ─── Phase E (Sprint 12) — cache purge after ETL backfill ──────────────
+
+
+class _FakeResponse:
+    """Minimal httpx.Response stand-in (status_code + text only)."""
+
+    def __init__(self, status_code: int, text: str = ""):
+        self.status_code = status_code
+        self.text = text
+
+
+class _FakeAsyncClient:
+    """Async-context-manager httpx.AsyncClient stand-in.
+
+    Captures the last post() call into ``captured`` so tests can assert the
+    scope=INDICATOR contract. Raises ``raise_exc`` (if set) to simulate a
+    network error.
+    """
+
+    def __init__(self, response=None, raise_exc=None, captured=None, **kwargs):
+        self._response = response
+        self._raise_exc = raise_exc
+        self._captured = captured
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+    async def post(self, url, params=None, headers=None):
+        if self._captured is not None:
+            self._captured["url"] = url
+            self._captured["params"] = params
+            self._captured["headers"] = headers
+        if self._raise_exc is not None:
+            raise self._raise_exc
+        return self._response
+
+
+def _client_factory(response=None, raise_exc=None, captured=None):
+    def factory(*args, **kwargs):
+        return _FakeAsyncClient(
+            response=response, raise_exc=raise_exc, captured=captured, **kwargs
+        )
+
+    return factory
+
+
+@pytest.mark.asyncio
+async def test_purge_cache_skips_when_jwt_unset(monkeypatch):
+    """No ETL_ADMIN_JWT env → purge skipped, success=False, no HTTP call."""
+    from smartbi.api import restaurant_etl_admin as mod
+
+    monkeypatch.delenv("ETL_ADMIN_JWT", raising=False)
+
+    # Any httpx use would be a bug — fail loudly if AsyncClient is constructed.
+    def _boom(*args, **kwargs):
+        raise AssertionError("httpx.AsyncClient must NOT be called when JWT unset")
+
+    monkeypatch.setattr(mod.httpx, "AsyncClient", _boom)
+
+    result = await mod._purge_indicator_cache_for_factory("RES_3101_009", "etl-test")
+
+    assert result["success"] is False
+    assert result["factoryId"] == "RES_3101_009"
+    assert "ETL_ADMIN_JWT" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_purge_cache_success_200(monkeypatch):
+    """JWT set + HTTP 200 → success=True, posts scope=INDICATOR contract."""
+    from smartbi.api import restaurant_etl_admin as mod
+
+    monkeypatch.setenv("ETL_ADMIN_JWT", "fake-admin-token")
+    monkeypatch.setenv("JAVA_API_BASE_URL", "http://localhost:10010")
+
+    captured: dict = {}
+    monkeypatch.setattr(
+        mod.httpx,
+        "AsyncClient",
+        _client_factory(response=_FakeResponse(200, '{"success":true}'), captured=captured),
+    )
+
+    result = await mod._purge_indicator_cache_for_factory(
+        "RES_3101_009", "etl-backfill-abc12345"
+    )
+
+    assert result["success"] is True
+    assert result["statusCode"] == 200
+    # Contract: scope=INDICATOR, factoryId + reason passed through
+    assert captured["url"] == "http://localhost:10010/api/admin/cache/purge"
+    assert captured["params"] == {
+        "scope": "INDICATOR",
+        "factoryId": "RES_3101_009",
+        "reason": "etl-backfill-abc12345",
+    }
+    assert captured["headers"]["Authorization"] == "Bearer fake-admin-token"
+
+
+@pytest.mark.asyncio
+async def test_purge_cache_non_200_returns_failure(monkeypatch):
+    """HTTP 403 → success=False with statusCode + error, never raises."""
+    from smartbi.api import restaurant_etl_admin as mod
+
+    monkeypatch.setenv("ETL_ADMIN_JWT", "fake-admin-token")
+    monkeypatch.setattr(
+        mod.httpx,
+        "AsyncClient",
+        _client_factory(response=_FakeResponse(403, "forbidden")),
+    )
+
+    result = await mod._purge_indicator_cache_for_factory("F001", "etl-test")
+
+    assert result["success"] is False
+    assert result["statusCode"] == 403
+    assert "403" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_purge_cache_network_error_returns_failure(monkeypatch):
+    """httpx raises (connection refused) → success=False, swallowed not raised."""
+    from smartbi.api import restaurant_etl_admin as mod
+
+    monkeypatch.setenv("ETL_ADMIN_JWT", "fake-admin-token")
+    monkeypatch.setattr(
+        mod.httpx,
+        "AsyncClient",
+        _client_factory(raise_exc=ConnectionError("connection refused")),
+    )
+
+    result = await mod._purge_indicator_cache_for_factory("F001", "etl-test")
+
+    assert result["success"] is False
+    assert "network" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_purge_cache_uses_default_base_url_when_env_unset(monkeypatch):
+    """JAVA_API_BASE_URL unset → falls back to localhost:10010 default."""
+    from smartbi.api import restaurant_etl_admin as mod
+
+    monkeypatch.setenv("ETL_ADMIN_JWT", "fake-admin-token")
+    monkeypatch.delenv("JAVA_API_BASE_URL", raising=False)
+
+    captured: dict = {}
+    monkeypatch.setattr(
+        mod.httpx,
+        "AsyncClient",
+        _client_factory(response=_FakeResponse(200), captured=captured),
+    )
+
+    await mod._purge_indicator_cache_for_factory("F001", "etl-test")
+
+    assert captured["url"] == "http://localhost:10010/api/admin/cache/purge"
+
+
+@pytest.mark.asyncio
+async def test_bulk_job_purges_only_succeeded_factories(monkeypatch):
+    """_run_finance_bulk_job calls cache purge for each succeeded factory only."""
+    from smartbi.api import restaurant_etl_admin as mod
+    from smartbi.gold.restaurant_finance_etl import BulkFinanceEtlStats, FinanceEtlStats
+
+    # Bulk result: 2 succeeded, 1 failed
+    bulk = BulkFinanceEtlStats()
+    bulk.per_factory = {
+        "RES_3101_009": FinanceEtlStats(revenue_upserted=365),
+        "F001": FinanceEtlStats(revenue_upserted=140),
+        "R_XMX_CHAIN": FinanceEtlStats(),
+    }
+    bulk.succeeded = ["RES_3101_009", "F001"]
+    bulk.failed = ["R_XMX_CHAIN"]
+
+    # Patch the pool getters + orchestrator (imported inside the function)
+    monkeypatch.setattr(
+        "smartbi.config.get_pg_pool", AsyncMock(return_value=MagicMock())
+    )
+    monkeypatch.setattr(
+        "smartbi.config.get_cretas_pool", AsyncMock(return_value=MagicMock())
+    )
+    monkeypatch.setattr(
+        "smartbi.gold.restaurant_finance_etl.run_full_finance_etl_for_factories",
+        AsyncMock(return_value=bulk),
+    )
+
+    purged: list = []
+
+    async def _fake_purge(factory_id, reason):
+        purged.append(factory_id)
+        return {"success": True, "factoryId": factory_id, "statusCode": 200}
+
+    monkeypatch.setattr(mod, "_purge_indicator_cache_for_factory", _fake_purge)
+
+    job_id = "test-job-1234abcd"
+    mod._running_jobs[job_id] = {
+        "factory_id": "RES_3101_009,F001,R_XMX_CHAIN",
+        "status": "queued",
+        "started_at": None,
+        "finished_at": None,
+        "error": None,
+    }
+
+    try:
+        await mod._run_finance_bulk_job(job_id, ["RES_3101_009", "F001", "R_XMX_CHAIN"], None, None)
+
+        # Only the 2 succeeded factories purged — NOT the failed one
+        assert purged == ["RES_3101_009", "F001"]
+        assert "R_XMX_CHAIN" not in purged
+        # Results captured in job stats
+        assert len(mod._running_jobs[job_id]["cachePurge"]) == 2
+        assert all(r["success"] for r in mod._running_jobs[job_id]["cachePurge"])
+        assert mod._running_jobs[job_id]["status"] == "success"
+    finally:
+        mod._running_jobs.pop(job_id, None)
+
+
+@pytest.mark.asyncio
+async def test_bulk_job_purge_failure_does_not_flip_etl_status(monkeypatch):
+    """Cache purge failure must NOT mark the ETL job as error."""
+    from smartbi.api import restaurant_etl_admin as mod
+    from smartbi.gold.restaurant_finance_etl import BulkFinanceEtlStats, FinanceEtlStats
+
+    bulk = BulkFinanceEtlStats()
+    bulk.per_factory = {"RES_3101_009": FinanceEtlStats(revenue_upserted=365)}
+    bulk.succeeded = ["RES_3101_009"]
+    bulk.failed = []
+
+    monkeypatch.setattr(
+        "smartbi.config.get_pg_pool", AsyncMock(return_value=MagicMock())
+    )
+    monkeypatch.setattr(
+        "smartbi.config.get_cretas_pool", AsyncMock(return_value=MagicMock())
+    )
+    monkeypatch.setattr(
+        "smartbi.gold.restaurant_finance_etl.run_full_finance_etl_for_factories",
+        AsyncMock(return_value=bulk),
+    )
+
+    async def _failing_purge(factory_id, reason):
+        return {"success": False, "factoryId": factory_id, "error": "HTTP 500"}
+
+    monkeypatch.setattr(mod, "_purge_indicator_cache_for_factory", _failing_purge)
+
+    job_id = "test-job-failpurge"
+    mod._running_jobs[job_id] = {
+        "factory_id": "RES_3101_009",
+        "status": "queued",
+        "started_at": None,
+        "finished_at": None,
+        "error": None,
+    }
+
+    try:
+        await mod._run_finance_bulk_job(job_id, ["RES_3101_009"], None, None)
+
+        # ETL succeeded → job status stays 'success' even though purge failed
+        assert mod._running_jobs[job_id]["status"] == "success"
+        assert mod._running_jobs[job_id]["cachePurge"][0]["success"] is False
+    finally:
+        mod._running_jobs.pop(job_id, None)

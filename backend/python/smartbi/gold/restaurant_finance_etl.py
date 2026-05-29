@@ -70,6 +70,18 @@ CATEGORY_REVENUE: str = "营业收入"          # matches sumRevenueCategory("�
 CATEGORY_COST_WASTAGE: str = "食材损耗"     # matches FOOD_KEYWORDS = {"食材", ...}
 CATEGORY_COST_POS_RECIPE: str = "食材成本"   # matches FOOD_KEYWORDS = {"食材", ...}
 
+# Sprint 12 Phase D — factories included in nightly bulk finance ETL.
+# Per dispatch Q2 decision: factories with real POS data in smartbi_prod_db
+# (verified 2026-05-29 via fact_pos_transaction by-factory count).
+# F006 excluded (0 POS data) — deferred to Phase F pending source data sync OR
+# Sprint 13 customer-upload workflow.
+RESTAURANT_FACTORY_BACKFILL_LIST: tuple = (
+    "RES_3101_009",   # ~140K POS txns, full 2025 year (Phase F.1 baseline factory)
+    "F001",           # ~140K POS txns (manufacturing factory with embedded POS — see Q2)
+    "R_GML_DEMO",     # ~16K POS txns (demo / mid-sized restaurant)
+    "R_XMX_CHAIN",    # ~141 POS txns (small chain, sparse data — sanity check)
+)
+
 
 @dataclass
 class FinanceEtlStats:
@@ -582,3 +594,97 @@ async def run_full_finance_etl_with_retry(
 
     # Defensive: should not be reachable
     raise last_exc  # type: ignore[misc]
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Sprint 12 Phase D — multi-factory orchestrator
+# ─────────────────────────────────────────────────────────────────────
+
+@dataclass
+class BulkFinanceEtlStats:
+    """Aggregate stats across multiple factory runs (Sprint 12 Phase D)."""
+    per_factory: Dict[str, FinanceEtlStats] = field(default_factory=dict)
+    succeeded: List[str] = field(default_factory=list)
+    failed: List[str] = field(default_factory=list)
+
+    @property
+    def total_revenue_upserted(self) -> int:
+        return sum(s.revenue_upserted for s in self.per_factory.values())
+
+    @property
+    def total_cost_wastage_upserted(self) -> int:
+        return sum(s.cost_wastage_upserted for s in self.per_factory.values())
+
+    @property
+    def total_cost_pos_recipe_upserted(self) -> int:
+        return sum(s.cost_pos_recipe_upserted for s in self.per_factory.values())
+
+
+async def run_full_finance_etl_for_factories(
+    cretas_pool: asyncpg.Pool,
+    smartbi_pool: asyncpg.Pool,
+    factory_ids: Optional[List[str]] = None,
+    start_date: Optional[date] = None,
+    end_date: Optional[date] = None,
+) -> BulkFinanceEtlStats:
+    """Run finance ETL for multiple restaurant factories (Sprint 12 Phase D).
+
+    Default factory list = :data:`RESTAURANT_FACTORY_BACKFILL_LIST` (4 factories
+    with real POS data in smartbi_prod_db, F006 excluded per Q2 decision).
+
+    Each factory runs sequentially through the retry wrapper — a single factory
+    crash does NOT abort the others. Failures are persisted to
+    ``restaurant_etl_failures`` table by ``run_full_finance_etl_with_retry``.
+
+    Typical operational usage (nightly cron — scripts/ops/run-finance-etl-daily.sh):
+
+        await run_full_finance_etl_for_factories(
+            cretas_pool, smartbi_pool,
+            start_date=date.today() - timedelta(days=1),
+            end_date=date.today() - timedelta(days=1),
+        )
+
+    Args:
+        cretas_pool: cretas_db connection pool
+        smartbi_pool: smartbi_db connection pool
+        factory_ids: list of factory IDs (None → use RESTAURANT_FACTORY_BACKFILL_LIST)
+        start_date: defaults to (end_date - DEFAULT_BACKFILL_DAYS) if None
+        end_date: defaults to today if None
+
+    Returns:
+        :class:`BulkFinanceEtlStats` aggregating per-factory stats + success/fail lists.
+    """
+    if factory_ids is None:
+        factory_ids = list(RESTAURANT_FACTORY_BACKFILL_LIST)
+
+    bulk = BulkFinanceEtlStats()
+    logger.info(
+        "[finance-etl-bulk] starting %d factories range=%s..%s factories=%s",
+        len(factory_ids), start_date, end_date, factory_ids,
+    )
+
+    for factory_id in factory_ids:
+        try:
+            stats = await run_full_finance_etl_with_retry(
+                cretas_pool, smartbi_pool, factory_id, start_date, end_date,
+            )
+            bulk.per_factory[factory_id] = stats
+            bulk.succeeded.append(factory_id)
+        except Exception as exc:
+            # run_full_finance_etl_with_retry already logged + persisted failure;
+            # we record the factory as failed and continue with the next.
+            logger.warning(
+                "[finance-etl-bulk] factory=%s final failure (after retries): %s",
+                factory_id, exc,
+            )
+            bulk.failed.append(factory_id)
+
+    logger.info(
+        "[finance-etl-bulk] finished succeeded=%d failed=%d "
+        "totalRevenueUpserted=%d totalCostWastageUpserted=%d totalCostPosRecipeUpserted=%d",
+        len(bulk.succeeded), len(bulk.failed),
+        bulk.total_revenue_upserted,
+        bulk.total_cost_wastage_upserted,
+        bulk.total_cost_pos_recipe_upserted,
+    )
+    return bulk

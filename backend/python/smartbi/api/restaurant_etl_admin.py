@@ -30,16 +30,39 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import uuid
 from datetime import date, datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
+import httpx
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 
 from smartbi.canonical.provenance._admin_auth import require_admin
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Phase E (Sprint 12) — cache purge after ETL backfill
+# ---------------------------------------------------------------------------
+# Sister chat sprint12-cache-fix (PR #286, merged 2026-05-29) ships
+# POST /api/admin/cache/purge with scope=INDICATOR contract. After bulk ETL
+# completes successfully for a factory, we MUST invalidate the per-factory
+# semantic_cache rows so the Composite Tool's next invocation sees the new
+# REVENUE/COST data instead of stale "(缓存结果)" payloads.
+#
+# Contract (docs/sprint12-cache-fix/PHASE-B-cache-purge-readme.md):
+#   POST {base}/api/admin/cache/purge?scope=INDICATOR&factoryId=...&reason=...
+#   Authorization: Bearer {ADMIN_JWT}
+#
+# Failures here log a warning but do NOT mark the ETL job failed — purge is
+# post-hoc cleanup, must not mask the underlying ETL success that operators
+# need to see in the bulk endpoint response.
+CACHE_PURGE_TIMEOUT_S = 10.0
+JAVA_API_BASE_URL_ENV = "JAVA_API_BASE_URL"
+ETL_ADMIN_JWT_ENV = "ETL_ADMIN_JWT"
+DEFAULT_JAVA_API_BASE_URL = "http://localhost:10010"
 
 router = APIRouter()
 
@@ -64,6 +87,18 @@ class FinanceEtlTriggerRequest(BaseModel):
     (per restaurant_finance_etl.DEFAULT_BACKFILL_DAYS).
     """
     factoryId: str
+    startDate: Optional[date] = None
+    endDate: Optional[date] = None
+
+
+class FinanceEtlBulkTriggerRequest(BaseModel):
+    """Sprint 12 Phase D — bulk multi-factory finance ETL trigger payload.
+
+    When ``factoryIds`` is None / empty, defaults to
+    ``RESTAURANT_FACTORY_BACKFILL_LIST`` (F001 + RES_3101_009 + R_GML_DEMO +
+    R_XMX_CHAIN per dispatch Q2). F006 excluded — no POS source data.
+    """
+    factoryIds: Optional[List[str]] = None
     startDate: Optional[date] = None
     endDate: Optional[date] = None
 
@@ -511,6 +546,265 @@ async def trigger_finance_etl(request: Request, body: FinanceEtlTriggerRequest):
         "jobId": job_id,
         "status": _running_jobs[job_id]["status"],
         "factoryId": factory_id,
+        "startDate": body.startDate.isoformat() if body.startDate else None,
+        "endDate": body.endDate.isoformat() if body.endDate else None,
+        "etaSeconds": eta_seconds,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Sprint 12 Phase D — bulk multi-factory finance ETL trigger
+# ---------------------------------------------------------------------------
+
+async def _purge_indicator_cache_for_factory(
+    factory_id: str, reason: str
+) -> Dict[str, Any]:
+    """Call Java admin cache purge after ETL backfill (Sprint 12 Phase E).
+
+    Posts to ``{JAVA_API_BASE_URL}/api/admin/cache/purge`` with
+    ``scope=INDICATOR`` per sister PR #286 contract. Uses ``ETL_ADMIN_JWT``
+    env var for auth (service-account JWT with platform_admin role).
+
+    Returns ``{success, factoryId, statusCode?, error?}`` dict for inclusion
+    in bulk job stats. Errors are logged at WARN and returned in the dict —
+    they MUST NOT raise, because cache purge is a post-hoc convenience that
+    must not mask underlying ETL success.
+
+    When ``ETL_ADMIN_JWT`` is unset (e.g. local dev runs, test env without
+    cron config), the call is skipped with a WARN log and ``success=False``
+    returned — operator can manually curl the endpoint later.
+    """
+    base_url = os.environ.get(JAVA_API_BASE_URL_ENV, DEFAULT_JAVA_API_BASE_URL)
+    admin_jwt = os.environ.get(ETL_ADMIN_JWT_ENV)
+
+    if not admin_jwt:
+        logger.warning(
+            "[cache-purge] %s env not set — skipping cache purge for factory=%s "
+            "(operator can run: curl -X POST '%s/api/admin/cache/purge"
+            "?scope=INDICATOR&factoryId=%s&reason=%s' -H 'Authorization: Bearer ...')",
+            ETL_ADMIN_JWT_ENV, factory_id, base_url, factory_id, reason,
+        )
+        return {
+            "success": False,
+            "factoryId": factory_id,
+            "error": f"{ETL_ADMIN_JWT_ENV} env not configured",
+        }
+
+    url = f"{base_url.rstrip('/')}/api/admin/cache/purge"
+    params = {
+        "scope": "INDICATOR",
+        "factoryId": factory_id,
+        "reason": reason,
+    }
+    headers = {"Authorization": f"Bearer {admin_jwt}"}
+
+    try:
+        async with httpx.AsyncClient(timeout=CACHE_PURGE_TIMEOUT_S) as client:
+            resp = await client.post(url, params=params, headers=headers)
+    except Exception as exc:
+        logger.warning(
+            "[cache-purge] factory=%s reason=%s network error: %s",
+            factory_id, reason, exc,
+        )
+        return {
+            "success": False,
+            "factoryId": factory_id,
+            "error": f"network: {exc}",
+        }
+
+    if resp.status_code == 200:
+        logger.info(
+            "[cache-purge] factory=%s reason=%s ok status=%d",
+            factory_id, reason, resp.status_code,
+        )
+        return {
+            "success": True,
+            "factoryId": factory_id,
+            "statusCode": resp.status_code,
+        }
+
+    logger.warning(
+        "[cache-purge] factory=%s reason=%s failed status=%d body=%s",
+        factory_id, reason, resp.status_code, resp.text[:200],
+    )
+    return {
+        "success": False,
+        "factoryId": factory_id,
+        "statusCode": resp.status_code,
+        "error": f"HTTP {resp.status_code}: {resp.text[:200]}",
+    }
+
+
+async def _enqueue_finance_bulk_job(
+    job_id: str,
+    factory_ids: List[str],
+    start_date: Optional[date],
+    end_date: Optional[date],
+) -> None:
+    """Spawn the bulk finance ETL background task (Sprint 12 Phase D)."""
+    task = asyncio.create_task(
+        _run_finance_bulk_job(job_id, factory_ids, start_date, end_date)
+    )
+    if job_id in _running_jobs:
+        _running_jobs[job_id]["_task"] = task
+
+
+async def _run_finance_bulk_job(
+    job_id: str,
+    factory_ids: List[str],
+    start_date: Optional[date],
+    end_date: Optional[date],
+) -> None:
+    """Execute run_full_finance_etl_for_factories in the background.
+
+    Per-factory failures are isolated by the orchestrator — job status reports
+    aggregate success/failure counts. Failed-factory list is included in
+    response so admin can re-trigger selectively.
+    """
+    _running_jobs[job_id]["status"] = "running"
+    _running_jobs[job_id]["started_at"] = datetime.now(timezone.utc).isoformat()
+
+    try:
+        from smartbi.config import get_pg_pool, get_cretas_pool
+        from smartbi.gold.restaurant_finance_etl import (
+            run_full_finance_etl_for_factories,
+        )
+
+        smartbi_pool = await get_pg_pool()
+        if smartbi_pool is None:
+            raise RuntimeError("SmartBI pool unavailable — check POSTGRES_URL setting")
+
+        cretas_pool = await get_cretas_pool()
+        if cretas_pool is None:
+            raise RuntimeError(
+                "Cretas pool unavailable — check FOOD_KB_DB_URL setting"
+            )
+
+        bulk = await run_full_finance_etl_for_factories(
+            cretas_pool, smartbi_pool, factory_ids, start_date, end_date,
+        )
+
+        # Mark success when at least one factory succeeded; partial-fail still
+        # reports 'success' so cron-style callers don't retry the whole batch.
+        # The failed list is preserved in stats for operator inspection.
+        _running_jobs[job_id]["status"] = "success" if bulk.succeeded else "error"
+        _running_jobs[job_id]["stats"] = {
+            "succeeded": bulk.succeeded,
+            "failed": bulk.failed,
+            "totalRevenueUpserted": bulk.total_revenue_upserted,
+            "totalCostWastageUpserted": bulk.total_cost_wastage_upserted,
+            "totalCostPosRecipeUpserted": bulk.total_cost_pos_recipe_upserted,
+            "perFactory": {
+                fid: {
+                    "revenueUpserted": s.revenue_upserted,
+                    "costWastageUpserted": s.cost_wastage_upserted,
+                    "costPosRecipeUpserted": s.cost_pos_recipe_upserted,
+                    "posDishResolved": s.pos_dish_resolved,
+                    "posDishUnresolved": s.pos_dish_unresolved,
+                    "errors": s.errors,
+                }
+                for fid, s in bulk.per_factory.items()
+            },
+        }
+        logger.info(
+            "[finance-etl-bulk] job %s completed: succeeded=%d failed=%d",
+            job_id, len(bulk.succeeded), len(bulk.failed),
+        )
+
+        # Phase E (Sprint 12) — purge stale indicator cache for each factory
+        # that backfilled successfully, so the Composite Tool's next call sees
+        # the fresh REVENUE/COST data instead of a cached "(缓存结果)" payload.
+        # Only purge succeeded factories — failed ones still have old data, no
+        # point invalidating cache they didn't refresh. Per-factory purge
+        # failures are captured in stats but never flip the ETL job status.
+        purge_reason = f"etl-backfill-bulk-{job_id[:8]}"
+        purge_results = []
+        for fid in bulk.succeeded:
+            purge_results.append(
+                await _purge_indicator_cache_for_factory(fid, purge_reason)
+            )
+        _running_jobs[job_id]["cachePurge"] = purge_results
+        purged_ok = sum(1 for r in purge_results if r.get("success"))
+        logger.info(
+            "[finance-etl-bulk] job %s cache purge: %d/%d factories ok",
+            job_id, purged_ok, len(purge_results),
+        )
+    except Exception as exc:
+        _running_jobs[job_id]["status"] = "error"
+        _running_jobs[job_id]["error"] = str(exc)
+        logger.warning(
+            "[finance-etl-bulk] job %s failed: %s", job_id, exc,
+        )
+    finally:
+        _running_jobs[job_id]["finished_at"] = datetime.now(timezone.utc).isoformat()
+
+
+@router.post("/finance-etl/trigger-bulk")
+async def trigger_finance_etl_bulk(
+    request: Request, body: FinanceEtlBulkTriggerRequest,
+):
+    """Trigger finance ETL for multiple restaurant factories (Sprint 12 Phase D).
+
+    Operational nightly cron endpoint — accepts ``factoryIds`` list OR omits
+    to use the default ``RESTAURANT_FACTORY_BACKFILL_LIST`` (F001 +
+    RES_3101_009 + R_GML_DEMO + R_XMX_CHAIN).
+
+    Each factory runs through the retry wrapper; per-factory failures are
+    isolated. Response includes aggregate stats + per-factory results.
+
+    Defaults to last 90 days when startDate / endDate omitted. Operational
+    cron should pass yesterday's date for both bounds.
+
+    Requires admin-tier role (factory_super_admin / platform_admin /
+    permission_admin).
+    """
+    require_admin(request, action_name="餐饮 Finance ETL 批量触发")
+
+    if (
+        body.startDate is not None
+        and body.endDate is not None
+        and body.endDate < body.startDate
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail=f"endDate ({body.endDate}) 早于 startDate ({body.startDate})",
+        )
+
+    # Resolve factoryIds: None / empty list → default backfill list
+    from smartbi.gold.restaurant_finance_etl import RESTAURANT_FACTORY_BACKFILL_LIST
+    if body.factoryIds:
+        factory_ids = [fid.strip() for fid in body.factoryIds if fid and fid.strip()]
+        if not factory_ids:
+            raise HTTPException(
+                status_code=400,
+                detail="factoryIds 全部为空 — 传 null/[] 走默认列表, 或填具体 ID",
+            )
+    else:
+        factory_ids = list(RESTAURANT_FACTORY_BACKFILL_LIST)
+
+    job_id = str(uuid.uuid4())
+
+    _running_jobs[job_id] = {
+        "factory_id": ",".join(factory_ids),   # display only (multi-factory job)
+        "status": "queued",
+        "started_at": None,
+        "finished_at": None,
+        "error": None,
+        "kind": "finance_bulk",
+        "factoryIds": factory_ids,
+        "startDate": body.startDate.isoformat() if body.startDate else None,
+        "endDate": body.endDate.isoformat() if body.endDate else None,
+    }
+
+    await _enqueue_finance_bulk_job(job_id, factory_ids, body.startDate, body.endDate)
+
+    # ETA scales linearly with factory count — ~30s per factory worst case
+    eta_seconds = 30 * len(factory_ids)
+
+    return {
+        "jobId": job_id,
+        "status": _running_jobs[job_id]["status"],
+        "factoryIds": factory_ids,
         "startDate": body.startDate.isoformat() if body.startDate else None,
         "endDate": body.endDate.isoformat() if body.endDate else None,
         "etaSeconds": eta_seconds,

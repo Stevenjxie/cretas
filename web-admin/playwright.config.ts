@@ -187,7 +187,9 @@ export default defineConfig({
       workers: 1,
     },
     // Sprint 11 MealClaw Audit Q7/Q8 — UI-level customer journey screenshot + video
-    // Reproduces customer-visible "部分数据不可用" error dump via real browser.
+    // Per .claude/rules/playwright-headed-mode.md: 强制 headed + zh-CN locale +
+    // 1920x1080 viewport so 中文 font renders真 + 客户演示截图价值. Multi-chat
+    // coexistence: set PLAYWRIGHT_PORT (9222/9223/9224) + PLAYWRIGHT_CHAT_ID per chat.
     // Output: docs/audits/sprint-11-mealclaw-screenshots/*.png + *.webm
     {
       name: 'mealclaw-customer-ui',
@@ -195,8 +197,49 @@ export default defineConfig({
       fullyParallel: false,
       workers: 1,
       use: {
+        headless: false,
+        viewport: { width: 1920, height: 1080 },
+        launchOptions: {
+          args: [
+            `--remote-debugging-port=${Number(process.env.PLAYWRIGHT_PORT) || 9224}`,
+            `--user-data-dir=./.pw-cache-${process.env.PLAYWRIGHT_CHAT_ID || 'mealclaw'}/`,
+            '--lang=zh-CN',
+            '--font-render-hinting=none',
+            '--disable-blink-features=AutomationControlled',
+            '--window-position=1000,0',
+            '--window-size=1920,1080',
+          ],
+          slowMo: 100,
+        },
         video: 'on',
         trace: 'on',
+        screenshot: 'on',
+      },
+    },
+    // Sprint 11 Round 4 — B.5 explicit-month customer evidence (headed per rule)
+    {
+      name: 'mealclaw-customer-r4',
+      testMatch: 'tests/e2e-customer-journey/mealclaw-customer-r4-explicit-month.spec.ts',
+      fullyParallel: false,
+      workers: 1,
+      use: {
+        headless: false,
+        viewport: { width: 1920, height: 1080 },
+        launchOptions: {
+          args: [
+            `--remote-debugging-port=${Number(process.env.PLAYWRIGHT_PORT) || 9224}`,
+            `--user-data-dir=./.pw-cache-${process.env.PLAYWRIGHT_CHAT_ID || 'mealclaw'}/`,
+            '--lang=zh-CN',
+            '--font-render-hinting=none',
+            '--disable-blink-features=AutomationControlled',
+            '--window-position=1000,0',
+            '--window-size=1920,1080',
+          ],
+          slowMo: 100,
+        },
+        video: 'on',
+        trace: 'on',
+        screenshot: 'on',
       },
     },
     // Sprint 11 D7 — SalesOwner Workdesk 4 IndicatorCards depth test
