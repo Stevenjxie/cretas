@@ -815,9 +815,10 @@ deploy_jar() {
             echo "   ❌ 没有可用的 Fallback 方式 (rsync/oss/r2 均不可用)"
         fi
 
-        # 等待 Fallback 完成 (最多5分钟)
-        echo "   等待 Fallback 完成 (超时: 5分钟)..."
-        FALLBACK_TIMEOUT=300
+        # 等待 Fallback 完成 (默认5分钟; 163MB jar 在慢 ISP 下 R2 上传需 ~6.5min,
+        # 用 FALLBACK_TIMEOUT 环境变量放宽, 如 FALLBACK_TIMEOUT=900)
+        FALLBACK_TIMEOUT="${FALLBACK_TIMEOUT:-300}"
+        echo "   等待 Fallback 完成 (超时: ${FALLBACK_TIMEOUT}s)..."
         ELAPSED=0
 
         while [ -z "$WINNER" ] && [ $ELAPSED -lt $FALLBACK_TIMEOUT ]; do
