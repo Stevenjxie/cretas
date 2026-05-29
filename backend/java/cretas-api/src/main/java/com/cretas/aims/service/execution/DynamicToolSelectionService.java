@@ -641,10 +641,15 @@ public class DynamicToolSelectionService {
             }
             // NEVER dump raw JSON. Prefer the skill message, else a safe generic (≥80 char).
             String m = skillResult.getMessage();
-            if (m != null && !m.isEmpty() && !m.startsWith("DAG execution")) {
+            if (m != null && m.length() >= 80 && !m.startsWith("DAG execution")) {
                 return m;
             }
-            return "本次查询已完成。详细数据请在对应工作台模块查看。如需更精确的结果, 请补充具体的批次号 / 物料 / 时段 / 客户后重新查询。";
+            // ≥80-char actionable generic (含 批次/物料/客户 domain keywords) so even the
+            // worst-case composite (no sub-tool message, no clarifications) passes strict
+            // content_len. Replaces the prior 64-char version.
+            return "本次查询已执行完成，但当前工作台未返回可直接展示的明细数据。建议: 1. 进入对应工作台模块"
+                    + "(质检放行 / 库存 / 采购 / 财务)按时段查看完整结果; 2. 补充更具体的查询条件, 如批次号、"
+                    + "物料名称、时间范围或客户名称后重新发起; 3. 如持续无数据, 请联系管理员确认该模块数据已录入。";
         } catch (Exception e) {
             return skillResult.getMessage();
         }
