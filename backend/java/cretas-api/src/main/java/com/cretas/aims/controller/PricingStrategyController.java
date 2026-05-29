@@ -104,7 +104,8 @@ public class PricingStrategyController {
     public static class SimulateRequest {
         @NotBlank(message = "商品ID不能为空")
         private String productId;
-        private Integer quantity;
+        /** BigDecimal to allow fractional/kg quantities in the pricing preview (Jackson accepts int JSON too). */
+        private BigDecimal quantity;
         private BigDecimal unitPriceList;
         private Long customerId;
         /** Post-review I7: 必须传, 否则 MEMBER 策略 + scope_filter customerGroups 不生效. */
@@ -276,7 +277,7 @@ public class PricingStrategyController {
                 com.cretas.aims.service.pricing.PricingRequest.builder()
                         .factoryId(factoryId)
                         .productId(req.getProductId())
-                        .quantity(req.getQuantity() != null ? req.getQuantity() : 1)
+                        .quantity(req.getQuantity() != null ? req.getQuantity() : BigDecimal.ONE)
                         .unitPriceList(req.getUnitPriceList() != null ? req.getUnitPriceList() : BigDecimal.ZERO)
                         .customerId(req.getCustomerId())
                         .customerGroup(req.getCustomerGroup())

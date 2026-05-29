@@ -124,7 +124,7 @@ public class PricingEngineImpl implements PricingEngine {
      */
     @Override
     @Deprecated
-    public PricingResult simulate(String factoryId, String productId, int quantity,
+    public PricingResult simulate(String factoryId, String productId, BigDecimal quantity,
                                    BigDecimal unitPriceList, Long customerId) {
         PricingRequest req = PricingRequest.builder()
                 .factoryId(factoryId)
@@ -145,10 +145,10 @@ public class PricingEngineImpl implements PricingEngine {
     private PricingResult computeInternal(PricingRequest request) {
         BigDecimal unitPriceList = request.getUnitPriceList() != null
                 ? request.getUnitPriceList() : BigDecimal.ZERO;
-        int quantity = request.getQuantity() != null ? request.getQuantity() : 1;
+        BigDecimal quantity = request.getQuantity() != null ? request.getQuantity() : BigDecimal.ONE;
 
         // originalPrice = unitPriceList * quantity (line total before any strategy)
-        BigDecimal originalPrice = unitPriceList.multiply(BigDecimal.valueOf(quantity));
+        BigDecimal originalPrice = unitPriceList.multiply(quantity);
 
         // Step 1: load active strategies, ordered by priority asc
         List<PricingStrategy> activeStrategies =
@@ -313,17 +313,23 @@ public class PricingEngineImpl implements PricingEngine {
         List<?> tiers = asList(rules.get("tiers"));
         if (tiers == null || tiers.isEmpty()) return BigDecimal.ZERO;
 
-        int qty = request.getQuantity() != null ? request.getQuantity() : 0;
+        BigDecimal qty = request.getQuantity() != null ? request.getQuantity() : BigDecimal.ZERO;
         BigDecimal bestDiscountPct = null;
 
         for (Object t : tiers) {
             if (!(t instanceof Map)) continue;
             Map<?, ?> tier = (Map<?, ?>) t;
-            int minQty = asInt(tier.get("minQty"), 0);
-            int maxQty = asInt(tier.get("maxQty"), Integer.MAX_VALUE);
+            // Tier boundaries parsed as BigDecimal so fractional thresholds (e.g. minQty 0.5) work;
+            // integer tiers behave identically. Missing minQty → 0, missing maxQty → unbounded.
+            BigDecimal minQty = asDecimal(tier.get("minQty"));
+            if (minQty == null) minQty = BigDecimal.ZERO;
+            BigDecimal maxQty = asDecimal(tier.get("maxQty"));   // null = no upper bound
             BigDecimal discountPct = asDecimal(tier.get("discountPct"));
 
-            if (qty >= minQty && qty <= maxQty && discountPct != null) {
+            // Inclusive boundary match via compareTo (no floor/ceil): minQty <= qty <= maxQty.
+            boolean inRange = qty.compareTo(minQty) >= 0
+                    && (maxQty == null || qty.compareTo(maxQty) <= 0);
+            if (inRange && discountPct != null) {
                 if (bestDiscountPct == null || discountPct.compareTo(bestDiscountPct) > 0) {
                     bestDiscountPct = discountPct;
                 }
@@ -333,7 +339,7 @@ public class PricingEngineImpl implements PricingEngine {
         if (bestDiscountPct == null) return BigDecimal.ZERO;
 
         // line total = qty * unitPriceList; discount = lineTotal * discountPct / 100
-        BigDecimal lineTotal = unitPriceList.multiply(BigDecimal.valueOf(qty));
+        BigDecimal lineTotal = unitPriceList.multiply(qty);
         return percentOf(lineTotal, bestDiscountPct);
     }
 
@@ -350,7 +356,7 @@ public class PricingEngineImpl implements PricingEngine {
         BigDecimal discountPct = asDecimal(rules.get("discountPct"));     // 0-100 (percent)
 
         BigDecimal lineTotal = unitPriceList.multiply(
-                BigDecimal.valueOf(request.getQuantity() != null ? request.getQuantity() : 1));
+                request.getQuantity() != null ? request.getQuantity() : BigDecimal.ONE);
 
         // Threshold gate: line total must meet threshold (NULL = unconditional).
         if (threshold != null && lineTotal.compareTo(threshold) < 0) {
@@ -480,10 +486,10 @@ public class PricingEngineImpl implements PricingEngine {
                                           BigDecimal finalPrice, BigDecimal totalDiscount) {
         List<String> warnings = new ArrayList<>();
         BigDecimal costEstimate = request.getCostEstimate();
-        int qty = request.getQuantity() != null ? request.getQuantity() : 1;
+        BigDecimal qty = request.getQuantity() != null ? request.getQuantity() : BigDecimal.ONE;
 
-        if (costEstimate != null && qty > 0) {
-            BigDecimal totalCost = costEstimate.multiply(BigDecimal.valueOf(qty));
+        if (costEstimate != null && qty.signum() > 0) {
+            BigDecimal totalCost = costEstimate.multiply(qty);
             if (finalPrice.compareTo(totalCost) < 0) {
                 warnings.add(String.format("final price ¥%s below cost ¥%s — 请销售经理审核",
                         finalPrice.setScale(2, RoundingMode.HALF_UP).toPlainString(),
@@ -582,7 +588,10 @@ public class PricingEngineImpl implements PricingEngine {
     private BigDecimal asDecimal(Object v) {
         if (v == null) return null;
         if (v instanceof BigDecimal) return (BigDecimal) v;
-        if (v instanceof Number) return BigDecimal.valueOf(((Number) v).doubleValue());
+        // Round-trip Numbers through String, NOT doubleValue(): a JSON-parsed tier boundary
+        // (Integer/Double) must compare exactly against a qty built via new BigDecimal(String).
+        // BigDecimal.valueOf(double) goes through Double and risks asymmetric representation vs the
+        // string-built qty (preflight-review HIGH finding); v.toString() keeps both sides exact.
         try {
             return new BigDecimal(v.toString());
         } catch (NumberFormatException e) {
@@ -590,15 +599,6 @@ public class PricingEngineImpl implements PricingEngine {
         }
     }
 
-    private int asInt(Object v, int fallback) {
-        if (v == null) return fallback;
-        if (v instanceof Number) return ((Number) v).intValue();
-        try {
-            return Integer.parseInt(v.toString());
-        } catch (NumberFormatException e) {
-            return fallback;
-        }
-    }
 
     private String asString(Object v) {
         return v != null ? v.toString() : null;
