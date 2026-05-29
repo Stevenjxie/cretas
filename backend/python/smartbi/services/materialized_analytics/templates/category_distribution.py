@@ -12,6 +12,7 @@ from smartbi.capability.contract import RequiresSpec
 
 from ..compute.base import ComputeBackend
 from ..restaurant.action_rec_formatter import format_action_rec
+from ..restaurant.schema_helpers import aggregation_for_measure
 from ..schema import DataSchema
 from .base import AnalysisTemplate, TemplateResult
 from .registry import register
@@ -58,6 +59,16 @@ class CategoryDistribution(AnalysisTemplate):
 
     def compute(self, backend: ComputeBackend, schema: DataSchema) -> TemplateResult:
         measure = schema.primary_measure
+        # May 30 2026: a "占比/份额" pie of an intensive measure (星级分/评分/率)
+        # is meaningless — you cannot speak of "60% 份额 of a rating". Skip
+        # this card for AVG-semantic measures (the trend/ranking cards still
+        # show the proper per-dim average).
+        if aggregation_for_measure(measure) == "avg":
+            return TemplateResult(
+                code=self.code, title=self.title, data={},
+                applies=False,
+                skip_reason=f"占比分布对均值类指标 ({measure}) 无意义,已跳过",
+            )
         shares_by_dim = {}
 
         for dim in schema.dimensions[:4]:

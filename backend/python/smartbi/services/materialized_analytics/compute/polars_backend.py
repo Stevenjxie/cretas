@@ -59,24 +59,38 @@ class PolarsBackend(ComputeBackend):
         """Cast column to Float64; nulls for non-numeric strings."""
         return pl.col(col).cast(pl.Float64, strict=False)
 
-    def group_sum(self, group_col: str, measure: str) -> List[Dict[str, Any]]:
+    @staticmethod
+    def _agg_expr(agg: str) -> pl.Expr:
+        """Build the aggregation expr on the prepared '_m' column.
+
+        May 30 2026: support 'avg' for intensive measures (星级分/评分/率) so a
+        star-rating series shows the mean (~4.8) instead of a meaningless
+        accumulating SUM. Default 'sum' keeps every existing call byte-identical.
+        """
+        if agg == "avg":
+            return pl.col("_m").mean().alias("total")
+        if agg == "sum":
+            return pl.col("_m").sum().alias("total")
+        raise ValueError(f"unsupported agg: {agg!r} (expected 'sum' or 'avg')")
+
+    def group_sum(self, group_col: str, measure: str, agg: str = "sum") -> List[Dict[str, Any]]:
         return (
             self._df
             .with_columns(self._as_numeric(measure).alias("_m"))
             .filter(pl.col(group_col).is_not_null() & pl.col("_m").is_not_null())
             .filter(~pl.col(group_col).cast(pl.Utf8).is_in(list(_META_LABELS)))  # W2.0: exclude meta-rows
             .group_by(group_col)
-            .agg(pl.col("_m").sum().alias("total"))
+            .agg(self._agg_expr(agg))
             .sort("total", descending=True)
             .rename({group_col: "label"})
             .select(["label", "total"])
             .to_dicts()
         )
 
-    def top_n(self, group_col: str, measure: str, n: int) -> List[Dict[str, Any]]:
-        return self.group_sum(group_col, measure)[:n]
+    def top_n(self, group_col: str, measure: str, n: int, agg: str = "sum") -> List[Dict[str, Any]]:
+        return self.group_sum(group_col, measure, agg=agg)[:n]
 
-    def time_series(self, time_col: str, measure: str, freq: str) -> List[Dict[str, Any]]:
+    def time_series(self, time_col: str, measure: str, freq: str, agg: str = "sum") -> List[Dict[str, Any]]:
         if freq not in ("D", "W", "M"):
             raise ValueError(f"unsupported freq: {freq}")
         polars_freq = {"D": "1d", "W": "1w", "M": "1mo"}[freq]
@@ -92,7 +106,7 @@ class PolarsBackend(ComputeBackend):
             .filter(pl.col("_t").is_not_null() & pl.col("_m").is_not_null())
             .sort("_t")  # C2: group_by_dynamic requires pre-sorted input
             .group_by_dynamic("_t", every=polars_freq)
-            .agg(pl.col("_m").sum().alias("total"))
+            .agg(self._agg_expr(agg))
             .with_columns(pl.col("_t").dt.strftime("%Y-%m-%d").alias("period"))
             .select(["period", "total"])
             .to_dicts()

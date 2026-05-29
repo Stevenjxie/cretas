@@ -24,16 +24,23 @@ class ComputeBackend(ABC):
         """Returns normalized dtype name: int|float|string|datetime|bool."""
 
     @abstractmethod
-    def group_sum(self, group_col: str, measure: str) -> List[Dict[str, Any]]:
-        """Returns [{label, total}, ...] sorted by total DESC."""
+    def group_sum(self, group_col: str, measure: str, agg: str = "sum") -> List[Dict[str, Any]]:
+        """Returns [{label, total}, ...] sorted by total DESC.
+
+        agg='sum' (default) for additive measures; 'avg' for intensive
+        measures (rating/rate) where summing is meaningless.
+        """
 
     @abstractmethod
-    def top_n(self, group_col: str, measure: str, n: int) -> List[Dict[str, Any]]:
+    def top_n(self, group_col: str, measure: str, n: int, agg: str = "sum") -> List[Dict[str, Any]]:
         """Top N rows from group_sum."""
 
     @abstractmethod
-    def time_series(self, time_col: str, measure: str, freq: str) -> List[Dict[str, Any]]:
-        """Returns [{period, total}, ...] resampled by freq ('D'|'W'|'M')."""
+    def time_series(self, time_col: str, measure: str, freq: str, agg: str = "sum") -> List[Dict[str, Any]]:
+        """Returns [{period, total}, ...] resampled by freq ('D'|'W'|'M').
+
+        agg='sum' (default) or 'avg' (intensive measures).
+        """
 
     @abstractmethod
     def percentile(self, measure: str, percentiles: List[float]) -> Dict[float, float]:

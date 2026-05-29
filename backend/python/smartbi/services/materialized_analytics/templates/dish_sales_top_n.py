@@ -15,6 +15,7 @@ from smartbi.capability.contract import RequiresSpec
 
 from ..compute.base import ComputeBackend
 from ..restaurant.action_rec_formatter import format_action_rec
+from ..restaurant.dish_classifier import classify_dish
 from ..restaurant.dish_name_normalizer import normalize_dish_name
 from ..restaurant.item_parser import parse_items
 from ..schema import DataSchema, Domain
@@ -23,6 +24,12 @@ from .registry import register
 
 _TOP_N = 20
 _SAMPLE_ROWS = 500_000
+
+# May 30 2026: staples/surcharge items distort the "畅销菜品" ranking — 米饭/
+# 面/打包盒/餐位费 sell in huge volume but are not menu dishes a chef would
+# promote. Exclude these inferred categories from the Top-N so the ranking
+# surfaces real signature dishes (招牌青花椒鱼 etc.) instead of 米饭.
+_EXCLUDED_CATEGORIES = ("主食", "调料/附加")
 
 
 @register
@@ -67,6 +74,7 @@ class DishSalesTopN(AnalysisTemplate):
 
         qty_counter: Counter = Counter()
         rev_counter: Counter = Counter()
+        excluded_count = 0
 
         for raw_value in series.to_list():
             if not raw_value:
@@ -77,6 +85,12 @@ class DishSalesTopN(AnalysisTemplate):
                 # into the parent dish name so the Top-N ranking treats
                 # 招牌青花椒鱼(一吃) and 招牌青花椒鱼(二吃) as one dish.
                 name = normalize_dish_name(item["name"])
+                # May 30 2026: drop staples (米饭/面/粉) + surcharge items
+                # (打包盒/餐位费) — they swamp the畅销ranking but aren't菜品.
+                category = classify_dish(name, item.get("is_signature", False))
+                if category in _EXCLUDED_CATEGORIES:
+                    excluded_count += 1
+                    continue
                 qty_counter[name] += item["quantity"]
                 rev_counter[name] += item["total"]
 
@@ -148,11 +162,15 @@ class DishSalesTopN(AnalysisTemplate):
             prerequisite="确认菜单首屏 / 首页排位 + 上架库存满足 1 周",
             timeline="本周内",
         )
+        staple_note = (
+            f"(已排除米饭/面/打包盒等主食及附加项 {excluded_count} 项)"
+            if excluded_count else ""
+        )
         insight_text = (
             f"菜品销量 Top 1:{top_name},"
             f"共售出 {top_qty:.0f} 份,"
             f"贡献营业额 {top_revenue:,.0f} 元。"
-            f"全量菜单共 {distinct_dishes} 个菜品。 "
+            f"全量菜单共 {distinct_dishes} 个菜品{staple_note}。 "
             f"{action_rec}"
         )
 
@@ -163,6 +181,7 @@ class DishSalesTopN(AnalysisTemplate):
                 "top_by_qty": top_by_qty,
                 "top_by_revenue": top_by_revenue,
                 "distinct_dishes": distinct_dishes,
+                "excluded_staple_items": excluded_count,
             },
             chart_config=chart_config,
             kpis={
