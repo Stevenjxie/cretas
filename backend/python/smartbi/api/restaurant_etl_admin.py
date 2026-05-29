@@ -30,16 +30,39 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import uuid
 from datetime import date, datetime, timezone
 from typing import Any, Dict, List, Optional
 
+import httpx
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 
 from smartbi.canonical.provenance._admin_auth import require_admin
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Phase E (Sprint 12) — cache purge after ETL backfill
+# ---------------------------------------------------------------------------
+# Sister chat sprint12-cache-fix (PR #286, merged 2026-05-29) ships
+# POST /api/admin/cache/purge with scope=INDICATOR contract. After bulk ETL
+# completes successfully for a factory, we MUST invalidate the per-factory
+# semantic_cache rows so the Composite Tool's next invocation sees the new
+# REVENUE/COST data instead of stale "(缓存结果)" payloads.
+#
+# Contract (docs/sprint12-cache-fix/PHASE-B-cache-purge-readme.md):
+#   POST {base}/api/admin/cache/purge?scope=INDICATOR&factoryId=...&reason=...
+#   Authorization: Bearer {ADMIN_JWT}
+#
+# Failures here log a warning but do NOT mark the ETL job failed — purge is
+# post-hoc cleanup, must not mask the underlying ETL success that operators
+# need to see in the bulk endpoint response.
+CACHE_PURGE_TIMEOUT_S = 10.0
+JAVA_API_BASE_URL_ENV = "JAVA_API_BASE_URL"
+ETL_ADMIN_JWT_ENV = "ETL_ADMIN_JWT"
+DEFAULT_JAVA_API_BASE_URL = "http://localhost:10010"
 
 router = APIRouter()
 
@@ -533,6 +556,85 @@ async def trigger_finance_etl(request: Request, body: FinanceEtlTriggerRequest):
 # Sprint 12 Phase D — bulk multi-factory finance ETL trigger
 # ---------------------------------------------------------------------------
 
+async def _purge_indicator_cache_for_factory(
+    factory_id: str, reason: str
+) -> Dict[str, Any]:
+    """Call Java admin cache purge after ETL backfill (Sprint 12 Phase E).
+
+    Posts to ``{JAVA_API_BASE_URL}/api/admin/cache/purge`` with
+    ``scope=INDICATOR`` per sister PR #286 contract. Uses ``ETL_ADMIN_JWT``
+    env var for auth (service-account JWT with platform_admin role).
+
+    Returns ``{success, factoryId, statusCode?, error?}`` dict for inclusion
+    in bulk job stats. Errors are logged at WARN and returned in the dict —
+    they MUST NOT raise, because cache purge is a post-hoc convenience that
+    must not mask underlying ETL success.
+
+    When ``ETL_ADMIN_JWT`` is unset (e.g. local dev runs, test env without
+    cron config), the call is skipped with a WARN log and ``success=False``
+    returned — operator can manually curl the endpoint later.
+    """
+    base_url = os.environ.get(JAVA_API_BASE_URL_ENV, DEFAULT_JAVA_API_BASE_URL)
+    admin_jwt = os.environ.get(ETL_ADMIN_JWT_ENV)
+
+    if not admin_jwt:
+        logger.warning(
+            "[cache-purge] %s env not set — skipping cache purge for factory=%s "
+            "(operator can run: curl -X POST '%s/api/admin/cache/purge"
+            "?scope=INDICATOR&factoryId=%s&reason=%s' -H 'Authorization: Bearer ...')",
+            ETL_ADMIN_JWT_ENV, factory_id, base_url, factory_id, reason,
+        )
+        return {
+            "success": False,
+            "factoryId": factory_id,
+            "error": f"{ETL_ADMIN_JWT_ENV} env not configured",
+        }
+
+    url = f"{base_url.rstrip('/')}/api/admin/cache/purge"
+    params = {
+        "scope": "INDICATOR",
+        "factoryId": factory_id,
+        "reason": reason,
+    }
+    headers = {"Authorization": f"Bearer {admin_jwt}"}
+
+    try:
+        async with httpx.AsyncClient(timeout=CACHE_PURGE_TIMEOUT_S) as client:
+            resp = await client.post(url, params=params, headers=headers)
+    except Exception as exc:
+        logger.warning(
+            "[cache-purge] factory=%s reason=%s network error: %s",
+            factory_id, reason, exc,
+        )
+        return {
+            "success": False,
+            "factoryId": factory_id,
+            "error": f"network: {exc}",
+        }
+
+    if resp.status_code == 200:
+        logger.info(
+            "[cache-purge] factory=%s reason=%s ok status=%d",
+            factory_id, reason, resp.status_code,
+        )
+        return {
+            "success": True,
+            "factoryId": factory_id,
+            "statusCode": resp.status_code,
+        }
+
+    logger.warning(
+        "[cache-purge] factory=%s reason=%s failed status=%d body=%s",
+        factory_id, reason, resp.status_code, resp.text[:200],
+    )
+    return {
+        "success": False,
+        "factoryId": factory_id,
+        "statusCode": resp.status_code,
+        "error": f"HTTP {resp.status_code}: {resp.text[:200]}",
+    }
+
+
 async def _enqueue_finance_bulk_job(
     job_id: str,
     factory_ids: List[str],
@@ -607,6 +709,25 @@ async def _run_finance_bulk_job(
         logger.info(
             "[finance-etl-bulk] job %s completed: succeeded=%d failed=%d",
             job_id, len(bulk.succeeded), len(bulk.failed),
+        )
+
+        # Phase E (Sprint 12) — purge stale indicator cache for each factory
+        # that backfilled successfully, so the Composite Tool's next call sees
+        # the fresh REVENUE/COST data instead of a cached "(缓存结果)" payload.
+        # Only purge succeeded factories — failed ones still have old data, no
+        # point invalidating cache they didn't refresh. Per-factory purge
+        # failures are captured in stats but never flip the ETL job status.
+        purge_reason = f"etl-backfill-bulk-{job_id[:8]}"
+        purge_results = []
+        for fid in bulk.succeeded:
+            purge_results.append(
+                await _purge_indicator_cache_for_factory(fid, purge_reason)
+            )
+        _running_jobs[job_id]["cachePurge"] = purge_results
+        purged_ok = sum(1 for r in purge_results if r.get("success"))
+        logger.info(
+            "[finance-etl-bulk] job %s cache purge: %d/%d factories ok",
+            job_id, purged_ok, len(purge_results),
         )
     except Exception as exc:
         _running_jobs[job_id]["status"] = "error"

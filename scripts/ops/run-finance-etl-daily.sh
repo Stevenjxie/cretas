@@ -24,6 +24,15 @@
 # Auth: reads ADMIN_JWT from /etc/cretas/finance-etl-cron.env (mode 600).
 # The token must belong to a platform_admin / factory_super_admin user.
 #
+# Cache purge (Sprint 12 Phase E): after a successful bulk backfill, the Python
+# service auto-purges each factory's stale indicator cache by calling the Java
+# admin endpoint (POST /api/admin/cache/purge, sister PR #286). For this to
+# work the PYTHON service (cretas-python.service) must have these env vars:
+#   ETL_ADMIN_JWT     — platform_admin JWT (may reuse the cron ADMIN_JWT value)
+#   JAVA_API_BASE_URL — defaults to http://localhost:10010 if unset
+# If ETL_ADMIN_JWT is unset the purge is skipped with a WARN log (ETL still
+# succeeds) and an operator must manually curl the purge endpoint.
+#
 # Exit codes:
 #   0 — bulk job accepted (jobId returned by API)
 #   1 — API returned non-200 (auth / 400 / 500)
@@ -31,7 +40,11 @@
 set -euo pipefail
 
 # --- Config ---
-API_BASE="${CRETAS_API_BASE:-http://localhost:10010}"
+# The bulk ETL endpoint is registered on the PYTHON service (port 8083),
+# prefix /api/smartbi/restaurant/etl (see backend/python/main.py). Java (10010)
+# does NOT proxy /api/smartbi/* — targeting 10010 would 404. Override with
+# CRETAS_API_BASE only if the Python service moved.
+API_BASE="${CRETAS_API_BASE:-http://localhost:8083}"
 ENV_FILE="${CRETAS_ETL_ENV_FILE:-/etc/cretas/finance-etl-cron.env}"
 LOG_TAG="finance-etl-daily"
 
