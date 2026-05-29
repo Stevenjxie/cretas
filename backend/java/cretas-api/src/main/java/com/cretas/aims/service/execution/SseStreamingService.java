@@ -68,6 +68,10 @@ public class SseStreamingService {
     @Autowired(required = false)
     private SlotFillingService slotFillingService;
 
+    // Sprint 13 #305 业态门控: shared gate so the SSE path gates identically to /execute.
+    @Autowired
+    private BusinessTypeGate businessTypeGate;
+
     @Autowired
     public SseStreamingService(@Lazy AIIntentService aiIntentService,
                                SemanticCacheService semanticCacheService,
@@ -382,6 +386,20 @@ public class SseStreamingService {
             sendSseEvent(emitter, "result", approvalResponse);
             sendSseEvent(emitter, "complete", Map.of(
                     "status", "PENDING_APPROVAL",
+                    "totalLatencyMs", System.currentTimeMillis() - startTime
+            ));
+            emitter.complete();
+            return;
+        }
+
+        // 业态门控 (Sprint 13 #305): domain-exclusive intent on a mismatched factory.type →
+        // honest empty-state + domain next-action, instead of executing a tool with no data.
+        Optional<IntentExecuteResponse> gate = businessTypeGate.check(factoryId, intent);
+        if (gate.isPresent()) {
+            IntentExecuteResponse gateResponse = gate.get();
+            sendSseEvent(emitter, "result", gateResponse);
+            sendSseEvent(emitter, "complete", Map.of(
+                    "status", gateResponse.getStatus() != null ? gateResponse.getStatus() : "NOT_APPLICABLE",
                     "totalLatencyMs", System.currentTimeMillis() - startTime
             ));
             emitter.complete();
