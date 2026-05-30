@@ -110,6 +110,97 @@ async def get_cached_analytics(upload_id: int, request: Request) -> Dict[str, An
     }
 
 
+@router.get("/list-factory-templates")
+async def list_factory_templates(
+    request: Request,
+    factory_id: str = Query(..., description="Factory whose materialized templates to list"),
+) -> Dict[str, Any]:
+    """措施③ recommendation engine: list the analysis templates that already
+    have materialized (pre-computed) results for a factory, so the FE can show
+    a "猜你想问" guidance area.
+
+    Why this is the core 杠杆: clicking a recommended chip pins the user's
+    free-form natural-language input to a known template phrase, which then
+    hits the materialized cache in the query router → 0 LLM token + ~230ms,
+    instead of running the full open-NL pipeline (slow + expensive).
+
+    Logic: DISTINCT template_code over this factory's materialized results,
+    counted by how many uploads produced each template (popularity proxy),
+    DESC by count. The top 3 get is_recommended=true. Titles come from the
+    template registry's canonical Chinese title (single source of truth shared
+    with the FE useTemplateMap dictionary).
+
+    Returns {success, factory_id, count, templates: [{code, title,
+    materialization_count, is_recommended}]}.
+
+    Auth: same JWT / X-Internal-Secret + X-Factory-Id model as the rest of
+    this router. The path factory_id MUST equal the authenticated factory
+    (no cross-tenant listing).
+    """
+    pool = await get_pg_pool()
+    if pool is None:
+        raise HTTPException(status_code=503, detail="postgres pool not available")
+
+    user_factory = _extract_factory_id(request)
+    if factory_id != user_factory:
+        logger.warning(
+            f"[list-factory-templates] factory mismatch: user={user_factory}, "
+            f"requested={factory_id}"
+        )
+        raise HTTPException(status_code=403, detail="cross-tenant access denied")
+
+    # DISTINCT template_code with per-template materialization count. We count
+    # DISTINCT uploads (a single upload can store one row per template, but join
+    # on upload guards against any future duplicate rows inflating the count).
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """SELECT r.template_code AS template_code,
+                      COUNT(DISTINCT r.upload_id) AS materialization_count
+               FROM smart_bi_pg_analysis_results r
+               JOIN smart_bi_pg_excel_uploads u ON u.id = r.upload_id
+               WHERE u.factory_id = $1 AND r.template_code IS NOT NULL
+               GROUP BY r.template_code
+               ORDER BY materialization_count DESC, r.template_code ASC""",
+            user_factory,
+        )
+
+    # Resolve canonical titles from the template registry (single source of
+    # truth). get_registry() here lazy-imports + ensures load_all_templates()
+    # ran (idempotent), so the registry is populated even if no materialize has
+    # happened in this process yet. Fall back to the raw code on any failure.
+    try:
+        from smartbi.capability.template_status import get_registry as _get_registry
+        registry = _get_registry()
+    except Exception as e:  # pragma: no cover - registry import is stable
+        logger.warning(f"[list-factory-templates] registry unavailable: {e}")
+        registry = None
+
+    def _title_for(code: str) -> str:
+        if registry is not None:
+            try:
+                return registry.by_code(code).title
+            except KeyError:
+                pass
+        return code
+
+    templates: List[Dict[str, Any]] = []
+    for idx, row in enumerate(rows):
+        code = row["template_code"]
+        templates.append({
+            "code": code,
+            "title": _title_for(code),
+            "materialization_count": int(row["materialization_count"]),
+            "is_recommended": idx < 3,  # top 3 by popularity
+        })
+
+    return {
+        "success": True,
+        "factory_id": user_factory,
+        "count": len(templates),
+        "templates": templates,
+    }
+
+
 @router.post("/precompute-cache/{upload_id}")
 async def precompute_cache_endpoint(upload_id: int, request: Request) -> Dict[str, Any]:
     """γ-2c (Apr 25 2026 / Task C / PROD-1 fix): pre-materialize KPI-only

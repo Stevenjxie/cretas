@@ -10,6 +10,8 @@ import { useRoute } from 'vue-router';
 import { useAuthStore } from '@/store/modules/auth';
 import { chatAnalysis, chatAnalysisStream, getUploadHistory, deduplicateUploads, nl2sql, logFeedback, type AnalysisResult, type AIInsightData, type ChartConfig, type UploadHistoryItem, type NL2SQLResponse } from '@/api/smartbi';
 import { executeIntent, fetchCachedXlsx } from '@/api/smartbi/intent-chat';
+import { listFactoryTemplates, type FactoryTemplate } from '@/api/smartbi/materialized';
+import { getTemplateTitle } from './composables/useTemplateMap';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import {
   ChatDotRound,
@@ -33,7 +35,8 @@ import {
   SetUp,
   DataAnalysis,
   Flag,
-  Search
+  Search,
+  MagicStick
 } from '@element-plus/icons-vue';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
@@ -283,6 +286,50 @@ const autocompleteSuggestions = [
   // 会员
   '会员消费情况', '储值卡使用'
 ];
+
+// ── 措施③ 推荐机制 "猜你想问" ───────────────────────────────────────────
+// 列出该工厂已物化的模板, 渲染成可点 chip. 点击 → 把输入框设为模板中文标题
+// 并自动提交 → 命中物化缓存 (0 LLM token + ~230ms), 比开放 NL 链快且便宜.
+// 这是把 "开放 NL" 转成 "受限选择" 的核心杠杆.
+const recommendTemplates = ref<FactoryTemplate[]>([]);
+const recommendLoading = ref(false);
+
+// 优先展示 is_recommended (Top 3), 再按物化次数补满, 最多 6 个 chip.
+const recommendChips = computed<FactoryTemplate[]>(() => {
+  const all = recommendTemplates.value;
+  const recommended = all.filter((t) => t.isRecommended);
+  const rest = all.filter((t) => !t.isRecommended);
+  return [...recommended, ...rest].slice(0, 6);
+});
+
+// chip 显示用 FE 短标题 (useTemplateMap) override 后端 registry 长标题; 缺失回退后端 title.
+function recommendChipLabel(t: FactoryTemplate): string {
+  const feTitle = getTemplateTitle(t.code);
+  // getTemplateTitle 未命中时返回 code 本身 → 退回后端 title.
+  return feTitle === t.code ? (t.title || t.code) : feTitle;
+}
+
+async function loadRecommendTemplates() {
+  if (!factoryId.value) return;
+  recommendLoading.value = true;
+  try {
+    const res = await listFactoryTemplates();
+    recommendTemplates.value = res.success && Array.isArray(res.templates) ? res.templates : [];
+  } catch (e) {
+    // 推荐区是增强项, 失败不打扰用户 — 只是少一个引导. 不返回假数据.
+    console.warn('[ai-query] 加载推荐模板失败:', e);
+    recommendTemplates.value = [];
+  } finally {
+    recommendLoading.value = false;
+  }
+}
+
+// 点击推荐 chip → 用模板标题填入并自动提交 (走现有 chatAnalysisStream 命中物化缓存).
+function handleRecommendChip(t: FactoryTemplate) {
+  if (isTyping.value) return;
+  inputQuery.value = recommendChipLabel(t);
+  handleSendMessage();
+}
 
 // 分析模板系统
 interface QueryTemplate {
@@ -537,6 +584,9 @@ onMounted(async () => {
       setTimeout(() => handleSendMessage(), 300);
     });
   }
+
+  // 措施③: 加载该工厂已物化模板, 填充 "猜你想问" 推荐区 (非阻塞, 失败静默).
+  loadRecommendTemplates();
 });
 
 // Cleanup on unmount
@@ -1799,6 +1849,37 @@ function handleKeydown(event: KeyboardEvent) {
           发送
         </el-button>
       </div>
+
+      <!-- 措施③ "猜你想问" 推荐区: 输入框下方. 列出该工厂已物化的模板, 点 chip
+           直接命中物化缓存 (0 token, ~230ms). 仅在有已物化模板时展示. -->
+      <div v-if="recommendChips.length > 0" class="recommend-area">
+        <span class="recommend-label">
+          <el-icon><MagicStick /></el-icon> 猜你想问:
+        </span>
+        <div class="recommend-chips">
+          <el-button
+            v-for="chip in recommendChips"
+            :key="chip.code"
+            class="recommend-chip"
+            size="small"
+            round
+            :type="chip.isRecommended ? 'primary' : 'default'"
+            :plain="!chip.isRecommended"
+            :disabled="isTyping"
+            @click="handleRecommendChip(chip)"
+          >
+            {{ recommendChipLabel(chip) }}
+            <el-tag
+              v-if="chip.materializationCount > 0"
+              class="recommend-chip-badge"
+              size="small"
+              :type="chip.isRecommended ? 'success' : 'info'"
+              effect="plain"
+              round
+            >已物化 {{ chip.materializationCount }}</el-tag>
+          </el-button>
+        </div>
+      </div>
     </div>
   </div>
 </template>
@@ -2135,6 +2216,41 @@ function handleKeydown(event: KeyboardEvent) {
     align-self: flex-end;
     height: 40px;
     padding: 0 24px;
+  }
+}
+
+// 措施③ "猜你想问" 推荐区
+.recommend-area {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 10px 20px 14px;
+  background: var(--el-bg-color, #fff);
+
+  .recommend-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 13px;
+    color: var(--el-text-color-secondary, #909399);
+    white-space: nowrap;
+    padding-top: 4px;
+  }
+
+  .recommend-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .recommend-chip {
+    display: inline-flex;
+    align-items: center;
+
+    .recommend-chip-badge {
+      margin-left: 6px;
+      transform: scale(0.85);
+    }
   }
 }
 
