@@ -1,4 +1,4 @@
-# 白垩纪AI展示网站 robots.txt
+# 白垩纪 Cretas robots.txt
 # https://cretaceousfuture.com
 
 User-agent: *
@@ -7,6 +7,19 @@ Allow: /
 # 禁止爬取非公开资源
 Disallow: /product-brochure/output/
 Disallow: /*.pdf$
+
+# 下架的技术细节页 (避免技术细节被抓取/索引)
+Disallow: /ai-intent/
+Disallow: /ai-architecture/
+Disallow: /ai-calibration.html
+Disallow: /ai-calibration-v3.html
+Disallow: /ai-scheduling.html
+Disallow: /ai-scheduling-v3.html
+Disallow: /ai-chat.html
+Disallow: /correction/
+Disallow: /index-v2.html
+Disallow: /index-v3.html
+Disallow: /index-legacy-2026-02.html
 
 # Sitemap
 Sitemap: https://cretaceousfuture.com/sitemap.xml
