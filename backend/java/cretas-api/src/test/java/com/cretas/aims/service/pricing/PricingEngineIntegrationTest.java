@@ -88,7 +88,7 @@ class PricingEngineIntegrationTest {
         PricingRequest req = PricingRequest.builder()
                 .factoryId(FACTORY_ID)
                 .productId("P-IT-001")
-                .quantity(600)
+                .quantity(new BigDecimal("600"))
                 .unitPriceList(new BigDecimal("10.00"))
                 .businessEntityType("SO_LINE")
                 .businessEntityId("SO-IT-LINE-001")

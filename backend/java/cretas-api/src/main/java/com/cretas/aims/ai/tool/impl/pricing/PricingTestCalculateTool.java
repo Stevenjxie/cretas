@@ -45,7 +45,7 @@ public class PricingTestCalculateTool extends AbstractBusinessTool {
         schema.put("type", "object");
         Map<String, Object> properties = new HashMap<>();
         properties.put("productId", Map.of("type", "string", "description", "商品ID"));
-        properties.put("quantity", Map.of("type", "integer", "description", "数量"));
+        properties.put("quantity", Map.of("type", "number", "description", "数量 (支持小数, 如按公斤)"));
         properties.put("unitPriceList", Map.of("type", "number", "description", "标价 (商品 master 取)"));
         properties.put("customerId", Map.of("type", "integer", "description", "客户ID (可空, 匿名询价)"));
         properties.put("customerGroup", Map.of("type", "string",
@@ -74,7 +74,7 @@ public class PricingTestCalculateTool extends AbstractBusinessTool {
         }
 
         String productId = getString(params, "productId");
-        Integer quantity = getInteger(params, "quantity");
+        BigDecimal quantity = getBigDecimal(params, "quantity");
         BigDecimal unitPriceList = getBigDecimal(params, "unitPriceList");
         if (unitPriceList == null) unitPriceList = BigDecimal.ZERO;
         Long customerId = getLong(params, "customerId");
@@ -89,7 +89,7 @@ public class PricingTestCalculateTool extends AbstractBusinessTool {
         PricingRequest req = PricingRequest.builder()
                 .factoryId(factoryId)
                 .productId(productId)
-                .quantity(quantity != null ? quantity : 1)
+                .quantity(quantity != null ? quantity : BigDecimal.ONE)
                 .unitPriceList(unitPriceList)
                 .customerId(customerId)
                 .customerGroup(customerGroup)

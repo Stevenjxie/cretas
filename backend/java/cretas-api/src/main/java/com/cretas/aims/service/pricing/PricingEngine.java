@@ -63,6 +63,6 @@ public interface PricingEngine {
      *     this overload 静默 drop customerGroup / productCategory.
      */
     @Deprecated
-    PricingResult simulate(String factoryId, String productId, int quantity,
+    PricingResult simulate(String factoryId, String productId, BigDecimal quantity,
                            BigDecimal unitPriceList, Long customerId);
 }

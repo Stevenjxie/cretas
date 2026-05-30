@@ -26,7 +26,8 @@ import java.math.BigDecimal;
 public class PricingRequest {
     String factoryId;
     String productId;
-    Integer quantity;
+    /** Order/line quantity. BigDecimal to support fractional units (e.g. kg). */
+    BigDecimal quantity;
     BigDecimal unitPriceList;
     Long customerId;
     String customerGroup;     // optional, e.g. "VIP"

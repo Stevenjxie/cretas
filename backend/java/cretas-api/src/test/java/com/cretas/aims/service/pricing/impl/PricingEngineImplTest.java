@@ -86,7 +86,7 @@ class PricingEngineImplTest {
                 .thenReturn(List.of(tiered));
 
         PricingRequest req = baseRequest()
-                .quantity(600)
+                .quantity(new BigDecimal("600"))
                 .unitPriceList(new BigDecimal("10.00"))
                 .build();
 
@@ -98,6 +98,100 @@ class PricingEngineImplTest {
         assertEquals(new BigDecimal("300.00"), result.getTotalDiscount());
         assertEquals(1, result.getAppliedStrategies().size());
         assertEquals(PricingStrategyType.TIERED, result.getAppliedStrategies().get(0).getStrategyType());
+    }
+
+    // ==================== Fractional quantity (Integer→BigDecimal widening) ====================
+
+    @Test
+    @DisplayName("Fractional qty — 2.5 × ¥50 → line total ¥125 (NOT truncated to 2 × ¥50 = ¥100)")
+    void fractionalQty_notTruncated_usesFullQuantity() {
+        // Pre-widening, PricingRequest.quantity was Integer and SalesServiceImpl passed
+        // getQuantity().intValue() → 2.5 became 2 → ¥100. Now the full 2.5 is used → ¥125.
+        PricingRequest req = baseRequest()
+                .quantity(new BigDecimal("2.5"))
+                .unitPriceList(new BigDecimal("50.00"))
+                .build();
+        PricingResult result = engine.calculate(req);
+        assertEquals(0, new BigDecimal("125.00").compareTo(result.getOriginalPrice()),
+                "fractional qty must not be truncated to an integer");
+        assertEquals(0, new BigDecimal("125.00").compareTo(result.getFinalPrice()));
+    }
+
+    @Test
+    @DisplayName("Fractional qty — 2.5 matches integer tier [2,10] @10%, discount on full fractional line")
+    void fractionalQty_matchesIntegerTier() {
+        Map<String, Object> rules = mapOf("tiers", List.of(
+                mapOf("minQty", 2, "maxQty", 10, "discountPct", new BigDecimal("10"))));
+        when(strategyRepo.findActiveByFactoryIdOrderByPriorityAsc(eq(FACTORY_ID), any(LocalDate.class)))
+                .thenReturn(List.of(buildStrategy("TIER_FRAC", PricingStrategyType.TIERED, rules, 100)));
+        PricingRequest req = baseRequest()
+                .quantity(new BigDecimal("2.5"))
+                .unitPriceList(new BigDecimal("50.00"))
+                .build();
+        PricingResult result = engine.calculate(req);
+        // line 125, 10% off = 12.50 discount → final 112.50
+        assertEquals(0, new BigDecimal("125.00").compareTo(result.getOriginalPrice()));
+        assertEquals(0, new BigDecimal("112.50").compareTo(result.getFinalPrice()));
+        assertEquals(0, new BigDecimal("12.50").compareTo(result.getTotalDiscount()));
+    }
+
+    @Test
+    @DisplayName("Fractional qty — 1.9 does NOT match tier [2,10] (no round-up to 2, no discount)")
+    void fractionalQty_belowTierMin_noDiscount() {
+        Map<String, Object> rules = mapOf("tiers", List.of(
+                mapOf("minQty", 2, "maxQty", 10, "discountPct", new BigDecimal("10"))));
+        when(strategyRepo.findActiveByFactoryIdOrderByPriorityAsc(eq(FACTORY_ID), any(LocalDate.class)))
+                .thenReturn(List.of(buildStrategy("TIER_FRAC2", PricingStrategyType.TIERED, rules, 100)));
+        PricingRequest req = baseRequest()
+                .quantity(new BigDecimal("1.9"))
+                .unitPriceList(new BigDecimal("50.00"))
+                .build();
+        PricingResult result = engine.calculate(req);
+        // 1.9 < minQty 2 → no match; line = 1.9 × 50 = 95, no discount
+        assertEquals(0, new BigDecimal("95.00").compareTo(result.getFinalPrice()));
+        assertEquals(0, BigDecimal.ZERO.compareTo(result.getTotalDiscount()));
+    }
+
+    @Test
+    @DisplayName("Fractional TIER boundary — tier {minQty:2.5} inclusively matches qty 2.5")
+    void fractionalTierBoundary_inclusiveMatch() {
+        Map<String, Object> rules = mapOf("tiers", List.of(
+                mapOf("minQty", new BigDecimal("2.5"), "maxQty", new BigDecimal("10"),
+                        "discountPct", new BigDecimal("20"))));
+        when(strategyRepo.findActiveByFactoryIdOrderByPriorityAsc(eq(FACTORY_ID), any(LocalDate.class)))
+                .thenReturn(List.of(buildStrategy("TIER_FRAC3", PricingStrategyType.TIERED, rules, 100)));
+        PricingRequest req = baseRequest()
+                .quantity(new BigDecimal("2.5"))
+                .unitPriceList(new BigDecimal("50.00"))
+                .build();
+        PricingResult result = engine.calculate(req);
+        // 2.5 matches [2.5,10] inclusive; 20% off 125 = 25 discount → final 100
+        assertEquals(0, new BigDecimal("100.00").compareTo(result.getFinalPrice()));
+        assertEquals(0, new BigDecimal("25.00").compareTo(result.getTotalDiscount()));
+    }
+
+    @Test
+    @DisplayName("Fractional TIER boundary from JSON Double — {minQty:0.5(Double)} matches qty 0.5 (asDecimal exact)")
+    void fractionalTierBoundary_jsonDoubleType_exactMatch() {
+        // Tier boundaries arrive from rulesJson as boxed Double/Integer (not BigDecimal). asDecimal
+        // must round-trip them through String, NOT doubleValue() — otherwise the boxed Double's
+        // representation could diverge from a string-built qty and the tier would silently not apply.
+        // This case exercises asDecimal's Number branch (the BigDecimal-literal tests bypass it).
+        Map<String, Object> rules = mapOf("tiers", List.of(
+                mapOf("minQty", Double.valueOf(0.5), "maxQty", Double.valueOf(2.0),
+                        "discountPct", new BigDecimal("10"))));
+        when(strategyRepo.findActiveByFactoryIdOrderByPriorityAsc(eq(FACTORY_ID), any(LocalDate.class)))
+                .thenReturn(List.of(buildStrategy("TIER_JSON_DBL", PricingStrategyType.TIERED, rules, 100)));
+        PricingRequest req = baseRequest()
+                .quantity(new BigDecimal("0.5"))
+                .unitPriceList(new BigDecimal("50.00"))
+                .build();
+        PricingResult result = engine.calculate(req);
+        // 0.5 must match [0.5,2.0]; line 0.5×50=25, 10% off = 2.50 discount → final 22.50
+        assertEquals(0, new BigDecimal("25.00").compareTo(result.getOriginalPrice()));
+        assertEquals(0, new BigDecimal("22.50").compareTo(result.getFinalPrice()),
+                "Double-typed tier boundary 0.5 must match qty 0.5 (asDecimal String round-trip)");
+        assertEquals(0, new BigDecimal("2.50").compareTo(result.getTotalDiscount()));
     }
 
     // ==================== PROMOTION ====================
@@ -114,7 +208,7 @@ class PricingEngineImplTest {
                 .thenReturn(List.of(promo));
 
         PricingRequest req = baseRequest()
-                .quantity(5000)
+                .quantity(new BigDecimal("5000"))
                 .unitPriceList(new BigDecimal("10.00"))   // line total = 50000, meets threshold
                 .build();
 
@@ -138,7 +232,7 @@ class PricingEngineImplTest {
                 .thenReturn(List.of(promo));
 
         PricingRequest req = baseRequest()
-                .quantity(100)
+                .quantity(new BigDecimal("100"))
                 .unitPriceList(new BigDecimal("10.00"))   // line total = 1000, BELOW threshold
                 .build();
 
@@ -163,7 +257,7 @@ class PricingEngineImplTest {
                 .thenReturn(List.of(member));
 
         PricingRequest req = baseRequest()
-                .quantity(10)
+                .quantity(new BigDecimal("10"))
                 .unitPriceList(new BigDecimal("100.00"))
                 .customerGroup("VIP")
                 .build();
@@ -185,7 +279,7 @@ class PricingEngineImplTest {
                 .thenReturn(List.of(member));
 
         PricingRequest req = baseRequest()
-                .quantity(10)
+                .quantity(new BigDecimal("10"))
                 .unitPriceList(new BigDecimal("100.00"))
                 .customerGroup(null)   // anonymous
                 .build();
@@ -213,7 +307,7 @@ class PricingEngineImplTest {
 
         PricingRequest req = baseRequest()
                 .productId("P_HOTPOT")   // in bundle
-                .quantity(2)
+                .quantity(new BigDecimal("2"))
                 .unitPriceList(new BigDecimal("200.00"))
                 .build();
 
@@ -239,7 +333,7 @@ class PricingEngineImplTest {
                 .thenReturn(List.of(cycle));
 
         PricingRequest req = baseRequest()
-                .quantity(100)
+                .quantity(new BigDecimal("100"))
                 .unitPriceList(new BigDecimal("10.00"))
                 .build();
 
@@ -265,7 +359,7 @@ class PricingEngineImplTest {
                 .thenReturn(Arrays.asList(tiered, member));
 
         PricingRequest req = baseRequest()
-                .quantity(200)
+                .quantity(new BigDecimal("200"))
                 .unitPriceList(new BigDecimal("10.00"))
                 .customerGroup("VIP")
                 .build();
@@ -293,7 +387,7 @@ class PricingEngineImplTest {
                 .thenReturn(List.of(tiered));
 
         PricingRequest req = baseRequest()
-                .quantity(10)
+                .quantity(new BigDecimal("10"))
                 .unitPriceList(new BigDecimal("100.00"))   // line 1000
                 .costEstimate(new BigDecimal("60.00"))     // total cost 600
                 .build();
@@ -320,7 +414,7 @@ class PricingEngineImplTest {
                 .thenReturn(List.of(tiered));
 
         PricingRequest req = baseRequest()
-                .quantity(10)
+                .quantity(new BigDecimal("10"))
                 .unitPriceList(new BigDecimal("100.00"))
                 .build();
 
@@ -346,7 +440,7 @@ class PricingEngineImplTest {
                 .thenReturn(List.of(tiered));
 
         PricingRequest req = baseRequest()
-                .quantity(10)
+                .quantity(new BigDecimal("10"))
                 .unitPriceList(new BigDecimal("100.00"))
                 .customerGroup("NORMAL")
                 .build();
@@ -369,7 +463,7 @@ class PricingEngineImplTest {
                 .thenReturn(List.of(tiered));
 
         PricingRequest req = baseRequest()
-                .quantity(10)
+                .quantity(new BigDecimal("10"))
                 .unitPriceList(new BigDecimal("100.00"))
                 .businessEntityType("SO_LINE")
                 .businessEntityId("SO-LINE-001")
@@ -397,7 +491,7 @@ class PricingEngineImplTest {
         when(strategyRepo.findActiveByFactoryIdOrderByPriorityAsc(eq(FACTORY_ID), any(LocalDate.class)))
                 .thenReturn(List.of(tiered));
 
-        PricingResult result = engine.simulate(FACTORY_ID, "P-001", 10, new BigDecimal("100.00"), 999L);
+        PricingResult result = engine.simulate(FACTORY_ID, "P-001", new BigDecimal("10"), new BigDecimal("100.00"), 999L);
 
         assertNotNull(result);
         assertNotNull(result.getFinalPrice());
@@ -420,7 +514,7 @@ class PricingEngineImplTest {
         PricingRequest req = PricingRequest.builder()
                 .factoryId(FACTORY_ID)
                 .productId("P_VIP")
-                .quantity(10)
+                .quantity(new BigDecimal("10"))
                 .unitPriceList(new BigDecimal("100.00"))
                 .customerId(999L)
                 .customerGroup("VIP")
@@ -451,7 +545,7 @@ class PricingEngineImplTest {
         PricingRequest req = PricingRequest.builder()
                 .factoryId(FACTORY_ID)
                 .productId("P_ICE")
-                .quantity(10)
+                .quantity(new BigDecimal("10"))
                 .unitPriceList(new BigDecimal("100.00"))
                 .productCategory("frozen")
                 .build();
@@ -473,7 +567,7 @@ class PricingEngineImplTest {
     @DisplayName("5-arg simulate (deprecated) — still delegates to new overload (backwards compat)")
     void simulate5ArgOverload_delegates() {
         // Empty repo, expect no-op pricing pass-through
-        PricingResult result = engine.simulate(FACTORY_ID, "P-001", 5, new BigDecimal("20.00"), null);
+        PricingResult result = engine.simulate(FACTORY_ID, "P-001", new BigDecimal("5"), new BigDecimal("20.00"), null);
         assertNotNull(result);
         assertEquals(new BigDecimal("100.00"), result.getOriginalPrice());
         assertEquals(new BigDecimal("100.00"), result.getFinalPrice());
@@ -500,7 +594,7 @@ class PricingEngineImplTest {
                 .thenReturn(Arrays.asList(tiered, promo));
 
         PricingRequest req = baseRequest()
-                .quantity(10)
+                .quantity(new BigDecimal("10"))
                 .unitPriceList(new BigDecimal("100.00"))   // line 1000
                 .build();
 
@@ -531,7 +625,7 @@ class PricingEngineImplTest {
                 .thenReturn(List.of(bad));
 
         PricingRequest req = baseRequest()
-                .quantity(10)
+                .quantity(new BigDecimal("10"))
                 .unitPriceList(new BigDecimal("100.00"))
                 .build();
 

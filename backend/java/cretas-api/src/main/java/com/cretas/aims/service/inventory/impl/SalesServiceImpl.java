@@ -340,7 +340,9 @@ public class SalesServiceImpl implements SalesService {
                             com.cretas.aims.service.pricing.PricingRequest.builder()
                                     .factoryId(factoryId)
                                     .productId(itemDTO.getProductTypeId())
-                                    .quantity(itemDTO.getQuantity().intValue())
+                                    // Pass full BigDecimal qty (no intValue truncation) so fractional
+                                    // /kg quantities price correctly — engine now takes BigDecimal.
+                                    .quantity(itemDTO.getQuantity())
                                     .unitPriceList(resolvedUnitPrice)
                                     .customerId(customerIdLong)
                                     .customerGroup(customerGroup)
