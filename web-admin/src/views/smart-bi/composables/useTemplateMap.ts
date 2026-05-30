@@ -39,27 +39,62 @@ export const PAGE_TEMPLATE_MAP: Record<string, readonly string[]> = {
 
 export type TemplatePageKey = keyof typeof PAGE_TEMPLATE_MAP;
 
-/** Stable 中文 display titles — do NOT use AI-generated titles, they drift. */
+/** Stable 中文 display titles — do NOT use AI-generated titles, they drift.
+ *
+ * Covers every template registered in the Python TemplateRegistry
+ * (backend/python/smartbi/services/materialized_analytics/templates/registry.py).
+ * Titles here are the short, chip-friendly Chinese labels shown in the
+ * "猜你想问" recommendation area; the backend registry holds the canonical
+ * long title and is the ultimate source of truth (the list-factory-templates
+ * endpoint returns the registry title, this map is the FE display override). */
 export const TEMPLATE_TITLES: Record<string, string> = {
+  // W1 generic
   monthly_trend: '时间趋势',
   top_n_by_dim: '维度 Top N',
-  category_distribution: '分类分布',
-  anomaly_detection: '异常检测',
+  category_distribution: '分类占比',
+  anomaly_detection: '异常值检测',
   pareto_analysis: '帕累托分析',
+  // 财务
   profit_loss_statement: '利润表',
   revenue_management_report: '营收管理报表',
   stored_value_card_consumption: '储值卡消费分析',
   groupon_channel_breakdown: '团购渠道明细',
-  period_comparison_trend: '同比环比趋势',
-  weekday_weekend_pattern: '工作日/周末规律',
+  business_overview_summary: '营业概况汇总',
+  payment_method_mix: '付款方式分布',
+  refund_analysis: '退菜/损耗分析',
+  reverse_checkout_stats: '反结账统计',
+  // 趋势
+  period_comparison_trend: '营收趋势对比',
+  weekday_weekend_pattern: '周末平日对比',
   monthly_anomaly: '月度异常',
+  // 菜品
   dish_sales_top_n: '热销菜品 Top N',
-  dish_slow_movers: '滞销菜品',
+  dish_slow_movers: '慢销菜品',
   dish_category_breakdown: '菜品分类明细',
+  dish_by_table_type: '桌位类型菜品',
+  dish_time_slot_matrix: '菜品 × 时段矩阵',
+  dish_store_drill: '菜品 × 门店下钻',
   combo_usage_rate: '套餐使用率',
   time_slot_revenue: '时段营业额',
-  dish_by_table_type: '桌位类型消费',
-  dish_time_slot_matrix: '菜品 × 时段矩阵',
+  // 渠道 / 门店 / 员工
+  channel_analysis: '堂食外卖渠道',
+  store_performance: '门店业绩',
+  staff_performance: '员工业绩',
+  table_type_comparison: '堂食/包厢/外卖对比',
+  store_customer_stratification: '门店客单分层',
+  // 会员
+  member_consumption: '会员卡消费',
+  member_deep_analytics: '会员卡深度分析',
+  // 营销
+  promotion_impact: '优惠券效果',
+  // 评价
+  reviews_sentiment_summary: '评价情感',
+  // 后厨
+  kitchen_dispatch_heatmap: '传菜厨房统计',
+  // 进销存
+  purchase_inventory_inflow: '采购入库分析',
+  // 制造
+  defect_rate_top_n: '不良率 Top N',
 };
 
 /** What fields must be present in the source Excel for this template to match.
