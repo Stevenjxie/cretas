@@ -89,7 +89,8 @@ TEMPLATE_DOMAIN: dict[str, str] = {
 # Query → domain keywords. Mirrors query_router._QUERY_DIM_HINTS plus a few
 # domain-specific hints for finance/review/staff that aren't in the dim hints.
 QUERY_DOMAIN_HINTS: dict[str, list[str]] = {
-    'dish': ['菜品', '商品', '产品', '菜', '单品', '主推', '畅销', '爆款', '滞销', '慢销'],
+    'dish': ['菜品', '商品', '产品', '菜', '单品', '主推', '畅销', '爆款', '滞销', '慢销',
+             '卖不出去', '卖不动', '卖得不好', '不好卖', '热销', '卖得最好', '卖得最多'],
     'store': ['门店', '店', '店铺', '分店', '哪家店', '哪几家', '单店'],
     'channel': ['渠道', '美团', '饿了么', '抖音', '点评', '外卖渠道', '堂食外卖'],
     'time': ['时段', '小时', '早餐', '午餐', '晚餐', '宵夜', '午晚市', '周末', '工作日',
@@ -201,6 +202,37 @@ _HOWTO_INTENT_WORDS: list[str] = [
     '应该怎么', '该如何', '建议怎么',
 ]
 
+# Slow-mover / worst-performer intent words. When the user asks about the
+# WORST sellers ("卖不出去" / "慢销" / "末位" / "最差") but the matched template
+# produces a BEST-seller / 畅销 ranking (top_n_by_dim, dish_sales_top_n), the
+# cache answers the *opposite* of what the user asked. Reject → let LLM (or the
+# dedicated dish_slow_movers template) give the true answer.
+#
+# 措施①-bug2 (May 31 2026): "哪些菜卖不出去" was matching top_n_by_dim and
+# returning 畅销 Top10 — answer 答非所问. Detect the slow-mover intent and
+# reject the best-seller ranking template.
+_SLOW_MOVER_INTENT_WORDS: list[str] = [
+    '卖不出去', '卖不动', '卖得不好', '不好卖', '滞销', '慢销', '低销',
+    '末位', '末尾', '垫底', '倒数', '最差', '最少', '下架',
+]
+
+# Templates that rank items by BEST / 畅销 / Top-N. A slow-mover query against
+# any of these is a semantic inversion → reject.
+_BEST_SELLER_RANKING_TEMPLATES: set[str] = {
+    'top_n_by_dim',
+    'dish_sales_top_n',
+    'dish_category_breakdown',
+    'pareto_analysis',
+}
+
+
+def has_slow_mover_intent(query: str) -> bool:
+    """True iff the query asks about the worst-selling / slow-moving items."""
+    if not query:
+        return False
+    q = query.lower()
+    return any(w in q for w in _SLOW_MOVER_INTENT_WORDS)
+
 
 def query_intent_kind(query: str) -> str:
     """Detect query's analytical intent kind.
@@ -239,6 +271,18 @@ def should_reject_cache(query: str, template_code: str) -> bool:
     """
     if not query or not template_code:
         return False
+
+    # 措施①-bug2 (May 31 2026): slow-mover semantic inversion. If the query
+    # asks about the WORST / 卖不出去 / 滞销 items but the matched template
+    # produces a BEST-seller / 畅销 Top-N ranking, the cache answers the
+    # opposite of the question → reject so LLM (or dish_slow_movers) answers
+    # correctly. Most specific check — runs first.
+    if template_code in _BEST_SELLER_RANKING_TEMPLATES and has_slow_mover_intent(query):
+        logger.info(
+            f"[intent-classifier] cache REJECTED (slow-mover inversion): "
+            f"query asks worst-sellers but template='{template_code}' ranks best-sellers"
+        )
+        return True
 
     # v7 #1 (Apr 26 2026): sub-intent mismatch detection. If query asks for
     # causal/prescriptive analysis but template gives ranking/Top-N, reject

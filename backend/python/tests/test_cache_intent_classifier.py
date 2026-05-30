@@ -204,6 +204,33 @@ def test_allow_ranking_template_for_ranking_query():
     ) is False
 
 
+def test_reject_slow_mover_query_on_best_seller_template():
+    # 措施①-bug2 (May 31 2026): a slow-mover query ("卖不出去" / "滞销") routed
+    # to a best-seller ranking template (top_n_by_dim / dish_sales_top_n) is a
+    # semantic inversion — the cache would return 畅销 Top-N, answering the
+    # OPPOSITE of the question. Must reject → LLM / dish_slow_movers.
+    assert should_reject_cache("哪些菜卖不出去", "top_n_by_dim") is True
+    assert should_reject_cache("哪些商品滞销", "top_n_by_dim") is True
+    assert should_reject_cache("哪些菜卖不动", "dish_sales_top_n") is True
+    assert should_reject_cache("哪些菜卖得不好", "dish_category_breakdown") is True
+
+
+def test_allow_best_seller_query_on_best_seller_template():
+    # The non-inverted case: best-seller query on a best-seller ranking
+    # template must NOT be rejected by the slow-mover guard.
+    assert should_reject_cache("哪些菜卖得最好", "top_n_by_dim") is False
+    assert should_reject_cache("畅销品 Top 5", "dish_sales_top_n") is False
+
+
+def test_has_slow_mover_intent():
+    from smartbi.services.cache_intent_classifier import has_slow_mover_intent
+    assert has_slow_mover_intent("哪些菜卖不出去") is True
+    assert has_slow_mover_intent("滞销菜品有哪些") is True
+    assert has_slow_mover_intent("末位菜品") is True
+    assert has_slow_mover_intent("哪些菜卖得最好") is False
+    assert has_slow_mover_intent("") is False
+
+
 def test_template_domain_coverage():
     # Sanity: TEMPLATE_DOMAIN covers the main known templates from the
     # Apr 26 audit. Specifically the F4 case template must be mapped.

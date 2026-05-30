@@ -1437,14 +1437,42 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                                             )
                                 # Step 3 (fallback): largest non-empty when no
                                 # template match OR matched template has no upload.
+                                #
+                                # 措施①-bug3 (May 31 2026, LLM-parity critical):
+                                # the old fallback picked the absolute largest
+                                # upload by row_count — but the largest upload
+                                # may have 0 materialized templates / 0 field
+                                # definitions (e.g. a raw dump that never finished
+                                # analysis). The LLM then gets an upload with no
+                                # usable schema → "暂无数据" dead-end, even though
+                                # a smaller-but-analyzed upload could answer.
+                                #
+                                # New: prefer the largest upload that has at least
+                                # one materialized template OR field_definitions,
+                                # so the LLM lands on data it can actually reason
+                                # over (= pure-LLM quality, not "暂无数据").
+                                # Risk#2: conservative — fall back to the old
+                                # "largest non-empty" if NO upload has any
+                                # template/fields, and log WHY either way.
                                 if not upload_id:
                                     _row = await _conn.fetchrow(
                                         """
-                                        SELECT id FROM smart_bi_pg_excel_uploads
-                                        WHERE factory_id = $1
-                                          AND upload_status = 'COMPLETED'
-                                          AND row_count > 0
-                                        ORDER BY row_count DESC, created_at DESC
+                                        SELECT u.id FROM smart_bi_pg_excel_uploads u
+                                        WHERE u.factory_id = $1
+                                          AND u.upload_status = 'COMPLETED'
+                                          AND u.row_count > 0
+                                          AND (
+                                            EXISTS (
+                                              SELECT 1 FROM smart_bi_pg_analysis_results a
+                                              WHERE a.upload_id = u.id
+                                                AND a.template_code IS NOT NULL
+                                            )
+                                            OR EXISTS (
+                                              SELECT 1 FROM smart_bi_pg_field_definitions fd
+                                              WHERE fd.upload_id = u.id
+                                            )
+                                          )
+                                        ORDER BY u.row_count DESC, u.created_at DESC
                                         LIMIT 1
                                         """,
                                         factory_id_for_select,
@@ -1454,8 +1482,34 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                                         logger.info(
                                             f"[stream] phase-1 fallback upload {upload_id} "
                                             f"(factory={factory_id_for_select}, "
-                                            f"no template match)"
+                                            f"no template match; picked largest "
+                                            f"upload WITH templates/field_definitions)"
                                         )
+                                    else:
+                                        # Risk#2 conservative fallback: no upload
+                                        # has any template/fields — take the
+                                        # absolute largest non-empty (old behavior)
+                                        # so we never regress to picking nothing.
+                                        _row = await _conn.fetchrow(
+                                            """
+                                            SELECT id FROM smart_bi_pg_excel_uploads
+                                            WHERE factory_id = $1
+                                              AND upload_status = 'COMPLETED'
+                                              AND row_count > 0
+                                            ORDER BY row_count DESC, created_at DESC
+                                            LIMIT 1
+                                            """,
+                                            factory_id_for_select,
+                                        )
+                                        if _row:
+                                            upload_id = _row['id']
+                                            logger.warning(
+                                                f"[stream] phase-1 fallback upload {upload_id} "
+                                                f"(factory={factory_id_for_select}, "
+                                                f"no template match AND no upload has "
+                                                f"templates/field_definitions; "
+                                                f"picked absolute largest non-empty)"
+                                            )
                         except Exception as _e:
                             logger.warning(f"[stream] auto-select upload failed: {_e}")
                 if upload_id and user_q:

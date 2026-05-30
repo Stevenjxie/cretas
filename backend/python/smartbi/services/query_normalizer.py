@@ -83,7 +83,32 @@ SYNONYM_GROUPS: list[tuple[str, list[str]]] = [
     ('召回', ['挽回', '拉回', '唤醒', '激活']),
     # 复购/二次购买/再消费 → 复购
     ('复购', ['二次购买', '再消费', '回头', '重复消费']),
+
+    # === Light measure② (May 31 2026): obvious best/slow-seller synonyms ===
+    # Audit-observed misses where a synonym didn't match the canonical pattern.
+    # Conservative — only unambiguous restaurant best/slow-seller phrasings, no
+    # "卖得最好"-type strings (those are ambiguous between dish-rank and
+    # store-rank and would shift store_performance routing).
+    #
+    # 热销/最畅销 → 畅销 (top_n_by_dim & dish patterns key on 畅销)
+    ('畅销', ['热销', '最畅销', '热卖', '畅销品']),
+    # 卖不出去/卖不动/卖得不好/不好卖/慢销/卖不掉 → 滞销
+    # (dish_slow_movers patterns key on these; normalize all to 滞销 so the
+    #  slow-mover query reliably routes to dish_slow_movers)
+    ('滞销', ['卖不出去', '卖不动', '卖得不好', '不好卖', '慢销', '卖不掉']),
+    # 收入 → 营业额 (already have 营收/总收入 above; add bare 收入 — but only
+    #  as part of the existing 营业额 group to keep one canonical). Handled by
+    #  appending below.
 ]
+
+# Append bare 收入 → 营业额 to the existing revenue group (kept separate to
+# avoid touching the literal above). 收入 alone is a common phrasing
+# ("12月收入多少") that didn't normalize. Safe: '收入' is not a substring of
+# '营业额'.
+for _i, (_canon, _syns) in enumerate(SYNONYM_GROUPS):
+    if _canon == '营业额' and '收入' not in _syns:
+        _syns.append('收入')
+        break
 
 
 # Pre-compute reverse index: synonym → canonical.
