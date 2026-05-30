@@ -53,6 +53,30 @@ def test_generic_trend_query():
     assert match_template("每日销售走势") == "monthly_trend"
 
 
+def test_store_performance_routing_fork():
+    # 措施①-bug1 (May 31 2026): single-store / drill-down performance queries
+    # must route to store_performance (not fall through to top_n_by_dim).
+    # Before the fix "哪个门店营收最高" hit top_n_by_dim while its synonym
+    # "哪家店业绩最好" hit store_performance via pgvector — same intent, split.
+    assert match_template("哪个门店营收最高") == "store_performance"
+    assert match_template("哪家店业绩最好") == "store_performance"
+    assert match_template("单店表现如何") == "store_performance"
+    assert match_template("哪家店卖得最多") == "store_performance"
+    assert match_template("哪家店客单价最高") == "store_performance"
+    # NOTE: "这家店..." carries the "这家" hard modifier (pronominal reference),
+    # so it intentionally returns None → LLM fallback with conversation context.
+    # That is NOT a store_performance routing case.
+
+
+def test_store_performance_does_not_steal_generic_comparison():
+    # Risk#1 mitigation: generic multi-store comparison / channel queries lack
+    # the single-store drill-down marker → must NOT route to store_performance.
+    assert match_template("包厢和大厅客单价对比") == "table_type_comparison"
+    # Generic "门店对比" (no 哪家/单店 marker) must not hit store_performance.
+    assert match_template("门店对比") != "store_performance"
+    assert match_template("各门店销售情况") != "store_performance"
+
+
 def test_no_match_returns_none():
     assert match_template("今天天气怎么样") is None
     assert match_template("") is None

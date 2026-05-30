@@ -121,6 +121,29 @@ def test_normalize_for_match_unchanged():
     assert out == "Top 10 菜品"
 
 
+# ---------- Light measure② (May 31 2026): best/slow-seller + 收入 ----------
+
+def test_rexiao_to_changxiao():
+    """热销 → 畅销 (best-seller synonym)"""
+    out, subs = normalize_query("热销菜品")
+    assert out == "畅销菜品"
+    assert "热销→畅销" in subs
+
+
+def test_slow_mover_variants_to_zhixiao():
+    """卖不出去 / 卖不动 / 卖得不好 → 滞销 (slow-mover synonyms)"""
+    assert normalize_query("哪些菜卖不出去")[0] == "哪些菜滞销"
+    assert normalize_query("卖不动的商品")[0] == "滞销的商品"
+    assert normalize_query("哪些产品卖得不好")[0] == "哪些产品滞销"
+
+
+def test_shouru_to_yingyee():
+    """收入 → 营业额 (bare 收入 appended to revenue group)"""
+    out, _ = normalize_query("12 月收入多少")
+    assert "收入" not in out
+    assert "营业额" in out
+
+
 # ---------- Integration: realistic S4 audit queries ----------
 
 def test_s4_audit_misses_now_normalize():

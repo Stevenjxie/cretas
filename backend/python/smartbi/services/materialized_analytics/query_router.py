@@ -45,6 +45,27 @@ _PATTERNS: List[Tuple[str, List[List[str]]]] = [
         [["菜品", "商品", "产品", "菜"],
          ["销量", "销售", "卖", "热销", "畅销", "排名", "Top", "最多", "最高"]],
     ),
+    # store_performance must precede the generic top_n_by_dim (further below) —
+    # single-store / drill-down performance queries ("哪个门店营收最高" /
+    # "哪家店业绩最好" / "单店表现") belong to the dedicated store_performance
+    # template (rich sample_queries served via pgvector). Without this keyword
+    # entry, "哪个门店营收最高" fell through to top_n_by_dim while its synonym
+    # "哪家店业绩最好" hit store_performance via pgvector — same intent, one
+    # right one wrong (措施①-bug1, May 31 2026).
+    #
+    # Risk#1 mitigation: group-1 REQUIRES a specific-store / drill-down marker
+    # (单店/该门店/这家店/这家/哪家/哪个门店/门店业绩/门店排名). Generic multi-store
+    # comparison ("门店对比" / "各门店") and channel queries do NOT carry these,
+    # so they still route to table_type_comparison / top_n_by_dim as before.
+    # Placed AFTER the dish blocks so dish-specific queries win, but BEFORE the
+    # generic top_n_by_dim so store-performance drill-downs aren't swallowed.
+    (
+        "store_performance",
+        [["单店", "该门店", "这家店", "这家", "哪家", "哪个门店", "门店业绩",
+          "门店排名", "门店销售排行", "业绩冠军", "单店表现"],
+         ["营收", "营业额", "销售额", "业绩", "表现", "排名", "排行",
+          "最高", "最好", "最多", "最差", "客单价", "卖得最", "畅销"]],
+    ),
     (
         "dish_time_slot_matrix",
         [["菜品", "商品"], ["时段", "早餐", "午餐", "晚餐", "宵夜", "时间", "小时", "早晚"]],
