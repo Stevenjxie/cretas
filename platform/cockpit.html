@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="color-scheme" content="dark">
+<title>实时经营驾驶舱 · 白垩纪 Cretas</title>
+<meta name="description" content="实时经营驾驶舱 — 一屏看清经营全貌。智能调度、人效、排程、批次追踪、质检、库存、物料流转、全链路追溯，11 大模块实时联动。餐饮与食品工厂通用。">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230A0A0C'/%3E%3Cpath d='M21 9.5C19.6 8 17.9 7 15.5 7 11 7 7.5 10.4 7.5 15S11 23 15.5 23c2.4 0 4.1-1 5.5-2.5' stroke='%23E8732E' stroke-width='3' fill='none' stroke-linecap='round'/%3E%3Ccircle cx='22' cy='15.5' r='2.5' fill='%230EA5E9'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/cretas-site.css">
+<style>
+.ck-hero{display:grid;grid-template-columns:1fr 1.1fr;gap:46px;align-items:center}
+.ck-hero .halo{position:absolute;width:70%;height:70%;right:0;top:10%;border-radius:50%;filter:blur(80px);background:radial-gradient(circle,var(--cyan-glow),transparent 70%);z-index:0}
+@media(max-width:980px){.ck-hero{grid-template-columns:1fr;gap:40px}}
+.hl-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:18px}
+@media(max-width:980px){.hl-grid{grid-template-columns:1fr}}
+.hl{border:1px solid var(--line);border-radius:14px;padding:26px;background:linear-gradient(165deg,var(--surface),var(--bg-soft))}
+.hl .hn{font-family:var(--font-display);font-weight:700;font-size:30px;color:var(--cyan-soft)}
+.hl h4{font-family:var(--font-display);font-size:17px;margin:10px 0 8px}
+.hl p{color:var(--text-3);font-size:14px}
+</style>
+</head>
+<body>
+
+<header class="nav" id="nav">
+  <div class="bar">
+    <a href="index.html" class="logo" aria-label="白垩纪 Cretas">
+      <svg class="mark" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg"><defs><linearGradient id="lg" x1="0" y1="0" x2="32" y2="32"><stop stop-color="#F0A36B"/><stop offset=".55" stop-color="#E8732E"/><stop offset="1" stop-color="#0EA5E9"/></linearGradient></defs><path d="M16 2.5C9 2.5 3.5 8 3.5 15.5S9 29.5 16 29.5c4.2 0 7-1.6 9.2-4.2l-3.5-2.6c-1.4 1.6-3.1 2.5-5.5 2.5-4.6 0-7.8-3.6-7.8-8.2S11.4 7 16 7c2.4 0 4.1.9 5.5 2.5l3.5-2.6C22.9 4.1 20.2 2.5 16 2.5Z" fill="url(#lg)"/><circle cx="23.5" cy="15.5" r="3" fill="#0EA5E9"/></svg>
+      <span>白垩纪<small>CRETAS</small></span>
+    </a>
+    <nav class="nav-links">
+      <div class="nav-drop"><span>产品功能</span>
+        <div class="menu">
+          <a href="smartbi.html" class="cy"><div class="di cy"><svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M2 13l3-4 3 2 5-7"/><path d="M2 2v12h12"/></svg></div><div><div class="dt">SmartBI 智能分析</div><div class="dd">Excel 秒变报表 · 对话式分析</div></div></a>
+          <a href="cockpit.html" class="cy"><div class="di cy"><svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="2" y="2" width="5" height="5" rx="1"/><rect x="9" y="2" width="5" height="5" rx="1"/><rect x="2" y="9" width="5" height="5" rx="1"/><rect x="9" y="9" width="5" height="5" rx="1"/></svg></div><div><div class="dt">实时经营驾驶舱</div><div class="dd">一屏看清经营全貌</div></div></a>
+          <a href="index.html#value"><div class="di"><svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M8 1.5 2 4.5v4c0 3.5 2.5 5.5 6 7 3.5-1.5 6-3.5 6-7v-4L8 1.5Z"/></svg></div><div><div class="dt">运营中枢 &amp; 全链路溯源</div><div class="dd">成本对账 · 批次追溯</div></div></a>
+        </div>
+      </div>
+      <a href="demo.html">在线演示</a>
+      <a href="index.html#why">为什么选我们</a>
+      <a href="index.html#contact">联系我们</a>
+    </nav>
+    <div class="nav-cta">
+      <a href="client-request/" class="btn btn-primary">预约演示</a>
+      <button class="menu-btn" id="menuBtn" aria-label="菜单"><svg width="24" height="24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M3 12h18M3 18h18"/></svg></button>
+    </div>
+  </div>
+</header>
+<div class="mobile-menu" id="mobileMenu">
+  <a href="smartbi.html">SmartBI 智能分析</a><a href="cockpit.html">实时驾驶舱</a><a href="demo.html">在线演示</a><a href="index.html#why">为什么选我们</a><a href="index.html#contact">联系我们</a>
+  <a href="client-request/" class="btn btn-primary">预约演示</a>
+</div>
+
+<!-- HERO -->
+<section class="page-hero">
+  <div class="hero-bg"><div class="aurora a2"></div><div class="aurora a1"></div><div class="grid-overlay"></div></div>
+  <div class="wrap">
+    <div class="ck-hero">
+      <div>
+        <div class="crumb reveal"><a href="index.html">首页</a><span>/</span><a href="index.html#value">产品功能</a><span>/</span>实时经营驾驶舱</div>
+        <div class="eyebrow cyan reveal">实时经营驾驶舱</div>
+        <h1 class="reveal d1">一屏，<span class="grad-cyan">看清经营全貌</span></h1>
+        <p class="lead reveal d2">从生产到经营，11 大模块实时联动。调度、人效、排程、批次追踪、质检、库存、物料流转、全链路追溯——老板、厂长、店长看同一份实时数据，不再等月底拉表。</p>
+        <div class="hero-actions reveal d3">
+          <a href="client-request/" class="btn btn-primary">预约演示 <span class="arr">→</span></a>
+          <a href="demo.html" class="btn btn-ghost">看在线演示</a>
+        </div>
+      </div>
+      <div class="reveal d2" style="position:relative">
+        <div class="halo"></div>
+        <div class="browser"><div class="browser-bar"><div class="tl"><i class="r"></i><i class="y"></i><i class="g"></i></div><div class="url">cretas.app · 实时经营驾驶舱</div></div>
+          <div class="browser-body"><div class="dash fac">
+            <div class="dash-top"><div class="dt">生产经营驾驶舱<span>· 实时</span></div><div class="dash-chips"><span class="dash-chip on">今日</span><span class="dash-chip">本周</span></div></div>
+            <div class="kpis">
+              <div class="kpi"><div class="kl">在产批次</div><div class="kv">24</div><div class="kd flat">进行中</div></div>
+              <div class="kpi"><div class="kl">综合良率</div><div class="kv">98.1%</div><div class="kd up">▲ 0.6pt</div></div>
+              <div class="kpi"><div class="kl">今日报工</div><div class="kv">312</div><div class="kd up">▲ 工序</div></div>
+              <div class="kpi"><div class="kl">库存预警</div><div class="kv" style="color:var(--amber)">5</div><div class="kd down">待补货</div></div>
+            </div>
+            <div class="dash-main">
+              <div class="dpanel"><div class="ph"><span>产量趋势</span></div><div class="mbars"><div class="mbar" style="height:58%"></div><div class="mbar" style="height:72%"></div><div class="mbar" style="height:64%"></div><div class="mbar" style="height:80%"></div><div class="mbar" style="height:70%"></div><div class="mbar" style="height:90%"></div></div></div>
+              <div class="dpanel"><div class="ph"><span>批次工序</span></div>
+                <div class="rank"><span class="ri">B1</span><span class="rn">原料分割</span><span class="rv" style="color:#4ade80">完成</span></div>
+                <div class="rank"><span class="ri">B2</span><span class="rn">腌制调理</span><span class="rv" style="color:var(--cyan-soft)">进行</span></div>
+                <div class="rank"><span class="ri">B3</span><span class="rn">熟化包装</span><span class="rv" style="color:var(--text-3)">待开始</span></div>
+              </div>
+            </div>
+            <div class="ai-strip"><div class="ab">AI</div><div class="at">批次 <b>B2</b> 投料量低于配方 5%，已提醒车间主管复核。</div></div>
+          </div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 模块全景 -->
+<section class="tone-soft">
+  <div class="wrap">
+    <div class="sec-head center reveal"><div class="eyebrow cyan" style="justify-content:center">模块全景</div><h2 class="h-sec">从生产到经营，<span class="grad-cyan">一个驾驶舱全管</span></h2><p class="lead">每个模块都实时联动、互相打通，不是各管各的孤岛。</p></div>
+    <div class="module-grid">
+      <div class="module-card am reveal"><div class="mi"><svg width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M3 3v16h16"/><path d="m6 13 3-4 3 2 5-6"/></svg></div><h4>经营总览</h4><p>营收、成本、产量、毛利一屏看全，关键指标实时刷新。</p></div>
+      <div class="module-card reveal d1"><div class="mi"><svg width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="11" cy="11" r="8"/><path d="M11 7v4l3 2"/></svg></div><h4>AI 智能调度分析</h4><p>结合订单与产能，AI 给出排产与人力调度建议。</p></div>
+      <div class="module-card reveal d2"><div class="mi"><svg width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M3 11h4l2-6 4 14 2-8h4"/></svg></div><h4>人效实时分析</h4><p>各工序、各班组的人均产出与工时，实时可比。</p></div>
+      <div class="module-card reveal d3"><div class="mi"><svg width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3" y="4" width="16" height="3"/><rect x="3" y="10" width="11" height="3"/><rect x="3" y="16" width="14" height="3"/></svg></div><h4>生产排程</h4><p>计划与实际进度对齐，延误自动预警。</p></div>
+      <div class="module-card am reveal"><div class="mi"><svg width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M11 2 3 6v6c0 5 3.4 7.7 8 10 4.6-2.3 8-5 8-10V6l-8-4Z"/><path d="m8 11 2 2 4-4"/></svg></div><h4>批次追踪</h4><p>每个批次的投料、报工、出成率，全程留痕。</p></div>
+      <div class="module-card reveal d1"><div class="mi"><svg width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M11 2 3 6v6c0 5 3.4 7.7 8 10 4.6-2.3 8-5 8-10V6l-8-4Z"/></svg></div><h4>质量检测</h4><p>移动端质检、不合格自动拦截，记录可追溯。</p></div>
+      <div class="module-card reveal d2"><div class="mi"><svg width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M3 7l8-4 8 4-8 4-8-4Z"/><path d="M3 7v8l8 4 8-4V7"/></svg></div><h4>库存管理</h4><p>原料 / 半成品 / 成品三级库存实时联动，负库存拦截。</p></div>
+      <div class="module-card reveal d3"><div class="mi"><svg width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M3 11h12M11 7l4 4-4 4"/><path d="M19 4v14"/></svg></div><h4>物料流转</h4><p>领用、调拨、退料全程记录，料去哪了一查到底。</p></div>
+      <div class="module-card am reveal"><div class="mi"><svg width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="11" cy="11" r="7"/><path d="M11 7v4l3 2"/><path d="m19 19-3-3"/></svg></div><h4>全链路追溯查询</h4><p>从供应商到成品/餐桌，正向反向一键倒查。</p></div>
+      <div class="module-card reveal d1"><div class="mi"><svg width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="11" cy="7" r="3"/><path d="M5 19c0-3.3 2.7-6 6-6s6 2.7 6 6"/></svg></div><h4>多角色与权限</h4><p>老板、厂长、店长、仓管各看各的视图，权限分明。</p></div>
+      <div class="module-card reveal d2"><div class="mi"><svg width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="11" cy="11" r="3"/><path d="M11 2v3M11 17v3M2 11h3M17 11h3M4.5 4.5l2 2M15.5 15.5l2 2M17.5 4.5l-2 2M6.5 15.5l-2 2"/></svg></div><h4>灵活配置</h4><p>工序、流程、指标可配置，非标工厂也能快速上手。</p></div>
+      <div class="module-card am reveal d3"><div class="mi"><svg width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3" y="3" width="16" height="16" rx="2"/><path d="M7 11l3 3 5-6"/></svg></div><h4>防呆易用</h4><p>一线零培训，系统直接告诉他该收多少、该做什么。</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- 深度亮点 -->
+<section>
+  <div class="wrap">
+    <div class="sec-head center reveal"><div class="eyebrow" style="justify-content:center">为什么是"实时"</div><h2 class="h-sec">看的是<span class="grad">此刻</span>，不是上个月</h2></div>
+    <div class="hl-grid">
+      <div class="hl reveal"><div class="hn">实时</div><h4>数据当场进系统</h4><p>扫码报工、移动端质检、电子秤入库，数据即时上屏，不靠事后纸质回填。</p></div>
+      <div class="hl reveal d1"><div class="hn">多端</div><h4>桌面 + 移动一致</h4><p>办公室看大屏驾驶舱，车间 / 门店用手机报工查数，同一份数据。</p></div>
+      <div class="hl reveal d2"><div class="hn">联动</div><h4>模块互相打通</h4><p>报工影响库存、库存影响成本、成本进经营总览，一处变动全局更新。</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- CTA -->
+<section class="cta-band tone-soft">
+  <div class="glow"></div>
+  <div class="wrap reveal">
+    <h2>把经营全貌，<span class="grad-cyan">装进一块屏</span></h2>
+    <p>一次演示，看实时驾驶舱怎么把你的生产和经营连成一张实时的账。</p>
+    <div class="acts"><a href="client-request/" class="btn btn-primary">预约演示 <span class="arr">→</span></a><a href="demo.html" class="btn btn-ghost">先看在线演示</a></div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <div class="foot-grid">
+      <div class="foot-brand">
+        <a href="index.html" class="logo"><svg class="mark" viewBox="0 0 32 32" fill="none"><path d="M16 2.5C9 2.5 3.5 8 3.5 15.5S9 29.5 16 29.5c4.2 0 7-1.6 9.2-4.2l-3.5-2.6c-1.4 1.6-3.1 2.5-5.5 2.5-4.6 0-7.8-3.6-7.8-8.2S11.4 7 16 7c2.4 0 4.1.9 5.5 2.5l3.5-2.6C22.9 4.1 20.2 2.5 16 2.5Z" fill="#E8732E"/><circle cx="23.5" cy="15.5" r="3" fill="#0EA5E9"/></svg><span>白垩纪<small>CRETAS</small></span></a>
+        <p>餐饮门店与食品工厂通用的 AI 运营中枢。让后厨与车间的每一笔钱、每一克料，清清楚楚。</p>
+      </div>
+      <div class="foot-col"><h6>产品</h6><a href="smartbi.html">SmartBI 智能分析</a><a href="cockpit.html">实时经营驾驶舱</a><a href="index.html#value">核心价值</a><a href="index.html#why">为什么选我们</a></div>
+      <div class="foot-col"><h6>真实演示</h6><a href="demo.html">在线演示中心</a><a href="restaurantbi-example/">餐饮经营演示</a><a href="factorybi-example/">工厂生产演示</a><a href="client-request/">预约演示</a></div>
+      <div class="foot-col"><h6>联系</h6><a href="mailto:stevenj4xie@gmail.com">stevenj4xie@gmail.com</a><a href="client-request/">商务合作</a><a href="privacy.html">隐私政策</a></div>
+    </div>
+    <div class="foot-bottom"><div>© 2026 白垩纪 Cretas · cretaceousfuture.com</div><div>餐饮 · 食品工厂 · 全链路溯源</div></div>
+  </div>
+</footer>
+<script src="js/cretas-site.js"></script>
+</body>
+</html>

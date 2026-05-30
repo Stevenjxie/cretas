@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="color-scheme" content="dark">
+<title>SmartBI 智能分析 · 白垩纪 Cretas</title>
+<meta name="description" content="SmartBI 智能分析 — Excel 上传秒变经营报表，像聊天一样问数据，10+ 专业图表按需生成，AI 主动找出哪里在漏钱。餐饮与食品工厂通用。">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230A0A0C'/%3E%3Cpath d='M21 9.5C19.6 8 17.9 7 15.5 7 11 7 7.5 10.4 7.5 15S11 23 15.5 23c2.4 0 4.1-1 5.5-2.5' stroke='%23E8732E' stroke-width='3' fill='none' stroke-linecap='round'/%3E%3Ccircle cx='22' cy='15.5' r='2.5' fill='%230EA5E9'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/cretas-site.css">
+<style>
+.sb-hero{text-align:center}
+.sb-hero .crumb{justify-content:center}
+.sb-hero h1{margin-left:auto;margin-right:auto}
+.sb-hero .lead{margin-left:auto;margin-right:auto}
+.sb-hero .hero-actions{justify-content:center}
+.sb-mock{max-width:1000px;margin:54px auto 0;position:relative}
+.sb-mock .halo{position:absolute;width:80%;height:60%;left:10%;top:18%;border-radius:50%;filter:blur(80px);background:radial-gradient(circle,var(--cyan-glow),transparent 70%);z-index:0}
+.report-main{display:grid;grid-template-columns:1.5fr 1fr;gap:10px}
+.donut{width:120px;height:120px;border-radius:50%;margin:6px auto;position:relative;background:conic-gradient(var(--cyan) 0 42%,var(--amber) 42% 70%,#3a3a42 70% 100%)}
+.donut::after{content:"";position:absolute;inset:16px;border-radius:50%;background:#0b0b0f}
+.donut-legend{display:flex;flex-direction:column;gap:6px;margin-top:8px;font-size:11px;color:var(--text-3);font-family:var(--font-mono)}
+.donut-legend i{display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:6px;vertical-align:middle}
+.area{height:96px;display:flex;align-items:flex-end;gap:3px;margin-top:10px}
+.area i{flex:1;background:linear-gradient(180deg,rgba(14,165,233,.5),rgba(14,165,233,.05));border-radius:2px 2px 0 0;display:block}
+</style>
+</head>
+<body>
+
+<header class="nav" id="nav">
+  <div class="bar">
+    <a href="index.html" class="logo" aria-label="白垩纪 Cretas">
+      <svg class="mark" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg"><defs><linearGradient id="lg" x1="0" y1="0" x2="32" y2="32"><stop stop-color="#F0A36B"/><stop offset=".55" stop-color="#E8732E"/><stop offset="1" stop-color="#0EA5E9"/></linearGradient></defs><path d="M16 2.5C9 2.5 3.5 8 3.5 15.5S9 29.5 16 29.5c4.2 0 7-1.6 9.2-4.2l-3.5-2.6c-1.4 1.6-3.1 2.5-5.5 2.5-4.6 0-7.8-3.6-7.8-8.2S11.4 7 16 7c2.4 0 4.1.9 5.5 2.5l3.5-2.6C22.9 4.1 20.2 2.5 16 2.5Z" fill="url(#lg)"/><circle cx="23.5" cy="15.5" r="3" fill="#0EA5E9"/></svg>
+      <span>白垩纪<small>CRETAS</small></span>
+    </a>
+    <nav class="nav-links">
+      <div class="nav-drop"><span>产品功能</span>
+        <div class="menu">
+          <a href="smartbi.html" class="cy"><div class="di cy"><svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M2 13l3-4 3 2 5-7"/><path d="M2 2v12h12"/></svg></div><div><div class="dt">SmartBI 智能分析</div><div class="dd">Excel 秒变报表 · 对话式分析</div></div></a>
+          <a href="cockpit.html" class="cy"><div class="di cy"><svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="2" y="2" width="5" height="5" rx="1"/><rect x="9" y="2" width="5" height="5" rx="1"/><rect x="2" y="9" width="5" height="5" rx="1"/><rect x="9" y="9" width="5" height="5" rx="1"/></svg></div><div><div class="dt">实时经营驾驶舱</div><div class="dd">一屏看清经营全貌</div></div></a>
+          <a href="index.html#value"><div class="di"><svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M8 1.5 2 4.5v4c0 3.5 2.5 5.5 6 7 3.5-1.5 6-3.5 6-7v-4L8 1.5Z"/></svg></div><div><div class="dt">运营中枢 &amp; 全链路溯源</div><div class="dd">成本对账 · 批次追溯</div></div></a>
+        </div>
+      </div>
+      <a href="demo.html">在线演示</a>
+      <a href="index.html#why">为什么选我们</a>
+      <a href="index.html#contact">联系我们</a>
+    </nav>
+    <div class="nav-cta">
+      <a href="client-request/" class="btn btn-primary">预约演示</a>
+      <button class="menu-btn" id="menuBtn" aria-label="菜单"><svg width="24" height="24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M3 12h18M3 18h18"/></svg></button>
+    </div>
+  </div>
+</header>
+<div class="mobile-menu" id="mobileMenu">
+  <a href="smartbi.html">SmartBI 智能分析</a><a href="cockpit.html">实时驾驶舱</a><a href="demo.html">在线演示</a><a href="index.html#why">为什么选我们</a><a href="index.html#contact">联系我们</a>
+  <a href="client-request/" class="btn btn-primary">预约演示</a>
+</div>
+
+<!-- HERO -->
+<section class="page-hero sb-hero">
+  <div class="hero-bg"><div class="aurora a2"></div><div class="aurora a3"></div><div class="grid-overlay"></div></div>
+  <div class="wrap">
+    <div class="crumb reveal"><a href="index.html">首页</a><span>/</span><a href="index.html#value">产品功能</a><span>/</span>SmartBI 智能分析</div>
+    <div class="eyebrow cyan reveal" style="justify-content:center">SMARTBI 智能分析</div>
+    <h1 class="reveal d1">一句话，<span class="grad-cyan">把经营数据问明白</span></h1>
+    <p class="lead reveal d2">Excel 上传，秒变经营报表；像聊天一样问数据，10+ 专业图表按需生成，AI 主动找出哪里在漏钱。不用懂报表，也不用学公式。餐饮与食品工厂通用。</p>
+    <div class="hero-actions reveal d3">
+      <a href="client-request/" class="btn btn-primary">预约演示 <span class="arr">→</span></a>
+      <a href="demo.html" class="btn btn-ghost">看在线演示</a>
+    </div>
+    <div class="sb-mock reveal d2">
+      <div class="halo"></div>
+      <div class="browser"><div class="browser-bar"><div class="tl"><i class="r"></i><i class="y"></i><i class="g"></i></div><div class="url">cretas.app · SmartBI · 经营分析报表</div></div>
+        <div class="browser-body"><div class="dash fac">
+          <div class="dash-top"><div class="dt">经营分析报表<span>· 自动生成</span></div><div class="dash-chips"><span class="dash-chip">日</span><span class="dash-chip on">月</span><span class="dash-chip">年</span></div></div>
+          <div class="kpis">
+            <div class="kpi"><div class="kl">营业收入</div><div class="kv">¥193<span style="font-size:11px">万</span></div><div class="kd up">▲ 12.4%</div></div>
+            <div class="kpi"><div class="kl">综合毛利率</div><div class="kv">58.2%</div><div class="kd up">▲ 2.1pt</div></div>
+            <div class="kpi"><div class="kl">总成本</div><div class="kv">¥80.8<span style="font-size:11px">万</span></div><div class="kd down">▼ 1.6%</div></div>
+            <div class="kpi"><div class="kl">损耗占比</div><div class="kv">2.1%</div><div class="kd down">▼ 0.5pt</div></div>
+          </div>
+          <div class="report-main">
+            <div class="dpanel"><div class="ph"><span>近 30 日收入 / 成本趋势</span><span style="color:var(--cyan-soft)">面积图</span></div>
+              <div class="area"><i style="height:40%"></i><i style="height:55%"></i><i style="height:48%"></i><i style="height:68%"></i><i style="height:60%"></i><i style="height:80%"></i><i style="height:72%"></i><i style="height:90%"></i><i style="height:84%"></i><i style="height:95%"></i></div>
+            </div>
+            <div class="dpanel"><div class="ph"><span>渠道收入占比</span><span style="color:var(--amber-soft)">环形图</span></div>
+              <div class="donut"></div>
+              <div class="donut-legend"><div><i style="background:var(--cyan)"></i>堂食 42%</div><div><i style="background:var(--amber)"></i>外卖 28%</div><div><i style="background:#3a3a42"></i>其他 30%</div></div>
+            </div>
+          </div>
+          <div class="ai-strip"><div class="ab">AI</div><div class="at">本月毛利率提升主要来自 <b>主推套餐占比上升</b>；建议继续主推，并复核 3 道负毛利菜品。</div></div>
+        </div></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 核心能力 -->
+<section>
+  <div class="wrap">
+    <div class="sec-head center reveal"><div class="eyebrow cyan" style="justify-content:center">核心能力</div><h2 class="h-sec">不用懂 BI，<span class="grad-cyan">也能看懂经营</span></h2></div>
+    <div class="pillars">
+      <div class="pcard cyan col-6 reveal">
+        <div class="pico"><svg width="24" height="24" fill="none" stroke="#0EA5E9" stroke-width="1.7"><path d="M4 4h16v16H4z"/><path d="M4 9h16M9 9v11"/></svg></div>
+        <h3>Excel 上传，秒变报表</h3>
+        <p>把你现有的台账、报表、流水 Excel 直接传上来，系统自动识别字段、清洗、汇总，几秒生成结构化经营报表——不用改格式、不用录系统。</p>
+      </div>
+      <div class="pcard cyan col-6 reveal d1">
+        <div class="pico"><svg width="24" height="24" fill="none" stroke="#0EA5E9" stroke-width="1.7"><path d="M21 11.5a8.4 8.4 0 0 1-9 8.4L3 21l1.1-3.3A8.4 8.4 0 1 1 21 11.5Z"/></svg></div>
+        <h3>像聊天一样问数据</h3>
+        <p>"这个月哪道菜最亏钱？""哪个门店损耗最高？"直接用大白话问，直接给答案和图表。一线和老板都能用，不用培训。</p>
+      </div>
+      <div class="pcard cyan col-6 reveal">
+        <div class="pico"><svg width="24" height="24" fill="none" stroke="#0EA5E9" stroke-width="1.7"><path d="M3 3v18h18"/><rect x="6" y="11" width="3" height="7"/><rect x="11" y="7" width="3" height="11"/><rect x="16" y="13" width="3" height="5"/></svg></div>
+        <h3>10+ 专业图表，按需生成</h3>
+        <p>柱状、折线、面积、环形、雷达、漏斗、热力……根据你的数据和问题自动选图，该用哪种图就出哪种，不用自己拖拽配置。</p>
+      </div>
+      <div class="pcard cyan col-6 reveal d1">
+        <div class="pico"><svg width="24" height="24" fill="none" stroke="#0EA5E9" stroke-width="1.7"><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/><circle cx="12" cy="12" r="4"/></svg></div>
+        <h3>AI 主动找问题</h3>
+        <p>不只是出图。AI 会主动读懂数据，告诉你这个月发生了什么、为什么变、哪里在漏钱，并给出可执行的建议。</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 特性行 -->
+<section class="tone-soft">
+  <div class="wrap">
+    <div class="feat-rows">
+      <div class="feat-row reveal">
+        <div class="feat-txt">
+          <div class="num">// 01 上传即分析</div>
+          <h3>把 Excel 台账，变成会说话的报表</h3>
+          <p>你不用换系统、不用改表头。现有的销售流水、采购台账、损耗记录，传上来就行。</p>
+          <ul class="blist"><li>自动识别字段、清洗脏数据、跨表汇总</li><li>多 Sheet、多月份合并分析</li><li>生成可下钻的经营报表，不是一张静态图</li></ul>
+        </div>
+        <div class="feat-vis">
+          <div class="browser"><div class="browser-bar"><div class="tl"><i class="r"></i><i class="y"></i><i class="g"></i></div><div class="url">上传 · 销售台账.xlsx</div></div>
+            <div class="browser-body"><div class="dash fac">
+              <div class="ai-strip" style="margin-top:0;margin-bottom:12px"><div class="ab">↑</div><div class="at">已解析 <b>销售台账.xlsx</b> · 1,284 行 · 自动识别 12 个字段</div></div>
+              <div class="kpis"><div class="kpi"><div class="kl">总记录</div><div class="kv">1,284</div></div><div class="kpi"><div class="kl">字段</div><div class="kv">12</div></div><div class="kpi"><div class="kl">时间跨度</div><div class="kv">90<span style="font-size:11px">天</span></div></div><div class="kpi"><div class="kl">生成图表</div><div class="kv">6</div></div></div>
+              <div class="dpanel"><div class="ph"><span>日收入趋势(自动生成)</span></div><div class="mbars"><div class="mbar" style="height:50%"></div><div class="mbar" style="height:68%"></div><div class="mbar" style="height:55%"></div><div class="mbar" style="height:80%"></div><div class="mbar" style="height:64%"></div><div class="mbar" style="height:90%"></div><div class="mbar" style="height:76%"></div></div></div>
+            </div></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="feat-row rev reveal">
+        <div class="feat-txt">
+          <div class="num">// 02 对话式分析</div>
+          <h3>像聊天一样，把数据问明白</h3>
+          <p>不用懂报表、不用学公式。用大白话问，系统给答案、给图、给建议。</p>
+          <ul class="blist"><li>自然语言提问，自动转成查询</li><li>答案带图表 + 结论 + 行动建议</li><li>可继续追问，层层下钻</li></ul>
+        </div>
+        <div class="feat-vis">
+          <div class="chat-mock">
+            <div class="chat-line u"><div class="av">你</div><div class="chat-bubble">这个月哪道菜最亏钱？</div></div>
+            <div class="chat-line a"><div class="av">AI</div><div class="chat-bubble">本月共 <b>3 道菜</b> 持续负毛利，最亏的是某招牌菜（毛利 <b>-3.2%</b>）。主因是主料成本上涨但售价没调。<div class="chat-mini-chart"><i style="height:90%"></i><i style="height:60%"></i><i style="height:40%"></i></div><div style="margin-top:8px;font-size:12px;color:var(--text-3)">建议：调价或换供应商，预计月增利 ¥2.1 万。</div></div></div>
+            <div class="chat-line u"><div class="av">你</div><div class="chat-bubble">那哪个门店损耗最高？</div></div>
+            <div class="chat-line a"><div class="av">AI</div><div class="chat-bubble"><b>3 号门店</b> 净菜损耗高于均值 18%，建议核对验收流程。</div></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="feat-row reveal">
+        <div class="feat-txt">
+          <div class="num">// 03 多图表 + AI 洞察</div>
+          <h3>该用什么图，AI 替你选</h3>
+          <p>10+ 专业图表按数据和问题自动生成，并附上 AI 解读——不只是好看，而是看得懂、用得上。</p>
+          <div class="chart-chips" style="margin-bottom:18px">
+            <div class="chart-chip"><svg class="ci" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M2 14V6M7 14V2M12 14V9"/></svg>柱状图</div>
+            <div class="chart-chip"><svg class="ci" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M2 12l4-5 3 2 5-6"/></svg>折线图</div>
+            <div class="chart-chip"><svg class="ci" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="8" cy="8" r="6"/><path d="M8 2v6l4 2"/></svg>环形图</div>
+            <div class="chart-chip">面积图</div><div class="chart-chip">雷达图</div><div class="chart-chip">漏斗图</div><div class="chart-chip">热力图</div><div class="chart-chip">+ 更多</div>
+          </div>
+          <ul class="blist"><li>自动配色、自动标注关键点</li><li>每张图都带一句 AI 结论</li><li>异常自动高亮 + 预警</li></ul>
+        </div>
+        <div class="feat-vis">
+          <div class="browser"><div class="browser-bar"><div class="tl"><i class="r"></i><i class="y"></i><i class="g"></i></div><div class="url">SmartBI · 多维分析</div></div>
+            <div class="browser-body"><div class="dash fac">
+              <div class="dash-main">
+                <div class="dpanel"><div class="ph"><span>品类毛利贡献</span></div><div class="mbars"><div class="mbar" style="height:92%"></div><div class="mbar" style="height:74%"></div><div class="mbar" style="height:62%"></div><div class="mbar" style="height:48%"></div><div class="mbar" style="height:34%"></div></div></div>
+                <div class="dpanel"><div class="ph"><span>成本结构</span></div><div class="donut" style="width:96px;height:96px;background:conic-gradient(var(--cyan) 0 48%,var(--amber) 48% 78%,#3a3a42 78% 100%)"></div></div>
+              </div>
+              <div class="ai-strip"><div class="ab">AI</div><div class="at">检测到 <b>原料成本环比 +4.2%</b>，建议核对近期采购单价波动。</div></div>
+            </div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 适用场景 (真实两业态) -->
+<section>
+  <div class="wrap">
+    <div class="sec-head center reveal"><div class="eyebrow" style="justify-content:center">适用场景</div><h2 class="h-sec">餐饮、食品工厂，<span class="grad">同一套分析</span></h2></div>
+    <div class="pillars">
+      <div class="pcard amber col-6 reveal">
+        <div class="pico"><svg width="24" height="24" fill="none" stroke="#E8732E" stroke-width="1.7"><path d="M4 3h16v6H4zM7 9v12M17 9v12M4 21h16"/></svg></div>
+        <h3>餐饮门店 / 连锁</h3>
+        <p>营收、客单、渠道占比、菜品毛利、损耗、多门店对比——把每天的流水变成能决策的经营报表。</p>
+        <div class="tags"><span class="tag">经营驾驶舱</span><span class="tag">菜品毛利</span><span class="tag">多门店对比</span></div>
+      </div>
+      <div class="pcard cyan col-6 reveal d1">
+        <div class="pico"><svg width="24" height="24" fill="none" stroke="#0EA5E9" stroke-width="1.7"><path d="M3 21V8l6-4 6 4v13M9 21v-6h4v6M19 21V11l2 1.2V21"/></svg></div>
+        <h3>食品加工厂</h3>
+        <p>产量、成本、出成率、良率、人效、损耗——把车间的生产数据汇成一张老板和厂长都看得懂的账。</p>
+        <div class="tags"><span class="tag">产量成本</span><span class="tag">出成率</span><span class="tag">人效分析</span></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- CTA -->
+<section class="cta-band tone-soft">
+  <div class="glow"></div>
+  <div class="wrap reveal">
+    <h2>把你的 Excel，<span class="grad-cyan">问成经营决策</span></h2>
+    <p>一次演示，看 SmartBI 怎么把你现有的台账变成会说话的报表。</p>
+    <div class="acts"><a href="client-request/" class="btn btn-primary">预约演示 <span class="arr">→</span></a><a href="demo.html" class="btn btn-ghost">先看在线演示</a></div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <div class="foot-grid">
+      <div class="foot-brand">
+        <a href="index.html" class="logo"><svg class="mark" viewBox="0 0 32 32" fill="none"><path d="M16 2.5C9 2.5 3.5 8 3.5 15.5S9 29.5 16 29.5c4.2 0 7-1.6 9.2-4.2l-3.5-2.6c-1.4 1.6-3.1 2.5-5.5 2.5-4.6 0-7.8-3.6-7.8-8.2S11.4 7 16 7c2.4 0 4.1.9 5.5 2.5l3.5-2.6C22.9 4.1 20.2 2.5 16 2.5Z" fill="#E8732E"/><circle cx="23.5" cy="15.5" r="3" fill="#0EA5E9"/></svg><span>白垩纪<small>CRETAS</small></span></a>
+        <p>餐饮门店与食品工厂通用的 AI 运营中枢。让后厨与车间的每一笔钱、每一克料，清清楚楚。</p>
+      </div>
+      <div class="foot-col"><h6>产品</h6><a href="smartbi.html">SmartBI 智能分析</a><a href="cockpit.html">实时经营驾驶舱</a><a href="index.html#value">核心价值</a><a href="index.html#why">为什么选我们</a></div>
+      <div class="foot-col"><h6>真实演示</h6><a href="demo.html">在线演示中心</a><a href="restaurantbi-example/">餐饮经营演示</a><a href="factorybi-example/">工厂生产演示</a><a href="client-request/">预约演示</a></div>
+      <div class="foot-col"><h6>联系</h6><a href="mailto:stevenj4xie@gmail.com">stevenj4xie@gmail.com</a><a href="client-request/">商务合作</a><a href="privacy.html">隐私政策</a></div>
+    </div>
+    <div class="foot-bottom"><div>© 2026 白垩纪 Cretas · cretaceousfuture.com</div><div>餐饮 · 食品工厂 · 全链路溯源</div></div>
+  </div>
+</footer>
+<script src="js/cretas-site.js"></script>
+</body>
+</html>
