@@ -354,15 +354,28 @@ public class SalesServiceImpl implements SalesService {
                             pricingEngine.calculate(pricingReq);
                     if (pricingResult != null && pricingResult.getFinalPrice() != null
                             && pricingResult.getFinalPrice().signum() >= 0) {
-                        resolvedUnitPrice = pricingResult.getFinalPrice();
+                        // BUGFIX (2026-05-30, surfaced by F006 UI E2E): PricingResult.finalPrice
+                        // is a LINE TOTAL — PricingEngineImpl computes
+                        //   originalPrice = unitPriceList × quantity   (line total before strategies)
+                        //   finalPrice    = originalPrice − Σ discounts (line total after strategies)
+                        // but a SO item stores a PER-UNIT price. Assigning the line total directly to
+                        // resolvedUnitPrice made item.unitPrice = qty × price and
+                        // order.totalAmount = qty × (qty × price) = qty² × price
+                        // (e.g. 276 × ¥50 was stored as unitPrice ¥13,800, total ¥3,808,800).
+                        // Convert back to per-unit: perUnit = finalPrice / quantity (HALF_UP, scale 2).
+                        BigDecimal finalPerUnit = lineTotalToUnitPrice(
+                                pricingResult.getFinalPrice(), itemDTO.getQuantity(), resolvedUnitPrice);
                         log.info("Canvas-Pricing Phase 4b: 应用策略 — SO={}, productId={}, "
-                                + "origPrice={}, finalPrice={}, appliedStrategies={}, warnings={}",
+                                + "origUnitPrice={}, lineTotal(orig={}, final={}), finalUnitPrice={}, "
+                                + "appliedStrategies={}, warnings={}",
                                 order.getOrderNumber(), itemDTO.getProductTypeId(),
-                                pricingResult.getOriginalPrice(), pricingResult.getFinalPrice(),
+                                resolvedUnitPrice, pricingResult.getOriginalPrice(),
+                                pricingResult.getFinalPrice(), finalPerUnit,
                                 pricingResult.getAppliedStrategies() != null
                                         ? pricingResult.getAppliedStrategies().size() : 0,
                                 pricingResult.getWarnings() != null
                                         ? pricingResult.getWarnings().size() : 0);
+                        resolvedUnitPrice = finalPerUnit;
                     }
                 } catch (UnsupportedOperationException e) {
                     // Phase 4b skeleton — PricingEngineImpl 抛 UnsupportedOp, 跳过应用走 legacy fallback.
@@ -1535,6 +1548,29 @@ public class SalesServiceImpl implements SalesService {
             }
         }
         return item.getLineAmount();
+    }
+
+    /**
+     * Convert a pricing-engine <em>line total</em> back to a <em>per-unit</em> price.
+     *
+     * <p>{@link com.cretas.aims.service.pricing.PricingResult#getFinalPrice()} is a line total
+     * ({@code unitPriceList × quantity − Σ discounts}, see {@code PricingEngineImpl}). A
+     * {@link SalesOrderItem} stores a per-unit price, so the engine result must be divided by the
+     * quantity before {@code setUnitPrice}. Skipping this (the 2026-05-30 bug, surfaced by the F006
+     * UI E2E) stored {@code unitPrice = qty × price} and {@code totalAmount = qty² × price}.
+     *
+     * @return {@code lineTotal / quantity} (HALF_UP, scale 2), or {@code fallbackUnitPrice} when
+     *         {@code lineTotal} is null / negative or {@code quantity} is null / non-positive.
+     */
+    public static BigDecimal lineTotalToUnitPrice(BigDecimal lineTotal, BigDecimal quantity,
+                                                  BigDecimal fallbackUnitPrice) {
+        // A negative line total must never become a negative unit price. PricingEngineImpl currently
+        // clamps finalPrice to ≥ 0, but the engine contract is not enforced at compile time, so guard
+        // here defensively rather than trust the upstream clamp (preflight-audit MEDIUM finding).
+        if (lineTotal == null || lineTotal.signum() < 0 || quantity == null || quantity.signum() <= 0) {
+            return fallbackUnitPrice;
+        }
+        return lineTotal.divide(quantity, 2, java.math.RoundingMode.HALF_UP);
     }
 
     private void runConfiguredValidation(String factoryId, String operation, Map<String, Object> context) {
