@@ -154,20 +154,29 @@ async def generate_llm_insights(
     ]
     prompt = _build_prompt(prompt_payload, domain)
 
-    try:
-        from smartbi.services.insights import llm_client as llm
-        raw = await llm.call_llm(
-            prompt,
-            system_role=_SYSTEM_ROLE,
-            enable_thinking=False,
-            max_tokens=_MAX_TOKENS,
-        )
-    except Exception as e:
-        logger.warning(
-            f"[llm-mat] LLM call raised ({type(e).__name__}: {e}) — "
-            f"keeping rule insights for {len(applicable)} templates"
-        )
-        return None
+    # 内容未变跳过 LLM (榨干持久缓存): prompt 与上次 byte-identical (模板 KPI 没变) → 复用
+    # 上次 LLM 输出, 跳过调用 (0 token)。可证明正确: 同一 prompt → 同一解析结果。复用已持久的
+    # smart_bi_distillation_samples (它按 input_hash 存了 prompt→teacher_output)。
+    input_hash = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
+    raw = await _get_cached_teacher_output(input_hash)
+    from_cache = bool(raw)
+    if from_cache:
+        logger.info("[llm-mat] content-hash cache HIT — 复用上次洞察, 跳过 LLM (0 token)")
+    else:
+        try:
+            from smartbi.services.insights import llm_client as llm
+            raw = await llm.call_llm(
+                prompt,
+                system_role=_SYSTEM_ROLE,
+                enable_thinking=False,
+                max_tokens=_MAX_TOKENS,
+            )
+        except Exception as e:
+            logger.warning(
+                f"[llm-mat] LLM call raised ({type(e).__name__}: {e}) — "
+                f"keeping rule insights for {len(applicable)} templates"
+            )
+            return None
 
     if not raw or not raw.strip():
         logger.warning(
@@ -215,7 +224,7 @@ async def generate_llm_insights(
     # pair for future vertical-model distillation. Only when the teacher produced
     # usable output (applied > 0). Fire-and-forget, fully swallowed — NEVER let
     # training-data capture affect insight generation or materialization.
-    if applied > 0:
+    if applied > 0 and not from_cache:
         try:
             await _persist_distillation_sample(
                 prompt=prompt,
@@ -314,3 +323,28 @@ async def _persist_distillation_sample(
     except Exception as e:
         # Training-data capture is best-effort. Never propagate.
         logger.warning(f"[distill] sample capture failed (non-blocking): {e}")
+
+
+async def _get_cached_teacher_output(input_hash: str) -> Optional[str]:
+    """复用对同一 prompt (byte-identical) 的上次 LLM 输出 —— 物化时模板 KPI 没变则 prompt
+    完全一致, 直接复用跳过 LLM (0 token)。可证明正确: 同输入 → 解析结果完全相同。
+
+    数据源: smart_bi_distillation_samples (已按 input_hash 持久存 prompt→teacher_output,
+    且只在 applied>0 即上次产出可用时才写) —— 天然是一个"内容哈希→可用洞察"持久缓存。
+    只读, 永不抛错; 表空/缺失 → 返回 None → 正常调 LLM (退化为原行为)。
+    """
+    try:
+        from smartbi.config import get_pg_pool
+        pool = await get_pg_pool()
+        if pool is None:
+            return None
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT teacher_output FROM smart_bi_distillation_samples WHERE input_hash = $1",
+                input_hash,
+            )
+        if row and row["teacher_output"] and str(row["teacher_output"]).strip():
+            return row["teacher_output"]
+    except Exception as e:
+        logger.debug(f"[llm-mat] content-hash cache lookup skipped (non-blocking): {e}")
+    return None
