@@ -289,35 +289,96 @@ def _dedup_chain(pairs: List[Tuple[str, str]]) -> List[Tuple[str, str]]:
     return out
 
 
-# Universal free-text fallback tail (appended to every text slot). All entries
-# verified FREE + 已开启 on the console 2026-05-31.
-_TEXT_TAIL: List[Tuple[str, str]] = [
-    ("aliyun_c", "qwen-plus"), ("aliyun_c", "qwen3-max"), ("aliyun_c", "qwen-max"),
-    ("aliyun_c", "qwen3-235b-a22b"), ("aliyun_c", "qwen3.5-397b-a17b"),
-    ("aliyun_c", "qwen3.6-flash"), ("aliyun_c", "qwen3-32b"),
-    ("aliyun_c", "deepseek-v3"), ("aliyun_c", "glm-5"), ("aliyun_c", "glm-4.6"),
-    ("aliyun_b", "qwen-flash"), ("aliyun_b", "qwen-plus-latest"), ("aliyun_b", "qwen3-max"),
-    ("aliyun_b", "qwen3-235b-a22b"), ("aliyun_b", "qwen3.5-397b-a17b"),
-    ("aliyun_b", "deepseek-v3"), ("aliyun_b", "glm-4.6"),
-    ("aliyun_a", "qwen3.6-flash"), ("aliyun_a", "qwen3.6-plus"),
-    ("aliyun_a", "qwen3.5-plus-2026-04-20"), ("aliyun_a", "qwen3.7-max-2026-05-17"),
-    # tencent TokenHub free-trial tail (2026-06-01) — placed AFTER all aliyun
-    # free quota (drains first) and BEFORE zhipu. All FREE on the 90-day trial.
-    ("tencent", "deepseek-v4-pro"), ("tencent", "glm-5.1"),
-    ("tencent", "qwen3.5-flash"), ("tencent", "kimi-k2.6"),
-    ("tencent", "deepseek-v4-flash"), ("tencent", "minimax-m2.7"),
-    ("zhipu", "glm-4.5-air"),
-]
+# =====================================================================
+# 全量 free-model inventory per account (Steve directive 2026-06-01: "把所有
+# 可用的免费模型都串进 fallback"). Source: Steve console screenshots, memory
+# reference_dashscope_free_model_allowlist. EVERY general-purpose free text
+# model across all 4 accounts is chained so the router drains the ENTIRE free
+# inventory before failing. A typo'd / renamed model just 404s → CB skips → next
+# (no billing). Narrow-modality SKUs excluded from general text: VL → _*_FREE_VL;
+# coder / math / mt-translation / character / intent-detect / gui / deep-research
+# would garble a general prompt and are omitted. FORBIDDEN on aliyun (paid or
+# 未开启 → bills when free runs out): qwen3.7-max (bare) / -preview / -2026-05-20.
+# Order within tail: aliyun_c (freshest, exp 2026/08) → b → a → tencent → zhipu.
+# =====================================================================
 
-# VL-only chain (vision; text models can't serve images).
-_VL_CHAIN: List[Tuple[str, str]] = _dedup_chain([
-    ("aliyun_c", "qwen3-vl-plus-2025-12-19"), ("aliyun_c", "qwen-vl-max"),
-    ("aliyun_c", "qwen3-vl-plus"), ("aliyun_c", "qwen3-vl-32b-instruct"),
-    ("aliyun_c", "qwen3-vl-flash-2026-01-22"), ("aliyun_c", "qwen3-vl-30b-a3b-instruct"),
-    ("aliyun_b", "qwen3-vl-plus-2025-12-19"), ("aliyun_b", "qwen-vl-max"),
-    ("aliyun_b", "qwen3-vl-plus"), ("aliyun_b", "qwen3-vl-32b-instruct"),
-    ("zhipu", "glm-4.6v"),
-])
+# aliyun_c — largest/freshest free pool (exp 2026/08-13, mostly 已开启)
+_C_FREE_TEXT = [
+    "qwen3-max", "qwen3-max-2026-01-23", "qwen3-max-preview", "qwen3-max-2025-09-23",
+    "qwen-max", "qwen3.6-max-preview", "qwen3.6-plus", "qwen3.5-plus",
+    "qwen3.5-plus-2026-04-20", "qwen3.5-plus-2026-02-15", "qwen3.5-397b-a17b",
+    "qwen3.5-122b-a10b", "qwen3-235b-a22b", "qwen3-235b-a22b-instruct-2507",
+    "qwen3-235b-a22b-thinking-2507", "qwen3-next-80b-a3b-instruct",
+    "qwen3-next-80b-a3b-thinking", "qwen3.6-35b-a3b", "qwen3.5-35b-a3b",
+    "qwen3.6-27b", "qwen3.5-27b", "qwen3-32b", "qwen3-14b", "qwen3-8b",
+    "qwen3-30b-a3b", "qwen3-30b-a3b-instruct-2507", "qwen3-30b-a3b-thinking-2507",
+    "qwen-plus", "qwen-plus-latest", "qwen-flash-2025-07-28", "qwen3.5-flash",
+    "qwen3.5-flash-2026-02-23", "qwen3.6-flash", "qwen3.6-flash-2026-04-16",
+    "qwen-turbo", "qwen-long-latest", "deepseek-v3", "deepseek-v3.1",
+    "deepseek-v3.2", "deepseek-v3.2-exp", "deepseek-r1", "deepseek-r1-0528",
+    "deepseek-r1-distill-qwen-32b", "deepseek-r1-distill-llama-70b",
+    "glm-5", "glm-5.1", "glm-4.7", "glm-4.6", "glm-4.5", "glm-4.5-air",
+    "kimi-k2.6", "kimi-k2.5", "kimi-k2-thinking", "Moonshot-Kimi-K2-Instruct",
+    "MiniMax-M2.5", "MiniMax-M2.1", "llama-4-maverick", "llama-4-scout", "qwq-plus",
+]
+# aliyun_b — huge free pool (exp 2026/07-16). NO glm-5 / qwen3-max-2026-01-23 here.
+_B_FREE_TEXT = [
+    "qwen3-max", "qwen3.6-plus-2026-04-02", "qwen3.5-plus", "qwen3.5-plus-2026-04-20",
+    "qwen3.5-plus-2026-02-15", "qwen3.5-397b-a17b", "qwen3.5-122b-a10b",
+    "qwen3-235b-a22b", "qwen3-235b-a22b-instruct-2507", "qwen3-235b-a22b-thinking-2507",
+    "qwen3-30b-a3b", "qwen3-30b-a3b-instruct-2507", "qwen3-30b-a3b-thinking-2507",
+    "qwen3-next-80b-a3b-instruct", "qwen3.6-27b", "qwen3.6-flash",
+    "qwen3.6-flash-2026-04-16", "qwen-flash", "qwen-flash-2025-07-28",
+    "qwen-plus-latest", "qwen-plus-1220", "qwen-plus-2025-09-11", "qwen-long-latest",
+    "deepseek-v3", "deepseek-v3.1", "deepseek-v3.2", "deepseek-v3.2-exp",
+    "deepseek-r1-0528", "deepseek-r1-distill-qwen-14b", "deepseek-r1-distill-llama-70b",
+    "glm-4.7", "glm-4.6", "glm-4.5", "kimi-k2.6", "kimi-k2.5", "kimi-k2-thinking",
+    "Moonshot-Kimi-K2-Instruct", "MiniMax-M2.1", "llama-4-maverick", "llama-4-scout",
+    "qwq-plus",
+]
+# aliyun_a — small free pool (exp 2026/06-08, soonest). qwen3.7-max-2026-05-17 is
+# 已开启 here (the bare / -preview / -2026-05-20 variants are NOT — forbidden).
+_A_FREE_TEXT = [
+    "qwen3.7-max-2026-05-17", "qwen3.6-plus", "qwen3.6-plus-2026-04-02",
+    "qwen3.6-flash", "qwen3.6-27b", "qwen3.5-plus-2026-04-20", "kimi-k2.6",
+]
+# tencent TokenHub 90-day free trial (用完即停, no silent paid billing)
+_TENCENT_FREE_TEXT = [
+    "deepseek-v4-pro", "deepseek-v4-flash", "glm-5.1", "glm-5",
+    "kimi-k2.6", "qwen3.5-flash", "minimax-m2.7",
+]
+_ZHIPU_FREE_TEXT = ["glm-4.5-air"]
+
+# Universal free-text fallback tail (appended to every text slot) — 全量 inventory.
+_TEXT_TAIL: List[Tuple[str, str]] = _dedup_chain(
+    [("aliyun_c", m) for m in _C_FREE_TEXT]
+    + [("aliyun_b", m) for m in _B_FREE_TEXT]
+    + [("aliyun_a", m) for m in _A_FREE_TEXT]
+    + [("tencent", m) for m in _TENCENT_FREE_TEXT]
+    + [("zhipu", m) for m in _ZHIPU_FREE_TEXT]
+)
+
+# VL-only chain (vision; text models can't serve images). 全量 free VL on c/b + zhipu.
+# tencent has NO VL-understanding model. qwen-vl-ocr included as deep VL fallback.
+_C_FREE_VL = [
+    "qwen3-vl-plus-2025-12-19", "qwen3-vl-plus", "qwen3-vl-plus-2025-09-23",
+    "qwen-vl-max", "qwen3-vl-235b-a22b-instruct", "qwen3-vl-235b-a22b-thinking",
+    "qwen3-vl-32b-instruct", "qwen3-vl-32b-thinking", "qwen3-vl-30b-a3b-instruct",
+    "qwen3-vl-30b-a3b-thinking", "qwen3-vl-8b-instruct", "qwen3-vl-8b-thinking",
+    "qwen3-vl-flash-2026-01-22", "qwen3-vl-flash-2025-10-15",
+    "qwen-vl-ocr", "qwen-vl-ocr-latest",
+]
+_B_FREE_VL = [
+    "qwen3-vl-plus-2025-12-19", "qwen3-vl-plus", "qwen3-vl-plus-2025-09-23",
+    "qwen-vl-max", "qwen3-vl-235b-a22b-instruct", "qwen3-vl-32b-instruct",
+    "qwen3-vl-30b-a3b-instruct", "qwen3-vl-8b-instruct", "qwen3-vl-flash-2026-01-22",
+    "qwen-vl-ocr", "qwen-vl-ocr-2025-08-28",
+]
+_VL_CHAIN: List[Tuple[str, str]] = _dedup_chain(
+    [("aliyun_c", m) for m in _C_FREE_VL]
+    + [("aliyun_b", m) for m in _B_FREE_VL]
+    + [("zhipu", "glm-4.6v")]
+)
 
 # SLOT_MODELS[slot] = ordered list of (account, model) — the deep fallback chain.
 SLOT_MODELS: Dict[SLOT, List[Tuple[str, str]]] = {

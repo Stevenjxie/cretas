@@ -26,31 +26,16 @@ from common.llm_router import SLOT, call_chain
 
 # Models that are FREE + 已开启 per account (DashScope console 2026-05-31).
 # The router must ONLY ever use these — any other code would bill paid.
+# 全量 free inventory — derived from the router's per-account lists (single
+# source of truth = llm_router; Steve directive 2026-06-01 "所有免费模型都串进
+# fallback"). The independent safety net is _FORBIDDEN_ON_ALIYUN below +
+# test_free_lists_contain_no_forbidden, which assert no paid/未开启 SKU leaked in.
 _FREE_BY_ACCOUNT: Dict[str, set] = {
-    "aliyun_c": {
-        "qwen-flash-2025-07-28", "qwen-turbo", "qwen-plus", "qwen3-max", "qwen-max",
-        "qwen3-235b-a22b", "qwen3.5-397b-a17b", "qwen3.5-122b-a10b", "qwen3.6-flash",
-        "qwen3-32b", "deepseek-v3", "deepseek-r1", "glm-5", "glm-4.6",
-        "qwen3-max-2026-01-23", "qwen3-vl-plus-2025-12-19", "qwen-vl-max",
-        "qwen3-vl-plus", "qwen3-vl-32b-instruct", "qwen3-vl-flash-2026-01-22",
-        "qwen3-vl-30b-a3b-instruct",
-    },
-    "aliyun_b": {
-        "qwen-flash", "qwen-plus-latest", "qwen3-max", "qwen3-235b-a22b",
-        "qwen3.5-397b-a17b", "qwen3.5-122b-a10b", "deepseek-v3", "glm-4.6",
-        "qwen3-vl-plus-2025-12-19", "qwen-vl-max", "qwen3-vl-plus", "qwen3-vl-32b-instruct",
-    },
-    "aliyun_a": {
-        "qwen3.6-flash", "qwen3.6-plus", "qwen3.5-plus-2026-04-20", "qwen3.7-max-2026-05-17",
-    },
-    # tencent TokenHub 90-day free trial (2026-06-01) — OpenAI-compatible.
-    # deepseek-v4-pro is FREE here (it is NOT on any aliyun free list, hence the
-    # aliyun-scoped ban below). See common/llm_router.py top-of-file note.
-    "tencent": {
-        "deepseek-v4-pro", "deepseek-v4-flash", "glm-5.1", "glm-5",
-        "kimi-k2.6", "qwen3.5-flash", "minimax-m2.7",
-    },
-    "zhipu": {"glm-4.5-air", "glm-4.6v"},
+    "aliyun_c": set(llm_router._C_FREE_TEXT) | set(llm_router._C_FREE_VL),
+    "aliyun_b": set(llm_router._B_FREE_TEXT) | set(llm_router._B_FREE_VL),
+    "aliyun_a": set(llm_router._A_FREE_TEXT),
+    "tencent": set(llm_router._TENCENT_FREE_TEXT),
+    "zhipu": set(llm_router._ZHIPU_FREE_TEXT) | {"glm-4.6v"},
 }
 
 # NEVER allowed on ALIYUN accounts (paid or 未开启 → bills when free runs out).
@@ -295,6 +280,33 @@ def test_every_chain_entry_is_free_and_enabled():
                 assert model not in _FORBIDDEN_ON_ALIYUN, (
                     f"{slot.value}: aliyun-forbidden code {account}/{model}"
                 )
+
+
+def test_free_lists_contain_no_forbidden():
+    """Independent safety net: since _FREE_BY_ACCOUNT now derives from the router's
+    own per-account lists, this test guards the LISTS themselves — no paid/未开启
+    aliyun SKU may leak into _C/_B/_A_FREE_TEXT or the VL lists."""
+    for label, models in [
+        ("aliyun_c text", llm_router._C_FREE_TEXT),
+        ("aliyun_b text", llm_router._B_FREE_TEXT),
+        ("aliyun_a text", llm_router._A_FREE_TEXT),
+        ("aliyun_c vl", llm_router._C_FREE_VL),
+        ("aliyun_b vl", llm_router._B_FREE_VL),
+    ]:
+        for m in models:
+            assert m not in _FORBIDDEN_ON_ALIYUN, (
+                f"{label}: forbidden (paid/未开启) code {m!r} leaked into a free list"
+            )
+
+
+def test_full_inventory_chained():
+    """全量 sanity: every text slot drains a deep free inventory (>=40 across all
+    4 accounts) so a quota exhaustion almost never hard-fails."""
+    for slot, chain in llm_router.SLOT_MODELS.items():
+        if slot == SLOT.VL:
+            assert len(chain) >= 20, f"VL chain {len(chain)} < 20 (expected full VL inventory)"
+        else:
+            assert len(chain) >= 40, f"{slot.value} chain {len(chain)} < 40 (expected full inventory)"
 
 
 def test_chain_heads_are_slot_tuned():
