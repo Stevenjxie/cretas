@@ -10,12 +10,17 @@ from common.llm_redactor import (
     PlaceholderAllocator,
     RedactionScope,
     StreamRestorer,
+    current_redaction_scope,
+    ensure_redaction_scope,
     extract_sensitive_values_from_df,
+    extract_sensitive_values_from_fields,
     redact_dict,
     redact_payload,
     redact_payload_for_egress,
     redaction_scope,
+    register_df_for_egress,
     register_df_in_scope,
+    register_values_for_egress,
     restore_in_scope,
     restore_obj,
     restore_text,
@@ -183,6 +188,38 @@ def test_stream_restorer_split_placeholder():
     emitted += sr.flush()
     assert "门店A" not in emitted
     assert emitted.count("青花椒大融城店") == 2
+
+
+# ── 二级调用方 helpers (field_detector / llm_mapper / data_cleaner / cross_sheet) ──
+def test_extract_sensitive_values_from_fields():
+    fields = [
+        {"fieldName": "门店名称", "sampleValues": ["青花椒大融城店", "青花椒春熙店"]},
+        {"fieldName": "营业额", "sampleValues": [12000, 9000]},   # 数值字段不抽
+        {"fieldName": "客户类型", "sampleValues": ["VIP", "普通"]},  # 类别列不抽
+    ]
+    v = extract_sensitive_values_from_fields(fields)
+    assert v.get("门店") == ["青花椒大融城店", "青花椒春熙店"]
+    assert "客户" not in v and "营业额" not in str(v)
+
+
+def test_register_df_for_egress_creates_scope():
+    # ensure_redaction_scope: 无 scope 时自建 (no-reset), 给二级调用方用
+    with redaction_scope():  # 隔离, 测完自动 reset
+        register_df_for_egress(pd.DataFrame({"客户名称": ["张权"], "额": [1]}))
+        scope = current_redaction_scope()
+        assert scope is not None and "张权" in scope.known_values
+
+
+def test_register_values_for_egress_then_redact():
+    with redaction_scope():
+        register_values_for_egress({"分部": ["华东大区", "青花椒大融城店"]})
+        payload = {"messages": [{"role": "user", "content": "华东大区 利润率 18%, 青花椒大融城店 12%"}]}
+        out, meta = redact_payload_for_egress(payload)
+        sent = out["messages"][0]["content"]
+        assert "华东大区" not in sent and "青花椒大融城店" not in sent
+        assert "18%" in sent and "12%" in sent  # 数字不动
+        # 输出还原
+        assert restore_in_scope([{"text": sent}])[0]["text"].count("华东大区") == 1
 
 
 if __name__ == "__main__":

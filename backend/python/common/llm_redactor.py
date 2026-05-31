@@ -312,6 +312,30 @@ def extract_sensitive_values_from_df(df: "pd.DataFrame") -> Dict[str, List[str]]
     return {k: v for k, v in out.items() if v}
 
 
+def extract_sensitive_values_from_fields(detected_fields: Any) -> Dict[str, List[str]]:
+    """从 SmartBI detected_fields (list of {fieldName, sampleValues}) 抽敏感样本值。
+
+    用于 llm_mapper / field_detector 这类把字段样本值塞进 prompt 的调用方。
+    """
+    out: Dict[str, List[str]] = {}
+    for f in (detected_fields or []):
+        try:
+            if not isinstance(f, dict):
+                continue
+            name = f.get("fieldName") or f.get("name") or ""
+            tl = sensitive_type_for_column(name)
+            if not tl:
+                continue
+            bucket = out.setdefault(tl, [])
+            for v in (f.get("sampleValues") or [])[:_MAX_DISTINCT_PER_COL]:
+                sv = str(v).strip()
+                if sv and 0 < len(sv) <= _MAX_NAME_LEN and sv not in bucket:
+                    bucket.append(sv)
+        except Exception:
+            continue
+    return {k: v for k, v in out.items() if v}
+
+
 # ── 请求级脱敏 scope (ContextVar) ───────────────────────────────────────────
 # choke point (llm_router) 读它; prompt 构建方 (insights generator) 写它。
 # 镜像 common/llm_metrics 已有的 _llm_caller / _llm_factory ContextVar 模式。
@@ -387,6 +411,36 @@ def register_df_in_scope(df: "pd.DataFrame") -> None:
     scope = _redaction_scope.get()
     if scope is not None:
         scope.register_df(df)
+
+
+def ensure_redaction_scope() -> RedactionScope:
+    """Return the active scope, creating one (no reset — request-scoped) if none.
+
+    For secondary callers (Excel field-detect / mapping / cross-sheet) that just need
+    the wrapper to redact their egress; they typically need no output restore.
+    """
+    scope = _redaction_scope.get()
+    if scope is None:
+        scope = RedactionScope()
+        _redaction_scope.set(scope)
+    return scope
+
+
+def register_df_for_egress(df: "pd.DataFrame") -> None:
+    """One-liner for secondary callers: ensure a scope + register the df's sensitive names."""
+    try:
+        ensure_redaction_scope().register_df(df)
+    except Exception:
+        pass
+
+
+def register_values_for_egress(values_by_type: Dict[str, List[str]]) -> None:
+    """One-liner for callers holding extracted name lists (e.g. field sampleValues)."""
+    try:
+        if values_by_type:
+            ensure_redaction_scope().register_values(values_by_type)
+    except Exception:
+        pass
 
 
 def restore_in_scope(value: Any) -> Any:
