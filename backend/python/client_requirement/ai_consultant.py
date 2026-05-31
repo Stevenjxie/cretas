@@ -9,10 +9,7 @@ import logging
 import re
 from typing import Any, Dict, List
 
-import httpx
 from pydantic import BaseModel
-
-from smartbi.config import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -113,33 +110,21 @@ async def _call_llm(
     max_tokens: int = 800,
     temperature: float = 0.5
 ) -> str:
-    """Call DashScope LLM API with full message list."""
-    settings = get_settings()
-    if not settings.llm_api_key:
-        raise RuntimeError("LLM API key not configured")
-
-    headers = {
-        "Authorization": f"Bearer {settings.llm_api_key}",
-        "Content-Type": "application/json",
-    }
+    """Call LLM via免费 fallback 链 (call_chain SLOT.CHAT) with full message list."""
+    from common.llm_router import call_chain, SLOT
+    from common.llm_metrics import llm_caller_context
 
     payload = {
-        "model": settings.llm_model,
+        # model 由 call_chain(SLOT.CHAT) 按免费链注入
         "messages": messages,
         "temperature": temperature,
         "max_tokens": max_tokens,
         "enable_thinking": False,
     }
 
-    async with httpx.AsyncClient(timeout=60.0) as client:
-        resp = await client.post(
-            f"{settings.llm_base_url}/chat/completions",
-            headers=headers,
-            json=payload,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        return data["choices"][0]["message"]["content"]
+    with llm_caller_context("ai_consultant"):
+        data = await call_chain(SLOT.CHAT, payload, timeout=60.0)
+    return data["choices"][0]["message"]["content"]
 
 
 def _extract_json(text: str) -> Any:

@@ -682,30 +682,28 @@ JSON schema:
 }}"""
 
 
-async def _call_llm_for_recipe(dish_name: str, hint: Optional[str], client, settings) -> Dict[str, Any]:
-    """Single LLM call for one dish. Returns parsed dict or {success:false}."""
-    import httpx
+async def _call_llm_for_recipe(dish_name: str, hint: Optional[str], client=None, settings=None) -> Dict[str, Any]:
+    """Single LLM call for one dish. Returns parsed dict or {success:false}.
+
+    走 call_chain(SLOT.INSIGHTS): 免费 fallback 链 + 熔断。model 由 router 按 slot 注入。
+    client/settings 参数保留兼容旧 caller 签名, 已不使用 (router 自管客户端 + key)。
+    """
     if not dish_name or len(dish_name) < 2:
         return {"success": False, "dishName": dish_name, "message": "菜名过短"}
     prompt = _build_recipe_prompt(dish_name, hint)
-    headers = {
-        "Authorization": f"Bearer {settings.llm_api_key}",
-        "Content-Type": "application/json",
-    }
     payload = {
-        "model": settings.llm_model or "qwen3-max-2026-01-23",
+        # model 由 call_chain(SLOT.INSIGHTS) 按免费链注入
         "messages": [{"role": "user", "content": prompt}],
         "max_tokens": 800,
         "temperature": 0.3,
         "enable_thinking": False,
     }
     try:
-        resp = await client.post(
-            f"{settings.llm_base_url}/chat/completions",
-            headers=headers, json=payload, timeout=httpx.Timeout(45.0),
-        )
-        resp.raise_for_status()
-        content = resp.json()["choices"][0]["message"]["content"].strip()
+        from common.llm_router import call_chain, SLOT
+        from common.llm_metrics import llm_caller_context
+        with llm_caller_context("ai_recipe_draft"):
+            data = await call_chain(SLOT.INSIGHTS, payload, timeout=45.0)
+        content = data["choices"][0]["message"]["content"].strip()
         if content.startswith("```"):
             content = content.strip("`").lstrip("json").strip()
         import json as _json

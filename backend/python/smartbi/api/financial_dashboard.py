@@ -162,10 +162,8 @@ async def batch_generate(request: FinancialDashboardRequest):
 async def analyze_chart(request: AnalyzeRequest):
     """AI analysis for a single chart, with optional follow-up conversation."""
     try:
-        from smartbi.config import get_settings
-        from openai import OpenAI
-        settings = get_settings()
-        client = OpenAI(api_key=settings.llm_api_key, base_url=settings.llm_base_url)
+        from common.llm_router import call_chain, SLOT
+        from common.llm_metrics import llm_caller_context
 
         system_msg = "你是服务于食品加工企业CFO的资深财务分析师。请用简洁的中文回复。"
 
@@ -198,14 +196,17 @@ async def analyze_chart(request: AnalyzeRequest):
                 {"role": "user", "content": prompt},
             ]
 
-        response = client.chat.completions.create(
-            model=settings.llm_insight_model,
-            messages=messages,
-            max_tokens=2000,
-            temperature=0.3,
-        )
+        # 走 call_chain(SLOT.INSIGHTS): 免费 fallback 链 + 熔断。原 OpenAI SDK 同步直连
+        # (在 async endpoint 内阻塞) 改为 async router 调用。model 由 router 按 slot 注入。
+        payload = {
+            "messages": messages,
+            "max_tokens": 2000,
+            "temperature": 0.3,
+        }
+        with llm_caller_context("financial_dashboard_analyze"):
+            data = await call_chain(SLOT.INSIGHTS, payload, timeout=60.0)
 
-        analysis_text = response.choices[0].message.content
+        analysis_text = data["choices"][0]["message"]["content"]
         return {
             "success": True,
             "chartType": request.chart_type,

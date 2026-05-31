@@ -39,8 +39,6 @@ import statistics
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
-import httpx
-
 from smartbi.config import get_settings
 
 from .review_analyzer import (
@@ -63,12 +61,11 @@ class LlmExtractResult:
 
 
 class LlmReviewAnalyzer:
-    """LLM 驱动的评论分析器 — 支持 DashScope / DeepSeek 双 provider
+    """LLM 驱动的评论分析器 — 走免费 fallback 链 (common.llm_router.call_chain).
 
-    Provider 选择 (环境变量 LLM_PROVIDER):
-      - auto (默认): DeepSeek 优先, fallback DashScope
-      - deepseek:   仅用 DeepSeek (chat-v3)
-      - dashscope:  仅用 DashScope (qwen3.5-flash)
+    路由 (SLOT.REVIEW): aliyun_c → aliyun_b → aliyun_a → zhipu 的免费已开启模型深链,
+    受免费 fallback + 熔断保护。原 DeepSeek (api.deepseek.com) 直连分支已删除
+    (余额 0, 硬失败), 统一走 call_chain。
     """
 
     # 配置
@@ -76,20 +73,6 @@ class LlmReviewAnalyzer:
     _MAX_CONCURRENT = 5           # 最多 5 个并发请求
     _TIMEOUT_SECS = 60.0
     _MAX_RETRIES = 2
-
-    # Provider 配置 (base_url + model + env var for key)
-    _PROVIDERS = {
-        "deepseek": {
-            "base_url": "https://api.deepseek.com/v1",
-            "model": "deepseek-chat",
-            "api_key_env": "DEEPSEEK_API_KEY",
-        },
-        "dashscope": {
-            "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-            "model": "qwen3.5-flash",
-            "api_key_env": "DASHSCOPE_API_KEY",
-        },
-    }
 
     _SYSTEM_PROMPT = """你是一位专业的餐饮评论分析专家。
 你的任务: 从一批大众点评评论中准确抽取顾客提到的菜品名称和情感, 按 JSON 格式输出.
@@ -114,44 +97,26 @@ class LlmReviewAnalyzer:
     def __init__(
         self,
         fallback_analyzer: Optional[ReviewAnalyzer] = None,
-        provider: Optional[str] = None,  # "deepseek" / "dashscope" / "auto" / None
+        provider: Optional[str] = None,  # 兼容旧签名, 已忽略 (统一走 call_chain)
     ):
         self.fallback = fallback_analyzer or ReviewAnalyzer()
         cfg = get_settings()
 
-        # Resolve provider
-        provider = provider or os.environ.get("LLM_PROVIDER", "auto")
-        self.provider = self._resolve_provider(provider)
-
-        # Set api_key / base_url / model based on provider
-        if self.provider == "deepseek":
-            p = self._PROVIDERS["deepseek"]
-            self._api_key = os.environ.get(p["api_key_env"]) or ""
-            self._base_url = p["base_url"]
-            self._model = p["model"]
-        else:  # dashscope fallback
-            p = self._PROVIDERS["dashscope"]
-            self._api_key = os.environ.get(p["api_key_env"]) or cfg.llm_api_key
-            self._base_url = cfg.llm_base_url
-            self._model = cfg.llm_fast_model
-
-        logger.info(
-            f"LlmReviewAnalyzer: provider={self.provider}, model={self._model}, "
-            f"api_key={'set' if self._api_key else 'EMPTY'}"
+        # LLM 可用性: call_chain 按 slot 自动选免费 model, 只要任一 provider 配了 key
+        # 即视为可用; 否则退回 regex 分析。沿用 DASHSCOPE_API_KEY / settings.llm_api_key
+        # 作为可用性信号 (与 call_chain 的 aliyun 账号 key 同源)。
+        self._llm_available = bool(
+            os.environ.get("LLM_ALIYUN_C_API_KEY")
+            or os.environ.get("LLM_ALIYUN_B_API_KEY")
+            or os.environ.get("LLM_ALIYUN_A_API_KEY")
+            or os.environ.get("DASHSCOPE_API_KEY")
+            or cfg.llm_api_key
         )
 
-    @classmethod
-    def _resolve_provider(cls, requested: str) -> str:
-        """Resolve 'auto' → actual provider based on what's available"""
-        if requested == "auto":
-            # Prefer DeepSeek if key available, else DashScope
-            if os.environ.get("DEEPSEEK_API_KEY"):
-                return "deepseek"
-            return "dashscope"
-        if requested in cls._PROVIDERS:
-            return requested
-        logger.warning(f"Unknown provider '{requested}', falling back to dashscope")
-        return "dashscope"
+        logger.info(
+            f"LlmReviewAnalyzer: routing via call_chain(SLOT.REVIEW), "
+            f"llm_available={self._llm_available}"
+        )
 
     # ── Main entry (async) ──────────────────────────────
 
@@ -172,8 +137,8 @@ class LlmReviewAnalyzer:
             return self.fallback._empty("无评论数据")
 
         # LLM 不可用 → fallback
-        if not self._api_key:
-            logger.warning("DASHSCOPE_API_KEY not set, falling back to regex analyzer")
+        if not self._llm_available:
+            logger.warning("No LLM provider key configured, falling back to regex analyzer")
             return self.fallback.analyze(reviews, min_mentions=min_mentions)
 
         # Truncate to safe limit
@@ -257,7 +222,7 @@ class LlmReviewAnalyzer:
         user_prompt = "请抽取以下评论的菜品和情感:\n\n" + "\n".join(lines)
 
         payload = {
-            "model": self._model,
+            # model 由 call_chain(SLOT.REVIEW) 按免费链注入, 此处不指定
             "messages": [
                 {"role": "system", "content": self._SYSTEM_PROMPT},
                 {"role": "user", "content": user_prompt},
@@ -265,31 +230,20 @@ class LlmReviewAnalyzer:
             "temperature": 0.2,
             "max_tokens": 2500,
             "response_format": {"type": "json_object"},  # W6: force valid JSON
-            "enable_thinking": False,  # DashScope fast model, no thinking (ignored by DeepSeek)
-        }
-
-        headers = {
-            "Authorization": f"Bearer {self._api_key}",
-            "Content-Type": "application/json",
+            "enable_thinking": False,  # DashScope fast model, no thinking
         }
 
         for attempt in range(self._MAX_RETRIES):
             try:
-                # P0 出境脱敏: 走共享(脱敏包装)客户端而非私有 httpx.AsyncClient —— 否则评论文本
-                # (含手机/邮箱等 PII) 完全绕过脱敏 + 审计。包装层施加 PII/factory 兜底 + 记审计;
-                # 菜品名是本功能要抽取的目标, 不脱敏 (无 scope → 不占位)。
-                from common.llm_client import get_llm_http_client
+                # 走 call_chain(SLOT.REVIEW): 免费 fallback 链 + 熔断 + 出境脱敏/审计
+                # (共享客户端在 wrapper 层施加 PII/factory 兜底)。评论文本可能含 PII →
+                # 必须走 router 共享客户端, 不私连; 菜品名是抽取目标, 不脱敏。
+                from common.llm_router import call_chain, SLOT
                 from common.llm_metrics import llm_caller_context
-                client = get_llm_http_client()
                 with llm_caller_context("review_analyzer"):
-                    resp = await client.post(
-                        f"{self._base_url}/chat/completions",
-                        headers=headers,
-                        json=payload,
-                        timeout=httpx.Timeout(self._TIMEOUT_SECS),
+                    data = await call_chain(
+                        SLOT.REVIEW, payload, timeout=self._TIMEOUT_SECS
                     )
-                    resp.raise_for_status()
-                    data = resp.json()
 
                 content = (
                     data.get("choices", [{}])[0]
@@ -349,14 +303,11 @@ class LlmReviewAnalyzer:
                     )
                 return results
 
-            except httpx.HTTPStatusError as e:
-                logger.warning(f"Batch {batch_idx}: HTTP {e.response.status_code} (attempt {attempt + 1})")
-                if attempt < self._MAX_RETRIES - 1:
-                    await asyncio.sleep(2 ** attempt)
             except json.JSONDecodeError as e:
                 logger.warning(f"Batch {batch_idx}: JSON parse fail: {e}")
                 return []  # Don't retry JSON errors
             except Exception as e:
+                # call_chain 在全链耗尽时抛 RuntimeError; 其余传输异常也走这里, 重试
                 logger.warning(f"Batch {batch_idx}: {type(e).__name__}: {e}")
                 if attempt < self._MAX_RETRIES - 1:
                     await asyncio.sleep(2 ** attempt)
