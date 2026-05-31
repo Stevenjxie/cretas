@@ -233,6 +233,7 @@ async def test_distillation_sample_captured_on_success(monkeypatch):
     """On usable LLM output, a materialization sample is INSERTed with the
     structured input + teacher output, tagged by business_type + factory_id."""
     sink: list = []
+
     async def _pool():
         return _FakePool(sink)
     monkeypatch.setattr("smartbi.config.get_pg_pool", _pool)
@@ -264,6 +265,7 @@ async def test_distillation_sample_captured_on_success(monkeypatch):
 async def test_distillation_capture_disabled_by_env(monkeypatch):
     """SMARTBI_DISTILL_CAPTURE=0 → no DB write even on success."""
     sink: list = []
+
     async def _pool():
         return _FakePool(sink)
     monkeypatch.setattr("smartbi.config.get_pg_pool", _pool)
