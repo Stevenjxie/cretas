@@ -258,6 +258,8 @@ class InsightGenerator:
                 self._parse_llm_insights(full_response, stat_insights),
                 _scope.placeholder_map,
             )  # P0: 还原 done 事件里的真名
+            from .fact_reconciler import reconcile_insights
+            parsed = reconcile_insights(parsed, metrics)  # 阶段2 grounding
             done_result = {
                 "success": True,
                 "insights": parsed,
@@ -403,7 +405,10 @@ class InsightGenerator:
                 max_tokens=max_tokens,
                 model_override=self.model_override,
             )
-            return restore_in_scope(self._parse_llm_insights(response, stat_insights))
+            parsed = restore_in_scope(self._parse_llm_insights(response, stat_insights))
+            # 阶段2 grounding: 用确定性 metrics 对账 LLM 数字 (无 metrics → no-op)
+            from .fact_reconciler import reconcile_insights
+            return reconcile_insights(parsed, metrics)
 
         except Exception as e:
             logger.error("LLM insight generation failed: %s", e, exc_info=True)
