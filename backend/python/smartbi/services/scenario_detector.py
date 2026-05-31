@@ -18,8 +18,6 @@ import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
-import httpx
-
 from services.utils.json_parser import robust_json_parse
 
 logger = logging.getLogger(__name__)
@@ -398,14 +396,12 @@ class LLMScenarioDetector:
         # Build user prompt
         prompt = self._build_detection_prompt(columns, sample_rows, metadata)
 
-        # Call LLM
-        headers = {
-            "Authorization": f"Bearer {self.settings.llm_api_key}",
-            "Content-Type": "application/json"
-        }
+        # Call LLM via free-tier router chain (call_chain) — 免费 fallback + 熔断保护。
+        # INSIGHTS slot 按 provider 注入免费 model, 此处去掉显式 model 字段。
+        from common.llm_router import call_chain, SLOT
+        from common.llm_metrics import llm_caller_context
 
         payload = {
-            "model": self.settings.llm_fast_model,  # Use qwen-turbo for simple classification
             "messages": [
                 {"role": "system", "content": self.SYSTEM_PROMPT},
                 {"role": "user", "content": prompt}
@@ -415,15 +411,8 @@ class LLMScenarioDetector:
             "enable_thinking": False
         }
 
-        response = await self.client.post(
-            f"{self.settings.llm_base_url}/chat/completions",
-            headers=headers,
-            json=payload,
-            timeout=httpx.Timeout(30.0)
-        )
-        response.raise_for_status()
-
-        result_json = response.json()
+        with llm_caller_context("scenario_detector"):
+            result_json = await call_chain(SLOT.INSIGHTS, payload, timeout=30.0)
         content = result_json.get("choices", [{}])[0].get("message", {}).get("content", "")
 
         # Parse LLM response

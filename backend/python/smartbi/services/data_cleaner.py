@@ -529,14 +529,12 @@ class DataCleaner:
         return prompt
 
     async def _call_llm(self, prompt: str) -> str:
-        """调用LLM API"""
-        headers = {
-            "Authorization": f"Bearer {self.settings.llm_api_key}",
-            "Content-Type": "application/json"
-        }
+        """调用LLM API (经免费链 call_chain — 免费 fallback + 熔断保护)。
+        INSIGHTS slot 按 provider 注入免费 model, 此处去掉显式 model 字段。"""
+        from common.llm_router import call_chain, SLOT
+        from common.llm_metrics import llm_caller_context
 
         payload = {
-            "model": self.settings.llm_mapper_model,
             "messages": [
                 {
                     "role": "system",
@@ -552,14 +550,8 @@ class DataCleaner:
             "enable_thinking": False
         }
 
-        response = await self.client.post(
-            f"{self.settings.llm_base_url}/chat/completions",
-            headers=headers,
-            json=payload
-        )
-        response.raise_for_status()
-
-        result = response.json()
+        with llm_caller_context("data_cleaner_issue_detect"):
+            result = await call_chain(SLOT.INSIGHTS, payload)
         return result["choices"][0]["message"]["content"]
 
     def _parse_issue_response(self, response: str) -> List[CleaningIssue]:
@@ -698,14 +690,12 @@ def rule_function(data: List[Dict], columns: List[str]) -> int:
 """
 
     async def _call_llm_for_rule(self, prompt: str) -> str:
-        """调用 LLM 生成规则代码"""
-        headers = {
-            "Authorization": f"Bearer {self.settings.llm_api_key}",
-            "Content-Type": "application/json"
-        }
+        """调用 LLM 生成规则代码 (经免费链 call_chain — 免费 fallback + 熔断保护)。
+        INSIGHTS slot 按 provider 注入免费 model, 此处去掉显式 model 字段。"""
+        from common.llm_router import call_chain, SLOT
+        from common.llm_metrics import llm_caller_context
 
         payload = {
-            "model": self.settings.llm_mapper_model,
             "messages": [
                 {
                     "role": "system",
@@ -721,14 +711,8 @@ def rule_function(data: List[Dict], columns: List[str]) -> int:
             "enable_thinking": False
         }
 
-        response = await self.client.post(
-            f"{self.settings.llm_base_url}/chat/completions",
-            headers=headers,
-            json=payload
-        )
-        response.raise_for_status()
-
-        result = response.json()
+        with llm_caller_context("data_cleaner_rule_gen"):
+            result = await call_chain(SLOT.INSIGHTS, payload)
         return result["choices"][0]["message"]["content"]
 
     def _parse_and_execute_rule(self, rule_name: str, response: str) -> Optional[Callable]:
