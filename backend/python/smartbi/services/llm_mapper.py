@@ -264,22 +264,52 @@ class LLMMapper:
             Field mapping results
         """
         if not self.settings.llm_api_key:
-            # Fallback to rule-based mapping
+            # No LLM available — rules only.
             return self._rule_based_mapping(detected_fields)
 
+        # ── Rules-first (规则引擎必须准确): 规则先跑; 只信"高置信"映射 —— exact-alias(0.85) +
+        # date(0.8) 是确定性可靠的, 直接采用; amount/quantity/category 的语义"猜测"(0.7) 与
+        # substring(0.65) 不可靠, 连同未映射字段一起 fallback 给 LLM. 全部高置信 → 跳过 LLM. ──
+        rule_result = self._rule_based_mapping(detected_fields)
+        CONFIDENT = 0.8
+        confident_maps = [
+            m for m in rule_result.get("mappings", []) if (m.get("confidence") or 0) >= CONFIDENT
+        ]
+        confident_sources = {m["sourceField"] for m in confident_maps}
+        uncertain_fields = [
+            f for f in detected_fields if f.get("fieldName") not in confident_sources
+        ]
+
+        if not uncertain_fields:
+            logger.info(
+                "[map_fields] rules-first: 全部 %d 字段规则高置信映射, 跳过 LLM", len(detected_fields)
+            )
+            return {"success": True, "mappings": confident_maps, "unmapped": [], "method": "rules"}
+
+        # 只把不确定的字段交给 LLM (更小 prompt = 更少 token); 高置信字段保留规则结果.
+        logger.info(
+            "[map_fields] rules-first: %d/%d 字段规则高置信, %d 个 → LLM",
+            len(confident_sources), len(detected_fields), len(uncertain_fields),
+        )
         # P0 出境脱敏: 注册敏感字段样本值真名 → 出境占位 (输出是字段映射元数据, 无需还原).
         from common.llm_redactor import (
             register_values_for_egress, extract_sensitive_values_from_fields,
         )
-        register_values_for_egress(extract_sensitive_values_from_fields(detected_fields))
+        register_values_for_egress(extract_sensitive_values_from_fields(uncertain_fields))
 
-        prompt = self._build_mapping_prompt(detected_fields, context)
+        prompt = self._build_mapping_prompt(uncertain_fields, context)
 
         try:
             response = await self._call_llm(prompt)
-            return self._parse_mapping_response(response, detected_fields)
+            llm_result = self._parse_mapping_response(response, uncertain_fields)
+            return {
+                "success": True,
+                "mappings": confident_maps + (llm_result.get("mappings") or []),
+                "unmapped": llm_result.get("unmapped") or [],
+                "method": "rules+llm",
+            }
         except Exception as e:
-            logger.error(f"LLM mapping failed, using rule-based: {e}")
+            logger.error("LLM mapping failed for residual, using rule-based for all: %s", e)
             return self._rule_based_mapping(detected_fields)
 
     async def recommend_chart_config(
