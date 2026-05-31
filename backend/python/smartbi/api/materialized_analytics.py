@@ -282,6 +282,31 @@ async def trigger_materialization(upload_id: int, request: Request) -> Dict[str,
     else:
         domain_value = Domain.UNKNOWN.value
 
+    # LLM insight materialization (Fix2): mirror hooks._trigger_materialization
+    # so the manual / frontend re-materialize path ALSO upgrades the formulaic
+    # rule insight_text to rich LLM-generated content (现状/原因/建议). This is
+    # what lets EXISTING uploads get LLM-quality insights without a fresh upload.
+    # Must run BEFORE save so the rich insight lands in the persisted `insights`
+    # column. Wrapped: any failure leaves result.llm_insight=None → persistence
+    # falls back to rule insight_text (禁止降级处理: never store empty/fake).
+    try:
+        from smartbi.services.materialized_analytics.llm_materializer import (
+            generate_llm_insights,
+        )
+        t_llm = time.time()
+        exec_summary = await generate_llm_insights(results, domain_value)
+        logger.info(
+            f"[materialize] upload {upload_id}: LLM insight materialization done "
+            f"in {time.time() - t_llm:.1f}s"
+            f"{' (with executive summary)' if exec_summary else ''}"
+        )
+    except Exception as llm_err:
+        # Defensive — generate_llm_insights already swallows internally.
+        logger.warning(
+            f"[materialize] upload {upload_id}: LLM insight materialization "
+            f"failed (non-blocking): {llm_err}"
+        )
+
     saved = await save_materialization_results(
         pool, upload_id, user_factory, domain_value, results
     )
