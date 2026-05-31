@@ -40,6 +40,12 @@ class TemplateResult:
     insight_text: Optional[str] = None
     # Single sentence; stored as insights=[insight_text] in DB.
     # If a template needs multi-line insights, change to List[str] + update persistence.
+    llm_insight: Optional[str] = None
+    # Optional richer, LLM-generated insight produced at materialization time
+    # (see llm_materializer.py). When present, persistence stores this in place
+    # of insight_text so cache hits serve LLM-quality content at 0 query-token.
+    # When None (LLM unavailable / failed / partial), the rule insight_text is
+    # used as the durable fallback — NEVER store empty/fake content.
     applies: bool = True                              # False = schema doesn't match
     skip_reason: Optional[str] = None
     error: bool = False                               # True = compute() raised (skip_reason has details)
