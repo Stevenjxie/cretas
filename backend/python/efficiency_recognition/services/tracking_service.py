@@ -17,7 +17,6 @@
 - 无数据库时自动降级为内存存储
 """
 
-import os
 import json
 import uuid
 from datetime import datetime, timedelta
@@ -197,45 +196,37 @@ class WorkerTrackingService:
 仅返回 JSON，不要包含其他文字。"""
 
         try:
-            import httpx
-            client = httpx.Client(timeout=120.0)
+            # Route through the free-tier VL fallback chain (call_chain) instead
+            # of a direct DashScope httpx connection — gets circuit-breaker +
+            # multi-account free fallback. payload drops `model` (call_chain
+            # injects the SLOT.VL model per provider); vision messages preserved.
+            from common.llm_router import call_chain, SLOT
+            from common.llm_metrics import llm_caller_context
 
-            api_key = os.getenv("LLM_API_KEY", os.getenv("DASHSCOPE_API_KEY", ""))
-            base_url = os.getenv("LLM_VL_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1")
-            model = os.getenv("LLM_VL_MODEL", "qwen3-vl-plus-2025-12-19")
-
-            response = client.post(
-                f"{base_url}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {api_key}",
-                    "Content-Type": "application/json"
-                },
-                json={
-                    "model": model,
-                    "messages": [
-                        {
-                            "role": "user",
-                            "content": [
-                                {
-                                    "type": "image_url",
-                                    "image_url": {
-                                        "url": f"data:image/jpeg;base64,{image_base64}"
-                                    }
-                                },
-                                {
-                                    "type": "text",
-                                    "text": prompt
+            payload = {
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": f"data:image/jpeg;base64,{image_base64}"
                                 }
-                            ]
-                        }
-                    ],
-                    "max_tokens": 2000,
-                    "temperature": 0.2,
-                    "enable_thinking": False
-                }
-            )
-
-            result = response.json()
+                            },
+                            {
+                                "type": "text",
+                                "text": prompt
+                            }
+                        ]
+                    }
+                ],
+                "max_tokens": 2000,
+                "temperature": 0.2,
+                "enable_thinking": False,
+            }
+            with llm_caller_context("worker_tracking"):
+                result = await call_chain(SLOT.VL, payload)
 
             if "error" in result:
                 logger.error(f"VL API error: {result['error']}")

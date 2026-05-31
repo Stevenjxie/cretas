@@ -145,6 +145,13 @@ class QwenVLClient:
         else:
             use_model = self.default_model
 
+        # TODO BYPASS-UNFIXED: sync context, needs async refactor. QwenVLClient
+        # is a synchronous httpx.Client used by deep sync call chains
+        # (efficiency_recognition photo/recording/routes + multi_stream_sampler,
+        # all outside this lane). Routing through call_chain(SLOT.VL) requires
+        # making analyze()/analyze_with_context() async and awaiting them up the
+        # whole chain — too risky to change here. Left direct for now; efficiency
+        # VL (offline video analysis) can be migrated to call_chain separately.
         try:
             response = self.client.post(
                 f"{self.base_url}/chat/completions",
@@ -232,6 +239,10 @@ class QwenVLClient:
         else:
             use_model = ModelConfig.DEEP_REASONING
 
+        # TODO BYPASS-UNFIXED: sync context, needs async refactor. Same as
+        # analyze() above — QwenVLClient sync httpx.Client called by deep sync
+        # chains outside this lane. Migrate to call_chain(SLOT.VL) when the
+        # efficiency VL path is converted to async end-to-end.
         try:
             response = self.client.post(
                 f"{self.base_url}/chat/completions",
