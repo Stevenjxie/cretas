@@ -352,18 +352,21 @@ _SOFT_MODIFIERS = (
 # (precise, low false-positive), and entries are restricted to short phrases
 # that the existing _PATTERNS already fail on.
 #
-# Each entry: (substring_to_match, template_code). First match wins, so
-# place more-specific phrases before broader ones. Substrings must be
-# distinctive enough that a substring hit reliably implies the intent.
+# Each entry: (substring_to_match, template_code). First match wins.
+#
+# ⛔ ORDER PRINCIPLE (2026-05-31 fix — audit found a misroute): place
+# METRIC-intent phrases (翻台率 / 退款 / 客户分层 …) BEFORE the broader
+# TIME/DIMENSION-modifier phrases (时段 / 各时段 …). Why: a combined query like
+# "各时段的翻台率" has 翻台率 as the actual METRIC and 各时段 as a mere breakdown
+# dimension — the metric must win. With the time-slot group listed first +
+# first-match-wins, "各时段..." matched 各时段 → time_slot_revenue, delivering
+# revenue-by-slot instead of the turnover-rate the user asked for. Keeping the
+# time-slot group LAST means a metric phrase in the same query is matched first
+# (correct), while a bare "各时段营收" still falls through to time_slot_revenue
+# (no metric phrase present). Substrings must stay distinctive enough that a
+# hit reliably implies the intent.
 _PHRASE_SHORTCUTS: List[Tuple[str, str]] = [
-    # ── 时段营收 / 营业时段 → time_slot_revenue (materialized) ──
-    # _PATTERNS time_slot_revenue needs group-2 (营业额/营收/门店/区域…); bare
-    # "营业时段" / "时段营收" miss it. Both clearly mean per-slot revenue.
-    ("时段营收", "time_slot_revenue"),
-    ("营业时段", "time_slot_revenue"),
-    ("分时段", "time_slot_revenue"),
-    ("各时段", "time_slot_revenue"),
-    # ── 退款 / 退单 → refund_analysis (materialized) ──
+    # ── 退款 / 退单 → refund_analysis (materialized) ── [METRIC]
     # _PATTERNS refund_analysis group-1 has 退菜/退单/撤单/损耗/损失 but group-2
     # requires 分析/统计/次数/多少 — bare "退款"/"退单" miss both. "退款" not
     # even in group-1. Map common refund colloquialisms here.
@@ -371,12 +374,12 @@ _PHRASE_SHORTCUTS: List[Tuple[str, str]] = [
     ("退单", "refund_analysis"),
     ("退菜", "refund_analysis"),
     ("撤单", "refund_analysis"),
-    # ── 翻台 / 翻台率 → business_overview_summary (materializes 翻台率 KPI) ──
+    # ── 翻台 / 翻台率 → business_overview_summary (materializes 翻台率 KPI) ── [METRIC]
     # No _PATTERNS entry covers turn-rate at all; 翻台率 is a KPI inside the
     # 营业概况 (business_overview_summary) template.
     ("翻台率", "business_overview_summary"),
     ("翻台", "business_overview_summary"),
-    # ── 客户分层 / 会员分层 → store_customer_stratification (materialized) ──
+    # ── 客户分层 / 会员分层 → store_customer_stratification (materialized) ── [METRIC]
     # _PATTERNS store_customer_stratification group-1 needs 门店/客单/几人/人数;
     # bare "客户分层"/"会员分层" miss it. Maps to the per-store party-size /
     # customer-stratification template.
@@ -384,6 +387,14 @@ _PHRASE_SHORTCUTS: List[Tuple[str, str]] = [
     ("会员分层", "store_customer_stratification"),
     ("客单分层", "store_customer_stratification"),
     ("人数分层", "store_customer_stratification"),
+    # ── 时段营收 / 营业时段 → time_slot_revenue (materialized) ── [TIME/DIM — keep LAST]
+    # _PATTERNS time_slot_revenue needs group-2 (营业额/营收/门店/区域…); bare
+    # "营业时段" / "时段营收" miss it. Both clearly mean per-slot revenue. Listed
+    # AFTER the metric groups so a combined "各时段的<metric>" routes to the metric.
+    ("时段营收", "time_slot_revenue"),
+    ("营业时段", "time_slot_revenue"),
+    ("分时段", "time_slot_revenue"),
+    ("各时段", "time_slot_revenue"),
 ]
 
 

@@ -139,6 +139,32 @@ def test_phrase_shortcut_function_direct():
     assert match_phrase_shortcut(None) is None
 
 
+def test_phrase_shortcut_metric_beats_time_dimension():
+    """2026-05-31 audit fix: a combined query containing BOTH a metric phrase
+    and the broad 时段/各时段 modifier must route to the METRIC, not time_slot.
+
+    Pre-fix bug: 各时段 (time_slot_revenue) was listed before 翻台率
+    (business_overview_summary) + first-match-wins → "各时段的翻台率" wrongly
+    returned time_slot_revenue (revenue-by-slot) instead of the turnover-rate
+    template. Metric groups now precede the time-slot group.
+    """
+    from smartbi.services.materialized_analytics.query_router import (
+        match_phrase_shortcut,
+    )
+    # METRIC must win over the time/dimension modifier
+    assert match_phrase_shortcut("各时段的翻台率") == "business_overview_summary"
+    assert match_phrase_shortcut("各时段翻台情况") == "business_overview_summary"
+    assert match_phrase_shortcut("分时段退款") == "refund_analysis"
+    assert match_phrase_shortcut("各时段客户分层") == "store_customer_stratification"
+    # Standalone time-slot queries (no metric phrase) STILL route to time_slot
+    assert match_phrase_shortcut("各时段营收") == "time_slot_revenue"
+    assert match_phrase_shortcut("时段营收") == "time_slot_revenue"
+    assert match_phrase_shortcut("营业时段") == "time_slot_revenue"
+    # Standalone metric queries unaffected
+    assert match_phrase_shortcut("翻台率") == "business_overview_summary"
+    assert match_phrase_shortcut("退款") == "refund_analysis"
+
+
 def test_format_cached_no_chart_config():
     tpl = {
         "code": "anomaly_detection", "title": "异常值检测",
