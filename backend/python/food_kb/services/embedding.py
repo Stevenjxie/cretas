@@ -4,6 +4,23 @@ Embedding service for food knowledge base using DashScope text-embedding-v3.
 
 Uses OpenAI-compatible API (DashScope) to generate 768-dim vectors.
 Reuses llm_api_key + llm_base_url from SmartBI config.
+
+⚠️ DOES NOT route through common.llm_router.call_chain — embedding is a
+SEPARATE DashScope API + billing pool from the chat-slot LLMs (CHAT/INSIGHTS/
+CHART/...). call_chain only injects chat models (qwen-flash, glm-5, ...), which
+cannot serve /embeddings. So the chat免费链 (c→b→a→zhipu fallback + circuit
+breaker) does NOT apply here; this stays a direct DashScope embeddings call.
+
+text-embedding-v3 免费额度确认 (2026-06-01 live probe, prod keys LLM_ALIYUN_C /
+LLM_ALIYUN_A):
+    POST /compatible-mode/v1/embeddings {"model":"text-embedding-v3", ...}
+    → HTTP 200 on both aliyun_C and aliyun_A (working, NOT exhausted).
+DashScope grants text-embedding-v3 its own free quota (independent of the
+chat-LLM 免费清单 in memory reference_dashscope_free_model_allowlist). When that
+free quota exhausts, DashScope returns 403 AllocationQuota.FreeTierOnly — which
+we now log at WARNING (see get_embedding error handler) so exhaustion is loud,
+not buried in a generic ERROR. Re-audit when food-KB ingest/search RAG starts
+emitting 403 quota WARNINGs.
 """
 
 import logging
@@ -65,6 +82,22 @@ async def get_embedding(text: str) -> Optional[List[float]]:
         embedding = data["data"][0]["embedding"]
         return embedding
 
+    except httpx.HTTPStatusError as e:
+        # Surface 403 AllocationQuota.FreeTierOnly distinctly so free-quota
+        # exhaustion is loud (not buried in a generic ERROR). Still degrade
+        # gracefully (return None) — caller (RAG retriever) handles a missing
+        # vector by falling back to BM25 / keyword search.
+        body = e.response.text[:200] if e.response is not None else ""
+        status = e.response.status_code if e.response is not None else "?"
+        if status == 403 and ("FreeTierOnly" in body or "AllocationQuota" in body):
+            logger.warning(
+                f"Embedding text-embedding-v3 FREE-TIER EXHAUSTED "
+                f"(403 AllocationQuota.FreeTierOnly): {body} — "
+                f"re-audit DashScope embedding free quota"
+            )
+        else:
+            logger.error(f"Embedding generation failed (HTTP {status}): {body}")
+        return None
     except Exception as e:
         logger.error(f"Embedding generation failed: {e}")
         return None
@@ -105,6 +138,21 @@ async def get_embeddings_batch(texts: List[str], batch_size: int = 20) -> List[O
             for item in data["data"]:
                 idx = i + item["index"]
                 results[idx] = item["embedding"]
+        except httpx.HTTPStatusError as e:
+            # Distinct WARNING on 403 free-tier exhaustion (see get_embedding).
+            body = e.response.text[:200] if e.response is not None else ""
+            status = e.response.status_code if e.response is not None else "?"
+            if status == 403 and ("FreeTierOnly" in body or "AllocationQuota" in body):
+                logger.warning(
+                    f"Batch embedding text-embedding-v3 FREE-TIER EXHAUSTED "
+                    f"(403 AllocationQuota.FreeTierOnly) at batch {i}: {body} — "
+                    f"re-audit DashScope embedding free quota"
+                )
+            else:
+                logger.error(
+                    f"Batch embedding failed for batch starting at {i} "
+                    f"(HTTP {status}): {body}"
+                )
         except Exception as e:
             logger.error(f"Batch embedding failed for batch starting at {i}: {e}")
 
