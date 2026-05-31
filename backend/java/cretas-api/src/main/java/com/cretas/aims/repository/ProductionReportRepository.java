@@ -353,4 +353,37 @@ public interface ProductionReportRepository extends JpaRepository<ProductionRepo
             @Param("factoryId") String factoryId,
             @Param("processCategory") String processCategory,
             @Param("sinceDate") LocalDate sinceDate);
+
+    // ==================== Phase A 出成率 (report_type='YIELD') ====================
+
+    /** 某批次全部 YIELD 报工 (按工序序), 出成率派生用 */
+    @Query("SELECT r FROM ProductionReport r WHERE r.factoryId = :factoryId "
+            + "AND r.batchId = :batchId AND r.reportType = 'YIELD' AND r.deletedAt IS NULL "
+            + "ORDER BY r.processOrder ASC, r.createdAt ASC")
+    List<ProductionReport> findYieldReportsByBatch(@Param("factoryId") String factoryId,
+                                                   @Param("batchId") Long batchId);
+
+    /** 某工序任务的全部 YIELD 报工 (一道工序可 N 条分次报) */
+    @Query("SELECT r FROM ProductionReport r WHERE r.factoryId = :factoryId "
+            + "AND r.workProcessTaskId = :taskId AND r.reportType = 'YIELD' AND r.deletedAt IS NULL "
+            + "ORDER BY r.createdAt ASC")
+    List<ProductionReport> findYieldReportsByTask(@Param("factoryId") String factoryId,
+                                                  @Param("taskId") Long taskId);
+
+    /**
+     * 权威规则: 该批次是否已有 YIELD 报工 (有则 YIELD 是产出权威源, 老报工端点应拒绝).
+     * <p>暂未 wire — 留给 Phase D: RN 从 /process-work-reporting 切到 YIELD API 前,
+     * 用它做老/新端点同批次互斥校验 (spec §9.6/§9.7). Phase A report_type 物理隔离已防派生污染,
+     * RN 未接, 故互斥护栏 deferred 不阻塞。
+     */
+    boolean existsByFactoryIdAndBatchIdAndReportTypeAndDeletedAtIsNull(
+            String factoryId, Long batchId, String reportType);
+
+    /** 某批次某日未结清的 YIELD 报工 (每日结清打标用) */
+    @Query("SELECT r FROM ProductionReport r WHERE r.factoryId = :factoryId "
+            + "AND r.batchId = :batchId AND r.reportType = 'YIELD' "
+            + "AND r.reportDate = :date AND r.settled = false AND r.deletedAt IS NULL")
+    List<ProductionReport> findUnsettledYieldReports(@Param("factoryId") String factoryId,
+                                                     @Param("batchId") Long batchId,
+                                                     @Param("date") LocalDate date);
 }
