@@ -57,9 +57,11 @@ async def test_cache_miss_calls_llm(monkeypatch):
 
     monkeypatch.setattr(lm, "_get_cached_teacher_output", _no_cache)
     monkeypatch.setattr("smartbi.services.insights.llm_client.call_llm", _real)
+
     # 缓存 miss 时会尝试写 distillation; mock 掉避免 DB
     async def _noop(**k):
         return None
+
     monkeypatch.setattr(lm, "_persist_distillation_sample", _noop)
 
     r = _result("X")
