@@ -151,6 +151,60 @@ public class ProductionReport {
     @Column(name = "notes", length = 500)
     private String notes;
 
+    // ==================== Phase A 报工事实层 (report_type='YIELD') ====================
+
+    /** 对应工序任务 (关联 WorkProcessTask.id);权威规则: 有 YIELD report 的批次以此为产出权威源 */
+    @Column(name = "work_process_task_id")
+    private Long workProcessTaskId;
+
+    /** 工序序 (冗余 WorkProcessTask.processOrder, 便于按序聚合出成率) */
+    @Column(name = "process_order")
+    private Integer processOrder;
+
+    /** 产品类型 id (冗余, 便于跨批归因) */
+    @Column(name = "product_type_id", length = 100)
+    private String productTypeId;
+
+    /** 本道投入量 (中道=实际上料, 预填上道产出可改; 首道=feedInQuantity) */
+    @Column(name = "input_quantity", precision = 12, scale = 2)
+    private BigDecimal inputQuantity;
+
+    @Column(name = "input_unit", length = 16)
+    private String inputUnit;
+
+    /** 产出单位 (可能 != inputUnit, 如装盒 kg→盒) */
+    @Column(name = "output_unit", length = 16)
+    private String outputUnit;
+
+    /** 本道余料结转 = 上道产出 − 本道投入 (张权 A2b; Phase A 仅记录值不进库存) */
+    @Column(name = "carryover_quantity", precision = 12, scale = 2)
+    private BigDecimal carryoverQuantity;
+
+    /** 跨批料来源 (张权 A3): [{"source_batch_id":Long,"source_work_process_task_id":Long|null,"quantity_from_source":Number,"source_unit":String}] */
+    @Type(JsonType.class)
+    @Column(name = "source_batch_refs", columnDefinition = "jsonb")
+    private List<Map<String, Object>> sourceBatchRefs;
+
+    /** 领料出库量 (张权 A1, 如 998; 仅首道领料填) */
+    @Column(name = "warehouse_out_quantity", precision = 12, scale = 2)
+    private BigDecimal warehouseOutQuantity;
+
+    /** 领料投料量 (张权 A1, 如 935.5; 与出库量差额是对账缺口) */
+    @Column(name = "feed_in_quantity", precision = 12, scale = 2)
+    private BigDecimal feedInQuantity;
+
+    /** 工序批次号 (张权 A6, 系统生成, 工厂内唯一) */
+    @Column(name = "intermediate_batch_no", length = 64)
+    private String intermediateBatchNo;
+
+    /** 是否已结清 (每日结清打标) */
+    @Column(name = "settled")
+    @Builder.Default
+    private Boolean settled = false;
+
+    @Column(name = "settled_at")
+    private LocalDateTime settledAt;
+
     @Column(name = "reversal_of_id")
     private Long reversalOfId;
 
