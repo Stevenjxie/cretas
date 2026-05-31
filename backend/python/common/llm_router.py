@@ -179,6 +179,17 @@ class SLOT(str, Enum):
 #             even if the API allows it. If quota on these 7 ever exhausts,
 #             fall through to aliyun_b/a per the chain — do not silently swap
 #             in another C-account SKU.
+#
+#             ↑ RE-CONFIRMED + EXPANDED (Steve May 31 2026): c's original cheap
+#             SKUs (qwen-flash CHAT/INSIGHTS, qwen-turbo CHART/MAPPER,
+#             deepseek-v4-pro REASONING) hit FREE-TIER EXHAUSTED (403
+#             AllocationQuota.FreeTierOnly). Live probe confirmed these strong
+#             SKUs have INTACT free pools on C and Steve approved adding them to
+#             the c allowlist: qwen-plus (CHAT), qwen3-max (INSIGHTS/CHART),
+#             qwen3-235b-a22b (MAPPER), deepseek-v3 (REASONING). VL
+#             (qwen3-vl-plus-2025-12-19) + REVIEW (qwen3-max-2026-01-23) still
+#             intact, unchanged. The "do not silently swap" rule still holds —
+#             any FURTHER c SKU change needs Steve re-confirm + a fresh probe.
 #   aliyun_b: qwen-max (CHAT), qwen3.6-35b-a3b (INSIGHTS), glm-5 (CHART),
 #             qwen3.5-122b-a10b (MAPPER), qwen3.5-397b-a17b (REASONING),
 #             qwen3-vl-plus-2025-12-19 (VL), qwen-max (REVIEW — May 14 fix:
@@ -215,35 +226,35 @@ class SLOT(str, Enum):
 # ERROR before exhausting cleanly.
 SLOT_MODELS: Dict[SLOT, Dict[str, Optional[str]]] = {
     SLOT.CHAT: {
-        "aliyun_c":          "qwen-flash",                # ✅ May 14 benchmark winner: 1.4s median, clean concise output, no hallucination (deepseek-v4-flash was 15s + hallucinated specifics)  # noqa: E501
+        "aliyun_c":          "qwen-plus",                 # May 31 2026 (Steve re-confirm c allowlist update): qwen-flash FREE-TIER EXHAUSTED on C (403). qwen-plus free-pool intact on C, faster than qwen3-max for interactive CHAT. c is chain head → consumes first.  # noqa: E501
         "aliyun_b":          "qwen-flash",                # May 31 2026 swap: qwen-max FREE-TIER EXHAUSTED on B (403 AllocationQuota.FreeTierOnly). qwen-flash free-pool intact on B + is CHAT slot benchmark winner (1.4s concise). c's qwen-flash also exhausted → b is effective head.  # noqa: E501
         "aliyun_a":          "qwen3-max",                 # May 31 2026 swap: qwen3.6-max-preview EXHAUSTED on A (403). qwen3-max (旗舰) free-pool intact on ALL 3 accounts (independent of the 3.6-preview pool) → flagship-quality fallback.  # noqa: E501
         "zhipu":             "glm-4.5-air",               # 6.5M independent pool (NOT in 通用池 which is 0)
         "aliyun_a_deepseek": "deepseek-v4-pro",           # DashScope-hosted, free 999K on aliyun_a key
     },
     SLOT.INSIGHTS: {
-        "aliyun_c":          "qwen-flash",                # ✅ May 14 benchmark winner: 1.2s median, 1-sentence精炼洞察(26 tokens). Cleanest of 5 candidates. (May 31: c free-tier exhausted → falls through to b.)  # noqa: E501
+        "aliyun_c":          "qwen3-max",                 # May 31 2026 (Steve re-confirm c allowlist): qwen-flash EXHAUSTED on C (403). qwen3-max free on C — INSIGHTS is offline materialization (Fix2 rich attribution) → flagship quality, c head consumes first.  # noqa: E501
         "aliyun_b":          "qwen3-max",                 # May 31 2026 swap: qwen3.6-35b-a3b EXHAUSTED on B (403). qwen3-max (旗舰) free on ALL 3 accts; INSIGHTS is offline materialization (Fix2 rich-attribution insights) → flagship quality > speed.  # noqa: E501
         "aliyun_a":          "qwen3-max",                 # May 31 2026 swap: qwen3.6-35b-a3b EXHAUSTED on A (403). qwen3-max free-pool intact on A.  # noqa: E501
         "zhipu":             "glm-4.5-air",               # 6.5M independent pool
         "aliyun_a_deepseek": "deepseek-v4-pro",
     },
     SLOT.CHART: {
-        "aliyun_c":          "qwen-turbo",                # ✅ May 14 benchmark winner: 1.1s median, valid compact JSON. glm-5 was 60s, glm-4.5-air 400'd, deepseek-v4-flash mismatched xAxis/title.  # noqa: E501
+        "aliyun_c":          "qwen3-max",                 # May 31 2026 (Steve re-confirm c allowlist): qwen-turbo EXHAUSTED on C (403). qwen3-max free on C, reliable structured JSON (CHART not interactive). On any malformed JSON, b glm-5 catches.  # noqa: E501
         "aliyun_b":          "glm-5",                     # 875K intact B (May 31 probe: still OK — chain catches here)
         "aliyun_a":          "qwen-turbo",                # May 31 2026 swap: glm-5 EXHAUSTED on A (403). qwen-turbo free on A + is CHART benchmark winner (valid compact JSON). Redundancy only — b glm-5 catches first.  # noqa: E501
         "zhipu":             "glm-4.5-air",
         "aliyun_a_deepseek": "deepseek-v4-pro",
     },
     SLOT.MAPPER: {
-        "aliyun_c":          "qwen-turbo",                # ✅ May 14 benchmark winner: 1.2s median, correct mapping direction (original-col → standard-field). qwen-flash flipped direction; deepseek-v4-flash wrapped in ```json``` (needs extra parse).  # noqa: E501
+        "aliyun_c":          "qwen3-235b-a22b",           # May 31 2026 (Steve re-confirm c allowlist): qwen-turbo EXHAUSTED on C (403). qwen3-235b-a22b (big MoE) free on C — strong enough for correct mapping direction. b qwen3.5-122b-a10b catches on any issue.  # noqa: E501
         "aliyun_b":          "qwen3.5-122b-a10b",         # 998K intact (May 31 probe: still OK — chain catches here)
         "aliyun_a":          "qwen-turbo",                # May 31 2026 swap: qwen3.5-122b-a10b EXHAUSTED on A (403). qwen-turbo free on A + is MAPPER benchmark winner (correct mapping direction). Redundancy — b catches first.  # noqa: E501
         "zhipu":             "glm-4.5-air",
         "aliyun_a_deepseek": "deepseek-v4-pro",
     },
     SLOT.REASONING: {
-        "aliyun_c":          "deepseek-v4-pro",           # ✅ May 14 benchmark winner: 22.7s but best depth+structure. Acceptable latency for REASONING (non-interactive). qwen3-max @16s was simpler; deepseek-r1 @43s too slow.  # noqa: E501
+        "aliyun_c":          "deepseek-v3",               # May 31 2026 (Steve re-confirm c allowlist): deepseek-v4-pro EXHAUSTED on C (403). deepseek-v3 free on C — deepseek-class depth, non-interactive REASONING. b qwen3.5-397b-a17b catches on any issue.  # noqa: E501
         "aliyun_b":          "qwen3.5-397b-a17b",         # 974K intact (May 31 probe: still OK — chain catches here)
         "aliyun_a":          "qwen3-235b-a22b",           # May 31 2026 swap: qwen3.5-397b-a17b EXHAUSTED on A (403). qwen3-235b-a22b (big MoE) free on A — strong reasoning. Redundancy — b catches first.  # noqa: E501
         "zhipu":             "glm-4.5-air",
