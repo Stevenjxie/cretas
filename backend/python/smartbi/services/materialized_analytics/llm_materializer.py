@@ -28,8 +28,10 @@ content. The whole call is wrapped so a failure only logs a warning and leaves
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
+import os
 from typing import Any, Dict, List, Optional
 
 from .templates.base import TemplateResult
@@ -117,12 +119,16 @@ def _build_prompt(
 async def generate_llm_insights(
     results: List[TemplateResult],
     domain: str,
+    factory_id: Optional[str] = None,
 ) -> Optional[str]:
     """Generate rich LLM insights for all applicable templates (single call).
 
     Mutates ``results`` in place: sets ``result.llm_insight`` for each template
     the LLM produced an insight for. Returns the executive summary string (or
     ``None`` if generation failed / produced nothing).
+
+    ``factory_id`` (optional) only tags the distillation training sample
+    captured on success — it does not affect insight generation.
 
     NEVER raises — all failures are swallowed and leave ``llm_insight=None`` so
     the caller's persistence falls back to the deterministic ``insight_text``.
@@ -204,5 +210,107 @@ async def generate_llm_insights(
         f"[llm-mat] LLM insights applied to {applied}/{len(applicable)} templates"
         f"{' + executive summary' if exec_summary else ''}"
     )
+
+    # Distillation data pipeline: capture the (structured input → teacher output)
+    # pair for future vertical-model distillation. Only when the teacher produced
+    # usable output (applied > 0). Fire-and-forget, fully swallowed — NEVER let
+    # training-data capture affect insight generation or materialization.
+    if applied > 0:
+        try:
+            await _persist_distillation_sample(
+                prompt=prompt,
+                system_prompt=_SYSTEM_ROLE,
+                teacher_output=raw,
+                business_type=domain,
+                factory_id=factory_id,
+                template_codes=[r.code for r in applicable],
+                applied=applied,
+                total=len(applicable),
+            )
+        except Exception as e:  # belt-and-suspenders; helper already swallows
+            logger.debug(f"[llm-mat] distillation capture skipped: {e}")
+
     # If the LLM produced nothing usable, signal nothing applied (rule survives).
     return exec_summary
+
+
+async def _persist_distillation_sample(
+    *,
+    prompt: str,
+    system_prompt: str,
+    teacher_output: str,
+    business_type: str,
+    factory_id: Optional[str],
+    template_codes: List[str],
+    applied: int,
+    total: int,
+) -> None:
+    """Write one distillation training sample. Fire-and-forget, never raises.
+
+    Persists the (structured-input → strong-teacher-output) pair into
+    ``smart_bi_distillation_samples`` so it can later be exported (bucketed by
+    business_type) and used to distill / fine-tune a vertical model. Idempotent
+    on ``input_hash`` — re-materializing the same upload refreshes the row's
+    teacher_output instead of stacking near-duplicate samples.
+
+    Gated by env ``SMARTBI_DISTILL_CAPTURE`` (default on; set to "0" to disable
+    without a redeploy).
+    """
+    if os.getenv("SMARTBI_DISTILL_CAPTURE", "1") == "0":
+        return
+    try:
+        from smartbi.config import get_pg_pool
+        pool = await get_pg_pool()
+        if pool is None:
+            return
+        input_hash = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
+        # INSIGHTS slot primary model is qwen3-max on all 3 aliyun accounts
+        # (post PR #331/#333); a small fraction may fall back to zhipu/glm-4.5-air
+        # — recorded in metadata, verifiable against llm_router logs by timestamp.
+        teacher_model = "qwen3-max"
+        metadata = json.dumps(
+            {
+                "slot": "insights",
+                "applied": applied,
+                "total_applicable": total,
+                "teacher_model_note": "INSIGHTS-slot primary qwen3-max; rare zhipu fallback possible",
+            },
+            ensure_ascii=False,
+        )
+        sql = """
+            INSERT INTO smart_bi_distillation_samples (
+                source, business_type, factory_id, task_type, template_codes,
+                system_prompt, input_text, teacher_model, teacher_output,
+                input_hash, metadata
+            ) VALUES (
+                'materialization', $1, $2, 'insights', $3,
+                $4, $5, $6, $7,
+                $8, $9::jsonb
+            )
+            ON CONFLICT (input_hash) DO UPDATE SET
+                teacher_output = EXCLUDED.teacher_output,
+                teacher_model  = EXCLUDED.teacher_model,
+                template_codes = EXCLUDED.template_codes,
+                metadata       = EXCLUDED.metadata,
+                created_at     = NOW()
+        """
+        async with pool.acquire() as conn:
+            await conn.execute(
+                sql,
+                (business_type or "unknown"),
+                factory_id,
+                ",".join(template_codes),
+                system_prompt,
+                prompt,
+                teacher_model,
+                teacher_output,
+                input_hash,
+                metadata,
+            )
+        logger.debug(
+            f"[distill] captured sample (business_type={business_type}, "
+            f"factory={factory_id}, templates={len(template_codes)})"
+        )
+    except Exception as e:
+        # Training-data capture is best-effort. Never propagate.
+        logger.warning(f"[distill] sample capture failed (non-blocking): {e}")

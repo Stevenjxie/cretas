@@ -294,7 +294,7 @@ async def trigger_materialization(upload_id: int, request: Request) -> Dict[str,
             generate_llm_insights,
         )
         t_llm = time.time()
-        exec_summary = await generate_llm_insights(results, domain_value)
+        exec_summary = await generate_llm_insights(results, domain_value, factory_id=user_factory)
         logger.info(
             f"[materialize] upload {upload_id}: LLM insight materialization done "
             f"in {time.time() - t_llm:.1f}s"
