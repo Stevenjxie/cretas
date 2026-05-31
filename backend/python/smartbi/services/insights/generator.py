@@ -258,8 +258,9 @@ class InsightGenerator:
                 self._parse_llm_insights(full_response, stat_insights),
                 _scope.placeholder_map,
             )  # P0: 还原 done 事件里的真名
-            from .fact_reconciler import reconcile_insights
-            parsed = reconcile_insights(parsed, metrics)  # 阶段2 grounding
+            from .fact_reconciler import reconcile_insights, overall_ratio_facts
+            # 阶段2 grounding: 调用方 metrics + Python 自算的整体口径比率 (毛利率/净利率)
+            parsed = reconcile_insights(parsed, (metrics or []) + overall_ratio_facts(df))
             done_result = {
                 "success": True,
                 "insights": parsed,
@@ -406,9 +407,9 @@ class InsightGenerator:
                 model_override=self.model_override,
             )
             parsed = restore_in_scope(self._parse_llm_insights(response, stat_insights))
-            # 阶段2 grounding: 用确定性 metrics 对账 LLM 数字 (无 metrics → no-op)
-            from .fact_reconciler import reconcile_insights
-            return reconcile_insights(parsed, metrics)
+            # 阶段2 grounding: 调用方 metrics + Python 自算的整体口径比率 (毛利率/净利率) 对账
+            from .fact_reconciler import reconcile_insights, overall_ratio_facts
+            return reconcile_insights(parsed, (metrics or []) + overall_ratio_facts(df))
 
         except Exception as e:
             logger.error("LLM insight generation failed: %s", e, exc_info=True)

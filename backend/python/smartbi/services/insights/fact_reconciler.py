@@ -71,6 +71,53 @@ def build_factbook_from_metrics(metrics: Optional[List[dict]]) -> FactBook:
     return fb
 
 
+def overall_ratio_facts(df: Any) -> List[dict]:
+    """从 df 的损益行项目算"整体"口径单值比率 (毛利率/净利率), 返回 metrics-shaped dicts
+    喂给对账器 —— 这是 Python 自己算的确定性指标 (无需 Java/RPC)。
+
+    安全铁律 (算错比不算更糟): 只在能**唯一**识别营收/成本/净利行时算; 任一关键词匹配到
+    0 行或 >1 行 → 视为歧义, 整体放弃返回 []。配合 _number_after 的干净边界 guard,
+    只会纠正"毛利率38%"这类整体口径提及, 不碰"门店甲毛利率38%"。
+    """
+    try:
+        import numpy as np
+        import pandas as pd
+    except Exception:
+        return []
+    if df is None or getattr(df, "empty", True):
+        return []
+    try:
+        text_cols = df.select_dtypes(include=["object"]).columns
+        numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+        if len(text_cols) == 0 or not numeric_cols:
+            return []
+        labels = df[text_cols[0]].astype(str).str.strip()
+
+        def _row_total(keywords: List[str]) -> Optional[float]:
+            pat = "|".join(re.escape(k) for k in keywords)
+            mask = labels.str.contains(pat, regex=True, na=False)
+            idxs = mask[mask].index
+            if len(idxs) != 1:            # 0 行 → 无; >1 行 → 歧义 → 放弃
+                return None
+            row = df.loc[idxs[0], numeric_cols]
+            vals = [float(v) for v in row if pd.notna(v) and isinstance(v, (int, float, np.number))]
+            return sum(vals) if vals else None
+
+        rev = _row_total(["营业收入", "主营业务收入"])
+        if rev is None or rev <= 0:
+            return []
+        facts: List[dict] = []
+        net = _row_total(["净利润", "利润总额"])
+        if net is not None:
+            facts.append({"name": "净利率", "value": round(net / rev * 100, 2), "unit": "%", "success": True})
+        cost = _row_total(["营业成本", "主营业务成本"])
+        if cost is not None:
+            facts.append({"name": "毛利率", "value": round((rev - cost) / rev * 100, 2), "unit": "%", "success": True})
+        return facts
+    except Exception:
+        return []
+
+
 def _fmt(value: Decimal, unit: str) -> str:
     q = value.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
     # 整数去小数尾
@@ -80,25 +127,41 @@ def _fmt(value: Decimal, unit: str) -> str:
     return f"{s}{unit}"
 
 
+# 指标名前若紧跟非边界字 (尤其 CJK), 说明被限定了 (如"门店甲毛利率"=某店的, 非整体口径),
+# 整体事实表不该改它 → 只在干净边界处的指标名才算"整体口径"命中, 避免误改某实体局部值。
+_CLEAN_PREFIX = set(" 　\t\r\n。，、；：（）()[]【】{}/|<>《》\"'`-—~,.:;!?")
+
+
+def _is_clean_prefix(ch: str) -> bool:
+    return ch in _CLEAN_PREFIX or ch.isdigit()
+
+
 def _number_after(text: str, name: str, start_from: int = 0):
-    """在 name 后紧跟处取数字。返回 (decimal_value, span_start, span_end) 或 (None, -1, -1)。"""
-    idx = text.find(name, start_from)
-    if idx < 0:
-        return None, -1, -1
-    after_off = idx + len(name)
-    m = _NUM_AFTER.match(text[after_off:])
-    if not m:
-        return None, -1, -1
-    raw = m.group(1).replace(",", "")
-    try:
-        val = Decimal(raw)
-    except InvalidOperation:
-        return None, -1, -1
-    if m.group(2):
-        val *= _UNIT_MULT[m.group(2)]
-    num_start = after_off + m.start(1)
-    num_end = after_off + (m.end(2) if m.group(2) else m.end(1))
-    return val, num_start, num_end
+    """在 name 后紧跟处取数字 (且 name 处于干净边界=整体口径)。
+
+    返回 (decimal_value, span_start, span_end) 或 (None, -1, -1)。
+    被前缀限定的 name (如 '门店甲毛利率' 里的 '毛利率') 跳过, 防误改某实体局部值。
+    """
+    search = start_from
+    while True:
+        idx = text.find(name, search)
+        if idx < 0:
+            return None, -1, -1
+        if idx == 0 or _is_clean_prefix(text[idx - 1]):
+            after_off = idx + len(name)
+            m = _NUM_AFTER.match(text[after_off:])
+            if m:
+                raw = m.group(1).replace(",", "")
+                try:
+                    val = Decimal(raw)
+                    if m.group(2):
+                        val *= _UNIT_MULT[m.group(2)]
+                    num_start = after_off + m.start(1)
+                    num_end = after_off + (m.end(2) if m.group(2) else m.end(1))
+                    return val, num_start, num_end
+                except InvalidOperation:
+                    pass
+        search = idx + 1  # 本次出现被限定或无数字 → 试下一次出现
 
 
 def _rel_diff(a: Decimal, b: Decimal) -> Decimal:

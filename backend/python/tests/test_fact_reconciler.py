@@ -3,14 +3,67 @@ from __future__ import annotations
 
 from decimal import Decimal
 
+import pandas as pd
+
 from smartbi.services.insights.fact_reconciler import (
     build_factbook_from_metrics,
+    overall_ratio_facts,
     reconcile_insights,
 )
 
 
 def _ins(text, **kw):
     return [{"type": "kpi", "text": text, **kw}]
+
+
+# ── 边界 guard: 被实体限定的指标名不纠正 (整体 35% 不改 门店甲的 38%) ──────────
+def test_guard_skips_entity_qualified_metric():
+    metrics = [{"name": "毛利率", "value": 35, "unit": "%", "success": True}]
+    # "门店甲毛利率38%" 中的毛利率被"甲"限定 = 某店的, 不是整体 → 不改
+    out = reconcile_insights(_ins("门店甲毛利率38%，门店乙更高"), metrics)
+    assert "门店甲毛利率38%" in out[0]["text"]
+
+
+def test_guard_corrects_clean_boundary_mention():
+    metrics = [{"name": "毛利率", "value": 35, "unit": "%", "success": True}]
+    # 句首干净边界 = 整体口径 → 纠正
+    assert "毛利率35%" in reconcile_insights(_ins("毛利率38%，高于行业"), metrics)[0]["text"]
+    # 标点后干净边界 → 纠正
+    assert "毛利率35%" in reconcile_insights(_ins("整体看，毛利率38%偏低"), metrics)[0]["text"]
+
+
+# ── Python 自算整体口径比率 (毛利率/净利率) ──────────────────────────────────
+def test_overall_ratio_facts_from_clean_pnl():
+    df = pd.DataFrame({"项目": ["营业收入", "营业成本", "净利润"], "金额": [1000, 600, 80]})
+    d = {f["name"]: f["value"] for f in overall_ratio_facts(df)}
+    assert d["净利率"] == 8.0          # 80/1000
+    assert d["毛利率"] == 40.0         # (1000-600)/1000
+
+
+def test_overall_ratio_facts_ambiguous_returns_empty():
+    # 营业收入 匹配到 2 行 (营业收入 + 营业收入合计) → 歧义 → 放弃
+    df = pd.DataFrame({"项目": ["营业收入", "营业收入合计", "净利润"], "金额": [1000, 1000, 80]})
+    assert overall_ratio_facts(df) == []
+
+
+def test_overall_ratio_facts_no_revenue_returns_empty():
+    df = pd.DataFrame({"项目": ["产量", "良品数"], "值": [100, 98]})
+    assert overall_ratio_facts(df) == []
+
+
+def test_overall_ratio_facts_feeds_reconcile():
+    # 端到端: Python 算出毛利率40%, LLM 误报48% (>5%偏差) → 纠正
+    df = pd.DataFrame({"项目": ["营业收入", "营业成本"], "金额": [1000, 600]})
+    facts = overall_ratio_facts(df)
+    out = reconcile_insights(_ins("毛利率48%，表现不错"), facts)
+    assert "毛利率40%" in out[0]["text"] and "48%" not in out[0]["text"]
+
+
+def test_overall_ratio_small_divergence_within_tolerance_untouched():
+    # 42% vs 40% 偏差<5% → 不改 (避免对正常四舍五入误差过度纠正)
+    df = pd.DataFrame({"项目": ["营业收入", "营业成本"], "金额": [1000, 600]})
+    out = reconcile_insights(_ins("毛利率42%"), overall_ratio_facts(df))
+    assert "毛利率42%" in out[0]["text"]
 
 
 # ── 安全: 无 metrics / 不匹配 → 完全不动 ──────────────────────────────────
