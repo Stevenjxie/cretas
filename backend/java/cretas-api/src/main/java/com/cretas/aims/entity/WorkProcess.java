@@ -4,6 +4,8 @@ import lombok.*;
 import jakarta.persistence.*;
 import org.hibernate.annotations.Where;
 
+import java.math.BigDecimal;
+
 @Data
 @EqualsAndHashCode(callSuper = true)
 @AllArgsConstructor
@@ -47,4 +49,21 @@ public class WorkProcess extends BaseEntity {
     @Column(name = "is_active")
     @Builder.Default
     private Boolean isActive = true;
+
+    /** 标准出成率下限 (张权 A7, 报工时越界软告警; null=不校验) */
+    @Column(name = "standard_yield_min", precision = 6, scale = 4)
+    private BigDecimal standardYieldMin;
+
+    /** 标准出成率上限 (张权 A7; 支持 >1 如滚揉保水 1.35) */
+    @Column(name = "standard_yield_max", precision = 6, scale = 4)
+    private BigDecimal standardYieldMax;
+
+    /** 该工序是否需录投入量 (默认 true; 纯包装/检验可 false) */
+    @Column(name = "needs_input")
+    @Builder.Default
+    private Boolean needsInput = true;
+
+    /** 产出单位 (kg→盒; 为空沿用 unit) */
+    @Column(name = "output_unit", length = 20)
+    private String outputUnit;
 }
