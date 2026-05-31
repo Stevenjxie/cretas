@@ -74,7 +74,7 @@ public class SalesOrder extends BaseEntity {
     private String factoryId;
 
     @NotBlank
-    @Column(name = "order_number", nullable = false, length = 50)
+    @Column(name = "order_number", nullable = false, length = 64)
     private String orderNumber;
 
     @NotBlank

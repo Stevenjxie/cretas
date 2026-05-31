@@ -61,7 +61,7 @@ public class FinishedGoodsBatch extends BaseEntity {
     private String factoryId;
 
     @NotBlank
-    @Column(name = "batch_number", nullable = false, length = 50)
+    @Column(name = "batch_number", nullable = false, length = 64)
     private String batchNumber;
 
     @NotBlank

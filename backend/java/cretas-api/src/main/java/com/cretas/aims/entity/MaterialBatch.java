@@ -45,7 +45,7 @@ public class MaterialBatch extends BaseEntity {
     private String id;
     @Column(name = "factory_id", nullable = false)
     private String factoryId;
-    @Column(name = "batch_number", nullable = false, unique = true, length = 50)
+    @Column(name = "batch_number", nullable = false, unique = true, length = 64)
     private String batchNumber;
     @Column(name = "material_type_id", nullable = false)
     private String materialTypeId;  // 修改为String类型以匹配MaterialType的UUID

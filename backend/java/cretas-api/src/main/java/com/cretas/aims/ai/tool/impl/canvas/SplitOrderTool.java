@@ -112,6 +112,13 @@ public class SplitOrderTool extends AbstractBusinessTool {
         for (int i = 0; i < splits.size(); i++) {
             Map<String, Object> split = splits.get(i);
             String tag = (String) split.getOrDefault("tag", "SPLIT-" + (i + 1));
+            // The tag is a caller/LLM-supplied parameter and is concatenated into order_number
+            // (VARCHAR(64)). datePrefix(18) + tag + "-" + i must stay within the column, so cap the
+            // tag defensively — an over-long tag would otherwise roll back the whole split with a
+            // "value too long" error (same class as the business_entity_id #325 fix).
+            if (tag != null && tag.length() > 20) {
+                tag = tag.substring(0, 20);
+            }
 
             SalesOrder child = new SalesOrder();
             child.setFactoryId(factoryId);
