@@ -646,6 +646,15 @@ async def call_chain_stream(
                                 f"prompt={prompt_total} cached={cached} ({pct}%) "
                                 f"completion={completion}"
                             )
+                        # 真实记账流式 usage (钩子抓不到, 否则记成 0-token)
+                        try:
+                            from common.llm_metrics import record_stream_usage
+                            record_stream_usage(
+                                account, model, prompt_total, completion,
+                                total or (prompt_total + completion),
+                            )
+                        except Exception as _e:
+                            logger.debug(f"[llm_router_stream] usage record skipped: {_e}")
                         if total:
                             yield {"type": "usage", "tokens": total}
                 # Successful stream — record CB success and return
