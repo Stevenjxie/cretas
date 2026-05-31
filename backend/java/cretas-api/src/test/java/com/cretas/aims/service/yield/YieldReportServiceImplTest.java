@@ -61,10 +61,9 @@ class YieldReportServiceImplTest {
         when(reportRepo.save(any(ProductionReport.class))).thenAnswer(i -> {
             ProductionReport r = i.getArgument(0); r.setId(99L); return r;
         });
-        // 该任务累计 YIELD 报工: 80 + 70 -> task.actualQuantity 应=150
+        // existingTaskReports 在 save 之前查: 已有 1 条产出 80, 本次 output 70 -> task.actualQuantity 应=80+70=150
         when(reportRepo.findYieldReportsByTask("F006", 10L)).thenReturn(List.of(
-                ProductionReport.builder().outputQuantity(new BigDecimal("80")).build(),
-                ProductionReport.builder().outputQuantity(new BigDecimal("70")).build()
+                ProductionReport.builder().outputQuantity(new BigDecimal("80")).build()
         ));
 
         YieldReportRequest req = new YieldReportRequest();
@@ -79,6 +78,64 @@ class YieldReportServiceImplTest {
         ArgumentCaptor<WorkProcessTask> cap = ArgumentCaptor.forClass(WorkProcessTask.class);
         verify(taskRepo).save(cap.capture());
         assertThat(cap.getValue().getActualQuantity()).isEqualByComparingTo("150");
+    }
+
+    @Test
+    void submitReport_secondReportForSameTask_leavesBatchNoNull() {
+        // 工序序=2 (非首道), 已有 1 条 YIELD 报工 -> 本次是第 2 条 -> intermediateBatchNo 必须 null
+        WorkProcessTask t = task(10L, 2, "WP-LU");
+        t.setProductTypeId("PT-100");
+        when(taskRepo.findByFactoryIdAndId("F006", 10L)).thenReturn(Optional.of(t));
+        when(processRepo.findById("WP-LU")).thenReturn(Optional.empty());
+        when(reportRepo.findYieldReportsByBatch(anyString(), eq(1L))).thenReturn(List.of());
+        ArgumentCaptor<ProductionReport> reportCap = ArgumentCaptor.forClass(ProductionReport.class);
+        when(reportRepo.save(reportCap.capture())).thenAnswer(i -> {
+            ProductionReport r = i.getArgument(0); r.setId(99L); return r;
+        });
+        // 已有 1 条报工 -> 本次是第 2 条
+        when(reportRepo.findYieldReportsByTask("F006", 10L)).thenReturn(List.of(
+                ProductionReport.builder().outputQuantity(new BigDecimal("80")).build()
+        ));
+
+        YieldReportRequest req = new YieldReportRequest();
+        req.setWorkProcessTaskId(10L);
+        req.setInputQuantity(new BigDecimal("100"));
+        req.setInputUnit("kg");
+        req.setOutputQuantity(new BigDecimal("70"));
+        req.setOutputUnit("kg");
+
+        svc.submitReport("F006", 1L, 5L, req);
+
+        verify(reportRepo).save(any(ProductionReport.class));
+        assertThat(reportCap.getValue().getIntermediateBatchNo()).isNull();  // 第 2 条不生成批次号
+    }
+
+    @Test
+    void submitReport_firstReportForSameTask_generatesBatchNo() {
+        // 工序序=2, existingTaskReports 空 -> 本次是首条 -> intermediateBatchNo 非 null
+        WorkProcessTask t = task(10L, 2, "WP-LU");
+        t.setProductTypeId("PT-100");
+        when(taskRepo.findByFactoryIdAndId("F006", 10L)).thenReturn(Optional.of(t));
+        when(processRepo.findById("WP-LU")).thenReturn(Optional.empty());
+        when(reportRepo.findYieldReportsByBatch(anyString(), eq(1L))).thenReturn(List.of());
+        ArgumentCaptor<ProductionReport> reportCap = ArgumentCaptor.forClass(ProductionReport.class);
+        when(reportRepo.save(reportCap.capture())).thenAnswer(i -> {
+            ProductionReport r = i.getArgument(0); r.setId(99L); return r;
+        });
+        when(reportRepo.findYieldReportsByTask("F006", 10L)).thenReturn(List.of());  // 首条
+
+        YieldReportRequest req = new YieldReportRequest();
+        req.setWorkProcessTaskId(10L);
+        req.setInputQuantity(new BigDecimal("100"));
+        req.setInputUnit("kg");
+        req.setOutputQuantity(new BigDecimal("70"));
+        req.setOutputUnit("kg");
+
+        svc.submitReport("F006", 1L, 5L, req);
+
+        verify(reportRepo).save(any(ProductionReport.class));
+        // {产品码}-B{批次}-S{工序序}-{taskId}
+        assertThat(reportCap.getValue().getIntermediateBatchNo()).isEqualTo("PT-100-B1-S2-10");
     }
 
     @Test

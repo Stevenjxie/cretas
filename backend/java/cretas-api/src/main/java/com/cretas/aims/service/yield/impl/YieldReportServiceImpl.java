@@ -56,6 +56,10 @@ public class YieldReportServiceImpl implements YieldReportService {
 
         Long effectiveWorker = req.getTargetWorkerId() != null ? req.getTargetWorkerId() : workerId;
 
+        // 前置查该 task 已有 YIELD 报工: 决定是否首条 + 作双写求和基数
+        List<ProductionReport> existingTaskReports = reportRepo.findYieldReportsByTask(factoryId, t.getId());
+        boolean isFirstReportForTask = existingTaskReports.isEmpty();
+
         ProductionReport r = ProductionReport.builder()
                 .factoryId(factoryId).batchId(batchId).reportType(YIELD)
                 .workerId(effectiveWorker).reporterName(req.getReporterName())
@@ -66,7 +70,8 @@ public class YieldReportServiceImpl implements YieldReportService {
                 .outputQuantity(req.getOutputQuantity()).outputUnit(req.getOutputUnit())
                 .totalWorkMinutes(req.getWorkMinutes())
                 .sourceBatchRefs(req.getSourceBatchRefs())
-                .intermediateBatchNo(generateBatchNo(t, batchId))
+                // 工序批次号是任务级: 仅首条报工生成, 后续条 null (避免 uq_pr_intermediate_batch_no 冲突)
+                .intermediateBatchNo(isFirstReportForTask ? generateBatchNo(t, batchId) : null)
                 .status(ProductionReport.Status.SUBMITTED)
                 .build();
 
@@ -76,11 +81,14 @@ public class YieldReportServiceImpl implements YieldReportService {
         ProductionReport saved = reportRepo.save(r);
 
         // 双写 WorkProcessTask.actualQuantity = Σ该任务 YIELD output (权威=YIELD, 老字段保兼容)
-        List<ProductionReport> taskReports = reportRepo.findYieldReportsByTask(factoryId, t.getId());
-        BigDecimal taskTotal = taskReports.stream()
+        // 已有报工产出 + 本次 (显式加本次, 不依赖 JPQL flush 时序)
+        BigDecimal taskTotal = existingTaskReports.stream()
                 .map(ProductionReport::getOutputQuantity)
                 .filter(Objects::nonNull)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
+        if (saved.getOutputQuantity() != null) {
+            taskTotal = taskTotal.add(saved.getOutputQuantity());
+        }
         t.setActualQuantity(taskTotal);
         taskRepo.save(t);
 
