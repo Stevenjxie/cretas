@@ -174,6 +174,15 @@ class InsightGenerator:
                 }
                 return
 
+            # P0 出境脱敏: 设置请求级脱敏 scope (流式: set 不取 reset, 镜像 _set_llm_caller —
+            # 异步生成器跨 task 边界, reset 会报错; 请求级 task 隔离负责清理), 注册 df 敏感列
+            # 真名 → choke point 出境占位; 输出再 restore 还原 (真名不出境, 数字/分析 0 损失).
+            from common.llm_redactor import (
+                begin_redaction_scope_no_reset, StreamRestorer, restore_obj,
+            )
+            _scope = begin_redaction_scope_no_reset()
+            _scope.register_df(df)
+
             # Build prompt (same pipeline as non-streaming)
             data_summary = ds.prepare_data_summary(df)
             financial_metrics = sc.compute_financial_context(df)
@@ -231,15 +240,24 @@ class InsightGenerator:
 
             system_role = pb.build_cacheable_system_prompt(tier, scenario)
             full_response = ""
+            _restorer = StreamRestorer(_scope.placeholder_map)  # P0: 流式占位实时还原
             async for chunk in llm.call_llm_stream(
                 prompt, system_role, max_tokens=max_tokens,
                 model_override=self.model_override,
             ):
                 full_response += chunk
-                yield {"event": "chunk", "data": chunk}
+                out = _restorer.push(chunk)
+                if out:
+                    yield {"event": "chunk", "data": out}
+            tail = _restorer.flush()
+            if tail:
+                yield {"event": "chunk", "data": tail}
 
             stat_insights = generate_statistical_insights(df, metrics)
-            parsed = self._parse_llm_insights(full_response, stat_insights)
+            parsed = restore_obj(
+                self._parse_llm_insights(full_response, stat_insights),
+                _scope.placeholder_map,
+            )  # P0: 还原 done 事件里的真名
             done_result = {
                 "success": True,
                 "insights": parsed,
@@ -309,7 +327,15 @@ class InsightGenerator:
         context_info: Optional[ContextInfo] = None,
     ) -> List[dict]:
         """Generate AI-powered insights using LLM, with tier-scaled prompt."""
+        # P0 出境脱敏: 进入请求级脱敏 scope, 注册 df 敏感列真名 → choke point 出境时占位,
+        # LLM 只看占位+数字; 输出再 restore 还原真名 (数字/分析 0 损失, 真名不出境).
+        from common.llm_redactor import (
+            redaction_scope, register_df_in_scope, restore_in_scope,
+        )
+        _redaction = redaction_scope()
+        _redaction.__enter__()
         try:
+            register_df_in_scope(df)
             row_count = len(df)
             tier_cfg = pb.get_tiered_config(row_count)
             tier = tier_cfg["tier"]
@@ -377,11 +403,13 @@ class InsightGenerator:
                 max_tokens=max_tokens,
                 model_override=self.model_override,
             )
-            return self._parse_llm_insights(response, stat_insights)
+            return restore_in_scope(self._parse_llm_insights(response, stat_insights))
 
         except Exception as e:
             logger.error("LLM insight generation failed: %s", e, exc_info=True)
             return stat_insights
+        finally:
+            _redaction.__exit__(None, None, None)
 
     # ------------------------------------------------------------------
     # Response parsing

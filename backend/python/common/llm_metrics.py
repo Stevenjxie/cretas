@@ -28,6 +28,34 @@ logger = logging.getLogger(__name__)
 #   with llm_caller_context("semantic_mapper"): await client.post(...)
 _llm_caller: contextvars.ContextVar[str] = contextvars.ContextVar("llm_caller", default="unknown")
 _llm_factory: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar("llm_factory", default=None)
+# Optional data-window label (e.g. "2025-12" / "2025-01..2025-12") for egress audit context.
+_llm_data_window: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar("llm_data_window", default=None)
+# P0: redaction meta of the most recent egress payload (set by the redacting client wrapper,
+# read by the egress-audit branch of metrics_response_hook). common.llm_redactor.RedactionMeta.
+_egress_redaction_meta: contextvars.ContextVar[Any] = contextvars.ContextVar("egress_redaction_meta", default=None)
+
+
+def set_egress_redaction_meta(meta: Any) -> None:
+    """Stash the RedactionMeta for the in-flight egress so the response hook can audit it.
+
+    Set without a reset token (request-scoped task isolation handles cleanup), mirroring
+    the streaming caller-attribution pattern.
+    """
+    _egress_redaction_meta.set(meta)
+
+
+def _payload_message_text(payload: Dict[str, Any]) -> str:
+    """Concatenate message content text (str or [{text}] shape) for egress audit sha/chars."""
+    parts = []
+    for m in (payload.get("messages") or []):
+        c = m.get("content")
+        if isinstance(c, str):
+            parts.append(c)
+        elif isinstance(c, list):
+            for p in c:
+                if isinstance(p, dict) and isinstance(p.get("text"), str):
+                    parts.append(p["text"])
+    return "".join(parts)
 
 
 class llm_caller_context:
@@ -153,6 +181,31 @@ async def metrics_response_hook(response: httpx.Response) -> None:
             _usage_queue.put_nowait(record)
         except asyncio.QueueFull:
             logger.warning("LLM usage queue full, dropping record")
+
+        # P0 数据主权: egress audit (universal — every LLM call through the shared client).
+        # Reads the redaction meta the redacting client wrapper stashed for this egress.
+        try:
+            from common.llm_egress_audit import (
+                EgressAuditRecord, record_egress, sha256_of,
+            )
+            meta = _egress_redaction_meta.get()
+            msg_text = _payload_message_text(payload)
+            record_egress(EgressAuditRecord(
+                call_site=_llm_caller.get(),
+                provider=provider,
+                model=model if isinstance(model, str) else str(model),
+                slot=None,
+                factory_id=_llm_factory.get(),
+                sanitized=bool(getattr(meta, "sanitized", False)),
+                redacted_count=int(getattr(meta, "redacted_count", 0) or 0),
+                redacted_fields=list(getattr(meta, "redacted_fields", []) or []),
+                data_window=_llm_data_window.get(),
+                prompt_chars=len(msg_text),
+                prompt_sha256=sha256_of(msg_text),
+                status_code=response.status_code,
+            ))
+        except Exception as e:
+            logger.debug("egress audit record failed (non-fatal): %s", e)
     except Exception as e:
         logger.warning(f"metrics_response_hook failed (non-fatal): {e}")
 
