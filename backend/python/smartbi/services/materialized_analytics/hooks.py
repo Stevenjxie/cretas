@@ -86,6 +86,32 @@ async def _trigger_materialization(upload_id: int, factory_id: Optional[str] = N
         else:
             domain_value = Domain.UNKNOWN.value
 
+        # LLM insight materialization (Fix2): generate rich, natural-language
+        # insights for the applicable templates so cache hits serve LLM-quality
+        # content at 0 query-token. Single aggregated LLM call, run here (upload
+        # bg task, NOT user-facing) BEFORE persisting so the rich insights land
+        # in the saved `insights` column. Wrapped: any failure leaves
+        # result.llm_insight=None → persistence falls back to rule insight_text
+        # (禁止降级处理: never store empty/fake).
+        try:
+            from smartbi.services.materialized_analytics.llm_materializer import (
+                generate_llm_insights,
+            )
+            t_llm = time.time()
+            exec_summary = await generate_llm_insights(results, domain_value)
+            logger.info(
+                f"[hook] upload {upload_id}: LLM insight materialization done "
+                f"in {time.time() - t_llm:.1f}s"
+                f"{' (with executive summary)' if exec_summary else ''}"
+            )
+        except Exception as llm_err:
+            # Defensive belt-and-suspenders — generate_llm_insights already
+            # swallows internally, but never let the hook fail on insight gen.
+            logger.warning(
+                f"[hook] upload {upload_id}: LLM insight materialization "
+                f"failed (non-blocking): {llm_err}"
+            )
+
         saved = await save_materialization_results(
             pool, upload_id, factory_id, domain_value, results
         )

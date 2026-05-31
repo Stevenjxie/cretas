@@ -18,6 +18,16 @@ logger = logging.getLogger(__name__)
 
 def _result_to_row_fields(result: TemplateResult) -> Dict[str, Any]:
     """Map TemplateResult → column values. Caller adds upload_id/factory_id/domain."""
+    # Prefer the LLM-generated rich insight (produced at materialize time by
+    # llm_materializer) so cache hits serve LLM-quality content at 0 query-token.
+    # Fall back to the deterministic rule insight_text when the LLM was
+    # unavailable / failed (llm_insight is None). NEVER store empty/fake — an
+    # empty llm_insight must not clobber a present rule insight_text.
+    chosen_insight = (
+        result.llm_insight
+        if (result.llm_insight and result.llm_insight.strip())
+        else result.insight_text
+    )
     return {
         "analysis_type": f"materialized:{result.code}",
         "template_code": result.code,
@@ -27,7 +37,7 @@ def _result_to_row_fields(result: TemplateResult) -> Dict[str, Any]:
         },
         "chart_configs": [result.chart_config] if result.chart_config else [],
         "kpi_values": result.kpis or {},
-        "insights": [result.insight_text] if result.insight_text else [],
+        "insights": [chosen_insight] if chosen_insight else [],
     }
 
 
