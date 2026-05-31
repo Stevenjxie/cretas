@@ -215,6 +215,12 @@ class VideoEfficiencyAnalyzer:
 
 仅返回 JSON，不要包含其他文字。"""
 
+        # TODO BYPASS-UNFIXED: sync context, needs async refactor. analyze_frame
+        # uses a sync httpx.Client and is called by sync chains (analyze_video
+        # below + efficiency_recognition routes/sampler, outside this lane).
+        # Routing through call_chain(SLOT.VL) requires making this async and
+        # awaiting it up the whole chain. Left direct for now; efficiency VL
+        # (offline video analysis) can be migrated to call_chain separately.
         try:
             response = self.client.post(
                 f"{self.base_url}/chat/completions",
@@ -408,6 +414,9 @@ class VideoEfficiencyAnalyzer:
 
 仅返回 JSON，不要包含其他文字。"""
 
+        # TODO BYPASS-UNFIXED: sync context, needs async refactor. analyze_ocr
+        # uses a sync httpx.Client called by sync chains outside this lane.
+        # Migrate to call_chain(SLOT.VL) when efficiency VL goes async.
         try:
             response = self.client.post(
                 f"{self.base_url}/chat/completions",
@@ -517,6 +526,9 @@ class VideoEfficiencyAnalyzer:
 
 仅返回 JSON，不要包含其他文字。"""
 
+        # TODO BYPASS-UNFIXED: sync context, needs async refactor. analyze_counting
+        # uses a sync httpx.Client called by sync chains outside this lane.
+        # Migrate to call_chain(SLOT.VL) when efficiency VL goes async.
         try:
             response = self.client.post(
                 f"{self.base_url}/chat/completions",

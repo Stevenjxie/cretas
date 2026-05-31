@@ -1073,28 +1073,27 @@ Return JSON: {{"mappings": [{{"original": "col", "standard": "field_or_null", "c
 """
 
     async def _call_llm(self, prompt: str, model: str = "default") -> Optional[str]:
-        """Call LLM API"""
+        """Call LLM via multi-provider router (SLOT.MAPPER — semantic field
+        mapping). Shares the free-first chain + circuit-breaker + free-tier
+        fallback; the model is injected per-slot by call_chain (replaces the
+        prior default/fast direct call)."""
         try:
-            from openai import AsyncOpenAI
+            from common.llm_router import call_chain, SLOT
+            from common.llm_metrics import llm_caller_context
 
-            model_name = {
-                "default": self.settings.llm_model,
-                "fast": self.settings.llm_fast_model
-            }.get(model, self.settings.llm_model)
+            payload = {
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0.1,
+                "max_tokens": 1000,
+            }
 
-            client = AsyncOpenAI(
-                api_key=self.settings.llm_api_key,
-                base_url=self.settings.llm_base_url
-            )
+            with llm_caller_context("semantic_mapper"):
+                resp_json = await call_chain(SLOT.MAPPER, payload)
 
-            response = await client.chat.completions.create(
-                model=model_name,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.1,
-                max_tokens=1000
-            )
-
-            return response.choices[0].message.content
+            choices = resp_json.get("choices") or []
+            if not choices:
+                return None
+            return choices[0].get("message", {}).get("content")
 
         except Exception as e:
             logger.error(f"LLM call failed: {e}")

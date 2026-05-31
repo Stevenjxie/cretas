@@ -1660,14 +1660,13 @@ class UnifiedAnalyzer:
         return "\n".join(parts)
 
     async def _call_llm(self, prompt: str) -> str:
-        """Call LLM API."""
-        headers = {
-            "Authorization": f"Bearer {self.settings.llm_api_key}",
-            "Content-Type": "application/json"
-        }
+        """Call LLM API via free-tier router chain (call_chain) — gets free
+        fallback + circuit-breaker protection. INSIGHTS slot injects the
+        per-provider free model; we drop the explicit `model` field here."""
+        from common.llm_router import call_chain, SLOT
+        from common.llm_metrics import llm_caller_context
 
         payload = {
-            "model": self.settings.llm_model,
             "messages": [
                 {
                     "role": "system",
@@ -1683,14 +1682,8 @@ class UnifiedAnalyzer:
             "enable_thinking": False
         }
 
-        response = await self.client.post(
-            f"{self.settings.llm_base_url}/chat/completions",
-            headers=headers,
-            json=payload
-        )
-        response.raise_for_status()
-
-        result = response.json()
+        with llm_caller_context("unified_analyzer_insight"):
+            result = await call_chain(SLOT.INSIGHTS, payload)
         return result["choices"][0]["message"]["content"]
 
     def _parse_llm_insights(self, response: str) -> List[Insight]:

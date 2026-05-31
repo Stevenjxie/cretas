@@ -468,34 +468,23 @@ class SimpleLLMClient:
 
     async def chat(self, prompt: str) -> str:
         """
-        发送聊天请求
+        发送聊天请求 (经免费链 call_chain — 免费 fallback + 熔断保护)。
 
-        实际实现需要调用 OpenAI/Claude API
+        INSIGHTS slot 按 provider 注入免费 model, 此处去掉显式 model 字段。
         """
-        # 示例实现 - 替换为真实 API 调用
-        import httpx
+        from common.llm_router import call_chain, SLOT
+        from common.llm_metrics import llm_caller_context
 
         if not self.api_key:
             raise ValueError("API key not configured")
 
-        from common.llm_client import get_llm_http_client
-        client = get_llm_http_client()
-        response = await client.post(
-            f"{self.base_url}/chat/completions",
-            headers={
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json"
-            },
-            json={
-                "model": self.model,
-                "messages": [{"role": "user", "content": prompt}],
-                "temperature": 0.1
-            },
-            timeout=httpx.Timeout(60.0),
-        )
+        payload = {
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.1
+        }
 
-        response.raise_for_status()
-        data = response.json()
+        with llm_caller_context("export_validator_fix"):
+            data = await call_chain(SLOT.INSIGHTS, payload, timeout=60.0)
         return data["choices"][0]["message"]["content"]
 
 

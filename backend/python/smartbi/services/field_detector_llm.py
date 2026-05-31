@@ -465,14 +465,13 @@ class LLMFieldDetector:
 
 请返回JSON格式的分析结果。"""
 
-        # Call LLM
-        headers_dict = {
-            "Authorization": f"Bearer {self.settings.llm_api_key}",
-            "Content-Type": "application/json"
-        }
+        # Call LLM via multi-provider router (SLOT.MAPPER — field semantic
+        # mapping). Shares the free-first chain + circuit-breaker + free-tier
+        # fallback; the model field is injected per-slot by call_chain.
+        from common.llm_router import call_chain, SLOT
+        from common.llm_metrics import llm_caller_context
 
         payload = {
-            "model": self.settings.llm_fast_model,  # Use qwen-turbo for simple classification
             "messages": [
                 {"role": "system", "content": self.SYSTEM_PROMPT},
                 {"role": "user", "content": prompt}
@@ -482,14 +481,9 @@ class LLMFieldDetector:
             "enable_thinking": False
         }
 
-        response = await self.client.post(
-            f"{self.settings.llm_base_url}/chat/completions",
-            headers=headers_dict,
-            json=payload
-        )
-        response.raise_for_status()
+        with llm_caller_context("field_detector_llm"):
+            result_json = await call_chain(SLOT.MAPPER, payload)
 
-        result_json = response.json()
         content = result_json["choices"][0]["message"]["content"]
 
         return self._parse_llm_response(content, headers, basic_info)

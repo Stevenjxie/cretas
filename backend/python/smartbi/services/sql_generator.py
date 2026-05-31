@@ -646,15 +646,12 @@ class SQLGenerator:
         )
 
         try:
-            from common.llm_client import get_llm_http_client
-            client = get_llm_http_client()
+            # 经免费链 call_chain — 免费 fallback + 熔断保护。INSIGHTS slot 按
+            # provider 注入免费 model, 此处去掉显式 model 字段。
+            from common.llm_router import call_chain, SLOT
+            from common.llm_metrics import llm_caller_context
 
-            headers = {
-                "Authorization": f"Bearer {self.settings.llm_api_key}",
-                "Content-Type": "application/json",
-            }
             payload = {
-                "model": self.settings.llm_fast_model,
                 "messages": [
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt},
@@ -664,15 +661,8 @@ class SQLGenerator:
                 "enable_thinking": False,
             }
 
-            response = await client.post(
-                f"{self.settings.llm_base_url}/chat/completions",
-                headers=headers,
-                json=payload,
-                timeout=httpx.Timeout(30.0),
-            )
-            response.raise_for_status()
-
-            result = response.json()
+            with llm_caller_context("sql_generator_nl2sql"):
+                result = await call_chain(SLOT.INSIGHTS, payload, timeout=30.0)
             content = result["choices"][0]["message"]["content"]
 
             # Parse LLM response

@@ -685,13 +685,12 @@ class CrossSheetAggregator:
 
 请用中文回答，每个观点必须有具体数字支撑。控制在 800 字以内。"""
 
-            headers = {
-                "Authorization": f"Bearer {self.settings.llm_api_key}",
-                "Content-Type": "application/json"
-            }
+            # 经免费链 call_chain — 免费 fallback + 熔断保护。INSIGHTS slot 按
+            # provider 注入免费 model, 此处去掉显式 model 字段。
+            from common.llm_router import call_chain, SLOT
+            from common.llm_metrics import llm_caller_context
 
             payload = {
-                "model": self.settings.llm_model,
                 "messages": [
                     {
                         "role": "system",
@@ -708,14 +707,8 @@ class CrossSheetAggregator:
             }
 
             async with llm_rate_limit():
-                response = await self.client.post(
-                    f"{self.settings.llm_base_url}/chat/completions",
-                    headers=headers,
-                    json=payload,
-                    timeout=httpx.Timeout(60.0),
-                )
-            response.raise_for_status()
-            result = response.json()
+                with llm_caller_context("cross_sheet_ai_summary"):
+                    result = await call_chain(SLOT.INSIGHTS, payload, timeout=60.0)
             return restore_in_scope(result["choices"][0]["message"]["content"])  # P0 还原分部真名
 
         except Exception as e:

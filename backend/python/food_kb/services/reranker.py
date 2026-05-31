@@ -8,6 +8,24 @@ Usage:
     reranker = get_reranker()
     reranker.configure(api_key="sk-xxx")
     reranked = await reranker.rerank(query, documents, top_n=5)
+
+⚠️ DOES NOT route through common.llm_router.call_chain — rerank (text-rerank
+service) is a SEPARATE DashScope API + billing pool from the chat-slot LLMs.
+call_chain only injects chat models, which cannot serve the rerank endpoint. So
+the chat免费链 (c→b→a→zhipu fallback + circuit breaker) does NOT apply; this
+stays a direct DashScope rerank call.
+
+gte-rerank-v2 免费额度确认 (2026-06-01 live probe, prod keys LLM_ALIYUN_C /
+LLM_ALIYUN_A):
+    POST /api/v1/services/rerank/text-rerank/text-rerank
+         {"model":"gte-rerank-v2", "input":{...}, "parameters":{...}}
+    → HTTP 200 on both aliyun_C and aliyun_A (working, NOT exhausted;
+      usage.total_tokens reported). DashScope grants gte-rerank-v2 its own free
+      quota, independent of the chat-LLM 免费清单. When that free quota
+      exhausts, DashScope returns 403 AllocationQuota.FreeTierOnly — already
+      surfaced LOUD by the httpx.HTTPStatusError handler below (logs status +
+      body at ERROR), and the reranker degrades gracefully to the original
+      pgvector order (no crash). Re-audit when this handler starts logging 403.
 """
 
 import logging

@@ -426,13 +426,6 @@ async def _ocr_extract_text(image_b64: str) -> str:
     (logs warning, never raises) so the caller can degrade gracefully.
     """
     try:
-        import os
-        from config import get_settings
-        from common.llm_client import get_llm_http_client
-
-        settings = get_settings()
-        client = get_llm_http_client()
-
         # Strip optional data URI prefix → keep raw base64 only
         # Also parse mime type from prefix (e.g. data:image/jpeg;base64,...) so we
         # don't lie to the VL model about the format. Default to png if absent.
@@ -453,46 +446,35 @@ async def _ocr_extract_text(image_b64: str) -> str:
             logger.warning("OCR called with empty base64 after stripping prefix")
             return ""
 
-        # OCR via DashScope OpenAI-compatible endpoint.
-        # Prefer aliyun_a credentials (LLM_ALIYUN_A_*) — DashScope keys hosting vision models.
-        # 默认 qwen-vl-ocr (专用 OCR 模型, 中文小字精度 ≥ qwen-vl-plus, 同价位).
-        # 可通过 LLM_OCR_MODEL env 切换到 qwen-vl-plus / qwen-vl-max 等通用 VL.
-        vl_model = os.getenv("LLM_OCR_MODEL", "qwen-vl-ocr")
-        vl_base_url = os.getenv("LLM_ALIYUN_A_BASE_URL", "") or settings.llm_base_url
-        vl_api_key = os.getenv("LLM_ALIYUN_A_API_KEY", "") or settings.llm_api_key
+        # OCR via call_chain(SLOT.VL): 免费 VL fallback 链 (qwen3-vl-* 等) + 熔断。
+        # 用标准 OpenAI vision 格式 (image_url + text); model 由 router 按 VL slot 注入。
+        from common.llm_router import call_chain, SLOT
+        from common.llm_metrics import llm_caller_context
 
-        resp = await client.post(
-            f"{vl_base_url}/chat/completions",
-            headers={
-                "Authorization": f"Bearer {vl_api_key}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": vl_model,
-                "messages": [{
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "image_url",
-                            "image_url": {"url": f"data:{mime_type};base64,{stripped_b64}"},
-                        },
-                        {
-                            "type": "text",
-                            "text": (
-                                "Read all the text in the image. "
-                                "按从上到下、从左到右顺序输出原文，不解释、不补充。"
-                                "如果完全识别不出文字返回空字符串。"
-                            ),
-                        },
-                    ],
-                }],
-                "max_tokens": 2000,
-                "temperature": 0.0,
-            },
-            timeout=30.0,
-        )
-        resp.raise_for_status()
-        data = resp.json()
+        payload = {
+            # model 由 call_chain(SLOT.VL) 按免费 VL 链注入
+            "messages": [{
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:{mime_type};base64,{stripped_b64}"},
+                    },
+                    {
+                        "type": "text",
+                        "text": (
+                            "Read all the text in the image. "
+                            "按从上到下、从左到右顺序输出原文，不解释、不补充。"
+                            "如果完全识别不出文字返回空字符串。"
+                        ),
+                    },
+                ],
+            }],
+            "max_tokens": 2000,
+            "temperature": 0.0,
+        }
+        with llm_caller_context("manual_chat_ocr"):
+            data = await call_chain(SLOT.VL, payload, timeout=30.0)
         extracted = (data["choices"][0]["message"]["content"] or "").strip()
         return extracted
     except Exception as e:
@@ -511,11 +493,8 @@ async def _rewrite_followup(question: str, history: List[ChatMessage]) -> str:
     Falls back to original question on any error.
     """
     try:
-        from config import get_settings
-        from common.llm_client import get_llm_http_client
-
-        settings = get_settings()
-        client = get_llm_http_client()
+        from common.llm_router import call_chain, SLOT
+        from common.llm_metrics import llm_caller_context
 
         # Build conversation context (last 2 turns)
         history_text = "\n".join(
@@ -530,24 +509,16 @@ async def _rewrite_followup(question: str, history: List[ChatMessage]) -> str:
 
 请把"当前提问"改写为可独立检索的完整问题, 解析所有代词(它/这个/那个) 和省略主语. 只输出改写后的问题, 不要任何解释."""
 
-        # Use qwen-flash via existing llm_* config (cheap + fast for 单 task)
-        resp = await client.post(
-            f"{settings.llm_base_url}/chat/completions",
-            headers={
-                "Authorization": f"Bearer {settings.llm_api_key}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": settings.llm_fast_model,  # qwen3.5-flash
-                "messages": [{"role": "user", "content": rewrite_prompt}],
-                "max_tokens": 100,
-                "temperature": 0.1,  # deterministic rewrite
-                "enable_thinking": False,
-            },
-            timeout=10.0,
-        )
-        resp.raise_for_status()
-        data = resp.json()
+        # 走 call_chain(SLOT.CHAT): 免费 fallback 链 + 熔断 (单 task, 快路由 head)。
+        payload = {
+            # model 由 call_chain(SLOT.CHAT) 按免费链注入
+            "messages": [{"role": "user", "content": rewrite_prompt}],
+            "max_tokens": 100,
+            "temperature": 0.1,  # deterministic rewrite
+            "enable_thinking": False,
+        }
+        with llm_caller_context("manual_chat_rewrite"):
+            data = await call_chain(SLOT.CHAT, payload, timeout=10.0)
         rewritten = data["choices"][0]["message"]["content"].strip()
         # Sanity: rewriting should be longer than original (no truncation)
         if rewritten and len(rewritten) > len(question) * 0.6:
@@ -711,48 +682,20 @@ async def manual_chat(request: ManualChatRequest) -> dict:
     # ------ Improvement #5: adaptive max_tokens ------
     max_tokens = _estimate_max_tokens(request.question)
 
-    # Call LLM for the answer
-    # G4 audit round 5 — KB chat uses DeepSeek by default (30-60x cheaper than qwen)
-    # Falls back to llm_* if kb_chat_api_key not configured
+    # Answer via call_chain(SLOT.CHAT): 免费 fallback 链 + 熔断。删 KB-chat 原
+    # DeepSeek 直连分支 (绕过免费链 + DeepSeek 余额硬失败风险); model 由 router 注入。
     try:
-        from config import get_settings
-        from common.llm_client import get_llm_http_client
-        import os
+        from common.llm_router import call_chain, SLOT
+        from common.llm_metrics import llm_caller_context
 
-        settings = get_settings()
-        client = get_llm_http_client()
-
-        # Pick provider: kb_chat_* if configured, else fallback to llm_*
-        kb_api_key = settings.kb_chat_api_key or os.getenv("LLM_DEEPSEEK_API_KEY", "")
-        if settings.kb_chat_provider == "deepseek" and kb_api_key:
-            base_url = settings.kb_chat_base_url
-            api_key = kb_api_key
-            model = settings.kb_chat_model
-            # DeepSeek API does NOT accept enable_thinking field — must omit it
-            extra_payload = {}
-        else:
-            base_url = settings.llm_base_url
-            api_key = settings.llm_api_key
-            model = settings.llm_fast_model
-            extra_payload = {"enable_thinking": False}
-
-        resp = await client.post(
-            f"{base_url}/chat/completions",
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": model,
-                "messages": messages,
-                "max_tokens": max_tokens,
-                "temperature": 0.3,
-                **extra_payload,
-            },
-            timeout=30.0,
-        )
-        resp.raise_for_status()
-        data = resp.json()
+        payload = {
+            "messages": messages,
+            "max_tokens": max_tokens,
+            "temperature": 0.3,
+            "enable_thinking": False,
+        }
+        with llm_caller_context("food_kb.manual_chat.answer"):
+            data = await call_chain(SLOT.CHAT, payload, timeout=30.0)
         answer = data["choices"][0]["message"]["content"]
     except Exception as e:
         logger.error(f"LLM call failed: {e}")
@@ -814,44 +757,35 @@ async def _generate_related_questions(question: str, answer: str) -> List[str]:
     on any failure.
     """
     try:
-        from config import get_settings
-        from common.llm_client import get_llm_http_client
+        from common.llm_router import call_chain, SLOT
+        from common.llm_metrics import llm_caller_context
 
-        settings = get_settings()
-        client = get_llm_http_client()
-
-        rq_resp = await client.post(
-            f"{settings.llm_base_url}/chat/completions",
-            headers={
-                "Authorization": f"Bearer {settings.llm_api_key}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": settings.llm_fast_model,
-                "messages": [
-                    {
-                        "role": "system",
-                        "content": (
-                            "基于用户的问题和AI的回答，生成3个用户最可能接着问的相关问题。"
-                            "只输出问题列表，每行一个，不要编号不要解释。"
-                            "严格要求：问题必须是AI回答中提到过的功能或操作，"
-                            "不要推荐回答中没有提到的功能。"
-                            "系统名称是「白垩纪 AI Agent」。"
-                        ),
-                    },
-                    {
-                        "role": "user",
-                        "content": f"用户问: {question}\nAI答: {answer[:300]}",
-                    },
-                ],
-                "max_tokens": 150,
-                "temperature": 0.5,
-                "enable_thinking": False,
-            },
-            timeout=8.0,
-        )
-        rq_resp.raise_for_status()
-        rq_text = rq_resp.json()["choices"][0]["message"]["content"]
+        # 走 call_chain(SLOT.CHAT): 免费 fallback 链 + 熔断 (单 task, 快路由 head)。
+        payload = {
+            # model 由 call_chain(SLOT.CHAT) 按免费链注入
+            "messages": [
+                {
+                    "role": "system",
+                    "content": (
+                        "基于用户的问题和AI的回答，生成3个用户最可能接着问的相关问题。"
+                        "只输出问题列表，每行一个，不要编号不要解释。"
+                        "严格要求：问题必须是AI回答中提到过的功能或操作，"
+                        "不要推荐回答中没有提到的功能。"
+                        "系统名称是「白垩纪 AI Agent」。"
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": f"用户问: {question}\nAI答: {answer[:300]}",
+                },
+            ],
+            "max_tokens": 150,
+            "temperature": 0.5,
+            "enable_thinking": False,
+        }
+        with llm_caller_context("manual_chat_related"):
+            data = await call_chain(SLOT.CHAT, payload, timeout=8.0)
+        rq_text = data["choices"][0]["message"]["content"]
         return [
             q.strip().lstrip("0123456789.、）)").lstrip("•-·").strip()
             for q in rq_text.strip().split("\n")

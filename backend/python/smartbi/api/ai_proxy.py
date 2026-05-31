@@ -17,8 +17,7 @@ import logging
 import time
 from typing import Any, Dict, List, Optional
 
-import httpx
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Request
 from pydantic import BaseModel, Field
 
 from smartbi.config import get_settings
@@ -184,20 +183,13 @@ async def _call_llm(
         if cached_content is not None:
             return cached_content
 
-    settings = get_settings()
-    if not settings.llm_api_key:
-        raise HTTPException(status_code=503, detail="LLM API key not configured")
-
-    model_name = model if model is not None else settings.llm_model
-    logger.info(f"[LLM] Using model={model_name} for request")
-
-    headers = {
-        "Authorization": f"Bearer {settings.llm_api_key}",
-        "Content-Type": "application/json"
-    }
+    # 走 call_chain(SLOT.CHAT): 免费 fallback 链 + 熔断。model 由 router 按 slot 注入,
+    # 此处不再用 settings.llm_model / fast_model (调用方传入的 model 参数已忽略)。
+    from common.llm_router import call_chain, SLOT
+    from common.llm_metrics import llm_caller_context
 
     payload = {
-        "model": model_name,
+        # model 由 call_chain(SLOT.CHAT) 按免费链注入
         "messages": [
             {
                 "role": "system",
@@ -216,16 +208,9 @@ async def _call_llm(
         "enable_thinking": False
     }
 
-    from common.llm_client import get_llm_http_client
-    client = get_llm_http_client()
-    resp = await client.post(
-        f"{settings.llm_base_url}/chat/completions",
-        headers=headers,
-        json=payload,
-        timeout=httpx.Timeout(30.0),
-    )
-    resp.raise_for_status()
-    data = resp.json()
+    with llm_caller_context("ai_proxy"):
+        data = await call_chain(SLOT.CHAT, payload, timeout=30.0)
+
     # Log context cache stats
     usage = data.get("usage", {})
     cached = (usage.get("prompt_tokens_details") or {}).get("cached_tokens", 0)

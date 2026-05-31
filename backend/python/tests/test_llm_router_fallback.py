@@ -43,12 +43,21 @@ _FREE_BY_ACCOUNT: Dict[str, set] = {
     "aliyun_a": {
         "qwen3.6-flash", "qwen3.6-plus", "qwen3.5-plus-2026-04-20", "qwen3.7-max-2026-05-17",
     },
+    # tencent TokenHub 90-day free trial (2026-06-01) — OpenAI-compatible.
+    # deepseek-v4-pro is FREE here (it is NOT on any aliyun free list, hence the
+    # aliyun-scoped ban below). See common/llm_router.py top-of-file note.
+    "tencent": {
+        "deepseek-v4-pro", "deepseek-v4-flash", "glm-5.1", "glm-5",
+        "kimi-k2.6", "qwen3.5-flash", "minimax-m2.7",
+    },
     "zhipu": {"glm-4.5-air", "glm-4.6v"},
 }
 
-# NEVER allowed (paid or 未开启 → bills when free runs out).
-_FORBIDDEN = {
-    "deepseek-v4-pro",          # not on any free list
+# NEVER allowed on ALIYUN accounts (paid or 未开启 → bills when free runs out).
+# Scoped to aliyun_c/b/a because deepseek-v4-pro IS free on tencent's TokenHub
+# trial — the "no deepseek-v4-pro" ban is an aliyun-specific free-list fact.
+_FORBIDDEN_ON_ALIYUN = {
+    "deepseek-v4-pro",          # not on any aliyun free list (free on tencent)
     "qwen3.7-max",              # C/A 未开启
     "qwen3.7-max-preview",      # C/A 未开启
     "qwen3.7-max-2026-05-20",   # C/A 未开启
@@ -99,6 +108,8 @@ class _ScriptedClient:
                 account = "aliyun_a"
         elif "open.bigmodel.cn" in url:
             account = "zhipu"
+        elif "tokenhub.tencentmaas.com" in url:
+            account = "tencent"
         self.call_log.append((account or "unknown", model))
         if account in self.route_responses:
             return self.route_responses[account]
@@ -120,7 +131,10 @@ def _assert_all_calls_are_free(call_log: List[Tuple[str, str]]):
             f"router called {account}/{model} which is NOT a free-enabled code "
             f"→ would bill paid"
         )
-        assert model not in _FORBIDDEN, f"router called forbidden {account}/{model}"
+        if account in ("aliyun_c", "aliyun_b", "aliyun_a"):
+            assert model not in _FORBIDDEN_ON_ALIYUN, (
+                f"router called aliyun-forbidden {account}/{model}"
+            )
 
 
 # ════════════════════════════════════════════════════════════════════════
@@ -219,10 +233,12 @@ async def test_5xx_also_falls_through(monkeypatch):
 async def test_all_exhausted_raises(monkeypatch):
     """Every account 403/429 → RuntimeError after trying the whole deep chain."""
     _patch_provider_keys(monkeypatch)
+    monkeypatch.setenv("LLM_TENCENT_API_KEY", "key_tencent_fake")
     client = _ScriptedClient({
         "aliyun_c": _fake_response(403, body='AllocationQuota.FreeTierOnly'),
         "aliyun_b": _fake_response(403, body='AllocationQuota.FreeTierOnly'),
         "aliyun_a": _fake_response(403, body='AllocationQuota.FreeTierOnly'),
+        "tencent": _fake_response(429),
         "zhipu": _fake_response(429),
     })
     monkeypatch.setattr(llm_router, "get_llm_http_client", lambda: client)
@@ -231,7 +247,8 @@ async def test_all_exhausted_raises(monkeypatch):
         await call_chain(SLOT.CHAT, {"messages": []})
 
     accounts = {a for a, _ in client.call_log}
-    assert accounts == {"aliyun_c", "aliyun_b", "aliyun_a", "zhipu"}   # tried every account
+    # tried every account in the chain (tencent sits between aliyun + zhipu)
+    assert accounts == {"aliyun_c", "aliyun_b", "aliyun_a", "tencent", "zhipu"}
     _assert_all_calls_are_free(client.call_log)
 
 
@@ -239,13 +256,16 @@ async def test_all_exhausted_raises(monkeypatch):
 # SLOT_MODELS structure (deep free-only chains)
 # ════════════════════════════════════════════════════════════════════════
 
-# Expected chain HEAD (first entry) per slot — the slot-tuned preferred model.
+# Expected chain HEAD (first entry) per slot — the quality-first preferred model
+# (Steve 2026-06-01: order by quality, all entries free so cost is equal). tencent
+# deepseek-v4-pro heads the two quality slots (REASONING/INSIGHTS); high-freq
+# CHAT/MAPPER keep a proven aliyun fast head for latency.
 SLOT_HEADS = {
     SLOT.CHAT: ("aliyun_c", "qwen-flash-2025-07-28"),
-    SLOT.INSIGHTS: ("aliyun_c", "qwen3-max"),
-    SLOT.CHART: ("aliyun_c", "qwen-turbo"),
+    SLOT.INSIGHTS: ("tencent", "deepseek-v4-pro"),
+    SLOT.CHART: ("aliyun_c", "glm-5"),
     SLOT.MAPPER: ("aliyun_c", "qwen-turbo"),
-    SLOT.REASONING: ("aliyun_c", "deepseek-v3"),
+    SLOT.REASONING: ("tencent", "deepseek-v4-pro"),
     SLOT.VL: ("aliyun_c", "qwen3-vl-plus-2025-12-19"),
     SLOT.REVIEW: ("aliyun_c", "qwen3-max-2026-01-23"),
 }
@@ -271,7 +291,10 @@ def test_every_chain_entry_is_free_and_enabled():
             assert model in _FREE_BY_ACCOUNT[account], (
                 f"{slot.value}: {account}/{model} is NOT a free-enabled code → would bill paid"
             )
-            assert model not in _FORBIDDEN, f"{slot.value}: forbidden code {account}/{model}"
+            if account in ("aliyun_c", "aliyun_b", "aliyun_a"):
+                assert model not in _FORBIDDEN_ON_ALIYUN, (
+                    f"{slot.value}: aliyun-forbidden code {account}/{model}"
+                )
 
 
 def test_chain_heads_are_slot_tuned():
@@ -282,12 +305,17 @@ def test_chain_heads_are_slot_tuned():
         )
 
 
-def test_no_deepseek_v4_pro_anywhere():
-    """deepseek-v4-pro is not on any free list — must be fully removed."""
+def test_no_deepseek_v4_pro_on_aliyun():
+    """deepseek-v4-pro is not on any ALIYUN free list — must never appear on an
+    aliyun account. It IS free on tencent's TokenHub trial, so tencent/
+    deepseek-v4-pro is allowed (and used in the REASONING head)."""
     sm = llm_router.SLOT_MODELS
     for slot, chain in sm.items():
-        models = [m for _, m in chain]
-        assert "deepseek-v4-pro" not in models, f"{slot.value} still uses deepseek-v4-pro"
+        for account, model in chain:
+            if account in ("aliyun_c", "aliyun_b", "aliyun_a"):
+                assert model != "deepseek-v4-pro", (
+                    f"{slot.value} uses aliyun-billed deepseek-v4-pro on {account}"
+                )
 
 
 def test_vl_chain_is_vision_only():

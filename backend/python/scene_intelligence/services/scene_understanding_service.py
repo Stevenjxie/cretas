@@ -86,15 +86,21 @@ class SceneUnderstandingService:
         self.base_url = os.getenv("LLM_VL_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1")
         self.model = os.getenv("VL_MODEL_DEEP_REASONING", os.getenv("LLM_VL_MODEL", "qwen3-vl-plus-2025-12-19"))
 
-    def _call_vl_model(
+    async def _call_vl_model(
         self,
         images: List[Dict[str, str]],
         prompt: str,
         max_tokens: int = 3000
     ) -> Optional[Dict]:
-        """调用 VL 模型"""
-        import httpx
-        client = httpx.Client(timeout=120.0)
+        """调用 VL 模型
+
+        Routes through the free-tier VL fallback chain (call_chain) instead of a
+        direct DashScope httpx connection — gets circuit-breaker + multi-account
+        free fallback. payload drops `model` (call_chain injects the SLOT.VL
+        model per provider); vision messages preserved.
+        """
+        from common.llm_router import call_chain, SLOT
+        from common.llm_metrics import llm_caller_context
 
         try:
             content = []
@@ -116,27 +122,19 @@ class SceneUnderstandingService:
                 "text": prompt
             })
 
-            response = client.post(
-                f"{self.base_url}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {self.api_key}",
-                    "Content-Type": "application/json"
-                },
-                json={
-                    "model": self.model,
-                    "messages": [
-                        {
-                            "role": "user",
-                            "content": content
-                        }
-                    ],
-                    "max_tokens": max_tokens,
-                    "temperature": 0.3,
-                    "enable_thinking": False
-                }
-            )
-
-            result = response.json()
+            payload = {
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": content
+                    }
+                ],
+                "max_tokens": max_tokens,
+                "temperature": 0.3,
+                "enable_thinking": False,
+            }
+            with llm_caller_context("scene_intelligence"):
+                result = await call_chain(SLOT.VL, payload)
 
             if "error" in result:
                 logger.error(f"VL API error: {result['error']}")
@@ -215,7 +213,7 @@ class SceneUnderstandingService:
 
 仅返回 JSON，不要包含其他文字。"""
 
-        result = self._call_vl_model(
+        result = await self._call_vl_model(
             images=[{"base64": image_base64}],
             prompt=prompt
         )
@@ -349,7 +347,7 @@ class SceneUnderstandingService:
 
 仅返回 JSON，不要包含其他文字。"""
 
-        result = self._call_vl_model(
+        result = await self._call_vl_model(
             images=[
                 {"base64": previous.reference_frame_base64, "label": "参考图片（之前的场景）:"},
                 {"base64": current_frame_base64, "label": "当前图片（现在的场景）:"}
