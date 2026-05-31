@@ -68,8 +68,8 @@ public class PricingApplicationLog extends BaseEntity {
     @Column(name = "business_entity_type", length = 50)
     private String businessEntityType;
 
-    /** e.g. SO line UUID. */
-    @Column(name = "business_entity_id", length = 50)
+    /** e.g. "SO-20260531-0001/{productTypeId-UUID}" (orderNumber/productTypeId) — up to ~53 chars. */
+    @Column(name = "business_entity_id", length = 120)
     private String businessEntityId;
 
     /** Unit price before applying any strategies. */
