@@ -378,6 +378,25 @@ class DataCleaner:
         # 生成Markdown格式的数据预览
         md_content = self.raw_exporter.to_markdown(raw_data, max_rows=15, truncate=False)
 
+        # P0 出境脱敏: 注册敏感列单元格真名 → 出境占位 (15 行预览含真实客户/门店名).
+        try:
+            from common.llm_redactor import register_values_for_egress, sensitive_type_for_column
+            _data_start = structure.get("data_start_row", 0)
+            _vbt = {}
+            for _i, _col in enumerate(structure.get("columns", [])):
+                _tl = sensitive_type_for_column(_col.get("name") or _col.get("merged_name") or "")
+                if not _tl:
+                    continue
+                _bucket = _vbt.setdefault(_tl, [])
+                for _row in raw_data.rows[_data_start:_data_start + 30]:
+                    if _i < len(_row.cells):
+                        _sv = str(_row.cells[_i]).strip()
+                        if _sv and 0 < len(_sv) <= 40 and _sv not in _bucket:
+                            _bucket.append(_sv)
+            register_values_for_egress(_vbt)
+        except Exception:
+            pass
+
         prompt = self._build_issue_detection_prompt(raw_data, structure, md_content)
 
         try:
@@ -386,6 +405,8 @@ class DataCleaner:
                 return self._rule_based_detection(raw_data, structure)
 
             response = await self._call_llm(prompt)
+            from common.llm_redactor import restore_in_scope
+            response = restore_in_scope(response)  # P0 还原占位 (清洗示例可能含值)
             issues = self._parse_issue_response(response)
 
             # --- cache store ---

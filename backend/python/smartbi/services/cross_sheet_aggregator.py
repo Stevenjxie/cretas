@@ -617,6 +617,12 @@ class CrossSheetAggregator:
         if not self.settings.llm_api_key:
             return self._generate_statistical_summary(kpi_comparison)
 
+        # P0 出境脱敏: 注册分部/报表名 → 出境占位; 输出叙述还原真名 (叙述引用这些名字).
+        from common.llm_redactor import register_values_for_egress, restore_in_scope
+        register_values_for_egress({
+            "分部": [str(it.get("sheetName")) for it in kpi_comparison if it.get("sheetName")]
+        })
+
         try:
             # Build KPI summary for LLM
             kpi_text_parts = []
@@ -710,7 +716,7 @@ class CrossSheetAggregator:
                 )
             response.raise_for_status()
             result = response.json()
-            return result["choices"][0]["message"]["content"]
+            return restore_in_scope(result["choices"][0]["message"]["content"])  # P0 还原分部真名
 
         except Exception as e:
             logger.error(f"LLM cross-sheet summary failed: {e}")

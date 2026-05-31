@@ -278,6 +278,10 @@ class LLMFieldDetector:
 
         df = pd.DataFrame(rows, columns=headers)
 
+        # P0 出境脱敏: 注册敏感列真名 → 共享客户端包装层在出境时占位 (输出是字段元数据, 无需还原).
+        from common.llm_redactor import register_df_for_egress
+        register_df_for_egress(df)
+
         # Step 1: Calculate basic data types and statistics
         basic_info = self._analyze_basic_types(df)
         sample_types = [info["data_type"] for info in basic_info.values()]

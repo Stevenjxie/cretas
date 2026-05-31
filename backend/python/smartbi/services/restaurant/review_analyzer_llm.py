@@ -275,11 +275,18 @@ class LlmReviewAnalyzer:
 
         for attempt in range(self._MAX_RETRIES):
             try:
-                async with httpx.AsyncClient(timeout=httpx.Timeout(self._TIMEOUT_SECS)) as client:
+                # P0 出境脱敏: 走共享(脱敏包装)客户端而非私有 httpx.AsyncClient —— 否则评论文本
+                # (含手机/邮箱等 PII) 完全绕过脱敏 + 审计。包装层施加 PII/factory 兜底 + 记审计;
+                # 菜品名是本功能要抽取的目标, 不脱敏 (无 scope → 不占位)。
+                from common.llm_client import get_llm_http_client
+                from common.llm_metrics import llm_caller_context
+                client = get_llm_http_client()
+                with llm_caller_context("review_analyzer"):
                     resp = await client.post(
                         f"{self._base_url}/chat/completions",
                         headers=headers,
                         json=payload,
+                        timeout=httpx.Timeout(self._TIMEOUT_SECS),
                     )
                     resp.raise_for_status()
                     data = resp.json()

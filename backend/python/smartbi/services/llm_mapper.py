@@ -267,6 +267,12 @@ class LLMMapper:
             # Fallback to rule-based mapping
             return self._rule_based_mapping(detected_fields)
 
+        # P0 出境脱敏: 注册敏感字段样本值真名 → 出境占位 (输出是字段映射元数据, 无需还原).
+        from common.llm_redactor import (
+            register_values_for_egress, extract_sensitive_values_from_fields,
+        )
+        register_values_for_egress(extract_sensitive_values_from_fields(detected_fields))
+
         prompt = self._build_mapping_prompt(detected_fields, context)
 
         try:
@@ -293,6 +299,12 @@ class LLMMapper:
         """
         if not self.settings.llm_api_key:
             return self._rule_based_chart_recommendation(detected_fields)
+
+        # P0 出境脱敏: 注册敏感字段样本值真名 → 出境占位 (输出是图表配置元数据, 无需还原).
+        from common.llm_redactor import (
+            register_values_for_egress, extract_sensitive_values_from_fields,
+        )
+        register_values_for_egress(extract_sensitive_values_from_fields(detected_fields))
 
         prompt = self._build_chart_prompt(detected_fields, analysis_goal)
 

@@ -373,6 +373,13 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"LLM metrics enable failed: {e}")
 
+    # P0 数据主权: enable LLM egress audit (writes to smart_bi_llm_egress_audit via pg pool)
+    try:
+        from common.llm_egress_audit import enable_egress_audit
+        enable_egress_audit()
+    except Exception as e:
+        logger.warning(f"LLM egress audit enable failed: {e}")
+
     # Phase 3 (Apr 23 2026): template embedding index population.
     # Populates smart_bi_template_embeddings on first boot. Re-runs are
     # idempotent (ON CONFLICT). Fires in background — no blocking.
@@ -869,6 +876,11 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"LLM metrics disable error: {e}")
     try:
+        from common.llm_egress_audit import disable_egress_audit
+        await disable_egress_audit()
+    except Exception as e:
+        logger.warning(f"LLM egress audit disable error: {e}")
+    try:
         from common.llm_client import close_llm_client
         await close_llm_client()
     except Exception as e:
@@ -1033,6 +1045,10 @@ else:
 # LLM usage admin (BUG-9 + 模型切换监控)
 from smartbi.api import llm_usage_admin  # noqa: E402
 app.include_router(llm_usage_admin.router, prefix="/api/smartbi/admin/llm-usage", tags=["LLM Usage Admin"])
+
+# P0 数据主权: LLM 出境审计 admin (出境日志 + 脱敏统计 + CSV 导出, 给客户/合规演示)
+from smartbi.api import llm_egress_audit_admin  # noqa: E402
+app.include_router(llm_egress_audit_admin.router, prefix="/api/smartbi/admin/llm-egress", tags=["LLM Egress Audit"])
 
 # Phase 1 (Apr 23 2026): LLM fallback query log admin + feedback write
 from smartbi.api import llm_fallback_admin  # noqa: E402
