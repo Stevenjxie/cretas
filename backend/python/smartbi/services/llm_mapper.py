@@ -668,7 +668,62 @@ class LLMMapper:
         "菜品大类": ("category", "category_dimensions"),
         "菜品类别": ("category", "category_dimensions"),
         "品类": ("category", "category_dimensions"),
+        # ── 真实客户数据扩充 (2026-05-31: 大众点评餐饮 + 六扇门卤味工厂) ──
+        # 门店/店铺 → store (原字典无 store 目标, 但餐饮每张表都有门店名称)
+        "门店名称": ("store", "category_dimensions"),
+        "店铺名称": ("store", "category_dimensions"),
+        "评价门店": ("store", "category_dimensions"),
+        "门店": ("store", "category_dimensions"),
+        # 销售单价 → unit_price; 分摊优惠 → discount_amount; 实退金额 → refund_amount
+        "销售单价": ("unit_price", "measures"),
+        "分摊优惠": ("discount_amount", "measures"),
+        "实退金额": ("refund_amount", "measures"),
+        "汇总实际收入": ("revenue", "measures"),
+        "数量(含套餐子商品)": ("quantity_sold", "measures"),
+        "退货数量": ("returned_quantity", "measures"),
+        # 维度: 点单方式(堂食/外卖/团购) / 商品编码 / 规格
+        "点单方式": ("order_channel", "category_dimensions"),
+        "商品编码": ("product_code", "category_dimensions"),
+        "规格": ("spec", "category_dimensions"),
+        # 采购/原料 (采购入库报表)
+        "供应商": ("supplier", "category_dimensions"),
+        "供应商名称": ("supplier", "category_dimensions"),
+        "原料名称": ("material", "category_dimensions"),
+        "原料分类": ("material_category", "category_dimensions"),
+        "入库仓库": ("warehouse", "category_dimensions"),
+        "入库数量": ("inbound_quantity", "measures"),
+        "原料批次": ("batch", "category_dimensions"),
+        "原料批次号": ("batch", "category_dimensions"),
+        "批次号": ("batch", "category_dimensions"),
+        "订单批次": ("batch", "category_dimensions"),
+        # ── 工厂/生产 (六扇门卤味加工: 出成率/投料/产出/人工) ──
+        "出成率": ("yield_rate", "measures"),
+        "成品总出成率": ("yield_rate", "measures"),
+        "投料重量": ("input_weight", "measures"),
+        "投入重量": ("input_weight", "measures"),
+        "产出重量": ("output_quantity", "measures"),
+        "产出数量": ("output_quantity", "measures"),
+        "成品重量": ("output_quantity", "measures"),
+        "仓库出库重量": ("outbound_weight", "measures"),
+        "入库数量/盒": ("inbound_quantity", "measures"),
+        "实际生产数量": ("output_quantity", "measures"),
+        "人工（分）": ("labor_minutes", "measures"),
+        "人工(分)": ("labor_minutes", "measures"),
+        "人工（时）": ("labor_hours", "measures"),
+        "人工(时)": ("labor_hours", "measures"),
     }
+
+    @staticmethod
+    def _normalize_field_name(name: str) -> str:
+        """去掉列名的"噪声"后缀(单位 /kg /盒、套餐限定),让 '投入重量/kg'、
+        '单卖数量(不含套餐子商品)' 命中基础别名。保留 '（分）/（时）' 等有意义的限定。"""
+        import re as _re
+        s = (name or "").strip()
+        for token in ("(不含套餐子商品)", "（不含套餐子商品）", "(含套餐子商品)", "（含套餐子商品）"):
+            s = s.replace(token, "")
+        s = _re.sub(r"[/／](kg|g|t|吨|盒|个|份|件|台|箱|包|袋|条|只|斤|克)$", "", s)
+        s = _re.sub(r"[(（](元|%|千克|公斤|kg|个|份)[)）]$", "", s)
+        return s.strip()
 
     def _rule_based_mapping(self, detected_fields: List[dict]) -> dict:
         """Fallback rule-based field mapping with POS field alias support"""
@@ -685,14 +740,22 @@ class LLMMapper:
             # Check the raw field name against known POS field aliases.
             # Strip whitespace for fuzzy matching but try exact first.
             stripped_name = field_name.strip()
+            # 精确匹配: 先原名, 再规范化名 (去单位/套餐噪声后) —— 都算 exact(0.85, 高置信)
+            alias_key = None
             if stripped_name in self.POS_FIELD_ALIASES:
-                target, category = self.POS_FIELD_ALIASES[stripped_name]
+                alias_key = stripped_name
+            else:
+                norm = self._normalize_field_name(stripped_name)
+                if norm and norm != stripped_name and norm in self.POS_FIELD_ALIASES:
+                    alias_key = norm
+            if alias_key:
+                target, category = self.POS_FIELD_ALIASES[alias_key]
                 mappings.append({
                     "sourceField": field_name,
                     "targetField": target,
                     "targetCategory": category,
                     "confidence": 0.85,
-                    "reason": f"POS field alias exact match: {stripped_name} → {target}"
+                    "reason": f"POS field alias exact match: {alias_key} → {target}"
                 })
                 mapped = True
 
