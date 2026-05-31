@@ -1,11 +1,20 @@
 """
 Multi-provider LLM router with 403 AllocationQuota.FreeTierOnly fallback.
 
-Chain (priority order): aliyun_b → aliyun_a → zhipu → aliyun_a_deepseek
+Per-slot DEEP fallback chains (rebuilt 2026-05-31, Steve directive): each SLOT
+has a list of (account, model) entries — ≥10 free-tier models spanning
+aliyun_c → aliyun_b → aliyun_a → zhipu (see SLOT_MODELS). The router tries them
+in order; an exhausted free model returns 403 FreeTierOnly and falls to the
+NEXT entry, so it keeps trying free models across all 3 aliyun accounts before
+any chance of error. EVERY entry is FREE + "免费额度用完即停=已开启" per the
+console (memory reference_dashscope_free_model_allowlist) — NO paid SKU is ever
+in a chain, so paid billing is structurally impossible.
 
 No client-side quota estimation — we rely on Aliyun's 免费额度用完即停 toggle
 which returns 403 when free quota exhausts. This is the HARD guarantee that
-accounts will never be charged beyond free tier.
+accounts will never be charged beyond free tier. Circuit breaker is keyed per
+(account, model) so one model's quota-403 doesn't skip other free models on the
+same account.
 
 The metrics hook in common/llm_metrics.py records each attempt (including
 failed fallback attempts) so we have per-account usage visibility.
@@ -224,56 +233,101 @@ class SLOT(str, Enum):
 # DeepSeek-official balance-0 returns 402 'Insufficient Balance' — issue #581
 # added that case so the chain logs WARNING quota-exhausted instead of generic
 # ERROR before exhausting cleanly.
-SLOT_MODELS: Dict[SLOT, Dict[str, Optional[str]]] = {
-    SLOT.CHAT: {
-        "aliyun_c":          "qwen-plus",                 # May 31 2026 (Steve re-confirm c allowlist update): qwen-flash FREE-TIER EXHAUSTED on C (403). qwen-plus free-pool intact on C, faster than qwen3-max for interactive CHAT. c is chain head → consumes first.  # noqa: E501
-        "aliyun_b":          "qwen-flash",                # May 31 2026 swap: qwen-max FREE-TIER EXHAUSTED on B (403 AllocationQuota.FreeTierOnly). qwen-flash free-pool intact on B + is CHAT slot benchmark winner (1.4s concise). c's qwen-flash also exhausted → b is effective head.  # noqa: E501
-        "aliyun_a":          "qwen3-max",                 # May 31 2026 swap: qwen3.6-max-preview EXHAUSTED on A (403). qwen3-max (旗舰) free-pool intact on ALL 3 accounts (independent of the 3.6-preview pool) → flagship-quality fallback.  # noqa: E501
-        "zhipu":             "glm-4.5-air",               # 6.5M independent pool (NOT in 通用池 which is 0)
-        "aliyun_a_deepseek": "deepseek-v4-pro",           # DashScope-hosted, free 999K on aliyun_a key
-    },
-    SLOT.INSIGHTS: {
-        "aliyun_c":          "qwen3-max",                 # May 31 2026 (Steve re-confirm c allowlist): qwen-flash EXHAUSTED on C (403). qwen3-max free on C — INSIGHTS is offline materialization (Fix2 rich attribution) → flagship quality, c head consumes first.  # noqa: E501
-        "aliyun_b":          "qwen3-max",                 # May 31 2026 swap: qwen3.6-35b-a3b EXHAUSTED on B (403). qwen3-max (旗舰) free on ALL 3 accts; INSIGHTS is offline materialization (Fix2 rich-attribution insights) → flagship quality > speed.  # noqa: E501
-        "aliyun_a":          "qwen3-max",                 # May 31 2026 swap: qwen3.6-35b-a3b EXHAUSTED on A (403). qwen3-max free-pool intact on A.  # noqa: E501
-        "zhipu":             "glm-4.5-air",               # 6.5M independent pool
-        "aliyun_a_deepseek": "deepseek-v4-pro",
-    },
-    SLOT.CHART: {
-        "aliyun_c":          "qwen3-max",                 # May 31 2026 (Steve re-confirm c allowlist): qwen-turbo EXHAUSTED on C (403). qwen3-max free on C, reliable structured JSON (CHART not interactive). On any malformed JSON, b glm-5 catches.  # noqa: E501
-        "aliyun_b":          "glm-5",                     # 875K intact B (May 31 probe: still OK — chain catches here)
-        "aliyun_a":          "qwen-turbo",                # May 31 2026 swap: glm-5 EXHAUSTED on A (403). qwen-turbo free on A + is CHART benchmark winner (valid compact JSON). Redundancy only — b glm-5 catches first.  # noqa: E501
-        "zhipu":             "glm-4.5-air",
-        "aliyun_a_deepseek": "deepseek-v4-pro",
-    },
-    SLOT.MAPPER: {
-        "aliyun_c":          "qwen3-235b-a22b",           # May 31 2026 (Steve re-confirm c allowlist): qwen-turbo EXHAUSTED on C (403). qwen3-235b-a22b (big MoE) free on C — strong enough for correct mapping direction. b qwen3.5-122b-a10b catches on any issue.  # noqa: E501
-        "aliyun_b":          "qwen3.5-122b-a10b",         # 998K intact (May 31 probe: still OK — chain catches here)
-        "aliyun_a":          "qwen-turbo",                # May 31 2026 swap: qwen3.5-122b-a10b EXHAUSTED on A (403). qwen-turbo free on A + is MAPPER benchmark winner (correct mapping direction). Redundancy — b catches first.  # noqa: E501
-        "zhipu":             "glm-4.5-air",
-        "aliyun_a_deepseek": "deepseek-v4-pro",
-    },
-    SLOT.REASONING: {
-        "aliyun_c":          "deepseek-v3",               # May 31 2026 (Steve re-confirm c allowlist): deepseek-v4-pro EXHAUSTED on C (403). deepseek-v3 free on C — deepseek-class depth, non-interactive REASONING. b qwen3.5-397b-a17b catches on any issue.  # noqa: E501
-        "aliyun_b":          "qwen3.5-397b-a17b",         # 974K intact (May 31 probe: still OK — chain catches here)
-        "aliyun_a":          "qwen3-235b-a22b",           # May 31 2026 swap: qwen3.5-397b-a17b EXHAUSTED on A (403). qwen3-235b-a22b (big MoE) free on A — strong reasoning. Redundancy — b catches first.  # noqa: E501
-        "zhipu":             "glm-4.5-air",
-        "aliyun_a_deepseek": "deepseek-v4-pro",
-    },
-    SLOT.VL: {
-        "aliyun_c":          "qwen3-vl-plus-2025-12-19",  # ✅ Only allowlist-approved VL option on aliyun_c (2025-05-07 SKU is 404 NOSKU on new accounts — deprecated).  # noqa: E501
-        "aliyun_b":          "qwen3-vl-plus-2025-12-19",  # 1M intact (May 31 probe: still OK)
-        "aliyun_a":          "qwen-vl-max",               # May 31 2026 swap: qwen3-vl-plus-2025-12-19 EXHAUSTED on A (403). qwen-vl-max free on A — strong VL, same DashScope image_url format. Redundancy — c/b catch first.  # noqa: E501
-        "zhipu":             "glm-4.6v",                  # ⚠️ payload format incompatible with image_url (zhipu needs different shape); 6M independent pool exists but call site must adapt  # noqa: E501
-        "aliyun_a_deepseek": None,                        # DashScope has no DeepSeek VL — skip cleanly
-    },
-    SLOT.REVIEW: {
-        "aliyun_c":          "qwen3-max-2026-01-23",      # ✅ May 14 benchmark winner: 9.3s, concise + complete.
-        "aliyun_b":          "qwen3-max",                     # May 31 2026 swap: qwen-max EXHAUSTED on B (403). qwen3-max free on B — strong critique. Redundancy — c qwen3-max-2026-01-23 catches first.  # noqa: E501
-        "aliyun_a":          "qwen3-max",                     # May 31 2026 swap: qwen3.5-397b-a17b EXHAUSTED on A (403). qwen3-max free on A. Redundancy — c catches first.  # noqa: E501
-        "zhipu":             "glm-4.5-air",
-        "aliyun_a_deepseek": None,                            # Skip new chain entry cleanly for REVIEW
-    },
+# =====================================================================
+# Free-tier deep fallback chains — rebuilt 2026-05-31 (Steve directive:
+# "每个 slot 至少 10 个 fallback, 把所有可用免费模型都串进 fallback").
+#
+# ⛔ HARD RULE: EVERY (account, model) below MUST be a model that is FREE +
+# "免费额度用完即停 = 已开启" on THAT account per the DashScope console (recorded
+# in memory reference_dashscope_free_model_allowlist). A code NOT on the
+# account's free-enabled list = PAID billing. With 已开启 ON, an exhausted free
+# model returns 403 AllocationQuota.FreeTierOnly → router falls to the NEXT
+# entry, never billing paid. A long chain = keep trying free models across all
+# 3 aliyun accounts + zhipu until one has quota; only "every free model on
+# every account exhausted" surfaces an error — a paid charge is structurally
+# impossible (no paid SKU is ever in a chain).
+#
+# Each slot = slot-tuned HEAD + shared _TEXT_TAIL (deduped) → ≥10 fallbacks.
+# Order: aliyun_c (freshest, exp 2026/08) → aliyun_b → aliyun_a (small free
+# list) → zhipu (independent GLM pool). VL slot uses a vision-only chain.
+#
+# ⚠️ NEVER add (NOT free-enabled, would bill): deepseek-v4-pro (no free list);
+# glm-5 on B (only glm-4.5/4.6/4.7 free on B; glm-5 IS free on C); qwen3.7-max /
+# qwen3.7-max-preview / qwen3.7-max-2026-05-20 (C/A 未开启 → bill when exhausted);
+# any bare max-class on A (A free list is tiny: see _A_FREE below).
+# Free quotas EXPIRE (A: 2026/06-08, B/C: 2026/07-08) → re-audit + rotate; when a
+# model 403s persistently, confirm it's still on the console free-enabled list.
+# =====================================================================
+
+
+def _dedup_chain(pairs: List[Tuple[str, str]]) -> List[Tuple[str, str]]:
+    seen: set = set()
+    out: List[Tuple[str, str]] = []
+    for ac, m in pairs:
+        if (ac, m) not in seen:
+            seen.add((ac, m))
+            out.append((ac, m))
+    return out
+
+
+# Universal free-text fallback tail (appended to every text slot). All entries
+# verified FREE + 已开启 on the console 2026-05-31.
+_TEXT_TAIL: List[Tuple[str, str]] = [
+    ("aliyun_c", "qwen-plus"), ("aliyun_c", "qwen3-max"), ("aliyun_c", "qwen-max"),
+    ("aliyun_c", "qwen3-235b-a22b"), ("aliyun_c", "qwen3.5-397b-a17b"),
+    ("aliyun_c", "qwen3.6-flash"), ("aliyun_c", "qwen3-32b"),
+    ("aliyun_c", "deepseek-v3"), ("aliyun_c", "glm-5"), ("aliyun_c", "glm-4.6"),
+    ("aliyun_b", "qwen-flash"), ("aliyun_b", "qwen-plus-latest"), ("aliyun_b", "qwen3-max"),
+    ("aliyun_b", "qwen3-235b-a22b"), ("aliyun_b", "qwen3.5-397b-a17b"),
+    ("aliyun_b", "deepseek-v3"), ("aliyun_b", "glm-4.6"),
+    ("aliyun_a", "qwen3.6-flash"), ("aliyun_a", "qwen3.6-plus"),
+    ("aliyun_a", "qwen3.5-plus-2026-04-20"), ("aliyun_a", "qwen3.7-max-2026-05-17"),
+    ("zhipu", "glm-4.5-air"),
+]
+
+# VL-only chain (vision; text models can't serve images).
+_VL_CHAIN: List[Tuple[str, str]] = _dedup_chain([
+    ("aliyun_c", "qwen3-vl-plus-2025-12-19"), ("aliyun_c", "qwen-vl-max"),
+    ("aliyun_c", "qwen3-vl-plus"), ("aliyun_c", "qwen3-vl-32b-instruct"),
+    ("aliyun_c", "qwen3-vl-flash-2026-01-22"), ("aliyun_c", "qwen3-vl-30b-a3b-instruct"),
+    ("aliyun_b", "qwen3-vl-plus-2025-12-19"), ("aliyun_b", "qwen-vl-max"),
+    ("aliyun_b", "qwen3-vl-plus"), ("aliyun_b", "qwen3-vl-32b-instruct"),
+    ("zhipu", "glm-4.6v"),
+])
+
+# SLOT_MODELS[slot] = ordered list of (account, model) — the deep fallback chain.
+SLOT_MODELS: Dict[SLOT, List[Tuple[str, str]]] = {
+    # CHAT — interactive → fast head, then full free tail.
+    SLOT.CHAT: _dedup_chain([
+        ("aliyun_c", "qwen-flash-2025-07-28"), ("aliyun_b", "qwen-flash"),
+        ("aliyun_a", "qwen3.6-flash"), ("aliyun_c", "qwen-turbo"),
+    ] + _TEXT_TAIL),
+    # INSIGHTS — offline materialization (Fix2 rich attribution) → flagship head.
+    SLOT.INSIGHTS: _dedup_chain([
+        ("aliyun_c", "qwen3-max"), ("aliyun_b", "qwen3-max"),
+        ("aliyun_a", "qwen3.7-max-2026-05-17"),
+    ] + _TEXT_TAIL),
+    # CHART — needs valid compact JSON → JSON-reliable head.
+    SLOT.CHART: _dedup_chain([
+        ("aliyun_c", "qwen-turbo"), ("aliyun_c", "glm-5"), ("aliyun_b", "glm-4.6"),
+    ] + _TEXT_TAIL),
+    # MAPPER — field-mapping direction → turbo / 122b head.
+    SLOT.MAPPER: _dedup_chain([
+        ("aliyun_c", "qwen-turbo"), ("aliyun_c", "qwen3.5-122b-a10b"),
+        ("aliyun_b", "qwen3.5-122b-a10b"),
+    ] + _TEXT_TAIL),
+    # REASONING — depth → deepseek / 397b / big-MoE head.
+    SLOT.REASONING: _dedup_chain([
+        ("aliyun_c", "deepseek-v3"), ("aliyun_b", "qwen3.5-397b-a17b"),
+        ("aliyun_c", "qwen3-235b-a22b"), ("aliyun_c", "deepseek-r1"),
+    ] + _TEXT_TAIL),
+    # VL — vision-only chain.
+    SLOT.VL: _VL_CHAIN,
+    # REVIEW — critique → max-class head.
+    SLOT.REVIEW: _dedup_chain([
+        ("aliyun_c", "qwen3-max-2026-01-23"), ("aliyun_b", "qwen3-max"),
+        ("aliyun_c", "qwen-max"),
+    ] + _TEXT_TAIL),
 }
 
 
@@ -390,19 +444,23 @@ async def call_chain(
     Returns parsed JSON response from the first successful provider.
     Raises RuntimeError if all providers exhaust.
     """
-    chain = chain or DEFAULT_CHAIN
+    slot_chain = SLOT_MODELS.get(slot, [])
+    if chain is not None:
+        # Optional account-filter override (legacy callers pass account names).
+        slot_chain = [(ac, m) for (ac, m) in slot_chain if ac in chain]
     client = get_llm_http_client()
     errors: List[str] = []
 
-    for account in chain:
-        model = SLOT_MODELS.get(slot, {}).get(account)
+    for account, model in slot_chain:
         if not model:
             continue
+        cb_key = f"{account}/{model}"  # circuit-breaker per (account,model): one
+        # model's free-quota 403 must NOT skip other free models on same account
 
-        # Circuit breaker — skip provider if in cooldown after CB_THRESHOLD fails
-        if _cb_should_skip(account):
+        # Circuit breaker — skip this (account,model) if in cooldown after CB_THRESHOLD fails
+        if _cb_should_skip(cb_key):
             logger.info(
-                f"[llm_router] slot={slot.value} skipping {account} "
+                f"[llm_router] slot={slot.value} skipping {account}/{model} "
                 f"(circuit breaker open, cooldown {CB_COOLDOWN}s)"
             )
             errors.append(f"{account}: cb_open")
@@ -438,14 +496,14 @@ async def call_chain(
             body_text = resp.text  # may trigger aread() internally
 
             if 200 <= resp.status_code < 300:
-                _cb_record_success(account)
+                _cb_record_success(cb_key)
                 body_json = resp.json()
                 _log_cache_and_record_budget(slot.value, account, model, body_json)
                 logger.info(f"[llm_router] slot={slot.value} OK via {account}/{model}")
                 return body_json
 
             if _is_quota_exhausted(resp.status_code, body_text):
-                _cb_record_failure(account)
+                _cb_record_failure(cb_key)
                 fails = _CB_FAILURES.get(account, 0)
                 logger.warning(
                     f"[llm_router] slot={slot.value} {account}/{model} "
@@ -456,7 +514,7 @@ async def call_chain(
                 continue
 
             # Other errors: don't blindly fallback — log and raise
-            _cb_record_failure(account)
+            _cb_record_failure(cb_key)
             fails = _CB_FAILURES.get(account, 0)
             logger.error(
                 f"[llm_router] slot={slot.value} {account}/{model} "
@@ -469,7 +527,7 @@ async def call_chain(
             continue
 
         except asyncio.TimeoutError:
-            _cb_record_failure(account)
+            _cb_record_failure(cb_key)
             fails = _CB_FAILURES.get(account, 0)
             logger.warning(
                 f"[llm_router] {account}/{model} timeout "
@@ -478,7 +536,7 @@ async def call_chain(
             errors.append(f"{account}/{model}: timeout")
             continue
         except Exception as e:
-            _cb_record_failure(account)
+            _cb_record_failure(cb_key)
             fails = _CB_FAILURES.get(account, 0)
             logger.warning(
                 f"[llm_router] {account}/{model} exception "
@@ -528,7 +586,9 @@ async def call_chain_stream(
 
     Raises RuntimeError if all providers exhaust BEFORE any delta is yielded.
     """
-    chain = chain or DEFAULT_CHAIN
+    slot_chain = SLOT_MODELS.get(slot, [])
+    if chain is not None:
+        slot_chain = [(ac, m) for (ac, m) in slot_chain if ac in chain]
     client = get_llm_http_client()
     errors: List[str] = []
     payload = {**payload, "stream": True}
@@ -538,15 +598,15 @@ async def call_chain_stream(
     # flags. AgentOrchestrator already sets this; chat path does not need it.
     payload.setdefault("stream_options", {"include_usage": True})
 
-    for account in chain:
-        model = SLOT_MODELS.get(slot, {}).get(account)
+    for account, model in slot_chain:
         if not model:
             continue
+        cb_key = f"{account}/{model}"  # CB per (account,model), see call_chain
 
-        # Circuit breaker — skip provider if in cooldown after CB_THRESHOLD fails
-        if _cb_should_skip(account):
+        # Circuit breaker — skip this (account,model) if in cooldown after CB_THRESHOLD fails
+        if _cb_should_skip(cb_key):
             logger.info(
-                f"[llm_router_stream] slot={slot.value} skipping {account} "
+                f"[llm_router_stream] slot={slot.value} skipping {account}/{model} "
                 f"(circuit breaker open, cooldown {CB_COOLDOWN}s)"
             )
             errors.append(f"{account}: cb_open")
@@ -576,7 +636,7 @@ async def call_chain_stream(
                 # Pre-stream error branch — fallback before content yielded
                 if resp.status_code >= 400:
                     body_text = (await resp.aread()).decode("utf-8", errors="replace")
-                    _cb_record_failure(account)
+                    _cb_record_failure(cb_key)
                     fails = _CB_FAILURES.get(account, 0)
                     if _is_quota_exhausted(resp.status_code, body_text):
                         logger.warning(
@@ -658,7 +718,7 @@ async def call_chain_stream(
                         if total:
                             yield {"type": "usage", "tokens": total}
                 # Successful stream — record CB success and return
-                _cb_record_success(account)
+                _cb_record_success(cb_key)
                 return
 
         except (asyncio.TimeoutError, httpx.TimeoutException):
@@ -669,7 +729,7 @@ async def call_chain_stream(
                     "propagating partial result (no fallback)"
                 )
                 return
-            _cb_record_failure(account)
+            _cb_record_failure(cb_key)
             fails = _CB_FAILURES.get(account, 0)
             logger.warning(
                 f"[llm_router_stream] {account}/{model} pre-stream timeout, "
@@ -685,7 +745,7 @@ async def call_chain_stream(
                     "propagating partial result (no fallback)"
                 )
                 return
-            _cb_record_failure(account)
+            _cb_record_failure(cb_key)
             fails = _CB_FAILURES.get(account, 0)
             logger.warning(
                 f"[llm_router_stream] {account}/{model} pre-stream exception "
