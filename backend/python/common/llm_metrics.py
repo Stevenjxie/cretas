@@ -177,10 +177,14 @@ async def metrics_response_hook(response: httpx.Response) -> None:
             "factory_id": _llm_factory.get(),
             "error_snippet": error_snippet,
         }
-        try:
-            _usage_queue.put_nowait(record)
-        except asyncio.QueueFull:
-            logger.warning("LLM usage queue full, dropping record")
+        # 流式响应: 钩子在响应头触发时 usage 还没到 (body 未读完 → 全 0)。这会记一条假
+        # 0-token 记录 (ai_query_chat 3972 次记成 0 的根因)。改为: 流式跳过这里, 由
+        # call_chain_stream 在流末尾用真实 usage 记账 (record_stream_usage), 避免假 0 + 双记。
+        if not payload.get("stream"):
+            try:
+                _usage_queue.put_nowait(record)
+            except asyncio.QueueFull:
+                logger.warning("LLM usage queue full, dropping record")
 
         # P0 数据主权: egress audit (universal — every LLM call through the shared client).
         # Reads the redaction meta the redacting client wrapper stashed for this egress.
@@ -208,6 +212,42 @@ async def metrics_response_hook(response: httpx.Response) -> None:
             logger.debug("egress audit record failed (non-fatal): %s", e)
     except Exception as e:
         logger.warning(f"metrics_response_hook failed (non-fatal): {e}")
+
+
+def record_stream_usage(
+    provider: str,
+    model: str,
+    input_tokens: int,
+    output_tokens: int,
+    total_tokens: int,
+    status_code: int = 200,
+    latency_ms: Optional[int] = None,
+) -> None:
+    """记录一次**流式** LLM 调用的 usage。
+
+    metrics_response_hook 抓不到流式 usage (在响应头触发, usage 在流末尾的 trailer 才到),
+    所以流式调用一直被记成 0-token (ai_query_chat 3972 次记成 0 的根因)。
+    call_chain_stream 在解析到最后的 usage 事件时调本函数, 让流式 token 被真实记账。
+    复用 _llm_caller / _llm_factory ContextVar (与非流式同源) + 同一 _usage_queue/flush。
+    """
+    if not _enabled:
+        return
+    record = {
+        "provider": provider,
+        "model": model,
+        "caller": _llm_caller.get(),
+        "input_tokens": int(input_tokens or 0),
+        "output_tokens": int(output_tokens or 0),
+        "total_tokens": int(total_tokens or 0),
+        "latency_ms": latency_ms,
+        "status_code": status_code,
+        "factory_id": _llm_factory.get(),
+        "error_snippet": None,
+    }
+    try:
+        _usage_queue.put_nowait(record)
+    except asyncio.QueueFull:
+        logger.warning("LLM usage queue full (stream), dropping record")
 
 
 async def _flush_loop() -> None:
