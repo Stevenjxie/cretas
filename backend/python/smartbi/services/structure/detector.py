@@ -1485,58 +1485,62 @@ Return JSON:
         return None
 
     async def _call_llm(self, prompt: str, model: str = "default") -> Optional[str]:
-        """Call LLM API"""
+        """Call LLM via multi-provider router (free-first chain + circuit-breaker
+        + free-tier fallback). The `model` selector maps to a SLOT: the prior
+        `reasoning` model → SLOT.REASONING, otherwise SLOT.MAPPER (structure
+        detection). call_chain injects the per-slot free model."""
         try:
-            from openai import AsyncOpenAI
+            from common.llm_router import call_chain, SLOT
+            from common.llm_metrics import llm_caller_context
 
-            model_name = {
-                "default": self.settings.llm_model,
-                "fast": self.settings.llm_fast_model,
-                "reasoning": self.settings.llm_reasoning_model
-            }.get(model, self.settings.llm_model)
+            slot = SLOT.REASONING if model == "reasoning" else SLOT.MAPPER
+            payload = {
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0.1,
+                "max_tokens": 1000,
+            }
 
-            client = AsyncOpenAI(
-                api_key=self.settings.llm_api_key,
-                base_url=self.settings.llm_base_url
-            )
+            with llm_caller_context("structure_detector"):
+                resp_json = await call_chain(slot, payload)
 
-            response = await client.chat.completions.create(
-                model=model_name,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.1,
-                max_tokens=1000
-            )
-
-            return response.choices[0].message.content
+            choices = resp_json.get("choices") or []
+            if not choices:
+                return None
+            return choices[0].get("message", {}).get("content")
 
         except Exception as e:
             logger.error(f"LLM call failed: {e}")
             return None
 
     async def _call_llm_vl(self, prompt: str, image_base64: str) -> Optional[str]:
-        """Call Vision-Language LLM API"""
+        """Call Vision-Language LLM via multi-provider router (SLOT.VL).
+
+        Routes through the free-first VL chain (qwen3-vl across aliyun_c/b →
+        zhipu glm-4.6v) + circuit-breaker + free-tier fallback. payload uses the
+        standard OpenAI vision image_url shape."""
         try:
-            from openai import AsyncOpenAI
+            from common.llm_router import call_chain, SLOT
+            from common.llm_metrics import llm_caller_context
 
-            client = AsyncOpenAI(
-                api_key=self.settings.llm_api_key,
-                base_url=self.settings.llm_vl_base_url
-            )
-
-            response = await client.chat.completions.create(
-                model=self.settings.llm_vl_model,
-                messages=[{
+            payload = {
+                "messages": [{
                     "role": "user",
                     "content": [
                         {"type": "text", "text": prompt},
                         {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{image_base64}"}}
                     ]
                 }],
-                temperature=0.1,
-                max_tokens=1000
-            )
+                "temperature": 0.1,
+                "max_tokens": 1000,
+            }
 
-            return response.choices[0].message.content
+            with llm_caller_context("structure_detector_vl"):
+                resp_json = await call_chain(SLOT.VL, payload)
+
+            choices = resp_json.get("choices") or []
+            if not choices:
+                return None
+            return choices[0].get("message", {}).get("content")
 
         except Exception as e:
             logger.error(f"LLM-VL call failed: {e}")

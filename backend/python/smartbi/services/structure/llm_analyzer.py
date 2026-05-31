@@ -590,10 +590,8 @@ class LLMStructureAnalyzer:
             row_count: 数据行数（用于计算超时）
             col_count: 数据列数（用于计算max_tokens）
         """
-        headers = {
-            "Authorization": f"Bearer {self.settings.llm_api_key}",
-            "Content-Type": "application/json"
-        }
+        from common.llm_router import call_chain, SLOT
+        from common.llm_metrics import llm_caller_context
 
         # 动态计算超时和max_tokens
         timeout = self._calculate_timeout(row_count, col_count)
@@ -601,8 +599,9 @@ class LLMStructureAnalyzer:
 
         logger.info(f"LLM call: {row_count}x{col_count} -> timeout={timeout:.1f}s, max_tokens={max_tokens}")
 
+        # 走 call_chain 免费链 (SLOT.MAPPER — 结构分析) + 熔断 + 免费 fallback;
+        # model 由 slot 注入 (替代原 llm_mapper_model 直连). 动态 timeout 透传给 call_chain.
         payload = {
-            "model": self.settings.llm_mapper_model,
             "messages": [
                 {
                     "role": "system",
@@ -618,15 +617,9 @@ class LLMStructureAnalyzer:
             "enable_thinking": False
         }
 
-        response = await self.client.post(
-            f"{self.settings.llm_base_url}/chat/completions",
-            headers=headers,
-            json=payload,
-            timeout=timeout
-        )
-        response.raise_for_status()
+        with llm_caller_context("structure_llm_analyzer"):
+            result = await call_chain(SLOT.MAPPER, payload, timeout=timeout)
 
-        result = response.json()
         return result["choices"][0]["message"]["content"]
 
     def _parse_response(

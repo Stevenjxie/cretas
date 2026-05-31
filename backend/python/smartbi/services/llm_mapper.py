@@ -347,14 +347,14 @@ class LLMMapper:
             return self._rule_based_chart_recommendation(detected_fields)
 
     async def _call_llm(self, prompt: str) -> str:
-        """Call LLM API"""
-        headers = {
-            "Authorization": f"Bearer {self.settings.llm_api_key}",
-            "Content-Type": "application/json"
-        }
+        """Call LLM via multi-provider router (SLOT.MAPPER — field mapping /
+        chart-config recommendation). Shares the free-first chain +
+        circuit-breaker + free-tier fallback; the model is injected per-slot
+        by call_chain (replaces the prior llm_mapper_model direct call)."""
+        from common.llm_router import call_chain, SLOT
+        from common.llm_metrics import llm_caller_context
 
         payload = {
-            "model": self.settings.llm_mapper_model,
             "messages": [
                 {
                     "role": "system",
@@ -370,14 +370,9 @@ class LLMMapper:
             "enable_thinking": False
         }
 
-        response = await self.client.post(
-            f"{self.settings.llm_base_url}/chat/completions",
-            headers=headers,
-            json=payload
-        )
-        response.raise_for_status()
+        with llm_caller_context("llm_mapper"):
+            result = await call_chain(SLOT.MAPPER, payload)
 
-        result = response.json()
         return result["choices"][0]["message"]["content"]
 
     def _build_mapping_prompt(self, detected_fields: List[dict], context: Optional[str]) -> str:

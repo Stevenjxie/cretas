@@ -249,14 +249,14 @@ class LLMStructureAnalyzer:
         return prompt
 
     async def _call_llm(self, prompt: str) -> str:
-        """调用LLM API"""
-        headers = {
-            "Authorization": f"Bearer {self.settings.llm_api_key}",
-            "Content-Type": "application/json"
-        }
+        """调用 LLM (多 provider 路由 SLOT.MAPPER — Excel 结构分析).
+
+        走 call_chain 免费链 + 熔断 + 免费 fallback; model 由 slot 注入
+        (替代原 llm_mapper_model 直连)."""
+        from common.llm_router import call_chain, SLOT
+        from common.llm_metrics import llm_caller_context
 
         payload = {
-            "model": self.settings.llm_mapper_model,
             "messages": [
                 {
                     "role": "system",
@@ -272,14 +272,9 @@ class LLMStructureAnalyzer:
             "enable_thinking": False
         }
 
-        response = await self.client.post(
-            f"{self.settings.llm_base_url}/chat/completions",
-            headers=headers,
-            json=payload
-        )
-        response.raise_for_status()
+        with llm_caller_context("llm_structure_analyzer"):
+            result = await call_chain(SLOT.MAPPER, payload)
 
-        result = response.json()
         return result["choices"][0]["message"]["content"]
 
     def _parse_response(
