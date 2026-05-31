@@ -109,9 +109,13 @@ def _rel_diff(a: Decimal, b: Decimal) -> Decimal:
 
 
 def _reconcile_text(text: str, fb: FactBook) -> "tuple[str, bool, bool]":
-    """返回 (新文本, 是否回填纠正过, 是否命中哨兵)。"""
+    """返回 (新文本, 是否回填纠正过, 是否命中哨兵)。
+
+    哨兵注脚统一追加到文本末尾 (不内插, 避免把 '8.5%' 切成 '8.5(注)%')。
+    回填只替换数字本体, 保留原文单位/符号。
+    """
     corrected = False
-    sentinel_hit = False
+    flagged: List[str] = []
     for f in fb.facts:
         if not f.name or f.name not in text:
             continue
@@ -119,18 +123,21 @@ def _reconcile_text(text: str, fb: FactBook) -> "tuple[str, bool, bool]":
         if llm_num is None:
             continue
         if f.value is None:
-            # 哨兵: 该指标无数据但 LLM 给了数 → 加注 + 标记 (幂等: 已有注则跳过)
-            tail = text[ne:ne + 16]
-            if _VERIFY_MARK not in tail:
-                text = f"{text[:ne]}（注：{f.name}数据不足，此数{_VERIFY_MARK}）{text[ne:]}"
-                sentinel_hit = True
+            # 哨兵: 该指标无数据但 LLM 给了数 → 收集, 末尾统一加注
+            if f.name not in flagged:
+                flagged.append(f.name)
             continue
         # 有确定值: 偏差 >5% → 回填确定值 (幂等: 相等则不动)
         if _rel_diff(llm_num, f.value) > _REL_TOL:
-            replacement = _fmt(f.value, "")  # 只替换数字本体, 保留原文的单位/符号写法
+            replacement = _fmt(f.value, "")
             logger.info("[reconcile] backfill %s: LLM=%s → fact=%s", f.name, llm_num, f.value)
             text = text[:ns] + replacement + text[ne:]
             corrected = True
+
+    sentinel_hit = False
+    if flagged and _VERIFY_MARK not in text:  # 幂等: 已有注脚则不重复加
+        text = f"{text}（注：{'、'.join(flagged)}数据不足，相关数字{_VERIFY_MARK}）"
+        sentinel_hit = True
     return text, corrected, sentinel_hit
 
 
