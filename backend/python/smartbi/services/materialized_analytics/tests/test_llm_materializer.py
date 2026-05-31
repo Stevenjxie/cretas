@@ -46,12 +46,20 @@ def _make_results():
 
 @pytest.fixture(autouse=True)
 def _force_api_key(monkeypatch):
-    """Make get_settings().llm_api_key truthy so the gate passes."""
+    """Make get_settings().llm_api_key truthy so the gate passes, and neutralize
+    the distillation-capture DB call by default (pool=None → clean no-op) so the
+    existing tests don't attempt a real connection. Capture-specific tests
+    override get_pg_pool with a mock pool.
+    """
     class _S:
         llm_api_key = "test-key"
         llm_insight_model = "qwen3.5-flash"
 
     monkeypatch.setattr("config.get_settings", lambda: _S())
+
+    async def _no_pool():
+        return None
+    monkeypatch.setattr("smartbi.config.get_pg_pool", _no_pool)
 
 
 def _patch_llm(monkeypatch, response):
@@ -193,3 +201,81 @@ async def test_no_applicable_templates_returns_none(monkeypatch):
     ]
     exec_summary = await lm.generate_llm_insights(results, "restaurant")
     assert exec_summary is None
+
+
+# --- Distillation data pipeline capture (Steve 2026-05-31) ---
+
+class _FakeConn:
+    def __init__(self, sink):
+        self._sink = sink
+
+    async def execute(self, sql, *args):
+        self._sink.append((sql, args))
+        return "INSERT 0 1"
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *a):
+        return False
+
+
+class _FakePool:
+    def __init__(self, sink):
+        self._sink = sink
+
+    def acquire(self):
+        return _FakeConn(self._sink)
+
+
+@pytest.mark.asyncio
+async def test_distillation_sample_captured_on_success(monkeypatch):
+    """On usable LLM output, a materialization sample is INSERTed with the
+    structured input + teacher output, tagged by business_type + factory_id."""
+    sink: list = []
+
+    async def _pool():
+        return _FakePool(sink)
+    monkeypatch.setattr("smartbi.config.get_pg_pool", _pool)
+    monkeypatch.setenv("SMARTBI_DISTILL_CAPTURE", "1")
+
+    results = _make_results()
+    _patch_llm(monkeypatch, json.dumps({
+        "executive_summary": "整体营收稳健。" * 3,
+        "insights": {"top_n_by_dim": "门店 A 因核心商圈贡献过半; 建议复制选址。"},
+    }, ensure_ascii=False))
+
+    await lm.generate_llm_insights(results, "restaurant", factory_id="RES_TEST_001")
+
+    assert len(sink) == 1, "exactly one distillation row should be written"
+    sql, args = sink[0]
+    assert "smart_bi_distillation_samples" in sql
+    assert "ON CONFLICT (input_hash)" in sql
+    # positional args: business_type, factory_id, template_codes, system_prompt,
+    #                  input_text, teacher_model, teacher_output, input_hash, metadata
+    assert args[0] == "restaurant"
+    assert args[1] == "RES_TEST_001"
+    assert "top_n_by_dim" in args[2]
+    assert args[5] == "qwen3-max"
+    assert len(args[7]) == 64  # sha256 hex
+    assert "核心商圈" in args[6]  # teacher_output carried through
+
+
+@pytest.mark.asyncio
+async def test_distillation_capture_disabled_by_env(monkeypatch):
+    """SMARTBI_DISTILL_CAPTURE=0 → no DB write even on success."""
+    sink: list = []
+
+    async def _pool():
+        return _FakePool(sink)
+    monkeypatch.setattr("smartbi.config.get_pg_pool", _pool)
+    monkeypatch.setenv("SMARTBI_DISTILL_CAPTURE", "0")
+
+    results = _make_results()
+    _patch_llm(monkeypatch, json.dumps({
+        "executive_summary": "s" * 30,
+        "insights": {"top_n_by_dim": "x 富洞察"},
+    }, ensure_ascii=False))
+
+    await lm.generate_llm_insights(results, "restaurant", factory_id="F1")
+    assert sink == [], "capture must be skipped when disabled by env"
