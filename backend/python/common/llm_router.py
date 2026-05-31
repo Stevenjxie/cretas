@@ -256,15 +256,19 @@ class SLOT(str, Enum):
 # 模型 50万-100万 token 免费额度 (OpenAI-compatible, base
 # https://tokenhub.tencentmaas.com/v1, Bearer key from env LLM_TENCENT_API_KEY).
 # Probed-free codes: deepseek-v4-pro / deepseek-v4-flash / glm-5.1 / glm-5 /
-# kimi-k2.6 / qwen3.5-flash / minimax-m2.7. Sits AFTER aliyun (a/b/c) and BEFORE
-# zhipu as an extra free layer. ⚠️ Unlike aliyun, TokenHub has NO "免费额度用完
-# 即停" toggle — after the 90-day window / token quota is consumed it falls back
-# to account-balance billing OR hard-fails. So it is placed in the DEEP tail
-# (aliyun free quota drains first); when its free pool exhausts the router falls
-# to zhipu next, never relying on tencent paid billing. Re-audit when the 90-day
-# trial expires. NOTE: deepseek-v4-pro is FORBIDDEN on aliyun (no free list) but
-# is FREE on tencent's TokenHub trial — the "deepseek-v4-pro never appears" rule
-# is aliyun-scoped; tencent/deepseek-v4-pro is allowed because it bills $0 here.
+# kimi-k2.6 / qwen3.5-flash / minimax-m2.7. TokenHub free trial is "用完即停"
+# like aliyun (Steve 2026-06-01) — when the 90-day window / token quota is
+# consumed it STOPS; it does NOT silently fall to account-balance billing. So
+# tencent is structurally as safe as aliyun (no paid SKU reachable) and is
+# placed by QUALITY, not buried in a never-reached deep tail: deepseek-v4-pro
+# (best free reasoner, FREE on TokenHub, NOT free on aliyun) HEADS the REASONING
+# + INSIGHTS slots, and tencent fast models (qwen3.5-flash / deepseek-v4-flash /
+# glm-5.1) sit 2nd on CHAT/MAPPER/CHART/REVIEW so the trial quota is actually
+# used before it expires. High-freq CHAT/MAPPER still LEAD with a proven aliyun
+# fast model (latency); the circuit breaker auto-skips tencent if it ever flakes.
+# Remaining tencent codes (kimi-k2.6 / minimax-m2.7) live in _TEXT_TAIL. Re-audit
+# when the 90-day trial expires. NOTE: deepseek-v4-pro is FORBIDDEN on aliyun (no
+# free list) but FREE on tencent — the rule is aliyun-scoped, $0 on TokenHub.
 #
 # ⚠️ NEVER add (NOT free-enabled, would bill): aliyun deepseek-v4-pro (no free list);
 # glm-5 on B (only glm-4.5/4.6/4.7 free on B; glm-5 IS free on C); qwen3.7-max /
@@ -317,39 +321,44 @@ _VL_CHAIN: List[Tuple[str, str]] = _dedup_chain([
 
 # SLOT_MODELS[slot] = ordered list of (account, model) — the deep fallback chain.
 SLOT_MODELS: Dict[SLOT, List[Tuple[str, str]]] = {
-    # CHAT — interactive → fast head, then full free tail.
+    # CHAT — high-freq interactive → proven aliyun fast head (latency), tencent
+    # fast models 2nd, then full free tail.
     SLOT.CHAT: _dedup_chain([
-        ("aliyun_c", "qwen-flash-2025-07-28"), ("aliyun_b", "qwen-flash"),
-        ("aliyun_a", "qwen3.6-flash"), ("aliyun_c", "qwen-turbo"),
+        ("aliyun_c", "qwen-flash-2025-07-28"),
+        ("tencent", "qwen3.5-flash"), ("tencent", "deepseek-v4-flash"),
+        ("aliyun_b", "qwen-flash"), ("aliyun_a", "qwen3.6-flash"),
+        ("aliyun_c", "qwen-turbo"),
     ] + _TEXT_TAIL),
-    # INSIGHTS — offline materialization (Fix2 rich attribution) → flagship head.
+    # INSIGHTS — quality slot (offline materialization Fix2 + upload analysis) →
+    # tencent deepseek-v4-pro flagship head (best free reasoner), aliyun max 2nd.
     SLOT.INSIGHTS: _dedup_chain([
+        ("tencent", "deepseek-v4-pro"),
         ("aliyun_c", "qwen3-max"), ("aliyun_b", "qwen3-max"),
         ("aliyun_a", "qwen3.7-max-2026-05-17"),
     ] + _TEXT_TAIL),
-    # CHART — needs valid compact JSON → JSON-reliable head.
+    # CHART — needs valid compact JSON → JSON-reliable head, tencent glm-5.1 2nd.
     SLOT.CHART: _dedup_chain([
-        ("aliyun_c", "qwen-turbo"), ("aliyun_c", "glm-5"), ("aliyun_b", "glm-4.6"),
+        ("aliyun_c", "glm-5"), ("tencent", "glm-5.1"),
+        ("aliyun_c", "qwen-turbo"), ("aliyun_b", "glm-4.6"),
     ] + _TEXT_TAIL),
-    # MAPPER — field-mapping direction → turbo / 122b head.
+    # MAPPER — field-mapping direction → aliyun fast head, tencent v4-flash 2nd.
     SLOT.MAPPER: _dedup_chain([
-        ("aliyun_c", "qwen-turbo"), ("aliyun_c", "qwen3.5-122b-a10b"),
-        ("aliyun_b", "qwen3.5-122b-a10b"),
+        ("aliyun_c", "qwen-turbo"), ("tencent", "deepseek-v4-flash"),
+        ("aliyun_c", "qwen3.5-122b-a10b"), ("aliyun_b", "qwen3.5-122b-a10b"),
     ] + _TEXT_TAIL),
-    # REASONING — depth → deepseek / 397b / big-MoE head. tencent deepseek-v4-pro
-    # (strong reasoning, free on TokenHub; NOT free on aliyun) added to the head
-    # after the aliyun free deepseek/MoE options so aliyun quota drains first.
+    # REASONING — depth → tencent deepseek-v4-pro quality head (best free reasoner,
+    # free on TokenHub; NOT free on aliyun), then aliyun free deepseek/MoE options.
     SLOT.REASONING: _dedup_chain([
+        ("tencent", "deepseek-v4-pro"),
         ("aliyun_c", "deepseek-v3"), ("aliyun_b", "qwen3.5-397b-a17b"),
         ("aliyun_c", "qwen3-235b-a22b"), ("aliyun_c", "deepseek-r1"),
-        ("tencent", "deepseek-v4-pro"),
     ] + _TEXT_TAIL),
-    # VL — vision-only chain.
+    # VL — vision-only chain (tencent has no VL-understanding model).
     SLOT.VL: _VL_CHAIN,
-    # REVIEW — critique → max-class head.
+    # REVIEW — critique (Chinese-strong) → aliyun max head, tencent v4-pro 2nd.
     SLOT.REVIEW: _dedup_chain([
-        ("aliyun_c", "qwen3-max-2026-01-23"), ("aliyun_b", "qwen3-max"),
-        ("aliyun_c", "qwen-max"),
+        ("aliyun_c", "qwen3-max-2026-01-23"), ("tencent", "deepseek-v4-pro"),
+        ("aliyun_b", "qwen3-max"), ("aliyun_c", "qwen-max"),
     ] + _TEXT_TAIL),
 }
 
@@ -383,9 +392,9 @@ def _provider_config(account: str) -> Tuple[str, str]:
             os.getenv("LLM_ALIYUN_B_API_KEY", ""),
         ),
         # tencent (TokenHub, June 1 2026): 腾讯云 TokenHub 90-day free trial,
-        # OpenAI-compatible. Placed AFTER aliyun + BEFORE zhipu in _TEXT_TAIL —
-        # an extra free layer; aliyun 免费额度用完即停 drains first (TokenHub has
-        # no such toggle, so it lives in the deep tail). See top-of-file note.
+        # OpenAI-compatible. "用完即停" like aliyun (no silent paid billing), so
+        # placed by quality: deepseek-v4-pro heads REASONING/INSIGHTS, tencent
+        # fast models sit 2nd elsewhere, rest in _TEXT_TAIL. See top-of-file note.
         "tencent": (
             os.getenv("LLM_TENCENT_BASE_URL", "https://tokenhub.tencentmaas.com/v1"),
             os.getenv("LLM_TENCENT_API_KEY", ""),

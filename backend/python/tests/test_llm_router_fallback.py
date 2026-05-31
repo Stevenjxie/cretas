@@ -256,13 +256,16 @@ async def test_all_exhausted_raises(monkeypatch):
 # SLOT_MODELS structure (deep free-only chains)
 # ════════════════════════════════════════════════════════════════════════
 
-# Expected chain HEAD (first entry) per slot — the slot-tuned preferred model.
+# Expected chain HEAD (first entry) per slot — the quality-first preferred model
+# (Steve 2026-06-01: order by quality, all entries free so cost is equal). tencent
+# deepseek-v4-pro heads the two quality slots (REASONING/INSIGHTS); high-freq
+# CHAT/MAPPER keep a proven aliyun fast head for latency.
 SLOT_HEADS = {
     SLOT.CHAT: ("aliyun_c", "qwen-flash-2025-07-28"),
-    SLOT.INSIGHTS: ("aliyun_c", "qwen3-max"),
-    SLOT.CHART: ("aliyun_c", "qwen-turbo"),
+    SLOT.INSIGHTS: ("tencent", "deepseek-v4-pro"),
+    SLOT.CHART: ("aliyun_c", "glm-5"),
     SLOT.MAPPER: ("aliyun_c", "qwen-turbo"),
-    SLOT.REASONING: ("aliyun_c", "deepseek-v3"),
+    SLOT.REASONING: ("tencent", "deepseek-v4-pro"),
     SLOT.VL: ("aliyun_c", "qwen3-vl-plus-2025-12-19"),
     SLOT.REVIEW: ("aliyun_c", "qwen3-max-2026-01-23"),
 }
