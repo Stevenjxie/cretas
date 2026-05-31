@@ -11,7 +11,6 @@ from common.llm_redactor import (
     RedactionScope,
     StreamRestorer,
     current_redaction_scope,
-    ensure_redaction_scope,
     extract_sensitive_values_from_df,
     extract_sensitive_values_from_fields,
     redact_dict,
@@ -94,8 +93,8 @@ def test_substring_longest_first_no_collision():
                             allocator=scope.allocator, known_values=scope.known_values)
     sent = out["messages"][0]["content"]
     assert "青花椒大融城店" not in sent and "青花椒(品牌)" not in sent
-    # 还原回去要正确 (长占位优先)
-    back = restore_text(sent, {v: k for k, v in {**scope.known_values}.items()})
+    # 还原回去 (长占位优先) — 仅验证 restore_text 调用不抛 (sister 原意未加断言, 保持现状)
+    restore_text(sent, {v: k for k, v in {**scope.known_values}.items()})
 
 
 def test_pii_regex_phone_email_id():
@@ -157,7 +156,7 @@ def test_placeholder_stable_across_retries():
 # ── scope 集成 (choke point 路径) ─────────────────────────────────────────
 def test_redact_payload_for_egress_with_scope():
     df = pd.DataFrame({"门店名称": ["青花椒大融城店"], "营业额": [12000]})
-    with redaction_scope() as scope:
+    with redaction_scope():
         register_df_in_scope(df)
         payload = {"messages": [{"role": "user", "content": "青花椒大融城店 营收 12000"}]}
         out, meta = redact_payload_for_egress(payload)
