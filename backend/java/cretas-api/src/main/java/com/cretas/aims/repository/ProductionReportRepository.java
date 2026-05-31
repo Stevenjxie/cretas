@@ -370,7 +370,12 @@ public interface ProductionReportRepository extends JpaRepository<ProductionRepo
     List<ProductionReport> findYieldReportsByTask(@Param("factoryId") String factoryId,
                                                   @Param("taskId") Long taskId);
 
-    /** 权威规则: 该批次是否已有 YIELD 报工 (有则 YIELD 是产出权威源, 老报工端点应拒绝) */
+    /**
+     * 权威规则: 该批次是否已有 YIELD 报工 (有则 YIELD 是产出权威源, 老报工端点应拒绝).
+     * <p>暂未 wire — 留给 Phase D: RN 从 /process-work-reporting 切到 YIELD API 前,
+     * 用它做老/新端点同批次互斥校验 (spec §9.6/§9.7). Phase A report_type 物理隔离已防派生污染,
+     * RN 未接, 故互斥护栏 deferred 不阻塞。
+     */
     boolean existsByFactoryIdAndBatchIdAndReportTypeAndDeletedAtIsNull(
             String factoryId, Long batchId, String reportType);
 
