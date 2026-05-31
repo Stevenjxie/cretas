@@ -21,7 +21,9 @@ REQUIRED_LOGIC = [
     # 必须含的关键逻辑标记
     ('request.category in ("restaurant", "factory")', '显式 category 路由分支'),
     ('_ocr_extract_text', 'OCR 提取函数'),
-    ('LLM_OCR_MODEL', 'OCR 模型 env 配置'),
+    # 2026-06-01: OCR 由直连 LLM_OCR_MODEL 改走 call_chain(SLOT.VL) 免费 VL 链
+    # (PR #352, 旁路收口). 守卫从 env 名改为"OCR 仍经免费 VL 链路由"不被误丢.
+    ('call_chain(SLOT.VL', 'OCR 经免费 VL 链路由 (取代旧 LLM_OCR_MODEL 直连)'),
 ]
 
 def main():
