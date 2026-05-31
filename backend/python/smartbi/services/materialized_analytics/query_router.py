@@ -332,6 +332,82 @@ _SOFT_MODIFIERS = (
 )
 
 
+# ─────────────────────────────────────────────────────────────────────────
+# Phrase shortcut fallback (May 31 2026 — 死胡同修复 / dead-end fix)
+#
+# Problem (content-quality audit): short colloquial phrases (≤ a few chars,
+# no group-2 keyword) miss BOTH the keyword _PATTERNS (which require a
+# keyword from EVERY group) AND the pgvector RAG threshold (HIGH_CONFIDENCE
+# 0.78). Result: queries like "时段营收" / "营业时段" / "退款" / "退单" /
+# "翻台" / "翻台率" / "客户分层" / "会员分层" return None → LLM fallback,
+# but the corresponding materialized data IS present (time_slot_revenue 97
+# rows / refund_analysis 38 rows / table-turnover in business_overview /
+# store_customer_stratification 134 rows). The user sees a false "暂无可分析
+# 的数据 请先上传Excel" dead-end even though the answer is sitting in cache.
+#
+# Fix: a deterministic last-resort substring map that pins these common
+# colloquial forms to their materialized template. Mirrors the Java-side
+# IntentKnowledgeBase phrase shortcut pattern. CONSERVATIVE by design —
+# only consulted AFTER keyword + vector both miss, uses substring containment
+# (precise, low false-positive), and entries are restricted to short phrases
+# that the existing _PATTERNS already fail on.
+#
+# Each entry: (substring_to_match, template_code). First match wins, so
+# place more-specific phrases before broader ones. Substrings must be
+# distinctive enough that a substring hit reliably implies the intent.
+_PHRASE_SHORTCUTS: List[Tuple[str, str]] = [
+    # ── 时段营收 / 营业时段 → time_slot_revenue (materialized) ──
+    # _PATTERNS time_slot_revenue needs group-2 (营业额/营收/门店/区域…); bare
+    # "营业时段" / "时段营收" miss it. Both clearly mean per-slot revenue.
+    ("时段营收", "time_slot_revenue"),
+    ("营业时段", "time_slot_revenue"),
+    ("分时段", "time_slot_revenue"),
+    ("各时段", "time_slot_revenue"),
+    # ── 退款 / 退单 → refund_analysis (materialized) ──
+    # _PATTERNS refund_analysis group-1 has 退菜/退单/撤单/损耗/损失 but group-2
+    # requires 分析/统计/次数/多少 — bare "退款"/"退单" miss both. "退款" not
+    # even in group-1. Map common refund colloquialisms here.
+    ("退款", "refund_analysis"),
+    ("退单", "refund_analysis"),
+    ("退菜", "refund_analysis"),
+    ("撤单", "refund_analysis"),
+    # ── 翻台 / 翻台率 → business_overview_summary (materializes 翻台率 KPI) ──
+    # No _PATTERNS entry covers turn-rate at all; 翻台率 is a KPI inside the
+    # 营业概况 (business_overview_summary) template.
+    ("翻台率", "business_overview_summary"),
+    ("翻台", "business_overview_summary"),
+    # ── 客户分层 / 会员分层 → store_customer_stratification (materialized) ──
+    # _PATTERNS store_customer_stratification group-1 needs 门店/客单/几人/人数;
+    # bare "客户分层"/"会员分层" miss it. Maps to the per-store party-size /
+    # customer-stratification template.
+    ("客户分层", "store_customer_stratification"),
+    ("会员分层", "store_customer_stratification"),
+    ("客单分层", "store_customer_stratification"),
+    ("人数分层", "store_customer_stratification"),
+]
+
+
+def match_phrase_shortcut(query: str) -> Optional[str]:
+    """Last-resort deterministic phrase → template mapping.
+
+    Consulted ONLY after keyword (_PATTERNS) and vector RAG both miss.
+    Uses substring containment so colloquial / short forms still route to
+    their materialized template instead of falling into a false "暂无数据"
+    dead-end. Returns template_code on first matching substring, else None.
+
+    Conservative: entries are short, distinctive phrases that _PATTERNS
+    already fail on; we never override a keyword/vector match (caller order
+    guarantees this).
+    """
+    if not query or not isinstance(query, str):
+        return None
+    q = query.lower()
+    for phrase, code in _PHRASE_SHORTCUTS:
+        if phrase.lower() in q:
+            return code
+    return None
+
+
 # Apr 23 2026: explicit time limiters. When the user mentions a specific
 # time window ("8月", "2025-08", "昨天", "近7天"), pre-computed templates
 # that return upload-total aggregates give the wrong answer — the answer
@@ -441,6 +517,14 @@ def match_template(query: str) -> Optional[str]:
     if _has_soft_modifier(query):
         logger.info(f"[query-router] no template + soft modifier in '{query[:50]}' → LLM")
         return None
+    # Phrase shortcut fallback (May 31 2026 死胡同修复): pin short colloquial
+    # forms that the keyword _PATTERNS miss but whose template IS materialized.
+    phrase_code = match_phrase_shortcut(query)
+    if phrase_code:
+        logger.info(
+            f"[query-router] phrase shortcut matched '{query[:50]}' → {phrase_code}"
+        )
+        return phrase_code
     logger.debug(f"[query-router] no match for '{query[:50]}'")
     return None
 
@@ -511,10 +595,23 @@ async def match_template_hybrid(query: str, pool) -> Optional[str]:
         logger.info(f"[query-router] matched '{query[:50]}' → {keyword_code} (keyword)")
         return keyword_code
 
-    # Soft modifiers
+    # Soft modifiers — explicit drill-down markers that template can't honor.
+    # Checked BEFORE the phrase shortcut so e.g. "哪家店…" still defers to LLM.
     if _has_soft_modifier(query):
         logger.info(f"[query-router] no template + soft modifier in '{query[:50]}' → LLM")
         return None
+
+    # Phrase shortcut fallback (May 31 2026 死胡同修复): keyword + vector both
+    # missed, but the query may be a short colloquial form whose materialized
+    # template we can still pin deterministically. Run on the NORMALIZED query
+    # so synonym substitution (走势→趋势 etc.) also benefits.
+    phrase_code = match_phrase_shortcut(normalized)
+    if phrase_code:
+        logger.info(
+            f"[query-router] phrase shortcut matched '{query[:50]}' → {phrase_code}"
+        )
+        return phrase_code
+
     logger.debug(f"[query-router] no match for '{query[:50]}'")
     return None
 
