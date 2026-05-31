@@ -850,8 +850,18 @@ async def general_analysis(request: GeneralAnalysisRequest, http_request: Reques
         if not data:
             # No SmartBI data — but if there's a message/query, use LLM to analyze it directly
             # (Java cost analysis sends formatted cost data as the message text)
+            #
+            # 死胡同修复 (May 31 2026): the old `len > 20` gate blocked SHORT
+            # questions ("退款", "翻台率", "客户分层" …) from ever reaching the
+            # LLM — they fell straight to the "暂无可分析的数据 请先上传Excel"
+            # dead-end even when bug3's with-data LLM path could answer. The
+            # >20 length was a proxy for "this is Java-injected cost text" but
+            # it also discarded every genuine short user question. Relax to a
+            # 2-char minimum so a real short query gets a real LLM answer; the
+            # phrase-shortcut router catches the materialized-template cases
+            # upstream, so by the time we reach here it's truly cache-miss.
             query = request.effective_query
-            if query and len(query) > 20:
+            if query and len(query.strip()) >= 2:
                 # Use LLM to analyze the text directly
                 try:
                     insight_gen = InsightGenerator()
@@ -2075,9 +2085,13 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                     logger.warning(f"[stream] Failed to load upload data: {e}")
 
             if not data:
-                # No data — try direct LLM text analysis
+                # No data — try direct LLM text analysis.
+                # 死胡同修复 (May 31 2026): relax old `len > 20` gate (which
+                # dead-ended every SHORT user question into "暂无数据") to a
+                # 2-char minimum so short cache-miss queries still get a real
+                # streamed LLM answer instead of the upload-Excel placeholder.
                 query = request.effective_query
-                if query and len(query) > 20:
+                if query and len(query.strip()) >= 2:
                     try:
                         insight_gen = InsightGenerator()
                         yield _sse_event("status", "正在分析...")

@@ -98,6 +98,47 @@ def test_format_cached_as_sse_builds_answer():
     assert payload["source"] == "materialized_cache"
 
 
+def test_phrase_shortcut_deadend_fix():
+    # 死胡同修复 (May 31 2026): short colloquial phrases that miss the keyword
+    # _PATTERNS (which require a keyword from EVERY group) must still pin to
+    # their materialized template via the phrase-shortcut fallback, instead of
+    # returning None → false "暂无可分析的数据" dead-end. These 4 templates ARE
+    # materialized (time_slot_revenue / refund_analysis / business_overview /
+    # store_customer_stratification) per the content-quality audit.
+    assert match_template("时段营收") == "time_slot_revenue"
+    assert match_template("营业时段") == "time_slot_revenue"
+    assert match_template("退款") == "refund_analysis"
+    assert match_template("退单") == "refund_analysis"
+    assert match_template("翻台") == "business_overview_summary"
+    assert match_template("翻台率") == "business_overview_summary"
+    assert match_template("客户分层") == "store_customer_stratification"
+    assert match_template("会员分层") == "store_customer_stratification"
+
+
+def test_phrase_shortcut_does_not_override_keyword():
+    # The phrase shortcut is a LAST-resort fallback — it must never override an
+    # existing keyword/pattern match. "工作日和周末的营业额对比" already routes
+    # to weekday_weekend_pattern via _PATTERNS and must stay there even though
+    # it contains no shortcut phrase.
+    assert match_template("工作日和周末的营业额对比") == "weekday_weekend_pattern"
+    # Unrelated / non-restaurant queries still return None (no shortcut hit).
+    assert match_template("今天天气怎么样") is None
+    assert match_template("你好") is None
+    assert match_template("") is None
+
+
+def test_phrase_shortcut_function_direct():
+    # Direct unit test of the matcher: substring containment, first-match wins.
+    from smartbi.services.materialized_analytics.query_router import (
+        match_phrase_shortcut,
+    )
+    assert match_phrase_shortcut("看一下翻台率") == "business_overview_summary"
+    assert match_phrase_shortcut("各时段营收情况") == "time_slot_revenue"
+    assert match_phrase_shortcut("无关内容") is None
+    assert match_phrase_shortcut("") is None
+    assert match_phrase_shortcut(None) is None
+
+
 def test_format_cached_no_chart_config():
     tpl = {
         "code": "anomaly_detection", "title": "异常值检测",
