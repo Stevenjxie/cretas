@@ -267,11 +267,12 @@ class LLMMapper:
             # No LLM available — rules only.
             return self._rule_based_mapping(detected_fields)
 
-        # ── Rules-first (规则引擎必须准确): 规则先跑; 只信"高置信"映射 —— exact-alias(0.85) +
-        # date(0.8) 是确定性可靠的, 直接采用; amount/quantity/category 的语义"猜测"(0.7) 与
-        # substring(0.65) 不可靠, 连同未映射字段一起 fallback 给 LLM. 全部高置信 → 跳过 LLM. ──
+        # ── Rules-first (规则引擎必须准确): 规则先跑; **只信 exact-alias(0.85, 整名匹配 curated
+        # 字典)**。语义猜测(date 0.8 / amount,quantity,category 0.7 / substring 0.65)都不可靠
+        # (真实数据深核对发现 date 检测会把"焯水使用重量"误判成 date), 一律 fallback 给 LLM。
+        # 全部命中 exact-alias → 跳过 LLM。这样规则信任的每条都是人工核对过的精确别名, 0 误判。──
         rule_result = self._rule_based_mapping(detected_fields)
-        CONFIDENT = 0.8
+        CONFIDENT = 0.85
         confident_maps = [
             m for m in rule_result.get("mappings", []) if (m.get("confidence") or 0) >= CONFIDENT
         ]
