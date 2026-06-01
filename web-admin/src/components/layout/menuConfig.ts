@@ -214,22 +214,6 @@ export const menuConfig: MenuItem[] = [
     ]
   },
   {
-    // UX Round 4 改名: "数据分析" → "经营报表" 与 "智能分析" 消歧 (固定报表 vs AI 探索)
-    path: '/analytics', title: '经营报表', icon: 'Histogram', module: 'analytics',
-    children: [
-      { path: '/analytics/overview', title: '分析概览', icon: '', module: 'analytics' },
-      { path: '/analytics/trends', title: '趋势分析', icon: '', module: 'analytics' },
-      { path: '/analytics/ai-reports', title: 'AI分析报告', icon: '', module: 'analytics' },
-      { path: '/analytics/kpi', title: 'KPI看板', icon: '', module: 'analytics' },
-      { path: '/analytics/production-report', title: '车间实时生产报表', icon: '', module: 'analytics',
-        hideForFactoryTypes: ['RESTAURANT'] },
-      { path: '/analytics/alert-dashboard', title: '异常预警', icon: '', module: 'analytics' },
-      { path: '/analytics/supply-chain', title: '进销存闭环总览', icon: '', module: 'analytics' },
-      // Phase 1 Track B.3 (2026-05-22): 指标中心 UI 入口 — surfaces Phase 1 backend (PR #155)
-      { path: '/indicator-center', title: '指标中心', icon: 'Histogram', module: 'analytics' }
-    ]
-  },
-  {
     path: '/scheduling', title: '智能调度', icon: 'Calendar', module: 'scheduling',
     children: [
       { path: '/scheduling/overview', title: '调度中心', icon: '', module: 'scheduling' },
@@ -261,34 +245,43 @@ export const menuConfig: MenuItem[] = [
       { path: '/restaurant/data-completeness', title: '数据完整度', icon: '', module: 'restaurant' }
     ]
   },
-  // UX P2-5 merged: /calibration 并入 系统管理, /production-analytics 并入 智能BI
   {
-    // UX Round 4 改名: "智能BI" → "智能分析" (AI 问答 / Excel 探索 / 追问)
-    path: '/smart-bi', title: '智能分析', icon: 'TrendCharts', module: 'analytics',
+    // UX 2026-06-01: 合并「经营报表」(/analytics) + 「智能分析」(/smart-bi) 为单一
+    // 「数据与分析」组 (spec 2026-06-01-web-admin-analytics-ia-redesign-design.md)。
+    // 经营驾驶舱置顶主入口; 5 子组。各页后端不变 (部分页 Java reports + Python 混合)。
+    path: '/smart-bi', title: '数据与分析', icon: 'TrendCharts', module: 'analytics',
     children: [
-      // -- 分析入口 --
-      { path: '/smart-bi/dashboard', title: '经营驾驶舱', icon: 'Monitor', module: 'analytics', groupLabel: '分析入口' },
-      { path: '/smart-bi/financial-dashboard', title: '财务 PBI 看板', icon: 'TrendCharts', module: 'analytics' },
-      { path: '/smart-bi/analysis', title: '智能数据分析', icon: 'DataAnalysis', module: 'analytics' },
-      { path: '/smart-bi/query', title: 'AI问答', icon: 'ChatDotRound', module: 'analytics' },
-      // -- 预定义报表 --
-      { path: '/smart-bi/sales', title: '销售数据分析', icon: 'Sell', module: 'analytics', groupLabel: '预定义报表' },
-      { path: '/smart-bi/finance', title: '财务数据分析', icon: 'Money', module: 'analytics' },
-      // QHJ 收入管理报表 (Phase I) — restaurant tenants only (青花椒 / R_*_REAL chains).
+      // ★ 主入口 (无 groupLabel, 置顶)
+      { path: '/smart-bi/dashboard', title: '经营驾驶舱', icon: 'Monitor', module: 'analytics' },
+      // -- AI 探索 --
+      { path: '/smart-bi/analysis', title: 'AI 问答 / 数据分析', icon: 'DataAnalysis', module: 'analytics', groupLabel: 'AI 探索' },
+      { path: '/analytics/ai-reports', title: 'AI 分析报告', icon: 'Document', module: 'analytics' },
+      // -- 专题报表 --
+      { path: '/smart-bi/financial-dashboard', title: '财务看板', icon: 'TrendCharts', module: 'analytics', groupLabel: '专题报表' },
+      { path: '/smart-bi/sales', title: '销售分析', icon: 'Sell', module: 'analytics' },
       { path: '/smart-bi/revenue-report', title: '收入管理报表', icon: 'Money', module: 'analytics',
         hideForFactoryTypes: ['FACTORY'] },
-      // -- 数据管理 --
-      { path: '/smart-bi/upload', title: 'Excel上传', icon: 'Upload', module: 'analytics', groupLabel: '数据管理' },
-      { path: '/smart-bi/query-templates', title: '查询模板', icon: 'Tickets', module: 'analytics' },
-      { path: '/smart-bi/data-completeness', title: '数据完整度', icon: 'DataAnalysis', module: 'analytics' },
-      { path: '/smart-bi/food-kb-feedback', title: '知识库反馈', icon: 'ChatDotRound', module: 'analytics', groupLabel: '质量管理' },
-      { path: '/smart-bi/fallback-log', title: 'AI 追问日志', icon: 'DataLine', module: 'analytics' },
-      { path: '/smart-bi/calibration', title: '行为校准监控', icon: 'Aim', module: 'analytics', roles: ['platform_admin'] },
-      // UX P2-5: 生产分析 (2 项) 合并入智能BI, 不单做顶级组
-      { path: '/production-analytics/production', title: '生产数据分析', icon: 'Histogram', module: 'analytics', groupLabel: '生产分析',
+      { path: '/analytics/trends', title: '趋势分析', icon: 'TrendCharts', module: 'analytics' },
+      { path: '/analytics/kpi', title: 'KPI 看板', icon: 'Histogram', module: 'analytics' },
+      { path: '/analytics/alert-dashboard', title: '异常预警', icon: 'Warning', module: 'analytics' },
+      { path: '/analytics/supply-chain', title: '进销存总览', icon: 'Histogram', module: 'analytics' },
+      { path: '/analytics/production-report', title: '车间实时生产报表', icon: 'Operation', module: 'analytics',
+        hideForFactoryTypes: ['RESTAURANT'] },
+      { path: '/indicator-center', title: '指标中心', icon: 'Histogram', module: 'analytics' },
+      { path: '/production-analytics/production', title: '生产数据分析', icon: 'Histogram', module: 'analytics',
         hideForFactoryTypes: ['RESTAURANT'] },
       { path: '/production-analytics/efficiency', title: '人效分析', icon: 'User', module: 'analytics',
-        hideForFactoryTypes: ['RESTAURANT'] }
+        hideForFactoryTypes: ['RESTAURANT'] },
+      // -- 数据管理 --
+      { path: '/smart-bi/upload', title: 'Excel 上传', icon: 'Upload', module: 'analytics', groupLabel: '数据管理' },
+      { path: '/smart-bi/query-templates', title: '查询模板', icon: 'Tickets', module: 'analytics' },
+      { path: '/smart-bi/data-completeness', title: '数据完整度', icon: 'DataAnalysis', module: 'analytics' },
+      // -- AI 运维 --
+      { path: '/smart-bi/food-kb-feedback', title: '知识库反馈', icon: 'ChatDotRound', module: 'analytics', groupLabel: 'AI 运维' },
+      { path: '/smart-bi/fallback-log', title: 'AI 追问日志', icon: 'DataLine', module: 'analytics' },
+      { path: '/smart-bi/calibration', title: '行为校准监控', icon: 'Aim', module: 'analytics', roles: ['platform_admin'] },
+      // D-6 保守保留: 分析概览 (与驾驶舱重叠但数据源不同, P5 凭埋点再决定真删)
+      { path: '/analytics/overview', title: '分析概览', icon: 'DataAnalysis', module: 'analytics' },
     ]
   }
 ];
