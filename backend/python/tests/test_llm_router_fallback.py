@@ -128,10 +128,10 @@ def _assert_all_calls_are_free(call_log: List[Tuple[str, str]]):
 
 @pytest.mark.asyncio
 async def test_first_model_success_returns_immediately(monkeypatch):
-    """Chain head (aliyun_c) 200 → returns at the first model, no fallthrough."""
+    """Chain head (aliyun_a, expiry-first) 200 → returns at first model, no fallthrough."""
     _patch_provider_keys(monkeypatch)
     success = {"choices": [{"message": {"content": "ok"}}]}
-    client = _ScriptedClient({"aliyun_c": _fake_response(200, json_payload=success)})
+    client = _ScriptedClient({"aliyun_a": _fake_response(200, json_payload=success)})
     monkeypatch.setattr(llm_router, "get_llm_http_client", lambda: client)
 
     result = await call_chain(SLOT.CHAT, {"messages": [{"role": "user", "content": "hi"}]})
@@ -144,13 +144,13 @@ async def test_first_model_success_returns_immediately(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_account_c_fully_exhausted_falls_to_b(monkeypatch):
-    """All aliyun_c models 403 → chain keeps trying (c models) then lands on the
-    first aliyun_b model. Deep chain: many c attempts before b."""
+async def test_account_a_fully_exhausted_falls_to_b(monkeypatch):
+    """All aliyun_a models 403 (a is the expiry-first HEAD account) → chain keeps
+    trying a models then lands on the first aliyun_b model. Deep chain: a before b."""
     _patch_provider_keys(monkeypatch)
     success = {"choices": [{"message": {"content": "ok from b"}}]}
     client = _ScriptedClient({
-        "aliyun_c": _fake_response(403, body='AllocationQuota.FreeTierOnly'),
+        "aliyun_a": _fake_response(403, body='AllocationQuota.FreeTierOnly'),
         "aliyun_b": _fake_response(200, json_payload=success),
     })
     monkeypatch.setattr(llm_router, "get_llm_http_client", lambda: client)
@@ -159,7 +159,7 @@ async def test_account_c_fully_exhausted_falls_to_b(monkeypatch):
 
     assert result == success
     accounts = [a for a, _ in client.call_log]
-    assert "aliyun_c" in accounts and accounts[-1] == "aliyun_b"   # fell through c → b
+    assert "aliyun_a" in accounts and accounts[-1] == "aliyun_b"   # fell through a → b
     assert accounts.index("aliyun_b") == len(accounts) - 1          # b is where it succeeded
     _assert_all_calls_are_free(client.call_log)
 

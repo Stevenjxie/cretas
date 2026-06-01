@@ -388,26 +388,17 @@ _VL_CHAIN: List[Tuple[str, str]] = _dedup_chain(
 
 # SLOT_MODELS[slot] = ordered list of (account, model) — the deep fallback chain.
 SLOT_MODELS: Dict[SLOT, List[Tuple[str, str]]] = {
-    # CHAT — high-freq interactive → proven aliyun fast head (latency), tencent
-    # fast models 2nd, then full free tail.
+    # EXPIRY-FIRST (Steve 2026-06-01): each text slot LEADS with aliyun_a's best
+    # model for the task (a expires 2026-06-08, soonest -> drain first); the
+    # full _TEXT_TAIL flows a-rest -> b -> c -> tencent -> zhipu by expiry.
+    # After 2026-06-08 switch heads to aliyun_b + drop _A_FREE_TEXT (else thrash).
     SLOT.CHAT: _dedup_chain([("aliyun_a", "qwen3.6-flash")] + _TEXT_TAIL),       # fast
-    # INSIGHTS — quality slot (offline materialization Fix2 + upload analysis) →
-    # tencent deepseek-v4-pro flagship head (best free reasoner), aliyun max 2nd.
     SLOT.INSIGHTS: _dedup_chain([("aliyun_a", "qwen3.7-max-2026-05-17")] + _TEXT_TAIL),   # a's strongest
-    # CHART — needs valid compact JSON → JSON-reliable head, tencent glm-5.1 2nd.
     SLOT.CHART: _dedup_chain([("aliyun_a", "qwen3.6-plus")] + _TEXT_TAIL),       # general/JSON
-    # MAPPER — field-mapping direction → aliyun fast head, tencent v4-flash 2nd.
     SLOT.MAPPER: _dedup_chain([("aliyun_a", "qwen3.6-flash")] + _TEXT_TAIL),     # fast field-map
-    # REASONING — depth → tencent deepseek-v4-pro quality head (best free reasoner,
-    # free on TokenHub; NOT free on aliyun), then aliyun free deepseek/MoE options.
     SLOT.REASONING: _dedup_chain([("aliyun_a", "qwen3.7-max-2026-05-17")] + _TEXT_TAIL),  # depth
-    # VL — vision-only chain (tencent has no VL-understanding model).
     SLOT.VL: _VL_CHAIN,
-    # REVIEW — critique (Chinese-strong) → aliyun max head, tencent v4-pro 2nd.
-    SLOT.REVIEW: _dedup_chain([
-        ("aliyun_c", "qwen3-max-2026-01-23"), ("tencent", "deepseek-v4-pro"),
-        ("aliyun_b", "qwen3-max"), ("aliyun_c", "qwen-max"),
-    ] + _TEXT_TAIL),
+    SLOT.REVIEW: _dedup_chain([("aliyun_a", "qwen3.7-max-2026-05-17")] + _TEXT_TAIL),     # Chinese-strong
 }
 
 
