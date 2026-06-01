@@ -88,7 +88,7 @@ Expected: FAIL — `Failed to resolve import "../menuConfig"` (模块还不存�
 Create `web-admin/src/components/layout/menuConfig.ts`. 把 `AppSidebar.vue` 当前 `:57-66` 的 `MenuItem` interface、`:68-84` 的 `financeManagerMenu`、`:86-347` 的 `menuConfig` **原样移过来** (内容此刻不改, 仅迁移 + export)。顶部加 `ModuleName` import:
 
 ```typescript
-import type { ModuleName } from '@/types/permission'; // 与 AppSidebar 现用同一来源 — 见 Step 3a 核对
+import { ModuleName } from '@/store/modules/permission'; // 实测 AppSidebar.vue:6 同源 (注: 非 type-only, ModuleName 是 enum/值)
 
 export interface MenuItem {
   path: string;
@@ -112,7 +112,7 @@ export const menuConfig: MenuItem[] = [
 ];
 ```
 
-> **Step 3a — 核对 ModuleName 来源**: 先 `grep -n "ModuleName" web-admin/src/components/layout/AppSidebar.vue` 找它当前从哪 import (可能是 `@/stores/permission` 或 `@/types`)。用**完全相同**的 import 路径, 否则 TS 报错。若 `ModuleName` 是 .vue 内本地定义的, 则一并迁到 menuConfig.ts 并 export。
+> **Step 3a — ModuleName 来源 (已实测)**: `AppSidebar.vue:6` 是 `import { usePermissionStore, ModuleName } from '@/store/modules/permission';`。menuConfig.ts 用**完全相同**路径 `@/store/modules/permission` (单数 store, modules 子目录)。`ModuleName` 是值 (enum), 用 `import { ModuleName }` 非 `import type`。
 
 - [ ] **Step 4: 跑测试确认通过**
 
@@ -516,7 +516,7 @@ export const smartBIRedirects: RouteRecordRaw[] = [
   { path: '/smart-bi/query', redirect: '/smart-bi/analysis?tab=query' },
 ];
 ```
-> 确认 `smartBIRedirects` 被 router 实际挂载 (`grep -n smartBIRedirects web-admin/src/router/index.ts` — 若没被 import/spread 进 routes, 需补挂载, 见审计 M6 note: 该数组当前 empty 可能未被消费, 实现时核实)。
+> `smartBIRedirects` **已实测被挂载**: `index.ts:6` import + `:1562` `...smartBIRedirects` spread 进 routes。数组当前 empty, 往里加项即生效, 无需额外挂载。
 
 - [ ] **Step 8: 跑单测 + type check**
 
