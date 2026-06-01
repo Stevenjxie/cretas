@@ -1,14 +1,19 @@
 package com.cretas.aims.service.yield;
 
 import com.cretas.aims.dto.yield.BatchYieldDTO;
+import com.cretas.aims.dto.yield.MaterialBatchRef;
+import com.cretas.aims.dto.yield.MaterialInputRequest;
 import com.cretas.aims.dto.yield.StepYieldDTO;
 import com.cretas.aims.dto.yield.YieldLimitsDTO;
 import com.cretas.aims.dto.yield.YieldReportRequest;
+import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.ProductionReport;
 import com.cretas.aims.entity.WorkProcess;
+import com.cretas.aims.entity.enums.MaterialBatchStatus;
 import com.cretas.aims.entity.workprocess.WorkProcessTask;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.FactorySettingsRepository;
+import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.ProductionReportRepository;
 import com.cretas.aims.repository.WorkProcessRepository;
 import com.cretas.aims.repository.workprocess.WorkProcessTaskRepository;
@@ -40,6 +45,7 @@ class YieldReportServiceImplTest {
     private ProcessingService processingService;
     private YieldCalculationService calcSvc;
     private FactorySettingsRepository factorySettingsRepo;
+    private MaterialBatchRepository materialBatchRepo;
     private ObjectMapper objectMapper;
     private YieldReportServiceImpl svc;
 
@@ -51,9 +57,10 @@ class YieldReportServiceImplTest {
         processingService = mock(ProcessingService.class);
         calcSvc = new YieldCalculationServiceImpl();
         factorySettingsRepo = mock(FactorySettingsRepository.class);
+        materialBatchRepo = mock(MaterialBatchRepository.class);
         objectMapper = new ObjectMapper();
         svc = new YieldReportServiceImpl(reportRepo, taskRepo, processRepo, calcSvc, processingService,
-                factorySettingsRepo, objectMapper);
+                factorySettingsRepo, materialBatchRepo, objectMapper);
     }
 
     private WorkProcessTask task(long id, int order, String wpId) {
@@ -441,5 +448,322 @@ class YieldReportServiceImplTest {
 
         assertThat(dto.getSteps()).extracting(StepYieldDTO::getProcessName)
                 .containsExactly("处理", "滚揉");
+    }
+
+    // ── A2b: recordMaterialInput 写 material_batch_refs ──────────────────────────
+
+    /** 共用 helper: 为 recordMaterialInput 测试 setup task mock */
+    private void setupMaterialInputTask() {
+        WorkProcessTask t = task(30L, 1, "WP-MAT");
+        when(taskRepo.findByFactoryIdAndId("F006", 30L)).thenReturn(Optional.of(t));
+        when(reportRepo.findYieldReportsByBatch(anyString(), eq(1L))).thenReturn(List.of());
+    }
+
+    @Test
+    void recordMaterialInput_writesMaterialBatchRefs_single() {
+        setupMaterialInputTask();
+        ArgumentCaptor<ProductionReport> cap = ArgumentCaptor.forClass(ProductionReport.class);
+        when(reportRepo.save(cap.capture())).thenAnswer(i -> {
+            ProductionReport r = i.getArgument(0); r.setId(101L); return r;
+        });
+        // materialBatch 123 is NOT USED_UP, so autoSettle won't fire
+        MaterialBatch mb = new MaterialBatch();
+        mb.setId("123"); mb.setStatus(MaterialBatchStatus.AVAILABLE);
+        mb.setReceiptQuantity(new BigDecimal("820")); mb.setUsedQuantity(new BigDecimal("520")); // remaining=300
+        when(materialBatchRepo.findById("123")).thenReturn(Optional.of(mb));
+
+        MaterialInputRequest req = new MaterialInputRequest();
+        req.setWorkProcessTaskId(30L);
+        req.setWarehouseOutQuantity(new BigDecimal("998"));
+        req.setFeedInQuantity(new BigDecimal("998"));
+        req.setInputUnit("kg");
+        req.setMaterialBatchRefs(List.of(
+                new MaterialBatchRef(123L, new BigDecimal("520"), "kg")
+        ));
+
+        svc.recordMaterialInput("F006", 1L, 5L, req);
+
+        ProductionReport saved = cap.getValue();
+        assertThat(saved.getMaterialBatchRefs()).isNotNull().hasSize(1);
+        Map<String, Object> ref = saved.getMaterialBatchRefs().get(0);
+        assertThat(ref.get("materialBatchId")).isEqualTo(123L);
+        assertThat(ref.get("quantity")).isEqualTo(new BigDecimal("520"));
+        assertThat(ref.get("unit")).isEqualTo("kg");
+    }
+
+    @Test
+    void recordMaterialInput_writesMaterialBatchRefs_multi() {
+        setupMaterialInputTask();
+        ArgumentCaptor<ProductionReport> cap = ArgumentCaptor.forClass(ProductionReport.class);
+        when(reportRepo.save(cap.capture())).thenAnswer(i -> {
+            ProductionReport r = i.getArgument(0); r.setId(102L); return r;
+        });
+        // both batches NOT USED_UP
+        MaterialBatch mb1 = new MaterialBatch();
+        mb1.setId("123"); mb1.setStatus(MaterialBatchStatus.AVAILABLE);
+        mb1.setReceiptQuantity(new BigDecimal("400")); mb1.setUsedQuantity(new BigDecimal("300")); // remaining=100
+        MaterialBatch mb2 = new MaterialBatch();
+        mb2.setId("456"); mb2.setStatus(MaterialBatchStatus.AVAILABLE);
+        mb2.setReceiptQuantity(new BigDecimal("400")); mb2.setUsedQuantity(new BigDecimal("200")); // remaining=200
+        when(materialBatchRepo.findById("123")).thenReturn(Optional.of(mb1));
+        when(materialBatchRepo.findById("456")).thenReturn(Optional.of(mb2));
+
+        MaterialInputRequest req = new MaterialInputRequest();
+        req.setWorkProcessTaskId(30L);
+        req.setWarehouseOutQuantity(new BigDecimal("500"));
+        req.setFeedInQuantity(new BigDecimal("500"));
+        req.setInputUnit("kg");
+        req.setMaterialBatchRefs(List.of(
+                new MaterialBatchRef(123L, new BigDecimal("300"), "kg"),
+                new MaterialBatchRef(456L, new BigDecimal("200"), "kg")
+        ));
+
+        svc.recordMaterialInput("F006", 1L, 5L, req);
+
+        ProductionReport saved = cap.getValue();
+        assertThat(saved.getMaterialBatchRefs()).isNotNull().hasSize(2);
+        assertThat(saved.getMaterialBatchRefs().get(0).get("materialBatchId")).isEqualTo(123L);
+        assertThat(saved.getMaterialBatchRefs().get(1).get("materialBatchId")).isEqualTo(456L);
+    }
+
+    // ── A2b: checkAndAutoSettle ───────────────────────────────────────────────────
+
+    /** Build a ProductionReport with materialBatchRefs already set (simulates persisted report). */
+    private ProductionReport reportWithBatchRefs(List<Map<String, Object>> refs) {
+        ProductionReport r = ProductionReport.builder()
+                .id(200L).factoryId("F006").batchId(1L).reportType("YIELD")
+                .workerId(5L).settled(false)
+                .build();
+        r.setMaterialBatchRefs(refs);
+        return r;
+    }
+
+    @Test
+    void autoSettle_singleBatchUsedUp_settles() {
+        setupMaterialInputTask();
+        ArgumentCaptor<ProductionReport> saveCap = ArgumentCaptor.forClass(ProductionReport.class);
+        when(reportRepo.save(saveCap.capture())).thenAnswer(i -> {
+            ProductionReport r = i.getArgument(0); r.setId(201L); return r;
+        });
+
+        // trigger batch 123 IS USED_UP (remainingQuantity=0)
+        MaterialBatch mb = new MaterialBatch();
+        mb.setId("123"); mb.setStatus(MaterialBatchStatus.USED_UP);
+        mb.setReceiptQuantity(new BigDecimal("520")); mb.setUsedQuantity(new BigDecimal("520")); // remaining=0
+        when(materialBatchRepo.findById("123")).thenReturn(Optional.of(mb));
+
+        // candidate report has refs=[{materialBatchId:123}]
+        ProductionReport candidate = reportWithBatchRefs(List.of(
+                Map.of("materialBatchId", 123L, "quantity", new BigDecimal("520"), "unit", "kg")
+        ));
+        when(reportRepo.findUnsettledYieldContainingMaterialBatch(
+                eq("F006"), eq(1L), eq("[{\"materialBatchId\":123}]")))
+                .thenReturn(List.of(candidate));
+        when(reportRepo.saveAll(any())).thenAnswer(i -> i.getArgument(0));
+
+        MaterialInputRequest req = new MaterialInputRequest();
+        req.setWorkProcessTaskId(30L);
+        req.setWarehouseOutQuantity(new BigDecimal("998"));
+        req.setFeedInQuantity(new BigDecimal("998"));
+        req.setInputUnit("kg");
+        req.setMaterialBatchRefs(List.of(
+                new MaterialBatchRef(123L, new BigDecimal("520"), "kg")
+        ));
+
+        svc.recordMaterialInput("F006", 1L, 5L, req);
+
+        // saveAll was called for settling the candidate
+        ArgumentCaptor<List> settledCap = ArgumentCaptor.forClass(List.class);
+        verify(reportRepo).saveAll(settledCap.capture());
+        @SuppressWarnings("unchecked")
+        List<ProductionReport> settled = (List<ProductionReport>) settledCap.getValue();
+        assertThat(settled).hasSize(1);
+        assertThat(settled.get(0).getSettled()).isTrue();
+        assertThat(settled.get(0).getSettledAt()).isNotNull();
+    }
+
+    @Test
+    void autoSettle_multiBatch_partialUsedUp_notSettled() {
+        setupMaterialInputTask();
+        when(reportRepo.save(any(ProductionReport.class))).thenAnswer(i -> {
+            ProductionReport r = i.getArgument(0); r.setId(202L); return r;
+        });
+
+        // batch 123 USED_UP, batch 456 still has remaining
+        MaterialBatch mb123 = new MaterialBatch();
+        mb123.setId("123"); mb123.setStatus(MaterialBatchStatus.USED_UP);
+        mb123.setReceiptQuantity(new BigDecimal("300")); mb123.setUsedQuantity(new BigDecimal("300")); // remaining=0
+        MaterialBatch mb456 = new MaterialBatch();
+        mb456.setId("456"); mb456.setStatus(MaterialBatchStatus.AVAILABLE);
+        mb456.setReceiptQuantity(new BigDecimal("400")); mb456.setUsedQuantity(new BigDecimal("200")); // remaining=200
+        when(materialBatchRepo.findById("123")).thenReturn(Optional.of(mb123));
+        when(materialBatchRepo.findById("456")).thenReturn(Optional.of(mb456));
+
+        // candidate report refs BOTH batches; 456 has remaining → allRefsUsedUp=false → not settled
+        ProductionReport candidate = reportWithBatchRefs(List.of(
+                Map.of("materialBatchId", 123L, "quantity", new BigDecimal("300")),
+                Map.of("materialBatchId", 456L, "quantity", new BigDecimal("200"))
+        ));
+        when(reportRepo.findUnsettledYieldContainingMaterialBatch(
+                eq("F006"), eq(1L), eq("[{\"materialBatchId\":123}]")))
+                .thenReturn(List.of(candidate));
+        when(reportRepo.findUnsettledYieldContainingMaterialBatch(
+                eq("F006"), eq(1L), eq("[{\"materialBatchId\":456}]")))
+                .thenReturn(List.of(candidate));
+
+        MaterialInputRequest req = new MaterialInputRequest();
+        req.setWorkProcessTaskId(30L);
+        req.setWarehouseOutQuantity(new BigDecimal("500"));
+        req.setFeedInQuantity(new BigDecimal("500"));
+        req.setInputUnit("kg");
+        req.setMaterialBatchRefs(List.of(
+                new MaterialBatchRef(123L, new BigDecimal("300"), "kg"),
+                new MaterialBatchRef(456L, new BigDecimal("200"), "kg")
+        ));
+
+        svc.recordMaterialInput("F006", 1L, 5L, req);
+
+        // saveAll should NOT be called (no settling happened)
+        verify(reportRepo, never()).saveAll(any());
+        assertThat(candidate.getSettled()).isFalse();
+    }
+
+    @Test
+    void autoSettle_multiBatch_allUsedUp_settles() {
+        setupMaterialInputTask();
+        when(reportRepo.save(any(ProductionReport.class))).thenAnswer(i -> {
+            ProductionReport r = i.getArgument(0); r.setId(203L); return r;
+        });
+
+        // both batches USED_UP
+        MaterialBatch mb123 = new MaterialBatch();
+        mb123.setId("123"); mb123.setStatus(MaterialBatchStatus.USED_UP);
+        mb123.setReceiptQuantity(new BigDecimal("300")); mb123.setUsedQuantity(new BigDecimal("300")); // remaining=0
+        MaterialBatch mb456 = new MaterialBatch();
+        mb456.setId("456"); mb456.setStatus(MaterialBatchStatus.USED_UP);
+        mb456.setReceiptQuantity(new BigDecimal("200")); mb456.setUsedQuantity(new BigDecimal("200")); // remaining=0
+        when(materialBatchRepo.findById("123")).thenReturn(Optional.of(mb123));
+        when(materialBatchRepo.findById("456")).thenReturn(Optional.of(mb456));
+
+        ProductionReport candidate = reportWithBatchRefs(List.of(
+                Map.of("materialBatchId", 123L, "quantity", new BigDecimal("300")),
+                Map.of("materialBatchId", 456L, "quantity", new BigDecimal("200"))
+        ));
+        when(reportRepo.findUnsettledYieldContainingMaterialBatch(
+                eq("F006"), eq(1L), eq("[{\"materialBatchId\":123}]")))
+                .thenReturn(List.of(candidate));
+        when(reportRepo.findUnsettledYieldContainingMaterialBatch(
+                eq("F006"), eq(1L), eq("[{\"materialBatchId\":456}]")))
+                .thenReturn(List.of(candidate));
+        when(reportRepo.saveAll(any())).thenAnswer(i -> i.getArgument(0));
+
+        MaterialInputRequest req = new MaterialInputRequest();
+        req.setWorkProcessTaskId(30L);
+        req.setWarehouseOutQuantity(new BigDecimal("500"));
+        req.setFeedInQuantity(new BigDecimal("500"));
+        req.setInputUnit("kg");
+        req.setMaterialBatchRefs(List.of(
+                new MaterialBatchRef(123L, new BigDecimal("300"), "kg"),
+                new MaterialBatchRef(456L, new BigDecimal("200"), "kg")
+        ));
+
+        svc.recordMaterialInput("F006", 1L, 5L, req);
+
+        ArgumentCaptor<List> settledCap = ArgumentCaptor.forClass(List.class);
+        // saveAll called at least once (may be called once per batch trigger, but candidate deduplicated)
+        verify(reportRepo, atLeastOnce()).saveAll(settledCap.capture());
+        // The candidate must end up settled
+        assertThat(candidate.getSettled()).isTrue();
+        assertThat(candidate.getSettledAt()).isNotNull();
+    }
+
+    @Test
+    void autoSettle_noRefs_skips() {
+        setupMaterialInputTask();
+        when(reportRepo.save(any(ProductionReport.class))).thenAnswer(i -> {
+            ProductionReport r = i.getArgument(0); r.setId(204L); return r;
+        });
+
+        MaterialInputRequest req = new MaterialInputRequest();
+        req.setWorkProcessTaskId(30L);
+        req.setWarehouseOutQuantity(new BigDecimal("998"));
+        req.setFeedInQuantity(new BigDecimal("998"));
+        req.setInputUnit("kg");
+        req.setMaterialBatchRefs(null);  // no refs → no autoSettle
+
+        svc.recordMaterialInput("F006", 1L, 5L, req);
+
+        // No saveAll for settling, no materialBatchRepo calls
+        verify(reportRepo, never()).saveAll(any());
+        verify(materialBatchRepo, never()).findById(anyString());
+    }
+
+    // ── Task 4: autoSettleByMaterialBatch 端点测试 ──────────────────────────────
+
+    @Test
+    void autoSettleByMaterialBatch_returnsSettledCount() {
+        // batch 500 is USED_UP; 1 candidate report with refs=[{materialBatchId:500}] gets settled
+        MaterialBatch mb = new MaterialBatch();
+        mb.setId("500"); mb.setStatus(MaterialBatchStatus.USED_UP);
+        mb.setReceiptQuantity(new BigDecimal("300")); mb.setUsedQuantity(new BigDecimal("300"));
+        when(materialBatchRepo.findById("500")).thenReturn(Optional.of(mb));
+
+        ProductionReport candidate = reportWithBatchRefs(List.of(
+                Map.of("materialBatchId", 500L, "quantity", new BigDecimal("300"), "unit", "kg")
+        ));
+        when(reportRepo.findUnsettledYieldContainingMaterialBatch(
+                eq("F006"), eq(1L), eq("[{\"materialBatchId\":500}]")))
+                .thenReturn(List.of(candidate));
+        when(reportRepo.saveAll(any())).thenAnswer(i -> i.getArgument(0));
+
+        Map<String, Object> result = svc.autoSettleByMaterialBatch("F006", 1L, 500L);
+
+        assertThat(result.get("settledCount")).isEqualTo(1);
+        assertThat(candidate.getSettled()).isTrue();
+        assertThat(candidate.getSettledAt()).isNotNull();
+    }
+
+    @Test
+    void autoSettleByMaterialBatch_batchNotUsedUp_returnsZero() {
+        // batch 501 still AVAILABLE → no settle
+        MaterialBatch mb = new MaterialBatch();
+        mb.setId("501"); mb.setStatus(MaterialBatchStatus.AVAILABLE);
+        mb.setReceiptQuantity(new BigDecimal("300")); mb.setUsedQuantity(new BigDecimal("100"));
+        when(materialBatchRepo.findById("501")).thenReturn(Optional.of(mb));
+
+        Map<String, Object> result = svc.autoSettleByMaterialBatch("F006", 1L, 501L);
+
+        assertThat(result.get("settledCount")).isEqualTo(0);
+        verify(reportRepo, never()).findUnsettledYieldContainingMaterialBatch(any(), any(), any());
+    }
+
+    @Test
+    void autoSettle_batchExpiredNotUsedUp_doesNotSettle() {
+        // Fix 1 regression: EXPIRED batch with remaining=0 must NOT trigger auto-settle.
+        // "原料用完自动结清" fires ONLY on status==USED_UP (正常耗尽), not on EXPIRED/DEFECTIVE/SCRAPPED.
+        setupMaterialInputTask();
+        when(reportRepo.save(any(ProductionReport.class))).thenAnswer(i -> {
+            ProductionReport r = i.getArgument(0); r.setId(205L); return r;
+        });
+
+        // batch 789 has status EXPIRED and remaining=0 (e.g. expired and fully consumed)
+        MaterialBatch mb = new MaterialBatch();
+        mb.setId("789"); mb.setStatus(MaterialBatchStatus.EXPIRED);
+        mb.setReceiptQuantity(new BigDecimal("100")); mb.setUsedQuantity(new BigDecimal("100")); // remaining=0
+        when(materialBatchRepo.findById("789")).thenReturn(Optional.of(mb));
+
+        MaterialInputRequest req = new MaterialInputRequest();
+        req.setWorkProcessTaskId(30L);
+        req.setWarehouseOutQuantity(new BigDecimal("100"));
+        req.setFeedInQuantity(new BigDecimal("100"));
+        req.setInputUnit("kg");
+        req.setMaterialBatchRefs(List.of(
+                new MaterialBatchRef(789L, new BigDecimal("100"), "kg")
+        ));
+
+        svc.recordMaterialInput("F006", 1L, 5L, req);
+
+        // checkAndAutoSettle sees status != USED_UP → returns immediately, saveAll never called
+        verify(reportRepo, never()).saveAll(any());
     }
 }

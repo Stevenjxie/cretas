@@ -167,8 +167,8 @@ private void checkAndAutoSettle(String factoryId, Long batchId, Long materialBat
     Optional<MaterialBatch> batchOpt = materialBatchRepository.findById(String.valueOf(materialBatchId));
     if (batchOpt.isEmpty()) return;
     MaterialBatch mb = batchOpt.get();
-    if (mb.getStatus() != MaterialBatchStatus.USED_UP
-            && mb.getRemainingQuantity().compareTo(BigDecimal.ZERO) > 0) {
+    // "原料用完" = status 是 USED_UP (权威信号). 排除 EXPIRED/DEFECTIVE 等 remaining=0 但非正常耗尽的状态.
+    if (mb.getStatus() != MaterialBatchStatus.USED_UP) {
         return;  // 触发批次未用完，不触发
     }
     // 2. 找到 material_batch_refs 包含此 materialBatchId 的所有未结清 YIELD 报工
@@ -202,9 +202,9 @@ private boolean allRefsUsedUp(List<Map<String, Object>> refs) {
         Long mbId = Long.valueOf(mbIdObj.toString());
         Optional<MaterialBatch> mb = materialBatchRepository.findById(String.valueOf(mbId));
         if (mb.isEmpty()) continue;  // 找不到批次视为忽略
-        if (mb.get().getStatus() != MaterialBatchStatus.USED_UP
-                && mb.get().getRemainingQuantity().compareTo(BigDecimal.ZERO) > 0) {
-            return false;  // 至少一个未用完 → 不结清
+        // 仅 USED_UP 视为"原料用完". EXPIRED/DEFECTIVE 等状态即使 remaining=0 也不触发结清.
+        if (mb.get().getStatus() != MaterialBatchStatus.USED_UP) {
+            return false;  // 至少一个非 USED_UP → 不结清
         }
     }
     return true;
@@ -463,6 +463,15 @@ assert dtoA.getSteps().get(1).getCarryover().compareTo(new BigDecimal("606")) ==
 | DESIGN-4 (P2) | P2 | 草稿 A3 测试场景数字跳跃: 表格 998→1126→520→606 但测试代码 inputQty=520 无法从 998 直接理解 | §3.2 增加完整过程边界说明，区分"出库量 998"与"道2 投入量 520" |
 | DESIGN-3 (P2) | P2 | carryover 跨日/跨批库存 = Phase B，边界不清晰 | §4 Phase B/E 接缝表，明确"Phase A 只记值不入库"，需 Steve 产品确认 |
 | DESIGN-5 (P1) | P1 | 草稿遗漏 Q6/Q7/Q8 | §7 新增 Q6 (materialBatchId 基数)、Q7 (追踪颗粒度)、Q8 (报废/呆废 Phase 边界) |
+
+### Code-review 修订 (2026-06-02)
+
+| Finding | 问题 | 修订 |
+|---|---|---|
+| Fix 1 (CRITICAL) | `checkAndAutoSettle` 和 `allRefsUsedUp` 的早退条件是双条件 (`status != USED_UP && remaining > 0`)，EXPIRED/DEFECTIVE 批次 remaining=0 时会错误通过检查并触发结清 — 语义应为"原料正常耗尽"而非"任何状态下 remaining 归零" | 改为单条件 `status != USED_UP`，USED_UP 是 MaterialBatchServiceImpl 原子写入的权威信号 |
+| Fix 2 (Important) | `allRefsUsedUp` 中 `Long.valueOf(mbIdObj.toString())` 在 jsonb 反序列化产生 BigDecimal 时抛 NumberFormatException | 改为 `((Number) mbIdObj).longValue()`，Number 接口兼容 Integer/Long/BigDecimal |
+| Fix 3 (Minor) | `recordMaterialInput` 调 `reportRepo.save(r)` 丢弃返回值，用 `r.getId()`（save 前 id 可能为 null）作响应 | 改为 `ProductionReport saved = reportRepo.save(r); ... saved.getId()` |
+| Fix 4 (Test) | 缺少锁定 Fix 1 语义的回归测试 | 新增 `autoSettle_batchExpiredNotUsedUp_doesNotSettle`：EXPIRED 批次 remaining=0 不触发 saveAll |
 
 ### 代码 audit 结果汇总 (READ-ONLY)
 
