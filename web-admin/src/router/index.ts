@@ -1418,6 +1418,13 @@ const businessRoutes: RouteRecordRaw[] = [
             redirect: (to) => ({ path: '/smart-bi/dashboard', query: { ...to.query } }),
           },
           {
+            // IA v2: 菜品分析双tab (整合 菜品四象限 + 菜品毛利)
+            path: 'analytics/dishes',
+            name: 'RestaurantDishes',
+            component: () => import('@/views/restaurant/analytics/dishes.vue'),
+            meta: { requiresAuth: true, title: '菜品分析', module: 'restaurant' }
+          },
+          {
             path: 'analytics/menu',
             name: 'RestaurantMenuBoard',
             component: () => import('@/views/restaurant/analytics/menu-board.vue'),
