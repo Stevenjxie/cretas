@@ -38,9 +38,7 @@ import { aiApiClient } from '../../../services/api/aiApiClient';
 import type { IntentSSECallbacks } from '../../../services/api/aiApiClient';
 import type { FAAIStackParamList } from '../../../types/navigation';
 import { QuickActionCardGrid } from '../../../components/ai/QuickActionCardGrid';
-import { TemplateCommandSheet } from '../../../components/ai/TemplateCommandSheet';
 import { feedbackSounds } from '../../../services/audio/feedbackSounds';
-import { smartDefaults } from '../../../services/smartDefaults';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 
 // 建议操作类型
@@ -201,15 +199,6 @@ export default function AIChatScreen() {
   // P1: Voice preview before auto-send
   const [previewText, setPreviewText] = useState('');
   const previewTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // P2: Template command sheet
-  const [templateVisible, setTemplateVisible] = useState(false);
-  const [templateType, setTemplateType] = useState<'report' | 'inbound' | 'inventory'>('report');
-  // P4: Smart defaults for template
-  const [templateDefaults, setTemplateDefaults] = useState<{
-    product?: string;
-    quantity?: string;
-    material?: string;
-  }>({});
 
   // Get user role for card grid and audio feedback
   const getUserRole = useAuthStore((s) => s.getUserRole);
@@ -254,29 +243,6 @@ export default function AIChatScreen() {
       handleSend(screen);
     }
   }, [navigation]);
-
-  // P3: Open template sheet with smart defaults
-  const openTemplate = useCallback(async (type: 'report' | 'inbound' | 'inventory') => {
-    setTemplateType(type);
-    const defaults: typeof templateDefaults = {};
-    if (type === 'report') {
-      const lastProduct = await smartDefaults.getLastProduct();
-      if (lastProduct) defaults.product = lastProduct.value;
-      const lastQty = await smartDefaults.getLastQuantity();
-      if (lastQty) defaults.quantity = lastQty;
-    } else if (type === 'inbound') {
-      const lastMaterial = await smartDefaults.getLastMaterial();
-      if (lastMaterial) defaults.material = lastMaterial.value;
-    }
-    setTemplateDefaults(defaults);
-    setTemplateVisible(true);
-  }, []);
-
-  // P3: Handle template confirm
-  const handleTemplateConfirm = (composedText: string) => {
-    setTemplateVisible(false);
-    handleSend(composedText);
-  };
 
   // 实时检测当前输入的分析模式
   const detectedMode = useMemo(() => {
@@ -946,15 +912,6 @@ export default function AIChatScreen() {
             </View>
           )}
         </View>
-
-        {/* P3: 模板命令底部弹窗 */}
-        <TemplateCommandSheet
-          visible={templateVisible}
-          templateType={templateType}
-          onConfirm={handleTemplateConfirm}
-          onClose={() => setTemplateVisible(false)}
-          defaultValues={templateDefaults}
-        />
       </KeyboardAvoidingView>
     </SafeAreaView>
   );
