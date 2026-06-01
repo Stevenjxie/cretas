@@ -217,7 +217,7 @@ class AgentOrchestrator:
         try:
             with redaction_scope():
                 register_values_for_egress(_collect_sensitive_names(data))
-                answer, tokens = await self._call_llm(user_prompt)
+                answer, tokens = await self._call_llm(user_prompt, factory_id)
                 answer = restore_in_scope(answer)
         except Exception as e:
             logger.exception("LLM call failed: %s", e)
@@ -341,7 +341,7 @@ class AgentOrchestrator:
 
     # ---------- LLM ----------
 
-    async def _call_llm(self, user_prompt: str) -> Tuple[str, int]:
+    async def _call_llm(self, user_prompt: str, factory_id: Optional[str] = None) -> Tuple[str, int]:
         """Call LLM via multi-provider router (INSIGHTS slot). Returns (text, total_tokens).
 
         Chain: aliyun_b → aliyun_a → zhipu → deepseek with 403/429 fallback.
@@ -357,7 +357,9 @@ class AgentOrchestrator:
             "temperature": 0.3,
             "max_tokens": 600,
         }
-        with llm_caller_context("agent_orchestrator"):
+        # factory_id → _llm_factory ContextVar so the egress audit + usage rows
+        # attribute this call to the tenant (else factory_id is NULL).
+        with llm_caller_context("agent_orchestrator", factory_id):
             body = await call_chain(SLOT.INSIGHTS, payload, timeout=60.0)
 
         text = (
@@ -443,7 +445,7 @@ class AgentOrchestrator:
         full_text_parts = []
         total_tokens = 0
         try:
-            async for chunk in self._call_llm_stream(user_prompt):
+            async for chunk in self._call_llm_stream(user_prompt, factory_id):
                 if chunk.get("text"):
                     full_text_parts.append(chunk["text"])
                     emitted = _restorer.push(chunk["text"])
@@ -474,7 +476,9 @@ class AgentOrchestrator:
         yield {"type": "done", "tokens": total_tokens,
                "elapsed_ms": int((time.monotonic() - t0) * 1000)}
 
-    async def _call_llm_stream(self, user_prompt: str) -> AsyncIterator[Dict[str, Any]]:
+    async def _call_llm_stream(
+        self, user_prompt: str, factory_id: Optional[str] = None
+    ) -> AsyncIterator[Dict[str, Any]]:
         """Call LLM via multi-provider router (INSIGHTS slot) with SSE streaming.
 
         Chain: aliyun_b → aliyun_a → zhipu → deepseek (provider fallback before
@@ -493,12 +497,16 @@ class AgentOrchestrator:
             "max_tokens": 600,
             "stream_options": {"include_usage": True},
         }
-        # Set caller via direct set() instead of `with llm_caller_context()` —
+        # Set caller + factory via direct set() instead of `with llm_caller_context()` —
         # the latter errors on __exit__ ("Token created in different Context")
         # when an async generator crosses task boundaries (e.g. inside httpx
         # aiter_lines). Contextvar is request-scoped via FastAPI task isolation.
-        from common.llm_metrics import _llm_caller as _llm_caller_var
+        from common.llm_metrics import (
+            _llm_caller as _llm_caller_var,
+            _llm_factory as _llm_factory_var,
+        )
         _llm_caller_var.set("agent_orchestrator_stream")
+        _llm_factory_var.set(factory_id)
         async for event in call_chain_stream(SLOT.INSIGHTS, payload, timeout=60.0):
             etype = event.get("type")
             if etype == "delta":
