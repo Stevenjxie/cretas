@@ -4,9 +4,10 @@
 """
 from __future__ import annotations
 
+import json
 import logging
 from pathlib import Path
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -37,3 +38,24 @@ def is_promotable(
     if int(candidate.get("factory_count", 0)) < MIN_FACTORIES:
         return False, f"复现工厂不足 (<{MIN_FACTORIES})"
     return True, "可毕业"
+
+
+def _load_promoted() -> Dict[str, str]:
+    try:
+        if PROMOTED_FILE.exists():
+            with open(PROMOTED_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            return {str(k): str(v) for k, v in data.items()} if isinstance(data, dict) else {}
+    except Exception as e:  # fail-open: 映射绝不因 promoted 文件坏而崩
+        logger.warning("load promoted_field_aliases failed (ignored): %s", e)
+    return {}
+
+
+_PROMOTED: Dict[str, str] = _load_promoted()
+
+
+def consult_promoted(column_name: Optional[str]) -> Optional[str]:
+    """规则层先查: 命中返回标准字段 (0 token 确定), 否则 None。"""
+    if not column_name:
+        return None
+    return _PROMOTED.get(column_name.strip())

@@ -29,3 +29,24 @@ def test_reject_conflict_with_curated():
 def test_already_promoted_is_not_a_candidate():
     ok, reason = is_promotable(_cand(), curated={}, promoted={"本月实际": "actual_amount"})
     assert ok is False and "已毕业" in reason
+
+
+from smartbi.services.field_promotion import consult_promoted, _load_promoted
+
+
+def test_consult_hit(monkeypatch):
+    monkeypatch.setattr("smartbi.services.field_promotion._PROMOTED",
+                        {"本月实际": "actual_amount"})
+    assert consult_promoted("本月实际") == "actual_amount"
+
+
+def test_consult_miss(monkeypatch):
+    monkeypatch.setattr("smartbi.services.field_promotion._PROMOTED", {})
+    assert consult_promoted("未知列") is None
+
+
+def test_load_promoted_bad_file_is_empty(tmp_path, monkeypatch):
+    bad = tmp_path / "x.json"
+    bad.write_text("not json", encoding="utf-8")
+    monkeypatch.setattr("smartbi.services.field_promotion.PROMOTED_FILE", bad)
+    assert _load_promoted() == {}
