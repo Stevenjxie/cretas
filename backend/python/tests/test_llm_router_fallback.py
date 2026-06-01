@@ -241,18 +241,18 @@ async def test_all_exhausted_raises(monkeypatch):
 # SLOT_MODELS structure (deep free-only chains)
 # ════════════════════════════════════════════════════════════════════════
 
-# Expected chain HEAD (first entry) per slot — the quality-first preferred model
-# (Steve 2026-06-01: order by quality, all entries free so cost is equal). tencent
-# deepseek-v4-pro heads the two quality slots (REASONING/INSIGHTS); high-freq
-# CHAT/MAPPER keep a proven aliyun fast head for latency.
+# Expected chain HEAD (first entry) per slot — EXPIRY-FIRST (Steve 2026-06-01:
+# drain soonest-expiring free quota first). aliyun_a (exp 2026-06-08) leads every
+# text slot with its best model for the task; VL has no aliyun_a/tencent model so
+# it leads with aliyun_b (exp 07-16). ⚠️ update after 06-08 when aliyun_a expires.
 SLOT_HEADS = {
-    SLOT.CHAT: ("aliyun_c", "qwen-flash-2025-07-28"),
-    SLOT.INSIGHTS: ("tencent", "deepseek-v4-pro"),
-    SLOT.CHART: ("aliyun_c", "glm-5"),
-    SLOT.MAPPER: ("aliyun_c", "qwen-turbo"),
-    SLOT.REASONING: ("tencent", "deepseek-v4-pro"),
-    SLOT.VL: ("aliyun_c", "qwen3-vl-plus-2025-12-19"),
-    SLOT.REVIEW: ("aliyun_c", "qwen3-max-2026-01-23"),
+    SLOT.CHAT: ("aliyun_a", "qwen3.6-flash"),
+    SLOT.INSIGHTS: ("aliyun_a", "qwen3.7-max-2026-05-17"),
+    SLOT.CHART: ("aliyun_a", "qwen3.6-plus"),
+    SLOT.MAPPER: ("aliyun_a", "qwen3.6-flash"),
+    SLOT.REASONING: ("aliyun_a", "qwen3.7-max-2026-05-17"),
+    SLOT.VL: ("aliyun_b", "qwen3-vl-plus-2025-12-19"),
+    SLOT.REVIEW: ("aliyun_a", "qwen3.7-max-2026-05-17"),
 }
 
 

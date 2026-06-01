@@ -349,11 +349,16 @@ _TENCENT_FREE_TEXT = [
 ]
 _ZHIPU_FREE_TEXT = ["glm-4.5-air"]
 
-# Universal free-text fallback tail (appended to every text slot) — 全量 inventory.
+# Universal free-text fallback tail (appended to every text slot) — 全量 inventory,
+# EXPIRY-ASCENDING order (Steve 2026-06-01: drain soonest-expiring free quota
+# FIRST = use-it-or-lose-it). Account expiry: aliyun_a 2026/06-08 (soonest) →
+# aliyun_b 07-16 → aliyun_c 08-13 → tencent ~09 (90d trial activated 06-01) →
+# zhipu. ⚠️ After 2026-06-08 aliyun_a expires → drop _A_FREE_TEXT + a-headed
+# slots below (else heads 403-thrash on expired quota). Re-audit each expiry.
 _TEXT_TAIL: List[Tuple[str, str]] = _dedup_chain(
-    [("aliyun_c", m) for m in _C_FREE_TEXT]
+    [("aliyun_a", m) for m in _A_FREE_TEXT]
     + [("aliyun_b", m) for m in _B_FREE_TEXT]
-    + [("aliyun_a", m) for m in _A_FREE_TEXT]
+    + [("aliyun_c", m) for m in _C_FREE_TEXT]
     + [("tencent", m) for m in _TENCENT_FREE_TEXT]
     + [("zhipu", m) for m in _ZHIPU_FREE_TEXT]
 )
@@ -374,9 +379,10 @@ _B_FREE_VL = [
     "qwen3-vl-30b-a3b-instruct", "qwen3-vl-8b-instruct", "qwen3-vl-flash-2026-01-22",
     "qwen-vl-ocr", "qwen-vl-ocr-2025-08-28",
 ]
+# VL expiry order: aliyun_b (07-16) → aliyun_c (08-13) → zhipu (a/tencent have no VL).
 _VL_CHAIN: List[Tuple[str, str]] = _dedup_chain(
-    [("aliyun_c", m) for m in _C_FREE_VL]
-    + [("aliyun_b", m) for m in _B_FREE_VL]
+    [("aliyun_b", m) for m in _B_FREE_VL]
+    + [("aliyun_c", m) for m in _C_FREE_VL]
     + [("zhipu", "glm-4.6v")]
 )
 
