@@ -599,7 +599,9 @@ async def call_chain(
                 errors.append(f"{account}/{model}: quota {resp.status_code}")
                 continue
 
-            # Other errors: don't blindly fallback — log and raise
+            # Other errors (401 expired/disabled key, 404 missing model, 4xx) — log
+            # and FALL THROUGH to the next (account, model): account-to-account
+            # fallback is automatic for ANY non-2xx, not just quota (see continue below).
             _cb_record_failure(cb_key)
             fails = _CB_FAILURES.get(account, 0)
             logger.error(
