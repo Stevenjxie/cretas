@@ -165,6 +165,43 @@ async def test_account_a_fully_exhausted_falls_to_b(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_expired_account_401_falls_to_next(monkeypatch):
+    """An EXPIRED / disabled account returns 401 (NOT a 403 quota) → the chain
+    must still auto-fall to the next account. Account-to-account fallback is
+    automatic for ANY non-2xx, not just quota. Guards the expiry-first design:
+    when aliyun_a expires it 401s and the router skips to aliyun_b with no manual
+    chain edit."""
+    _patch_provider_keys(monkeypatch)
+    success = {"choices": [{"message": {"content": "ok from b"}}]}
+    client = _ScriptedClient({
+        "aliyun_a": _fake_response(401, body="Unauthorized: free trial expired"),
+        "aliyun_b": _fake_response(200, json_payload=success),
+    })
+    monkeypatch.setattr(llm_router, "get_llm_http_client", lambda: client)
+
+    result = await call_chain(SLOT.CHAT, {"messages": [{"role": "user", "content": "hi"}]})
+
+    assert result == success
+    assert client.call_log[-1][0] == "aliyun_b"   # 401 on a did NOT hard-fail; fell to b
+    _assert_all_calls_are_free(client.call_log)
+
+
+@pytest.mark.asyncio
+async def test_404_missing_model_falls_to_next(monkeypatch):
+    """A renamed/removed model returns 404 → skip to next entry (not a hard fail)."""
+    _patch_provider_keys(monkeypatch)
+    success = {"choices": [{"message": {"content": "ok"}}]}
+    client = _ScriptedClient({
+        "aliyun_a": _fake_response(404, body="model not found"),
+        "aliyun_b": _fake_response(200, json_payload=success),
+    })
+    monkeypatch.setattr(llm_router, "get_llm_http_client", lambda: client)
+    result = await call_chain(SLOT.MAPPER, {"messages": []})
+    assert result == success
+    assert client.call_log[-1][0] == "aliyun_b"
+
+
+@pytest.mark.asyncio
 async def test_all_aliyun_exhausted_falls_to_zhipu(monkeypatch):
     """Every aliyun account 403/429 → lands on zhipu (independent GLM pool)."""
     _patch_provider_keys(monkeypatch)
