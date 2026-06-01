@@ -62,4 +62,18 @@ describe('menuConfig — merged 数据与分析 group (Task 1)', () => {
     const g = menuConfig.find((m) => m.path === '/smart-bi')!;
     expect(g.children!.map((c) => c.path)).toContain('/analytics/overview');
   });
+
+  it('原 /smart-bi children 未掉项 (含 query/finance, P1 暂留待 P3/P4 移除)', () => {
+    const g = menuConfig.find((m) => m.path === '/smart-bi')!;
+    const paths = g.children!.map((c) => c.path);
+    for (const p of [
+      '/smart-bi/dashboard', '/smart-bi/analysis', '/smart-bi/query',
+      '/smart-bi/financial-dashboard', '/smart-bi/finance', '/smart-bi/sales',
+      '/smart-bi/revenue-report', '/smart-bi/upload', '/smart-bi/query-templates',
+      '/smart-bi/data-completeness', '/smart-bi/food-kb-feedback',
+      '/smart-bi/fallback-log', '/smart-bi/calibration',
+    ]) {
+      expect(paths, `dropped original /smart-bi child ${p}`).toContain(p);
+    }
+  });
 });
