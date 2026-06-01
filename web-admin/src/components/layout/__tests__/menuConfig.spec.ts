@@ -77,3 +77,32 @@ describe('menuConfig — merged 数据与分析 group (Task 1)', () => {
     }
   });
 });
+
+describe('menuConfig — 业态门控方向 (Task 2, M4)', () => {
+  const group = () => menuConfig.find((m) => m.path === '/smart-bi')!;
+  const child = (p: string) => group().children!.find((c) => c.path === p)!;
+
+  it.each([
+    '/analytics/production-report',
+    '/analytics/supply-chain',
+    '/production-analytics/production',
+    '/production-analytics/efficiency',
+  ])('制造专属项 %s 对餐饮隐藏 (hideForFactoryTypes 含 RESTAURANT)', (p) => {
+    expect(child(p).hideForFactoryTypes).toContain('RESTAURANT');
+  });
+
+  it.each([
+    '/analytics/trends',   // 双业态自适应 — 餐饮看 POS 营收趋势的唯一入口
+    '/analytics/kpi',      // 餐饮有 restaurant-ops/summary 数据 (Steve 定: 不门控)
+  ])('双业态项 %s 不门控 (餐饮仍可见)', (p) => {
+    expect(child(p).hideForFactoryTypes).toBeUndefined();
+  });
+
+  it('收入管理报表对制造隐藏 (FACTORY)', () => {
+    expect(child('/smart-bi/revenue-report').hideForFactoryTypes).toContain('FACTORY');
+  });
+
+  it('行为校准监控保留 platform_admin 门控', () => {
+    expect(child('/smart-bi/calibration').roles).toContain('platform_admin');
+  });
+});
