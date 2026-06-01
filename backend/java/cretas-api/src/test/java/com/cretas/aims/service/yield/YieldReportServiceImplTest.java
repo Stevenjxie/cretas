@@ -698,6 +698,45 @@ class YieldReportServiceImplTest {
         verify(materialBatchRepo, never()).findById(anyString());
     }
 
+    // ── Task 4: autoSettleByMaterialBatch 端点测试 ──────────────────────────────
+
+    @Test
+    void autoSettleByMaterialBatch_returnsSettledCount() {
+        // batch 500 is USED_UP; 1 candidate report with refs=[{materialBatchId:500}] gets settled
+        MaterialBatch mb = new MaterialBatch();
+        mb.setId("500"); mb.setStatus(MaterialBatchStatus.USED_UP);
+        mb.setReceiptQuantity(new BigDecimal("300")); mb.setUsedQuantity(new BigDecimal("300"));
+        when(materialBatchRepo.findById("500")).thenReturn(Optional.of(mb));
+
+        ProductionReport candidate = reportWithBatchRefs(List.of(
+                Map.of("materialBatchId", 500L, "quantity", new BigDecimal("300"), "unit", "kg")
+        ));
+        when(reportRepo.findUnsettledYieldContainingMaterialBatch(
+                eq("F006"), eq(1L), eq("[{\"materialBatchId\":500}]")))
+                .thenReturn(List.of(candidate));
+        when(reportRepo.saveAll(any())).thenAnswer(i -> i.getArgument(0));
+
+        Map<String, Object> result = svc.autoSettleByMaterialBatch("F006", 1L, 500L);
+
+        assertThat(result.get("settledCount")).isEqualTo(1);
+        assertThat(candidate.getSettled()).isTrue();
+        assertThat(candidate.getSettledAt()).isNotNull();
+    }
+
+    @Test
+    void autoSettleByMaterialBatch_batchNotUsedUp_returnsZero() {
+        // batch 501 still AVAILABLE → no settle
+        MaterialBatch mb = new MaterialBatch();
+        mb.setId("501"); mb.setStatus(MaterialBatchStatus.AVAILABLE);
+        mb.setReceiptQuantity(new BigDecimal("300")); mb.setUsedQuantity(new BigDecimal("100"));
+        when(materialBatchRepo.findById("501")).thenReturn(Optional.of(mb));
+
+        Map<String, Object> result = svc.autoSettleByMaterialBatch("F006", 1L, 501L);
+
+        assertThat(result.get("settledCount")).isEqualTo(0);
+        verify(reportRepo, never()).findUnsettledYieldContainingMaterialBatch(any(), any(), any());
+    }
+
     @Test
     void autoSettle_batchExpiredNotUsedUp_doesNotSettle() {
         // Fix 1 regression: EXPIRED batch with remaining=0 must NOT trigger auto-settle.

@@ -7,6 +7,7 @@ import com.cretas.aims.dto.yield.BatchYieldDTO;
 import com.cretas.aims.dto.yield.MaterialInputRequest;
 import com.cretas.aims.dto.yield.YieldLimitsDTO;
 import com.cretas.aims.dto.yield.YieldReportRequest;
+import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.service.yield.YieldReportService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -91,5 +92,21 @@ public class YieldReportController {
             @PathVariable Long batchId) {
         // 复用 getYield 的 steps 即流水汇总视图; 明细 append-only 流水 Phase D RN 接入时按需扩展
         return ApiResponse.success(yieldReportService.getYield(factoryId, batchId));
+    }
+
+    @RequirePermission({"production:read_write"})
+    @PostMapping("/auto-settle-by-material-batch")
+    @Operation(summary = "A2b: 主动触发自动结清 — 仓管员将原料批次标 USED_UP 后手动调用, 系统检查并结清关联报工")
+    public ApiResponse<Map<String, Object>> autoSettleByMaterialBatch(
+            @PathVariable String factoryId,
+            @PathVariable Long batchId,
+            @RequestBody Map<String, Object> body) {
+        Object mbIdObj = body.get("materialBatchId");
+        if (mbIdObj == null) {
+            throw new BusinessException(400, "缺少必填字段: materialBatchId")
+                    .withHint("请传入 materialBatchId").withHintTarget("materialBatchId");
+        }
+        Long materialBatchId = ((Number) mbIdObj).longValue();
+        return ApiResponse.success(yieldReportService.autoSettleByMaterialBatch(factoryId, batchId, materialBatchId));
     }
 }

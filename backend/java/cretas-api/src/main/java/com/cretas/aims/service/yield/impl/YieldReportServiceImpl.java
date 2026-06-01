@@ -332,21 +332,23 @@ public class YieldReportServiceImpl implements YieldReportService {
      * A2b: 检查触发批次是否 USED_UP, 若是则查找关联本批次 (batchId) 的未结清 YIELD 报工,
      * 对每条候选报工检查其 material_batch_refs 中全部 materialBatchId 是否均 USED_UP,
      * 全部满足才打 settled=true (all-or-nothing 语义).
+     *
+     * @return 本次实际结清的报工条数 (0 表示未结清任何报工)
      */
-    private void checkAndAutoSettle(String factoryId, Long batchId, Long materialBatchId) {
+    private int checkAndAutoSettle(String factoryId, Long batchId, Long materialBatchId) {
         // 1. 查触发批次状态
         Optional<MaterialBatch> batchOpt = materialBatchRepository.findById(String.valueOf(materialBatchId));
-        if (batchOpt.isEmpty()) return;
+        if (batchOpt.isEmpty()) return 0;
         MaterialBatch mb = batchOpt.get();
         // "原料用完" = status 是 USED_UP (权威信号). 排除 EXPIRED/DEFECTIVE/SCRAPPED 等 remaining=0 但非正常耗尽的状态.
         if (mb.getStatus() != MaterialBatchStatus.USED_UP) {
-            return;  // 触发批次未用完，不触发
+            return 0;  // 触发批次未用完，不触发
         }
         // 2. 找到 material_batch_refs 包含此 materialBatchId 的所有未结清 YIELD 报工
         String refJson = "[{\"materialBatchId\":" + materialBatchId + "}]";
         List<ProductionReport> candidates = reportRepo.findUnsettledYieldContainingMaterialBatch(
                 factoryId, batchId, refJson);
-        if (candidates.isEmpty()) return;
+        if (candidates.isEmpty()) return 0;
         // 3. 对每条候选报工: 检查其 material_batch_refs 中所有 materialBatchId 是否全部 USED_UP
         LocalDateTime now = LocalDateTime.now();
         List<ProductionReport> toSettle = new ArrayList<>();
@@ -362,6 +364,7 @@ public class YieldReportServiceImpl implements YieldReportService {
             log.info("A2b 自动结清: factoryId={}, batchId={}, triggerMaterialBatchId={}, settledCount={}",
                     factoryId, batchId, materialBatchId, toSettle.size());
         }
+        return toSettle.size();
     }
 
     /**
@@ -383,6 +386,15 @@ public class YieldReportServiceImpl implements YieldReportService {
             }
         }
         return true;
+    }
+
+    @Override
+    @Transactional
+    public Map<String, Object> autoSettleByMaterialBatch(String factoryId, Long batchId, Long materialBatchId) {
+        int settled = checkAndAutoSettle(factoryId, batchId, materialBatchId);
+        Map<String, Object> out = new HashMap<>();
+        out.put("settledCount", settled);
+        return out;
     }
 
     @Override

@@ -32,4 +32,12 @@ public interface YieldReportService {
      * 返回 {settledCount, batchYield, completed}
      */
     Map<String, Object> settleDay(String factoryId, Long batchId, Long workerId, LocalDate date, boolean triggerComplete);
+
+    /**
+     * A2b: 主动触发自动结清 — 供仓管员在 MaterialBatch 标记 USED_UP 之后手动调用,
+     * 覆盖"先 USED_UP 后 recordMaterialInput 未触发"的边界场景.
+     * 内部调用 checkAndAutoSettle(factoryId, batchId, materialBatchId).
+     * 返回 {settledCount: N}
+     */
+    Map<String, Object> autoSettleByMaterialBatch(String factoryId, Long batchId, Long materialBatchId);
 }
