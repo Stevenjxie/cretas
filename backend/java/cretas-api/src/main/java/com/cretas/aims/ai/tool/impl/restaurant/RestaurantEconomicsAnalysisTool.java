@@ -226,7 +226,13 @@ public class RestaurantEconomicsAnalysisTool extends AbstractBusinessTool {
             result.put("message", "部分数据不可用: " + String.join(" / ", failed)
                     + ". 已基于可用数据生成分析, 不可用部分需明确标注.");
         } else {
-            result.put("message", "餐厅经营分析数据暂不可用: 损益 / 档口损溢 / 成本刚性 均无数据.");
+            // 防呆 Rule 5: 不要只说"均无数据"(死胡同), 解释原因 + 给 next-action.
+            // 经营分析需要财务/经营数据 (营业额/成本/损耗); 常见原因是当前数据源是
+            // 评价/客户等非财务数据, 或本工厂尚未上传经营报表。
+            result.put("message", "餐厅经营分析暂不可用: 本期未找到损益 / 档口损溢 / 成本刚性数据。"
+                    + "该分析需要经营/财务数据 (营业额、成本、损耗) — 当前数据源可能是评价或非财务数据。"
+                    + "请在「智能分析 - Excel上传」上传含营业额与成本的经营报表后重试。");
+            result.put("actionHint", "前往「智能分析 - Excel上传」上传含营业额/成本的经营报表");
         }
 
         return result;

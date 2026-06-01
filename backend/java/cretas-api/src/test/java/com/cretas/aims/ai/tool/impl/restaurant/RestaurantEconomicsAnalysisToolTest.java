@@ -213,7 +213,7 @@ class RestaurantEconomicsAnalysisToolTest {
     }
 
     @Test
-    @DisplayName("UT-REA-05: S13-001 — ALL 3 sub-Tools fail → dataAvailable=false + 均无数据 + 3 failure markers")
+    @DisplayName("UT-REA-05: S13-001 — ALL 3 sub-Tools fail → dataAvailable=false + 暂不可用+next-action + 3 failure markers")
     void allSubToolsFail() throws Exception {
         when(storePnlTool.getToolName()).thenReturn("restaurant_store_pnl_one_pager");
         when(shrinkageTool.getToolName()).thenReturn("restaurant_shrinkage_analysis");
@@ -231,8 +231,9 @@ class RestaurantEconomicsAnalysisToolTest {
         Map<String, Object> result = tool.doExecute(FACTORY_ID, Map.of(), ctx());
 
         // Only when ALL dimensions fail is top-level dataAvailable false (S13-001).
+        // None-available message now explains cause + next-action (防呆 Rule 5).
         assertThat(result).containsEntry("dataAvailable", false);
-        assertThat(result.get("message").toString()).contains("均无数据");
+        assertThat(result.get("message").toString()).contains("暂不可用").contains("Excel上传");
 
         @SuppressWarnings("unchecked")
         List<Map<String, Object>> evidence = (List<Map<String, Object>>) result.get("evidence");

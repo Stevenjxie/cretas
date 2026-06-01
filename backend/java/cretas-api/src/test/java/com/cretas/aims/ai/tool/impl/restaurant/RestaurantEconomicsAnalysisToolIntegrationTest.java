@@ -191,10 +191,12 @@ class RestaurantEconomicsAnalysisToolIntegrationTest {
         Map<String, Object> result = tool.doExecute(FACTORY, new HashMap<>(), ctx());
 
         // S13-001 (#312): NONE available is the only case that stays dataAvailable=false, and it
-        // uses the distinct "均无数据" template (not the partial "部分数据不可用" failed-list).
+        // uses the distinct none-available template (not the partial "部分数据不可用" failed-list).
+        // Message now explains cause + next-action (防呆 Rule 5) instead of a bare "均无数据".
         assertThat(result.get("dataAvailable")).isEqualTo(false);
         assertThat(result.get("message").toString())
-                .contains("数据暂不可用").contains("档口损溢").contains("成本刚性").contains("均无数据");
+                .contains("暂不可用").contains("档口损溢").contains("成本刚性").contains("Excel上传");
+        assertThat(result.get("actionHint").toString()).contains("Excel上传");
     }
 
     @SuppressWarnings("unchecked")
