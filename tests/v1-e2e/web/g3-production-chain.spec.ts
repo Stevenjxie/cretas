@@ -43,7 +43,13 @@ const PRODUCT_NAME = '酸菜鱼 500g';      // SKU_SCY500
 const CUSTOMER_NAME = '鼎鲜火锅义乌分公司';
 
 const PLAN_QTY = 30;
-const PLAN_DATE = '2026-04-20';
+// 计划日期必须是未来 (后端校验 '计划日期不能是过去')。动态算 今天+7天, 避免硬编码日期
+// 随时间过期 (原 '2026-04-20' 在 2026-06 后变成过去日期 → 400 → G3 长期红)。
+const PLAN_DATE = (() => {
+  const d = new Date();
+  d.setDate(d.getDate() + 7);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+})();
 
 // ─── Suite ────────────────────────────────────────────────────────────────────
 
