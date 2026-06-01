@@ -11,7 +11,14 @@ import json
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend" / "python"))
+_BACKEND_PY = Path(__file__).resolve().parents[1] / "backend" / "python"
+sys.path.insert(0, str(_BACKEND_PY))
+# smartbi/services/__init__.py eagerly imports excel_parser, which does a bare
+# `from services.data_feature_analyzer import ...`. That alias only resolves
+# when backend/python/smartbi is on sys.path (this is how the live uvicorn app
+# resolves `services`, via main.py). Without it, importing field_promotion
+# crashes with ModuleNotFoundError: services. Add it so the CLI runs standalone.
+sys.path.insert(0, str(_BACKEND_PY / "smartbi"))
 
 from smartbi.services.field_promotion import (        # noqa: E402
     is_promotable, PROMOTED_FILE, _load_promoted,

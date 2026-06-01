@@ -140,6 +140,17 @@ rsync -az --timeout=60 \
     "$SERVER:/www/wwwroot/cretas/scripts/" 2>&1 | tail -5
 ssh "$SERVER" "chmod +x /www/wwwroot/cretas/scripts/t6-dryrun-compare.sh /www/wwwroot/cretas/scripts/baseline-java-metrics.sh"
 
+# 3c. 同步 field-mapping 毕业 CLI 到 code/scripts/ (2026-06-01 — self-learn promote loop).
+# Must land at code/scripts/ (NOT cretas/scripts/) because the CLI resolves
+# backend/python via Path(__file__).parents[1] = /www/wwwroot/cretas/code.
+# Earlier: scripts/ was never synced, so `python scripts/promote_field_mappings.py`
+# had no file on the server — the promote leg of the loop was un-runnable.
+log "INFO" "[3c/5] 同步 field-mapping 毕业 CLI..."
+ssh "$SERVER" "mkdir -p /www/wwwroot/cretas/code/scripts"
+rsync -az --timeout=60 \
+    "$PROJECT_ROOT/scripts/promote_field_mappings.py" \
+    "$SERVER:/www/wwwroot/cretas/code/scripts/" 2>&1 | tail -5
+
 # 3.5. Apply pending smartbi migrations (per spec 2026-05-07-smartbi-migration-runner-spec.md).
 # Trigger: task #30 — 8 个 data fabric C 系列 migrations 当初部署漏跑 prod, T6.2 4h 才发现.
 # Runner consumes smartbi_migrations tracker (PR-A #98) to skip already-applied
