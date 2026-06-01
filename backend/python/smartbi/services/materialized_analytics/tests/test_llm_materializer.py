@@ -251,14 +251,17 @@ async def test_distillation_sample_captured_on_success(monkeypatch):
     sql, args = sink[0]
     assert "smart_bi_distillation_samples" in sql
     assert "ON CONFLICT (input_hash)" in sql
-    # positional args: business_type, factory_id, template_codes, system_prompt,
-    #                  input_text, teacher_model, teacher_output, input_hash, metadata
-    assert args[0] == "restaurant"
-    assert args[1] == "RES_TEST_001"
-    assert "top_n_by_dim" in args[2]
-    assert args[5] == "qwen3-max"
-    assert len(args[7]) == 64  # sha256 hex
-    assert "核心商圈" in args[6]  # teacher_output carried through
+    # positional args (shared helper order): source, business_type, factory_id,
+    #   task_type, template_codes, system_prompt, input_text, teacher_model,
+    #   teacher_output, input_hash, quality, metadata
+    assert args[0] == "materialization"
+    assert args[1] == "restaurant"
+    assert args[2] == "RES_TEST_001"
+    assert args[3] == "insights"
+    assert "top_n_by_dim" in args[4]
+    assert args[7] == "qwen3-max"
+    assert "核心商圈" in args[8]  # teacher_output carried through
+    assert len(args[9]) == 64  # sha256 hex
 
 
 @pytest.mark.asyncio

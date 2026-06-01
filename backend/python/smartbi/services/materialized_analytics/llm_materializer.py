@@ -31,7 +31,6 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import os
 from typing import Any, Dict, List, Optional
 
 from .templates.base import TemplateResult
@@ -254,74 +253,45 @@ async def _persist_distillation_sample(
     applied: int,
     total: int,
 ) -> None:
-    """Write one distillation training sample. Fire-and-forget, never raises.
+    """Write one materialization distillation sample. Fire-and-forget.
 
-    Persists the (structured-input → strong-teacher-output) pair into
-    ``smart_bi_distillation_samples`` so it can later be exported (bucketed by
-    business_type) and used to distill / fine-tune a vertical model. Idempotent
-    on ``input_hash`` — re-materializing the same upload refreshes the row's
-    teacher_output instead of stacking near-duplicate samples.
-
-    Gated by env ``SMARTBI_DISTILL_CAPTURE`` (default on; set to "0" to disable
-    without a redeploy).
+    Thin wrapper around the shared ``persist_distillation_sample`` helper
+    (``smartbi.services.distillation_capture``) — kept for the materializer's
+    call site + metadata shaping. Behavior is IDENTICAL to before the
+    extraction: same ``input_hash = sha256(prompt)``, same INSERT columns, same
+    ON CONFLICT (input_hash) refresh, same env kill-switch
+    ``SMARTBI_DISTILL_CAPTURE``. Persists the (structured-input → strong-teacher
+    -output) pair into ``smart_bi_distillation_samples`` so it can later be
+    exported (bucketed by business_type) for vertical-model distillation.
     """
-    if os.getenv("SMARTBI_DISTILL_CAPTURE", "1") == "0":
-        return
+    # INSIGHTS slot primary model is qwen3-max on all 3 aliyun accounts
+    # (post PR #331/#333); a small fraction may fall back to zhipu/glm-4.5-air
+    # — recorded in metadata, verifiable against llm_router logs by timestamp.
+    teacher_model = "qwen3-max"
+    metadata = {
+        "slot": "insights",
+        "applied": applied,
+        "total_applicable": total,
+        "teacher_model_note": "INSIGHTS-slot primary qwen3-max; rare zhipu fallback possible",
+    }
     try:
         from smartbi.config import get_pg_pool
+        from smartbi.services.distillation_capture import persist_distillation_sample
         pool = await get_pg_pool()
-        if pool is None:
-            return
-        input_hash = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
-        # INSIGHTS slot primary model is qwen3-max on all 3 aliyun accounts
-        # (post PR #331/#333); a small fraction may fall back to zhipu/glm-4.5-air
-        # — recorded in metadata, verifiable against llm_router logs by timestamp.
-        teacher_model = "qwen3-max"
-        metadata = json.dumps(
-            {
-                "slot": "insights",
-                "applied": applied,
-                "total_applicable": total,
-                "teacher_model_note": "INSIGHTS-slot primary qwen3-max; rare zhipu fallback possible",
-            },
-            ensure_ascii=False,
+        await persist_distillation_sample(
+            pool,
+            source="materialization",
+            task_type="insights",
+            input_text=prompt,
+            teacher_output=teacher_output,
+            business_type=business_type,
+            factory_id=factory_id,
+            system_prompt=system_prompt,
+            teacher_model=teacher_model,
+            template_codes=template_codes,
+            metadata=metadata,
         )
-        sql = """
-            INSERT INTO smart_bi_distillation_samples (
-                source, business_type, factory_id, task_type, template_codes,
-                system_prompt, input_text, teacher_model, teacher_output,
-                input_hash, metadata
-            ) VALUES (
-                'materialization', $1, $2, 'insights', $3,
-                $4, $5, $6, $7,
-                $8, $9::jsonb
-            )
-            ON CONFLICT (input_hash) DO UPDATE SET
-                teacher_output = EXCLUDED.teacher_output,
-                teacher_model  = EXCLUDED.teacher_model,
-                template_codes = EXCLUDED.template_codes,
-                metadata       = EXCLUDED.metadata,
-                created_at     = NOW()
-        """
-        async with pool.acquire() as conn:
-            await conn.execute(
-                sql,
-                (business_type or "unknown"),
-                factory_id,
-                ",".join(template_codes),
-                system_prompt,
-                prompt,
-                teacher_model,
-                teacher_output,
-                input_hash,
-                metadata,
-            )
-        logger.debug(
-            f"[distill] captured sample (business_type={business_type}, "
-            f"factory={factory_id}, templates={len(template_codes)})"
-        )
-    except Exception as e:
-        # Training-data capture is best-effort. Never propagate.
+    except Exception as e:  # belt-and-suspenders; helper already swallows
         logger.warning(f"[distill] sample capture failed (non-blocking): {e}")
 
 

@@ -240,6 +240,12 @@ class AgentOrchestrator:
             ttl_hours=cache_ttl_hours,
         )
 
+        # 6. Distillation capture (training corpus). Fire-and-forget; only the
+        # freshly-generated LLM answer (cache-hit returns above never reach here).
+        await _capture_insight_distillation(
+            user_prompt, answer, factory_id, tokens,
+        )
+
         return InsightResponse(
             answer=answer,
             source=RESULT_SOURCE_LLM,
@@ -473,6 +479,12 @@ class AgentOrchestrator:
                 factory_id, q_hash, answer,
                 chart_config=None, tokens=total_tokens, ttl_hours=cache_ttl_hours,
             )
+            # Distillation capture (training corpus). Fire-and-forget; only a
+            # freshly-streamed LLM answer (cache-hit / degraded paths return
+            # above and never reach here).
+            await _capture_insight_distillation(
+                user_prompt, answer, factory_id, total_tokens,
+            )
         yield {"type": "done", "tokens": total_tokens,
                "elapsed_ms": int((time.monotonic() - t0) * 1000)}
 
@@ -557,3 +569,42 @@ def _collect_sensitive_names(data: Dict[str, Any]) -> Dict[str, List[str]]:
         if isinstance(n, str) and n.strip():
             out["活动"].append(n.strip())
     return {k: v for k, v in out.items() if v}
+
+
+async def _capture_insight_distillation(
+    user_prompt: str,
+    answer: str,
+    factory_id: Optional[str],
+    tokens: int,
+) -> None:
+    """Capture a 经营驾驶舱 report-insight teacher pair into the distillation
+    corpus. Fire-and-forget — wrapped so it NEVER raises and never affects the
+    insight response / streaming. Only called on freshly-generated LLM answers
+    (cache-hit / degraded early-returns never reach the call sites).
+
+    The INSIGHTS slot's primary model is qwen3-max (aliyun chain), with rare
+    zhipu fallback — recorded in metadata, matching the materializer's
+    teacher_model convention.
+    """
+    try:
+        from smartbi.config import get_pg_pool
+        from smartbi.services.distillation_capture import persist_distillation_sample
+        pool = await get_pg_pool()
+        await persist_distillation_sample(
+            pool,
+            source="agent_insight",
+            task_type="insight",
+            input_text=user_prompt,
+            teacher_output=answer,
+            business_type="restaurant",
+            factory_id=factory_id,
+            system_prompt=SYSTEM_PROMPT,
+            teacher_model="qwen3-max",
+            metadata={
+                "slot": "insights",
+                "tokens": tokens,
+                "teacher_model_note": "INSIGHTS-slot primary qwen3-max; rare zhipu fallback possible",
+            },
+        )
+    except Exception as e:  # belt-and-suspenders; helper already swallows
+        logger.debug("[distill] insight capture skipped (non-blocking): %s", e)
