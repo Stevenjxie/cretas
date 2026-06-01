@@ -5,6 +5,8 @@
 **前置**: 报工体系统一 Phase A (PR #350/#354/#358 merged main), Phase D (PR #360 merged main)
 **关联**: `ProductionReport.workProcessTaskId`, `WagePolicy`, `PieceRateRule`, `WageCalculationService`, `ProductionBatch.laborCost`
 
+> **状态: 本轮暂缓 (DEFERRED, per Steve 2026-06-01)。** 工资/计件成本部分本轮不实现; 本 spec 为审计加固后的就绪设计, 待 Steve 决定启动时直接进 writing-plans。本轮实现范围 = A4 + A2b。
+
 > **审计状态**: 草稿经对抗性代码审计 (2026-06-01), 发现 5 个 finding (F001–F005). 全部已纳入本定稿.
 > Steve 产品决策: **计件单位 = kg 和件数 BOTH 支持** (BigDecimal 模式, rateUnit 维度).
 

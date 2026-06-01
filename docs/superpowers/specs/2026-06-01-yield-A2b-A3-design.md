@@ -4,6 +4,7 @@
 **状态**: 设计确认 — 待实施
 **前置**: Phase A (PR #350/#354/#358) 已 merged main + prod LIVE。本文覆盖 A2b 和 A3 两个尚未实施的子需求。
 **产品决策 (Steve 2026-06-01)**: A2b 采用**方案 B — materialBatchId 真实关联**。方案 C (报工侧自检代理) 降级为 fallback 注记，不作主路径。
+**产品决策 (Steve 2026-06-01, Q6 补充)**: 一条 material-input 可关联 **1 个或多个** MaterialBatch (取决于产品配置)。设计采用 **`material_batch_refs` jsonb 数组**，镜像现有 `source_batch_refs` 模式 (非单 BIGINT 列)。1 个批次以长度为 1 的数组表示，N 个批次以 N 元素数组表示，天然向后兼容。
 
 ---
 
@@ -59,44 +60,98 @@ Steve 决策: **追踪 `materialBatchId` 到 material-input 路径**，使自动
 
 | 位置 | 改动 |
 |---|---|
-| `MaterialInputRequest.java` | 加 `private Long materialBatchId;` (可选, 仓管员领料时选择批次) |
-| `ProductionReport` entity | 加 `@Column(name = "material_batch_id") private Long materialBatchId;` |
-| 新 Flyway migration | `V20260901_04__add_material_batch_id_to_production_reports.sql` (参考现有 V20260901 序列) |
+| `MaterialInputRequest.java` | 加 `private List<MaterialBatchRef> materialBatchRefs;` (可选, 仓管员领料时选择批次列表；1 个批次 = 1 元素列表) |
+| `ProductionReport` entity | 加 jsonb 字段，镜像现有 `source_batch_refs` 模式 (见下) |
+| 新 Flyway migration | `V20260901_04__add_material_batch_refs_to_production_reports.sql` (参考现有 V20260901 序列) |
+
+**`MaterialBatchRef` (内嵌 DTO / 序列化到 jsonb)**:
+```java
+// dto/yield/MaterialBatchRef.java (新建, 也可用 Map<String, Object> 行内)
+public class MaterialBatchRef {
+    private Long materialBatchId;    // 关联 MaterialBatch.id
+    private BigDecimal quantity;     // 本次从该批次领用量
+    private String unit;             // 可选, 与 inputUnit 一致
+}
+```
+
+**`ProductionReport` entity 新增字段** (镜像 `source_batch_refs` 的 `@Type(JsonType.class)` jsonb 模式):
+```java
+/** A2b: 领料关联原料批次列表 (1 或 N, 取决于产品配置)
+ *  格式: [{"materialBatchId": Long, "quantity": Number, "unit": String|null}]
+ *  镜像 source_batch_refs: 同用 @Type(JsonType.class) + columnDefinition="jsonb"
+ */
+@Type(JsonType.class)
+@Column(name = "material_batch_refs", columnDefinition = "jsonb")
+private List<Map<String, Object>> materialBatchRefs;
+```
 
 **migration 内容**:
 ```sql
--- V20260901_04__add_material_batch_id_to_production_reports.sql
+-- V20260901_04__add_material_batch_refs_to_production_reports.sql
 ALTER TABLE production_reports
-    ADD COLUMN material_batch_id BIGINT;
+    ADD COLUMN material_batch_refs jsonb;
 
-CREATE INDEX idx_pr_material_batch ON production_reports (material_batch_id)
-    WHERE material_batch_id IS NOT NULL;
+-- GIN 索引支持 @> 包含查询 (查找包含特定 materialBatchId 的报工记录)
+CREATE INDEX idx_pr_material_batch_refs ON production_reports
+    USING gin (material_batch_refs jsonb_path_ops)
+    WHERE material_batch_refs IS NOT NULL;
 
-COMMENT ON COLUMN production_reports.material_batch_id
-    IS 'A2b: 关联的原料批次 ID (仅领料报工首道填写, 驱动自动结清)';
+COMMENT ON COLUMN production_reports.material_batch_refs
+    IS 'A2b: 领料关联原料批次列表 (jsonb); 格式 [{"materialBatchId":Long,"quantity":Number,"unit":String}]; 支持 1 或 N 批次';
 ```
+
+> **为何用 jsonb 数组而非单 BIGINT 列**: Steve Q6 决策 — 1 个批次只是 N=1 的特例。jsonb 数组天然支持两种情况，无需加 join 表，且与现有 `source_batch_refs` 模式完全一致 (同用 `@Type(JsonType.class)`)。索引用 `jsonb_path_ops` GIN 支持 `@>` 包含查询，效率与 B-tree 索引相当 (适合本场景的 "找含某 materialBatchId 的报工" 查询)。
 
 #### 2.3.2 recordMaterialInput 改动
 
 `YieldReportServiceImpl.recordMaterialInput` (line 144) 在 builder 中加入:
 ```java
-.materialBatchId(req.getMaterialBatchId())   // A2b: 链接领料批次
+.materialBatchRefs(toMaterialBatchRefMaps(req.getMaterialBatchRefs()))   // A2b: 链接领料批次列表
 ```
 
-只有 `req.getMaterialBatchId() != null` 时才有关联。仓管员不填时 (`null`) 退化为只有人工结清路径 — 功能向后兼容。
+辅助方法将 `List<MaterialBatchRef>` 转为 `List<Map<String, Object>>` (与 jsonb 序列化层一致):
+```java
+private List<Map<String, Object>> toMaterialBatchRefMaps(List<MaterialBatchRef> refs) {
+    if (refs == null || refs.isEmpty()) return null;
+    return refs.stream().map(r -> {
+        Map<String, Object> m = new java.util.LinkedHashMap<>();
+        m.put("materialBatchId", r.getMaterialBatchId());
+        m.put("quantity", r.getQuantity());
+        if (r.getUnit() != null) m.put("unit", r.getUnit());
+        return m;
+    }).collect(java.util.stream.Collectors.toList());
+}
+```
+
+只有 `req.getMaterialBatchRefs() != null && !isEmpty()` 时才有关联。仓管员不填时 (`null`) 退化为只有人工结清路径 — 功能向后兼容。
+
+**1 个批次的向后兼容写法** (调用方便利): 若调用方只传单个 `materialBatchId`，前端/RN 端包装为 1 元素列表即可:
+```json
+{ "materialBatchRefs": [{"materialBatchId": 123, "quantity": 520.0, "unit": "kg"}] }
+```
 
 #### 2.3.3 自动结清 hook: 触发时机与实现
 
 **触发时机选择 (两种方案):**
 
-**方案 B-1 (推荐)**: 在 `YieldReportServiceImpl.recordMaterialInput` 末尾调 `checkAndAutoSettle`:
+**方案 B-1 (推荐)**: 在 `YieldReportServiceImpl.recordMaterialInput` 末尾，对 `materialBatchRefs` 列表中**每一个**已 USED_UP 的 materialBatchId 调 `checkAndAutoSettle`:
 ```java
-// recordMaterialInput 完成保存后
-if (req.getMaterialBatchId() != null) {
-    checkAndAutoSettle(factoryId, batchId, req.getMaterialBatchId());
+// recordMaterialInput 完成保存后 — 遍历每个关联批次，各自独立检查
+if (req.getMaterialBatchRefs() != null) {
+    for (MaterialBatchRef ref : req.getMaterialBatchRefs()) {
+        if (ref.getMaterialBatchId() != null) {
+            checkAndAutoSettle(factoryId, batchId, ref.getMaterialBatchId());
+        }
+    }
 }
 ```
 `checkAndAutoSettle` 查询对应 MaterialBatch 的当前状态，若已是 USED_UP 则触发结清。
+
+**N 批次部分耗尽语义 (关键边界)**:
+- 每个 materialBatchId 独立检查 USED_UP，互不干扰。
+- 若 `materialBatchRefs` 有 3 个批次，其中批次 A 已 USED_UP，批次 B/C 未用完 → 仅批次 A 的路径触发 `checkAndAutoSettle`。但此时生产报工记录是否结清，取决于 **B/C 也耗尽**或**人工调用 settle**。
+- **设计选择**: `checkAndAutoSettle` 只在该 materialBatchId 的引用报工全部找到 + 所有引用该批次的 refs 对应的批次均 USED_UP 时才打 `settled=true`。实际实现: 查出该报工记录的 `material_batch_refs`，取出全部 `materialBatchId`，逐个查状态，**全部 USED_UP** 才结清。否则跳过 (等待剩余批次也 USED_UP 时再次触发)。
+- 这确保了: 1 个批次 = 该批次 USED_UP 即结清；N 个批次 = **全部 USED_UP** 才结清 (any-vs-all 语义保守选 all，防止原料未耗尽的生产批次被误结清)。
 
 **方案 B-2 (备选)**: 在 MaterialBatchServiceImpl 的 4 处 USED_UP 赋值后，注入 `YieldReportService` 调 autoSettle。需 `@Lazy` 注入防循环依赖 (per `.claude/rules/ai-intent-tool-skill-architecture.md`)。
 
@@ -108,48 +163,79 @@ if (req.getMaterialBatchId() != null) {
 
 ```java
 private void checkAndAutoSettle(String factoryId, Long batchId, Long materialBatchId) {
-    // 1. 查 MaterialBatch 当前状态
+    // 1. 查触发批次状态
     Optional<MaterialBatch> batchOpt = materialBatchRepository.findById(String.valueOf(materialBatchId));
     if (batchOpt.isEmpty()) return;
     MaterialBatch mb = batchOpt.get();
     if (mb.getStatus() != MaterialBatchStatus.USED_UP
             && mb.getRemainingQuantity().compareTo(BigDecimal.ZERO) > 0) {
-        return;  // 批次未用完，不触发
+        return;  // 触发批次未用完，不触发
     }
-    // 2. 找到关联同一 materialBatchId 的所有生产批次 (该工厂 + 指定 batchId)
-    List<ProductionReport> unsettled = reportRepo.findUnsettledYieldByMaterialBatch(
+    // 2. 找到 material_batch_refs 包含此 materialBatchId 的所有未结清 YIELD 报工
+    List<ProductionReport> candidates = reportRepo.findUnsettledYieldContainingMaterialBatch(
             factoryId, batchId, materialBatchId);
-    if (unsettled.isEmpty()) return;
-    // 3. 批量打结清标
+    if (candidates.isEmpty()) return;
+    // 3. 对每条候选报工: 检查其 material_batch_refs 中所有 materialBatchId 是否全部 USED_UP
+    //    全部 USED_UP → 结清; 任一未 USED_UP → 跳过 (等待该批次也用完时再次触发)
     LocalDateTime now = LocalDateTime.now();
-    for (ProductionReport r : unsettled) {
-        r.setSettled(true);
-        r.setSettledAt(now);
+    List<ProductionReport> toSettle = new ArrayList<>();
+    for (ProductionReport r : candidates) {
+        if (allRefsUsedUp(r.getMaterialBatchRefs())) {
+            r.setSettled(true);
+            r.setSettledAt(now);
+            toSettle.add(r);
+        }
     }
-    reportRepo.saveAll(unsettled);
-    log.info("A2b 自动结清: factoryId={}, batchId={}, materialBatchId={}, settledCount={}",
-            factoryId, batchId, materialBatchId, unsettled.size());
+    if (!toSettle.isEmpty()) {
+        reportRepo.saveAll(toSettle);
+        log.info("A2b 自动结清: factoryId={}, batchId={}, triggerMaterialBatchId={}, settledCount={}",
+                factoryId, batchId, materialBatchId, toSettle.size());
+    }
+}
+
+/** 检查 materialBatchRefs 列表中所有 materialBatchId 是否全部 USED_UP */
+private boolean allRefsUsedUp(List<Map<String, Object>> refs) {
+    if (refs == null || refs.isEmpty()) return false;
+    for (Map<String, Object> ref : refs) {
+        Object mbIdObj = ref.get("materialBatchId");
+        if (mbIdObj == null) continue;
+        Long mbId = Long.valueOf(mbIdObj.toString());
+        Optional<MaterialBatch> mb = materialBatchRepository.findById(String.valueOf(mbId));
+        if (mb.isEmpty()) continue;  // 找不到批次视为忽略
+        if (mb.get().getStatus() != MaterialBatchStatus.USED_UP
+                && mb.get().getRemainingQuantity().compareTo(BigDecimal.ZERO) > 0) {
+            return false;  // 至少一个未用完 → 不结清
+        }
+    }
+    return true;
 }
 ```
 
-新增 repository 方法:
+新增 repository 方法 (使用 native SQL 支持 jsonb `@>` 包含查询):
 ```java
 // ProductionReportRepository
-List<ProductionReport> findUnsettledYieldByMaterialBatch(
+@Query(value = "SELECT * FROM production_reports r " +
+               "WHERE r.factory_id = :factoryId " +
+               "AND r.batch_id = :batchId " +
+               "AND r.report_type = 'YIELD' " +
+               "AND (r.settled IS NULL OR r.settled = false) " +
+               "AND r.deleted_at IS NULL " +
+               "AND r.material_batch_refs @> CAST(:refJson AS jsonb)",
+       nativeQuery = true)
+List<ProductionReport> findUnsettledYieldContainingMaterialBatch(
     @Param("factoryId") String factoryId,
     @Param("batchId") Long batchId,
-    @Param("materialBatchId") Long materialBatchId);
+    @Param("refJson") String refJson);  // 调用方传 "[{\"materialBatchId\":" + materialBatchId + "}]"
 ```
 
-JPQL:
+调用方包装 (Service 层):
 ```java
-@Query("SELECT r FROM ProductionReport r WHERE r.factoryId = :factoryId " +
-       "AND r.batchId = :batchId " +
-       "AND r.materialBatchId = :materialBatchId " +
-       "AND r.reportType = 'YIELD' " +
-       "AND (r.settled IS NULL OR r.settled = false) " +
-       "AND r.deletedAt IS NULL")
+String refJson = "[{\"materialBatchId\":" + materialBatchId + "}]";
+List<ProductionReport> candidates = reportRepo.findUnsettledYieldContainingMaterialBatch(
+        factoryId, batchId, refJson);
 ```
+
+> **GIN 索引**: migration 中已建 `idx_pr_material_batch_refs` (jsonb_path_ops GIN)，`@>` 查询会命中该索引，不需全表扫描。
 
 #### 2.3.5 补充触发 API (materialBatch 先 USED_UP 的情况)
 
@@ -160,10 +246,12 @@ POST /api/mobile/{factoryId}/production/batches/{batchId}/auto-settle-by-materia
 Body: { "materialBatchId": 123 }
 ```
 
-Controller 调 `checkAndAutoSettle(factoryId, batchId, materialBatchId)`，供仓管员在标记批次用完后主动触发。这样两个时机都覆盖:
+Controller 调 `checkAndAutoSettle(factoryId, batchId, materialBatchId)`。此端点通过检查 `material_batch_refs @> [{"materialBatchId": 123}]` 找到关联报工，并评估该报工的**全部** materialBatchRefs 是否都已 USED_UP，才打结清标。供仓管员在标记批次用完后主动触发。这样两个时机都覆盖:
 - 先 recordMaterialInput 后 USED_UP: recordMaterialInput 末尾 check 触发
 - 先 USED_UP 后 recordMaterialInput: recordMaterialInput 末尾 check 触发 (此时已 USED_UP)
 - 先 USED_UP，recordMaterialInput 并不一定发生: 主动端点触发
+
+**N 批次场景下的主动触发**: 若 materialBatchRefs=[A,B,C]，仓管员需在 B 耗尽时手动触发一次 `auto-settle-by-material-batch` body `{materialBatchId: B的id}`。系统会检查 A/B/C 是否全部 USED_UP，全部满足才结清。
 
 ### 2.4 方案 C 降级注记 (fallback, 不作主路径)
 
@@ -175,11 +263,12 @@ Controller 调 `checkAndAutoSettle(factoryId, batchId, materialBatchId)`，供�
 
 | 文件 | 改动 | 说明 |
 |---|---|---|
-| `dto/yield/MaterialInputRequest.java` | 加 `materialBatchId` 字段 | 领料时传入批次 ID |
-| `entity/ProductionReport.java` | 加 `material_batch_id` 列 | |
-| `V20260901_04__add_material_batch_id_to_production_reports.sql` (新建) | DDL + 索引 | Phase A migration 序列末位 |
-| `YieldReportServiceImpl.java` | `recordMaterialInput` 加写入 + 新增 `checkAndAutoSettle` | |
-| `ProductionReportRepository.java` | 新增 `findUnsettledYieldByMaterialBatch` JPQL | |
+| `dto/yield/MaterialInputRequest.java` | 加 `List<MaterialBatchRef> materialBatchRefs` 字段 | 领料时传入批次列表 (1 或 N) |
+| `dto/yield/MaterialBatchRef.java` (新建) | DTO: `{materialBatchId, quantity, unit}` | jsonb 数组元素类型 |
+| `entity/ProductionReport.java` | 加 `@Type(JsonType.class) List<Map<String,Object>> materialBatchRefs` jsonb 字段 | 镜像 source_batch_refs 模式 |
+| `V20260901_04__add_material_batch_refs_to_production_reports.sql` (新建) | `ADD COLUMN material_batch_refs jsonb` + GIN 索引 | Phase A migration 序列末位 |
+| `YieldReportServiceImpl.java` | `recordMaterialInput` 加 jsonb 写入 + 新增 `checkAndAutoSettle` + `allRefsUsedUp` | |
+| `ProductionReportRepository.java` | 新增 `findUnsettledYieldContainingMaterialBatch` (native SQL `@>` 查询) | GIN 索引命中 |
 | `YieldReportController.java` | 新增 `auto-settle-by-material-batch` 端点 | 补充触发路径 |
 
 ---
@@ -301,10 +390,12 @@ assert dtoA.getSteps().get(1).getCarryover().compareTo(new BigDecimal("606")) ==
 | 测试 | 条件 | 期望 |
 |---|---|---|
 | 人工结清仍可用 | 调 `settle-day` | settled=true, settledAt 设置 (Phase A 已有，回归) |
-| materialBatchId 写入 | recordMaterialInput + materialBatchId=123 | ProductionReport.materialBatchId=123 落库 |
-| 自动结清触发 (USED_UP) | MaterialBatch status=USED_UP + batchId 匹配 | 关联 YIELD report settled=true |
+| materialBatchRefs 写入 (单批次) | recordMaterialInput + materialBatchRefs=[{id:123, qty:520}] | ProductionReport.material_batch_refs=[{"materialBatchId":123,...}] 落库 |
+| materialBatchRefs 写入 (多批次) | recordMaterialInput + materialBatchRefs=[{id:123,qty:300},{id:456,qty:220}] | 两个 ref 均在 jsonb 数组中 |
+| 自动结清触发 (单批次 USED_UP) | materialBatchRefs=[{id:123}], 批次 123 USED_UP | settled=true (仅有 1 个 ref 且已 USED_UP) |
+| N 批次全部 USED_UP 才结清 | materialBatchRefs=[{id:123},{id:456}], 123 先 USED_UP，456 未用完 | 触发 id=123 的 checkAndAutoSettle → allRefsUsedUp() 返 false → 不结清；456 USED_UP 时再次触发 → allRefsUsedUp() 返 true → 结清 |
 | 已 USED_UP 时 recordMaterialInput | 批次已 USED_UP，此时 recordMaterialInput | recordMaterialInput 末尾 check 触发结清 |
-| 未关联批次时不触发 | materialBatchId=null | 不触发自动结清，人工 settle 仍可用 |
+| 未关联批次时不触发 | materialBatchRefs=null 或 empty | 不触发自动结清，人工 settle 仍可用 |
 | 余料 carryover 正确算 | 道1输出 1126kg，道2投入 520kg | carryover=606 on 道2 report (已有，回归) |
 | 自动结清不重复 | 已 settled 的 report 再次 check | settled 状态不变，settledAt 不覆盖 |
 | 主动触发端点 | POST auto-settle-by-material-batch | 同自动触发路径结果 |
@@ -323,11 +414,12 @@ assert dtoA.getSteps().get(1).getCarryover().compareTo(new BigDecimal("606")) ==
 
 | 文件 | 类型 | 改动说明 | 关联子需求 |
 |---|---|---|---|
-| `dto/yield/MaterialInputRequest.java` | 改动 | 加 `materialBatchId` 字段 | A2b |
-| `entity/ProductionReport.java` | 改动 | 加 `material_batch_id` 列映射 | A2b |
-| `migrations/V20260901_04__add_material_batch_id_to_production_reports.sql` | 新建 | DDL + 索引 | A2b |
-| `service/yield/impl/YieldReportServiceImpl.java` | 改动 | `recordMaterialInput` 写 materialBatchId + `checkAndAutoSettle` 新方法 | A2b |
-| `repository/ProductionReportRepository.java` | 改动 | 新增 `findUnsettledYieldByMaterialBatch` JPQL | A2b |
+| `dto/yield/MaterialInputRequest.java` | 改动 | 加 `List<MaterialBatchRef> materialBatchRefs` 字段 | A2b |
+| `dto/yield/MaterialBatchRef.java` | 新建 | DTO: `{materialBatchId, quantity, unit}` | A2b |
+| `entity/ProductionReport.java` | 改动 | 加 `@Type(JsonType.class) material_batch_refs jsonb` 字段 (镜像 source_batch_refs) | A2b |
+| `migrations/V20260901_04__add_material_batch_refs_to_production_reports.sql` | 新建 | `ADD COLUMN material_batch_refs jsonb` + GIN 索引 | A2b |
+| `service/yield/impl/YieldReportServiceImpl.java` | 改动 | `recordMaterialInput` 写 materialBatchRefs jsonb + `checkAndAutoSettle` + `allRefsUsedUp` 新方法 | A2b |
+| `repository/ProductionReportRepository.java` | 改动 | 新增 `findUnsettledYieldContainingMaterialBatch` (native SQL `@>` 包含查询) | A2b |
 | `controller/yield/YieldReportController.java` | 改动 | 新增 `auto-settle-by-material-batch` 端点 | A2b |
 | `test/.../YieldCalculationCrossBatchTest.java` | 新建 | A3 跨批归因集成测试 6 用例 | A3 |
 
@@ -342,8 +434,8 @@ assert dtoA.getSteps().get(1).getCarryover().compareTo(new BigDecimal("606")) ==
 | **Q3** | A3 主用途: 出成率归因 (数据层已做) / 成本分摊 (A5 范围) / 追溯审计 (需 UI)? 目前实施到测试层即够？ | 数据层已支持，UI 暂无 | 待确认 |
 | **Q4** | 张权有没有明确要在界面上看到"B批次道1的300kg有606kg来自A批次"的跨批溯源细节？还是数据对了就行？ | Phase E spec 已排除 UI，若有需求升为子项 | 待确认 |
 | **Q5** | A2b "余料 carryover 给下一天/下一批次" 的跨日/跨批场景 — Phase A 只记录值，Phase B 才做 WIP 库存实体。张权接受这个范围边界吗？ | Phase B 接缝，见 §4 | 待确认 |
-| **Q6** | materialBatchId 关联的基数: 一条 materialInput 只关联一个 MaterialBatch (1:1)，还是可能一次领料跨多批次？ | 当前设计 1:1，若多批次需改为 jsonb 数组 | **Steve 决策: 方案 B，需确认 1:1 vs N** |
-| **Q7** | 跨批追踪颗粒度: 以 `entry-level` (每条 recordMaterialInput 都记 materialBatchId) 还是 `batch-level` (一个生产批次关联一个原料批次)? | 当前设计是 entry-level，更细粒度但字段加在 ProductionReport 上 | 待确认 |
+| **Q6** | materialBatchId 关联的基数: 一条 materialInput 只关联一个 MaterialBatch (1:1)，还是可能一次领料跨多批次？ | ~~当前设计 1:1，若多批次需改为 jsonb 数组~~ | **✅ 已决策 (Steve 2026-06-01): 1 和 N 都支持，取决于产品配置。设计改为 `material_batch_refs` jsonb 数组 (1 个批次 = 1 元素数组, N 个批次 = N 元素数组)，镜像 `source_batch_refs` 模式。** |
+| **Q7** | 跨批追踪颗粒度: 以 `entry-level` (每条 recordMaterialInput 都记 materialBatchRefs) 还是 `batch-level` (一个生产批次关联一个原料批次)? | 当前设计是 entry-level (每条 ProductionReport 记一份 materialBatchRefs) | **✅ 已决策 (Q6 推导): entry-level。每条 recordMaterialInput 记自己的 materialBatchRefs (1 或 N 元素)，颗粒度细，支持同一生产批次不同道次领不同原料批次的场景。** |
 | **Q8** | 报废/呆废 + 中间库存数据结构 — 余料 606 kg 如何处理: 报废、留存、转下批? Phase A 只记录，Phase B 才有实体。这个 Phase A/B 边界张权接受吗? | Phase B 接缝 | 待确认，HARD RULE: **Phase B 前不静默扩展到此** |
 
 ---
@@ -364,7 +456,7 @@ assert dtoA.getSteps().get(1).getCarryover().compareTo(new BigDecimal("606")) ==
 | Finding | 级别 | 问题 | 修订位置 |
 |---|---|---|---|
 | CLAIM-1 (P0 gap) | P0 | 自动结清触发逻辑**完全未实现** — draft 描述正确，此处确认。这是 A2b 要 BUILD 的核心。 | §2.3.3 给出具体实现设计 (checkAndAutoSettle 方法 + hook 位置) |
-| DESIGN-2 (P1) | P1 | 草稿方案 C "哪个批次触发" 的多批次歧义 | **由 Steve 产品决策消解**: materialBatchId entry-level 追踪，结清 key 在具体 MaterialBatch，见 §2.3.1-2.3.4 |
+| DESIGN-2 (P1) | P1 | 草稿方案 C "哪个批次触发" 的多批次歧义；Q6 追加: 1:1 还是 1:N | **由 Steve 产品决策消解 (两次)**: (1) 主路径为方案 B materialBatchId entry-level 追踪；(2) Q6 决策支持 1 或 N 批次 → 设计升级为 `material_batch_refs` jsonb 数组 (非单 BIGINT)，镜像 source_batch_refs 模式，auto-settle 采用"所有 refs 全部 USED_UP 才结清"语义，见 §2.3.1-2.3.5 |
 | CLAIM-3 (确认) | 确认 | `recordMaterialInput` 不记录 materialBatchId — 草稿正确，此处代码 audit 确认 | §2.3.2 明确改动 |
 | CLAIM-4 (确认) | 确认 | MaterialBatch USED_UP 存在且在 4 处触发 (草稿称 3 处，实际 4 处) | §2.1 修正为 4 处，hook 需覆盖全部 |
 | CLAIM-2 (确认) | 确认 | A3 数据层已完整实现 (source_batch_refs + calculateSteps:42-46 + tests) | §3.1 确认；A3 只需测试 |
@@ -376,8 +468,8 @@ assert dtoA.getSteps().get(1).getCarryover().compareTo(new BigDecimal("606")) ==
 
 | 验证项 | 结果 |
 |---|---|
-| `MaterialInputRequest.java` 无 materialBatchId | **确认** (4 字段，见 §2.2) |
-| `ProductionReport.java` 无 material_batch_id 列 | **确认** (entity 全字段已读，无此列) |
+| `MaterialInputRequest.java` 无 materialBatchRefs | **确认** (4 字段，见 §2.2；A2b 需新增 `List<MaterialBatchRef> materialBatchRefs`) |
+| `ProductionReport.java` 无 material_batch_refs 列 | **确认** (entity 全字段已读，无此列；A2b 新增 jsonb 字段镜像 source_batch_refs 模式) |
 | MaterialBatch USED_UP 触发位置数 | **4 处** (draft 称 3 处，实际 4: adjustBatchQuantity:599 + markBatchAsUsedUp:636 + consumeBatchQuantity:718 + 第二消耗方法:1012) |
 | `settleDay` 实现确认 | **已实现** (YieldReportServiceImpl:206-230，含 triggerComplete 标志) |
 | A3 数据层实现确认 | **已实现** (source_batch_refs jsonb entity:183-186 + calculateSteps:42-46 累加 sourceBatchRefs) |
