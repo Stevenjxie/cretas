@@ -33,6 +33,18 @@ def test_monthly_trend_daily_small_range(time_series_schema):
     assert result.kpis["trough_value"] == 50.0
 
 
+def test_monthly_trend_single_period_no_volatility_advice(time_series_schema):
+    """退化数据 (单周期, 峰==谷): 不给 '复刻峰值/缩小波动' 无意义建议, 给诚实 '需更多周期'。"""
+    rows = [{"订单日期": "2026-01-01", "销售金额": 1000.0}]
+    backend = PolarsBackend.from_rows(rows)
+    result = MonthlyTrend().run(backend, time_series_schema)
+    assert result.applies
+    assert result.kpis["period_count"] == 1
+    assert "缩小波动" not in result.insight_text
+    assert "复刻峰值" not in result.insight_text
+    assert "周期过少" in result.insight_text
+
+
 def test_monthly_trend_skip_when_no_time_field():
     schema = DataSchema(
         upload_id=1, factory_id="F001", domain=Domain.RESTAURANT,
