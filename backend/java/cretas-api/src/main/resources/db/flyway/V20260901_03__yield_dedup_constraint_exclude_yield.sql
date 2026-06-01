@@ -25,8 +25,36 @@
 --   - WHERE 加 report_type <> 'YIELD' → YIELD 行不进此约束, 逐道多条放行。
 --   PostgreSQL: <> 对 NULL report_type 返 NULL (不入索引), 但 report_type 在本表 NOT NULL, 无 NULL 隐患。
 --
--- 幂等: DROP IF EXISTS + CREATE IF NOT EXISTS。
+-- ⚠️ C2b 健壮性修复 (真 test_db 暴露): 旧版直接 CREATE UNIQUE INDEX, 若库里**已有**违反新约束的
+--   历史重复行 (同 factory+worker+batch+report_type+report_date 多条非 YIELD), 建索引会失败 →
+--   整个 flyway 迁移失败 → 后端无法启动。test_db 有 2 组历史重复 PROGRESS 数据 (F001/worker148/
+--   2026-02-24/batch 1&2 各 2 条) 即踩此坑, cretas-backend-test 起不来。prod_db 当时恰好 0 重复才侥幸
+--   成功, 但任何库 (含 prod 将来) 一旦有重复就炸。
+--   修法: 建索引**前**先软删每组重复中除最新一条 (created_at DESC, id DESC tiebreak) 外的所有行。
+--   软删行因 WHERE deleted_at IS NULL 不进索引, 故去重后建索引必成功。0 重复的库 (prod) 此步 no-op。
+--
+-- 幂等: 去重 UPDATE 用 deleted_at IS NULL 守卫; DROP/CREATE IF EXISTS。prod 本迁移已 success 不重跑;
+--   test 重启跑此健壮版必成功。
 
+-- Step 1: 软删违反新约束的历史重复行 (保留每组 created_at 最新的一条)。
+WITH ranked AS (
+    SELECT id,
+           ROW_NUMBER() OVER (
+               PARTITION BY factory_id, worker_id, batch_id, report_type, report_date
+               ORDER BY created_at DESC NULLS LAST, id DESC
+           ) AS rn
+    FROM production_reports
+    WHERE deleted_at IS NULL
+      AND batch_id IS NOT NULL
+      AND report_type <> 'YIELD'
+)
+UPDATE production_reports p
+SET deleted_at = NOW()
+FROM ranked r
+WHERE p.id = r.id
+  AND r.rn > 1;
+
+-- Step 2: DROP 旧约束 + 建新约束 (含 report_type 且排除 YIELD)。
 DROP INDEX IF EXISTS uk_report_worker_batch_date;
 
 CREATE UNIQUE INDEX IF NOT EXISTS uk_report_worker_batch_type_date_non_yield
