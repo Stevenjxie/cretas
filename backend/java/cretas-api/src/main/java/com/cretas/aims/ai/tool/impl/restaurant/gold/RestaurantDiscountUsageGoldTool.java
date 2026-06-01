@@ -103,11 +103,26 @@ public class RestaurantDiscountUsageGoldTool extends GoldBackedRestaurantTool {
             if (i < ranking.size() - 1) sb.append("\n");
         }
 
+        // Build chartConfig: horizontal bar — discount type vs amount in 万元
+        List<String> chartNames = new ArrayList<>();
+        List<Double> chartVals = new ArrayList<>();
+        for (Map<String, Object> entry : ranking) {
+            Object type = entry.get("优惠类型");
+            Object amt = entry.get("优惠金额");
+            double amtD = amt instanceof Number ? ((Number) amt).doubleValue() : 0.0;
+            chartNames.add(type != null ? type.toString() : "");
+            chartVals.add(toWan(amtD));
+        }
+
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("统计周期", period);
         result.put("优惠使用排行", ranking);
         result.put("dataAvailable", true);
         result.put("message", sb.toString());
+        if (!chartNames.isEmpty()) {
+            result.put("chartConfig", barChartConfig(
+                    "优惠使用排行 (万元)", chartNames, chartVals, "万元"));
+        }
         return result;
     }
 

@@ -99,11 +99,26 @@ public class RestaurantDishSlowsellerGoldTool extends GoldBackedRestaurantTool {
             if (i < formatted.size() - 1) sb.append("\n");
         }
 
+        // Build chartConfig: horizontal bar — dish name vs qty sold in 份
+        List<String> chartNames = new ArrayList<>();
+        List<Integer> chartVals = new ArrayList<>();
+        for (Map<String, Object> entry : formatted) {
+            Object name = entry.get("菜品");
+            Object qty = entry.get("销量");
+            int qtyI = qty instanceof Number ? ((Number) qty).intValue() : 0;
+            chartNames.add(name != null ? name.toString() : "");
+            chartVals.add(qtyI);
+        }
+
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("统计周期", period);
         result.put("慢销TOP10", formatted);
         result.put("dataAvailable", true);
         result.put("message", sb.toString());
+        if (!chartNames.isEmpty()) {
+            result.put("chartConfig", barChartConfig(
+                    "慢销菜品 (销量/份)", chartNames, chartVals, "份"));
+        }
         return result;
     }
 

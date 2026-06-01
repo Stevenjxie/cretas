@@ -102,6 +102,17 @@ public class RestaurantStoreRevenueRankGoldTool extends GoldBackedRestaurantTool
             if (i < storeRank.size() - 1) sb.append("\n");
         }
 
+        // Build chartConfig: horizontal bar — store name vs revenue in 万元
+        List<String> chartNames = new ArrayList<>();
+        List<Double> chartVals = new ArrayList<>();
+        for (Map<String, Object> entry : storeRank) {
+            Object name = entry.get("门店");
+            Object rev = entry.get("营收");
+            double revD = rev instanceof Number ? ((Number) rev).doubleValue() : 0.0;
+            chartNames.add(name != null ? name.toString() : "");
+            chartVals.add(toWan(revD));
+        }
+
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("统计周期", period);
         result.put("总营收", goldResult.get("total_revenue"));
@@ -109,6 +120,10 @@ public class RestaurantStoreRevenueRankGoldTool extends GoldBackedRestaurantTool
         result.put("门店营收排行", storeRank);
         result.put("dataAvailable", true);
         result.put("message", sb.toString());
+        if (!chartNames.isEmpty()) {
+            result.put("chartConfig", barChartConfig(
+                    "门店营收排行 (万元)", chartNames, chartVals, "万元"));
+        }
         return result;
     }
 

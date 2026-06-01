@@ -106,11 +106,26 @@ public class RestaurantStaffRankingGoldTool extends GoldBackedRestaurantTool {
         }
         sb.append("\n\n说明：").append(caveatStr);
 
+        // Build chartConfig: horizontal bar — operator vs net amount in 万元
+        List<String> chartNames = new ArrayList<>();
+        List<Double> chartVals = new ArrayList<>();
+        for (Map<String, Object> entry : ranking) {
+            Object name = entry.get("操作员");
+            Object amt = entry.get("开单净额");
+            double amtD = amt instanceof Number ? ((Number) amt).doubleValue() : 0.0;
+            chartNames.add(name != null ? name.toString() : "");
+            chartVals.add(toWan(amtD));
+        }
+
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("开单操作员排行", ranking);
         result.put("说明", caveatStr);
         result.put("dataAvailable", true);
         result.put("message", sb.toString());
+        if (!chartNames.isEmpty()) {
+            result.put("chartConfig", barChartConfig(
+                    "开单操作员排行 (万元)", chartNames, chartVals, "万元"));
+        }
         return result;
     }
 

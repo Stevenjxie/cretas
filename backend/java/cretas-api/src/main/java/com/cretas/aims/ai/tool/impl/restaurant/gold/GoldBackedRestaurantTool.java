@@ -8,8 +8,10 @@ import org.springframework.beans.factory.annotation.Autowired;
 import java.time.LocalDate;
 import java.time.YearMonth;
 import java.time.format.DateTimeParseException;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -335,5 +337,102 @@ public abstract class GoldBackedRestaurantTool extends AbstractBusinessTool {
     @Override
     protected List<String> getRequiredParameters() {
         return Collections.emptyList();
+    }
+
+    // =========================================================================
+    // ECharts chart config helpers — used by format() in each concrete tool
+    // =========================================================================
+
+    /**
+     * Build a horizontal bar chart config for ECharts.
+     *
+     * <p>The first entry in {@code categories}/{@code values} is rendered at the
+     * <em>bottom</em> of a horizontal bar chart by default; we reverse both lists
+     * so that the highest-ranked item (index 0) appears at the <em>top</em>.
+     *
+     * @param title      chart title (shown in the UI header above the chart)
+     * @param categories labels for each bar (e.g. dish names, store names)
+     * @param values     numeric values parallel to {@code categories}
+     * @param unitName   axis unit label (e.g. "万元", "份", "单")
+     * @return chartConfig map shaped {@code {type, title, option}}
+     */
+    protected static Map<String, Object> barChartConfig(
+            String title,
+            List<String> categories,
+            List<? extends Number> values,
+            String unitName) {
+
+        // Reverse so highest value (index 0) appears at the top of the bar chart.
+        List<String> cat = new ArrayList<>(categories);
+        Collections.reverse(cat);
+        List<Object> val = new ArrayList<>(values);
+        Collections.reverse(val);
+
+        Map<String, Object> opt = new LinkedHashMap<>();
+        opt.put("tooltip", Map.of("trigger", "axis"));
+        opt.put("grid", Map.of("left", "3%", "right", "6%",
+                "bottom", "3%", "top", "8%", "containLabel", true));
+        opt.put("xAxis", Map.of("type", "value", "name", unitName));
+        opt.put("yAxis", Map.of("type", "category", "data", cat,
+                "axisLabel", Map.of("fontSize", 11)));
+
+        Map<String, Object> series = new LinkedHashMap<>();
+        series.put("type", "bar");
+        series.put("data", val);
+        series.put("itemStyle", Map.of("color", "#5470c6"));
+        series.put("label", Map.of("show", true, "position", "right"));
+        opt.put("series", List.of(series));
+
+        Map<String, Object> cfg = new LinkedHashMap<>();
+        cfg.put("type", "bar");
+        cfg.put("title", title);
+        cfg.put("option", opt);
+        return cfg;
+    }
+
+    /**
+     * Build a pie chart config for ECharts.
+     *
+     * @param title  chart title
+     * @param names  slice labels
+     * @param values slice values parallel to {@code names}
+     * @return chartConfig map shaped {@code {type, title, option}}
+     */
+    protected static Map<String, Object> pieChartConfig(
+            String title,
+            List<String> names,
+            List<? extends Number> values) {
+
+        List<Map<String, Object>> data = new ArrayList<>();
+        for (int i = 0; i < names.size(); i++) {
+            data.add(Map.of("name", names.get(i), "value", values.get(i)));
+        }
+
+        Map<String, Object> opt = new LinkedHashMap<>();
+        opt.put("tooltip", Map.of("trigger", "item", "formatter", "{b}: {c} ({d}%)"));
+        opt.put("legend", Map.of("top", "bottom"));
+
+        Map<String, Object> series = new LinkedHashMap<>();
+        series.put("type", "pie");
+        series.put("radius", "60%");
+        series.put("data", data);
+        series.put("label", Map.of("formatter", "{b} {d}%"));
+        opt.put("series", List.of(series));
+
+        Map<String, Object> cfg = new LinkedHashMap<>();
+        cfg.put("type", "pie");
+        cfg.put("title", title);
+        cfg.put("option", opt);
+        return cfg;
+    }
+
+    /**
+     * Convert a raw amount (in yuan) to 万元 rounded to 1 decimal place.
+     *
+     * @param yuan raw value in yuan
+     * @return value in 万元 (1 decimal)
+     */
+    protected static double toWan(double yuan) {
+        return Math.round(yuan / 1000.0) / 10.0;
     }
 }
