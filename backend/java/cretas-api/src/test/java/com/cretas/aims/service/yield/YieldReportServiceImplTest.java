@@ -1,5 +1,7 @@
 package com.cretas.aims.service.yield;
 
+import com.cretas.aims.dto.yield.BatchYieldDTO;
+import com.cretas.aims.dto.yield.StepYieldDTO;
 import com.cretas.aims.dto.yield.YieldReportRequest;
 import com.cretas.aims.entity.ProductionReport;
 import com.cretas.aims.entity.WorkProcess;
@@ -163,5 +165,31 @@ class YieldReportServiceImplTest {
 
         assertThat(out.get("alert")).isEqualTo("BELOW_MIN");
         verify(reportRepo).save(any(ProductionReport.class));  // 软告警仍写入
+    }
+
+    @Test
+    void getYield_enrichesProcessNamesFromWorkProcess() {
+        // 真实 calcSvc 从 reports 派生出 2 步 (task 24/25), processName 初始为 null
+        ProductionReport r1 = ProductionReport.builder()
+                .workProcessTaskId(24L).processOrder(1)
+                .inputQuantity(new BigDecimal("998")).inputUnit("kg")
+                .outputQuantity(new BigDecimal("935.5")).outputUnit("kg")
+                .build();
+        ProductionReport r2 = ProductionReport.builder()
+                .workProcessTaskId(25L).processOrder(2)
+                .inputQuantity(new BigDecimal("935.5")).inputUnit("kg")
+                .outputQuantity(new BigDecimal("1262.9")).outputUnit("kg")
+                .build();
+        when(reportRepo.findYieldReportsByBatch("F006", 1897L)).thenReturn(List.of(r1, r2));
+        when(taskRepo.findByFactoryIdAndIdIn(eq("F006"), any()))
+                .thenReturn(List.of(task(24L, 1, "W1"), task(25L, 2, "W2")));
+        WorkProcess w1 = new WorkProcess(); w1.setId("W1"); w1.setProcessName("处理");
+        WorkProcess w2 = new WorkProcess(); w2.setId("W2"); w2.setProcessName("滚揉");
+        when(processRepo.findAllById(any())).thenReturn(List.of(w1, w2));
+
+        BatchYieldDTO dto = svc.getYield("F006", 1897L);
+
+        assertThat(dto.getSteps()).extracting(StepYieldDTO::getProcessName)
+                .containsExactly("处理", "滚揉");
     }
 }
