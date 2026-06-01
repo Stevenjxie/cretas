@@ -276,6 +276,23 @@ class SemanticMapper:
         rule_mappings, rule_unmapped = self._map_with_rules(columns, factory_id)
         mappings.extend(rule_mappings)
 
+        # Layer 1 (promoted): consult graduated aliases before early-return.
+        # Hits become high-confidence "promoted" mappings; misses stay unmapped.
+        from smartbi.services.field_promotion import consult_promoted
+        _still_unmapped = []
+        for col in rule_unmapped:
+            std = consult_promoted(col)
+            if std and std in STANDARD_FIELDS:
+                fi = STANDARD_FIELDS.get(std, {})
+                mappings.append(FieldMapping(
+                    original=col, standard=std, confidence=0.97,
+                    method="promoted", category=fi.get("category"),
+                    description="graduated rule (promoted_field_aliases)",
+                ))
+            else:
+                _still_unmapped.append(col)
+        rule_unmapped = _still_unmapped
+
         # Bug #12 fix (Apr 17 2026): only return early when every field got a
         # rule mapping. Previously `all(... for m in mappings)` returned True
         # when mappings=[] (vacuous truth), which short-circuited Layer 2 LLM
@@ -384,6 +401,21 @@ class SemanticMapper:
         result.unmapped_fields = unmapped
         result.confidence = sum(m.confidence for m in mappings) / len(mappings) if mappings else 0.5
         result.method = "combined"
+
+        # Capture non-rule mappings (embedding/llm) as self-learning candidates.
+        # best-effort: wrapped in try/except so any DB/pool error never blocks upload.
+        try:
+            from smartbi.services.field_promotion import capture_candidate
+            from smartbi.config import get_pg_pool
+            _pool = await get_pg_pool()
+            for m in mappings:
+                if m.method in ("embedding", "llm") and m.standard:
+                    await capture_candidate(
+                        _pool, m.original, m.standard,
+                        factory_id, m.method, m.confidence,
+                    )
+        except Exception as e:
+            logger.warning("field-mapping capture skipped (ignored): %s", e)
 
         return result
 

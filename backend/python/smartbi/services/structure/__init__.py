@@ -1,20 +1,18 @@
 """
 Structure Services Group
 
-This module provides Excel structure detection, analysis, and field mapping services:
+This module provides Excel structure detection, analysis, and classification services:
 
 - detector: Rule-based and LLM-powered structure detection
 - llm_analyzer: LLM-based structure analysis with recommendations
-- semantic_mapper: Field name to standard field mapping
 - table_classifier: Table type classification
 
 Usage:
-    from smartbi.services.structure import StructureDetector, SemanticMapper, TableClassifier
+    from smartbi.services.structure import StructureDetector, TableClassifier
 
     # Or import specific classes
     from smartbi.services.structure import (
         StructureDetectionResult,
-        SemanticMappingResult,
         ClassificationResult,
     )
 """
@@ -41,23 +39,6 @@ from .llm_analyzer import (
     FullAnalysisResult,
     LLMStructureAnalyzer,
     analyze_excel_structure,
-)
-
-# ============================================================
-# From semantic_mapper.py
-# ============================================================
-from .semantic_mapper import (
-    # Constants
-    CATEGORY_TO_DATA_TYPE,
-    LEARNED_MAPPINGS_FILE,
-    FIELD_REGISTRY_FILE,
-    STANDARD_FIELDS,
-    TABLE_TYPE_PATTERNS,
-    # Classes
-    FieldMappingResult,
-    FieldMapping,
-    SemanticMappingResult,
-    SemanticMapper,
 )
 
 # ============================================================
@@ -92,16 +73,6 @@ __all__ = [
     "FullAnalysisResult",
     "LLMStructureAnalyzer",
     "analyze_excel_structure",
-    # semantic_mapper.py
-    "CATEGORY_TO_DATA_TYPE",
-    "LEARNED_MAPPINGS_FILE",
-    "FIELD_REGISTRY_FILE",
-    "STANDARD_FIELDS",
-    "TABLE_TYPE_PATTERNS",
-    "FieldMappingResult",
-    "FieldMapping",
-    "SemanticMappingResult",
-    "SemanticMapper",
     # table_classifier.py
     "TableType",
     "ClassificationResult",
