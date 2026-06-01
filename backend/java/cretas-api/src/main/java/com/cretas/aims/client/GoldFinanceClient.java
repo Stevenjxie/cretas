@@ -474,6 +474,70 @@ public class GoldFinanceClient {
     }
 
     /**
+     * Fetch the actual date range of a factory's Gold data (agg_daily).
+     *
+     * <p>Used by {@code GoldBackedRestaurantTool.resolveWindow} to default the
+     * analysis window to the factory's real data span instead of an arbitrary
+     * "last 7 days from today" window.
+     *
+     * <p>Response keys (Python Gold {@code data_range} function):
+     * <ul>
+     *   <li>{@code factory_id} — echoes input</li>
+     *   <li>{@code min_date} — ISO {@code yyyy-MM-dd} string of the earliest row in
+     *       {@code agg_daily}, or {@code null} when the factory has no Gold rows yet</li>
+     *   <li>{@code max_date} — ISO {@code yyyy-MM-dd} string of the latest row, or
+     *       {@code null} when no rows</li>
+     *   <li>{@code day_count} — number of distinct dates with data (0 when no rows)</li>
+     * </ul>
+     *
+     * <p>No money fields → no RBAC strip on the Python side → no X-User-Role needed;
+     * still forwarded for consistency with other Gold calls.
+     *
+     * @param factoryId factory (tenant) id — must match the caller's auth scope
+     * @return parsed JSON as a Map with keys described above
+     * @throws IOException if Gold is unreachable, returns non-2xx, or body doesn't parse
+     */
+    public Map<String, Object> fetchDataRange(String factoryId) throws IOException {
+        if (factoryId == null || factoryId.isEmpty()) {
+            throw new IllegalArgumentException("factoryId required");
+        }
+
+        HttpUrl url = HttpUrl.parse(config.getUrl() + "/api/smartbi/gold/data-range")
+                .newBuilder()
+                .addQueryParameter("factory_id", factoryId)
+                .build();
+
+        Request.Builder reqBuilder = new Request.Builder().url(url).get();
+        if (!internalSecret.isEmpty()) {
+            reqBuilder.addHeader("X-Internal-Secret", internalSecret);
+            reqBuilder.addHeader("X-Factory-Id", factoryId);
+            String userRole = currentUserRole();
+            if (userRole != null && !userRole.isEmpty()) {
+                reqBuilder.addHeader("X-User-Role", userRole);
+            }
+        }
+        Request req = reqBuilder.build();
+
+        long t0 = System.currentTimeMillis();
+        try (Response resp = http.newCall(req).execute()) {
+            long elapsed = System.currentTimeMillis() - t0;
+            if (!resp.isSuccessful()) {
+                String body = resp.body() != null ? resp.body().string() : "";
+                throw new IOException(
+                        "Gold data-range HTTP " + resp.code() + " in " + elapsed
+                                + "ms: " + body);
+            }
+            String body = resp.body() != null ? resp.body().string() : "{}";
+            @SuppressWarnings("unchecked")
+            Map<String, Object> parsed = objectMapper.readValue(body, Map.class);
+            log.debug("Gold data-range factory={} min_date={} max_date={} day_count={} in {}ms",
+                    factoryId, parsed.get("min_date"), parsed.get("max_date"),
+                    parsed.get("day_count"), elapsed);
+            return parsed;
+        }
+    }
+
+    /**
      * Fetch discount/promotion breakdown from Python Gold layer.
      *
      * @param factoryId factory (tenant) id — must match the caller's auth scope
