@@ -694,11 +694,13 @@ async function tryJavaIntentChat(
       }
       // Gold-backed restaurant tools (经营驾驶舱 销售问答) emit a chartConfig with a
       // full ECharts `option` so the answer renders a visualization (bar/pie/line),
-      // not just text. renderChartFromConfig (below) draws chartConfig.option.
+      // not just text. These tools return their map DIRECTLY as resultData (no
+      // `.data` wrapper), so chartConfig is on res.resultData itself; report-style
+      // tools (buildSimpleResult) put it under resultData.data. Check both.
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      if ((toolData as any)?.chartConfig?.option) {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        msg.chartConfig = (toolData as any).chartConfig as ChartConfig;
+      const _toolChart = (res.resultData as any)?.chartConfig ?? (toolData as any)?.chartConfig;
+      if (_toolChart?.option) {
+        msg.chartConfig = _toolChart as ChartConfig;
       }
       if (!downloadUrl) {
         const rawMsg = res.message || '';
