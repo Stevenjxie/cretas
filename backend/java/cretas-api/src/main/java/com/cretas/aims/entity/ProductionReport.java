@@ -185,6 +185,14 @@ public class ProductionReport {
     @Column(name = "source_batch_refs", columnDefinition = "jsonb")
     private List<Map<String, Object>> sourceBatchRefs;
 
+    /** A2b: 领料关联原料批次列表 (1 或 N, 取决于产品配置)
+     *  格式: [{"materialBatchId": Long, "quantity": Number, "unit": String|null}]
+     *  镜像 source_batch_refs: 同用 @Type(JsonType.class) + columnDefinition="jsonb"
+     */
+    @Type(JsonType.class)
+    @Column(name = "material_batch_refs", columnDefinition = "jsonb")
+    private List<Map<String, Object>> materialBatchRefs;
+
     /** 领料出库量 (张权 A1, 如 998; 仅首道领料填) */
     @Column(name = "warehouse_out_quantity", precision = 12, scale = 2)
     private BigDecimal warehouseOutQuantity;

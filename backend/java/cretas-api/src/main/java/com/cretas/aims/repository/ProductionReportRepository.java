@@ -387,6 +387,26 @@ public interface ProductionReportRepository extends JpaRepository<ProductionRepo
                                                      @Param("batchId") Long batchId,
                                                      @Param("date") LocalDate date);
 
+    // ==================== A2b: 自动结清 — @> jsonb 包含查询 ====================
+
+    /**
+     * A2b: 查找 material_batch_refs 包含特定 materialBatchId 的未结清 YIELD 报工。
+     * 使用 GIN idx_pr_material_batch_refs (jsonb_path_ops) 支持 @> 包含查询。
+     * 调用方传 refJson = "[{\"materialBatchId\":" + materialBatchId + "}]"
+     */
+    @Query(value = "SELECT * FROM production_reports r " +
+                   "WHERE r.factory_id = :factoryId " +
+                   "AND r.batch_id = :batchId " +
+                   "AND r.report_type = 'YIELD' " +
+                   "AND (r.settled IS NULL OR r.settled = false) " +
+                   "AND r.deleted_at IS NULL " +
+                   "AND r.material_batch_refs @> CAST(:refJson AS jsonb)",
+           nativeQuery = true)
+    List<ProductionReport> findUnsettledYieldContainingMaterialBatch(
+            @Param("factoryId") String factoryId,
+            @Param("batchId") Long batchId,
+            @Param("refJson") String refJson);
+
     // ==================== 单元2: 厂级工序聚合 ====================
 
     /**
