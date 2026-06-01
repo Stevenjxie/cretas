@@ -46,6 +46,19 @@ VALID_ENTITY_TYPES = frozenset({
     "field_conflict",
 })
 
+# Subset of entity_type values that are genuine name-resolution entities with a
+# canonical dim table (dim_store / dim_product / dim_staff) AND that the
+# entity_resolution_history CHECK constraint accepts (V20260426_01 created it as
+# only 'store'/'product'/'staff' and it was never widened, unlike the queue's).
+# These mirror EntityType in
+# smartbi.canonical.entity_resolution.orchestrator. The other queue-only types
+# (ingredient / shape_detection / sheet_merge / period_inference / field_conflict)
+# have no dim_* table and would violate the history CHECK, so admin confirms of
+# those types are NOT graduated into entity_resolution_history.
+# Used as the allow-list that gates the f-string-interpolated dynamic table name
+# (dim_{entity_type}) — only values in this frozen set are ever interpolated.
+HISTORY_GRADUATABLE_ENTITY_TYPES = frozenset({"store", "product", "staff"})
+
 
 async def _fetch_queue_items(
     pool,
@@ -364,14 +377,18 @@ async def _update_queue_resolved(
     admin_user: str,
     notes: Optional[str],
     single_admin_degraded: bool,
-) -> bool:
+) -> Optional[Dict[str, Any]]:
     """Single transaction: SET GUC + UPDATE queue status to CONFIRMED.
 
     W0.4 finding 3: set_config MUST be inside conn.transaction() so RLS FORCE
     sees the GUC for the duration of the UPDATE (transaction-scoped local GUC).
 
     Race condition: UPDATE conditioned on status='PENDING' so concurrent resolves
-    return no rows (fetchval → None → caller maps to 409).
+    return no rows (fetchrow → None → caller maps to 409).
+
+    Returns the updated row {id, raw_name, entity_type} on success (so callers
+    can graduate an admin-confirmed match into entity_resolution_history without
+    a second fetch), or None if no PENDING row was updated (race / already done).
     """
     async with pool.acquire() as conn:
         async with conn.transaction():
@@ -384,7 +401,7 @@ async def _update_queue_resolved(
             # reviewer Task 3.3 concern: f-string + dynamic SQL is a foot-gun even
             # when current values are constant.
             if single_admin_degraded:
-                updated = await conn.fetchval(
+                updated = await conn.fetchrow(
                     """
                     UPDATE entity_resolution_admin_queue
                        SET status                    = 'CONFIRMED',
@@ -399,12 +416,12 @@ async def _update_queue_resolved(
                                                           )
                      WHERE id = $4
                        AND status = 'PENDING'
-                    RETURNING id
+                    RETURNING id, raw_name, entity_type
                     """,
                     action, admin_user, resolved_to_entity_id, item_id,
                 )
             else:
-                updated = await conn.fetchval(
+                updated = await conn.fetchrow(
                     """
                     UPDATE entity_resolution_admin_queue
                        SET status                    = 'CONFIRMED',
@@ -414,11 +431,104 @@ async def _update_queue_resolved(
                            admin_resolved_to_entity_id = $3
                      WHERE id = $4
                        AND status = 'PENDING'
-                    RETURNING id
+                    RETURNING id, raw_name, entity_type
                     """,
                     action, admin_user, resolved_to_entity_id, item_id,
                 )
-    return updated is not None
+    if updated is None:
+        return None
+    return {
+        "id": int(updated["id"]),
+        "raw_name": updated["raw_name"],
+        "entity_type": updated["entity_type"],
+    }
+
+
+async def _record_admin_confirm_history(
+    pool,
+    factory_id: str,
+    entity_type: str,
+    raw_name: str,
+    resolved_to_entity_id: int,
+) -> None:
+    """Graduate an admin-confirmed resolution into entity_resolution_history.
+
+    The automated orchestrator (orchestrator.py:_record_history) records every
+    machine decision here so the transitive read path resolves the same name at
+    0 cost next upload. The admin's manual confirmation previously wrote ONLY the
+    queue's admin_resolved_to_entity_id, so the human gold-standard correction was
+    discarded and the same name re-ran the whole agent chain + re-queued forever.
+    This mirrors the orchestrator's upsert (same columns + ON CONFLICT key) with
+    confidence=1.0 (human gold, well above the read path's >0.85 threshold) and
+    decided_by_agent='admin'.
+
+    SECURITY: entity_type is interpolated into the dim table name, so it MUST be
+    validated against HISTORY_GRADUATABLE_ENTITY_TYPES (store/product/staff)
+    BEFORE this call; the caller skips non-graduatable types. We re-check here as
+    defence in depth before interpolating.
+
+    RLS: entity_resolution_history has FORCE ROW LEVEL SECURITY, so app.factory_id
+    must be set inside the same transaction as the upsert (mirrors the GUC pattern
+    in _update_queue_resolved / _fetch_queue_items).
+
+    This is a best-effort learning side-effect: the caller wraps it in try/except
+    so a failure here NEVER blocks or rolls back the admin confirm.
+    """
+    if entity_type not in HISTORY_GRADUATABLE_ENTITY_TYPES:
+        # Defence in depth — caller already gates, but never interpolate an
+        # unvalidated entity_type into the dynamic dim_* table name.
+        logger.warning(
+            "Skipping history graduation: entity_type %r not graduatable "
+            "(factory=%s raw_name=%r)",
+            entity_type, factory_id, raw_name,
+        )
+        return
+
+    # Safe now: entity_type is one of store/product/staff (known dim_* tables).
+    entity_table = f"dim_{entity_type}"
+    id_column = f"{entity_type}_id"
+
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            # RLS FORCE: GUC inside the transaction so both the dim_* lookup and
+            # the history upsert see the correct factory_id.
+            await conn.execute(
+                "SELECT set_config('app.factory_id', $1, true)", factory_id
+            )
+
+            # b_name = canonical name of the resolved entity (spec C-NEW-2:
+            # lookup from dim, not self-ref). Fallback to raw_name if the dim
+            # row is not visible, exactly like the orchestrator.
+            row = await conn.fetchrow(
+                f"SELECT name FROM {entity_table} "
+                f"WHERE factory_id = $1 AND {id_column} = $2",
+                factory_id,
+                resolved_to_entity_id,
+            )
+            b_name = row["name"] if row else raw_name
+
+            await conn.execute(
+                """
+                INSERT INTO entity_resolution_history
+                  (factory_id, entity_type, a_name, b_name, b_entity_id,
+                   confidence, decided_by_agent, reasoning)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                ON CONFLICT (factory_id, entity_type, a_name, b_entity_id) DO UPDATE SET
+                  confidence = GREATEST(
+                      entity_resolution_history.confidence, EXCLUDED.confidence
+                  ),
+                  decided_by_agent = EXCLUDED.decided_by_agent,
+                  reasoning = EXCLUDED.reasoning
+                """,
+                factory_id,
+                entity_type,
+                raw_name,
+                b_name,
+                resolved_to_entity_id,
+                1.0,  # human gold — well above the read path's >0.85 threshold
+                "admin",
+                "human-confirmed via admin queue",
+            )
 
 
 @router.post("/{id}/resolve")
@@ -496,7 +606,7 @@ async def resolve_queue(
             item["factoryId"], id, current_user,
         )
 
-    success = await _update_queue_resolved(
+    updated = await _update_queue_resolved(
         pool,
         id,
         item["factoryId"],
@@ -507,11 +617,39 @@ async def resolve_queue(
         single_admin_degraded,
     )
 
-    if not success:
+    if updated is None:
         raise HTTPException(
             status_code=409,
             detail="队列项已被其他管理员处理（race condition），请刷新列表",
         )
+
+    # The confirm transaction has committed above. Now best-effort graduate the
+    # admin's gold-standard confirmation into entity_resolution_history so the
+    # transitive read path resolves this name at 0 cost next upload (instead of
+    # re-running the whole agent chain + re-queuing forever). This is a SEPARATE
+    # transaction wrapped in its own try/except: a failure here must NEVER block
+    # or roll back the confirm the admin already succeeded at. Only graduate a
+    # 'confirm' with a real resolved entity of a graduatable type (store/product/
+    # staff) — create_new / reject / null-entity produce no first-hop history.
+    if (
+        body.action == "confirm"
+        and body.resolvedToEntityId is not None
+        and updated["entity_type"] in HISTORY_GRADUATABLE_ENTITY_TYPES
+    ):
+        try:
+            await _record_admin_confirm_history(
+                pool,
+                item["factoryId"],
+                updated["entity_type"],
+                updated["raw_name"],
+                body.resolvedToEntityId,
+            )
+        except Exception as exc:  # noqa: BLE001 — fail-open learning side-effect
+            logger.warning(
+                "History graduation failed (confirm succeeded) "
+                "item=%s factory=%s: %s",
+                id, item["factoryId"], exc,
+            )
 
     return {
         "resolved": True,
@@ -727,7 +865,7 @@ async def batch_resolve_queue(
             )
 
         try:
-            ok = await _update_queue_resolved(
+            updated = await _update_queue_resolved(
                 pool,
                 item_id,
                 item["factoryId"],
@@ -737,8 +875,31 @@ async def batch_resolve_queue(
                 None,  # notes not supported in batch mode
                 single_admin_degraded,
             )
-            if ok:
+            if updated is not None:
                 success_count += 1
+                # Same best-effort history graduation as resolve_queue: the
+                # confirm committed, now learn from the human gold correction so
+                # the read path hits 0-cost next upload. Separate try/except —
+                # never fail the (already-succeeded) confirm for a learning write.
+                if (
+                    body.action == "confirm"
+                    and body.resolvedToEntityId is not None
+                    and updated["entity_type"] in HISTORY_GRADUATABLE_ENTITY_TYPES
+                ):
+                    try:
+                        await _record_admin_confirm_history(
+                            pool,
+                            item["factoryId"],
+                            updated["entity_type"],
+                            updated["raw_name"],
+                            body.resolvedToEntityId,
+                        )
+                    except Exception as hist_exc:  # noqa: BLE001 — fail-open
+                        logger.warning(
+                            "History graduation failed (batch confirm succeeded) "
+                            "item=%s factory=%s: %s",
+                            item_id, item["factoryId"], hist_exc,
+                        )
             else:
                 failed_items.append({
                     "id": item_id,
