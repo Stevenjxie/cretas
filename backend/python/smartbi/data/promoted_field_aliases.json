@@ -1,1 +1,18 @@
-{}
+{
+  "本月实际": "actual_amount",
+  "预算数": "budget_amount",
+  "预算金额": "budget_amount",
+  "实际金额": "actual_amount",
+  "预实差异": "variance",
+  "达成率": "achievement_rate",
+  "同比增长": "yoy_rate",
+  "环比增长": "mom_rate",
+  "项目": "category",
+  "科目": "category",
+  "销售收入": "revenue",
+  "营业收入": "revenue",
+  "成本": "cost",
+  "毛利": "gross_profit",
+  "净利润": "net_profit",
+  "去年同期": "last_year_actual"
+}
