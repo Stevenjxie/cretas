@@ -19,12 +19,6 @@ const smartBIRoutes: RouteRecordRaw[] = [
         meta: { requiresAuth: true, title: '经营驾驶舱', icon: 'Odometer', module: 'analytics' },
       },
       {
-        path: 'finance',
-        name: 'SmartBIFinance',
-        component: () => import('@/views/smart-bi/FinanceAnalysis.vue'),
-        meta: { requiresAuth: true, title: '财务分析', icon: 'Money', module: 'analytics' },
-      },
-      {
         path: 'sales',
         name: 'SmartBISales',
         component: () => import('@/views/smart-bi/SalesAnalysis.vue'),
@@ -122,6 +116,8 @@ const smartBIRoutes: RouteRecordRaw[] = [
 export const smartBIRedirects: RouteRecordRaw[] = [
   // P3: AI问答合并入 AI探索 query tab
   { path: '/smart-bi/query', redirect: '/smart-bi/analysis?tab=query' },
+  // P4: 财务数据分析合并入财务看板 analysis section
+  { path: '/smart-bi/finance', redirect: '/smart-bi/financial-dashboard?tab=analysis' },
 ];
 
 export default smartBIRoutes;

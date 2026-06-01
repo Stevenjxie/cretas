@@ -4,7 +4,10 @@
  * Orchestrates all 7 financial chart types with AI analysis and PPT export
  */
 import { ref, reactive, computed, watch, nextTick, onBeforeUnmount } from 'vue';
+import { useRoute } from 'vue-router';
 import { ElMessage } from 'element-plus';
+import FinanceAnalysis from './FinanceAnalysis.vue';
+import { resolveFinanceSection } from './financeDashboardSection';
 import { DataAnalysis, VideoPlay, Download, Collection, SetUp, ArrowDown, ArrowRight, Delete } from '@element-plus/icons-vue';
 import echarts from '@/utils/echarts';
 import { processEChartsOptions } from '@/utils/echarts-fmt';
@@ -63,6 +66,12 @@ const availableDimensions = ref<{ name: string; values: string[] }[]>([]);
 let autoRefreshTimer: ReturnType<typeof setInterval> | null = null;
 const useSvgRenderer = ref(false); // D4: SVG renderer toggle
 const isInDemoMode = ref(false); // Track demo mode for slicer re-generation
+
+// P4: 顶层 section tab — 财务 PBI 看板(dashboard) / 财务数据分析(analysis)。
+// 注意: 与下方 chart activeTab 完全独立 (后者是图表类型 key)。
+const route = useRoute();
+const sectionTab = ref(resolveFinanceSection(route.query));
+watch(() => route.query.tab, () => { sectionTab.value = resolveFinanceSection(route.query); });
 
 // Tab navigation state
 const viewMode = ref<'tab' | 'grid'>('tab');
@@ -1395,6 +1404,9 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="financial-dashboard-pbi" :data-theme="isDarkMode ? 'dark' : 'light'" role="main" aria-label="财务分析看板">
+    <!-- P4: 顶层 section tabs — 财务 PBI 看板 / 财务数据分析 (合并自原 /smart-bi/finance) -->
+    <el-tabs v-model="sectionTab" class="finance-section-tabs">
+    <el-tab-pane label="财务 PBI 看板" name="dashboard">
     <!-- Top Toolbar -->
     <el-card class="toolbar-card" shadow="never">
       <div class="toolbar-inner">
@@ -2143,6 +2155,13 @@ onBeforeUnmount(() => {
         height="500px"
       />
     </el-card>
+    </el-tab-pane>
+
+    <!-- P4: 财务数据分析 (embed FinanceAnalysis, 原 /smart-bi/finance) -->
+    <el-tab-pane label="财务数据分析" name="analysis">
+      <FinanceAnalysis />
+    </el-tab-pane>
+    </el-tabs>
 
     <!-- Bookmark Drawer -->
     <el-drawer

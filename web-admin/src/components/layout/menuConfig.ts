@@ -258,9 +258,8 @@ export const menuConfig: MenuItem[] = [
       { path: '/smart-bi/analysis', title: 'AI 问答 / 数据分析', icon: 'DataAnalysis', module: 'analytics', groupLabel: 'AI 探索' },
       { path: '/analytics/ai-reports', title: 'AI 分析报告', icon: 'Document', module: 'analytics' },
       // -- 专题报表 --
+      // P4: 财务数据分析已合并入财务看板 analysis section (redirect /smart-bi/finance → /smart-bi/financial-dashboard?tab=analysis), 菜单项移除
       { path: '/smart-bi/financial-dashboard', title: '财务看板', icon: 'TrendCharts', module: 'analytics', groupLabel: '专题报表' },
-      // P1: 暂留, P3/P4 合并 redirect 时移除 (spec §合并2) — redirect /smart-bi/finance → /smart-bi/financial-dashboard?tab=analysis
-      { path: '/smart-bi/finance', title: '财务数据分析', icon: 'Money', module: 'analytics' },
       { path: '/smart-bi/sales', title: '销售分析', icon: 'Sell', module: 'analytics' },
       { path: '/smart-bi/revenue-report', title: '收入管理报表', icon: 'Money', module: 'analytics',
         hideForFactoryTypes: ['FACTORY'] },
