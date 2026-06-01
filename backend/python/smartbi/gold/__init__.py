@@ -32,6 +32,8 @@ from smartbi.gold.queries import (
     discount_breakdown,
     finance_summary,
     kpi_summary,
+    order_type_mix,
+    staff_ranking,
     top_products,
 )
 from smartbi.gold.shadow_compare import DiffReport, FieldDiff, diff_results
@@ -62,6 +64,8 @@ __all__ = [
     "finance_summary",
     "ingest_and_materialize",
     "kpi_summary",
+    "order_type_mix",
+    "staff_ranking",
     "top_products",
     "run_silver_dual_write",
     "silver_dual_write_enabled",
