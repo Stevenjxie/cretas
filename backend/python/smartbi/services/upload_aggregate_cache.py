@@ -33,20 +33,26 @@ import time
 from typing import Any, Dict, List, Optional
 
 
+# Intensive-measure patterns (rating/score/rate/per-unit) that must aggregate by AVG,
+# not SUM. Kept INLINE (not imported from materialized_analytics.schema_helpers) on
+# purpose: that import pulls smartbi.services.__init__ → excel_parser → bare `services`,
+# which only resolves under the app's special sys.path setup and raised
+# ModuleNotFoundError('services') at runtime here — silently falling back to SUM so the
+# fix never fired. Mirror of schema_helpers._AVG_MEASURE_PATTERNS (#3 chat-path fix).
+_INTENSIVE_MEASURE_PATTERNS = (
+    '星级', '评分', '分数', '打分', '得分', '评价分', '环境分', '服务分', '口味分',
+    '率', '比率', '占比', '百分比',
+    '客单价', '人均', '单价', '均价',
+)
+
+
 def _measure_is_avg(col: Optional[str]) -> bool:
-    """True if `col` is an intensive measure (星级分/评分/率) that must aggregate by
-    AVG, not SUM. Mirrors materialized-analytics aggregation_for_measure; lazy import
-    avoids any cycle. A SUM of star points ('总星级分 57974') is meaningless and, fed
-    to the LLM, gets narrated as a headline. (#3 chat-path fix.)"""
+    """True if `col` is an intensive measure (星级分/评分/率/客单价) that must aggregate
+    by AVG, not SUM. A SUM of star points ('总星级分 57974') is meaningless and, fed to
+    the LLM, gets narrated as a headline. (#3 chat-path fix.)"""
     if not col:
         return False
-    try:
-        from smartbi.services.materialized_analytics.restaurant.schema_helpers import (
-            aggregation_for_measure,
-        )
-        return aggregation_for_measure(col) == "avg"
-    except Exception:
-        return False
+    return any(p in col for p in _INTENSIVE_MEASURE_PATTERNS)
 
 
 # Apr 26 2026 phase 5 (UX): mirror _is_id_like from materializer.py.
