@@ -23,37 +23,52 @@ MIN_INDUSTRIES = 2
 CAPTURE_METHODS = ("embedding", "llm", "user_correction")
 
 
+def _meets_consensus(group: Dict[str, Any]) -> bool:
+    """跨工厂共识阈值: ≥2 工厂且 conf≥0.9(LLM 共识), 或 纠正+再1工厂任意证据(折中)。"""
+    fc = int(group.get("factory_count", 0))
+    mc = float(group.get("max_confidence", 0))
+    has_corr = bool(group.get("has_correction", False))
+    if fc >= MIN_FACTORIES and mc >= MIN_CONFIDENCE:
+        return True
+    if has_corr and fc >= MIN_FACTORIES:
+        return True
+    return False
+
+
 def is_branch_promotable(
     group: Dict[str, Any], branch: Dict[str, Any], trunk: Dict[str, Any]
 ) -> Tuple[bool, str]:
     """一个聚合候选能否升"行业分支"。group 含 learning_type/source_key/target_value/
-    business_type/max_confidence/factory_count/has_correction。"""
+    business_type/max_confidence/factory_count/has_correction。unknown 业态不走分支
+    (无行业可 scope), 改由 is_trunk_promotable 的 unknown-共识 直升主干。"""
     lt = group["learning_type"]
     src = group["source_key"]
     tgt = group["target_value"]
     bt = group["business_type"]
     if bt == "unknown":
-        return False, "unknown 业态不升分支"
+        return False, "unknown 业态不升分支(走主干共识)"
     if branch.get(lt, {}).get(bt, {}).get(src) == tgt:
         return False, "已在行业分支"
+    if _meets_consensus(group):
+        return True, "行业内共识"
     fc = int(group.get("factory_count", 0))
     mc = float(group.get("max_confidence", 0))
-    has_corr = bool(group.get("has_correction", False))
-    if fc >= MIN_FACTORIES and mc >= MIN_CONFIDENCE:
-        return True, "LLM 共识"
-    if has_corr and fc >= MIN_FACTORIES:
-        return True, "纠正+corroboration"
     return False, f"未达标(工厂{fc}/置信{mc})"
 
 
 def is_trunk_promotable(
-    learning_type: str, source_key: str, target_value: str, branch_state: Dict[str, Any]
+    learning_type: str, source_key: str, target_value: str,
+    branch_state: Dict[str, Any], unknown_group: Optional[Dict[str, Any]] = None
 ) -> Tuple[bool, str]:
-    """同一 (lt, src, tgt) 已在 ≥MIN_INDUSTRIES 个不同行业分支 → 升全局主干。"""
+    """升全局主干, 两条路径:
+    (a) 同一 (lt, src, tgt) 已在 ≥MIN_INDUSTRIES 个不同行业分支(跨行业收敛); 或
+    (b) unknown 业态候选达跨工厂共识(无行业可 scope → 直升主干, 等价 v1 扁平)。"""
     lt_branches = branch_state.get(learning_type, {})
     n = sum(1 for _bt, m in lt_branches.items() if m.get(source_key) == target_value)
     if n >= MIN_INDUSTRIES:
         return True, f"跨{n}行业一致"
+    if unknown_group and _meets_consensus(unknown_group):
+        return True, "unknown 共识直升主干"
     return False, f"仅{n}行业"
 
 

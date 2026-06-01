@@ -81,6 +81,26 @@ def test_trunk_diff_target_not_counted():
     assert not ok
 
 
+def test_trunk_unknown_consensus_direct():
+    # unknown 业态(无行业可 scope)+ 跨工厂共识 → 直升主干(等价 v1 扁平)
+    ug = dict(factory_count=2, max_confidence=0.95, has_correction=False)
+    ok, _ = is_trunk_promotable("field_mapping", "营业进账", "revenue", {}, unknown_group=ug)
+    assert ok
+
+
+def test_trunk_unknown_single_factory_blocked():
+    ug = dict(factory_count=1, max_confidence=0.95, has_correction=False)
+    ok, _ = is_trunk_promotable("field_mapping", "营业进账", "revenue", {}, unknown_group=ug)
+    assert not ok
+
+
+def test_branch_unknown_still_never_branches():
+    # unknown 永不升分支(改走主干), 即使达共识
+    ok, _ = is_branch_promotable(
+        _g(business_type="unknown", factory_count=5, max_confidence=0.99), {}, {})
+    assert not ok
+
+
 # ---- consult 层级 ----
 def test_consult_branch_over_trunk():
     branch = {"field_mapping": {"restaurant": {"客流": "traffic_branch"}}}

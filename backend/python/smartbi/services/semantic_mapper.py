@@ -242,7 +242,8 @@ class SemanticMapper:
         columns: List[str],
         sample_data: Optional[List[List[Any]]] = None,
         factory_id: Optional[str] = None,
-        table_context: Optional[str] = None
+        table_context: Optional[str] = None,
+        business_type: Optional[str] = None
     ) -> SemanticMappingResult:
         """
         Map column names to standard fields.
@@ -252,6 +253,8 @@ class SemanticMapper:
             sample_data: Optional sample data for context
             factory_id: Optional factory ID for custom mappings
             table_context: Optional context about the table (e.g., sheet name)
+            business_type: Optional industry (restaurant/factory/unknown) for
+                hierarchical promoted-rule consult + learning capture scope
 
         Returns:
             SemanticMappingResult with all mappings
@@ -277,17 +280,17 @@ class SemanticMapper:
         mappings.extend(rule_mappings)
 
         # Layer 1 (promoted): consult graduated aliases before early-return.
-        # Hits become high-confidence "promoted" mappings; misses stay unmapped.
-        from smartbi.services.field_promotion import consult_promoted
+        # Hierarchical: industry-branch first, then global trunk (0-token determinism).
+        from smartbi.services.learning_promotion import consult_promoted
         _still_unmapped = []
         for col in rule_unmapped:
-            std = consult_promoted(col)
+            std, hit_method = consult_promoted("field_mapping", col, business_type)
             if std and std in STANDARD_FIELDS:
                 fi = STANDARD_FIELDS.get(std, {})
                 mappings.append(FieldMapping(
                     original=col, standard=std, confidence=0.97,
-                    method="promoted", category=fi.get("category"),
-                    description="graduated rule (promoted_field_aliases)",
+                    method=hit_method, category=fi.get("category"),
+                    description="graduated rule (promoted_learnings)",
                 ))
             else:
                 _still_unmapped.append(col)
@@ -405,14 +408,15 @@ class SemanticMapper:
         # Capture non-rule mappings (embedding/llm) as self-learning candidates.
         # best-effort: wrapped in try/except so any DB/pool error never blocks upload.
         try:
-            from smartbi.services.field_promotion import capture_candidate
+            from smartbi.services.learning_promotion import capture_candidate
             from smartbi.config import get_pg_pool
             _pool = await get_pg_pool()
+            _bt = business_type or "unknown"
             for m in mappings:
                 if m.method in ("embedding", "llm") and m.standard:
                     await capture_candidate(
-                        _pool, m.original, m.standard,
-                        factory_id, m.method, m.confidence,
+                        _pool, "field_mapping", m.original, m.standard,
+                        factory_id, m.method, m.confidence, business_type=_bt,
                     )
         except Exception as e:
             logger.warning("field-mapping capture skipped (ignored): %s", e)

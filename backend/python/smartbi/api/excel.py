@@ -649,6 +649,7 @@ async def auto_parse_excel(
     sheet_name: Optional[str] = Form(None),
     sheetName: Optional[str] = Form(None),  # Alias for Java client compatibility
     factory_id: Optional[str] = Form(None),
+    business_type: Optional[str] = Form(None),  # restaurant/factory/unknown — 行业分支学习 scope
     use_cache: bool = Form(True),
     max_rows: int = Form(500000),  # P0-3 (Apr 20): was 10000 silent cap, customer lost rows. 500K safe; 0 = unlimited
     skip_empty_rows: bool = Form(True),
@@ -1191,7 +1192,8 @@ async def auto_parse_excel(
                 columns=columns,
                 sample_data=sample_data,
                 factory_id=factory_id,
-                table_context=structure_result.sheet_name
+                table_context=structure_result.sheet_name,
+                business_type=business_type
             )
 
             logger.info(

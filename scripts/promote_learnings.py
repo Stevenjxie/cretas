@@ -80,6 +80,10 @@ async def main(apply: bool, type_filter):
         for bt, m in bts.items():
             _ensure(merged_branch, lt, bt).update(m)
 
+    # unknown 业态候选(无行业可 scope)→ 跨工厂共识可直升主干
+    unknown_groups = {(c["learning_type"], c["source_key"], c["target_value"]): c
+                      for c in cands if c["business_type"] == "unknown"}
+
     to_trunk = {}  # lt -> {src: tgt}
     seen = set()
     print("\n=== 全局主干候选 ===")
@@ -92,8 +96,9 @@ async def main(apply: bool, type_filter):
         seen.add(key)
         if trunk.get(c["learning_type"], {}).get(c["source_key"]) == c["target_value"]:
             continue  # 已在主干
-        ok, reason = is_trunk_promotable(c["learning_type"], c["source_key"],
-                                         c["target_value"], merged_branch)
+        ok, _reason = is_trunk_promotable(c["learning_type"], c["source_key"],
+                                          c["target_value"], merged_branch,
+                                          unknown_group=unknown_groups.get(key))
         if ok:
             print(f"{c['learning_type']:<14}{str(c['source_key']):<18}{str(c['target_value']):<18}[升主干]")
             _ensure(to_trunk, c["learning_type"])[c["source_key"]] = c["target_value"]
