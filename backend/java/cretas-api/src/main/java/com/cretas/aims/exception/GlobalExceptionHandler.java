@@ -151,7 +151,11 @@ public class GlobalExceptionHandler {
             };
         }
         ApiResponse<?> body;
-        if (e.getActionHint() != null || effectiveSeverity != null || e.getHintTarget() != null) {
+        if (e.getErrorCode() != null) {
+            // A4 / Phase 4a: semantic errorCode for frontend branching (e.g. OVER_RECEIPT)
+            body = ApiResponse.errorWithCode(e.getCode(), e.getErrorCode(), message,
+                    e.getActionHint(), effectiveSeverity);
+        } else if (e.getActionHint() != null || effectiveSeverity != null || e.getHintTarget() != null) {
             body = ApiResponse.errorWithHint(e.getCode(), message,
                     e.getActionHint(), effectiveSeverity, e.getHintTarget());
         } else {
