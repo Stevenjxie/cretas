@@ -14,6 +14,8 @@ import { OfflineIndicator } from '../../components/common/OfflineIndicator';
 import { useDraftReportStore } from '../../store/draftReportStore';
 import { useFieldVisibilityStore } from '../../store/fieldVisibilityStore';
 import { handleError } from '../../utils/errorHandler';
+import { hasProductionCapability } from '../../utils/factoryType';
+import { useAuthStore } from '../../store/authStore';
 
 interface BatchInfo {
   id: number;
@@ -38,6 +40,9 @@ type NavProp = NativeStackNavigationProp<WSBatchesStackParamList, 'ScanReport'>;
 
 const ScanReportScreen: React.FC = () => {
   const navigation = useNavigation<NavProp>();
+  // 专跳逐道报工屏的导航句柄 (不污染现有 NavProp; YieldBatchSelect 不在 WSBatchesStackParamList)
+  const yieldNav = useNavigation<NativeStackNavigationProp<Record<string, object | undefined>>>();
+  const user = useAuthStore((s) => s.user);
   const factoryId = getCurrentFactoryId();
   const { addDraft } = useDraftReportStore();
   const { isFieldVisible } = useFieldVisibilityStore();
@@ -143,6 +148,17 @@ const ScanReportScreen: React.FC = () => {
       <OfflineIndicator />
       <ScrollView style={styles.container} contentContainerStyle={styles.content}>
         <Text style={styles.title}>扫码报工</Text>
+
+        {/* 逐道工序报工入口 (业态门控: 仅工厂/中央厨房有工序, 餐饮不显) */}
+        {hasProductionCapability(user) && (
+          <TouchableOpacity
+            style={styles.yieldEntryButton}
+            onPress={() => yieldNav.navigate('YieldBatchSelect')}
+            testID="yield-entry-button"
+          >
+            <Text style={styles.yieldEntryText}>逐道工序报工 ▶</Text>
+          </TouchableOpacity>
+        )}
 
         {!batchInfo && !loading && (
           <View style={styles.scanPrompt}>
@@ -290,6 +306,11 @@ const styles = StyleSheet.create({
   submitText: { color: '#fff', fontSize: 17, fontWeight: '600' },
   rescanButton: { paddingVertical: 12, alignItems: 'center' },
   rescanText: { color: '#4F46E5', fontSize: 16 },
+  yieldEntryButton: {
+    backgroundColor: '#E8732E', borderRadius: 10, paddingVertical: 16,
+    alignItems: 'center', marginBottom: 16,
+  },
+  yieldEntryText: { color: '#FFFFFF', fontSize: 17, fontWeight: '600' },
 });
 
 export default ScanReportScreen;

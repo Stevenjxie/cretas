@@ -27,31 +27,33 @@
 -- No new index — version column is never queried; Hibernate writes it in the
 -- UPDATE ... WHERE id=? AND version=? clause auto-generated for @Version fields.
 
-ALTER TABLE factory_scheduling_config
-  ADD COLUMN IF NOT EXISTS version BIGINT NOT NULL DEFAULT 0;
-
-ALTER TABLE factory_temp_worker
-  ADD COLUMN IF NOT EXISTS version BIGINT NOT NULL DEFAULT 0;
-
--- hr_insurance_configs: already has `opt_lock_version` from V20260824_06 (P3-batch1 PR #196).
--- Phase B controller uses `getOptLockVersion()` accessor instead of `getVersion()`.
--- No ALTER TABLE here to avoid duplicate AUD-4 columns.
-
-ALTER TABLE wage_policy
-  ADD COLUMN IF NOT EXISTS version BIGINT NOT NULL DEFAULT 0;
-
--- encoding_rules: already has `opt_lock_version` from V20260824_05 (P3-batch1 PR #196).
--- Phase B controller uses `getOptLockVersion()` accessor instead of `getLockVersion()`.
--- JSON contract still exposes the value under key `lockVersion` for backwards compat.
-
-ALTER TABLE factory_settings
-  ADD COLUMN IF NOT EXISTS version BIGINT NOT NULL DEFAULT 0;
-
-COMMENT ON COLUMN factory_scheduling_config.version IS
-  'AUD-4 JPA @Version optimistic lock — Canvas Phase B Factory Config Hub. Hibernate auto-increments on save(). Lost Update prevention.';
-COMMENT ON COLUMN factory_temp_worker.version IS
-  'AUD-4 JPA @Version optimistic lock — Canvas Phase B Factory Config Hub. Hibernate auto-increments on save(). Lost Update prevention.';
-COMMENT ON COLUMN wage_policy.version IS
-  'AUD-4 JPA @Version optimistic lock — Canvas Phase B Factory Config Hub. Hibernate auto-increments on save(). Lost Update prevention.';
-COMMENT ON COLUMN factory_settings.version IS
-  'AUD-4 JPA @Version optimistic lock — Canvas Phase B Factory Config Hub. Hibernate auto-increments on save(). Lost Update prevention.';
+-- ⚠️ 2026-06-01 修 e2e-pr-gate 全新 CI DB: factory_scheduling_config / factory_temp_worker /
+--   wage_policy / factory_settings 均为 Hibernate JPA entity 表 (无 Flyway CREATE)。全新 DB 上
+--   Flyway 先于 ddl-auto 跑 → 表不存在 → 裸 ALTER 报 relation does not exist 阻断启动。
+--   每个 ALTER 用 to_regclass 守卫: 表存在才加 version 列; 不存在则跳过 (Hibernate 随后建表,
+--   该 @Version 字段由 entity 声明, ddl-auto 会补)。prod 表早已存在 → no-op 行为不变。
+DO $$
+BEGIN
+    -- hr_insurance_configs: 已有 opt_lock_version (V20260824_06), Phase B 用 getOptLockVersion()。
+    -- encoding_rules: 已有 opt_lock_version (V20260824_05), 不在此加 version。
+    IF to_regclass('public.factory_scheduling_config') IS NOT NULL THEN
+        ALTER TABLE factory_scheduling_config ADD COLUMN IF NOT EXISTS version BIGINT NOT NULL DEFAULT 0;
+        COMMENT ON COLUMN factory_scheduling_config.version IS
+          'AUD-4 JPA @Version optimistic lock — Canvas Phase B Factory Config Hub. Hibernate auto-increments on save(). Lost Update prevention.';
+    END IF;
+    IF to_regclass('public.factory_temp_worker') IS NOT NULL THEN
+        ALTER TABLE factory_temp_worker ADD COLUMN IF NOT EXISTS version BIGINT NOT NULL DEFAULT 0;
+        COMMENT ON COLUMN factory_temp_worker.version IS
+          'AUD-4 JPA @Version optimistic lock — Canvas Phase B Factory Config Hub. Hibernate auto-increments on save(). Lost Update prevention.';
+    END IF;
+    IF to_regclass('public.wage_policy') IS NOT NULL THEN
+        ALTER TABLE wage_policy ADD COLUMN IF NOT EXISTS version BIGINT NOT NULL DEFAULT 0;
+        COMMENT ON COLUMN wage_policy.version IS
+          'AUD-4 JPA @Version optimistic lock — Canvas Phase B Factory Config Hub. Hibernate auto-increments on save(). Lost Update prevention.';
+    END IF;
+    IF to_regclass('public.factory_settings') IS NOT NULL THEN
+        ALTER TABLE factory_settings ADD COLUMN IF NOT EXISTS version BIGINT NOT NULL DEFAULT 0;
+        COMMENT ON COLUMN factory_settings.version IS
+          'AUD-4 JPA @Version optimistic lock — Canvas Phase B Factory Config Hub. Hibernate auto-increments on save(). Lost Update prevention.';
+    END IF;
+END $$;

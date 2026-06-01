@@ -39,15 +39,27 @@ MAX_UPLOAD_SIZE = 300 * 1024 * 1024  # 300MB
 
 def _fix_filename(filename: str) -> str:
     """R47 BUG-19 fix: FastAPI/python-multipart decodes filename header as Latin-1
-    per RFC 7578. Chinese UTF-8 filenames arrive as garbled (e.g. 'qhj_25_¿¨ÏêÇéÒ»ÀÀ.csv'
-    instead of 'qhj_25_卡详情一览.csv'). Re-decode bytes as UTF-8.
+    per RFC 7578. Chinese filenames arrive as garbled (e.g. 'qhj_25_¿¨ÏêÇéÒ»ÀÀ.csv'
+    instead of 'qhj_25_卡详情一览.csv'). Re-decode the raw bytes as the original
+    charset.
+
+    UTF-8 first (modern browsers), GBK second (older Chinese Windows browsers
+    that send 销售数据_2026年5月.xlsx as GBK bytes — UTF-8 decode of those fails
+    and the file label rendered as mojibake '数据来源: ��������_2026��5��.xlsx').
+    If the filename isn't Latin-1-encodable it's already proper unicode → leave it.
     """
     if not filename:
         return filename
     try:
-        return filename.encode('latin-1').decode('utf-8')
-    except (UnicodeEncodeError, UnicodeDecodeError):
-        return filename
+        raw = filename.encode('latin-1')
+    except UnicodeEncodeError:
+        return filename  # already proper unicode (not a mangled Latin-1 string)
+    for enc in ('utf-8', 'gbk'):
+        try:
+            return raw.decode(enc)
+        except UnicodeDecodeError:
+            continue
+    return filename
 
 
 async def _validate_upload(file: UploadFile) -> bytes:

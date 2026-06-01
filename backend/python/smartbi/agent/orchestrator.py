@@ -39,13 +39,21 @@ import logging
 import time
 from dataclasses import dataclass
 from datetime import date
-from typing import Any, AsyncIterator, Dict, Optional, Tuple
+from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
 
 import asyncpg
 import httpx
 
 from common.llm_router import call_chain, call_chain_stream, SLOT
 from common.llm_metrics import llm_caller_context
+from common.llm_redactor import (
+    redaction_scope,
+    register_values_for_egress,
+    restore_in_scope,
+    begin_redaction_scope_no_reset,
+    StreamRestorer,
+    restore_text,
+)
 from smartbi.agent.budget_tracker import AgentBudgetTracker
 from smartbi.agent.narrative_cache import (
     NarrativeCacheService,
@@ -201,10 +209,16 @@ class AgentOrchestrator:
         # 3. Pull Gold summaries (concrete numbers for prompt)
         data = await self._gather_data(factory_id, date_range)
 
-        # 4. Build prompt + call LLM
+        # 4. Build prompt + call LLM.
+        # P0 出境脱敏 (数据主权): 在请求级 RedactionScope 内注册门店/商品/折扣真名,
+        # choke point (llm_router) 出境前换成占位 (门店A/商品B), LLM 只看占位+数字;
+        # 输出再 restore 还原真名展示给用户 (真名不出境, 数字/分析 0 损失).
         user_prompt = self._build_user_prompt(question, start_iso, end_iso, data)
         try:
-            answer, tokens = await self._call_llm(user_prompt)
+            with redaction_scope():
+                register_values_for_egress(_collect_sensitive_names(data))
+                answer, tokens = await self._call_llm(user_prompt, factory_id)
+                answer = restore_in_scope(answer)
         except Exception as e:
             logger.exception("LLM call failed: %s", e)
             return InsightResponse(
@@ -327,7 +341,7 @@ class AgentOrchestrator:
 
     # ---------- LLM ----------
 
-    async def _call_llm(self, user_prompt: str) -> Tuple[str, int]:
+    async def _call_llm(self, user_prompt: str, factory_id: Optional[str] = None) -> Tuple[str, int]:
         """Call LLM via multi-provider router (INSIGHTS slot). Returns (text, total_tokens).
 
         Chain: aliyun_b → aliyun_a → zhipu → deepseek with 403/429 fallback.
@@ -343,7 +357,9 @@ class AgentOrchestrator:
             "temperature": 0.3,
             "max_tokens": 600,
         }
-        with llm_caller_context("agent_orchestrator"):
+        # factory_id → _llm_factory ContextVar so the egress audit + usage rows
+        # attribute this call to the tenant (else factory_id is NULL).
+        with llm_caller_context("agent_orchestrator", factory_id):
             body = await call_chain(SLOT.INSIGHTS, payload, timeout=60.0)
 
         text = (
@@ -406,6 +422,14 @@ class AgentOrchestrator:
         data = await self._gather_data(factory_id, date_range)
         user_prompt = self._build_user_prompt(question, start_iso, end_iso, data)
 
+        # P0 出境脱敏 (数据主权, 流式): set scope 不取 reset (镜像 generator 流式路径 —
+        # 异步生成器跨 task 边界 reset 会报 'Token created in different Context';
+        # 请求级 task 隔离负责清理). 注册门店/商品/折扣真名 → choke point 出境占位.
+        # StreamRestorer 实时把回流占位还原成真名 (占位可能被切到两个 chunk, 缓冲尾窗).
+        _scope = begin_redaction_scope_no_reset()
+        _scope.register_values(_collect_sensitive_names(data))
+        _restorer = StreamRestorer(_scope.placeholder_map)
+
         yield {"type": "meta", "source": RESULT_SOURCE_LLM,
                "tokens_used_today": budget.tokens_used, "tokens_cap": budget.tokens_cap,
                "data_summary_compact": {
@@ -416,16 +440,22 @@ class AgentOrchestrator:
                    }
                }}
 
-        # 4. Stream LLM
+        # 4. Stream LLM. Accumulate RAW (placeholder) chunks for the cache restore;
+        # emit RESTORED (real-name) deltas live via the StreamRestorer.
         full_text_parts = []
         total_tokens = 0
         try:
-            async for chunk in self._call_llm_stream(user_prompt):
+            async for chunk in self._call_llm_stream(user_prompt, factory_id):
                 if chunk.get("text"):
                     full_text_parts.append(chunk["text"])
-                    yield {"type": "delta", "text": chunk["text"]}
+                    emitted = _restorer.push(chunk["text"])
+                    if emitted:
+                        yield {"type": "delta", "text": emitted}
                 if chunk.get("tokens"):
                     total_tokens = chunk["tokens"]
+            tail = _restorer.flush()
+            if tail:
+                yield {"type": "delta", "text": tail}
         except Exception as e:
             logger.exception("LLM stream failed: %s", e)
             # Emit degraded tail so client gets a valid terminator
@@ -434,7 +464,9 @@ class AgentOrchestrator:
                    "elapsed_ms": int((time.monotonic() - t0) * 1000)}
             return
 
-        answer = "".join(full_text_parts).strip()
+        # Restore placeholders → real names in the cached answer (so future cache
+        # hits show real 门店/菜品 names, not 门店A).
+        answer = restore_text("".join(full_text_parts), _scope.placeholder_map).strip()
         if answer:
             post_budget = await self._budget.consume(factory_id, total_tokens)  # noqa: F841
             await self._cache.put(
@@ -444,7 +476,9 @@ class AgentOrchestrator:
         yield {"type": "done", "tokens": total_tokens,
                "elapsed_ms": int((time.monotonic() - t0) * 1000)}
 
-    async def _call_llm_stream(self, user_prompt: str) -> AsyncIterator[Dict[str, Any]]:
+    async def _call_llm_stream(
+        self, user_prompt: str, factory_id: Optional[str] = None
+    ) -> AsyncIterator[Dict[str, Any]]:
         """Call LLM via multi-provider router (INSIGHTS slot) with SSE streaming.
 
         Chain: aliyun_b → aliyun_a → zhipu → deepseek (provider fallback before
@@ -463,12 +497,16 @@ class AgentOrchestrator:
             "max_tokens": 600,
             "stream_options": {"include_usage": True},
         }
-        # Set caller via direct set() instead of `with llm_caller_context()` —
+        # Set caller + factory via direct set() instead of `with llm_caller_context()` —
         # the latter errors on __exit__ ("Token created in different Context")
         # when an async generator crosses task boundaries (e.g. inside httpx
         # aiter_lines). Contextvar is request-scoped via FastAPI task isolation.
-        from common.llm_metrics import _llm_caller as _llm_caller_var
+        from common.llm_metrics import (
+            _llm_caller as _llm_caller_var,
+            _llm_factory as _llm_factory_var,
+        )
         _llm_caller_var.set("agent_orchestrator_stream")
+        _llm_factory_var.set(factory_id)
         async for event in call_chain_stream(SLOT.INSIGHTS, payload, timeout=60.0):
             etype = event.get("type")
             if etype == "delta":
@@ -492,3 +530,30 @@ def _fmt_money(v: Any) -> str:
         return f"{float(v):,.2f}"
     except (TypeError, ValueError):
         return str(v)
+
+
+def _collect_sensitive_names(data: Dict[str, Any]) -> Dict[str, List[str]]:
+    """Pull real entity names (门店/商品/折扣活动) out of the gathered Gold
+    summaries so the egress redactor can swap them for placeholders before the
+    prompt leaves for the public LLM (P0 数据主权).
+
+    The insights generator registers a whole DataFrame's sensitive columns;
+    the orchestrator builds its prompt from dict-shaped Gold summaries instead,
+    so we extract the same entity names by their known keys here. Names are
+    restored on the way back so the user still sees real 门店/菜品 names.
+    """
+    out: Dict[str, List[str]] = {"门店": [], "商品": [], "活动": []}
+    fin = data.get("finance") or {}
+    for s in (fin.get("top_stores") or []):
+        n = s.get("store_name") if isinstance(s, dict) else None
+        if isinstance(n, str) and n.strip():
+            out["门店"].append(n.strip())
+    for p in (data.get("top_products") or []):
+        n = (p.get("product_name") or p.get("name")) if isinstance(p, dict) else None
+        if isinstance(n, str) and n.strip():
+            out["商品"].append(n.strip())
+    for d in (data.get("discount_breakdown") or []):
+        n = (d.get("discount_name") or d.get("name")) if isinstance(d, dict) else None
+        if isinstance(n, str) and n.strip():
+            out["活动"].append(n.strip())
+    return {k: v for k, v in out.items() if v}

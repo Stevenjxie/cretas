@@ -91,17 +91,21 @@ class PriceHistoryQueryToolTest {
         when(purchaseOrderItemRepository.findByMaterialTypeId("M001"))
                 .thenReturn(List.of(item1, item2));
 
-        // Both items same month
+        // Both items in the CURRENT calendar month (day 1, always <= today AND inside
+        // the monthsBack=1 window). Anchor to withDayOfMonth(1) for determinism on every
+        // day incl. month boundary: now().minusDays(5/3) drifted into the PRIOR month on
+        // the 1st (June 1 CI) → outside the monthsBack=1 window → 0 buckets, test failed.
+        LocalDate inMonth = LocalDate.now().withDayOfMonth(1);
         PurchaseOrder po = new PurchaseOrder();
         po.setId("PO-1");
         po.setFactoryId(FACTORY_ID);
-        po.setOrderDate(LocalDate.now().minusDays(5));
+        po.setOrderDate(inMonth);
         when(purchaseOrderRepository.findById("PO-1")).thenReturn(Optional.of(po));
 
         PurchaseOrder po2 = new PurchaseOrder();
         po2.setId("PO-2");
         po2.setFactoryId(FACTORY_ID);
-        po2.setOrderDate(LocalDate.now().minusDays(3));
+        po2.setOrderDate(inMonth);
         when(purchaseOrderRepository.findById("PO-2")).thenReturn(Optional.of(po2));
 
         Map<String, Object> result = invoke("doExecute", FACTORY_ID,

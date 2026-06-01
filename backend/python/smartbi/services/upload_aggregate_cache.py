@@ -32,6 +32,29 @@ import threading
 import time
 from typing import Any, Dict, List, Optional
 
+
+# Intensive-measure patterns (rating/score/rate/per-unit) that must aggregate by AVG,
+# not SUM. Kept INLINE (not imported from materialized_analytics.schema_helpers) on
+# purpose: that import pulls smartbi.services.__init__ → excel_parser → bare `services`,
+# which only resolves under the app's special sys.path setup and raised
+# ModuleNotFoundError('services') at runtime here — silently falling back to SUM so the
+# fix never fired. Mirror of schema_helpers._AVG_MEASURE_PATTERNS (#3 chat-path fix).
+_INTENSIVE_MEASURE_PATTERNS = (
+    '星级', '评分', '分数', '打分', '得分', '评价分', '环境分', '服务分', '口味分',
+    '率', '比率', '占比', '百分比',
+    '客单价', '人均', '单价', '均价',
+)
+
+
+def _measure_is_avg(col: Optional[str]) -> bool:
+    """True if `col` is an intensive measure (星级分/评分/率/客单价) that must aggregate
+    by AVG, not SUM. A SUM of star points ('总星级分 57974') is meaningless and, fed to
+    the LLM, gets narrated as a headline. (#3 chat-path fix.)"""
+    if not col:
+        return False
+    return any(p in col for p in _INTENSIVE_MEASURE_PATTERNS)
+
+
 # Apr 26 2026 phase 5 (UX): mirror _is_id_like from materializer.py.
 # Without filtering, qhj 4216 卡号 / 手机 (numeric is_measure=True) leaked
 # into LLM aggregation context as "实收 总计 = 1,643,645,749,770" garbage
@@ -215,17 +238,30 @@ async def compute_upload_aggregates(
         asyncio.gather(*measure_tasks, return_exceptions=True) if measure_tasks else asyncio.sleep(0, result=[]),
         asyncio.gather(*dim_tasks, return_exceptions=True) if dim_tasks else asyncio.sleep(0, result=[]),
     )
+    # #3 chat-path fix: intensive measures (星级分/评分/率) report 均值 not 总计 — a
+    # SUM of star points ('总星级分 57974') is meaningless and gets narrated by the
+    # LLM as a headline. See module-level _measure_is_avg.
+    _is_avg = _measure_is_avg
+
     for item in measure_res:
         if isinstance(item, Exception) or not item:
             continue
         m_col, r = item
         if r and r['c']:
-            agg_lines.append(
-                f"- {m_col} (全量): 总计={r['s'] or 0:,.2f}, "
-                f"均值={r['a'] or 0:,.2f}, "
-                f"最大={r['mx'] or 0:,.2f}, 最小={r['mn'] or 0:,.2f}, "
-                f"有效行数={r['c']}"
-            )
+            if _is_avg(m_col):
+                # 评分/率类: 只报均值 + 范围, 不报无意义的总计 (避免 LLM 把 SUM 当头条)
+                agg_lines.append(
+                    f"- {m_col} (全量): 均值={r['a'] or 0:,.2f} (评分/率类，求和无意义), "
+                    f"最大={r['mx'] or 0:,.2f}, 最小={r['mn'] or 0:,.2f}, "
+                    f"有效行数={r['c']}"
+                )
+            else:
+                agg_lines.append(
+                    f"- {m_col} (全量): 总计={r['s'] or 0:,.2f}, "
+                    f"均值={r['a'] or 0:,.2f}, "
+                    f"最大={r['mx'] or 0:,.2f}, 最小={r['mn'] or 0:,.2f}, "
+                    f"有效行数={r['c']}"
+                )
     for item in dim_res:
         if isinstance(item, Exception) or not item:
             continue
@@ -245,12 +281,17 @@ async def compute_upload_aggregates(
     if not primary_measure and measures:
         primary_measure = measures[0]
 
+    # AVG for intensive primary measure (星级分/评分/率), SUM otherwise. The per-dim
+    # AVG (上海市=4.83) is meaningful; the per-dim SUM (上海市=57974) is not.
+    _agg_fn = "AVG" if (primary_measure and _is_avg(primary_measure)) else "SUM"
+    _agg_word = "平均" if _agg_fn == "AVG" else "合计"
+
     # ── Top-5 per (dim × primary_measure) for top dims ──
     top5_by_dim: Dict[str, List[Dict[str, Any]]] = {}
     if primary_measure:
         top5_sql = (
-            """SELECT row_data->>$1 AS label,
-                      SUM((row_data->>$2)::numeric) AS total
+            f"""SELECT row_data->>$1 AS label,
+                      {_agg_fn}((row_data->>$2)::numeric) AS total
                FROM smart_bi_dynamic_data
                WHERE upload_id = $3
                  AND row_data->>$2 ~ '^-?[0-9.,]+$'
@@ -281,7 +322,7 @@ async def compute_upload_aggregates(
                     f"{tr['label']}={tr['total'] or 0:,.2f}"
                     for tr in top_rows
                 )
-                agg_lines.append(f"- Top5 by {dim} (按 {primary_measure}): {top_str}")
+                agg_lines.append(f"- Top5 by {dim} (按 {primary_measure} {_agg_word}): {top_str}")
 
     compute_time_s = asyncio.get_event_loop().time() - t_start
     logger.info(
@@ -399,21 +440,23 @@ def compute_aggregates_from_polars(
     if not primary_measure and measures:
         primary_measure = measures[0]
 
-    # Top-5 per dim × primary_measure
+    # Top-5 per dim × primary_measure (AVG for 星级分/评分/率, SUM otherwise)
     top5_by_dim: Dict[str, List[Dict[str, Any]]] = {}
+    _p_is_avg = _measure_is_avg(primary_measure)
+    _agg_word2 = "平均" if _p_is_avg else "合计"
     if primary_measure and primary_measure in filtered_df.columns:
         for d in dims[:4]:
             if d not in filtered_df.columns:
                 continue
             try:
+                _measure_expr = pl.col(primary_measure).cast(pl.Float64, strict=False)
+                _agg_expr = (_measure_expr.mean() if _p_is_avg else _measure_expr.sum()).alias("total")
                 top = (
                     filtered_df
                     .filter(pl.col(d).is_not_null())
                     .filter(pl.col(d).cast(pl.Utf8, strict=False).is_in(list(meta_values)).not_())
                     .group_by(d)
-                    .agg(
-                        pl.col(primary_measure).cast(pl.Float64, strict=False).sum().alias("total")
-                    )
+                    .agg(_agg_expr)
                     .sort("total", descending=True, nulls_last=True)
                     .head(5)
                 )
@@ -426,7 +469,7 @@ def compute_aggregates_from_polars(
                     top_str = ", ".join(
                         f"{r['label']}={r['total']:,.2f}" for r in top5_by_dim[d]
                     )
-                    agg_lines.append(f"- Top5 by {d} (按 {primary_measure}): {top_str}")
+                    agg_lines.append(f"- Top5 by {d} (按 {primary_measure} {_agg_word2}): {top_str}")
             except Exception as e:
                 logger.debug(f"[agg-polars] top5 {d} failed: {e}")
 
