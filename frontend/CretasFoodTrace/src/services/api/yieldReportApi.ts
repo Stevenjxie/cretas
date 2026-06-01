@@ -97,6 +97,8 @@ export interface MaterialInputRequest {
   warehouseOutQuantity: number;     // 出库量 998
   feedInQuantity: number;           // 投料量 935.5
   inputUnit?: string;
+  /** A2b: 本批次领料批次引用 (1 or N). materialBatchId is String (UUID/varchar). */
+  materialBatchRefs?: { materialBatchId: string; quantity: number; unit?: string }[];
 }
 
 // ============ YieldLimitsDTO (mirror backend dto/yield/YieldLimitsDTO.java) ============
