@@ -54,6 +54,25 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
   const [rows, setRows] = useState<RowState[]>([]);
   const [expanded, setExpanded] = useState(false);
 
+  // Issue #3 fix: emit onChange in a useEffect keyed on rows, NOT inside setRows updater.
+  // Calling parent setState (onChange → setMaterialBatchRefs) from inside setRows updater
+  // triggers "Cannot update a component while rendering" warning.
+  const onChangeRef = React.useRef(onChange);
+  onChangeRef.current = onChange;
+  useEffect(() => {
+    const refs: MaterialBatchRef[] = [];
+    for (const row of rows) {
+      if (!row.selected) continue;
+      const qty = parseFloat(row.qtyStr);
+      if (!Number.isNaN(qty) && qty > 0) {
+        refs.push({ materialBatchId: row.batch.id, quantity: qty, unit });
+      }
+    }
+    onChangeRef.current(refs);
+    // unit is intentionally included: if the picker unit changes, re-emit with new unit
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rows, unit]);
+
   // 从 value prop 初始化/同步 rows (仅在 batches 加载完成后)
   const syncRowsFromValue = useCallback(
     (batches: MaterialBatch[]) => {
@@ -98,33 +117,15 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
     }
   }, [expanded, rows.length, loading, loadBatches]);
 
-  // 当 row 状态变更时, emit onChange (只 emit selected + valid qty 的行)
-  const emitChange = useCallback(
-    (nextRows: RowState[]) => {
-      const refs: MaterialBatchRef[] = [];
-      for (const row of nextRows) {
-        if (!row.selected) continue;
-        const qty = parseFloat(row.qtyStr);
-        if (!Number.isNaN(qty) && qty > 0) {
-          refs.push({ materialBatchId: row.batch.id, quantity: qty, unit });
-        }
-      }
-      onChange(refs);
-    },
-    [onChange, unit],
-  );
-
   const toggleRow = useCallback(
     (idx: number) => {
-      setRows((prev: RowState[]) => {
-        const next = prev.map((r: RowState, i: number) =>
+      setRows((prev: RowState[]) =>
+        prev.map((r: RowState, i: number) =>
           i === idx ? { ...r, selected: !r.selected, qtyStr: !r.selected ? '' : r.qtyStr } : r,
-        );
-        emitChange(next);
-        return next;
-      });
+        ),
+      );
     },
-    [emitChange],
+    [],
   );
 
   const setQty = useCallback(
@@ -134,15 +135,13 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
       const parts = cleaned.split('.');
       const normalized =
         parts.length > 2 ? `${parts[0]}.${parts.slice(1).join('')}` : cleaned;
-      setRows((prev: RowState[]) => {
-        const next = prev.map((r: RowState, i: number) =>
+      setRows((prev: RowState[]) =>
+        prev.map((r: RowState, i: number) =>
           i === idx ? { ...r, qtyStr: normalized, selected: true } : r,
-        );
-        emitChange(next);
-        return next;
-      });
+        ),
+      );
     },
-    [emitChange],
+    [],
   );
 
   const selectedCount = value.length;

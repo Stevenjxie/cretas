@@ -14,7 +14,6 @@ import {
   StepYieldDTO,
   YieldReportRequest,
   YieldLimitsDTO,
-  MaterialInputRequest,
 } from '../../services/api/yieldReportApi';
 import { processingApiClient } from '../../services/api/processingApiClient';
 import { handleError } from '../../utils/errorHandler';
@@ -170,35 +169,25 @@ const YieldStepReportScreen: React.FC = () => {
       return;
     }
     const input = parseFloat(inputQty);
+    // A2b: 首道 + 有批次引用时, 将 materialBatchRefs 随报工单一起提交 (一次请求, 不再双调)
     const req: YieldReportRequest = {
       workProcessTaskId: currentTask.id,
       inputQuantity: Number.isNaN(input) ? 0 : input,
       inputUnit: unit,
       outputQuantity: output,
       outputUnit: unit,
+      ...(currentStepIndex === 0 && materialBatchRefs.length > 0
+        ? {
+            materialBatchRefs: materialBatchRefs.map((r: MaterialBatchRef) => ({
+              materialBatchId: r.materialBatchId,
+              quantity: r.quantity,
+              unit: r.unit ?? unit,
+            })),
+          }
+        : {}),
     };
     setSubmitting(true);
     try {
-      // A2b: 首道 + 有批次引用时, 先记录领料 (material-input), 再报工
-      if (currentStepIndex === 0 && materialBatchRefs.length > 0) {
-        const miReq: MaterialInputRequest = {
-          workProcessTaskId: currentTask.id,
-          warehouseOutQuantity: Number.isNaN(input) ? 0 : input,
-          feedInQuantity: Number.isNaN(input) ? 0 : input,
-          inputUnit: unit,
-          materialBatchRefs: materialBatchRefs.map((r: MaterialBatchRef) => ({
-            materialBatchId: r.materialBatchId,
-            quantity: r.quantity,
-            unit: r.unit ?? unit,
-          })),
-        };
-        const miRes = await yieldReportApi.recordMaterialInput(batchId, miReq);
-        if (!miRes.success) {
-          Alert.alert('领料记录失败', miRes.message || '请重试');
-          return;
-        }
-      }
-
       const res = await yieldReportApi.submitReport(batchId, req);
       if (!res.success) {
         Alert.alert('提交失败', res.message || '请重试');

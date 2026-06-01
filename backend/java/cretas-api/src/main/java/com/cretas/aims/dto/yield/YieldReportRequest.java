@@ -20,4 +20,6 @@ public class YieldReportRequest {
     private List<Map<String, Object>> sourceBatchRefs;
     private String reporterName;
     private Long targetWorkerId;          // 代报工 (主管替工人提交)
+    /** A2b: 首道领料批次引用 (与 materialBatchRefs 字段合并到报工单, 不再单独调用 recordMaterialInput) */
+    private List<MaterialBatchRef> materialBatchRefs;
 }
