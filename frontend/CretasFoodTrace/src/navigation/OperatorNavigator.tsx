@@ -10,6 +10,8 @@ import ProfileStackNavigator from './ProfileStackNavigator';
 import ScanReportScreen from '../screens/processing/ScanReportScreen';
 import ScanReportSuccessScreen from '../screens/processing/ScanReportSuccessScreen';
 import DraftReportsScreen from '../screens/processing/DraftReportsScreen';
+import YieldBatchSelectScreen from '../screens/processing/YieldBatchSelectScreen';
+import YieldStepReportScreen from '../screens/processing/YieldStepReportScreen';
 
 const Tab = createBottomTabNavigator<any>();
 const ReportStack = createNativeStackNavigator<any>();
@@ -24,6 +26,8 @@ function OperatorReportStackNavigator() {
       <ReportStack.Screen name="ScanReport" component={ScanReportScreen} />
       <ReportStack.Screen name="ScanReportSuccess" component={ScanReportSuccessScreen} />
       <ReportStack.Screen name="DraftReports" component={DraftReportsScreen} />
+      <ReportStack.Screen name="YieldBatchSelect" component={YieldBatchSelectScreen} />
+      <ReportStack.Screen name="YieldStepReport" component={YieldStepReportScreen} />
     </ReportStack.Navigator>
   );
 }
