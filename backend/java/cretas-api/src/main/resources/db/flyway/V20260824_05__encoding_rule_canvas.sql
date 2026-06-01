@@ -9,25 +9,29 @@
 -- API: /api/mobile/{factoryId}/canvas-encoding-rule
 -- Vue: web-admin/src/views/platform/encoding-rule-editor/index.vue
 
--- 增加 JPA @Version 乐观锁字段 (与业务 version 字段共存)
-ALTER TABLE encoding_rules
-    ADD COLUMN IF NOT EXISTS opt_lock_version BIGINT NOT NULL DEFAULT 0;
-
-COMMENT ON COLUMN encoding_rules.opt_lock_version IS
-    'Canvas-P3: JPA @Version 乐观锁字段, 与业务 version (Integer 配置版本号) 互不干扰';
-
--- Partial unique index: 同 (factory_id, entity_type) 不能有 2 条 非软删 行
--- (老 unique constraint 不考虑 deleted_at, 会让软删/恢复操作冲突)
+-- ⚠️ 2026-06-01 修 e2e-pr-gate 全新 CI DB: encoding_rules 是 Hibernate JPA entity 表 (无 Flyway
+--   CREATE)。全新 DB 上 Flyway 先于 ddl-auto 跑 → 表不存在 → 裸 ALTER/CREATE INDEX 报 relation
+--   does not exist 阻断启动。整块用 to_regclass 守卫: 表存在才跑; 不存在跳过 (Hibernate 随后
+--   建表+列, opt_lock_version 由 entity @Version 声明)。prod 表早已存在 → 行为不变。
 DO $$
 BEGIN
-    IF EXISTS (
-        SELECT 1 FROM pg_constraint WHERE conname = 'uk_encoding_rules'
-    ) THEN
+    IF to_regclass('public.encoding_rules') IS NULL THEN
+        RAISE NOTICE 'V20260824_05 skipped: encoding_rules table absent (fresh DB pre-ddl-auto), non-fatal';
+        RETURN;
+    END IF;
+
+    -- 增加 JPA @Version 乐观锁字段 (与业务 version 字段共存)
+    ALTER TABLE encoding_rules ADD COLUMN IF NOT EXISTS opt_lock_version BIGINT NOT NULL DEFAULT 0;
+    COMMENT ON COLUMN encoding_rules.opt_lock_version IS
+        'Canvas-P3: JPA @Version 乐观锁字段, 与业务 version (Integer 配置版本号) 互不干扰';
+
+    -- Partial unique index: 同 (factory_id, entity_type) 不能有 2 条 非软删 行
+    -- (老 unique constraint 不考虑 deleted_at, 会让软删/恢复操作冲突)
+    IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'uk_encoding_rules') THEN
         ALTER TABLE encoding_rules DROP CONSTRAINT uk_encoding_rules;
     END IF;
-END
-$$;
 
-CREATE UNIQUE INDEX IF NOT EXISTS idx_encoding_rules_unique
-    ON encoding_rules (factory_id, entity_type)
-    WHERE deleted_at IS NULL;
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_encoding_rules_unique
+        ON encoding_rules (factory_id, entity_type)
+        WHERE deleted_at IS NULL;
+END $$;
