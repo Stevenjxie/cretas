@@ -71,7 +71,7 @@ const isInDemoMode = ref(false); // Track demo mode for slicer re-generation
 // 注意: 与下方 chart activeTab 完全独立 (后者是图表类型 key)。
 const route = useRoute();
 const sectionTab = ref(resolveFinanceSection(route.query));
-watch(() => route.query.tab, () => { sectionTab.value = resolveFinanceSection(route.query); });
+watch(() => route.query.section, () => { sectionTab.value = resolveFinanceSection(route.query); });
 
 // Tab navigation state
 const viewMode = ref<'tab' | 'grid'>('tab');

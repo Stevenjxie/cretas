@@ -121,8 +121,8 @@ test.describe('IA 重设计 — 数据与分析组 (headed 双业态)', () => {
     await page.goto(`${BASE_URL}/smart-bi/query`, { waitUntil: 'networkidle', timeout: 30000 });
     await expect(page).toHaveURL(/\/smart-bi\/analysis\?tab=query/);
 
-    // /smart-bi/finance → /smart-bi/financial-dashboard?tab=analysis
+    // /smart-bi/finance → /smart-bi/financial-dashboard?section=analysis
     await page.goto(`${BASE_URL}/smart-bi/finance`, { waitUntil: 'networkidle', timeout: 30000 });
-    await expect(page).toHaveURL(/\/smart-bi\/financial-dashboard\?tab=analysis/);
+    await expect(page).toHaveURL(/\/smart-bi\/financial-dashboard\?section=analysis/);
   });
 });

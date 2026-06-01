@@ -10,7 +10,7 @@ const smartBIRoutes: RouteRecordRaw[] = [
     path: 'smart-bi',
     name: 'SmartBI',
     redirect: '/smart-bi/dashboard',
-    meta: { requiresAuth: true, title: '智能BI', icon: 'TrendCharts', module: 'analytics' },
+    meta: { requiresAuth: true, title: '数据与分析', icon: 'TrendCharts', module: 'analytics' },
     children: [
       {
         path: 'dashboard',
@@ -114,10 +114,10 @@ const smartBIRoutes: RouteRecordRaw[] = [
 ];
 
 export const smartBIRedirects: RouteRecordRaw[] = [
-  // P3: AI问答合并入 AI探索 query tab
-  { path: '/smart-bi/query', redirect: '/smart-bi/analysis?tab=query' },
-  // P4: 财务数据分析合并入财务看板 analysis section
-  { path: '/smart-bi/finance', redirect: '/smart-bi/financial-dashboard?tab=analysis' },
+  // P3: AI问答合并入 AI探索 query tab。function-form 保留 incoming query (e.g. AI 快捷入口的 ?q=<问题>)。
+  { path: '/smart-bi/query', redirect: (to) => ({ path: '/smart-bi/analysis', query: { ...to.query, tab: 'query' } }) },
+  // P4: 财务数据分析合并入财务看板 analysis section。function-form 保留 incoming ?tab=cost (FinanceAnalysis 内部子 tab) + 加 section=analysis (section 选择器)。
+  { path: '/smart-bi/finance', redirect: (to) => ({ path: '/smart-bi/financial-dashboard', query: { ...to.query, section: 'analysis' } }) },
 ];
 
 export default smartBIRoutes;
