@@ -81,6 +81,14 @@ RESULT_SOURCE_CACHE = "cache"
 RESULT_SOURCE_LLM = "llm"
 RESULT_SOURCE_DEGRADED = "degraded"
 
+# Insight answer token budget. Must be large enough for a reasoning model
+# (the INSIGHTS slot now routes to deepseek-v4-pro, which spends completion
+# tokens on chain-of-thought before the answer). At 600 the reasoning could
+# consume the whole budget, leaving message.content empty -> "LLM returned
+# empty content" -> degraded "AI 服务暂时不可用" (intermittent, seen 2026-06-02).
+# 1500 is the proven-working value in insights.generator; 2000 adds margin.
+INSIGHT_MAX_TOKENS = 2000
+
 
 SYSTEM_PROMPT = """你是一位服务于中国餐饮连锁企业的资深数据分析师。
 你将收到用户的一个业务问题，以及该企业真实经营数据的摘要。你的任务是基于这些数据回答问题，并给出可执行的运营建议。
@@ -361,7 +369,7 @@ class AgentOrchestrator:
                 {"role": "user", "content": user_prompt},
             ],
             "temperature": 0.3,
-            "max_tokens": 600,
+            "max_tokens": INSIGHT_MAX_TOKENS,
         }
         # factory_id → _llm_factory ContextVar so the egress audit + usage rows
         # attribute this call to the tenant (else factory_id is NULL).
@@ -506,7 +514,7 @@ class AgentOrchestrator:
                 {"role": "user", "content": user_prompt},
             ],
             "temperature": 0.3,
-            "max_tokens": 600,
+            "max_tokens": INSIGHT_MAX_TOKENS,
             "stream_options": {"include_usage": True},
         }
         # Set caller + factory via direct set() instead of `with llm_caller_context()` —
