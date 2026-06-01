@@ -50,11 +50,11 @@ def test_orchestrator_egress_redacts_then_restores():
     data = {
         "finance": {"top_stores": [{"store_name": "青花椒新世界新丸中心店", "revenue": 3435300}]},
         "top_products": [{"product_name": "蟹小青龙"}],
-        "discount_breakdown": [{"discount_name": "抖音畅享套餐A"}],
+        "discount_breakdown": [{"discount_name": "抖音满减券"}],
     }
     user_prompt = (
         "## Top 门店\n1. 青花椒新世界新丸中心店：¥3,435,300\n"
-        "## Top 商品\n1. 蟹小青龙\n## 折扣\n- 抖音畅享套餐A：¥35,000"
+        "## Top 商品\n1. 蟹小青龙\n## 折扣\n- 抖音满减券：¥35,000"
     )
     payload = {"messages": [
         {"role": "system", "content": "你是餐饮数据分析师"},
@@ -71,15 +71,17 @@ def test_orchestrator_egress_redacts_then_restores():
         # 真名不出境
         assert "青花椒新世界新丸中心店" not in egress_text
         assert "蟹小青龙" not in egress_text
-        assert "抖音畅享套餐A" not in egress_text
+        assert "抖音满减券" not in egress_text
         assert meta.sanitized is True
         assert meta.redacted_count >= 3
         assert "门店A" in egress_text  # 占位替换确实发生
 
-        # LLM 用占位作答 → restore 还原成真名展示给用户
-        llm_answer = "建议门店A主推商品A，暂停活动A，预计提升营业额 5%[按营业额]。"
+        # LLM 用占位作答, 且像 prod qwen3 那样在 CJK 前缀和序号间插空格 (门店A → 门店 A)
+        # → restore 必须容空白, 否则用户看到 '门店 A' 占位而非真名。
+        llm_answer = "建议门店 A 主推商品 A，暂停活动 A，预计提升营业额 5%[按营业额]。"
         restored = restore_in_scope(llm_answer)
         assert "青花椒新世界新丸中心店" in restored
         assert "蟹小青龙" in restored
-        assert "抖音畅享套餐A" in restored
+        assert "抖音满减券" in restored
+        assert "门店 A" not in restored
         assert "门店A" not in restored

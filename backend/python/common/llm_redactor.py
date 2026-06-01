@@ -243,11 +243,25 @@ def redact_payload(
 
 
 def restore_text(text: str, placeholder_map: Dict[str, str]) -> str:
-    """LLM 输出占位还原回真名。长占位优先 (门店A1 先于 门店A, 防子串误伤)。"""
+    """LLM 输出占位还原回真名。长占位优先 (门店A1 先于 门店A, 防子串误伤)。
+
+    LLM 常在 CJK 前缀和 ASCII 序号之间插空格 (把占位 '门店A' 写成 '门店 A'),
+    精确替换会漏 → 还原失败, 用户看到 '门店 A' 而非真名。所以先精确替换, 对仍未命中
+    的占位再做 '前缀 + \\s+ + 后缀' 的容空白匹配 (prod 实测 qwen3 把 11 个占位全部
+    加了空格 → 不容空白则全部漏还原)。
+    """
     if not text or not placeholder_map:
         return text
     for ph in sorted(placeholder_map, key=len, reverse=True):
-        text = text.replace(ph, placeholder_map[ph])
+        real = placeholder_map[ph]
+        if ph in text:
+            text = text.replace(ph, real)
+            continue
+        # 容空白兜底: 拆成 CJK 前缀 + ASCII 序号, 中间允许 \s+ (LLM 插的空格/换行)
+        m = re.match(r'^([^\x00-\x7f]+)([\x00-\x7f].*)$', ph)
+        if m:
+            pattern = re.compile(re.escape(m.group(1)) + r'\s+' + re.escape(m.group(2)))
+            text = pattern.sub(lambda _m: real, text)
     return text
 
 
