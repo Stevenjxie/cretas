@@ -63,7 +63,11 @@ class CustomerRevenueTrendToolTest {
     @DisplayName("UT-CRT-02: customerId provided — aggregates by month, computes pctChange")
     @SuppressWarnings("unchecked")
     void aggregateByMonth() throws Exception {
-        LocalDate thisMonth = LocalDate.now().withDayOfMonth(15);
+        // Anchor to day 1 of the month: day-1 of THIS month is always <= today (so the
+        // tool's isAfter(now) future-filter never drops it), and prior-month day-1 is
+        // always inside the periodMonths=2 window. Using day-15 broke on the 1st of the
+        // month (June 1 CI): day-15 = a FUTURE date → filtered out → this-month bucket=0.
+        LocalDate thisMonth = LocalDate.now().withDayOfMonth(1);
         LocalDate lastMonth = thisMonth.minusMonths(1);
 
         SalesOrder soThis = newSalesOrder(thisMonth, new BigDecimal("1500"));
