@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { View, Text, ScrollView, StyleSheet, Alert, ActivityIndicator } from 'react-native';
 import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -12,6 +12,7 @@ import {
   BatchYieldDTO,
   StepYieldDTO,
   YieldReportRequest,
+  YieldLimitsDTO,
 } from '../../services/api/yieldReportApi';
 import { processingApiClient } from '../../services/api/processingApiClient';
 import { handleError } from '../../utils/errorHandler';
@@ -40,6 +41,9 @@ const YieldStepReportScreen: React.FC = () => {
   const [inputQty, setInputQty] = useState('');
   const [outputQty, setOutputQty] = useState('');
   const [lastAlert, setLastAlert] = useState<'BELOW_MIN' | 'ABOVE_MAX' | null>(null);
+  // A4: 超收预检
+  const [yieldLimits, setYieldLimits] = useState<YieldLimitsDTO | null>(null);
+  const limitsDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const currentTask = tasks[currentStepIndex] ?? null;
   const totalSteps = tasks.length;
@@ -81,13 +85,38 @@ const YieldStepReportScreen: React.FC = () => {
     loadAll();
   }, [loadAll]);
 
-  // 切道时: 投入预填上道产出, 产出清空, 清告警
+  // 切道时: 投入预填上道产出, 产出清空, 清告警, 清 limits
   useEffect(() => {
     if (phase !== 'reporting') return;
     setInputQty(prevOutput != null ? String(prevOutput) : '');
     setOutputQty('');
     setLastAlert(null);
+    setYieldLimits(null);
   }, [currentStepIndex, prevOutput, phase]);
+
+  // A4: 投入量变化后 debounce 500ms 拉超收上限
+  useEffect(() => {
+    if (limitsDebounceRef.current) clearTimeout(limitsDebounceRef.current);
+    if (!currentTask) return;
+    const parsed = parseFloat(inputQty);
+    if (!inputQty || Number.isNaN(parsed) || parsed <= 0) {
+      setYieldLimits(null);
+      return;
+    }
+    limitsDebounceRef.current = setTimeout(async () => {
+      try {
+        const res = await yieldReportApi.getYieldLimits(batchId, currentTask.id, parsed);
+        if (res.success) {
+          setYieldLimits(res.data.maxAllowed != null ? res.data : null);
+        }
+      } catch {
+        // 预检失败不阻断报工, 静默忽略
+      }
+    }, 500);
+    return () => {
+      if (limitsDebounceRef.current) clearTimeout(limitsDebounceRef.current);
+    };
+  }, [inputQty, currentTask, batchId]);
 
   const unit = currentTask?.plannedUnit ?? 'kg';
   const planned = currentTask?.plannedQuantity ?? null;
@@ -100,6 +129,33 @@ const YieldStepReportScreen: React.FC = () => {
     prevOutput != null
       ? `← 上道产出 ${prevOutput} ${unit}, 请确认实际投了多少`
       : '本道为首道, 请填本道领料投入量';
+
+  // A4: 强制提交 (OVER_RECEIPT 确认后调用)
+  const submitWithForce = useCallback(async (req: YieldReportRequest) => {
+    setSubmitting(true);
+    try {
+      const res = await yieldReportApi.submitReport(batchId, { ...req, forceSubmit: true });
+      if (!res.success) {
+        Alert.alert('提交失败', res.message || '请重试');
+        return;
+      }
+      setLastAlert(res.data.alert ?? null);
+      const yieldRes = await yieldReportApi.getYield(batchId);
+      if (yieldRes.success) setYieldData(yieldRes.data);
+      const isLast = currentStepIndex >= totalSteps - 1;
+      if (isLast) {
+        setPhase('done');
+      } else {
+        setCurrentStepIndex((i) => i + 1);
+      }
+    } catch (forceError) {
+      handleError(forceError, { showAlert: false, logError: true });
+      const fe = forceError as { response?: { data?: { message?: string } } };
+      Alert.alert('提交失败', fe.response?.data?.message ?? '请重试');
+    } finally {
+      setSubmitting(false);
+    }
+  }, [batchId, currentStepIndex, totalSteps]);
 
   const handleSubmit = useCallback(async () => {
     if (!currentTask) return;
@@ -136,9 +192,26 @@ const YieldStepReportScreen: React.FC = () => {
         setCurrentStepIndex((i) => i + 1);
       }
     } catch (error) {
+      // A4: OVER_RECEIPT (HTTP 409) → 弹确认框, 不走默认 toast
+      // apiClient 对非 401/410 的 HTTP 错误直接 Promise.reject(error), 无全局 toast,
+      // 所以直接在 catch 检查 errorCode 即可拦截.
+      const e = error as { response?: { data?: { success?: boolean; message?: string; errorCode?: string; actionHint?: string; hint?: string } } };
+      const errorCode = e.response?.data?.errorCode;
+      if (errorCode === 'OVER_RECEIPT') {
+        handleError(error, { showAlert: false, logError: true });
+        const actionHint = e.response?.data?.actionHint ?? e.response?.data?.message ?? '产出已超收收告警上限, 确认要超收提交吗?';
+        Alert.alert(
+          '超收确认',
+          actionHint,
+          [
+            { text: '取消', style: 'cancel' },
+            { text: '确认超收提交', onPress: () => submitWithForce(req) },
+          ],
+        );
+        return;
+      }
       // 4位一体: 透传后端 message (含 hint), 用 Alert (RN sticky 模态)
       handleError(error, { showAlert: false, logError: true });
-      const e = error as { response?: { data?: { message?: string; hint?: string } } };
       const backendMsg = e.response?.data?.message;
       const hint = e.response?.data?.hint;
       const msg = backendMsg
@@ -148,12 +221,11 @@ const YieldStepReportScreen: React.FC = () => {
         : error instanceof Error
           ? error.message
           : '提交失败, 请重试';
-      // A4 后端补后会抛超收错 → 此处可扩展"确认超收提交"按钮重发 forceSubmit:true (spec §3.3); Phase A 未实现 A4, 暂只显错.
       Alert.alert('提交失败', msg);
     } finally {
       setSubmitting(false);
     }
-  }, [currentTask, outputQty, inputQty, unit, batchId, currentStepIndex, totalSteps]);
+  }, [currentTask, outputQty, inputQty, unit, batchId, currentStepIndex, totalSteps, submitWithForce]);
 
   const handleSettleDay = useCallback(async () => {
     setSubmitting(true);
@@ -286,6 +358,15 @@ const YieldStepReportScreen: React.FC = () => {
             testID="yield-input-qty"
           />
 
+          {/* A4: 超收预检提示 (仅 maxAllowed != null 时显示) */}
+          {yieldLimits != null ? (
+            <View style={styles.limitsHint} testID="yield-limits-hint">
+              <Text style={styles.limitsHintText}>
+                目标 {yieldLimits.targetQuantity ?? '—'} / 已报 {yieldLimits.alreadyReported ?? 0} / 最多可报 {yieldLimits.remaining ?? '—'} {yieldLimits.unit ?? unit}
+              </Text>
+            </View>
+          ) : null}
+
           <YieldQuantityInput
             label="产出量"
             value={outputQty}
@@ -338,6 +419,8 @@ const styles = StyleSheet.create({
   divider: { height: 1, backgroundColor: '#EBEEF5', marginVertical: 16 },
   alertBanner: { backgroundColor: '#FDF6EC', borderRadius: 8, padding: 12, marginTop: 4 },
   alertText: { fontSize: 14, color: '#E6A23C', fontWeight: '500' },
+  limitsHint: { backgroundColor: '#F0F9EB', borderRadius: 6, paddingHorizontal: 10, paddingVertical: 6, marginTop: 4 },
+  limitsHintText: { fontSize: 13, color: '#67C23A' },
   fullBtn: { width: '100%', marginBottom: 12 },
   doneCard: { marginBottom: 20, alignItems: 'center' },
   doneTitle: { fontSize: 20, fontWeight: '700', color: '#67C23A', marginBottom: 12 },
