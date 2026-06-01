@@ -77,7 +77,7 @@ export interface BatchYieldDTO {
 }
 
 // ============ 请求 DTO ============
-// mirror backend dto/yield/YieldReportRequest.java:11-23
+// mirror backend dto/yield/YieldReportRequest.java:11-26
 export interface YieldReportRequest {
   workProcessTaskId: number;
   inputQuantity: number;            // 本道投入 (前端预填上道产出, 可改)
@@ -89,6 +89,8 @@ export interface YieldReportRequest {
   sourceBatchRefs?: Array<Record<string, unknown>>;  // A3 跨批来源 (Phase D 默认不传)
   reporterName?: string;
   targetWorkerId?: number;          // 代报工 (Phase D operator 自报, 默认不传)
+  /** A2b: 首道领料批次引用 (随报工单一起提交, 不再单独调用 recordMaterialInput) */
+  materialBatchRefs?: { materialBatchId: string; quantity: number; unit?: string }[];
 }
 
 // mirror backend dto/yield/MaterialInputRequest.java:9-14
@@ -97,6 +99,8 @@ export interface MaterialInputRequest {
   warehouseOutQuantity: number;     // 出库量 998
   feedInQuantity: number;           // 投料量 935.5
   inputUnit?: string;
+  /** A2b: 本批次领料批次引用 (1 or N). materialBatchId is String (UUID/varchar). */
+  materialBatchRefs?: { materialBatchId: string; quantity: number; unit?: string }[];
 }
 
 // ============ YieldLimitsDTO (mirror backend dto/yield/YieldLimitsDTO.java) ============

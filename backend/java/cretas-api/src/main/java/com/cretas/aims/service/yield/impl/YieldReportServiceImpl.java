@@ -90,6 +90,8 @@ public class YieldReportServiceImpl implements YieldReportService {
                 .outputQuantity(req.getOutputQuantity()).outputUnit(req.getOutputUnit())
                 .totalWorkMinutes(req.getWorkMinutes())
                 .sourceBatchRefs(req.getSourceBatchRefs())
+                // A2b: 领料批次引用直接挂在报工单上 (不再单独调用 recordMaterialInput)
+                .materialBatchRefs(toMaterialBatchRefMaps(req.getMaterialBatchRefs()))
                 // 工序批次号是任务级: 仅首条报工生成, 后续条 null (避免 uq_pr_intermediate_batch_no 冲突)
                 .intermediateBatchNo(isFirstReportForTask ? generateBatchNo(t, batchId) : null)
                 .status(ProductionReport.Status.SUBMITTED)
@@ -141,6 +143,15 @@ public class YieldReportServiceImpl implements YieldReportService {
         }
 
         ProductionReport saved = reportRepo.save(r);
+
+        // A2b: 报工单保存后, 对每个关联批次独立检查自动结清 (order: save → settle)
+        if (req.getMaterialBatchRefs() != null) {
+            for (MaterialBatchRef ref : req.getMaterialBatchRefs()) {
+                if (ref.getMaterialBatchId() != null) {
+                    checkAndAutoSettle(factoryId, batchId, ref.getMaterialBatchId());
+                }
+            }
+        }
 
         // 双写 WorkProcessTask.actualQuantity = Σ该任务 YIELD output (权威=YIELD, 老字段保兼容)
         // 已有报工产出 + 本次 (显式加本次, 不依赖 JPQL flush 时序)

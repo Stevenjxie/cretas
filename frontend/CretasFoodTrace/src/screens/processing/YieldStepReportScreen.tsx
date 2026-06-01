@@ -6,6 +6,7 @@ import { ScreenWrapper } from '../../components/ui/ScreenWrapper';
 import { NeoCard } from '../../components/ui/NeoCard';
 import { NeoButton } from '../../components/ui/NeoButton';
 import YieldQuantityInput from '../../components/processing/YieldQuantityInput';
+import MaterialBatchPicker, { MaterialBatchRef } from '../../components/processing/MaterialBatchPicker';
 import {
   yieldReportApi,
   WorkProcessTask,
@@ -44,6 +45,8 @@ const YieldStepReportScreen: React.FC = () => {
   // A4: 超收预检
   const [yieldLimits, setYieldLimits] = useState<YieldLimitsDTO | null>(null);
   const limitsDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // A2b: 首道领料批次引用
+  const [materialBatchRefs, setMaterialBatchRefs] = useState<MaterialBatchRef[]>([]);
 
   const currentTask = tasks[currentStepIndex] ?? null;
   const totalSteps = tasks.length;
@@ -85,13 +88,14 @@ const YieldStepReportScreen: React.FC = () => {
     loadAll();
   }, [loadAll]);
 
-  // 切道时: 投入预填上道产出, 产出清空, 清告警, 清 limits
+  // 切道时: 投入预填上道产出, 产出清空, 清告警, 清 limits, 清 A2b refs
   useEffect(() => {
     if (phase !== 'reporting') return;
     setInputQty(prevOutput != null ? String(prevOutput) : '');
     setOutputQty('');
     setLastAlert(null);
     setYieldLimits(null);
+    setMaterialBatchRefs([]);
   }, [currentStepIndex, prevOutput, phase]);
 
   // A4: 投入量变化后 debounce 500ms 拉超收上限
@@ -165,12 +169,22 @@ const YieldStepReportScreen: React.FC = () => {
       return;
     }
     const input = parseFloat(inputQty);
+    // A2b: 首道 + 有批次引用时, 将 materialBatchRefs 随报工单一起提交 (一次请求, 不再双调)
     const req: YieldReportRequest = {
       workProcessTaskId: currentTask.id,
       inputQuantity: Number.isNaN(input) ? 0 : input,
       inputUnit: unit,
       outputQuantity: output,
       outputUnit: unit,
+      ...(currentStepIndex === 0 && materialBatchRefs.length > 0
+        ? {
+            materialBatchRefs: materialBatchRefs.map((r: MaterialBatchRef) => ({
+              materialBatchId: r.materialBatchId,
+              quantity: r.quantity,
+              unit: r.unit ?? unit,
+            })),
+          }
+        : {}),
     };
     setSubmitting(true);
     try {
@@ -225,7 +239,7 @@ const YieldStepReportScreen: React.FC = () => {
     } finally {
       setSubmitting(false);
     }
-  }, [currentTask, outputQty, inputQty, unit, batchId, currentStepIndex, totalSteps, submitWithForce]);
+  }, [currentTask, outputQty, inputQty, unit, batchId, currentStepIndex, totalSteps, submitWithForce, materialBatchRefs]);
 
   const handleSettleDay = useCallback(async () => {
     setSubmitting(true);
@@ -345,6 +359,16 @@ const YieldStepReportScreen: React.FC = () => {
           ) : null}
 
           <View style={styles.divider} />
+
+          {/* A2b: 首道领料批次选择 (仅 currentStepIndex === 0) */}
+          {currentStepIndex === 0 ? (
+            <MaterialBatchPicker
+              unit={unit}
+              value={materialBatchRefs}
+              onChange={setMaterialBatchRefs}
+              disabled={submitting}
+            />
+          ) : null}
 
           <YieldQuantityInput
             label="投入量"
