@@ -106,7 +106,11 @@ public class YieldReportController {
             throw new BusinessException(400, "缺少必填字段: materialBatchId")
                     .withHint("请传入 materialBatchId").withHintTarget("materialBatchId");
         }
-        Long materialBatchId = ((Number) mbIdObj).longValue();
+        String materialBatchId = mbIdObj.toString().trim();
+        if (materialBatchId.isEmpty()) {
+            throw new BusinessException(400, "materialBatchId 不能为空")
+                    .withHint("请传入有效的 materialBatchId").withHintTarget("materialBatchId");
+        }
         return ApiResponse.success(yieldReportService.autoSettleByMaterialBatch(factoryId, batchId, materialBatchId));
     }
 }

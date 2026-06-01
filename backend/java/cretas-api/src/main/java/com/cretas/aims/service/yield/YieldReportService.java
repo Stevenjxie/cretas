@@ -39,5 +39,5 @@ public interface YieldReportService {
      * 内部调用 checkAndAutoSettle(factoryId, batchId, materialBatchId).
      * 返回 {settledCount: N}
      */
-    Map<String, Object> autoSettleByMaterialBatch(String factoryId, Long batchId, Long materialBatchId);
+    Map<String, Object> autoSettleByMaterialBatch(String factoryId, Long batchId, String materialBatchId);
 }
