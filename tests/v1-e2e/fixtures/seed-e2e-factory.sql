@@ -115,9 +115,12 @@ INSERT INTO factory_warehouses (
     id, factory_id, code, name, type, is_active,
     created_at, updated_at
 )
+-- 2026-06-01 修 G2: code 必须用后端 canonical WH-LOG / WH-WKS (WarehouseCodes.java),
+-- 不是 WH_LOGISTICS / WH_WORKSHOP。后端 confirm-receive / FIFO 按 WH-LOG/WH-WKS 查双仓,
+-- 用错 code → 'Factory 缺少 warehouse seed [WH-LOG]' 500。真实工厂 (F001/F006) 都用这俩 code。
 VALUES
-    ('e2e-wh-logistics-00000000000001', 'F_E2E_TEST', 'WH_LOGISTICS', '物流仓', 'LOGISTICS', true, NOW(), NOW()),
-    ('e2e-wh-workshop-00000000000001',  'F_E2E_TEST', 'WH_WORKSHOP',  '鲜棉仓', 'WORKSHOP',  true, NOW(), NOW())
+    ('e2e-wh-logistics-00000000000001', 'F_E2E_TEST', 'WH-LOG', '物流仓', 'LOGISTICS', true, NOW(), NOW()),
+    ('e2e-wh-workshop-00000000000001',  'F_E2E_TEST', 'WH-WKS', '鲜棉仓', 'WORKSHOP',  true, NOW(), NOW())
 ON CONFLICT (factory_id, code) DO NOTHING;
 
 -- ─────────────────────────────────────────────────────────────────────────────
@@ -330,6 +333,32 @@ WHERE NOT EXISTS (
       AND b.material_type_id = m.id
       AND b.deleted_at IS NULL
 );
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 8b. MATERIAL BATCHES (库存)  — 2026-06-01 修 G3: 开始生产 (start) 校验原料库存,
+--     seed 只建了 raw_material_types (类型) 没建 material_batches (实际库存) → 开始生产
+--     报 '原料库存不足, 可用 0'。给每个 raw material 建一个 AVAILABLE 批次到 WH-LOG (物流仓),
+--     量充足 (1000 单位) 覆盖任何 BOM 需求。可用 = receipt - used - reserved。
+--     material_type_id 引用 seed 自己的 raw_material_types.id; warehouse_id = WH-LOG 的 seed id。
+-- ─────────────────────────────────────────────────────────────────────────────
+INSERT INTO material_batches (
+    id, factory_id, material_type_id, batch_number, warehouse_id,
+    receipt_quantity, used_quantity, reserved_quantity, quantity_unit,
+    inbound_date, status, created_by, created_at, updated_at
+)
+SELECT
+    'e2e-mb-' || m.code || '-0000000000001',
+    'F_E2E_TEST',
+    m.id,
+    'E2E-MB-' || m.code,
+    'e2e-wh-logistics-00000000000001',   -- WH-LOG (物流仓)
+    1000.0000, 0.0000, 0.0000, m.unit,
+    CURRENT_DATE, 'AVAILABLE',
+    (SELECT id FROM users WHERE username = 'e2e_super_admin'),
+    NOW(), NOW()
+FROM raw_material_types m
+WHERE m.factory_id = 'F_E2E_TEST' AND m.deleted_at IS NULL
+ON CONFLICT (id) DO NOTHING;
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- 9. VERIFICATION QUERY

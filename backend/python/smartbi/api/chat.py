@@ -69,6 +69,35 @@ async def _log_template_hit_safe(pool, query, factory_id, upload_id, template_co
         return None
 
 
+async def _capture_qa_distillation(query, answer, http_request) -> None:
+    """Capture an AI Q&A teacher pair (question → final LLM answer) into the
+    distillation corpus. Fire-and-forget — wrapped so it NEVER raises and never
+    affects the response. Only called on freshly-generated LLM answers in the
+    non-stream ``general_analysis`` path (cache-hit returns at the top of that
+    function, so reaching the call sites means a fresh teacher pair)."""
+    try:
+        if not query or not answer:
+            return
+        from smartbi.config import get_pg_pool
+        from smartbi.services.distillation_capture import persist_distillation_sample
+        factory_id = (
+            getattr(http_request.state, 'factory_id', None)
+            if hasattr(http_request, 'state') else None
+        )
+        pool = await get_pg_pool()
+        await persist_distillation_sample(
+            pool,
+            source="chat_qa",
+            task_type="qa",
+            input_text=query,
+            teacher_output=answer,
+            business_type="unknown",
+            factory_id=factory_id,
+        )
+    except Exception as e:  # belt-and-suspenders; helper already swallows
+        logger.debug(f"[distill] qa capture skipped (non-blocking): {e}")
+
+
 # H4 (Apr 27 2026): shared helpers for v2 conv memory across multiple SSE
 # endpoints (drill_down_stream / root_cause_stream / benchmark_stream).
 # Keeps the lookup + writeback logic DRY across endpoints.
@@ -878,6 +907,11 @@ async def general_analysis(request: GeneralAnalysisRequest, http_request: Reques
                         processing_time_ms=int((time.time() - start_time) * 1000)
                     )
                     _chat_cache_set(cache_key, response.dict())
+                    # Distillation capture (training corpus): freshly-generated
+                    # LLM answer (text-only, no-data branch). Cache-hit returns
+                    # above this point so this is always a fresh teacher pair.
+                    if llm_result:
+                        await _capture_qa_distillation(query, answer, http_request)
                     return response
                 except Exception as e:
                     logger.warning(f"Direct LLM analysis failed: {e}")
@@ -1148,6 +1182,11 @@ async def general_analysis(request: GeneralAnalysisRequest, http_request: Reques
 
         # Cache successful result
         _chat_cache_set(cache_key, response.dict())
+
+        # Distillation capture (training corpus): freshly-generated LLM answer
+        # (with-data insights branch). Cache-hit returns near the top of this
+        # function, so reaching here means a fresh teacher pair.
+        await _capture_qa_distillation(query, answer, http_request)
 
         return response
 

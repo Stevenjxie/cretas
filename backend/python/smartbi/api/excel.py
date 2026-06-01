@@ -1804,12 +1804,51 @@ def _recommend_charts(
     return charts[:5]  # Limit to 5 recommendations
 
 
+def _resolve_corrected_column(
+    cache,
+    cache_key: str,
+    original_value: str,
+    column_name: Optional[str],
+) -> Optional[str]:
+    """Resolve which Excel column a "mapping" correction is about (the source_key).
+
+    Prefers an explicit column_name form field. Otherwise derives it from the
+    cached mapping_config: the correction's original_value is either the column
+    name itself or the previously-detected standard field; match against both.
+    Returns None if the column cannot be determined (caller then skips capture —
+    a wrong learned mapping is worse than none).
+    """
+    if column_name and column_name.strip():
+        return column_name.strip()
+    entry = cache._memory_cache.get(cache_key)
+    if not entry:
+        return None
+    field_mappings = entry.mapping_config.get("field_mappings", []) or []
+    target = (original_value or "").strip()
+    if not target:
+        return None
+    # Case 1: original_value already names the column.
+    for fm in field_mappings:
+        if (fm.get("original") or "").strip() == target:
+            return fm["original"].strip()
+    # Case 2: original_value is the old (wrong) standard field -> find its column.
+    for fm in field_mappings:
+        if (fm.get("standard") or "").strip() == target:
+            col = (fm.get("original") or "").strip()
+            if col:
+                return col
+    return None
+
+
 @router.post("/auto-parse/feedback")
 async def submit_auto_parse_feedback(
     cache_key: str = Form(...),
     correction_type: str = Form(...),
     original_value: str = Form(...),
-    correct_value: str = Form(...)
+    correct_value: str = Form(...),
+    column_name: Optional[str] = Form(None),
+    factory_id: Optional[str] = Form(None),
+    business_type: Optional[str] = Form(None),
 ):
     """
     Submit feedback for auto-parse results to improve future detection.
@@ -1818,6 +1857,10 @@ async def submit_auto_parse_feedback(
     - **correction_type**: Type of correction (mapping, structure, data_type)
     - **original_value**: The original detected value
     - **correct_value**: The user's corrected value
+    - **column_name**: Optional Excel column being corrected (source_key for learning).
+      Falls back to deriving it from the cached mapping when omitted.
+    - **factory_id**: Optional factory ID (learning-candidate scope).
+    - **business_type**: Optional industry (restaurant/factory/unknown) for layered learning.
     """
     try:
         cache = get_schema_cache()
@@ -1829,6 +1872,33 @@ async def submit_auto_parse_feedback(
         }
 
         success = cache.add_user_correction(cache_key, correction)
+
+        # A "mapping" correction is a human telling us the right column->standard-field
+        # mapping (gold-standard signal). Also record it as a learning candidate so a
+        # human can later promote it via the CLI. NEVER auto-graduate here.
+        # Double fail-open: this block must never break feedback recording.
+        if correction_type == "mapping":
+            try:
+                source_key = _resolve_corrected_column(
+                    cache, cache_key, original_value, column_name
+                )
+                target_value = (correct_value or "").strip()
+                if source_key and target_value:
+                    from smartbi.services.learning_promotion import capture_candidate
+                    from smartbi.config import get_pg_pool
+                    pool = await get_pg_pool()
+                    await capture_candidate(
+                        pool, "field_mapping", source_key, target_value,
+                        factory_id, "user_correction", 1.0,
+                        business_type=(business_type or "unknown"),
+                    )
+                else:
+                    logger.info(
+                        "mapping-correction capture skipped: column unresolved "
+                        f"(cache_key={cache_key}, original={original_value!r})"
+                    )
+            except Exception as e:
+                logger.warning("mapping-correction capture failed (ignored): %s", e)
 
         if success:
             logger.info(f"Feedback recorded: {correction_type} correction for {cache_key}")
