@@ -29,6 +29,8 @@ from smartbi.gold import (
     discount_breakdown,
     finance_summary,
     kpi_summary,
+    order_type_mix,
+    staff_ranking,
     top_products,
 )
 from smartbi.tenant_ctx import get_factory_id
@@ -168,14 +170,17 @@ async def get_top_products(
     end_date: str = Query(...),
     factory_id: Optional[str] = Query(None),
     top_n: int = Query(10, ge=1, le=100),
+    order: str = Query("desc", description="Sort direction: 'desc' for top sellers, 'asc' for slow sellers"),
 ):
-    """Top products by revenue. Uses agg_product which is monthly-grained —
-    date range is normalized to the month(s) it touches."""
+    """Top (or bottom) products by revenue. Uses agg_product which is monthly-grained —
+    date range is normalized to the month(s) it touches.
+
+    Pass order=asc to get slow-sellers (慢销菜品) ranked by lowest revenue first."""
     fid = _resolve_tenant(factory_id)
     start, end = _parse_range(start_date, end_date)
     pool = await get_pg_pool()
     try:
-        result = await top_products(pool, fid, (start, end), top_n=top_n)
+        result = await top_products(pool, fid, (start, end), top_n=top_n, order=order)
         return _apply_rbac_strip(result, _get_role(request))
     except Exception as e:
         logger.exception("top-products failed: %s", e)
@@ -221,6 +226,53 @@ async def get_discount_breakdown(
         return _apply_rbac_strip(result, _get_role(request))
     except Exception as e:
         logger.exception("discount-breakdown failed: %s", e)
+        raise HTTPException(status_code=500, detail=f"Gold query failed: {e}")
+
+
+@router.get("/order-type-mix")
+async def get_order_type_mix(
+    request: Request,
+    start_date: str = Query(...),
+    end_date: str = Query(...),
+    factory_id: Optional[str] = Query(None),
+):
+    """堂食 vs 外卖 revenue split from agg_daily_order_type_meal.order_type.
+
+    NOTE: this is NOT /channel-breakdown — that endpoint shows payment channel
+    (微信/美团) which conflates payment method with service mode. This endpoint
+    reads the order_type dimension (堂食/外卖) to answer delivery-mix questions."""
+    fid = _resolve_tenant(factory_id)
+    start, end = _parse_range(start_date, end_date)
+    pool = await get_pg_pool()
+    try:
+        result = await order_type_mix(pool, fid, (start, end))
+        return _apply_rbac_strip(result, _get_role(request))
+    except Exception as e:
+        logger.exception("order-type-mix failed: %s", e)
+        raise HTTPException(status_code=500, detail=f"Gold query failed: {e}")
+
+
+@router.get("/staff-ranking")
+async def get_staff_ranking(
+    request: Request,
+    start_date: str = Query(...),
+    end_date: str = Query(...),
+    factory_id: Optional[str] = Query(None),
+    top_n: int = Query(5, ge=1, le=50),
+):
+    """POS operator ranking by net revenue handled.
+
+    Returns staff list with honest caveat: fact_pos_transaction.staff_id
+    records the POS operator (cashier / order-taker), NOT server/waiter
+    performance. Results should not be used for server performance reviews."""
+    fid = _resolve_tenant(factory_id)
+    start, end = _parse_range(start_date, end_date)
+    pool = await get_pg_pool()
+    try:
+        result = await staff_ranking(pool, fid, (start, end), top_n=top_n)
+        return _apply_rbac_strip(result, _get_role(request))
+    except Exception as e:
+        logger.exception("staff-ranking failed: %s", e)
         raise HTTPException(status_code=500, detail=f"Gold query failed: {e}")
 
 

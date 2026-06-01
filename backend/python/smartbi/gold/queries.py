@@ -30,7 +30,7 @@ from __future__ import annotations
 
 import logging
 from datetime import date
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Any, Dict, Optional, Tuple
 
 import asyncpg
@@ -97,6 +97,7 @@ async def top_products(
     date_range: Tuple[date, date],
     *,
     top_n: int = 10,
+    order: str = "desc",
 ) -> Dict[str, Any]:
     """Top products by revenue over the date range — feeds 分析概览 pie
     chart + KPI看板 top seller card.
@@ -118,13 +119,15 @@ async def top_products(
     """
     start, end = date_range
     _validate_range(start, end)
+    # Whitelist the order direction to avoid interpolating raw user input into SQL.
+    direction = "ASC" if str(order).lower() == "asc" else "DESC"
     # agg_product.month is always first-of-month; pick months where
     # first-of-month ≤ end AND month ≥ first-of-start-month.
     start_m = start.replace(day=1)
     end_m = end.replace(day=1)
     async with pool.acquire() as conn:
         rows = await conn.fetch(
-            """
+            f"""
             SELECT p.product_id,
                    p.name,
                    SUM(a.qty_sold)::numeric(18,3) AS qty,
@@ -158,7 +161,7 @@ async def top_products(
              GROUP BY p.product_id, p.name,
                       fp.confidence, fp.source_type,
                       fp.source_upload_id, fp.field_name
-             ORDER BY SUM(a.revenue) DESC
+             ORDER BY SUM(a.revenue) {direction}
              LIMIT $4
             """,
             factory_id, start_m, end_m, int(top_n),
@@ -391,6 +394,123 @@ async def data_range(
         "min_date": min_date.isoformat() if min_date else None,
         "max_date": max_date.isoformat() if max_date else None,
         "day_count": int(row["day_count"]) if row and row["day_count"] else 0,
+    }
+
+
+async def order_type_mix(
+    pool: asyncpg.Pool,
+    factory_id: str,
+    date_range: Tuple[date, date],
+) -> Dict[str, Any]:
+    """Dine-in vs takeout revenue split from agg_daily_order_type_meal.
+
+    Reads agg_daily_order_type_meal.order_type (values: 堂食/外卖).
+    NOTE: this is NOT the same as channel-breakdown which shows payment
+    channel (微信/美团) — using channel data for delivery-type mix conflates
+    payment method with service mode.
+
+    Returns:
+      - total_revenue
+      - order_types: list of {order_type, revenue, bill_count, revenue_pct}
+        sorted by revenue descending.
+    """
+    start, end = date_range
+    _validate_range(start, end)
+    if start is None or end is None:
+        raise ValueError("order_type_mix: start/end dates are required")
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT order_type,
+                   COALESCE(SUM(actual_receive), 0)::numeric(18,2) AS amt,
+                   COALESCE(SUM(bill_count), 0)                    AS bills
+              FROM agg_daily_order_type_meal
+             WHERE factory_id = $1
+               AND date BETWEEN $2 AND $3
+               AND order_type IS NOT NULL
+             GROUP BY order_type
+             ORDER BY amt DESC
+            """,
+            factory_id, start, end,
+        )
+    total = sum((Decimal(str(r["amt"])) for r in rows), Decimal("0"))
+    types = []
+    for r in rows:
+        amt = Decimal(str(r["amt"]))
+        pct = (
+            (amt / total * 100).quantize(Decimal("0.1"), rounding=ROUND_HALF_UP)
+            if total > 0
+            else Decimal("0")
+        )
+        types.append({
+            "order_type": r["order_type"],
+            "revenue": float(amt),
+            "bill_count": int(r["bills"]),
+            "revenue_pct": float(pct),
+        })
+    return {
+        "factory_id": factory_id,
+        "start_date": start.isoformat(),
+        "end_date": end.isoformat(),
+        "total_revenue": float(total),
+        "order_types": types,
+    }
+
+
+async def staff_ranking(
+    pool: asyncpg.Pool,
+    factory_id: str,
+    date_range: Tuple[date, date],
+    *,
+    top_n: int = 5,
+) -> Dict[str, Any]:
+    """POS operator ranking by net revenue handled.
+
+    Data source: fact_pos_transaction.staff_id — this is the POS
+    operator (cashier / order-taker), NOT a server/waiter attribution.
+    Results MUST be read with the accompanying caveat.
+
+    Returns:
+      - staff: list of {name, net_amount, bill_count} sorted by net_amount desc
+      - caveat: honest disclaimer about data meaning (required by no-fabrication rule)
+    """
+    start, end = date_range
+    _validate_range(start, end)
+    if start is None or end is None:
+        raise ValueError("staff_ranking: start/end dates are required")
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT COALESCE(s.name, t.staff_id::text) AS name,
+                   COALESCE(SUM(t.net_amount), 0)::numeric(18,2) AS net,
+                   COUNT(*)                                        AS bills
+              FROM fact_pos_transaction t
+              LEFT JOIN dim_staff s
+                     ON s.staff_id = t.staff_id
+                    AND s.factory_id = t.factory_id
+             WHERE t.factory_id = $1
+               AND t.date BETWEEN $2 AND $3
+               AND t.staff_id IS NOT NULL
+             GROUP BY COALESCE(s.name, t.staff_id::text)
+             ORDER BY net DESC
+             LIMIT $4
+            """,
+            factory_id, start, end, int(top_n),
+        )
+    staff = [
+        {
+            "name": r["name"],
+            "net_amount": float(Decimal(str(r["net"]))),
+            "bill_count": int(r["bills"]),
+        }
+        for r in rows
+    ]
+    return {
+        "factory_id": factory_id,
+        "start_date": start.isoformat(),
+        "end_date": end.isoformat(),
+        "staff": staff,
+        "caveat": "POS 数据按开单操作员(收银/点菜)记账, 非服务员业绩归因; 仅供操作量参考。",
     }
 
 

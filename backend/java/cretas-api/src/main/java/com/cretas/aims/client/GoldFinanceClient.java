@@ -240,10 +240,8 @@ public class GoldFinanceClient {
     /**
      * Fetch top products by revenue from Python Gold layer.
      *
-     * Used to populate the 产品类别占比 pie chart on Dashboard. Note that
-     * dim_product.category is NULL for restaurant tenants ingested before
-     * v1.3, so we fall back to top product names as the breakdown — still
-     * useful as a "热销产品 Top N" donut.
+     * Delegates to the 5-arg overload with order="desc" for backward compatibility.
+     * Existing callers (e.g. GoldDashboardBuilder) are unaffected.
      *
      * @return parsed JSON; key fields:
      *         - factory_id, start_month, end_month (rolled up to month grain)
@@ -257,6 +255,32 @@ public class GoldFinanceClient {
             LocalDate endDate,
             int topN
     ) throws IOException {
+        return fetchTopProducts(factoryId, startDate, endDate, topN, "desc");
+    }
+
+    /**
+     * Fetch top products by revenue from Python Gold layer, with explicit sort order.
+     *
+     * Used to populate the 产品类别占比 pie chart on Dashboard. Note that
+     * dim_product.category is NULL for restaurant tenants ingested before
+     * v1.3, so we fall back to top product names as the breakdown — still
+     * useful as a "热销产品 Top N" donut.
+     *
+     * @param order sort direction: "asc" or "desc" (default "desc"); any other
+     *              value is silently normalized to "desc"
+     * @return parsed JSON; key fields:
+     *         - factory_id, start_month, end_month (rolled up to month grain)
+     *         - top_products: List of {product_id, product_name, qty_sold,
+     *           revenue, bill_count}, ordered by revenue per {@code order}, max top_n
+     * @throws IOException on transport / non-2xx / parse failure
+     */
+    public Map<String, Object> fetchTopProducts(
+            String factoryId,
+            LocalDate startDate,
+            LocalDate endDate,
+            int topN,
+            String order
+    ) throws IOException {
         if (factoryId == null || factoryId.isEmpty()) {
             throw new IllegalArgumentException("factoryId required");
         }
@@ -269,6 +293,7 @@ public class GoldFinanceClient {
         if (topN < 1 || topN > 100) {
             throw new IllegalArgumentException("topN must be 1..100");
         }
+        String normalizedOrder = ("asc".equals(order)) ? "asc" : "desc";
 
         HttpUrl url = HttpUrl.parse(config.getUrl() + "/api/smartbi/gold/top-products")
                 .newBuilder()
@@ -276,6 +301,7 @@ public class GoldFinanceClient {
                 .addQueryParameter("start_date", startDate.toString())
                 .addQueryParameter("end_date", endDate.toString())
                 .addQueryParameter("top_n", String.valueOf(topN))
+                .addQueryParameter("order", normalizedOrder)
                 .build();
 
         Request.Builder reqBuilder = new Request.Builder().url(url).get();
@@ -305,7 +331,279 @@ public class GoldFinanceClient {
             Map<String, Object> parsed = objectMapper.readValue(body, Map.class);
             Object items = parsed.get("top_products");
             int count = (items instanceof java.util.List) ? ((java.util.List<?>) items).size() : 0;
-            log.debug("Gold top-products factory={} range={}..{} count={} in {}ms",
+            log.debug("Gold top-products factory={} range={}..{} count={} order={} in {}ms",
+                    factoryId, startDate, endDate, count, normalizedOrder, elapsed);
+            return parsed;
+        }
+    }
+
+    /**
+     * Fetch order-type mix (dine-in vs takeout vs delivery breakdown) from Python Gold layer.
+     *
+     * @param factoryId factory (tenant) id — must match the caller's auth scope
+     * @param startDate inclusive
+     * @param endDate   inclusive; must be >= startDate
+     * @return parsed JSON with order type breakdown; key fields vary by tenant
+     *         but typically include order_type_breakdown (List), total_revenue, bill_count
+     * @throws IOException if Gold is unreachable, returns non-2xx, or the body
+     *                    doesn't parse. Caller should log + fall through to legacy.
+     */
+    public Map<String, Object> fetchOrderTypeMix(
+            String factoryId,
+            LocalDate startDate,
+            LocalDate endDate
+    ) throws IOException {
+        if (factoryId == null || factoryId.isEmpty()) {
+            throw new IllegalArgumentException("factoryId required");
+        }
+        if (startDate == null || endDate == null) {
+            throw new IllegalArgumentException("startDate and endDate required");
+        }
+        if (startDate.isAfter(endDate)) {
+            throw new IllegalArgumentException("startDate > endDate");
+        }
+
+        HttpUrl url = HttpUrl.parse(config.getUrl() + "/api/smartbi/gold/order-type-mix")
+                .newBuilder()
+                .addQueryParameter("factory_id", factoryId)
+                .addQueryParameter("start_date", startDate.toString())
+                .addQueryParameter("end_date", endDate.toString())
+                .build();
+
+        Request.Builder reqBuilder = new Request.Builder().url(url).get();
+        if (!internalSecret.isEmpty()) {
+            reqBuilder.addHeader("X-Internal-Secret", internalSecret);
+            reqBuilder.addHeader("X-Factory-Id", factoryId);
+            // Forward the request user's role so Python RBAC money-strip respects
+            // price-view permission (else revenue fields get nulled).
+            String userRole = currentUserRole();
+            if (userRole != null && !userRole.isEmpty()) {
+                reqBuilder.addHeader("X-User-Role", userRole);
+            }
+        }
+        Request req = reqBuilder.build();
+
+        long t0 = System.currentTimeMillis();
+        try (Response resp = http.newCall(req).execute()) {
+            long elapsed = System.currentTimeMillis() - t0;
+            if (!resp.isSuccessful()) {
+                String body = resp.body() != null ? resp.body().string() : "";
+                throw new IOException(
+                        "Gold order-type-mix HTTP " + resp.code() + " in " + elapsed
+                                + "ms: " + body);
+            }
+            String body = resp.body() != null ? resp.body().string() : "{}";
+            @SuppressWarnings("unchecked")
+            Map<String, Object> parsed = objectMapper.readValue(body, Map.class);
+            log.debug("Gold order-type-mix factory={} range={}..{} in {}ms",
+                    factoryId, startDate, endDate, elapsed);
+            return parsed;
+        }
+    }
+
+    /**
+     * Fetch staff performance ranking from Python Gold layer.
+     *
+     * @param factoryId factory (tenant) id — must match the caller's auth scope
+     * @param startDate inclusive
+     * @param endDate   inclusive; must be >= startDate
+     * @param topN      max staff entries to return (1..50)
+     * @return parsed JSON; key fields typically include staff_ranking
+     *         (List of {staff_id, staff_name, revenue, bill_count, avg_bill_value})
+     * @throws IOException if Gold is unreachable, returns non-2xx, or the body
+     *                    doesn't parse. Caller should log + fall through to legacy.
+     */
+    public Map<String, Object> fetchStaffRanking(
+            String factoryId,
+            LocalDate startDate,
+            LocalDate endDate,
+            int topN
+    ) throws IOException {
+        if (factoryId == null || factoryId.isEmpty()) {
+            throw new IllegalArgumentException("factoryId required");
+        }
+        if (startDate == null || endDate == null) {
+            throw new IllegalArgumentException("startDate and endDate required");
+        }
+        if (startDate.isAfter(endDate)) {
+            throw new IllegalArgumentException("startDate > endDate");
+        }
+        if (topN < 1 || topN > 50) {
+            throw new IllegalArgumentException("topN must be 1..50");
+        }
+
+        HttpUrl url = HttpUrl.parse(config.getUrl() + "/api/smartbi/gold/staff-ranking")
+                .newBuilder()
+                .addQueryParameter("factory_id", factoryId)
+                .addQueryParameter("start_date", startDate.toString())
+                .addQueryParameter("end_date", endDate.toString())
+                .addQueryParameter("top_n", String.valueOf(topN))
+                .build();
+
+        Request.Builder reqBuilder = new Request.Builder().url(url).get();
+        if (!internalSecret.isEmpty()) {
+            reqBuilder.addHeader("X-Internal-Secret", internalSecret);
+            reqBuilder.addHeader("X-Factory-Id", factoryId);
+            // Forward the request user's role so Python RBAC money-strip respects
+            // price-view permission (else revenue fields get nulled).
+            String userRole = currentUserRole();
+            if (userRole != null && !userRole.isEmpty()) {
+                reqBuilder.addHeader("X-User-Role", userRole);
+            }
+        }
+        Request req = reqBuilder.build();
+
+        long t0 = System.currentTimeMillis();
+        try (Response resp = http.newCall(req).execute()) {
+            long elapsed = System.currentTimeMillis() - t0;
+            if (!resp.isSuccessful()) {
+                String body = resp.body() != null ? resp.body().string() : "";
+                throw new IOException(
+                        "Gold staff-ranking HTTP " + resp.code() + " in " + elapsed
+                                + "ms: " + body);
+            }
+            String body = resp.body() != null ? resp.body().string() : "{}";
+            @SuppressWarnings("unchecked")
+            Map<String, Object> parsed = objectMapper.readValue(body, Map.class);
+            Object items = parsed.get("staff_ranking");
+            int count = (items instanceof java.util.List) ? ((java.util.List<?>) items).size() : 0;
+            log.debug("Gold staff-ranking factory={} range={}..{} count={} in {}ms",
+                    factoryId, startDate, endDate, count, elapsed);
+            return parsed;
+        }
+    }
+
+    /**
+     * Fetch the actual date range of a factory's Gold data (agg_daily).
+     *
+     * <p>Used by {@code GoldBackedRestaurantTool.resolveWindow} to default the
+     * analysis window to the factory's real data span instead of an arbitrary
+     * "last 7 days from today" window.
+     *
+     * <p>Response keys (Python Gold {@code data_range} function):
+     * <ul>
+     *   <li>{@code factory_id} — echoes input</li>
+     *   <li>{@code min_date} — ISO {@code yyyy-MM-dd} string of the earliest row in
+     *       {@code agg_daily}, or {@code null} when the factory has no Gold rows yet</li>
+     *   <li>{@code max_date} — ISO {@code yyyy-MM-dd} string of the latest row, or
+     *       {@code null} when no rows</li>
+     *   <li>{@code day_count} — number of distinct dates with data (0 when no rows)</li>
+     * </ul>
+     *
+     * <p>No money fields → no RBAC strip on the Python side → no X-User-Role needed;
+     * still forwarded for consistency with other Gold calls.
+     *
+     * @param factoryId factory (tenant) id — must match the caller's auth scope
+     * @return parsed JSON as a Map with keys described above
+     * @throws IOException if Gold is unreachable, returns non-2xx, or body doesn't parse
+     */
+    public Map<String, Object> fetchDataRange(String factoryId) throws IOException {
+        if (factoryId == null || factoryId.isEmpty()) {
+            throw new IllegalArgumentException("factoryId required");
+        }
+
+        HttpUrl url = HttpUrl.parse(config.getUrl() + "/api/smartbi/gold/data-range")
+                .newBuilder()
+                .addQueryParameter("factory_id", factoryId)
+                .build();
+
+        Request.Builder reqBuilder = new Request.Builder().url(url).get();
+        if (!internalSecret.isEmpty()) {
+            reqBuilder.addHeader("X-Internal-Secret", internalSecret);
+            reqBuilder.addHeader("X-Factory-Id", factoryId);
+            String userRole = currentUserRole();
+            if (userRole != null && !userRole.isEmpty()) {
+                reqBuilder.addHeader("X-User-Role", userRole);
+            }
+        }
+        Request req = reqBuilder.build();
+
+        long t0 = System.currentTimeMillis();
+        try (Response resp = http.newCall(req).execute()) {
+            long elapsed = System.currentTimeMillis() - t0;
+            if (!resp.isSuccessful()) {
+                String body = resp.body() != null ? resp.body().string() : "";
+                throw new IOException(
+                        "Gold data-range HTTP " + resp.code() + " in " + elapsed
+                                + "ms: " + body);
+            }
+            String body = resp.body() != null ? resp.body().string() : "{}";
+            @SuppressWarnings("unchecked")
+            Map<String, Object> parsed = objectMapper.readValue(body, Map.class);
+            log.debug("Gold data-range factory={} min_date={} max_date={} day_count={} in {}ms",
+                    factoryId, parsed.get("min_date"), parsed.get("max_date"),
+                    parsed.get("day_count"), elapsed);
+            return parsed;
+        }
+    }
+
+    /**
+     * Fetch discount/promotion breakdown from Python Gold layer.
+     *
+     * @param factoryId factory (tenant) id — must match the caller's auth scope
+     * @param startDate inclusive
+     * @param endDate   inclusive; must be >= startDate
+     * @param topN      max discount categories to return (1..100)
+     * @return parsed JSON; key fields typically include discount_breakdown
+     *         (List of {discount_type, discount_amount, bill_count, revenue_impact})
+     * @throws IOException if Gold is unreachable, returns non-2xx, or the body
+     *                    doesn't parse. Caller should log + fall through to legacy.
+     */
+    public Map<String, Object> fetchDiscountBreakdown(
+            String factoryId,
+            LocalDate startDate,
+            LocalDate endDate,
+            int topN
+    ) throws IOException {
+        if (factoryId == null || factoryId.isEmpty()) {
+            throw new IllegalArgumentException("factoryId required");
+        }
+        if (startDate == null || endDate == null) {
+            throw new IllegalArgumentException("startDate and endDate required");
+        }
+        if (startDate.isAfter(endDate)) {
+            throw new IllegalArgumentException("startDate > endDate");
+        }
+        if (topN < 1 || topN > 100) {
+            throw new IllegalArgumentException("topN must be 1..100");
+        }
+
+        HttpUrl url = HttpUrl.parse(config.getUrl() + "/api/smartbi/gold/discount-breakdown")
+                .newBuilder()
+                .addQueryParameter("factory_id", factoryId)
+                .addQueryParameter("start_date", startDate.toString())
+                .addQueryParameter("end_date", endDate.toString())
+                .addQueryParameter("top_n", String.valueOf(topN))
+                .build();
+
+        Request.Builder reqBuilder = new Request.Builder().url(url).get();
+        if (!internalSecret.isEmpty()) {
+            reqBuilder.addHeader("X-Internal-Secret", internalSecret);
+            reqBuilder.addHeader("X-Factory-Id", factoryId);
+            // Forward the request user's role so Python RBAC money-strip respects
+            // price-view permission (else revenue/amount fields get nulled).
+            String userRole = currentUserRole();
+            if (userRole != null && !userRole.isEmpty()) {
+                reqBuilder.addHeader("X-User-Role", userRole);
+            }
+        }
+        Request req = reqBuilder.build();
+
+        long t0 = System.currentTimeMillis();
+        try (Response resp = http.newCall(req).execute()) {
+            long elapsed = System.currentTimeMillis() - t0;
+            if (!resp.isSuccessful()) {
+                String body = resp.body() != null ? resp.body().string() : "";
+                throw new IOException(
+                        "Gold discount-breakdown HTTP " + resp.code() + " in " + elapsed
+                                + "ms: " + body);
+            }
+            String body = resp.body() != null ? resp.body().string() : "{}";
+            @SuppressWarnings("unchecked")
+            Map<String, Object> parsed = objectMapper.readValue(body, Map.class);
+            Object items = parsed.get("discount_breakdown");
+            int count = (items instanceof java.util.List) ? ((java.util.List<?>) items).size() : 0;
+            log.debug("Gold discount-breakdown factory={} range={}..{} count={} in {}ms",
                     factoryId, startDate, endDate, count, elapsed);
             return parsed;
         }
