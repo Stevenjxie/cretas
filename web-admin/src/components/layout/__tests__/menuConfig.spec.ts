@@ -63,11 +63,13 @@ describe('menuConfig — merged 数据与分析 group (Task 1)', () => {
     expect(g.children!.map((c) => c.path)).toContain('/analytics/overview');
   });
 
-  it('原 /smart-bi children 未掉项 (含 query/finance, P1 暂留待 P3/P4 移除)', () => {
+  it('原 /smart-bi children 未掉项 (P3 已移除 query → redirect; finance P4 暂留)', () => {
     const g = menuConfig.find((m) => m.path === '/smart-bi')!;
     const paths = g.children!.map((c) => c.path);
+    // P3: /smart-bi/query 已合并入 /smart-bi/analysis?tab=query (菜单项移除, 由 redirect 桥接)
+    expect(paths, '/smart-bi/query 应已移除 (P3 合并)').not.toContain('/smart-bi/query');
     for (const p of [
-      '/smart-bi/dashboard', '/smart-bi/analysis', '/smart-bi/query',
+      '/smart-bi/dashboard', '/smart-bi/analysis',
       '/smart-bi/financial-dashboard', '/smart-bi/finance', '/smart-bi/sales',
       '/smart-bi/revenue-report', '/smart-bi/upload', '/smart-bi/query-templates',
       '/smart-bi/data-completeness', '/smart-bi/food-kb-feedback',

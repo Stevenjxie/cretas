@@ -125,7 +125,9 @@ const smartBIRoutes: RouteRecordRaw[] = [
   },
 ];
 
-// No longer needed — sidebar entries for these paths were removed
-export const smartBIRedirects: RouteRecordRaw[] = [];
+export const smartBIRedirects: RouteRecordRaw[] = [
+  // P3: AI问答合并入 AI探索 query tab
+  { path: '/smart-bi/query', redirect: '/smart-bi/analysis?tab=query' },
+];
 
 export default smartBIRoutes;
