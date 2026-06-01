@@ -692,6 +692,14 @@ async function tryJavaIntentChat(
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         preview = (toolData as any).preview;
       }
+      // Gold-backed restaurant tools (经营驾驶舱 销售问答) emit a chartConfig with a
+      // full ECharts `option` so the answer renders a visualization (bar/pie/line),
+      // not just text. renderChartFromConfig (below) draws chartConfig.option.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      if ((toolData as any)?.chartConfig?.option) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        msg.chartConfig = (toolData as any).chartConfig as ChartConfig;
+      }
       if (!downloadUrl) {
         const rawMsg = res.message || '';
         const jsonStart = rawMsg.indexOf('{');
@@ -703,6 +711,7 @@ async function tryJavaIntentChat(
             if (typeof inner?.download_url === 'string') downloadUrl = inner.download_url;
             if (inner?.summary && typeof inner.summary === 'object') summary = inner.summary;
             if (inner?.preview && typeof inner.preview === 'object') preview = inner.preview;
+            if (inner?.chartConfig?.option) msg.chartConfig = inner.chartConfig as ChartConfig;
             const cleanMsg = parsed.data?.message ?? parsed.message;
             if (typeof cleanMsg === 'string' && cleanMsg.trim()) displayMessage = cleanMsg;
           } catch {
