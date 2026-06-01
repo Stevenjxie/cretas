@@ -161,14 +161,13 @@ WHERE pr.factory_id = :factoryId
   AND wpt.factory_id = :factoryId            -- 显式租户隔离 (audit RBAC-3, belt-and-suspenders)
   AND pr.report_type = 'YIELD'
   AND pr.deleted_at IS NULL
-  AND (CAST(:startDate AS string) IS NULL OR pr.report_date >= :startDate)
-  AND (CAST(:endDate   AS string) IS NULL OR pr.report_date <= :endDate)
-  AND (CAST(:productTypeId AS string) IS NULL OR wpt.product_type_id = :productTypeId)
+  AND pr.report_date BETWEEN :startDate AND :endDate
+  AND (:productTypeId = '' OR wpt.product_type_id = :productTypeId)
 GROUP BY wp.id, wp.process_name, wp.unit, wp.output_unit
 ORDER BY MIN(wpt.process_order)
 ```
 
-> **CAST 类型 (audit SQL-1, HARD)**: 必须 `CAST(:param AS string)` — **不是** `AS date`/`AS varchar`。Hibernate 6 只认通用类型 `string`, PG 原生类型会 "could not determine data type of parameter" 部署失败(见 `.claude/rules/database-entity-sync.md`)。
+> **可空参数用 sentinel, 不用 CAST (audit SQL-1 修正)**: 本查询是 **native** (`nativeQuery=true`, 沿用本仓库 analytics 聚合惯例如 `getDailyProductionTrend`)。audit SQL-1 建议的 `CAST(:param AS string)` 是 **JPQL** 规则(`.claude/rules/database-entity-sync.md`), **不适用 native** —— PG 没有 `string` 类型, native 里 `CAST(... AS string)` 会直接报错。native PG 对 `(:param IS NULL OR ...)` 的 null bind 参数无法推断类型("could not determine data type of parameter")。**解法: service 层把 null 参数转 sentinel**(`startDate` null → `LocalDate.of(1900,1,1)`, `endDate` null → `LocalDate.of(2999,12,31)`, `productTypeId` null → `""`), 查询永远拿到非 null 有类型的参数, 彻底绕过类型推断问题。比 CAST 更稳。
 > **单位取 `wp.unit`/`wp.output_unit` (audit SQL-2)**: 工序标准单位, 不是 `MIN(pr.input_unit)`(报工记录单位可跨批不一致, MIN 取字典序最小会误导)。`GROUP BY` 须含这两列。Service 据 `wp.unit == wp.output_unit` 算 `unitComparable`; 不可比则 `conversionRate`/`wastageRate` 置 null。
 > **`wpt.factory_id = :factoryId` (audit RBAC-3)**: 即使 id 全局唯一, 显式租户过滤是本仓库 SQL 惯例(防御深度)。
 > 按 `wp.id` 分组(不是按 name 字符串)— 同名不同工序定义算两行, 更准。
@@ -177,7 +176,8 @@ ORDER BY MIN(wpt.process_order)
 ### Service
 
 `YieldAnalysisService.aggregateByProcess(factoryId, startDate, endDate, productTypeId)`:
-- 调 repository 拿聚合行(投影接口, 含 inputUnit/outputUnit)
+- **sentinel 转换 (audit SQL-1 修正)**: `startDate = startDate != null ? startDate : LocalDate.of(1900,1,1)`; `endDate = endDate != null ? endDate : LocalDate.of(2999,12,31)`; `productTypeId = productTypeId != null ? productTypeId : ""`。传给 native query 前置, 避免 PG null 参数类型推断失败。
+- 调 repository 拿聚合行(`List<Map<String,Object>>`, 含 inputUnit/outputUnit, 沿用 analytics native 投影惯例)
 - 每行算 `unitComparable = Objects.equals(inputUnit, outputUnit)`
 - `unitComparable && total_input>0` → `conversionRate = total_output/total_input*100`(scale 1, HALF_UP)、`wastageRate = max(0, (in-out)/in*100)`(scale 1); 否则 `conversionRate = wastageRate = null`(不可比工序不算率, 与单批 StepYieldDTO 一致)
 - `total_input==0`(理论上 YIELD 报工必有投入, 防御)→ rate 置 0
@@ -373,7 +373,7 @@ per HARD RULE `.claude/rules/worktree-and-main-only-deploy.md`:
 | Finding | 级别 | 问题 | 修订位置 |
 |---|---|---|---|
 | YIELD-1 | P0 | getYield 硬编码 standardGramsPerUnit=null → 跨单位 cumulative 显错误比率(3.19 而非 0.38) | **单元 1b**: 跨单位 cumulative 置 null 显 "—"; 正确折算配置列 out-of-scope(Phase A/B) |
-| SQL-1 | P1 | `CAST(:p AS date/varchar)` PG 部署失败 | SQL 改 `CAST(:p AS string)` |
+| SQL-1 | P1 | 可空参数 PG 类型推断失败 (audit 建议 `CAST AS string` 但那是 JPQL 规则, 本查询 native, `string` 非 PG 类型会报错) | **改用 service 层 sentinel 参数**(null→1900/2999/""), native query 用 `BETWEEN` + `(:pt='' OR ...)`, 永不传 null |
 | SQL-2 / SCHEMA-2 | P1 | `MIN(pr.input_unit)` 跨批单位歧义 | 改用 `wp.unit`/`wp.output_unit` 工序标准单位 |
 | TESTING-2 | P1 | 聚合端点缺 unitComparable, 与单批不一致 | ProcessYieldAggDTO 加 `unitComparable`; 不可比 → conversionRate=null |
 | RBAC-2 | P1 | `production_report` 非合法 module | 新 controller 用 `@RequireModule("production")` |
