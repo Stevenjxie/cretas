@@ -99,6 +99,19 @@ export interface MaterialInputRequest {
   inputUnit?: string;
 }
 
+// ============ YieldLimitsDTO (mirror backend dto/yield/YieldLimitsDTO.java) ============
+// GET /yield/limits?workProcessTaskId=&inputQuantity=
+export interface YieldLimitsDTO {
+  targetQuantity: number | null;      // inputQuantity × standardYieldMax; null when no base
+  standardYieldMax: number | null;    // WorkProcess.standardYieldMax (null if unconfigured)
+  unit: string | null;
+  alreadyReported: number | null;     // Σ outputQuantity already reported for this task
+  toleranceRate: number | null;       // e.g. 0.30 (30%)
+  maxAllowed: number | null;          // targetQuantity × (1 + toleranceRate); null when no base
+  remaining: number | null;           // maxAllowed − alreadyReported; null when no base
+  message: string;                    // human-readable summary
+}
+
 // ============ Map 响应结果类型 (后端返 Map<String,Object>, 见 YieldReportServiceImpl.java) ============
 // submitReport: 只 put reportId(always) + yieldRate(always, null if 量纲不可比) + alert(仅越界 put) — :95-106
 export interface YieldReportResult {
@@ -189,6 +202,20 @@ class YieldReportApi {
     const fid = requireFactoryId(factoryId);
     return apiClient.get<ApiResponse<WorkProcessTask[]>>(
       `/api/mobile/${fid}/production/batches/${batchId}/work-process-tasks`,
+    );
+  }
+
+  /** A4: GET /yield/limits — 投入量预检, 返回超收上限信息.
+   *  若 standardYieldMax 未配置, 返回 maxAllowed=null (不触发超收检查). */
+  async getYieldLimits(
+    batchId: number,
+    workProcessTaskId: number,
+    inputQuantity: number,
+    factoryId?: string,
+  ): Promise<ApiResponse<YieldLimitsDTO>> {
+    return apiClient.get<ApiResponse<YieldLimitsDTO>>(
+      `${this.getBase(batchId, factoryId)}/yield/limits`,
+      { params: { workProcessTaskId, inputQuantity } },
     );
   }
 }

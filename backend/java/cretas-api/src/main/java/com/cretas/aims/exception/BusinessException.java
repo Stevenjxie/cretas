@@ -10,6 +10,11 @@ package com.cretas.aims.exception;
 public class BusinessException extends RuntimeException {
     private Integer code;
     /**
+     * Semantic error code for frontend branching (e.g. "OVER_RECEIPT", "RULE_VIOLATION").
+     * When present, GlobalExceptionHandler propagates it to ApiResponse.errorCode field.
+     */
+    private String errorCode;
+    /**
      * UX: optional hint text telling the user what to do next.
      * Rendered as ElNotification with action button on frontend.
      * Example: "请先点'分配批次'再发货" / "请先处理或撤销已有的发票申请".
@@ -53,11 +58,17 @@ public class BusinessException extends RuntimeException {
         return code;
     }
 
+    public String getErrorCode() { return errorCode; }
     public String getActionHint() { return actionHint; }
     public String getSeverity() { return severity; }
     public String getHintTarget() { return hintTarget; }
 
     /** Fluent builder — chain after constructor. */
+    public BusinessException withCode(String errorCode) {
+        this.errorCode = errorCode;
+        return this;
+    }
+
     public BusinessException withHint(String actionHint) {
         this.actionHint = actionHint;
         return this;

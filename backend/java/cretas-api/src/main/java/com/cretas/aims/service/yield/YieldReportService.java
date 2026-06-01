@@ -2,8 +2,10 @@ package com.cretas.aims.service.yield;
 
 import com.cretas.aims.dto.yield.BatchYieldDTO;
 import com.cretas.aims.dto.yield.MaterialInputRequest;
+import com.cretas.aims.dto.yield.YieldLimitsDTO;
 import com.cretas.aims.dto.yield.YieldReportRequest;
 
+import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.Map;
 
@@ -17,6 +19,13 @@ public interface YieldReportService {
 
     /** 整批出成率 (派生). */
     BatchYieldDTO getYield(String factoryId, Long batchId);
+
+    /**
+     * 预检端点 — 防呆 Rule 1: 报工 dialog 打开时前端调此端点, 取得超收边界预填 input max + 显示提示文字.
+     *
+     * @param inputQuantity 操作员填写的本道投入量; null/0 时 targetQuantity/maxAllowed/remaining 均为 null.
+     */
+    YieldLimitsDTO getLimits(String factoryId, Long batchId, Long workProcessTaskId, BigDecimal inputQuantity);
 
     /**
      * 人工标记每日结清. triggerComplete=true 时(末道结清/整批完成)聚合末道产出回写批次并入成品库.
