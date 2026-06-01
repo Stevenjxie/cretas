@@ -64,6 +64,12 @@ public class WorkProcessTaskDTO {
     private String processName;
     private String processCategory;
 
+    /** 标准出成率下限 (张权 A7; 来自该工序 WorkProcess, join 透出; null=不校验). */
+    private BigDecimal standardYieldMin;
+
+    /** 标准出成率上限 (张权 A7; 支持 >1 如滚揉保水 1.35; null=不校验). */
+    private BigDecimal standardYieldMax;
+
     @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss")
     private LocalDateTime createdAt;
 
