@@ -115,9 +115,12 @@ INSERT INTO factory_warehouses (
     id, factory_id, code, name, type, is_active,
     created_at, updated_at
 )
+-- 2026-06-01 修 G2: code 必须用后端 canonical WH-LOG / WH-WKS (WarehouseCodes.java),
+-- 不是 WH_LOGISTICS / WH_WORKSHOP。后端 confirm-receive / FIFO 按 WH-LOG/WH-WKS 查双仓,
+-- 用错 code → 'Factory 缺少 warehouse seed [WH-LOG]' 500。真实工厂 (F001/F006) 都用这俩 code。
 VALUES
-    ('e2e-wh-logistics-00000000000001', 'F_E2E_TEST', 'WH_LOGISTICS', '物流仓', 'LOGISTICS', true, NOW(), NOW()),
-    ('e2e-wh-workshop-00000000000001',  'F_E2E_TEST', 'WH_WORKSHOP',  '鲜棉仓', 'WORKSHOP',  true, NOW(), NOW())
+    ('e2e-wh-logistics-00000000000001', 'F_E2E_TEST', 'WH-LOG', '物流仓', 'LOGISTICS', true, NOW(), NOW()),
+    ('e2e-wh-workshop-00000000000001',  'F_E2E_TEST', 'WH-WKS', '鲜棉仓', 'WORKSHOP',  true, NOW(), NOW())
 ON CONFLICT (factory_id, code) DO NOTHING;
 
 -- ─────────────────────────────────────────────────────────────────────────────

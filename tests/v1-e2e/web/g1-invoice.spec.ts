@@ -258,8 +258,18 @@ test.describe('G1 税率分组开票 @pr-gate', () => {
     if (await messageBoxBtn.count() > 0) {
       await messageBoxBtn.first().click({ timeout: 5_000 }).catch(() => {});
     }
-
-    // Close outer dialog
-    await dialog.locator('button:has-text("关闭"), button:has-text("取消")').first().click();
+    // 2026-06-01 修 G1: 等 message-box overlay 真正消失再关 dialog。原代码点完 messageBox
+    // 按钮就立刻点 dialog 的 关闭/取消, 但 overlay 淡出动画未完 → 按钮 'not stable' →
+    // locator.click 15s 超时。先等 overlay detach, 再用 el-dialog 右上角 X (比 footer
+    // 关闭/取消 更不易被遮), footer 按钮作 fallback。
+    await page.locator('.el-overlay-message-box').waitFor({ state: 'detached', timeout: 10_000 }).catch(() => {});
+    const closeIcon = dialog.locator('.el-dialog__headerbtn').first();
+    if (await closeIcon.count() > 0) {
+      await closeIcon.click({ timeout: 8_000 }).catch(async () => {
+        await dialog.locator('button:has-text("关闭"), button:has-text("取消")').first().click({ timeout: 8_000 }).catch(() => {});
+      });
+    } else {
+      await dialog.locator('button:has-text("关闭"), button:has-text("取消")').first().click({ timeout: 8_000 }).catch(() => {});
+    }
   });
 });
