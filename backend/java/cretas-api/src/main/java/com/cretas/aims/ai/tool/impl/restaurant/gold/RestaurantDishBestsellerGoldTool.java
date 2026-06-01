@@ -100,11 +100,26 @@ public class RestaurantDishBestsellerGoldTool extends GoldBackedRestaurantTool {
             if (i < formatted.size() - 1) sb.append("\n");
         }
 
+        // Build chartConfig: horizontal bar — dish name vs sales amount in 万元
+        List<String> chartNames = new ArrayList<>();
+        List<Double> chartVals = new ArrayList<>();
+        for (Map<String, Object> entry : formatted) {
+            Object name = entry.get("菜品");
+            Object rev = entry.get("销售额");
+            double revD = rev instanceof Number ? ((Number) rev).doubleValue() : 0.0;
+            chartNames.add(name != null ? name.toString() : "");
+            chartVals.add(toWan(revD));
+        }
+
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("统计周期", period);
         result.put("畅销TOP5", formatted);
         result.put("dataAvailable", true);
         result.put("message", sb.toString());
+        if (!chartNames.isEmpty()) {
+            result.put("chartConfig", barChartConfig(
+                    "畅销菜品 Top5 (销售额/万元)", chartNames, chartVals, "万元"));
+        }
         return result;
     }
 

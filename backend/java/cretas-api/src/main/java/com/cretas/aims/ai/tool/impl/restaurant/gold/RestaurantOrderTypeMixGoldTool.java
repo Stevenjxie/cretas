@@ -107,12 +107,27 @@ public class RestaurantOrderTypeMixGoldTool extends GoldBackedRestaurantTool {
             if (i < breakdown.size() - 1) sb.append("\n");
         }
 
+        // Build chartConfig: pie — order type vs revenue
+        List<String> pieNames = new ArrayList<>();
+        List<Double> pieVals = new ArrayList<>();
+        for (Map<String, Object> entry : breakdown) {
+            Object type = entry.get("类型");
+            Object rev = entry.get("营收");
+            double revD = rev instanceof Number ? ((Number) rev).doubleValue() : 0.0;
+            pieNames.add(type != null ? type.toString() : "");
+            pieVals.add(revD);
+        }
+
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("统计周期", period);
         result.put("总营收", goldResult.get("total_revenue"));
         result.put("堂食外卖占比", breakdown);
         result.put("dataAvailable", true);
         result.put("message", sb.toString());
+        if (!pieNames.isEmpty()) {
+            result.put("chartConfig", pieChartConfig(
+                    "堂食 vs 外卖 (营收占比)", pieNames, pieVals));
+        }
         return result;
     }
 

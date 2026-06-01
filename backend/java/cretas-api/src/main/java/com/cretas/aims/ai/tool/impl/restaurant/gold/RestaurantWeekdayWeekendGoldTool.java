@@ -5,6 +5,7 @@ import org.springframework.stereotype.Component;
 
 import java.time.DayOfWeek;
 import java.time.LocalDate;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -130,12 +131,22 @@ public class RestaurantWeekdayWeekendGoldTool extends GoldBackedRestaurantTool {
                 + "周中 日均" + fmtAmt(avgWeekday) + "（" + nWeekday + "天）\n"
                 + "结论：" + conclusion;
 
+        // Build chartConfig: horizontal bar — 周末 vs 周中 daily average revenue in 万元
+        List<String> chartCats = new ArrayList<>();
+        chartCats.add("周末");
+        chartCats.add("周中");
+        List<Double> chartVals = new ArrayList<>();
+        chartVals.add(toWan(avgWeekend));
+        chartVals.add(toWan(avgWeekday));
+
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("周末", weekendStats);
         result.put("周中", weekdayStats);
         result.put("结论", conclusion);
         result.put("dataAvailable", true);
         result.put("message", msg);
+        result.put("chartConfig", barChartConfig(
+                "周末 vs 周中 日均营收 (万元)", chartCats, chartVals, "万元"));
         return result;
     }
 

@@ -123,12 +123,27 @@ public class RestaurantPeakMonthGoldTool extends GoldBackedRestaurantTool {
             }
         }
 
+        // Build chartConfig: horizontal bar — month vs revenue in 万元 (same order as message)
+        List<String> chartMonths = new ArrayList<>();
+        List<Double> chartVals = new ArrayList<>();
+        for (Map<String, Object> m : byMonth) {
+            Object mo = m.get("月份");
+            Object rev = m.get("营收");
+            double revD = rev instanceof Number ? ((Number) rev).doubleValue() : 0.0;
+            chartMonths.add(mo != null ? mo.toString() : "");
+            chartVals.add(toWan(revD));
+        }
+
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("按月营收", byMonth);
         result.put("峰值月份", peakMonth);
         result.put("峰值营收", peakRevenue);
         result.put("dataAvailable", true);
         result.put("message", sb.toString());
+        if (!chartMonths.isEmpty()) {
+            result.put("chartConfig", barChartConfig(
+                    "各月营收 (万元)", chartMonths, chartVals, "万元"));
+        }
         return result;
     }
 
