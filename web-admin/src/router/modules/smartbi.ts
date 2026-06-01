@@ -31,12 +31,6 @@ const smartBIRoutes: RouteRecordRaw[] = [
         meta: { requiresAuth: true, title: '销售分析', icon: 'TrendCharts', module: 'analytics' },
       },
       {
-        path: 'query',
-        name: 'SmartBIQuery',
-        component: () => import('@/views/smart-bi/AIQuery.vue'),
-        meta: { requiresAuth: true, title: 'AI问答', icon: 'ChatDotRound', module: 'analytics' },
-      },
-      {
         path: 'query-templates',
         name: 'SmartBIQueryTemplates',
         component: () => import('@/views/smart-bi/QueryTemplateManager.vue'),
