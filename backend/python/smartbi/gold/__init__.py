@@ -36,6 +36,14 @@ from smartbi.gold.queries import (
     staff_ranking,
     top_products,
 )
+from smartbi.gold.review_queries import (
+    review_city_ranking,
+    review_complaints,
+    review_dish_issues,
+    review_store_ranking,
+    review_summary,
+    review_vip,
+)
 from smartbi.gold.shadow_compare import DiffReport, FieldDiff, diff_results
 from smartbi.gold.triggers import (
     ApiAppendIncrementalTrigger,
@@ -65,6 +73,12 @@ __all__ = [
     "ingest_and_materialize",
     "kpi_summary",
     "order_type_mix",
+    "review_city_ranking",
+    "review_complaints",
+    "review_dish_issues",
+    "review_store_ranking",
+    "review_summary",
+    "review_vip",
     "staff_ranking",
     "top_products",
     "run_silver_dual_write",

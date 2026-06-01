@@ -608,4 +608,121 @@ public class GoldFinanceClient {
             return parsed;
         }
     }
+
+    // =========================================================================
+    // Review-analytics fetches (大众点评 评价下载 data)
+    //
+    // Reviews carry no money fields and no date dimension (aggregated over the
+    // full review corpus), so these GET endpoints take only factory_id plus a
+    // few shaping params. Shared via getReviewJson to avoid 6× okhttp
+    // boilerplate. X-User-Role is still forwarded for consistency (no-op for
+    // money-strip since reviews have no monetary keys).
+    // =========================================================================
+
+    private static void requireFactory(String factoryId) {
+        if (factoryId == null || factoryId.isEmpty()) {
+            throw new IllegalArgumentException("factoryId required");
+        }
+    }
+
+    /**
+     * Shared GET → parsed-JSON helper for the review endpoints.
+     *
+     * @param path        endpoint path under config.getUrl()
+     * @param queryParams query params; null values are skipped. Must include
+     *                    {@code factory_id} (used for the X-Factory-Id header)
+     * @return parsed JSON as a Map; never null
+     * @throws IOException on transport / non-2xx / parse failure
+     */
+    private Map<String, Object> getReviewJson(String path, Map<String, String> queryParams)
+            throws IOException {
+        HttpUrl.Builder ub = HttpUrl.parse(config.getUrl() + path).newBuilder();
+        for (Map.Entry<String, String> e : queryParams.entrySet()) {
+            if (e.getValue() != null) {
+                ub.addQueryParameter(e.getKey(), e.getValue());
+            }
+        }
+        Request.Builder reqBuilder = new Request.Builder().url(ub.build()).get();
+        if (!internalSecret.isEmpty()) {
+            reqBuilder.addHeader("X-Internal-Secret", internalSecret);
+            reqBuilder.addHeader("X-Factory-Id", queryParams.getOrDefault("factory_id", ""));
+            String userRole = currentUserRole();
+            if (userRole != null && !userRole.isEmpty()) {
+                reqBuilder.addHeader("X-User-Role", userRole);
+            }
+        }
+        long t0 = System.currentTimeMillis();
+        try (Response resp = http.newCall(reqBuilder.build()).execute()) {
+            long elapsed = System.currentTimeMillis() - t0;
+            if (!resp.isSuccessful()) {
+                String body = resp.body() != null ? resp.body().string() : "";
+                throw new IOException(
+                        "Gold " + path + " HTTP " + resp.code() + " in " + elapsed + "ms: " + body);
+            }
+            String body = resp.body() != null ? resp.body().string() : "{}";
+            @SuppressWarnings("unchecked")
+            Map<String, Object> parsed = objectMapper.readValue(body, Map.class);
+            log.debug("Gold {} factory={} in {}ms", path, queryParams.get("factory_id"), elapsed);
+            return parsed;
+        }
+    }
+
+    /** Overall review KPIs (avg 星级/服务/环境/口味, totals, VIP, store/city counts). */
+    public Map<String, Object> fetchReviewSummary(String factoryId) throws IOException {
+        requireFactory(factoryId);
+        return getReviewJson("/api/smartbi/gold/review-summary",
+                Map.of("factory_id", factoryId));
+    }
+
+    /**
+     * Per-store review aggregates sorted by {@code dim}.
+     *
+     * @param dim        one of star|service|env|low_star
+     * @param order      asc|desc
+     * @param topN       max stores (1..50)
+     * @param minReviews minimum review count per store to be included
+     */
+    public Map<String, Object> fetchReviewStoreRanking(
+            String factoryId, String dim, String order, int topN, int minReviews)
+            throws IOException {
+        requireFactory(factoryId);
+        return getReviewJson("/api/smartbi/gold/review-store-ranking", Map.of(
+                "factory_id", factoryId,
+                "dim", dim,
+                "order", order,
+                "top_n", String.valueOf(topN),
+                "min_reviews", String.valueOf(minReviews)));
+    }
+
+    /** Per-city review averages (lowest-rated first). */
+    public Map<String, Object> fetchReviewCityRanking(String factoryId) throws IOException {
+        requireFactory(factoryId);
+        return getReviewJson("/api/smartbi/gold/review-city-ranking",
+                Map.of("factory_id", factoryId));
+    }
+
+    /** VIP vs 非VIP review comparison. */
+    public Map<String, Object> fetchReviewVip(String factoryId) throws IOException {
+        requireFactory(factoryId);
+        return getReviewJson("/api/smartbi/gold/review-vip",
+                Map.of("factory_id", factoryId));
+    }
+
+    /** Merchant review-dispute categories + the real 低星(<=3星) review count. */
+    public Map<String, Object> fetchReviewComplaints(String factoryId, int topN) throws IOException {
+        requireFactory(factoryId);
+        return getReviewJson("/api/smartbi/gold/review-complaints", Map.of(
+                "factory_id", factoryId,
+                "top_n", String.valueOf(topN)));
+    }
+
+    /** High-frequency 口味/品质标签 in low-star reviews. */
+    public Map<String, Object> fetchReviewDishIssues(
+            String factoryId, int topN, int starThreshold) throws IOException {
+        requireFactory(factoryId);
+        return getReviewJson("/api/smartbi/gold/review-dish-issues", Map.of(
+                "factory_id", factoryId,
+                "top_n", String.valueOf(topN),
+                "star_threshold", String.valueOf(starThreshold)));
+    }
 }
