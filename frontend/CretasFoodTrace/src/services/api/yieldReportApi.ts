@@ -1,0 +1,196 @@
+import { apiClient } from './apiClient';
+import { requireFactoryId } from '../../utils/factoryIdHelper';
+
+// ============ 后端统一响应信封 (拦截器已解包 axios 一层, 见 apiClient.ts:51-55) ============
+export interface ApiResponse<T> {
+  success: boolean;
+  code: number;
+  message: string;
+  data: T;
+}
+
+// ============ 工序任务状态 (mirror WorkProcessTask.Status) ============
+export type WorkProcessTaskStatus =
+  | 'PENDING'
+  | 'IN_PROGRESS'
+  | 'COMPLETED'
+  | 'SKIPPED'
+  | 'CANCELLED';
+
+// ============ WorkProcessTaskDTO (mirror backend dto/WorkProcessTaskDTO.java:23-71 + Task 0 两字段) ============
+// 注: 后端 types/workProcess.ts 无此 interface (只有 WorkProcess/ProductWorkProcess), 故在此定义.
+export interface WorkProcessTask {
+  id: number;                       // = workProcessTaskId (报工 req 用这个)
+  factoryId: string;
+  productionBatchId: number;        // 注意: 不是 batchId
+  productWorkProcessId: number;
+  workProcessId: string;            // String (非 number)
+  productTypeId: string;
+  processOrder: number;             // 第几道 (升序)
+  status: WorkProcessTaskStatus;
+  plannedQuantity: number | null;   // BigDecimal → number; 计划数量 (Rule 1 max + Rule 2)
+  plannedUnit: string | null;       // 计划单位 (非 unit)
+  estimatedMinutes?: number | null;
+  actualQuantity?: number | null;   // 累计产出 (Phase A 双写)
+  assignedTo?: number | null;
+  completedBy?: number | null;
+  notes?: string | null;
+  processName?: string | null;      // 工序名 (焯水/卤制..., join 提供, 选填) — 卡片头用
+  processCategory?: string | null;
+  standardYieldMin?: number | null; // Task 0 透出: A7 标准出成率下限 (null=未配)
+  standardYieldMax?: number | null; // Task 0 透出: A7 标准出成率上限 (null=未配)
+  plannedStartAt?: string | null;
+  plannedEndAt?: string | null;
+  actualStartAt?: string | null;
+  actualEndAt?: string | null;
+  actualMinutes?: number | null;
+  completedAt?: string | null;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+}
+
+// ============ BatchYieldDTO (mirror backend dto/yield/BatchYieldDTO.java:16-28) ============
+export interface StepYieldDTO {
+  workProcessTaskId: number;
+  processOrder: number;
+  processName: string | null;
+  totalInput: number | null;        // Σ input (BigDecimal → number)
+  totalOutput: number | null;       // Σ output — 下道预填用这个
+  inputUnit: string | null;
+  outputUnit: string | null;
+  yieldRate: number | null;         // Σoutput/Σinput; 量纲不可比时 null
+  unitComparable: boolean | null;   // false → 只展示量
+  carryover: number | null;         // 上道产出 − 本道投入 (>0 结转)
+  yieldAlert: 'BELOW_MIN' | 'ABOVE_MAX' | null;  // A7 越界软告警
+}
+
+export interface BatchYieldDTO {
+  batchId: number;
+  batchNumber: string;
+  firstStepInput: number | null;    // 998
+  lastStepOutput: number | null;    // 382.08 或 3184 盒
+  firstStepInputUnit: string | null;
+  lastStepOutputUnit: string | null;
+  cumulativeYieldRate: number | null;  // 0.3828
+  steps: StepYieldDTO[];
+  complete: boolean | null;         // 每道都有 input+output 才 true
+}
+
+// ============ 请求 DTO ============
+// mirror backend dto/yield/YieldReportRequest.java:11-23
+export interface YieldReportRequest {
+  workProcessTaskId: number;
+  inputQuantity: number;            // 本道投入 (前端预填上道产出, 可改)
+  inputUnit?: string;
+  outputQuantity: number;           // 本道产出 (必填)
+  outputUnit?: string;
+  workMinutes?: number;             // 选填工时 (后端 Integer)
+  forceSubmit?: boolean;            // A4 超收软告警后强制提交
+  sourceBatchRefs?: Array<Record<string, unknown>>;  // A3 跨批来源 (Phase D 默认不传)
+  reporterName?: string;
+  targetWorkerId?: number;          // 代报工 (Phase D operator 自报, 默认不传)
+}
+
+// mirror backend dto/yield/MaterialInputRequest.java:9-14
+export interface MaterialInputRequest {
+  workProcessTaskId: number;
+  warehouseOutQuantity: number;     // 出库量 998
+  feedInQuantity: number;           // 投料量 935.5
+  inputUnit?: string;
+}
+
+// ============ Map 响应结果类型 (后端返 Map<String,Object>, 见 YieldReportServiceImpl.java) ============
+// submitReport: 只 put reportId(always) + yieldRate(always, null if 量纲不可比) + alert(仅越界 put) — :95-106
+export interface YieldReportResult {
+  reportId: number;
+  yieldRate: number | null;
+  alert?: 'BELOW_MIN' | 'ABOVE_MAX';   // null 时 key 不出现
+}
+
+// recordMaterialInput: 只 put reportId — :160-162
+export interface MaterialInputResult {
+  reportId: number;
+}
+
+// settleDay: settledCount + batchYield(BatchYieldDTO) + completed — :182-196
+export interface SettleDayResult {
+  settledCount: number;
+  batchYield: BatchYieldDTO;
+  completed: boolean;
+}
+
+// ============ API Client ============
+class YieldReportApi {
+  private getBase(batchId: number, factoryId?: string): string {
+    const fid = requireFactoryId(factoryId);
+    return `/api/mobile/${fid}/production/batches/${batchId}`;
+  }
+
+  /** 1. POST /reports — 逐道报工 (投入+产出双量). workerId 后端从 JWT @RequestAttribute("userId") 取, body 不传. */
+  async submitReport(
+    batchId: number,
+    req: YieldReportRequest,
+    factoryId?: string,
+  ): Promise<ApiResponse<YieldReportResult>> {
+    return apiClient.post<ApiResponse<YieldReportResult>>(
+      `${this.getBase(batchId, factoryId)}/reports`,
+      req,
+    );
+  }
+
+  /** 2. PUT /material-input — 首道领料双量 (出库量+投料量). Phase D 暂不在 UI 调用 (spec §4). */
+  async recordMaterialInput(
+    batchId: number,
+    req: MaterialInputRequest,
+    factoryId?: string,
+  ): Promise<ApiResponse<MaterialInputResult>> {
+    return apiClient.put<ApiResponse<MaterialInputResult>>(
+      `${this.getBase(batchId, factoryId)}/material-input`,
+      req,
+    );
+  }
+
+  /** 3. GET /yield — 整批+单工序出成率 (派生, 下道预填用 steps[i-1].totalOutput). */
+  async getYield(batchId: number, factoryId?: string): Promise<ApiResponse<BatchYieldDTO>> {
+    return apiClient.get<ApiResponse<BatchYieldDTO>>(
+      `${this.getBase(batchId, factoryId)}/yield`,
+    );
+  }
+
+  /** 4. POST /settle-day?date=&triggerComplete= — 每日结清. */
+  async settleDay(
+    batchId: number,
+    opts: { date?: string; triggerComplete?: boolean } = {},
+    factoryId?: string,
+  ): Promise<ApiResponse<SettleDayResult>> {
+    const params = new URLSearchParams();
+    if (opts.date) params.append('date', opts.date);
+    if (opts.triggerComplete != null) {
+      params.append('triggerComplete', String(opts.triggerComplete));
+    }
+    const qs = params.toString();
+    return apiClient.post<ApiResponse<SettleDayResult>>(
+      `${this.getBase(batchId, factoryId)}/settle-day${qs ? `?${qs}` : ''}`,
+    );
+  }
+
+  /** 5. GET /reports — 报工流水汇总 (当前后端复用 getYield 的 steps 聚合视图). */
+  async listReports(batchId: number, factoryId?: string): Promise<ApiResponse<BatchYieldDTO>> {
+    return apiClient.get<ApiResponse<BatchYieldDTO>>(
+      `${this.getBase(batchId, factoryId)}/reports`,
+    );
+  }
+
+  /** 工序任务列表 (该批次, 按 processOrder 升序). 端点见 WorkProcessTaskController.java:93-99. */
+  async listWorkProcessTasks(
+    batchId: number,
+    factoryId?: string,
+  ): Promise<ApiResponse<WorkProcessTask[]>> {
+    const fid = requireFactoryId(factoryId);
+    return apiClient.get<ApiResponse<WorkProcessTask[]>>(
+      `/api/mobile/${fid}/production/batches/${batchId}/work-process-tasks`,
+    );
+  }
+}
+
+export const yieldReportApi = new YieldReportApi();
