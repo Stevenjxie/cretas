@@ -59,3 +59,29 @@ def consult_promoted(column_name: Optional[str]) -> Optional[str]:
     if not column_name:
         return None
     return _PROMOTED.get(column_name.strip())
+
+
+async def capture_candidate(
+    pool, column_name: str, standard_field: str,
+    factory_id: Optional[str], method: str, confidence: float,
+) -> None:
+    """非规则映射 (embedding/llm) 解决一个列时记候选。best-effort:
+    任何失败只 warn, 绝不让上传/映射因此报错 (fail-open)。"""
+    if not (column_name and standard_field and method in ("embedding", "llm")):
+        return
+    try:
+        async with pool.acquire() as conn:
+            await conn.execute(
+                """INSERT INTO smart_bi_field_mapping_candidates
+                       (column_name, standard_field, factory_id, method, confidence)
+                   VALUES ($1, $2, $3, $4, $5)
+                   ON CONFLICT (column_name, standard_field, factory_id) DO UPDATE
+                     SET occurrences = smart_bi_field_mapping_candidates.occurrences + 1,
+                         last_seen = now(),
+                         confidence = GREATEST(smart_bi_field_mapping_candidates.confidence,
+                                               EXCLUDED.confidence)""",
+                column_name.strip(), standard_field.strip(),
+                factory_id, method, round(float(confidence), 3),
+            )
+    except Exception as e:
+        logger.warning("capture_candidate failed (ignored): %s", e)
