@@ -92,6 +92,7 @@ class YieldCalculationServiceImplTest {
         );
         BatchYieldDTO dto = svc.calculateBatchYield(reports, null);
         assertThat(dto.getCumulativeYieldRate()).isNull();
+        assertThat(dto.getLastStepOutput()).isEqualByComparingTo("3184");
     }
 
     @Test

@@ -85,7 +85,9 @@ public class YieldCalculationServiceImpl implements YieldCalculationService {
         BigDecimal lastOutput = last.getTotalOutput();
 
         // 末道折算到首道单位 (盒->kg): output_盒 * gramsPerUnit / 1000
-        boolean sameUnit = first.getInputUnit() != null && first.getInputUnit().equals(last.getOutputUnit());
+        boolean sameUnit = first.getInputUnit() != null
+                && last.getOutputUnit() != null
+                && first.getInputUnit().equals(last.getOutputUnit());
         // audit YIELD-1: 跨单位且无折算系数时不可比, cumulative 留 null (不输出 lastOutput/firstInput 的混单位错误值)
         boolean canComputeCumulative = sameUnit || standardGramsPerUnit != null;
         BigDecimal cumulative = null;
