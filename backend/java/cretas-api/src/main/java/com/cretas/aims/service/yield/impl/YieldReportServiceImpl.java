@@ -297,7 +297,7 @@ public class YieldReportServiceImpl implements YieldReportService {
                 .materialBatchRefs(toMaterialBatchRefMaps(req.getMaterialBatchRefs()))  // A2b: 链接领料批次列表
                 .status(ProductionReport.Status.SUBMITTED)
                 .build();
-        reportRepo.save(r);
+        ProductionReport saved = reportRepo.save(r);
 
         // A2b: 保存后对每个关联批次独立检查自动结清
         if (req.getMaterialBatchRefs() != null) {
@@ -309,7 +309,7 @@ public class YieldReportServiceImpl implements YieldReportService {
         }
 
         Map<String, Object> out = new HashMap<>();
-        out.put("reportId", r.getId());
+        out.put("reportId", saved.getId());
         return out;
     }
 
@@ -338,8 +338,8 @@ public class YieldReportServiceImpl implements YieldReportService {
         Optional<MaterialBatch> batchOpt = materialBatchRepository.findById(String.valueOf(materialBatchId));
         if (batchOpt.isEmpty()) return;
         MaterialBatch mb = batchOpt.get();
-        if (mb.getStatus() != MaterialBatchStatus.USED_UP
-                && mb.getRemainingQuantity().compareTo(BigDecimal.ZERO) > 0) {
+        // "原料用完" = status 是 USED_UP (权威信号). 排除 EXPIRED/DEFECTIVE/SCRAPPED 等 remaining=0 但非正常耗尽的状态.
+        if (mb.getStatus() != MaterialBatchStatus.USED_UP) {
             return;  // 触发批次未用完，不触发
         }
         // 2. 找到 material_batch_refs 包含此 materialBatchId 的所有未结清 YIELD 报工
@@ -373,12 +373,13 @@ public class YieldReportServiceImpl implements YieldReportService {
         for (Map<String, Object> ref : refs) {
             Object mbIdObj = ref.get("materialBatchId");
             if (mbIdObj == null) continue;
-            Long mbId = Long.valueOf(mbIdObj.toString());
+            // jsonb 反序列化可能产生 Integer/Long/BigDecimal; 统一走 Number 路径避免 NumberFormatException.
+            Long mbId = ((Number) mbIdObj).longValue();
             Optional<MaterialBatch> mb = materialBatchRepository.findById(String.valueOf(mbId));
             if (mb.isEmpty()) continue;  // 找不到批次视为忽略
-            if (mb.get().getStatus() != MaterialBatchStatus.USED_UP
-                    && mb.get().getRemainingQuantity().compareTo(BigDecimal.ZERO) > 0) {
-                return false;  // 至少一个未用完 → 不结清
+            // 仅 USED_UP 视为"原料用完". EXPIRED/DEFECTIVE 等状态即使 remaining=0 也不触发结清.
+            if (mb.get().getStatus() != MaterialBatchStatus.USED_UP) {
+                return false;  // 至少一个非 USED_UP → 不结清
             }
         }
         return true;

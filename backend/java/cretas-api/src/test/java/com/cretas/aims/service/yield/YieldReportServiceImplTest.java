@@ -33,7 +33,6 @@ import java.util.Optional;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
@@ -697,5 +696,35 @@ class YieldReportServiceImplTest {
         // No saveAll for settling, no materialBatchRepo calls
         verify(reportRepo, never()).saveAll(any());
         verify(materialBatchRepo, never()).findById(anyString());
+    }
+
+    @Test
+    void autoSettle_batchExpiredNotUsedUp_doesNotSettle() {
+        // Fix 1 regression: EXPIRED batch with remaining=0 must NOT trigger auto-settle.
+        // "原料用完自动结清" fires ONLY on status==USED_UP (正常耗尽), not on EXPIRED/DEFECTIVE/SCRAPPED.
+        setupMaterialInputTask();
+        when(reportRepo.save(any(ProductionReport.class))).thenAnswer(i -> {
+            ProductionReport r = i.getArgument(0); r.setId(205L); return r;
+        });
+
+        // batch 789 has status EXPIRED and remaining=0 (e.g. expired and fully consumed)
+        MaterialBatch mb = new MaterialBatch();
+        mb.setId("789"); mb.setStatus(MaterialBatchStatus.EXPIRED);
+        mb.setReceiptQuantity(new BigDecimal("100")); mb.setUsedQuantity(new BigDecimal("100")); // remaining=0
+        when(materialBatchRepo.findById("789")).thenReturn(Optional.of(mb));
+
+        MaterialInputRequest req = new MaterialInputRequest();
+        req.setWorkProcessTaskId(30L);
+        req.setWarehouseOutQuantity(new BigDecimal("100"));
+        req.setFeedInQuantity(new BigDecimal("100"));
+        req.setInputUnit("kg");
+        req.setMaterialBatchRefs(List.of(
+                new MaterialBatchRef(789L, new BigDecimal("100"), "kg")
+        ));
+
+        svc.recordMaterialInput("F006", 1L, 5L, req);
+
+        // checkAndAutoSettle sees status != USED_UP → returns immediately, saveAll never called
+        verify(reportRepo, never()).saveAll(any());
     }
 }
