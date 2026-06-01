@@ -1241,7 +1241,7 @@ const businessRoutes: RouteRecordRaw[] = [
       {
         path: 'analytics',
         name: 'Analytics',
-        redirect: '/analytics/overview',
+        redirect: '/smart-bi/dashboard',   // IA 合并: 旧经营报表顶级入口落到经营驾驶舱 (P2)
         meta: { requiresAuth: true, title: '数据与分析', icon: 'DataAnalysis', module: 'analytics' },
         children: [
           {
