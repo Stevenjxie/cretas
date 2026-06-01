@@ -225,24 +225,26 @@ export const menuConfig: MenuItem[] = [
     ]
   },
   {
+    // UX 2026-06-02 IA v2: 餐饮组重组为 3 层 (深度分析/日常录入/数据与系统)。
+    // 运营总览移除 (Excel 浏览器病症); 经营驾驶舱复用「数据与分析」组 /smart-bi/dashboard
+    // (业态自适应, 不重复造); 菜品四象限+毛利合并为 菜品分析双tab; 点评改名平台口碑。
+    // spec: 2026-06-01-restaurant-web-admin-ia-redesign-design.md v2。
     path: '/restaurant', title: '餐饮运营', icon: 'KnifeFork', module: 'restaurant',
-    // Restaurant-only group: hide for pure FACTORY tenants (manufacturing)
     hideForFactoryTypes: ['FACTORY'],
     children: [
-      { path: '/restaurant/analytics', title: '运营总览', icon: '', module: 'restaurant', groupLabel: '运营分析' },
-      { path: '/restaurant/analytics/menu', title: '菜品四象限', icon: '', module: 'restaurant' },
+      // -- 深度分析 (Gold 读层) --
+      { path: '/restaurant/analytics/dishes', title: '菜品分析', icon: '', module: 'restaurant', groupLabel: '深度分析' },
       { path: '/restaurant/analytics/stores', title: '门店对比', icon: '', module: 'restaurant' },
-      { path: '/restaurant/analytics/dianping', title: '经营与平台分析', icon: '', module: 'restaurant' },
-      { path: '/restaurant/analytics/gross-margin', title: '菜品毛利分析', icon: '', module: 'restaurant' },
-      { path: '/restaurant/requisitions', title: '领料管理', icon: '', module: 'restaurant', groupLabel: '日常管理' },
+      { path: '/restaurant/analytics/platform', title: '平台口碑', icon: '', module: 'restaurant' },
+      // -- 日常录入 (写侧) — 配方置顶 (喂养分析层成本) --
+      { path: '/restaurant/recipes', title: '配方管理', icon: '', module: 'restaurant', groupLabel: '日常录入' },
+      { path: '/restaurant/requisitions', title: '领料管理', icon: '', module: 'restaurant' },
       { path: '/restaurant/wastage', title: '损耗管理', icon: '', module: 'restaurant' },
-      { path: '/restaurant/recipes', title: '配方管理', icon: '', module: 'restaurant' },
       { path: '/restaurant/stocktaking', title: '盘点管理', icon: '', module: 'restaurant' },
-      // 餐饮 Phase A-1 Task 1.5: ETL admin page (admin-only)
+      // -- 数据与系统 (admin) --
+      { path: '/restaurant/data-completeness', title: '数据完整度', icon: '', module: 'restaurant', groupLabel: '数据与系统' },
       { path: '/restaurant/admin/etl-status', title: 'ETL 状态', icon: '', module: 'restaurant',
-        roles: ['factory_super_admin', 'platform_admin', 'permission_admin'] },
-      // 餐饮 Phase A-2 Task 2.2: data completeness page
-      { path: '/restaurant/data-completeness', title: '数据完整度', icon: '', module: 'restaurant' }
+        roles: ['factory_super_admin', 'platform_admin', 'permission_admin'] }
     ]
   },
   {

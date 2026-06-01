@@ -110,3 +110,52 @@ describe('menuConfig — 业态门控方向 (Task 2, M4)', () => {
     expect(child('/smart-bi/calibration').roles).toContain('platform_admin');
   });
 });
+
+describe('menuConfig — 餐饮运营组 3 层重组 (Task 1)', () => {
+  const group = () => menuConfig.find((m) => m.path === '/restaurant')!;
+  const paths = () => group().children!.map((c) => c.path);
+
+  it('餐饮组仍存在且仅 RESTAURANT 可见', () => {
+    const g = group();
+    expect(g).toBeDefined();
+    expect(g.hideForFactoryTypes).toEqual(['FACTORY']);
+  });
+
+  it('3 个 groupLabel 段: 深度分析 / 日常录入 / 数据与系统', () => {
+    const labels = group().children!.filter((c) => c.groupLabel).map((c) => c.groupLabel);
+    expect(labels).toEqual(['深度分析', '日常录入', '数据与系统']);
+  });
+
+  it('运营总览菜单项已移除 (病症: Excel 浏览器, 驾驶舱在数据与分析组)', () => {
+    expect(paths()).not.toContain('/restaurant/analytics');
+  });
+
+  it('菜品四象限+毛利合并为单一 菜品分析 (无独立菜品两项)', () => {
+    const p = paths();
+    expect(p).toContain('/restaurant/analytics/dishes');
+    expect(p).not.toContain('/restaurant/analytics/menu');
+    expect(p).not.toContain('/restaurant/analytics/gross-margin');
+  });
+
+  it('点评改名平台口碑 → /analytics/platform (无旧 dianping)', () => {
+    const p = paths();
+    expect(p).toContain('/restaurant/analytics/platform');
+    expect(p).not.toContain('/restaurant/analytics/dianping');
+  });
+
+  it('深度分析段含 菜品分析/门店对比/平台口碑; 日常录入段含 配方/领料/损耗/盘点; 数据与系统段含 数据完整度/ETL', () => {
+    const p = paths();
+    for (const x of [
+      '/restaurant/analytics/dishes', '/restaurant/analytics/stores', '/restaurant/analytics/platform',
+      '/restaurant/recipes', '/restaurant/requisitions', '/restaurant/wastage', '/restaurant/stocktaking',
+      '/restaurant/data-completeness', '/restaurant/admin/etl-status',
+    ]) {
+      expect(p, `缺餐饮项 ${x}`).toContain(x);
+    }
+  });
+
+  it('admin 段 (ETL状态) 保留 roles 门控', () => {
+    const etl = group().children!.find((c) => c.path === '/restaurant/admin/etl-status')!;
+    expect(etl.roles).toContain('factory_super_admin');
+  });
+});
