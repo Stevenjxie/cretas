@@ -161,6 +161,7 @@ async def top_products(
              GROUP BY p.product_id, p.name,
                       fp.confidence, fp.source_type,
                       fp.source_upload_id, fp.field_name
+            HAVING SUM(a.revenue) > 0
              ORDER BY SUM(a.revenue) {direction}
              LIMIT $4
             """,
