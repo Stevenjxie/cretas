@@ -390,36 +390,17 @@ _VL_CHAIN: List[Tuple[str, str]] = _dedup_chain(
 SLOT_MODELS: Dict[SLOT, List[Tuple[str, str]]] = {
     # CHAT — high-freq interactive → proven aliyun fast head (latency), tencent
     # fast models 2nd, then full free tail.
-    SLOT.CHAT: _dedup_chain([
-        ("aliyun_c", "qwen-flash-2025-07-28"),
-        ("tencent", "qwen3.5-flash"), ("tencent", "deepseek-v4-flash"),
-        ("aliyun_b", "qwen-flash"), ("aliyun_a", "qwen3.6-flash"),
-        ("aliyun_c", "qwen-turbo"),
-    ] + _TEXT_TAIL),
+    SLOT.CHAT: _dedup_chain([("aliyun_a", "qwen3.6-flash")] + _TEXT_TAIL),       # fast
     # INSIGHTS — quality slot (offline materialization Fix2 + upload analysis) →
     # tencent deepseek-v4-pro flagship head (best free reasoner), aliyun max 2nd.
-    SLOT.INSIGHTS: _dedup_chain([
-        ("tencent", "deepseek-v4-pro"),
-        ("aliyun_c", "qwen3-max"), ("aliyun_b", "qwen3-max"),
-        ("aliyun_a", "qwen3.7-max-2026-05-17"),
-    ] + _TEXT_TAIL),
+    SLOT.INSIGHTS: _dedup_chain([("aliyun_a", "qwen3.7-max-2026-05-17")] + _TEXT_TAIL),   # a's strongest
     # CHART — needs valid compact JSON → JSON-reliable head, tencent glm-5.1 2nd.
-    SLOT.CHART: _dedup_chain([
-        ("aliyun_c", "glm-5"), ("tencent", "glm-5.1"),
-        ("aliyun_c", "qwen-turbo"), ("aliyun_b", "glm-4.6"),
-    ] + _TEXT_TAIL),
+    SLOT.CHART: _dedup_chain([("aliyun_a", "qwen3.6-plus")] + _TEXT_TAIL),       # general/JSON
     # MAPPER — field-mapping direction → aliyun fast head, tencent v4-flash 2nd.
-    SLOT.MAPPER: _dedup_chain([
-        ("aliyun_c", "qwen-turbo"), ("tencent", "deepseek-v4-flash"),
-        ("aliyun_c", "qwen3.5-122b-a10b"), ("aliyun_b", "qwen3.5-122b-a10b"),
-    ] + _TEXT_TAIL),
+    SLOT.MAPPER: _dedup_chain([("aliyun_a", "qwen3.6-flash")] + _TEXT_TAIL),     # fast field-map
     # REASONING — depth → tencent deepseek-v4-pro quality head (best free reasoner,
     # free on TokenHub; NOT free on aliyun), then aliyun free deepseek/MoE options.
-    SLOT.REASONING: _dedup_chain([
-        ("tencent", "deepseek-v4-pro"),
-        ("aliyun_c", "deepseek-v3"), ("aliyun_b", "qwen3.5-397b-a17b"),
-        ("aliyun_c", "qwen3-235b-a22b"), ("aliyun_c", "deepseek-r1"),
-    ] + _TEXT_TAIL),
+    SLOT.REASONING: _dedup_chain([("aliyun_a", "qwen3.7-max-2026-05-17")] + _TEXT_TAIL),  # depth
     # VL — vision-only chain (tencent has no VL-understanding model).
     SLOT.VL: _VL_CHAIN,
     # REVIEW — critique (Chinese-strong) → aliyun max head, tencent v4-pro 2nd.
