@@ -197,9 +197,11 @@ const defaultContent = {
     actionIcon: RefreshRight,
   },
   'no-analysis': {
-    title: 'AI分析准备中',
-    description: '正在为您生成智能分析洞察...',
-    actionText: '重新分析',
+    // 终态空状态 (非加载中): LLM 洞察返回空时显示。文案须诚实+给 next-action,
+    // 不要用"准备中/正在生成"这类 loading 语气 (会让用户误以为一直在转圈)。
+    title: '暂无 AI 洞察',
+    description: '当前时间范围内数据不足以生成智能洞察，可调整上方时间范围或上传更多经营数据后重试',
+    actionText: '调整时间范围',
     actionIcon: Search,
   },
   'error': {

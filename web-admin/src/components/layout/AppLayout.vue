@@ -3,8 +3,6 @@ import { computed, onMounted } from 'vue';
 import { useAppStore } from '@/store/modules/app';
 import AppSidebar from './AppSidebar.vue';
 import AppHeader from './AppHeader.vue';
-// U-FEED-1 (Sprint 4 Wave 2 Chat L) — in-app release-notes toast stack.
-import ReleaseNoteCard from '@/components/notification/ReleaseNoteCard.vue';
 import InlineCustomerService from '@/components/support/InlineCustomerService.vue';
 
 const appStore = useAppStore();
@@ -43,8 +41,6 @@ const mainStyle = computed(() => ({
       </main>
     </div>
 
-    <!-- U-FEED-1 (Sprint 4 Wave 2 Chat L) — release-notes toast stack -->
-    <ReleaseNoteCard />
     <!-- Sprint 4 W1 C-INLINE-CS-1: 在线客服浮动入口 (固定右下角) -->
     <InlineCustomerService :service-url="customerServiceUrl" />
   </div>
