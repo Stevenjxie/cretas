@@ -123,18 +123,22 @@ async def test_resolve_allows_self_when_single_admin():
     class _Req:
         state = _S()
 
+    # _update_queue_resolved now returns the updated row dict (id/raw_name/
+    # entity_type) instead of a bool — see graduation feature.
     with patch('smartbi.api.data_quality_queue_admin._get_queue_item',
                new=AsyncMock(return_value={"id": 1, "factoryId": "F001", "status": "PENDING", "submitter": "1"})):
         with patch('smartbi.api.data_quality_queue_admin._get_admin_count_for_factory',
                    new=AsyncMock(return_value=1)):
             with patch('smartbi.api.data_quality_queue_admin._update_queue_resolved',
-                       new=AsyncMock(return_value=True)):
-                with patch('smartbi.api.data_quality_queue_admin.get_pg_pool',
-                           new=AsyncMock(return_value=AsyncMock())):
-                    result = await resolve_queue(
-                        request=_Req(), id=1,
-                        body=ResolveBody(action="confirm", resolvedToEntityId=99),
-                    )
+                       new=AsyncMock(return_value={"id": 1, "raw_name": "x", "entity_type": "store"})):
+                with patch('smartbi.api.data_quality_queue_admin._record_admin_confirm_history',
+                           new=AsyncMock(return_value=None)):
+                    with patch('smartbi.api.data_quality_queue_admin.get_pg_pool',
+                               new=AsyncMock(return_value=AsyncMock())):
+                        result = await resolve_queue(
+                            request=_Req(), id=1,
+                            body=ResolveBody(action="confirm", resolvedToEntityId=99),
+                        )
 
     assert result["resolved"] is True
     assert result.get("singleAdminDegraded") is True
@@ -164,17 +168,20 @@ async def test_batch_resolve_partial_success():
     async def fake_get_item(pool, item_id):
         return items.get(item_id)
 
+    # _update_queue_resolved now returns the updated row dict instead of a bool.
     with patch('smartbi.api.data_quality_queue_admin._get_queue_item', side_effect=fake_get_item):
         with patch('smartbi.api.data_quality_queue_admin._get_admin_count_for_factory',
                    new=AsyncMock(return_value=2)):
             with patch('smartbi.api.data_quality_queue_admin._update_queue_resolved',
-                       new=AsyncMock(return_value=True)):
-                with patch('smartbi.api.data_quality_queue_admin.get_pg_pool',
-                           new=AsyncMock(return_value=AsyncMock())):
-                    result = await batch_resolve_queue(
-                        request=_Req(),
-                        body=BatchResolveBody(ids=[1, 2, 3], action="confirm", resolvedToEntityId=99),
-                    )
+                       new=AsyncMock(return_value={"id": 1, "raw_name": "x", "entity_type": "store"})):
+                with patch('smartbi.api.data_quality_queue_admin._record_admin_confirm_history',
+                           new=AsyncMock(return_value=None)):
+                    with patch('smartbi.api.data_quality_queue_admin.get_pg_pool',
+                               new=AsyncMock(return_value=AsyncMock())):
+                        result = await batch_resolve_queue(
+                            request=_Req(),
+                            body=BatchResolveBody(ids=[1, 2, 3], action="confirm", resolvedToEntityId=99),
+                        )
 
     assert result["successCount"] == 1
     assert len(result["failedItems"]) == 2
