@@ -88,6 +88,21 @@ class YieldAnalysisServiceImplTest {
     }
 
     @Test
+    void aggregate_nullOutputUnit_treatedAsSameUnit() {
+        // 工序未配置 output_unit (绝大多数情况) → 视为与投入同单位 → 出成率应正常计算, 不显 "—"
+        when(reportRepo.aggregateYieldByProcess(anyString(), any(), any(), anyString()))
+                .thenReturn(List.of(row("演示工序1", "998", "935.5", "kg", null, 1L)));
+
+        List<ProcessYieldAggDTO> result = service.aggregateByProcess("F001", null, null, null);
+
+        assertThat(result).hasSize(1);
+        ProcessYieldAggDTO dto = result.get(0);
+        assertThat(dto.getUnitComparable()).isTrue();
+        assertThat(dto.getConversionRate()).isEqualByComparingTo("93.7"); // 935.5/998*100=93.73→93.7
+        assertThat(dto.getWastageRate()).isEqualByComparingTo("6.3");      // 62.5/998*100=6.26→6.3
+    }
+
+    @Test
     void aggregate_nullParams_convertedToSentinels() {
         when(reportRepo.aggregateYieldByProcess(anyString(), any(), any(), anyString()))
                 .thenReturn(Collections.emptyList());

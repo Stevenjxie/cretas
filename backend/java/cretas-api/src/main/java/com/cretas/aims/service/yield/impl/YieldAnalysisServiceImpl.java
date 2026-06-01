@@ -34,7 +34,10 @@ public class YieldAnalysisServiceImpl implements YieldAnalysisService {
             BigDecimal totalInput = toBig(r.get("total_input"));
             BigDecimal totalOutput = toBig(r.get("total_output"));
             String inUnit = asStr(r.get("input_unit"));
-            String outUnit = asStr(r.get("output_unit"));
+            String rawOutUnit = asStr(r.get("output_unit"));
+            // output_unit 未配置(null/空)视为与投入同单位 — 多数工序不声明 output_unit,
+            // 仅 kg→盒 等单位转换工序才设。否则同单位工序会被误判不可比 → 出成率恒显 "—"。
+            String outUnit = (rawOutUnit == null || rawOutUnit.isEmpty()) ? inUnit : rawOutUnit;
             boolean comparable = Objects.equals(inUnit, outUnit);
 
             BigDecimal conversionRate = null;
