@@ -39,7 +39,7 @@ import logging
 import time
 from dataclasses import dataclass
 from datetime import date
-from typing import Any, AsyncIterator, Dict, Optional, Tuple
+from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
 
 import asyncpg
 import httpx
