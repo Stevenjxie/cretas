@@ -29,9 +29,10 @@ const MAIN_MENUS: Array<{
   { name: '仓储管理', firstChildPath: '/warehouse/materials',    urlContains: /\/warehouse/ },
   { name: '质量管理', firstChildPath: '/quality/inspections',    urlContains: /\/quality/ },
   { name: '财务管理', firstChildPath: '/finance/costs',          urlContains: /\/finance/ },
-  // UX Round 4 (commit c07680547, 2026-04-24): "数据分析" → "经营报表" (固定报表 vs
-  // 智能分析的 AI 探索) disambiguation. /analytics/* URLs unchanged.
-  { name: '经营报表', firstChildPath: '/analytics/overview',     urlContains: /\/analytics/ },
+  // IA 重设计 (2026-06-01): 合并「经营报表」(/analytics) + 「智能分析」(/smart-bi) 为单一
+  // 「数据与分析」组, 主入口经营驾驶舱 (/smart-bi/dashboard)。旧顶级「经营报表」组已删除,
+  // 故 smoke 改查「数据与分析」+ 落在驾驶舱。/analytics/* 子路由仍保留 (D-6)。
+  { name: '数据与分析', firstChildPath: '/smart-bi/dashboard',    urlContains: /\/smart-bi\/dashboard/ },
   { name: '系统管理', firstChildPath: '/system/users',           urlContains: /\/system/ },
 ];
 
