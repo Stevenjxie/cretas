@@ -1,8 +1,10 @@
 # 餐饮 Web-Admin 侧边栏 / IA 重设计
 
-**日期**: 2026-06-01
-**状态**: DESIGN — 待 Steve 审批后转 writing-plans
+**日期**: 2026-06-01 (v2 修订 2026-06-02: 驾驶舱去重 + 改 3 层)
+**状态**: DESIGN v2 — 已确认, 转 writing-plans
 **触发**: Steve "我们去整理一下餐饮的 web 端吧，我看目前有很多内容，而且很乱"
+
+> **v2 关键修订 (2026-06-02, Steve 确认 — durable 优先)**: 本 spec v1 写于 analytics IA 重设计 (#363) 部署**之前**。#363 已上线「数据与分析」组, 内含一个**业态自适应**的「经营驾驶舱」(`/smart-bi/dashboard`, `Dashboard.vue:440 isRestaurantTenant` + `:684 餐饮默认全量出图` — 餐饮租户在此看餐饮 KPI)。若按 v1 再新建 `/restaurant/dashboard`, 餐饮租户会有**两个经营驾驶舱**(双源、需维护两份), 不长久。**v2 决策: 不新建餐饮驾驶舱, 复用 `/smart-bi/dashboard`**; 餐饮运营组从 v1 的 4 层降为 **3 层** (深度分析 / 日常录入 / 数据与系统), 驾驶舱完全交给「数据与分析」组。全系统单一驾驶舱 = durable。原 §3/§4.2/§7 的 D-4「新建经营驾驶舱」**作废**, 见下方 §3 v2 结构。
 **范围**: 餐饮 (RESTAURANT 业态) web-admin 侧边栏 + 信息架构 (IA) 重整。**不含** 制造业 (FACTORY) 侧边栏，不含后端 API 改动 (除非分层暴露出 API gap)。
 
 ---
@@ -35,12 +37,11 @@
 
 ---
 
-## 3. 新 IA (目标侧边栏结构)
+## 3. 新 IA (目标侧边栏结构 — v2)
 
 ```
 餐饮运营  (hideForFactoryTypes: ['FACTORY'] — 仅 RESTAURANT 业态可见)
-│
-├─ 经营驾驶舱            /restaurant/dashboard         [Gold]  ← 单一经营概览入口 (D-4)
+│   ※ 经营驾驶舱 不在此组 — 复用「数据与分析」组的 /smart-bi/dashboard (业态自适应, v2 去重)
 │
 ├─ 深度分析  (groupLabel, Gold 读层 D-1)
 │  ├─ 菜品分析           /restaurant/analytics/dishes  [Gold]  ← 合并四象限+毛利, 双 tab (D-2)
@@ -58,7 +59,8 @@
    └─ ETL 状态           /restaurant/admin/etl-status
 ```
 
-**从 11 项 → 10 项** (合并菜品 -1)，但**层次从 2 组扁平 → 4 个语义清晰的层**。
+**从 11 项 → 9 项** (合并菜品 -1, 运营总览/驾驶舱不在本组 -1), **层次从 2 组扁平 → 3 个语义清晰的层**。
+旧「运营总览」(`/restaurant/analytics`) 不再是本组菜单项 — 它是 Excel 上传浏览器 (病症), 餐饮租户看经营总览改用「数据与分析」组的经营驾驶舱; 其路由 redirect 到 `/smart-bi/dashboard` (§3.2)。
 
 ### 3.1 各项映射 (旧 → 新)
 
@@ -78,12 +80,14 @@
 
 **路由变更最小化**: 仅 2 处真实变化 — (a) 新增 `/restaurant/dashboard`; (b) `gross-margin` 内容并入 `dishes`。其余仅侧边栏**分组/排序/命名**变化，路由 path 不动 (降低实现风险 + 不破坏书签)。
 
-### 3.2 旧路由兼容 (防破坏书签/外链)
+### 3.2 旧路由兼容 (防破坏书签/外链) — v2
 
-- `/restaurant/analytics` (旧总览) → redirect `/restaurant/dashboard`
+- `/restaurant/analytics` (旧总览) → redirect **`/smart-bi/dashboard`** (v2: 复用业态自适应驾驶舱, 非新建 /restaurant/dashboard)
 - `/restaurant/analytics/menu` (旧四象限) → redirect `/restaurant/analytics/dishes?tab=quadrant`
 - `/restaurant/analytics/gross-margin` (旧毛利) → redirect `/restaurant/analytics/dishes?tab=margin`
 - `/restaurant/analytics/dianping` (旧点评) → redirect `/restaurant/analytics/platform`
+
+> **redirect 保留 query string** (per analytics IA 教训 #363): redirect 用函数式 `(to) => ({ path, query: {...to.query, tab} })`, 不丢 `?` 参数。
 
 ---
 
@@ -104,13 +108,9 @@
 - `tab` 由 query param 驱动 (`?tab=quadrant|margin`)，支持旧路由 redirect 落点 (§3.2)。
 - 无配方成本时: 四象限退化为"仅销量" + 提示"配置配方后显示毛利率"，毛利 tab 显示空状态引导去「配方管理」(防呆 Rule 5 — next action)。
 
-### 4.2 经营驾驶舱 (D-4)
+### 4.2 经营驾驶舱 (D-4 — v2 作废, 改复用)
 
-`views/restaurant/dashboard.vue` (新建):
-
-- Gold 驱动 KPI 卡 (营收 / 订单数 / 门店数 / 客单价 / 翻台率) + 趋势图 + 门店营收排行。
-- 数据源: 复用现有 `gold.ts` helper (`getFinanceSummary` / `getChannelBreakdown` / `getDataRange`) — 与已上线的 RN/制造业驾驶舱默认全量出图逻辑一致 (见 memory: 餐饮驾驶舱默认全量出图)。
-- **MVP 取舍**: 若工期紧，dashboard 可先复用现有 `Dashboard.vue` 餐厅分支 (它已做 Gold 探测 + 默认时间区间)，仅在侧边栏新增入口指向它；后续再做独立 `restaurant/dashboard.vue`。**这是 §7 阶段划分的决策点。**
+~~`views/restaurant/dashboard.vue` (新建)~~ **v2: 不新建。** 餐饮租户的经营驾驶舱 = 已上线的「数据与分析」组 `/smart-bi/dashboard` (`Dashboard.vue` 业态自适应: `:440 isRestaurantTenant` + `:684 餐饮默认全量出图`, 复用 `gold.ts` helper)。它已经是 Gold 驱动、餐饮租户看餐饮 KPI。**全系统单一驾驶舱, 不重复造** = durable。本 plan 不创建任何 dashboard 组件; 仅旧 `/restaurant/analytics` 路由 redirect 到它 (§3.2)。
 
 ### 4.3 平台口碑页 (D-3)
 
@@ -182,12 +182,13 @@ Gold 状态 ──► 数据完整度 / ETL 状态 (admin 审计)
 
 | 阶段 | 内容 | 风险 | 可独立交付 |
 |---|---|---|---|
-| **P1 侧边栏重组** | AppSidebar.vue 4 层分组 + 命名 + 旧路由 redirect (§3.2) | 低 (纯 UI 结构) | ✓ 立即减乱 |
+| **P1 侧边栏重组** | menuConfig.ts 餐饮组重组为 3 层分组 + 命名 + 旧路由 redirect (§3.2, 含 /restaurant/analytics→/smart-bi/dashboard) | 低 (纯 UI 结构) | ✓ 立即减乱 |
 | **P2 菜品分析合并** | 新建 `dishes.vue` 双 tab, 整合 menu-board + gross-margin, 旧路由 redirect | 中 (整合两组件) | ✓ |
-| **P3 经营驾驶舱** | 新 `dashboard.vue` (或先复用 Dashboard.vue 餐厅分支, §4.2 取舍) | 中 | ✓ |
-| **P4 平台口碑改造** | dianping-gap → platform.vue, 空状态 + 明标 + 手动上传 | 低 | ✓ |
+| **P3 平台口碑改造** | dianping-gap → platform.vue, 空状态 + 明标 + 手动上传 | 低 | ✓ |
 
-每阶段独立 PR + 独立验证 (Playwright headed per `.claude/rules/playwright-headed-mode.md`)。P1 先上 = 最快见效。
+~~P3 经营驾驶舱~~ **v2 删除** — 复用 `/smart-bi/dashboard`, 无新建组件。
+每阶段独立 PR 或合并一个 PR (本组小)。Playwright headed 验证 (per `.claude/rules/playwright-headed-mode.md`)。
+注: menuConfig 已抽到独立模块 (`web-admin/src/components/layout/menuConfig.ts`, analytics IA 重构落地), 餐饮组改动在该文件, 可单测。
 
 ---
 
