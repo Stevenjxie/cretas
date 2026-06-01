@@ -1411,10 +1411,11 @@ const businessRoutes: RouteRecordRaw[] = [
             meta: { requiresAuth: true, title: '盘点管理', module: 'restaurant' }
           },
           {
+            // IA v2 (2026-06-02): 旧运营总览 (Excel 浏览器) 不再渲染; 餐饮经营总览复用
+            // 「数据与分析」组的业态自适应经营驾驶舱。保留 query (函数式 redirect)。
             path: 'analytics',
             name: 'RestaurantAnalyticsOverview',
-            component: () => import('@/views/restaurant/analytics/overview.vue'),
-            meta: { requiresAuth: true, title: '运营分析', module: 'restaurant' }
+            redirect: (to) => ({ path: '/smart-bi/dashboard', query: { ...to.query } }),
           },
           {
             path: 'analytics/menu',
