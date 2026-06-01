@@ -1,4 +1,6 @@
-from smartbi.services.field_promotion import is_promotable
+from smartbi.services.field_promotion import (
+    is_promotable, consult_promoted, _load_promoted,
+)
 
 
 def _cand(col="本月实际", std="actual_amount", conf=0.95, factories=("F1", "F2"), occ=4):
@@ -29,9 +31,6 @@ def test_reject_conflict_with_curated():
 def test_already_promoted_is_not_a_candidate():
     ok, reason = is_promotable(_cand(), curated={}, promoted={"本月实际": "actual_amount"})
     assert ok is False and "已毕业" in reason
-
-
-from smartbi.services.field_promotion import consult_promoted, _load_promoted
 
 
 def test_consult_hit(monkeypatch):
