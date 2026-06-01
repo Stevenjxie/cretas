@@ -86,11 +86,30 @@ public class RestaurantDishBestsellerGoldTool extends GoldBackedRestaurantTool {
             formatted.add(entry);
         }
 
+        StringBuilder sb = new StringBuilder();
+        sb.append("畅销菜品 Top").append(formatted.size())
+                .append("（按销售额，").append(period).append("）：\n");
+        for (int i = 0; i < formatted.size(); i++) {
+            Map<String, Object> entry = formatted.get(i);
+            Object qty = entry.get("销量");
+            Object rev = entry.get("销售额");
+            double revD = rev instanceof Number ? ((Number) rev).doubleValue() : 0.0;
+            sb.append(i + 1).append(". ").append(entry.get("菜品"))
+                    .append(" — 销量").append(qty != null ? qty : 0).append("份，")
+                    .append("销售额").append(fmtAmt(revD));
+            if (i < formatted.size() - 1) sb.append("\n");
+        }
+
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("统计周期", period);
         result.put("畅销TOP5", formatted);
         result.put("dataAvailable", true);
+        result.put("message", sb.toString());
         return result;
+    }
+
+    private static String fmtAmt(double v) {
+        return v >= 10_000 ? String.format("%.1f万", v / 10_000) : String.format("%.0f", v);
     }
 
     @Override

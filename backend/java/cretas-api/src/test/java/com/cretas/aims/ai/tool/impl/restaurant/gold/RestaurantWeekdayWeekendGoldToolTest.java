@@ -100,6 +100,10 @@ class RestaurantWeekdayWeekendGoldToolTest {
 
         // Weekend avg (50,000) > weekday avg (20,000)
         assertThat(avgWeekend).isGreaterThan(avgWeekday);
+
+        // message should be present and contain the conclusion
+        assertThat(result).containsKey("message");
+        assertThat(result.get("message").toString()).contains("结论");
     }
 
     @Test
