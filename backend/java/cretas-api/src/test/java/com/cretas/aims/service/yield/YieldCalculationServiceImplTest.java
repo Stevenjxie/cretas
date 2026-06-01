@@ -83,6 +83,19 @@ class YieldCalculationServiceImplTest {
     }
 
     @Test
+    void crossUnitBatch_nullGramsPerUnit_cumulativeIsNull() {
+        // step1: kg→kg (998→935.5); step2: kg→盒 (935.5→3184); no gramsPerUnit
+        // cross-unit with no conversion factor → cumulativeYieldRate must be null
+        List<ProductionReport> reports = List.of(
+                rpt(1, 1, "998",   "kg", "935.5", "kg"),
+                rpt(2, 2, "935.5", "kg", "3184",  "盒")
+        );
+        BatchYieldDTO dto = svc.calculateBatchYield(reports, null);
+        assertThat(dto.getCumulativeYieldRate()).isNull();
+        assertThat(dto.getLastStepOutput()).isEqualByComparingTo("3184");
+    }
+
+    @Test
     void a3_crossBatchSourceCountsIntoCurrentStepInput() {
         // 本道投入 100 + 跨批带入 50 = 150 input; 产 120 -> yield 0.8000
         ProductionReport r = ProductionReport.builder()

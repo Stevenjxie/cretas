@@ -79,14 +79,19 @@
 -- Bootstrap (V20260415_99:51-68) created 11 cols + factory_id + audit. Entity has 30+.
 -- Already covered: embedding (V20260505_01 vector(768)).
 ALTER TABLE ai_intent_configs
-    ADD COLUMN IF NOT EXISTS description     TEXT,
-    ADD COLUMN IF NOT EXISTS priority        INTEGER,
-    ADD COLUMN IF NOT EXISTS quota_cost      INTEGER,
-    ADD COLUMN IF NOT EXISTS required_roles  TEXT,
-    ADD COLUMN IF NOT EXISTS semantic_domain VARCHAR(30),
-    ADD COLUMN IF NOT EXISTS semantic_action VARCHAR(30),
-    ADD COLUMN IF NOT EXISTS semantic_object VARCHAR(50),
-    ADD COLUMN IF NOT EXISTS business_type   VARCHAR(30);
+    ADD COLUMN IF NOT EXISTS description       TEXT,
+    ADD COLUMN IF NOT EXISTS priority          INTEGER,
+    ADD COLUMN IF NOT EXISTS quota_cost        INTEGER,
+    ADD COLUMN IF NOT EXISTS required_roles    TEXT,
+    ADD COLUMN IF NOT EXISTS semantic_domain   VARCHAR(30),
+    ADD COLUMN IF NOT EXISTS semantic_action   VARCHAR(30),
+    ADD COLUMN IF NOT EXISTS semantic_object   VARCHAR(50),
+    ADD COLUMN IF NOT EXISTS business_type     VARCHAR(30),
+    -- 2026-06-01: negative_keywords (Hibernate entity 列 AIIntentConfig.java:150, JSON) 漏在
+    -- bootstrap, 导致全新 CI DB 上 V_23_12/_13 的 UPDATE...SET negative_keywords 报 column does
+    -- not exist 阻断启动 (e2e-pr-gate)。补进 bootstrap (root fix; prod 该列 Hibernate 已建 →
+    -- ADD IF NOT EXISTS no-op)。jsonb 与 entity columnDefinition=JSON 兼容。
+    ADD COLUMN IF NOT EXISTS negative_keywords JSONB;
 
 -- =============================================================================
 -- End of V20260416_09 bootstrap class6 remaining columns.

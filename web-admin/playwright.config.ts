@@ -294,5 +294,35 @@ export default defineConfig({
         video: { mode: 'on', size: { width: 1920, height: 1080 } },
       },
     },
+    // Sidebar IA-redesign — 双业态 E2E (2026-06-01). 验证「经营报表」+「智能分析」
+    // 合并为单一「数据与分析」组 + 业态门控 + redirect。HEADED per
+    // .claude/rules/playwright-headed-mode.md (中文字体/CSS/客户演示真实)。
+    // Run via: npx playwright test --project ia-redesign
+    // Self-injects auth (factory_admin1 + qhj_prod) via e2e-auth-helper; no vue-auth dep.
+    {
+      name: 'ia-redesign',
+      testMatch: 'tests/e2e-ia-redesign.spec.ts',
+      fullyParallel: false,
+      workers: 1,
+      use: {
+        // ⭐ HEADED — 真弹 chromium window, 客户演示价值 (per playwright-headed-mode rule)
+        headless: false,
+        viewport: { width: 1920, height: 1080 },
+        locale: 'zh-CN',
+        timezoneId: 'Asia/Shanghai',
+        launchOptions: {
+          args: [
+            '--lang=zh-CN',
+            '--font-render-hinting=none',
+            '--disable-blink-features=AutomationControlled',
+            '--window-position=0,0',
+            '--window-size=1920,1080',
+          ],
+          slowMo: 100,
+        },
+        screenshot: { mode: 'on', fullPage: true },
+        video: { mode: 'on', size: { width: 1920, height: 1080 } },
+      },
+    },
   ],
 });

@@ -9,6 +9,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
@@ -39,6 +40,9 @@ public interface WorkProcessTaskRepository extends JpaRepository<WorkProcessTask
      * 检查某批次是否已 spawn 过工序任务 (防重 spawn).
      */
     boolean existsByFactoryIdAndProductionBatchId(String factoryId, Long productionBatchId);
+
+    /** 批量按 id 取任务 (audit YIELD-4: enrich processName 避免 N+1). */
+    List<WorkProcessTask> findByFactoryIdAndIdIn(String factoryId, Collection<Long> ids);
 
     /**
      * 分页列表 — 按 factoryId + status 过滤.

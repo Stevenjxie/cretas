@@ -140,15 +140,17 @@ rsync -az --timeout=60 \
     "$SERVER:/www/wwwroot/cretas/scripts/" 2>&1 | tail -5
 ssh "$SERVER" "chmod +x /www/wwwroot/cretas/scripts/t6-dryrun-compare.sh /www/wwwroot/cretas/scripts/baseline-java-metrics.sh"
 
-# 3c. 同步 field-mapping 毕业 CLI 到 code/scripts/ (2026-06-01 — self-learn promote loop).
+# 3c. 同步 多域学习 毕业 CLI 到 code/scripts/ (2026-06-01 — self-learn promote loop).
 # Must land at code/scripts/ (NOT cretas/scripts/) because the CLI resolves
 # backend/python via Path(__file__).parents[1] = /www/wwwroot/cretas/code.
-# Earlier: scripts/ was never synced, so `python scripts/promote_field_mappings.py`
+# Earlier: scripts/ was never synced, so `python scripts/promote_learnings.py`
 # had no file on the server — the promote leg of the loop was un-runnable.
-log "INFO" "[3c/5] 同步 field-mapping 毕业 CLI..."
-ssh "$SERVER" "mkdir -p /www/wwwroot/cretas/code/scripts"
+# v2 (2026-06-01): renamed promote_field_mappings.py -> promote_learnings.py
+# (generalized multi-domain). Remove the stale old CLI from the server too.
+log "INFO" "[3c/5] 同步 多域学习 毕业 CLI..."
+ssh "$SERVER" "mkdir -p /www/wwwroot/cretas/code/scripts && rm -f /www/wwwroot/cretas/code/scripts/promote_field_mappings.py"
 rsync -az --timeout=60 \
-    "$PROJECT_ROOT/scripts/promote_field_mappings.py" \
+    "$PROJECT_ROOT/scripts/promote_learnings.py" \
     "$SERVER:/www/wwwroot/cretas/code/scripts/" 2>&1 | tail -5
 
 # 3.5. Apply pending smartbi migrations (per spec 2026-05-07-smartbi-migration-runner-spec.md).
