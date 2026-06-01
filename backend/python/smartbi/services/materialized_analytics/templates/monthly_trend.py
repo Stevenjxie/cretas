@@ -106,7 +106,17 @@ class MonthlyTrend(AnalysisTemplate):
 
         # Spec §4.3: drive trough vs peak gap into seasonal action plan
         gap_pct = round((peak["total"] - trough["total"]) / peak["total"] * 100, 0) if peak["total"] > 0 else 0
-        if gap_pct >= 30:
+        # Degenerate guard: with <2 periods (or 峰==谷 / 无波动) there is nothing to
+        # "复刻峰值 / 缩小波动" — that advice would be nonsense on e.g. a single
+        # ¥1,000 day where 峰 == 谷. Give an honest "需更多周期" rec instead.
+        if len(series) < 2 or peak["period"] == trough["period"]:
+            action_rec = format_action_rec(
+                object_target=f"当前仅 {len(series)} 个周期 ({peak['period']})",
+                benefit_range="周期过少,暂无法判断趋势 / 波动",
+                prerequisite="积累 ≥2 个周期数据 (或拉长时间范围) 后再看趋势",
+                timeline="数据积累后",
+            )
+        elif gap_pct >= 30:
             action_rec = format_action_rec(
                 object_target=f"谷值周期 {trough['period']} (低于峰值 {gap_pct:.0f}%)",
                 benefit_range=f"谷值时段定向促销 + 套餐 + 会员唤回可拉高谷值 {measure} 10-25%",
