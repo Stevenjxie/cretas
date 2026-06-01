@@ -93,6 +93,10 @@ class RestaurantPeakMonthGoldToolTest {
         assertThat(byMonth).hasSize(2);
         assertThat(byMonth.get(0).get("月份")).isEqualTo("2026-03");
         assertThat(byMonth.get(1).get("月份")).isEqualTo("2026-01");
+
+        // message should be present and contain the peak month
+        assertThat(result).containsKey("message");
+        assertThat(result.get("message").toString()).contains("2026-03");
     }
 
     @Test

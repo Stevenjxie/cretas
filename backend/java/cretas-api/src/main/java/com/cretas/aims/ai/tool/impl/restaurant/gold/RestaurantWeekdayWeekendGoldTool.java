@@ -125,12 +125,22 @@ public class RestaurantWeekdayWeekendGoldTool extends GoldBackedRestaurantTool {
         weekdayStats.put("总营收", round2(totalWeekday));
         weekdayStats.put("天数", nWeekday);
 
+        String msg = "周末 vs 周中营收对比（按日均）：\n"
+                + "周末 日均" + fmtAmt(avgWeekend) + "（" + nWeekend + "天）\n"
+                + "周中 日均" + fmtAmt(avgWeekday) + "（" + nWeekday + "天）\n"
+                + "结论：" + conclusion;
+
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("周末", weekendStats);
         result.put("周中", weekdayStats);
         result.put("结论", conclusion);
         result.put("dataAvailable", true);
+        result.put("message", msg);
         return result;
+    }
+
+    private static String fmtAmt(double v) {
+        return v >= 10_000 ? String.format("%.1f万", v / 10_000) : String.format("%.0f", v);
     }
 
     @Override

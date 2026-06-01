@@ -92,12 +92,32 @@ public class RestaurantOrderTypeMixGoldTool extends GoldBackedRestaurantTool {
             breakdown.add(entry);
         }
 
+        StringBuilder sb = new StringBuilder();
+        sb.append("堂食 vs 外卖（").append(period).append("）：\n");
+        for (int i = 0; i < breakdown.size(); i++) {
+            Map<String, Object> entry = breakdown.get(i);
+            Object rev = entry.get("营收");
+            double revD = rev instanceof Number ? ((Number) rev).doubleValue() : 0.0;
+            Object pct = entry.get("占比");
+            Object bills = entry.get("单数");
+            sb.append(entry.get("类型")).append("：")
+                    .append(fmtAmt(revD))
+                    .append("（").append(pct != null ? pct : "N/A").append("）")
+                    .append("，").append(bills != null ? bills : 0).append("单");
+            if (i < breakdown.size() - 1) sb.append("\n");
+        }
+
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("统计周期", period);
         result.put("总营收", goldResult.get("total_revenue"));
         result.put("堂食外卖占比", breakdown);
         result.put("dataAvailable", true);
+        result.put("message", sb.toString());
         return result;
+    }
+
+    private static String fmtAmt(double v) {
+        return v >= 10_000 ? String.format("%.1f万", v / 10_000) : String.format("%.0f", v);
     }
 
     @Override

@@ -104,12 +104,36 @@ public class RestaurantPeakMonthGoldTool extends GoldBackedRestaurantTool {
         String peakMonth = byMonth.isEmpty() ? null : (String) byMonth.get(0).get("月份");
         Object peakRevenue = byMonth.isEmpty() ? null : byMonth.get(0).get("营收");
 
+        // Build human-readable message.
+        StringBuilder sb = new StringBuilder();
+        if (peakMonth != null && peakRevenue instanceof Number) {
+            sb.append("营收峰值月份：").append(peakMonth)
+                    .append("（").append(fmtAmt(((Number) peakRevenue).doubleValue())).append("）。\n");
+        }
+        if (!byMonth.isEmpty()) {
+            sb.append("各月营收排行：");
+            int limit = Math.min(byMonth.size(), 6);
+            for (int i = 0; i < limit; i++) {
+                Map<String, Object> m = byMonth.get(i);
+                Object rev = m.get("营收");
+                double revD = rev instanceof Number ? ((Number) rev).doubleValue() : 0.0;
+                sb.append(i + 1).append(". ").append(m.get("月份"))
+                        .append(" ").append(fmtAmt(revD));
+                if (i < limit - 1) sb.append("\n");
+            }
+        }
+
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("按月营收", byMonth);
         result.put("峰值月份", peakMonth);
         result.put("峰值营收", peakRevenue);
         result.put("dataAvailable", true);
+        result.put("message", sb.toString());
         return result;
+    }
+
+    private static String fmtAmt(double v) {
+        return v >= 10_000 ? String.format("%.1f万", v / 10_000) : String.format("%.0f", v);
     }
 
     @Override

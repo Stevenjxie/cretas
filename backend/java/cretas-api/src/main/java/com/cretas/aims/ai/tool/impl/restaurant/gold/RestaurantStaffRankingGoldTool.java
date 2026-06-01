@@ -90,12 +90,32 @@ public class RestaurantStaffRankingGoldTool extends GoldBackedRestaurantTool {
 
         // caveat MUST be surfaced verbatim — no fabricating "best server" claims.
         Object caveat = goldResult.get("caveat");
+        String caveatStr = caveat != null ? caveat.toString() : "POS 数据按开单操作员记账, 非服务员业绩归因。";
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("开单操作员排行：\n");
+        for (int i = 0; i < ranking.size(); i++) {
+            Map<String, Object> entry = ranking.get(i);
+            Object amt = entry.get("开单净额");
+            double amtD = amt instanceof Number ? ((Number) amt).doubleValue() : 0.0;
+            Object bills = entry.get("单数");
+            sb.append(i + 1).append(". ").append(entry.get("操作员"))
+                    .append(" — 开单净额").append(fmtAmt(amtD))
+                    .append("，").append(bills != null ? bills : 0).append("单");
+            if (i < ranking.size() - 1) sb.append("\n");
+        }
+        sb.append("\n\n说明：").append(caveatStr);
 
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("开单操作员排行", ranking);
-        result.put("说明", caveat != null ? caveat.toString() : "POS 数据按开单操作员记账, 非服务员业绩归因。");
+        result.put("说明", caveatStr);
         result.put("dataAvailable", true);
+        result.put("message", sb.toString());
         return result;
+    }
+
+    private static String fmtAmt(double v) {
+        return v >= 10_000 ? String.format("%.1f万", v / 10_000) : String.format("%.0f", v);
     }
 
     @Override

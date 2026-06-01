@@ -77,6 +77,9 @@ public class RestaurantStoreRevenueRankGoldTool extends GoldBackedRestaurantTool
                         ? (List<Map<String, Object>>) goldResult.get("top_stores")
                         : Collections.emptyList();
 
+        Object storeCountObj = goldResult.get("store_count");
+        int storeCount = storeCountObj instanceof Number ? ((Number) storeCountObj).intValue() : rawStores.size();
+
         List<Map<String, Object>> storeRank = new ArrayList<>();
         for (Map<String, Object> row : rawStores) {
             Map<String, Object> entry = new LinkedHashMap<>();
@@ -86,13 +89,31 @@ public class RestaurantStoreRevenueRankGoldTool extends GoldBackedRestaurantTool
             storeRank.add(entry);
         }
 
+        StringBuilder sb = new StringBuilder();
+        sb.append("门店营收排行（").append(period).append("，共").append(storeCount).append("家）：\n");
+        for (int i = 0; i < storeRank.size(); i++) {
+            Map<String, Object> entry = storeRank.get(i);
+            Object rev = entry.get("营收");
+            Object bills = entry.get("单数");
+            double revD = rev instanceof Number ? ((Number) rev).doubleValue() : 0.0;
+            sb.append(i + 1).append(". ").append(entry.get("门店"))
+                    .append(" — 营收").append(fmtAmt(revD))
+                    .append("，").append(bills != null ? bills : 0).append("单");
+            if (i < storeRank.size() - 1) sb.append("\n");
+        }
+
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("统计周期", period);
         result.put("总营收", goldResult.get("total_revenue"));
         result.put("门店数", goldResult.get("store_count"));
         result.put("门店营收排行", storeRank);
         result.put("dataAvailable", true);
+        result.put("message", sb.toString());
         return result;
+    }
+
+    private static String fmtAmt(double v) {
+        return v >= 10_000 ? String.format("%.1f万", v / 10_000) : String.format("%.0f", v);
     }
 
     @Override
