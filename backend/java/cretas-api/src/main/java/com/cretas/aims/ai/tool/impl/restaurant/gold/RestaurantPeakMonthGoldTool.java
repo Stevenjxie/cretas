@@ -24,6 +24,13 @@ import java.util.Map;
  */
 @Slf4j
 @Component
+/**
+ * factoryId 隔离豁免说明 (@FactoryIsolationExempt): 本类经 GoldBackedRestaurantTool
+ * 的 final doExecute(factoryId) 模板方法把 factoryId 传入 queryGold(factoryId, ...)
+ * → GoldFinanceClient.fetchX(factoryId, ...), 每个 gold 查询都按 factory_id 租户隔离
+ * (Python gold 层 _resolve_tenant)。审计正则无法追踪模板方法 + final 修饰, 故显式豁免;
+ * 隔离实际由 factoryId 全程传递保证。
+ */
 public class RestaurantPeakMonthGoldTool extends GoldBackedRestaurantTool {
 
     @Override
