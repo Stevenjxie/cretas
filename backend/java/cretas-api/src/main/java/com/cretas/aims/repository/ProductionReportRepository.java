@@ -404,7 +404,7 @@ public interface ProductionReportRepository extends JpaRepository<ProductionRepo
             COUNT(DISTINCT pr.batch_id) AS batch_count
         FROM production_reports pr
         JOIN work_process_tasks wpt ON pr.work_process_task_id = wpt.id AND wpt.deleted_at IS NULL
-        JOIN work_processes wp ON wpt.work_process_id = wp.id
+        JOIN work_processes wp ON wpt.work_process_id = wp.id AND wp.deleted_at IS NULL
         WHERE pr.factory_id = :factoryId
           AND wpt.factory_id = :factoryId
           AND pr.report_type = 'YIELD'
