@@ -2,9 +2,7 @@
 import { ref, computed, onMounted } from 'vue';
 import { useAuthStore } from '@/store/modules/auth';
 import { get } from '@/api/request';
-import { ElMessage } from 'element-plus';
 import { Search, Refresh } from '@element-plus/icons-vue';
-import { formatDateTimeCell } from '@/utils/tableFormatters';
 
 // ---------- auth ----------
 const authStore = useAuthStore();
@@ -23,8 +21,8 @@ interface ProcessIORow {
   processCategory: string;
   inputQuantity: number;
   outputQuantity: number;
-  conversionRate: number;
-  wastageRate: number;
+  conversionRate: number | null;
+  wastageRate: number | null;
   unit: string;
   batchCount: number;
 }
@@ -34,27 +32,27 @@ interface ProductType {
   name: string;
 }
 
-interface ProcessTaskItem {
-  id: string;
-  processName?: string;
-  productName?: string;
-  productTypeId?: string;
-  plannedQuantity: number;
-  completedQuantity: number;
+interface ProcessYieldAgg {
+  processName: string;
+  inputQuantity: number;
+  outputQuantity: number;
+  conversionRate: number | null;  // 后端已 0-100, 不再 ×100 (audit FE-VUE-5); 不可比为 null
+  wastageRate: number | null;
   unit: string;
-  status: string;
-  createdAt: string;
+  unitComparable: boolean;
+  batchCount: number;
 }
 
 // ---------- KPI ----------
 const kpi = computed(() => {
   const rows = tableData.value;
   if (rows.length === 0) return { processCount: 0, avgConversion: 0, avgWastage: 0, lowEfficiencyCount: 0 };
-
-  const avgConversion = rows.reduce((s, r) => s + r.conversionRate, 0) / rows.length;
-  const avgWastage = rows.reduce((s, r) => s + r.wastageRate, 0) / rows.length;
-  const lowEfficiency = rows.filter(r => r.conversionRate < 80).length;
-
+  const comparable = rows.filter((r) => r.conversionRate != null);
+  const avgConversion = comparable.length
+    ? comparable.reduce((s, r) => s + (r.conversionRate as number), 0) / comparable.length : 0;
+  const avgWastage = comparable.length
+    ? comparable.reduce((s, r) => s + ((r.wastageRate as number) ?? 0), 0) / comparable.length : 0;
+  const lowEfficiency = comparable.filter((r) => (r.conversionRate as number) < 80).length;
   return {
     processCount: rows.length,
     avgConversion: Math.round(avgConversion * 10) / 10,
@@ -86,13 +84,9 @@ async function loadProductTypes() {
 
 async function loadData() {
   if (!factoryId.value) return;
-
   loading.value = true;
   try {
-    const params: Record<string, unknown> = {
-      page: 1,
-      size: 200, // Fetch enough tasks to aggregate by process
-    };
+    const params: Record<string, unknown> = {};
     if (dateRange.value && dateRange.value[0]) {
       params.startDate = dateRange.value[0];
       params.endDate = dateRange.value[1];
@@ -100,81 +94,31 @@ async function loadData() {
     if (selectedProduct.value) {
       params.productTypeId = selectedProduct.value;
     }
-
-    const response = await get<{ content: ProcessTaskItem[]; totalElements: number }>(
-      `/${factoryId.value}/process-tasks`, { params }
+    // 单元4: 换源 /process-tasks → /production/yield/by-process (后端已聚合, 直接渲染)
+    const response = await get<ProcessYieldAgg[]>(
+      `/${factoryId.value}/production/yield/by-process`, { params }
     );
-
     if (response.success && response.data) {
-      const tasks = response.data.content || [];
-      tableData.value = aggregateByProcess(tasks);
+      tableData.value = (response.data || []).map((r) => ({
+        processName: r.processName,
+        processCategory: '',
+        inputQuantity: r.inputQuantity,
+        outputQuantity: r.outputQuantity,
+        conversionRate: r.conversionRate ?? null,
+        wastageRate: r.wastageRate ?? null,
+        unit: r.unit,
+        batchCount: r.batchCount,
+      })) as ProcessIORow[];
     } else {
       tableData.value = [];
     }
   } catch (error: any) {
-    console.error('加载工序数据失败:', error);
-    if (!error?.actionHint) ElMessage.error('加载数据失败');
-    // TODO: If process-tasks API doesn't return enough data, consider using sample data
+    // audit RULE-5: 不在 catch 弹 toast — request.ts 拦截器已对 success=false 弹 sticky+actionHint
+    console.error('加载工序出成率失败:', error);
     tableData.value = [];
   } finally {
     loading.value = false;
   }
-}
-
-/**
- * Aggregate process tasks by processName to compute input/output comparison.
- * Input = plannedQuantity (what goes into the process)
- * Output = completedQuantity (what comes out)
- */
-function aggregateByProcess(tasks: ProcessTaskItem[]): ProcessIORow[] {
-  const map = new Map<string, {
-    processName: string;
-    processCategory: string;
-    totalInput: number;
-    totalOutput: number;
-    unit: string;
-    count: number;
-  }>();
-
-  for (const task of tasks) {
-    const name = task.processName || '未知工序';
-    const existing = map.get(name);
-
-    if (existing) {
-      existing.totalInput += task.plannedQuantity || 0;
-      existing.totalOutput += task.completedQuantity || 0;
-      existing.count += 1;
-    } else {
-      map.set(name, {
-        processName: name,
-        processCategory: '',
-        totalInput: task.plannedQuantity || 0,
-        totalOutput: task.completedQuantity || 0,
-        unit: task.unit || '',
-        count: 1,
-      });
-    }
-  }
-
-  return Array.from(map.values()).map(item => {
-    const conversionRate = item.totalInput > 0
-      ? Math.round((item.totalOutput / item.totalInput) * 1000) / 10
-      : 0;
-    const wastageRate = item.totalInput > 0
-      ? Math.round(((item.totalInput - item.totalOutput) / item.totalInput) * 1000) / 10
-      : 0;
-
-    return {
-      processName: item.processName,
-      processCategory: item.processCategory,
-      inputQuantity: Math.round(item.totalInput * 100) / 100,
-      outputQuantity: Math.round(item.totalOutput * 100) / 100,
-      conversionRate,
-      wastageRate: Math.max(0, wastageRate),
-      unit: item.unit,
-      batchCount: item.count,
-    };
-  });
 }
 
 // ---------- helpers ----------
@@ -221,10 +165,11 @@ function handleReset() {
               v-model="dateRange"
               type="daterange"
               range-separator="至"
-              start-placeholder="开始日期"
-              end-placeholder="结束日期"
+              start-placeholder="报工开始日期"
+              end-placeholder="报工结束日期"
               value-format="YYYY-MM-DD"
               style="width: 280px"
+              title="按 YIELD 报工日期筛选"
               @change="handleSearch"
             />
           </div>
@@ -277,7 +222,7 @@ function handleReset() {
       <el-table
         :data="tableData"
         v-loading="loading"
-        empty-text="暂无工序数据"
+        empty-text="本厂暂无出成率报工数据 — 车间在 App 端逐道报工后此处自动汇总"
         stripe
         border
         style="width: 100%"
@@ -295,34 +240,25 @@ function handleReset() {
         </el-table-column>
         <el-table-column label="转化率" width="130" align="center">
           <template #default="{ row }">
-            <el-tag
-              :type="getConversionTagType(row.conversionRate)"
-              size="small"
-              effect="light"
-            >
+            <span v-if="row.conversionRate == null">—</span>
+            <el-tag v-else :type="getConversionTagType(row.conversionRate)" size="small" effect="light">
               {{ row.conversionRate }}%
             </el-tag>
           </template>
         </el-table-column>
         <el-table-column label="损耗率" width="130" align="center">
           <template #default="{ row }">
-            <el-tag
-              :type="getWastageTagType(row.wastageRate)"
-              size="small"
-              effect="light"
-            >
+            <span v-if="row.wastageRate == null">—</span>
+            <el-tag v-else :type="getWastageTagType(row.wastageRate)" size="small" effect="light">
               {{ row.wastageRate }}%
             </el-tag>
           </template>
         </el-table-column>
         <el-table-column label="转化率进度" min-width="180">
           <template #default="{ row }">
-            <el-progress
-              :percentage="Math.min(row.conversionRate, 100)"
-              :color="getConversionColor(row.conversionRate)"
-              :stroke-width="10"
-              :show-text="false"
-            />
+            <span v-if="row.conversionRate == null">—</span>
+            <el-progress v-else :percentage="Math.min(row.conversionRate, 100)"
+              :color="getConversionColor(row.conversionRate)" :stroke-width="10" :show-text="false" />
           </template>
         </el-table-column>
         <el-table-column prop="batchCount" label="任务数" width="90" align="center" />

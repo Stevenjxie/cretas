@@ -37,6 +37,7 @@ const attachmentRefreshKey = ref(0);
 // Backend endpoint /processing/material-consumptions/batch/{productionBatchId} (MaterialConsumptionController:151)
 // returns the consumption rows for this batch's production plan.
 const consumptions = ref<TableRow[]>([]);
+const yieldData = ref<any | null>(null);
 
 onMounted(() => {
   loadData();
@@ -47,9 +48,10 @@ async function loadData() {
 
   loading.value = true;
   try {
-    const [batchRes, timelineRes] = await Promise.allSettled([
+    const [batchRes, timelineRes, yieldRes] = await Promise.allSettled([
       get(`/${factoryId.value}/processing/batches/${batchId.value}`),
-      get(`/${factoryId.value}/processing/batches/${batchId.value}/timeline`)
+      get(`/${factoryId.value}/processing/batches/${batchId.value}/timeline`),
+      get(`/${factoryId.value}/production/batches/${batchId.value}/yield`)
     ]);
 
     if (batchRes.status === 'fulfilled' && batchRes.value.success) {
@@ -63,6 +65,13 @@ async function loadData() {
 
     if (timelineRes.status === 'fulfilled' && timelineRes.value.success) {
       timeline.value = timelineRes.value.data || [];
+    }
+
+    if (yieldRes.status === 'fulfilled' && yieldRes.value.success
+        && yieldRes.value.data?.steps?.length > 0) {
+      yieldData.value = yieldRes.value.data;
+    } else {
+      yieldData.value = null;
     }
   } catch (error) {
     // Interceptor already shows specific sticky toast for ApiError.
@@ -169,6 +178,18 @@ function formatDuration(minutes: number | null) {
   return h > 0 ? `${h}小时${m > 0 ? m + '分钟' : ''}` : `${m}分钟`;
 }
 
+// 单元3: 有 YIELD 数据时用末道产出回填"实际产量"
+const hasYield = computed(() => !!yieldData.value?.steps?.length);
+const displayActualQuantity = computed(() =>
+  hasYield.value ? yieldData.value.lastStepOutput : batch.value?.actualQuantity);
+const displayActualUnit = computed(() =>
+  hasYield.value ? (yieldData.value.lastStepOutputUnit || '') : (batch.value?.unit || ''));
+// audit YIELD-1: 跨单位 cumulative=null 显 —, 不能 *100 (null*100===0 会误显 0.0%)
+const cumulativeDisplay = computed(() => {
+  const r = yieldData.value?.cumulativeYieldRate;
+  return r == null ? '—' : formatPercent(r * 100);
+});
+
 function getTimelineIcon(type: string) {
   const map: Record<string, string> = {
     CREATED: 'primary',
@@ -226,10 +247,14 @@ function getTimelineIcon(type: string) {
         </div>
         <div class="kpi-card">
           <div class="kpi-label">实际产量</div>
-          <div class="kpi-value" :class="{ 'text-success': batch.actualQuantity > 0 }">
-            {{ formatNum(batch.actualQuantity) }}
+          <div class="kpi-value" :class="{ 'text-success': Number(displayActualQuantity) > 0 }">
+            {{ formatNum(displayActualQuantity) }}
           </div>
-          <div class="kpi-unit">{{ batch.unit || '' }}</div>
+          <div class="kpi-unit">{{ displayActualUnit }}</div>
+        </div>
+        <div v-if="hasYield" class="kpi-card">
+          <div class="kpi-label">累计出成率</div>
+          <div class="kpi-value">{{ cumulativeDisplay }}</div>
         </div>
         <div class="kpi-card">
           <div class="kpi-label">良品率</div>
@@ -326,6 +351,46 @@ function getTimelineIcon(type: string) {
             </el-descriptions-item>
             <el-descriptions-item label="单位成本">{{ formatCost(batch.unitCost) }}/{{ batch.unit }}</el-descriptions-item>
           </el-descriptions>
+        </el-card>
+
+        <!-- 单元3: 出成率·逐道报工 (audit YIELD-1/5/6, FE-VUE-6) -->
+        <el-card v-if="hasYield" shadow="never" class="detail-card">
+          <template #header>
+            <span class="section-title">出成率 · 逐道报工</span>
+          </template>
+          <el-table :data="yieldData.steps" border stripe size="small" style="width: 100%">
+            <el-table-column label="道" width="60" align="center">
+              <template #default="{ row }">{{ row.processOrder }}</template>
+            </el-table-column>
+            <el-table-column label="工序" min-width="120" show-overflow-tooltip>
+              <template #default="{ row }">{{ row.processName || ('第' + row.processOrder + '道') }}</template>
+            </el-table-column>
+            <el-table-column label="投入" width="130" align="right">
+              <template #default="{ row }">{{ formatNum(row.totalInput) }} {{ row.inputUnit || '' }}</template>
+            </el-table-column>
+            <el-table-column label="产出" width="130" align="right">
+              <template #default="{ row }">{{ formatNum(row.totalOutput) }} {{ row.outputUnit || '' }}</template>
+            </el-table-column>
+            <el-table-column label="出成率" width="110" align="center">
+              <template #default="{ row }">
+                <span v-if="!row.unitComparable">—</span>
+                <span v-else :class="{ 'text-danger': row.yieldAlert }" :title="row.yieldAlert || ''">
+                  {{ formatPercent(row.yieldRate * 100) }}
+                </span>
+              </template>
+            </el-table-column>
+            <el-table-column label="结转" width="110" align="right">
+              <template #default="{ row }">
+                <span v-if="row.carryover == null">—</span>
+                <span v-else :class="{ 'text-warning': Number(row.carryover) > 0 }">{{ formatNum(row.carryover) }}</span>
+              </template>
+            </el-table-column>
+          </el-table>
+          <div class="yield-summary">
+            合计: {{ formatNum(yieldData.firstStepInput) }} {{ yieldData.firstStepInputUnit || '' }}
+            → {{ formatNum(yieldData.lastStepOutput) }} {{ yieldData.lastStepOutputUnit || '' }}
+            &nbsp;累计出成率 {{ cumulativeDisplay }}
+          </div>
         </el-card>
 
         <!-- T4-D4 (issue #533): F006 customer asked for raw_material consumption visibility on
@@ -440,7 +505,7 @@ function getTimelineIcon(type: string) {
 
 .kpi-row {
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   gap: 16px;
   margin-bottom: 20px;
 }
@@ -506,6 +571,14 @@ function getTimelineIcon(type: string) {
 .text-success { color: #67C23A; }
 .text-warning { color: #E6A23C; }
 .text-danger { color: #F56C6C; }
+
+.yield-summary {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-color-lighter, #ebeef5);
+  font-weight: 600;
+  color: var(--text-color-primary, #303133);
+}
 
 .timeline-content {
   p {

@@ -85,14 +85,18 @@ public class YieldCalculationServiceImpl implements YieldCalculationService {
         BigDecimal lastOutput = last.getTotalOutput();
 
         // 末道折算到首道单位 (盒->kg): output_盒 * gramsPerUnit / 1000
-        BigDecimal lastOutputInFirstUnit = lastOutput;
-        boolean sameUnit = first.getInputUnit() != null && first.getInputUnit().equals(last.getOutputUnit());
-        if (!sameUnit && standardGramsPerUnit != null) {
-            lastOutputInFirstUnit = lastOutput.multiply(standardGramsPerUnit)
-                    .divide(new BigDecimal("1000"), 4, RoundingMode.HALF_UP);
-        }
+        boolean sameUnit = first.getInputUnit() != null
+                && last.getOutputUnit() != null
+                && first.getInputUnit().equals(last.getOutputUnit());
+        // audit YIELD-1: 跨单位且无折算系数时不可比, cumulative 留 null (不输出 lastOutput/firstInput 的混单位错误值)
+        boolean canComputeCumulative = sameUnit || standardGramsPerUnit != null;
         BigDecimal cumulative = null;
-        if (firstInput != null && firstInput.compareTo(BigDecimal.ZERO) > 0) {
+        if (canComputeCumulative && firstInput != null && firstInput.compareTo(BigDecimal.ZERO) > 0) {
+            BigDecimal lastOutputInFirstUnit = lastOutput;
+            if (!sameUnit) {  // 此分支 standardGramsPerUnit 必非 null
+                lastOutputInFirstUnit = lastOutput.multiply(standardGramsPerUnit)
+                        .divide(new BigDecimal("1000"), 4, RoundingMode.HALF_UP);
+            }
             cumulative = lastOutputInFirstUnit.divide(firstInput, YIELD_SCALE, RoundingMode.HALF_UP);
         }
         boolean complete = steps.stream().allMatch(s ->
