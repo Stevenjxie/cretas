@@ -30,6 +30,12 @@ from smartbi.gold import (
     finance_summary,
     kpi_summary,
     order_type_mix,
+    review_city_ranking,
+    review_complaints,
+    review_dish_issues,
+    review_store_ranking,
+    review_summary,
+    review_vip,
     staff_ranking,
     top_products,
 )
@@ -274,6 +280,117 @@ async def get_staff_ranking(
     except Exception as e:
         logger.exception("staff-ranking failed: %s", e)
         raise HTTPException(status_code=500, detail=f"Gold query failed: {e}")
+
+
+# =============================================================================
+# Review-analytics endpoints (大众点评 评价下载 data via smart_bi_dynamic_data)
+#
+# Reviews carry no monetary fields → no RBAC money-strip and no date range
+# (aggregated over the full review corpus). Tenant scope is enforced by the
+# RLS app.factory_id GUC the pool sets per connection + the explicit
+# factory_id WHERE inside each query. See smartbi/gold/review_queries.py.
+# =============================================================================
+
+
+@router.get("/review-summary")
+async def get_review_summary(
+    request: Request,
+    factory_id: Optional[str] = Query(None),
+):
+    """Overall review KPIs (avg 星级/服务/环境/口味, totals, VIP, store/city counts)."""
+    fid = _resolve_tenant(factory_id)
+    pool = await get_pg_pool()
+    try:
+        return await review_summary(pool, fid)
+    except Exception as e:
+        logger.exception("review-summary failed: %s", e)
+        raise HTTPException(status_code=500, detail=f"Review query failed: {e}")
+
+
+@router.get("/review-store-ranking")
+async def get_review_store_ranking(
+    request: Request,
+    factory_id: Optional[str] = Query(None),
+    dim: str = Query("low_star", description="star|service|env|low_star"),
+    order: str = Query("desc", description="asc|desc"),
+    top_n: int = Query(10, ge=1, le=50),
+    min_reviews: int = Query(20, ge=1, le=1000),
+):
+    """Per-store review aggregates sorted by dim (差评门店 / 服务分 / 环境分)."""
+    fid = _resolve_tenant(factory_id)
+    pool = await get_pg_pool()
+    try:
+        return await review_store_ranking(
+            pool, fid, dim=dim, order=order, top_n=top_n, min_reviews=min_reviews,
+        )
+    except Exception as e:
+        logger.exception("review-store-ranking failed: %s", e)
+        raise HTTPException(status_code=500, detail=f"Review query failed: {e}")
+
+
+@router.get("/review-city-ranking")
+async def get_review_city_ranking(
+    request: Request,
+    factory_id: Optional[str] = Query(None),
+):
+    """Per-city review averages, lowest-rated first (哪个城市评价最低)."""
+    fid = _resolve_tenant(factory_id)
+    pool = await get_pg_pool()
+    try:
+        return await review_city_ranking(pool, fid)
+    except Exception as e:
+        logger.exception("review-city-ranking failed: %s", e)
+        raise HTTPException(status_code=500, detail=f"Review query failed: {e}")
+
+
+@router.get("/review-vip")
+async def get_review_vip(
+    request: Request,
+    factory_id: Optional[str] = Query(None),
+):
+    """VIP vs 非VIP review comparison (count + average scores)."""
+    fid = _resolve_tenant(factory_id)
+    pool = await get_pg_pool()
+    try:
+        return await review_vip(pool, fid)
+    except Exception as e:
+        logger.exception("review-vip failed: %s", e)
+        raise HTTPException(status_code=500, detail=f"Review query failed: {e}")
+
+
+@router.get("/review-complaints")
+async def get_review_complaints(
+    request: Request,
+    factory_id: Optional[str] = Query(None),
+    top_n: int = Query(8, ge=1, le=30),
+):
+    """商家评价申诉 categories + the real 低星(<=3星) review count."""
+    fid = _resolve_tenant(factory_id)
+    pool = await get_pg_pool()
+    try:
+        return await review_complaints(pool, fid, top_n=top_n)
+    except Exception as e:
+        logger.exception("review-complaints failed: %s", e)
+        raise HTTPException(status_code=500, detail=f"Review query failed: {e}")
+
+
+@router.get("/review-dish-issues")
+async def get_review_dish_issues(
+    request: Request,
+    factory_id: Optional[str] = Query(None),
+    top_n: int = Query(10, ge=1, le=30),
+    star_threshold: int = Query(3, ge=1, le=5),
+):
+    """High-frequency 口味/品质标签 in low-star reviews (honest: tags, not dishes)."""
+    fid = _resolve_tenant(factory_id)
+    pool = await get_pg_pool()
+    try:
+        return await review_dish_issues(
+            pool, fid, top_n=top_n, star_threshold=star_threshold,
+        )
+    except Exception as e:
+        logger.exception("review-dish-issues failed: %s", e)
+        raise HTTPException(status_code=500, detail=f"Review query failed: {e}")
 
 
 async def _query_analysis_results_batch(
