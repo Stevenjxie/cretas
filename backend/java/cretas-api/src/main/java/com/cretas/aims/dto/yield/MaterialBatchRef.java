@@ -15,8 +15,8 @@ import java.math.BigDecimal;
 @NoArgsConstructor
 @AllArgsConstructor
 public class MaterialBatchRef {
-    /** 关联 MaterialBatch.id (varchar PK, Long 外部 ID) */
-    private Long materialBatchId;
+    /** 关联 MaterialBatch.id (varchar PK, UUID-style String) */
+    private String materialBatchId;
     /** 本次从该批次领用量 */
     private BigDecimal quantity;
     /** 可选, 与 inputUnit 一致 */

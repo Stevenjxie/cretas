@@ -335,9 +335,9 @@ public class YieldReportServiceImpl implements YieldReportService {
      *
      * @return 本次实际结清的报工条数 (0 表示未结清任何报工)
      */
-    private int checkAndAutoSettle(String factoryId, Long batchId, Long materialBatchId) {
+    private int checkAndAutoSettle(String factoryId, Long batchId, String materialBatchId) {
         // 1. 查触发批次状态
-        Optional<MaterialBatch> batchOpt = materialBatchRepository.findById(String.valueOf(materialBatchId));
+        Optional<MaterialBatch> batchOpt = materialBatchRepository.findById(materialBatchId);
         if (batchOpt.isEmpty()) return 0;
         MaterialBatch mb = batchOpt.get();
         // "原料用完" = status 是 USED_UP (权威信号). 排除 EXPIRED/DEFECTIVE/SCRAPPED 等 remaining=0 但非正常耗尽的状态.
@@ -345,7 +345,8 @@ public class YieldReportServiceImpl implements YieldReportService {
             return 0;  // 触发批次未用完，不触发
         }
         // 2. 找到 material_batch_refs 包含此 materialBatchId 的所有未结清 YIELD 报工
-        String refJson = "[{\"materialBatchId\":" + materialBatchId + "}]";
+        // materialBatchId is a String (VARCHAR PK) → must be quoted in JSON
+        String refJson = "[{\"materialBatchId\":\"" + materialBatchId + "\"}]";
         List<ProductionReport> candidates = reportRepo.findUnsettledYieldContainingMaterialBatch(
                 factoryId, batchId, refJson);
         if (candidates.isEmpty()) return 0;
@@ -376,9 +377,9 @@ public class YieldReportServiceImpl implements YieldReportService {
         for (Map<String, Object> ref : refs) {
             Object mbIdObj = ref.get("materialBatchId");
             if (mbIdObj == null) continue;
-            // jsonb 反序列化可能产生 Integer/Long/BigDecimal; 统一走 Number 路径避免 NumberFormatException.
-            Long mbId = ((Number) mbIdObj).longValue();
-            Optional<MaterialBatch> mb = materialBatchRepository.findById(String.valueOf(mbId));
+            // materialBatchId is a String (VARCHAR PK); jsonb deserializes it as String directly.
+            String mbId = mbIdObj.toString();
+            Optional<MaterialBatch> mb = materialBatchRepository.findById(mbId);
             if (mb.isEmpty()) continue;  // 找不到批次视为忽略
             // 仅 USED_UP 视为"原料用完". EXPIRED/DEFECTIVE 等状态即使 remaining=0 也不触发结清.
             if (mb.get().getStatus() != MaterialBatchStatus.USED_UP) {
@@ -390,7 +391,7 @@ public class YieldReportServiceImpl implements YieldReportService {
 
     @Override
     @Transactional
-    public Map<String, Object> autoSettleByMaterialBatch(String factoryId, Long batchId, Long materialBatchId) {
+    public Map<String, Object> autoSettleByMaterialBatch(String factoryId, Long batchId, String materialBatchId) {
         int settled = checkAndAutoSettle(factoryId, batchId, materialBatchId);
         Map<String, Object> out = new HashMap<>();
         out.put("settledCount", settled);
