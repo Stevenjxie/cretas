@@ -1,4 +1,6 @@
 <template>
+  <el-tabs v-model="topTab" class="ai-explore-top-tabs">
+    <el-tab-pane label="传 Excel 分析" name="analysis">
   <div ref="rootRef" class="smart-bi-analysis">
     <el-card class="upload-card">
       <template #header>
@@ -320,6 +322,11 @@
       </div>
     </el-card>
   </div>
+    </el-tab-pane>
+    <el-tab-pane label="问数据 (AI)" name="query">
+      <AIQuery />
+    </el-tab-pane>
+  </el-tabs>
 
   <!-- 下钻分析抽屉 -->
   <!-- 下钻分析抽屉 — extracted to analysis/DrillDownDrawer.vue (Item 1 phase 2). The
@@ -391,6 +398,7 @@
 <script setup lang="ts">
 defineOptions({ name: 'SmartBIAnalysis' });
 import { ref, reactive, computed, onMounted, onBeforeUnmount, onDeactivated, onActivated, nextTick, watch } from 'vue';
+import { useRoute } from 'vue-router';
 import { useAuthStore } from '@/store/modules/auth';
 import { useAppStore } from '@/store/modules/app';
 import { usePermissionStore } from '@/store/modules/permission';
@@ -407,6 +415,8 @@ import type { SmartBIChartOption, SmartBIChartItem } from '@/types/echarts';
 import DOMPurify from 'dompurify';
 import { defineAsyncComponent } from 'vue';
 import KPICard from '@/components/smartbi/KPICard.vue';
+import AIQuery from './AIQuery.vue';
+import { resolveTopTab } from './smartBIAnalysisTab';
 import ShareDialog from './analysis/ShareDialog.vue';
 import DataPreviewDialog from './analysis/DataPreviewDialog.vue';
 import YoYDialog from './analysis/YoYDialog.vue';
@@ -463,6 +473,11 @@ import { useSmartBIDashboardLayout } from './composables/useSmartBIDashboardLayo
 const authStore = useAuthStore();
 const factoryId = computed(() => authStore.factoryId);
 const appStore = useAppStore();
+
+// P3: AI 探索顶层 tab (传 Excel 分析 / 问数据 AI)。与 sheet 级 activeTab 互不相干。
+const route = useRoute();
+const topTab = ref(resolveTopTab(route.query));
+watch(() => route.query.tab, () => { topTab.value = resolveTopTab(route.query); });
 const echartsThemeName = computed(() => appStore.theme === 'dark' ? 'cretas-dark' : 'cretas');
 const permissionStore = usePermissionStore();
 const canUpload = computed(() => permissionStore.canWrite('analytics'));

@@ -29,9 +29,12 @@ const MAIN_MENUS: Array<{
   { name: '仓储管理', firstChildPath: '/warehouse/materials',    urlContains: /\/warehouse/ },
   { name: '质量管理', firstChildPath: '/quality/inspections',    urlContains: /\/quality/ },
   { name: '财务管理', firstChildPath: '/finance/costs',          urlContains: /\/finance/ },
-  // UX Round 4 (commit c07680547, 2026-04-24): "数据分析" → "经营报表" (固定报表 vs
-  // 智能分析的 AI 探索) disambiguation. /analytics/* URLs unchanged.
-  { name: '经营报表', firstChildPath: '/analytics/overview',     urlContains: /\/analytics/ },
+  // IA 重设计 (2026-06-01): 合并「经营报表」(/analytics) + 「智能分析」(/smart-bi) 为单一
+  // 「数据与分析」组。旧顶级「经营报表」组已删除 → smoke 改查新组名「数据与分析」。
+  // firstChildPath 仍用 /analytics/overview (分析概览, D-6 保留的纯 Java 页): L1 smoke 只验
+  // "菜单组能打开+导航无 HTTP 错误", 用 Java-backed 页避免 e2e-pr-gate 无 Python 服务 (8083)
+  // 时经营驾驶舱模板分析打 Python 返 500 触发 Step6 hard-error 误判。菜单组名匹配才是本 case 重点。
+  { name: '数据与分析', firstChildPath: '/analytics/overview',    urlContains: /\/analytics/ },
   { name: '系统管理', firstChildPath: '/system/users',           urlContains: /\/system/ },
 ];
 
