@@ -335,6 +335,32 @@ WHERE NOT EXISTS (
 );
 
 -- ─────────────────────────────────────────────────────────────────────────────
+-- 8b. MATERIAL BATCHES (库存)  — 2026-06-01 修 G3: 开始生产 (start) 校验原料库存,
+--     seed 只建了 raw_material_types (类型) 没建 material_batches (实际库存) → 开始生产
+--     报 '原料库存不足, 可用 0'。给每个 raw material 建一个 AVAILABLE 批次到 WH-LOG (物流仓),
+--     量充足 (1000 单位) 覆盖任何 BOM 需求。可用 = receipt - used - reserved。
+--     material_type_id 引用 seed 自己的 raw_material_types.id; warehouse_id = WH-LOG 的 seed id。
+-- ─────────────────────────────────────────────────────────────────────────────
+INSERT INTO material_batches (
+    id, factory_id, material_type_id, batch_number, warehouse_id,
+    receipt_quantity, used_quantity, reserved_quantity, quantity_unit,
+    inbound_date, status, created_by, created_at, updated_at
+)
+SELECT
+    'e2e-mb-' || m.code || '-0000000000001',
+    'F_E2E_TEST',
+    m.id,
+    'E2E-MB-' || m.code,
+    'e2e-wh-logistics-00000000000001',   -- WH-LOG (物流仓)
+    1000.0000, 0.0000, 0.0000, m.unit,
+    CURRENT_DATE, 'AVAILABLE',
+    (SELECT id FROM users WHERE username = 'e2e_super_admin'),
+    NOW(), NOW()
+FROM raw_material_types m
+WHERE m.factory_id = 'F_E2E_TEST' AND m.deleted_at IS NULL
+ON CONFLICT (id) DO NOTHING;
+
+-- ─────────────────────────────────────────────────────────────────────────────
 -- 9. VERIFICATION QUERY
 -- ─────────────────────────────────────────────────────────────────────────────
 DO $$
