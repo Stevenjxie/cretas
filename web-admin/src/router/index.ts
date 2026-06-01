@@ -1425,10 +1425,10 @@ const businessRoutes: RouteRecordRaw[] = [
             meta: { requiresAuth: true, title: '菜品分析', module: 'restaurant' }
           },
           {
+            // IA v2: 旧四象限 → 菜品分析 quadrant tab (保留 query)
             path: 'analytics/menu',
             name: 'RestaurantMenuBoard',
-            component: () => import('@/views/restaurant/analytics/menu-board.vue'),
-            meta: { requiresAuth: true, title: '菜品四象限', module: 'restaurant' }
+            redirect: (to) => ({ path: '/restaurant/analytics/dishes', query: { ...to.query, tab: 'quadrant' } }),
           },
           {
             path: 'analytics/stores',
@@ -1443,11 +1443,10 @@ const businessRoutes: RouteRecordRaw[] = [
             meta: { requiresAuth: true, title: '经营与平台分析', module: 'restaurant' }
           },
           {
-            // Apr 24 2026 Plan C Phase 7+: cross-module POS × food cost gross margin
+            // IA v2: 旧菜品毛利 → 菜品分析 margin tab (保留 query)
             path: 'analytics/gross-margin',
             name: 'RestaurantGrossMargin',
-            component: () => import('@/views/restaurant/analytics/gross-margin.vue'),
-            meta: { requiresAuth: true, title: '菜品毛利分析', module: 'restaurant' }
+            redirect: (to) => ({ path: '/restaurant/analytics/dishes', query: { ...to.query, tab: 'margin' } }),
           },
           {
             // 餐饮 Phase A-1 Task 1.5: ETL admin status page
