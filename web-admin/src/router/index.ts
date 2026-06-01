@@ -1242,7 +1242,7 @@ const businessRoutes: RouteRecordRaw[] = [
         path: 'analytics',
         name: 'Analytics',
         redirect: '/analytics/overview',
-        meta: { requiresAuth: true, title: '数据分析', icon: 'DataAnalysis', module: 'analytics' },
+        meta: { requiresAuth: true, title: '数据与分析', icon: 'DataAnalysis', module: 'analytics' },
         children: [
           {
             path: 'overview',
