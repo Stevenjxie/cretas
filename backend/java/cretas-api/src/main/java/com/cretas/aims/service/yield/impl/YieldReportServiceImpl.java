@@ -18,15 +18,20 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.cretas.aims.dto.yield.StepYieldDTO;
+
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 @Slf4j
 @Service
@@ -165,7 +170,35 @@ public class YieldReportServiceImpl implements YieldReportService {
     @Override
     public BatchYieldDTO getYield(String factoryId, Long batchId) {
         List<ProductionReport> reports = reportRepo.findYieldReportsByBatch(factoryId, batchId);
-        return calcSvc.calculateBatchYield(reports, null);
+        BatchYieldDTO dto = calcSvc.calculateBatchYield(reports, null);
+        enrichProcessNames(factoryId, dto);
+        return dto;
+    }
+
+    /** audit YIELD-4: 批量查 task→work_process→processName 回填 steps (避免 N+1). 查不到留 null, 前端 fallback. */
+    private void enrichProcessNames(String factoryId, BatchYieldDTO dto) {
+        if (dto.getSteps() == null || dto.getSteps().isEmpty()) {
+            return;
+        }
+        Set<Long> taskIds = dto.getSteps().stream()
+                .map(StepYieldDTO::getWorkProcessTaskId)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toSet());
+        if (taskIds.isEmpty()) {
+            return;
+        }
+        Map<Long, String> taskToProcessId = taskRepo.findByFactoryIdAndIdIn(factoryId, taskIds).stream()
+                .filter(t -> t.getWorkProcessId() != null)
+                .collect(Collectors.toMap(WorkProcessTask::getId, WorkProcessTask::getWorkProcessId, (a, b) -> a));
+        Set<String> processIds = new HashSet<>(taskToProcessId.values());
+        Map<String, String> processIdToName = processRepo.findAllById(processIds).stream()
+                .collect(Collectors.toMap(WorkProcess::getId, WorkProcess::getProcessName, (a, b) -> a));
+        for (StepYieldDTO step : dto.getSteps()) {
+            String pid = taskToProcessId.get(step.getWorkProcessTaskId());
+            if (pid != null) {
+                step.setProcessName(processIdToName.get(pid));
+            }
+        }
     }
 
     @Override

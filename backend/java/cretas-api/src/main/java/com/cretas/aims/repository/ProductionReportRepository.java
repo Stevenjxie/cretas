@@ -386,4 +386,37 @@ public interface ProductionReportRepository extends JpaRepository<ProductionRepo
     List<ProductionReport> findUnsettledYieldReports(@Param("factoryId") String factoryId,
                                                      @Param("batchId") Long batchId,
                                                      @Param("date") LocalDate date);
+
+    // ==================== 单元2: 厂级工序聚合 ====================
+
+    /**
+     * audit 单元2: 厂级按工序聚合 YIELD 报工投入/产出. native (沿用 analytics 投影惯例).
+     * 单位取工序标准 wp.unit/wp.output_unit (audit SQL-2). 可空参数由 service 转 sentinel
+     * (audit SQL-1: 永不传 null, 避 PG 类型推断失败).
+     */
+    @Query(value = """
+        SELECT
+            wp.process_name AS process_name,
+            COALESCE(SUM(CAST(pr.input_quantity AS DECIMAL(14,2))), 0) AS total_input,
+            COALESCE(SUM(CAST(pr.output_quantity AS DECIMAL(14,2))), 0) AS total_output,
+            wp.unit AS input_unit,
+            wp.output_unit AS output_unit,
+            COUNT(DISTINCT pr.batch_id) AS batch_count
+        FROM production_reports pr
+        JOIN work_process_tasks wpt ON pr.work_process_task_id = wpt.id AND wpt.deleted_at IS NULL
+        JOIN work_processes wp ON wpt.work_process_id = wp.id AND wp.deleted_at IS NULL
+        WHERE pr.factory_id = :factoryId
+          AND wpt.factory_id = :factoryId
+          AND pr.report_type = 'YIELD'
+          AND pr.deleted_at IS NULL
+          AND pr.report_date BETWEEN :startDate AND :endDate
+          AND (:productTypeId = '' OR wpt.product_type_id = :productTypeId)
+        GROUP BY wp.id, wp.process_name, wp.unit, wp.output_unit
+        ORDER BY MIN(wpt.process_order)
+        """, nativeQuery = true)
+    List<Map<String, Object>> aggregateYieldByProcess(
+            @Param("factoryId") String factoryId,
+            @Param("startDate") java.time.LocalDate startDate,
+            @Param("endDate") java.time.LocalDate endDate,
+            @Param("productTypeId") String productTypeId);
 }
