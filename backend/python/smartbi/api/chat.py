@@ -1819,6 +1819,12 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                                     agg_lines = list(_bundle['agg_lines'])  # mutable copy (entity block appends)
                                     top5_by_dim = dict(_bundle['top5_by_dim'])
                                     primary_measure = _bundle['primary_measure']
+                                    # #3: AVG for intensive primary measure (星级分/评分/率) in the
+                                    # query-scoped aggregates below — a SUM of star points is
+                                    # meaningless. Mirror the bundle path (_measure_is_avg).
+                                    from smartbi.services.upload_aggregate_cache import _measure_is_avg
+                                    _q_agg = "AVG" if _measure_is_avg(primary_measure) else "SUM"
+                                    _q_lbl = "平均" if _q_agg == "AVG" else "总计"
                                     # Heartbeat after aggregate phase (cache hit OR fresh compute)
                                     yield _sse_event("status", _hb_text)
 
@@ -1851,7 +1857,7 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                                             # Grand total for the time window
                                             where_frag, extra = time_where_clause(_tf, "$2", 2)
                                             q_total = (
-                                                f"SELECT SUM((row_data->>$1)::numeric) AS s, "
+                                                f"SELECT {_q_agg}((row_data->>$1)::numeric) AS s, "
                                                 f"COUNT((row_data->>$1)::numeric) AS c "
                                                 f"FROM smart_bi_dynamic_data "
                                                 f"WHERE upload_id = $3 "
@@ -1864,7 +1870,7 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                                                 )
                                                 if tot_row and tot_row['s'] is not None:
                                                     agg_lines.append(
-                                                        f"- {_tf['label']} {primary_measure} 总计: "
+                                                        f"- {_tf['label']} {primary_measure} {_q_lbl}: "
                                                         f"{tot_row['s']:,.2f} (行数={tot_row['c']})"
                                                     )
                                             except Exception as e1:
@@ -1877,7 +1883,7 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                                                     where_frag2, extra2 = time_where_clause(_tf, "$3", 4)
                                                     q_top = (
                                                         f"SELECT row_data->>$1 AS label, "
-                                                        f"SUM((row_data->>$2)::numeric) AS total "
+                                                        f"{_q_agg}((row_data->>$2)::numeric) AS total "
                                                         f"FROM smart_bi_dynamic_data "
                                                         f"WHERE upload_id = $4 "
                                                         f"AND row_data->>$2 ~ '^-?[0-9.,]+$' "
@@ -1920,8 +1926,8 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                                             for _dim in _mentioned_only:
                                                 try:
                                                     rows = await conn.fetch(
-                                                        """SELECT row_data->>$1 AS label,
-                                                                  SUM((row_data->>$2)::numeric) AS total
+                                                        f"""SELECT row_data->>$1 AS label,
+                                                                  {_q_agg}((row_data->>$2)::numeric) AS total
                                                            FROM smart_bi_dynamic_data
                                                            WHERE upload_id = $3
                                                              AND row_data->>$2 ~ '^-?[0-9.,]+$'
@@ -1965,7 +1971,7 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                                                     where_frag3, extra3 = time_where_clause(_tf, "$3", 3)
                                                     q_prod = (
                                                         f"SELECT row_data->>$1 AS label, "
-                                                        f"SUM((row_data->>$2)::numeric) AS total, "
+                                                        f"{_q_agg}((row_data->>$2)::numeric) AS total, "
                                                         f"COUNT(*) AS cnt "
                                                         f"FROM smart_bi_dynamic_data "
                                                         f"WHERE upload_id = $4 "
@@ -1980,8 +1986,8 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                                                     )
                                                 else:
                                                     prod_rows = await conn.fetch(
-                                                        """SELECT row_data->>$1 AS label,
-                                                                  SUM((row_data->>$2)::numeric) AS total,
+                                                        f"""SELECT row_data->>$1 AS label,
+                                                                  {_q_agg}((row_data->>$2)::numeric) AS total,
                                                                   COUNT(*) AS cnt
                                                            FROM smart_bi_dynamic_data
                                                            WHERE upload_id = $3
@@ -2060,7 +2066,7 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                                                 agg_lines.append("## 用户提到的具体实体聚合 (权威, 基于 DB 全量)")
                                                 for dim, lab in uniq_mentioned:
                                                     rr = await conn.fetchrow(
-                                                        """SELECT SUM((row_data->>$1)::numeric) AS s,
+                                                        f"""SELECT {_q_agg}((row_data->>$1)::numeric) AS s,
                                                                   COUNT((row_data->>$1)::numeric) AS c
                                                            FROM smart_bi_dynamic_data
                                                            WHERE upload_id = $2
@@ -2070,7 +2076,7 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                                                     )
                                                     if rr and rr['s'] is not None:
                                                         agg_lines.append(
-                                                            f"- {dim}={lab}: {primary_measure} 总计={rr['s']:,.2f} (行数={rr['c']})"  # noqa: E501
+                                                            f"- {dim}={lab}: {primary_measure} {_q_lbl}={rr['s']:,.2f} (行数={rr['c']})"  # noqa: E501
                                                         )
                                                 logger.info(f"[stream] Entity aggregates: {len(uniq_mentioned)} entities")  # noqa: E501
                                     except Exception as ee:
