@@ -22,7 +22,7 @@ function onTabChange(name: string | number) {
   <div class="restaurant-dishes">
     <el-tabs v-model="activeTab" class="dishes-top-tabs" @tab-change="onTabChange">
       <el-tab-pane label="菜品四象限" name="quadrant">
-        <MenuBoard />
+        <MenuBoard :embedded="true" />
       </el-tab-pane>
       <el-tab-pane label="菜品毛利" name="margin">
         <GrossMargin />
