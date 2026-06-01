@@ -42,6 +42,9 @@ _NON_DISH_REVIEW_TAGS = frozenset([
     # 味道 / 口感
     "味道好", "味道不错", "味道赞", "味道一般", "味道差", "好吃", "很好吃", "超好吃",
     "美味", "难吃", "口感好", "口感不错", "口感一般", "口味好", "口味不错", "口味一般",
+    # 口感卖点形容词 (非菜品名)
+    "鲜嫩", "入味", "爽口", "解腻", "够味", "足料", "地道", "正宗", "鲜香", "香辣",
+    "酥脆", "软糯", "弹牙", "多汁", "浓郁", "清淡", "重口", "下饭",
     # 价格
     "实惠", "划算", "超值", "性价比高", "性价比", "便宜", "价格实惠", "价格公道",
     "价格贵", "不便宜", "量大实惠",
@@ -380,7 +383,9 @@ class ReviewsSentimentSummary(AnalysisTemplate):
         if top_dish_tags:
             top3 = top_dish_tags[:3]
             parts.append(
-                "🥘 评价中最常提及的菜品: "
+                # 大众点评 标签列即便过滤了纯口碑词, 仍可能混菜品名与卖点形容词
+                # (鲜嫩/入味...)。统一叫"高频好评词"既诚实又对菜品/卖点都成立。
+                "🥘 评价中高频好评词: "
                 + "、".join(f"{t['dish']} ({t['mentions']} 条)" for t in top3)
                 + "。"
             )
@@ -404,8 +409,8 @@ class ReviewsSentimentSummary(AnalysisTemplate):
         elif top_dish_tags and top_dish_tags[0]["mentions"] >= 50:
             top_d = top_dish_tags[0]
             action_rec = format_action_rec(
-                object_target=f"口碑菜品「{top_d['dish']}」 ({top_d['mentions']} 条提及)",
-                benefit_range="主推位 + 招牌菜营销可放大口碑效应,带动客流 5-10%",
+                object_target=f"高频好评词「{top_d['dish']}」 ({top_d['mentions']} 条提及)",
+                benefit_range="围绕该卖点强化菜单主推 / 营销可放大口碑效应,带动客流 5-10%",
                 prerequisite="POS 推荐位置顶 + 包装升级 + 大众点评 / 美团置顶推广",
                 timeline="本月内",
             )
@@ -460,8 +465,8 @@ class ReviewsSentimentSummary(AnalysisTemplate):
                 "投诉率": complaint_rate_pct,
                 "最低评分门店": worst_stores[0]["store"] if worst_stores else None,
                 "最低评分门店星级": worst_stores[0]["avg_star"] if worst_stores else None,
-                "最常提及菜品": top_dish_tags[0]["dish"] if top_dish_tags else None,
-                "最常提及菜品次数": top_dish_tags[0]["mentions"] if top_dish_tags else None,
+                "高频好评词": top_dish_tags[0]["dish"] if top_dish_tags else None,
+                "高频好评词次数": top_dish_tags[0]["mentions"] if top_dish_tags else None,
                 "好评榜达标门店数": quality_eligible_count,
                 "必吃榜候选门店数": must_eat_candidate_count,
                 "黑珍珠候选门店数": black_pearl_candidate_count,
