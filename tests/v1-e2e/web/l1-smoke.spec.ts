@@ -30,9 +30,11 @@ const MAIN_MENUS: Array<{
   { name: '质量管理', firstChildPath: '/quality/inspections',    urlContains: /\/quality/ },
   { name: '财务管理', firstChildPath: '/finance/costs',          urlContains: /\/finance/ },
   // IA 重设计 (2026-06-01): 合并「经营报表」(/analytics) + 「智能分析」(/smart-bi) 为单一
-  // 「数据与分析」组, 主入口经营驾驶舱 (/smart-bi/dashboard)。旧顶级「经营报表」组已删除,
-  // 故 smoke 改查「数据与分析」+ 落在驾驶舱。/analytics/* 子路由仍保留 (D-6)。
-  { name: '数据与分析', firstChildPath: '/smart-bi/dashboard',    urlContains: /\/smart-bi\/dashboard/ },
+  // 「数据与分析」组。旧顶级「经营报表」组已删除 → smoke 改查新组名「数据与分析」。
+  // firstChildPath 仍用 /analytics/overview (分析概览, D-6 保留的纯 Java 页): L1 smoke 只验
+  // "菜单组能打开+导航无 HTTP 错误", 用 Java-backed 页避免 e2e-pr-gate 无 Python 服务 (8083)
+  // 时经营驾驶舱模板分析打 Python 返 500 触发 Step6 hard-error 误判。菜单组名匹配才是本 case 重点。
+  { name: '数据与分析', firstChildPath: '/analytics/overview',    urlContains: /\/analytics/ },
   { name: '系统管理', firstChildPath: '/system/users',           urlContains: /\/system/ },
 ];
 
