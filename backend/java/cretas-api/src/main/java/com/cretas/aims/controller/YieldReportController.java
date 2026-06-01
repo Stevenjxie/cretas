@@ -5,6 +5,7 @@ import com.cretas.aims.annotation.RequirePermission;
 import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.dto.yield.BatchYieldDTO;
 import com.cretas.aims.dto.yield.MaterialInputRequest;
+import com.cretas.aims.dto.yield.YieldLimitsDTO;
 import com.cretas.aims.dto.yield.YieldReportRequest;
 import com.cretas.aims.service.yield.YieldReportService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -14,6 +15,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.web.bind.annotation.*;
 
+import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.Map;
 
@@ -68,6 +70,17 @@ public class YieldReportController {
             @RequestParam(required = false, defaultValue = "false") boolean triggerComplete,
             @RequestAttribute("userId") Long workerId) {
         return ApiResponse.success(yieldReportService.settleDay(factoryId, batchId, workerId, date, triggerComplete));
+    }
+
+    @RequirePermission({"production:read"})
+    @GetMapping("/yield/limits")
+    @Operation(summary = "超收预检 — 防呆 Rule 1: 报工 dialog 打开即显示边界 (maxAllowed / remaining)")
+    public ApiResponse<YieldLimitsDTO> getYieldLimits(
+            @PathVariable String factoryId,
+            @PathVariable Long batchId,
+            @RequestParam Long workProcessTaskId,
+            @RequestParam(required = false) BigDecimal inputQuantity) {
+        return ApiResponse.success(yieldReportService.getLimits(factoryId, batchId, workProcessTaskId, inputQuantity));
     }
 
     @RequirePermission({"production:read"})

@@ -2,8 +2,8 @@ package com.cretas.aims.service.yield;
 
 import com.cretas.aims.dto.yield.BatchYieldDTO;
 import com.cretas.aims.dto.yield.StepYieldDTO;
+import com.cretas.aims.dto.yield.YieldLimitsDTO;
 import com.cretas.aims.dto.yield.YieldReportRequest;
-import com.cretas.aims.entity.FactorySettings;
 import com.cretas.aims.entity.ProductionReport;
 import com.cretas.aims.entity.WorkProcess;
 import com.cretas.aims.entity.workprocess.WorkProcessTask;
@@ -184,7 +184,7 @@ class YieldReportServiceImplTest {
         WorkProcessTask t = task(10L, 1, "WP-01");
         when(taskRepo.findByFactoryIdAndId("F006", 10L)).thenReturn(Optional.of(t));
         when(processRepo.findById("WP-01")).thenReturn(Optional.of(wp));
-        when(factorySettingsRepo.findByFactoryId("F006")).thenReturn(Optional.empty()); // default 30%
+        when(factorySettingsRepo.findProductionSettingsByFactoryId("F006")).thenReturn(null); // default 30%
         when(reportRepo.findYieldReportsByBatch(anyString(), eq(1L))).thenReturn(List.of());
         when(reportRepo.save(any(ProductionReport.class))).thenAnswer(i -> {
             ProductionReport r = i.getArgument(0); r.setId(99L); return r;
@@ -341,12 +341,9 @@ class YieldReportServiceImplTest {
             ProductionReport r = i.getArgument(0); r.setId(99L); return r;
         });
 
-        // set custom tolerance = 0.10 (10%)
+        // set custom tolerance = 0.10 (10%) via projection query
         String psJson = "{\"yieldOverReceiptTolerance\":0.10}";
-        FactorySettings fs = new FactorySettings();
-        fs.setFactoryId("F006");
-        fs.setProductionSettings(psJson);
-        when(factorySettingsRepo.findByFactoryId("F006")).thenReturn(Optional.of(fs));
+        when(factorySettingsRepo.findProductionSettingsByFactoryId("F006")).thenReturn(psJson);
 
         when(reportRepo.findYieldReportsByTask("F006", 10L)).thenReturn(List.of(
                 ProductionReport.builder().outputQuantity(new BigDecimal("100")).build()
@@ -367,6 +364,57 @@ class YieldReportServiceImplTest {
                     assertThat(be.getErrorCode()).isEqualTo("OVER_RECEIPT");
                 });
         verify(reportRepo, never()).save(any(ProductionReport.class));
+    }
+
+    // ── A4 getLimits 预检端点测试 ─────────────────────────────────────────────────
+
+    @Test
+    void getLimits_withData_calculatesMaxAllowedAndRemaining() {
+        // input=100, syMax=0.85, tolerance=0.30
+        // target = 100 × 0.85 = 85
+        // maxAllowed = 85 × 1.30 = 110.5
+        // alreadyReported = 60
+        // remaining = 110.5 - 60 = 50.5
+        WorkProcessTask t = task(20L, 1, "WP-GET");
+        when(taskRepo.findByFactoryIdAndId("F006", 20L)).thenReturn(Optional.of(t));
+        WorkProcess wp = WorkProcess.builder().id("WP-GET").factoryId("F006")
+                .unit("kg").standardYieldMax(new BigDecimal("0.8500")).build();
+        when(processRepo.findById("WP-GET")).thenReturn(Optional.of(wp));
+        when(factorySettingsRepo.findProductionSettingsByFactoryId("F006")).thenReturn(null); // default 30%
+        when(reportRepo.findYieldReportsByTask("F006", 20L)).thenReturn(List.of(
+                ProductionReport.builder().outputQuantity(new BigDecimal("60")).build()
+        ));
+
+        YieldLimitsDTO dto = svc.getLimits("F006", 1L, 20L, new BigDecimal("100"));
+
+        assertThat(dto.getWorkProcessTaskId()).isEqualTo(20L);
+        assertThat(dto.getTargetQuantity()).isEqualByComparingTo("85");
+        assertThat(dto.getStandardYieldMax()).isEqualByComparingTo("0.85");
+        assertThat(dto.getUnit()).isEqualTo("kg");
+        assertThat(dto.getAlreadyReported()).isEqualByComparingTo("60");
+        assertThat(dto.getToleranceRate()).isEqualByComparingTo("0.30");
+        assertThat(dto.getMaxAllowed()).isEqualByComparingTo("110.5");
+        assertThat(dto.getRemaining()).isEqualByComparingTo("50.5");
+        assertThat(dto.getMessage()).contains("60").contains("85").contains("110.5");
+    }
+
+    @Test
+    void getLimits_noBase_nullTargetAndMax() {
+        // standardYieldMax=null → targetQuantity/maxAllowed/remaining all null
+        WorkProcessTask t = task(21L, 1, "WP-NULL");
+        when(taskRepo.findByFactoryIdAndId("F006", 21L)).thenReturn(Optional.of(t));
+        WorkProcess wp = WorkProcess.builder().id("WP-NULL").factoryId("F006")
+                .unit("kg").standardYieldMax(null).build();
+        when(processRepo.findById("WP-NULL")).thenReturn(Optional.of(wp));
+        when(factorySettingsRepo.findProductionSettingsByFactoryId("F006")).thenReturn(null);
+        when(reportRepo.findYieldReportsByTask("F006", 21L)).thenReturn(List.of());
+
+        YieldLimitsDTO dto = svc.getLimits("F006", 1L, 21L, new BigDecimal("100"));
+
+        assertThat(dto.getTargetQuantity()).isNull();
+        assertThat(dto.getMaxAllowed()).isNull();
+        assertThat(dto.getRemaining()).isNull();
+        assertThat(dto.getMessage()).isNotBlank();
     }
 
     @Test

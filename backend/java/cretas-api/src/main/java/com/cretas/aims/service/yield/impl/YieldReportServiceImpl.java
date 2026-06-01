@@ -3,6 +3,7 @@ package com.cretas.aims.service.yield.impl;
 import com.cretas.aims.dto.FactorySettingsDTO;
 import com.cretas.aims.dto.yield.BatchYieldDTO;
 import com.cretas.aims.dto.yield.MaterialInputRequest;
+import com.cretas.aims.dto.yield.YieldLimitsDTO;
 import com.cretas.aims.dto.yield.YieldReportRequest;
 import com.cretas.aims.entity.FactorySettings;
 import com.cretas.aims.entity.ProductionReport;
@@ -171,14 +172,18 @@ public class YieldReportServiceImpl implements YieldReportService {
         return null;
     }
 
-    /** A4: 读取工厂级超收容差. 无配置或解析失败时返回默认 30%. */
+    /**
+     * A4: 读取工厂级超收容差. 无配置或解析失败时返回默认 30%.
+     * 使用 {@code findProductionSettingsByFactoryId} 投影查询 (仅读 TEXT 列, 不加载完整实体).
+     * <p>注意: {@code BusinessException.withCode} 的 errorCode 通过 ApiResponse.errorWithCode 对外暴露,
+     * 但 hintTarget 不经该路径传播.</p>
+     */
     private BigDecimal getToleranceForFactory(String factoryId) {
         try {
-            FactorySettings settings = factorySettingsRepo.findByFactoryId(factoryId).orElse(null);
-            if (settings == null || settings.getProductionSettings() == null) return DEFAULT_TOLERANCE;
+            String json = factorySettingsRepo.findProductionSettingsByFactoryId(factoryId);
+            if (json == null) return DEFAULT_TOLERANCE;
             FactorySettingsDTO.ProductionSettings ps =
-                    objectMapper.readValue(settings.getProductionSettings(),
-                            FactorySettingsDTO.ProductionSettings.class);
+                    objectMapper.readValue(json, FactorySettingsDTO.ProductionSettings.class);
             return ps.getYieldOverReceiptTolerance() != null
                     ? ps.getYieldOverReceiptTolerance()
                     : DEFAULT_TOLERANCE;
@@ -186,6 +191,63 @@ public class YieldReportServiceImpl implements YieldReportService {
             log.warn("[A4] 读取容差设置失败, 使用默认 30%", e);
             return DEFAULT_TOLERANCE;
         }
+    }
+
+    @Override
+    public YieldLimitsDTO getLimits(String factoryId, Long batchId, Long workProcessTaskId, BigDecimal inputQuantity) {
+        WorkProcessTask t = taskRepo.findByFactoryIdAndId(factoryId, workProcessTaskId)
+                .orElseThrow(() -> new BusinessException(404, "工序任务不存在: " + workProcessTaskId));
+
+        String workProcessId = t.getWorkProcessId();
+        Optional<WorkProcess> wpOpt = processRepo.findById(workProcessId);
+        BigDecimal syMax = wpOpt.map(WorkProcess::getStandardYieldMax).orElse(null);
+        String unit = wpOpt.map(WorkProcess::getUnit).orElse("");
+
+        BigDecimal alreadyReported = reportRepo.findYieldReportsByTask(factoryId, t.getId()).stream()
+                .map(ProductionReport::getOutputQuantity)
+                .filter(Objects::nonNull)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+
+        BigDecimal toleranceRate = getToleranceForFactory(factoryId);
+
+        // Compute target / maxAllowed / remaining only when we have a valid base
+        BigDecimal targetQuantity = null;
+        BigDecimal maxAllowed = null;
+        BigDecimal remaining = null;
+        String message;
+
+        boolean hasInput = inputQuantity != null && inputQuantity.compareTo(BigDecimal.ZERO) > 0;
+        if (!hasInput) {
+            message = "未填投入量, 无超收告警";
+        } else if (syMax == null) {
+            message = "该工序未配置标准出成上限, 无超收告警";
+        } else {
+            targetQuantity = inputQuantity.multiply(syMax);
+            if (targetQuantity.compareTo(BigDecimal.ZERO) > 0) {
+                maxAllowed = targetQuantity.multiply(BigDecimal.ONE.add(toleranceRate))
+                        .setScale(4, RoundingMode.HALF_UP);
+                remaining = maxAllowed.subtract(alreadyReported);
+                message = String.format("已报 %.2f %s / 目标 %.2f %s / 含 %.0f%% 超收容差最多可报 %.2f %s",
+                        alreadyReported, unit,
+                        targetQuantity, unit,
+                        toleranceRate.multiply(BigDecimal.valueOf(100)),
+                        maxAllowed, unit);
+            } else {
+                message = "投入量为零, 无超收告警";
+            }
+        }
+
+        return YieldLimitsDTO.builder()
+                .workProcessTaskId(workProcessTaskId)
+                .targetQuantity(targetQuantity)
+                .standardYieldMax(syMax)
+                .unit(unit)
+                .alreadyReported(alreadyReported)
+                .toleranceRate(toleranceRate)
+                .maxAllowed(maxAllowed)
+                .remaining(remaining)
+                .message(message)
+                .build();
     }
 
     private BigDecimal computeCarryover(String factoryId, Long batchId, WorkProcessTask t, BigDecimal thisInput) {
