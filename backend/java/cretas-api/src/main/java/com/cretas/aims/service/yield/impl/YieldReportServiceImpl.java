@@ -2,15 +2,18 @@ package com.cretas.aims.service.yield.impl;
 
 import com.cretas.aims.dto.FactorySettingsDTO;
 import com.cretas.aims.dto.yield.BatchYieldDTO;
+import com.cretas.aims.dto.yield.MaterialBatchRef;
 import com.cretas.aims.dto.yield.MaterialInputRequest;
 import com.cretas.aims.dto.yield.YieldLimitsDTO;
 import com.cretas.aims.dto.yield.YieldReportRequest;
-import com.cretas.aims.entity.FactorySettings;
+import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.ProductionReport;
 import com.cretas.aims.entity.WorkProcess;
+import com.cretas.aims.entity.enums.MaterialBatchStatus;
 import com.cretas.aims.entity.workprocess.WorkProcessTask;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.FactorySettingsRepository;
+import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.ProductionReportRepository;
 import com.cretas.aims.repository.WorkProcessRepository;
 import com.cretas.aims.repository.workprocess.WorkProcessTaskRepository;
@@ -29,8 +32,10 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -52,6 +57,7 @@ public class YieldReportServiceImpl implements YieldReportService {
     private final YieldCalculationService calcSvc;
     private final ProcessingService processingService;
     private final FactorySettingsRepository factorySettingsRepo;
+    private final MaterialBatchRepository materialBatchRepository;
     private final ObjectMapper objectMapper;
 
     @Override
@@ -288,12 +294,94 @@ public class YieldReportServiceImpl implements YieldReportService {
                 .feedInQuantity(req.getFeedInQuantity())
                 .inputQuantity(req.getFeedInQuantity())   // 投料量落首道 input
                 .inputUnit(req.getInputUnit())
+                .materialBatchRefs(toMaterialBatchRefMaps(req.getMaterialBatchRefs()))  // A2b: 链接领料批次列表
                 .status(ProductionReport.Status.SUBMITTED)
                 .build();
-        ProductionReport saved = reportRepo.save(r);
+        reportRepo.save(r);
+
+        // A2b: 保存后对每个关联批次独立检查自动结清
+        if (req.getMaterialBatchRefs() != null) {
+            for (MaterialBatchRef ref : req.getMaterialBatchRefs()) {
+                if (ref.getMaterialBatchId() != null) {
+                    checkAndAutoSettle(factoryId, batchId, ref.getMaterialBatchId());
+                }
+            }
+        }
+
         Map<String, Object> out = new HashMap<>();
-        out.put("reportId", saved.getId());
+        out.put("reportId", r.getId());
         return out;
+    }
+
+    /**
+     * A2b: 将 List<MaterialBatchRef> 转为 List<Map<String,Object>> 用于 jsonb 序列化.
+     * null/empty → null (backward-compatible: 仓管员不填则无自动结清路径).
+     */
+    private List<Map<String, Object>> toMaterialBatchRefMaps(List<MaterialBatchRef> refs) {
+        if (refs == null || refs.isEmpty()) return null;
+        return refs.stream().map(r -> {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("materialBatchId", r.getMaterialBatchId());
+            m.put("quantity", r.getQuantity());
+            if (r.getUnit() != null) m.put("unit", r.getUnit());
+            return m;
+        }).collect(Collectors.toList());
+    }
+
+    /**
+     * A2b: 检查触发批次是否 USED_UP, 若是则查找关联本批次 (batchId) 的未结清 YIELD 报工,
+     * 对每条候选报工检查其 material_batch_refs 中全部 materialBatchId 是否均 USED_UP,
+     * 全部满足才打 settled=true (all-or-nothing 语义).
+     */
+    private void checkAndAutoSettle(String factoryId, Long batchId, Long materialBatchId) {
+        // 1. 查触发批次状态
+        Optional<MaterialBatch> batchOpt = materialBatchRepository.findById(String.valueOf(materialBatchId));
+        if (batchOpt.isEmpty()) return;
+        MaterialBatch mb = batchOpt.get();
+        if (mb.getStatus() != MaterialBatchStatus.USED_UP
+                && mb.getRemainingQuantity().compareTo(BigDecimal.ZERO) > 0) {
+            return;  // 触发批次未用完，不触发
+        }
+        // 2. 找到 material_batch_refs 包含此 materialBatchId 的所有未结清 YIELD 报工
+        String refJson = "[{\"materialBatchId\":" + materialBatchId + "}]";
+        List<ProductionReport> candidates = reportRepo.findUnsettledYieldContainingMaterialBatch(
+                factoryId, batchId, refJson);
+        if (candidates.isEmpty()) return;
+        // 3. 对每条候选报工: 检查其 material_batch_refs 中所有 materialBatchId 是否全部 USED_UP
+        LocalDateTime now = LocalDateTime.now();
+        List<ProductionReport> toSettle = new ArrayList<>();
+        for (ProductionReport candidate : candidates) {
+            if (allRefsUsedUp(candidate.getMaterialBatchRefs())) {
+                candidate.setSettled(true);
+                candidate.setSettledAt(now);
+                toSettle.add(candidate);
+            }
+        }
+        if (!toSettle.isEmpty()) {
+            reportRepo.saveAll(toSettle);
+            log.info("A2b 自动结清: factoryId={}, batchId={}, triggerMaterialBatchId={}, settledCount={}",
+                    factoryId, batchId, materialBatchId, toSettle.size());
+        }
+    }
+
+    /**
+     * A2b: 检查 materialBatchRefs 列表中所有 materialBatchId 是否全部 USED_UP.
+     * null/empty → false (无关联批次不触发自动结清).
+     */
+    private boolean allRefsUsedUp(List<Map<String, Object>> refs) {
+        if (refs == null || refs.isEmpty()) return false;
+        for (Map<String, Object> ref : refs) {
+            Object mbIdObj = ref.get("materialBatchId");
+            if (mbIdObj == null) continue;
+            Long mbId = Long.valueOf(mbIdObj.toString());
+            Optional<MaterialBatch> mb = materialBatchRepository.findById(String.valueOf(mbId));
+            if (mb.isEmpty()) continue;  // 找不到批次视为忽略
+            if (mb.get().getStatus() != MaterialBatchStatus.USED_UP
+                    && mb.get().getRemainingQuantity().compareTo(BigDecimal.ZERO) > 0) {
+                return false;  // 至少一个未用完 → 不结清
+            }
+        }
+        return true;
     }
 
     @Override
