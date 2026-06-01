@@ -466,11 +466,11 @@ class YieldReportServiceImplTest {
         when(reportRepo.save(cap.capture())).thenAnswer(i -> {
             ProductionReport r = i.getArgument(0); r.setId(101L); return r;
         });
-        // materialBatch 123 is NOT USED_UP, so autoSettle won't fire
+        // materialBatch mb-uuid-aaa is NOT USED_UP, so autoSettle won't fire
         MaterialBatch mb = new MaterialBatch();
-        mb.setId("123"); mb.setStatus(MaterialBatchStatus.AVAILABLE);
+        mb.setId("mb-uuid-aaa"); mb.setStatus(MaterialBatchStatus.AVAILABLE);
         mb.setReceiptQuantity(new BigDecimal("820")); mb.setUsedQuantity(new BigDecimal("520")); // remaining=300
-        when(materialBatchRepo.findById("123")).thenReturn(Optional.of(mb));
+        when(materialBatchRepo.findById("mb-uuid-aaa")).thenReturn(Optional.of(mb));
 
         MaterialInputRequest req = new MaterialInputRequest();
         req.setWorkProcessTaskId(30L);
@@ -478,7 +478,7 @@ class YieldReportServiceImplTest {
         req.setFeedInQuantity(new BigDecimal("998"));
         req.setInputUnit("kg");
         req.setMaterialBatchRefs(List.of(
-                new MaterialBatchRef(123L, new BigDecimal("520"), "kg")
+                new MaterialBatchRef("mb-uuid-aaa", new BigDecimal("520"), "kg")
         ));
 
         svc.recordMaterialInput("F006", 1L, 5L, req);
@@ -486,7 +486,7 @@ class YieldReportServiceImplTest {
         ProductionReport saved = cap.getValue();
         assertThat(saved.getMaterialBatchRefs()).isNotNull().hasSize(1);
         Map<String, Object> ref = saved.getMaterialBatchRefs().get(0);
-        assertThat(ref.get("materialBatchId")).isEqualTo(123L);
+        assertThat(ref.get("materialBatchId")).isEqualTo("mb-uuid-aaa");
         assertThat(ref.get("quantity")).isEqualTo(new BigDecimal("520"));
         assertThat(ref.get("unit")).isEqualTo("kg");
     }
@@ -500,13 +500,13 @@ class YieldReportServiceImplTest {
         });
         // both batches NOT USED_UP
         MaterialBatch mb1 = new MaterialBatch();
-        mb1.setId("123"); mb1.setStatus(MaterialBatchStatus.AVAILABLE);
+        mb1.setId("mb-uuid-aaa"); mb1.setStatus(MaterialBatchStatus.AVAILABLE);
         mb1.setReceiptQuantity(new BigDecimal("400")); mb1.setUsedQuantity(new BigDecimal("300")); // remaining=100
         MaterialBatch mb2 = new MaterialBatch();
-        mb2.setId("456"); mb2.setStatus(MaterialBatchStatus.AVAILABLE);
+        mb2.setId("mb-uuid-bbb"); mb2.setStatus(MaterialBatchStatus.AVAILABLE);
         mb2.setReceiptQuantity(new BigDecimal("400")); mb2.setUsedQuantity(new BigDecimal("200")); // remaining=200
-        when(materialBatchRepo.findById("123")).thenReturn(Optional.of(mb1));
-        when(materialBatchRepo.findById("456")).thenReturn(Optional.of(mb2));
+        when(materialBatchRepo.findById("mb-uuid-aaa")).thenReturn(Optional.of(mb1));
+        when(materialBatchRepo.findById("mb-uuid-bbb")).thenReturn(Optional.of(mb2));
 
         MaterialInputRequest req = new MaterialInputRequest();
         req.setWorkProcessTaskId(30L);
@@ -514,16 +514,16 @@ class YieldReportServiceImplTest {
         req.setFeedInQuantity(new BigDecimal("500"));
         req.setInputUnit("kg");
         req.setMaterialBatchRefs(List.of(
-                new MaterialBatchRef(123L, new BigDecimal("300"), "kg"),
-                new MaterialBatchRef(456L, new BigDecimal("200"), "kg")
+                new MaterialBatchRef("mb-uuid-aaa", new BigDecimal("300"), "kg"),
+                new MaterialBatchRef("mb-uuid-bbb", new BigDecimal("200"), "kg")
         ));
 
         svc.recordMaterialInput("F006", 1L, 5L, req);
 
         ProductionReport saved = cap.getValue();
         assertThat(saved.getMaterialBatchRefs()).isNotNull().hasSize(2);
-        assertThat(saved.getMaterialBatchRefs().get(0).get("materialBatchId")).isEqualTo(123L);
-        assertThat(saved.getMaterialBatchRefs().get(1).get("materialBatchId")).isEqualTo(456L);
+        assertThat(saved.getMaterialBatchRefs().get(0).get("materialBatchId")).isEqualTo("mb-uuid-aaa");
+        assertThat(saved.getMaterialBatchRefs().get(1).get("materialBatchId")).isEqualTo("mb-uuid-bbb");
     }
 
     // ── A2b: checkAndAutoSettle ───────────────────────────────────────────────────
@@ -546,18 +546,18 @@ class YieldReportServiceImplTest {
             ProductionReport r = i.getArgument(0); r.setId(201L); return r;
         });
 
-        // trigger batch 123 IS USED_UP (remainingQuantity=0)
+        // trigger batch mb-uuid-aaa IS USED_UP (remainingQuantity=0)
         MaterialBatch mb = new MaterialBatch();
-        mb.setId("123"); mb.setStatus(MaterialBatchStatus.USED_UP);
+        mb.setId("mb-uuid-aaa"); mb.setStatus(MaterialBatchStatus.USED_UP);
         mb.setReceiptQuantity(new BigDecimal("520")); mb.setUsedQuantity(new BigDecimal("520")); // remaining=0
-        when(materialBatchRepo.findById("123")).thenReturn(Optional.of(mb));
+        when(materialBatchRepo.findById("mb-uuid-aaa")).thenReturn(Optional.of(mb));
 
-        // candidate report has refs=[{materialBatchId:123}]
+        // candidate report has refs=[{materialBatchId:"mb-uuid-aaa"}] — String value quoted in JSON
         ProductionReport candidate = reportWithBatchRefs(List.of(
-                Map.of("materialBatchId", 123L, "quantity", new BigDecimal("520"), "unit", "kg")
+                Map.of("materialBatchId", "mb-uuid-aaa", "quantity", new BigDecimal("520"), "unit", "kg")
         ));
         when(reportRepo.findUnsettledYieldContainingMaterialBatch(
-                eq("F006"), eq(1L), eq("[{\"materialBatchId\":123}]")))
+                eq("F006"), eq(1L), eq("[{\"materialBatchId\":\"mb-uuid-aaa\"}]")))
                 .thenReturn(List.of(candidate));
         when(reportRepo.saveAll(any())).thenAnswer(i -> i.getArgument(0));
 
@@ -567,7 +567,7 @@ class YieldReportServiceImplTest {
         req.setFeedInQuantity(new BigDecimal("998"));
         req.setInputUnit("kg");
         req.setMaterialBatchRefs(List.of(
-                new MaterialBatchRef(123L, new BigDecimal("520"), "kg")
+                new MaterialBatchRef("mb-uuid-aaa", new BigDecimal("520"), "kg")
         ));
 
         svc.recordMaterialInput("F006", 1L, 5L, req);
@@ -589,26 +589,26 @@ class YieldReportServiceImplTest {
             ProductionReport r = i.getArgument(0); r.setId(202L); return r;
         });
 
-        // batch 123 USED_UP, batch 456 still has remaining
-        MaterialBatch mb123 = new MaterialBatch();
-        mb123.setId("123"); mb123.setStatus(MaterialBatchStatus.USED_UP);
-        mb123.setReceiptQuantity(new BigDecimal("300")); mb123.setUsedQuantity(new BigDecimal("300")); // remaining=0
-        MaterialBatch mb456 = new MaterialBatch();
-        mb456.setId("456"); mb456.setStatus(MaterialBatchStatus.AVAILABLE);
-        mb456.setReceiptQuantity(new BigDecimal("400")); mb456.setUsedQuantity(new BigDecimal("200")); // remaining=200
-        when(materialBatchRepo.findById("123")).thenReturn(Optional.of(mb123));
-        when(materialBatchRepo.findById("456")).thenReturn(Optional.of(mb456));
+        // batch mb-uuid-aaa USED_UP, batch mb-uuid-bbb still has remaining
+        MaterialBatch mbAaa = new MaterialBatch();
+        mbAaa.setId("mb-uuid-aaa"); mbAaa.setStatus(MaterialBatchStatus.USED_UP);
+        mbAaa.setReceiptQuantity(new BigDecimal("300")); mbAaa.setUsedQuantity(new BigDecimal("300")); // remaining=0
+        MaterialBatch mbBbb = new MaterialBatch();
+        mbBbb.setId("mb-uuid-bbb"); mbBbb.setStatus(MaterialBatchStatus.AVAILABLE);
+        mbBbb.setReceiptQuantity(new BigDecimal("400")); mbBbb.setUsedQuantity(new BigDecimal("200")); // remaining=200
+        when(materialBatchRepo.findById("mb-uuid-aaa")).thenReturn(Optional.of(mbAaa));
+        when(materialBatchRepo.findById("mb-uuid-bbb")).thenReturn(Optional.of(mbBbb));
 
-        // candidate report refs BOTH batches; 456 has remaining → allRefsUsedUp=false → not settled
+        // candidate report refs BOTH batches; mb-uuid-bbb has remaining → allRefsUsedUp=false → not settled
         ProductionReport candidate = reportWithBatchRefs(List.of(
-                Map.of("materialBatchId", 123L, "quantity", new BigDecimal("300")),
-                Map.of("materialBatchId", 456L, "quantity", new BigDecimal("200"))
+                Map.of("materialBatchId", "mb-uuid-aaa", "quantity", new BigDecimal("300")),
+                Map.of("materialBatchId", "mb-uuid-bbb", "quantity", new BigDecimal("200"))
         ));
         when(reportRepo.findUnsettledYieldContainingMaterialBatch(
-                eq("F006"), eq(1L), eq("[{\"materialBatchId\":123}]")))
+                eq("F006"), eq(1L), eq("[{\"materialBatchId\":\"mb-uuid-aaa\"}]")))
                 .thenReturn(List.of(candidate));
         when(reportRepo.findUnsettledYieldContainingMaterialBatch(
-                eq("F006"), eq(1L), eq("[{\"materialBatchId\":456}]")))
+                eq("F006"), eq(1L), eq("[{\"materialBatchId\":\"mb-uuid-bbb\"}]")))
                 .thenReturn(List.of(candidate));
 
         MaterialInputRequest req = new MaterialInputRequest();
@@ -617,8 +617,8 @@ class YieldReportServiceImplTest {
         req.setFeedInQuantity(new BigDecimal("500"));
         req.setInputUnit("kg");
         req.setMaterialBatchRefs(List.of(
-                new MaterialBatchRef(123L, new BigDecimal("300"), "kg"),
-                new MaterialBatchRef(456L, new BigDecimal("200"), "kg")
+                new MaterialBatchRef("mb-uuid-aaa", new BigDecimal("300"), "kg"),
+                new MaterialBatchRef("mb-uuid-bbb", new BigDecimal("200"), "kg")
         ));
 
         svc.recordMaterialInput("F006", 1L, 5L, req);
@@ -636,24 +636,24 @@ class YieldReportServiceImplTest {
         });
 
         // both batches USED_UP
-        MaterialBatch mb123 = new MaterialBatch();
-        mb123.setId("123"); mb123.setStatus(MaterialBatchStatus.USED_UP);
-        mb123.setReceiptQuantity(new BigDecimal("300")); mb123.setUsedQuantity(new BigDecimal("300")); // remaining=0
-        MaterialBatch mb456 = new MaterialBatch();
-        mb456.setId("456"); mb456.setStatus(MaterialBatchStatus.USED_UP);
-        mb456.setReceiptQuantity(new BigDecimal("200")); mb456.setUsedQuantity(new BigDecimal("200")); // remaining=0
-        when(materialBatchRepo.findById("123")).thenReturn(Optional.of(mb123));
-        when(materialBatchRepo.findById("456")).thenReturn(Optional.of(mb456));
+        MaterialBatch mbAaa = new MaterialBatch();
+        mbAaa.setId("mb-uuid-aaa"); mbAaa.setStatus(MaterialBatchStatus.USED_UP);
+        mbAaa.setReceiptQuantity(new BigDecimal("300")); mbAaa.setUsedQuantity(new BigDecimal("300")); // remaining=0
+        MaterialBatch mbBbb = new MaterialBatch();
+        mbBbb.setId("mb-uuid-bbb"); mbBbb.setStatus(MaterialBatchStatus.USED_UP);
+        mbBbb.setReceiptQuantity(new BigDecimal("200")); mbBbb.setUsedQuantity(new BigDecimal("200")); // remaining=0
+        when(materialBatchRepo.findById("mb-uuid-aaa")).thenReturn(Optional.of(mbAaa));
+        when(materialBatchRepo.findById("mb-uuid-bbb")).thenReturn(Optional.of(mbBbb));
 
         ProductionReport candidate = reportWithBatchRefs(List.of(
-                Map.of("materialBatchId", 123L, "quantity", new BigDecimal("300")),
-                Map.of("materialBatchId", 456L, "quantity", new BigDecimal("200"))
+                Map.of("materialBatchId", "mb-uuid-aaa", "quantity", new BigDecimal("300")),
+                Map.of("materialBatchId", "mb-uuid-bbb", "quantity", new BigDecimal("200"))
         ));
         when(reportRepo.findUnsettledYieldContainingMaterialBatch(
-                eq("F006"), eq(1L), eq("[{\"materialBatchId\":123}]")))
+                eq("F006"), eq(1L), eq("[{\"materialBatchId\":\"mb-uuid-aaa\"}]")))
                 .thenReturn(List.of(candidate));
         when(reportRepo.findUnsettledYieldContainingMaterialBatch(
-                eq("F006"), eq(1L), eq("[{\"materialBatchId\":456}]")))
+                eq("F006"), eq(1L), eq("[{\"materialBatchId\":\"mb-uuid-bbb\"}]")))
                 .thenReturn(List.of(candidate));
         when(reportRepo.saveAll(any())).thenAnswer(i -> i.getArgument(0));
 
@@ -663,8 +663,8 @@ class YieldReportServiceImplTest {
         req.setFeedInQuantity(new BigDecimal("500"));
         req.setInputUnit("kg");
         req.setMaterialBatchRefs(List.of(
-                new MaterialBatchRef(123L, new BigDecimal("300"), "kg"),
-                new MaterialBatchRef(456L, new BigDecimal("200"), "kg")
+                new MaterialBatchRef("mb-uuid-aaa", new BigDecimal("300"), "kg"),
+                new MaterialBatchRef("mb-uuid-bbb", new BigDecimal("200"), "kg")
         ));
 
         svc.recordMaterialInput("F006", 1L, 5L, req);
@@ -702,21 +702,21 @@ class YieldReportServiceImplTest {
 
     @Test
     void autoSettleByMaterialBatch_returnsSettledCount() {
-        // batch 500 is USED_UP; 1 candidate report with refs=[{materialBatchId:500}] gets settled
+        // batch mb-uuid-ccc is USED_UP; 1 candidate report gets settled
         MaterialBatch mb = new MaterialBatch();
-        mb.setId("500"); mb.setStatus(MaterialBatchStatus.USED_UP);
+        mb.setId("mb-uuid-ccc"); mb.setStatus(MaterialBatchStatus.USED_UP);
         mb.setReceiptQuantity(new BigDecimal("300")); mb.setUsedQuantity(new BigDecimal("300"));
-        when(materialBatchRepo.findById("500")).thenReturn(Optional.of(mb));
+        when(materialBatchRepo.findById("mb-uuid-ccc")).thenReturn(Optional.of(mb));
 
         ProductionReport candidate = reportWithBatchRefs(List.of(
-                Map.of("materialBatchId", 500L, "quantity", new BigDecimal("300"), "unit", "kg")
+                Map.of("materialBatchId", "mb-uuid-ccc", "quantity", new BigDecimal("300"), "unit", "kg")
         ));
         when(reportRepo.findUnsettledYieldContainingMaterialBatch(
-                eq("F006"), eq(1L), eq("[{\"materialBatchId\":500}]")))
+                eq("F006"), eq(1L), eq("[{\"materialBatchId\":\"mb-uuid-ccc\"}]")))
                 .thenReturn(List.of(candidate));
         when(reportRepo.saveAll(any())).thenAnswer(i -> i.getArgument(0));
 
-        Map<String, Object> result = svc.autoSettleByMaterialBatch("F006", 1L, 500L);
+        Map<String, Object> result = svc.autoSettleByMaterialBatch("F006", 1L, "mb-uuid-ccc");
 
         assertThat(result.get("settledCount")).isEqualTo(1);
         assertThat(candidate.getSettled()).isTrue();
@@ -725,13 +725,13 @@ class YieldReportServiceImplTest {
 
     @Test
     void autoSettleByMaterialBatch_batchNotUsedUp_returnsZero() {
-        // batch 501 still AVAILABLE → no settle
+        // batch mb-uuid-ddd still AVAILABLE → no settle
         MaterialBatch mb = new MaterialBatch();
-        mb.setId("501"); mb.setStatus(MaterialBatchStatus.AVAILABLE);
+        mb.setId("mb-uuid-ddd"); mb.setStatus(MaterialBatchStatus.AVAILABLE);
         mb.setReceiptQuantity(new BigDecimal("300")); mb.setUsedQuantity(new BigDecimal("100"));
-        when(materialBatchRepo.findById("501")).thenReturn(Optional.of(mb));
+        when(materialBatchRepo.findById("mb-uuid-ddd")).thenReturn(Optional.of(mb));
 
-        Map<String, Object> result = svc.autoSettleByMaterialBatch("F006", 1L, 501L);
+        Map<String, Object> result = svc.autoSettleByMaterialBatch("F006", 1L, "mb-uuid-ddd");
 
         assertThat(result.get("settledCount")).isEqualTo(0);
         verify(reportRepo, never()).findUnsettledYieldContainingMaterialBatch(any(), any(), any());
@@ -746,11 +746,12 @@ class YieldReportServiceImplTest {
             ProductionReport r = i.getArgument(0); r.setId(205L); return r;
         });
 
-        // batch 789 has status EXPIRED and remaining=0 (e.g. expired and fully consumed)
+        // batch mb-uuid-exp has status EXPIRED and remaining=0 (e.g. expired and fully consumed)
+        // UUID-style id confirms Long regression would be caught: "mb-uuid-exp" cannot be parsed as Long.
         MaterialBatch mb = new MaterialBatch();
-        mb.setId("789"); mb.setStatus(MaterialBatchStatus.EXPIRED);
+        mb.setId("mb-uuid-exp"); mb.setStatus(MaterialBatchStatus.EXPIRED);
         mb.setReceiptQuantity(new BigDecimal("100")); mb.setUsedQuantity(new BigDecimal("100")); // remaining=0
-        when(materialBatchRepo.findById("789")).thenReturn(Optional.of(mb));
+        when(materialBatchRepo.findById("mb-uuid-exp")).thenReturn(Optional.of(mb));
 
         MaterialInputRequest req = new MaterialInputRequest();
         req.setWorkProcessTaskId(30L);
@@ -758,7 +759,7 @@ class YieldReportServiceImplTest {
         req.setFeedInQuantity(new BigDecimal("100"));
         req.setInputUnit("kg");
         req.setMaterialBatchRefs(List.of(
-                new MaterialBatchRef(789L, new BigDecimal("100"), "kg")
+                new MaterialBatchRef("mb-uuid-exp", new BigDecimal("100"), "kg")
         ));
 
         svc.recordMaterialInput("F006", 1L, 5L, req);

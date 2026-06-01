@@ -68,7 +68,7 @@ Steve 决策: **追踪 `materialBatchId` 到 material-input 路径**，使自动
 ```java
 // dto/yield/MaterialBatchRef.java (新建, 也可用 Map<String, Object> 行内)
 public class MaterialBatchRef {
-    private Long materialBatchId;    // 关联 MaterialBatch.id
+    private String materialBatchId;  // 关联 MaterialBatch.id (varchar PK, UUID-style String)
     private BigDecimal quantity;     // 本次从该批次领用量
     private String unit;             // 可选, 与 inputUnit 一致
 }
@@ -77,7 +77,7 @@ public class MaterialBatchRef {
 **`ProductionReport` entity 新增字段** (镜像 `source_batch_refs` 的 `@Type(JsonType.class)` jsonb 模式):
 ```java
 /** A2b: 领料关联原料批次列表 (1 或 N, 取决于产品配置)
- *  格式: [{"materialBatchId": Long, "quantity": Number, "unit": String|null}]
+ *  格式: [{"materialBatchId": String, "quantity": Number, "unit": String|null}]
  *  镜像 source_batch_refs: 同用 @Type(JsonType.class) + columnDefinition="jsonb"
  */
 @Type(JsonType.class)
@@ -97,7 +97,7 @@ CREATE INDEX idx_pr_material_batch_refs ON production_reports
     WHERE material_batch_refs IS NOT NULL;
 
 COMMENT ON COLUMN production_reports.material_batch_refs
-    IS 'A2b: 领料关联原料批次列表 (jsonb); 格式 [{"materialBatchId":Long,"quantity":Number,"unit":String}]; 支持 1 或 N 批次';
+    IS 'A2b: 领料关联原料批次列表 (jsonb); 格式 [{"materialBatchId":String,"quantity":Number,"unit":String}]; 支持 1 或 N 批次';
 ```
 
 > **为何用 jsonb 数组而非单 BIGINT 列**: Steve Q6 决策 — 1 个批次只是 N=1 的特例。jsonb 数组天然支持两种情况，无需加 join 表，且与现有 `source_batch_refs` 模式完全一致 (同用 `@Type(JsonType.class)`)。索引用 `jsonb_path_ops` GIN 支持 `@>` 包含查询，效率与 B-tree 索引相当 (适合本场景的 "找含某 materialBatchId 的报工" 查询)。
@@ -162,9 +162,9 @@ if (req.getMaterialBatchRefs() != null) {
 新私有方法 (或独立 service 方法供测试):
 
 ```java
-private void checkAndAutoSettle(String factoryId, Long batchId, Long materialBatchId) {
-    // 1. 查触发批次状态
-    Optional<MaterialBatch> batchOpt = materialBatchRepository.findById(String.valueOf(materialBatchId));
+private void checkAndAutoSettle(String factoryId, Long batchId, String materialBatchId) {
+    // 1. 查触发批次状态 — materialBatchId is String (VARCHAR PK)
+    Optional<MaterialBatch> batchOpt = materialBatchRepository.findById(materialBatchId);
     if (batchOpt.isEmpty()) return;
     MaterialBatch mb = batchOpt.get();
     // "原料用完" = status 是 USED_UP (权威信号). 排除 EXPIRED/DEFECTIVE 等 remaining=0 但非正常耗尽的状态.
@@ -199,8 +199,8 @@ private boolean allRefsUsedUp(List<Map<String, Object>> refs) {
     for (Map<String, Object> ref : refs) {
         Object mbIdObj = ref.get("materialBatchId");
         if (mbIdObj == null) continue;
-        Long mbId = Long.valueOf(mbIdObj.toString());
-        Optional<MaterialBatch> mb = materialBatchRepository.findById(String.valueOf(mbId));
+        String mbId = mbIdObj.toString();  // String PK; jsonb deserializes as String
+        Optional<MaterialBatch> mb = materialBatchRepository.findById(mbId);
         if (mb.isEmpty()) continue;  // 找不到批次视为忽略
         // 仅 USED_UP 视为"原料用完". EXPIRED/DEFECTIVE 等状态即使 remaining=0 也不触发结清.
         if (mb.get().getStatus() != MaterialBatchStatus.USED_UP) {
@@ -225,12 +225,12 @@ private boolean allRefsUsedUp(List<Map<String, Object>> refs) {
 List<ProductionReport> findUnsettledYieldContainingMaterialBatch(
     @Param("factoryId") String factoryId,
     @Param("batchId") Long batchId,
-    @Param("refJson") String refJson);  // 调用方传 "[{\"materialBatchId\":" + materialBatchId + "}]"
+    @Param("refJson") String refJson);  // 调用方传 "[{\"materialBatchId\":\"" + materialBatchId + "\"}]"
 ```
 
-调用方包装 (Service 层):
+调用方包装 (Service 层, materialBatchId 是 String → 必须在 JSON 中加引号):
 ```java
-String refJson = "[{\"materialBatchId\":" + materialBatchId + "}]";
+String refJson = "[{\"materialBatchId\":\"" + materialBatchId + "\"}]";
 List<ProductionReport> candidates = reportRepo.findUnsettledYieldContainingMaterialBatch(
         factoryId, batchId, refJson);
 ```
@@ -472,6 +472,7 @@ assert dtoA.getSteps().get(1).getCarryover().compareTo(new BigDecimal("606")) ==
 | Fix 2 (Important) | `allRefsUsedUp` 中 `Long.valueOf(mbIdObj.toString())` 在 jsonb 反序列化产生 BigDecimal 时抛 NumberFormatException | 改为 `((Number) mbIdObj).longValue()`，Number 接口兼容 Integer/Long/BigDecimal |
 | Fix 3 (Minor) | `recordMaterialInput` 调 `reportRepo.save(r)` 丢弃返回值，用 `r.getId()`（save 前 id 可能为 null）作响应 | 改为 `ProductionReport saved = reportRepo.save(r); ... saved.getId()` |
 | Fix 4 (Test) | 缺少锁定 Fix 1 语义的回归测试 | 新增 `autoSettle_batchExpiredNotUsedUp_doesNotSettle`：EXPIRED 批次 remaining=0 不触发 saveAll |
+| Fix 5 (CRITICAL — prod E2E 2026-06-02) | `MaterialBatchRef.materialBatchId` 声明为 `Long`，但 `MaterialBatch.id` 是 `VARCHAR` (UUID-style PK)。prod E2E 发现真实 id 如 `"9a354a1a-cdb0-4faf-..."` 无法解析为 Long → 400 `字段类型不正确，期望 Long`。`String.valueOf(longId)` 亦从不能匹配 UUID id，auto-settle 端点同理。 | `MaterialBatchRef.materialBatchId`、`checkAndAutoSettle` 参数、`autoSettleByMaterialBatch` 参数全改为 `String`；refJson 构建加引号 `"[{\"materialBatchId\":\"" + materialBatchId + "\"}]"`；`allRefsUsedUp` 改为 `mbIdObj.toString()`；测试 id 全改为 UUID-style 字符串（`mb-uuid-aaa`/`mb-uuid-bbb` 等）锁定 Long 回归。 |
 
 ### 代码 audit 结果汇总 (READ-ONLY)
 
