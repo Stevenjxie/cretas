@@ -1,0 +1,632 @@
+"""ComprehensiveSynthesisEngine — P2 多维综合分析 (multi-dim synthesis).
+
+Mirrors AgentOrchestrator's design (orchestrator.py) but合成 evaluates MULTIPLE
+deterministic sources (P1 review + gold finance/sales) into a FactBook, runs the
+InsightDimensionAnalyzer for structured correlations, asks the LLM for a grounded
+narrative via call_chain(SLOT.INSIGHTS), then hard-checks the answer with
+FactReconciler before collecting charts.
+
+Flow (spec §4.3)
+----------------
+  question
+    → narrative_cache.get (hit → 0 token)
+    → budget_tracker.check_budget (blocked → degraded)
+    → plan_dimensions (rules-first, no LLM)
+    → build_factbook (asyncio.gather P1 review_* + gold finance/products/...)
+    → InsightDimensionAnalyzer.analyze(factbook_to_dataframe)
+    → call_chain(SLOT.INSIGHTS, FactBook prompt + InsightReport summary)
+         ── inside a RedactionScope (P0 数据主权, mirror orchestrator PR #355) ──
+    → FactReconciler.reconcile (grounding hard-check)
+    → collect_charts (gated by plan)
+    → budget.consume + cache.put
+
+P0 数据主权 (§5.4) — RedactionScope
+-----------------------------------
+LLM calls route through call_chain → the shared _RedactingLLMClient wrapper.
+That wrapper ONLY redacts when a RedactionScope ContextVar is set. We mirror the
+orchestrator's NON-STREAMING path EXACTLY:
+
+    with redaction_scope():
+        register_values_for_egress(factbook.collect_sensitive_names())
+        answer, tokens = await self._call_llm(prompt, factory_id)
+        answer = restore_in_scope(answer)
+
+and set _llm_factory via llm_caller_context so the egress audit attributes the
+call to the tenant. Sensitive values = store names (top + worst stores) and dish
+names from the FactBook; generic 口味词 (味道好/鲜嫩) are NOT registered (they are
+quality words, not identity — collect_sensitive_names excludes them). We do NOT
+re-implement redaction (that would double-redact) — only set the scope.
+
+Grounding (§4.4/§5.2/§5.6) — the LLM never sees raw rows
+--------------------------------------------------------
+The prompt carries ONLY FactBook rendered text (real aggregated numbers) +
+InsightReport summary (deterministic correlations). The system prompt appends
+orchestrator SYSTEM_PROMPT + the 3 llm_guard clauses + a new HONEST_LABEL_CLAUSE
+(菜品标签非菜名 / 小样本 / VIP signal causal=推测 / 投诉=申诉). FactReconciler then
+backfills any deviating number and flags fabricated names.
+
+This template uses float() (per python-java-port: not byte-strict). Money rendered
+via orchestrator._fmt_money.
+"""
+from __future__ import annotations
+
+import asyncio
+import logging
+import time
+from dataclasses import dataclass, field
+from datetime import date
+from typing import Any, Dict, List, Optional, Tuple
+
+import asyncpg
+
+from common.llm_metrics import llm_caller_context
+from common.llm_redactor import (
+    redaction_scope,
+    register_values_for_egress,
+    restore_in_scope,
+)
+from common.llm_router import call_chain, SLOT
+from smartbi.agent.budget_tracker import AgentBudgetTracker
+from smartbi.agent.factbook import (
+    FactBook,
+    NOTE_COMPLAINT_DISPUTE,
+    NOTE_DISH_TAG_NOT_NAME,
+    NOTE_LOW_STAR_SMALL_SAMPLE,
+    NOTE_REVIEW_ABSENT_NEXTACTION,
+    NOTE_VIP_SIGNAL,
+    factbook_to_dataframe,
+)
+from smartbi.agent.narrative_cache import (
+    NarrativeCacheService,
+    compute_question_hash,
+)
+from smartbi.agent.orchestrator import (
+    DEGRADED_MESSAGE_BUDGET_EXHAUSTED,
+    DEGRADED_MESSAGE_LLM_UNAVAILABLE,
+    RESULT_SOURCE_CACHE,
+    RESULT_SOURCE_DEGRADED,
+    RESULT_SOURCE_LLM,
+    SYSTEM_PROMPT,
+)
+from smartbi.gold import (
+    channel_breakdown,
+    discount_breakdown,
+    finance_summary,
+    review_dish_issues,
+    review_good_tags,
+    review_platform,
+    review_store_ranking,
+    review_summary,
+    review_time_period,
+    review_vip,
+    top_products,
+)
+from smartbi.services.insight_dimensions import (
+    InsightDimension,
+    InsightDimensionAnalyzer,
+)
+from smartbi.services.llm_guard import (
+    ACTION_REC_GUARD_CLAUSE,
+    FactReconciler,
+    LABELING_GUARD_CLAUSE,
+    NUMERIC_GUARD_CLAUSE,
+)
+
+logger = logging.getLogger(__name__)
+
+
+SYNTHESIS_MAX_TOKENS = 2000  # multi-dim; reasoning models spend tokens on CoT
+
+
+# New clause (§4.3 / §5.6) — honesty labels MUST survive into output.
+HONEST_LABEL_CLAUSE = (
+    "\n\n诚实标注强制规则（综合分析专用，违反视为错误答案）：\n"
+    "1. '菜品标签'/'高频好评词'/'高频差评词' 实为口味/品质标签 (味道好/鲜嫩/太软了)，"
+    "**不是菜名**。提到时必须写成 '口味标签'，禁止说成 '招牌菜'/'明星菜'/'最畅销的菜'。\n"
+    "2. 差评(≤3星)是小样本(占比约2%)，任何'差评高频'结论必须带样本量并提示谨慎。\n"
+    "3. 若数据显示 VIP 评分低于非VIP，这是真实信号，可陈述该关系；但任何因果归因"
+    "(如'VIP期望更高')必须明确标注为'推测'，不得当作结论。\n"
+    "4. '投诉类型'为商家申诉口径(小样本)，不等于客诉总量，提到时必须注明。\n"
+    "5. 只陈述数据中的相关关系，相关≠因果；跨维度因果推断一律标注'推测'。"
+)
+
+
+@dataclass
+class SynthesisResponse:
+    answer: str
+    source: str                      # cache | llm | degraded
+    tokens: int
+    tokens_used_today: int
+    tokens_cap: int
+    elapsed_ms: int
+    charts: List[Dict[str, Any]] = field(default_factory=list)
+    plan: Optional[Dict[str, Any]] = None
+    factbook_text: Optional[str] = None
+    insight_summary: Optional[str] = None
+    fact_check: Optional[Dict[str, Any]] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "answer": self.answer,
+            "source": self.source,
+            "tokens": self.tokens,
+            "tokens_used_today": self.tokens_used_today,
+            "tokens_cap": self.tokens_cap,
+            "elapsed_ms": self.elapsed_ms,
+            "charts": self.charts,
+            "plan": self.plan,
+            "factbook_text": self.factbook_text,
+            "insight_summary": self.insight_summary,
+            "fact_check": self.fact_check,
+        }
+
+
+class ComprehensiveSynthesisEngine:
+    def __init__(
+        self,
+        pool: asyncpg.Pool,
+        *,
+        budget_tracker: Optional[AgentBudgetTracker] = None,
+        cache: Optional[NarrativeCacheService] = None,
+    ):
+        self._pool = pool
+        self._budget = budget_tracker or AgentBudgetTracker(pool)
+        self._cache = cache or NarrativeCacheService(pool)
+        self._dim_analyzer = InsightDimensionAnalyzer()
+        self._reconciler = FactReconciler()
+
+    # =====================================================================
+    # Main entry
+    # =====================================================================
+    async def synthesize(
+        self,
+        factory_id: str,
+        question: str,
+        date_range: Tuple[date, date],
+        *,
+        cache_ttl_hours: int = 24,
+    ) -> SynthesisResponse:
+        t0 = time.monotonic()
+        start, end = date_range
+        start_iso, end_iso = start.isoformat(), end.isoformat()
+
+        # 1. Cache check — same answer for same question+range+factory.
+        q_hash = compute_question_hash(question, start_iso, end_iso, factory_id)
+        hit = await self._cache.get(factory_id, q_hash)
+        if hit is not None:
+            budget = await self._budget.check_budget(factory_id)
+            charts = (hit.get("chart_config") or {}).get("charts") or [] \
+                if isinstance(hit.get("chart_config"), dict) else []
+            return SynthesisResponse(
+                answer=hit["answer"], source=RESULT_SOURCE_CACHE, tokens=0,
+                tokens_used_today=budget.tokens_used, tokens_cap=budget.tokens_cap,
+                elapsed_ms=int((time.monotonic() - t0) * 1000),
+                charts=charts,
+            )
+
+        # 2. Budget check.
+        budget = await self._budget.check_budget(factory_id)
+        if budget.blocked:
+            logger.warning(
+                "synthesis budget exhausted: factory=%s used=%d cap=%d q=%r",
+                factory_id, budget.tokens_used, budget.tokens_cap, question,
+            )
+            return SynthesisResponse(
+                answer=DEGRADED_MESSAGE_BUDGET_EXHAUSTED, source=RESULT_SOURCE_DEGRADED,
+                tokens=0, tokens_used_today=budget.tokens_used, tokens_cap=budget.tokens_cap,
+                elapsed_ms=int((time.monotonic() - t0) * 1000),
+            )
+
+        # 3. Dimension plan (rules-first, no LLM).
+        plan = self.plan_dimensions(question)
+
+        # 4. Build FactBook (parallel deterministic pulls per plan).
+        factbook = await self._build_factbook(
+            factory_id, date_range, plan, period=f"{start_iso} 至 {end_iso}",
+        )
+
+        # 5. Structured multi-dim insights (deterministic correlations).
+        insight_summary = self._analyze(factbook, period=f"{start_iso} 至 {end_iso}")
+
+        # 6. LLM grounded narrative — inside RedactionScope (P0 数据主权).
+        prompt = self._build_prompt(question, factbook, insight_summary)
+        try:
+            with redaction_scope():
+                register_values_for_egress(factbook.collect_sensitive_names())
+                answer, tokens = await self._call_llm(prompt, factory_id)
+                answer = restore_in_scope(answer)
+        except Exception as e:
+            logger.exception("synthesis LLM call failed: %s", e)
+            return SynthesisResponse(
+                answer=DEGRADED_MESSAGE_LLM_UNAVAILABLE, source=RESULT_SOURCE_DEGRADED,
+                tokens=0, tokens_used_today=budget.tokens_used, tokens_cap=budget.tokens_cap,
+                elapsed_ms=int((time.monotonic() - t0) * 1000),
+                plan=plan, factbook_text=factbook.to_prompt_text(),
+            )
+
+        # 7. Grounding hard-check (backfill真值 + flag fabricated names).
+        answer, fc_meta = self._reconciler.reconcile(answer, factbook)
+
+        # 8. Charts (gated by plan).
+        charts = self.collect_charts(factbook, plan)
+
+        # 9. Bookkeeping.
+        post_budget = await self._budget.consume(factory_id, tokens)
+        await self._cache.put(
+            factory_id, q_hash, answer,
+            chart_config={"charts": charts} if charts else None,
+            tokens=tokens, ttl_hours=cache_ttl_hours,
+        )
+
+        return SynthesisResponse(
+            answer=answer, source=RESULT_SOURCE_LLM, tokens=tokens,
+            tokens_used_today=post_budget.tokens_used, tokens_cap=post_budget.tokens_cap,
+            elapsed_ms=int((time.monotonic() - t0) * 1000),
+            charts=charts, plan=plan, factbook_text=factbook.to_prompt_text(),
+            insight_summary=insight_summary, fact_check=fc_meta,
+        )
+
+    # =====================================================================
+    # Step 1: dimension planning (rules-first, no LLM per feedback_rules_first)
+    # =====================================================================
+    def plan_dimensions(self, q: str) -> Dict[str, Any]:
+        """Decide {review, finance, sales, cross[]} from the question.
+
+        Rule coverage is sufficient for synthesis questions (limited dimension
+        vocabulary). No LLM here — if future queries escape the rules, add a
+        1-sentence LLM classifier at THIS site only.
+        """
+        ql = (q or "").lower()
+        plan = {"review": False, "finance": False, "sales": False, "cross": []}
+        if any(k in ql for k in ("评价", "口碑", "星级", "好评", "差评", "vip", "投诉", "满意")):
+            plan["review"] = True
+        if any(k in ql for k in ("营收", "营业额", "经营", "财务", "客单价", "收入", "业绩")):
+            plan["finance"] = True
+        if any(k in ql for k in ("菜品", "商品", "销量", "畅销", "渠道", "折扣", "套餐")):
+            plan["sales"] = True
+        # Cross relations.
+        if "vip" in ql and any(k in ql for k in ("菜品", "门店", "评价", "口味")):
+            plan["cross"].append("vip_x_rating")
+        if any(k in ql for k in ("时段", "时间段", "早午晚")) and \
+                any(k in ql for k in ("营收", "营业", "评价", "评分")):
+            plan["cross"].append("time_x_review")
+        if any(k in ql for k in ("平台", "美团", "点评")) and \
+                any(k in ql for k in ("评分", "评价", "口碑")):
+            plan["cross"].append("platform_x_rating")
+        # Fallback: holistic question with no explicit dimension → open all.
+        if not (plan["review"] or plan["finance"] or plan["sales"]):
+            plan["review"] = plan["finance"] = plan["sales"] = True
+        return plan
+
+    # =====================================================================
+    # Step 2: build FactBook (parallel deterministic pulls)
+    # =====================================================================
+    async def _build_factbook(
+        self,
+        factory_id: str,
+        date_range: Tuple[date, date],
+        plan: Dict[str, Any],
+        *,
+        period: str,
+    ) -> FactBook:
+        """Pull only the plan's dimensions concurrently (asyncio.gather —
+        orchestrator _gather_data pattern; different tables, no contention).
+
+        Each coroutine is wrapped so one failing source degrades that section
+        to None instead of aborting the whole synthesis (fool-proof: partial
+        answer beats dead-end). Review pulls take NO date range (reviews
+        aggregate all); finance/sales take the (start,end) tuple.
+        """
+        fb = FactBook(period=period)
+        notes: List[str] = []
+
+        async def _safe(coro, label):
+            try:
+                return await coro
+            except Exception as e:
+                logger.warning("[synthesis] %s pull failed: %s", label, e)
+                return None
+
+        tasks: Dict[str, Any] = {}
+        if plan.get("review"):
+            tasks["review_summary"] = _safe(review_summary(self._pool, factory_id), "review_summary")
+            tasks["review_vip"] = _safe(review_vip(self._pool, factory_id), "review_vip")
+            tasks["review_platform"] = _safe(review_platform(self._pool, factory_id), "review_platform")
+            tasks["review_time"] = _safe(review_time_period(self._pool, factory_id), "review_time")
+            tasks["review_good"] = _safe(review_good_tags(self._pool, factory_id), "review_good")
+            tasks["review_issues"] = _safe(review_dish_issues(self._pool, factory_id), "review_issues")
+            tasks["review_worst"] = _safe(
+                review_store_ranking(self._pool, factory_id, dim="low_star", order="desc", top_n=5),
+                "review_worst",
+            )
+        if plan.get("finance"):
+            tasks["finance"] = _safe(
+                finance_summary(self._pool, factory_id, date_range, top_n_stores=5), "finance",
+            )
+        if plan.get("sales"):
+            tasks["top_products"] = _safe(
+                top_products(self._pool, factory_id, date_range, top_n=5), "top_products",
+            )
+            tasks["channels"] = _safe(
+                channel_breakdown(self._pool, factory_id, date_range), "channels",
+            )
+            tasks["discounts"] = _safe(
+                discount_breakdown(self._pool, factory_id, date_range), "discounts",
+            )
+
+        results: Dict[str, Any] = {}
+        if tasks:
+            keys = list(tasks.keys())
+            done = await asyncio.gather(*(tasks[k] for k in keys))
+            results = dict(zip(keys, done))
+
+        # ---- assemble review ----
+        if plan.get("review"):
+            summary = results.get("review_summary")
+            total = (summary or {}).get("total_reviews", 0) if summary else 0
+            if summary and total:
+                fb.review = {
+                    "summary": summary,
+                    "vip": results.get("review_vip"),
+                    "platform": results.get("review_platform"),
+                    "time": results.get("review_time"),
+                    "good_tags": results.get("review_good"),
+                    "dish_issues": results.get("review_issues"),
+                    "worst_stores": results.get("review_worst"),
+                }
+                notes.append(NOTE_DISH_TAG_NOT_NAME)
+                if (summary.get("low_star_count") or 0) > 0:
+                    notes.append(NOTE_LOW_STAR_SMALL_SAMPLE)
+                # VIP signal note only when VIP avg < 非VIP avg.
+                vip_groups = (results.get("review_vip") or {}).get("groups") or []
+                vmap = {g.get("group"): g.get("avg_star") for g in vip_groups}
+                if vmap.get("VIP") is not None and vmap.get("非VIP") is not None \
+                        and vmap["VIP"] < vmap["非VIP"]:
+                    notes.append(NOTE_VIP_SIGNAL)
+                if (results.get("review_issues") or {}).get("low_star_count"):
+                    notes.append(NOTE_COMPLAINT_DISPUTE)
+            else:
+                # P1 absent / empty review → degrade, next-action (fool-proof Rule 5).
+                plan["review"] = False
+                notes.append(NOTE_REVIEW_ABSENT_NEXTACTION)
+
+        # ---- assemble finance ----
+        if plan.get("finance"):
+            fin = results.get("finance")
+            if fin and (fin.get("bill_count") or fin.get("total_revenue")):
+                fb.finance = fin
+            else:
+                plan["finance"] = False
+
+        # ---- assemble sales ----
+        if plan.get("sales"):
+            prods = (results.get("top_products") or {}).get("top_products") or []
+            channels = (results.get("channels") or {}).get("channels") or []
+            discounts = (results.get("discounts") or {}).get("discounts") or []
+            if prods or channels or discounts:
+                fb.sales = {
+                    "top_products": prods,
+                    "channels": channels,
+                    "discounts": discounts,
+                }
+            else:
+                plan["sales"] = False
+
+        # ---- cross hints (descriptive relationships, 相关≠因果) ----
+        fb.cross_hints = self._build_cross_hints(fb, plan, results)
+        fb.notes = notes
+        return fb
+
+    def _build_cross_hints(
+        self, fb: FactBook, plan: Dict[str, Any], results: Dict[str, Any]
+    ) -> List[Dict[str, Any]]:
+        hints: List[Dict[str, Any]] = []
+        # VIP × rating
+        if "vip_x_rating" in plan.get("cross", []) or fb.review:
+            vip_groups = ((fb.review or {}).get("vip") or {}).get("groups") or []
+            vmap = {g.get("group"): g.get("avg_star") for g in vip_groups}
+            if vmap.get("VIP") is not None and vmap.get("非VIP") is not None:
+                rel = "低于" if vmap["VIP"] < vmap["非VIP"] else "高于"
+                hints.append({
+                    "description": (
+                        f"VIP 平均星级 {vmap['VIP']} {rel} 非VIP {vmap['非VIP']}"
+                        f"（数据关系，因果需标推测）"
+                    ),
+                    "values": {"VIP星级": vmap["VIP"], "非VIP星级": vmap["非VIP"]},
+                })
+        # time × review (avg star by period)
+        if "time_x_review" in plan.get("cross", []):
+            periods = ((fb.review or {}).get("time") or {}).get("periods") or []
+            if periods:
+                best = max(periods, key=lambda p: p.get("avg_star") or 0)
+                worst = min(periods, key=lambda p: p.get("avg_star") or 99)
+                hints.append({
+                    "description": (
+                        f"评价最高时段 {best.get('period')}({best.get('avg_star')}星)，"
+                        f"最低 {worst.get('period')}({worst.get('avg_star')}星)"
+                    ),
+                    "values": {},
+                })
+        # platform × rating
+        if "platform_x_rating" in plan.get("cross", []):
+            plats = ((fb.review or {}).get("platform") or {}).get("platforms") or []
+            if len(plats) >= 2:
+                hints.append({
+                    "description": "；".join(
+                        f"{p.get('platform')} 平均 {p.get('avg_star')} 星" for p in plats[:3]
+                    ),
+                    "values": {},
+                })
+        return hints
+
+    # =====================================================================
+    # Step 3: structured multi-dim insights
+    # =====================================================================
+    def _analyze(self, factbook: FactBook, *, period: str) -> str:
+        """Run InsightDimensionAnalyzer over the flattened FactBook → summary text.
+
+        Best-effort: the analyzer is statistical and never raises on small data;
+        we only need its executive_summary + top insights as grounding context
+        for the LLM (NOT as the final answer).
+        """
+        try:
+            df = factbook_to_dataframe(factbook)
+            if df is None or df.empty:
+                return ""
+            report = self._dim_analyzer.analyze(
+                df=df,
+                context={"scope": "comprehensive", "period": period},
+                focus_dimensions=[
+                    InsightDimension.WHAT_HAPPENED,
+                    InsightDimension.WHY_HAPPENED,
+                    InsightDimension.RECOMMENDATION,
+                ],
+            )
+            parts = [report.executive_summary]
+            for ins in report.insights[:5]:
+                parts.append(f"- {ins.title}：{ins.description}")
+            return "\n".join(p for p in parts if p)
+        except Exception as e:
+            logger.warning("[synthesis] dimension analysis failed (non-fatal): %s", e)
+            return ""
+
+    # =====================================================================
+    # Step 4: LLM grounded narrative
+    # =====================================================================
+    def _build_prompt(
+        self, question: str, factbook: FactBook, insight_summary: str
+    ) -> str:
+        lines = [
+            f"用户问：{question}",
+            "",
+            "以下是该餐饮连锁的真实经营+评价数据摘要（所有数字均来自确定性聚合，"
+            "你必须严格基于这些数字回答，不得编造门店名/菜名/数字）：",
+            "",
+        ]
+        lines.extend(factbook.to_prompt_lines())
+        if insight_summary:
+            lines.append("")
+            lines.append("## 结构化分析提示（确定性算出的关系，供你解读，不要重复计算）")
+            lines.append(insight_summary)
+        lines.append("")
+        lines.append(
+            "请综合以上多维数据回答用户问题：先给 1-2 句核心结论，再分维度("
+            "评价/经营/交叉关系)简述，最后给 2-3 条 4 要素齐全的可执行建议。"
+            "严格遵守诚实标注规则。"
+        )
+        return "\n".join(lines)
+
+    async def _call_llm(
+        self, user_prompt: str, factory_id: Optional[str] = None
+    ) -> Tuple[str, int]:
+        """Call the INSIGHTS slot chain. Returns (text, total_tokens).
+
+        Mirrors orchestrator._call_llm: system prompt = orchestrator SYSTEM_PROMPT
+        + NUMERIC/LABELING/ACTION_REC guard clauses + new HONEST_LABEL_CLAUSE.
+        factory_id → _llm_factory ContextVar (via llm_caller_context) so the egress
+        audit + usage rows attribute the call to the tenant.
+        """
+        system = (
+            SYSTEM_PROMPT
+            + NUMERIC_GUARD_CLAUSE
+            + LABELING_GUARD_CLAUSE
+            + ACTION_REC_GUARD_CLAUSE
+            + HONEST_LABEL_CLAUSE
+        )
+        payload = {
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user_prompt},
+            ],
+            "temperature": 0.3,
+            "max_tokens": SYNTHESIS_MAX_TOKENS,
+        }
+        with llm_caller_context("synthesis_engine", factory_id):
+            body = await call_chain(SLOT.INSIGHTS, payload, timeout=60.0)
+        text = (
+            body.get("choices", [{}])[0]
+            .get("message", {})
+            .get("content", "")
+            or ""
+        ).strip()
+        usage = body.get("usage") or {}
+        tokens = int(usage.get("total_tokens") or 0)
+        if not text:
+            raise ValueError("LLM returned empty content")
+        return text, tokens
+
+    # =====================================================================
+    # Step 6: charts (gated by plan) — reuse each metric's natural chart shape
+    # =====================================================================
+    def collect_charts(
+        self, factbook: FactBook, plan: Dict[str, Any]
+    ) -> List[Dict[str, Any]]:
+        """Build ECharts-option charts for the dimensions present in the plan.
+
+        Shape mirrors restaurant_ops_router charts ({chartType, title, ...}):
+        the FE AIQuery renderer accepts this. Each title carries口径 + honest label.
+        """
+        charts: List[Dict[str, Any]] = []
+        rv = factbook.review or {}
+        fin = factbook.finance or {}
+        sales = factbook.sales or {}
+
+        # Review: 维度评分 bar (星级/服务/环境/口味, same 5-point scale).
+        dims = (rv.get("summary") or {}).get("dimension_scores") or []
+        if dims:
+            charts.append({
+                "chartType": "bar",
+                "title": "评价维度平均分（5分制）",
+                "xAxis": {"data": [d["name"] for d in dims]},
+                "series": [{"name": "平均分", "type": "bar",
+                            "data": [d["value"] for d in dims]}],
+            })
+
+        # VIP vs 非VIP bar (honest label: VIP 反低是真实信号).
+        vip_groups = (rv.get("vip") or {}).get("groups") or []
+        if len(vip_groups) >= 2:
+            charts.append({
+                "chartType": "bar",
+                "title": "VIP vs 非VIP 平均星级（VIP 若偏低为真实信号，非异常）",
+                "xAxis": {"data": [g["group"] for g in vip_groups]},
+                "series": [{"name": "平均星级", "type": "bar",
+                            "data": [g.get("avg_star") for g in vip_groups]}],
+            })
+
+        # Time-of-day line (avg star by period).
+        periods = (rv.get("time") or {}).get("periods") or []
+        if periods:
+            charts.append({
+                "chartType": "line",
+                "title": "各时段平均星级",
+                "xAxis": {"data": [p["period"] for p in periods]},
+                "series": [{"name": "平均星级", "type": "line",
+                            "data": [p.get("avg_star") for p in periods]}],
+            })
+
+        # Finance: store revenue bar (万元).
+        stores = fin.get("top_stores") or []
+        if stores:
+            charts.append({
+                "chartType": "bar",
+                "title": "门店营收排行（万元，毛/应收）",
+                "xAxis": {"data": [s.get("store_name") for s in stores]},
+                "series": [{"name": "营收(万元)", "type": "bar",
+                            "data": [round((s.get("revenue") or 0) / 10000.0, 1)
+                                     for s in stores]}],
+            })
+
+        # Sales: channel pie.
+        channels = sales.get("channels") or []
+        if channels:
+            charts.append({
+                "chartType": "pie",
+                "title": "渠道营收占比（按营业额）",
+                "series": [{
+                    "name": "渠道", "type": "pie",
+                    "data": [{"name": c.get("channel_name"), "value": c.get("amount")}
+                             for c in channels],
+                }],
+            })
+
+        return charts

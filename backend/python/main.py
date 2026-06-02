@@ -1015,6 +1015,11 @@ app.include_router(printing_api.router, prefix="/api/printing", tags=["Printing"
 from smartbi.api import gold_reads  # noqa: E402
 app.include_router(gold_reads.router, prefix="/api/smartbi", tags=["Gold Reads"])
 
+# P2 综合分析 (multi-dim synthesis) — review + finance/sales → FactBook → grounded
+# narrative + charts. Path A entrypoint for the Java COMPREHENSIVE_SYNTHESIS tool.
+from smartbi.api import synthesis as synthesis_api  # noqa: E402
+app.include_router(synthesis_api.router, prefix="/api/smartbi", tags=["Comprehensive Synthesis"])
+
 # Sub-Project C Day 26: cell-level field_provenance audit (§6.3).
 # Admin-gated read endpoint powering /audit/cell?type=&id=&field= page.
 from smartbi.api import provenance_audit  # noqa: E402
