@@ -4,7 +4,7 @@
       <template #header>
         <div class="card-header">
           <div class="header-left">
-            <el-button text :icon="ArrowLeft" @click="$router.push('/restaurant/analytics')">返回</el-button>
+            <el-button v-if="!embedded" text :icon="ArrowLeft" @click="$router.push('/restaurant/analytics')">返回</el-button>
             <span class="page-title">菜品四象限分析</span>
             <el-tag v-if="data" size="small">{{ data.items.length }} 个菜品</el-tag>
           </div>
@@ -132,6 +132,9 @@ import { pythonFetch } from '@/api/smartbi/common'
 import { useCapability } from '@/composables/useCapability'
 import CapabilityGate from '@/components/CapabilityGate.vue'
 import UnlockMoreCTA from '@/components/UnlockMoreCTA.vue'
+
+// embedded: 当被 dishes.vue 双tab 嵌入时为 true → 隐藏独立页才需要的「返回」按钮 (IA v2)
+defineProps<{ embedded?: boolean }>()
 
 const permissionStore = usePermissionStore()
 const canViewPrice = computed(() => permissionStore.canViewPrice)

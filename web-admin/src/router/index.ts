@@ -1411,16 +1411,31 @@ const businessRoutes: RouteRecordRaw[] = [
             meta: { requiresAuth: true, title: '盘点管理', module: 'restaurant' }
           },
           {
+            // IA v2 (2026-06-02): 旧运营总览 (Excel 浏览器) 不再渲染; 餐饮经营总览复用
+            // 「数据与分析」组的业态自适应经营驾驶舱。保留 query (函数式 redirect)。
             path: 'analytics',
             name: 'RestaurantAnalyticsOverview',
-            component: () => import('@/views/restaurant/analytics/overview.vue'),
-            meta: { requiresAuth: true, title: '运营分析', module: 'restaurant' }
+            redirect: (to) => ({ path: '/smart-bi/dashboard', query: { ...to.query } }),
           },
           {
+            // IA v2: 菜品分析双tab (整合 菜品四象限 + 菜品毛利)
+            path: 'analytics/dishes',
+            name: 'RestaurantDishes',
+            component: () => import('@/views/restaurant/analytics/dishes.vue'),
+            meta: { requiresAuth: true, title: '菜品分析', module: 'restaurant' }
+          },
+          {
+            // IA v2: 平台口碑 (原 经营与平台分析, 明标需接平台数据)
+            path: 'analytics/platform',
+            name: 'RestaurantPlatform',
+            component: () => import('@/views/restaurant/analytics/platform.vue'),
+            meta: { requiresAuth: true, title: '平台口碑', module: 'restaurant' }
+          },
+          {
+            // IA v2: 旧四象限 → 菜品分析 quadrant tab (保留 query)
             path: 'analytics/menu',
             name: 'RestaurantMenuBoard',
-            component: () => import('@/views/restaurant/analytics/menu-board.vue'),
-            meta: { requiresAuth: true, title: '菜品四象限', module: 'restaurant' }
+            redirect: (to) => ({ path: '/restaurant/analytics/dishes', query: { ...to.query, tab: 'quadrant' } }),
           },
           {
             path: 'analytics/stores',
@@ -1429,17 +1444,16 @@ const businessRoutes: RouteRecordRaw[] = [
             meta: { requiresAuth: true, title: '门店对比', module: 'restaurant' }
           },
           {
+            // IA v2: 旧点评页 → 平台口碑 (保留 query)
             path: 'analytics/dianping',
             name: 'RestaurantDianpingGap',
-            component: () => import('@/views/restaurant/analytics/dianping-gap.vue'),
-            meta: { requiresAuth: true, title: '经营与平台分析', module: 'restaurant' }
+            redirect: (to) => ({ path: '/restaurant/analytics/platform', query: { ...to.query } }),
           },
           {
-            // Apr 24 2026 Plan C Phase 7+: cross-module POS × food cost gross margin
+            // IA v2: 旧菜品毛利 → 菜品分析 margin tab (保留 query)
             path: 'analytics/gross-margin',
             name: 'RestaurantGrossMargin',
-            component: () => import('@/views/restaurant/analytics/gross-margin.vue'),
-            meta: { requiresAuth: true, title: '菜品毛利分析', module: 'restaurant' }
+            redirect: (to) => ({ path: '/restaurant/analytics/dishes', query: { ...to.query, tab: 'margin' } }),
           },
           {
             // 餐饮 Phase A-1 Task 1.5: ETL admin status page
