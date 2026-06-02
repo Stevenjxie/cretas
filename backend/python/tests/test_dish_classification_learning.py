@@ -252,8 +252,9 @@ class _FakeBackend:
 
 
 class _FakeSchema:
-    def __init__(self, domain_value):
+    def __init__(self, domain_value, field_names=("商品信息",)):
         self.domain = type("D", (), {"value": domain_value})()
+        self.fields = [type("F", (), {"name": n})() for n in field_names]
 
 
 def test_collect_unknown_dishes_only_qita(monkeypatch):
@@ -277,19 +278,38 @@ def test_collect_unknown_dishes_no_item_column():
     assert dcl.collect_unknown_dishes(backend, _FakeSchema("restaurant")) == []
 
 
-async def test_orchestrator_skips_non_restaurant(monkeypatch):
-    """Non-restaurant domain → orchestrator returns 0, no LLM call."""
+async def test_orchestrator_skips_no_dish_column(monkeypatch):
+    """No 商品信息 column in schema → orchestrator returns 0, no LLM call.
+    (Gate is the dish column, mirroring dish_category_breakdown.applies.)"""
     async def boom_llm(*a, **k):
-        raise AssertionError("must not enrich non-restaurant upload")
+        raise AssertionError("must not enrich an upload with no dish column")
 
     monkeypatch.setattr(
         "smartbi.services.insights.llm_client.call_llm", boom_llm
     )
-    df = _FakeDF("商品信息", ["神秘冷盘_1份*18"])
+    df = _FakeDF("销售额", [100, 200])
     captured = await dcl.maybe_enrich_dish_classifications(
-        _FakePool(), "F001", _FakeBackend(df), _FakeSchema("finance")
+        _FakePool(), "F001", _FakeBackend(df), _FakeSchema("finance", field_names=("销售额",))
     )
     assert captured == 0
+
+
+async def test_orchestrator_enriches_unknown_domain_with_dishes(monkeypatch):
+    """The fix: an upload with a 商品信息 column enriches EVEN when domain
+    detects 'unknown' (restaurant POS data often does). Domain no longer gates."""
+    monkeypatch.setattr(
+        "smartbi.services.learning_promotion.consult_promoted",
+        lambda *a, **k: (None, None),
+    )
+    calls = await _patch_capture(monkeypatch)
+    _patch_llm(monkeypatch, {"神秘冷盘": "配菜"})
+
+    df = _FakeDF("商品信息", ["神秘冷盘_1份*18"])
+    captured = await dcl.maybe_enrich_dish_classifications(
+        _FakePool(), "RES_X", _FakeBackend(df), _FakeSchema("unknown")
+    )
+    assert captured == 1
+    assert calls[0]["source_key"] == "神秘冷盘"
 
 
 async def test_orchestrator_restaurant_enriches(monkeypatch):
