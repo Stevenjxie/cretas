@@ -33,10 +33,15 @@ UPDATE ai_intent_configs SET is_active = false, updated_at = NOW()
  WHERE intent_code IN ('RESTAURANT_REVIEW_COMPETITIVE', 'RESTAURANT_PERFORMANCE_EVAL');
 
 -- ============ (3) 收窄 OPS_STORE_MARGIN 过宽关键词 (去 门店/分店/店铺) ============
+-- keywords 列在 bootstrap (V20260415_99) 建为 TEXT, 在 prod 是 json/jsonb
+-- (ddl-auto columnDefinition="JSON") → 跨环境类型不一致。jsonb_array_elements 需 jsonb
+-- 入参, 必须 keywords::jsonb cast (text→jsonb 解析 / json|jsonb→jsonb 等价), 否则
+-- fresh-CI DB 报 "function jsonb_array_elements(text) does not exist" 阻断后端启动。
+-- (V_05 / V_36 / V20260522_50/51 历史教训, 本迁移当初漏 cast → e2e-pr-gate 全红)
 UPDATE ai_intent_configs
    SET keywords = COALESCE((
          SELECT jsonb_agg(e)
-           FROM jsonb_array_elements(keywords) e
+           FROM jsonb_array_elements(keywords::jsonb) e
           WHERE e NOT IN ('"门店"'::jsonb, '"分店"'::jsonb, '"店铺"'::jsonb)
        ), '[]'::jsonb),
        updated_at = NOW()
