@@ -75,6 +75,9 @@ class ContextualAgent(BaseAgent):
             return bool(ctx.get("category") or ctx.get("store_name"))
         if entity_type == EntityType.STAFF:
             return bool(ctx.get("store_name") or ctx.get("role"))
+        if entity_type == EntityType.DISH:
+            # dish ctx: category (dish_classifier) + price range (agg_product_period)
+            return bool(ctx.get("category") or ctx.get("price_range"))
         return False
 
     @staticmethod
@@ -95,6 +98,10 @@ class ContextualAgent(BaseAgent):
             store_name = str(ctx.get("store_name", "") or "")
             role = str(ctx.get("role", "") or "")
             return f"{raw_name} 店:{store_name} 岗位:{role}".strip()
+        if entity_type == EntityType.DISH:
+            category = str(ctx.get("category", "") or "")
+            price_range = str(ctx.get("price_range", "") or "")
+            return f"{raw_name} 品类:{category} 价位:{price_range}".strip()
         return raw_name
 
     @staticmethod
@@ -116,6 +123,9 @@ class ContextualAgent(BaseAgent):
             role = row.get("role") or ""
             store_name = row.get("store_name") or ""
             return f"{name} 店:{store_name} 岗位:{role}".strip()
+        if entity_type == EntityType.DISH:
+            category = row.get("category") or ""
+            return f"{name} 品类:{category}".strip()
         return str(name)
 
     async def resolve(
@@ -165,6 +175,15 @@ class ContextualAgent(BaseAgent):
                     "FROM dim_staff s "
                     "LEFT JOIN dim_store st ON st.store_id = s.store_id "
                     "WHERE s.factory_id = $1 LIMIT 1000",
+                    input.factory_id,
+                )
+            elif input.entity_type == EntityType.DISH:
+                # candidate set = dim_canonical_dish (canonical_name + category)
+                rows = await conn.fetch(
+                    "SELECT canonical_dish_id AS eid, canonical_name AS name, "
+                    "category "
+                    "FROM dim_canonical_dish "
+                    "WHERE factory_id = $1 AND status = 'active' LIMIT 1000",
                     input.factory_id,
                 )
             else:

@@ -16,7 +16,11 @@ if TYPE_CHECKING:
 
 LLMCallFn = Callable[..., Awaitable[str]]
 
-_RELEVANT_CONTEXT_KEYS = ("city", "district", "category", "store_name", "role")
+_RELEVANT_CONTEXT_KEYS = (
+    "city", "district", "category", "store_name", "role",
+    # P4a dish context: 品类 (dish_classifier) / 价位区间 / 出现门店数
+    "price_range", "store_count",
+)
 
 
 class LLMArbitrator(BaseAgent):
@@ -61,6 +65,23 @@ class LLMArbitrator(BaseAgent):
         ctx_str = json.dumps(
             LLMArbitrator._filter_context(ctx), ensure_ascii=False
         )
+        # DISH 仲裁额外铁律 (per spec §R1 P0 / fool-proof / #364): 错合并污染所有按
+        # canonical 的销量/营收/评价且难发现 → prompt 明示 "宁可返 null, 字面相似 ≠ 同菜"。
+        if entity_type_value == "dish":
+            return (
+                f"你是餐饮菜品归一专家. 判断 \"{raw_name}\" 是否与下列任一候选是"
+                f"**同一道菜** (跨门店同菜不同名, 如 '招牌青花椒鱼' 与 '青花椒味鱼'):\n\n"
+                f"候选 (按相似度排序):\n{cand_block}\n\n"
+                f"上下文 (品类/价位/门店数): {ctx_str}\n\n"
+                "⛔ 铁律:\n"
+                "1. 字面相似 ≠ 同菜: '红烧牛肉' 与 '红烧牛腩' 是两道不同的菜, 不可合并; "
+                "'青花椒鱼' 与 '青花椒虾' 主料不同, 不可合并; "
+                "'青花椒鱼' 与 '青花椒烤鱼煲' 做法不同, 不可合并.\n"
+                "2. 只在你**确信是同一道菜**时返回候选 id; 任何疑问一律返 null "
+                "(错合并比漏合并代价大得多, 漏合并人工可补).\n\n"
+                "返回 JSON: {\"matched_id\": <候选id or null>, "
+                "\"confidence\": <0-1>, \"reasoning\": \"<简要原因>\"}"
+            )
         return (
             f"你是餐饮数据实体识别专家. 判断 \"{raw_name}\" 是否与下列任一候选指同一 "
             f"{entity_type_value}:\n\n"

@@ -17,6 +17,11 @@ class EntityType(Enum):
     STORE = "store"
     PRODUCT = "product"
     STAFF = "staff"
+    # P4a 跨店菜名归一: dish 指向 dim_canonical_dish (跨店 canonical), 比 dim_product
+    # (门店级 SKU) 更高一层。其 entity_table / id_column / name 列与 dim_<value> 默认推导
+    # 不一致 (表名 dim_canonical_dish / id canonical_dish_id / name canonical_name),
+    # 故 _record_history + 各 agent 对 DISH 走特判。
+    DISH = "dish"
 
 
 @dataclass
@@ -145,10 +150,21 @@ class EntityResolutionOrchestrator:
         if output.matched_entity_id is None:
             return
         async with self._pool.acquire() as conn:
-            entity_table = f"dim_{input.entity_type.value}"
-            id_column = f"{input.entity_type.value}_id"
+            # DISH special-case: canonical dish lives in dim_canonical_dish with
+            # id column canonical_dish_id and display name column canonical_name.
+            # The naive f"dim_{value}" = "dim_dish" table does NOT exist, so the
+            # default derivation would raise UndefinedTableError and fail the whole
+            # resolve. Other types keep the dim_<value> / <value>_id / name shape.
+            if input.entity_type == EntityType.DISH:
+                entity_table = "dim_canonical_dish"
+                id_column = "canonical_dish_id"
+                name_column = "canonical_name"
+            else:
+                entity_table = f"dim_{input.entity_type.value}"
+                id_column = f"{input.entity_type.value}_id"
+                name_column = "name"
             row = await conn.fetchrow(
-                f"SELECT name FROM {entity_table} "
+                f"SELECT {name_column} AS name FROM {entity_table} "
                 f"WHERE factory_id = $1 AND {id_column} = $2",
                 input.factory_id,
                 output.matched_entity_id,
