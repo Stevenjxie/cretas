@@ -7338,6 +7338,73 @@ public class IntentKnowledgeBase {
         restaurantPhraseMapping.put("综合评估", "RESTAURANT_STORE_KPI_DASHBOARD");
         restaurantPhraseMapping.put("门店评估", "RESTAURANT_STORE_KPI_DASHBOARD");
 
+        // ========== 餐饮评价/评分-营收/综合分析 短语短路 (2026-06-02) ==========
+        // 补 review/synthesis/rating 类意图的精确短语短路。这些意图本会话上线但只配关键词,
+        // 用户自由输入 "客户评价怎么样/服务怎么样/环境怎么样" 这类以"怎么样"结尾的短问句被
+        // 归为 GENERAL_QUESTION 触发 0.88/0.90 高阈值, 短而泛的问句多个评价子意图竞争语义分
+        // 达不到被拒, 落 LLM 兜底编造制造业。短语层 (matchPhrase) 在模糊阈值前短路, 确定性路由。
+        // 与 FuzzyExpressionSeeder 的语义种子互补: 短语 = 确定性命中典型说法; 种子 = 泛化变体。
+        // 全部用完整、有区分度的问句 (避免裸话题词经 isLongPhrase>=4 过度匹配)。
+
+        // 评价总览
+        restaurantPhraseMapping.put("客户评价怎么样", "RESTAURANT_REVIEW_SUMMARY");
+        restaurantPhraseMapping.put("顾客评价怎么样", "RESTAURANT_REVIEW_SUMMARY");
+        restaurantPhraseMapping.put("用户评价怎么样", "RESTAURANT_REVIEW_SUMMARY");
+        restaurantPhraseMapping.put("客户评价情况", "RESTAURANT_REVIEW_SUMMARY");
+        restaurantPhraseMapping.put("评价情况怎么样", "RESTAURANT_REVIEW_SUMMARY");
+        restaurantPhraseMapping.put("整体评价怎么样", "RESTAURANT_REVIEW_SUMMARY");
+        restaurantPhraseMapping.put("口碑怎么样", "RESTAURANT_REVIEW_SUMMARY");
+        restaurantPhraseMapping.put("顾客满意度怎么样", "RESTAURANT_REVIEW_SUMMARY");
+
+        // 服务 (标签/评分)
+        restaurantPhraseMapping.put("服务怎么样", "RESTAURANT_REVIEW_SERVICE_TAGS");
+        restaurantPhraseMapping.put("服务评价怎么样", "RESTAURANT_REVIEW_SERVICE_TAGS");
+        restaurantPhraseMapping.put("服务态度怎么样", "RESTAURANT_REVIEW_SERVICE_TAGS");
+        restaurantPhraseMapping.put("服务分怎么样", "RESTAURANT_REVIEW_SERVICE_SCORE");
+        restaurantPhraseMapping.put("服务评分怎么样", "RESTAURANT_REVIEW_SERVICE_SCORE");
+
+        // 环境 (标签/评分)
+        restaurantPhraseMapping.put("环境怎么样", "RESTAURANT_REVIEW_ENV_TAGS");
+        restaurantPhraseMapping.put("用餐环境怎么样", "RESTAURANT_REVIEW_ENV_TAGS");
+        restaurantPhraseMapping.put("环境评价怎么样", "RESTAURANT_REVIEW_ENV_TAGS");
+        restaurantPhraseMapping.put("环境分怎么样", "RESTAURANT_REVIEW_ENV_SCORE");
+        restaurantPhraseMapping.put("环境评分怎么样", "RESTAURANT_REVIEW_ENV_SCORE");
+
+        // VIP / 会员
+        restaurantPhraseMapping.put("vip客户评价怎么样", "RESTAURANT_REVIEW_VIP");
+        restaurantPhraseMapping.put("会员评价怎么样", "RESTAURANT_REVIEW_VIP");
+        restaurantPhraseMapping.put("vip顾客关注什么", "RESTAURANT_REVIEW_VIP_TAGS");
+
+        // 投诉 / 差评门店 / 菜品差评
+        restaurantPhraseMapping.put("投诉情况怎么样", "RESTAURANT_REVIEW_COMPLAINT");
+        restaurantPhraseMapping.put("顾客投诉多不多", "RESTAURANT_REVIEW_COMPLAINT");
+        restaurantPhraseMapping.put("哪家店评价差", "RESTAURANT_REVIEW_BAD_STORE");
+        restaurantPhraseMapping.put("评价最差的门店", "RESTAURANT_REVIEW_BAD_STORE");
+        restaurantPhraseMapping.put("哪些菜被吐槽", "RESTAURANT_REVIEW_DISH_ISSUE");
+        restaurantPhraseMapping.put("菜品差评怎么样", "RESTAURANT_REVIEW_DISH_ISSUE");
+
+        // 好评 / 趋势 / 回复率 / 平台 / 城市 / 时段
+        restaurantPhraseMapping.put("高频好评词", "RESTAURANT_REVIEW_GOOD_TAGS");
+        restaurantPhraseMapping.put("顾客最满意什么", "RESTAURANT_REVIEW_GOOD_TAGS");
+        restaurantPhraseMapping.put("评价趋势怎么样", "RESTAURANT_REVIEW_TREND");
+        restaurantPhraseMapping.put("口碑趋势怎么样", "RESTAURANT_REVIEW_TREND");
+        restaurantPhraseMapping.put("评价回复率怎么样", "RESTAURANT_REVIEW_REPLY_RATE");
+        restaurantPhraseMapping.put("各平台评价怎么样", "RESTAURANT_REVIEW_PLATFORM");
+        restaurantPhraseMapping.put("各城市评价怎么样", "RESTAURANT_REVIEW_CITY");
+        restaurantPhraseMapping.put("各时段评价怎么样", "RESTAURANT_REVIEW_TIME_PERIOD");
+
+        // 评分-营收相关性
+        restaurantPhraseMapping.put("高分门店是不是更赚钱", "RESTAURANT_RATING_REVENUE_CORRELATION");
+        restaurantPhraseMapping.put("评分和营收有关系吗", "RESTAURANT_RATING_REVENUE_CORRELATION");
+        restaurantPhraseMapping.put("评分高的店营收怎么样", "RESTAURANT_RATING_REVENUE_CORRELATION");
+        restaurantPhraseMapping.put("口碑好的店赚得多吗", "RESTAURANT_RATING_REVENUE_CORRELATION");
+
+        // 综合分析
+        restaurantPhraseMapping.put("综合分析一下", "COMPREHENSIVE_SYNTHESIS");
+        restaurantPhraseMapping.put("综合经营分析", "COMPREHENSIVE_SYNTHESIS");
+        restaurantPhraseMapping.put("全面分析一下经营", "COMPREHENSIVE_SYNTHESIS");
+        restaurantPhraseMapping.put("整体经营分析", "COMPREHENSIVE_SYNTHESIS");
+
         log.debug("v33 餐饮短语映射初始化完成，共 {} 条映射", restaurantPhraseMapping.size());
 
         // ========== v32: 业态隔离 — 公共短语映射（两种业态共享） ==========
