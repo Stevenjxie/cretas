@@ -110,9 +110,8 @@ const YieldStepReportScreen: React.FC = () => {
     limitsDebounceRef.current = setTimeout(async () => {
       try {
         const res = await yieldReportApi.getYieldLimits(batchId, currentTask.id, parsed);
-        if (res.success) {
-          setYieldLimits(res.data.maxAllowed != null ? res.data : null);
-        }
+        // P0-3: 保留 limits 即使 maxAllowed==null (诚实显示"未配置标准出成上限"灰条, 不静默空白)
+        if (res.success) setYieldLimits(res.data);
       } catch {
         // 预检失败不阻断报工, 静默忽略
       }
@@ -133,6 +132,18 @@ const YieldStepReportScreen: React.FC = () => {
     prevOutput != null
       ? `← 上道产出 ${prevOutput} ${unit}, 请确认实际投了多少`
       : '本道为首道, 请填本道领料投入量';
+
+  // P0-3: 产出绝对物理上限 = 2 × maxAllowed (maxAllowed 本身已含 30% 容差;
+  // 1×~2× 之间走超收确认流, 超 2× 视为单位/数量误输, 直接 disable 提交)
+  const OUTPUT_HARD_CAP_MULTIPLIER = 2;
+  const outputHardCap = useMemo<number | null>(() => {
+    if (!yieldLimits || yieldLimits.maxAllowed == null) return null;
+    return yieldLimits.maxAllowed * OUTPUT_HARD_CAP_MULTIPLIER;
+  }, [yieldLimits]);
+  const outputOverHardCap = useMemo<boolean>(() => {
+    const out = parseFloat(outputQty);
+    return outputHardCap != null && !Number.isNaN(out) && out > outputHardCap;
+  }, [outputQty, outputHardCap]);
 
   // A4: 强制提交 (OVER_RECEIPT 确认后调用)
   const submitWithForce = useCallback(async (req: YieldReportRequest) => {
@@ -382,13 +393,21 @@ const YieldStepReportScreen: React.FC = () => {
             testID="yield-input-qty"
           />
 
-          {/* A4: 超收预检提示 (仅 maxAllowed != null 时显示) */}
+          {/* A4 + P0-3: 超收预检提示. maxAllowed!=null → 绿条边界; ==null → 诚实灰条 (未配置) */}
           {yieldLimits != null ? (
-            <View style={styles.limitsHint} testID="yield-limits-hint">
-              <Text style={styles.limitsHintText}>
-                目标 {yieldLimits.targetQuantity ?? '—'} / 已报 {yieldLimits.alreadyReported ?? 0} / 最多可报 {yieldLimits.remaining ?? '—'} {yieldLimits.unit ?? unit}
-              </Text>
-            </View>
+            yieldLimits.maxAllowed != null ? (
+              <View style={styles.limitsHint} testID="yield-limits-hint">
+                <Text style={styles.limitsHintText}>
+                  目标 {yieldLimits.targetQuantity ?? '—'} / 已报 {yieldLimits.alreadyReported ?? 0} / 最多可报 {yieldLimits.remaining ?? '—'} {yieldLimits.unit ?? unit}
+                </Text>
+              </View>
+            ) : (
+              <View style={styles.limitsHintMuted} testID="yield-limits-unconfigured">
+                <Text style={styles.limitsHintMutedText}>
+                  该工序未配置标准出成上限, 无超收边界提示 (可在 web 工序管理配置)
+                </Text>
+              </View>
+            )
           ) : null}
 
           <YieldQuantityInput
@@ -396,9 +415,24 @@ const YieldStepReportScreen: React.FC = () => {
             value={outputQty}
             onChangeText={setOutputQty}
             unit={unit}
+            max={outputHardCap}
+            maxHint={
+              outputHardCap != null
+                ? `产出超过物理上限 ${Math.round(outputHardCap)} ${unit} 不可提交 (疑似单位/数量误输)`
+                : null
+            }
             disabled={submitting}
             testID="yield-output-qty"
           />
+
+          {/* P0-3: 超 2× maxAllowed 的物理墙 — 显式红条 + disable 提交 */}
+          {outputOverHardCap ? (
+            <View style={styles.hardcapBanner} testID="yield-hardcap-banner">
+              <Text style={styles.hardcapText}>
+                产出量超过物理上限 {Math.round(outputHardCap ?? 0)} {unit}, 请核对 (疑似单位/数量错误)
+              </Text>
+            </View>
+          ) : null}
 
           {alertText ? (
             <View style={styles.alertBanner} testID="yield-alert-banner">
@@ -411,7 +445,7 @@ const YieldStepReportScreen: React.FC = () => {
           variant="primary"
           size="large"
           onPress={handleSubmit}
-          disabled={submitting}
+          disabled={submitting || outputOverHardCap}
           loading={submitting}
           style={styles.fullBtn}
           testID="yield-submit-btn"
@@ -445,6 +479,10 @@ const styles = StyleSheet.create({
   alertText: { fontSize: 14, color: '#E6A23C', fontWeight: '500' },
   limitsHint: { backgroundColor: '#F0F9EB', borderRadius: 6, paddingHorizontal: 10, paddingVertical: 6, marginTop: 4 },
   limitsHintText: { fontSize: 13, color: '#67C23A' },
+  limitsHintMuted: { backgroundColor: '#F4F4F5', borderRadius: 6, paddingHorizontal: 10, paddingVertical: 6, marginTop: 4 },
+  limitsHintMutedText: { fontSize: 13, color: '#909399' },
+  hardcapBanner: { backgroundColor: '#FEF0F0', borderRadius: 8, padding: 12, marginTop: 4 },
+  hardcapText: { fontSize: 14, color: '#F56C6C', fontWeight: '600' },
   fullBtn: { width: '100%', marginBottom: 12 },
   doneCard: { marginBottom: 20, alignItems: 'center' },
   doneTitle: { fontSize: 20, fontWeight: '700', color: '#67C23A', marginBottom: 12 },

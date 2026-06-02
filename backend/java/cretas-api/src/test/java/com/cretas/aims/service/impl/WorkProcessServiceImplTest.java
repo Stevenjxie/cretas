@@ -20,6 +20,7 @@ import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 
+import java.math.BigDecimal;
 import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
@@ -149,6 +150,69 @@ class WorkProcessServiceImplTest {
             verify(workProcessRepository).save(workProcessCaptor.capture());
             assertEquals("kg", workProcessCaptor.getValue().getUnit(), "unit 为 null 时应默认为 kg");
         }
+
+        @Test
+        @DisplayName("UT-WP-P0-3-a: create() 映射 4 个出成率配置字段")
+        void testCreateMapsYieldConfigFields() {
+            // Arrange
+            WorkProcessDTO dto = buildDefaultCreateDTO();
+            dto.setStandardYieldMin(new BigDecimal("0.30"));
+            dto.setStandardYieldMax(new BigDecimal("0.60"));
+            dto.setNeedsInput(false);
+            dto.setOutputUnit("盒");
+            when(workProcessRepository.existsByFactoryIdAndProcessName(FACTORY_ID, "炸制"))
+                    .thenReturn(false);
+            when(workProcessRepository.save(any(WorkProcess.class))).thenAnswer(inv -> inv.getArgument(0));
+
+            // Act
+            WorkProcessDTO result = service.create(FACTORY_ID, dto);
+
+            // Assert
+            verify(workProcessRepository).save(workProcessCaptor.capture());
+            WorkProcess saved = workProcessCaptor.getValue();
+            assertEquals(0, new BigDecimal("0.30").compareTo(saved.getStandardYieldMin()));
+            assertEquals(0, new BigDecimal("0.60").compareTo(saved.getStandardYieldMax()));
+            assertFalse(saved.getNeedsInput(), "needsInput=false 应被映射");
+            assertEquals("盒", saved.getOutputUnit());
+            assertEquals(0, new BigDecimal("0.60").compareTo(result.getStandardYieldMax()), "返回 DTO 含上限");
+        }
+
+        @Test
+        @DisplayName("UT-WP-P0-3-b: create() min>=max 抛 BusinessException(400) hintTarget=standardYieldMax")
+        void testCreateYieldMinGteMaxThrows() {
+            // Arrange
+            WorkProcessDTO dto = buildDefaultCreateDTO();
+            dto.setStandardYieldMin(new BigDecimal("0.60"));
+            dto.setStandardYieldMax(new BigDecimal("0.30"));
+            when(workProcessRepository.existsByFactoryIdAndProcessName(FACTORY_ID, "炸制"))
+                    .thenReturn(false);
+
+            // Act & Assert
+            BusinessException ex = assertThrows(BusinessException.class,
+                    () -> service.create(FACTORY_ID, dto));
+            assertEquals(400, ex.getCode());
+            assertTrue(ex.getMessage().contains("下限必须小于上限"));
+            assertEquals("standardYieldMax", ex.getHintTarget());
+            verify(workProcessRepository, never()).save(any());
+        }
+
+        @Test
+        @DisplayName("UT-WP-P0-3-c: create() 不传 needsInput → entity 默认 true")
+        void testCreateDefaultsNeedsInputTrue() {
+            // Arrange
+            WorkProcessDTO dto = buildDefaultCreateDTO();
+            // needsInput left null
+            when(workProcessRepository.existsByFactoryIdAndProcessName(FACTORY_ID, "炸制"))
+                    .thenReturn(false);
+            when(workProcessRepository.save(any(WorkProcess.class))).thenAnswer(inv -> inv.getArgument(0));
+
+            // Act
+            service.create(FACTORY_ID, dto);
+
+            // Assert
+            verify(workProcessRepository).save(workProcessCaptor.capture());
+            assertTrue(workProcessCaptor.getValue().getNeedsInput(), "needsInput 缺省应为 true");
+        }
     }
 
     // ==================== 查询活跃工序测试 ====================
@@ -265,6 +329,72 @@ class WorkProcessServiceImplTest {
             assertEquals("kg", saved.getUnit(), "unit 未传入应保持原值");
             assertEquals(30, saved.getEstimatedMinutes(), "estimatedMinutes 未传入应保持原值");
             assertEquals(1, saved.getSortOrder(), "sortOrder 未传入应保持原值");
+        }
+
+        @Test
+        @DisplayName("UT-WP-P0-3-d: update() 只传 standardYieldMax → 其余不动, 与已有 min 校验通过")
+        void testUpdateYieldMaxOnly() {
+            // Arrange — existing min=0.30, no max
+            WorkProcess existing = buildDefaultWorkProcess();
+            existing.setStandardYieldMin(new BigDecimal("0.30"));
+            when(workProcessRepository.findByFactoryIdAndId(FACTORY_ID, WP_ID))
+                    .thenReturn(Optional.of(existing));
+            when(workProcessRepository.save(any(WorkProcess.class))).thenAnswer(inv -> inv.getArgument(0));
+
+            WorkProcessDTO dto = WorkProcessDTO.builder()
+                    .standardYieldMax(new BigDecimal("0.60"))
+                    .build();
+
+            // Act
+            service.update(FACTORY_ID, WP_ID, dto);
+
+            // Assert
+            verify(workProcessRepository).save(workProcessCaptor.capture());
+            WorkProcess saved = workProcessCaptor.getValue();
+            assertEquals(0, new BigDecimal("0.30").compareTo(saved.getStandardYieldMin()), "min 未传入保持原值");
+            assertEquals(0, new BigDecimal("0.60").compareTo(saved.getStandardYieldMax()), "max 被更新");
+        }
+
+        @Test
+        @DisplayName("UT-WP-P0-3-e: update() 新 max <= 已有 min → 400")
+        void testUpdateYieldMaxLteExistingMinThrows() {
+            // Arrange — existing min=0.60
+            WorkProcess existing = buildDefaultWorkProcess();
+            existing.setStandardYieldMin(new BigDecimal("0.60"));
+            when(workProcessRepository.findByFactoryIdAndId(FACTORY_ID, WP_ID))
+                    .thenReturn(Optional.of(existing));
+
+            WorkProcessDTO dto = WorkProcessDTO.builder()
+                    .standardYieldMax(new BigDecimal("0.30"))
+                    .build();
+
+            // Act & Assert
+            BusinessException ex = assertThrows(BusinessException.class,
+                    () -> service.update(FACTORY_ID, WP_ID, dto));
+            assertEquals(400, ex.getCode());
+            verify(workProcessRepository, never()).save(any());
+        }
+
+        @Test
+        @DisplayName("UT-WP-P0-3-f: toDTO 往返 — entity 4 字段全映射到 DTO")
+        void testToDtoRoundtripYieldFields() {
+            // Arrange
+            WorkProcess existing = buildDefaultWorkProcess();
+            existing.setStandardYieldMin(new BigDecimal("1.0000"));
+            existing.setStandardYieldMax(new BigDecimal("1.3500"));
+            existing.setNeedsInput(false);
+            existing.setOutputUnit("份");
+            when(workProcessRepository.findByFactoryIdAndId(FACTORY_ID, WP_ID))
+                    .thenReturn(Optional.of(existing));
+
+            // Act
+            WorkProcessDTO result = service.getById(FACTORY_ID, WP_ID);
+
+            // Assert
+            assertEquals(0, new BigDecimal("1.0000").compareTo(result.getStandardYieldMin()));
+            assertEquals(0, new BigDecimal("1.3500").compareTo(result.getStandardYieldMax()));
+            assertFalse(result.getNeedsInput());
+            assertEquals("份", result.getOutputUnit());
         }
     }
 

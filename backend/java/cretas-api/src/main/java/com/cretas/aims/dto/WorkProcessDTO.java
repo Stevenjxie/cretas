@@ -6,8 +6,11 @@ import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
+import jakarta.validation.constraints.DecimalMax;
+import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
 @Data
@@ -36,6 +39,23 @@ public class WorkProcessDTO {
     private Integer sortOrder;
 
     private Boolean isActive;
+
+    /** 标准出成率下限 (A7 越界软告警; null=不校验). 支持 0.0001..99.9999 (小数, 0.30=30%). */
+    @DecimalMin(value = "0.0001", message = "标准出成率下限须大于 0")
+    @DecimalMax(value = "99.9999", message = "标准出成率下限超出范围")
+    private BigDecimal standardYieldMin;
+
+    /** 标准出成率上限 (A7; 支持 >1 如滚揉保水 1.35; null=不校验). 超收预检基准. */
+    @DecimalMin(value = "0.0001", message = "标准出成率上限须大于 0")
+    @DecimalMax(value = "99.9999", message = "标准出成率上限超出范围")
+    private BigDecimal standardYieldMax;
+
+    /** 该工序是否需录投入量 (默认 true; 纯包装/检验可 false). */
+    private Boolean needsInput;
+
+    /** 产出单位 (kg→盒/份; 为空沿用 unit). */
+    @Size(max = 20, message = "产出单位不能超过20个字符")
+    private String outputUnit;
 
     @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss")
     private LocalDateTime createdAt;

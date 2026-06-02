@@ -15,6 +15,7 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.math.BigDecimal;
 import java.util.List;
 import java.util.UUID;
 import java.util.stream.Collectors;
@@ -36,6 +37,8 @@ public class WorkProcessServiceImpl implements WorkProcessService {
                     .withHint("请使用其他工序名称").withHintTarget("processName");
         }
 
+        validateYieldRange(dto.getStandardYieldMin(), dto.getStandardYieldMax());
+
         WorkProcess entity = WorkProcess.builder()
                 .id(UUID.randomUUID().toString())
                 .factoryId(factoryId)
@@ -46,6 +49,10 @@ public class WorkProcessServiceImpl implements WorkProcessService {
                 .estimatedMinutes(dto.getEstimatedMinutes())
                 .sortOrder(dto.getSortOrder() != null ? dto.getSortOrder() : 0)
                 .isActive(true)
+                .standardYieldMin(dto.getStandardYieldMin())
+                .standardYieldMax(dto.getStandardYieldMax())
+                .needsInput(dto.getNeedsInput() != null ? dto.getNeedsInput() : true)
+                .outputUnit(dto.getOutputUnit())
                 .build();
 
         WorkProcess saved = workProcessRepository.save(entity);
@@ -92,8 +99,27 @@ public class WorkProcessServiceImpl implements WorkProcessService {
         if (dto.getDescription() != null) entity.setDescription(dto.getDescription());
         if (dto.getSortOrder() != null) entity.setSortOrder(dto.getSortOrder());
 
+        // P0-3: 出成率配置 — if != null 模式无法清空已配值 (防误清取舍)
+        // 跨字段校验取"合并后"值 (新值优先, 否则保留已配)
+        BigDecimal effMin = dto.getStandardYieldMin() != null ? dto.getStandardYieldMin() : entity.getStandardYieldMin();
+        BigDecimal effMax = dto.getStandardYieldMax() != null ? dto.getStandardYieldMax() : entity.getStandardYieldMax();
+        validateYieldRange(effMin, effMax);
+        if (dto.getStandardYieldMin() != null) entity.setStandardYieldMin(dto.getStandardYieldMin());
+        if (dto.getStandardYieldMax() != null) entity.setStandardYieldMax(dto.getStandardYieldMax());
+        if (dto.getNeedsInput() != null) entity.setNeedsInput(dto.getNeedsInput());
+        if (dto.getOutputUnit() != null) entity.setOutputUnit(dto.getOutputUnit());
+
         WorkProcess saved = workProcessRepository.save(entity);
         return toDTO(saved);
+    }
+
+    /** P0-3: 标准出成率区间跨字段校验 — min < max (两者皆非 null 时), 否则 400. */
+    private void validateYieldRange(BigDecimal min, BigDecimal max) {
+        if (min != null && max != null && min.compareTo(max) >= 0) {
+            throw new BusinessException(400, "标准出成率下限必须小于上限")
+                    .withHint("如焯水 0.30~0.60, 滚揉保水 1.00~1.35")
+                    .withHintTarget("standardYieldMax");
+        }
     }
 
     @Override
@@ -139,6 +165,10 @@ public class WorkProcessServiceImpl implements WorkProcessService {
                 .estimatedMinutes(entity.getEstimatedMinutes())
                 .sortOrder(entity.getSortOrder())
                 .isActive(entity.getIsActive())
+                .standardYieldMin(entity.getStandardYieldMin())
+                .standardYieldMax(entity.getStandardYieldMax())
+                .needsInput(entity.getNeedsInput())
+                .outputUnit(entity.getOutputUnit())
                 .createdAt(entity.getCreatedAt())
                 .updatedAt(entity.getUpdatedAt())
                 .build();
