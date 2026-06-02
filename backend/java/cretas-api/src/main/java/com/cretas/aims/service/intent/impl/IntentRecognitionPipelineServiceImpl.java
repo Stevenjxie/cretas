@@ -42,6 +42,7 @@ import com.cretas.aims.service.IntentDisambiguationService;
 import com.cretas.aims.service.impl.IntentConfigRollbackService;
 import com.cretas.aims.service.intent.IntentConfigManagementService;
 import com.cretas.aims.service.intent.IntentRecognitionPipelineService;
+import com.cretas.aims.ai.tool.WriteGuardService;
 import com.cretas.aims.dto.ClassifierResult;
 import com.cretas.aims.dto.SemanticMatchResult;
 import com.cretas.aims.dto.intent.RouteDecision;
@@ -250,6 +251,10 @@ public class IntentRecognitionPipelineServiceImpl implements IntentRecognitionPi
         log.info("[Disambiguation] IntentDisambiguationService injected: {}",
                 disambiguationService != null ? "success" : "not configured");
     }
+
+    // W0 fast-follow: write-guard for scoping abstain to write/destructive intents only.
+    @Autowired
+    private WriteGuardService writeGuardService;
 
     // ==================== Configuration values ====================
 
@@ -3601,6 +3606,14 @@ public class IntentRecognitionPipelineServiceImpl implements IntentRecognitionPi
         if (!top1Low && !marginNarrow) return null;
         CandidateIntent c1 = candidates.get(0);
         CandidateIntent c2 = candidates.size() >= 2 ? candidates.get(1) : null;
+        // W0 fast-follow: only abstain when a write/destructive intent is in play — for pure
+        // read ambiguity, let the downstream RAG / LLM-reranking auto-resolve (no answer-rate hit).
+        boolean writeInPlay = writeGuardService != null && (
+                writeGuardService.hasWriteSuffix(c1.getIntentCode())
+                || (c2 != null && writeGuardService.hasWriteSuffix(c2.getIntentCode())));
+        if (!writeInPlay) {
+            return null;
+        }
         String clarification = (c2 != null)
                 ? String.format("您的问题可能对应「%s」或「%s」，请问您想要哪个？", c1.getIntentName(), c2.getIntentName())
                 : String.format("您的问题与「%s」相关度不够高，请提供更多细节。", c1.getIntentName());
