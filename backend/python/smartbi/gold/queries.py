@@ -852,3 +852,79 @@ async def menu_quadrant(
         "qtyMedian": qty_median,
         "revenueMedian": rev_median,
     }
+
+
+async def store_comparison(
+    pool: asyncpg.Pool,
+    factory_id: str,
+    date_range: Tuple[Optional[date], Optional[date]],
+) -> Dict[str, Any]:
+    """门店对比 — per-store revenue / order-count / avg-ticket comparison.
+
+    Reads agg_daily JOIN dim_store, grouped by store: SUM(net_amount) as
+    revenue, SUM(bill_count) as order_count, and avg_ticket = revenue /
+    NULLIF(order_count, 0) (NULL → 0.0 when a store has no bills).
+
+    Computes the per-store revenue median and flags weak stores (revenue
+    strictly below the median) so the FE can highlight underperformers.
+
+    Dates optional (None bound = all history on that side, filtered on
+    a.date). Returns: {stores:[{name, revenue, orderCount, avgTicket}],
+    medianRevenue, weakStores:[name,...]}. Honest empty: stores=[],
+    medianRevenue=0, weakStores=[].
+    """
+    start, end = date_range
+    _validate_range(start, end)
+    conds = ["a.factory_id = $1"]
+    params: list = [factory_id]
+    if start is not None:
+        params.append(start)
+        conds.append(f"a.date >= ${len(params)}")
+    if end is not None:
+        params.append(end)
+        conds.append(f"a.date <= ${len(params)}")
+    where = " AND ".join(conds)
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            f"""
+            SELECT s.name AS name,
+                   SUM(a.net_amount)::numeric(18,2) AS revenue,
+                   SUM(a.bill_count)                AS order_count,
+                   (SUM(a.net_amount)
+                      / NULLIF(SUM(a.bill_count), 0))::numeric(18,2) AS avg_ticket
+              FROM agg_daily a
+              JOIN dim_store s ON s.store_id = a.store_id
+             WHERE {where}
+             GROUP BY s.name
+             ORDER BY SUM(a.net_amount) DESC
+            """,
+            *params,
+        )
+
+    stores = []
+    rev_vals = []
+    for r in rows:
+        revenue = float(Decimal(str(r["revenue"]))) if r["revenue"] is not None else 0.0
+        order_count = int(r["order_count"]) if r["order_count"] is not None else 0
+        avg_ticket = (
+            float(Decimal(str(r["avg_ticket"]))) if r["avg_ticket"] is not None else 0.0
+        )
+        rev_vals.append(revenue)
+        stores.append({
+            "name": r["name"],
+            "revenue": revenue,
+            "orderCount": order_count,
+            "avgTicket": avg_ticket,
+        })
+
+    median_revenue = _median(rev_vals)
+    weak_stores = [s["name"] for s in stores if s["revenue"] < median_revenue]
+
+    return {
+        "factory_id": factory_id,
+        "start_date": start.isoformat() if start is not None else None,
+        "end_date": end.isoformat() if end is not None else None,
+        "stores": stores,
+        "medianRevenue": median_revenue,
+        "weakStores": weak_stores,
+    }

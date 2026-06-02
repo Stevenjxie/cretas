@@ -504,6 +504,38 @@ async def menu_quadrant_endpoint(
     return {"success": True, "data": data}
 
 
+@router.get("/restaurant-ops/store-comparison")
+async def store_comparison_endpoint(
+    request: Request,
+    start_date: Optional[str] = Query(None, description="YYYY-MM-DD inclusive; 省略=全部历史"),
+    end_date: Optional[str] = Query(None, description="YYYY-MM-DD inclusive; 省略=全部历史"),
+) -> Dict[str, Any]:
+    """门店对比 — per-store revenue / 单量 / 客单价 + 低于中位营收的弱店列表。
+
+    Returns {stores:[{name, revenue, orderCount, avgTicket}], medianRevenue,
+    weakStores:[name,...]}. Dates optional (省略 → 全部历史)。Honest empty:
+    no stores → stores=[]。
+    """
+    factory_id = _get_factory_id(request)
+    if not factory_id:
+        return {"success": False, "message": "missing factory context"}
+
+    from smartbi.config import get_pg_pool
+    from smartbi.gold.queries import store_comparison as _store_comparison
+    pool = await get_pg_pool()
+    if pool is None:
+        return {"success": False, "message": "db pool unavailable"}
+
+    start = _parse_opt_date(start_date, "start_date")
+    end = _parse_opt_date(end_date, "end_date")
+    try:
+        data = await _store_comparison(pool, factory_id, (start, end))
+    except Exception as e:
+        logger.exception("[store-comparison] failed for %s", factory_id)
+        return {"success": False, "message": f"compute failed: {e}"}
+    return {"success": True, "data": data}
+
+
 @router.get("/restaurant-ops/store-margin")
 async def store_margin(request: Request, days: int = Query(30, ge=1, le=365)) -> Dict[str, Any]:
     """Per-store margin breakdown for store-comparison page."""

@@ -19,6 +19,7 @@ import pytest
 from smartbi.gold.queries import (
     _median,
     menu_quadrant,
+    store_comparison,
 )
 
 
@@ -193,3 +194,71 @@ async def test_menu_quadrant_month_filter_on_a_month():
     assert "a.month >=" in sql and "a.month <=" in sql
     # month is normalized to first-of-month
     assert params == ["F1", date(2025, 4, 1), date(2025, 5, 1)]
+
+
+# ── Task 5: store_comparison ─────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_store_comparison_avg_ticket_and_weak_stores():
+    rows = [
+        {"name": "旗舰店", "revenue": 10000, "order_count": 500, "avg_ticket": 20.0},
+        {"name": "中位店", "revenue": 5000, "order_count": 250, "avg_ticket": 20.0},
+        {"name": "弱店", "revenue": 2000, "order_count": 200, "avg_ticket": 10.0},
+    ]
+    # revenue sorted [2000,5000,10000] median = 5000
+    # weakStores = those strictly below median revenue → 弱店 (2000)
+    conn = _ScriptedConn([rows])
+    pool = _ScriptedPool(conn)
+    out = await store_comparison(pool, "F1", (None, None))
+    assert out["medianRevenue"] == 5000
+    stores = {s["name"]: s for s in out["stores"]}
+    assert stores["旗舰店"]["avgTicket"] == pytest.approx(20.0)
+    assert stores["弱店"]["avgTicket"] == pytest.approx(10.0)
+    assert out["weakStores"] == ["弱店"]
+
+
+@pytest.mark.asyncio
+async def test_store_comparison_avg_ticket_zero_orders_is_zero():
+    rows = [
+        {"name": "无单店", "revenue": 0, "order_count": 0, "avg_ticket": None},
+        {"name": "有单店", "revenue": 1000, "order_count": 50, "avg_ticket": 20.0},
+    ]
+    conn = _ScriptedConn([rows])
+    pool = _ScriptedPool(conn)
+    out = await store_comparison(pool, "F1", (None, None))
+    stores = {s["name"]: s for s in out["stores"]}
+    # NULLIF(order_count,0) → NULL → avgTicket falls back to 0.0
+    assert stores["无单店"]["avgTicket"] == 0.0
+    assert stores["有单店"]["avgTicket"] == pytest.approx(20.0)
+
+
+@pytest.mark.asyncio
+async def test_store_comparison_empty_honest():
+    conn = _ScriptedConn([[]])
+    pool = _ScriptedPool(conn)
+    out = await store_comparison(pool, "F1", (None, None))
+    assert out["stores"] == []
+    assert out["medianRevenue"] == 0
+    assert out["weakStores"] == []
+
+
+@pytest.mark.asyncio
+async def test_store_comparison_all_history_no_date_filter():
+    conn = _ScriptedConn([[]])
+    pool = _ScriptedPool(conn)
+    await store_comparison(pool, "F1", (None, None))
+    kind, sql, params = conn.calls[0]
+    assert _no_date_filter(sql), sql
+    assert not any(isinstance(p, date) for p in params)
+    assert params == ["F1"]
+
+
+@pytest.mark.asyncio
+async def test_store_comparison_date_filter_both_bounds():
+    conn = _ScriptedConn([[]])
+    pool = _ScriptedPool(conn)
+    await store_comparison(pool, "F1", (date(2025, 1, 1), date(2025, 12, 31)))
+    kind, sql, params = conn.calls[0]
+    assert "a.date >=" in sql and "a.date <=" in sql
+    assert params == ["F1", date(2025, 1, 1), date(2025, 12, 31)]

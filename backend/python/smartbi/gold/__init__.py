@@ -35,6 +35,7 @@ from smartbi.gold.queries import (
     menu_quadrant,
     order_type_mix,
     staff_ranking,
+    store_comparison,
     top_products,
 )
 from smartbi.gold.review_queries import (
@@ -97,6 +98,7 @@ __all__ = [
     "review_vip",
     "review_vip_tags",
     "staff_ranking",
+    "store_comparison",
     "store_review_vs_revenue",
     "top_products",
     "run_silver_dual_write",
