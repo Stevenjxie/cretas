@@ -327,4 +327,56 @@ class WriteGuardWiringTest {
         assertThat(response.getStatus()).isNotEqualTo("WRITE_CONFIRM_REQUIRED");
         verify(writeTool, times(1)).execute(any(), any());
     }
+
+    // ================= Site F: LLM Tool-Calling fallback (LlmIntentFallbackClientImpl) =================
+
+    /**
+     * Site F reproduces the exact guard condition at
+     * {@code LlmIntentFallbackClientImpl.executeToolCallingWorkflow} (the line immediately before
+     * {@code executor.execute(toolCall, context)}). That method is private and depends on a live
+     * DashScope LLM round-trip + domain-filtered tool list, so it is not unit-testable in isolation;
+     * this test instead asserts the guard PREDICATE at that call path with the real stateless guard.
+     *
+     * <p>Why {@code Map.of()} for the confirm check: the LLM-fallback path has NO user confirmation
+     * step — {@code buildToolExecutionContext} sets no confirm flag — so a write tool selected
+     * autonomously by the LLM is unconfirmed by construction and MUST be blocked.
+     */
+    @Test
+    @DisplayName("Site F: LLM-fallback guard blocks an LLM-selected write tool (no confirm) → throws, execute() never reached")
+    void siteF_llmFallback_blocksWriteToolWithoutConfirm() throws Exception {
+        ToolExecutor llmSelectedWriteTool = mock(ToolExecutor.class);
+        when(llmSelectedWriteTool.getActionType()).thenReturn(ToolExecutor.ActionType.DELETE);
+        String toolName = "material_batch_delete";
+
+        // Exact Site F guard expression (LlmIntentFallbackClientImpl): isWriteTool && !isConfirmed(Map.of()).
+        boolean blocked = false;
+        try {
+            if (writeGuard.isWriteTool(llmSelectedWriteTool) && !writeGuard.isConfirmed(Map.of())) {
+                throw new IllegalStateException(
+                        "W0 write-guard: tool '" + toolName + "' 需要显式确认后才能执行");
+            }
+            // Only reached if NOT blocked — would be the real execute() call site.
+            llmSelectedWriteTool.execute(any(), any());
+        } catch (IllegalStateException e) {
+            blocked = true;
+            assertThat(e.getMessage()).contains("W0 write-guard").contains(toolName);
+        }
+
+        assertThat(blocked).as("LLM-selected write tool must be blocked at Site F").isTrue();
+        // The destructive operation must NEVER have executed.
+        verify(llmSelectedWriteTool, never()).execute(any(), any());
+    }
+
+    @Test
+    @DisplayName("Site F: a READ tool (ANALYZE/READ actionType) is NOT blocked by the LLM-fallback guard")
+    void siteF_llmFallback_readToolNotBlocked() {
+        ToolExecutor llmSelectedReadTool = mock(ToolExecutor.class);
+        when(llmSelectedReadTool.getActionType()).thenReturn(ToolExecutor.ActionType.READ);
+
+        // Same predicate; a READ tool must fall through (isWriteTool == false).
+        boolean wouldBlock = writeGuard.isWriteTool(llmSelectedReadTool)
+                && !writeGuard.isConfirmed(Map.of());
+
+        assertThat(wouldBlock).as("READ tool must NOT be blocked by the LLM-fallback write-guard").isFalse();
+    }
 }
