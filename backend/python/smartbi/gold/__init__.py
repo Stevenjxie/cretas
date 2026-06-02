@@ -52,6 +52,7 @@ from smartbi.gold.review_queries import (
     review_vip_tags,         # P1
 )
 from smartbi.gold.shadow_compare import DiffReport, FieldDiff, diff_results
+from smartbi.gold.store_review_revenue import store_review_vs_revenue  # P3
 from smartbi.gold.triggers import (
     ApiAppendIncrementalTrigger,
     FieldRegistryReviewedTrigger,
@@ -94,6 +95,7 @@ __all__ = [
     "review_vip",
     "review_vip_tags",
     "staff_ranking",
+    "store_review_vs_revenue",
     "top_products",
     "run_silver_dual_write",
     "silver_dual_write_enabled",

@@ -611,6 +611,89 @@ public class GoldFinanceClient {
         }
     }
 
+    /**
+     * Fetch P3 门店评分 × 营收 cross-dataset analysis from Python Gold layer.
+     *
+     * <p>Joins per-store review scores (大众点评 评价) with per-store POS revenue
+     * (gold agg_daily) via the {@code dim_store_review_alias} bridge. The window
+     * scopes the REVENUE half (review scores are over the full corpus).
+     *
+     * <p><b>RBAC</b>: the response's {@code linked_stores[].revenue} (+ bill_count
+     * is a count, kept) is monetary → Python {@code _apply_rbac_strip} nulls it for
+     * non-price-view roles. {@code avg_rating} / {@code review_count} are NOT money
+     * and stay visible. We forward X-User-Role so price-view roles see revenue
+     * (per feedback_java_python_rbac_role_forward — else revenue回 ¥0/null).
+     *
+     * @param factoryId     tenant id
+     * @param startDate     inclusive (营收口径)
+     * @param endDate       inclusive; must be ≥ startDate
+     * @param minConfidence alias 进 join 的最低置信 (0..1); admin 行不受此限
+     * @return parsed JSON; key fields: linked_stores (List of {store_id,
+     *         gold_store_name, review_store_name, avg_rating, review_count, revenue,
+     *         bill_count, alias_confidence, alias_decided_by}), linked_count,
+     *         total_review_stores, total_gold_stores, unlinked_review_stores (List),
+     *         unlinked_count, correlation ({metric, value, n, note} or null),
+     *         honest_note, optional next_action
+     * @throws IOException on transport / non-2xx / parse failure
+     */
+    public Map<String, Object> fetchStoreReviewRevenue(
+            String factoryId,
+            LocalDate startDate,
+            LocalDate endDate,
+            double minConfidence
+    ) throws IOException {
+        if (factoryId == null || factoryId.isEmpty()) {
+            throw new IllegalArgumentException("factoryId required");
+        }
+        if (startDate == null || endDate == null) {
+            throw new IllegalArgumentException("startDate and endDate required");
+        }
+        if (startDate.isAfter(endDate)) {
+            throw new IllegalArgumentException("startDate > endDate");
+        }
+        if (minConfidence < 0.0 || minConfidence > 1.0) {
+            throw new IllegalArgumentException("minConfidence must be 0..1");
+        }
+
+        HttpUrl url = HttpUrl.parse(config.getUrl() + "/api/smartbi/gold/store-review-revenue")
+                .newBuilder()
+                .addQueryParameter("factory_id", factoryId)
+                .addQueryParameter("start_date", startDate.toString())
+                .addQueryParameter("end_date", endDate.toString())
+                .addQueryParameter("min_confidence", String.valueOf(minConfidence))
+                .build();
+
+        Request.Builder reqBuilder = new Request.Builder().url(url).get();
+        if (!internalSecret.isEmpty()) {
+            reqBuilder.addHeader("X-Internal-Secret", internalSecret);
+            reqBuilder.addHeader("X-Factory-Id", factoryId);
+            // Forward role so Python RBAC keeps revenue for price-view roles
+            // (per feedback_java_python_rbac_role_forward).
+            String userRole = currentUserRole();
+            if (userRole != null && !userRole.isEmpty()) {
+                reqBuilder.addHeader("X-User-Role", userRole);
+            }
+        }
+        Request req = reqBuilder.build();
+
+        long t0 = System.currentTimeMillis();
+        try (Response resp = http.newCall(req).execute()) {
+            long elapsed = System.currentTimeMillis() - t0;
+            if (!resp.isSuccessful()) {
+                String body = resp.body() != null ? resp.body().string() : "";
+                throw new IOException(
+                        "Gold store-review-revenue HTTP " + resp.code() + " in " + elapsed
+                                + "ms: " + body);
+            }
+            String body = resp.body() != null ? resp.body().string() : "{}";
+            @SuppressWarnings("unchecked")
+            Map<String, Object> parsed = objectMapper.readValue(body, Map.class);
+            log.debug("Gold store-review-revenue factory={} range={}..{} linked={} in {}ms",
+                    factoryId, startDate, endDate, parsed.get("linked_count"), elapsed);
+            return parsed;
+        }
+    }
+
     // =========================================================================
     // Review-analytics fetches (大众点评 评价下载 data)
     //

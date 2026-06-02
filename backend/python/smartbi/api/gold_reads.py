@@ -44,6 +44,7 @@ from smartbi.gold import (
     review_vip,
     review_vip_tags,
     staff_ranking,
+    store_review_vs_revenue,
     top_products,
 )
 from smartbi.tenant_ctx import get_factory_id
@@ -509,6 +510,40 @@ async def get_review_reply_rate(
     except Exception as e:
         logger.exception("review-reply-rate failed: %s", e)
         raise HTTPException(status_code=500, detail=f"Review query failed: {e}")
+
+
+@router.get("/store-review-revenue")
+async def get_store_review_revenue(
+    request: Request,
+    start_date: str = Query(..., description="YYYY-MM-DD inclusive (营收口径)"),
+    end_date: str = Query(..., description="YYYY-MM-DD inclusive (营收口径)"),
+    factory_id: Optional[str] = Query(None),
+    min_confidence: float = Query(
+        0.90, ge=0.0, le=1.0,
+        description="alias 进 join 的最低置信; admin 行不受此限。低于此值的猜测不参与关联。",
+    ),
+):
+    """P3 门店评分 (大众点评评价) × 营收 (POS gold) 跨数据集关联。
+
+    诚实标注内建 (per spec §3/§5):
+      - 仅 decided_by='admin' 或 confidence>=min_confidence 的 alias 进 join。
+      - correlation 仅 linked_count>=4 时计算, 否则 null + 解释。
+      - 必返 unlinked_review_stores 门店名列表 + honest_note。
+
+    RBAC: revenue/bill_count 等金额字段对非 price-view 角色剥零 (_apply_rbac_strip),
+    评分/评价数 (avg_rating / review_count) 保留 — 评分非金额, 不剥。
+    """
+    fid = _resolve_tenant(factory_id)
+    start, end = _parse_range(start_date, end_date)
+    pool = await get_pg_pool()
+    try:
+        result = await store_review_vs_revenue(
+            pool, fid, (start, end), min_confidence=min_confidence,
+        )
+        return _apply_rbac_strip(result, _get_role(request))
+    except Exception as e:
+        logger.exception("store-review-revenue failed: %s", e)
+        raise HTTPException(status_code=500, detail=f"Gold query failed: {e}")
 
 
 async def _query_analysis_results_batch(
