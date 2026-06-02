@@ -78,6 +78,16 @@ public class RestaurantReviewCityTool extends AbstractReviewGoldTool {
         if (!names.isEmpty()) {
             result.put("chartConfig", barChartConfig("各城市平均星级 (分)", names, vals, "分"));
         }
+        attachDepth(result,
+                followups(
+                        followup("差评最多门店", "差评最多的门店"),
+                        followup("门店服务分排名", "服务分排名"),
+                        followup("整体评价总览", "客户评价怎么样"),
+                        followup("各平台口碑对比", "各平台评价对比")),
+                glossary(
+                        "平均星级", "该城市所有门店评价星级的算术平均(满分5分)。",
+                        "评价数", "该城市去重后的有效评价条数。"),
+                "柱越长代表该城市平均星级越高、口碑越好；评分最低的城市排在最前，是要重点抓的区域。");
         return result;
     }
 

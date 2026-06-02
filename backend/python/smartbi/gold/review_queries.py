@@ -63,6 +63,29 @@ _STORE_DIM_EXPR = {
     "low_star": "low_star_count",
 }
 
+# Time-of-day bucketing for time_period (评价 datetime, ~73% populated).
+# A guarded cast — only rows whose text looks like an ISO timestamp are
+# parsed; everything else (blank / malformed) falls into the NULL bucket.
+# The 5 buckets mirror the GROUNDTRUTH cohorts:
+#   早 5-10 / 午 11-14 / 下午 15-16 / 晚 17-21 / 夜 22-4
+_TIME_PERIOD_EXPR = """
+    CASE
+        WHEN NULLIF(row_data->>'time_period', '') !~ '^\\d{4}-\\d{2}-\\d{2}' THEN NULL
+        ELSE (
+            CASE
+                WHEN EXTRACT(HOUR FROM (row_data->>'time_period')::timestamp) BETWEEN 5  AND 10 THEN '早(5-10点)'
+                WHEN EXTRACT(HOUR FROM (row_data->>'time_period')::timestamp) BETWEEN 11 AND 14 THEN '午(11-14点)'
+                WHEN EXTRACT(HOUR FROM (row_data->>'time_period')::timestamp) BETWEEN 15 AND 16 THEN '下午(15-16点)'
+                WHEN EXTRACT(HOUR FROM (row_data->>'time_period')::timestamp) BETWEEN 17 AND 21 THEN '晚(17-21点)'
+                ELSE '夜(22-4点)'
+            END
+        )
+    END
+"""
+
+# Stable presentation order for the 5 time buckets.
+_TIME_PERIOD_ORDER = ['早(5-10点)', '午(11-14点)', '下午(15-16点)', '晚(17-21点)', '夜(22-4点)']
+
 
 def _f(v: Any) -> Optional[float]:
     """Decimal/None → float/None for JSON serialization."""
@@ -318,4 +341,283 @@ async def review_dish_issues(
         "low_star_count": int(cnt["low_star_count"]) if cnt else 0,
         "low_with_tag": int(cnt["low_with_tag"]) if cnt else 0,
         "tags": tags,
+    }
+
+
+# =============================================================================
+# P1 conversational-depth queries (2026-06-02) — within-review cross-dim +
+# more review questions. All reuse _DEDUP_CTE / _f(); all output float().
+# =============================================================================
+
+
+async def review_vip_tags(
+    pool: asyncpg.Pool, factory_id: str, *, top_n: int = 6
+) -> Dict[str, Any]:
+    """VIP vs 非VIP 各自的高频好评(>=4.5星)与差评(<=3星)口味/品质标签。
+
+    NOTE: 菜品标签 是口味/品质标签 (味道好/鲜嫩/太软了)，非菜名。
+    标签按 [,，、/] 切分单独计数。返回四组列表供前端做双向对比。"""
+    sql = _DEDUP_CTE + """
+        , tagged AS (
+            SELECT
+                CASE WHEN row_data->>'是否vip' = '是' THEN 'VIP' ELSE '非VIP' END AS grp,
+                CASE WHEN (row_data->>'星级分')::numeric >= 4.5 THEN 'good'
+                     WHEN (row_data->>'星级分')::numeric <= 3   THEN 'bad'
+                     ELSE 'mid' END                                              AS sentiment,
+                trim(t)                                                          AS tag
+              FROM r,
+                   LATERAL regexp_split_to_table(
+                       COALESCE(row_data->>'菜品标签', ''), '[,，、/]') AS t
+             WHERE NULLIF(row_data->>'菜品标签', '') IS NOT NULL
+        )
+        SELECT grp, sentiment, tag, count(*) AS n
+          FROM tagged
+         WHERE trim(tag) <> '' AND sentiment IN ('good', 'bad')
+         GROUP BY grp, sentiment, tag
+    """
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(sql, factory_id)
+
+    buckets: Dict[str, list] = {
+        "VIP_good": [], "VIP_bad": [], "非VIP_good": [], "非VIP_bad": [],
+    }
+    for row in rows:
+        key = f"{row['grp']}_{row['sentiment']}"
+        if key in buckets:
+            buckets[key].append({"tag": row["tag"], "count": int(row["n"])})
+    for key in buckets:
+        buckets[key].sort(key=lambda x: x["count"], reverse=True)
+        buckets[key] = buckets[key][:top_n]
+
+    return {
+        "factory_id": factory_id,
+        "vip_good_tags": buckets["VIP_good"],
+        "vip_bad_tags": buckets["VIP_bad"],
+        "normal_good_tags": buckets["非VIP_good"],
+        "normal_bad_tags": buckets["非VIP_bad"],
+    }
+
+
+async def review_time_period(pool: asyncpg.Pool, factory_id: str) -> Dict[str, Any]:
+    """各时段 (早/午/下午/晚/夜) 评价量与平均星级。time_period ~73% 有值，
+    返回 null_period_count 供 message 注明覆盖率。"""
+    sql = _DEDUP_CTE + f"""
+        , p AS (
+            SELECT {_TIME_PERIOD_EXPR} AS period,
+                   (row_data->>'星级分')::numeric AS star
+              FROM r
+        )
+        SELECT period,
+               count(*)                       AS n,
+               round(avg(star), 3)            AS avg_star
+          FROM p
+         WHERE period IS NOT NULL
+         GROUP BY period
+    """
+    null_sql = _DEDUP_CTE + f"""
+        , p AS (SELECT {_TIME_PERIOD_EXPR} AS period FROM r)
+        SELECT count(*) FILTER (WHERE period IS NULL)     AS null_count,
+               count(*)                                    AS total
+          FROM p
+    """
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(sql, factory_id)
+        cnt = await conn.fetchrow(null_sql, factory_id)
+
+    by_period = {row["period"]: row for row in rows}
+    periods = []
+    for label in _TIME_PERIOD_ORDER:
+        row = by_period.get(label)
+        if row is None:
+            continue
+        periods.append({
+            "period": label,
+            "review_count": int(row["n"]),
+            "avg_star": _f(row["avg_star"]),
+        })
+    return {
+        "factory_id": factory_id,
+        "periods": periods,
+        "null_period_count": int(cnt["null_count"]) if cnt else 0,
+        "total_reviews": int(cnt["total"]) if cnt else 0,
+    }
+
+
+async def review_score_tags(
+    pool: asyncpg.Pool, factory_id: str, *, dim: str = "service", top_n: int = 10
+) -> Dict[str, Any]:
+    """服务/环境标签×评分 高频词 + 该维度平均分。
+
+    dim=service → 服务标签 + avg_service；dim=env → 环境标签 + avg_env。
+    标签是大众点评预设的评价标签 (如 服务热情/环境优雅)，按 [,，、/] 切分。"""
+    tag_col = "服务标签" if dim == "service" else "环境标签"
+    score_col = "服务分" if dim == "service" else "环境分"
+    sql = _DEDUP_CTE + f"""
+        , tags AS (
+            SELECT trim(t)                                       AS tag,
+                   NULLIF(row_data->>'{score_col}', '')::numeric AS score
+              FROM r,
+                   LATERAL regexp_split_to_table(
+                       COALESCE(row_data->>'{tag_col}', ''), '[,，、/]') AS t
+             WHERE NULLIF(row_data->>'{tag_col}', '') IS NOT NULL
+        )
+        SELECT tag,
+               count(*)                AS n,
+               round(avg(score), 3)    AS avg_score
+          FROM tags
+         WHERE trim(tag) <> ''
+         GROUP BY tag
+         ORDER BY n DESC
+         LIMIT $2
+    """
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(sql, factory_id, int(top_n))
+    tags = [
+        {"tag": row["tag"], "count": int(row["n"]), "avg_score": _f(row["avg_score"])}
+        for row in rows
+    ]
+    return {"factory_id": factory_id, "dim": dim, "score_col": score_col, "tags": tags}
+
+
+async def review_good_tags(
+    pool: asyncpg.Pool, factory_id: str, *, top_n: int = 10
+) -> Dict[str, Any]:
+    """好评(>=4.5星)中高频的口味/品质标签。
+
+    NOTE: 菜品标签是口味/品质标签 (味道好/鲜嫩)，非菜名。GROUNDTRUTH:
+    味道好 5998 / 实惠 1791 / 鲜嫩 1394 / 新鲜 1295 / 香辣 1046。"""
+    tag_sql = _DEDUP_CTE + """
+        , high AS (
+            SELECT row_data
+              FROM r
+             WHERE (row_data->>'星级分')::numeric >= 4.5
+               AND NULLIF(row_data->>'菜品标签', '') IS NOT NULL
+        ),
+        tags AS (
+            SELECT trim(t) AS tag
+              FROM high,
+                   LATERAL regexp_split_to_table(high.row_data->>'菜品标签', '[,，、/]') AS t
+        )
+        SELECT tag, count(*) AS n
+          FROM tags
+         WHERE trim(tag) <> ''
+         GROUP BY tag
+         ORDER BY n DESC
+         LIMIT $2
+    """
+    cnt_sql = _DEDUP_CTE + """
+        SELECT count(*) FILTER (WHERE (row_data->>'星级分')::numeric >= 4.5) AS high_star_count
+          FROM r
+    """
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(tag_sql, factory_id, int(top_n))
+        cnt = await conn.fetchrow(cnt_sql, factory_id)
+    tags = [{"tag": row["tag"], "count": int(row["n"])} for row in rows]
+    return {
+        "factory_id": factory_id,
+        "high_star_count": int(cnt["high_star_count"]) if cnt else 0,
+        "tags": tags,
+    }
+
+
+async def review_platform(pool: asyncpg.Pool, factory_id: str) -> Dict[str, Any]:
+    """各平台 (点评/美团/...) 评价量与平均星级。GROUNDTRUTH:
+    点评 19189 (4.80) / 美团 656 (4.57)。按评价量降序。"""
+    sql = _DEDUP_CTE + """
+        SELECT COALESCE(NULLIF(row_data->>'平台', ''), '未标注')        AS platform,
+               count(*)                                                 AS n,
+               round(avg((row_data->>'星级分')::numeric), 3)            AS avg_star,
+               round(avg(NULLIF(row_data->>'服务分', '')::numeric), 3)  AS avg_service,
+               round(avg(NULLIF(row_data->>'环境分', '')::numeric), 3)  AS avg_env
+          FROM r
+         GROUP BY platform
+         ORDER BY n DESC
+    """
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(sql, factory_id)
+    platforms = [
+        {
+            "platform": row["platform"],
+            "review_count": int(row["n"]),
+            "avg_star": _f(row["avg_star"]),
+            "avg_service": _f(row["avg_service"]),
+            "avg_env": _f(row["avg_env"]),
+        }
+        for row in rows
+    ]
+    return {"factory_id": factory_id, "platforms": platforms}
+
+
+async def review_trend(pool: asyncpg.Pool, factory_id: str) -> Dict[str, Any]:
+    """按 time_period 月份聚合评价量与平均星级 (时间序列)。
+
+    time_period ~73% 有值；无月份的行不计入趋势 (返回 null_period_count)。
+    月份键 = calendar year-month (to_char 直接出 YYYY-MM，无 ISO-year 跨年坑)。"""
+    sql = _DEDUP_CTE + """
+        , m AS (
+            SELECT
+                CASE
+                    WHEN NULLIF(row_data->>'time_period', '') !~ '^\\d{4}-\\d{2}-\\d{2}' THEN NULL
+                    ELSE to_char((row_data->>'time_period')::timestamp, 'YYYY-MM')
+                END AS month,
+                (row_data->>'星级分')::numeric AS star
+              FROM r
+        )
+        SELECT month,
+               count(*)            AS n,
+               round(avg(star), 3) AS avg_star
+          FROM m
+         WHERE month IS NOT NULL
+         GROUP BY month
+         ORDER BY month ASC
+    """
+    null_sql = _DEDUP_CTE + """
+        SELECT count(*) FILTER (
+                 WHERE NULLIF(row_data->>'time_period', '') !~ '^\\d{4}-\\d{2}-\\d{2}'
+               ) AS null_count
+          FROM r
+    """
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(sql, factory_id)
+        cnt = await conn.fetchrow(null_sql, factory_id)
+    months = [
+        {"month": row["month"], "review_count": int(row["n"]), "avg_star": _f(row["avg_star"])}
+        for row in rows
+    ]
+    return {
+        "factory_id": factory_id,
+        "months": months,
+        "null_period_count": int(cnt["null_count"]) if cnt else 0,
+    }
+
+
+async def review_reply_rate(pool: asyncpg.Pool, factory_id: str) -> Dict[str, Any]:
+    """商家回复率：已回复/未回复评价数 + 未回复差评数 (优先级处理对象)。
+
+    GROUNDTRUTH: 已回复 19452 / 未回复 393 (回复率 98%)。
+    回复状态字段值为 已回复 / 未回复。"""
+    sql = _DEDUP_CTE + """
+        SELECT
+            count(*) FILTER (WHERE row_data->>'回复状态' = '已回复')                       AS replied,
+            count(*) FILTER (WHERE row_data->>'回复状态' = '未回复')                       AS not_replied,
+            count(*) FILTER (WHERE row_data->>'回复状态' = '未回复'
+                             AND (row_data->>'星级分')::numeric <= 3)                      AS not_replied_low_star,
+            count(*) FILTER (WHERE NULLIF(row_data->>'回复状态', '') IS NOT NULL)          AS total_with_status
+          FROM r
+    """
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(sql, factory_id)
+    if row is None or int(row["total_with_status"]) == 0:
+        return {"factory_id": factory_id, "total_with_status": 0,
+                "replied": 0, "not_replied": 0, "not_replied_low_star": 0, "reply_rate": None}
+    replied = int(row["replied"])
+    total = int(row["total_with_status"])
+    reply_rate = round(replied / total * 100, 1) if total > 0 else None
+    return {
+        "factory_id": factory_id,
+        "replied": replied,
+        "not_replied": int(row["not_replied"]),
+        "not_replied_low_star": int(row["not_replied_low_star"]),
+        "total_with_status": total,
+        "reply_rate": reply_rate,
     }

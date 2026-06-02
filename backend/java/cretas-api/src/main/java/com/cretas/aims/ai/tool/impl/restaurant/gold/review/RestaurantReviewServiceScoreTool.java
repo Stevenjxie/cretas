@@ -73,6 +73,16 @@ public class RestaurantReviewServiceScoreTool extends AbstractReviewGoldTool {
         if (!names.isEmpty()) {
             result.put("chartConfig", barChartConfig("门店服务分 (分)", names, vals, "分"));
         }
+        attachDepth(result,
+                followups(
+                        followup("服务评价标签", "服务标签"),
+                        followup("门店环境分对比", "环境分对比"),
+                        followup("差评最多门店", "差评最多的门店"),
+                        followup("整体评价总览", "客户评价怎么样")),
+                glossary(
+                        "服务分", "顾客对门店服务态度/效率的评分(满分5分)。",
+                        "评价数", "该门店去重后的有效评价条数。"),
+                "柱越长代表该门店服务分越高；排名靠后的门店是服务培训要优先覆盖的对象。");
         return result;
     }
 

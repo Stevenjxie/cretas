@@ -73,6 +73,16 @@ public class RestaurantReviewEnvScoreTool extends AbstractReviewGoldTool {
         if (!names.isEmpty()) {
             result.put("chartConfig", barChartConfig("门店环境分 (分)", names, vals, "分"));
         }
+        attachDepth(result,
+                followups(
+                        followup("环境评价标签", "环境标签"),
+                        followup("门店服务分排名", "服务分排名"),
+                        followup("差评最多门店", "差评最多的门店"),
+                        followup("整体评价总览", "客户评价怎么样")),
+                glossary(
+                        "环境分", "顾客对就餐环境(卫生/氛围/舒适度)的评分(满分5分)。",
+                        "评价数", "该门店去重后的有效评价条数。"),
+                "柱越长代表该门店环境分越高；排名靠后的门店是环境改造要优先考虑的对象。");
         return result;
     }
 
