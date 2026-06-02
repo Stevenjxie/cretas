@@ -1218,6 +1218,52 @@ public class PurchaseServiceImpl implements PurchaseService {
         return result;
     }
 
+    @Override
+    public List<Map<String, Object>> getOrderReceiveSequence(String factoryId, String orderId) {
+        // 单元 G (F006 R-B3): 分次收货时序明细 — 客户张权 "第一次收了多少第二次收了多少更直观".
+        // getPurchaseOrderById 已强制工厂隔离 (BusinessException 403 if cross-factory).
+        PurchaseOrder order = getPurchaseOrderById(factoryId, orderId);
+
+        List<PurchaseReceiveRecord> records = receiveRecordRepository
+                .findByFactoryIdAndPurchaseOrderIdOrderByCreatedAtAsc(factoryId, order.getId());
+
+        List<Map<String, Object>> sequence = new ArrayList<>();
+        int seq = 1;
+        for (PurchaseReceiveRecord record : records) {
+            BigDecimal totalQuantity = BigDecimal.ZERO;
+            List<Map<String, Object>> items = new ArrayList<>();
+            for (PurchaseReceiveItem item : record.getItems() != null ? record.getItems() : List.<PurchaseReceiveItem>of()) {
+                BigDecimal qty = item.getReceivedQuantity() != null ? item.getReceivedQuantity() : BigDecimal.ZERO;
+                totalQuantity = totalQuantity.add(qty);
+
+                Map<String, Object> itemMap = new LinkedHashMap<>();
+                itemMap.put("materialName", item.getMaterialName());
+                itemMap.put("quantity", qty);
+                itemMap.put("unit", item.getUnit());
+                items.add(itemMap);
+            }
+
+            // createdByName best-effort: receivedByUser 关联 (LAZY) 若已加载则取 fullName, 否则 null.
+            String createdByName = null;
+            com.cretas.aims.entity.User user = record.getReceivedByUser();
+            if (user != null) {
+                createdByName = user.getFullName();
+            }
+
+            Map<String, Object> entry = new LinkedHashMap<>();
+            entry.put("seq", seq++);
+            entry.put("receiveId", record.getId());
+            entry.put("receiveNumber", record.getReceiveNumber());
+            entry.put("receiveDate", record.getReceiveDate());
+            entry.put("createdAt", record.getCreatedAt());
+            entry.put("createdByName", createdByName);
+            entry.put("totalQuantity", totalQuantity);
+            entry.put("items", items);
+            sequence.add(entry);
+        }
+        return sequence;
+    }
+
     // ==================== 统计 ====================
 
     @Override
