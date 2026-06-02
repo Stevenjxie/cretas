@@ -114,8 +114,25 @@ async def top_products(
     JOIN picks the highest-confidence active (non-superseded) row matching
     EITHER the bare ``revenue`` field_name OR the per-store-suffixed
     ``revenue@store_<id>`` form (per ProductSummaryWriter Phase B C1
-    encoding). LATERAL keeps it 1:1 per product even with multi-store
+    encoding). LATERAL keeps it 1:1 per group even with multi-store
     provenance fan-out.
+
+    P4b-safe (canonical-dish-aware grouping): LEFT JOIN dim_canonical_dish
+    on dim_product.canonical_dish_id. The group key is the canonical dish
+    when a product has been human-confirmed-merged (canonical_dish_id NOT
+    NULL and the canonical row exists), else the product itself —
+    expressed as ``COALESCE('c'||canonical_dish_id, 'p'||product_id)``.
+    A confirmed canonical therefore sums qty/revenue/bill across all its
+    member products into one ranked row, displayed under canonical_name.
+
+    SAFETY — identical-to-pre-P4b when nothing is merged: any product with
+    canonical_dish_id NULL (the prod-default; only human confirmation sets
+    it) groups by itself, is the sole member, and yields the same name and
+    same sums as the per-product query. dim_canonical_dish empty / no rows
+    for a factory likewise leaves every canonical NULL → every product
+    groups by itself. The representative product_id (MIN over the group)
+    drives an identical per-rep provenance LATERAL, so for a single-member
+    group the rep IS the product and provenance is byte-identical to today.
     """
     start, end = date_range
     _validate_range(start, end)
@@ -128,26 +145,60 @@ async def top_products(
     async with pool.acquire() as conn:
         rows = await conn.fetch(
             f"""
-            SELECT p.product_id,
-                   p.name,
-                   SUM(a.qty_sold)::numeric(18,3) AS qty,
-                   SUM(a.revenue)::numeric(18,2) AS revenue,
-                   SUM(a.bill_count)             AS bill_count,
+            WITH grouped AS (
+                SELECT
+                    -- Stable group identity: canonical when confirmed-merged,
+                    -- else the product itself. COALESCE means a NULL
+                    -- canonical_dish_id falls back to per-product grouping,
+                    -- preserving exactly the pre-P4b behavior.
+                    COALESCE('c' || p.canonical_dish_id::text,
+                             'p' || p.product_id::text)  AS group_key,
+                    -- Representative product_id for the group. For a single-
+                    -- member (NULL-canonical) group this equals the product's
+                    -- own id, so downstream shape + provenance are unchanged.
+                    MIN(p.product_id)                    AS rep_product_id,
+                    -- Display name: canonical name when merged, else product
+                    -- name. For NULL-canonical groups cd.* is all-NULL so this
+                    -- is just p.name (identical to today).
+                    COALESCE(cd.canonical_name, p.name)  AS display_name,
+                    SUM(a.qty_sold)::numeric(18,3)       AS qty,
+                    SUM(a.revenue)::numeric(18,2)        AS revenue,
+                    SUM(a.bill_count)                    AS bill_count
+                  FROM agg_product a
+                  JOIN dim_product p ON p.product_id = a.product_id
+                  LEFT JOIN dim_canonical_dish cd
+                         ON cd.canonical_dish_id = p.canonical_dish_id
+                 WHERE a.factory_id = $1
+                   AND a.month BETWEEN $2 AND $3
+                 GROUP BY COALESCE('c' || p.canonical_dish_id::text,
+                                   'p' || p.product_id::text),
+                          COALESCE(cd.canonical_name, p.name)
+                HAVING SUM(a.revenue) > 0
+            )
+            SELECT g.rep_product_id              AS product_id,
+                   g.display_name                AS name,
+                   g.qty                          AS qty,
+                   g.revenue                      AS revenue,
+                   g.bill_count                   AS bill_count,
                    fp.confidence                  AS confidence,
                    fp.source_type                 AS source,
                    fp.source_upload_id            AS source_upload_id,
                    fp.field_name                  AS prov_field_name
-              FROM agg_product a
-              JOIN dim_product p ON p.product_id = a.product_id
+              FROM grouped g
               LEFT JOIN LATERAL (
+                  -- Provenance driven off the group's representative product.
+                  -- For single-member groups the rep is the product itself, so
+                  -- this is identical to the pre-P4b per-product lookup. For
+                  -- merged groups it returns the representative's lineage
+                  -- (NULL-safe — empty field_provenance ⇒ all columns NULL).
                   SELECT fp_inner.confidence,
                          fp_inner.source_type,
                          fp_inner.source_upload_id,
                          fp_inner.field_name
                     FROM field_provenance fp_inner
-                   WHERE fp_inner.factory_id  = a.factory_id
+                   WHERE fp_inner.factory_id  = $1
                      AND fp_inner.entity_type = 'product'
-                     AND fp_inner.entity_id   = p.product_id
+                     AND fp_inner.entity_id   = g.rep_product_id
                      AND (fp_inner.field_name = 'revenue'
                           OR fp_inner.field_name LIKE 'revenue@store\\_%' ESCAPE '\\')
                      AND fp_inner.superseded_by_id IS NULL
@@ -156,13 +207,7 @@ async def top_products(
                             fp_inner.id DESC
                    LIMIT 1
               ) fp ON TRUE
-             WHERE a.factory_id = $1
-               AND a.month BETWEEN $2 AND $3
-             GROUP BY p.product_id, p.name,
-                      fp.confidence, fp.source_type,
-                      fp.source_upload_id, fp.field_name
-            HAVING SUM(a.revenue) > 0
-             ORDER BY SUM(a.revenue) {direction}
+             ORDER BY g.revenue {direction}
              LIMIT $4
             """,
             factory_id, start_m, end_m, int(top_n),
@@ -173,12 +218,20 @@ async def top_products(
         "end_month": end_m.isoformat(),
         "top_products": [
             {
+                # product_id is the group's representative product (MIN over
+                # members). For a single-member (NULL-canonical) group this is
+                # the product's own id; for a confirmed merge it's a stable
+                # representative — the row is conceptually a dish, consumers
+                # display product_name. Stays an int for shape compatibility.
                 "product_id": int(r["product_id"]),
+                # product_name is canonical_name when merged, else the product
+                # name — driven by COALESCE(cd.canonical_name, p.name).
                 "product_name": r["name"],
                 "qty_sold": float(r["qty"]),
                 "revenue": float(r["revenue"]),
                 "bill_count": int(r["bill_count"]),
-                # Sub-Project C Day 24-25 POC: per-row provenance pass-through.
+                # Sub-Project C Day 24-25 POC: per-row provenance pass-through,
+                # now driven off the group's representative product.
                 # confidence/source/source_upload_id are None when no field_
                 # provenance row matches (prod-OFF empty-table state).
                 # field_name is returned from the JOIN when matched (carries
