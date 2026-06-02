@@ -40,9 +40,16 @@ from smartbi.gold.review_queries import (
     review_city_ranking,
     review_complaints,
     review_dish_issues,
+    review_good_tags,        # P1
+    review_platform,         # P1
+    review_reply_rate,       # P1
+    review_score_tags,       # P1
     review_store_ranking,
     review_summary,
+    review_time_period,      # P1
+    review_trend,            # P1
     review_vip,
+    review_vip_tags,         # P1
 )
 from smartbi.gold.shadow_compare import DiffReport, FieldDiff, diff_results
 from smartbi.gold.triggers import (
@@ -76,9 +83,16 @@ __all__ = [
     "review_city_ranking",
     "review_complaints",
     "review_dish_issues",
+    "review_good_tags",
+    "review_platform",
+    "review_reply_rate",
+    "review_score_tags",
     "review_store_ranking",
     "review_summary",
+    "review_time_period",
+    "review_trend",
     "review_vip",
+    "review_vip_tags",
     "staff_ranking",
     "top_products",
     "run_silver_dual_write",

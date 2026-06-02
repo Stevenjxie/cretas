@@ -725,4 +725,67 @@ public class GoldFinanceClient {
                 "top_n", String.valueOf(topN),
                 "star_threshold", String.valueOf(starThreshold)));
     }
+
+    // =========================================================================
+    // P1 conversational-depth review fetches (2026-06-02)
+    // within-review cross-dim (vip_tags / time_period / score_tags) +
+    // more review questions (good_tags / platform / trend / reply_rate).
+    // =========================================================================
+
+    /** VIP vs 非VIP 各自高频好评/差评口味标签 (非菜名)。 */
+    public Map<String, Object> fetchReviewVipTags(String factoryId, int topN) throws IOException {
+        requireFactory(factoryId);
+        return getReviewJson("/api/smartbi/gold/review-vip-tags", Map.of(
+                "factory_id", factoryId,
+                "top_n", String.valueOf(topN)));
+    }
+
+    /** 各时段 (早/午/下午/晚/夜) 评价量与平均星级。 */
+    public Map<String, Object> fetchReviewTimePeriod(String factoryId) throws IOException {
+        requireFactory(factoryId);
+        return getReviewJson("/api/smartbi/gold/review-time-period",
+                Map.of("factory_id", factoryId));
+    }
+
+    /**
+     * 服务标签 / 环境标签 高频词 + 平均分。
+     * @param dim service|env
+     */
+    public Map<String, Object> fetchReviewScoreTags(String factoryId, String dim, int topN)
+            throws IOException {
+        requireFactory(factoryId);
+        return getReviewJson("/api/smartbi/gold/review-score-tags", Map.of(
+                "factory_id", factoryId,
+                "dim", dim,
+                "top_n", String.valueOf(topN)));
+    }
+
+    /** 好评(>=4.5星)高频口味/品质标签 (非菜名)。 */
+    public Map<String, Object> fetchReviewGoodTags(String factoryId, int topN) throws IOException {
+        requireFactory(factoryId);
+        return getReviewJson("/api/smartbi/gold/review-good-tags", Map.of(
+                "factory_id", factoryId,
+                "top_n", String.valueOf(topN)));
+    }
+
+    /** 各平台 (点评/美团) 评价量与平均星级对比。 */
+    public Map<String, Object> fetchReviewPlatform(String factoryId) throws IOException {
+        requireFactory(factoryId);
+        return getReviewJson("/api/smartbi/gold/review-platform",
+                Map.of("factory_id", factoryId));
+    }
+
+    /** 按 time_period 月份聚合评价量与平均星级 (时间序列)。 */
+    public Map<String, Object> fetchReviewTrend(String factoryId) throws IOException {
+        requireFactory(factoryId);
+        return getReviewJson("/api/smartbi/gold/review-trend",
+                Map.of("factory_id", factoryId));
+    }
+
+    /** 商家回复率 (已/未回复 + 未回复差评数)。 */
+    public Map<String, Object> fetchReviewReplyRate(String factoryId) throws IOException {
+        requireFactory(factoryId);
+        return getReviewJson("/api/smartbi/gold/review-reply-rate",
+                Map.of("factory_id", factoryId));
+    }
 }

@@ -2,6 +2,7 @@ package com.cretas.aims.ai.tool.impl.restaurant.gold.review;
 
 import com.cretas.aims.ai.tool.impl.restaurant.gold.GoldBackedRestaurantTool;
 
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -51,5 +52,59 @@ public abstract class AbstractReviewGoldTool extends GoldBackedRestaurantTool {
     @SuppressWarnings("unchecked")
     protected static List<Map<String, Object>> listOfMaps(Object o) {
         return o instanceof List ? (List<Map<String, Object>>) o : Collections.emptyList();
+    }
+
+    // -------------------------------------------------------------------------
+    // P1 conversational-depth helpers — suggestedFollowups / glossary / chartGuide
+    // -------------------------------------------------------------------------
+
+    /** Build one follow-up chip: {label (短，显示在按钮), question (点击后发送的查询)}. */
+    protected static Map<String, Object> followup(String label, String question) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("label", label);
+        m.put("question", question);
+        return m;
+    }
+
+    /** Collect follow-up chips into a list (varargs convenience). */
+    @SafeVarargs
+    protected static List<Map<String, Object>> followups(Map<String, Object>... entries) {
+        List<Map<String, Object>> list = new ArrayList<>();
+        for (Map<String, Object> e : entries) {
+            if (e != null) {
+                list.add(e);
+            }
+        }
+        return list;
+    }
+
+    /** Build an ordered glossary map (term → 通俗定义). Pairs flattened: k1,v1,k2,v2,... */
+    protected static Map<String, String> glossary(String... kv) {
+        Map<String, String> g = new LinkedHashMap<>();
+        for (int i = 0; i + 1 < kv.length; i += 2) {
+            g.put(kv[i], kv[i + 1]);
+        }
+        return g;
+    }
+
+    /**
+     * Attach the three conversational-depth fields onto a tool result map.
+     * Skips null / empty so empty-state results stay clean. Called at the end
+     * of each concrete {@code format()}.
+     */
+    protected void attachDepth(
+            Map<String, Object> result,
+            List<Map<String, Object>> followups,
+            Map<String, String> glossary,
+            String chartGuide) {
+        if (followups != null && !followups.isEmpty()) {
+            result.put("suggestedFollowups", followups);
+        }
+        if (glossary != null && !glossary.isEmpty()) {
+            result.put("glossary", glossary);
+        }
+        if (chartGuide != null && !chartGuide.isEmpty()) {
+            result.put("chartGuide", chartGuide);
+        }
     }
 }

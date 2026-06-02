@@ -78,6 +78,17 @@ public class RestaurantReviewStoreRankTool extends AbstractReviewGoldTool {
         if (!names.isEmpty()) {
             result.put("chartConfig", barChartConfig("差评(≤3星)数 Top 门店 (条)", names, vals, "条"));
         }
+        attachDepth(result,
+                followups(
+                        followup("差评提到哪些口味", "哪些菜品差评多"),
+                        followup("投诉集中点", "投诉最集中的问题"),
+                        followup("评价趋势", "评价趋势怎么样"),
+                        followup("城市评价对比", "哪个城市评价最低")),
+                glossary(
+                        "差评", "星级 <= 3 星的评价。",
+                        "差评率", "该门店差评数 ÷ 该门店评价总数 × 100%。",
+                        "平均星级", "该门店所有评价星级的算术平均(满分5分)。"),
+                "柱越长代表该门店差评数越多，是口碑维护要优先关注的门店；结合差评率看是否绝对值大但占比低。");
         return result;
     }
 
