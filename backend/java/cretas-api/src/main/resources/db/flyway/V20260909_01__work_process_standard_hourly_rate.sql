@@ -9,8 +9,7 @@
 DO $$ BEGIN
   IF to_regclass('public.work_processes') IS NOT NULL THEN
     ALTER TABLE work_processes ADD COLUMN IF NOT EXISTS standard_hourly_rate NUMERIC(8,2);
+    COMMENT ON COLUMN work_processes.standard_hourly_rate
+        IS '标准时薪(元/小时); null=未配置(绝不默认0), 用于逐道人工成本计算';
   END IF;
 END $$;
-
-COMMENT ON COLUMN work_processes.standard_hourly_rate
-    IS '标准时薪(元/小时); null=未配置(绝不默认0), 用于逐道人工成本计算';

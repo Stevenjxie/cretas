@@ -11,10 +11,9 @@ DO $$ BEGIN
   IF to_regclass('public.semi_finished_inventory') IS NOT NULL THEN
     ALTER TABLE semi_finished_inventory ADD COLUMN IF NOT EXISTS accumulated_cost NUMERIC(14,2);
     ALTER TABLE semi_finished_inventory ADD COLUMN IF NOT EXISTS unit_cost NUMERIC(14,4);
+    COMMENT ON COLUMN semi_finished_inventory.accumulated_cost
+        IS '滚动累计成本(人工+材料)(元); null=无成本数据(绝不默认0)';
+    COMMENT ON COLUMN semi_finished_inventory.unit_cost
+        IS '单位成本 = accumulated_cost / produced_quantity; null=无成本数据';
   END IF;
 END $$;
-
-COMMENT ON COLUMN semi_finished_inventory.accumulated_cost
-    IS '滚动累计成本(人工+材料)(元); null=无成本数据(绝不默认0)';
-COMMENT ON COLUMN semi_finished_inventory.unit_cost
-    IS '单位成本 = accumulated_cost / produced_quantity; null=无成本数据';

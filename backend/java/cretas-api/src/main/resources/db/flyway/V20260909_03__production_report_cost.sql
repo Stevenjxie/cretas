@@ -11,10 +11,9 @@ DO $$ BEGIN
   IF to_regclass('public.production_reports') IS NOT NULL THEN
     ALTER TABLE production_reports ADD COLUMN IF NOT EXISTS labor_cost NUMERIC(14,2);
     ALTER TABLE production_reports ADD COLUMN IF NOT EXISTS material_cost NUMERIC(14,2);
+    COMMENT ON COLUMN production_reports.labor_cost
+        IS '本道人工成本(元); null=无成本数据(绝不默认0)';
+    COMMENT ON COLUMN production_reports.material_cost
+        IS '本道材料成本(元); null=无成本数据';
   END IF;
 END $$;
-
-COMMENT ON COLUMN production_reports.labor_cost
-    IS '本道人工成本(元); null=无成本数据(绝不默认0)';
-COMMENT ON COLUMN production_reports.material_cost
-    IS '本道材料成本(元); null=无成本数据';

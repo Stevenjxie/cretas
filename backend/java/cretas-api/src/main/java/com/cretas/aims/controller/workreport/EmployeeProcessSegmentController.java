@@ -82,6 +82,7 @@ public class EmployeeProcessSegmentController {
      *
      * <p>员工一个工序段内可能多次扫码上班/下班, 客户要"所有上班下班时间"汇总.
      */
+    @RequirePermission({"work_report:read_write", "work_report:read"})
     @GetMapping("/total-minutes")
     public ApiResponse<Map<String, Object>> getTotalMinutes(
             @PathVariable @NotBlank String factoryId,
