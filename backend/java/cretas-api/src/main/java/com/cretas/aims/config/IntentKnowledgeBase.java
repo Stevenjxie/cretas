@@ -7405,6 +7405,21 @@ public class IntentKnowledgeBase {
         restaurantPhraseMapping.put("全面分析一下经营", "COMPREHENSIVE_SYNTHESIS");
         restaurantPhraseMapping.put("整体经营分析", "COMPREHENSIVE_SYNTHESIS");
 
+        // 门店营收排行 (2026-06-02) — prod 扫描发现高频 chip 路由到坏意图:
+        // "门店营收对比"→RESTAURANT_DAILY_REVENUE(无工具 FAILED); "哪家店业绩最好"→STORE_KPI(qhj 降级)。
+        // 短语短路到专用意图 RESTAURANT_STORE_REVENUE_RANK(绑 restaurant_store_revenue_rank_gold gold 工具)。
+        // 仅 "最好/排行/对比/最赚钱" 类 (工具取营收 top, 不收 "最差" 避免 top 当 bottom 答错)。
+        restaurantPhraseMapping.put("哪家店业绩最好", "RESTAURANT_STORE_REVENUE_RANK");
+        restaurantPhraseMapping.put("门店营收对比", "RESTAURANT_STORE_REVENUE_RANK");
+        restaurantPhraseMapping.put("门店营收排行", "RESTAURANT_STORE_REVENUE_RANK");
+        restaurantPhraseMapping.put("门店营收排名", "RESTAURANT_STORE_REVENUE_RANK");
+        restaurantPhraseMapping.put("门店业绩排名", "RESTAURANT_STORE_REVENUE_RANK");
+        restaurantPhraseMapping.put("哪家店最赚钱", "RESTAURANT_STORE_REVENUE_RANK");
+        restaurantPhraseMapping.put("哪家店营收最高", "RESTAURANT_STORE_REVENUE_RANK");
+        restaurantPhraseMapping.put("各门店营收对比", "RESTAURANT_STORE_REVENUE_RANK");
+        restaurantPhraseMapping.put("哪家店生意最好", "RESTAURANT_STORE_REVENUE_RANK");
+        restaurantPhraseMapping.put("门店销售排行", "RESTAURANT_STORE_REVENUE_RANK");
+
         log.debug("v33 餐饮短语映射初始化完成，共 {} 条映射", restaurantPhraseMapping.size());
 
         // ========== v32: 业态隔离 — 公共短语映射（两种业态共享） ==========
