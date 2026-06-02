@@ -7,8 +7,10 @@ import org.springframework.web.context.request.RequestContextHolder;
 import org.springframework.web.context.request.ServletRequestAttributes;
 import lombok.extern.slf4j.Slf4j;
 import okhttp3.HttpUrl;
+import okhttp3.MediaType;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
+import okhttp3.RequestBody;
 import okhttp3.Response;
 import org.springframework.stereotype.Component;
 
@@ -787,5 +789,83 @@ public class GoldFinanceClient {
         requireFactory(factoryId);
         return getReviewJson("/api/smartbi/gold/review-reply-rate",
                 Map.of("factory_id", factoryId));
+    }
+
+    // =========================================================================
+    // P2 综合分析 (multi-dim synthesis) — POST /api/smartbi/synthesis/comprehensive
+    //
+    // Unlike the GET review/finance fetches, synthesis is a POST: the Python
+    // engine aggregates review + finance/sales into a FactBook, asks the LLM for
+    // a grounded narrative (redacted at egress, restored on return), fact-checks
+    // it, and returns answer + charts + plan + fact_check. The window is optional
+    // — when start/end are null the Python side defaults to the factory's Gold
+    // data span (so the tool can pass the resolved [start,end] or let Python
+    // resolve). X-User-Role forwarded so the gold finance pulls' RBAC sees the
+    // caller's price-view permission (else revenue gets nulled).
+    // =========================================================================
+
+    private static final MediaType JSON_MEDIA = MediaType.get("application/json; charset=utf-8");
+
+    /**
+     * Fetch a comprehensive multi-dimension synthesis from the Python engine.
+     *
+     * @param factoryId tenant id
+     * @param question  the user's free-form question (e.g. "综合分析评价和经营")
+     * @param startDate inclusive window start; nullable (Python defaults to Gold data range)
+     * @param endDate   inclusive window end; nullable
+     * @return parsed JSON: answer (markdown), charts (List of chart configs), plan,
+     *         fact_check, source, tokens
+     * @throws IOException on transport / non-2xx / parse failure
+     */
+    public Map<String, Object> fetchComprehensiveSynthesis(
+            String factoryId,
+            String question,
+            LocalDate startDate,
+            LocalDate endDate
+    ) throws IOException {
+        requireFactory(factoryId);
+        if (question == null || question.trim().isEmpty()) {
+            throw new IllegalArgumentException("question required");
+        }
+
+        java.util.Map<String, Object> bodyMap = new java.util.LinkedHashMap<>();
+        bodyMap.put("question", question);
+        bodyMap.put("factory_id", factoryId);
+        if (startDate != null) {
+            bodyMap.put("start_date", startDate.toString());
+        }
+        if (endDate != null) {
+            bodyMap.put("end_date", endDate.toString());
+        }
+        String json = objectMapper.writeValueAsString(bodyMap);
+
+        Request.Builder reqBuilder = new Request.Builder()
+                .url(config.getUrl() + "/api/smartbi/synthesis/comprehensive")
+                .post(RequestBody.create(json, JSON_MEDIA));
+        if (!internalSecret.isEmpty()) {
+            reqBuilder.addHeader("X-Internal-Secret", internalSecret);
+            reqBuilder.addHeader("X-Factory-Id", factoryId);
+            String userRole = currentUserRole();
+            if (userRole != null && !userRole.isEmpty()) {
+                reqBuilder.addHeader("X-User-Role", userRole);
+            }
+        }
+        Request req = reqBuilder.build();
+
+        long t0 = System.currentTimeMillis();
+        try (Response resp = http.newCall(req).execute()) {
+            long elapsed = System.currentTimeMillis() - t0;
+            if (!resp.isSuccessful()) {
+                String body = resp.body() != null ? resp.body().string() : "";
+                throw new IOException(
+                        "Gold synthesis HTTP " + resp.code() + " in " + elapsed + "ms: " + body);
+            }
+            String body = resp.body() != null ? resp.body().string() : "{}";
+            @SuppressWarnings("unchecked")
+            Map<String, Object> parsed = objectMapper.readValue(body, Map.class);
+            log.debug("Gold synthesis factory={} source={} tokens={} in {}ms",
+                    factoryId, parsed.get("source"), parsed.get("tokens"), elapsed);
+            return parsed;
+        }
     }
 }
