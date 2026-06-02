@@ -609,7 +609,55 @@ public class YieldReportServiceImpl implements YieldReportService {
         BigDecimal gramsPerUnit = resolveGramsPerUnit(factoryId, reports);
         BatchYieldDTO dto = calcSvc.calculateBatchYield(reports, gramsPerUnit);
         enrichProcessNames(factoryId, dto);
+        // G8 Wave 3 (C): 进行中标注 — 算在制 WIP 总量 + 批次完工判定
+        enrichInProgressAnnotation(factoryId, batchId, dto);
         return dto;
+    }
+
+    /**
+     * G8 Wave 3 (C): 填充进行中标注字段 (展示层防呆, 拍板 A 主算法 + C 标注)。
+     *
+     * <p><b>inProgress 判定</b> = 批次未完工 (status ≠ COMPLETED/CANCELLED) <b>或</b> 仍有在制 WIP 余额
+     * (Σ AVAILABLE.availableQuantity &gt; 0)。完工 (COMPLETED) 且 WIP 全清零 → inProgress=false, 数字锁定。</p>
+     *
+     * <p><b>wipInProgressQuantity</b> = Σ 该批次所有 AVAILABLE WIP 行的 available_quantity
+     * (尚未变成成品的中间品总量)。inProgress=false 时为 ZERO。</p>
+     *
+     * <p><b>cumulativeYieldRate 不变</b>: 始终是 A 完工口径 (calc 算的末道÷首道)。本方法只加展示标注,
+     * 不改算法 (per 设计章一 ★推荐)。asOfYieldRate 当前与 A 口径同源, 仅语义标注。</p>
+     */
+    private void enrichInProgressAnnotation(String factoryId, Long batchId, BatchYieldDTO dto) {
+        if (batchId == null) {
+            return;  // 无批次上下文 (理论不达; 防御): 不标注
+        }
+        // 1) 该批次在制 WIP 总量 = Σ AVAILABLE.available_quantity (RETURNED/DEPLETED 不计)
+        List<SemiFinishedInventory> wips =
+                wipRepo.findByFactoryIdAndBatchIdAndDeletedAtIsNull(factoryId, batchId);
+        BigDecimal wipPending = BigDecimal.ZERO;
+        String wipUnit = null;
+        for (SemiFinishedInventory w : wips) {
+            if (!SemiFinishedInventory.Status.AVAILABLE.equals(w.getStatus())) continue;
+            BigDecimal avail = nz(w.getAvailableQuantity());
+            if (avail.compareTo(BigDecimal.ZERO) <= 0) continue;
+            wipPending = wipPending.add(avail);
+            if (wipUnit == null && w.getUnit() != null) wipUnit = w.getUnit();
+        }
+        boolean hasWipPending = wipPending.compareTo(BigDecimal.ZERO) > 0;
+
+        // 2) 批次完工判定: COMPLETED/CANCELLED 视为已完工 (终态), 其余 (PLANNED/IN_PROGRESS/PAUSED) 视为进行中
+        ProductionBatch pb = productionBatchRepository.findByIdAndFactoryId(batchId, factoryId).orElse(null);
+        boolean batchFinished = pb != null
+                && (pb.getStatus() == ProductionBatchStatus.COMPLETED
+                    || pb.getStatus() == ProductionBatchStatus.CANCELLED);
+
+        // 进行中 = 批次未完工 OR 仍有在制 WIP 余额
+        boolean inProgress = !batchFinished || hasWipPending;
+
+        dto.setInProgress(inProgress);
+        dto.setWipInProgressQuantity(inProgress ? wipPending : BigDecimal.ZERO);
+        dto.setWipInProgressUnit(hasWipPending ? wipUnit : null);
+        // asOfYieldRate: 进行中参考数, 当前与 A 口径同源 (末道总产出/首道总投入)
+        dto.setAsOfYieldRate(dto.getCumulativeYieldRate());
     }
 
     /**
@@ -700,6 +748,44 @@ public class YieldReportServiceImpl implements YieldReportService {
         }
         out.put("completed", completed);
         if (completeError != null) out.put("completeError", completeError);
+
+        // D3 (Wave 3): 完工时若该批次仍有在制半成品结余 (WIP available > 0), 加诚实提示 (不阻塞完工)。
+        // per 设计章三表 + fool-proof Rule 5: 提示退回总仓建调拨单, 给 next-action, 不 dead-end。
+        if (completed) {
+            addWipRemainingHint(factoryId, batchId, out);
+        }
         return out;
+    }
+
+    /**
+     * D3 (Wave 3): 完工后若批次仍有在制 WIP 结余 → 加 {@code wipRemainingHint} 诚实提示 (不阻塞完工)。
+     *
+     * <p>per 设计章三 + fool-proof Rule 5 (dead-end 改导航): 提示"结余 Xkg 半成品待退回总仓",
+     * 让用户知道还有未消耗的中间品该处理 (退回总仓建调拨单)。仅提示, 不自动建单、不拦截完工。</p>
+     *
+     * <p>fail-soft: 查询/拼装失败不影响完工结果, 只记 WARN。</p>
+     */
+    private void addWipRemainingHint(String factoryId, Long batchId, Map<String, Object> out) {
+        try {
+            List<SemiFinishedInventory> remaining = wipRepo.findRemainingWip(factoryId, batchId);
+            if (remaining == null || remaining.isEmpty()) return;
+            BigDecimal total = BigDecimal.ZERO;
+            String unit = null;
+            for (SemiFinishedInventory w : remaining) {
+                BigDecimal avail = nz(w.getAvailableQuantity());
+                if (avail.compareTo(BigDecimal.ZERO) <= 0) continue;
+                total = total.add(avail);
+                if (unit == null && w.getUnit() != null) unit = w.getUnit();
+            }
+            if (total.compareTo(BigDecimal.ZERO) <= 0) return;
+            String u = unit == null ? "" : unit;
+            out.put("wipRemaining", total);
+            out.put("wipRemainingUnit", unit);
+            out.put("wipRemainingHint", String.format(
+                    "结余 %s %s 半成品待退回总仓 (建调拨单退库), 完工不受影响",
+                    total.stripTrailingZeros().toPlainString(), u));
+        } catch (Exception e) {
+            log.warn("[D3] 余料退回提示拼装失败 (fail-soft, 不影响完工): batch={}", batchId, e);
+        }
     }
 }

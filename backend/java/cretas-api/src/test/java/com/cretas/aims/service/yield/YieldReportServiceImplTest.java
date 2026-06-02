@@ -985,8 +985,10 @@ class YieldReportServiceImplTest {
 
         assertThat(out.get("completed")).isEqualTo(false);
         verify(processingService, never()).completeProduction(anyString(), anyString(), any(), any(), any(), any());
-        // lastOutput=0 → 连批次都不查
-        verify(productionBatchRepo, never()).findByIdAndFactoryId(eq(12L), anyString());
+        // lastOutput=0 → 完工 path 不调 completeProduction; 未完工 → D3 余料提示不触发 (findRemainingWip 不查)
+        // (注: getYield 的 C 进行中标注会查批次, 故不再断言 findByIdAndFactoryId never — Wave 3 新契约)
+        verify(wipRepo, never()).findRemainingWip(anyString(), any());
+        assertThat(out.get("wipRemainingHint")).isNull();
     }
 
     @Test
@@ -1429,5 +1431,215 @@ class YieldReportServiceImplTest {
         YieldLimitsDTO dto = svc.getLimits("F006", 1L, 111L, new BigDecimal("100"));
 
         assertThat(dto.getWipAvailable()).isNull();
+    }
+
+    // ── G8 Wave 3 (C): getYield 进行中标注 (在制 WIP + 完工判定) ──────────────────────
+
+    /** 共用: getYield 基础 mock (单道报工, 无 enrich 干扰). */
+    private void setupGetYieldBase(Long batchId, ProductionReport... reports) {
+        when(reportRepo.findYieldReportsByBatch("F006", batchId)).thenReturn(List.of(reports));
+        when(productTypeRepo.findByIdAndFactoryId(anyString(), anyString())).thenReturn(Optional.empty());
+        when(taskRepo.findByFactoryIdAndIdIn(eq("F006"), any())).thenReturn(List.of());
+        when(processRepo.findAllById(any())).thenReturn(List.of());
+    }
+
+    @Test
+    void getYield_withWipPending_marksInProgress_andSumsWipQuantity() {
+        // 批次 IN_PROGRESS + 有在制 WIP 余额 (AVAILABLE 200 + 50) → inProgress=true, wipInProgressQuantity=250
+        ProductionReport r1 = ProductionReport.builder()
+                .workProcessTaskId(120L).processOrder(1).productTypeId("PT-LU")
+                .inputQuantity(new BigDecimal("998")).inputUnit("kg")
+                .outputQuantity(new BigDecimal("935.5")).outputUnit("kg")
+                .build();
+        setupGetYieldBase(20L, r1);
+        // 批次进行中
+        ProductionBatch batch = new ProductionBatch();
+        batch.setStatus(ProductionBatchStatus.IN_PROGRESS);
+        when(productionBatchRepo.findByIdAndFactoryId(20L, "F006")).thenReturn(Optional.of(batch));
+        // 在制 WIP: 两笔 AVAILABLE (200 + 50) + 一笔 DEPLETED (不计) + 一笔 RETURNED (不计)
+        SemiFinishedInventory w1 = SemiFinishedInventory.builder()
+                .availableQuantity(new BigDecimal("200")).unit("kg")
+                .status(SemiFinishedInventory.Status.AVAILABLE).build();
+        SemiFinishedInventory w2 = SemiFinishedInventory.builder()
+                .availableQuantity(new BigDecimal("50")).unit("kg")
+                .status(SemiFinishedInventory.Status.AVAILABLE).build();
+        SemiFinishedInventory w3 = SemiFinishedInventory.builder()
+                .availableQuantity(BigDecimal.ZERO).unit("kg")
+                .status(SemiFinishedInventory.Status.DEPLETED).build();
+        SemiFinishedInventory w4 = SemiFinishedInventory.builder()
+                .availableQuantity(new BigDecimal("99")).unit("kg")
+                .status(SemiFinishedInventory.Status.RETURNED).build();
+        when(wipRepo.findByFactoryIdAndBatchIdAndDeletedAtIsNull("F006", 20L))
+                .thenReturn(List.of(w1, w2, w3, w4));
+
+        BatchYieldDTO dto = svc.getYield("F006", 20L);
+
+        assertThat(dto.getInProgress()).isTrue();
+        assertThat(dto.getWipInProgressQuantity()).isEqualByComparingTo("250");  // 200+50 (DEPLETED/RETURNED 不计)
+        assertThat(dto.getWipInProgressUnit()).isEqualTo("kg");
+        // cumulativeYieldRate 仍是 A 口径 (未被标注改写); asOf 同源
+        assertThat(dto.getAsOfYieldRate()).isEqualByComparingTo(dto.getCumulativeYieldRate());
+    }
+
+    @Test
+    void getYield_batchCompleted_noWip_marksNotInProgress_wipZero() {
+        // 批次 COMPLETED + 无在制 WIP → inProgress=false, wipInProgressQuantity=0, 数字锁定
+        ProductionReport r1 = ProductionReport.builder()
+                .workProcessTaskId(121L).processOrder(1).productTypeId("PT-LU")
+                .inputQuantity(new BigDecimal("998")).inputUnit("kg")
+                .outputQuantity(new BigDecimal("382")).outputUnit("kg")
+                .build();
+        setupGetYieldBase(21L, r1);
+        ProductionBatch batch = new ProductionBatch();
+        batch.setStatus(ProductionBatchStatus.COMPLETED);
+        when(productionBatchRepo.findByIdAndFactoryId(21L, "F006")).thenReturn(Optional.of(batch));
+        // 全部 WIP 已领空 (DEPLETED) → 无在制余额
+        SemiFinishedInventory depleted = SemiFinishedInventory.builder()
+                .availableQuantity(BigDecimal.ZERO).unit("kg")
+                .status(SemiFinishedInventory.Status.DEPLETED).build();
+        when(wipRepo.findByFactoryIdAndBatchIdAndDeletedAtIsNull("F006", 21L))
+                .thenReturn(List.of(depleted));
+
+        BatchYieldDTO dto = svc.getYield("F006", 21L);
+
+        assertThat(dto.getInProgress()).isFalse();
+        assertThat(dto.getWipInProgressQuantity()).isEqualByComparingTo("0");
+        assertThat(dto.getWipInProgressUnit()).isNull();
+    }
+
+    @Test
+    void getYield_batchCompletedButWipRemaining_stillInProgress() {
+        // 边缘: 批次 COMPLETED 但仍有在制 WIP 结余 → inProgress=true (有未消耗中间品 = 还没真正全部转成品)
+        ProductionReport r1 = ProductionReport.builder()
+                .workProcessTaskId(122L).processOrder(1).productTypeId("PT-LU")
+                .inputQuantity(new BigDecimal("998")).inputUnit("kg")
+                .outputQuantity(new BigDecimal("382")).outputUnit("kg")
+                .build();
+        setupGetYieldBase(22L, r1);
+        ProductionBatch batch = new ProductionBatch();
+        batch.setStatus(ProductionBatchStatus.COMPLETED);
+        when(productionBatchRepo.findByIdAndFactoryId(22L, "F006")).thenReturn(Optional.of(batch));
+        SemiFinishedInventory remaining = SemiFinishedInventory.builder()
+                .availableQuantity(new BigDecimal("30")).unit("kg")
+                .status(SemiFinishedInventory.Status.AVAILABLE).build();
+        when(wipRepo.findByFactoryIdAndBatchIdAndDeletedAtIsNull("F006", 22L))
+                .thenReturn(List.of(remaining));
+
+        BatchYieldDTO dto = svc.getYield("F006", 22L);
+
+        assertThat(dto.getInProgress()).isTrue();
+        assertThat(dto.getWipInProgressQuantity()).isEqualByComparingTo("30");
+        assertThat(dto.getWipInProgressUnit()).isEqualTo("kg");
+    }
+
+    @Test
+    void getYield_inProgressBatch_noWipRows_marksInProgress_wipZero() {
+        // 批次 IN_PROGRESS 但还没产出 WIP 行 → inProgress=true (未完工), wipInProgressQuantity=0
+        ProductionReport r1 = ProductionReport.builder()
+                .workProcessTaskId(123L).processOrder(1).productTypeId("PT-LU")
+                .inputQuantity(new BigDecimal("100")).inputUnit("kg")
+                .outputQuantity(new BigDecimal("80")).outputUnit("kg")
+                .build();
+        setupGetYieldBase(23L, r1);
+        ProductionBatch batch = new ProductionBatch();
+        batch.setStatus(ProductionBatchStatus.IN_PROGRESS);
+        when(productionBatchRepo.findByIdAndFactoryId(23L, "F006")).thenReturn(Optional.of(batch));
+        when(wipRepo.findByFactoryIdAndBatchIdAndDeletedAtIsNull("F006", 23L)).thenReturn(List.of());
+
+        BatchYieldDTO dto = svc.getYield("F006", 23L);
+
+        assertThat(dto.getInProgress()).isTrue();
+        assertThat(dto.getWipInProgressQuantity()).isEqualByComparingTo("0");
+        assertThat(dto.getWipInProgressUnit()).isNull();
+    }
+
+    // ── G8 Wave 3 (D3): settleDay 完工时余料退回提示 ──────────────────────────────────
+
+    @Test
+    void settleDay_complete_withWipRemaining_addsWipRemainingHint() {
+        // 完工成功 + 批次仍有 WIP 结余 (40+10=50kg) → out 含 wipRemainingHint, 不阻塞完工
+        ProductionReport r1 = ProductionReport.builder()
+                .workProcessTaskId(130L).processOrder(1).productTypeId("PT-LU")
+                .inputQuantity(new BigDecimal("998")).inputUnit("kg")
+                .outputQuantity(new BigDecimal("382")).outputUnit("kg")
+                .build();
+        when(reportRepo.findUnsettledYieldReports(eq("F006"), eq(30L), any())).thenReturn(List.of());
+        when(reportRepo.findYieldReportsByBatch("F006", 30L)).thenReturn(List.of(r1));
+        when(productTypeRepo.findByIdAndFactoryId(anyString(), anyString())).thenReturn(Optional.empty());
+        when(taskRepo.findByFactoryIdAndIdIn(eq("F006"), any())).thenReturn(List.of());
+        when(processRepo.findAllById(any())).thenReturn(List.of());
+        ProductionBatch batch = new ProductionBatch();
+        batch.setStatus(ProductionBatchStatus.IN_PROGRESS);
+        when(productionBatchRepo.findByIdAndFactoryId(30L, "F006")).thenReturn(Optional.of(batch));
+        when(processingService.completeProduction(anyString(), anyString(), any(), any(), any(), any()))
+                .thenReturn(new ProductionBatch());
+        // D3: findRemainingWip 返两笔结余 (40 + 10)
+        SemiFinishedInventory w1 = SemiFinishedInventory.builder()
+                .availableQuantity(new BigDecimal("40")).unit("kg")
+                .status(SemiFinishedInventory.Status.AVAILABLE).build();
+        SemiFinishedInventory w2 = SemiFinishedInventory.builder()
+                .availableQuantity(new BigDecimal("10")).unit("kg")
+                .status(SemiFinishedInventory.Status.AVAILABLE).build();
+        when(wipRepo.findRemainingWip("F006", 30L)).thenReturn(List.of(w1, w2));
+
+        Map<String, Object> out = svc.settleDay("F006", 30L, 5L, null, true);
+
+        assertThat(out.get("completed")).isEqualTo(true);
+        assertThat(out.get("wipRemaining")).isEqualTo(new BigDecimal("50"));
+        assertThat(out.get("wipRemainingUnit")).isEqualTo("kg");
+        assertThat(out.get("wipRemainingHint")).asString()
+                .contains("50").contains("半成品").contains("退回总仓");
+    }
+
+    @Test
+    void settleDay_complete_noWipRemaining_noHint() {
+        // 完工成功 + 无 WIP 结余 → out 不含 wipRemainingHint
+        ProductionReport r1 = ProductionReport.builder()
+                .workProcessTaskId(131L).processOrder(1).productTypeId("PT-LU")
+                .inputQuantity(new BigDecimal("998")).inputUnit("kg")
+                .outputQuantity(new BigDecimal("382")).outputUnit("kg")
+                .build();
+        when(reportRepo.findUnsettledYieldReports(eq("F006"), eq(31L), any())).thenReturn(List.of());
+        when(reportRepo.findYieldReportsByBatch("F006", 31L)).thenReturn(List.of(r1));
+        when(productTypeRepo.findByIdAndFactoryId(anyString(), anyString())).thenReturn(Optional.empty());
+        when(taskRepo.findByFactoryIdAndIdIn(eq("F006"), any())).thenReturn(List.of());
+        when(processRepo.findAllById(any())).thenReturn(List.of());
+        ProductionBatch batch = new ProductionBatch();
+        batch.setStatus(ProductionBatchStatus.IN_PROGRESS);
+        when(productionBatchRepo.findByIdAndFactoryId(31L, "F006")).thenReturn(Optional.of(batch));
+        when(processingService.completeProduction(anyString(), anyString(), any(), any(), any(), any()))
+                .thenReturn(new ProductionBatch());
+        when(wipRepo.findRemainingWip("F006", 31L)).thenReturn(List.of());
+
+        Map<String, Object> out = svc.settleDay("F006", 31L, 5L, null, true);
+
+        assertThat(out.get("completed")).isEqualTo(true);
+        assertThat(out.get("wipRemainingHint")).isNull();
+        assertThat(out.get("wipRemaining")).isNull();
+    }
+
+    @Test
+    void settleDay_notCompleted_noWipRemainingHint_evenIfWipExists() {
+        // 未完工 (triggerComplete=false) → 即便有 WIP 结余也不查 findRemainingWip / 不加提示
+        ProductionReport r1 = ProductionReport.builder()
+                .workProcessTaskId(132L).processOrder(1).productTypeId("PT-LU")
+                .inputQuantity(new BigDecimal("100")).inputUnit("kg")
+                .outputQuantity(new BigDecimal("80")).outputUnit("kg")
+                .build();
+        when(reportRepo.findUnsettledYieldReports(eq("F006"), eq(32L), any())).thenReturn(List.of());
+        when(reportRepo.findYieldReportsByBatch("F006", 32L)).thenReturn(List.of(r1));
+        when(productTypeRepo.findByIdAndFactoryId(anyString(), anyString())).thenReturn(Optional.empty());
+        when(taskRepo.findByFactoryIdAndIdIn(eq("F006"), any())).thenReturn(List.of());
+        when(processRepo.findAllById(any())).thenReturn(List.of());
+        // 进行中标注会查 batch + wip (getYield 内), 但 D3 hint 不该触发
+        when(productionBatchRepo.findByIdAndFactoryId(32L, "F006")).thenReturn(Optional.empty());
+        when(wipRepo.findByFactoryIdAndBatchIdAndDeletedAtIsNull("F006", 32L)).thenReturn(List.of());
+
+        Map<String, Object> out = svc.settleDay("F006", 32L, 5L, null, false);
+
+        assertThat(out.get("completed")).isEqualTo(false);
+        assertThat(out.get("wipRemainingHint")).isNull();
+        // D3 findRemainingWip 仅在 completed 时调
+        verify(wipRepo, never()).findRemainingWip(anyString(), any());
     }
 }
