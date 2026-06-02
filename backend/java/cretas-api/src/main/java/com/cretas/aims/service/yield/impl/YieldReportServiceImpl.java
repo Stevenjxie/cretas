@@ -7,14 +7,17 @@ import com.cretas.aims.dto.yield.MaterialInputRequest;
 import com.cretas.aims.dto.yield.YieldLimitsDTO;
 import com.cretas.aims.dto.yield.YieldReportRequest;
 import com.cretas.aims.entity.MaterialBatch;
+import com.cretas.aims.entity.ProductionBatch;
 import com.cretas.aims.entity.ProductionReport;
 import com.cretas.aims.entity.WorkProcess;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
+import com.cretas.aims.entity.enums.ProductionBatchStatus;
 import com.cretas.aims.entity.workprocess.WorkProcessTask;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.FactorySettingsRepository;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
+import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.ProductionReportRepository;
 import com.cretas.aims.repository.WorkProcessRepository;
 import com.cretas.aims.repository.workprocess.WorkProcessTaskRepository;
@@ -60,6 +63,7 @@ public class YieldReportServiceImpl implements YieldReportService {
     private final FactorySettingsRepository factorySettingsRepo;
     private final MaterialBatchRepository materialBatchRepository;
     private final ProductTypeRepository productTypeRepository;
+    private final ProductionBatchRepository productionBatchRepository;
     private final ObjectMapper objectMapper;
 
     @Override
@@ -482,16 +486,33 @@ public class YieldReportServiceImpl implements YieldReportService {
         out.put("batchYield", batchYield);
 
         boolean completed = false;
+        String completeError = null;
         if (triggerComplete && batchYield.getLastStepOutput() != null
                 && batchYield.getLastStepOutput().compareTo(BigDecimal.ZERO) > 0) {
-            BigDecimal lastOutput = batchYield.getLastStepOutput();
-            // P0-2: 成品按"末道产出单位"(份/盒) 入库, 份数原值入库 (订单达成率"份对份")
-            String finishedUnit = batchYield.getLastStepOutputUnit();
-            processingService.completeProduction(factoryId, String.valueOf(batchId),
-                    lastOutput, lastOutput, BigDecimal.ZERO, finishedUnit);
-            completed = true;
+            // P1-1: 完工前预校验批次状态. completeProduction 仅允许 IN_PROGRESS/PAUSED, 否则抛 409
+            // → 会污染本结清事务(settled 标记随回滚丢失). 先查状态, 仅可完工才调, 否则 completed=false
+            // + completeError 透传前端(诚实提示"批次未开始生产"), 不抛异常.
+            ProductionBatch pb = productionBatchRepository.findByIdAndFactoryId(batchId, factoryId).orElse(null);
+            boolean canComplete = pb != null
+                    && (pb.getStatus() == ProductionBatchStatus.IN_PROGRESS
+                        || pb.getStatus() == ProductionBatchStatus.PAUSED);
+            if (canComplete) {
+                BigDecimal lastOutput = batchYield.getLastStepOutput();
+                // P0-2: 成品按"末道产出单位"(份/盒) 入库, 份数原值入库 (订单达成率"份对份")
+                String finishedUnit = batchYield.getLastStepOutputUnit();
+                processingService.completeProduction(factoryId, String.valueOf(batchId),
+                        lastOutput, lastOutput, BigDecimal.ZERO, finishedUnit);
+                completed = true;
+            } else {
+                completeError = pb == null
+                        ? "批次不存在"
+                        : ("批次状态 " + pb.getStatus() + " 不允许完工 (需先开始生产)");
+                log.warn("[完工入库] settle-day 触发完工跳过 (结清已成功不回滚): batch={} reason={}",
+                        batchId, completeError);
+            }
         }
         out.put("completed", completed);
+        if (completeError != null) out.put("completeError", completeError);
         return out;
     }
 }

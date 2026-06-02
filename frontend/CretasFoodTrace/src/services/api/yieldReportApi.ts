@@ -135,6 +135,7 @@ export interface SettleDayResult {
   settledCount: number;
   batchYield: BatchYieldDTO;
   completed: boolean;
+  completeError?: string;   // P1-1: 完工失败原因 (结清成功但批次未完工时, 如"批次未开始生产")
 }
 
 // ============ API Client ============

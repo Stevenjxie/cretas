@@ -35,6 +35,7 @@ const YieldStepReportScreen: React.FC = () => {
 
   const [productType, setProductType] = useState<string>('');
   const [batchNumber, setBatchNumber] = useState<string>(route.params.batchNumber ?? '');
+  const [batchStatus, setBatchStatus] = useState<string>('');  // P1-1: 完工幂等判断
   const [tasks, setTasks] = useState<WorkProcessTask[]>([]);
   const [yieldData, setYieldData] = useState<BatchYieldDTO | null>(null);
   const [currentStepIndex, setCurrentStepIndex] = useState(0);
@@ -73,6 +74,7 @@ const YieldStepReportScreen: React.FC = () => {
       if (batchRes.success && batchRes.data) {
         setProductType(batchRes.data.productType ?? '');
         if (batchRes.data.batchNumber) setBatchNumber(batchRes.data.batchNumber);
+        setBatchStatus(batchRes.data.status ?? '');  // P1-1: 完工幂等判断
       }
       if (yieldRes.success) setYieldData(yieldRes.data);
     } catch (error) {
@@ -254,23 +256,67 @@ const YieldStepReportScreen: React.FC = () => {
     }
   }, [currentTask, outputQty, inputQty, unit, outUnit, batchId, currentStepIndex, totalSteps, submitWithForce, materialBatchRefs]);
 
-  const handleSettleDay = useCallback(async () => {
+  // P1-1: 结清 (triggerComplete 决定是否同时完工入库)
+  const doSettle = useCallback(async (triggerComplete: boolean) => {
     setSubmitting(true);
     try {
-      const res = await yieldReportApi.settleDay(batchId, {});
-      if (res.success) {
-        Alert.alert('已标记今日结清', `本次结清 ${res.data.settledCount} 条报工`);
-      } else {
+      const res = await yieldReportApi.settleDay(batchId, { triggerComplete });
+      if (!res.success) {
         Alert.alert('结清失败', res.message || '请重试');
+        return;
+      }
+      if (res.data.completed) {
+        const out = yieldData?.lastStepOutput;
+        const unitL = yieldData?.lastStepOutputUnit ?? '';
+        Alert.alert(
+          '已完工入库',
+          `${productType || ''} ${batchNumber}\n本次结清 ${res.data.settledCount} 条报工\n` +
+          `批次已完工, 末道产出 ${out ?? '—'}${unitL} 已入成品库, 生产计划实际产量已回填`,
+          [{ text: '返回选批次', onPress: () => navigation.goBack() }],
+        );
+      } else if (res.data.completeError) {
+        // Rule 5 next-action: 结清成功但完工失败 (批次未开始生产), 透传后端原因
+        Alert.alert(
+          '已结清 (批次未完工)',
+          `本次结清 ${res.data.settledCount} 条报工\n${res.data.completeError}`,
+        );
+      } else {
+        Alert.alert('已标记今日结清', `本次结清 ${res.data.settledCount} 条报工 (批次未完工)`);
       }
     } catch (error) {
       handleError(error, { showAlert: false, logError: true });
-      const e = error as { response?: { data?: { message?: string } } };
-      Alert.alert('结清失败', e.response?.data?.message ?? '请重试');
+      const e = error as { response?: { data?: { message?: string; hint?: string } } };
+      const msg = e.response?.data?.message;
+      const hint = e.response?.data?.hint;
+      Alert.alert('结清失败', msg ? (hint ? `${msg}\n${hint}` : msg) : '请重试');
     } finally {
       setSubmitting(false);
     }
-  }, [batchId]);
+  }, [batchId, productType, batchNumber, yieldData, navigation]);
+
+  // P1-1: 末道全报完 → 二段确认是否完工入库 (Rule 2 context + Rule 4 幂等)
+  const handleSettleDay = useCallback(() => {
+    const alreadyCompleted = batchStatus === 'COMPLETED' || batchStatus === 'completed';
+    if (alreadyCompleted) {
+      // Rule 4 幂等: 批次已完工, 不再重复触发 (后端会返 completeError)
+      Alert.alert('批次已完工', `${batchNumber} 已入库, 无需重复完工`, [
+        { text: '返回选批次', onPress: () => navigation.goBack() },
+      ]);
+      return;
+    }
+    const out = yieldData?.lastStepOutput;
+    const unitL = yieldData?.lastStepOutputUnit ?? '';
+    // Rule 2 context: 品名 + 批次 + 末道产出
+    Alert.alert(
+      '完工入库确认',
+      `${productType || ''} ${batchNumber}\n末道产出 ${out ?? '—'}${unitL}\n` +
+      `确认后: 批次标完工 + 末道产出入成品库 + 回填生产计划实际产量`,
+      [
+        { text: '暂不完工(仅结清今日)', onPress: () => doSettle(false) },
+        { text: '完工入库', style: 'default', onPress: () => doSettle(true) },
+      ],
+    );
+  }, [batchStatus, productType, batchNumber, yieldData, doSettle, navigation]);
 
   if (loading) {
     return (
@@ -330,7 +376,7 @@ const YieldStepReportScreen: React.FC = () => {
             ) : null}
           </NeoCard>
           <NeoButton variant="primary" size="large" onPress={handleSettleDay} disabled={submitting} loading={submitting} style={styles.fullBtn}>
-            标记今日结清
+            完工入库
           </NeoButton>
           <NeoButton variant="outline" size="large" onPress={() => navigation.goBack()} style={styles.fullBtn}>
             返回选批次

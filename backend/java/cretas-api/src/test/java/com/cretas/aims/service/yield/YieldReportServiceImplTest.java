@@ -18,6 +18,7 @@ import com.cretas.aims.entity.enums.ProductionBatchStatus;
 import com.cretas.aims.repository.FactorySettingsRepository;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
+import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.ProductionReportRepository;
 import com.cretas.aims.repository.WorkProcessRepository;
 import com.cretas.aims.repository.workprocess.WorkProcessTaskRepository;
@@ -51,6 +52,7 @@ class YieldReportServiceImplTest {
     private FactorySettingsRepository factorySettingsRepo;
     private MaterialBatchRepository materialBatchRepo;
     private ProductTypeRepository productTypeRepo;
+    private ProductionBatchRepository productionBatchRepo;
     private ObjectMapper objectMapper;
     private YieldReportServiceImpl svc;
 
@@ -64,9 +66,10 @@ class YieldReportServiceImplTest {
         factorySettingsRepo = mock(FactorySettingsRepository.class);
         materialBatchRepo = mock(MaterialBatchRepository.class);
         productTypeRepo = mock(ProductTypeRepository.class);
+        productionBatchRepo = mock(ProductionBatchRepository.class);
         objectMapper = new ObjectMapper();
         svc = new YieldReportServiceImpl(reportRepo, taskRepo, processRepo, calcSvc, processingService,
-                factorySettingsRepo, materialBatchRepo, productTypeRepo, objectMapper);
+                factorySettingsRepo, materialBatchRepo, productTypeRepo, productionBatchRepo, objectMapper);
     }
 
     private WorkProcessTask task(long id, int order, String wpId) {
@@ -879,6 +882,10 @@ class YieldReportServiceImplTest {
         when(productTypeRepo.findByIdAndFactoryId("PT-LU", "F006")).thenReturn(Optional.empty());
         when(taskRepo.findByFactoryIdAndIdIn(eq("F006"), any())).thenReturn(List.of());
         when(processRepo.findAllById(any())).thenReturn(List.of());
+        // P1-1: 批次 IN_PROGRESS → 可完工
+        ProductionBatch batch = new ProductionBatch();
+        batch.setStatus(ProductionBatchStatus.IN_PROGRESS);
+        when(productionBatchRepo.findByIdAndFactoryId(9L, "F006")).thenReturn(Optional.of(batch));
         when(processingService.completeProduction(anyString(), anyString(), any(), any(), any(), any()))
                 .thenReturn(new ProductionBatch());
 
@@ -907,6 +914,88 @@ class YieldReportServiceImplTest {
 
         assertThat(out.get("completed")).isEqualTo(false);
         verify(processingService, never()).completeProduction(anyString(), anyString(), any(), any(), any());
+        verify(processingService, never()).completeProduction(anyString(), anyString(), any(), any(), any(), any());
+    }
+
+    // ── P1-1: 完工入库 + 回填生产计划 ─────────────────────────────────────────────
+
+    @Test
+    void settleDay_triggerComplete_batchPlanned_skipsComplete_settlesStill() {
+        // P1-1 1c: 批次 PLANNED (工人没点开始生产) → 不调 completeProduction (避免 409 污染结清),
+        // completed=false + completeError 非空, 结清记录仍 saveAll (settled=true)
+        ProductionReport unsettled = ProductionReport.builder()
+                .workProcessTaskId(70L).processOrder(1).productTypeId("PT-LU")
+                .inputQuantity(new BigDecimal("100")).inputUnit("kg")
+                .outputQuantity(new BigDecimal("80")).outputUnit("kg")
+                .settled(false).build();
+        ProductionReport r1 = ProductionReport.builder()
+                .workProcessTaskId(70L).processOrder(1).productTypeId("PT-LU")
+                .inputQuantity(new BigDecimal("100")).inputUnit("kg")
+                .outputQuantity(new BigDecimal("80")).outputUnit("kg")
+                .build();
+        when(reportRepo.findUnsettledYieldReports(eq("F006"), eq(11L), any())).thenReturn(List.of(unsettled));
+        when(reportRepo.findYieldReportsByBatch("F006", 11L)).thenReturn(List.of(r1));
+        when(productTypeRepo.findByIdAndFactoryId(anyString(), anyString())).thenReturn(Optional.empty());
+        when(taskRepo.findByFactoryIdAndIdIn(eq("F006"), any())).thenReturn(List.of());
+        when(processRepo.findAllById(any())).thenReturn(List.of());
+        ProductionBatch batch = new ProductionBatch();
+        batch.setStatus(ProductionBatchStatus.PLANNED);
+        when(productionBatchRepo.findByIdAndFactoryId(11L, "F006")).thenReturn(Optional.of(batch));
+
+        Map<String, Object> out = svc.settleDay("F006", 11L, 5L, null, true);
+
+        assertThat(out.get("completed")).isEqualTo(false);
+        assertThat(out.get("completeError")).asString().contains("不允许完工");
+        // 结清仍成功: settled 标记被写, saveAll 被调
+        assertThat(unsettled.getSettled()).isTrue();
+        verify(reportRepo).saveAll(any());
+        // completeProduction 从未被调 (无 409 抛出)
+        verify(processingService, never()).completeProduction(anyString(), anyString(), any(), any(), any(), any());
+    }
+
+    @Test
+    void settleDay_triggerComplete_lastOutputZero_doesNotComplete() {
+        // 末道产出为 0 → 不触发完工
+        ProductionReport r1 = ProductionReport.builder()
+                .workProcessTaskId(71L).processOrder(1).productTypeId("PT-LU")
+                .inputQuantity(new BigDecimal("100")).inputUnit("kg")
+                .outputQuantity(BigDecimal.ZERO).outputUnit("kg")
+                .build();
+        when(reportRepo.findUnsettledYieldReports(eq("F006"), eq(12L), any())).thenReturn(List.of());
+        when(reportRepo.findYieldReportsByBatch("F006", 12L)).thenReturn(List.of(r1));
+        when(productTypeRepo.findByIdAndFactoryId(anyString(), anyString())).thenReturn(Optional.empty());
+        when(taskRepo.findByFactoryIdAndIdIn(eq("F006"), any())).thenReturn(List.of());
+        when(processRepo.findAllById(any())).thenReturn(List.of());
+
+        Map<String, Object> out = svc.settleDay("F006", 12L, 5L, null, true);
+
+        assertThat(out.get("completed")).isEqualTo(false);
+        verify(processingService, never()).completeProduction(anyString(), anyString(), any(), any(), any(), any());
+        // lastOutput=0 → 连批次都不查
+        verify(productionBatchRepo, never()).findByIdAndFactoryId(eq(12L), anyString());
+    }
+
+    @Test
+    void settleDay_triggerComplete_batchCompleted_idempotent_skipsComplete() {
+        // P1-1 幂等: 批次已 COMPLETED → 不重复 completeProduction (防 PP actualQuantity 重复累加)
+        ProductionReport r1 = ProductionReport.builder()
+                .workProcessTaskId(72L).processOrder(1).productTypeId("PT-LU")
+                .inputQuantity(new BigDecimal("100")).inputUnit("kg")
+                .outputQuantity(new BigDecimal("80")).outputUnit("kg")
+                .build();
+        when(reportRepo.findUnsettledYieldReports(eq("F006"), eq(13L), any())).thenReturn(List.of());
+        when(reportRepo.findYieldReportsByBatch("F006", 13L)).thenReturn(List.of(r1));
+        when(productTypeRepo.findByIdAndFactoryId(anyString(), anyString())).thenReturn(Optional.empty());
+        when(taskRepo.findByFactoryIdAndIdIn(eq("F006"), any())).thenReturn(List.of());
+        when(processRepo.findAllById(any())).thenReturn(List.of());
+        ProductionBatch batch = new ProductionBatch();
+        batch.setStatus(ProductionBatchStatus.COMPLETED);
+        when(productionBatchRepo.findByIdAndFactoryId(13L, "F006")).thenReturn(Optional.of(batch));
+
+        Map<String, Object> out = svc.settleDay("F006", 13L, 5L, null, true);
+
+        assertThat(out.get("completed")).isEqualTo(false);
+        assertThat(out.get("completeError")).asString().contains("不允许完工");
         verify(processingService, never()).completeProduction(anyString(), anyString(), any(), any(), any(), any());
     }
 
