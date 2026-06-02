@@ -20,6 +20,7 @@ from smartbi.gold.queries import (
     _median,
     menu_quadrant,
     store_comparison,
+    trend_bundle,
 )
 
 
@@ -262,3 +263,87 @@ async def test_store_comparison_date_filter_both_bounds():
     kind, sql, params = conn.calls[0]
     assert "a.date >=" in sql and "a.date <=" in sql
     assert params == ["F1", date(2025, 1, 1), date(2025, 12, 31)]
+
+
+# ── Task 6: trend_bundle ─────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_trend_bundle_three_blocks_and_weekday_weekend():
+    # Call order inside trend_bundle:
+    #   1) daily_trend rows (date, revenue, bill_count)
+    #   2) weekday/weekend rows (is_weekend, total_revenue, day_count)
+    #   3) monthly rows (month, revenue)
+    daily_rows = [
+        {"date": date(2025, 1, 1), "revenue": 100, "bill_count": 10},
+        {"date": date(2025, 1, 2), "revenue": 200, "bill_count": 20},
+    ]
+    # weekday: 2 days totaling 1000 → avg 500; weekend: 1 day totaling 300 → avg 300
+    ww_rows = [
+        {"is_weekend": False, "total_revenue": 1000, "day_count": 2},
+        {"is_weekend": True, "total_revenue": 300, "day_count": 1},
+    ]
+    monthly_rows = [
+        {"month": date(2025, 1, 1), "revenue": 1300},
+    ]
+    conn = _ScriptedConn([daily_rows, ww_rows, monthly_rows])
+    pool = _ScriptedPool(conn)
+    out = await trend_bundle(pool, "F1", (None, None))
+
+    assert "dailyTrend" in out
+    assert "weekdayWeekend" in out
+    assert "monthlyTrend" in out
+
+    assert len(out["dailyTrend"]) == 2
+    assert out["dailyTrend"][0]["date"] == "2025-01-01"
+    assert out["dailyTrend"][0]["revenue"] == pytest.approx(100.0)
+
+    ww = out["weekdayWeekend"]
+    assert ww["weekdayDays"] == 2
+    assert ww["weekendDays"] == 1
+    assert ww["weekdayAvg"] == pytest.approx(500.0)  # 1000/2
+    assert ww["weekendAvg"] == pytest.approx(300.0)  # 300/1
+
+    assert out["monthlyTrend"][0]["month"] == "2025-01"
+    assert out["monthlyTrend"][0]["revenue"] == pytest.approx(1300.0)
+
+
+@pytest.mark.asyncio
+async def test_trend_bundle_weekday_weekend_zero_days_safe():
+    daily_rows = []
+    ww_rows = [
+        {"is_weekend": False, "total_revenue": 0, "day_count": 0},
+    ]
+    monthly_rows = []
+    conn = _ScriptedConn([daily_rows, ww_rows, monthly_rows])
+    pool = _ScriptedPool(conn)
+    out = await trend_bundle(pool, "F1", (None, None))
+    ww = out["weekdayWeekend"]
+    assert ww["weekdayAvg"] == 0.0
+    assert ww["weekendAvg"] == 0.0
+    assert ww["weekdayDays"] == 0
+    assert ww["weekendDays"] == 0
+    assert out["dailyTrend"] == []
+    assert out["monthlyTrend"] == []
+
+
+@pytest.mark.asyncio
+async def test_trend_bundle_all_history_no_date_filter():
+    conn = _ScriptedConn([[], [], []])
+    pool = _ScriptedPool(conn)
+    await trend_bundle(pool, "F1", (None, None))
+    assert len(conn.calls) == 3
+    for kind, sql, params in conn.calls:
+        assert _no_date_filter(sql), f"{sql}"
+        assert not any(isinstance(p, date) for p in params)
+
+
+@pytest.mark.asyncio
+async def test_trend_bundle_date_filter_both_bounds():
+    conn = _ScriptedConn([[], [], []])
+    pool = _ScriptedPool(conn)
+    await trend_bundle(pool, "F1", (date(2025, 1, 1), date(2025, 12, 31)))
+    for kind, sql, params in conn.calls:
+        assert ">=" in sql and "<=" in sql
+        assert params[0] == "F1"
+        assert date(2025, 1, 1) in params and date(2025, 12, 31) in params

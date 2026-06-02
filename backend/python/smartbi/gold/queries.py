@@ -928,3 +928,131 @@ async def store_comparison(
         "medianRevenue": median_revenue,
         "weakStores": weak_stores,
     }
+
+
+async def trend_bundle(
+    pool: asyncpg.Pool,
+    factory_id: str,
+    date_range: Tuple[Optional[date], Optional[date]],
+) -> Dict[str, Any]:
+    """趋势分析合一 — one bundle so the FE makes a single round-trip.
+
+    Combines three trend views over agg_daily, all sharing the same optional
+    date window (None bound = all history on that side):
+      - dailyTrend     : per-day {date, revenue, bill_count} (same shape as
+                         daily_trend's points), ascending.
+      - weekdayWeekend : per-day-average revenue split into weekday vs weekend
+                         (Sun=0 / Sat=6 via EXTRACT(DOW) IN (0,6)). Average =
+                         total revenue / DISTINCT day count in each group.
+      - monthlyTrend   : SUM(revenue) grouped by date_trunc('month', date),
+                         ascending, as [{month: 'YYYY-MM', revenue}].
+
+    Honest empty: no rows → dailyTrend=[], monthlyTrend=[], and the
+    weekdayWeekend averages/day-counts are 0.
+    """
+    start, end = date_range
+    _validate_range(start, end)
+
+    # Build a shared date-filter fragment + param list (None bound = no filter).
+    conds = ["factory_id = $1"]
+    params: list = [factory_id]
+    if start is not None:
+        params.append(start)
+        conds.append(f"date >= ${len(params)}")
+    if end is not None:
+        params.append(end)
+        conds.append(f"date <= ${len(params)}")
+    where = " AND ".join(conds)
+
+    async with pool.acquire() as conn:
+        daily_rows = await conn.fetch(
+            f"""
+            SELECT date,
+                   SUM(net_amount)::numeric(18,2) AS revenue,
+                   SUM(bill_count)                AS bill_count
+              FROM agg_daily
+             WHERE {where}
+             GROUP BY date
+             ORDER BY date
+            """,
+            *params,
+        )
+        # Weekday vs weekend: aggregate per-day revenue first, then group by the
+        # weekend flag so day_count is DISTINCT days (a day with multiple store
+        # rows counts once).
+        ww_rows = await conn.fetch(
+            f"""
+            WITH per_day AS (
+                SELECT date,
+                       SUM(net_amount)::numeric(18,2) AS day_revenue
+                  FROM agg_daily
+                 WHERE {where}
+                 GROUP BY date
+            )
+            SELECT (EXTRACT(DOW FROM date) IN (0, 6)) AS is_weekend,
+                   COALESCE(SUM(day_revenue), 0)::numeric(18,2) AS total_revenue,
+                   COUNT(*)                                     AS day_count
+              FROM per_day
+             GROUP BY (EXTRACT(DOW FROM date) IN (0, 6))
+            """,
+            *params,
+        )
+        monthly_rows = await conn.fetch(
+            f"""
+            SELECT date_trunc('month', date)::date AS month,
+                   SUM(net_amount)::numeric(18,2)  AS revenue
+              FROM agg_daily
+             WHERE {where}
+             GROUP BY date_trunc('month', date)
+             ORDER BY date_trunc('month', date)
+            """,
+            *params,
+        )
+
+    daily_trend_points = []
+    for r in daily_rows:
+        rev = Decimal(str(r["revenue"])) if r["revenue"] is not None else Decimal("0")
+        bc = int(r["bill_count"]) if r["bill_count"] is not None else 0
+        daily_trend_points.append({
+            "date": r["date"].isoformat(),
+            "revenue": float(rev),
+            "bill_count": bc,
+        })
+
+    weekday_total = Decimal("0")
+    weekday_days = 0
+    weekend_total = Decimal("0")
+    weekend_days = 0
+    for r in ww_rows:
+        total = Decimal(str(r["total_revenue"])) if r["total_revenue"] is not None else Decimal("0")
+        days = int(r["day_count"]) if r["day_count"] is not None else 0
+        if r["is_weekend"]:
+            weekend_total += total
+            weekend_days += days
+        else:
+            weekday_total += total
+            weekday_days += days
+    weekday_avg = float((weekday_total / weekday_days)) if weekday_days > 0 else 0.0
+    weekend_avg = float((weekend_total / weekend_days)) if weekend_days > 0 else 0.0
+
+    monthly_trend = [
+        {
+            "month": r["month"].strftime("%Y-%m"),
+            "revenue": float(Decimal(str(r["revenue"]))) if r["revenue"] is not None else 0.0,
+        }
+        for r in monthly_rows
+    ]
+
+    return {
+        "factory_id": factory_id,
+        "start_date": start.isoformat() if start is not None else None,
+        "end_date": end.isoformat() if end is not None else None,
+        "dailyTrend": daily_trend_points,
+        "weekdayWeekend": {
+            "weekdayAvg": round(weekday_avg, 2),
+            "weekendAvg": round(weekend_avg, 2),
+            "weekdayDays": weekday_days,
+            "weekendDays": weekend_days,
+        },
+        "monthlyTrend": monthly_trend,
+    }

@@ -46,6 +46,7 @@ from smartbi.gold import (
     staff_ranking,
     store_review_vs_revenue,
     top_products,
+    trend_bundle,
 )
 from smartbi.gold.gold_read_cache import GoldReadCache, compute_cache_key
 from smartbi.tenant_ctx import INTERNAL_SENTINEL, get_factory_id
@@ -76,6 +77,10 @@ def _get_cache(pool) -> GoldReadCache:
 _GOLD_EXTRA_MONEY_KEYS: frozenset[str] = frozenset({
     "avg_bill_value",
     "avg_per_capita",
+    # trend-bundle weekday/weekend average daily REVENUE (元) — camelCase keys
+    # not matched by the shared _MONEY_PATTERN, so strip them here too.
+    "weekdayAvg",
+    "weekendAvg",
 })
 
 
@@ -222,6 +227,30 @@ async def get_daily_trend(
         return _apply_rbac_strip(result, _get_role(request))
     except Exception as e:
         logger.exception("daily-trend failed: %s", e)
+        raise HTTPException(status_code=500, detail=f"Gold query failed: {e}")
+
+
+@router.get("/trend-bundle")
+async def get_trend_bundle(
+    request: Request,
+    start_date: Optional[str] = Query(None, description="YYYY-MM-DD inclusive; 省略=全部历史"),
+    end_date: Optional[str] = Query(None, description="YYYY-MM-DD inclusive; 省略=全部历史"),
+    factory_id: Optional[str] = Query(None),
+):
+    """趋势分析合一 — one bundle (dailyTrend + weekdayWeekend + monthlyTrend)
+    so 趋势分析 page loads in a single round-trip.
+
+    Revenue fields are monetary → RBAC money-strip applies for non price-view
+    roles (mirrors /daily-trend). Dates optional (省略 → 全部历史)。
+    """
+    fid = _resolve_tenant(factory_id)
+    start, end = _parse_range(start_date, end_date)
+    pool = await get_pg_pool()
+    try:
+        result = await trend_bundle(pool, fid, (start, end))
+        return _apply_rbac_strip(result, _get_role(request))
+    except Exception as e:
+        logger.exception("trend-bundle failed: %s", e)
         raise HTTPException(status_code=500, detail=f"Gold query failed: {e}")
 
 
