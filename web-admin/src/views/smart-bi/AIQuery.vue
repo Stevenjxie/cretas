@@ -173,7 +173,7 @@ function resetChatSession(): void {
 const QUICK_QUESTIONS_BY_DOMAIN: Record<string, string[]> = {
   // 评价/口碑数据
   review: [
-    '客户评价怎么样', '差评最多的门店', '哪些菜品差评多',
+    '客户评价情况', '差评最多的门店', '哪些菜品差评多',
     'VIP 评价情况', '投诉最集中的问题', '哪个城市评价最低',
     '服务分排名', '环境分对比'
   ],
@@ -418,7 +418,7 @@ const RELATED_FOLLOWUPS: Record<string, string[]> = {
   promotion_impact: ['付款方式占比', '套餐使用率', '反结账情况'],
   weekday_weekend_pattern: ['哪家店业绩最好', '时段销售分布', '优惠券使用情况'],
   combo_usage_rate: ['畅销品 Top 5', '哪个菜品类别卖得多', '哪家店业绩最好'],
-  reverse_checkout_stats: ['哪家店业绩最差', '客户评价怎么样', '员工里谁最厉害'],
+  reverse_checkout_stats: ['哪家店业绩最差', '客户评价情况', '员工里谁最厉害'],
   member_consumption: ['储值卡使用', '付款方式占比', '优惠券使用情况'],
   dish_by_table_type: ['畅销品 Top 5', '哪家店业绩最好', '套餐使用率'],
 };
