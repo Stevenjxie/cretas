@@ -74,6 +74,44 @@ class DeterministicAgent(BaseAgent):
         input: ResolutionInput,
         pool: "asyncpg.Pool",
     ) -> AgentResult:
+        # DISH: candidate set is dim_canonical_dish (NOT dim_product). The input
+        # raw_name is a dim_product.name; rule-normalize it (strip 5 suffix classes)
+        # to the canonical normalized_key, then exact-match an existing canonical.
+        if input.entity_type == EntityType.DISH:
+            from smartbi.services.materialized_analytics.restaurant.dish_rule_normalize import (  # noqa: E501
+                dish_rule_normalize,
+            )
+
+            normalized_key = dish_rule_normalize(input.raw_name)
+            if not normalized_key:
+                return AgentResult(
+                    matched_entity_id=None,
+                    confidence=0.0,
+                    reasoning="空 dish name",
+                )
+            async with pool.acquire() as conn:
+                row = await conn.fetchrow(
+                    "SELECT canonical_dish_id FROM dim_canonical_dish "
+                    "WHERE factory_id = $1 AND normalized_key = $2 "
+                    "AND status = 'active'",
+                    input.factory_id,
+                    normalized_key,
+                )
+            if row:
+                return AgentResult(
+                    matched_entity_id=row["canonical_dish_id"],
+                    confidence=1.0,
+                    reasoning=(
+                        f"规则层归一 key 完全匹配 canonical: "
+                        f"'{input.raw_name}' → '{normalized_key}'"
+                    ),
+                )
+            return AgentResult(
+                matched_entity_id=None,
+                confidence=0.0,
+                reasoning=f"无 canonical 完全匹配 (key='{normalized_key}')",
+            )
+
         normalized_input = normalize_for_dim(input.raw_name)
         if not normalized_input:
             return AgentResult(

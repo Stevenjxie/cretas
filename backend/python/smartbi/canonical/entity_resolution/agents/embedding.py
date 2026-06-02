@@ -74,22 +74,34 @@ class EmbeddingAgent(BaseAgent):
             )
 
         async with pool.acquire() as conn:
-            entity_table = f"dim_{input.entity_type.value}"
-            id_column = f"{input.entity_type.value}_id"
-            if input.entity_type == EntityType.PRODUCT:
+            # DISH: candidate set is dim_canonical_dish (canonical_dish_id /
+            # canonical_name), NOT dim_<value>. Compare cosine over canonical_name.
+            if input.entity_type == EntityType.DISH:
                 rows = await conn.fetch(
-                    f"SELECT {id_column} AS eid, name, normalized_name "
-                    f"FROM {entity_table} WHERE factory_id = $1 LIMIT 1000",
-                    input.factory_id,
-                )
-                cmp_field = "normalized_name"
-            else:
-                rows = await conn.fetch(
-                    f"SELECT {id_column} AS eid, name FROM {entity_table} "
-                    f"WHERE factory_id = $1 LIMIT 1000",
+                    "SELECT canonical_dish_id AS eid, canonical_name AS name "
+                    "FROM dim_canonical_dish "
+                    "WHERE factory_id = $1 AND status = 'active' LIMIT 1000",
                     input.factory_id,
                 )
                 cmp_field = "name"
+                entity_table = "dim_canonical_dish"
+            else:
+                entity_table = f"dim_{input.entity_type.value}"
+                id_column = f"{input.entity_type.value}_id"
+                if input.entity_type == EntityType.PRODUCT:
+                    rows = await conn.fetch(
+                        f"SELECT {id_column} AS eid, name, normalized_name "
+                        f"FROM {entity_table} WHERE factory_id = $1 LIMIT 1000",
+                        input.factory_id,
+                    )
+                    cmp_field = "normalized_name"
+                else:
+                    rows = await conn.fetch(
+                        f"SELECT {id_column} AS eid, name FROM {entity_table} "
+                        f"WHERE factory_id = $1 LIMIT 1000",
+                        input.factory_id,
+                    )
+                    cmp_field = "name"
 
         if not rows:
             return AgentResult(
