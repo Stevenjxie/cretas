@@ -201,6 +201,25 @@ public class ProductionReport {
     @Column(name = "material_batch_refs", columnDefinition = "jsonb")
     private List<Map<String, Object>> materialBatchRefs;
 
+    /** 传统报工适配 (适配单元1): 多时段×人数工时 [{startTime,endTime,headcount,note}];
+     *  null = 用单一 workerCount/totalWorkers。镜像 hourEntries/materialBatchRefs 的 jsonb pattern。 */
+    @Type(JsonType.class)
+    @Column(name = "labor_segments", columnDefinition = "jsonb")
+    private List<Map<String, Object>> laborSegments;
+
+    /** 传统报工适配: 副产物明细 [{name,quantity,unit}] (料头/肥油/骨头) */
+    @Type(JsonType.class)
+    @Column(name = "byproducts", columnDefinition = "jsonb")
+    private List<Map<String, Object>> byproducts;
+
+    /** 传统报工适配: 损耗量; null = 未录 */
+    @Column(name = "waste_quantity", precision = 14, scale = 3)
+    private BigDecimal wasteQuantity;
+
+    /** 传统报工适配: 留样(盒/份, 末道装盒); 入库=产出-留样-剩余 */
+    @Column(name = "sample_retain_quantity")
+    private Integer sampleRetainQuantity;
+
     /** 领料出库量 (张权 A1, 如 998; 仅首道领料填) */
     @Column(name = "warehouse_out_quantity", precision = 12, scale = 2)
     private BigDecimal warehouseOutQuantity;

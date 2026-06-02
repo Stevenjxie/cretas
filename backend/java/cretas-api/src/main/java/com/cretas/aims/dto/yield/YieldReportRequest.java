@@ -30,4 +30,36 @@ public class YieldReportRequest {
      * null 走旧路径 (首道领原料 / 老批次, 向后兼容零回归)。
      */
     private String sourceWipNo;
+
+    // ==================== 传统报工适配 (适配单元1 地基; 算法在后续任务) ====================
+
+    /** 图片证据 URL 列表 (前端先传 OSS 拿 URL, 存入 ProductionReport.photos) */
+    private List<String> evidenceImages;
+
+    /** 多时段×人数工时 (张权 多段开工/收工) */
+    private List<LaborSegment> laborSegments;
+
+    /** 副产物明细 (料头/肥油/骨头) */
+    private List<Byproduct> byproducts;
+
+    /** 损耗量; null=未录 */
+    private BigDecimal wasteQuantity;
+
+    /** 留样(盒/份, 末道装盒) */
+    private Integer sampleRetainQuantity;
+
+    @Data
+    public static class LaborSegment {
+        private String startTime;   // "HH:mm"
+        private String endTime;     // "HH:mm"
+        private Integer headcount;
+        private String note;
+    }
+
+    @Data
+    public static class Byproduct {
+        private String name;
+        private BigDecimal quantity;
+        private String unit;
+    }
 }
