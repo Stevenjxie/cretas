@@ -458,6 +458,15 @@ class FactReconciler:
         """
         fabricated: List[str] = []
         known_set = set(known)
+        # Brand tokens from known store names (first 3 chars before any paren).
+        # A real store NAME carries a brand (青花椒…/鲜行者…); generic references
+        # (该店/门店/跨门店) and regex noise ("64条（该店") do NOT — gate on this.
+        brands = {
+            re.split(r"[（(]", k)[0].strip()[:3]
+            for k in known_set
+            if len(re.split(r"[（(]", k)[0].strip()) >= 2
+        }
+        brands.discard("")
         # Match "<name>店" tokens (CJK run ending in 店, 2-20 chars before 店).
         store_pat = re.compile(r"([一-龥A-Za-z0-9·\-（）()]{2,20}店)")
         seen = set()
@@ -466,11 +475,11 @@ class FactReconciler:
             if cand in seen:
                 continue
             seen.add(cand)
-            # 宁漏不错: only branch-style store NAMES carry a parenthetical
-            # landmark ("…（虹口龙之梦店）"). Generic references (该店 / 门店 /
-            # 其他门店 / 个别门店 / 高差评门店) have none and are NOT fabricated
-            # names — never flag them.
-            if "（" not in cand and "(" not in cand:
+            # 宁漏不错: only consider candidates that carry a known brand prefix.
+            # Real store NAMES do (青花椒…/鲜行者…); generic references
+            # (该店/门店/其他门店/跨门店/个别门店) and regex noise ("64条（该店")
+            # do NOT — never flag those as fabricated names.
+            if brands and not any(b in cand for b in brands):
                 continue
             # If the candidate is a substring of, or contains, a known store →
             # treat as known (handles "大融城店" vs "青花椒大融城店").
