@@ -14,6 +14,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
@@ -50,6 +51,13 @@ public class SkillExecutorImpl implements SkillExecutor {
     private final ToolRegistry toolRegistry;
     private final DashScopeClient dashScopeClient;
     private final ObjectMapper objectMapper;
+
+    // W0 write-guard (intent-w0) — SITE D. Skill orchestration calls ToolExecutor.execute() directly
+    // (executeSingleTool), bypassing ToolDispatchService (Site B). Field-injected (not in the Lombok
+    // @RequiredArgsConstructor) so existing direct-construction tests stay unaffected; tests set it via
+    // reflection. Stateless → safe on the skill worker thread pool.
+    @Autowired
+    private com.cretas.aims.ai.tool.WriteGuardService writeGuardService;
 
     // ==================== Configuration ====================
 
@@ -759,6 +767,21 @@ public class SkillExecutorImpl implements SkillExecutor {
             log.warn("Tool disabled for factory via Canvas: tool={}, factoryId={}, skill path",
                     toolName, context.getFactoryId());
             throw new IllegalStateException("Tool disabled for factory: " + toolName);
+        }
+
+        // W0 write-guard (intent-w0) — SITE D: Skill orchestration calls executor.execute() directly,
+        // bypassing ToolDispatchService (Site B). Block a write tool unless a confirmed=true signal is
+        // present (checked across the immediate tool params AND the SkillContext extractedParams).
+        // Exception-based (mirrors the tool-not-found / tool-disabled throws above); the skill engine's
+        // catch(Exception) blocks surface it. WriteGuardService is stateless → safe on the worker pool.
+        com.cretas.aims.ai.tool.ToolExecutor wgTool = executorOpt.get();
+        java.util.Map<String, Object> skCtx = params != null ? params
+                : (context != null && context.getExtractedParams() != null ? context.getExtractedParams() : java.util.Map.of());
+        boolean wgConfirmed = writeGuardService.isConfirmed(skCtx)
+                || (context != null && writeGuardService.isConfirmed(context.getExtractedParams()));
+        if (writeGuardService.isWriteTool(wgTool) && !wgConfirmed) {
+            log.info("W0 write-guard (skill): blocked write tool {} (confirmed=false)", toolName);
+            throw new IllegalStateException("W0 write-guard: tool '" + toolName + "' 需要显式确认后才能执行");
         }
 
         ToolExecutor executor = executorOpt.get();

@@ -44,6 +44,12 @@ public class DynamicToolSelectionService {
     @Autowired(required = false)
     private SkillRouterService skillRouterService;
 
+    // W0 write-guard (intent-w0) — SITE C/E. Auto-Planner (executeAutoPlan) calls tool.execute()
+    // directly, bypassing ToolDispatchService.executeWithTool (Site B). Guard each step so a
+    // multi-tool plan that includes a destructive tool cannot silently execute without confirm.
+    @Autowired
+    private com.cretas.aims.ai.tool.WriteGuardService writeGuardService;
+
     // ==================== 公开方法 ====================
 
     /**
@@ -407,6 +413,17 @@ public class DynamicToolSelectionService {
                             stepParams.put("_dep_" + depStepId, depOutput);
                         }
                     }
+                }
+
+                // W0 write-guard (intent-w0) — SITE C: Auto-Planner calls tool.execute() directly,
+                // not through Site B. Block any write tool in the plan unless the step context carries
+                // a confirmed=true signal. (Auto-plans have no previewOnly concept — a plan step always
+                // executes; the only allowed bypass is explicit confirm.)
+                if (writeGuardService.isWriteTool(tool) && !writeGuardService.isConfirmed(stepParams)) {
+                    hasError = true;
+                    errorMessages.append(toolName).append(": W0 write-guard 阻止 (需确认); ");
+                    log.info("W0 write-guard (auto-plan): blocked write tool {}", toolName);
+                    continue;
                 }
 
                 String argsJson;

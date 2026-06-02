@@ -108,6 +108,24 @@ public class SemanticRouterServiceImpl implements SemanticRouterService {
             "RESTAURANT_DISH_SALES_RANKING" // 吸引"经营状况总览"
     );
 
+    /** W0: read/write confusion twins (canonical set from convertNegationIntent), "WRITE|READ". */
+    private static final double READ_WRITE_TWIN_MARGIN = 0.08;
+    private static final Set<String> READ_WRITE_TWIN_PAIRS = Set.of(
+            "PROCESSING_BATCH_COMPLETE|PROCESSING_BATCH_LIST", "PROCESSING_BATCH_START|PROCESSING_BATCH_LIST",
+            "PROCESSING_BATCH_PAUSE|PROCESSING_BATCH_LIST", "PROCESSING_BATCH_CREATE|PROCESSING_BATCH_LIST",
+            "ALERT_ACKNOWLEDGE|ALERT_LIST", "ALERT_CREATE|ALERT_LIST",
+            "EQUIPMENT_STOP|EQUIPMENT_STATUS", "EQUIPMENT_START|EQUIPMENT_STATUS",
+            "EQUIPMENT_CONTROL|EQUIPMENT_STATUS", "EQUIPMENT_STATUS_UPDATE|EQUIPMENT_STATUS",
+            "SHIPMENT_STATUS_UPDATE|SHIPMENT_QUERY", "SHIPMENT_CREATE|SHIPMENT_QUERY", "SHIPMENT_UPDATE|SHIPMENT_QUERY",
+            "MATERIAL_BATCH_CREATE|MATERIAL_BATCH_QUERY", "MATERIAL_BATCH_CONSUME|MATERIAL_BATCH_QUERY",
+            "QUALITY_CHECK_EXECUTE|QUALITY_CHECK_QUERY", "QUALITY_DISPOSITION_EXECUTE|QUALITY_CHECK_QUERY",
+            "CLOCK_IN|ATTENDANCE_QUERY", "CLOCK_OUT|ATTENDANCE_QUERY", "ATTENDANCE_RECORD|ATTENDANCE_QUERY",
+            "SUPPLIER_EVALUATE|SUPPLIER_QUERY", "SCALE_ADD_DEVICE|MATERIAL_BATCH_QUERY");
+
+    private boolean isTwinPair(String a, String b) {
+        return READ_WRITE_TWIN_PAIRS.contains(a + "|" + b) || READ_WRITE_TWIN_PAIRS.contains(b + "|" + a);
+    }
+
     // Wave-10: 完全排除意图 — 从语义路由器缓存中彻底移除，不参与任何语义匹配
     // 这些意图的embedding向量存在异常(cosine 1.00命中率100%错误)，GUARD降级不够，需完全排除
     private static final Set<String> SEMANTIC_EXCLUDE_INTENTS = Set.of(
@@ -196,39 +214,8 @@ public class SemanticRouterServiceImpl implements SemanticRouterService {
             totalLatencyMs.addAndGet(latencyMs);
             totalRoutes.incrementAndGet();
 
-            // 7. 三级路由决策
-            RouteDecision decision;
-            if (topScore >= directExecuteThreshold && bestIntent != null) {
-                if (SEMANTIC_GUARD_INTENTS.contains(bestIntent.getIntentCode())) {
-                    // 黑洞意图降级: 强制走 RERANKING (LLM二次确认)
-                    needRerankingCount.incrementAndGet();
-                    decision = RouteDecision.needReranking(bestIntent, topScore, candidates, userInput, latencyMs);
-                    log.info("SemanticRouter: GUARD_DOWNGRADE for '{}' -> {} (score={}, latency={}ms) — 黑洞意图降级为RERANKING",
-                            truncate(userInput, 50), bestIntent.getIntentCode(), topScore, latencyMs);
-                } else {
-                    // 高置信度: 直接执行
-                    directExecuteCount.incrementAndGet();
-                    decision = RouteDecision.directExecute(bestIntent, topScore, candidates, userInput, latencyMs);
-                    log.info("SemanticRouter: DIRECT_EXECUTE for '{}' -> {} (score={}, latency={}ms)",
-                            truncate(userInput, 50), bestIntent.getIntentCode(), topScore, latencyMs);
-                }
-
-            } else if (topScore >= rerankingThreshold) {
-                // 中等置信度: 需要 Reranking
-                needRerankingCount.incrementAndGet();
-                decision = RouteDecision.needReranking(bestIntent, topScore, candidates, userInput, latencyMs);
-                log.info("SemanticRouter: NEED_RERANKING for '{}' -> {} (score={}, latency={}ms)",
-                        truncate(userInput, 50),
-                        bestIntent != null ? bestIntent.getIntentCode() : "null",
-                        topScore, latencyMs);
-
-            } else {
-                // 低置信度: 需要完整 LLM
-                needFullLLMCount.incrementAndGet();
-                decision = RouteDecision.needFullLLM(topScore, candidates, userInput, latencyMs);
-                log.info("SemanticRouter: NEED_FULL_LLM for '{}' (topScore={}, latency={}ms)",
-                        truncate(userInput, 50), topScore, latencyMs);
-            }
+            // 7. 三级路由决策 (委托给 decideFromScored 以便单元测试)
+            RouteDecision decision = decideFromScored(scoredIntents, candidates, userInput, latencyMs);
 
             return decision;
 
@@ -315,6 +302,67 @@ public class SemanticRouterServiceImpl implements SemanticRouterService {
         } catch (Exception e) {
             log.error("Wave-12 BERT-Hint route error: {}", e.getMessage(), e);
             return route(factoryId, userInput, topN);
+        }
+    }
+
+    /**
+     * W0: 核心路由决策逻辑 — 从已排序的 scoredIntents 做三级决策。
+     *
+     * 提取为 package-private 方法以便单元测试 (无需 Spring 容器或 embedding 服务)。
+     *
+     * @param scoredIntents 已按 score 降序排序的意图列表
+     * @param candidates    Top-N 候选列表 (已构建好)
+     * @param userInput     原始用户输入 (用于日志)
+     * @param latencyMs     路由耗时 (用于日志)
+     * @return 路由决策
+     */
+    RouteDecision decideFromScored(List<ScoredIntent> scoredIntents,
+                                   List<CandidateMatch> candidates,
+                                   String userInput,
+                                   long latencyMs) {
+        double topScore = scoredIntents.isEmpty() ? 0.0 : scoredIntents.get(0).score;
+        AIIntentConfig bestIntent = scoredIntents.isEmpty() ? null : scoredIntents.get(0).intent;
+
+        if (topScore >= directExecuteThreshold && bestIntent != null) {
+            // W0 twin-pair margin guard: narrow margin between read/write confusion twin → downgrade
+            if (scoredIntents.size() >= 2) {
+                double margin = scoredIntents.get(0).score - scoredIntents.get(1).score;
+                String c1 = scoredIntents.get(0).intentCode;
+                String c2 = scoredIntents.get(1).intentCode;
+                if (margin < READ_WRITE_TWIN_MARGIN && isTwinPair(c1, c2)) {
+                    needRerankingCount.incrementAndGet();
+                    log.info("SemanticRouter: TWIN_MARGIN_DOWNGRADE '{}' -> {} vs {} (margin={}, latency={}ms)",
+                            truncate(userInput, 50), c1, c2, String.format("%.3f", margin), latencyMs);
+                    return RouteDecision.needReranking(bestIntent, topScore, candidates, userInput, latencyMs);
+                }
+            }
+            if (SEMANTIC_GUARD_INTENTS.contains(bestIntent.getIntentCode())) {
+                // 黑洞意图降级: 强制走 RERANKING (LLM二次确认)
+                needRerankingCount.incrementAndGet();
+                log.info("SemanticRouter: GUARD_DOWNGRADE for '{}' -> {} (score={}, latency={}ms) — 黑洞意图降级为RERANKING",
+                        truncate(userInput, 50), bestIntent.getIntentCode(), topScore, latencyMs);
+                return RouteDecision.needReranking(bestIntent, topScore, candidates, userInput, latencyMs);
+            } else {
+                // 高置信度: 直接执行
+                directExecuteCount.incrementAndGet();
+                log.info("SemanticRouter: DIRECT_EXECUTE for '{}' -> {} (score={}, latency={}ms)",
+                        truncate(userInput, 50), bestIntent.getIntentCode(), topScore, latencyMs);
+                return RouteDecision.directExecute(bestIntent, topScore, candidates, userInput, latencyMs);
+            }
+        } else if (topScore >= rerankingThreshold) {
+            // 中等置信度: 需要 Reranking
+            needRerankingCount.incrementAndGet();
+            log.info("SemanticRouter: NEED_RERANKING for '{}' -> {} (score={}, latency={}ms)",
+                    truncate(userInput, 50),
+                    bestIntent != null ? bestIntent.getIntentCode() : "null",
+                    topScore, latencyMs);
+            return RouteDecision.needReranking(bestIntent, topScore, candidates, userInput, latencyMs);
+        } else {
+            // 低置信度: 需要完整 LLM
+            needFullLLMCount.incrementAndGet();
+            log.info("SemanticRouter: NEED_FULL_LLM for '{}' (topScore={}, latency={}ms)",
+                    truncate(userInput, 50), topScore, latencyMs);
+            return RouteDecision.needFullLLM(topScore, candidates, userInput, latencyMs);
         }
     }
 
@@ -520,9 +568,9 @@ public class SemanticRouterServiceImpl implements SemanticRouterService {
     }
 
     /**
-     * 带分数的意图
+     * 带分数的意图 (package-private for unit testing)
      */
-    private static class ScoredIntent {
+    static class ScoredIntent {
         final String intentCode;
         final AIIntentConfig intent;
         final double score;

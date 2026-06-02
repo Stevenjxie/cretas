@@ -624,6 +624,18 @@ public class LlmIntentFallbackClientImpl implements LlmIntentFallbackClient {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.service.ConfidenceCalibrationService confidenceCalibrationService;
 
+    // W0 write-guard (intent-w0) — SITE F. The LLM Tool-Calling fallback (executeToolCallingWorkflow)
+    // calls ToolExecutor.execute() DIRECTLY on a tool the LLM autonomously selected, bypassing
+    // ToolDispatchService (Site B) and all confidence/sensitivity gating. A classifier misroute that
+    // reaches this fallback could otherwise drive a write/destructive tool to silently execute with NO
+    // user confirmation step. Field-injected (this class mixes constructor + @Autowired field injection);
+    // WriteGuardService is stateless → safe to call from any thread.
+    // Required injection (WriteGuardService is an unconditional @Service so always present) for
+    // fail-CLOSED consistency with Sites A-E — required=false made Site F fail OPEN if the bean
+    // were ever absent, defeating the destructive-op safety net.
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.cretas.aims.ai.tool.WriteGuardService writeGuardService;
+
     /**
      * 构建意图分类系统提示词
      *
@@ -2954,6 +2966,17 @@ public class LlmIntentFallbackClientImpl implements LlmIntentFallbackClient {
 
                 // 构建执行上下文（包含 userId 和 userRole 用于权限验证）
                 Map<String, Object> context = buildToolExecutionContext(factoryId, userId, userRole);
+
+                // W0 write-guard (intent-w0) — SITE F: this LLM-fallback path calls executor.execute()
+                // directly on an LLM-selected tool, bypassing ToolDispatchService (Site B). The fallback
+                // has NO user confirmation step, so a write tool here is unconfirmed by construction —
+                // block it. isConfirmed(context) is false (buildToolExecutionContext sets no confirm
+                // flag); pass Map.of() defensively so a future confirm flag cannot leak through.
+                if (writeGuardService.isWriteTool(executor)
+                        && !writeGuardService.isConfirmed(java.util.Map.of())) {
+                    log.warn("W0 write-guard (llm-fallback): blocked write tool {} (no confirmation in LLM tool-calling path)", toolName);
+                    throw new IllegalStateException("W0 write-guard: tool '" + toolName + "' 需要显式确认后才能执行");
+                }
 
                 // 执行工具
                 String result = executor.execute(toolCall, context);
