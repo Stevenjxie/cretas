@@ -2152,6 +2152,15 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                             "charts": [],
                             "processingTimeMs": int((time.time() - start_time) * 1000)
                         })
+                        # Distillation capture (training corpus): freshly-streamed
+                        # LLM answer on the no-data direct-LLM branch (mirrors the
+                        # non-stream call site). Cache-serve / degraded paths return
+                        # earlier, so reaching here means a complete fresh teacher
+                        # pair. Guarded on non-empty full_text. Fire-and-forget.
+                        if full_text:
+                            await _capture_qa_distillation(
+                                request.effective_query, full_text, http_request
+                            )
                         return
                     except Exception as e:
                         logger.warning(f"[stream] Direct LLM failed: {e}")
@@ -2879,6 +2888,21 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                         ))
                 except Exception as e:
                     logger.warning(f"[chat-session] writeback (LLM path) failed: {e}")
+
+            # Distillation capture (training corpus): freshly-streamed LLM
+            # answer on the with-data main path. Gated by the SAME condition the
+            # LLM-answer-cache writeback uses above (full_text and not
+            # _llm_truncated) so we ONLY record a genuine complete fresh teacher
+            # pair. This excludes every degraded answer: silent-timeout, soft-
+            # timeout truncation, and the cache-fallback swap all set
+            # _llm_truncated=True. Cache-serve branches (gold-ops /
+            # materialized_cache / llm_answer_cache / capability_short_circuit)
+            # return earlier and never reach here. Fire-and-forget — the helper
+            # swallows all exceptions and never delays the stream.
+            if full_text and not _llm_truncated:
+                await _capture_qa_distillation(
+                    request.effective_query, full_text, http_request
+                )
 
             # Done event MUST be yielded last — async generator gets cancelled
             # by client immediately after the done payload arrives, so any
