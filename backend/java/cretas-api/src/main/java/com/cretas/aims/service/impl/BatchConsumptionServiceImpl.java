@@ -50,6 +50,11 @@ public class BatchConsumptionServiceImpl implements BatchConsumptionService {
     @Transactional
     public void autoConsumeForBatch(ProductionBatch batch) {
         String factoryId = batch.getFactoryId();
+        // recorded_by 是 NOT NULL + FK 到 users; 硬编码 0L 是无效用户, save 会抛 FK 违例并污染
+        // Hibernate Session, 导致同事务后续 createFinishedGoodsFromBatch 无法 flush -> 自动入库静默失败
+        // (prod E2E 抓到: 凡有 BOM 的成品 plain-complete 都不会自动建成品批次). 用批次主管/创建人兜底.
+        Long recordedBy = batch.getSupervisorId() != null ? batch.getSupervisorId()
+                : (batch.getCreatedBy() != null ? batch.getCreatedBy() : 1L);
         BigDecimal productionQty = batch.getActualQuantity() != null
                 ? batch.getActualQuantity()
                 : batch.getPlannedQuantity();
@@ -121,7 +126,7 @@ public class BatchConsumptionServiceImpl implements BatchConsumptionService {
                     consumption.setTotalCost(cost);
                     consumption.setConsumptionTime(LocalDateTime.now());
                     consumption.setConsumedAt(LocalDateTime.now());
-                    consumption.setRecordedBy(0L); // 系统自动
+                    consumption.setRecordedBy(recordedBy); // 系统自动 (批次主管/创建人, 不用无效 0L)
                     consumption.setSourceType(SOURCE_AUTO_BOM);
                     consumption.setNotes("BOM自动扣料");
 
@@ -158,7 +163,7 @@ public class BatchConsumptionServiceImpl implements BatchConsumptionService {
             consumption.setTotalCost(cost);
             consumption.setConsumptionTime(LocalDateTime.now());
             consumption.setConsumedAt(LocalDateTime.now());
-            consumption.setRecordedBy(0L);
+            consumption.setRecordedBy(recordedBy);
             consumption.setSourceType(SOURCE_AUTO_BOM);
             consumption.setNotes("BOM自动扣料(库存不足: 需" + shortfall.getRequiredQuantity()
                     + ", 可用" + shortfall.getAvailableQuantity() + ")");
