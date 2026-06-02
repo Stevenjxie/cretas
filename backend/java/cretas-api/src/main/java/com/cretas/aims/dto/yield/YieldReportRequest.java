@@ -14,7 +14,8 @@ public class YieldReportRequest {
     private String inputUnit;
     private BigDecimal outputQuantity;    // 本道产出
     private String outputUnit;
-    private Integer workMinutes;          // 选填工时
+    private Integer workMinutes;          // 本道工时(分钟), 选填
+    private Integer workerCount;          // 本道人数, 选填 (张权 G4: "用了多少人")
     private Boolean forceSubmit;          // A4 超收软告警后强制提交
     /** 跨批来源 (张权 A3), 见 ProductionReport.sourceBatchRefs 形状 */
     private List<Map<String, Object>> sourceBatchRefs;

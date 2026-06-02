@@ -42,6 +42,9 @@ const YieldStepReportScreen: React.FC = () => {
 
   const [inputQty, setInputQty] = useState('');
   const [outputQty, setOutputQty] = useState('');
+  // P1-3 (G4): 本道人数 / 工时 (选填; 张权 "用了多少人 / 一个人一个小时")
+  const [workerCount, setWorkerCount] = useState('');
+  const [workMinutes, setWorkMinutes] = useState('');
   const [lastAlert, setLastAlert] = useState<'BELOW_MIN' | 'ABOVE_MAX' | null>(null);
   // A4: 超收预检
   const [yieldLimits, setYieldLimits] = useState<YieldLimitsDTO | null>(null);
@@ -95,6 +98,8 @@ const YieldStepReportScreen: React.FC = () => {
     if (phase !== 'reporting') return;
     setInputQty(prevOutput != null ? String(prevOutput) : '');
     setOutputQty('');
+    setWorkerCount('');
+    setWorkMinutes('');
     setLastAlert(null);
     setYieldLimits(null);
     setMaterialBatchRefs([]);
@@ -184,6 +189,9 @@ const YieldStepReportScreen: React.FC = () => {
       return;
     }
     const input = parseFloat(inputQty);
+    // P1-3 (G4): 本道人数 / 工时 — 选填整数, 仅 >0 才进 req (不填则后端存 null, 向后兼容)
+    const wc = parseInt(workerCount, 10);
+    const wm = parseInt(workMinutes, 10);
     // A2b: 首道 + 有批次引用时, 将 materialBatchRefs 随报工单一起提交 (一次请求, 不再双调)
     const req: YieldReportRequest = {
       workProcessTaskId: currentTask.id,
@@ -191,6 +199,8 @@ const YieldStepReportScreen: React.FC = () => {
       inputUnit: unit,
       outputQuantity: output,
       outputUnit: outUnit,
+      ...(Number.isNaN(wc) || wc <= 0 ? {} : { workerCount: wc }),
+      ...(Number.isNaN(wm) || wm <= 0 ? {} : { workMinutes: wm }),
       ...(currentStepIndex === 0 && materialBatchRefs.length > 0
         ? {
             materialBatchRefs: materialBatchRefs.map((r: MaterialBatchRef) => ({
@@ -254,7 +264,7 @@ const YieldStepReportScreen: React.FC = () => {
     } finally {
       setSubmitting(false);
     }
-  }, [currentTask, outputQty, inputQty, unit, outUnit, batchId, currentStepIndex, totalSteps, submitWithForce, materialBatchRefs]);
+  }, [currentTask, outputQty, inputQty, unit, outUnit, batchId, currentStepIndex, totalSteps, submitWithForce, materialBatchRefs, workerCount, workMinutes]);
 
   // P1-1: 结清 (triggerComplete 决定是否同时完工入库)
   const doSettle = useCallback(async (triggerComplete: boolean) => {
@@ -493,6 +503,24 @@ const YieldStepReportScreen: React.FC = () => {
               </Text>
             </View>
           ) : null}
+
+          {/* P1-3 (G4): 本道人数 + 工时 (选填) — 张权 "用了多少人 / 一个人一个小时" (Rule 2 context: label 明确"本道") */}
+          <YieldQuantityInput
+            label="本道人数 (选填)"
+            value={workerCount}
+            onChangeText={setWorkerCount}
+            unit="人"
+            disabled={submitting}
+            testID="yield-worker-count"
+          />
+          <YieldQuantityInput
+            label="本道工时 (选填)"
+            value={workMinutes}
+            onChangeText={setWorkMinutes}
+            unit="分钟"
+            disabled={submitting}
+            testID="yield-work-minutes"
+          />
 
           {alertText ? (
             <View style={styles.alertBanner} testID="yield-alert-banner">

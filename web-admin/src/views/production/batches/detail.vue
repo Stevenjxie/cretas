@@ -393,11 +393,27 @@ function getTimelineIcon(type: string) {
                 <span v-else :class="{ 'text-warning': Number(row.carryover) > 0 }">{{ formatNum(row.carryover) }}</span>
               </template>
             </el-table-column>
+            <!-- P1-3 (G4): 逐道人数/工时 (张权 "用了多少人 / 一个人一个小时"); null 显 "—" -->
+            <el-table-column label="人数" width="80" align="center">
+              <template #default="{ row }">
+                <span v-if="row.totalWorkers == null">—</span>
+                <span v-else>{{ row.totalWorkers }} 人</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="工时" width="100" align="right">
+              <template #default="{ row }">
+                <span v-if="row.totalWorkMinutes == null">—</span>
+                <span v-else>{{ row.totalWorkMinutes }} 分钟</span>
+              </template>
+            </el-table-column>
           </el-table>
           <div class="yield-summary">
             合计: {{ formatNum(yieldData.firstStepInput) }} {{ yieldData.firstStepInputUnit || '' }}
             → {{ formatNum(yieldData.lastStepOutput) }} {{ yieldData.lastStepOutputUnit || '' }}
             &nbsp;累计出成率 {{ cumulativeDisplay }}
+            <!-- P1-3 (G4): 整批工时/人次 — 跨道相加是"人次"(同一人多道重复计), 诚实标注 -->
+            <span v-if="yieldData.totalWorkMinutes != null">&nbsp;·&nbsp;总工时 {{ yieldData.totalWorkMinutes }} 分钟</span>
+            <span v-if="yieldData.totalWorkers != null">&nbsp;·&nbsp;总人次 {{ yieldData.totalWorkers }}</span>
           </div>
         </el-card>
 

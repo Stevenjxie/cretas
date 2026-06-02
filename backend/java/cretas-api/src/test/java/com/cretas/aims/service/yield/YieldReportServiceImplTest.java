@@ -1029,4 +1029,91 @@ class YieldReportServiceImplTest {
         // checkAndAutoSettle sees status != USED_UP → returns immediately, saveAll never called
         verify(reportRepo, never()).saveAll(any());
     }
+
+    // ── P1-3 (G4): 工时/人数采集 ──────────────────────────────────────────────────
+
+    @Test
+    void submitReport_storesWorkerCountAndMinutes() {
+        // 报工带 workerCount=3, workMinutes=120 → 保存的 report total_workers=3, total_work_minutes=120
+        WorkProcessTask t = task(10L, 1, "WP-LU");
+        when(taskRepo.findByFactoryIdAndId("F006", 10L)).thenReturn(Optional.of(t));
+        when(processRepo.findById("WP-LU")).thenReturn(Optional.empty());
+        when(reportRepo.findYieldReportsByBatch(anyString(), eq(1L))).thenReturn(List.of());
+        when(reportRepo.findYieldReportsByTask("F006", 10L)).thenReturn(List.of());
+        ArgumentCaptor<ProductionReport> cap = ArgumentCaptor.forClass(ProductionReport.class);
+        when(reportRepo.save(cap.capture())).thenAnswer(i -> {
+            ProductionReport r = i.getArgument(0); r.setId(99L); return r;
+        });
+
+        YieldReportRequest req = new YieldReportRequest();
+        req.setWorkProcessTaskId(10L);
+        req.setInputQuantity(new BigDecimal("100"));
+        req.setInputUnit("kg");
+        req.setOutputQuantity(new BigDecimal("80"));
+        req.setOutputUnit("kg");
+        req.setWorkerCount(3);
+        req.setWorkMinutes(120);
+
+        svc.submitReport("F006", 1L, 5L, req);
+
+        ProductionReport saved = cap.getValue();
+        assertThat(saved.getTotalWorkers()).isEqualTo(3);
+        assertThat(saved.getTotalWorkMinutes()).isEqualTo(120);
+    }
+
+    @Test
+    void submitReport_nullWorkerCount_storesNull_backwardCompatible() {
+        // 不带 workerCount/workMinutes → total_workers/total_work_minutes 为 null (向后兼容, 不报错)
+        WorkProcessTask t = task(10L, 1, "WP-LU");
+        when(taskRepo.findByFactoryIdAndId("F006", 10L)).thenReturn(Optional.of(t));
+        when(processRepo.findById("WP-LU")).thenReturn(Optional.empty());
+        when(reportRepo.findYieldReportsByBatch(anyString(), eq(1L))).thenReturn(List.of());
+        when(reportRepo.findYieldReportsByTask("F006", 10L)).thenReturn(List.of());
+        ArgumentCaptor<ProductionReport> cap = ArgumentCaptor.forClass(ProductionReport.class);
+        when(reportRepo.save(cap.capture())).thenAnswer(i -> {
+            ProductionReport r = i.getArgument(0); r.setId(99L); return r;
+        });
+
+        YieldReportRequest req = new YieldReportRequest();
+        req.setWorkProcessTaskId(10L);
+        req.setInputQuantity(new BigDecimal("100"));
+        req.setInputUnit("kg");
+        req.setOutputQuantity(new BigDecimal("80"));
+        req.setOutputUnit("kg");
+        // workerCount / workMinutes 不设 → null
+
+        svc.submitReport("F006", 1L, 5L, req);
+
+        ProductionReport saved = cap.getValue();
+        assertThat(saved.getTotalWorkers()).isNull();
+        assertThat(saved.getTotalWorkMinutes()).isNull();
+    }
+
+    @Test
+    void getYield_aggregatesWorkMinutesAndWorkers_toBatchTotal() {
+        // 两道各带工时/人数 → batch totalWorkMinutes/totalWorkers = Σ steps
+        ProductionReport r1 = ProductionReport.builder()
+                .workProcessTaskId(80L).processOrder(1).productTypeId("PT-LU")
+                .inputQuantity(new BigDecimal("998")).inputUnit("kg")
+                .outputQuantity(new BigDecimal("935.5")).outputUnit("kg")
+                .totalWorkMinutes(120).totalWorkers(2)
+                .build();
+        ProductionReport r2 = ProductionReport.builder()
+                .workProcessTaskId(81L).processOrder(2).productTypeId("PT-LU")
+                .inputQuantity(new BigDecimal("935.5")).inputUnit("kg")
+                .outputQuantity(new BigDecimal("382")).outputUnit("kg")
+                .totalWorkMinutes(90).totalWorkers(3)
+                .build();
+        when(reportRepo.findYieldReportsByBatch("F006", 14L)).thenReturn(List.of(r1, r2));
+        when(productTypeRepo.findByIdAndFactoryId(anyString(), anyString())).thenReturn(Optional.empty());
+        when(taskRepo.findByFactoryIdAndIdIn(eq("F006"), any())).thenReturn(List.of());
+        when(processRepo.findAllById(any())).thenReturn(List.of());
+
+        BatchYieldDTO dto = svc.getYield("F006", 14L);
+
+        assertThat(dto.getTotalWorkMinutes()).isEqualTo(210);
+        assertThat(dto.getTotalWorkers()).isEqualTo(5);
+        assertThat(dto.getSteps().get(0).getTotalWorkMinutes()).isEqualTo(120);
+        assertThat(dto.getSteps().get(0).getTotalWorkers()).isEqualTo(2);
+    }
 }

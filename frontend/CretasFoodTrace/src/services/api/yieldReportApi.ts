@@ -63,6 +63,8 @@ export interface StepYieldDTO {
   unitComparable: boolean | null;   // false → 只展示量
   carryover: number | null;         // 上道产出 − 本道投入 (>0 结转)
   yieldAlert: 'BELOW_MIN' | 'ABOVE_MAX' | null;  // A7 越界软告警
+  totalWorkMinutes: number | null;  // P1-3 (G4): Σ 本道工时(分钟); 全 null → null
+  totalWorkers: number | null;      // P1-3 (G4): Σ 本道人数(人次); 全 null → null
 }
 
 export interface BatchYieldDTO {
@@ -75,6 +77,8 @@ export interface BatchYieldDTO {
   cumulativeYieldRate: number | null;  // 0.3828
   steps: StepYieldDTO[];
   complete: boolean | null;         // 每道都有 input+output 才 true
+  totalWorkMinutes: number | null;  // P1-3 (G4): Σ 所有道工时(分钟); 全 null → null
+  totalWorkers: number | null;      // P1-3 (G4): Σ 所有道人数(总人次); 全 null → null
 }
 
 // ============ 请求 DTO ============
@@ -85,7 +89,8 @@ export interface YieldReportRequest {
   inputUnit?: string;
   outputQuantity: number;           // 本道产出 (必填)
   outputUnit?: string;
-  workMinutes?: number;             // 选填工时 (后端 Integer)
+  workMinutes?: number;             // 本道工时(分钟), 选填 (后端 Integer)
+  workerCount?: number;             // P1-3 (G4): 本道人数, 选填 (后端 Integer)
   forceSubmit?: boolean;            // A4 超收软告警后强制提交
   sourceBatchRefs?: Array<Record<string, unknown>>;  // A3 跨批来源 (Phase D 默认不传)
   reporterName?: string;

@@ -95,6 +95,7 @@ public class YieldReportServiceImpl implements YieldReportService {
                 .inputQuantity(req.getInputQuantity()).inputUnit(req.getInputUnit())
                 .outputQuantity(req.getOutputQuantity()).outputUnit(req.getOutputUnit())
                 .totalWorkMinutes(req.getWorkMinutes())
+                .totalWorkers(req.getWorkerCount())   // P1-3 (G4): 本道人数
                 .sourceBatchRefs(req.getSourceBatchRefs())
                 // A2b: 领料批次引用直接挂在报工单上 (不再单独调用 recordMaterialInput)
                 .materialBatchRefs(toMaterialBatchRefMaps(req.getMaterialBatchRefs()))
