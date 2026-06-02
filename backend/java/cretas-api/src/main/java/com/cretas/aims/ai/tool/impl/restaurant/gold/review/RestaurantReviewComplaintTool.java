@@ -82,6 +82,16 @@ public class RestaurantReviewComplaintTool extends AbstractReviewGoldTool {
         if (!names.isEmpty()) {
             result.put("chartConfig", barChartConfig("商家评价申诉类型分布 (条)", names, vals, "条"));
         }
+        attachDepth(result,
+                followups(
+                        followup("差评最多门店", "差评最多的门店"),
+                        followup("差评提到哪些口味", "哪些菜品差评多"),
+                        followup("回复率情况", "评价回复率"),
+                        followup("整体评价总览", "客户评价怎么样")),
+                glossary(
+                        "差评", "星级 <= 3 星的评价，是最直接的客诉信号。",
+                        "投诉类型", "这是「商家申诉类型」——商家对不实评价发起申诉的分类，样本较小(数十条)，不等于顾客投诉。"),
+                "柱越长代表该申诉类型出现越多(注意是商家申诉非顾客投诉)；真正的客诉强度看差评数。");
         return result;
     }
 

@@ -76,6 +76,17 @@ public class RestaurantReviewDishTool extends AbstractReviewGoldTool {
         if (!names.isEmpty()) {
             result.put("chartConfig", barChartConfig("差评中高频口味/品质标签 (次)", names, vals, "次"));
         }
+        attachDepth(result,
+                followups(
+                        followup("好评高频词", "好评最多提到什么"),
+                        followup("VIP 差评点", "VIP喜欢什么口味"),
+                        followup("差评最多门店", "差评最多的门店"),
+                        followup("投诉集中点", "投诉最集中的问题")),
+                glossary(
+                        "口味/品质标签", "顾客在评价里勾选的口味描述词(如 太软了/份量太小)，不是具体菜名。",
+                        "差评", "星级 <= 3 星的评价。",
+                        "提及次数", "该标签在差评中被勾选的总次数。"),
+                "柱越长代表该口味问题在差评里出现越多，是菜品改进的优先方向(注意是口味标签非菜名)。");
         return result;
     }
 

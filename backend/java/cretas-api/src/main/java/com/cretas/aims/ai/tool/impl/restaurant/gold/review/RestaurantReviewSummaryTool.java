@@ -86,6 +86,20 @@ public class RestaurantReviewSummaryTool extends AbstractReviewGoldTool {
         if (!names.isEmpty()) {
             result.put("chartConfig", barChartConfig("各维度平均分 (5分制)", names, vals, "分"));
         }
+        attachDepth(result,
+                followups(
+                        followup("差评最多门店", "差评最多的门店"),
+                        followup("VIP 评价情况", "VIP评价情况"),
+                        followup("好评高频词", "好评最多提到什么"),
+                        followup("各平台口碑对比", "各平台评价对比")),
+                glossary(
+                        "星级分", "顾客对本次到店体验的总体评分(满分5分)。",
+                        "服务分", "顾客对服务态度/效率的评分(满分5分)。",
+                        "环境分", "顾客对就餐环境的评分(满分5分)。",
+                        "口味分", "顾客对菜品口味的评分(满分5分)。",
+                        "好评", "星级 >= 4.5 星的评价。",
+                        "差评", "星级 <= 3 星的评价。"),
+                "横轴是各维度平均分(5分制)，柱越高该维度口碑越好；对比哪个维度是短板。");
         return result;
     }
 

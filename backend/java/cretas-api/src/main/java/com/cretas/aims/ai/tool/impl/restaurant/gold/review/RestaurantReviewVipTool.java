@@ -90,6 +90,17 @@ public class RestaurantReviewVipTool extends AbstractReviewGoldTool {
         if (!names.isEmpty()) {
             result.put("chartConfig", barChartConfig("VIP vs 非VIP 平均星级 (分)", names, vals, "分"));
         }
+        attachDepth(result,
+                followups(
+                        followup("VIP 喜欢什么口味", "VIP喜欢什么口味"),
+                        followup("好评高频词", "好评最多提到什么"),
+                        followup("差评集中点", "投诉最集中的问题"),
+                        followup("整体评价总览", "客户评价怎么样")),
+                glossary(
+                        "VIP", "大众点评标记为会员/VIP 的顾客评价。",
+                        "平均星级", "该分组所有评价星级的算术平均(满分5分)。",
+                        "平均服务分", "该分组评价的服务分平均值(满分5分)。"),
+                "柱对比 VIP 与非VIP 的平均星级；若 VIP 偏低说明会员更挑剔，需加强 VIP 接待标准。");
         return result;
     }
 
