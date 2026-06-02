@@ -43,6 +43,8 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.LocalTime;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -61,6 +63,9 @@ public class YieldReportServiceImpl implements YieldReportService {
 
     private static final String YIELD = "YIELD";
     private static final BigDecimal DEFAULT_TOLERANCE = new BigDecimal("0.30");
+    private static final BigDecimal BD_60 = BigDecimal.valueOf(60);
+    /** 守恒软校验阈值: |balance| / input > 15% → 告警 (非阻塞) */
+    private static final BigDecimal BALANCE_WARN_THRESHOLD = new BigDecimal("0.15");
 
     private final ProductionReportRepository reportRepo;
     private final WorkProcessTaskRepository taskRepo;
@@ -139,10 +144,31 @@ public class YieldReportServiceImpl implements YieldReportService {
         // — A.4/A.5: 逐道成本 (人工 + 材料), 诚实 null 传播 (缺输入则该项 null, 绝不默认 0) —
         // 人工成本依赖本道 WorkProcess.standardHourlyRate; sourceWip 已在上方解析 (G7 路径)。
         WorkProcess costWp = processRepo.findById(t.getWorkProcessId()).orElse(null);
-        BigDecimal laborCost = computeLaborCost(req.getWorkerCount(), req.getWorkMinutes(),
-                costWp == null ? null : costWp.getStandardHourlyRate());
+        BigDecimal hourlyRate = costWp == null ? null : costWp.getStandardHourlyRate();
+        // 适配单元3: 优先多段工时 person-hours; 段为空退回单一 workerCount/workMinutes (back-compat)
+        List<YieldReportRequest.LaborSegment> segs = req.getLaborSegments();
+        BigDecimal laborCost = computeLaborCost(segs, req.getWorkerCount(), req.getWorkMinutes(), hourlyRate);
         BigDecimal materialCost = computeMaterialCost(req.getMaterialBatchRefs(),
                 sourceWip, req.getInputQuantity());
+
+        // 适配单元3: 多段工时时, totalWorkMinutes = Σ段时长, totalWorkers = MAX headcount (峰值, 修 M2);
+        // 段为空时退回单一 req.getWorkMinutes()/getWorkerCount() (零回归)。
+        Integer effectiveWorkMinutes = req.getWorkMinutes();
+        Integer effectiveWorkers = req.getWorkerCount();
+        boolean hasSegs = segs != null && !segs.isEmpty();
+        if (hasSegs) {
+            Integer sumMinutes = null;
+            Integer maxHead = null;
+            for (YieldReportRequest.LaborSegment s : segs) {
+                Integer dur = segmentMinutes(s);
+                if (dur != null) sumMinutes = (sumMinutes == null ? 0 : sumMinutes) + dur;
+                if (s.getHeadcount() != null) {
+                    maxHead = (maxHead == null ? s.getHeadcount() : Math.max(maxHead, s.getHeadcount()));
+                }
+            }
+            effectiveWorkMinutes = sumMinutes;
+            effectiveWorkers = maxHead;   // 峰值人数 (非 SUM) — 修 M2 inflation
+        }
 
         ProductionReport r = ProductionReport.builder()
                 .factoryId(factoryId).batchId(batchId).reportType(YIELD)
@@ -152,13 +178,19 @@ public class YieldReportServiceImpl implements YieldReportService {
                 .productTypeId(t.getProductTypeId())
                 .inputQuantity(req.getInputQuantity()).inputUnit(req.getInputUnit())
                 .outputQuantity(req.getOutputQuantity()).outputUnit(req.getOutputUnit())
-                .totalWorkMinutes(req.getWorkMinutes())
-                .totalWorkers(req.getWorkerCount())   // P1-3 (G4): 本道人数
+                .totalWorkMinutes(effectiveWorkMinutes)   // 适配单元3: 多段=Σ段时长, 单段=req.getWorkMinutes()
+                .totalWorkers(effectiveWorkers)           // 适配单元3: 多段=MAX headcount (修 M2), 单段=req.getWorkerCount()
                 .laborCost(laborCost)                 // A.4: 本道人工成本 (null=缺输入)
                 .materialCost(materialCost)           // A.5: 本道材料成本 (null=无价)
                 .sourceBatchRefs(req.getSourceBatchRefs())
                 // A2b: 领料批次引用直接挂在报工单上 (不再单独调用 recordMaterialInput)
                 .materialBatchRefs(toMaterialBatchRefMaps(req.getMaterialBatchRefs()))
+                // 适配单元3: 传统报工证据/工时段/副产物/损耗/留样 (各报工携带自身明细, 聚合时合并)
+                .photos(req.getEvidenceImages())
+                .laborSegments(toLaborSegmentMaps(segs))
+                .byproducts(toByproductMaps(req.getByproducts()))
+                .wasteQuantity(req.getWasteQuantity())
+                .sampleRetainQuantity(req.getSampleRetainQuantity())
                 // 工序批次号是任务级: 仅首条报工生成, 后续条 null (避免 uq_pr_intermediate_batch_no 冲突)
                 .intermediateBatchNo(isFirstReportForTask ? generateBatchNo(t, batchId) : null)
                 // G7: 本道领用的源 WIP 工序批次号 (向后兼容: null 走旧路径)
@@ -256,6 +288,9 @@ public class YieldReportServiceImpl implements YieldReportService {
         out.put("yieldRate", yieldRate);
         String alert = yieldAlert(t.getWorkProcessId(), yieldRate);
         if (alert != null) out.put("alert", alert);
+        // 适配单元3 (Part C): 守恒软校验 (非阻塞), 仅偏差 > 15% 且单位可比时附 balanceWarning
+        String balanceWarning = computeBalanceWarning(req);
+        if (balanceWarning != null) out.put("balanceWarning", balanceWarning);
         return out;
     }
 
@@ -603,6 +638,134 @@ public class YieldReportServiceImpl implements YieldReportService {
                 .divide(BigDecimal.valueOf(60), 6, RoundingMode.HALF_UP);
         return BigDecimal.valueOf(workerCount).multiply(hours).multiply(hourlyRate)
                 .setScale(2, RoundingMode.HALF_UP);
+    }
+
+    /**
+     * 适配单元3: 多段工时人工成本 = Σ (段时长 × 段人数) person-min / 60 × rate。
+     *
+     * <p>优先用 {@code laborSegments} (张权 多段开工/收工); 段为空则退回单一
+     * {@code workerCount}/{@code workMinutes} 旧路径 (back-compat, 零回归)。</p>
+     *
+     * <p>诚实 null 传播: rate==null → null (绝不默认 0)。段全部无效 (时长/人数缺失) 或 person-min=0
+     * → null。 final scale 2 ROUND_HALF_UP。</p>
+     */
+    private BigDecimal computeLaborCost(List<YieldReportRequest.LaborSegment> segs,
+                                        Integer workerCount, Integer workMinutes, BigDecimal rate) {
+        if (rate == null) return null;
+        if (segs != null && !segs.isEmpty()) {
+            BigDecimal personMin = BigDecimal.ZERO;
+            boolean any = false;
+            for (YieldReportRequest.LaborSegment s : segs) {
+                Integer dur = segmentMinutes(s);
+                if (dur == null || s.getHeadcount() == null) continue;
+                personMin = personMin.add(BigDecimal.valueOf((long) dur * s.getHeadcount()));
+                any = true;
+            }
+            if (!any || personMin.signum() == 0) return null;
+            return personMin.divide(BD_60, 6, RoundingMode.HALF_UP).multiply(rate)
+                    .setScale(2, RoundingMode.HALF_UP);
+        }
+        // fallback: 单一 workerCount/workMinutes 旧路径 (保持既有行为)
+        return computeLaborCost(workerCount, workMinutes, rate);
+    }
+
+    /**
+     * 适配单元3: 解析单段工时分钟数 (startTime/endTime "HH:mm" 差)。
+     *
+     * <p>end &lt; start → 跨夜 (+1440)。任一端不可解析 / 为空 → null (整段不计入)。</p>
+     */
+    private static Integer segmentMinutes(YieldReportRequest.LaborSegment s) {
+        if (s == null) return null;
+        LocalTime start = parseHHmm(s.getStartTime());
+        LocalTime end = parseHHmm(s.getEndTime());
+        if (start == null || end == null) return null;
+        int startMin = start.getHour() * 60 + start.getMinute();
+        int endMin = end.getHour() * 60 + end.getMinute();
+        int diff = endMin - startMin;
+        if (diff < 0) diff += 1440;   // 跨夜
+        return diff;
+    }
+
+    private static final DateTimeFormatter HHMM = DateTimeFormatter.ofPattern("HH:mm");
+
+    /** 解析 "HH:mm"; 不可解析 → null (不抛, 让上层视为整段无效)。 */
+    private static LocalTime parseHHmm(String v) {
+        if (v == null || v.isBlank()) return null;
+        try {
+            return LocalTime.parse(v.trim(), HHMM);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /**
+     * 适配单元3: 把 List&lt;DTO&gt; 转 List&lt;Map&gt; 用于 jsonb 序列化 (镜像 toMaterialBatchRefMaps)。
+     * null/empty → null (back-compat)。
+     */
+    private List<Map<String, Object>> toLaborSegmentMaps(List<YieldReportRequest.LaborSegment> segs) {
+        if (segs == null || segs.isEmpty()) return null;
+        return segs.stream().map(s -> {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("startTime", s.getStartTime());
+            m.put("endTime", s.getEndTime());
+            m.put("headcount", s.getHeadcount());
+            if (s.getNote() != null) m.put("note", s.getNote());
+            return m;
+        }).collect(Collectors.toList());
+    }
+
+    /**
+     * 适配单元3: 把 List&lt;Byproduct&gt; 转 List&lt;Map&gt; 用于 jsonb 序列化 (镜像 toMaterialBatchRefMaps)。
+     * null/empty → null (back-compat)。
+     */
+    private List<Map<String, Object>> toByproductMaps(List<YieldReportRequest.Byproduct> bps) {
+        if (bps == null || bps.isEmpty()) return null;
+        return bps.stream().map(b -> {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("name", b.getName());
+            m.put("quantity", b.getQuantity());
+            if (b.getUnit() != null) m.put("unit", b.getUnit());
+            return m;
+        }).collect(Collectors.toList());
+    }
+
+    /**
+     * 适配单元3 守恒软校验 (Part C): 计算物料平衡告警 (非阻塞)。
+     *
+     * <p>balance = input − output − Σ副产物 − 损耗 (null 视 0)。仅当 input!=null 且 inputUnit==outputUnit
+     * (单位可比) 且 input&gt;0 时计算。|balance|/input &gt; 15% → 返回告警串; 否则 null。
+     * 跨单位 / input null / input≤0 → null (不告警)。</p>
+     *
+     * <p>per fool-proof 4 位一体: 含具体数字 + next-action ("请核对, 系统不阻塞")。</p>
+     */
+    private String computeBalanceWarning(YieldReportRequest req) {
+        BigDecimal input = req.getInputQuantity();
+        BigDecimal output = req.getOutputQuantity();
+        if (input == null || input.compareTo(BigDecimal.ZERO) <= 0) return null;
+        // 单位可比性: inputUnit == outputUnit (跨单位无法守恒比较)
+        String inUnit = req.getInputUnit();
+        String outUnit = req.getOutputUnit();
+        if (inUnit == null || !inUnit.equals(outUnit)) return null;
+
+        BigDecimal byproductSum = BigDecimal.ZERO;
+        if (req.getByproducts() != null) {
+            for (YieldReportRequest.Byproduct b : req.getByproducts()) {
+                if (b != null && b.getQuantity() != null) byproductSum = byproductSum.add(b.getQuantity());
+            }
+        }
+        BigDecimal waste = req.getWasteQuantity() == null ? BigDecimal.ZERO : req.getWasteQuantity();
+        BigDecimal balance = input.subtract(nz(output)).subtract(byproductSum).subtract(waste);
+
+        BigDecimal deviation = balance.abs().divide(input, 6, RoundingMode.HALF_UP);
+        if (deviation.compareTo(BALANCE_WARN_THRESHOLD) <= 0) return null;
+
+        return String.format(
+                "物料平衡偏差 %.0f%% (投入 %s, 产出 %s, 副产物 %s, 损耗 %s) — 请核对, 系统不阻塞",
+                deviation.multiply(BigDecimal.valueOf(100)).setScale(0, RoundingMode.HALF_UP),
+                input.stripTrailingZeros().toPlainString(),
+                nz(output).stripTrailingZeros().toPlainString(),
+                byproductSum.stripTrailingZeros().toPlainString(),
+                waste.stripTrailingZeros().toPlainString());
     }
 
     /**

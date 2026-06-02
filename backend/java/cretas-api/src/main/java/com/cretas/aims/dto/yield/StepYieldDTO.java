@@ -6,6 +6,8 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 
 import java.math.BigDecimal;
+import java.util.List;
+import java.util.Map;
 
 /** 单工序出成率 (YieldCalculationService 派生输出) */
 @Data
@@ -38,4 +40,16 @@ public class StepYieldDTO {
     private BigDecimal materialCost;
     /** 本道总成本 = laborCost + materialCost (null-safe; 两者全 null → null) */
     private BigDecimal stepCost;
+
+    // ── 适配单元3: 传统报工证据/工时段/副产物/损耗/留样 (本道各次报工合并) ──────────────
+    /** 证据图片 URL (本道各次报工 photos 合并去重; 无则 null) */
+    private List<String> photos;
+    /** 多时段×人数工时明细 (本道各次报工 laborSegments 拼接; 无则 null) */
+    private List<Map<String, Object>> laborSegments;
+    /** 副产物明细 (本道各次报工 byproducts 拼接; 无则 null) */
+    private List<Map<String, Object>> byproducts;
+    /** Σ 本道损耗量 (null-safe; 全 null → null, 绝不默认 0) */
+    private BigDecimal wasteQuantity;
+    /** Σ 本道留样数 (null-safe; 全 null → null; 通常仅末道有) */
+    private Integer sampleRetainQuantity;
 }

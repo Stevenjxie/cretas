@@ -43,6 +43,13 @@ public class YieldCalculationServiceImpl implements YieldCalculationService {
             // A.4/A.5: null-safe 成本聚合 — 全 null 保持 null, 任一非 null 则求和 (绝不默认 0)
             BigDecimal stepLaborCost = null;
             BigDecimal stepMaterialCost = null;
+            // 适配单元3: 证据/工时段/副产物 合并 — 全空保持 null; 损耗/留样 null-safe Σ; 人数 MAX peak (修 M2)
+            List<String> stepPhotos = null;          // 合并去重 (保序)
+            List<Map<String, Object>> stepLaborSegments = null;  // 拼接 (全段明细)
+            List<Map<String, Object>> stepByproducts = null;     // 拼接
+            BigDecimal stepWaste = null;
+            Integer stepSampleRetain = null;
+            Integer stepWorkersMax = null;           // MAX headcount across reports (peak, 非 SUM)
             for (ProductionReport r : group) {
                 if (r.getInputQuantity() != null) totalInput = totalInput.add(r.getInputQuantity());
                 // A3: 跨批带入计入当前道 input
@@ -57,7 +64,10 @@ public class YieldCalculationServiceImpl implements YieldCalculationService {
                     stepMinutes = (stepMinutes == null ? 0 : stepMinutes) + r.getTotalWorkMinutes();
                 }
                 if (r.getTotalWorkers() != null) {
-                    stepWorkers = (stepWorkers == null ? 0 : stepWorkers) + r.getTotalWorkers();
+                    // 修 M2: 同一道多次报工的人数取 MAX (峰值人力), 不是 SUM (避免重复计同批人力虚高)。
+                    // submitReport 已把多段工时的本道人数收敛为 MAX headcount; 这里跨次再取 MAX。
+                    stepWorkersMax = (stepWorkersMax == null ? r.getTotalWorkers()
+                            : Math.max(stepWorkersMax, r.getTotalWorkers()));
                 }
                 if (r.getLaborCost() != null) {
                     stepLaborCost = (stepLaborCost == null ? BigDecimal.ZERO : stepLaborCost).add(r.getLaborCost());
@@ -65,7 +75,33 @@ public class YieldCalculationServiceImpl implements YieldCalculationService {
                 if (r.getMaterialCost() != null) {
                     stepMaterialCost = (stepMaterialCost == null ? BigDecimal.ZERO : stepMaterialCost).add(r.getMaterialCost());
                 }
+                // 适配单元3: 证据合并去重 (保序)
+                if (r.getPhotos() != null && !r.getPhotos().isEmpty()) {
+                    if (stepPhotos == null) stepPhotos = new ArrayList<>();
+                    for (String p : r.getPhotos()) {
+                        if (p != null && !stepPhotos.contains(p)) stepPhotos.add(p);
+                    }
+                }
+                // 工时段拼接 (全段明细, 不去重 — 每段独立)
+                if (r.getLaborSegments() != null && !r.getLaborSegments().isEmpty()) {
+                    if (stepLaborSegments == null) stepLaborSegments = new ArrayList<>();
+                    stepLaborSegments.addAll(r.getLaborSegments());
+                }
+                // 副产物拼接
+                if (r.getByproducts() != null && !r.getByproducts().isEmpty()) {
+                    if (stepByproducts == null) stepByproducts = new ArrayList<>();
+                    stepByproducts.addAll(r.getByproducts());
+                }
+                // 损耗 null-safe Σ
+                if (r.getWasteQuantity() != null) {
+                    stepWaste = (stepWaste == null ? BigDecimal.ZERO : stepWaste).add(r.getWasteQuantity());
+                }
+                // 留样 null-safe Σ (通常仅末道有)
+                if (r.getSampleRetainQuantity() != null) {
+                    stepSampleRetain = (stepSampleRetain == null ? 0 : stepSampleRetain) + r.getSampleRetainQuantity();
+                }
             }
+            stepWorkers = stepWorkersMax;
             // 本道总成本 = labor + material (两者全 null → null; 任一非 null → 该项视为 0 参与求和)
             BigDecimal stepCost = nullSafeAdd(stepLaborCost, stepMaterialCost);
             ProductionReport head = group.get(0);
@@ -93,6 +129,11 @@ public class YieldCalculationServiceImpl implements YieldCalculationService {
                     .laborCost(stepLaborCost)
                     .materialCost(stepMaterialCost)
                     .stepCost(stepCost)
+                    .photos(stepPhotos)
+                    .laborSegments(stepLaborSegments)
+                    .byproducts(stepByproducts)
+                    .wasteQuantity(stepWaste)
+                    .sampleRetainQuantity(stepSampleRetain)
                     .build());
             prevOutput = totalOutput;
         }
@@ -142,6 +183,12 @@ public class YieldCalculationServiceImpl implements YieldCalculationService {
                 .filter(Objects::nonNull).reduce(BigDecimal::add).orElse(null);
         BigDecimal batchTotalCost = nullSafeAdd(batchLaborCost, batchMaterialCost);
 
+        // 适配单元3: 整批损耗/留样 = Σ steps (全 null → null, 任一非 null 则求和; 绝不默认 0)
+        BigDecimal batchWaste = steps.stream().map(StepYieldDTO::getWasteQuantity)
+                .filter(Objects::nonNull).reduce(BigDecimal::add).orElse(null);
+        Integer batchSampleRetain = steps.stream().map(StepYieldDTO::getSampleRetainQuantity)
+                .filter(Objects::nonNull).reduce(Integer::sum).orElse(null);
+
         return BatchYieldDTO.builder()
                 .batchId(reports.get(0).getBatchId())
                 .firstStepInput(firstInput)
@@ -156,6 +203,8 @@ public class YieldCalculationServiceImpl implements YieldCalculationService {
                 .totalLaborCost(batchLaborCost)
                 .totalMaterialCost(batchMaterialCost)
                 .totalCost(batchTotalCost)
+                .totalWaste(batchWaste)
+                .totalSampleRetain(batchSampleRetain)
                 .build();
     }
 
