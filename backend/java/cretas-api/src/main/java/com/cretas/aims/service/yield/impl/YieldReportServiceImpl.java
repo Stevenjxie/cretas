@@ -4,6 +4,7 @@ import com.cretas.aims.dto.FactorySettingsDTO;
 import com.cretas.aims.dto.yield.BatchYieldDTO;
 import com.cretas.aims.dto.yield.MaterialBatchRef;
 import com.cretas.aims.dto.yield.MaterialInputRequest;
+import com.cretas.aims.dto.yield.WipRowDTO;
 import com.cretas.aims.dto.yield.YieldLimitsDTO;
 import com.cretas.aims.dto.yield.YieldReportRequest;
 import com.cretas.aims.entity.MaterialBatch;
@@ -307,6 +308,8 @@ public class YieldReportServiceImpl implements YieldReportService {
         // G7 防呆 Rule 1: 本道可领的源 WIP 余额 = Σ 上道工序产出的 AVAILABLE WIP available_quantity。
         // 首道 (processOrder<=1 或上道无 WIP 行) → null (领原料, 不受 WIP 约束)。
         BigDecimal wipAvailable = resolveSourceWipAvailable(factoryId, batchId, t.getProcessOrder());
+        // G7 Wave 4: 上道恰有一笔可领 WIP → 回显其工序批次号, RN 报工直接带 sourceWipNo。
+        String sourceWipNo = resolveSourceWipNo(factoryId, batchId, t.getProcessOrder());
 
         return YieldLimitsDTO.builder()
                 .workProcessTaskId(workProcessTaskId)
@@ -318,6 +321,7 @@ public class YieldReportServiceImpl implements YieldReportService {
                 .maxAllowed(maxAllowed)
                 .remaining(remaining)
                 .wipAvailable(wipAvailable)
+                .sourceWipNo(sourceWipNo)
                 .message(message)
                 .build();
     }
@@ -346,6 +350,30 @@ public class YieldReportServiceImpl implements YieldReportService {
         return prev.stream()
                 .map(w -> nz(w.getAvailableQuantity()))
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
+    }
+
+    /**
+     * G7 Wave 4: 解析本道 (processOrder) 应领用的源 WIP 工序批次号。
+     *
+     * <p>仅当上道 (processOrder-1) <b>恰有一笔</b> AVAILABLE 且 available_quantity &gt; 0 的 WIP 行时,
+     * 回显其 {@code intermediate_batch_no} (RN 报工 req 直接带它)。零笔或多笔 (歧义) → null:
+     * 首道领原料无源 WIP; 多笔时不自动猜, 由前端经 {@code GET /wip} 显式选择。</p>
+     */
+    private String resolveSourceWipNo(String factoryId, Long batchId, Integer processOrder) {
+        if (processOrder == null || processOrder <= 1 || batchId == null) {
+            return null;  // 首道领原料, 无源 WIP
+        }
+        int prevOrder = processOrder - 1;
+        List<SemiFinishedInventory> available = wipRepo
+                .findByFactoryIdAndBatchIdAndDeletedAtIsNull(factoryId, batchId).stream()
+                .filter(w -> w.getProcessOrder() != null && w.getProcessOrder() == prevOrder)
+                .filter(w -> SemiFinishedInventory.Status.AVAILABLE.equals(w.getStatus()))
+                .filter(w -> nz(w.getAvailableQuantity()).compareTo(BigDecimal.ZERO) > 0)
+                .collect(Collectors.toList());
+        if (available.size() != 1) {
+            return null;  // 0 笔 (无可领) 或 多笔 (歧义, 前端经 GET /wip 显式选)
+        }
+        return available.get(0).getIntermediateBatchNo();
     }
 
     private BigDecimal computeCarryover(String factoryId, Long batchId, WorkProcessTask t, BigDecimal thisInput) {
@@ -612,6 +640,55 @@ public class YieldReportServiceImpl implements YieldReportService {
         // G8 Wave 3 (C): 进行中标注 — 算在制 WIP 总量 + 批次完工判定
         enrichInProgressAnnotation(factoryId, batchId, dto);
         return dto;
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<WipRowDTO> listWip(String factoryId, Long batchId) {
+        if (batchId == null) {
+            return new ArrayList<>();
+        }
+        List<SemiFinishedInventory> wips =
+                wipRepo.findByFactoryIdAndBatchIdAndDeletedAtIsNull(factoryId, batchId);
+        if (wips.isEmpty()) {
+            return new ArrayList<>();  // 诚实空态 (前端显空态 / 隐藏 WIP 区)
+        }
+        // 批量 join task→work_process→processName 回填 (避免 N+1; 查不到留 null, 前端 fallback)
+        Set<Long> taskIds = wips.stream()
+                .map(SemiFinishedInventory::getSourceWorkProcessTaskId)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toSet());
+        Map<Long, String> processNameByTask = new HashMap<>();
+        if (!taskIds.isEmpty()) {
+            Map<Long, String> taskToProcessId = taskRepo.findByFactoryIdAndIdIn(factoryId, taskIds).stream()
+                    .filter(t -> t.getWorkProcessId() != null)
+                    .collect(Collectors.toMap(WorkProcessTask::getId, WorkProcessTask::getWorkProcessId, (a, b) -> a));
+            Map<String, String> processIdToName = processRepo.findAllById(new HashSet<>(taskToProcessId.values())).stream()
+                    .collect(Collectors.toMap(WorkProcess::getId, WorkProcess::getProcessName, (a, b) -> a));
+            taskToProcessId.forEach((tid, pid) -> {
+                String name = processIdToName.get(pid);
+                if (name != null) processNameByTask.put(tid, name);
+            });
+        }
+        return wips.stream()
+                .sorted((a, b) -> {
+                    int ao = a.getProcessOrder() == null ? Integer.MAX_VALUE : a.getProcessOrder();
+                    int bo = b.getProcessOrder() == null ? Integer.MAX_VALUE : b.getProcessOrder();
+                    return Integer.compare(ao, bo);
+                })
+                .map(w -> WipRowDTO.builder()
+                        .intermediateBatchNo(w.getIntermediateBatchNo())
+                        .sourceWorkProcessTaskId(w.getSourceWorkProcessTaskId())
+                        .processOrder(w.getProcessOrder())
+                        .processName(processNameByTask.get(w.getSourceWorkProcessTaskId()))
+                        .productTypeId(w.getProductTypeId())
+                        .producedQuantity(w.getProducedQuantity())
+                        .consumedQuantity(w.getConsumedQuantity())
+                        .availableQuantity(w.getAvailableQuantity())
+                        .unit(w.getUnit())
+                        .status(w.getStatus())
+                        .build())
+                .collect(Collectors.toList());
     }
 
     /**

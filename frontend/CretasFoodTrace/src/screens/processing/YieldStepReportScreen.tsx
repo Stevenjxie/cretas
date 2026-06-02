@@ -132,11 +132,24 @@ const YieldStepReportScreen: React.FC = () => {
   // P0-2: 本道产出单位 — 工序配了 outputUnit (如末道 kg→份/盒) 则用它, 否则沿用投入单位
   const outUnit = currentTask?.outputUnit ?? unit;
   const planned = currentTask?.plannedQuantity ?? null;
-  const inputMax = planned != null ? planned * OVER_RECEIVE_TOLERANCE : null;
+  const isFirstStep = currentStepIndex === 0;
+  // G7 Wave 4: 非首道可领的上道 WIP 余额 (来自 limits.wipAvailable); 首道为 null (领原料不受 WIP 约束)
+  const wipAvailable = yieldLimits?.wipAvailable ?? null;
+  const plannedMax = planned != null ? planned * OVER_RECEIVE_TOLERANCE : null;
+  // G7: 非首道有 WIP 余额时, 投入硬上限 = WIP 余额 (操作工领不超过可用; 防呆 Rule 1 事前阻止);
+  // 与计划超收上限取更严的 (min) 作为 input :max。首道沿用计划超收上限。
+  const inputMax =
+    wipAvailable != null
+      ? plannedMax != null
+        ? Math.min(plannedMax, wipAvailable)
+        : wipAvailable
+      : plannedMax;
   const inputMaxHint =
-    planned != null
-      ? `计划 ${planned} ${unit}, 可投上限约 ${Math.round(planned * OVER_RECEIVE_TOLERANCE)} (含 30% 超收)`
-      : null;
+    wipAvailable != null
+      ? `可领上道半成品余额 ${wipAvailable} ${unit} (本道最多领这么多)`
+      : planned != null
+        ? `计划 ${planned} ${unit}, 可投上限约 ${Math.round(planned * OVER_RECEIVE_TOLERANCE)} (含 30% 超收)`
+        : null;
   const prefillNote =
     prevOutput != null
       ? `← 上道产出 ${prevOutput} ${unit}, 请确认实际投了多少`
@@ -210,6 +223,10 @@ const YieldStepReportScreen: React.FC = () => {
             })),
           }
         : {}),
+      // G7 Wave 4: 非首道领用上道 WIP — limits 透出唯一可领 WIP 工序批次号则带回, 后端扣减其余额
+      ...(currentStepIndex > 0 && yieldLimits?.sourceWipNo
+        ? { sourceWipNo: yieldLimits.sourceWipNo }
+        : {}),
     };
     setSubmitting(true);
     try {
@@ -264,7 +281,7 @@ const YieldStepReportScreen: React.FC = () => {
     } finally {
       setSubmitting(false);
     }
-  }, [currentTask, outputQty, inputQty, unit, outUnit, batchId, currentStepIndex, totalSteps, submitWithForce, materialBatchRefs, workerCount, workMinutes]);
+  }, [currentTask, outputQty, inputQty, unit, outUnit, batchId, currentStepIndex, totalSteps, submitWithForce, materialBatchRefs, workerCount, workMinutes, yieldLimits]);
 
   // P1-1: 结清 (triggerComplete 决定是否同时完工入库)
   const doSettle = useCallback(async (triggerComplete: boolean) => {
@@ -278,10 +295,13 @@ const YieldStepReportScreen: React.FC = () => {
       if (res.data.completed) {
         const out = yieldData?.lastStepOutput;
         const unitL = yieldData?.lastStepOutputUnit ?? '';
+        // D3 Wave 4: 完工后若仍有在制 WIP 结余 → 附诚实退回提示 (后端给, 不阻塞完工)
+        const wipHint = res.data.wipRemainingHint ? `\n${res.data.wipRemainingHint}` : '';
         Alert.alert(
           '已完工入库',
           `${productType || ''} ${batchNumber}\n本次结清 ${res.data.settledCount} 条报工\n` +
-          `批次已完工, 末道产出 ${out ?? '—'}${unitL} 已入成品库, 生产计划实际产量已回填`,
+          `批次已完工, 末道产出 ${out ?? '—'}${unitL} 已入成品库, 生产计划实际产量已回填` +
+          wipHint,
           [{ text: '返回选批次', onPress: () => navigation.goBack() }],
         );
       } else if (res.data.completeError) {
@@ -375,10 +395,22 @@ const YieldStepReportScreen: React.FC = () => {
               </View>
             ) : (
               <View style={styles.doneRow}>
-                <Text style={styles.doneLabel}>累计出成率</Text>
+                <Text style={styles.doneLabel}>
+                  {yieldData?.inProgress ? '批次累计出成率 (进行中)' : '整批出成率'}
+                </Text>
                 <Text style={styles.doneValue} testID="cumulative-yield-rate">{cumPct}</Text>
               </View>
             )}
+            {/* G8 Wave 4 (C): 进行中标注 — 在制半成品未计入成品, 数字偏低且会变 (per 设计章一 ★推荐) */}
+            {yieldData?.inProgress && (yieldData?.wipInProgressQuantity ?? 0) > 0 ? (
+              <View style={styles.inProgressBanner} testID="yield-inprogress-banner">
+                <Text style={styles.inProgressText}>
+                  进行中: 含 {yieldData.wipInProgressQuantity} {yieldData.wipInProgressUnit ?? ''} 在制半成品未计入成品, 出成率完工后才锁定
+                </Text>
+              </View>
+            ) : !yieldData?.inProgress ? (
+              <Text style={styles.lockedNote} testID="yield-locked-note">已完工, 出成率已锁定为最终值</Text>
+            ) : null}
             {yieldData?.firstStepInput != null && yieldData?.lastStepOutput != null ? (
               <Text style={styles.doneFlow}>
                 {yieldData.firstStepInput}{yieldData.firstStepInputUnit ?? ''} → {yieldData.lastStepOutput}{yieldData.lastStepOutputUnit ?? ''}
@@ -449,6 +481,19 @@ const YieldStepReportScreen: React.FC = () => {
               onChange={setMaterialBatchRefs}
               disabled={submitting}
             />
+          ) : null}
+
+          {/* G7 Wave 4: 非首道领用上道半成品 — 显式显示可领余额 (防呆 Rule 1: dialog 打开即显边界) */}
+          {!isFirstStep && wipAvailable != null ? (
+            <View style={styles.wipBanner} testID="yield-wip-available">
+              <Text style={styles.wipBannerText}>
+                可领上道半成品余额 {wipAvailable} {unit}
+                {wipAvailable <= 0 ? ' (已领空, 请确认上道是否还需报工产出)' : ' (本道最多领这么多)'}
+              </Text>
+              {yieldLimits?.sourceWipNo ? (
+                <Text style={styles.wipBannerSub}>来源批次 {yieldLimits.sourceWipNo}</Text>
+              ) : null}
+            </View>
           ) : null}
 
           <YieldQuantityInput
@@ -571,6 +616,10 @@ const styles = StyleSheet.create({
   limitsHintMutedText: { fontSize: 13, color: '#909399' },
   hardcapBanner: { backgroundColor: '#FEF0F0', borderRadius: 8, padding: 12, marginTop: 4 },
   hardcapText: { fontSize: 14, color: '#F56C6C', fontWeight: '600' },
+  // G7 Wave 4: 可领上道半成品余额提示 (蓝条, 防呆 Rule 1)
+  wipBanner: { backgroundColor: '#ECF5FF', borderRadius: 8, padding: 12, marginBottom: 8 },
+  wipBannerText: { fontSize: 14, color: '#409EFF', fontWeight: '600' },
+  wipBannerSub: { fontSize: 12, color: '#909399', marginTop: 4 },
   fullBtn: { width: '100%', marginBottom: 12 },
   doneCard: { marginBottom: 20, alignItems: 'center' },
   doneTitle: { fontSize: 20, fontWeight: '700', color: '#67C23A', marginBottom: 12 },
@@ -578,6 +627,10 @@ const styles = StyleSheet.create({
   doneBatch: { fontSize: 14, color: '#909399', marginTop: 4, marginBottom: 16 },
   crossUnitBanner: { backgroundColor: '#FDF6EC', borderRadius: 8, padding: 12, marginTop: 8 },
   crossUnitText: { fontSize: 14, color: '#E6A23C', fontWeight: '500', textAlign: 'center' },
+  // G8 Wave 4 (C): 进行中标注 (橙条) / 完工锁定提示
+  inProgressBanner: { backgroundColor: '#FDF6EC', borderRadius: 8, padding: 12, marginTop: 12 },
+  inProgressText: { fontSize: 13, color: '#E6A23C', fontWeight: '500', textAlign: 'center' },
+  lockedNote: { fontSize: 13, color: '#67C23A', marginTop: 10, textAlign: 'center' },
   doneRow: { flexDirection: 'row', alignItems: 'baseline', marginTop: 8 },
   doneLabel: { fontSize: 15, color: '#606266', marginRight: 12 },
   doneValue: { fontSize: 28, fontWeight: '700', color: '#E8732E' },

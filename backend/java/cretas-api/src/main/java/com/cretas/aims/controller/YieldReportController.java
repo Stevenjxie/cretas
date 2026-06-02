@@ -5,6 +5,7 @@ import com.cretas.aims.annotation.RequirePermission;
 import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.dto.yield.BatchYieldDTO;
 import com.cretas.aims.dto.yield.MaterialInputRequest;
+import com.cretas.aims.dto.yield.WipRowDTO;
 import com.cretas.aims.dto.yield.YieldLimitsDTO;
 import com.cretas.aims.dto.yield.YieldReportRequest;
 import com.cretas.aims.exception.BusinessException;
@@ -18,6 +19,7 @@ import org.springframework.web.bind.annotation.*;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.util.List;
 import java.util.Map;
 
 @Slf4j
@@ -82,6 +84,15 @@ public class YieldReportController {
             @RequestParam Long workProcessTaskId,
             @RequestParam(required = false) BigDecimal inputQuantity) {
         return ApiResponse.success(yieldReportService.getLimits(factoryId, batchId, workProcessTaskId, inputQuantity));
+    }
+
+    @RequirePermission({"production:read"})
+    @GetMapping("/wip")
+    @Operation(summary = "半成品库存 (WIP) 列表 — 该批次每道工序中间品存量 (产出/已领/余额/状态)")
+    public ApiResponse<List<WipRowDTO>> listWip(
+            @PathVariable String factoryId,
+            @PathVariable Long batchId) {
+        return ApiResponse.success(yieldReportService.listWip(factoryId, batchId));
     }
 
     @RequirePermission({"production:read"})

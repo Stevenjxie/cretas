@@ -50,6 +50,14 @@ public class YieldLimitsDTO {
      */
     private BigDecimal wipAvailable;
 
+    /**
+     * G7 Wave 4: 本道应领用的源 WIP 工序批次号 (上道唯一 AVAILABLE WIP 的 intermediate_batch_no)。
+     * 供 RN 报工 req 直接带 {@code sourceWipNo} (无需前端再查 WIP 列表)。
+     * <p>null = 首道 (无源 WIP) / 上道无 WIP 行 / 上道有多笔 AVAILABLE WIP (歧义, 由前端经
+     * {@code GET /wip} 显式选择, 不自动猜); 非 null = 上道恰有一笔可领 WIP, 直接回显该号。</p>
+     */
+    private String sourceWipNo;
+
     /** 人性化提示文字, 直接在 dialog 中展示给操作员. */
     private String message;
 }
