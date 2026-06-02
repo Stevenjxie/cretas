@@ -456,6 +456,54 @@ async def gross_margin(request: Request, days: int = Query(30, ge=1, le=365)) ->
     }
 
 
+def _parse_opt_date(s: Optional[str], field: str) -> Optional[Any]:
+    """Parse an optional YYYY-MM-DD query param → date | None.
+
+    None / empty → None (= all-history on that bound). Bad format → None too
+    (honest empty window rather than 500); callers that need strict parsing
+    use the gold_reads._parse_range path.
+    """
+    if not s:
+        return None
+    from datetime import datetime as _dt
+    try:
+        return _dt.strptime(s, "%Y-%m-%d").date()
+    except ValueError:
+        logger.warning("[restaurant-ops] bad %s=%r, treating as open bound", field, s)
+        return None
+
+
+@router.get("/restaurant-ops/menu-quadrant")
+async def menu_quadrant_endpoint(
+    request: Request,
+    start_date: Optional[str] = Query(None, description="YYYY-MM-DD inclusive; 省略=全部历史"),
+    end_date: Optional[str] = Query(None, description="YYYY-MM-DD inclusive; 省略=全部历史"),
+) -> Dict[str, Any]:
+    """菜品四象限 (收入模式) — classify dishes by sales volume × revenue.
+
+    Returns {items:[{name, qty, revenue, quadrant}], qtyMedian, revenueMedian}.
+    Dates optional (省略 → 全部历史). Honest empty: no dishes → items=[].
+    """
+    factory_id = _get_factory_id(request)
+    if not factory_id:
+        return {"success": False, "message": "missing factory context"}
+
+    from smartbi.config import get_pg_pool
+    from smartbi.gold.queries import menu_quadrant as _menu_quadrant
+    pool = await get_pg_pool()
+    if pool is None:
+        return {"success": False, "message": "db pool unavailable"}
+
+    start = _parse_opt_date(start_date, "start_date")
+    end = _parse_opt_date(end_date, "end_date")
+    try:
+        data = await _menu_quadrant(pool, factory_id, (start, end))
+    except Exception as e:
+        logger.exception("[menu-quadrant] failed for %s", factory_id)
+        return {"success": False, "message": f"compute failed: {e}"}
+    return {"success": True, "data": data}
+
+
 @router.get("/restaurant-ops/store-margin")
 async def store_margin(request: Request, days: int = Query(30, ge=1, le=365)) -> Dict[str, Any]:
     """Per-store margin breakdown for store-comparison page."""

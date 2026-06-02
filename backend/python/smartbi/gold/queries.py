@@ -49,6 +49,22 @@ def _validate_range(start: Optional[date], end: Optional[date]) -> None:
         raise ValueError(f"start {start} > end {end}")
 
 
+def _median(values):
+    """Single-value median of a numeric iterable.
+
+    Sorts ascending and returns the lower-middle element (``sorted[(n-1)//2]``)
+    so the median is itself one of the observed values — a stable threshold for
+    quadrant / weak-store classification rather than an interpolated average.
+    Empty input → 0 (honest neutral threshold; callers treat an empty dataset
+    as "nothing above/below median").
+    """
+    vals = sorted(values)
+    n = len(vals)
+    if n == 0:
+        return 0
+    return vals[(n - 1) // 2]
+
+
 async def daily_trend(
     pool: asyncpg.Pool,
     factory_id: str,
@@ -742,4 +758,97 @@ async def finance_summary(
             }
             for r in top_stores
         ],
+    }
+
+
+async def menu_quadrant(
+    pool: asyncpg.Pool,
+    factory_id: str,
+    date_range: Tuple[Optional[date], Optional[date]],
+) -> Dict[str, Any]:
+    """菜品四象限 (收入模式) — classify each dish by sales-volume × revenue.
+
+    Reads agg_product (monthly grain) JOIN dim_product (+ LEFT JOIN
+    dim_canonical_dish for a confirmed-merge canonical name). Rolls up per
+    dish name across the touched months, keeps only dishes with positive
+    revenue (HAVING SUM(revenue) > 0), and orders by revenue DESC.
+
+    Each dish is tagged into one of four quadrants using the per-dish qty and
+    revenue medians as thresholds (== threshold counts as the high side):
+      - 明星 (star)    : qty >= qtyMedian AND revenue >= revenueMedian
+      - 金牛 (cash cow): revenue >= revenueMedian (high revenue, low volume)
+      - 潜力 (potential): qty >= qtyMedian (high volume, low revenue)
+      - 瘦狗 (dog)     : neither
+
+    Dates optional (None bound = all history on that side). agg_product.month
+    is first-of-month, so a bound is normalized to its first-of-month.
+
+    Returns: {items:[{name, qty, revenue, quadrant}], qtyMedian, revenueMedian}.
+    Honest empty: no dishes → items=[], medians=0.
+    """
+    start, end = date_range
+    _validate_range(start, end)
+    start_m = start.replace(day=1) if start is not None else None
+    end_m = end.replace(day=1) if end is not None else None
+    conds = ["a.factory_id = $1"]
+    params: list = [factory_id]
+    if start_m is not None:
+        params.append(start_m)
+        conds.append(f"a.month >= ${len(params)}")
+    if end_m is not None:
+        params.append(end_m)
+        conds.append(f"a.month <= ${len(params)}")
+    where = " AND ".join(conds)
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            f"""
+            SELECT COALESCE(cd.canonical_name, p.name) AS name,
+                   cd.canonical_name                   AS canonical_name,
+                   SUM(a.qty_sold)::numeric(18,3)      AS qty,
+                   SUM(a.revenue)::numeric(18,2)       AS revenue
+              FROM agg_product a
+              JOIN dim_product p ON p.product_id = a.product_id
+              LEFT JOIN dim_canonical_dish cd
+                     ON cd.canonical_dish_id = p.canonical_dish_id
+             WHERE {where}
+             GROUP BY COALESCE(cd.canonical_name, p.name), cd.canonical_name
+            HAVING SUM(a.revenue) > 0
+             ORDER BY SUM(a.revenue) DESC
+            """,
+            *params,
+        )
+
+    qty_vals = [float(r["qty"]) for r in rows]
+    rev_vals = [float(r["revenue"]) for r in rows]
+    qty_median = _median(qty_vals)
+    rev_median = _median(rev_vals)
+
+    items = []
+    for r in rows:
+        qty = float(r["qty"])
+        revenue = float(r["revenue"])
+        qty_high = qty >= qty_median
+        rev_high = revenue >= rev_median
+        if qty_high and rev_high:
+            quadrant = "明星"
+        elif rev_high:
+            quadrant = "金牛"
+        elif qty_high:
+            quadrant = "潜力"
+        else:
+            quadrant = "瘦狗"
+        items.append({
+            "name": r["name"],
+            "qty": qty,
+            "revenue": revenue,
+            "quadrant": quadrant,
+        })
+
+    return {
+        "factory_id": factory_id,
+        "start_month": start_m.isoformat() if start_m is not None else None,
+        "end_month": end_m.isoformat() if end_m is not None else None,
+        "items": items,
+        "qtyMedian": qty_median,
+        "revenueMedian": rev_median,
     }
