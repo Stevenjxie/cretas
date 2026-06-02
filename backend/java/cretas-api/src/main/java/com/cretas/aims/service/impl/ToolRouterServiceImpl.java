@@ -61,6 +61,13 @@ public class ToolRouterServiceImpl implements ToolRouterService {
     @Autowired
     private ObjectMapper objectMapper;
 
+    // W0 write-guard (intent-w0) — SITE E. executeToolChain → executeParallel/executeSequential →
+    // executeSingleTool calls ToolExecutor.execute() DIRECTLY, bypassing ToolDispatchService
+    // (Site B). Guard here so a dynamically-selected write tool cannot silently execute without
+    // confirm. WriteGuardService is stateless → safe to call from the executorService worker pool.
+    @Autowired
+    private com.cretas.aims.ai.tool.WriteGuardService writeGuardService;
+
     @Autowired(required = false)
     private ArenaRLTournamentService arenaRLTournamentService;
 
@@ -557,6 +564,15 @@ public class ToolRouterServiceImpl implements ToolRouterService {
         }
 
         ToolExecutor executor = executorOpt.get();
+
+        // W0 write-guard (intent-w0) — SITE E: this path calls executor.execute() directly, bypassing
+        // ToolDispatchService (Site B). Block a write tool unless the chain context carries a
+        // confirmed=true signal. Exception-based (mirrors the tool-not-found throw above); callers
+        // (executeParallel/executeSequential) catch Exception → record per-tool error + stop chain.
+        if (writeGuardService.isWriteTool(executor) && !writeGuardService.isConfirmed(context)) {
+            log.info("W0 write-guard (tool-chain): blocked write tool {} (confirmed=false)", toolName);
+            throw new IllegalStateException("W0 write-guard: tool '" + toolName + "' 需要显式确认后才能执行");
+        }
 
         // 构建 ToolCall (简化版，实际参数需要从上下文提取)
         ToolCall toolCall = ToolCall.builder()

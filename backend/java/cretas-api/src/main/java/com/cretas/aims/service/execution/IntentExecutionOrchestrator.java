@@ -99,6 +99,12 @@ public class IntentExecutionOrchestrator {
     @Autowired
     private BusinessTypeGate businessTypeGate;
 
+    // W0 write-guard (intent-w0): confidence-independent write detection. Inserted at the
+    // explicit-intent convergence point so a misroute to a write intent cannot silently execute,
+    // INCLUDING via forceExecute=true (multi-intent / conversation-continuation hard-set true).
+    @Autowired
+    private com.cretas.aims.ai.tool.WriteGuardService writeGuardService;
+
     // ===== Route counters =====
     private final AtomicLong branchToolDirect = new AtomicLong();
     private final AtomicLong branchSkill = new AtomicLong();
@@ -455,6 +461,29 @@ public class IntentExecutionOrchestrator {
 
         if (!aiIntentService.hasPermission(intent.getIntentCode(), userRole)) {
             return buildNoPermissionResponse(intent);
+        }
+
+        // W0 write-guard (intent-w0) — SITE A: the convergence point all explicit-code / forced /
+        // multi-intent / phrase-shortcut / conversation-continuation paths funnel through. The guard
+        // is deliberately NOT conditioned on request.getForceExecute() (which is hard-set true by the
+        // multi-intent and conversation-continuation paths and is exactly what must NOT skip the
+        // guard). previewOnly requests are allowed (they preview, not execute); a confirmed=true
+        // signal in the request context means the user already confirmed → allow.
+        java.util.Map<String, Object> ctx = request.getContext() != null ? request.getContext() : java.util.Map.of();
+        if (writeGuardService.isWriteIntent(intent)
+                && !Boolean.TRUE.equals(request.getPreviewOnly())
+                && !writeGuardService.isConfirmed(ctx)) {
+            log.info("W0 write-guard: blocked write intent {} (forceExecute={}, confirmed=false)",
+                    intent.getIntentCode(), request.getForceExecute());
+            return IntentExecuteResponse.builder()
+                    .intentRecognized(true)
+                    .intentCode(intent.getIntentCode())
+                    .intentName(intent.getIntentName())
+                    .status("WRITE_CONFIRM_REQUIRED")
+                    .message("「" + intent.getIntentName() + "」是写入/修改操作，执行前需要确认。")
+                    .requiresApproval(true)
+                    .executedAt(java.time.LocalDateTime.now())
+                    .build();
         }
 
         if (intent.needsApproval() && !Boolean.TRUE.equals(request.getForceExecute())) {
