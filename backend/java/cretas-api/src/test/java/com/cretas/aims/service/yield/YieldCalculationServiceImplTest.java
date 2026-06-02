@@ -167,6 +167,52 @@ class YieldCalculationServiceImplTest {
         assertThat(dto.getTotalWorkers()).isNull();
     }
 
+    // ── G8 Wave 3 (A): 整批出成率跨天/跨多次报工汇总到原料批次级 ──────────────────────
+
+    private ProductionReport rptDated(long taskId, int order, String in, String out, String date) {
+        return ProductionReport.builder()
+                .factoryId("F006").batchId(1L).reportType("YIELD")
+                .workProcessTaskId(taskId).processOrder(order)
+                .inputQuantity(new BigDecimal(in)).inputUnit("kg")
+                .outputQuantity(new BigDecimal(out)).outputUnit("kg")
+                .reportDate(java.time.LocalDate.parse(date))
+                .build();
+    }
+
+    @Test
+    void calculateSteps_crossDay_sameTask_aggregatesInputAndOutput() {
+        // A 口径核心: 同一道 (task 1) 跨两天报工 → totalInput/totalOutput 跨天求和 (分组键=task 非日期)。
+        // Day1 投 300 产 280, Day2 投 200 产 190 → totalInput=500, totalOutput=470。
+        List<StepYieldDTO> steps = svc.calculateSteps(List.of(
+                rptDated(1, 1, "300", "280", "2026-06-01"),
+                rptDated(1, 1, "200", "190", "2026-06-02")
+        ));
+        assertThat(steps).hasSize(1);
+        assertThat(steps.get(0).getTotalInput()).isEqualByComparingTo("500");
+        assertThat(steps.get(0).getTotalOutput()).isEqualByComparingTo("470");
+        // 整道出成率 = 470/500 = 0.9400
+        assertThat(steps.get(0).getYieldRate()).isEqualByComparingTo("0.9400");
+    }
+
+    @Test
+    void calculateBatchYield_crossDay_multiStep_endToEndAggregation() {
+        // A 完工口径: 首道跨两天领进 998kg, 末道跨两天产出 382.08kg → 整批 = 382.08/998 = 0.3828。
+        // 首道 (task1): Day1 投 600, Day2 投 398 → 首道总投入 998。
+        // 中道 (task2): 滚揉保水。
+        // 末道 (task3): Day1 产 200, Day2 产 182.08 → 末道总产出 382.08。
+        List<ProductionReport> reports = List.of(
+                rptDated(1, 1, "600",    "560",    "2026-06-01"),
+                rptDated(1, 1, "398",    "375.5",  "2026-06-02"),   // 首道总: 投998 产935.5
+                rptDated(2, 2, "935.5",  "1262.9", "2026-06-02"),   // 滚揉保水 1.35
+                rptDated(3, 3, "700",    "200",    "2026-06-02"),
+                rptDated(3, 3, "562.9",  "182.08", "2026-06-03")    // 末道总产出 382.08
+        );
+        BatchYieldDTO dto = svc.calculateBatchYield(reports, null);
+        assertThat(dto.getFirstStepInput()).isEqualByComparingTo("998");      // 跨天首道汇总
+        assertThat(dto.getLastStepOutput()).isEqualByComparingTo("382.08");   // 跨天末道汇总
+        assertThat(dto.getCumulativeYieldRate()).isEqualByComparingTo("0.3828");
+    }
+
     @Test
     void a3_crossBatchSourceCountsIntoCurrentStepInput() {
         // 本道投入 100 + 跨批带入 50 = 150 input; 产 120 -> yield 0.8000

@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { get } from '@/api/request';
+import { getBatchWip, type WipRowItem } from '@/api/processProduction';
 import { ElMessage } from 'element-plus';
 import { ArrowLeft, Refresh } from '@element-plus/icons-vue';
 import { formatDateTime } from '@/utils/dateFormat';
@@ -38,6 +39,8 @@ const attachmentRefreshKey = ref(0);
 // returns the consumption rows for this batch's production plan.
 const consumptions = ref<TableRow[]>([]);
 const yieldData = ref<any | null>(null);
+// G6/G7 Wave 4: 半成品库存 (WIP) — 每道工序中间品存量 (产出/已领/余额/状态)
+const wipRows = ref<WipRowItem[]>([]);
 
 onMounted(() => {
   loadData();
@@ -48,10 +51,11 @@ async function loadData() {
 
   loading.value = true;
   try {
-    const [batchRes, timelineRes, yieldRes] = await Promise.allSettled([
+    const [batchRes, timelineRes, yieldRes, wipRes] = await Promise.allSettled([
       get(`/${factoryId.value}/processing/batches/${batchId.value}`),
       get(`/${factoryId.value}/processing/batches/${batchId.value}/timeline`),
-      get(`/${factoryId.value}/production/batches/${batchId.value}/yield`)
+      get(`/${factoryId.value}/production/batches/${batchId.value}/yield`),
+      getBatchWip(factoryId.value, batchId.value)
     ]);
 
     if (batchRes.status === 'fulfilled' && batchRes.value.success) {
@@ -72,6 +76,13 @@ async function loadData() {
       yieldData.value = yieldRes.value.data;
     } else {
       yieldData.value = null;
+    }
+
+    // G6/G7 Wave 4: WIP 库存行 (无则空数组 → WIP 区 v-if 隐藏, 诚实空态)
+    if (wipRes.status === 'fulfilled' && wipRes.value.success && Array.isArray(wipRes.value.data)) {
+      wipRows.value = wipRes.value.data;
+    } else {
+      wipRows.value = [];
     }
   } catch (error) {
     // Interceptor already shows specific sticky toast for ApiError.
@@ -198,6 +209,36 @@ const cumulativeDisplay = computed(() => {
   return '—';
 });
 
+// G8 Wave 4 (C): 进行中标注 — 在制半成品未计入成品, 出成率偏低且会变 (cumulativeYieldRate 仍是 A 完工口径)
+const yieldInProgress = computed(() => yieldData.value?.inProgress === true);
+const wipInProgressText = computed(() => {
+  const yd = yieldData.value;
+  if (!yd?.inProgress) return '';
+  const q = yd.wipInProgressQuantity;
+  if (q == null || Number(q) <= 0) return '生产进行中, 出成率完工后才锁定';
+  const u = yd.wipInProgressUnit || '';
+  return `进行中: 含 ${formatNum(q)} ${u} 在制半成品未计入成品, 出成率完工后才锁定`;
+});
+
+// G6/G7 Wave 4: WIP 区 — 仅有 WIP 行时显示
+const hasWip = computed(() => wipRows.value.length > 0);
+function getWipStatusText(status: string) {
+  const map: Record<string, string> = {
+    AVAILABLE: '可领用',
+    DEPLETED: '已领空',
+    RETURNED: '已退回'
+  };
+  return map[status?.toUpperCase()] || status || '-';
+}
+function getWipStatusType(status: string) {
+  const map: Record<string, string> = {
+    AVAILABLE: 'success',
+    DEPLETED: 'info',
+    RETURNED: 'warning'
+  };
+  return map[status?.toUpperCase()] || 'info';
+}
+
 // P0-2 review fix: 末道产出单位 (份/盒) ≠ 批次原计划单位 (kg) 时, 后端已把 efficiency/unitCost
 // 置 null (跨单位无意义)。前端据 plannedUnit≠unit 显诚实提示, 而非裸 "-" (易误读为"无数据")。
 // 镜像 cumulativeDisplay 跨单位做法。同单位批次 plannedUnit 为 null → 走原 formatPercent/formatCost。
@@ -274,7 +315,9 @@ function getTimelineIcon(type: string) {
           <div class="kpi-unit">{{ displayActualUnit }}</div>
         </div>
         <div v-if="hasYield" class="kpi-card">
-          <div class="kpi-label">累计出成率</div>
+          <div class="kpi-label">
+            {{ yieldInProgress ? '累计出成率 (进行中)' : '累计出成率' }}
+          </div>
           <div class="kpi-value">{{ cumulativeDisplay }}</div>
         </div>
         <div class="kpi-card">
@@ -381,7 +424,20 @@ function getTimelineIcon(type: string) {
         <el-card v-if="hasYield" shadow="never" class="detail-card">
           <template #header>
             <span class="section-title">出成率 · 逐道报工</span>
+            <!-- G8 Wave 4 (C): 进行中标注 (展示层防呆) -->
+            <el-tag v-if="yieldInProgress" type="warning" size="small" effect="plain" style="margin-left: 12px">
+              进行中
+            </el-tag>
           </template>
+          <!-- G8 Wave 4 (C): 在制半成品提示条 — 数字偏低且会变, 完工后锁定 -->
+          <el-alert
+            v-if="yieldInProgress"
+            :title="wipInProgressText"
+            type="warning"
+            :closable="false"
+            show-icon
+            style="margin-bottom: 12px"
+          />
           <el-table :data="yieldData.steps" border stripe size="small" style="width: 100%">
             <el-table-column label="道" width="60" align="center">
               <template #default="{ row }">{{ row.processOrder }}</template>
@@ -431,6 +487,44 @@ function getTimelineIcon(type: string) {
             <span v-if="yieldData.totalWorkMinutes != null">&nbsp;·&nbsp;总工时 {{ yieldData.totalWorkMinutes }} 分钟</span>
             <span v-if="yieldData.totalWorkers != null">&nbsp;·&nbsp;总人次 {{ yieldData.totalWorkers }}</span>
           </div>
+        </el-card>
+
+        <!-- G6/G7 Wave 4: 半成品库存 (WIP) — 每道工序中间品产出/已领/余额/状态.
+             端点 YieldReportController GET /wip. 无 WIP → 整块隐藏 (诚实空态). -->
+        <el-card v-if="hasWip" shadow="never" class="detail-card">
+          <template #header>
+            <span class="section-title">半成品库存 (WIP)</span>
+            <span class="section-meta">共 {{ wipRows.length }} 道</span>
+          </template>
+          <el-table :data="wipRows" border stripe size="small" style="width: 100%">
+            <el-table-column label="道" width="60" align="center">
+              <template #default="{ row }">{{ row.processOrder ?? '-' }}</template>
+            </el-table-column>
+            <el-table-column label="工序" min-width="120" show-overflow-tooltip>
+              <template #default="{ row }">{{ row.processName || ('第' + (row.processOrder ?? '?') + '道') }}</template>
+            </el-table-column>
+            <el-table-column label="工序批次号" min-width="180" show-overflow-tooltip>
+              <template #default="{ row }">{{ row.intermediateBatchNo || '-' }}</template>
+            </el-table-column>
+            <el-table-column label="产出" width="120" align="right">
+              <template #default="{ row }">{{ formatNum(row.producedQuantity) }} {{ row.unit || '' }}</template>
+            </el-table-column>
+            <el-table-column label="已领" width="120" align="right">
+              <template #default="{ row }">{{ formatNum(row.consumedQuantity) }} {{ row.unit || '' }}</template>
+            </el-table-column>
+            <el-table-column label="余额" width="120" align="right">
+              <template #default="{ row }">
+                <span :class="{ 'text-warning': Number(row.availableQuantity) > 0 }">
+                  {{ formatNum(row.availableQuantity) }} {{ row.unit || '' }}
+                </span>
+              </template>
+            </el-table-column>
+            <el-table-column label="状态" width="100" align="center">
+              <template #default="{ row }">
+                <el-tag :type="getWipStatusType(row.status)" size="small">{{ getWipStatusText(row.status) }}</el-tag>
+              </template>
+            </el-table-column>
+          </el-table>
         </el-card>
 
         <!-- T4-D4 (issue #533): F006 customer asked for raw_material consumption visibility on

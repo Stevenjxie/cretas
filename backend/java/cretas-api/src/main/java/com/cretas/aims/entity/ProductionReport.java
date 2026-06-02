@@ -205,6 +205,11 @@ public class ProductionReport {
     @Column(name = "intermediate_batch_no", length = 64)
     private String intermediateBatchNo;
 
+    /** G7 部分领用: 本道领用的 WIP 工序批次号 (SemiFinishedInventory.intermediateBatchNo);
+     *  null 走旧路径 (向后兼容)。Wave 2 才接入扣减逻辑, 本 Wave 仅声明字段。 */
+    @Column(name = "source_wip_no", length = 64)
+    private String sourceWipNo;
+
     /** 是否已结清 (每日结清打标) */
     @Column(name = "settled")
     @Builder.Default

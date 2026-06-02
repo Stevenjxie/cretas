@@ -89,6 +89,16 @@ export function getRunOverview(factoryId: string, runId: string) {
   return get(`/${factoryId}/process-tasks/run/${runId}`);
 }
 
+// === 半成品库存 (WIP) — G6/G7 Wave 4 ===
+
+/**
+ * 某生产批次的半成品库存 (WIP) 列表 — 每道工序中间品存量 (产出/已领/余额/状态)。
+ * 端点: YieldReportController GET /production/batches/{batchId}/wip。无 WIP → 空数组。
+ */
+export function getBatchWip(factoryId: string, batchId: string | number) {
+  return get<WipRowItem[]>(`/${factoryId}/production/batches/${batchId}/wip`);
+}
+
 // === Approval ===
 
 export function getPendingApprovals(factoryId: string, params?: Record<string, unknown>) {
@@ -174,4 +184,18 @@ export interface ApprovalItem {
   approvalStatus: string;
   isSupplemental: boolean;
   createdAt: string;
+}
+
+// mirror backend dto/yield/WipRowDTO.java
+export interface WipRowItem {
+  intermediateBatchNo: string;             // 工序批次号
+  sourceWorkProcessTaskId: number | null;  // 哪道任务产出
+  processOrder: number | null;             // 第几道
+  processName: string | null;              // 工序名 (join; null fallback)
+  productTypeId: string | null;
+  producedQuantity: number | null;         // 该道总产出
+  consumedQuantity: number | null;         // 已被下道领走
+  availableQuantity: number | null;        // 余额 = produced − consumed
+  unit: string | null;
+  status: 'AVAILABLE' | 'DEPLETED' | 'RETURNED' | string;
 }

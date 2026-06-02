@@ -2,11 +2,13 @@ package com.cretas.aims.service.yield;
 
 import com.cretas.aims.dto.yield.BatchYieldDTO;
 import com.cretas.aims.dto.yield.MaterialInputRequest;
+import com.cretas.aims.dto.yield.WipRowDTO;
 import com.cretas.aims.dto.yield.YieldLimitsDTO;
 import com.cretas.aims.dto.yield.YieldReportRequest;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.util.List;
 import java.util.Map;
 
 public interface YieldReportService {
@@ -19,6 +21,13 @@ public interface YieldReportService {
 
     /** 整批出成率 (派生). */
     BatchYieldDTO getYield(String factoryId, Long batchId);
+
+    /**
+     * G6/G7 (Wave 4): 该批次半成品库存 (WIP) 只读列表 — 每道工序中间品存量。
+     * 供 RN 报工领用展示 + web-admin 批次详情 WIP 区。按 processOrder 升序。
+     * 无 WIP 行 → 空 list (诚实空态, 不臆造)。
+     */
+    List<WipRowDTO> listWip(String factoryId, Long batchId);
 
     /**
      * 预检端点 — 防呆 Rule 1: 报工 dialog 打开时前端调此端点, 取得超收边界预填 input max + 显示提示文字.

@@ -79,6 +79,26 @@ export interface BatchYieldDTO {
   complete: boolean | null;         // 每道都有 input+output 才 true
   totalWorkMinutes: number | null;  // P1-3 (G4): Σ 所有道工时(分钟); 全 null → null
   totalWorkers: number | null;      // P1-3 (G4): Σ 所有道人数(总人次); 全 null → null
+  // ── G8 Wave 4 (C): 进行中标注 (展示层防呆; cumulativeYieldRate 始终是 A 完工口径) ──
+  inProgress?: boolean | null;             // true → 旁标"进行中, 含 X 在制半成品未计入成品"
+  wipInProgressQuantity?: number | null;   // Σ AVAILABLE WIP 余额 (在制中间品总量); inProgress=false 时 0
+  wipInProgressUnit?: string | null;       // 在制半成品单位 (无在制则 null)
+  asOfYieldRate?: number | null;           // 进行中参考数 (候选 B); 当前与 A 口径同源
+}
+
+// ============ WipRowDTO (mirror backend dto/yield/WipRowDTO.java) ============
+// GET /wip — 该批次每道工序半成品库存 (产出/已领/余额/状态)
+export interface WipRowDTO {
+  intermediateBatchNo: string;             // 工序批次号 (报工领用 sourceWipNo 传回)
+  sourceWorkProcessTaskId: number | null;  // 哪道任务产出
+  processOrder: number | null;             // 第几道
+  processName: string | null;              // 工序名 (join; null fallback)
+  productTypeId: string | null;
+  producedQuantity: number | null;         // 该道总产出
+  consumedQuantity: number | null;         // 已被下道领走
+  availableQuantity: number | null;        // 余额 = produced − consumed (下道 :max)
+  unit: string | null;
+  status: 'AVAILABLE' | 'DEPLETED' | 'RETURNED' | string;
 }
 
 // ============ 请求 DTO ============
@@ -97,6 +117,12 @@ export interface YieldReportRequest {
   targetWorkerId?: number;          // 代报工 (Phase D operator 自报, 默认不传)
   /** A2b: 首道领料批次引用 (随报工单一起提交, 不再单独调用 recordMaterialInput) */
   materialBatchRefs?: { materialBatchId: string; quantity: number; unit?: string }[];
+  /**
+   * G7 Wave 4 部分领用: 本道领用哪个上道 WIP (semi_finished_inventory.intermediate_batch_no)。
+   * 非空 → 后端扣减该 WIP available_quantity (防呆 inputQuantity ≤ available);
+   * null 走旧路径 (首道领原料 / 老批次, 向后兼容)。
+   */
+  sourceWipNo?: string;
 }
 
 // mirror backend dto/yield/MaterialInputRequest.java:9-14
@@ -119,6 +145,10 @@ export interface YieldLimitsDTO {
   toleranceRate: number | null;       // e.g. 0.30 (30%)
   maxAllowed: number | null;          // targetQuantity × (1 + toleranceRate); null when no base
   remaining: number | null;           // maxAllowed − alreadyReported; null when no base
+  // ── G7 Wave 4 部分领用防呆 ──
+  wipAvailable?: number | null;       // 本道可领的上道 WIP 余额 (RN 投入 :max); null=首道; 0=领空
+  wipAvailableUnit?: string | null;   // 源 WIP 余额单位 (=上道 outputUnit); banner/:max 用它而非本道 unit; null=无源 WIP
+  sourceWipNo?: string | null;        // 上道唯一可领 WIP 工序批次号 (报工 sourceWipNo 回传); null=首道/歧义
   message: string;                    // human-readable summary
 }
 
@@ -141,6 +171,10 @@ export interface SettleDayResult {
   batchYield: BatchYieldDTO;
   completed: boolean;
   completeError?: string;   // P1-1: 完工失败原因 (结清成功但批次未完工时, 如"批次未开始生产")
+  // ── D3 Wave 4: 完工后若仍有在制 WIP 结余 → 诚实提示退回总仓 (不阻塞完工) ──
+  wipRemaining?: number;    // Σ AVAILABLE WIP 结余总量
+  wipRemainingUnit?: string | null;
+  wipRemainingHint?: string;  // "结余 X kg 半成品待退回总仓 (建调拨单退库), 完工不受影响"
 }
 
 // ============ API Client ============
@@ -227,6 +261,13 @@ class YieldReportApi {
     return apiClient.get<ApiResponse<YieldLimitsDTO>>(
       `${this.getBase(batchId, factoryId)}/yield/limits`,
       { params: { workProcessTaskId, inputQuantity } },
+    );
+  }
+
+  /** G6/G7 Wave 4: GET /wip — 该批次半成品库存 (每道工序产出/已领/余额/状态). 无 WIP → 空数组. */
+  async listWip(batchId: number, factoryId?: string): Promise<ApiResponse<WipRowDTO[]>> {
+    return apiClient.get<ApiResponse<WipRowDTO[]>>(
+      `${this.getBase(batchId, factoryId)}/wip`,
     );
   }
 }

@@ -4,12 +4,15 @@ import com.cretas.aims.dto.yield.BatchYieldDTO;
 import com.cretas.aims.dto.yield.MaterialBatchRef;
 import com.cretas.aims.dto.yield.MaterialInputRequest;
 import com.cretas.aims.dto.yield.StepYieldDTO;
+import com.cretas.aims.dto.yield.WipRowDTO;
 import com.cretas.aims.dto.yield.YieldLimitsDTO;
 import com.cretas.aims.dto.yield.YieldReportRequest;
 import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.ProductionReport;
+import com.cretas.aims.entity.SemiFinishedInventory;
 import com.cretas.aims.entity.WorkProcess;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
+import com.cretas.aims.entity.lineage.BatchLineageEdge;
 import com.cretas.aims.entity.workprocess.WorkProcessTask;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.entity.ProductType;
@@ -20,7 +23,9 @@ import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.ProductionReportRepository;
+import com.cretas.aims.repository.SemiFinishedInventoryRepository;
 import com.cretas.aims.repository.WorkProcessRepository;
+import com.cretas.aims.repository.lineage.BatchLineageEdgeRepository;
 import com.cretas.aims.repository.workprocess.WorkProcessTaskRepository;
 import com.cretas.aims.service.ProcessingService;
 import com.cretas.aims.service.yield.impl.YieldCalculationServiceImpl;
@@ -53,6 +58,8 @@ class YieldReportServiceImplTest {
     private MaterialBatchRepository materialBatchRepo;
     private ProductTypeRepository productTypeRepo;
     private ProductionBatchRepository productionBatchRepo;
+    private SemiFinishedInventoryRepository wipRepo;
+    private BatchLineageEdgeRepository lineageEdgeRepo;
     private ObjectMapper objectMapper;
     private YieldReportServiceImpl svc;
 
@@ -67,9 +74,17 @@ class YieldReportServiceImplTest {
         materialBatchRepo = mock(MaterialBatchRepository.class);
         productTypeRepo = mock(ProductTypeRepository.class);
         productionBatchRepo = mock(ProductionBatchRepository.class);
+        wipRepo = mock(SemiFinishedInventoryRepository.class);
+        lineageEdgeRepo = mock(BatchLineageEdgeRepository.class);
         objectMapper = new ObjectMapper();
+        // default: no source WIP found (向后兼容旧测试: sourceWipNo=null 不查 WIP)
+        when(wipRepo.findByIntermediateBatchNoAndDeletedAtIsNull(anyString())).thenReturn(Optional.empty());
+        when(wipRepo.findByFactoryIdAndBatchIdAndDeletedAtIsNull(anyString(), any())).thenReturn(List.of());
+        when(wipRepo.save(any(SemiFinishedInventory.class))).thenAnswer(i -> i.getArgument(0));
+        when(lineageEdgeRepo.save(any(BatchLineageEdge.class))).thenAnswer(i -> i.getArgument(0));
         svc = new YieldReportServiceImpl(reportRepo, taskRepo, processRepo, calcSvc, processingService,
-                factorySettingsRepo, materialBatchRepo, productTypeRepo, productionBatchRepo, objectMapper);
+                factorySettingsRepo, materialBatchRepo, productTypeRepo, productionBatchRepo,
+                wipRepo, lineageEdgeRepo, objectMapper);
     }
 
     private WorkProcessTask task(long id, int order, String wpId) {
@@ -971,8 +986,10 @@ class YieldReportServiceImplTest {
 
         assertThat(out.get("completed")).isEqualTo(false);
         verify(processingService, never()).completeProduction(anyString(), anyString(), any(), any(), any(), any());
-        // lastOutput=0 → 连批次都不查
-        verify(productionBatchRepo, never()).findByIdAndFactoryId(eq(12L), anyString());
+        // lastOutput=0 → 完工 path 不调 completeProduction; 未完工 → D3 余料提示不触发 (findRemainingWip 不查)
+        // (注: getYield 的 C 进行中标注会查批次, 故不再断言 findByIdAndFactoryId never — Wave 3 新契约)
+        verify(wipRepo, never()).findRemainingWip(anyString(), any());
+        assertThat(out.get("wipRemainingHint")).isNull();
     }
 
     @Test
@@ -1115,5 +1132,775 @@ class YieldReportServiceImplTest {
         assertThat(dto.getTotalWorkers()).isEqualTo(5);
         assertThat(dto.getSteps().get(0).getTotalWorkMinutes()).isEqualTo(120);
         assertThat(dto.getSteps().get(0).getTotalWorkers()).isEqualTo(2);
+    }
+
+    // ── G6/G7 Wave 2: WIP 产出 / 领用扣减 / 防呆 ─────────────────────────────────
+
+    /** 共用: setup 一道 task 报工成功保存 (mock report save 返 id). */
+    private void setupWipSubmitTask(WorkProcessTask t) {
+        when(taskRepo.findByFactoryIdAndId("F006", t.getId())).thenReturn(Optional.of(t));
+        when(processRepo.findById(anyString())).thenReturn(Optional.empty());
+        when(reportRepo.findYieldReportsByBatch(anyString(), eq(1L))).thenReturn(List.of());
+        when(reportRepo.findYieldReportsByTask("F006", t.getId())).thenReturn(List.of());
+        when(reportRepo.save(any(ProductionReport.class))).thenAnswer(i -> {
+            ProductionReport r = i.getArgument(0); r.setId(900L); return r;
+        });
+    }
+
+    @Test
+    void submitReport_producesWip_createsNewRowFromOutput() {
+        // 道1 首次报工产出 935.5kg → 建一笔新 WIP 行 (produced=available=935.5, consumed=0)
+        WorkProcessTask t = task(100L, 1, "WP-P1");
+        t.setProductTypeId("PT-LU");
+        setupWipSubmitTask(t);
+        ArgumentCaptor<SemiFinishedInventory> wipCap = ArgumentCaptor.forClass(SemiFinishedInventory.class);
+        when(wipRepo.save(wipCap.capture())).thenAnswer(i -> i.getArgument(0));
+
+        YieldReportRequest req = new YieldReportRequest();
+        req.setWorkProcessTaskId(100L);
+        req.setInputQuantity(new BigDecimal("998"));
+        req.setInputUnit("kg");
+        req.setOutputQuantity(new BigDecimal("935.5"));
+        req.setOutputUnit("kg");
+
+        svc.submitReport("F006", 1L, 5L, req);
+
+        SemiFinishedInventory wip = wipCap.getValue();
+        // 工序批次号 = {产品码}-B{批次}-S{工序序}-{taskId}
+        assertThat(wip.getIntermediateBatchNo()).isEqualTo("PT-LU-B1-S1-100");
+        assertThat(wip.getProducedQuantity()).isEqualByComparingTo("935.5");
+        assertThat(wip.getConsumedQuantity()).isEqualByComparingTo("0");
+        assertThat(wip.getAvailableQuantity()).isEqualByComparingTo("935.5");
+        assertThat(wip.getStatus()).isEqualTo(SemiFinishedInventory.Status.AVAILABLE);
+        assertThat(wip.getUnit()).isEqualTo("kg");
+        assertThat(wip.getProcessOrder()).isEqualTo(1);
+    }
+
+    @Test
+    void submitReport_producesWip_crossDayAccumulatesProducedAndAvailable() {
+        // 跨天: 同 task 第二次报工产出 200kg, 已有 WIP 行 produced=500/consumed=100/available=400
+        // → produced=700, available=700-100=600
+        WorkProcessTask t = task(101L, 1, "WP-P2");
+        t.setProductTypeId("PT-LU");
+        setupWipSubmitTask(t);
+        // 第二条报工: 已有 1 条 → isFirstReportForTask=false (intermediateBatchNo null on report,
+        // 但 WIP upsert 用 generateBatchNo 重派生稳定键命中已有行)
+        when(reportRepo.findYieldReportsByTask("F006", 101L)).thenReturn(List.of(
+                ProductionReport.builder().outputQuantity(new BigDecimal("500")).build()
+        ));
+        SemiFinishedInventory existing = SemiFinishedInventory.builder()
+                .id(7L).factoryId("F006").batchId(1L)
+                .intermediateBatchNo("PT-LU-B1-S1-101").processOrder(1)
+                .producedQuantity(new BigDecimal("500"))
+                .consumedQuantity(new BigDecimal("100"))
+                .availableQuantity(new BigDecimal("400"))
+                .unit("kg").status(SemiFinishedInventory.Status.AVAILABLE)
+                .build();
+        when(wipRepo.findByIntermediateBatchNoAndDeletedAtIsNull("PT-LU-B1-S1-101"))
+                .thenReturn(Optional.of(existing));
+        ArgumentCaptor<SemiFinishedInventory> wipCap = ArgumentCaptor.forClass(SemiFinishedInventory.class);
+        when(wipRepo.save(wipCap.capture())).thenAnswer(i -> i.getArgument(0));
+
+        YieldReportRequest req = new YieldReportRequest();
+        req.setWorkProcessTaskId(101L);
+        req.setInputQuantity(new BigDecimal("0"));
+        req.setInputUnit("kg");
+        req.setOutputQuantity(new BigDecimal("200"));
+        req.setOutputUnit("kg");
+
+        svc.submitReport("F006", 1L, 5L, req);
+
+        SemiFinishedInventory wip = wipCap.getValue();
+        assertThat(wip.getProducedQuantity()).isEqualByComparingTo("700");  // 500+200
+        assertThat(wip.getConsumedQuantity()).isEqualByComparingTo("100");  // 不变
+        assertThat(wip.getAvailableQuantity()).isEqualByComparingTo("600"); // 700-100
+    }
+
+    @Test
+    void submitReport_consumesSourceWip_decrementsAvailableAndStatus() {
+        // 道2 领用源 WIP (sourceWipNo): available 500 → 领 500 → consumed=500, available=0 → DEPLETED
+        WorkProcessTask t = task(102L, 2, "WP-P3");
+        t.setProductTypeId("PT-LU");
+        setupWipSubmitTask(t);
+        SemiFinishedInventory source = SemiFinishedInventory.builder()
+                .id(8L).factoryId("F006").batchId(1L)
+                .intermediateBatchNo("PT-LU-B1-S1-100").processOrder(1)
+                .producedQuantity(new BigDecimal("500"))
+                .consumedQuantity(new BigDecimal("0"))
+                .availableQuantity(new BigDecimal("500"))
+                .unit("kg").status(SemiFinishedInventory.Status.AVAILABLE)
+                .build();
+        when(wipRepo.findByIntermediateBatchNoAndDeletedAtIsNull("PT-LU-B1-S1-100"))
+                .thenReturn(Optional.of(source));
+        // 本道产出 WIP 行 (不同 key) 不影响断言: 让 produced upsert 找不到行新建
+        when(wipRepo.findByIntermediateBatchNoAndDeletedAtIsNull("PT-LU-B1-S2-102"))
+                .thenReturn(Optional.empty());
+
+        YieldReportRequest req = new YieldReportRequest();
+        req.setWorkProcessTaskId(102L);
+        req.setSourceWipNo("PT-LU-B1-S1-100");
+        req.setInputQuantity(new BigDecimal("500"));
+        req.setInputUnit("kg");
+        req.setOutputQuantity(new BigDecimal("480"));
+        req.setOutputUnit("kg");
+
+        svc.submitReport("F006", 1L, 5L, req);
+
+        // source WIP 被扣减并标 DEPLETED
+        assertThat(source.getConsumedQuantity()).isEqualByComparingTo("500");
+        assertThat(source.getAvailableQuantity()).isEqualByComparingTo("0");
+        assertThat(source.getStatus()).isEqualTo(SemiFinishedInventory.Status.DEPLETED);
+        // lineage 边写入 (副产物)
+        verify(lineageEdgeRepo).save(any(BatchLineageEdge.class));
+    }
+
+    @Test
+    void submitReport_consumeSourceWip_partialLeavesCarryover() {
+        // G7 部分领用: available 500 → 领 300 → consumed=300, available=200 (结余), 仍 AVAILABLE
+        WorkProcessTask t = task(103L, 2, "WP-P4");
+        t.setProductTypeId("PT-LU");
+        setupWipSubmitTask(t);
+        SemiFinishedInventory source = SemiFinishedInventory.builder()
+                .id(9L).factoryId("F006").batchId(1L)
+                .intermediateBatchNo("PT-LU-B1-S1-100").processOrder(1)
+                .producedQuantity(new BigDecimal("500"))
+                .consumedQuantity(new BigDecimal("0"))
+                .availableQuantity(new BigDecimal("500"))
+                .unit("kg").status(SemiFinishedInventory.Status.AVAILABLE)
+                .build();
+        when(wipRepo.findByIntermediateBatchNoAndDeletedAtIsNull("PT-LU-B1-S1-100"))
+                .thenReturn(Optional.of(source));
+        when(wipRepo.findByIntermediateBatchNoAndDeletedAtIsNull("PT-LU-B1-S2-103"))
+                .thenReturn(Optional.empty());
+
+        YieldReportRequest req = new YieldReportRequest();
+        req.setWorkProcessTaskId(103L);
+        req.setSourceWipNo("PT-LU-B1-S1-100");
+        req.setInputQuantity(new BigDecimal("300"));
+        req.setInputUnit("kg");
+        req.setOutputQuantity(new BigDecimal("290"));
+        req.setOutputUnit("kg");
+
+        svc.submitReport("F006", 1L, 5L, req);
+
+        assertThat(source.getConsumedQuantity()).isEqualByComparingTo("300");
+        assertThat(source.getAvailableQuantity()).isEqualByComparingTo("200");  // 结余
+        assertThat(source.getStatus()).isEqualTo(SemiFinishedInventory.Status.AVAILABLE);
+    }
+
+    @Test
+    void submitReport_overDrawSourceWip_throws409_doesNotSave() {
+        // 防呆 Rule 1: available 200, 领 250 > 200 → 409 WIP_INSUFFICIENT, 报工不落库
+        WorkProcessTask t = task(104L, 2, "WP-P5");
+        when(taskRepo.findByFactoryIdAndId("F006", 104L)).thenReturn(Optional.of(t));
+        SemiFinishedInventory source = SemiFinishedInventory.builder()
+                .id(10L).factoryId("F006").batchId(1L)
+                .intermediateBatchNo("PT-LU-B1-S1-100").processOrder(1)
+                .producedQuantity(new BigDecimal("200"))
+                .consumedQuantity(new BigDecimal("0"))
+                .availableQuantity(new BigDecimal("200"))
+                .unit("kg").status(SemiFinishedInventory.Status.AVAILABLE)
+                .build();
+        when(wipRepo.findByIntermediateBatchNoAndDeletedAtIsNull("PT-LU-B1-S1-100"))
+                .thenReturn(Optional.of(source));
+
+        YieldReportRequest req = new YieldReportRequest();
+        req.setWorkProcessTaskId(104L);
+        req.setSourceWipNo("PT-LU-B1-S1-100");
+        req.setInputQuantity(new BigDecimal("250"));
+        req.setInputUnit("kg");
+        req.setOutputQuantity(new BigDecimal("240"));
+        req.setOutputUnit("kg");
+
+        assertThatThrownBy(() -> svc.submitReport("F006", 1L, 5L, req))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(ex -> {
+                    BusinessException be = (BusinessException) ex;
+                    assertThat(be.getCode()).isEqualTo(409);
+                    assertThat(be.getErrorCode()).isEqualTo("WIP_INSUFFICIENT");
+                    assertThat(be.getActionHint()).contains("余额仅").contains("200").contains("250");
+                });
+        // 报工不落库, WIP 不被扣减
+        verify(reportRepo, never()).save(any(ProductionReport.class));
+        verify(wipRepo, never()).save(any(SemiFinishedInventory.class));
+        assertThat(source.getConsumedQuantity()).isEqualByComparingTo("0");
+    }
+
+    @Test
+    void submitReport_crossUnitSourceWip_throws409_doesNotSave() {
+        // 跨单位防呆: WIP 单位 kg, 本道 inputUnit 份 → 409 WIP_UNIT_MISMATCH, 报工不落库, WIP 不扣减
+        WorkProcessTask t = task(108L, 2, "WP-XU");
+        when(taskRepo.findByFactoryIdAndId("F006", 108L)).thenReturn(Optional.of(t));
+        SemiFinishedInventory source = SemiFinishedInventory.builder()
+                .id(11L).factoryId("F006").batchId(1L)
+                .intermediateBatchNo("PT-LU-B1-S1-100").processOrder(1)
+                .producedQuantity(new BigDecimal("500"))
+                .consumedQuantity(new BigDecimal("0"))
+                .availableQuantity(new BigDecimal("500"))
+                .unit("kg").status(SemiFinishedInventory.Status.AVAILABLE)
+                .build();
+        when(wipRepo.findByIntermediateBatchNoAndDeletedAtIsNull("PT-LU-B1-S1-100"))
+                .thenReturn(Optional.of(source));
+
+        YieldReportRequest req = new YieldReportRequest();
+        req.setWorkProcessTaskId(108L);
+        req.setSourceWipNo("PT-LU-B1-S1-100");
+        req.setInputQuantity(new BigDecimal("100"));
+        req.setInputUnit("份");   // ← 与 WIP 单位 kg 不一致
+        req.setOutputQuantity(new BigDecimal("90"));
+        req.setOutputUnit("份");
+
+        assertThatThrownBy(() -> svc.submitReport("F006", 1L, 5L, req))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(ex -> {
+                    BusinessException be = (BusinessException) ex;
+                    assertThat(be.getCode()).isEqualTo(409);
+                    assertThat(be.getErrorCode()).isEqualTo("WIP_UNIT_MISMATCH");
+                    assertThat(be.getActionHint()).contains("kg").contains("份");
+                });
+        // 报工不落库, WIP 不被扣减 (校验在保存前)
+        verify(reportRepo, never()).save(any(ProductionReport.class));
+        verify(wipRepo, never()).save(any(SemiFinishedInventory.class));
+        assertThat(source.getConsumedQuantity()).isEqualByComparingTo("0");
+    }
+
+    @Test
+    void submitReport_sameUnitSourceWip_consumesNormally_noUnitMismatch() {
+        // 同单位 (WIP kg + 本道 kg): 单位校验通过, 正常扣减 (防呆不误报)
+        WorkProcessTask t = task(109L, 2, "WP-SU");
+        t.setProductTypeId("PT-LU");
+        setupWipSubmitTask(t);
+        SemiFinishedInventory source = SemiFinishedInventory.builder()
+                .id(12L).factoryId("F006").batchId(1L)
+                .intermediateBatchNo("PT-LU-B1-S1-100").processOrder(1)
+                .producedQuantity(new BigDecimal("500"))
+                .consumedQuantity(new BigDecimal("0"))
+                .availableQuantity(new BigDecimal("500"))
+                .unit("kg").status(SemiFinishedInventory.Status.AVAILABLE)
+                .build();
+        when(wipRepo.findByIntermediateBatchNoAndDeletedAtIsNull("PT-LU-B1-S1-100"))
+                .thenReturn(Optional.of(source));
+        when(wipRepo.findByIntermediateBatchNoAndDeletedAtIsNull("PT-LU-B1-S2-109"))
+                .thenReturn(Optional.empty());
+
+        YieldReportRequest req = new YieldReportRequest();
+        req.setWorkProcessTaskId(109L);
+        req.setSourceWipNo("PT-LU-B1-S1-100");
+        req.setInputQuantity(new BigDecimal("300"));
+        req.setInputUnit("kg");   // ← 与 WIP 单位 kg 一致
+        req.setOutputQuantity(new BigDecimal("290"));
+        req.setOutputUnit("kg");
+
+        Map<String, Object> out = svc.submitReport("F006", 1L, 5L, req);
+
+        assertThat(out.get("reportId")).isEqualTo(900L);
+        assertThat(source.getConsumedQuantity()).isEqualByComparingTo("300");
+        assertThat(source.getAvailableQuantity()).isEqualByComparingTo("200");
+    }
+
+    @Test
+    void submitReport_nullInputUnitSourceWip_skipsUnitCheck_consumes() {
+        // inputUnit 为空 → 跳过单位校验 (向后兼容旧客户端不传单位), 仍按余额扣减
+        WorkProcessTask t = task(112L, 2, "WP-NU");
+        t.setProductTypeId("PT-LU");
+        setupWipSubmitTask(t);
+        SemiFinishedInventory source = SemiFinishedInventory.builder()
+                .id(13L).factoryId("F006").batchId(1L)
+                .intermediateBatchNo("PT-LU-B1-S1-100").processOrder(1)
+                .producedQuantity(new BigDecimal("500"))
+                .consumedQuantity(new BigDecimal("0"))
+                .availableQuantity(new BigDecimal("500"))
+                .unit("kg").status(SemiFinishedInventory.Status.AVAILABLE)
+                .build();
+        when(wipRepo.findByIntermediateBatchNoAndDeletedAtIsNull("PT-LU-B1-S1-100"))
+                .thenReturn(Optional.of(source));
+        when(wipRepo.findByIntermediateBatchNoAndDeletedAtIsNull("PT-LU-B1-S2-112"))
+                .thenReturn(Optional.empty());
+
+        YieldReportRequest req = new YieldReportRequest();
+        req.setWorkProcessTaskId(112L);
+        req.setSourceWipNo("PT-LU-B1-S1-100");
+        req.setInputQuantity(new BigDecimal("200"));
+        req.setInputUnit(null);   // ← 不传单位 → 跳过单位校验
+        req.setOutputQuantity(new BigDecimal("190"));
+        req.setOutputUnit("kg");
+
+        svc.submitReport("F006", 1L, 5L, req);
+
+        assertThat(source.getConsumedQuantity()).isEqualByComparingTo("200");
+        assertThat(source.getAvailableQuantity()).isEqualByComparingTo("300");
+    }
+
+    @Test
+    void submitReport_unknownSourceWipNo_throws404() {
+        WorkProcessTask t = task(105L, 2, "WP-P6");
+        when(taskRepo.findByFactoryIdAndId("F006", 105L)).thenReturn(Optional.of(t));
+        when(wipRepo.findByIntermediateBatchNoAndDeletedAtIsNull("NO-SUCH-WIP"))
+                .thenReturn(Optional.empty());
+
+        YieldReportRequest req = new YieldReportRequest();
+        req.setWorkProcessTaskId(105L);
+        req.setSourceWipNo("NO-SUCH-WIP");
+        req.setInputQuantity(new BigDecimal("10"));
+        req.setOutputQuantity(new BigDecimal("9"));
+
+        assertThatThrownBy(() -> svc.submitReport("F006", 1L, 5L, req))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(ex -> assertThat(((BusinessException) ex).getCode()).isEqualTo(404));
+        verify(reportRepo, never()).save(any(ProductionReport.class));
+    }
+
+    @Test
+    void submitReport_nullSourceWipNo_backwardCompatible_noWipLookupForConsume() {
+        // sourceWipNo=null → 不查源 WIP (走旧路径), 仍产出进 WIP (G6 对所有报工生效)
+        WorkProcessTask t = task(106L, 1, "WP-P7");
+        t.setProductTypeId("PT-LU");
+        setupWipSubmitTask(t);
+        ArgumentCaptor<SemiFinishedInventory> wipCap = ArgumentCaptor.forClass(SemiFinishedInventory.class);
+        when(wipRepo.save(wipCap.capture())).thenAnswer(i -> i.getArgument(0));
+
+        YieldReportRequest req = new YieldReportRequest();
+        req.setWorkProcessTaskId(106L);
+        req.setInputQuantity(new BigDecimal("100"));
+        req.setInputUnit("kg");
+        req.setOutputQuantity(new BigDecimal("80"));
+        req.setOutputUnit("kg");
+        // sourceWipNo 不设 → null
+
+        Map<String, Object> out = svc.submitReport("F006", 1L, 5L, req);
+
+        assertThat(out.get("reportId")).isEqualTo(900L);
+        verify(reportRepo).save(any(ProductionReport.class));  // 旧路径正常保存
+        // 仅产出 WIP 被写 (1 次 save), 无源 WIP 扣减, 无 lineage 边
+        verify(wipRepo, times(1)).save(any(SemiFinishedInventory.class));
+        verify(lineageEdgeRepo, never()).save(any(BatchLineageEdge.class));
+        assertThat(wipCap.getValue().getIntermediateBatchNo()).isEqualTo("PT-LU-B1-S1-106");
+    }
+
+    @Test
+    void submitReport_zeroOutput_doesNotCreateWip() {
+        // 产出为 0 (例如只领料不产出的中间记录) → 不建 WIP 行
+        WorkProcessTask t = task(107L, 1, "WP-P8");
+        t.setProductTypeId("PT-LU");
+        setupWipSubmitTask(t);
+
+        YieldReportRequest req = new YieldReportRequest();
+        req.setWorkProcessTaskId(107L);
+        req.setInputQuantity(new BigDecimal("100"));
+        req.setInputUnit("kg");
+        req.setOutputQuantity(BigDecimal.ZERO);
+        req.setOutputUnit("kg");
+
+        svc.submitReport("F006", 1L, 5L, req);
+
+        verify(wipRepo, never()).save(any(SemiFinishedInventory.class));
+    }
+
+    // ── G7 getLimits 返回 wipAvailable ────────────────────────────────────────────
+
+    @Test
+    void getLimits_secondProcess_returnsWipAvailableFromPrevProcess() {
+        // 道2 getLimits: 上道 (processOrder=1) 有 WIP available=400 → wipAvailable=400
+        WorkProcessTask t = task(110L, 2, "WP-L1");
+        when(taskRepo.findByFactoryIdAndId("F006", 110L)).thenReturn(Optional.of(t));
+        WorkProcess wp = WorkProcess.builder().id("WP-L1").factoryId("F006")
+                .unit("kg").standardYieldMax(new BigDecimal("0.9000")).build();
+        when(processRepo.findById("WP-L1")).thenReturn(Optional.of(wp));
+        when(factorySettingsRepo.findProductionSettingsByFactoryId("F006")).thenReturn(null);
+        when(reportRepo.findYieldReportsByTask("F006", 110L)).thenReturn(List.of());
+        // 上道 WIP (processOrder=1) available=400; 本道 (processOrder=2) WIP 忽略
+        SemiFinishedInventory prevWip = SemiFinishedInventory.builder()
+                .processOrder(1).availableQuantity(new BigDecimal("400"))
+                .status(SemiFinishedInventory.Status.AVAILABLE).build();
+        SemiFinishedInventory thisWip = SemiFinishedInventory.builder()
+                .processOrder(2).availableQuantity(new BigDecimal("999"))
+                .status(SemiFinishedInventory.Status.AVAILABLE).build();
+        when(wipRepo.findByFactoryIdAndBatchIdAndDeletedAtIsNull("F006", 1L))
+                .thenReturn(List.of(prevWip, thisWip));
+
+        YieldLimitsDTO dto = svc.getLimits("F006", 1L, 110L, new BigDecimal("400"));
+
+        assertThat(dto.getWipAvailable()).isEqualByComparingTo("400");
+    }
+
+    @Test
+    void getLimits_firstProcess_wipAvailableNull() {
+        // 首道 (processOrder=1): 无上道 WIP → wipAvailable=null (领原料不受约束)
+        WorkProcessTask t = task(111L, 1, "WP-L2");
+        when(taskRepo.findByFactoryIdAndId("F006", 111L)).thenReturn(Optional.of(t));
+        WorkProcess wp = WorkProcess.builder().id("WP-L2").factoryId("F006")
+                .unit("kg").standardYieldMax(new BigDecimal("0.9000")).build();
+        when(processRepo.findById("WP-L2")).thenReturn(Optional.of(wp));
+        when(factorySettingsRepo.findProductionSettingsByFactoryId("F006")).thenReturn(null);
+        when(reportRepo.findYieldReportsByTask("F006", 111L)).thenReturn(List.of());
+
+        YieldLimitsDTO dto = svc.getLimits("F006", 1L, 111L, new BigDecimal("100"));
+
+        assertThat(dto.getWipAvailable()).isNull();
+    }
+
+    @Test
+    void getLimits_secondProcess_exposesSourceWipUnit() {
+        // 道2 getLimits: 上道 WIP 单位 份 → wipAvailableUnit=份 (RN banner/:max 用源 WIP 真实单位)
+        WorkProcessTask t = task(113L, 2, "WP-L3");
+        when(taskRepo.findByFactoryIdAndId("F006", 113L)).thenReturn(Optional.of(t));
+        WorkProcess wp = WorkProcess.builder().id("WP-L3").factoryId("F006")
+                .unit("kg").standardYieldMax(new BigDecimal("0.9000")).build();
+        when(processRepo.findById("WP-L3")).thenReturn(Optional.of(wp));
+        when(factorySettingsRepo.findProductionSettingsByFactoryId("F006")).thenReturn(null);
+        when(reportRepo.findYieldReportsByTask("F006", 113L)).thenReturn(List.of());
+        // 上道 WIP 单位 份 (与本道 WorkProcess.unit=kg 不同) → wipAvailableUnit 取源 WIP 的 份
+        SemiFinishedInventory prevWip = SemiFinishedInventory.builder()
+                .processOrder(1).availableQuantity(new BigDecimal("300")).unit("份")
+                .status(SemiFinishedInventory.Status.AVAILABLE).build();
+        when(wipRepo.findByFactoryIdAndBatchIdAndDeletedAtIsNull("F006", 1L))
+                .thenReturn(List.of(prevWip));
+
+        YieldLimitsDTO dto = svc.getLimits("F006", 1L, 113L, new BigDecimal("300"));
+
+        assertThat(dto.getWipAvailable()).isEqualByComparingTo("300");
+        assertThat(dto.getWipAvailableUnit()).isEqualTo("份");  // 源 WIP 单位, 非本道 unit (kg)
+    }
+
+    @Test
+    void getLimits_firstProcess_wipAvailableUnitNull() {
+        // 首道: 无源 WIP → wipAvailableUnit=null
+        WorkProcessTask t = task(114L, 1, "WP-L4");
+        when(taskRepo.findByFactoryIdAndId("F006", 114L)).thenReturn(Optional.of(t));
+        WorkProcess wp = WorkProcess.builder().id("WP-L4").factoryId("F006")
+                .unit("kg").standardYieldMax(new BigDecimal("0.9000")).build();
+        when(processRepo.findById("WP-L4")).thenReturn(Optional.of(wp));
+        when(factorySettingsRepo.findProductionSettingsByFactoryId("F006")).thenReturn(null);
+        when(reportRepo.findYieldReportsByTask("F006", 114L)).thenReturn(List.of());
+
+        YieldLimitsDTO dto = svc.getLimits("F006", 1L, 114L, new BigDecimal("100"));
+
+        assertThat(dto.getWipAvailableUnit()).isNull();
+    }
+
+    // ── G8 Wave 3 (C): getYield 进行中标注 (在制 WIP + 完工判定) ──────────────────────
+
+    /** 共用: getYield 基础 mock (单道报工, 无 enrich 干扰). */
+    private void setupGetYieldBase(Long batchId, ProductionReport... reports) {
+        when(reportRepo.findYieldReportsByBatch("F006", batchId)).thenReturn(List.of(reports));
+        when(productTypeRepo.findByIdAndFactoryId(anyString(), anyString())).thenReturn(Optional.empty());
+        when(taskRepo.findByFactoryIdAndIdIn(eq("F006"), any())).thenReturn(List.of());
+        when(processRepo.findAllById(any())).thenReturn(List.of());
+    }
+
+    @Test
+    void getYield_withWipPending_marksInProgress_andSumsWipQuantity() {
+        // 批次 IN_PROGRESS + 有在制 WIP 余额 (AVAILABLE 200 + 50) → inProgress=true, wipInProgressQuantity=250
+        ProductionReport r1 = ProductionReport.builder()
+                .workProcessTaskId(120L).processOrder(1).productTypeId("PT-LU")
+                .inputQuantity(new BigDecimal("998")).inputUnit("kg")
+                .outputQuantity(new BigDecimal("935.5")).outputUnit("kg")
+                .build();
+        setupGetYieldBase(20L, r1);
+        // 批次进行中
+        ProductionBatch batch = new ProductionBatch();
+        batch.setStatus(ProductionBatchStatus.IN_PROGRESS);
+        when(productionBatchRepo.findByIdAndFactoryId(20L, "F006")).thenReturn(Optional.of(batch));
+        // 在制 WIP: 两笔 AVAILABLE (200 + 50) + 一笔 DEPLETED (不计) + 一笔 RETURNED (不计)
+        SemiFinishedInventory w1 = SemiFinishedInventory.builder()
+                .availableQuantity(new BigDecimal("200")).unit("kg")
+                .status(SemiFinishedInventory.Status.AVAILABLE).build();
+        SemiFinishedInventory w2 = SemiFinishedInventory.builder()
+                .availableQuantity(new BigDecimal("50")).unit("kg")
+                .status(SemiFinishedInventory.Status.AVAILABLE).build();
+        SemiFinishedInventory w3 = SemiFinishedInventory.builder()
+                .availableQuantity(BigDecimal.ZERO).unit("kg")
+                .status(SemiFinishedInventory.Status.DEPLETED).build();
+        SemiFinishedInventory w4 = SemiFinishedInventory.builder()
+                .availableQuantity(new BigDecimal("99")).unit("kg")
+                .status(SemiFinishedInventory.Status.RETURNED).build();
+        when(wipRepo.findByFactoryIdAndBatchIdAndDeletedAtIsNull("F006", 20L))
+                .thenReturn(List.of(w1, w2, w3, w4));
+
+        BatchYieldDTO dto = svc.getYield("F006", 20L);
+
+        assertThat(dto.getInProgress()).isTrue();
+        assertThat(dto.getWipInProgressQuantity()).isEqualByComparingTo("250");  // 200+50 (DEPLETED/RETURNED 不计)
+        assertThat(dto.getWipInProgressUnit()).isEqualTo("kg");
+        // cumulativeYieldRate 仍是 A 口径 (未被标注改写); asOf 同源
+        assertThat(dto.getAsOfYieldRate()).isEqualByComparingTo(dto.getCumulativeYieldRate());
+    }
+
+    @Test
+    void getYield_batchCompleted_noWip_marksNotInProgress_wipZero() {
+        // 批次 COMPLETED + 无在制 WIP → inProgress=false, wipInProgressQuantity=0, 数字锁定
+        ProductionReport r1 = ProductionReport.builder()
+                .workProcessTaskId(121L).processOrder(1).productTypeId("PT-LU")
+                .inputQuantity(new BigDecimal("998")).inputUnit("kg")
+                .outputQuantity(new BigDecimal("382")).outputUnit("kg")
+                .build();
+        setupGetYieldBase(21L, r1);
+        ProductionBatch batch = new ProductionBatch();
+        batch.setStatus(ProductionBatchStatus.COMPLETED);
+        when(productionBatchRepo.findByIdAndFactoryId(21L, "F006")).thenReturn(Optional.of(batch));
+        // 全部 WIP 已领空 (DEPLETED) → 无在制余额
+        SemiFinishedInventory depleted = SemiFinishedInventory.builder()
+                .availableQuantity(BigDecimal.ZERO).unit("kg")
+                .status(SemiFinishedInventory.Status.DEPLETED).build();
+        when(wipRepo.findByFactoryIdAndBatchIdAndDeletedAtIsNull("F006", 21L))
+                .thenReturn(List.of(depleted));
+
+        BatchYieldDTO dto = svc.getYield("F006", 21L);
+
+        assertThat(dto.getInProgress()).isFalse();
+        assertThat(dto.getWipInProgressQuantity()).isEqualByComparingTo("0");
+        assertThat(dto.getWipInProgressUnit()).isNull();
+    }
+
+    @Test
+    void getYield_batchCompletedButWipRemaining_stillInProgress() {
+        // 边缘: 批次 COMPLETED 但仍有在制 WIP 结余 → inProgress=true (有未消耗中间品 = 还没真正全部转成品)
+        ProductionReport r1 = ProductionReport.builder()
+                .workProcessTaskId(122L).processOrder(1).productTypeId("PT-LU")
+                .inputQuantity(new BigDecimal("998")).inputUnit("kg")
+                .outputQuantity(new BigDecimal("382")).outputUnit("kg")
+                .build();
+        setupGetYieldBase(22L, r1);
+        ProductionBatch batch = new ProductionBatch();
+        batch.setStatus(ProductionBatchStatus.COMPLETED);
+        when(productionBatchRepo.findByIdAndFactoryId(22L, "F006")).thenReturn(Optional.of(batch));
+        SemiFinishedInventory remaining = SemiFinishedInventory.builder()
+                .availableQuantity(new BigDecimal("30")).unit("kg")
+                .status(SemiFinishedInventory.Status.AVAILABLE).build();
+        when(wipRepo.findByFactoryIdAndBatchIdAndDeletedAtIsNull("F006", 22L))
+                .thenReturn(List.of(remaining));
+
+        BatchYieldDTO dto = svc.getYield("F006", 22L);
+
+        assertThat(dto.getInProgress()).isTrue();
+        assertThat(dto.getWipInProgressQuantity()).isEqualByComparingTo("30");
+        assertThat(dto.getWipInProgressUnit()).isEqualTo("kg");
+    }
+
+    @Test
+    void getYield_inProgressBatch_noWipRows_marksInProgress_wipZero() {
+        // 批次 IN_PROGRESS 但还没产出 WIP 行 → inProgress=true (未完工), wipInProgressQuantity=0
+        ProductionReport r1 = ProductionReport.builder()
+                .workProcessTaskId(123L).processOrder(1).productTypeId("PT-LU")
+                .inputQuantity(new BigDecimal("100")).inputUnit("kg")
+                .outputQuantity(new BigDecimal("80")).outputUnit("kg")
+                .build();
+        setupGetYieldBase(23L, r1);
+        ProductionBatch batch = new ProductionBatch();
+        batch.setStatus(ProductionBatchStatus.IN_PROGRESS);
+        when(productionBatchRepo.findByIdAndFactoryId(23L, "F006")).thenReturn(Optional.of(batch));
+        when(wipRepo.findByFactoryIdAndBatchIdAndDeletedAtIsNull("F006", 23L)).thenReturn(List.of());
+
+        BatchYieldDTO dto = svc.getYield("F006", 23L);
+
+        assertThat(dto.getInProgress()).isTrue();
+        assertThat(dto.getWipInProgressQuantity()).isEqualByComparingTo("0");
+        assertThat(dto.getWipInProgressUnit()).isNull();
+    }
+
+    // ── G8 Wave 3 (D3): settleDay 完工时余料退回提示 ──────────────────────────────────
+
+    @Test
+    void settleDay_complete_withWipRemaining_addsWipRemainingHint() {
+        // 完工成功 + 批次仍有 WIP 结余 (40+10=50kg) → out 含 wipRemainingHint, 不阻塞完工
+        ProductionReport r1 = ProductionReport.builder()
+                .workProcessTaskId(130L).processOrder(1).productTypeId("PT-LU")
+                .inputQuantity(new BigDecimal("998")).inputUnit("kg")
+                .outputQuantity(new BigDecimal("382")).outputUnit("kg")
+                .build();
+        when(reportRepo.findUnsettledYieldReports(eq("F006"), eq(30L), any())).thenReturn(List.of());
+        when(reportRepo.findYieldReportsByBatch("F006", 30L)).thenReturn(List.of(r1));
+        when(productTypeRepo.findByIdAndFactoryId(anyString(), anyString())).thenReturn(Optional.empty());
+        when(taskRepo.findByFactoryIdAndIdIn(eq("F006"), any())).thenReturn(List.of());
+        when(processRepo.findAllById(any())).thenReturn(List.of());
+        ProductionBatch batch = new ProductionBatch();
+        batch.setStatus(ProductionBatchStatus.IN_PROGRESS);
+        when(productionBatchRepo.findByIdAndFactoryId(30L, "F006")).thenReturn(Optional.of(batch));
+        when(processingService.completeProduction(anyString(), anyString(), any(), any(), any(), any()))
+                .thenReturn(new ProductionBatch());
+        // D3: findRemainingWip 返两笔结余 (40 + 10)
+        SemiFinishedInventory w1 = SemiFinishedInventory.builder()
+                .availableQuantity(new BigDecimal("40")).unit("kg")
+                .status(SemiFinishedInventory.Status.AVAILABLE).build();
+        SemiFinishedInventory w2 = SemiFinishedInventory.builder()
+                .availableQuantity(new BigDecimal("10")).unit("kg")
+                .status(SemiFinishedInventory.Status.AVAILABLE).build();
+        when(wipRepo.findRemainingWip("F006", 30L)).thenReturn(List.of(w1, w2));
+
+        Map<String, Object> out = svc.settleDay("F006", 30L, 5L, null, true);
+
+        assertThat(out.get("completed")).isEqualTo(true);
+        assertThat(out.get("wipRemaining")).isEqualTo(new BigDecimal("50"));
+        assertThat(out.get("wipRemainingUnit")).isEqualTo("kg");
+        assertThat(out.get("wipRemainingHint")).asString()
+                .contains("50").contains("半成品").contains("退回总仓");
+    }
+
+    @Test
+    void settleDay_complete_noWipRemaining_noHint() {
+        // 完工成功 + 无 WIP 结余 → out 不含 wipRemainingHint
+        ProductionReport r1 = ProductionReport.builder()
+                .workProcessTaskId(131L).processOrder(1).productTypeId("PT-LU")
+                .inputQuantity(new BigDecimal("998")).inputUnit("kg")
+                .outputQuantity(new BigDecimal("382")).outputUnit("kg")
+                .build();
+        when(reportRepo.findUnsettledYieldReports(eq("F006"), eq(31L), any())).thenReturn(List.of());
+        when(reportRepo.findYieldReportsByBatch("F006", 31L)).thenReturn(List.of(r1));
+        when(productTypeRepo.findByIdAndFactoryId(anyString(), anyString())).thenReturn(Optional.empty());
+        when(taskRepo.findByFactoryIdAndIdIn(eq("F006"), any())).thenReturn(List.of());
+        when(processRepo.findAllById(any())).thenReturn(List.of());
+        ProductionBatch batch = new ProductionBatch();
+        batch.setStatus(ProductionBatchStatus.IN_PROGRESS);
+        when(productionBatchRepo.findByIdAndFactoryId(31L, "F006")).thenReturn(Optional.of(batch));
+        when(processingService.completeProduction(anyString(), anyString(), any(), any(), any(), any()))
+                .thenReturn(new ProductionBatch());
+        when(wipRepo.findRemainingWip("F006", 31L)).thenReturn(List.of());
+
+        Map<String, Object> out = svc.settleDay("F006", 31L, 5L, null, true);
+
+        assertThat(out.get("completed")).isEqualTo(true);
+        assertThat(out.get("wipRemainingHint")).isNull();
+        assertThat(out.get("wipRemaining")).isNull();
+    }
+
+    @Test
+    void settleDay_notCompleted_noWipRemainingHint_evenIfWipExists() {
+        // 未完工 (triggerComplete=false) → 即便有 WIP 结余也不查 findRemainingWip / 不加提示
+        ProductionReport r1 = ProductionReport.builder()
+                .workProcessTaskId(132L).processOrder(1).productTypeId("PT-LU")
+                .inputQuantity(new BigDecimal("100")).inputUnit("kg")
+                .outputQuantity(new BigDecimal("80")).outputUnit("kg")
+                .build();
+        when(reportRepo.findUnsettledYieldReports(eq("F006"), eq(32L), any())).thenReturn(List.of());
+        when(reportRepo.findYieldReportsByBatch("F006", 32L)).thenReturn(List.of(r1));
+        when(productTypeRepo.findByIdAndFactoryId(anyString(), anyString())).thenReturn(Optional.empty());
+        when(taskRepo.findByFactoryIdAndIdIn(eq("F006"), any())).thenReturn(List.of());
+        when(processRepo.findAllById(any())).thenReturn(List.of());
+        // 进行中标注会查 batch + wip (getYield 内), 但 D3 hint 不该触发
+        when(productionBatchRepo.findByIdAndFactoryId(32L, "F006")).thenReturn(Optional.empty());
+        when(wipRepo.findByFactoryIdAndBatchIdAndDeletedAtIsNull("F006", 32L)).thenReturn(List.of());
+
+        Map<String, Object> out = svc.settleDay("F006", 32L, 5L, null, false);
+
+        assertThat(out.get("completed")).isEqualTo(false);
+        assertThat(out.get("wipRemainingHint")).isNull();
+        // D3 findRemainingWip 仅在 completed 时调
+        verify(wipRepo, never()).findRemainingWip(anyString(), any());
+    }
+
+    // ── G7 Wave 4: getLimits 返回 sourceWipNo (上道唯一可领 WIP 工序批次号) ──────────────
+
+    @Test
+    void getLimits_secondProcess_singleAvailablePrevWip_returnsSourceWipNo() {
+        // 道2 getLimits: 上道恰有一笔 AVAILABLE WIP (available>0) → sourceWipNo = 其 intermediate_batch_no
+        WorkProcessTask t = task(140L, 2, "WP-W1");
+        when(taskRepo.findByFactoryIdAndId("F006", 140L)).thenReturn(Optional.of(t));
+        WorkProcess wp = WorkProcess.builder().id("WP-W1").factoryId("F006")
+                .unit("kg").standardYieldMax(new BigDecimal("0.9000")).build();
+        when(processRepo.findById("WP-W1")).thenReturn(Optional.of(wp));
+        when(factorySettingsRepo.findProductionSettingsByFactoryId("F006")).thenReturn(null);
+        when(reportRepo.findYieldReportsByTask("F006", 140L)).thenReturn(List.of());
+        SemiFinishedInventory prevWip = SemiFinishedInventory.builder()
+                .intermediateBatchNo("PT-LU-B1-S1-100").processOrder(1)
+                .availableQuantity(new BigDecimal("400"))
+                .status(SemiFinishedInventory.Status.AVAILABLE).build();
+        when(wipRepo.findByFactoryIdAndBatchIdAndDeletedAtIsNull("F006", 1L))
+                .thenReturn(List.of(prevWip));
+
+        YieldLimitsDTO dto = svc.getLimits("F006", 1L, 140L, new BigDecimal("400"));
+
+        assertThat(dto.getSourceWipNo()).isEqualTo("PT-LU-B1-S1-100");
+        assertThat(dto.getWipAvailable()).isEqualByComparingTo("400");
+    }
+
+    @Test
+    void getLimits_firstProcess_sourceWipNoNull() {
+        // 首道: 无源 WIP → sourceWipNo=null
+        WorkProcessTask t = task(141L, 1, "WP-W2");
+        when(taskRepo.findByFactoryIdAndId("F006", 141L)).thenReturn(Optional.of(t));
+        WorkProcess wp = WorkProcess.builder().id("WP-W2").factoryId("F006")
+                .unit("kg").standardYieldMax(new BigDecimal("0.9000")).build();
+        when(processRepo.findById("WP-W2")).thenReturn(Optional.of(wp));
+        when(factorySettingsRepo.findProductionSettingsByFactoryId("F006")).thenReturn(null);
+        when(reportRepo.findYieldReportsByTask("F006", 141L)).thenReturn(List.of());
+
+        YieldLimitsDTO dto = svc.getLimits("F006", 1L, 141L, new BigDecimal("100"));
+
+        assertThat(dto.getSourceWipNo()).isNull();
+    }
+
+    @Test
+    void getLimits_multipleAvailablePrevWip_sourceWipNoNull_ambiguous() {
+        // 上道有两笔 AVAILABLE WIP (歧义) → sourceWipNo=null (不自动猜, 前端经 GET /wip 选);
+        // 但 wipAvailable 仍是两笔之和 (防呆 :max 用总余额)
+        WorkProcessTask t = task(142L, 2, "WP-W3");
+        when(taskRepo.findByFactoryIdAndId("F006", 142L)).thenReturn(Optional.of(t));
+        WorkProcess wp = WorkProcess.builder().id("WP-W3").factoryId("F006")
+                .unit("kg").standardYieldMax(new BigDecimal("0.9000")).build();
+        when(processRepo.findById("WP-W3")).thenReturn(Optional.of(wp));
+        when(factorySettingsRepo.findProductionSettingsByFactoryId("F006")).thenReturn(null);
+        when(reportRepo.findYieldReportsByTask("F006", 142L)).thenReturn(List.of());
+        SemiFinishedInventory wipA = SemiFinishedInventory.builder()
+                .intermediateBatchNo("WIP-A").processOrder(1)
+                .availableQuantity(new BigDecimal("100"))
+                .status(SemiFinishedInventory.Status.AVAILABLE).build();
+        SemiFinishedInventory wipB = SemiFinishedInventory.builder()
+                .intermediateBatchNo("WIP-B").processOrder(1)
+                .availableQuantity(new BigDecimal("50"))
+                .status(SemiFinishedInventory.Status.AVAILABLE).build();
+        when(wipRepo.findByFactoryIdAndBatchIdAndDeletedAtIsNull("F006", 1L))
+                .thenReturn(List.of(wipA, wipB));
+
+        YieldLimitsDTO dto = svc.getLimits("F006", 1L, 142L, new BigDecimal("100"));
+
+        assertThat(dto.getSourceWipNo()).isNull();
+        assertThat(dto.getWipAvailable()).isEqualByComparingTo("150");
+    }
+
+    // ── G6/G7 Wave 4: listWip (WIP 只读列表) ───────────────────────────────────────────
+
+    @Test
+    void listWip_returnsRowsSortedByProcessOrder_withProcessNameJoin() {
+        SemiFinishedInventory w2 = SemiFinishedInventory.builder()
+                .intermediateBatchNo("PT-LU-B1-S2-201").processOrder(2)
+                .sourceWorkProcessTaskId(201L).productTypeId("PT-LU")
+                .producedQuantity(new BigDecimal("382")).consumedQuantity(new BigDecimal("0"))
+                .availableQuantity(new BigDecimal("382")).unit("kg")
+                .status(SemiFinishedInventory.Status.AVAILABLE).build();
+        SemiFinishedInventory w1 = SemiFinishedInventory.builder()
+                .intermediateBatchNo("PT-LU-B1-S1-200").processOrder(1)
+                .sourceWorkProcessTaskId(200L).productTypeId("PT-LU")
+                .producedQuantity(new BigDecimal("935.5")).consumedQuantity(new BigDecimal("935.5"))
+                .availableQuantity(new BigDecimal("0")).unit("kg")
+                .status(SemiFinishedInventory.Status.DEPLETED).build();
+        when(wipRepo.findByFactoryIdAndBatchIdAndDeletedAtIsNull("F006", 40L))
+                .thenReturn(List.of(w2, w1));  // 故意乱序, 验排序
+        WorkProcessTask t1 = task(200L, 1, "WP-A");
+        WorkProcessTask t2 = task(201L, 2, "WP-B");
+        when(taskRepo.findByFactoryIdAndIdIn(eq("F006"), any())).thenReturn(List.of(t1, t2));
+        when(processRepo.findAllById(any())).thenReturn(List.of(
+                WorkProcess.builder().id("WP-A").processName("焯水").build(),
+                WorkProcess.builder().id("WP-B").processName("卤制").build()));
+
+        List<WipRowDTO> rows = svc.listWip("F006", 40L);
+
+        assertThat(rows).hasSize(2);
+        // processOrder 升序
+        assertThat(rows.get(0).getProcessOrder()).isEqualTo(1);
+        assertThat(rows.get(0).getIntermediateBatchNo()).isEqualTo("PT-LU-B1-S1-200");
+        assertThat(rows.get(0).getProcessName()).isEqualTo("焯水");
+        assertThat(rows.get(0).getStatus()).isEqualTo(SemiFinishedInventory.Status.DEPLETED);
+        assertThat(rows.get(1).getProcessOrder()).isEqualTo(2);
+        assertThat(rows.get(1).getProcessName()).isEqualTo("卤制");
+        assertThat(rows.get(1).getAvailableQuantity()).isEqualByComparingTo("382");
+    }
+
+    @Test
+    void listWip_noWip_returnsEmptyList() {
+        when(wipRepo.findByFactoryIdAndBatchIdAndDeletedAtIsNull("F006", 41L)).thenReturn(List.of());
+
+        List<WipRowDTO> rows = svc.listWip("F006", 41L);
+
+        assertThat(rows).isEmpty();
     }
 }
