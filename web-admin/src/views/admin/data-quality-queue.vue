@@ -35,10 +35,22 @@ const ENTITY_TYPES: Array<{ label: string; value: string }> = [
   { label: '产品', value: 'product' },
   { label: '员工', value: 'staff' },
   { label: '食材', value: 'ingredient' },
+  // P4a (Task 8): cross-store canonical dish merge review.
+  { label: '菜名归一', value: 'dish' },
   { label: '形态识别', value: 'shape_detection' },
   { label: '跨表合并', value: 'sheet_merge' },
   { label: '周期推断', value: 'period_inference' },
   { label: '字段冲突', value: 'field_conflict' },
+];
+
+// P4a (Task 8) — standard reject reasons (防呆 Rule 3: dropdown, not free text).
+// "其他" reveals an optional note textarea.
+const DISH_REJECT_REASONS: Array<{ label: string; value: string }> = [
+  { label: '主料不同，非同一道菜（如 青花椒鱼 ≠ 青花椒虾）', value: '主料不同，非同一道菜' },
+  { label: '只是名字相似，实际不同菜', value: '名字相似但不是同一道菜' },
+  { label: '规格/吃法不同，应分开统计', value: '规格或吃法不同，应分开统计' },
+  { label: '建议名不准确，需重新归一', value: '建议的规范名不准确' },
+  { label: '其他（填写说明）', value: '__other__' },
 ];
 
 const STATUS_OPTIONS = [
@@ -97,6 +109,21 @@ const modalAction = ref<'confirm' | 'create_new' | 'reject'>('confirm');
 const modalEntityId = ref<string>('');
 const modalReason = ref<string>('');
 const modalSubmitting = ref<boolean>(false);
+
+// P4a (Task 8) — dish-specific modal state.
+// modalCanonicalName: the regularised display name for create_new.
+// modalRejectReasonValue: the selected dropdown reason ('__other__' → free note).
+// modalRejectNote: the optional free-text when reason === '__other__'.
+const modalCanonicalName = ref<string>('');
+const modalRejectReasonValue = ref<string>(DISH_REJECT_REASONS[0].value);
+const modalRejectNote = ref<string>('');
+
+// Active tab is the dish (菜名归一) review tab.
+const isDishTab = computed<boolean>(() => activeEntityType.value === 'dish');
+// The modal item is a dish proposal (drives dish-specific modal UI).
+const isDishModal = computed<boolean>(
+  () => modalItem.value?.entityType === 'dish'
+);
 
 // 4-eye gate: submitter == currentUserId AND adminCount > 1 → blocked
 const isFourEyeBlocked = computed<boolean>(() => {
@@ -159,6 +186,18 @@ function priorityTagType(priority: string): string {
 function confidencePercent(c: number | null): string {
   if (c == null) return '—';
   return `${Math.round(c * 100)}%`;
+}
+
+// P4a (Task 8): compact 元 / 件 formatting for the dish sales sample.
+function formatRevenue(v: number | null | undefined): string {
+  if (v == null) return '¥0';
+  if (v >= 10000) return `¥${(v / 10000).toFixed(1)}万`;
+  return `¥${Math.round(v)}`;
+}
+
+function formatQty(v: number | null | undefined): string {
+  if (v == null) return '0';
+  return Number.isInteger(v) ? String(v) : v.toFixed(1);
 }
 
 // ── Data loading ───────────────────────────────────────────────────────────
@@ -237,9 +276,19 @@ function onSelectionChange(rows: QueueItem[]): void {
 
 function openModal(item: QueueItem): void {
   modalItem.value = item;
-  modalAction.value = 'confirm';
   modalEntityId.value = item.candidateEntityId != null ? String(item.candidateEntityId) : '';
   modalReason.value = '';
+  // P4a (Task 8): dish defaults — propose create_new (most common: 8 stores'
+  // variants → one new canonical), pre-fill the suggested canonical name from
+  // rawName (the proposal's shortest member name). Human edits / switches action.
+  if (item.entityType === 'dish') {
+    modalAction.value = 'create_new';
+    modalCanonicalName.value = item.rawName || '';
+    modalRejectReasonValue.value = DISH_REJECT_REASONS[0].value;
+    modalRejectNote.value = '';
+  } else {
+    modalAction.value = 'confirm';
+  }
   modalVisible.value = true;
 }
 
@@ -248,9 +297,97 @@ function closeModal(): void {
   modalItem.value = null;
 }
 
+// P4a (Task 8): dish submit — uses the regularised canonical name (create_new)
+// or an existing canonical_dish_id (confirm), and a dropdown reject reason.
+async function submitDishModal(): Promise<void> {
+  if (!modalItem.value) return;
+  const id = modalItem.value.id;
+
+  if (modalAction.value === 'reject') {
+    const sel = modalRejectReasonValue.value;
+    const reason =
+      sel === '__other__' ? modalRejectNote.value.trim() : sel;
+    if (!reason) {
+      ElMessage.warning('请选择或填写拒绝原因');
+      return;
+    }
+    modalSubmitting.value = true;
+    try {
+      await rejectQueue(id, reason);
+      ElMessage.success('已拒绝该归一提议');
+      closeModal();
+      await loadList();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      ElMessage.error(`拒绝失败: ${msg}`);
+    } finally {
+      modalSubmitting.value = false;
+    }
+    return;
+  }
+
+  if (modalAction.value === 'create_new') {
+    const name = modalCanonicalName.value.trim();
+    if (!name) {
+      ElMessage.warning('请填写规范菜名');
+      return;
+    }
+    modalSubmitting.value = true;
+    try {
+      const resp = await resolveQueue(id, {
+        action: 'create_new',
+        canonicalName: name,
+      });
+      ElMessage.success(
+        resp.singleAdminDegraded ? '已新建归一（单管理员模式）' : '已新建归一菜品'
+      );
+      closeModal();
+      await loadList();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      ElMessage.error(`处理失败: ${msg}`);
+    } finally {
+      modalSubmitting.value = false;
+    }
+    return;
+  }
+
+  // confirm: attach members to an EXISTING canonical_dish_id.
+  const canonicalIdNum = modalEntityId.value.trim()
+    ? parseInt(modalEntityId.value.trim(), 10)
+    : undefined;
+  if (canonicalIdNum == null || Number.isNaN(canonicalIdNum)) {
+    ElMessage.warning('确认合并到既有菜品需填写 canonical_dish_id');
+    return;
+  }
+  modalSubmitting.value = true;
+  try {
+    const resp = await resolveQueue(id, {
+      action: 'confirm',
+      resolvedToEntityId: canonicalIdNum,
+    });
+    ElMessage.success(
+      resp.singleAdminDegraded ? '已合并（单管理员模式）' : '已合并到既有菜品'
+    );
+    closeModal();
+    await loadList();
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    ElMessage.error(`处理失败: ${msg}`);
+  } finally {
+    modalSubmitting.value = false;
+  }
+}
+
 async function submitModal(): Promise<void> {
   if (!modalItem.value) return;
   if (isFourEyeBlocked.value) return;
+
+  // P4a (Task 8): dish proposals use the dish-specific submit path.
+  if (isDishModal.value) {
+    await submitDishModal();
+    return;
+  }
 
   const id = modalItem.value.id;
 
@@ -384,8 +521,10 @@ onMounted(() => {
 
         <el-button type="primary" @click="loadList">查询</el-button>
 
-        <!-- Batch button -->
+        <!-- Batch button — disabled on the dish tab: canonical merges are
+             one-at-a-time human decisions (per fool-proof Rule 2/3). -->
         <el-button
+          v-if="!isDishTab"
           type="warning"
           :disabled="selectedRows.length === 0"
           style="margin-left: 16px;"
@@ -393,6 +532,14 @@ onMounted(() => {
         >
           批量 confirm ({{ selectedRows.length }})
         </el-button>
+        <el-text
+          v-else
+          type="info"
+          size="small"
+          style="margin-left: 16px;"
+        >
+          菜名归一需逐条人工确认（不支持批量）
+        </el-text>
       </div>
 
       <!-- Require factoryId banner -->
@@ -440,7 +587,22 @@ onMounted(() => {
         description="请输入工厂 ID 查询队列"
       />
 
-      <!-- Empty: no items -->
+      <!-- Empty: no dish items — next-action guidance (fool-proof Rule 5),
+           not a dead-end. -->
+      <el-empty
+        v-else-if="!loading && isDishTab && listData.items.length === 0"
+        description="暂无待归一菜品"
+      >
+        <div class="empty-dish-hint">
+          <p>跨店同名菜归一候选已全部处理，或尚未生成。</p>
+          <p>可在服务器重跑候选生成（离线，仅 PROPOSE，绝不自动合并）：</p>
+          <code class="empty-dish-cmd">
+            python -m smartbi.scripts.generate_dish_canonical_candidates --factory {{ filterFactoryId || '&lt;工厂ID&gt;' }} --apply
+          </code>
+        </div>
+      </el-empty>
+
+      <!-- Empty: no items (non-dish) -->
       <el-empty
         v-else-if="!loading && listData.items.length === 0"
         description="暂无队列数据"
@@ -456,21 +618,59 @@ onMounted(() => {
         @selection-change="onSelectionChange"
         class="queue-table"
       >
-        <!-- Checkbox -->
-        <el-table-column type="selection" width="50" />
+        <!-- Checkbox — hidden on dish tab (no batch) -->
+        <el-table-column v-if="!isDishTab" type="selection" width="50" />
 
         <!-- ID -->
         <el-table-column label="ID" prop="id" width="80" />
 
-        <!-- rawName -->
-        <el-table-column label="原始名称" prop="rawName" min-width="160">
+        <!-- rawName / 建议规范名 (dish) -->
+        <el-table-column
+          :label="isDishTab ? '建议规范名' : '原始名称'"
+          prop="rawName"
+          min-width="160"
+        >
           <template #default="{ row }">
             <span class="raw-name">{{ row.rawName || '—' }}</span>
           </template>
         </el-table-column>
 
-        <!-- candidateEntityId -->
-        <el-table-column label="候选实体 ID" prop="candidateEntityId" width="110">
+        <!-- P4a: dish member dishes + which stores (fool-proof Rule 2) -->
+        <el-table-column v-if="isDishTab" label="成员菜名（哪些门店有）" min-width="320">
+          <template #default="{ row }">
+            <div v-if="row.dishReview && row.dishReview.members.length" class="dish-members">
+              <div
+                v-for="m in row.dishReview.members"
+                :key="m.productId"
+                class="dish-member-row"
+              >
+                <span class="dish-member-name">{{ m.name }}</span>
+                <span class="dish-member-stores">
+                  <el-tag
+                    v-for="st in m.stores"
+                    :key="st"
+                    size="small"
+                    type="info"
+                    class="dish-store-tag"
+                  >{{ st }}</el-tag>
+                  <span v-if="!m.stores.length" class="dish-no-store">（无门店销售记录）</span>
+                </span>
+                <span class="dish-member-sales">
+                  销 {{ formatQty(m.qty) }} · {{ formatRevenue(m.revenue) }}
+                </span>
+              </div>
+            </div>
+            <span v-else class="dish-no-member">—</span>
+          </template>
+        </el-table-column>
+
+        <!-- candidateEntityId (non-dish) -->
+        <el-table-column
+          v-if="!isDishTab"
+          label="候选实体 ID"
+          prop="candidateEntityId"
+          width="110"
+        >
           <template #default="{ row }">
             {{ row.candidateEntityId ?? '—' }}
           </template>
@@ -538,11 +738,112 @@ onMounted(() => {
     <!-- ── Single-resolve modal ─────────────────────────────────────────── -->
     <el-dialog
       v-model="modalVisible"
-      title="处理队列项"
-      width="540px"
+      :title="isDishModal ? '菜名归一 — 人工确认' : '处理队列项'"
+      width="640px"
       :close-on-click-modal="false"
     >
-      <template v-if="modalItem">
+      <!-- ===================== DISH (菜名归一) modal ===================== -->
+      <template v-if="modalItem && isDishModal">
+        <!-- Proposal summary -->
+        <el-descriptions :column="2" border size="small" style="margin-bottom: 12px;">
+          <el-descriptions-item label="建议规范名">{{ modalItem.rawName }}</el-descriptions-item>
+          <el-descriptions-item label="归一类型">{{ modalItem.dishReview?.proposalKind || '—' }}</el-descriptions-item>
+          <el-descriptions-item label="品类">{{ modalItem.dishReview?.category || '—' }}</el-descriptions-item>
+          <el-descriptions-item label="成员数">{{ modalItem.dishReview?.memberCount ?? 0 }}</el-descriptions-item>
+          <el-descriptions-item label="AI 置信度">{{ confidencePercent(modalItem.confidence) }}</el-descriptions-item>
+          <el-descriptions-item label="归一 key">{{ modalItem.dishReview?.normalizedKey || '—' }}</el-descriptions-item>
+        </el-descriptions>
+
+        <!-- Caution: literal similarity ≠ same dish (fool-proof Rule 2 context) -->
+        <el-alert
+          type="warning"
+          :closable="false"
+          show-icon
+          title="确认前请核对：下列成员菜名是否真的是同一道菜？"
+          description="字面相似不等于同菜（如 青花椒鱼 ≠ 青花椒虾）。确认后将合并销量/营收/评价统计。"
+          style="margin-bottom: 12px;"
+        />
+
+        <!-- Member dishes + stores + sales (Rule 2: eyeball before confirm) -->
+        <div class="dish-modal-members">
+          <div
+            v-for="m in (modalItem.dishReview?.members || [])"
+            :key="m.productId"
+            class="dish-modal-member"
+          >
+            <div class="dish-modal-member-name">{{ m.name }}</div>
+            <div class="dish-modal-member-meta">
+              <span class="dish-modal-stores">
+                门店：
+                <el-tag
+                  v-for="st in m.stores"
+                  :key="st"
+                  size="small"
+                  type="info"
+                  class="dish-store-tag"
+                >{{ st }}</el-tag>
+                <span v-if="!m.stores.length" class="dish-no-store">无销售记录</span>
+              </span>
+              <span class="dish-modal-sales">销 {{ formatQty(m.qty) }} 件 · {{ formatRevenue(m.revenue) }}</span>
+            </div>
+          </div>
+          <div v-if="!(modalItem.dishReview?.members || []).length" class="dish-no-member">
+            该提议无成员菜品。
+          </div>
+        </div>
+
+        <!-- Action dropdown (Rule 3: dropdown, not free text) -->
+        <el-form-item label="处理动作" style="margin-top: 8px;">
+          <el-select v-model="modalAction" style="width: 240px;">
+            <el-option label="新建归一菜品（create_new）" value="create_new" />
+            <el-option label="合并到既有菜品（confirm）" value="confirm" />
+            <el-option label="拒绝该归一（reject）" value="reject" />
+          </el-select>
+        </el-form-item>
+
+        <!-- create_new: regularised canonical name -->
+        <el-form-item v-if="modalAction === 'create_new'" label="规范菜名（必填）">
+          <el-input
+            v-model="modalCanonicalName"
+            placeholder="确认后的统一展示名，如「招牌青花椒鱼」"
+            style="width: 360px;"
+          />
+        </el-form-item>
+
+        <!-- confirm: attach to existing canonical_dish_id -->
+        <el-form-item v-if="modalAction === 'confirm'" label="既有菜品 ID（必填）">
+          <el-input
+            v-model="modalEntityId"
+            placeholder="要合并到的 canonical_dish_id"
+            style="width: 240px;"
+          />
+        </el-form-item>
+
+        <!-- reject: reason dropdown + optional note (Rule 3) -->
+        <template v-if="modalAction === 'reject'">
+          <el-form-item label="拒绝原因（必选）">
+            <el-select v-model="modalRejectReasonValue" style="width: 420px;">
+              <el-option
+                v-for="opt in DISH_REJECT_REASONS"
+                :key="opt.value"
+                :label="opt.label"
+                :value="opt.value"
+              />
+            </el-select>
+          </el-form-item>
+          <el-form-item v-if="modalRejectReasonValue === '__other__'" label="补充说明（必填）">
+            <el-input
+              v-model="modalRejectNote"
+              type="textarea"
+              :rows="2"
+              placeholder="请说明拒绝原因"
+            />
+          </el-form-item>
+        </template>
+      </template>
+
+      <!-- ===================== GENERIC modal ===================== -->
+      <template v-else-if="modalItem">
         <!-- Item summary -->
         <el-descriptions :column="1" border size="small" style="margin-bottom: 16px;">
           <el-descriptions-item label="原始名称">{{ modalItem.rawName }}</el-descriptions-item>
@@ -683,5 +984,98 @@ onMounted(() => {
   font-size: 13px;
   color: #909399;
   text-align: right;
+}
+
+/* P4a (Task 8) — dish member display */
+.dish-members {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.dish-member-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+}
+
+.dish-member-name {
+  font-weight: 500;
+  color: #303133;
+}
+
+.dish-store-tag {
+  margin-right: 4px;
+}
+
+.dish-member-sales {
+  color: #909399;
+  font-size: 12px;
+}
+
+.dish-no-store,
+.dish-no-member {
+  color: #c0c4cc;
+  font-size: 12px;
+}
+
+.empty-dish-hint {
+  text-align: left;
+  max-width: 560px;
+  margin: 0 auto;
+  color: #606266;
+  font-size: 13px;
+}
+
+.empty-dish-cmd {
+  display: block;
+  margin-top: 8px;
+  padding: 8px 10px;
+  background: #f5f7fa;
+  border-radius: 4px;
+  font-family: monospace;
+  font-size: 12px;
+  word-break: break-all;
+  color: #303133;
+}
+
+/* dish modal member list */
+.dish-modal-members {
+  max-height: 240px;
+  overflow-y: auto;
+  border: 1px solid #ebeef5;
+  border-radius: 4px;
+  padding: 8px;
+  margin-bottom: 12px;
+}
+
+.dish-modal-member {
+  padding: 6px 4px;
+  border-bottom: 1px dashed #ebeef5;
+}
+
+.dish-modal-member:last-child {
+  border-bottom: none;
+}
+
+.dish-modal-member-name {
+  font-weight: 600;
+  color: #303133;
+  font-size: 13px;
+}
+
+.dish-modal-member-meta {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 4px;
+  font-size: 12px;
+}
+
+.dish-modal-sales {
+  color: #909399;
 }
 </style>

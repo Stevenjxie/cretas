@@ -27,19 +27,26 @@ from typing import Any, Dict, List, Optional, Tuple
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 
+from smartbi.canonical.dish_confirm_service import (
+    build_dish_review_payload,
+    confirm as dish_confirm,
+    reject as dish_reject,
+)
 from smartbi.canonical.provenance._admin_auth import require_admin
 from smartbi.config import get_pg_pool
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-# W0.4 finding 7: all 8 entity_type values from DB CHECK constraint.
+# W0.4 finding 7: entity_type values from DB CHECK constraint.
 # Must stay in sync with entity_resolution_admin_queue.entity_type CHECK.
+# P4a (V20260602_04): 'dish' added — cross-store canonical dish merge proposals.
 VALID_ENTITY_TYPES = frozenset({
     "store",
     "product",
     "staff",
     "ingredient",
+    "dish",
     "shape_detection",
     "sheet_merge",
     "period_inference",
@@ -154,6 +161,29 @@ async def _fetch_queue_items(
                 *params,
             )
 
+            # P4a (Task 8): for entity_type='dish', enrich each item with the
+            # human-review payload (fool-proof Rule 2 — show member dishes +
+            # which stores carry each name + sales sample + confidence so a human
+            # can eyeball "same dish?" before confirming). Done INSIDE the same
+            # transaction so app.factory_id GUC is still set for the FORCE-RLS
+            # JOINs (dim_store / fact_pos_* / agg_product). Generic shape for the
+            # other 8 entity types is unchanged.
+            dish_reviews: Dict[int, Dict[str, Any]] = {}
+            if entity_type == "dish":
+                for r in rows:
+                    try:
+                        dish_reviews[int(r["id"])] = await build_dish_review_payload(
+                            conn, factory_id, r["extra"]
+                        )
+                    except Exception as exc:  # noqa: BLE001 — enrichment is best-effort
+                        # Never fail the whole list because one item's sales JOIN
+                        # blew up; the item still shows raw_name + confidence.
+                        logger.warning(
+                            "dish review enrichment failed for queue id=%s "
+                            "(factory=%s): %s",
+                            r["id"], factory_id, exc,
+                        )
+
     items: List[Dict[str, Any]] = [
         {
             "id": int(r["id"]),
@@ -201,6 +231,8 @@ async def _fetch_queue_items(
                 if r["created_at"] is not None
                 else None
             ),
+            # P4a (Task 8): dish-only enrichment (None for other entity types).
+            "dishReview": dish_reviews.get(int(r["id"])),
         }
         for r in rows
     ]
@@ -286,6 +318,11 @@ class ResolveBody(BaseModel):
     action: str  # 'confirm' | 'create_new'
     resolvedToEntityId: Optional[int] = None
     notes: Optional[str] = None
+    # P4a (Task 8): for entity_type='dish', the regularised canonical display
+    # name the human entered/edited. 'create_new' → new dim_canonical_dish with
+    # this name; 'confirm' with resolvedToEntityId → attach members to that
+    # existing canonical_dish_id. Ignored for non-dish entity types.
+    canonicalName: Optional[str] = None
 
 
 class RejectBody(BaseModel):
@@ -311,6 +348,7 @@ async def _get_queue_item(pool, item_id: int) -> Optional[Dict[str, Any]]:
                 SELECT q.id,
                        q.factory_id,
                        q.status,
+                       q.entity_type,
                        u.uploaded_by AS submitter
                   FROM entity_resolution_admin_queue q
                   LEFT JOIN smart_bi_pg_excel_uploads u
@@ -325,6 +363,8 @@ async def _get_queue_item(pool, item_id: int) -> Optional[Dict[str, Any]]:
         "id": int(r["id"]),
         "factoryId": r["factory_id"],
         "status": r["status"],
+        # P4a (Task 8): needed so resolve/reject can branch to the dish path.
+        "entityType": r["entity_type"],
         # W0.4 finding 1: uploaded_by (BIGINT) may be None
         "submitter": str(r["submitter"]) if r["submitter"] is not None else None,
     }
@@ -531,6 +571,73 @@ async def _record_admin_confirm_history(
             )
 
 
+# ---------------------------------------------------------------------------
+# P4a (Task 8): dish entity_type path — reuse dish_confirm_service (the same
+# core the CLI confirm_dish_canonical uses) so the canonical write + history
+# graduation live in ONE place.
+# ---------------------------------------------------------------------------
+
+async def _resolve_dish(
+    pool,
+    item_id: int,
+    factory_id: str,
+    action: str,
+    resolved_to_entity_id: Optional[int],
+    canonical_name: Optional[str],
+    admin_user: str,
+) -> int:
+    """Confirm a dish merge proposal via dish_confirm_service.confirm.
+
+    The dish service does ALL of: create/attach dim_canonical_dish, set
+    dim_product.canonical_dish_id, recount, mark queue CONFIRMED, and the
+    fail-open entity_resolution_history graduation (#389). We acquire a conn,
+    set the FORCE-RLS GUC, and delegate.
+
+      action='create_new' → new canonical named canonical_name (or the
+                            proposal's suggested name when None).
+      action='confirm'    → attach members to existing canonical
+                            (resolved_to_entity_id = canonical_dish_id).
+
+    Returns the service's status code (0 success; 1 precondition failed). The
+    service raises on a fail-loud canonical/link write failure (#390).
+    """
+    target_canonical_id = (
+        resolved_to_entity_id if action == "confirm" else None
+    )
+    async with pool.acquire() as conn:
+        # FORCE RLS: set the tenant GUC for this connection before the service
+        # runs its own transaction (mirrors the GUC pattern elsewhere here; the
+        # dish service does NOT set tenant itself by design).
+        await conn.execute(
+            "SELECT set_config('app.factory_id', $1, false)", factory_id
+        )
+        return await dish_confirm(
+            conn,
+            factory_id,
+            item_id,
+            canonical_name=canonical_name,
+            canonical_id=target_canonical_id,
+            admin_user=admin_user,
+        )
+
+
+async def _reject_dish(
+    pool,
+    item_id: int,
+    factory_id: str,
+    reason: str,
+    admin_user: str,
+) -> int:
+    """Reject a dish merge proposal via dish_confirm_service.reject."""
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "SELECT set_config('app.factory_id', $1, false)", factory_id
+        )
+        return await dish_reject(
+            conn, factory_id, item_id, reason, admin_user=admin_user
+        )
+
+
 @router.post("/{id}/resolve")
 async def resolve_queue(
     request: Request,
@@ -605,6 +712,36 @@ async def resolve_queue(
             "Single-admin degradation: factory=%s item=%d user=%s",
             item["factoryId"], id, current_user,
         )
+
+    # P4a (Task 8): dish proposals take the canonical-merge path, NOT the generic
+    # queue-status update. dish_confirm_service.confirm does the whole thing in
+    # one place (create/attach canonical + link dim_product + recount + mark
+    # CONFIRMED + fail-open history graduation). It fails LOUD (#390) on a
+    # canonical/link write rejection → surfaced to the admin as a 500/error.
+    if item.get("entityType") == "dish":
+        if body.action == "confirm" and body.resolvedToEntityId is None:
+            raise HTTPException(
+                status_code=400,
+                detail="dish confirm 需指定 resolvedToEntityId (要挂到的 canonical_dish_id); "
+                       "若要新建 canonical 请用 action='create_new'",
+            )
+        rc = await _resolve_dish(
+            pool,
+            id,
+            item["factoryId"],
+            body.action,
+            body.resolvedToEntityId,
+            body.canonicalName,
+            current_user or "admin",
+        )
+        if rc != 0:
+            # Precondition failure inside the service (already non-PENDING / no
+            # members / missing). We re-checked PENDING above, so this is a race.
+            raise HTTPException(
+                status_code=409,
+                detail="菜品归一提议已被处理或无成员，无法确认（请刷新列表）",
+            )
+        return {"resolved": True, "singleAdminDegraded": single_admin_degraded}
 
     updated = await _update_queue_resolved(
         pool,
@@ -717,6 +854,22 @@ async def reject_queue(
             "Single-admin degradation (reject): factory=%s item=%d user=%s",
             item["factoryId"], id, current_user,
         )
+
+    # P4a (Task 8): dish proposals reject via dish_confirm_service.reject (same
+    # core as the CLI). Functionally it is the same UPDATE (mark REJECTED + store
+    # reason in extra) but routed through the shared module so the dish path
+    # stays single-sourced. NEVER touches canonical / dim_product on reject.
+    if item.get("entityType") == "dish":
+        rc = await _reject_dish(
+            pool, id, item["factoryId"], body.reason.strip(),
+            current_user or "admin",
+        )
+        if rc != 0:
+            raise HTTPException(
+                status_code=409,
+                detail="菜品归一提议已被处理，无法拒绝（请刷新列表）",
+            )
+        return {"rejected": True}
 
     async with pool.acquire() as conn:
         # W0.4 finding 3: GUC inside transaction
@@ -835,6 +988,18 @@ async def batch_resolve_queue(
             failed_items.append({
                 "id": item_id,
                 "reason": f"非 platform_admin 仅可处理自己工厂的项 (该项属于 {item['factoryId']!r})",
+            })
+            continue
+
+        # P4a (Task 8): NEVER batch-confirm dish proposals. A dish confirm must
+        # create/attach a canonical (one-at-a-time human judgement per fool-proof
+        # Rule 2/3 — eyeball members + stores first). Batch here would only flip
+        # queue status WITHOUT writing the canonical → silent membership gap.
+        # The dish tab UI does not offer batch; this is defence-in-depth.
+        if item.get("entityType") == "dish":
+            failed_items.append({
+                "id": item_id,
+                "reason": "菜品归一需逐条人工确认 (不支持批量), 请在详情逐条确认",
             })
             continue
 

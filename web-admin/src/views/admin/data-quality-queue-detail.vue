@@ -122,6 +122,28 @@ function confidencePercent(c: number | null): string {
   return `${Math.round(c * 100)}%`;
 }
 
+// P4a (Task 8): for a dish (菜名归一) item, surface the proposed member dish
+// names from the row's extra JSONB (member_names) so the detail view shows what
+// would be merged. The history endpoint returns extra as-is; no extra API call.
+const isDishItem = computed<boolean>(
+  () => currentItem.value?.entityType === 'dish'
+);
+
+const dishMemberNames = computed<string[]>(() => {
+  const extra = currentItem.value?.extra;
+  if (!extra || typeof extra !== 'object') return [];
+  const raw = (extra as Record<string, unknown>).member_names;
+  if (!Array.isArray(raw)) return [];
+  return raw.map((x) => String(x));
+});
+
+const dishProposalKind = computed<string>(() => {
+  const extra = currentItem.value?.extra;
+  if (!extra || typeof extra !== 'object') return '';
+  const raw = (extra as Record<string, unknown>).proposal_kind;
+  return raw == null ? '' : String(raw);
+});
+
 // ── Lifecycle ──────────────────────────────────────────────────────────────
 
 onMounted(load);
@@ -230,6 +252,29 @@ onMounted(load);
         </el-descriptions>
       </el-card>
 
+      <!-- P4a (Task 8): dish proposal member dishes (菜名归一 detail) -->
+      <el-card v-if="isDishItem" shadow="never" style="margin-bottom: 16px;">
+        <template #header>
+          <span>归一成员菜名（{{ dishProposalKind || '提议' }}，共 {{ dishMemberNames.length }} 个）</span>
+        </template>
+        <el-empty
+          v-if="dishMemberNames.length === 0"
+          description="该提议无成员菜名记录"
+        />
+        <div v-else class="dish-member-tags">
+          <el-tag
+            v-for="(name, idx) in dishMemberNames"
+            :key="idx"
+            size="default"
+            type="info"
+            class="dish-member-tag"
+          >{{ name }}</el-tag>
+        </div>
+        <p class="dish-member-note">
+          字面相似不等于同菜（如 青花椒鱼 ≠ 青花椒虾）。确认归一将合并这些名字的销量/营收/评价统计。
+        </p>
+      </el-card>
+
       <!-- History table card -->
       <el-card shadow="never">
         <template #header>
@@ -333,5 +378,22 @@ onMounted(load);
   font-size: 13px;
   color: #606266;
   word-break: break-all;
+}
+
+/* P4a (Task 8) — dish member tags in detail */
+.dish-member-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.dish-member-tag {
+  margin-bottom: 4px;
+}
+
+.dish-member-note {
+  margin-top: 12px;
+  font-size: 12px;
+  color: #e6a23c;
 }
 </style>
