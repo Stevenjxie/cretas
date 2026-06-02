@@ -25,7 +25,8 @@ detects; it never rewrites the answer.
 from __future__ import annotations
 
 import re
-from typing import Iterable, List, Optional
+from dataclasses import dataclass, field
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 
 NUMERIC_GUARD_CLAUSE = (
@@ -184,3 +185,291 @@ def detect_numeric_hallucination(
     if not violations:
         return None
     return "疑似数字幻觉（LLM 输出的金额超出聚合上下文范围）：" + "；".join(violations)
+
+
+# =============================================================================
+# FactReconciler — P2 综合分析 grounding hard-check (spec §4.4 / §5.5 / §5.6).
+#
+# Extends llm_guard (reuses detect_numeric_hallucination + extract_max_agg_value)
+# instead of starting a new module. Reconciles the LLM's free-text answer against
+# a FactBook's deterministic {fact_name: true_value} index.
+#
+# Safety design (per memory PR #337/#338 grounding + feedback_rules_first_llm_fallback):
+#   - ONLY reconcile "已知指标名 紧跟 数字" explicit references —宁漏不错.
+#   - No matching fact → no-op (never punish the LLM for an unknown number).
+#   - NO fuzzy matching (no edit-distance, no partial). A metric is reconciled
+#     only when its EXACT name substring is present AND a number follows within
+#     a short window. Deviation > tol (default 5%) → backfill真值 + annotate +
+#     lower confidence.
+#   - Fabricated store/dish name detection: flag a name-looking token that the
+#     answer presents as a 门店/菜名 but is NOT in the FactBook entity set. We do
+#     this conservatively — only names the FactBook KNOWS the universe of (i.e.
+#     when known_store_names is non-empty do we judge店-context names).
+#
+# Honesty labels (§5.6): detect "菜名"/"招牌菜" phrasing applied to 口味标签 → annotate.
+# =============================================================================
+
+
+# A number immediately (within ~12 chars) following a metric name. The window
+# tolerates a unit/colon/label between name and number ("平均星级 4.79 星",
+# "平均星级为 4.79", "总营业额 ¥2,064 万元").
+_FACT_NUMBER_WINDOW = 14
+
+# Money-scale words the LLM may append; used to normalize 万/亿 back to base.
+_SCALE_WORDS: List[Tuple[str, float]] = [
+    ("亿", 100_000_000.0),
+    ("千万", 10_000_000.0),
+    ("万", 10_000.0),
+]
+
+# Phrasings that wrongly treat 口味/品质标签 as dish names (§5.6).
+_DISH_NAME_MISLABELS = ["招牌菜", "招牌菜品", "明星菜", "这道菜", "该菜品", "畅销菜名"]
+
+_ANNOT_TEMPLATE = "（数据核对：实际 {true}）"
+_ANNOT_FABRICATED = "[未在数据中找到该名称]"
+_ANNOT_DISH_LABEL = "（提示：上述为口味/品质标签，非菜名）"
+
+
+@dataclass
+class ReconcileResult:
+    annotated_answer: str
+    violations: List[str] = field(default_factory=list)
+    reconciled: bool = False
+    confidence_adj: float = 0.0  # negative = lower confidence
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "violations": self.violations,
+            "reconciled": self.reconciled,
+            "confidence_adj": self.confidence_adj,
+        }
+
+
+def _normalize_claimed(num_str: str, trailing: str) -> Optional[float]:
+    """Parse a claimed number + optional 万/亿 scale word to a base float."""
+    try:
+        base = float(num_str.replace(",", ""))
+    except ValueError:
+        return None
+    for word, mult in _SCALE_WORDS:
+        if trailing.startswith(word):
+            return base * mult
+    return base
+
+
+class FactReconciler:
+    """Reconcile LLM free-text output against a FactBook (grounding hard-check).
+
+    Usage::
+
+        rec = FactReconciler()
+        answer, meta = rec.reconcile(llm_text, factbook)
+
+    ``factbook`` is any object exposing ``to_facts_index() -> {name: value}``
+    and ``known_store_names() -> [str]`` (FactBook satisfies this; a plain
+    dict/list can be passed via the lower-level ``reconcile_index``).
+    """
+
+    def reconcile(
+        self,
+        answer: str,
+        factbook: Any,
+        *,
+        tol: float = 0.05,
+        agg_lines: Optional[Iterable[str]] = None,
+    ) -> Tuple[str, Dict[str, Any]]:
+        """Reconcile ``answer`` against ``factbook``. Returns (annotated_answer, meta)."""
+        facts = {}
+        known_stores: List[str] = []
+        known_tags: List[str] = []
+        try:
+            facts = factbook.to_facts_index() or {}
+        except Exception:
+            facts = {}
+        try:
+            known_stores = factbook.known_store_names() or []
+        except Exception:
+            known_stores = []
+        try:
+            known_tags = factbook.known_tags() or []
+        except Exception:
+            known_tags = []
+
+        res = self.reconcile_index(
+            answer, facts,
+            known_store_names=known_stores,
+            known_tags=known_tags,
+            tol=tol,
+            agg_lines=agg_lines,
+        )
+        return res.annotated_answer, res.to_dict()
+
+    def reconcile_index(
+        self,
+        answer: str,
+        facts: Dict[str, float],
+        *,
+        known_store_names: Optional[List[str]] = None,
+        known_tags: Optional[List[str]] = None,
+        tol: float = 0.05,
+        agg_lines: Optional[Iterable[str]] = None,
+    ) -> ReconcileResult:
+        """Lower-level reconcile against an explicit facts dict + name universe."""
+        if not answer:
+            return ReconcileResult(annotated_answer=answer or "")
+
+        out = answer
+        violations: List[str] = []
+        confidence_adj = 0.0
+
+        # 1. Per-fact exact-name + 紧跟数字 reconciliation (宁漏不错).
+        #    Longest fact name first so "VIP平均星级" matches before "平均星级".
+        for name in sorted(facts.keys(), key=len, reverse=True):
+            true_v = facts[name]
+            out, hit, dev = self._reconcile_one_fact(out, name, true_v, tol)
+            if hit and dev is not None:
+                violations.append(
+                    f"{name}: LLM 偏离真值 (实际 {self._fmt(true_v)}, 偏差 {dev * 100:.0f}%)"
+                )
+                confidence_adj -= 0.1
+
+        # 2. Reuse the 亿/千万 hallucination sentinel against the agg context.
+        #    agg_lines defaults to the rendered fact values so the upper-bound
+        #    check still fires even without an explicit agg block.
+        eff_agg = agg_lines if agg_lines is not None else [
+            f"{k}: {v}" for k, v in facts.items()
+        ]
+        halluc = detect_numeric_hallucination(answer, eff_agg)
+        if halluc:
+            violations.append(halluc)
+            confidence_adj -= 0.2
+
+        # 3. Fabricated store-name detection (only when we know the universe).
+        if known_store_names:
+            out, fab = self._flag_fabricated_stores(out, known_store_names)
+            if fab:
+                violations.extend(f"疑似编造门店名: {n}" for n in fab)
+                confidence_adj -= 0.15
+
+        # 4. Honesty-label: 口味标签 mislabeled as 菜名 (§5.6).
+        out, mislabel = self._flag_dish_mislabel(out, known_tags or [])
+        if mislabel:
+            violations.append("检测到将口味/品质标签当作菜名的措辞，已加注。")
+            confidence_adj -= 0.05
+
+        return ReconcileResult(
+            annotated_answer=out,
+            violations=violations,
+            reconciled=bool(violations),
+            confidence_adj=confidence_adj,
+        )
+
+    # ---------------- internals ----------------
+
+    def _reconcile_one_fact(
+        self, text: str, name: str, true_v: float, tol: float
+    ) -> Tuple[str, bool, Optional[float]]:
+        """If ``name`` appears in text followed (within window) by a number that
+        deviates from ``true_v`` by > tol, annotate it. Returns
+        (new_text, name_was_present, deviation_or_None).
+
+        Exact-name substring only. No fuzzy matching. The annotation is appended
+        immediately after the claimed number so the真值 travels with the claim.
+        """
+        idx = text.find(name)
+        if idx < 0:
+            return text, False, None
+        # Scan windows after each occurrence of the name. Only the FIRST claimed
+        # number per occurrence is judged (宁漏不错 — avoid grabbing an unrelated
+        # later number).
+        search_from = 0
+        worst_dev: Optional[float] = None
+        result = text
+        offset_shift = 0
+        while True:
+            pos = result.find(name, search_from)
+            if pos < 0:
+                break
+            after = result[pos + len(name): pos + len(name) + _FACT_NUMBER_WINDOW]
+            m = _NUMBER_PATTERN.search(after)
+            if not m:
+                search_from = pos + len(name)
+                continue
+            # trailing chars right after the number → possible 万/亿 scale word
+            trailing = after[m.end(): m.end() + 2]
+            claimed = _normalize_claimed(m.group(1), trailing)
+            if claimed is None:
+                search_from = pos + len(name)
+                continue
+            if true_v == 0:
+                dev = 0.0 if claimed == 0 else 1.0
+            else:
+                dev = abs(claimed - true_v) / abs(true_v)
+            if dev > tol:
+                # Insert annotation right after the matched number.
+                insert_at = pos + len(name) + m.end()
+                annot = _ANNOT_TEMPLATE.format(true=self._fmt(true_v))
+                result = result[:insert_at] + annot + result[insert_at:]
+                worst_dev = dev if worst_dev is None else max(worst_dev, dev)
+                search_from = insert_at + len(annot)
+                offset_shift += len(annot)
+            else:
+                search_from = pos + len(name)
+        return result, True, worst_dev
+
+    def _flag_fabricated_stores(
+        self, text: str, known: List[str]
+    ) -> Tuple[str, List[str]]:
+        """Flag store-like names in 门店-context that aren't in the known set.
+
+        Conservative: we only look at tokens the answer EXPLICITLY frames as a
+        store ("XXX店" / "门店 XXX") and annotate those NOT in ``known``. A name
+        already in ``known`` is never flagged. We never invent名字 — only
+        annotate the model's own text.
+        """
+        fabricated: List[str] = []
+        known_set = set(known)
+        # Match "<name>店" tokens (CJK run ending in 店, 2-20 chars before 店).
+        store_pat = re.compile(r"([一-龥A-Za-z0-9·\-（）()]{2,20}店)")
+        seen = set()
+        for m in store_pat.finditer(text):
+            cand = m.group(1)
+            if cand in seen:
+                continue
+            seen.add(cand)
+            # If the candidate is a substring of, or contains, a known store →
+            # treat as known (handles "大融城店" vs "青花椒大融城店").
+            if cand in known_set:
+                continue
+            if any(cand in k or k in cand for k in known_set):
+                continue
+            fabricated.append(cand)
+        # Annotate each fabricated name once (first occurrence).
+        out = text
+        for name in fabricated:
+            pos = out.find(name)
+            if pos >= 0 and _ANNOT_FABRICATED not in out[pos:pos + len(name) + 20]:
+                insert_at = pos + len(name)
+                out = out[:insert_at] + _ANNOT_FABRICATED + out[insert_at:]
+        return out, fabricated
+
+    def _flag_dish_mislabel(
+        self, text: str, known_tags: List[str]
+    ) -> Tuple[str, bool]:
+        """If the answer uses 招牌菜/明星菜-style phrasing AND references one of the
+        口味/品质标签 strings, append a one-time honesty annotation."""
+        if not any(w in text for w in _DISH_NAME_MISLABELS):
+            return text, False
+        # Only annotate if a tag is also present (otherwise the 招牌菜 might be
+        # about a real product, which is fine).
+        if known_tags and not any(t in text for t in known_tags):
+            return text, False
+        if _ANNOT_DISH_LABEL in text:
+            return text, False
+        return text + "\n\n" + _ANNOT_DISH_LABEL, True
+
+    @staticmethod
+    def _fmt(v: float) -> str:
+        if v == int(v):
+            return f"{int(v):,}"
+        return f"{v:,.2f}"
