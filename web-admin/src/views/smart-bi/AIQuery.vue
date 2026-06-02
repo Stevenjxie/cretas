@@ -1216,6 +1216,49 @@ function formatDataSourceLabel(ds: UploadHistoryItem): string {
 defineExpose({ setAnalysisContext });
 
 // 渲染图表 (从 ChartConfig)
+// Defensive chart-layout normalizer (Jun 2026): some Python templates emit
+// ECharts options that leave no room for the title (it overlaps the plot) and
+// rotate many long Chinese category labels too little (labels overlap each
+// other). Applied to EVERY rendered option so both Python templates and gold
+// tools render clean inside the fixed-height chart container — no re-
+// materialization needed. Mutates `opt` in place.
+function normalizeChartLayout(opt: Record<string, unknown>): void {
+  if (!opt || typeof opt !== 'object') return;
+  const titleObj = opt.title as { text?: string } | undefined;
+  const hasTitle = !!(titleObj && typeof titleObj === 'object' && titleObj.text);
+  const grid = (typeof opt.grid === 'object' && opt.grid && !Array.isArray(opt.grid)
+    ? opt.grid : {}) as Record<string, unknown>;
+  grid.containLabel = true;
+  if (grid.left == null) grid.left = '4%';
+  if (grid.right == null) grid.right = '5%';
+  // Leave vertical room for the title so it never overlaps the plot.
+  if (grid.top == null) grid.top = hasTitle ? 54 : 28;
+
+  // Long / many category labels on a horizontal (xAxis) category axis overlap
+  // when barely rotated. Rotate more + show every label + shrink font + reserve
+  // bottom room. Horizontal-bar charts (categories on yAxis) are untouched.
+  const xa = (Array.isArray(opt.xAxis) ? opt.xAxis[0] : opt.xAxis) as
+    Record<string, unknown> | undefined;
+  if (xa && xa.type === 'category' && Array.isArray(xa.data)) {
+    const cats = xa.data as unknown[];
+    const longest = cats.reduce((m: number, c) => Math.max(m, String(c ?? '').length), 0);
+    if (cats.length > 4 || longest > 5) {
+      const al = (typeof xa.axisLabel === 'object' && xa.axisLabel
+        ? xa.axisLabel : {}) as Record<string, unknown>;
+      if (al.rotate == null || (typeof al.rotate === 'number' && al.rotate < 35)) {
+        al.rotate = (cats.length > 6 || longest > 7) ? 40 : 30;
+      }
+      al.interval = 0;
+      if (al.fontSize == null) al.fontSize = 10;
+      al.hideOverlap = true;
+      if (al.width == null) { al.width = 84; al.overflow = 'truncate'; }
+      xa.axisLabel = al;
+      if (grid.bottom == null || grid.bottom === '3%') grid.bottom = 76;
+    }
+  }
+  opt.grid = grid;
+}
+
 function renderChartFromConfig(messageId: string, chartConfig: ChartConfig) {
   if (!chartConfig) return;
 
@@ -1246,6 +1289,7 @@ function renderChartFromConfig(messageId: string, chartConfig: ChartConfig) {
     // sentinel string as a formatter.
     if (chartConfig.option && typeof chartConfig.option === 'object') {
       const resolvedOption = processEChartsOptions(chartConfig.option as Record<string, unknown>);
+      normalizeChartLayout(resolvedOption as Record<string, unknown>);
       chart.setOption(resolvedOption as echarts.EChartsOption);
       return;
     }
