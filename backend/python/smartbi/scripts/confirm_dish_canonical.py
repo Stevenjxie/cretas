@@ -36,13 +36,19 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import json
 import logging
 import os
 import sys
-from typing import Any, Dict, List, Optional
 
 import asyncpg
+
+# Task 8 refactor: confirm/reject 核心移到共用服务模块, CLI 与 web-admin API 调同一份代码。
+# CLI 保留 list_pending + argparse 入口; confirm/reject/_parse_extra 从 service re-export。
+from smartbi.canonical.dish_confirm_service import (
+    confirm,
+    reject,
+    _parse_extra,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -57,91 +63,9 @@ _LIST_PENDING_SQL = """
      ORDER BY priority DESC, created_at DESC
 """
 
-_GET_ITEM_SQL = """
-    SELECT id, factory_id, status, raw_name, candidate_entity_id, extra
-      FROM entity_resolution_admin_queue
-     WHERE id = $1 AND factory_id = $2 AND entity_type = 'dish'
-"""
-
-# 新建 canonical (ON CONFLICT 同 (factory, normalized_key) → 复用既有, 避免重复建)。
-_CREATE_CANONICAL_SQL = """
-    INSERT INTO dim_canonical_dish
-      (factory_id, canonical_name, normalized_key, category, member_count,
-       status, created_by)
-    VALUES ($1, $2, $3, $4, 0, 'active', 'admin')
-    ON CONFLICT (factory_id, normalized_key) DO UPDATE SET
-      canonical_name = EXCLUDED.canonical_name,
-      updated_at = NOW()
-    RETURNING canonical_dish_id
-"""
-
-# 把成员 dim_product 挂到 canonical (只有这里写 canonical_dish_id)。
-_LINK_PRODUCT_SQL = """
-    UPDATE dim_product
-       SET canonical_dish_id = $1
-     WHERE factory_id = $2 AND product_id = ANY($3::bigint[])
-    RETURNING product_id
-"""
-
-# member_count 同步 = 当前挂在该 canonical 的 dim_product 数 (权威重算, 避免漂移)。
-_RECOUNT_SQL = """
-    UPDATE dim_canonical_dish
-       SET member_count = (
-           SELECT COUNT(*) FROM dim_product
-            WHERE factory_id = $2 AND canonical_dish_id = $1
-       )
-     WHERE factory_id = $2 AND canonical_dish_id = $1
-"""
-
-_MARK_CONFIRMED_SQL = """
-    UPDATE entity_resolution_admin_queue
-       SET status = 'CONFIRMED',
-           admin_action = 'confirm',
-           admin_user = 'admin',
-           admin_at = NOW(),
-           admin_resolved_to_entity_id = $2
-     WHERE id = $1 AND status = 'PENDING'
-    RETURNING id
-"""
-
-_MARK_REJECTED_SQL = """
-    UPDATE entity_resolution_admin_queue
-       SET status = 'REJECTED',
-           admin_action = 'reject',
-           admin_user = 'admin',
-           admin_at = NOW(),
-           extra = COALESCE(extra, '{}'::jsonb)
-                   || jsonb_build_object('reject_reason', $2::text)
-     WHERE id = $1 AND status = 'PENDING'
-    RETURNING id
-"""
-
-# 毕业镜像 (per #389): dish 走 entity_resolution_history, entity_type='dish' (V04 CHECK 已扩)。
-_HISTORY_MIRROR_SQL = """
-    INSERT INTO entity_resolution_history
-      (factory_id, entity_type, a_name, b_name, b_entity_id,
-       confidence, decided_by_agent, reasoning)
-    VALUES ($1, 'dish', $2, $3, $4, 1.0, 'admin', $5)
-    ON CONFLICT (factory_id, entity_type, a_name, b_entity_id) DO UPDATE SET
-      confidence = GREATEST(entity_resolution_history.confidence, EXCLUDED.confidence),
-      decided_by_agent = EXCLUDED.decided_by_agent,
-      reasoning = EXCLUDED.reasoning
-"""
-
 
 async def _set_tenant(conn: asyncpg.Connection, factory_id: str) -> None:
     await conn.execute("SELECT set_config('app.factory_id', $1, false)", factory_id)
-
-
-def _parse_extra(extra: Any) -> Dict[str, Any]:
-    if extra is None:
-        return {}
-    if isinstance(extra, dict):
-        return extra
-    try:
-        return json.loads(extra)
-    except (json.JSONDecodeError, TypeError, ValueError):
-        return {}
 
 
 async def list_pending(conn: asyncpg.Connection, factory_id: str) -> int:
@@ -161,144 +85,6 @@ async def list_pending(conn: asyncpg.Connection, factory_id: str) -> int:
             int(r["id"]), kind, r["raw_name"],
             extra.get("normalized_key", "?"), member_preview, more,
         )
-    return 0
-
-
-async def _mirror_history(
-    conn: asyncpg.Connection,
-    factory_id: str,
-    member_names: List[str],
-    canonical_name: str,
-    canonical_id: int,
-) -> None:
-    """best-effort 写 entity_resolution_history (per #389). fail-open + WARNING。
-
-    history 写失败 (grant gap / RLS / CHECK) 绝不阻塞 confirm — canonical + link 已落库。
-    但记 WARNING 让 deploy/审计能发现 (per #364: fail-open 必配可观测, 不静默吞)。
-    """
-    try:
-        for a_name in member_names:
-            await conn.execute(
-                _HISTORY_MIRROR_SQL,
-                factory_id, str(a_name), canonical_name, canonical_id,
-                "admin confirmed dish canonical (P4a)",
-            )
-        logger.info(
-            "  毕业镜像 → entity_resolution_history OK (%d 行, entity_type=dish)",
-            len(member_names),
-        )
-    except Exception as e:  # noqa: BLE001 — fail-open by design (per #389/#364)
-        logger.warning(
-            "  毕业镜像写 entity_resolution_history 失败 "
-            "(fail-open, 不影响 confirm; 但需关注 — 可能 grant/RLS/CHECK gap): %s",
-            e,
-        )
-
-
-async def confirm(
-    conn: asyncpg.Connection,
-    factory_id: str,
-    queue_id: int,
-    canonical_name: Optional[str],
-    canonical_id: Optional[int],
-) -> int:
-    """毕业一条 dish 提议: 建/挂 canonical + 写 dim_product.canonical_dish_id。
-
-    这是唯一写 canonical membership 的路径 (per #364 人工闸门)。
-    """
-    item = await conn.fetchrow(_GET_ITEM_SQL, queue_id, factory_id)
-    if item is None:
-        logger.error("提议 id=%d 不存在于 factory=%s 的 dish 队列。", queue_id, factory_id)
-        return 1
-    if item["status"] != "PENDING":
-        logger.error("提议 id=%d 当前状态 %s, 非 PENDING, 无法确认。",
-                     queue_id, item["status"])
-        return 1
-
-    extra = _parse_extra(item["extra"])
-    member_ids: List[int] = [int(x) for x in (extra.get("member_product_ids") or [])]
-    member_names: List[str] = [str(x) for x in (extra.get("member_names") or [])]
-    normalized_key: str = extra.get("normalized_key") or ""
-    category = extra.get("category")
-    if not member_ids:
-        logger.error("提议 id=%d 无成员 dim_product (extra.member_product_ids 空)。", queue_id)
-        return 1
-
-    # 主路径在单一事务内: 建/挂 canonical + link products + recount + mark confirmed。
-    # fail-loud — RETURNING 没行 = RLS/grant 拒, 抛异常 (per #390)。
-    async with conn.transaction():
-        if canonical_id is not None:
-            # 挂到既有 canonical: 校验存在 + active。
-            exists = await conn.fetchrow(
-                "SELECT canonical_name FROM dim_canonical_dish "
-                "WHERE factory_id = $1 AND canonical_dish_id = $2 AND status = 'active'",
-                factory_id, canonical_id,
-            )
-            if exists is None:
-                raise RuntimeError(
-                    f"--canonical-id {canonical_id} 不存在 / 非 active "
-                    f"(factory={factory_id})"
-                )
-            resolved_id = canonical_id
-            resolved_name = exists["canonical_name"]
-        else:
-            # 新建 canonical (ON CONFLICT 复用同 key)。canonical_name 优先用 --canonical-name,
-            # 否则用提议建议名 (raw_name)。
-            new_name = canonical_name or item["raw_name"]
-            row = await conn.fetchrow(
-                _CREATE_CANONICAL_SQL,
-                factory_id, new_name, normalized_key, category,
-            )
-            if row is None:
-                raise RuntimeError(
-                    f"建 canonical 失败 (factory={factory_id}, key={normalized_key!r}) — "
-                    f"possible RLS/grant rejection (per feedback_smartbi_table_grant_gap)"
-                )
-            resolved_id = int(row["canonical_dish_id"])
-            resolved_name = new_name
-
-        linked = await conn.fetch(
-            _LINK_PRODUCT_SQL, resolved_id, factory_id, member_ids
-        )
-        if not linked:
-            raise RuntimeError(
-                f"link dim_product 失败 (factory={factory_id}, members={member_ids}) — "
-                f"possible RLS/grant rejection (per feedback_smartbi_table_grant_gap)"
-            )
-        await conn.execute(_RECOUNT_SQL, resolved_id, factory_id)
-
-        marked = await conn.fetchval(_MARK_CONFIRMED_SQL, queue_id, resolved_id)
-        if marked is None:
-            raise RuntimeError(
-                f"标记队列 CONFIRMED 失败 (id={queue_id}) — 可能已被并发处理 (race)。"
-            )
-
-    logger.info(
-        "已确认 (毕业 admin): 提议 id=%d → canonical_dish_id=%d '%s', "
-        "挂 %d 个 dim_product。",
-        queue_id, resolved_id, resolved_name, len(linked),
-    )
-
-    # 毕业镜像 (best-effort, 独立于主事务; fail-open + WARNING)。
-    await _mirror_history(conn, factory_id, member_names, resolved_name, resolved_id)
-    return 0
-
-
-async def reject(
-    conn: asyncpg.Connection, factory_id: str, queue_id: int, reason: str
-) -> int:
-    item = await conn.fetchrow(_GET_ITEM_SQL, queue_id, factory_id)
-    if item is None:
-        logger.error("提议 id=%d 不存在于 factory=%s 的 dish 队列。", queue_id, factory_id)
-        return 1
-    if item["status"] != "PENDING":
-        logger.error("提议 id=%d 当前状态 %s, 非 PENDING, 无法拒绝。",
-                     queue_id, item["status"])
-        return 1
-    marked = await conn.fetchval(_MARK_REJECTED_SQL, queue_id, reason)
-    if marked is None:
-        raise RuntimeError(f"标记队列 REJECTED 失败 (id={queue_id}) — 可能已被并发处理。")
-    logger.info("已拒绝提议 id=%d (原因: %s)。", queue_id, reason)
     return 0
 
 
