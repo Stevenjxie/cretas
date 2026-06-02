@@ -15,7 +15,8 @@
 -- 范围: 仅 "最好/排行/对比/最赚钱" 类 (工具取营收 top, 不支持 "最差/垫底" 方向, 故不收 "最差"
 --   关键词, 避免把 top 当 bottom 答错; "哪家店业绩最差" 维持现状不误导)。
 --
--- flyway 版本 20260909.01 > db/flyway 已应用 max 20260908.02 (out-of-order=false, 必须更大)。
+-- flyway 版本 20260910.01 (原 20260909.01 与 #424 work_process_standard_hourly_rate 撞号,
+--   并发 merge 后 origin/main 出现两个 V20260909_01 → 重编号到空号 20260910.01; 本迁移幂等未 apply 过, 改号安全)。
 -- 幂等 ON CONFLICT (intent_code) DO UPDATE。priority 115 (= 经营基础问), business_type='RESTAURANT'
 -- 业态门控放行。keywords ::jsonb cast 与 V20260903/04/07 一致 (跨环境 keywords 列类型不一, 须显式 cast)。
 
