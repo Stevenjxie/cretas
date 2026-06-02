@@ -597,3 +597,18 @@ cd /c/Users/Steve/cretas-rest-ia/web-admin && git -C /c/Users/Steve/cretas-rest-
 - **无配方成本退化提示**(spec §4.1):menu-board/gross-margin 现有空状态逻辑沿用;若不足再单独增强。
 - **平台口碑手动上传 LLM 分析**(spec §4.3 路径1):本 plan platform.vue 引导到 `/smart-bi/upload`;专门的点评分析 LLM pipeline 是独立后续项目。
 - **部署**: 合并 main 后从 main worktree 跑 `deploy-web-admin.sh --env prod`(需 YES-PROD,per worktree-and-main-only-deploy)。
+
+---
+
+## Headed Mode Verification (Task 6 实测 2026-06-02, per `.claude/rules/playwright-headed-mode.md`)
+
+- headless: false ✓ (`restaurant-ia` project)
+- viewport: 1920×1080 ✓
+- locale: zh-CN ✓
+- chromium window 真弹 ✓ (本地 `vite dev :5173` 服务**未部署**的本分支代码, `/api` 代理到 gateway `8097` 真后端 → 验证的是本分支代码而非线上旧代码)
+- 截图字体: 中文真显示 (无方块 □) ✓ — `test-results/restaurant-ia-sidebar.png` 显示「餐饮运营」展开呈 3 层 (深度分析/日常录入/数据与系统 section divider + 9 子项)
+- screenshot mode: fullPage ✓ / video: .webm 真录 ✓
+- 多 chat 共存: `--window-position=1000,0` (右); 本版 Playwright `launch()` 拒 `--user-data-dir`/`--remote-debugging-port` → 移除 (见 commit `6fcf6f2ab`), 靠 Playwright 内置 per-worker context 隔离
+- **结果: 3/3 PASS** — (1) sidebar 3 层断言 (菜品分析/门店对比/平台口碑/配方/领料/损耗/盘点 可见, 运营总览/菜品四象限/菜品毛利 不存在) (2) 4 条旧路由 redirect (analytics→驾驶舱 / menu→dishes?tab=quadrant / gross-margin→dishes?tab=margin / dianping→platform) (3) 平台口碑 banner「本页需接入大众点评 / 美团平台数据」
+- 账号: `qhj_prod` → factoryId=`RES_3101_009` → factoryType=`RESTAURANT` (实测 unified-login 返回; #372 修正测试库后生效) → 驱动 `hideForFactoryTypes:['FACTORY']` 门控正确放行
+- 注: 单测层 25 menuConfig + 4 restaurantDishesTab = 29 通过 (结构/门控/tab 解析确定性覆盖)
