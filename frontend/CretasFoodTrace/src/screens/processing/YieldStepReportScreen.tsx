@@ -7,6 +7,7 @@ import { NeoCard } from '../../components/ui/NeoCard';
 import { NeoButton } from '../../components/ui/NeoButton';
 import YieldQuantityInput from '../../components/processing/YieldQuantityInput';
 import MaterialBatchPicker, { MaterialBatchRef } from '../../components/processing/MaterialBatchPicker';
+import WipBatchPicker, { WipSelection } from '../../components/processing/WipBatchPicker';
 import {
   yieldReportApi,
   WorkProcessTask,
@@ -67,6 +68,8 @@ const YieldStepReportScreen: React.FC = () => {
   const limitsDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // A2b: 首道领料批次引用
   const [materialBatchRefs, setMaterialBatchRefs] = useState<MaterialBatchRef[]>([]);
+  // 单元D (F006 #5): 上道多笔 WIP 时操作工选中的领用批次 (单选; null = 未选或不适用)
+  const [selectedWip, setSelectedWip] = useState<WipSelection | null>(null);
 
   const currentTask = tasks[currentStepIndex] ?? null;
   const totalSteps = tasks.length;
@@ -125,6 +128,7 @@ const YieldStepReportScreen: React.FC = () => {
     setLastAlert(null);
     setYieldLimits(null);
     setMaterialBatchRefs([]);
+    setSelectedWip(null);
   }, [currentStepIndex, prevOutput, phase]);
 
   // A4: 投入量变化后 debounce 500ms 拉超收上限
@@ -157,20 +161,31 @@ const YieldStepReportScreen: React.FC = () => {
   const isFirstStep = currentStepIndex === 0;
   // G7 Wave 4: 非首道可领的上道 WIP 余额 (来自 limits.wipAvailable); 首道为 null (领原料不受 WIP 约束)
   const wipAvailable = yieldLimits?.wipAvailable ?? null;
+  // 单元D (F006 #5): 上道多笔 WIP — sourceWipNo 歧义 (null) 但 wipAvailable>0 → 需操作工单选;
+  // 单笔时 sourceWipNo 非空, 自动领用 (保留旧行为, 不显选择器)。
+  const needsWipPicker = !isFirstStep && yieldLimits != null && yieldLimits.sourceWipNo == null && (wipAvailable ?? 0) > 0;
+  // 报工/防呆用的有效来源 WIP 批次号: 多笔 → 操作工选中的; 单笔 → limits 透出的唯一一笔。
+  const effectiveSourceWipNo = needsWipPicker ? (selectedWip?.sourceWipNo ?? null) : (yieldLimits?.sourceWipNo ?? null);
+  // 多笔模式: 投入 :max / 单位以选中那笔 WIP 为准 (各笔余额/单位可能不同)。
+  const effectiveWipAvailable = needsWipPicker
+    ? (selectedWip?.availableQuantity ?? null)
+    : wipAvailable;
   // G7 跨单位防呆: WIP 余额单位 = 上道 outputUnit (可能 ≠ 本道 unit); banner/:max 提示用源 WIP 真实单位
-  const wipUnit = yieldLimits?.wipAvailableUnit ?? unit;
+  const wipUnit = (needsWipPicker ? selectedWip?.unit : yieldLimits?.wipAvailableUnit) ?? unit;
   const plannedMax = planned != null ? planned * OVER_RECEIVE_TOLERANCE : null;
   // G7: 非首道有 WIP 余额时, 投入硬上限 = WIP 余额 (操作工领不超过可用; 防呆 Rule 1 事前阻止);
   // 与计划超收上限取更严的 (min) 作为 input :max。首道沿用计划超收上限。
+  // 单元D: 多笔 WIP 时用选中那笔的余额 (effectiveWipAvailable); 未选时为 null → 退回计划超收上限,
+  //        但提交会被 needsWipPicker && !selectedWip 阻塞 (见 submitBlockedNoWip)。
   const inputMax =
-    wipAvailable != null
+    effectiveWipAvailable != null
       ? plannedMax != null
-        ? Math.min(plannedMax, wipAvailable)
-        : wipAvailable
+        ? Math.min(plannedMax, effectiveWipAvailable)
+        : effectiveWipAvailable
       : plannedMax;
   const inputMaxHint =
-    wipAvailable != null
-      ? `可领上道半成品余额 ${wipAvailable} ${wipUnit} (本道最多领这么多)`
+    effectiveWipAvailable != null
+      ? `可领上道半成品余额 ${effectiveWipAvailable} ${wipUnit} (本道最多领这么多)`
       : planned != null
         ? `计划 ${planned} ${unit}, 可投上限约 ${Math.round(planned * OVER_RECEIVE_TOLERANCE)} (含 30% 超收)`
         : null;
@@ -190,6 +205,9 @@ const YieldStepReportScreen: React.FC = () => {
     const out = parseFloat(outputQty);
     return outputHardCap != null && !Number.isNaN(out) && out > outputHardCap;
   }, [outputQty, outputHardCap]);
+
+  // 单元D: 上道多笔 WIP 但操作工尚未选领用批次 → 阻塞提交 (本道领用是必须的, 否则后端不扣 WIP 库存账错)。
+  const submitBlockedNoWip = needsWipPicker && selectedWip == null;
 
   // A4: 强制提交 (OVER_RECEIPT 确认后调用)
   const submitWithForce = useCallback(async (req: YieldReportRequest) => {
@@ -220,6 +238,11 @@ const YieldStepReportScreen: React.FC = () => {
 
   const handleSubmit = useCallback(async () => {
     if (!currentTask) return;
+    // 单元D: 上道多笔 WIP 必须先选领用批次, 否则后端不扣 WIP 库存账会错 (防呆 Rule 1)。
+    if (submitBlockedNoWip) {
+      Alert.alert('请选择半成品批次', '上道有多笔半成品, 请先选择本道要领用的那一笔再提交');
+      return;
+    }
     const output = parseFloat(outputQty);
     if (Number.isNaN(output) || output <= 0) {
       Alert.alert('请填写本道产出量', '产出量必须大于 0');
@@ -247,9 +270,10 @@ const YieldStepReportScreen: React.FC = () => {
             })),
           }
         : {}),
-      // G7 Wave 4: 非首道领用上道 WIP — limits 透出唯一可领 WIP 工序批次号则带回, 后端扣减其余额
-      ...(currentStepIndex > 0 && yieldLimits?.sourceWipNo
-        ? { sourceWipNo: yieldLimits.sourceWipNo }
+      // G7 Wave 4 + 单元D: 非首道领用上道 WIP — 单笔自动用 limits.sourceWipNo, 多笔用操作工选中的;
+      // effectiveSourceWipNo 两种情况都已收口, 非空则带回, 后端扣减其余额。
+      ...(currentStepIndex > 0 && effectiveSourceWipNo
+        ? { sourceWipNo: effectiveSourceWipNo }
         : {}),
     };
     setSubmitting(true);
@@ -305,7 +329,7 @@ const YieldStepReportScreen: React.FC = () => {
     } finally {
       setSubmitting(false);
     }
-  }, [currentTask, outputQty, inputQty, unit, outUnit, batchId, currentStepIndex, totalSteps, submitWithForce, materialBatchRefs, workerCount, workMinutes, yieldLimits]);
+  }, [currentTask, outputQty, inputQty, unit, outUnit, batchId, currentStepIndex, totalSteps, submitWithForce, materialBatchRefs, workerCount, workMinutes, effectiveSourceWipNo, submitBlockedNoWip]);
 
   // P1-1: 结清 (triggerComplete 决定是否同时完工入库)
   const doSettle = useCallback(async (triggerComplete: boolean) => {
@@ -524,8 +548,16 @@ const YieldStepReportScreen: React.FC = () => {
             />
           ) : null}
 
-          {/* G7 Wave 4: 非首道领用上道半成品 — 显式显示可领余额 (防呆 Rule 1: dialog 打开即显边界) */}
-          {!isFirstStep && wipAvailable != null ? (
+          {/* 单元D (F006 #5): 上道多笔 WIP (sourceWipNo 歧义) → 显式单选领用批次 (防呆 Rule 1: 事前阻止) */}
+          {needsWipPicker ? (
+            <WipBatchPicker
+              batchId={batchId}
+              selectedSourceWipNo={selectedWip?.sourceWipNo ?? null}
+              onChange={setSelectedWip}
+              disabled={submitting}
+            />
+          ) : !isFirstStep && wipAvailable != null ? (
+            /* G7 Wave 4: 非首道单笔 WIP (自动领用) — 显式显示可领余额 (防呆 Rule 1: dialog 打开即显边界) */
             <View style={styles.wipBanner} testID="yield-wip-available">
               <Text style={styles.wipBannerText}>
                 可领上道半成品余额 {wipAvailable} {wipUnit}
@@ -619,7 +651,7 @@ const YieldStepReportScreen: React.FC = () => {
           variant="primary"
           size="large"
           onPress={handleSubmit}
-          disabled={submitting || outputOverHardCap}
+          disabled={submitting || outputOverHardCap || submitBlockedNoWip}
           loading={submitting}
           style={styles.fullBtn}
           testID="yield-submit-btn"
