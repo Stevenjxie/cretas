@@ -76,4 +76,18 @@ public class EmployeeProcessSegmentController {
             @PathVariable @NotBlank String factoryId) {
         return ApiResponse.success("查询成功", service.listActive(factoryId));
     }
+
+    /**
+     * 单元C (F006 REQ-14): 汇总某员工在某工序上所有已结束片段的总工时 (整分钟).
+     *
+     * <p>员工一个工序段内可能多次扫码上班/下班, 客户要"所有上班下班时间"汇总.
+     */
+    @GetMapping("/total-minutes")
+    public ApiResponse<Map<String, Object>> getTotalMinutes(
+            @PathVariable @NotBlank String factoryId,
+            @RequestParam Long employeeId,
+            @RequestParam String processId) {
+        int totalMinutes = service.getTotalMinutes(factoryId, employeeId, processId);
+        return ApiResponse.success("查询成功", Map.of("totalMinutes", totalMinutes));
+    }
 }
