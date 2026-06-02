@@ -419,13 +419,20 @@ class FactReconciler:
             else:
                 dev = abs(claimed - true_v) / abs(true_v)
             if dev > tol:
-                # 宁漏不错: if a store/branch qualifier appears just BEFORE the
-                # metric, this number is entity-scoped (e.g.
-                # "…（虹口龙之梦店）差评集中（64条" — that 64 is THIS store's count,
-                # not the global 差评 total), so rewriting it to the global fact
-                # would be a FALSE correction. Skip. (spec §5.5)
-                preceding = result[max(0, pos - 24): pos]
-                if "店" in preceding or "馆" in preceding or "门店" in preceding:
+                # 宁漏不错: only annotate when the number is a CLAIM about the
+                # GLOBAL metric. Skip when the same sentence (before the metric)
+                # carries a store/branch qualifier — a store-scoped number, e.g.
+                # "…（虹口龙之梦店）差评集中（64" / "…日月光店…客单价694" — OR a
+                # projection verb — a forecast delta, e.g. "约减少差评45条".
+                # Rewriting either to the global fact is a FALSE correction.
+                sb = max((result.rfind(c, 0, pos) for c in "。；！？!?\n"), default=-1)
+                sentence = result[sb + 1: pos]
+                if any(t in sentence for t in ("店", "馆", "门店")):
+                    search_from = pos + len(name)
+                    continue
+                if any(v in sentence for v in (
+                        "减少", "降低", "下降", "提升", "提高", "回升", "增长",
+                        "预计", "可降", "可减", "将降", "下调", "上调", "目标")):
                     search_from = pos + len(name)
                     continue
                 # Insert annotation right after the matched number.
@@ -459,6 +466,12 @@ class FactReconciler:
             if cand in seen:
                 continue
             seen.add(cand)
+            # 宁漏不错: only branch-style store NAMES carry a parenthetical
+            # landmark ("…（虹口龙之梦店）"). Generic references (该店 / 门店 /
+            # 其他门店 / 个别门店 / 高差评门店) have none and are NOT fabricated
+            # names — never flag them.
+            if "（" not in cand and "(" not in cand:
+                continue
             # If the candidate is a substring of, or contains, a known store →
             # treat as known (handles "大融城店" vs "青花椒大融城店").
             if cand in known_set:
