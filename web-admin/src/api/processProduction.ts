@@ -133,6 +133,7 @@ export interface WorkProcessItem {
   standardYieldMax: number | null;   // P0-3: 标准出成率上限 (1.35 = 135%, 超收预检基准)
   needsInput: boolean;               // 该工序是否需录投入量 (默认 true)
   outputUnit: string | null;         // 产出单位 (kg→盒/份; 空则沿用 unit)
+  standardHourlyRate: number | null; // 标准时薪 (元/小时; null=未配置, 绝不默认 0)
   createdAt: string;
   updatedAt: string;
 }
