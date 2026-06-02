@@ -324,5 +324,42 @@ export default defineConfig({
         video: { mode: 'on', size: { width: 1920, height: 1080 } },
       },
     },
+    // 餐饮运营组 IA v2 — headed E2E (2026-06-02). 验证「餐饮运营」组重组 3 层
+    // (深度分析/日常录入/数据与系统) + 旧路由 redirect (menu/gross-margin/dianping/analytics)
+    // + 平台口碑页禁假数据 banner。HEADED per .claude/rules/playwright-headed-mode.md
+    // (中文字体/CSS/客户演示真实)。多 chat 共存: PLAYWRIGHT_PORT/CHAT_ID per chat
+    // (默认 9224 / mealclaw 餐饮 chat, window-position 右)。
+    // Run via:
+    //   E2E_BASE_URL=http://139.196.165.140:8097 \
+    //   PLAYWRIGHT_PORT=9224 PLAYWRIGHT_CHAT_ID=restaurant-ia \
+    //   npx playwright test --project restaurant-ia
+    // Self-injects auth (qhj_prod) via e2e-auth-helper; no vue-auth dep.
+    {
+      name: 'restaurant-ia',
+      testMatch: 'tests/restaurant-ia.spec.ts',
+      fullyParallel: false,
+      workers: 1,
+      use: {
+        // ⭐ HEADED — 真弹 chromium window, 客户演示价值 (per playwright-headed-mode rule)
+        headless: false,
+        viewport: { width: 1920, height: 1080 },
+        locale: 'zh-CN',
+        timezoneId: 'Asia/Shanghai',
+        launchOptions: {
+          args: [
+            `--remote-debugging-port=${Number(process.env.PLAYWRIGHT_PORT) || 9224}`,
+            `--user-data-dir=./.pw-cache-${process.env.PLAYWRIGHT_CHAT_ID || 'restaurant-ia'}/`,
+            '--lang=zh-CN',
+            '--font-render-hinting=none',
+            '--disable-blink-features=AutomationControlled',
+            '--window-position=1000,0',
+            '--window-size=1920,1080',
+          ],
+          slowMo: 100,
+        },
+        screenshot: { mode: 'on', fullPage: true },
+        video: { mode: 'on', size: { width: 1920, height: 1080 } },
+      },
+    },
   ],
 });
