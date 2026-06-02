@@ -24,13 +24,65 @@ from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Query, Request
 
+from smartbi_compat._rbac_strip import PRICE_VIEW_ROLES, strip_price_for_role
+
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["RestaurantOpsGold"])
+
+
+# Restaurant-ops money keys not matched by the shared ``_MONEY_PATTERN``. The
+# shared regex catches ``revenue`` / ``revenueMedian`` / ``medianRevenue`` (all
+# contain the substring 'revenue') but NOT the camelCase ``avgTicket`` (客单价,
+# 元/单) — unambiguously monetary, so strip it here as a thin local extension.
+# Mirror of gold_reads._GOLD_EXTRA_MONEY_KEYS (which added weekdayAvg/weekendAvg
+# for the same reason on the /trend-bundle shape).
+_RESTAURANT_OPS_EXTRA_MONEY_KEYS: frozenset[str] = frozenset({
+    "avgTicket",
+})
 
 
 def _get_factory_id(request: Request) -> Optional[str]:
     """Extract factory_id set by auth middleware."""
     return getattr(request.state, "factory_id", None)
+
+
+def _get_role(request: Request) -> Optional[str]:
+    """Role string set by JWTAuthMiddleware (auth_middleware.py).
+
+    Mirrors gold_reads._get_role — ``_get_factory_id`` above reads
+    ``request.state.factory_id`` from the same middleware, so the role lives at
+    ``request.state.role``.
+    """
+    return getattr(request.state, "role", None)
+
+
+def _strip_ops_extras(node: Any) -> None:
+    """Depth-first null of restaurant-ops money keys the shared regex misses."""
+    if isinstance(node, dict):
+        for k, v in list(node.items()):
+            if k in _RESTAURANT_OPS_EXTRA_MONEY_KEYS and not isinstance(v, (dict, list)):
+                node[k] = None
+            else:
+                _strip_ops_extras(v)
+    elif isinstance(node, list):
+        for item in node:
+            _strip_ops_extras(item)
+
+
+def _apply_rbac_strip(data: Any, role: Optional[str]) -> Any:
+    """Null monetary fields in ``data`` for roles outside PRICE_VIEW_ROLES.
+
+    Walks the inner ``data`` payload (NOT the ``{success, data}`` envelope) so
+    the standard wrapper keys survive. Whitelisted roles get the raw payload.
+    Returns the same ``data`` reference for caller convenience.
+    """
+    if role and role in PRICE_VIEW_ROLES:
+        return data
+    if data is None:
+        return data
+    strip_price_for_role(data, role)
+    _strip_ops_extras(data)
+    return data
 
 
 @router.post("/restaurant-ops/etl")
@@ -501,6 +553,9 @@ async def menu_quadrant_endpoint(
     except Exception as e:
         logger.exception("[menu-quadrant] failed for %s", factory_id)
         return {"success": False, "message": f"compute failed: {e}"}
+    # RBAC: revenue / revenueMedian 等金额字段对非 price-view 角色剥零。
+    # qty / quadrant / name / qtyMedian 非金额, 保留。
+    _apply_rbac_strip(data, _get_role(request))
     return {"success": True, "data": data}
 
 
@@ -533,6 +588,9 @@ async def store_comparison_endpoint(
     except Exception as e:
         logger.exception("[store-comparison] failed for %s", factory_id)
         return {"success": False, "message": f"compute failed: {e}"}
+    # RBAC: revenue / medianRevenue / avgTicket 等金额字段对非 price-view 角色剥零。
+    # orderCount / name / weakStores(门店名) 非金额, 保留。
+    _apply_rbac_strip(data, _get_role(request))
     return {"success": True, "data": data}
 
 
