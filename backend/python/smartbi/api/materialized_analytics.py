@@ -515,6 +515,34 @@ async def reclassify_upload(
             "domain": domain_value,
         }
 
+        # Dish-classification self-learning (Jun 2 2026): this reclassify endpoint
+        # is the UI save→materialize terminus (Java POST /reclassify after the
+        # confirm/persist), NOT the background schedule_materialization hook —
+        # so the dish enrichment wired in hooks.py never ran here. Mirror it:
+        # while materialize_ctx still holds the polars DataFrame + schema (cleared
+        # by the L2-warm block below), collect 其他 dishes → LLM-classify →
+        # capture as classification candidates. Fire-and-forget; never blocks.
+        try:
+            from smartbi.services.materialized_analytics.restaurant.dish_classifier_learning import (  # noqa: E501
+                maybe_enrich_dish_classifications,
+            )
+            _dish_backend = materialize_ctx.get("backend")
+            _dish_schema = materialize_ctx.get("schema")
+            if _dish_backend is not None and _dish_schema is not None:
+                _captured = await maybe_enrich_dish_classifications(
+                    pool, user_factory, _dish_backend, _dish_schema
+                )
+                if _captured:
+                    logger.info(
+                        f"[reclassify] upload {upload_id}: dish-classification "
+                        f"learning captured {_captured} candidate(s)"
+                    )
+        except Exception as _dish_err:  # noqa: BLE001 — fire-and-forget
+            logger.warning(
+                f"[reclassify] upload {upload_id}: dish-classification learning "
+                f"failed (non-blocking): {_dish_err}"
+            )
+
         # Also pre-warm the L2 aggregate cache (LLM fallback path). If the
         # materialize call exposed its polars DataFrame via out_ctx we use
         # that for a ~1s in-memory compute; otherwise we fall back to the SQL
