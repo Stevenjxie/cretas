@@ -33,9 +33,16 @@ from smartbi.gold import (
     review_city_ranking,
     review_complaints,
     review_dish_issues,
+    review_good_tags,
+    review_platform,
+    review_reply_rate,
+    review_score_tags,
     review_store_ranking,
     review_summary,
+    review_time_period,
+    review_trend,
     review_vip,
+    review_vip_tags,
     staff_ranking,
     top_products,
 )
@@ -390,6 +397,117 @@ async def get_review_dish_issues(
         )
     except Exception as e:
         logger.exception("review-dish-issues failed: %s", e)
+        raise HTTPException(status_code=500, detail=f"Review query failed: {e}")
+
+
+@router.get("/review-vip-tags")
+async def get_review_vip_tags(
+    request: Request,
+    factory_id: Optional[str] = Query(None),
+    top_n: int = Query(6, ge=1, le=20),
+):
+    """VIP vs 非VIP 各自的高频好评/差评口味/品质标签 (非菜名)。"""
+    fid = _resolve_tenant(factory_id)
+    pool = await get_pg_pool()
+    try:
+        return await review_vip_tags(pool, fid, top_n=top_n)
+    except Exception as e:
+        logger.exception("review-vip-tags failed: %s", e)
+        raise HTTPException(status_code=500, detail=f"Review query failed: {e}")
+
+
+@router.get("/review-time-period")
+async def get_review_time_period(
+    request: Request,
+    factory_id: Optional[str] = Query(None),
+):
+    """各时段 (早/午/下午/晚/夜) 评价量与平均星级 (time_period ~73% 有值)。"""
+    fid = _resolve_tenant(factory_id)
+    pool = await get_pg_pool()
+    try:
+        return await review_time_period(pool, fid)
+    except Exception as e:
+        logger.exception("review-time-period failed: %s", e)
+        raise HTTPException(status_code=500, detail=f"Review query failed: {e}")
+
+
+@router.get("/review-score-tags")
+async def get_review_score_tags(
+    request: Request,
+    factory_id: Optional[str] = Query(None),
+    dim: str = Query("service", description="service|env"),
+    top_n: int = Query(10, ge=1, le=30),
+):
+    """服务标签 / 环境标签 高频词 + 该维度平均分。"""
+    fid = _resolve_tenant(factory_id)
+    if dim not in ("service", "env"):
+        raise HTTPException(status_code=400, detail="dim must be service|env")
+    pool = await get_pg_pool()
+    try:
+        return await review_score_tags(pool, fid, dim=dim, top_n=top_n)
+    except Exception as e:
+        logger.exception("review-score-tags failed: %s", e)
+        raise HTTPException(status_code=500, detail=f"Review query failed: {e}")
+
+
+@router.get("/review-good-tags")
+async def get_review_good_tags(
+    request: Request,
+    factory_id: Optional[str] = Query(None),
+    top_n: int = Query(10, ge=1, le=30),
+):
+    """好评(>=4.5星)高频口味/品质标签 (非菜名)。"""
+    fid = _resolve_tenant(factory_id)
+    pool = await get_pg_pool()
+    try:
+        return await review_good_tags(pool, fid, top_n=top_n)
+    except Exception as e:
+        logger.exception("review-good-tags failed: %s", e)
+        raise HTTPException(status_code=500, detail=f"Review query failed: {e}")
+
+
+@router.get("/review-platform")
+async def get_review_platform(
+    request: Request,
+    factory_id: Optional[str] = Query(None),
+):
+    """各平台 (点评/美团) 评价量与平均星级对比。"""
+    fid = _resolve_tenant(factory_id)
+    pool = await get_pg_pool()
+    try:
+        return await review_platform(pool, fid)
+    except Exception as e:
+        logger.exception("review-platform failed: %s", e)
+        raise HTTPException(status_code=500, detail=f"Review query failed: {e}")
+
+
+@router.get("/review-trend")
+async def get_review_trend(
+    request: Request,
+    factory_id: Optional[str] = Query(None),
+):
+    """按 time_period 月份聚合评价量与平均星级 (时间序列)。"""
+    fid = _resolve_tenant(factory_id)
+    pool = await get_pg_pool()
+    try:
+        return await review_trend(pool, fid)
+    except Exception as e:
+        logger.exception("review-trend failed: %s", e)
+        raise HTTPException(status_code=500, detail=f"Review query failed: {e}")
+
+
+@router.get("/review-reply-rate")
+async def get_review_reply_rate(
+    request: Request,
+    factory_id: Optional[str] = Query(None),
+):
+    """商家回复率 (已/未回复 + 未回复差评数)。"""
+    fid = _resolve_tenant(factory_id)
+    pool = await get_pg_pool()
+    try:
+        return await review_reply_rate(pool, fid)
+    except Exception as e:
+        logger.exception("review-reply-rate failed: %s", e)
         raise HTTPException(status_code=500, detail=f"Review query failed: {e}")
 
 
