@@ -1283,6 +1283,60 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                 logger.warning(f"[chat-session] phase 0 lookup failed (non-fatal): {e}")
 
         try:
+            # P2 综合分析 (multi-dim synthesis) router — runs FIRST, BEFORE the
+            # single-dataset gold-ops + xlsx template routers, so a free-form
+            # "综合分析评价和经营" / "VIP和菜品门店的关系" question is served by the
+            # synthesis engine (review + finance/sales → FactBook → grounded LLM +
+            # charts) instead of falling through to a single-dataset template.
+            # match_comprehensive_synthesis is confident-only: single-dim queries
+            # do NOT match here and fall through to the existing accurate routes
+            # (per feedback_intent_gate_must_cover_all_execution_paths: this is the
+            # Python path B mirror of the Java COMPREHENSIVE_SYNTHESIS intent).
+            try:
+                user_q = (request.effective_query or "").strip()
+                factory_id_hdr = (
+                    getattr(http_request.state, 'factory_id', None)
+                    if hasattr(http_request, 'state') else None
+                )
+                if user_q and factory_id_hdr:
+                    from smartbi.agent.synthesis_router import match_comprehensive_synthesis
+                    if match_comprehensive_synthesis(user_q):
+                        from smartbi.agent.synthesis_engine import (
+                            ComprehensiveSynthesisEngine,
+                        )
+                        from smartbi.api.synthesis import _resolve_window
+                        from smartbi.config import get_pg_pool as _get_pool_syn
+                        pool_syn = await _get_pool_syn()
+                        if pool_syn:
+                            window = await _resolve_window(pool_syn, factory_id_hdr, None, None)
+                            engine = ComprehensiveSynthesisEngine(pool_syn)
+                            syn = await engine.synthesize(factory_id_hdr, user_q, window)
+                            yield _sse_event("status", "综合分析：评价+经营多维")
+                            answer_syn = syn.answer or ""
+                            chunk_size = 40
+                            for i in range(0, len(answer_syn), chunk_size):
+                                yield _sse_event("chunk", answer_syn[i:i + chunk_size])
+                            if syn.charts:
+                                yield _sse_event("charts", syn.charts)
+                            wall_ms = int((time.time() - start_time) * 1000)
+                            yield _sse_event("done", {
+                                "success": True,
+                                "answer": answer_syn,
+                                "charts": syn.charts,
+                                "source": "comprehensive_synthesis",
+                                "plan": syn.plan,
+                                "fact_check": syn.fact_check,
+                                "processingTimeMs": wall_ms,
+                                "log_id": None,
+                            })
+                            logger.info(
+                                f"[stream] served via synthesis engine: source={syn.source}, "
+                                f"wall={wall_ms}ms"
+                            )
+                            return  # early exit — synthesis served the answer
+            except Exception as e:
+                logger.warning(f"[stream] synthesis router failed, falling through: {e}")
+
             # Apr 24 2026 Plan C Phase 4: Restaurant daily-ops Gold router (runs
             # BEFORE xlsx template router). Routes queries about 损耗/盘点/领料/
             # 配方成本 to pre-aggregated Gold tables. No upload_id needed.
