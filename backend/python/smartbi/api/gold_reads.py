@@ -135,10 +135,15 @@ def _resolve_tenant(factory_id: Optional[str]) -> str:
     return fid
 
 
-def _parse_range(start_date: str, end_date: str) -> tuple:
-    start = _parse_date(start_date, "start_date")
-    end = _parse_date(end_date, "end_date")
-    if start > end:
+def _parse_range(start_date: Optional[str], end_date: Optional[str]) -> tuple:
+    """Parse an optional date range.
+
+    WS1: dates are optional — a missing bound means "open" (= all history on
+    that side). Only validate the ordering when BOTH bounds are present.
+    """
+    start = _parse_date(start_date, "start_date") if start_date else None
+    end = _parse_date(end_date, "end_date") if end_date else None
+    if start is not None and end is not None and start > end:
         raise HTTPException(status_code=400, detail="start_date > end_date")
     return start, end
 
@@ -146,8 +151,8 @@ def _parse_range(start_date: str, end_date: str) -> tuple:
 @router.get("/finance-summary")
 async def get_finance_summary(
     request: Request,
-    start_date: str = Query(..., description="YYYY-MM-DD inclusive"),
-    end_date: str = Query(..., description="YYYY-MM-DD inclusive"),
+    start_date: Optional[str] = Query(None, description="YYYY-MM-DD inclusive; 省略=全部历史"),
+    end_date: Optional[str] = Query(None, description="YYYY-MM-DD inclusive; 省略=全部历史"),
     factory_id: Optional[str] = Query(None, description="belt-and-suspenders; defaults to JWT tenant"),
     top_n_stores: int = Query(10, ge=1, le=100),
 ):
@@ -168,7 +173,12 @@ async def get_finance_summary(
     cache = _get_cache(pool)
     cache_key = compute_cache_key(
         "finance-summary",
-        start.isoformat(), end.isoformat(),
+        # start/end may be None (all-history). Pass the parsed date's ISO
+        # string when present, else None — compute_cache_key collapses None
+        # to "" giving a stable, distinct all-history key (no AttributeError
+        # on None).
+        start.isoformat() if start is not None else None,
+        end.isoformat() if end is not None else None,
         role, {"top_n_stores": top_n_stores},
     )
     try:
@@ -199,8 +209,8 @@ async def get_finance_summary(
 @router.get("/daily-trend")
 async def get_daily_trend(
     request: Request,
-    start_date: str = Query(..., description="YYYY-MM-DD inclusive"),
-    end_date: str = Query(..., description="YYYY-MM-DD inclusive"),
+    start_date: Optional[str] = Query(None, description="YYYY-MM-DD inclusive; 省略=全部历史"),
+    end_date: Optional[str] = Query(None, description="YYYY-MM-DD inclusive; 省略=全部历史"),
     factory_id: Optional[str] = Query(None),
 ):
     """Daily revenue + bill-count trend for 分析概览 line chart."""
@@ -218,8 +228,8 @@ async def get_daily_trend(
 @router.get("/top-products")
 async def get_top_products(
     request: Request,
-    start_date: str = Query(...),
-    end_date: str = Query(...),
+    start_date: Optional[str] = Query(None, description="YYYY-MM-DD inclusive; 省略=全部历史"),
+    end_date: Optional[str] = Query(None, description="YYYY-MM-DD inclusive; 省略=全部历史"),
     factory_id: Optional[str] = Query(None),
     top_n: int = Query(10, ge=1, le=100),
     order: str = Query("desc", description="Sort direction: 'desc' for top sellers, 'asc' for slow sellers"),
@@ -242,8 +252,8 @@ async def get_top_products(
 @router.get("/channel-breakdown")
 async def get_channel_breakdown(
     request: Request,
-    start_date: str = Query(...),
-    end_date: str = Query(...),
+    start_date: Optional[str] = Query(None, description="YYYY-MM-DD inclusive; 省略=全部历史"),
+    end_date: Optional[str] = Query(None, description="YYYY-MM-DD inclusive; 省略=全部历史"),
     factory_id: Optional[str] = Query(None),
     top_n: int = Query(10, ge=1, le=100),
 ):
@@ -263,8 +273,8 @@ async def get_channel_breakdown(
 @router.get("/discount-breakdown")
 async def get_discount_breakdown(
     request: Request,
-    start_date: str = Query(...),
-    end_date: str = Query(...),
+    start_date: Optional[str] = Query(None, description="YYYY-MM-DD inclusive; 省略=全部历史"),
+    end_date: Optional[str] = Query(None, description="YYYY-MM-DD inclusive; 省略=全部历史"),
     factory_id: Optional[str] = Query(None),
     top_n: int = Query(10, ge=1, le=100),
 ):
@@ -284,8 +294,8 @@ async def get_discount_breakdown(
 @router.get("/order-type-mix")
 async def get_order_type_mix(
     request: Request,
-    start_date: str = Query(...),
-    end_date: str = Query(...),
+    start_date: Optional[str] = Query(None, description="YYYY-MM-DD inclusive; 省略=全部历史"),
+    end_date: Optional[str] = Query(None, description="YYYY-MM-DD inclusive; 省略=全部历史"),
     factory_id: Optional[str] = Query(None),
 ):
     """堂食 vs 外卖 revenue split from agg_daily_order_type_meal.order_type.
@@ -307,8 +317,8 @@ async def get_order_type_mix(
 @router.get("/staff-ranking")
 async def get_staff_ranking(
     request: Request,
-    start_date: str = Query(...),
-    end_date: str = Query(...),
+    start_date: Optional[str] = Query(None, description="YYYY-MM-DD inclusive; 省略=全部历史"),
+    end_date: Optional[str] = Query(None, description="YYYY-MM-DD inclusive; 省略=全部历史"),
     factory_id: Optional[str] = Query(None),
     top_n: int = Query(5, ge=1, le=50),
 ):
@@ -794,8 +804,8 @@ def _row_to_result(row) -> dict:
 @router.get("/kpi-summary")
 async def get_kpi_summary(
     request: Request,
-    start_date: str = Query(...),
-    end_date: str = Query(...),
+    start_date: Optional[str] = Query(None, description="YYYY-MM-DD inclusive; 省略=全部历史"),
+    end_date: Optional[str] = Query(None, description="YYYY-MM-DD inclusive; 省略=全部历史"),
     factory_id: Optional[str] = Query(None),
 ):
     """Compact KPI card data — feeds both 分析概览 + KPI看板 headers.

@@ -52,7 +52,7 @@ def _validate_range(start: Optional[date], end: Optional[date]) -> None:
 async def daily_trend(
     pool: asyncpg.Pool,
     factory_id: str,
-    date_range: Tuple[date, date],
+    date_range: Tuple[Optional[date], Optional[date]],
 ) -> Dict[str, Any]:
     """Daily revenue/bill-count trend — feeds 分析概览 trend line chart.
 
@@ -108,7 +108,7 @@ async def daily_trend(
 async def top_products(
     pool: asyncpg.Pool,
     factory_id: str,
-    date_range: Tuple[date, date],
+    date_range: Tuple[Optional[date], Optional[date]],
     *,
     top_n: int = 10,
     order: str = "desc",
@@ -283,7 +283,7 @@ async def top_products(
 async def channel_breakdown(
     pool: asyncpg.Pool,
     factory_id: str,
-    date_range: Tuple[date, date],
+    date_range: Tuple[Optional[date], Optional[date]],
     *,
     top_n: int = 10,
 ) -> Dict[str, Any]:
@@ -344,7 +344,7 @@ async def channel_breakdown(
 async def discount_breakdown(
     pool: asyncpg.Pool,
     factory_id: str,
-    date_range: Tuple[date, date],
+    date_range: Tuple[Optional[date], Optional[date]],
     *,
     top_n: int = 10,
 ) -> Dict[str, Any]:
@@ -414,7 +414,7 @@ async def discount_breakdown(
 async def kpi_summary(
     pool: asyncpg.Pool,
     factory_id: str,
-    date_range: Tuple[date, date],
+    date_range: Tuple[Optional[date], Optional[date]],
 ) -> Dict[str, Any]:
     """Compact KPI card data for the 分析概览 + KPI看板 headers.
 
@@ -509,7 +509,7 @@ async def data_range(
 async def order_type_mix(
     pool: asyncpg.Pool,
     factory_id: str,
-    date_range: Tuple[date, date],
+    date_range: Tuple[Optional[date], Optional[date]],
 ) -> Dict[str, Any]:
     """Dine-in vs takeout revenue split from agg_daily_order_type_meal.
 
@@ -575,7 +575,7 @@ async def order_type_mix(
 async def staff_ranking(
     pool: asyncpg.Pool,
     factory_id: str,
-    date_range: Tuple[date, date],
+    date_range: Tuple[Optional[date], Optional[date]],
     *,
     top_n: int = 5,
 ) -> Dict[str, Any]:
@@ -640,7 +640,7 @@ async def staff_ranking(
 async def finance_summary(
     pool: asyncpg.Pool,
     factory_id: str,
-    date_range: Tuple[date, date],
+    date_range: Tuple[Optional[date], Optional[date]],
     *,
     top_n_stores: int = 10,
 ) -> Dict[str, Any]:
