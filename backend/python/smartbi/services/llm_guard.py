@@ -354,9 +354,16 @@ class FactReconciler:
             violations.append(halluc)
             confidence_adj -= 0.2
 
-        # 3. Fabricated store-name detection (only when we know the universe).
+        # 3. Fabricated store-name detection — METADATA ONLY (宁漏不错).
+        # Inline annotating store names on free-form prose is unreliable: a regex
+        # can't robustly tell a real branch name from generic 店-words
+        # (该店/跨门店/"64条（该店") across all LLM phrasings, and a wrong
+        # "[未在数据中找到]" in the customer answer is worse than none. So we
+        # record the suspicion as a violation (for monitoring / confidence) but
+        # do NOT mutate the answer text. The numeric reconciliation above stays
+        # inline (it is now precise — connective-adjacent + sentence-scoped).
         if known_store_names:
-            out, fab = self._flag_fabricated_stores(out, known_store_names)
+            _annotated, fab = self._flag_fabricated_stores(out, known_store_names)
             if fab:
                 violations.extend(f"疑似编造门店名: {n}" for n in fab)
                 confidence_adj -= 0.15
