@@ -27,15 +27,16 @@
  * 与 e2e-ia-redesign.spec.ts / revenue-report-smoke.spec.ts 同模式。登录 API 返回的
  * factoryType 会写入 cretas_user → 驱动 AppSidebar 的业态门控 (hideForFactoryTypes)。
  *
- * ⚠️ 已知数据 caveat (与 e2e-ia-redesign.spec.ts lines 92-96 同源):
+ * 数据前提 (2026-06-02 实测确认):
  *   「餐饮运营」顶级组 hideForFactoryTypes:['FACTORY'] → 仅 factoryType=RESTAURANT 的
- *   租户可见。prod 测试账号 qhj_prod 在 cretas_prod_db 里 factoryType=FACTORY (其 POS
- *   数据在 smartbi_prod_db 是餐饮数据, 但租户类型未标 RESTAURANT) → 「餐饮运营」组对
- *   该账号会被门控隐藏。故 sidebar 测试在该账号下若发现组缺失, 会跳过组成员断言并打印
- *   诊断 (门控机制本身已由 18 个 menuConfig 单测 + restaurantDishesTab 单测覆盖)。
- *   待有真 RESTAURANT 账号 (E2E_REST_USER override) 即可全量断言。
- *   redirect 测试 + 平台口碑 banner 测试 不依赖 sidebar 门控 (路由/页面与 factoryType 无关),
- *   始终全量执行。
+ *   租户可见。qhj_prod 经 #372 修正后在测试后端 (gateway 8097) 已正确解析为
+ *   factoryId=RES_3101_009 / factoryType=RESTAURANT (实测 unified-login 返回值 +
+ *   注入 cretas_user → authStore.factoryType=RESTAURANT → AppSidebar 渲染该组,
+ *   含菜品分析/门店对比/平台口碑/配方/领料/损耗/盘点/数据完整度/ETL 全 9 项)。
+ *   故 sidebar 测试**断言**该组渲染 (不再 skip) —— 若该组缺失即真失败 (账号业态错 /
+ *   代码未部署), 是诚实信号, 不静默降级。
+ *   注: 等 Vue 侧边栏挂载用 auto-waiting `expect(...).toBeVisible()`, 不用 `isVisible()`
+ *   瞬时检查 (会在渲染前误判 false)。
  *
  * Java 对每个 username 有 60s 登录限流, 故 beforeAll 登录一次, 整个 spec 共享 token。
  */
@@ -77,31 +78,22 @@ test.describe('餐饮运营组 IA v2 (headed 餐饮租户)', () => {
   test('餐饮运营组呈 3 层, 含菜品分析/平台口碑, 无运营总览/菜品两项', async ({ page, context }) => {
     await gotoRestaurant(page, context);
 
-    // 「餐饮运营」组标题 (el-sub-menu__title)。仅 factoryType=RESTAURANT 可见。
-    const groupTitle = page.getByText('餐饮运营', { exact: true });
-    const groupVisible = await groupTitle.isVisible().catch(() => false);
-    if (!groupVisible) {
-      // qhj_prod factoryType=FACTORY → 组被 hideForFactoryTypes:['FACTORY'] 门控隐藏。
-      // 见文件头 caveat。组成员断言留给真 RESTAURANT 账号; 门控由单测覆盖。
-      // eslint-disable-next-line no-console
-      console.warn(
-        '[restaurant-ia] 「餐饮运营」组未渲染 — 当前账号 factoryType≠RESTAURANT, ' +
-          '组被 hideForFactoryTypes:[FACTORY] 门控隐藏 (见文件头 caveat)。跳过组成员断言。',
-      );
-      await page.screenshot({ path: 'test-results/restaurant-ia-sidebar.png', fullPage: true });
-      test.skip(true, '当前测试账号 factoryType≠RESTAURANT, 餐饮运营组被门控隐藏');
-      return;
+    // 「餐饮运营」组标题 (el-sub-menu__title)。qhj_prod=RESTAURANT → 必渲染。
+    // auto-waiting 断言等 Vue 侧边栏挂载 (不用 isVisible() 瞬时检查)。
+    const groupTitle = page.locator('.el-sub-menu__title', { hasText: '餐饮运营' });
+    await expect(groupTitle).toBeVisible({ timeout: 15_000 });
+
+    // 确保组展开 (默认折叠则点开), 使子 el-menu-item 进入可见态
+    const dishItem = page.getByRole('menuitem', { name: '菜品分析', exact: true });
+    if (!(await dishItem.isVisible().catch(() => false))) {
+      await groupTitle.click();
+      await page.waitForTimeout(600);
     }
 
-    // 展开组使 el-menu-item 子项渲染
-    await groupTitle.click();
-    await page.waitForTimeout(600);
-
-    // 重组后子项可见 (深度分析 + 日常录入)
-    await expect(page.getByRole('menuitem', { name: '菜品分析' })).toBeVisible();
-    await expect(page.getByRole('menuitem', { name: '平台口碑' })).toBeVisible();
-    await expect(page.getByRole('menuitem', { name: '门店对比' })).toBeVisible();
-    await expect(page.getByRole('menuitem', { name: '配方管理' })).toBeVisible();
+    // 重组后子项可见 (深度分析: 菜品分析/门店对比/平台口碑; 日常录入: 配方/领料/损耗/盘点)
+    for (const name of ['菜品分析', '门店对比', '平台口碑', '配方管理', '领料管理', '损耗管理', '盘点管理']) {
+      await expect(page.getByRole('menuitem', { name, exact: true })).toBeVisible();
+    }
 
     // 移除项不应出现
     await expect(page.getByRole('menuitem', { name: '运营总览' })).toHaveCount(0);

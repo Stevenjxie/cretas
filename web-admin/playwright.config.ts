@@ -327,11 +327,11 @@ export default defineConfig({
     // 餐饮运营组 IA v2 — headed E2E (2026-06-02). 验证「餐饮运营」组重组 3 层
     // (深度分析/日常录入/数据与系统) + 旧路由 redirect (menu/gross-margin/dianping/analytics)
     // + 平台口碑页禁假数据 banner。HEADED per .claude/rules/playwright-headed-mode.md
-    // (中文字体/CSS/客户演示真实)。多 chat 共存: PLAYWRIGHT_PORT/CHAT_ID per chat
-    // (默认 9224 / mealclaw 餐饮 chat, window-position 右)。
+    // (中文字体/CSS/客户演示真实)。多 chat 共存靠 --window-position (右) + Playwright
+    // 内置 per-worker context 隔离 —— 不用 --user-data-dir/--remote-debugging-port
+    // (本版 Playwright 的 launch() 拒绝 --user-data-dir; 沿用已验证的 ia-redesign 配置)。
     // Run via:
     //   E2E_BASE_URL=http://139.196.165.140:8097 \
-    //   PLAYWRIGHT_PORT=9224 PLAYWRIGHT_CHAT_ID=restaurant-ia \
     //   npx playwright test --project restaurant-ia
     // Self-injects auth (qhj_prod) via e2e-auth-helper; no vue-auth dep.
     {
@@ -347,8 +347,6 @@ export default defineConfig({
         timezoneId: 'Asia/Shanghai',
         launchOptions: {
           args: [
-            `--remote-debugging-port=${Number(process.env.PLAYWRIGHT_PORT) || 9224}`,
-            `--user-data-dir=./.pw-cache-${process.env.PLAYWRIGHT_CHAT_ID || 'restaurant-ia'}/`,
             '--lang=zh-CN',
             '--font-render-hinting=none',
             '--disable-blink-features=AutomationControlled',
