@@ -231,15 +231,21 @@ async def maybe_enrich_dish_classifications(
 ) -> int:
     """Fire-and-forget orchestrator: collect unknown dishes → LLM-enrich → capture.
 
-    Only runs for restaurant uploads (schema.domain == restaurant) that actually
-    carry dish data. Returns the number of candidates captured (0 on any skip /
+    Gates on the presence of the dish column (``商品信息``) — the SAME condition
+    ``dish_category_breakdown.applies`` uses — NOT on ``schema.domain``. Domain
+    detection is unreliable for restaurant POS data (often returns ``unknown``),
+    which would silently gate out the very uploads that carry dishes. If the
+    upload has a ``商品信息`` column there are dishes to classify regardless of the
+    detected domain. Returns the number of candidates captured (0 on any skip /
     failure). NEVER raises — wraps the whole thing so a learning side-effect can
     never block or fail materialization.
     """
     try:
-        domain = getattr(getattr(schema, "domain", None), "value", None)
-        if domain != "restaurant":
-            return 0
+        field_names = {
+            getattr(f, "name", None) for f in getattr(schema, "fields", [])
+        }
+        if _ITEM_COLUMN not in field_names:
+            return 0  # no dish column — nothing to classify
 
         unknowns = collect_unknown_dishes(backend, schema)
         if not unknowns:
