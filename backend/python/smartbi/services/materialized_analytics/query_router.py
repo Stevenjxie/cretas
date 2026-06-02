@@ -1016,7 +1016,38 @@ def _humanize_kpi_key(key: str) -> str:
     return " ".join(replacements.get(p.lower(), p) for p in parts)
 
 
-def _fmt_kpi_value(key: str, value: Any) -> str:
+# Generic top_n_by_dim-style KPIs whose value is in the (dynamic) primary
+# measure. A hardcoded 元 is wrong when the measure is 星级分 / 订单数 / etc.,
+# so their unit is derived from the measure name at format time instead.
+_MEASURE_UNIT_KEYS = frozenset({"top_value", "top_total"})
+
+
+def _unit_for_measure(measure: Optional[str]) -> str:
+    """Derive a display-unit suffix from a dynamic measure name.
+
+    Used for ``top_n_by_dim``-style KPIs where the measure varies. Checks
+    score/count BEFORE money so '星级分' / '评价数' are never mislabeled 元:
+    rating/score (星级分/评分/服务分) → ' 分'; counts → ' 单'/' 件'/' 人';
+    money (金额/营收/营业额/...) → ' 元'; anything else → '' (no unit).
+    """
+    if not measure:
+        return ""
+    m = str(measure)
+    if any(t in m for t in ("星级", "评分", "得分", "分值")) or m.endswith("分"):
+        return " 分"
+    if any(t in m for t in ("订单", "单数", "笔数", "次数", "成交")):
+        return " 单"
+    if any(t in m for t in ("销量", "数量", "件数")):
+        return " 件"
+    if any(t in m for t in ("人数", "客流", "人次")):
+        return " 人"
+    if any(t in m for t in ("金额", "营收", "营业额", "销售", "收入", "成本",
+                            "利润", "支出", "客单", "流水", "实收", "应收")):
+        return " 元"
+    return ""
+
+
+def _fmt_kpi_value(key: str, value: Any, measure: Optional[str] = None) -> str:
     """Format a single KPI value with unit + label.
 
     Rules:
@@ -1025,11 +1056,15 @@ def _fmt_kpi_value(key: str, value: Any) -> str:
       - Integers render as comma-separated.
       - Strings pass through.
       - Explicit unit in _KPI_UNIT_MAP wins over auto-percent.
+      - Dynamic-measure keys (top_value/top_total) derive their unit from
+        ``measure`` (e.g. 星级分 → ' 分') instead of a hardcoded 元.
     """
     if value is None:
         return "—"
     is_pct = key.endswith("_pct") or key.endswith("_rate") or key.endswith("_share_pct")
     unit = _KPI_UNIT_MAP.get(key, "")
+    if key in _MEASURE_UNIT_KEYS and measure:
+        unit = _unit_for_measure(measure)
     if not unit and is_pct:
         unit = "%"
     if isinstance(value, bool):
@@ -1397,10 +1432,11 @@ def format_cached_as_sse(
             )
 
     if kpis:
+        _kpi_measure = data.get('measure') if isinstance(data, dict) else None
         answer += "**关键指标:**\n"
         for k, v in list(kpis.items())[:8]:
             label = _KPI_LABEL_MAP.get(k) or _humanize_kpi_key(k)
-            answer += f"- **{label}**: {_fmt_kpi_value(k, v)}\n"
+            answer += f"- **{label}**: {_fmt_kpi_value(k, v, measure=_kpi_measure)}\n"
 
     charts = []
     if chart_config and isinstance(chart_config, dict):
