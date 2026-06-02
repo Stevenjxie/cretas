@@ -133,6 +133,11 @@ public class FuzzyExpressionSeeder implements ApplicationRunner {
                 "综合分析一下", "帮我综合分析", "综合看看经营情况",
                 "整体经营分析", "全面分析一下经营"));
 
+        // ---- 门店营收排行 ----
+        m.put("RESTAURANT_STORE_REVENUE_RANK", List.of(
+                "哪家店业绩最好", "门店营收对比", "门店业绩排名",
+                "哪家店最赚钱", "哪家店生意最好", "门店营收谁最高"));
+
         // ---- 销售类 (活跃) ----
         m.put("RESTAURANT_BESTSELLER_QUERY", List.of(
                 "哪些菜卖得好", "卖得最好的菜是什么", "畅销菜怎么样", "什么菜最受欢迎"));
