@@ -213,6 +213,70 @@ class YieldCalculationServiceImplTest {
         assertThat(dto.getCumulativeYieldRate()).isEqualByComparingTo("0.3828");
     }
 
+    // ── 单元 A.4/A.5: 逐道成本聚合 ─────────────────────────────────────────────────
+
+    private ProductionReport rptCost(long taskId, int order, String in, String out,
+                                     String laborCost, String materialCost) {
+        return ProductionReport.builder()
+                .factoryId("F006").batchId(1L).reportType("YIELD")
+                .workProcessTaskId(taskId).processOrder(order)
+                .inputQuantity(new BigDecimal(in)).inputUnit("kg")
+                .outputQuantity(new BigDecimal(out)).outputUnit("kg")
+                .laborCost(laborCost == null ? null : new BigDecimal(laborCost))
+                .materialCost(materialCost == null ? null : new BigDecimal(materialCost))
+                .build();
+    }
+
+    @Test
+    void calculateSteps_sumsCostsPerStep_nullSafe() {
+        // 同一道 (task 1) 两次报工: labor 60+0=60, material 1000+null=1000, step cost = 1060
+        List<StepYieldDTO> steps = svc.calculateSteps(List.of(
+                rptCost(1, 1, "100", "80", "60.00", "1000.00"),
+                rptCost(1, 1, "80", "70", "0.00", null)
+        ));
+        assertThat(steps).hasSize(1);
+        assertThat(steps.get(0).getLaborCost()).isEqualByComparingTo("60.00");
+        assertThat(steps.get(0).getMaterialCost()).isEqualByComparingTo("1000.00");
+        assertThat(steps.get(0).getStepCost()).isEqualByComparingTo("1060.00");
+    }
+
+    @Test
+    void calculateSteps_allNullCost_keepsStepCostNull() {
+        // 全 null 成本 → step 三字段保持 null (不是 0)
+        List<StepYieldDTO> steps = svc.calculateSteps(List.of(
+                rpt(1, 1, "100", "kg", "80", "kg")
+        ));
+        assertThat(steps.get(0).getLaborCost()).isNull();
+        assertThat(steps.get(0).getMaterialCost()).isNull();
+        assertThat(steps.get(0).getStepCost()).isNull();
+    }
+
+    @Test
+    void calculateBatchYield_sumsCostsAcrossSteps_nullSafe() {
+        // 道1 labor=60 material=1000, 道2 labor=40 material=null → batch labor=100, material=1000, total=1100
+        List<ProductionReport> reports = List.of(
+                rptCost(1, 1, "998", "935.5", "60.00", "1000.00"),
+                rptCost(2, 2, "935.5", "382", "40.00", null)
+        );
+        BatchYieldDTO dto = svc.calculateBatchYield(reports, null);
+        assertThat(dto.getTotalLaborCost()).isEqualByComparingTo("100.00");
+        assertThat(dto.getTotalMaterialCost()).isEqualByComparingTo("1000.00");
+        assertThat(dto.getTotalCost()).isEqualByComparingTo("1100.00");
+    }
+
+    @Test
+    void calculateBatchYield_allNullCost_batchCostNull() {
+        // 全 null 成本 → batch 三字段 null (绝不默认 0)
+        List<ProductionReport> reports = List.of(
+                rpt(1, 1, "998", "kg", "935.5", "kg"),
+                rpt(2, 2, "935.5", "kg", "382", "kg")
+        );
+        BatchYieldDTO dto = svc.calculateBatchYield(reports, null);
+        assertThat(dto.getTotalLaborCost()).isNull();
+        assertThat(dto.getTotalMaterialCost()).isNull();
+        assertThat(dto.getTotalCost()).isNull();
+    }
+
     @Test
     void a3_crossBatchSourceCountsIntoCurrentStepInput() {
         // 本道投入 100 + 跨批带入 50 = 150 input; 产 120 -> yield 0.8000

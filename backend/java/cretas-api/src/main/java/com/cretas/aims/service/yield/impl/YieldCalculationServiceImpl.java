@@ -40,6 +40,9 @@ public class YieldCalculationServiceImpl implements YieldCalculationService {
             // P1-3 (G4): null-safe 工时/人数聚合 — 全 null 保持 null, 任一非 null 则求和
             Integer stepMinutes = null;
             Integer stepWorkers = null;
+            // A.4/A.5: null-safe 成本聚合 — 全 null 保持 null, 任一非 null 则求和 (绝不默认 0)
+            BigDecimal stepLaborCost = null;
+            BigDecimal stepMaterialCost = null;
             for (ProductionReport r : group) {
                 if (r.getInputQuantity() != null) totalInput = totalInput.add(r.getInputQuantity());
                 // A3: 跨批带入计入当前道 input
@@ -56,7 +59,15 @@ public class YieldCalculationServiceImpl implements YieldCalculationService {
                 if (r.getTotalWorkers() != null) {
                     stepWorkers = (stepWorkers == null ? 0 : stepWorkers) + r.getTotalWorkers();
                 }
+                if (r.getLaborCost() != null) {
+                    stepLaborCost = (stepLaborCost == null ? BigDecimal.ZERO : stepLaborCost).add(r.getLaborCost());
+                }
+                if (r.getMaterialCost() != null) {
+                    stepMaterialCost = (stepMaterialCost == null ? BigDecimal.ZERO : stepMaterialCost).add(r.getMaterialCost());
+                }
             }
+            // 本道总成本 = labor + material (两者全 null → null; 任一非 null → 该项视为 0 参与求和)
+            BigDecimal stepCost = nullSafeAdd(stepLaborCost, stepMaterialCost);
             ProductionReport head = group.get(0);
             String inUnit = head.getInputUnit();
             String outUnit = head.getOutputUnit();
@@ -79,6 +90,9 @@ public class YieldCalculationServiceImpl implements YieldCalculationService {
                     .carryover(carryover)
                     .totalWorkMinutes(stepMinutes)
                     .totalWorkers(stepWorkers)
+                    .laborCost(stepLaborCost)
+                    .materialCost(stepMaterialCost)
+                    .stepCost(stepCost)
                     .build());
             prevOutput = totalOutput;
         }
@@ -121,6 +135,13 @@ public class YieldCalculationServiceImpl implements YieldCalculationService {
         Integer batchWorkers = steps.stream().map(StepYieldDTO::getTotalWorkers)
                 .filter(Objects::nonNull).reduce(Integer::sum).orElse(null);
 
+        // A.4/A.5: 整批成本 = Σ steps (全 null → null, 任一非 null 则求和; 绝不默认 0)
+        BigDecimal batchLaborCost = steps.stream().map(StepYieldDTO::getLaborCost)
+                .filter(Objects::nonNull).reduce(BigDecimal::add).orElse(null);
+        BigDecimal batchMaterialCost = steps.stream().map(StepYieldDTO::getMaterialCost)
+                .filter(Objects::nonNull).reduce(BigDecimal::add).orElse(null);
+        BigDecimal batchTotalCost = nullSafeAdd(batchLaborCost, batchMaterialCost);
+
         return BatchYieldDTO.builder()
                 .batchId(reports.get(0).getBatchId())
                 .firstStepInput(firstInput)
@@ -132,6 +153,23 @@ public class YieldCalculationServiceImpl implements YieldCalculationService {
                 .complete(complete)
                 .totalWorkMinutes(batchMinutes)
                 .totalWorkers(batchWorkers)
+                .totalLaborCost(batchLaborCost)
+                .totalMaterialCost(batchMaterialCost)
+                .totalCost(batchTotalCost)
                 .build();
+    }
+
+    /**
+     * null-safe 加和: 全部参数 null → null; 否则把 null 视为 0 求和。
+     * <p>用于成本聚合 (绝不默认 0 — 全无数据时保持 null 诚实显示"无成本数据")。</p>
+     */
+    static BigDecimal nullSafeAdd(BigDecimal... vals) {
+        BigDecimal sum = null;
+        for (BigDecimal v : vals) {
+            if (v != null) {
+                sum = (sum == null ? BigDecimal.ZERO : sum).add(v);
+            }
+        }
+        return sum;
     }
 }
