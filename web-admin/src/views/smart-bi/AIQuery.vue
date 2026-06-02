@@ -1232,7 +1232,25 @@ function normalizeChartLayout(opt: Record<string, unknown>): void {
   if (grid.left == null) grid.left = '4%';
   if (grid.right == null) grid.right = '5%';
   // Leave vertical room for the title so it never overlaps the plot.
-  if (grid.top == null) grid.top = hasTitle ? 54 : 28;
+  if (grid.top == null) grid.top = hasTitle ? 62 : 28;
+  // A value-axis `name` (e.g. "星级分") renders at the top-left and collides
+  // with a centered title that already states the measure ("…(按 星级分)").
+  // Drop the redundant axis name when a title is present.
+  if (hasTitle) {
+    const ya = (Array.isArray(opt.yAxis) ? opt.yAxis[0] : opt.yAxis) as
+      Record<string, unknown> | undefined;
+    if (ya && typeof ya === 'object' && ya.name) ya.name = '';
+  }
+  // Shrink crowded value labels on many-bar charts so they stop piling up.
+  const xcat = (Array.isArray(opt.xAxis) ? opt.xAxis[0] : opt.xAxis) as
+    Record<string, unknown> | undefined;
+  const nCat = xcat && Array.isArray(xcat.data) ? xcat.data.length : 0;
+  if (nCat > 6 && Array.isArray(opt.series)) {
+    for (const s of opt.series as Array<Record<string, unknown>>) {
+      const lbl = s && typeof s.label === 'object' ? (s.label as Record<string, unknown>) : null;
+      if (lbl && lbl.show && lbl.fontSize == null) lbl.fontSize = 9;
+    }
+  }
 
   // Long / many category labels on a horizontal (xAxis) category axis overlap
   // when barely rotated. Rotate more + show every label + shrink font + reserve
