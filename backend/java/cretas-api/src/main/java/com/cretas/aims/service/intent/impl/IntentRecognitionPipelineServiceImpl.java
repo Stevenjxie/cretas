@@ -1501,6 +1501,17 @@ public class IntentRecognitionPipelineServiceImpl implements IntentRecognitionPi
                         }
                     }
 
+                    // W0 (2026-06-02): 边界弃权门 —— top1<0.70 或 top1-top2<0.15 时不静默采用，
+                    // 返回 clarify(top-2) 让前端反问用户。!isAmbiguousQuery 保证不与下方模糊查询
+                    // 拒绝分支冲突 (模糊查询交给那条分支彻底拒绝)。
+                    IntentMatchResult abstainResult = maybeAbstain(candidates, isAmbiguousQuery, userInput, opType, questionType);
+                    if (abstainResult != null) {
+                        log.info("W0 abstain: top1={} conf={} (clarify top-2)", candidates.get(0).getIntentCode(),
+                                String.format("%.3f", candidates.get(0).getConfidence()));
+                        saveIntentMatchRecord(abstainResult, factoryId, null, null, false);
+                        return abstainResult;
+                    }
+
                     // 中/低置信度: 构建结果交给后续 LLM Reranking/Fallback 处理
                     IntentMatchResult semanticResult = IntentMatchResult.builder()
                             .bestMatch(bestCandidate.config)
@@ -3554,6 +3565,52 @@ public class IntentRecognitionPipelineServiceImpl implements IntentRecognitionPi
         }
 
         return userInput;
+    }
+
+    /**
+     * W0 (2026-06-02): 基于边界的 ABSTAIN 弃权门。
+     *
+     * <p>当语义优先路径产出的 top-1 候选「弱」(top1 &lt; 0.70) 或 top-2 之间「窄」
+     * (top1 - top2 &lt; 0.15) 时，不要静默采用最佳匹配 —— 返回一个弃权结果
+     * (bestMatch == null, matchMethod == NONE, 携带 clarificationQuestion + top-2
+     * 候选)，让前端反问用户究竟想要哪个意图。无校准依赖。</p>
+     *
+     * <p>排序铁律: 模糊查询 ("xxx怎么样" → GENERAL_QUESTION) 的既有拒绝分支
+     * 优先级更高，因此 {@code isAmbiguousQuery == true} 时本方法直接返回 null，
+     * 不与那条分支冲突 (那条分支负责彻底拒绝模糊问句)。</p>
+     *
+     * <p>纯函数，仅读取入参、不触碰实例字段，便于单测直接调用。</p>
+     *
+     * @param candidates        候选列表 (按置信度降序)
+     * @param isAmbiguousQuery  是否为模糊查询 (GENERAL_QUESTION)
+     * @param userInput         原始用户输入
+     * @param opType            操作类型
+     * @param questionType      问题类型
+     * @return 弃权结果，若无需弃权则返回 null
+     */
+    IntentMatchResult maybeAbstain(List<CandidateIntent> candidates, boolean isAmbiguousQuery,
+                                   String userInput, ActionType opType,
+                                   IntentKnowledgeBase.QuestionType questionType) {
+        // 排序铁律: 模糊查询交给既有拒绝分支处理，不在此弃权
+        if (isAmbiguousQuery) return null;
+        if (candidates == null || candidates.isEmpty()) return null;
+        double top1 = candidates.get(0).getConfidence() != null ? candidates.get(0).getConfidence() : 0.0;
+        boolean top1Low = top1 < 0.70;
+        boolean marginNarrow = candidates.size() >= 2
+                && (candidates.get(0).getConfidence() - candidates.get(1).getConfidence()) < 0.15;
+        if (!top1Low && !marginNarrow) return null;
+        CandidateIntent c1 = candidates.get(0);
+        CandidateIntent c2 = candidates.size() >= 2 ? candidates.get(1) : null;
+        String clarification = (c2 != null)
+                ? String.format("您的问题可能对应「%s」或「%s」，请问您想要哪个？", c1.getIntentName(), c2.getIntentName())
+                : String.format("您的问题与「%s」相关度不够高，请提供更多细节。", c1.getIntentName());
+        java.util.List<CandidateIntent> top2 = candidates.stream().limit(2).collect(java.util.stream.Collectors.toList());
+        return IntentMatchResult.builder()
+                .bestMatch(null).topCandidates(top2).confidence(c1.getConfidence())
+                .matchMethod(MatchMethod.NONE).matchedKeywords(c1.getMatchedKeywords())
+                .isStrongSignal(false).requiresConfirmation(true)
+                .clarificationQuestion(clarification)
+                .userInput(userInput).actionType(opType).questionType(questionType).build();
     }
 
     /**

@@ -173,6 +173,21 @@ public class AIPublicDemoController {
         IntentMatchResult matchResult = aiIntentService.recognizeIntentWithConfidence(
                 userInput, DEMO_FACTORY_ID, 1, demoUserId, DEMO_USER_ROLE, sessionId);
 
+        // 2.5. W0 (2026-06-02): 边界弃权 —— 识别引擎判定置信度不足/top-2 接近，
+        // 返回澄清问题让用户在 top-2 之间选择，而不是静默猜测或直接报"未识别"。
+        if (!matchResult.hasMatch() && matchResult.getClarificationQuestion() != null) {
+            java.util.List<String> labels = matchResult.getTopCandidates() != null
+                    ? matchResult.getTopCandidates().stream()
+                        .map(c -> c.getIntentName() + " (" + String.format("%.0f%%", c.getConfidence() * 100) + ")")
+                        .collect(java.util.stream.Collectors.toList())
+                    : java.util.List.of();
+            return ResponseEntity.ok(ApiResponse.success(IntentExecuteResponse.builder()
+                    .intentRecognized(false).status("NEED_MORE_INFO")
+                    .message(matchResult.getClarificationQuestion())
+                    .clarificationQuestions(labels).sessionId(sessionId)
+                    .executedAt(java.time.LocalDateTime.now()).build()));
+        }
+
         // 3. 如果没有匹配到意图
         if (!matchResult.hasMatch()) {
             IntentExecuteResponse response = IntentExecuteResponse.builder()
