@@ -1527,9 +1527,19 @@ public class IntentRecognitionPipelineServiceImpl implements IntentRecognitionPi
                             // 继续处理，不拒绝
                         } else {
                             log.info("模糊查询置信度过低 ({:.3f} < 0.88)，拒绝匹配: input='{}'", confidence, userInput);
+                            // 自学习/覆盖缺口 (Jun 2 2026): 拒绝匹配时保留近失候选 (near-miss
+                            // candidates) 而非丢弃。bestMatch 仍为 null、matchMethod 仍为 NONE、
+                            // confidence 仍为 0.0 —— 所有"已匹配/成功"指标都以 matchedIntentCode
+                            // IS NOT NULL 判定 (saveIntentMatchRecord 仅在 hasMatch()=true 时写
+                            // matchScore)，因此保留 topCandidates 不会让任何统计把被拒查询误计为命中。
+                            // 收益: intent_match_records.top_candidates 记下"这条模糊查询差一点
+                            // 命中了哪个意图 (置信 0.65~0.87)"，让既有覆盖缺口面板
+                            // (/patterns/missing-rules + /suggestions/create-intent) 能据此提示
+                            // "为新意图补关键词/短语" —— 正是新意图冷启动 (仅关键词无向量) 时
+                            // 模糊问句被拒所需要的自学习信号。
                             IntentMatchResult noMatch = IntentMatchResult.builder()
                                     .bestMatch(null)
-                                    .topCandidates(Collections.emptyList())
+                                    .topCandidates(candidates)
                                     .confidence(0.0)
                                     .matchMethod(MatchMethod.NONE)
                                     .matchedKeywords(Collections.emptyList())
