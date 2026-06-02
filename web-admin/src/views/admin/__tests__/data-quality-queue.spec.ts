@@ -63,7 +63,7 @@ const globalStubs = {
   'el-skeleton': { template: '<div class="el-skeleton" />' },
   'el-empty': {
     props: ['description'],
-    template: '<div class="el-empty">{{ description }}</div>',
+    template: '<div class="el-empty">{{ description }}<slot /></div>',
   },
   'el-alert': {
     props: ['title', 'description', 'type', 'closable', 'showIcon'],
@@ -109,6 +109,10 @@ const globalStubs = {
   'el-tag': {
     props: ['type', 'size'],
     template: '<span class="el-tag"><slot /></span>',
+  },
+  'el-text': {
+    props: ['type', 'size'],
+    template: '<span class="el-text"><slot /></span>',
   },
   'el-radio-group': {
     props: ['modelValue', 'disabled'],
@@ -205,6 +209,48 @@ function makeListResponse(overrides: Partial<{ submitter: string }> = {}) {
         reasoning: null as string | null,
         extra: null as Record<string, unknown> | null,
         createdAt: '2026-04-28T10:00:00Z',
+        dishReview: null,
+      },
+    ],
+    total: 1,
+    page: 1,
+    pageSize: 50,
+  };
+}
+
+// P4a (Task 8): dish proposal list fixture with the dishReview enrichment.
+function makeDishListResponse() {
+  return {
+    items: [
+      {
+        id: 201,
+        factoryId: 'F001',
+        entityType: 'dish',
+        rawName: '招牌青花椒鱼',
+        candidateEntityId: null as number | null,
+        confidence: 0.0,
+        decidedByAgent: 'rule_cluster' as string | null,
+        status: 'PENDING' as const,
+        priority: 'HIGH',
+        sourceUploadId: null as number | null,
+        submitter: null as string | null,
+        adminUser: null as string | null,
+        adminAt: null as string | null,
+        adminAction: null as string | null,
+        reasoning: '规则层归一' as string | null,
+        extra: { proposal_kind: 'rule_cluster' } as Record<string, unknown> | null,
+        createdAt: '2026-06-02T10:00:00Z',
+        dishReview: {
+          proposalKind: 'rule_cluster',
+          normalizedKey: '招牌青花椒鱼',
+          category: '主菜',
+          suggestedCanonicalName: null,
+          memberCount: 2,
+          members: [
+            { productId: 101, name: '招牌青花椒鱼(单人份)', stores: ['大融城店', '龙湖店'], qty: 30, revenue: 1740 },
+            { productId: 102, name: '青花椒味鱼', stores: ['颛桥店'], qty: 12, revenue: 720 },
+          ],
+        },
       },
     ],
     total: 1,
@@ -402,5 +448,156 @@ describe('data-quality-queue.vue (餐饮 Phase A A-3)', () => {
     expect(mockBatchResolveQueue).toHaveBeenCalledWith(
       expect.objectContaining({ ids: [101] })
     );
+  });
+
+  // ── Test 6 (P4a): 菜名归一 dish tab label present ───────────────────────
+
+  it('Test 6: renders the 菜名归一 (dish) tab label', async () => {
+    const wrapper = mount(DataQualityQueue, {
+      global: {
+        stubs: globalStubs,
+        directives: { loading: vLoadingStub },
+      },
+    });
+    await flushPromises();
+    expect(wrapper.html()).toContain('菜名归一');
+  });
+
+  // ── Test 7 (P4a): dish member dishes + stores + sales rendered ──────────
+
+  it('Test 7: dish tab shows member dish names, stores and sales sample', async () => {
+    mockListQueue.mockResolvedValue(makeDishListResponse());
+    mockGetAdminCount.mockResolvedValue(2);
+
+    const wrapper = mount(DataQualityQueue, {
+      global: {
+        stubs: globalStubs,
+        directives: { loading: vLoadingStub },
+      },
+    });
+    await flushPromises();
+
+    // Switch to the dish tab → reload with entityType=dish
+    const vm = wrapper.vm as unknown as { activeEntityType: string; onTabChange: (n: string) => void };
+    vm.onTabChange('dish');
+    await flushPromises();
+
+    const html = wrapper.html();
+    // member dish names + stores + sales fragments visible (Rule 2 eyeball)
+    expect(html).toContain('招牌青花椒鱼(单人份)');
+    expect(html).toContain('青花椒味鱼');
+    expect(html).toContain('大融城店');
+    expect(html).toContain('颛桥店');
+    expect(html).toContain('销 30'); // formatQty(30) inside the sales label
+  });
+
+  // ── Test 8 (P4a): dish create_new sends canonicalName ───────────────────
+
+  it('Test 8: dish create_new resolve sends action create_new + canonicalName', async () => {
+    mockListQueue.mockResolvedValue(makeDishListResponse());
+    mockGetAdminCount.mockResolvedValue(2);
+    mockResolveQueue.mockResolvedValue({ resolved: true });
+
+    const wrapper = mount(DataQualityQueue, {
+      global: {
+        stubs: globalStubs,
+        directives: { loading: vLoadingStub },
+      },
+    });
+    await flushPromises();
+
+    const vm = wrapper.vm as unknown as {
+      onTabChange: (n: string) => void;
+      activeEntityType: string;
+    };
+    vm.onTabChange('dish');
+    await flushPromises();
+
+    // Open the dish modal via 处理 button
+    const processBtn = wrapper.findAll('button.el-button').find(
+      (b) => b.text().includes('处理')
+    );
+    expect(processBtn).toBeDefined();
+    await processBtn!.trigger('click');
+    await flushPromises();
+
+    // Default dish action = create_new with rawName pre-filled → submit
+    const dialogButtons = wrapper.findAll('.el-dialog button.el-button');
+    const confirmBtn = dialogButtons.find((b) => b.text().includes('确认'));
+    expect(confirmBtn).toBeDefined();
+    await confirmBtn!.trigger('click');
+    await flushPromises();
+
+    expect(mockResolveQueue).toHaveBeenCalledWith(
+      201,
+      expect.objectContaining({ action: 'create_new', canonicalName: '招牌青花椒鱼' })
+    );
+    expect(elMessageSuccess).toHaveBeenCalled();
+  });
+
+  // ── Test 9 (P4a): dish reject uses dropdown reason ──────────────────────
+
+  it('Test 9: dish reject sends the selected dropdown reason (not free text)', async () => {
+    mockListQueue.mockResolvedValue(makeDishListResponse());
+    mockGetAdminCount.mockResolvedValue(2);
+    mockRejectQueue.mockResolvedValue({ rejected: true });
+
+    const wrapper = mount(DataQualityQueue, {
+      global: {
+        stubs: globalStubs,
+        directives: { loading: vLoadingStub },
+      },
+    });
+    await flushPromises();
+
+    const vm = wrapper.vm as unknown as {
+      onTabChange: (n: string) => void;
+      modalAction: 'confirm' | 'create_new' | 'reject';
+      modalItem: unknown;
+      modalVisible: boolean;
+    };
+    vm.onTabChange('dish');
+    await flushPromises();
+
+    // Open dish modal, switch action to reject (default reason = first dropdown option)
+    const processBtn = wrapper.findAll('button.el-button').find(
+      (b) => b.text().includes('处理')
+    );
+    await processBtn!.trigger('click');
+    await flushPromises();
+    vm.modalAction = 'reject';
+    await wrapper.vm.$nextTick();
+
+    const dialogButtons = wrapper.findAll('.el-dialog button.el-button');
+    const confirmBtn = dialogButtons.find((b) => b.text().includes('确认'));
+    await confirmBtn!.trigger('click');
+    await flushPromises();
+
+    // First standard reason value is the主料不同 option (dropdown, not free text)
+    expect(mockRejectQueue).toHaveBeenCalledWith(201, '主料不同，非同一道菜');
+    expect(elMessageSuccess).toHaveBeenCalled();
+  });
+
+  // ── Test 10 (P4a): dish empty state gives next-action ───────────────────
+
+  it('Test 10: dish empty state shows the canonicalize re-run guidance', async () => {
+    mockListQueue.mockResolvedValue({ items: [], total: 0, page: 1, pageSize: 50 });
+    mockGetAdminCount.mockResolvedValue(2);
+
+    const wrapper = mount(DataQualityQueue, {
+      global: {
+        stubs: globalStubs,
+        directives: { loading: vLoadingStub },
+      },
+    });
+    await flushPromises();
+
+    const vm = wrapper.vm as unknown as { onTabChange: (n: string) => void };
+    vm.onTabChange('dish');
+    await flushPromises();
+
+    const html = wrapper.html();
+    expect(html).toContain('暂无待归一菜品');
+    expect(html).toContain('generate_dish_canonical_candidates');
   });
 });

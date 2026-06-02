@@ -14,6 +14,27 @@ import type { ApiResponse } from '@/types/api';
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
+// P4a (Task 8): per-member enrichment for dish (菜名归一) review items.
+// One member = one dim_product SKU that the proposal wants to merge into a
+// canonical dish. stores = which 门店 carry that SKU name; qty/revenue from
+// agg_product (cross-store sum). Lets a human eyeball "same dish?" (Rule 2).
+export interface DishReviewMember {
+  productId: number;
+  name: string;
+  stores: string[];
+  qty: number;
+  revenue: number;
+}
+
+export interface DishReview {
+  proposalKind: string | null;        // 'rule_cluster' | 'create_new' | 'agent_match'
+  normalizedKey: string | null;
+  category: string | null;
+  suggestedCanonicalName: string | null;
+  memberCount: number;
+  members: DishReviewMember[];
+}
+
 export interface QueueItem {
   id: number;
   factoryId: string;
@@ -32,6 +53,8 @@ export interface QueueItem {
   reasoning: string | null;
   extra: Record<string, unknown> | null;
   createdAt: string | null;
+  // P4a: present (non-null) only for entity_type='dish'; null otherwise.
+  dishReview?: DishReview | null;
 }
 
 export interface ListResponse {
@@ -45,6 +68,10 @@ export interface ResolveBody {
   action: 'confirm' | 'create_new';
   resolvedToEntityId?: number;
   notes?: string;
+  // P4a (Task 8): for entity_type='dish' — the canonical display name the human
+  // entered/edited. create_new → new canonical with this name; confirm →
+  // (ignored, the target is resolvedToEntityId = existing canonical_dish_id).
+  canonicalName?: string;
 }
 
 export interface ResolveResponse {
