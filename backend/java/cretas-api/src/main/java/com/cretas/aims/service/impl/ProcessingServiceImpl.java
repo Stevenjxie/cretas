@@ -110,8 +110,25 @@ public class ProcessingServiceImpl implements ProcessingService {
         batch.setStatus(ProductionBatchStatus.PLANNED);
         batch.setCreatedAt(LocalDateTime.now());
 
-        // 设置必填字段的默认值
-        if (batch.getProductName() == null || batch.getProductName().isEmpty()) {
+        // P0-1 产品名绑定 (F006 报工审计修复):
+        //   若传了 productTypeId, 从 product_types 解析真实品名设为 productName,
+        //   消除"待设置产品名称"占位符 (生产批次/报工界面显示真实品名)。
+        //   防呆 (fool-proof 快速失败): productTypeId 传了但查不到 → 抛 400 业务异常,
+        //   不静默落占位符 (避免用户错填一个无效的 productTypeId 而无感知)。
+        //   仅当用户未显式提供 productName 时才用 productType 的 name 覆盖
+        //   (尊重用户传入的自定义品名, 向后兼容)。
+        boolean productNameMissing = batch.getProductName() == null || batch.getProductName().isEmpty();
+        if (batch.getProductTypeId() != null && !batch.getProductTypeId().isEmpty()) {
+            ProductType productType = productTypeRepository
+                    .findByIdAndFactoryId(batch.getProductTypeId(), factoryId)
+                    .orElseThrow(() -> new BusinessException(400,
+                            "产品类型不存在: " + batch.getProductTypeId())
+                            .withHint("请刷新产品列表后重新选择产品").withHintTarget("productTypeId"));
+            if (productNameMissing) {
+                batch.setProductName(productType.getName());
+            }
+        } else if (productNameMissing) {
+            // productTypeId 和 productName 都没传 → 保留原占位逻辑 (向后兼容, 不硬断)
             batch.setProductName("待设置产品名称");
         }
         if (batch.getQuantity() == null) {
