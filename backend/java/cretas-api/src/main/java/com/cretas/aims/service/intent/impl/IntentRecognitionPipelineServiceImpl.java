@@ -256,6 +256,10 @@ public class IntentRecognitionPipelineServiceImpl implements IntentRecognitionPi
     @Autowired
     private WriteGuardService writeGuardService;
 
+    // W1a shadow router harness — wired here, flag-gated, default OFF.
+    @Autowired
+    private com.cretas.aims.service.impl.ShadowRouterHarnessService shadowRouterHarnessService;
+
     // ==================== Configuration values ====================
 
     @Value("${cretas.ai.preprocess.enabled:true}")
@@ -263,6 +267,10 @@ public class IntentRecognitionPipelineServiceImpl implements IntentRecognitionPi
 
     @Value("${cretas.ai.semantic-router.enabled:true}")
     private boolean semanticRouterEnabled;
+
+    // W1a shadow router harness flag — default OFF; set cretas.router.shadow.enabled=true to activate.
+    @Value("${cretas.router.shadow.enabled:false}")
+    private boolean shadowRouterEnabled;
 
     @Value("${cretas.ai.long-text.enabled:true}")
     private boolean longTextEnabled;
@@ -4126,6 +4134,20 @@ public class IntentRecognitionPipelineServiceImpl implements IntentRecognitionPi
 
             log.debug("Intent match record saved: id={}, intent={}, confidence={}",
                     record.getId(), record.getMatchedIntentCode(), record.getConfidenceScore());
+
+            // W1a: fire the challenger router in shadow (async, isolated, flag-gated; never affects live result)
+            if (shadowRouterEnabled) {
+                try {
+                    shadowRouterHarnessService.shadowRoute(
+                            record.getId(),
+                            result.getUserInput(),
+                            result.hasMatch() ? result.getBestMatch().getIntentCode() : null,
+                            result.getConfidence() != null ? result.getConfidence() : 0.0,
+                            factoryId);
+                } catch (Exception ignore) {
+                    // shadow must never disturb the champion path
+                }
+            }
 
             // Wave-10: 低置信度样本自动送入 Active Learning 闭环
             if (activeLearningService != null && record.getConfidenceScore() != null) {
