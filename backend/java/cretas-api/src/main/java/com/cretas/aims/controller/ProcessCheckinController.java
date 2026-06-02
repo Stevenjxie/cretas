@@ -204,10 +204,11 @@ public class ProcessCheckinController {
     @GetMapping("/available-processes")
     public ApiResponse<List<Map<String, Object>>> getAvailableProcesses(
             @PathVariable String factoryId) {
-        // Get today's production plans and extract process names
+        // 单元E (F006 防呆 REQ-13): 只返回今日 (plannedDate=today) 的可用工序,
+        // 多日计划不污染下拉; plannedDate=null 的计划保留 (向后兼容)。
+        LocalDate today = LocalDate.now();
         List<Map<String, Object>> processes = planRepository.findByFactoryId(factoryId).stream()
-                .filter(p -> p.getProcessName() != null && !p.getProcessName().isEmpty())
-                .filter(p -> "IN_PROGRESS".equals(p.getStatus().name()) || "PLANNED".equals(p.getStatus().name()) || "PENDING".equals(p.getStatus().name()))
+                .filter(p -> isAvailableProcessPlan(p, today))
                 .map(p -> {
                     Map<String, Object> m = new HashMap<>();
                     m.put("processName", p.getProcessName());
@@ -218,5 +219,25 @@ public class ProcessCheckinController {
                 })
                 .collect(Collectors.toList());
         return ApiResponse.success(processes);
+    }
+
+    /**
+     * 单元E (F006 防呆 REQ-13): 判断生产计划是否应出现在 "今日工序" 下拉中。
+     * 规则: 工序名非空 + 状态为 PLANNED/PENDING/IN_PROGRESS + (plannedDate=today 或 plannedDate=null)。
+     * plannedDate=null 的计划保留以兼容历史无日期数据。
+     */
+    static boolean isAvailableProcessPlan(com.cretas.aims.entity.ProductionPlan p, LocalDate today) {
+        if (p.getProcessName() == null || p.getProcessName().isEmpty()) {
+            return false;
+        }
+        String status = p.getStatus() != null ? p.getStatus().name() : null;
+        boolean statusOk = "IN_PROGRESS".equals(status)
+                || "PLANNED".equals(status)
+                || "PENDING".equals(status);
+        if (!statusOk) {
+            return false;
+        }
+        // 保留 null 日期计划 (向后兼容); 有日期则必须等于今天
+        return p.getPlannedDate() == null || p.getPlannedDate().isEqual(today);
     }
 }
