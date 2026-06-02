@@ -76,6 +76,10 @@ interface ChatMessage {
     data: Record<string, unknown>;
   };
   chartConfig?: ChartConfig;
+  // P2 综合分析 (2026-06-02): multi-chart answers (synthesis returns several
+  // charts — 评价 pie / 门店 bar / VIP bar / 时段 line). Rendered as a stack of
+  // chart containers below the answer. Single-chart tools keep using chartConfig.
+  charts?: ChartConfig[];
   insights?: AIInsightData;
   table?: {
     columns: string[];
@@ -712,6 +716,16 @@ async function tryJavaIntentChat(
       if (_toolChart?.option) {
         msg.chartConfig = _toolChart as ChartConfig;
       }
+      // P2 综合分析: tools may return MULTIPLE charts under resultData.charts
+      // (each {type,title,option}). Render them as a stack.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const _toolCharts = (res.resultData as any)?.charts ?? (toolData as any)?.charts;
+      if (Array.isArray(_toolCharts)) {
+        const valid = _toolCharts.filter(
+          (c: any) => c && c.option && typeof c.option === 'object',
+        ) as ChartConfig[];
+        if (valid.length) msg.charts = valid;
+      }
       // P1 (2026-06-02): conversational-depth fields. Gold tools return their
       // map DIRECTLY as resultData (no .data wrapper) — same as chartConfig.
       // Report-style tools (buildSimpleResult) put them under resultData.data.
@@ -833,6 +847,11 @@ async function tryJavaIntentChat(
       if (msg.chartConfig) {
         const cfg = msg.chartConfig;
         nextTick(() => renderChartFromConfig(assistantId, cfg));
+      }
+      // P2: render the multi-chart stack (each into its own container id).
+      if (msg.charts && msg.charts.length) {
+        const cs = msg.charts;
+        nextTick(() => cs.forEach((c, i) => renderChartFromConfig(`${assistantId}__${i}`, c)));
       }
       return 'handled';
     }
@@ -1825,6 +1844,15 @@ function handleKeydown(event: KeyboardEvent) {
                 <!-- 图表展示 (only show if chart has proper ECharts option) -->
                 <div v-if="(message.chartConfig && message.chartConfig.option) || message.chart" class="message-chart">
                   <div :id="`chart-${message.id}`" class="chart-container"></div>
+                </div>
+                <!-- P2 综合分析: multi-chart stack (评价/门店/VIP/时段 …) -->
+                <div v-if="message.charts && message.charts.length" class="message-chart">
+                  <div
+                    v-for="(c, ci) in message.charts"
+                    :key="ci"
+                    :id="`chart-${message.id}__${ci}`"
+                    class="chart-container"
+                  ></div>
                 </div>
 
                 <!-- P1 (2026-06-02): expandable 字段说明 / 怎么看这张图 (zero extra call). -->
