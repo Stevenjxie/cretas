@@ -24,7 +24,17 @@ _DEFAULT_CATEGORIES: Dict[str, List[str]] = {
 
 
 def classify_dish(name: str, is_signature: bool = False) -> str:
-    """Return the first-matching category for a dish name, or '其他' if none."""
+    """Return the first-matching category for a dish name, or '其他' if none.
+
+    Precedence (Jun 2 2026 self-learning): static dict (curated) FIRST →
+    graduated classification (learned, via consult_promoted) → '其他'.
+    A dish the static dict misses but that has GRADUATED (human-approved,
+    promoted_learnings*.json) resolves through consult instead of falling to
+    '其他'. The consult is a pure in-memory dict lookup (0 token, SYNC) and is
+    guarded so it can NEVER make classify_dish throw — this function is called
+    in tight per-row loops all over materialization; a learning lookup must
+    never break it. On any error we fall through to '其他' (existing behavior).
+    """
     if not name:
         return "其他"
     if is_signature:
@@ -32,7 +42,15 @@ def classify_dish(name: str, is_signature: bool = False) -> str:
     for cat, keywords in _DEFAULT_CATEGORIES.items():
         for kw in keywords:
             if kw in name:
-                return cat
+                return cat  # static dict (curated) wins — never consult
+    # Static dict missed → try a GRADUATED classification (learned rule).
+    try:
+        from smartbi.services.learning_promotion import consult_promoted
+        std, _m = consult_promoted("classification", name, "restaurant")
+        if std:
+            return std
+    except Exception:  # noqa: BLE001 — learning lookup must never break classify
+        pass
     return "其他"
 
 

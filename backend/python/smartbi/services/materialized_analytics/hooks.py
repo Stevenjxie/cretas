@@ -122,6 +122,34 @@ async def _trigger_materialization(upload_id: int, factory_id: Optional[str] = N
             f"domain={domain_value}, wall={time.time() - t0:.1f}s"
         )
 
+        # Dish-classification self-learning (Jun 2 2026): for restaurant uploads,
+        # collect the DISTINCT dish names that classify to '其他' (static dict +
+        # graduated rules both miss), LLM-classify them into known categories,
+        # and capture each as a learning candidate (graduates later via human
+        # promote --apply). Piggybacks on the polars DataFrame still alive in
+        # materialize_ctx (before the L2 warm block nulls it). Fully fire-and-
+        # forget: any failure only logs and never affects materialization.
+        try:
+            from smartbi.services.materialized_analytics.restaurant.dish_classifier_learning import (  # noqa: E501
+                maybe_enrich_dish_classifications,
+            )
+            dish_backend = materialize_ctx.get("backend")
+            dish_schema = materialize_ctx.get("schema")
+            if dish_backend is not None and dish_schema is not None:
+                captured = await maybe_enrich_dish_classifications(
+                    pool, factory_id, dish_backend, dish_schema
+                )
+                if captured:
+                    logger.info(
+                        f"[hook] upload {upload_id}: dish-classification learning "
+                        f"captured {captured} candidate(s)"
+                    )
+        except Exception as dish_err:
+            logger.warning(
+                f"[hook] upload {upload_id}: dish-classification learning "
+                f"failed (non-blocking): {dish_err}"
+            )
+
         # Also pre-warm the L2 aggregate cache used by the LLM fallback path
         # in chat.py. We piggyback on the polars DataFrame that materialize
         # already built — polars in-memory aggregation runs in ~1s vs ~30-70s
