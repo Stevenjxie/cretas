@@ -21,6 +21,7 @@ import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
@@ -47,7 +48,11 @@ public class BatchConsumptionServiceImpl implements BatchConsumptionService {
     private final WarehouseResolver warehouseResolver;
 
     @Override
-    @Transactional
+    // REQUIRES_NEW: 自动扣料失败必须真正"不影响后续流程". 调用方 onBatchCompleted 是 @Transactional,
+    // 若本方法用默认 REQUIRED 会加入同一事务, 任一 save 失败(FK/缺料 shortfall 等)就把整个事务标记
+    // rollback-only 并污染 Session, 导致调用方后续自动入库 createFinishedGoodsFromBatch flush 失败而
+    // 成品静默不创建 (prod E2E 实测). 独立事务隔离扣料失败, 入库在调用方干净事务里照常进行.
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void autoConsumeForBatch(ProductionBatch batch) {
         String factoryId = batch.getFactoryId();
         // recorded_by 是 NOT NULL + FK 到 users; 硬编码 0L 是无效用户, save 会抛 FK 违例并污染
