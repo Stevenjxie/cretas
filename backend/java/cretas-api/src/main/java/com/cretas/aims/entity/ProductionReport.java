@@ -90,6 +90,14 @@ public class ProductionReport {
     @Column(name = "total_workers")
     private Integer totalWorkers;
 
+    /** 本道人工成本(元); null=无成本数据 (单元 A.3 地基; 算法在后续任务) */
+    @Column(name = "labor_cost", precision = 14, scale = 2)
+    private BigDecimal laborCost;
+
+    /** 本道材料成本(元); null=无成本数据 (单元 A.3 地基) */
+    @Column(name = "material_cost", precision = 14, scale = 2)
+    private BigDecimal materialCost;
+
     @Column(name = "operation_volume", precision = 10, scale = 2)
     private BigDecimal operationVolume;
 
