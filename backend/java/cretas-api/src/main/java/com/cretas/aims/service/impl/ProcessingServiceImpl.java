@@ -208,8 +208,12 @@ public class ProcessingServiceImpl implements ProcessingService {
         batch.setGoodQuantity(goodQuantity);
         batch.setDefectQuantity(defectQuantity);
         // P0-2: 末道产出单位非空时, 成品按"末道产出单位"(如 份/盒)入库, 而非批次原单位 (kg)
-        // → createFinishedGoodsFromBatch 的 fg.setUnit(batch.getUnit()) 自动拿到正确单位
+        // → createFinishedGoodsFromBatch 的 fg.setUnit(batch.getUnit()) 自动拿到正确单位.
+        // 覆盖 unit 前先把原计划单位记到瞬态 plannedUnit, 供 calculateMetrics 检测跨单位:
+        // 跨单位 (产出"份" ≠ 原计划"kg") 时 efficiency/unitCost 会被置 null 诚实留空,
+        // 不算出 actualQuantity(份)/plannedQuantity(kg) 这类无意义值 (镜像 yield cumulative=null).
         if (finishedUnit != null && !finishedUnit.isBlank()) {
+            batch.setPlannedUnit(batch.getUnit());  // 记录原单位 (kg), 须在 setUnit 之前
             batch.setUnit(finishedUnit);
         }
         // 计算指标

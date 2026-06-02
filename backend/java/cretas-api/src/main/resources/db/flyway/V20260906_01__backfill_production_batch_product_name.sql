@@ -1,4 +1,4 @@
--- V20260905_01__backfill_production_batch_product_name.sql
+-- V20260906_01__backfill_production_batch_product_name.sql
 --
 -- P0-1 产品名绑定 (F006 报工审计修复) — 回填历史占位行。
 --
@@ -35,8 +35,8 @@ BEGIN
           AND pt.name IS NOT NULL
           AND pt.name <> '';
 
-        RAISE NOTICE 'V20260905_01: production_batches placeholder product_name backfilled from product_types';
+        RAISE NOTICE 'V20260906_01: production_batches placeholder product_name backfilled from product_types';
     ELSE
-        RAISE NOTICE 'V20260905_01 skipped: production_batches or product_types table absent (fresh/minimal DB), non-fatal';
+        RAISE NOTICE 'V20260906_01 skipped: production_batches or product_types table absent (fresh/minimal DB), non-fatal';
     END IF;
 END $$;

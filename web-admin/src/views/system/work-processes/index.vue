@@ -268,12 +268,15 @@ function handlePageChange(page: number) {
           <el-input-number v-model="formData.estimatedMinutes" :min="1" placeholder="分钟" style="width: 100%" />
         </el-form-item>
         <el-form-item label="标准出成率下限" prop="standardYieldMin">
-          <el-input-number v-model="minPct" :min="0" :max="999.99" :step="5" :precision="2"
+          <!-- 防呆 Rule 1: :min=0.01 (映射后端最小有效值 0.0001), 禁止输 0 → 后端 @DecimalMin(0.0001) 会拒.
+               想"不校验"请清空 (留空=null), 这是唯一的低于阈值路径。 -->
+          <el-input-number v-model="minPct" :min="0.01" :max="999.99" :step="5" :precision="2"
             placeholder="如 30 (留空=不校验)" style="width: 100%" />
-          <span class="form-hint">%（焯水约 30~60，滚揉保水 100~135；装盒/检验类留空）</span>
+          <span class="form-hint">%（焯水约 30~60，滚揉保水 100~135；装盒/检验类留空。输 0 无效，不校验请清空）</span>
         </el-form-item>
         <el-form-item label="标准出成率上限" prop="standardYieldMax">
-          <el-input-number v-model="maxPct" :min="0" :max="999.99" :step="5" :precision="2"
+          <!-- 防呆 Rule 1: 同上, :min=0.01 禁 0; 清空=不校验 -->
+          <el-input-number v-model="maxPct" :min="0.01" :max="999.99" :step="5" :precision="2"
             placeholder="如 60 (留空=不校验)" style="width: 100%" />
           <span class="form-hint">%（超收预检以此为基准 × 投入量 × 1.3 容差）</span>
         </el-form-item>

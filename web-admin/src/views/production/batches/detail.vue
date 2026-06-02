@@ -198,6 +198,19 @@ const cumulativeDisplay = computed(() => {
   return '—';
 });
 
+// P0-2 review fix: 末道产出单位 (份/盒) ≠ 批次原计划单位 (kg) 时, 后端已把 efficiency/unitCost
+// 置 null (跨单位无意义)。前端据 plannedUnit≠unit 显诚实提示, 而非裸 "-" (易误读为"无数据")。
+// 镜像 cumulativeDisplay 跨单位做法。同单位批次 plannedUnit 为 null → 走原 formatPercent/formatCost。
+const isCrossUnit = computed(() => {
+  const pu = batch.value?.plannedUnit;
+  const u = batch.value?.unit;
+  return pu != null && pu !== '' && u != null && pu !== u;
+});
+const efficiencyDisplay = computed(() =>
+  isCrossUnit.value ? '跨单位不可比' : formatPercent(batch.value?.efficiency));
+const unitCostDisplay = computed(() =>
+  isCrossUnit.value ? '跨单位不可比' : formatCost(batch.value?.unitCost));
+
 function getTimelineIcon(type: string) {
   const map: Record<string, string> = {
     CREATED: 'primary',
@@ -276,11 +289,11 @@ function getTimelineIcon(type: string) {
         </div>
         <div class="kpi-card">
           <div class="kpi-label">完成效率</div>
-          <div class="kpi-value">{{ formatPercent(batch.efficiency) }}</div>
+          <div class="kpi-value">{{ efficiencyDisplay }}</div>
         </div>
         <div v-if="canViewPrice" class="kpi-card">
           <div class="kpi-label">单位成本</div>
-          <div class="kpi-value">{{ formatCost(batch.unitCost) }}</div>
+          <div class="kpi-value">{{ unitCostDisplay }}</div>
         </div>
       </div>
 
@@ -340,7 +353,7 @@ function getTimelineIcon(type: string) {
                 {{ formatPercent(batch.yieldRate) }}
               </span>
             </el-descriptions-item>
-            <el-descriptions-item label="完成效率">{{ formatPercent(batch.efficiency) }}</el-descriptions-item>
+            <el-descriptions-item label="完成效率">{{ efficiencyDisplay }}</el-descriptions-item>
           </el-descriptions>
         </el-card>
 
@@ -357,7 +370,10 @@ function getTimelineIcon(type: string) {
             <el-descriptions-item label="总成本">
               <span class="cost-total">{{ formatCost(batch.totalCost) }}</span>
             </el-descriptions-item>
-            <el-descriptions-item label="单位成本">{{ formatCost(batch.unitCost) }}/{{ batch.unit }}</el-descriptions-item>
+            <el-descriptions-item label="单位成本">
+              <template v-if="isCrossUnit">跨单位不可比</template>
+              <template v-else>{{ formatCost(batch.unitCost) }}/{{ batch.unit }}</template>
+            </el-descriptions-item>
           </el-descriptions>
         </el-card>
 

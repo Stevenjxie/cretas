@@ -1,4 +1,4 @@
--- V20260905_03__production_report_worker_columns_guard.sql
+-- V20260906_03__production_report_worker_columns_guard.sql
 --
 -- 报工体 P1-3 (张权 G4 "用了多少人 / 一个人一个小时"): production_reports 的
 -- total_work_minutes / total_workers 两列采集逐道报工工时/人数, 供 B3 效率指标(产出/工时、产出/人)。

@@ -1,4 +1,4 @@
--- V20260905_02__product_type_grams_per_unit.sql
+-- V20260906_02__product_type_grams_per_unit.sql
 --
 -- 报工体 P0-2: product_types 加标准克重 (1份/盒 = X 克), 供末道"份/盒→kg"折算整批出成率
 -- + 成品入库换算。spec §3.2。
