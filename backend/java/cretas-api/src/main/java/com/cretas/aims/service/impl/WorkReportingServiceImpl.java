@@ -65,20 +65,20 @@ public class WorkReportingServiceImpl {
                     .withHint("请选择参与报工的工人").withHintTarget("workerIds");
         }
 
-        // P1-2: 防重提交 — 同一工人+同一批次+同一报工类型+同一日期只能提交一次
-        if (request.getReportDate() != null) {
-            boolean duplicate;
-            if (request.getBatchId() != null) {
-                duplicate = reportRepository.existsByFactoryIdAndWorkerIdAndBatchIdAndReportTypeAndReportDateAndDeletedAtIsNull(
-                        factoryId, workerId, request.getBatchId(), request.getReportType(), request.getReportDate());
-            } else {
-                duplicate = reportRepository.existsByFactoryIdAndWorkerIdAndReportTypeAndReportDateAndBatchIdIsNullAndDeletedAtIsNull(
-                        factoryId, workerId, request.getReportType(), request.getReportDate());
-            }
-            if (duplicate) {
-                throw new BusinessException(409, "您今天已对该批次提交过报工")
-                        .withHint("如需修改请编辑已有记录, 而非重复提交");
-            }
+        // 单元B (F006 REQ-17): 防重提交改为 5 分钟窗口 — 只拦 double-click, 不再封锁同日累加。
+        // 客户张权要"累加式分时段报工"(每小时报一次后台累加), 旧的全天去重把累加封死。
+        LocalDateTime cutoff = LocalDateTime.now().minusMinutes(5);
+        boolean duplicate;
+        if (request.getBatchId() != null) {
+            duplicate = reportRepository.existsByFactoryIdAndWorkerIdAndBatchIdAndReportTypeAndCreatedAtAfterAndDeletedAtIsNull(
+                    factoryId, workerId, request.getBatchId(), request.getReportType(), cutoff);
+        } else {
+            duplicate = reportRepository.existsByFactoryIdAndWorkerIdAndReportTypeAndCreatedAtAfterAndBatchIdIsNullAndDeletedAtIsNull(
+                    factoryId, workerId, request.getReportType(), cutoff);
+        }
+        if (duplicate) {
+            throw new BusinessException(409, "5分钟内已对该批次提交过报工, 请勿重复点击 (如需累加报工请稍后再报)")
+                    .withHint("同一批次同一工序可多次报工累加, 仅 5 分钟内的重复提交被拦截");
         }
 
         // 自动填充报告人姓名
