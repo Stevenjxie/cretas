@@ -2972,8 +2972,7 @@ public class LlmIntentFallbackClientImpl implements LlmIntentFallbackClient {
                 // has NO user confirmation step, so a write tool here is unconfirmed by construction —
                 // block it. isConfirmed(context) is false (buildToolExecutionContext sets no confirm
                 // flag); pass Map.of() defensively so a future confirm flag cannot leak through.
-                if (writeGuardService != null
-                        && writeGuardService.isWriteTool(executor)
+                if (writeGuardService.isWriteTool(executor)
                         && !writeGuardService.isConfirmed(java.util.Map.of())) {
                     log.warn("W0 write-guard (llm-fallback): blocked write tool {} (no confirmation in LLM tool-calling path)", toolName);
                     throw new IllegalStateException("W0 write-guard: tool '" + toolName + "' 需要显式确认后才能执行");

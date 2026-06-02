@@ -13,11 +13,34 @@ import java.util.Set;
 @Service
 public class WriteGuardService {
 
+    // Confidence-independent write-verb allowlist. matched via upper.contains(suffix) on the
+    // tool/intent NAME. getActionType() only recognizes _create/_update/_delete and defaults the
+    // rest to READ/GENERATE/NOTIFY (none of which isWriteAction() treats as a write), so genuinely
+    // destructive tools (bom_recipe_activate, alert_rule_toggle, processing_worker_assign,
+    // notify_send, factory_material_requisition_generate, ...) would slip the guard if their verb
+    // isn't listed here. Over-block of a read tool (extra confirm) is the safe direction.
+    //
+    // W0 final review (M1): expanded with verbs that were confirmed-exploitable on real tools.
+    // Suffixes chosen to avoid substring over-match with common read tool names — verified by
+    // grepping every getToolName() literal: zero read-style name (*_query/_list/_detail/_stats/
+    // _search/_overview/_trend/_ranking/_report/_status/_history/_today/_monthly) matches any
+    // suffix below. NOTE: deliberately NOT adding _SHIP (over-matches _SHIPMENT → would over-block
+    // shipment queries) or _SET (over-matches _SETTINGS). _MARK over-matches MARKET-style names
+    // (none exist today) which is an acceptable over-block (safe direction).
     private static final Set<String> WRITE_SUFFIXES = Set.of(
             "_CREATE", "_UPDATE", "_DELETE", "_START", "_STOP", "_PAUSE", "_RESUME",
             "_COMPLETE", "_EXECUTE", "_CONSUME", "_RELEASE", "_RESERVE", "_ACKNOWLEDGE",
             "_RESOLVE", "_CLEAR", "_CLOSE", "_REOPEN", "_FREEZE", "_RESET", "_DEDUCT",
-            "_APPROVE", "_CANCEL", "_CONFIRM", "_ADJUST", "_SUBMIT");
+            "_APPROVE", "_CANCEL", "_CONFIRM", "_ADJUST", "_SUBMIT",
+            // W0 final review (M1) additions:
+            "_ACTIVATE", "_DEACTIVATE", "_TOGGLE", "_ASSIGN", "_UNASSIGN", "_GENERATE",
+            "_SPLIT", "_MERGE", "_SEND", "_DISPOSE", "_REGISTER", "_TRANSITION", "_SETTLE",
+            "_ALLOCATE", "_VOID", "_REJECT", "_DISPATCH", "_DISABLE", "_ENABLE", "_MARK",
+            "_IMPORT", "_UPLOAD", "_BIND", "_UNBIND", "_ARCHIVE", "_RESTORE", "_ROLLBACK",
+            // Verb-FIRST form: split_order names the verb as a prefix, so "_SPLIT" (leading underscore)
+            // never matches "SPLIT_ORDER". Add the "SPLIT_" prefix form. Verified: only SPLIT_ORDER
+            // starts with SPLIT_ among all getToolName() literals — no read-style over-match.
+            "SPLIT_");
 
     public boolean isWriteAction(ToolExecutor.ActionType t) {
         return t == ToolExecutor.ActionType.WRITE

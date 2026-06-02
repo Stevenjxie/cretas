@@ -42,6 +42,46 @@ class WriteGuardServiceTest {
         assertFalse(guard.isWriteTool(toolNamed("report_inventory", ToolExecutor.ActionType.READ)));
     }
 
+    @Test
+    void toolGuard_expandedWriteVerbs_catchExploitableDestructiveTools() {
+        // M1 (W0 final review): genuinely destructive tools whose action verb was NOT in the
+        // original WRITE_SUFFIXES allowlist AND whose getActionType() defaults to READ (no override).
+        // Before the suffix expansion these slipped the guard at Sites B/C/D/E and executed silently.
+        // Each was confirmed exploitable against a real registered tool.
+        assertTrue(guard.isWriteTool(toolNamed("bom_recipe_activate", ToolExecutor.ActionType.READ)),
+                "bom_recipe_activate flips BOM DRAFT→ACTIVE — must be caught by _ACTIVATE suffix");
+        assertTrue(guard.isWriteTool(toolNamed("alert_rule_toggle", ToolExecutor.ActionType.READ)),
+                "alert_rule_toggle flips rule enabled state — must be caught by _TOGGLE suffix");
+        assertTrue(guard.isWriteTool(toolNamed("scheduling_set_disabled", ToolExecutor.ActionType.READ)),
+                "scheduling_set_disabled disables scheduling — must be caught by _DISABLE suffix");
+        assertTrue(guard.isWriteTool(toolNamed("processing_worker_assign", ToolExecutor.ActionType.READ)),
+                "processing_worker_assign assigns workers to a batch — must be caught by _ASSIGN suffix");
+        assertTrue(guard.isWriteTool(toolNamed("split_order", ToolExecutor.ActionType.READ)),
+                "split_order splits/cancels a source order — must be caught by _SPLIT suffix");
+        assertTrue(guard.isWriteTool(toolNamed("notify_send", ToolExecutor.ActionType.READ)),
+                "notify_send sends a notification (side-effect) — must be caught by _SEND suffix");
+        assertTrue(guard.isWriteTool(toolNamed("quality_batch_mark_inspected", ToolExecutor.ActionType.READ)),
+                "quality_batch_mark_inspected mutates batch state — must be caught by _MARK suffix");
+        // factory_material_requisition_generate: getActionType() maps _generate → GENERATE, which
+        // isWriteAction() does NOT treat as a write; only the _GENERATE name suffix catches it.
+        assertTrue(guard.isWriteTool(toolNamed("factory_material_requisition_generate", ToolExecutor.ActionType.GENERATE)),
+                "factory_material_requisition_generate creates a requisition — must be caught by _GENERATE suffix");
+    }
+
+    @Test
+    void toolGuard_commonReadTools_areNotOverBlocked() {
+        // The expanded WRITE_SUFFIXES list must not over-match common read tool names. Over-block is
+        // the safe direction (extra confirm) but a routine read prompted for confirmation is bad UX,
+        // so these canonical reads must classify as NOT-write.
+        assertFalse(guard.isWriteTool(toolNamed("material_batch_query", ToolExecutor.ActionType.READ)));
+        assertFalse(guard.isWriteTool(toolNamed("report_inventory", ToolExecutor.ActionType.READ)));
+        assertFalse(guard.isWriteTool(toolNamed("customer_list", ToolExecutor.ActionType.READ)));
+        assertFalse(guard.isWriteTool(toolNamed("shipment_query", ToolExecutor.ActionType.READ)));
+        assertFalse(guard.isWriteTool(toolNamed("attendance_today", ToolExecutor.ActionType.READ)));
+        assertFalse(guard.isWriteTool(toolNamed("quality_check_query", ToolExecutor.ActionType.READ)));
+        assertFalse(guard.isWriteTool(toolNamed("report_dashboard_overview", ToolExecutor.ActionType.READ)));
+    }
+
     private static ToolExecutor toolNamed(String name, ToolExecutor.ActionType actionType) {
         ToolExecutor tool = Mockito.mock(ToolExecutor.class);
         Mockito.when(tool.getToolName()).thenReturn(name);

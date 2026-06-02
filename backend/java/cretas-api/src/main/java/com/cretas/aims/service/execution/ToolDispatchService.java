@@ -118,8 +118,13 @@ public class ToolDispatchService {
             // W0 write-guard (intent-w0) — SITE B: block a write tool unless previewOnly or confirmed.
             // Runs BEFORE the role-permission check so a misroute to a destructive operation cannot
             // silently execute. NOT conditioned on forceExecute (the multi-intent bypass flag).
+            // The bound AIIntentConfig is available here (Site B only) — add a curated-sensitivity
+            // backstop so HIGH/CRITICAL write intents (e.g. PROCESSING_WORKER_ASSIGN) are blocked even
+            // if the tool-NAME heuristic misses the verb. Sites C/D/E/F lack the bound intent and rely
+            // on the expanded WRITE_SUFFIXES list.
             java.util.Map<String, Object> wgCtx = request.getContext() != null ? request.getContext() : java.util.Map.of();
-            if (writeGuardService.isWriteTool(tool)
+            if ((writeGuardService.isWriteTool(tool)
+                    || (intent != null && writeGuardService.isWriteIntent(intent)))
                     && !Boolean.TRUE.equals(request.getPreviewOnly())
                     && !writeGuardService.isConfirmed(wgCtx)) {
                 log.info("W0 write-guard (tool-dispatch): blocked write tool {} (confirmed=false)", tool.getToolName());
