@@ -65,6 +65,10 @@ export interface StepYieldDTO {
   yieldAlert: 'BELOW_MIN' | 'ABOVE_MAX' | null;  // A7 越界软告警
   totalWorkMinutes: number | null;  // P1-3 (G4): Σ 本道工时(分钟); 全 null → null
   totalWorkers: number | null;      // P1-3 (G4): Σ 本道人数(人次); 全 null → null
+  // ── A.6 逐道成本 (BigDecimal → number); null = 无法计算 (未配工价 / 无原料单价), 展示 "—" 非 ¥0 ──
+  laborCost: number | null;         // 本道人工成本
+  materialCost: number | null;      // 本道材料成本
+  stepCost: number | null;          // 本道小计 = laborCost + materialCost (两者全 null → null)
 }
 
 export interface BatchYieldDTO {
@@ -79,6 +83,10 @@ export interface BatchYieldDTO {
   complete: boolean | null;         // 每道都有 input+output 才 true
   totalWorkMinutes: number | null;  // P1-3 (G4): Σ 所有道工时(分钟); 全 null → null
   totalWorkers: number | null;      // P1-3 (G4): Σ 所有道人数(总人次); 全 null → null
+  // ── A.6 整批逐道成本汇总 (BigDecimal → number); null = 无法计算, 展示 "—" 非 ¥0 ──
+  totalLaborCost: number | null;    // Σ 所有道人工成本
+  totalMaterialCost: number | null; // Σ 所有道材料成本
+  totalCost: number | null;         // 整批总成本 = totalLaborCost + totalMaterialCost (两者全 null → null)
   // ── G8 Wave 4 (C): 进行中标注 (展示层防呆; cumulativeYieldRate 始终是 A 完工口径) ──
   inProgress?: boolean | null;             // true → 旁标"进行中, 含 X 在制半成品未计入成品"
   wipInProgressQuantity?: number | null;   // Σ AVAILABLE WIP 余额 (在制中间品总量); inProgress=false 时 0

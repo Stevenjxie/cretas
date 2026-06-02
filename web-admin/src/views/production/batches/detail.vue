@@ -176,6 +176,14 @@ function formatCost(val: unknown) {
   return isNaN(n) ? '-' : '¥' + n.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
+// A.6 逐道成本: null/未计算 → "—" (em dash, 不是 0/¥0); 与出成率表其他空值 (出成率/结转/人数/工时) 一致.
+// 后端 cost 为 null 表示无法计算 (未配工价 / 无原料单价), 不应误显 ¥0.
+function formatCostDash(val: unknown) {
+  if (val === null || val === undefined) return '—';
+  const n = Number(val);
+  return isNaN(n) ? '—' : '¥' + n.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
 function formatPercent(val: unknown) {
   if (val === null || val === undefined) return '-';
   const n = Number(val);
@@ -478,6 +486,16 @@ function getTimelineIcon(type: string) {
                 <span v-else>{{ row.totalWorkMinutes }} 分钟</span>
               </template>
             </el-table-column>
+            <!-- A.6 逐道成本: 人工/材料/小计. null (未配工价 / 无原料单价) → "—" (非 ¥0). canViewPrice 门控. -->
+            <el-table-column v-if="canViewPrice" label="人工成本" width="120" align="right">
+              <template #default="{ row }">{{ formatCostDash(row.laborCost) }}</template>
+            </el-table-column>
+            <el-table-column v-if="canViewPrice" label="材料成本" width="120" align="right">
+              <template #default="{ row }">{{ formatCostDash(row.materialCost) }}</template>
+            </el-table-column>
+            <el-table-column v-if="canViewPrice" label="小计" width="120" align="right">
+              <template #default="{ row }">{{ formatCostDash(row.stepCost) }}</template>
+            </el-table-column>
           </el-table>
           <div class="yield-summary">
             合计: {{ formatNum(yieldData.firstStepInput) }} {{ yieldData.firstStepInputUnit || '' }}
@@ -486,6 +504,12 @@ function getTimelineIcon(type: string) {
             <!-- P1-3 (G4): 整批工时/人次 — 跨道相加是"人次"(同一人多道重复计), 诚实标注 -->
             <span v-if="yieldData.totalWorkMinutes != null">&nbsp;·&nbsp;总工时 {{ yieldData.totalWorkMinutes }} 分钟</span>
             <span v-if="yieldData.totalWorkers != null">&nbsp;·&nbsp;总人次 {{ yieldData.totalWorkers }}</span>
+          </div>
+          <!-- A.6 整批逐道成本汇总: 总人工/总材料/总成本. null (无法计算) → "—" (非 ¥0). canViewPrice 门控. -->
+          <div v-if="canViewPrice" class="yield-cost-summary">
+            <span class="cost-item">总人工成本 {{ formatCostDash(yieldData.totalLaborCost) }}</span>
+            <span class="cost-item">总材料成本 {{ formatCostDash(yieldData.totalMaterialCost) }}</span>
+            <span class="cost-item cost-item-total">总成本 {{ formatCostDash(yieldData.totalCost) }}</span>
           </div>
         </el-card>
 
@@ -712,6 +736,24 @@ function getTimelineIcon(type: string) {
   border-top: 1px solid var(--border-color-lighter, #ebeef5);
   font-weight: 600;
   color: var(--text-color-primary, #303133);
+}
+
+.yield-cost-summary {
+  margin-top: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 20px;
+  font-size: 14px;
+  color: var(--text-color-secondary, #606266);
+
+  .cost-item {
+    font-weight: 500;
+  }
+
+  .cost-item-total {
+    font-weight: 700;
+    color: var(--el-color-primary);
+  }
 }
 
 .timeline-content {

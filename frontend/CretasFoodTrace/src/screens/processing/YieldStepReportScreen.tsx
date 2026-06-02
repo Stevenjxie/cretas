@@ -24,6 +24,22 @@ type NavT = NativeStackNavigationProp<Record<string, object | undefined>>;
 
 const OVER_RECEIVE_TOLERANCE = 1.3; // A4 软上限: 计划 ×1.3 (含 30% 超收)
 
+// A.6 逐道成本格式化: null (未配工价 / 无原料单价) → "—" (非 ¥0).
+const fmtMoney = (v: number | null | undefined): string =>
+  v == null || Number.isNaN(Number(v)) ? '—' : `¥${Number(v).toFixed(2)}`;
+
+// A.6 一道成本文案 — 低文化操作工友好: 人工/材料/合计 明确标签.
+// 全 null (整道无成本数据) → "未配工价" 诚实提示, 不显 ¥0.
+const stepCostLine = (
+  s: { laborCost: number | null; materialCost: number | null; stepCost: number | null } | null | undefined,
+): string => {
+  if (!s) return '';
+  if (s.laborCost == null && s.materialCost == null && s.stepCost == null) {
+    return '本道成本: 未配工价 / 无原料单价';
+  }
+  return `本道成本: 人工${fmtMoney(s.laborCost)} + 材料${fmtMoney(s.materialCost)} = ${fmtMoney(s.stepCost)}`;
+};
+
 const YieldStepReportScreen: React.FC = () => {
   const navigation = useNavigation<NavT>();
   const route = useRoute<RouteT>();
@@ -61,6 +77,12 @@ const YieldStepReportScreen: React.FC = () => {
     const prevOrder = currentTask.processOrder - 1;
     const prevStep = yieldData.steps.find((s: StepYieldDTO) => s.processOrder === prevOrder);
     return prevStep?.totalOutput ?? null;
+  }, [currentTask, yieldData]);
+
+  // A.6: 本道已报工的成本 (若该道之前已报过, yieldData.steps 里有对应行带 cost; 未报过则 undefined → 不显示成本行)
+  const currentStepYield = useMemo<StepYieldDTO | undefined>(() => {
+    if (!currentTask || !yieldData) return undefined;
+    return yieldData.steps.find((s: StepYieldDTO) => s.processOrder === currentTask.processOrder);
   }, [currentTask, yieldData]);
 
   const loadAll = useCallback(async () => {
@@ -418,6 +440,18 @@ const YieldStepReportScreen: React.FC = () => {
                 {yieldData.firstStepInput}{yieldData.firstStepInputUnit ?? ''} → {yieldData.lastStepOutput}{yieldData.lastStepOutputUnit ?? ''}
               </Text>
             ) : null}
+            {/* A.6: 整批成本汇总 — 人工/材料/合计. 全 null → "未配工价" 诚实提示, 不显 ¥0 */}
+            {yieldData != null ? (
+              <View style={styles.doneCostWrap} testID="yield-batch-cost">
+                {yieldData.totalLaborCost == null && yieldData.totalMaterialCost == null && yieldData.totalCost == null ? (
+                  <Text style={styles.doneCostMuted}>整批成本: 未配工价 / 无原料单价</Text>
+                ) : (
+                  <Text style={styles.doneCost}>
+                    整批成本: 人工{fmtMoney(yieldData.totalLaborCost)} + 材料{fmtMoney(yieldData.totalMaterialCost)} = {fmtMoney(yieldData.totalCost)}
+                  </Text>
+                )}
+              </View>
+            ) : null}
           </NeoCard>
           <NeoButton variant="primary" size="large" onPress={handleSettleDay} disabled={submitting} loading={submitting} style={styles.fullBtn}>
             完工入库
@@ -471,6 +505,11 @@ const YieldStepReportScreen: React.FC = () => {
               {' ~ '}
               {currentTask?.standardYieldMax != null ? `${(currentTask.standardYieldMax * 100).toFixed(0)}%` : '—'}
             </Text>
+          ) : null}
+
+          {/* A.6: 本道成本 — 仅该道已报过工 (yieldData 有对应行) 才显; 全 null → "未配工价" 诚实提示, 不显 ¥0 */}
+          {currentStepYield ? (
+            <Text style={styles.stepCost} testID="yield-step-cost">{stepCostLine(currentStepYield)}</Text>
           ) : null}
 
           <View style={styles.divider} />
@@ -609,6 +648,8 @@ const styles = StyleSheet.create({
   batchProcess: { fontSize: 15, color: '#606266', marginTop: 6 },
   planned: { fontSize: 14, color: '#909399', marginTop: 6 },
   stdRange: { fontSize: 13, color: '#409EFF', marginTop: 4 },
+  // A.6: 本道成本行 (报工卡内, 该道已报过时显示)
+  stepCost: { fontSize: 14, color: '#606266', marginTop: 6, fontWeight: '500' },
   divider: { height: 1, backgroundColor: '#EBEEF5', marginVertical: 16 },
   alertBanner: { backgroundColor: '#FDF6EC', borderRadius: 8, padding: 12, marginTop: 4 },
   alertText: { fontSize: 14, color: '#E6A23C', fontWeight: '500' },
@@ -637,6 +678,10 @@ const styles = StyleSheet.create({
   doneLabel: { fontSize: 15, color: '#606266', marginRight: 12 },
   doneValue: { fontSize: 28, fontWeight: '700', color: '#E8732E' },
   doneFlow: { fontSize: 15, color: '#606266', marginTop: 12 },
+  // A.6: 整批成本汇总 (done 卡内)
+  doneCostWrap: { marginTop: 12 },
+  doneCost: { fontSize: 14, color: '#303133', fontWeight: '600', textAlign: 'center' },
+  doneCostMuted: { fontSize: 13, color: '#909399', textAlign: 'center' },
 });
 
 export default YieldStepReportScreen;
