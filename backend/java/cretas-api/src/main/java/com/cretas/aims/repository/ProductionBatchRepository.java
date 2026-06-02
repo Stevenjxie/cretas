@@ -245,6 +245,19 @@ public interface ProductionBatchRepository extends JpaRepository<ProductionBatch
     java.util.List<ProductionBatch> findByIdInAndFactoryId(@Param("ids") Collection<Long> ids, @Param("factoryId") String factoryId);
 
     /**
+     * 单元 F (F006 REQ-21): 查工厂下属于一组生产计划的全部批次 (按订单聚合出成率用).
+     * 调用方先用 {@code ProductionPlanRepository.findByFactoryIdAndSourceOrderId} 取订单的计划 ids,
+     * 再用本方法取这些计划下的全部批次。空集合 → 空列表 (Spring Data IN-空 行为)。
+     *
+     * @param factoryId 工厂ID (工厂隔离)
+     * @param planIds   生产计划ID集合
+     * @return 这些计划下的全部生产批次
+     */
+    @Query("SELECT b FROM ProductionBatch b WHERE b.factoryId = :factoryId AND b.productionPlanId IN :planIds")
+    java.util.List<ProductionBatch> findByFactoryIdAndProductionPlanIdIn(
+            @Param("factoryId") String factoryId, @Param("planIds") Collection<String> planIds);
+
+    /**
      * 统计关联生产计划中未完成的批次数量
      * 用于供应链联动：批次报工后判断PP是否全部完成
      *

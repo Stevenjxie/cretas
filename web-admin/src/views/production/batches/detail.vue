@@ -4,7 +4,7 @@ import { useRoute, useRouter } from 'vue-router';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { get } from '@/api/request';
-import { getBatchWip, type WipRowItem } from '@/api/processProduction';
+import { getBatchWip, getOrderYieldSummary, type WipRowItem, type OrderYieldSummary } from '@/api/processProduction';
 import { ElMessage } from 'element-plus';
 import { ArrowLeft, Refresh } from '@element-plus/icons-vue';
 import { formatDateTime } from '@/utils/dateFormat';
@@ -41,6 +41,12 @@ const consumptions = ref<TableRow[]>([]);
 const yieldData = ref<any | null>(null);
 // G6/G7 Wave 4: 半成品库存 (WIP) — 每道工序中间品存量 (产出/已领/余额/状态)
 const wipRows = ref<WipRowItem[]>([]);
+
+// 单元 F (F006 REQ-21): 分订单出成率 — 本订单下全部批次聚合 (弹窗惰性加载)
+const orderYieldVisible = ref(false);
+const orderYieldLoading = ref(false);
+const orderYield = ref<OrderYieldSummary | null>(null);
+const orderYieldError = ref('');
 
 onMounted(() => {
   loadData();
@@ -195,6 +201,55 @@ function formatDuration(minutes: number | null) {
   const h = Math.floor(minutes / 60);
   const m = minutes % 60;
   return h > 0 ? `${h}小时${m > 0 ? m + '分钟' : ''}` : `${m}分钟`;
+}
+
+// 单元 F: 累计出成率 (0-1 小数) → 百分比文案; 跨单位不可比 (null) → "—"
+function formatRateDash(rate: unknown) {
+  if (rate === null || rate === undefined) return '—';
+  const n = Number(rate);
+  return isNaN(n) ? '—' : (n * 100).toFixed(1) + '%';
+}
+
+// 单元 F: 本批次是否挂在某生产计划 (有 productionPlanId 才能解析订单)
+const hasOrderContext = computed(() => !!batch.value?.productionPlanId);
+
+/**
+ * 单元 F (F006 REQ-21 "以订单的模式呈现"): 打开"本订单整体出成率"弹窗。
+ * 链路: batch.productionPlanId → GET 生产计划 (取 sourceOrderId) → GET 订单出成率聚合。
+ * 惰性触发 (点击才查), 不影响详情页初始加载。无订单/无聚合 → 诚实空态文案。
+ */
+async function openOrderYield() {
+  orderYieldVisible.value = true;
+  if (orderYield.value || orderYieldLoading.value) return; // 已加载 / 加载中, 不重复请求
+  orderYieldError.value = '';
+  const planId = batch.value?.productionPlanId as string | undefined;
+  if (!factoryId.value || !planId) {
+    orderYieldError.value = '本批次未关联生产计划, 无法按订单聚合';
+    return;
+  }
+  orderYieldLoading.value = true;
+  try {
+    // 1) 计划 → sourceOrderId
+    const planRes = await get(`/${factoryId.value}/production-plans/${planId}`);
+    const orderId = planRes.success ? (planRes.data?.sourceOrderId as string | undefined) : undefined;
+    if (!orderId) {
+      orderYieldError.value = '本批次所属计划未关联销售订单, 无法按订单聚合';
+      return;
+    }
+    // 2) 订单 → 全部批次出成率聚合
+    const res = await getOrderYieldSummary(factoryId.value, orderId);
+    if (res.success && res.data) {
+      orderYield.value = res.data;
+    } else {
+      orderYieldError.value = res.message || '加载订单出成率失败';
+    }
+  } catch (error) {
+    // 拦截器已弹 sticky toast; 这里给弹窗内兜底文案
+    orderYieldError.value = '加载订单出成率失败';
+    console.error('加载订单出成率失败:', error);
+  } finally {
+    orderYieldLoading.value = false;
+  }
 }
 
 // 单元3: 有 YIELD 数据时用末道产出回填"实际产量"
@@ -436,6 +491,17 @@ function getTimelineIcon(type: string) {
             <el-tag v-if="yieldInProgress" type="warning" size="small" effect="plain" style="margin-left: 12px">
               进行中
             </el-tag>
+            <!-- 单元 F (F006 REQ-21): 以订单的模式呈现 — 查看本订单下全部批次整体出成率 -->
+            <el-button
+              v-if="hasOrderContext"
+              type="primary"
+              link
+              size="small"
+              style="float: right"
+              @click="openOrderYield"
+            >
+              查看本订单整体出成率
+            </el-button>
           </template>
           <!-- G8 Wave 4 (C): 在制半成品提示条 — 数字偏低且会变, 完工后锁定 -->
           <el-alert
@@ -630,6 +696,74 @@ function getTimelineIcon(type: string) {
         </el-card>
       </div>
     </template>
+
+    <!-- 单元 F (F006 REQ-21 "以订单的模式呈现…分订单分产品分工序"): 订单整体出成率弹窗 -->
+    <el-dialog
+      v-model="orderYieldVisible"
+      title="本订单整体出成率"
+      width="760px"
+      append-to-body
+    >
+      <div v-loading="orderYieldLoading">
+        <el-alert
+          v-if="orderYieldError"
+          :title="orderYieldError"
+          type="info"
+          :closable="false"
+          show-icon
+        />
+        <template v-else-if="orderYield">
+          <div class="order-yield-meta">
+            订单号: {{ orderYield.orderId }} · 共 {{ orderYield.batchCount }} 个批次
+          </div>
+          <el-empty
+            v-if="orderYield.batchCount === 0"
+            description="该订单下暂无生产批次"
+          />
+          <template v-else>
+            <el-table :data="orderYield.batches" border stripe size="small" style="width: 100%">
+              <el-table-column label="批次号" min-width="180" show-overflow-tooltip>
+                <template #default="{ row }">{{ row.batchNumber || ('#' + (row.batchId ?? '-')) }}</template>
+              </el-table-column>
+              <el-table-column label="首道投入" width="130" align="right">
+                <template #default="{ row }">{{ formatNum(row.firstStepInput) }} {{ row.firstStepInputUnit || '' }}</template>
+              </el-table-column>
+              <el-table-column label="末道产出" width="130" align="right">
+                <template #default="{ row }">{{ formatNum(row.lastStepOutput) }} {{ row.lastStepOutputUnit || '' }}</template>
+              </el-table-column>
+              <el-table-column label="累计出成率" width="120" align="center">
+                <template #default="{ row }">
+                  <span>{{ formatRateDash(row.cumulativeYieldRate) }}</span>
+                  <el-tag v-if="row.inProgress" type="warning" size="small" effect="plain" style="margin-left: 6px">
+                    进行中
+                  </el-tag>
+                </template>
+              </el-table-column>
+            </el-table>
+            <!-- 订单整体合计行: 单位不可比时 totalFirstInput/overallYieldRate 后端返 null → 显 "—" -->
+            <div class="order-yield-summary">
+              <span>
+                订单合计:
+                {{ orderYield.totalFirstInput != null ? formatNum(orderYield.totalFirstInput) + ' ' + (orderYield.firstInputUnit || '') : '—' }}
+                →
+                {{ orderYield.totalLastOutput != null ? formatNum(orderYield.totalLastOutput) + ' ' + (orderYield.lastOutputUnit || '') : '—' }}
+              </span>
+              <span class="order-yield-rate">
+                整体出成率 {{ formatRateDash(orderYield.overallYieldRate) }}
+              </span>
+            </div>
+            <div v-if="orderYield.overallYieldRate == null" class="order-yield-note">
+              各批次单位不一致, 无法跨单位合计 (整体出成率不可比)
+            </div>
+            <div v-if="canViewPrice" class="order-yield-cost">
+              <span class="cost-item">总人工成本 {{ formatCostDash(orderYield.totalLaborCost) }}</span>
+              <span class="cost-item">总材料成本 {{ formatCostDash(orderYield.totalMaterialCost) }}</span>
+              <span class="cost-item cost-item-total">总成本 {{ formatCostDash(orderYield.totalCost) }}</span>
+            </div>
+          </template>
+        </template>
+      </div>
+    </el-dialog>
   </div>
 </template>
 
@@ -739,6 +873,53 @@ function getTimelineIcon(type: string) {
 }
 
 .yield-cost-summary {
+  margin-top: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 20px;
+  font-size: 14px;
+  color: var(--text-color-secondary, #606266);
+
+  .cost-item {
+    font-weight: 500;
+  }
+
+  .cost-item-total {
+    font-weight: 700;
+    color: var(--el-color-primary);
+  }
+}
+
+/* 单元 F: 订单出成率弹窗 */
+.order-yield-meta {
+  margin-bottom: 12px;
+  font-size: 13px;
+  color: var(--text-color-secondary, #606266);
+}
+
+.order-yield-summary {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-color-lighter, #ebeef5);
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 8px 20px;
+  font-weight: 600;
+  color: var(--text-color-primary, #303133);
+
+  .order-yield-rate {
+    color: var(--el-color-primary);
+  }
+}
+
+.order-yield-note {
+  margin-top: 6px;
+  font-size: 13px;
+  color: var(--el-color-warning, #e6a23c);
+}
+
+.order-yield-cost {
   margin-top: 10px;
   display: flex;
   flex-wrap: wrap;

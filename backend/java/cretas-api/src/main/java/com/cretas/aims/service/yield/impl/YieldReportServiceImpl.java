@@ -4,6 +4,7 @@ import com.cretas.aims.dto.FactorySettingsDTO;
 import com.cretas.aims.dto.yield.BatchYieldDTO;
 import com.cretas.aims.dto.yield.MaterialBatchRef;
 import com.cretas.aims.dto.yield.MaterialInputRequest;
+import com.cretas.aims.dto.yield.OrderYieldSummaryDTO;
 import com.cretas.aims.dto.yield.WipRowDTO;
 import com.cretas.aims.dto.yield.YieldLimitsDTO;
 import com.cretas.aims.dto.yield.YieldReportRequest;
@@ -21,6 +22,7 @@ import com.cretas.aims.repository.FactorySettingsRepository;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.ProductionBatchRepository;
+import com.cretas.aims.repository.ProductionPlanRepository;
 import com.cretas.aims.repository.ProductionReportRepository;
 import com.cretas.aims.repository.SemiFinishedInventoryRepository;
 import com.cretas.aims.repository.WorkProcessRepository;
@@ -69,6 +71,7 @@ public class YieldReportServiceImpl implements YieldReportService {
     private final MaterialBatchRepository materialBatchRepository;
     private final ProductTypeRepository productTypeRepository;
     private final ProductionBatchRepository productionBatchRepository;
+    private final ProductionPlanRepository productionPlanRepository;
     private final SemiFinishedInventoryRepository wipRepo;
     private final BatchLineageEdgeRepository lineageEdgeRepo;
     private final ObjectMapper objectMapper;
@@ -773,6 +776,123 @@ public class YieldReportServiceImpl implements YieldReportService {
         // G8 Wave 3 (C): 进行中标注 — 算在制 WIP 总量 + 批次完工判定
         enrichInProgressAnnotation(factoryId, batchId, dto);
         return dto;
+    }
+
+    /**
+     * 单元 F (F006 REQ-21): 分订单出成率聚合。
+     *
+     * <p>orderId → 计划 (source_order_id) → 批次 (production_plan_id IN 计划ids) → 每批 {@link #getYield}。
+     * 总投入/总产出/整体出成率仅在所有批次单位一致时计算 (诚实, 不混算不可比单位);
+     * 成本 null-safe 累加 (全 null → null, 绝不默认 0)。无计划/批次 → 空 batches + batchCount 0。</p>
+     */
+    @Override
+    @Transactional(readOnly = true)
+    public OrderYieldSummaryDTO getOrderYieldSummary(String factoryId, String orderId) {
+        // 1) 订单 → 生产计划 ids
+        List<String> planIds = productionPlanRepository
+                .findByFactoryIdAndSourceOrderId(factoryId, orderId).stream()
+                .map(com.cretas.aims.entity.ProductionPlan::getId)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toList());
+        if (planIds.isEmpty()) {
+            return emptyOrderSummary(orderId);  // 诚实空态: 该订单无生产计划
+        }
+
+        // 2) 计划 ids → 批次 → 每批 getYield (复用逐道工序链 + 累计出成率)
+        List<ProductionBatch> batches =
+                productionBatchRepository.findByFactoryIdAndProductionPlanIdIn(factoryId, planIds);
+        if (batches.isEmpty()) {
+            return emptyOrderSummary(orderId);  // 诚实空态: 计划下无批次
+        }
+        List<BatchYieldDTO> batchYields = batches.stream()
+                .map(b -> getYield(factoryId, b.getId()))
+                .collect(Collectors.toList());
+
+        // 3) 单位一致性判定 (首道投入单位 / 末道产出单位 各自全等才聚合)
+        String firstInputUnit = commonUnit(batchYields, BatchYieldDTO::getFirstStepInputUnit);
+        String lastOutputUnit = commonUnit(batchYields, BatchYieldDTO::getLastStepOutputUnit);
+
+        BigDecimal totalFirstInput = firstInputUnit == null ? null
+                : sumNonNull(batchYields, BatchYieldDTO::getFirstStepInput);
+        BigDecimal totalLastOutput = lastOutputUnit == null ? null
+                : sumNonNull(batchYields, BatchYieldDTO::getLastStepOutput);
+
+        // 整体出成率 = 总产出 / 总投入 (scale 4 HALF_UP); 单位不可比或总投入 ≤ 0 → null
+        BigDecimal overallYieldRate = null;
+        if (totalFirstInput != null && totalLastOutput != null
+                && totalFirstInput.signum() > 0) {
+            overallYieldRate = totalLastOutput.divide(totalFirstInput, 4, RoundingMode.HALF_UP);
+        }
+
+        // 成本 null-safe 累加 (全 null → null, 绝不默认 0)
+        BigDecimal totalLaborCost = sumNullSafe(batchYields, BatchYieldDTO::getTotalLaborCost);
+        BigDecimal totalMaterialCost = sumNullSafe(batchYields, BatchYieldDTO::getTotalMaterialCost);
+        BigDecimal totalCost = nullSafeAdd(totalLaborCost, totalMaterialCost);
+
+        return OrderYieldSummaryDTO.builder()
+                .orderId(orderId)
+                .batches(batchYields)
+                .totalFirstInput(totalFirstInput)
+                .totalLastOutput(totalLastOutput)
+                .overallYieldRate(overallYieldRate)
+                .firstInputUnit(firstInputUnit)
+                .lastOutputUnit(lastOutputUnit)
+                .totalLaborCost(totalLaborCost)
+                .totalMaterialCost(totalMaterialCost)
+                .totalCost(totalCost)
+                .batchCount(batchYields.size())
+                .build();
+    }
+
+    /** 单元 F: 诚实空态 (无计划/批次) — 空 batches + batchCount 0 + 全 null 聚合。 */
+    private OrderYieldSummaryDTO emptyOrderSummary(String orderId) {
+        return OrderYieldSummaryDTO.builder()
+                .orderId(orderId)
+                .batches(new ArrayList<>())
+                .batchCount(0)
+                .build();
+    }
+
+    /**
+     * 单元 F: 取所有批次某单位字段的共同值 — 全部非空且相等 → 该单位; 否则 null (不可比, 不混算)。
+     * 任一为 null 或存在不同单位 → null。
+     */
+    private String commonUnit(List<BatchYieldDTO> batches,
+                              java.util.function.Function<BatchYieldDTO, String> unitGetter) {
+        String common = null;
+        for (BatchYieldDTO b : batches) {
+            String u = unitGetter.apply(b);
+            if (u == null) return null;          // 缺单位 → 不可比
+            if (common == null) {
+                common = u;
+            } else if (!common.equals(u)) {
+                return null;                     // 单位不一致 → 不可比
+            }
+        }
+        return common;
+    }
+
+    /** 单元 F: Σ 字段, 把 null 视为 0 (调用方已确认单位可比, totalInput/Output 必有值)。 */
+    private BigDecimal sumNonNull(List<BatchYieldDTO> batches,
+                                  java.util.function.Function<BatchYieldDTO, BigDecimal> getter) {
+        BigDecimal sum = BigDecimal.ZERO;
+        for (BatchYieldDTO b : batches) {
+            sum = sum.add(nz(getter.apply(b)));
+        }
+        return sum;
+    }
+
+    /** 单元 F: 成本 null-safe Σ — 全 null → null; 任一非 null → 该项视 0 求和 (绝不默认 0)。 */
+    private BigDecimal sumNullSafe(List<BatchYieldDTO> batches,
+                                   java.util.function.Function<BatchYieldDTO, BigDecimal> getter) {
+        BigDecimal sum = null;
+        for (BatchYieldDTO b : batches) {
+            BigDecimal v = getter.apply(b);
+            if (v != null) {
+                sum = (sum == null ? BigDecimal.ZERO : sum).add(v);
+            }
+        }
+        return sum;
     }
 
     @Override

@@ -99,6 +99,19 @@ export function getBatchWip(factoryId: string, batchId: string | number) {
   return get<WipRowItem[]>(`/${factoryId}/production/batches/${batchId}/wip`);
 }
 
+// === 单元 F (F006 REQ-21): 分订单出成率聚合 ===
+
+/**
+ * 一张销售订单下全部生产批次的出成率聚合 (分订单分产品分工序)。
+ * 端点: OrderYieldController GET /production/orders/{orderId}/yield-summary。
+ * 单位不可比 → 总投入/总产出/整体出成率为 null (前端显 "—")。订单无批次 → batchCount 0。
+ */
+export function getOrderYieldSummary(factoryId: string, orderId: string) {
+  return get<OrderYieldSummary>(
+    `/${factoryId}/production/orders/${orderId}/yield-summary`
+  );
+}
+
 // === Approval ===
 
 export function getPendingApprovals(factoryId: string, params?: Record<string, unknown>) {
@@ -199,4 +212,35 @@ export interface WipRowItem {
   availableQuantity: number | null;        // 余额 = produced − consumed
   unit: string | null;
   status: 'AVAILABLE' | 'DEPLETED' | 'RETURNED' | string;
+}
+
+// mirror backend dto/yield/BatchYieldDTO.java (单元 F 聚合用到的子集)
+export interface BatchYieldRow {
+  batchId: number | null;
+  batchNumber: string | null;
+  firstStepInput: number | null;
+  lastStepOutput: number | null;
+  firstStepInputUnit: string | null;
+  lastStepOutputUnit: string | null;
+  cumulativeYieldRate: number | null;      // 累计出成率 (跨单位不可比 → null)
+  complete: boolean | null;
+  inProgress: boolean | null;
+  totalLaborCost: number | null;
+  totalMaterialCost: number | null;
+  totalCost: number | null;
+}
+
+// mirror backend dto/yield/OrderYieldSummaryDTO.java
+export interface OrderYieldSummary {
+  orderId: string;
+  batches: BatchYieldRow[];
+  totalFirstInput: number | null;          // 单位不可比 → null
+  totalLastOutput: number | null;
+  overallYieldRate: number | null;         // 整体出成率 (单位不可比 → null)
+  firstInputUnit: string | null;
+  lastOutputUnit: string | null;
+  totalLaborCost: number | null;
+  totalMaterialCost: number | null;
+  totalCost: number | null;
+  batchCount: number;
 }

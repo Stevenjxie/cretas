@@ -3,6 +3,7 @@ package com.cretas.aims.service.yield;
 import com.cretas.aims.dto.yield.BatchYieldDTO;
 import com.cretas.aims.dto.yield.MaterialBatchRef;
 import com.cretas.aims.dto.yield.MaterialInputRequest;
+import com.cretas.aims.dto.yield.OrderYieldSummaryDTO;
 import com.cretas.aims.dto.yield.StepYieldDTO;
 import com.cretas.aims.dto.yield.WipRowDTO;
 import com.cretas.aims.dto.yield.YieldLimitsDTO;
@@ -22,6 +23,7 @@ import com.cretas.aims.repository.FactorySettingsRepository;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.ProductionBatchRepository;
+import com.cretas.aims.repository.ProductionPlanRepository;
 import com.cretas.aims.repository.ProductionReportRepository;
 import com.cretas.aims.repository.SemiFinishedInventoryRepository;
 import com.cretas.aims.repository.WorkProcessRepository;
@@ -58,6 +60,7 @@ class YieldReportServiceImplTest {
     private MaterialBatchRepository materialBatchRepo;
     private ProductTypeRepository productTypeRepo;
     private ProductionBatchRepository productionBatchRepo;
+    private ProductionPlanRepository productionPlanRepo;
     private SemiFinishedInventoryRepository wipRepo;
     private BatchLineageEdgeRepository lineageEdgeRepo;
     private ObjectMapper objectMapper;
@@ -74,6 +77,7 @@ class YieldReportServiceImplTest {
         materialBatchRepo = mock(MaterialBatchRepository.class);
         productTypeRepo = mock(ProductTypeRepository.class);
         productionBatchRepo = mock(ProductionBatchRepository.class);
+        productionPlanRepo = mock(ProductionPlanRepository.class);
         wipRepo = mock(SemiFinishedInventoryRepository.class);
         lineageEdgeRepo = mock(BatchLineageEdgeRepository.class);
         objectMapper = new ObjectMapper();
@@ -84,7 +88,7 @@ class YieldReportServiceImplTest {
         when(lineageEdgeRepo.save(any(BatchLineageEdge.class))).thenAnswer(i -> i.getArgument(0));
         svc = new YieldReportServiceImpl(reportRepo, taskRepo, processRepo, calcSvc, processingService,
                 factorySettingsRepo, materialBatchRepo, productTypeRepo, productionBatchRepo,
-                wipRepo, lineageEdgeRepo, objectMapper);
+                productionPlanRepo, wipRepo, lineageEdgeRepo, objectMapper);
     }
 
     private WorkProcessTask task(long id, int order, String wpId) {
@@ -2182,5 +2186,120 @@ class YieldReportServiceImplTest {
         assertThat(wip.getProducedQuantity()).isEqualByComparingTo("150");
         assertThat(wip.getAccumulatedCost()).isEqualByComparingTo("1560.00");
         assertThat(wip.getUnitCost()).isEqualByComparingTo("10.4000");
+    }
+
+    // ── 单元 F (F006 REQ-21): getOrderYieldSummary 分订单出成率聚合 ──────────────────
+
+    /** 构造一条单工序 same-unit YIELD 报工 (input/output 同单位 → cumulative 可算). */
+    private ProductionReport batchReport(long batchId, long taskId, BigDecimal in, BigDecimal out, String unit) {
+        return ProductionReport.builder()
+                .batchId(batchId)
+                .workProcessTaskId(taskId).processOrder(1).productTypeId("PT-ORD")
+                .inputQuantity(in).inputUnit(unit)
+                .outputQuantity(out).outputUnit(unit)
+                .build();
+    }
+
+    private ProductionBatch batch(long id, String planId) {
+        ProductionBatch b = new ProductionBatch();
+        b.setId(id); b.setFactoryId("F006"); b.setProductionPlanId(planId);
+        b.setStatus(ProductionBatchStatus.IN_PROGRESS);
+        return b;
+    }
+
+    private com.cretas.aims.entity.ProductionPlan plan(String id) {
+        com.cretas.aims.entity.ProductionPlan p = new com.cretas.aims.entity.ProductionPlan();
+        p.setId(id); p.setFactoryId("F006");
+        return p;
+    }
+
+    @Test
+    void getOrderYieldSummary_sameUnit_aggregatesTotalsAndOverallRate() {
+        // order O-1 → plan PL-1 → 2 batches (101, 102) both kg
+        // batch 101: in 100 → out 90 (kg)
+        // batch 102: in 200 → out 150 (kg)
+        // totalFirstInput=300, totalLastOutput=240, overall=240/300=0.8000
+        when(productionPlanRepo.findByFactoryIdAndSourceOrderId("F006", "O-1"))
+                .thenReturn(List.of(plan("PL-1")));
+        when(productionBatchRepo.findByFactoryIdAndProductionPlanIdIn(eq("F006"), any()))
+                .thenReturn(List.of(batch(101L, "PL-1"), batch(102L, "PL-1")));
+        when(reportRepo.findYieldReportsByBatch("F006", 101L))
+                .thenReturn(List.of(batchReport(101L, 1L, new BigDecimal("100"), new BigDecimal("90"), "kg")));
+        when(reportRepo.findYieldReportsByBatch("F006", 102L))
+                .thenReturn(List.of(batchReport(102L, 2L, new BigDecimal("200"), new BigDecimal("150"), "kg")));
+        // getYield internals: no cross-unit grams lookup needed (same unit), enrich no-op
+        when(taskRepo.findByFactoryIdAndIdIn(eq("F006"), any())).thenReturn(List.of());
+        when(processRepo.findAllById(any())).thenReturn(List.of());
+
+        OrderYieldSummaryDTO dto = svc.getOrderYieldSummary("F006", "O-1");
+
+        assertThat(dto.getOrderId()).isEqualTo("O-1");
+        assertThat(dto.getBatchCount()).isEqualTo(2);
+        assertThat(dto.getBatches()).hasSize(2);
+        assertThat(dto.getFirstInputUnit()).isEqualTo("kg");
+        assertThat(dto.getLastOutputUnit()).isEqualTo("kg");
+        assertThat(dto.getTotalFirstInput()).isEqualByComparingTo("300");
+        assertThat(dto.getTotalLastOutput()).isEqualByComparingTo("240");
+        assertThat(dto.getOverallYieldRate()).isEqualByComparingTo("0.8000");
+    }
+
+    @Test
+    void getOrderYieldSummary_differentUnits_totalsAndOverallNull_butBatchesPresent() {
+        // batch 201: kg/kg; batch 202: 份/份 → units not comparable → totals + overall null
+        when(productionPlanRepo.findByFactoryIdAndSourceOrderId("F006", "O-2"))
+                .thenReturn(List.of(plan("PL-2")));
+        when(productionBatchRepo.findByFactoryIdAndProductionPlanIdIn(eq("F006"), any()))
+                .thenReturn(List.of(batch(201L, "PL-2"), batch(202L, "PL-2")));
+        when(reportRepo.findYieldReportsByBatch("F006", 201L))
+                .thenReturn(List.of(batchReport(201L, 1L, new BigDecimal("100"), new BigDecimal("90"), "kg")));
+        when(reportRepo.findYieldReportsByBatch("F006", 202L))
+                .thenReturn(List.of(batchReport(202L, 2L, new BigDecimal("50"), new BigDecimal("48"), "份")));
+        when(taskRepo.findByFactoryIdAndIdIn(eq("F006"), any())).thenReturn(List.of());
+        when(processRepo.findAllById(any())).thenReturn(List.of());
+
+        OrderYieldSummaryDTO dto = svc.getOrderYieldSummary("F006", "O-2");
+
+        assertThat(dto.getBatchCount()).isEqualTo(2);
+        assertThat(dto.getBatches()).hasSize(2);   // individual batches still present
+        assertThat(dto.getTotalFirstInput()).isNull();
+        assertThat(dto.getTotalLastOutput()).isNull();
+        assertThat(dto.getOverallYieldRate()).isNull();
+        assertThat(dto.getFirstInputUnit()).isNull();
+        assertThat(dto.getLastOutputUnit()).isNull();
+    }
+
+    @Test
+    void getOrderYieldSummary_noBatches_returnsEmptySummary() {
+        // order O-3 → plan exists but no batches (or no plan) → honest empty, NOT exception
+        when(productionPlanRepo.findByFactoryIdAndSourceOrderId("F006", "O-3"))
+                .thenReturn(List.of(plan("PL-3")));
+        when(productionBatchRepo.findByFactoryIdAndProductionPlanIdIn(eq("F006"), any()))
+                .thenReturn(List.of());
+
+        OrderYieldSummaryDTO dto = svc.getOrderYieldSummary("F006", "O-3");
+
+        assertThat(dto.getOrderId()).isEqualTo("O-3");
+        assertThat(dto.getBatchCount()).isEqualTo(0);
+        assertThat(dto.getBatches()).isEmpty();
+        assertThat(dto.getTotalFirstInput()).isNull();
+        assertThat(dto.getTotalLastOutput()).isNull();
+        assertThat(dto.getOverallYieldRate()).isNull();
+        assertThat(dto.getTotalCost()).isNull();
+        // never queried reports for any batch
+        verify(reportRepo, never()).findYieldReportsByBatch(eq("F006"), any());
+    }
+
+    @Test
+    void getOrderYieldSummary_noPlans_returnsEmptySummary() {
+        // order with no production plans at all → empty (no batch lookup)
+        when(productionPlanRepo.findByFactoryIdAndSourceOrderId("F006", "O-NONE"))
+                .thenReturn(List.of());
+
+        OrderYieldSummaryDTO dto = svc.getOrderYieldSummary("F006", "O-NONE");
+
+        assertThat(dto.getBatchCount()).isEqualTo(0);
+        assertThat(dto.getBatches()).isEmpty();
+        assertThat(dto.getOverallYieldRate()).isNull();
+        verify(productionBatchRepo, never()).findByFactoryIdAndProductionPlanIdIn(any(), any());
     }
 }
