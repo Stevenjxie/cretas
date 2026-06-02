@@ -38,7 +38,21 @@ const formData = reactive<Partial<WorkProcessItem>>({
   processCategory: '',
   unit: 'kg',
   estimatedMinutes: null,
-  sortOrder: 0
+  sortOrder: 0,
+  standardYieldMin: null,
+  standardYieldMax: null,
+  needsInput: true,
+  outputUnit: ''
+});
+
+// P0-3: 百分比 ↔ 小数转换 (表单按百分比录入, payload 存小数 0.0001..99.9999)
+const minPct = computed<number | null>({
+  get: () => formData.standardYieldMin != null ? +(formData.standardYieldMin * 100).toFixed(2) : null,
+  set: (v) => { formData.standardYieldMin = v != null ? +(v / 100).toFixed(4) : null; }
+});
+const maxPct = computed<number | null>({
+  get: () => formData.standardYieldMax != null ? +(formData.standardYieldMax * 100).toFixed(2) : null,
+  set: (v) => { formData.standardYieldMax = v != null ? +(v / 100).toFixed(4) : null; }
 });
 
 const formRules = {
@@ -48,6 +62,19 @@ const formRules = {
   ],
   unit: [
     { required: true, message: '请输入单位', trigger: 'blur' }
+  ],
+  standardYieldMax: [
+    {
+      validator: (_r: unknown, _v: unknown, cb: (e?: Error) => void) => {
+        if (formData.standardYieldMin != null && formData.standardYieldMax != null
+          && formData.standardYieldMax <= formData.standardYieldMin) {
+          cb(new Error('上限须大于下限'));
+        } else {
+          cb();
+        }
+      },
+      trigger: 'blur'
+    }
   ]
 };
 
@@ -83,7 +110,8 @@ function handleAdd() {
   isEditing.value = false;
   Object.assign(formData, {
     id: '', processName: '', processCategory: '',
-    unit: 'kg', estimatedMinutes: null, sortOrder: 0
+    unit: 'kg', estimatedMinutes: null, sortOrder: 0,
+    standardYieldMin: null, standardYieldMax: null, needsInput: true, outputUnit: ''
   });
   dialogVisible.value = true;
 }
@@ -179,6 +207,14 @@ function handlePageChange(page: number) {
           </template>
         </el-table-column>
         <el-table-column prop="unit" label="单位" width="80" />
+        <el-table-column label="标准出成率" width="130">
+          <template #default="{ row }">
+            <span v-if="row.standardYieldMin != null && row.standardYieldMax != null">
+              {{ (row.standardYieldMin * 100).toFixed(0) }}%~{{ (row.standardYieldMax * 100).toFixed(0) }}%
+            </span>
+            <el-tag v-else type="warning" size="small">未配置</el-tag>
+          </template>
+        </el-table-column>
         <el-table-column prop="estimatedMinutes" label="预估工时(分钟)" width="130">
           <template #default="{ row }">
             {{ row.estimatedMinutes ?? '-' }}
@@ -231,6 +267,26 @@ function handlePageChange(page: number) {
         <el-form-item label="预估工时">
           <el-input-number v-model="formData.estimatedMinutes" :min="1" placeholder="分钟" style="width: 100%" />
         </el-form-item>
+        <el-form-item label="标准出成率下限" prop="standardYieldMin">
+          <!-- 防呆 Rule 1: :min=0.01 (映射后端最小有效值 0.0001), 禁止输 0 → 后端 @DecimalMin(0.0001) 会拒.
+               想"不校验"请清空 (留空=null), 这是唯一的低于阈值路径。 -->
+          <el-input-number v-model="minPct" :min="0.01" :max="999.99" :step="5" :precision="2"
+            placeholder="如 30 (留空=不校验)" style="width: 100%" />
+          <span class="form-hint">%（焯水约 30~60，滚揉保水 100~135；装盒/检验类留空。输 0 无效，不校验请清空）</span>
+        </el-form-item>
+        <el-form-item label="标准出成率上限" prop="standardYieldMax">
+          <!-- 防呆 Rule 1: 同上, :min=0.01 禁 0; 清空=不校验 -->
+          <el-input-number v-model="maxPct" :min="0.01" :max="999.99" :step="5" :precision="2"
+            placeholder="如 60 (留空=不校验)" style="width: 100%" />
+          <span class="form-hint">%（超收预检以此为基准 × 投入量 × 1.3 容差）</span>
+        </el-form-item>
+        <el-form-item label="需录投入量">
+          <el-switch v-model="formData.needsInput" />
+          <span class="form-hint">纯包装/检验类可关闭</span>
+        </el-form-item>
+        <el-form-item label="产出单位">
+          <el-input v-model="formData.outputUnit" placeholder="与投入单位不同时填，如 盒/份；留空则同投入单位" />
+        </el-form-item>
         <el-form-item label="排序">
           <el-input-number v-model="formData.sortOrder" :min="0" style="width: 100%" />
         </el-form-item>
@@ -249,4 +305,5 @@ function handlePageChange(page: number) {
 .toolbar-left { display: flex; align-items: center; gap: 12px; }
 .toolbar-right { display: flex; gap: 8px; }
 .text-muted { color: #909399; }
+.form-hint { font-size: 12px; color: #909399; margin-left: 4px; }
 </style>

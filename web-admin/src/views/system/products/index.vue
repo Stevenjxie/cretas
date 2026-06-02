@@ -26,8 +26,10 @@ const productExtendedFields: FieldConfig[] = [
     ] },
   { key: 'boxConversionCoefficient', label: '箱规转换系数', type: 'decimal', group: '商务信息', precision: 4, order: 4,
     placeholder: '如 10kg/箱 填 10' },
-  { key: 'inventoryWarningThreshold', label: '库存预警值', type: 'decimal', group: '库存采购', precision: 2, order: 5 },
-  { key: 'minimumOrderQuantity', label: '起订量(MOQ)', type: 'decimal', group: '库存采购', precision: 2, order: 6 },
+  { key: 'gramsPerUnit', label: '标准克重(克/份)', type: 'decimal', group: '商务信息', precision: 2, suffix: '克', order: 5,
+    placeholder: '如 1份/盒=120克 填 120 (报工末道份→kg折算用; 留空=无标准)' },
+  { key: 'inventoryWarningThreshold', label: '库存预警值', type: 'decimal', group: '库存采购', precision: 2, order: 6 },
+  { key: 'minimumOrderQuantity', label: '起订量(MOQ)', type: 'decimal', group: '库存采购', precision: 2, order: 7 },
 ];
 import {
   getActiveWorkProcesses,
@@ -69,6 +71,7 @@ interface ProductType {
   updatedAt?: string;
   // 六扇门扩展字段
   boxConversionCoefficient?: number;
+  gramsPerUnit?: number;   // P0-2: 标准克重(克/份), 报工末道份→kg折算用
   inventoryWarningThreshold?: number;
   minimumOrderQuantity?: number;
   brand?: string;

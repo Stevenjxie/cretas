@@ -193,6 +193,13 @@ public class ProductType extends BaseEntity {
     @Column(name = "box_conversion_coefficient", precision = 10, scale = 4)
     private java.math.BigDecimal boxConversionCoefficient;
 
+    /**
+     * P0-2 标准克重: 1 份/盒 = X 克 (报工末道"份/盒→kg"折算整批出成率 + 成品入库换算用;
+     * null=无标准克重, 跨单位出成率保持诚实 null, 不臆造).
+     */
+    @Column(name = "grams_per_unit", precision = 10, scale = 2)
+    private java.math.BigDecimal gramsPerUnit;
+
     /** 库存预警值 */
     @Column(name = "inventory_warning_threshold", precision = 15, scale = 2)
     private java.math.BigDecimal inventoryWarningThreshold;

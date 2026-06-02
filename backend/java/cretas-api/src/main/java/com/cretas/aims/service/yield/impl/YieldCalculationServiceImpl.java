@@ -12,6 +12,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 
 @Service
 public class YieldCalculationServiceImpl implements YieldCalculationService {
@@ -36,6 +37,9 @@ public class YieldCalculationServiceImpl implements YieldCalculationService {
             List<ProductionReport> group = e.getValue();
             BigDecimal totalInput = BigDecimal.ZERO;
             BigDecimal totalOutput = BigDecimal.ZERO;
+            // P1-3 (G4): null-safe 工时/人数聚合 — 全 null 保持 null, 任一非 null 则求和
+            Integer stepMinutes = null;
+            Integer stepWorkers = null;
             for (ProductionReport r : group) {
                 if (r.getInputQuantity() != null) totalInput = totalInput.add(r.getInputQuantity());
                 // A3: 跨批带入计入当前道 input
@@ -46,6 +50,12 @@ public class YieldCalculationServiceImpl implements YieldCalculationService {
                     }
                 }
                 if (r.getOutputQuantity() != null) totalOutput = totalOutput.add(r.getOutputQuantity());
+                if (r.getTotalWorkMinutes() != null) {
+                    stepMinutes = (stepMinutes == null ? 0 : stepMinutes) + r.getTotalWorkMinutes();
+                }
+                if (r.getTotalWorkers() != null) {
+                    stepWorkers = (stepWorkers == null ? 0 : stepWorkers) + r.getTotalWorkers();
+                }
             }
             ProductionReport head = group.get(0);
             String inUnit = head.getInputUnit();
@@ -67,6 +77,8 @@ public class YieldCalculationServiceImpl implements YieldCalculationService {
                     .yieldRate(yieldRate)
                     .unitComparable(comparable)
                     .carryover(carryover)
+                    .totalWorkMinutes(stepMinutes)
+                    .totalWorkers(stepWorkers)
                     .build());
             prevOutput = totalOutput;
         }
@@ -103,6 +115,12 @@ public class YieldCalculationServiceImpl implements YieldCalculationService {
                 s.getTotalInput() != null && s.getTotalInput().compareTo(BigDecimal.ZERO) > 0
                         && s.getTotalOutput() != null && s.getTotalOutput().compareTo(BigDecimal.ZERO) > 0);
 
+        // P1-3 (G4): 整批工时/人数 = Σ steps (全 null → null, 任一非 null 则求和)
+        Integer batchMinutes = steps.stream().map(StepYieldDTO::getTotalWorkMinutes)
+                .filter(Objects::nonNull).reduce(Integer::sum).orElse(null);
+        Integer batchWorkers = steps.stream().map(StepYieldDTO::getTotalWorkers)
+                .filter(Objects::nonNull).reduce(Integer::sum).orElse(null);
+
         return BatchYieldDTO.builder()
                 .batchId(reports.get(0).getBatchId())
                 .firstStepInput(firstInput)
@@ -112,6 +130,8 @@ public class YieldCalculationServiceImpl implements YieldCalculationService {
                 .cumulativeYieldRate(cumulative)
                 .steps(steps)
                 .complete(complete)
+                .totalWorkMinutes(batchMinutes)
+                .totalWorkers(batchWorkers)
                 .build();
     }
 }

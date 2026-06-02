@@ -70,6 +70,9 @@ public class WorkProcessTaskDTO {
     /** 标准出成率上限 (张权 A7; 支持 >1 如滚揉保水 1.35; null=不校验). */
     private BigDecimal standardYieldMax;
 
+    /** P0-2 产出单位 (来自该工序 WorkProcess.outputUnit, join 透出; null=沿用投入单位). */
+    private String outputUnit;
+
     @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss")
     private LocalDateTime createdAt;
 

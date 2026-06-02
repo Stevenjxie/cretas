@@ -254,6 +254,28 @@ public class ProductionBatch extends BaseEntity {
     @Builder.Default
     private Map<String, Object> customFields = new HashMap<>();
 
+    // ==================== 报工 P0-2: 跨单位指标守卫 ====================
+
+    /**
+     * plannedQuantity 所属的原计划单位。
+     *
+     * <p>末道报工产出单位 (份/盒) 与批次原计划单位 (kg) 不同时, completeProduction 会把
+     * {@code unit} 覆盖成产出单位 (份), 使 batch/成品入库单位一致。但此时 {@code plannedQuantity}
+     * 仍是原 kg 数 → {@code efficiency = actualQuantity(份)/plannedQuantity(kg)} 与
+     * {@code unitCost = totalCost(kg基)/goodQuantity(份)} 跨单位无意义。</p>
+     *
+     * <p>completeProduction 覆盖 unit 前把原单位写入此列; {@link #calculateMetrics()}
+     * 检测到 {@code plannedUnit != null && !plannedUnit.equals(unit)} 时, 把 efficiency / unitCost
+     * 置 null (诚实留空, 镜像 yield 层 cumulative=null 做法), 而非算出垃圾值。</p>
+     *
+     * <p><b>持久化原因</b>: {@code @PreUpdate onUpdate()} 每次 save 都重算 calculateMetrics —
+     * 若仅瞬态, 完工后质检改 qualityStatus 等无关更新会用 plannedUnit=null 重新算出垃圾值,
+     * 覆盖已诚实置 null 的结果。持久化保证跨单位事实在批次生命周期内稳定。
+     * 同单位批次此列为 null, calculateMetrics 行为零变化。</p>
+     */
+    @Column(name = "planned_unit", length = 20)
+    private String plannedUnit;
+
     // ==========================================
     // 注意: createdAt 和 updatedAt 字段已从 BaseEntity 继承
     // 不再需要在此定义，避免字段重复
@@ -276,6 +298,12 @@ public class ProductionBatch extends BaseEntity {
      * 计算各项指标
      */
     public void calculateMetrics() {
+        // 报工 P0-2: 末道产出单位 (份/盒) ≠ 原计划单位 (kg) → 跨单位.
+        // actualQuantity/goodQuantity 是产出单位计数, plannedQuantity/成本基是原单位 →
+        // efficiency / unitCost 跨单位无意义, 置 null 诚实留空 (镜像 yield 层 cumulative=null).
+        // 同单位 (plannedUnit 为 null 或与 unit 相同) 行为零变化。
+        boolean crossUnit = plannedUnit != null && unit != null && !plannedUnit.equals(unit);
+
         // 计算总成本
         if (materialCost != null || laborCost != null || equipmentCost != null || otherCost != null) {
             totalCost = BigDecimal.ZERO;
@@ -286,20 +314,27 @@ public class ProductionBatch extends BaseEntity {
         }
 
         // 计算单位成本 - 优先使用良品数量，如果没有则使用实际产量
-        BigDecimal quantityForUnitCost = goodQuantity != null && goodQuantity.compareTo(BigDecimal.ZERO) > 0
-                ? goodQuantity : actualQuantity;
-        if (totalCost != null && quantityForUnitCost != null && quantityForUnitCost.compareTo(BigDecimal.ZERO) > 0) {
-            unitCost = totalCost.divide(quantityForUnitCost, 4, RoundingMode.HALF_UP);
+        // 跨单位时: 成本按原单位 (kg) 归集, 产量是产出单位 (份) → 元/份 但基是 kg, 无意义 → 留空
+        if (crossUnit) {
+            unitCost = null;
+        } else {
+            BigDecimal quantityForUnitCost = goodQuantity != null && goodQuantity.compareTo(BigDecimal.ZERO) > 0
+                    ? goodQuantity : actualQuantity;
+            if (totalCost != null && quantityForUnitCost != null && quantityForUnitCost.compareTo(BigDecimal.ZERO) > 0) {
+                unitCost = totalCost.divide(quantityForUnitCost, 4, RoundingMode.HALF_UP);
+            }
         }
 
-        // 计算良品率
+        // 计算良品率 — good/actual 同为产出单位, 跨单位下仍是同单位比值, 正常计算
         if (goodQuantity != null && actualQuantity != null && actualQuantity.compareTo(BigDecimal.ZERO) > 0) {
             yieldRate = goodQuantity.multiply(BigDecimal.valueOf(100))
                     .divide(actualQuantity, 2, RoundingMode.HALF_UP);
         }
 
-        // 计算效率
-        if (actualQuantity != null && plannedQuantity != null && plannedQuantity.compareTo(BigDecimal.ZERO) > 0) {
+        // 计算效率 — actual(产出单位) / planned(原单位), 跨单位时无意义 → 留空
+        if (crossUnit) {
+            efficiency = null;
+        } else if (actualQuantity != null && plannedQuantity != null && plannedQuantity.compareTo(BigDecimal.ZERO) > 0) {
             efficiency = actualQuantity.multiply(BigDecimal.valueOf(100))
                     .divide(plannedQuantity, 2, RoundingMode.HALF_UP);
         }

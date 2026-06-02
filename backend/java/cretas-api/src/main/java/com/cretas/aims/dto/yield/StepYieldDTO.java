@@ -26,4 +26,8 @@ public class StepYieldDTO {
     private BigDecimal carryover;        // 上道产出 − 本道投入 (>0 结转)
     /** A7 越界告警: null=未配区间/在区间内; 否则 "BELOW_MIN"/"ABOVE_MAX" */
     private String yieldAlert;
+    /** P1-3 (G4): Σ 本道各次报工工时(分钟); 全 null → null (B3 效率指标用) */
+    private Integer totalWorkMinutes;
+    /** P1-3 (G4): Σ 本道各次报工人数; 全 null → null (本道人次, 单道通常≈实际人数) */
+    private Integer totalWorkers;
 }

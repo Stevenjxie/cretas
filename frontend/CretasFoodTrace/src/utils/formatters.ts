@@ -46,6 +46,32 @@ export function formatPercent(value: number | null | undefined, decimals = 1): s
   return `${v.toFixed(decimals)}%`;
 }
 
+// ─── Product name (P0-1 fool-proof display fallback) ────────────────
+
+/**
+ * Backend legacy placeholder for an un-bound batch product name.
+ * P0-1 fix makes createBatch resolve the real name from productTypeId, but
+ * historical rows (pre-backfill, or rows the backfill could not resolve)
+ * may still carry this string. The UI must never surface it as a real name.
+ */
+const PRODUCT_NAME_PLACEHOLDER = '待设置产品名称';
+
+/**
+ * Display-safe product name: filters out the legacy "待设置产品名称" placeholder
+ * (and blank/null) so the UI shows a clean fallback (e.g. t('...pending')).
+ *
+ * @param name    raw productName / productType from the API
+ * @param fallback what to show when the name is missing or placeholder
+ */
+export function displayProductName(
+  name: string | null | undefined,
+  fallback: string,
+): string {
+  const trimmed = (name ?? '').trim();
+  if (!trimmed || trimmed === PRODUCT_NAME_PLACEHOLDER) return fallback;
+  return trimmed;
+}
+
 // ─── Date helpers ───────────────────────────────────────────────────
 
 function toDate(input: Date | string | number | null | undefined): Date | null {

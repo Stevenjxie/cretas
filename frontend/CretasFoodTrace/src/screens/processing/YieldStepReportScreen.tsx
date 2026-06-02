@@ -35,12 +35,16 @@ const YieldStepReportScreen: React.FC = () => {
 
   const [productType, setProductType] = useState<string>('');
   const [batchNumber, setBatchNumber] = useState<string>(route.params.batchNumber ?? '');
+  const [batchStatus, setBatchStatus] = useState<string>('');  // P1-1: 完工幂等判断
   const [tasks, setTasks] = useState<WorkProcessTask[]>([]);
   const [yieldData, setYieldData] = useState<BatchYieldDTO | null>(null);
   const [currentStepIndex, setCurrentStepIndex] = useState(0);
 
   const [inputQty, setInputQty] = useState('');
   const [outputQty, setOutputQty] = useState('');
+  // P1-3 (G4): 本道人数 / 工时 (选填; 张权 "用了多少人 / 一个人一个小时")
+  const [workerCount, setWorkerCount] = useState('');
+  const [workMinutes, setWorkMinutes] = useState('');
   const [lastAlert, setLastAlert] = useState<'BELOW_MIN' | 'ABOVE_MAX' | null>(null);
   // A4: 超收预检
   const [yieldLimits, setYieldLimits] = useState<YieldLimitsDTO | null>(null);
@@ -73,6 +77,7 @@ const YieldStepReportScreen: React.FC = () => {
       if (batchRes.success && batchRes.data) {
         setProductType(batchRes.data.productType ?? '');
         if (batchRes.data.batchNumber) setBatchNumber(batchRes.data.batchNumber);
+        setBatchStatus(batchRes.data.status ?? '');  // P1-1: 完工幂等判断
       }
       if (yieldRes.success) setYieldData(yieldRes.data);
     } catch (error) {
@@ -93,6 +98,8 @@ const YieldStepReportScreen: React.FC = () => {
     if (phase !== 'reporting') return;
     setInputQty(prevOutput != null ? String(prevOutput) : '');
     setOutputQty('');
+    setWorkerCount('');
+    setWorkMinutes('');
     setLastAlert(null);
     setYieldLimits(null);
     setMaterialBatchRefs([]);
@@ -110,9 +117,8 @@ const YieldStepReportScreen: React.FC = () => {
     limitsDebounceRef.current = setTimeout(async () => {
       try {
         const res = await yieldReportApi.getYieldLimits(batchId, currentTask.id, parsed);
-        if (res.success) {
-          setYieldLimits(res.data.maxAllowed != null ? res.data : null);
-        }
+        // P0-3: 保留 limits 即使 maxAllowed==null (诚实显示"未配置标准出成上限"灰条, 不静默空白)
+        if (res.success) setYieldLimits(res.data);
       } catch {
         // 预检失败不阻断报工, 静默忽略
       }
@@ -123,6 +129,8 @@ const YieldStepReportScreen: React.FC = () => {
   }, [inputQty, currentTask, batchId]);
 
   const unit = currentTask?.plannedUnit ?? 'kg';
+  // P0-2: 本道产出单位 — 工序配了 outputUnit (如末道 kg→份/盒) 则用它, 否则沿用投入单位
+  const outUnit = currentTask?.outputUnit ?? unit;
   const planned = currentTask?.plannedQuantity ?? null;
   const inputMax = planned != null ? planned * OVER_RECEIVE_TOLERANCE : null;
   const inputMaxHint =
@@ -133,6 +141,18 @@ const YieldStepReportScreen: React.FC = () => {
     prevOutput != null
       ? `← 上道产出 ${prevOutput} ${unit}, 请确认实际投了多少`
       : '本道为首道, 请填本道领料投入量';
+
+  // P0-3: 产出绝对物理上限 = 2 × maxAllowed (maxAllowed 本身已含 30% 容差;
+  // 1×~2× 之间走超收确认流, 超 2× 视为单位/数量误输, 直接 disable 提交)
+  const OUTPUT_HARD_CAP_MULTIPLIER = 2;
+  const outputHardCap = useMemo<number | null>(() => {
+    if (!yieldLimits || yieldLimits.maxAllowed == null) return null;
+    return yieldLimits.maxAllowed * OUTPUT_HARD_CAP_MULTIPLIER;
+  }, [yieldLimits]);
+  const outputOverHardCap = useMemo<boolean>(() => {
+    const out = parseFloat(outputQty);
+    return outputHardCap != null && !Number.isNaN(out) && out > outputHardCap;
+  }, [outputQty, outputHardCap]);
 
   // A4: 强制提交 (OVER_RECEIPT 确认后调用)
   const submitWithForce = useCallback(async (req: YieldReportRequest) => {
@@ -169,13 +189,18 @@ const YieldStepReportScreen: React.FC = () => {
       return;
     }
     const input = parseFloat(inputQty);
+    // P1-3 (G4): 本道人数 / 工时 — 选填整数, 仅 >0 才进 req (不填则后端存 null, 向后兼容)
+    const wc = parseInt(workerCount, 10);
+    const wm = parseInt(workMinutes, 10);
     // A2b: 首道 + 有批次引用时, 将 materialBatchRefs 随报工单一起提交 (一次请求, 不再双调)
     const req: YieldReportRequest = {
       workProcessTaskId: currentTask.id,
       inputQuantity: Number.isNaN(input) ? 0 : input,
       inputUnit: unit,
       outputQuantity: output,
-      outputUnit: unit,
+      outputUnit: outUnit,
+      ...(Number.isNaN(wc) || wc <= 0 ? {} : { workerCount: wc }),
+      ...(Number.isNaN(wm) || wm <= 0 ? {} : { workMinutes: wm }),
       ...(currentStepIndex === 0 && materialBatchRefs.length > 0
         ? {
             materialBatchRefs: materialBatchRefs.map((r: MaterialBatchRef) => ({
@@ -239,25 +264,69 @@ const YieldStepReportScreen: React.FC = () => {
     } finally {
       setSubmitting(false);
     }
-  }, [currentTask, outputQty, inputQty, unit, batchId, currentStepIndex, totalSteps, submitWithForce, materialBatchRefs]);
+  }, [currentTask, outputQty, inputQty, unit, outUnit, batchId, currentStepIndex, totalSteps, submitWithForce, materialBatchRefs, workerCount, workMinutes]);
 
-  const handleSettleDay = useCallback(async () => {
+  // P1-1: 结清 (triggerComplete 决定是否同时完工入库)
+  const doSettle = useCallback(async (triggerComplete: boolean) => {
     setSubmitting(true);
     try {
-      const res = await yieldReportApi.settleDay(batchId, {});
-      if (res.success) {
-        Alert.alert('已标记今日结清', `本次结清 ${res.data.settledCount} 条报工`);
-      } else {
+      const res = await yieldReportApi.settleDay(batchId, { triggerComplete });
+      if (!res.success) {
         Alert.alert('结清失败', res.message || '请重试');
+        return;
+      }
+      if (res.data.completed) {
+        const out = yieldData?.lastStepOutput;
+        const unitL = yieldData?.lastStepOutputUnit ?? '';
+        Alert.alert(
+          '已完工入库',
+          `${productType || ''} ${batchNumber}\n本次结清 ${res.data.settledCount} 条报工\n` +
+          `批次已完工, 末道产出 ${out ?? '—'}${unitL} 已入成品库, 生产计划实际产量已回填`,
+          [{ text: '返回选批次', onPress: () => navigation.goBack() }],
+        );
+      } else if (res.data.completeError) {
+        // Rule 5 next-action: 结清成功但完工失败 (批次未开始生产), 透传后端原因
+        Alert.alert(
+          '已结清 (批次未完工)',
+          `本次结清 ${res.data.settledCount} 条报工\n${res.data.completeError}`,
+        );
+      } else {
+        Alert.alert('已标记今日结清', `本次结清 ${res.data.settledCount} 条报工 (批次未完工)`);
       }
     } catch (error) {
       handleError(error, { showAlert: false, logError: true });
-      const e = error as { response?: { data?: { message?: string } } };
-      Alert.alert('结清失败', e.response?.data?.message ?? '请重试');
+      const e = error as { response?: { data?: { message?: string; hint?: string } } };
+      const msg = e.response?.data?.message;
+      const hint = e.response?.data?.hint;
+      Alert.alert('结清失败', msg ? (hint ? `${msg}\n${hint}` : msg) : '请重试');
     } finally {
       setSubmitting(false);
     }
-  }, [batchId]);
+  }, [batchId, productType, batchNumber, yieldData, navigation]);
+
+  // P1-1: 末道全报完 → 二段确认是否完工入库 (Rule 2 context + Rule 4 幂等)
+  const handleSettleDay = useCallback(() => {
+    const alreadyCompleted = batchStatus === 'COMPLETED' || batchStatus === 'completed';
+    if (alreadyCompleted) {
+      // Rule 4 幂等: 批次已完工, 不再重复触发 (后端会返 completeError)
+      Alert.alert('批次已完工', `${batchNumber} 已入库, 无需重复完工`, [
+        { text: '返回选批次', onPress: () => navigation.goBack() },
+      ]);
+      return;
+    }
+    const out = yieldData?.lastStepOutput;
+    const unitL = yieldData?.lastStepOutputUnit ?? '';
+    // Rule 2 context: 品名 + 批次 + 末道产出
+    Alert.alert(
+      '完工入库确认',
+      `${productType || ''} ${batchNumber}\n末道产出 ${out ?? '—'}${unitL}\n` +
+      `确认后: 批次标完工 + 末道产出入成品库 + 回填生产计划实际产量`,
+      [
+        { text: '暂不完工(仅结清今日)', onPress: () => doSettle(false) },
+        { text: '完工入库', style: 'default', onPress: () => doSettle(true) },
+      ],
+    );
+  }, [batchStatus, productType, batchNumber, yieldData, doSettle, navigation]);
 
   if (loading) {
     return (
@@ -286,6 +355,10 @@ const YieldStepReportScreen: React.FC = () => {
 
   if (phase === 'done') {
     const cum = yieldData?.cumulativeYieldRate;
+    // P0-2: 跨单位 (首道投入单位 ≠ 末道产出单位) 且无累计出成率 → 诚实标"跨单位不可比", 不显 0/—
+    const inU = yieldData?.firstStepInputUnit;
+    const outU = yieldData?.lastStepOutputUnit;
+    const crossUnitNoGrams = cum == null && inU != null && outU != null && inU !== outU;
     const cumPct = cum != null ? `${(cum * 100).toFixed(2)}%` : '—';
     return (
       <ScreenWrapper>
@@ -294,10 +367,18 @@ const YieldStepReportScreen: React.FC = () => {
             <Text style={styles.doneTitle}>✓ {totalSteps}/{totalSteps} 道全部报完</Text>
             <Text style={styles.doneProduct}>{productType || '—'}</Text>
             <Text style={styles.doneBatch}>{batchNumber}</Text>
-            <View style={styles.doneRow}>
-              <Text style={styles.doneLabel}>累计出成率</Text>
-              <Text style={styles.doneValue} testID="cumulative-yield-rate">{cumPct}</Text>
-            </View>
+            {crossUnitNoGrams ? (
+              <View style={styles.crossUnitBanner} testID="cumulative-cross-unit">
+                <Text style={styles.crossUnitText}>
+                  整批出成率: 跨单位不可比 (末道为 {outU}, 需在产品管理配产品标准克重后折算)
+                </Text>
+              </View>
+            ) : (
+              <View style={styles.doneRow}>
+                <Text style={styles.doneLabel}>累计出成率</Text>
+                <Text style={styles.doneValue} testID="cumulative-yield-rate">{cumPct}</Text>
+              </View>
+            )}
             {yieldData?.firstStepInput != null && yieldData?.lastStepOutput != null ? (
               <Text style={styles.doneFlow}>
                 {yieldData.firstStepInput}{yieldData.firstStepInputUnit ?? ''} → {yieldData.lastStepOutput}{yieldData.lastStepOutputUnit ?? ''}
@@ -305,7 +386,7 @@ const YieldStepReportScreen: React.FC = () => {
             ) : null}
           </NeoCard>
           <NeoButton variant="primary" size="large" onPress={handleSettleDay} disabled={submitting} loading={submitting} style={styles.fullBtn}>
-            标记今日结清
+            完工入库
           </NeoButton>
           <NeoButton variant="outline" size="large" onPress={() => navigation.goBack()} style={styles.fullBtn}>
             返回选批次
@@ -382,22 +463,63 @@ const YieldStepReportScreen: React.FC = () => {
             testID="yield-input-qty"
           />
 
-          {/* A4: 超收预检提示 (仅 maxAllowed != null 时显示) */}
+          {/* A4 + P0-3: 超收预检提示. maxAllowed!=null → 绿条边界; ==null → 诚实灰条 (未配置) */}
           {yieldLimits != null ? (
-            <View style={styles.limitsHint} testID="yield-limits-hint">
-              <Text style={styles.limitsHintText}>
-                目标 {yieldLimits.targetQuantity ?? '—'} / 已报 {yieldLimits.alreadyReported ?? 0} / 最多可报 {yieldLimits.remaining ?? '—'} {yieldLimits.unit ?? unit}
-              </Text>
-            </View>
+            yieldLimits.maxAllowed != null ? (
+              <View style={styles.limitsHint} testID="yield-limits-hint">
+                <Text style={styles.limitsHintText}>
+                  目标 {yieldLimits.targetQuantity ?? '—'} / 已报 {yieldLimits.alreadyReported ?? 0} / 最多可报 {yieldLimits.remaining ?? '—'} {yieldLimits.unit ?? unit}
+                </Text>
+              </View>
+            ) : (
+              <View style={styles.limitsHintMuted} testID="yield-limits-unconfigured">
+                <Text style={styles.limitsHintMutedText}>
+                  该工序未配置标准出成上限, 无超收边界提示 (可在 web 工序管理配置)
+                </Text>
+              </View>
+            )
           ) : null}
 
           <YieldQuantityInput
             label="产出量"
             value={outputQty}
             onChangeText={setOutputQty}
-            unit={unit}
+            unit={outUnit}
+            max={outputHardCap}
+            maxHint={
+              outputHardCap != null
+                ? `产出超过物理上限 ${Math.round(outputHardCap)} ${outUnit} 不可提交 (疑似单位/数量误输)`
+                : null
+            }
             disabled={submitting}
             testID="yield-output-qty"
+          />
+
+          {/* P0-3: 超 2× maxAllowed 的物理墙 — 显式红条 + disable 提交 */}
+          {outputOverHardCap ? (
+            <View style={styles.hardcapBanner} testID="yield-hardcap-banner">
+              <Text style={styles.hardcapText}>
+                产出量超过物理上限 {Math.round(outputHardCap ?? 0)} {outUnit}, 请核对 (疑似单位/数量错误)
+              </Text>
+            </View>
+          ) : null}
+
+          {/* P1-3 (G4): 本道人数 + 工时 (选填) — 张权 "用了多少人 / 一个人一个小时" (Rule 2 context: label 明确"本道") */}
+          <YieldQuantityInput
+            label="本道人数 (选填)"
+            value={workerCount}
+            onChangeText={setWorkerCount}
+            unit="人"
+            disabled={submitting}
+            testID="yield-worker-count"
+          />
+          <YieldQuantityInput
+            label="本道工时 (选填)"
+            value={workMinutes}
+            onChangeText={setWorkMinutes}
+            unit="分钟"
+            disabled={submitting}
+            testID="yield-work-minutes"
           />
 
           {alertText ? (
@@ -411,7 +533,7 @@ const YieldStepReportScreen: React.FC = () => {
           variant="primary"
           size="large"
           onPress={handleSubmit}
-          disabled={submitting}
+          disabled={submitting || outputOverHardCap}
           loading={submitting}
           style={styles.fullBtn}
           testID="yield-submit-btn"
@@ -445,11 +567,17 @@ const styles = StyleSheet.create({
   alertText: { fontSize: 14, color: '#E6A23C', fontWeight: '500' },
   limitsHint: { backgroundColor: '#F0F9EB', borderRadius: 6, paddingHorizontal: 10, paddingVertical: 6, marginTop: 4 },
   limitsHintText: { fontSize: 13, color: '#67C23A' },
+  limitsHintMuted: { backgroundColor: '#F4F4F5', borderRadius: 6, paddingHorizontal: 10, paddingVertical: 6, marginTop: 4 },
+  limitsHintMutedText: { fontSize: 13, color: '#909399' },
+  hardcapBanner: { backgroundColor: '#FEF0F0', borderRadius: 8, padding: 12, marginTop: 4 },
+  hardcapText: { fontSize: 14, color: '#F56C6C', fontWeight: '600' },
   fullBtn: { width: '100%', marginBottom: 12 },
   doneCard: { marginBottom: 20, alignItems: 'center' },
   doneTitle: { fontSize: 20, fontWeight: '700', color: '#67C23A', marginBottom: 12 },
   doneProduct: { fontSize: 18, fontWeight: '600', color: '#1A1A1A' },
   doneBatch: { fontSize: 14, color: '#909399', marginTop: 4, marginBottom: 16 },
+  crossUnitBanner: { backgroundColor: '#FDF6EC', borderRadius: 8, padding: 12, marginTop: 8 },
+  crossUnitText: { fontSize: 14, color: '#E6A23C', fontWeight: '500', textAlign: 'center' },
   doneRow: { flexDirection: 'row', alignItems: 'baseline', marginTop: 8 },
   doneLabel: { fontSize: 15, color: '#606266', marginRight: 12 },
   doneValue: { fontSize: 28, fontWeight: '700', color: '#E8732E' },

@@ -39,6 +39,13 @@ public interface ProcessingService {
       */
     ProductionBatch completeProduction(String factoryId, String batchId, BigDecimal actualQuantity,
                                        BigDecimal goodQuantity, BigDecimal defectQuantity);
+
+    /**
+     * 完成生产 (P0-2 重载): finishedUnit 非空时按"末道产出单位"(如 份/盒)入成品库,
+     * 而非批次原单位 (kg)。finishedUnit=null 行为同上重载 (沿用 batch.unit)。
+     */
+    ProductionBatch completeProduction(String factoryId, String batchId, BigDecimal actualQuantity,
+                                       BigDecimal goodQuantity, BigDecimal defectQuantity, String finishedUnit);
      /**
      * 取消生产
       */

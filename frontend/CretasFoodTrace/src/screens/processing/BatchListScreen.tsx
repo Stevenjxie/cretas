@@ -6,6 +6,7 @@ import { ProcessingScreenProps } from '../../types/navigation';
 import { BatchStatusBadge, BatchStatus } from '../../components/processing';
 import { processingApiClient as processingAPI, BatchResponse } from '../../services/api/processingApiClient';
 import { handleError } from '../../utils/errorHandler';
+import { displayProductName } from '../../utils/formatters';
 import { NeoCard, NeoButton, ScreenWrapper, StatusBadge } from '../../components/ui';
 import { theme } from '../../theme';
 import { useTranslation } from 'react-i18next';
@@ -118,7 +119,7 @@ export default function BatchListScreen() {
           <View style={styles.row}>
             <View style={styles.col}>
               <Text style={styles.label}>{t('batchList.labels.product')}</Text>
-              <Text style={styles.value}>{item.productType || t('batchList.labels.pending')}</Text>
+              <Text style={styles.value}>{displayProductName(item.productType, t('batchList.labels.pending'))}</Text>
             </View>
             <View style={styles.col}>
               <Text style={styles.label}>{t('batchList.labels.supervisor')}</Text>

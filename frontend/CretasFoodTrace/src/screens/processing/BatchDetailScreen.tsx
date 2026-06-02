@@ -8,6 +8,7 @@ import { BatchStatusBadge, BatchStatus } from '../../components/processing';
 import { processingApiClient, ProcessingBatch } from '../../services/api/processingApiClient';
 import { materialConsumptionApiClient, MaterialConsumption, BatchConsumptionSummary } from '../../services/api/materialConsumptionApiClient';
 import { handleError } from '../../utils/errorHandler';
+import { displayProductName } from '../../utils/formatters';
 import { NeoCard, NeoButton, ScreenWrapper, StatusBadge } from '../../components/ui';
 import { theme } from '../../theme';
 
@@ -382,7 +383,7 @@ export default function BatchDetailScreen() {
           <View style={styles.infoGrid}>
              <View style={styles.infoItem}>
                 <Text style={styles.label}>产品类型</Text>
-                <Text style={styles.value}>{batch.productType}</Text>
+                <Text style={styles.value}>{displayProductName(batch.productType, t('batchList.labels.pending'))}</Text>
              </View>
              <View style={styles.infoItem}>
                 <Text style={styles.label}>负责人</Text>

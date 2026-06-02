@@ -185,10 +185,31 @@ const displayActualQuantity = computed(() =>
 const displayActualUnit = computed(() =>
   hasYield.value ? (yieldData.value.lastStepOutputUnit || '') : (batch.value?.unit || ''));
 // audit YIELD-1: 跨单位 cumulative=null 显 —, 不能 *100 (null*100===0 会误显 0.0%)
+// P0-2: 跨单位且无 cumulative → 标"跨单位不可比, 需配产品标准克重" (诚实, 不显 0/—)
 const cumulativeDisplay = computed(() => {
-  const r = yieldData.value?.cumulativeYieldRate;
-  return r == null ? '—' : formatPercent(r * 100);
+  const yd = yieldData.value;
+  const r = yd?.cumulativeYieldRate;
+  if (r != null) return formatPercent(r * 100);
+  const inU = yd?.firstStepInputUnit;
+  const outU = yd?.lastStepOutputUnit;
+  if (inU != null && outU != null && inU !== outU) {
+    return '跨单位不可比, 需配产品标准克重';
+  }
+  return '—';
 });
+
+// P0-2 review fix: 末道产出单位 (份/盒) ≠ 批次原计划单位 (kg) 时, 后端已把 efficiency/unitCost
+// 置 null (跨单位无意义)。前端据 plannedUnit≠unit 显诚实提示, 而非裸 "-" (易误读为"无数据")。
+// 镜像 cumulativeDisplay 跨单位做法。同单位批次 plannedUnit 为 null → 走原 formatPercent/formatCost。
+const isCrossUnit = computed(() => {
+  const pu = batch.value?.plannedUnit;
+  const u = batch.value?.unit;
+  return pu != null && pu !== '' && u != null && pu !== u;
+});
+const efficiencyDisplay = computed(() =>
+  isCrossUnit.value ? '跨单位不可比' : formatPercent(batch.value?.efficiency));
+const unitCostDisplay = computed(() =>
+  isCrossUnit.value ? '跨单位不可比' : formatCost(batch.value?.unitCost));
 
 function getTimelineIcon(type: string) {
   const map: Record<string, string> = {
@@ -268,11 +289,11 @@ function getTimelineIcon(type: string) {
         </div>
         <div class="kpi-card">
           <div class="kpi-label">完成效率</div>
-          <div class="kpi-value">{{ formatPercent(batch.efficiency) }}</div>
+          <div class="kpi-value">{{ efficiencyDisplay }}</div>
         </div>
         <div v-if="canViewPrice" class="kpi-card">
           <div class="kpi-label">单位成本</div>
-          <div class="kpi-value">{{ formatCost(batch.unitCost) }}</div>
+          <div class="kpi-value">{{ unitCostDisplay }}</div>
         </div>
       </div>
 
@@ -332,7 +353,7 @@ function getTimelineIcon(type: string) {
                 {{ formatPercent(batch.yieldRate) }}
               </span>
             </el-descriptions-item>
-            <el-descriptions-item label="完成效率">{{ formatPercent(batch.efficiency) }}</el-descriptions-item>
+            <el-descriptions-item label="完成效率">{{ efficiencyDisplay }}</el-descriptions-item>
           </el-descriptions>
         </el-card>
 
@@ -349,7 +370,10 @@ function getTimelineIcon(type: string) {
             <el-descriptions-item label="总成本">
               <span class="cost-total">{{ formatCost(batch.totalCost) }}</span>
             </el-descriptions-item>
-            <el-descriptions-item label="单位成本">{{ formatCost(batch.unitCost) }}/{{ batch.unit }}</el-descriptions-item>
+            <el-descriptions-item label="单位成本">
+              <template v-if="isCrossUnit">跨单位不可比</template>
+              <template v-else>{{ formatCost(batch.unitCost) }}/{{ batch.unit }}</template>
+            </el-descriptions-item>
           </el-descriptions>
         </el-card>
 
@@ -385,11 +409,27 @@ function getTimelineIcon(type: string) {
                 <span v-else :class="{ 'text-warning': Number(row.carryover) > 0 }">{{ formatNum(row.carryover) }}</span>
               </template>
             </el-table-column>
+            <!-- P1-3 (G4): 逐道人数/工时 (张权 "用了多少人 / 一个人一个小时"); null 显 "—" -->
+            <el-table-column label="人数" width="80" align="center">
+              <template #default="{ row }">
+                <span v-if="row.totalWorkers == null">—</span>
+                <span v-else>{{ row.totalWorkers }} 人</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="工时" width="100" align="right">
+              <template #default="{ row }">
+                <span v-if="row.totalWorkMinutes == null">—</span>
+                <span v-else>{{ row.totalWorkMinutes }} 分钟</span>
+              </template>
+            </el-table-column>
           </el-table>
           <div class="yield-summary">
             合计: {{ formatNum(yieldData.firstStepInput) }} {{ yieldData.firstStepInputUnit || '' }}
             → {{ formatNum(yieldData.lastStepOutput) }} {{ yieldData.lastStepOutputUnit || '' }}
             &nbsp;累计出成率 {{ cumulativeDisplay }}
+            <!-- P1-3 (G4): 整批工时/人次 — 跨道相加是"人次"(同一人多道重复计), 诚实标注 -->
+            <span v-if="yieldData.totalWorkMinutes != null">&nbsp;·&nbsp;总工时 {{ yieldData.totalWorkMinutes }} 分钟</span>
+            <span v-if="yieldData.totalWorkers != null">&nbsp;·&nbsp;总人次 {{ yieldData.totalWorkers }}</span>
           </div>
         </el-card>
 

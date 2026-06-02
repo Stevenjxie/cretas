@@ -25,4 +25,8 @@ public class BatchYieldDTO {
     private List<StepYieldDTO> steps;
     /** 数据是否完整 (每道都有 input+output); 缺则 cumulativeYieldRate 标不可信 */
     private Boolean complete;
+    /** P1-3 (G4): Σ 所有道工时(分钟); 全 null → null */
+    private Integer totalWorkMinutes;
+    /** P1-3 (G4): Σ 所有道人数 — 跨道相加是"人次" (同一人多道会重复计), UI 必须标"总人次" */
+    private Integer totalWorkers;
 }
