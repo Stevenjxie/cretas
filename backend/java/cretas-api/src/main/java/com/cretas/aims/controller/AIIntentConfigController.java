@@ -386,10 +386,16 @@ public class AIIntentConfigController {
 
         // 2. 如果需要执行，构建执行请求
         if (Boolean.TRUE.equals(request.getExecuteAfterConfirm())) {
+            // W0 write-guard (intent-w0): parameter confirmation IS the user's confirmation — flag it
+            // so the downstream W0 guard (Site A) does not re-prompt WRITE_CONFIRM_REQUIRED on a write
+            // intent the user just confirmed. Copy into a mutable map (getConfirmedParams() may be null/immutable).
+            Map<String, Object> context = new java.util.HashMap<>(
+                    request.getConfirmedParams() != null ? request.getConfirmedParams() : Map.of());
+            context.put("confirmed", true);
             IntentExecuteRequest executeRequest = IntentExecuteRequest.builder()
                     .userInput(request.getUserInput())
                     .intentCode(request.getIntentCode())
-                    .context(request.getConfirmedParams())
+                    .context(context)
                     .build();
 
             IntentExecuteResponse response = intentExecutorService.execute(factoryId, executeRequest, userId, userRole);

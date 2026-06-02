@@ -630,7 +630,10 @@ public class LlmIntentFallbackClientImpl implements LlmIntentFallbackClient {
     // reaches this fallback could otherwise drive a write/destructive tool to silently execute with NO
     // user confirmation step. Field-injected (this class mixes constructor + @Autowired field injection);
     // WriteGuardService is stateless → safe to call from any thread.
-    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    // Required injection (WriteGuardService is an unconditional @Service so always present) for
+    // fail-CLOSED consistency with Sites A-E — required=false made Site F fail OPEN if the bean
+    // were ever absent, defeating the destructive-op safety net.
+    @org.springframework.beans.factory.annotation.Autowired
     private com.cretas.aims.ai.tool.WriteGuardService writeGuardService;
 
     /**

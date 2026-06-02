@@ -29,6 +29,27 @@ class WriteGuardServiceTest {
     }
 
     @Test
+    void toolGuard_nameSuffixFallback_catchesDestructiveToolsThatLieAboutActionType() {
+        // ISSUE 1: getActionType() only maps _create/_update/_delete suffixes and defaults the rest
+        // to READ. These genuinely destructive tools report READ — the NAME-suffix fallback must catch them.
+        assertTrue(guard.isWriteTool(toolNamed("material_batch_consume", ToolExecutor.ActionType.READ)),
+                "material_batch_consume reports READ but is destructive — name fallback must fire");
+        assertTrue(guard.isWriteTool(toolNamed("shipment_cancel", ToolExecutor.ActionType.READ)));
+        assertTrue(guard.isWriteTool(toolNamed("purchase_order_approve", ToolExecutor.ActionType.READ)));
+
+        // Genuine reads: READ actionType AND no write suffix → must NOT be flagged.
+        assertFalse(guard.isWriteTool(toolNamed("material_batch_query", ToolExecutor.ActionType.READ)));
+        assertFalse(guard.isWriteTool(toolNamed("report_inventory", ToolExecutor.ActionType.READ)));
+    }
+
+    private static ToolExecutor toolNamed(String name, ToolExecutor.ActionType actionType) {
+        ToolExecutor tool = Mockito.mock(ToolExecutor.class);
+        Mockito.when(tool.getToolName()).thenReturn(name);
+        Mockito.when(tool.getActionType()).thenReturn(actionType);
+        return tool;
+    }
+
+    @Test
     void intentGuard_coversSensitivityAndSuffix() {
         AIIntentConfig high = AIIntentConfig.builder().intentCode("FOO_QUERY").sensitivityLevel("HIGH").build();
         assertTrue(guard.isWriteIntent(high));
