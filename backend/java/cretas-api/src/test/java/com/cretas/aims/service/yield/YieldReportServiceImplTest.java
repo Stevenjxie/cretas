@@ -2302,4 +2302,240 @@ class YieldReportServiceImplTest {
         assertThat(dto.getOverallYieldRate()).isNull();
         verify(productionBatchRepo, never()).findByFactoryIdAndProductionPlanIdIn(any(), any());
     }
+
+    // ══════════════════════════════════════════════════════════════════════════════
+    // 适配单元3: 多段工时 person-hours + 守恒软校验 + 证据/副产物/损耗/留样存储 (修 M2)
+    // ══════════════════════════════════════════════════════════════════════════════
+
+    private YieldReportRequest.LaborSegment seg(String start, String end, Integer headcount) {
+        YieldReportRequest.LaborSegment s = new YieldReportRequest.LaborSegment();
+        s.setStartTime(start); s.setEndTime(end); s.setHeadcount(headcount);
+        return s;
+    }
+
+    // ── A. 多段工时 person-hours ───────────────────────────────────────────────────
+
+    @Test
+    void submitReport_multiSegmentLabor_computesPersonHours() {
+        // segs [(08:00-14:30, 12人), (14:30-15:30, 9人)] rate ¥20
+        // personMin = 390×12 + 60×9 = 4680 + 540 = 5220 → /60 = 87h × 20 = ¥1740.00
+        WorkProcess wp = WorkProcess.builder().id("WP-COST").factoryId("F006")
+                .unit("kg").standardHourlyRate(new BigDecimal("20.00")).build();
+        ArgumentCaptor<ProductionReport> cap = setupCostTask(wp);
+
+        YieldReportRequest req = new YieldReportRequest();
+        req.setWorkProcessTaskId(70L);
+        req.setInputQuantity(new BigDecimal("100")); req.setInputUnit("kg");
+        req.setOutputQuantity(new BigDecimal("90")); req.setOutputUnit("kg");
+        req.setLaborSegments(List.of(seg("08:00", "14:30", 12), seg("14:30", "15:30", 9)));
+
+        svc.submitReport("F006", 1L, 5L, req);
+
+        assertThat(cap.getValue().getLaborCost()).isEqualByComparingTo("1740.00");
+    }
+
+    @Test
+    void submitReport_multiSegmentLabor_totalMinutesSum_totalWorkersMax() {
+        // 工时合计 = Σ segmentMinutes = 390 + 60 = 450; 人数 = MAX headcount = 12 (非 SUM 21) — 修 M2
+        WorkProcess wp = WorkProcess.builder().id("WP-COST").factoryId("F006")
+                .unit("kg").standardHourlyRate(new BigDecimal("20.00")).build();
+        ArgumentCaptor<ProductionReport> cap = setupCostTask(wp);
+
+        YieldReportRequest req = new YieldReportRequest();
+        req.setWorkProcessTaskId(70L);
+        req.setInputQuantity(new BigDecimal("100")); req.setInputUnit("kg");
+        req.setOutputQuantity(new BigDecimal("90")); req.setOutputUnit("kg");
+        req.setLaborSegments(List.of(seg("08:00", "14:30", 12), seg("14:30", "15:30", 9)));
+
+        svc.submitReport("F006", 1L, 5L, req);
+
+        assertThat(cap.getValue().getTotalWorkMinutes()).isEqualTo(450);
+        assertThat(cap.getValue().getTotalWorkers()).isEqualTo(12);   // MAX peak, 不是 SUM 21
+    }
+
+    @Test
+    void submitReport_crossMidnightSegment_addsFullDay() {
+        // 跨夜 (22:00-01:00, 2人): end < start → +1440 → 3h = 180min × 2 = 360 person-min
+        // rate ¥10 → 360/60 = 6h × 10 = ¥60.00; totalWorkMinutes = 180
+        WorkProcess wp = WorkProcess.builder().id("WP-COST").factoryId("F006")
+                .unit("kg").standardHourlyRate(new BigDecimal("10.00")).build();
+        ArgumentCaptor<ProductionReport> cap = setupCostTask(wp);
+
+        YieldReportRequest req = new YieldReportRequest();
+        req.setWorkProcessTaskId(70L);
+        req.setInputQuantity(new BigDecimal("100")); req.setInputUnit("kg");
+        req.setOutputQuantity(new BigDecimal("90")); req.setOutputUnit("kg");
+        req.setLaborSegments(List.of(seg("22:00", "01:00", 2)));
+
+        svc.submitReport("F006", 1L, 5L, req);
+
+        assertThat(cap.getValue().getTotalWorkMinutes()).isEqualTo(180);
+        assertThat(cap.getValue().getLaborCost()).isEqualByComparingTo("60.00");
+    }
+
+    @Test
+    void submitReport_noLaborSegments_fallsBackToSingleWorkerCount() {
+        // laborSegments null → 退回单一 workerCount/workMinutes 旧路径 (back-compat)
+        // 3 workers × 60min (1h) × ¥20 = ¥60.00; totalWorkers=3 (单一), totalWorkMinutes=60
+        WorkProcess wp = WorkProcess.builder().id("WP-COST").factoryId("F006")
+                .unit("kg").standardHourlyRate(new BigDecimal("20.00")).build();
+        ArgumentCaptor<ProductionReport> cap = setupCostTask(wp);
+
+        YieldReportRequest req = new YieldReportRequest();
+        req.setWorkProcessTaskId(70L);
+        req.setInputQuantity(new BigDecimal("100")); req.setInputUnit("kg");
+        req.setOutputQuantity(new BigDecimal("90")); req.setOutputUnit("kg");
+        req.setWorkerCount(3); req.setWorkMinutes(60);   // 无 laborSegments
+
+        svc.submitReport("F006", 1L, 5L, req);
+
+        assertThat(cap.getValue().getLaborCost()).isEqualByComparingTo("60.00");
+        assertThat(cap.getValue().getTotalWorkers()).isEqualTo(3);
+        assertThat(cap.getValue().getTotalWorkMinutes()).isEqualTo(60);
+    }
+
+    @Test
+    void submitReport_laborSegments_nullRate_laborCostNull() {
+        // 多段工时但 rate null → laborCost null (绝不默认 0); 工时/人数仍从 segs 派生
+        WorkProcess wp = WorkProcess.builder().id("WP-COST").factoryId("F006")
+                .unit("kg").standardHourlyRate(null).build();
+        ArgumentCaptor<ProductionReport> cap = setupCostTask(wp);
+
+        YieldReportRequest req = new YieldReportRequest();
+        req.setWorkProcessTaskId(70L);
+        req.setInputQuantity(new BigDecimal("100")); req.setInputUnit("kg");
+        req.setOutputQuantity(new BigDecimal("90")); req.setOutputUnit("kg");
+        req.setLaborSegments(List.of(seg("08:00", "14:30", 12), seg("14:30", "15:30", 9)));
+
+        svc.submitReport("F006", 1L, 5L, req);
+
+        assertThat(cap.getValue().getLaborCost()).isNull();
+        assertThat(cap.getValue().getTotalWorkMinutes()).isEqualTo(450);
+        assertThat(cap.getValue().getTotalWorkers()).isEqualTo(12);
+    }
+
+    // ── B. 守恒软校验 (balanceWarning) ─────────────────────────────────────────────
+
+    @Test
+    void submitReport_balanceWarning_whenDeviationOver15pct() {
+        // input 100, output 60, byproduct 10, waste 5 → balance 25, 25/100 = 25% > 15% → 告警
+        WorkProcess wp = WorkProcess.builder().id("WP-COST").factoryId("F006").unit("kg").build();
+        setupCostTask(wp);
+
+        YieldReportRequest req = new YieldReportRequest();
+        req.setWorkProcessTaskId(70L);
+        req.setInputQuantity(new BigDecimal("100")); req.setInputUnit("kg");
+        req.setOutputQuantity(new BigDecimal("60")); req.setOutputUnit("kg");
+        req.setByproducts(List.of(byproduct("料头", "10", "kg")));
+        req.setWasteQuantity(new BigDecimal("5"));
+
+        Map<String, Object> out = svc.submitReport("F006", 1L, 5L, req);
+
+        assertThat(out.get("balanceWarning")).isNotNull();
+        assertThat(out.get("balanceWarning").toString()).contains("物料平衡偏差");
+    }
+
+    @Test
+    void submitReport_noBalanceWarning_whenBalanced() {
+        // input 100, output 90, byproduct 5, waste 5 → balance 0 → 无告警
+        WorkProcess wp = WorkProcess.builder().id("WP-COST").factoryId("F006").unit("kg").build();
+        setupCostTask(wp);
+
+        YieldReportRequest req = new YieldReportRequest();
+        req.setWorkProcessTaskId(70L);
+        req.setInputQuantity(new BigDecimal("100")); req.setInputUnit("kg");
+        req.setOutputQuantity(new BigDecimal("90")); req.setOutputUnit("kg");
+        req.setByproducts(List.of(byproduct("料头", "5", "kg")));
+        req.setWasteQuantity(new BigDecimal("5"));
+
+        Map<String, Object> out = svc.submitReport("F006", 1L, 5L, req);
+
+        assertThat(out.get("balanceWarning")).isNull();
+    }
+
+    @Test
+    void submitReport_noBalanceWarning_whenUnitsDiffer() {
+        // input kg, output 份 (跨单位) → 守恒不可比 → 无告警 (即便数值偏差大)
+        WorkProcess wp = WorkProcess.builder().id("WP-COST").factoryId("F006").unit("kg").build();
+        setupCostTask(wp);
+
+        YieldReportRequest req = new YieldReportRequest();
+        req.setWorkProcessTaskId(70L);
+        req.setInputQuantity(new BigDecimal("100")); req.setInputUnit("kg");
+        req.setOutputQuantity(new BigDecimal("10")); req.setOutputUnit("份");   // 跨单位
+
+        Map<String, Object> out = svc.submitReport("F006", 1L, 5L, req);
+
+        assertThat(out.get("balanceWarning")).isNull();
+    }
+
+    @Test
+    void submitReport_noBalanceWarning_whenInputNull() {
+        // inputQuantity null → 无基准 → 无告警
+        WorkProcess wp = WorkProcess.builder().id("WP-COST").factoryId("F006").unit("kg").build();
+        setupCostTask(wp);
+
+        YieldReportRequest req = new YieldReportRequest();
+        req.setWorkProcessTaskId(70L);
+        req.setInputQuantity(null); req.setInputUnit("kg");
+        req.setOutputQuantity(new BigDecimal("10")); req.setOutputUnit("kg");
+
+        Map<String, Object> out = svc.submitReport("F006", 1L, 5L, req);
+
+        assertThat(out.get("balanceWarning")).isNull();
+    }
+
+    // ── C. 证据/副产物/损耗/留样 存储 ───────────────────────────────────────────────
+
+    @Test
+    void submitReport_persistsEvidenceByproductsWasteSample() {
+        WorkProcess wp = WorkProcess.builder().id("WP-COST").factoryId("F006").unit("kg").build();
+        ArgumentCaptor<ProductionReport> cap = setupCostTask(wp);
+
+        YieldReportRequest req = new YieldReportRequest();
+        req.setWorkProcessTaskId(70L);
+        req.setInputQuantity(new BigDecimal("100")); req.setInputUnit("kg");
+        req.setOutputQuantity(new BigDecimal("90")); req.setOutputUnit("kg");
+        req.setEvidenceImages(List.of("https://oss/img1.jpg", "https://oss/img2.jpg"));
+        req.setByproducts(List.of(byproduct("料头", "10", "kg"), byproduct("肥油", "3", "kg")));
+        req.setWasteQuantity(new BigDecimal("5"));
+        req.setSampleRetainQuantity(4);
+
+        svc.submitReport("F006", 1L, 5L, req);
+
+        ProductionReport saved = cap.getValue();
+        assertThat(saved.getPhotos()).containsExactly("https://oss/img1.jpg", "https://oss/img2.jpg");
+        assertThat(saved.getByproducts()).isNotNull().hasSize(2);
+        assertThat(saved.getByproducts().get(0).get("name")).isEqualTo("料头");
+        assertThat(saved.getByproducts().get(0).get("quantity")).isEqualTo(new BigDecimal("10"));
+        assertThat(saved.getByproducts().get(0).get("unit")).isEqualTo("kg");
+        assertThat(saved.getWasteQuantity()).isEqualByComparingTo("5");
+        assertThat(saved.getSampleRetainQuantity()).isEqualTo(4);
+    }
+
+    @Test
+    void submitReport_noTraditionalFields_persistsNull() {
+        // 不传证据/副产物/损耗/留样 → 字段保持 null (back-compat)
+        WorkProcess wp = WorkProcess.builder().id("WP-COST").factoryId("F006").unit("kg").build();
+        ArgumentCaptor<ProductionReport> cap = setupCostTask(wp);
+
+        YieldReportRequest req = new YieldReportRequest();
+        req.setWorkProcessTaskId(70L);
+        req.setInputQuantity(new BigDecimal("100")); req.setInputUnit("kg");
+        req.setOutputQuantity(new BigDecimal("90")); req.setOutputUnit("kg");
+
+        svc.submitReport("F006", 1L, 5L, req);
+
+        ProductionReport saved = cap.getValue();
+        assertThat(saved.getPhotos()).isNull();
+        assertThat(saved.getByproducts()).isNull();
+        assertThat(saved.getWasteQuantity()).isNull();
+        assertThat(saved.getSampleRetainQuantity()).isNull();
+    }
+
+    private YieldReportRequest.Byproduct byproduct(String name, String qty, String unit) {
+        YieldReportRequest.Byproduct b = new YieldReportRequest.Byproduct();
+        b.setName(name); b.setQuantity(new BigDecimal(qty)); b.setUnit(unit);
+        return b;
+    }
 }

@@ -109,15 +109,16 @@ class YieldCalculationServiceImplTest {
     }
 
     @Test
-    void calculateSteps_sumsWorkMinutesAndWorkers_perStep() {
-        // 同一道 (task 1) 两次报工: workers 2+3=5, minutes 60+90=150
+    void calculateSteps_sumsWorkMinutes_butWorkersIsMaxPeak_perStep() {
+        // 同一道 (task 1) 两次报工: minutes 60+90=150 (Σ);
+        // 修 M2: 人数取 MAX(2,3)=3 峰值, 不是 SUM 5 (同批人力不重复计虚高)
         List<StepYieldDTO> steps = svc.calculateSteps(List.of(
                 rptWork(1, 1, "100", "80", 60, 2),
                 rptWork(1, 1, "80", "70", 90, 3)
         ));
         assertThat(steps).hasSize(1);
         assertThat(steps.get(0).getTotalWorkMinutes()).isEqualTo(150);
-        assertThat(steps.get(0).getTotalWorkers()).isEqualTo(5);
+        assertThat(steps.get(0).getTotalWorkers()).isEqualTo(3);   // MAX peak, 非 SUM 5
     }
 
     @Test
@@ -275,6 +276,85 @@ class YieldCalculationServiceImplTest {
         assertThat(dto.getTotalLaborCost()).isNull();
         assertThat(dto.getTotalMaterialCost()).isNull();
         assertThat(dto.getTotalCost()).isNull();
+    }
+
+    // ── 适配单元3: 证据/工时段/副产物/损耗/留样 聚合 + totalWorkers MAX (修 M2) ──────────
+
+    private ProductionReport rptTraditional(long taskId, int order, String in, String out,
+                                            List<String> photos,
+                                            List<Map<String, Object>> laborSegments,
+                                            List<Map<String, Object>> byproducts,
+                                            String waste, Integer sampleRetain,
+                                            Integer workers) {
+        return ProductionReport.builder()
+                .factoryId("F006").batchId(1L).reportType("YIELD")
+                .workProcessTaskId(taskId).processOrder(order)
+                .inputQuantity(new BigDecimal(in)).inputUnit("kg")
+                .outputQuantity(new BigDecimal(out)).outputUnit("kg")
+                .photos(photos)
+                .laborSegments(laborSegments)
+                .byproducts(byproducts)
+                .wasteQuantity(waste == null ? null : new BigDecimal(waste))
+                .sampleRetainQuantity(sampleRetain)
+                .totalWorkers(workers)
+                .build();
+    }
+
+    @Test
+    void calculateSteps_mergesPhotosByproducts_sumsWasteSample_maxWorkers() {
+        // 同一道 (task 1) 两次报工:
+        //   报工A: photos[p1,p2], 副产物[料头10], waste 5, sample null, workers 12
+        //   报工B: photos[p2,p3], 副产物[肥油3],  waste 2, sample 4,   workers 9
+        // 期望: photos 合并去重 = [p1,p2,p3]; byproducts 拼接 2 条; waste = 7; sample = 4; workers MAX = 12 (非 21)
+        Map<String, Object> bpA = Map.of("name", "料头", "quantity", new BigDecimal("10"), "unit", "kg");
+        Map<String, Object> bpB = Map.of("name", "肥油", "quantity", new BigDecimal("3"), "unit", "kg");
+        List<StepYieldDTO> steps = svc.calculateSteps(List.of(
+                rptTraditional(1, 1, "100", "80", List.of("p1", "p2"), null, List.of(bpA), "5", null, 12),
+                rptTraditional(1, 1, "80", "70", List.of("p2", "p3"), null, List.of(bpB), "2", 4, 9)
+        ));
+        assertThat(steps).hasSize(1);
+        StepYieldDTO s = steps.get(0);
+        assertThat(s.getPhotos()).containsExactly("p1", "p2", "p3");   // 去重保序
+        assertThat(s.getByproducts()).hasSize(2);
+        assertThat(s.getWasteQuantity()).isEqualByComparingTo("7");
+        assertThat(s.getSampleRetainQuantity()).isEqualTo(4);
+        assertThat(s.getTotalWorkers()).isEqualTo(12);                 // MAX peak, 不是 SUM 21 (修 M2)
+    }
+
+    @Test
+    void calculateSteps_allTraditionalNull_keepsFieldsNull() {
+        // 无证据/副产物/损耗/留样 → step 字段保持 null (绝不默认空 list / 0)
+        List<StepYieldDTO> steps = svc.calculateSteps(List.of(
+                rpt(1, 1, "100", "kg", "80", "kg")
+        ));
+        StepYieldDTO s = steps.get(0);
+        assertThat(s.getPhotos()).isNull();
+        assertThat(s.getByproducts()).isNull();
+        assertThat(s.getWasteQuantity()).isNull();
+        assertThat(s.getSampleRetainQuantity()).isNull();
+    }
+
+    @Test
+    void calculateBatchYield_sumsWasteAndSampleAcrossSteps() {
+        // 道1 waste 5 sample null, 道2 waste 2 sample 4 → totalWaste 7, totalSampleRetain 4
+        List<ProductionReport> reports = List.of(
+                rptTraditional(1, 1, "998", "935.5", null, null, null, "5", null, 12),
+                rptTraditional(2, 2, "935.5", "382", null, null, null, "2", 4, 9)
+        );
+        BatchYieldDTO dto = svc.calculateBatchYield(reports, null);
+        assertThat(dto.getTotalWaste()).isEqualByComparingTo("7");
+        assertThat(dto.getTotalSampleRetain()).isEqualTo(4);
+    }
+
+    @Test
+    void calculateBatchYield_allNullWasteSample_batchFieldsNull() {
+        List<ProductionReport> reports = List.of(
+                rpt(1, 1, "998", "kg", "935.5", "kg"),
+                rpt(2, 2, "935.5", "kg", "382", "kg")
+        );
+        BatchYieldDTO dto = svc.calculateBatchYield(reports, null);
+        assertThat(dto.getTotalWaste()).isNull();
+        assertThat(dto.getTotalSampleRetain()).isNull();
     }
 
     @Test

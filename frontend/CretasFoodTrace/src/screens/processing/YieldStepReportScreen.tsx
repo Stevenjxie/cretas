@@ -1,7 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { View, Text, ScrollView, StyleSheet, Alert, ActivityIndicator } from 'react-native';
+import {
+  View, Text, TextInput, TouchableOpacity, Image, ScrollView, StyleSheet,
+  Alert, ActivityIndicator,
+} from 'react-native';
 import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import * as ImagePicker from 'expo-image-picker';
+import * as ImageManipulator from 'expo-image-manipulator';
 import { ScreenWrapper } from '../../components/ui/ScreenWrapper';
 import { NeoCard } from '../../components/ui/NeoCard';
 import { NeoButton } from '../../components/ui/NeoButton';
@@ -24,6 +29,26 @@ type RouteT = RouteProp<{ YieldStepReport: YieldStepReportParams }, 'YieldStepRe
 type NavT = NativeStackNavigationProp<Record<string, object | undefined>>;
 
 const OVER_RECEIVE_TOLERANCE = 1.3; // A4 软上限: 计划 ×1.3 (含 30% 超收)
+
+// 单元4 STEP 3: 图片证据本地态 (uri 上传中 / 上传完拿 serverUrl)
+interface EvidencePhoto {
+  uri: string;
+  uploading: boolean;
+  serverUrl?: string;
+}
+// 单元4 STEP 4: 工时段本地态 (HH:mm + 人数 + 备注)
+interface LaborSegmentInput {
+  startTime: string;
+  endTime: string;
+  headcount: string;
+  note: string;
+}
+// 单元4 STEP 5: 副产物本地态 (名称 + 数量 + 单位)
+interface ByproductInput {
+  name: string;
+  quantity: string;
+  unit: string;
+}
 
 // A.6 逐道成本格式化: null (未配工价 / 无原料单价) → "—" (非 ¥0).
 const fmtMoney = (v: number | null | undefined): string =>
@@ -70,6 +95,13 @@ const YieldStepReportScreen: React.FC = () => {
   const [materialBatchRefs, setMaterialBatchRefs] = useState<MaterialBatchRef[]>([]);
   // 单元D (F006 #5): 上道多笔 WIP 时操作工选中的领用批次 (单选; null = 未选或不适用)
   const [selectedWip, setSelectedWip] = useState<WipSelection | null>(null);
+
+  // ── 单元4 传统报工适配 (六扇门工人报工方式) ──
+  const [evidencePhotos, setEvidencePhotos] = useState<EvidencePhoto[]>([]);  // STEP 3 图片证据
+  const [laborSegments, setLaborSegments] = useState<LaborSegmentInput[]>([]); // STEP 4 多段工时
+  const [byproducts, setByproducts] = useState<ByproductInput[]>([]);          // STEP 5 副产物
+  const [wasteQty, setWasteQty] = useState('');                                // STEP 5 损耗量
+  const [sampleRetainQty, setSampleRetainQty] = useState('');                  // STEP 5 留样
 
   const currentTask = tasks[currentStepIndex] ?? null;
   const totalSteps = tasks.length;
@@ -129,6 +161,12 @@ const YieldStepReportScreen: React.FC = () => {
     setYieldLimits(null);
     setMaterialBatchRefs([]);
     setSelectedWip(null);
+    // 单元4: 切道时清空传统报工录入 (每道独立)
+    setEvidencePhotos([]);
+    setLaborSegments([]);
+    setByproducts([]);
+    setWasteQty('');
+    setSampleRetainQty('');
   }, [currentStepIndex, prevOutput, phase]);
 
   // A4: 投入量变化后 debounce 500ms 拉超收上限
@@ -209,6 +247,97 @@ const YieldStepReportScreen: React.FC = () => {
   // 单元D: 上道多笔 WIP 但操作工尚未选领用批次 → 阻塞提交 (本道领用是必须的, 否则后端不扣 WIP 库存账错)。
   const submitBlockedNoWip = needsWipPicker && selectedWip == null;
 
+  // ── 单元4 STEP 3: 图片证据拍照/相册 → 压缩 → 上传 OSS → 收集 URL ──
+  const uploadEvidence = useCallback(async (uri: string) => {
+    // 压缩 (resize 1024 / quality 0.7 / JPEG), 镜像 PhotoEvidenceCapture
+    const manipulated = await ImageManipulator.manipulateAsync(
+      uri,
+      [{ resize: { width: 1024 } }],
+      { compress: 0.7, format: ImageManipulator.SaveFormat.JPEG },
+    );
+    const localUri = manipulated.uri;
+    setEvidencePhotos((prev) => [...prev, { uri: localUri, uploading: true }]);
+    try {
+      const url = await yieldReportApi.uploadYieldEvidence(localUri);
+      setEvidencePhotos((prev) =>
+        prev.map((p) => (p.uri === localUri ? { ...p, uploading: false, serverUrl: url } : p)),
+      );
+    } catch (err) {
+      // 上传失败 → 移除该缩略图 + 透传后端 message (4 位一体)
+      setEvidencePhotos((prev) => prev.filter((p) => p.uri !== localUri));
+      const e = err as { response?: { data?: { message?: string } } };
+      Alert.alert('图片上传失败', e.response?.data?.message ?? '请重试 (网络/格式)');
+    }
+  }, []);
+
+  const takeEvidencePhoto = useCallback(async () => {
+    const permission = await ImagePicker.requestCameraPermissionsAsync();
+    if (!permission.granted) {
+      Alert.alert('需要相机权限', '请在系统设置开启相机权限后再拍照');
+      return;
+    }
+    const result = await ImagePicker.launchCameraAsync({
+      mediaTypes: ['images'],
+      quality: 0.8,
+      allowsEditing: false,
+    });
+    if (!result.canceled && result.assets?.[0]) {
+      await uploadEvidence(result.assets[0].uri);
+    }
+  }, [uploadEvidence]);
+
+  const pickEvidencePhoto = useCallback(async () => {
+    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!permission.granted) {
+      Alert.alert('需要相册权限', '请在系统设置开启相册权限后再选图');
+      return;
+    }
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'],
+      quality: 0.8,
+      allowsEditing: false,
+    });
+    if (!result.canceled && result.assets?.[0]) {
+      await uploadEvidence(result.assets[0].uri);
+    }
+  }, [uploadEvidence]);
+
+  const removeEvidencePhoto = useCallback((uri: string) => {
+    setEvidencePhotos((prev) => prev.filter((p) => p.uri !== uri));
+  }, []);
+
+  // ── 单元4 STEP 4: 多段工时 ──
+  const addLaborSegment = useCallback(() => {
+    setLaborSegments((prev) => [...prev, { startTime: '', endTime: '', headcount: '', note: '' }]);
+  }, []);
+  const updateLaborSegment = useCallback(
+    (idx: number, field: keyof LaborSegmentInput, val: string) => {
+      setLaborSegments((prev) => prev.map((s, i) => (i === idx ? { ...s, [field]: val } : s)));
+    },
+    [],
+  );
+  const removeLaborSegment = useCallback((idx: number) => {
+    setLaborSegments((prev) => prev.filter((_, i) => i !== idx));
+  }, []);
+
+  // ── 单元4 STEP 5: 副产物 ──
+  const addByproduct = useCallback(() => {
+    setByproducts((prev) => [...prev, { name: '', quantity: '', unit: '' }]);
+  }, []);
+  const updateByproduct = useCallback(
+    (idx: number, field: keyof ByproductInput, val: string) => {
+      setByproducts((prev) => prev.map((b, i) => (i === idx ? { ...b, [field]: val } : b)));
+    },
+    [],
+  );
+  const removeByproduct = useCallback((idx: number) => {
+    setByproducts((prev) => prev.filter((_, i) => i !== idx));
+  }, []);
+
+  // 上传中 (任一图片) → 阻塞提交, 避免 evidenceImages 丢 URL
+  const evidenceUploading = evidencePhotos.some((p) => p.uploading);
+  const isLastStep = currentStepIndex >= totalSteps - 1;
+
   // A4: 强制提交 (OVER_RECEIPT 确认后调用)
   const submitWithForce = useCallback(async (req: YieldReportRequest) => {
     setSubmitting(true);
@@ -243,6 +372,11 @@ const YieldStepReportScreen: React.FC = () => {
       Alert.alert('请选择半成品批次', '上道有多笔半成品, 请先选择本道要领用的那一笔再提交');
       return;
     }
+    // 单元4 STEP 3: 还有图片在上传 → 拦截, 避免 evidenceImages 漏 URL
+    if (evidencePhotos.some((p) => p.uploading)) {
+      Alert.alert('图片上传中', '请等照片上传完成再提交');
+      return;
+    }
     const output = parseFloat(outputQty);
     if (Number.isNaN(output) || output <= 0) {
       Alert.alert('请填写本道产出量', '产出量必须大于 0');
@@ -252,6 +386,27 @@ const YieldStepReportScreen: React.FC = () => {
     // P1-3 (G4): 本道人数 / 工时 — 选填整数, 仅 >0 才进 req (不填则后端存 null, 向后兼容)
     const wc = parseInt(workerCount, 10);
     const wm = parseInt(workMinutes, 10);
+    // 单元4 STEP 3-5: 整理传统报工字段 (只取已上传成功的 URL / 录全的工时段&副产物)
+    const uploadedEvidenceUrls = evidencePhotos
+      .map((p) => p.serverUrl)
+      .filter((u): u is string => !!u);
+    const validLaborSegments = laborSegments
+      .filter((s) => s.startTime.trim() && s.endTime.trim() && parseInt(s.headcount, 10) > 0)
+      .map((s) => ({
+        startTime: s.startTime.trim(),
+        endTime: s.endTime.trim(),
+        headcount: parseInt(s.headcount, 10),
+        ...(s.note.trim() ? { note: s.note.trim() } : {}),
+      }));
+    const validByproducts = byproducts
+      .filter((b) => b.name.trim() && parseFloat(b.quantity) > 0)
+      .map((b) => ({
+        name: b.name.trim(),
+        quantity: parseFloat(b.quantity),
+        ...(b.unit.trim() ? { unit: b.unit.trim() } : {}),
+      }));
+    const wasteNum = parseFloat(wasteQty);
+    const sampleNum = parseInt(sampleRetainQty, 10);
     // A2b: 首道 + 有批次引用时, 将 materialBatchRefs 随报工单一起提交 (一次请求, 不再双调)
     const req: YieldReportRequest = {
       workProcessTaskId: currentTask.id,
@@ -275,6 +430,12 @@ const YieldStepReportScreen: React.FC = () => {
       ...(currentStepIndex > 0 && effectiveSourceWipNo
         ? { sourceWipNo: effectiveSourceWipNo }
         : {}),
+      // 单元4 STEP 3-5: 传统报工适配字段 (仅非空才传, 后端存 null 向后兼容)
+      ...(uploadedEvidenceUrls.length > 0 ? { evidenceImages: uploadedEvidenceUrls } : {}),
+      ...(validLaborSegments.length > 0 ? { laborSegments: validLaborSegments } : {}),
+      ...(validByproducts.length > 0 ? { byproducts: validByproducts } : {}),
+      ...(Number.isNaN(wasteNum) || wasteNum < 0 ? {} : { wasteQuantity: wasteNum }),
+      ...(Number.isNaN(sampleNum) || sampleNum <= 0 ? {} : { sampleRetainQuantity: sampleNum }),
     };
     setSubmitting(true);
     try {
@@ -329,7 +490,7 @@ const YieldStepReportScreen: React.FC = () => {
     } finally {
       setSubmitting(false);
     }
-  }, [currentTask, outputQty, inputQty, unit, outUnit, batchId, currentStepIndex, totalSteps, submitWithForce, materialBatchRefs, workerCount, workMinutes, effectiveSourceWipNo, submitBlockedNoWip]);
+  }, [currentTask, outputQty, inputQty, unit, outUnit, batchId, currentStepIndex, totalSteps, submitWithForce, materialBatchRefs, workerCount, workMinutes, effectiveSourceWipNo, submitBlockedNoWip, evidencePhotos, laborSegments, byproducts, wasteQty, sampleRetainQty]);
 
   // P1-1: 结清 (triggerComplete 决定是否同时完工入库)
   const doSettle = useCallback(async (triggerComplete: boolean) => {
@@ -578,6 +739,7 @@ const YieldStepReportScreen: React.FC = () => {
             maxHint={inputMaxHint}
             prefillNote={prefillNote}
             disabled={submitting}
+            calculatorMode
             testID="yield-input-qty"
           />
 
@@ -610,6 +772,7 @@ const YieldStepReportScreen: React.FC = () => {
                 : null
             }
             disabled={submitting}
+            calculatorMode
             testID="yield-output-qty"
           />
 
@@ -640,6 +803,183 @@ const YieldStepReportScreen: React.FC = () => {
             testID="yield-work-minutes"
           />
 
+          <View style={styles.divider} />
+
+          {/* 单元4 STEP 4: 多段工时 (几点到几点, 几个人) — 张权 多段开工/收工 */}
+          <View style={styles.section} testID="yield-labor-segments">
+            <Text style={styles.sectionTitle}>工时段 (几点到几点, 几个人)</Text>
+            {laborSegments.map((seg, idx) => (
+              <View style={styles.segRow} key={`seg-${idx}`}>
+                <TextInput
+                  style={styles.segTimeInput}
+                  value={seg.startTime}
+                  onChangeText={(v) => updateLaborSegment(idx, 'startTime', v)}
+                  placeholder="开始"
+                  placeholderTextColor="#C0C4CC"
+                  editable={!submitting}
+                  testID={`seg-start-${idx}`}
+                />
+                <Text style={styles.segSep}>~</Text>
+                <TextInput
+                  style={styles.segTimeInput}
+                  value={seg.endTime}
+                  onChangeText={(v) => updateLaborSegment(idx, 'endTime', v)}
+                  placeholder="结束"
+                  placeholderTextColor="#C0C4CC"
+                  editable={!submitting}
+                  testID={`seg-end-${idx}`}
+                />
+                <TextInput
+                  style={styles.segNumInput}
+                  keyboardType="number-pad"
+                  value={seg.headcount}
+                  onChangeText={(v) => updateLaborSegment(idx, 'headcount', v.replace(/[^0-9]/g, ''))}
+                  placeholder="人数"
+                  placeholderTextColor="#C0C4CC"
+                  editable={!submitting}
+                  testID={`seg-headcount-${idx}`}
+                />
+                <TouchableOpacity
+                  style={styles.rowRemoveBtn}
+                  onPress={() => removeLaborSegment(idx)}
+                  disabled={submitting}
+                  accessibilityLabel="删除这段工时"
+                >
+                  <Text style={styles.rowRemoveText}>✕</Text>
+                </TouchableOpacity>
+              </View>
+            ))}
+            <TouchableOpacity
+              style={styles.addRowBtn}
+              onPress={addLaborSegment}
+              disabled={submitting}
+              testID="add-labor-segment"
+            >
+              <Text style={styles.addRowText}>＋ 加一段</Text>
+            </TouchableOpacity>
+          </View>
+
+          <View style={styles.divider} />
+
+          {/* 单元4 STEP 3: 拍照留证 (产品+电子秤+盒数) */}
+          <View style={styles.section} testID="yield-evidence-section">
+            <Text style={styles.sectionTitle}>拍照留证 (产品+秤)</Text>
+            {evidencePhotos.length > 0 ? (
+              <View style={styles.thumbRow}>
+                {evidencePhotos.map((p) => (
+                  <View style={styles.thumbItem} key={p.uri}>
+                    <Image source={{ uri: p.uri }} style={styles.thumb} />
+                    {p.uploading ? (
+                      <View style={styles.thumbOverlay}><ActivityIndicator color="#fff" /></View>
+                    ) : (
+                      <TouchableOpacity
+                        style={styles.thumbRemove}
+                        onPress={() => removeEvidencePhoto(p.uri)}
+                        disabled={submitting}
+                        accessibilityLabel="删除照片"
+                      >
+                        <Text style={styles.thumbRemoveText}>✕</Text>
+                      </TouchableOpacity>
+                    )}
+                  </View>
+                ))}
+              </View>
+            ) : null}
+            <View style={styles.photoBtnRow}>
+              <TouchableOpacity
+                style={styles.photoBtn}
+                onPress={takeEvidencePhoto}
+                disabled={submitting}
+                testID="evidence-take-photo"
+              >
+                <Text style={styles.photoBtnText}>拍照留证 (产品+秤)</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.photoBtnOutline}
+                onPress={pickEvidencePhoto}
+                disabled={submitting}
+                testID="evidence-pick-photo"
+              >
+                <Text style={styles.photoBtnOutlineText}>从相册选</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+
+          <View style={styles.divider} />
+
+          {/* 单元4 STEP 5: 副产物 (料头/肥油/骨头) */}
+          <View style={styles.section} testID="yield-byproducts-section">
+            <Text style={styles.sectionTitle}>副产物 (料头/肥油/骨头)</Text>
+            {byproducts.map((bp, idx) => (
+              <View style={styles.segRow} key={`bp-${idx}`}>
+                <TextInput
+                  style={styles.bpNameInput}
+                  value={bp.name}
+                  onChangeText={(v) => updateByproduct(idx, 'name', v)}
+                  placeholder="名称"
+                  placeholderTextColor="#C0C4CC"
+                  editable={!submitting}
+                  testID={`bp-name-${idx}`}
+                />
+                <TextInput
+                  style={styles.segNumInput}
+                  keyboardType="decimal-pad"
+                  value={bp.quantity}
+                  onChangeText={(v) => updateByproduct(idx, 'quantity', v.replace(/[^0-9.]/g, ''))}
+                  placeholder="数量"
+                  placeholderTextColor="#C0C4CC"
+                  editable={!submitting}
+                  testID={`bp-qty-${idx}`}
+                />
+                <TextInput
+                  style={styles.bpUnitInput}
+                  value={bp.unit}
+                  onChangeText={(v) => updateByproduct(idx, 'unit', v)}
+                  placeholder={unit}
+                  placeholderTextColor="#C0C4CC"
+                  editable={!submitting}
+                  testID={`bp-unit-${idx}`}
+                />
+                <TouchableOpacity
+                  style={styles.rowRemoveBtn}
+                  onPress={() => removeByproduct(idx)}
+                  disabled={submitting}
+                  accessibilityLabel="删除这行副产物"
+                >
+                  <Text style={styles.rowRemoveText}>✕</Text>
+                </TouchableOpacity>
+              </View>
+            ))}
+            <TouchableOpacity
+              style={styles.addRowBtn}
+              onPress={addByproduct}
+              disabled={submitting}
+              testID="add-byproduct"
+            >
+              <Text style={styles.addRowText}>＋ 加一行</Text>
+            </TouchableOpacity>
+          </View>
+
+          {/* 单元4 STEP 5: 损耗量 */}
+          <YieldQuantityInput
+            label="损耗量 (选填)"
+            value={wasteQty}
+            onChangeText={setWasteQty}
+            unit={unit}
+            disabled={submitting}
+            testID="yield-waste-qty"
+          />
+
+          {/* 单元4 STEP 5: 留样 (末道装盒更显著, 任何道可填) */}
+          <YieldQuantityInput
+            label={isLastStep ? '留样 (末道装盒, 盒/份)' : '留样 (选填, 盒/份)'}
+            value={sampleRetainQty}
+            onChangeText={setSampleRetainQty}
+            unit="份"
+            disabled={submitting}
+            testID="yield-sample-retain"
+          />
+
           {alertText ? (
             <View style={styles.alertBanner} testID="yield-alert-banner">
               <Text style={styles.alertText}>{alertText}</Text>
@@ -651,7 +991,7 @@ const YieldStepReportScreen: React.FC = () => {
           variant="primary"
           size="large"
           onPress={handleSubmit}
-          disabled={submitting || outputOverHardCap || submitBlockedNoWip}
+          disabled={submitting || outputOverHardCap || submitBlockedNoWip || evidenceUploading}
           loading={submitting}
           style={styles.fullBtn}
           testID="yield-submit-btn"
@@ -714,6 +1054,65 @@ const styles = StyleSheet.create({
   doneCostWrap: { marginTop: 12 },
   doneCost: { fontSize: 14, color: '#303133', fontWeight: '600', textAlign: 'center' },
   doneCostMuted: { fontSize: 13, color: '#909399', textAlign: 'center' },
+  // ── 单元4 传统报工适配 ──
+  section: { marginBottom: 16 },
+  sectionTitle: { fontSize: 16, fontWeight: '600', color: '#303133', marginBottom: 10 },
+  // 通用行 (工时段 / 副产物)
+  segRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 8 },
+  segTimeInput: {
+    flex: 1, height: 48, borderWidth: 1, borderColor: '#DCDFE6', borderRadius: 8,
+    backgroundColor: '#FFFFFF', textAlign: 'center', fontSize: 16, color: '#1A1A1A',
+    paddingHorizontal: 6,
+  },
+  segSep: { fontSize: 18, color: '#909399', marginHorizontal: 6 },
+  segNumInput: {
+    width: 72, height: 48, borderWidth: 1, borderColor: '#DCDFE6', borderRadius: 8,
+    backgroundColor: '#FFFFFF', textAlign: 'center', fontSize: 16, color: '#1A1A1A',
+    marginLeft: 8, paddingHorizontal: 4,
+  },
+  bpNameInput: {
+    flex: 1, height: 48, borderWidth: 1, borderColor: '#DCDFE6', borderRadius: 8,
+    backgroundColor: '#FFFFFF', fontSize: 16, color: '#1A1A1A', paddingHorizontal: 10,
+  },
+  bpUnitInput: {
+    width: 56, height: 48, borderWidth: 1, borderColor: '#DCDFE6', borderRadius: 8,
+    backgroundColor: '#FFFFFF', textAlign: 'center', fontSize: 15, color: '#1A1A1A',
+    marginLeft: 8, paddingHorizontal: 4,
+  },
+  rowRemoveBtn: {
+    width: 40, height: 40, borderRadius: 20, backgroundColor: '#FEF0F0',
+    alignItems: 'center', justifyContent: 'center', marginLeft: 8,
+  },
+  rowRemoveText: { fontSize: 16, color: '#F56C6C', fontWeight: '700' },
+  addRowBtn: {
+    height: 48, borderRadius: 8, borderWidth: 1, borderColor: '#409EFF', borderStyle: 'dashed',
+    alignItems: 'center', justifyContent: 'center', marginTop: 2,
+  },
+  addRowText: { fontSize: 16, color: '#409EFF', fontWeight: '600' },
+  // 图片证据
+  thumbRow: { flexDirection: 'row', flexWrap: 'wrap', marginBottom: 10 },
+  thumbItem: { width: 80, height: 80, borderRadius: 8, overflow: 'hidden', marginRight: 8, marginBottom: 8 },
+  thumb: { width: 80, height: 80 },
+  thumbOverlay: {
+    ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.4)',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  thumbRemove: {
+    position: 'absolute', top: 2, right: 2, width: 22, height: 22, borderRadius: 11,
+    backgroundColor: 'rgba(0,0,0,0.55)', alignItems: 'center', justifyContent: 'center',
+  },
+  thumbRemoveText: { fontSize: 13, color: '#FFFFFF', fontWeight: '700' },
+  photoBtnRow: { flexDirection: 'row', alignItems: 'center' },
+  photoBtn: {
+    flex: 1, height: 52, borderRadius: 8, backgroundColor: '#E8732E',
+    alignItems: 'center', justifyContent: 'center', marginRight: 10,
+  },
+  photoBtnText: { fontSize: 16, color: '#FFFFFF', fontWeight: '700' },
+  photoBtnOutline: {
+    height: 52, paddingHorizontal: 18, borderRadius: 8, borderWidth: 1, borderColor: '#E8732E',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  photoBtnOutlineText: { fontSize: 15, color: '#E8732E', fontWeight: '600' },
 });
 
 export default YieldStepReportScreen;

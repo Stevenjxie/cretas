@@ -38,6 +38,12 @@ public class BatchYieldDTO {
     /** 整批总成本 = totalLaborCost + totalMaterialCost (null-safe; 两者全 null → null) */
     private BigDecimal totalCost;
 
+    // ── 适配单元3: 整批副产物/损耗/留样聚合 (Σ steps, null-safe) ──────────────────────
+    /** Σ 所有道留样数 (null-safe; 全 null → null) */
+    private Integer totalSampleRetain;
+    /** Σ 所有道损耗量 (null-safe; 全 null → null, 绝不默认 0) */
+    private BigDecimal totalWaste;
+
     // ── G8 Wave 3: C 进行中标注 (展示层防呆, 拍板 A 主算法 + C 标注) ──────────────────
     /**
      * 是否生产进行中 (批次未完工 或 仍有在制半成品 WIP 余额)。

@@ -91,6 +91,49 @@ public class FileUploadController {
     }
 
     /**
+     * 逐道报工图片证据上传 (产品+电子秤+盒数照片) — 后端中转到 OSS, 返回 URL 供 submitReport 的 evidenceImages 引用
+     *
+     * <p>文件限制: ≤5MB,仅支持 image/jpeg, image/png。
+     * 上传成功后返回公网 URL,前端拿到 URL 后写入逐道报工的 evidenceImages 字段。
+     */
+    @RequirePermission({"production:read_write"})
+    @PostMapping(value = "/yield-evidence", consumes = "multipart/form-data")
+    @Operation(summary = "上传逐道报工图片证据", description = "产品+电子秤+盒数照片;≤5MB,仅 JPEG/PNG")
+    public ApiResponse<Map<String, String>> uploadYieldEvidence(
+            @Parameter(description = "工厂ID", example = "F001", required = true)
+            @PathVariable @NotBlank String factoryId,
+            @Parameter(description = "报工证据照片(JPEG/PNG,≤5MB)", required = true)
+            @RequestParam("file") MultipartFile file) {
+
+        log.info("上传逐道报工图片证据: factoryId={}, filename={}, size={}, contentType={}",
+                factoryId, file.getOriginalFilename(), file.getSize(), file.getContentType());
+
+        if (file.isEmpty()) {
+            throw new BusinessException(400, "文件不能为空");
+        }
+        if (file.getSize() > MAX_SIGNATURE_PHOTO_SIZE) {
+            throw new BusinessException(400, "报工证据照片不能超过 5MB");
+        }
+        String contentType = file.getContentType();
+        if (contentType == null || !ALLOWED_PHOTO_TYPES.contains(contentType.toLowerCase())) {
+            throw new BusinessException(400, "仅支持 JPEG/PNG 格式,当前: " + contentType).withHint("请上传支持的文件格式");
+        }
+
+        try {
+            // category = "yield-evidence" → OSS 路径: {factoryId}/images/yield-evidence/yyyy/MM/dd/{uuid}_{filename}
+            String url = ossService.uploadImage(file, "yield-evidence", factoryId);
+            log.info("逐道报工图片证据上传成功: factoryId={}, url={}", factoryId, url);
+            return ApiResponse.success("上传成功", Map.of("url", url));
+        } catch (IllegalArgumentException e) {
+            log.warn("逐道报工图片证据上传失败(参数错误): {}", e.getMessage());
+            throw new BusinessException(400, ErrorSanitizer.sanitize(e), e);
+        } catch (Exception e) {
+            log.error("逐道报工图片证据上传失败: factoryId={}", factoryId, e);
+            throw new BusinessException(500, "上传失败: " + ErrorSanitizer.sanitize(e), e);
+        }
+    }
+
+    /**
      * 上传收款凭证附件 (P0-3d, v1 §2.3.2 客户要求: 登记收款时可附上回款凭证截图/PDF).
      * 接受 PDF/图片, ≤10MB. 上传成功后返回 URL, 前端绑定到 paymentForm.receiptUrl 后
      * 调用 finance/payments/record 接口一并提交.

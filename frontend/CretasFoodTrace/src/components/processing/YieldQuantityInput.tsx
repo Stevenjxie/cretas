@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import { View, Text, TextInput, TouchableOpacity, StyleSheet } from 'react-native';
 
 interface YieldQuantityInputProps {
@@ -19,10 +19,42 @@ interface YieldQuantityInputProps {
   prefillNote?: string | null;
   /** 是否禁用 (提交中) */
   disabled?: boolean;
+  /**
+   * 单元4 STEP 6: 允许"按托称重"计算器模式 (六扇门毛重-皮重算净重).
+   * true → 输入框旁显示"按托称重"切换钮; 打开后录多笔毛重 + 单托皮重, 自动算净重写回 value.
+   */
+  calculatorMode?: boolean;
   testID?: string;
 }
 
 const clampToZero = (n: number): number => (n < 0 ? 0 : n);
+
+/** 净重 = Σ毛重 − 托数×皮重 (托数自动取毛重笔数). 负数归零. */
+const computeNet = (grossRows: string[], tare: string): number => {
+  const grossSum = grossRows.reduce((acc, g) => {
+    const n = parseFloat(g);
+    return acc + (Number.isNaN(n) ? 0 : n);
+  }, 0);
+  const t = parseFloat(tare);
+  const palletCount = grossRows.filter((g) => {
+    const n = parseFloat(g);
+    return !Number.isNaN(n) && n > 0;
+  }).length;
+  const net = grossSum - palletCount * (Number.isNaN(t) ? 0 : t);
+  return clampToZero(Number(net.toFixed(2)));
+};
+
+/** 净重计算明细文案: "毛 294.5+245.5 − 皮 2×24.5 = 净 491.0". 无有效毛重 → 空串. */
+const buildBreakdown = (grossRows: string[], tare: string, net: number): string => {
+  const valid = grossRows.filter((g) => {
+    const n = parseFloat(g);
+    return !Number.isNaN(n) && n > 0;
+  });
+  if (valid.length === 0) return '';
+  const t = parseFloat(tare);
+  const tareNum = Number.isNaN(t) ? 0 : t;
+  return `毛 ${valid.join('+')} − 皮 ${valid.length}×${tareNum} = 净 ${net}`;
+};
 
 export const YieldQuantityInput: React.FC<YieldQuantityInputProps> = ({
   label,
@@ -34,6 +66,7 @@ export const YieldQuantityInput: React.FC<YieldQuantityInputProps> = ({
   maxHint,
   prefillNote,
   disabled = false,
+  calculatorMode = false,
   testID,
 }) => {
   const numeric = parseFloat(value);
@@ -41,6 +74,77 @@ export const YieldQuantityInput: React.FC<YieldQuantityInputProps> = ({
     () => max != null && !Number.isNaN(numeric) && numeric > max,
     [max, numeric],
   );
+
+  // STEP 6: 按托称重计算器状态
+  const [calcOpen, setCalcOpen] = useState(false);
+  const [grossRows, setGrossRows] = useState<string[]>(['']);
+  const [tare, setTare] = useState('');
+
+  const calcNet = useMemo(() => computeNet(grossRows, tare), [grossRows, tare]);
+  const breakdown = useMemo(
+    () => buildBreakdown(grossRows, tare, calcNet),
+    [grossRows, tare, calcNet],
+  );
+
+  // 计算器明细变化 → 自动把净重写回受控 value (仅打开计算器时)
+  const applyNet = useCallback(
+    (rows: string[], tareVal: string) => {
+      const net = computeNet(rows, tareVal);
+      onChangeText(Number.isInteger(net) ? String(net) : String(Number(net.toFixed(2))));
+    },
+    [onChangeText],
+  );
+
+  const handleGrossChange = useCallback(
+    (idx: number, raw: string) => {
+      const cleaned = raw.replace(/[^0-9.]/g, '');
+      const parts = cleaned.split('.');
+      const normalized = parts.length > 2 ? `${parts[0]}.${parts.slice(1).join('')}` : cleaned;
+      setGrossRows((prev) => {
+        const next = [...prev];
+        next[idx] = normalized;
+        applyNet(next, tare);
+        return next;
+      });
+    },
+    [applyNet, tare],
+  );
+
+  const handleTareChange = useCallback(
+    (raw: string) => {
+      const cleaned = raw.replace(/[^0-9.]/g, '');
+      const parts = cleaned.split('.');
+      const normalized = parts.length > 2 ? `${parts[0]}.${parts.slice(1).join('')}` : cleaned;
+      setTare(normalized);
+      applyNet(grossRows, normalized);
+    },
+    [applyNet, grossRows],
+  );
+
+  const addGrossRow = useCallback(() => {
+    setGrossRows((prev) => [...prev, '']);
+  }, []);
+
+  const removeGrossRow = useCallback(
+    (idx: number) => {
+      setGrossRows((prev) => {
+        const next = prev.filter((_, i) => i !== idx);
+        const safe = next.length > 0 ? next : [''];
+        applyNet(safe, tare);
+        return safe;
+      });
+    },
+    [applyNet, tare],
+  );
+
+  const toggleCalc = useCallback(() => {
+    setCalcOpen((open) => {
+      const next = !open;
+      // 打开时立即把当前明细净重写回 (空则为 0)
+      if (next) applyNet(grossRows, tare);
+      return next;
+    });
+  }, [applyNet, grossRows, tare]);
 
   const handleStep = useCallback(
     (delta: number) => {
@@ -65,7 +169,85 @@ export const YieldQuantityInput: React.FC<YieldQuantityInputProps> = ({
 
   return (
     <View style={styles.wrap} testID={testID}>
-      <Text style={styles.label}>{label}</Text>
+      <View style={styles.labelRow}>
+        <Text style={styles.label}>{label}</Text>
+        {calculatorMode ? (
+          <TouchableOpacity
+            style={[styles.calcToggle, calcOpen && styles.calcToggleOn]}
+            onPress={toggleCalc}
+            disabled={disabled}
+            testID={testID ? `${testID}-calc-toggle` : undefined}
+            accessibilityLabel="按托称重计算器"
+          >
+            <Text style={[styles.calcToggleText, calcOpen && styles.calcToggleTextOn]}>
+              {calcOpen ? '✓ 按托称重' : '按托称重'}
+            </Text>
+          </TouchableOpacity>
+        ) : null}
+      </View>
+
+      {/* STEP 6: 按托称重计算器面板 (毛重多笔 + 单托皮重 → 自动算净重) */}
+      {calculatorMode && calcOpen ? (
+        <View style={styles.calcPanel} testID={testID ? `${testID}-calc-panel` : undefined}>
+          <Text style={styles.calcHelp}>每托一笔毛重, 填单托皮重, 自动算净重</Text>
+          {grossRows.map((g, idx) => (
+            <View style={styles.calcGrossRow} key={`gross-${idx}`}>
+              <Text style={styles.calcGrossLabel}>毛重{idx + 1}</Text>
+              <TextInput
+                style={styles.calcGrossInput}
+                keyboardType="decimal-pad"
+                value={g}
+                onChangeText={(raw) => handleGrossChange(idx, raw)}
+                editable={!disabled}
+                placeholder="0"
+                placeholderTextColor="#C0C4CC"
+                testID={testID ? `${testID}-gross-${idx}` : undefined}
+              />
+              {unit ? <Text style={styles.calcUnit}>{unit}</Text> : null}
+              {grossRows.length > 1 ? (
+                <TouchableOpacity
+                  style={styles.calcRemoveBtn}
+                  onPress={() => removeGrossRow(idx)}
+                  disabled={disabled}
+                  accessibilityLabel="删除这笔毛重"
+                >
+                  <Text style={styles.calcRemoveText}>✕</Text>
+                </TouchableOpacity>
+              ) : null}
+            </View>
+          ))}
+          <TouchableOpacity
+            style={styles.calcAddBtn}
+            onPress={addGrossRow}
+            disabled={disabled}
+            testID={testID ? `${testID}-add-gross` : undefined}
+          >
+            <Text style={styles.calcAddText}>＋ 加托 (再称一托)</Text>
+          </TouchableOpacity>
+
+          <View style={styles.calcTareRow}>
+            <Text style={styles.calcTareLabel}>单托皮重</Text>
+            <TextInput
+              style={styles.calcGrossInput}
+              keyboardType="decimal-pad"
+              value={tare}
+              onChangeText={handleTareChange}
+              editable={!disabled}
+              placeholder="0"
+              placeholderTextColor="#C0C4CC"
+              testID={testID ? `${testID}-tare` : undefined}
+            />
+            {unit ? <Text style={styles.calcUnit}>{unit}</Text> : null}
+          </View>
+
+          {breakdown ? (
+            <Text style={styles.calcBreakdown} testID={testID ? `${testID}-breakdown` : undefined}>
+              {breakdown} {unit ?? ''}
+            </Text>
+          ) : null}
+        </View>
+      ) : null}
+
       <View style={styles.row}>
         <TouchableOpacity
           style={[styles.stepBtn, disabled && styles.stepBtnDisabled]}
@@ -110,7 +292,41 @@ export const YieldQuantityInput: React.FC<YieldQuantityInputProps> = ({
 
 const styles = StyleSheet.create({
   wrap: { marginBottom: 16 },
-  label: { fontSize: 16, fontWeight: '600', color: '#303133', marginBottom: 10 },
+  labelRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 },
+  label: { fontSize: 16, fontWeight: '600', color: '#303133' },
+  // STEP 6: 按托称重计算器
+  calcToggle: {
+    paddingHorizontal: 14, paddingVertical: 8, borderRadius: 16, borderWidth: 1,
+    borderColor: '#409EFF', backgroundColor: '#FFFFFF',
+  },
+  calcToggleOn: { backgroundColor: '#409EFF' },
+  calcToggleText: { fontSize: 14, color: '#409EFF', fontWeight: '600' },
+  calcToggleTextOn: { color: '#FFFFFF' },
+  calcPanel: {
+    backgroundColor: '#ECF5FF', borderRadius: 8, padding: 12, marginBottom: 12,
+  },
+  calcHelp: { fontSize: 13, color: '#606266', marginBottom: 10 },
+  calcGrossRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 8 },
+  calcGrossLabel: { fontSize: 15, color: '#303133', width: 64 },
+  calcTareLabel: { fontSize: 15, color: '#303133', fontWeight: '600', width: 80 },
+  calcGrossInput: {
+    flex: 1, fontSize: 20, fontWeight: '600', color: '#1A1A1A', textAlign: 'center',
+    borderWidth: 1, borderColor: '#DCDFE6', borderRadius: 8, backgroundColor: '#FFFFFF',
+    height: 48, paddingHorizontal: 10,
+  },
+  calcUnit: { fontSize: 15, color: '#909399', marginLeft: 8, width: 40 },
+  calcRemoveBtn: {
+    width: 36, height: 36, borderRadius: 18, backgroundColor: '#FEF0F0',
+    alignItems: 'center', justifyContent: 'center', marginLeft: 6,
+  },
+  calcRemoveText: { fontSize: 16, color: '#F56C6C', fontWeight: '700' },
+  calcAddBtn: {
+    height: 44, borderRadius: 8, borderWidth: 1, borderColor: '#409EFF', borderStyle: 'dashed',
+    alignItems: 'center', justifyContent: 'center', marginTop: 2, marginBottom: 10,
+  },
+  calcAddText: { fontSize: 15, color: '#409EFF', fontWeight: '600' },
+  calcTareRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 10 },
+  calcBreakdown: { fontSize: 15, color: '#303133', fontWeight: '700', textAlign: 'center', marginTop: 2 },
   row: { flexDirection: 'row', alignItems: 'center' },
   stepBtn: {
     width: 48, height: 48, borderRadius: 8, borderWidth: 1, borderColor: '#DCDFE6',

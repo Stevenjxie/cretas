@@ -131,6 +131,18 @@ export interface YieldReportRequest {
    * null 走旧路径 (首道领原料 / 老批次, 向后兼容)。
    */
   sourceWipNo?: string;
+
+  // ==================== 传统报工适配 (适配单元4; mirror backend YieldReportRequest.java:34-49) ====================
+  /** 图片证据 URL 列表 (先传 OSS 拿 URL, 存入 ProductionReport.photos). 六扇门: 产品+电子秤+盒数照. */
+  evidenceImages?: string[];
+  /** 多时段×人数工时 (张权 多段开工/收工). startTime/endTime = "HH:mm". */
+  laborSegments?: { startTime: string; endTime: string; headcount: number; note?: string }[];
+  /** 副产物明细 (料头/肥油/骨头). */
+  byproducts?: { name: string; quantity: number; unit?: string }[];
+  /** 损耗量; 选填. */
+  wasteQuantity?: number;
+  /** 留样数量 (盒/份, 末道装盒); 选填. 后端字段名 sampleRetainQuantity (Integer). */
+  sampleRetainQuantity?: number;
 }
 
 // mirror backend dto/yield/MaterialInputRequest.java:9-14
@@ -277,6 +289,32 @@ class YieldReportApi {
     return apiClient.get<ApiResponse<WipRowDTO[]>>(
       `${this.getBase(batchId, factoryId)}/wip`,
     );
+  }
+
+  /**
+   * 适配单元4: 上传逐道报工图片证据 (产品+电子秤+盒数照) → OSS, 返回公网 URL.
+   * 端点 POST /api/mobile/{factoryId}/upload/yield-evidence (consumes multipart/form-data,
+   * 见 FileUploadController.java:100). 返回 ApiResponse<{url}>; 拿 url 写入 submitReport 的 evidenceImages.
+   * 注: 不在 batch base 路径下 (是工厂级通用上传入口).
+   */
+  async uploadYieldEvidence(fileUri: string, factoryId?: string): Promise<string> {
+    const fid = requireFactoryId(factoryId);
+    const formData = new FormData();
+    // React Native FormData 接受 {uri, name, type} 形状 (非 Blob), 见 PhotoEvidenceCapture.tsx:71
+    formData.append('file', {
+      uri: fileUri,
+      name: `yield_evidence_${Date.now()}.jpg`,
+      type: 'image/jpeg',
+    } as unknown as Blob);
+    const res = await apiClient.post<ApiResponse<{ url: string }>>(
+      `/api/mobile/${fid}/upload/yield-evidence`,
+      formData,
+      { headers: { 'Content-Type': 'multipart/form-data' } },
+    );
+    if (!res.success || !res.data?.url) {
+      throw new Error(res.message || '图片上传失败');
+    }
+    return res.data.url;
   }
 }
 

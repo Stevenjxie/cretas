@@ -196,6 +196,15 @@ function formatPercent(val: unknown) {
   return isNaN(n) ? '-' : n.toFixed(1) + '%';
 }
 
+// 适配单元5 (F006 传统报工): 数量类字段 null/undefined → "—" (em dash, 非 0).
+// 用于损耗 / 留样 / 副产物数量等 — 后端 null 表示"未记录", 绝不能误显 0.
+// 与 formatCostDash (带 ¥) 区分: 这个不带货币符号, 带可选单位后缀.
+function fmtDash(val: unknown, suffix = '') {
+  if (val === null || val === undefined) return '—';
+  const n = Number(val);
+  return isNaN(n) ? '—' : n.toLocaleString('zh-CN') + (suffix ? ' ' + suffix : '');
+}
+
 function formatDuration(minutes: number | null) {
   if (!minutes) return '-';
   const h = Math.floor(minutes / 60);
@@ -281,6 +290,54 @@ const wipInProgressText = computed(() => {
   if (q == null || Number(q) <= 0) return '生产进行中, 出成率完工后才锁定';
   const u = yd.wipInProgressUnit || '';
   return `进行中: 含 ${formatNum(q)} ${u} 在制半成品未计入成品, 出成率完工后才锁定`;
+});
+
+// 适配单元5 (F006 传统报工 展示层): 逐道报工新增字段 — 证据照片 / 工时段 / 副产物 / 损耗 / 留样.
+// 因主表已有 11 列, 再加 5 列会过宽 → 用 el-table type="expand" 展开行承载这些细节,
+// 主行仅保留核心出成率数字 + 小缩略图 + 📷 计数, 由工厂管理者按需展开.
+// 下列 helper 统一判空 (null/空数组 → false), 避免模板里散落判断.
+function stepPhotos(row: Record<string, unknown>): string[] {
+  const p = row?.photos;
+  return Array.isArray(p) ? (p as string[]).filter((u) => !!u) : [];
+}
+function stepSegments(row: Record<string, unknown>): Array<Record<string, unknown>> {
+  const s = row?.laborSegments;
+  return Array.isArray(s) ? (s as Array<Record<string, unknown>>) : [];
+}
+function stepByproducts(row: Record<string, unknown>): Array<Record<string, unknown>> {
+  const b = row?.byproducts;
+  return Array.isArray(b) ? (b as Array<Record<string, unknown>>) : [];
+}
+// 某道是否有任意传统报工细节 (决定展开行是否有内容显示, 无则展示"本道无补充明细")
+function hasTraditionalDetail(row: Record<string, unknown>): boolean {
+  return (
+    stepPhotos(row).length > 0 ||
+    stepSegments(row).length > 0 ||
+    stepByproducts(row).length > 0 ||
+    row?.wasteQuantity != null ||
+    row?.sampleRetainQuantity != null
+  );
+}
+// 工时段单行文案: "08:00-10:00 3人 焯水" (note 可缺省)
+function segmentText(seg: Record<string, unknown>): string {
+  const st = (seg?.startTime as string) || '';
+  const et = (seg?.endTime as string) || '';
+  const time = st || et ? `${st || '?'}-${et || '?'}` : '';
+  const hc = seg?.headcount != null ? `${seg.headcount}人` : '';
+  const note = (seg?.note as string) || '';
+  return [time, hc, note].filter((x) => !!x).join(' ') || '—';
+}
+// 副产物单条文案: "料头 24.2kg"
+function byproductText(bp: Record<string, unknown>): string {
+  const name = (bp?.name as string) || '副产物';
+  const qty = bp?.quantity != null ? fmtDash(bp.quantity) : '—';
+  const unit = (bp?.unit as string) || '';
+  return `${name} ${qty}${unit ? unit : ''}`.trim();
+}
+// 批次级总损耗 / 总留样是否需在 KPI 汇总区显示 (任一非 null)
+const hasBatchTraditionalSummary = computed(() => {
+  const yd = yieldData.value;
+  return !!yd && (yd.totalWaste != null || yd.totalSampleRetain != null);
 });
 
 // G6/G7 Wave 4: WIP 区 — 仅有 WIP 行时显示
@@ -513,6 +570,65 @@ function getTimelineIcon(type: string) {
             style="margin-bottom: 12px"
           />
           <el-table :data="yieldData.steps" border stripe size="small" style="width: 100%">
+            <!-- 适配单元5 (F006 传统报工): 展开行承载证据照片/工时段/副产物/损耗/留样.
+                 主表已 11 列, 这些细节放展开行避免横向溢出, 工厂管理者按需点开. -->
+            <el-table-column type="expand">
+              <template #default="{ row }">
+                <div class="trad-detail">
+                  <template v-if="hasTraditionalDetail(row)">
+                    <!-- 证据照片: 缩略图 + 点击 lightbox 画廊 (镜像 AttachmentList el-image preview) -->
+                    <div class="trad-item">
+                      <span class="trad-label">证据照片</span>
+                      <template v-if="stepPhotos(row).length > 0">
+                        <el-image
+                          v-for="(url, i) in stepPhotos(row)"
+                          :key="i"
+                          :src="url"
+                          fit="cover"
+                          :preview-src-list="stepPhotos(row)"
+                          :initial-index="i"
+                          class="trad-thumb"
+                          preview-teleported
+                        />
+                      </template>
+                      <span v-else class="trad-empty">—</span>
+                    </div>
+                    <!-- 工时段: 每段 起-止 N人 备注 -->
+                    <div class="trad-item">
+                      <span class="trad-label">工时段</span>
+                      <template v-if="stepSegments(row).length > 0">
+                        <span
+                          v-for="(seg, i) in stepSegments(row)"
+                          :key="i"
+                          class="trad-chip"
+                        >{{ segmentText(seg) }}</span>
+                      </template>
+                      <span v-else class="trad-empty">—</span>
+                    </div>
+                    <!-- 副产物: 名称 数量单位 列表 -->
+                    <div class="trad-item">
+                      <span class="trad-label">副产物</span>
+                      <template v-if="stepByproducts(row).length > 0">
+                        <span
+                          v-for="(bp, i) in stepByproducts(row)"
+                          :key="i"
+                          class="trad-chip trad-chip-by"
+                        >{{ byproductText(bp) }}</span>
+                      </template>
+                      <span v-else class="trad-empty">—</span>
+                    </div>
+                    <!-- 损耗 / 留样: 数量 null → "—" (非 0) -->
+                    <div class="trad-item">
+                      <span class="trad-label">损耗</span>
+                      <span class="trad-value">{{ fmtDash(row.wasteQuantity, row.outputUnit || '') }}</span>
+                      <span class="trad-label" style="margin-left: 24px">留样</span>
+                      <span class="trad-value">{{ fmtDash(row.sampleRetainQuantity, row.outputUnit || '') }}</span>
+                    </div>
+                  </template>
+                  <span v-else class="trad-empty">本道无补充明细 (证据照片 / 工时段 / 副产物 / 损耗 / 留样)</span>
+                </div>
+              </template>
+            </el-table-column>
             <el-table-column label="道" width="60" align="center">
               <template #default="{ row }">{{ row.processOrder }}</template>
             </el-table-column>
@@ -552,6 +668,24 @@ function getTimelineIcon(type: string) {
                 <span v-else>{{ row.totalWorkMinutes }} 分钟</span>
               </template>
             </el-table-column>
+            <!-- 适配单元5 (F006 传统报工): 证据列 — 首张缩略图 + 📷 张数; 点击展开行看全部细节.
+                 无照片 → "—". 镜像 AttachmentList 的 el-image + preview-src-list. -->
+            <el-table-column label="证据" width="92" align="center">
+              <template #default="{ row }">
+                <div v-if="stepPhotos(row).length > 0" class="evidence-cell">
+                  <el-image
+                    :src="stepPhotos(row)[0]"
+                    fit="cover"
+                    :preview-src-list="stepPhotos(row)"
+                    :initial-index="0"
+                    class="evidence-thumb"
+                    preview-teleported
+                  />
+                  <span v-if="stepPhotos(row).length > 1" class="evidence-badge">📷{{ stepPhotos(row).length }}</span>
+                </div>
+                <span v-else>—</span>
+              </template>
+            </el-table-column>
             <!-- A.6 逐道成本: 人工/材料/小计. null (未配工价 / 无原料单价) → "—" (非 ¥0). canViewPrice 门控. -->
             <el-table-column v-if="canViewPrice" label="人工成本" width="120" align="right">
               <template #default="{ row }">{{ formatCostDash(row.laborCost) }}</template>
@@ -570,6 +704,11 @@ function getTimelineIcon(type: string) {
             <!-- P1-3 (G4): 整批工时/人次 — 跨道相加是"人次"(同一人多道重复计), 诚实标注 -->
             <span v-if="yieldData.totalWorkMinutes != null">&nbsp;·&nbsp;总工时 {{ yieldData.totalWorkMinutes }} 分钟</span>
             <span v-if="yieldData.totalWorkers != null">&nbsp;·&nbsp;总人次 {{ yieldData.totalWorkers }}</span>
+          </div>
+          <!-- 适配单元5 (F006 传统报工): 批次级 总损耗 / 总留样 汇总. null (未记录) → "—" (非 0). -->
+          <div v-if="hasBatchTraditionalSummary" class="yield-trad-summary">
+            <span class="trad-summary-item">总损耗 {{ fmtDash(yieldData.totalWaste, yieldData.lastStepOutputUnit || '') }}</span>
+            <span class="trad-summary-item">总留样 {{ fmtDash(yieldData.totalSampleRetain, yieldData.lastStepOutputUnit || '') }}</span>
           </div>
           <!-- A.6 整批逐道成本汇总: 总人工/总材料/总成本. null (无法计算) → "—" (非 ¥0). canViewPrice 门控. -->
           <div v-if="canViewPrice" class="yield-cost-summary">
@@ -888,6 +1027,95 @@ function getTimelineIcon(type: string) {
     font-weight: 700;
     color: var(--el-color-primary);
   }
+}
+
+/* 适配单元5 (F006 传统报工): 批次级总损耗/总留样汇总 */
+.yield-trad-summary {
+  margin-top: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 24px;
+  font-size: 14px;
+  color: var(--text-color-secondary, #606266);
+
+  .trad-summary-item {
+    font-weight: 500;
+  }
+}
+
+/* 适配单元5: 主表证据列 — 缩略图 + 张数角标 */
+.evidence-cell {
+  position: relative;
+  display: inline-block;
+  line-height: 0;
+}
+
+.evidence-thumb {
+  width: 40px;
+  height: 40px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.evidence-badge {
+  position: absolute;
+  right: -6px;
+  bottom: -4px;
+  font-size: 10px;
+  line-height: 1;
+  padding: 1px 3px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.6);
+  color: #fff;
+}
+
+/* 适配单元5: 展开行 — 证据照片/工时段/副产物/损耗/留样 细节 */
+.trad-detail {
+  padding: 8px 16px 8px 48px;
+  background: var(--el-fill-color-lighter, #fafafa);
+}
+
+.trad-item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  padding: 4px 0;
+  font-size: 13px;
+}
+
+.trad-label {
+  font-weight: 600;
+  color: var(--text-color-secondary, #606266);
+  min-width: 56px;
+}
+
+.trad-value {
+  color: var(--text-color-primary, #303133);
+}
+
+.trad-empty {
+  color: var(--text-color-placeholder, #c0c4cc);
+}
+
+.trad-thumb {
+  width: 56px;
+  height: 56px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.trad-chip {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: var(--el-color-info-light-9, #f4f4f5);
+  color: var(--text-color-primary, #303133);
+  font-size: 12px;
+}
+
+.trad-chip-by {
+  background: var(--el-color-success-light-9, #f0f9eb);
 }
 
 /* 单元 F: 订单出成率弹窗 */
