@@ -46,13 +46,27 @@ from smartbi.gold import (
     staff_ranking,
     store_review_vs_revenue,
     top_products,
+    trend_bundle,
 )
-from smartbi.tenant_ctx import get_factory_id
+from smartbi.gold.gold_read_cache import GoldReadCache, compute_cache_key
+from smartbi.tenant_ctx import INTERNAL_SENTINEL, get_factory_id
 from smartbi_compat._rbac_strip import PRICE_VIEW_ROLES, strip_price_for_role
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/gold", tags=["Gold Reads"])
+
+# Module-level cache wrapper. The class is a thin stateless wrapper over the
+# asyncpg pool; we lazily bind it to the (singleton) pool on first use so the
+# pool isn't created at import time.
+_gold_read_cache: Optional[GoldReadCache] = None
+
+
+def _get_cache(pool) -> GoldReadCache:
+    global _gold_read_cache
+    if _gold_read_cache is None or _gold_read_cache._pool is not pool:
+        _gold_read_cache = GoldReadCache(pool)
+    return _gold_read_cache
 
 
 # Gold-specific money keys not matched by the shared `_MONEY_PATTERN`. The
@@ -63,6 +77,10 @@ router = APIRouter(prefix="/gold", tags=["Gold Reads"])
 _GOLD_EXTRA_MONEY_KEYS: frozenset[str] = frozenset({
     "avg_bill_value",
     "avg_per_capita",
+    # trend-bundle weekday/weekend average daily REVENUE (元) — camelCase keys
+    # not matched by the shared _MONEY_PATTERN, so strip them here too.
+    "weekdayAvg",
+    "weekendAvg",
 })
 
 
@@ -122,10 +140,15 @@ def _resolve_tenant(factory_id: Optional[str]) -> str:
     return fid
 
 
-def _parse_range(start_date: str, end_date: str) -> tuple:
-    start = _parse_date(start_date, "start_date")
-    end = _parse_date(end_date, "end_date")
-    if start > end:
+def _parse_range(start_date: Optional[str], end_date: Optional[str]) -> tuple:
+    """Parse an optional date range.
+
+    WS1: dates are optional — a missing bound means "open" (= all history on
+    that side). Only validate the ordering when BOTH bounds are present.
+    """
+    start = _parse_date(start_date, "start_date") if start_date else None
+    end = _parse_date(end_date, "end_date") if end_date else None
+    if start is not None and end is not None and start > end:
         raise HTTPException(status_code=400, detail="start_date > end_date")
     return start, end
 
@@ -133,8 +156,8 @@ def _parse_range(start_date: str, end_date: str) -> tuple:
 @router.get("/finance-summary")
 async def get_finance_summary(
     request: Request,
-    start_date: str = Query(..., description="YYYY-MM-DD inclusive"),
-    end_date: str = Query(..., description="YYYY-MM-DD inclusive"),
+    start_date: Optional[str] = Query(None, description="YYYY-MM-DD inclusive; 省略=全部历史"),
+    end_date: Optional[str] = Query(None, description="YYYY-MM-DD inclusive; 省略=全部历史"),
     factory_id: Optional[str] = Query(None, description="belt-and-suspenders; defaults to JWT tenant"),
     top_n_stores: int = Query(10, ge=1, le=100),
 ):
@@ -148,11 +171,41 @@ async def get_finance_summary(
     fid = _resolve_tenant(factory_id)
     start, end = _parse_range(start_date, end_date)
     pool = await get_pg_pool()
+    role = _get_role(request)
+    # Role is in the cache key, so a cached payload is already RBAC-correct
+    # for this caller — we cache the POST-strip result and never re-strip.
+    cacheable = fid != INTERNAL_SENTINEL
+    cache = _get_cache(pool)
+    cache_key = compute_cache_key(
+        "finance-summary",
+        # start/end may be None (all-history). Pass the parsed date's ISO
+        # string when present, else None — compute_cache_key collapses None
+        # to "" giving a stable, distinct all-history key (no AttributeError
+        # on None).
+        start.isoformat() if start is not None else None,
+        end.isoformat() if end is not None else None,
+        role, {"top_n_stores": top_n_stores},
+    )
     try:
+        if cacheable:
+            try:
+                hit = await cache.get(fid, cache_key)
+                if hit is not None:
+                    return hit
+            except Exception as ce:  # cache read is best-effort, never fatal
+                logger.warning("finance-summary cache get failed: %s", ce)
         result = await finance_summary(
             pool, fid, (start, end), top_n_stores=top_n_stores,
         )
-        return _apply_rbac_strip(result, _get_role(request))
+        stripped = _apply_rbac_strip(result, role)
+        if cacheable:
+            try:
+                await cache.put(fid, cache_key, stripped)
+            except Exception as ce:  # cache write is best-effort, never fatal
+                logger.warning("finance-summary cache put failed: %s", ce)
+        return stripped
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception("finance-summary failed: %s", e)
         raise HTTPException(status_code=500, detail=f"Gold query failed: {e}")
@@ -161,8 +214,8 @@ async def get_finance_summary(
 @router.get("/daily-trend")
 async def get_daily_trend(
     request: Request,
-    start_date: str = Query(..., description="YYYY-MM-DD inclusive"),
-    end_date: str = Query(..., description="YYYY-MM-DD inclusive"),
+    start_date: Optional[str] = Query(None, description="YYYY-MM-DD inclusive; 省略=全部历史"),
+    end_date: Optional[str] = Query(None, description="YYYY-MM-DD inclusive; 省略=全部历史"),
     factory_id: Optional[str] = Query(None),
 ):
     """Daily revenue + bill-count trend for 分析概览 line chart."""
@@ -177,11 +230,35 @@ async def get_daily_trend(
         raise HTTPException(status_code=500, detail=f"Gold query failed: {e}")
 
 
+@router.get("/trend-bundle")
+async def get_trend_bundle(
+    request: Request,
+    start_date: Optional[str] = Query(None, description="YYYY-MM-DD inclusive; 省略=全部历史"),
+    end_date: Optional[str] = Query(None, description="YYYY-MM-DD inclusive; 省略=全部历史"),
+    factory_id: Optional[str] = Query(None),
+):
+    """趋势分析合一 — one bundle (dailyTrend + weekdayWeekend + monthlyTrend)
+    so 趋势分析 page loads in a single round-trip.
+
+    Revenue fields are monetary → RBAC money-strip applies for non price-view
+    roles (mirrors /daily-trend). Dates optional (省略 → 全部历史)。
+    """
+    fid = _resolve_tenant(factory_id)
+    start, end = _parse_range(start_date, end_date)
+    pool = await get_pg_pool()
+    try:
+        result = await trend_bundle(pool, fid, (start, end))
+        return _apply_rbac_strip(result, _get_role(request))
+    except Exception as e:
+        logger.exception("trend-bundle failed: %s", e)
+        raise HTTPException(status_code=500, detail=f"Gold query failed: {e}")
+
+
 @router.get("/top-products")
 async def get_top_products(
     request: Request,
-    start_date: str = Query(...),
-    end_date: str = Query(...),
+    start_date: Optional[str] = Query(None, description="YYYY-MM-DD inclusive; 省略=全部历史"),
+    end_date: Optional[str] = Query(None, description="YYYY-MM-DD inclusive; 省略=全部历史"),
     factory_id: Optional[str] = Query(None),
     top_n: int = Query(10, ge=1, le=100),
     order: str = Query("desc", description="Sort direction: 'desc' for top sellers, 'asc' for slow sellers"),
@@ -204,8 +281,8 @@ async def get_top_products(
 @router.get("/channel-breakdown")
 async def get_channel_breakdown(
     request: Request,
-    start_date: str = Query(...),
-    end_date: str = Query(...),
+    start_date: Optional[str] = Query(None, description="YYYY-MM-DD inclusive; 省略=全部历史"),
+    end_date: Optional[str] = Query(None, description="YYYY-MM-DD inclusive; 省略=全部历史"),
     factory_id: Optional[str] = Query(None),
     top_n: int = Query(10, ge=1, le=100),
 ):
@@ -225,8 +302,8 @@ async def get_channel_breakdown(
 @router.get("/discount-breakdown")
 async def get_discount_breakdown(
     request: Request,
-    start_date: str = Query(...),
-    end_date: str = Query(...),
+    start_date: Optional[str] = Query(None, description="YYYY-MM-DD inclusive; 省略=全部历史"),
+    end_date: Optional[str] = Query(None, description="YYYY-MM-DD inclusive; 省略=全部历史"),
     factory_id: Optional[str] = Query(None),
     top_n: int = Query(10, ge=1, le=100),
 ):
@@ -246,8 +323,8 @@ async def get_discount_breakdown(
 @router.get("/order-type-mix")
 async def get_order_type_mix(
     request: Request,
-    start_date: str = Query(...),
-    end_date: str = Query(...),
+    start_date: Optional[str] = Query(None, description="YYYY-MM-DD inclusive; 省略=全部历史"),
+    end_date: Optional[str] = Query(None, description="YYYY-MM-DD inclusive; 省略=全部历史"),
     factory_id: Optional[str] = Query(None),
 ):
     """堂食 vs 外卖 revenue split from agg_daily_order_type_meal.order_type.
@@ -269,8 +346,8 @@ async def get_order_type_mix(
 @router.get("/staff-ranking")
 async def get_staff_ranking(
     request: Request,
-    start_date: str = Query(...),
-    end_date: str = Query(...),
+    start_date: Optional[str] = Query(None, description="YYYY-MM-DD inclusive; 省略=全部历史"),
+    end_date: Optional[str] = Query(None, description="YYYY-MM-DD inclusive; 省略=全部历史"),
     factory_id: Optional[str] = Query(None),
     top_n: int = Query(5, ge=1, le=50),
 ):
@@ -756,8 +833,8 @@ def _row_to_result(row) -> dict:
 @router.get("/kpi-summary")
 async def get_kpi_summary(
     request: Request,
-    start_date: str = Query(...),
-    end_date: str = Query(...),
+    start_date: Optional[str] = Query(None, description="YYYY-MM-DD inclusive; 省略=全部历史"),
+    end_date: Optional[str] = Query(None, description="YYYY-MM-DD inclusive; 省略=全部历史"),
     factory_id: Optional[str] = Query(None),
 ):
     """Compact KPI card data — feeds both 分析概览 + KPI看板 headers.

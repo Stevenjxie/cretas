@@ -24,13 +24,65 @@ from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Query, Request
 
+from smartbi_compat._rbac_strip import PRICE_VIEW_ROLES, strip_price_for_role
+
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["RestaurantOpsGold"])
+
+
+# Restaurant-ops money keys not matched by the shared ``_MONEY_PATTERN``. The
+# shared regex catches ``revenue`` / ``revenueMedian`` / ``medianRevenue`` (all
+# contain the substring 'revenue') but NOT the camelCase ``avgTicket`` (客单价,
+# 元/单) — unambiguously monetary, so strip it here as a thin local extension.
+# Mirror of gold_reads._GOLD_EXTRA_MONEY_KEYS (which added weekdayAvg/weekendAvg
+# for the same reason on the /trend-bundle shape).
+_RESTAURANT_OPS_EXTRA_MONEY_KEYS: frozenset[str] = frozenset({
+    "avgTicket",
+})
 
 
 def _get_factory_id(request: Request) -> Optional[str]:
     """Extract factory_id set by auth middleware."""
     return getattr(request.state, "factory_id", None)
+
+
+def _get_role(request: Request) -> Optional[str]:
+    """Role string set by JWTAuthMiddleware (auth_middleware.py).
+
+    Mirrors gold_reads._get_role — ``_get_factory_id`` above reads
+    ``request.state.factory_id`` from the same middleware, so the role lives at
+    ``request.state.role``.
+    """
+    return getattr(request.state, "role", None)
+
+
+def _strip_ops_extras(node: Any) -> None:
+    """Depth-first null of restaurant-ops money keys the shared regex misses."""
+    if isinstance(node, dict):
+        for k, v in list(node.items()):
+            if k in _RESTAURANT_OPS_EXTRA_MONEY_KEYS and not isinstance(v, (dict, list)):
+                node[k] = None
+            else:
+                _strip_ops_extras(v)
+    elif isinstance(node, list):
+        for item in node:
+            _strip_ops_extras(item)
+
+
+def _apply_rbac_strip(data: Any, role: Optional[str]) -> Any:
+    """Null monetary fields in ``data`` for roles outside PRICE_VIEW_ROLES.
+
+    Walks the inner ``data`` payload (NOT the ``{success, data}`` envelope) so
+    the standard wrapper keys survive. Whitelisted roles get the raw payload.
+    Returns the same ``data`` reference for caller convenience.
+    """
+    if role and role in PRICE_VIEW_ROLES:
+        return data
+    if data is None:
+        return data
+    strip_price_for_role(data, role)
+    _strip_ops_extras(data)
+    return data
 
 
 @router.post("/restaurant-ops/etl")
@@ -454,6 +506,92 @@ async def gross_margin(request: Request, days: int = Query(30, ge=1, le=365)) ->
             "dishes": dishes,
         },
     }
+
+
+def _parse_opt_date(s: Optional[str], field: str) -> Optional[Any]:
+    """Parse an optional YYYY-MM-DD query param → date | None.
+
+    None / empty → None (= all-history on that bound). Bad format → None too
+    (honest empty window rather than 500); callers that need strict parsing
+    use the gold_reads._parse_range path.
+    """
+    if not s:
+        return None
+    from datetime import datetime as _dt
+    try:
+        return _dt.strptime(s, "%Y-%m-%d").date()
+    except ValueError:
+        logger.warning("[restaurant-ops] bad %s=%r, treating as open bound", field, s)
+        return None
+
+
+@router.get("/restaurant-ops/menu-quadrant")
+async def menu_quadrant_endpoint(
+    request: Request,
+    start_date: Optional[str] = Query(None, description="YYYY-MM-DD inclusive; 省略=全部历史"),
+    end_date: Optional[str] = Query(None, description="YYYY-MM-DD inclusive; 省略=全部历史"),
+) -> Dict[str, Any]:
+    """菜品四象限 (收入模式) — classify dishes by sales volume × revenue.
+
+    Returns {items:[{name, qty, revenue, quadrant}], qtyMedian, revenueMedian}.
+    Dates optional (省略 → 全部历史). Honest empty: no dishes → items=[].
+    """
+    factory_id = _get_factory_id(request)
+    if not factory_id:
+        return {"success": False, "message": "missing factory context"}
+
+    from smartbi.config import get_pg_pool
+    from smartbi.gold.queries import menu_quadrant as _menu_quadrant
+    pool = await get_pg_pool()
+    if pool is None:
+        return {"success": False, "message": "db pool unavailable"}
+
+    start = _parse_opt_date(start_date, "start_date")
+    end = _parse_opt_date(end_date, "end_date")
+    try:
+        data = await _menu_quadrant(pool, factory_id, (start, end))
+    except Exception as e:
+        logger.exception("[menu-quadrant] failed for %s", factory_id)
+        return {"success": False, "message": f"compute failed: {e}"}
+    # RBAC: revenue / revenueMedian 等金额字段对非 price-view 角色剥零。
+    # qty / quadrant / name / qtyMedian 非金额, 保留。
+    _apply_rbac_strip(data, _get_role(request))
+    return {"success": True, "data": data}
+
+
+@router.get("/restaurant-ops/store-comparison")
+async def store_comparison_endpoint(
+    request: Request,
+    start_date: Optional[str] = Query(None, description="YYYY-MM-DD inclusive; 省略=全部历史"),
+    end_date: Optional[str] = Query(None, description="YYYY-MM-DD inclusive; 省略=全部历史"),
+) -> Dict[str, Any]:
+    """门店对比 — per-store revenue / 单量 / 客单价 + 低于中位营收的弱店列表。
+
+    Returns {stores:[{name, revenue, orderCount, avgTicket}], medianRevenue,
+    weakStores:[name,...]}. Dates optional (省略 → 全部历史)。Honest empty:
+    no stores → stores=[]。
+    """
+    factory_id = _get_factory_id(request)
+    if not factory_id:
+        return {"success": False, "message": "missing factory context"}
+
+    from smartbi.config import get_pg_pool
+    from smartbi.gold.queries import store_comparison as _store_comparison
+    pool = await get_pg_pool()
+    if pool is None:
+        return {"success": False, "message": "db pool unavailable"}
+
+    start = _parse_opt_date(start_date, "start_date")
+    end = _parse_opt_date(end_date, "end_date")
+    try:
+        data = await _store_comparison(pool, factory_id, (start, end))
+    except Exception as e:
+        logger.exception("[store-comparison] failed for %s", factory_id)
+        return {"success": False, "message": f"compute failed: {e}"}
+    # RBAC: revenue / medianRevenue / avgTicket 等金额字段对非 price-view 角色剥零。
+    # orderCount / name / weakStores(门店名) 非金额, 保留。
+    _apply_rbac_strip(data, _get_role(request))
+    return {"success": True, "data": data}
 
 
 @router.get("/restaurant-ops/store-margin")

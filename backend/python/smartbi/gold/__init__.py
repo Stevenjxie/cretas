@@ -32,9 +32,12 @@ from smartbi.gold.queries import (
     discount_breakdown,
     finance_summary,
     kpi_summary,
+    menu_quadrant,
     order_type_mix,
     staff_ranking,
+    store_comparison,
     top_products,
+    trend_bundle,
 )
 from smartbi.gold.review_queries import (
     review_city_ranking,
@@ -80,6 +83,7 @@ __all__ = [
     "finance_summary",
     "ingest_and_materialize",
     "kpi_summary",
+    "menu_quadrant",
     "order_type_mix",
     "review_city_ranking",
     "review_complaints",
@@ -95,8 +99,10 @@ __all__ = [
     "review_vip",
     "review_vip_tags",
     "staff_ranking",
+    "store_comparison",
     "store_review_vs_revenue",
     "top_products",
+    "trend_bundle",
     "run_silver_dual_write",
     "silver_dual_write_enabled",
 ]
