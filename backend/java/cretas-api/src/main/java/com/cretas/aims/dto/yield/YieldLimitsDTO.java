@@ -43,6 +43,13 @@ public class YieldLimitsDTO {
     /** 剩余可报量 = maxAllowed − alreadyReported; null if maxAllowed null. */
     private BigDecimal remaining;
 
+    /**
+     * G7 防呆 Rule 1: 本道可领的源 WIP 余额 (Σ 上道工序产出的 AVAILABLE WIP available_quantity)。
+     * 供 RN 领用 input 的 {@code :max} 约束 ("告诉他这个东西你要收多少就行")。
+     * <p>null = 首道 (无上道 WIP, 领原料不受 WIP 余额约束); 0 = 上道 WIP 已被领空。</p>
+     */
+    private BigDecimal wipAvailable;
+
     /** 人性化提示文字, 直接在 dialog 中展示给操作员. */
     private String message;
 }

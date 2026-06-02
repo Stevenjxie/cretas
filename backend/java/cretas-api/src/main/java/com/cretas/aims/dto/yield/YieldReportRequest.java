@@ -23,4 +23,11 @@ public class YieldReportRequest {
     private Long targetWorkerId;          // 代报工 (主管替工人提交)
     /** A2b: 首道领料批次引用 (与 materialBatchRefs 字段合并到报工单, 不再单独调用 recordMaterialInput) */
     private List<MaterialBatchRef> materialBatchRefs;
+
+    /**
+     * G7 部分领用 (Wave 2): 本道领用哪个上道 WIP (semi_finished_inventory.intermediate_batch_no)。
+     * 非空时: 报工保存后扣减该 WIP 的 available_quantity (防呆 inputQuantity ≤ available);
+     * null 走旧路径 (首道领原料 / 老批次, 向后兼容零回归)。
+     */
+    private String sourceWipNo;
 }

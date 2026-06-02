@@ -9,9 +9,11 @@ import com.cretas.aims.dto.yield.YieldReportRequest;
 import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.ProductionBatch;
 import com.cretas.aims.entity.ProductionReport;
+import com.cretas.aims.entity.SemiFinishedInventory;
 import com.cretas.aims.entity.WorkProcess;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
 import com.cretas.aims.entity.enums.ProductionBatchStatus;
+import com.cretas.aims.entity.lineage.BatchLineageEdge;
 import com.cretas.aims.entity.workprocess.WorkProcessTask;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.FactorySettingsRepository;
@@ -19,7 +21,9 @@ import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.ProductionReportRepository;
+import com.cretas.aims.repository.SemiFinishedInventoryRepository;
 import com.cretas.aims.repository.WorkProcessRepository;
+import com.cretas.aims.repository.lineage.BatchLineageEdgeRepository;
 import com.cretas.aims.repository.workprocess.WorkProcessTaskRepository;
 import com.cretas.aims.service.ProcessingService;
 import com.cretas.aims.service.yield.YieldCalculationService;
@@ -64,6 +68,8 @@ public class YieldReportServiceImpl implements YieldReportService {
     private final MaterialBatchRepository materialBatchRepository;
     private final ProductTypeRepository productTypeRepository;
     private final ProductionBatchRepository productionBatchRepository;
+    private final SemiFinishedInventoryRepository wipRepo;
+    private final BatchLineageEdgeRepository lineageEdgeRepo;
     private final ObjectMapper objectMapper;
 
     @Override
@@ -81,6 +87,30 @@ public class YieldReportServiceImpl implements YieldReportService {
                 .orElseThrow(() -> new BusinessException(404, "工序任务不存在: " + req.getWorkProcessTaskId()));
 
         Long effectiveWorker = req.getTargetWorkerId() != null ? req.getTargetWorkerId() : workerId;
+
+        // — G7 部分领用防呆 (Rule 1): 报工带 sourceWipNo 时, 校验 inputQuantity ≤ 源 WIP 余额 —
+        // 校验在保存前 (超额不落库); 实际扣减在保存后 (order: validate → save → consume)。
+        // sourceWipNo=null → 走旧路径 (首道领原料 / 老批次, 向后兼容, 不查 WIP)。
+        SemiFinishedInventory sourceWip = null;
+        if (req.getSourceWipNo() != null && !req.getSourceWipNo().isBlank()) {
+            sourceWip = wipRepo.findByIntermediateBatchNoAndDeletedAtIsNull(req.getSourceWipNo())
+                    .orElseThrow(() -> new BusinessException(404, "源半成品库存不存在: " + req.getSourceWipNo())
+                            .withHint("请重新选择要领用的上道半成品批次")
+                            .withHintTarget("sourceWipNo"));
+            BigDecimal want = req.getInputQuantity();
+            BigDecimal avail = sourceWip.getAvailableQuantity() == null
+                    ? BigDecimal.ZERO : sourceWip.getAvailableQuantity();
+            if (want != null && want.compareTo(avail) > 0) {
+                String u = sourceWip.getUnit() == null ? "" : sourceWip.getUnit();
+                throw new BusinessException(409, "领用量超过半成品余额")
+                        .withCode("WIP_INSUFFICIENT")
+                        .withHint(String.format("WIP 余额仅 %s %s, 不能领 %s %s",
+                                avail.stripTrailingZeros().toPlainString(), u,
+                                want.stripTrailingZeros().toPlainString(), u))
+                        .withSeverity("BLOCKING")
+                        .withHintTarget("inputQuantity");
+            }
+        }
 
         // 前置查该 task 已有 YIELD 报工: 决定是否首条 + 作双写求和基数
         List<ProductionReport> existingTaskReports = reportRepo.findYieldReportsByTask(factoryId, t.getId());
@@ -101,6 +131,8 @@ public class YieldReportServiceImpl implements YieldReportService {
                 .materialBatchRefs(toMaterialBatchRefMaps(req.getMaterialBatchRefs()))
                 // 工序批次号是任务级: 仅首条报工生成, 后续条 null (避免 uq_pr_intermediate_batch_no 冲突)
                 .intermediateBatchNo(isFirstReportForTask ? generateBatchNo(t, batchId) : null)
+                // G7: 本道领用的源 WIP 工序批次号 (向后兼容: null 走旧路径)
+                .sourceWipNo(req.getSourceWipNo())
                 .status(ProductionReport.Status.SUBMITTED)
                 .build();
 
@@ -171,6 +203,17 @@ public class YieldReportServiceImpl implements YieldReportService {
         }
         t.setActualQuantity(taskTotal);
         taskRepo.save(t);
+
+        // — G7: 扣减源 WIP (报工保存后, 同事务) —
+        // sourceWip 已在保存前防呆校验过 (inputQuantity ≤ available); 此处实际递减。
+        if (sourceWip != null && req.getInputQuantity() != null) {
+            consumeSourceWip(sourceWip, req.getInputQuantity(), saved, t, effectiveWorker);
+        }
+
+        // — G6: 本道产出进 WIP (报工保存后, 同事务; 按 intermediateBatchNo 幂等, 跨天累加) —
+        if (saved.getOutputQuantity() != null && saved.getOutputQuantity().compareTo(BigDecimal.ZERO) > 0) {
+            upsertProducedWip(factoryId, batchId, t, saved);
+        }
 
         Map<String, Object> out = new HashMap<>();
         out.put("reportId", saved.getId());
@@ -261,6 +304,10 @@ public class YieldReportServiceImpl implements YieldReportService {
             }
         }
 
+        // G7 防呆 Rule 1: 本道可领的源 WIP 余额 = Σ 上道工序产出的 AVAILABLE WIP available_quantity。
+        // 首道 (processOrder<=1 或上道无 WIP 行) → null (领原料, 不受 WIP 约束)。
+        BigDecimal wipAvailable = resolveSourceWipAvailable(factoryId, batchId, t.getProcessOrder());
+
         return YieldLimitsDTO.builder()
                 .workProcessTaskId(workProcessTaskId)
                 .targetQuantity(targetQuantity)
@@ -270,8 +317,35 @@ public class YieldReportServiceImpl implements YieldReportService {
                 .toleranceRate(toleranceRate)
                 .maxAllowed(maxAllowed)
                 .remaining(remaining)
+                .wipAvailable(wipAvailable)
                 .message(message)
                 .build();
+    }
+
+    /**
+     * G7: 计算本道 (processOrder) 可领的源 WIP 余额 = 上道 (processOrder-1) 全部 AVAILABLE WIP 的
+     * Σ available_quantity。供 RN 领用 input 的 {@code :max} 防呆。
+     *
+     * <p>首道 (processOrder=null 或 ≤1) 或上道无 WIP 行 → null (领原料, 不受 WIP 余额约束)。
+     * 上道有 WIP 行但已领空 → 0。</p>
+     */
+    private BigDecimal resolveSourceWipAvailable(String factoryId, Long batchId, Integer processOrder) {
+        if (processOrder == null || processOrder <= 1 || batchId == null) {
+            return null;  // 首道领原料, 无源 WIP
+        }
+        int prevOrder = processOrder - 1;
+        List<SemiFinishedInventory> wips =
+                wipRepo.findByFactoryIdAndBatchIdAndDeletedAtIsNull(factoryId, batchId);
+        List<SemiFinishedInventory> prev = wips.stream()
+                .filter(w -> w.getProcessOrder() != null && w.getProcessOrder() == prevOrder)
+                .filter(w -> !SemiFinishedInventory.Status.RETURNED.equals(w.getStatus()))
+                .collect(Collectors.toList());
+        if (prev.isEmpty()) {
+            return null;  // 上道还没产出 WIP (例如本道是非 WIP 路径), 不约束
+        }
+        return prev.stream()
+                .map(w -> nz(w.getAvailableQuantity()))
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
     }
 
     private BigDecimal computeCarryover(String factoryId, Long batchId, WorkProcessTask t, BigDecimal thisInput) {
@@ -291,6 +365,118 @@ public class YieldReportServiceImpl implements YieldReportService {
         return String.format("%s-B%d-S%d-%d",
                 t.getProductTypeId() == null ? "NA" : t.getProductTypeId(),
                 batchId, t.getProcessOrder() == null ? 0 : t.getProcessOrder(), t.getId());
+    }
+
+    // ==================== G6/G7 WIP (Wave 2) ====================
+
+    /**
+     * G6: 本道产出 upsert 进 WIP 库存 (按 task 的工序批次号幂等)。
+     *
+     * <p>幂等键 = {@link #generateBatchNo} 的稳定派生 (task-level, 与首条报工生成的
+     * {@code intermediate_batch_no} 一致)。后续条报工 {@code report.intermediateBatchNo} 为 null,
+     * 故这里**重新派生**同一稳定键, 命中同一 WIP 行累加 {@code produced/available} (跨天天然支持)。</p>
+     *
+     * <p>溯源 {@code materialBatchRefs} 从产出报工继承 (首条建行时写, 后续累加不覆盖)。</p>
+     */
+    private void upsertProducedWip(String factoryId, Long batchId, WorkProcessTask t, ProductionReport saved) {
+        String wipNo = generateBatchNo(t, batchId);
+        BigDecimal out = saved.getOutputQuantity();
+        SemiFinishedInventory wip = wipRepo.findByIntermediateBatchNoAndDeletedAtIsNull(wipNo).orElse(null);
+        if (wip == null) {
+            wip = SemiFinishedInventory.builder()
+                    .factoryId(factoryId)
+                    .batchId(batchId)
+                    .intermediateBatchNo(wipNo)
+                    .sourceWorkProcessTaskId(t.getId())
+                    .processOrder(t.getProcessOrder())
+                    .productTypeId(t.getProductTypeId())
+                    .producedQuantity(out)
+                    .consumedQuantity(BigDecimal.ZERO)
+                    .availableQuantity(out)
+                    .unit(saved.getOutputUnit())
+                    .status(SemiFinishedInventory.Status.AVAILABLE)
+                    .materialBatchRefs(saved.getMaterialBatchRefs())  // 从产出报工继承溯源
+                    .build();
+        } else {
+            // 跨天 / 同 task 多次报工: 累加产出与余额 (consumed 不变)
+            BigDecimal produced = nz(wip.getProducedQuantity()).add(out);
+            BigDecimal consumed = nz(wip.getConsumedQuantity());
+            wip.setProducedQuantity(produced);
+            wip.setAvailableQuantity(produced.subtract(consumed));
+            // 重新累加产出后余额>0 → 回到 AVAILABLE (即便此前被领空 DEPLETED)
+            if (wip.getAvailableQuantity().compareTo(BigDecimal.ZERO) > 0
+                    && !SemiFinishedInventory.Status.RETURNED.equals(wip.getStatus())) {
+                wip.setStatus(SemiFinishedInventory.Status.AVAILABLE);
+            }
+            if (wip.getUnit() == null) wip.setUnit(saved.getOutputUnit());
+        }
+        wipRepo.save(wip);
+    }
+
+    /**
+     * G7: 扣减源 WIP 余额 (已在调用前防呆校验 inputQuantity ≤ available)。
+     *
+     * <p>consumed += input; available = produced − consumed; 余额=0 → DEPLETED。
+     * 乐观锁 (@Version, Wave1) 防并发超领: 同事务内扣减, 冲突时抛 OptimisticLockException 回滚。</p>
+     *
+     * <p>顺手写一条 PRODUCTION→PRODUCTION lineage 边 (副产物, 复用 closure trigger), fail-soft。</p>
+     */
+    private void consumeSourceWip(SemiFinishedInventory sourceWip, BigDecimal input,
+                                  ProductionReport saved, WorkProcessTask t, Long workerId) {
+        BigDecimal consumed = nz(sourceWip.getConsumedQuantity()).add(input);
+        BigDecimal produced = nz(sourceWip.getProducedQuantity());
+        sourceWip.setConsumedQuantity(consumed);
+        sourceWip.setAvailableQuantity(produced.subtract(consumed));
+        if (sourceWip.getAvailableQuantity().compareTo(BigDecimal.ZERO) <= 0) {
+            sourceWip.setStatus(SemiFinishedInventory.Status.DEPLETED);
+        }
+        wipRepo.save(sourceWip);
+
+        // lineage 副产物: 源 WIP (上道) → 本道产出工序批次号 (PRODUCTION→PRODUCTION)。
+        recordWipLineageEdge(saved.getFactoryId(), sourceWip, t, saved.getBatchId(), input, workerId);
+    }
+
+    /**
+     * lineage 写入器 (最小实现, Wave 2 还 lineage 死骨架债)。
+     *
+     * <p>WIP 领用时写一条 PRODUCTION_BATCH → PRODUCTION_BATCH 有向边: source = 源 WIP 所在批次,
+     * target = 本道所在批次 (同批工序流转)。插入触发 {@code fn_maintain_lineage_closure} 维护闭包。</p>
+     *
+     * <p><b>fail-soft</b>: lineage 是溯源副产物, 非库存权威源。写边失败不阻塞报工主线
+     * (per brief: lineage 风险高可降级)。只记 WARN, 不抛。</p>
+     */
+    private void recordWipLineageEdge(String factoryId, SemiFinishedInventory sourceWip,
+                                      WorkProcessTask t, Long batchId, BigDecimal qty, Long workerId) {
+        try {
+            BatchLineageEdge edge = new BatchLineageEdge();
+            edge.setFactoryId(factoryId);
+            // 同批工序间 WIP 领用流转 (源 WIP→本道); 文档化 edge_type 集合无 intra-batch 流转值,
+            // 用 WIP_CONSUME 明示 (VARCHAR(30) 无 CHECK 约束)。
+            edge.setEdgeType("WIP_CONSUME");
+            edge.setSourceType("PRODUCTION_BATCH");
+            edge.setSourceId(sourceWip.getBatchId() == null
+                    ? String.valueOf(batchId) : String.valueOf(sourceWip.getBatchId()));
+            edge.setTargetType("PRODUCTION_BATCH");
+            edge.setTargetId(String.valueOf(batchId));
+            edge.setQuantityUsed(qty);
+            edge.setUnit(sourceWip.getUnit());
+            edge.setEventTime(LocalDateTime.now());
+            edge.setOperatorId(workerId);
+            Map<String, Object> meta = new HashMap<>();
+            meta.put("sourceWipNo", sourceWip.getIntermediateBatchNo());
+            meta.put("targetWorkProcessTaskId", t.getId());
+            meta.put("targetProcessOrder", t.getProcessOrder());
+            edge.setMeta(meta);
+            lineageEdgeRepo.save(edge);
+        } catch (Exception e) {
+            log.warn("[lineage] WIP 领用边写入失败 (fail-soft, 不阻塞报工): sourceWipNo={} batchId={} qty={}",
+                    sourceWip.getIntermediateBatchNo(), batchId, qty, e);
+        }
+    }
+
+    /** null-safe BigDecimal: null → ZERO. */
+    private static BigDecimal nz(BigDecimal v) {
+        return v == null ? BigDecimal.ZERO : v;
     }
 
     @Override
