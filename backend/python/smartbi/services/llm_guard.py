@@ -215,6 +215,16 @@ def detect_numeric_hallucination(
 # "平均星级为 4.79", "总营业额 ¥2,064 万元").
 _FACT_NUMBER_WINDOW = 14
 
+# 宁漏不错 (spec §5.5): a number is only a CLAIM about the metric when it
+# IMMEDIATELY follows the metric name with just connective chars between
+# (space / colon / ¥ / 为约达是共计有 / brackets). A number separated by real
+# text — "差评集中（64", "好评词…味道好（5998" — is NOT about this metric, so
+# the loose 14-char window must not match it (that caused false corrections).
+_CONNECTIVE_THEN_NUMBER = re.compile(
+    r"^[\s:：=＝（()【】《》为约达是共计有的为¥￥$\"']{0,5}"
+    r"([-+]?\d+(?:,\d{3})*(?:\.\d+)?)"
+)
+
 # Money-scale words the LLM may append; used to normalize 万/亿 back to base.
 _SCALE_WORDS: List[Tuple[str, float]] = [
     ("亿", 100_000_000.0),
@@ -391,7 +401,10 @@ class FactReconciler:
             if pos < 0:
                 break
             after = result[pos + len(name): pos + len(name) + _FACT_NUMBER_WINDOW]
-            m = _NUMBER_PATTERN.search(after)
+            # 宁漏不错: only treat a number as this metric's claim if it
+            # IMMEDIATELY follows the name (connective chars only). Numbers with
+            # real text in between are about something else — skip them.
+            m = _CONNECTIVE_THEN_NUMBER.match(after)
             if not m:
                 search_from = pos + len(name)
                 continue
