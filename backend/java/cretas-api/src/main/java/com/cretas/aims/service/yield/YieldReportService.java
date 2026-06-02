@@ -2,6 +2,7 @@ package com.cretas.aims.service.yield;
 
 import com.cretas.aims.dto.yield.BatchYieldDTO;
 import com.cretas.aims.dto.yield.MaterialInputRequest;
+import com.cretas.aims.dto.yield.OrderYieldSummaryDTO;
 import com.cretas.aims.dto.yield.WipRowDTO;
 import com.cretas.aims.dto.yield.YieldLimitsDTO;
 import com.cretas.aims.dto.yield.YieldReportRequest;
@@ -21,6 +22,16 @@ public interface YieldReportService {
 
     /** 整批出成率 (派生). */
     BatchYieldDTO getYield(String factoryId, Long batchId);
+
+    /**
+     * 单元 F (F006 REQ-21 "以订单的模式呈现…分订单分产品分工序"):
+     * 一张销售订单下全部生产批次的出成率聚合 (复用 {@link #getYield} 逐批求, 再聚合)。
+     *
+     * <p>数据链: orderId → ProductionPlan(source_order_id) → ProductionBatch(production_plan_id IN)
+     * → 每批 getYield。总投入/总产出/整体出成率仅单位一致时计算; 成本 null-safe 累加。
+     * 订单无计划/批次 → 空 batches + batchCount 0 (诚实空态, 非异常)。</p>
+     */
+    OrderYieldSummaryDTO getOrderYieldSummary(String factoryId, String orderId);
 
     /**
      * G6/G7 (Wave 4): 该批次半成品库存 (WIP) 只读列表 — 每道工序中间品存量。

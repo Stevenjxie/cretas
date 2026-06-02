@@ -16,8 +16,15 @@ import { ref, computed, onMounted } from 'vue';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { get, post } from '@/api/request';
+// 单元 G (F006 R-B3): 跨页累计 + 分次收货时序明细 (后端权威值, 替代 page-local 聚合)
+import {
+  getCumulativeReceived,
+  getOrderReceiveSequence,
+  type CumulativeReceived,
+  type ReceiveSequenceEntry,
+} from '@/api/purchaseReceive';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { Plus, Refresh, Check, Document, ChatDotRound } from '@element-plus/icons-vue';
+import { Plus, Refresh, Check, Document, ChatDotRound, List } from '@element-plus/icons-vue';
 import ConceptDisambiguationAlert from '@/components/common/ConceptDisambiguationAlert.vue';
 import { RowActionMenu } from '@/components/list';
 import { computeRowActions } from '@/composables/useRowActions';
@@ -421,6 +428,47 @@ function cumulativeProgress(row: ReceiveRow): number | null {
   return Math.min(100, Math.round((stats.cumulative / stats.ordered) * 100));
 }
 
+/**
+ * 单元 G (F006 R-B3): 收货明细对话框 — 客户张权 "第一次收了多少第二次收了多少更直观".
+ *
+ * page-local cumulativeForRow() 只聚合当前页 rows, 跨页不准. 本对话框打开时拉两个后端权威 endpoint:
+ *   - getCumulativeReceived: 跨页累计 vs 计划 (按 PO item receivedQuantity 累计, 准确)
+ *   - getOrderReceiveSequence: 分次收货时序 (第N次 — 日期 — 数量)
+ */
+const seqDialogVisible = ref(false);
+const seqLoading = ref(false);
+const seqCumulative = ref<CumulativeReceived | null>(null);
+const seqEntries = ref<ReceiveSequenceEntry[]>([]);
+const seqOrderNumber = ref('');
+
+const fmtQty = (n: number | null | undefined): string => {
+  if (n == null) return '—';
+  const s = Number(n).toFixed(3);
+  return s.replace(/\.?0+$/, '');
+};
+
+async function openSequenceDialog(row: ReceiveRow) {
+  if (!row.purchaseOrderId) {
+    ElMessage.info('无单入库, 无累计收货明细');
+    return;
+  }
+  const orderId = row.purchaseOrderId;
+  seqOrderNumber.value = row.purchaseOrderNumber || orderId;
+  seqCumulative.value = null;
+  seqEntries.value = [];
+  seqDialogVisible.value = true;
+  seqLoading.value = true;
+  try {
+    const [cumRes, seqRes] = await Promise.all([
+      getCumulativeReceived(factoryId.value, orderId),
+      getOrderReceiveSequence(factoryId.value, orderId),
+    ]);
+    if (cumRes.success && cumRes.data) seqCumulative.value = cumRes.data;
+    if (seqRes.success && Array.isArray(seqRes.data)) seqEntries.value = seqRes.data;
+  } catch { /* interceptor toasts */ }
+  finally { seqLoading.value = false; }
+}
+
 function formatDate(s: string): string {
   if (!s) return '';
   return new Date(s).toLocaleString('zh-CN', { hour12: false });
@@ -498,9 +546,15 @@ onMounted(() => { loadData(); loadOptions(); });
         <el-table-column label="创建时间" width="170">
           <template #default="{ row }">{{ formatDate(row.createdAt) }}</template>
         </el-table-column>
-        <el-table-column label="操作" width="280" fixed="right">
+        <el-table-column label="操作" width="380" fixed="right">
           <template #default="{ row }">
             <el-button size="small" :icon="Document" @click="handleDetail(row)">详情</el-button>
+            <!-- 单元 G (F006 R-B3): 跨页准确累计 + 分次收货时序 (仅关联采购单的行可看) -->
+            <el-button
+              v-if="row.purchaseOrderId"
+              size="small" :icon="List"
+              @click="openSequenceDialog(row)"
+            >收货明细</el-button>
             <el-button
               v-if="canWrite && row.status === 'DRAFT'"
               type="success" size="small" :icon="Check"
@@ -678,6 +732,54 @@ onMounted(() => { loadData(); loadOptions(); });
           type="success" :icon="Check"
           @click="() => detailData && handleConfirm(detailData)"
         >确认入库</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 单元 G (F006 R-B3): 收货明细对话框 — 跨页准确累计 + 分次收货时序 -->
+    <el-dialog
+      v-model="seqDialogVisible"
+      :title="`收货明细 — ${seqOrderNumber}`"
+      width="720px"
+    >
+      <div v-loading="seqLoading">
+        <!-- 跨页准确累计 vs 计划 (后端 cumulative-received endpoint) -->
+        <el-descriptions v-if="seqCumulative" :column="2" border size="small">
+          <el-descriptions-item label="采购单号">{{ seqCumulative.orderNumber || '—' }}</el-descriptions-item>
+          <el-descriptions-item label="计划总量">{{ fmtQty(seqCumulative.plannedTotal) }}</el-descriptions-item>
+          <el-descriptions-item label="累计已收 (跨页准确)">
+            <strong>{{ fmtQty(seqCumulative.cumulativeReceived) }}</strong>
+          </el-descriptions-item>
+          <el-descriptions-item label="待收">
+            {{ fmtQty((seqCumulative.plannedTotal ?? 0) - (seqCumulative.cumulativeReceived ?? 0)) }}
+          </el-descriptions-item>
+        </el-descriptions>
+
+        <el-divider content-position="left">分次收货时序</el-divider>
+        <el-table
+          v-if="seqEntries.length"
+          :data="seqEntries" border size="small" style="width:100%"
+        >
+          <el-table-column label="第几次" width="80" align="center">
+            <template #default="{ row }">第 {{ row.seq }} 次</template>
+          </el-table-column>
+          <el-table-column prop="receiveNumber" label="收货单号" min-width="170" show-overflow-tooltip />
+          <el-table-column prop="receiveDate" label="日期" width="120" />
+          <el-table-column label="数量" min-width="140" align="right">
+            <template #default="{ row }">
+              <span>{{ fmtQty(row.totalQuantity) }}</span>
+              <span v-if="row.items && row.items[0]?.unit" style="margin-left:4px;color:#909399">
+                {{ row.items[0].unit }}
+              </span>
+            </template>
+          </el-table-column>
+          <el-table-column prop="createdByName" label="收货人" width="100" show-overflow-tooltip>
+            <template #default="{ row }">{{ row.createdByName || '—' }}</template>
+          </el-table-column>
+        </el-table>
+        <el-empty v-else-if="!seqLoading" description="暂无收货记录" :image-size="80" />
+      </div>
+      <template #footer>
+        <el-button @click="seqDialogVisible = false">关闭</el-button>
       </template>
     </el-dialog>
 

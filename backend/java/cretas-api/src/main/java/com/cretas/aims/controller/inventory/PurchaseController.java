@@ -452,6 +452,27 @@ public class PurchaseController {
         return ApiResponse.success("查询成功", result);
     }
 
+    /**
+     * 单元 G (F006 R-B3): 采购订单分次收货时序明细.
+     *
+     * <p>客户张权 (5/8 system review): "收货数量要显示出来 (第一次收了多少第二次收了多少更直观)".
+     * 不同于 {@link #getCumulativeReceived} (按 PO item 读累计总量), 本 endpoint 按收货发生
+     * 时间顺序返回**每次收货事件**, 逐条带 1-based seq + 该次数量 + 明细.
+     *
+     * <p>Response: {@code [{seq, receiveId, receiveNumber, receiveDate, createdAt,
+     *                        createdByName, totalQuantity, items: [...]}]} (空列表 = 暂无收货).
+     */
+    @GetMapping("/orders/{orderId}/receives")
+    @Operation(summary = "采购订单分次收货时序明细 (单元G F006 R-B3)",
+            description = "按 createdAt 升序返回每次收货事件 (第N次/日期/数量), 替代 FE-only page-rows 聚合.")
+    @RequirePermission({"procurement:read_write", "procurement:read"})
+    public ApiResponse<List<Map<String, Object>>> getOrderReceiveSequence(
+            @PathVariable @NotBlank String factoryId,
+            @PathVariable @NotBlank String orderId) {
+        List<Map<String, Object>> result = purchaseService.getOrderReceiveSequence(factoryId, orderId);
+        return ApiResponse.success("查询成功", result);
+    }
+
     // ==================== 三价对比 ====================
 
     @GetMapping("/orders/{orderId}/price-comparison")

@@ -91,4 +91,14 @@ public class EmployeeProcessSegmentServiceImpl implements EmployeeProcessSegment
     public List<EmployeeProcessSegment> listActive(String factoryId) {
         return repository.findByFactoryIdAndStatusAndDeletedAtIsNull(factoryId, SegmentStatus.ACTIVE);
     }
+
+    @Override
+    public int getTotalMinutes(String factoryId, Long employeeId, String processId) {
+        Double minutes = repository.sumMinutesByEmployeeAndProcess(factoryId, employeeId, processId);
+        if (minutes == null) {
+            return 0;
+        }
+        // 四舍五入到整分钟 (round-half-up)
+        return (int) Math.round(minutes);
+    }
 }

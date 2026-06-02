@@ -16,5 +16,15 @@ public interface PurchaseReceiveRecordRepository extends JpaRepository<PurchaseR
 
     List<PurchaseReceiveRecord> findByPurchaseOrderId(String purchaseOrderId);
 
+    /**
+     * 单元 G (F006 R-B3) — 按 PO 分次收货时序列出.
+     *
+     * <p>客户张权: "第一次收了多少第二次收了多少更直观". createdAt 升序 = 收货发生先后顺序,
+     * 上层据此分配 1-based seq. 工厂隔离 (factoryId) 防跨租户. 软删记录由 entity 级
+     * {@code @Where(deleted_at IS NULL)} 自动过滤.
+     */
+    List<PurchaseReceiveRecord> findByFactoryIdAndPurchaseOrderIdOrderByCreatedAtAsc(
+            String factoryId, String purchaseOrderId);
+
     Optional<PurchaseReceiveRecord> findByFactoryIdAndReceiveNumber(String factoryId, String receiveNumber);
 }

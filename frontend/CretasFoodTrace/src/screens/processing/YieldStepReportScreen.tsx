@@ -7,6 +7,7 @@ import { NeoCard } from '../../components/ui/NeoCard';
 import { NeoButton } from '../../components/ui/NeoButton';
 import YieldQuantityInput from '../../components/processing/YieldQuantityInput';
 import MaterialBatchPicker, { MaterialBatchRef } from '../../components/processing/MaterialBatchPicker';
+import WipBatchPicker, { WipSelection } from '../../components/processing/WipBatchPicker';
 import {
   yieldReportApi,
   WorkProcessTask,
@@ -23,6 +24,22 @@ type RouteT = RouteProp<{ YieldStepReport: YieldStepReportParams }, 'YieldStepRe
 type NavT = NativeStackNavigationProp<Record<string, object | undefined>>;
 
 const OVER_RECEIVE_TOLERANCE = 1.3; // A4 软上限: 计划 ×1.3 (含 30% 超收)
+
+// A.6 逐道成本格式化: null (未配工价 / 无原料单价) → "—" (非 ¥0).
+const fmtMoney = (v: number | null | undefined): string =>
+  v == null || Number.isNaN(Number(v)) ? '—' : `¥${Number(v).toFixed(2)}`;
+
+// A.6 一道成本文案 — 低文化操作工友好: 人工/材料/合计 明确标签.
+// 全 null (整道无成本数据) → "未配工价" 诚实提示, 不显 ¥0.
+const stepCostLine = (
+  s: { laborCost: number | null; materialCost: number | null; stepCost: number | null } | null | undefined,
+): string => {
+  if (!s) return '';
+  if (s.laborCost == null && s.materialCost == null && s.stepCost == null) {
+    return '本道成本: 未配工价 / 无原料单价';
+  }
+  return `本道成本: 人工${fmtMoney(s.laborCost)} + 材料${fmtMoney(s.materialCost)} = ${fmtMoney(s.stepCost)}`;
+};
 
 const YieldStepReportScreen: React.FC = () => {
   const navigation = useNavigation<NavT>();
@@ -51,6 +68,8 @@ const YieldStepReportScreen: React.FC = () => {
   const limitsDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // A2b: 首道领料批次引用
   const [materialBatchRefs, setMaterialBatchRefs] = useState<MaterialBatchRef[]>([]);
+  // 单元D (F006 #5): 上道多笔 WIP 时操作工选中的领用批次 (单选; null = 未选或不适用)
+  const [selectedWip, setSelectedWip] = useState<WipSelection | null>(null);
 
   const currentTask = tasks[currentStepIndex] ?? null;
   const totalSteps = tasks.length;
@@ -61,6 +80,12 @@ const YieldStepReportScreen: React.FC = () => {
     const prevOrder = currentTask.processOrder - 1;
     const prevStep = yieldData.steps.find((s: StepYieldDTO) => s.processOrder === prevOrder);
     return prevStep?.totalOutput ?? null;
+  }, [currentTask, yieldData]);
+
+  // A.6: 本道已报工的成本 (若该道之前已报过, yieldData.steps 里有对应行带 cost; 未报过则 undefined → 不显示成本行)
+  const currentStepYield = useMemo<StepYieldDTO | undefined>(() => {
+    if (!currentTask || !yieldData) return undefined;
+    return yieldData.steps.find((s: StepYieldDTO) => s.processOrder === currentTask.processOrder);
   }, [currentTask, yieldData]);
 
   const loadAll = useCallback(async () => {
@@ -103,6 +128,7 @@ const YieldStepReportScreen: React.FC = () => {
     setLastAlert(null);
     setYieldLimits(null);
     setMaterialBatchRefs([]);
+    setSelectedWip(null);
   }, [currentStepIndex, prevOutput, phase]);
 
   // A4: 投入量变化后 debounce 500ms 拉超收上限
@@ -135,20 +161,31 @@ const YieldStepReportScreen: React.FC = () => {
   const isFirstStep = currentStepIndex === 0;
   // G7 Wave 4: 非首道可领的上道 WIP 余额 (来自 limits.wipAvailable); 首道为 null (领原料不受 WIP 约束)
   const wipAvailable = yieldLimits?.wipAvailable ?? null;
+  // 单元D (F006 #5): 上道多笔 WIP — sourceWipNo 歧义 (null) 但 wipAvailable>0 → 需操作工单选;
+  // 单笔时 sourceWipNo 非空, 自动领用 (保留旧行为, 不显选择器)。
+  const needsWipPicker = !isFirstStep && yieldLimits != null && yieldLimits.sourceWipNo == null && (wipAvailable ?? 0) > 0;
+  // 报工/防呆用的有效来源 WIP 批次号: 多笔 → 操作工选中的; 单笔 → limits 透出的唯一一笔。
+  const effectiveSourceWipNo = needsWipPicker ? (selectedWip?.sourceWipNo ?? null) : (yieldLimits?.sourceWipNo ?? null);
+  // 多笔模式: 投入 :max / 单位以选中那笔 WIP 为准 (各笔余额/单位可能不同)。
+  const effectiveWipAvailable = needsWipPicker
+    ? (selectedWip?.availableQuantity ?? null)
+    : wipAvailable;
   // G7 跨单位防呆: WIP 余额单位 = 上道 outputUnit (可能 ≠ 本道 unit); banner/:max 提示用源 WIP 真实单位
-  const wipUnit = yieldLimits?.wipAvailableUnit ?? unit;
+  const wipUnit = (needsWipPicker ? selectedWip?.unit : yieldLimits?.wipAvailableUnit) ?? unit;
   const plannedMax = planned != null ? planned * OVER_RECEIVE_TOLERANCE : null;
   // G7: 非首道有 WIP 余额时, 投入硬上限 = WIP 余额 (操作工领不超过可用; 防呆 Rule 1 事前阻止);
   // 与计划超收上限取更严的 (min) 作为 input :max。首道沿用计划超收上限。
+  // 单元D: 多笔 WIP 时用选中那笔的余额 (effectiveWipAvailable); 未选时为 null → 退回计划超收上限,
+  //        但提交会被 needsWipPicker && !selectedWip 阻塞 (见 submitBlockedNoWip)。
   const inputMax =
-    wipAvailable != null
+    effectiveWipAvailable != null
       ? plannedMax != null
-        ? Math.min(plannedMax, wipAvailable)
-        : wipAvailable
+        ? Math.min(plannedMax, effectiveWipAvailable)
+        : effectiveWipAvailable
       : plannedMax;
   const inputMaxHint =
-    wipAvailable != null
-      ? `可领上道半成品余额 ${wipAvailable} ${wipUnit} (本道最多领这么多)`
+    effectiveWipAvailable != null
+      ? `可领上道半成品余额 ${effectiveWipAvailable} ${wipUnit} (本道最多领这么多)`
       : planned != null
         ? `计划 ${planned} ${unit}, 可投上限约 ${Math.round(planned * OVER_RECEIVE_TOLERANCE)} (含 30% 超收)`
         : null;
@@ -168,6 +205,9 @@ const YieldStepReportScreen: React.FC = () => {
     const out = parseFloat(outputQty);
     return outputHardCap != null && !Number.isNaN(out) && out > outputHardCap;
   }, [outputQty, outputHardCap]);
+
+  // 单元D: 上道多笔 WIP 但操作工尚未选领用批次 → 阻塞提交 (本道领用是必须的, 否则后端不扣 WIP 库存账错)。
+  const submitBlockedNoWip = needsWipPicker && selectedWip == null;
 
   // A4: 强制提交 (OVER_RECEIPT 确认后调用)
   const submitWithForce = useCallback(async (req: YieldReportRequest) => {
@@ -198,6 +238,11 @@ const YieldStepReportScreen: React.FC = () => {
 
   const handleSubmit = useCallback(async () => {
     if (!currentTask) return;
+    // 单元D: 上道多笔 WIP 必须先选领用批次, 否则后端不扣 WIP 库存账会错 (防呆 Rule 1)。
+    if (submitBlockedNoWip) {
+      Alert.alert('请选择半成品批次', '上道有多笔半成品, 请先选择本道要领用的那一笔再提交');
+      return;
+    }
     const output = parseFloat(outputQty);
     if (Number.isNaN(output) || output <= 0) {
       Alert.alert('请填写本道产出量', '产出量必须大于 0');
@@ -225,9 +270,10 @@ const YieldStepReportScreen: React.FC = () => {
             })),
           }
         : {}),
-      // G7 Wave 4: 非首道领用上道 WIP — limits 透出唯一可领 WIP 工序批次号则带回, 后端扣减其余额
-      ...(currentStepIndex > 0 && yieldLimits?.sourceWipNo
-        ? { sourceWipNo: yieldLimits.sourceWipNo }
+      // G7 Wave 4 + 单元D: 非首道领用上道 WIP — 单笔自动用 limits.sourceWipNo, 多笔用操作工选中的;
+      // effectiveSourceWipNo 两种情况都已收口, 非空则带回, 后端扣减其余额。
+      ...(currentStepIndex > 0 && effectiveSourceWipNo
+        ? { sourceWipNo: effectiveSourceWipNo }
         : {}),
     };
     setSubmitting(true);
@@ -283,7 +329,7 @@ const YieldStepReportScreen: React.FC = () => {
     } finally {
       setSubmitting(false);
     }
-  }, [currentTask, outputQty, inputQty, unit, outUnit, batchId, currentStepIndex, totalSteps, submitWithForce, materialBatchRefs, workerCount, workMinutes, yieldLimits]);
+  }, [currentTask, outputQty, inputQty, unit, outUnit, batchId, currentStepIndex, totalSteps, submitWithForce, materialBatchRefs, workerCount, workMinutes, effectiveSourceWipNo, submitBlockedNoWip]);
 
   // P1-1: 结清 (triggerComplete 决定是否同时完工入库)
   const doSettle = useCallback(async (triggerComplete: boolean) => {
@@ -418,6 +464,18 @@ const YieldStepReportScreen: React.FC = () => {
                 {yieldData.firstStepInput}{yieldData.firstStepInputUnit ?? ''} → {yieldData.lastStepOutput}{yieldData.lastStepOutputUnit ?? ''}
               </Text>
             ) : null}
+            {/* A.6: 整批成本汇总 — 人工/材料/合计. 全 null → "未配工价" 诚实提示, 不显 ¥0 */}
+            {yieldData != null ? (
+              <View style={styles.doneCostWrap} testID="yield-batch-cost">
+                {yieldData.totalLaborCost == null && yieldData.totalMaterialCost == null && yieldData.totalCost == null ? (
+                  <Text style={styles.doneCostMuted}>整批成本: 未配工价 / 无原料单价</Text>
+                ) : (
+                  <Text style={styles.doneCost}>
+                    整批成本: 人工{fmtMoney(yieldData.totalLaborCost)} + 材料{fmtMoney(yieldData.totalMaterialCost)} = {fmtMoney(yieldData.totalCost)}
+                  </Text>
+                )}
+              </View>
+            ) : null}
           </NeoCard>
           <NeoButton variant="primary" size="large" onPress={handleSettleDay} disabled={submitting} loading={submitting} style={styles.fullBtn}>
             完工入库
@@ -473,6 +531,11 @@ const YieldStepReportScreen: React.FC = () => {
             </Text>
           ) : null}
 
+          {/* A.6: 本道成本 — 仅该道已报过工 (yieldData 有对应行) 才显; 全 null → "未配工价" 诚实提示, 不显 ¥0 */}
+          {currentStepYield ? (
+            <Text style={styles.stepCost} testID="yield-step-cost">{stepCostLine(currentStepYield)}</Text>
+          ) : null}
+
           <View style={styles.divider} />
 
           {/* A2b: 首道领料批次选择 (仅 currentStepIndex === 0) */}
@@ -485,8 +548,16 @@ const YieldStepReportScreen: React.FC = () => {
             />
           ) : null}
 
-          {/* G7 Wave 4: 非首道领用上道半成品 — 显式显示可领余额 (防呆 Rule 1: dialog 打开即显边界) */}
-          {!isFirstStep && wipAvailable != null ? (
+          {/* 单元D (F006 #5): 上道多笔 WIP (sourceWipNo 歧义) → 显式单选领用批次 (防呆 Rule 1: 事前阻止) */}
+          {needsWipPicker ? (
+            <WipBatchPicker
+              batchId={batchId}
+              selectedSourceWipNo={selectedWip?.sourceWipNo ?? null}
+              onChange={setSelectedWip}
+              disabled={submitting}
+            />
+          ) : !isFirstStep && wipAvailable != null ? (
+            /* G7 Wave 4: 非首道单笔 WIP (自动领用) — 显式显示可领余额 (防呆 Rule 1: dialog 打开即显边界) */
             <View style={styles.wipBanner} testID="yield-wip-available">
               <Text style={styles.wipBannerText}>
                 可领上道半成品余额 {wipAvailable} {wipUnit}
@@ -580,7 +651,7 @@ const YieldStepReportScreen: React.FC = () => {
           variant="primary"
           size="large"
           onPress={handleSubmit}
-          disabled={submitting || outputOverHardCap}
+          disabled={submitting || outputOverHardCap || submitBlockedNoWip}
           loading={submitting}
           style={styles.fullBtn}
           testID="yield-submit-btn"
@@ -609,6 +680,8 @@ const styles = StyleSheet.create({
   batchProcess: { fontSize: 15, color: '#606266', marginTop: 6 },
   planned: { fontSize: 14, color: '#909399', marginTop: 6 },
   stdRange: { fontSize: 13, color: '#409EFF', marginTop: 4 },
+  // A.6: 本道成本行 (报工卡内, 该道已报过时显示)
+  stepCost: { fontSize: 14, color: '#606266', marginTop: 6, fontWeight: '500' },
   divider: { height: 1, backgroundColor: '#EBEEF5', marginVertical: 16 },
   alertBanner: { backgroundColor: '#FDF6EC', borderRadius: 8, padding: 12, marginTop: 4 },
   alertText: { fontSize: 14, color: '#E6A23C', fontWeight: '500' },
@@ -637,6 +710,10 @@ const styles = StyleSheet.create({
   doneLabel: { fontSize: 15, color: '#606266', marginRight: 12 },
   doneValue: { fontSize: 28, fontWeight: '700', color: '#E8732E' },
   doneFlow: { fontSize: 15, color: '#606266', marginTop: 12 },
+  // A.6: 整批成本汇总 (done 卡内)
+  doneCostWrap: { marginTop: 12 },
+  doneCost: { fontSize: 14, color: '#303133', fontWeight: '600', textAlign: 'center' },
+  doneCostMuted: { fontSize: 13, color: '#909399', textAlign: 'center' },
 });
 
 export default YieldStepReportScreen;

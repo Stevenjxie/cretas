@@ -53,6 +53,7 @@ public class WorkProcessServiceImpl implements WorkProcessService {
                 .standardYieldMax(dto.getStandardYieldMax())
                 .needsInput(dto.getNeedsInput() != null ? dto.getNeedsInput() : true)
                 .outputUnit(dto.getOutputUnit())
+                .standardHourlyRate(dto.getStandardHourlyRate())
                 .build();
 
         WorkProcess saved = workProcessRepository.save(entity);
@@ -108,6 +109,7 @@ public class WorkProcessServiceImpl implements WorkProcessService {
         if (dto.getStandardYieldMax() != null) entity.setStandardYieldMax(dto.getStandardYieldMax());
         if (dto.getNeedsInput() != null) entity.setNeedsInput(dto.getNeedsInput());
         if (dto.getOutputUnit() != null) entity.setOutputUnit(dto.getOutputUnit());
+        if (dto.getStandardHourlyRate() != null) entity.setStandardHourlyRate(dto.getStandardHourlyRate());
 
         WorkProcess saved = workProcessRepository.save(entity);
         return toDTO(saved);
@@ -169,6 +171,7 @@ public class WorkProcessServiceImpl implements WorkProcessService {
                 .standardYieldMax(entity.getStandardYieldMax())
                 .needsInput(entity.getNeedsInput())
                 .outputUnit(entity.getOutputUnit())
+                .standardHourlyRate(entity.getStandardHourlyRate())
                 .createdAt(entity.getCreatedAt())
                 .updatedAt(entity.getUpdatedAt())
                 .build();

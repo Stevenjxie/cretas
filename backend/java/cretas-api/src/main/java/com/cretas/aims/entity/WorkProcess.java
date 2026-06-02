@@ -66,4 +66,8 @@ public class WorkProcess extends BaseEntity {
     /** 产出单位 (kg→盒; 为空沿用 unit) */
     @Column(name = "output_unit", length = 20)
     private String outputUnit;
+
+    /** 标准时薪 (元/小时; null=未配置, 用于逐道人工成本计算, 绝不默认 0) */
+    @Column(name = "standard_hourly_rate", precision = 8, scale = 2)
+    private BigDecimal standardHourlyRate;
 }

@@ -55,4 +55,17 @@ public interface EmployeeProcessSegmentService {
      * 查工厂内所有当前 ACTIVE 的员工片段 (for 每日扫描 / 主管仪表板).
      */
     List<EmployeeProcessSegment> listActive(String factoryId);
+
+    /**
+     * 单元C (F006 REQ-14): 汇总某员工在某工序上所有已结束片段的总工时 (整分钟).
+     *
+     * <p>员工一个工序段内可能多次扫码上班/下班, 客户要"所有上班下班时间"汇总.
+     * 只统计已结束 (endAt 已填) 的片段; 无片段时返 0.
+     *
+     * @param factoryId  工厂ID (factoryId 隔离)
+     * @param employeeId 员工ID
+     * @param processId  工序ID
+     * @return 总工时 (整分钟, 四舍五入), 无片段返 0
+     */
+    int getTotalMinutes(String factoryId, Long employeeId, String processId);
 }

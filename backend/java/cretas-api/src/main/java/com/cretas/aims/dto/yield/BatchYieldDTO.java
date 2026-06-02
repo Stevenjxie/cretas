@@ -30,6 +30,14 @@ public class BatchYieldDTO {
     /** P1-3 (G4): Σ 所有道人数 — 跨道相加是"人次" (同一人多道会重复计), UI 必须标"总人次" */
     private Integer totalWorkers;
 
+    // ── 单元 A.4/A.5: 整批成本聚合 (Σ steps, null-safe; 全 null → null, 绝不默认 0) ──────
+    /** Σ 所有道人工成本(元); 全 null → null */
+    private BigDecimal totalLaborCost;
+    /** Σ 所有道材料成本(元); 全 null → null */
+    private BigDecimal totalMaterialCost;
+    /** 整批总成本 = totalLaborCost + totalMaterialCost (null-safe; 两者全 null → null) */
+    private BigDecimal totalCost;
+
     // ── G8 Wave 3: C 进行中标注 (展示层防呆, 拍板 A 主算法 + C 标注) ──────────────────
     /**
      * 是否生产进行中 (批次未完工 或 仍有在制半成品 WIP 余额)。

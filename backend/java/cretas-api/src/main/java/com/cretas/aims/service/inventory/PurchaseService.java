@@ -108,6 +108,23 @@ public interface PurchaseService {
      */
     Map<String, Object> getCumulativeReceived(String factoryId, String orderId);
 
+    /**
+     * 单元 G (F006 R-B3) — 采购订单的分次收货时序明细.
+     *
+     * <p>客户张权 (5/8 system review): "收货数量要显示出来 (第一次收了多少第二次收了多少更直观)".
+     * 不同于 {@link #getCumulativeReceived} (读 PO item 累计总量), 本方法返回**每次收货事件**
+     * (PurchaseReceiveRecord) 的时序列表, createdAt 升序, 逐条带 1-based seq.
+     *
+     * <p>返回结构: {@code [{seq, receiveId, receiveNumber, receiveDate, createdAt,
+     *                        createdByName, totalQuantity, items: [{materialName, quantity, unit}]}]}
+     *
+     * <p>无收货记录时返回空列表 (非 null), 不返回假数据.
+     *
+     * @throws com.cretas.aims.exception.ResourceNotFoundException PO 不存在
+     * @throws com.cretas.aims.exception.BusinessException 403 跨工厂访问
+     */
+    List<Map<String, Object>> getOrderReceiveSequence(String factoryId, String orderId);
+
     // ==================== 统计 ====================
 
     Map<String, Object> getPurchaseStatistics(String factoryId);

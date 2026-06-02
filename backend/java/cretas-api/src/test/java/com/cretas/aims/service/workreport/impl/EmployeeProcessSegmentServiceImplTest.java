@@ -119,4 +119,44 @@ class EmployeeProcessSegmentServiceImplTest {
         assertThrows(BusinessException.class,
                 () -> service.checkOut(FACTORY_ID, EMPLOYEE_ID, CheckoutReason.END_OF_SHIFT, null));
     }
+
+    // ---- 单元C (F006 REQ-14): 多区间工时 SUM 聚合 ----
+
+    private static final String PROCESS_ID = "process-a";
+
+    @Test
+    @DisplayName("getTotalMinutes 应返回 repository SUM 结果 (整分钟)")
+    void getTotalMinutes_returnsSum() {
+        when(repository.sumMinutesByEmployeeAndProcess(
+                eq(FACTORY_ID), eq(EMPLOYEE_ID), eq(PROCESS_ID)))
+                .thenReturn(90.0);
+
+        int total = service.getTotalMinutes(FACTORY_ID, EMPLOYEE_ID, PROCESS_ID);
+
+        assertEquals(90, total);
+    }
+
+    @Test
+    @DisplayName("getTotalMinutes 无 segment (repository 返 null) 应返回 0")
+    void getTotalMinutes_nullSum_returnsZero() {
+        when(repository.sumMinutesByEmployeeAndProcess(
+                eq(FACTORY_ID), eq(EMPLOYEE_ID), eq(PROCESS_ID)))
+                .thenReturn(null);
+
+        int total = service.getTotalMinutes(FACTORY_ID, EMPLOYEE_ID, PROCESS_ID);
+
+        assertEquals(0, total);
+    }
+
+    @Test
+    @DisplayName("getTotalMinutes 小数应四舍五入到整分钟 (90.7 -> 91)")
+    void getTotalMinutes_roundsHalfUp() {
+        when(repository.sumMinutesByEmployeeAndProcess(
+                eq(FACTORY_ID), eq(EMPLOYEE_ID), eq(PROCESS_ID)))
+                .thenReturn(90.7);
+
+        int total = service.getTotalMinutes(FACTORY_ID, EMPLOYEE_ID, PROCESS_ID);
+
+        assertEquals(91, total);
+    }
 }

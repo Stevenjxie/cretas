@@ -3,6 +3,7 @@ package com.cretas.aims.service.yield;
 import com.cretas.aims.dto.yield.BatchYieldDTO;
 import com.cretas.aims.dto.yield.MaterialBatchRef;
 import com.cretas.aims.dto.yield.MaterialInputRequest;
+import com.cretas.aims.dto.yield.OrderYieldSummaryDTO;
 import com.cretas.aims.dto.yield.StepYieldDTO;
 import com.cretas.aims.dto.yield.WipRowDTO;
 import com.cretas.aims.dto.yield.YieldLimitsDTO;
@@ -22,6 +23,7 @@ import com.cretas.aims.repository.FactorySettingsRepository;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.ProductionBatchRepository;
+import com.cretas.aims.repository.ProductionPlanRepository;
 import com.cretas.aims.repository.ProductionReportRepository;
 import com.cretas.aims.repository.SemiFinishedInventoryRepository;
 import com.cretas.aims.repository.WorkProcessRepository;
@@ -58,6 +60,7 @@ class YieldReportServiceImplTest {
     private MaterialBatchRepository materialBatchRepo;
     private ProductTypeRepository productTypeRepo;
     private ProductionBatchRepository productionBatchRepo;
+    private ProductionPlanRepository productionPlanRepo;
     private SemiFinishedInventoryRepository wipRepo;
     private BatchLineageEdgeRepository lineageEdgeRepo;
     private ObjectMapper objectMapper;
@@ -74,6 +77,7 @@ class YieldReportServiceImplTest {
         materialBatchRepo = mock(MaterialBatchRepository.class);
         productTypeRepo = mock(ProductTypeRepository.class);
         productionBatchRepo = mock(ProductionBatchRepository.class);
+        productionPlanRepo = mock(ProductionPlanRepository.class);
         wipRepo = mock(SemiFinishedInventoryRepository.class);
         lineageEdgeRepo = mock(BatchLineageEdgeRepository.class);
         objectMapper = new ObjectMapper();
@@ -84,7 +88,7 @@ class YieldReportServiceImplTest {
         when(lineageEdgeRepo.save(any(BatchLineageEdge.class))).thenAnswer(i -> i.getArgument(0));
         svc = new YieldReportServiceImpl(reportRepo, taskRepo, processRepo, calcSvc, processingService,
                 factorySettingsRepo, materialBatchRepo, productTypeRepo, productionBatchRepo,
-                wipRepo, lineageEdgeRepo, objectMapper);
+                productionPlanRepo, wipRepo, lineageEdgeRepo, objectMapper);
     }
 
     private WorkProcessTask task(long id, int order, String wpId) {
@@ -1902,5 +1906,400 @@ class YieldReportServiceImplTest {
         List<WipRowDTO> rows = svc.listWip("F006", 41L);
 
         assertThat(rows).isEmpty();
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════════
+    // 单元 A.4/A.5: 逐道成本计算 (人工 + 材料) + WIP 成本滚动
+    // ══════════════════════════════════════════════════════════════════════════════
+
+    /** 共用 setup: 首道 (task 70, WP-COST), 无历史报工, save 回填 id; report saved 捕获器返回. */
+    private ArgumentCaptor<ProductionReport> setupCostTask(WorkProcess wp) {
+        WorkProcessTask t = task(70L, 1, "WP-COST");
+        t.setProductTypeId("PT-C");
+        when(taskRepo.findByFactoryIdAndId("F006", 70L)).thenReturn(Optional.of(t));
+        when(processRepo.findById("WP-COST")).thenReturn(wp == null ? Optional.empty() : Optional.of(wp));
+        when(factorySettingsRepo.findProductionSettingsByFactoryId("F006")).thenReturn(null);
+        when(reportRepo.findYieldReportsByBatch(anyString(), eq(1L))).thenReturn(List.of());
+        when(reportRepo.findYieldReportsByTask("F006", 70L)).thenReturn(List.of());
+        ArgumentCaptor<ProductionReport> cap = ArgumentCaptor.forClass(ProductionReport.class);
+        when(reportRepo.save(cap.capture())).thenAnswer(i -> {
+            ProductionReport r = i.getArgument(0); r.setId(700L); return r;
+        });
+        return cap;
+    }
+
+    // ── 人工成本 (test 1, 2) ─────────────────────────────────────────────────────
+
+    @Test
+    void submitReport_laborCost_workersTimesHoursTimesRate() {
+        // 3 workers × 60 min (=1.0 h) × ¥20/hr = ¥60.00
+        WorkProcess wp = WorkProcess.builder().id("WP-COST").factoryId("F006")
+                .unit("kg").standardHourlyRate(new BigDecimal("20.00")).build();
+        ArgumentCaptor<ProductionReport> cap = setupCostTask(wp);
+
+        YieldReportRequest req = new YieldReportRequest();
+        req.setWorkProcessTaskId(70L);
+        req.setInputQuantity(new BigDecimal("100")); req.setInputUnit("kg");
+        req.setOutputQuantity(new BigDecimal("90")); req.setOutputUnit("kg");
+        req.setWorkerCount(3); req.setWorkMinutes(60);
+
+        svc.submitReport("F006", 1L, 5L, req);
+
+        assertThat(cap.getValue().getLaborCost()).isEqualByComparingTo("60.00");
+    }
+
+    @Test
+    void submitReport_laborCost_nullWhenRateNull() {
+        // standardHourlyRate=null → laborCost null (绝不默认 0)
+        WorkProcess wp = WorkProcess.builder().id("WP-COST").factoryId("F006")
+                .unit("kg").standardHourlyRate(null).build();
+        ArgumentCaptor<ProductionReport> cap = setupCostTask(wp);
+
+        YieldReportRequest req = new YieldReportRequest();
+        req.setWorkProcessTaskId(70L);
+        req.setInputQuantity(new BigDecimal("100")); req.setInputUnit("kg");
+        req.setOutputQuantity(new BigDecimal("90")); req.setOutputUnit("kg");
+        req.setWorkerCount(3); req.setWorkMinutes(60);
+
+        svc.submitReport("F006", 1L, 5L, req);
+
+        assertThat(cap.getValue().getLaborCost()).isNull();
+    }
+
+    @Test
+    void submitReport_laborCost_nullWhenWorkerCountNull() {
+        WorkProcess wp = WorkProcess.builder().id("WP-COST").factoryId("F006")
+                .unit("kg").standardHourlyRate(new BigDecimal("20.00")).build();
+        ArgumentCaptor<ProductionReport> cap = setupCostTask(wp);
+
+        YieldReportRequest req = new YieldReportRequest();
+        req.setWorkProcessTaskId(70L);
+        req.setInputQuantity(new BigDecimal("100")); req.setInputUnit("kg");
+        req.setOutputQuantity(new BigDecimal("90")); req.setOutputUnit("kg");
+        req.setWorkerCount(null); req.setWorkMinutes(60);
+
+        svc.submitReport("F006", 1L, 5L, req);
+
+        assertThat(cap.getValue().getLaborCost()).isNull();
+    }
+
+    @Test
+    void submitReport_laborCost_nullWhenWorkMinutesNull() {
+        WorkProcess wp = WorkProcess.builder().id("WP-COST").factoryId("F006")
+                .unit("kg").standardHourlyRate(new BigDecimal("20.00")).build();
+        ArgumentCaptor<ProductionReport> cap = setupCostTask(wp);
+
+        YieldReportRequest req = new YieldReportRequest();
+        req.setWorkProcessTaskId(70L);
+        req.setInputQuantity(new BigDecimal("100")); req.setInputUnit("kg");
+        req.setOutputQuantity(new BigDecimal("90")); req.setOutputUnit("kg");
+        req.setWorkerCount(3); req.setWorkMinutes(null);
+
+        svc.submitReport("F006", 1L, 5L, req);
+
+        assertThat(cap.getValue().getLaborCost()).isNull();
+    }
+
+    // ── 材料成本 — 原料领用 (test 3, 5) ─────────────────────────────────────────────
+
+    @Test
+    void submitReport_materialCost_rawBatchQtyTimesUnitPrice() {
+        // 100kg × ¥10 unitPrice = ¥1000.00
+        WorkProcess wp = WorkProcess.builder().id("WP-COST").factoryId("F006")
+                .unit("kg").build();  // no rate → labor null, isolate material
+        ArgumentCaptor<ProductionReport> cap = setupCostTask(wp);
+        MaterialBatch mb = new MaterialBatch();
+        mb.setId("mb-raw-1"); mb.setStatus(MaterialBatchStatus.AVAILABLE);
+        mb.setUnitPrice(new BigDecimal("10"));
+        when(materialBatchRepo.findById("mb-raw-1")).thenReturn(Optional.of(mb));
+
+        YieldReportRequest req = new YieldReportRequest();
+        req.setWorkProcessTaskId(70L);
+        req.setInputQuantity(new BigDecimal("100")); req.setInputUnit("kg");
+        req.setOutputQuantity(new BigDecimal("90")); req.setOutputUnit("kg");
+        req.setMaterialBatchRefs(List.of(new MaterialBatchRef("mb-raw-1", new BigDecimal("100"), "kg")));
+
+        svc.submitReport("F006", 1L, 5L, req);
+
+        assertThat(cap.getValue().getMaterialCost()).isEqualByComparingTo("1000.00");
+    }
+
+    @Test
+    void submitReport_materialCost_nullWhenNoPricesAnywhere() {
+        // batch unitPrice null AND no priced WIP → materialCost null (绝不默认 0)
+        WorkProcess wp = WorkProcess.builder().id("WP-COST").factoryId("F006").unit("kg").build();
+        ArgumentCaptor<ProductionReport> cap = setupCostTask(wp);
+        MaterialBatch mb = new MaterialBatch();
+        mb.setId("mb-noprice"); mb.setStatus(MaterialBatchStatus.AVAILABLE);
+        mb.setUnitPrice(null);  // 无单价 (e.g. 仓管员脱敏 或 未录入)
+        when(materialBatchRepo.findById("mb-noprice")).thenReturn(Optional.of(mb));
+
+        YieldReportRequest req = new YieldReportRequest();
+        req.setWorkProcessTaskId(70L);
+        req.setInputQuantity(new BigDecimal("100")); req.setInputUnit("kg");
+        req.setOutputQuantity(new BigDecimal("90")); req.setOutputUnit("kg");
+        req.setMaterialBatchRefs(List.of(new MaterialBatchRef("mb-noprice", new BigDecimal("100"), "kg")));
+
+        svc.submitReport("F006", 1L, 5L, req);
+
+        assertThat(cap.getValue().getMaterialCost()).isNull();
+    }
+
+    @Test
+    void submitReport_materialCost_someBatchesPricedSomeNot_sumsPriced() {
+        // mb-a priced (50×¥10=500), mb-b unpriced → materialCost = 500.00 (non-null, missing treated as 0)
+        WorkProcess wp = WorkProcess.builder().id("WP-COST").factoryId("F006").unit("kg").build();
+        ArgumentCaptor<ProductionReport> cap = setupCostTask(wp);
+        MaterialBatch mbA = new MaterialBatch();
+        mbA.setId("mb-a"); mbA.setStatus(MaterialBatchStatus.AVAILABLE); mbA.setUnitPrice(new BigDecimal("10"));
+        MaterialBatch mbB = new MaterialBatch();
+        mbB.setId("mb-b"); mbB.setStatus(MaterialBatchStatus.AVAILABLE); mbB.setUnitPrice(null);
+        when(materialBatchRepo.findById("mb-a")).thenReturn(Optional.of(mbA));
+        when(materialBatchRepo.findById("mb-b")).thenReturn(Optional.of(mbB));
+
+        YieldReportRequest req = new YieldReportRequest();
+        req.setWorkProcessTaskId(70L);
+        req.setInputQuantity(new BigDecimal("80")); req.setInputUnit("kg");
+        req.setOutputQuantity(new BigDecimal("70")); req.setOutputUnit("kg");
+        req.setMaterialBatchRefs(List.of(
+                new MaterialBatchRef("mb-a", new BigDecimal("50"), "kg"),
+                new MaterialBatchRef("mb-b", new BigDecimal("30"), "kg")));
+
+        svc.submitReport("F006", 1L, 5L, req);
+
+        assertThat(cap.getValue().getMaterialCost()).isEqualByComparingTo("500.00");
+    }
+
+    // ── 材料成本 — 半成品领用 (test 4) ─────────────────────────────────────────────
+
+    @Test
+    void submitReport_materialCost_fromWip_consumedQtyTimesUnitCost() {
+        // 领用 80 × wip.unitCost ¥10.6 = ¥848.00 (非首道; sourceWipNo present)
+        WorkProcess wp = WorkProcess.builder().id("WP-COST2").factoryId("F006").unit("kg").build();
+        WorkProcessTask t = task(71L, 2, "WP-COST2");  // 非首道
+        t.setProductTypeId("PT-C");
+        when(taskRepo.findByFactoryIdAndId("F006", 71L)).thenReturn(Optional.of(t));
+        when(processRepo.findById("WP-COST2")).thenReturn(Optional.of(wp));
+        when(factorySettingsRepo.findProductionSettingsByFactoryId("F006")).thenReturn(null);
+        when(reportRepo.findYieldReportsByBatch(anyString(), eq(1L))).thenReturn(List.of());
+        when(reportRepo.findYieldReportsByTask("F006", 71L)).thenReturn(List.of());
+        ArgumentCaptor<ProductionReport> cap = ArgumentCaptor.forClass(ProductionReport.class);
+        when(reportRepo.save(cap.capture())).thenAnswer(i -> {
+            ProductionReport r = i.getArgument(0); r.setId(710L); return r;
+        });
+
+        SemiFinishedInventory sourceWip = SemiFinishedInventory.builder()
+                .intermediateBatchNo("WIP-SRC-1").batchId(1L).factoryId("F006")
+                .processOrder(1).producedQuantity(new BigDecimal("100"))
+                .consumedQuantity(new BigDecimal("0")).availableQuantity(new BigDecimal("100"))
+                .unitCost(new BigDecimal("10.6000")).unit("kg")
+                .status(SemiFinishedInventory.Status.AVAILABLE).build();
+        when(wipRepo.findByIntermediateBatchNoAndDeletedAtIsNull("WIP-SRC-1"))
+                .thenReturn(Optional.of(sourceWip));
+
+        YieldReportRequest req = new YieldReportRequest();
+        req.setWorkProcessTaskId(71L);
+        req.setInputQuantity(new BigDecimal("80")); req.setInputUnit("kg");
+        req.setOutputQuantity(new BigDecimal("70")); req.setOutputUnit("kg");
+        req.setSourceWipNo("WIP-SRC-1");
+
+        svc.submitReport("F006", 1L, 5L, req);
+
+        assertThat(cap.getValue().getMaterialCost()).isEqualByComparingTo("848.00");
+    }
+
+    // ── WIP 成本滚动 (test 6, 7) ───────────────────────────────────────────────────
+
+    @Test
+    void submitReport_wipRollup_accumulatedCostAndUnitCost() {
+        // step 产 100 output, laborCost 60 (3×1h×¥20) + materialCost 1000 (100×¥10)
+        //   → wip.accumulatedCost=1060, unitCost = 1060/100 = 10.6000
+        WorkProcess wp = WorkProcess.builder().id("WP-COST").factoryId("F006")
+                .unit("kg").standardHourlyRate(new BigDecimal("20.00")).build();
+        setupCostTask(wp);  // first report for task → new WIP row
+        MaterialBatch mb = new MaterialBatch();
+        mb.setId("mb-r"); mb.setStatus(MaterialBatchStatus.AVAILABLE); mb.setUnitPrice(new BigDecimal("10"));
+        when(materialBatchRepo.findById("mb-r")).thenReturn(Optional.of(mb));
+
+        ArgumentCaptor<SemiFinishedInventory> wipCap = ArgumentCaptor.forClass(SemiFinishedInventory.class);
+        when(wipRepo.save(wipCap.capture())).thenAnswer(i -> i.getArgument(0));
+
+        YieldReportRequest req = new YieldReportRequest();
+        req.setWorkProcessTaskId(70L);
+        req.setInputQuantity(new BigDecimal("100")); req.setInputUnit("kg");
+        req.setOutputQuantity(new BigDecimal("100")); req.setOutputUnit("kg");
+        req.setWorkerCount(3); req.setWorkMinutes(60);
+        req.setMaterialBatchRefs(List.of(new MaterialBatchRef("mb-r", new BigDecimal("100"), "kg")));
+
+        svc.submitReport("F006", 1L, 5L, req);
+
+        // last save to wipRepo is the produced WIP upsert
+        SemiFinishedInventory wip = wipCap.getValue();
+        assertThat(wip.getAccumulatedCost()).isEqualByComparingTo("1060.00");
+        assertThat(wip.getUnitCost()).isEqualByComparingTo("10.6000");
+    }
+
+    @Test
+    void submitReport_wipRollup_crossDay_accumulatesCost() {
+        // second produce of +50 with cost +500 over an existing WIP (produced 100, accumulatedCost 1060)
+        //   → produced 150, accumulatedCost 1560, unitCost = 1560/150 = 10.4000
+        WorkProcess wp = WorkProcess.builder().id("WP-COST").factoryId("F006")
+                .unit("kg").standardHourlyRate(new BigDecimal("0")).build();  // labor 0 → isolate material
+        WorkProcessTask t = task(70L, 1, "WP-COST");
+        t.setProductTypeId("PT-C");
+        when(taskRepo.findByFactoryIdAndId("F006", 70L)).thenReturn(Optional.of(t));
+        when(processRepo.findById("WP-COST")).thenReturn(Optional.of(wp));
+        when(factorySettingsRepo.findProductionSettingsByFactoryId("F006")).thenReturn(null);
+        when(reportRepo.findYieldReportsByBatch(anyString(), eq(1L))).thenReturn(List.of());
+        // already 1 report → not first → reuses existing WIP row
+        when(reportRepo.findYieldReportsByTask("F006", 70L)).thenReturn(List.of(
+                ProductionReport.builder().outputQuantity(new BigDecimal("100")).build()));
+        when(reportRepo.save(any(ProductionReport.class))).thenAnswer(i -> {
+            ProductionReport r = i.getArgument(0); r.setId(701L); return r;
+        });
+        MaterialBatch mb = new MaterialBatch();
+        mb.setId("mb-r"); mb.setStatus(MaterialBatchStatus.AVAILABLE); mb.setUnitPrice(new BigDecimal("10"));
+        when(materialBatchRepo.findById("mb-r")).thenReturn(Optional.of(mb));
+
+        // existing WIP row (from day 1): produced 100, accumulatedCost 1060
+        SemiFinishedInventory existing = SemiFinishedInventory.builder()
+                .intermediateBatchNo("PT-C-B1-S1-70").batchId(1L).factoryId("F006")
+                .processOrder(1).producedQuantity(new BigDecimal("100"))
+                .consumedQuantity(new BigDecimal("0")).availableQuantity(new BigDecimal("100"))
+                .accumulatedCost(new BigDecimal("1060.00")).unitCost(new BigDecimal("10.6000"))
+                .unit("kg").status(SemiFinishedInventory.Status.AVAILABLE).build();
+        when(wipRepo.findByIntermediateBatchNoAndDeletedAtIsNull("PT-C-B1-S1-70"))
+                .thenReturn(Optional.of(existing));
+        ArgumentCaptor<SemiFinishedInventory> wipCap = ArgumentCaptor.forClass(SemiFinishedInventory.class);
+        when(wipRepo.save(wipCap.capture())).thenAnswer(i -> i.getArgument(0));
+
+        YieldReportRequest req = new YieldReportRequest();
+        req.setWorkProcessTaskId(70L);
+        req.setInputQuantity(new BigDecimal("50")); req.setInputUnit("kg");
+        req.setOutputQuantity(new BigDecimal("50")); req.setOutputUnit("kg");
+        req.setWorkerCount(3); req.setWorkMinutes(60);  // labor 0 (rate 0)
+        req.setMaterialBatchRefs(List.of(new MaterialBatchRef("mb-r", new BigDecimal("50"), "kg")));
+
+        svc.submitReport("F006", 1L, 5L, req);
+
+        SemiFinishedInventory wip = wipCap.getValue();
+        assertThat(wip.getProducedQuantity()).isEqualByComparingTo("150");
+        assertThat(wip.getAccumulatedCost()).isEqualByComparingTo("1560.00");
+        assertThat(wip.getUnitCost()).isEqualByComparingTo("10.4000");
+    }
+
+    // ── 单元 F (F006 REQ-21): getOrderYieldSummary 分订单出成率聚合 ──────────────────
+
+    /** 构造一条单工序 same-unit YIELD 报工 (input/output 同单位 → cumulative 可算). */
+    private ProductionReport batchReport(long batchId, long taskId, BigDecimal in, BigDecimal out, String unit) {
+        return ProductionReport.builder()
+                .batchId(batchId)
+                .workProcessTaskId(taskId).processOrder(1).productTypeId("PT-ORD")
+                .inputQuantity(in).inputUnit(unit)
+                .outputQuantity(out).outputUnit(unit)
+                .build();
+    }
+
+    private ProductionBatch batch(long id, String planId) {
+        ProductionBatch b = new ProductionBatch();
+        b.setId(id); b.setFactoryId("F006"); b.setProductionPlanId(planId);
+        b.setStatus(ProductionBatchStatus.IN_PROGRESS);
+        return b;
+    }
+
+    private com.cretas.aims.entity.ProductionPlan plan(String id) {
+        com.cretas.aims.entity.ProductionPlan p = new com.cretas.aims.entity.ProductionPlan();
+        p.setId(id); p.setFactoryId("F006");
+        return p;
+    }
+
+    @Test
+    void getOrderYieldSummary_sameUnit_aggregatesTotalsAndOverallRate() {
+        // order O-1 → plan PL-1 → 2 batches (101, 102) both kg
+        // batch 101: in 100 → out 90 (kg)
+        // batch 102: in 200 → out 150 (kg)
+        // totalFirstInput=300, totalLastOutput=240, overall=240/300=0.8000
+        when(productionPlanRepo.findByFactoryIdAndSourceOrderId("F006", "O-1"))
+                .thenReturn(List.of(plan("PL-1")));
+        when(productionBatchRepo.findByFactoryIdAndProductionPlanIdIn(eq("F006"), any()))
+                .thenReturn(List.of(batch(101L, "PL-1"), batch(102L, "PL-1")));
+        when(reportRepo.findYieldReportsByBatch("F006", 101L))
+                .thenReturn(List.of(batchReport(101L, 1L, new BigDecimal("100"), new BigDecimal("90"), "kg")));
+        when(reportRepo.findYieldReportsByBatch("F006", 102L))
+                .thenReturn(List.of(batchReport(102L, 2L, new BigDecimal("200"), new BigDecimal("150"), "kg")));
+        // getYield internals: no cross-unit grams lookup needed (same unit), enrich no-op
+        when(taskRepo.findByFactoryIdAndIdIn(eq("F006"), any())).thenReturn(List.of());
+        when(processRepo.findAllById(any())).thenReturn(List.of());
+
+        OrderYieldSummaryDTO dto = svc.getOrderYieldSummary("F006", "O-1");
+
+        assertThat(dto.getOrderId()).isEqualTo("O-1");
+        assertThat(dto.getBatchCount()).isEqualTo(2);
+        assertThat(dto.getBatches()).hasSize(2);
+        assertThat(dto.getFirstInputUnit()).isEqualTo("kg");
+        assertThat(dto.getLastOutputUnit()).isEqualTo("kg");
+        assertThat(dto.getTotalFirstInput()).isEqualByComparingTo("300");
+        assertThat(dto.getTotalLastOutput()).isEqualByComparingTo("240");
+        assertThat(dto.getOverallYieldRate()).isEqualByComparingTo("0.8000");
+    }
+
+    @Test
+    void getOrderYieldSummary_differentUnits_totalsAndOverallNull_butBatchesPresent() {
+        // batch 201: kg/kg; batch 202: 份/份 → units not comparable → totals + overall null
+        when(productionPlanRepo.findByFactoryIdAndSourceOrderId("F006", "O-2"))
+                .thenReturn(List.of(plan("PL-2")));
+        when(productionBatchRepo.findByFactoryIdAndProductionPlanIdIn(eq("F006"), any()))
+                .thenReturn(List.of(batch(201L, "PL-2"), batch(202L, "PL-2")));
+        when(reportRepo.findYieldReportsByBatch("F006", 201L))
+                .thenReturn(List.of(batchReport(201L, 1L, new BigDecimal("100"), new BigDecimal("90"), "kg")));
+        when(reportRepo.findYieldReportsByBatch("F006", 202L))
+                .thenReturn(List.of(batchReport(202L, 2L, new BigDecimal("50"), new BigDecimal("48"), "份")));
+        when(taskRepo.findByFactoryIdAndIdIn(eq("F006"), any())).thenReturn(List.of());
+        when(processRepo.findAllById(any())).thenReturn(List.of());
+
+        OrderYieldSummaryDTO dto = svc.getOrderYieldSummary("F006", "O-2");
+
+        assertThat(dto.getBatchCount()).isEqualTo(2);
+        assertThat(dto.getBatches()).hasSize(2);   // individual batches still present
+        assertThat(dto.getTotalFirstInput()).isNull();
+        assertThat(dto.getTotalLastOutput()).isNull();
+        assertThat(dto.getOverallYieldRate()).isNull();
+        assertThat(dto.getFirstInputUnit()).isNull();
+        assertThat(dto.getLastOutputUnit()).isNull();
+    }
+
+    @Test
+    void getOrderYieldSummary_noBatches_returnsEmptySummary() {
+        // order O-3 → plan exists but no batches (or no plan) → honest empty, NOT exception
+        when(productionPlanRepo.findByFactoryIdAndSourceOrderId("F006", "O-3"))
+                .thenReturn(List.of(plan("PL-3")));
+        when(productionBatchRepo.findByFactoryIdAndProductionPlanIdIn(eq("F006"), any()))
+                .thenReturn(List.of());
+
+        OrderYieldSummaryDTO dto = svc.getOrderYieldSummary("F006", "O-3");
+
+        assertThat(dto.getOrderId()).isEqualTo("O-3");
+        assertThat(dto.getBatchCount()).isEqualTo(0);
+        assertThat(dto.getBatches()).isEmpty();
+        assertThat(dto.getTotalFirstInput()).isNull();
+        assertThat(dto.getTotalLastOutput()).isNull();
+        assertThat(dto.getOverallYieldRate()).isNull();
+        assertThat(dto.getTotalCost()).isNull();
+        // never queried reports for any batch
+        verify(reportRepo, never()).findYieldReportsByBatch(eq("F006"), any());
+    }
+
+    @Test
+    void getOrderYieldSummary_noPlans_returnsEmptySummary() {
+        // order with no production plans at all → empty (no batch lookup)
+        when(productionPlanRepo.findByFactoryIdAndSourceOrderId("F006", "O-NONE"))
+                .thenReturn(List.of());
+
+        OrderYieldSummaryDTO dto = svc.getOrderYieldSummary("F006", "O-NONE");
+
+        assertThat(dto.getBatchCount()).isEqualTo(0);
+        assertThat(dto.getBatches()).isEmpty();
+        assertThat(dto.getOverallYieldRate()).isNull();
+        verify(productionBatchRepo, never()).findByFactoryIdAndProductionPlanIdIn(any(), any());
     }
 }

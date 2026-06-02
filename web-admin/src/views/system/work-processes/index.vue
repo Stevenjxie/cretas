@@ -42,7 +42,8 @@ const formData = reactive<Partial<WorkProcessItem>>({
   standardYieldMin: null,
   standardYieldMax: null,
   needsInput: true,
-  outputUnit: ''
+  outputUnit: '',
+  standardHourlyRate: null
 });
 
 // P0-3: 百分比 ↔ 小数转换 (表单按百分比录入, payload 存小数 0.0001..99.9999)
@@ -111,7 +112,8 @@ function handleAdd() {
   Object.assign(formData, {
     id: '', processName: '', processCategory: '',
     unit: 'kg', estimatedMinutes: null, sortOrder: 0,
-    standardYieldMin: null, standardYieldMax: null, needsInput: true, outputUnit: ''
+    standardYieldMin: null, standardYieldMax: null, needsInput: true, outputUnit: '',
+    standardHourlyRate: null
   });
   dialogVisible.value = true;
 }
@@ -261,7 +263,7 @@ function handlePageChange(page: number) {
             <el-option v-for="cat in CATEGORIES" :key="cat" :label="cat" :value="cat" />
           </el-select>
         </el-form-item>
-        <el-form-item label="产出单位" prop="unit">
+        <el-form-item label="计量单位" prop="unit">
           <el-input v-model="formData.unit" placeholder="如：箱、车、框、kg" />
         </el-form-item>
         <el-form-item label="预估工时">
@@ -286,6 +288,10 @@ function handlePageChange(page: number) {
         </el-form-item>
         <el-form-item label="产出单位">
           <el-input v-model="formData.outputUnit" placeholder="与投入单位不同时填，如 盒/份；留空则同投入单位" />
+        </el-form-item>
+        <el-form-item label="标准时薪(元/小时)" prop="standardHourlyRate">
+          <el-input-number v-model="formData.standardHourlyRate" :min="0" :step="1" :precision="2"
+            placeholder="如 25.00；留空表示未配置(不计算人工成本)" style="width: 100%" />
         </el-form-item>
         <el-form-item label="排序">
           <el-input-number v-model="formData.sortOrder" :min="0" style="width: 100%" />

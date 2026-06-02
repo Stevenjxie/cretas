@@ -330,6 +330,15 @@ public interface ProductionReportRepository extends JpaRepository<ProductionRepo
     boolean existsByFactoryIdAndWorkerIdAndReportTypeAndReportDateAndBatchIdIsNullAndDeletedAtIsNull(
             String factoryId, Long workerId, String reportType, LocalDate reportDate);
 
+    // 单元B (F006 REQ-17): 5 分钟窗口去重 (createdAt > cutoff), 替代全天去重以解封累加式分时段报工。
+    // 仅拦 5 分钟内的 double-click, 不再封锁同日累加。createdAt 为实体字段 → CreatedAtAfter 派生 createdAt > cutoff。
+
+    boolean existsByFactoryIdAndWorkerIdAndBatchIdAndReportTypeAndCreatedAtAfterAndDeletedAtIsNull(
+            String factoryId, Long workerId, Long batchId, String reportType, LocalDateTime cutoff);
+
+    boolean existsByFactoryIdAndWorkerIdAndReportTypeAndCreatedAtAfterAndBatchIdIsNullAndDeletedAtIsNull(
+            String factoryId, Long workerId, String reportType, LocalDateTime cutoff);
+
     // ==================== 报工傻瓜化: 上次报工 + 历史均值 ====================
 
     ProductionReport findTopByFactoryIdAndWorkerIdAndReportTypeAndDeletedAtIsNullOrderByCreatedAtDesc(

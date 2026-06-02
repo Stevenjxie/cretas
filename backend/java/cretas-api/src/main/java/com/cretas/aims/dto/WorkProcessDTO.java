@@ -57,6 +57,11 @@ public class WorkProcessDTO {
     @Size(max = 20, message = "产出单位不能超过20个字符")
     private String outputUnit;
 
+    /** 标准时薪 (元/小时; null=未配置, 绝不默认 0; 用于逐道人工成本计算). NUMERIC(8,2) → 0..999999.99. */
+    @DecimalMin(value = "0", message = "标准时薪不能为负")
+    @DecimalMax(value = "999999.99", message = "标准时薪超出范围")
+    private BigDecimal standardHourlyRate;
+
     @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss")
     private LocalDateTime createdAt;
 

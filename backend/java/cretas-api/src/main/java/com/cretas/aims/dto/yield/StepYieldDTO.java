@@ -30,4 +30,12 @@ public class StepYieldDTO {
     private Integer totalWorkMinutes;
     /** P1-3 (G4): Σ 本道各次报工人数; 全 null → null (本道人次, 单道通常≈实际人数) */
     private Integer totalWorkers;
+
+    // ── 单元 A.4/A.5: 逐道成本 (Σ 本道各次报工的持久化成本, null-safe) ──────────────
+    /** Σ 本道人工成本(元); 全 null → null (绝不默认 0) */
+    private BigDecimal laborCost;
+    /** Σ 本道材料成本(元); 全 null → null (绝不默认 0) */
+    private BigDecimal materialCost;
+    /** 本道总成本 = laborCost + materialCost (null-safe; 两者全 null → null) */
+    private BigDecimal stepCost;
 }

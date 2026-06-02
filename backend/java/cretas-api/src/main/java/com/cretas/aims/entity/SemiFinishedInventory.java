@@ -96,6 +96,14 @@ public class SemiFinishedInventory {
     @Column(name = "available_quantity", precision = 12, scale = 2)
     private BigDecimal availableQuantity;
 
+    /** 滚动累计成本(人工+材料); null=无成本数据 (单元 A.2 地基; 算法在后续任务) */
+    @Column(name = "accumulated_cost", precision = 14, scale = 2)
+    private BigDecimal accumulatedCost;
+
+    /** 单位成本 = accumulatedCost / producedQuantity; null=无成本数据 (单元 A.2 地基) */
+    @Column(name = "unit_cost", precision = 14, scale = 4)
+    private BigDecimal unitCost;
+
     @Column(name = "unit", length = 16)
     private String unit;
 
