@@ -38,8 +38,14 @@ import asyncpg
 logger = logging.getLogger(__name__)
 
 
-def _validate_range(start: date, end: date) -> None:
-    if start > end:
+def _validate_range(start: Optional[date], end: Optional[date]) -> None:
+    """Guard a (start, end) range.
+
+    WS1: dates are optional — a None bound means "open" (= all history on
+    that side). The only invalid case is BOTH bounds present AND inverted
+    (start > end).
+    """
+    if start is not None and end is not None and start > end:
         raise ValueError(f"start {start} > end {end}")
 
 
@@ -58,19 +64,27 @@ async def daily_trend(
     """
     start, end = date_range
     _validate_range(start, end)
+    conds = ["factory_id = $1"]
+    params: list = [factory_id]
+    if start is not None:
+        params.append(start)
+        conds.append(f"date >= ${len(params)}")
+    if end is not None:
+        params.append(end)
+        conds.append(f"date <= ${len(params)}")
+    where = " AND ".join(conds)
     async with pool.acquire() as conn:
         rows = await conn.fetch(
-            """
+            f"""
             SELECT date,
                    SUM(net_amount)::numeric(18,2) AS revenue,
                    SUM(bill_count)                AS bill_count
               FROM agg_daily
-             WHERE factory_id = $1
-               AND date BETWEEN $2 AND $3
+             WHERE {where}
              GROUP BY date
              ORDER BY date
             """,
-            factory_id, start, end,
+            *params,
         )
     points = []
     for r in rows:
@@ -85,8 +99,8 @@ async def daily_trend(
         })
     return {
         "factory_id": factory_id,
-        "start_date": start.isoformat(),
-        "end_date": end.isoformat(),
+        "start_date": start.isoformat() if start is not None else None,
+        "end_date": end.isoformat() if end is not None else None,
         "points": points,
     }
 
@@ -139,9 +153,23 @@ async def top_products(
     # Whitelist the order direction to avoid interpolating raw user input into SQL.
     direction = "ASC" if str(order).lower() == "asc" else "DESC"
     # agg_product.month is always first-of-month; pick months where
-    # first-of-month ≤ end AND month ≥ first-of-start-month.
-    start_m = start.replace(day=1)
-    end_m = end.replace(day=1)
+    # first-of-month ≤ end AND month ≥ first-of-start-month. A None bound
+    # means no filter on that side (= all history).
+    start_m = start.replace(day=1) if start is not None else None
+    end_m = end.replace(day=1) if end is not None else None
+    # Build the date filter conditionally; remaining params (top_n) are
+    # appended AFTER so $N renumbers correctly.
+    month_conds = ["a.factory_id = $1"]
+    params: list = [factory_id]
+    if start_m is not None:
+        params.append(start_m)
+        month_conds.append(f"a.month >= ${len(params)}")
+    if end_m is not None:
+        params.append(end_m)
+        month_conds.append(f"a.month <= ${len(params)}")
+    month_where = " AND ".join(month_conds)
+    params.append(int(top_n))
+    limit_ph = f"${len(params)}"
     async with pool.acquire() as conn:
         rows = await conn.fetch(
             f"""
@@ -168,8 +196,7 @@ async def top_products(
                   JOIN dim_product p ON p.product_id = a.product_id
                   LEFT JOIN dim_canonical_dish cd
                          ON cd.canonical_dish_id = p.canonical_dish_id
-                 WHERE a.factory_id = $1
-                   AND a.month BETWEEN $2 AND $3
+                 WHERE {month_where}
                  GROUP BY COALESCE('c' || p.canonical_dish_id::text,
                                    'p' || p.product_id::text),
                           COALESCE(cd.canonical_name, p.name)
@@ -208,14 +235,14 @@ async def top_products(
                    LIMIT 1
               ) fp ON TRUE
              ORDER BY g.revenue {direction}
-             LIMIT $4
+             LIMIT {limit_ph}
             """,
-            factory_id, start_m, end_m, int(top_n),
+            *params,
         )
     return {
         "factory_id": factory_id,
-        "start_month": start_m.isoformat(),
-        "end_month": end_m.isoformat(),
+        "start_month": start_m.isoformat() if start_m is not None else None,
+        "end_month": end_m.isoformat() if end_m is not None else None,
         "top_products": [
             {
                 # product_id is the group's representative product (MIN over
@@ -266,22 +293,32 @@ async def channel_breakdown(
     """
     start, end = date_range
     _validate_range(start, end)
+    conds = ["a.factory_id = $1"]
+    params: list = [factory_id]
+    if start is not None:
+        params.append(start)
+        conds.append(f"a.date >= ${len(params)}")
+    if end is not None:
+        params.append(end)
+        conds.append(f"a.date <= ${len(params)}")
+    where = " AND ".join(conds)
+    params.append(int(top_n))
+    limit_ph = f"${len(params)}"
     async with pool.acquire() as conn:
         rows = await conn.fetch(
-            """
+            f"""
             SELECT c.channel_id,
                    c.name,
                    SUM(a.amount)::numeric(18,2) AS amount,
                    SUM(a.bill_count)            AS bill_count
               FROM agg_channel a
               JOIN dim_payment_channel c ON c.channel_id = a.channel_id
-             WHERE a.factory_id = $1
-               AND a.date BETWEEN $2 AND $3
+             WHERE {where}
              GROUP BY c.channel_id, c.name
              ORDER BY SUM(a.amount) DESC
-             LIMIT $4
+             LIMIT {limit_ph}
             """,
-            factory_id, start, end, int(top_n),
+            *params,
         )
     total = sum(Decimal(r["amount"]) for r in rows)
     channels = []
@@ -297,8 +334,8 @@ async def channel_breakdown(
         })
     return {
         "factory_id": factory_id,
-        "start_date": start.isoformat(),
-        "end_date": end.isoformat(),
+        "start_date": start.isoformat() if start is not None else None,
+        "end_date": end.isoformat() if end is not None else None,
         "total_amount": float(total),
         "channels": channels,
     }
@@ -324,24 +361,34 @@ async def discount_breakdown(
     """
     start, end = date_range
     _validate_range(start, end)
-    start_m = start.replace(day=1)
-    end_m = end.replace(day=1)
+    start_m = start.replace(day=1) if start is not None else None
+    end_m = end.replace(day=1) if end is not None else None
+    conds = ["a.factory_id = $1"]
+    params: list = [factory_id]
+    if start_m is not None:
+        params.append(start_m)
+        conds.append(f"a.month >= ${len(params)}")
+    if end_m is not None:
+        params.append(end_m)
+        conds.append(f"a.month <= ${len(params)}")
+    where = " AND ".join(conds)
+    params.append(int(top_n))
+    limit_ph = f"${len(params)}"
     async with pool.acquire() as conn:
         rows = await conn.fetch(
-            """
+            f"""
             SELECT d.discount_id,
                    d.name,
                    SUM(a.amount)::numeric(18,2) AS amount,
                    SUM(a.bill_count)            AS bill_count
               FROM agg_discount a
               JOIN dim_discount d ON d.discount_id = a.discount_id
-             WHERE a.factory_id = $1
-               AND a.month BETWEEN $2 AND $3
+             WHERE {where}
              GROUP BY d.discount_id, d.name
              ORDER BY SUM(a.amount) DESC
-             LIMIT $4
+             LIMIT {limit_ph}
             """,
-            factory_id, start_m, end_m, int(top_n),
+            *params,
         )
     total = sum(Decimal(r["amount"]) for r in rows)
     items = []
@@ -357,8 +404,8 @@ async def discount_breakdown(
         })
     return {
         "factory_id": factory_id,
-        "start_date": start.isoformat(),
-        "end_date": end.isoformat(),
+        "start_date": start.isoformat() if start is not None else None,
+        "end_date": end.isoformat() if end is not None else None,
         "total_amount": float(total),
         "discounts": items,
     }
@@ -378,9 +425,18 @@ async def kpi_summary(
     """
     start, end = date_range
     _validate_range(start, end)
+    conds = ["factory_id = $1"]
+    params: list = [factory_id]
+    if start is not None:
+        params.append(start)
+        conds.append(f"date >= ${len(params)}")
+    if end is not None:
+        params.append(end)
+        conds.append(f"date <= ${len(params)}")
+    where = " AND ".join(conds)
     async with pool.acquire() as conn:
         daily = await conn.fetchrow(
-            """
+            f"""
             SELECT
               COALESCE(SUM(net_amount), 0)::numeric(18,2) AS revenue,
               COALESCE(SUM(bill_count), 0)               AS bills,
@@ -389,10 +445,9 @@ async def kpi_summary(
               COUNT(DISTINCT store_id)                   AS stores,
               COUNT(DISTINCT date)                       AS days
             FROM agg_daily
-            WHERE factory_id = $1
-              AND date BETWEEN $2 AND $3
+            WHERE {where}
             """,
-            factory_id, start, end,
+            *params,
         )
     revenue = Decimal(daily["revenue"])
     bills = int(daily["bills"])
@@ -404,8 +459,8 @@ async def kpi_summary(
 
     return {
         "factory_id": factory_id,
-        "start_date": start.isoformat(),
-        "end_date": end.isoformat(),
+        "start_date": start.isoformat() if start is not None else None,
+        "end_date": end.isoformat() if end is not None else None,
         "revenue": float(revenue),
         "bill_count": bills,
         "item_count": items,
@@ -470,22 +525,28 @@ async def order_type_mix(
     """
     start, end = date_range
     _validate_range(start, end)
-    if start is None or end is None:
-        raise ValueError("order_type_mix: start/end dates are required")
+    conds = ["factory_id = $1"]
+    params: list = [factory_id]
+    if start is not None:
+        params.append(start)
+        conds.append(f"date >= ${len(params)}")
+    if end is not None:
+        params.append(end)
+        conds.append(f"date <= ${len(params)}")
+    conds.append("order_type IS NOT NULL")
+    where = " AND ".join(conds)
     async with pool.acquire() as conn:
         rows = await conn.fetch(
-            """
+            f"""
             SELECT order_type,
                    COALESCE(SUM(actual_receive), 0)::numeric(18,2) AS amt,
                    COALESCE(SUM(bill_count), 0)                    AS bills
               FROM agg_daily_order_type_meal
-             WHERE factory_id = $1
-               AND date BETWEEN $2 AND $3
-               AND order_type IS NOT NULL
+             WHERE {where}
              GROUP BY order_type
              ORDER BY amt DESC
             """,
-            factory_id, start, end,
+            *params,
         )
     total = sum((Decimal(str(r["amt"])) for r in rows), Decimal("0"))
     types = []
@@ -504,8 +565,8 @@ async def order_type_mix(
         })
     return {
         "factory_id": factory_id,
-        "start_date": start.isoformat(),
-        "end_date": end.isoformat(),
+        "start_date": start.isoformat() if start is not None else None,
+        "end_date": end.isoformat() if end is not None else None,
         "total_revenue": float(total),
         "order_types": types,
     }
@@ -530,11 +591,21 @@ async def staff_ranking(
     """
     start, end = date_range
     _validate_range(start, end)
-    if start is None or end is None:
-        raise ValueError("staff_ranking: start/end dates are required")
+    conds = ["t.factory_id = $1"]
+    params: list = [factory_id]
+    if start is not None:
+        params.append(start)
+        conds.append(f"t.date >= ${len(params)}")
+    if end is not None:
+        params.append(end)
+        conds.append(f"t.date <= ${len(params)}")
+    conds.append("t.staff_id IS NOT NULL")
+    where = " AND ".join(conds)
+    params.append(int(top_n))
+    limit_ph = f"${len(params)}"
     async with pool.acquire() as conn:
         rows = await conn.fetch(
-            """
+            f"""
             SELECT COALESCE(s.name, t.staff_id::text) AS name,
                    COALESCE(SUM(t.net_amount), 0)::numeric(18,2) AS net,
                    COUNT(*)                                        AS bills
@@ -542,14 +613,12 @@ async def staff_ranking(
               LEFT JOIN dim_staff s
                      ON s.staff_id = t.staff_id
                     AND s.factory_id = t.factory_id
-             WHERE t.factory_id = $1
-               AND t.date BETWEEN $2 AND $3
-               AND t.staff_id IS NOT NULL
+             WHERE {where}
              GROUP BY COALESCE(s.name, t.staff_id::text)
              ORDER BY net DESC
-             LIMIT $4
+             LIMIT {limit_ph}
             """,
-            factory_id, start, end, int(top_n),
+            *params,
         )
     staff = [
         {
@@ -561,8 +630,8 @@ async def staff_ranking(
     ]
     return {
         "factory_id": factory_id,
-        "start_date": start.isoformat(),
-        "end_date": end.isoformat(),
+        "start_date": start.isoformat() if start is not None else None,
+        "end_date": end.isoformat() if end is not None else None,
         "staff": staff,
         "caveat": "POS 数据按开单操作员(收银/点菜)记账, 非服务员业绩归因; 仅供操作量参考。",
     }
@@ -595,37 +664,57 @@ async def finance_summary(
     start, end = date_range
     _validate_range(start, end)
 
+    # Shared dynamic date params (None bound = no filter on that side =
+    # all history). The two queries use different column aliases (bare
+    # `date` vs `a.date`) but the SAME $N param order, so we build the
+    # param list once and two parallel WHERE fragments.
+    params: list = [factory_id]
+    totals_conds = ["factory_id = $1"]
+    stores_conds = ["a.factory_id = $1"]
+    if start is not None:
+        params.append(start)
+        totals_conds.append(f"date >= ${len(params)}")
+        stores_conds.append(f"a.date >= ${len(params)}")
+    if end is not None:
+        params.append(end)
+        totals_conds.append(f"date <= ${len(params)}")
+        stores_conds.append(f"a.date <= ${len(params)}")
+    totals_where = " AND ".join(totals_conds)
+    stores_where = " AND ".join(stores_conds)
+    # top_n_stores comes AFTER the dynamic date params → renumbered $N.
+    params.append(int(top_n_stores))
+    limit_ph = f"${len(params)}"
+
     async with pool.acquire() as conn:
-        # Grand totals + row counts.
+        # Grand totals + row counts. Uses only the date params (drops the
+        # trailing top_n_stores limit param via the slice).
         totals = await conn.fetchrow(
-            """
+            f"""
             SELECT
               COALESCE(SUM(net_amount), 0)::numeric(18,2)  AS total_revenue,
               COALESCE(SUM(bill_count), 0)                 AS bill_count,
               COUNT(DISTINCT store_id)                     AS store_count,
               COUNT(DISTINCT date)                         AS day_count
             FROM agg_daily
-            WHERE factory_id = $1
-              AND date BETWEEN $2 AND $3
+            WHERE {totals_where}
             """,
-            factory_id, start, end,
+            *params[:-1],
         )
 
         top_stores = await conn.fetch(
-            """
+            f"""
             SELECT a.store_id,
                    s.name AS store_name,
                    SUM(a.net_amount)::numeric(18,2) AS revenue,
                    SUM(a.bill_count)                AS bill_count
               FROM agg_daily a
               JOIN dim_store s ON s.store_id = a.store_id
-             WHERE a.factory_id = $1
-               AND a.date BETWEEN $2 AND $3
+             WHERE {stores_where}
              GROUP BY a.store_id, s.name
              ORDER BY SUM(a.net_amount) DESC
-             LIMIT $4
+             LIMIT {limit_ph}
             """,
-            factory_id, start, end, int(top_n_stores),
+            *params,
         )
 
     total_revenue = Decimal(totals["total_revenue"])
@@ -637,8 +726,8 @@ async def finance_summary(
 
     return {
         "factory_id": factory_id,
-        "start_date": start.isoformat(),
-        "end_date": end.isoformat(),
+        "start_date": start.isoformat() if start is not None else None,
+        "end_date": end.isoformat() if end is not None else None,
         "total_revenue": float(total_revenue),
         "bill_count": bill_count,
         "avg_bill_value": float(avg_bill_value) if avg_bill_value is not None else None,
