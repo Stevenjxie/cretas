@@ -36,7 +36,8 @@ import {
   DataAnalysis,
   Flag,
   Search,
-  MagicStick
+  MagicStick,
+  QuestionFilled
 } from '@element-plus/icons-vue';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
@@ -108,6 +109,15 @@ interface ChatMessage {
     factoryId: string;
     downloading?: boolean;  // local UI state during fetch
   };
+  // P1 conversational-depth (2026-06-02): gold-tool answers carry these.
+  // suggestedFollowups: clickable down-drill chips ({label shown, question sent}).
+  // glossary: term → 通俗定义 for the expandable 字段说明 block + local meta-Q answers.
+  // chartGuide: one-liner explaining how to read the chart.
+  suggestedFollowups?: Array<{ label: string; question: string }>;
+  glossary?: Record<string, string>;
+  chartGuide?: string;
+  // UI local state for the expandable 字段说明/怎么看图 block.
+  depthExpanded?: boolean;
 }
 
 // 当前分析上下文 (用于连续对话)
@@ -702,6 +712,30 @@ async function tryJavaIntentChat(
       if (_toolChart?.option) {
         msg.chartConfig = _toolChart as ChartConfig;
       }
+      // P1 (2026-06-02): conversational-depth fields. Gold tools return their
+      // map DIRECTLY as resultData (no .data wrapper) — same as chartConfig.
+      // Report-style tools (buildSimpleResult) put them under resultData.data.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const _rd = res.resultData as any;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const _td = toolData as any;
+      const _followups = _rd?.suggestedFollowups ?? _td?.suggestedFollowups;
+      if (Array.isArray(_followups) && _followups.length > 0) {
+        msg.suggestedFollowups = _followups
+          .filter((f: unknown) => f && typeof (f as { question?: unknown }).question === 'string')
+          .map((f: { label?: string; question: string }) => ({
+            label: String(f.label ?? f.question),
+            question: String(f.question),
+          }));
+      }
+      const _glossary = _rd?.glossary ?? _td?.glossary;
+      if (_glossary && typeof _glossary === 'object' && !Array.isArray(_glossary)) {
+        msg.glossary = _glossary as Record<string, string>;
+      }
+      const _chartGuide = _rd?.chartGuide ?? _td?.chartGuide;
+      if (typeof _chartGuide === 'string' && _chartGuide.trim()) {
+        msg.chartGuide = _chartGuide;
+      }
       if (!downloadUrl) {
         const rawMsg = res.message || '';
         const jsonStart = rawMsg.indexOf('{');
@@ -714,6 +748,16 @@ async function tryJavaIntentChat(
             if (inner?.summary && typeof inner.summary === 'object') summary = inner.summary;
             if (inner?.preview && typeof inner.preview === 'object') preview = inner.preview;
             if (inner?.chartConfig?.option) msg.chartConfig = inner.chartConfig as ChartConfig;
+            // P1 (2026-06-02): cached map carries depth fields too — capture from inner.
+            if (Array.isArray(inner?.suggestedFollowups)) {
+              msg.suggestedFollowups = inner.suggestedFollowups
+                .filter((f: { question?: unknown }) => f && typeof f.question === 'string')
+                .map((f: { label?: string; question: string }) => ({
+                  label: String(f.label ?? f.question), question: String(f.question),
+                }));
+            }
+            if (inner?.glossary && typeof inner.glossary === 'object') msg.glossary = inner.glossary;
+            if (typeof inner?.chartGuide === 'string') msg.chartGuide = inner.chartGuide;
             const cleanMsg = parsed.data?.message ?? parsed.message;
             if (typeof cleanMsg === 'string' && cleanMsg.trim()) displayMessage = cleanMsg;
           } catch {
@@ -815,10 +859,75 @@ async function tryJavaIntentChat(
   }
 }
 
+// P1 (2026-06-02): local meta-question resolver. Answers "这个字段什么意思" /
+// "这张图说明什么" from the LAST assistant answer's glossary/chartGuide with
+// ZERO LLM/API calls. Falls through (returns false) when it can't answer
+// locally, so the normal pipeline runs instead.
+const META_FIELD_PATTERNS = [/(.+?)\s*(是什么意思|什么意思|是啥|是什么|怎么算|怎么理解|指的是什么)/];
+const META_CHART_PATTERNS = [/(这张图|这个图|图表|图)(说明|表示|代表|怎么看|看什么|什么意思)/];
+
+function lastAssistantAnswer(): ChatMessage | undefined {
+  for (let i = chatHistory.value.length - 1; i >= 0; i--) {
+    const m = chatHistory.value[i];
+    if (m.role === 'assistant' && !m.loading && !m.streaming) return m;
+  }
+  return undefined;
+}
+
+function tryLocalMetaAnswer(query: string): boolean {
+  const prev = lastAssistantAnswer();
+  if (!prev) return false;
+  const q = query.trim();
+
+  // (a) "这张图说明什么 / 怎么看这张图" → chartGuide
+  if (META_CHART_PATTERNS.some((re) => re.test(q)) && prev.chartGuide) {
+    pushLocalAssistant(`关于上一张图：${prev.chartGuide}`);
+    return true;
+  }
+
+  // (b) "X 什么意思" → glossary[X] (substring match, longest term wins)
+  if (prev.glossary && Object.keys(prev.glossary).length > 0) {
+    for (const pat of META_FIELD_PATTERNS) {
+      const m = q.match(pat);
+      if (m && m[1]) {
+        const asked = m[1].trim();
+        const terms = Object.keys(prev.glossary).sort((a, b) => b.length - a.length);
+        const hit = terms.find((t) => asked.includes(t) || t.includes(asked));
+        if (hit) {
+          pushLocalAssistant(`「${hit}」：${prev.glossary[hit]}`);
+          return true;
+        }
+      }
+    }
+    // (c) bare term lookup: query itself IS a glossary term (e.g. user types "差评率")
+    const direct = Object.keys(prev.glossary).find((t) => t === q);
+    if (direct) {
+      pushLocalAssistant(`「${direct}」：${prev.glossary[direct]}`);
+      return true;
+    }
+  }
+  return false;
+}
+
+// Render a synthetic assistant bubble without any backend call.
+function pushLocalAssistant(content: string) {
+  // Echo the user's question first (mirror handleSendMessage's user-echo).
+  chatHistory.value.push({
+    id: `u-${Date.now()}`, role: 'user', content: inputQuery.value.trim(), timestamp: new Date(),
+  });
+  chatHistory.value.push({
+    id: `a-${Date.now()}`, role: 'assistant', content, timestamp: new Date(),
+  });
+  inputQuery.value = '';
+  nextTick(() => scrollToBottom());
+}
+
 // 发送消息
 async function handleSendMessage() {
   const query = inputQuery.value.trim();
   if (!query) return;
+  // P1: try local glossary/chartGuide answer first (0 LLM).
+  if (tryLocalMetaAnswer(query)) return;
 
   // Route to NL2SQL handler if in SQL mode
   if (nl2sqlMode.value) {
@@ -1212,8 +1321,9 @@ function formatDataSourceLabel(ds: UploadHistoryItem): string {
   return parts.join(' · ');
 }
 
-// 暴露给父组件调用
-defineExpose({ setAnalysisContext });
+// 暴露给父组件调用。inputQuery / handleSendMessage / chatHistory 额外暴露供
+// 单元测试驱动消息管线 (P1 AIQuery.depth.spec.ts)，生产代码不依赖。
+defineExpose({ setAnalysisContext, inputQuery, handleSendMessage, chatHistory });
 
 // 渲染图表 (从 ChartConfig)
 // Defensive chart-layout normalizer (Jun 2026): some Python templates emit
@@ -1717,6 +1827,33 @@ function handleKeydown(event: KeyboardEvent) {
                   <div :id="`chart-${message.id}`" class="chart-container"></div>
                 </div>
 
+                <!-- P1 (2026-06-02): expandable 字段说明 / 怎么看这张图 (zero extra call). -->
+                <div
+                  v-if="message.role === 'assistant' && !message.loading && !message.streaming && ((message.glossary && Object.keys(message.glossary).length > 0) || message.chartGuide)"
+                  class="message-depth-block"
+                >
+                  <el-link
+                    type="info"
+                    :underline="false"
+                    class="depth-toggle"
+                    @click="message.depthExpanded = !message.depthExpanded"
+                  >
+                    <el-icon><QuestionFilled /></el-icon>
+                    {{ message.depthExpanded ? '收起说明' : '字段说明 / 怎么看这张图' }}
+                  </el-link>
+                  <div v-show="message.depthExpanded" class="depth-content">
+                    <div v-if="message.chartGuide" class="depth-chart-guide">
+                      <strong>怎么看这张图：</strong>{{ message.chartGuide }}
+                    </div>
+                    <dl v-if="message.glossary && Object.keys(message.glossary).length > 0" class="depth-glossary">
+                      <template v-for="(def, term) in message.glossary" :key="term">
+                        <dt>{{ term }}</dt>
+                        <dd>{{ def }}</dd>
+                      </template>
+                    </dl>
+                  </div>
+                </div>
+
                 <!-- NL2SQL 结果面板 -->
                 <div v-if="message.sqlResult" class="sql-result-panel">
                   <div class="sql-meta">
@@ -1799,6 +1936,27 @@ function handleKeydown(event: KeyboardEvent) {
                     @click="triggerRelatedFollowup(q)"
                   >
                     {{ q }}
+                  </el-button>
+                </div>
+
+                <!-- P1 (2026-06-02): gold-tool dynamic follow-up chips.
+                     Independent of materialized_cache source — gold answers
+                     carry suggestedFollowups directly. -->
+                <div
+                  v-if="message.role === 'assistant' && !message.loading && !message.streaming && (message.suggestedFollowups?.length ?? 0) > 0"
+                  class="message-related-followups"
+                >
+                  <span class="related-label">继续追问:</span>
+                  <el-button
+                    v-for="(f, i) in message.suggestedFollowups"
+                    :key="i"
+                    size="small"
+                    type="info"
+                    plain
+                    round
+                    @click="triggerRelatedFollowup(f.question)"
+                  >
+                    {{ f.label }}
                   </el-button>
                 </div>
 
@@ -2198,6 +2356,35 @@ function handleKeydown(event: KeyboardEvent) {
       width: 100%;
       min-width: 300px;
     }
+  }
+
+  /* P1 (2026-06-02): expandable 字段说明 / 怎么看这张图 block. */
+  .message-depth-block {
+    margin-top: 8px;
+  }
+  .depth-toggle {
+    font-size: 12px;
+  }
+  .depth-content {
+    margin-top: 6px;
+    padding: 8px 12px;
+    background: #f5f7fa;
+    border-radius: 6px;
+    font-size: 13px;
+    line-height: 1.6;
+  }
+  .depth-chart-guide {
+    margin-bottom: 6px;
+    color: #303133;
+  }
+  .depth-glossary dt {
+    font-weight: 600;
+    color: #303133;
+    margin-top: 4px;
+  }
+  .depth-glossary dd {
+    margin: 0 0 4px 0;
+    color: #606266;
   }
 
   .message-table {
