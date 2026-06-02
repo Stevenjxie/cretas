@@ -1425,6 +1425,13 @@ const businessRoutes: RouteRecordRaw[] = [
             meta: { requiresAuth: true, title: '菜品分析', module: 'restaurant' }
           },
           {
+            // IA v2: 平台口碑 (原 经营与平台分析, 明标需接平台数据)
+            path: 'analytics/platform',
+            name: 'RestaurantPlatform',
+            component: () => import('@/views/restaurant/analytics/platform.vue'),
+            meta: { requiresAuth: true, title: '平台口碑', module: 'restaurant' }
+          },
+          {
             // IA v2: 旧四象限 → 菜品分析 quadrant tab (保留 query)
             path: 'analytics/menu',
             name: 'RestaurantMenuBoard',
@@ -1437,10 +1444,10 @@ const businessRoutes: RouteRecordRaw[] = [
             meta: { requiresAuth: true, title: '门店对比', module: 'restaurant' }
           },
           {
+            // IA v2: 旧点评页 → 平台口碑 (保留 query)
             path: 'analytics/dianping',
             name: 'RestaurantDianpingGap',
-            component: () => import('@/views/restaurant/analytics/dianping-gap.vue'),
-            meta: { requiresAuth: true, title: '经营与平台分析', module: 'restaurant' }
+            redirect: (to) => ({ path: '/restaurant/analytics/platform', query: { ...to.query } }),
           },
           {
             // IA v2: 旧菜品毛利 → 菜品分析 margin tab (保留 query)
