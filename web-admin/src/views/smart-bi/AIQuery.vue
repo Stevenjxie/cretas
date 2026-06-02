@@ -716,15 +716,40 @@ async function tryJavaIntentChat(
       if (_toolChart?.option) {
         msg.chartConfig = _toolChart as ChartConfig;
       }
-      // P2 综合分析: tools may return MULTIPLE charts under resultData.charts
-      // (each {type,title,option}). Render them as a stack.
+      // P2 综合分析: tools may return MULTIPLE charts under resultData.charts.
+      // Two shapes: (a) gold-style {type,title,option:{…ECharts}} and (b)
+      // synthesis/restaurant_ops-style {chartType,title,xAxis:{data},series}
+      // with ECharts fields INLINE (no .option). Normalize (b) → renderable
+      // .option here so renderChartFromConfig (+normalizeChartLayout) can draw it.
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const _toolCharts = (res.resultData as any)?.charts ?? (toolData as any)?.charts;
-      if (Array.isArray(_toolCharts)) {
-        const valid = _toolCharts.filter(
-          (c: any) => c && c.option && typeof c.option === 'object',
-        ) as ChartConfig[];
-        if (valid.length) msg.charts = valid;
+      if (Array.isArray(_toolCharts) && _toolCharts.length) {
+        const built: ChartConfig[] = [];
+        for (const c of _toolCharts as any[]) {
+          if (!c) continue;
+          if (c.option && typeof c.option === 'object') {
+            built.push(c as ChartConfig);
+            continue;
+          }
+          if (!c.series && !c.data) continue;
+          const ct = c.chartType || c.type || 'bar';
+          const opt: Record<string, unknown> = { title: { text: c.title, left: 'center' } };
+          if (ct === 'pie') {
+            const pd = (Array.isArray(c.series) && c.series[0]?.data) || c.data || [];
+            opt.tooltip = { trigger: 'item', formatter: '{b}: {c} ({d}%)' };
+            opt.legend = { top: 'bottom' };
+            opt.series = [{ type: 'pie', radius: '60%', data: pd }];
+          } else {
+            opt.tooltip = { trigger: 'axis' };
+            opt.xAxis = { type: 'category', data: (c.xAxis && c.xAxis.data) || c.xAxis || [] };
+            opt.yAxis = c.yAxis || { type: 'value' };
+            opt.series = (c.series || []).map((s: any) => ({
+              name: s.name, type: s.type || ct, data: s.data,
+            }));
+          }
+          built.push({ type: ct, title: c.title, option: opt } as ChartConfig);
+        }
+        if (built.length) msg.charts = built;
       }
       // P1 (2026-06-02): conversational-depth fields. Gold tools return their
       // map DIRECTLY as resultData (no .data wrapper) — same as chartConfig.
