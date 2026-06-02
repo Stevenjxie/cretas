@@ -39,6 +39,7 @@ export interface WorkProcessTask {
   processCategory?: string | null;
   standardYieldMin?: number | null; // Task 0 透出: A7 标准出成率下限 (null=未配)
   standardYieldMax?: number | null; // Task 0 透出: A7 标准出成率上限 (null=未配)
+  outputUnit?: string | null;       // P0-2: 工序产出单位 (kg→份/盒, join 透出; null=沿用投入单位)
   plannedStartAt?: string | null;
   plannedEndAt?: string | null;
   actualStartAt?: string | null;

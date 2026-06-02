@@ -90,6 +90,7 @@ public class ProductTypeServiceImpl implements ProductTypeService {
         productType.setImageUrl(dto.getImageUrl());
         productType.setProductCategory(dto.getProductCategory());
         productType.setTemperatureZone(dto.getTemperatureZone());
+        productType.setGramsPerUnit(dto.getGramsPerUnit());
         productType.setNotes(dto.getNotes());
         productType.setIsActive(true);
         productType.setCreatedBy(dto.getCreatedBy() != null ? Long.valueOf(dto.getCreatedBy()) : null);
@@ -157,6 +158,7 @@ public class ProductTypeServiceImpl implements ProductTypeService {
         if (dto.getImageUrl() != null) productType.setImageUrl(dto.getImageUrl());
         if (dto.getProductCategory() != null) productType.setProductCategory(dto.getProductCategory());
         if (dto.getTemperatureZone() != null) productType.setTemperatureZone(dto.getTemperatureZone());
+        if (dto.getGramsPerUnit() != null) productType.setGramsPerUnit(dto.getGramsPerUnit());
 
         // Sprint 2 S2-1: Form Template Association
         if (dto.getFormTemplateId() != null) productType.setFormTemplateId(dto.getFormTemplateId());
@@ -493,6 +495,7 @@ public class ProductTypeServiceImpl implements ProductTypeService {
                 .specification(productType.getSpecification())
                 .productCategory(productType.getProductCategory())
                 .temperatureZone(productType.getTemperatureZone())
+                .gramsPerUnit(productType.getGramsPerUnit())
                 .isActive(productType.getIsActive())
                 .notes(productType.getNotes())
                 .createdBy(productType.getCreatedBy())

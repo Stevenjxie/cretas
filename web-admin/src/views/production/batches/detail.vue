@@ -185,9 +185,17 @@ const displayActualQuantity = computed(() =>
 const displayActualUnit = computed(() =>
   hasYield.value ? (yieldData.value.lastStepOutputUnit || '') : (batch.value?.unit || ''));
 // audit YIELD-1: 跨单位 cumulative=null 显 —, 不能 *100 (null*100===0 会误显 0.0%)
+// P0-2: 跨单位且无 cumulative → 标"跨单位不可比, 需配产品标准克重" (诚实, 不显 0/—)
 const cumulativeDisplay = computed(() => {
-  const r = yieldData.value?.cumulativeYieldRate;
-  return r == null ? '—' : formatPercent(r * 100);
+  const yd = yieldData.value;
+  const r = yd?.cumulativeYieldRate;
+  if (r != null) return formatPercent(r * 100);
+  const inU = yd?.firstStepInputUnit;
+  const outU = yd?.lastStepOutputUnit;
+  if (inU != null && outU != null && inU !== outU) {
+    return '跨单位不可比, 需配产品标准克重';
+  }
+  return '—';
 });
 
 function getTimelineIcon(type: string) {

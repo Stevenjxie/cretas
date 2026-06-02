@@ -122,6 +122,8 @@ const YieldStepReportScreen: React.FC = () => {
   }, [inputQty, currentTask, batchId]);
 
   const unit = currentTask?.plannedUnit ?? 'kg';
+  // P0-2: 本道产出单位 — 工序配了 outputUnit (如末道 kg→份/盒) 则用它, 否则沿用投入单位
+  const outUnit = currentTask?.outputUnit ?? unit;
   const planned = currentTask?.plannedQuantity ?? null;
   const inputMax = planned != null ? planned * OVER_RECEIVE_TOLERANCE : null;
   const inputMaxHint =
@@ -186,7 +188,7 @@ const YieldStepReportScreen: React.FC = () => {
       inputQuantity: Number.isNaN(input) ? 0 : input,
       inputUnit: unit,
       outputQuantity: output,
-      outputUnit: unit,
+      outputUnit: outUnit,
       ...(currentStepIndex === 0 && materialBatchRefs.length > 0
         ? {
             materialBatchRefs: materialBatchRefs.map((r: MaterialBatchRef) => ({
@@ -250,7 +252,7 @@ const YieldStepReportScreen: React.FC = () => {
     } finally {
       setSubmitting(false);
     }
-  }, [currentTask, outputQty, inputQty, unit, batchId, currentStepIndex, totalSteps, submitWithForce, materialBatchRefs]);
+  }, [currentTask, outputQty, inputQty, unit, outUnit, batchId, currentStepIndex, totalSteps, submitWithForce, materialBatchRefs]);
 
   const handleSettleDay = useCallback(async () => {
     setSubmitting(true);
@@ -297,6 +299,10 @@ const YieldStepReportScreen: React.FC = () => {
 
   if (phase === 'done') {
     const cum = yieldData?.cumulativeYieldRate;
+    // P0-2: 跨单位 (首道投入单位 ≠ 末道产出单位) 且无累计出成率 → 诚实标"跨单位不可比", 不显 0/—
+    const inU = yieldData?.firstStepInputUnit;
+    const outU = yieldData?.lastStepOutputUnit;
+    const crossUnitNoGrams = cum == null && inU != null && outU != null && inU !== outU;
     const cumPct = cum != null ? `${(cum * 100).toFixed(2)}%` : '—';
     return (
       <ScreenWrapper>
@@ -305,10 +311,18 @@ const YieldStepReportScreen: React.FC = () => {
             <Text style={styles.doneTitle}>✓ {totalSteps}/{totalSteps} 道全部报完</Text>
             <Text style={styles.doneProduct}>{productType || '—'}</Text>
             <Text style={styles.doneBatch}>{batchNumber}</Text>
-            <View style={styles.doneRow}>
-              <Text style={styles.doneLabel}>累计出成率</Text>
-              <Text style={styles.doneValue} testID="cumulative-yield-rate">{cumPct}</Text>
-            </View>
+            {crossUnitNoGrams ? (
+              <View style={styles.crossUnitBanner} testID="cumulative-cross-unit">
+                <Text style={styles.crossUnitText}>
+                  整批出成率: 跨单位不可比 (末道为 {outU}, 需在产品管理配产品标准克重后折算)
+                </Text>
+              </View>
+            ) : (
+              <View style={styles.doneRow}>
+                <Text style={styles.doneLabel}>累计出成率</Text>
+                <Text style={styles.doneValue} testID="cumulative-yield-rate">{cumPct}</Text>
+              </View>
+            )}
             {yieldData?.firstStepInput != null && yieldData?.lastStepOutput != null ? (
               <Text style={styles.doneFlow}>
                 {yieldData.firstStepInput}{yieldData.firstStepInputUnit ?? ''} → {yieldData.lastStepOutput}{yieldData.lastStepOutputUnit ?? ''}
@@ -414,11 +428,11 @@ const YieldStepReportScreen: React.FC = () => {
             label="产出量"
             value={outputQty}
             onChangeText={setOutputQty}
-            unit={unit}
+            unit={outUnit}
             max={outputHardCap}
             maxHint={
               outputHardCap != null
-                ? `产出超过物理上限 ${Math.round(outputHardCap)} ${unit} 不可提交 (疑似单位/数量误输)`
+                ? `产出超过物理上限 ${Math.round(outputHardCap)} ${outUnit} 不可提交 (疑似单位/数量误输)`
                 : null
             }
             disabled={submitting}
@@ -429,7 +443,7 @@ const YieldStepReportScreen: React.FC = () => {
           {outputOverHardCap ? (
             <View style={styles.hardcapBanner} testID="yield-hardcap-banner">
               <Text style={styles.hardcapText}>
-                产出量超过物理上限 {Math.round(outputHardCap ?? 0)} {unit}, 请核对 (疑似单位/数量错误)
+                产出量超过物理上限 {Math.round(outputHardCap ?? 0)} {outUnit}, 请核对 (疑似单位/数量错误)
               </Text>
             </View>
           ) : null}
@@ -488,6 +502,8 @@ const styles = StyleSheet.create({
   doneTitle: { fontSize: 20, fontWeight: '700', color: '#67C23A', marginBottom: 12 },
   doneProduct: { fontSize: 18, fontWeight: '600', color: '#1A1A1A' },
   doneBatch: { fontSize: 14, color: '#909399', marginTop: 4, marginBottom: 16 },
+  crossUnitBanner: { backgroundColor: '#FDF6EC', borderRadius: 8, padding: 12, marginTop: 8 },
+  crossUnitText: { fontSize: 14, color: '#E6A23C', fontWeight: '500', textAlign: 'center' },
   doneRow: { flexDirection: 'row', alignItems: 'baseline', marginTop: 8 },
   doneLabel: { fontSize: 15, color: '#606266', marginRight: 12 },
   doneValue: { fontSize: 28, fontWeight: '700', color: '#E8732E' },

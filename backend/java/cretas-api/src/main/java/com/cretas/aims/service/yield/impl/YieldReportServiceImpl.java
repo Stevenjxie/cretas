@@ -14,6 +14,7 @@ import com.cretas.aims.entity.workprocess.WorkProcessTask;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.FactorySettingsRepository;
 import com.cretas.aims.repository.MaterialBatchRepository;
+import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.ProductionReportRepository;
 import com.cretas.aims.repository.WorkProcessRepository;
 import com.cretas.aims.repository.workprocess.WorkProcessTaskRepository;
@@ -58,6 +59,7 @@ public class YieldReportServiceImpl implements YieldReportService {
     private final ProcessingService processingService;
     private final FactorySettingsRepository factorySettingsRepo;
     private final MaterialBatchRepository materialBatchRepository;
+    private final ProductTypeRepository productTypeRepository;
     private final ObjectMapper objectMapper;
 
     @Override
@@ -412,9 +414,29 @@ public class YieldReportServiceImpl implements YieldReportService {
     @Override
     public BatchYieldDTO getYield(String factoryId, Long batchId) {
         List<ProductionReport> reports = reportRepo.findYieldReportsByBatch(factoryId, batchId);
-        BatchYieldDTO dto = calcSvc.calculateBatchYield(reports, null);
+        // P0-2: 解析末道产品标准克重, 打通 kg↔份 折算 (跨单位且无克重时 cumulative 保持 null, 诚实)
+        BigDecimal gramsPerUnit = resolveGramsPerUnit(factoryId, reports);
+        BatchYieldDTO dto = calcSvc.calculateBatchYield(reports, gramsPerUnit);
         enrichProcessNames(factoryId, dto);
         return dto;
+    }
+
+    /**
+     * P0-2: 取末道报工的 productTypeId → ProductType.gramsPerUnit (份/盒→kg 折算系数).
+     * reports 为空 / 无 productTypeId / 产品无克重 → null (calc 据此保持 cumulative=null, 不臆造).
+     */
+    private BigDecimal resolveGramsPerUnit(String factoryId, List<ProductionReport> reports) {
+        if (reports == null || reports.isEmpty()) return null;
+        // 同批同产品, 取任一 report 的 productTypeId 即可
+        String productTypeId = reports.stream()
+                .map(ProductionReport::getProductTypeId)
+                .filter(Objects::nonNull)
+                .findFirst()
+                .orElse(null);
+        if (productTypeId == null) return null;
+        return productTypeRepository.findByIdAndFactoryId(productTypeId, factoryId)
+                .map(pt -> pt.getGramsPerUnit())
+                .orElse(null);
     }
 
     /** audit YIELD-4: 批量查 task→work_process→processName 回填 steps (避免 N+1). 查不到留 null, 前端 fallback. */
@@ -463,8 +485,10 @@ public class YieldReportServiceImpl implements YieldReportService {
         if (triggerComplete && batchYield.getLastStepOutput() != null
                 && batchYield.getLastStepOutput().compareTo(BigDecimal.ZERO) > 0) {
             BigDecimal lastOutput = batchYield.getLastStepOutput();
+            // P0-2: 成品按"末道产出单位"(份/盒) 入库, 份数原值入库 (订单达成率"份对份")
+            String finishedUnit = batchYield.getLastStepOutputUnit();
             processingService.completeProduction(factoryId, String.valueOf(batchId),
-                    lastOutput, lastOutput, BigDecimal.ZERO);
+                    lastOutput, lastOutput, BigDecimal.ZERO, finishedUnit);
             completed = true;
         }
         out.put("completed", completed);

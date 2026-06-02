@@ -52,6 +52,9 @@ public class ProductTypeDTO {
     @Schema(description = "温区: 常温, 冷藏, 冷冻")
     private String temperatureZone;
 
+    @Schema(description = "P0-2 标准克重: 1 份/盒 = X 克 (报工末道折算/成品入库换算用; null=无标准)")
+    private BigDecimal gramsPerUnit;
+
     private Boolean isActive;
     private String notes;
     private Long createdBy;

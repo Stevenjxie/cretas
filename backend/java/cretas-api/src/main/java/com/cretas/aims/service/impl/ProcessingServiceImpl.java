@@ -185,7 +185,15 @@ public class ProcessingServiceImpl implements ProcessingService {
     }
     public ProductionBatch completeProduction(String factoryId, String batchId, BigDecimal actualQuantity,
                                              BigDecimal goodQuantity, BigDecimal defectQuantity) {
-        log.info("完成生产: factoryId={}, batchId={}, actualQuantity={}", factoryId, batchId, actualQuantity);
+        // 默认重载: 不改批次成品单位 (沿用 batch.unit)
+        return completeProduction(factoryId, batchId, actualQuantity, goodQuantity, defectQuantity, null);
+    }
+
+    @Override
+    public ProductionBatch completeProduction(String factoryId, String batchId, BigDecimal actualQuantity,
+                                             BigDecimal goodQuantity, BigDecimal defectQuantity, String finishedUnit) {
+        log.info("完成生产: factoryId={}, batchId={}, actualQuantity={}, finishedUnit={}",
+                factoryId, batchId, actualQuantity, finishedUnit);
         Long id = parseBatchId(batchId);
         ProductionBatch batch = productionBatchRepository.findByIdAndFactoryId(id, factoryId)
                 .orElseThrow(() -> new ResourceNotFoundException("批次不存在"));
@@ -199,6 +207,11 @@ public class ProcessingServiceImpl implements ProcessingService {
         batch.setActualQuantity(actualQuantity);
         batch.setGoodQuantity(goodQuantity);
         batch.setDefectQuantity(defectQuantity);
+        // P0-2: 末道产出单位非空时, 成品按"末道产出单位"(如 份/盒)入库, 而非批次原单位 (kg)
+        // → createFinishedGoodsFromBatch 的 fg.setUnit(batch.getUnit()) 自动拿到正确单位
+        if (finishedUnit != null && !finishedUnit.isBlank()) {
+            batch.setUnit(finishedUnit);
+        }
         // 计算指标
         batch.calculateMetrics();
         ProductionBatch saved = productionBatchRepository.save(batch);

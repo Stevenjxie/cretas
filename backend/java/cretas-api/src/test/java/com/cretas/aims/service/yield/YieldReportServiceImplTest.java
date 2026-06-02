@@ -12,8 +12,12 @@ import com.cretas.aims.entity.WorkProcess;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
 import com.cretas.aims.entity.workprocess.WorkProcessTask;
 import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.entity.ProductType;
+import com.cretas.aims.entity.ProductionBatch;
+import com.cretas.aims.entity.enums.ProductionBatchStatus;
 import com.cretas.aims.repository.FactorySettingsRepository;
 import com.cretas.aims.repository.MaterialBatchRepository;
+import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.ProductionReportRepository;
 import com.cretas.aims.repository.WorkProcessRepository;
 import com.cretas.aims.repository.workprocess.WorkProcessTaskRepository;
@@ -46,6 +50,7 @@ class YieldReportServiceImplTest {
     private YieldCalculationService calcSvc;
     private FactorySettingsRepository factorySettingsRepo;
     private MaterialBatchRepository materialBatchRepo;
+    private ProductTypeRepository productTypeRepo;
     private ObjectMapper objectMapper;
     private YieldReportServiceImpl svc;
 
@@ -58,9 +63,10 @@ class YieldReportServiceImplTest {
         calcSvc = new YieldCalculationServiceImpl();
         factorySettingsRepo = mock(FactorySettingsRepository.class);
         materialBatchRepo = mock(MaterialBatchRepository.class);
+        productTypeRepo = mock(ProductTypeRepository.class);
         objectMapper = new ObjectMapper();
         svc = new YieldReportServiceImpl(reportRepo, taskRepo, processRepo, calcSvc, processingService,
-                factorySettingsRepo, materialBatchRepo, objectMapper);
+                factorySettingsRepo, materialBatchRepo, productTypeRepo, objectMapper);
     }
 
     private WorkProcessTask task(long id, int order, String wpId) {
@@ -798,6 +804,110 @@ class YieldReportServiceImplTest {
         assertThat(settled).hasSize(1);
         assertThat(settled.get(0).getSettled()).isTrue();
         assertThat(settled.get(0).getSettledAt()).isNotNull();
+    }
+
+    // ── P0-2: kg/份 单位换算 ──────────────────────────────────────────────────────
+
+    @Test
+    void getYield_resolvesGramsPerUnit_crossUnitCumulativeNonNull() {
+        // 末道 kg→份 (998kg → 382份), 产品配 gramsPerUnit=120 → cumulative = (382×120/1000)/998 折算
+        ProductionReport r1 = ProductionReport.builder()
+                .workProcessTaskId(50L).processOrder(1).productTypeId("PT-LU")
+                .inputQuantity(new BigDecimal("998")).inputUnit("kg")
+                .outputQuantity(new BigDecimal("935.5")).outputUnit("kg")
+                .build();
+        ProductionReport r2 = ProductionReport.builder()
+                .workProcessTaskId(51L).processOrder(2).productTypeId("PT-LU")
+                .inputQuantity(new BigDecimal("935.5")).inputUnit("kg")
+                .outputQuantity(new BigDecimal("382")).outputUnit("份")
+                .build();
+        when(reportRepo.findYieldReportsByBatch("F006", 7L)).thenReturn(List.of(r1, r2));
+        ProductType pt = new ProductType();
+        pt.setId("PT-LU"); pt.setFactoryId("F006"); pt.setGramsPerUnit(new BigDecimal("120"));
+        when(productTypeRepo.findByIdAndFactoryId("PT-LU", "F006")).thenReturn(Optional.of(pt));
+        when(taskRepo.findByFactoryIdAndIdIn(eq("F006"), any())).thenReturn(List.of());
+        when(processRepo.findAllById(any())).thenReturn(List.of());
+
+        BatchYieldDTO dto = svc.getYield("F006", 7L);
+
+        // cumulative = (382 × 120 / 1000) / 998 = 45.84 / 998 = 0.0459 (非 null = 折算成功)
+        assertThat(dto.getCumulativeYieldRate()).isNotNull();
+        verify(productTypeRepo).findByIdAndFactoryId("PT-LU", "F006");
+    }
+
+    @Test
+    void getYield_noGramsPerUnit_crossUnitCumulativeNull() {
+        // 末道 kg→份 但产品无 gramsPerUnit → cumulative 保持 null (诚实, 不臆造)
+        ProductionReport r1 = ProductionReport.builder()
+                .workProcessTaskId(52L).processOrder(1).productTypeId("PT-NOGRAM")
+                .inputQuantity(new BigDecimal("998")).inputUnit("kg")
+                .outputQuantity(new BigDecimal("935.5")).outputUnit("kg")
+                .build();
+        ProductionReport r2 = ProductionReport.builder()
+                .workProcessTaskId(53L).processOrder(2).productTypeId("PT-NOGRAM")
+                .inputQuantity(new BigDecimal("935.5")).inputUnit("kg")
+                .outputQuantity(new BigDecimal("382")).outputUnit("份")
+                .build();
+        when(reportRepo.findYieldReportsByBatch("F006", 8L)).thenReturn(List.of(r1, r2));
+        ProductType pt = new ProductType();
+        pt.setId("PT-NOGRAM"); pt.setFactoryId("F006"); pt.setGramsPerUnit(null);
+        when(productTypeRepo.findByIdAndFactoryId("PT-NOGRAM", "F006")).thenReturn(Optional.of(pt));
+        when(taskRepo.findByFactoryIdAndIdIn(eq("F006"), any())).thenReturn(List.of());
+        when(processRepo.findAllById(any())).thenReturn(List.of());
+
+        BatchYieldDTO dto = svc.getYield("F006", 8L);
+
+        assertThat(dto.getCumulativeYieldRate()).isNull();
+        assertThat(dto.getLastStepOutputUnit()).isEqualTo("份");
+    }
+
+    @Test
+    void settleDay_triggerComplete_passesLastOutputUnitAsFinishedUnit() {
+        // settle + triggerComplete=true: completeProduction 收到 finishedUnit=份 (末道产出单位)
+        ProductionReport r1 = ProductionReport.builder()
+                .workProcessTaskId(60L).processOrder(1).productTypeId("PT-LU")
+                .inputQuantity(new BigDecimal("998")).inputUnit("kg")
+                .outputQuantity(new BigDecimal("935.5")).outputUnit("kg")
+                .build();
+        ProductionReport r2 = ProductionReport.builder()
+                .workProcessTaskId(61L).processOrder(2).productTypeId("PT-LU")
+                .inputQuantity(new BigDecimal("935.5")).inputUnit("kg")
+                .outputQuantity(new BigDecimal("382")).outputUnit("份")
+                .build();
+        when(reportRepo.findUnsettledYieldReports(eq("F006"), eq(9L), any())).thenReturn(List.of());
+        when(reportRepo.findYieldReportsByBatch("F006", 9L)).thenReturn(List.of(r1, r2));
+        when(productTypeRepo.findByIdAndFactoryId("PT-LU", "F006")).thenReturn(Optional.empty());
+        when(taskRepo.findByFactoryIdAndIdIn(eq("F006"), any())).thenReturn(List.of());
+        when(processRepo.findAllById(any())).thenReturn(List.of());
+        when(processingService.completeProduction(anyString(), anyString(), any(), any(), any(), any()))
+                .thenReturn(new ProductionBatch());
+
+        Map<String, Object> out = svc.settleDay("F006", 9L, 5L, null, true);
+
+        assertThat(out.get("completed")).isEqualTo(true);
+        // 末道产出 382 份 → completeProduction(.., 382, 382, 0, "份")
+        verify(processingService).completeProduction(eq("F006"), eq("9"),
+                eq(new BigDecimal("382")), eq(new BigDecimal("382")), eq(BigDecimal.ZERO), eq("份"));
+    }
+
+    @Test
+    void settleDay_noTriggerComplete_doesNotComplete() {
+        ProductionReport r1 = ProductionReport.builder()
+                .workProcessTaskId(62L).processOrder(1).productTypeId("PT-LU")
+                .inputQuantity(new BigDecimal("100")).inputUnit("kg")
+                .outputQuantity(new BigDecimal("80")).outputUnit("kg")
+                .build();
+        when(reportRepo.findUnsettledYieldReports(eq("F006"), eq(10L), any())).thenReturn(List.of());
+        when(reportRepo.findYieldReportsByBatch("F006", 10L)).thenReturn(List.of(r1));
+        when(productTypeRepo.findByIdAndFactoryId(anyString(), anyString())).thenReturn(Optional.empty());
+        when(taskRepo.findByFactoryIdAndIdIn(eq("F006"), any())).thenReturn(List.of());
+        when(processRepo.findAllById(any())).thenReturn(List.of());
+
+        Map<String, Object> out = svc.settleDay("F006", 10L, 5L, null, false);
+
+        assertThat(out.get("completed")).isEqualTo(false);
+        verify(processingService, never()).completeProduction(anyString(), anyString(), any(), any(), any());
+        verify(processingService, never()).completeProduction(anyString(), anyString(), any(), any(), any(), any());
     }
 
     @Test

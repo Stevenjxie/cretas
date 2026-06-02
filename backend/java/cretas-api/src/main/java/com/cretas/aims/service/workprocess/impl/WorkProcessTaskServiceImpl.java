@@ -365,6 +365,7 @@ public class WorkProcessTaskServiceImpl implements WorkProcessTaskService {
             dto.setProcessCategory(definition.getProcessCategory());
             dto.setStandardYieldMin(definition.getStandardYieldMin());
             dto.setStandardYieldMax(definition.getStandardYieldMax());
+            dto.setOutputUnit(definition.getOutputUnit());  // P0-2: 末道折份/盒
         }
         return dto;
     }
