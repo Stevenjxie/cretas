@@ -406,6 +406,15 @@ class FactReconciler:
             else:
                 dev = abs(claimed - true_v) / abs(true_v)
             if dev > tol:
+                # 宁漏不错: if a store/branch qualifier appears just BEFORE the
+                # metric, this number is entity-scoped (e.g.
+                # "…（虹口龙之梦店）差评集中（64条" — that 64 is THIS store's count,
+                # not the global 差评 total), so rewriting it to the global fact
+                # would be a FALSE correction. Skip. (spec §5.5)
+                preceding = result[max(0, pos - 24): pos]
+                if "店" in preceding or "馆" in preceding or "门店" in preceding:
+                    search_from = pos + len(name)
+                    continue
                 # Insert annotation right after the matched number.
                 insert_at = pos + len(name) + m.end()
                 annot = _ANNOT_TEMPLATE.format(true=self._fmt(true_v))
@@ -442,6 +451,15 @@ class FactReconciler:
             if cand in known_set:
                 continue
             if any(cand in k or k in cand for k in known_set):
+                continue
+            # 宁漏不错: 大众点评 review store names ("鲜行者X顺德小馆（虹口龙之梦店）")
+            # and POS/gold names ("青花椒徐汇日月光店") are different datasets with
+            # different conventions. Cross-check the parenthetical landmark against
+            # known names before flagging, so a real store named differently across
+            # datasets isn't falsely marked fabricated.
+            mp = re.search(r"[（(]([^）)]{2,})[）)]?", cand)
+            landmark = mp.group(1) if mp else None
+            if landmark and any(landmark in k or k in landmark for k in known_set):
                 continue
             fabricated.append(cand)
         # Annotate each fabricated name once (first occurrence).
