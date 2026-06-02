@@ -1,4 +1,4 @@
--- V20260907_02__production_report_source_wip_no.sql
+-- V20260908_02__production_report_source_wip_no.sql
 --
 -- G7 部分领用地基 — 给 production_reports 加 source_wip_no 列。
 --

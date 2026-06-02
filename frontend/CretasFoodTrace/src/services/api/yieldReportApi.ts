@@ -147,6 +147,7 @@ export interface YieldLimitsDTO {
   remaining: number | null;           // maxAllowed − alreadyReported; null when no base
   // ── G7 Wave 4 部分领用防呆 ──
   wipAvailable?: number | null;       // 本道可领的上道 WIP 余额 (RN 投入 :max); null=首道; 0=领空
+  wipAvailableUnit?: string | null;   // 源 WIP 余额单位 (=上道 outputUnit); banner/:max 用它而非本道 unit; null=无源 WIP
   sourceWipNo?: string | null;        // 上道唯一可领 WIP 工序批次号 (报工 sourceWipNo 回传); null=首道/歧义
   message: string;                    // human-readable summary
 }

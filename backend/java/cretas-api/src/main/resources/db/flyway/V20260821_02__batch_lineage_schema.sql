@@ -21,7 +21,7 @@
 CREATE TABLE batch_lineage_edges (
     id              VARCHAR(191)   PRIMARY KEY,
     factory_id      VARCHAR(50)    NOT NULL,
-    edge_type       VARCHAR(30)    NOT NULL,                                   -- RAW_TO_PRODUCTION / PRODUCTION_TO_FINISHED / FINISHED_TO_SHIPMENT / REWORK / BLEND
+    edge_type       VARCHAR(30)    NOT NULL,                                   -- RAW_TO_PRODUCTION / PRODUCTION_TO_FINISHED / FINISHED_TO_SHIPMENT / REWORK / BLEND / WIP_CONSUME (G7 WIP 同批工序间领用流转, 见 YieldReportServiceImpl.recordWipLineageEdge)
     source_type     VARCHAR(30)    NOT NULL,                                   -- MATERIAL_BATCH / PRODUCTION_BATCH / FINISHED_BATCH / SHIPMENT_RECORD
     source_id       VARCHAR(191)   NOT NULL,
     target_type     VARCHAR(30)    NOT NULL,

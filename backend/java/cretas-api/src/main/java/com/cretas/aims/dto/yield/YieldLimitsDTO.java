@@ -51,6 +51,14 @@ public class YieldLimitsDTO {
     private BigDecimal wipAvailable;
 
     /**
+     * G7 跨单位防呆: 源 WIP 余额的单位 (= 上道 outputUnit)。
+     * 供 RN 报工时 banner / input :max 用源 WIP 的真实单位 (而非本道 WorkProcess.unit),
+     * 避免跨单位 (kg→份) 时 :max 用错单位误导操作员。
+     * <p>null = 无源 WIP (首道) / 上道 WIP 行未记单位。</p>
+     */
+    private String wipAvailableUnit;
+
+    /**
      * G7 Wave 4: 本道应领用的源 WIP 工序批次号 (上道唯一 AVAILABLE WIP 的 intermediate_batch_no)。
      * 供 RN 报工 req 直接带 {@code sourceWipNo} (无需前端再查 WIP 列表)。
      * <p>null = 首道 (无源 WIP) / 上道无 WIP 行 / 上道有多笔 AVAILABLE WIP (歧义, 由前端经

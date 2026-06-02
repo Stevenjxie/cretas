@@ -135,6 +135,8 @@ const YieldStepReportScreen: React.FC = () => {
   const isFirstStep = currentStepIndex === 0;
   // G7 Wave 4: 非首道可领的上道 WIP 余额 (来自 limits.wipAvailable); 首道为 null (领原料不受 WIP 约束)
   const wipAvailable = yieldLimits?.wipAvailable ?? null;
+  // G7 跨单位防呆: WIP 余额单位 = 上道 outputUnit (可能 ≠ 本道 unit); banner/:max 提示用源 WIP 真实单位
+  const wipUnit = yieldLimits?.wipAvailableUnit ?? unit;
   const plannedMax = planned != null ? planned * OVER_RECEIVE_TOLERANCE : null;
   // G7: 非首道有 WIP 余额时, 投入硬上限 = WIP 余额 (操作工领不超过可用; 防呆 Rule 1 事前阻止);
   // 与计划超收上限取更严的 (min) 作为 input :max。首道沿用计划超收上限。
@@ -146,7 +148,7 @@ const YieldStepReportScreen: React.FC = () => {
       : plannedMax;
   const inputMaxHint =
     wipAvailable != null
-      ? `可领上道半成品余额 ${wipAvailable} ${unit} (本道最多领这么多)`
+      ? `可领上道半成品余额 ${wipAvailable} ${wipUnit} (本道最多领这么多)`
       : planned != null
         ? `计划 ${planned} ${unit}, 可投上限约 ${Math.round(planned * OVER_RECEIVE_TOLERANCE)} (含 30% 超收)`
         : null;
@@ -487,7 +489,7 @@ const YieldStepReportScreen: React.FC = () => {
           {!isFirstStep && wipAvailable != null ? (
             <View style={styles.wipBanner} testID="yield-wip-available">
               <Text style={styles.wipBannerText}>
-                可领上道半成品余额 {wipAvailable} {unit}
+                可领上道半成品余额 {wipAvailable} {wipUnit}
                 {wipAvailable <= 0 ? ' (已领空, 请确认上道是否还需报工产出)' : ' (本道最多领这么多)'}
               </Text>
               {yieldLimits?.sourceWipNo ? (

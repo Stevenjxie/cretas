@@ -164,7 +164,7 @@ class SemiFinishedInventoryRepositoryTest {
     @Test
     @org.junit.jupiter.api.Disabled("需真实 PG (H2 PG-compat jsonb round-trip 限制, 同 BatchLineageEdgeRepositoryTest). "
             + "真实 PG 手动跑: mvn -o test -Dtest=SemiFinishedInventoryRepositoryTest#jsonbMaterialBatchRefs_roundTrip "
-            + "-Dspring-boot.run.profiles=pg-test (本地 PG + Flyway 已 apply V20260907_01)")
+            + "-Dspring-boot.run.profiles=pg-test (本地 PG + Flyway 已 apply V20260908_01)")
     @DisplayName("[real-PG only] material_batch_refs jsonb 往返 — 镜像 production_reports.material_batch_refs")
     void jsonbMaterialBatchRefs_roundTrip() {
         SemiFinishedInventory w = wip(F1, 700L, "WIP-JSONB", 1L, 1, "5.00", "0.00", "5.00");

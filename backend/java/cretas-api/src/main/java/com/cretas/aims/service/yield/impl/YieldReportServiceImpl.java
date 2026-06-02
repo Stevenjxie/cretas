@@ -98,6 +98,22 @@ public class YieldReportServiceImpl implements YieldReportService {
                     .orElseThrow(() -> new BusinessException(404, "源半成品库存不存在: " + req.getSourceWipNo())
                             .withHint("请重新选择要领用的上道半成品批次")
                             .withHintTarget("sourceWipNo"));
+            // — 跨单位一致性校验 (P0-2 类): WIP 余额单位 (= 上道 outputUnit) 与本道 inputUnit 必须一致 —
+            // available − inputQuantity 在不同单位 (kg vs 份) 间相减无意义, 会静默混算余额。
+            // inputUnit 为空 → 跳过 (向后兼容: 旧客户端不传单位, 由现网全 kg 数据保证一致);
+            // 两单位都非空且不等 → 拒绝, 不降级 (需配单位换算系数才能跨单位领用)。
+            String wipUnit = sourceWip.getUnit();
+            String reqInputUnit = req.getInputUnit();
+            if (wipUnit != null && !wipUnit.isBlank()
+                    && reqInputUnit != null && !reqInputUnit.isBlank()
+                    && !wipUnit.equals(reqInputUnit)) {
+                throw new BusinessException(409, "半成品单位与本道投入单位不一致")
+                        .withCode("WIP_UNIT_MISMATCH")
+                        .withHint(String.format("WIP 单位为 %s, 本道投入单位为 %s, 跨单位领用需先配置换算系数",
+                                wipUnit, reqInputUnit))
+                        .withSeverity("BLOCKING")
+                        .withHintTarget("inputUnit");
+            }
             BigDecimal want = req.getInputQuantity();
             BigDecimal avail = sourceWip.getAvailableQuantity() == null
                     ? BigDecimal.ZERO : sourceWip.getAvailableQuantity();
@@ -308,6 +324,8 @@ public class YieldReportServiceImpl implements YieldReportService {
         // G7 防呆 Rule 1: 本道可领的源 WIP 余额 = Σ 上道工序产出的 AVAILABLE WIP available_quantity。
         // 首道 (processOrder<=1 或上道无 WIP 行) → null (领原料, 不受 WIP 约束)。
         BigDecimal wipAvailable = resolveSourceWipAvailable(factoryId, batchId, t.getProcessOrder());
+        // G7 跨单位防呆: 源 WIP 余额的真实单位 (= 上道 outputUnit), RN banner/:max 用它而非本道 unit。
+        String wipAvailableUnit = resolveSourceWipUnit(factoryId, batchId, t.getProcessOrder());
         // G7 Wave 4: 上道恰有一笔可领 WIP → 回显其工序批次号, RN 报工直接带 sourceWipNo。
         String sourceWipNo = resolveSourceWipNo(factoryId, batchId, t.getProcessOrder());
 
@@ -321,6 +339,7 @@ public class YieldReportServiceImpl implements YieldReportService {
                 .maxAllowed(maxAllowed)
                 .remaining(remaining)
                 .wipAvailable(wipAvailable)
+                .wipAvailableUnit(wipAvailableUnit)
                 .sourceWipNo(sourceWipNo)
                 .message(message)
                 .build();
@@ -350,6 +369,28 @@ public class YieldReportServiceImpl implements YieldReportService {
         return prev.stream()
                 .map(w -> nz(w.getAvailableQuantity()))
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
+    }
+
+    /**
+     * G7 跨单位防呆: 解析本道 (processOrder) 源 WIP 余额的单位 (= 上道 outputUnit)。
+     * 取上道 (processOrder-1) 非 RETURNED WIP 行的首个非空单位 (同道工序产出单位一致)。
+     *
+     * <p>供 RN 报工 banner / input {@code :max} 用源 WIP 真实单位 (而非本道 WorkProcess.unit),
+     * 避免跨单位 (kg→份) 场景下 :max 显示错误单位误导操作员。
+     * 与 {@link #resolveSourceWipAvailable} 同口径过滤 (首道 / 上道无 WIP → null)。</p>
+     */
+    private String resolveSourceWipUnit(String factoryId, Long batchId, Integer processOrder) {
+        if (processOrder == null || processOrder <= 1 || batchId == null) {
+            return null;  // 首道领原料, 无源 WIP
+        }
+        int prevOrder = processOrder - 1;
+        return wipRepo.findByFactoryIdAndBatchIdAndDeletedAtIsNull(factoryId, batchId).stream()
+                .filter(w -> w.getProcessOrder() != null && w.getProcessOrder() == prevOrder)
+                .filter(w -> !SemiFinishedInventory.Status.RETURNED.equals(w.getStatus()))
+                .map(SemiFinishedInventory::getUnit)
+                .filter(Objects::nonNull)
+                .findFirst()
+                .orElse(null);
     }
 
     /**
@@ -631,6 +672,7 @@ public class YieldReportServiceImpl implements YieldReportService {
     }
 
     @Override
+    @Transactional(readOnly = true)
     public BatchYieldDTO getYield(String factoryId, Long batchId) {
         List<ProductionReport> reports = reportRepo.findYieldReportsByBatch(factoryId, batchId);
         // P0-2: 解析末道产品标准克重, 打通 kg↔份 折算 (跨单位且无克重时 cumulative 保持 null, 诚实)

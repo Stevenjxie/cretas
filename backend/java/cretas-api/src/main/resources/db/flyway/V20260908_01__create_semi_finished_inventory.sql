@@ -1,4 +1,4 @@
--- V20260907_01__create_semi_finished_inventory.sql
+-- V20260908_01__create_semi_finished_inventory.sql
 --
 -- 半成品库存 (WIP) — G6 地基 (Phase B 方案1)。
 --
