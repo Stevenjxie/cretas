@@ -166,7 +166,7 @@ public class ClassifierIntentMatcher {
                 } else {
                     int failures = consecutiveFailures.incrementAndGet();
                     if (failures >= ALERT_THRESHOLD) {
-                        log.error("BERT分类器模型未加载 — 连续{}次失败! 准确率将严重下降(历史教训:98%→92%). 原因: {}",
+                        log.warn("BERT影子分类器模型未加载 — 连续{}次失败 (仅影响 shadow 数据采集，不影响路由)。原因: {}",
                                 failures, response.getBody().getError());
                     } else {
                         log.warn("分类器服务可用但模型未加载: {}", response.getBody().getError());
@@ -177,7 +177,7 @@ public class ClassifierIntentMatcher {
         } catch (Exception e) {
             int failures = consecutiveFailures.incrementAndGet();
             if (failures >= ALERT_THRESHOLD) {
-                log.error("BERT分类器服务不可达 — 连续{}次失败! 请检查Python服务(端口8083)和torch/transformers依赖. 错误: {}",
+                log.warn("BERT影子分类器服务不可达 — 连续{}次失败 (仅影响 shadow 数据采集，不影响路由)。错误: {}",
                         failures, e.getMessage());
             } else {
                 log.warn("分类器服务健康检查失败: {}", e.getMessage());
