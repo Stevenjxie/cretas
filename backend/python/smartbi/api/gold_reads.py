@@ -47,12 +47,25 @@ from smartbi.gold import (
     store_review_vs_revenue,
     top_products,
 )
-from smartbi.tenant_ctx import get_factory_id
+from smartbi.gold.gold_read_cache import GoldReadCache, compute_cache_key
+from smartbi.tenant_ctx import INTERNAL_SENTINEL, get_factory_id
 from smartbi_compat._rbac_strip import PRICE_VIEW_ROLES, strip_price_for_role
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/gold", tags=["Gold Reads"])
+
+# Module-level cache wrapper. The class is a thin stateless wrapper over the
+# asyncpg pool; we lazily bind it to the (singleton) pool on first use so the
+# pool isn't created at import time.
+_gold_read_cache: Optional[GoldReadCache] = None
+
+
+def _get_cache(pool) -> GoldReadCache:
+    global _gold_read_cache
+    if _gold_read_cache is None or _gold_read_cache._pool is not pool:
+        _gold_read_cache = GoldReadCache(pool)
+    return _gold_read_cache
 
 
 # Gold-specific money keys not matched by the shared `_MONEY_PATTERN`. The
@@ -148,11 +161,36 @@ async def get_finance_summary(
     fid = _resolve_tenant(factory_id)
     start, end = _parse_range(start_date, end_date)
     pool = await get_pg_pool()
+    role = _get_role(request)
+    # Role is in the cache key, so a cached payload is already RBAC-correct
+    # for this caller — we cache the POST-strip result and never re-strip.
+    cacheable = fid != INTERNAL_SENTINEL
+    cache = _get_cache(pool)
+    cache_key = compute_cache_key(
+        "finance-summary",
+        start.isoformat(), end.isoformat(),
+        role, {"top_n_stores": top_n_stores},
+    )
     try:
+        if cacheable:
+            try:
+                hit = await cache.get(fid, cache_key)
+                if hit is not None:
+                    return hit
+            except Exception as ce:  # cache read is best-effort, never fatal
+                logger.warning("finance-summary cache get failed: %s", ce)
         result = await finance_summary(
             pool, fid, (start, end), top_n_stores=top_n_stores,
         )
-        return _apply_rbac_strip(result, _get_role(request))
+        stripped = _apply_rbac_strip(result, role)
+        if cacheable:
+            try:
+                await cache.put(fid, cache_key, stripped)
+            except Exception as ce:  # cache write is best-effort, never fatal
+                logger.warning("finance-summary cache put failed: %s", ce)
+        return stripped
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception("finance-summary failed: %s", e)
         raise HTTPException(status_code=500, detail=f"Gold query failed: {e}")
