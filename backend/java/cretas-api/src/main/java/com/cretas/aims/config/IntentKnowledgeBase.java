@@ -7061,14 +7061,9 @@ public class IntentKnowledgeBase {
         restaurantPhraseMapping.put("翻台率", "RESTAURANT_PEAK_HOURS_ANALYSIS");
         restaurantPhraseMapping.put("翻台率多少", "RESTAURANT_PEAK_HOURS_ANALYSIS");
         restaurantPhraseMapping.put("座位利用率", "RESTAURANT_PEAK_HOURS_ANALYSIS");
-        // 餐饮路由修复: "时段营业额分布" 之前被 RESTAURANT_DAILY_REVENUE 的"营业额"短语抢占;
-        // 绑定更长更具体的时段短语(短语匹配长者优先)到高峰时段分析。
-        restaurantPhraseMapping.put("时段营业额分布", "RESTAURANT_PEAK_HOURS_ANALYSIS");
-        restaurantPhraseMapping.put("时段营业额", "RESTAURANT_PEAK_HOURS_ANALYSIS");
-        restaurantPhraseMapping.put("分时段营业额", "RESTAURANT_PEAK_HOURS_ANALYSIS");
-        restaurantPhraseMapping.put("各时段营业额", "RESTAURANT_PEAK_HOURS_ANALYSIS");
-        restaurantPhraseMapping.put("时段销售分布", "RESTAURANT_PEAK_HOURS_ANALYSIS");
-        restaurantPhraseMapping.put("时段分布", "RESTAURANT_PEAK_HOURS_ANALYSIS");
+        // 注: "时段营业额" 类短语 NOT 绑到 RESTAURANT_PEAK_HOURS_ANALYSIS —— 该意图的工具
+        // (restaurant_peak_hours_analysis) 查 sales_orders(餐饮 gold 租户为空)→ 执行报"暂未配置执行器/无数据"。
+        // 待建 gold-backed 时段工具(参照 restaurant_store_revenue_rank_gold)后再绑。当前回退 DAILY_REVENUE(有图)。
         restaurantPhraseMapping.put("排队情况", "RESTAURANT_PEAK_HOURS_ANALYSIS");
         restaurantPhraseMapping.put("等位多久", "RESTAURANT_PEAK_HOURS_ANALYSIS");
         restaurantPhraseMapping.put("午市和晚市哪个好", "RESTAURANT_PEAK_HOURS_ANALYSIS");
