@@ -486,26 +486,29 @@ async def gross_margin(request: Request, days: int = Query(30, ge=1, le=365)) ->
     total_profit_combined = total_profit + total_profit_estimated  # 精确 + 估算
     avg_rate_combined = total_profit_combined / total_rev_all if total_rev_all > 0 else 0
 
-    return {
-        "success": True,
-        "data": {
-            "windowDays": days,
-            "totalRevenue": total_rev_all,
-            "totalRevenueWithCost": total_rev_with_cost,
-            "totalProfit": total_profit,
-            "avgRate": avg_rate,
-            # 加速 E 新字段: 精确+估算 合并版 (FE 可选切换显示)
-            "totalProfitWithEstimated": total_profit_combined,
-            "avgRateWithEstimated": avg_rate_combined,
-            "industryDefaultCostRatio": industry_cost_ratio,
-            "coverage": {
-                "dishCount": dishes_with_cost,
-                "totalDishCount": len(dishes),
-                "revenueRatio": coverage_revenue,
-            },
-            "dishes": dishes,
+    data = {
+        "windowDays": days,
+        "totalRevenue": total_rev_all,
+        "totalRevenueWithCost": total_rev_with_cost,
+        "totalProfit": total_profit,
+        "avgRate": avg_rate,
+        # 加速 E 新字段: 精确+估算 合并版 (FE 可选切换显示)
+        "totalProfitWithEstimated": total_profit_combined,
+        "avgRateWithEstimated": avg_rate_combined,
+        "industryDefaultCostRatio": industry_cost_ratio,
+        "coverage": {
+            "dishCount": dishes_with_cost,
+            "totalDishCount": len(dishes),
+            "revenueRatio": coverage_revenue,
         },
+        "dishes": dishes,
     }
+    # RBAC: revenue / profit / cost 等金额字段对非 price-view 角色剥零 (pre-existing leak fix)。
+    # 比率 (avgRate / marginRate) 与计数 (dishCount) 非绝对金额, 但共享 _MONEY_PATTERN 会
+    # 过度匹配含 cost/revenue 子串的计数键 (如 dishCount 不含; revenueRatio/dishesWithCost 含) —
+    # 过度剥零是保守安全行为 (counts 非泄露), 不影响金额脱敏正确性。
+    _apply_rbac_strip(data, _get_role(request))
+    return {"success": True, "data": data}
 
 
 def _parse_opt_date(s: Optional[str], field: str) -> Optional[Any]:
@@ -610,7 +613,12 @@ async def store_margin(request: Request, days: int = Query(30, ge=1, le=365)) ->
     except Exception as e:
         logger.exception("[store-margin] failed")
         return {"success": False, "message": str(e)}
-    return {"success": True, "data": ans.meta}
+    # RBAC: totalRevenue / totalProfit / stores[].revenue / grossProfit 等金额对非
+    # price-view 角色剥零 (pre-existing leak fix)。marginRate (比率) 保留;
+    # dishesWithCost (计数) 因含 'cost' 子串会被保守剥零, 不影响金额脱敏正确性。
+    data = ans.meta
+    _apply_rbac_strip(data, _get_role(request))
+    return {"success": True, "data": data}
 
 
 @router.get("/restaurant-ops/summary")
@@ -670,20 +678,20 @@ async def summary(request: Request, days: int = Query(30, ge=1, le=365)) -> Dict
             )
         except _asyncpg.exceptions.UndefinedTableError as e:
             logger.warning(f"[summary] agg table not yet provisioned for {factory_id}: {e}")
-            return {
-                "success": True,
-                "data": {
-                    "window_days": days,
-                    "totals": {},
-                    "top5_ingredients": [],
-                    "margin": {
-                        "total_pos_revenue": 0.0, "total_gross_profit": 0.0,
-                        "avg_margin_rate": 0.0,
-                        "dish_count_with_cost": 0, "total_dish_count": 0,
-                    },
-                    "etl_pending": True,
-                }
+            empty_data = {
+                "window_days": days,
+                "totals": {},
+                "top5_ingredients": [],
+                "margin": {
+                    "total_pos_revenue": 0.0, "total_gross_profit": 0.0,
+                    "avg_margin_rate": 0.0,
+                    "dish_count_with_cost": 0, "total_dish_count": 0,
+                },
+                "etl_pending": True,
             }
+            # RBAC strip even on empty payload (idempotent; nulls the 0.0 money fields).
+            _apply_rbac_strip(empty_data, _get_role(request))
+            return {"success": True, "data": empty_data}
 
     # Apr 24 Plan C Phase 7+: compute gross margin totals by reusing the
     # resolver. Wraps the same POS × food_cost join already used by AI query.
@@ -714,15 +722,17 @@ async def summary(request: Request, days: int = Query(30, ge=1, le=365)) -> Dict
     except Exception as e:
         logger.warning(f"[summary] gross margin compute failed: {e}")
 
-    return {
-        "success": True,
-        "data": {
-            "window_days": days,
-            "totals": dict(totals) if totals else {},
-            "top5_ingredients": [
-                {"name": r["name"], "category": r["category"], "cost": r["cost"]}
-                for r in top5
-            ],
-            "margin": margin_totals,
-        },
+    data = {
+        "window_days": days,
+        "totals": dict(totals) if totals else {},
+        "top5_ingredients": [
+            {"name": r["name"], "category": r["category"], "cost": r["cost"]}
+            for r in top5
+        ],
+        "margin": margin_totals,
     }
+    # RBAC: totals.*_cost / top5_ingredients[].cost / margin.total_pos_revenue /
+    # total_gross_profit 等金额字段对非 price-view 角色剥零 (pre-existing leak fix)。
+    # _qty / _count / *_rate 等非绝对金额保留 (avg_margin_rate 是比率)。
+    _apply_rbac_strip(data, _get_role(request))
+    return {"success": True, "data": data}
