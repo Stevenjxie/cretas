@@ -8,9 +8,12 @@ import com.cretas.aims.repository.ProductionPlanRepository;
 import com.cretas.aims.repository.SemiFinishedInventoryRepository;
 import com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository;
 import com.cretas.aims.repository.inventory.ProductDemandProjection;
+import com.cretas.aims.repository.inventory.ProductWarehouseDemandProjection;
 import com.cretas.aims.repository.inventory.SalesOrderItemRepository;
 import com.cretas.aims.service.restock.dto.RestockBoardDTO;
 import com.cretas.aims.service.restock.dto.RestockRow;
+import com.cretas.aims.service.restock.dto.WarehouseRestockBoardDTO;
+import com.cretas.aims.service.restock.dto.WarehouseRestockRow;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -137,6 +140,108 @@ public class RestockBoardService {
             BigDecimal total     = fg.add(nz(wipBox)).add(scheduled);
             BigDecimal shortfall = demand.subtract(total).max(BigDecimal.ZERO);
             b.demandQty(demand)
+             .totalAvailableQty(total)
+             .shortfallQty(shortfall)
+             .status(shortfall.compareTo(BigDecimal.ZERO) == 0 ? "SATISFIED" : "SHORTFALL");
+        }
+
+        return b.conversionWarning(warning).build();
+    }
+
+    // ==================== P3 多仓备货看板 ====================
+
+    /**
+     * P3 多仓备货看板: 同交货日按产品 × 目的仓展开需求, 库存三层仍为全厂共享池。
+     *
+     * <p>向后兼容: 旧订单行 {@code destWarehouseCode = null} 被 COALESCE 归入"未分仓"桶,
+     * 与 {@link #getRestockBoard} 的产品级结果等价 (全在"未分仓"桶)。
+     *
+     * <p>注: 供给侧 (FG/WIP/已排产) 仍为全厂级, 一个产品在所有仓行共享同一库存数字。
+     * 这是 P3 建模设计决策 — 六扇门无仓级库存分区, 全厂统一调度。
+     *
+     * @param factoryId    工厂 ID
+     * @param deliveryDate 要求交货日期
+     * @return 按产品 × 仓分组的备货看板
+     */
+    @Transactional(readOnly = true)
+    public WarehouseRestockBoardDTO getRestockBoardByWarehouse(String factoryId, LocalDate deliveryDate) {
+        List<ProductWarehouseDemandProjection> demands =
+                salesOrderItemRepository.sumDemandByProductAndWarehouseForDeliveryDate(
+                        factoryId, deliveryDate, DEMAND_STATUSES);
+
+        List<WarehouseRestockRow> rows = new ArrayList<>();
+        for (ProductWarehouseDemandProjection d : demands) {
+            rows.add(buildWarehouseRow(factoryId, d));
+        }
+
+        int shortfallCount  = (int) rows.stream().filter(r -> "SHORTFALL".equals(r.getStatus())).count();
+        int satisfiedCount  = (int) rows.stream().filter(r -> "SATISFIED".equals(r.getStatus())).count();
+        long warehouseCount = rows.stream().map(WarehouseRestockRow::getDestWarehouseCode).distinct().count();
+
+        return WarehouseRestockBoardDTO.builder()
+                .deliveryDate(deliveryDate)
+                .rows(rows)
+                .summary(WarehouseRestockBoardDTO.Summary.builder()
+                        .totalRows(rows.size())
+                        .shortfallRows(shortfallCount)
+                        .satisfiedRows(satisfiedCount)
+                        .warehouseCount(warehouseCount)
+                        .build())
+                .build();
+    }
+
+    private WarehouseRestockRow buildWarehouseRow(String factoryId, ProductWarehouseDemandProjection d) {
+        String productTypeId = d.getProductTypeId();
+        Optional<ProductType> ptOpt = productTypeRepository.findById(productTypeId);
+        BigDecimal gramsPerUnit = ptOpt.map(ProductType::getGramsPerUnit).orElse(null);
+        BigDecimal wipYield    = ptOpt.map(ProductType::getWipToFgYield).orElse(null);
+
+        String warning = null;
+
+        // F2: 单位不一致检测 (同产品+仓组合, 跨行不同 unit)
+        boolean unitInconsistent =
+                d.getMinUnit() != null && !Objects.equals(d.getMinUnit(), d.getMaxUnit());
+
+        // 供给侧: 全厂共享池 (与产品级 buildRow 相同)
+        BigDecimal fg = nz(finishedGoodsBatchRepository
+                .sumAvailableQuantityByProductType(factoryId, productTypeId));
+
+        BigDecimal wipKg    = nz(semiFinishedInventoryRepository.sumAvailableByProduct(factoryId, productTypeId));
+        BigDecimal effYield = wipYield != null ? wipYield : BigDecimal.ONE;
+        BigDecimal wipBox   = RestockUnitConverter.kgToBox(wipKg.multiply(effYield), gramsPerUnit);
+
+        if (wipBox == null && wipKg.compareTo(BigDecimal.ZERO) > 0) {
+            warning = append(warning, "未配置规格(gramsPerUnit), 在产无法折盒");
+        }
+        if (wipYield == null && wipKg.compareTo(BigDecimal.ZERO) > 0 && wipBox != null) {
+            warning = append(warning, "未配置在产出率, 按1:1估算");
+        }
+
+        BigDecimal scheduled = nz(productionPlanRepository
+                .sumPlannedQuantityByProductAndStatuses(factoryId, productTypeId, SCHEDULED_STATUSES));
+
+        WarehouseRestockRow.WarehouseRestockRowBuilder b = WarehouseRestockRow.builder()
+                .productTypeId(productTypeId)
+                .productName(d.getProductName())
+                .unit("盒")
+                .destWarehouseCode(d.getDestWarehouseCode())
+                .destWarehouseName(d.getDestWarehouseName())
+                .fgAvailableQty(fg)
+                .wipEstimatedQty(wipBox)
+                .scheduledQty(scheduled)
+                .wipIsEstimated(true);
+
+        if (unitInconsistent) {
+            warning = append(warning, "订单行单位不一致, 需人工核对");
+            b.warehouseDemandQty(null)
+             .totalAvailableQty(null)
+             .shortfallQty(null)
+             .status("UNIT_INCONSISTENT");
+        } else {
+            BigDecimal demand    = nz(d.getDemand());
+            BigDecimal total     = fg.add(nz(wipBox)).add(scheduled);
+            BigDecimal shortfall = demand.subtract(total).max(BigDecimal.ZERO);
+            b.warehouseDemandQty(demand)
              .totalAvailableQty(total)
              .shortfallQty(shortfall)
              .status(shortfall.compareTo(BigDecimal.ZERO) == 0 ? "SATISFIED" : "SHORTFALL");

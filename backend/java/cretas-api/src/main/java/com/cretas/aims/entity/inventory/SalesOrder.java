@@ -246,6 +246,18 @@ public class SalesOrder extends BaseEntity {
     @Column(name = "contract_file_name", length = 255)
     private String contractFileName;
 
+    /**
+     * P3 多仓: 叮咚采购单标题 (如 "0601-熟食T+2").
+     *
+     * <p>客户视角的"1张采购单"分组键 — 同一个叮咚采购单对应系统里 1 张 SalesOrder,
+     * 订单内含 N 行 (按仓 × 按品). 此字段在列表页展示方便追溯.
+     *
+     * <p>Nullable: 普通订单 (非叮咚多仓场景) 不传此字段.
+     * Migration: {@code V20260915_01__sales_order_item_dest_warehouse.sql}
+     */
+    @Column(name = "external_order_title", length = 100)
+    private String externalOrderTitle;
+
     // ==================== 关联 ====================
 
     @JsonIgnore

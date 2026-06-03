@@ -237,6 +237,8 @@ public class SalesServiceImpl implements SalesService {
         order.setExtraFees(request.getExtraFees());
         order.setQuoteId(request.getQuoteId()); // 报价→订单联动 (5016s 客户流程文档)
         order.setStatus(SalesOrderStatus.DRAFT);
+        // P3 多仓: 叮咚采购单标题 (如 "0601-熟食T+2"). Nullable.
+        order.setExternalOrderTitle(request.getExternalOrderTitle());
         order.setCreatedBy(userId);
 
         // Sprint 4 W2 S-INVOICE-CLIENT-1 Option 3 三层 default 链 — 第 1→2 层 prefill:
@@ -403,6 +405,13 @@ public class SalesServiceImpl implements SalesService {
             item.setRemark(itemDTO.getRemark());
             item.setSpecification(itemDTO.getSpecification());
             item.setBoxQuantity(itemDTO.getBoxQuantity());
+            // P3 多仓字段 (V20260915_01) — 全 nullable, 普通订单不传不影响现有逻辑
+            item.setDestWarehouseName(itemDTO.getDestWarehouseName());
+            item.setDestWarehouseCode(itemDTO.getDestWarehouseCode());
+            item.setExternalPoId(itemDTO.getExternalPoId());
+            item.setBarcode(itemDTO.getBarcode());
+            item.setAppointmentTime(itemDTO.getAppointmentTime());
+            item.setRequiredArrivalDate(itemDTO.getRequiredArrivalDate());
             items.add(item);
 
             totalAmount = totalAmount.add(calculateLineAmount(factoryId, item));
