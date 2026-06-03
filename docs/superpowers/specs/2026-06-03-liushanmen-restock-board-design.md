@@ -124,6 +124,21 @@ RestockRow:
 
 需求只算**有效订单**: `SalesOrder.status` ∈ 已确认且未取消的状态 (具体枚举值实现时对照 `SalesOrder` 状态机, 至少含 CONFIRMED, 排除 CANCELLED / DRAFT)。草稿/已取消不计入需求。
 
+### 4.5 审计加固项 (superpowers 审计 2026-06-03, F1/F2, 均 LOW)
+
+43-agent 对抗审计确认 0 CRITICAL/HIGH。两条 LOW 加固直接纳入本设计:
+
+**F1 — FG 单日快照语义 (跨日不自洽风险, 已部分缓解)**:
+`fgAvailableQty = produced − shipped − reserved` 已对【已财审 + 库存充足】订单 net out 预留 (`InventoryMatchingService.reserveStock` 在财审通过事件按 FEFO 设 `reservedQuantity`)。但**未预留的 FG** (订单仍 DRAFT/CONFIRMED/未财审, 或财审时缺货转了生产计划) 不归属某交货日 → 多个交货日的看板会各自把这批未预留 FG 算满一次, **跨日不自洽**。
+- 本 spec 明确: **看板是单日快照, fgAvailableQty 显示"当前总可用未预留成品", 不按交货日跨日归属; 多日并存时未预留 FG 的归属需人工判断。**
+- UI 在 fgAvailableQty 列加角标提示"未预留成品, 多日订单请人工分配"。
+- 完整 FEFO 跨日预留分配标 **P-later** (不在 P1)。
+
+**F2 — 需求侧单位一致性 (latent, F006 当前不触发)**:
+`demandQty` 把 `SalesOrderItem.quantity` 当"盒"累加, 但 `SalesOrderItem.unit` 是自由文本 (非枚举)。F006 真实订单行 unit 一律=份(=盒 1:1), 当前不会算错; 仅未来同产品订单行混用单位(箱/kg)才触发。
+- 本 spec 假设: **P1 假设同产品所有计入订单行 unit 均=盒(份)**。
+- 防御: 聚合时若同一产品的订单行出现**不一致 unit** → 该产品 `demandQty` 显 "—" + `conversionWarning="订单行单位不一致, 需人工核对"`, 不静默按盒算。
+
 ---
 
 ## 5. 缺口 → 生产计划草稿 (防呆闭环)
@@ -173,6 +188,8 @@ body: { sourceType:"MANUAL", productTypeId, plannedQuantity, plannedDate, remark
 | 已取消/草稿订单 | 不计入需求 |
 | WIP/计划无该产品 | 该列 0 |
 | 负的合计 (理论不会) | 缺口仍 max(.,0) 兜底 |
+| 同产品订单行 unit 不一致 (F2) | demandQty 显 "—" + "订单行单位不一致需人工核对" |
+| 未预留 FG + 多日并存 (F1) | 单日快照, fgAvailable 列带"未预留,需人工分配"角标 |
 
 无降级假数据 (per CLAUDE.md 核心原则): 缺配置就显警告, 不编造数字。
 
@@ -186,6 +203,7 @@ body: { sourceType:"MANUAL", productTypeId, plannedQuantity, plannedDate, remark
 - 缺口: 需求>合计 → 正缺口; 需求≤合计 → 0 + SATISFIED。
 - WIP 折算: 有 wipToFgYield / 无 (1.0+估) / gramsPerUnit null (—+警告)。
 - 边界: 无订单 (空)、负合计兜底、单产品只有 WIP 没成品。
+- F2 异质单位: 同产品两订单行 unit 一个"盒"一个"箱" → demandQty="—" + 警告 (不静默累加)。
 
 ### 单元 (UnitConversion)
 - kg→盒 正算; gramsPerUnit null → 返 null/抛受控异常。
