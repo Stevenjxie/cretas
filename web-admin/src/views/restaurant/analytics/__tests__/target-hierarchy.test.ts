@@ -145,3 +145,21 @@ describe('TargetHierarchyEditor', () => {
     expect(wrapper.text()).toContain('RES_TEST');
   });
 });
+
+// ── KPI dashboard integration: achievement card contract smoke test ───────────
+describe('kpi dashboard achievement contract', () => {
+  it('fetchAchievement returns points array; empty-points handled', async () => {
+    // The api module is mocked above; confirm the empty-points contract the
+    // kpi/index.vue achievement card relies on (Rule 5 empty-state branch).
+    const api = await import('@/api/smartbi/restaurant-targets');
+    const result = await api.fetchAchievement({ startDate: '2026-06-01', endDate: '2026-06-07' });
+    expect(result.success).toBe(true);
+    expect(Array.isArray(result.data.points)).toBe(true);
+    expect(result.data.points).toHaveLength(0);
+
+    const alerts = await api.fetchAlerts({ lookbackDays: 7 });
+    expect(alerts.success).toBe(true);
+    expect(alerts.data.configExists).toBe(false);
+    expect(alerts.data.timeline).toHaveLength(0);
+  });
+});
