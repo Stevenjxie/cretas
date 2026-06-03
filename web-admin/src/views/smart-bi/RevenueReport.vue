@@ -26,6 +26,7 @@ import {
   type UploadResultItem,
   type AuditLogEntry,
 } from '@/api/smartbi/revenue-report';
+import { getGoldDataRange } from '@/api/smartbi/dataRange';
 import { useAuthStore } from '@/store/modules/auth';
 import SmartBIUploader from '@/components/smartbi/SmartBIUploader.vue';
 
@@ -53,6 +54,7 @@ const uploadResults = ref<UploadResultItem[]>([]);
 
 // ─── Generation state ─────────────────────────────────────────────────
 const generating = ref(false);
+const oneClickLoading = ref(false);
 const elapsedSec = ref(0);
 let elapsedTimer: number | null = null;
 const lastDownloadInfo = ref<{
@@ -284,6 +286,34 @@ async function handlePreview() {
   }
 }
 
+// Filenames built from the resolved date range. Firefox mangles non-ASCII
+// download names, so fall back to an ASCII filename there.
+function buildFilename(dateFrom: string, dateTo: string): string {
+  const isFirefox = navigator.userAgent.toLowerCase().includes('firefox');
+  const safeRange = `${dateFrom}_${dateTo}`;
+  return isFirefox
+    ? `revenue_report_${safeRange}.xlsx`
+    : `收入管理报表_${safeRange}.xlsx`;
+}
+
+// Shared blob → browser-download. Chrome requires the anchor to be IN THE DOM
+// before .click() for the `download` attribute to be respected; without
+// appendChild Chrome falls back to the Blob URL's UUID as the filename.
+function triggerDownload(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(
+    new Blob([blob], {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    }),
+  );
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
 async function handleDownload() {
   if (generating.value) return;
   const params = buildParams();
@@ -292,26 +322,8 @@ async function handleDownload() {
   startElapsedTimer();
   try {
     const result = await generateAndDownload(params);
-    const isFirefox = navigator.userAgent.toLowerCase().includes('firefox');
-    const safeRange = `${params.date_from}_${params.date_to}`;
-    const filename = isFirefox
-      ? `revenue_report_${safeRange}.xlsx`
-      : `收入管理报表_${safeRange}.xlsx`;
-    const url = URL.createObjectURL(
-      new Blob([result.blob], {
-        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-      }),
-    );
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    // Chrome requires the anchor to be IN THE DOM before .click() for
-    // the `download` attribute to be respected. Without appendChild,
-    // Chrome falls back to the Blob URL's UUID as the filename.
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    const filename = buildFilename(params.date_from, params.date_to);
+    triggerDownload(result.blob, filename);
 
     lastDownloadInfo.value = {
       filename,
@@ -327,6 +339,58 @@ async function handleDownload() {
     ElMessage.error(`下载失败: ${e?.response?.data?.message || e?.message || e}`);
   } finally {
     generating.value = false;
+    stopElapsedTimer();
+  }
+}
+
+// ─── One-click default-header report (#13) ───────────────────────────────
+// Generates with full-history range (from getGoldDataRange) + all stores
+// (empty array) + all meal periods (empty array). No filter pre-fill needed —
+// the default-header layout is already baked into the backend renderer
+// (qhj_revenue_v1.py), so we only supply the all-history date window.
+async function handleOneClickDefault() {
+  if (oneClickLoading.value || generating.value) return;
+  const factoryId = authStore.factoryId;
+  if (!factoryId) {
+    ElMessage.error('无法获取工厂信息，请重新登录');
+    return;
+  }
+  oneClickLoading.value = true;
+  startElapsedTimer();
+  try {
+    const dr = await getGoldDataRange(factoryId);
+    if (!dr.minDate || !dr.maxDate) {
+      ElMessage.error('暂无可用数据：尚未上传任何 POS 报表，请先在上方上传文件');
+      return;
+    }
+    const params: RevenueReportParams = {
+      date_from: dr.minDate,
+      date_to: dr.maxDate,
+      store_names: [], // 空 = 全部门店
+      meal_periods: [], // 空 = 全班次
+    };
+    const result = await generateAndDownload(params);
+    const filename = buildFilename(params.date_from, params.date_to);
+    triggerDownload(result.blob, filename);
+
+    lastDownloadInfo.value = {
+      filename,
+      cacheHit: result.cacheHit,
+      storeCount: result.storeCount,
+      goldMaterializedAt: result.goldMaterializedAt,
+      isStale: result.isStale,
+    };
+    ElMessage.success(
+      `默认报表已生成（全部历史 ${dr.minDate} ~ ${dr.maxDate}）` +
+        `${result.cacheHit ? '（缓存命中）' : ''}`,
+    );
+    await loadAuditLog();
+  } catch (e: any) {
+    ElMessage.error(
+      `一键生成失败: ${e?.response?.data?.message || e?.message || e}`,
+    );
+  } finally {
+    oneClickLoading.value = false;
     stopElapsedTimer();
   }
 }
@@ -457,6 +521,25 @@ function fmtDuration(ms: number | null | undefined) {
         <!-- ─── Generate block ─────────────────────────────────── -->
         <section class="card" style="margin-top: 24px">
           <h3 class="card-title">生成报表</h3>
+
+          <!-- ─── One-click default-header report (#13) ─────────── -->
+          <div class="oneclick-block">
+            <el-button
+              type="primary"
+              size="large"
+              :loading="oneClickLoading"
+              :disabled="oneClickLoading || generating"
+              @click="handleOneClickDefault"
+            >
+              一键生成默认收入管理报表 (全部历史)
+            </el-button>
+            <div class="oneclick-hint">
+              默认表头 · 全部门店 · 全部班次 · 全部历史区间，无需选择，直接下载 Excel
+            </div>
+            <span v-if="oneClickLoading" class="elapsed">已等待 {{ elapsedSec }} 秒...</span>
+          </div>
+
+          <el-divider content-position="left">或自定义生成</el-divider>
 
           <el-form label-width="100px" label-position="left">
             <el-form-item label="日期范围" required>
@@ -724,6 +807,20 @@ function fmtDuration(ms: number | null | undefined) {
   margin-left: 12px;
   color: #86909c;
   font-size: 12px;
+}
+
+.oneclick-block {
+  background: #ecf5ff;
+  border: 1px solid #d9ecff;
+  border-radius: 8px;
+  padding: 20px 24px;
+  margin-bottom: 8px;
+}
+
+.oneclick-hint {
+  margin-top: 10px;
+  color: #606266;
+  font-size: 13px;
 }
 
 .elapsed {
