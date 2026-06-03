@@ -6,6 +6,7 @@ import com.cretas.aims.entity.config.FactoryTriggerChain;
 import com.cretas.aims.entity.enums.*;
 import com.cretas.aims.entity.inventory.FinishedGoodsBatch;
 import com.cretas.aims.event.*;
+import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.ProductionPlanRepository;
 import com.cretas.aims.repository.config.FactoryTriggerChainRepository;
@@ -13,6 +14,7 @@ import com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository;
 import com.cretas.aims.service.BatchConsumptionService;
 import com.cretas.aims.service.LinkArrayService;
 import com.cretas.aims.service.QualityInspectionService;
+import com.cretas.aims.service.restock.RestockUnitConverter;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -58,6 +60,7 @@ public class SupplyChainOrchestrator {
     private final ApplicationEventPublisher applicationEventPublisher;
     private final QualityInspectionService qualityInspectionService;
     private final BatchConsumptionService batchConsumptionService;
+    private final ProductTypeRepository productTypeRepository;
 
     /** D1 双仓流转 (2026-05-10 spec, PR #309 A1=A) — production output 默认 WH-WKS. */
     @org.springframework.beans.factory.annotation.Autowired
@@ -339,6 +342,11 @@ public class SupplyChainOrchestrator {
     /**
      * 根据完成的生产批次创建成品批次入库记录。
      *
+     * <p>P4 kg↔盒单位标准化 (2026-06-03):
+     * 若报工单位=kg 且产品标准单位=盒 且 gramsPerUnit 已配置, 则自动换算为盒入库.
+     * 防双重换算: 若批次产出单位已是产品单位, 直接原值入库.
+     * 严格条件: 只在产品 unit=盒 且 批次 unit=kg 且 gramsPerUnit!=null 时换算, 不误伤其他产品.
+     *
      * @param batch 已完成的生产批次
      * @return 持久化后的 {@link FinishedGoodsBatch}
      */
@@ -350,18 +358,61 @@ public class SupplyChainOrchestrator {
             return null;
         }
 
+        // P4: 解析产品标准单位 + gramsPerUnit, 判断是否需要 kg→盒换算
+        String batchUnit = batch.getUnit() != null ? batch.getUnit() : "kg";
+        BigDecimal producedQty = batch.getGoodQuantity();
+        String fgUnit = batchUnit;
+        String conversionRemark = null;
+
+        ProductType productType = batch.getProductTypeId() != null
+                ? productTypeRepository.findById(batch.getProductTypeId()).orElse(null)
+                : null;
+
+        if (productType != null) {
+            String productUnit = productType.getUnit();
+            BigDecimal gramsPerUnit = productType.getGramsPerUnit();
+
+            boolean needsConversion = "kg".equals(batchUnit)
+                    && "盒".equals(productUnit)
+                    && gramsPerUnit != null
+                    && gramsPerUnit.compareTo(BigDecimal.ZERO) > 0;
+
+            if (needsConversion) {
+                // kg → 盒 换算
+                BigDecimal kgQty = producedQty;
+                BigDecimal boxQty = RestockUnitConverter.kgToBox(kgQty, gramsPerUnit);
+                if (boxQty != null) {
+                    conversionRemark = "[P4]原kg=" + kgQty.toPlainString()
+                            + ", gramsPerUnit=" + gramsPerUnit.toPlainString()
+                            + ", 换算=" + boxQty.toPlainString() + "盒";
+                    producedQty = boxQty;
+                    fgUnit = "盒";
+                    log.info("P4 kg→盒换算: batchId={}, {}kg -> {}盒 (gramsPerUnit={})",
+                            batch.getId(), kgQty, boxQty, gramsPerUnit);
+                } else {
+                    log.warn("P4 换算失败(kgToBox返null), 保持kg入库: batchId={}", batch.getId());
+                }
+            } else if ("盒".equals(batchUnit) && "盒".equals(productUnit)) {
+                // 防双重换算: 产出已是盒, 直接原值入库
+                log.debug("P4: 批次单位已是盒, 不重复换算: batchId={}", batch.getId());
+            }
+        }
+
         FinishedGoodsBatch fg = new FinishedGoodsBatch();
         fg.setFactoryId(batch.getFactoryId());
         fg.setProductTypeId(batch.getProductTypeId());
         fg.setProductName(batch.getProductName());
-        fg.setProducedQuantity(batch.getGoodQuantity());
+        fg.setProducedQuantity(producedQty);
         fg.setBatchNumber(fgBatchNumber);
         fg.setProductionDate(LocalDate.now());
         fg.setExpireDate(LocalDate.now().plusDays(180));
         fg.setStorageLocation("默认仓位");
         fg.setCreatedBy(0L);
         fg.setStatus("AVAILABLE");
-        fg.setUnit(batch.getUnit() != null ? batch.getUnit() : "kg");
+        fg.setUnit(fgUnit);
+        if (conversionRemark != null) {
+            fg.setRemark(conversionRemark);
+        }
         if (batch.getProductionPlanId() != null) {
             fg.setProductionPlanId(batch.getProductionPlanId());
         }

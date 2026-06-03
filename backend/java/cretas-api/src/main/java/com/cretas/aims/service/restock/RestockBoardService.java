@@ -98,9 +98,9 @@ public class RestockBoardService {
         boolean unitInconsistent =
                 d.getMinUnit() != null && !Objects.equals(d.getMinUnit(), d.getMaxUnit());
 
-        // 成品可用 (盒)
+        // P4 防御: 只汇总 unit='盒' 的 FG 行, 防止换算前后混单位加和
         BigDecimal fg = nz(finishedGoodsBatchRepository
-                .sumAvailableQuantityByProductType(factoryId, productTypeId));
+                .sumAvailableQuantityByProductTypeAndUnit(factoryId, productTypeId, "盒"));
 
         // 在产 WIP (kg) → 折盒 (×出率 effYield / gramsPerUnit)
         BigDecimal wipKg   = nz(semiFinishedInventoryRepository.sumAvailableByProduct(factoryId, productTypeId));
@@ -202,9 +202,9 @@ public class RestockBoardService {
         boolean unitInconsistent =
                 d.getMinUnit() != null && !Objects.equals(d.getMinUnit(), d.getMaxUnit());
 
-        // 供给侧: 全厂共享池 (与产品级 buildRow 相同)
+        // 供给侧: 全厂共享池 (P4 防御: 只汇总 unit='盒' 的 FG 行)
         BigDecimal fg = nz(finishedGoodsBatchRepository
-                .sumAvailableQuantityByProductType(factoryId, productTypeId));
+                .sumAvailableQuantityByProductTypeAndUnit(factoryId, productTypeId, "盒"));
 
         BigDecimal wipKg    = nz(semiFinishedInventoryRepository.sumAvailableByProduct(factoryId, productTypeId));
         BigDecimal effYield = wipYield != null ? wipYield : BigDecimal.ONE;
