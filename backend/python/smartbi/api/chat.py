@@ -1355,7 +1355,21 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                     if ops_code:
                         pool = await _get_pool()
                         if pool:
-                            ops_answer = await resolve_by_code(ops_code, pool, factory_id_hdr)
+                            # Role-aware RBAC for revenue-exposing gold ops
+                            # (trend_analysis). The auth middleware sets
+                            # request.state.role; the trend resolver suppresses
+                            # ¥ amounts for non price-view roles (mirrors the
+                            # gold endpoint money-strip, which can't reach prose
+                            # / chart data baked here). resolve_by_code filters
+                            # kwargs to each resolver's signature, so legacy
+                            # resolvers without a `role` param silently ignore it.
+                            _role_hdr = (
+                                getattr(http_request.state, 'role', None)
+                                if hasattr(http_request, 'state') else None
+                            )
+                            ops_answer = await resolve_by_code(
+                                ops_code, pool, factory_id_hdr, role=_role_hdr,
+                            )
                             if ops_answer:
                                 yield _sse_event("status", f"命中餐饮运营模板:{ops_answer.title}")
                                 chunk_size = 40

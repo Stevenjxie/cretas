@@ -20,6 +20,7 @@ semantic routing (Phase 3 of learned-template plan).
 """
 from __future__ import annotations
 
+import inspect
 import logging
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
@@ -83,6 +84,24 @@ _OPS_PATTERNS: List[Tuple[str, List[List[str]]]] = [
         [["领料", "领用", "用料", "食材用量"],
          ["趋势", "最多", "top", "TOP", "哪个食材", "哪些食材", "排名"]],
     ),
+    # Revenue trend / YoY / MoM analysis (Jun 2026 WS6 routing fix):
+    # "同比/环比/趋势/增长/下降/月度变化" → revenue trend served from Gold
+    # trend_bundle (full 2025+2026 history), NOT the per-upload xlsx template
+    # router (which fails for qhj with "缺少按时间拆分的同比环比数据" because the
+    # selected upload is a partial POS part or a review xlsx).
+    #
+    # MUST come AFTER RESTAURANT_OPS_REQUISITION_TREND so the more specific
+    # "领料趋势" (requires 领料 + 趋势) still wins; a bare "营收趋势" / "同比环比"
+    # has no 领料 group-1 keyword so it falls through to here.
+    #
+    # Single-group match (any one keyword triggers). Keywords chosen to avoid
+    # the NO_MATCH set: bare "营业" is NOT used (would catch "本月营业额"); we
+    # require the explicit trend/comparison vocabulary 同比 / 环比 / 趋势 / 增长 /
+    # 下降 / 月度变化 / 走势 instead.
+    (
+        "RESTAURANT_OPS_TREND_ANALYSIS",
+        [["同比", "环比", "趋势", "增长", "下降", "月度变化", "走势"]],
+    ),
 ]
 
 
@@ -141,6 +160,16 @@ SAMPLE_QUERIES: Dict[str, List[str]] = {
         "分店利润对比",
         "店铺毛利分析",
         "哪家店净赚最多",
+    ],
+    "RESTAURANT_OPS_TREND_ANALYSIS": [
+        "同比和环比分析，识别增长和下降趋势",
+        "分析销售额的月度变化趋势",
+        "营收趋势",
+        "增长趋势",
+        "销售趋势",
+        "月度趋势",
+        "营业额走势",
+        "近期增长还是下降",
     ],
 }
 
@@ -829,6 +858,171 @@ async def resolve_store_margin(
     )
 
 
+async def resolve_trend_analysis(
+    smartbi_pool, factory_id: str, *, role: Optional[str] = None,
+) -> OpsAnswer:
+    """Revenue trend / YoY / MoM analysis served from Gold trend_bundle.
+
+    Answers "同比环比/营收趋势/增长下降趋势/月度变化" from the pre-aggregated
+    agg_daily Gold table (FULL history — all 2025+2026 data), instead of the
+    per-upload xlsx template router which fails for qhj ("缺少按时间拆分的同比
+    环比数据") because the selected upload is only a partial POS part or a
+    review xlsx.
+
+    Uses trend_bundle(pool, factory_id, (None, None)) → all history. Builds a
+    readable Chinese answer (monthly revenue trend with peak/trough months,
+    MoM growth/decline of the latest month, weekday vs weekend split) plus a
+    line chart of monthly revenue.
+
+    RBAC: trend_bundle revenue is monetary. At the gold endpoint layer
+    (gold_reads.get_trend_bundle) it's nulled for non price-view roles via
+    strip_price_for_role. Here we call the query directly and bake revenue
+    numbers into prose + chart, which strip_price_for_role can NOT reach. So
+    only roles in PRICE_VIEW_ROLES see the actual ¥ amounts; everyone else
+    (including a missing/None role) gets trend direction + structure only.
+    This mirrors strip_price_for_role's own contract ("None / empty / unknown
+    roles are treated as ineligible") so we never leak revenue in prose/chart.
+    """
+    from smartbi.gold.queries import trend_bundle
+    from smartbi_compat._rbac_strip import PRICE_VIEW_ROLES
+
+    can_see_money = bool(role) and role in PRICE_VIEW_ROLES
+
+    bundle = await trend_bundle(smartbi_pool, factory_id, (None, None))
+    monthly: List[Dict[str, Any]] = bundle.get("monthlyTrend") or []
+    ww: Dict[str, Any] = bundle.get("weekdayWeekend") or {}
+
+    def _money(v: float) -> str:
+        return f"¥{v:,.2f}" if can_see_money else "***"
+
+    if not monthly:
+        return OpsAnswer(
+            code="RESTAURANT_OPS_TREND_ANALYSIS",
+            title="营收趋势分析",
+            answer_text=(
+                "暂无按时间拆分的营收数据 (Gold 层 agg_daily 为空)。\n"
+                "提示: 上传带日期的 POS 营业数据并完成 materialize 后, "
+                "本分析即可展示月度趋势 + 同比环比。"
+            ),
+            charts=[], kpis=[],
+            meta={"all_history": True, "no_data": True},
+        )
+
+    # Peak / trough months by revenue.
+    peak = max(monthly, key=lambda m: m["revenue"])
+    trough = min(monthly, key=lambda m: m["revenue"])
+    total_rev = sum(m["revenue"] for m in monthly)
+    n_months = len(monthly)
+
+    # MoM (环比): latest month vs previous month.
+    mom_line = ""
+    if n_months >= 2:
+        last, prev = monthly[-1], monthly[-2]
+        if prev["revenue"] > 0:
+            mom_rate = (last["revenue"] - prev["revenue"]) / prev["revenue"] * 100
+            direction = "增长" if mom_rate >= 0 else "下降"
+            mom_line = (
+                f"- 环比(最新月 {last['month']} vs {prev['month']}): "
+                f"{direction} {abs(mom_rate):.1f}%\n"
+            )
+
+    # YoY (同比): latest month vs same month last year, if present.
+    yoy_line = ""
+    if monthly:
+        last = monthly[-1]
+        try:
+            ly, lm = last["month"].split("-")
+            same_last_year = f"{int(ly) - 1}-{lm}"
+        except (ValueError, AttributeError):
+            same_last_year = None
+        if same_last_year:
+            prior = next((m for m in monthly if m["month"] == same_last_year), None)
+            if prior and prior["revenue"] > 0:
+                yoy_rate = (last["revenue"] - prior["revenue"]) / prior["revenue"] * 100
+                direction = "增长" if yoy_rate >= 0 else "下降"
+                yoy_line = (
+                    f"- 同比(最新月 {last['month']} vs {same_last_year}): "
+                    f"{direction} {abs(yoy_rate):.1f}%\n"
+                )
+
+    # Overall direction: first vs last month.
+    overall_line = ""
+    if n_months >= 2 and monthly[0]["revenue"] > 0:
+        overall_rate = (
+            (monthly[-1]["revenue"] - monthly[0]["revenue"])
+            / monthly[0]["revenue"] * 100
+        )
+        direction = "上升" if overall_rate >= 0 else "下降"
+        overall_line = (
+            f"- 整体走势({monthly[0]['month']} → {monthly[-1]['month']}): "
+            f"{direction} {abs(overall_rate):.1f}%\n"
+        )
+
+    month_list_text = "\n".join([
+        f"  {m['month']}: {_money(m['revenue'])}" for m in monthly
+    ])
+
+    weekday_avg = ww.get("weekdayAvg") or 0.0
+    weekend_avg = ww.get("weekendAvg") or 0.0
+    ww_line = ""
+    if (ww.get("weekdayDays") or 0) > 0 or (ww.get("weekendDays") or 0) > 0:
+        ww_line = (
+            f"- 工作日日均 {_money(weekday_avg)} / 周末日均 {_money(weekend_avg)}"
+            + (
+                f" (周末高 {((weekend_avg / weekday_avg - 1) * 100):.0f}%)"
+                if can_see_money and weekday_avg > 0 and weekend_avg > weekday_avg
+                else ""
+            )
+            + "\n"
+        )
+
+    answer = (
+        f"营收趋势分析 (全部历史, 共 {n_months} 个月):\n"
+        f"- 累计营收 {_money(total_rev)}\n"
+        f"- 营收最高月: {peak['month']} ({_money(peak['revenue'])})\n"
+        f"- 营收最低月: {trough['month']} ({_money(trough['revenue'])})\n"
+        f"{overall_line}{yoy_line}{mom_line}{ww_line}"
+        f"\n各月营收:\n{month_list_text}"
+    )
+
+    charts = [{
+        "chartType": "line",
+        "title": "月度营收趋势 (全部历史)",
+        "xAxis": {"data": [m["month"] for m in monthly]},
+        "series": [{
+            "name": "营收",
+            "type": "line",
+            "data": [(m["revenue"] if can_see_money else None) for m in monthly],
+        }],
+    }]
+
+    kpis = [
+        {"title": "数据月数", "value": n_months, "rawValue": n_months},
+        {
+            "title": "累计营收",
+            "value": _money(total_rev) if can_see_money else None,
+            "rawValue": total_rev if can_see_money else None,
+        },
+        {"title": "最高月", "value": peak["month"], "rawValue": 0},
+        {"title": "最低月", "value": trough["month"], "rawValue": 0},
+    ]
+
+    return OpsAnswer(
+        code="RESTAURANT_OPS_TREND_ANALYSIS",
+        title="营收趋势分析 (全部历史)",
+        answer_text=answer,
+        charts=charts,
+        kpis=kpis,
+        meta={
+            "all_history": True,
+            "month_count": n_months,
+            "peak_month": peak["month"],
+            "trough_month": trough["month"],
+            "price_view": can_see_money,
+        },
+    )
+
+
 _RESOLVERS = {
     "RESTAURANT_OPS_WASTAGE_TOP": resolve_wastage_top,
     "RESTAURANT_OPS_STOCK_SHORTAGE": resolve_stock_shortage,
@@ -836,14 +1030,30 @@ _RESOLVERS = {
     "RESTAURANT_OPS_REQUISITION_TREND": resolve_requisition_trend,
     "RESTAURANT_OPS_GROSS_MARGIN": resolve_gross_margin,
     "RESTAURANT_OPS_STORE_MARGIN": resolve_store_margin,
+    "RESTAURANT_OPS_TREND_ANALYSIS": resolve_trend_analysis,
 }
 
 
 async def resolve_by_code(
     code: str, smartbi_pool, factory_id: str, **kwargs
 ) -> Optional[OpsAnswer]:
-    """Dispatch to the right resolver. Returns None if code unknown."""
+    """Dispatch to the right resolver. Returns None if code unknown.
+
+    Callers may pass extra kwargs (e.g. ``role`` for RBAC-aware resolvers like
+    trend_analysis). Resolvers that don't declare those params would raise
+    TypeError, so we filter kwargs down to each resolver's accepted parameter
+    names (unless it has a **kwargs catch-all). This keeps the dispatch
+    backward-compatible: legacy resolvers silently ignore ``role``.
+    """
     resolver = _RESOLVERS.get(code)
     if resolver is None:
         return None
-    return await resolver(smartbi_pool, factory_id, **kwargs)
+    sig = inspect.signature(resolver)
+    accepts_var_kw = any(
+        p.kind is inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
+    )
+    if accepts_var_kw:
+        filtered = kwargs
+    else:
+        filtered = {k: v for k, v in kwargs.items() if k in sig.parameters}
+    return await resolver(smartbi_pool, factory_id, **filtered)
