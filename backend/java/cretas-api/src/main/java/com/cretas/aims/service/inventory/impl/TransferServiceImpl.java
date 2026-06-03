@@ -134,7 +134,14 @@ public class TransferServiceImpl implements TransferService {
                             java.util.Map.of("quantity", item.getQuantity(), "unitPrice", item.getUnitPrice()));
                 } catch (Exception e) { /* fall back */ }
             }
-            totalAmount = totalAmount.add(lineAmt != null ? lineAmt : item.getLineAmount());
+            // Null-safe: 无单价的 item (e.g. D1 反向调拨余料 buildMaterialItem 不设 unitPrice)
+            // getLineAmount() 返 null → add(null) 抛 NPE "augend is null" 并标记事务 rollback-only,
+            // 即使调用方 fail-soft catch 也会 doom 父事务 (ReverseTransferService onProductionCompleted
+            // → completeProduction UnexpectedRollbackException 500). 无价 item 对总额贡献 0。
+            java.math.BigDecimal addend = lineAmt != null ? lineAmt : item.getLineAmount();
+            if (addend != null) {
+                totalAmount = totalAmount.add(addend);
+            }
         }
 
         transfer.setTotalAmount(totalAmount);
