@@ -258,6 +258,20 @@ public interface ProductionBatchRepository extends JpaRepository<ProductionBatch
             @Param("factoryId") String factoryId, @Param("planIds") Collection<String> planIds);
 
     /**
+     * 完工链 GAP 6 (F006 — 2026-06-02): 查某工厂下关联指定生产计划的全部批次.
+     * 计划级 {@code completeProduction} 用此方法找到关联批次并级联完成 + 发 BatchCompletedEvent (建成品).
+     *
+     * <p>命名遵循本仓库既有约定 (其它 finder 均不带 {@code AndDeletedAtIsNull} 后缀);
+     * 调用方依赖批次 status 守卫, 不依赖软删除过滤。空 → 空列表。
+     *
+     * @param factoryId        工厂ID (工厂隔离)
+     * @param productionPlanId 生产计划ID
+     * @return 关联该计划的全部生产批次
+     */
+    java.util.List<ProductionBatch> findByFactoryIdAndProductionPlanId(
+            String factoryId, String productionPlanId);
+
+    /**
      * 统计关联生产计划中未完成的批次数量
      * 用于供应链联动：批次报工后判断PP是否全部完成
      *

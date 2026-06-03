@@ -128,6 +128,14 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private org.springframework.context.ApplicationEventPublisher applicationEventPublisher;
 
+    /**
+     * 完工链 GAP 3/4 (F006 — 2026-06-02): 转批次时从 product_work_processes 模板 spawn 工序任务.
+     * {@code WorkProcessTaskServiceImpl} 不注入 ProductionPlanService → 无循环依赖, 普通注入即可.
+     * required=false 兼容单测 (反射注入 mock) 与无工序配置场景.
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.workprocess.WorkProcessTaskService workProcessTaskService;
+
     private void runConfiguredValidation(String factoryId, String operation, java.util.Map<String, Object> context) {
         if (validationRuleEvaluator == null) return;
         try {
@@ -791,6 +799,36 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         plan.setActualQuantity(actualQuantity);
         plan = productionPlanRepository.save(plan);
 
+        // GAP 6 (F006): 计划级完工应级联完成关联批次并发 BatchCompletedEvent,
+        // 触发 SupplyChainOrchestrator.onBatchCompleted (扣料 REQUIRES_NEW + goodQuantity>0 时建成品).
+        // ProductionCompletedEvent 无建成品监听器, 必须显式走批次完工链.
+        List<ProductionBatch> linked = productionBatchRepository
+                .findByFactoryIdAndProductionPlanId(factoryId, planId);
+        for (ProductionBatch b : linked) {
+            if (b.getStatus() == ProductionBatchStatus.IN_PROGRESS
+                    || b.getStatus() == ProductionBatchStatus.PLANNED
+                    || b.getStatus() == ProductionBatchStatus.PRODUCING) {
+                b.setStatus(ProductionBatchStatus.COMPLETED);
+                b.setEndTime(LocalDateTime.now());
+                if (actualQuantity != null) {
+                    b.setActualQuantity(actualQuantity);
+                    // 计划级无良/次品拆分 → 全部计为良品 (成品创建需 goodQuantity>0).
+                    b.setGoodQuantity(actualQuantity);
+                }
+                try { b.calculateMetrics(); } catch (Exception ignore) {}
+                ProductionBatch cb = productionBatchRepository.save(b);
+                if (applicationEventPublisher != null) {
+                    try {
+                        applicationEventPublisher.publishEvent(
+                                new com.cretas.aims.event.BatchCompletedEvent(this, cb));
+                        log.info("计划完成级联完成批次 + 发 BatchCompletedEvent(建成品): batchId={}", cb.getId());
+                    } catch (Exception e) {
+                        log.warn("BatchCompletedEvent 发布失败 (fail-soft): batchId={}, err={}", cb.getId(), e.getMessage());
+                    }
+                }
+            }
+        }
+
         if (applicationEventPublisher != null) {
             try {
                 applicationEventPublisher.publishEvent(new com.cretas.aims.event.ProductionCompletedEvent(
@@ -1346,7 +1384,10 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                 .plannedQuantity(plan.getPlannedQuantity())
                 .quantity(plan.getPlannedQuantity())
                 .unit("kg")
-                .status(ProductionBatchStatus.PLANNED)
+                // GAP 3/4 (F006): 转批次=开始生产, 批次直接 IN_PROGRESS + 设 startTime,
+                // 使逐道报工 YieldBatchSelect (筛 status=IN_PROGRESS) 立刻可见.
+                .status(ProductionBatchStatus.IN_PROGRESS)
+                .startTime(LocalDateTime.now())
                 .workerCount(plan.getEstimatedWorkers())
                 .notes("从计划 " + plan.getPlanNumber() + " 创建")
                 .createdBy(plan.getCreatedBy())
@@ -1368,6 +1409,17 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         }
 
         ProductionBatch saved = productionBatchRepository.save(batch);
+
+        // GAP 3/4 (F006): 转批次时从 product_work_processes 模板 spawn 工序任务 (逐道报工需要任务实例).
+        // fail-soft: 产品未配 product_work_processes 时 spawnTasks 抛异常, 不阻塞批次创建.
+        if (workProcessTaskService != null) {
+            try {
+                workProcessTaskService.spawnTasks(factoryId, saved.getId(), saved.getProductTypeId());
+                log.info("转批次已 spawn 工序任务: batchId={}, productTypeId={}", saved.getId(), saved.getProductTypeId());
+            } catch (Exception e) {
+                log.warn("转批次 spawn 工序任务失败 (fail-soft, 不阻塞批次创建): batchId={}, err={}", saved.getId(), e.getMessage());
+            }
+        }
 
         // 更新计划状态为 IN_PROGRESS
         plan.setStatus(ProductionPlanStatus.IN_PROGRESS);
