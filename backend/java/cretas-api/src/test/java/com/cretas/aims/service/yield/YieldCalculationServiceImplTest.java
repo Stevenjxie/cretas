@@ -393,6 +393,29 @@ class YieldCalculationServiceImplTest {
     }
 
     @Test
+    void calculateSteps_phasedSplit_unitsOnSeparateReports_yieldRateStillComputed() {
+        // 回归: 三阶段真实场景 INPUT report 只有 inputUnit(outputUnit=null), OUTPUT report 只有 outputUnit(inputUnit=null)。
+        // 修复前 unit 取自 group.get(0)(INPUT)→ outputUnit=null → 误判不可比 → yieldRate 丢失。
+        ProductionReport input = ProductionReport.builder()
+                .factoryId("F006").batchId(1L).reportType("YIELD")
+                .workProcessTaskId(1L).processOrder(1).reportKind("INPUT")
+                .inputQuantity(new BigDecimal("998")).inputUnit("kg")
+                .build();   // outputUnit 故意 null
+        ProductionReport output = ProductionReport.builder()
+                .factoryId("F006").batchId(1L).reportType("YIELD")
+                .workProcessTaskId(1L).processOrder(1).reportKind("OUTPUT")
+                .outputQuantity(new BigDecimal("980")).outputUnit("kg")
+                .build();   // inputUnit 故意 null
+        List<StepYieldDTO> steps = svc.calculateSteps(List.of(input, output));
+        assertThat(steps).hasSize(1);
+        StepYieldDTO s = steps.get(0);
+        assertThat(s.getUnitComparable()).isTrue();
+        assertThat(s.getYieldRate()).isNotNull();
+        assertThat(s.getYieldRate()).isEqualByComparingTo(
+                new BigDecimal("980").divide(new BigDecimal("998"), 4, java.math.RoundingMode.HALF_UP));
+    }
+
+    @Test
     void calculateSteps_phase_segmentOnly_isAwaitingInput() {
         // 仅 SEGMENT (无投入无产出) → AWAITING_INPUT (尚无投入锚定)
         Map<String, Object> seg = Map.of("startTime", "08:00", "endTime", "10:00", "headcount", 3);
