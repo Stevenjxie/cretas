@@ -16,11 +16,14 @@ remaining margin-specific vocabulary (毛利 / 毛利率 / 赚钱 / 净赚 / 利
 """
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from smartbi.gold.restaurant_ops_router import (
     SAMPLE_QUERIES,
     match_restaurant_ops,
+    resolve_by_code,
 )
 
 
@@ -43,6 +46,15 @@ LEGITIMATE_TRIGGERS = [
     # WASTAGE_TOP
     ("损耗最多的食材", "RESTAURANT_OPS_WASTAGE_TOP"),
     ("浪费最多的菜是哪些", "RESTAURANT_OPS_WASTAGE_TOP"),
+    # TREND_ANALYSIS (Jun 2026 WS6 routing fix) — 同比/环比/趋势/增长下降 must
+    # route to the gold trend_bundle resolver, NOT the file-based xlsx router
+    # that failed for qhj with "缺少按时间拆分的同比环比数据".
+    ("同比和环比分析，识别增长和下降趋势", "RESTAURANT_OPS_TREND_ANALYSIS"),
+    ("分析销售额的月度变化趋势", "RESTAURANT_OPS_TREND_ANALYSIS"),
+    ("营收趋势", "RESTAURANT_OPS_TREND_ANALYSIS"),
+    ("增长趋势", "RESTAURANT_OPS_TREND_ANALYSIS"),
+    ("营业额走势", "RESTAURANT_OPS_TREND_ANALYSIS"),
+    ("最近是增长还是下降", "RESTAURANT_OPS_TREND_ANALYSIS"),
 ]
 
 # Queries that MUST NOT match any ops template (ambiguous or unrelated to ops)
@@ -118,6 +130,162 @@ def test_all_documented_sample_queries_route_correctly(
     See _KNOWN_UNCOVERED_SAMPLES above for pre-existing keyword-coverage
     gaps that are documented but not enforced here."""
     assert match_restaurant_ops(query) == expected_code
+
+
+def test_requisition_trend_still_wins_over_generic_trend():
+    """领料趋势 must stay on RESTAURANT_OPS_REQUISITION_TREND (more specific:
+    requires 领料 + 趋势) even though the generic TREND_ANALYSIS also matches
+    趋势 — ordering puts requisition first."""
+    assert match_restaurant_ops("领料趋势") == "RESTAURANT_OPS_REQUISITION_TREND"
+    assert match_restaurant_ops("领用最多的食材") == "RESTAURANT_OPS_REQUISITION_TREND"
+
+
+def test_revenue_amount_query_still_does_not_match_trend():
+    """本月营业额 must NOT match TREND_ANALYSIS — bare 营业 is deliberately
+    excluded from the trend keyword group so a point-in-time amount query
+    falls through to the POS/template path."""
+    assert match_restaurant_ops("本月营业额") is None
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# resolve_by_code → trend_analysis resolver (pure, mocked trend_bundle).
+# ──────────────────────────────────────────────────────────────────────────
+
+_FAKE_BUNDLE = {
+    "factory_id": "RES_TEST",
+    "start_date": None,
+    "end_date": None,
+    "dailyTrend": [
+        {"date": "2025-01-05", "revenue": 1000.0, "bill_count": 10},
+    ],
+    "weekdayWeekend": {
+        "weekdayAvg": 800.0, "weekendAvg": 1200.0,
+        "weekdayDays": 20, "weekendDays": 8,
+    },
+    "monthlyTrend": [
+        {"month": "2025-01", "revenue": 30000.0},
+        {"month": "2025-02", "revenue": 25000.0},
+        {"month": "2026-01", "revenue": 45000.0},
+        {"month": "2026-02", "revenue": 40000.0},
+    ],
+}
+
+
+def _patch_trend_bundle(monkeypatch, captured):
+    async def _fake_trend_bundle(pool, factory_id, date_range):
+        captured["pool"] = pool
+        captured["factory_id"] = factory_id
+        captured["date_range"] = date_range
+        return _FAKE_BUNDLE
+
+    # Resolver does `from smartbi.gold.queries import trend_bundle` at call
+    # time, so patch it on the queries module.
+    import smartbi.gold.queries as _q
+    monkeypatch.setattr(_q, "trend_bundle", _fake_trend_bundle)
+
+
+def test_resolve_trend_analysis_calls_trend_bundle_all_history(monkeypatch):
+    """resolve_by_code('RESTAURANT_OPS_TREND_ANALYSIS', ...) must call
+    trend_bundle with the all-history (None, None) range and return an answer
+    containing month + revenue."""
+    captured: dict = {}
+    _patch_trend_bundle(monkeypatch, captured)
+
+    ans = asyncio.run(
+        resolve_by_code(
+            "RESTAURANT_OPS_TREND_ANALYSIS",
+            object(),  # pool is just forwarded to the mocked trend_bundle
+            "RES_TEST",
+            role="restaurant_manager",  # price-view role → ¥ visible
+        )
+    )
+
+    # all-history call
+    assert captured["date_range"] == (None, None)
+    assert captured["factory_id"] == "RES_TEST"
+
+    assert ans is not None
+    assert ans.code == "RESTAURANT_OPS_TREND_ANALYSIS"
+    # answer mentions months + revenue figures
+    assert "2026-01" in ans.answer_text          # peak month present
+    assert "45,000" in ans.answer_text           # peak revenue (price-view)
+    assert "环比" in ans.answer_text or "同比" in ans.answer_text
+    # line chart of monthly revenue
+    assert ans.charts and ans.charts[0]["chartType"] == "line"
+    assert ans.charts[0]["series"][0]["data"] == [30000.0, 25000.0, 45000.0, 40000.0]
+    # YoY present: 2026-02 vs 2025-02 → both in fixture
+    assert "同比" in ans.answer_text
+
+
+def test_resolve_trend_analysis_rbac_strips_revenue_for_non_price_role(monkeypatch):
+    """A non price-view role (e.g. operator) must NOT see ¥ amounts in the
+    prose or chart data — the resolver suppresses them since
+    strip_price_for_role can't reach prose / chart arrays."""
+    captured: dict = {}
+    _patch_trend_bundle(monkeypatch, captured)
+
+    ans = asyncio.run(
+        resolve_by_code(
+            "RESTAURANT_OPS_TREND_ANALYSIS",
+            object(),
+            "RES_TEST",
+            role="operator",  # NOT in PRICE_VIEW_ROLES
+        )
+    )
+    assert ans is not None
+    # No raw revenue figure leaks into prose; redacted to ***
+    assert "45,000" not in ans.answer_text
+    assert "30,000" not in ans.answer_text
+    assert "***" in ans.answer_text
+    # Chart revenue data nulled
+    assert ans.charts[0]["series"][0]["data"] == [None, None, None, None]
+    # Month structure (non-monetary) still visible
+    assert "2026-01" in ans.answer_text
+    assert ans.meta["price_view"] is False
+
+
+def test_resolve_trend_analysis_missing_role_strips_revenue(monkeypatch):
+    """A missing/None role must default to stripped (secure) — mirrors
+    strip_price_for_role treating None/unknown roles as ineligible."""
+    captured: dict = {}
+    _patch_trend_bundle(monkeypatch, captured)
+
+    ans = asyncio.run(
+        resolve_by_code("RESTAURANT_OPS_TREND_ANALYSIS", object(), "RES_TEST")
+    )
+    assert ans is not None
+    assert "45,000" not in ans.answer_text
+    assert "***" in ans.answer_text
+    assert ans.charts[0]["series"][0]["data"] == [None, None, None, None]
+    assert ans.meta["price_view"] is False
+
+
+def test_resolve_by_code_legacy_resolver_ignores_role_kwarg(monkeypatch):
+    """resolve_by_code must not break a legacy resolver (no `role` param) when
+    the caller passes role=... — kwargs are filtered to the resolver's
+    signature. Patch a wastage-style resolver to assert no TypeError."""
+    called: dict = {}
+
+    async def _fake_wastage(pool, factory_id, days=30, top_n=10):
+        called["days"] = days
+        from smartbi.gold.restaurant_ops_router import OpsAnswer
+        return OpsAnswer(
+            code="RESTAURANT_OPS_WASTAGE_TOP", title="t",
+            answer_text="ok", charts=[], kpis=[], meta={},
+        )
+
+    import smartbi.gold.restaurant_ops_router as _r
+    monkeypatch.setitem(_r._RESOLVERS, "RESTAURANT_OPS_WASTAGE_TOP", _fake_wastage)
+
+    # role=... is passed but _fake_wastage has no role param → must be dropped,
+    # NOT raise TypeError.
+    ans = asyncio.run(
+        resolve_by_code(
+            "RESTAURANT_OPS_WASTAGE_TOP", object(), "RES_TEST", role="operator",
+        )
+    )
+    assert ans is not None and ans.answer_text == "ok"
+    assert called["days"] == 30
 
 
 def test_store_margin_does_not_match_service_quality():
