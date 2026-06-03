@@ -232,11 +232,13 @@ test.describe('A. F006 admin happy path — Indicator Center 主路径', () => {
   test('A1. login + /indicator-center renders (depth=smoke)', async ({ page }) => {
     const tracker = await trackConsoleAndNetwork(page);
     await loginAndSeed(page, acct);
+    // WS4: /indicator-center → 经营分析 hub KPI·指标 内层 tab (redirect)。组件 (.indicator-center)
+    // 仍渲染; 页面 title 改为 hub 的「经营分析」。
     await page.goto(`${BASE}/indicator-center`, { waitUntil: 'domcontentloaded', timeout: 30_000 });
     await page.waitForSelector('.indicator-center, .b2b-real-section', { timeout: 15_000 });
     const png = await shotInto(page, 'a1-login-render');
     const title = await page.title();
-    expect(title).toContain('指标中心');
+    expect(title).toContain('经营分析');
     results.push({
       caseId: 'A1', scenario: 'login render', account: acct.label, factoryId: acct.factoryId,
       depth: 'smoke', status: 'PASS',

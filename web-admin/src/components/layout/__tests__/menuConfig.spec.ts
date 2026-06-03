@@ -24,7 +24,7 @@ describe('menuConfig — baseline structure (pre-merge)', () => {
   });
 });
 
-describe('menuConfig — merged 数据与分析 group (Task 1)', () => {
+describe('menuConfig — merged 数据与分析 group (WS4 经营分析合并)', () => {
   it('顶级 /analytics 组已删除 (合并入 /smart-bi)', () => {
     expect(menuConfig.find((m) => m.path === '/analytics')).toBeUndefined();
   });
@@ -40,19 +40,46 @@ describe('menuConfig — merged 数据与分析 group (Task 1)', () => {
     expect(g.children![0].path).toBe('/smart-bi/dashboard');
   });
 
-  it('含 5 个 groupLabel 子组 (经营驾驶舱无 label, 其余 4 段)', () => {
+  it('含 4 个 groupLabel 子组: AI 探索 / 经营分析 / 数据管理 / AI 运维', () => {
     const g = menuConfig.find((m) => m.path === '/smart-bi')!;
     const labels = g.children!.filter((c) => c.groupLabel).map((c) => c.groupLabel);
-    expect(labels).toEqual(['AI 探索', '专题报表', '数据管理', 'AI 运维']);
+    expect(labels).toEqual(['AI 探索', '经营分析', '数据管理', 'AI 运维']);
   });
 
-  it('原 /analytics 的 children 全部迁入 (无掉项, 含车间报表+指标中心)', () => {
+  it('WS4: 经营分析 hub 项存在 (/smart-bi/analysis-hub, 经营分析 段首)', () => {
+    const g = menuConfig.find((m) => m.path === '/smart-bi')!;
+    const hub = g.children!.find((c) => c.path === '/smart-bi/analysis-hub');
+    expect(hub, '缺经营分析 hub 项').toBeDefined();
+    expect(hub!.groupLabel).toBe('经营分析');
+    expect(hub!.title).toBe('经营分析');
+  });
+
+  it('WS4: 6 页独立菜单项已删除 (合并入 hub, 由 router redirect 桥接)', () => {
     const g = menuConfig.find((m) => m.path === '/smart-bi')!;
     const paths = g.children!.map((c) => c.path);
     for (const p of [
-      '/analytics/ai-reports', '/analytics/trends', '/analytics/kpi',
+      '/smart-bi/financial-dashboard',   // 财务看板 → hub?tab=finance
+      '/smart-bi/sales',                 // 销售分析 → hub?tab=sales
+      '/analytics/trends',               // 趋势分析 → hub?tab=trend
+      '/analytics/kpi',                  // KPI看板 → hub?tab=kpi
+      '/indicator-center',               // 指标中心 → hub?tab=kpi&sub=indicator
+    ]) {
+      expect(paths, `${p} 应已移除 (WS4 合并入 hub)`).not.toContain(p);
+    }
+  });
+
+  it('WS4 #9: AI 分析报告菜单项已删除', () => {
+    const g = menuConfig.find((m) => m.path === '/smart-bi')!;
+    expect(g.children!.map((c) => c.path)).not.toContain('/analytics/ai-reports');
+  });
+
+  it('迁入的工厂侧专题项仍保留 (异常预警/进销存/车间/生产/人效)', () => {
+    const g = menuConfig.find((m) => m.path === '/smart-bi')!;
+    const paths = g.children!.map((c) => c.path);
+    for (const p of [
       '/analytics/alert-dashboard', '/analytics/supply-chain',
-      '/analytics/production-report', '/indicator-center',
+      '/analytics/production-report',
+      '/production-analytics/production', '/production-analytics/efficiency',
     ]) {
       expect(paths, `missing migrated child ${p}`).toContain(p);
     }
@@ -63,16 +90,15 @@ describe('menuConfig — merged 数据与分析 group (Task 1)', () => {
     expect(g.children!.map((c) => c.path)).toContain('/analytics/overview');
   });
 
-  it('原 /smart-bi children 未掉项 (P3 已移除 query → redirect; P4 已移除 finance → redirect)', () => {
+  it('原 /smart-bi 其余 children 未掉项 (P3 query / P4 finance / WS4 6页 已 redirect)', () => {
     const g = menuConfig.find((m) => m.path === '/smart-bi')!;
     const paths = g.children!.map((c) => c.path);
     // P3: /smart-bi/query 已合并入 /smart-bi/analysis?tab=query (菜单项移除, 由 redirect 桥接)
     expect(paths, '/smart-bi/query 应已移除 (P3 合并)').not.toContain('/smart-bi/query');
-    // P4: /smart-bi/finance 已合并入 /smart-bi/financial-dashboard?tab=analysis (菜单项移除, 由 redirect 桥接)
+    // P4: /smart-bi/finance 已合并入 hub (菜单项移除, 由 redirect 桥接)
     expect(paths, '/smart-bi/finance 应已移除 (P4 合并)').not.toContain('/smart-bi/finance');
     for (const p of [
-      '/smart-bi/dashboard', '/smart-bi/analysis',
-      '/smart-bi/financial-dashboard', '/smart-bi/sales',
+      '/smart-bi/dashboard', '/smart-bi/analysis', '/smart-bi/analysis-hub',
       '/smart-bi/revenue-report', '/smart-bi/upload', '/smart-bi/query-templates',
       '/smart-bi/data-completeness', '/smart-bi/food-kb-feedback',
       '/smart-bi/fallback-log', '/smart-bi/calibration',
@@ -82,7 +108,7 @@ describe('menuConfig — merged 数据与分析 group (Task 1)', () => {
   });
 });
 
-describe('menuConfig — 业态门控方向 (Task 2, M4)', () => {
+describe('menuConfig — 业态门控方向 (WS4)', () => {
   const group = () => menuConfig.find((m) => m.path === '/smart-bi')!;
   const child = (p: string) => group().children!.find((c) => c.path === p)!;
 
@@ -95,11 +121,12 @@ describe('menuConfig — 业态门控方向 (Task 2, M4)', () => {
     expect(child(p).hideForFactoryTypes).toContain('RESTAURANT');
   });
 
-  it.each([
-    '/analytics/trends',   // 双业态自适应 — 餐饮看 POS 营收趋势的唯一入口
-    '/analytics/kpi',      // 餐饮有 restaurant-ops/summary 数据 (Steve 定: 不门控)
-  ])('双业态项 %s 不门控 (餐饮仍可见)', (p) => {
-    expect(child(p).hideForFactoryTypes).toBeUndefined();
+  it('经营分析 hub 不门控 (双业态自适应 — 财务/销售/趋势/KPI 各 tab 内部自适应)', () => {
+    expect(child('/smart-bi/analysis-hub').hideForFactoryTypes).toBeUndefined();
+  });
+
+  it('异常预警不门控 (双业态可见)', () => {
+    expect(child('/analytics/alert-dashboard').hideForFactoryTypes).toBeUndefined();
   });
 
   it('收入管理报表对制造隐藏 (FACTORY)', () => {
@@ -108,6 +135,11 @@ describe('menuConfig — 业态门控方向 (Task 2, M4)', () => {
 
   it('行为校准监控保留 platform_admin 门控', () => {
     expect(child('/smart-bi/calibration').roles).toContain('platform_admin');
+  });
+
+  it('WS4: AI 运维 (知识库反馈/AI追问日志) 收 admin 门控', () => {
+    expect(child('/smart-bi/food-kb-feedback').roles).toContain('platform_admin');
+    expect(child('/smart-bi/fallback-log').roles).toContain('platform_admin');
   });
 });
 

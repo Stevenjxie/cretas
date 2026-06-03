@@ -25,6 +25,8 @@ import {
   buildChart,
 } from '@/api/smartbi/python-service';
 import { getFinanceSummary, type FinanceSummary } from '@/api/smartbi/gold';
+import { getGoldDataRange } from '@/api/smartbi/dataRange';
+import { resolveAllHistoryRange } from './analysisDefaults';
 import { ElMessage } from 'element-plus';
 import {
   Refresh,
@@ -692,11 +694,16 @@ onMounted(async () => {
   // visibility for KPI cards below.
   fetchCapability();
 
-  // 默认选择最近365天（覆盖更多财务数据）
-  const end = new Date();
-  const start = new Date();
-  start.setTime(start.getTime() - 3600 * 1000 * 24 * 365);
-  dateRange.value = [start, end];
+  // WS4 #10: 默认全部历史 (而非近365天 — 财务数据可能落在更早区间)。探 gold 数据窗,
+  // 失败回落宽窗。绝不回到固定 N 天窗。
+  let allHistory: [string, string];
+  try {
+    const probe = factoryId.value ? await getGoldDataRange(factoryId.value) : null;
+    allHistory = resolveAllHistoryRange(probe);
+  } catch {
+    allHistory = resolveAllHistoryRange(null);
+  }
+  dateRange.value = [new Date(allHistory[0]), new Date(allHistory[1])];
 
   // Load data source list in background (for dropdown)
   loadDataSources();
@@ -1972,29 +1979,7 @@ onUnmounted(() => {
       </div>
     </div>
 
-    <!-- Phase B v0 Gold preview CTA — links to /smart-bi/gold-preview which
-         reads agg_* (Silver+Gold) directly. Appears to all users; once the
-         Java READ_FROM=GOLD cutover lands this banner can become a toggle
-         on this same page. For now, it's an exploration entry point. -->
-    <el-alert
-      type="info"
-      :closable="false"
-      show-icon
-      class="gold-cta"
- title=" Gold 数据层预览"
-    >
-      <template #default>
-        <div class="gold-cta-row">
-          <span>试用基于 Silver+Gold (agg_*) 的新数据路径 — 6 个 KPI 查询并发,直连 Python。</span>
-          <el-button
-            size="small"
-            type="primary"
-            plain
-            @click="$router.push('/smart-bi/gold-preview')"
-          >打开 Gold 预览</el-button>
-        </div>
-      </template>
-    </el-alert>
+    <!-- WS4 #9: Gold 预览页已删除 (探索期临时入口), CTA banner 随之移除。 -->
 
     <template v-if="canViewPrice">
     <!-- 筛选栏 -->

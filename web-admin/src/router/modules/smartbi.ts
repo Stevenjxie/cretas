@@ -3,6 +3,7 @@
  * 面向财务主管的经营分析工具
  */
 import type { RouteRecordRaw } from 'vue-router';
+import { buildHubRedirect, buildPathRedirect } from '../analysisHubRedirect';
 
 const smartBIRoutes: RouteRecordRaw[] = [
   // SmartBI 主模块
@@ -18,11 +19,18 @@ const smartBIRoutes: RouteRecordRaw[] = [
         component: () => import('@/views/smart-bi/Dashboard.vue'),
         meta: { requiresAuth: true, title: '经营驾驶舱', icon: 'Odometer', module: 'analytics' },
       },
+      // WS4: 经营分析合并模块入口 (财务/销售/趋势/KPI·指标 tab 化)。
+      {
+        path: 'analysis-hub',
+        name: 'SmartBIAnalysisHub',
+        component: () => import('@/views/smart-bi/BusinessAnalysisHub.vue'),
+        meta: { requiresAuth: true, title: '经营分析', icon: 'TrendCharts', module: 'analytics' },
+      },
+      // WS4: 销售分析已合并入经营分析 hub (redirect 保书签 → ?tab=sales)。组件经 hub 加载。
       {
         path: 'sales',
         name: 'SmartBISales',
-        component: () => import('@/views/smart-bi/SalesAnalysis.vue'),
-        meta: { requiresAuth: true, title: '销售分析', icon: 'TrendCharts', module: 'analytics' },
+        redirect: (to) => buildHubRedirect(to, 'sales'),
       },
       {
         path: 'query-templates',
@@ -72,29 +80,28 @@ const smartBIRoutes: RouteRecordRaw[] = [
         component: () => import('@/views/calibration/CalibrationListView.vue'),
         meta: { requiresAuth: true, title: '行为校准监控', icon: 'Aim', module: 'analytics' },
       },
+      // WS4: 财务看板已合并入经营分析 hub (redirect 保书签 → ?tab=finance, 保留 ?section=)。
       {
         path: 'financial-dashboard',
         name: 'FinancialDashboardPBI',
-        component: () => import('@/views/smart-bi/FinancialDashboardPBI.vue'),
-        meta: { requiresAuth: true, title: '财务 PBI 看板', icon: 'TrendCharts', module: 'analytics' },
+        redirect: (to) => buildHubRedirect(to, 'finance'),
       },
+      // WS4 #9: What-If/餐饮V2/Gold预览删除 — redirect 到经营驾驶舱 (component 已不在 menu;
+      // 直链 redirect 不 404, 保书签 query)。
       {
         path: 'whatif',
         name: 'SmartBIWhatIf',
-        component: () => import('@/views/smart-bi/WhatIfSimulator.vue'),
-        meta: { requiresAuth: true, title: 'What-If模拟', icon: 'TrendCharts', module: 'analytics' },
+        redirect: (to) => buildPathRedirect(to, '/smart-bi/dashboard'),
       },
       {
         path: 'restaurant-v2',
         name: 'SmartBIRestaurantV2',
-        component: () => import('@/views/smart-bi/RestaurantV2Dashboard.vue'),
-        meta: { requiresAuth: true, title: '餐饮 V2 Dashboard', icon: 'DataAnalysis', module: 'analytics' },
+        redirect: (to) => buildPathRedirect(to, '/smart-bi/dashboard'),
       },
       {
         path: 'gold-preview',
         name: 'SmartBIGoldPreview',
-        component: () => import('@/views/smart-bi/GoldPreview.vue'),
-        meta: { requiresAuth: true, title: 'Gold 预览', icon: 'Cpu', module: 'analytics' },
+        redirect: (to) => buildPathRedirect(to, '/smart-bi/dashboard'),
       },
       // QHJ 收入管理报表 (青花椒 / R_*_REAL restaurant chains; Phase I, 2026-05-13)
       {
@@ -116,8 +123,9 @@ const smartBIRoutes: RouteRecordRaw[] = [
 export const smartBIRedirects: RouteRecordRaw[] = [
   // P3: AI问答合并入 AI探索 query tab。function-form 保留 incoming query (e.g. AI 快捷入口的 ?q=<问题>)。
   { path: '/smart-bi/query', redirect: (to) => ({ path: '/smart-bi/analysis', query: { ...to.query, tab: 'query' } }) },
-  // P4: 财务数据分析合并入财务看板 analysis section。function-form 保留 incoming ?tab=cost (FinanceAnalysis 内部子 tab) + 加 section=analysis (section 选择器)。
-  { path: '/smart-bi/finance', redirect: (to) => ({ path: '/smart-bi/financial-dashboard', query: { ...to.query, section: 'analysis' } }) },
+  // P4 + WS4: 财务数据分析合并入经营分析 hub 财务 tab analysis section。保留 incoming ?tab=cost
+  // (FinanceAnalysis 内部子 tab) + 加 section=analysis (FinanceAnalysis section 选择器)。
+  { path: '/smart-bi/finance', redirect: (to) => ({ path: '/smart-bi/analysis-hub', query: { ...to.query, tab: 'finance', section: 'analysis' } }) },
 ];
 
 export default smartBIRoutes;

@@ -42,6 +42,8 @@ import {
   batchBuildCharts,
   buildChart,
 } from '@/api/smartbi/python-service';
+import { getGoldDataRange } from '@/api/smartbi/dataRange';
+import { resolveAllHistoryRange } from './analysisDefaults';
 import type { TableRow } from '@/types/api';
 
 const authStore = useAuthStore();
@@ -627,11 +629,16 @@ onMounted(async () => {
     return;
   }
 
-  // 默认选择最近30天
-  const end = new Date();
-  const start = new Date();
-  start.setTime(start.getTime() - 3600 * 1000 * 24 * 30);
-  dateRange.value = [start, end];
+  // WS4 #11: 默认全部历史 (而非近30天 — qhj 等租户真实数据落在历史区间,
+  // 近30天常空 → "所选区间无销售数据")。探 gold 数据窗; 失败回落宽窗 (绝不近30天)。
+  let allHistory: [string, string];
+  try {
+    const probe = factoryId.value ? await getGoldDataRange(factoryId.value) : null;
+    allHistory = resolveAllHistoryRange(probe);
+  } catch {
+    allHistory = resolveAllHistoryRange(null);
+  }
+  dateRange.value = [new Date(allHistory[0]), new Date(allHistory[1])];
 
   // 加载数据源列表
   await loadDataSources();

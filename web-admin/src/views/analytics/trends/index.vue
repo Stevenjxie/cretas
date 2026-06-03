@@ -7,6 +7,8 @@ import { ElMessage } from 'element-plus';
 import echarts from '@/utils/echarts';
 import TemplateGrid from '@/views/smart-bi/components/TemplateGrid.vue';
 import { getDailyTrend, type DailyTrend } from '@/api/smartbi/gold';
+import { getGoldDataRange } from '@/api/smartbi/dataRange';
+import { resolveAllHistoryRange } from '@/views/smart-bi/analysisDefaults';
 // Day 9 数据织网 Sub-Project A: capability-driven card visibility
 import { useCapability } from '@/composables/useCapability';
 import CapabilityGate from '@/components/CapabilityGate.vue';
@@ -25,7 +27,8 @@ const canViewPrice = computed(() => permissionStore.canViewPrice);
 const isRestaurantTenant = computed(() => authStore.factoryType === 'RESTAURANT');
 
 const loading = ref(false);
-const selectedPeriod = ref('week');
+// WS4 #12: 默认"全部历史" (而非近7天) — 餐饮 POS 趋势第一眼即看到完整历史曲线。
+const selectedPeriod = ref('all');
 
 // 趋势数据
 const trendData = ref({
@@ -43,6 +46,7 @@ let costChart: echarts.ECharts | null = null;
 let resizeRaf = 0;
 
 const periodOptions = [
+  { label: '全部历史', value: 'all' },
   { label: '近7天', value: 'week' },
   { label: '近30天', value: 'month' },
   { label: '近90天', value: 'quarter' },
@@ -98,6 +102,19 @@ function _periodToDateRange(period: string): [string, string] {
   const days = period === 'week' ? 7 : period === 'quarter' ? 90 : 30;
   start.setDate(start.getDate() - (days - 1));
   return [iso(start), iso(end)];
+}
+
+// WS4 #12: 'all' = 全部历史 — 探 gold 数据窗拿真实 [min, max]; 失败回落宽窗。
+async function _resolvePrimaryRange(period: string): Promise<[string, string]> {
+  if (period === 'all') {
+    try {
+      const probe = factoryId.value ? await getGoldDataRange(factoryId.value) : null;
+      return resolveAllHistoryRange(probe);
+    } catch {
+      return resolveAllHistoryRange(null);
+    }
+  }
+  return _periodToDateRange(period);
 }
 
 // Auto-fallback label shown when Gold chart falls back to a prior range.
@@ -163,7 +180,7 @@ async function loadGoldTrend() {
   // Primary range is still tried first; cached fallback used only when primary empty.
   const iso = (d: Date): string => d.toISOString().slice(0, 10);
   const y = new Date().getFullYear();
-  const primary = _periodToDateRange(selectedPeriod.value);
+  const primary = await _resolvePrimaryRange(selectedPeriod.value);
   const cacheKey = `goldTrend.lastRange.${factoryId.value}`;
   const cached = (() => {
     try { return JSON.parse(localStorage.getItem(cacheKey) || 'null') as { s: string; e: string; label: string } | null; }
@@ -308,8 +325,11 @@ async function loadTrendData() {
   if (!factoryId.value) return;
   loading.value = true;
   try {
+    // 工厂生产趋势 (Java reports) 仅认 week/month/quarter/year; 'all' (全部历史) 映射到 year
+    // 作其最宽窗。餐饮 POS 趋势 (loadGoldTrend) 才真正按 gold 数据窗取全部历史。
+    const javaPeriod = selectedPeriod.value === 'all' ? 'year' : selectedPeriod.value;
     const response = await get(`/${factoryId.value}/reports/dashboard/trends`, {
-      params: { period: selectedPeriod.value }
+      params: { period: javaPeriod }
     });
     if (response.success && response.data) {
       trendData.value = response.data;

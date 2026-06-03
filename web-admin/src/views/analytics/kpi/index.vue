@@ -37,7 +37,9 @@ async function loadRestaurantKpi() {
   if (!factoryId.value) return;
   loading.value = true;
   try {
-    const res = await pythonFetch('/api/smartbi/restaurant-ops/summary?days=30') as {
+    // WS4 #10: 默认全部历史。restaurant-ops/summary 的 days 上限 365 (后端 Query le=365),
+    // 取最大窗 = 餐饮租户全部历史 (qhj 等数据落在单年内)。绝不再用 days=30 默认窗。
+    const res = await pythonFetch('/api/smartbi/restaurant-ops/summary?days=365') as {
       success: boolean;
       data?: {
         totals?: Record<string, number>;
@@ -164,7 +166,7 @@ function formatPercent(value: number) {
     <div v-if="isRestaurant" class="kpi-grid" v-loading="loading">
       <el-card class="kpi-card">
         <template #header>
-          <div class="card-header"><el-icon><KnifeFork /></el-icon><span>运营指标 (近30天)</span></div>
+          <div class="card-header"><el-icon><KnifeFork /></el-icon><span>运营指标 (全部历史)</span></div>
         </template>
         <div class="kpi-item">
           <div class="kpi-label">损耗率 (金额占领料比)</div>
@@ -212,13 +214,13 @@ function formatPercent(value: number) {
         <div style="padding:12px 0">
           <p style="color:#606266;line-height:1.8">
             本 KPI 看板基于 <b>Gold 运营层聚合</b>. 数据来自领料/损耗/盘点 3 个 Silver 事实表
-            的当日汇总 (近 30 天).
+            的当日汇总 (全部历史).
           </p>
           <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
  <el-button size="small" @click="router.push('/smart-bi/query?q=最近30天损耗最多的食材和类型占比')"> 损耗分析</el-button>
  <el-button size="small" @click="router.push('/smart-bi/query?q=哪个食材盘亏最严重')"> 盘亏分析</el-button>
  <el-button size="small" @click="router.push('/smart-bi/query?q=最近30天领料趋势 top 10 食材')"> 领料趋势</el-button>
-            <el-button size="small" @click="router.push('/smart-bi/restaurant-v2')">餐饮综合分析 V2 →</el-button>
+            <el-button size="small" @click="router.push('/smart-bi/analysis?tab=query')">AI 综合分析 →</el-button>
           </div>
         </div>
       </el-card>
@@ -229,7 +231,7 @@ function formatPercent(value: number) {
         </template>
         <div style="text-align:center;padding:20px 0">
           <div style="font-size:24px;font-weight:600;color:#303133">{{ restaurantKpi.topIngredient }}</div>
-          <div style="color:#909399;margin-top:8px;font-size:13px">近30天消耗最多 (按金额)</div>
+          <div style="color:#909399;margin-top:8px;font-size:13px">全部历史消耗最多 (按金额)</div>
           <el-button type="text" size="small" style="margin-top:12px"
             @click="router.push('/restaurant/requisitions')">查看领料明细 →</el-button>
         </div>
