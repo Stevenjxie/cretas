@@ -1431,6 +1431,13 @@ const businessRoutes: RouteRecordRaw[] = [
             meta: { requiresAuth: true, title: '菜品分析', module: 'restaurant' }
           },
           {
+            // G2 (2026-06-03): 目标拆分 + 达成率预警 — 年/月/周/日四级目标录入
+            path: 'analytics/targets',
+            name: 'RestaurantTargets',
+            component: () => import('@/views/restaurant/analytics/target-hierarchy.vue'),
+            meta: { requiresAuth: true, title: '目标管理', module: 'restaurant' }
+          },
+          {
             // IA v2: 平台口碑 (原 经营与平台分析, 明标需接平台数据)
             path: 'analytics/platform',
             name: 'RestaurantPlatform',
