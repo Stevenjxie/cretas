@@ -3,7 +3,7 @@
  * FinancialDashboardPBI - 财务分析看板 (Power BI Style)
  * Orchestrates all 7 financial chart types with AI analysis and PPT export
  */
-import { ref, reactive, computed, watch, nextTick, onBeforeUnmount } from 'vue';
+import { ref, reactive, computed, watch, nextTick, onMounted, onBeforeUnmount } from 'vue';
 import { useRoute } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import { useAuthStore } from '@/store/modules/auth';
@@ -137,11 +137,14 @@ function clearAllAnnotations(chartType: string) {
 
 const uploadId = ref<number | null>(null);
 const uploadIdInput = ref<string>('');
+// 默认「全部历史」: type='year' + allHistory 标记 → 后端 period_type='year'
+// (normalizer 对 'year' 不做任何月份过滤, 即返回该数据源全部数据)。
 const periodSelection = ref<PeriodSelection>({
   type: 'year',
   year: new Date().getFullYear(),
   value: String(new Date().getFullYear()),
   compareEnabled: false,
+  allHistory: true,
 });
 
 const isGenerating = ref(false);
@@ -257,16 +260,18 @@ function teardownLazyObserver(): void {
 
 // ---- Computed ----
 const currentYear = computed(() => periodSelection.value.year);
-const periodType = computed(() => periodSelection.value.type === 'year' ? 'year' : 'month_range');
+// 「全部历史」与「单年」都映射 period_type='year' (normalizer 对 'year' 不做月份过滤 → 返回全部数据)。
+const periodType = computed(() =>
+  periodSelection.value.allHistory || periodSelection.value.type === 'year' ? 'year' : 'month_range');
 const startMonth = computed(() => {
-  if (periodSelection.value.type === 'year') return 1;
+  if (periodSelection.value.allHistory || periodSelection.value.type === 'year') return 1;
   if (Array.isArray(periodSelection.value.value)) {
     return parseInt(String(periodSelection.value.value[0]).split('-')[1] || '1', 10);
   }
   return 1;
 });
 const endMonth = computed(() => {
-  if (periodSelection.value.type === 'year') return 12;
+  if (periodSelection.value.allHistory || periodSelection.value.type === 'year') return 12;
   if (Array.isArray(periodSelection.value.value)) {
     return parseInt(String(periodSelection.value.value[1]).split('-')[1] || '12', 10);
   }
@@ -1386,6 +1391,22 @@ watch(() => charts.value.length, () => {
   nextTick(() => setupResizeObserver());
 }, { once: true });
 
+// 自动加载: 若已有数据源 (route query ?upload_id= 或 ?uploadId=), 进页即以「全部历史」
+// 生成看板, 免手动点「生成看板」。无数据源时保留引导空态 (PBI 看板是 upload 绑定的, 没有
+// upload_id 无法生成 — 餐饮租户默认落 gold「财务数据分析」子页, 见 financeDashboardSection.ts)。
+onMounted(() => {
+  const q = route.query;
+  const rawId = q.upload_id ?? q.uploadId;
+  const idStr = Array.isArray(rawId) ? rawId[0] : rawId;
+  const id = idStr ? parseInt(String(idStr), 10) : NaN;
+  if (!isNaN(id) && id > 0) {
+    uploadId.value = id;
+    uploadIdInput.value = String(id);
+    // periodSelection 默认 allHistory=true → 全部历史
+    nextTick(() => generate(false));
+  }
+});
+
 // Cleanup on unmount
 onBeforeUnmount(() => {
   // Bug #2: mark unmount so in-flight generate() stops touching reactive state,
@@ -1427,6 +1448,7 @@ onBeforeUnmount(() => {
             v-model="periodSelection"
             :show-quick-select="true"
             :show-custom-tab="false"
+            :show-all-history="true"
             default-type="year"
             size="small"
             style="margin-left: 8px"
@@ -1584,7 +1606,7 @@ onBeforeUnmount(() => {
 
     <!-- Empty state -->
     <div v-if="!dashboardResponse && !isGenerating" class="empty-state">
-      <SmartBIEmptyState type="no-data" title="请选择数据源和时间范围" description="点击「生成看板」开始分析" :show-action="false" />
+      <SmartBIEmptyState type="no-data" title="请选择数据源" description="选好数据源后点击「生成看板」(默认「全部历史」, 展示该数据源全部数据)" :show-action="false" />
     </div>
 
     <!-- Loading skeleton (grid mode) -->
