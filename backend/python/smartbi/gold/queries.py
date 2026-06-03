@@ -49,6 +49,55 @@ def _validate_range(start: Optional[date], end: Optional[date]) -> None:
         raise ValueError(f"start {start} > end {end}")
 
 
+# Wrapping bracket pairs we strip for display. Each tuple is (open, close);
+# we only strip when the WHOLE name is wrapped by a matching pair.
+_BRACKET_PAIRS = (
+    ("[", "]"),
+    ("【", "】"),
+    ("（", "）"),
+    ("(", ")"),
+)
+
+
+def _clean_display_name(name):
+    """Strip a single matched WRAPPING bracket pair from a display name.
+
+    qhj's POS export wraps payment-channel / coupon / discount names in
+    brackets (e.g. ``[微信]``, ``[饿了么]``, ``[美团套餐券]``) — an export
+    artifact that surfaces in the dashboard 渠道占比, sales 渠道明细 and the
+    AI 洞察/FactBook looking like markup. This normalizes them for display.
+
+    Conservative — only strips when the ENTIRE name is wrapped: it starts
+    with an open bracket AND ends with its matching close bracket. Names
+    with mid-string or unmatched brackets are returned unchanged:
+      ``[微信]``                       → ``微信``
+      ``[美团套餐券]``                  → ``美团套餐券``
+      ``现金`` / ``招行买单`` / ``银行卡`` → unchanged (no wrapping pair)
+      ``[微信]余额``                    → unchanged (close bracket not at end)
+      ``招牌青花椒鱼(微麻微辣)[小份]``    → unchanged (not fully wrapped)
+
+    Applied to the NAME field in the RESULT (post-fetch, after GROUP BY) so
+    grouping/aggregation is unaffected — only the displayed name is cleaned.
+    Non-str / empty / None inputs are returned as-is (safe).
+    """
+    if not isinstance(name, str):
+        return name
+    s = name.strip()
+    if len(s) < 2:
+        return name
+    for open_b, close_b in _BRACKET_PAIRS:
+        if s.startswith(open_b) and s.endswith(close_b):
+            inner = s[len(open_b):len(s) - len(close_b)]
+            # Guard against over-stripping: the inner text must not itself
+            # contain an unbalanced occurrence of THIS pair's close bracket,
+            # which would mean the leading open didn't wrap the whole name
+            # (e.g. "[a]b]" — close at end but a mid-string close exists).
+            if close_b in inner:
+                return name
+            return inner
+    return name
+
+
 def _median(values):
     """Single-value median of a numeric iterable.
 
@@ -343,7 +392,9 @@ async def channel_breakdown(
         share = float((amt / total * 100).quantize(Decimal("0.01"))) if total > 0 else 0.0
         channels.append({
             "channel_id": int(r["channel_id"]),
-            "channel_name": r["name"],
+            # Display normalization: strip qhj POS export wrapping brackets
+            # (e.g. [微信]→微信). Done post-fetch so GROUP BY is unaffected.
+            "channel_name": _clean_display_name(r["name"]),
             "amount": float(amt),
             "bill_count": int(r["bill_count"]),
             "share_pct": share,
@@ -413,7 +464,9 @@ async def discount_breakdown(
         share = float((amt / total * 100).quantize(Decimal("0.01"))) if total > 0 else 0.0
         items.append({
             "discount_id": int(r["discount_id"]),
-            "discount_name": r["name"],
+            # Display normalization: strip qhj POS export wrapping brackets
+            # (e.g. [美团套餐券]→美团套餐券). Post-fetch so GROUP BY unaffected.
+            "discount_name": _clean_display_name(r["name"]),
             "amount": float(amt),
             "bill_count": int(r["bill_count"]),
             "share_pct": share,
@@ -574,7 +627,10 @@ async def order_type_mix(
             else Decimal("0")
         )
         types.append({
-            "order_type": r["order_type"],
+            # Display normalization (consistency with channel/discount): strip
+            # any wrapping brackets. 堂食/外卖 are normally unbracketed so this
+            # is a no-op for qhj, but guards against bracketed POS export values.
+            "order_type": _clean_display_name(r["order_type"]),
             "revenue": float(amt),
             "bill_count": int(r["bills"]),
             "revenue_pct": float(pct),
