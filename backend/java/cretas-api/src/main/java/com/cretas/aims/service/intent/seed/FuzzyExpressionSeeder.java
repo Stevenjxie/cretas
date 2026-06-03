@@ -152,6 +152,16 @@ public class FuzzyExpressionSeeder implements ApplicationRunner {
         m.put("RESTAURANT_STAFF_RANKING", List.of(
                 "员工业绩排名怎么样", "哪个员工业绩好", "服务员业绩排行"));
 
+        // ---- 营收趋势 / 同比环比 (gold trend tool; 高余弦种子压过 COMPREHENSIVE_SYNTHESIS) ----
+        // 必含仪表盘 chip t9 原话, 让"同比环比/趋势"问题命中 RESTAURANT_REVENUE_TREND(绑 gold
+        // restaurant_revenue_trend_gold)直接执行出月度趋势+图, 而非被综合分析拦截或 LLM 描述。
+        m.put("RESTAURANT_REVENUE_TREND", List.of(
+                "进行同比和环比分析，识别增长和下降趋势",
+                "同比和环比分析，识别增长和下降趋势",
+                "同比环比分析", "识别增长和下降趋势",
+                "营收趋势", "月度趋势", "营收趋势分析", "月度营收趋势",
+                "销售额的月度变化趋势", "销售趋势分析", "营收的增长和下降趋势"));
+
         return m;
     }
 
