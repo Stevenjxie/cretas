@@ -43,6 +43,7 @@ import com.cretas.aims.service.impl.IntentConfigRollbackService;
 import com.cretas.aims.service.intent.IntentConfigManagementService;
 import com.cretas.aims.service.intent.IntentRecognitionPipelineService;
 import com.cretas.aims.ai.tool.WriteGuardService;
+import com.cretas.aims.ai.tool.NegationTwinPolicy;
 import com.cretas.aims.dto.ClassifierResult;
 import com.cretas.aims.dto.SemanticMatchResult;
 import com.cretas.aims.dto.intent.RouteDecision;
@@ -121,6 +122,7 @@ public class IntentRecognitionPipelineServiceImpl implements IntentRecognitionPi
     private final SemanticRouterService semanticRouterService;
     private final LongTextHandler longTextHandler;
     private final IntentConfigManagementService configService;
+    private final NegationTwinPolicy negationTwinPolicy;
 
     @Autowired
     public IntentRecognitionPipelineServiceImpl(
@@ -148,7 +150,8 @@ public class IntentRecognitionPipelineServiceImpl implements IntentRecognitionPi
             IntentKnowledgeBase knowledgeBase,
             SemanticRouterService semanticRouterService,
             LongTextHandler longTextHandler,
-            IntentConfigManagementService configService) {
+            IntentConfigManagementService configService,
+            NegationTwinPolicy negationTwinPolicy) {
         this.intentRepository = intentRepository;
         this.recordRepository = recordRepository;
         this.objectMapper = objectMapper;
@@ -174,6 +177,7 @@ public class IntentRecognitionPipelineServiceImpl implements IntentRecognitionPi
         this.semanticRouterService = semanticRouterService;
         this.longTextHandler = longTextHandler;
         this.configService = configService;
+        this.negationTwinPolicy = negationTwinPolicy;
     }
 
     // ==================== Optional setter-injected dependencies ====================
@@ -661,18 +665,37 @@ public class IntentRecognitionPipelineServiceImpl implements IntentRecognitionPi
             result.setPreprocessedQuery(preprocessedQuery);
         }
 
-        // v7.5: Negation semantic intent conversion
-        if (result != null && result.getBestMatch() != null && enhancedResult != null) {
-            QueryPreprocessorService.NegationInfo negationInfo = enhancedResult.getNegationInfo();
-            if (negationInfo != null && negationInfo.hasNegation()) {
-                String originalIntentCode = result.getBestMatch().getIntentCode();
-                String convertedIntentCode = convertNegationIntent(originalIntentCode, true);
-                if (!convertedIntentCode.equals(originalIntentCode)) {
-                    AIIntentConfig convertedConfig = configService.getIntentConfigByCode(factoryId, convertedIntentCode);
-                    if (convertedConfig != null) {
-                        result = result.toBuilder().bestMatch(convertedConfig).build();
+        // ========== W1b T4: single-intent negation veto + twin rerank (replaces v7.5) ==========
+        // 复用早期门已算的 vetoKind(同方法局部,line ~462)。到此处 VETO_READ 已被早期门截返,
+        // 故 vetoKind ∈ {NONE, EXCLUDE_CONTENT, VETO_WRITE}。VETO_WRITE → 写候选转读孪生;
+        // NONE/EXCLUDE_CONTENT 且读措辞(QUERY)→ 组件2 读优先重排。fail-open:policy 异常不破识别。
+        if (result != null && result.getTopCandidates() != null && !result.getTopCandidates().isEmpty()) {
+            try {
+                QueryPreprocessorService.NegationInfo negForPolicy =
+                        QueryPreprocessorService.NegationInfo.builder().kind(vetoKind).build();
+                IntentKnowledgeBase.ActionType at = knowledgeBase.detectActionType(userInput);
+                java.util.function.Function<String, AIIntentConfig> resolver =
+                        code -> configService.getIntentConfigByCode(factoryId, code);
+                List<CandidateIntent> before = result.getTopCandidates();
+                List<CandidateIntent> after =
+                        negationTwinPolicy.applyNegationVetoAndTwinRerank(before, negForPolicy, at, resolver);
+                if (negationTwinPolicy.isVetoToClarification(before, after, negForPolicy)) {
+                    // VETO_WRITE 无读孪生剔空 → 澄清(VETO_READ 早期门已截,此处兜 VETO_WRITE 空集)。
+                    IntentMatchResult clar = buildNegationClarificationResult(userInput);
+                    saveIntentMatchRecord(clar, factoryId, userId, sessionId, false);
+                    return attachTiming(clar, startTimeMs, preprocessEndMs);
+                }
+                if (after != null && !after.isEmpty()
+                        && after.get(0) != result.getTopCandidates().get(0)) {
+                    AIIntentConfig newBest =
+                            configService.getIntentConfigByCode(factoryId, after.get(0).getIntentCode());
+                    if (newBest != null) {
+                        result = result.toBuilder().bestMatch(newBest).topCandidates(after).build();
                     }
                 }
+            } catch (Exception e) {
+                log.warn("[W1b] single-intent negation/twin policy failed, fail-open: input='{}': {}",
+                        userInput, e.toString());
             }
         }
 
@@ -714,7 +737,9 @@ public class IntentRecognitionPipelineServiceImpl implements IntentRecognitionPi
                     .overallConfidence(0.0).reasoning("无法识别意图").build();
         }
         try {
-            return multiLabelIntentClassifier.classifyMultiLabel(userInput, factoryId, threshold);
+            MultiIntentResult multi = multiLabelIntentClassifier.classifyMultiLabel(userInput, factoryId, threshold);
+            // W1b T4: multi-intent negation veto + twin rerank. classifyMultiLabel 本身不做否定处理(finding 3)。
+            return applyMultiIntentNegationPolicy(multi, userInput, factoryId);
         } catch (Exception e) {
             log.error("多意图识别失败: {}", e.getMessage(), e);
             return MultiIntentResult.builder()
@@ -722,6 +747,126 @@ public class IntentRecognitionPipelineServiceImpl implements IntentRecognitionPi
                     .executionStrategy(MultiIntentResult.ExecutionStrategy.PARALLEL)
                     .overallConfidence(0.0).reasoning("识别过程异常: " + e.getMessage()).build();
         }
+    }
+
+    /**
+     * W1b T4: 多意图否定否决 + 读写孪生重排。
+     *
+     * <p>① {@code VETO_READ}("不用查库存了")→ 抑制为单意图澄清结果({@code isMultiIntent=false} +
+     * 空 intents + 澄清文案进 reasoning;{@code MultiIntentResult} 无 clarification 字段,用 reasoning 承载)。
+     * ② 其它({@code NONE/EXCLUDE_CONTENT/VETO_WRITE})→ 把 {@code SingleIntentMatch} 映射成
+     * {@code CandidateIntent}(code+confidence),过 {@code NegationTwinPolicy},再映回过滤后的
+     * {@code SingleIntentMatch} 列表(存活原对象 by-code 保留;VETO_WRITE 转出的读孪生 code 合成最小对象)。</p>
+     *
+     * <p><b>保守不变量</b>:{@code kind==NONE} 时 policy 的组件2只 <i>重排不删</i>(twinRerank 返回全部元素),
+     * 故真复合查询(如 {@code 查库存和今天的销售})所有意图都存活,绝不被误剔。fail-open:任何异常返原 {@code multi}。</p>
+     */
+    // package-private for unit testing (mirrors decideFromScored / maybeAbstain testability pattern).
+    MultiIntentResult applyMultiIntentNegationPolicy(
+            MultiIntentResult multi, String userInput, String factoryId) {
+        if (multi == null) return multi;
+        try {
+            QueryPreprocessorService.NegationKind vetoKind = detectVetoKind(userInput);
+
+            // ① VETO_READ → 抑制为澄清(用户明说不要查/看)。
+            if (vetoKind == QueryPreprocessorService.NegationKind.VETO_READ) {
+                return MultiIntentResult.builder()
+                        .isMultiIntent(false)
+                        .intents(Collections.emptyList())
+                        .executionStrategy(MultiIntentResult.ExecutionStrategy.PARALLEL)
+                        .overallConfidence(0.0)
+                        .reasoning("您是要取消这次操作吗?需要我帮您查询或处理什么?")
+                        .build();
+            }
+
+            List<MultiIntentResult.SingleIntentMatch> intents = multi.getIntents();
+            if (intents == null || intents.isEmpty()) {
+                return multi;  // 无候选 → 无需处理
+            }
+
+            // ② NONE/EXCLUDE_CONTENT/VETO_WRITE → 候选过策略。
+            QueryPreprocessorService.NegationInfo negForPolicy =
+                    QueryPreprocessorService.NegationInfo.builder().kind(vetoKind).build();
+            IntentKnowledgeBase.ActionType at = knowledgeBase.detectActionType(userInput);
+            java.util.function.Function<String, AIIntentConfig> resolver =
+                    code -> configService.getIntentConfigByCode(factoryId, code);
+
+            List<CandidateIntent> candidates = new ArrayList<>(intents.size());
+            for (MultiIntentResult.SingleIntentMatch m : intents) {
+                candidates.add(CandidateIntent.builder()
+                        .intentCode(m.getIntentCode())
+                        .confidence(m.getConfidence())
+                        .build());
+            }
+            List<CandidateIntent> after =
+                    negationTwinPolicy.applyNegationVetoAndTwinRerank(candidates, negForPolicy, at, resolver);
+
+            // VETO_WRITE 把全部写候选剔空 → 单意图澄清(对齐单意图出口的 isVetoToClarification 行为)。
+            if (negationTwinPolicy.isVetoToClarification(candidates, after, negForPolicy)) {
+                return MultiIntentResult.builder()
+                        .isMultiIntent(false)
+                        .intents(Collections.emptyList())
+                        .executionStrategy(MultiIntentResult.ExecutionStrategy.PARALLEL)
+                        .overallConfidence(0.0)
+                        .reasoning("您是要取消这次操作吗?需要我帮您查询或处理什么?")
+                        .build();
+            }
+            if (after == null) {
+                return multi;  // 防御:fail-open
+            }
+
+            // 映回 SingleIntentMatch:存活原对象 by-code 保留(连带 name/params/reasoning);
+            // VETO_WRITE 转出的读孪生 code 在原列表不存在 → 合成最小对象(承载 confidence)。
+            Map<String, MultiIntentResult.SingleIntentMatch> byCode = new LinkedHashMap<>();
+            for (MultiIntentResult.SingleIntentMatch m : intents) {
+                byCode.putIfAbsent(m.getIntentCode(), m);
+            }
+            List<MultiIntentResult.SingleIntentMatch> filtered = new ArrayList<>(after.size());
+            int order = 1;
+            for (CandidateIntent c : after) {
+                MultiIntentResult.SingleIntentMatch orig = byCode.get(c.getIntentCode());
+                if (orig != null) {
+                    filtered.add(orig);
+                } else {
+                    // 读孪生(VETO_WRITE 转出)→ 合成
+                    filtered.add(MultiIntentResult.SingleIntentMatch.builder()
+                            .intentCode(c.getIntentCode())
+                            .confidence(c.getConfidence() == null ? 0.0 : c.getConfidence())
+                            .extractedParams(new HashMap<>())
+                            .reasoning("否定写动词 → 读孪生")
+                            .executionOrder(order)
+                            .build());
+                }
+                order++;
+            }
+
+            // 未发生任何变化(引用相等且大小相同)→ 返原 multi(避免无谓重建)。
+            if (filtered.size() == intents.size() && sameRefsInOrder(filtered, intents)) {
+                return multi;
+            }
+            // MultiIntentResult 无 toBuilder → 全字段重建,仅改 isMultiIntent + intents。
+            return MultiIntentResult.builder()
+                    .isMultiIntent(filtered.size() > 1)
+                    .intents(filtered)
+                    .executionStrategy(multi.getExecutionStrategy())
+                    .overallConfidence(multi.getOverallConfidence())
+                    .reasoning(multi.getReasoning())
+                    .build();
+        } catch (Exception e) {
+            log.warn("[W1b] multi-intent negation/twin policy failed, fail-open: input='{}': {}",
+                    userInput, e.toString());
+            return multi;
+        }
+    }
+
+    /** 引用-逐位相等(避免对象 equals 误判;policy 重排会换引用顺序故可检出)。 */
+    private static boolean sameRefsInOrder(List<MultiIntentResult.SingleIntentMatch> a,
+                                           List<MultiIntentResult.SingleIntentMatch> b) {
+        if (a.size() != b.size()) return false;
+        for (int i = 0; i < a.size(); i++) {
+            if (a.get(i) != b.get(i)) return false;
+        }
+        return true;
     }
 
     // ======================================================================================
@@ -5514,33 +5659,12 @@ public class IntentRecognitionPipelineServiceImpl implements IntentRecognitionPi
     }
 
     // -- Negation conversion --
+    // W1b T4: 委托 NegationTwinPolicy 的单一事实源孪生表(消重,原本地 Map 已删)。
+    // 仍被 applyNegationConversion(多意图触发词 trailing-segment 短路)调用,故保留方法。
     private String convertNegationIntent(String intentCode, boolean hasNegation) {
         if (!hasNegation || intentCode == null) return intentCode;
-        Map<String, String> conversions = Map.ofEntries(
-                Map.entry("PROCESSING_BATCH_COMPLETE", "PROCESSING_BATCH_LIST"),
-                Map.entry("PROCESSING_BATCH_START", "PROCESSING_BATCH_LIST"),
-                Map.entry("PROCESSING_BATCH_PAUSE", "PROCESSING_BATCH_LIST"),
-                Map.entry("PROCESSING_BATCH_CREATE", "PROCESSING_BATCH_LIST"),
-                Map.entry("ALERT_ACKNOWLEDGE", "ALERT_LIST"),
-                Map.entry("ALERT_CREATE", "ALERT_LIST"),
-                Map.entry("EQUIPMENT_STOP", "EQUIPMENT_STATUS"),
-                Map.entry("EQUIPMENT_START", "EQUIPMENT_STATUS"),
-                Map.entry("EQUIPMENT_CONTROL", "EQUIPMENT_STATUS"),
-                Map.entry("EQUIPMENT_STATUS_UPDATE", "EQUIPMENT_STATUS"),
-                Map.entry("SHIPMENT_STATUS_UPDATE", "SHIPMENT_QUERY"),
-                Map.entry("SHIPMENT_CREATE", "SHIPMENT_QUERY"),
-                Map.entry("SHIPMENT_UPDATE", "SHIPMENT_QUERY"),
-                Map.entry("MATERIAL_BATCH_CREATE", "MATERIAL_BATCH_QUERY"),
-                Map.entry("MATERIAL_BATCH_CONSUME", "MATERIAL_BATCH_QUERY"),
-                Map.entry("MATERIAL_EXPIRED_QUERY", "MATERIAL_BATCH_QUERY"),
-                Map.entry("QUALITY_CHECK_EXECUTE", "QUALITY_CHECK_QUERY"),
-                Map.entry("QUALITY_DISPOSITION_EXECUTE", "QUALITY_CHECK_QUERY"),
-                Map.entry("CLOCK_IN", "ATTENDANCE_QUERY"),
-                Map.entry("CLOCK_OUT", "ATTENDANCE_QUERY"),
-                Map.entry("ATTENDANCE_RECORD", "ATTENDANCE_QUERY"),
-                Map.entry("SUPPLIER_EVALUATE", "SUPPLIER_QUERY"),
-                Map.entry("SCALE_ADD_DEVICE", "MATERIAL_BATCH_QUERY"));
-        return conversions.getOrDefault(intentCode, intentCode);
+        String twin = negationTwinPolicy.readTwinOf(intentCode);
+        return twin != null ? twin : intentCode;
     }
 
     private IntentMatchResult applyNegationConversion(IntentMatchResult result, Object enhancedResultObj, String factoryId) {
