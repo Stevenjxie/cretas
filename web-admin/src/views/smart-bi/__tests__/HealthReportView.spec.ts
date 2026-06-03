@@ -182,10 +182,11 @@ describe('HealthReportView', () => {
       summary: {
         criticalCount: 1, warningCount: 0, infoCount: 0, checkedCount: 3,
         coverageNote: '食材成本率因无财务数据跳过',
+        // review fix: 真实 transformKeys 输出 coverage 的 KEY 也被 camelize → 用 camelCase 才匹配 prod
         coverage: {
-          food_cost_ratio: 'skipped:无财务数据',
-          labor_cost_ratio: 'skipped:无财务数据',
-          delivery_dependency: 'ok',
+          foodCostRatio: 'skipped:无财务数据',
+          laborCostRatio: 'skipped:无财务数据',
+          deliveryDependency: 'ok',
         },
       },
       diagnoses: [diag('delivery_dependency', 'critical')],

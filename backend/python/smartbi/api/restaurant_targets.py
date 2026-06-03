@@ -18,7 +18,7 @@ from datetime import datetime
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, field_validator, model_validator
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["RestaurantTargets"])
@@ -100,13 +100,14 @@ class AlertConfigRequest(BaseModel):
             raise ValueError(f"level must be one of {_VALID_LEVELS}")
         return v
 
-    @field_validator("warnThreshold")
-    @classmethod
-    def warn_above_critical(cls, v: float, info) -> float:
-        critical = info.data.get("criticalThreshold")
-        if critical is not None and v <= critical:
+    @model_validator(mode="after")
+    def warn_above_critical(self) -> "AlertConfigRequest":
+        # review fix: 原 @field_validator('warnThreshold') 是死代码 (Pydantic v2 info.data
+        # 不含后声明的 criticalThreshold) → 非法阈值绕过 422 落到 DB CHECK → 未捕获 500。
+        # 改 model_validator(after) 看全字段, 非法组合返 422 而非 500。
+        if self.warnThreshold <= self.criticalThreshold:
             raise ValueError("warn_threshold must be > critical_threshold")
-        return v
+        return self
 
 
 @router.post("/restaurant-targets")
@@ -124,13 +125,21 @@ async def upsert_target(request: Request, body: TargetUpsertRequest) -> Dict[str
     async with pool.acquire() as conn:
         await _set_tenant(conn, factory_id)
         async with conn.transaction():
+            # review fix: store_id 可空 → 按有无选对应 partial unique index 的 conflict target
+            # (否则 PG NULLS DISTINCT 下 factory 级 store_id IS NULL 永不冲突 → 累加重复行不幂等)。
+            # conflict_target 为静态串 (无用户输入), f-string 安全。
+            conflict_target = (
+                "(factory_id, kpi_kind, level, period_key) WHERE store_id IS NULL"
+                if body.storeId is None
+                else "(factory_id, kpi_kind, level, period_key, store_id) WHERE store_id IS NOT NULL"
+            )
             row = await conn.fetchrow(
-                """
+                f"""
                 INSERT INTO restaurant_target_hierarchy
                     (factory_id, kpi_kind, level, period_key, store_id,
                      target_value, reason, created_by)
                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-                ON CONFLICT (factory_id, kpi_kind, level, period_key, store_id)
+                ON CONFLICT {conflict_target}
                 DO UPDATE SET
                     target_value = EXCLUDED.target_value,
                     reason       = EXCLUDED.reason,
@@ -252,13 +261,19 @@ async def upsert_alert_config(request: Request, body: AlertConfigRequest) -> Dic
     async with pool.acquire() as conn:
         await _set_tenant(conn, factory_id)
         async with conn.transaction():
+            # review fix: 同 target — store_id 可空选对应 partial unique index conflict target。
+            conflict_target = (
+                "(factory_id, kpi_kind, level) WHERE store_id IS NULL"
+                if body.storeId is None
+                else "(factory_id, kpi_kind, level, store_id) WHERE store_id IS NOT NULL"
+            )
             row = await conn.fetchrow(
-                """
+                f"""
                 INSERT INTO restaurant_alert_config
                     (factory_id, kpi_kind, level, warn_threshold, critical_threshold,
                      store_id, created_by)
                 VALUES ($1, $2, $3, $4, $5, $6, $7)
-                ON CONFLICT (factory_id, kpi_kind, level, store_id)
+                ON CONFLICT {conflict_target}
                 DO UPDATE SET
                     warn_threshold     = EXCLUDED.warn_threshold,
                     critical_threshold = EXCLUDED.critical_threshold

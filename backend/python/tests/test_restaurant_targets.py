@@ -15,9 +15,11 @@ def test_migration_file_exists():
 
 def test_migration_contains_grant_dml():
     sql = MIGRATION_PATH.read_text(encoding="utf-8")
-    assert "GRANT INSERT, UPDATE, DELETE ON restaurant_target_hierarchy TO smartbi_user" in sql
-    assert "GRANT INSERT, UPDATE, DELETE ON restaurant_alert_config TO smartbi_user" in sql
+    # review fix: 必须含 SELECT — 原迁移漏 SELECT 致所有 GET 读 permission denied (grant gap 第 3 次复发)
+    assert "GRANT SELECT, INSERT, UPDATE, DELETE ON restaurant_target_hierarchy TO smartbi_user" in sql
+    assert "GRANT SELECT, INSERT, UPDATE, DELETE ON restaurant_alert_config TO smartbi_user" in sql
     assert "GRANT USAGE, SELECT ON SEQUENCE restaurant_target_hierarchy_id_seq TO smartbi_user" in sql
+    assert "GRANT USAGE, SELECT ON SEQUENCE restaurant_alert_config_id_seq TO smartbi_user" in sql
 
 
 def test_migration_contains_rls():
@@ -29,8 +31,15 @@ def test_migration_contains_rls():
 
 def test_migration_has_unique_constraint():
     sql = MIGRATION_PATH.read_text(encoding="utf-8")
-    assert "uq_target_grain" in sql
-    assert "factory_id, kpi_kind, level, period_key, store_id" in sql
+    # review fix: 幂等唯一性改 partial unique index 分 store_id 有/无两路
+    # (否则 PG NULLS DISTINCT 下 store_id IS NULL upsert 不幂等)
+    assert "uq_target_grain_store" in sql
+    assert "uq_target_grain_nostore" in sql
+    assert "WHERE store_id IS NOT NULL" in sql
+    assert "WHERE store_id IS NULL" in sql
+    assert "(factory_id, kpi_kind, level, period_key, store_id)" in sql
+    assert "uq_alert_config_store" in sql
+    assert "uq_alert_config_nostore" in sql
 
 
 # ─── Task 2: query function tests ──────────────────────────────────────────────
