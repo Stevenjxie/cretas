@@ -102,8 +102,10 @@ RestockRow:
 |---|---|
 | `demandQty` | Σ `SalesOrderItem.quantity` where `SalesOrder.requiredDeliveryDate = date` AND `SalesOrder.status` 有效 (见 4.4), group by productTypeId。单位=盒。 |
 | `fgAvailableQty` | `sumAvailableQuantityByProductType(factoryId, productTypeId)` (= Σ produced − shipped − reserved, status=AVAILABLE)。 |
-| `wipEstimatedQty` | `sumBalanceByProduct(factoryId, productTypeId)` (kg) × `wipToFgYield` × 1000 / `gramsPerUnit` → 盒。 |
-| `scheduledQty` | `sumOpenPlannedByProduct(factoryId, productTypeId)` (= Σ plannedQuantity − allocatedQuantity, status ∈ {PLANNED, IN_PROGRESS})。单位=盒 (计划单位)。 |
+| `wipEstimatedQty` | `sumAvailableByProduct(factoryId, productTypeId)` (= Σ `SemiFinishedInventory.availableQuantity` where availableQuantity>0, kg) × `wipToFgYield` × 1000 / `gramsPerUnit` → 盒。 |
+| `scheduledQty` | `sumNotStartedPlannedByProduct(factoryId, productTypeId)` = **Σ `plannedQuantity` where status ∈ {PLANNED, PENDING}** (= 已提交但未开工的计划)。单位=盒 (计划单位)。 |
+
+> ⚠️ **double-count 修正 (写计划时发现)**: `ProductionPlan.allocatedQuantity` 是"已分配**原料**数量"**不是生产进度**, 故 spec 早稿的"plannedQuantity − allocatedQuantity"是错的。更关键: **IN_PROGRESS / PAUSED 的计划其产出已经变成 `SemiFinishedInventory`(在产 WIP)或 FG(成品)**, 若再把它们的 plannedQuantity 算进"已排产"就会**同批算两次**(正是审计 F1 担心的)。**正确无重复口径: 已排产只算 NOT-STARTED 计划 (PLANNED + PENDING) 的整 plannedQuantity**; IN_PROGRESS/PAUSED 排除(产出在 WIP/FG)、COMPLETED 排除(在 FG)、CANCELLED 排除、PREPARED/PREP 草稿排除(可能丢弃)。三层 (成品FG / 在产WIP / 已排产NOT-STARTED) 因此互不相交。 |
 | `totalAvailableQty` | fgAvailableQty + wipEstimatedQty + scheduledQty |
 | `shortfallQty` | `max(demandQty − totalAvailableQty, 0)` |
 | `status` | shortfallQty == 0 → SATISFIED; else SHORTFALL |
