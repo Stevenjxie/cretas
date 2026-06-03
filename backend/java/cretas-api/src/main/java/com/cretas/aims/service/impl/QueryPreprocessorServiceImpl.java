@@ -867,6 +867,7 @@ public class QueryPreprocessorServiceImpl implements QueryPreprocessorService {
      * @param kb    意图知识库,提供 {@code detectActionType} 判定否定副词后的动词性质
      * @return VETO_READ / VETO_WRITE / NONE
      */
+    @Override
     public QueryPreprocessorService.NegationKind detectNegationVeto(String input, IntentKnowledgeBase kb) {
         if (input == null) return QueryPreprocessorService.NegationKind.NONE;
         String s = input.trim();

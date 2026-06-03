@@ -40,7 +40,6 @@ import com.cretas.aims.service.SemanticIntentMatcher;
 import com.cretas.aims.service.ClassifierIntentMatcher;
 import com.cretas.aims.service.IntentDisambiguationService;
 import com.cretas.aims.service.impl.IntentConfigRollbackService;
-import com.cretas.aims.service.impl.QueryPreprocessorServiceImpl;
 import com.cretas.aims.service.intent.IntentConfigManagementService;
 import com.cretas.aims.service.intent.IntentRecognitionPipelineService;
 import com.cretas.aims.ai.tool.WriteGuardService;
@@ -561,6 +560,8 @@ public class IntentRecognitionPipelineServiceImpl implements IntentRecognitionPi
         boolean skipPhraseShortcut = false;
         if (containsMultiIntentTrigger(userInput)) {
             skipPhraseShortcut = true;
+            // W1b: segment-scoped path — sentence-level negationVetoWrite intentionally NOT applied here;
+            // the trailing segment is a distinct intent (e.g. "别开始生产，顺便创建采购单"). Multi-intent veto is T4's concern.
             // Wave-7d: trailing segment phrase match
             String trailingSegment = extractTrailingAfterMultiIntentTrigger(userInput);
             if (trailingSegment != null && trailingSegment.length() >= 2) {
@@ -5409,31 +5410,16 @@ public class IntentRecognitionPipelineServiceImpl implements IntentRecognitionPi
 
     // ==================== W1b T3: early VETO gate (finding 7) ====================
 
-    /**
-     * W1b finding 7: 计算否定否决细分类型。
-     *
-     * <p>{@code detectNegationVeto(String, IntentKnowledgeBase)} 只在 {@code QueryPreprocessorServiceImpl}
-     * 上(不在接口),且 IRP 持有 {@code knowledgeBase} —— 故由 IRP 转发调用。QPSImpl 无
-     * {@code @Transactional}/{@code @Cacheable}/AOP pointcut 匹配(它在 {@code service.impl} 包,
-     * PerformanceMonitorAspect 只匹配 {@code service.intent.impl}/{@code scheduling.impl}/{@code executor.impl}),
-     * 故 Spring 不代理它,{@code instanceof} 成立。</p>
-     *
-     * <p><b>Fail-open</b>:若 bean 非预期 impl 类型(理论上被代理)或调用抛错 → 返回 {@code NONE}
-     * (门不触发,落到常规识别;写仍受 W0 写护栏执行层兜底)。早期门 VETO_READ 是唯一非 fail-open 的
-     * 主动短路点,故此处判定必须稳健 —— 拿不到 veto 时保守返 NONE 而非误抑制。</p>
-     */
+    /** W1b: compute the negation veto kind for the early gate. Defensive: any detection failure
+     *  fails open to NONE (writes remain backstopped by the W0 write-guard) but is logged. */
     private QueryPreprocessorService.NegationKind detectVetoKind(String userInput) {
         try {
-            if (queryPreprocessorService instanceof QueryPreprocessorServiceImpl) {
-                QueryPreprocessorService.NegationKind k =
-                        ((QueryPreprocessorServiceImpl) queryPreprocessorService)
-                                .detectNegationVeto(userInput, knowledgeBase);
-                return k == null ? QueryPreprocessorService.NegationKind.NONE : k;
-            }
+            return queryPreprocessorService.detectNegationVeto(userInput, knowledgeBase);
         } catch (Exception e) {
-            log.warn("[W1b] detectVetoKind failed, fail-open to NONE: {}", e.getMessage());
+            log.warn("[W1b] detectNegationVeto failed, fail-open to NONE for input='{}': {}",
+                    userInput, e.toString());
+            return QueryPreprocessorService.NegationKind.NONE;
         }
-        return QueryPreprocessorService.NegationKind.NONE;
     }
 
     /**
@@ -5450,7 +5436,7 @@ public class IntentRecognitionPipelineServiceImpl implements IntentRecognitionPi
      *
      * @param kind      否定细分类型(由 detectNegationVeto 计算)
      * @param userInput 原始用户输入(用于澄清结果回填)
-     * @return VETO_READ → 澄清结果(NEED_MORE_INFO);否则 null(继续识别)
+     * @return VETO_READ → 澄清结果(MatchMethod.REJECTED);否则 null(继续识别)
      */
     static IntentMatchResult earlyVetoGateResultOrNull(
             QueryPreprocessorService.NegationKind kind, String userInput) {

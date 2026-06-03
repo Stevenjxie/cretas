@@ -175,6 +175,12 @@ public interface QueryPreprocessorService {
      */
     EnhancedPreprocessResult enhancedPreprocess(String input);
 
+    /**
+     * W1b: 细分否定否决类型。语句级否定("别查/不用看")→ VETO_READ;否定写动词("别开始")→ VETO_WRITE;
+     * 双重否定/合法动作动词/普通查询 → NONE。需 IntentKnowledgeBase 判定动词类型。
+     */
+    NegationKind detectNegationVeto(String input, com.cretas.aims.config.IntentKnowledgeBase knowledgeBase);
+
     // ==================== 语用学处理方法 (v8.0) ====================
 
     /**
