@@ -16,6 +16,12 @@ export interface PeriodSelection {
   value: string | [string, string];
   compareEnabled: boolean;
   compareValue?: string | [string, string];
+  /**
+   * 「全部历史」标记 (financial PBI 看板用)。设为 true 时表示不按月份/年份过滤,
+   * 消费方应映射为后端 period_type='year' (normalizer 对 'year' 不做任何 month 过滤,
+   * 即返回全部上传数据)。type 仍是 'year' 以兼容所有现有 switch 分支。
+   */
+  allHistory?: boolean;
 }
 
 interface Props {
@@ -26,6 +32,8 @@ interface Props {
   minYear?: number;
   maxYear?: number;
   disabled?: boolean;
+  /** 显示「全部历史」快捷选项 (默认 false — 只有 PBI 看板等需要时开启)。 */
+  showAllHistory?: boolean;
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -35,7 +43,8 @@ const props = withDefaults(defineProps<Props>(), {
   defaultType: 'month',
   minYear: 2020,
   maxYear: () => new Date().getFullYear() + 1,
-  disabled: false
+  disabled: false,
+  showAllHistory: false
 });
 
 const emit = defineEmits<{
@@ -58,6 +67,8 @@ const customStartMonth = ref(1);
 const customEndYear = ref(new Date().getFullYear());
 const customEndMonth = ref(new Date().getMonth() + 1);
 const compareEnabled = ref(false);
+// 「全部历史」模式: type 仍是 'year' (兼容所有分支), 但消费方据此走"不过滤全部数据"路径。
+const allHistoryMode = ref(false);
 
 // Constants
 const months = [
@@ -183,13 +194,15 @@ const currentSelection = computed<PeriodSelection>(() => {
     year: selectedYear.value,
     value,
     compareEnabled: compareEnabled.value,
-    compareValue
+    compareValue,
+    allHistory: allHistoryMode.value || undefined
   };
 });
 
 // Display text for current selection
 const selectionDisplayText = computed(() => {
   const sel = currentSelection.value;
+  if (allHistoryMode.value) return '全部历史';
 
   switch (sel.type) {
     case 'month':
@@ -236,6 +249,7 @@ const compareDisplayText = computed(() => {
 // Quick selection handlers
 function selectThisMonth() {
   const now = new Date();
+  allHistoryMode.value = false;
   selectedYear.value = now.getFullYear();
   selectedMonth.value = now.getMonth() + 1;
   selectedType.value = 'month';
@@ -252,6 +266,7 @@ function selectLastMonth() {
     month = 12;
   }
 
+  allHistoryMode.value = false;
   selectedYear.value = year;
   selectedMonth.value = month;
   selectedType.value = 'month';
@@ -260,6 +275,7 @@ function selectLastMonth() {
 
 function selectThisQuarter() {
   const now = new Date();
+  allHistoryMode.value = false;
   selectedYear.value = now.getFullYear();
   selectedQuarter.value = Math.ceil((now.getMonth() + 1) / 3);
   selectedType.value = 'quarter';
@@ -276,6 +292,7 @@ function selectLastQuarter() {
     quarter = 4;
   }
 
+  allHistoryMode.value = false;
   selectedYear.value = year;
   selectedQuarter.value = quarter;
   selectedType.value = 'quarter';
@@ -283,15 +300,32 @@ function selectLastQuarter() {
 }
 
 function selectThisYear() {
+  allHistoryMode.value = false;
   selectedYear.value = new Date().getFullYear();
   selectedType.value = 'year';
   emitChange();
 }
 
 function selectLastYear() {
+  allHistoryMode.value = false;
   selectedYear.value = new Date().getFullYear() - 1;
   selectedType.value = 'year';
   emitChange();
+}
+
+/**
+ * 「全部历史」: type 设为 'year' (兼容所有分支), 同时打开 allHistoryMode。
+ * 消费方 (PBI 看板) 据 allHistory 标记走"全部上传数据, 不按月/年过滤"路径。
+ */
+function selectAllHistory() {
+  allHistoryMode.value = true;
+  selectedType.value = 'year';
+  emitChange();
+}
+
+/** 用户手动改类型/月份/季度等 → 退出「全部历史」模式 (年份 select 同样)。 */
+function clearAllHistory() {
+  allHistoryMode.value = false;
 }
 
 // Emit change event
@@ -353,6 +387,7 @@ function initFromModelValue() {
   selectedType.value = mv.type;
   selectedYear.value = mv.year;
   compareEnabled.value = mv.compareEnabled;
+  allHistoryMode.value = mv.allHistory === true;
 
   if (typeof mv.value === 'string') {
     if (mv.type === 'month') {
@@ -429,6 +464,13 @@ defineExpose({
     <!-- Quick Selection -->
     <div v-if="activeTab === 'quick' && showQuickSelect" class="quick-selection">
       <div class="quick-buttons">
+        <el-button
+          v-if="showAllHistory"
+          size="small"
+          :type="allHistoryMode ? 'primary' : 'default'"
+          :disabled="disabled"
+          @click="selectAllHistory"
+        >全部历史</el-button>
         <el-button size="small" :disabled="disabled" @click="selectThisMonth">本月</el-button>
         <el-button size="small" :disabled="disabled" @click="selectLastMonth">上月</el-button>
         <el-button size="small" :disabled="disabled" @click="selectThisQuarter">本季</el-button>
@@ -448,6 +490,7 @@ defineExpose({
           :disabled="disabled || selectedType === 'custom'"
           size="small"
           style="width: 120px"
+          @change="clearAllHistory"
         >
           <el-option
             v-for="year in yearOptions"
@@ -461,7 +504,7 @@ defineExpose({
       <!-- Type Selector -->
       <div class="selector-row">
         <span class="row-label">类型:</span>
-        <el-radio-group v-model="selectedType" size="small" :disabled="disabled">
+        <el-radio-group v-model="selectedType" size="small" :disabled="disabled" @change="clearAllHistory">
           <el-radio-button value="month">单月</el-radio-button>
           <el-radio-button value="quarter">单季</el-radio-button>
           <el-radio-button value="year">单年</el-radio-button>
