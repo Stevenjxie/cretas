@@ -19,6 +19,7 @@ import com.cretas.aims.service.ComplexityRouter;
 import com.cretas.aims.service.ConversationMemoryService;
 import com.cretas.aims.service.ConversationService;
 import com.cretas.aims.service.IntentSemanticsParser;
+import com.cretas.aims.service.QueryPreprocessorService;
 import com.cretas.aims.service.ResultValidatorService;
 import com.cretas.aims.service.RuleEngineService;
 import com.cretas.aims.service.SemanticCacheService;
@@ -107,7 +108,8 @@ class WriteGuardWiringTest {
                 mock(AgenticRAGRouterService.class),
                 mock(ResultValidatorService.class),
                 toolDispatchService,
-                mock(DynamicToolSelectionService.class));
+                mock(DynamicToolSelectionService.class),
+                mock(QueryPreprocessorService.class));
 
         // Field-injected dependencies (set via reflection since they are not constructor args).
         ReflectionTestUtils.setField(orchestrator, "writeGuardService", writeGuard);
