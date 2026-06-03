@@ -19,7 +19,16 @@
       加载营收分析失败: {{ loadError }}
     </div>
 
-    <div v-else class="rgg-grid">
+    <!--
+      WS2 #7: 规则洞察条 (0 LLM). 仅在有数据可算时渲染 (revenueInsight 非空);
+      数据不足或加载中不显示 (诚实, 不编).
+    -->
+    <div v-if="!loadError && !loading && revenueInsight" class="rgg-insight">
+      <el-icon class="rgg-insight-icon"><MagicStick /></el-icon>
+      <span>{{ revenueInsight }}</span>
+    </div>
+
+    <div v-if="!loadError" class="rgg-grid">
       <!-- 门店营收排行 -->
       <el-card class="rgg-card" shadow="never">
         <template #header>
@@ -63,9 +72,10 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
-import { Refresh, Sell, PieChart } from '@element-plus/icons-vue';
+import { Refresh, Sell, PieChart, MagicStick } from '@element-plus/icons-vue';
 import { getFinanceSummary, getChannelBreakdown } from '@/api/smartbi/gold';
 import { formatNumber } from '@/utils/format-number';
+import { buildRevenueInsight } from './revenueInsight';
 
 const props = defineProps<{
   factoryId: string;
@@ -80,6 +90,11 @@ const channels = ref<Array<{ channelId: number; channelName: string; amount: num
 
 const dateLabel = computed(() =>
   props.dateRange ? `${props.dateRange[0]} 至 ${props.dateRange[1]}` : '全部数据',
+);
+
+// WS2 #7: 规则洞察 (0 LLM) — 从已 fetch 的门店营收 + 渠道占比算一句话; 数据不足返 null。
+const revenueInsight = computed<string | null>(() =>
+  buildRevenueInsight(topStores.value, channels.value),
 );
 
 const maxStoreRevenue = computed(() =>
@@ -128,6 +143,20 @@ watch(
 .rgg-title-text { font-size: 16px; font-weight: 600; }
 .rgg-subtitle { font-size: 12px; color: #909399; flex: 1; }
 .rgg-error { color: #f56c6c; padding: 12px; background: #fef0f0; border-radius: 6px; }
+.rgg-insight {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding: 10px 14px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: #1f6f54;
+  background: #f0f9f4;
+  border: 1px solid #d4ecdd;
+  border-radius: 6px;
+}
+.rgg-insight-icon { color: #2d8b57; flex-shrink: 0; }
 .rgg-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 @media (max-width: 992px) { .rgg-grid { grid-template-columns: 1fr; } }
 .rgg-card-header { display: flex; align-items: center; gap: 6px; font-weight: 600; }

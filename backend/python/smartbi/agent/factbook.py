@@ -88,7 +88,7 @@ class FactBook:
         """Render FactBook → readable prompt lines (honest labels inline).
 
         Mirrors orchestrator._build_user_prompt: pretty text, not JSON dumps.
-        Each money figure carries [毛/应收]; percentages carry their basis.
+        金额口径用自然语言说明 (不用方括号标记, 客户反馈方括号像 JSON 不可读, #5).
         Only the sections present (per plan) are rendered; absent sections are
         replaced by a next-action note (fool-proof Rule 5, no dead-end).
         """
@@ -188,9 +188,9 @@ class FactBook:
         store_count = fin.get("store_count") or 0
         day_count = fin.get("day_count") or 0
         lines.append(f"- 营业日 {int(day_count):,} 天，门店 {int(store_count):,} 家")
-        lines.append(f"- 总营业额 ¥{_money(revenue)}[毛/应收]；订单数 {int(bills):,}")
+        lines.append(f"- 总营业额（应收口径）¥{_money(revenue)}；订单数 {int(bills):,}")
         if avg_bill is not None:
-            lines.append(f"- 客单价 ¥{_money(avg_bill)}[毛]")
+            lines.append(f"- 客单价 ¥{_money(avg_bill)}")
         stores = fin.get("top_stores") or []
         if stores:
             lines.append("- Top 门店（按营业额）：")
@@ -198,7 +198,7 @@ class FactBook:
                 name = s.get("store_name") or s.get("store_id") or "未知门店"
                 rev = s.get("revenue")
                 bc = s.get("bill_count") or 0
-                lines.append(f"  {i}. {name}：¥{_money(rev)}[毛]（{int(bc):,} 单）")
+                lines.append(f"  {i}. {name}：¥{_money(rev)}（{int(bc):,} 单）")
         lines.append("")
 
     def _render_sales(self, lines: List[str]) -> None:
@@ -217,13 +217,13 @@ class FactBook:
                 name = p.get("product_name") or p.get("name") or "未知商品"
                 rev = p.get("revenue")
                 qty = p.get("qty_sold") or p.get("quantity") or 0
-                lines.append(f"  {i}. {name}：¥{_money(rev)}[毛]（销量 {int(qty):,}）")
+                lines.append(f"  {i}. {name}：¥{_money(rev)}（销量 {int(qty):,}）")
         if channels:
             seg = "；".join(
-                f"{c.get('channel_name')} ¥{_money(c.get('amount'))}({c.get('share_pct')}%[按营业额])"
+                f"{c.get('channel_name')} ¥{_money(c.get('amount'))}（{c.get('share_pct')}%）"
                 for c in channels[:6]
             )
-            lines.append(f"- 渠道占比：{seg}")
+            lines.append(f"- 渠道占比（按营业额）：{seg}")
         if discounts:
             seg = "；".join(
                 f"{d.get('discount_name')} ¥{_money(d.get('amount'))}"

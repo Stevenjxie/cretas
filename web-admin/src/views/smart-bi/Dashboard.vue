@@ -9,12 +9,6 @@ import { useRouter } from 'vue-router';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { get } from '@/api/request';
-import {
-  getUploadHistory,
-  getDynamicAnalysis,
-  type UploadHistoryItem,
-  type DynamicAnalysisResponse,
-} from '@/api/smartbi';
 import { getGoldDataRange } from '@/api/smartbi/dataRange';
 import { ElMessage } from 'element-plus';
 import {
@@ -28,8 +22,6 @@ import {
   Medal,
   Location,
   Goods,
-  Upload,
-  Document,
   InfoFilled,
   User,
   Clock,
@@ -59,7 +51,6 @@ const canViewPrice = computed(() => permissionStore.canViewPrice);
 // ==================== 类型定义 ====================
 
 import type {
-  KPICard,
   RankingItem,
   AIInsightResponse,
   DashboardChartConfig as ChartConfig,
@@ -122,11 +113,11 @@ const insightsTookLong = ref(false);
 const streamingInsightText = ref('');
 const streamingInsightMeta = ref<{ source?: string; tokens_used_today?: number } | null>(null);
 
-// 数据源选择 — default empty, will be set after loading sources
-const dataSources = ref<UploadHistoryItem[]>([]);
-const selectedDataSource = ref<string>('');
+// WS2 (2026-06-02): 数据源选择器已移除 — 驾驶舱永远从 gold 层自动聚合 (默认全部历史)。
+// 不再让用户挑某一次上传的 CSV 作为 KPI 来源 (误导且复杂)。所有数据加载走
+// loadDashboardData() (gold/executive 路径)。保留 dateRange 选择器供用户收窄区间。
 
-// Dynamic data AI insights (from uploaded Excel)
+// Dynamic data AI insights (kept as empty placeholder — dynamic-upload path removed)
 const dynamicInsights = ref<string[]>([]);
 
 // Dashboard 数据
@@ -255,6 +246,17 @@ const kpiData = computed(() => {
     customerLabel: customerCard?.title || (growthCard ? '环比增长' : '活跃客户'),
     customerUnit: customerCard ? '' : (growthCard ? '%' : ''),
   };
+});
+
+// WS2 (2026-06-02): gold-mode 检测 — 当后端返回 gold KPI 卡 (total_revenue /
+// bill_count / avg_bill_value / store_count) 时, KPI 区直接出数, 不经
+// <CapabilityGate> 的上传能力门控 (gold 聚合无需 upload-capability 判定)。
+// 制造业 / xlsx 上传路径 (无 gold 卡) 保持原 CapabilityGate 行为不变。
+const isGoldMode = computed(() => {
+  const cards = dashboardData.value?.kpiCards;
+  if (!cards || cards.length === 0) return false;
+  const has = (key: string) => cards.some(c => c.key === key);
+  return has('total_revenue') && has('bill_count') && has('avg_bill_value') && has('store_count');
 });
 
 // 部门排行数据 (从 rankings 提取)
@@ -407,30 +409,6 @@ const hasData = computed(() => {
     || (dashboardData.value?.kpiCards && dashboardData.value.kpiCards.length > 0);
 });
 
-// Detect "partial" system data: some KPIs present but charts/ranking mostly empty
-const hasPartialSystemData = computed(() => {
-  if (selectedDataSource.value !== 'system') return false;
-  if (!dashboardData.value) return false;
-  const kd = kpiData.value;
-  const hasAnyKpi = kd.totalRevenue !== null || kd.orderCount !== null;
-  const missingKpi = kd.totalProfit === null || kd.customerCount === null;
-  const charts = dashboardData.value.charts || {};
-  const hasCharts = Object.keys(charts).length > 0 &&
-    Object.values(charts).some(c =>
-      (c && 'series' in c && Array.isArray(c.series) && c.series.length > 0) ||
-      (c && 'data' in c && Array.isArray(c.data) && c.data.length > 0)
-    );
-  return hasAnyKpi && (missingKpi || !hasCharts) && dataSources.value.length > 0;
-});
-
-function switchToBestUpload() {
-  const best = dataSources.value.find(d => d.id != null);
-  if (best) {
-    selectedDataSource.value = String(best.id);
-    loadDynamicDashboardData(best.id);
-  }
-}
-
 function goToUpload() {
   router.push({ name: 'SmartBIAnalysis' });
 }
@@ -544,9 +522,6 @@ function scrollToChart(chartIndex: number) {
 function cacheKeyFor(factoryId: string, sourceId: string | number) {
   return `smartbi-dashboard:${factoryId}:${sourceId}`;
 }
-function savedSourceKey(factoryId: string) {
-  return `smartbi-dashboard-src:${factoryId}`;
-}
 function savedRangeKey(factoryId: string) {
   return `smartbi-dashboard-range:${factoryId}`;
 }
@@ -618,23 +593,13 @@ function onDateRangeChange(range: [string, string] | null) {
   if (range) {
     try { localStorage.setItem(savedRangeKey(factoryId.value), JSON.stringify(range)); } catch {}
   } else {
+    // WS2: cleared range → revert to all-history gold default (re-probe min/max).
     try { localStorage.removeItem(savedRangeKey(factoryId.value)); } catch {}
+    applyAllHistoryDefault().then(() => loadDashboardData());
+    return;
   }
-  // Switch back to system view so the new range actually drives the Gold-backed dashboard.
-  // Otherwise we'd stay on the upload fallback and the picker would silently do nothing.
-  if (selectedDataSource.value !== 'system') {
-    selectedDataSource.value = 'system';
-  }
+  // Always gold-backed (data-source picker removed) — the range drives /executive/custom.
   loadDashboardData();
-}
-function getCached<T>(factoryId: string, sourceId: string | number): T | null {
-  try {
-    const raw = localStorage.getItem(cacheKeyFor(factoryId, sourceId));
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as { ts: number; data: T };
-    if (Date.now() - parsed.ts > 5 * 60 * 1000) return null;  // 5min TTL
-    return parsed.data;
-  } catch { return null; }
 }
 function putCached(factoryId: string, sourceId: string | number, data: unknown) {
   try {
@@ -644,19 +609,31 @@ function putCached(factoryId: string, sourceId: string | number, data: unknown) 
 
 const { fetchCapability } = useCapability();
 
+// WS2 (2026-06-02): 默认全部历史 — 探测 Gold (agg_daily) 真实 [min,max] 区间,
+// 默认显示全部已有数据 (不再只取「最近有数据的年」)。老板登录即见全量经营图表,
+// 不需先上传/选时间。保留 dateRange 选择器供用户收窄。探测失败/无数据 → 不伪造区间,
+// 落回 period=month + 空状态 CTA。
+async function applyAllHistoryDefault(): Promise<boolean> {
+  if (!factoryId.value) return false;
+  try {
+    const dr = await getGoldDataRange(factoryId.value);
+    if (dr.minDate && dr.maxDate) {
+      dateRange.value = [dr.minDate, dr.maxDate];
+      return true;
+    }
+  } catch {
+    // 探测失败 → 不阻塞, 落回 period=month 默认。
+  }
+  return false;
+}
+
 onMounted(async () => {
   // Day 8 数据织网 Sub-Project A: prime capability cache (fire-and-forget,
-  // useCapability handles errors and is fail-open). Drives <CapabilityGate>
-  // visibility for KPI cards below.
+  // useCapability handles errors and is fail-open).
   fetchCapability();
 
-  // Apr 24 UX perf: fire /uploads list in background (non-blocking) — most users
-  // stay on 'system' view and never open the dropdown. Old await blocked ~400ms
-  // on network idle for a 200-item upload list. We only need it synchronously
-  // when restoring a specific remembered upload-ID (cold path).
-  const dataSourcesPromise = loadDataSources();
-
-  // Restore date range from localStorage (per factory) — qhj needs wider default to see 2025 data
+  // Restore an explicit date range from localStorage (per factory) if the user
+  // previously narrowed it. Otherwise default to all-history gold below.
   if (factoryId.value) {
     const rawRange = localStorage.getItem(savedRangeKey(factoryId.value));
     if (rawRange) {
@@ -669,74 +646,14 @@ onMounted(async () => {
     }
   }
 
-  // If user had picked an explicit date range, that overrides any persisted upload-source choice
-  // (otherwise FIX-12 restore would pin them to stale upload data even after they opted into 2025 Gold).
+  // User had a saved explicit range → honor it (gold /executive/custom path).
   if (dateRange.value && factoryId.value) {
-    selectedDataSource.value = 'system';
     await loadDashboardData();
     return;
   }
 
-  // FIX-12: last-selected data source — used by both the 餐饮 default-range
-  // branch and the restore-source branches below.
-  const remembered = factoryId.value ? localStorage.getItem(savedSourceKey(factoryId.value)) : null;
-
-  // 餐饮业态默认全量出图 (May 29 2026):
-  // 制造业的 period=month 默认对餐饮无意义 — 餐厅历史营收数据沉淀在过去月份
-  // (e.g. 青花椒全年 2025), 本月无新数据 → KPI 全 0 + 空趋势图。无显式区间且未锁定
-  // 具体上传时, 探测 Gold (agg_daily) 真实区间 [min,max] 默认显示全部已有数据,
-  // 餐饮老板登录即见全量图表, 不需先上传/选时间。
-  // 业态门控: 仅 RESTAURANT, FACTORY 保持 period=month 不回归。优先于
-  // remembered==='system' (那只是"上次在系统视图", 无具体区间), 但不覆盖用户
-  // 显式锁定的某次上传 (remembered 为具体 uploadId)。
-  if (isRestaurantTenant.value && factoryId.value && (!remembered || remembered === 'system')) {
-    try {
-      const dr = await getGoldDataRange(factoryId.value);
-      if (dr.minDate && dr.maxDate) {
-        // 默认显示「最近有数据的年」(per Steve May 29 2026): max date 所在年的 1-1
-        // 到 max, 不跨年把多个部分样本混在一起 (e.g. 2025 + 2026 → ¥6370万 混样)。
-        // max=2026-04-30 → [2026-01-01, 2026-04-30]; 老板第一眼看最新最完整的一年。
-        // 日期选择器 (v-model=dateRange) 直接显示该区间 (防呆透明), 可手动改回全量。
-        const yearStart = `${dr.maxDate.slice(0, 4)}-01-01`;
-        const startDate = yearStart > dr.minDate ? yearStart : dr.minDate;
-        dateRange.value = [startDate, dr.maxDate];
-        selectedDataSource.value = 'system';
-        await loadDashboardData();
-        return;
-      }
-      // dr 为空 (该餐厅 Gold 无数据) → 落到下方现有 ladder + 空状态 CTA, 不伪造区间。
-    } catch {
-      // 探测失败 → 不阻塞, 落到下方默认 period=month + ladder。
-    }
-  }
-
-  // FIX-12: restore last-selected data source from localStorage so 刷新 doesn't reset to 'system'
-  if (remembered === 'system') {
-    selectedDataSource.value = 'system';
-    if (factoryId.value) {
-      const cached = getCached<DashboardResponse>(factoryId.value, 'system');
-      if (cached) dashboardData.value = cached;
-    }
-    await loadDashboardData();
-    return;
-  }
-  if (remembered && remembered !== 'system') {
-    // Cold path: need dataSources loaded to validate remembered upload still exists
-    await dataSourcesPromise;
-    if (dataSources.value.some(d => String(d.id) === remembered)) {
-      selectedDataSource.value = remembered;
-      if (factoryId.value) {
-        const cached = getCached<DashboardResponse>(factoryId.value, remembered);
-        if (cached) dashboardData.value = cached;
-      }
-      await loadDynamicDashboardData(Number(remembered));
-      return;
-    }
-    // Remembered upload no longer exists — fall through to default
-  }
-
-  // Default to system data
-  selectedDataSource.value = 'system';
+  // Default = all history from the gold layer.
+  await applyAllHistoryDefault();
   await loadDashboardData();
 });
 
@@ -747,14 +664,6 @@ watch(() => dashboardData.value?.charts, (newCharts) => {
     nextTick(() => {
       initCharts(newCharts);
     });
-  }
-});
-
-// FIX-12 (Apr 16 2026): persist selectedDataSource to localStorage on every change,
-// including auto-switch from fallback path (not just manual onDataSourceChange).
-watch(selectedDataSource, (newSrc) => {
-  if (newSrc && factoryId.value) {
-    try { localStorage.setItem(savedSourceKey(factoryId.value), newSrc); } catch {}
   }
 });
 
@@ -921,28 +830,13 @@ async function loadDashboardData() {
       // Apr 25 2026 P1 fix: also trigger fallback when KPI is non-empty but
       // charts are empty — prior logic pinned the user on an all-chart-empty
       // range, creating a "本月销售额 2064万 + 暂无图表" contradiction.
+      // WS2 (2026-06-02): data-source picker removed — never auto-switch to an
+      // uploaded Excel. When the gold view is empty AND no explicit range,
+      // silently probe 近90天 → 上年 → 前年 for genuine historical gold data
+      // (a warning tag explains the switch). If all empty → keep the gold empty
+      // state + CTA (no upload fallback).
       if (!dateRange.value && (!hasRealKpi || !hasCharts)) {
-        const ok = await tryFallbackRanges();
-        if (!ok) {
-          fallbackRangeLabel.value = '';
-          fallbackDateRange.value = null;
-
-          // Apr 24 P0-2 fix: Gold fallback chain all empty AND user has upload(s) →
-          // auto-switch to latest upload's dynamic analysis (previously disabled
-          // because test env had smoke Excel files like gamma1c polluting. For new
-          // merchants with real upload, this IS the right data). Show alert
-          // "已切换到您上传的数据" so user understands the source swap.
-          // Only triggers when Gold chain fails AND uploads exist — not for seed-
-          // data factories (F001 test) that already had Gold.
-          const uploads = dataSources.value.filter(d => d.id != null);
-          if (uploads.length > 0) {
-            const latest = uploads[0];  // already sorted newest-first from API
-            const shortName = (latest.fileName || '未命名').slice(0, 30);
-            fallbackRangeLabel.value = `Gold 层暂无数据,已切换到您上传的 ${shortName}`;
-            selectedDataSource.value = String(latest.id);
-            await loadDynamicDashboardData(Number(latest.id));
-          }
-        }
+        await tryFallbackRanges();
       } else {
         fallbackRangeLabel.value = '';
         fallbackDateRange.value = null;
@@ -970,7 +864,6 @@ async function loadDashboardData() {
 
 async function loadLLMInsights() {
   if (!factoryId.value || !dashboardData.value) return;
-  const sourceAtStart = selectedDataSource.value;
   const signal = abortController?.signal;
   insightsLoading.value = true;
   insightsTookLong.value = false;
@@ -985,7 +878,7 @@ async function loadLLMInsights() {
     // token appears ~2-3s instead of user waiting 8-10s for full response.
     // Fall back to legacy JSON for period=month path (agent not wired there).
     if (effectiveRange) {
-      const ok = await loadLLMInsightsStream(effectiveRange[0], effectiveRange[1], sourceAtStart, signal);
+      const ok = await loadLLMInsightsStream(effectiveRange[0], effectiveRange[1], signal);
       if (ok) return;
       // SSE failed → fall through to legacy JSON path as backup
     }
@@ -994,7 +887,7 @@ async function loadLLMInsights() {
       ? `/${factoryId.value}/smart-bi/dashboard/executive/insights/custom?startDate=${effectiveRange[0]}&endDate=${effectiveRange[1]}`
       : `/${factoryId.value}/smart-bi/dashboard/executive/insights?period=month`;
     const res = await get(insightsUrl, { timeout: 120000, signal });
-    if (selectedDataSource.value !== sourceAtStart) return;
+    if (signal?.aborted) return;
     if (res.success && res.data) {
       const raw = res.data as Record<string, unknown>;
       const insights = (raw.data && Array.isArray(raw.data)) ? raw.data : (Array.isArray(raw) ? raw : []);
@@ -1023,7 +916,6 @@ async function loadLLMInsights() {
 async function loadLLMInsightsStream(
   startDate: string,
   endDate: string,
-  sourceAtStart: string,
   signal: AbortSignal | undefined,
 ): Promise<boolean> {
   if (!factoryId.value) return false;
@@ -1053,9 +945,9 @@ async function loadLLMInsightsStream(
       const { value, done: readerDone } = await reader.read();
       if (readerDone) break;
       buffer += decoder.decode(value, { stream: true });
-      // I3 fix (reviewer Apr 24): cancel reader on source switch mid-stream,
+      // Cancel reader if the request was aborted mid-stream (navigation / reload),
       // not just break — otherwise fetch connection keeps consuming bytes.
-      if (selectedDataSource.value !== sourceAtStart) {
+      if (signal?.aborted) {
         try { await reader.cancel(); } catch { /* ignore */ }
         return gotAnyDelta;
       }
@@ -1069,7 +961,7 @@ async function loadLLMInsightsStream(
         if (!dataStr) continue;
         try {
           const event = JSON.parse(dataStr);
-          if (selectedDataSource.value !== sourceAtStart) {
+          if (signal?.aborted) {
             try { await reader.cancel(); } catch { /* ignore */ }
             return gotAnyDelta;
           }
@@ -1112,227 +1004,9 @@ async function loadLLMInsightsStream(
   }
 }
 
-// ==================== 数据源管理 ====================
-
-async function loadDataSources() {
-  try {
-    const res = await getUploadHistory();
-    if (res.success && res.data) {
-      const completed = res.data.filter(
-        (item: UploadHistoryItem) => item.status === 'COMPLETED' || item.status === 'SUCCESS'
-      );
-      // Deduplicate by fileName + sheetName, keep the latest (first) entry
-      const seen = new Set<string>();
-      dataSources.value = completed.filter((item: UploadHistoryItem) => {
-        const key = `${item.fileName}||${item.sheetName || ''}`;
-        if (seen.has(key)) return false;
-        seen.add(key);
-        return true;
-      });
-    }
-  } catch (error) {
-    console.warn('加载数据源列表失败:', error);
-  }
-}
-
-async function onDataSourceChange(sourceId: string) {
-  // Cancel any pending requests from previous data source
-  getSignal();
-
-  // FIX-12: remember selection so 刷新后 restore
-  if (factoryId.value && sourceId) {
-    try { localStorage.setItem(savedSourceKey(factoryId.value), sourceId); } catch {}
-  }
-
-  // Serve cached dashboard data immediately if available (instant UI, no white flash)
-  if (factoryId.value) {
-    const cached = getCached<DashboardResponse>(factoryId.value, sourceId);
-    if (cached) dashboardData.value = cached;
-  }
-
-  if (sourceId === 'system') {
-    dynamicInsights.value = [];
-    await loadDashboardData();
-  } else {
-    await loadDynamicDashboardData(Number(sourceId));
-  }
-}
-
-/**
- * Load dashboard data from an uploaded Excel source via dynamic analysis API.
- * Maps the dynamic analysis response (kpiCards, charts, insights) into the
- * same DashboardResponse shape so existing KPI/chart rendering works unchanged.
- */
-async function loadDynamicDashboardData(uploadId: number) {
-  loading.value = true;
-  hasError.value = false;
-  errorMessage.value = '';
-  dynamicInsights.value = [];
-
-  try {
-    const res = await getDynamicAnalysis(uploadId, 'auto');
-
-    if (res.success && res.data) {
-      const data = res.data as DynamicAnalysisResponse;
-
-      // Map dynamic kpiCards → DashboardResponse.kpiCards format
-      // Apr 24 P0-1: humanize "_N" dedupe suffix from column name leakage
-      const kpiCards: KPICard[] = (data.kpiCards || []).map((kpi, idx) => ({
-        key: detectKpiKey(kpi.title || ''),
-        title: humanizeKpiLabel(kpi.title || '', idx),
-        displayValue: kpi.value != null ? String(kpi.value) : String(kpi.rawValue ?? 0),
-        rawValue: kpi.rawValue ?? 0,
-        changeRate: kpi.changeRate ?? null,
-        unit: '',
-        trend: 'stable' as const,
-        sparklineData: [] as number[],
-      }));
-
-      // Map dynamic charts → DashboardResponse.charts
-      const charts: Record<string, ChartConfig> = {};
-      if (data.charts && data.charts.length > 0) {
-        // Assign first pie chart to category_distribution, first non-pie to sales_trend
-        let hasTrend = false;
-        let hasPie = false;
-        data.charts.forEach((chart) => {
-          const labels = chart.data?.labels || [];
-          const datasets = chart.data?.datasets || [];
-
-          if (chart.type === 'pie' && datasets.length > 0 && !hasPie) {
-            hasPie = true;
-            charts['category_distribution'] = {
-              chartType: 'pie',
-              title: chart.title || '',
-              xAxis: { data: labels },
-              series: [{
-                name: chart.title || 'Distribution',
-                type: 'pie',
-                data: labels.map((label, i) => ({
-                  name: label,
-                  value: datasets[0]?.data?.[i] || 0,
-                })),
-              }],
-            } as unknown as ChartConfig;
-          } else if (datasets.length > 0 && !hasTrend) {
-            hasTrend = true;
-            charts['sales_trend'] = {
-              chartType: chart.type || 'bar',
-              title: chart.title || '',
-              xAxis: { type: 'category', data: labels },
-              series: datasets.map(ds => ({
-                name: ds.label || '',
-                type: chart.type || 'bar',
-                data: ds.data || [],
-              })),
-            } as unknown as ChartConfig;
-          }
-        });
-      }
-
-      // Fallback: generate summary charts from KPIs when no charts available
-      if (Object.keys(charts).length === 0 && kpiCards.length > 0) {
-        const validKpis = kpiCards.filter(k => k.rawValue != null && k.rawValue !== 0);
-        if (validKpis.length >= 2) {
-          // Bar chart of KPI values
-          charts['sales_trend'] = {
-            chartType: 'bar',
-            title: '核心指标概览',
-            xAxis: { type: 'category', data: validKpis.map(k => k.title) },
-            series: [{
-              name: '数值',
-              type: 'bar',
-              data: validKpis.map(k => k.rawValue),
-            }],
-          } as unknown as ChartConfig;
-          // Pie chart of absolute values for composition
-          charts['category_distribution'] = {
-            chartType: 'pie',
-            title: '指标构成',
-            xAxis: { data: validKpis.map(k => k.title) },
-            series: [{
-              name: '构成',
-              type: 'pie',
-              data: validKpis.map(k => ({
-                name: k.title,
-                value: Math.abs(k.rawValue),
-              })),
-            }],
-          } as unknown as ChartConfig;
-        }
-      }
-
-      // Store AI insights from dynamic source
-      if (data.insights && data.insights.length > 0) {
-        dynamicInsights.value = data.insights;
-      }
-
-      // Build DashboardResponse from dynamic data
-      dashboardData.value = {
-        kpiCards,
-        charts,
-        rankings: {},
-        aiInsights: data.insights?.map(msg => ({
-          level: 'INFO',
-          category: '数据洞察',
-          message: msg,
-          actionSuggestion: '',
-        })) || [],
-        suggestions: [],
-        lastUpdated: new Date().toISOString(),
-      } as unknown as DashboardResponse;
-
-      // FIX-12: cache per-uploadId dashboard payload (5min TTL) for instant refresh
-      if (factoryId.value) putCached(factoryId.value, uploadId, dashboardData.value);
-
-      // dynamic data loaded from upload
-    } else {
-      throw new Error(res.message || '加载上传数据分析失败');
-    }
-  } catch (error) {
-    console.error('加载动态驾驶舱数据失败:', error);
-    hasError.value = true;
-    // Bug #3: upgrade error message — "数据处理失败，请联系管理员" is a generic Java
-    // ErrorSanitizer fallback for any SQL error. Give the user next-step guidance.
-    const rawMsg = error instanceof Error ? error.message : '加载数据失败';
-    if (rawMsg.includes('数据处理失败') || rawMsg.includes('SQL')) {
-      errorMessage.value = '上传的数据暂时无法解析，请在「Excel上传」页重新上传，或选择系统数据。如持续失败请联系管理员。';
-    } else {
-      errorMessage.value = rawMsg;
-    }
-    ElMessage.error(errorMessage.value);
-    dashboardData.value = null;
-  } finally {
-    loading.value = false;
-  }
-}
-
-/**
- * Apr 24 P0-1 fix: humanize dedupe "_N" suffix. Backend dedupe_column_names
- * adds _2/_3 to duplicate columns ("数量金额_3") — render as "数量金额 (指标 3)"
- * so users don't see DB column names directly.
- */
-function humanizeKpiLabel(rawTitle: string, idx: number): string {
-  if (!rawTitle) return `指标 ${idx + 1}`;
-  const t = rawTitle.trim();
-  const m = t.match(/^(.+?)_(\d+)$/);
-  if (m) return `${m[1]} (指标 ${m[2]})`;
-  return t;
-}
-
-/**
- * Detect KPI key from title text for mapping to existing dashboard KPI slots.
- */
-function detectKpiKey(title: string): string {
-  const t = title.toLowerCase();
-  if (t.includes('收入') || t.includes('销售') || t.includes('revenue') || t.includes('sales')) return 'SALES_AMOUNT';
-  if (t.includes('净利') || t.includes('profit')) return 'PROFIT';
-  if (t.includes('毛利') && !t.includes('率')) return 'PROFIT';
-  if (t.includes('订单') || t.includes('order')) return 'ORDER_COUNT';
-  if (t.includes('客户') || t.includes('customer')) return 'CUSTOMER_COUNT';
-  if (t.includes('成本') || t.includes('cost')) return 'TOTAL_COST';
-  if (t.includes('利润')) return 'PROFIT';
-  return title;
-}
+// ==================== 数据源管理 (WS2: 上传数据源路径已移除) ====================
+// WS2 (2026-06-02): 驾驶舱永远从 gold 层聚合, 不再让用户选某次上传作为 KPI 来源。
+// 原 loadDataSources / onDataSourceChange / loadDynamicDashboardData 已删除。
 
 // ==================== 图表初始化 ====================
 
@@ -1731,11 +1405,8 @@ function getInsightTagType(type: string): 'success' | 'warning' | 'danger' | 'in
 }
 
 function handleRefresh() {
-  if (selectedDataSource.value && selectedDataSource.value !== 'system') {
-    loadDynamicDashboardData(Number(selectedDataSource.value));
-  } else {
-    loadDashboardData();
-  }
+  // WS2: always gold-backed (data-source picker removed).
+  loadDashboardData();
 }
 
 // ==================== 生命周期清理 ====================
@@ -1764,34 +1435,9 @@ onUnmounted(() => {
       </div>
     </div>
 
-    <!-- 数据源 + 时间范围 -->
+    <!-- 时间范围 (WS2: 数据源选择器已移除 — 永远从 gold 层聚合, 默认全部历史) -->
     <el-card class="datasource-card">
       <div class="datasource-bar">
-        <div class="datasource-item">
-          <span class="datasource-label">
-            <el-icon><Document /></el-icon>
-            数据源
-          </span>
-          <el-select
-            v-model="selectedDataSource"
-            placeholder="选择数据源"
-            style="width: 280px"
-            @change="onDataSourceChange"
-          >
-            <el-option label="系统数据" value="system" />
-            <el-option
-              v-for="ds in dataSources.filter(d => d.id != null)"
-              :key="ds.id"
-              :label="`${ds.fileName || '未命名'}${ds.sheetName ? ' - ' + ds.sheetName : ''}`"
-              :value="String(ds.id)"
-            >
-              <div class="datasource-option">
-                <span>{{ ds.fileName }}</span>
-                <span class="datasource-meta">{{ ds.sheetName }} · {{ ds.rowCount }}行</span>
-              </div>
-            </el-option>
-          </el-select>
-        </div>
         <div class="datasource-item">
           <span class="datasource-label">
             <el-icon><Clock /></el-icon>
@@ -1809,11 +1455,10 @@ onUnmounted(() => {
             clearable
             @change="onDateRangeChange"
           />
-          <span v-if="!dateRange && selectedDataSource === 'system' && !fallbackRangeLabel" class="datasource-meta" style="margin-left: 8px;">默认: 本月</span>
-          <span v-else-if="!dateRange && selectedDataSource === 'system' && fallbackRangeLabel" class="datasource-meta" style="margin-left: 8px; color: #E6A23C;">本月无数据 · 显示 {{ fallbackRangeLabel }}</span>
-          <span v-else-if="selectedDataSource !== 'system'" class="datasource-meta" style="margin-left: 8px;">(选择范围将返回系统视图)</span>
+          <span v-if="dateRange && !fallbackRangeLabel" class="datasource-meta" style="margin-left: 8px;">全部历史 · {{ dateRange[0] }} 至 {{ dateRange[1] }}</span>
+          <span v-else-if="fallbackRangeLabel" class="datasource-meta" style="margin-left: 8px; color: #E6A23C;">本月无数据 · 显示 {{ fallbackRangeLabel }}</span>
+          <span v-else class="datasource-meta" style="margin-left: 8px;">默认: 本月</span>
         </div>
-        <el-tag v-if="selectedDataSource && selectedDataSource !== 'system'" type="success" size="small">来自上传数据</el-tag>
       </div>
     </el-card>
 
@@ -1828,29 +1473,6 @@ onUnmounted(() => {
       @close="hasError = false"
     >
       <el-button size="small" type="primary" @click="handleRefresh" style="margin-top: 8px;">重试</el-button>
-    </el-alert>
-
-    <!-- Partial data guidance: system has some KPIs but charts/other KPIs are missing -->
-    <el-alert
-      v-if="!loading && hasPartialSystemData"
-      title="系统数据不完整"
-      description="当前系统数据仅包含部分指标，上传 Excel 报表可获得完整的趋势图表和 AI 分析。"
-      type="info"
-      show-icon
-      :closable="true"
-      class="partial-data-alert"
-    >
-      <template #default>
-        <div style="display: flex; gap: 8px; margin-top: 8px;">
-          <el-button size="small" type="primary" @click="switchToBestUpload">
-            切换到上传数据
-          </el-button>
-          <el-button size="small" @click="goToUpload">
-            <el-icon><Upload /></el-icon>
-            上传新数据
-          </el-button>
-        </div>
-      </template>
     </el-alert>
 
     <!-- Empty state guidance when no data -->
@@ -1882,7 +1504,7 @@ onUnmounted(() => {
     </el-row>
     <el-row v-else :gutter="16" class="kpi-section kpi-fade-in" aria-label="KPI指标" aria-live="polite" :aria-busy="loading">
       <el-col v-if="canViewPrice" :xs="24" :sm="12" :md="6">
-        <CapabilityGate card-id="dashboard_revenue_month" :requires="['date', 'net_amount']">
+        <CapabilityGate card-id="dashboard_revenue_month" :requires="['date', 'net_amount']" :force="isGoldMode">
         <el-card class="kpi-card revenue">
           <div class="kpi-icon">
             <el-icon><DataLine /></el-icon>
@@ -1911,7 +1533,7 @@ onUnmounted(() => {
         </CapabilityGate>
       </el-col>
       <el-col v-if="canViewPrice" :xs="24" :sm="12" :md="6">
-        <CapabilityGate card-id="dashboard_avg_bill" :requires="['source_bill_no', 'net_amount']">
+        <CapabilityGate card-id="dashboard_avg_bill" :requires="['source_bill_no', 'net_amount']" :force="isGoldMode">
         <el-card class="kpi-card profit">
           <div class="kpi-icon">
             <el-icon><Histogram /></el-icon>
@@ -1940,7 +1562,7 @@ onUnmounted(() => {
         </CapabilityGate>
       </el-col>
       <el-col :xs="24" :sm="12" :md="6">
-        <CapabilityGate card-id="dashboard_order_count" :requires="['date', 'source_bill_no']">
+        <CapabilityGate card-id="dashboard_order_count" :requires="['date', 'source_bill_no']" :force="isGoldMode">
         <el-card class="kpi-card orders">
           <div class="kpi-icon">
             <el-icon><Goods /></el-icon>
@@ -1969,7 +1591,7 @@ onUnmounted(() => {
         </CapabilityGate>
       </el-col>
       <el-col :xs="24" :sm="12" :md="6">
-        <CapabilityGate card-id="dashboard_active_customers" :requires="['customer_count']">
+        <CapabilityGate card-id="dashboard_active_customers" :requires="['customer_count']" :force="isGoldMode">
         <el-card class="kpi-card customers">
           <div class="kpi-icon">
             <el-icon><Medal /></el-icon>
