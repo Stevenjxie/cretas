@@ -1,0 +1,70 @@
+# 外卖依赖度偏高 — 操作建议手册
+#
+# trigger_metric: delivery_dependency (外卖营收/总营收, 0-1 scale)
+# 健康 < 0.50 / 偏高(warning) 0.50-0.70 / 严重(critical) >= 0.70
+# higher_is_worse: true (依赖越高越被平台绑架)
+
+diagnosis_code: delivery_dependency_high
+trigger_metric: delivery_dependency
+trigger_condition: "value >= 0.50"
+display_name: "外卖依赖度偏高"
+
+severity_levels:
+  warning:
+    condition: "0.50 <= value < 0.70"
+    label: "渠道结构失衡"
+    color: yellow
+  critical:
+    condition: "value >= 0.70"
+    label: "高度依赖平台"
+    color: red
+
+action_plans:
+  - id: 1
+    name: "堂食引流回流"
+    priority: "P0"
+    actions:
+      - "堂食推出外卖没有的体验项(锅气现炒/限定菜/堂食专享套餐)"
+      - "外卖订单内放堂食优惠券引导到店"
+      - "堂食午市/晚市错峰促销提升堂食占比"
+    expected_impact: "堂食占比 +10pp, 平台抽佣总成本下降"
+
+  - id: 2
+    name: "私域复购降平台抽佣"
+    priority: "P1"
+    actions:
+      - "外卖包装引流微信群/小程序, 复购走 0 抽佣自营渠道"
+      - "会员储值+积分锁定复购, 减少平台券依赖"
+    expected_impact: "自营外卖占比提升, 综合渠道成本下降 3-5pp"
+
+# ── 结构化处方行动 (P3.7) ─────────────────────────
+rx_actions:
+  - id: DDH-A01
+    title: 堂食专享体验拉回到店客流
+    description: 外卖吃不到的现炒锅气/堂食限定套餐做差异化, 外卖订单内夹堂食满减券引导到店。
+    owner: 店长
+    timeframe: 本周内
+    priority: P0
+    effort: low
+    expected_impact: 堂食占比 +5-10pp, 降低单一平台依赖
+  - id: DDH-A02
+    title: 私域自营外卖闭环
+    description: 外卖包装贴二维码引流微信群→小程序自营外卖(0 抽佣), 把高频复购客从平台搬到私域。
+    owner: 运营经理
+    timeframe: 本月
+    priority: P1
+    effort: medium
+    expected_impact: 自营外卖占比 +10pp, 综合抽佣成本 -3~5pp
+  - id: DDH-A03
+    title: 平台促销活动减量增效
+    description: 砍掉 ROI<1.5 的平台满减/补贴活动, 把预算挪到私域和堂食, 减少为冲单被迫亏本接单。
+    owner: 运营经理
+    timeframe: 2 周
+    priority: P1
+    effort: medium
+    expected_impact: 无效平台让利减少, 外卖净利率回升
+
+sub_sector_notes:
+  鱼类餐饮:
+    - "酸菜鱼/烤鱼堂食体验(现做现烤)远胜外卖, 是拉回堂食的天然卖点"
+    - "外卖依赖>70% 时, 一旦平台调费率或限流, 营收断崖风险极高"
