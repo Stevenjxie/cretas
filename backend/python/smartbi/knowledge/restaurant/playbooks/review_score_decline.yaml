@@ -1,0 +1,71 @@
+# 评分趋势下滑 — 操作建议手册
+#
+# trigger_metric: review_score_decline (5 星占比环比变化, 0-1 scale, 负数=下滑)
+# 健康 >= -0.02 / 偏低(warning) -0.05 ~ -0.02 / 严重(critical) < -0.05
+# higher_is_worse: false (下滑越多越糟)
+
+diagnosis_code: review_score_decline
+trigger_metric: review_score_decline
+trigger_condition: "value < -0.02"
+display_name: "评分趋势下滑"
+
+severity_levels:
+  warning:
+    condition: "-0.05 <= value < -0.02"
+    label: "口碑预警"
+    color: yellow
+  critical:
+    condition: "value < -0.05"
+    label: "口碑严重下滑"
+    color: red
+
+action_plans:
+  - id: 1
+    name: "差评闭环处理"
+    priority: "P0"
+    actions:
+      - "盘点本月所有 3 星及以下差评, 按问题类型分类(出品/服务/环境/配送)"
+      - "店长 24 小时内逐条公开回复差评, 提供补偿方案"
+      - "高频差评问题立即整改, 整改后主动私信邀请回访"
+    expected_impact: "差评转化率提升, 5 星占比环比回升 2-3pp"
+
+  - id: 2
+    name: "主动邀评提升好评量"
+    priority: "P1"
+    actions:
+      - "堂食结账时引导满意顾客扫码好评(返券激励)"
+      - "外卖小票/包装附好评有礼卡片"
+      - "VIP/复购客户定向邀评(满意度更高)"
+    expected_impact: "好评量提升, 稀释偶发差评影响, 评分企稳"
+
+# ── 结构化处方行动 (P3.7) ─────────────────────────
+rx_actions:
+  - id: RSD-A01
+    title: 差评 24 小时闭环回复
+    description: 本月 3 星及以下差评逐条公开回复 + 私信补偿(优惠券/换菜), 让平台算法和潜客看到商家态度。
+    owner: 店长
+    timeframe: 本周内
+    priority: P0
+    effort: low
+    expected_impact: 差评影响降低, 转化挽回 30%+ 不满顾客
+  - id: RSD-A02
+    title: 高频差评问题根因整改
+    description: 把差评按 出品/服务/环境/配送 分类, 找出 Top1 高频问题(如出餐慢/口味不稳)定责整改。
+    owner: 运营经理
+    timeframe: 2 周
+    priority: P0
+    effort: medium
+    expected_impact: 同类差评下降, 5 星占比环比回升 2-3pp
+  - id: RSD-A03
+    title: 主动邀评提升好评基数
+    description: 堂食结账+外卖小票双渠道引导满意顾客好评(返券激励), 用好评量稀释偶发差评。
+    owner: 店长
+    timeframe: 本月
+    priority: P1
+    effort: low
+    expected_impact: 好评量 +20%, 综合评分企稳回升
+
+sub_sector_notes:
+  鱼类餐饮:
+    - "酸菜鱼/烤鱼差评高发点: 鱼不新鲜/刺多/分量。重点盯食材新鲜度和分量稳定"
+    - "外卖汤汁洒漏是配送类差评高频项, 升级包装可显著降低"
