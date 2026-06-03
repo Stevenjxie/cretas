@@ -61,6 +61,7 @@ export const menuConfig: MenuItem[] = [
     children: [
       { path: '/production/batches', title: '生产批次', icon: '', module: 'production' },
       { path: '/production/plans', title: '生产计划', icon: '', module: 'production' },
+      { path: '/production/restock-board', title: '备货看板', icon: '', module: 'production' },
       { path: '/production/conversions', title: '转换率配置', icon: '', module: 'production' },
       { path: '/production/bom', title: 'BOM成本管理', icon: '', module: 'production' },
       { path: '/production/approval', title: '报工审批', icon: '', module: 'production' },

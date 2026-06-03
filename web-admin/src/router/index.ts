@@ -197,6 +197,12 @@ const businessRoutes: RouteRecordRaw[] = [
             meta: { requiresAuth: true, title: '生产计划', module: 'production' }
           },
           {
+            path: 'restock-board',
+            name: 'RestockBoard',
+            component: () => import('@/views/production/restock-board/index.vue'),
+            meta: { requiresAuth: true, title: '备货看板', module: 'production' }
+          },
+          {
             path: 'delivery-warnings',
             name: 'ProductionDeliveryWarnings',
             component: () => import('@/views/production/delivery-warnings/list.vue'),
