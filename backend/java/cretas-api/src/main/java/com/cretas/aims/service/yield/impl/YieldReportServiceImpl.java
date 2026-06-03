@@ -26,7 +26,9 @@ import com.cretas.aims.repository.ProductionPlanRepository;
 import com.cretas.aims.repository.ProductionReportRepository;
 import com.cretas.aims.repository.SemiFinishedInventoryRepository;
 import com.cretas.aims.repository.WorkProcessRepository;
+import com.cretas.aims.entity.recipe.ProcessMaterialRecipe;
 import com.cretas.aims.repository.lineage.BatchLineageEdgeRepository;
+import com.cretas.aims.repository.recipe.ProcessMaterialRecipeRepository;
 import com.cretas.aims.repository.workprocess.WorkProcessTaskRepository;
 import com.cretas.aims.service.ProcessingService;
 import com.cretas.aims.service.yield.YieldCalculationService;
@@ -80,6 +82,7 @@ public class YieldReportServiceImpl implements YieldReportService {
     private final SemiFinishedInventoryRepository wipRepo;
     private final BatchLineageEdgeRepository lineageEdgeRepo;
     private final ObjectMapper objectMapper;
+    private final ProcessMaterialRecipeRepository recipeRepository;
 
     @Override
     @Transactional
@@ -177,7 +180,8 @@ public class YieldReportServiceImpl implements YieldReportService {
         List<YieldReportRequest.LaborSegment> segs = effSegs;
         BigDecimal laborCost = computeLaborCost(segs, effReqWorkerCount, effReqWorkMinutes, hourlyRate);
         BigDecimal materialCost = computeMaterialCost(effMaterialRefs,
-                sourceWip, effInput);
+                sourceWip, effInput,
+                factoryId, t.getWorkProcessId(), effOutput);
 
         // 适配单元3: 多段工时时, totalWorkMinutes = Σ段时长, totalWorkers = MAX headcount (峰值, 修 M2);
         // 段为空时退回单一 req.getWorkMinutes()/getWorkerCount() (零回归)。
@@ -872,8 +876,23 @@ public class YieldReportServiceImpl implements YieldReportService {
      * 但本方法两路都累加 — 若某道既带原料 ref 又领 WIP (理论少见, e.g. 补料), 两者都是真实成本投入,
      * 应当都计入 (非重复计同一物料)。</p>
      */
+    /**
+     * P5 扩展版: 原有原料/WIP 成本基础上叠加调料 (SEASONING) 和包材 (PACKAGING) 配方成本。
+     *
+     * <p><b>叠加逻辑</b> (不与原有成本重复):
+     * <ul>
+     *   <li>原料 ref 成本 (领料折价) — 不变</li>
+     *   <li>WIP 成本 (sourceWip.unitCost × inputQuantity) — 不变</li>
+     *   <li>调料 (SEASONING): recipe.unitCost (元/kg投入) × inputQuantity — 新增</li>
+     *   <li>包材 (PACKAGING): recipe.unitCost (元/盒产出) × outputQuantity — 新增</li>
+     * </ul>
+     *
+     * <p><b>诚实 null 传播</b>: 任何来源只要有值就累加。全部无价 → null。
+     * 调料/包材 recipe 未配置 (factoryId/workProcessId 为 null, 或无 active recipe) → 该项 0 贡献不影响其他项。
+     */
     private BigDecimal computeMaterialCost(List<MaterialBatchRef> refs,
-                                           SemiFinishedInventory sourceWip, BigDecimal inputQuantity) {
+                                           SemiFinishedInventory sourceWip, BigDecimal inputQuantity,
+                                           String factoryId, String workProcessId, BigDecimal outputQuantity) {
         BigDecimal cost = null;  // null = 至今无任何有价项
         // 1) 原料领用: 每个 ref 的 quantity × 批次 unitPrice (unitPrice 可能被脱敏为 null)
         if (refs != null) {
@@ -889,6 +908,27 @@ public class YieldReportServiceImpl implements YieldReportService {
         if (sourceWip != null && sourceWip.getUnitCost() != null && inputQuantity != null) {
             BigDecimal line = inputQuantity.multiply(sourceWip.getUnitCost());
             cost = (cost == null ? BigDecimal.ZERO : cost).add(line);
+        }
+        // 3) P5: 调料/包材配方成本 (叠加, 不与原料/WIP 重复)
+        if (factoryId != null && workProcessId != null) {
+            List<ProcessMaterialRecipe> recipes =
+                    recipeRepository.findActiveByFactoryIdAndWorkProcessId(factoryId, workProcessId);
+            for (ProcessMaterialRecipe recipe : recipes) {
+                if (recipe.getUnitCost() == null || !Boolean.TRUE.equals(recipe.getIsActive())) continue;
+                BigDecimal line = null;
+                if (recipe.getRecipeType() == ProcessMaterialRecipe.RecipeType.SEASONING
+                        && inputQuantity != null) {
+                    // 调料: 元/kg投入 × 本道投入量
+                    line = recipe.getUnitCost().multiply(inputQuantity);
+                } else if (recipe.getRecipeType() == ProcessMaterialRecipe.RecipeType.PACKAGING
+                        && outputQuantity != null) {
+                    // 包材: 元/盒产出 × 本道产出量 (盒)
+                    line = recipe.getUnitCost().multiply(outputQuantity);
+                }
+                if (line != null) {
+                    cost = (cost == null ? BigDecimal.ZERO : cost).add(line);
+                }
+            }
         }
         return cost == null ? null : cost.setScale(2, RoundingMode.HALF_UP);
     }

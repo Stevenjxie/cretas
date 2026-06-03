@@ -10,6 +10,7 @@ import jakarta.persistence.*;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Positive;
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import org.hibernate.annotations.Where;
 
 /**
@@ -100,6 +101,53 @@ public class SalesOrderItem extends BaseEntity {
     /** 箱数 = 数量/箱系数, 可手动修改 */
     @Column(name = "box_quantity", precision = 15, scale = 2)
     private BigDecimal boxQuantity;
+
+    // ==================== P3 多仓订单字段 (V20260915_01) ====================
+
+    /**
+     * 目的仓全名 (如 叮咚-北仑总仓).
+     *
+     * <p>P3 多仓建模: 叮咚采购单 1 张 SalesOrder 含 24 行 (6仓×4品),
+     * 每行通过此字段标记配送目的仓. 备货看板按 {@link #destWarehouseCode} 拆需求.
+     *
+     * <p>Nullable: 普通订单 (非多仓叮咚单) 无目的仓.
+     * Migration: {@code V20260915_01__sales_order_item_dest_warehouse.sql}
+     */
+    @Column(name = "dest_warehouse_name", length = 100)
+    private String destWarehouseName;
+
+    /**
+     * 目的仓 code — 备货看板按此 GROUP BY.
+     *
+     * <p>Nullable. COALESCE(null, '未分仓') 在聚合查询里保底.
+     */
+    @Column(name = "dest_warehouse_code", length = 32)
+    private String destWarehouseCode;
+
+    /**
+     * 叮咚外部采购单ID — 跨行共享, 标识"1张叮咚单"的分组键.
+     * 与 SalesOrder.externalOrderTitle 互补 (title 是人读; ID 是机器键).
+     */
+    @Column(name = "external_po_id", length = 64)
+    private String externalPoId;
+
+    /** 商品条码 (叮咚配送签收用). Nullable. */
+    @Column(name = "barcode", length = 64)
+    private String barcode;
+
+    /**
+     * 预约入场时段字符串 (如 "8:00-12:00"), 叮咚仓库签收预约. Nullable.
+     * 有意设为 VARCHAR 不解析为 Time — 叮咚格式不固定, 存原文方便展示.
+     */
+    @Column(name = "appointment_time", length = 50)
+    private String appointmentTime;
+
+    /**
+     * 行级要求到达日期 — 精细到行, 可与 SalesOrder.requiredDeliveryDate 不同.
+     * 典型场景: 叮咚多温区混批, 不同产品到达日期不同. Nullable.
+     */
+    @Column(name = "required_arrival_date")
+    private LocalDate requiredArrivalDate;
 
     /**
      * 来源仓库 code (T4-D1, issue #525): WH-LOG (总仓) / WH-WKS (线边仓).

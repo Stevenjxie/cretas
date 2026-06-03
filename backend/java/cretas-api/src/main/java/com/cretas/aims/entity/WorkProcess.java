@@ -1,10 +1,14 @@
 package com.cretas.aims.entity;
 
+import io.hypersistence.utils.hibernate.type.json.JsonType;
 import lombok.*;
 import jakarta.persistence.*;
+import org.hibernate.annotations.Type;
 import org.hibernate.annotations.Where;
 
 import java.math.BigDecimal;
+import java.util.List;
+import java.util.Map;
 
 @Data
 @EqualsAndHashCode(callSuper = true)
@@ -70,4 +74,13 @@ public class WorkProcess extends BaseEntity {
     /** 标准时薪 (元/小时; null=未配置, 用于逐道人工成本计算, 绝不默认 0) */
     @Column(name = "standard_hourly_rate", precision = 8, scale = 2)
     private BigDecimal standardHourlyRate;
+
+    /**
+     * 预期副产物列表 (防呆 Rule 3: 报工 OUTPUT 阶段预填提示).
+     * 格式: [{"name":"肥油","unit":"kg","defaultEnabled":true}, ...]
+     * null = 本道无预期副产物, 不预填。
+     */
+    @Type(JsonType.class)
+    @Column(name = "expected_byproducts", columnDefinition = "jsonb")
+    private List<Map<String, Object>> expectedByproducts;
 }

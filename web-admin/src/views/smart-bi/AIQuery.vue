@@ -179,6 +179,157 @@ function resetChatSession(): void {
   }
 }
 
+// P1-B (2026-06-03): 餐饮租户专属快捷问题目录 — 按 老板 高频维度分组展示.
+// 仅当 authStore.factoryType === 'RESTAURANT' 时生效; 工厂租户不受影响.
+// 覆盖 gold 后端已支持的维度: 营收/菜品/门店/评价/渠道/客单价/峰值时段.
+// 不含"商品分类占比"(gold 后端无此数据, 会 fall-through).
+interface RestaurantQuickGroup {
+  label: string;
+  questions: string[];
+}
+const RESTAURANT_QUICK_GROUPS: RestaurantQuickGroup[] = [
+  {
+    label: '经营总览',
+    questions: [
+      '总营业额', '今年营收', '本季度营收', '营收趋势', '峰值时段',
+    ],
+  },
+  {
+    label: '菜品',
+    questions: [
+      '哪个菜卖得最好', '慢销菜品', '外卖点什么多', '高频好评词',
+    ],
+  },
+  {
+    label: '门店',
+    questions: [
+      '哪家店业绩最好', '门店销售对比', '哪家店差评多',
+    ],
+  },
+  {
+    label: '顾客与评价',
+    questions: [
+      '客户评价怎么样', 'VIP客户分析', '有哪些差评', '平台口碑如何',
+    ],
+  },
+  {
+    label: '渠道与促销',
+    questions: [
+      '外卖占比', '优惠券使用', '客单价', '周末周中对比',
+    ],
+  },
+];
+
+// P1-B: 时间变体追问 map — 前端静态补充. 后端 gold 工具已对时间参数化,
+// 点击 chip 只是预填+提交一个新问题, 走现有 intent 路由.
+// key = 问题模式 (substring match), value = 追问 chip 列表.
+// 注意: 追问 chip 应避免"怎么样"结尾(命中 GENERAL_QUESTION 高阈值会被拒绝).
+const RESTAURANT_TIME_FOLLOWUPS: Array<{
+  patterns: string[];
+  followups: Array<{ label: string; question: string }>;
+}> = [
+  {
+    patterns: ['营收趋势', '收入趋势', '月度趋势'],
+    followups: [
+      { label: '本季度', question: '本季度营收趋势' },
+      { label: '今年', question: '今年营收趋势' },
+      { label: '近30天', question: '近30天营收趋势' },
+      { label: '今年 vs 去年', question: '今年与去年营收对比' },
+    ],
+  },
+  {
+    patterns: ['总营业额', '营业额多少', '今年营收', '本季度营收'],
+    followups: [
+      { label: '上个月', question: '上个月总营业额' },
+      { label: '本季度', question: '本季度总营业额' },
+      { label: '今年', question: '今年总营业额' },
+      { label: '去年同期', question: '去年同期总营业额' },
+    ],
+  },
+  {
+    patterns: ['哪个菜卖得最好', '畅销', '热销', '爆款'],
+    followups: [
+      { label: '上个月', question: '上个月哪个菜卖得最好' },
+      { label: '本季度', question: '本季度哪个菜卖得最好' },
+      { label: '今年', question: '今年哪个菜卖得最好' },
+      { label: '近30天', question: '近30天畅销菜品' },
+    ],
+  },
+  {
+    patterns: ['慢销', '滞销'],
+    followups: [
+      { label: '上个月', question: '上个月慢销菜品' },
+      { label: '本季度', question: '本季度慢销菜品' },
+      { label: '近60天', question: '近60天慢销菜品' },
+    ],
+  },
+  {
+    patterns: ['哪家店业绩最好', '门店业绩', '门店销售', '门店对比'],
+    followups: [
+      { label: '上个月', question: '上个月哪家店业绩最好' },
+      { label: '本季度', question: '本季度门店业绩对比' },
+      { label: '今年', question: '今年各门店营收排名' },
+      { label: '近30天', question: '近30天门店销售对比' },
+    ],
+  },
+  {
+    patterns: ['客户评价', '评价情况', '口碑', '平台口碑'],
+    followups: [
+      { label: 'VIP 评价', question: 'VIP客户评价情况' },
+      { label: '差评门店', question: '哪家店差评最多' },
+      { label: '高频好评词', question: '高频好评词有哪些' },
+      { label: '回复率', question: '平台评价回复率' },
+    ],
+  },
+  {
+    patterns: ['VIP', 'vip', '会员'],
+    followups: [
+      { label: '本季度', question: '本季度VIP客户分析' },
+      { label: '今年', question: '今年VIP客户分析' },
+      { label: 'VIP评价', question: 'VIP客户评价情况' },
+    ],
+  },
+  {
+    patterns: ['客单价'],
+    followups: [
+      { label: '上个月', question: '上个月客单价' },
+      { label: '本季度', question: '本季度客单价' },
+      { label: '门店对比', question: '各门店客单价对比' },
+    ],
+  },
+  {
+    patterns: ['外卖占比', '外卖'],
+    followups: [
+      { label: '上个月', question: '上个月外卖占比' },
+      { label: '本季度', question: '本季度外卖占比' },
+      { label: '门店对比', question: '各门店外卖占比对比' },
+    ],
+  },
+  {
+    patterns: ['峰值时段', '时段'],
+    followups: [
+      { label: '工作日', question: '工作日峰值时段' },
+      { label: '周末', question: '周末峰值时段' },
+      { label: '门店对比', question: '各门店峰值时段对比' },
+    ],
+  },
+  {
+    patterns: ['周末周中', '周末'],
+    followups: [
+      { label: '上个月', question: '上个月周末与工作日营收对比' },
+      { label: '本季度', question: '本季度周末与工作日对比' },
+    ],
+  },
+  {
+    patterns: ['优惠券', '促销'],
+    followups: [
+      { label: '上个月', question: '上个月优惠券使用情况' },
+      { label: '本季度', question: '本季度优惠券使用情况' },
+      { label: '门店对比', question: '各门店优惠券使用对比' },
+    ],
+  },
+];
+
 // Apr 27 2026 (F6): caps-aware 快捷问题 — chip 内容根据当前数据集 domain
 // 动态切换. 之前固定 8 个 sales-focused chips 在 reviews/finance/member 数据集
 // 上点了会触发 capability_short_circuit 拒绝, UX 误导.
@@ -263,7 +414,17 @@ function inferDomainFromFilename(name: string): string {
   return 'default';
 }
 
+// P1-B: For RESTAURANT tenants, the quick-question section is replaced by the
+// grouped catalog (rendered separately in the template). This flat list is used
+// as a fallback for non-restaurant tenants and the autocomplete list.
+const isRestaurantTenant = computed(() => authStore.factoryType === 'RESTAURANT');
+
 const quickQuestions = computed<string[]>(() => {
+  // Restaurant tenants get the grouped catalog (rendered as grouped chips).
+  // Return all questions flattened so autocomplete still covers them.
+  if (isRestaurantTenant.value) {
+    return RESTAURANT_QUICK_GROUPS.flatMap((g) => g.questions);
+  }
   const item = dataSources.value.find(d => d.id === selectedUploadId.value);
   const fname = item?.fileName || item?.originalFileName || '';
   const sname = (item as any)?.sheetName || '';
@@ -446,6 +607,20 @@ function relatedFollowups(templateCode?: string): string[] {
 function triggerRelatedFollowup(query: string) {
   inputQuery.value = query;
   handleSendMessage();
+}
+
+// P1-B (2026-06-03): time-variant follow-up chips for restaurant tenants.
+// Looks up the last user question against RESTAURANT_TIME_FOLLOWUPS patterns.
+// Returns an empty array for non-restaurant tenants — the chips never appear.
+function timeFollowups(lastQuestion?: string): Array<{ label: string; question: string }> {
+  if (!isRestaurantTenant.value || !lastQuestion) return [];
+  const q = lastQuestion.trim();
+  for (const entry of RESTAURANT_TIME_FOLLOWUPS) {
+    if (entry.patterns.some((p) => q.includes(p))) {
+      return entry.followups;
+    }
+  }
+  return [];
 }
 
 async function sendFeedback(msg: ChatMessage, value: 1 | -1) {
@@ -1789,7 +1964,7 @@ function handleKeydown(event: KeyboardEvent) {
       <!-- 对话历史区 -->
       <div class="chat-history" ref="chatContainerRef" @scroll="onChatScroll">
         <div
-          v-for="message in chatHistory"
+          v-for="(message, msgIdx) in chatHistory"
           :key="message.id"
           class="chat-message"
           :class="message.role"
@@ -2010,6 +2185,28 @@ function handleKeydown(event: KeyboardEvent) {
                   </el-button>
                 </div>
 
+                <!-- P1-B (2026-06-03): time-variant follow-up chips for restaurant tenants.
+                     Only shown when the backend suggestedFollowups are absent (to avoid
+                     crowding the UI when the gold tool already returned rich follow-ups).
+                     Looks at the preceding user message to decide which time variants to show. -->
+                <div
+                  v-if="message.role === 'assistant' && !message.loading && !message.streaming && !(message.suggestedFollowups?.length) && timeFollowups(msgIdx > 0 ? chatHistory[msgIdx - 1]?.content : '').length > 0"
+                  class="message-related-followups"
+                >
+                  <span class="related-label">换个时间:</span>
+                  <el-button
+                    v-for="(f, i) in timeFollowups(msgIdx > 0 ? chatHistory[msgIdx - 1]?.content : '')"
+                    :key="i"
+                    size="small"
+                    type="success"
+                    plain
+                    round
+                    @click="triggerRelatedFollowup(f.question)"
+                  >
+                    {{ f.label }}
+                  </el-button>
+                </div>
+
                 <!-- Feedback for both LLM and template answers (Apr 24 2026 extended).
                      Template hits get a logId via _log_template_hit_safe in chat.py. -->
                 <div
@@ -2082,7 +2279,29 @@ function handleKeydown(event: KeyboardEvent) {
       </div>
 
       <!-- 快捷问题 (hide when conversation has started to save space) -->
-      <div v-if="chatHistory.length <= 2" class="quick-questions">
+      <!-- P1-B: RESTAURANT 租户展示分组目录; 其他租户展示扁平 chip 列表 (原有逻辑) -->
+      <div v-if="chatHistory.length <= 2 && isRestaurantTenant" class="quick-questions quick-questions--grouped">
+        <span class="label">老板问什么:</span>
+        <div class="questions-grouped">
+          <div
+            v-for="group in RESTAURANT_QUICK_GROUPS"
+            :key="group.label"
+            class="questions-group"
+          >
+            <span class="group-label">{{ group.label }}</span>
+            <el-button
+              v-for="(q, qi) in group.questions"
+              :key="qi"
+              size="small"
+              round
+              @click="handleQuickQuestion(q)"
+            >
+              {{ q }}
+            </el-button>
+          </div>
+        </div>
+      </div>
+      <div v-else-if="chatHistory.length <= 2" class="quick-questions">
         <span class="label">快捷问题:</span>
         <div class="questions-list">
           <el-button
@@ -2494,6 +2713,42 @@ function handleKeydown(event: KeyboardEvent) {
     display: inline-flex;
     flex-wrap: wrap;
     gap: 8px;
+  }
+
+  // P1-B: grouped layout for restaurant tenants
+  &--grouped {
+    padding-bottom: 16px;
+
+    .label {
+      display: block;
+      margin-bottom: 10px;
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--el-text-color-secondary, #909399);
+    }
+
+    .questions-grouped {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .questions-group {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 6px;
+
+      .group-label {
+        font-size: 12px;
+        color: var(--el-text-color-placeholder, #c0c4cc);
+        font-weight: 600;
+        min-width: 52px;
+        text-align: right;
+        padding-right: 4px;
+        flex-shrink: 0;
+      }
+    }
   }
 }
 

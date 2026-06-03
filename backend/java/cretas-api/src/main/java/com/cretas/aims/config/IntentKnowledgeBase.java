@@ -8601,8 +8601,69 @@ public class IntentKnowledgeBase {
         if (result.isPresent()) return result;
 
         // 3. 回退到公共 Map
-        return doMatchPhrase(input, commonPhraseMapping);
+        result = doMatchPhrase(input, commonPhraseMapping);
+        if (result.isPresent()) return result;
+
+        // 4. P1-A: 剥离开头的时间前缀后再试一次
+        //    形如 "本月哪个菜卖得好" / "今年销量最好的菜" / "本季度菜品排行" 这类带时间前缀的查询,
+        //    直接匹配会因覆盖率下降或前缀挤占而落空 → 落到 dynamic/LLM 自动规划路径, 结果不稳定。
+        //    这里仅为「匹配决策」剥离前导时间词, 命中后返回的 intentCode 跟未带时间前缀的同一意图一致,
+        //    从而路由到 gold tool; 而下游 resolveWindow 仍然读取的是原始 userInput (带时间词), 时间照常生效。
+        //    NB: 仅剥离「开头」的时间词, 不动句中/句尾, 因此非时间短语 ("哪个菜卖得好") 完全不受影响。
+        String timeStripped = stripLeadingTimePhrase(input);
+        if (timeStripped != null && !timeStripped.equals(input.trim())) {
+            result = doMatchPhrase(timeStripped, businessSpecificMap);
+            if (result.isPresent()) return result;
+            return doMatchPhrase(timeStripped, commonPhraseMapping);
+        }
+        return Optional.empty();
     }
+
+    /**
+     * P1-A: 剥离查询开头的时间前缀, 仅用于短语匹配决策 (不影响下游 resolveWindow 的时间解析)。
+     *
+     * <p>支持的前导时间表达 (锚定在/接近句首, 可吞掉前缀型助词「的」):
+     * <ul>
+     *   <li>相对月/周/季/年: 本月/这个月/当月/上月/上个月/本季度/上季度/本周/上周/本年/今年/去年/前年</li>
+     *   <li>滚动窗口: 最近N天/近N周 等 (N 为数字, 单位 天|日|周|月|年)</li>
+     *   <li>绝对月: 2025年12月 / 2025-12 / 2025/12 / 2025年</li>
+     *   <li>第N季度 / 第一季度~第四季度</li>
+     * </ul>
+     *
+     * @param input 原始用户输入
+     * @return 剥离前导时间词后的字符串; 若开头没有时间词则返回 {@code input.trim()} (调用方据此判断是否有变化)
+     */
+    String stripLeadingTimePhrase(String input) {
+        if (input == null) return null;
+        String trimmed = input.trim();
+        java.util.regex.Matcher m = LEADING_TIME_PREFIX.matcher(trimmed);
+        if (m.find()) {
+            String rest = trimmed.substring(m.end()).trim();
+            // 若剥离后为空 (整句就是个时间词) 则不剥, 避免把有效查询掏空
+            if (!rest.isEmpty()) {
+                return rest;
+            }
+        }
+        return trimmed;
+    }
+
+    /**
+     * P1-A: 前导时间前缀正则。锚定句首 ({@code ^}), 可匹配尾随的前缀助词「的」(如「今年的销量排行」)。
+     * 数字 N 限定 1-3 位避免吞掉无关数字串。绝对月份限制 1-12。
+     */
+    private static final java.util.regex.Pattern LEADING_TIME_PREFIX = java.util.regex.Pattern.compile(
+            // NB: longer alternatives MUST precede their prefixes (本年度 before 本年,
+            //     上个月 before 上月) so the longest leading token is stripped.
+            "^(?:" +
+            "这个月|上个月|本月|当月|上月" +
+            "|本季度|上季度|第[一二三四1-4]季度" +
+            "|本星期|这周|本周|上星期|上周" +
+            "|本年度|本年|今年|去年|前年" +
+            "|最近\\d{1,3}\\s*[天日周月年]|近\\d{1,3}\\s*[天日周月年]" +
+            "|\\d{4}\\s*[年/\\-]\\s*(?:1[0-2]|0?[1-9])\\s*月?" +
+            "|\\d{4}\\s*年" +
+            ")的?"
+    );
 
     /**
      * 原有方法保持向后兼容（默认走工厂路径）
