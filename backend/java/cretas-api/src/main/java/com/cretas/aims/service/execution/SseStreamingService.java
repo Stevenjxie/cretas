@@ -234,7 +234,7 @@ public class SseStreamingService {
                 IntentExecuteResponse noMatchResponse = buildNoMatchResponseForStream(matchResult, factoryId);
                 sendSseEvent(emitter, "result", noMatchResponse);
                 sendSseEvent(emitter, "complete", Map.of(
-                        "status", "NO_MATCH",
+                        "status", noMatchCompleteStatus(matchResult),
                         "cacheHit", false,
                         "totalLatencyMs", System.currentTimeMillis() - startTime
                 ));
@@ -645,6 +645,18 @@ public class SseStreamingService {
             return matchResult.getClarificationQuestion();
         }
         return "我没有理解您的意图，请更详细地描述您的需求。";
+    }
+
+    /**
+     * Returns the SSE complete-event status string for a no-match result.
+     * W1b: when the no-match carries a clarificationQuestion (negation VETO_READ), the complete
+     * status must be NEED_CLARIFICATION to match the result event — not the generic NO_MATCH.
+     * Mirrors the selectNoMatchStreamMessage priority: conversationMessage → clarificationQuestion → generic.
+     */
+    static String noMatchCompleteStatus(IntentMatchResult matchResult) {
+        boolean isNegationClarification = matchResult.getClarificationQuestion() != null
+                && !matchResult.getClarificationQuestion().isEmpty();
+        return isNegationClarification ? "NEED_CLARIFICATION" : "NO_MATCH";
     }
 
     private IntentExecuteResponse buildNoMatchResponseForStream(IntentMatchResult matchResult, String factoryId) {
