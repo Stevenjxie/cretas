@@ -9,13 +9,18 @@ const props = defineProps<{
   /** spec v1.2: default 'placeholder' to teach customer what's missing.
    * Use 'hide' for admin/experiment/RBAC-restricted cards. See spec §6.3. */
   fallback?: 'hide' | 'placeholder';
+  /** WS2 (2026-06-02): force-render the default slot, bypassing capability
+   * gating entirely. Used by the gold-backed dashboard KPI strip — gold
+   * aggregation needs no upload-capability check, so it must never show the
+   * "此分析需上传含..." placeholder. Default false = normal gating. */
+  force?: boolean;
 }>();
 
 const router = useRouter();
 const { hasAll, missingOf, available, loading, suggestions } = useCapability();
 
-const isLoading = computed(() => loading.value && available.value === null);
-const satisfied = computed(() => hasAll(props.requires));
+const isLoading = computed(() => !props.force && loading.value && available.value === null);
+const satisfied = computed(() => props.force || hasAll(props.requires));
 const missing = computed(() => missingOf(props.requires));
 const fallbackMode = computed(() => props.fallback ?? 'placeholder');
 

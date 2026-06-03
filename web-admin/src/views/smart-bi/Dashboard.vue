@@ -248,6 +248,17 @@ const kpiData = computed(() => {
   };
 });
 
+// WS2 (2026-06-02): gold-mode 检测 — 当后端返回 gold KPI 卡 (total_revenue /
+// bill_count / avg_bill_value / store_count) 时, KPI 区直接出数, 不经
+// <CapabilityGate> 的上传能力门控 (gold 聚合无需 upload-capability 判定)。
+// 制造业 / xlsx 上传路径 (无 gold 卡) 保持原 CapabilityGate 行为不变。
+const isGoldMode = computed(() => {
+  const cards = dashboardData.value?.kpiCards;
+  if (!cards || cards.length === 0) return false;
+  const has = (key: string) => cards.some(c => c.key === key);
+  return has('total_revenue') && has('bill_count') && has('avg_bill_value') && has('store_count');
+});
+
 // 部门排行数据 (从 rankings 提取)
 const departmentRanking = computed<DepartmentRank[]>(() => {
   if (!dashboardData.value?.rankings) return [];
@@ -1493,7 +1504,7 @@ onUnmounted(() => {
     </el-row>
     <el-row v-else :gutter="16" class="kpi-section kpi-fade-in" aria-label="KPI指标" aria-live="polite" :aria-busy="loading">
       <el-col v-if="canViewPrice" :xs="24" :sm="12" :md="6">
-        <CapabilityGate card-id="dashboard_revenue_month" :requires="['date', 'net_amount']">
+        <CapabilityGate card-id="dashboard_revenue_month" :requires="['date', 'net_amount']" :force="isGoldMode">
         <el-card class="kpi-card revenue">
           <div class="kpi-icon">
             <el-icon><DataLine /></el-icon>
@@ -1522,7 +1533,7 @@ onUnmounted(() => {
         </CapabilityGate>
       </el-col>
       <el-col v-if="canViewPrice" :xs="24" :sm="12" :md="6">
-        <CapabilityGate card-id="dashboard_avg_bill" :requires="['source_bill_no', 'net_amount']">
+        <CapabilityGate card-id="dashboard_avg_bill" :requires="['source_bill_no', 'net_amount']" :force="isGoldMode">
         <el-card class="kpi-card profit">
           <div class="kpi-icon">
             <el-icon><Histogram /></el-icon>
@@ -1551,7 +1562,7 @@ onUnmounted(() => {
         </CapabilityGate>
       </el-col>
       <el-col :xs="24" :sm="12" :md="6">
-        <CapabilityGate card-id="dashboard_order_count" :requires="['date', 'source_bill_no']">
+        <CapabilityGate card-id="dashboard_order_count" :requires="['date', 'source_bill_no']" :force="isGoldMode">
         <el-card class="kpi-card orders">
           <div class="kpi-icon">
             <el-icon><Goods /></el-icon>
@@ -1580,7 +1591,7 @@ onUnmounted(() => {
         </CapabilityGate>
       </el-col>
       <el-col :xs="24" :sm="12" :md="6">
-        <CapabilityGate card-id="dashboard_active_customers" :requires="['customer_count']">
+        <CapabilityGate card-id="dashboard_active_customers" :requires="['customer_count']" :force="isGoldMode">
         <el-card class="kpi-card customers">
           <div class="kpi-icon">
             <el-icon><Medal /></el-icon>

@@ -122,16 +122,21 @@ vi.mock('./components/RestaurantGoldGrid.vue', () => ({
 vi.mock('@/components/UnlockMoreCTA.vue', () => ({
   default: { template: '<div class="unlock-cta-stub" />' },
 }));
-// CapabilityGate: render its DEFAULT slot only when satisfied; otherwise render the
-// real "此分析需上传含..." placeholder text — mirroring the real component so the
-// test can detect whether a gold card is (wrongly) still gated.
+// CapabilityGate stub mirroring the real component's gold-mode bypass:
+//  - `force` (gold mode) → render the default slot only, NO placeholder.
+//  - otherwise (capability unsatisfied, see useCapability mock) → render the
+//    real "此分析需上传含..." placeholder text so the test can detect a gold
+//    card that is (wrongly) still gated.
 vi.mock('@/components/CapabilityGate.vue', () => ({
   default: {
-    props: ['requires', 'cardId', 'fallback'],
+    props: ['requires', 'cardId', 'fallback', 'force'],
     template:
       '<div class="capability-gate-stub">' +
+      '<template v-if="force"><slot /></template>' +
+      '<template v-else>' +
       '<div class="cap-placeholder">此分析需上传含 {{ (requires || []).join(" / ") }} 的数据</div>' +
       '<slot />' +
+      '</template>' +
       '</div>',
   },
 }));
@@ -221,12 +226,18 @@ describe('Dashboard WS2 — KPI cards always gold (no 需上传 placeholder)', (
 
   it('renders the 4 gold KPI values without the 此分析需上传含 placeholder', async () => {
     const wrapper = await mountDashboard();
-    const text = wrapper.text();
-    // gold KPI labels present
-    expect(text).toContain('总营收');
-    expect(text).toContain('客单价');
-    expect(text).toContain('门店数');
-    // no capability "需上传" placeholder leaked into the KPI strip
-    expect(text).not.toContain('此分析需上传含');
+    // scope to the KPI strip (.kpi-section) — Task 2 is specifically the 4 KPI
+    // cards. Chart/ranking gates below the strip keep their normal gating.
+    const kpiSection = wrapper.find('.kpi-section.kpi-fade-in');
+    expect(kpiSection.exists()).toBe(true);
+    const kpiText = kpiSection.text();
+    // 4 gold KPI labels + values present
+    expect(kpiText).toContain('总营收');
+    expect(kpiText).toContain('客单价');
+    expect(kpiText).toContain('订单数');
+    expect(kpiText).toContain('门店数');
+    expect(kpiText).toContain('4321万');
+    // no capability "需上传" placeholder leaked into the KPI strip (gold mode bypass)
+    expect(kpiText).not.toContain('此分析需上传含');
   });
 });
