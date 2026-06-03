@@ -12,6 +12,8 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.util.List;
+import java.util.Map;
 
 @Data
 @Builder
@@ -61,6 +63,13 @@ public class WorkProcessDTO {
     @DecimalMin(value = "0", message = "标准时薪不能为负")
     @DecimalMax(value = "999999.99", message = "标准时薪超出范围")
     private BigDecimal standardHourlyRate;
+
+    /**
+     * 预期副产物列表 (防呆 Rule 3: 报工 OUTPUT 阶段预填提示).
+     * 格式: [{"name":"肥油","unit":"kg","defaultEnabled":true}, ...]
+     * null = 本道无预期副产物。
+     */
+    private List<Map<String, Object>> expectedByproducts;
 
     @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss")
     private LocalDateTime createdAt;

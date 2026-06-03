@@ -12,6 +12,8 @@ import lombok.NoArgsConstructor;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.util.List;
+import java.util.Map;
 
 /**
  * 工序任务 DTO (Track D2 — M-WP-1/2).
@@ -72,6 +74,13 @@ public class WorkProcessTaskDTO {
 
     /** P0-2 产出单位 (来自该工序 WorkProcess.outputUnit, join 透出; null=沿用投入单位). */
     private String outputUnit;
+
+    /**
+     * 预期副产物列表 (防呆 Rule 3: 报工 OUTPUT 阶段预填提示; 来自 WorkProcess.expectedByproducts).
+     * 格式: [{"name":"肥油","unit":"kg","defaultEnabled":true}, ...]
+     * null = 本道无预期副产物, RN 不预填。
+     */
+    private List<Map<String, Object>> expectedByproducts;
 
     @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss")
     private LocalDateTime createdAt;
