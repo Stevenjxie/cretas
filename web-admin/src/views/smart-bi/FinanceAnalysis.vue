@@ -25,6 +25,8 @@ import {
   buildChart,
 } from '@/api/smartbi/python-service';
 import { getFinanceSummary, type FinanceSummary } from '@/api/smartbi/gold';
+import { getGoldDataRange } from '@/api/smartbi/dataRange';
+import { resolveAllHistoryRange } from './analysisDefaults';
 import { ElMessage } from 'element-plus';
 import {
   Refresh,
@@ -692,11 +694,16 @@ onMounted(async () => {
   // visibility for KPI cards below.
   fetchCapability();
 
-  // 默认选择最近365天（覆盖更多财务数据）
-  const end = new Date();
-  const start = new Date();
-  start.setTime(start.getTime() - 3600 * 1000 * 24 * 365);
-  dateRange.value = [start, end];
+  // WS4 #10: 默认全部历史 (而非近365天 — 财务数据可能落在更早区间)。探 gold 数据窗,
+  // 失败回落宽窗。绝不回到固定 N 天窗。
+  let allHistory: [string, string];
+  try {
+    const probe = factoryId.value ? await getGoldDataRange(factoryId.value) : null;
+    allHistory = resolveAllHistoryRange(probe);
+  } catch {
+    allHistory = resolveAllHistoryRange(null);
+  }
+  dateRange.value = [new Date(allHistory[0]), new Date(allHistory[1])];
 
   // Load data source list in background (for dropdown)
   loadDataSources();
