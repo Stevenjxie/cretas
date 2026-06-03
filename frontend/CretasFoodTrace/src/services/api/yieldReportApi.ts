@@ -69,6 +69,20 @@ export interface StepYieldDTO {
   laborCost: number | null;         // 本道人工成本
   materialCost: number | null;      // 本道材料成本
   stepCost: number | null;          // 本道小计 = laborCost + materialCost (两者全 null → null)
+  // ── 适配单元3: 传统报工证据/工时段/副产物/损耗/留样 (本道各次报工合并; 无则 null) ──
+  photos?: string[] | null;         // 证据图片 URL (本道各次报工 photos 合并去重)
+  laborSegments?: Array<Record<string, unknown>> | null;  // 多时段×人数工时明细 (startTime/endTime/headcount/note)
+  byproducts?: Array<Record<string, unknown>> | null;     // 副产物明细 (name/quantity/unit)
+  wasteQuantity?: number | null;    // Σ 本道损耗量
+  sampleRetainQuantity?: number | null;  // Σ 本道留样数 (盒/份)
+  // ── 三阶段报工 (单元1): 阶段推断 + 照片按 reportKind 分组 ──
+  /** 本道阶段: AWAITING_INPUT (无投入) / IN_PRODUCTION (有投入无产出) / COMPLETED (有产出)。
+   *  旧式报工 (reportKind null) 按 input/output 有无推断, 与三阶段语义一致。 */
+  phase?: 'AWAITING_INPUT' | 'IN_PRODUCTION' | 'COMPLETED' | null;
+  /** 投入阶段照片 (reportKind ∈ {INPUT, SEGMENT}; 旧式 null reportKind 也归此组); 无则 null */
+  inputPhotos?: string[] | null;
+  /** 产出阶段照片 (reportKind == OUTPUT); 无则 null */
+  outputPhotos?: string[] | null;
 }
 
 export interface BatchYieldDTO {
@@ -117,6 +131,12 @@ export interface YieldReportRequest {
   inputUnit?: string;
   outputQuantity: number;           // 本道产出 (必填)
   outputUnit?: string;
+  /**
+   * 三阶段报工标记 (单元1): INPUT (投入) / SEGMENT (生产中时段) / OUTPUT (完工出成)。
+   * 后端按 reportKind 隔离字段 (INPUT 忽略 output, OUTPUT 忽略 input, SEGMENT 只取 laborSegments)。
+   * null/缺省 = 旧式整合报工 (向后兼容, 全字段生效)。
+   */
+  reportKind?: 'INPUT' | 'SEGMENT' | 'OUTPUT';
   workMinutes?: number;             // 本道工时(分钟), 选填 (后端 Integer)
   workerCount?: number;             // P1-3 (G4): 本道人数, 选填 (后端 Integer)
   forceSubmit?: boolean;            // A4 超收软告警后强制提交
