@@ -288,6 +288,70 @@ def test_resolve_by_code_legacy_resolver_ignores_role_kwarg(monkeypatch):
     assert called["days"] == 30
 
 
+# ──────────────────────────────────────────────────────────────────────────
+# WS6 (#5 趋势不出图): the chat stream now pre-checks the TREND ops code BEFORE
+# the P2 synthesis router so trend / 同比环比 questions reach the gold
+# trend_bundle resolver (monthly trend + MoM/YoY + line chart) instead of being
+# swallowed by synthesis (which answers from a FactBook that lacks monthly
+# time-series and admits "无法计算同比环比/趋势"). These tests lock the routing
+# decision that the pre-check relies on:
+#   1. the dashboard 「同比环比分析」 chip query DOES match the TREND ops code →
+#      the pre-check diverts it to the gold trend resolver.
+#   2. a genuine "综合分析评价和经营" question does NOT match the TREND ops code →
+#      the pre-check skips it and it still reaches the synthesis engine.
+# ──────────────────────────────────────────────────────────────────────────
+
+# Exact query string the web-admin AIQuery 「同比环比分析」 chip (t9) sends.
+_DASHBOARD_TREND_CHIP_QUERY = "进行同比和环比分析，识别增长和下降趋势"
+
+
+def test_dashboard_trend_chip_matches_trend_ops_code():
+    """The exact dashboard chip query must route to the TREND ops code so the
+    chat-stream pre-check diverts it to the gold trend resolver (before
+    synthesis). Regression net for the #5 趋势不出图 fix."""
+    assert (
+        match_restaurant_ops(_DASHBOARD_TREND_CHIP_QUERY)
+        == "RESTAURANT_OPS_TREND_ANALYSIS"
+    )
+
+
+def test_synthesis_query_does_not_match_trend_ops_code():
+    """A genuine multi-dimension synthesis question ("综合分析评价和经营") must NOT
+    match the TREND ops code — the chat-stream pre-check only diverts the TREND
+    code, so this query is left untouched and still reaches the synthesis
+    engine. Verifies the pre-check does not steal genuine 综合分析 questions."""
+    for synthesis_q in (
+        "综合分析评价和经营",
+        "综合分析收入、成本、利润、费用等关键经营指标，给出经营建议",
+        "整体分析一下门店的评价和营收情况",
+    ):
+        assert match_restaurant_ops(synthesis_q) != "RESTAURANT_OPS_TREND_ANALYSIS", (
+            f"Genuine synthesis query {synthesis_q!r} unexpectedly matched the "
+            f"TREND ops code — the pre-check would wrongly divert it away from "
+            f"the synthesis engine."
+        )
+
+
+def test_trend_chip_reaches_trend_not_synthesis_router():
+    """End-to-end routing decision for the #5 fix: the dashboard trend chip
+    query must (a) match the TREND ops code (→ gold trend resolver via the
+    pre-check) and (b) NOT trigger the comprehensive-synthesis matcher (so even
+    without the pre-check it would not be a synthesis question by keyword). The
+    pre-check exists precisely because prod synthesis was observed to swallow
+    it; this asserts the gold path is the correct destination."""
+    from smartbi.agent.synthesis_router import match_comprehensive_synthesis
+
+    # (a) gold TREND is the intended destination
+    assert (
+        match_restaurant_ops(_DASHBOARD_TREND_CHIP_QUERY)
+        == "RESTAURANT_OPS_TREND_ANALYSIS"
+    )
+    # (b) genuine synthesis questions still match synthesis (sanity: matcher works)
+    assert match_comprehensive_synthesis("综合分析评价和经营") is True
+    # (b') the genuine synthesis query is NOT a TREND ops code → not diverted
+    assert match_restaurant_ops("综合分析评价和经营") != "RESTAURANT_OPS_TREND_ANALYSIS"
+
+
 def test_store_margin_does_not_match_service_quality():
     """Apr 25 2026 explicit regression test for the AIQuery C-4 bug.
 

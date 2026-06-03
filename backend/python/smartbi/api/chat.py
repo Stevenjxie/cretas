@@ -1283,6 +1283,89 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                 logger.warning(f"[chat-session] phase 0 lookup failed (non-fatal): {e}")
 
         try:
+            # ── Jun 2026 WS6 routing fix (#5 趋势不出图) ───────────────────────
+            # SURGICAL pre-check: trend / 同比环比 questions MUST reach the gold
+            # trend resolver (trend_bundle, full 2025+2026 history → monthly
+            # trend + peak/trough + MoM/YoY + line chart) BEFORE the P2 synthesis
+            # router below gets a chance. The dashboard 「同比环比分析」 chip sends
+            # "进行同比和环比分析，识别增长和下降趋势"; if synthesis serves it first
+            # it answers from the FactBook (which lacks monthly time-series) and
+            # admits "无法计算同比环比/趋势" — the gold TREND resolver never fires
+            # (verified on prod). We divert ONLY the TREND ops code here; every
+            # other ops code stays in its normal position in the gold-ops block
+            # after synthesis (minimal blast radius — only trend/同比/环比 queries
+            # are re-ordered, all other routing is unchanged). A genuine
+            # "综合分析评价和经营" question does NOT match the TREND ops code
+            # (it has no 同比/环比/趋势/增长/下降/月度变化/走势 keyword) so it still
+            # reaches the synthesis engine untouched.
+            try:
+                user_q = (request.effective_query or "").strip()
+                factory_id_hdr = (
+                    getattr(http_request.state, 'factory_id', None)
+                    if hasattr(http_request, 'state') else None
+                )
+                if user_q and factory_id_hdr:
+                    from smartbi.gold.restaurant_ops_router import (
+                        match_restaurant_ops as _match_ops_trend,
+                        resolve_by_code as _resolve_ops_trend,
+                    )
+                    from smartbi.config import get_pg_pool as _get_pool_trend
+                    if _match_ops_trend(user_q) == "RESTAURANT_OPS_TREND_ANALYSIS":
+                        pool_trend = await _get_pool_trend()
+                        if pool_trend:
+                            _role_hdr = (
+                                getattr(http_request.state, 'role', None)
+                                if hasattr(http_request, 'state') else None
+                            )
+                            trend_answer = await _resolve_ops_trend(
+                                "RESTAURANT_OPS_TREND_ANALYSIS",
+                                pool_trend, factory_id_hdr, role=_role_hdr,
+                            )
+                            if trend_answer:
+                                yield _sse_event("status", f"命中餐饮运营模板:{trend_answer.title}")
+                                chunk_size = 40
+                                for i in range(0, len(trend_answer.answer_text), chunk_size):
+                                    yield _sse_event("chunk", trend_answer.answer_text[i:i + chunk_size])
+                                if trend_answer.charts:
+                                    yield _sse_event("charts", trend_answer.charts)
+                                wall_ms = int((time.time() - start_time) * 1000)
+                                yield _sse_event("done", {
+                                    "success": True,
+                                    "answer": trend_answer.answer_text,
+                                    "charts": trend_answer.charts,
+                                    "kpis": trend_answer.kpis,
+                                    "source": "restaurant_ops_gold",
+                                    "template_code": "RESTAURANT_OPS_TREND_ANALYSIS",
+                                    "processingTimeMs": wall_ms,
+                                    "log_id": None,
+                                })
+                                if request.session_id and _session_factory_id:
+                                    try:
+                                        from smartbi.services.chat_session_service import (
+                                            ChatSessionService as _CSS_TREND,
+                                        )
+                                        from smartbi.api.materialized_analytics import (
+                                            _spawn_bg as _spawn_trend,
+                                        )
+                                        _spawn_trend(_CSS_TREND(pool_trend).upsert(
+                                            session_id=request.session_id,
+                                            factory_id=_session_factory_id,
+                                            parent_query=user_q,
+                                            parent_answer_summary=trend_answer.answer_text,
+                                            parent_template_code="RESTAURANT_OPS_TREND_ANALYSIS",
+                                            parent_upload_id=None,
+                                            user_id=_session_user_id,
+                                        ))
+                                    except Exception as _e:
+                                        logger.warning(f"[chat-session] writeback (gold trend) failed: {_e}")
+                                logger.info(
+                                    f"[stream] served via gold trend (pre-synthesis): "
+                                    f"template=RESTAURANT_OPS_TREND_ANALYSIS, wall={wall_ms}ms"
+                                )
+                                return  # early exit — gold trend served the answer
+            except Exception as e:
+                logger.warning(f"[stream] gold trend pre-check failed, falling through: {e}")
+
             # P2 综合分析 (multi-dim synthesis) router — runs FIRST, BEFORE the
             # single-dataset gold-ops + xlsx template routers, so a free-form
             # "综合分析评价和经营" / "VIP和菜品门店的关系" question is served by the
