@@ -86,6 +86,8 @@ public class RestaurantStoreRevenueRankGoldTool extends GoldBackedRestaurantTool
             entry.put("门店", row.get("store_name"));
             entry.put("营收", row.get("revenue"));
             entry.put("单数", row.get("bill_count"));
+            java.math.BigDecimal avgTicket = deriveAvgTicket(row.get("revenue"), row.get("bill_count"));
+            if (avgTicket != null) entry.put("客单价", avgTicket);
             storeRank.add(entry);
         }
 
@@ -99,6 +101,7 @@ public class RestaurantStoreRevenueRankGoldTool extends GoldBackedRestaurantTool
             sb.append(i + 1).append(". ").append(entry.get("门店"))
                     .append(" — 营收").append(fmtAmt(revD))
                     .append("，").append(bills != null ? bills : 0).append("单");
+            if (entry.get("客单价") != null) sb.append("，客单价 ¥").append(entry.get("客单价"));
             if (i < storeRank.size() - 1) sb.append("\n");
         }
 
@@ -129,6 +132,17 @@ public class RestaurantStoreRevenueRankGoldTool extends GoldBackedRestaurantTool
 
     private static String fmtAmt(double v) {
         return v >= 10_000 ? String.format("%.1f万", v / 10_000) : String.format("%.0f", v);
+    }
+
+    /** 派生客单价 = 营收/单数 (单数>0 才算)。真实数据, 非编造。 */
+    static java.math.BigDecimal deriveAvgTicket(Object revenue, Object billCount) {
+        if (revenue == null || billCount == null) return null;
+        try {
+            java.math.BigDecimal rev = new java.math.BigDecimal(revenue.toString());
+            java.math.BigDecimal bill = new java.math.BigDecimal(billCount.toString());
+            if (bill.compareTo(java.math.BigDecimal.ZERO) <= 0) return null;
+            return rev.divide(bill, 2, java.math.RoundingMode.HALF_UP);
+        } catch (NumberFormatException e) { return null; }
     }
 
     @Override

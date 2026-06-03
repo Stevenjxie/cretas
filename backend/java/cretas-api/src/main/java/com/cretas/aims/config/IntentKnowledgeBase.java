@@ -6872,6 +6872,17 @@ public class IntentKnowledgeBase {
         restaurantPhraseMapping.put("哪个菜卖得最多", "RESTAURANT_BESTSELLER_QUERY");
         restaurantPhraseMapping.put("销量最高的菜", "RESTAURANT_BESTSELLER_QUERY");
 
+        // Track A (2026-06-03): 堂食外卖 → order_type_mix_gold (服务模式真数据)
+        restaurantPhraseMapping.put("堂食外卖对比", "RESTAURANT_ORDER_STATISTICS");
+        restaurantPhraseMapping.put("堂食外卖占比", "RESTAURANT_ORDER_STATISTICS");
+        restaurantPhraseMapping.put("内用外卖对比", "RESTAURANT_ORDER_STATISTICS");
+        restaurantPhraseMapping.put("堂食和外卖", "RESTAURANT_ORDER_STATISTICS");
+        // Track A: 客单价 → store_revenue_rank_gold (派生客单价列)
+        restaurantPhraseMapping.put("哪家店客单价最高", "RESTAURANT_STORE_REVENUE_RANK");
+        restaurantPhraseMapping.put("客单价排行", "RESTAURANT_STORE_REVENUE_RANK");
+        restaurantPhraseMapping.put("客单价最高的门店", "RESTAURANT_STORE_REVENUE_RANK");
+        restaurantPhraseMapping.put("人均消费最高", "RESTAURANT_STORE_REVENUE_RANK");
+
         // RESTAURANT_SLOW_SELLER_QUERY — 滞销菜品查询
         restaurantPhraseMapping.put("哪个菜卖不动", "RESTAURANT_SLOW_SELLER_QUERY");
         restaurantPhraseMapping.put("滞销菜", "RESTAURANT_SLOW_SELLER_QUERY");

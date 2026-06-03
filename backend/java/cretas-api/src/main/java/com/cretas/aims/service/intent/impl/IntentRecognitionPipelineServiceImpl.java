@@ -44,6 +44,7 @@ import com.cretas.aims.service.intent.IntentConfigManagementService;
 import com.cretas.aims.service.intent.IntentRecognitionPipelineService;
 import com.cretas.aims.ai.tool.WriteGuardService;
 import com.cretas.aims.ai.tool.NegationTwinPolicy;
+import com.cretas.aims.ai.tool.BusinessTypeScope;
 import com.cretas.aims.dto.ClassifierResult;
 import com.cretas.aims.dto.SemanticMatchResult;
 import com.cretas.aims.dto.intent.RouteDecision;
@@ -2404,24 +2405,13 @@ public class IntentRecognitionPipelineServiceImpl implements IntentRecognitionPi
                 userInput, matchingConfig.isLlmFallbackEnabled());
 
         // v32.1: 业态隔离 — 过滤掉不属于当前业态的意图（工厂和餐饮均过滤）
+        // 单一事实源 BusinessTypeScope.isCompatible（T1 抽取，行为等价于历史 if/else 内联过滤）
         String biz = configService.resolveBusinessDomain(factoryId);
-        if ("RESTAURANT".equals(biz)) {
-            List<AIIntentConfig> filtered = allIntents.stream()
-                    .filter(i -> {
-                        String bt = i.getBusinessType();
-                        return bt == null || "COMMON".equals(bt) || "RESTAURANT".equals(bt);
-                    })
-                    .collect(Collectors.toList());
-            log.info("v32.1 LLM fallback 餐饮过滤: {} → {} intents", allIntents.size(), filtered.size());
-            allIntents = filtered;
-        } else {
-            // 工厂（FACTORY/COMMON/default）: 排除 RESTAURANT 专属意图
-            List<AIIntentConfig> filtered = allIntents.stream()
-                    .filter(i -> !"RESTAURANT".equals(i.getBusinessType()))
-                    .collect(Collectors.toList());
-            log.info("v32.1 LLM fallback 工厂过滤: {} → {} intents (排除RESTAURANT)", allIntents.size(), filtered.size());
-            allIntents = filtered;
-        }
+        List<AIIntentConfig> filtered = allIntents.stream()
+                .filter(i -> BusinessTypeScope.isCompatible(i.getBusinessType(), biz))
+                .collect(Collectors.toList());
+        log.info("v32.1 LLM fallback 业态过滤: {} → {} intents (biz={})", allIntents.size(), filtered.size(), biz);
+        allIntents = filtered;
 
         // v32.4: 从 LLM 候选列表中排除语义黑洞意图 (扩展)
         Set<String> LLM_BLACKHOLE_INTENTS_FB = Set.of(
@@ -4534,11 +4524,25 @@ public class IntentRecognitionPipelineServiceImpl implements IntentRecognitionPi
      * @param confidence 置信度
      * @param sourceType 来源类型
      */
-    private void tryAutoLearnExpression(String userInput, String intentCode,
+    void tryAutoLearnExpression(String userInput, String intentCode,
                                          String factoryId, double confidence,
                                          LearnedExpression.SourceType sourceType) {
         if (userInput == null || userInput.trim().isEmpty()) {
             return;
+        }
+
+        // Track C 防中毒: 拒绝学习业态不兼容的意图(餐饮工厂永不学 SKU_GROSS_MARGIN 等 FACTORY 意图)
+        try {
+            String biz = configService.resolveBusinessDomain(factoryId);
+            AIIntentConfig cfg = configService.getAllIntents(factoryId).stream()
+                    .filter(i -> intentCode.equals(i.getIntentCode())).findFirst().orElse(null);
+            if (cfg != null && !BusinessTypeScope.isCompatible(cfg.getBusinessType(), biz)) {
+                log.warn("拒绝中毒学习: intent={} business_type={} 与工厂 biz={} 不兼容",
+                        intentCode, cfg.getBusinessType(), biz);
+                return;
+            }
+        } catch (Exception e) {
+            /* 解析失败不阻断既有学习, 保守放行 */
         }
 
         try {

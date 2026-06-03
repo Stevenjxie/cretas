@@ -254,7 +254,9 @@ public class LearnedExpression {
         /** 从关键词匹配学习 */
         KEYWORD_MATCH,
         /** LLM Reranking 确认 (中置信度区间) */
-        LLM_RERANKING
+        LLM_RERANKING,
+        /** 动态工具选择路径自愈学习 */
+        DYNAMIC_SELECTION
     }
 
     /**
