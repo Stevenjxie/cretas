@@ -40,9 +40,12 @@ function statusTag(s: string): { type: 'success' | 'warning' | 'info'; text: str
 
 async function createPlan(row: RestockRow) {
   if (!row.shortfallQty || row.shortfallQty <= 0) return
+  // 计划日期不能早于今天 (后端 @FutureOrPresent 约束): 查历史交货日缺口时, 计划日取今天
+  const today = new Date().toISOString().slice(0, 10)
+  const plannedDate = deliveryDate.value >= today ? deliveryDate.value : today
   try {
     await ElMessageBox.confirm(
-      `产品: ${row.productName}\n建议补产: ${row.shortfallQty} ${row.unit}\n交期: ${deliveryDate.value}\n是否生成生产计划草稿?`,
+      `产品: ${row.productName}\n建议补产: ${row.shortfallQty} ${row.unit}\n交期: ${deliveryDate.value}\n计划生产日: ${plannedDate}\n是否生成生产计划草稿?`,
       '缺口转生产计划草稿',
       { confirmButtonText: '生成草稿', cancelButtonText: '取消', type: 'warning' }
     )
@@ -50,7 +53,7 @@ async function createPlan(row: RestockRow) {
       sourceType: 'MANUAL',
       productTypeId: row.productTypeId,
       plannedQuantity: row.shortfallQty,
-      plannedDate: deliveryDate.value,
+      plannedDate,
       notes: `来自 ${deliveryDate.value} 备货看板缺口`,
     })
     if (res.success) {
@@ -97,7 +100,11 @@ onMounted(load)
         <el-table-column label="成品可用" width="110">
           <template #default="{ row }">
             {{ row.fgAvailableQty }}
-            <el-tooltip content="未预留成品, 多日订单请人工分配" placement="top">
+            <el-tooltip
+              v-if="row.fgAvailableQty > 0"
+              content="未预留成品, 多日订单请人工分配"
+              placement="top"
+            >
               <el-icon style="color: #e6a23c; vertical-align: middle"><Warning /></el-icon>
             </el-tooltip>
           </template>
