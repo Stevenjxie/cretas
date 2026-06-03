@@ -40,6 +40,7 @@ import com.cretas.aims.service.SemanticIntentMatcher;
 import com.cretas.aims.service.ClassifierIntentMatcher;
 import com.cretas.aims.service.IntentDisambiguationService;
 import com.cretas.aims.service.impl.IntentConfigRollbackService;
+import com.cretas.aims.service.impl.QueryPreprocessorServiceImpl;
 import com.cretas.aims.service.intent.IntentConfigManagementService;
 import com.cretas.aims.service.intent.IntentRecognitionPipelineService;
 import com.cretas.aims.ai.tool.WriteGuardService;
@@ -453,9 +454,25 @@ public class IntentRecognitionPipelineServiceImpl implements IntentRecognitionPi
             return IntentMatchResult.empty(userInput);
         }
 
+        // ========== W1b T3 (finding 7): EARLY VETO GATE ==========
+        // 必须在所有早退写短路(v33.1 早期短语 / v22.0 verb-noun / doRecognize 内 verb-noun)之前。
+        // 否则 "别开始生产了"/"不用查库存了" 会被这些短路直接当成写返回,绕过下游否定处理。
+        // veto kind 由 IRP 自己算(detectNegationVeto 需要 knowledgeBase 判动词,而 enhancedPreprocess
+        // 走 kb-less 路径只产 NONE/EXCLUDE_CONTENT —— 见 spec finding 7 / T2 实现注释)。
+        // 仅需 userInput + knowledgeBase,无需 enhancedResult,故可在预处理之前算。
+        QueryPreprocessorService.NegationKind vetoKind = detectVetoKind(userInput);
+        boolean negationVetoWrite = (vetoKind == QueryPreprocessorService.NegationKind.VETO_WRITE);
+        IntentMatchResult earlyVeto = earlyVetoGateResultOrNull(vetoKind, userInput);
+        if (earlyVeto != null) {
+            // VETO_READ: 用户明说不要查/看 → 立即澄清,绝不进短语/verb-noun 短路(零写风险)。
+            saveIntentMatchRecord(earlyVeto, factoryId, userId, sessionId, false);
+            return attachTiming(earlyVeto, startTimeMs, preprocessEndMs);
+        }
+
         // v33.1: Pre-preprocess phrase matching — match on ORIGINAL input before preprocessing
         // Prevents preprocessor from stripping keywords like "收款", "开票", "研发需求"
-        {
+        // W1b T3: VETO_WRITE("别开始生产") 守卫此短路,使其跳过 → 落到下游 policy 转读孪生。
+        if (!negationVetoWrite) {
             String rawNormalized = userInput.toLowerCase().trim();
             String rawPhraseInput = filterFillerWordsForPhrase(rawNormalized);
             Optional<String> earlyPhraseMatch = knowledgeBase.matchPhrase(rawPhraseInput, businessDomain);
@@ -603,7 +620,8 @@ public class IntentRecognitionPipelineServiceImpl implements IntentRecognitionPi
                     isNegatedVerb = prefix.endsWith("未") || prefix.endsWith("没") || prefix.endsWith("没有") || prefix.endsWith("非");
                 }
             }
-            if (!isNegatedVerb && (recAction == ActionType.CREATE || recAction == ActionType.UPDATE || recAction == ActionType.DELETE)) {
+            // W1b T3: VETO_WRITE("别开始生产") 守卫此 verb-noun 写短路 → 跳过 → 落到下游 policy 转读孪生。
+            if (!negationVetoWrite && !isNegatedVerb && (recAction == ActionType.CREATE || recAction == ActionType.UPDATE || recAction == ActionType.DELETE)) {
                 List<AIIntentConfig> allIntents = configService.getAllIntents(factoryId);
                 Optional<AIIntentConfig> intentOpt = allIntents.stream().filter(i -> i.getIntentCode().equals(recIntent)).findFirst();
                 if (intentOpt.isPresent()) {
@@ -636,7 +654,7 @@ public class IntentRecognitionPipelineServiceImpl implements IntentRecognitionPi
         // Use processed input for core recognition
         IntentMatchResult result = doRecognizeIntentWithConfidence(
                 processedInput, userInput, factoryId, topN, userId, userRole,
-                enhancedResult, verbNounResult, skipPhraseShortcut, businessDomain);
+                enhancedResult, verbNounResult, skipPhraseShortcut, businessDomain, negationVetoWrite);
 
         if (preprocessedQuery != null && result != null) {
             result.setPreprocessedQuery(preprocessedQuery);
@@ -734,7 +752,8 @@ public class IntentRecognitionPipelineServiceImpl implements IntentRecognitionPi
                                                               QueryPreprocessorService.EnhancedPreprocessResult enhancedResult,
                                                               IntentKnowledgeBase.VerbNounDisambiguationResult verbNounResult,
                                                               boolean skipPhraseShortcut,
-                                                              String businessDomain) {
+                                                              String businessDomain,
+                                                              boolean negationVetoWrite) {
         String userInput = processedInput; // 使用处理后的输入进行匹配
 
         // ========== A-quick-6: Short-query keyword shortcut (J3, 2026-04-24) ==========
@@ -1007,7 +1026,8 @@ public class IntentRecognitionPipelineServiceImpl implements IntentRecognitionPi
         // ========== Layer 0.5: 动词+名词消歧快速路径 ==========
         // 如果动词+名词消歧成功且置信度足够高，直接返回该意图
         // v12.1修复: 当检测到多意图触发词时，跳过此快速路径，确保多意图检测能执行
-        if (!skipPhraseShortcut && verbNounResult != null && verbNounResult.isDisambiguated()
+        // W1b T3: VETO_WRITE("别开始生产") 守卫此 verb-noun 短路 → 跳过 → 落到下游 policy 转读孪生。
+        if (!negationVetoWrite && !skipPhraseShortcut && verbNounResult != null && verbNounResult.isDisambiguated()
                 && verbNounResult.getConfidence() >= 0.80) {
             String recommendedIntent = verbNounResult.getRecommendedIntent();
             List<AIIntentConfig> allIntents = configService.getAllIntents(factoryId);
@@ -5385,6 +5405,84 @@ public class IntentRecognitionPipelineServiceImpl implements IntentRecognitionPi
         timing.put("totalMs", now - startTimeMs);
         result.setTimingMs(timing);
         return result;
+    }
+
+    // ==================== W1b T3: early VETO gate (finding 7) ====================
+
+    /**
+     * W1b finding 7: 计算否定否决细分类型。
+     *
+     * <p>{@code detectNegationVeto(String, IntentKnowledgeBase)} 只在 {@code QueryPreprocessorServiceImpl}
+     * 上(不在接口),且 IRP 持有 {@code knowledgeBase} —— 故由 IRP 转发调用。QPSImpl 无
+     * {@code @Transactional}/{@code @Cacheable}/AOP pointcut 匹配(它在 {@code service.impl} 包,
+     * PerformanceMonitorAspect 只匹配 {@code service.intent.impl}/{@code scheduling.impl}/{@code executor.impl}),
+     * 故 Spring 不代理它,{@code instanceof} 成立。</p>
+     *
+     * <p><b>Fail-open</b>:若 bean 非预期 impl 类型(理论上被代理)或调用抛错 → 返回 {@code NONE}
+     * (门不触发,落到常规识别;写仍受 W0 写护栏执行层兜底)。早期门 VETO_READ 是唯一非 fail-open 的
+     * 主动短路点,故此处判定必须稳健 —— 拿不到 veto 时保守返 NONE 而非误抑制。</p>
+     */
+    private QueryPreprocessorService.NegationKind detectVetoKind(String userInput) {
+        try {
+            if (queryPreprocessorService instanceof QueryPreprocessorServiceImpl) {
+                QueryPreprocessorService.NegationKind k =
+                        ((QueryPreprocessorServiceImpl) queryPreprocessorService)
+                                .detectNegationVeto(userInput, knowledgeBase);
+                return k == null ? QueryPreprocessorService.NegationKind.NONE : k;
+            }
+        } catch (Exception e) {
+            log.warn("[W1b] detectVetoKind failed, fail-open to NONE: {}", e.getMessage());
+        }
+        return QueryPreprocessorService.NegationKind.NONE;
+    }
+
+    /**
+     * W1b finding 7: 早期 VETO 门的纯决策函数。在所有早退写短路之前由
+     * {@code recognizeIntentWithConfidence} 调用。
+     *
+     * <p>仅 {@code VETO_READ}("不用查库存了"/"别给我看订单" —— 否定副词 + 读动词)
+     * 在此立即返回澄清结果(用户已明说不要查/看,不该再弹"要清空库存吗?")。
+     * {@code VETO_WRITE} 不在此返回 —— 它由调用方设置的 {@code negationVetoWrite} 标志守卫
+     * 三个早退写短路(使其跳过),落到下游识别 + T4 policy 做"写→读孪生"。
+     * 其它(NONE/EXCLUDE_CONTENT/null)→ 返回 null,门不触发。</p>
+     *
+     * <p>纯静态、无 Spring 依赖,便于单测(见 IntentPipelineEarlyVetoGateTest)。</p>
+     *
+     * @param kind      否定细分类型(由 detectNegationVeto 计算)
+     * @param userInput 原始用户输入(用于澄清结果回填)
+     * @return VETO_READ → 澄清结果(NEED_MORE_INFO);否则 null(继续识别)
+     */
+    static IntentMatchResult earlyVetoGateResultOrNull(
+            QueryPreprocessorService.NegationKind kind, String userInput) {
+        if (kind == QueryPreprocessorService.NegationKind.VETO_READ) {
+            return buildNegationClarificationResult(userInput);
+        }
+        return null;
+    }
+
+    /**
+     * W1b finding 7: 构建 VETO_READ 否决澄清结果。
+     *
+     * <p>镜像既有 clarification 结果形态(IRP:587 {@code MatchMethod.REJECTED} +
+     * {@code clarificationQuestion}),但 {@code bestMatch=null}(绝不产出写意图)、
+     * {@code requiresConfirmation=false}(这是否决澄清,不是写确认)。
+     * {@code confidence=0.0}(非 null —— saveIntentMatchRecord 会调 {@code BigDecimal.valueOf})。</p>
+     *
+     * <p>防呆(fool-proof-design Rule 5):dead-end 改追问,不让用户卡住。</p>
+     */
+    static IntentMatchResult buildNegationClarificationResult(String userInput) {
+        return IntentMatchResult.builder()
+                .bestMatch(null)
+                .topCandidates(Collections.emptyList())
+                .confidence(0.0)
+                .matchMethod(MatchMethod.REJECTED)
+                .matchedKeywords(Collections.emptyList())
+                .isStrongSignal(false)
+                .requiresConfirmation(false)
+                .userInput(userInput)
+                .actionType(ActionType.UNKNOWN)
+                .clarificationQuestion("您是要取消这次操作吗?需要我帮您查询或处理什么?")
+                .build();
     }
 
     // -- Phrase matching --
