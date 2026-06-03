@@ -859,19 +859,27 @@ async def store_comparison(
     factory_id: str,
     date_range: Tuple[Optional[date], Optional[date]],
 ) -> Dict[str, Any]:
-    """门店对比 — per-store revenue / order-count / avg-ticket comparison.
+    """门店对比 — per-store revenue / order-count / avg-ticket / 折扣率 comparison.
 
     Reads agg_daily JOIN dim_store, grouped by store: SUM(net_amount) as
     revenue, SUM(bill_count) as order_count, and avg_ticket = revenue /
     NULLIF(order_count, 0) (NULL → 0.0 when a store has no bills).
 
+    Per-store 折扣率 (discountPct) = SUM(discount_amount) / SUM(gross_amount)
+    * 100. agg_daily already carries discount_amount AND gross_amount at
+    per-(factory, date, store) grain — both materialized straight from
+    fact_pos_transaction (see materializer._DAILY_UPSERT_SQL), so the discount
+    rate is computable from the SAME table without any extra join. Denominator
+    is gross (含折扣前) so the rate reads as "折掉了营业额的百分之几"; gross=0
+    (or NULL) → discountPct=0.0 (honest: no sales ⇒ no discount rate).
+
     Computes the per-store revenue median and flags weak stores (revenue
     strictly below the median) so the FE can highlight underperformers.
 
     Dates optional (None bound = all history on that side, filtered on
-    a.date). Returns: {stores:[{name, revenue, orderCount, avgTicket}],
-    medianRevenue, weakStores:[name,...]}. Honest empty: stores=[],
-    medianRevenue=0, weakStores=[].
+    a.date). Returns: {stores:[{name, revenue, orderCount, avgTicket,
+    discountPct}], medianRevenue, weakStores:[name,...]}. Honest empty:
+    stores=[], medianRevenue=0, weakStores=[].
     """
     start, end = date_range
     _validate_range(start, end)
@@ -891,7 +899,9 @@ async def store_comparison(
                    SUM(a.net_amount)::numeric(18,2) AS revenue,
                    SUM(a.bill_count)                AS order_count,
                    (SUM(a.net_amount)
-                      / NULLIF(SUM(a.bill_count), 0))::numeric(18,2) AS avg_ticket
+                      / NULLIF(SUM(a.bill_count), 0))::numeric(18,2) AS avg_ticket,
+                   SUM(a.discount_amount)::numeric(18,2) AS discount_amount,
+                   SUM(a.gross_amount)::numeric(18,2)    AS gross_amount
               FROM agg_daily a
               JOIN dim_store s ON s.store_id = a.store_id
              WHERE {where}
@@ -909,12 +919,28 @@ async def store_comparison(
         avg_ticket = (
             float(Decimal(str(r["avg_ticket"]))) if r["avg_ticket"] is not None else 0.0
         )
+        # 折扣率 = 折扣额 / 折前营业额 * 100. Decimal division then round to 1
+        # decimal place (matches the FE `.toFixed(1)` display). gross<=0 → 0.0.
+        discount_amt = (
+            Decimal(str(r["discount_amount"])) if r["discount_amount"] is not None
+            else Decimal("0")
+        )
+        gross_amt = (
+            Decimal(str(r["gross_amount"])) if r["gross_amount"] is not None
+            else Decimal("0")
+        )
+        discount_pct = (
+            float((discount_amt / gross_amt * 100).quantize(
+                Decimal("0.1"), rounding=ROUND_HALF_UP))
+            if gross_amt > 0 else 0.0
+        )
         rev_vals.append(revenue)
         stores.append({
             "name": r["name"],
             "revenue": revenue,
             "orderCount": order_count,
             "avgTicket": avg_ticket,
+            "discountPct": discount_pct,
         })
 
     median_revenue = _median(rev_vals)

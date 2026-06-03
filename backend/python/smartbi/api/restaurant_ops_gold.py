@@ -568,11 +568,11 @@ async def store_comparison_endpoint(
     start_date: Optional[str] = Query(None, description="YYYY-MM-DD inclusive; 省略=全部历史"),
     end_date: Optional[str] = Query(None, description="YYYY-MM-DD inclusive; 省略=全部历史"),
 ) -> Dict[str, Any]:
-    """门店对比 — per-store revenue / 单量 / 客单价 + 低于中位营收的弱店列表。
+    """门店对比 — per-store revenue / 单量 / 客单价 / 折扣率 + 低于中位营收的弱店列表。
 
-    Returns {stores:[{name, revenue, orderCount, avgTicket}], medianRevenue,
-    weakStores:[name,...]}. Dates optional (省略 → 全部历史)。Honest empty:
-    no stores → stores=[]。
+    Returns {stores:[{name, revenue, orderCount, avgTicket, discountPct}],
+    medianRevenue, weakStores:[name,...]}. Dates optional (省略 → 全部历史)。
+    Honest empty: no stores → stores=[]。
     """
     factory_id = _get_factory_id(request)
     if not factory_id:
@@ -591,8 +591,13 @@ async def store_comparison_endpoint(
     except Exception as e:
         logger.exception("[store-comparison] failed for %s", factory_id)
         return {"success": False, "message": f"compute failed: {e}"}
-    # RBAC: revenue / medianRevenue / avgTicket 等金额字段对非 price-view 角色剥零。
+    # RBAC: revenue / medianRevenue / avgTicket 等绝对金额字段对非 price-view 角色剥零。
     # orderCount / name / weakStores(门店名) 非金额, 保留。
+    # discountPct (折扣率) 是百分比"率"非绝对金额 — 与本文件 store-margin 的 marginRate /
+    # 共享 _rbac_strip 的 changeRate/completionRate 同属"率"类, 按既有约定保留可见
+    # (它只暴露"折掉营业额的百分之几", 不泄露折扣额/营业额本身的绝对值)。整页前端已
+    # 门控 canViewPrice, 此处仅 belt-and-suspenders。_MONEY_PATTERN 不匹配 'discountPct'
+    # (不含任何金额 token), 因此 strip 天然不会误剥它。
     _apply_rbac_strip(data, _get_role(request))
     return {"success": True, "data": data}
 

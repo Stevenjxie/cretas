@@ -135,9 +135,12 @@ def test_menu_quadrant_price_view_role_preserves_revenue(role: str):
 def _store_comparison_data() -> dict:
     return {
         "stores": [
-            {"name": "旗舰店", "revenue": 10000.0, "orderCount": 500, "avgTicket": 20.0},
-            {"name": "中位店", "revenue": 5000.0, "orderCount": 250, "avgTicket": 20.0},
-            {"name": "弱店", "revenue": 2000.0, "orderCount": 200, "avgTicket": 10.0},
+            {"name": "旗舰店", "revenue": 10000.0, "orderCount": 500,
+             "avgTicket": 20.0, "discountPct": 9.1},
+            {"name": "中位店", "revenue": 5000.0, "orderCount": 250,
+             "avgTicket": 20.0, "discountPct": 15.0},
+            {"name": "弱店", "revenue": 2000.0, "orderCount": 200,
+             "avgTicket": 10.0, "discountPct": 0.0},
         ],
         "medianRevenue": 5000.0,
         "weakStores": ["弱店"],
@@ -160,6 +163,20 @@ def test_store_comparison_non_price_role_nulls_revenue_and_avg_ticket():
     assert data["weakStores"] == ["弱店"]
 
 
+def test_store_comparison_discount_pct_is_a_rate_not_stripped():
+    """折扣率 (discountPct) is a percentage RATE, not an absolute amount, so it
+    follows the same convention as marginRate / changeRate / completionRate and
+    stays visible even for non-price roles. The shared _MONEY_PATTERN does not
+    match 'discountPct' (no money token), so the strip naturally leaves it.
+    """
+    data = _store_comparison_data()
+    _apply_rbac_strip(data, _NON_PRICE_ROLE)
+    # discountPct survives the strip for a non-price role.
+    assert data["stores"][0]["discountPct"] == 9.1
+    assert data["stores"][1]["discountPct"] == 15.0
+    assert data["stores"][2]["discountPct"] == 0.0
+
+
 @pytest.mark.parametrize("role", sorted(PRICE_VIEW_ROLES))
 def test_store_comparison_price_view_role_preserves_money(role: str):
     data = _store_comparison_data()
@@ -168,6 +185,7 @@ def test_store_comparison_price_view_role_preserves_money(role: str):
     assert data["stores"][0]["revenue"] == 10000.0
     assert data["stores"][0]["avgTicket"] == 20.0
     assert data["stores"][2]["avgTicket"] == 10.0
+    assert data["stores"][0]["discountPct"] == 9.1
     assert data["weakStores"] == ["弱店"]
 
 
