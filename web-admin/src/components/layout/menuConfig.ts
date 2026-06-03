@@ -267,6 +267,8 @@ export const menuConfig: MenuItem[] = [
       { path: '/smart-bi/analysis-hub', title: '经营分析', icon: 'TrendCharts', module: 'analytics', groupLabel: '经营分析' },
       { path: '/smart-bi/revenue-report', title: '收入管理报表', icon: 'Money', module: 'analytics',
         hideForFactoryTypes: ['FACTORY'] },
+      { path: '/smart-bi/health-report', title: 'AI 经营体检', icon: 'FirstAidKit', module: 'analytics',
+        hideForFactoryTypes: ['FACTORY'] },
       { path: '/analytics/alert-dashboard', title: '异常预警', icon: 'Warning', module: 'analytics' },
       { path: '/analytics/supply-chain', title: '进销存总览', icon: 'Histogram', module: 'analytics',
         hideForFactoryTypes: ['RESTAURANT'] },

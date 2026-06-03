@@ -116,6 +116,19 @@ const smartBIRoutes: RouteRecordRaw[] = [
           hideForFactoryTypes: ['FACTORY'],  // restaurant tenants only
         },
       },
+      // G4 AI 经营体检表 (餐饮诊断报告; 2026-06-03)
+      {
+        path: 'health-report',
+        name: 'SmartBIHealthReport',
+        component: () => import('@/views/smart-bi/HealthReportView.vue'),
+        meta: {
+          requiresAuth: true,
+          title: 'AI 经营体检',
+          icon: 'FirstAidKit',
+          module: 'analytics',
+          hideForFactoryTypes: ['FACTORY'],  // restaurant tenants only
+        },
+      },
     ],
   },
 ];
