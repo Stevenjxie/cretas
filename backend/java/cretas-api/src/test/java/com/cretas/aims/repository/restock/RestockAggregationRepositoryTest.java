@@ -24,6 +24,7 @@ import org.springframework.test.context.jdbc.SqlConfig;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -156,7 +157,7 @@ class RestockAggregationRepositoryTest {
     }
 
     @Test
-    @DisplayName("WIP 可用聚合: availableQuantity>0 的行求和=150")
+    @DisplayName("WIP 可用聚合: availableQuantity>0 的行求和=150; 已清零行和软删除行不计")
     void wipAggregation() {
         SemiFinishedInventory w1 = new SemiFinishedInventory();
         w1.setFactoryId(FID);
@@ -172,13 +173,30 @@ class RestockAggregationRepositoryTest {
         w2.setAvailableQuantity(new BigDecimal("50"));
         semiFinishedInventoryRepository.saveAndFlush(w2);
 
+        // M-4: 已清零行 (availableQuantity=0) 不应计入 sum (>0 过滤)
+        SemiFinishedInventory wDepleted = new SemiFinishedInventory();
+        wDepleted.setFactoryId(FID);
+        wDepleted.setProductTypeId("PT-ZS");
+        wDepleted.setIntermediateBatchNo("WIP-AGG-DEPLETED");
+        wDepleted.setAvailableQuantity(BigDecimal.ZERO);
+        semiFinishedInventoryRepository.saveAndFlush(wDepleted);
+
+        // M-4: 软删除行 (deletedAt 非空) 不应计入 sum (I-1 fix 验证)
+        SemiFinishedInventory wDeleted = new SemiFinishedInventory();
+        wDeleted.setFactoryId(FID);
+        wDeleted.setProductTypeId("PT-ZS");
+        wDeleted.setIntermediateBatchNo("WIP-AGG-DELETED");
+        wDeleted.setAvailableQuantity(new BigDecimal("999"));
+        wDeleted.setDeletedAt(LocalDateTime.now());
+        semiFinishedInventoryRepository.saveAndFlush(wDeleted);
+
         BigDecimal sum = semiFinishedInventoryRepository.sumAvailableByProduct(FID, "PT-ZS");
         assertEquals(0, new BigDecimal("150").compareTo(sum),
-                "100 + 50 = 150");
+                "100 + 50 = 150; depleted(0) and soft-deleted(999) excluded");
     }
 
     @Test
-    @DisplayName("已排产聚合: 仅 PLANNED+PENDING 计入; IN_PROGRESS/COMPLETED/CANCELLED 排除")
+    @DisplayName("已排产聚合: 仅 PLANNED+PENDING 计入; IN_PROGRESS/COMPLETED/CANCELLED/软删除 排除")
     void scheduledAggregation() {
         plan("PT-ZS", ProductionPlanStatus.PLANNED,      "200");
         plan("PT-ZS", ProductionPlanStatus.PENDING,      "100");
@@ -186,11 +204,23 @@ class RestockAggregationRepositoryTest {
         plan("PT-ZS", ProductionPlanStatus.COMPLETED,    "888"); // 排除
         plan("PT-ZS", ProductionPlanStatus.CANCELLED,    "777"); // 排除
 
+        // M-4: 软删除的 PLANNED 行不应计入 sum (I-2 fix 验证)
+        ProductionPlan softDeleted = new ProductionPlan();
+        softDeleted.setId(UUID.randomUUID().toString());
+        softDeleted.setFactoryId(FID);
+        softDeleted.setProductTypeId("PT-ZS");
+        softDeleted.setPlannedQuantity(new BigDecimal("555"));
+        softDeleted.setStatus(ProductionPlanStatus.PLANNED);
+        softDeleted.setPlanNumber("PLAN-DELETED-" + SEQ.getAndIncrement());
+        softDeleted.setCreatedBy(UID);
+        softDeleted.setDeletedAt(LocalDateTime.now());
+        productionPlanRepository.saveAndFlush(softDeleted);
+
         BigDecimal sum = productionPlanRepository.sumPlannedQuantityByProductAndStatuses(
                 FID, "PT-ZS",
                 List.of(ProductionPlanStatus.PLANNED, ProductionPlanStatus.PENDING));
 
         assertEquals(0, new BigDecimal("300").compareTo(sum),
-                "200 + 100 = 300; IN_PROGRESS/COMPLETED/CANCELLED excluded");
+                "200 + 100 = 300; IN_PROGRESS/COMPLETED/CANCELLED excluded; soft-deleted PLANNED excluded");
     }
 }

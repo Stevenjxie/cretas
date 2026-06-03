@@ -14,6 +14,7 @@ import org.springframework.stereotype.Repository;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
@@ -495,6 +496,10 @@ public interface ProductionPlanRepository extends JpaRepository<ProductionPlan, 
      * <p>典型调用传入 {@code [PLANNED, PENDING]}，排除 IN_PROGRESS（产出已在 WIP/FG 中计算）、
      * COMPLETED 和 CANCELLED。COALESCE(..., 0) 保证空集返回 0。
      *
+     * <p>注意：虽然 {@link ProductionPlan} 类级带有 {@code @Where(clause="deleted_at IS NULL")}，
+     * 但 Hibernate 对自定义 {@code @Query} 不自动应用 {@code @Where} 过滤（仅标准派生查询生效）。
+     * 因此在 JPQL 中显式加 {@code AND p.deletedAt IS NULL}（与同 repo 其他自定义 @Query 保持一致）。
+     *
      * @param factoryId     工厂 ID
      * @param productTypeId 产品类型 ID
      * @param statuses      要纳入的计划状态集合
@@ -502,9 +507,9 @@ public interface ProductionPlanRepository extends JpaRepository<ProductionPlan, 
      */
     @Query("SELECT COALESCE(SUM(p.plannedQuantity), 0) FROM ProductionPlan p " +
            "WHERE p.factoryId = :factoryId AND p.productTypeId = :productTypeId " +
-           "AND p.status IN :statuses")
-    java.math.BigDecimal sumPlannedQuantityByProductAndStatuses(
+           "AND p.status IN :statuses AND p.deletedAt IS NULL")
+    BigDecimal sumPlannedQuantityByProductAndStatuses(
             @Param("factoryId") String factoryId,
             @Param("productTypeId") String productTypeId,
-            @Param("statuses") java.util.Collection<ProductionPlanStatus> statuses);
+            @Param("statuses") Collection<ProductionPlanStatus> statuses);
 }

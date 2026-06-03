@@ -1,6 +1,8 @@
 -- Fixture data for RestockAggregationRepositoryTest
 -- Uses MERGE INTO (H2 upsert) so re-execution is idempotent.
 -- SET REFERENTIAL_INTEGRITY FALSE lets us insert in any order.
+-- H2-only (test): SET REFERENTIAL_INTEGRITY and MERGE INTO are H2 dialect;
+-- do NOT copy these statements into PostgreSQL migration scripts.
 
 SET REFERENTIAL_INTEGRITY FALSE;
 
