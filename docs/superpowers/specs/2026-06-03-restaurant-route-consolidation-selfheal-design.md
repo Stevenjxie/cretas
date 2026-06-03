@@ -165,11 +165,13 @@ private List<ToolRouterService.ToolCandidate> filterCandidatesByBusinessType(
 -- 'FACTORY': BusinessTypeScope.isCompatible('FACTORY','RESTAURANT')=false 餐饮过滤排除 ✓;
 --            isCompatible('FACTORY','FACTORY')=true 工厂租户保留 ✓; 两个 consumer 都正确。
 UPDATE ai_intent_configs SET business_type = 'FACTORY', updated_at = NOW()
- WHERE intent_code IN ('SKU_GROSS_MARGIN', 'REVENUE_REPORT_GENERATE')
+ WHERE intent_code = 'SKU_GROSS_MARGIN'
    AND business_type = 'COMMON';
 ```
 
-**边界**: 只重标这 2 个已 prod 实测确认的 offender。更广的 COMMON 误标审计 = backlog (避免误伤真跨业态 COMMON 意图)。**重标值 = `'FACTORY'`** (系统 canonical 工厂业态值): 餐饮工厂 `isCompatible('FACTORY','RESTAURANT')=false` 排除; 工厂租户 `isCompatible('FACTORY','FACTORY')=true` + `BusinessTypeGate 'FACTORY'=='FACTORY'` 放行, **零回归**。**不可用 `'MANUFACTURING'`** (resolveBusinessDomain 不返该值 → BusinessTypeGate 误拦工厂租户)。
+**边界**: **只重标 `SKU_GROSS_MARGIN`** (生产批次毛利, 真工厂概念)。**重标值 = `'FACTORY'`** (系统 canonical 工厂业态值): 餐饮工厂 `isCompatible('FACTORY','RESTAURANT')=false` 排除; 工厂租户 `isCompatible('FACTORY','FACTORY')=true` + `BusinessTypeGate 'FACTORY'=='FACTORY'` 放行, **零回归**。**不可用 `'MANUFACTURING'`** (resolveBusinessDomain 不返该值 → BusinessTypeGate 误拦工厂租户)。
+
+**⚠️ 终审修正**: 原 spec 还想重标 `REVENUE_REPORT_GENERATE` —— **错**。5-agent 终审确认它是**餐饮**功能 (`RevenueReportGenerateTool` 在 `ai/tool/impl/restaurant/`, intent_category=RESTAURANT, 生成青花椒餐饮收入报表 午市/晚市/堂食外卖)。误重标 FACTORY 会让 `BusinessTypeGate` 在餐饮租户上把"拉收入报表"拦成"工厂分析不适用"(回归)。它**保持 COMMON 不动**; 原"堂食外卖对比"误撞它的问题已由 Track A 确定性短语修复。更广的 COMMON 误标审计 = backlog。
 
 ---
 
@@ -305,3 +307,4 @@ C1 的 learnExpression 调用也经业态护栏 (C1 内已 filter, 双重保险�
 - 更广的 COMMON 误标制造业意图审计 (本 spec 只重标 2 个确认 offender)。
 - store-rank 真按客单价重排 (当前仅展示客单价列, 排序仍按营收)。
 - 历史中毒 learned_expressions 批量清理工具 (本 case 无中毒, 暂不需要)。
+- **Track C 自愈对"长问题/无 session 问题"只部分生效** (5-agent 终审 IMPORTANT): 动态路径学的是 `query`(=finalQuery 或 raw userInput), Layer-1 EXACT 下次比对的是 `processedInput`。**session-present + 短问题**(web-admin/RN 聊天主路径, 21 题目录全是短问题)二者相等 → 自愈生效; 但 **session 为 null** (raw vs enhancedPreprocess 归一) 或 **超长问题** (finalQuery 之后又过 keyword-extraction) 二者哈希不等 → 学了的 EXACT 行命中不了 → 该问法下次仍走 LLM (只是多一行死 row, 不误路由不中毒)。fuzzy-exact (95%) 部分兜底。**彻底修**: 把 recognition 算出的 `processedInput` 透传进动态路径, 学它而非 `query`(中等改动, 留 backlog)。

@@ -204,7 +204,12 @@ public class DynamicToolSelectionService {
         return kept;
     }
 
-    /** Track C: 动态单工具成功执行后自愈学习 (单工具+成功+有数据+业态兼容+相似度门)。fail-open。 */
+    /**
+     * Track C: 动态单工具成功执行后自愈学习 (单工具+成功+有数据+业态兼容+相似度门)。fail-open。
+     * <p>注意(已知局限, 见 spec backlog): 学的是 {@code query}(=finalQuery 或 raw userInput), Layer-1 EXACT
+     * 下次比对 processedInput。session-present + 短问题 二者相等→自愈生效(聊天主路径); session 为 null 或
+     * 超长问题 二者哈希可能不等→学的行命中不了(只多一行死 row, 不误路由不中毒), fuzzy-exact 部分兜底。
+     */
     void maybeLearnFromDynamicSelection(String query, ToolRouterService.SelectedTools selected,
             List<ToolRouterService.ToolCandidate> candidates, String factoryId, IntentExecuteResponse response) {
         try {
