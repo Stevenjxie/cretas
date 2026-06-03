@@ -6,7 +6,9 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.contains;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -30,6 +32,8 @@ class QueryPreprocessorNegationVetoTest {
     void setup() {
         // detectNegationVeto 仅需 knowledge base 判定否定副词后动词的 ActionType。
         kb = mock(IntentKnowledgeBase.class);
+        // 默认 stub: 未匹配的输入返 UNKNOWN(确定性,且 lenient 避免 strict-stubs 抱怨未用)
+        lenient().when(kb.detectActionType(any())).thenReturn(IntentKnowledgeBase.ActionType.UNKNOWN);
         // remainder verb → ActionType (mirror real detectActionType behavior for the test inputs)
         when(kb.detectActionType(contains("查"))).thenReturn(IntentKnowledgeBase.ActionType.QUERY);
         when(kb.detectActionType(contains("看"))).thenReturn(IntentKnowledgeBase.ActionType.QUERY);
@@ -78,5 +82,35 @@ class QueryPreprocessorNegationVetoTest {
     @Test
     void plainQuery_none() {
         assertThat(svc.detectNegationVeto("查库存", kb)).isEqualTo(NegationKind.NONE);
+    }
+
+    @Test
+    void nullInput_returnsNone() {
+        assertThat(svc.detectNegationVeto(null, kb)).isEqualTo(NegationKind.NONE);
+    }
+
+    @Test
+    void emptyInput_returnsNone() {
+        assertThat(svc.detectNegationVeto("  ", kb)).isEqualTo(NegationKind.NONE);
+    }
+
+    @Test
+    void midSentenceUnusedContent_stillVetoRead() {
+        // "别给我查不用的那批货" — 别 leads, 不用的 is mid-sentence content, must NOT false-friend out
+        when(kb.detectActionType(contains("查"))).thenReturn(IntentKnowledgeBase.ActionType.QUERY);
+        assertThat(svc.detectNegationVeto("别给我查不用的那批货", kb)).isEqualTo(NegationKind.VETO_READ);
+    }
+
+    @Test
+    void sentenceStartUnused_isNotVeto() {
+        // "不用的工具有哪些" — attributive 不用的 at start → NONE (a query about unused tools, not a veto)
+        assertThat(svc.detectNegationVeto("不用的工具有哪些", kb)).isEqualTo(NegationKind.NONE);
+    }
+
+    @Test
+    void exclusionStillProducesExcludeContent() {
+        // 2-arg detectNegationSemantics with an exclusion word but no veto adverb → EXCLUDE_CONTENT preserved
+        var ni = svc.detectNegationSemantics("查订单除了已完成的", kb);
+        assertThat(ni.getKind()).isEqualTo(NegationKind.EXCLUDE_CONTENT);
     }
 }

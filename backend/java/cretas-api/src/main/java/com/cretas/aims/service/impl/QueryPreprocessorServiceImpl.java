@@ -112,12 +112,9 @@ public class QueryPreprocessorServiceImpl implements QueryPreprocessorService {
             "^\\s*(我?|那|这个?|现在|先|那么)?\\s*(别|不用|不要|甭|无需|不必|先不|暂时不|不想|不需要)"
     );
 
-    /**
-     * W1b: "不用的"(unused)误触排除 —— 不用/不想/不要 紧跟 "的" 时是形容词性"无用的",非否决。
-     */
-    private static final Pattern VETO_FALSE_FRIEND = Pattern.compile(
-            "(不用|不想|不要)的"
-    );
+    /** W1b: 不用的/不想的/不要的 用作形容词性定语(unused/unwanted)且位于句首时,非否决副词 */
+    private static final java.util.regex.Pattern VETO_FALSE_FRIEND = java.util.regex.Pattern.compile(
+            "^\\s*(不用|不想|不要)的");
 
     // ==================== 语用学处理正则模式 (v8.0) ====================
 
@@ -883,7 +880,12 @@ public class QueryPreprocessorServiceImpl implements QueryPreprocessorService {
         if (!m.find()) return QueryPreprocessorService.NegationKind.NONE;
         String remainder = s.substring(m.end()).trim();
         if (remainder.startsWith("给我")) remainder = remainder.substring(2).trim();
-        // 4) 否定副词后的动词决定 写 vs 读(kb==null 时保守判 VETO_READ,不误升级为写)
+        // 4) 否定副词后的动词决定 veto 细分。仅<b>明确动词</b>触发 veto:
+        //    CREATE/UPDATE/DELETE → VETO_WRITE; QUERY → VETO_READ;
+        //    AMBIGUOUS/UNKNOWN/null(否定副词后无明确动词)→ NONE,不做明确读否决,
+        //    交给常规路由/排除逻辑处理 —— 这样既保留句首 "不要[名词]" 的 EXCLUDE_CONTENT,
+        //    也避免对模糊/无动词输入产生误否决。写操作无论如何仍受 W0 守护,
+        //    故对模糊/无动词否定保守默认 NONE(更少误否决)是安全选择。
         IntentKnowledgeBase.ActionType at = (kb == null)
                 ? IntentKnowledgeBase.ActionType.UNKNOWN
                 : kb.detectActionType(remainder.isEmpty() ? s : remainder);
@@ -892,8 +894,11 @@ public class QueryPreprocessorServiceImpl implements QueryPreprocessorService {
                 || at == IntentKnowledgeBase.ActionType.DELETE) {
             return QueryPreprocessorService.NegationKind.VETO_WRITE;
         }
-        // QUERY / AMBIGUOUS / UNKNOWN → 否定一个读/不明 → 抑制+澄清(安全方向)
-        return QueryPreprocessorService.NegationKind.VETO_READ;
+        if (at == IntentKnowledgeBase.ActionType.QUERY) {
+            return QueryPreprocessorService.NegationKind.VETO_READ;
+        }
+        // AMBIGUOUS / UNKNOWN(无明确动词)→ NONE
+        return QueryPreprocessorService.NegationKind.NONE;
     }
 
     /**
