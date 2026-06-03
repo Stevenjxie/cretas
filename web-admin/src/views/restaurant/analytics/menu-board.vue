@@ -45,15 +45,19 @@
           </el-col>
         </el-row>
 
-        <!-- Scatter chart -->
-        <CapabilityGate card-id="menu_top_dishes" :requires="['combo_string']">
+        <!-- Scatter chart — WS4: gold /restaurant-ops/menu-quadrant 已提供
+             {name,qty,revenue,unitProfit,quadrant}, 散点只需这些 quadrant items,
+             不需 combo_string。data 非空即 gold-mode → :force 跳过上传能力门控
+             (镜像 WS2 Dashboard.vue 的 :force="isGoldMode")。 -->
+        <CapabilityGate card-id="menu_top_dishes" :requires="['combo_string']" :force="isGoldMode">
         <el-card shadow="hover" style="margin-top: 16px">
           <div id="chart-quadrant-full" style="height: 480px" />
         </el-card>
         </CapabilityGate>
 
-        <!-- Filter + table -->
-        <CapabilityGate card-id="menu_dish_revenue" :requires="['combo_string', 'net_amount']">
+        <!-- Filter + table — 同上, 表格列 (菜品名/象限/营收/销量/品均收入) 全来自
+             gold quadrant items, 无套餐拆分逻辑, gold-mode 下 :force 出数。 -->
+        <CapabilityGate card-id="menu_dish_revenue" :requires="['combo_string', 'net_amount']" :force="isGoldMode">
         <el-card shadow="hover" style="margin-top: 16px">
           <div class="filter-bar">
             <el-radio-group v-model="filterQuadrant">
@@ -200,6 +204,14 @@ useChartResize(containerRef)
 // 不再依赖手选 CSV 数据源。marginMap (毛利模式) 仍走 /gross-margin。
 const data = ref<MenuQuadrantData | null>(null)
 const loading = ref(false)
+
+// WS4 (2026-06-03): gold-mode 检测 — 当 gold /restaurant-ops/menu-quadrant 返回
+// quadrant items (summary 卡已证明有数据) 时, 散点图 + 明细表直接出数, 不经
+// <CapabilityGate> 的上传能力 (combo_string / net_amount) 门控。gold 聚合自身
+// 已产出 {name,qty,revenue,unitProfit,quadrant}, 渲染散点/表格无需原始 combo_string
+// 列。镜像 WS2 Dashboard.vue 的 :force="isGoldMode" 模式。data 为空 (gold 无数据
+// 或工厂租户走别的路径) → false, 保持原门控行为不变。
+const isGoldMode = computed(() => data.value !== null && data.value.items.length > 0)
 
 async function loadQuadrantData() {
   loading.value = true
