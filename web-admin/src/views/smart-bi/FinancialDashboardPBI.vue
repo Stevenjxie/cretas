@@ -8,7 +8,8 @@ import { useRoute } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import { useAuthStore } from '@/store/modules/auth';
 import FinanceAnalysis from './FinanceAnalysis.vue';
-import { resolveFinanceSection } from './financeDashboardSection';
+import FinancePbiGoldView from './components/FinancePbiGoldView.vue';
+import { resolveFinanceSection, shouldRenderGoldFinanceView } from './financeDashboardSection';
 import { DataAnalysis, VideoPlay, Download, Collection, SetUp, ArrowDown, ArrowRight, Delete } from '@element-plus/icons-vue';
 import echarts from '@/utils/echarts';
 import { processEChartsOptions } from '@/utils/echarts-fmt';
@@ -76,6 +77,15 @@ const route = useRoute();
 const authStore = useAuthStore();
 const sectionTab = ref(resolveFinanceSection(route.query, authStore.factoryType));
 watch(() => route.query.section, () => { sectionTab.value = resolveFinanceSection(route.query, authStore.factoryType); });
+
+// follow-up (fu2): 餐饮租户在 PBI 看板(dashboard)子页 → 自动渲染 Gold 财务全量视图
+// (KPI 卡 + 月度营收趋势 + 门店排行 + 渠道占比), 免上传 / 免手动生成。
+// PBI 看板原本 upload_id 绑定, 餐饮租户没传财务 Excel → 只能看到空态。
+// 工厂租户保持原 upload-based PBI 看板 (PeriodSelector + 生成看板) 不变。
+// 餐饮租户可点「上传财务文件」临时切到 upload 路径 (高级)。
+const showUploadForRestaurant = ref(false);
+const goldFinanceMode = computed(() =>
+  shouldRenderGoldFinanceView(authStore.factoryType, sectionTab.value) && !showUploadForRestaurant.value);
 
 // Tab navigation state
 const viewMode = ref<'tab' | 'grid'>('tab');
@@ -1432,6 +1442,14 @@ onBeforeUnmount(() => {
     <!-- P4: 顶层 section tabs — 财务 PBI 看板 / 财务数据分析 (合并自原 /smart-bi/finance) -->
     <el-tabs v-model="sectionTab" class="finance-section-tabs">
     <el-tab-pane label="财务 PBI 看板" name="dashboard">
+    <!-- follow-up (fu2): 餐饮租户 Gold 财务全量视图 (免上传 / 免手动生成).
+         工厂租户 (或餐饮点「上传财务文件」) 走下方原 upload-based PBI 看板。 -->
+    <FinancePbiGoldView
+      v-if="goldFinanceMode"
+      @switch-to-upload="showUploadForRestaurant = true"
+    />
+
+    <template v-else>
     <!-- Top Toolbar -->
     <el-card class="toolbar-card" shadow="never">
       <div class="toolbar-inner">
@@ -2181,6 +2199,7 @@ onBeforeUnmount(() => {
         height="500px"
       />
     </el-card>
+    </template>
     </el-tab-pane>
 
     <!-- P4: 财务数据分析 (embed FinanceAnalysis, 原 /smart-bi/finance) -->
