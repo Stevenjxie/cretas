@@ -12,6 +12,7 @@ import { chatAnalysis, chatAnalysisStream, getUploadHistory, deduplicateUploads,
 import { executeIntent, fetchCachedXlsx } from '@/api/smartbi/intent-chat';
 import { listFactoryTemplates, type FactoryTemplate } from '@/api/smartbi/materialized';
 import { getTemplateTitle } from './composables/useTemplateMap';
+import { pickDefaultDataSource } from './composables/useDataSourceSelect';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import {
   ChatDotRound,
@@ -529,47 +530,17 @@ onMounted(async () => {
       const deduped = deduplicateUploads(res.data);
       dataSources.value = deduped;
 
-      // Prefer non-auto-sync uploads
-      const nonAutoSync = deduped.filter(d => {
-        const name = d.fileName || d.originalFileName || '';
-        return !name.startsWith('[自动同步]');
-      });
-      const candidates = nonAutoSync.length > 0 ? nonAutoSync : deduped;
-      // Apr 28 2026 (Bug D): recency bias — user just uploaded a new file
-      // expects to use it. Prior logic picked biggest rowCount, which made
-      // a fresh 16-row 收入管理报表 lose to an older 12,903-row 评价下载.
-      // qa-prompt v2.4 Phase 6 confirmed: AI Query showed "暂无上传数据"
-      // post-upload because selector kept old dataset selected.
+      // #8 (2026-06-02): 默认数据源选择. 之前的逻辑会在最新非评价上传超过 1 小时时
+      // "回退"到最近的评价文件 (评价下载...xlsx) → 对青花椒等餐饮租户, AI 问答默认选中
+      // 评价文件 (只有评分/口碑, 无营收/时间序列), 销售/营收/趋势问题就跑错数据集.
       //
-      // New rule: most recent upload wins by default. Tiebreaker = rowCount.
-      // Review-keyword bias retained but lowered priority — only kicks in
-      // when no recent (< 1h) non-review upload exists.
-      const REVIEW_KEYWORDS = ['评价', '评论', '大众点评', '美团评价', '评分', 'review', 'comment'];
-      const isReviewFile = (d: any) => {
-        const name = (d.fileName || d.originalFileName || '').toLowerCase();
-        return REVIEW_KEYWORDS.some(kw => name.includes(kw.toLowerCase()));
-      };
-      const ts = (d: any) => {
-        const t = d.createdAt || d.created_at || d.uploadTime || d.upload_time;
-        return t ? new Date(t).getTime() : 0;
-      };
-      const sortByRecency = (a: any, b: any) => {
-        const dt = ts(b) - ts(a);
-        if (dt !== 0) return dt;
-        return (b.rowCount || 0) - (a.rowCount || 0);
-      };
-      const sorted = [...candidates].sort(sortByRecency);
-      // If most-recent file is < 1 hour old, pick it directly (user just
-      // uploaded). Otherwise apply legacy review-keyword bias.
-      const ONE_HOUR = 60 * 60 * 1000;
-      const newest = sorted[0];
-      const isFresh = newest && (Date.now() - ts(newest)) < ONE_HOUR;
-      let chosen = newest;
-      if (!isFresh) {
-        const reviewCands = candidates.filter(isReviewFile).sort(sortByRecency);
-        chosen = reviewCands[0] || sorted[0];
+      // 修复: pickDefaultDataSource 永远优先非评价、完整的上传 (POS/销售/财务数据),
+      // 仅在完全没有非评价上传时才回退评价文件; 同名文件优先完整文件 (避开 _part1/(1)
+      // 等分卷). 详见 composables/useDataSourceSelect.ts.
+      const chosen = pickDefaultDataSource(deduped);
+      if (chosen) {
+        selectedUploadId.value = chosen.id;
       }
-      selectedUploadId.value = chosen.id;
     }
   } catch (e) {
     console.warn('加载上传列表失败:', e);
