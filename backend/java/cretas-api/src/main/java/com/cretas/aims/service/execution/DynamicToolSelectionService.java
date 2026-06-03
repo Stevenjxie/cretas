@@ -54,6 +54,13 @@ public class DynamicToolSelectionService {
     @Autowired
     private com.cretas.aims.service.intent.IntentConfigManagementService configService;
 
+    // Track C (restaurant-route-selfheal) — 动态单工具成功执行后自愈学习 query → owning-intent,
+    // 让下次相同 query 走 Layer-1 EXACT (0-token, 不再烧 LLM)。
+    @Autowired
+    private com.cretas.aims.service.ExpressionLearningService expressionLearningService;
+
+    private static final double DYNAMIC_LEARN_MIN_SIMILARITY = 0.55;
+
     // ==================== 公开方法 ====================
 
     /**
@@ -161,7 +168,11 @@ public class DynamicToolSelectionService {
             Object result = toolRouterService.executeToolChain(selectedTools, context);
 
             // 6. 转换结果
-            return convertDynamicToolResultToResponse(result, intent, selectedTools);
+            IntentExecuteResponse response = convertDynamicToolResultToResponse(result, intent, selectedTools);
+
+            // 7. Track C: 单工具成功执行后带护栏自愈学习 (query → owning-intent, 下次走 Layer-1 EXACT)
+            maybeLearnFromDynamicSelection(query, selectedTools, candidates, factoryId, response);
+            return response;
 
         } catch (Exception e) {
             log.error("动态工具选择执行失败: {}", e.getMessage(), e);
@@ -191,6 +202,33 @@ public class DynamicToolSelectionService {
             log.info("动态候选业态过滤: {} → {} (biz={})", candidates.size(), kept.size(), biz);
         }
         return kept;
+    }
+
+    /** Track C: 动态单工具成功执行后自愈学习 (单工具+成功+有数据+业态兼容+相似度门)。fail-open。 */
+    void maybeLearnFromDynamicSelection(String query, ToolRouterService.SelectedTools selected,
+            List<ToolRouterService.ToolCandidate> candidates, String factoryId, IntentExecuteResponse response) {
+        try {
+            if (selected == null || selected.getTools() == null || selected.getTools().size() != 1) return;
+            if (response == null || !"SUCCESS".equals(response.getStatus()) || response.getResultData() == null) return;
+            String toolName = selected.getTools().get(0).getToolName();
+            if (toolName == null) return;
+            double sim = candidates.stream()
+                .filter(c -> toolName.equals(c.getToolName()))
+                .mapToDouble(ToolRouterService.ToolCandidate::getSimilarity).max().orElse(0.0);
+            if (sim < DYNAMIC_LEARN_MIN_SIMILARITY) return;
+            String biz = configService.resolveBusinessDomain(factoryId);
+            com.cretas.aims.entity.config.AIIntentConfig owner = configService.getAllIntents(factoryId).stream()
+                .filter(i -> toolName.equals(i.getToolName()))
+                .filter(i -> com.cretas.aims.ai.tool.BusinessTypeScope.isCompatible(i.getBusinessType(), biz))
+                .findFirst().orElse(null);
+            if (owner == null) return;
+            expressionLearningService.learnExpression(factoryId, owner.getIntentCode(), query.trim(), sim,
+                com.cretas.aims.entity.learning.LearnedExpression.SourceType.DYNAMIC_SELECTION);
+            log.info("动态选择自愈学习: query={}, intent={}, tool={}, sim={}",
+                query.length() > 40 ? query.substring(0, 40) : query, owner.getIntentCode(), toolName, sim);
+        } catch (Exception e) {
+            log.warn("动态选择学习失败: {}", e.getMessage());
+        }
     }
 
     /**
