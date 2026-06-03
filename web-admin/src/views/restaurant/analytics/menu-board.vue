@@ -25,16 +25,13 @@
               />
               <span class="threshold-value">{{ (marginThreshold * 100).toFixed(0) }}%</span>
             </div>
-            <el-select v-model="selectedUploadId" placeholder="选择数据源" filterable style="width: 280px; margin-left: 8px" @change="handleSelectUpload">
-              <el-option v-for="u in uploads" :key="u.id" :label="`${u.fileName} (${u.rowCount}行)`" :value="u.id" />
-            </el-select>
           </div>
         </div>
       </template>
 
       <div v-if="loading" v-loading="true" style="min-height: 400px" />
 
-      <el-empty v-else-if="!data" description="请选择数据源" />
+      <el-empty v-else-if="!data" description="暂无菜品销售数据（全部历史）。上传POS销售明细后将自动展示四象限分析。" />
 
       <template v-if="data && !loading">
         <!-- Summary cards -->
@@ -120,14 +117,15 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, nextTick, watch, onUnmounted } from 'vue'
+import { ref, computed, nextTick, watch, onUnmounted, onMounted } from 'vue'
 import { ArrowLeft } from '@element-plus/icons-vue'
 import echarts from '@/utils/echarts'
 import { useChartResize } from '@/composables/useChartResize'
-import { useRestaurantAnalytics } from '@/composables/useRestaurantAnalytics'
 import { usePermissionStore } from '@/store/modules/permission'
 import type { MenuQuadrantData, MenuQuadrantItem } from '@/types/restaurant-analytics'
-import { pythonFetch } from '@/api/smartbi/common'
+import { pythonFetch, getFactoryId } from '@/api/smartbi/common'
+import { goldQuadrantToData, type GoldQuadrantPayload } from './menuQuadrantGold'
+import { ElMessage } from 'element-plus'
 // Day 9 数据织网 Sub-Project A: capability-driven card visibility
 import { useCapability } from '@/composables/useCapability'
 import CapabilityGate from '@/components/CapabilityGate.vue'
@@ -198,10 +196,34 @@ function onModeChange() {
 const containerRef = ref<HTMLElement>()
 useChartResize(containerRef)
 
-const {
-  uploads, selectedUploadId, data, loading,
-  handleSelectUpload: _selectUpload,
-} = useRestaurantAnalytics<MenuQuadrantData>((result) => result.menuQuadrant)
+// WS3 #1: 收入模式四象限走 gold /restaurant-ops/menu-quadrant (默认全部历史),
+// 不再依赖手选 CSV 数据源。marginMap (毛利模式) 仍走 /gross-margin。
+const data = ref<MenuQuadrantData | null>(null)
+const loading = ref(false)
+
+async function loadQuadrantData() {
+  loading.value = true
+  try {
+    const factoryId = getFactoryId()
+    // 默认不传日期 = 全部历史 (WS1 menu-quadrant 端点已支持省略 → 开区间)。
+    const res = await pythonFetch(
+      `/api/smartbi/restaurant-ops/menu-quadrant?factory_id=${factoryId}`,
+      { timeoutMs: 60000 },
+    ) as { success?: boolean; message?: string; data?: GoldQuadrantPayload }
+    if (res && res.success === false) {
+      ElMessage.error(res.message || '菜品四象限数据加载失败')
+      data.value = null
+      return
+    }
+    data.value = goldQuadrantToData(res?.data)
+  } catch (e) {
+    console.error('[menu-board] quadrant load failed:', e)
+    ElMessage.error('菜品四象限数据加载失败，请稍后重试')
+    data.value = null
+  } finally {
+    loading.value = false
+  }
+}
 
 const filterQuadrant = ref('')
 const searchKeyword = ref('')
@@ -213,9 +235,9 @@ watch(data, (val) => {
   if (val) nextTick(() => setTimeout(renderChart, 300))
 })
 
-function handleSelectUpload(id: number) {
-  _selectUpload(id)
-}
+onMounted(() => {
+  loadQuadrantData()
+})
 
 const quadrants = computed(() => {
   if (!data.value) return []
