@@ -2,6 +2,7 @@ package com.cretas.aims.service.impl;
 
 import com.cretas.aims.ai.client.DashScopeClient;
 import com.cretas.aims.config.ColloquialMappings;
+import com.cretas.aims.config.IntentKnowledgeBase;
 import com.cretas.aims.config.TimeNormalizationRules;
 import com.cretas.aims.config.TimeNormalizationRules.TimeRange;
 import com.cretas.aims.dto.ai.PreprocessedQuery;
@@ -101,6 +102,21 @@ public class QueryPreprocessorServiceImpl implements QueryPreprocessorService {
      */
     private static final Pattern NEGATION_PATTERN = Pattern.compile(
             "(除了|排除|不要|不包括|去掉|去除|不含|除开|不是|非|不想要|别给我)"
+    );
+
+    /**
+     * W1b: 否定否决副词(语句级否定,非内容排除)。锚定句首/近句首以避免误吞合法写。
+     * 例: "别查/不用查/先不开始" 命中; "取消订单/作废这张单"(动作动词非否定副词) 不命中。
+     */
+    private static final Pattern VETO_ADVERB_PATTERN = Pattern.compile(
+            "^\\s*(我?|那|这个?|现在|先|那么)?\\s*(别|不用|不要|甭|无需|不必|先不|暂时不|不想|不需要)"
+    );
+
+    /**
+     * W1b: "不用的"(unused)误触排除 —— 不用/不想/不要 紧跟 "的" 时是形容词性"无用的",非否决。
+     */
+    private static final Pattern VETO_FALSE_FRIEND = Pattern.compile(
+            "(不用|不想|不要)的"
     );
 
     // ==================== 语用学处理正则模式 (v8.0) ====================
@@ -798,20 +814,86 @@ public class QueryPreprocessorServiceImpl implements QueryPreprocessorService {
 
     /**
      * 检测否定/排除语义 v7.4
-     * 当检测到否定词时，返回标记信息以便后续处理
+     * 当检测到否定词时，返回标记信息以便后续处理。
+     *
+     * <p>无 {@code knowledgeBase} 的调用路径(如 enhancedPreprocess @1473):仅做
+     * exclusion 检测,{@code kind} 取 {@code EXCLUDE_CONTENT} 或 {@code NONE},
+     * <b>不</b>产生 veto kind —— exclusion 行为与 W1b 之前完全一致(finding 4)。</p>
      */
     public NegationInfo detectNegationSemantics(String input) {
+        return detectNegationSemantics(input, null);
+    }
+
+    /**
+     * W1b: 带 knowledge base 的否定语义检测。在 exclusion 之外叠加 veto 细分(VETO_READ/VETO_WRITE)。
+     *
+     * <p>语句级否决("别查/不用看")优先于内容排除:veto 命中时 {@code kind=VETO_*};
+     * 否则 exclusion 命中 {@code kind=EXCLUDE_CONTENT};都不命中 {@code kind=NONE}。
+     * {@code kb==null} 时退化为纯 exclusion 检测(向后兼容)。</p>
+     *
+     * @param input 用户原始输入
+     * @param kb    意图知识库,用于判定否定副词后动词的 ActionType(可为 null)
+     */
+    public NegationInfo detectNegationSemantics(String input, IntentKnowledgeBase kb) {
         if (input == null || input.trim().isEmpty()) {
-            return new NegationInfo(false, null, null);
+            return new NegationInfo(false, null, null, QueryPreprocessorService.NegationKind.NONE);
         }
+        // veto 细分(kb==null 时恒返 NONE,纯 exclusion 路径不变)
+        QueryPreprocessorService.NegationKind vetoKind =
+                (kb == null) ? QueryPreprocessorService.NegationKind.NONE : detectNegationVeto(input, kb);
         Matcher matcher = NEGATION_PATTERN.matcher(input);
         if (matcher.find()) {
             String negationWord = matcher.group(1);
             // 提取被排除的内容
             String excludedContent = extractExcludedContent(input, matcher.end());
-            return new NegationInfo(true, negationWord, excludedContent);
+            // veto 优先于 exclusion(用户语句级否决比内容过滤更强);否则 EXCLUDE_CONTENT
+            QueryPreprocessorService.NegationKind kind =
+                    (vetoKind != QueryPreprocessorService.NegationKind.NONE)
+                            ? vetoKind : QueryPreprocessorService.NegationKind.EXCLUDE_CONTENT;
+            return new NegationInfo(true, negationWord, excludedContent, kind);
         }
-        return new NegationInfo(false, null, null);
+        // 无 exclusion 但有 veto(如 "不用查库存了" 不匹配 NEGATION_PATTERN)
+        if (vetoKind != QueryPreprocessorService.NegationKind.NONE) {
+            return new NegationInfo(true, null, null, vetoKind);
+        }
+        return new NegationInfo(false, null, null, QueryPreprocessorService.NegationKind.NONE);
+    }
+
+    /**
+     * W1b: 细分否定否决类型。语句级否定("别查/不用看")→ VETO_READ;
+     * 否定写动词("别开始/不用创建")→ VETO_WRITE。双重否定优先返 NONE(finding 6)。
+     *
+     * <p>采用<b>参数形式</b> 传入 {@code kb}:{@code QueryPreprocessorServiceImpl} 未注入
+     * {@code IntentKnowledgeBase}(其 ctor 7 参不含它),由调用方(IRP, T3/T4)持有并传入。</p>
+     *
+     * @param input 用户原始输入
+     * @param kb    意图知识库,提供 {@code detectActionType} 判定否定副词后的动词性质
+     * @return VETO_READ / VETO_WRITE / NONE
+     */
+    public QueryPreprocessorService.NegationKind detectNegationVeto(String input, IntentKnowledgeBase kb) {
+        if (input == null) return QueryPreprocessorService.NegationKind.NONE;
+        String s = input.trim();
+        if (s.isEmpty()) return QueryPreprocessorService.NegationKind.NONE;
+        // 1) 双重否定守卫(finding 6,必须第一步):不是不想查/不能不查 → 实为肯定查询
+        if (DOUBLE_NEGATIVE_PATTERN.matcher(s).find()) return QueryPreprocessorService.NegationKind.NONE;
+        // 2) "不用的"(unused)等 false friend
+        if (VETO_FALSE_FRIEND.matcher(s).find()) return QueryPreprocessorService.NegationKind.NONE;
+        // 3) 否定副词(句首/近句首)
+        Matcher m = VETO_ADVERB_PATTERN.matcher(s);
+        if (!m.find()) return QueryPreprocessorService.NegationKind.NONE;
+        String remainder = s.substring(m.end()).trim();
+        if (remainder.startsWith("给我")) remainder = remainder.substring(2).trim();
+        // 4) 否定副词后的动词决定 写 vs 读(kb==null 时保守判 VETO_READ,不误升级为写)
+        IntentKnowledgeBase.ActionType at = (kb == null)
+                ? IntentKnowledgeBase.ActionType.UNKNOWN
+                : kb.detectActionType(remainder.isEmpty() ? s : remainder);
+        if (at == IntentKnowledgeBase.ActionType.CREATE
+                || at == IntentKnowledgeBase.ActionType.UPDATE
+                || at == IntentKnowledgeBase.ActionType.DELETE) {
+            return QueryPreprocessorService.NegationKind.VETO_WRITE;
+        }
+        // QUERY / AMBIGUOUS / UNKNOWN → 否定一个读/不明 → 抑制+澄清(安全方向)
+        return QueryPreprocessorService.NegationKind.VETO_READ;
     }
 
     /**
@@ -1500,13 +1582,15 @@ public class QueryPreprocessorServiceImpl implements QueryPreprocessorService {
             finalProcessed = coreResult.getCoreQuery();
         }
 
-        // v7.5: 将内部 NegationInfo 转换为接口 NegationInfo
+        // v7.5 / W1b: 将内部 NegationInfo 转换为接口 NegationInfo(带 kind)
         QueryPreprocessorService.NegationInfo interfaceNegationInfo = null;
-        if (negationInfo.hasNegation()) {
+        if (negationInfo.hasNegation()
+                || negationInfo.getKind() != QueryPreprocessorService.NegationKind.NONE) {
             interfaceNegationInfo = QueryPreprocessorService.NegationInfo.builder()
-                    .hasNegation(true)
+                    .hasNegation(negationInfo.hasNegation())
                     .negationWord(negationInfo.getNegationWord())
                     .excludedContent(negationInfo.getExcludedContent())
+                    .kind(negationInfo.getKind())
                     .build();
         }
 
@@ -1870,22 +1954,32 @@ public class QueryPreprocessorServiceImpl implements QueryPreprocessorService {
         private final boolean hasNegation;
         private final String negationWord;
         private final String excludedContent;
+        private final QueryPreprocessorService.NegationKind kind;   // W1b
 
+        /** 旧 3-arg ctor 保留,kind 默认 NONE(向后兼容 805/812/814 三处 call site) */
         public NegationInfo(boolean hasNegation, String negationWord, String excludedContent) {
+            this(hasNegation, negationWord, excludedContent, QueryPreprocessorService.NegationKind.NONE);
+        }
+
+        /** W1b 4-arg ctor */
+        public NegationInfo(boolean hasNegation, String negationWord, String excludedContent,
+                            QueryPreprocessorService.NegationKind kind) {
             this.hasNegation = hasNegation;
             this.negationWord = negationWord;
             this.excludedContent = excludedContent;
+            this.kind = kind == null ? QueryPreprocessorService.NegationKind.NONE : kind;
         }
 
         public boolean hasNegation() { return hasNegation; }
         public String getNegationWord() { return negationWord; }
         public String getExcludedContent() { return excludedContent; }
+        public QueryPreprocessorService.NegationKind getKind() { return kind; }  // W1b
 
         @Override
         public String toString() {
             return hasNegation ?
-                String.format("NegationInfo[word=%s, excluded=%s]", negationWord, excludedContent) :
-                "NegationInfo[none]";
+                String.format("NegationInfo[word=%s, excluded=%s, kind=%s]", negationWord, excludedContent, kind) :
+                "NegationInfo[none, kind=" + kind + "]";
         }
     }
 }
