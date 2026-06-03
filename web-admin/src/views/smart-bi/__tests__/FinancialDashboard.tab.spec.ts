@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { resolveFinanceSection } from '../financeDashboardSection';
+import { resolveFinanceSection, shouldRenderGoldFinanceView } from '../financeDashboardSection';
 
 describe('FinancialDashboard sectionTab (P4)', () => {
   it('?section=analysis → analysis', () => { expect(resolveFinanceSection({ section: 'analysis' })).toBe('analysis'); });
@@ -27,5 +27,24 @@ describe('FinancialDashboard sectionTab tenant default (#10)', () => {
   });
   it('餐饮租户非法 section → analysis (回落到业态默认而非硬编码 dashboard)', () => {
     expect(resolveFinanceSection({ section: 'x' }, 'RESTAURANT')).toBe('analysis');
+  });
+});
+
+describe('shouldRenderGoldFinanceView (follow-up fu2 — PBI 看板 Gold 全量)', () => {
+  it('餐饮租户 + dashboard 子页 → true (自动渲染 Gold 财务全量)', () => {
+    expect(shouldRenderGoldFinanceView('RESTAURANT', 'dashboard')).toBe(true);
+  });
+  it('餐饮租户 + analysis 子页 → false (analysis 已自带 gold 分析)', () => {
+    expect(shouldRenderGoldFinanceView('RESTAURANT', 'analysis')).toBe(false);
+  });
+  it('工厂租户 + dashboard 子页 → false (保留 upload-based PBI 看板)', () => {
+    expect(shouldRenderGoldFinanceView('FACTORY', 'dashboard')).toBe(false);
+  });
+  it('工厂租户 + analysis 子页 → false', () => {
+    expect(shouldRenderGoldFinanceView('FACTORY', 'analysis')).toBe(false);
+  });
+  it('factoryType 未知/缺失 → false (保守, 走 upload 路径)', () => {
+    expect(shouldRenderGoldFinanceView(null, 'dashboard')).toBe(false);
+    expect(shouldRenderGoldFinanceView(undefined, 'dashboard')).toBe(false);
   });
 });

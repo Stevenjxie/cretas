@@ -203,9 +203,12 @@ async def test_menu_quadrant_month_filter_on_a_month():
 @pytest.mark.asyncio
 async def test_store_comparison_avg_ticket_and_weak_stores():
     rows = [
-        {"name": "旗舰店", "revenue": 10000, "order_count": 500, "avg_ticket": 20.0},
-        {"name": "中位店", "revenue": 5000, "order_count": 250, "avg_ticket": 20.0},
-        {"name": "弱店", "revenue": 2000, "order_count": 200, "avg_ticket": 10.0},
+        {"name": "旗舰店", "revenue": 10000, "order_count": 500, "avg_ticket": 20.0,
+         "discount_amount": 1000, "gross_amount": 11000},
+        {"name": "中位店", "revenue": 5000, "order_count": 250, "avg_ticket": 20.0,
+         "discount_amount": 500, "gross_amount": 5500},
+        {"name": "弱店", "revenue": 2000, "order_count": 200, "avg_ticket": 10.0,
+         "discount_amount": 200, "gross_amount": 2200},
     ]
     # revenue sorted [2000,5000,10000] median = 5000
     # weakStores = those strictly below median revenue → 弱店 (2000)
@@ -220,10 +223,52 @@ async def test_store_comparison_avg_ticket_and_weak_stores():
 
 
 @pytest.mark.asyncio
+async def test_store_comparison_discount_pct_per_store():
+    """折扣率 = discount_amount / gross_amount * 100 per store (rounded 1 dp)."""
+    rows = [
+        # 1000 / 11000 = 9.0909... → 9.1
+        {"name": "旗舰店", "revenue": 10000, "order_count": 500, "avg_ticket": 20.0,
+         "discount_amount": 1000, "gross_amount": 11000},
+        # 825 / 5500 = 15.0 → 15.0
+        {"name": "折扣店", "revenue": 4675, "order_count": 250, "avg_ticket": 18.7,
+         "discount_amount": 825, "gross_amount": 5500},
+        # 0 / 2000 = 0.0 (no discount)
+        {"name": "无折扣店", "revenue": 2000, "order_count": 200, "avg_ticket": 10.0,
+         "discount_amount": 0, "gross_amount": 2000},
+    ]
+    conn = _ScriptedConn([rows])
+    pool = _ScriptedPool(conn)
+    out = await store_comparison(pool, "F1", (None, None))
+    stores = {s["name"]: s for s in out["stores"]}
+    assert stores["旗舰店"]["discountPct"] == pytest.approx(9.1)
+    assert stores["折扣店"]["discountPct"] == pytest.approx(15.0)
+    assert stores["无折扣店"]["discountPct"] == 0.0
+
+
+@pytest.mark.asyncio
+async def test_store_comparison_discount_pct_zero_gross_is_zero():
+    """gross_amount = 0 (or NULL) → discountPct falls back to 0.0 (no /0)."""
+    rows = [
+        {"name": "零营业额店", "revenue": 0, "order_count": 0, "avg_ticket": None,
+         "discount_amount": 0, "gross_amount": 0},
+        {"name": "空折扣字段店", "revenue": 1000, "order_count": 50, "avg_ticket": 20.0,
+         "discount_amount": None, "gross_amount": None},
+    ]
+    conn = _ScriptedConn([rows])
+    pool = _ScriptedPool(conn)
+    out = await store_comparison(pool, "F1", (None, None))
+    stores = {s["name"]: s for s in out["stores"]}
+    assert stores["零营业额店"]["discountPct"] == 0.0
+    assert stores["空折扣字段店"]["discountPct"] == 0.0
+
+
+@pytest.mark.asyncio
 async def test_store_comparison_avg_ticket_zero_orders_is_zero():
     rows = [
-        {"name": "无单店", "revenue": 0, "order_count": 0, "avg_ticket": None},
-        {"name": "有单店", "revenue": 1000, "order_count": 50, "avg_ticket": 20.0},
+        {"name": "无单店", "revenue": 0, "order_count": 0, "avg_ticket": None,
+         "discount_amount": 0, "gross_amount": 0},
+        {"name": "有单店", "revenue": 1000, "order_count": 50, "avg_ticket": 20.0,
+         "discount_amount": 0, "gross_amount": 1000},
     ]
     conn = _ScriptedConn([rows])
     pool = _ScriptedPool(conn)

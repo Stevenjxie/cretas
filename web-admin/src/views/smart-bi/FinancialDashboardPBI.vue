@@ -3,12 +3,13 @@
  * FinancialDashboardPBI - 财务分析看板 (Power BI Style)
  * Orchestrates all 7 financial chart types with AI analysis and PPT export
  */
-import { ref, reactive, computed, watch, nextTick, onBeforeUnmount } from 'vue';
+import { ref, reactive, computed, watch, nextTick, onMounted, onBeforeUnmount } from 'vue';
 import { useRoute } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import { useAuthStore } from '@/store/modules/auth';
 import FinanceAnalysis from './FinanceAnalysis.vue';
-import { resolveFinanceSection } from './financeDashboardSection';
+import FinancePbiGoldView from './components/FinancePbiGoldView.vue';
+import { resolveFinanceSection, shouldRenderGoldFinanceView } from './financeDashboardSection';
 import { DataAnalysis, VideoPlay, Download, Collection, SetUp, ArrowDown, ArrowRight, Delete } from '@element-plus/icons-vue';
 import echarts from '@/utils/echarts';
 import { processEChartsOptions } from '@/utils/echarts-fmt';
@@ -77,6 +78,15 @@ const authStore = useAuthStore();
 const sectionTab = ref(resolveFinanceSection(route.query, authStore.factoryType));
 watch(() => route.query.section, () => { sectionTab.value = resolveFinanceSection(route.query, authStore.factoryType); });
 
+// follow-up (fu2): 餐饮租户在 PBI 看板(dashboard)子页 → 自动渲染 Gold 财务全量视图
+// (KPI 卡 + 月度营收趋势 + 门店排行 + 渠道占比), 免上传 / 免手动生成。
+// PBI 看板原本 upload_id 绑定, 餐饮租户没传财务 Excel → 只能看到空态。
+// 工厂租户保持原 upload-based PBI 看板 (PeriodSelector + 生成看板) 不变。
+// 餐饮租户可点「上传财务文件」临时切到 upload 路径 (高级)。
+const showUploadForRestaurant = ref(false);
+const goldFinanceMode = computed(() =>
+  shouldRenderGoldFinanceView(authStore.factoryType, sectionTab.value) && !showUploadForRestaurant.value);
+
 // Tab navigation state
 const viewMode = ref<'tab' | 'grid'>('tab');
 const activeTab = ref('budget_achievement');
@@ -137,11 +147,14 @@ function clearAllAnnotations(chartType: string) {
 
 const uploadId = ref<number | null>(null);
 const uploadIdInput = ref<string>('');
+// 默认「全部历史」: type='year' + allHistory 标记 → 后端 period_type='year'
+// (normalizer 对 'year' 不做任何月份过滤, 即返回该数据源全部数据)。
 const periodSelection = ref<PeriodSelection>({
   type: 'year',
   year: new Date().getFullYear(),
   value: String(new Date().getFullYear()),
   compareEnabled: false,
+  allHistory: true,
 });
 
 const isGenerating = ref(false);
@@ -257,16 +270,18 @@ function teardownLazyObserver(): void {
 
 // ---- Computed ----
 const currentYear = computed(() => periodSelection.value.year);
-const periodType = computed(() => periodSelection.value.type === 'year' ? 'year' : 'month_range');
+// 「全部历史」与「单年」都映射 period_type='year' (normalizer 对 'year' 不做月份过滤 → 返回全部数据)。
+const periodType = computed(() =>
+  periodSelection.value.allHistory || periodSelection.value.type === 'year' ? 'year' : 'month_range');
 const startMonth = computed(() => {
-  if (periodSelection.value.type === 'year') return 1;
+  if (periodSelection.value.allHistory || periodSelection.value.type === 'year') return 1;
   if (Array.isArray(periodSelection.value.value)) {
     return parseInt(String(periodSelection.value.value[0]).split('-')[1] || '1', 10);
   }
   return 1;
 });
 const endMonth = computed(() => {
-  if (periodSelection.value.type === 'year') return 12;
+  if (periodSelection.value.allHistory || periodSelection.value.type === 'year') return 12;
   if (Array.isArray(periodSelection.value.value)) {
     return parseInt(String(periodSelection.value.value[1]).split('-')[1] || '12', 10);
   }
@@ -1386,6 +1401,22 @@ watch(() => charts.value.length, () => {
   nextTick(() => setupResizeObserver());
 }, { once: true });
 
+// 自动加载: 若已有数据源 (route query ?upload_id= 或 ?uploadId=), 进页即以「全部历史」
+// 生成看板, 免手动点「生成看板」。无数据源时保留引导空态 (PBI 看板是 upload 绑定的, 没有
+// upload_id 无法生成 — 餐饮租户默认落 gold「财务数据分析」子页, 见 financeDashboardSection.ts)。
+onMounted(() => {
+  const q = route.query;
+  const rawId = q.upload_id ?? q.uploadId;
+  const idStr = Array.isArray(rawId) ? rawId[0] : rawId;
+  const id = idStr ? parseInt(String(idStr), 10) : NaN;
+  if (!isNaN(id) && id > 0) {
+    uploadId.value = id;
+    uploadIdInput.value = String(id);
+    // periodSelection 默认 allHistory=true → 全部历史
+    nextTick(() => generate(false));
+  }
+});
+
 // Cleanup on unmount
 onBeforeUnmount(() => {
   // Bug #2: mark unmount so in-flight generate() stops touching reactive state,
@@ -1411,6 +1442,14 @@ onBeforeUnmount(() => {
     <!-- P4: 顶层 section tabs — 财务 PBI 看板 / 财务数据分析 (合并自原 /smart-bi/finance) -->
     <el-tabs v-model="sectionTab" class="finance-section-tabs">
     <el-tab-pane label="财务 PBI 看板" name="dashboard">
+    <!-- follow-up (fu2): 餐饮租户 Gold 财务全量视图 (免上传 / 免手动生成).
+         工厂租户 (或餐饮点「上传财务文件」) 走下方原 upload-based PBI 看板。 -->
+    <FinancePbiGoldView
+      v-if="goldFinanceMode"
+      @switch-to-upload="showUploadForRestaurant = true"
+    />
+
+    <template v-else>
     <!-- Top Toolbar -->
     <el-card class="toolbar-card" shadow="never">
       <div class="toolbar-inner">
@@ -1427,6 +1466,7 @@ onBeforeUnmount(() => {
             v-model="periodSelection"
             :show-quick-select="true"
             :show-custom-tab="false"
+            :show-all-history="true"
             default-type="year"
             size="small"
             style="margin-left: 8px"
@@ -1584,7 +1624,7 @@ onBeforeUnmount(() => {
 
     <!-- Empty state -->
     <div v-if="!dashboardResponse && !isGenerating" class="empty-state">
-      <SmartBIEmptyState type="no-data" title="请选择数据源和时间范围" description="点击「生成看板」开始分析" :show-action="false" />
+      <SmartBIEmptyState type="no-data" title="请选择数据源" description="选好数据源后点击「生成看板」(默认「全部历史」, 展示该数据源全部数据)" :show-action="false" />
     </div>
 
     <!-- Loading skeleton (grid mode) -->
@@ -2159,6 +2199,7 @@ onBeforeUnmount(() => {
         height="500px"
       />
     </el-card>
+    </template>
     </el-tab-pane>
 
     <!-- P4: 财务数据分析 (embed FinanceAnalysis, 原 /smart-bi/finance) -->

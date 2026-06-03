@@ -536,6 +536,16 @@ const dateRange = ref<[string, string] | null>(null);
 // Tag below the picker explains the switch. Pattern mirrors Trends/RestaurantV2.
 const fallbackRangeLabel = ref<string>('');
 const fallbackDateRange = ref<[string, string] | null>(null);
+
+// WS follow-up (2026-06-03): gold 层真实 [min,max] 区间, 用于诚实区分「全部历史」与
+// 用户收窄后的「自定义区间」。之前 label 无条件写「全部历史」即使范围已被收窄
+// (e.g. 实测某浏览器残留收窄区间显示「全部历史 · 2026-02-01 至 2026-04-30」误导)。
+const goldFullRange = ref<[string, string] | null>(null);
+const isFullHistory = computed(() =>
+  !!dateRange.value && !!goldFullRange.value &&
+  dateRange.value[0] === goldFullRange.value[0] &&
+  dateRange.value[1] === goldFullRange.value[1]
+);
 function savedFallbackKey(factoryId: string) {
   return `smartbi-dashboard-fallback:${factoryId}`;
 }
@@ -601,6 +611,14 @@ function onDateRangeChange(range: [string, string] | null) {
   // Always gold-backed (data-source picker removed) — the range drives /executive/custom.
   loadDashboardData();
 }
+
+// WS follow-up (2026-06-03): 收窄后一键回到全部历史 — 清掉持久化的收窄区间 +
+// 重新套用 gold 全量 [min,max] + 重载。
+function resetToFullHistory() {
+  if (!factoryId.value) return;
+  try { localStorage.removeItem(savedRangeKey(factoryId.value)); } catch {}
+  applyAllHistoryDefault().then(() => loadDashboardData());
+}
 function putCached(factoryId: string, sourceId: string | number, data: unknown) {
   try {
     localStorage.setItem(cacheKeyFor(factoryId, sourceId), JSON.stringify({ ts: Date.now(), data }));
@@ -613,16 +631,22 @@ const { fetchCapability } = useCapability();
 // 默认显示全部已有数据 (不再只取「最近有数据的年」)。老板登录即见全量经营图表,
 // 不需先上传/选时间。保留 dateRange 选择器供用户收窄。探测失败/无数据 → 不伪造区间,
 // 落回 period=month + 空状态 CTA。
-async function applyAllHistoryDefault(): Promise<boolean> {
-  if (!factoryId.value) return false;
+// 探测一次 gold 真实区间, 缓存到 goldFullRange (供 label 诚实判断 + 收窄后一键回全量)。
+// fail-open: 探测失败留 null, label 退回旧文案, 不阻塞加载。
+async function probeGoldFullRange(): Promise<void> {
+  if (!factoryId.value || goldFullRange.value) return;
   try {
     const dr = await getGoldDataRange(factoryId.value);
-    if (dr.minDate && dr.maxDate) {
-      dateRange.value = [dr.minDate, dr.maxDate];
-      return true;
-    }
+    if (dr.minDate && dr.maxDate) goldFullRange.value = [dr.minDate, dr.maxDate];
   } catch {
-    // 探测失败 → 不阻塞, 落回 period=month 默认。
+    // 探测失败 → 不阻塞, label 退回旧文案。
+  }
+}
+async function applyAllHistoryDefault(): Promise<boolean> {
+  await probeGoldFullRange();
+  if (goldFullRange.value) {
+    dateRange.value = [goldFullRange.value[0], goldFullRange.value[1]];
+    return true;
   }
   return false;
 }
@@ -631,6 +655,10 @@ onMounted(async () => {
   // Day 8 数据织网 Sub-Project A: prime capability cache (fire-and-forget,
   // useCapability handles errors and is fail-open).
   fetchCapability();
+
+  // Probe the gold full range up-front so the label can honestly distinguish
+  // 「全部历史」from a user-narrowed 「自定义区间」(needed even when we honor a saved range below).
+  await probeGoldFullRange();
 
   // Restore an explicit date range from localStorage (per factory) if the user
   // previously narrowed it. Otherwise default to all-history gold below.
@@ -919,6 +947,13 @@ async function loadLLMInsightsStream(
   signal: AbortSignal | undefined,
 ): Promise<boolean> {
   if (!factoryId.value) return false;
+  // Deterministic guard (2026-06-03): strip [ ]/【】 wrapping any CJK entity name
+  // (折扣/门店/菜品名) — the insight LLM sometimes wraps names like 「[美团套餐券]」
+  // which reads like JSON. orchestrator SYSTEM_PROMPT also forbids it, but streamed
+  // deltas can't be un-sent, so we clean the display here. Numeric citations [1]/[2]
+  // (no CJK) are preserved.
+  const stripEntityBrackets = (s: string): string =>
+    s ? s.replace(/[\[【]([^\[\]【】]*[一-鿿][^\[\]【】]*)[\]】]/g, '$1') : s;
   // Use the same key that request.ts interceptor reads
   const authHeader = localStorage.getItem('cretas_access_token') || '';
   const url = `/api/mobile/${factoryId.value}/smart-bi/dashboard/executive/insights/custom/stream?startDate=${startDate}&endDate=${endDate}`;
@@ -972,7 +1007,7 @@ async function loadLLMInsightsStream(
             };
           } else if (event.type === 'delta' && event.text) {
             accumulated += event.text;
-            streamingInsightText.value = accumulated;
+            streamingInsightText.value = stripEntityBrackets(accumulated);
             gotAnyDelta = true;
           } else if (event.type === 'done') {
             // Finalize: append as regular insight
@@ -982,7 +1017,7 @@ async function loadLLMInsightsStream(
                 ...dashboardData.value,
                 aiInsights: [
                   ...existing,
-                  { level: 'normal', category: 'AI 洞察', message: accumulated, actionSuggestion: null } as never
+                  { level: 'normal', category: 'AI 洞察', message: stripEntityBrackets(accumulated), actionSuggestion: null } as never
                 ],
               };
               insightTimestamp.value = new Date();
@@ -1457,7 +1492,8 @@ onUnmounted(() => {
             clearable
             @change="onDateRangeChange"
           />
-          <span v-if="dateRange && !fallbackRangeLabel" class="datasource-meta" style="margin-left: 8px;">全部历史 · {{ dateRange[0] }} 至 {{ dateRange[1] }}</span>
+          <span v-if="dateRange && !fallbackRangeLabel && isFullHistory" class="datasource-meta" style="margin-left: 8px;">全部历史 · {{ dateRange[0] }} 至 {{ dateRange[1] }}</span>
+          <span v-else-if="dateRange && !fallbackRangeLabel" class="datasource-meta" style="margin-left: 8px;">自定义区间 · {{ dateRange[0] }} 至 {{ dateRange[1] }}<el-button link type="primary" size="small" style="margin-left: 4px;" @click="resetToFullHistory">查看全部历史</el-button></span>
           <span v-else-if="fallbackRangeLabel" class="datasource-meta" style="margin-left: 8px; color: #E6A23C;">本月无数据 · 显示 {{ fallbackRangeLabel }}</span>
           <span v-else class="datasource-meta" style="margin-left: 8px;">默认: 本月</span>
         </div>

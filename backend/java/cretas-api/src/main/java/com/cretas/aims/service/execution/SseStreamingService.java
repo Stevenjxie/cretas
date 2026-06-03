@@ -234,7 +234,7 @@ public class SseStreamingService {
                 IntentExecuteResponse noMatchResponse = buildNoMatchResponseForStream(matchResult, factoryId);
                 sendSseEvent(emitter, "result", noMatchResponse);
                 sendSseEvent(emitter, "complete", Map.of(
-                        "status", "NO_MATCH",
+                        "status", noMatchCompleteStatus(matchResult),
                         "cacheHit", false,
                         "totalLatencyMs", System.currentTimeMillis() - startTime
                 ));
@@ -631,10 +631,36 @@ public class SseStreamingService {
                 .build();
     }
 
+    /**
+     * Select the streamed no-match message. Priority: conversationMessage → clarificationQuestion → generic.
+     * W1b: a negation VETO_READ (e.g. "不用查库存了"/"别给我看订单") produces a REJECTED result
+     * (bestMatch=null → hasMatch()=false reaches the no-match branch) that carries a clarificationQuestion.
+     * Surface it so the streaming chat reply is the negation clarification, NOT the generic "我没有理解您的意图".
+     */
+    static String selectNoMatchStreamMessage(IntentMatchResult matchResult) {
+        if (matchResult.getConversationMessage() != null && !matchResult.getConversationMessage().isEmpty()) {
+            return matchResult.getConversationMessage();
+        }
+        if (matchResult.getClarificationQuestion() != null && !matchResult.getClarificationQuestion().isEmpty()) {
+            return matchResult.getClarificationQuestion();
+        }
+        return "我没有理解您的意图，请更详细地描述您的需求。";
+    }
+
+    /**
+     * Returns the SSE complete-event status string for a no-match result.
+     * W1b: when the no-match carries a clarificationQuestion (negation VETO_READ), the complete
+     * status must be NEED_CLARIFICATION to match the result event — not the generic NO_MATCH.
+     * Mirrors the selectNoMatchStreamMessage priority: conversationMessage → clarificationQuestion → generic.
+     */
+    static String noMatchCompleteStatus(IntentMatchResult matchResult) {
+        boolean isNegationClarification = matchResult.getClarificationQuestion() != null
+                && !matchResult.getClarificationQuestion().isEmpty();
+        return isNegationClarification ? "NEED_CLARIFICATION" : "NO_MATCH";
+    }
+
     private IntentExecuteResponse buildNoMatchResponseForStream(IntentMatchResult matchResult, String factoryId) {
-        String message = matchResult.getConversationMessage() != null && !matchResult.getConversationMessage().isEmpty()
-                ? matchResult.getConversationMessage()
-                : "我没有理解您的意图，请更详细地描述您的需求。";
+        String message = selectNoMatchStreamMessage(matchResult);
         return IntentExecuteResponse.builder()
                 .intentRecognized(false)
                 .status("NEED_CLARIFICATION")

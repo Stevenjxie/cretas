@@ -16,6 +16,18 @@ export interface DateRangeQuery {
   endDate: string;
 }
 
+/**
+ * All-history-capable variant: dates are optional. Omitting both bounds means
+ * "all history" (the gold backend's `_parse_range` treats a missing bound as
+ * open). Used by KPI看板 / 分析概览 headers which default to the tenant's full
+ * data span rather than a fixed window.
+ */
+export interface OptionalDateRangeQuery {
+  factoryId: string;
+  startDate?: string; // YYYY-MM-DD; omit = all history
+  endDate?: string;
+}
+
 export interface FinanceSummary {
   factoryId: string;
   startDate: string;
@@ -121,14 +133,42 @@ const _q = (args: DateRangeQuery & { topN?: number }): string => {
   return p.toString();
 };
 
-export async function getFinanceSummary(args: DateRangeQuery & { topNStores?: number }): Promise<FinanceSummary> {
-  const p = new URLSearchParams({
-    factory_id: args.factoryId,
-    start_date: args.startDate,
-    end_date: args.endDate,
-  });
+/**
+ * Query builder that OMITS empty date bounds (all-history). Use for the
+ * optional-date endpoints (kpi-summary / finance-summary / trend-bundle) where
+ * a missing start/end means "全部历史".
+ */
+const _qOptional = (args: OptionalDateRangeQuery & { topN?: number; topNStores?: number }): string => {
+  const p = new URLSearchParams({ factory_id: args.factoryId });
+  if (args.startDate) p.set('start_date', args.startDate);
+  if (args.endDate) p.set('end_date', args.endDate);
+  if (args.topN !== undefined) p.set('top_n', String(args.topN));
   if (args.topNStores !== undefined) p.set('top_n_stores', String(args.topNStores));
-  return (await pythonFetch(`/api/smartbi/gold/finance-summary?${p}`, {
+  return p.toString();
+};
+
+/** Weekday/weekend average revenue split (from /trend-bundle). */
+export interface TrendBundleWeekdayWeekend {
+  weekdayAvg: number | null;
+  weekendAvg: number | null;
+  weekdayDays: number;
+  weekendDays: number;
+}
+
+/** /api/smartbi/gold/trend-bundle response (camelCased). */
+export interface TrendBundle {
+  factoryId: string;
+  startDate: string | null;
+  endDate: string | null;
+  dailyTrend: Array<{ date: string; revenue: number | null; billCount: number }>;
+  weekdayWeekend: TrendBundleWeekdayWeekend;
+  monthlyTrend: Array<{ month: string; revenue: number | null }>;
+}
+
+export async function getFinanceSummary(args: OptionalDateRangeQuery & { topNStores?: number }): Promise<FinanceSummary> {
+  // Dates optional: omitting both = 全部历史 (gold _parse_range treats a missing
+  // bound as open). Existing callers pass concrete dates → unchanged behavior.
+  return (await pythonFetch(`/api/smartbi/gold/finance-summary?${_qOptional(args)}`, {
     timeoutMs: PYTHON_LLM_TIMEOUT_MS,
   })) as FinanceSummary;
 }
@@ -157,8 +197,18 @@ export async function getDiscountBreakdown(args: DateRangeQuery & { topN?: numbe
   })) as DiscountBreakdown;
 }
 
-export async function getKpiSummary(args: DateRangeQuery): Promise<KpiSummary> {
-  return (await pythonFetch(`/api/smartbi/gold/kpi-summary?${_q(args)}`, {
+export async function getKpiSummary(args: OptionalDateRangeQuery): Promise<KpiSummary> {
+  // Dates optional: omit both = 全部历史. Existing callers pass concrete dates.
+  return (await pythonFetch(`/api/smartbi/gold/kpi-summary?${_qOptional(args)}`, {
     timeoutMs: PYTHON_LLM_TIMEOUT_MS,
   })) as KpiSummary;
+}
+
+export async function getTrendBundle(args: OptionalDateRangeQuery): Promise<TrendBundle> {
+  // 趋势分析合一 — dailyTrend + weekdayWeekend + monthlyTrend in one round-trip.
+  // Dates optional: omit both = 全部历史. Revenue fields RBAC-nulled for
+  // non price-view roles.
+  return (await pythonFetch(`/api/smartbi/gold/trend-bundle?${_qOptional(args)}`, {
+    timeoutMs: PYTHON_LLM_TIMEOUT_MS,
+  })) as TrendBundle;
 }

@@ -49,6 +49,55 @@ def _validate_range(start: Optional[date], end: Optional[date]) -> None:
         raise ValueError(f"start {start} > end {end}")
 
 
+# Wrapping bracket pairs we strip for display. Each tuple is (open, close);
+# we only strip when the WHOLE name is wrapped by a matching pair.
+_BRACKET_PAIRS = (
+    ("[", "]"),
+    ("【", "】"),
+    ("（", "）"),
+    ("(", ")"),
+)
+
+
+def _clean_display_name(name):
+    """Strip a single matched WRAPPING bracket pair from a display name.
+
+    qhj's POS export wraps payment-channel / coupon / discount names in
+    brackets (e.g. ``[微信]``, ``[饿了么]``, ``[美团套餐券]``) — an export
+    artifact that surfaces in the dashboard 渠道占比, sales 渠道明细 and the
+    AI 洞察/FactBook looking like markup. This normalizes them for display.
+
+    Conservative — only strips when the ENTIRE name is wrapped: it starts
+    with an open bracket AND ends with its matching close bracket. Names
+    with mid-string or unmatched brackets are returned unchanged:
+      ``[微信]``                       → ``微信``
+      ``[美团套餐券]``                  → ``美团套餐券``
+      ``现金`` / ``招行买单`` / ``银行卡`` → unchanged (no wrapping pair)
+      ``[微信]余额``                    → unchanged (close bracket not at end)
+      ``招牌青花椒鱼(微麻微辣)[小份]``    → unchanged (not fully wrapped)
+
+    Applied to the NAME field in the RESULT (post-fetch, after GROUP BY) so
+    grouping/aggregation is unaffected — only the displayed name is cleaned.
+    Non-str / empty / None inputs are returned as-is (safe).
+    """
+    if not isinstance(name, str):
+        return name
+    s = name.strip()
+    if len(s) < 2:
+        return name
+    for open_b, close_b in _BRACKET_PAIRS:
+        if s.startswith(open_b) and s.endswith(close_b):
+            inner = s[len(open_b):len(s) - len(close_b)]
+            # Guard against over-stripping: the inner text must not itself
+            # contain an unbalanced occurrence of THIS pair's close bracket,
+            # which would mean the leading open didn't wrap the whole name
+            # (e.g. "[a]b]" — close at end but a mid-string close exists).
+            if close_b in inner:
+                return name
+            return inner
+    return name
+
+
 def _median(values):
     """Single-value median of a numeric iterable.
 
@@ -343,7 +392,9 @@ async def channel_breakdown(
         share = float((amt / total * 100).quantize(Decimal("0.01"))) if total > 0 else 0.0
         channels.append({
             "channel_id": int(r["channel_id"]),
-            "channel_name": r["name"],
+            # Display normalization: strip qhj POS export wrapping brackets
+            # (e.g. [微信]→微信). Done post-fetch so GROUP BY is unaffected.
+            "channel_name": _clean_display_name(r["name"]),
             "amount": float(amt),
             "bill_count": int(r["bill_count"]),
             "share_pct": share,
@@ -413,7 +464,9 @@ async def discount_breakdown(
         share = float((amt / total * 100).quantize(Decimal("0.01"))) if total > 0 else 0.0
         items.append({
             "discount_id": int(r["discount_id"]),
-            "discount_name": r["name"],
+            # Display normalization: strip qhj POS export wrapping brackets
+            # (e.g. [美团套餐券]→美团套餐券). Post-fetch so GROUP BY unaffected.
+            "discount_name": _clean_display_name(r["name"]),
             "amount": float(amt),
             "bill_count": int(r["bill_count"]),
             "share_pct": share,
@@ -574,7 +627,10 @@ async def order_type_mix(
             else Decimal("0")
         )
         types.append({
-            "order_type": r["order_type"],
+            # Display normalization (consistency with channel/discount): strip
+            # any wrapping brackets. 堂食/外卖 are normally unbracketed so this
+            # is a no-op for qhj, but guards against bracketed POS export values.
+            "order_type": _clean_display_name(r["order_type"]),
             "revenue": float(amt),
             "bill_count": int(r["bills"]),
             "revenue_pct": float(pct),
@@ -859,19 +915,27 @@ async def store_comparison(
     factory_id: str,
     date_range: Tuple[Optional[date], Optional[date]],
 ) -> Dict[str, Any]:
-    """门店对比 — per-store revenue / order-count / avg-ticket comparison.
+    """门店对比 — per-store revenue / order-count / avg-ticket / 折扣率 comparison.
 
     Reads agg_daily JOIN dim_store, grouped by store: SUM(net_amount) as
     revenue, SUM(bill_count) as order_count, and avg_ticket = revenue /
     NULLIF(order_count, 0) (NULL → 0.0 when a store has no bills).
 
+    Per-store 折扣率 (discountPct) = SUM(discount_amount) / SUM(gross_amount)
+    * 100. agg_daily already carries discount_amount AND gross_amount at
+    per-(factory, date, store) grain — both materialized straight from
+    fact_pos_transaction (see materializer._DAILY_UPSERT_SQL), so the discount
+    rate is computable from the SAME table without any extra join. Denominator
+    is gross (含折扣前) so the rate reads as "折掉了营业额的百分之几"; gross=0
+    (or NULL) → discountPct=0.0 (honest: no sales ⇒ no discount rate).
+
     Computes the per-store revenue median and flags weak stores (revenue
     strictly below the median) so the FE can highlight underperformers.
 
     Dates optional (None bound = all history on that side, filtered on
-    a.date). Returns: {stores:[{name, revenue, orderCount, avgTicket}],
-    medianRevenue, weakStores:[name,...]}. Honest empty: stores=[],
-    medianRevenue=0, weakStores=[].
+    a.date). Returns: {stores:[{name, revenue, orderCount, avgTicket,
+    discountPct}], medianRevenue, weakStores:[name,...]}. Honest empty:
+    stores=[], medianRevenue=0, weakStores=[].
     """
     start, end = date_range
     _validate_range(start, end)
@@ -891,7 +955,9 @@ async def store_comparison(
                    SUM(a.net_amount)::numeric(18,2) AS revenue,
                    SUM(a.bill_count)                AS order_count,
                    (SUM(a.net_amount)
-                      / NULLIF(SUM(a.bill_count), 0))::numeric(18,2) AS avg_ticket
+                      / NULLIF(SUM(a.bill_count), 0))::numeric(18,2) AS avg_ticket,
+                   SUM(a.discount_amount)::numeric(18,2) AS discount_amount,
+                   SUM(a.gross_amount)::numeric(18,2)    AS gross_amount
               FROM agg_daily a
               JOIN dim_store s ON s.store_id = a.store_id
              WHERE {where}
@@ -909,12 +975,28 @@ async def store_comparison(
         avg_ticket = (
             float(Decimal(str(r["avg_ticket"]))) if r["avg_ticket"] is not None else 0.0
         )
+        # 折扣率 = 折扣额 / 折前营业额 * 100. Decimal division then round to 1
+        # decimal place (matches the FE `.toFixed(1)` display). gross<=0 → 0.0.
+        discount_amt = (
+            Decimal(str(r["discount_amount"])) if r["discount_amount"] is not None
+            else Decimal("0")
+        )
+        gross_amt = (
+            Decimal(str(r["gross_amount"])) if r["gross_amount"] is not None
+            else Decimal("0")
+        )
+        discount_pct = (
+            float((discount_amt / gross_amt * 100).quantize(
+                Decimal("0.1"), rounding=ROUND_HALF_UP))
+            if gross_amt > 0 else 0.0
+        )
         rev_vals.append(revenue)
         stores.append({
             "name": r["name"],
             "revenue": revenue,
             "orderCount": order_count,
             "avgTicket": avg_ticket,
+            "discountPct": discount_pct,
         })
 
     median_revenue = _median(rev_vals)

@@ -175,6 +175,12 @@ public interface QueryPreprocessorService {
      */
     EnhancedPreprocessResult enhancedPreprocess(String input);
 
+    /**
+     * W1b: 细分否定否决类型。语句级否定("别查/不用看")→ VETO_READ;否定写动词("别开始")→ VETO_WRITE;
+     * 双重否定/合法动作动词/普通查询 → NONE。需 IntentKnowledgeBase 判定动词类型。
+     */
+    NegationKind detectNegationVeto(String input, com.cretas.aims.config.IntentKnowledgeBase knowledgeBase);
+
     // ==================== 语用学处理方法 (v8.0) ====================
 
     /**
@@ -324,6 +330,9 @@ public interface QueryPreprocessorService {
         private boolean disambiguated;
     }
 
+    /** 否定细分类型 v-W1b */
+    enum NegationKind { NONE, EXCLUDE_CONTENT, VETO_WRITE, VETO_READ }
+
     /**
      * 否定语义信息 v7.4
      */
@@ -338,6 +347,9 @@ public interface QueryPreprocessorService {
         private String negationWord;
         /** 被排除的内容 */
         private String excludedContent;
+        /** 否定细分类型 v-W1b(默认 NONE) */
+        @lombok.Builder.Default
+        private NegationKind kind = NegationKind.NONE;
 
         public boolean hasNegation() {
             return hasNegation;
