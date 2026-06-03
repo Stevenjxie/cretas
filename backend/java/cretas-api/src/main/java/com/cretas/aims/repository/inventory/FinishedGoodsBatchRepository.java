@@ -78,6 +78,20 @@ public interface FinishedGoodsBatchRepository extends JpaRepository<FinishedGood
             @Param("productTypeId") String productTypeId);
 
     /**
+     * P4 防御: 仅汇总指定单位的可用成品库存 (备货看板用; 防止 kg/盒 混单位加和).
+     * 在 P4 换算完成后, 只有 unit='盒' 的行参与备货看板成品列计算.
+     */
+    @Query("SELECT COALESCE(SUM(b.producedQuantity - b.shippedQuantity - b.reservedQuantity), 0) " +
+            "FROM FinishedGoodsBatch b WHERE b.factoryId = :factoryId " +
+            "AND b.productTypeId = :productTypeId AND b.status = 'AVAILABLE' " +
+            "AND b.unit = :unit " +
+            "AND (b.producedQuantity - b.shippedQuantity - b.reservedQuantity) > 0")
+    BigDecimal sumAvailableQuantityByProductTypeAndUnit(
+            @Param("factoryId") String factoryId,
+            @Param("productTypeId") String productTypeId,
+            @Param("unit") String unit);
+
+    /**
      * 按 warehouse 过滤的可用成品库存汇总。D1 双仓流转 (PR #309 A1=A, 2026-05-10 spec)。
      * 用途：销售订单库存检查 (WH-LOG)、调拨单库存检查 (source warehouse)。
      */
