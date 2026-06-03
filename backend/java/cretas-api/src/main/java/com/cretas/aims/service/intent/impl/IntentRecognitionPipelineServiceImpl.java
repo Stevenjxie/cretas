@@ -43,6 +43,7 @@ import com.cretas.aims.service.impl.IntentConfigRollbackService;
 import com.cretas.aims.service.intent.IntentConfigManagementService;
 import com.cretas.aims.service.intent.IntentRecognitionPipelineService;
 import com.cretas.aims.ai.tool.WriteGuardService;
+import com.cretas.aims.ai.tool.NegationTwinPolicy;
 import com.cretas.aims.dto.ClassifierResult;
 import com.cretas.aims.dto.SemanticMatchResult;
 import com.cretas.aims.dto.intent.RouteDecision;
@@ -121,6 +122,7 @@ public class IntentRecognitionPipelineServiceImpl implements IntentRecognitionPi
     private final SemanticRouterService semanticRouterService;
     private final LongTextHandler longTextHandler;
     private final IntentConfigManagementService configService;
+    private final NegationTwinPolicy negationTwinPolicy;
 
     @Autowired
     public IntentRecognitionPipelineServiceImpl(
@@ -148,7 +150,8 @@ public class IntentRecognitionPipelineServiceImpl implements IntentRecognitionPi
             IntentKnowledgeBase knowledgeBase,
             SemanticRouterService semanticRouterService,
             LongTextHandler longTextHandler,
-            IntentConfigManagementService configService) {
+            IntentConfigManagementService configService,
+            NegationTwinPolicy negationTwinPolicy) {
         this.intentRepository = intentRepository;
         this.recordRepository = recordRepository;
         this.objectMapper = objectMapper;
@@ -174,6 +177,7 @@ public class IntentRecognitionPipelineServiceImpl implements IntentRecognitionPi
         this.semanticRouterService = semanticRouterService;
         this.longTextHandler = longTextHandler;
         this.configService = configService;
+        this.negationTwinPolicy = negationTwinPolicy;
     }
 
     // ==================== Optional setter-injected dependencies ====================
@@ -453,9 +457,25 @@ public class IntentRecognitionPipelineServiceImpl implements IntentRecognitionPi
             return IntentMatchResult.empty(userInput);
         }
 
+        // ========== W1b T3 (finding 7): EARLY VETO GATE ==========
+        // 必须在所有早退写短路(v33.1 早期短语 / v22.0 verb-noun / doRecognize 内 verb-noun)之前。
+        // 否则 "别开始生产了"/"不用查库存了" 会被这些短路直接当成写返回,绕过下游否定处理。
+        // veto kind 由 IRP 自己算(detectNegationVeto 需要 knowledgeBase 判动词,而 enhancedPreprocess
+        // 走 kb-less 路径只产 NONE/EXCLUDE_CONTENT —— 见 spec finding 7 / T2 实现注释)。
+        // 仅需 userInput + knowledgeBase,无需 enhancedResult,故可在预处理之前算。
+        QueryPreprocessorService.NegationKind vetoKind = detectVetoKind(userInput);
+        boolean negationVetoWrite = (vetoKind == QueryPreprocessorService.NegationKind.VETO_WRITE);
+        IntentMatchResult earlyVeto = earlyVetoGateResultOrNull(vetoKind, userInput);
+        if (earlyVeto != null) {
+            // VETO_READ: 用户明说不要查/看 → 立即澄清,绝不进短语/verb-noun 短路(零写风险)。
+            saveIntentMatchRecord(earlyVeto, factoryId, userId, sessionId, false);
+            return attachTiming(earlyVeto, startTimeMs, preprocessEndMs);
+        }
+
         // v33.1: Pre-preprocess phrase matching — match on ORIGINAL input before preprocessing
         // Prevents preprocessor from stripping keywords like "收款", "开票", "研发需求"
-        {
+        // W1b T3: VETO_WRITE("别开始生产") 守卫此短路,使其跳过 → 落到下游 policy 转读孪生。
+        if (!negationVetoWrite) {
             String rawNormalized = userInput.toLowerCase().trim();
             String rawPhraseInput = filterFillerWordsForPhrase(rawNormalized);
             Optional<String> earlyPhraseMatch = knowledgeBase.matchPhrase(rawPhraseInput, businessDomain);
@@ -544,6 +564,8 @@ public class IntentRecognitionPipelineServiceImpl implements IntentRecognitionPi
         boolean skipPhraseShortcut = false;
         if (containsMultiIntentTrigger(userInput)) {
             skipPhraseShortcut = true;
+            // W1b: segment-scoped path — sentence-level negationVetoWrite intentionally NOT applied here;
+            // the trailing segment is a distinct intent (e.g. "别开始生产，顺便创建采购单"). Multi-intent veto is T4's concern.
             // Wave-7d: trailing segment phrase match
             String trailingSegment = extractTrailingAfterMultiIntentTrigger(userInput);
             if (trailingSegment != null && trailingSegment.length() >= 2) {
@@ -603,7 +625,8 @@ public class IntentRecognitionPipelineServiceImpl implements IntentRecognitionPi
                     isNegatedVerb = prefix.endsWith("未") || prefix.endsWith("没") || prefix.endsWith("没有") || prefix.endsWith("非");
                 }
             }
-            if (!isNegatedVerb && (recAction == ActionType.CREATE || recAction == ActionType.UPDATE || recAction == ActionType.DELETE)) {
+            // W1b T3: VETO_WRITE("别开始生产") 守卫此 verb-noun 写短路 → 跳过 → 落到下游 policy 转读孪生。
+            if (!negationVetoWrite && !isNegatedVerb && (recAction == ActionType.CREATE || recAction == ActionType.UPDATE || recAction == ActionType.DELETE)) {
                 List<AIIntentConfig> allIntents = configService.getAllIntents(factoryId);
                 Optional<AIIntentConfig> intentOpt = allIntents.stream().filter(i -> i.getIntentCode().equals(recIntent)).findFirst();
                 if (intentOpt.isPresent()) {
@@ -636,24 +659,70 @@ public class IntentRecognitionPipelineServiceImpl implements IntentRecognitionPi
         // Use processed input for core recognition
         IntentMatchResult result = doRecognizeIntentWithConfidence(
                 processedInput, userInput, factoryId, topN, userId, userRole,
-                enhancedResult, verbNounResult, skipPhraseShortcut, businessDomain);
+                enhancedResult, verbNounResult, skipPhraseShortcut, businessDomain, negationVetoWrite);
 
         if (preprocessedQuery != null && result != null) {
             result.setPreprocessedQuery(preprocessedQuery);
         }
 
-        // v7.5: Negation semantic intent conversion
-        if (result != null && result.getBestMatch() != null && enhancedResult != null) {
-            QueryPreprocessorService.NegationInfo negationInfo = enhancedResult.getNegationInfo();
-            if (negationInfo != null && negationInfo.hasNegation()) {
-                String originalIntentCode = result.getBestMatch().getIntentCode();
-                String convertedIntentCode = convertNegationIntent(originalIntentCode, true);
-                if (!convertedIntentCode.equals(originalIntentCode)) {
-                    AIIntentConfig convertedConfig = configService.getIntentConfigByCode(factoryId, convertedIntentCode);
-                    if (convertedConfig != null) {
-                        result = result.toBuilder().bestMatch(convertedConfig).build();
+        // ========== W1b T4: single-intent negation veto + twin rerank (replaces v7.5) ==========
+        // 复用早期门已算的 vetoKind(同方法局部,line ~462)。到此处 VETO_READ 已被早期门截返,
+        // 故 vetoKind ∈ {NONE, EXCLUDE_CONTENT, VETO_WRITE}。VETO_WRITE → 写候选转读孪生;
+        // NONE/EXCLUDE_CONTENT 且读措辞(QUERY)→ 组件2 读优先重排。fail-open:policy 异常不破识别。
+        if (result != null && result.getTopCandidates() != null && !result.getTopCandidates().isEmpty()) {
+            try {
+                QueryPreprocessorService.NegationInfo negForPolicy =
+                        QueryPreprocessorService.NegationInfo.builder().kind(vetoKind).build();
+                IntentKnowledgeBase.ActionType at = knowledgeBase.detectActionType(userInput);
+                java.util.function.Function<String, AIIntentConfig> resolver =
+                        code -> configService.getIntentConfigByCode(factoryId, code);
+                List<CandidateIntent> before = result.getTopCandidates();
+                List<CandidateIntent> after =
+                        negationTwinPolicy.applyNegationVetoAndTwinRerank(before, negForPolicy, at, resolver);
+                if (negationTwinPolicy.isVetoToClarification(before, after, negForPolicy)) {
+                    // VETO_WRITE 无读孪生剔空 → 澄清(VETO_READ 早期门已截,此处兜 VETO_WRITE 空集)。
+                    IntentMatchResult clar = buildNegationClarificationResult(userInput);
+                    saveIntentMatchRecord(clar, factoryId, userId, sessionId, false);
+                    return attachTiming(clar, startTimeMs, preprocessEndMs);
+                }
+                // Rebuild whenever the candidate LIST changed by intentCode (any position), not only when
+                // the TOP reference changed. A lower candidate retargeted/dropped under VETO_WRITE while the
+                // top read is unchanged would otherwise leave a stale vetoed write in topCandidates, surfaced
+                // as a user suggestion.
+                boolean listChanged = (after == null) || (after.size() != before.size());
+                if (!listChanged && after != null) {
+                    for (int i = 0; i < after.size(); i++) {
+                        if (!java.util.Objects.equals(after.get(i).getIntentCode(),
+                                before.get(i).getIntentCode())) {
+                            listChanged = true;
+                            break;
+                        }
                     }
                 }
+                if (listChanged && after != null && !after.isEmpty()) {
+                    // Resolve the first config-backed candidate (not just index 0): some twins are not
+                    // config-backed for this factory, so the read twin may sit below an unresolvable head.
+                    AIIntentConfig newBest = null;
+                    for (CandidateIntent cand : after) {
+                        AIIntentConfig cfg = configService.getIntentConfigByCode(factoryId, cand.getIntentCode());
+                        if (cfg != null) { newBest = cfg; break; }
+                    }
+                    if (newBest != null) {
+                        result = result.toBuilder().bestMatch(newBest).topCandidates(after).build();
+                    } else if (vetoKind == QueryPreprocessorService.NegationKind.VETO_WRITE) {
+                        // W1b safety: VETO_WRITE produced a write-free candidate set but NONE resolve to a
+                        // config for this factory → must NOT keep the original (vetoed write) result in
+                        // bestMatch/topCandidates. Clarify instead (mirrors the isVetoToClarification path above).
+                        IntentMatchResult clar = buildNegationClarificationResult(userInput);
+                        saveIntentMatchRecord(clar, factoryId, userId, sessionId, false);
+                        return attachTiming(clar, startTimeMs, preprocessEndMs);
+                    }
+                    // else (NONE/EXCLUDE_CONTENT rerank with unresolvable twin) → keep original;
+                    // component-2 read-rerank is cosmetic, no write-safety risk.
+                }
+            } catch (Exception e) {
+                log.warn("[W1b] single-intent negation/twin policy failed, fail-open: input='{}': {}",
+                        userInput, e.toString());
             }
         }
 
@@ -695,7 +764,9 @@ public class IntentRecognitionPipelineServiceImpl implements IntentRecognitionPi
                     .overallConfidence(0.0).reasoning("无法识别意图").build();
         }
         try {
-            return multiLabelIntentClassifier.classifyMultiLabel(userInput, factoryId, threshold);
+            MultiIntentResult multi = multiLabelIntentClassifier.classifyMultiLabel(userInput, factoryId, threshold);
+            // W1b T4: multi-intent negation veto + twin rerank. classifyMultiLabel 本身不做否定处理(finding 3)。
+            return applyMultiIntentNegationPolicy(multi, userInput, factoryId);
         } catch (Exception e) {
             log.error("多意图识别失败: {}", e.getMessage(), e);
             return MultiIntentResult.builder()
@@ -703,6 +774,131 @@ public class IntentRecognitionPipelineServiceImpl implements IntentRecognitionPi
                     .executionStrategy(MultiIntentResult.ExecutionStrategy.PARALLEL)
                     .overallConfidence(0.0).reasoning("识别过程异常: " + e.getMessage()).build();
         }
+    }
+
+    /**
+     * W1b T4: 多意图否定否决 + 读写孪生重排。
+     *
+     * <p>① {@code VETO_READ}("不用查库存了")→ 抑制为单意图澄清结果({@code isMultiIntent=false} +
+     * 空 intents + 澄清文案进 reasoning;{@code MultiIntentResult} 无 clarification 字段,用 reasoning 承载)。
+     * ② 其它({@code NONE/EXCLUDE_CONTENT/VETO_WRITE})→ 把 {@code SingleIntentMatch} 映射成
+     * {@code CandidateIntent}(code+confidence),过 {@code NegationTwinPolicy},再映回过滤后的
+     * {@code SingleIntentMatch} 列表(存活原对象 by-code 保留;VETO_WRITE 转出的读孪生 code 合成最小对象)。</p>
+     *
+     * <p><b>保守不变量</b>:{@code kind==NONE} 时 policy 的组件2只 <i>重排不删</i>(twinRerank 返回全部元素),
+     * 故真复合查询(如 {@code 查库存和今天的销售})所有意图都存活,绝不被误剔。fail-open:任何异常返原 {@code multi}。</p>
+     */
+    // package-private for unit testing (mirrors decideFromScored / maybeAbstain testability pattern).
+    MultiIntentResult applyMultiIntentNegationPolicy(
+            MultiIntentResult multi, String userInput, String factoryId) {
+        if (multi == null) return multi;
+        try {
+            QueryPreprocessorService.NegationKind vetoKind = detectVetoKind(userInput);
+
+            // ① VETO_READ → 抑制为澄清(用户明说不要查/看)。
+            if (vetoKind == QueryPreprocessorService.NegationKind.VETO_READ) {
+                return MultiIntentResult.builder()
+                        .isMultiIntent(false)
+                        .intents(Collections.emptyList())
+                        .executionStrategy(MultiIntentResult.ExecutionStrategy.PARALLEL)
+                        .overallConfidence(0.0)
+                        .reasoning("您是要取消这次操作吗?需要我帮您查询或处理什么?")
+                        .build();
+            }
+
+            List<MultiIntentResult.SingleIntentMatch> intents = multi.getIntents();
+            if (intents == null || intents.isEmpty()) {
+                return multi;  // 无候选 → 无需处理
+            }
+
+            // ② NONE/EXCLUDE_CONTENT/VETO_WRITE → 候选过策略。
+            QueryPreprocessorService.NegationInfo negForPolicy =
+                    QueryPreprocessorService.NegationInfo.builder().kind(vetoKind).build();
+            IntentKnowledgeBase.ActionType at = knowledgeBase.detectActionType(userInput);
+            java.util.function.Function<String, AIIntentConfig> resolver =
+                    code -> configService.getIntentConfigByCode(factoryId, code);
+
+            List<CandidateIntent> candidates = new ArrayList<>(intents.size());
+            for (MultiIntentResult.SingleIntentMatch m : intents) {
+                candidates.add(CandidateIntent.builder()
+                        .intentCode(m.getIntentCode())
+                        .confidence(m.getConfidence())
+                        .build());
+            }
+            // W1b backlog: detectNegationVeto is sentence-level, so a compound like
+            // "别开始生产，顺便创建采购单" applies VETO_WRITE to ALL candidates and may drop a legit
+            // trailing write (创建采购单). Accepted for W1b — it errs SAFE (suppresses a write, never
+            // executes an unwanted one; W0 guards writes at exec). Correct fix = segment-scoped negation
+            // in QueryPreprocessor (future). See spec §6.5 / T4 review.
+            List<CandidateIntent> after =
+                    negationTwinPolicy.applyNegationVetoAndTwinRerank(candidates, negForPolicy, at, resolver);
+
+            // VETO_WRITE 把全部写候选剔空 → 单意图澄清(对齐单意图出口的 isVetoToClarification 行为)。
+            if (negationTwinPolicy.isVetoToClarification(candidates, after, negForPolicy)) {
+                return MultiIntentResult.builder()
+                        .isMultiIntent(false)
+                        .intents(Collections.emptyList())
+                        .executionStrategy(MultiIntentResult.ExecutionStrategy.PARALLEL)
+                        .overallConfidence(0.0)
+                        .reasoning("您是要取消这次操作吗?需要我帮您查询或处理什么?")
+                        .build();
+            }
+            if (after == null) {
+                return multi;  // 防御:fail-open
+            }
+
+            // 映回 SingleIntentMatch:存活原对象 by-code 保留(连带 name/params/reasoning);
+            // VETO_WRITE 转出的读孪生 code 在原列表不存在 → 合成最小对象(承载 confidence)。
+            Map<String, MultiIntentResult.SingleIntentMatch> byCode = new LinkedHashMap<>();
+            for (MultiIntentResult.SingleIntentMatch m : intents) {
+                byCode.putIfAbsent(m.getIntentCode(), m);
+            }
+            List<MultiIntentResult.SingleIntentMatch> filtered = new ArrayList<>(after.size());
+            int order = 1;
+            for (CandidateIntent c : after) {
+                MultiIntentResult.SingleIntentMatch orig = byCode.get(c.getIntentCode());
+                if (orig != null) {
+                    filtered.add(orig);
+                } else {
+                    // 读孪生(VETO_WRITE 转出)→ 合成
+                    filtered.add(MultiIntentResult.SingleIntentMatch.builder()
+                            .intentCode(c.getIntentCode())
+                            .confidence(c.getConfidence() == null ? 0.0 : c.getConfidence())
+                            .extractedParams(new HashMap<>())
+                            .reasoning("否定写动词 → 读孪生")
+                            .executionOrder(order)
+                            .build());
+                }
+                order++;
+            }
+
+            // 未发生任何变化(引用相等且大小相同)→ 返原 multi(避免无谓重建)。
+            if (filtered.size() == intents.size() && sameRefsInOrder(filtered, intents)) {
+                return multi;
+            }
+            // MultiIntentResult 无 toBuilder → 全字段重建,仅改 isMultiIntent + intents。
+            return MultiIntentResult.builder()
+                    .isMultiIntent(filtered.size() > 1)
+                    .intents(filtered)
+                    .executionStrategy(multi.getExecutionStrategy())
+                    .overallConfidence(multi.getOverallConfidence())
+                    .reasoning(multi.getReasoning())
+                    .build();
+        } catch (Exception e) {
+            log.warn("[W1b] multi-intent negation/twin policy failed, fail-open: input='{}': {}",
+                    userInput, e.toString());
+            return multi;
+        }
+    }
+
+    /** 引用-逐位相等(避免对象 equals 误判;policy 重排会换引用顺序故可检出)。 */
+    private static boolean sameRefsInOrder(List<MultiIntentResult.SingleIntentMatch> a,
+                                           List<MultiIntentResult.SingleIntentMatch> b) {
+        if (a.size() != b.size()) return false;
+        for (int i = 0; i < a.size(); i++) {
+            if (a.get(i) != b.get(i)) return false;
+        }
+        return true;
     }
 
     // ======================================================================================
@@ -734,7 +930,8 @@ public class IntentRecognitionPipelineServiceImpl implements IntentRecognitionPi
                                                               QueryPreprocessorService.EnhancedPreprocessResult enhancedResult,
                                                               IntentKnowledgeBase.VerbNounDisambiguationResult verbNounResult,
                                                               boolean skipPhraseShortcut,
-                                                              String businessDomain) {
+                                                              String businessDomain,
+                                                              boolean negationVetoWrite) {
         String userInput = processedInput; // 使用处理后的输入进行匹配
 
         // ========== A-quick-6: Short-query keyword shortcut (J3, 2026-04-24) ==========
@@ -1007,7 +1204,8 @@ public class IntentRecognitionPipelineServiceImpl implements IntentRecognitionPi
         // ========== Layer 0.5: 动词+名词消歧快速路径 ==========
         // 如果动词+名词消歧成功且置信度足够高，直接返回该意图
         // v12.1修复: 当检测到多意图触发词时，跳过此快速路径，确保多意图检测能执行
-        if (!skipPhraseShortcut && verbNounResult != null && verbNounResult.isDisambiguated()
+        // W1b T3: VETO_WRITE("别开始生产") 守卫此 verb-noun 短路 → 跳过 → 落到下游 policy 转读孪生。
+        if (!negationVetoWrite && !skipPhraseShortcut && verbNounResult != null && verbNounResult.isDisambiguated()
                 && verbNounResult.getConfidence() >= 0.80) {
             String recommendedIntent = verbNounResult.getRecommendedIntent();
             List<AIIntentConfig> allIntents = configService.getAllIntents(factoryId);
@@ -5387,6 +5585,69 @@ public class IntentRecognitionPipelineServiceImpl implements IntentRecognitionPi
         return result;
     }
 
+    // ==================== W1b T3: early VETO gate (finding 7) ====================
+
+    /** W1b: compute the negation veto kind for the early gate. Defensive: any detection failure
+     *  fails open to NONE (writes remain backstopped by the W0 write-guard) but is logged. */
+    private QueryPreprocessorService.NegationKind detectVetoKind(String userInput) {
+        try {
+            return queryPreprocessorService.detectNegationVeto(userInput, knowledgeBase);
+        } catch (Exception e) {
+            log.warn("[W1b] detectNegationVeto failed, fail-open to NONE for input='{}': {}",
+                    userInput, e.toString());
+            return QueryPreprocessorService.NegationKind.NONE;
+        }
+    }
+
+    /**
+     * W1b finding 7: 早期 VETO 门的纯决策函数。在所有早退写短路之前由
+     * {@code recognizeIntentWithConfidence} 调用。
+     *
+     * <p>仅 {@code VETO_READ}("不用查库存了"/"别给我看订单" —— 否定副词 + 读动词)
+     * 在此立即返回澄清结果(用户已明说不要查/看,不该再弹"要清空库存吗?")。
+     * {@code VETO_WRITE} 不在此返回 —— 它由调用方设置的 {@code negationVetoWrite} 标志守卫
+     * 三个早退写短路(使其跳过),落到下游识别 + T4 policy 做"写→读孪生"。
+     * 其它(NONE/EXCLUDE_CONTENT/null)→ 返回 null,门不触发。</p>
+     *
+     * <p>纯静态、无 Spring 依赖,便于单测(见 IntentPipelineEarlyVetoGateTest)。</p>
+     *
+     * @param kind      否定细分类型(由 detectNegationVeto 计算)
+     * @param userInput 原始用户输入(用于澄清结果回填)
+     * @return VETO_READ → 澄清结果(MatchMethod.REJECTED);否则 null(继续识别)
+     */
+    static IntentMatchResult earlyVetoGateResultOrNull(
+            QueryPreprocessorService.NegationKind kind, String userInput) {
+        if (kind == QueryPreprocessorService.NegationKind.VETO_READ) {
+            return buildNegationClarificationResult(userInput);
+        }
+        return null;
+    }
+
+    /**
+     * W1b finding 7: 构建 VETO_READ 否决澄清结果。
+     *
+     * <p>镜像既有 clarification 结果形态(IRP:587 {@code MatchMethod.REJECTED} +
+     * {@code clarificationQuestion}),但 {@code bestMatch=null}(绝不产出写意图)、
+     * {@code requiresConfirmation=false}(这是否决澄清,不是写确认)。
+     * {@code confidence=0.0}(非 null —— saveIntentMatchRecord 会调 {@code BigDecimal.valueOf})。</p>
+     *
+     * <p>防呆(fool-proof-design Rule 5):dead-end 改追问,不让用户卡住。</p>
+     */
+    static IntentMatchResult buildNegationClarificationResult(String userInput) {
+        return IntentMatchResult.builder()
+                .bestMatch(null)
+                .topCandidates(Collections.emptyList())
+                .confidence(0.0)
+                .matchMethod(MatchMethod.REJECTED)
+                .matchedKeywords(Collections.emptyList())
+                .isStrongSignal(false)
+                .requiresConfirmation(false)
+                .userInput(userInput)
+                .actionType(ActionType.UNKNOWN)
+                .clarificationQuestion("您是要取消这次操作吗?需要我帮您查询或处理什么?")
+                .build();
+    }
+
     // -- Phrase matching --
     private String filterFillerWordsForPhrase(String input) {
         if (input == null || input.isEmpty()) return input;
@@ -5430,33 +5691,12 @@ public class IntentRecognitionPipelineServiceImpl implements IntentRecognitionPi
     }
 
     // -- Negation conversion --
+    // W1b T4: 委托 NegationTwinPolicy 的单一事实源孪生表(消重,原本地 Map 已删)。
+    // 仍被 applyNegationConversion(多意图触发词 trailing-segment 短路)调用,故保留方法。
     private String convertNegationIntent(String intentCode, boolean hasNegation) {
         if (!hasNegation || intentCode == null) return intentCode;
-        Map<String, String> conversions = Map.ofEntries(
-                Map.entry("PROCESSING_BATCH_COMPLETE", "PROCESSING_BATCH_LIST"),
-                Map.entry("PROCESSING_BATCH_START", "PROCESSING_BATCH_LIST"),
-                Map.entry("PROCESSING_BATCH_PAUSE", "PROCESSING_BATCH_LIST"),
-                Map.entry("PROCESSING_BATCH_CREATE", "PROCESSING_BATCH_LIST"),
-                Map.entry("ALERT_ACKNOWLEDGE", "ALERT_LIST"),
-                Map.entry("ALERT_CREATE", "ALERT_LIST"),
-                Map.entry("EQUIPMENT_STOP", "EQUIPMENT_STATUS"),
-                Map.entry("EQUIPMENT_START", "EQUIPMENT_STATUS"),
-                Map.entry("EQUIPMENT_CONTROL", "EQUIPMENT_STATUS"),
-                Map.entry("EQUIPMENT_STATUS_UPDATE", "EQUIPMENT_STATUS"),
-                Map.entry("SHIPMENT_STATUS_UPDATE", "SHIPMENT_QUERY"),
-                Map.entry("SHIPMENT_CREATE", "SHIPMENT_QUERY"),
-                Map.entry("SHIPMENT_UPDATE", "SHIPMENT_QUERY"),
-                Map.entry("MATERIAL_BATCH_CREATE", "MATERIAL_BATCH_QUERY"),
-                Map.entry("MATERIAL_BATCH_CONSUME", "MATERIAL_BATCH_QUERY"),
-                Map.entry("MATERIAL_EXPIRED_QUERY", "MATERIAL_BATCH_QUERY"),
-                Map.entry("QUALITY_CHECK_EXECUTE", "QUALITY_CHECK_QUERY"),
-                Map.entry("QUALITY_DISPOSITION_EXECUTE", "QUALITY_CHECK_QUERY"),
-                Map.entry("CLOCK_IN", "ATTENDANCE_QUERY"),
-                Map.entry("CLOCK_OUT", "ATTENDANCE_QUERY"),
-                Map.entry("ATTENDANCE_RECORD", "ATTENDANCE_QUERY"),
-                Map.entry("SUPPLIER_EVALUATE", "SUPPLIER_QUERY"),
-                Map.entry("SCALE_ADD_DEVICE", "MATERIAL_BATCH_QUERY"));
-        return conversions.getOrDefault(intentCode, intentCode);
+        String twin = negationTwinPolicy.readTwinOf(intentCode);
+        return twin != null ? twin : intentCode;
     }
 
     private IntentMatchResult applyNegationConversion(IntentMatchResult result, Object enhancedResultObj, String factoryId) {

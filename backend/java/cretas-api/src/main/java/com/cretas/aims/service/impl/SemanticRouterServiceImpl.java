@@ -8,6 +8,7 @@ import com.cretas.aims.service.EmbeddingClient;
 import com.cretas.aims.service.IntentEmbeddingCacheService;
 import com.cretas.aims.service.RequestScopedEmbeddingCache;
 import com.cretas.aims.service.SemanticRouterService;
+import com.cretas.aims.ai.tool.NegationTwinPolicy;
 import com.cretas.aims.util.VectorUtils;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -48,6 +49,8 @@ public class SemanticRouterServiceImpl implements SemanticRouterService {
     private final AIIntentConfigRepository intentConfigRepository;
     private final EmbeddingClient embeddingClient;
     private final RequestScopedEmbeddingCache requestScopedCache;
+    /** W1b: 单一事实源孪生表(消重,本类原 READ_WRITE_TWIN_PAIRS 已删,委托此服务)。 */
+    private final NegationTwinPolicy negationTwinPolicy;
 
     /**
      * 意图向量缓存: factoryId -> (intentCode -> CachedIntent)
@@ -108,22 +111,14 @@ public class SemanticRouterServiceImpl implements SemanticRouterService {
             "RESTAURANT_DISH_SALES_RANKING" // 吸引"经营状况总览"
     );
 
-    /** W0: read/write confusion twins (canonical set from convertNegationIntent), "WRITE|READ". */
+    /** W0: read/write confusion twins margin. The pair table itself moved to NegationTwinPolicy (单一事实源, W1b). */
     private static final double READ_WRITE_TWIN_MARGIN = 0.08;
-    private static final Set<String> READ_WRITE_TWIN_PAIRS = Set.of(
-            "PROCESSING_BATCH_COMPLETE|PROCESSING_BATCH_LIST", "PROCESSING_BATCH_START|PROCESSING_BATCH_LIST",
-            "PROCESSING_BATCH_PAUSE|PROCESSING_BATCH_LIST", "PROCESSING_BATCH_CREATE|PROCESSING_BATCH_LIST",
-            "ALERT_ACKNOWLEDGE|ALERT_LIST", "ALERT_CREATE|ALERT_LIST",
-            "EQUIPMENT_STOP|EQUIPMENT_STATUS", "EQUIPMENT_START|EQUIPMENT_STATUS",
-            "EQUIPMENT_CONTROL|EQUIPMENT_STATUS", "EQUIPMENT_STATUS_UPDATE|EQUIPMENT_STATUS",
-            "SHIPMENT_STATUS_UPDATE|SHIPMENT_QUERY", "SHIPMENT_CREATE|SHIPMENT_QUERY", "SHIPMENT_UPDATE|SHIPMENT_QUERY",
-            "MATERIAL_BATCH_CREATE|MATERIAL_BATCH_QUERY", "MATERIAL_BATCH_CONSUME|MATERIAL_BATCH_QUERY",
-            "QUALITY_CHECK_EXECUTE|QUALITY_CHECK_QUERY", "QUALITY_DISPOSITION_EXECUTE|QUALITY_CHECK_QUERY",
-            "CLOCK_IN|ATTENDANCE_QUERY", "CLOCK_OUT|ATTENDANCE_QUERY", "ATTENDANCE_RECORD|ATTENDANCE_QUERY",
-            "SUPPLIER_EVALUATE|SUPPLIER_QUERY", "SCALE_ADD_DEVICE|MATERIAL_BATCH_QUERY");
 
+    /** W1b: 委托 NegationTwinPolicy 的单一事实源孪生表(原本地 READ_WRITE_TWIN_PAIRS 已删)。
+     *  对称匹配:a→b 或 b→a 任一是 write→read 孪生即为孪生对。 */
     private boolean isTwinPair(String a, String b) {
-        return READ_WRITE_TWIN_PAIRS.contains(a + "|" + b) || READ_WRITE_TWIN_PAIRS.contains(b + "|" + a);
+        if (a == null || b == null) return false;
+        return b.equals(negationTwinPolicy.readTwinOf(a)) || a.equals(negationTwinPolicy.readTwinOf(b));
     }
 
     // Wave-10: 完全排除意图 — 从语义路由器缓存中彻底移除，不参与任何语义匹配

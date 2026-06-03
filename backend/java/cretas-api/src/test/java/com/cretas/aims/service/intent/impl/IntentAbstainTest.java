@@ -44,13 +44,15 @@ class IntentAbstainTest {
 
     @BeforeEach
     void setUp() {
-        // maybeAbstain reads writeGuardService; all 25 constructor deps can be null.
+        // maybeAbstain reads writeGuardService; all 26 constructor deps can be null
+        // (incl. the W1b negationTwinPolicy, unused by maybeAbstain).
         service = new IntentRecognitionPipelineServiceImpl(
                 null, null, null, null, null,
                 null, null, null, null, null,
                 null, null, null, null, null,
                 null, null, null, null, null,
-                null, null, null, null, null);
+                null, null, null, null, null,
+                null);
         // WriteGuardService is stateless — instantiate the real one so hasWriteSuffix works.
         ReflectionTestUtils.setField(service, "writeGuardService", new WriteGuardService());
     }

@@ -7,6 +7,8 @@ import com.cretas.aims.repository.config.AIIntentConfigRepository;
 import com.cretas.aims.service.EmbeddingClient;
 import com.cretas.aims.service.IntentEmbeddingCacheService;
 import com.cretas.aims.service.RequestScopedEmbeddingCache;
+import com.cretas.aims.ai.tool.NegationTwinPolicy;
+import com.cretas.aims.ai.tool.WriteGuardService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -50,8 +52,11 @@ class SemanticRouterTwinMarginTest {
 
     @BeforeEach
     void setUp() {
+        // W1b: SemanticRouter now delegates twin-pair lookups to NegationTwinPolicy (single source of truth).
+        // Construct a real policy (it is stateless; only needs a real WriteGuardService).
         router = new SemanticRouterServiceImpl(
-                embeddingCacheService, intentConfigRepository, embeddingClient, requestScopedCache);
+                embeddingCacheService, intentConfigRepository, embeddingClient, requestScopedCache,
+                new NegationTwinPolicy(new WriteGuardService()));
         // Set thresholds matching application defaults so DIRECT_EXECUTE branch is reachable
         ReflectionTestUtils.setField(router, "directExecuteThreshold", 0.88);
         ReflectionTestUtils.setField(router, "rerankingThreshold", 0.70);
