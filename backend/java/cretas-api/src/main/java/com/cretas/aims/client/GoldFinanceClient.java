@@ -1037,4 +1037,142 @@ public class GoldFinanceClient {
             return parsed;
         }
     }
+
+    // =========================================================================
+    // G2 餐饮目标拆分 + 达成率预警 (2026-06-03)
+    // GET /api/smartbi/restaurant-targets/achievement + /alerts
+    // Same OkHttp + X-Internal-Secret + X-Factory-Id + X-User-Role pattern.
+    // =========================================================================
+
+    /**
+     * Fetch daily achievement summary from Python
+     * {@code /api/smartbi/restaurant-targets/achievement}.
+     *
+     * <p>Pattern mirrors {@link #fetchFinanceSummary}: OkHttp GET + internal
+     * secret + role forward. Response is snake_case; the achievement
+     * {@code target}/{@code actual} fields are nulled Python-side for non
+     * price-view roles when {@code kpiKind=revenue}, so X-User-Role is forwarded.
+     *
+     * @param factoryId tenant id (required)
+     * @param startDate inclusive start (required)
+     * @param endDate   inclusive end (required, must be &gt;= startDate)
+     * @param kpiKind   "revenue" | "bill_count"
+     * @param level     "day" | "week" | "month" | "year"
+     * @return parsed JSON; key shape: {factory_id, kpi_kind, level,
+     *         points:[{period_key, target, actual, achievement_rate, data_missing}],
+     *         period_without_target}
+     * @throws IOException on transport / non-2xx / parse failure
+     */
+    public Map<String, Object> fetchAchievement(
+            String factoryId,
+            LocalDate startDate,
+            LocalDate endDate,
+            String kpiKind,
+            String level
+    ) throws IOException {
+        if (factoryId == null || factoryId.isEmpty()) {
+            throw new IllegalArgumentException("factoryId required");
+        }
+        if (startDate == null || endDate == null) {
+            throw new IllegalArgumentException("startDate and endDate required");
+        }
+        if (startDate.isAfter(endDate)) {
+            throw new IllegalArgumentException("startDate > endDate");
+        }
+
+        HttpUrl url = HttpUrl.parse(config.getUrl() + "/api/smartbi/restaurant-targets/achievement")
+                .newBuilder()
+                .addQueryParameter("start_date", startDate.toString())
+                .addQueryParameter("end_date", endDate.toString())
+                .addQueryParameter("kpi_kind", kpiKind != null ? kpiKind : "revenue")
+                .addQueryParameter("level", level != null ? level : "day")
+                .build();
+
+        Request.Builder reqBuilder = new Request.Builder().url(url).get();
+        if (!internalSecret.isEmpty()) {
+            reqBuilder.addHeader("X-Internal-Secret", internalSecret);
+            reqBuilder.addHeader("X-Factory-Id", factoryId);
+            String userRole = currentUserRole();
+            if (userRole != null && !userRole.isEmpty()) {
+                reqBuilder.addHeader("X-User-Role", userRole);
+            }
+        }
+        Request req = reqBuilder.build();
+
+        long t0 = System.currentTimeMillis();
+        try (Response resp = http.newCall(req).execute()) {
+            long elapsed = System.currentTimeMillis() - t0;
+            if (!resp.isSuccessful()) {
+                String body = resp.body() != null ? resp.body().string() : "";
+                throw new IOException(
+                        "Gold achievement HTTP " + resp.code() + " in " + elapsed
+                                + "ms: " + body);
+            }
+            String body = resp.body() != null ? resp.body().string() : "{}";
+            @SuppressWarnings("unchecked")
+            Map<String, Object> parsed = objectMapper.readValue(body, Map.class);
+            log.debug("Gold achievement factory={} range={}..{} level={} in {}ms",
+                    factoryId, startDate, endDate, level, elapsed);
+            return parsed;
+        }
+    }
+
+    /**
+     * Fetch the N-day alert preview from
+     * {@code /api/smartbi/restaurant-targets/alerts}.
+     *
+     * @param factoryId    tenant id (required)
+     * @param lookbackDays 1..30 inclusive
+     * @param kpiKind      "revenue" | "bill_count"
+     * @return parsed JSON; key shape: {config_exists,
+     *         timeline:[{date, status, achievement_rate, target, actual}],
+     *         summary:{OK, WARN, CRITICAL, NO_TARGET, DATA_MISSING}}
+     * @throws IOException on transport / non-2xx / parse failure
+     */
+    public Map<String, Object> fetchAlerts(
+            String factoryId,
+            int lookbackDays,
+            String kpiKind
+    ) throws IOException {
+        if (factoryId == null || factoryId.isEmpty()) {
+            throw new IllegalArgumentException("factoryId required");
+        }
+        if (lookbackDays < 1 || lookbackDays > 30) {
+            throw new IllegalArgumentException("lookbackDays must be 1..30");
+        }
+
+        HttpUrl url = HttpUrl.parse(config.getUrl() + "/api/smartbi/restaurant-targets/alerts")
+                .newBuilder()
+                .addQueryParameter("lookback_days", String.valueOf(lookbackDays))
+                .addQueryParameter("kpi_kind", kpiKind != null ? kpiKind : "revenue")
+                .build();
+
+        Request.Builder reqBuilder = new Request.Builder().url(url).get();
+        if (!internalSecret.isEmpty()) {
+            reqBuilder.addHeader("X-Internal-Secret", internalSecret);
+            reqBuilder.addHeader("X-Factory-Id", factoryId);
+            String userRole = currentUserRole();
+            if (userRole != null && !userRole.isEmpty()) {
+                reqBuilder.addHeader("X-User-Role", userRole);
+            }
+        }
+        Request req = reqBuilder.build();
+
+        long t0 = System.currentTimeMillis();
+        try (Response resp = http.newCall(req).execute()) {
+            long elapsed = System.currentTimeMillis() - t0;
+            if (!resp.isSuccessful()) {
+                String body = resp.body() != null ? resp.body().string() : "";
+                throw new IOException(
+                        "Gold alerts HTTP " + resp.code() + " in " + elapsed
+                                + "ms: " + body);
+            }
+            String body = resp.body() != null ? resp.body().string() : "{}";
+            @SuppressWarnings("unchecked")
+            Map<String, Object> parsed = objectMapper.readValue(body, Map.class);
+            log.debug("Gold alerts factory={} lookback={} kpi={} config_exists={} in {}ms",
+                    factoryId, lookbackDays, kpiKind, parsed.get("config_exists"), elapsed);
+            return parsed;
+        }
+    }
 }
