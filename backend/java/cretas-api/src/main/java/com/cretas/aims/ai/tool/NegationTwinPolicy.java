@@ -98,7 +98,17 @@ public class NegationTwinPolicy {
                     converted.add(c);
                 }
             }
-            result = converted;
+            // W1b: dedupe by intentCode. A converted write twin may collide with a read already present
+            // (e.g. [PROCESSING_BATCH_START, PROCESSING_BATCH_LIST] → both → PROCESSING_BATCH_LIST), or two
+            // writes share a twin. List is confidence-descending, so keeping the FIRST occurrence keeps the
+            // highest-confidence one. Dedup is VETO_WRITE-only: the NONE/EXCLUDE rerank path merely reorders
+            // and never creates dups, so leaving it untouched avoids any risk to true compound queries.
+            java.util.Set<String> seenCodes = new java.util.LinkedHashSet<>();
+            List<CandidateIntent> deduped = new ArrayList<>(converted.size());
+            for (CandidateIntent c : converted) {
+                if (seenCodes.add(c.getIntentCode())) deduped.add(c);
+            }
+            result = deduped;
         } else {
             // NONE / EXCLUDE_CONTENT → component-2 rerank only for read-phrased queries
             if (queryActionType == IntentKnowledgeBase.ActionType.QUERY) {

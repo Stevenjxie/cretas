@@ -685,8 +685,21 @@ public class IntentRecognitionPipelineServiceImpl implements IntentRecognitionPi
                     saveIntentMatchRecord(clar, factoryId, userId, sessionId, false);
                     return attachTiming(clar, startTimeMs, preprocessEndMs);
                 }
-                if (after != null && !after.isEmpty()
-                        && after.get(0) != result.getTopCandidates().get(0)) {
+                // Rebuild whenever the candidate LIST changed by intentCode (any position), not only when
+                // the TOP reference changed. A lower candidate retargeted/dropped under VETO_WRITE while the
+                // top read is unchanged would otherwise leave a stale vetoed write in topCandidates, surfaced
+                // as a user suggestion.
+                boolean listChanged = (after == null) || (after.size() != before.size());
+                if (!listChanged && after != null) {
+                    for (int i = 0; i < after.size(); i++) {
+                        if (!java.util.Objects.equals(after.get(i).getIntentCode(),
+                                before.get(i).getIntentCode())) {
+                            listChanged = true;
+                            break;
+                        }
+                    }
+                }
+                if (listChanged && after != null && !after.isEmpty()) {
                     AIIntentConfig newBest =
                             configService.getIntentConfigByCode(factoryId, after.get(0).getIntentCode());
                     if (newBest != null) {
@@ -798,6 +811,11 @@ public class IntentRecognitionPipelineServiceImpl implements IntentRecognitionPi
                         .confidence(m.getConfidence())
                         .build());
             }
+            // W1b backlog: detectNegationVeto is sentence-level, so a compound like
+            // "别开始生产，顺便创建采购单" applies VETO_WRITE to ALL candidates and may drop a legit
+            // trailing write (创建采购单). Accepted for W1b — it errs SAFE (suppresses a write, never
+            // executes an unwanted one; W0 guards writes at exec). Correct fix = segment-scoped negation
+            // in QueryPreprocessor (future). See spec §6.5 / T4 review.
             List<CandidateIntent> after =
                     negationTwinPolicy.applyNegationVetoAndTwinRerank(candidates, negForPolicy, at, resolver);
 

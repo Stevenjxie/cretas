@@ -141,6 +141,8 @@ class IntentPipelineMultiIntentNegationTest {
                 .map(MultiIntentResult.SingleIntentMatch::getIntentCode).toList();
         assertThat(codes).containsExactly("ORDER_LIST");
         assertThat(codes).doesNotContain("ORDER_CREATE");
+        // list collapsed to a single surviving read → no longer a multi-intent.
+        assertThat(out.isMultiIntent()).isFalse();
     }
 
     @Test

@@ -118,4 +118,13 @@ class NegationTwinPolicyTest {
         var neg = NegationInfo.builder().kind(NegationKind.VETO_WRITE).build();
         assertThat(policy.isVetoToClarification(List.of(c("SOME_DELETE", 0.9)), List.of(), neg)).isTrue();
     }
+
+    @Test
+    void vetoWrite_dedupesWhenTwinEqualsExistingRead() {
+        var in = List.of(c("PROCESSING_BATCH_START", 0.9), c("PROCESSING_BATCH_LIST", 0.8));
+        var neg = NegationInfo.builder().kind(NegationKind.VETO_WRITE).hasNegation(true).build();
+        var out = policy.applyNegationVetoAndTwinRerank(in, neg, IntentKnowledgeBase.ActionType.UPDATE, code -> null);
+        assertThat(out).extracting(CandidateIntent::getIntentCode)
+                .containsExactly("PROCESSING_BATCH_LIST");   // converted START→LIST deduped against existing LIST
+    }
 }
