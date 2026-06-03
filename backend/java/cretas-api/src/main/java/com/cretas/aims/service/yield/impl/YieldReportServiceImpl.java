@@ -88,20 +88,46 @@ public class YieldReportServiceImpl implements YieldReportService {
             throw new BusinessException(400, "缺少必填字段: workProcessTaskId")
                     .withHint("请选择工序任务").withHintTarget("workProcessTaskId");
         }
-        if (req.getOutputQuantity() == null) {
+        // 三阶段报工 (单元1): 阶段标记 INPUT/SEGMENT/OUTPUT; null = 旧式整合报工 (向后兼容)。
+        String reportKind = normalizeReportKind(req.getReportKind());
+        boolean isInput = "INPUT".equals(reportKind);
+        boolean isSegment = "SEGMENT".equals(reportKind);
+        boolean isOutput = "OUTPUT".equals(reportKind);
+        boolean isLegacy = reportKind == null;
+        // outputQuantity 必填仅在产出阶段 (OUTPUT) 或旧式整合报工 (legacy); INPUT/SEGMENT 阶段无产出。
+        if ((isLegacy || isOutput) && req.getOutputQuantity() == null) {
             throw new BusinessException(400, "缺少必填字段: outputQuantity")
                     .withHint("请填写本道产出量").withHintTarget("outputQuantity");
         }
         WorkProcessTask t = taskRepo.findByFactoryIdAndId(factoryId, req.getWorkProcessTaskId())
                 .orElseThrow(() -> new BusinessException(404, "工序任务不存在: " + req.getWorkProcessTaskId()));
 
+        // 三阶段字段隔离 (防御: 防止误填的非本阶段字段污染同 task 跨报工累加)。
+        // "生效值": 阶段决定哪些请求字段被采纳, 其余强制 null。legacy (null) 全采纳 (行为完全不变)。
+        //   INPUT  : 留 input/inputUnit/materialBatchRefs/sourceWipNo/evidenceImages; output/segment/byproduct/waste/sample 强制 null。
+        //   SEGMENT: 留 laborSegments(单段回退 workerCount/workMinutes)/evidenceImages; input/output/material/byproduct/waste/sample 强制 null。
+        //   OUTPUT : 留 output/outputUnit/byproducts/waste/sample/evidenceImages; input/segment 强制 null。
+        BigDecimal effInput = (isSegment || isOutput) ? null : req.getInputQuantity();
+        String effInputUnit = (isSegment || isOutput) ? null : req.getInputUnit();
+        BigDecimal effOutput = (isInput || isSegment) ? null : req.getOutputQuantity();
+        String effOutputUnit = (isInput || isSegment) ? null : req.getOutputUnit();
+        List<YieldReportRequest.LaborSegment> effSegs = (isInput || isOutput) ? null : req.getLaborSegments();
+        List<MaterialBatchRef> effMaterialRefs = (isSegment || isOutput) ? null : req.getMaterialBatchRefs();
+        List<YieldReportRequest.Byproduct> effByproducts = (isInput || isSegment) ? null : req.getByproducts();
+        BigDecimal effWaste = (isInput || isSegment) ? null : req.getWasteQuantity();
+        Integer effSampleRetain = (isInput || isSegment) ? null : req.getSampleRetainQuantity();
+        // 单段 workerCount/workMinutes (旧路径回退): SEGMENT/legacy 计工时; INPUT/OUTPUT 不计。
+        Integer effReqWorkMinutes = (isInput || isOutput) ? null : req.getWorkMinutes();
+        Integer effReqWorkerCount = (isInput || isOutput) ? null : req.getWorkerCount();
+
         Long effectiveWorker = req.getTargetWorkerId() != null ? req.getTargetWorkerId() : workerId;
 
         // — G7 部分领用防呆 (Rule 1): 报工带 sourceWipNo 时, 校验 inputQuantity ≤ 源 WIP 余额 —
         // 校验在保存前 (超额不落库); 实际扣减在保存后 (order: validate → save → consume)。
         // sourceWipNo=null → 走旧路径 (首道领原料 / 老批次, 向后兼容, 不查 WIP)。
+        // 三阶段 (单元1): 领料发生在 INPUT 阶段 (或 legacy); SEGMENT/OUTPUT 阶段不消耗源 WIP (input 已被隔离为 null)。
         SemiFinishedInventory sourceWip = null;
-        if (req.getSourceWipNo() != null && !req.getSourceWipNo().isBlank()) {
+        if ((isInput || isLegacy) && req.getSourceWipNo() != null && !req.getSourceWipNo().isBlank()) {
             sourceWip = wipRepo.findByIntermediateBatchNoAndDeletedAtIsNull(req.getSourceWipNo())
                     .orElseThrow(() -> new BusinessException(404, "源半成品库存不存在: " + req.getSourceWipNo())
                             .withHint("请重新选择要领用的上道半成品批次")
@@ -143,18 +169,20 @@ public class YieldReportServiceImpl implements YieldReportService {
 
         // — A.4/A.5: 逐道成本 (人工 + 材料), 诚实 null 传播 (缺输入则该项 null, 绝不默认 0) —
         // 人工成本依赖本道 WorkProcess.standardHourlyRate; sourceWip 已在上方解析 (G7 路径)。
+        // 三阶段 (单元1): 材料成本算在 INPUT 阶段 (effMaterialRefs 仅 INPUT/legacy 非空), 人工成本算在 SEGMENT 阶段
+        //   (effSegs/effReqWork* 仅 SEGMENT/legacy 非空); OUTPUT 阶段两者均 null (成本在 INPUT/SEGMENT 报工上)。
         WorkProcess costWp = processRepo.findById(t.getWorkProcessId()).orElse(null);
         BigDecimal hourlyRate = costWp == null ? null : costWp.getStandardHourlyRate();
         // 适配单元3: 优先多段工时 person-hours; 段为空退回单一 workerCount/workMinutes (back-compat)
-        List<YieldReportRequest.LaborSegment> segs = req.getLaborSegments();
-        BigDecimal laborCost = computeLaborCost(segs, req.getWorkerCount(), req.getWorkMinutes(), hourlyRate);
-        BigDecimal materialCost = computeMaterialCost(req.getMaterialBatchRefs(),
-                sourceWip, req.getInputQuantity());
+        List<YieldReportRequest.LaborSegment> segs = effSegs;
+        BigDecimal laborCost = computeLaborCost(segs, effReqWorkerCount, effReqWorkMinutes, hourlyRate);
+        BigDecimal materialCost = computeMaterialCost(effMaterialRefs,
+                sourceWip, effInput);
 
         // 适配单元3: 多段工时时, totalWorkMinutes = Σ段时长, totalWorkers = MAX headcount (峰值, 修 M2);
         // 段为空时退回单一 req.getWorkMinutes()/getWorkerCount() (零回归)。
-        Integer effectiveWorkMinutes = req.getWorkMinutes();
-        Integer effectiveWorkers = req.getWorkerCount();
+        Integer effectiveWorkMinutes = effReqWorkMinutes;
+        Integer effectiveWorkers = effReqWorkerCount;
         boolean hasSegs = segs != null && !segs.isEmpty();
         if (hasSegs) {
             Integer sumMinutes = null;
@@ -172,39 +200,48 @@ public class YieldReportServiceImpl implements YieldReportService {
 
         ProductionReport r = ProductionReport.builder()
                 .factoryId(factoryId).batchId(batchId).reportType(YIELD)
+                .reportKind(reportKind)                   // 三阶段 (单元1): INPUT/SEGMENT/OUTPUT; null=旧式整合
                 .workerId(effectiveWorker).reporterName(req.getReporterName())
                 .reportDate(LocalDate.now())
                 .workProcessTaskId(t.getId()).processOrder(t.getProcessOrder())
                 .productTypeId(t.getProductTypeId())
-                .inputQuantity(req.getInputQuantity()).inputUnit(req.getInputUnit())
-                .outputQuantity(req.getOutputQuantity()).outputUnit(req.getOutputUnit())
-                .totalWorkMinutes(effectiveWorkMinutes)   // 适配单元3: 多段=Σ段时长, 单段=req.getWorkMinutes()
-                .totalWorkers(effectiveWorkers)           // 适配单元3: 多段=MAX headcount (修 M2), 单段=req.getWorkerCount()
-                .laborCost(laborCost)                 // A.4: 本道人工成本 (null=缺输入)
-                .materialCost(materialCost)           // A.5: 本道材料成本 (null=无价)
+                .inputQuantity(effInput).inputUnit(effInputUnit)
+                .outputQuantity(effOutput).outputUnit(effOutputUnit)
+                .totalWorkMinutes(effectiveWorkMinutes)   // 适配单元3: 多段=Σ段时长, 单段=effReqWorkMinutes
+                .totalWorkers(effectiveWorkers)           // 适配单元3: 多段=MAX headcount (修 M2), 单段=effReqWorkerCount
+                .laborCost(laborCost)                 // A.4: 本道人工成本 (null=缺输入); 三阶段: 仅 SEGMENT/legacy
+                .materialCost(materialCost)           // A.5: 本道材料成本 (null=无价); 三阶段: 仅 INPUT/legacy
                 .sourceBatchRefs(req.getSourceBatchRefs())
-                // A2b: 领料批次引用直接挂在报工单上 (不再单独调用 recordMaterialInput)
-                .materialBatchRefs(toMaterialBatchRefMaps(req.getMaterialBatchRefs()))
+                // A2b: 领料批次引用直接挂在报工单上 (不再单独调用 recordMaterialInput); 三阶段: 仅 INPUT/legacy
+                .materialBatchRefs(toMaterialBatchRefMaps(effMaterialRefs))
                 // 适配单元3: 传统报工证据/工时段/副产物/损耗/留样 (各报工携带自身明细, 聚合时合并)
-                .photos(req.getEvidenceImages())
+                .photos(req.getEvidenceImages())          // 证据图片各阶段都可带 (按 reportKind 分组到 input/outputPhotos)
                 .laborSegments(toLaborSegmentMaps(segs))
-                .byproducts(toByproductMaps(req.getByproducts()))
-                .wasteQuantity(req.getWasteQuantity())
-                .sampleRetainQuantity(req.getSampleRetainQuantity())
+                .byproducts(toByproductMaps(effByproducts))
+                .wasteQuantity(effWaste)
+                .sampleRetainQuantity(effSampleRetain)
                 // 工序批次号是任务级: 仅首条报工生成, 后续条 null (避免 uq_pr_intermediate_batch_no 冲突)
                 .intermediateBatchNo(isFirstReportForTask ? generateBatchNo(t, batchId) : null)
-                // G7: 本道领用的源 WIP 工序批次号 (向后兼容: null 走旧路径)
-                .sourceWipNo(req.getSourceWipNo())
+                // G7: 本道领用的源 WIP 工序批次号 (向后兼容: null 走旧路径); 三阶段: 仅 INPUT/legacy 消耗
+                .sourceWipNo((isInput || isLegacy) ? req.getSourceWipNo() : null)
                 .status(ProductionReport.Status.SUBMITTED)
                 .build();
 
-        // carryover = 上道总产出 - 本道投入 (单批记录值, 不进库存)
-        r.setCarryoverQuantity(computeCarryover(factoryId, batchId, t, req.getInputQuantity()));
+        // carryover = 上道总产出 - 本道投入 (单批记录值, 不进库存); 三阶段: 仅 INPUT/legacy 有投入
+        r.setCarryoverQuantity(computeCarryover(factoryId, batchId, t, effInput));
 
         // — 超收检查 (A4) —
-        // 基准量 = 本道投入 × WorkProcess.standardYieldMax
-        BigDecimal inputQty = req.getInputQuantity();
-        if (inputQty != null && inputQty.compareTo(BigDecimal.ZERO) > 0) {
+        // 基准量 = 本道投入 × WorkProcess.standardYieldMax。
+        // 三阶段 (单元1): 超收针对"产出"判定, 仅在有产出 (OUTPUT/legacy) 且本道有投入基准时检查。
+        //   投入基准: OUTPUT 阶段本报工 effInput 为 null, 取该 task 历史 INPUT 报工的 Σ inputQuantity (跨阶段);
+        //   legacy 直接用本报工 effInput。INPUT/SEGMENT 阶段无产出 → effOutput null → 跳过。
+        BigDecimal inputQty = isOutput
+                ? existingTaskReports.stream()
+                        .map(ProductionReport::getInputQuantity)
+                        .filter(Objects::nonNull)
+                        .reduce(BigDecimal.ZERO, BigDecimal::add)
+                : effInput;
+        if (effOutput != null && inputQty != null && inputQty.compareTo(BigDecimal.ZERO) > 0) {
             Optional<WorkProcess> wpOpt = processRepo.findById(t.getWorkProcessId());
             BigDecimal syMax = wpOpt.map(WorkProcess::getStandardYieldMax).orElse(null);
             if (syMax != null) {
@@ -217,7 +254,7 @@ public class YieldReportServiceImpl implements YieldReportService {
                             .map(ProductionReport::getOutputQuantity)
                             .filter(Objects::nonNull)
                             .reduce(BigDecimal.ZERO, BigDecimal::add);
-                    BigDecimal cumulative = alreadyReported.add(req.getOutputQuantity());
+                    BigDecimal cumulative = alreadyReported.add(effOutput);
 
                     if (cumulative.compareTo(maxAllowed) > 0) {
                         boolean force = Boolean.TRUE.equals(req.getForceSubmit());
@@ -245,9 +282,9 @@ public class YieldReportServiceImpl implements YieldReportService {
 
         ProductionReport saved = reportRepo.save(r);
 
-        // A2b: 报工单保存后, 对每个关联批次独立检查自动结清 (order: save → settle)
-        if (req.getMaterialBatchRefs() != null) {
-            for (MaterialBatchRef ref : req.getMaterialBatchRefs()) {
+        // A2b: 报工单保存后, 对每个关联批次独立检查自动结清 (order: save → settle); 三阶段: 仅 INPUT/legacy 有领料
+        if (effMaterialRefs != null) {
+            for (MaterialBatchRef ref : effMaterialRefs) {
                 if (ref.getMaterialBatchId() != null) {
                     checkAndAutoSettle(factoryId, batchId, ref.getMaterialBatchId());
                 }
@@ -268,29 +305,51 @@ public class YieldReportServiceImpl implements YieldReportService {
 
         // — G7: 扣减源 WIP (报工保存后, 同事务) —
         // sourceWip 已在保存前防呆校验过 (inputQuantity ≤ available); 此处实际递减。
-        if (sourceWip != null && req.getInputQuantity() != null) {
-            consumeSourceWip(sourceWip, req.getInputQuantity(), saved, t, effectiveWorker);
+        // 三阶段: sourceWip 仅在 INPUT/legacy 被解析, effInput 即本道投入。
+        if (sourceWip != null && effInput != null) {
+            consumeSourceWip(sourceWip, effInput, saved, t, effectiveWorker);
         }
 
         // — G6: 本道产出进 WIP (报工保存后, 同事务; 按 intermediateBatchNo 幂等, 跨天累加) —
+        // 三阶段: 产出在 OUTPUT 阶段锁定 (effOutput 仅 OUTPUT/legacy 非空); INPUT/SEGMENT 无产出 → 不 upsert。
         if (saved.getOutputQuantity() != null && saved.getOutputQuantity().compareTo(BigDecimal.ZERO) > 0) {
-            upsertProducedWip(factoryId, batchId, t, saved);
+            // OUTPUT 阶段本报工 laborCost/materialCost 均 null (成本在 INPUT/SEGMENT 报工上),
+            // WIP 成本滚动须用整道汇总 (Σ INPUT materialCost + Σ SEGMENT laborCost); legacy 用本报工成本。
+            BigDecimal wipRollLabor = saved.getLaborCost();
+            BigDecimal wipRollMaterial = saved.getMaterialCost();
+            if (isOutput) {
+                BigDecimal taskLabor = existingTaskReports.stream()
+                        .map(ProductionReport::getLaborCost).filter(Objects::nonNull)
+                        .reduce(BigDecimal::add).orElse(null);
+                BigDecimal taskMaterial = existingTaskReports.stream()
+                        .map(ProductionReport::getMaterialCost).filter(Objects::nonNull)
+                        .reduce(BigDecimal::add).orElse(null);
+                wipRollLabor = taskLabor;
+                wipRollMaterial = taskMaterial;
+            }
+            upsertProducedWip(factoryId, batchId, t, saved, wipRollLabor, wipRollMaterial);
         }
 
         Map<String, Object> out = new HashMap<>();
         out.put("reportId", saved.getId());
 
+        // yieldRate: 单报工内即时出成率 (需同报工带可比 input+output → 仅 legacy 整合报工有意义)。
+        // 三阶段 INPUT/SEGMENT/OUTPUT 各只带单边量, 单报工 yieldRate 为 null (整道出成率经 calculateSteps 跨阶段算)。
         BigDecimal yieldRate = null;
-        if (req.getInputUnit() != null && req.getInputUnit().equals(req.getOutputUnit())
-                && req.getInputQuantity() != null && req.getInputQuantity().compareTo(BigDecimal.ZERO) > 0) {
-            yieldRate = req.getOutputQuantity().divide(req.getInputQuantity(), 4, RoundingMode.HALF_UP);
+        if (effInputUnit != null && effInputUnit.equals(effOutputUnit)
+                && effInput != null && effInput.compareTo(BigDecimal.ZERO) > 0
+                && effOutput != null) {
+            yieldRate = effOutput.divide(effInput, 4, RoundingMode.HALF_UP);
         }
         out.put("yieldRate", yieldRate);
         String alert = yieldAlert(t.getWorkProcessId(), yieldRate);
         if (alert != null) out.put("alert", alert);
-        // 适配单元3 (Part C): 守恒软校验 (非阻塞), 仅偏差 > 15% 且单位可比时附 balanceWarning
-        String balanceWarning = computeBalanceWarning(req);
-        if (balanceWarning != null) out.put("balanceWarning", balanceWarning);
+        // 适配单元3 (Part C): 守恒软校验 (非阻塞), 仅偏差 > 15% 且单位可比时附 balanceWarning。
+        // 三阶段 (单元1): 单报工只带单边量, 守恒须跨报工算 (不在此处); 仅 legacy 整合报工同报工带 input+output 才校验。
+        if (isLegacy) {
+            String balanceWarning = computeBalanceWarning(req);
+            if (balanceWarning != null) out.put("balanceWarning", balanceWarning);
+        }
         return out;
     }
 
@@ -496,6 +555,18 @@ public class YieldReportServiceImpl implements YieldReportService {
      * <p>溯源 {@code materialBatchRefs} 从产出报工继承 (首条建行时写, 后续累加不覆盖)。</p>
      */
     private void upsertProducedWip(String factoryId, Long batchId, WorkProcessTask t, ProductionReport saved) {
+        // 默认成本滚动用本报工的 labor+material (legacy 整合报工: 成本与产出同报工)。
+        upsertProducedWip(factoryId, batchId, t, saved, saved.getLaborCost(), saved.getMaterialCost());
+    }
+
+    /**
+     * G6 (三阶段重载): 同上, 但 WIP 成本滚动用显式传入的 rollLaborCost/rollMaterialCost。
+     *
+     * <p>三阶段 OUTPUT 报工本身 labor/material 为 null (成本在 INPUT/SEGMENT 报工上), 调用方传整道汇总
+     * (Σ INPUT materialCost + Σ SEGMENT laborCost); legacy 调用方传本报工成本 (行为不变)。</p>
+     */
+    private void upsertProducedWip(String factoryId, Long batchId, WorkProcessTask t, ProductionReport saved,
+                                   BigDecimal rollLaborCost, BigDecimal rollMaterialCost) {
         String wipNo = generateBatchNo(t, batchId);
         BigDecimal out = saved.getOutputQuantity();
         SemiFinishedInventory wip = wipRepo.findByIntermediateBatchNoAndDeletedAtIsNull(wipNo).orElse(null);
@@ -529,10 +600,11 @@ public class YieldReportServiceImpl implements YieldReportService {
         }
         // — A.4/A.5: WIP 成本滚动 (必须在 producedQuantity 更新之后) —
         // accumulatedCost null-safe 累加本道 (labor + material); 跨天天然累加 (沿用已有 accumulatedCost)。
+        // 三阶段 (单元1): OUTPUT 阶段传整道汇总成本 (本 OUTPUT 报工成本为 null); legacy 传本报工成本。
         // 全为 null (此前无成本 + 本道无成本) → 保持 null (诚实)。
         // unitCost = accumulatedCost / producedQuantity (scale 4 HALF_UP); 缺 accumulatedCost 或产量≤0 → null。
         wip.setAccumulatedCost(nullSafeAdd(
-                wip.getAccumulatedCost(), saved.getLaborCost(), saved.getMaterialCost()));
+                wip.getAccumulatedCost(), rollLaborCost, rollMaterialCost));
         BigDecimal produced = wip.getProducedQuantity();
         if (wip.getAccumulatedCost() != null && produced != null && produced.signum() > 0) {
             wip.setUnitCost(wip.getAccumulatedCost().divide(produced, 4, RoundingMode.HALF_UP));
@@ -606,6 +678,22 @@ public class YieldReportServiceImpl implements YieldReportService {
     /** null-safe BigDecimal: null → ZERO. */
     private static BigDecimal nz(BigDecimal v) {
         return v == null ? BigDecimal.ZERO : v;
+    }
+
+    /**
+     * 三阶段报工 (单元1): 规范化 reportKind 入参。
+     * <p>trim + 大写; 空白 → null (旧式整合报工); 非法值 (非 INPUT/SEGMENT/OUTPUT) → 400 拒绝
+     * (防呆: 误传未知阶段不静默当 legacy 处理, 避免字段隔离失效)。</p>
+     */
+    private static String normalizeReportKind(String raw) {
+        if (raw == null || raw.isBlank()) return null;
+        String k = raw.trim().toUpperCase();
+        if (!"INPUT".equals(k) && !"SEGMENT".equals(k) && !"OUTPUT".equals(k)) {
+            throw new BusinessException(400, "非法报工阶段: " + raw)
+                    .withHint("reportKind 仅支持 INPUT/SEGMENT/OUTPUT (或留空走旧式整合报工)")
+                    .withHintTarget("reportKind");
+        }
+        return k;
     }
 
     /**

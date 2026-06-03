@@ -357,6 +357,165 @@ class YieldCalculationServiceImplTest {
         assertThat(dto.getTotalSampleRetain()).isNull();
     }
 
+    // ── 三阶段报工 (单元1): phase 推断 + 照片按 reportKind 分组 ──────────────────────
+
+    private ProductionReport rptKind(long taskId, int order, String reportKind,
+                                     String in, String out, List<String> photos) {
+        return ProductionReport.builder()
+                .factoryId("F006").batchId(1L).reportType("YIELD")
+                .workProcessTaskId(taskId).processOrder(order)
+                .reportKind(reportKind)
+                .inputQuantity(in == null ? null : new BigDecimal(in)).inputUnit("kg")
+                .outputQuantity(out == null ? null : new BigDecimal(out)).outputUnit("kg")
+                .photos(photos)
+                .build();
+    }
+
+    @Test
+    void calculateSteps_phase_inputOnly_isInProduction() {
+        // 仅 INPUT report → IN_PRODUCTION
+        List<StepYieldDTO> steps = svc.calculateSteps(List.of(
+                rptKind(1, 1, "INPUT", "998", null, null)
+        ));
+        assertThat(steps).hasSize(1);
+        assertThat(steps.get(0).getPhase()).isEqualTo("IN_PRODUCTION");
+    }
+
+    @Test
+    void calculateSteps_phase_inputThenOutput_isCompleted() {
+        // INPUT + OUTPUT → COMPLETED
+        List<StepYieldDTO> steps = svc.calculateSteps(List.of(
+                rptKind(1, 1, "INPUT", "998", null, null),
+                rptKind(1, 1, "OUTPUT", null, "980", null)
+        ));
+        assertThat(steps).hasSize(1);
+        assertThat(steps.get(0).getPhase()).isEqualTo("COMPLETED");
+    }
+
+    @Test
+    void calculateSteps_phase_segmentOnly_isAwaitingInput() {
+        // 仅 SEGMENT (无投入无产出) → AWAITING_INPUT (尚无投入锚定)
+        Map<String, Object> seg = Map.of("startTime", "08:00", "endTime", "10:00", "headcount", 3);
+        ProductionReport r = ProductionReport.builder()
+                .factoryId("F006").batchId(1L).reportType("YIELD")
+                .workProcessTaskId(1L).processOrder(1)
+                .reportKind("SEGMENT").inputUnit("kg").outputUnit("kg")
+                .laborSegments(List.of(seg))
+                .build();
+        List<StepYieldDTO> steps = svc.calculateSteps(List.of(r));
+        assertThat(steps).hasSize(1);
+        assertThat(steps.get(0).getPhase()).isEqualTo("AWAITING_INPUT");
+    }
+
+    @Test
+    void calculateSteps_phase_legacy_inputAndOutput_isCompleted() {
+        // 旧式报工 (reportKind null) 一次带投入+产出 → COMPLETED (按 input/output 有无推断)
+        List<StepYieldDTO> steps = svc.calculateSteps(List.of(
+                rpt(1, 1, "100", "kg", "80", "kg")   // reportKind 默认 null
+        ));
+        assertThat(steps).hasSize(1);
+        assertThat(steps.get(0).getPhase()).isEqualTo("COMPLETED");
+    }
+
+    @Test
+    void calculateSteps_phase_legacy_inputOnly_isInProduction() {
+        // 旧式 reportKind null, 仅投入 → IN_PRODUCTION
+        ProductionReport r = ProductionReport.builder()
+                .factoryId("F006").batchId(1L).reportType("YIELD")
+                .workProcessTaskId(1L).processOrder(1)
+                .inputQuantity(new BigDecimal("100")).inputUnit("kg").outputUnit("kg")
+                .build();
+        List<StepYieldDTO> steps = svc.calculateSteps(List.of(r));
+        assertThat(steps.get(0).getPhase()).isEqualTo("IN_PRODUCTION");
+    }
+
+    @Test
+    void calculateSteps_photos_groupedByReportKind() {
+        // INPUT 照片 photoA → inputPhotos; OUTPUT 照片 photoB → outputPhotos
+        List<StepYieldDTO> steps = svc.calculateSteps(List.of(
+                rptKind(1, 1, "INPUT", "998", null, List.of("photoA")),
+                rptKind(1, 1, "OUTPUT", null, "980", List.of("photoB"))
+        ));
+        assertThat(steps).hasSize(1);
+        StepYieldDTO s = steps.get(0);
+        assertThat(s.getInputPhotos()).containsExactly("photoA");
+        assertThat(s.getOutputPhotos()).containsExactly("photoB");
+        // 兼容字段 photos 仍含全部 (合并去重)
+        assertThat(s.getPhotos()).containsExactly("photoA", "photoB");
+    }
+
+    @Test
+    void calculateSteps_photos_segmentGroupsToInputPhotos() {
+        // SEGMENT 照片归 inputPhotos (与 INPUT 同组)
+        List<StepYieldDTO> steps = svc.calculateSteps(List.of(
+                rptKind(1, 1, "INPUT", "998", null, List.of("pIn")),
+                rptKind(1, 1, "SEGMENT", null, null, List.of("pSeg")),
+                rptKind(1, 1, "OUTPUT", null, "980", List.of("pOut"))
+        ));
+        StepYieldDTO s = steps.get(0);
+        assertThat(s.getInputPhotos()).containsExactly("pIn", "pSeg");
+        assertThat(s.getOutputPhotos()).containsExactly("pOut");
+    }
+
+    @Test
+    void calculateSteps_photos_legacyNullKindGroupsToInputPhotos() {
+        // 旧式 reportKind null 的照片归 inputPhotos (向后兼容)
+        ProductionReport r = ProductionReport.builder()
+                .factoryId("F006").batchId(1L).reportType("YIELD")
+                .workProcessTaskId(1L).processOrder(1)
+                .inputQuantity(new BigDecimal("100")).inputUnit("kg")
+                .outputQuantity(new BigDecimal("80")).outputUnit("kg")
+                .photos(List.of("legacyPhoto"))
+                .build();
+        List<StepYieldDTO> steps = svc.calculateSteps(List.of(r));
+        StepYieldDTO s = steps.get(0);
+        assertThat(s.getInputPhotos()).containsExactly("legacyPhoto");
+        assertThat(s.getOutputPhotos()).isNull();
+    }
+
+    @Test
+    void calculateSteps_threeReportAccumulation_phasedEndToEnd() {
+        // 单元1 端到端: INPUT(998, photoA) + SEGMENT(工时段, materialless) + OUTPUT(980, photoB, byproduct)
+        // → totalInput 998, totalOutput 980, 出成率 980/998, inputPhotos[A], outputPhotos[B], phase COMPLETED
+        Map<String, Object> seg = Map.of("startTime", "08:00", "endTime", "10:00", "headcount", 3);
+        Map<String, Object> bp = Map.of("name", "骨头", "quantity", new BigDecimal("18"), "unit", "kg");
+        ProductionReport input = ProductionReport.builder()
+                .factoryId("F006").batchId(1L).reportType("YIELD")
+                .workProcessTaskId(1L).processOrder(1).reportKind("INPUT")
+                .inputQuantity(new BigDecimal("998")).inputUnit("kg").outputUnit("kg")
+                .materialCost(new BigDecimal("1000.00"))
+                .photos(List.of("photoA"))
+                .build();
+        ProductionReport segment = ProductionReport.builder()
+                .factoryId("F006").batchId(1L).reportType("YIELD")
+                .workProcessTaskId(1L).processOrder(1).reportKind("SEGMENT")
+                .inputUnit("kg").outputUnit("kg")
+                .laborSegments(List.of(seg))
+                .laborCost(new BigDecimal("180.00"))
+                .totalWorkMinutes(120).totalWorkers(3)
+                .build();
+        ProductionReport output = ProductionReport.builder()
+                .factoryId("F006").batchId(1L).reportType("YIELD")
+                .workProcessTaskId(1L).processOrder(1).reportKind("OUTPUT")
+                .outputQuantity(new BigDecimal("980")).inputUnit("kg").outputUnit("kg")
+                .byproducts(List.of(bp))
+                .photos(List.of("photoB"))
+                .build();
+
+        List<StepYieldDTO> steps = svc.calculateSteps(List.of(input, segment, output));
+        assertThat(steps).hasSize(1);
+        StepYieldDTO s = steps.get(0);
+        assertThat(s.getTotalInput()).isEqualByComparingTo("998");
+        assertThat(s.getTotalOutput()).isEqualByComparingTo("980");
+        assertThat(s.getYieldRate()).isEqualByComparingTo("0.9820");  // 980/998
+        assertThat(s.getLaborCost()).isEqualByComparingTo("180.00");
+        assertThat(s.getMaterialCost()).isEqualByComparingTo("1000.00");
+        assertThat(s.getInputPhotos()).containsExactly("photoA");
+        assertThat(s.getOutputPhotos()).containsExactly("photoB");
+        assertThat(s.getByproducts()).hasSize(1);
+        assertThat(s.getPhase()).isEqualTo("COMPLETED");
+    }
+
     @Test
     void a3_crossBatchSourceCountsIntoCurrentStepInput() {
         // 本道投入 100 + 跨批带入 50 = 150 input; 产 120 -> yield 0.8000

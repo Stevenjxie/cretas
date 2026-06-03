@@ -300,6 +300,34 @@ function stepPhotos(row: Record<string, unknown>): string[] {
   const p = row?.photos;
   return Array.isArray(p) ? (p as string[]).filter((u) => !!u) : [];
 }
+// 单元3 (F006 三阶段): 投入照片 / 产出照片 分组 (后端 BatchYieldDTO.steps[].inputPhotos / outputPhotos).
+// 各自独立 lightbox 画廊; 空数组/null → []. legacy 行两组都空时回退到合并的 photos (见 stepLegacyFallbackPhotos).
+function stepInputPhotos(row: Record<string, unknown>): string[] {
+  const p = row?.inputPhotos;
+  return Array.isArray(p) ? (p as string[]).filter((u) => !!u) : [];
+}
+function stepOutputPhotos(row: Record<string, unknown>): string[] {
+  const p = row?.outputPhotos;
+  return Array.isArray(p) ? (p as string[]).filter((u) => !!u) : [];
+}
+// legacy 回退: 旧数据无 input/output 分组 (两组都空), 仍用合并 photos 兜底展示, 不丢历史证据.
+function hasSplitPhotos(row: Record<string, unknown>): boolean {
+  return stepInputPhotos(row).length > 0 || stepOutputPhotos(row).length > 0;
+}
+function stepLegacyFallbackPhotos(row: Record<string, unknown>): string[] {
+  return hasSplitPhotos(row) ? [] : stepPhotos(row);
+}
+// 单元3 (F006 三阶段): 道阶段标记 — AWAITING_INPUT 待投料 / IN_PRODUCTION 生产中 / COMPLETED 已完工.
+// null (legacy 无阶段字段) → 不显示徽标.
+function phaseTag(phase: unknown): { text: string; type: 'info' | 'warning' | 'success' } | null {
+  const map: Record<string, { text: string; type: 'info' | 'warning' | 'success' }> = {
+    AWAITING_INPUT: { text: '待投料', type: 'info' },
+    IN_PRODUCTION: { text: '生产中', type: 'warning' },
+    COMPLETED: { text: '已完工', type: 'success' }
+  };
+  const key = typeof phase === 'string' ? phase.toUpperCase() : '';
+  return map[key] || null;
+}
 function stepSegments(row: Record<string, unknown>): Array<Record<string, unknown>> {
   const s = row?.laborSegments;
   return Array.isArray(s) ? (s as Array<Record<string, unknown>>) : [];
@@ -312,6 +340,8 @@ function stepByproducts(row: Record<string, unknown>): Array<Record<string, unkn
 function hasTraditionalDetail(row: Record<string, unknown>): boolean {
   return (
     stepPhotos(row).length > 0 ||
+    stepInputPhotos(row).length > 0 ||
+    stepOutputPhotos(row).length > 0 ||
     stepSegments(row).length > 0 ||
     stepByproducts(row).length > 0 ||
     row?.wasteQuantity != null ||
@@ -576,22 +606,53 @@ function getTimelineIcon(type: string) {
               <template #default="{ row }">
                 <div class="trad-detail">
                   <template v-if="hasTraditionalDetail(row)">
-                    <!-- 证据照片: 缩略图 + 点击 lightbox 画廊 (镜像 AttachmentList el-image preview) -->
+                    <!-- 单元3 (F006 三阶段): 证据照片拆分 投入照片 / 产出照片, 各自独立 lightbox 画廊.
+                         空组 → "—". legacy 行 (两组都空) 回退到合并 photos, 旧数据仍可见. -->
                     <div class="trad-item">
-                      <span class="trad-label">证据照片</span>
-                      <template v-if="stepPhotos(row).length > 0">
+                      <span class="trad-label">投入照片</span>
+                      <template v-if="stepInputPhotos(row).length > 0">
                         <el-image
-                          v-for="(url, i) in stepPhotos(row)"
-                          :key="i"
+                          v-for="(url, i) in stepInputPhotos(row)"
+                          :key="'in-' + i"
                           :src="url"
                           fit="cover"
-                          :preview-src-list="stepPhotos(row)"
+                          :preview-src-list="stepInputPhotos(row)"
                           :initial-index="i"
                           class="trad-thumb"
                           preview-teleported
                         />
                       </template>
                       <span v-else class="trad-empty">—</span>
+                    </div>
+                    <div class="trad-item">
+                      <span class="trad-label">产出照片</span>
+                      <template v-if="stepOutputPhotos(row).length > 0">
+                        <el-image
+                          v-for="(url, i) in stepOutputPhotos(row)"
+                          :key="'out-' + i"
+                          :src="url"
+                          fit="cover"
+                          :preview-src-list="stepOutputPhotos(row)"
+                          :initial-index="i"
+                          class="trad-thumb"
+                          preview-teleported
+                        />
+                      </template>
+                      <span v-else class="trad-empty">—</span>
+                    </div>
+                    <!-- legacy 回退: 旧数据无 input/output 分组时, 用合并 photos 兜底 (新数据此组不显示) -->
+                    <div v-if="stepLegacyFallbackPhotos(row).length > 0" class="trad-item">
+                      <span class="trad-label">证据照片</span>
+                      <el-image
+                        v-for="(url, i) in stepLegacyFallbackPhotos(row)"
+                        :key="'legacy-' + i"
+                        :src="url"
+                        fit="cover"
+                        :preview-src-list="stepLegacyFallbackPhotos(row)"
+                        :initial-index="i"
+                        class="trad-thumb"
+                        preview-teleported
+                      />
                     </div>
                     <!-- 工时段: 每段 起-止 N人 备注 -->
                     <div class="trad-item">
@@ -632,8 +693,18 @@ function getTimelineIcon(type: string) {
             <el-table-column label="道" width="60" align="center">
               <template #default="{ row }">{{ row.processOrder }}</template>
             </el-table-column>
-            <el-table-column label="工序" min-width="120" show-overflow-tooltip>
-              <template #default="{ row }">{{ row.processName || ('第' + row.processOrder + '道') }}</template>
+            <el-table-column label="工序" min-width="150" show-overflow-tooltip>
+              <template #default="{ row }">
+                <span>{{ row.processName || ('第' + row.processOrder + '道') }}</span>
+                <!-- 单元3 (F006 三阶段): 道阶段徽标 — 待投料/生产中/已完工. null (legacy) → 无徽标. -->
+                <el-tag
+                  v-if="phaseTag(row.phase)"
+                  :type="phaseTag(row.phase)!.type"
+                  size="small"
+                  effect="plain"
+                  style="margin-left: 6px"
+                >{{ phaseTag(row.phase)!.text }}</el-tag>
+              </template>
             </el-table-column>
             <el-table-column label="投入" width="130" align="right">
               <template #default="{ row }">{{ formatNum(row.totalInput) }} {{ row.inputUnit || '' }}</template>

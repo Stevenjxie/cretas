@@ -828,6 +828,185 @@ class YieldReportServiceImplTest {
         assertThat(settled.get(0).getSettledAt()).isNotNull();
     }
 
+    // ── 三阶段报工 (单元1): submitReport 按 reportKind 字段隔离 ──────────────────────
+
+    /** 共用 helper: 三阶段报工 task 60 (首道, WP-PHASE, syMax 配置) mock setup. */
+    private void setupPhaseTask(BigDecimal syMax) {
+        WorkProcessTask t = task(60L, 1, "WP-PHASE");
+        t.setProductTypeId("PT-PH");
+        when(taskRepo.findByFactoryIdAndId("F006", 60L)).thenReturn(Optional.of(t));
+        WorkProcess wp = WorkProcess.builder().id("WP-PHASE").factoryId("F006")
+                .unit("kg").standardHourlyRate(new BigDecimal("30"))
+                .standardYieldMax(syMax).build();
+        when(processRepo.findById("WP-PHASE")).thenReturn(Optional.of(wp));
+        when(factorySettingsRepo.findProductionSettingsByFactoryId("F006")).thenReturn(null);
+        when(reportRepo.findYieldReportsByBatch(anyString(), eq(1L))).thenReturn(List.of());
+        when(reportRepo.findYieldReportsByTask("F006", 60L)).thenReturn(List.of());
+    }
+
+    @Test
+    void submitReport_inputKind_forcesOutputNull_computesMaterialCost_persistsKind() {
+        setupPhaseTask(new BigDecimal("1.0000"));
+        ArgumentCaptor<ProductionReport> cap = ArgumentCaptor.forClass(ProductionReport.class);
+        when(reportRepo.save(cap.capture())).thenAnswer(i -> {
+            ProductionReport r = i.getArgument(0); r.setId(601L); return r;
+        });
+        // material batch with price → materialCost computed
+        MaterialBatch mb = new MaterialBatch();
+        mb.setId("mb-ph"); mb.setStatus(MaterialBatchStatus.AVAILABLE);
+        mb.setUnitPrice(new BigDecimal("2.00"));
+        when(materialBatchRepo.findById("mb-ph")).thenReturn(Optional.of(mb));
+
+        YieldReportRequest req = new YieldReportRequest();
+        req.setWorkProcessTaskId(60L);
+        req.setReportKind("INPUT");
+        req.setInputQuantity(new BigDecimal("998"));
+        req.setInputUnit("kg");
+        req.setOutputQuantity(new BigDecimal("980"));   // 误填 → 必须被强制 null
+        req.setOutputUnit("kg");
+        req.setMaterialBatchRefs(List.of(new MaterialBatchRef("mb-ph", new BigDecimal("998"), "kg")));
+
+        Map<String, Object> out = svc.submitReport("F006", 1L, 5L, req);
+
+        assertThat(out.get("reportId")).isEqualTo(601L);
+        ProductionReport saved = cap.getValue();
+        assertThat(saved.getReportKind()).isEqualTo("INPUT");
+        assertThat(saved.getInputQuantity()).isEqualByComparingTo("998");
+        assertThat(saved.getOutputQuantity()).isNull();          // 强制 null (即便请求带了)
+        assertThat(saved.getMaterialCost()).isEqualByComparingTo("1996.00");  // 998 × 2.00
+        assertThat(saved.getLaborCost()).isNull();               // INPUT 不算人工
+        assertThat(saved.getMaterialBatchRefs()).isNotNull().hasSize(1);
+        // INPUT 阶段不产出 → 不应 upsert WIP
+        verify(wipRepo, never()).save(any(SemiFinishedInventory.class));
+    }
+
+    @Test
+    void submitReport_segmentKind_forcesInputOutputNull_computesLaborCost() {
+        setupPhaseTask(new BigDecimal("1.0000"));
+        ArgumentCaptor<ProductionReport> cap = ArgumentCaptor.forClass(ProductionReport.class);
+        when(reportRepo.save(cap.capture())).thenAnswer(i -> {
+            ProductionReport r = i.getArgument(0); r.setId(602L); return r;
+        });
+
+        YieldReportRequest req = new YieldReportRequest();
+        req.setWorkProcessTaskId(60L);
+        req.setReportKind("SEGMENT");
+        req.setInputQuantity(new BigDecimal("100"));   // 误填 → 强制 null
+        req.setInputUnit("kg");
+        req.setOutputQuantity(new BigDecimal("90"));   // 误填 → 强制 null
+        req.setOutputUnit("kg");
+        YieldReportRequest.LaborSegment seg = new YieldReportRequest.LaborSegment();
+        seg.setStartTime("08:00"); seg.setEndTime("10:00"); seg.setHeadcount(3);   // 2h × 3 = 6 person-h
+        req.setLaborSegments(List.of(seg));
+
+        Map<String, Object> out = svc.submitReport("F006", 1L, 5L, req);
+
+        assertThat(out.get("reportId")).isEqualTo(602L);
+        ProductionReport saved = cap.getValue();
+        assertThat(saved.getReportKind()).isEqualTo("SEGMENT");
+        assertThat(saved.getInputQuantity()).isNull();
+        assertThat(saved.getOutputQuantity()).isNull();
+        assertThat(saved.getMaterialCost()).isNull();
+        assertThat(saved.getLaborCost()).isEqualByComparingTo("180.00");   // 6 person-h × 30
+        assertThat(saved.getLaborSegments()).isNotNull().hasSize(1);
+        verify(wipRepo, never()).save(any(SemiFinishedInventory.class));
+    }
+
+    @Test
+    void submitReport_outputKind_forcesInputNull_keepsOutput_upsertsWip() {
+        setupPhaseTask(new BigDecimal("1.5000"));   // syMax 高, 不触发超收
+        // task-accumulated cost from prior INPUT/SEGMENT reports (for OUTPUT WIP cost roll-up)
+        when(reportRepo.findYieldReportsByTask("F006", 60L)).thenReturn(List.of(
+                ProductionReport.builder().reportKind("INPUT").materialCost(new BigDecimal("1000.00")).build(),
+                ProductionReport.builder().reportKind("SEGMENT").laborCost(new BigDecimal("180.00")).build()
+        ));
+        ArgumentCaptor<ProductionReport> cap = ArgumentCaptor.forClass(ProductionReport.class);
+        when(reportRepo.save(cap.capture())).thenAnswer(i -> {
+            ProductionReport r = i.getArgument(0); r.setId(603L); return r;
+        });
+
+        YieldReportRequest req = new YieldReportRequest();
+        req.setWorkProcessTaskId(60L);
+        req.setReportKind("OUTPUT");
+        req.setInputQuantity(new BigDecimal("998"));   // 误填 → 强制 null
+        req.setInputUnit("kg");
+        req.setOutputQuantity(new BigDecimal("980"));
+        req.setOutputUnit("kg");
+
+        Map<String, Object> out = svc.submitReport("F006", 1L, 5L, req);
+
+        assertThat(out.get("reportId")).isEqualTo(603L);
+        ProductionReport saved = cap.getValue();
+        assertThat(saved.getReportKind()).isEqualTo("OUTPUT");
+        assertThat(saved.getInputQuantity()).isNull();           // 强制 null
+        assertThat(saved.getOutputQuantity()).isEqualByComparingTo("980");
+        assertThat(saved.getLaborCost()).isNull();               // 成本在 INPUT/SEGMENT 报工上
+        assertThat(saved.getMaterialCost()).isNull();
+        // OUTPUT 阶段产出锁定 → upsert WIP
+        ArgumentCaptor<SemiFinishedInventory> wipCap = ArgumentCaptor.forClass(SemiFinishedInventory.class);
+        verify(wipRepo).save(wipCap.capture());
+        SemiFinishedInventory wip = wipCap.getValue();
+        assertThat(wip.getProducedQuantity()).isEqualByComparingTo("980");
+        // WIP 成本滚动用整道汇总 (Σ INPUT materialCost 1000 + Σ SEGMENT laborCost 180 = 1180), 非本 OUTPUT 报工(null)
+        assertThat(wip.getAccumulatedCost()).isEqualByComparingTo("1180.00");
+    }
+
+    @Test
+    void submitReport_nullKind_legacyFullBehaviorUnchanged() {
+        // 回归守卫: reportKind=null → 旧式整合, 投入+产出全保留, 成本全算, WIP upsert
+        setupPhaseTask(new BigDecimal("1.5000"));
+        MaterialBatch mb = new MaterialBatch();
+        mb.setId("mb-leg"); mb.setStatus(MaterialBatchStatus.AVAILABLE);
+        mb.setUnitPrice(new BigDecimal("2.00"));
+        when(materialBatchRepo.findById("mb-leg")).thenReturn(Optional.of(mb));
+        ArgumentCaptor<ProductionReport> cap = ArgumentCaptor.forClass(ProductionReport.class);
+        when(reportRepo.save(cap.capture())).thenAnswer(i -> {
+            ProductionReport r = i.getArgument(0); r.setId(604L); return r;
+        });
+
+        YieldReportRequest req = new YieldReportRequest();
+        req.setWorkProcessTaskId(60L);
+        // reportKind not set → null (legacy)
+        req.setInputQuantity(new BigDecimal("998"));
+        req.setInputUnit("kg");
+        req.setOutputQuantity(new BigDecimal("980"));
+        req.setOutputUnit("kg");
+        req.setWorkMinutes(120);
+        req.setWorkerCount(3);
+        req.setMaterialBatchRefs(List.of(new MaterialBatchRef("mb-leg", new BigDecimal("998"), "kg")));
+
+        Map<String, Object> out = svc.submitReport("F006", 1L, 5L, req);
+
+        ProductionReport saved = cap.getValue();
+        assertThat(saved.getReportKind()).isNull();
+        assertThat(saved.getInputQuantity()).isEqualByComparingTo("998");   // 投入保留
+        assertThat(saved.getOutputQuantity()).isEqualByComparingTo("980");  // 产出保留
+        assertThat(saved.getLaborCost()).isEqualByComparingTo("180.00");    // 3 人 × 2h × 30 = 180
+        assertThat(saved.getMaterialCost()).isEqualByComparingTo("1996.00"); // 998 × 2.00
+        // 旧式: 有产出 → WIP upsert
+        verify(wipRepo).save(any(SemiFinishedInventory.class));
+        // yieldRate 正常返回 (旧式行为不变)
+        assertThat(out.get("yieldRate")).isNotNull();
+    }
+
+    @Test
+    void submitReport_outputKind_missingOutput_throws400() {
+        // OUTPUT 阶段缺产出量 → 400 (产出阶段必填 outputQuantity)
+        setupPhaseTask(new BigDecimal("1.5000"));
+
+        YieldReportRequest req = new YieldReportRequest();
+        req.setWorkProcessTaskId(60L);
+        req.setReportKind("OUTPUT");
+        req.setInputUnit("kg");
+        req.setOutputUnit("kg");
+        // outputQuantity 未设 → null
+
+        assertThatThrownBy(() -> svc.submitReport("F006", 1L, 5L, req))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(ex -> assertThat(((BusinessException) ex).getCode()).isEqualTo(400));
+        verify(reportRepo, never()).save(any(ProductionReport.class));
+    }
+
     // ── P0-2: kg/份 单位换算 ──────────────────────────────────────────────────────
 
     @Test

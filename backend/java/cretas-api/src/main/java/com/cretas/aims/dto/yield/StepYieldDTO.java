@@ -52,4 +52,13 @@ public class StepYieldDTO {
     private BigDecimal wasteQuantity;
     /** Σ 本道留样数 (null-safe; 全 null → null; 通常仅末道有) */
     private Integer sampleRetainQuantity;
+
+    // ── 三阶段报工 (单元1): 阶段推断 + 照片按 reportKind 分组 ──────────────
+    /** 本道阶段: AWAITING_INPUT (无投入) / IN_PRODUCTION (有投入无产出) / COMPLETED (有产出)。
+     *  旧式报工 (reportKind null) 按 input/output 有无推断, 与三阶段语义一致。 */
+    private String phase;
+    /** 投入阶段照片 (来自 reportKind ∈ {INPUT, SEGMENT} 的报工; 旧式 null reportKind 也归此组); 去重保序; 无则 null */
+    private List<String> inputPhotos;
+    /** 产出阶段照片 (来自 reportKind == OUTPUT 的报工); 去重保序; 无则 null */
+    private List<String> outputPhotos;
 }
