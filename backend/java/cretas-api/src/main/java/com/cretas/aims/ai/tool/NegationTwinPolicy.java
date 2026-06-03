@@ -30,7 +30,10 @@ public class NegationTwinPolicy {
     /** Component-2 rerank margin. Read twin within this score gap of a write top → promote read. */
     static final double TWIN_RERANK_MARGIN = 0.10;
 
-    /** canonical write -> read twin. Verified codes only (see spec §5.1 finding 1). */
+    // canonical write→read twin map (single source of truth). Also the delegation source for the legacy
+    // convertNegationIntent — a few keys (MATERIAL_EXPIRED_QUERY, SCALE_ADD_DEVICE) are read/non-suffix
+    // intents kept for convertNegationIntent parity; they are inert on the VETO_WRITE isWrite path
+    // (isWrite==false → passed through).
     private static final Map<String, String> WRITE_TO_READ_TWIN = Map.ofEntries(
             Map.entry("PROCESSING_BATCH_COMPLETE", "PROCESSING_BATCH_LIST"),
             Map.entry("PROCESSING_BATCH_START", "PROCESSING_BATCH_LIST"),
@@ -104,7 +107,7 @@ public class NegationTwinPolicy {
             return result;  // no veto safety filter on non-veto paths
         }
 
-        // Safety invariant (铁律): VETO_* must never emit a write candidate.
+        // VETO safety net: unreachable from the NONE/EXCLUDE path (which returned above). Guarantees no write survives a VETO_*.
         result.removeIf(c -> isWrite(c, configResolver));
         return result;
     }
@@ -129,6 +132,7 @@ public class NegationTwinPolicy {
     }
 
     /** read-phrased query whose top is a write with a comparable read present → promote the read. */
+    // Assumes candidates are sorted descending by confidence (upstream topCandidates contract).
     private List<CandidateIntent> twinRerank(List<CandidateIntent> result,
                                              Function<String, AIIntentConfig> resolver) {
         if (result.size() < 2) return result;
@@ -148,6 +152,8 @@ public class NegationTwinPolicy {
         return result;
     }
 
+    // Display fields (intentName/category/description) intentionally not copied — bestMatch is re-resolved
+    // from config downstream; topCandidates use code+score only.
     private CandidateIntent retarget(CandidateIntent from, String newCode) {
         return CandidateIntent.builder()
                 .intentCode(newCode)

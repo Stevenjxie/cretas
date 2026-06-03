@@ -98,4 +98,24 @@ class NegationTwinPolicyTest {
     void nullOrEmptyCandidates_returnedAsIs() {
         assertThat(policy.applyNegationVetoAndTwinRerank(List.of(), null, IntentKnowledgeBase.ActionType.QUERY, c -> null)).isEmpty();
     }
+
+    @Test
+    void vetoWrite_treatsHighSensitivityConfigAsWrite_evenWithoutSuffix() {
+        var in = List.of(c("DASHBOARD_OVERVIEW", 0.9));          // no write suffix
+        var neg = NegationInfo.builder().kind(NegationKind.VETO_WRITE).hasNegation(true).build();
+        var out = policy.applyNegationVetoAndTwinRerank(in, neg, IntentKnowledgeBase.ActionType.QUERY,
+                resolver(Map.of("DASHBOARD_OVERVIEW", "HIGH")));  // HIGH sensitivity → isWriteIntent==true
+        assertThat(out).isEmpty();   // treated as write, no twin → dropped by safety invariant
+    }
+
+    @Test
+    void nullCandidates_returnedAsIs() {
+        assertThat(policy.applyNegationVetoAndTwinRerank(null, null, IntentKnowledgeBase.ActionType.QUERY, code -> null)).isNull();
+    }
+
+    @Test
+    void isVetoToClarification_trueForVetoWriteAllDropped() {
+        var neg = NegationInfo.builder().kind(NegationKind.VETO_WRITE).build();
+        assertThat(policy.isVetoToClarification(List.of(c("SOME_DELETE", 0.9)), List.of(), neg)).isTrue();
+    }
 }
