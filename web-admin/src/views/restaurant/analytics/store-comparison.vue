@@ -10,16 +10,13 @@
           </div>
           <div class="header-right">
  <el-button v-if="canViewPrice" type="info" plain @click="$router.push('/restaurant/analytics/gross-margin')"> 菜品毛利分析 →</el-button>
-            <el-select v-model="selectedUploadId" placeholder="选择数据源" filterable style="width: 280px; margin-left: 8px" @change="handleSelectUpload">
-              <el-option v-for="u in uploads" :key="u.id" :label="`${u.fileName} (${u.rowCount}行)`" :value="u.id" />
-            </el-select>
           </div>
         </div>
       </template>
 
       <div v-if="loading" v-loading="true" style="min-height: 400px" />
       <el-empty v-else-if="!canViewPrice" description="您没有查看价格/财务数据的权限" />
-      <el-empty v-else-if="stores.length === 0" description="请选择数据源" />
+      <el-empty v-else-if="stores.length === 0" description="暂无门店销售数据（全部历史）。上传POS销售明细后将自动展示门店对比。" />
 
       <template v-if="canViewPrice && stores.length > 0 && !loading">
         <!-- Bar chart -->
@@ -95,14 +92,16 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, nextTick, watch, onUnmounted } from 'vue'
+import { ref, computed, nextTick, watch, onUnmounted, onMounted } from 'vue'
 import { ArrowLeft } from '@element-plus/icons-vue'
+import { ElMessage } from 'element-plus'
 import echarts from '@/utils/echarts'
 import { usePermissionStore } from '@/store/modules/permission'
 import { useChartResize } from '@/composables/useChartResize'
-import { useRestaurantAnalytics } from '@/composables/useRestaurantAnalytics'
 import { formatAmount } from '@/utils/tableFormatters'
+import { pythonFetch, getFactoryId } from '@/api/smartbi/common'
 import type { StoreComparisonData } from '@/types/restaurant-analytics'
+import { goldStoreComparisonToData, type GoldStoreComparisonPayload } from './storeComparisonGold'
 
 const permissionStore = usePermissionStore()
 const canViewPrice = computed(() => permissionStore.canViewPrice)
@@ -110,10 +109,34 @@ const canViewPrice = computed(() => permissionStore.canViewPrice)
 const containerRef = ref<HTMLElement>()
 useChartResize(containerRef)
 
-const {
-  uploads, selectedUploadId, data: storeData, loading,
-  handleSelectUpload,
-} = useRestaurantAnalytics<StoreComparisonData>((result) => result.storeComparison)
+// WS3 #2: 门店对比走 gold /restaurant-ops/store-comparison (默认全部历史),
+// 不再依赖手选 CSV 数据源。毛利率列仍走 /store-margin (storeMarginMap)。
+const storeData = ref<StoreComparisonData | null>(null)
+const loading = ref(false)
+
+async function loadStoreComparison() {
+  loading.value = true
+  try {
+    const factoryId = getFactoryId()
+    // 默认不传日期 = 全部历史 (WS1 store-comparison 端点省略 → 开区间)。
+    const res = await pythonFetch(
+      `/api/smartbi/restaurant-ops/store-comparison?factory_id=${factoryId}`,
+      { timeoutMs: 60000 },
+    ) as { success?: boolean; message?: string; data?: GoldStoreComparisonPayload }
+    if (res && res.success === false) {
+      ElMessage.error(res.message || '门店对比数据加载失败')
+      storeData.value = null
+      return
+    }
+    storeData.value = goldStoreComparisonToData(res?.data)
+  } catch (e) {
+    console.error('[store-compare] comparison load failed:', e)
+    ElMessage.error('门店对比数据加载失败，请稍后重试')
+    storeData.value = null
+  } finally {
+    loading.value = false
+  }
+}
 
 const stores = computed(() => storeData.value?.stores ?? [])
 const weakStores = computed(() => storeData.value?.weakStores ?? [])
@@ -128,7 +151,6 @@ async function loadStoreMargin() {
   // return empty for any merchant whose POS is not recent, causing the 毛利率 column
   // to silently show "—" for all rows.
   try {
-    const { pythonFetch } = await import('@/api/smartbi/common')
     const res = await pythonFetch('/api/smartbi/restaurant-ops/store-margin?days=365') as {
       success: boolean
       data?: { stores: StoreMarginRow[] }
@@ -209,7 +231,11 @@ function renderChart() {
   })
 }
 
-// composable handles onMounted + auto-select
+onMounted(() => {
+  // Only fetch when the user can view price/financial data — otherwise the page
+  // shows the no-permission empty state and we skip the (would-be-stripped) call.
+  if (canViewPrice.value) loadStoreComparison()
+})
 
 onUnmounted(() => {
   const el = document.getElementById('chart-store-bar')
