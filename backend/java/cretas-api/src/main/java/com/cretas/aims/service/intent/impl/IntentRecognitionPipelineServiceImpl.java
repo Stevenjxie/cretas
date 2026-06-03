@@ -4524,11 +4524,25 @@ public class IntentRecognitionPipelineServiceImpl implements IntentRecognitionPi
      * @param confidence 置信度
      * @param sourceType 来源类型
      */
-    private void tryAutoLearnExpression(String userInput, String intentCode,
+    void tryAutoLearnExpression(String userInput, String intentCode,
                                          String factoryId, double confidence,
                                          LearnedExpression.SourceType sourceType) {
         if (userInput == null || userInput.trim().isEmpty()) {
             return;
+        }
+
+        // Track C 防中毒: 拒绝学习业态不兼容的意图(餐饮工厂永不学 SKU_GROSS_MARGIN 等 FACTORY 意图)
+        try {
+            String biz = configService.resolveBusinessDomain(factoryId);
+            AIIntentConfig cfg = configService.getAllIntents(factoryId).stream()
+                    .filter(i -> intentCode.equals(i.getIntentCode())).findFirst().orElse(null);
+            if (cfg != null && !BusinessTypeScope.isCompatible(cfg.getBusinessType(), biz)) {
+                log.warn("拒绝中毒学习: intent={} business_type={} 与工厂 biz={} 不兼容",
+                        intentCode, cfg.getBusinessType(), biz);
+                return;
+            }
+        } catch (Exception e) {
+            /* 解析失败不阻断既有学习, 保守放行 */
         }
 
         try {
