@@ -3,18 +3,21 @@
  * payload to the existing `StoreComparisonData` shape store-comparison.vue renders.
  *
  * Gold endpoint returns (after pythonFetch snake→camel):
- *   { stores: [{ name, revenue, orderCount, avgTicket }], medianRevenue,
- *     weakStores: [name,...] }
+ *   { stores: [{ name, revenue, orderCount, avgTicket, discountPct }],
+ *     medianRevenue, weakStores: [name,...] }
  *
  * Legacy `StoreComparisonData` (from CSV path):
  *   { stores: StoreMetrics[{name,revenue,orderCount,avgTicket,discountPct}],
  *     weakStores, medianRevenue }
  *
- * The only gap: gold has NO `discountPct` (折扣率) — the daily-agg gold path
- * doesn't carry per-store discount. We default it to 0 (honest: this path has
- * no discount data; the 折扣率 column shows 0.0% and the "折扣高" status never
- * fires off gold data). RBAC-nulled revenue / avgTicket are coerced to 0 so the
- * table/chart render without NaN (the page is also gated behind canViewPrice).
+ * Follow-up fix (fix/fu-discount): gold now DOES carry per-store `discountPct`
+ * (折扣率). agg_daily holds discount_amount + gross_amount at per-store grain,
+ * so the store-comparison query computes discountPct = discount/gross*100 per
+ * store. We pass it straight through (default 0 only when the payload omits it,
+ * e.g. a pre-fix backend that hasn't shipped the field yet). RBAC-nulled
+ * revenue / avgTicket are coerced to 0 so the table/chart render without NaN
+ * (the page is also gated behind canViewPrice). discountPct is a rate (not an
+ * absolute amount) so RBAC leaves it visible.
  *
  * Pure function (no Vue / no fetch) → unit-testable without mounting.
  */
@@ -26,6 +29,9 @@ export interface GoldStore {
   revenue: number | null
   orderCount: number
   avgTicket: number | null
+  /** 折扣率 % (discount/gross*100). A rate, not an amount → RBAC leaves it
+   *  visible. Optional/null only for a pre-fix backend that omits the field. */
+  discountPct?: number | null
 }
 
 export interface GoldStoreComparisonPayload {
@@ -51,7 +57,10 @@ export function goldStoreComparisonToData(
     revenue: s.revenue ?? 0,
     orderCount: s.orderCount ?? 0,
     avgTicket: s.avgTicket ?? 0,
-    discountPct: 0, // gold daily-agg path has no per-store discount data
+    // gold store-comparison now computes per-store 折扣率 from agg_daily
+    // (discount_amount / gross_amount). Default 0 only if the field is absent
+    // (pre-fix backend).
+    discountPct: s.discountPct ?? 0,
   }))
 
   return {
