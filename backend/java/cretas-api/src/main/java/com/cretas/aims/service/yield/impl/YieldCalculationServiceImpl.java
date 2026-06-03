@@ -137,8 +137,13 @@ public class YieldCalculationServiceImpl implements YieldCalculationService {
             // 本道总成本 = labor + material (两者全 null → null; 任一非 null → 该项视为 0 参与求和)
             BigDecimal stepCost = nullSafeAdd(stepLaborCost, stepMaterialCost);
             ProductionReport head = group.get(0);
-            String inUnit = head.getInputUnit();
-            String outUnit = head.getOutputUnit();
+            // 三阶段 (单元1): 投入单位在 INPUT report、产出单位在 OUTPUT report (各自另一侧 null),
+            // 不能只看 group.get(0)(否则 INPUT report 的 outputUnit=null → 误判不可比 → 出成率丢失)。
+            // 扫全组取首个非 null 的 inputUnit / outputUnit。
+            String inUnit = group.stream().map(ProductionReport::getInputUnit)
+                    .filter(u -> u != null).findFirst().orElse(null);
+            String outUnit = group.stream().map(ProductionReport::getOutputUnit)
+                    .filter(u -> u != null).findFirst().orElse(null);
             boolean comparable = inUnit != null && inUnit.equals(outUnit);
             BigDecimal yieldRate = null;
             if (comparable && totalInput.compareTo(BigDecimal.ZERO) > 0) {
