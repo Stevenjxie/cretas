@@ -237,6 +237,12 @@ public class ProductionReport {
     @Column(name = "source_wip_no", length = 64)
     private String sourceWipNo;
 
+    /** 三阶段报工 (单元1): 报工阶段标记 INPUT/SEGMENT/OUTPUT; null = 旧式整合报工 (向后兼容)。
+     *  INPUT=投入(领料), SEGMENT=时段工时(可重复累加), OUTPUT=完工产出。
+     *  同 work_process_task 多条报工经 calculateSteps 自动 SUM 得整道。 */
+    @Column(name = "report_kind", length = 10)
+    private String reportKind;
+
     /** 是否已结清 (每日结清打标) */
     @Column(name = "settled")
     @Builder.Default

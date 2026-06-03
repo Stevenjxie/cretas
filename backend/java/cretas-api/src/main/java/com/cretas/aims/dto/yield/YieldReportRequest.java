@@ -31,6 +31,14 @@ public class YieldReportRequest {
      */
     private String sourceWipNo;
 
+    /**
+     * 三阶段报工 (单元1): 本次报工的阶段 INPUT/SEGMENT/OUTPUT。
+     * <p>null/缺省 = 旧式整合报工 (一次提交投入+产出, 向后兼容零回归)。
+     * 按阶段隔离字段 (INPUT 忽略 output, SEGMENT 忽略 input/output, OUTPUT 忽略 input),
+     * 避免误填污染同 task 跨报工累加。</p>
+     */
+    private String reportKind;
+
     // ==================== 传统报工适配 (适配单元1 地基; 算法在后续任务) ====================
 
     /** 图片证据 URL 列表 (前端先传 OSS 拿 URL, 存入 ProductionReport.photos) */

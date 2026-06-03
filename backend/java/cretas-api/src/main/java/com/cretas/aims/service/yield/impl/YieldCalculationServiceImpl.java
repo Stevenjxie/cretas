@@ -50,7 +50,39 @@ public class YieldCalculationServiceImpl implements YieldCalculationService {
             BigDecimal stepWaste = null;
             Integer stepSampleRetain = null;
             Integer stepWorkersMax = null;           // MAX headcount across reports (peak, 非 SUM)
+            // 三阶段 (单元1): 照片按 reportKind 分组 (INPUT/SEGMENT/legacy → inputPhotos; OUTPUT → outputPhotos)
+            List<String> stepInputPhotos = null;     // 去重保序
+            List<String> stepOutputPhotos = null;    // 去重保序
+            // 三阶段 phase 推断信号: 是否有 INPUT 报工 / 有 OUTPUT 报工 (或 legacy: 有投入 / 有产出)
+            boolean hasInputSignal = false;
+            boolean hasOutputSignal = false;
             for (ProductionReport r : group) {
+                String kind = r.getReportKind();
+                boolean kindOutput = "OUTPUT".equals(kind);
+                boolean kindInput = "INPUT".equals(kind);
+                // phase 信号: 三阶段按 reportKind; legacy (kind null) 按 input/output 有无 (与三阶段语义一致)
+                if (kindOutput || (kind == null && r.getOutputQuantity() != null
+                        && r.getOutputQuantity().compareTo(BigDecimal.ZERO) > 0)) {
+                    hasOutputSignal = true;
+                }
+                if (kindInput || (kind == null && r.getInputQuantity() != null
+                        && r.getInputQuantity().compareTo(BigDecimal.ZERO) > 0)) {
+                    hasInputSignal = true;
+                }
+                // 照片分组: OUTPUT 报工 → outputPhotos; INPUT/SEGMENT/legacy(null) → inputPhotos
+                if (r.getPhotos() != null && !r.getPhotos().isEmpty()) {
+                    if (kindOutput) {
+                        if (stepOutputPhotos == null) stepOutputPhotos = new ArrayList<>();
+                        for (String p : r.getPhotos()) {
+                            if (p != null && !stepOutputPhotos.contains(p)) stepOutputPhotos.add(p);
+                        }
+                    } else {
+                        if (stepInputPhotos == null) stepInputPhotos = new ArrayList<>();
+                        for (String p : r.getPhotos()) {
+                            if (p != null && !stepInputPhotos.contains(p)) stepInputPhotos.add(p);
+                        }
+                    }
+                }
                 if (r.getInputQuantity() != null) totalInput = totalInput.add(r.getInputQuantity());
                 // A3: 跨批带入计入当前道 input
                 if (r.getSourceBatchRefs() != null) {
@@ -114,6 +146,10 @@ public class YieldCalculationServiceImpl implements YieldCalculationService {
             }
             BigDecimal carryover = prevOutput == null ? null : prevOutput.subtract(totalInput);
 
+            // 三阶段 (单元1): phase 推断 — 有产出信号 → COMPLETED; 有投入信号(无产出) → IN_PRODUCTION; 否则 AWAITING_INPUT
+            String phase = hasOutputSignal ? "COMPLETED"
+                    : (hasInputSignal ? "IN_PRODUCTION" : "AWAITING_INPUT");
+
             steps.add(StepYieldDTO.builder()
                     .workProcessTaskId(head.getWorkProcessTaskId())
                     .processOrder(head.getProcessOrder())
@@ -134,6 +170,10 @@ public class YieldCalculationServiceImpl implements YieldCalculationService {
                     .byproducts(stepByproducts)
                     .wasteQuantity(stepWaste)
                     .sampleRetainQuantity(stepSampleRetain)
+                    // 三阶段 (单元1): phase 推断 + 照片按 reportKind 分组
+                    .phase(phase)
+                    .inputPhotos(stepInputPhotos)
+                    .outputPhotos(stepOutputPhotos)
                     .build());
             prevOutput = totalOutput;
         }
