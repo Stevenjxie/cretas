@@ -74,12 +74,14 @@ from smartbi.api import (  # noqa: E402
     whatif,
     rfm,
     financial_ratios,
+    supplier_price,
 )
 from smartbi.api import restaurant_sections  # noqa: E402
 from smartbi.api import intent_analysis  # noqa: E402
 from smartbi.api import revenue_report  # noqa: E402  (Phase G2, PR #516 — was unwired)
 from smartbi.api import sales_preset  # noqa: E402  (Sprint 4 W2 S-REPORTS-PRESETS — top 5 active + 9 Sprint 5 stubs)
 from smartbi.api import upload_status  # noqa: E402  (Phase IIa ops dashboard, 2026-05-14)
+from smartbi.api import restaurant_health_check  # noqa: E402  (G4 AI 经营体检表, 2026-06-03)
 from smartbi.api.materialized_analytics import router as materialized_analytics_router  # noqa: E402
 from smartbi.capability.api import router as capability_router  # noqa: E402
 
@@ -987,7 +989,9 @@ app.include_router(benchmark.router, prefix="/api/smartbi", tags=["Industry Benc
 app.include_router(finance_extract.router, prefix="/api/finance", tags=["Finance Extract"])
 app.include_router(restaurant_analytics.router, prefix="/api/smartbi", tags=["Restaurant Analytics"])
 app.include_router(restaurant_ops_gold.router, prefix="/api/smartbi", tags=["Restaurant Ops Gold"])
+app.include_router(supplier_price.router, prefix="/api/smartbi", tags=["Supplier Price Gold"])
 app.include_router(restaurant_ops_recipes.router, prefix="/api/smartbi", tags=["Restaurant Ops Recipes"])
+app.include_router(restaurant_health_check.router, prefix="/api/smartbi", tags=["Restaurant Health Check"])
 app.include_router(restaurant_sections.router, tags=["Restaurant Sections"])
 app.include_router(production_ai.router, prefix="/api/smartbi", tags=["Production AI"])
 app.include_router(financial_dashboard.router, prefix="/api/smartbi/financial-dashboard", tags=["Financial Dashboard"])
@@ -1014,6 +1018,10 @@ app.include_router(printing_api.router, prefix="/api/printing", tags=["Printing"
 # Gold layer reads — v1 Phase B pilot (§5). Finance-summary from agg_daily.
 from smartbi.api import gold_reads  # noqa: E402
 app.include_router(gold_reads.router, prefix="/api/smartbi", tags=["Gold Reads"])
+
+# G2 餐饮目标拆分 + 达成率预警 (2026-06-03) — year/month/week/day target cascade
+from smartbi.api import restaurant_targets as restaurant_targets_api  # noqa: E402
+app.include_router(restaurant_targets_api.router, prefix="/api/smartbi", tags=["Restaurant Targets"])
 
 # P2 综合分析 (multi-dim synthesis) — review + finance/sales → FactBook → grounded
 # narrative + charts. Path A entrypoint for the Java COMPREHENSIVE_SYNTHESIS tool.

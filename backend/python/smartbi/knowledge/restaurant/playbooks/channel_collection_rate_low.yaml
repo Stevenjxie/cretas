@@ -1,0 +1,74 @@
+# 渠道收款率偏低 — 操作建议手册
+#
+# trigger_metric: channel_collection_rate (0-1 scale)
+# 健康 >= 0.78 / 偏低(warning) 0.70-0.78 / 严重(critical) < 0.70
+#
+# 注意: channel_collection_rate 来自平台抽佣估算 (commission_rates.yaml),
+# 描述需标注"基于平台佣金估算" (D2 决策)。
+
+diagnosis_code: channel_collection_rate_low
+trigger_metric: channel_collection_rate
+trigger_condition: "value < 0.78"
+display_name: "渠道收款率偏低"
+
+severity_levels:
+  warning:
+    condition: "0.70 <= value < 0.78"
+    label: "佣金偏高"
+    color: yellow
+  critical:
+    condition: "value < 0.70"
+    label: "渠道严重失血"
+    color: red
+
+action_plans:
+  - id: 1
+    name: "佣金谈判"
+    priority: "P0"
+    actions:
+      - "拉出最近 3 个月各平台流水, 合并提交谈判材料"
+      - "要求平台代表到店谈判(月流水 >5 万有谈判筹码)"
+      - "申请\"品质商家\"认证可享 1-2% 佣金折扣"
+    expected_impact: "佣金率 -2~3pp, 月净增 ¥3K-8K"
+
+  - id: 2
+    name: "引流私域"
+    priority: "P1"
+    actions:
+      - "在外卖包装/收据印微信群二维码, 引导复购走微信小程序(0 抽佣)"
+      - "储值卡/会员积分仅线下/小程序可用, 降低平台依赖"
+    expected_impact: "私域比例 +10pp, 有效收款率 +2pp"
+
+# ── 结构化处方行动 (P3.7) ─────────────────────────
+rx_actions:
+  - id: CCR-A01
+    title: 申请美团/饿了么品质商家认证
+    description: 品质商家享受 0.5-1% 佣金减免。提交近 30 天好评率>95%+营业额证明。
+    owner: 店长
+    timeframe: 本周内
+    priority: P0
+    effort: low
+    expected_impact: 佣金率 -1pp, 月省 ¥2K-4K
+  - id: CCR-A02
+    title: 拉出平台流水谈商务合同
+    description: 月流水达到阶梯协议门槛可重谈年度合同。整理 3 月流水+好评截图给 BD 经理。
+    owner: 运营经理
+    timeframe: 2 周
+    priority: P0
+    effort: medium
+    expected_impact: 佣金率降 2-3pp
+  - id: CCR-A03
+    title: 搭建微信社群私域闭环
+    description: 在打包袋加贴二维码引流微信群→推小程序复购, 私域订单 0 抽佣。
+    owner: 运营经理
+    timeframe: 本月
+    priority: P1
+    effort: medium
+    expected_impact: 私域占比+10pp, 综合收款率+2pp
+
+sub_sector_notes:
+  鱼类餐饮:
+    - "高客单品类美团费率本应较低(约 18%), 实际收款率<78% 说明渠道结构需优化"
+    - "酸菜鱼/烤鱼适合做堂食预订, 引导大单走堂食降低外卖抽佣占比"
+  火锅:
+    - "火锅高客单可争取美团 18% 阶梯费率, 别用默认 20%"

@@ -39,6 +39,7 @@ import com.cretas.aims.annotation.RequireModule;
 public class MaterialRequisitionController {
 
     private final MaterialRequisitionRepository requisitionRepository;
+    private final com.cretas.aims.service.restaurant.VoiceRequisitionParserService voiceRequisitionParserService;
 
     /**
      * AUD-5 B-A3 sister sweep batch 4b (edge audit 2026-05-20): explicit length caps mirror PG
@@ -135,6 +136,30 @@ public class MaterialRequisitionController {
 
         MaterialRequisition saved = requisitionRepository.save(requisition);
         return ApiResponse.success("领料单创建成功", saved);
+    }
+
+    // ==================== 语音录入草稿 (G7 Tier B) ====================
+
+    /**
+     * 语音录入领料草稿 — 从语音识别文本提取食材/数量/单位 (Rule 2 二段式)。
+     *
+     * <p>先调 POST /voice/recognize 拿到 recognizedText, 再调本接口解析为 slot。
+     * <b>不写库</b> — 前端回填表单, 人工确认后调 POST /requisitions 创建。</p>
+     */
+    @RequireModule("restaurant")
+    @PostMapping("/voice-draft")
+    @Operation(summary = "语音录入领料草稿", description = "语音文本 → 提取食材/数量/单位 (返回草稿, 不落库)")
+    public ApiResponse<com.cretas.aims.dto.restaurant.VoiceRequisitionSlot> createVoiceDraft(
+            @PathVariable String factoryId,
+            @RequestBody Map<String, Object> body) {
+        String voiceText = body != null && body.get("voiceText") != null
+                ? body.get("voiceText").toString() : null;
+        if (!StringUtils.hasText(voiceText)) {
+            throw new BusinessException(400, "请提供语音识别文本 (voiceText)")
+                    .withHint("先调用 /voice/recognize 获取识别文本");
+        }
+        var slot = voiceRequisitionParserService.parse(factoryId, voiceText);
+        return ApiResponse.success(slot.getMessage(), slot);
     }
 
     // ==================== 提交审批 ====================
