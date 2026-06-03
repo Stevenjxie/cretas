@@ -1393,10 +1393,13 @@ function getGrowthClass(value: number): string {
 }
 
 function goToAIQuery(question?: string) {
+  // WS4 把 /smart-bi/query 改成 redirect (→ /smart-bi/analysis?tab=query), 原命名路由
+  // 'SmartBIQuery' 不再 resolve, router.push({name}) 会抛错导致快捷问答 chip 卡住不跳 (#6)。
+  // 改用 path /smart-bi/query (redirect 保留 query → 目标页自动读 q 并提交)。
   if (question) {
-    router.push({ name: 'SmartBIQuery', query: { q: question } });
+    router.push({ path: '/smart-bi/query', query: { q: question } });
   } else {
-    router.push({ name: 'SmartBIQuery' });
+    router.push({ path: '/smart-bi/query' });
   }
 }
 
