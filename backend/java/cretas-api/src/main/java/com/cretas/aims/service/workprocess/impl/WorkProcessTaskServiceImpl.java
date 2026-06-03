@@ -366,6 +366,7 @@ public class WorkProcessTaskServiceImpl implements WorkProcessTaskService {
             dto.setStandardYieldMin(definition.getStandardYieldMin());
             dto.setStandardYieldMax(definition.getStandardYieldMax());
             dto.setOutputUnit(definition.getOutputUnit());  // P0-2: 末道折份/盒
+            dto.setExpectedByproducts(definition.getExpectedByproducts());  // 防呆 Rule 3: OUTPUT 阶段预填
         }
         return dto;
     }

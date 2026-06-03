@@ -54,6 +54,7 @@ public class WorkProcessServiceImpl implements WorkProcessService {
                 .needsInput(dto.getNeedsInput() != null ? dto.getNeedsInput() : true)
                 .outputUnit(dto.getOutputUnit())
                 .standardHourlyRate(dto.getStandardHourlyRate())
+                .expectedByproducts(dto.getExpectedByproducts())
                 .build();
 
         WorkProcess saved = workProcessRepository.save(entity);
@@ -110,6 +111,8 @@ public class WorkProcessServiceImpl implements WorkProcessService {
         if (dto.getNeedsInput() != null) entity.setNeedsInput(dto.getNeedsInput());
         if (dto.getOutputUnit() != null) entity.setOutputUnit(dto.getOutputUnit());
         if (dto.getStandardHourlyRate() != null) entity.setStandardHourlyRate(dto.getStandardHourlyRate());
+        // expectedByproducts: null means "don't change"; explicit empty list means "clear"
+        if (dto.getExpectedByproducts() != null) entity.setExpectedByproducts(dto.getExpectedByproducts());
 
         WorkProcess saved = workProcessRepository.save(entity);
         return toDTO(saved);
@@ -172,6 +175,7 @@ public class WorkProcessServiceImpl implements WorkProcessService {
                 .needsInput(entity.getNeedsInput())
                 .outputUnit(entity.getOutputUnit())
                 .standardHourlyRate(entity.getStandardHourlyRate())
+                .expectedByproducts(entity.getExpectedByproducts())
                 .createdAt(entity.getCreatedAt())
                 .updatedAt(entity.getUpdatedAt())
                 .build();
