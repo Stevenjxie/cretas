@@ -25,6 +25,14 @@ export interface AchievementPoint {
   actual: number | null;
   achievementRate: number | null;
   dataMissing: boolean;
+  // Fix 3: in-progress period flags. A week/month/year period whose last day
+  // is still in the future is INCOMPLETE — its rate only covers the elapsed
+  // days, so a partial-period low percentage is NOT a real low-achievement
+  // signal. FE shows "进行中 (已过 N/总 M 天)" instead of a bare percentage.
+  periodComplete?: boolean;
+  inProgress?: boolean;
+  daysElapsed?: number;
+  daysTotal?: number;
 }
 
 export interface AchievementResponse {
