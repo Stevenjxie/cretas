@@ -1480,6 +1480,19 @@ const businessRoutes: RouteRecordRaw[] = [
             name: 'RestaurantDataCompleteness',
             component: () => import('@/views/restaurant/data-completeness.vue'),
             meta: { requiresAuth: true, title: '数据完整度', module: 'restaurant' },
+          },
+          {
+            // G7 取数自动化 Tier A: 供应商进货录入 (OCR + 手工)
+            path: 'supplier-delivery',
+            name: 'SupplierDeliveryNoteList',
+            component: () => import('@/views/restaurant/supplier-delivery/SupplierDeliveryNoteList.vue'),
+            meta: { requiresAuth: true, title: '供应商进货录入', module: 'restaurant' },
+          },
+          {
+            path: 'supplier-delivery/:id',
+            name: 'SupplierDeliveryNoteDetail',
+            component: () => import('@/views/restaurant/supplier-delivery/SupplierDeliveryNoteDetail.vue'),
+            meta: { requiresAuth: true, title: '送货单详情', module: 'restaurant', hidden: true },
           }
         ]
       },
