@@ -156,7 +156,7 @@ private List<ToolRouterService.ToolCandidate> filterCandidatesByBusinessType(
 
 ### B2. 重标确认的 COMMON-制造业意图 → MANUFACTURING
 
-**Flyway** `V20260913_03__retag_manufacturing_common_intents.sql` (版本号: `_01` 被 sister `product_type_wip_to_fg_yield` 占用, `_02` 是 Track A 关键词, 故用 `_03`):
+**Flyway** `V20260917_02__retag_manufacturing_common_intents.sql` (版本号: merge 前 origin/main 已涨到 V20260916, out-of-order=false → 必须排在最高之上, 故 Track A 关键词=V20260917_01, 本重标=V20260917_02):
 ```sql
 -- ⚠️ 重标值必须是 'FACTORY' 不是 'MANUFACTURING'!
 -- resolveBusinessDomain 只返 'RESTAURANT'/'FACTORY' (从不返 'MANUFACTURING')。
