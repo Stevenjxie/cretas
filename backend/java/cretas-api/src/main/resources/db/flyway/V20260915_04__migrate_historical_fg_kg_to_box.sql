@@ -39,6 +39,8 @@ END $$;
 
 -- 主迁移: kg → 盒换算 (UPDATE, 不可逆)
 DO $$
+DECLARE
+    updated_count INT;
 BEGIN
     IF to_regclass('public.finished_goods_batches') IS NULL THEN RETURN; END IF;
 
@@ -57,7 +59,9 @@ BEGIN
        AND pt.grams_per_unit IS NOT NULL
        AND pt.grams_per_unit > 0;
 
-    RAISE NOTICE 'V20260915_04: 历史 FG kg→盒换算完成, % 行更新', ROW_COUNT();
+    -- PostgreSQL plpgsql 取上一条语句行数用 GET DIAGNOSTICS (无 ROW_COUNT() 函数)
+    GET DIAGNOSTICS updated_count = ROW_COUNT;
+    RAISE NOTICE 'V20260915_04: 历史 FG kg→盒换算完成, % 行更新', updated_count;
 END $$;
 
 -- Post-verify: 确认无遗留 kg 行 (产品 unit=盒)
