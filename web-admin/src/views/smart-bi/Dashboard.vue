@@ -947,6 +947,13 @@ async function loadLLMInsightsStream(
   signal: AbortSignal | undefined,
 ): Promise<boolean> {
   if (!factoryId.value) return false;
+  // Deterministic guard (2026-06-03): strip [ ]/【】 wrapping any CJK entity name
+  // (折扣/门店/菜品名) — the insight LLM sometimes wraps names like 「[美团套餐券]」
+  // which reads like JSON. orchestrator SYSTEM_PROMPT also forbids it, but streamed
+  // deltas can't be un-sent, so we clean the display here. Numeric citations [1]/[2]
+  // (no CJK) are preserved.
+  const stripEntityBrackets = (s: string): string =>
+    s ? s.replace(/[\[【]([^\[\]【】]*[一-鿿][^\[\]【】]*)[\]】]/g, '$1') : s;
   // Use the same key that request.ts interceptor reads
   const authHeader = localStorage.getItem('cretas_access_token') || '';
   const url = `/api/mobile/${factoryId.value}/smart-bi/dashboard/executive/insights/custom/stream?startDate=${startDate}&endDate=${endDate}`;
@@ -1000,7 +1007,7 @@ async function loadLLMInsightsStream(
             };
           } else if (event.type === 'delta' && event.text) {
             accumulated += event.text;
-            streamingInsightText.value = accumulated;
+            streamingInsightText.value = stripEntityBrackets(accumulated);
             gotAnyDelta = true;
           } else if (event.type === 'done') {
             // Finalize: append as regular insight
@@ -1010,7 +1017,7 @@ async function loadLLMInsightsStream(
                 ...dashboardData.value,
                 aiInsights: [
                   ...existing,
-                  { level: 'normal', category: 'AI 洞察', message: accumulated, actionSuggestion: null } as never
+                  { level: 'normal', category: 'AI 洞察', message: stripEntityBrackets(accumulated), actionSuggestion: null } as never
                 ],
               };
               insightTimestamp.value = new Date();
