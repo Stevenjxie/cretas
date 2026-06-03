@@ -197,7 +197,9 @@ class DiagnosticsEngine:
         threshold_source_def = metric_def.get("threshold_source")
 
         if threshold_inline:
-            status, severity = self._evaluate_inline_threshold(actual_value, threshold_inline)
+            status, severity = self._evaluate_inline_threshold(
+                actual_value, threshold_inline, higher_is_worse
+            )
             benchmark_median = None
             benchmark_range = None
             threshold_source = "inline"
@@ -432,6 +434,7 @@ class DiagnosticsEngine:
         self,
         actual: float,
         threshold_inline: dict,
+        higher_is_worse: bool = False,
     ) -> tuple[Status, Severity]:
         """根据 inline 阈值表达式评估
 
@@ -440,23 +443,34 @@ class DiagnosticsEngine:
             warning: ">= 0.5 and < 0.85"
             critical: "< 0.5"
 
+        status 文案派生方向必须跟随 higher_is_worse:
+            higher_is_worse=True (越高越糟, 如外卖依赖度/折扣率):
+              warning  → '偏高'      (值太高)
+              critical → '严重偏高'
+            higher_is_worse=False (越低越糟, 如成本弹性/渠道收款率):
+              warning  → '偏低'      (值太低)
+              critical → '严重偏低'
+
+        历史 bug: 旧实现硬编码 warning→'偏低' / critical→'严重偏低'|'异常',
+        不看 higher_is_worse → higher-is-worse 指标卡片显 '偏低' 与诊断标题
+        "外卖依赖度偏高" 直接矛盾 (误导客户). 现按 higher_is_worse 派生.
+
         Returns:
             (status, severity)
         """
+        warning_status: Status = "偏高" if higher_is_worse else "偏低"
+        critical_status: Status = "严重偏高" if higher_is_worse else "严重偏低"
+
         # 按严重度顺序检查 (先 critical, 再 warning, 再 healthy)
-        for severity_name, status_str in [
-            ("critical", "严重偏低" if "< " in str(threshold_inline.get("critical", "")) else "异常"),
-            ("warning", "偏低"),
-            ("healthy", "健康"),
-        ]:
+        for severity_name in ("critical", "warning", "healthy"):
             condition = threshold_inline.get(severity_name)
             if not condition:
                 continue
             if self._eval_condition(actual, condition):
                 if severity_name == "critical":
-                    return (status_str, "critical")
+                    return (critical_status, "critical")
                 elif severity_name == "warning":
-                    return ("偏低", "warning")
+                    return (warning_status, "warning")
                 else:
                     return ("健康", "info")
 

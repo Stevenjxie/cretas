@@ -149,3 +149,45 @@ def test_diagnostics_engine_delivery_dependency_warning():
     diags = engine.run({"delivery_dependency": 0.55})
     assert len(diags) == 1
     assert diags[0].severity == "warning"
+
+
+# ── Fix 2: inline-threshold status TEXT must follow higher_is_worse ──
+# delivery_dependency is higher_is_worse=true → warning/critical mean the
+# value is too HIGH. Status text must say 偏高/严重偏高, never 偏低 (which
+# contradicts the diagnosis title "外卖依赖度偏高").
+
+
+def test_delivery_dependency_warning_status_text_is_high():
+    """higher_is_worse=true warning → status '偏高' (NOT '偏低')."""
+    engine = DiagnosticsEngine(domain="restaurant", sub_sector="鱼类餐饮")
+    diags = engine.run({"delivery_dependency": 0.55})
+    assert diags[0].severity == "warning"
+    assert diags[0].status == "偏高", \
+        f"higher_is_worse warning must show 偏高, got {diags[0].status!r}"
+
+
+def test_delivery_dependency_critical_status_text_is_severe_high():
+    """higher_is_worse=true critical → status '严重偏高' (NOT '严重偏低'/'异常')."""
+    engine = DiagnosticsEngine(domain="restaurant", sub_sector="鱼类餐饮")
+    diags = engine.run({"delivery_dependency": 0.75})
+    assert diags[0].severity == "critical"
+    assert diags[0].status == "严重偏高", \
+        f"higher_is_worse critical must show 严重偏高, got {diags[0].status!r}"
+
+
+def test_cost_rigidity_lower_is_worse_status_text_is_low():
+    """higher_is_worse=false (cost_rigidity) critical → '严重偏低' preserved."""
+    engine = DiagnosticsEngine(domain="restaurant", sub_sector="鱼类餐饮")
+    diags = engine.run({"cost_rigidity": 0.40})  # < 0.5 → critical
+    assert diags[0].severity == "critical"
+    assert diags[0].status == "严重偏低", \
+        f"lower_is_worse critical must show 严重偏低, got {diags[0].status!r}"
+
+
+def test_cost_rigidity_lower_is_worse_warning_status_text_is_low():
+    """higher_is_worse=false warning → '偏低' preserved."""
+    engine = DiagnosticsEngine(domain="restaurant", sub_sector="鱼类餐饮")
+    diags = engine.run({"cost_rigidity": 0.60})  # 0.5 <= v < 0.85 → warning
+    assert diags[0].severity == "warning"
+    assert diags[0].status == "偏低", \
+        f"lower_is_worse warning must show 偏低, got {diags[0].status!r}"
