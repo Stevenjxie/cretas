@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, onMounted } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { useRouter, useRoute } from 'vue-router';
 import { useAppStore } from '@/store/modules/app';
 import { useAuthStore } from '@/store/modules/auth';
@@ -30,13 +30,40 @@ const MODULE_CODE_TO_SIDEBAR: Record<string, string> = {
   finance_ar: 'finance', finance_ap: 'finance', warehouse: 'warehouse',
   scheduling: 'scheduling', restaurant: 'restaurant',
 };
-onMounted(async () => {
-  if (!authStore.factoryId) return;
+// WS6 reactivity fix: previously this ran in onMounted and bailed out with
+// `if (!authStore.factoryId) return;`. If the sidebar mounted before `user`
+// hydrated (factoryId still ''), the fetch never ran AND never retried →
+// disabled modules stayed visible until a manual page refresh. Watching
+// factoryId (immediate) re-runs the fetch the moment it becomes available,
+// and re-runs again if the user/factory identity changes (re-login). Updates
+// the reactive `disabledModuleCodes` ref so `disabledSidebarModules` (and thus
+// `filteredMenu`) recompute automatically.
+let disabledFetchToken = 0;
+async function fetchDisabledModules(factoryId: string) {
+  const token = ++disabledFetchToken;
+  if (!factoryId) {
+    disabledModuleCodes.value = [];
+    return;
+  }
   try {
-    const res = await get(`/${authStore.factoryId}/config/disabled-modules`);
-    if (res.success && Array.isArray(res.data)) disabledModuleCodes.value = res.data;
-  } catch { /* config not set up for this factory */ }
-});
+    const res = await get(`/${factoryId}/config/disabled-modules`);
+    // Guard against stale responses if factoryId changed mid-flight (re-login).
+    if (token !== disabledFetchToken) return;
+    if (res.success && Array.isArray(res.data)) {
+      disabledModuleCodes.value = res.data;
+    } else {
+      disabledModuleCodes.value = [];
+    }
+  } catch {
+    /* config not set up for this factory */
+    if (token === disabledFetchToken) disabledModuleCodes.value = [];
+  }
+}
+watch(
+  () => authStore.factoryId,
+  (factoryId) => { void fetchDisabledModules(factoryId); },
+  { immediate: true },
+);
 const disabledSidebarModules = computed(() => {
   const set = new Set<string>();
   for (const code of disabledModuleCodes.value) {
@@ -57,18 +84,35 @@ const iconMap: Record<string, any> = {
 // 菜单配置已抽到 ./menuConfig.ts (可单测) — MenuItem / menuConfig / financeManagerMenu 由顶部 import 引入
 
 // 检查菜单项是否可见（基于角色限制 + 工厂类型限制）
+//
+// WS6 reactivity fix: read every reactive source EAGERLY up-front before any
+// short-circuit, so Vue registers `filteredMenu`'s dependency on all of them on
+// the very first evaluation. Previously the early `return false` branches and
+// the `&&` short-circuit meant `permissionStore.canAccess(...)` /
+// `permissionStore.currentRole` were sometimes never read for an item when
+// auth/permission state was still stale on first render → that access path was
+// never tracked → the menu could fail to re-evaluate when permissions finished
+// loading, requiring a manual refresh. Reading them all unconditionally makes
+// the computed depend on factoryType, the disabled-module set, currentRole and
+// the (DB-or-fallback) permission level for the module — so any of them
+// changing reliably re-runs the filter.
 function canSeeMenuItem(item: MenuItem): boolean {
-  if (item.hideForFactoryTypes?.includes(authStore.factoryType)) {
+  const factoryType = authStore.factoryType;
+  const disabledSet = disabledSidebarModules.value;
+  const currentRole = permissionStore.currentRole;
+  const canAccess = permissionStore.canAccess(item.module);
+
+  if (item.hideForFactoryTypes?.includes(factoryType)) {
     return false;
   }
   // R19: Canvas module enable/disable — hide disabled modules
-  if (disabledSidebarModules.value.has(item.module)) {
+  if (disabledSet.has(item.module)) {
     return false;
   }
   if (!item.roles || item.roles.length === 0) {
-    return permissionStore.canAccess(item.module);
+    return canAccess;
   }
-  return item.roles.includes(permissionStore.currentRole) && permissionStore.canAccess(item.module);
+  return item.roles.includes(currentRole) && canAccess;
 }
 
 // 过滤有权限的菜单
