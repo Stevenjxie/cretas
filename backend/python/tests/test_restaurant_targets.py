@@ -261,3 +261,116 @@ def test_decimal_serialization_not_string():
     assert _compute_achievement_rate(Decimal("100"), None) is None
     assert _compute_achievement_rate(None, Decimal("100")) is None
     assert _compute_achievement_rate(Decimal("100"), Decimal("0")) is None
+
+
+# ─── Task 3: REST endpoint contract tests ──────────────────────────────────────
+import datetime as _dtmod
+from fastapi.testclient import TestClient
+from fastapi import FastAPI
+from unittest.mock import AsyncMock, patch
+
+
+def _make_test_app(role: str = "factory_super_admin"):
+    """Minimal FastAPI app with restaurant_targets router wired + fake auth."""
+    from smartbi.api.restaurant_targets import router
+    app = FastAPI()
+    app.include_router(router, prefix="/api/smartbi")
+
+    @app.middleware("http")
+    async def fake_auth(request, call_next):
+        request.state.factory_id = "RES_TEST"
+        request.state.username = "test_admin"
+        request.state.role = role
+        return await call_next(request)
+
+    return app
+
+
+def _fake_pool_with_conn(fetchrow_return=None, fetch_return=None):
+    """Build a fake asyncpg pool whose acquire() yields a fake conn."""
+    conn = AsyncMock()
+    conn.execute = AsyncMock()
+    conn.fetchrow = AsyncMock(return_value=fetchrow_return)
+    conn.fetch = AsyncMock(return_value=fetch_return or [])
+
+    class _AcquireCtx:
+        async def __aenter__(self):
+            return conn
+
+        async def __aexit__(self, *exc):
+            return False
+
+    class _Tx:
+        async def __aenter__(self):
+            return conn
+
+        async def __aexit__(self, *exc):
+            return False
+
+    pool = AsyncMock()
+    pool.acquire = lambda: _AcquireCtx()
+    conn.transaction = lambda: _Tx()
+    return pool, conn
+
+
+def test_upsert_target_returns_success():
+    """POST /restaurant-targets with valid body → success:true + id in data."""
+    app = _make_test_app()
+    client = TestClient(app)
+
+    pool, _conn = _fake_pool_with_conn(fetchrow_return={
+        "id": 1, "period_key": "2026-06", "target_value": 500000.00,
+        "updated_at": _dtmod.datetime(2026, 6, 3, 10, 0, 0),
+    })
+
+    with patch("smartbi.api.restaurant_targets._get_pool", new=AsyncMock(return_value=pool)):
+        resp = client.post("/api/smartbi/restaurant-targets", json={
+            "kpiKind": "revenue",
+            "level": "month",
+            "periodKey": "2026-06",
+            "targetValue": 500000.00,
+        })
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["success"] is True
+    assert body["data"]["id"] == 1
+    # POST upsert response uses explicit camelCase keys (plan §Task3)
+    assert body["data"]["periodKey"] == "2026-06"
+    assert body["data"]["targetValue"] == 500000.0
+
+
+def test_get_alerts_no_config_returns_empty():
+    """GET /restaurant-targets/alerts with no alert_config → configExists:false."""
+    app = _make_test_app()
+    client = TestClient(app)
+
+    pool, _conn = _fake_pool_with_conn()
+
+    fake_alert = AsyncMock(return_value={
+        "factory_id": "RES_TEST", "kpi_kind": "revenue",
+        "lookback_days": 7, "config_exists": False,
+        "timeline": [], "summary": {},
+    })
+
+    with patch("smartbi.api.restaurant_targets._get_pool", new=AsyncMock(return_value=pool)), \
+         patch("smartbi.gold.queries.alert_preview", new=fake_alert):
+        resp = client.get("/api/smartbi/restaurant-targets/alerts?kpi_kind=revenue&lookback_days=7")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["success"] is True
+    # GET endpoints return the raw query dict (snake_case); the FE pythonFetch
+    # transformKeys() converts snake→camel client-side.
+    assert body["data"]["config_exists"] is False
+
+
+def test_upsert_target_rejects_zero_value():
+    """POST with targetValue=0 → 422 Unprocessable Entity."""
+    app = _make_test_app()
+    client = TestClient(app)
+    resp = client.post("/api/smartbi/restaurant-targets", json={
+        "kpiKind": "revenue",
+        "level": "month",
+        "periodKey": "2026-06",
+        "targetValue": 0,
+    })
+    assert resp.status_code == 422

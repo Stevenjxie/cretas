@@ -1015,6 +1015,10 @@ app.include_router(printing_api.router, prefix="/api/printing", tags=["Printing"
 from smartbi.api import gold_reads  # noqa: E402
 app.include_router(gold_reads.router, prefix="/api/smartbi", tags=["Gold Reads"])
 
+# G2 餐饮目标拆分 + 达成率预警 (2026-06-03) — year/month/week/day target cascade
+from smartbi.api import restaurant_targets as restaurant_targets_api  # noqa: E402
+app.include_router(restaurant_targets_api.router, prefix="/api/smartbi", tags=["Restaurant Targets"])
+
 # P2 综合分析 (multi-dim synthesis) — review + finance/sales → FactBook → grounded
 # narrative + charts. Path A entrypoint for the Java COMPREHENSIVE_SYNTHESIS tool.
 from smartbi.api import synthesis as synthesis_api  # noqa: E402
