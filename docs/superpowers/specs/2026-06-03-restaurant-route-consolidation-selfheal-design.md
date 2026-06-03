@@ -156,16 +156,20 @@ private List<ToolRouterService.ToolCandidate> filterCandidatesByBusinessType(
 
 ### B2. 重标确认的 COMMON-制造业意图 → MANUFACTURING
 
-**Flyway** `V20260913_01__retag_manufacturing_common_intents.sql`:
+**Flyway** `V20260913_03__retag_manufacturing_common_intents.sql` (版本号: `_01` 被 sister `product_type_wip_to_fg_yield` 占用, `_02` 是 Track A 关键词, 故用 `_03`):
 ```sql
--- SKU_GROSS_MARGIN / REVENUE_REPORT_GENERATE 是制造业概念, 误挂 COMMON → 餐饮业态过滤放行 → 垃圾路由源。
--- 重标 MANUFACTURING: 餐饮工厂 isCompatible=false 排除; 非餐饮工厂(else 分支只排 RESTAURANT)仍放行, 无回归。
-UPDATE ai_intent_configs SET business_type = 'MANUFACTURING', updated_at = NOW()
+-- ⚠️ 重标值必须是 'FACTORY' 不是 'MANUFACTURING'!
+-- resolveBusinessDomain 只返 'RESTAURANT'/'FACTORY' (从不返 'MANUFACTURING')。
+-- BusinessTypeGate 用 intentBiz.equalsIgnoreCase(factoryDomain): 'FACTORY'=='FACTORY' 工厂租户放行 ✓;
+--   若用 'MANUFACTURING' → 'MANUFACTURING'!='FACTORY' → 工厂租户被误拦"本店为餐饮业态" (回归!)。
+-- 'FACTORY': BusinessTypeScope.isCompatible('FACTORY','RESTAURANT')=false 餐饮过滤排除 ✓;
+--            isCompatible('FACTORY','FACTORY')=true 工厂租户保留 ✓; 两个 consumer 都正确。
+UPDATE ai_intent_configs SET business_type = 'FACTORY', updated_at = NOW()
  WHERE intent_code IN ('SKU_GROSS_MARGIN', 'REVENUE_REPORT_GENERATE')
    AND business_type = 'COMMON';
 ```
 
-**边界**: 只重标这 2 个已 prod 实测确认的 offender。更广的 COMMON 误标审计 = backlog (避免误伤真跨业态 COMMON 意图)。非餐饮工厂 `resolveBusinessDomain` 返非 "RESTAURANT" → `isCompatible("MANUFACTURING", <非RESTAURANT>)` = `!"RESTAURANT".equals("MANUFACTURING")` = true → 保留, **零回归**。
+**边界**: 只重标这 2 个已 prod 实测确认的 offender。更广的 COMMON 误标审计 = backlog (避免误伤真跨业态 COMMON 意图)。**重标值 = `'FACTORY'`** (系统 canonical 工厂业态值): 餐饮工厂 `isCompatible('FACTORY','RESTAURANT')=false` 排除; 工厂租户 `isCompatible('FACTORY','FACTORY')=true` + `BusinessTypeGate 'FACTORY'=='FACTORY'` 放行, **零回归**。**不可用 `'MANUFACTURING'`** (resolveBusinessDomain 不返该值 → BusinessTypeGate 误拦工厂租户)。
 
 ---
 

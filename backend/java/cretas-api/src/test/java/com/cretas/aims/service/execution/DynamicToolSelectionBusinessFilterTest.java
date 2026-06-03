@@ -28,11 +28,12 @@ class DynamicToolSelectionBusinessFilterTest {
     }
 
     @Test
-    void restaurantFactory_dropsManufacturingTool_keepsRestaurantAndOrphan() {
+    void restaurantFactory_dropsFactoryTool_keepsRestaurantAndOrphan() {
+        // SKU_GROSS_MARGIN re-tagged to 'FACTORY' (V20260913_03, the real canonical factory value).
         IntentConfigManagementService cfg = mock(IntentConfigManagementService.class);
         when(cfg.resolveBusinessDomain("RES_1")).thenReturn("RESTAURANT");
         when(cfg.getAllIntents("RES_1")).thenReturn(List.of(
-            intent("SKU_GROSS_MARGIN", "MANUFACTURING", "sku_gross_margin_tool"),
+            intent("SKU_GROSS_MARGIN", "FACTORY", "sku_gross_margin_tool"),
             intent("RESTAURANT_ORDER_STATISTICS", "RESTAURANT", "restaurant_order_type_mix_gold")
         ));
         DynamicToolSelectionService svc = newSvc(cfg);
@@ -41,9 +42,24 @@ class DynamicToolSelectionBusinessFilterTest {
         List<ToolRouterService.ToolCandidate> out = svc.filterCandidatesByBusinessType(in, "RES_1");
         Set<String> kept = new HashSet<>();
         out.forEach(c -> kept.add(c.getToolName()));
-        assertFalse(kept.contains("sku_gross_margin_tool"));
+        assertFalse(kept.contains("sku_gross_margin_tool"));        // FACTORY tool dropped on restaurant
         assertTrue(kept.contains("restaurant_order_type_mix_gold"));
         assertTrue(kept.contains("some_orphan_tool"));  // orphan tool (no owning intent) kept
+    }
+
+    @Test
+    void factoryTenant_keepsFactoryTool_noRegression() {
+        // Re-tag regression guard: a FACTORY-tagged tool MUST stay available to a factory tenant.
+        IntentConfigManagementService cfg = mock(IntentConfigManagementService.class);
+        when(cfg.resolveBusinessDomain("F006")).thenReturn("FACTORY");
+        when(cfg.getAllIntents("F006")).thenReturn(List.of(
+            intent("SKU_GROSS_MARGIN", "FACTORY", "sku_gross_margin_tool")
+        ));
+        DynamicToolSelectionService svc = newSvc(cfg);
+        List<ToolRouterService.ToolCandidate> in = new ArrayList<>(List.of(cand("sku_gross_margin_tool")));
+        List<ToolRouterService.ToolCandidate> out = svc.filterCandidatesByBusinessType(in, "F006");
+        assertEquals(1, out.size());
+        assertEquals("sku_gross_margin_tool", out.get(0).getToolName());
     }
 
     @Test
