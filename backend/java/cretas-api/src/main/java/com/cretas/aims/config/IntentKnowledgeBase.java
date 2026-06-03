@@ -6860,16 +6860,17 @@ public class IntentKnowledgeBase {
         restaurantPhraseMapping.put("每道菜卖了多少", "RESTAURANT_DISH_SALES_RANKING");
         restaurantPhraseMapping.put("top菜品", "RESTAURANT_DISH_SALES_RANKING");
         // P1.1 餐饮时间修复: "哪个菜卖得最好"(含"最")等问法之前只走 SEMANTIC, 时间前缀剥离后落不到
-        // 短语表 → 掉 LLM/dynamic 路径返推理文字。加问法变体, 让 stripLeadingTimePhrase 回退命中 gold 意图,
-        // 时间前缀(上季度/去年/2025年12月哪个菜卖得最好)→ executeWithExplicitIntent → gold 工具确定性应用时间。
-        restaurantPhraseMapping.put("哪个菜卖得最好", "RESTAURANT_DISH_SALES_RANKING");
-        restaurantPhraseMapping.put("哪道菜卖得最好", "RESTAURANT_DISH_SALES_RANKING");
-        restaurantPhraseMapping.put("什么菜卖得最好", "RESTAURANT_DISH_SALES_RANKING");
-        restaurantPhraseMapping.put("哪个菜最畅销", "RESTAURANT_DISH_SALES_RANKING");
-        restaurantPhraseMapping.put("卖得最好的菜", "RESTAURANT_DISH_SALES_RANKING");
-        restaurantPhraseMapping.put("最畅销的菜", "RESTAURANT_DISH_SALES_RANKING");
-        restaurantPhraseMapping.put("哪个菜卖得最多", "RESTAURANT_DISH_SALES_RANKING");
-        restaurantPhraseMapping.put("销量最高的菜", "RESTAURANT_DISH_SALES_RANKING");
+        // 短语表 → 掉 LLM/dynamic 路径返推理文字。加问法变体, 让 stripLeadingTimePhrase 回退命中。
+        // ⚠️ 必须绑 RESTAURANT_BESTSELLER_QUERY(它才是绑了 gold 工具 restaurant_dish_bestseller_gold 的意图,
+        //    executeWithExplicitIntent 能执行); RESTAURANT_DISH_SALES_RANKING 无 tool_name → "暂未配置执行器"。
+        restaurantPhraseMapping.put("哪个菜卖得最好", "RESTAURANT_BESTSELLER_QUERY");
+        restaurantPhraseMapping.put("哪道菜卖得最好", "RESTAURANT_BESTSELLER_QUERY");
+        restaurantPhraseMapping.put("什么菜卖得最好", "RESTAURANT_BESTSELLER_QUERY");
+        restaurantPhraseMapping.put("哪个菜最畅销", "RESTAURANT_BESTSELLER_QUERY");
+        restaurantPhraseMapping.put("卖得最好的菜", "RESTAURANT_BESTSELLER_QUERY");
+        restaurantPhraseMapping.put("最畅销的菜", "RESTAURANT_BESTSELLER_QUERY");
+        restaurantPhraseMapping.put("哪个菜卖得最多", "RESTAURANT_BESTSELLER_QUERY");
+        restaurantPhraseMapping.put("销量最高的菜", "RESTAURANT_BESTSELLER_QUERY");
 
         // RESTAURANT_SLOW_SELLER_QUERY — 滞销菜品查询
         restaurantPhraseMapping.put("哪个菜卖不动", "RESTAURANT_SLOW_SELLER_QUERY");
