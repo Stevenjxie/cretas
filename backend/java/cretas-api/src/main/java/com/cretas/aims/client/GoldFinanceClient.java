@@ -240,6 +240,92 @@ public class GoldFinanceClient {
     }
 
     /**
+     * Fetch the trend bundle (dailyTrend + weekdayWeekend + monthlyTrend) from
+     * Python Gold layer's {@code /api/smartbi/gold/trend-bundle} endpoint.
+     *
+     * <p>One round-trip for all three trend views over agg_daily. Used by
+     * {@code RestaurantRevenueTrendGoldTool} to answer 营收趋势 / 同比环比 / 月度趋势
+     * questions in AI问答 — the COMPREHENSIVE_SYNTHESIS FactBook lacks a monthly
+     * series so it cannot compute trend; this gold path can.
+     *
+     * <p><b>All-history</b>: when {@code startDate}/{@code endDate} are null the
+     * date query params are omitted, so Python defaults to the factory's full
+     * Gold span (mirrors the endpoint's "省略=全部历史" contract). Unlike
+     * {@link #fetchDailyTrend} this method tolerates null bounds.
+     *
+     * <p><b>RBAC</b>: revenue fields (dailyTrend[].revenue, monthlyTrend[].revenue,
+     * weekdayWeekend.weekdayAvg/weekendAvg) are monetary → Python money-strip nulls
+     * them for non price-view roles. We forward X-User-Role so price-view roles see
+     * revenue (per feedback_java_python_rbac_role_forward).
+     *
+     * @param factoryId tenant id
+     * @param startDate inclusive window start; nullable (null → all history)
+     * @param endDate   inclusive window end; nullable (null → all history)
+     * @return parsed JSON; key fields:
+     *         - factory_id, start_date, end_date (echoes input; null when all-history)
+     *         - dailyTrend: List of {date, revenue, bill_count}, ascending
+     *         - weekdayWeekend: {weekdayAvg, weekendAvg, weekdayDays, weekendDays}
+     *         - monthlyTrend: List of {month: "YYYY-MM", revenue}, ascending
+     * @throws IOException on transport / non-2xx / parse failure
+     */
+    public Map<String, Object> fetchTrendBundle(
+            String factoryId,
+            LocalDate startDate,
+            LocalDate endDate
+    ) throws IOException {
+        if (factoryId == null || factoryId.isEmpty()) {
+            throw new IllegalArgumentException("factoryId required");
+        }
+        if (startDate != null && endDate != null && startDate.isAfter(endDate)) {
+            throw new IllegalArgumentException("startDate > endDate");
+        }
+
+        HttpUrl.Builder ub = HttpUrl.parse(config.getUrl() + "/api/smartbi/gold/trend-bundle")
+                .newBuilder()
+                .addQueryParameter("factory_id", factoryId);
+        // Omit date params when null so Python defaults to all history.
+        if (startDate != null) {
+            ub.addQueryParameter("start_date", startDate.toString());
+        }
+        if (endDate != null) {
+            ub.addQueryParameter("end_date", endDate.toString());
+        }
+        HttpUrl url = ub.build();
+
+        Request.Builder reqBuilder = new Request.Builder().url(url).get();
+        if (!internalSecret.isEmpty()) {
+            reqBuilder.addHeader("X-Internal-Secret", internalSecret);
+            reqBuilder.addHeader("X-Factory-Id", factoryId);
+            // Forward the request user's role so Python RBAC money-strip respects
+            // price-view permission (else revenue fields get nulled).
+            String userRole = currentUserRole();
+            if (userRole != null && !userRole.isEmpty()) {
+                reqBuilder.addHeader("X-User-Role", userRole);
+            }
+        }
+        Request req = reqBuilder.build();
+
+        long t0 = System.currentTimeMillis();
+        try (Response resp = http.newCall(req).execute()) {
+            long elapsed = System.currentTimeMillis() - t0;
+            if (!resp.isSuccessful()) {
+                String body = resp.body() != null ? resp.body().string() : "";
+                throw new IOException(
+                        "Gold trend-bundle HTTP " + resp.code() + " in " + elapsed
+                                + "ms: " + body);
+            }
+            String body = resp.body() != null ? resp.body().string() : "{}";
+            @SuppressWarnings("unchecked")
+            Map<String, Object> parsed = objectMapper.readValue(body, Map.class);
+            Object monthly = parsed.get("monthlyTrend");
+            int months = (monthly instanceof java.util.List) ? ((java.util.List<?>) monthly).size() : 0;
+            log.debug("Gold trend-bundle factory={} range={}..{} months={} in {}ms",
+                    factoryId, startDate, endDate, months, elapsed);
+            return parsed;
+        }
+    }
+
+    /**
      * Fetch top products by revenue from Python Gold layer.
      *
      * Delegates to the 5-arg overload with order="desc" for backward compatibility.

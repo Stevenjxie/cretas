@@ -391,6 +391,51 @@ public abstract class GoldBackedRestaurantTool extends AbstractBusinessTool {
     }
 
     /**
+     * Build a line chart config for ECharts (time series — e.g. monthly revenue trend).
+     *
+     * <p>Unlike {@link #barChartConfig}, categories are NOT reversed — a line chart
+     * reads left→right chronologically, so the caller passes them already ascending
+     * (earliest first). The AIQuery renderer uses the emitted {@code option} directly.
+     *
+     * @param title      chart title (shown in the UI header above the chart)
+     * @param categories x-axis labels in chronological order (e.g. "2025-01", "2025-02")
+     * @param values     numeric values parallel to {@code categories}
+     * @param unitName   y-axis unit label (e.g. "万元")
+     * @param seriesName legend / series name (e.g. "营收")
+     * @return chartConfig map shaped {@code {type, title, option}}
+     */
+    protected static Map<String, Object> lineChartConfig(
+            String title,
+            List<String> categories,
+            List<? extends Number> values,
+            String unitName,
+            String seriesName) {
+
+        Map<String, Object> opt = new LinkedHashMap<>();
+        opt.put("tooltip", Map.of("trigger", "axis"));
+        opt.put("grid", Map.of("left", "3%", "right", "4%",
+                "bottom", "3%", "top", "10%", "containLabel", true));
+        opt.put("xAxis", Map.of("type", "category", "data", new ArrayList<>(categories),
+                "axisLabel", Map.of("fontSize", 11, "rotate", categories.size() > 6 ? 40 : 0)));
+        opt.put("yAxis", Map.of("type", "value", "name", unitName));
+
+        Map<String, Object> series = new LinkedHashMap<>();
+        series.put("name", seriesName);
+        series.put("type", "line");
+        series.put("smooth", true);
+        series.put("data", new ArrayList<>(values));
+        series.put("itemStyle", Map.of("color", "#2D8B57"));
+        series.put("label", Map.of("show", false));
+        opt.put("series", List.of(series));
+
+        Map<String, Object> cfg = new LinkedHashMap<>();
+        cfg.put("type", "line");
+        cfg.put("title", title);
+        cfg.put("option", opt);
+        return cfg;
+    }
+
+    /**
      * Build a pie chart config for ECharts.
      *
      * @param title  chart title
