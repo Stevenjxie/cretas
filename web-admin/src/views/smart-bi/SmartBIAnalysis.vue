@@ -12,6 +12,7 @@
                  idleEnrichNext callbacks (script side, untouched). The child only forwards
                  @change → selectBatch so race-guard semantics are preserved. -->
             <UploadSwitcher
+              v-if="!goldMode"
               :batches="uploadBatches"
               :selected-index="selectedBatchIndex"
               :format-batch-label="formatBatchLabel"
@@ -46,6 +47,40 @@
           </div>
         </div>
       </template>
+
+      <!-- WS6 (#1/#3): 餐饮 (gold) 租户默认显示 Gold 全量图表, 取代自动选中上传分片导致
+           的 "0 个图表" 空白。文件上传分析仍可通过下方「分析上传文件」开关进入。 -->
+      <template v-if="goldMode">
+        <div class="gold-default-header">
+          <div class="gold-default-info">
+            <el-icon class="gold-default-icon"><DataAnalysis /></el-icon>
+            <div>
+              <div class="gold-default-title">本厂数据来自 Gold 全量层（无需选文件）</div>
+              <div class="gold-default-desc">
+                您的经营数据已汇总到全量数据层, 下方直接展示门店营收排行与渠道占比。
+                如需查看完整经营图表, 可前往
+                <router-link class="gold-default-link" to="/smart-bi/dashboard">经营驾驶舱</router-link>。
+              </div>
+            </div>
+          </div>
+          <el-button size="small" plain @click="enterUploadAnalysis">
+            <el-icon style="margin-right: 4px"><Upload /></el-icon>分析上传文件
+          </el-button>
+        </div>
+
+        <!-- 复用经营驾驶舱的 Gold 营收分析组件 (门店营收排行 + 渠道占比), 全量 agg_daily,
+             不依赖上传文件。dateRange 由 probeGoldRange() 探测真实区间填充。 -->
+        <RestaurantGoldGrid :factory-id="factoryId || ''" :date-range="goldDateRange" />
+      </template>
+
+      <template v-else>
+      <!-- 餐饮租户从上传分析视图返回 Gold 视图的入口 -->
+      <div v-if="isRestaurantTenant" class="gold-back-bar">
+        <el-button size="small" text type="primary" @click="backToGoldView">
+          <el-icon style="margin-right: 4px"><ArrowRight /></el-icon>返回 Gold 全量分析
+        </el-button>
+        <span class="gold-back-hint">当前为上传文件分析视图</span>
+      </div>
 
       <!-- Python 服务降级警告 — extracted to analysis/PythonUnavailableAlert.vue (Item 1 phase 5) -->
       <PythonUnavailableAlert :visible="pythonUnavailable" />
@@ -320,6 +355,7 @@
           </el-tab-pane>
         </el-tabs>
       </div>
+      </template>
     </el-card>
   </div>
     </el-tab-pane>
@@ -469,10 +505,56 @@ import { useSmartBIDrillDown, type SheetRef } from './composables/useSmartBIDril
 import { useSmartBIStatistical } from './composables/useSmartBIStatistical';
 import { useSmartBICrossSheet } from './composables/useSmartBICrossSheet';
 import { useSmartBIDashboardLayout } from './composables/useSmartBIDashboardLayout';
+import RestaurantGoldGrid from './components/RestaurantGoldGrid.vue';
+import { getGoldDataRange } from '@/api/smartbi/dataRange';
+import { resolveAllHistoryRange } from './analysisDefaults';
+import { shouldDefaultToGold, pickDefaultBatchIndex } from './analysisGoldMode';
 
 const authStore = useAuthStore();
 const factoryId = computed(() => authStore.factoryId);
 const appStore = useAppStore();
+
+// WS6 (#1/#3): 餐饮 (gold) 租户的「传 Excel 分析」tab 默认显示 Gold 全量图表,
+// 不再自动选中某个上传分片 (qhj 的 *_part4.csv 这类只是 1/4 分片 → 0 图表空白)。
+// 真正全量数据在 Gold 层 (经营驾驶舱 / 经营分析 已渲染同一组件)。文件上传分析仍
+// 保留在「分析上传文件」开关后, 供用户真正上传新文件时使用。制造业租户不受影响。
+const isRestaurantTenant = computed(() => shouldDefaultToGold(authStore.factoryType));
+// 餐饮租户默认 gold 视图; 用户点「分析上传文件」可切到上传分析视图。
+const showUploadAnalysis = ref(false);
+// Gold 视图是否生效 = 餐饮租户 且 未切到上传分析。
+const goldMode = computed(() => isRestaurantTenant.value && !showUploadAnalysis.value);
+// RestaurantGoldGrid 需要非 null 的 dateRange 才会加载 (其 load() 在 dateRange 为 null
+// 时早返回)。探测 Gold 真实 [min,max] 区间; 失败回落到足够宽的窗口 (绝不回到近30天)。
+const goldDateRange = ref<[string, string] | null>(null);
+const goldRangeProbed = ref(false);
+async function probeGoldRange() {
+  if (goldRangeProbed.value || !factoryId.value) return;  // factoryId 未就绪 → 不置 probed, 等 watch 重试
+  goldRangeProbed.value = true;
+  try {
+    const dr = await getGoldDataRange(factoryId.value);
+    goldDateRange.value = resolveAllHistoryRange(dr);
+  } catch {
+    // 探测失败 → 用宽回退窗 (RestaurantGoldGrid 自身再处理空数据/报错, 不伪造)。
+    goldDateRange.value = resolveAllHistoryRange(null);
+  }
+}
+// 餐饮租户从 Gold 视图切到「分析上传文件」视图。首次切换时确保历史已加载, 以便用户
+// 浏览/选择已上传文件 (gold 模式下我们跳过了自动 selectBatch)。
+const enterUploadAnalysis = () => {
+  showUploadAnalysis.value = true;
+  if (uploadBatches.value.length > 0 && uploadedSheets.value.length === 0) {
+    selectBatch(pickDefaultBatchIndex(uploadBatches.value.map(b => b.fileName)));
+  }
+};
+const backToGoldView = () => {
+  showUploadAnalysis.value = false;
+};
+// 若 factoryId 在 mount 后才异步就绪 (auth 水合延迟), 重试探测 Gold 区间。
+watch(factoryId, (id) => {
+  if (id && isRestaurantTenant.value && !goldRangeProbed.value) {
+    probeGoldRange().catch(() => {});
+  }
+});
 
 // P3: AI 探索顶层 tab (传 Excel 分析 / 问数据 AI)。与 sheet 级 activeTab 互不相干。
 const route = useRoute();
@@ -4178,8 +4260,11 @@ const loadHistory = async () => {
       }
     } else {
       uploadBatches.value = batches;
-      if (batches.length > 0) {
-        selectBatch(0);
+      // WS6 (#1/#3): gold 模式 (餐饮租户默认) 下不自动选中上传分片 —— 否则会落到某个
+      // *_partN 分片产出 "0 个图表" 空白。批次仍建好, 供用户点「分析上传文件」时浏览。
+      // 非 gold 模式 (制造业, 或餐饮已切到上传分析) 下默认选中: 优先完整文件 (跳过分片)。
+      if (batches.length > 0 && !goldMode.value) {
+        selectBatch(pickDefaultBatchIndex(batches.map(b => b.fileName)));
       }
     }
   } catch (error) {
@@ -4254,6 +4339,11 @@ const { showHelp: showShortcutsHelp, shortcuts: shortcutsList } = useSmartBIShor
 onMounted(() => {
   // 后台检查 Python 服务健康状态 (with retry)
   checkHealthWithRetry().catch(() => {});
+
+  // WS6 (#1/#3): 餐饮 (gold) 租户默认 Gold 视图 — 探测真实数据区间填充 RestaurantGoldGrid。
+  if (isRestaurantTenant.value) {
+    probeGoldRange().catch(() => {});
+  }
 
   // Demo 缓存快速恢复: 如果有缓存，跳过网络请求直接渲染
   const restoredFromCache = restoreFromDemoCache();
