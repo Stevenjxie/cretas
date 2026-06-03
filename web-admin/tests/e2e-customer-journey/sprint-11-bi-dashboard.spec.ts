@@ -102,12 +102,13 @@ test.describe.serial('Sprint 11 BI Dashboard — 10 scenarios', () => {
 
   test('1. F006 admin login + /indicator-center renders', async ({ page }) => {
     await loginAndSeed(page);
+    // WS4: /indicator-center 已合并入经营分析 hub 的 KPI·指标 内层 tab
+    // (redirect → /smart-bi/analysis-hub?tab=kpi&sub=indicator)。IndicatorCenterDashboard
+    // 组件仍渲染 (.indicator-center class), 经 hub 内层 tab 加载。
     await page.goto(`${BASE}/indicator-center`, { waitUntil: 'domcontentloaded', timeout: 30_000 });
     await page.waitForSelector('.indicator-center, .b2b-real-section', { timeout: 15_000 });
     const url = page.url();
-    expect(url).toContain('/indicator-center');
-    const title = await page.title();
-    expect(title).toContain('指标中心');
+    expect(url).toContain('/smart-bi/analysis-hub');
   });
 
   test('2. B2B section displays 3 KPI cards with real values', async ({ page }) => {

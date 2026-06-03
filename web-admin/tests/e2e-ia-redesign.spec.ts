@@ -129,8 +129,16 @@ test.describe('IA 重设计 — 数据与分析组 (headed 双业态)', () => {
     await page.goto(`${BASE_URL}/smart-bi/query`, { waitUntil: 'load', timeout: 30000 });
     await expect(page).toHaveURL(/\/smart-bi\/analysis\?tab=query/);
 
-    // /smart-bi/finance → /smart-bi/financial-dashboard?section=analysis
+    // WS4: /smart-bi/finance → 经营分析 hub 财务 tab (analysis section)
     await page.goto(`${BASE_URL}/smart-bi/finance`, { waitUntil: 'load', timeout: 30000 });
-    await expect(page).toHaveURL(/\/smart-bi\/financial-dashboard\?section=analysis/);
+    await expect(page).toHaveURL(/\/smart-bi\/analysis-hub\?.*tab=finance/);
+
+    // WS4: /smart-bi/sales → 经营分析 hub 销售 tab
+    await page.goto(`${BASE_URL}/smart-bi/sales`, { waitUntil: 'load', timeout: 30000 });
+    await expect(page).toHaveURL(/\/smart-bi\/analysis-hub\?.*tab=sales/);
+
+    // WS4: /analytics/trends → 经营分析 hub 趋势 tab
+    await page.goto(`${BASE_URL}/analytics/trends`, { waitUntil: 'load', timeout: 30000 });
+    await expect(page).toHaveURL(/\/smart-bi\/analysis-hub\?.*tab=trend/);
   });
 });

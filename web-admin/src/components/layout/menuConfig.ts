@@ -13,11 +13,10 @@ export interface MenuItem {
 }
 
 // 财务主管专用菜单 - 简化版
+// WS4: 财务看板/财务分析/销售分析 合并为单一「经营分析」hub (财务/销售/趋势/KPI tab)。
 export const financeManagerMenu: MenuItem[] = [
   { path: '/smart-bi/dashboard', title: '经营驾驶舱', icon: 'Odometer', module: 'analytics' },
-  { path: '/smart-bi/financial-dashboard', title: '财务 PBI 看板', icon: 'TrendCharts', module: 'analytics' },
-  { path: '/smart-bi/finance', title: '财务分析', icon: 'Money', module: 'analytics' },
-  { path: '/smart-bi/sales', title: '销售分析', icon: 'TrendCharts', module: 'sales' },
+  { path: '/smart-bi/analysis-hub', title: '经营分析', icon: 'TrendCharts', module: 'analytics' },
   { path: '/smart-bi/query', title: 'AI问答', icon: 'ChatDotRound', module: 'analytics' },
   { path: '/smart-bi/query-templates', title: '查询模板管理', icon: 'Tickets', module: 'analytics' },
   { path: '/smart-bi/analysis', title: '智能数据分析', icon: 'DataAnalysis', module: 'analytics' },
@@ -250,7 +249,10 @@ export const menuConfig: MenuItem[] = [
   {
     // UX 2026-06-01: 合并「经营报表」(/analytics) + 「智能分析」(/smart-bi) 为单一
     // 「数据与分析」组 (spec 2026-06-01-web-admin-analytics-ia-redesign-design.md)。
-    // 经营驾驶舱置顶主入口; 5 子组。各页后端不变 (部分页 Java reports + Python 混合)。
+    // WS4 (2026-06-02): 财务看板/销售分析/趋势分析/KPI看板/指标中心 6 页合并为单一
+    // 「经营分析」(BusinessAnalysisHub, 4 tab) — 菜单项移除, 由 redirect 桥接。
+    // 删 AI分析报告 (#9)。AI 运维 3 项收 platform_admin/permission_admin 门控 (移 admin 区)。
+    // 经营驾驶舱置顶主入口。各页后端不变 (部分页 Java reports + Python 混合)。
     path: '/smart-bi', title: '数据与分析', icon: 'TrendCharts', module: 'analytics',
     children: [
       // ★ 主入口 (无 groupLabel, 置顶)
@@ -258,21 +260,17 @@ export const menuConfig: MenuItem[] = [
       // -- AI 探索 --
       // P3: /smart-bi/query 已合并入此页 query tab (redirect /smart-bi/query → /smart-bi/analysis?tab=query), 菜单项移除
       { path: '/smart-bi/analysis', title: 'AI 问答 / 数据分析', icon: 'DataAnalysis', module: 'analytics', groupLabel: 'AI 探索' },
-      { path: '/analytics/ai-reports', title: 'AI 分析报告', icon: 'Document', module: 'analytics' },
-      // -- 专题报表 --
-      // P4: 财务数据分析已合并入财务看板 analysis section (redirect /smart-bi/finance → /smart-bi/financial-dashboard?tab=analysis), 菜单项移除
-      { path: '/smart-bi/financial-dashboard', title: '财务看板', icon: 'TrendCharts', module: 'analytics', groupLabel: '专题报表' },
-      { path: '/smart-bi/sales', title: '销售分析', icon: 'Sell', module: 'analytics' },
+      // -- 经营分析 --
+      // WS4: 财务/销售/趋势/KPI·指标 合并为单一 hub。旧路径 (financial-dashboard/sales/
+      // trends/kpi/indicator-center) 由 router redirect 保书签 → /smart-bi/analysis-hub?tab=。
+      { path: '/smart-bi/analysis-hub', title: '经营分析', icon: 'TrendCharts', module: 'analytics', groupLabel: '经营分析' },
       { path: '/smart-bi/revenue-report', title: '收入管理报表', icon: 'Money', module: 'analytics',
         hideForFactoryTypes: ['FACTORY'] },
-      { path: '/analytics/trends', title: '趋势分析', icon: 'TrendCharts', module: 'analytics' },
-      { path: '/analytics/kpi', title: 'KPI 看板', icon: 'Histogram', module: 'analytics' },
       { path: '/analytics/alert-dashboard', title: '异常预警', icon: 'Warning', module: 'analytics' },
       { path: '/analytics/supply-chain', title: '进销存总览', icon: 'Histogram', module: 'analytics',
         hideForFactoryTypes: ['RESTAURANT'] },
       { path: '/analytics/production-report', title: '车间实时生产报表', icon: 'Operation', module: 'analytics',
         hideForFactoryTypes: ['RESTAURANT'] },
-      { path: '/indicator-center', title: '指标中心', icon: 'Histogram', module: 'analytics' },
       { path: '/production-analytics/production', title: '生产数据分析', icon: 'Histogram', module: 'analytics',
         hideForFactoryTypes: ['RESTAURANT'] },
       { path: '/production-analytics/efficiency', title: '人效分析', icon: 'User', module: 'analytics',
@@ -281,12 +279,14 @@ export const menuConfig: MenuItem[] = [
       { path: '/smart-bi/upload', title: 'Excel 上传', icon: 'Upload', module: 'analytics', groupLabel: '数据管理' },
       { path: '/smart-bi/query-templates', title: '查询模板', icon: 'Tickets', module: 'analytics' },
       { path: '/smart-bi/data-completeness', title: '数据完整度', icon: 'DataAnalysis', module: 'analytics' },
-      // -- AI 运维 --
-      { path: '/smart-bi/food-kb-feedback', title: '知识库反馈', icon: 'ChatDotRound', module: 'analytics', groupLabel: 'AI 运维' },
-      { path: '/smart-bi/fallback-log', title: 'AI 追问日志', icon: 'DataLine', module: 'analytics' },
-      { path: '/smart-bi/calibration', title: '行为校准监控', icon: 'Aim', module: 'analytics', roles: ['platform_admin'] },
-      // D-6 保守保留: 分析概览 (与驾驶舱重叠但数据源不同, P5 凭埋点再决定真删)
+      // D-6 保守保留: 分析概览 (与驾驶舱/hub 重叠但数据源不同, P5 凭埋点再决定真删)
       { path: '/analytics/overview', title: '分析概览', icon: 'DataAnalysis', module: 'analytics' },
+      // -- AI 运维 (admin) — WS4: 收 admin 门控 (普通经营用户不需要) --
+      { path: '/smart-bi/food-kb-feedback', title: '知识库反馈', icon: 'ChatDotRound', module: 'analytics', groupLabel: 'AI 运维',
+        roles: ['platform_admin', 'permission_admin', 'factory_super_admin'] },
+      { path: '/smart-bi/fallback-log', title: 'AI 追问日志', icon: 'DataLine', module: 'analytics',
+        roles: ['platform_admin', 'permission_admin', 'factory_super_admin'] },
+      { path: '/smart-bi/calibration', title: '行为校准监控', icon: 'Aim', module: 'analytics', roles: ['platform_admin'] },
     ]
   }
 ];
