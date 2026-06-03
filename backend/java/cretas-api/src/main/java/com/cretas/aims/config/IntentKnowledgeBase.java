@@ -7061,6 +7061,14 @@ public class IntentKnowledgeBase {
         restaurantPhraseMapping.put("翻台率", "RESTAURANT_PEAK_HOURS_ANALYSIS");
         restaurantPhraseMapping.put("翻台率多少", "RESTAURANT_PEAK_HOURS_ANALYSIS");
         restaurantPhraseMapping.put("座位利用率", "RESTAURANT_PEAK_HOURS_ANALYSIS");
+        // 餐饮路由修复: "时段营业额分布" 之前被 RESTAURANT_DAILY_REVENUE 的"营业额"短语抢占;
+        // 绑定更长更具体的时段短语(短语匹配长者优先)到高峰时段分析。
+        restaurantPhraseMapping.put("时段营业额分布", "RESTAURANT_PEAK_HOURS_ANALYSIS");
+        restaurantPhraseMapping.put("时段营业额", "RESTAURANT_PEAK_HOURS_ANALYSIS");
+        restaurantPhraseMapping.put("分时段营业额", "RESTAURANT_PEAK_HOURS_ANALYSIS");
+        restaurantPhraseMapping.put("各时段营业额", "RESTAURANT_PEAK_HOURS_ANALYSIS");
+        restaurantPhraseMapping.put("时段销售分布", "RESTAURANT_PEAK_HOURS_ANALYSIS");
+        restaurantPhraseMapping.put("时段分布", "RESTAURANT_PEAK_HOURS_ANALYSIS");
         restaurantPhraseMapping.put("排队情况", "RESTAURANT_PEAK_HOURS_ANALYSIS");
         restaurantPhraseMapping.put("等位多久", "RESTAURANT_PEAK_HOURS_ANALYSIS");
         restaurantPhraseMapping.put("午市和晚市哪个好", "RESTAURANT_PEAK_HOURS_ANALYSIS");
@@ -7355,6 +7363,12 @@ public class IntentKnowledgeBase {
         restaurantPhraseMapping.put("整体评价怎么样", "RESTAURANT_REVIEW_SUMMARY");
         restaurantPhraseMapping.put("口碑怎么样", "RESTAURANT_REVIEW_SUMMARY");
         restaurantPhraseMapping.put("顾客满意度怎么样", "RESTAURANT_REVIEW_SUMMARY");
+        // 餐饮路由修复: "平台口碑如何" recognize 正确但 execute 经 orchestrator 误入工厂成本报告;
+        // 绑定平台口碑变体, 让 orchestrator 短语短路也命中评价总览(以"如何"结尾不被"怎么样"短语覆盖)。
+        restaurantPhraseMapping.put("平台口碑如何", "RESTAURANT_REVIEW_SUMMARY");
+        restaurantPhraseMapping.put("平台口碑怎么样", "RESTAURANT_REVIEW_SUMMARY");
+        restaurantPhraseMapping.put("平台口碑", "RESTAURANT_REVIEW_SUMMARY");
+        restaurantPhraseMapping.put("口碑如何", "RESTAURANT_REVIEW_SUMMARY");
 
         // 服务 (标签/评分)
         restaurantPhraseMapping.put("服务怎么样", "RESTAURANT_REVIEW_SERVICE_TAGS");
@@ -7419,6 +7433,10 @@ public class IntentKnowledgeBase {
         restaurantPhraseMapping.put("各门店营收对比", "RESTAURANT_STORE_REVENUE_RANK");
         restaurantPhraseMapping.put("哪家店生意最好", "RESTAURANT_STORE_REVENUE_RANK");
         restaurantPhraseMapping.put("门店销售排行", "RESTAURANT_STORE_REVENUE_RANK");
+        // 餐饮路由修复: "门店销售对比" 之前命中 REPORT_TRENDS(语义), 绑定销售/对比变体到门店营收排行。
+        restaurantPhraseMapping.put("门店销售对比", "RESTAURANT_STORE_REVENUE_RANK");
+        restaurantPhraseMapping.put("门店销售排名", "RESTAURANT_STORE_REVENUE_RANK");
+        restaurantPhraseMapping.put("各店销售对比", "RESTAURANT_STORE_REVENUE_RANK");
 
         log.debug("v33 餐饮短语映射初始化完成，共 {} 条映射", restaurantPhraseMapping.size());
 
