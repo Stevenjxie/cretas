@@ -592,16 +592,42 @@ onMounted(async () => {
   // 同时支持 Apr 24 Phase 5 餐饮日常页 "AI 分析" 按钮 ?q= 跳转.
   const qFromRoute = typeof route.query.q === 'string' ? route.query.q : null;
   if (qFromRoute) {
-    inputQuery.value = qFromRoute;
-    // Wait one tick so the data-source auto-select above finishes, then send.
-    nextTick(() => {
-      setTimeout(() => handleSendMessage(), 300);
-    });
+    submitRouteQuery(qFromRoute, /* waitForDataSource */ true);
   }
 
   // 措施③: 加载该工厂已物化模板, 填充 "猜你想问" 推荐区 (非阻塞, 失败静默).
   loadRecommendTemplates();
 });
+
+// WS2 #6 (2026-06-02): 经营驾驶舱快捷问答 chip 跳本页时 AIQuery 已挂载 (同路由
+// name 仅 query 变), Vue 复用组件 → onMounted 不再触发 → 之前点 chip "卡住不跳/
+// 不出答案". 这里 watch route.query.q, 已挂载情况下也读 q 并自动提交.
+//
+// onMounted 与本 watch 都会读初始 q: watch 默认 (immediate:false) 不在挂载时
+// 触发, 所以首次进入只由 onMounted 提交, 不会双发; 之后 q 变化才由 watch 接管.
+function submitRouteQuery(q: string, waitForDataSource = false): void {
+  const text = String(q).trim();
+  if (!text) return;
+  inputQuery.value = text;
+  if (waitForDataSource) {
+    // Wait one tick so the data-source auto-select (onMounted) finishes, then send.
+    nextTick(() => {
+      setTimeout(() => handleSendMessage(), 300);
+    });
+  } else {
+    // Already mounted: data source已就绪, 立即提交.
+    handleSendMessage();
+  }
+}
+
+watch(
+  () => route.query.q,
+  (q) => {
+    if (typeof q === 'string' && q.trim()) {
+      submitRouteQuery(q, /* waitForDataSource */ false);
+    }
+  },
+);
 
 // Cleanup on unmount
 onUnmounted(() => {
