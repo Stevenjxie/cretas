@@ -75,4 +75,34 @@ public interface SalesOrderItemRepository extends JpaRepository<SalesOrderItem, 
             @Param("factoryId") String factoryId,
             @Param("date") LocalDate date,
             @Param("statuses") Collection<SalesOrderStatus> statuses);
+
+    /**
+     * P3 多仓备货看板需求聚合 — 按产品 + 目的仓分组。
+     *
+     * <p>COALESCE(destWarehouseCode, '未分仓') 确保旧行（未填目的仓）归入"未分仓"桶，
+     * 不被丢弃，向后兼容普通订单。
+     *
+     * <p>MIN/MAX unit 检测 F2 单位不一致, 与 {@link #sumDemandByProductForDeliveryDate} 一致。
+     *
+     * @param factoryId 工厂 ID
+     * @param date      要求交货日期
+     * @param statuses  有效订单状态集合
+     * @return 按产品+仓分组的需求投影列表
+     */
+    @Query("SELECT i.productTypeId AS productTypeId, " +
+           "MIN(i.productName) AS productName, " +
+           "COALESCE(i.destWarehouseCode, '未分仓') AS destWarehouseCode, " +
+           "MIN(i.destWarehouseName) AS destWarehouseName, " +
+           "MIN(i.unit) AS minUnit, " +
+           "MAX(i.unit) AS maxUnit, " +
+           "SUM(i.quantity) AS demand " +
+           "FROM SalesOrderItem i " +
+           "WHERE i.salesOrder.factoryId = :factoryId " +
+           "AND i.salesOrder.requiredDeliveryDate = :date " +
+           "AND i.salesOrder.status IN :statuses " +
+           "GROUP BY i.productTypeId, COALESCE(i.destWarehouseCode, '未分仓')")
+    List<ProductWarehouseDemandProjection> sumDemandByProductAndWarehouseForDeliveryDate(
+            @Param("factoryId") String factoryId,
+            @Param("date") LocalDate date,
+            @Param("statuses") Collection<SalesOrderStatus> statuses);
 }

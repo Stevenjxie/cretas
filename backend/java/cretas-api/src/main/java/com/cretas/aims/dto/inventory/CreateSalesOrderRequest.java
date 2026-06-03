@@ -15,6 +15,7 @@ import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
 
+
 @Data
 @NoArgsConstructor
 @AllArgsConstructor
@@ -59,6 +60,13 @@ public class CreateSalesOrderRequest {
     /** 单据级默认开票类型 — 同 defaultTaxRate, 未传 → fallback 自 customer.defaultInvoiceType */
     private com.cretas.aims.entity.enums.InvoiceType defaultInvoiceType;
 
+    /**
+     * P3 多仓: 叮咚采购单标题 (如 "0601-熟食T+2").
+     * 对应 SalesOrder.externalOrderTitle. Nullable — 普通订单不传.
+     */
+    @Size(max = 100, message = "采购单标题长度不能超过100个字符")
+    private String externalOrderTitle;
+
     @Valid
     @NotEmpty(message = "订单行项目不能为空")
     private List<SalesOrderItemDTO> items;
@@ -102,5 +110,33 @@ public class CreateSalesOrderRequest {
         private String specification;
 
         private BigDecimal boxQuantity;
+
+        // ==================== P3 多仓字段 ====================
+
+        /**
+         * 目的仓全名 (如 叮咚-北仑总仓). Nullable — 普通订单不传.
+         * 对应 SalesOrderItem.destWarehouseName.
+         */
+        @Size(max = 100, message = "目的仓名称长度不能超过100个字符")
+        private String destWarehouseName;
+
+        /** 目的仓 code, 备货看板按此分组. Nullable. */
+        @Size(max = 32, message = "目的仓code长度不能超过32个字符")
+        private String destWarehouseCode;
+
+        /** 叮咚外部采购单ID. Nullable. */
+        @Size(max = 64, message = "外部采购单ID长度不能超过64个字符")
+        private String externalPoId;
+
+        /** 商品条码 (叮咚配送签收). Nullable. */
+        @Size(max = 64, message = "条码长度不能超过64个字符")
+        private String barcode;
+
+        /** 预约入场时段字符串 (如 "8:00-12:00"). Nullable. */
+        @Size(max = 50, message = "预约时段长度不能超过50个字符")
+        private String appointmentTime;
+
+        /** 行级要求到达日期. Nullable. */
+        private LocalDate requiredArrivalDate;
     }
 }
