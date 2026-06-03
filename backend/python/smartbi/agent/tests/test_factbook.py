@@ -1,6 +1,6 @@
 """Unit tests for FactBook (spec §4.2 + §6 Task 1).
 
-Asserts: honest labels rendered inline ([毛] / [口味/品质标签，非菜名] / 小样本);
+Asserts: honest labels rendered inline (口径自然语言 / 口味/品质标签，非菜名 / 小样本);
 facts_index flattened correctly; empty review → review段省略 + next-action note;
 sensitive name collection for the egress redactor.
 """
@@ -87,14 +87,17 @@ class TestRendering:
     def test_finance_money_labels(self):
         fb = FactBook(finance=_full_finance())
         text = fb.to_prompt_text()
-        assert "[毛/应收]" in text
-        assert "客单价" in text and "[毛]" in text
+        # 口径用自然语言, 不再用方括号标记 (#5)
+        assert "应收口径" in text
+        assert "[毛" not in text and "[净" not in text
+        assert "客单价" in text
         assert "青花椒大融城店" in text
 
     def test_sales_basis_labels(self):
         fb = FactBook(sales=_full_sales())
         text = fb.to_prompt_text()
-        assert "[按营业额]" in text  # channel share basis
+        assert "按营业额" in text  # channel share basis (自然语言, 非方括号)
+        assert "[按" not in text
         assert "藤椒鱼" in text
 
     def test_empty_review_omitted_with_nextaction(self):
