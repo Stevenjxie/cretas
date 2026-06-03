@@ -200,6 +200,10 @@ public class ProductType extends BaseEntity {
     @Column(name = "grams_per_unit", precision = 10, scale = 2)
     private java.math.BigDecimal gramsPerUnit;
 
+    /** 在产半成品折成品下游出率系数 (备货看板 WIP 估算; null = 按 1.0). */
+    @Column(name = "wip_to_fg_yield", precision = 5, scale = 4)
+    private java.math.BigDecimal wipToFgYield;
+
     /** 库存预警值 */
     @Column(name = "inventory_warning_threshold", precision = 15, scale = 2)
     private java.math.BigDecimal inventoryWarningThreshold;
