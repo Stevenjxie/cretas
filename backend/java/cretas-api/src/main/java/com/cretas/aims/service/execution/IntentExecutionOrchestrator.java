@@ -75,6 +75,11 @@ public class IntentExecutionOrchestrator {
     private final ToolDispatchService toolDispatchService;
     private final DynamicToolSelectionService dynamicToolSelectionService;
 
+    // W1b negation veto (intent-w1b): early VETO gate in the execution layer. Low-level service
+    // (QueryPreprocessorServiceImpl has no dependency back on the orchestrator), so safe to inject
+    // via the constructor — no circular dependency.
+    private final QueryPreprocessorService queryPreprocessorService;
+
     // Optional dependencies
     @Autowired(required = false)
     private ResultFormatterService resultFormatterService;
@@ -140,7 +145,8 @@ public class IntentExecutionOrchestrator {
             AgenticRAGRouterService agenticRAGRouterService,
             ResultValidatorService resultValidatorService,
             ToolDispatchService toolDispatchService,
-            DynamicToolSelectionService dynamicToolSelectionService) {
+            DynamicToolSelectionService dynamicToolSelectionService,
+            QueryPreprocessorService queryPreprocessorService) {
         this.aiIntentService = aiIntentService;
         this.semanticsParser = semanticsParser;
         this.semanticCacheService = semanticCacheService;
@@ -160,6 +166,7 @@ public class IntentExecutionOrchestrator {
         this.resultValidatorService = resultValidatorService;
         this.toolDispatchService = toolDispatchService;
         this.dynamicToolSelectionService = dynamicToolSelectionService;
+        this.queryPreprocessorService = queryPreprocessorService;
     }
 
     @PostConstruct
@@ -184,6 +191,31 @@ public class IntentExecutionOrchestrator {
         // 0. 显式意图代码
         if (request.getIntentCode() != null && !request.getIntentCode().isEmpty()) {
             return executeWithExplicitIntent(factoryId, request, userId, userRole);
+        }
+
+        // 0.1. W1b: early VETO gate in the execution layer. The orchestrator's own phrase shortcut
+        // (#0.2 below) is contains-based and would execute "看订单" inside "别给我看订单" — bypassing
+        // the recognition-layer veto gate. Mirror it here. Skipped for explicit intentCode (handled
+        // above), so a user explicitly confirming a write is never vetoed.
+        //   - VETO_READ  → return clarification immediately (no phrase shortcut, no execution).
+        //   - VETO_WRITE → guard the short-circuits below so the request falls through to
+        //                  recognizeIntentWithConfidence, which already handles VETO_WRITE safely
+        //                  (OUT_OF_DOMAIN / read-twin, never an executed write).
+        boolean negationVetoWrite = false;
+        String vInput = request.getUserInput();
+        if (vInput != null && !vInput.isEmpty()) {
+            QueryPreprocessorService.NegationKind vk;
+            try {
+                vk = queryPreprocessorService.detectNegationVeto(vInput, knowledgeBase);
+            } catch (Exception e) {
+                log.warn("[W1b] orchestrator detectNegationVeto failed, fail-open NONE for input='{}': {}", vInput, e.toString());
+                vk = QueryPreprocessorService.NegationKind.NONE;
+            }
+            if (vk == QueryPreprocessorService.NegationKind.VETO_READ) {
+                log.info("[W1b] orchestrator VETO_READ → clarification (no phrase shortcut, no execution): '{}'", vInput);
+                return buildNegationVetoClarificationResponse(vInput);
+            }
+            negationVetoWrite = (vk == QueryPreprocessorService.NegationKind.VETO_WRITE);
         }
 
         // 0.2. Sprint 12 cache-fix Phase C — Phrase shortcut moved AHEAD of conversation
@@ -214,7 +246,7 @@ public class IntentExecutionOrchestrator {
         // Phrase confidence is 0.96 (matching v33.1 EarlyPhrase tier so /recognize and /execute
         // produce consistent routing).
         String userInput = request.getUserInput();
-        if (userInput != null && !userInput.isEmpty()) {
+        if (!negationVetoWrite && userInput != null && !userInput.isEmpty()) {
             IntentMatchResult earlyPhraseMatch = tryOrchestratorPhraseShortcut(userInput, factoryId);
             if (earlyPhraseMatch != null && earlyPhraseMatch.hasMatch()) {
                 AIIntentConfig phraseIntent = earlyPhraseMatch.getBestMatch();
@@ -242,7 +274,7 @@ public class IntentExecutionOrchestrator {
         }
 
         // 0.3. 早期问题类型检测
-        if (userInput != null && !userInput.isEmpty()) {
+        if (!negationVetoWrite && userInput != null && !userInput.isEmpty()) {
             IntentExecuteResponse earlyRouteResponse = handleEarlyQuestionTypeDetection(
                     factoryId, userInput, request, userId, userRole);
             if (earlyRouteResponse != null) {
@@ -1048,6 +1080,24 @@ public class IntentExecutionOrchestrator {
         // Delegates to the shared BusinessTypeGate so the main execute() flow, the explicit-intent
         // flow, and SseStreamingService all gate identically (Sprint 13 #305).
         return businessTypeGate.check(factoryId, intent).orElse(null);
+    }
+
+    /**
+     * W1b: clarification response for a negation VETO_READ in the execution layer.
+     * Nothing is recognized or executed (intentRecognized=false) — the orchestrator's
+     * contains-based phrase shortcut is NOT consulted, so a negated read like "别给我看订单"
+     * can no longer execute the embedded "看订单" intent.
+     */
+    IntentExecuteResponse buildNegationVetoClarificationResponse(String userInput) {
+        final String msg = "您是要取消这次操作吗?需要我帮您查询或处理什么?";
+        log.info("[W1b] orchestrator negation veto clarification for input='{}'", userInput);
+        return IntentExecuteResponse.builder()
+                .intentRecognized(false)
+                .status("NEED_CLARIFICATION")
+                .message(msg)
+                .formattedText(msg)
+                .executedAt(LocalDateTime.now())
+                .build();
     }
 
     IntentExecuteResponse buildClarificationResponse(IntentMatchResult matchResult, String factoryId) {
