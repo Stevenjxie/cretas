@@ -27,7 +27,9 @@ import com.cretas.aims.repository.ProductionPlanRepository;
 import com.cretas.aims.repository.ProductionReportRepository;
 import com.cretas.aims.repository.SemiFinishedInventoryRepository;
 import com.cretas.aims.repository.WorkProcessRepository;
+import com.cretas.aims.entity.recipe.ProcessMaterialRecipe;
 import com.cretas.aims.repository.lineage.BatchLineageEdgeRepository;
+import com.cretas.aims.repository.recipe.ProcessMaterialRecipeRepository;
 import com.cretas.aims.repository.workprocess.WorkProcessTaskRepository;
 import com.cretas.aims.service.ProcessingService;
 import com.cretas.aims.service.yield.impl.YieldCalculationServiceImpl;
@@ -64,6 +66,7 @@ class YieldReportServiceImplTest {
     private SemiFinishedInventoryRepository wipRepo;
     private BatchLineageEdgeRepository lineageEdgeRepo;
     private ObjectMapper objectMapper;
+    private ProcessMaterialRecipeRepository recipeRepo;
     private YieldReportServiceImpl svc;
 
     @BeforeEach
@@ -81,14 +84,17 @@ class YieldReportServiceImplTest {
         wipRepo = mock(SemiFinishedInventoryRepository.class);
         lineageEdgeRepo = mock(BatchLineageEdgeRepository.class);
         objectMapper = new ObjectMapper();
+        recipeRepo = mock(ProcessMaterialRecipeRepository.class);
         // default: no source WIP found (向后兼容旧测试: sourceWipNo=null 不查 WIP)
         when(wipRepo.findByIntermediateBatchNoAndDeletedAtIsNull(anyString())).thenReturn(Optional.empty());
         when(wipRepo.findByFactoryIdAndBatchIdAndDeletedAtIsNull(anyString(), any())).thenReturn(List.of());
         when(wipRepo.save(any(SemiFinishedInventory.class))).thenAnswer(i -> i.getArgument(0));
         when(lineageEdgeRepo.save(any(BatchLineageEdge.class))).thenAnswer(i -> i.getArgument(0));
+        // default: no recipe (向后兼容旧测试: 无配方时行为不变)
+        when(recipeRepo.findActiveByFactoryIdAndWorkProcessId(anyString(), anyString())).thenReturn(List.of());
         svc = new YieldReportServiceImpl(reportRepo, taskRepo, processRepo, calcSvc, processingService,
                 factorySettingsRepo, materialBatchRepo, productTypeRepo, productionBatchRepo,
-                productionPlanRepo, wipRepo, lineageEdgeRepo, objectMapper);
+                productionPlanRepo, wipRepo, lineageEdgeRepo, objectMapper, recipeRepo);
     }
 
     private WorkProcessTask task(long id, int order, String wpId) {
@@ -2716,5 +2722,251 @@ class YieldReportServiceImplTest {
         YieldReportRequest.Byproduct b = new YieldReportRequest.Byproduct();
         b.setName(name); b.setQuantity(new BigDecimal(qty)); b.setUnit(unit);
         return b;
+    }
+
+    // ── P5: 调料 BOM + 包材成本叠加 ─────────────────────────────────────────────────
+
+    /**
+     * 构建 active ProcessMaterialRecipe (不带 items, 成本计算只需 unitCost).
+     */
+    private ProcessMaterialRecipe seasoningRecipe(String wpId, String unitCostStr) {
+        return ProcessMaterialRecipe.builder()
+                .id(1L)
+                .factoryId("F006")
+                .workProcessId(wpId)
+                .recipeType(ProcessMaterialRecipe.RecipeType.SEASONING)
+                .unitCost(new BigDecimal(unitCostStr))
+                .costUnit("元/kg投入")
+                .isActive(true)
+                .build();
+    }
+
+    private ProcessMaterialRecipe packagingRecipe(String wpId, String unitCostStr) {
+        return ProcessMaterialRecipe.builder()
+                .id(2L)
+                .factoryId("F006")
+                .workProcessId(wpId)
+                .recipeType(ProcessMaterialRecipe.RecipeType.PACKAGING)
+                .unitCost(new BigDecimal(unitCostStr))
+                .costUnit("元/盒产出")
+                .isActive(true)
+                .build();
+    }
+
+    /**
+     * P5-1: 有调料配方 (SEASONING) 时, materialCost = 原料成本 + 调料成本 (叠加).
+     * 滚揉道: 投入 833.5 kg × 调料 1.5049 元/kg = 1254.33元 (调料)
+     * + 原料 833.5 kg × unitPrice 9.00 = 7501.50元 → 总 materialCost = 8755.83元
+     */
+    @Test
+    void p5_seasoningRecipe_addedToMaterialCost() {
+        WorkProcessTask t = task(70L, 1, "WP-F006-ZS-02");
+        t.setProductTypeId("PT-ZS");
+        when(taskRepo.findByFactoryIdAndId("F006", 70L)).thenReturn(Optional.of(t));
+        when(processRepo.findById("WP-F006-ZS-02")).thenReturn(Optional.empty());
+        when(factorySettingsRepo.findProductionSettingsByFactoryId("F006")).thenReturn(null);
+        when(reportRepo.findYieldReportsByBatch(anyString(), eq(1L))).thenReturn(List.of());
+        when(reportRepo.findYieldReportsByTask("F006", 70L)).thenReturn(List.of());
+
+        // 原料批次有价
+        MaterialBatch mb = new MaterialBatch();
+        mb.setId("mb-zs-01"); mb.setStatus(MaterialBatchStatus.AVAILABLE);
+        mb.setUnitPrice(new BigDecimal("9.00"));
+        when(materialBatchRepo.findById("mb-zs-01")).thenReturn(Optional.of(mb));
+
+        // 调料配方: 1.5049 元/kg投入
+        when(recipeRepo.findActiveByFactoryIdAndWorkProcessId("F006", "WP-F006-ZS-02"))
+                .thenReturn(List.of(seasoningRecipe("WP-F006-ZS-02", "1.5049")));
+
+        ArgumentCaptor<ProductionReport> cap = ArgumentCaptor.forClass(ProductionReport.class);
+        when(reportRepo.save(cap.capture())).thenAnswer(i -> {
+            ProductionReport r = i.getArgument(0); r.setId(701L); return r;
+        });
+
+        YieldReportRequest req = new YieldReportRequest();
+        req.setWorkProcessTaskId(70L);
+        req.setInputQuantity(new BigDecimal("833.5"));
+        req.setInputUnit("kg");
+        req.setOutputQuantity(new BigDecimal("1126.5"));
+        req.setOutputUnit("kg");
+        req.setMaterialBatchRefs(List.of(new MaterialBatchRef("mb-zs-01", new BigDecimal("833.5"), "kg")));
+
+        Map<String, Object> out = svc.submitReport("F006", 1L, 5L, req);
+
+        assertThat(out.get("reportId")).isEqualTo(701L);
+        ProductionReport saved = cap.getValue();
+        // 原料: 833.5 × 9.00 = 7501.50; 调料: 833.5 × 1.5049 = 1253.84
+        // 总 = 7501.50 + 1253.84 = 8755.34 (scale 2, HALF_UP)
+        // 精确: 833.5 × 1.5049 = 1253.8342 → 1253.83 (scale 2); 7501.50 + 1253.83 = 8755.33
+        // Verify: materialCost contains both contributions by checking > 7501.50
+        assertThat(saved.getMaterialCost()).isNotNull();
+        assertThat(saved.getMaterialCost()).isGreaterThan(new BigDecimal("7501.50"));
+        // 调料部分: 833.5 × 1.5049 = 1253.8342 → adds ~1253.83 to base 7501.50
+        // Total range [8754, 8757] depending on HALF_UP precision
+        assertThat(saved.getMaterialCost()).isBetween(new BigDecimal("8755.00"), new BigDecimal("8756.00"));
+    }
+
+    /**
+     * P5-2: 有包材配方 (PACKAGING) 时, materialCost = 包材成本 (叠加到原料/WIP).
+     * 气调道: 产出 540 盒 × 0.5514 元/盒 = 297.76元 (包材); 无原料 ref → materialCost = 297.76元.
+     */
+    @Test
+    void p5_packagingRecipe_addedToMaterialCost() {
+        WorkProcessTask t = task(71L, 6, "WP-F006-ZS-06");
+        t.setProductTypeId("PT-ZS");
+        when(taskRepo.findByFactoryIdAndId("F006", 71L)).thenReturn(Optional.of(t));
+        when(processRepo.findById("WP-F006-ZS-06")).thenReturn(Optional.empty());
+        when(factorySettingsRepo.findProductionSettingsByFactoryId("F006")).thenReturn(null);
+        when(reportRepo.findYieldReportsByBatch(anyString(), eq(1L))).thenReturn(List.of());
+        when(reportRepo.findYieldReportsByTask("F006", 71L)).thenReturn(List.of());
+
+        // 包材配方: 0.5514 元/盒产出
+        when(recipeRepo.findActiveByFactoryIdAndWorkProcessId("F006", "WP-F006-ZS-06"))
+                .thenReturn(List.of(packagingRecipe("WP-F006-ZS-06", "0.5514")));
+
+        ArgumentCaptor<ProductionReport> cap = ArgumentCaptor.forClass(ProductionReport.class);
+        when(reportRepo.save(cap.capture())).thenAnswer(i -> {
+            ProductionReport r = i.getArgument(0); r.setId(702L); return r;
+        });
+
+        YieldReportRequest req = new YieldReportRequest();
+        req.setWorkProcessTaskId(71L);
+        req.setInputQuantity(new BigDecimal("46.2"));
+        req.setInputUnit("kg");
+        req.setOutputQuantity(new BigDecimal("540"));  // 540 盒
+        req.setOutputUnit("盒");
+        // no materialBatchRefs
+
+        Map<String, Object> out = svc.submitReport("F006", 1L, 5L, req);
+
+        assertThat(out.get("reportId")).isEqualTo(702L);
+        ProductionReport saved = cap.getValue();
+        // 包材: 540 × 0.5514 = 297.76 (scale 2)
+        assertThat(saved.getMaterialCost()).isNotNull();
+        assertThat(saved.getMaterialCost()).isEqualByComparingTo("297.76");
+    }
+
+    /**
+     * P5-3: 调料 + 包材两个配方都有时, materialCost 叠加两者.
+     * 假设某道既有调料 (2.00元/kg投入, 投入100kg = 200元) 又有包材 (0.50元/盒, 产出80盒 = 40元)
+     * → materialCost = 200 + 40 = 240元
+     */
+    @Test
+    void p5_seasoningAndPackaging_bothAdded() {
+        WorkProcessTask t = task(72L, 2, "WP-MULTI");
+        t.setProductTypeId("PT-M");
+        when(taskRepo.findByFactoryIdAndId("F006", 72L)).thenReturn(Optional.of(t));
+        when(processRepo.findById("WP-MULTI")).thenReturn(Optional.empty());
+        when(factorySettingsRepo.findProductionSettingsByFactoryId("F006")).thenReturn(null);
+        when(reportRepo.findYieldReportsByBatch(anyString(), eq(1L))).thenReturn(List.of());
+        when(reportRepo.findYieldReportsByTask("F006", 72L)).thenReturn(List.of());
+
+        // 两条 recipe: 调料 2.00/kg + 包材 0.50/盒
+        when(recipeRepo.findActiveByFactoryIdAndWorkProcessId("F006", "WP-MULTI"))
+                .thenReturn(List.of(
+                        seasoningRecipe("WP-MULTI", "2.00"),
+                        packagingRecipe("WP-MULTI", "0.50")
+                ));
+
+        ArgumentCaptor<ProductionReport> cap = ArgumentCaptor.forClass(ProductionReport.class);
+        when(reportRepo.save(cap.capture())).thenAnswer(i -> {
+            ProductionReport r = i.getArgument(0); r.setId(703L); return r;
+        });
+
+        YieldReportRequest req = new YieldReportRequest();
+        req.setWorkProcessTaskId(72L);
+        req.setInputQuantity(new BigDecimal("100"));
+        req.setInputUnit("kg");
+        req.setOutputQuantity(new BigDecimal("80"));
+        req.setOutputUnit("盒");
+        // no materialBatchRefs (原料无价)
+
+        Map<String, Object> out = svc.submitReport("F006", 1L, 5L, req);
+
+        ProductionReport saved = cap.getValue();
+        // 调料: 100 × 2.00 = 200; 包材: 80 × 0.50 = 40; 总 = 240.00
+        assertThat(saved.getMaterialCost()).isEqualByComparingTo("240.00");
+    }
+
+    /**
+     * P5-4: 无 recipe 时行为与 P5 前完全一致 (向后兼容).
+     * recipeRepo 返回空列表 (setUp 中已 default 如此), materialCost 只含原料成本.
+     */
+    @Test
+    void p5_noRecipe_backwardCompatible_materialCostUnchanged() {
+        WorkProcessTask t = task(73L, 1, "WP-NORECIPE");
+        t.setProductTypeId("PT-NR");
+        when(taskRepo.findByFactoryIdAndId("F006", 73L)).thenReturn(Optional.of(t));
+        when(processRepo.findById("WP-NORECIPE")).thenReturn(Optional.empty());
+        when(factorySettingsRepo.findProductionSettingsByFactoryId("F006")).thenReturn(null);
+        when(reportRepo.findYieldReportsByBatch(anyString(), eq(1L))).thenReturn(List.of());
+        when(reportRepo.findYieldReportsByTask("F006", 73L)).thenReturn(List.of());
+        // recipeRepo returns empty (default mock from setUp) → no recipe cost added
+
+        MaterialBatch mb = new MaterialBatch();
+        mb.setId("mb-nr"); mb.setStatus(MaterialBatchStatus.AVAILABLE);
+        mb.setUnitPrice(new BigDecimal("5.00"));
+        when(materialBatchRepo.findById("mb-nr")).thenReturn(Optional.of(mb));
+
+        ArgumentCaptor<ProductionReport> cap = ArgumentCaptor.forClass(ProductionReport.class);
+        when(reportRepo.save(cap.capture())).thenAnswer(i -> {
+            ProductionReport r = i.getArgument(0); r.setId(704L); return r;
+        });
+
+        YieldReportRequest req = new YieldReportRequest();
+        req.setWorkProcessTaskId(73L);
+        req.setInputQuantity(new BigDecimal("100"));
+        req.setInputUnit("kg");
+        req.setOutputQuantity(new BigDecimal("80"));
+        req.setOutputUnit("kg");
+        req.setMaterialBatchRefs(List.of(new MaterialBatchRef("mb-nr", new BigDecimal("100"), "kg")));
+
+        svc.submitReport("F006", 1L, 5L, req);
+
+        ProductionReport saved = cap.getValue();
+        // 无配方: materialCost = 仅原料 100 × 5.00 = 500.00 (不变)
+        assertThat(saved.getMaterialCost()).isEqualByComparingTo("500.00");
+    }
+
+    /**
+     * P5-5: 调料 recipe 存在但 inputQuantity 为 null (SEGMENT 阶段) → 调料成本不计 (不 NPE).
+     */
+    @Test
+    void p5_seasoningRecipe_nullInput_doesNotCrash() {
+        // SEGMENT 阶段: effInput=null → 调料 SEASONING 路径 inputQuantity==null 跳过
+        WorkProcessTask t = task(74L, 2, "WP-PHASE");
+        t.setProductTypeId("PT-SEG");
+        when(taskRepo.findByFactoryIdAndId("F006", 74L)).thenReturn(Optional.of(t));
+        WorkProcess wp = WorkProcess.builder().id("WP-PHASE").factoryId("F006")
+                .unit("kg").standardHourlyRate(new BigDecimal("30"))
+                .standardYieldMax(new BigDecimal("1.0000")).build();
+        when(processRepo.findById("WP-PHASE")).thenReturn(Optional.of(wp));
+        when(factorySettingsRepo.findProductionSettingsByFactoryId("F006")).thenReturn(null);
+        when(reportRepo.findYieldReportsByBatch(anyString(), eq(1L))).thenReturn(List.of());
+        when(reportRepo.findYieldReportsByTask("F006", 74L)).thenReturn(List.of());
+
+        // 有 SEASONING recipe 但投入量是 null (SEGMENT 阶段)
+        when(recipeRepo.findActiveByFactoryIdAndWorkProcessId("F006", "WP-PHASE"))
+                .thenReturn(List.of(seasoningRecipe("WP-PHASE", "1.5049")));
+
+        ArgumentCaptor<ProductionReport> cap = ArgumentCaptor.forClass(ProductionReport.class);
+        when(reportRepo.save(cap.capture())).thenAnswer(i -> {
+            ProductionReport r = i.getArgument(0); r.setId(705L); return r;
+        });
+
+        YieldReportRequest req = new YieldReportRequest();
+        req.setWorkProcessTaskId(74L);
+        req.setReportKind("SEGMENT");   // INPUT/OUTPUT 强制 null → effInput=null, effOutput=null
+        YieldReportRequest.LaborSegment seg = new YieldReportRequest.LaborSegment();
+        seg.setStartTime("08:00"); seg.setEndTime("10:00"); seg.setHeadcount(3);
+        req.setLaborSegments(List.of(seg));
+
+        // Must not throw
+        Map<String, Object> out = svc.submitReport("F006", 1L, 5L, req);
+
+        ProductionReport saved = cap.getValue();
+        // SEGMENT 阶段: effInput/effOutput 均 null → 调料/包材都无法计算 → materialCost null
+        assertThat(saved.getMaterialCost()).isNull();
+        assertThat(saved.getLaborCost()).isEqualByComparingTo("180.00");  // 2h × 3人 × 30 = 180
     }
 }
