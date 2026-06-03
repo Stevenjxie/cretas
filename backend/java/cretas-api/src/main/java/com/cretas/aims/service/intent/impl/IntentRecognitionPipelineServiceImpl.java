@@ -44,6 +44,7 @@ import com.cretas.aims.service.intent.IntentConfigManagementService;
 import com.cretas.aims.service.intent.IntentRecognitionPipelineService;
 import com.cretas.aims.ai.tool.WriteGuardService;
 import com.cretas.aims.ai.tool.NegationTwinPolicy;
+import com.cretas.aims.ai.tool.BusinessTypeScope;
 import com.cretas.aims.dto.ClassifierResult;
 import com.cretas.aims.dto.SemanticMatchResult;
 import com.cretas.aims.dto.intent.RouteDecision;
@@ -2404,24 +2405,13 @@ public class IntentRecognitionPipelineServiceImpl implements IntentRecognitionPi
                 userInput, matchingConfig.isLlmFallbackEnabled());
 
         // v32.1: 业态隔离 — 过滤掉不属于当前业态的意图（工厂和餐饮均过滤）
+        // 单一事实源 BusinessTypeScope.isCompatible（T1 抽取，行为等价于历史 if/else 内联过滤）
         String biz = configService.resolveBusinessDomain(factoryId);
-        if ("RESTAURANT".equals(biz)) {
-            List<AIIntentConfig> filtered = allIntents.stream()
-                    .filter(i -> {
-                        String bt = i.getBusinessType();
-                        return bt == null || "COMMON".equals(bt) || "RESTAURANT".equals(bt);
-                    })
-                    .collect(Collectors.toList());
-            log.info("v32.1 LLM fallback 餐饮过滤: {} → {} intents", allIntents.size(), filtered.size());
-            allIntents = filtered;
-        } else {
-            // 工厂（FACTORY/COMMON/default）: 排除 RESTAURANT 专属意图
-            List<AIIntentConfig> filtered = allIntents.stream()
-                    .filter(i -> !"RESTAURANT".equals(i.getBusinessType()))
-                    .collect(Collectors.toList());
-            log.info("v32.1 LLM fallback 工厂过滤: {} → {} intents (排除RESTAURANT)", allIntents.size(), filtered.size());
-            allIntents = filtered;
-        }
+        List<AIIntentConfig> filtered = allIntents.stream()
+                .filter(i -> BusinessTypeScope.isCompatible(i.getBusinessType(), biz))
+                .collect(Collectors.toList());
+        log.info("v32.1 LLM fallback 业态过滤: {} → {} intents (biz={})", allIntents.size(), filtered.size(), biz);
+        allIntents = filtered;
 
         // v32.4: 从 LLM 候选列表中排除语义黑洞意图 (扩展)
         Set<String> LLM_BLACKHOLE_INTENTS_FB = Set.of(
