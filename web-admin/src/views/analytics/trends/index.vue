@@ -1,14 +1,20 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, watch } from 'vue';
+import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { get } from '@/api/request';
 import { ElMessage } from 'element-plus';
 import echarts from '@/utils/echarts';
+import { pythonFetch, PYTHON_LLM_TIMEOUT_MS } from '@/api/smartbi/common';
 import TemplateGrid from '@/views/smart-bi/components/TemplateGrid.vue';
 import { getDailyTrend, type DailyTrend } from '@/api/smartbi/gold';
 import { getGoldDataRange } from '@/api/smartbi/dataRange';
 import { resolveAllHistoryRange } from '@/views/smart-bi/analysisDefaults';
+import {
+  goldTrendBundleToViewModel,
+  type GoldTrendBundlePayload,
+  type TrendBundleViewModel,
+} from './goldTrendBundle';
 // Day 9 数据织网 Sub-Project A: capability-driven card visibility
 import { useCapability } from '@/composables/useCapability';
 import CapabilityGate from '@/components/CapabilityGate.vue';
@@ -119,6 +125,138 @@ async function _resolvePrimaryRange(period: string): Promise<[string, string]> {
 
 // Auto-fallback label shown when Gold chart falls back to a prior range.
 const goldTrendFallbackLabel = ref<string>('');
+
+// WS4b #12: restaurant tenants' MAIN trend now renders from the gold
+// /api/smartbi/gold/trend-bundle (all history) — a monthly (or daily fallback)
+// revenue line + a weekday-vs-weekend average comparison. This supersedes the
+// old "需上传含 date 的数据" CapabilityGate placeholder + stale upload-template
+// 评分趋势 cards. Gold aggregation needs NO upload-capability check.
+const goldBundle = ref<TrendBundleViewModel | null>(null);
+const goldBundleLoading = ref(false);
+let goldBundleRevenueChart: echarts.ECharts | null = null;
+let goldBundleWwChart: echarts.ECharts | null = null;
+
+async function loadGoldBundle() {
+  // Only restaurant tenants with price-view get the gold POS revenue bundle;
+  // manufacturing tenants keep the production/quality/cost charts below, and
+  // non-price-view restaurant roles get RBAC-nulled revenue (don't fetch/show).
+  if (!isRestaurantTenant.value || !canViewPrice.value || !factoryId.value) {
+    goldBundle.value = null;
+    return;
+  }
+  goldBundleLoading.value = true;
+  try {
+    // Omit start/end = all history (gold _parse_range treats missing bounds as open).
+    const res = await pythonFetch(
+      `/api/smartbi/gold/trend-bundle?factory_id=${factoryId.value}`,
+      { timeoutMs: PYTHON_LLM_TIMEOUT_MS },
+    ) as (GoldTrendBundlePayload & { success?: boolean; message?: string });
+    // Defensive: honour an explicit envelope failure flag if a future endpoint adopts it.
+    if (res && (res as { success?: boolean }).success === false) {
+      goldBundle.value = null;
+      return;
+    }
+    goldBundle.value = goldTrendBundleToViewModel(res);
+    updateGoldBundleCharts();
+  } catch (e) {
+    // Honest empty on failure — show empty state, not a stale/fake chart.
+    console.error('[trends] gold trend-bundle load failed:', e);
+    goldBundle.value = null;
+  } finally {
+    goldBundleLoading.value = false;
+  }
+}
+
+async function updateGoldBundleCharts() {
+  const vm = goldBundle.value;
+  if (!vm) return;
+  // The chart DOM nodes render only after goldBundle is set (v-show card +
+  // v-if ww col) — wait a tick, then lazily init any chart whose element now
+  // exists but hasn't been initialized yet.
+  await nextTick();
+  if (!goldBundleRevenueChart) {
+    const el = document.getElementById('gold-bundle-revenue-chart');
+    if (el) goldBundleRevenueChart = echarts.init(el, 'cretas');
+  }
+  if (!goldBundleWwChart) {
+    const el = document.getElementById('gold-bundle-ww-chart');
+    if (el) goldBundleWwChart = echarts.init(el, 'cretas');
+  }
+
+  const fmtRevenue = (v: number) => v >= 10000
+    ? `¥${(v / 10000).toFixed(2)}万`
+    : `¥${v.toLocaleString('zh-CN', { maximumFractionDigits: 0 })}`;
+
+  if (goldBundleRevenueChart) {
+    const granLabel = vm.granularity === 'monthly' ? '按月' : '按日';
+    goldBundleRevenueChart.setOption({
+      title: { text: `POS 营收趋势 · ${granLabel} (Gold)`, left: 'center', textStyle: { fontSize: 14 } },
+      tooltip: {
+        trigger: 'axis', confine: true,
+        formatter: (params: Array<{ value: number; axisValue: string; marker: string }>) => {
+          if (!Array.isArray(params) || params.length === 0) return '';
+          const p = params[0];
+          const v = typeof p.value === 'number' ? p.value : Number(p.value);
+          return `${p.axisValue}<br/>${p.marker} 营收: ${fmtRevenue(v)}`;
+        },
+      },
+      grid: { top: 50, left: 60, right: 30, bottom: 60 },
+      xAxis: {
+        type: 'category',
+        data: vm.categories,
+        // Rotate + auto-thin labels so a long (daily-fallback) series doesn't
+        // pile labels into an unreadable wall.
+        axisLabel: { rotate: vm.categories.length > 12 ? 40 : 0, interval: 'auto' },
+      },
+      yAxis: {
+        type: 'value', name: '营收',
+        axisLabel: { formatter: (v: number) => v >= 10000 ? `${(v / 10000).toFixed(1)}万` : String(v) },
+      },
+      series: [{
+        name: '营收',
+        type: 'line',
+        smooth: true,
+        areaStyle: { opacity: 0.3 },
+        itemStyle: { color: '#67C23A' },
+        data: vm.revenue,
+      }],
+    }, true);
+  }
+
+  if (goldBundleWwChart) {
+    const ww = vm.weekdayWeekend;
+    goldBundleWwChart.setOption({
+      title: { text: '工作日 vs 周末 · 日均营收', left: 'center', textStyle: { fontSize: 14 } },
+      tooltip: {
+        trigger: 'axis', confine: true, axisPointer: { type: 'shadow' },
+        formatter: (params: Array<{ value: number; name: string; marker: string }>) => {
+          if (!Array.isArray(params) || params.length === 0) return '';
+          const p = params[0];
+          const v = typeof p.value === 'number' ? p.value : Number(p.value);
+          return `${p.name}<br/>${p.marker} 日均营收: ${fmtRevenue(v)}`;
+        },
+      },
+      grid: { top: 50, left: 60, right: 30, bottom: 40 },
+      xAxis: { type: 'category', data: ['工作日', '周末'] },
+      yAxis: {
+        type: 'value', name: '日均营收',
+        axisLabel: { formatter: (v: number) => v >= 10000 ? `${(v / 10000).toFixed(1)}万` : String(v) },
+      },
+      series: [{
+        name: '日均营收',
+        type: 'bar',
+        barWidth: '45%',
+        data: ww
+          ? [
+              { value: ww.weekdayAvg, itemStyle: { color: '#409EFF' } },
+              { value: ww.weekendAvg, itemStyle: { color: '#E6A23C' } },
+            ]
+          : [],
+        label: { show: true, position: 'top', formatter: (p: { value: number }) => fmtRevenue(p.value) },
+      }],
+    }, true);
+  }
+}
 
 // Apr 25 2026 UX P3 (C-3): 365-day daily granularity creates "noise wall".
 // Auto-aggregate to weekly (90-365 days) or monthly (>365 days). Granularity
@@ -303,11 +441,18 @@ onMounted(() => {
   fetchCapability();
   loadTrendData();
   loadGoldTrend();
+  loadGoldBundle();
   initCharts();
   const goldEl = document.getElementById('gold-revenue-chart');
   if (goldEl) {
     goldRevenueChart = echarts.init(goldEl, 'cretas');
     updateGoldChart();
+  }
+  // WS4b #12: restaurant gold trend-bundle charts (revenue + weekday/weekend)
+  // are lazily initialized inside updateGoldBundleCharts() once goldBundle data
+  // arrives (the ww col uses v-if, so its DOM node doesn't exist at mount).
+  if (goldBundle.value) {
+    updateGoldBundleCharts();
   }
   if (typeof ResizeObserver !== 'undefined') {
     resizeObserver = new ResizeObserver(handleResize);
@@ -319,6 +464,9 @@ onMounted(() => {
 watch(selectedPeriod, () => {
   loadTrendData();
   loadGoldTrend();
+  // gold trend-bundle is always all-history (period-independent) — reload only
+  // to recover from a transient earlier failure.
+  if (isRestaurantTenant.value && !goldBundle.value) loadGoldBundle();
 });
 
 async function loadTrendData() {
@@ -435,12 +583,15 @@ function handleResize() {
     qualityChart?.resize();
     costChart?.resize();
     goldRevenueChart?.resize();
+    goldBundleRevenueChart?.resize();
+    goldBundleWwChart?.resize();
   });
 }
 
 function handleRefresh() {
   loadTrendData();
   loadGoldTrend();
+  loadGoldBundle();
 }
 
 onUnmounted(() => {
@@ -451,10 +602,14 @@ onUnmounted(() => {
   qualityChart?.dispose();
   costChart?.dispose();
   goldRevenueChart?.dispose();
+  goldBundleRevenueChart?.dispose();
+  goldBundleWwChart?.dispose();
   productionChart = null;
   qualityChart = null;
   goldRevenueChart = null;
   costChart = null;
+  goldBundleRevenueChart = null;
+  goldBundleWwChart = null;
 });
 </script>
 
@@ -492,12 +647,69 @@ onUnmounted(() => {
       </template>
     </el-alert>
 
-    <!-- v1.2 Week 9 Gold flip: POS revenue+orders trend for restaurant tenants -->
-    <CapabilityGate v-if="canViewPrice" card-id="trends_monthly" :requires="['date', 'net_amount']">
+    <!-- WS4b #12: restaurant tenants' MAIN trend = gold /trend-bundle (all
+         history). Monthly (or daily fallback) revenue line + weekday/weekend
+         day-average comparison. Supersedes the old "需上传含 date 的数据"
+         CapabilityGate placeholder + stale upload-template 评分趋势 cards.
+         Gold aggregation needs NO upload-capability check. Revenue is a
+         price-view metric → gate on canViewPrice (non-price roles get RBAC
+         -nulled revenue from the backend, so an all-zero chart would mislead). -->
+    <template v-if="isRestaurantTenant && canViewPrice">
+      <el-card
+        v-show="goldBundle"
+        class="chart-card gold-trend-card"
+        style="margin-bottom: 16px; border-top: 3px solid #67C23A;"
+        v-loading="goldBundleLoading"
+      >
+        <template #header>
+          <div style="display: flex; align-items: center; gap: 8px; font-weight: 600; flex-wrap: wrap;">
+            <span>POS 营收趋势</span>
+            <el-tag size="small" type="success">Gold · trend_bundle</el-tag>
+            <el-tag v-if="goldBundle" size="small" type="info" effect="plain">
+              {{ goldBundle.granularity === 'monthly' ? '按月' : '按日' }}聚合 · 全部历史
+            </el-tag>
+            <span v-if="goldBundle" style="color: #909399; font-size: 12px; margin-left: auto;">
+              {{ goldBundle.pointCount }} {{ goldBundle.granularity === 'monthly' ? '个月' : '天' }}
+            </span>
+          </div>
+        </template>
+        <el-row :gutter="16">
+          <el-col :span="goldBundle && goldBundle.weekdayWeekend ? 16 : 24">
+            <div id="gold-bundle-revenue-chart" class="chart" style="height: 320px;"></div>
+          </el-col>
+          <el-col v-if="goldBundle && goldBundle.weekdayWeekend" :span="8">
+            <div id="gold-bundle-ww-chart" class="chart" style="height: 320px;"></div>
+          </el-col>
+        </el-row>
+      </el-card>
+
+      <!-- Honest empty: gold returned no usable revenue data. -->
+      <el-card
+        v-show="!goldBundle && !goldBundleLoading"
+        class="chart-card"
+        style="margin-bottom: 16px;"
+      >
+        <el-empty :image-size="80">
+          <template #description>
+            <p style="margin: 0 0 8px;">暂无 POS 营收趋势数据</p>
+            <p style="margin: 0; color: #909399; font-size: 13px;">
+              请在
+              <el-link type="primary" href="/smart-bi/upload" :underline="false">智能BI → 上传</el-link>
+              导入门店流水(POS/销售)数据后,本页自动生成营收趋势。
+            </p>
+          </template>
+        </el-empty>
+      </el-card>
+    </template>
+
+    <!-- v1.2 Week 9 Gold flip: POS revenue+orders trend for restaurant tenants.
+         Restaurant tenants force-render (gold needs no upload-capability check);
+         factory tenants keep the capability gate. -->
+    <CapabilityGate v-if="canViewPrice" card-id="trends_monthly" :requires="['date', 'net_amount']" :force="isRestaurantTenant">
     <el-card v-show="goldTrend" class="chart-card gold-trend-card" style="margin-bottom: 16px; border-top: 3px solid #67C23A;">
       <template #header>
         <div style="display: flex; align-items: center; gap: 8px; font-weight: 600; flex-wrap: wrap;">
- <span> POS 营收趋势</span>
+ <span>POS 营收 · 每日明细</span>
           <el-tag size="small" type="success">Gold · daily_trend</el-tag>
           <el-tag v-if="trendGranularity === 'weekly'" size="small" type="info" effect="plain"
                   title="范围 90-365 天时,自动按周聚合以减少视觉噪音">按周聚合</el-tag>
@@ -543,8 +755,11 @@ onUnmounted(() => {
       </el-row>
     </div>
 
-    <!-- Week 6 Template Surfacing: show analysis results for this page -->
-    <TemplateGrid page-key="trend" :factory-id="factoryId || ''" />
+    <!-- Week 6 Template Surfacing: show analysis results for this page.
+         WS4b #12: hidden for restaurant tenants — the gold trend-bundle above
+         is the canonical restaurant trend content, superseding the stale
+         upload-template 评分趋势 cards (from an old review xlsx). -->
+    <TemplateGrid v-if="!isRestaurantTenant" page-key="trend" :factory-id="factoryId || ''" />
 
     <UnlockMoreCTA />
   </div>
