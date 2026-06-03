@@ -15,6 +15,8 @@ import { Refresh, Calendar } from '@element-plus/icons-vue';
 import DynamicChartRenderer from './DynamicChartRenderer.vue';
 import SmartBIEmptyState from './SmartBIEmptyState.vue';
 import CapabilityGate from '@/components/CapabilityGate.vue';
+import { getGoldDataRange } from '@/api/smartbi/dataRange';
+import { resolveAllHistoryRange } from '@/views/smart-bi/analysisDefaults';
 import type { ChartConfig } from '@/types/smartbi';
 
 interface SalesOverview {
@@ -75,7 +77,9 @@ const permissionStore = usePermissionStore();
 const factoryId = computed(() => authStore.factoryId);
 const canViewPrice = computed(() => permissionStore.canViewPrice);
 
-// Default last 30 days (mirrors parent SalesAnalysis.vue default for restaurants).
+// WS4 #11: default = ALL HISTORY (gold 数据窗), 不是近30天 — 餐饮租户 (qhj 等) 真实
+// 数据落在历史区间 (2025-01..2026-04), 近30天默认窗常空 → "所选区间无销售数据"。
+// 镜像 SalesAnalysis.vue 工厂路径 (getGoldDataRange + resolveAllHistoryRange)。
 const dateRange = ref<[string, string] | null>(null);
 const shortcuts = [
   {
@@ -265,11 +269,18 @@ function refresh() {
   loadData();
 }
 
-onMounted(() => {
-  const end = new Date();
-  const start = new Date();
-  start.setTime(start.getTime() - 3600 * 1000 * 24 * 30);
-  dateRange.value = [toApiDateString(start), toApiDateString(end)];
+onMounted(async () => {
+  // 默认全部历史: 探 gold 数据窗 → [minDate, maxDate]; 失败回落宽窗 (绝不近30天)。
+  let allHistory: [string, string];
+  try {
+    const probe = factoryId.value ? await getGoldDataRange(factoryId.value) : null;
+    allHistory = resolveAllHistoryRange(probe);
+  } catch {
+    allHistory = resolveAllHistoryRange(null);
+  }
+  dateRange.value = [allHistory[0], allHistory[1]];
+  // dateRange watcher triggers loadData(); call directly too in case the value
+  // is unchanged (e.g. fallback window matches a prior state) so first paint loads.
   loadData();
 });
 
