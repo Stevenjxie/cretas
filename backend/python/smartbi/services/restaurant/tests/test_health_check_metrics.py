@@ -192,6 +192,81 @@ def test_build_full_all_metrics(monkeypatch):
     assert bundle.metrics["review_score_decline"] == -0.03
 
 
+# ── Fix 1: commission estimate must canonicalize short channel values ──
+# fact_pos_transaction.channel_origin stores SHORT forms (美团/抖音/饿了么),
+# but commission_rates.yaml keys are FULL names (美团外卖/抖音外卖/饿了么).
+# Without alias mapping, default_rates.get('美团') → None → 0% commission →
+# channel_collection_rate ≈ 1.0 false-healthy.
+
+
+def test_estimate_commission_short_channel_resolves_rate():
+    """'美团' short value must map to '美团外卖' rate (0.20), commission > 0."""
+    builder = HealthCheckMetricsBuilder()
+    chan_rows = [
+        {"channel_origin": "美团", "order_type": "外卖", "net": 10000.0},
+    ]
+    commission = builder._estimate_commission(chan_rows, sub_sector="")
+    # 10000 * 0.20 (美团外卖 default) = 2000
+    assert commission > 0, "short channel '美团' must resolve to a non-zero rate"
+    assert abs(commission - 2000.0) < 1e-6, f"expected 2000, got {commission}"
+
+
+def test_estimate_commission_douyin_eleme_short_values():
+    """'抖音'→抖音外卖 0.22, '饿了么' already canonical 0.20."""
+    builder = HealthCheckMetricsBuilder()
+    chan_rows = [
+        {"channel_origin": "抖音", "order_type": "外卖", "net": 5000.0},
+        {"channel_origin": "饿了么", "order_type": "外卖", "net": 5000.0},
+    ]
+    commission = builder._estimate_commission(chan_rows, sub_sector="")
+    # 5000*0.22 + 5000*0.20 = 1100 + 1000 = 2100
+    assert abs(commission - 2100.0) < 1e-6, f"expected 2100, got {commission}"
+
+
+def test_estimate_commission_dine_in_zero_rate():
+    """堂食/自点 (self-order dine-in) → 0% commission (no platform cut)."""
+    builder = HealthCheckMetricsBuilder()
+    chan_rows = [
+        {"channel_origin": "自点", "order_type": "堂食", "net": 10000.0},
+        {"channel_origin": None, "order_type": "堂食", "net": 5000.0},
+    ]
+    commission = builder._estimate_commission(chan_rows, sub_sector="")
+    assert commission == 0.0
+
+
+def test_channel_collection_rate_not_falsely_healthy_for_delivery():
+    """End-to-end: delivery-heavy POS with short channel values must NOT
+    produce channel_collection_rate ≈ 1.0 (the false-healthy bug)."""
+    builder = HealthCheckMetricsBuilder()
+    chan_rows = [
+        {"channel_origin": "美团", "order_type": "外卖", "net": 60000.0},
+        {"channel_origin": "抖音", "order_type": "外卖", "net": 40000.0},
+    ]
+    net = 100000.0
+    commission = builder._estimate_commission(chan_rows, sub_sector="")
+    rate = (net - commission) / net
+    # 60000*0.20 + 40000*0.22 = 12000 + 8800 = 20800 commission
+    # rate = (100000 - 20800)/100000 = 0.792 — clearly < 1.0
+    assert rate < 1.0, f"delivery revenue must incur commission, rate={rate}"
+    assert rate < 0.85, f"~21% blended commission expected, rate={rate}"
+
+
+def test_estimate_commission_unmapped_channel_with_delivery_records_note():
+    """A channel with delivery revenue but no matching rate must NOT be
+    silently estimated at 0 — coverage note flags partial config."""
+    builder = HealthCheckMetricsBuilder()
+    # '京东' short form not in alias map nor a yaml key → unmapped delivery.
+    chan_rows = [
+        {"channel_origin": "美团", "order_type": "外卖", "net": 50000.0},
+        {"channel_origin": "某新平台", "order_type": "外卖", "net": 50000.0},
+    ]
+    commission, note = builder._estimate_commission_with_note(chan_rows, sub_sector="")
+    # 美团 maps (50000*0.20=10000); 某新平台 unmapped delivery → flagged
+    assert commission >= 10000.0
+    assert note, "unmapped delivery channel must produce a coverage note"
+    assert "费率未配置" in note
+
+
 def test_review_score_decline_skip_no_data(monkeypatch):
     builder = HealthCheckMetricsBuilder()
 

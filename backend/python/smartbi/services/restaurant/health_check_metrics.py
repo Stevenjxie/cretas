@@ -38,6 +38,36 @@ _RENT_KEYWORDS = ("租金", "房租", "店租", "场地")
 # 外卖类 order_type / channel buckets for delivery_dependency.
 _DELIVERY_ORDER_TYPES = ("外卖", "外送", "配送")
 
+# channel_origin canonicalization → commission_rates.yaml key space.
+# fact_pos_transaction.channel_origin stores SHORT forms (美团/抖音/饿了么/...),
+# but commission_rates.yaml keys are FULL names (美团外卖/抖音外卖/...). Without
+# this mapping, default_rates.get('美团') → None → 0% commission → false-healthy
+# channel_collection_rate. Keys here are the short raw values; values are the
+# canonical yaml key. (饿了么/微信小程序/京东外卖 already match yaml verbatim.)
+_CHANNEL_ALIAS = {
+    "美团": "美团外卖",
+    "美团外卖": "美团外卖",
+    "抖音": "抖音外卖",
+    "抖音外卖": "抖音外卖",
+    "抖音团购": "抖音团购",
+    "饿了么": "饿了么",
+    "饿了么外卖": "饿了么",
+    "京东": "京东外卖",
+    "京东外卖": "京东外卖",
+    "微信": "微信小程序",
+    "微信小程序": "微信小程序",
+    "小程序": "微信小程序",
+    # dine-in / self-operated → 0% commission canonical keys
+    "堂食": "堂食",
+    "自点": "堂食",
+    "自营": "自营外卖",
+    "自营外卖": "自营外卖",
+    "自提": "外卖自提",
+    "外卖自提": "外卖自提",
+    "企业团餐": "企业团餐",
+    "团餐": "企业团餐",
+}
+
 # commission_rates.yaml path (for D2 estimate of channel_collection_rate).
 _KB_ROOT = Path(__file__).resolve().parents[2] / "knowledge" / "restaurant"
 
@@ -425,34 +455,103 @@ class HealthCheckMetricsBuilder:
 
         # channel_collection_rate (D2 estimate): (revenue - est_commission)/revenue.
         if net > 0:
-            est_commission = self._estimate_commission(chan_rows, sub_sector)
+            est_commission, coverage_note = self._estimate_commission_with_note(
+                chan_rows, sub_sector
+            )
             out["channel_collection_rate"] = round((net - est_commission) / net, 4)
             out["_channel_estimated"] = True
-            out["_channel_note"] = "基于平台佣金估算 (commission_rates.yaml)"
+            base_note = "基于平台佣金估算 (commission_rates.yaml)"
+            # Surface unmapped-delivery coverage gap so a falsely-healthy
+            # collection rate is never presented as fact.
+            out["_channel_note"] = (
+                f"{base_note}; {coverage_note}" if coverage_note else base_note
+            )
 
         return out
+
+    @staticmethod
+    def _canonicalize_channel(raw: Optional[str]) -> str:
+        """Map a raw channel_origin/order_type short value to the
+        commission_rates.yaml key space (e.g. '美团' → '美团外卖').
+
+        Unknown values pass through unchanged so a verbatim yaml-key match
+        still works (and so unmapped channels can be detected downstream).
+        """
+        if raw is None:
+            return ""
+        key = str(raw).strip()
+        if not key:
+            return ""
+        return _CHANNEL_ALIAS.get(key, key)
+
+    @staticmethod
+    def _is_delivery(order_type: Optional[str], channel: str) -> bool:
+        """True if this row is a delivery (外卖) channel — used to decide
+        whether an unmapped channel is a real coverage gap (delivery with no
+        configured rate) vs. an expected 0% channel (堂食/自营)."""
+        ot = str(order_type or "")
+        if any(d in ot for d in _DELIVERY_ORDER_TYPES):
+            return True
+        # canonical delivery yaml keys contain 外卖/团购/小程序
+        return any(tok in channel for tok in ("外卖", "团购", "小程序"))
 
     def _estimate_commission(self, chan_rows: list, sub_sector: str) -> float:
         """Estimate platform commission from per-channel net revenue × rate.
 
-        Rate from commission_rates.yaml: per_sub_sector → default_rates →
-        fallback 0 for unmapped (e.g. 堂食/自营). D2 decision: no hard-coded 21%.
+        Thin wrapper over :meth:`_estimate_commission_with_note` that drops the
+        coverage note (kept for callers that only need the amount).
+        """
+        commission, _note = self._estimate_commission_with_note(chan_rows, sub_sector)
+        return commission
+
+    def _estimate_commission_with_note(
+        self, chan_rows: list, sub_sector: str
+    ) -> tuple[float, Optional[str]]:
+        """Estimate platform commission + flag unmapped delivery channels.
+
+        Rate from commission_rates.yaml: per_sub_sector → default_rates.
+        channel_origin short values are canonicalized to the yaml key space
+        first (美团 → 美团外卖) — otherwise delivery revenue is silently
+        estimated at 0% commission → channel_collection_rate ≈ 1.0 (false
+        healthy). D2 decision: no hard-coded 21%.
+
+        Returns (total_commission, coverage_note). The note is non-None when a
+        DELIVERY channel had revenue but no configured rate — surfaced so the
+        UI does not present a falsely-healthy collection rate as fact.
         """
         rates = self._load_commission_rates()
         default_rates = rates.get("default_rates", {})
         per_sub = (rates.get("per_sub_sector", {}) or {}).get(sub_sector, {}) if sub_sector else {}
 
         total_commission = 0.0
+        unmapped_delivery: list[str] = []
         for r in chan_rows:
-            channel = (r["channel_origin"] or r["order_type"] or "").strip()
+            raw = r["channel_origin"] or r["order_type"]
+            channel = self._canonicalize_channel(raw)
             net = float(r["net"]) if r["net"] is not None else 0.0
-            if net <= 0:
+            if net <= 0 or not channel:
                 continue
             rate = per_sub.get(channel)
             if rate is None:
-                rate = default_rates.get(channel, 0.0)
+                rate = default_rates.get(channel)
+            if rate is None:
+                # No configured rate. If this is a delivery channel, a 0%
+                # fallback would fabricate a healthy collection rate — flag it.
+                if self._is_delivery(r["order_type"], channel):
+                    label = str(raw).strip()
+                    if label and label not in unmapped_delivery:
+                        unmapped_delivery.append(label)
+                continue  # do NOT add 0 commission silently
             total_commission += net * float(rate)
-        return total_commission
+
+        note = None
+        if unmapped_delivery:
+            note = (
+                "渠道收款率: 部分外卖渠道费率未配置 ("
+                + "、".join(unmapped_delivery)
+                + "), 估算未含其抽佣, 实际到手率可能偏低"
+            )
+        return total_commission, note
 
     def _load_commission_rates(self) -> dict:
         if self._commission_yaml is not None:

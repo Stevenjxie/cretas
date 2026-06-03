@@ -96,6 +96,12 @@ const achievementLevel = ref<'day' | 'week' | 'month'>('day');
 const achievementData = ref<AchievementResponse | null>(null);
 const alertData = ref<AlertResponse | null>(null);
 const achievementLoading = ref(false);
+// Fix 4: distinguish a READ FAILURE (500/network) from a genuine
+// "not configured" empty state. Without this, a failed read leaves
+// achievementData/alertData null → template renders "尚未设置营业目标" /
+// "预警阈值未配置", disguising a system error as user mis-configuration
+// (防呆 Rule 5 violation).
+const achievementError = ref('');
 
 const fmtDate = (d: Date) => {
   const y = d.getFullYear();
@@ -107,6 +113,7 @@ const fmtDate = (d: Date) => {
 async function loadAchievementData() {
   if (!factoryId.value || !isRestaurant.value) return;
   achievementLoading.value = true;
+  achievementError.value = '';
   try {
     const today = new Date();
     let start: string;
@@ -122,11 +129,22 @@ async function loadAchievementData() {
       fetchAchievement({ startDate: start, endDate: end, level: achievementLevel.value }),
       fetchAlerts({ lookbackDays: 7 }),
     ]);
-    if (achRes.success) achievementData.value = achRes.data;
-    if (alertRes.success) alertData.value = alertRes.data;
+    // success===false is a real backend error, NOT an empty/unconfigured state.
+    if (!achRes.success || !alertRes.success) {
+      throw new Error(achRes.message || alertRes.message || '达成率数据加载失败');
+    }
+    achievementData.value = achRes.data;
+    alertData.value = alertRes.data;
   } catch (e) {
-    // 禁降级假数据: 失败时保持空, 不伪造达成率
+    // Fix 4: surface read failure explicitly instead of masquerading as
+    // "尚未配置". Keep data null so cards render the error state (with retry),
+    // and emit a non-blocking toast carrying the backend message.
+    const msg = e instanceof Error ? e.message : '达成率数据加载失败';
+    achievementError.value = msg;
+    achievementData.value = null;
+    alertData.value = null;
     console.error('[kpi-dashboard] achievement load failed:', e);
+    ElMessage({ message: `达成率数据加载失败: ${msg}`, type: 'error', duration: 0, showClose: true });
   } finally {
     achievementLoading.value = false;
   }
@@ -334,16 +352,36 @@ function formatPercent(value: number) {
           </div>
         </template>
 
-        <template v-if="achievementData && achievementData.points.length > 0">
+        <!-- Fix 4: read failure → explicit error state + retry (NOT 未配置) -->
+        <div v-if="achievementError">
+          <el-alert
+            type="error"
+            :closable="false"
+            show-icon
+            :title="`达成率数据加载失败: ${achievementError}`"
+          />
+          <div style="text-align: center; margin-top: 8px;">
+            <el-button size="small" :icon="Refresh" @click="loadAchievementData">重试</el-button>
+          </div>
+        </div>
+        <template v-else-if="achievementData && achievementData.points.length > 0">
           <div v-for="pt in achievementData.points.slice(-3)" :key="pt.periodKey" class="kpi-item">
             <div class="kpi-label">
               {{ pt.periodKey }}
               <span v-if="pt.dataMissing" style="color: #909399; font-size: 12px;">（数据缺失）</span>
+              <!-- Fix 3: incomplete period badge — a partial week/month rate is
+                   not a real low-achievement signal. -->
+              <el-tag v-else-if="pt.inProgress" size="small" type="info" effect="plain" style="margin-left: 6px;">
+                进行中（已过 {{ pt.daysElapsed ?? 0 }}/{{ pt.daysTotal ?? 0 }} 天）
+              </el-tag>
             </div>
             <template v-if="!pt.dataMissing && pt.achievementRate !== null">
+              <!-- in-progress: neutral color (do NOT alert on a partial-period rate) -->
               <el-progress
                 :percentage="Math.min(100, Math.round((pt.achievementRate ?? 0) * 100))"
-                :color="(pt.achievementRate ?? 0) >= 0.8 ? '#67c23a' : (pt.achievementRate ?? 0) >= 0.6 ? '#e6a23c' : '#f56c6c'"
+                :color="pt.inProgress
+                  ? '#909399'
+                  : ((pt.achievementRate ?? 0) >= 0.8 ? '#67c23a' : (pt.achievementRate ?? 0) >= 0.6 ? '#e6a23c' : '#f56c6c')"
               />
               <!-- Rule 2: show target + actual + rate together -->
               <div class="kpi-footer" v-if="canViewPrice">
@@ -352,9 +390,11 @@ function formatPercent(value: number) {
                 <span>实际 ¥{{ (pt.actual ?? 0).toLocaleString() }}</span>
                 <span style="margin: 0 8px;">·</span>
                 <span>{{ ((pt.achievementRate ?? 0) * 100).toFixed(1) }}%</span>
+                <span v-if="pt.inProgress" style="margin-left: 6px; color: #909399;">（周期未结束，进度仅供参考）</span>
               </div>
               <div class="kpi-footer" v-else>
                 <span>达成率 {{ ((pt.achievementRate ?? 0) * 100).toFixed(1) }}%</span>
+                <span v-if="pt.inProgress" style="margin-left: 6px; color: #909399;">（周期未结束，进度仅供参考）</span>
               </div>
             </template>
             <div v-else-if="pt.dataMissing" class="kpi-footer" style="color: #909399;">
@@ -378,7 +418,19 @@ function formatPercent(value: number) {
         <template #header>
           <div class="card-header"><el-icon><Timer /></el-icon><span>近 7 天达成预警</span></div>
         </template>
-        <template v-if="alertData && alertData.configExists && alertData.timeline.length > 0">
+        <!-- Fix 4: read failure → explicit error state + retry (NOT 未配置) -->
+        <div v-if="achievementError">
+          <el-alert
+            type="error"
+            :closable="false"
+            show-icon
+            :title="`预警数据加载失败: ${achievementError}`"
+          />
+          <div style="text-align: center; margin-top: 8px;">
+            <el-button size="small" :icon="Refresh" @click="loadAchievementData">重试</el-button>
+          </div>
+        </div>
+        <template v-else-if="alertData && alertData.configExists && alertData.timeline.length > 0">
           <el-timeline>
             <el-timeline-item
               v-for="entry in alertData.timeline"
@@ -399,7 +451,7 @@ function formatPercent(value: number) {
             </el-timeline-item>
           </el-timeline>
         </template>
-        <!-- Rule 5: config not set → navigate to config -->
+        <!-- Rule 5: config not set → navigate to config (only when read succeeded) -->
         <div v-else-if="alertData && !alertData.configExists">
           <el-empty description="预警阈值未配置" :image-size="80" />
           <div style="text-align: center; margin-top: 8px;">
