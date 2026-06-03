@@ -48,4 +48,21 @@ public interface SemiFinishedInventoryRepository extends JpaRepository<SemiFinis
             + "ORDER BY w.processOrder ASC")
     List<SemiFinishedInventory> findRemainingWip(@Param("factoryId") String factoryId,
                                                  @Param("batchId") Long batchId);
+
+    /**
+     * 备货看板 WIP 可用量聚合 — 按产品类型汇总可用半成品库存。
+     *
+     * <p>COALESCE(..., 0) 保证空集返回 0 而非 null，Service 层无需 null 检查。
+     * 仅计入 {@code availableQuantity > 0} 的行（已耗尽/返库行不参与累加）。
+     *
+     * @param factoryId     工厂 ID
+     * @param productTypeId 产品类型 ID
+     * @return 可用 WIP 总量 (≥0)
+     */
+    @Query("SELECT COALESCE(SUM(s.availableQuantity), 0) FROM SemiFinishedInventory s " +
+           "WHERE s.factoryId = :factoryId AND s.productTypeId = :productTypeId " +
+           "AND s.availableQuantity > 0")
+    java.math.BigDecimal sumAvailableByProduct(
+            @Param("factoryId") String factoryId,
+            @Param("productTypeId") String productTypeId);
 }

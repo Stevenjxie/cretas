@@ -1,5 +1,6 @@
 package com.cretas.aims.repository.inventory;
 
+import com.cretas.aims.entity.enums.SalesOrderStatus;
 import com.cretas.aims.entity.inventory.SalesOrderItem;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
@@ -48,4 +49,30 @@ public interface SalesOrderItemRepository extends JpaRepository<SalesOrderItem, 
         String getProductTypeId();
         java.math.BigDecimal getAvgUnitPrice();
     }
+
+    /**
+     * 备货看板需求聚合 — 指定交货日期 + 有效订单状态。
+     *
+     * <p>按产品类型聚合当天需求量，同时捕获 MIN/MAX unit 用于 F2 单位不一致检测。
+     * CANCELLED/DRAFT 订单通过 {@code statuses} 参数排除。
+     *
+     * @param factoryId 工厂 ID
+     * @param date      要求交货日期
+     * @param statuses  有效订单状态集合 (e.g. CONFIRMED, FINANCE_APPROVED, PROCESSING ...)
+     * @return 每产品一行的需求投影列表
+     */
+    @Query("SELECT i.productTypeId AS productTypeId, " +
+           "MIN(i.productName) AS productName, " +
+           "MIN(i.unit) AS minUnit, " +
+           "MAX(i.unit) AS maxUnit, " +
+           "SUM(i.quantity) AS demand " +
+           "FROM SalesOrderItem i " +
+           "WHERE i.salesOrder.factoryId = :factoryId " +
+           "AND i.salesOrder.requiredDeliveryDate = :date " +
+           "AND i.salesOrder.status IN :statuses " +
+           "GROUP BY i.productTypeId")
+    List<ProductDemandProjection> sumDemandByProductForDeliveryDate(
+            @Param("factoryId") String factoryId,
+            @Param("date") LocalDate date,
+            @Param("statuses") Collection<SalesOrderStatus> statuses);
 }

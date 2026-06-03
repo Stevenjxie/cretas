@@ -488,4 +488,23 @@ public interface ProductionPlanRepository extends JpaRepository<ProductionPlan, 
             Boolean isForceInserted,
             Boolean requiresApproval,
             ProductionPlan.ApprovalStatus approvalStatus);
+
+    /**
+     * 备货看板已排产量聚合 — 按产品类型 + 状态集合汇总计划数量。
+     *
+     * <p>典型调用传入 {@code [PLANNED, PENDING]}，排除 IN_PROGRESS（产出已在 WIP/FG 中计算）、
+     * COMPLETED 和 CANCELLED。COALESCE(..., 0) 保证空集返回 0。
+     *
+     * @param factoryId     工厂 ID
+     * @param productTypeId 产品类型 ID
+     * @param statuses      要纳入的计划状态集合
+     * @return 符合条件的计划总量 (≥0)
+     */
+    @Query("SELECT COALESCE(SUM(p.plannedQuantity), 0) FROM ProductionPlan p " +
+           "WHERE p.factoryId = :factoryId AND p.productTypeId = :productTypeId " +
+           "AND p.status IN :statuses")
+    java.math.BigDecimal sumPlannedQuantityByProductAndStatuses(
+            @Param("factoryId") String factoryId,
+            @Param("productTypeId") String productTypeId,
+            @Param("statuses") java.util.Collection<ProductionPlanStatus> statuses);
 }
