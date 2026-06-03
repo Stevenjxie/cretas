@@ -324,6 +324,9 @@ public interface QueryPreprocessorService {
         private boolean disambiguated;
     }
 
+    /** 否定细分类型 v-W1b */
+    enum NegationKind { NONE, EXCLUDE_CONTENT, VETO_WRITE, VETO_READ }
+
     /**
      * 否定语义信息 v7.4
      */
@@ -338,6 +341,9 @@ public interface QueryPreprocessorService {
         private String negationWord;
         /** 被排除的内容 */
         private String excludedContent;
+        /** 否定细分类型 v-W1b(默认 NONE) */
+        @lombok.Builder.Default
+        private NegationKind kind = NegationKind.NONE;
 
         public boolean hasNegation() {
             return hasNegation;
