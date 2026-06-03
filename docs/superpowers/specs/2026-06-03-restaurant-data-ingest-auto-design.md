@@ -737,3 +737,15 @@ git ls-tree origin/main backend/java/cretas-api/src/main/resources/db/flyway \
 
 当前 origin/main 最高 Java Flyway 版本为 `V20260607_05`. `V20260608_01` 和 `V20260608_02` 安全.
 当前 Python smartbi migrations 最高为 `V20260531_01`. `V20260608_01` 安全.
+
+
+---
+
+## ✅ 决策已拍板 (2026-06-03, Steve)
+
+全部按默认:
+- D1 = 默认: 照片存 OSS `cretas-media` bucket, 路径 `restaurant/{factoryId}/delivery-notes/{noteId}.jpg`, 90 天生命周期。
+- D2 = 默认: OCR 失败/低置信允许纯手工录入 (`source_type=MANUAL`, `createManual()` endpoint)。
+- D3 = 默认: 语音录入新建独立 `RestaurantVoiceRequisitionTool` + 意图 `RESTAURANT_VOICE_REQUISITION` (与 AI 问答分开 UX)。
+- D4 = 默认: DashScope Vision 复用 `PythonLLMClient.visionChat()` 现有账号; **部署时确认 DashScope 月度配额/告警阈值 (非阻塞, 部署 checklist 项)**。
+- D5 = 默认: gold 写入失败时 note 标 CONFIRMED 不回滚, 标 `gold sync 失败` + 人工"重新同步"按钮; 不自动重试。

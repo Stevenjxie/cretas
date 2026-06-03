@@ -706,3 +706,17 @@ web-admin/src/views/smart-bi/components/chat/cards/RxPrescriptionCard.vue ← �
 ### Flyway 迁移
 
 本 feature 无新数据库表，不需要 migration。如 Phase 2 加缓存 Redis key 或报告快照表再补迁移。
+
+
+---
+
+## ✅ 决策已拍板 (2026-06-03, Steve)
+
+- **D2 = 佣金估算 + 标注 (DECIDED)**: 外卖平台佣金用 `backend/python/smartbi/knowledge/restaurant/pos/commission_rates.yaml` 的费率(不硬编码 21%); `descriptionZh` 必标注"基于平台佣金估算"。无 finance_data 佣金类目时走此估算路径。
+- **D3 = sub_sector benchmark 映射 (DECIDED)**: 子品类 benchmark 均已存在, 无需新建 YAML —
+  - 邓总(海鲜正餐) → `knowledge/restaurant/benchmarks/中式海鲜.yaml`
+  - qhj `RES_3101_009`(青花椒酸菜鱼) → `knowledge/restaurant/benchmarks/鱼类餐饮.yaml`
+  - 需建 factory_id → sub_sector 映射(配置/表), qhj 固定映射到 鱼类餐饮; 未配置工厂回退 `_common` 通用 benchmark。
+- D1 = 默认 A: Python asyncpg 直查 `smart_bi_finance_data`, keyword 分类 mirror Java `RestaurantFinancialMetricsFetcher`。
+- D4 = 默认 A: Phase 1 纯数字(deltaPp/deltaPct), 不做 sparkline。
+- D5 = 默认 A: 健康项不单独显示, 通过 summary "已检查 X 项无异常" 文案体现。

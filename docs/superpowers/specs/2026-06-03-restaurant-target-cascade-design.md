@@ -572,3 +572,14 @@ git ls-tree origin/main backend/python/smartbi/database/migrations | grep V20260
 - Task E：AI Tool + 意图数据库 INSERT（可与前端并行，只依赖 Python 端点合约）
 
 Task A 是关键路径（阻塞 Task C/D 的真实对接，但不阻塞开发）。Tasks B/C/D/E 可三个 subagent 并行。
+
+
+---
+
+## ✅ 决策已拍板 (2026-06-03, Steve)
+
+- **D4 = 单店目标 (DECIDED)**: `store_id` 是一级维度。前端必做门店选择器; 同时支持 `store_id IS NULL` 的全品牌汇总目标。查询优先精确匹配 `store_id`, 回退 NULL 汇总。`uq_target_grain` 已含 store_id, OK。
+- D1 季节性 = 默认 A: 年/12 均摊 + 运营手填月度; `distribution_weight` 列保留但 MVP 不渲染 UI。
+- D2 RBAC = 默认: `factory_super_admin` + 运营经理可写, `analytics:read` 只读; 实施时确认运营经理角色码 (代码核实, 不阻塞)。
+- D3 kpi_kind = 默认: 仅 `revenue`; `bill_count` tab 预留不强测。
+- D5 flyway = 默认: 实施前 `git ls-tree origin/main` 查 V20260604 防撞, 撞则顺延。
