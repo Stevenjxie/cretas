@@ -253,4 +253,68 @@ class IntentKnowledgeBaseTest {
         assertEquals("RESTAURANT_WASTAGE_SUMMARY", r3.orElse(""),
                 "Round 6 '食材损耗' must NOT regress to economics");
     }
+
+    // =========================================================================
+    // P1-A — leading time-prefix strip for restaurant gold time consistency
+    // =========================================================================
+
+    @Test
+    @DisplayName("P1-A — time-prefixed query routes to the SAME intent as the base phrase")
+    void timePrefixedQueryRoutesSameAsBasePhrase() {
+        String expected = kb.matchPhrase("爆款", "RESTAURANT").orElse("BASE_NONE");
+        assertEquals("RESTAURANT_BESTSELLER_QUERY", expected,
+                "Baseline: '爆款' must map to RESTAURANT_BESTSELLER_QUERY");
+
+        // These three FAIL direct phrase-match (the long absolute-date prefix pushes the input
+        // past the short-input coverage threshold) — the leading-time-strip fallback rescues them.
+        assertEquals(expected, kb.matchPhrase("2025年12月爆款", "RESTAURANT").orElse("NONE"),
+                "'2025年12月爆款' must route to the same intent as '爆款' via time-strip");
+        assertEquals(expected, kb.matchPhrase("最近30天爆款", "RESTAURANT").orElse("NONE"),
+                "'最近30天爆款' must route to the same intent as '爆款' via time-strip");
+        assertEquals(expected, kb.matchPhrase("2025年12月热门菜", "RESTAURANT").orElse("NONE"),
+                "'2025年12月热门菜' must route to RESTAURANT_BESTSELLER_QUERY via time-strip");
+    }
+
+    @Test
+    @DisplayName("P1-A — '本月哪个菜卖得好' routes to RESTAURANT_DISH_SALES_RANKING (same as base)")
+    void monthPrefixedDishRankingRoutesSame() {
+        String base = kb.matchPhrase("哪个菜卖得好", "RESTAURANT").orElse("NONE");
+        assertEquals("RESTAURANT_DISH_SALES_RANKING", base);
+        assertEquals(base, kb.matchPhrase("本月哪个菜卖得好", "RESTAURANT").orElse("NONE"));
+        assertEquals(base, kb.matchPhrase("今年哪个菜卖得好", "RESTAURANT").orElse("NONE"));
+        assertEquals(base, kb.matchPhrase("本季度哪个菜卖得好", "RESTAURANT").orElse("NONE"));
+        assertEquals(base, kb.matchPhrase("2025年12月哪个菜卖得好", "RESTAURANT").orElse("NONE"));
+    }
+
+    @Test
+    @DisplayName("P1-A — stripLeadingTimePhrase removes ONLY a leading time token, not mid/trailing")
+    void stripLeadingTimePhraseRemovesOnlyLeading() {
+        // Leading time tokens are removed (with optional trailing 的)
+        assertEquals("哪个菜卖得好", kb.stripLeadingTimePhrase("本月哪个菜卖得好"));
+        assertEquals("哪个菜卖得好", kb.stripLeadingTimePhrase("今年哪个菜卖得好"));
+        assertEquals("哪个菜卖得好", kb.stripLeadingTimePhrase("本季度哪个菜卖得好"));
+        assertEquals("哪个菜卖得好", kb.stripLeadingTimePhrase("今年的哪个菜卖得好"));
+        assertEquals("爆款", kb.stripLeadingTimePhrase("2025年12月爆款"));
+        assertEquals("爆款", kb.stripLeadingTimePhrase("最近30天爆款"));
+        assertEquals("招牌菜", kb.stripLeadingTimePhrase("本年度的招牌菜"),
+                "本年度 (longer) must be preferred over 本年 prefix");
+
+        // Non-time phrases are untouched
+        assertEquals("哪个菜卖得好", kb.stripLeadingTimePhrase("哪个菜卖得好"));
+        assertEquals("销量最好的菜", kb.stripLeadingTimePhrase("销量最好的菜"));
+        // A time-like word in the MIDDLE is NOT stripped (anchored at start only)
+        assertEquals("统计本月营业额", kb.stripLeadingTimePhrase("统计本月营业额"));
+    }
+
+    @Test
+    @DisplayName("P1-A — time-strip must NOT break a non-time phrase (no false strip)")
+    void timeStripDoesNotBreakNonTimePhrase() {
+        // '本周热销菜' is itself a phrase entry (contains 本周) — direct match must still win,
+        // and the result must remain BESTSELLER, not be corrupted by the strip.
+        assertEquals("RESTAURANT_BESTSELLER_QUERY",
+                kb.matchPhrase("本周热销菜", "RESTAURANT").orElse("NONE"));
+        // Plain dish-cost phrase unaffected by the new strip path.
+        assertEquals("RESTAURANT_DISH_COST_ANALYSIS",
+                kb.matchPhrase("哪些菜亏钱", "RESTAURANT").orElse("NONE"));
+    }
 }

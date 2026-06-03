@@ -217,53 +217,31 @@ public abstract class GoldBackedRestaurantTool extends AbstractBusinessTool {
         }
 
         // --- Step 3 & 4: parse raw NL query ---
+        // The Gold data range is the anchor for RELATIVE expressions (本月/今年/本季度/近N天):
+        // the demo / customer data typically ends in the past (e.g. 2026-04), so anchoring
+        // "本月" to today (2026-06) would yield an empty window. We use the data's latest day
+        // as "now" when available, else fall back to LocalDate.now().
         String userInput = getString(params, "userInput");
+        LocalDate[] dataRange = fetchDataRangeQuiet(factoryId);
+        LocalDate anchor = (dataRange != null && dataRange[1] != null) ? dataRange[1] : LocalDate.now();
         if (userInput != null) {
-            Matcher m = NL_ABSOLUTE_MONTH.matcher(userInput);
-            if (m.find()) {
-                int year = Integer.parseInt(m.group(1));
-                int monthNum = Integer.parseInt(m.group(2));
-                String ym = String.format(Locale.ROOT, "%04d-%02d", year, monthNum);
-                LocalDate[] win = parseMonthLabel(ym);
-                if (win != null) {
-                    log.debug("[{}] resolveWindow: NL absolute month '{}' → {}..{}",
-                            getToolName(), ym, win[0], win[1]);
-                    return win;
-                }
-            }
-            if (userInput.contains("本月") || userInput.contains("这个月")
-                    || userInput.contains("当月")) {
-                LocalDate[] win = parseMonthLabel("本月");
-                log.debug("[{}] resolveWindow: NL 本月 → {}..{}", getToolName(), win[0], win[1]);
-                return win;
-            }
-            if (userInput.contains("上月") || userInput.contains("上个月")) {
-                LocalDate[] win = parseMonthLabel("上月");
-                log.debug("[{}] resolveWindow: NL 上月 → {}..{}", getToolName(), win[0], win[1]);
+            LocalDate[] win = parseNlTimeWindow(userInput, anchor, dataRange);
+            if (win != null) {
+                log.debug("[{}] resolveWindow: NL time window (anchor={}) → {}..{}",
+                        getToolName(), anchor, win[0], win[1]);
                 return win;
             }
         }
 
         // --- Step 5: factory actual data range ---
-        try {
-            Map<String, Object> range = gold.fetchDataRange(factoryId);
-            String minDateStr = range.get("min_date") != null ? range.get("min_date").toString() : null;
-            String maxDateStr = range.get("max_date") != null ? range.get("max_date").toString() : null;
-            LocalDate minDate = parseIsoDate(minDateStr);
-            LocalDate maxDate = parseIsoDate(maxDateStr);
-            if (minDate != null && maxDate != null && !minDate.isAfter(maxDate)) {
-                log.debug("[{}] resolveWindow: Gold data-range → {}..{}",
-                        getToolName(), minDate, maxDate);
-                return new LocalDate[]{minDate, maxDate};
-            }
-            // data-range returned nulls (factory has no Gold data yet)
-            // Fall through to last-resort — still better than empty response with no hint
-            log.debug("[{}] resolveWindow: Gold data-range null/empty for factory={}; using fallback",
-                    getToolName(), factoryId);
-        } catch (Exception ex) {
-            log.warn("[{}] resolveWindow: fetchDataRange failed factory={}: {}; using fallback",
-                    getToolName(), factoryId, ex.getMessage());
+        if (dataRange != null && dataRange[0] != null && dataRange[1] != null
+                && !dataRange[0].isAfter(dataRange[1])) {
+            log.debug("[{}] resolveWindow: Gold data-range → {}..{}",
+                    getToolName(), dataRange[0], dataRange[1]);
+            return new LocalDate[]{dataRange[0], dataRange[1]};
         }
+        log.debug("[{}] resolveWindow: Gold data-range null/empty for factory={}; using fallback",
+                getToolName(), factoryId);
 
         // --- Step 6: last-resort 12-month trailing window ---
         LocalDate end = LocalDate.now();
@@ -271,6 +249,194 @@ public abstract class GoldBackedRestaurantTool extends AbstractBusinessTool {
         log.debug("[{}] resolveWindow: last-resort fallback → {}..{}", getToolName(), start, end);
         return new LocalDate[]{start, end};
     }
+
+    /**
+     * Fetch the factory's Gold data range as {@code [minDate, maxDate]}, swallowing errors.
+     *
+     * @param factoryId tenant id
+     * @return {@code [min, max]} (either element may be {@code null}); or {@code null} on
+     *         transport failure / empty data
+     */
+    private LocalDate[] fetchDataRangeQuiet(String factoryId) {
+        try {
+            Map<String, Object> range = gold.fetchDataRange(factoryId);
+            if (range == null) return null;
+            LocalDate minDate = parseIsoDate(range.get("min_date") != null ? range.get("min_date").toString() : null);
+            LocalDate maxDate = parseIsoDate(range.get("max_date") != null ? range.get("max_date").toString() : null);
+            if (minDate == null && maxDate == null) return null;
+            return new LocalDate[]{minDate, maxDate};
+        } catch (Exception ex) {
+            log.warn("[{}] fetchDataRange failed factory={}: {}", getToolName(), factoryId, ex.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * Parse a natural-language time window from the user query.
+     *
+     * <p>Coverage (matched in priority order — most-specific first):
+     * <ol>
+     *   <li>Absolute month: {@code 2025年12月}, {@code 2025-12}, {@code 2025/12}</li>
+     *   <li>Quarter: {@code 本季度}, {@code 上季度}, {@code 第N季度} / {@code QN}</li>
+     *   <li>Year: {@code 今年}, {@code 去年}, {@code 前年}, {@code 本年}, {@code YYYY年} (whole year)</li>
+     *   <li>Rolling N days: {@code 近30天}, {@code 最近7天} (trailing from anchor)</li>
+     *   <li>Relative month: {@code 本月}/{@code 这个月}/{@code 当月}, {@code 上月}/{@code 上个月}</li>
+     *   <li>Relative week: {@code 本周}, {@code 上周}</li>
+     * </ol>
+     *
+     * <p>All RELATIVE expressions resolve against {@code anchor} (the Gold data's latest day,
+     * or today if unknown). Whole-year / quarter windows are clamped to the data range so a
+     * "今年" query on data ending 2026-04 yields {@code 2026-01-01..2026-04-30} rather than a
+     * window that runs past the data and looks empty downstream.
+     *
+     * @param userInput the raw NL query
+     * @param anchor    the reference "now" (data max date, or today)
+     * @param dataRange {@code [min, max]} for clamping wide windows; may be {@code null}
+     * @return {@code [start, end]} window, or {@code null} if no time expression is present
+     */
+    LocalDate[] parseNlTimeWindow(String userInput, LocalDate anchor, LocalDate[] dataRange) {
+        if (userInput == null) return null;
+
+        // 1. Absolute month (YYYY年M月 / YYYY-MM / YYYY/M月)
+        Matcher m = NL_ABSOLUTE_MONTH.matcher(userInput);
+        if (m.find()) {
+            int year = Integer.parseInt(m.group(1));
+            int monthNum = Integer.parseInt(m.group(2));
+            YearMonth ym = YearMonth.of(year, monthNum);
+            return new LocalDate[]{ym.atDay(1), ym.atEndOfMonth()};
+        }
+
+        // 2. Quarter — 第N季度 / QN first (explicit), then 本季度 / 上季度 (relative)
+        Matcher q = NL_QUARTER.matcher(userInput);
+        if (q.find()) {
+            // group(1) = 第N季度 form, group(2) = QN form
+            String token = q.group(1) != null ? q.group(1) : q.group(2);
+            int quarter = cnQuarterToInt(token);
+            if (quarter >= 1 && quarter <= 4) {
+                return clamp(quarterWindow(anchor.getYear(), quarter), dataRange);
+            }
+        }
+        if (userInput.contains("本季度") || userInput.contains("这个季度")
+                || userInput.contains("当季") || userInput.contains("当前季度")) {
+            int quarter = (anchor.getMonthValue() - 1) / 3 + 1;
+            return clamp(quarterWindow(anchor.getYear(), quarter), dataRange);
+        }
+        if (userInput.contains("上季度") || userInput.contains("上个季度")) {
+            int curQuarter = (anchor.getMonthValue() - 1) / 3 + 1;
+            int prevQuarter = curQuarter - 1;
+            int year = anchor.getYear();
+            if (prevQuarter == 0) { prevQuarter = 4; year -= 1; }
+            return clamp(quarterWindow(year, prevQuarter), dataRange);
+        }
+
+        // 3. Year — 今年/去年/前年/本年, and bare "YYYY年" (whole year, no month after it)
+        if (userInput.contains("今年") || userInput.contains("本年")) {
+            return clamp(yearWindow(anchor.getYear()), dataRange);
+        }
+        if (userInput.contains("去年")) {
+            return clamp(yearWindow(anchor.getYear() - 1), dataRange);
+        }
+        if (userInput.contains("前年")) {
+            return clamp(yearWindow(anchor.getYear() - 2), dataRange);
+        }
+        Matcher yr = NL_BARE_YEAR.matcher(userInput);
+        if (yr.find()) {
+            return clamp(yearWindow(Integer.parseInt(yr.group(1))), dataRange);
+        }
+
+        // 4. Rolling N days — 近N天 / 最近N天
+        Matcher nd = NL_LAST_N_DAYS.matcher(userInput);
+        if (nd.find()) {
+            int n = Integer.parseInt(nd.group(1));
+            if (n > 0) {
+                LocalDate start = anchor.minusDays((long) n - 1);
+                return new LocalDate[]{start, anchor};
+            }
+        }
+
+        // 5. Relative month — anchored to data's latest month, NOT today
+        if (userInput.contains("本月") || userInput.contains("这个月") || userInput.contains("当月")) {
+            YearMonth ym = YearMonth.from(anchor);
+            return new LocalDate[]{ym.atDay(1), ym.atEndOfMonth()};
+        }
+        if (userInput.contains("上月") || userInput.contains("上个月")) {
+            YearMonth ym = YearMonth.from(anchor).minusMonths(1);
+            return new LocalDate[]{ym.atDay(1), ym.atEndOfMonth()};
+        }
+
+        // 6. Relative week — anchored to data's latest day (Mon..Sun of anchor's week)
+        if (userInput.contains("本周") || userInput.contains("这周") || userInput.contains("本星期")) {
+            LocalDate start = anchor.with(java.time.temporal.TemporalAdjusters.previousOrSame(java.time.DayOfWeek.MONDAY));
+            LocalDate end = anchor.with(java.time.temporal.TemporalAdjusters.nextOrSame(java.time.DayOfWeek.SUNDAY));
+            return new LocalDate[]{start, end};
+        }
+        if (userInput.contains("上周") || userInput.contains("上个星期") || userInput.contains("上星期")) {
+            LocalDate ref = anchor.minusWeeks(1);
+            LocalDate start = ref.with(java.time.temporal.TemporalAdjusters.previousOrSame(java.time.DayOfWeek.MONDAY));
+            LocalDate end = ref.with(java.time.temporal.TemporalAdjusters.nextOrSame(java.time.DayOfWeek.SUNDAY));
+            return new LocalDate[]{start, end};
+        }
+
+        return null;
+    }
+
+    /** Quarter [firstDay, lastDay] for a given year (q ∈ 1..4). */
+    private static LocalDate[] quarterWindow(int year, int q) {
+        int startMonth = (q - 1) * 3 + 1;
+        YearMonth startYm = YearMonth.of(year, startMonth);
+        YearMonth endYm = YearMonth.of(year, startMonth + 2);
+        return new LocalDate[]{startYm.atDay(1), endYm.atEndOfMonth()};
+    }
+
+    /** Whole-year [Jan 1, Dec 31] window. */
+    private static LocalDate[] yearWindow(int year) {
+        return new LocalDate[]{LocalDate.of(year, 1, 1), LocalDate.of(year, 12, 31)};
+    }
+
+    /**
+     * Clamp a wide window (year / quarter) to the data range so it does not extend past the
+     * available data. If the window falls entirely outside the data range, it is returned
+     * unchanged (the empty-guard downstream then produces an honest "no data" message).
+     */
+    private static LocalDate[] clamp(LocalDate[] win, LocalDate[] dataRange) {
+        if (dataRange == null || win == null) return win;
+        LocalDate min = dataRange[0];
+        LocalDate max = dataRange[1];
+        LocalDate start = win[0];
+        LocalDate end = win[1];
+        if (min != null && start.isBefore(min)) start = min;
+        if (max != null && end.isAfter(max)) end = max;
+        if (start.isAfter(end)) {
+            // Window is disjoint from data range — keep original so downstream returns
+            // an honest empty result rather than an inverted window.
+            return win;
+        }
+        return new LocalDate[]{start, end};
+    }
+
+    /** Map a Chinese/Arabic quarter token (一/二/三/四 or 1-4) to an int. */
+    private static int cnQuarterToInt(String token) {
+        if (token == null) return -1;
+        switch (token) {
+            case "一": case "1": return 1;
+            case "二": case "2": return 2;
+            case "三": case "3": return 3;
+            case "四": case "4": return 4;
+            default: return -1;
+        }
+    }
+
+    /** {@code 第N季度} / {@code QN} — captures the quarter token (一二三四 or 1-4). */
+    private static final Pattern NL_QUARTER = Pattern.compile(
+            "第\\s*([一二三四1-4])\\s*季度|[Qq]([1-4])");
+
+    /** Bare {@code YYYY年} NOT immediately followed by a month digit (whole-year intent). */
+    private static final Pattern NL_BARE_YEAR = Pattern.compile(
+            "(\\d{4})\\s*年(?!\\s*(?:1[0-2]|0?[1-9])\\s*月)");
+
+    /** {@code 近N天} / {@code 最近N天} — rolling N-day window. */
+    private static final Pattern NL_LAST_N_DAYS = Pattern.compile(
+            "(?:最近|近)\\s*(\\d{1,3})\\s*[天日]");
 
     // =========================================================================
     // Helpers
