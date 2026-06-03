@@ -55,9 +55,12 @@ const meta = computed(() => report.value?.reportMeta ?? null);
 
 // 是否缺成本侧数据 (food/labor 任一 skipped) → POS-only 降级提示。
 const financeMissing = computed(() => {
+  // review fix: transformKeys 递归 camelize 了 coverage 的 KEY (food_cost_ratio→foodCostRatio),
+  // 原只读 snake_case → 恒 undefined → POS-only(qhj 场景)时'上传财务Excel'引导永不渲染。防御读两形。
   const cov = report.value?.summary?.coverage ?? {};
-  return (cov['food_cost_ratio'] || '').startsWith('skipped')
-    && (cov['labor_cost_ratio'] || '').startsWith('skipped');
+  const food = (cov['foodCostRatio'] ?? cov['food_cost_ratio'] ?? '') as string;
+  const labor = (cov['laborCostRatio'] ?? cov['labor_cost_ratio'] ?? '') as string;
+  return food.startsWith('skipped') && labor.startsWith('skipped');
 });
 
 const allHealthy = computed(
