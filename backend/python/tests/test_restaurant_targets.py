@@ -5,7 +5,7 @@ import pytest
 
 MIGRATION_PATH = (
     pathlib.Path(__file__).parent.parent
-    / "smartbi/database/migrations/V20260604_01__restaurant_target_tables.sql"
+    / "smartbi/database/migrations/V20260916_02__restaurant_target_tables.sql"
 )
 
 
