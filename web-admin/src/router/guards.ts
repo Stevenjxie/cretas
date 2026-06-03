@@ -24,6 +24,7 @@ const ROLE_PATH_WHITELIST: Record<string, string[]> = {
     '/finance',
     '/procurement/finance-review',
     '/smart-bi/dashboard',
+    '/smart-bi/analysis-hub',   // WS4: 经营分析合并模块 (财务/销售/趋势/KPI) — finance_manager 主入口
     '/smart-bi/finance',
     '/smart-bi/financial-dashboard',
     '/smart-bi/sales',

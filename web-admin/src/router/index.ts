@@ -5,6 +5,7 @@ import { createRouter, createWebHistory, RouteRecordRaw } from 'vue-router';
 import { setupRouterGuards } from './guards';
 import smartBIRoutes, { smartBIRedirects } from './modules/smartbi';
 import productionAnalyticsRoutes from './modules/production-analytics';
+import { buildHubRedirect } from './analysisHubRedirect';
 
 // 基础路由 - 不需要权限
 const baseRoutes: RouteRecordRaw[] = [
@@ -1250,23 +1251,23 @@ const businessRoutes: RouteRecordRaw[] = [
             component: () => import('@/views/analytics/index.vue'),
             meta: { requiresAuth: true, title: '分析概览', module: 'analytics' }
           },
+          // WS4: 趋势分析合并入经营分析 hub (redirect 保书签 → ?tab=trend)。组件经 hub 加载。
           {
             path: 'trends',
             name: 'AnalyticsTrends',
-            component: () => import('@/views/analytics/trends/index.vue'),
-            meta: { requiresAuth: true, title: '趋势分析', module: 'analytics' }
+            redirect: (to) => buildHubRedirect(to, 'trend')
           },
+          // WS4 #9: AI分析报告删除 — redirect 到经营分析 hub (component 保留以防深链, 但 menu 隐藏)。
           {
             path: 'ai-reports',
             name: 'AnalyticsAIReports',
-            component: () => import('@/views/analytics/ai-reports/index.vue'),
-            meta: { requiresAuth: true, title: 'AI分析报告', module: 'analytics' }
+            redirect: (to) => buildHubRedirect(to)
           },
+          // WS4: KPI看板合并入经营分析 hub (redirect 保书签 → ?tab=kpi)。组件经 hub 加载。
           {
             path: 'kpi',
             name: 'AnalyticsKPI',
-            component: () => import('@/views/analytics/kpi/index.vue'),
-            meta: { requiresAuth: true, title: 'KPI看板', module: 'analytics' }
+            redirect: (to) => buildHubRedirect(to, 'kpi')
           },
           {
             path: 'production-report',
@@ -1290,13 +1291,12 @@ const businessRoutes: RouteRecordRaw[] = [
       },
 
       // Phase 1 Track B.3 (2026-05-22): 指标中心 — Phase 1 backend (PR #155) UI.
-      // Customer-facing dashboard for indicators / tree / thresholds / history.
-      // 入口路由 /indicator-center 直接展示 IndicatorCenterDashboard.
+      // WS4: 合并入经营分析 hub 的 KPI·指标 tab 内层 (redirect 保书签 → ?tab=kpi&sub=indicator)。
+      // IndicatorCenterDashboard 组件经 hub 加载。
       {
         path: 'indicator-center',
         name: 'IndicatorCenter',
-        component: () => import('@/views/indicator-center/IndicatorCenterDashboard.vue'),
-        meta: { requiresAuth: true, title: '指标中心', icon: 'Histogram', module: 'analytics' }
+        redirect: (to) => buildHubRedirect(to, 'kpi', 'indicator')
       },
 
       // 行为校准管理
