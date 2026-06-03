@@ -6,6 +6,7 @@
 import { ref, reactive, computed, watch, nextTick, onBeforeUnmount } from 'vue';
 import { useRoute } from 'vue-router';
 import { ElMessage } from 'element-plus';
+import { useAuthStore } from '@/store/modules/auth';
 import FinanceAnalysis from './FinanceAnalysis.vue';
 import { resolveFinanceSection } from './financeDashboardSection';
 import { DataAnalysis, VideoPlay, Download, Collection, SetUp, ArrowDown, ArrowRight, Delete } from '@element-plus/icons-vue';
@@ -69,9 +70,12 @@ const isInDemoMode = ref(false); // Track demo mode for slicer re-generation
 
 // P4: 顶层 section tab — 财务 PBI 看板(dashboard) / 财务数据分析(analysis)。
 // 注意: 与下方 chart activeTab 完全独立 (后者是图表类型 key)。
+// 修 #10: 餐饮租户默认落「财务数据分析」(gold 全历史, 进页即见数据); 工厂租户保持 PBI 看板默认。
+// 显式 ?section= 永远优先 (保书签 / 工厂用户主动选看板)。
 const route = useRoute();
-const sectionTab = ref(resolveFinanceSection(route.query));
-watch(() => route.query.section, () => { sectionTab.value = resolveFinanceSection(route.query); });
+const authStore = useAuthStore();
+const sectionTab = ref(resolveFinanceSection(route.query, authStore.factoryType));
+watch(() => route.query.section, () => { sectionTab.value = resolveFinanceSection(route.query, authStore.factoryType); });
 
 // Tab navigation state
 const viewMode = ref<'tab' | 'grid'>('tab');
