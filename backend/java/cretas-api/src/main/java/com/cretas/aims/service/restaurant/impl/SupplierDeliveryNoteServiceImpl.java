@@ -1,0 +1,472 @@
+package com.cretas.aims.service.restaurant.impl;
+
+import com.cretas.aims.ai.client.DashScopeVisionClient;
+import com.cretas.aims.client.SupplierPriceGoldClient;
+import com.cretas.aims.dto.restaurant.SupplierDeliveryNoteDto;
+import com.cretas.aims.entity.RawMaterialType;
+import com.cretas.aims.entity.restaurant.SupplierDeliveryNote;
+import com.cretas.aims.entity.restaurant.SupplierDeliveryNoteLine;
+import com.cretas.aims.entity.restaurant.enums.DeliveryNoteSourceType;
+import com.cretas.aims.entity.restaurant.enums.DeliveryNoteStatus;
+import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.repository.RawMaterialTypeRepository;
+import com.cretas.aims.repository.restaurant.SupplierDeliveryNoteLineRepository;
+import com.cretas.aims.repository.restaurant.SupplierDeliveryNoteRepository;
+import com.cretas.aims.service.OssService;
+import com.cretas.aims.service.restaurant.SupplierDeliveryNoteService;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.math.BigDecimal;
+import java.security.MessageDigest;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.YearMonth;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+/**
+ * 供应商送货单 OCR / 人工录入 Service 实现 (G7 Tier A)。
+ *
+ * @since 2026-06-03 (G7)
+ */
+@Slf4j
+@Service
+@RequiredArgsConstructor
+public class SupplierDeliveryNoteServiceImpl implements SupplierDeliveryNoteService {
+
+    private final SupplierDeliveryNoteRepository noteRepository;
+    private final SupplierDeliveryNoteLineRepository lineRepository;
+    private final DashScopeVisionClient visionClient;
+    private final OssService ossService;
+    private final RawMaterialTypeRepository rawMaterialTypeRepository;
+    private final SupplierPriceGoldClient goldClient;
+
+    private final ObjectMapper objectMapper = new ObjectMapper();
+
+    /** 低置信阈值 — 前端据此显示重拍提示 (Rule 5)。 */
+    private static final BigDecimal LOW_CONFIDENCE_THRESHOLD = new BigDecimal("0.75");
+
+    private static final String SUPPLIER_NOTE_OCR_PROMPT = """
+            你是中餐厅供应链单据识别专家。请识别这张供应商送货单/进货单图片。
+            严格以 JSON 返回(无其他文字):
+            {
+              "note_number": "送货单号(无则null)",
+              "delivery_date": "YYYY-MM-DD(无则今日)",
+              "supplier_name": "供应商名称",
+              "items": [
+                {
+                  "ingredient_name": "食材名称",
+                  "quantity": 数量数值,
+                  "unit": "单位(kg/斤/个/包等)",
+                  "unit_price": 单价数值或null,
+                  "line_amount": 金额数值或null
+                }
+              ],
+              "total_amount": 合计金额数值或null,
+              "confidence": 0.0-1.0整体置信度
+            }
+            要点:1.数量/金额为纯数字无单位 2.日期无法识别返回null 3.confidence<0.5时items返回空数组
+            """;
+
+    @Override
+    @Transactional
+    public SupplierDeliveryNote parseAndDraft(String factoryId, Long userId,
+            byte[] photoBytes, String photoContentType,
+            LocalDate deliveryDate, String supplierId) {
+        if (photoBytes == null || photoBytes.length == 0) {
+            throw new BusinessException(400, "照片内容为空").withHint("请重新上传清晰的送货单照片");
+        }
+        // 1. SHA-256 幂等检查 (Rule 4)
+        String photoHash = sha256(photoBytes);
+        var dup = noteRepository.findByPhotoHash(photoHash);
+        if (dup.isPresent()) {
+            throw new BusinessException(409, "已有该照片的草稿 (单号 " + dup.get().getId() + "), 是否前往查看?")
+                    .withCode("DUPLICATE_PHOTO")
+                    .withHint("同一张照片已上传过, 请勿重复录入")
+                    .withHintTarget(dup.get().getId());
+        }
+
+        // 2. Vision 可用性 (Rule 5 死路改导航)
+        if (!visionClient.isAvailable()) {
+            throw new BusinessException(503, "视觉识别服务暂不可用, 请改用手动录入")
+                    .withCode("VISION_UNAVAILABLE")
+                    .withHint("可点击「手动录入」直接填写送货单行项");
+        }
+
+        // 3. 上传 OSS (失败不阻断 — 仍可 OCR, 只是没留存原图)
+        String ossUrl = null;
+        try {
+            if (ossService.isAvailable()) {
+                String filename = "delivery-note-" + System.currentTimeMillis()
+                        + extFor(photoContentType);
+                ossUrl = ossService.uploadBytes(photoBytes,
+                        "restaurant/" + factoryId + "/delivery-notes",
+                        factoryId, filename,
+                        photoContentType != null ? photoContentType : "image/jpeg");
+            }
+        } catch (Exception e) {
+            log.warn("送货单照片 OSS 上传失败 (不阻断 OCR): {}", e.getMessage());
+        }
+
+        // 4. 调 Vision OCR
+        SupplierDeliveryNote note = new SupplierDeliveryNote();
+        note.setFactoryId(factoryId);
+        note.setSourceType(DeliveryNoteSourceType.OCR);
+        note.setPhotoHash(photoHash);
+        note.setPhotoOssUrl(ossUrl);
+        note.setSupplierId(supplierId);
+        note.setDeliveryDate(deliveryDate != null ? deliveryDate : LocalDate.now());
+        note.setStatus(DeliveryNoteStatus.DRAFT);
+        note.setCreatedBy(userId);
+        note.setOcrParsedAt(LocalDateTime.now());
+
+        String rawResponse;
+        try {
+            // analyzeImage 优先 (OSS 可读时); 无 OSS URL 则直接走 bytes 路径 (兜底)。
+            if (ossUrl != null) {
+                rawResponse = visionClient.analyzeImage(ossUrl, SUPPLIER_NOTE_OCR_PROMPT);
+            } else {
+                // 无 OSS 时无法用 URL 路径 — 此处明确报错 (不降级假数据)。
+                throw new BusinessException(503, "照片未能留存且无法直接识别, 请重试或手动录入")
+                        .withCode("OSS_REQUIRED");
+            }
+        } catch (BusinessException be) {
+            throw be;
+        } catch (Exception e) {
+            log.warn("送货单 OCR vision 调用失败: {}", e.getMessage());
+            note.setOcrErrorMessage("OCR 识别失败: " + e.getMessage());
+            note.setOcrConfidence(BigDecimal.ZERO);
+            return noteRepository.save(note);  // 留草稿, 用户可手工补行项
+        }
+
+        // 5. 解析 JSON
+        parseOcrJsonIntoNote(note, factoryId, rawResponse);
+
+        return noteRepository.save(note);
+    }
+
+    /** 把 OCR 原始 JSON 解析进 note + 行项 (软匹配 raw_material_types)。 */
+    private void parseOcrJsonIntoNote(SupplierDeliveryNote note, String factoryId, String rawResponse) {
+        note.setOcrRawJson(rawResponse);
+        try {
+            Pattern pattern = Pattern.compile("\\{[\\s\\S]*\\}");
+            Matcher matcher = pattern.matcher(rawResponse != null ? rawResponse : "");
+            if (!matcher.find()) {
+                note.setOcrErrorMessage("无法从识别结果中提取 JSON, 请手动填写行项");
+                note.setOcrConfidence(BigDecimal.ZERO);
+                return;
+            }
+            JsonNode json = objectMapper.readTree(matcher.group());
+
+            note.setNoteNumber(jsonStr(json, "note_number"));
+            String supplierName = jsonStr(json, "supplier_name");
+            if (supplierName != null && note.getSupplierName() == null) {
+                note.setSupplierName(supplierName);
+            }
+            String parsedDate = jsonStr(json, "delivery_date");
+            if (parsedDate != null) {
+                try {
+                    note.setDeliveryDate(LocalDate.parse(parsedDate));
+                } catch (Exception ignore) {
+                    // keep caller-supplied / today
+                }
+            }
+            note.setTotalAmount(jsonDecimal(json, "total_amount"));
+            BigDecimal confidence = jsonDecimal(json, "confidence");
+            note.setOcrConfidence(confidence != null ? confidence : BigDecimal.ZERO);
+
+            JsonNode items = json.get("items");
+            if (items != null && items.isArray()) {
+                for (JsonNode item : items) {
+                    SupplierDeliveryNoteLine line = new SupplierDeliveryNoteLine();
+                    String ingredientName = jsonStr(item, "ingredient_name");
+                    line.setIngredientName(ingredientName != null ? ingredientName : "未知食材");
+                    line.setQuantity(jsonDecimal(item, "quantity"));
+                    line.setUnit(jsonStr(item, "unit"));
+                    line.setUnitPrice(jsonDecimal(item, "unit_price"));
+                    line.setLineAmount(jsonDecimal(item, "line_amount"));
+                    line.setOcrConfidence(confidence);
+                    // 软匹配 raw_material_types
+                    line.setRawMaterialTypeId(softMatchMaterial(factoryId, ingredientName));
+                    note.addLine(line);
+                }
+            }
+        } catch (Exception e) {
+            log.warn("送货单 OCR JSON 解析失败: {}", e.getMessage());
+            note.setOcrErrorMessage("解析失败: " + e.getMessage() + " — 请手动校对行项");
+            if (note.getOcrConfidence() == null) {
+                note.setOcrConfidence(BigDecimal.ZERO);
+            }
+        }
+    }
+
+    /** 软匹配食材名 → raw_material_types.id (取最相关的一条); 无匹配返 null。 */
+    private String softMatchMaterial(String factoryId, String ingredientName) {
+        if (ingredientName == null || ingredientName.isBlank()) {
+            return null;
+        }
+        try {
+            Page<RawMaterialType> page = rawMaterialTypeRepository.searchMaterialTypes(
+                    factoryId, ingredientName.trim(), PageRequest.of(0, 1));
+            if (page != null && page.hasContent()) {
+                return page.getContent().get(0).getId();
+            }
+        } catch (Exception e) {
+            log.debug("食材软匹配失败 ({}): {}", ingredientName, e.getMessage());
+        }
+        return null;
+    }
+
+    @Override
+    @Transactional
+    public SupplierDeliveryNote createManual(String factoryId, Long userId,
+            SupplierDeliveryNoteDto.ManualCreateRequest req) {
+        if (req == null) {
+            throw new BusinessException(400, "录入内容为空");
+        }
+        SupplierDeliveryNote note = new SupplierDeliveryNote();
+        note.setFactoryId(factoryId);
+        note.setSourceType(DeliveryNoteSourceType.MANUAL);
+        note.setSupplierId(req.getSupplierId());
+        note.setSupplierName(req.getSupplierName());
+        note.setDeliveryDate(req.getDeliveryDate() != null ? req.getDeliveryDate() : LocalDate.now());
+        note.setNoteNumber(req.getNoteNumber());
+        note.setStatus(DeliveryNoteStatus.DRAFT);
+        note.setCreatedBy(userId);
+
+        BigDecimal total = BigDecimal.ZERO;
+        if (req.getLines() != null) {
+            for (SupplierDeliveryNoteDto.LineDto dto : req.getLines()) {
+                SupplierDeliveryNoteLine line = toLineEntity(dto);
+                line.setRawMaterialTypeId(dto.getRawMaterialTypeId() != null
+                        ? dto.getRawMaterialTypeId()
+                        : softMatchMaterial(factoryId, dto.getIngredientName()));
+                note.addLine(line);
+                if (line.getLineAmount() != null) {
+                    total = total.add(line.getLineAmount());
+                }
+            }
+        }
+        if (total.compareTo(BigDecimal.ZERO) > 0) {
+            note.setTotalAmount(total);
+        }
+        return noteRepository.save(note);
+    }
+
+    @Override
+    @Transactional
+    public SupplierDeliveryNote confirmNote(String factoryId, String noteId, Long userId) {
+        SupplierDeliveryNote note = mustFindDraftOrAny(factoryId, noteId);
+        if (note.getStatus() != DeliveryNoteStatus.DRAFT) {
+            throw new BusinessException(409, "仅草稿状态可确认 (当前: " + note.getStatus() + ")")
+                    .withCode("INVALID_STATUS")
+                    .withHint("该送货单已确认或已拒绝, 无需再次确认");
+        }
+        note.setStatus(DeliveryNoteStatus.CONFIRMED);
+        note.setConfirmedBy(userId);
+        note.setConfirmedAt(LocalDateTime.now());
+        // 先持久化确认状态 (主流程)
+        SupplierDeliveryNote saved = noteRepository.save(note);
+
+        // 写 gold (D5 fail-soft: 失败不回滚确认, 记 error message)
+        try {
+            List<Map<String, Object>> goldLines = new ArrayList<>();
+            for (SupplierDeliveryNoteLine line : saved.getLines()) {
+                if (line.getUnitPrice() == null) {
+                    continue;  // 无单价无法构成进价记录, 跳过
+                }
+                Map<String, Object> row = new HashMap<>();
+                row.put("ingredientName", line.getIngredientName());
+                row.put("normalizedName", normalizeName(line.getIngredientName()));
+                row.put("rawMaterialTypeId", line.getRawMaterialTypeId());
+                row.put("supplierId", saved.getSupplierId());
+                row.put("supplierName", saved.getSupplierName());
+                row.put("deliveryDate", saved.getDeliveryDate() != null
+                        ? saved.getDeliveryDate().toString() : null);
+                row.put("unitPrice", line.getUnitPrice());
+                row.put("quantity", line.getQuantity());
+                row.put("unit", line.getUnit());
+                row.put("lineAmount", line.getLineAmount());
+                goldLines.add(row);
+            }
+            if (!goldLines.isEmpty()) {
+                int count = goldClient.upsertSupplierPriceBatch(factoryId, saved.getId(), goldLines);
+                log.info("送货单 {} 确认 → gold 写入 {} 行进价", saved.getId(), count);
+            }
+        } catch (Exception e) {
+            log.error("送货单 {} 确认成功, 但 gold 进价同步失败 (fail-soft): {}",
+                    saved.getId(), e.getMessage());
+            saved.setOcrErrorMessage("gold 进价同步失败: " + e.getMessage()
+                    + " (送货单已确认, 可稍后重新同步)");
+            // best-effort persist the error flag; if this also fails, swallow (confirm already committed)
+            try {
+                noteRepository.save(saved);
+            } catch (Exception ignore) {
+                // confirm already persisted above; error flag is advisory
+            }
+        }
+        return saved;
+    }
+
+    @Override
+    @Transactional
+    public SupplierDeliveryNote rejectNote(String factoryId, String noteId,
+            String rejectReasonCode, String rejectReasonNote, Long userId) {
+        SupplierDeliveryNote note = mustFindDraftOrAny(factoryId, noteId);
+        if (note.getStatus() != DeliveryNoteStatus.DRAFT) {
+            throw new BusinessException(409, "仅草稿状态可拒绝 (当前: " + note.getStatus() + ")")
+                    .withCode("INVALID_STATUS");
+        }
+        if (rejectReasonCode == null || rejectReasonCode.isBlank()) {
+            throw new BusinessException(400, "请选择拒绝原因")
+                    .withHint("可选: 图片模糊 / 光线不足 / 单据不对 / 供应商不存在 / 其他");
+        }
+        note.setStatus(DeliveryNoteStatus.REJECTED);
+        note.setRejectReasonCode(rejectReasonCode);
+        note.setRejectReasonNote(rejectReasonNote);
+        return noteRepository.save(note);
+    }
+
+    @Override
+    @Transactional
+    public SupplierDeliveryNote updateLines(String factoryId, String noteId,
+            List<SupplierDeliveryNoteDto.LineDto> lines) {
+        SupplierDeliveryNote note = mustFindDraftOrAny(factoryId, noteId);
+        if (note.getStatus() != DeliveryNoteStatus.DRAFT) {
+            throw new BusinessException(409, "仅草稿状态可编辑行项")
+                    .withCode("INVALID_STATUS");
+        }
+        note.getLines().clear();  // orphanRemoval 删旧行
+        BigDecimal total = BigDecimal.ZERO;
+        if (lines != null) {
+            for (SupplierDeliveryNoteDto.LineDto dto : lines) {
+                SupplierDeliveryNoteLine line = toLineEntity(dto);
+                line.setRawMaterialTypeId(dto.getRawMaterialTypeId() != null
+                        ? dto.getRawMaterialTypeId()
+                        : softMatchMaterial(factoryId, dto.getIngredientName()));
+                note.addLine(line);
+                if (line.getLineAmount() != null) {
+                    total = total.add(line.getLineAmount());
+                }
+            }
+        }
+        note.setTotalAmount(total.compareTo(BigDecimal.ZERO) > 0 ? total : null);
+        return noteRepository.save(note);
+    }
+
+    @Override
+    @Transactional
+    public void deleteDraft(String factoryId, String noteId) {
+        SupplierDeliveryNote note = mustFindDraftOrAny(factoryId, noteId);
+        if (note.getStatus() != DeliveryNoteStatus.DRAFT) {
+            throw new BusinessException(409, "仅草稿可删除")
+                    .withCode("INVALID_STATUS");
+        }
+        note.softDelete();
+        noteRepository.save(note);
+    }
+
+    @Override
+    public Map<String, Object> getLimits(String factoryId, LocalDate month) {
+        YearMonth ym = YearMonth.from(month != null ? month : LocalDate.now());
+        LocalDate start = ym.atDay(1);
+        LocalDate end = ym.atEndOfMonth();
+        long confirmed = noteRepository.countByFactoryIdAndStatusAndMonth(
+                factoryId, DeliveryNoteStatus.CONFIRMED, start, end);
+        long draft = noteRepository.countByFactoryIdAndStatusAndMonth(
+                factoryId, DeliveryNoteStatus.DRAFT, start, end);
+        Map<String, Object> result = new HashMap<>();
+        result.put("month", ym.toString());
+        result.put("confirmedCount", confirmed);
+        result.put("draftCount", draft);
+        result.put("totalCount", confirmed + draft);
+        return result;
+    }
+
+    // ==================== helpers ====================
+
+    private SupplierDeliveryNote mustFindDraftOrAny(String factoryId, String noteId) {
+        return noteRepository.findByIdAndFactoryId(noteId, factoryId)
+                .orElseThrow(() -> new BusinessException(404, "送货单不存在: " + noteId)
+                        .withHint("请检查单号是否正确"));
+    }
+
+    private SupplierDeliveryNoteLine toLineEntity(SupplierDeliveryNoteDto.LineDto dto) {
+        SupplierDeliveryNoteLine line = new SupplierDeliveryNoteLine();
+        line.setIngredientName(dto.getIngredientName());
+        line.setQuantity(dto.getQuantity());
+        line.setUnit(dto.getUnit());
+        line.setUnitPrice(dto.getUnitPrice());
+        // 数字联动 (Rule 3): line_amount 缺失但有 qty×price 则自动算
+        if (dto.getLineAmount() != null) {
+            line.setLineAmount(dto.getLineAmount());
+        } else if (dto.getQuantity() != null && dto.getUnitPrice() != null) {
+            line.setLineAmount(dto.getQuantity().multiply(dto.getUnitPrice()));
+        }
+        line.setOcrConfidence(dto.getOcrConfidence());
+        return line;
+    }
+
+    private String sha256(byte[] bytes) {
+        try {
+            MessageDigest md = MessageDigest.getInstance("SHA-256");
+            byte[] digest = md.digest(bytes);
+            StringBuilder sb = new StringBuilder();
+            for (byte b : digest) {
+                sb.append(String.format("%02x", b));
+            }
+            return sb.toString();
+        } catch (Exception e) {
+            throw new BusinessException(500, "照片哈希计算失败");
+        }
+    }
+
+    /** 与 Python _normalize_name 一致: 小写 + strip + 折叠空白。 */
+    private String normalizeName(String name) {
+        if (name == null) {
+            return "";
+        }
+        return String.join(" ", name.toLowerCase().trim().split("\\s+"));
+    }
+
+    private String extFor(String contentType) {
+        if (contentType == null) {
+            return ".jpg";
+        }
+        if (contentType.contains("png")) return ".png";
+        if (contentType.contains("webp")) return ".webp";
+        return ".jpg";
+    }
+
+    private String jsonStr(JsonNode node, String field) {
+        JsonNode n = node.get(field);
+        if (n == null || n.isNull()) {
+            return null;
+        }
+        String s = n.asText();
+        return (s == null || s.isBlank() || "null".equalsIgnoreCase(s)) ? null : s;
+    }
+
+    private BigDecimal jsonDecimal(JsonNode node, String field) {
+        JsonNode n = node.get(field);
+        if (n == null || n.isNull()) {
+            return null;
+        }
+        try {
+            return new BigDecimal(n.asText().trim());
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+}

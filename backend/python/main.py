@@ -74,6 +74,7 @@ from smartbi.api import (  # noqa: E402
     whatif,
     rfm,
     financial_ratios,
+    supplier_price,
 )
 from smartbi.api import restaurant_sections  # noqa: E402
 from smartbi.api import intent_analysis  # noqa: E402
@@ -987,6 +988,7 @@ app.include_router(benchmark.router, prefix="/api/smartbi", tags=["Industry Benc
 app.include_router(finance_extract.router, prefix="/api/finance", tags=["Finance Extract"])
 app.include_router(restaurant_analytics.router, prefix="/api/smartbi", tags=["Restaurant Analytics"])
 app.include_router(restaurant_ops_gold.router, prefix="/api/smartbi", tags=["Restaurant Ops Gold"])
+app.include_router(supplier_price.router, prefix="/api/smartbi", tags=["Supplier Price Gold"])
 app.include_router(restaurant_ops_recipes.router, prefix="/api/smartbi", tags=["Restaurant Ops Recipes"])
 app.include_router(restaurant_sections.router, tags=["Restaurant Sections"])
 app.include_router(production_ai.router, prefix="/api/smartbi", tags=["Production AI"])

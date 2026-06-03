@@ -238,6 +238,7 @@ export const menuConfig: MenuItem[] = [
       { path: '/restaurant/analytics/platform', title: '平台口碑', icon: '', module: 'restaurant' },
       // -- 日常录入 (写侧) — 配方置顶 (喂养分析层成本) --
       { path: '/restaurant/recipes', title: '配方管理', icon: '', module: 'restaurant', groupLabel: '日常录入' },
+      { path: '/restaurant/supplier-delivery', title: '供应商进货录入', icon: '', module: 'restaurant' },
       { path: '/restaurant/requisitions', title: '领料管理', icon: '', module: 'restaurant' },
       { path: '/restaurant/wastage', title: '损耗管理', icon: '', module: 'restaurant' },
       { path: '/restaurant/stocktaking', title: '盘点管理', icon: '', module: 'restaurant' },
