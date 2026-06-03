@@ -1161,6 +1161,51 @@ def _period_key_for_target(d: date, level: str) -> str:
     raise ValueError(f"unknown level: {level!r}")
 
 
+def _period_bounds(period_key: str, level: str) -> Tuple[date, date]:
+    """Return (first_day, last_day) of the calendar period a period_key spans.
+
+    Used to detect in-progress (incomplete) periods: a period is incomplete
+    when its last_day is still in the future relative to today, so a week/month
+    rate computed from only the elapsed days would otherwise under-count
+    against the full-period target (false low-achievement signal).
+
+    WEEK uses calendar year (Rule 2, mirrors _period_key_for_target): the key
+    is 'YYYY-Www' where YYYY is the calendar year of any day in that ISO week.
+    """
+    import calendar
+    from datetime import timedelta
+
+    if level == "day":
+        d = date.fromisoformat(period_key)
+        return d, d
+    if level == "month":
+        year, month = (int(x) for x in period_key.split("-"))
+        last = calendar.monthrange(year, month)[1]
+        return date(year, month, 1), date(year, month, last)
+    if level == "year":
+        year = int(period_key)
+        return date(year, 1, 1), date(year, 12, 31)
+    if level == "week":
+        # key 'YYYY-Www' — YYYY is the calendar year (Rule 2), ww is ISO week.
+        year_str, week_str = period_key.split("-W")
+        cal_year = int(year_str)
+        iso_week = int(week_str)
+        # Find the Monday of the ISO week. The ISO year may differ from the
+        # calendar year at boundaries, so search around cal_year for the day
+        # whose _period_key_for_target round-trips to this key.
+        for probe_year in (cal_year, cal_year - 1, cal_year + 1):
+            try:
+                monday = date.fromisocalendar(probe_year, iso_week, 1)
+            except ValueError:
+                continue
+            if _period_key_for_target(monday, "week") == period_key:
+                return monday, monday + timedelta(days=6)
+        # Fallback: best-effort Monday of the ISO week in cal_year.
+        monday = date.fromisocalendar(cal_year, iso_week, 1)
+        return monday, monday + timedelta(days=6)
+    raise ValueError(f"unknown level: {level!r}")
+
+
 def _compute_achievement_rate(
     actual: Optional[Decimal], target: Optional[Decimal]
 ) -> Optional[float]:
@@ -1299,6 +1344,7 @@ async def daily_achievement_summary(
 
     points = []
     period_without_target: list[str] = []
+    today = date.today()
 
     for pk in period_keys:
         target = target_map.get(pk)
@@ -1310,12 +1356,32 @@ async def daily_achievement_summary(
         actual_val = actual_map.get(pk) if has_actual else None
         rate = _compute_achievement_rate(actual_val, target)
 
+        # In-progress detection: a week/month/year period whose last calendar
+        # day is still in the future is INCOMPLETE — its actuals only cover the
+        # elapsed days, so comparing to the full-period target under-counts the
+        # rate (false low-achievement alarm). Flag it so the UI shows
+        # "进行中 (已过 N/总 M 天)" instead of a bare percentage / alert color.
+        p_first, p_last = _period_bounds(pk, level)
+        period_complete = p_last <= today
+        days_total = (p_last - p_first).days + 1
+        if period_complete:
+            days_elapsed = days_total
+        else:
+            # clamp elapsed to [0, days_total]
+            elapsed_until = min(today, p_last)
+            days_elapsed = max(0, (elapsed_until - p_first).days + 1)
+            days_elapsed = min(days_elapsed, days_total)
+
         points.append({
             "period_key": pk,
             "target": _decimal_to_number(target),
             "actual": _decimal_to_number(actual_val) if actual_val is not None else None,
             "achievement_rate": rate,
             "data_missing": not has_actual,
+            "period_complete": period_complete,
+            "in_progress": not period_complete,
+            "days_elapsed": days_elapsed,
+            "days_total": days_total,
         })
 
     return {

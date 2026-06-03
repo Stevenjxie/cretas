@@ -272,6 +272,115 @@ def test_decimal_serialization_not_string():
     assert _compute_achievement_rate(Decimal("100"), Decimal("0")) is None
 
 
+# ── Fix 3: in-progress period flag (under-counted partial period) ──
+
+
+def test_period_bounds_month():
+    """_period_bounds('2026-06', 'month') → (2026-06-01, 2026-06-30)."""
+    from smartbi.gold.queries import _period_bounds
+    first, last = _period_bounds("2026-06", "month")
+    assert first == date(2026, 6, 1)
+    assert last == date(2026, 6, 30)
+
+
+def test_period_bounds_week_calendar_year():
+    """_period_bounds for a week key returns Mon..Sun spanning 7 days."""
+    from smartbi.gold.queries import _period_bounds, _period_key_for_target
+    # Pick a real day, derive its key, ensure bounds round-trip to that key.
+    d = date(2026, 6, 3)
+    key = _period_key_for_target(d, "week")
+    first, last = _period_bounds(key, "week")
+    assert (last - first).days == 6
+    assert first <= d <= last
+    assert _period_key_for_target(first, "week") == key
+    assert _period_key_for_target(last, "week") == key
+
+
+def test_period_bounds_day_and_year():
+    from smartbi.gold.queries import _period_bounds
+    assert _period_bounds("2026-06-03", "day") == (date(2026, 6, 3), date(2026, 6, 3))
+    assert _period_bounds("2026", "year") == (date(2026, 1, 1), date(2026, 12, 31))
+
+
+@pytest.mark.asyncio
+async def test_in_progress_month_period_flagged(monkeypatch):
+    """A month period whose last day > today → in_progress=True with
+    days_elapsed/days_total, so a partial-month low rate is not a false alarm."""
+    import smartbi.gold.queries as q
+
+    # Freeze "today" to mid-month so the month period is incomplete.
+    frozen_today = date(2026, 6, 3)
+
+    class _FrozenDate(date):
+        @classmethod
+        def today(cls):
+            return frozen_today
+
+    monkeypatch.setattr(q, "date", _FrozenDate)
+
+    conn = _FakeConn(
+        fetch_map={
+            "restaurant_target_hierarchy": [
+                {"period_key": "2026-06", "target_value": Decimal("1000000"), "store_id": None}
+            ],
+            # only 3 days of actuals exist (mid-month query)
+            "agg_daily": [
+                {"date": date(2026, 6, 1), "actual": Decimal("33000")},
+                {"date": date(2026, 6, 2), "actual": Decimal("34000")},
+                {"date": date(2026, 6, 3), "actual": Decimal("33000")},
+            ],
+        }
+    )
+    pool = _FakePool(conn)
+    result = await q.daily_achievement_summary(
+        pool, "RES_TEST", (date(2026, 6, 1), date(2026, 6, 3)),
+        kpi_kind="revenue", level="month",
+    )
+    pt = result["points"][0]
+    assert pt["period_key"] == "2026-06"
+    assert pt["in_progress"] is True, "incomplete month must be flagged in_progress"
+    assert pt["period_complete"] is False
+    assert pt["days_total"] == 30
+    assert pt["days_elapsed"] == 3
+    # achievement_rate still computed (not nulled), just annotated
+    assert pt["achievement_rate"] is not None
+
+
+@pytest.mark.asyncio
+async def test_complete_past_period_not_in_progress(monkeypatch):
+    """A fully-elapsed past month → in_progress=False, period_complete=True."""
+    import smartbi.gold.queries as q
+
+    frozen_today = date(2026, 6, 3)
+
+    class _FrozenDate(date):
+        @classmethod
+        def today(cls):
+            return frozen_today
+
+    monkeypatch.setattr(q, "date", _FrozenDate)
+
+    conn = _FakeConn(
+        fetch_map={
+            "restaurant_target_hierarchy": [
+                {"period_key": "2026-05", "target_value": Decimal("1000000"), "store_id": None}
+            ],
+            "agg_daily": [
+                {"date": date(2026, 5, 15), "actual": Decimal("980000")},
+            ],
+        }
+    )
+    pool = _FakePool(conn)
+    result = await q.daily_achievement_summary(
+        pool, "RES_TEST", (date(2026, 5, 1), date(2026, 5, 31)),
+        kpi_kind="revenue", level="month",
+    )
+    pt = result["points"][0]
+    assert pt["period_key"] == "2026-05"
+    assert pt["in_progress"] is False
+    assert pt["period_complete"] is True
+
+
 # ─── Task 3: REST endpoint contract tests ──────────────────────────────────────
 import datetime as _dtmod
 from fastapi.testclient import TestClient
