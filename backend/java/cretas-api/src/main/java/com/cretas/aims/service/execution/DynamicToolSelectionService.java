@@ -50,6 +50,10 @@ public class DynamicToolSelectionService {
     @Autowired
     private com.cretas.aims.ai.tool.WriteGuardService writeGuardService;
 
+    // Track B (restaurant-route-selfheal) — 用于动态候选业态过滤, 排除异业态工具。
+    @Autowired
+    private com.cretas.aims.service.intent.IntentConfigManagementService configService;
+
     // ==================== 公开方法 ====================
 
     /**
@@ -74,6 +78,13 @@ public class DynamicToolSelectionService {
             List<ToolRouterService.ToolCandidate> candidates = toolRouterService.retrieveCandidateTools(query, 10);
             if (candidates.isEmpty()) {
                 log.warn("动态工具选择: 未找到候选工具, query={}", query);
+                return buildNoToolResponse(intent);
+            }
+
+            // 2.1. Track B: 按工厂业态过滤动态候选工具(纯向量检索跨业态, 餐饮工厂排除制造业工具)
+            candidates = filterCandidatesByBusinessType(candidates, factoryId);
+            if (candidates.isEmpty()) {
+                log.warn("动态工具选择: 业态过滤后无候选工具, query={}", query);
                 return buildNoToolResponse(intent);
             }
 
@@ -156,6 +167,30 @@ public class DynamicToolSelectionService {
             log.error("动态工具选择执行失败: {}", e.getMessage(), e);
             return buildNoToolResponse(intent);
         }
+    }
+
+    /** Track B: 按工厂业态过滤动态候选工具, 排除异业态(如餐饮工厂排除制造业工具)。 */
+    List<ToolRouterService.ToolCandidate> filterCandidatesByBusinessType(
+            List<ToolRouterService.ToolCandidate> candidates, String factoryId) {
+        String biz;
+        try { biz = configService.resolveBusinessDomain(factoryId); }
+        catch (Exception e) { return candidates; }   // 解析失败不过滤(保守)
+        if (biz == null || biz.isEmpty()) return candidates;
+        java.util.Map<String, java.util.List<com.cretas.aims.entity.config.AIIntentConfig>> byTool =
+            configService.getAllIntents(factoryId).stream()
+                .filter(i -> i.getToolName() != null && !i.getToolName().isEmpty())
+                .collect(java.util.stream.Collectors.groupingBy(
+                    com.cretas.aims.entity.config.AIIntentConfig::getToolName));
+        java.util.List<ToolRouterService.ToolCandidate> kept = candidates.stream().filter(c -> {
+            java.util.List<com.cretas.aims.entity.config.AIIntentConfig> owners = byTool.get(c.getToolName());
+            if (owners == null || owners.isEmpty()) return true;   // 孤儿工具保留
+            return owners.stream().anyMatch(i ->
+                com.cretas.aims.ai.tool.BusinessTypeScope.isCompatible(i.getBusinessType(), biz));
+        }).collect(java.util.stream.Collectors.toList());
+        if (kept.size() < candidates.size()) {
+            log.info("动态候选业态过滤: {} → {} (biz={})", candidates.size(), kept.size(), biz);
+        }
+        return kept;
     }
 
     /**
