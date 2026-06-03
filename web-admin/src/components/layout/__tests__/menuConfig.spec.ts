@@ -179,7 +179,7 @@ describe('menuConfig — 餐饮运营组 3 层重组 (Task 1)', () => {
     const p = paths();
     for (const x of [
       '/restaurant/analytics/dishes', '/restaurant/analytics/stores', '/restaurant/analytics/platform',
-      '/restaurant/recipes', '/restaurant/requisitions', '/restaurant/wastage', '/restaurant/stocktaking',
+      '/restaurant/recipes', '/restaurant/supplier-delivery', '/restaurant/requisitions', '/restaurant/wastage', '/restaurant/stocktaking',
       '/restaurant/data-completeness', '/restaurant/admin/etl-status',
     ]) {
       expect(p, `缺餐饮项 ${x}`).toContain(x);

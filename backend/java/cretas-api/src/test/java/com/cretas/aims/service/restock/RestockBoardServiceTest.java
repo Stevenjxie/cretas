@@ -64,7 +64,7 @@ class RestockBoardServiceTest {
         when(salesOrderItemRepository.sumDemandByProductForDeliveryDate(eq("F006"), eq(D), anyCollection()))
                 .thenReturn(List.of(demand("PT-ZT", "猪蹄200g", "盒", "盒", "7088")));
         when(productTypeRepository.findById("PT-ZT")).thenReturn(Optional.of(pt("PT-ZT", "200", null)));
-        when(finishedGoodsBatchRepository.sumAvailableQuantityByProductType("F006", "PT-ZT")).thenReturn(new BigDecimal("1000"));
+        when(finishedGoodsBatchRepository.sumAvailableQuantityByProductTypeAndUnit("F006", "PT-ZT", "盒")).thenReturn(new BigDecimal("1000"));
         when(semiFinishedInventoryRepository.sumAvailableByProduct("F006", "PT-ZT")).thenReturn(BigDecimal.ZERO);
         when(productionPlanRepository.sumPlannedQuantityByProductAndStatuses(eq("F006"), eq("PT-ZT"), anyCollection())).thenReturn(new BigDecimal("2000"));
 
@@ -82,7 +82,7 @@ class RestockBoardServiceTest {
         when(salesOrderItemRepository.sumDemandByProductForDeliveryDate(eq("F006"), eq(D), anyCollection()))
                 .thenReturn(List.of(demand("PT-ZS", "猪舌120g", "盒", "盒", "625")));
         when(productTypeRepository.findById("PT-ZS")).thenReturn(Optional.of(pt("PT-ZS", "120", "1.0")));
-        when(finishedGoodsBatchRepository.sumAvailableQuantityByProductType("F006", "PT-ZS")).thenReturn(new BigDecimal("700"));
+        when(finishedGoodsBatchRepository.sumAvailableQuantityByProductTypeAndUnit("F006", "PT-ZS", "盒")).thenReturn(new BigDecimal("700"));
         when(semiFinishedInventoryRepository.sumAvailableByProduct("F006", "PT-ZS")).thenReturn(BigDecimal.ZERO);
         when(productionPlanRepository.sumPlannedQuantityByProductAndStatuses(eq("F006"), eq("PT-ZS"), anyCollection())).thenReturn(BigDecimal.ZERO);
 
@@ -97,7 +97,7 @@ class RestockBoardServiceTest {
         when(salesOrderItemRepository.sumDemandByProductForDeliveryDate(eq("F006"), eq(D), anyCollection()))
                 .thenReturn(List.of(demand("PT-ZS", "猪舌120g", "盒", "盒", "2000")));
         when(productTypeRepository.findById("PT-ZS")).thenReturn(Optional.of(pt("PT-ZS", "120", "0.9")));
-        when(finishedGoodsBatchRepository.sumAvailableQuantityByProductType("F006", "PT-ZS")).thenReturn(BigDecimal.ZERO);
+        when(finishedGoodsBatchRepository.sumAvailableQuantityByProductTypeAndUnit("F006", "PT-ZS", "盒")).thenReturn(BigDecimal.ZERO);
         when(semiFinishedInventoryRepository.sumAvailableByProduct("F006", "PT-ZS")).thenReturn(new BigDecimal("150"));
         when(productionPlanRepository.sumPlannedQuantityByProductAndStatuses(eq("F006"), eq("PT-ZS"), anyCollection())).thenReturn(BigDecimal.ZERO);
 
@@ -112,7 +112,7 @@ class RestockBoardServiceTest {
         when(salesOrderItemRepository.sumDemandByProductForDeliveryDate(eq("F006"), eq(D), anyCollection()))
                 .thenReturn(List.of(demand("PT-X", "X", "盒", "盒", "100")));
         when(productTypeRepository.findById("PT-X")).thenReturn(Optional.of(pt("PT-X", null, null)));
-        when(finishedGoodsBatchRepository.sumAvailableQuantityByProductType("F006", "PT-X")).thenReturn(BigDecimal.ZERO);
+        when(finishedGoodsBatchRepository.sumAvailableQuantityByProductTypeAndUnit("F006", "PT-X", "盒")).thenReturn(BigDecimal.ZERO);
         when(semiFinishedInventoryRepository.sumAvailableByProduct("F006", "PT-X")).thenReturn(new BigDecimal("50"));
         when(productionPlanRepository.sumPlannedQuantityByProductAndStatuses(eq("F006"), eq("PT-X"), anyCollection())).thenReturn(BigDecimal.ZERO);
 

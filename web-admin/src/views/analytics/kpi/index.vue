@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue';
+import { ref, computed, onMounted, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
@@ -10,6 +10,12 @@ import { pythonFetch } from '@/api/smartbi/common';
 import { getKpiSummary, getFinanceSummary, getTrendBundle } from '@/api/smartbi/gold';
 import { buildRestaurantKpiBoard, type RestaurantKpiBoard } from './restaurantKpiBoard';
 import { formatNumber } from '@/utils/format-number';
+import {
+  fetchAchievement,
+  fetchAlerts,
+  type AchievementResponse,
+  type AlertResponse,
+} from '@/api/smartbi/restaurant-targets';
 
 const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
@@ -85,11 +91,65 @@ async function loadGoldBoard() {
   }
 }
 
+// ── G2 Achievement + Alert state ─────────────────────────────────────────────
+const achievementLevel = ref<'day' | 'week' | 'month'>('day');
+const achievementData = ref<AchievementResponse | null>(null);
+const alertData = ref<AlertResponse | null>(null);
+const achievementLoading = ref(false);
+
+const fmtDate = (d: Date) => {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+};
+
+async function loadAchievementData() {
+  if (!factoryId.value || !isRestaurant.value) return;
+  achievementLoading.value = true;
+  try {
+    const today = new Date();
+    let start: string;
+    const end = fmtDate(today);
+    if (achievementLevel.value === 'day') {
+      start = fmtDate(new Date(today.getTime() - 6 * 86400000));
+    } else if (achievementLevel.value === 'week') {
+      start = fmtDate(new Date(today.getTime() - 27 * 86400000));
+    } else {
+      start = fmtDate(new Date(today.getFullYear(), today.getMonth(), 1));
+    }
+    const [achRes, alertRes] = await Promise.all([
+      fetchAchievement({ startDate: start, endDate: end, level: achievementLevel.value }),
+      fetchAlerts({ lookbackDays: 7 }),
+    ]);
+    if (achRes.success) achievementData.value = achRes.data;
+    if (alertRes.success) alertData.value = alertRes.data;
+  } catch (e) {
+    // 禁降级假数据: 失败时保持空, 不伪造达成率
+    console.error('[kpi-dashboard] achievement load failed:', e);
+  } finally {
+    achievementLoading.value = false;
+  }
+}
+
+// Alert timeline status → color
+const statusColor = (status: string) => ({
+  OK: '#67c23a',
+  WARN: '#e6a23c',
+  CRITICAL: '#f56c6c',
+  DATA_MISSING: '#909399',
+  NO_TARGET: '#c0c4cc',
+}[status] ?? '#c0c4cc');
+
+watch(achievementLevel, () => { if (isRestaurant.value) loadAchievementData(); });
+
 async function loadRestaurantKpi() {
   if (!factoryId.value) return;
   loading.value = true;
   // Gold 经营 KPI board (primary) + legacy ops summary (shown only if it has data).
   void loadGoldBoard();
+  // G2: achievement + alert (fire-and-forget; renders own card)
+  void loadAchievementData();
   try {
     // WS4 #10: 默认全部历史。restaurant-ops/summary 的 days 上限 365 (后端 Query le=365),
     // 取最大窗 = 餐饮租户全部历史 (qhj 等数据落在单年内)。绝不再用 days=30 默认窗。
@@ -252,6 +312,105 @@ function formatPercent(value: number) {
         </el-empty>
       </div>
     </template>
+
+    <!-- G2 (2026-06-03): 营业额达成率 KPI 卡 + 近 7 天预警 timeline -->
+    <div v-if="isRestaurant" class="kpi-grid">
+      <!-- 达成率 KPI 卡 -->
+      <el-card class="kpi-card" v-loading="achievementLoading">
+        <template #header>
+          <div class="card-header">
+            <el-icon><DataAnalysis /></el-icon>
+            <span>营业额达成率</span>
+            <el-radio-group
+              v-model="achievementLevel"
+              size="small"
+              style="margin-left: auto;"
+              @change="loadAchievementData"
+            >
+              <el-radio-button value="day">日</el-radio-button>
+              <el-radio-button value="week">周</el-radio-button>
+              <el-radio-button value="month">月</el-radio-button>
+            </el-radio-group>
+          </div>
+        </template>
+
+        <template v-if="achievementData && achievementData.points.length > 0">
+          <div v-for="pt in achievementData.points.slice(-3)" :key="pt.periodKey" class="kpi-item">
+            <div class="kpi-label">
+              {{ pt.periodKey }}
+              <span v-if="pt.dataMissing" style="color: #909399; font-size: 12px;">（数据缺失）</span>
+            </div>
+            <template v-if="!pt.dataMissing && pt.achievementRate !== null">
+              <el-progress
+                :percentage="Math.min(100, Math.round((pt.achievementRate ?? 0) * 100))"
+                :color="(pt.achievementRate ?? 0) >= 0.8 ? '#67c23a' : (pt.achievementRate ?? 0) >= 0.6 ? '#e6a23c' : '#f56c6c'"
+              />
+              <!-- Rule 2: show target + actual + rate together -->
+              <div class="kpi-footer" v-if="canViewPrice">
+                <span>目标 ¥{{ (pt.target ?? 0).toLocaleString() }}</span>
+                <span style="margin: 0 8px;">·</span>
+                <span>实际 ¥{{ (pt.actual ?? 0).toLocaleString() }}</span>
+                <span style="margin: 0 8px;">·</span>
+                <span>{{ ((pt.achievementRate ?? 0) * 100).toFixed(1) }}%</span>
+              </div>
+              <div class="kpi-footer" v-else>
+                <span>达成率 {{ ((pt.achievementRate ?? 0) * 100).toFixed(1) }}%</span>
+              </div>
+            </template>
+            <div v-else-if="pt.dataMissing" class="kpi-footer" style="color: #909399;">
+              POS 数据缺失，不计入达成
+            </div>
+          </div>
+        </template>
+        <!-- Rule 5: no target → navigate to config -->
+        <div v-else>
+          <el-empty description="尚未设置营业目标" :image-size="80" />
+          <div style="text-align: center; margin-top: 8px;">
+            <el-button type="primary" size="small" @click="router.push('/restaurant/analytics/targets')">
+              立即设置目标
+            </el-button>
+          </div>
+        </div>
+      </el-card>
+
+      <!-- 近 7 天达成预警 timeline -->
+      <el-card class="kpi-card">
+        <template #header>
+          <div class="card-header"><el-icon><Timer /></el-icon><span>近 7 天达成预警</span></div>
+        </template>
+        <template v-if="alertData && alertData.configExists && alertData.timeline.length > 0">
+          <el-timeline>
+            <el-timeline-item
+              v-for="entry in alertData.timeline"
+              :key="entry.date"
+              :color="statusColor(entry.status)"
+              :timestamp="entry.date"
+            >
+              <!-- Rule 2: full context per node -->
+              <span v-if="entry.status === 'DATA_MISSING'" style="color: #909399;">数据缺失</span>
+              <span v-else-if="entry.status === 'NO_TARGET'" style="color: #c0c4cc;">无目标配置</span>
+              <span v-else>
+                {{ entry.status }} ·
+                <template v-if="canViewPrice">
+                  ¥{{ (entry.actual ?? 0).toLocaleString() }} / ¥{{ (entry.target ?? 0).toLocaleString() }} =
+                </template>
+                {{ entry.achievementRate !== null ? ((entry.achievementRate ?? 0) * 100).toFixed(1) + '%' : '—' }}
+              </span>
+            </el-timeline-item>
+          </el-timeline>
+        </template>
+        <!-- Rule 5: config not set → navigate to config -->
+        <div v-else-if="alertData && !alertData.configExists">
+          <el-empty description="预警阈值未配置" :image-size="80" />
+          <div style="text-align: center; margin-top: 8px;">
+            <el-button size="small" @click="router.push('/restaurant/analytics/targets')">配置预警阈值</el-button>
+          </div>
+        </div>
+        <div v-else>
+          <el-empty description="暂无预警数据" :image-size="80" />
+        </div>
+      </el-card>
+    </div>
 
     <!-- Apr 24 P1.6: restaurant-specific KPI view (Plan C Gold).
          领料/损耗/盘点 ops cards — shown ONLY when the tenant actually has

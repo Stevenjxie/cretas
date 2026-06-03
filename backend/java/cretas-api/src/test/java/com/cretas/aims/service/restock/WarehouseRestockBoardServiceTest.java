@@ -90,7 +90,7 @@ class WarehouseRestockBoardServiceTest {
                         demand("PT-ZS", "猪舌120g", "WH-PUDONG",  "浦东总仓",  "盒", "盒", "200")));
         when(productTypeRepository.findById("PT-ZS"))
                 .thenReturn(Optional.of(pt("PT-ZS", "120", "1.0")));
-        when(finishedGoodsBatchRepository.sumAvailableQuantityByProductType(anyString(), anyString()))
+        when(finishedGoodsBatchRepository.sumAvailableQuantityByProductTypeAndUnit(anyString(), anyString(), eq("盒")))
                 .thenReturn(new BigDecimal("1000"));
         when(semiFinishedInventoryRepository.sumAvailableByProduct(anyString(), anyString()))
                 .thenReturn(BigDecimal.ZERO);
@@ -117,7 +117,7 @@ class WarehouseRestockBoardServiceTest {
                         demand("PT-ZS", "猪舌120g", "WH-BEILUN", "北仑", "盒", "盒", "2000")));
         when(productTypeRepository.findById("PT-ZS"))
                 .thenReturn(Optional.of(pt("PT-ZS", "120", null)));
-        when(finishedGoodsBatchRepository.sumAvailableQuantityByProductType("F006", "PT-ZS"))
+        when(finishedGoodsBatchRepository.sumAvailableQuantityByProductTypeAndUnit("F006", "PT-ZS", "盒"))
                 .thenReturn(new BigDecimal("500"));
         when(semiFinishedInventoryRepository.sumAvailableByProduct("F006", "PT-ZS"))
                 .thenReturn(BigDecimal.ZERO);
@@ -141,7 +141,7 @@ class WarehouseRestockBoardServiceTest {
                         demand("PT-ZS", "猪舌120g", "WH-BEILUN", "北仑", "盒", "盒", "531")));
         when(productTypeRepository.findById("PT-ZS"))
                 .thenReturn(Optional.of(pt("PT-ZS", "120", "1.0")));
-        when(finishedGoodsBatchRepository.sumAvailableQuantityByProductType("F006", "PT-ZS"))
+        when(finishedGoodsBatchRepository.sumAvailableQuantityByProductTypeAndUnit("F006", "PT-ZS", "盒"))
                 .thenReturn(new BigDecimal("800"));
         when(semiFinishedInventoryRepository.sumAvailableByProduct("F006", "PT-ZS"))
                 .thenReturn(BigDecimal.ZERO);
@@ -162,7 +162,7 @@ class WarehouseRestockBoardServiceTest {
                         demand("PT-ZS", "猪舌120g", "未分仓", null, "盒", "盒", "300")));
         when(productTypeRepository.findById("PT-ZS"))
                 .thenReturn(Optional.of(pt("PT-ZS", "120", null)));
-        when(finishedGoodsBatchRepository.sumAvailableQuantityByProductType("F006", "PT-ZS"))
+        when(finishedGoodsBatchRepository.sumAvailableQuantityByProductTypeAndUnit("F006", "PT-ZS", "盒"))
                 .thenReturn(BigDecimal.ZERO);
         when(semiFinishedInventoryRepository.sumAvailableByProduct("F006", "PT-ZS"))
                 .thenReturn(BigDecimal.ZERO);
@@ -186,7 +186,7 @@ class WarehouseRestockBoardServiceTest {
                         demand("PT-ZS", "猪舌120g", "WH-C", "C仓", "盒", "盒", "300")));
         when(productTypeRepository.findById("PT-ZS"))
                 .thenReturn(Optional.of(pt("PT-ZS", "120", null)));
-        when(finishedGoodsBatchRepository.sumAvailableQuantityByProductType(anyString(), anyString()))
+        when(finishedGoodsBatchRepository.sumAvailableQuantityByProductTypeAndUnit(anyString(), anyString(), eq("盒")))
                 .thenReturn(BigDecimal.ZERO);
         when(semiFinishedInventoryRepository.sumAvailableByProduct(anyString(), anyString()))
                 .thenReturn(BigDecimal.ZERO);

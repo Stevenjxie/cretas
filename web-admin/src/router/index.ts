@@ -1431,6 +1431,13 @@ const businessRoutes: RouteRecordRaw[] = [
             meta: { requiresAuth: true, title: '菜品分析', module: 'restaurant' }
           },
           {
+            // G2 (2026-06-03): 目标拆分 + 达成率预警 — 年/月/周/日四级目标录入
+            path: 'analytics/targets',
+            name: 'RestaurantTargets',
+            component: () => import('@/views/restaurant/analytics/target-hierarchy.vue'),
+            meta: { requiresAuth: true, title: '目标管理', module: 'restaurant' }
+          },
+          {
             // IA v2: 平台口碑 (原 经营与平台分析, 明标需接平台数据)
             path: 'analytics/platform',
             name: 'RestaurantPlatform',
@@ -1480,6 +1487,19 @@ const businessRoutes: RouteRecordRaw[] = [
             name: 'RestaurantDataCompleteness',
             component: () => import('@/views/restaurant/data-completeness.vue'),
             meta: { requiresAuth: true, title: '数据完整度', module: 'restaurant' },
+          },
+          {
+            // G7 取数自动化 Tier A: 供应商进货录入 (OCR + 手工)
+            path: 'supplier-delivery',
+            name: 'SupplierDeliveryNoteList',
+            component: () => import('@/views/restaurant/supplier-delivery/SupplierDeliveryNoteList.vue'),
+            meta: { requiresAuth: true, title: '供应商进货录入', module: 'restaurant' },
+          },
+          {
+            path: 'supplier-delivery/:id',
+            name: 'SupplierDeliveryNoteDetail',
+            component: () => import('@/views/restaurant/supplier-delivery/SupplierDeliveryNoteDetail.vue'),
+            meta: { requiresAuth: true, title: '送货单详情', module: 'restaurant', hidden: true },
           }
         ]
       },

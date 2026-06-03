@@ -238,6 +238,7 @@ export const menuConfig: MenuItem[] = [
       { path: '/restaurant/analytics/platform', title: '平台口碑', icon: '', module: 'restaurant' },
       // -- 日常录入 (写侧) — 配方置顶 (喂养分析层成本) --
       { path: '/restaurant/recipes', title: '配方管理', icon: '', module: 'restaurant', groupLabel: '日常录入' },
+      { path: '/restaurant/supplier-delivery', title: '供应商进货录入', icon: '', module: 'restaurant' },
       { path: '/restaurant/requisitions', title: '领料管理', icon: '', module: 'restaurant' },
       { path: '/restaurant/wastage', title: '损耗管理', icon: '', module: 'restaurant' },
       { path: '/restaurant/stocktaking', title: '盘点管理', icon: '', module: 'restaurant' },
@@ -266,6 +267,8 @@ export const menuConfig: MenuItem[] = [
       // trends/kpi/indicator-center) 由 router redirect 保书签 → /smart-bi/analysis-hub?tab=。
       { path: '/smart-bi/analysis-hub', title: '经营分析', icon: 'TrendCharts', module: 'analytics', groupLabel: '经营分析' },
       { path: '/smart-bi/revenue-report', title: '收入管理报表', icon: 'Money', module: 'analytics',
+        hideForFactoryTypes: ['FACTORY'] },
+      { path: '/smart-bi/health-report', title: 'AI 经营体检', icon: 'FirstAidKit', module: 'analytics',
         hideForFactoryTypes: ['FACTORY'] },
       { path: '/analytics/alert-dashboard', title: '异常预警', icon: 'Warning', module: 'analytics' },
       { path: '/analytics/supply-chain', title: '进销存总览', icon: 'Histogram', module: 'analytics',

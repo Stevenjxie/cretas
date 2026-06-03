@@ -1138,3 +1138,361 @@ async def trend_bundle(
         },
         "monthlyTrend": monthly_trend,
     }
+
+
+# ── G2: Restaurant Target Achievement Queries ─────────────────────────────────
+
+
+def _period_key_for_target(d: date, level: str) -> str:
+    """Generate period_key string matching restaurant_target_hierarchy.period_key.
+
+    Rule 2 (python-java-port.md): WEEK uses calendar year (d.year), not ISO year
+    (isocalendar()[0]) to match Java LocalDate.getYear() semantics.
+    """
+    if level == "day":
+        return d.isoformat()          # '2026-06-03'
+    if level == "week":
+        _, iso_week, _ = d.isocalendar()
+        return f"{d.year}-W{iso_week:02d}"   # calendar year, NOT iso_year
+    if level == "month":
+        return d.strftime("%Y-%m")    # '2026-06'
+    if level == "year":
+        return str(d.year)            # '2026'
+    raise ValueError(f"unknown level: {level!r}")
+
+
+def _compute_achievement_rate(
+    actual: Optional[Decimal], target: Optional[Decimal]
+) -> Optional[float]:
+    """Compute achievement rate with ROUND_HALF_UP (Rule 10/12).
+
+    Returns None if target is None, target==0, or actual is None (data_missing).
+    Never raises ZeroDivisionError.
+    """
+    if actual is None or target is None or target == Decimal("0"):
+        return None
+    # Rule 10: intermediate quantize at 4 dp HALF_UP, then final 3 dp HALF_UP
+    intermediate = (actual / target).quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)
+    result = intermediate.quantize(Decimal("0.001"), rounding=ROUND_HALF_UP)
+    return float(result)
+
+
+async def _set_target_tenant(conn: asyncpg.Connection, factory_id: str) -> None:
+    """Set RLS tenant context on a borrowed connection (parameterized, injection-safe).
+
+    Mirrors restaurant_finance_etl._set_tenant / restaurant_ops_gold endpoints.
+    """
+    await conn.execute("SELECT set_config('app.factory_id', $1, true)", factory_id)
+
+
+async def daily_achievement_summary(
+    pool: asyncpg.Pool,
+    factory_id: str,
+    date_range: Tuple[date, date],
+    *,
+    kpi_kind: str = "revenue",
+    level: str = "day",
+    store_id: Optional[int] = None,
+) -> Dict[str, Any]:
+    """Query actual POS data vs. stored targets for the given date range and level.
+
+    Returns {factory_id, kpi_kind, level, points: [...], period_without_target: [...]}
+    - actual=null + data_missing=True when agg_daily has no row (POS fault)
+    - achievement_rate=null when target=null or target=0 (prevent false 0% signal)
+    """
+    from smartbi_compat.api.analysis_finance import _decimal_to_number
+
+    if not factory_id:
+        raise ValueError("factory_id required")
+    start, end = date_range
+    if start is None or end is None:
+        raise ValueError(
+            f"daily_achievement_summary: start/end required (got {start}, {end})"
+        )
+    _validate_range(start, end)
+
+    from datetime import timedelta
+
+    # Derive period keys for the range at the given level (preserve order)
+    period_keys: list[str] = []
+    current = start
+    while current <= end:
+        pk = _period_key_for_target(current, level)
+        if pk not in period_keys:
+            period_keys.append(pk)
+        current += timedelta(days=1)
+
+    agg_col = "net_amount" if kpi_kind == "revenue" else "bill_count"
+
+    async with pool.acquire() as conn:
+        await _set_target_tenant(conn, factory_id)
+
+        # Targets for the period_keys. store_id is a first-class dimension (D4).
+        if store_id is None:
+            target_rows = await conn.fetch(
+                """
+                SELECT period_key, target_value, store_id
+                  FROM restaurant_target_hierarchy
+                 WHERE factory_id = $1
+                   AND kpi_kind = $2
+                   AND level = $3
+                   AND period_key = ANY($4)
+                   AND store_id IS NULL
+                """,
+                factory_id, kpi_kind, level, period_keys,
+            )
+        else:
+            target_rows = await conn.fetch(
+                """
+                SELECT period_key, target_value, store_id
+                  FROM restaurant_target_hierarchy
+                 WHERE factory_id = $1
+                   AND kpi_kind = $2
+                   AND level = $3
+                   AND period_key = ANY($4)
+                   AND store_id = $5
+                """,
+                factory_id, kpi_kind, level, period_keys, store_id,
+            )
+        target_map: dict[str, Decimal] = {
+            r["period_key"]: Decimal(str(r["target_value"]))
+            for r in target_rows
+            if r["target_value"] is not None
+        }
+
+        # Actuals from agg_daily grouped by date (then bucketed into period_key)
+        if store_id is None:
+            actual_rows = await conn.fetch(
+                f"""
+                SELECT date, SUM({agg_col})::numeric(18,2) AS actual
+                  FROM agg_daily
+                 WHERE factory_id = $1
+                   AND date BETWEEN $2 AND $3
+                 GROUP BY date
+                 ORDER BY date
+                """,
+                factory_id, start, end,
+            )
+        else:
+            actual_rows = await conn.fetch(
+                f"""
+                SELECT date, SUM({agg_col})::numeric(18,2) AS actual
+                  FROM agg_daily
+                 WHERE factory_id = $1
+                   AND date BETWEEN $2 AND $3
+                   AND store_id = $4
+                 GROUP BY date
+                 ORDER BY date
+                """,
+                factory_id, start, end, store_id,
+            )
+
+    actual_map: dict[str, Decimal] = {}
+    actual_period_keys: set[str] = set()
+    for r in actual_rows:
+        pk = _period_key_for_target(r["date"], level)
+        if r["actual"] is None:
+            continue
+        v = Decimal(str(r["actual"]))
+        actual_map[pk] = actual_map.get(pk, Decimal("0")) + v
+        actual_period_keys.add(pk)
+
+    points = []
+    period_without_target: list[str] = []
+
+    for pk in period_keys:
+        target = target_map.get(pk)
+        if target is None:
+            period_without_target.append(pk)
+            continue
+
+        has_actual = pk in actual_period_keys
+        actual_val = actual_map.get(pk) if has_actual else None
+        rate = _compute_achievement_rate(actual_val, target)
+
+        points.append({
+            "period_key": pk,
+            "target": _decimal_to_number(target),
+            "actual": _decimal_to_number(actual_val) if actual_val is not None else None,
+            "achievement_rate": rate,
+            "data_missing": not has_actual,
+        })
+
+    return {
+        "factory_id": factory_id,
+        "kpi_kind": kpi_kind,
+        "level": level,
+        "points": points,
+        "period_without_target": period_without_target,
+    }
+
+
+async def hierarchy_rollup(
+    pool: asyncpg.Pool,
+    factory_id: str,
+    year: int,
+    *,
+    kpi_kind: str = "revenue",
+) -> Dict[str, Any]:
+    """Return the four-level target tree for a given year plus YTD actuals."""
+    from smartbi_compat.api.analysis_finance import _decimal_to_number
+
+    if not factory_id:
+        raise ValueError("factory_id required")
+
+    async with pool.acquire() as conn:
+        await _set_target_tenant(conn, factory_id)
+
+        target_rows = await conn.fetch(
+            """
+            SELECT level, period_key, target_value, store_id
+              FROM restaurant_target_hierarchy
+             WHERE factory_id = $1
+               AND kpi_kind = $2
+               AND (period_key = $3
+                    OR period_key LIKE $4
+                    OR period_key LIKE $5)
+             ORDER BY level, period_key
+            """,
+            factory_id, kpi_kind,
+            str(year),            # year level
+            f"{year}-%",          # month / day level: '2026-01' … '2026-06-03'
+            f"{year}-W%",         # week level: '2026-W23'
+        )
+
+        actual_rows = await conn.fetch(
+            """
+            SELECT SUM(net_amount)::numeric(18,2) AS actual_ytd
+              FROM agg_daily
+             WHERE factory_id = $1
+               AND EXTRACT(YEAR FROM date) = $2
+            """,
+            factory_id, year,
+        )
+
+    year_target: Optional[Decimal] = None
+    months: list[dict] = []
+    actual_ytd: Optional[Decimal] = None
+    if actual_rows and actual_rows[0]["actual_ytd"] is not None:
+        actual_ytd = Decimal(str(actual_rows[0]["actual_ytd"]))
+
+    for r in target_rows:
+        if r["target_value"] is None:
+            continue
+        tv = Decimal(str(r["target_value"]))
+        if r["level"] == "year":
+            year_target = tv
+        elif r["level"] == "month":
+            months.append({
+                "period_key": r["period_key"],
+                "target": _decimal_to_number(tv),
+                "actual_ytd": _decimal_to_number(actual_ytd) if actual_ytd is not None else None,
+            })
+
+    return {
+        "factory_id": factory_id,
+        "year": year,
+        "kpi_kind": kpi_kind,
+        "year_target": _decimal_to_number(year_target) if year_target is not None else None,
+        "months": months,
+    }
+
+
+async def alert_preview(
+    pool: asyncpg.Pool,
+    factory_id: str,
+    lookback_days: int = 7,
+    *,
+    kpi_kind: str = "revenue",
+) -> Dict[str, Any]:
+    """Return N-day alert timeline. Fail-closed: no alert_config row → config_exists=False."""
+    if not factory_id:
+        raise ValueError("factory_id required")
+
+    from datetime import timedelta
+
+    end = date.today()
+    start = end - timedelta(days=lookback_days - 1)
+
+    async with pool.acquire() as conn:
+        await _set_target_tenant(conn, factory_id)
+        config_rows = await conn.fetch(
+            """
+            SELECT warn_threshold, critical_threshold, store_id
+              FROM restaurant_alert_config
+             WHERE factory_id = $1
+               AND kpi_kind = $2
+               AND level = 'day'
+             LIMIT 1
+            """,
+            factory_id, kpi_kind,
+        )
+
+    if not config_rows:
+        return {
+            "factory_id": factory_id,
+            "kpi_kind": kpi_kind,
+            "lookback_days": lookback_days,
+            "config_exists": False,
+            "timeline": [],
+            "summary": {},
+        }
+
+    cfg = config_rows[0]
+    warn_t = Decimal(str(cfg["warn_threshold"]))
+    crit_t = Decimal(str(cfg["critical_threshold"]))
+
+    summary_result = await daily_achievement_summary(
+        pool, factory_id, (start, end), kpi_kind=kpi_kind, level="day",
+    )
+
+    point_map = {pt["period_key"]: pt for pt in summary_result["points"]}
+    no_target_set = set(summary_result["period_without_target"])
+
+    timeline: list[dict] = []
+    summary: dict[str, int] = {
+        "OK": 0, "WARN": 0, "CRITICAL": 0, "NO_TARGET": 0, "DATA_MISSING": 0
+    }
+
+    cur = start
+    while cur <= end:
+        pk = cur.isoformat()
+        if pk in no_target_set or pk not in point_map:
+            status = "NO_TARGET"
+            entry = {
+                "date": pk, "achievement_rate": None, "status": status,
+                "target": None, "actual": None,
+            }
+        else:
+            pt = point_map[pk]
+            if pt["data_missing"]:
+                status = "DATA_MISSING"
+            elif pt["achievement_rate"] is None:
+                status = "NO_TARGET"
+            else:
+                rate = Decimal(str(pt["achievement_rate"]))
+                if rate < crit_t:
+                    status = "CRITICAL"
+                elif rate < warn_t:
+                    status = "WARN"
+                else:
+                    status = "OK"
+            entry = {
+                "date": pk,
+                "achievement_rate": pt["achievement_rate"],
+                "status": status,
+                "target": pt["target"],
+                "actual": pt["actual"],
+            }
+        timeline.append(entry)
+        summary[status] = summary.get(status, 0) + 1
+        cur += timedelta(days=1)
+
+    return {
+        "factory_id": factory_id,
+        "kpi_kind": kpi_kind,
+        "lookback_days": lookback_days,
+        "config_exists": True,
+        "timeline": timeline,
+        "summary": summary,
+    }
