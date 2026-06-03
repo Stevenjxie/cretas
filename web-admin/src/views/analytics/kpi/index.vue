@@ -5,8 +5,11 @@ import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { get } from '@/api/request';
 import { ElMessage } from 'element-plus';
-import { Refresh, TrendCharts, Histogram, Timer, Check, KnifeFork, DataAnalysis } from '@element-plus/icons-vue';
+import { Refresh, TrendCharts, Histogram, Timer, Check, KnifeFork, DataAnalysis, Money, Sell, Calendar, Shop } from '@element-plus/icons-vue';
 import { pythonFetch } from '@/api/smartbi/common';
+import { getKpiSummary, getFinanceSummary, getTrendBundle } from '@/api/smartbi/gold';
+import { buildRestaurantKpiBoard, type RestaurantKpiBoard } from './restaurantKpiBoard';
+import { formatNumber } from '@/utils/format-number';
 
 const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
@@ -33,9 +36,60 @@ const restaurantKpi = ref({
   marginProfit: 0,
 });
 
+// Jun 2026 follow-up: GOLD 经营 KPI board for restaurant tenants.
+// 青花椒 (POS-only) has no 领料/损耗/盘点 data → the old ops cards showed empty
+// "—". Surface the boss-relevant Gold KPIs instead (营收/订单/客单价/门店/天数/峰值月).
+const goldBoard = ref<RestaurantKpiBoard | null>(null);
+const goldBoardError = ref('');
+// Whether the legacy 领料/损耗/盘点 ops section actually has any data — only
+// then do we render it (honest: hide the empty ops card for POS-only tenants).
+const hasOpsData = computed(() =>
+  restaurantKpi.value.activeDays > 0 ||
+  restaurantKpi.value.totalCost > 0 ||
+  restaurantKpi.value.wastageCost > 0 ||
+  (restaurantKpi.value.topIngredient !== '' && restaurantKpi.value.topIngredient !== '—'),
+);
+
+function kpiDisplay(item: { value: number | null; text?: string | null; kind: string }): string {
+  if (item.kind === 'text') return item.text || '—';
+  if (item.value === null) return '—';
+  if (item.kind === 'money') return '¥' + formatNumber(item.value);
+  return formatNumber(item.value, 0);
+}
+
+const goldIconFor: Record<string, unknown> = {
+  revenue: Money,
+  billCount: Sell,
+  avgBillValue: Money,
+  storeCount: Shop,
+  dayCount: Calendar,
+  peakMonth: TrendCharts,
+};
+
+async function loadGoldBoard() {
+  if (!factoryId.value) return;
+  goldBoardError.value = '';
+  try {
+    // All-history (omit dates). Money fields RBAC-nulled for non price-view roles.
+    const [kpi, fin, bundle] = await Promise.all([
+      getKpiSummary({ factoryId: factoryId.value }),
+      getFinanceSummary({ factoryId: factoryId.value, topNStores: 5 }),
+      getTrendBundle({ factoryId: factoryId.value }),
+    ]);
+    goldBoard.value = buildRestaurantKpiBoard(kpi, fin, bundle, canViewPrice.value);
+  } catch (e) {
+    // 禁降级假数据: 显式报错, 不伪造
+    goldBoardError.value = e instanceof Error ? e.message : '加载经营 KPI 失败';
+    goldBoard.value = null;
+    console.error('[kpi-dashboard] gold board load failed:', e);
+  }
+}
+
 async function loadRestaurantKpi() {
   if (!factoryId.value) return;
   loading.value = true;
+  // Gold 经营 KPI board (primary) + legacy ops summary (shown only if it has data).
+  void loadGoldBoard();
   try {
     // WS4 #10: 默认全部历史。restaurant-ops/summary 的 days 上限 365 (后端 Query le=365),
     // 取最大窗 = 餐饮租户全部历史 (qhj 等数据落在单年内)。绝不再用 days=30 默认窗。
@@ -162,8 +216,47 @@ function formatPercent(value: number) {
       </div>
     </div>
 
-    <!-- Apr 24 P1.6: restaurant-specific KPI view (Plan C Gold) -->
-    <div v-if="isRestaurant" class="kpi-grid" v-loading="loading">
+    <!-- Jun 2026 follow-up: GOLD 经营 KPI board (营收/订单/客单价/门店/天数/峰值月).
+         Primary for restaurant tenants — replaces the empty 领料/损耗/盘点 cards
+         a POS-only restaurant (青花椒) doesn't have data for. -->
+    <template v-if="isRestaurant">
+      <div v-if="goldBoardError" class="gold-board-error">
+        加载经营 KPI 失败: {{ goldBoardError }}
+      </div>
+      <div v-else-if="goldBoard && goldBoard.hasData" class="gold-board" v-loading="loading">
+        <div class="gold-board-title">
+          <el-icon><DataAnalysis /></el-icon>
+          <span>经营 KPI (全部历史)</span>
+          <span v-if="goldBoard.topStoreName" class="gold-board-sub">
+            营收最高门店: {{ goldBoard.topStoreName }}
+          </span>
+        </div>
+        <div class="gold-cards">
+          <div v-for="item in goldBoard.items" :key="item.key" class="gold-card">
+            <div class="gold-card-icon"><el-icon><component :is="goldIconFor[item.key]" /></el-icon></div>
+            <div class="gold-card-body">
+              <div class="gold-card-value">{{ kpiDisplay(item) }}</div>
+              <div class="gold-card-label">{{ item.label }}</div>
+              <div v-if="item.hint" class="gold-card-hint">{{ item.hint }}</div>
+            </div>
+          </div>
+        </div>
+        <div class="gold-board-actions">
+          <el-button size="small" @click="router.push('/smart-bi/dashboard')">经营驾驶舱 →</el-button>
+          <el-button size="small" @click="router.push('/smart-bi/analysis?tab=query')">AI 综合分析 →</el-button>
+        </div>
+      </div>
+      <div v-else-if="!loading && goldBoard && !goldBoard.hasData" class="gold-board-empty">
+        <el-empty description="暂无经营数据 — 上传 POS 流水后这里将显示营收/订单/客单价等 KPI">
+          <el-button size="small" type="primary" @click="router.push('/smart-bi/dashboard')">前往经营驾驶舱 →</el-button>
+        </el-empty>
+      </div>
+    </template>
+
+    <!-- Apr 24 P1.6: restaurant-specific KPI view (Plan C Gold).
+         领料/损耗/盘点 ops cards — shown ONLY when the tenant actually has
+         requisition/wastage data (honest: hidden for POS-only restaurants). -->
+    <div v-if="isRestaurant && hasOpsData" class="kpi-grid" v-loading="loading">
       <el-card class="kpi-card">
         <template #header>
           <div class="card-header"><el-icon><KnifeFork /></el-icon><span>运营指标 (全部历史)</span></div>
@@ -239,7 +332,7 @@ function formatPercent(value: number) {
     </div>
 
     <!-- Factory tenant: manufacturing KPI (original) -->
-    <div v-else class="kpi-grid" v-loading="loading">
+    <div v-if="!isRestaurant" class="kpi-grid" v-loading="loading">
       <!-- 生产效率KPI -->
       <el-card class="kpi-card">
         <template #header>
@@ -399,6 +492,106 @@ function formatPercent(value: number) {
 <style lang="scss" scoped>
 .kpi-page {
   padding: 20px;
+}
+
+/* Jun 2026 follow-up: GOLD 经营 KPI board (restaurant tenants) */
+.gold-board {
+  margin-bottom: 16px;
+  padding: 18px 20px;
+  background: linear-gradient(135deg, #f8fafc 0%, #f0f5ff 100%);
+  border: 1px solid #e4ebf5;
+  border-radius: 12px;
+
+  .gold-board-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 15px;
+    font-weight: 600;
+    color: #303133;
+    margin-bottom: 16px;
+
+    .el-icon { color: #409eff; font-size: 18px; }
+    .gold-board-sub {
+      margin-left: auto;
+      font-size: 12px;
+      font-weight: 400;
+      color: #909399;
+    }
+  }
+}
+
+.gold-cards {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 14px;
+}
+
+@media (max-width: 768px) {
+  .gold-cards { grid-template-columns: repeat(2, 1fr); }
+}
+
+.gold-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  background: #fff;
+  border-radius: 10px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.04);
+
+  .gold-card-icon {
+    flex-shrink: 0;
+    width: 40px;
+    height: 40px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 10px;
+    background: #ecf5ff;
+    color: #409eff;
+    .el-icon { font-size: 20px; }
+  }
+
+  .gold-card-body { min-width: 0; }
+  .gold-card-value {
+    font-size: 22px;
+    font-weight: 700;
+    color: #303133;
+    line-height: 1.2;
+  }
+  .gold-card-label {
+    font-size: 13px;
+    color: #606266;
+    margin-top: 2px;
+  }
+  .gold-card-hint {
+    font-size: 11px;
+    color: #a8abb2;
+    margin-top: 2px;
+  }
+}
+
+.gold-board-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 16px;
+}
+
+.gold-board-error {
+  margin-bottom: 16px;
+  padding: 12px 16px;
+  color: #f56c6c;
+  background: #fef0f0;
+  border-radius: 8px;
+}
+
+.gold-board-empty {
+  margin-bottom: 16px;
+  padding: 12px;
+  background: #fafafa;
+  border-radius: 8px;
 }
 
 .page-header {
