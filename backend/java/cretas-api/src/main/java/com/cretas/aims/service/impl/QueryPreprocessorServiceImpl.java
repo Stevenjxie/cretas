@@ -116,6 +116,10 @@ public class QueryPreprocessorServiceImpl implements QueryPreprocessorService {
     private static final java.util.regex.Pattern VETO_FALSE_FRIEND = java.util.regex.Pattern.compile(
             "^\\s*(不用|不想|不要)的");
 
+    /** W1b: 不用谢/不必客气/甭麻烦 等寒暄,非否决 */
+    private static final java.util.regex.Pattern VETO_POLITENESS = java.util.regex.Pattern.compile(
+            "^\\s*(不用|不必|甭|无需)\\s*(谢|客气|麻烦|担心|介意|送|管我)");
+
     // ==================== 语用学处理正则模式 (v8.0) ====================
 
     /**
@@ -876,6 +880,8 @@ public class QueryPreprocessorServiceImpl implements QueryPreprocessorService {
         if (DOUBLE_NEGATIVE_PATTERN.matcher(s).find()) return QueryPreprocessorService.NegationKind.NONE;
         // 2) "不用的"(unused)等 false friend
         if (VETO_FALSE_FRIEND.matcher(s).find()) return QueryPreprocessorService.NegationKind.NONE;
+        // 2b) 寒暄 false friend: "不用谢/不必客气/甭麻烦" 后接合法查询时,否定副词非否决(W1b)
+        if (VETO_POLITENESS.matcher(s).find()) return QueryPreprocessorService.NegationKind.NONE;
         // 3) 否定副词(句首/近句首)
         Matcher m = VETO_ADVERB_PATTERN.matcher(s);
         if (!m.find()) return QueryPreprocessorService.NegationKind.NONE;

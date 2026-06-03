@@ -700,11 +700,25 @@ public class IntentRecognitionPipelineServiceImpl implements IntentRecognitionPi
                     }
                 }
                 if (listChanged && after != null && !after.isEmpty()) {
-                    AIIntentConfig newBest =
-                            configService.getIntentConfigByCode(factoryId, after.get(0).getIntentCode());
+                    // Resolve the first config-backed candidate (not just index 0): some twins are not
+                    // config-backed for this factory, so the read twin may sit below an unresolvable head.
+                    AIIntentConfig newBest = null;
+                    for (CandidateIntent cand : after) {
+                        AIIntentConfig cfg = configService.getIntentConfigByCode(factoryId, cand.getIntentCode());
+                        if (cfg != null) { newBest = cfg; break; }
+                    }
                     if (newBest != null) {
                         result = result.toBuilder().bestMatch(newBest).topCandidates(after).build();
+                    } else if (vetoKind == QueryPreprocessorService.NegationKind.VETO_WRITE) {
+                        // W1b safety: VETO_WRITE produced a write-free candidate set but NONE resolve to a
+                        // config for this factory → must NOT keep the original (vetoed write) result in
+                        // bestMatch/topCandidates. Clarify instead (mirrors the isVetoToClarification path above).
+                        IntentMatchResult clar = buildNegationClarificationResult(userInput);
+                        saveIntentMatchRecord(clar, factoryId, userId, sessionId, false);
+                        return attachTiming(clar, startTimeMs, preprocessEndMs);
                     }
+                    // else (NONE/EXCLUDE_CONTENT rerank with unresolvable twin) → keep original;
+                    // component-2 read-rerank is cosmetic, no write-safety risk.
                 }
             } catch (Exception e) {
                 log.warn("[W1b] single-intent negation/twin policy failed, fail-open: input='{}': {}",

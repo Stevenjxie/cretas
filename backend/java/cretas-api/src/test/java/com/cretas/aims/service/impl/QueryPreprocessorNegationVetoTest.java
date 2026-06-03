@@ -113,4 +113,22 @@ class QueryPreprocessorNegationVetoTest {
         var ni = svc.detectNegationSemantics("查订单除了已完成的", kb);
         assertThat(ni.getKind()).isEqualTo(NegationKind.EXCLUDE_CONTENT);
     }
+
+    @Test
+    void politeness_buyongXie_notVeto() {
+        when(kb.detectActionType(contains("查"))).thenReturn(IntentKnowledgeBase.ActionType.QUERY);
+        assertThat(svc.detectNegationVeto("不用谢，查一下库存", kb)).isEqualTo(NegationKind.NONE);
+    }
+
+    @Test
+    void politeness_bubiKeqi_notVeto() {
+        assertThat(svc.detectNegationVeto("不必客气", kb)).isEqualTo(NegationKind.NONE);
+    }
+
+    @Test
+    void negatedReadVerb_stillVetoRead() {
+        // sanity: a genuine negated query (not politeness) still vetoes
+        when(kb.detectActionType(contains("查"))).thenReturn(IntentKnowledgeBase.ActionType.QUERY);
+        assertThat(svc.detectNegationVeto("不用查库存了", kb)).isEqualTo(NegationKind.VETO_READ);
+    }
 }
