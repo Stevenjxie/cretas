@@ -245,3 +245,91 @@ export async function suppressAlert(
     body: JSON.stringify({ suppressUntil }),
   });
 }
+
+// ── #58 Phase 2: 毛利预测 + 毛利 pace 预警 + 目标毛利率 ────────────────────────────
+// margin = 营收 − 食材成本 (COGS). 成本数据不足时金额为 null (绝不返回假毛利)。
+
+export interface CostCoverage {
+  totalDishCount: number;
+  resolvedDishCount: number;
+  pricedDishCount: number;
+  revenueCoverage: number;   // 0..1 — 已配价菜品覆盖的 POS 营收比例
+}
+
+export interface MarginForecastResponse {
+  factoryId: string;
+  storeId: number | null;
+  modelType: string;          // 'linear_trend' | 'mean_fallback' | 'no_data' | 'cost_data_insufficient'
+  anchorDate: string | null;
+  windowDays: number;
+  horizonDays: number;
+  points: ForecastPoint[];    // forecastAmount = 预测毛利 (null when RBAC-stripped)
+  costDataSufficient: boolean;
+  coverage?: CostCoverage;
+  message?: string;
+}
+
+export interface MarginPaceAlertResponse {
+  factoryId: string;
+  storeId: number | null;
+  periodType: string;
+  periodKey: string;
+  alertLevel: 'OK' | 'WARN' | 'CRIT' | 'NO_TARGET' | 'COST_DATA_INSUFFICIENT';
+  marginAmount: number | null;   // 期间累计毛利 (null when stripped / insufficient)
+  cogsAmount: number | null;     // 期间累计食材成本
+  targetMargin: number | null;   // 目标毛利 = 营收目标 × marginRate
+  completionPct: number | null;
+  elapsedPct: number | null;
+  paceGapPct: number | null;
+  marginRate: number;            // 目标毛利率 (0..1)
+  daysElapsed?: number;
+  daysTotal?: number;
+  dataMissing?: boolean;
+  costDataSufficient: boolean;
+  coverage?: CostCoverage;
+  message?: string;
+}
+
+export async function fetchMarginForecast(params?: {
+  horizonDays?: number;
+  windowDays?: number;
+  storeId?: number | null;
+}): Promise<ApiEnvelope<MarginForecastResponse>> {
+  const qp = new URLSearchParams({
+    horizon_days: String(params?.horizonDays ?? 30),
+    window_days: String(params?.windowDays ?? 90),
+  });
+  if (params?.storeId != null) qp.set('store_id', String(params.storeId));
+  return pythonFetch(`${BASE}/margin-forecast?${qp.toString()}`);
+}
+
+export async function fetchMarginPaceAlert(params?: {
+  storeId?: number | null;
+  periodType?: string;
+}): Promise<ApiEnvelope<MarginPaceAlertResponse>> {
+  const qp = new URLSearchParams({
+    period_type: params?.periodType ?? 'month',
+  });
+  if (params?.storeId != null) qp.set('store_id', String(params.storeId));
+  return pythonFetch(`${BASE}/margin-pace-alert?${qp.toString()}`);
+}
+
+export async function getMarginRate(params?: {
+  storeId?: number | null;
+}): Promise<ApiEnvelope<{ storeId: number | null; targetMarginRate: number }>> {
+  const qp = new URLSearchParams();
+  if (params?.storeId != null) qp.set('store_id', String(params.storeId));
+  const suffix = qp.toString() ? `?${qp.toString()}` : '';
+  return pythonFetch(`${BASE}/margin-rate${suffix}`);
+}
+
+export async function setMarginRate(
+  targetMarginRate: number,
+  storeId?: number | null,
+): Promise<ApiEnvelope<{ storeId: number | null; targetMarginRate: number }>> {
+  return pythonFetch(`${BASE}/margin-rate`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ targetMarginRate, storeId: storeId ?? null }),
+  });
+}

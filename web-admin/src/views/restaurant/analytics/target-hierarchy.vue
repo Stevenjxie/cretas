@@ -11,6 +11,7 @@
 import { ref, computed, onMounted, nextTick } from 'vue';
 import { useRouter } from 'vue-router';
 import { useAuthStore } from '@/store/modules/auth';
+import { usePermissionStore } from '@/store/modules/permission';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import echarts from '@/utils/echarts';
 import {
@@ -18,14 +19,22 @@ import {
   decomposeWeeks,
   fetchForecast,
   fetchPaceAlerts,
+  fetchMarginForecast,
+  fetchMarginPaceAlert,
+  getMarginRate,
+  setMarginRate,
   type TargetUpsertRequest,
   type ForecastResponse,
   type PaceAlertResponse,
   type DecomposeWeeksResponse,
+  type MarginForecastResponse,
+  type MarginPaceAlertResponse,
 } from '@/api/smartbi/restaurant-targets';
 
 const router = useRouter();
 const authStore = useAuthStore();
+const permissionStore = usePermissionStore();
+const canViewPrice = computed(() => permissionStore.canViewPrice);
 const factoryId = computed(() => authStore.factoryId ?? '');
 
 // ── #58 Phase 1 state ───────────────────────────────────────────────────────
@@ -47,12 +56,24 @@ const paceLoading = ref(false);
 const pacePeriod = ref<'month' | 'week' | 'day'>('month');
 const paceAlert = ref<PaceAlertResponse | null>(null);
 
+// #58 P2 毛利 (margin) state
+const marginForecast = ref<MarginForecastResponse | null>(null);
+const marginPace = ref<MarginPaceAlertResponse | null>(null);
+const marginRate = ref<number>(0.55);
+const marginRateSaving = ref(false);
+
 const PACE_LEVEL_META: Record<string, { text: string; color: string; tag: string }> = {
   OK: { text: '进度正常', color: '#67c23a', tag: 'success' },
   WARN: { text: '略微落后', color: '#e6a23c', tag: 'warning' },
   CRIT: { text: '明显落后', color: '#f56c6c', tag: 'danger' },
   NO_TARGET: { text: '目标未设置', color: '#909399', tag: 'info' },
+  COST_DATA_INSUFFICIENT: { text: '成本数据不足', color: '#909399', tag: 'info' },
 };
+
+const marginPaceMeta = computed(() => {
+  const lvl = marginPace.value?.alertLevel ?? 'NO_TARGET';
+  return PACE_LEVEL_META[lvl] ?? PACE_LEVEL_META.NO_TARGET;
+});
 
 const paceMeta = computed(() => {
   const lvl = paceAlert.value?.alertLevel ?? 'NO_TARGET';
@@ -104,6 +125,8 @@ async function loadForecast() {
   } finally {
     forecastLoading.value = false;
   }
+  // margin forecast overlays the same chart (separate request so revenue is never blocked)
+  void loadMarginForecast();
 }
 
 async function loadPaceAlert() {
@@ -118,7 +141,65 @@ async function loadPaceAlert() {
   } finally {
     paceLoading.value = false;
   }
+  // margin pace shares the period selector
+  void loadMarginPace();
 }
+
+// #58 P2 — 毛利预测 + 毛利 pace 预警
+async function loadMarginForecast() {
+  if (!factoryId.value) return;
+  try {
+    const res = await fetchMarginForecast({ horizonDays: forecastHorizon.value });
+    marginForecast.value = res.data;
+    await nextTick();
+    renderForecastChart();
+  } catch (e: unknown) {
+    // margin failure must not break the revenue forecast; surface softly
+    const msg = (e instanceof Error ? e.message : String(e)) || '毛利预测失败';
+    ElMessage({ message: msg, type: 'warning', duration: 0, showClose: true });
+  }
+}
+
+async function loadMarginPace() {
+  if (!factoryId.value) return;
+  try {
+    const res = await fetchMarginPaceAlert({ periodType: pacePeriod.value });
+    marginPace.value = res.data;
+  } catch (e: unknown) {
+    const msg = (e instanceof Error ? e.message : String(e)) || '查询毛利进度失败';
+    ElMessage({ message: msg, type: 'warning', duration: 0, showClose: true });
+  }
+}
+
+async function loadMarginRate() {
+  if (!factoryId.value) return;
+  try {
+    const res = await getMarginRate();
+    marginRate.value = res.data.targetMarginRate;
+  } catch {
+    marginRate.value = 0.55; // honest default; never blocks the page
+  }
+}
+
+async function saveMarginRate() {
+  if (!factoryId.value || !canViewPrice.value) return;
+  marginRateSaving.value = true;
+  try {
+    const res = await setMarginRate(marginRate.value, null);
+    marginRate.value = res.data.targetMarginRate;
+    ElMessage({ message: '目标毛利率已更新', type: 'success' });
+    void loadMarginPace(); // recompute pace against the new target
+  } catch (e: unknown) {
+    const msg = (e instanceof Error ? e.message : String(e)) || '保存失败';
+    ElMessage({ message: msg, type: 'error', duration: 0, showClose: true });
+  } finally {
+    marginRateSaving.value = false;
+  }
+}
+
+const marginInsufficient = computed(
+  () => marginForecast.value != null && marginForecast.value.costDataSufficient === false,
+);
 
 function renderForecastChart() {
   const el = document.getElementById('chart-forecast');
@@ -133,22 +214,40 @@ function renderForecastChart() {
   const band = data.points.map(p =>
     p.upperBound != null && p.lowerBound != null ? p.upperBound - p.lowerBound : null,
   );
+  // #58 P2 — overlay 预测毛利 line when cost data is sufficient (align by date).
+  const mf = marginForecast.value;
+  const marginByDate = new Map<string, number | null>();
+  const showMargin = mf != null && mf.costDataSufficient && mf.points.length > 0;
+  if (showMargin) {
+    for (const p of mf!.points) marginByDate.set(p.date, p.forecastAmount);
+  }
+  const marginLine = showMargin ? dates.map(d => marginByDate.get(d) ?? null) : [];
+
+  const legendData = showMargin ? ['预测营收', '预测毛利', '80% 区间'] : ['预测营收', '80% 区间'];
+  const series: Record<string, unknown>[] = [
+    // CI band: invisible lower baseline + translucent stacked band
+    { name: '_lower', type: 'line', data: lo, stack: 'ci', lineStyle: { opacity: 0 }, areaStyle: { opacity: 0 }, symbol: 'none', silent: true },
+    { name: '80% 区间', type: 'line', data: band, stack: 'ci', lineStyle: { opacity: 0 }, areaStyle: { color: 'rgba(64,158,255,0.18)' }, symbol: 'none' },
+    { name: '预测营收', type: 'line', data: fc, smooth: true, lineStyle: { width: 2, color: '#409eff' }, itemStyle: { color: '#409eff' }, symbol: 'circle', symbolSize: 5 },
+  ];
+  if (showMargin) {
+    series.push({
+      name: '预测毛利', type: 'line', data: marginLine, smooth: true,
+      lineStyle: { width: 2, color: '#67c23a' }, itemStyle: { color: '#67c23a' },
+      symbol: 'circle', symbolSize: 5,
+    });
+  }
   chart.setOption({
     tooltip: { trigger: 'axis', confine: true },
-    legend: { data: ['预测营收', '80% 区间'], top: 0 },
+    legend: { data: legendData, top: 0 },
     grid: { left: 60, right: 30, top: 36, bottom: 50 },
     xAxis: { type: 'category', data: dates, axisLabel: { rotate: 40, interval: Math.ceil(dates.length / 12) } },
     yAxis: {
-      type: 'value', name: '营收 (¥)',
+      type: 'value', name: '金额 (¥)',
       axisLabel: { formatter: (v: number) => (v >= 10000 ? (v / 10000).toFixed(1) + '万' : String(Math.round(v))) },
     },
-    series: [
-      // CI band: invisible lower baseline + translucent stacked band
-      { name: '_lower', type: 'line', data: lo, stack: 'ci', lineStyle: { opacity: 0 }, areaStyle: { opacity: 0 }, symbol: 'none', silent: true },
-      { name: '80% 区间', type: 'line', data: band, stack: 'ci', lineStyle: { opacity: 0 }, areaStyle: { color: 'rgba(64,158,255,0.18)' }, symbol: 'none' },
-      { name: '预测营收', type: 'line', data: fc, smooth: true, lineStyle: { width: 2, color: '#409eff' }, itemStyle: { color: '#409eff' }, symbol: 'circle', symbolSize: 5 },
-    ],
-  });
+    series,
+  }, true);
 }
 
 // ── State ─────────────────────────────────────────────────────────────────────
@@ -270,13 +369,15 @@ function onTabChange() {
   if (activeTab.value === 'forecast') {
     if (!forecastData.value) loadForecast();
     if (!paceAlert.value) loadPaceAlert();
+    void loadMarginRate();
   }
 }
 
 defineExpose({
   saving, yearTargetValue, selectedReason, monthlyTargets,
   activeTab, decomposeResult, forecastData, paceAlert,
-  runDecompose, loadForecast, loadPaceAlert,
+  marginForecast, marginPace, marginRate, canViewPrice,
+  runDecompose, loadForecast, loadPaceAlert, loadMarginForecast, loadMarginPace, saveMarginRate,
 });
 </script>
 
@@ -503,6 +604,55 @@ defineExpose({
           <span>已完成 {{ fmtMoney(paceAlert.actualAmount) }}</span>
           <span v-if="paceAlert.dataMissing" class="data-missing">（POS 数据缺失，仅供参考）</span>
         </div>
+
+        <!-- #58 P2 — 毛利进度 (margin = 营收 − 食材成本) -->
+        <el-divider style="margin: 16px 0 12px;">毛利进度</el-divider>
+        <template v-if="marginPace && marginPace.costDataSufficient && marginPace.alertLevel !== 'NO_TARGET'">
+          <div class="pace-level" :style="{ color: marginPaceMeta.color }">
+            <el-tag :type="marginPaceMeta.tag" effect="plain" size="default">毛利 {{ marginPaceMeta.text }}</el-tag>
+            <span class="pace-period">目标毛利率 {{ Math.round((marginPace.marginRate ?? 0.55) * 100) }}%</span>
+          </div>
+          <div class="pace-gauge">
+            <div class="gauge-row">
+              <span class="gauge-label">毛利完成</span>
+              <el-progress
+                :percentage="Math.min(100, Math.round((marginPace.completionPct ?? 0) * 100))"
+                :color="marginPaceMeta.color"
+                :stroke-width="16"
+              />
+            </div>
+          </div>
+          <div v-if="canViewPrice" class="pace-detail">
+            <span>目标毛利 {{ fmtMoney(marginPace.targetMargin) }}</span>
+            <span>已实现毛利 {{ fmtMoney(marginPace.marginAmount) }}</span>
+            <span class="anchor-note">食材成本 {{ fmtMoney(marginPace.cogsAmount) }}</span>
+          </div>
+        </template>
+        <!-- 防呆 Rule 5: 成本数据不足 → 给出下一步动作 (跳配方/菜名匹配) -->
+        <el-alert
+          v-else-if="marginPace && marginPace.costDataSufficient === false"
+          type="warning" :closable="false" show-icon style="margin-top: 4px;"
+        >
+          <template #title>
+            {{ marginPace.message || '成本数据不足，无法计算毛利进度' }}
+          </template>
+          <div class="margin-actions">
+            <el-button size="small" type="primary" link @click="router.push('/restaurant/recipes')">去配方管理补单价</el-button>
+            <el-button size="small" type="primary" link @click="router.push('/restaurant/admin/name-resolution')">去菜品名称匹配</el-button>
+          </div>
+        </el-alert>
+        <span v-else class="anchor-note">毛利进度需先设置营收目标。</span>
+
+        <!-- 目标毛利率设置 (仅有价权角色可改) -->
+        <div v-if="canViewPrice" class="margin-rate-row">
+          <span class="gauge-label">目标毛利率</span>
+          <el-input-number
+            v-model="marginRate" :min="0" :max="1" :step="0.01" :precision="2"
+            size="small" controls-position="right" style="width: 120px;"
+          />
+          <el-button size="small" :loading="marginRateSaving" @click="saveMarginRate">保存</el-button>
+          <span class="anchor-note">目标毛利 = 营收目标 × 该比率</span>
+        </div>
       </div>
       <el-empty
         v-else
@@ -516,7 +666,7 @@ defineExpose({
     <el-card class="section-card">
       <template #header>
         <div class="card-header">
-          滚动营收预测（基于历史趋势，含 80% 置信区间）
+          滚动营收 / 毛利预测（基于历史趋势，含 80% 置信区间）
           <el-select v-model="forecastHorizon" size="small" style="width: 110px; margin-left: 16px;" @change="loadForecast">
             <el-option :value="7" label="未来 7 天" />
             <el-option :value="14" label="未来 14 天" />
@@ -533,9 +683,29 @@ defineExpose({
           <el-tag size="small" :type="forecastData.modelType === 'linear_trend' ? 'success' : 'warning'">
             {{ forecastData.modelType === 'linear_trend' ? '线性趋势模型' : '近期均值（数据较少）' }}
           </el-tag>
+          <el-tag
+            v-if="marginForecast && marginForecast.costDataSufficient"
+            size="small" type="success" effect="plain"
+          >含预测毛利</el-tag>
           <span class="anchor-note">锚定日期 {{ forecastData.anchorDate }} · 拟合窗口 {{ forecastData.windowDays }} 天</span>
         </div>
         <div id="chart-forecast" class="forecast-chart"></div>
+        <!-- 防呆 Rule 2 + Rule 5: 毛利成本数据不足 → 显数字 + 下一步动作 -->
+        <el-alert
+          v-if="marginInsufficient"
+          type="info" :closable="false" show-icon style="margin-top: 8px;"
+        >
+          <template #title>毛利预测：{{ marginForecast?.message || '成本数据不足' }}</template>
+          <div v-if="marginForecast?.coverage" class="anchor-note" style="margin-top: 4px;">
+            已配价 {{ marginForecast.coverage.pricedDishCount }} 道菜 ·
+            覆盖 {{ Math.round((marginForecast.coverage.revenueCoverage ?? 0) * 100) }}% 营收
+            （需 ≥3 道菜且 ≥50% 营收覆盖才计算毛利）
+          </div>
+          <div class="margin-actions">
+            <el-button size="small" type="primary" link @click="router.push('/restaurant/recipes')">去配方管理补单价</el-button>
+            <el-button size="small" type="primary" link @click="router.push('/restaurant/admin/name-resolution')">去菜品名称匹配</el-button>
+          </div>
+        </el-alert>
         <el-empty
           v-if="forecastData && forecastData.points.length === 0"
           :description="forecastData.message || '暂无足够历史数据生成预测'"
@@ -577,4 +747,6 @@ defineExpose({
 .forecast-meta { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
 .anchor-note { color: #909399; font-size: 13px; }
 .forecast-chart { width: 100%; height: 340px; }
+.margin-rate-row { display: flex; align-items: center; gap: 10px; margin-top: 16px; }
+.margin-actions { margin-top: 6px; display: flex; gap: 12px; }
 </style>
