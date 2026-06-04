@@ -56,7 +56,7 @@ _SAMPLE_ANOMALY = {
 
 
 def test_detect_returns_anomalies(patch_pool, monkeypatch):
-    async def fake_detect(pool, factory_id, trailing_n=3, epsilon_pct=5.0):
+    async def fake_detect(pool, factory_id, trailing_n=3, epsilon_pct=5.0, **kw):
         assert factory_id == "F006"
         assert trailing_n == 3
         assert epsilon_pct == 5.0
@@ -78,9 +78,12 @@ def test_detect_returns_anomalies(patch_pool, monkeypatch):
 def test_detect_passes_through_params(patch_pool, monkeypatch):
     captured = {}
 
-    async def fake_detect(pool, factory_id, trailing_n=3, epsilon_pct=5.0):
+    async def fake_detect(pool, factory_id, trailing_n=3, epsilon_pct=5.0,
+                          baseline_mode="count", window_days=90):
         captured["trailing_n"] = trailing_n
         captured["epsilon_pct"] = epsilon_pct
+        captured["baseline_mode"] = baseline_mode
+        captured["window_days"] = window_days
         return []
 
     import smartbi.gold.price_anomaly as mod
@@ -91,10 +94,47 @@ def test_detect_passes_through_params(patch_pool, monkeypatch):
     assert resp.json()["success"] is True
     assert captured["trailing_n"] == 5
     assert captured["epsilon_pct"] == 8.5
+    # defaults: legacy count mode preserved
+    assert captured["baseline_mode"] == "count"
+    assert captured["window_days"] == 90
+
+
+def test_detect_days_mode_params_pass_through(patch_pool, monkeypatch):
+    """baseline_mode=days + window_days forward to the detector (邓总 90 天均价)."""
+    captured = {}
+
+    async def fake_detect(pool, factory_id, trailing_n=3, epsilon_pct=5.0,
+                          baseline_mode="count", window_days=90):
+        captured["baseline_mode"] = baseline_mode
+        captured["window_days"] = window_days
+        return []
+
+    import smartbi.gold.price_anomaly as mod
+    monkeypatch.setattr(mod, "detect_price_anomalies", fake_detect)
+
+    client = TestClient(_make_app())
+    resp = client.get(
+        "/api/smartbi/gold/price-anomaly/detect?baseline_mode=days&window_days=90")
+    assert resp.json()["success"] is True
+    assert captured["baseline_mode"] == "days"
+    assert captured["window_days"] == 90
+
+
+def test_detect_rejects_bad_baseline_mode(patch_pool, monkeypatch):
+    """Out-of-enum baseline_mode → 422 (FastAPI Query regex guard)."""
+    async def fake_detect(pool, factory_id, **kw):
+        return []
+
+    import smartbi.gold.price_anomaly as mod
+    monkeypatch.setattr(mod, "detect_price_anomalies", fake_detect)
+
+    client = TestClient(_make_app())
+    resp = client.get("/api/smartbi/gold/price-anomaly/detect?baseline_mode=bogus")
+    assert resp.status_code == 422
 
 
 def test_detect_strips_money_for_non_price_role(patch_pool, monkeypatch):
-    async def fake_detect(pool, factory_id, trailing_n=3, epsilon_pct=5.0):
+    async def fake_detect(pool, factory_id, trailing_n=3, epsilon_pct=5.0, **kw):
         return [dict(_SAMPLE_ANOMALY)]
 
     import smartbi.gold.price_anomaly as mod
@@ -116,7 +156,7 @@ def test_detect_strips_money_for_non_price_role(patch_pool, monkeypatch):
 
 
 def test_detect_visible_for_price_role(patch_pool, monkeypatch):
-    async def fake_detect(pool, factory_id, trailing_n=3, epsilon_pct=5.0):
+    async def fake_detect(pool, factory_id, trailing_n=3, epsilon_pct=5.0, **kw):
         return [dict(_SAMPLE_ANOMALY)]
 
     import smartbi.gold.price_anomaly as mod

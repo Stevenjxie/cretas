@@ -17,6 +17,7 @@ import org.springframework.stereotype.Component;
 import jakarta.annotation.PostConstruct;
 import java.io.IOException;
 import java.time.LocalDate;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
@@ -1173,6 +1174,97 @@ public class GoldFinanceClient {
             log.debug("Gold alerts factory={} lookback={} kpi={} config_exists={} in {}ms",
                     factoryId, lookbackDays, kpiKind, parsed.get("config_exists"), elapsed);
             return parsed;
+        }
+    }
+
+    // =========================================================================
+    // 供应商价格预警 (邓总点名痛点) — GET /api/smartbi/gold/price-anomaly/detect
+    //
+    // Reuses Wave2 #53's detector (same agg_supplier_price history + ack/累计
+    // 高风险 infra) via its baseline_mode=days mode — 邓总 locked the basis at
+    // "自身 90 天移动均价". This client wraps that endpoint for the AI tool so
+    // 老板 can ask "哪个供应商涨价了" in 智能问答, not only via the price-anomaly board.
+    //
+    // RBAC: deltaPct (率) + direction/riskLevel (威慑信号) stay visible; absolute
+    // prices (oldPrice/newPrice/trailingAvg) are nulled Python-side for non
+    // price-view roles. We forward X-User-Role so procurement roles see amounts
+    // (per feedback_java_python_rbac_role_forward). The detect endpoint emits the
+    // {success, data, message} envelope, so we unwrap to the data list here.
+    // =========================================================================
+
+    /**
+     * Detect supplier price anomalies against a moving-average baseline.
+     *
+     * @param factoryId    tenant id (required)
+     * @param baselineMode "days" (邓总 90-day moving avg) or "count" (legacy trailing-N)
+     * @param windowDays   moving-average window in days for {@code days} mode (1..365);
+     *                     ignored in {@code count} mode
+     * @param epsilonPct   anomaly tolerance ε in percent (0..100); deviations within
+     *                     ±ε of the baseline are NOT flagged
+     * @return the list of anomaly rows (camelCase keys: normalizedName, ingredientName,
+     *         supplierId, supplierName, unit, anomalyDeliveryDate, oldPrice, newPrice,
+     *         trailingAvg, deltaPct, direction, consecutiveAnomalyCount, riskLevel);
+     *         empty list when none / on a {@code success:false} envelope
+     * @throws IOException on transport / non-2xx / parse failure
+     */
+    @SuppressWarnings("unchecked")
+    public List<Map<String, Object>> fetchPriceAnomalies(
+            String factoryId,
+            String baselineMode,
+            int windowDays,
+            double epsilonPct
+    ) throws IOException {
+        if (factoryId == null || factoryId.isEmpty()) {
+            throw new IllegalArgumentException("factoryId required");
+        }
+        String mode = "count".equals(baselineMode) ? "count" : "days";
+        if (windowDays < 1) windowDays = 1;
+        if (windowDays > 365) windowDays = 365;
+        if (epsilonPct < 0.0) epsilonPct = 0.0;
+        if (epsilonPct > 100.0) epsilonPct = 100.0;
+
+        HttpUrl url = HttpUrl.parse(config.getUrl() + "/api/smartbi/gold/price-anomaly/detect")
+                .newBuilder()
+                .addQueryParameter("baseline_mode", mode)
+                .addQueryParameter("window_days", String.valueOf(windowDays))
+                .addQueryParameter("epsilon_pct", String.valueOf(epsilonPct))
+                .build();
+
+        Request.Builder reqBuilder = new Request.Builder().url(url).get();
+        if (!internalSecret.isEmpty()) {
+            reqBuilder.addHeader("X-Internal-Secret", internalSecret);
+            reqBuilder.addHeader("X-Factory-Id", factoryId);
+            // Forward role so Python RBAC keeps absolute prices for price-view roles.
+            String userRole = currentUserRole();
+            if (userRole != null && !userRole.isEmpty()) {
+                reqBuilder.addHeader("X-User-Role", userRole);
+            }
+        }
+        Request req = reqBuilder.build();
+
+        long t0 = System.currentTimeMillis();
+        try (Response resp = http.newCall(req).execute()) {
+            long elapsed = System.currentTimeMillis() - t0;
+            if (!resp.isSuccessful()) {
+                String body = resp.body() != null ? resp.body().string() : "";
+                throw new IOException(
+                        "Gold price-anomaly detect HTTP " + resp.code() + " in " + elapsed
+                                + "ms: " + body);
+            }
+            String body = resp.body() != null ? resp.body().string() : "{}";
+            Map<String, Object> envelope = objectMapper.readValue(body, Map.class);
+            Object ok = envelope.get("success");
+            if (Boolean.FALSE.equals(ok)) {
+                Object msg = envelope.get("message");
+                throw new IOException("Gold price-anomaly detect success=false: " + msg);
+            }
+            Object data = envelope.get("data");
+            List<Map<String, Object>> rows = (data instanceof List)
+                    ? (List<Map<String, Object>>) data
+                    : java.util.Collections.emptyList();
+            log.debug("Gold price-anomaly detect factory={} mode={} window={} eps={} rows={} in {}ms",
+                    factoryId, mode, windowDays, epsilonPct, rows.size(), elapsed);
+            return rows;
         }
     }
 }

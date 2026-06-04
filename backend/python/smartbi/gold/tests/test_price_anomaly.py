@@ -226,6 +226,129 @@ def test_detect_skips_ingredient_with_no_history():
     assert out == []
 
 
+# ---------------------------------------------------------------------------
+# detect_price_anomalies — 90-day moving-average mode (邓总 locked basis)
+# ---------------------------------------------------------------------------
+
+def test_detect_days_mode_baseline_is_90d_moving_avg():
+    """baseline_mode='days', window_days=90: latest vs avg of ALL prior points
+    within the trailing 90 days (邓总: '自身 90 天移动均价').
+
+    洗洁精: latest 150 on 6-3; prior points 110/110/120 all within 90d →
+    moving avg = (110+110+120)/3 = 113.33 → +32.4% > ε → anomaly UP.
+    A 4th point far outside the 90d window (older than 90 days) is EXCLUDED.
+    """
+    history = [
+        {"normalized_name": "洗洁精", "ingredient_name": "洗洁精",
+         "supplier_id": "sup-1", "supplier_name": "鑫农", "unit": "瓶",
+         "delivery_date": date(2026, 6, 3), "unit_price": Decimal("150.0")},
+        {"normalized_name": "洗洁精", "ingredient_name": "洗洁精",
+         "supplier_id": "sup-1", "supplier_name": "鑫农", "unit": "瓶",
+         "delivery_date": date(2026, 5, 20), "unit_price": Decimal("110.0")},
+        {"normalized_name": "洗洁精", "ingredient_name": "洗洁精",
+         "supplier_id": "sup-1", "supplier_name": "鑫农", "unit": "瓶",
+         "delivery_date": date(2026, 5, 1), "unit_price": Decimal("110.0")},
+        {"normalized_name": "洗洁精", "ingredient_name": "洗洁精",
+         "supplier_id": "sup-1", "supplier_name": "鑫农", "unit": "瓶",
+         "delivery_date": date(2026, 4, 1), "unit_price": Decimal("120.0")},
+        # Outside the 90d window from 6-3 (older than 2026-03-05) → excluded.
+        {"normalized_name": "洗洁精", "ingredient_name": "洗洁精",
+         "supplier_id": "sup-1", "supplier_name": "鑫农", "unit": "瓶",
+         "delivery_date": date(2025, 12, 1), "unit_price": Decimal("500.0")},
+    ]
+    pool = _FakePool([history, []])
+    out = asyncio.run(detect_price_anomalies(
+        pool, "F006", baseline_mode="days", window_days=90, epsilon_pct=5.0))
+    assert len(out) == 1
+    a = out[0]
+    # moving avg over the 3 in-window prior points = (110+110+120)/3 = 113.3333
+    assert a["trailingAvg"] == 113.3333
+    assert a["newPrice"] == 150.0
+    assert a["oldPrice"] == 110.0  # immediately-prior price still the latest-1
+    assert a["direction"] == "UP"
+    assert a["deltaPct"] > 5.0
+    # The 500 point (outside window) did NOT inflate the baseline.
+    assert a["trailingAvg"] < 200.0
+
+
+def test_detect_days_mode_skips_when_no_prior_point_in_window():
+    """If the only prior price points are all OLDER than window_days, there is
+    no in-window baseline → skipped (no false anomaly off a stale price)."""
+    history = [
+        {"normalized_name": "陈醋", "ingredient_name": "陈醋",
+         "supplier_id": "sup-7", "supplier_name": "恒顺", "unit": "瓶",
+         "delivery_date": date(2026, 6, 3), "unit_price": Decimal("20.0")},
+        # 6 months old — outside a 90d window
+        {"normalized_name": "陈醋", "ingredient_name": "陈醋",
+         "supplier_id": "sup-7", "supplier_name": "恒顺", "unit": "瓶",
+         "delivery_date": date(2025, 12, 1), "unit_price": Decimal("10.0")},
+    ]
+    pool = _FakePool([history, []])
+    out = asyncio.run(detect_price_anomalies(
+        pool, "F006", baseline_mode="days", window_days=90, epsilon_pct=5.0))
+    assert out == []
+
+
+def test_detect_days_mode_within_tolerance_ignored():
+    """90d moving avg with a tiny wiggle stays within ε → not flagged."""
+    history = [
+        {"normalized_name": "豆腐", "ingredient_name": "豆腐",
+         "supplier_id": "sup-2", "supplier_name": "李记", "unit": "kg",
+         "delivery_date": date(2026, 6, 3), "unit_price": Decimal("4.08")},
+        {"normalized_name": "豆腐", "ingredient_name": "豆腐",
+         "supplier_id": "sup-2", "supplier_name": "李记", "unit": "kg",
+         "delivery_date": date(2026, 5, 20), "unit_price": Decimal("4.00")},
+        {"normalized_name": "豆腐", "ingredient_name": "豆腐",
+         "supplier_id": "sup-2", "supplier_name": "李记", "unit": "kg",
+         "delivery_date": date(2026, 5, 1), "unit_price": Decimal("4.00")},
+    ]
+    pool = _FakePool([history, []])
+    out = asyncio.run(detect_price_anomalies(
+        pool, "F006", baseline_mode="days", window_days=90, epsilon_pct=5.0))
+    assert out == []
+
+
+def test_detect_days_mode_escalates_to_high_on_third_consecutive():
+    """Days-mode anomaly still escalates to HIGH via the ack-count join (威慑)."""
+    history = [
+        {"normalized_name": "洗洁精", "ingredient_name": "洗洁精",
+         "supplier_id": "sup-1", "supplier_name": "鑫农", "unit": "瓶",
+         "delivery_date": date(2026, 6, 3), "unit_price": Decimal("150.0")},
+        {"normalized_name": "洗洁精", "ingredient_name": "洗洁精",
+         "supplier_id": "sup-1", "supplier_name": "鑫农", "unit": "瓶",
+         "delivery_date": date(2026, 5, 20), "unit_price": Decimal("110.0")},
+    ]
+    ack_counts = [{"normalized_name": "洗洁精", "supplier_id": "sup-1",
+                   "prior_count": 2}]
+    pool = _FakePool([history, ack_counts])
+    out = asyncio.run(detect_price_anomalies(
+        pool, "F006", baseline_mode="days", window_days=90, epsilon_pct=5.0))
+    assert len(out) == 1
+    assert out[0]["consecutiveAnomalyCount"] == 3
+    assert out[0]["riskLevel"] == "HIGH"
+
+
+def test_detect_default_mode_is_count_legacy_unchanged():
+    """Default baseline_mode='count' preserves the legacy trailing-N behaviour
+    (so existing callers / the web-admin board are unaffected)."""
+    history = [
+        {"normalized_name": "洗洁精", "ingredient_name": "洗洁精",
+         "supplier_id": "sup-1", "supplier_name": "鑫农", "unit": "瓶",
+         "delivery_date": date(2026, 6, 3), "unit_price": Decimal("150.0")},
+        {"normalized_name": "洗洁精", "ingredient_name": "洗洁精",
+         "supplier_id": "sup-1", "supplier_name": "鑫农", "unit": "瓶",
+         "delivery_date": date(2026, 5, 20), "unit_price": Decimal("110.0")},
+        {"normalized_name": "洗洁精", "ingredient_name": "洗洁精",
+         "supplier_id": "sup-1", "supplier_name": "鑫农", "unit": "瓶",
+         "delivery_date": date(2026, 5, 10), "unit_price": Decimal("110.0")},
+    ]
+    pool = _FakePool([history, []])
+    # No baseline_mode arg → count mode → trailing-2 baseline = 110
+    out = asyncio.run(detect_price_anomalies(pool, "F006", trailing_n=3, epsilon_pct=5.0))
+    assert len(out) == 1
+    assert out[0]["trailingAvg"] == 110.0
+
+
 def test_detect_rejects_none_factory():
     pool = _FakePool([[], []])
     with pytest.raises(ValueError):
