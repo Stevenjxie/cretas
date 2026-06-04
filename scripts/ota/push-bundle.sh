@@ -81,6 +81,12 @@ echo "[push-bundle] 2/5 npx expo config --json > dist/expoConfig.json"
     npx expo config --json > dist/expoConfig.json
 )
 
+# 2.5 Normalize Windows backslash asset paths in metadata.json. `expo export`
+# on Windows emits `assets\\<hash>`; the Linux OTA server treats backslash as a
+# literal filename char → FileNotFoundError → "Bundle metadata corrupted" 500.
+echo "[push-bundle] 2.5 normalizing metadata.json path separators (Windows safe)"
+"${PYTHON:-python}" "$(dirname "$0")/_fix_meta_slashes.py" frontend/CretasFoodTrace/dist/metadata.json
+
 # Sanity: expected files must exist.
 for f in frontend/CretasFoodTrace/dist/metadata.json frontend/CretasFoodTrace/dist/expoConfig.json; do
     if [[ ! -f "$f" ]]; then
@@ -110,17 +116,18 @@ rm "$TARBALL"
 
 # --- 5. register via admin API ------------------------------------------------
 
-echo "[push-bundle] 5/5 POST $SERVER_API/api/ota/admin/register"
-HTTP_CODE="$(curl -s -o /tmp/ota-register-resp.json -w "%{http_code}" \
-    -X POST "$SERVER_API/api/ota/admin/register" \
-    -H "Authorization: Bearer $ADMIN_TOKEN" \
-    -H "Content-Type: application/json" \
-    -d "{\"runtimeVersion\":\"$RUNTIME_VERSION\",\"channel\":\"$CHANNEL\",\"timestamp\":\"$TIMESTAMP\"}")"
+# Register over SSH on the server itself: 47:8083 is firewalled to the 139
+# gateway only (a dev box hitting it directly times out / exit 28), but
+# localhost on 47 always reaches it.
+echo "[push-bundle] 5/5 register via $SERVER localhost:8083"
+HTTP_CODE="$(ssh "$SERVER" "curl -s -o /dev/null -w '%{http_code}' \
+    -X POST http://localhost:8083/api/ota/admin/register \
+    -H 'Authorization: Bearer $ADMIN_TOKEN' \
+    -H 'Content-Type: application/json' \
+    -d '{\"runtimeVersion\":\"$RUNTIME_VERSION\",\"channel\":\"$CHANNEL\",\"timestamp\":\"$TIMESTAMP\"}'")"
 
 if [[ "$HTTP_CODE" != "200" ]]; then
     echo "ERROR: /admin/register returned $HTTP_CODE" >&2
-    cat /tmp/ota-register-resp.json >&2 || true
-    echo >&2
     exit 4
 fi
 
