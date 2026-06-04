@@ -21,6 +21,7 @@ import SupplierManagementScreen from "../../screens/management/SupplierManagemen
 import CustomerManagementScreen from "../../screens/management/CustomerManagementScreen";
 import ShipmentManagementScreen from "../../screens/management/ShipmentManagementScreen";
 import ConversionRateScreen from "../../screens/management/ConversionRateScreen";
+import MaterialConversionDetailScreen from "../../screens/management/MaterialConversionDetailScreen";
 import DisposalRecordManagementScreen from "../../screens/management/DisposalRecordManagementScreen";
 import EquipmentManagementScreen from "../../screens/processing/EquipmentManagementScreen";
 import EquipmentDetailScreen from "../../screens/processing/EquipmentDetailScreen";
@@ -276,6 +277,13 @@ export function FAManagementStackNavigator() {
             name="ConversionRate"
             component={ConversionRateScreen}
             options={{ title: "转换率配置" }}
+          />
+
+          {/* 单原料换算配置详情 (工厂专属) — FA 栈此前漏注册, 点原料打不开, 2026-06-04 补 */}
+          <Stack.Screen
+            name="MaterialConversionDetail"
+            component={MaterialConversionDetailScreen}
+            options={{ title: "换算配置" }}
           />
 
           {/* 质检项配置 (工厂专属) */}

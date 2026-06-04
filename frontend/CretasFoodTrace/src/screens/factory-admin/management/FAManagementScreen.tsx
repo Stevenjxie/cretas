@@ -68,14 +68,7 @@ export function FAManagementScreen() {
               onPress={() => navigation.navigate('UnifiedDeviceManagement')}
             />
             )}
-            {!isRestaurantMode && (
-            <GridItem
-              icon="chart-line"
-              title={t('management.equipmentAnalysis', '设备分析')}
-              color="#667eea"
-              onPress={() => navigation.navigate('EquipmentAnalysis')}
-            />
-            )}
+            {/* 设备分析已移除 (2026-06-04): /equipment/analysis/* 后端未实现 (404) */}
             {!isRestaurantMode && (
             <GridItem
               icon="clipboard-check"
