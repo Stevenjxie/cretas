@@ -181,8 +181,8 @@ function resetChatSession(): void {
 
 // P1-B (2026-06-03): 餐饮租户专属快捷问题目录 — 按 老板 高频维度分组展示.
 // 仅当 authStore.factoryType === 'RESTAURANT' 时生效; 工厂租户不受影响.
-// 覆盖 gold 后端已支持的维度: 营收/菜品/门店/评价/渠道/客单价/峰值时段.
-// 不含"商品分类占比"(gold 后端无此数据, 会 fall-through).
+// 覆盖 gold 后端已支持的维度: 营收/菜品/门店/评价/渠道/客单价.
+// 不含"商品分类占比"/"峰值时段"(gold 后端无此数据/无执行器, 会 fall-through).
 interface RestaurantQuickGroup {
   label: string;
   questions: string[];
@@ -191,7 +191,7 @@ const RESTAURANT_QUICK_GROUPS: RestaurantQuickGroup[] = [
   {
     label: '经营总览',
     questions: [
-      '总营业额', '今年营收', '本季度营收', '营收趋势', '峰值时段',
+      '总营业额', '今年营收', '本季度营收', '营收趋势',
     ],
   },
   {
