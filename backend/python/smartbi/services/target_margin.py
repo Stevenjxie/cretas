@@ -9,7 +9,7 @@ COGS = Σ (POS 售出数量 × agg_restaurant_product_cost.food_cost), 按工厂
 诚实降级 (#57 ↔ #61 依赖): 若某租户 #61 菜名解析未跑 / 配方未配价 → COGS 严重偏低 →
 毛利虚高。两个判据都满足才认为成本数据足够:
   - priced_dish_count >= MIN_PRICED_DISH_COUNT (3)
-  - revenue_coverage  >= MIN_REVENUE_COVERAGE (0.50)
+  - revenue_coverage  >= MIN_REVENUE_COVERAGE (0.80)
 不足 → 毛利/COGS 金额全部 None (绝不返回假 0 / 虚高毛利) + honest message 带覆盖数字。
 
 复用 P1:
@@ -43,8 +43,12 @@ logger = logging.getLogger(__name__)
 DEFAULT_TARGET_MARGIN_RATE = Decimal("0.55")
 
 # Graceful-degradation thresholds (#61 dependency). BOTH must hold.
+# 0.80 (not 0.50): below this too much period revenue is uncosted (COGS=0 for unpriced
+# dishes) → the pace margin is materially overstated. 0.80 bounds the uncovered-revenue
+# (overstate) fraction to <=20% (review #58-P2 IMPORTANT-1). Forecast path is additionally
+# IQR-cleaned; pace path sums COGS directly, so the gate is what protects it.
 MIN_PRICED_DISH_COUNT = 3
-MIN_REVENUE_COVERAGE = 0.50
+MIN_REVENUE_COVERAGE = 0.80
 
 _Q4 = Decimal("0.0001")
 

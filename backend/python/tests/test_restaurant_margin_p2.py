@@ -146,9 +146,9 @@ def test_assess_cost_coverage_low_revenue_coverage():
         total_dish_count=10, resolved_dish_count=8, priced_dish_count=5,
         period_revenue=Decimal("100000"), priced_revenue=Decimal("30000"),
     )
-    # coverage 0.30 < MIN_REVENUE_COVERAGE (0.50) → insufficient
+    # coverage 0.30 < MIN_REVENUE_COVERAGE (0.80) → insufficient
     assert cov.revenue_coverage == pytest.approx(0.3, abs=1e-6)
-    assert MIN_REVENUE_COVERAGE == pytest.approx(0.5)
+    assert MIN_REVENUE_COVERAGE == pytest.approx(0.8)
     assert assess_cost_coverage(cov) is False
 
 
