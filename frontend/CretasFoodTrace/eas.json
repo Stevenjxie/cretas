@@ -14,12 +14,18 @@
     "preview": {
       "distribution": "internal",
       "channel": "staging",
+      "env": {
+        "ENVFILE": ".env.test"
+      },
       "android": {
         "buildType": "apk"
       }
     },
     "production": {
       "channel": "production",
+      "env": {
+        "ENVFILE": ".env.production"
+      },
       "android": {
         "buildType": "apk"
       }

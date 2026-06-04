@@ -31,7 +31,7 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.cretaceousfuture",
-      "buildNumber": "2",
+      "buildNumber": "3",
       "infoPlist": {
         "NSMicrophoneUsageDescription": "允许白垩纪AI Agent使用麦克风进行语音输入和语音识别"
       }
