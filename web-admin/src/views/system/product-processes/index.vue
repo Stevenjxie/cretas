@@ -16,6 +16,7 @@ import {
   type ProductWorkProcessItem
 } from '@/api/processProduction';
 import { getOperatorUsers } from '@/api/factory';
+import WorkProcessAIChatPanel from '@/views/system/components/WorkProcessAIChatPanel.vue';
 
 const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
@@ -68,6 +69,13 @@ interface PendingSort { type: 'sort' }
 interface PendingResponsible { type: 'responsible'; serverId: number; workerId: number | null; productTypeId: string; workProcessId: string }
 type PendingOp = PendingAdd | PendingRemove | PendingSort | PendingResponsible;
 const pendingOps = ref<PendingOp[]>([]);
+
+interface AIDraftStep {
+  workProcessId: string;
+  processName?: string;
+  processOrder?: number;
+  responsibleWorkerId?: number | null;
+}
 
 /** Convert server items to DraftItems */
 function toDraftItems(items: ProductWorkProcessItem[]): DraftItem[] {
@@ -361,6 +369,98 @@ function handleAdd(wp: WorkProcessItem) {
   markDirty({ type: 'add', wp });
 }
 
+function normalizeAIDraftStep(value: unknown): AIDraftStep | null {
+  if (!isObjectRecord(value)) {
+    return null;
+  }
+
+  const workProcessId = typeof value.workProcessId === 'string' ? value.workProcessId : '';
+  if (!workProcessId) {
+    return null;
+  }
+
+  const responsibleWorkerId = typeof value.responsibleWorkerId === 'number'
+    ? value.responsibleWorkerId
+    : null;
+  return {
+    workProcessId,
+    processName: typeof value.processName === 'string' ? value.processName : undefined,
+    processOrder: typeof value.processOrder === 'number' ? value.processOrder : undefined,
+    responsibleWorkerId,
+  };
+}
+
+function handleApplyAIDraft(payload: Record<string, unknown>): void {
+  const rawDraft = payload.draft;
+  if (!Array.isArray(rawDraft)) {
+    ElMessage.warning('AI 草稿格式不正确，请重新生成');
+    return;
+  }
+
+  const draftSteps = rawDraft
+    .map(normalizeAIDraftStep)
+    .filter((row): row is AIDraftStep => row !== null)
+    .sort((a, b) => (a.processOrder ?? 999) - (b.processOrder ?? 999));
+
+  const missingNames: string[] = [];
+  const processById = new Map(allProcesses.value.map(process => [process.id, process]));
+  for (const step of draftSteps) {
+    const wp = processById.get(step.workProcessId);
+    if (!wp) {
+      missingNames.push(step.processName || step.workProcessId);
+      continue;
+    }
+
+    let draftItem = draftLinked.value.find(d => d.workProcessId === step.workProcessId);
+    if (!draftItem) {
+      handleAdd(wp);
+      draftItem = draftLinked.value.find(d => d.workProcessId === step.workProcessId);
+    }
+    if (draftItem && step.responsibleWorkerId != null) {
+      handleResponsibleWorkerChange(draftItem, step.responsibleWorkerId);
+    }
+  }
+
+  if (draftSteps.length > 0) {
+    const aiOrder = new Map(draftSteps.map((step, index) => [step.workProcessId, index]));
+    const ordered = [...draftLinked.value]
+      .sort((a, b) => {
+        const ai = aiOrder.get(a.workProcessId);
+        const bi = aiOrder.get(b.workProcessId);
+        if (ai == null && bi == null) return a.processOrder - b.processOrder;
+        if (ai == null) return 1;
+        if (bi == null) return -1;
+        return ai - bi;
+      })
+      .map((item, index) => ({ ...item, processOrder: index + 1 }));
+    const orderChanged = ordered.some((item, index) => item.workProcessId !== draftLinked.value[index]?.workProcessId);
+    draftLinked.value = ordered;
+    if (orderChanged) {
+      markDirty({ type: 'sort' });
+    }
+  }
+
+  const rawMissing = payload.missingProcesses;
+  if (Array.isArray(rawMissing)) {
+    for (const item of rawMissing) {
+      if (isObjectRecord(item)) {
+        const name = item.name;
+        if (typeof name === 'string') missingNames.push(name);
+      }
+    }
+  }
+
+  if (missingNames.length > 0) {
+    ElMessage.warning(`以下工序未在本厂工序库找到，请先去工序管理新建：${[...new Set(missingNames)].join('、')}`);
+  } else {
+    ElMessage.success('AI 草稿已应用，请检查后点击保存');
+  }
+}
+
+function isObjectRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object';
+}
+
 /** Remove a process from draft (C4 draft remove) */
 function handleRemove(item: DraftItem) {
   draftLinked.value = draftLinked.value.filter(d => d.draftKey !== item.draftKey);
@@ -529,6 +629,16 @@ async function handleRefresh() {
             已配 {{ draftLinked.length }} 道工序
           </el-text>
         </div>
+
+        <WorkProcessAIChatPanel
+          v-if="factoryId && canWrite"
+          :factory-id="factoryId"
+          :product-type-id="selectedProductId"
+          :endpoint="`/${factoryId}/config/v2/ai/chat`"
+          module-code="product_work_process_config"
+          :disabled="!selectedProductId"
+          @apply-draft="handleApplyAIDraft"
+        />
       </el-card>
 
       <!-- 右：C2 — 左右两栏布局 (工序流程 | 可添加工序池) -->
