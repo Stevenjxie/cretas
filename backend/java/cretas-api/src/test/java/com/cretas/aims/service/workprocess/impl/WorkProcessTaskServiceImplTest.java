@@ -1,6 +1,7 @@
 package com.cretas.aims.service.workprocess.impl;
 
 import com.cretas.aims.dto.WorkProcessTaskDTO;
+import com.cretas.aims.entity.ProductWorkProcess;
 import com.cretas.aims.entity.WorkProcess;
 import com.cretas.aims.entity.workprocess.WorkProcessTask;
 import com.cretas.aims.repository.ProductWorkProcessRepository;
@@ -9,6 +10,7 @@ import com.cretas.aims.repository.workprocess.WorkProcessTaskRepository;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -19,6 +21,8 @@ import java.util.Map;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
 
 /**
@@ -228,5 +232,81 @@ class WorkProcessTaskServiceImplTest {
 
         assertNull(dto.getExpectedByproducts(), "definition 为 null 时 expectedByproducts 应 null 不抛 NPE");
         assertNull(dto.getProcessName(), "processName 同样应为 null");
+    }
+
+    // ==================== M1: spawnTasks 按工序默认责任人写 assignedTo ====================
+
+    @Test
+    @DisplayName("spawnTasks: 工序模板有 responsibleWorkerId → 对应任务 assignedTo 携带责任人 id")
+    void spawnTasks_setsAssignedToFromTemplate() {
+        String productTypeId = "PT-001";
+        Long batchId = 999L;
+        String wpId1 = "wp-spawn-1";
+        String wpId2 = "wp-spawn-2";
+
+        // template1 有责任人 1615, template2 无责任人
+        ProductWorkProcess template1 = ProductWorkProcess.builder()
+                .id(10L)
+                .factoryId(FACTORY_ID)
+                .productTypeId(productTypeId)
+                .workProcessId(wpId1)
+                .processOrder(1)
+                .isActive(true)
+                .responsibleWorkerId(1615L)
+                .build();
+
+        ProductWorkProcess template2 = ProductWorkProcess.builder()
+                .id(11L)
+                .factoryId(FACTORY_ID)
+                .productTypeId(productTypeId)
+                .workProcessId(wpId2)
+                .processOrder(2)
+                .isActive(true)
+                .responsibleWorkerId(null)
+                .build();
+
+        WorkProcess def1 = WorkProcess.builder()
+                .id(wpId1)
+                .factoryId(FACTORY_ID)
+                .processName("滚揉")
+                .build();
+
+        WorkProcess def2 = WorkProcess.builder()
+                .id(wpId2)
+                .factoryId(FACTORY_ID)
+                .processName("包装")
+                .build();
+
+        when(taskRepository.existsByFactoryIdAndProductionBatchId(FACTORY_ID, batchId))
+                .thenReturn(false);
+        when(productWorkProcessRepository
+                .findByFactoryIdAndProductTypeIdOrderByProcessOrderAsc(FACTORY_ID, productTypeId))
+                .thenReturn(List.of(template1, template2));
+        when(workProcessRepository.findByFactoryIdAndIdIn(eq(FACTORY_ID), any()))
+                .thenReturn(List.of(def1, def2));
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<WorkProcessTask>> captor = ArgumentCaptor.forClass(List.class);
+        when(taskRepository.saveAll(captor.capture()))
+                .thenAnswer(inv -> inv.getArgument(0));
+
+        service.spawnTasks(FACTORY_ID, batchId, productTypeId);
+
+        List<WorkProcessTask> saved = captor.getValue();
+        assertEquals(2, saved.size(), "应 spawn 2 道工序任务");
+
+        WorkProcessTask task1 = saved.stream()
+                .filter(t -> wpId1.equals(t.getWorkProcessId()))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("找不到 wpId1 的任务"));
+        WorkProcessTask task2 = saved.stream()
+                .filter(t -> wpId2.equals(t.getWorkProcessId()))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("找不到 wpId2 的任务"));
+
+        assertEquals(1615L, task1.getAssignedTo(),
+                "template1 responsibleWorkerId=1615 → task1.assignedTo 应为 1615");
+        assertNull(task2.getAssignedTo(),
+                "template2 responsibleWorkerId=null → task2.assignedTo 应为 null");
     }
 }

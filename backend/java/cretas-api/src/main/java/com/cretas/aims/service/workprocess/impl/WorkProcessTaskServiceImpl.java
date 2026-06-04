@@ -105,6 +105,7 @@ public class WorkProcessTaskServiceImpl implements WorkProcessTaskService {
                             .status(Status.PENDING)
                             .plannedUnit(unit)
                             .estimatedMinutes(estMinutes)
+                            .assignedTo(template.getResponsibleWorkerId())
                             .createdAt(now)
                             .updatedAt(now)
                             .build();
