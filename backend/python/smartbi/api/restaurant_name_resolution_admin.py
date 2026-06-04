@@ -31,7 +31,7 @@ from pydantic import BaseModel
 
 from smartbi.canonical.provenance._admin_auth import require_admin
 from smartbi.gold import pos_name_resolver as resolver
-from smartbi.gold.pos_name_resolver import _normalize_name, _pos_dish_surrogate_bigint
+from smartbi.gold.pos_name_resolver import _pos_dish_surrogate_bigint
 
 logger = logging.getLogger(__name__)
 
@@ -123,9 +123,11 @@ async def confirm_binding(request: Request, body: ConfirmRequest) -> Dict[str, A
     factory_id = require_admin(request, action_name=f"{_ACTION}（确认绑定）")
     if not factory_id:
         raise HTTPException(status_code=400, detail="缺少工厂上下文")
-    pos_name = (body.posName or "").strip()
+    # Preserve posName verbatim — it must stay byte-identical to dim_product.normalized_name
+    # (the ETL alias lookup key); do NOT strip/normalize the persisted key.
+    pos_name = body.posName or ""
     product_type_id = (body.productTypeId or "").strip()
-    if not pos_name or not product_type_id:
+    if not pos_name.strip() or not product_type_id:
         raise HTTPException(status_code=400, detail="posName 和 productTypeId 必填")
 
     cretas, smartbi = await _pools()
@@ -247,7 +249,9 @@ async def coverage_stats(request: Request) -> Dict[str, Any]:
             """,
             factory_id,
         )
-    distinct = {_normalize_name(r["normalized_name"]) for r in pos_rows if r["normalized_name"]}
+    # Coverage mirrors the ETL: match RAW normalized_name against RAW product_types.name /
+    # RAW alias pos_name (NOT _normalize_name — that would under-count Latin/whitespace names).
+    distinct = {r["normalized_name"] for r in pos_rows if r["normalized_name"]}
     distinct.discard("")
     total = len(distinct)
 
@@ -266,7 +270,7 @@ async def coverage_stats(request: Request) -> Dict[str, Any]:
             except Exception:
                 alias_rows = []
         resolved_keys = {r["name"] for r in pt_rows} | {r["pos_name"] for r in alias_rows}
-        matched = sum(1 for nn in distinct if nn in resolved_keys)
+        matched = sum(1 for raw in distinct if raw in resolved_keys)
 
     coverage = round(matched / total * 100, 1) if total else 0.0
     return {

@@ -161,14 +161,23 @@ async def test_L1_product_types_exact(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_L2_normalized_match_auto_writes_alias(monkeypatch):
+async def test_L2_normalized_match_persists_RAW_verbatim_key(monkeypatch):
+    """REGRESSION (review BLOCKING): the persisted alias key MUST be the VERBATIM
+    dim_product.normalized_name (the exact key the finance ETL Stage 3 alias fallback
+    looks up: WHERE pos_name = ANY(raw normalized_name)). If the resolver lowercases it
+    via _normalize_name, the ETL lookup misses and the cost card stays ¥0 while the
+    resolver falsely reports success. _normalize_name is for fuzzy comparison ONLY.
+
+    Scenario: POS normalized_name is verbatim-cased 'Kung Pao Chicken'; the product name
+    differs only by case ('KUNG PAO CHICKEN') so it matches via L2 normalized comparison
+    (NOT L1 raw-exact) — exactly the path where the old code lowercased the key.
+    """
     cretas, smartbi = FakeConn(), FakeConn()
     _wire(
         cretas, smartbi,
-        # POS normalized "kung pao chicken" vs product_types name "Kung Pao Chicken"
-        pos_rows=[{"normalized_name": "kung pao chicken", "display_name": "Kung Pao Chicken",
+        pos_rows=[{"normalized_name": "Kung Pao Chicken", "display_name": "Kung Pao Chicken",
                    "revenue": 300.0, "qty": 5.0, "bills": 4}],
-        product_types=[{"id": "pt-2", "name": "Kung Pao Chicken"}],
+        product_types=[{"id": "pt-2", "name": "KUNG PAO CHICKEN"}],
         existing_aliases=[],
     )
     result = await R.resolve_factory_pos_names(make_pool(cretas), make_pool(smartbi), FACTORY)
@@ -176,8 +185,9 @@ async def test_L2_normalized_match_auto_writes_alias(monkeypatch):
     assert result["queued"] == 0
     aliases = _alias_upserts(cretas)
     assert len(aliases) == 1
-    # alias key MUST be the normalized_name (ETL lookup key)
-    assert "kung pao chicken" in aliases[0]
+    # alias key MUST be the RAW verbatim normalized_name, NOT the _normalize_name'd form
+    assert "Kung Pao Chicken" in aliases[0]
+    assert "kung pao chicken" not in aliases[0]  # must NOT persist the lowercased key
     assert "pt-2" in aliases[0]
 
 
@@ -241,8 +251,11 @@ async def test_L3_no_match_queues_without_candidate_and_revenue_at_risk(monkeypa
 @pytest.mark.asyncio
 async def test_L4_transitive_over_alias_inherits(monkeypatch):
     cretas, smartbi = FakeConn(), FakeConn()
-    # An existing confirmed alias "宫保鸡" → pt-9. New POS name "宫保 鸡" normalizes
-    # to the same key "宫保鸡" (after WS collapse) → transitive inherit at 0.76 (< 0.85 → queue).
+    # A confirmed alias "宫保鸡" → pt-9 exists. New POS normalized_name "宫保鸡 " (trailing
+    # space) is a DISTINCT RAW key — the finance ETL keys verbatim, so it would MISS the
+    # "宫保鸡" alias and stay unresolved. It normalizes to the same fuzzy form, so L4
+    # transitive SUGGESTS pt-9 and QUEUES it for admin confirm — it is NOT auto-resolved
+    # (the raw keys differ; only an explicit confirm writes the "宫保鸡 " alias the ETL needs).
     _wire(
         cretas, smartbi,
         pos_rows=[{"normalized_name": "宫保鸡 ", "display_name": "宫保 鸡",
@@ -251,9 +264,12 @@ async def test_L4_transitive_over_alias_inherits(monkeypatch):
         existing_aliases=[{"pos_name": "宫保鸡", "product_type_id": "pt-9"}],
     )
     result = await R.resolve_factory_pos_names(make_pool(cretas), make_pool(smartbi), FACTORY)
-    # normalized("宫保鸡 ") == "宫保鸡" == existing alias key → L0 exact actually catches this.
-    # So this is L0. assert resolved.
-    assert result["alreadyResolved"] == 1
+    # Distinct raw key → not L0/L1; L4 transitive over the near alias → queued with pt-9 hint.
+    assert result["alreadyResolved"] == 0
+    assert result["queued"] == 1
+    queued = _queue_upserts(smartbi)
+    assert len(queued) == 1
+    assert "pt-9" in queued[0]   # transitive candidate inherited from the near alias
 
 
 @pytest.mark.asyncio

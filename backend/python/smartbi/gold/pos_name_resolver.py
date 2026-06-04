@@ -209,22 +209,27 @@ async def resolve_factory_pos_names(cretas_pool, smartbi_pool, factory_id: str) 
         logger.info("[pos-name-resolver] no POS rows for factory=%s", factory_id)
         return result
 
-    # De-dup by normalized_name (the ETL key), aggregating revenue/qty/bills.
-    by_norm: Dict[str, Dict[str, Any]] = {}
+    # De-dup by the RAW normalized_name — this is the EXACT key the finance ETL
+    # Stage 3 alias fallback looks up (WHERE pos_name = ANY(dim_product.normalized_name)).
+    # The persisted alias/queue key MUST be byte-identical to dim_product.normalized_name
+    # or the ETL lookup misses and the cost card stays ¥0. _normalize_name is used ONLY
+    # for the fuzzy comparison side (L2/L3/L4), never for the persisted key.
+    by_raw: Dict[str, Dict[str, Any]] = {}
     for r in pos_rows:
-        nn = _normalize_name(r["normalized_name"] or r["display_name"] or "")
-        if not nn:
+        raw_key = r["normalized_name"] or r["display_name"]
+        if not raw_key:
             continue
-        agg = by_norm.setdefault(nn, {
-            "normalized_name": nn,
-            "display_name": r["display_name"] or nn,
+        agg = by_raw.setdefault(raw_key, {
+            "raw_key": raw_key,
+            "norm_key": _normalize_name(raw_key),
+            "display_name": r["display_name"] or raw_key,
             "revenue": 0.0, "qty": 0.0, "bills": 0,
         })
         agg["revenue"] += float(r["revenue"] or 0)
         agg["qty"] += float(r["qty"] or 0)
         agg["bills"] += int(r["bills"] or 0)
 
-    distinct = list(by_norm.values())
+    distinct = list(by_raw.values())
     result["totalPosNames"] = len(distinct)
 
     # 2. Load product_types + existing aliases from cretas.
@@ -258,32 +263,33 @@ async def resolve_factory_pos_names(cretas_pool, smartbi_pool, factory_id: str) 
     to_queue: List[Dict[str, Any]] = []
 
     for d in distinct:
-        nn = d["normalized_name"]
+        raw_key = d["raw_key"]      # persisted alias/queue key (== dim_product.normalized_name)
+        norm = d["norm_key"]        # fuzzy-comparison form only, never persisted
 
-        # L0: already has an alias (exact key).
-        if nn in alias_exact:
+        # L0: already has an alias (exact RAW key — same form the alias table stores).
+        if raw_key in alias_exact:
             result["alreadyResolved"] += 1
             continue
-        # L1: product_types exact name == normalized_name (ETL primary path).
-        if nn in pt_exact:
+        # L1: product_types exact name == raw normalized_name (ETL primary path).
+        if raw_key in pt_exact:
             result["alreadyResolved"] += 1
             continue
-        # L2: normalized product name equals.
-        if nn in pt_norm_exact:
-            c = pt_norm_exact[nn]
-            to_write_alias.append((nn, c["id"], L2_AUTO_CONFIDENCE, "fuzzy_match"))
+        # L2: normalized product name equals normalized key — persist the RAW key.
+        if norm in pt_norm_exact:
+            c = pt_norm_exact[norm]
+            to_write_alias.append((raw_key, c["id"], L2_AUTO_CONFIDENCE, "fuzzy_match"))
             continue
 
-        # L3: difflib best fuzzy match against product candidates.
-        best_id, best_name, ratio = _best_fuzzy_match(nn, candidates)
+        # L3: difflib best fuzzy match against normalized product candidates.
+        best_id, best_name, ratio = _best_fuzzy_match(norm, candidates)
         if best_id is not None and ratio >= AUTO_ACCEPT_THRESHOLD:
-            to_write_alias.append((nn, best_id, round(ratio, 2), "fuzzy_match"))
+            to_write_alias.append((raw_key, best_id, round(ratio, 2), "fuzzy_match"))
             continue
 
-        # L4: transitive-over-alias (near-key match to a confirmed alias).
+        # L4: transitive-over-alias (near-key match to a confirmed alias, normalized).
         t_id, t_ratio = None, 0.0
         for akey, apt in alias_norm.items():
-            r2 = SequenceMatcher(None, nn, akey).ratio()
+            r2 = SequenceMatcher(None, norm, akey).ratio()
             if r2 > t_ratio:
                 t_ratio, t_id = r2, apt
         transitive_conf = (
@@ -309,9 +315,9 @@ async def resolve_factory_pos_names(cretas_pool, smartbi_pool, factory_id: str) 
     # 4. Write aliases (cretas).
     if to_write_alias:
         async with cretas_pool.acquire() as cretas:
-            for nn, pt_id, conf, source in to_write_alias:
+            for raw_key, pt_id, conf, source in to_write_alias:
                 await _upsert_alias(
-                    cretas, factory_id, nn, pt_id, conf, source, "resolver",
+                    cretas, factory_id, raw_key, pt_id, conf, source, "resolver",
                 )
         result["resolvedAuto"] = len(to_write_alias)
 
@@ -323,7 +329,7 @@ async def resolve_factory_pos_names(cretas_pool, smartbi_pool, factory_id: str) 
                 await _set_tenant(conn, factory_id)
                 for q in to_queue:
                     await _upsert_queue_row(
-                        conn, factory_id, q["normalized_name"], q["display_name"],
+                        conn, factory_id, q["raw_key"], q["display_name"],
                         q["bills"], q["revenue"],
                         q["best_candidate_id"], q["best_candidate_name"],
                         q["best_confidence"],
