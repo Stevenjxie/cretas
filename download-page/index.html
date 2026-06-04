@@ -175,15 +175,19 @@
       hint.innerHTML = 'iOS 版正在上架中，请稍后再来<br>安卓 / 鸿蒙用户可直接下载安装';
     }
   } else {
-    // 桌面：隐藏按钮，显示二维码引导手机扫码
-    title.textContent = '手机扫码下载';
-    btn.style.display = 'none';
-    document.getElementById('ver').style.display = 'block';
+    // 桌面：直接点击下载 APK（主操作），二维码降级为"或手机扫码"次要选项
+    title.textContent = '下载安卓版';
+    btn.href = APK_URL;
+    btn.setAttribute('download', '');
+    btnText.textContent = '立即下载 APK';
+    androidsteps.style.display = 'block';
+    hint.innerHTML = '点击直接下载安装包 <b>v' + APP_VERSION + '</b><br>下载后传到安卓手机安装（已装旧版自动覆盖更新）';
     qrbox.style.display = 'flex';
     var pageUrl = location.href.split('#')[0];
     document.getElementById('qrimg').src =
       'https://api.qrserver.com/v1/create-qr-code/?size=376x376&margin=0&data=' + encodeURIComponent(pageUrl);
-    hint.innerHTML = '用微信 / 浏览器扫一扫，在手机上打开本页面下载';
+    document.querySelector('#qrbox .qr-tip').textContent = '或：手机扫码直接下载';
+    document.querySelector('#qrbox .qr-sub').textContent = '用手机相机 / 微信扫一扫';
   }
 })();
 </script>

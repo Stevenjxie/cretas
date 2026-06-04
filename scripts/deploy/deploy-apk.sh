@@ -37,6 +37,7 @@ APK_PATH=""
 DRY_RUN=0
 WITH_SERVER_COPY=0
 SKIP_PAGE_DEPLOY=0
+PAGE_ONLY=0
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -45,6 +46,7 @@ while [ $# -gt 0 ]; do
     --dry-run) DRY_RUN=1; shift ;;
     --with-server-copy) WITH_SERVER_COPY=1; shift ;;
     --skip-page-deploy) SKIP_PAGE_DEPLOY=1; shift ;;
+    --page-only) PAGE_ONLY=1; shift ;;   # 仅重写+部署下载页, 跳过 APK/签名/OSS/CDN (APK 未变时改页面用)
     *) echo "❌ 未知参数: $1"; echo "用法见脚本头部注释"; exit 1 ;;
   esac
 done
@@ -70,6 +72,7 @@ log "📌 版本 (build.gradle versionName): v$VER"
 log "   APK 文件名: $APK_FILE"
 log "   CDN 直链:   $CDN_URL"
 
+if [ "$PAGE_ONLY" = "0" ]; then
 # ==================== 1. 定位 / 构建 APK ====================
 DEFAULT_APK="$ANDROID_DIR/app/build/outputs/apk/release/app-release.apk"
 if [ "$DO_BUILD" = "1" ]; then
@@ -121,6 +124,7 @@ if [ "$APK_SHA" != "$EXPECTED_SHA" ]; then
    绝不能分发 — 老用户将无法覆盖更新。检查 keystore.properties 是否在构建机生效。"
 fi
 log "   ✓ 签名 = release key, 通过硬闸"
+fi  # PAGE_ONLY=0: 步骤 1-2 (APK 定位/构建 + 签名硬闸) 仅完整发布
 
 # ==================== 3. 重写下载页 (单一事实源) ====================
 log "📝 [page] 重写 download-page/*.html 版本文案..."
@@ -154,6 +158,7 @@ if [ "$DRY_RUN" = "1" ]; then
   exit 0
 fi
 
+if [ "$PAGE_ONLY" = "0" ]; then
 # ==================== 5. 上传 OSS (CDN 回源) ====================
 command -v "$OSSUTIL" >/dev/null 2>&1 || die "$OSSUTIL 未安装 (OSS). 见 .claude/rules/server-operations.md"
 [ -f "$OSS_CONFIG" ] || die "找不到 OSS 配置 $OSS_CONFIG (账号 A/C, 需对 $OSS_BUCKET 有写权限)"
@@ -177,6 +182,7 @@ if [ "$WITH_SERVER_COPY" = "1" ]; then
   [ "$REMOTE_MD5" = "$LOCAL_MD5" ] || die "服务器副本 md5 不匹配 (local=$LOCAL_MD5 remote=$REMOTE_MD5)"
   log "   ✓ 服务器副本 md5 一致 ($LOCAL_MD5)"
 fi
+fi  # PAGE_ONLY=0: 步骤 5-6 (OSS 上传 + 服务器副本) 仅完整发布
 
 # ==================== 7. 部署下载页到 139 ====================
 if [ "$SKIP_PAGE_DEPLOY" = "0" ]; then
@@ -190,6 +196,7 @@ if [ "$SKIP_PAGE_DEPLOY" = "0" ]; then
   log "   ✓ 下载页已部署"
 fi
 
+if [ "$PAGE_ONLY" = "0" ]; then
 # ==================== 8. CDN 刷新 (best-effort, latest 别名) ====================
 if command -v aliyun >/dev/null 2>&1; then
   log "♻️  [cdn] 刷新 latest 别名缓存..."
@@ -211,9 +218,10 @@ if [ -n "$CLEN" ] && [ "$CLEN" != "$APK_SIZE_BYTES" ]; then
   die "CDN Content-Length($CLEN) != 本地 APK($APK_SIZE_BYTES) — 上传可能截断"
 fi
 log "   ✓ CDN 可下且大小一致"
+fi  # PAGE_ONLY=0: CDN 刷新 + 可下验证仅完整发布
 
 echo ""
-log "✅ 发布完成 v$VER"
+log "$([ "$PAGE_ONLY" = "1" ] && echo "✅ 下载页已更新部署 (page-only) v$VER" || echo "✅ 发布完成 v$VER")"
 log "   下载页:   https://download.${CDN_DOMAIN#dl.}/   (即 download.cretaceousfuture.com)"
 log "   APK 直链: $CDN_URL"
 echo ""
