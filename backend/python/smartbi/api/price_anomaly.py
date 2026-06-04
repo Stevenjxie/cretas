@@ -81,8 +81,13 @@ def _parse_date(s: Any):
 @router.get("/gold/price-anomaly/detect")
 async def detect(
     request: Request,
-    trailing_n: int = Query(3, ge=1, le=20, description="trailing 均价窗口 N"),
+    trailing_n: int = Query(3, ge=1, le=20, description="count 模式: trailing 均价窗口 N"),
     epsilon_pct: float = Query(5.0, ge=0.0, le=100.0, description="异常容限 ε (百分比)"),
+    baseline_mode: str = Query(
+        "count", pattern="^(count|days)$",
+        description="基准模式: count=trailing-N 次均价 (legacy); days=N 天移动均价 (邓总锁定 90 天)"),
+    window_days: int = Query(
+        90, ge=1, le=365, description="days 模式: 移动均价窗口天数 (邓总锁定 90)"),
 ) -> Dict[str, Any]:
     """检测同类物料相邻采购单价异常。
 
@@ -90,6 +95,10 @@ async def detect(
       {normalizedName, ingredientName, supplierId, supplierName, unit,
        anomalyDeliveryDate, oldPrice, newPrice, trailingAvg, deltaPct,
        direction, consecutiveAnomalyCount, riskLevel}
+
+    baseline_mode='days' + window_days=90 = 邓总锁定的"自身 90 天移动均价"基准
+    (供应商涨价预警)。复用 #53 检测内核 (同 agg_supplier_price 历史 + ack/累计高风险),
+    不分叉新 detector。
     """
     factory_id = _get_factory_id(request)
     if not factory_id:
@@ -104,6 +113,7 @@ async def detect(
     try:
         data = await mod.detect_price_anomalies(
             pool, factory_id, trailing_n=trailing_n, epsilon_pct=epsilon_pct,
+            baseline_mode=baseline_mode, window_days=window_days,
         )
     except ValueError as e:
         return {"success": False, "message": str(e)}

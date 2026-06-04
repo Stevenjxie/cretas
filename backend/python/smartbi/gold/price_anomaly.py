@@ -28,6 +28,7 @@ factory_id 静默零结果。Java↔Python parity: 金额/率 → float (JSON-sa
 from __future__ import annotations
 
 import logging
+from datetime import timedelta
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Any, List, Optional
 
@@ -47,6 +48,13 @@ _HIGH_RISK_THRESHOLD = 3
 # 默认配置。
 DEFAULT_TRAILING_N = 3
 DEFAULT_EPSILON_PCT = 5.0
+
+# 基准窗口模式。
+#   "count" — 取 latest 之前最多 trailing_n 次的均价 (legacy, 默认; web-admin 板 + #53 原行为)。
+#   "days"  — 取 latest 之前 window_days 天内全部点的均价 (邓总锁定: "自身 90 天移动均价")。
+BASELINE_MODE_COUNT = "count"
+BASELINE_MODE_DAYS = "days"
+DEFAULT_WINDOW_DAYS = 90
 
 
 def _to_float(v: Any) -> Optional[float]:
@@ -82,6 +90,8 @@ async def detect_price_anomalies(
     factory_id: str,
     trailing_n: int = DEFAULT_TRAILING_N,
     epsilon_pct: float = DEFAULT_EPSILON_PCT,
+    baseline_mode: str = BASELINE_MODE_COUNT,
+    window_days: int = DEFAULT_WINDOW_DAYS,
 ) -> List[dict]:
     """检测同类物料相邻采购单价异常。
 
@@ -92,9 +102,15 @@ async def detect_price_anomalies(
 
     算法 (per (food, supplier) group):
         latest        = 最近一次单价
-        trailing_avg  = latest 之前最多 trailing_n 次的均价
+        trailing_avg  = 基准均价, 取决于 baseline_mode:
+            "count" — latest 之前最多 trailing_n 次的均价 (legacy, web-admin 板默认)
+            "days"  — latest 之前 window_days 天内全部点的均价
+                      (邓总锁定: "自身 90 天移动均价"; 跨同类物料相邻采购单价比较)
         delta_pct     = (latest - trailing_avg) / trailing_avg * 100  (Rule 10: Decimal)
         anomaly       当 |delta_pct| > epsilon_pct
+
+    两种 mode 共享同一 SQL (按 (food, supplier) date-DESC 全量拉取), 仅基准点的
+    选取方式不同 — 不分叉成两个 detector (邓总护城河复用 #53 检测内核 + ack/累计高风险)。
 
     Rule 6: 拒绝 None factory_id。
     """
@@ -104,6 +120,10 @@ async def detect_price_anomalies(
         )
     if trailing_n < 1:
         trailing_n = 1
+    if window_days < 1:
+        window_days = 1
+    mode = baseline_mode if baseline_mode in (BASELINE_MODE_COUNT, BASELINE_MODE_DAYS) \
+        else BASELINE_MODE_COUNT
     eps = Decimal(str(epsilon_pct))
 
     async with pool.acquire() as conn:
@@ -139,7 +159,23 @@ async def detect_price_anomalies(
             if latest_price is None:
                 continue
             latest_price = Decimal(str(latest_price))
-            baseline_pts = pts[1: 1 + trailing_n]
+            # Baseline-point selection — pts[1:] are the prior points (date-DESC).
+            #   count mode: the immediately-prior `trailing_n` points.
+            #   days  mode: every prior point whose delivery_date is within
+            #              [latest_date - window_days, latest_date) — i.e. the
+            #              moving-average window 邓总 locked at 90 days.
+            if mode == BASELINE_MODE_DAYS:
+                latest_date = latest["delivery_date"]
+                cutoff = (latest_date - timedelta(days=window_days)
+                          if latest_date is not None else None)
+                baseline_pts = [
+                    p for p in pts[1:]
+                    if p["delivery_date"] is not None
+                    and cutoff is not None
+                    and cutoff <= p["delivery_date"] < latest_date
+                ]
+            else:
+                baseline_pts = pts[1: 1 + trailing_n]
             baseline_prices = [
                 Decimal(str(p["unit_price"]))
                 for p in baseline_pts
@@ -216,8 +252,9 @@ async def detect_price_anomalies(
     # Stable ordering: HIGH risk first, then larger |delta| first.
     out.sort(key=lambda a: (a["riskLevel"] != "HIGH", -abs(a.get("deltaPct") or 0)))
     logger.info(
-        "[price-anomaly] detected %d anomalies for factory=%s (trailing_n=%d eps=%s%%)",
-        len(out), factory_id, trailing_n, epsilon_pct,
+        "[price-anomaly] detected %d anomalies for factory=%s "
+        "(mode=%s trailing_n=%d window_days=%d eps=%s%%)",
+        len(out), factory_id, mode, trailing_n, window_days, epsilon_pct,
     )
     return out
 
