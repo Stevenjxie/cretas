@@ -245,6 +245,8 @@ export const menuConfig: MenuItem[] = [
       // -- 数据与系统 (admin) --
       { path: '/restaurant/data-completeness', title: '数据完整度', icon: '', module: 'restaurant', groupLabel: '数据与系统' },
       { path: '/restaurant/admin/etl-status', title: 'ETL 状态', icon: '', module: 'restaurant',
+        roles: ['factory_super_admin', 'platform_admin', 'permission_admin'] },
+      { path: '/restaurant/admin/name-resolution', title: '菜品名称匹配', icon: '', module: 'restaurant',
         roles: ['factory_super_admin', 'platform_admin', 'permission_admin'] }
     ]
   },
