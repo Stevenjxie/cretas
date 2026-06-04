@@ -142,3 +142,33 @@ metrics:
     playbook: review_score_decline
     description_zh: 5 星评价占比的环比变化, < -5pp 触发严重告警
     requires_temporal: true
+
+  # ── Phase 1 #60 诊断指标深化 (gold-available, 无 #57 依赖) ──
+
+  ingredient_waste_rate:
+    name_zh: 食材损耗率
+    name_en: Ingredient Waste Rate
+    formula: wastage_cost / (food_cost_purchase + wastage_cost)
+    threshold_source: "benchmarks/{sub_sector}.yaml#metrics.waste_loss_rate"
+    higher_is_worse: true  # 损耗越高越糟
+    playbook: ingredient_waste_rate_high
+    description_zh: 报废损耗金额占（采购食材成本 + 损耗）的比例
+    notes: |
+      值以百分比 (0-100) 传入引擎, 与 benchmarks waste_loss_rate range 单位一致
+      (沿用 food_cost_ratio 的 *100 约定). 数据来源 gold 层 wastage_cost +
+      food_cost_purchase, 无 #57 BOM 成本卡依赖.
+
+  avg_ticket_vs_target:
+    name_zh: 客单价达标率
+    name_en: Avg Ticket vs Target
+    formula: actual_avg_ticket / target_avg_ticket - 1.0
+    threshold_inline:
+      healthy: ">= -0.05"
+      warning: ">= -0.15 and < -0.05"
+      critical: "< -0.15"
+    higher_is_worse: false  # 低于目标越多越糟
+    playbook: avg_ticket_below_target
+    description_zh: 实际客单价相对目标客单价的偏差率 (低于目标为负值)
+    notes: |
+      target_avg_ticket 来自 DynamicConfigResolver avg_ticket_target 配置,
+      未配置时回退子行业 benchmark average_ticket 中位数. 偏差 < -15% 触发严重告警.

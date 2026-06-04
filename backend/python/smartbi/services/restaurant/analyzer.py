@@ -135,6 +135,13 @@ class FinancialMetrics:
     gross_margin_folded: Optional[float] = None     # (revenue - food_cost) / revenue * 100
     gross_margin_unfolded: Optional[float] = None   # (gross_revenue - food_cost) / gross_revenue * 100
 
+    # Phase 1 #60: 诊断指标深化 (gold-available, 无 #57 依赖)
+    # 仅在源数据存在时计算; None 表示数据缺失, 不参与诊断.
+    ingredient_waste_rate: Optional[float] = None    # 报废损耗 / (采购食材成本 + 损耗) * 100 (百分比)
+    actual_avg_ticket: Optional[float] = None        # 实际客单价 (元)
+    target_avg_ticket: Optional[float] = None        # 目标客单价 (config → benchmark median)
+    avg_ticket_vs_target: Optional[float] = None      # actual / target - 1.0 (偏差率)
+
     def to_dict(self) -> dict:
         return {
             "revenue": self.revenue,
@@ -154,6 +161,10 @@ class FinancialMetrics:
             "grossRevenue": self.gross_revenue,
             "grossMarginFolded": self.gross_margin_folded,
             "grossMarginUnfolded": self.gross_margin_unfolded,
+            "ingredientWasteRate": self.ingredient_waste_rate,
+            "actualAvgTicket": self.actual_avg_ticket,
+            "targetAvgTicket": self.target_avg_ticket,
+            "avgTicketVsTarget": self.avg_ticket_vs_target,
         }
 
 
@@ -888,7 +899,55 @@ class RestaurantAnalyzerV2:
                 if prev_food and prev_food > 0 and food_cost is not None:
                     metrics.food_cost_change_pct = (food_cost - prev_food) / prev_food
 
+        # ── Phase 1 #60: 食材损耗率 + 客单价达标率 ──
+        # GUARD: 源数据缺失时不计算, 不写入 metric_dict (引擎跳过未知 key, 无错误).
+        # ingredient_waste_rate 以百分比 (0-100) 计算, 与 benchmarks waste_loss_rate
+        # 单位及 food_cost_ratio 的 *100 约定一致.
+        wastage_cost = self._safe_float(current.get("wastage_cost"))
+        food_cost_purchase = self._safe_float(current.get("food_cost_purchase"))
+        if wastage_cost is not None and food_cost_purchase is not None:
+            denom = food_cost_purchase + wastage_cost
+            if denom > 0:
+                metrics.ingredient_waste_rate = wastage_cost / denom * 100
+
+        # avg_ticket_vs_target: target 来自 DynamicConfigResolver (config → benchmark median).
+        actual_avg_ticket = self._safe_float(current.get("actual_avg_ticket"))
+        if actual_avg_ticket is not None and actual_avg_ticket > 0:
+            metrics.actual_avg_ticket = actual_avg_ticket
+            target = self._resolve_target_avg_ticket()
+            if target is not None and target > 0:
+                metrics.target_avg_ticket = target
+                metrics.avg_ticket_vs_target = actual_avg_ticket / target - 1.0
+
         return metrics
+
+    def _resolve_target_avg_ticket(self) -> Optional[float]:
+        """解析目标客单价: config override → 子行业 benchmark average_ticket 中位数.
+
+        优先 DynamicConfigResolver 的 restaurant.avg_ticket_target 配置 (门店/工厂级),
+        未配置时回退到 diagnostics_engine 已加载的子行业 benchmark average_ticket median.
+        Phase 1 #60.
+        """
+        benchmark_median = self._benchmark_avg_ticket_median()
+        try:
+            cfg = self.config_resolver.resolve(
+                "restaurant.avg_ticket_target",
+                yaml_fallback=benchmark_median,
+            )
+            target = self._safe_float(cfg.value)
+            if target is not None and target > 0:
+                return target
+        except Exception as e:  # noqa: BLE001 — config 解析失败回退 benchmark
+            logger.debug(f"avg_ticket_target 配置解析失败, 回退 benchmark: {e}")
+        return benchmark_median
+
+    def _benchmark_avg_ticket_median(self) -> Optional[float]:
+        """读取子行业 benchmark average_ticket 中位数 (diagnostics_engine 已合并加载)."""
+        bm = (
+            self.diagnostics_engine._benchmarks.get("metrics", {})
+            .get("average_ticket", {})
+        )
+        return self._safe_float(bm.get("median"))
 
     def _diagnostics_metric_dict(self, metrics: FinancialMetrics) -> dict[str, float]:
         """Build the snake_case ratio dict that DiagnosticsEngine /
@@ -909,6 +968,11 @@ class RestaurantAnalyzerV2:
             metric_dict["restaurant_net_margin"] = metrics.restaurant_net_margin
         if metrics.cost_rigidity is not None:
             metric_dict["cost_rigidity"] = metrics.cost_rigidity
+        # Phase 1 #60: only add when source data present (engine skips unknown keys).
+        if metrics.ingredient_waste_rate is not None:
+            metric_dict["ingredient_waste_rate"] = metrics.ingredient_waste_rate
+        if metrics.avg_ticket_vs_target is not None:
+            metric_dict["avg_ticket_vs_target"] = metrics.avg_ticket_vs_target
         return metric_dict
 
     def _run_diagnostics(self, metrics: FinancialMetrics) -> list:
