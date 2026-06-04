@@ -266,71 +266,9 @@ export function FAManagementScreen() {
           </View>
         </View>
 
-        {/* 系统配置 */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>{t('management.systemConfig')}</Text>
-          <View style={styles.grid}>
-            <GridItem
-              icon="form-select"
-              title={t('schemaConfig.title')}
-              color="#667eea"
-              onPress={() => navigation.navigate('SchemaConfig')}
-            />
-            <GridItem
-              icon="view-grid-plus"
-              title={t('management.pageEditor', '页面编辑器')}
-              color="#5a4ad1"
-              testID="fa-page-editor-btn"
-              onPress={() => navigation.navigate('PageEditor', { pageType: 'home' })}
-            />
-            <GridItem
-              icon="file-document-multiple-outline"
-              title={t('formTemplate.title', '表单模版')}
-              color="#722ed1"
-              onPress={() => navigation.navigate('FormTemplateList')}
-            />
-            <GridItem
-              icon="code-braces"
-              title={t('management.ruleConfiguration')}
-              color="#9c27b0"
-              onPress={() => navigation.navigate('RuleConfiguration')}
-            />
-            <GridItem
-              icon="robot"
-              title={t('aiBusinessInit.title')}
-              color="#1890ff"
-              onPress={() => navigation.navigate('AIBusinessInit')}
-            />
-            <GridItem
-              icon="barcode"
-              title={t('encodingRuleConfig.title')}
-              color="#fa8c16"
-              onPress={() => navigation.navigate('EncodingRuleConfig')}
-            />
-            {!isRestaurantMode && (
-            <GridItem
-              icon="clipboard-check-outline"
-              title={t('qualityCheckItemConfig.title')}
-              color="#52c41a"
-              onPress={() => navigation.navigate('QualityCheckItemConfig')}
-            />
-            )}
-            {!isRestaurantMode && (
-            <GridItem
-              icon="clipboard-flow-outline"
-              title={t('management.sopConfig')}
-              color="#13c2c2"
-              onPress={() => navigation.navigate('SopConfig')}
-            />
-            )}
-            <GridItem
-              icon="robot-outline"
-              title={t('management.intentView', 'AI意图查看')}
-              color="#eb2f96"
-              onPress={() => navigation.navigate('IntentView')}
-            />
-          </View>
-        </View>
+        {/* 系统配置分区已移除 (2026-06-04): 表单配置/页面编辑器/表单模版/规则配置/
+            AI智能初始化/编码规则/质检项配置/SOP配置/AI意图查看 均为管理员在 web 后台
+            使用的配置工具, 不适合手机端 (路由仍在 navigator 注册, 仅从菜单隐藏). */}
 
         {/* 其他 */}
         <View style={styles.section}>
