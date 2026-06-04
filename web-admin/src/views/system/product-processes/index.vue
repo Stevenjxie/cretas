@@ -9,7 +9,6 @@ import {
   getActiveWorkProcesses,
   getProductWorkProcesses,
   createProductWorkProcess,
-  generateTasksFromProduct,
   deleteProductWorkProcess,
   batchSortProductWorkProcesses,
   updateProductWorkProcess,
@@ -125,7 +124,7 @@ async function handleResponsibleWorkerChange(item: ProductWorkProcessItem, value
   if (!factoryId.value) return;
   const responsibleWorkerId = (value == null) ? -1 : value;
   try {
-    const res = await updateProductWorkProcess(factoryId.value, item.id, { responsibleWorkerId });
+    const res = await updateProductWorkProcess(factoryId.value, item.id, { productTypeId: item.productTypeId, workProcessId: item.workProcessId, responsibleWorkerId });
     if (res.success && res.data) {
       // Update local ref to reflect server state
       item.responsibleWorkerId = res.data.responsibleWorkerId ?? null;
@@ -227,33 +226,7 @@ const selectedProductName = computed(() => {
   return products.value.find(p => p.id === selectedProductId.value)?.name || '';
 });
 
-async function handleGenerateTasks() {
-  if (!factoryId.value || !selectedProductId.value) return;
-  if (linkedProcesses.value.length === 0) {
-    ElMessage.warning('请先为产品关联工序');
-    return;
-  }
-  try {
-    await ElMessageBox.confirm(
-      `确定为「${selectedProductName.value}」生成 ${linkedProcesses.value.length} 道工序任务？`,
-      '生成工序任务',
-      { type: 'info' }
-    );
-    const res = await generateTasksFromProduct(factoryId.value, {
-      productTypeId: selectedProductId.value,
-      sourceCustomerName: selectedProductName.value,
-    });
-    if (res.success && res.data) {
-      ElMessage.success(`已生成 ${res.data.length} 个工序任务`);
-    } else {
-      ElMessage.error(res.message || '生成失败');
-    }
-  } catch (e) {
-    // UX polish (2026-05-20): ElMessageBox throws 'cancel' on user dismissal (skip);
-    // interceptor handles 4xx/5xx with backend message — fallback only for network errors.
-    if (e !== 'cancel') handleCatchError(e, '生成失败');
-  }
-}
+
 </script>
 
 <template>
@@ -299,14 +272,6 @@ async function handleGenerateTasks() {
         <template #header>
           <div class="card-header">
             <span style="font-weight: 600">工序流程（按顺序执行）</span>
-            <el-button
-              v-if="canWrite && selectedProductId && linkedProcesses.length > 0"
-              type="success"
-              size="small"
-              @click="handleGenerateTasks"
-            >
-              生成工序任务
-            </el-button>
           </div>
         </template>
 
