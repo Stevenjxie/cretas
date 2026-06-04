@@ -2,7 +2,7 @@
 --   1) RESTAURANT_VIP_GUEST_QUERY     → restaurant_vip_guest_query     (重点客户/VIP)
 --   2) RESTAURANT_AT_RISK_GUEST_QUERY  → restaurant_at_risk_guest_query  (即将流失/好久没来)
 --
--- flyway 版本 20260921.04 (Phase 1 预分配块 _01/_02/_04; _03/_05/_06 留给 Phase 2).
+-- flyway 版本 20260922.04 (自 20260921 上移避 sister 撞车; Phase 1 块 _01/_02/_04; _03/_05/_06 留 Phase 2).
 -- 幂等: ON CONFLICT (intent_code) DO UPDATE, 可重复执行.
 -- business_type='RESTAURANT' 让业态门控放行 (制造业态工厂不进此意图).
 -- keywords ::jsonb cast 与既有迁移一致 (keywords 列跨环境 text/json/jsonb 不一致).

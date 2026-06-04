@@ -48,6 +48,10 @@ public class RestaurantCrmController {
     private final RestaurantCrmService crmService;
     private final RestaurantGuestRepository guestRepository;
 
+    /** For detaching managed entities before in-place phone masking (see maskGuestPhoneInPlace). */
+    @jakarta.persistence.PersistenceContext
+    private jakarta.persistence.EntityManager entityManager;
+
     /** 可见完整手机号的管理角色（其余脱敏）。 */
     private static final Set<String> PHONE_UNMASK_ROLES = Set.of(
             "factory_super_admin", "platform_admin", "restaurant_manager");
@@ -199,6 +203,11 @@ public class RestaurantCrmController {
 
     private void maskGuestPhoneInPlace(RestaurantGuest g) {
         if (g != null && g.getPhone() != null) {
+            // Detach BEFORE mutating: these are managed JPA entities from the read query.
+            // Under OSIV (open-in-view=true by default) a later flush would otherwise
+            // persist the masked "138****1234" back to restaurant_guests.phone (data
+            // corruption). Detaching makes the mask a response-only transformation.
+            entityManager.detach(g);
             g.setPhone(com.cretas.aims.service.restaurant.impl.RestaurantCrmServiceImpl.maskPhone(g.getPhone()));
         }
     }

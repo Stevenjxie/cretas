@@ -1,8 +1,8 @@
 -- #59 Phase 1 — 餐饮 CRM 散客表 (cretas_db)
 -- 邓总模型: 散客首次登记不计业绩 → 营销员维护 → 第二次复购才计业绩 → 重点客户(来3次+)必须进包厢.
 --
--- flyway 版本 20260921.01: origin/main 已应用 max 20260920.01 (out-of-order=false, 必须更大).
---   部署前已 collision-check (无 V20260921 占用). _01/_02/_04 是 Phase 1 预分配块,
+-- flyway 版本 20260922.01: 原取 20260921 但 sister session 已合并 V20260921_01 到 main
+--   (cross-session 撞车), 上移到 20260922 (Java flyway max 现为 20260921.01). _01/_02/_04 是 Phase 1 预分配块,
 --   _03/_05/_06 保留给 Phase 2 (阶梯提成 rep_summary/commissions).
 -- 对应实体: com.cretas.aims.entity.restaurant.RestaurantGuest.
 

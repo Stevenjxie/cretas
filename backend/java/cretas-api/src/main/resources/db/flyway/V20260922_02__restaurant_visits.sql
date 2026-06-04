@@ -2,7 +2,7 @@
 -- 每次到访一条. rep_id 是到访时绑定营销员的快照 (换绑后不回写历史, 保证 Phase 2 业绩归属正确).
 -- is_qualifying = (visit_number >= 2): 首次到访不计业绩, 第2次复购起计.
 --
--- flyway 版本 20260921.02 (见 V20260921_01 头注释). 对应实体:
+-- flyway 版本 20260922.02 (见 V20260922_01 头注释; 自 20260921 上移避 sister 撞车). 对应实体:
 --   com.cretas.aims.entity.restaurant.RestaurantVisit.
 
 CREATE TABLE IF NOT EXISTS restaurant_visits (
