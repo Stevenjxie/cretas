@@ -52,6 +52,20 @@ public interface SalesService {
      */
     com.cretas.aims.dto.inventory.FinanceCostBreakdown getOrderCostBreakdown(String factoryId, String orderId);
 
+    /**
+     * B3 售价趋势 — 财审辅助决策.
+     *
+     * <p>返回该工厂该产品最近 N 笔成交销售订单的单价明细（非草稿/取消状态），
+     * 供财务审核人员快速判断本单售价是否偏离历史水平。
+     *
+     * @param factoryId     工厂 ID
+     * @param productTypeId 产品类型 ID
+     * @param limit         最多返回条数（建议 8–12）
+     * @return 按下单日期倒序的价格趋势 DTO 列表
+     */
+    java.util.List<com.cretas.aims.dto.inventory.SalesPriceTrendDTO> getProductPriceTrend(
+            String factoryId, String productTypeId, int limit);
+
     SalesOrder updateSalesOrder(String factoryId, String orderId, UpdateSalesOrderRequest request);
 
     SalesOrder cancelOrder(String factoryId, String orderId);

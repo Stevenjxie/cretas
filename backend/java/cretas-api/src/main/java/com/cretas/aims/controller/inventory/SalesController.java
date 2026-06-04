@@ -331,6 +331,27 @@ public class SalesController {
         return ApiResponse.success("查询成功", breakdown);
     }
 
+    /**
+     * B3 售价趋势 — 财审辅助决策.
+     *
+     * <p>返回该产品最近 N 笔成交销售订单的行级单价，
+     * 供财务审核人员快速判断本单售价是否偏离历史水平。
+     *
+     * @param productTypeId 产品类型 ID (query param)
+     * @param limit         最多返回条数，默认 10，最大 20
+     */
+    @GetMapping("/orders/price-trend")
+    @Operation(summary = "产品售价趋势 (B3 财审辅助)",
+            description = "返回该产品最近 N 笔成交单价，供财务审核对比判断本单价格是否异常")
+    @RequirePermission({"finance:read_write", "finance:read", "sales:read_write"})
+    public ApiResponse<java.util.List<com.cretas.aims.dto.inventory.SalesPriceTrendDTO>> getProductPriceTrend(
+            @PathVariable @NotBlank String factoryId,
+            @RequestParam @NotBlank String productTypeId,
+            @RequestParam(defaultValue = "10") int limit) {
+        var trend = salesService.getProductPriceTrend(factoryId, productTypeId, limit);
+        return ApiResponse.success("查询成功", trend);
+    }
+
     // ==================== 发货/出库 ====================
 
     @PostMapping("/deliveries")

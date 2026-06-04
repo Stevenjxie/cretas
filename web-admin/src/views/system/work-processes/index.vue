@@ -3,12 +3,12 @@ import { ref, computed, onMounted, reactive } from 'vue';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { Plus, Search, Refresh } from '@element-plus/icons-vue';
+import { Plus, Search, Refresh, Warning } from '@element-plus/icons-vue';
 import { handleCatchError } from '@/utils/errorToast';
 import {
   getWorkProcesses, createWorkProcess, updateWorkProcess,
-  deleteWorkProcess, toggleWorkProcessStatus,
-  type WorkProcessItem
+  deleteWorkProcess, toggleWorkProcessStatus, getWorkProcessDuplicates,
+  type WorkProcessItem, type WorkProcessDuplicateGroup
 } from '@/api/processProduction';
 
 const authStore = useAuthStore();
@@ -78,6 +78,51 @@ const formRules = {
     }
   ]
 };
+
+// C5: duplicate detection
+const dupGroups = ref<WorkProcessDuplicateGroup[]>([]);
+const dupLoading = ref(false);
+const dupPanelVisible = ref(false);
+
+async function handleDetectDuplicates() {
+  if (!factoryId.value) return;
+  dupLoading.value = true;
+  dupPanelVisible.value = true;
+  try {
+    const response = await getWorkProcessDuplicates(factoryId.value);
+    if (response.success && response.data) {
+      dupGroups.value = response.data;
+      if (dupGroups.value.length === 0) {
+        ElMessage.success('未检测到重复工序');
+        dupPanelVisible.value = false;
+      }
+    }
+  } catch (e) {
+    handleCatchError(e, '检测重复工序失败');
+    dupPanelVisible.value = false;
+  } finally {
+    dupLoading.value = false;
+  }
+}
+
+async function handleDupToggle(member: WorkProcessItem) {
+  if (!factoryId.value) return;
+  const action = member.isActive ? '停用' : '启用';
+  try {
+    await ElMessageBox.confirm(
+      `确定${action}重复工序「${member.processName}」（ID: ${member.id}）？`,
+      `${action}确认`,
+      { type: 'warning' }
+    );
+    await toggleWorkProcessStatus(factoryId.value, member.id);
+    ElMessage.success(`已${action}`);
+    // Refresh both main list and dup panel
+    await loadData();
+    await handleDetectDuplicates();
+  } catch (e) {
+    if (e !== 'cancel') handleCatchError(e, `${action}失败`);
+  }
+}
 
 onMounted(() => {
   loadData();
@@ -192,10 +237,63 @@ function handlePageChange(page: number) {
         </div>
         <div class="toolbar-right">
           <el-button :icon="Refresh" @click="loadData" />
+          <!-- C5: duplicate detection -->
+          <el-button :icon="Warning" :loading="dupLoading" @click="handleDetectDuplicates">
+            检测重复工序
+          </el-button>
           <el-button v-if="canWrite" type="primary" :icon="Plus" @click="handleAdd">
             新增工序
           </el-button>
         </div>
+      </div>
+    </el-card>
+
+    <!-- C5: Duplicate clusters panel -->
+    <el-card v-if="dupPanelVisible" style="margin-top: 16px; border: 1px solid #faad14">
+      <template #header>
+        <div style="display: flex; justify-content: space-between; align-items: center">
+          <span style="font-weight: 600; color: #e6a23c">
+            <el-icon style="vertical-align: middle; margin-right: 4px"><Warning /></el-icon>
+            检测到 {{ dupGroups.length }} 组重复工序（同名称+类别+单位）
+          </span>
+          <el-button text size="small" @click="dupPanelVisible = false">关闭</el-button>
+        </div>
+      </template>
+
+      <div v-for="(group, gi) in dupGroups" :key="gi" class="dup-group">
+        <div class="dup-group-title">
+          重复组 #{{ gi + 1 }}：
+          <el-tag size="small">{{ group.processName }}</el-tag>
+          <el-tag v-if="group.processCategory" size="small" type="info" style="margin-left: 4px">
+            {{ group.processCategory }}
+          </el-tag>
+          <el-tag size="small" type="warning" style="margin-left: 4px">{{ group.unit }}</el-tag>
+          <span class="text-muted" style="margin-left: 8px; font-size: 12px">
+            {{ group.members.length }} 条记录 — 请保留 1 条，停用其余
+          </span>
+        </div>
+        <el-table :data="group.members" size="small" style="margin-top: 8px">
+          <el-table-column prop="id" label="ID" width="220" />
+          <el-table-column prop="processName" label="名称" min-width="100" />
+          <el-table-column prop="processCategory" label="类别" width="90" />
+          <el-table-column prop="unit" label="单位" width="70" />
+          <el-table-column prop="sortOrder" label="排序" width="60" />
+          <el-table-column prop="isActive" label="状态" width="70">
+            <template #default="{ row }">
+              <el-tag :type="row.isActive ? 'success' : 'info'" size="small">
+                {{ row.isActive ? '启用' : '禁用' }}
+              </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="操作" width="120" v-if="canWrite">
+            <template #default="{ row }">
+              <el-button type="warning" text size="small" @click="handleDupToggle(row)">
+                {{ row.isActive ? '停用' : '启用' }}
+              </el-button>
+              <el-button type="primary" text size="small" @click="handleEdit(row)">编辑</el-button>
+            </template>
+          </el-table-column>
+        </el-table>
       </div>
     </el-card>
 
@@ -312,4 +410,8 @@ function handlePageChange(page: number) {
 .toolbar-right { display: flex; gap: 8px; }
 .text-muted { color: #909399; }
 .form-hint { font-size: 12px; color: #909399; margin-left: 4px; }
+/* C5: duplicate panel */
+.dup-group { margin-bottom: 20px; padding-bottom: 16px; border-bottom: 1px solid #f0f0f0; }
+.dup-group:last-child { border-bottom: none; margin-bottom: 0; }
+.dup-group-title { font-size: 13px; font-weight: 500; }
 </style>

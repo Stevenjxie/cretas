@@ -51,6 +51,50 @@ public interface SalesOrderItemRepository extends JpaRepository<SalesOrderItem, 
     }
 
     /**
+     * B3 售价趋势 — 财审辅助决策.
+     *
+     * <p>返回某工厂某产品最近 N 笔已成交（状态非 DRAFT/CANCELLED）销售订单的行级单价明细，
+     * 按下单日期降序，最多取 {@code limit} 条。财务审核人员据此判断本单售价是否偏离历史均值。
+     *
+     * <p>用 JPQL 而非原生 SQL，兼容 H2 测试环境。
+     *
+     * @param factoryId     工厂 ID
+     * @param productTypeId 产品类型 ID
+     * @param excludedStatuses 排除的状态（DRAFT/CANCELLED）
+     * @param limit         最多返回条数（排序后取前 N）
+     * @return 最近成交记录，每行一个 projection
+     */
+    @Query("""
+            SELECT so.orderNumber AS orderNumber,
+                   so.orderDate   AS orderDate,
+                   soi.unitPrice  AS unitPrice,
+                   soi.quantity   AS quantity,
+                   soi.unit       AS unit
+              FROM SalesOrderItem soi
+              JOIN soi.salesOrder so
+             WHERE so.factoryId    = :factoryId
+               AND soi.productTypeId = :productTypeId
+               AND so.status NOT IN :excludedStatuses
+               AND soi.unitPrice IS NOT NULL
+               AND soi.unitPrice > 0
+             ORDER BY so.orderDate DESC, so.createdAt DESC
+            """)
+    List<PriceTrendRow> findRecentPriceByProduct(@Param("factoryId") String factoryId,
+                                                 @Param("productTypeId") String productTypeId,
+                                                 @Param("excludedStatuses")
+                                                 Collection<SalesOrderStatus> excludedStatuses,
+                                                 org.springframework.data.domain.Pageable pageable);
+
+    /** 售价趋势行投影 (B3). */
+    interface PriceTrendRow {
+        String getOrderNumber();
+        java.time.LocalDate getOrderDate();
+        java.math.BigDecimal getUnitPrice();
+        java.math.BigDecimal getQuantity();
+        String getUnit();
+    }
+
+    /**
      * 备货看板需求聚合 — 指定交货日期 + 有效订单状态。
      *
      * <p>按产品类型聚合当天需求量，同时捕获 MIN/MAX unit 用于 F2 单位不一致检测。

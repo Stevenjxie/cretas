@@ -698,11 +698,19 @@ public class SalesServiceImpl implements SalesService {
                 try {
                     java.util.Optional<com.cretas.aims.entity.bom.BomRecipe> recipeOpt =
                             bomRecipeService.getCurrentRecipe(factoryId, item.getProductTypeId());
-                    if (recipeOpt.isPresent() && recipeOpt.get().getTotalCost() != null) {
-                        bomUnit = recipeOpt.get().getTotalCost();
-                        bomLine = qty.multiply(bomUnit).setScale(2, java.math.RoundingMode.HALF_UP);
-                        bomStandardCostSum = bomStandardCostSum.add(bomLine);
-                        anyBomAvailable = true;
+                    if (recipeOpt.isPresent()) {
+                        BigDecimal tc = recipeOpt.get().getTotalCost();
+                        // B2 fix: treat null or <= 0 totalCost as "BOM items have no unit price configured".
+                        // A BOM that exists but has totalCost=null (hasNullPrice path) or =0 (empty-items
+                        // path) must not be reported as 0 — that would mislead finance into thinking
+                        // production truly costs nothing.  null → front-end shows "-" (honest).
+                        if (tc != null && tc.compareTo(BigDecimal.ZERO) > 0) {
+                            bomUnit = tc;
+                            bomLine = qty.multiply(bomUnit).setScale(2, java.math.RoundingMode.HALF_UP);
+                            bomStandardCostSum = bomStandardCostSum.add(bomLine);
+                            anyBomAvailable = true;
+                        }
+                        // else: BOM exists but prices not configured → bomUnit stays null (honest gap)
                     }
                 } catch (Exception e) {
                     log.warn("BOM 标准成本查询失败 (productTypeId={}): {}", item.getProductTypeId(), e.getMessage());
@@ -710,7 +718,9 @@ public class SalesServiceImpl implements SalesService {
             }
 
             BigDecimal actualLine = null;
-            if (costUnit != null) {
+            // B2 fix: costUnitPrice=0 means cost was never recorded (default or erroneous data),
+            // not that cost is truly zero. Treat 0 same as null → missing.
+            if (costUnit != null && costUnit.compareTo(BigDecimal.ZERO) > 0) {
                 actualLine = qty.multiply(costUnit).setScale(2, java.math.RoundingMode.HALF_UP);
                 actualCostSum = actualCostSum.add(actualLine);
             } else {
@@ -753,12 +763,15 @@ public class SalesServiceImpl implements SalesService {
             }
         }
 
+        // B2 fix: produce specific actionable hints for each missing-cost scenario.
         StringBuilder hint = new StringBuilder();
         if (bomStandardCost == null) {
-            hint.append("部分产品无 ACTIVE BOM 配方, BOM 标准成本暂不可用. ");
+            // B2 fix: differentiate between "no BOM" and "BOM items missing unit price"
+            hint.append("部分产品的 BOM 标准成本不可用 (无 ACTIVE BOM 配方, 或 BOM 配方中原料单价未配置). ");
+            hint.append("请到「配方管理」为 BOM 原料填写单价后重新查看. ");
         }
         if (actualCost == null) {
-            hint.append("订单尚未完成生产, 实际成本数据暂不完整 (使用预估成本对比). ");
+            hint.append("实际成本暂不可用: 订单行成本单价未录入 (生产批次完工后系统自动回填). ");
         }
         String hintStr = hint.length() > 0 ? hint.toString().trim() : null;
 
@@ -774,6 +787,34 @@ public class SalesServiceImpl implements SalesService {
                 .dataSourceHint(hintStr)
                 .lines(lines)
                 .build();
+    }
+
+    /**
+     * B3 售价趋势 — 财审辅助决策.
+     *
+     * <p>返回该产品最近 {@code limit} 笔成交记录的行级单价，
+     * 供财务审核人员判断本单价格是否偏离历史水平。
+     * 排除 DRAFT / CANCELLED 状态的订单。
+     */
+    @Override
+    @Transactional(readOnly = true)
+    public java.util.List<com.cretas.aims.dto.inventory.SalesPriceTrendDTO> getProductPriceTrend(
+            String factoryId, String productTypeId, int limit) {
+        int safeLimit = Math.max(1, Math.min(limit, 20));
+        java.util.Set<SalesOrderStatus> excluded = java.util.Set.of(
+                SalesOrderStatus.DRAFT, SalesOrderStatus.CANCELLED);
+        var rows = salesOrderItemRepository.findRecentPriceByProduct(
+                factoryId, productTypeId, excluded,
+                org.springframework.data.domain.PageRequest.of(0, safeLimit));
+        return rows.stream()
+                .map(r -> com.cretas.aims.dto.inventory.SalesPriceTrendDTO.builder()
+                        .orderNumber(r.getOrderNumber())
+                        .orderDate(r.getOrderDate())
+                        .unitPrice(r.getUnitPrice())
+                        .quantity(r.getQuantity())
+                        .unit(r.getUnit())
+                        .build())
+                .collect(java.util.stream.Collectors.toList());
     }
 
     @Override

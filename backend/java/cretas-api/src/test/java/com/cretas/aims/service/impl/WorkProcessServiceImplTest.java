@@ -457,6 +457,216 @@ class WorkProcessServiceImplTest {
         }
     }
 
+    // ==================== C5 重复工序检测测试 ====================
+
+    @Nested
+    @DisplayName("C5 重复工序检测测试")
+    class DuplicateDetectionTests {
+
+        // ---- create() dup-check tests ----
+
+        @Test
+        @DisplayName("UT-WP-C5-01: create() 同名称 → 409 BusinessException（现有行为保留）")
+        void testCreateExactNameBlocked() {
+            // Arrange
+            WorkProcessDTO dto = buildDefaultCreateDTO();
+            when(workProcessRepository.existsByFactoryIdAndProcessName(FACTORY_ID, "炸制"))
+                    .thenReturn(true);
+
+            // Act & Assert
+            BusinessException ex = assertThrows(BusinessException.class,
+                    () -> service.create(FACTORY_ID, dto));
+            assertEquals(409, ex.getCode());
+            assertTrue(ex.getMessage().contains("工序名称已存在"));
+            verify(workProcessRepository, never()).save(any());
+        }
+
+        @Test
+        @DisplayName("UT-WP-C5-02: create() 名称唯一但 name+category+unit 全匹配 → 409 near-dup")
+        void testCreateNearDupNameCategoryUnitBlocked() {
+            // Arrange: exact-name check passes (false), but name+category+unit matches
+            WorkProcessDTO dto = buildDefaultCreateDTO();
+            dto.setProcessCategory("前处理");
+            dto.setUnit("kg");
+
+            when(workProcessRepository.existsByFactoryIdAndProcessName(FACTORY_ID, "炸制"))
+                    .thenReturn(false);
+
+            WorkProcess existing = WorkProcess.builder()
+                    .id("existing-1")
+                    .factoryId(FACTORY_ID)
+                    .processName("炸制")
+                    .processCategory("前处理")
+                    .unit("kg")
+                    .isActive(true)
+                    .sortOrder(1)
+                    .build();
+            when(workProcessRepository.findByFactoryIdAndProcessNameAndProcessCategoryAndUnit(
+                    FACTORY_ID, "炸制", "前处理", "kg"))
+                    .thenReturn(List.of(existing));
+
+            // Act & Assert
+            BusinessException ex = assertThrows(BusinessException.class,
+                    () -> service.create(FACTORY_ID, dto));
+            assertEquals(409, ex.getCode());
+            assertTrue(ex.getMessage().contains("已存在相同名称+类别+单位的工序"));
+            verify(workProcessRepository, never()).save(any());
+        }
+
+        @Test
+        @DisplayName("UT-WP-C5-03: create() name+category+unit 无匹配 → 正常创建（近重复检测不误报）")
+        void testCreateNearDupCheckPassesWhenNoMatch() {
+            // Arrange
+            WorkProcessDTO dto = buildDefaultCreateDTO();
+            dto.setProcessCategory("前处理");
+            dto.setUnit("kg");
+
+            when(workProcessRepository.existsByFactoryIdAndProcessName(FACTORY_ID, "炸制"))
+                    .thenReturn(false);
+            when(workProcessRepository.findByFactoryIdAndProcessNameAndProcessCategoryAndUnit(
+                    FACTORY_ID, "炸制", "前处理", "kg"))
+                    .thenReturn(Collections.emptyList());
+            when(workProcessRepository.save(any(WorkProcess.class))).thenAnswer(inv -> inv.getArgument(0));
+
+            // Act — should not throw
+            WorkProcessDTO result = service.create(FACTORY_ID, dto);
+
+            // Assert
+            assertNotNull(result);
+            verify(workProcessRepository).save(any(WorkProcess.class));
+        }
+
+        @Test
+        @DisplayName("UT-WP-C5-04: create() 无 category → 跳过近重复检测（防呆：category 为空不触发）")
+        void testCreateSkipsNearDupCheckWhenCategoryBlank() {
+            // Arrange: no category provided
+            WorkProcessDTO dto = buildDefaultCreateDTO();
+            dto.setProcessCategory(null); // no category
+
+            when(workProcessRepository.existsByFactoryIdAndProcessName(FACTORY_ID, "炸制"))
+                    .thenReturn(false);
+            when(workProcessRepository.save(any(WorkProcess.class))).thenAnswer(inv -> inv.getArgument(0));
+
+            // Act — should not throw, and near-dup repo method never called
+            service.create(FACTORY_ID, dto);
+
+            // Assert: findByFactoryIdAndProcessNameAndProcessCategoryAndUnit never called
+            verify(workProcessRepository, never())
+                    .findByFactoryIdAndProcessNameAndProcessCategoryAndUnit(any(), any(), any(), any());
+        }
+
+        // ---- detectDuplicates() tests ----
+
+        @Test
+        @DisplayName("UT-WP-C5-05: detectDuplicates() 两条 name+category+unit 相同 → 返回 1 组 2 成员")
+        void testDetectDuplicatesTwoMatchingItems() {
+            // Arrange
+            WorkProcess wp1 = WorkProcess.builder()
+                    .id("dup-1").factoryId(FACTORY_ID)
+                    .processName("焯水").processCategory("前处理").unit("kg")
+                    .sortOrder(1).isActive(true).build();
+            WorkProcess wp2 = WorkProcess.builder()
+                    .id("dup-2").factoryId(FACTORY_ID)
+                    .processName("焯水").processCategory("前处理").unit("kg")
+                    .sortOrder(2).isActive(true).build();
+            // A third with different category — should NOT be in the dup group
+            WorkProcess wp3 = WorkProcess.builder()
+                    .id("unique-1").factoryId(FACTORY_ID)
+                    .processName("焯水").processCategory("加工").unit("kg")
+                    .sortOrder(3).isActive(true).build();
+
+            when(workProcessRepository.findByFactoryId(FACTORY_ID))
+                    .thenReturn(List.of(wp1, wp2, wp3));
+
+            // Act
+            List<WorkProcessDTO.DuplicateGroup> groups = service.detectDuplicates(FACTORY_ID);
+
+            // Assert: exactly 1 dup group (焯水/前处理/kg), with 2 members; wp3 not included
+            assertEquals(1, groups.size(), "应有 1 组重复");
+            WorkProcessDTO.DuplicateGroup group = groups.get(0);
+            assertEquals("焯水", group.getProcessName());
+            assertEquals("前处理", group.getProcessCategory());
+            assertEquals("kg", group.getUnit());
+            assertEquals(2, group.getMembers().size(), "重复组应有 2 条成员");
+            List<String> memberIds = group.getMembers().stream()
+                    .map(WorkProcessDTO::getId).toList();
+            assertTrue(memberIds.contains("dup-1"));
+            assertTrue(memberIds.contains("dup-2"));
+            assertFalse(memberIds.contains("unique-1"), "不同 category 不应进入重复组");
+        }
+
+        @Test
+        @DisplayName("UT-WP-C5-06: detectDuplicates() 无重复 → 返回空列表")
+        void testDetectDuplicatesNoneFound() {
+            // Arrange: all unique
+            WorkProcess wp1 = WorkProcess.builder()
+                    .id("u1").factoryId(FACTORY_ID)
+                    .processName("焯水").processCategory("前处理").unit("kg")
+                    .sortOrder(1).isActive(true).build();
+            WorkProcess wp2 = WorkProcess.builder()
+                    .id("u2").factoryId(FACTORY_ID)
+                    .processName("滚揉").processCategory("加工").unit("kg")
+                    .sortOrder(2).isActive(true).build();
+
+            when(workProcessRepository.findByFactoryId(FACTORY_ID))
+                    .thenReturn(List.of(wp1, wp2));
+
+            // Act
+            List<WorkProcessDTO.DuplicateGroup> groups = service.detectDuplicates(FACTORY_ID);
+
+            // Assert
+            assertTrue(groups.isEmpty(), "无重复时应返回空列表");
+        }
+
+        @Test
+        @DisplayName("UT-WP-C5-07: detectDuplicates() 三条相同 name+category+unit → 1 组 3 成员")
+        void testDetectDuplicatesThreeCopies() {
+            // Arrange: simulate the 掌中宝 焯水 real-world scenario
+            WorkProcess wp1 = WorkProcess.builder()
+                    .id("z1").factoryId(FACTORY_ID)
+                    .processName("修油").processCategory("前处理").unit("kg")
+                    .sortOrder(1).isActive(true).build();
+            WorkProcess wp2 = WorkProcess.builder()
+                    .id("z2").factoryId(FACTORY_ID)
+                    .processName("修油").processCategory("前处理").unit("kg")
+                    .sortOrder(2).isActive(true).build();
+            WorkProcess wp3 = WorkProcess.builder()
+                    .id("z3").factoryId(FACTORY_ID)
+                    .processName("修油").processCategory("前处理").unit("kg")
+                    .sortOrder(3).isActive(false).build();
+
+            when(workProcessRepository.findByFactoryId(FACTORY_ID))
+                    .thenReturn(List.of(wp1, wp2, wp3));
+
+            // Act
+            List<WorkProcessDTO.DuplicateGroup> groups = service.detectDuplicates(FACTORY_ID);
+
+            // Assert
+            assertEquals(1, groups.size());
+            assertEquals(3, groups.get(0).getMembers().size(), "应有 3 条成员（含已禁用的也算重复）");
+        }
+
+        @Test
+        @DisplayName("UT-WP-C5-08: detectDuplicates() factory 隔离 — 另一工厂的重复不出现")
+        void testDetectDuplicatesFactoryIsolation() {
+            // Arrange: factory FACTORY_ID has only unique processes
+            WorkProcess wp1 = WorkProcess.builder()
+                    .id("f1").factoryId(FACTORY_ID)
+                    .processName("焯水").processCategory("前处理").unit("kg")
+                    .sortOrder(1).isActive(true).build();
+
+            when(workProcessRepository.findByFactoryId(FACTORY_ID))
+                    .thenReturn(List.of(wp1));
+
+            // Act
+            List<WorkProcessDTO.DuplicateGroup> groups = service.detectDuplicates(FACTORY_ID);
+
+            // Assert: only queried FACTORY_ID, and no dups
+            verify(workProcessRepository).findByFactoryId(FACTORY_ID);
+            assertTrue(groups.isEmpty());
+        }
+    }
+
     // ==================== toggleStatus 与 updateSortOrder 额外测试 ====================
 
     @Nested

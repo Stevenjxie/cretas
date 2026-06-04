@@ -27,7 +27,7 @@ const products = ref<Array<{ id: string; name: string }>>([]);
 const selectedProductId = ref('');
 const productsLoading = ref(false);
 
-// 已关联工序
+// 服务端已关联工序（source of truth from backend）
 const linkedProcesses = ref<ProductWorkProcessItem[]>([]);
 const linkedLoading = ref(false);
 
@@ -37,17 +37,165 @@ const allProcesses = ref<WorkProcessItem[]>([]);
 // 操作员列表（小组长下拉数据源）
 const operators = ref<Array<{ id: number; username: string; realName?: string; fullName?: string }>>([]);
 
+// ─────────────────────────────────────────────
+// C4 — 草稿 / 显式保存
+//
+// DraftItem wraps ProductWorkProcessItem with a stable string draftKey
+// so we can distinguish server items (draftKey = String(id)) from
+// locally-added items (draftKey = '__draft__' + workProcessId).
+// ─────────────────────────────────────────────
+
+interface DraftItem extends ProductWorkProcessItem {
+  /** stable string key for v-for and draft tracking */
+  draftKey: string;
+  /** true = this item exists only in local draft, not yet on server */
+  isPending: boolean;
+}
+
+// Local draft array — all edits operate here first
+const draftLinked = ref<DraftItem[]>([]);
+
+// dirty = draft differs from server state
+const dirty = ref(false);
+
+// saving in progress
+const saving = ref(false);
+
+// Pending ops to flush on save
+interface PendingAdd { type: 'add'; wp: WorkProcessItem }
+interface PendingRemove { type: 'remove'; serverId: number }
+interface PendingSort { type: 'sort' }
+interface PendingResponsible { type: 'responsible'; serverId: number; workerId: number | null; productTypeId: string; workProcessId: string }
+type PendingOp = PendingAdd | PendingRemove | PendingSort | PendingResponsible;
+const pendingOps = ref<PendingOp[]>([]);
+
+/** Convert server items to DraftItems */
+function toDraftItems(items: ProductWorkProcessItem[]): DraftItem[] {
+  return items.map(i => ({ ...i, draftKey: String(i.id), isPending: false }));
+}
+
+/** Reset draft to server state */
+function resetDraftToServer() {
+  draftLinked.value = toDraftItems(linkedProcesses.value);
+  dirty.value = false;
+  pendingOps.value = [];
+}
+
+/** Mark dirty and push an op (dedup sort ops) */
+function markDirty(op: PendingOp) {
+  dirty.value = true;
+  if (op.type === 'sort') {
+    pendingOps.value = pendingOps.value.filter(o => o.type !== 'sort');
+  }
+  pendingOps.value.push(op);
+}
+
+/** Guard: ask user before switching product if there are unsaved changes */
+async function guardUnsaved(): Promise<boolean> {
+  if (!dirty.value) return true;
+  try {
+    await ElMessageBox.confirm('有未保存改动，确定放弃？', '提示', {
+      confirmButtonText: '放弃改动',
+      cancelButtonText: '继续编辑',
+      type: 'warning',
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Save all pending ops to backend */
+async function handleSave() {
+  if (!factoryId.value || !selectedProductId.value || !dirty.value) return;
+  saving.value = true;
+  try {
+    const toRemove = pendingOps.value.filter((o): o is PendingRemove => o.type === 'remove');
+    const toAdd = pendingOps.value.filter((o): o is PendingAdd => o.type === 'add');
+    const toResponsible = pendingOps.value.filter((o): o is PendingResponsible => o.type === 'responsible');
+    const needsSort = pendingOps.value.some(o =>
+      o.type === 'sort' || o.type === 'add' || o.type === 'remove'
+    );
+
+    // 1. Removals (server items only)
+    for (const op of toRemove) {
+      await deleteProductWorkProcess(factoryId.value, op.serverId);
+    }
+
+    // 2. Additions (include responsibleWorkerId if user set it on draft item)
+    for (const op of toAdd) {
+      const draftItem = draftLinked.value.find(d => d.workProcessId === op.wp.id && d.isPending);
+      const responsibleWorkerId = draftItem?.responsibleWorkerId ?? undefined;
+      await createProductWorkProcess(factoryId.value, {
+        productTypeId: selectedProductId.value,
+        workProcessId: op.wp.id,
+        processOrder: 999, // corrected by sort step below
+        ...(responsibleWorkerId != null ? { responsibleWorkerId } : {}),
+      });
+    }
+
+    // 3. Re-fetch to get fresh server IDs after add/remove
+    const freshRes = await getProductWorkProcesses(factoryId.value, selectedProductId.value);
+    let freshItems: ProductWorkProcessItem[] = [];
+    if (freshRes.success && freshRes.data) {
+      freshItems = Array.isArray(freshRes.data) ? freshRes.data : [];
+    }
+
+    // 4. Responsible worker changes (use fresh server IDs)
+    const freshByWpId = new Map(freshItems.map(i => [i.workProcessId, i]));
+    for (const op of toResponsible) {
+      const freshItem = freshByWpId.get(op.workProcessId);
+      if (!freshItem) continue;
+      const workerId = op.workerId == null ? -1 : op.workerId;
+      await updateProductWorkProcess(factoryId.value, freshItem.id, {
+        productTypeId: freshItem.productTypeId,
+        workProcessId: freshItem.workProcessId,
+        responsibleWorkerId: workerId,
+      });
+    }
+
+    // 5. Sort — align fresh items to draft order
+    if (needsSort && freshItems.length > 0) {
+      const draftOrder = draftLinked.value.map(d => d.workProcessId);
+      const sortedFresh = [...freshItems].sort((a, b) => {
+        const ai = draftOrder.indexOf(a.workProcessId);
+        const bi = draftOrder.indexOf(b.workProcessId);
+        return (ai === -1 ? 999 : ai) - (bi === -1 ? 999 : bi);
+      });
+      const sortItems = sortedFresh.map((item, i) => ({ id: item.id, processOrder: i + 1 }));
+      await batchSortProductWorkProcesses(factoryId.value, sortItems);
+    }
+
+    ElMessage.success('保存成功');
+    await loadLinkedProcesses(); // reload to sync draft
+  } catch (e) {
+    handleCatchError(e, '保存失败');
+  } finally {
+    saving.value = false;
+  }
+}
+
+// ─────────────────────────────────────────────
+// Data loading
+// ─────────────────────────────────────────────
+
 onMounted(async () => {
   await loadProducts();
   await loadAllProcesses();
   await loadOperators();
 });
 
-watch(selectedProductId, () => {
-  if (selectedProductId.value) {
-    loadLinkedProcesses();
+// flag: suppress watch reload when guard-rejecting a product switch
+let suppressNextWatch = false;
+
+watch(selectedProductId, async (newVal, oldVal) => {
+  if (newVal === oldVal) return;
+  if (suppressNextWatch) { suppressNextWatch = false; return; }
+  if (newVal) {
+    await loadLinkedProcesses();
   } else {
     linkedProcesses.value = [];
+    resetDraftToServer();
   }
 });
 
@@ -66,8 +214,6 @@ async function loadProducts() {
       }
     }
   } catch (e) {
-    // UX polish (2026-05-20): interceptor handles 4xx/5xx with backend message;
-    // fallback only for network errors (避免双 toast).
     handleCatchError(e, '加载产品列表失败');
   } finally {
     productsLoading.value = false;
@@ -98,47 +244,6 @@ async function loadOperators() {
   }
 }
 
-/**
- * 返回操作员的显示名称：优先 realName（即 fullName），次选 username。
- * UserDTO 的 @JsonProperty("realName") 将 fullName 序列化为 realName，
- * 因此前端应首先使用 realName。
- */
-function operatorDisplayName(op: { id: number; username: string; realName?: string; fullName?: string }) {
-  return op.realName || op.fullName || op.username;
-}
-
-/**
- * 返回工序行的责任小组长显示名称（用于只读模式）。
- */
-function responsibleLabel(item: ProductWorkProcessItem): string {
-  if (!item.responsibleWorkerId) return '';
-  const op = operators.value.find(o => o.id === item.responsibleWorkerId);
-  return op ? operatorDisplayName(op) : `#${item.responsibleWorkerId}`;
-}
-
-/**
- * 小组长选择变更回调：立即 PUT 更新。
- * el-select clearable 清空后 value 变为 undefined/null → 发送 -1 (clear sentinel)。
- */
-async function handleResponsibleWorkerChange(item: ProductWorkProcessItem, value: number | null | undefined) {
-  if (!factoryId.value) return;
-  const responsibleWorkerId = (value == null) ? -1 : value;
-  try {
-    const res = await updateProductWorkProcess(factoryId.value, item.id, { productTypeId: item.productTypeId, workProcessId: item.workProcessId, responsibleWorkerId });
-    if (res.success && res.data) {
-      // Update local ref to reflect server state
-      item.responsibleWorkerId = res.data.responsibleWorkerId ?? null;
-    } else {
-      ElMessage.error(res.message || '更新责任小组长失败');
-      // Revert on error
-      await loadLinkedProcesses();
-    }
-  } catch (e) {
-    handleCatchError(e, '更新责任小组长失败');
-    await loadLinkedProcesses();
-  }
-}
-
 async function loadLinkedProcesses() {
   if (!factoryId.value || !selectedProductId.value) return;
   linkedLoading.value = true;
@@ -148,85 +253,229 @@ async function loadLinkedProcesses() {
       linkedProcesses.value = Array.isArray(res.data) ? res.data : [];
     }
   } catch (e) {
-    // UX polish (2026-05-20): interceptor handles 4xx/5xx with backend message;
-    // fallback only for network errors (避免双 toast).
     handleCatchError(e, '加载关联工序失败');
   } finally {
     linkedLoading.value = false;
+    resetDraftToServer(); // sync draft to fresh server state
   }
 }
 
-// 可添加的工序（排除已关联的）
+// ─────────────────────────────────────────────
+// Computed
+// ─────────────────────────────────────────────
+
+// Available pool: all processes minus those in draft
 const availableProcesses = computed(() => {
-  const linkedIds = new Set(linkedProcesses.value.map(p => p.workProcessId));
+  const linkedIds = new Set(draftLinked.value.map(p => p.workProcessId));
   return allProcesses.value.filter(p => !linkedIds.has(p.id));
 });
-
-async function handleAdd(wp: WorkProcessItem) {
-  if (!factoryId.value || !selectedProductId.value) return;
-  try {
-    const nextOrder = linkedProcesses.value.length + 1;
-    await createProductWorkProcess(factoryId.value, {
-      productTypeId: selectedProductId.value,
-      workProcessId: wp.id,
-      processOrder: nextOrder,
-    });
-    ElMessage.success(`已添加工序「${wp.processName}」`);
-    loadLinkedProcesses();
-  } catch (e) {
-    // Interceptor shows specific toast; dedupe fallback
-    console.error('[失败]', e);
-  }
-}
-
-async function handleRemove(item: ProductWorkProcessItem) {
-  if (!factoryId.value) return;
-  try {
-    await ElMessageBox.confirm(`确定移除工序关联？`, '确认');
-    await deleteProductWorkProcess(factoryId.value, item.id);
-    ElMessage.success('已移除');
-    loadLinkedProcesses();
-  } catch (e) {
-    // UX polish (2026-05-20): ElMessageBox throws 'cancel' on user dismissal (skip);
-    // interceptor handles 4xx/5xx with backend message — fallback only for network errors.
-    if (e !== 'cancel') handleCatchError(e, '移除失败');
-  }
-}
-
-async function handleMoveUp(index: number) {
-  if (index <= 0) return;
-  const items = [...linkedProcesses.value];
-  [items[index - 1], items[index]] = [items[index], items[index - 1]];
-  await saveSortOrder(items);
-}
-
-async function handleMoveDown(index: number) {
-  if (index >= linkedProcesses.value.length - 1) return;
-  const items = [...linkedProcesses.value];
-  [items[index], items[index + 1]] = [items[index + 1], items[index]];
-  await saveSortOrder(items);
-}
-
-async function saveSortOrder(items: ProductWorkProcessItem[]) {
-  if (!factoryId.value) return;
-  try {
-    const sortItems = items.map((item, i) => ({ id: item.id, processOrder: i + 1 }));
-    await batchSortProductWorkProcesses(factoryId.value, sortItems);
-    linkedProcesses.value = items.map((item, i) => ({ ...item, processOrder: i + 1 }));
-    ElMessage.success('排序已更新');
-  } catch (e) {
-    // UX polish (2026-05-20): interceptor handles 4xx/5xx with backend message;
-    // fallback only for network errors (避免双 toast).
-    handleCatchError(e, '排序失败');
-    loadLinkedProcesses();
-  }
-}
 
 const selectedProductName = computed(() => {
   return products.value.find(p => p.id === selectedProductId.value)?.name || '';
 });
 
+// ─────────────────────────────────────────────
+// C3 — 责任人下拉搜索 filter method
+// ─────────────────────────────────────────────
 
+// Per-item operator search query (keyed by draft item index or id)
+const operatorFilterQuery = ref<Record<string, string>>({});
+
+function filterOperator(query: string, opList: typeof operators.value) {
+  if (!query) return opList;
+  const q = query.toLowerCase();
+  return opList.filter(op => {
+    const name = (op.realName || op.fullName || op.username).toLowerCase();
+    return name.includes(q);
+  });
+}
+
+// Filtered operators per item (C3)
+function filteredOperators(itemKey: string) {
+  const q = operatorFilterQuery.value[itemKey] || '';
+  return filterOperator(q, operators.value);
+}
+
+/**
+ * 返回操作员的显示名称：优先 realName（即 fullName），次选 username。
+ */
+function operatorDisplayName(op: { id: number; username: string; realName?: string; fullName?: string }) {
+  return op.realName || op.fullName || op.username;
+}
+
+/**
+ * 返回工序行的责任小组长显示名称（只读模式）。
+ */
+function responsibleLabel(item: ProductWorkProcessItem): string {
+  if (!item.responsibleWorkerId) return '';
+  const op = operators.value.find(o => o.id === item.responsibleWorkerId);
+  return op ? operatorDisplayName(op) : `#${item.responsibleWorkerId}`;
+}
+
+// ─────────────────────────────────────────────
+// C4 — Draft CRUD handlers (no immediate API calls)
+// ─────────────────────────────────────────────
+
+/** Product selector change: guard unsaved first */
+async function handleProductChange(newId: string) {
+  // At this point el-select has already updated selectedProductId to newId via v-model.
+  // We need the old product id before the change.
+  const prevProductId = draftLinked.value.length > 0
+    ? draftLinked.value[0].productTypeId
+    : '';
+
+  const ok = await guardUnsaved();
+  if (!ok) {
+    // User chose to continue editing — restore selectedProductId to previous product.
+    // Use suppressNextWatch to prevent the watch from re-loading the old product
+    // (it's already loaded; draft still has current state).
+    if (prevProductId && prevProductId !== newId) {
+      suppressNextWatch = true;
+      selectedProductId.value = prevProductId;
+    }
+    return;
+  }
+  // ok — proceed; the watch will fire and load the new product
+}
+
+/** Add a process to draft (C4 draft add) */
+function handleAdd(wp: WorkProcessItem) {
+  if (!selectedProductId.value) return;
+  const draftItem: DraftItem = {
+    // id as number is required by ProductWorkProcessItem type; use 0 as sentinel for draft-only
+    id: 0 as unknown as number,
+    draftKey: `__draft__${wp.id}`,
+    isPending: true,
+    productTypeId: selectedProductId.value,
+    workProcessId: wp.id,
+    processOrder: draftLinked.value.length + 1,
+    processName: wp.processName,
+    processCategory: wp.processCategory,
+    defaultUnit: wp.unit,
+    unitOverride: null,
+    estimatedMinutesOverride: null,
+    defaultEstimatedMinutes: null,
+    responsibleWorkerId: null,
+  };
+  draftLinked.value = [...draftLinked.value, draftItem];
+  markDirty({ type: 'add', wp });
+}
+
+/** Remove a process from draft (C4 draft remove) */
+function handleRemove(item: DraftItem) {
+  draftLinked.value = draftLinked.value.filter(d => d.draftKey !== item.draftKey);
+  draftLinked.value = draftLinked.value.map((d, i) => ({ ...d, processOrder: i + 1 }));
+
+  if (!item.isPending) {
+    // Server item — queue delete + sort
+    markDirty({ type: 'remove', serverId: item.id });
+    markDirty({ type: 'sort' });
+  } else {
+    // Draft-only item — cancel the matching add op
+    pendingOps.value = pendingOps.value.filter(
+      o => !(o.type === 'add' && o.wp.id === item.workProcessId)
+    );
+    dirty.value = pendingOps.value.length > 0;
+  }
+}
+
+/** Responsible worker change → draft only (C4) */
+function handleResponsibleWorkerChange(item: DraftItem, value: number | null | undefined) {
+  const workerId = value == null ? null : value;
+  const idx = draftLinked.value.findIndex(d => d.draftKey === item.draftKey);
+  if (idx !== -1) {
+    draftLinked.value[idx] = { ...draftLinked.value[idx], responsibleWorkerId: workerId };
+  }
+  if (!item.isPending) {
+    // Server item — dedupe and queue responsible op
+    pendingOps.value = pendingOps.value.filter(
+      o => !(o.type === 'responsible' && o.serverId === item.id)
+    );
+    markDirty({
+      type: 'responsible',
+      serverId: item.id,
+      workerId,
+      productTypeId: item.productTypeId,
+      workProcessId: item.workProcessId,
+    });
+  } else {
+    // Draft-only item — responsible is tracked in local state; will be set on POST in save
+    if (!dirty.value) dirty.value = true;
+  }
+}
+
+// ─────────────────────────────────────────────
+// Move up/down (fallback buttons, C1)
+// ─────────────────────────────────────────────
+
+function handleMoveUp(index: number) {
+  if (index <= 0) return;
+  const items = [...draftLinked.value];
+  [items[index - 1], items[index]] = [items[index], items[index - 1]];
+  draftLinked.value = items.map((d, i) => ({ ...d, processOrder: i + 1 }));
+  markDirty({ type: 'sort' });
+}
+
+function handleMoveDown(index: number) {
+  if (index >= draftLinked.value.length - 1) return;
+  const items = [...draftLinked.value];
+  [items[index], items[index + 1]] = [items[index + 1], items[index]];
+  draftLinked.value = items.map((d, i) => ({ ...d, processOrder: i + 1 }));
+  markDirty({ type: 'sort' });
+}
+
+// ─────────────────────────────────────────────
+// C1 — Native HTML5 drag-and-drop reorder
+// ─────────────────────────────────────────────
+
+const dragFromIndex = ref<number | null>(null);
+const dragOverIndex = ref<number | null>(null);
+
+function onDragStart(index: number, event: DragEvent) {
+  dragFromIndex.value = index;
+  if (event.dataTransfer) {
+    event.dataTransfer.effectAllowed = 'move';
+    event.dataTransfer.setData('text/plain', String(index));
+  }
+}
+
+function onDragOver(index: number, event: DragEvent) {
+  event.preventDefault();
+  if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+  dragOverIndex.value = index;
+}
+
+function onDragLeave() {
+  dragOverIndex.value = null;
+}
+
+function onDrop(toIndex: number, event: DragEvent) {
+  event.preventDefault();
+  const fromIndex = dragFromIndex.value;
+  dragFromIndex.value = null;
+  dragOverIndex.value = null;
+  if (fromIndex === null || fromIndex === toIndex) return;
+  const items = [...draftLinked.value];
+  const [moved] = items.splice(fromIndex, 1);
+  items.splice(toIndex, 0, moved);
+  draftLinked.value = items.map((d, i) => ({ ...d, processOrder: i + 1 }));
+  markDirty({ type: 'sort' });
+}
+
+function onDragEnd() {
+  dragFromIndex.value = null;
+  dragOverIndex.value = null;
+}
+
+// ─────────────────────────────────────────────
+// Refresh (reloads from server, discards draft if confirmed)
+// ─────────────────────────────────────────────
+
+async function handleRefresh() {
+  const ok = await guardUnsaved();
+  if (!ok) return;
+  await loadLinkedProcesses();
+}
 </script>
 
 <template>
@@ -238,13 +487,27 @@ const selectedProductName = computed(() => {
           <el-tag type="info">{{ factoryId }}</el-tag>
         </div>
         <div class="toolbar-right">
-          <el-button :icon="Refresh" @click="loadLinkedProcesses" />
+          <!-- C4 status indicator + save button -->
+          <template v-if="selectedProductId && canWrite">
+            <span v-if="dirty" class="dirty-indicator">● 有未保存改动</span>
+            <span v-else class="clean-indicator">✓ 已保存</span>
+            <el-button
+              type="primary"
+              :disabled="!dirty || saving"
+              :loading="saving"
+              @click="handleSave"
+              style="margin-left: 8px"
+            >
+              保存
+            </el-button>
+          </template>
+          <el-button :icon="Refresh" @click="handleRefresh" />
         </div>
       </div>
     </el-card>
 
     <div class="content-layout">
-      <!-- 左：产品选择 -->
+      <!-- 左：产品选择 (fixed 280px) -->
       <el-card class="product-panel">
         <template #header>
           <span style="font-weight: 600">选择产品</span>
@@ -255,6 +518,7 @@ const selectedProductName = computed(() => {
           filterable
           style="width: 100%; margin-bottom: 12px"
           :loading="productsLoading"
+          @change="handleProductChange"
         >
           <el-option v-for="p in products" :key="p.id" :label="p.name" :value="p.id" />
         </el-select>
@@ -262,82 +526,119 @@ const selectedProductName = computed(() => {
         <div v-if="selectedProductId" class="product-info">
           <el-tag>{{ selectedProductName }}</el-tag>
           <el-text type="info" size="small" style="margin-top: 8px; display: block">
-            已关联 {{ linkedProcesses.length }} 道工序
+            已配 {{ draftLinked.length }} 道工序
           </el-text>
         </div>
       </el-card>
 
-      <!-- 右：工序配置 -->
+      <!-- 右：C2 — 左右两栏布局 (工序流程 | 可添加工序池) -->
       <el-card class="process-panel" v-loading="linkedLoading">
         <template #header>
           <div class="card-header">
-            <span style="font-weight: 600">工序流程（按顺序执行）</span>
+            <div class="panel-titles">
+              <span class="panel-title-left">工序流程（按顺序执行）</span>
+              <span class="panel-title-right" v-if="selectedProductId && canWrite">可添加的工序</span>
+            </div>
           </div>
         </template>
 
-        <!-- 已关联工序列表 -->
-        <div v-if="linkedProcesses.length === 0 && selectedProductId" class="empty-state">
-          <el-empty description="暂无关联工序，请从下方添加" :image-size="80" />
+        <div v-if="!selectedProductId" class="no-product-hint">
+          <el-empty description="请在左侧选择产品" :image-size="80" />
         </div>
 
-        <div v-for="(item, index) in linkedProcesses" :key="item.id" class="linked-item">
-          <div class="step-number">{{ index + 1 }}</div>
-          <div class="step-info">
-            <div class="step-name">{{ item.processName || item.workProcessId }}</div>
-            <div class="step-meta">
-              <el-tag v-if="item.processCategory || ''" size="small" type="info">{{ item.processCategory || '' }}</el-tag>
-              <span class="step-unit">单位: {{ item.unitOverride || item.defaultUnit || '-' }}</span>
+        <div v-else class="two-column-layout">
+          <!-- ───── LEFT column: 工序链 (C1 drag + C4 draft) ───── -->
+          <div class="chain-column">
+            <div v-if="draftLinked.length === 0" class="empty-state">
+              <el-empty description="暂无工序，请从右侧添加" :image-size="60" />
             </div>
-            <!-- 默认责任小组长 (只读模式不显示，可写模式内联下拉) -->
-            <div class="step-leader" v-if="canWrite">
-              <el-select
-                :model-value="item.responsibleWorkerId ?? undefined"
-                placeholder="默认责任小组长"
-                clearable
-                size="small"
-                style="width: 160px"
-                @change="(val: number | undefined) => handleResponsibleWorkerChange(item, val)"
-              >
-                <el-option
-                  v-for="op in operators"
-                  :key="op.id"
-                  :label="operatorDisplayName(op)"
-                  :value="op.id"
-                />
-              </el-select>
-            </div>
-            <div class="step-leader-readonly" v-else-if="item.responsibleWorkerId">
-              <el-text type="info" size="small">
-                责任小组长: {{ responsibleLabel(item) }}
-              </el-text>
-            </div>
-          </div>
-          <div class="step-actions" v-if="canWrite">
-            <el-button text size="small" :disabled="index === 0" @click="handleMoveUp(index)">
-              <el-icon><Rank /></el-icon>上移
-            </el-button>
-            <el-button text size="small" :disabled="index === linkedProcesses.length - 1" @click="handleMoveDown(index)">
-              <el-icon><Rank /></el-icon>下移
-            </el-button>
-            <el-button type="danger" text size="small" @click="handleRemove(item)">
-              <el-icon><Delete /></el-icon>移除
-            </el-button>
-          </div>
-        </div>
 
-        <!-- 可添加的工序 -->
-        <el-divider v-if="selectedProductId && canWrite">可添加的工序</el-divider>
-        <div v-if="selectedProductId && canWrite" class="available-list">
-          <div v-if="availableProcesses.length === 0" class="empty-hint">
-            <el-text type="info" size="small">所有工序已关联，或尚未创建工序</el-text>
-          </div>
-          <div v-for="wp in availableProcesses" :key="wp.id" class="available-item">
-            <div class="available-info">
-              <span class="available-name">{{ wp.processName }}</span>
-              <el-tag v-if="wp.processCategory" size="small" type="info" style="margin-left: 8px">{{ wp.processCategory }}</el-tag>
-              <span class="available-unit">{{ wp.unit }}</span>
+            <div
+              v-for="(item, index) in draftLinked"
+              :key="item.draftKey"
+              class="linked-item"
+              :class="{
+                'is-draft': item.isPending,
+                'drag-over': dragOverIndex === index,
+              }"
+              :draggable="canWrite"
+              @dragstart="onDragStart(index, $event)"
+              @dragover="onDragOver(index, $event)"
+              @dragleave="onDragLeave"
+              @drop="onDrop(index, $event)"
+              @dragend="onDragEnd"
+            >
+              <!-- Drag handle hint -->
+              <div class="drag-handle" v-if="canWrite" title="拖拽排序">⠿</div>
+
+              <div class="step-number">{{ index + 1 }}</div>
+              <div class="step-info">
+                <div class="step-name">
+                  {{ item.processName || item.workProcessId }}
+                  <el-tag v-if="item.isPending" size="small" type="warning" style="margin-left: 6px">待保存</el-tag>
+                </div>
+                <div class="step-meta">
+                  <el-tag v-if="item.processCategory" size="small" type="info">{{ item.processCategory }}</el-tag>
+                  <span class="step-unit">单位: {{ item.unitOverride || item.defaultUnit || '-' }}</span>
+                </div>
+
+                <!-- C3 — 责任人下拉加搜索 (filterable) -->
+                <div class="step-leader" v-if="canWrite">
+                  <el-select
+                    :model-value="item.responsibleWorkerId ?? undefined"
+                    placeholder="默认责任小组长"
+                    clearable
+                    filterable
+                    :filter-method="(q: string) => { operatorFilterQuery[item.draftKey] = q }"
+                    size="small"
+                    style="width: 170px"
+                    @change="(val: number | undefined) => handleResponsibleWorkerChange(item, val)"
+                  >
+                    <el-option
+                      v-for="op in filteredOperators(item.draftKey)"
+                      :key="op.id"
+                      :label="operatorDisplayName(op)"
+                      :value="op.id"
+                    />
+                  </el-select>
+                </div>
+                <div class="step-leader-readonly" v-else-if="item.responsibleWorkerId">
+                  <el-text type="info" size="small">
+                    责任小组长: {{ responsibleLabel(item) }}
+                  </el-text>
+                </div>
+              </div>
+
+              <div class="step-actions" v-if="canWrite">
+                <el-button text size="small" :disabled="index === 0" @click="handleMoveUp(index)" title="上移">
+                  <el-icon><Rank /></el-icon>
+                </el-button>
+                <el-button text size="small" :disabled="index === draftLinked.length - 1" @click="handleMoveDown(index)" title="下移">
+                  <el-icon><Rank /></el-icon>
+                </el-button>
+                <el-button type="danger" text size="small" @click="handleRemove(item)" title="移除">
+                  <el-icon><Delete /></el-icon>
+                </el-button>
+              </div>
             </div>
-            <el-button type="primary" text size="small" :icon="Plus" @click="handleAdd(wp)">添加</el-button>
+          </div>
+
+          <!-- ───── C2 Separator ───── -->
+          <div class="column-divider" v-if="canWrite"></div>
+
+          <!-- ───── RIGHT column: 可添加工序池 ───── -->
+          <div class="pool-column" v-if="canWrite">
+            <div v-if="availableProcesses.length === 0" class="empty-hint">
+              <el-text type="info" size="small">所有工序已关联，或尚未创建工序</el-text>
+            </div>
+            <div v-for="wp in availableProcesses" :key="wp.id" class="available-item">
+              <div class="available-info">
+                <span class="available-name">{{ wp.processName }}</span>
+                <el-tag v-if="wp.processCategory" size="small" type="info" style="margin-left: 6px">{{ wp.processCategory }}</el-tag>
+                <span class="available-unit">{{ wp.unit }}</span>
+              </div>
+              <el-button type="primary" text size="small" :icon="Plus" @click="handleAdd(wp)">添加</el-button>
+            </div>
           </div>
         </div>
       </el-card>
@@ -349,7 +650,11 @@ const selectedProductName = computed(() => {
 .page-container { padding: 20px; }
 .toolbar { display: flex; justify-content: space-between; align-items: center; }
 .toolbar-left { display: flex; align-items: center; gap: 12px; }
-.toolbar-right { display: flex; gap: 8px; }
+.toolbar-right { display: flex; align-items: center; gap: 8px; }
+
+/* C4 status indicators */
+.dirty-indicator { font-size: 13px; color: #e6a23c; font-weight: 500; }
+.clean-indicator { font-size: 13px; color: #67c23a; font-weight: 500; }
 
 .content-layout {
   display: flex;
@@ -357,26 +662,99 @@ const selectedProductName = computed(() => {
   margin-top: 16px;
 }
 .product-panel { width: 280px; flex-shrink: 0; }
-.process-panel { flex: 1; }
+.process-panel { flex: 1; min-width: 0; }
 
 .card-header { display: flex; justify-content: space-between; align-items: center; }
 .product-info { padding: 8px 0; }
 
+/* C2 — two-column layout inside the right card */
+.panel-titles {
+  display: flex;
+  gap: 0;
+  width: 100%;
+}
+.panel-title-left {
+  flex: 1;
+  font-weight: 600;
+  font-size: 14px;
+}
+.panel-title-right {
+  width: 240px;
+  flex-shrink: 0;
+  font-weight: 600;
+  font-size: 14px;
+  color: #606266;
+  padding-left: 16px;
+  border-left: 1px solid #e4e7ed;
+  box-sizing: border-box;
+}
+
+.no-product-hint { padding: 20px 0; }
+
+.two-column-layout {
+  display: flex;
+  gap: 0;
+  min-height: 300px;
+}
+
+/* Left chain column */
+.chain-column {
+  flex: 1;
+  min-width: 0;
+  padding-right: 16px;
+  overflow-y: auto;
+  max-height: 70vh;
+}
+
+/* Separator */
+.column-divider {
+  width: 1px;
+  background: #e4e7ed;
+  flex-shrink: 0;
+  margin: 0 4px;
+}
+
+/* Right pool column */
+.pool-column {
+  width: 240px;
+  flex-shrink: 0;
+  padding-left: 16px;
+  overflow-y: auto;
+  max-height: 70vh;
+}
+
+/* Linked item row (C1 drag-enabled) */
 .linked-item {
   display: flex;
   align-items: center;
-  padding: 12px;
+  padding: 10px 8px;
   margin-bottom: 8px;
   border: 1px solid #e4e7ed;
   border-radius: 8px;
   background: #fafafa;
-  transition: background 0.2s;
+  transition: background 0.15s, border-color 0.15s;
+  cursor: grab;
+  user-select: none;
 }
+.linked-item:active { cursor: grabbing; }
 .linked-item:hover { background: #f0f9ff; border-color: #409eff; }
+.linked-item.is-draft { border-style: dashed; border-color: #e6a23c; background: #fffbe6; }
+.linked-item.drag-over { border-color: #409eff; background: #ecf5ff; border-style: solid; }
+
+/* Drag handle */
+.drag-handle {
+  font-size: 18px;
+  color: #c0c4cc;
+  cursor: grab;
+  padding: 0 4px 0 0;
+  flex-shrink: 0;
+  line-height: 1;
+}
+.drag-handle:hover { color: #909399; }
 
 .step-number {
-  width: 32px;
-  height: 32px;
+  width: 28px;
+  height: 28px;
   border-radius: 50%;
   background: #409eff;
   color: #fff;
@@ -384,30 +762,32 @@ const selectedProductName = computed(() => {
   align-items: center;
   justify-content: center;
   font-weight: 700;
-  font-size: 14px;
+  font-size: 13px;
   flex-shrink: 0;
+  margin-right: 10px;
 }
-.step-info { flex: 1; margin-left: 12px; }
-.step-name { font-weight: 600; font-size: 14px; color: #333; }
-.step-meta { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
+.step-info { flex: 1; min-width: 0; }
+.step-name { font-weight: 600; font-size: 14px; color: #333; display: flex; align-items: center; flex-wrap: wrap; gap: 4px; }
+.step-meta { display: flex; align-items: center; gap: 8px; margin-top: 4px; flex-wrap: wrap; }
 .step-unit { font-size: 12px; color: #909399; }
-.step-actions { display: flex; gap: 4px; flex-shrink: 0; }
+.step-actions { display: flex; gap: 2px; flex-shrink: 0; margin-left: 4px; }
 
-.available-list { }
+.step-leader { margin-top: 6px; }
+.step-leader-readonly { margin-top: 4px; }
+
+/* Pool (right column) */
 .available-item {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 8px 12px;
+  padding: 8px 4px;
   border-bottom: 1px solid #f0f0f0;
 }
 .available-item:last-child { border-bottom: none; }
-.available-info { display: flex; align-items: center; gap: 4px; }
-.available-name { font-size: 14px; color: #333; }
-.available-unit { font-size: 12px; color: #909399; margin-left: 8px; }
+.available-info { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; min-width: 0; }
+.available-name { font-size: 13px; color: #333; }
+.available-unit { font-size: 12px; color: #909399; margin-left: 4px; }
 
 .empty-state { padding: 20px 0; }
 .empty-hint { padding: 12px; text-align: center; }
-.step-leader { margin-top: 6px; }
-.step-leader-readonly { margin-top: 4px; }
 </style>
