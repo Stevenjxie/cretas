@@ -1,8 +1,8 @@
 # 多模型分发路由规范 (Multi-Model Dispatch)
 
-**最后更新**: 2026-06-04
-**触发**: Steve 要"Claude 出计划时直接产出可分发的 task 输出, 我去派给其他 chat, 并指定哪些给 GPT-5.5·Codex / 哪些给 Composer 2.5"。
-**关系**: 这是 [`parallel-work-analysis.md`](./parallel-work-analysis.md) 的**升级层** —— 老规则回答"能不能并行", 本规则在它之上回答"每块并行工作派给哪个模型 + 怎么物理隔离 + 怎么交接回 main"。隔离铁律继承 [`worktree-and-main-only-deploy.md`](./worktree-and-main-only-deploy.md) + [`concurrent-edit-safety.md`](./concurrent-edit-safety.md)。
+**最后更新**: 2026-06-05
+**触发**: Steve 要"Claude 出计划时直接产出可分发的 task 输出, 我去派给其他 chat, 并指定哪些给 GPT-5.5·Codex / 哪些给 Composer 2.5"。增补：Sonnet 执行层 + 三轴路由（模型/effort/orchestration）+ 预算均衡注记 + 两通道 + 审查分层。
+**关系**: 这是 [`parallel-work-analysis.md`](./parallel-work-analysis.md) 的**升级层** —— 老规则回答"能不能并行", 本规则在它之上回答"每块并行工作派给哪个模型 + 怎么物理隔离 + 怎么交接回 main"。隔离铁律继承 [`worktree-and-main-only-deploy.md`](./worktree-and-main-only-deploy.md) + [`concurrent-edit-safety.md`](./concurrent-edit-safety.md)。编排顶层入口 → [`organizer-protocol.md`](./organizer-protocol.md)。
 
 ---
 
@@ -10,9 +10,16 @@
 
 ```text
 Opus 4.8       = 总工 / 架构师 / 高风险决策 / 上线前终审 (贵但稳, 负责判断对不对)
-Composer 2.5   = 日常执行工程师 (便宜耐用, 负责干活)
+Sonnet         = Claude 侧默认执行层 (便宜 20x, rule-heavy in-harness, 自动加载 .claude/rules)
 GPT-5.5·Codex  = 复杂执行 + CLI/E2E/构建 + 第二审查 (强执行, 复杂工程操作)
+Composer 2.5   = 独立 UI / 样式 / lint / 补测试 (Cursor 内便宜耐用)
 ```
+
+**预算均衡注记**: Claude Max 20x + GPT 10x(较小桶) + Cursor 三个都是 flat → **铺开用三个、别撑爆更小的 GPT 10x**。Claude 侧执行优先走 Sonnet 拉长 20x（省 Opus 周额度），Opus 集中用在需求框架/🔒终审/难架构。
+
+**两派发通道**:
+- **In-harness**（Sonnet subagent）：organizer 直接 spawn，`.claude/rules/*` 自动可见 → 适合 rule-heavy 任务（Java Tool-Skill / Python parity port / rule-aware review）
+- **Out-of-harness**（Codex/Composer：organizer 出卡 → Steve courier）：无 `.claude/rules`，brief 卡**必须自包含**相关规则摘要（否则必翻车）→ 适合可完整 brief 的纯执行
 
 三条铁律:
 
@@ -66,12 +73,13 @@ brief 卡要**自包含** —— 别的 chat 看不到本 chat 的上下文, 卡
 | 改页面/组件/样式 (Vue/RN) · 普通 bug · 补 lint/类型/测试 · 照任务文档批量小改 | **Composer 2.5** | 边界清楚, Cursor 内最顺手最便宜, 高频执行任务 |
 | 跨模块 bug · 查日志 · headed Playwright/E2E · 构建排查 · 仓库级检查 | **GPT-5.5·Codex** | CLI agent 更适合命令行/测试/构建型工作 |
 | 构建/CI/部署脚本问题 | **Codex 执行 + Opus 审** | 执行与风险判断分开 |
-| **Java AI Tool-Skill 意图路由 · Python↔Java parity port** | **Opus**, 或 Opus 写死严格 brief 后给 Codex | 有 `.claude/rules/ai-intent-tool-skill-architecture.md` / `python-java-port.md` 硬规则(Decimal/Map.of order/Lombok null/HALF_UP 等 12 条), 易踩, 执行者无规则上下文会翻车 |
+| **规则重 in-harness 执行**（新 Java Tool / Flyway 编号检查 / rule-aware code review / Python parity port 机械修复） | **Sonnet in-harness** | `.claude/rules/*` 自动可见 → 不会因缺上下文翻 12 条 Java port 规则；比 Opus 省 20x 额度 |
+| **Java AI Tool-Skill 意图路由 · Python↔Java parity port（首次判断/架构）** | **Opus**（或 Opus 写死严格 brief 后给 Sonnet/Codex） | 有 `.claude/rules/ai-intent-tool-skill-architecture.md` / `python-java-port.md` 硬规则(Decimal/Map.of order/Lombok null/HALF_UP 等 12 条), 易踩; 首次需判断力 |
 | 🔒 Flyway/migration/schema · 权限/RLS/多租户/业态隔离 · 架构/跨模块重构/新实体 · 上线前 diff 终审 | **Opus 把关** | 见下方⛔红线 |
 | 同一问题某模型修 2 轮还没好 | 切 **Opus** 做 root-cause review | 不让一个模型一直撞墙; 别盲改 |
 | 某模型改乱了 / 你不放心 | **Opus** root-cause review (先停下判断, 不继续盲改) | |
 
-> 模型名以 Steve 当前工具箱为准(Cursor Composer / OpenAI Codex / 本 Claude chat)。名字变了路由逻辑不变 —— 关键是"执行 vs 判断"分层。
+> 模型名以 Steve 当前工具箱为准(Cursor Composer / OpenAI Codex / 本 Claude chat / Claude Sonnet subagent)。名字变了路由逻辑不变 —— 关键是"执行 vs 判断"分层 + 有没有 `.claude/rules` 上下文。
 
 ---
 
@@ -138,6 +146,70 @@ Opus 从 main 部署 prod → 核对运行中 jar/代码确含修复
 
 ---
 
+## 第二路由轴: Effort + Orchestration
+
+> 第一轴=模型(Opus/Sonnet/Codex/Composer)。第二轴=两个独立决定: 推理深度(effort) + 编排形式(orchestration)。
+> 三轴都乘进 Opus 配额(cost ≈ 轮数 × effort × context), 默认保守、按需升级。
+
+### Effort (Claude harness 旋钮; 只对 Opus/Sonnet 有效)
+
+| 情况 | effort |
+|---|---|
+| 日常 Opus | `high` (默认; Opus 4.8 在此已几乎总是深想) |
+| 单个难 turn | 该 prompt 加 `ultrathink` (只点一轮, 最省) |
+| 长自主 session(30min+) / 真模糊架构 | `xhigh` |
+| `max` | ⛔ 破玻璃; 实测 xhigh 不足才用; 稀缺 Opus 配额杀手 |
+| Sonnet | `high` 封顶 (xhigh 无收益) |
+| Codex/Composer | organizer 在 brief 里"建议", 设不了 |
+
+**Effort ≠ Max 订阅**: 订阅控制用哪个模型/多少额度; effort 控制每轮想多深。两轴正交。
+
+**⚠️ Organizer 是 effort 分配者，不是满载消费者**: 常驻 max effort 去做廉价路由分诊 = 用核弹价钱决定"派给谁" = 烧周额度最快。Organizer 用 `high` 分诊，把 `xhigh`/`ultrathink` 分配给真难的 turn。
+
+### Orchestration (从便宜到贵, 按需上调)
+
+`inline`(默认) → `单 subagent`(侧产出污染 Opus 主上下文/需工具隔离) → `workflow`(10+ agent 交叉核验/跨文件广覆盖) → `ultracode`(常驻 workflow-by-default、最大彻底、不计 token)
+
+- **铁律**: fan-out 时 workers 跑 Sonnet+默认 effort, 只 Opus 编排者 high。**cost = agents × effort, 乘不是加。**
+- **`ultrathink`(深化一个脑) ≠ `ultracode`(开很多脑)**: 名字像, 但前者 effort 轴顶、后者 orchestration 轴顶。
+- **反例**: 概念咨询/单点问题/对话轮 → inline 或单 subagent, **哪怕 ultracode 关键词出现也别默认上 workflow**。
+
+### 组合速查 (模型 × effort × orchestration)
+
+| 任务 | 模型 | effort | orchestration |
+|---|---|---|---|
+| Codex 执行(有 spec) | Codex | default(brief 建议) | inline |
+| Sonnet in-harness 执行 | Sonnet | high | inline |
+| Composer UI/样式 | Composer | default | inline |
+| Opus 需求 framing(低歧义) | Opus | high | inline |
+| Opus 架构决策(真有疑问) | Opus | xhigh | inline |
+| Opus 高风险门控 review | Opus | xhigh | 单 subagent(read-only 隔离) |
+| Opus 单个难点 | Opus | high + `ultrathink` 点该轮 | inline |
+| 广覆盖审计/迁移 | Opus 编排 + Sonnet workers | xhigh(Opus)/high(workers) | ultracode → workflow |
+
+### 台账加两列
+
+现有 dispatch 条目加 `effort` + `orchestration`（见 `docs/dispatch/ACTIVE.md`）:
+
+```
+| ID | 任务 | model | effort | orchestration | 分支 | scope 锁 | 状态 | PR | 阻塞 |
+```
+
+### Brief-vs-do 叠加 effort
+
+"写 xhigh 任务的 brief+review, 比 Opus 直接 xhigh 做更省配额吗？" 能完整 brief → 派; brief 本身就要 xhigh Opus 才写得清 → Opus 直接做。
+
+---
+
+## 审查分层
+
+| 场景 | 审查者 |
+|---|---|
+| 例行 review（无风险改样式/lint/补测试/无红线依赖） | **Sonnet**（rule-aware in-harness，.claude/rules 自动可见，省 Opus 额度）|
+| 🔒 Risky review（权限/RLS/迁移/业态/架构/上线前 diff 终审） | **Opus**（organizer 本体，不可外包）|
+
+---
+
 ## 反 pattern (绝对禁止)
 
 - ❌ 三个模型同时改同一文件 → 互相覆盖(见 `concurrent-edit-safety.md`)
@@ -145,3 +217,7 @@ Opus 从 main 部署 prod → 核对运行中 jar/代码确含修复
 - ❌ brief 卡假设别的 chat 知道"我们刚才聊的" → 卡必须自包含
 - ❌ 红线任务交给 Composer/Codex 自审自部署 → 数据泄漏/覆盖风险
 - ❌ 按固定额度比例硬塞 Opus 干低价值执行 / 硬塞 Composer 做高风险决策
+- ❌ Opus 常驻 max effort 做路由分诊 → 用核弹价钱决定"派给谁"，几天撑爆周限额
+- ❌ Out-of-harness Codex/Composer brief 卡不内联相关 `.claude/rules` 摘要 → Java parity/Tool-Skill 规则缺失必翻车
+- ❌ Java Tool-Skill / Python parity port 直接派 Codex（无规则上下文）→ 用 Sonnet in-harness 或 Opus 把规则内联进 brief
+- ❌ fan-out workflow 时 workers 也跑 Opus/xhigh → cost = agents × effort 是乘，炸配额

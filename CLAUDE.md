@@ -177,7 +177,12 @@ frontend/CretasFoodTrace/src/
 ## Key Patterns
 
 ### 代码质量原则
+
+本项目用 **Thin-Opus-Organizer 编排**：所有想法经一个 Opus organizer 分配给 Sonnet/Codex/Composer，详见 `organizer-protocol.md`。
+
 详见 `.claude/rules/` 目录下的规范文件：
+- `organizer-protocol.md` - **多模型编排模型（Thin-Opus Organizer，顶层入口，核心）**
+- `multi-model-dispatch.md` - 模型/effort/orchestration 三轴路由（含 Sonnet 执行层 + 预算均衡）
 - `ai-intent-tool-skill-architecture.md` - **AI Tool-Skill 架构规范（核心）**
 - `api-response-handling.md` - API 响应处理
 - `typescript-type-safety.md` - TypeScript 类型安全
