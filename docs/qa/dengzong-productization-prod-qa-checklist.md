@@ -57,3 +57,25 @@
 ## 备注
 
 qhj 演示租户名称解析覆盖率约 20%。所有依赖菜品成本/毛利的功能显示“成本数据不足”时，先按诚实空态处理，不直接判 bug。完整毛利链需要补齐菜品定价或人审毕业候选。
+
+## 2026-06-04 执行摘要
+
+证据目录：
+- 全量页面/API headed：`docs/audits/2026-06-04-dengzong-prod-headed-e2e/`
+- 多角色 RBAC headed：`docs/audits/2026-06-04-dengzong-prod-rbac-e2e/`
+
+结果：
+- 全量页面/API：17 页面 PASS / 8 API PASS / 0 FAIL。
+- 多角色店长 KPI 金额 RBAC：5/5 PASS。
+- `qhj_prod` 与 `qhj_finance_mgr` 可见店长 KPI 金额。
+- `qhj_sales_mgr`、`qhj_warehouse_mgr`、`qhj_operator` 金额已脱敏为 null/空展示，不是 0。
+
+本轮发现并修复：
+- `qhj_sales_mgr` 原本可通过 `store-kpi-dashboard` API 看到日营收/客单价金额。根因是店长 KPI 复用了全局 `PRICE_VIEW_ROLES`，其中包含 `sales_manager`。
+- 已改为店长 KPI 专用金额白名单，只允许 super/platform/finance/restaurant manager 等经营管理角色看绝对金额。
+- 修复提交：`65eaafda6 fix(restaurant): tighten store KPI money RBAC`，已推送 `origin/main` 并部署 prod SmartBI Python。
+
+仍需单独判断的权限现象：
+- `qhj_finance_mgr` API 可看金额，但直接访问餐饮运营页面会被 web-admin 路由守卫拦到 403。
+- `qhj_warehouse_mgr` 直接访问餐饮运营页面也为 403，但 API 金额脱敏正确。
+- `qhj_operator` Web 登录后会回到登录页，页面提示该一线员工账号仅限移动端登录；这不是店长 KPI 金额 RBAC 问题。
