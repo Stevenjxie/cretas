@@ -257,7 +257,8 @@ public class IntentExecutionOrchestrator {
         // Phrase confidence is 0.96 (matching v33.1 EarlyPhrase tier so /recognize and /execute
         // produce consistent routing).
         String userInput = request.getUserInput();
-        if (!negationVetoWrite && userInput != null && !userInput.isEmpty()) {
+        if (!negationVetoWrite && userInput != null && !userInput.isEmpty()
+                && !shouldBypassEarlyPhraseShortcutForStoreReference(userInput)) {
             IntentMatchResult earlyPhraseMatch = tryOrchestratorPhraseShortcut(userInput, factoryId);
             if (earlyPhraseMatch != null && earlyPhraseMatch.hasMatch()) {
                 AIIntentConfig phraseIntent = earlyPhraseMatch.getBestMatch();
@@ -1135,6 +1136,10 @@ public class IntentExecutionOrchestrator {
                 .noneMatch(ref -> ref != null
                         && ref.getEntityType() != null
                         && "STORE".equalsIgnoreCase(ref.getEntityType()));
+    }
+
+    boolean shouldBypassEarlyPhraseShortcutForStoreReference(String userInput) {
+        return userInput != null && STORE_REFERENCE_PATTERN.matcher(userInput).find();
     }
 
     IntentExecuteResponse buildStoreReferenceClarificationResponse(IntentExecuteRequest request) {
