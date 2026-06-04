@@ -141,6 +141,24 @@ class GoldBackedRestaurantToolTimeTest {
     }
 
     @Test
+    @DisplayName("近3个月 → trailing 3 calendar months from anchor month (2026-02-01..2026-04-30)")
+    void last3Months() {
+        assertThat(parse("近3个月哪个菜卖得好")).isEqualTo(win("2026-02-01", "2026-04-30"));
+    }
+
+    @Test
+    @DisplayName("最近6个月 → trailing 6 calendar months from anchor month (2025-11-01..2026-04-30)")
+    void last6Months() {
+        assertThat(parse("最近6个月销量最好的菜")).isEqualTo(win("2025-11-01", "2026-04-30"));
+    }
+
+    @Test
+    @DisplayName("近1个月 → just the anchor month (2026-04-01..2026-04-30)")
+    void last1Month() {
+        assertThat(parse("近1个月销量")).isEqualTo(win("2026-04-01", "2026-04-30"));
+    }
+
+    @Test
     @DisplayName("2025年12月 (Chinese) → that month (2025-12-01..2025-12-31)")
     void chineseAbsoluteMonth() {
         assertThat(parse("2025年12月哪个菜卖得好")).isEqualTo(win("2025-12-01", "2025-12-31"));
@@ -190,6 +208,12 @@ class GoldBackedRestaurantToolTimeTest {
     @DisplayName("resolveWindow 近30天 → 2026-04-01..2026-04-30")
     void resolveWindowLast30Days() {
         assertThat(resolve("近30天哪个菜卖得好")).isEqualTo(win("2026-04-01", "2026-04-30"));
+    }
+
+    @Test
+    @DisplayName("resolveWindow 近3个月 → 2026-02-01..2026-04-30 (rolling months, was the gap)")
+    void resolveWindowLast3Months() {
+        assertThat(resolve("近3个月哪个菜卖得好")).isEqualTo(win("2026-02-01", "2026-04-30"));
     }
 
     @Test

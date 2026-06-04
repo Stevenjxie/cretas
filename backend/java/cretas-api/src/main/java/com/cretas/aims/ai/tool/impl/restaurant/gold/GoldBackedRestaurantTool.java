@@ -354,6 +354,18 @@ public abstract class GoldBackedRestaurantTool extends AbstractBusinessTool {
             }
         }
 
+        // 4b. Rolling N months — 近N个月 / 最近N个月 (trailing calendar months, inclusive of the
+        // anchor's month). Checked AFTER N-days so "近30天" still wins; the pattern requires 月
+        // (not 天/日) so the two never collide. Window = first day of (anchor month - (n-1)) .. anchor.
+        Matcher nmo = NL_LAST_N_MONTHS.matcher(userInput);
+        if (nmo.find()) {
+            int n = Integer.parseInt(nmo.group(1));
+            if (n > 0) {
+                LocalDate start = YearMonth.from(anchor).minusMonths((long) n - 1).atDay(1);
+                return new LocalDate[]{start, anchor};
+            }
+        }
+
         // 5. Relative month — anchored to data's latest month, NOT today
         if (userInput.contains("本月") || userInput.contains("这个月") || userInput.contains("当月")) {
             YearMonth ym = YearMonth.from(anchor);
@@ -437,6 +449,10 @@ public abstract class GoldBackedRestaurantTool extends AbstractBusinessTool {
     /** {@code 近N天} / {@code 最近N天} — rolling N-day window. */
     private static final Pattern NL_LAST_N_DAYS = Pattern.compile(
             "(?:最近|近)\\s*(\\d{1,3})\\s*[天日]");
+
+    /** {@code 近N个月} / {@code 最近N个月} — rolling N-month window (optional 个). */
+    private static final Pattern NL_LAST_N_MONTHS = Pattern.compile(
+            "(?:最近|近)\\s*(\\d{1,3})\\s*个?\\s*月");
 
     // =========================================================================
     // Helpers
