@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<meta name="format-detection" content="telephone=no" />
+<title>白垩纪 AI Agent — 下载</title>
+<meta name="description" content="白垩纪 AI Agent 食品溯源系统 App 下载" />
+<style>
+  :root {
+    --brand: #2d5016;
+    --brand-light: #3f7020;
+    --accent: #1976d2;
+    --ink: #1a1a1a;
+    --muted: #6b7280;
+    --card: #ffffff;
+    --bg: #f3f6f0;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei",
+      "Hiragino Sans GB", "Source Han Sans SC", "Noto Sans CJK SC", sans-serif;
+    color: var(--ink);
+    background: linear-gradient(160deg, #2d5016 0%, #4a7c2a 38%, #f3f6f0 38%, #f3f6f0 100%);
+    -webkit-font-smoothing: antialiased;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    min-height: 100%;
+    padding: 0 20px env(safe-area-inset-bottom);
+  }
+  .wrap { width: 100%; max-width: 440px; display: flex; flex-direction: column; align-items: center; }
+  .brand-head { padding: 44px 0 26px; text-align: center; color: #fff; }
+  .logo {
+    width: 88px; height: 88px; border-radius: 22px; margin: 0 auto 16px;
+    background: #fff; display: flex; align-items: center; justify-content: center;
+    box-shadow: 0 10px 30px rgba(0,0,0,.18); overflow: hidden;
+  }
+  .logo img { width: 100%; height: 100%; object-fit: cover; }
+  .logo .fallback { font-size: 40px; font-weight: 800; color: var(--brand); }
+  .brand-head h1 { font-size: 22px; font-weight: 700; letter-spacing: .5px; }
+  .brand-head p { font-size: 13px; opacity: .9; margin-top: 6px; }
+
+  .card {
+    width: 100%; background: var(--card); border-radius: 20px; padding: 28px 24px 26px;
+    box-shadow: 0 16px 40px rgba(20,40,10,.12); text-align: center;
+  }
+  .card h2 { font-size: 18px; font-weight: 700; margin-bottom: 6px; }
+  .ver { font-size: 13px; color: var(--muted); margin-bottom: 22px; }
+  .ver b { color: var(--brand-light); font-weight: 700; }
+
+  .btn {
+    display: flex; align-items: center; justify-content: center; gap: 10px;
+    width: 100%; padding: 16px 18px; border: none; border-radius: 14px;
+    font-size: 17px; font-weight: 700; color: #fff; text-decoration: none;
+    background: linear-gradient(135deg, var(--brand-light), var(--brand));
+    box-shadow: 0 8px 20px rgba(45,80,22,.35); cursor: pointer;
+    transition: transform .08s ease, box-shadow .2s ease;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .btn:active { transform: translateY(1px) scale(.995); }
+  .btn svg { width: 22px; height: 22px; flex: none; }
+  .btn.ios { background: linear-gradient(135deg, #2b9bff, var(--accent)); box-shadow: 0 8px 20px rgba(25,118,210,.35); }
+
+  .hint { font-size: 12.5px; color: var(--muted); line-height: 1.7; margin-top: 16px; }
+  .hint b { color: var(--ink); }
+
+  /* desktop QR */
+  .qr-box { display: none; flex-direction: column; align-items: center; gap: 14px; }
+  .qr-box img { width: 188px; height: 188px; border-radius: 12px; border: 1px solid #e5e7eb; padding: 8px; background: #fff; }
+  .qr-box .qr-tip { font-size: 14px; color: var(--ink); font-weight: 600; }
+  .qr-box .qr-sub { font-size: 12.5px; color: var(--muted); }
+
+  .footer { margin: 26px 0 30px; font-size: 12px; color: #9aa3ac; text-align: center; line-height: 1.7; }
+  .footer a { color: #7d8893; text-decoration: none; }
+
+  .steps { text-align: left; margin-top: 20px; background: #f7faf4; border-radius: 12px; padding: 14px 16px; }
+  .steps .st-title { font-size: 12.5px; font-weight: 700; color: var(--brand-light); margin-bottom: 8px; }
+  .steps ol { margin: 0; padding-left: 18px; }
+  .steps li { font-size: 12.5px; color: var(--muted); line-height: 1.85; }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="brand-head">
+      <div class="logo">
+        <img src="./icon.png" alt="白垩纪 AI Agent" onerror="this.style.display='none';this.nextElementSibling.style.display='flex';" />
+        <span class="fallback" style="display:none">白</span>
+      </div>
+      <h1>白垩纪 AI Agent</h1>
+      <p>食品溯源 · 智能工厂管理</p>
+    </div>
+
+    <div class="card">
+      <h2 id="title">手机扫码下载</h2>
+      <div class="ver" id="ver">最新版本 <b data-version>v–</b></div>
+
+      <a class="btn" id="dlbtn" href="#" rel="noopener">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 11 5 5 5-5"/><path d="M5 21h14"/></svg>
+        <span id="btntext">下载安装包</span>
+      </a>
+
+      <div class="hint" id="hint"></div>
+
+      <div class="qr-box" id="qrbox">
+        <img id="qrimg" alt="扫码下载二维码" />
+        <div class="qr-tip">请用手机扫码下载</div>
+        <div class="qr-sub">支持 Android / 鸿蒙 / iOS</div>
+      </div>
+
+      <div class="steps" id="androidsteps" style="display:none">
+        <div class="st-title">安装说明</div>
+        <ol>
+          <li>点击上方按钮，浏览器开始下载 APK</li>
+          <li>下载完成后点击文件，允许"安装未知应用"</li>
+          <li>已装旧版会自动覆盖更新，<b>无需卸载</b></li>
+        </ol>
+      </div>
+    </div>
+
+    <div class="footer">
+      © 白垩纪未来 (Cretaceous Future)<br />
+      <a href="https://www.cretaceousfuture.com" rel="noopener">www.cretaceousfuture.com</a>
+    </div>
+  </div>
+
+<script>
+(function () {
+  // ── 单一事实源：发版同步脚本只改这两行 ─────────────────────────────
+  var APP_VERSION = '1.0.1';
+  var APK_URL = 'https://dl.cretaceousfuture.com/cretas-v1.0.1.apk';
+  // iOS App Store（国区）地址 —— 由 Steve 提供后填入（占位待替换）
+  var APPSTORE_URL_CN = '__APPSTORE_URL_CN__';
+  // ───────────────────────────────────────────────────────────────
+
+  // 版本号文案统一渲染（避免多处硬编码）
+  Array.prototype.forEach.call(document.querySelectorAll('[data-version]'), function (el) {
+    el.textContent = 'v' + APP_VERSION;
+  });
+
+  var ua = navigator.userAgent.toLowerCase();
+  var isIOS = (/iphone|ipad|ipod/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)) && !window.MSStream;
+  var isAndroid = /android|harmonyos|huawei|honor/.test(ua);
+  var device = isIOS ? 'ios' : (isAndroid ? 'android' : 'desktop');
+
+  var btn = document.getElementById('dlbtn');
+  var btnText = document.getElementById('btntext');
+  var hint = document.getElementById('hint');
+  var title = document.getElementById('title');
+  var qrbox = document.getElementById('qrbox');
+  var androidsteps = document.getElementById('androidsteps');
+  var hasAppStore = APPSTORE_URL_CN && APPSTORE_URL_CN.indexOf('__') !== 0;
+
+  if (device === 'android') {
+    title.textContent = '下载安卓版';
+    btn.href = APK_URL;
+    btn.setAttribute('download', '');
+    btnText.textContent = '立即下载 (Android)';
+    androidsteps.style.display = 'block';
+    hint.innerHTML = '将开始下载安装包 <b>v' + APP_VERSION + '</b><br>' +
+      '已装旧版会自动覆盖更新，无需卸载<br>' +
+      '若提示"未经安全审核"，点「<b>继续安装</b>」即可';
+  } else if (device === 'ios') {
+    title.textContent = '下载 iOS 版';
+    btn.classList.add('ios');
+    btnText.textContent = hasAppStore ? '前往 App Store' : 'iOS 版即将推出';
+    if (hasAppStore) {
+      btn.href = APPSTORE_URL_CN;
+      hint.innerHTML = '将跳转至 App Store，请更新到 <b>v' + APP_VERSION + '</b>';
+    } else {
+      btn.href = 'javascript:void(0)';
+      btn.style.opacity = '.6';
+      btn.style.pointerEvents = 'none';
+      hint.innerHTML = 'iOS 版正在上架中，请稍后再来<br>安卓 / 鸿蒙用户可直接下载安装';
+    }
+  } else {
+    // 桌面：隐藏按钮，显示二维码引导手机扫码
+    title.textContent = '手机扫码下载';
+    btn.style.display = 'none';
+    document.getElementById('ver').style.display = 'block';
+    qrbox.style.display = 'flex';
+    var pageUrl = location.href.split('#')[0];
+    document.getElementById('qrimg').src =
+      'https://api.qrserver.com/v1/create-qr-code/?size=376x376&margin=0&data=' + encodeURIComponent(pageUrl);
+    hint.innerHTML = '用微信 / 浏览器扫一扫，在手机上打开本页面下载';
+  }
+})();
+</script>
+</body>
+</html>

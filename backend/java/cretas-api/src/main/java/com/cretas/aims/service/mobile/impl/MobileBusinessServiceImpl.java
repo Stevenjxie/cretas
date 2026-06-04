@@ -65,8 +65,27 @@ public class MobileBusinessServiceImpl implements MobileBusinessService {
     private final OssService ossService;
     private final ObjectMapper objectMapper;
 
-    @Value("${app.version.latest:1.0.0}")
+    @Value("${app.version.latest:1.0.1}")
     private String latestVersion;
+
+    /** 低于此版本 (versionName) 强制更新；默认 1.0.0 = 现存用户不被强制 */
+    @Value("${app.version.min:1.0.0}")
+    private String minVersion;
+
+    /** Android APK 直链前缀，最终 URL = base + latestVersion + ".apk" */
+    @Value("${app.version.android.download-base:https://dl.cretaceousfuture.com/cretas-v}")
+    private String androidDownloadBase;
+
+    /** iOS 跳转地址（App Store 国区） */
+    @Value("${app.version.ios.download-url:}")
+    private String iosDownloadUrl;
+
+    @Value("${app.version.release-notes:}")
+    private String releaseNotes;
+
+    /** 最新 APK 字节数（下载页/网关展示），0 表示未配置 */
+    @Value("${app.version.file-size:0}")
+    private Long fileSize;
 
     // ==================== 仪表盘 & 同步 ====================
 
@@ -193,32 +212,61 @@ public class MobileBusinessServiceImpl implements MobileBusinessService {
 
     @Override
     public MobileDTO.VersionCheckResponse checkVersion(String currentVersion, String platform) {
-        log.debug("检查版本: current={}, platform={}", currentVersion, platform);
+        log.debug("检查版本: current={}, platform={}, latest={}, min={}",
+                currentVersion, platform, latestVersion, minVersion);
 
-        boolean updateRequired = false;
-        boolean updateAvailable = false;
+        // versionName 语义比较；阈值由环境变量驱动 (蓝绿/多实例共享 .env.prod 避免漂移)
+        boolean updateAvailable = compareVersion(currentVersion, latestVersion) < 0;
+        boolean updateRequired = compareVersion(currentVersion, minVersion) < 0;
 
-        // 简单版本比较逻辑
-        if (!currentVersion.equals(latestVersion)) {
-            updateAvailable = true;
-            // 如果主版本号不同，则强制更新
-            String[] current = currentVersion.split("\\.");
-            String[] latest = latestVersion.split("\\.");
-            if (!current[0].equals(latest[0])) {
-                updateRequired = true;
-            }
-        }
+        String downloadUrl = "ios".equalsIgnoreCase(platform)
+                ? iosDownloadUrl
+                : androidDownloadBase + latestVersion + ".apk";
 
         return MobileDTO.VersionCheckResponse.builder()
                 .currentVersion(currentVersion)
                 .latestVersion(latestVersion)
                 .updateRequired(updateRequired)
                 .updateAvailable(updateAvailable)
-                .downloadUrl("https://download.example.com/app-" + platform + "-" + latestVersion + ".apk")
-                .releaseNotes("1. 修复已知问题\n2. 性能优化\n3. 新增功能")
-                .fileSize(52428800L) // 50MB
-                .releaseDate(LocalDateTime.now().minusDays(7))
+                .downloadUrl(downloadUrl)
+                .releaseNotes(releaseNotes == null || releaseNotes.isBlank() ? null : releaseNotes)
+                .fileSize(fileSize != null && fileSize > 0 ? fileSize : null)
                 .build();
+    }
+
+    /**
+     * 比较两个 versionName（如 "1.0.1" vs "1.0.10"）。返回 &lt;0 / 0 / &gt;0。
+     * 逐段数字比较，缺段补 0，非数字前缀按其前导数字解析（容忍 "1-rc1"）。
+     * null/空按 "0"（最旧）处理 —— currentVersion 缺失时会被判定为需强制更新。
+     * package-private 便于单元测试直接断言。
+     */
+    static int compareVersion(String a, String b) {
+        String[] pa = (a == null || a.isBlank() ? "0" : a.trim()).split("\\.");
+        String[] pb = (b == null || b.isBlank() ? "0" : b.trim()).split("\\.");
+        int n = Math.max(pa.length, pb.length);
+        for (int i = 0; i < n; i++) {
+            int va = i < pa.length ? leadingInt(pa[i]) : 0;
+            int vb = i < pb.length ? leadingInt(pb[i]) : 0;
+            if (va != vb) {
+                return Integer.compare(va, vb);
+            }
+        }
+        return 0;
+    }
+
+    private static int leadingInt(String s) {
+        int i = 0;
+        while (i < s.length() && Character.isDigit(s.charAt(i))) {
+            i++;
+        }
+        if (i == 0) {
+            return 0;
+        }
+        try {
+            return Integer.parseInt(s.substring(0, i));
+        } catch (NumberFormatException e) {
+            return 0;
+        }
     }
 
     @Override
