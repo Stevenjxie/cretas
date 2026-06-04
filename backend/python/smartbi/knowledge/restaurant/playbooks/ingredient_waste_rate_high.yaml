@@ -1,0 +1,113 @@
+# 食材损耗率偏高 — 操作建议手册
+#
+# trigger_metric: ingredient_waste_rate (报废损耗 / (采购食材成本 + 损耗), 百分比 0-100)
+# threshold_source: benchmarks waste_loss_rate
+#   通用: 健康 8-25 / 标杆 <5; 火锅: 健康 3-15 / 标杆 <5
+# higher_is_worse: true (损耗越高越糟)
+
+diagnosis_code: ingredient_waste_rate_high
+trigger_metric: ingredient_waste_rate
+trigger_condition: "actual > range_high"
+display_name: "食材损耗率偏高"
+
+severity_levels:
+  warning:
+    condition: "actual > range_high"
+    label: "损耗偏高"
+    color: yellow
+  critical:
+    condition: "actual > range_high + 25%范围宽度"
+    label: "损耗严重"
+    color: red
+
+diagnosis_checklist:
+  - question: "是否有每日食材报废登记？"
+    if_no: "先建立每日报废台账, 没有数据就无法定位损耗来源"
+  - question: "损耗集中在哪个品类（叶菜/海鲜/肉类）？"
+    if_yes: "对高损耗品类单独优化备料与保鲜"
+  - question: "采购量是否远超实际出品需求？"
+    if_yes: "复核安全库存上限, 削减过量采购"
+
+action_plans:
+  - id: 1
+    name: "每日报废追踪"
+    priority: "P0"
+    actions:
+      - "设立每日食材报废登记表, 记录品名/数量/原因"
+      - "每周复盘损耗 TOP5 品类, 定向改善"
+      - "对比各门店损耗率差异, 末位门店专项整改"
+    expected_impact: "损耗率降低 3-5 个百分点"
+
+  - id: 2
+    name: "库存与采购管控"
+    priority: "P0"
+    actions:
+      - "按历史销量+天气+节假日预测备料量, 设安全库存上限"
+      - "实行先进先出(FIFO), 减少过期报废"
+      - "削减过量采购, 高损耗品类小批量多频次进货"
+    expected_impact: "过期报废减少 2-4 个百分点"
+
+  - id: 3
+    name: "净料率标准化"
+    priority: "P1"
+    actions:
+      - "建立各食材净料率卡标准, 培训切配减少边角料"
+      - "推动中央厨房/统一预处理降低单店切配损耗"
+      - "高损耗海鲜/叶菜建立每日采购与预订量联动机制"
+    expected_impact: "切配损耗降低 2-3 个百分点"
+
+# ── 结构化处方行动 (P3.7 结构, Phase 1 #60 新增) ─────────
+rx_actions:
+  - id: WR-A01
+    title: 建立每日报废登记 + 周 TOP5 复盘
+    description: 设立每日食材报废台账(品名/数量/原因), 每周拉出损耗 TOP5 品类做根因复盘, 没有数据就无从下手。
+    owner: 店长
+    timeframe: 本周内
+    priority: P0
+    effort: low
+    expected_impact: 损耗率可见可控, 首月即可降低 2-3pp
+
+  - id: WR-A02
+    title: 安全库存上限管控削减过量采购
+    description: 按历史销量+天气+节假日预测备料量, 对高损耗品类设安全库存上限, 小批量多频次进货, 砍掉过量采购导致的过期报废。
+    owner: 运营经理
+    timeframe: 2 周
+    priority: P0
+    effort: medium
+    expected_impact: 过期报废 -2~4pp, 月度减少浪费 ≈ ¥5-12K
+
+  - id: WR-A03
+    title: 中央厨房净料率卡标准化
+    description: 建立各食材净料率卡标准(可食部分占比), 推动中央厨房或统一预处理, 培训切配减少边角料, 稳定单店损耗水平。
+    owner: 中央厨房
+    timeframe: 4 周
+    priority: P1
+    effort: high
+    expected_impact: 切配损耗 -2~3pp, 损耗率向行业标杆(<5%)靠拢
+
+sub_sector_notes:
+  火锅:
+    - "火锅食材预处理损耗本应低于炒菜类, 损耗偏高多来自涮品备货过量"
+    - "自助小料台的损耗常被忽视, 单独核算"
+    - "参考海底捞: 自建供应链可将损耗控制在 5% 以下"
+  快餐:
+    - "标准化程度高, 损耗偏高通常是备料量预测不准"
+    - "高峰备料与平峰备料分开管控, 避免平峰过量报废"
+  烧烤:
+    - "肉类采购量大, 冷链仓储与解冻损耗是主要控制点"
+    - "腌制半成品按当日预估量制作, 避免隔夜报废"
+
+decision_tree:
+  root: "食材损耗率是否超过子行业上限？"
+  yes:
+    question: "是否已有每日报废登记数据？"
+    no:
+      action: "紧急启动: 每日报废追踪(P0), 先有数据再优化"
+    yes:
+      question: "损耗是否集中在少数高损耗品类？"
+      yes:
+        action: "优先执行: 库存与采购管控(P0) + 净料率标准化(P1)"
+      no:
+        action: "执行: 库存与采购管控(P0) 全品类铺开"
+  no:
+    action: "当前损耗率健康, 定期监控即可"

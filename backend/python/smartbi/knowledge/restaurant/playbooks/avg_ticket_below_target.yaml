@@ -1,0 +1,111 @@
+# 客单价低于目标 — 操作建议手册
+#
+# trigger_metric: avg_ticket_vs_target (实际客单价 / 目标客单价 - 1.0, 偏差率)
+# 健康 >= -0.05 / 偏低(warning) -0.15 ~ -0.05 / 严重(critical) < -0.15
+# higher_is_worse: false (低于目标越多越糟)
+
+diagnosis_code: avg_ticket_below_target
+trigger_metric: avg_ticket_vs_target
+trigger_condition: "value < -0.05"
+display_name: "客单价低于目标"
+
+severity_levels:
+  warning:
+    condition: "-0.15 <= value < -0.05"
+    label: "客单价偏低"
+    color: yellow
+  critical:
+    condition: "value < -0.15"
+    label: "客单价严重不达标"
+    color: red
+
+diagnosis_checklist:
+  - question: "目标客单价设定是否合理（参照子行业中位数）？"
+    if_no: "先校准目标客单价, 避免目标虚高造成误判"
+  - question: "是否缺少高客单价的旗舰菜/套餐锚点？"
+    if_yes: "增设价格锚定的旗舰菜品引导客单上行"
+  - question: "饮品/甜品等高毛利附加品附加率是否偏低？"
+    if_yes: "强推套餐+饮品组合提升单均消费"
+
+action_plans:
+  - id: 1
+    name: "菜单价格锚定"
+    priority: "P0"
+    actions:
+      - "上架 1-2 个高客单旗舰菜品, 做价格心理锚点"
+      - "调整菜单排版, 把高毛利高客单菜品放在视觉黄金位"
+      - "优化套餐结构, 引导客户选择更高价位组合"
+    expected_impact: "客单价提升 5-10 元"
+
+  - id: 2
+    name: "套餐与附加品强推"
+    priority: "P0"
+    actions:
+      - "推出套餐 + 饮品/甜品组合, 提高单均消费"
+      - "点餐环节培训推荐高毛利附加品(饮品/小食)"
+      - "会员/储值客户专享加价升级套餐"
+    expected_impact: "套餐附加率提升, 客单价 +3-8 元"
+
+  - id: 3
+    name: "高客单时段与桌型经营"
+    priority: "P1"
+    actions:
+      - "分析高客单时段(晚市/周末), 针对性配置高价菜单"
+      - "大桌/包间引导多人聚餐高客单消费场景"
+      - "复核折扣与优惠券是否过度拉低实际客单"
+    expected_impact: "高客单时段占比提升, 综合客单回升"
+
+# ── 结构化处方行动 (P3.7 结构, Phase 1 #60 新增) ─────────
+rx_actions:
+  - id: AT-A01
+    title: 旗舰菜品做价格心理锚
+    description: 上架 1-2 个高客单旗舰菜品放在菜单视觉黄金位, 用高价锚点抬升整体点单价位, 引导客户向中高价菜品迁移。
+    owner: 店长
+    timeframe: 本周内
+    priority: P0
+    effort: low
+    expected_impact: 客单价 +5-10 元, 不增成本即可见效
+
+  - id: AT-A02
+    title: 套餐 + 饮品组合强推
+    description: 设计套餐+饮品/甜品的高毛利组合, 点餐环节培训主动推荐附加品, 储值会员专享升级套餐, 提升单均消费。
+    owner: 运营经理
+    timeframe: 2 周
+    priority: P0
+    effort: medium
+    expected_impact: 套餐附加率 +10pp, 客单价 +3-8 元
+
+  - id: AT-A03
+    title: 高客单时段与桌型分析
+    description: 分析晚市/周末高客单时段, 针对性配置高价菜单与大桌聚餐场景, 复核折扣/优惠券是否过度拉低实际客单。
+    owner: 运营经理
+    timeframe: Q2 结束前
+    priority: P1
+    effort: medium
+    expected_impact: 高客单时段占比提升, 综合客单价回升至目标
+
+sub_sector_notes:
+  火锅:
+    - "锅底升级(牛油/番茄拼锅)和特色涮品是火锅抬客单的天然抓手"
+    - "酒水/饮品在火锅场景渗透率高, 是高毛利客单增量来源"
+  快餐:
+    - "快餐客单弹性小, 主要靠套餐组合和小食饮品附加提升"
+    - "避免单纯涨价导致客流流失, 用加量加料的价值感拉客单"
+  烧烤:
+    - "烧烤宵夜场景酒水占比高, 主推啤酒/饮料套餐拉客单"
+    - "高价招牌肉串/海鲜拼盘做锚点, 引导客户从低价素串向高价品迁移"
+
+decision_tree:
+  root: "客单价是否低于目标超过 5%？"
+  yes:
+    question: "目标客单价设定是否合理？"
+    no:
+      action: "先校准目标客单价(参照子行业中位数), 再判断是否真不达标"
+    yes:
+      question: "偏差是否超过 15%(严重)？"
+      yes:
+        action: "紧急启动: 菜单价格锚定(P0) + 套餐与附加品强推(P0)"
+      no:
+        action: "执行: 套餐与附加品强推(P0) + 高客单时段经营(P1)"
+  no:
+    action: "客单价达标, 定期监控即可"
