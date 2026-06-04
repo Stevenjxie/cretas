@@ -27,6 +27,16 @@ export const getRecipeSummary = (factoryId: string) =>
 export const calculateRecipeIngredients = (factoryId: string, productTypeId: string, quantity: number = 1) =>
   get(`/${factoryId}/restaurant/recipes/by-dish/${productTypeId}/calculate`, { params: { quantity } });
 
+// ==================== 成本卡 / 出菜反推 (#57) ====================
+
+/**
+ * 菜品成本卡: 逐料食材成本拆解 + 毛利率 (按份数缩放)。
+ * 价权字段 (totalIngredientCost / sellPrice / grossMargin / 行 unitPrice/itemCost)
+ * 对无价权角色由后端 PriceFieldResponseAdvice 自动剥离为 null。
+ */
+export const getDishCostCard = (factoryId: string, productTypeId: string, portions: number = 1) =>
+  get(`/${factoryId}/restaurant/dishes/${productTypeId}/cost-card`, { params: { portions } });
+
 // ==================== 领料管理 ====================
 
 export const getRequisitions = (factoryId: string, params?: Record<string, unknown>) =>
