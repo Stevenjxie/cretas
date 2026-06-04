@@ -30,6 +30,9 @@ _VALID_KPI_KINDS = {"revenue", "bill_count"}
 _FORECAST_MONEY_KEYS = frozenset({
     "forecast_amount", "lower_bound", "upper_bound",
     "actual_amount", "target_amount",
+    # #58 P2 margin keys (毛利 / 成本金额). margin_rate / coverage counts are
+    # NOT money (directional / diagnostic) and stay visible.
+    "margin_amount", "cogs_amount", "target_margin",
 })
 
 # Decompose-response revenue keys — monetary ONLY when kpiKind == 'revenue'
@@ -291,4 +294,154 @@ async def suppress_alert(
             "suppressedUntil": row["suppressed_until"].isoformat(),
         },
         "message": "预警已静默",
+    }
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# #58 Phase 2 — 毛利 (margin = 营收 − 食材成本 COGS)
+# COGS 跨库即时计算 (POS qty × agg_restaurant_product_cost.food_cost)。
+# 成本数据不足 (#61 菜名解析 / 配方未配价) → 诚实降级, 金额 None, 绝不返回假毛利。
+# ══════════════════════════════════════════════════════════════════════════════
+async def _get_cretas_pool():
+    from smartbi.config import get_cretas_pool
+    return await get_cretas_pool()
+
+
+# ── GET /margin-forecast ──────────────────────────────────────────────────────
+@router.get("/restaurant-targets/margin-forecast")
+async def get_margin_forecast(
+    request: Request,
+    horizon_days: int = Query(30, ge=1, le=90),
+    window_days: int = Query(90, ge=14, le=365),
+    store_id: Optional[int] = Query(None),
+) -> Dict[str, Any]:
+    factory_id = _get_factory_id(request)
+    if not factory_id:
+        raise HTTPException(status_code=401, detail="tenant context not set")
+    pool = await _get_pool()
+    if pool is None:
+        raise HTTPException(status_code=503, detail="smartbi_db unavailable")
+    cretas_pool = await _get_cretas_pool()
+    if cretas_pool is None:
+        raise HTTPException(status_code=503, detail="cretas_db unavailable")
+
+    from smartbi.services.target_margin import compute_margin_forecast
+
+    try:
+        result = await compute_margin_forecast(
+            pool, cretas_pool, factory_id,
+            horizon_days=horizon_days, window_days=window_days, store_id=store_id,
+        )
+    except Exception as e:
+        logger.exception("margin-forecast failed: %s", e)
+        raise HTTPException(status_code=500, detail=f"margin-forecast failed: {e}")
+
+    result = _strip_forecast_money(result, _get_role(request))
+    return {"success": True, "data": result, "message": "ok"}
+
+
+# ── GET /margin-pace-alert ────────────────────────────────────────────────────
+@router.get("/restaurant-targets/margin-pace-alert")
+async def get_margin_pace_alert(
+    request: Request,
+    store_id: Optional[int] = Query(None),
+    period_type: str = Query("month", description="month|week|day|year"),
+) -> Dict[str, Any]:
+    factory_id = _get_factory_id(request)
+    if not factory_id:
+        raise HTTPException(status_code=401, detail="tenant context not set")
+    if period_type not in {"month", "week", "day", "year"}:
+        raise HTTPException(
+            status_code=422, detail="period_type must be month|week|day|year"
+        )
+    pool = await _get_pool()
+    if pool is None:
+        raise HTTPException(status_code=503, detail="smartbi_db unavailable")
+    cretas_pool = await _get_cretas_pool()
+    if cretas_pool is None:
+        raise HTTPException(status_code=503, detail="cretas_db unavailable")
+
+    from smartbi.services.target_margin import compute_margin_pace_alert
+
+    try:
+        result = await compute_margin_pace_alert(
+            pool, cretas_pool, factory_id,
+            store_id=store_id, period_type=period_type,
+        )
+    except Exception as e:
+        logger.exception("margin-pace-alert failed: %s", e)
+        raise HTTPException(status_code=500, detail=f"margin-pace-alert failed: {e}")
+
+    result = _strip_forecast_money(result, _get_role(request))
+    return {"success": True, "data": result, "message": "ok"}
+
+
+# ── GET /margin-rate ──────────────────────────────────────────────────────────
+@router.get("/restaurant-targets/margin-rate")
+async def get_margin_rate_endpoint(
+    request: Request,
+    store_id: Optional[int] = Query(None),
+) -> Dict[str, Any]:
+    factory_id = _get_factory_id(request)
+    if not factory_id:
+        raise HTTPException(status_code=401, detail="tenant context not set")
+    pool = await _get_pool()
+    if pool is None:
+        raise HTTPException(status_code=503, detail="smartbi_db unavailable")
+
+    from smartbi.services.target_margin import get_margin_rate
+
+    rate = await get_margin_rate(pool, factory_id, store_id=store_id)
+    # target_margin_rate is a ratio (0..1), NOT a money amount → not stripped.
+    return {
+        "success": True,
+        "data": {"storeId": store_id, "targetMarginRate": float(rate)},
+        "message": "ok",
+    }
+
+
+# ── PUT /margin-rate (admin only) ─────────────────────────────────────────────
+class MarginRateRequest(BaseModel):
+    targetMarginRate: float
+    storeId: Optional[int] = None
+
+    @field_validator("targetMarginRate")
+    @classmethod
+    def _vr(cls, v: float) -> float:
+        if v < 0 or v > 1:
+            raise ValueError("targetMarginRate must be within [0, 1]")
+        return v
+
+
+@router.put("/restaurant-targets/margin-rate")
+async def put_margin_rate_endpoint(
+    request: Request, body: MarginRateRequest
+) -> Dict[str, Any]:
+    factory_id = _get_factory_id(request)
+    if not factory_id:
+        raise HTTPException(status_code=401, detail="tenant context not set")
+
+    # Admin gate: only price-view (manager-class) roles may change the rate.
+    from smartbi_compat._rbac_strip import PRICE_VIEW_ROLES
+    role = _get_role(request)
+    if not (role and role in PRICE_VIEW_ROLES):
+        raise HTTPException(
+            status_code=403, detail="需要管理员权限才能修改目标毛利率"
+        )
+
+    pool = await _get_pool()
+    if pool is None:
+        raise HTTPException(status_code=503, detail="smartbi_db unavailable")
+
+    from decimal import Decimal as _Decimal
+    from smartbi.services.target_margin import set_margin_rate
+
+    stored = await set_margin_rate(
+        pool, factory_id, _Decimal(str(body.targetMarginRate)),
+        store_id=body.storeId, updated_by=_get_username(request),
+    )
+    return {
+        "success": True,
+        "data": {"storeId": body.storeId, "targetMarginRate": float(stored)},
+        "message": "目标毛利率已更新",
     }
