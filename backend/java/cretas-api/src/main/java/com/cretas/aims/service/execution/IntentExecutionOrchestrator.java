@@ -1571,6 +1571,7 @@ public class IntentExecutionOrchestrator {
             List<Map<String, Object>> items = null;
             if (data instanceof Map) {
                 Map<String, Object> dataMap = (Map<String, Object>) data;
+                extractTopStoreSlot(sessionId, dataMap.get("top_store"));
                 if (dataMap.containsKey("content") && dataMap.get("content") instanceof List)
                     items = (List<Map<String, Object>>) dataMap.get("content");
             } else if (data instanceof List) {
@@ -1590,6 +1591,30 @@ public class IntentExecutionOrchestrator {
             extractSlot(sessionId, firstItem, "SUPPLIER", "supplierId", "supplier_id");
             extractSlot(sessionId, firstItem, "PRODUCT", "productTypeId", "productId", "materialTypeId");
         } catch (Exception e) { log.debug("Entity extraction failed: {}", e.getMessage()); }
+    }
+
+    @SuppressWarnings("unchecked")
+    private void extractTopStoreSlot(String sessionId, Object topStoreObj) {
+        if (topStoreObj == null) return;
+        try {
+            Map<String, Object> topStore;
+            if (topStoreObj instanceof Map) {
+                topStore = (Map<String, Object>) topStoreObj;
+            } else {
+                topStore = objectMapper.convertValue(topStoreObj,
+                        new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>() {});
+            }
+            String id = getStringValue(topStore, "store_id", "id");
+            String name = getStringValue(topStore, "门店", "store_name", "name");
+            if (id == null || name == null) return;
+            var slot = com.cretas.aims.dto.conversation.EntitySlot.store(id, name);
+            conversationMemoryService.updateEntitySlot(
+                    sessionId,
+                    com.cretas.aims.dto.conversation.EntitySlot.SlotType.STORE,
+                    slot);
+        } catch (Exception e) {
+            log.debug("STORE entity extraction failed: {}", e.getMessage());
+        }
     }
 
     private void extractSlot(String sessionId, Map<String, Object> item, String entityType, String... idKeys) {
@@ -1614,6 +1639,7 @@ public class IntentExecutionOrchestrator {
         return switch (entityType.toUpperCase()) {
             case "BATCH", "MATERIAL_BATCH" -> com.cretas.aims.dto.conversation.EntitySlot.SlotType.BATCH;
             case "SUPPLIER" -> com.cretas.aims.dto.conversation.EntitySlot.SlotType.SUPPLIER;
+            case "STORE" -> com.cretas.aims.dto.conversation.EntitySlot.SlotType.STORE;
             case "CUSTOMER" -> com.cretas.aims.dto.conversation.EntitySlot.SlotType.CUSTOMER;
             case "PRODUCT", "PRODUCT_TYPE" -> com.cretas.aims.dto.conversation.EntitySlot.SlotType.PRODUCT;
             case "WAREHOUSE", "LOCATION" -> com.cretas.aims.dto.conversation.EntitySlot.SlotType.WAREHOUSE;
