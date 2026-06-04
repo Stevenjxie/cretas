@@ -44,7 +44,7 @@ import {
   EditToolbar,
   AddItemSheet,
 } from './components';
-import { WorkflowVisualizer } from '../../../components/workflow';
+import { WorkflowWorkdesk } from '../../../components/workflow';
 import { getBucketPrimaryStatus } from '../../../types/workflow';
 import type { WorkflowModule, WorkflowAIEntryContext } from '../../../types/workflow';
 
@@ -336,17 +336,15 @@ export function FAHomeScreen() {
           onEditLayout={() => navigation.navigate('HomeLayoutEditor')}
         />
 
-        {/* U-NAV-1 业务流程图导航 — Sprint 2 Track G */}
+        {/* Compact actionable workflow entry for the FA home first screen. */}
         <View style={styles.workflowSection}>
-          <WorkflowVisualizer
+          <WorkflowWorkdesk
             modules={FA_WORKFLOW_MODULES}
             factoryId={user?.factoryId}
-            aiTriggerEnabled
             onNodePress={(module, nodeId) =>
               navigateToModuleList(navigation, module, nodeId)
             }
-            onNodeLongPress={(module, ctx) => navigateToAIChat(navigation, ctx)}
-            onAITrigger={(_module, ctx) => navigateToAIChat(navigation, ctx)}
+            onAITrigger={(ctx) => navigateToAIChat(navigation, ctx)}
           />
         </View>
 
