@@ -14,10 +14,14 @@
 import { ref, computed, onMounted } from 'vue';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
-import { useRoute } from 'vue-router';
+import { useRoute, useRouter } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { get, post } from '@/api/request';
-import { Refresh, Lock, Unlock, Calendar } from '@element-plus/icons-vue';
+import { Refresh, Lock, Unlock, Calendar, Finished } from '@element-plus/icons-vue';
+import {
+  computeAdjustWindow,
+  reconciliationTagType,
+} from './monthCloseHelpers';
 
 // ============================================================
 // Types — mirror backend AccountingPeriod entity
@@ -40,6 +44,31 @@ interface AccountingPeriod {
   approvalWorkflowInstanceId?: string;
   createdAt?: string;
   updatedAt?: string;
+  // Wave2 月结自动闭环字段
+  adjustDeadline?: string;
+  reconciliationStatus?: string;
+  reconciliationSummary?: string;
+  totalRevenueSnapshot?: number;
+  netProfitSnapshot?: number;
+  reportReadyAt?: string;
+}
+
+// Wave2 月结对账预览 DTO
+interface CheckItem {
+  name: string;
+  passed: boolean;
+  severity: 'BLOCKING' | 'WARNING' | 'INFO';
+  detail: string;
+  value?: unknown;
+}
+interface MonthCloseReconciliation {
+  factoryId: string;
+  year: number;
+  month: number;
+  canClose: boolean;
+  reconciliationStatus: string;
+  checks: CheckItem[];
+  summary: string;
 }
 
 // ============================================================
@@ -48,11 +77,20 @@ interface AccountingPeriod {
 const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
 const route = useRoute();
+const router = useRouter();
 const factoryId = computed(() => authStore.factoryId ?? '');
 const canWrite = computed(() => permissionStore.canWrite('finance'));
 
 const loading = ref(false);
 const periods = ref<AccountingPeriod[]>([]);
+
+// ============================================================
+// Wave2 月结 (Month-Close) state
+// ============================================================
+const monthClosePreviewVisible = ref(false);
+const monthCloseLoading = ref(false);
+const monthClosePreview = ref<MonthCloseReconciliation | null>(null);
+const monthCloseTarget = ref<{ year: number; month: number } | null>(null);
 
 // ============================================================
 // Open / close dialog state
@@ -271,6 +309,84 @@ async function handleReopen() {
 }
 
 // ============================================================
+// Wave2 月结: 一键月结流程
+//   1. GET /preview → 弹对账预显 dialog (防呆 R1)
+//   2. canClose=false 时 disable 确认 button
+//   3. 确认 → POST /execute → 成功后 dead-end 跳报表 (防呆 R5)
+// ============================================================
+async function handleMonthClose(period: AccountingPeriod) {
+  if (!factoryId.value) return;
+  // 幂等防呆 R4: 已 CLOSED 不应到这 (按钮已隐藏), 防御性再挡一次
+  if (period.status === 'CLOSED') {
+    ElMessage.warning('该期间已结账, 不能重复结账');
+    return;
+  }
+  monthCloseTarget.value = { year: period.year, month: period.month };
+  monthClosePreview.value = null;
+  monthCloseLoading.value = true;
+  monthClosePreviewVisible.value = true;
+  try {
+    const res = await get<MonthCloseReconciliation>(
+      `/${factoryId.value}/finance/month-close/preview`,
+      { params: { year: period.year, month: period.month } }
+    );
+    if (res.success && res.data) {
+      monthClosePreview.value = res.data;
+    }
+  } catch {
+    // interceptor toasts; 关 dialog
+    monthClosePreviewVisible.value = false;
+  } finally {
+    monthCloseLoading.value = false;
+  }
+}
+
+async function confirmMonthClose() {
+  const target = monthCloseTarget.value;
+  if (!target || !factoryId.value) return;
+  if (!monthClosePreview.value?.canClose) {
+    ElMessage.error('对账校验未通过, 无法结账');
+    return;
+  }
+  monthCloseLoading.value = true;
+  try {
+    const res = await post<{
+      adjustDeadline?: string;
+      reportReadyAt?: string;
+      message?: string;
+      incomeStatement?: { netProfit?: number };
+    }>(
+      `/${factoryId.value}/finance/month-close/execute`,
+      { year: target.year, month: target.month }
+    );
+    if (res.success) {
+      monthClosePreviewVisible.value = false;
+      await loadPeriods();
+      // 防呆 R5 dead-end nav: 结账后跳报表
+      try {
+        await ElMessageBox.confirm(
+          `${target.year}-${String(target.month).padStart(2, '0')} 月结完成, 利润表已生成.\n` +
+          `是否立即查看财务报表?`,
+          '月结完成',
+          {
+            confirmButtonText: '查看报表',
+            cancelButtonText: '稍后',
+            type: 'success',
+          }
+        );
+        router.push('/finance/three-statements');
+      } catch {
+        // 用户选"稍后", 不跳转
+      }
+    }
+  } catch {
+    // interceptor toasts
+  } finally {
+    monthCloseLoading.value = false;
+  }
+}
+
+// ============================================================
 // Mounted — check route query for ?year=&month= deep-link
 // (Rule 5 dead-end nav: PeriodClosedException actionHint 跳此页 + auto-open dialog)
 // ============================================================
@@ -323,7 +439,8 @@ onMounted(async () => {
           <ul style="padding-left: 20px; margin: 5px 0;">
             <li><b>开账中 (OPEN)</b>: 凭证可写入 / 过账 / 作废</li>
             <li><b>审批中 (PENDING_CLOSE)</b>: 财务发起结账, 等待 finance director 审批, voucher 仍可修改</li>
-            <li><b>已结账 (CLOSED)</b>: 凭证锁定, 不可修改 / 过账 / 作废. 反结账 必须填原因 (audit log)</li>
+            <li><b>已结账 (CLOSED)</b>: 利润表已生成并冻结. 凭证在 20 天调整窗口内仍可调整, 窗口结束后锁定. 反结账 必须填原因 (audit log)</li>
+            <li><b>一键月结</b>: 月初触发 — 对账校验 → 生成利润表 → 快照锁定 → 结账 + 开启 20 天调整窗口 (月初出报表, 留调整窗口)</li>
             <li>每月 1 号 02:00 自动对上月 OPEN 期间发起结账请求</li>
           </ul>
         </template>
@@ -364,6 +481,40 @@ onMounted(async () => {
           </template>
         </el-table-column>
 
+        <!-- Wave2 月结: 调整窗口截止 + 倒计时 (邓总20天窗口) -->
+        <el-table-column label="调整窗口" min-width="170">
+          <template #default="{ row }">
+            <template v-if="row.status === 'CLOSED'">
+              <el-tag
+                :type="computeAdjustWindow(row.status, row.adjustDeadline).state === 'OPEN_WINDOW' ? 'warning' : 'info'"
+                size="small">
+                {{ computeAdjustWindow(row.status, row.adjustDeadline).label }}
+              </el-tag>
+              <div v-if="row.adjustDeadline" class="muted small">
+                截止 {{ row.adjustDeadline.replace('T', ' ').slice(0, 10) }}
+              </div>
+            </template>
+            <span v-else class="muted">—</span>
+          </template>
+        </el-table-column>
+
+        <!-- Wave2 月结: 净利润快照 + 对账结论 -->
+        <el-table-column label="月结报表" min-width="180">
+          <template #default="{ row }">
+            <template v-if="row.status === 'CLOSED' && row.reportReadyAt">
+              <div>
+                <el-tag :type="reconciliationTagType(row.reconciliationStatus)" size="small">
+                  对账 {{ row.reconciliationStatus || '—' }}
+                </el-tag>
+              </div>
+              <div class="muted small">
+                净利 {{ row.netProfitSnapshot != null ? row.netProfitSnapshot : '—' }}
+              </div>
+            </template>
+            <span v-else class="muted">—</span>
+          </template>
+        </el-table-column>
+
         <el-table-column label="最近反结账" min-width="200">
           <template #default="{ row }">
             <div v-if="row.reopenedAt">
@@ -374,8 +525,18 @@ onMounted(async () => {
           </template>
         </el-table-column>
 
-        <el-table-column label="操作" width="240" fixed="right">
+        <el-table-column label="操作" width="300" fixed="right">
           <template #default="{ row }">
+            <!-- Wave2 一键月结: OPEN / PENDING_CLOSE 行可触发 (CLOSED 隐藏, 防重复 R4) -->
+            <el-button
+              v-if="row.status !== 'CLOSED'"
+              size="small"
+              type="success"
+              :icon="Finished"
+              :disabled="!canWrite"
+              @click="handleMonthClose(row)">
+              一键月结
+            </el-button>
             <el-button
               v-if="row.status === 'OPEN'"
               size="small"
@@ -473,6 +634,55 @@ onMounted(async () => {
       <template #footer>
         <el-button @click="reopenDialogVisible = false">取消</el-button>
         <el-button type="danger" @click="handleReopen">确认反结账</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- Wave2 一键月结: 对账预显 dialog (防呆 R1 预先显示边界) -->
+    <el-dialog
+      v-model="monthClosePreviewVisible"
+      title="月结对账预览"
+      width="600px">
+      <div v-loading="monthCloseLoading">
+        <template v-if="monthClosePreview">
+          <el-alert
+            :title="`${monthClosePreview.year}-${String(monthClosePreview.month).padStart(2,'0')} 月结对账 — ${monthClosePreview.canClose ? '可执行结账' : '存在阻塞项, 暂不可结账'}`"
+            :type="monthClosePreview.canClose ? (monthClosePreview.reconciliationStatus === 'PASS' ? 'success' : 'warning') : 'error'"
+            :closable="false"
+            show-icon>
+            月结将: 对账校验 → 生成利润表 → 快照锁定 → 结账并开启 20 天调整窗口.
+            结账后报表立即生成, 调整窗口内凭证仍可调整, 窗口结束后锁定.
+          </el-alert>
+
+          <el-table :data="monthClosePreview.checks" style="margin-top: 16px;" size="small">
+            <el-table-column label="校验项" min-width="160">
+              <template #default="{ row }">{{ row.name }}</template>
+            </el-table-column>
+            <el-table-column label="结果" width="90">
+              <template #default="{ row }">
+                <el-tag :type="row.passed ? 'success' : (row.severity === 'BLOCKING' ? 'danger' : 'warning')" size="small">
+                  {{ row.passed ? '通过' : (row.severity === 'BLOCKING' ? '阻塞' : '提示') }}
+                </el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="说明" min-width="240">
+              <template #default="{ row }">
+                <span :class="{ muted: row.passed }">{{ row.detail }}</span>
+              </template>
+            </el-table-column>
+          </el-table>
+        </template>
+        <el-empty v-else-if="!monthCloseLoading" description="无对账数据" />
+      </div>
+
+      <template #footer>
+        <el-button @click="monthClosePreviewVisible = false">取消</el-button>
+        <el-button
+          type="success"
+          :loading="monthCloseLoading"
+          :disabled="!monthClosePreview?.canClose"
+          @click="confirmMonthClose">
+          确认月结
+        </el-button>
       </template>
     </el-dialog>
   </div>
