@@ -518,19 +518,25 @@ public class IntentRecognitionPipelineServiceImpl implements IntentRecognitionPi
                 if (sessionId != null) {
                     ConversationContext context = conversationMemoryService
                         .getOrCreateContext(factoryId, userId, sessionId);
-                    processedInput = performCoreferenceResolution(processedInput, context);
-                    preprocessedQuery = queryPreprocessorService.preprocess(processedInput, context);
-                    if (preprocessedQuery != null && preprocessedQuery.getFinalQuery() != null) {
-                        processedInput = preprocessedQuery.getFinalQuery();
-                    }
-                    // X1 Part B — continuation-intent inheritance. ONLY runs inside this
-                    // sessionId != null block, so standalone (sessionless) queries — including every
-                    // IntentParityTest / IntentGoldenAssertionTest case — are completely unaffected.
-                    String augmented = maybeAugmentContinuation(processedInput, context);
+                    // X1 Part B — continuation-intent inheritance. Runs on the RAW userInput BEFORE
+                    // queryPreprocessorService.preprocess() expands a bare time word ("上个月呢") into a
+                    // date range (live prod 2026-06-04: "上个月呢" became "[2026-05-01 00:00 至
+                    // 2026-05-31 23:59]"), which fails maybeAugmentContinuation's length/bare-time gates
+                    // and prevents inheritance. When it does NOT augment (returns null) — which is EVERY
+                    // sessionless query incl. all IntentParityTest / IntentGoldenAssertionTest cases,
+                    // plus every non-continuation in-session query — the coref+preprocess path below runs
+                    // exactly as before, so those paths are byte-for-byte unaffected.
+                    String augmented = maybeAugmentContinuation(userInput, context);
                     if (augmented != null) {
                         log.info("[X1-Continuation] inherit prior intent: lastIntent={}, '{}' -> '{}'",
-                                context.getLastIntentCode(), processedInput, augmented);
+                                context.getLastIntentCode(), userInput, augmented);
                         processedInput = augmented;
+                    } else {
+                        processedInput = performCoreferenceResolution(processedInput, context);
+                        preprocessedQuery = queryPreprocessorService.preprocess(processedInput, context);
+                        if (preprocessedQuery != null && preprocessedQuery.getFinalQuery() != null) {
+                            processedInput = preprocessedQuery.getFinalQuery();
+                        }
                     }
                 }
             } catch (Exception e) {
