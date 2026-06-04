@@ -282,7 +282,7 @@ async def record_anomaly_ack(
                     reason_code, reason_note, acknowledged_by
                 )
                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-                ON CONFLICT (factory_id, normalized_name, anomaly_delivery_date, supplier_id)
+                ON CONFLICT (factory_id, normalized_name, anomaly_delivery_date, COALESCE(supplier_id, ''))
                 DO UPDATE SET
                     reason_code = EXCLUDED.reason_code,
                     reason_note = EXCLUDED.reason_note,

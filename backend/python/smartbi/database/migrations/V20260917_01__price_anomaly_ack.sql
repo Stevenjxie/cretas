@@ -26,10 +26,7 @@ CREATE TABLE IF NOT EXISTS price_anomaly_ack (
     reason_code         VARCHAR(40)     NOT NULL,               -- SEASONAL / MARKET_RISE / SPEC_CHANGE / OTHER
     reason_note         TEXT,                                   -- reason_code=OTHER 必填补充, 其它选填
     acknowledged_by     VARCHAR(100),                           -- 录入解释的用户 (username)
-    created_at          TIMESTAMP       NOT NULL DEFAULT NOW(),
-    -- 幂等: 一条异常 (factory, food, supplier, 异常送货日) 只能 ack 一次。
-    -- supplier_id 可能为 NULL (历史进价无供应商), 用 COALESCE 折叠为空串保证唯一约束生效。
-    CONSTRAINT uq_price_anomaly_ack UNIQUE (factory_id, normalized_name, anomaly_delivery_date, supplier_id)
+    created_at          TIMESTAMP       NOT NULL DEFAULT NOW()
 );
 
 ALTER TABLE price_anomaly_ack ENABLE ROW LEVEL SECURITY;
@@ -38,6 +35,13 @@ DROP POLICY IF EXISTS tenant_isolation ON price_anomaly_ack;
 CREATE POLICY tenant_isolation ON price_anomaly_ack FOR ALL
     USING  (factory_id = current_setting('app.factory_id', true))
     WITH CHECK (factory_id = current_setting('app.factory_id', true));
+
+-- 幂等唯一索引: 一条异常 (factory, food, supplier, 异常送货日) 只能 ack 一次。
+-- supplier_id 可能为 NULL (历史进价无供应商), COALESCE 折叠为空串。PG 13 无 NULLS NOT DISTINCT,
+-- 普通 UNIQUE 约束对 NULL supplier_id 失效 (NULL 互不相等 → 重复 ack → consecutive_count 虚高 → 误标高风险)。
+-- 参 V20260428_01__b_review_idempotency.sql 同款 COALESCE-index 修法。
+CREATE UNIQUE INDEX IF NOT EXISTS uq_price_anomaly_ack
+    ON price_anomaly_ack (factory_id, normalized_name, anomaly_delivery_date, COALESCE(supplier_id, ''));
 
 -- 查询: 某食材/供应商的已确认异常 (报警去重) + 累计高风险标记。
 CREATE INDEX IF NOT EXISTS idx_pa_ack_factory_food   ON price_anomaly_ack (factory_id, normalized_name, anomaly_delivery_date DESC);
