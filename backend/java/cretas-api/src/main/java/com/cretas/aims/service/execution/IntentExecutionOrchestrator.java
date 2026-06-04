@@ -110,6 +110,14 @@ public class IntentExecutionOrchestrator {
     @Autowired
     private com.cretas.aims.ai.tool.WriteGuardService writeGuardService;
 
+    // C1 clarification business-type filter (restaurant-chat-qa): resolve the factory's business
+    // domain + each candidate intent's business_type so the NEED_CLARIFICATION choice list never
+    // shows manufacturing options (查询原料库存 / 查询生产批次) to a RESTAURANT tenant.
+    // @Lazy mirrors BusinessTypeGate's injection pattern (avoids eager init / circular wiring).
+    @Autowired
+    @Lazy
+    private com.cretas.aims.service.intent.IntentConfigManagementService configService;
+
     // ===== Route counters =====
     private final AtomicLong branchToolDirect = new AtomicLong();
     private final AtomicLong branchSkill = new AtomicLong();
@@ -1110,7 +1118,7 @@ public class IntentExecutionOrchestrator {
         // visible in formattedText / message — bare "请确认您想要执行的操作" fails.
         String clarificationMessage = matchResult.getClarificationQuestion();
         if (clarificationMessage == null || clarificationMessage.isEmpty()) {
-            clarificationMessage = buildClarificationWithChoices(candidateActions);
+            clarificationMessage = buildClarificationWithChoices(candidateActions, factoryId);
         }
 
         Map<String, Object> metadata = new HashMap<>();
@@ -1224,10 +1232,11 @@ public class IntentExecutionOrchestrator {
      * <p>Audit close-gate row "NEED_CLARIFICATION contains specific 2+ choices" requires
      * the user-facing text to enumerate the candidate intents inline.
      */
-    private String buildClarificationWithChoices(List<IntentExecuteResponse.SuggestedAction> candidateActions) {
+    private String buildClarificationWithChoices(List<IntentExecuteResponse.SuggestedAction> candidateActions,
+                                                  String factoryId) {
         StringBuilder sb = new StringBuilder();
         sb.append("您的请求可能匹配多个操作, 请选择您实际想做的:");
-        sb.append(buildChoicesLine(ensureMinChoices(candidateActions, 2)));
+        sb.append(buildChoicesLine(ensureMinChoices(candidateActions, 2, factoryId)));
         sb.append("回复对应序号, 或更详细描述需求 (例如指定时段 / 物料 / 批次 / 客户)。");
         return sb.toString();
     }
@@ -1237,8 +1246,8 @@ public class IntentExecutionOrchestrator {
      * requires ≥2 data choices in the user-visible text. When the candidate set has <2
      * data actions (filtering REPHRASE / SHOW_INTENTS), pad with default common queries.
      */
-    private List<IntentExecuteResponse.SuggestedAction> ensureMinChoices(
-            List<IntentExecuteResponse.SuggestedAction> actions, int minCount) {
+    List<IntentExecuteResponse.SuggestedAction> ensureMinChoices(
+            List<IntentExecuteResponse.SuggestedAction> actions, int minCount, String factoryId) {
         List<IntentExecuteResponse.SuggestedAction> dataActions = new ArrayList<>();
         if (actions != null) {
             for (IntentExecuteResponse.SuggestedAction a : actions) {
@@ -1250,15 +1259,27 @@ public class IntentExecutionOrchestrator {
             }
         }
         if (dataActions.size() >= minCount) return actions;
-        // Pad with common defaults that are guaranteed-bound intents.
-        IntentExecuteResponse.SuggestedAction[] padCandidates = {
-                IntentExecuteResponse.SuggestedAction.builder()
-                        .actionCode("MATERIAL_BATCH_QUERY").actionName("查询原料库存").build(),
-                IntentExecuteResponse.SuggestedAction.builder()
-                        .actionCode("PROCESSING_BATCH_LIST").actionName("查询生产批次").build(),
-                IntentExecuteResponse.SuggestedAction.builder()
-                        .actionCode("DAILY_CUSTOMER_FOLLOWUP").actionName("查询今日待跟进客户").build(),
-        };
+        // C1: pad with a FACTORY-AWARE pool of guaranteed-bound intents — never pad a restaurant
+        // clarification with manufacturing intents (查询原料库存 / 查询生产批次).
+        String factoryDomain = resolveFactoryDomainSafe(factoryId);
+        IntentExecuteResponse.SuggestedAction[] padCandidates =
+                "RESTAURANT".equalsIgnoreCase(factoryDomain)
+                ? new IntentExecuteResponse.SuggestedAction[] {
+                        IntentExecuteResponse.SuggestedAction.builder()
+                                .actionCode("RESTAURANT_BESTSELLER_QUERY").actionName("查询畅销菜品").build(),
+                        IntentExecuteResponse.SuggestedAction.builder()
+                                .actionCode("RESTAURANT_STORE_REVENUE_RANK").actionName("查询门店营收排行").build(),
+                        IntentExecuteResponse.SuggestedAction.builder()
+                                .actionCode("RESTAURANT_ORDER_STATISTICS").actionName("查询订单统计").build(),
+                }
+                : new IntentExecuteResponse.SuggestedAction[] {
+                        IntentExecuteResponse.SuggestedAction.builder()
+                                .actionCode("MATERIAL_BATCH_QUERY").actionName("查询原料库存").build(),
+                        IntentExecuteResponse.SuggestedAction.builder()
+                                .actionCode("PROCESSING_BATCH_LIST").actionName("查询生产批次").build(),
+                        IntentExecuteResponse.SuggestedAction.builder()
+                                .actionCode("DAILY_CUSTOMER_FOLLOWUP").actionName("查询今日待跟进客户").build(),
+                };
         java.util.Set<String> existingNames = new java.util.HashSet<>();
         for (IntentExecuteResponse.SuggestedAction a : dataActions) existingNames.add(a.getActionName());
         List<IntentExecuteResponse.SuggestedAction> padded = new ArrayList<>(actions != null ? actions : new ArrayList<>());
@@ -1302,11 +1323,59 @@ public class IntentExecutionOrchestrator {
         return sb.toString();
     }
 
+    // ==================== C1 业态过滤 helpers (restaurant-chat-qa) ====================
+
+    /**
+     * Resolve a factory's business domain ("RESTAURANT" / "FACTORY"), fail-soft.
+     * Returns {@code null} if resolution throws — callers treat null as "unknown" and
+     * keep the original (unfiltered) behavior so the clarification path never crashes.
+     */
+    String resolveFactoryDomainSafe(String factoryId) {
+        try {
+            return configService.resolveBusinessDomain(factoryId);
+        } catch (Exception e) {
+            log.warn("[C1业态过滤] resolveBusinessDomain failed for factoryId={} — skip filter: {}",
+                    factoryId, e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * Is a candidate intent (by code) compatible with the factory's business domain?
+     * Looks up the intent's business_type via configService and delegates to the single
+     * source of truth {@link com.cretas.aims.ai.tool.BusinessTypeScope#isCompatible}.
+     * Fail-soft: any lookup error → {@code true} (keep the candidate, don't crash).
+     *
+     * @param factoryDomain resolved factory domain ("RESTAURANT"/"FACTORY"); when null the
+     *                      method returns true (no filtering when domain is unknown).
+     */
+    boolean isCandidateCompatible(String factoryId, String factoryDomain, String intentCode) {
+        if (factoryDomain == null || intentCode == null) {
+            return true; // unknown domain or missing code → don't filter
+        }
+        try {
+            String intentBiz = configService.getIntentByCode(factoryId, intentCode)
+                    .map(AIIntentConfig::getBusinessType)
+                    .orElse(null);
+            return com.cretas.aims.ai.tool.BusinessTypeScope.isCompatible(intentBiz, factoryDomain);
+        } catch (Exception e) {
+            log.warn("[C1业态过滤] business_type lookup failed for intent={} factory={} — keep candidate: {}",
+                    intentCode, factoryId, e.getMessage());
+            return true; // fail-soft
+        }
+    }
+
     private List<IntentExecuteResponse.SuggestedAction> buildCandidateActions(IntentMatchResult matchResult, String factoryId) {
         List<IntentExecuteResponse.SuggestedAction> actions = new ArrayList<>();
+        // C1: drop candidates whose owning intent's business_type is incompatible with this
+        // factory's domain (e.g. a RESTAURANT tenant must not see 查询原料库存 manufacturing options).
+        String factoryDomain = resolveFactoryDomainSafe(factoryId);
         if (matchResult.getTopCandidates() != null) {
             for (IntentMatchResult.CandidateIntent candidate : matchResult.getTopCandidates()) {
                 if (actions.size() >= 3) break;
+                if (!isCandidateCompatible(factoryId, factoryDomain, candidate.getIntentCode())) {
+                    continue; // business-type mismatch — skip noise
+                }
                 Map<String, Object> params = new HashMap<>();
                 params.put("intentCode", candidate.getIntentCode());
                 params.put("forceExecute", true);
@@ -1318,6 +1387,15 @@ public class IntentExecutionOrchestrator {
                         .parameters(params).build());
             }
         }
+        // C1: if filtering left ZERO data candidates (all incompatible with this domain), fall
+        // back to factory-aware defaults so the user still gets actionable options (never empty).
+        if (actions.isEmpty()) {
+            for (IntentExecuteResponse.SuggestedAction d : buildDefaultSuggestions(factoryId)) {
+                String code = d.getActionCode();
+                if ("REPHRASE".equals(code) || "SHOW_INTENTS".equals(code)) continue;
+                actions.add(d);
+            }
+        }
         actions.add(IntentExecuteResponse.SuggestedAction.builder()
                 .actionCode("REPHRASE").actionName("重新描述").build());
         actions.add(IntentExecuteResponse.SuggestedAction.builder()
@@ -1326,14 +1404,32 @@ public class IntentExecutionOrchestrator {
         return actions;
     }
 
-    private List<IntentExecuteResponse.SuggestedAction> buildDefaultSuggestions(String factoryId) {
+    /**
+     * Factory-aware default clarification choices. A RESTAURANT tenant gets restaurant
+     * defaults (畅销菜品 / 门店营收排行 / 订单统计); all other tenants keep the original
+     * manufacturing defaults (查询原料库存 / 查询生产批次). Package-private for unit testing.
+     */
+    List<IntentExecuteResponse.SuggestedAction> buildDefaultSuggestions(String factoryId) {
         List<IntentExecuteResponse.SuggestedAction> actions = new ArrayList<>();
-        actions.add(IntentExecuteResponse.SuggestedAction.builder()
-                .actionCode("MATERIAL_BATCH_QUERY").actionName("查询原料库存")
-                .endpoint("/api/mobile/" + factoryId + "/material-batches").build());
-        actions.add(IntentExecuteResponse.SuggestedAction.builder()
-                .actionCode("PROCESSING_BATCH_LIST").actionName("查询生产批次")
-                .endpoint("/api/mobile/" + factoryId + "/processing/batches").build());
+        String factoryDomain = resolveFactoryDomainSafe(factoryId);
+        if ("RESTAURANT".equalsIgnoreCase(factoryDomain)) {
+            actions.add(IntentExecuteResponse.SuggestedAction.builder()
+                    .actionCode("RESTAURANT_BESTSELLER_QUERY").actionName("查询畅销菜品")
+                    .endpoint("/api/mobile/" + factoryId + "/ai-intents/execute").build());
+            actions.add(IntentExecuteResponse.SuggestedAction.builder()
+                    .actionCode("RESTAURANT_STORE_REVENUE_RANK").actionName("查询门店营收排行")
+                    .endpoint("/api/mobile/" + factoryId + "/ai-intents/execute").build());
+            actions.add(IntentExecuteResponse.SuggestedAction.builder()
+                    .actionCode("RESTAURANT_ORDER_STATISTICS").actionName("查询订单统计")
+                    .endpoint("/api/mobile/" + factoryId + "/ai-intents/execute").build());
+        } else {
+            actions.add(IntentExecuteResponse.SuggestedAction.builder()
+                    .actionCode("MATERIAL_BATCH_QUERY").actionName("查询原料库存")
+                    .endpoint("/api/mobile/" + factoryId + "/material-batches").build());
+            actions.add(IntentExecuteResponse.SuggestedAction.builder()
+                    .actionCode("PROCESSING_BATCH_LIST").actionName("查询生产批次")
+                    .endpoint("/api/mobile/" + factoryId + "/processing/batches").build());
+        }
         actions.add(IntentExecuteResponse.SuggestedAction.builder()
                 .actionCode("REPHRASE").actionName("重新描述").build());
         actions.add(IntentExecuteResponse.SuggestedAction.builder()

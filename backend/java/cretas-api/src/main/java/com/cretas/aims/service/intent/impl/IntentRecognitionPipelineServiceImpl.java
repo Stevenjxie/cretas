@@ -1716,7 +1716,7 @@ public class IntentRecognitionPipelineServiceImpl implements IntentRecognitionPi
                     // W0 (2026-06-02): 边界弃权门 —— top1<0.70 或 top1-top2<0.15 时不静默采用，
                     // 返回 clarify(top-2) 让前端反问用户。!isAmbiguousQuery 保证不与下方模糊查询
                     // 拒绝分支冲突 (模糊查询交给那条分支彻底拒绝)。
-                    IntentMatchResult abstainResult = maybeAbstain(candidates, isAmbiguousQuery, userInput, opType, questionType);
+                    IntentMatchResult abstainResult = maybeAbstain(candidates, isAmbiguousQuery, userInput, opType, questionType, factoryId);
                     if (abstainResult != null) {
                         log.info("W0 abstain: top1={} conf={} (clarify top-2)", candidates.get(0).getIntentCode(),
                                 String.format("%.3f", candidates.get(0).getConfidence()));
@@ -3787,14 +3787,16 @@ public class IntentRecognitionPipelineServiceImpl implements IntentRecognitionPi
      * @param userInput         原始用户输入
      * @param opType            操作类型
      * @param questionType      问题类型
+     * @param factoryId         工厂 ID — 用于按业态过滤澄清候选 (C1)
      * @return 弃权结果，若无需弃权则返回 null
      */
     IntentMatchResult maybeAbstain(List<CandidateIntent> candidates, boolean isAmbiguousQuery,
                                    String userInput, ActionType opType,
-                                   IntentKnowledgeBase.QuestionType questionType) {
+                                   IntentKnowledgeBase.QuestionType questionType, String factoryId) {
         // 排序铁律: 模糊查询交给既有拒绝分支处理，不在此弃权
         if (isAmbiguousQuery) return null;
         if (candidates == null || candidates.isEmpty()) return null;
+        // 弃权决策 (阈值/margin) 仍基于原始候选 — C1 只过滤展示给用户的候选列表，不改阈值行为。
         double top1 = candidates.get(0).getConfidence() != null ? candidates.get(0).getConfidence() : 0.0;
         boolean top1Low = top1 < 0.70;
         boolean marginNarrow = candidates.size() >= 2
@@ -3810,16 +3812,68 @@ public class IntentRecognitionPipelineServiceImpl implements IntentRecognitionPi
         if (!writeInPlay) {
             return null;
         }
-        String clarification = (c2 != null)
-                ? String.format("您的问题可能对应「%s」或「%s」，请问您想要哪个？", c1.getIntentName(), c2.getIntentName())
-                : String.format("您的问题与「%s」相关度不够高，请提供更多细节。", c1.getIntentName());
-        java.util.List<CandidateIntent> top2 = candidates.stream().limit(2).collect(java.util.stream.Collectors.toList());
+        // C1 (restaurant-chat-qa): filter the clarification candidate list by business type so a
+        // RESTAURANT tenant's abstain clarification never offers manufacturing intents. Decision to
+        // abstain is unchanged (computed above); only the user-facing candidate list is filtered.
+        java.util.List<CandidateIntent> displayCandidates = filterCandidatesByBusinessType(candidates, factoryId);
+        if (displayCandidates.isEmpty()) {
+            // Over-filtered (all incompatible) — fall back to the original list so the user still
+            // gets options rather than an empty clarification (fail-open, mirrors orchestrator C1).
+            displayCandidates = candidates;
+        }
+        CandidateIntent d1 = displayCandidates.get(0);
+        CandidateIntent d2 = displayCandidates.size() >= 2 ? displayCandidates.get(1) : null;
+        String clarification = (d2 != null)
+                ? String.format("您的问题可能对应「%s」或「%s」，请问您想要哪个？", d1.getIntentName(), d2.getIntentName())
+                : String.format("您的问题与「%s」相关度不够高，请提供更多细节。", d1.getIntentName());
+        java.util.List<CandidateIntent> top2 = displayCandidates.stream().limit(2).collect(java.util.stream.Collectors.toList());
         return IntentMatchResult.builder()
                 .bestMatch(null).topCandidates(top2).confidence(c1.getConfidence())
                 .matchMethod(MatchMethod.NONE).matchedKeywords(c1.getMatchedKeywords())
                 .isStrongSignal(false).requiresConfirmation(true)
                 .clarificationQuestion(clarification)
                 .userInput(userInput).actionType(opType).questionType(questionType).build();
+    }
+
+    /**
+     * C1 (restaurant-chat-qa): keep only candidates whose owning intent's business_type is
+     * compatible with the factory's domain (via {@link com.cretas.aims.ai.tool.BusinessTypeScope}).
+     * Fail-soft: if the domain can't be resolved (null) or lookup throws, returns the input
+     * unchanged so the clarification path never breaks. Package-private for unit testing.
+     */
+    java.util.List<CandidateIntent> filterCandidatesByBusinessType(List<CandidateIntent> candidates,
+                                                                    String factoryId) {
+        if (candidates == null || candidates.isEmpty()) {
+            return candidates == null ? new java.util.ArrayList<>() : candidates;
+        }
+        String factoryDomain;
+        try {
+            factoryDomain = configService.resolveBusinessDomain(factoryId);
+        } catch (Exception e) {
+            log.warn("[C1业态过滤] resolveBusinessDomain failed for factoryId={} — skip filter: {}",
+                    factoryId, e.getMessage());
+            return candidates; // fail-soft
+        }
+        if (factoryDomain == null) {
+            return candidates; // unknown domain — no filtering
+        }
+        java.util.List<CandidateIntent> kept = new java.util.ArrayList<>(candidates.size());
+        for (CandidateIntent c : candidates) {
+            String intentBiz = null;
+            try {
+                AIIntentConfig cfg = configService.getIntentConfigByCode(factoryId, c.getIntentCode());
+                intentBiz = cfg != null ? cfg.getBusinessType() : null;
+            } catch (Exception e) {
+                log.warn("[C1业态过滤] business_type lookup failed for intent={} factory={} — keep: {}",
+                        c.getIntentCode(), factoryId, e.getMessage());
+                kept.add(c); // fail-soft: keep on lookup error
+                continue;
+            }
+            if (com.cretas.aims.ai.tool.BusinessTypeScope.isCompatible(intentBiz, factoryDomain)) {
+                kept.add(c);
+            }
+        }
+        return kept;
     }
 
     /**

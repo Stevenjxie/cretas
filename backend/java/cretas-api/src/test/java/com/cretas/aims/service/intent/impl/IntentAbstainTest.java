@@ -78,7 +78,7 @@ class IntentAbstainTest {
                 candidate("REPORT_INVENTORY", "库存报表", 0.70));
 
         IntentMatchResult result = service.maybeAbstain(
-                candidates, false, "出货还是查库存", ActionType.CREATE, QuestionType.OPERATIONAL_COMMAND);
+                candidates, false, "出货还是查库存", ActionType.CREATE, QuestionType.OPERATIONAL_COMMAND, "F001");
 
         assertThat(result).isNotNull();
         assertThat(result.getBestMatch()).isNull();
@@ -97,7 +97,7 @@ class IntentAbstainTest {
                 candidate("MATERIAL_BATCH_DELETE", "删除原料批次", 0.70));
 
         IntentMatchResult result = service.maybeAbstain(
-                candidates, false, "看批次还是删批次", ActionType.QUERY, QuestionType.OPERATIONAL_COMMAND);
+                candidates, false, "看批次还是删批次", ActionType.QUERY, QuestionType.OPERATIONAL_COMMAND, "F001");
 
         assertThat(result).isNotNull();
         assertThat(result.getBestMatch()).isNull();
@@ -115,7 +115,7 @@ class IntentAbstainTest {
                 candidate("SHIPMENT_CREATE", "创建出货单", 0.62));
 
         IntentMatchResult result = service.maybeAbstain(
-                candidates, false, "帮我发个货", ActionType.CREATE, QuestionType.OPERATIONAL_COMMAND);
+                candidates, false, "帮我发个货", ActionType.CREATE, QuestionType.OPERATIONAL_COMMAND, "F001");
 
         assertThat(result).isNotNull();
         assertThat(result.getBestMatch()).isNull();
@@ -136,7 +136,7 @@ class IntentAbstainTest {
                 candidate("REPORT_INVENTORY", "库存报表", 0.70));
 
         IntentMatchResult result = service.maybeAbstain(
-                candidates, false, "批次还是库存", ActionType.QUERY, QuestionType.OPERATIONAL_COMMAND);
+                candidates, false, "批次还是库存", ActionType.QUERY, QuestionType.OPERATIONAL_COMMAND, "F001");
 
         assertThat(result).isNull();
     }
@@ -148,7 +148,7 @@ class IntentAbstainTest {
                 candidate("MATERIAL_BATCH_QUERY", "原料批次查询", 0.62));
 
         IntentMatchResult result = service.maybeAbstain(
-                candidates, false, "查批次", ActionType.QUERY, QuestionType.OPERATIONAL_COMMAND);
+                candidates, false, "查批次", ActionType.QUERY, QuestionType.OPERATIONAL_COMMAND, "F001");
 
         assertThat(result).isNull();
     }
@@ -161,7 +161,7 @@ class IntentAbstainTest {
                 candidate("REPORT_INVENTORY", "库存报表", 0.40));
 
         IntentMatchResult result = service.maybeAbstain(
-                candidates, false, "明确的查询", ActionType.QUERY, QuestionType.OPERATIONAL_COMMAND);
+                candidates, false, "明确的查询", ActionType.QUERY, QuestionType.OPERATIONAL_COMMAND, "F001");
 
         assertThat(result).isNull();
     }
@@ -173,7 +173,7 @@ class IntentAbstainTest {
                 candidate("SHIPMENT_CREATE", "创建出货单", 0.62));
 
         IntentMatchResult result = service.maybeAbstain(
-                candidates, true, "天气怎么样", ActionType.QUERY, QuestionType.GENERAL_QUESTION);
+                candidates, true, "天气怎么样", ActionType.QUERY, QuestionType.GENERAL_QUESTION, "F001");
 
         assertThat(result).isNull();
     }
