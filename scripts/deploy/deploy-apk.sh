@@ -224,8 +224,10 @@ echo ""
 log "$([ "$PAGE_ONLY" = "1" ] && echo "✅ 下载页已更新部署 (page-only) v$VER" || echo "✅ 发布完成 v$VER")"
 log "   下载页:   https://download.${CDN_DOMAIN#dl.}/   (即 download.cretaceousfuture.com)"
 log "   APK 直链: $CDN_URL"
+if [ "$PAGE_ONLY" = "0" ]; then
 echo ""
 log "下一步 (版本网关): 更新 47 服务器 .env.prod 的"
 log "   APP_VERSION_LATEST=$VER"
 log "   APP_VERSION_FILE_SIZE=$APK_SIZE_BYTES"
 log "   然后 systemctl restart cretas-backend (prod) / cretas-backend-test (test)"
+fi
