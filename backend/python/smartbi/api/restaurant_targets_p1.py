@@ -32,6 +32,10 @@ _FORECAST_MONEY_KEYS = frozenset({
     "actual_amount", "target_amount",
 })
 
+# Decompose-response revenue keys — monetary ONLY when kpiKind == 'revenue'
+# (bill_count targets under these keys are counts, not money → NOT stripped).
+_DECOMPOSE_REVENUE_KEYS = frozenset({"target_value", "month_target", "week_target"})
+
 
 def _get_factory_id(request: Request) -> Optional[str]:
     return getattr(request.state, "factory_id", None)
@@ -54,22 +58,29 @@ async def _get_pool():
     return await get_pg_pool()
 
 
-def _strip_forecast_money(node: Any, role: Optional[str]) -> Any:
+def _strip_forecast_money(
+    node: Any, role: Optional[str], extra_money_keys: frozenset = frozenset()
+) -> Any:
     """Depth-first null monetary fields for non-price-view roles.
 
-    Price-view roles → passthrough. Others → every _FORECAST_MONEY_KEYS leaf
-    set to None (Rule 4: None, never 0). alert_level / pace_gap_pct /
-    completion_pct / elapsed_pct survive (directional, no absolute amount).
+    Price-view roles → passthrough. Others → every (_FORECAST_MONEY_KEYS |
+    extra_money_keys) leaf set to None (Rule 4: None, never 0). alert_level /
+    pace_gap_pct / completion_pct / elapsed_pct survive (directional, no amount).
+    extra_money_keys lets callers add context-dependent money keys — e.g. the
+    decompose response's target_value/month_target/week_target, which are money
+    only when kpiKind == 'revenue'.
     """
     from smartbi_compat._rbac_strip import PRICE_VIEW_ROLES
 
     if role and role in PRICE_VIEW_ROLES:
         return node
 
+    money_keys = _FORECAST_MONEY_KEYS | extra_money_keys
+
     def _walk(n: Any) -> None:
         if isinstance(n, dict):
             for k, v in list(n.items()):
-                if k in _FORECAST_MONEY_KEYS and not isinstance(v, (dict, list)):
+                if k in money_keys and not isinstance(v, (dict, list)):
                     n[k] = None
                 else:
                     _walk(v)
@@ -138,7 +149,10 @@ async def decompose_weeks(
             day_results.append(dr)
         result["dayCascade"] = day_results
 
-    result = _strip_forecast_money(result, _get_role(request))
+    # target_value/month_target/week_target are revenue amounts ONLY for kpiKind=='revenue';
+    # bill_count targets are counts (not stripped). Gate accordingly.
+    extra = _DECOMPOSE_REVENUE_KEYS if body.kpiKind == "revenue" else frozenset()
+    result = _strip_forecast_money(result, _get_role(request), extra)
     return {"success": True, "data": result, "message": "ok"}
 
 

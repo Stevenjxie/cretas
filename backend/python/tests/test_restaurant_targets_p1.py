@@ -438,3 +438,36 @@ def test_rbac_strip_passthrough_for_price_role():
     _strip_forecast_money(payload, "factory_super_admin")
     # price-view role → untouched
     assert payload["points"][0]["forecast_amount"] == 50000.0
+
+
+def test_rbac_strip_decompose_revenue_keys_gated_by_kpi():
+    """IMPORTANT-1 regression: the decompose response carries revenue under
+    target_value / month_target / week_target — money ONLY for kpiKind=='revenue'
+    (passed as extra_money_keys). For bill_count they are counts and must survive.
+    """
+    from smartbi.api.restaurant_targets_p1 import (
+        _strip_forecast_money, _DECOMPOSE_REVENUE_KEYS,
+    )
+
+    def _payload():
+        return {
+            "month_target": 300000.0,
+            "weeks": [{"period_key": "2026-W23", "target_value": 70000.0}],
+            "dayCascade": [{"week_target": 70000.0,
+                            "days": [{"period_key": "2026-06-04", "target_value": 10000.0}]}],
+        }
+
+    # revenue kpi → extra keys passed → every revenue amount nulled for non-price role
+    p = _payload()
+    _strip_forecast_money(p, "operator", _DECOMPOSE_REVENUE_KEYS)
+    assert p["month_target"] is None
+    assert p["weeks"][0]["target_value"] is None
+    assert p["dayCascade"][0]["week_target"] is None
+    assert p["dayCascade"][0]["days"][0]["target_value"] is None
+    assert p["weeks"][0]["period_key"] == "2026-W23"  # directional key survives
+
+    # bill_count kpi → NO extra keys → counts survive (they are not money)
+    p2 = _payload()
+    _strip_forecast_money(p2, "operator")
+    assert p2["month_target"] == 300000.0
+    assert p2["weeks"][0]["target_value"] == 70000.0

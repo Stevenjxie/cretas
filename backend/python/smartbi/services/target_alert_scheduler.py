@@ -226,6 +226,23 @@ async def run_nightly_alert_batch(
     if factory_ids is None:
         factory_ids = await _active_target_factories(pool)
 
+    if not factory_ids:
+        # Review IMPORTANT: under FORCE RLS the smartbi_user-scoped scan returns []
+        # (no app.factory_id set), so a None-arg cron call would silently no-op while
+        # looking healthy. Surface it loudly + return a non-empty errors list so
+        # monitoring catches it. Cron MUST pass an explicit per-tenant factory_ids list.
+        logger.error(
+            "run_nightly_alert_batch: 0 factories resolved — likely FORCE-RLS hiding "
+            "rows from the smartbi_user scan. Cron MUST pass an explicit factory_ids list."
+        )
+        return {
+            "today": today.isoformat(),
+            "factories": 0,
+            "alerts_computed": 0,
+            "forecasts_computed": 0,
+            "errors": ["no_factories_resolved: pass explicit factory_ids (FORCE-RLS no-op guard)"],
+        }
+
     summary = {
         "today": today.isoformat(),
         "factories": len(factory_ids),
