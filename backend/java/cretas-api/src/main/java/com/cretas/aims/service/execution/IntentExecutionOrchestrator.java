@@ -52,6 +52,9 @@ import java.util.stream.Collectors;
 @Service
 public class IntentExecutionOrchestrator {
 
+    private static final Pattern STORE_REFERENCE_PATTERN = Pattern.compile(
+            "那家店|这家店|该店|那个店|这个店|该门店|那家|这家");
+
     // ===== 依赖 =====
     private final AIIntentService aiIntentService;
     private final IntentSemanticsParser semanticsParser;
@@ -338,6 +341,10 @@ public class IntentExecutionOrchestrator {
         log.info("识别到意图: code={}, category={}, sensitivity={}, matchMethod={}, confidence={}",
                 intent.getIntentCode(), intent.getIntentCategory(), intent.getSensitivityLevel(),
                 matchResult.getMatchMethod(), matchResult.getConfidence());
+
+        if (requiresStoreReferenceClarification(request, matchResult, intent)) {
+            return buildStoreReferenceClarificationResponse(request);
+        }
 
         // 权限检查
         if (!aiIntentService.hasPermission(intent.getIntentCode(), userRole)) {
@@ -1107,6 +1114,37 @@ public class IntentExecutionOrchestrator {
                 .status("NEED_CLARIFICATION")
                 .message(msg)
                 .formattedText(msg)
+                .executedAt(LocalDateTime.now())
+                .build();
+    }
+
+    boolean requiresStoreReferenceClarification(
+            IntentExecuteRequest request, IntentMatchResult matchResult, AIIntentConfig intent) {
+        if (intent == null || !"RESTAURANT_STORE_REVENUE_RANK".equals(intent.getIntentCode())) {
+            return false;
+        }
+        String input = request != null ? request.getUserInput() : null;
+        if (input == null || !STORE_REFERENCE_PATTERN.matcher(input).find()) {
+            return false;
+        }
+        if (matchResult == null || matchResult.getPreprocessedQuery() == null
+                || matchResult.getPreprocessedQuery().getResolvedReferences() == null) {
+            return true;
+        }
+        return matchResult.getPreprocessedQuery().getResolvedReferences().values().stream()
+                .noneMatch(ref -> ref != null
+                        && ref.getEntityType() != null
+                        && "STORE".equalsIgnoreCase(ref.getEntityType()));
+    }
+
+    IntentExecuteResponse buildStoreReferenceClarificationResponse(IntentExecuteRequest request) {
+        final String msg = "请问您指的是哪家店？";
+        return IntentExecuteResponse.builder()
+                .intentRecognized(false)
+                .status("NEED_CLARIFICATION")
+                .message(msg)
+                .formattedText(msg)
+                .sessionId(request != null ? request.getSessionId() : null)
                 .executedAt(LocalDateTime.now())
                 .build();
     }
