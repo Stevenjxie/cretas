@@ -64,6 +64,35 @@ export interface WastageRecord {
   estimatedCost?: number;
   reason?: string;
   notes?: string;
+  // Wave2 损耗按人/档口责任制
+  operatorId?: number | null;
+  sectionCode?: 'SEAFOOD' | 'COLD_DISH' | 'HOT_DISH' | 'FRONT_HOUSE' | 'OTHER' | null;
   createdAt?: string;
   updatedAt?: string;
+}
+
+/** Wave2 损耗责任制汇总（按责任人 + 档口） */
+export interface WastageAccountability {
+  startDate: string;
+  endDate: string;
+  totalCost?: number | null;
+  totalCount: number;
+  byOperator: WastageByOperator[];
+  bySection: WastageBySection[];
+}
+
+export interface WastageByOperator {
+  operatorId?: number | null;
+  operatorName: string;
+  count: number;
+  totalQuantity?: number | null;
+  totalCost?: number | null;
+}
+
+export interface WastageBySection {
+  sectionCode?: string | null;
+  sectionName: string;
+  count: number;
+  totalQuantity?: number | null;
+  totalCost?: number | null;
 }

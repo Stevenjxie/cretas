@@ -8,6 +8,7 @@
             <span class="data-count">共 {{ pagination.total }} 条</span>
           </div>
           <div class="header-right">
+            <el-button v-if="canViewPrice" type="warning" plain @click="boardVisible = true">损耗责任看板</el-button>
  <el-button type="info" plain @click="handleAiAnalyze"> AI 分析</el-button>
             <el-button :icon="Download" @click="handleExport">导出</el-button>
             <el-button v-if="canWrite" type="primary" :icon="Plus" @click="handleCreate">新建损耗记录</el-button>
@@ -97,6 +98,15 @@
         <el-table-column label="数量" width="110" align="right">
           <template #default="{ row }">{{ row.quantity }} {{ row.unit }}</template>
         </el-table-column>
+        <el-table-column label="档口" width="90" align="center" class-name="hidden-sm-col">
+          <template #default="{ row }">
+            <el-tag v-if="row.sectionCode" size="small" effect="plain">{{ sectionLabel(row.sectionCode) }}</el-tag>
+            <span v-else class="muted-cell">-</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="责任人" width="110" show-overflow-tooltip class-name="hidden-sm-col">
+          <template #default="{ row }">{{ row.operatorId ? (operatorNameMap[row.operatorId] || ('用户#' + row.operatorId)) : '-' }}</template>
+        </el-table-column>
         <el-table-column v-if="canViewPrice" label="估算损失" width="110" align="right">
           <template #default="{ row }">
             {{ formatAmount(row.estimatedCost) }}
@@ -156,6 +166,17 @@
         <el-form-item label="单位">
           <el-input v-model="dialogForm.unit" placeholder="kg / L" style="width: 120px" />
         </el-form-item>
+        <!-- Wave2 损耗按人/档口责任制：dropdown 选择（防呆 Rule 3 — 约束选择非自由文本） -->
+        <el-form-item label="档口">
+          <el-select v-model="dialogForm.sectionCode" clearable placeholder="选择档口（可选）" style="width: 100%">
+            <el-option v-for="s in sectionOptions" :key="s.code" :label="s.label" :value="s.code" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="责任人">
+          <el-select v-model="dialogForm.operatorId" filterable clearable placeholder="选择责任人（可选）" style="width: 100%">
+            <el-option v-for="u in operatorOptions" :key="u.id" :label="u.label" :value="u.id" />
+          </el-select>
+        </el-form-item>
         <el-form-item v-if="canViewPrice" label="估算损失">
           <el-input-number v-model="dialogForm.estimatedCost" :precision="2" :step="10" :min="0" />
         </el-form-item>
@@ -169,6 +190,9 @@
       </template>
     </el-dialog>
 
+    <!-- Wave2 损耗责任看板 -->
+    <AccountabilityBoard v-model="boardVisible" :factory-id="factoryId" />
+
     <!-- 详情抽屉 -->
     <el-drawer v-model="detailVisible" title="损耗记录详情" size="400px">
       <el-descriptions :column="1" border v-if="detailData">
@@ -178,6 +202,8 @@
         <el-descriptions-item label="状态">{{ statusText(detailData.status) }}</el-descriptions-item>
         <el-descriptions-item label="食材">{{ materialNameMap[detailData.rawMaterialTypeId] || detailData.rawMaterialTypeId }}</el-descriptions-item>
         <el-descriptions-item label="数量">{{ detailData.quantity }} {{ detailData.unit }}</el-descriptions-item>
+        <el-descriptions-item label="档口">{{ detailData.sectionCode ? sectionLabel(detailData.sectionCode) : '-' }}</el-descriptions-item>
+        <el-descriptions-item label="责任人">{{ detailData.operatorId ? (operatorNameMap[detailData.operatorId] || ('用户#' + detailData.operatorId)) : '-' }}</el-descriptions-item>
         <el-descriptions-item v-if="canViewPrice" label="估算损失">{{ formatAmount(detailData.estimatedCost) }}</el-descriptions-item>
         <el-descriptions-item label="原因">{{ detailData.reason || '-' }}</el-descriptions-item>
         <el-descriptions-item label="备注">{{ detailData.notes || '-' }}</el-descriptions-item>
@@ -193,7 +219,8 @@ import { Plus, Search, Refresh, Download } from '@element-plus/icons-vue';
 import { ElMessage, ElMessageBox, type FormInstance } from 'element-plus';
 import { useFactoryId } from '@/composables/useFactoryId';
 import { usePermissionStore } from '@/store/modules/permission';
-import { getWastageRecords, getWastageRecord, getWastageStatistics, createWastageRecord, submitWastage, approveWastage, rejectWastage, getRawMaterialTypes } from '@/api/restaurant';
+import { getWastageRecords, getWastageRecord, getWastageStatistics, createWastageRecord, submitWastage, approveWastage, rejectWastage, getRawMaterialTypes, getFactoryUsersForSelect } from '@/api/restaurant';
+import AccountabilityBoard from './AccountabilityBoard.vue';
 import { emptyCell, formatDateCell, formatAmount, exportTableToExcel } from '@/utils/tableFormatters';
 import { formatDate } from '@/utils/dateFormat';
 import type { WastageRecord } from '@/types/restaurant';
@@ -208,6 +235,17 @@ const wastageTypeMap: Record<string, string> = {
   EXPIRED: '过期', DAMAGED: '破损', SPOILED: '变质', PROCESSING: '加工损耗', OTHER: '其他',
 };
 
+// Wave2 损耗按人/档口责任制：档口固定枚举 (dropdown 约束选择，防呆 Rule 3)
+const sectionOptions = [
+  { code: 'SEAFOOD', label: '海鲜' },
+  { code: 'COLD_DISH', label: '冷菜' },
+  { code: 'HOT_DISH', label: '热菜' },
+  { code: 'FRONT_HOUSE', label: '前厅' },
+  { code: 'OTHER', label: '其他' },
+];
+const sectionLabelMap: Record<string, string> = Object.fromEntries(sectionOptions.map(s => [s.code, s.label]));
+const sectionLabel = (code?: string | null) => (code ? (sectionLabelMap[code] || code) : '-');
+
 const factoryId = useFactoryId();
 const permissionStore = usePermissionStore();
 const canWrite = computed(() => permissionStore.canWrite('restaurant'));
@@ -216,6 +254,25 @@ const canViewPrice = computed(() => permissionStore.canViewPrice);
 // U-FOOTER-1
 const summaryRequest = computed<ListSummaryRequest>(() => ({ filterConditions: {} }));
 const { summary: footerSummary, loading: footerLoading } = useListSummary('wastage', summaryRequest);
+
+const boardVisible = ref(false);
+
+// Wave2 责任人下拉 + 姓名映射（dropdown 选择，非自由文本）
+const operatorOptions = ref<{ id: number; label: string }[]>([]);
+const operatorNameMap = computed(() => Object.fromEntries(operatorOptions.value.map(u => [u.id, u.label])));
+async function loadOperators() {
+  if (!factoryId.value) return;
+  try {
+    const res = await getFactoryUsersForSelect(factoryId.value);
+    if (res.success && res.data) {
+      const d = res.data as { content?: { id: number; username: string; realName?: string }[] } | { id: number; username: string; realName?: string }[];
+      const users = Array.isArray(d) ? d : (d.content || []);
+      operatorOptions.value = users.map(u => ({ id: u.id, label: u.realName || u.username }));
+    }
+  } catch (e) {
+    console.error('Failed to load operators:', e);
+  }
+}
 
 const materialTypes = ref<{ id: string; name: string }[]>([]);
 const materialNameMap = computed(() => Object.fromEntries(materialTypes.value.map(m => [m.id, m.name])));
@@ -274,7 +331,9 @@ const emptyForm = () => ({
   quantity: 1,
   unit: 'kg',
   estimatedCost: 0,
-  reason: ''
+  reason: '',
+  sectionCode: undefined as string | undefined,
+  operatorId: undefined as number | undefined,
 });
 const dialogForm = ref(emptyForm());
 const formRef = ref<FormInstance>();
@@ -434,15 +493,17 @@ async function handleExport() {
     { label: '食材', field: 'rawMaterialTypeId', formatter: (val) => materialNameMap.value[String(val)] || String(val) },
     { label: '数量', field: 'quantity' },
     { label: '单位', field: 'unit' },
+    { label: '档口', field: 'sectionCode', formatter: (val) => val ? sectionLabel(String(val)) : '' },
+    { label: '责任人', field: 'operatorId', formatter: (val) => val ? (operatorNameMap.value[Number(val)] || ('用户#' + val)) : '' },
     { label: '估算损失', field: 'estimatedCost' },
     { label: '原因', field: 'reason' },
   ], '损耗记录');
 }
 
-onMounted(() => { loadData(); loadMaterialTypes(); loadStatistics(); });
+onMounted(() => { loadData(); loadMaterialTypes(); loadStatistics(); loadOperators(); });
 
 // Handle full-page reload: factoryId may not be ready at mount time
-watch(factoryId, (val) => { if (val) { loadData(); loadStatistics(); } });
+watch(factoryId, (val) => { if (val) { loadData(); loadStatistics(); loadOperators(); } });
 </script>
 
 <style scoped lang="scss">

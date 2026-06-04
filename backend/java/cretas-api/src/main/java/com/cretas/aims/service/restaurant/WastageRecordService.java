@@ -64,4 +64,17 @@ public interface WastageRecordService {
      * }
      */
     Map<String, Object> getStatistics(String factoryId, LocalDate startDate, LocalDate endDate);
+
+    /**
+     * 损耗责任制汇总：按责任人 + 档口聚合 APPROVED 损耗 (Wave2)。
+     *
+     * <p>兑现邓总诉求："今天损耗明天屌你" / "同样 1 万营业额哪个档口哪个人成本涨了"。
+     * 回填责任人姓名 + 档口中文名。仅统计 APPROVED 记录。</p>
+     *
+     * <p>金额脱敏由 controller 端点的 {@code @RequirePermission} 整体门控
+     * （procurement:price:view OR finance:read），无价权角色无法调用，故 service
+     * 直接返回金额，与 {@link #getStatistics} 同 RBAC 模型。</p>
+     */
+    com.cretas.aims.dto.restaurant.WastageAccountability getAccountability(
+            String factoryId, LocalDate startDate, LocalDate endDate);
 }

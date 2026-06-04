@@ -142,6 +142,26 @@ public class WastageRecord extends BaseEntity {
     @Column(name = "reason", columnDefinition = "TEXT")
     private String reason;
 
+    // ========== 责任归属 (Wave2 损耗按人/档口责任制) ==========
+
+    /**
+     * 责任人 ID (users.id)。损耗事件的直接责任操作员，用于按人透明化归因。
+     *
+     * <p>对应邓总诉求："同样 1 万营业额哪个档口哪个人成本涨了"。
+     * 与 {@link #reportedBy}（上报人）区分：reportedBy 是录单人，operatorId 是损耗发生时的操作责任人。</p>
+     */
+    @Column(name = "operator_id")
+    private Long operatorId;
+
+    /**
+     * 档口编码 (SEAFOOD / COLD_DISH / HOT_DISH / FRONT_HOUSE / OTHER)。
+     *
+     * <p>用于按档口聚合损耗。固定枚举值，前端 dropdown 录入（防呆 Rule 3：约束选择而非自由文本）。
+     * 存稳定英文码，UI 层映射中文（海鲜/冷菜/热菜/前厅/其他）。</p>
+     */
+    @Column(name = "section_code", length = 32)
+    private String sectionCode;
+
     // ========== 审批信息 ==========
 
     /**

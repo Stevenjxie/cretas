@@ -149,4 +149,55 @@ public interface WastageRecordRepository extends JpaRepository<WastageRecord, St
     @Query("SELECT COUNT(w) FROM WastageRecord w " +
             "WHERE w.factoryId = :factoryId AND w.wastageDate = :date")
     long countByFactoryIdAndDate(@Param("factoryId") String factoryId, @Param("date") LocalDate date);
+
+    // ==================== 责任制聚合 (Wave2 损耗按人/档口) ====================
+
+    /**
+     * 按责任人聚合 APPROVED 损耗（成本降序）。
+     *
+     * <p>operator_id 为 null 的记录归并为「未指定责任人」一行（COALESCE 在 service 层处理，
+     * 此处保留原始 null operatorId，ORDER BY 用 SUM(estimatedCost) 降序）。</p>
+     *
+     * @return List of [operatorId(Long, 可 null), count(Long), sumQuantity(BigDecimal), sumCost(BigDecimal)]
+     */
+    @Query("SELECT w.operatorId, COUNT(w), COALESCE(SUM(w.quantity), 0), COALESCE(SUM(w.estimatedCost), 0) " +
+            "FROM WastageRecord w " +
+            "WHERE w.factoryId = :factoryId " +
+            "AND w.status = 'APPROVED' " +
+            "AND w.wastageDate BETWEEN :startDate AND :endDate " +
+            "GROUP BY w.operatorId " +
+            "ORDER BY COALESCE(SUM(w.estimatedCost), 0) DESC")
+    List<Object[]> getStatisticsByOperator(
+            @Param("factoryId") String factoryId,
+            @Param("startDate") LocalDate startDate,
+            @Param("endDate") LocalDate endDate);
+
+    /**
+     * 按档口聚合 APPROVED 损耗（成本降序）。
+     *
+     * @return List of [sectionCode(String, 可 null), count(Long), sumQuantity(BigDecimal), sumCost(BigDecimal)]
+     */
+    @Query("SELECT w.sectionCode, COUNT(w), COALESCE(SUM(w.quantity), 0), COALESCE(SUM(w.estimatedCost), 0) " +
+            "FROM WastageRecord w " +
+            "WHERE w.factoryId = :factoryId " +
+            "AND w.status = 'APPROVED' " +
+            "AND w.wastageDate BETWEEN :startDate AND :endDate " +
+            "GROUP BY w.sectionCode " +
+            "ORDER BY COALESCE(SUM(w.estimatedCost), 0) DESC")
+    List<Object[]> getStatisticsBySection(
+            @Param("factoryId") String factoryId,
+            @Param("startDate") LocalDate startDate,
+            @Param("endDate") LocalDate endDate);
+
+    /**
+     * APPROVED 损耗总记录数（时间范围内）— 责任制汇总 totalCount 用。
+     */
+    @Query("SELECT COUNT(w) FROM WastageRecord w " +
+            "WHERE w.factoryId = :factoryId " +
+            "AND w.status = 'APPROVED' " +
+            "AND w.wastageDate BETWEEN :startDate AND :endDate")
+    long countApprovedByDateRange(
+            @Param("factoryId") String factoryId,
+            @Param("startDate") LocalDate startDate,
+            @Param("endDate") LocalDate endDate);
 }

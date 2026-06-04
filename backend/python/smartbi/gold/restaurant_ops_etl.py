@@ -285,7 +285,8 @@ async def sync_fact_wastage(
         rows = await src.fetch(
             """
             SELECT id, wastage_number, wastage_date, type, status,
-                   raw_material_type_id, quantity, unit, estimated_cost, reason
+                   raw_material_type_id, quantity, unit, estimated_cost, reason,
+                   operator_id, section_code
               FROM wastage_records
              WHERE factory_id = $1::varchar AND deleted_at IS NULL
             """,
@@ -306,6 +307,9 @@ async def sync_fact_wastage(
     units = [r["unit"] for r in rows]
     est_costs = [float(r["estimated_cost"]) if r["estimated_cost"] is not None else None for r in rows]
     reasons = [r["reason"] for r in rows]
+    # Wave2 损耗按人/档口责任制
+    operator_ids = [r["operator_id"] for r in rows]
+    section_codes = [r["section_code"] for r in rows]
 
     async with smartbi_pool.acquire() as dst:
         async with dst.transaction():
@@ -314,13 +318,15 @@ async def sync_fact_wastage(
                 """
                 INSERT INTO fact_restaurant_wastage (
                     factory_id, source_pk, wastage_number, date, wastage_type,
-                    status, ingredient_id, quantity, unit, estimated_cost, reason
+                    status, ingredient_id, quantity, unit, estimated_cost, reason,
+                    operator_id, section_code
                 )
-                SELECT $1, pk, n, d, wt, s, ing, q, u, ec, r
+                SELECT $1, pk, n, d, wt, s, ing, q, u, ec, r, op, sec
                   FROM UNNEST(
                     $2::text[], $3::text[], $4::date[], $5::text[], $6::text[],
-                    $7::bigint[], $8::numeric[], $9::text[], $10::numeric[], $11::text[]
-                  ) AS t(pk, n, d, wt, s, ing, q, u, ec, r)
+                    $7::bigint[], $8::numeric[], $9::text[], $10::numeric[], $11::text[],
+                    $12::bigint[], $13::text[]
+                  ) AS t(pk, n, d, wt, s, ing, q, u, ec, r, op, sec)
                 ON CONFLICT (factory_id, source_pk) DO UPDATE SET
                     wastage_number = EXCLUDED.wastage_number,
                     date = EXCLUDED.date,
@@ -331,11 +337,14 @@ async def sync_fact_wastage(
                     unit = EXCLUDED.unit,
                     estimated_cost = EXCLUDED.estimated_cost,
                     reason = EXCLUDED.reason,
+                    operator_id = EXCLUDED.operator_id,
+                    section_code = EXCLUDED.section_code,
                     updated_at = NOW()
                 RETURNING id
                 """,
                 factory_id, source_pks, numbers, dates, wastage_types, statuses,
                 ingredient_ids, quantities, units, est_costs, reasons,
+                operator_ids, section_codes,
             )
     count = len(result)
     logger.info("[etl] fact_wastage: upserted %d rows for factory=%s", count, factory_id)
