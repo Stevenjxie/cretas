@@ -22,5 +22,12 @@ public interface WorkProcessRepository extends JpaRepository<WorkProcess, String
 
     boolean existsByFactoryIdAndProcessName(String factoryId, String processName);
 
+    /**
+     * C5: near-dup detection — find processes with the same name + category + unit
+     * (excluding the caller's own ID on update; pass null for create).
+     */
+    List<WorkProcess> findByFactoryIdAndProcessNameAndProcessCategoryAndUnit(
+            String factoryId, String processName, String processCategory, String unit);
+
     List<WorkProcess> findByFactoryIdAndIdIn(String factoryId, List<String> ids);
 }

@@ -111,4 +111,16 @@ public class WorkProcessController {
         workProcessService.updateSortOrder(factoryId, updates);
         return ApiResponse.success();
     }
+
+    /**
+     * C5: Detect duplicate work-process clusters.
+     * Returns groups of work-processes that share the same (processName, processCategory, unit).
+     * Only groups with ≥ 2 members are returned.
+     */
+    @GetMapping("/duplicates")
+    @Operation(summary = "检测重复工序（同名称+类别+单位）")
+    public ApiResponse<List<WorkProcessDTO.DuplicateGroup>> detectDuplicates(
+            @PathVariable String factoryId) {
+        return ApiResponse.success(workProcessService.detectDuplicates(factoryId));
+    }
 }

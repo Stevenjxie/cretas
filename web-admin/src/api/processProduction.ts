@@ -32,6 +32,11 @@ export function toggleWorkProcessStatus(factoryId: string, id: string) {
   return put<WorkProcessItem>(`/${factoryId}/work-processes/${id}/toggle-status`);
 }
 
+/** C5: Fetch duplicate clusters — groups sharing same (processName, processCategory, unit). */
+export function getWorkProcessDuplicates(factoryId: string) {
+  return get<WorkProcessDuplicateGroup[]>(`/${factoryId}/work-processes/duplicates`);
+}
+
 // === Product-Work Process Associations ===
 
 export function getProductWorkProcesses(factoryId: string, productTypeId: string) {
@@ -141,6 +146,15 @@ export function batchApproveReports(factoryId: string, reportIds: number[]) {
 }
 
 // === Types ===
+
+/** C5: A cluster of duplicate work-processes sharing the same name + category + unit. */
+export interface WorkProcessDuplicateGroup {
+  processName: string;
+  processCategory: string | null;
+  unit: string;
+  /** Always ≥ 2 members. */
+  members: WorkProcessItem[];
+}
 
 export interface WorkProcessItem {
   id: string;

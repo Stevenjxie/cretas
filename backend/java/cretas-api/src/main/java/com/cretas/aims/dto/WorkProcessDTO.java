@@ -85,4 +85,23 @@ public class WorkProcessDTO {
         private String id;
         private Integer sortOrder;
     }
+
+    /**
+     * C5: A cluster of duplicate work-processes that share the same
+     * processName + processCategory + unit within a factory.
+     */
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class DuplicateGroup {
+        /** The shared name. */
+        private String processName;
+        /** The shared category (may be null). */
+        private String processCategory;
+        /** The shared unit. */
+        private String unit;
+        /** All members of this duplicate cluster (always ≥ 2). */
+        private List<WorkProcessDTO> members;
+    }
 }
