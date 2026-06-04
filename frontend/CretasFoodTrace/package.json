@@ -41,6 +41,7 @@
     "axios": "^1.11.0",
     "expo": "~53.0.27",
     "expo-application": "~6.1.5",
+    "expo-asset": "~11.1.7",
     "expo-av": "~15.1.7",
     "expo-camera": "~16.1.11",
     "expo-clipboard": "~7.1.5",
