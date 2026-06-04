@@ -1431,6 +1431,14 @@ const businessRoutes: RouteRecordRaw[] = [
             redirect: (to) => ({ path: '/smart-bi/dashboard', query: { ...to.query } }),
           },
           {
+            // 店长经营 KPI 看板 (single-store 直营 MVP, 2026-06-04):
+            // 一屏 6 KPI (日营收/客单价/订单数/毛利率/食材成本率/目标完成率) + 健康灯。
+            path: 'analytics/role-kpi',
+            name: 'RestaurantRoleKpiDashboard',
+            component: () => import('@/views/restaurant/analytics/role-kpi-dashboard.vue'),
+            meta: { requiresAuth: true, title: '经营看板', module: 'restaurant' }
+          },
+          {
             // IA v2: 菜品分析双tab (整合 菜品四象限 + 菜品毛利)
             path: 'analytics/dishes',
             name: 'RestaurantDishes',
