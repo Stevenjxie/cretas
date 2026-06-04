@@ -6882,6 +6882,10 @@ public class IntentKnowledgeBase {
         restaurantPhraseMapping.put("客单价排行", "RESTAURANT_STORE_REVENUE_RANK");
         restaurantPhraseMapping.put("客单价最高的门店", "RESTAURANT_STORE_REVENUE_RANK");
         restaurantPhraseMapping.put("人均消费最高", "RESTAURANT_STORE_REVENUE_RANK");
+        restaurantPhraseMapping.put("客单价", "RESTAURANT_STORE_REVENUE_RANK");
+        restaurantPhraseMapping.put("客单价呢", "RESTAURANT_STORE_REVENUE_RANK");
+        restaurantPhraseMapping.put("人均消费", "RESTAURANT_STORE_REVENUE_RANK");
+        restaurantPhraseMapping.put("人均消费呢", "RESTAURANT_STORE_REVENUE_RANK");
         // QA-fix R1 (2026-06-04): route comparative/review queries to working gold intents
         restaurantPhraseMapping.put("周末周中对比", "RESTAURANT_WEEKDAY_WEEKEND");
         restaurantPhraseMapping.put("周末与工作日营收对比", "RESTAURANT_WEEKDAY_WEEKEND");

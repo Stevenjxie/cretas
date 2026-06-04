@@ -96,6 +96,9 @@ import java.util.stream.Collectors;
 @Service
 public class IntentRecognitionPipelineServiceImpl implements IntentRecognitionPipelineService {
 
+    private static final Pattern STORE_REFERENCE_PATTERN = Pattern.compile(
+            "那家店|这家店|该店|那个店|这个店|该门店|那家|这家");
+
     // ==================== Constructor-injected dependencies ====================
 
     private final AIIntentConfigRepository intentRepository;
@@ -476,7 +479,7 @@ public class IntentRecognitionPipelineServiceImpl implements IntentRecognitionPi
         // v33.1: Pre-preprocess phrase matching — match on ORIGINAL input before preprocessing
         // Prevents preprocessor from stripping keywords like "收款", "开票", "研发需求"
         // W1b T3: VETO_WRITE("别开始生产") 守卫此短路,使其跳过 → 落到下游 policy 转读孪生。
-        if (!negationVetoWrite) {
+        if (!negationVetoWrite && !shouldBypassEarlyPhraseShortcutForStoreReference(userInput)) {
             String rawNormalized = userInput.toLowerCase().trim();
             String rawPhraseInput = filterFillerWordsForPhrase(rawNormalized);
             Optional<String> earlyPhraseMatch = knowledgeBase.matchPhrase(rawPhraseInput, businessDomain);
@@ -743,6 +746,10 @@ public class IntentRecognitionPipelineServiceImpl implements IntentRecognitionPi
         }
 
         return attachTiming(result, startTimeMs, preprocessEndMs);
+    }
+
+    static boolean shouldBypassEarlyPhraseShortcutForStoreReference(String userInput) {
+        return userInput != null && STORE_REFERENCE_PATTERN.matcher(userInput).find();
     }
 
     @Override

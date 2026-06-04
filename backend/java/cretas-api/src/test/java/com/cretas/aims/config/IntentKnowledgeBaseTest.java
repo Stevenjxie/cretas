@@ -317,4 +317,15 @@ class IntentKnowledgeBaseTest {
         assertEquals("RESTAURANT_DISH_COST_ANALYSIS",
                 kb.matchPhrase("哪些菜亏钱", "RESTAURANT").orElse("NONE"));
     }
+
+    @Test
+    @DisplayName("Phase 2a — bare avg-ticket phrase routes to store revenue rank")
+    void bareAverageTicketRoutesToStoreRevenueRank() {
+        assertEquals("RESTAURANT_STORE_REVENUE_RANK",
+                kb.matchPhrase("客单价", "RESTAURANT").orElse("NONE"));
+        assertEquals("RESTAURANT_STORE_REVENUE_RANK",
+                kb.matchPhrase("青花椒大丸百货店的客单价呢", "RESTAURANT").orElse("NONE"));
+        assertEquals("RESTAURANT_STORE_REVENUE_RANK",
+                kb.matchPhrase("人均消费", "RESTAURANT").orElse("NONE"));
+    }
 }
