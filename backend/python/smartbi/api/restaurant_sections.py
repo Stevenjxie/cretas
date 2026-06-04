@@ -75,6 +75,7 @@ from smartbi.services.restaurant.sections.shift_analysis import ShiftAnalysisHan
 from smartbi.services.restaurant.sections.piecework_calc import PieceworkCalcHandler
 from smartbi.services.restaurant.sections.performance_eval import PerformanceEvalHandler
 from smartbi.services.restaurant.sections.store_kpi_dashboard import StoreKpiDashboardHandler
+from smartbi.services.restaurant.sections.value_summary import ValueSummaryHandler
 
 logger = logging.getLogger(__name__)
 _cache = SectionCache(ttl_seconds=300)
@@ -141,6 +142,7 @@ HANDLERS = {
     "piecework_calc": PieceworkCalcHandler(),
     "performance_eval": PerformanceEvalHandler(),
     "store_kpi_dashboard": StoreKpiDashboardHandler(),
+    "value_summary": ValueSummaryHandler(),
 }
 
 

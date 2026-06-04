@@ -36,6 +36,7 @@ import ChartSkeleton from '@/components/smartbi/ChartSkeleton.vue';
 import { enhanceChartDefaults } from '@/composables/useChartEnhancer';
 import TemplateGrid from './components/TemplateGrid.vue';
 import RestaurantGoldGrid from './components/RestaurantGoldGrid.vue';
+import ValueFeedbackStrip from './components/ValueFeedbackStrip.vue';
 // Day 8 数据织网 Sub-Project A: capability-driven card visibility
 import { useCapability } from '@/composables/useCapability';
 import CapabilityGate from '@/components/CapabilityGate.vue';
@@ -1882,6 +1883,14 @@ onUnmounted(() => {
         </el-card>
       </el-col>
     </el-row>
+
+    <!-- #56 价值可视化回馈回路: 本月价值回馈条 (诊断引擎已算出的省钱/改善金额, 月度+年化
+         两口径)。业态门控仅 RESTAURANT。解决"门店看不到价值 → 配合度崩塌"死因。 -->
+    <ValueFeedbackStrip
+      v-if="isRestaurantTenant"
+      :factory-id="factoryId || ''"
+      :show="isRestaurantTenant"
+    />
 
     <!-- 餐饮业态: Gold 全量营收分析 (门店排行 + 渠道占比), 取代通用 schema-driven
          模板卡 — 后者对青花椒误选"星级分"显示累计 SUM bug 且老板不关心 (May 29 2026,

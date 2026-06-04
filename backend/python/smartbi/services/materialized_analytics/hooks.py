@@ -150,6 +150,49 @@ async def _trigger_materialization(upload_id: int, factory_id: Optional[str] = N
                 f"failed (non-blocking): {dish_err}"
             )
 
+        # #56 价值可视化回馈回路 (D1-b): on a restaurant finance/POS upload, recompute
+        # the current factory's value snapshot immediately (上传即看见). Idempotent
+        # upsert (compute_and_upsert_snapshot) → re-trigger never adds a duplicate row.
+        # Fully fire-and-forget: any failure only logs, never affects materialization.
+        # Period = the upload's most recent finance month (None → pipeline default = last
+        # complete month). Gated on restaurant domain (RESTAURANT_* / unknown-restaurant).
+        try:
+            if domain_value and str(domain_value).upper().startswith("RESTAURANT"):
+                from smartbi.services.restaurant.value_refresh_pipeline import (
+                    refresh_snapshot_for_factory,
+                )
+                from smartbi.services.restaurant.value_notifier import maybe_notify_monthly
+                from smartbi.services.restaurant.value_snapshot_service import (
+                    get_value_summary,
+                )
+
+                vf_result = await refresh_snapshot_for_factory(
+                    factory_id, period_month=None, store_id=None, pool=pool,
+                )
+                if vf_result.get("success"):
+                    logger.info(
+                        "[hook] upload %s: value snapshot refreshed factory=%s month=%s",
+                        upload_id, factory_id, vf_result.get("totalMonth"),
+                    )
+                    # Notify店长/老板 (D2). maybe_notify_monthly is idempotent against the
+                    # notifications-log table, so the upload-triggered notify won't double up
+                    # with the monthly cron. Period derived from the just-written snapshot.
+                    summary = await get_value_summary(
+                        pool, factory_id, period_month=None, store_id=None,
+                        set_tenant_guc=True,
+                    )
+                    if summary is not None:
+                        await maybe_notify_monthly(
+                            pool, factory_id,
+                            period_month=summary.get("periodMonth"),
+                            summary=summary,
+                        )
+        except Exception as vf_err:
+            logger.warning(
+                f"[hook] upload {upload_id}: value-feedback snapshot "
+                f"failed (non-blocking): {vf_err}"
+            )
+
         # Also pre-warm the L2 aggregate cache used by the LLM fallback path
         # in chat.py. We piggyback on the polars DataFrame that materialize
         # already built — polars in-memory aggregation runs in ~1s vs ~30-70s
