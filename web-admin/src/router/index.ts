@@ -1482,6 +1482,19 @@ const businessRoutes: RouteRecordRaw[] = [
             },
           },
           {
+            // #61 Phase 1 (2026-06-04): POS 菜品名称解析回填 — 未解析队列 admin 裁决
+            path: 'admin/name-resolution',
+            name: 'RestaurantNameResolution',
+            component: () => import('@/views/restaurant/admin/name-resolution.vue'),
+            meta: {
+              requiresAuth: true,
+              title: '菜品名称匹配',
+              module: 'restaurant',
+              roles: ['factory_super_admin', 'platform_admin', 'permission_admin'],
+              hidden: false,
+            },
+          },
+          {
             // 餐饮 Phase A-2 Task 2.2: data completeness page
             path: 'data-completeness',
             name: 'RestaurantDataCompleteness',

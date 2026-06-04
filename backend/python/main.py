@@ -1103,6 +1103,14 @@ app.include_router(
     tags=["Restaurant ETL Admin"],
 )
 
+# Restaurant POS dish-name resolution admin (#61 Phase 1, 2026-06-04)
+from smartbi.api import restaurant_name_resolution_admin  # noqa: E402
+app.include_router(
+    restaurant_name_resolution_admin.router,
+    prefix="/api/smartbi/restaurant/name-resolution",
+    tags=["Restaurant POS Name Resolution"],
+)
+
 # Restaurant completeness API (餐饮 Phase A Task 2.1)
 from smartbi.api import restaurant_completeness  # noqa: E402
 app.include_router(
