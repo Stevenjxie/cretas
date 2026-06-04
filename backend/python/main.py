@@ -77,6 +77,7 @@ from smartbi.api import (  # noqa: E402
     supplier_price,
 )
 from smartbi.api import restaurant_sections  # noqa: E402
+from smartbi.api import restaurant_value  # noqa: E402  (#56 价值可视化回馈回路, 2026-06-04)
 from smartbi.api import intent_analysis  # noqa: E402
 from smartbi.api import revenue_report  # noqa: E402  (Phase G2, PR #516 — was unwired)
 from smartbi.api import sales_preset  # noqa: E402  (Sprint 4 W2 S-REPORTS-PRESETS — top 5 active + 9 Sprint 5 stubs)
@@ -993,6 +994,7 @@ app.include_router(supplier_price.router, prefix="/api/smartbi", tags=["Supplier
 app.include_router(restaurant_ops_recipes.router, prefix="/api/smartbi", tags=["Restaurant Ops Recipes"])
 app.include_router(restaurant_health_check.router, prefix="/api/smartbi", tags=["Restaurant Health Check"])
 app.include_router(restaurant_sections.router, tags=["Restaurant Sections"])
+app.include_router(restaurant_value.router, prefix="/api/smartbi", tags=["Restaurant Value Feedback"])
 app.include_router(production_ai.router, prefix="/api/smartbi", tags=["Production AI"])
 app.include_router(financial_dashboard.router, prefix="/api/smartbi/financial-dashboard", tags=["Financial Dashboard"])
 app.include_router(layout.router, prefix="/api/smartbi", tags=["Dashboard Layout"])
