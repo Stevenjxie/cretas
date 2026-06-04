@@ -587,6 +587,9 @@ public class IntentExecutionOrchestrator {
         applyResultFormatting(response);
         applyFormattedTextFallback(response);
 
+        // X1 Part B 修复:短路 / 显式意图路径也持久化对话记忆,供下一轮续接继承。
+        persistConversationMemoryForExplicitIntent(factoryId, request, response, intent, userId);
+
         return response;
     }
 
@@ -1504,6 +1507,30 @@ public class IntentExecutionOrchestrator {
     }
 
     // ==================== 对话记忆 ====================
+
+    /**
+     * X1 Part B 修复 —— 在短路 / 显式意图路径持久化对话记忆。供下一轮 X1 续接继承 lastIntentCode。
+     * 仅当 sessionId 非空时生效(无 session 的独立查询 parity/golden 完全不受影响)。fail-soft。
+     * 包级可见便于单测。
+     */
+    void persistConversationMemoryForExplicitIntent(String factoryId, IntentExecuteRequest request,
+                                                    IntentExecuteResponse response,
+                                                    AIIntentConfig intent, Long userId) {
+        if (request.getSessionId() == null || request.getSessionId().isEmpty()) {
+            return;
+        }
+        try {
+            conversationMemoryService.getOrCreateContext(factoryId, userId, request.getSessionId());
+            IntentMatchResult syntheticMatch = IntentMatchResult.builder()
+                    .bestMatch(intent)
+                    .userInput(request.getUserInput())
+                    .build();
+            updateConversationMemory(request.getSessionId(), request, response,
+                    syntheticMatch, factoryId, userId);
+        } catch (Exception e) {
+            log.warn("X1 explicit-intent path memory persist failed: {}", e.getMessage());
+        }
+    }
 
     private void updateConversationMemory(String sessionId, IntentExecuteRequest request,
                                            IntentExecuteResponse response, IntentMatchResult intentResult,
