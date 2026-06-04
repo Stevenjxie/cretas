@@ -4,6 +4,7 @@ import lombok.Getter;
 import org.springframework.context.ApplicationEvent;
 
 import java.math.BigDecimal;
+import java.time.LocalDateTime;
 
 /**
  * 餐饮到访业绩归属事件。
@@ -25,20 +26,27 @@ public class RestaurantVisitAttributedEvent extends ApplicationEvent {
     private final Long repId;
     /** 本次到访营收。 */
     private final BigDecimal visitRevenue;
+    /**
+     * 本次到访时间（Phase 2 用于月度计提周期 period_key 'YYYY-MM' 归月，避免用结算时刻跨月误算）。
+     * 可空（旧 publish 站点未携带时为 null → 结算降级用结算时刻）。
+     */
+    private final LocalDateTime visitAt;
 
     public RestaurantVisitAttributedEvent(Object source, String factoryId, String guestId,
-                                          String visitId, Long repId, BigDecimal visitRevenue) {
+                                          String visitId, Long repId, BigDecimal visitRevenue,
+                                          LocalDateTime visitAt) {
         super(source);
         this.factoryId = factoryId;
         this.guestId = guestId;
         this.visitId = visitId;
         this.repId = repId;
         this.visitRevenue = visitRevenue;
+        this.visitAt = visitAt;
     }
 
     @Override
     public String toString() {
-        return String.format("RestaurantVisitAttributedEvent[factoryId=%s, guestId=%s, visitId=%s, repId=%s, revenue=%s]",
-                factoryId, guestId, visitId, repId, visitRevenue);
+        return String.format("RestaurantVisitAttributedEvent[factoryId=%s, guestId=%s, visitId=%s, repId=%s, revenue=%s, visitAt=%s]",
+                factoryId, guestId, visitId, repId, visitRevenue, visitAt);
     }
 }

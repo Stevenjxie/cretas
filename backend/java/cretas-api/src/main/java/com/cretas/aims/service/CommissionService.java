@@ -277,6 +277,84 @@ public class CommissionService {
         return commissionRepository.save(c);
     }
 
+    // ==================== Tier resolution (shared single source of truth) ====================
+
+    /**
+     * 阶梯档位解析结果 — 给定累计业绩落在哪个档 + 该档费率。
+     *
+     * <p>{@code tierIndex} 为 0-based 档位 index（NULL = 无 tierConfig，走 flat percentage）；
+     * {@code rate} 为套用的费率（百分比，0-100）。</p>
+     */
+    public record TierResolution(Integer tierIndex, BigDecimal rate) {}
+
+    /**
+     * 按累计业绩在 {@code tierConfig} 中解析所处档位与费率（#59 Phase 2 餐饮月度累计阶梯提成的核心）。
+     *
+     * <p>这是阶梯费率解析的<b>单一事实源</b>：餐饮提成引擎结算、web-admin 区间预览均调用此方法，
+     * 保证 UI 预览与实际结算一致。<b>不改</b> {@link #calculate(String)} 工厂商机路径（其仍用 flat
+     * {@code percentage}），契合 CLAUDE 规则"不改既有 calculate()"。</p>
+     *
+     * <p>档位匹配规则：{@code minAmount <= cumulative}（含下界）且
+     * {@code (maxAmount IS NULL OR cumulative < maxAmount)}（不含上界，避免边界 double-count）。
+     * 多档命中取 <b>下界最大</b>者（落在更高档）。无 tierConfig → 返 {@code (null, flatPercentage)}；
+     * 有 tierConfig 但无命中（累计额低于所有档下界）→ {@code (null, flatPercentage)} 兜底。</p>
+     *
+     * @param cumulativeRevenue 累计业绩（月度累计），不为 null
+     * @param tierConfig        JSONB 档位配置（{minAmount, maxAmount, rate}），可空
+     * @param flatPercentage    无 tierConfig / 无命中时的兜底 flat 费率（可空 → 0）
+     */
+    public TierResolution resolveTier(BigDecimal cumulativeRevenue,
+                                       List<java.util.Map<String, Object>> tierConfig,
+                                       BigDecimal flatPercentage) {
+        BigDecimal cumulative = cumulativeRevenue != null ? cumulativeRevenue : BigDecimal.ZERO;
+        BigDecimal flat = flatPercentage != null ? flatPercentage : BigDecimal.ZERO;
+
+        if (tierConfig == null || tierConfig.isEmpty()) {
+            return new TierResolution(null, flat);
+        }
+
+        Integer matchedIdx = null;
+        BigDecimal matchedRate = null;
+        BigDecimal matchedMin = null;
+        for (int i = 0; i < tierConfig.size(); i++) {
+            java.util.Map<String, Object> t = tierConfig.get(i);
+            BigDecimal min = toDecimal(t.get("minAmount"));
+            BigDecimal max = toDecimal(t.get("maxAmount"));
+            BigDecimal rate = toDecimal(t.get("rate"));
+            if (min == null || rate == null) {
+                continue;  // 跳过非法档（UI 校验本应拦下）
+            }
+            boolean aboveMin = cumulative.compareTo(min) >= 0;          // min <= cumulative
+            boolean belowMax = (max == null) || cumulative.compareTo(max) < 0;  // cumulative < max
+            if (aboveMin && belowMax) {
+                // 下界最大者落更高档
+                if (matchedMin == null || min.compareTo(matchedMin) > 0) {
+                    matchedIdx = i;
+                    matchedRate = rate;
+                    matchedMin = min;
+                }
+            }
+        }
+
+        if (matchedIdx == null) {
+            // 有 tier 但无命中（累计额低于所有档下界）→ flat 兜底
+            return new TierResolution(null, flat);
+        }
+        return new TierResolution(matchedIdx, matchedRate);
+    }
+
+    /** 宽松转 BigDecimal（容忍 Number / String / null），用于 JSONB 档位字段解析。 */
+    private static BigDecimal toDecimal(Object v) {
+        if (v == null) return null;
+        if (v instanceof BigDecimal bd) return bd;
+        if (v instanceof Number n) return new BigDecimal(n.toString());
+        try {
+            return new BigDecimal(v.toString().trim());
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
     // ==================== Helpers ====================
 
     private void validateRuleInputs(String factoryId, BigDecimal percentage,

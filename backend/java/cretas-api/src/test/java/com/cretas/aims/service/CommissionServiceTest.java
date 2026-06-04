@@ -230,6 +230,94 @@ class CommissionServiceTest {
                 () -> service.cancel(FACTORY, "c-1"));
     }
 
+    // ==================== resolveTier — #59 Phase 2 阶梯档位解析 (单一事实源) ====================
+
+    /** 邓总三档: 0~15万 → 3% / 15万~30万 → 5% / 30万~50万 → 8% (50万 maxAmount=null 兜顶档). */
+    private static List<java.util.Map<String, Object>> dengTiers() {
+        return List.of(
+                java.util.Map.of("minAmount", 0,      "maxAmount", 150000, "rate", 3.0),
+                java.util.Map.of("minAmount", 150000, "maxAmount", 300000, "rate", 5.0),
+                java.util.Map.of("minAmount", 300000, "maxAmount", 500000, "rate", 8.0)
+        );
+    }
+
+    @Test
+    @DisplayName("resolveTier: 累计在第1档区间内 (低于15万) → tier 0, rate 3%")
+    void resolveTier_firstBracket() {
+        CommissionService.TierResolution r = service.resolveTier(
+                new BigDecimal("100000"), dengTiers(), new BigDecimal("99"));
+        assertEquals(Integer.valueOf(0), r.tierIndex());
+        assertEquals(0, new BigDecimal("3.0").compareTo(r.rate()));
+    }
+
+    @Test
+    @DisplayName("resolveTier: 累计恰在第2档下界 15万 → tier 1, rate 5% (含下界, 不含上界)")
+    void resolveTier_lowerBoundaryInclusive() {
+        CommissionService.TierResolution r = service.resolveTier(
+                new BigDecimal("150000"), dengTiers(), new BigDecimal("99"));
+        assertEquals(Integer.valueOf(1), r.tierIndex());
+        assertEquals(0, new BigDecimal("5.0").compareTo(r.rate()));
+    }
+
+    @Test
+    @DisplayName("resolveTier: 累计在第3档区间 (30万~50万) → tier 2, rate 8%")
+    void resolveTier_thirdBracket() {
+        CommissionService.TierResolution r = service.resolveTier(
+                new BigDecimal("450000"), dengTiers(), new BigDecimal("99"));
+        assertEquals(Integer.valueOf(2), r.tierIndex());
+        assertEquals(0, new BigDecimal("8.0").compareTo(r.rate()));
+    }
+
+    @Test
+    @DisplayName("resolveTier: 累计恰在第2档上界 30万 → 落第3档 (上界不含, 边界不 double-count)")
+    void resolveTier_upperBoundaryExclusive() {
+        CommissionService.TierResolution r = service.resolveTier(
+                new BigDecimal("300000"), dengTiers(), new BigDecimal("99"));
+        assertEquals(Integer.valueOf(2), r.tierIndex());
+        assertEquals(0, new BigDecimal("8.0").compareTo(r.rate()));
+    }
+
+    @Test
+    @DisplayName("resolveTier: 无 tierConfig → tier null, 用 flat percentage")
+    void resolveTier_noTierConfigFlat() {
+        CommissionService.TierResolution r = service.resolveTier(
+                new BigDecimal("999999"), null, new BigDecimal("6.5"));
+        assertNull(r.tierIndex());
+        assertEquals(0, new BigDecimal("6.5").compareTo(r.rate()));
+    }
+
+    @Test
+    @DisplayName("resolveTier: 超出顶档 (maxAmount=null 的兜顶档) 仍命中顶档")
+    void resolveTier_aboveTopOpenEnded() {
+        // Map.of 不允许 null value; 用 HashMap 表达 maxAmount=null 的开口顶档 (JSONB 实际形态)
+        java.util.Map<String, Object> bottom = new java.util.HashMap<>();
+        bottom.put("minAmount", 0);
+        bottom.put("maxAmount", 150000);
+        bottom.put("rate", 3.0);
+        java.util.Map<String, Object> top = new java.util.HashMap<>();
+        top.put("minAmount", 150000);
+        top.put("maxAmount", null);
+        top.put("rate", 10.0);
+        List<java.util.Map<String, Object>> openTop = List.of(bottom, top);
+
+        CommissionService.TierResolution r = service.resolveTier(
+                new BigDecimal("9999999"), openTop, new BigDecimal("1"));
+        assertEquals(Integer.valueOf(1), r.tierIndex());
+        assertEquals(0, new BigDecimal("10.0").compareTo(r.rate()));
+    }
+
+    @Test
+    @DisplayName("resolveTier: 有 tierConfig 但累计低于所有下界 → flat 兜底")
+    void resolveTier_belowAllBracketsFallsBackFlat() {
+        List<java.util.Map<String, Object>> highTiers = List.of(
+                java.util.Map.of("minAmount", 100000, "maxAmount", 200000, "rate", 5.0)
+        );
+        CommissionService.TierResolution r = service.resolveTier(
+                new BigDecimal("50000"), highTiers, new BigDecimal("2.5"));
+        assertNull(r.tierIndex());
+        assertEquals(0, new BigDecimal("2.5").compareTo(r.rate()));
+    }
+
     // ==================== Helpers ====================
 
     private SalesOpportunity oppOf(String id, BigDecimal valueAmount) {
