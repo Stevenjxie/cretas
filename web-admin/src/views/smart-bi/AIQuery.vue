@@ -181,8 +181,8 @@ function resetChatSession(): void {
 
 // P1-B (2026-06-03): 餐饮租户专属快捷问题目录 — 按 老板 高频维度分组展示.
 // 仅当 authStore.factoryType === 'RESTAURANT' 时生效; 工厂租户不受影响.
-// 覆盖 gold 后端已支持的维度: 营收/菜品/门店/评价/渠道/客单价/峰值时段.
-// 不含"商品分类占比"(gold 后端无此数据, 会 fall-through).
+// 覆盖 gold 后端已支持的维度: 营收/菜品/门店/评价/渠道/客单价.
+// 不含"商品分类占比"/"峰值时段"(gold 后端无此数据/无执行器, 会 fall-through).
 interface RestaurantQuickGroup {
   label: string;
   questions: string[];
@@ -191,7 +191,7 @@ const RESTAURANT_QUICK_GROUPS: RestaurantQuickGroup[] = [
   {
     label: '经营总览',
     questions: [
-      '总营业额', '今年营收', '本季度营收', '营收趋势', '峰值时段',
+      '总营业额', '今年营收', '本季度营收', '营收趋势',
     ],
   },
   {
@@ -302,15 +302,7 @@ const RESTAURANT_TIME_FOLLOWUPS: Array<{
     followups: [
       { label: '上个月', question: '上个月外卖占比' },
       { label: '本季度', question: '本季度外卖占比' },
-      { label: '门店对比', question: '各门店外卖占比对比' },
-    ],
-  },
-  {
-    patterns: ['峰值时段', '时段'],
-    followups: [
-      { label: '工作日', question: '工作日峰值时段' },
-      { label: '周末', question: '周末峰值时段' },
-      { label: '门店对比', question: '各门店峰值时段对比' },
+      { label: '堂食外卖', question: '堂食外卖对比' },
     ],
   },
   {
@@ -325,7 +317,7 @@ const RESTAURANT_TIME_FOLLOWUPS: Array<{
     followups: [
       { label: '上个月', question: '上个月优惠券使用情况' },
       { label: '本季度', question: '本季度优惠券使用情况' },
-      { label: '门店对比', question: '各门店优惠券使用对比' },
+      { label: '本月', question: '本月优惠券使用情况' },
     ],
   },
 ];
