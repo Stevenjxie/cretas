@@ -72,6 +72,10 @@ public class MobileBusinessServiceImpl implements MobileBusinessService {
     @Value("${app.version.min:1.0.0}")
     private String minVersion;
 
+    /** Android APK 显式直链；配置后优先返回，用于 bN 文件名绕过 CDN/手机缓存 */
+    @Value("${app.version.android.download-url:}")
+    private String androidDownloadUrl;
+
     /** Android APK 直链前缀，最终 URL = base + latestVersion + ".apk" */
     @Value("${app.version.android.download-base:https://dl.cretaceousfuture.com/cretas-v}")
     private String androidDownloadBase;
@@ -221,7 +225,7 @@ public class MobileBusinessServiceImpl implements MobileBusinessService {
 
         String downloadUrl = "ios".equalsIgnoreCase(platform)
                 ? iosDownloadUrl
-                : androidDownloadBase + latestVersion + ".apk";
+                : resolveAndroidDownloadUrl();
 
         return MobileDTO.VersionCheckResponse.builder()
                 .currentVersion(currentVersion)
@@ -232,6 +236,12 @@ public class MobileBusinessServiceImpl implements MobileBusinessService {
                 .releaseNotes(releaseNotes == null || releaseNotes.isBlank() ? null : releaseNotes)
                 .fileSize(fileSize != null && fileSize > 0 ? fileSize : null)
                 .build();
+    }
+
+    private String resolveAndroidDownloadUrl() {
+        return StringUtils.hasText(androidDownloadUrl)
+                ? androidDownloadUrl
+                : androidDownloadBase + latestVersion + ".apk";
     }
 
     /**
