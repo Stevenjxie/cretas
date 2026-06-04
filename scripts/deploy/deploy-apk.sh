@@ -21,7 +21,8 @@
 set -euo pipefail
 
 # ==================== 配置 ====================
-OSS_BUCKET="${OSS_BUCKET:-cretas-dl}"
+OSS_BUCKET="${OSS_BUCKET:-cretas-download}"           # CDN 源站桶 (账号 A/C, 与 CDN 同账号)
+OSS_CONFIG="${OSS_CONFIG:-$HOME/.ossutilconfig-apk}"  # 账号 A/C ossutil 配置 (与默认账号 B cretas-media 区分)
 CDN_DOMAIN="${CDN_DOMAIN:-dl.cretaceousfuture.com}"
 PAGE_GATEWAY="${PAGE_GATEWAY:-root@139.196.165.140}"
 PAGE_REMOTE_DIR="${PAGE_REMOTE_DIR:-/www/wwwroot/download}"          # download.cretaceousfuture.com 根
@@ -140,13 +141,15 @@ if [ "$DRY_RUN" = "1" ]; then
 fi
 
 # ==================== 5. 上传 OSS (CDN 回源) ====================
-command -v "$OSSUTIL" >/dev/null 2>&1 || die "$OSSUTIL 未安装 (账号 B OSS). 见 .claude/rules/server-operations.md"
+command -v "$OSSUTIL" >/dev/null 2>&1 || die "$OSSUTIL 未安装 (OSS). 见 .claude/rules/server-operations.md"
+[ -f "$OSS_CONFIG" ] || die "找不到 OSS 配置 $OSS_CONFIG (账号 A/C, 需对 $OSS_BUCKET 有写权限)"
 CT="Content-Type:application/vnd.android.package-archive"
+OSSARGS=(--config-file "$OSS_CONFIG" -f --meta "$CT" --acl public-read)
 log "☁️  [oss] 上传 $APK_FILE → oss://$OSS_BUCKET/ ..."
-"$OSSUTIL" cp -f "$APK_PATH" "oss://$OSS_BUCKET/$APK_FILE" --meta "$CT" --acl public-read >/dev/null
+"$OSSUTIL" cp "${OSSARGS[@]}" "$APK_PATH" "oss://$OSS_BUCKET/$APK_FILE" >/dev/null
 log "   ✓ 上传 $APK_FILE"
 log "☁️  [oss] 更新 latest 别名 → $LATEST_ALIAS ..."
-"$OSSUTIL" cp -f "$APK_PATH" "oss://$OSS_BUCKET/$LATEST_ALIAS" --meta "$CT" --acl public-read >/dev/null
+"$OSSUTIL" cp "${OSSARGS[@]}" "$APK_PATH" "oss://$OSS_BUCKET/$LATEST_ALIAS" >/dev/null
 log "   ✓ 上传 $LATEST_ALIAS"
 
 # ==================== 6. (可选) 服务器副本 ====================
