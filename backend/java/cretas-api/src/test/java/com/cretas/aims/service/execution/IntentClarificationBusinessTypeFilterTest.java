@@ -163,19 +163,30 @@ class IntentClarificationBusinessTypeFilterTest {
     }
 
     @Test
-    @DisplayName("isCandidateCompatible: RESTAURANT factory rejects a manufacturing (FACTORY) intent, accepts a restaurant one")
+    @DisplayName("isCandidateCompatible: filters FACTORY-tagged intents for a restaurant; COMMON-tagged is NOT caught (COMMON-overload — see comment)")
     void isCandidateCompatibleFiltersByBusinessType() {
         when(configService.resolveBusinessDomain(RESTAURANT_FACTORY)).thenReturn("RESTAURANT");
-        when(configService.getIntentByCode(eq(RESTAURANT_FACTORY), eq("MATERIAL_BATCH_QUERY")))
-                .thenReturn(Optional.of(intentWithBiz("MATERIAL_BATCH_QUERY", "FACTORY")));
+        // A genuinely FACTORY-tagged intent (e.g. SKU_GROSS_MARGIN, retagged COMMON→FACTORY in #485) → filtered out.
+        when(configService.getIntentByCode(eq(RESTAURANT_FACTORY), eq("SKU_GROSS_MARGIN")))
+                .thenReturn(Optional.of(intentWithBiz("SKU_GROSS_MARGIN", "FACTORY")));
         when(configService.getIntentByCode(eq(RESTAURANT_FACTORY), eq("RESTAURANT_BESTSELLER_QUERY")))
                 .thenReturn(Optional.of(intentWithBiz("RESTAURANT_BESTSELLER_QUERY", "RESTAURANT")));
+        // ⚠️ Real-world COMMON-overload (honest test): MATERIAL_BATCH_QUERY ("查询原料库存") is business_type=COMMON
+        // in the DB, NOT FACTORY. isCompatible(COMMON, RESTAURANT)=true → the per-candidate filter does NOT catch it.
+        // The user-reported "查询原料库存" leak is removed by the buildDefaultSuggestions/ensureMinChoices SWAP
+        // (covered by restaurantDefaultsExcludeManufacturing + ensureMinChoicesRestaurantPadding above), NOT by this
+        // candidate filter. Retagging the broader COMMON-manufacturing set → FACTORY is backlog (see #485 residual).
+        when(configService.getIntentByCode(eq(RESTAURANT_FACTORY), eq("MATERIAL_BATCH_QUERY")))
+                .thenReturn(Optional.of(intentWithBiz("MATERIAL_BATCH_QUERY", "COMMON")));
 
         String domain = orchestrator.resolveFactoryDomainSafe(RESTAURANT_FACTORY);
-        assertThat(orchestrator.isCandidateCompatible(RESTAURANT_FACTORY, domain, "MATERIAL_BATCH_QUERY"))
-                .as("manufacturing intent must be filtered out for a restaurant tenant").isFalse();
+        assertThat(orchestrator.isCandidateCompatible(RESTAURANT_FACTORY, domain, "SKU_GROSS_MARGIN"))
+                .as("FACTORY-tagged intent must be filtered out for a restaurant tenant").isFalse();
         assertThat(orchestrator.isCandidateCompatible(RESTAURANT_FACTORY, domain, "RESTAURANT_BESTSELLER_QUERY"))
                 .as("restaurant intent must pass for a restaurant tenant").isTrue();
+        assertThat(orchestrator.isCandidateCompatible(RESTAURANT_FACTORY, domain, "MATERIAL_BATCH_QUERY"))
+                .as("COMMON-tagged manufacturing intent is NOT caught by the candidate filter (COMMON-overload); "
+                        + "the default/padding swap removes the actual leak").isTrue();
     }
 
     @Test

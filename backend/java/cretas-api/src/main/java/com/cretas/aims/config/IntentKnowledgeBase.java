@@ -7208,9 +7208,11 @@ public class IntentKnowledgeBase {
         restaurantPhraseMapping.put("经营分析", "RESTAURANT_MARGIN_ANALYSIS");
 
         // === Wave-7e-sync: 从备份JAR恢复缺失短语 (29条餐饮意图) ===
-        // RESTAURANT_AVG_TICKET (2)
-        restaurantPhraseMapping.put("人均消费", "RESTAURANT_AVG_TICKET");
-        restaurantPhraseMapping.put("人均消费是多少", "RESTAURANT_AVG_TICKET");
+        // QA-fix R1 (2026-06-04): RESTAURANT_AVG_TICKET 是孤儿意图(tool_name=null 无执行器),
+        // 这两条曾覆盖上面 ~7079 的 R1 改动(LinkedHashMap 后者胜)→ 人均消费 仍落空 orphan。
+        // 改指 STORE_REVENUE_RANK(其 gold 工具输出客单价=营收/单数, 真数据)。
+        restaurantPhraseMapping.put("人均消费", "RESTAURANT_STORE_REVENUE_RANK");
+        restaurantPhraseMapping.put("人均消费是多少", "RESTAURANT_STORE_REVENUE_RANK");
         // RESTAURANT_DISH_CREATE — Wave-11 扩充 (含自然语言新增菜品)
         restaurantPhraseMapping.put("新增菜品", "RESTAURANT_DISH_CREATE");
         restaurantPhraseMapping.put("添加新菜品", "RESTAURANT_DISH_CREATE");
