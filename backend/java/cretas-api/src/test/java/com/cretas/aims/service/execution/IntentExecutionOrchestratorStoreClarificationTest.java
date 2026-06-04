@@ -111,6 +111,15 @@ class IntentExecutionOrchestratorStoreClarificationTest {
         assertThat(required).isFalse();
     }
 
+    @Test
+    @DisplayName("store reference follow-up bypasses early phrase shortcut")
+    void storeReferenceFollowUpBypassesEarlyPhraseShortcut() {
+        assertThat(orchestrator.shouldBypassEarlyPhraseShortcutForStoreReference("那家店的客单价呢")).isTrue();
+        assertThat(orchestrator.shouldBypassEarlyPhraseShortcutForStoreReference("这家的客单价呢")).isTrue();
+        assertThat(orchestrator.shouldBypassEarlyPhraseShortcutForStoreReference("哪家店业绩最好")).isFalse();
+        assertThat(orchestrator.shouldBypassEarlyPhraseShortcutForStoreReference("客单价排行")).isFalse();
+    }
+
     private static IntentExecuteRequest request(String input, String sessionId) {
         return IntentExecuteRequest.builder()
                 .userInput(input)
