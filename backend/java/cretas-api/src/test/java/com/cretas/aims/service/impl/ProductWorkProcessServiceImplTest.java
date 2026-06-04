@@ -405,7 +405,7 @@ class ProductWorkProcessServiceImplTest {
                     .thenReturn(Optional.of(existing));
             when(repository.save(any(ProductWorkProcess.class))).thenAnswer(inv -> inv.getArgument(0));
 
-            // Only update processOrder
+            // Only update processOrder — responsibleWorkerId null means no change
             ProductWorkProcessDTO dto = ProductWorkProcessDTO.builder()
                     .processOrder(5)
                     .build();
@@ -419,6 +419,116 @@ class ProductWorkProcessServiceImplTest {
             assertEquals(5, saved.getProcessOrder(), "processOrder 应被更新为 5");
             assertEquals("件", saved.getUnitOverride(), "unitOverride 未传入应保持原值");
             assertEquals(45, saved.getEstimatedMinutesOverride(), "estimatedMinutesOverride 未传入应保持原值");
+            assertNull(saved.getResponsibleWorkerId(), "responsibleWorkerId 未传入应保持原值 null");
+        }
+
+        @Test
+        @DisplayName("UT-PWP-05a: update() 设置 responsibleWorkerId — 实体和返回 DTO 均含新值")
+        void testUpdateSetsResponsibleWorkerId() {
+            // Arrange
+            ProductWorkProcess existing = buildDefaultAssociation();
+            // initially no responsible worker
+            when(repository.findByFactoryIdAndId(FACTORY_ID, 1L))
+                    .thenReturn(Optional.of(existing));
+            when(repository.save(any(ProductWorkProcess.class))).thenAnswer(inv -> inv.getArgument(0));
+
+            ProductWorkProcessDTO dto = ProductWorkProcessDTO.builder()
+                    .responsibleWorkerId(1616L)
+                    .build();
+
+            // Act
+            ProductWorkProcessDTO result = service.update(FACTORY_ID, 1L, dto);
+
+            // Assert — entityCaptor confirms DB value; result confirms toDTO mapping
+            verify(repository).save(entityCaptor.capture());
+            assertEquals(1616L, entityCaptor.getValue().getResponsibleWorkerId(),
+                    "entity 应持久化 responsibleWorkerId=1616");
+            assertEquals(1616L, result.getResponsibleWorkerId(),
+                    "返回 DTO 应映射 responsibleWorkerId=1616");
+        }
+
+        @Test
+        @DisplayName("UT-PWP-05b: update() responsibleWorkerId=-1 应清空 (置 null)")
+        void testUpdateMinusOneClearsResponsibleWorkerId() {
+            // Arrange — entity already has a responsible worker assigned
+            ProductWorkProcess existing = buildDefaultAssociation();
+            existing.setResponsibleWorkerId(1616L);
+            when(repository.findByFactoryIdAndId(FACTORY_ID, 1L))
+                    .thenReturn(Optional.of(existing));
+            when(repository.save(any(ProductWorkProcess.class))).thenAnswer(inv -> inv.getArgument(0));
+
+            ProductWorkProcessDTO dto = ProductWorkProcessDTO.builder()
+                    .responsibleWorkerId(-1L)
+                    .build();
+
+            // Act
+            ProductWorkProcessDTO result = service.update(FACTORY_ID, 1L, dto);
+
+            // Assert — sentinel -1 must never persist; entity and DTO must both be null
+            verify(repository).save(entityCaptor.capture());
+            assertNull(entityCaptor.getValue().getResponsibleWorkerId(),
+                    "sentinel -1 应将 responsibleWorkerId 清空为 null");
+            assertNull(result.getResponsibleWorkerId(),
+                    "返回 DTO 的 responsibleWorkerId 应为 null");
+        }
+
+        @Test
+        @DisplayName("UT-PWP-05c: create() 传入 responsibleWorkerId 应在实体中保留")
+        void testCreatePersistsResponsibleWorkerId() {
+            // Arrange
+            ProductWorkProcessDTO dto = ProductWorkProcessDTO.builder()
+                    .productTypeId(PRODUCT_TYPE_ID)
+                    .workProcessId(WORK_PROCESS_ID)
+                    .processOrder(1)
+                    .responsibleWorkerId(1617L)
+                    .build();
+
+            when(repository.existsByFactoryIdAndProductTypeIdAndWorkProcessId(
+                    FACTORY_ID, PRODUCT_TYPE_ID, WORK_PROCESS_ID))
+                    .thenReturn(false);
+            when(workProcessRepository.findByFactoryIdAndId(FACTORY_ID, WORK_PROCESS_ID))
+                    .thenReturn(Optional.of(buildDefaultWorkProcess()));
+            when(repository.save(any(ProductWorkProcess.class))).thenAnswer(inv -> {
+                ProductWorkProcess arg = inv.getArgument(0);
+                arg.setId(10L);
+                return arg;
+            });
+
+            // Act
+            ProductWorkProcessDTO result = service.create(FACTORY_ID, dto);
+
+            // Assert
+            verify(repository).save(entityCaptor.capture());
+            assertEquals(1617L, entityCaptor.getValue().getResponsibleWorkerId(),
+                    "create 应持久化 responsibleWorkerId=1617");
+            assertEquals(1617L, result.getResponsibleWorkerId(),
+                    "返回 DTO 应映射 responsibleWorkerId=1617");
+        }
+
+        @Test
+        @DisplayName("UT-PWP-05d: create() 传入 responsibleWorkerId=-1 哨兵应被规范化为 null")
+        void testCreateMinusOneSentinelNormalizedToNull() {
+            // Arrange — defensive: sentinel -1 must never land in DB via create either
+            ProductWorkProcessDTO dto = ProductWorkProcessDTO.builder()
+                    .productTypeId(PRODUCT_TYPE_ID)
+                    .workProcessId(WORK_PROCESS_ID)
+                    .responsibleWorkerId(-1L)
+                    .build();
+
+            when(repository.existsByFactoryIdAndProductTypeIdAndWorkProcessId(
+                    FACTORY_ID, PRODUCT_TYPE_ID, WORK_PROCESS_ID))
+                    .thenReturn(false);
+            when(workProcessRepository.findByFactoryIdAndId(FACTORY_ID, WORK_PROCESS_ID))
+                    .thenReturn(Optional.of(buildDefaultWorkProcess()));
+            when(repository.save(any(ProductWorkProcess.class))).thenAnswer(inv -> inv.getArgument(0));
+
+            // Act
+            service.create(FACTORY_ID, dto);
+
+            // Assert
+            verify(repository).save(entityCaptor.capture());
+            assertNull(entityCaptor.getValue().getResponsibleWorkerId(),
+                    "create 时哨兵 -1 应被规范化为 null, 不得持久化到 DB");
         }
     }
 }

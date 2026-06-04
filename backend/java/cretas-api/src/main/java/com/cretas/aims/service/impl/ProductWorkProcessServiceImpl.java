@@ -42,6 +42,10 @@ public class ProductWorkProcessServiceImpl implements ProductWorkProcessService 
         workProcessRepository.findByFactoryIdAndId(factoryId, dto.getWorkProcessId())
                 .orElseThrow(() -> new ResourceNotFoundException("WorkProcess", "id", dto.getWorkProcessId()));
 
+        // Normalize -1L sentinel to null so it never lands in DB via create
+        Long rw = dto.getResponsibleWorkerId();
+        Long normalizedRw = (rw != null && rw == -1L) ? null : rw;
+
         ProductWorkProcess entity = ProductWorkProcess.builder()
                 .factoryId(factoryId)
                 .productTypeId(dto.getProductTypeId())
@@ -49,6 +53,7 @@ public class ProductWorkProcessServiceImpl implements ProductWorkProcessService 
                 .processOrder(dto.getProcessOrder() != null ? dto.getProcessOrder() : 0)
                 .unitOverride(dto.getUnitOverride())
                 .estimatedMinutesOverride(dto.getEstimatedMinutesOverride())
+                .responsibleWorkerId(normalizedRw)
                 .build();
 
         ProductWorkProcess saved = repository.save(entity);
@@ -86,6 +91,15 @@ public class ProductWorkProcessServiceImpl implements ProductWorkProcessService 
         if (dto.getUnitOverride() != null) entity.setUnitOverride(dto.getUnitOverride());
         if (dto.getEstimatedMinutesOverride() != null) entity.setEstimatedMinutesOverride(dto.getEstimatedMinutesOverride());
 
+        // Three-state responsibleWorkerId:
+        //   null        → no change (partial update — leave existing value alone)
+        //   -1L         → clear (set null; sentinel must never persist as a real user id)
+        //   positive id → set
+        Long rw = dto.getResponsibleWorkerId();
+        if (rw != null) {
+            entity.setResponsibleWorkerId(rw == -1L ? null : rw);
+        }
+
         ProductWorkProcess saved = repository.save(entity);
         return toDTO(saved, null);
     }
@@ -120,6 +134,7 @@ public class ProductWorkProcessServiceImpl implements ProductWorkProcessService 
                 .processOrder(entity.getProcessOrder())
                 .unitOverride(entity.getUnitOverride())
                 .estimatedMinutesOverride(entity.getEstimatedMinutesOverride())
+                .responsibleWorkerId(entity.getResponsibleWorkerId())
                 .isActive(entity.getIsActive())
                 .createdAt(entity.getCreatedAt());
 

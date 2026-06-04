@@ -30,6 +30,16 @@ public class ProductWorkProcessDTO {
 
     private Integer estimatedMinutesOverride;
 
+    /**
+     * 默认责任小组长 ID。
+     * <ul>
+     *   <li>null (omitted) — 不修改现有值 (update 语义: no-change)</li>
+     *   <li>-1L (sentinel) — 清空，wire-only，不持久化</li>
+     *   <li>正数 — 设置为对应用户 ID</li>
+     * </ul>
+     */
+    private Long responsibleWorkerId;
+
     private Boolean isActive;
 
     // Read-only fields populated from joined WorkProcess
