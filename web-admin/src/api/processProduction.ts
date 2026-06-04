@@ -68,6 +68,17 @@ export function updateProductWorkProcess(
   return put<ProductWorkProcessItem>(`/${factoryId}/product-work-processes/${id}`, data);
 }
 
+export function getProductWorkProcessRecommendation(
+  factoryId: string,
+  productTypeId: string,
+  limit = 5
+) {
+  return get<ProductWorkProcessRecommendation>(
+    `/${factoryId}/product-types/${productTypeId}/work-process-recommendation`,
+    { params: { limit } }
+  );
+}
+
 // === Process Tasks ===
 
 export function getActiveTasks(factoryId: string) {
@@ -188,6 +199,25 @@ export interface ProductWorkProcessItem {
   responsibleWorkerId?: number | null;
   /** 只读：后端 join 填充，前端不发送。 */
   responsibleWorkerName?: string | null;
+}
+
+export interface RecommendedWorkProcess {
+  workProcessId: string;
+  processName: string;
+  processCategory: string | null;
+  unit: string | null;
+  estimatedMinutes: number | null;
+  processOrder: number;
+  score: number;
+  reason: 'HISTORY' | 'LLM' | string;
+}
+
+export interface ProductWorkProcessRecommendation {
+  productTypeId: string;
+  source: 'HISTORY' | 'LLM' | 'NO_HISTORY' | 'LLM_UNAVAILABLE' | 'NO_CATALOG' | 'LLM_EMPTY' | 'LLM_NO_MATCH' | string;
+  notice: string;
+  message: string;
+  recommendations: RecommendedWorkProcess[];
 }
 
 export interface ProcessTaskItem {

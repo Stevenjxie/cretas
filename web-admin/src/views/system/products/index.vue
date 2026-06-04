@@ -37,6 +37,7 @@ import {
   createProductWorkProcess,
   deleteProductWorkProcess,
   batchSortProductWorkProcesses,
+  getProductWorkProcessRecommendation,
   type WorkProcessItem,
   type ProductWorkProcessItem,
 } from '@/api/processProduction';
@@ -354,17 +355,17 @@ async function handleSubmit() {
       payload.isActive = true;
     }
 
-    let response;
-    if (isEditing.value) {
-      response = await put(`/${factoryId.value}/product-types/${formData.id}`, payload);
-    } else {
-      response = await post(`/${factoryId.value}/product-types`, payload);
-    }
+    const response = isEditing.value
+      ? await put<ProductType>(`/${factoryId.value}/product-types/${formData.id}`, payload)
+      : await post<ProductType>(`/${factoryId.value}/product-types`, payload);
 
     if (response.success) {
       ElMessage.success(isEditing.value ? '编辑成功' : '新增成功');
       dialogVisible.value = false;
-      loadData();
+      await loadData();
+      if (!isEditing.value && response.data?.id) {
+        await offerWorkProcessRecommendation(response.data);
+      }
     } else {
       ElMessage.error(response.message || '提交失败');
     }
@@ -373,6 +374,39 @@ async function handleSubmit() {
     console.error('提交失败:', error);
   } finally {
     submitting.value = false;
+  }
+}
+
+async function offerWorkProcessRecommendation(product: ProductType) {
+  if (!factoryId.value) return;
+  try {
+    const res = await getProductWorkProcessRecommendation(factoryId.value, product.id, 5);
+    const count = res.success && res.data ? res.data.recommendations.length : 0;
+    if (!res.success || !res.data || count === 0) {
+      ElMessage.warning(res.message || res.data?.message || '暂未生成推荐工序，请手动配置');
+      return;
+    }
+
+    await ElMessageBox.confirm(
+      `AI 已推荐 ${count} 道工序，去查看并核对草稿？`,
+      'AI 工序推荐',
+      {
+        confirmButtonText: '去查看',
+        cancelButtonText: '稍后配置',
+        type: 'success',
+      }
+    );
+    router.push({
+      path: '/system/product-processes',
+      query: {
+        productTypeId: product.id,
+        recommend: '1',
+      },
+    });
+  } catch (error) {
+    if (error !== 'cancel') {
+      handleCatchError(error, '推荐工序生成失败');
+    }
   }
 }
 
