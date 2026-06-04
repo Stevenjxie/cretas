@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, Image, ScrollView, StyleSheet,
-  Alert, ActivityIndicator,
+  ActivityIndicator,
 } from 'react-native';
 import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -24,6 +24,7 @@ import {
 import { processingApiClient } from '../../services/api/processingApiClient';
 import { handleError } from '../../utils/errorHandler';
 import { useAuthStore } from '../../store/authStore';
+import { appAlert, AppDialogHost } from '../../components/ui/AppDialog';
 
 type YieldStepReportParams = { batchId: number; batchNumber?: string };
 type RouteT = RouteProp<{ YieldStepReport: YieldStepReportParams }, 'YieldStepReport'>;
@@ -171,7 +172,7 @@ const YieldStepReportScreen: React.FC = () => {
     } catch (error) {
       handleError(error, { showAlert: false, logError: true });
       const msg = error instanceof Error ? error.message : '加载批次工序失败';
-      Alert.alert('加载失败', msg);
+      appAlert('加载失败', msg);
     } finally {
       setLoading(false);
     }
@@ -310,14 +311,14 @@ const YieldStepReportScreen: React.FC = () => {
     } catch (err) {
       setEvidencePhotos((prev) => prev.filter((p) => p.uri !== localUri));
       const e = err as { response?: { data?: { message?: string } } };
-      Alert.alert('图片上传失败', e.response?.data?.message ?? '请重试 (网络/格式)');
+      appAlert('图片上传失败', e.response?.data?.message ?? '请重试 (网络/格式)');
     }
   }, []);
 
   const takeEvidencePhoto = useCallback(async () => {
     const permission = await ImagePicker.requestCameraPermissionsAsync();
     if (!permission.granted) {
-      Alert.alert('需要相机权限', '请在系统设置开启相机权限后再拍照');
+      appAlert('需要相机权限', '请在系统设置开启相机权限后再拍照');
       return;
     }
     const result = await ImagePicker.launchCameraAsync({
@@ -333,7 +334,7 @@ const YieldStepReportScreen: React.FC = () => {
   const pickEvidencePhoto = useCallback(async () => {
     const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (!permission.granted) {
-      Alert.alert('需要相册权限', '请在系统设置开启相册权限后再选图');
+      appAlert('需要相册权限', '请在系统设置开启相册权限后再选图');
       return;
     }
     const result = await ImagePicker.launchImageLibraryAsync({
@@ -380,16 +381,16 @@ const YieldStepReportScreen: React.FC = () => {
   const handleSubmitInput = useCallback(async () => {
     if (!currentTask) return;
     if (submitBlockedNoWip) {
-      Alert.alert('请选择半成品批次', '上道有多笔半成品, 请先选择本道要领用的那一笔再提交');
+      appAlert('请选择半成品批次', '上道有多笔半成品, 请先选择本道要领用的那一笔再提交');
       return;
     }
     if (evidenceUploading) {
-      Alert.alert('图片上传中', '请等照片上传完成再提交');
+      appAlert('图片上传中', '请等照片上传完成再提交');
       return;
     }
     const input = parseFloat(inputQty);
     if (Number.isNaN(input) || input <= 0) {
-      Alert.alert('请填写本道投入量', '投入量必须大于 0');
+      appAlert('请填写本道投入量', '投入量必须大于 0');
       return;
     }
     const req: YieldReportRequest = {
@@ -414,13 +415,13 @@ const YieldStepReportScreen: React.FC = () => {
     try {
       const res = await yieldReportApi.submitReport(batchId, req);
       if (!res.success) {
-        Alert.alert('提交失败', res.message || '请重试');
+        appAlert('提交失败', res.message || '请重试');
         return;
       }
       await refetchYield();
       // 投入提交成功 → 该道转 IN_PRODUCTION; 清生产阶段输入残留
       setEvidencePhotos([]);
-      Alert.alert('投入已提交', '本道进入生产阶段, 可分多段报工时, 完工时录产出');
+      appAlert('投入已提交', '本道进入生产阶段, 可分多段报工时, 完工时录产出');
     } catch (error) {
       handleError(error, { showAlert: false, logError: true });
       const e = error as { response?: { data?: { message?: string; hint?: string } } };
@@ -429,7 +430,7 @@ const YieldStepReportScreen: React.FC = () => {
       const msg = backendMsg
         ? hint ? `${backendMsg}\n${hint}` : backendMsg
         : error instanceof Error ? error.message : '提交失败, 请重试';
-      Alert.alert('提交失败', msg);
+      appAlert('提交失败', msg);
     } finally {
       setSubmitting(false);
     }
@@ -440,12 +441,12 @@ const YieldStepReportScreen: React.FC = () => {
   const handleSubmitSegment = useCallback(async () => {
     if (!currentTask) return;
     if (evidenceUploading) {
-      Alert.alert('图片上传中', '请等照片上传完成再提交');
+      appAlert('图片上传中', '请等照片上传完成再提交');
       return;
     }
     const hc = parseInt(segHeadcount, 10);
     if (!segStart.trim() || !segEnd.trim() || Number.isNaN(hc) || hc <= 0) {
-      Alert.alert('请填写本段工时', '开始时间 / 结束时间 / 人数都要填 (人数 > 0)');
+      appAlert('请填写本段工时', '开始时间 / 结束时间 / 人数都要填 (人数 > 0)');
       return;
     }
     const seg = {
@@ -466,7 +467,7 @@ const YieldStepReportScreen: React.FC = () => {
     try {
       const res = await yieldReportApi.submitReport(batchId, req);
       if (!res.success) {
-        Alert.alert('提交失败', res.message || '请重试');
+        appAlert('提交失败', res.message || '请重试');
         return;
       }
       await refetchYield();
@@ -484,7 +485,7 @@ const YieldStepReportScreen: React.FC = () => {
       const msg = backendMsg
         ? hint ? `${backendMsg}\n${hint}` : backendMsg
         : error instanceof Error ? error.message : '提交失败, 请重试';
-      Alert.alert('提交失败', msg);
+      appAlert('提交失败', msg);
     } finally {
       setSubmitting(false);
     }
@@ -498,7 +499,7 @@ const YieldStepReportScreen: React.FC = () => {
     try {
       const res = await yieldReportApi.submitReport(batchId, { ...req, forceSubmit: true });
       if (!res.success) {
-        Alert.alert('提交失败', res.message || '请重试');
+        appAlert('提交失败', res.message || '请重试');
         return;
       }
       setLastAlert(res.data.alert ?? null);
@@ -507,7 +508,7 @@ const YieldStepReportScreen: React.FC = () => {
     } catch (forceError) {
       handleError(forceError, { showAlert: false, logError: true });
       const fe = forceError as { response?: { data?: { message?: string } } };
-      Alert.alert('提交失败', fe.response?.data?.message ?? '请重试');
+      appAlert('提交失败', fe.response?.data?.message ?? '请重试');
     } finally {
       setSubmitting(false);
     }
@@ -516,12 +517,12 @@ const YieldStepReportScreen: React.FC = () => {
   const doSubmitOutput = useCallback(async () => {
     if (!currentTask) return;
     if (evidenceUploading) {
-      Alert.alert('图片上传中', '请等照片上传完成再提交');
+      appAlert('图片上传中', '请等照片上传完成再提交');
       return;
     }
     const output = parseFloat(outputQty);
     if (Number.isNaN(output) || output <= 0) {
-      Alert.alert('请填写本道产出量', '产出量必须大于 0');
+      appAlert('请填写本道产出量', '产出量必须大于 0');
       return;
     }
     const validByproducts = byproducts
@@ -548,7 +549,7 @@ const YieldStepReportScreen: React.FC = () => {
     try {
       const res = await yieldReportApi.submitReport(batchId, req);
       if (!res.success) {
-        Alert.alert('提交失败', res.message || '请重试');
+        appAlert('提交失败', res.message || '请重试');
         return;
       }
       setLastAlert(res.data.alert ?? null);
@@ -561,7 +562,7 @@ const YieldStepReportScreen: React.FC = () => {
       if (errorCode === 'OVER_RECEIPT') {
         handleError(error, { showAlert: false, logError: true });
         const actionHint = e.response?.data?.actionHint ?? e.response?.data?.message ?? '产出已超收告警上限, 确认要超收提交吗?';
-        Alert.alert('超收确认', actionHint, [
+        appAlert('超收确认', actionHint, [
           { text: '取消', style: 'cancel' },
           { text: '确认超收提交', onPress: () => submitOutputWithForce(req) },
         ]);
@@ -573,7 +574,7 @@ const YieldStepReportScreen: React.FC = () => {
       const msg = backendMsg
         ? hint ? `${backendMsg}\n${hint}` : backendMsg
         : error instanceof Error ? error.message : '提交失败, 请重试';
-      Alert.alert('提交失败', msg);
+      appAlert('提交失败', msg);
     } finally {
       setSubmitting(false);
     }
@@ -583,10 +584,10 @@ const YieldStepReportScreen: React.FC = () => {
   // 完工二次确认 (Rule: 出成率锁定)
   const handleSubmitOutput = useCallback(() => {
     if (outputOverHardCap) {
-      Alert.alert('产出量异常', '产出量超过物理上限, 请核对 (疑似单位/数量错误)');
+      appAlert('产出量异常', '产出量超过物理上限, 请核对 (疑似单位/数量错误)');
       return;
     }
-    Alert.alert(
+    appAlert(
       '完工出成确认',
       `${productType || ''} ${currentTask?.processName ?? ''}\n完工后本道出成率锁定, 确认要完工出成吗?`,
       [
@@ -621,14 +622,14 @@ const YieldStepReportScreen: React.FC = () => {
     try {
       const res = await yieldReportApi.settleDay(batchId, { triggerComplete });
       if (!res.success) {
-        Alert.alert('结清失败', res.message || '请重试');
+        appAlert('结清失败', res.message || '请重试');
         return;
       }
       if (res.data.completed) {
         const out = yieldData?.lastStepOutput;
         const unitL = yieldData?.lastStepOutputUnit ?? '';
         const wipHint = res.data.wipRemainingHint ? `\n${res.data.wipRemainingHint}` : '';
-        Alert.alert(
+        appAlert(
           '已完工入库',
           `${productType || ''} ${batchNumber}\n本次结清 ${res.data.settledCount} 条报工\n` +
           `批次已完工, 末道产出 ${out ?? '—'}${unitL} 已入成品库, 生产计划实际产量已回填` +
@@ -636,19 +637,19 @@ const YieldStepReportScreen: React.FC = () => {
           [{ text: '返回选批次', onPress: () => navigation.goBack() }],
         );
       } else if (res.data.completeError) {
-        Alert.alert(
+        appAlert(
           '已结清 (批次未完工)',
           `本次结清 ${res.data.settledCount} 条报工\n${res.data.completeError}`,
         );
       } else {
-        Alert.alert('已标记今日结清', `本次结清 ${res.data.settledCount} 条报工 (批次未完工)`);
+        appAlert('已标记今日结清', `本次结清 ${res.data.settledCount} 条报工 (批次未完工)`);
       }
     } catch (error) {
       handleError(error, { showAlert: false, logError: true });
       const e = error as { response?: { data?: { message?: string; hint?: string } } };
       const msg = e.response?.data?.message;
       const hint = e.response?.data?.hint;
-      Alert.alert('结清失败', msg ? (hint ? `${msg}\n${hint}` : msg) : '请重试');
+      appAlert('结清失败', msg ? (hint ? `${msg}\n${hint}` : msg) : '请重试');
     } finally {
       setSubmitting(false);
     }
@@ -657,14 +658,14 @@ const YieldStepReportScreen: React.FC = () => {
   const handleSettleDay = useCallback(() => {
     const alreadyCompleted = batchStatus === 'COMPLETED' || batchStatus === 'completed';
     if (alreadyCompleted) {
-      Alert.alert('批次已完工', `${batchNumber} 已入库, 无需重复完工`, [
+      appAlert('批次已完工', `${batchNumber} 已入库, 无需重复完工`, [
         { text: '返回选批次', onPress: () => navigation.goBack() },
       ]);
       return;
     }
     const out = yieldData?.lastStepOutput;
     const unitL = yieldData?.lastStepOutputUnit ?? '';
-    Alert.alert(
+    appAlert(
       '完工入库确认',
       `${productType || ''} ${batchNumber}\n末道产出 ${out ?? '—'}${unitL}\n` +
       `确认后: 批次标完工 + 末道产出入成品库 + 回填生产计划实际产量`,
@@ -886,6 +887,7 @@ const YieldStepReportScreen: React.FC = () => {
 
   return (
     <ScreenWrapper>
+      <AppDialogHost />
       <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
         {renderHeader()}
 
@@ -1355,9 +1357,9 @@ const styles = StyleSheet.create({
   reportedSegTitle: { fontSize: 13, color: '#67C23A', fontWeight: '700', marginBottom: 4 },
   reportedSegLine: { fontSize: 13, color: '#606266', marginTop: 2 },
   emptySegHint: { fontSize: 13, color: '#909399', marginBottom: 12 },
-  segRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 8 },
+  segRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 8, minWidth: 0 },
   segTimeInput: {
-    flex: 1, height: 48, borderWidth: 1, borderColor: '#DCDFE6', borderRadius: 8,
+    flex: 1, minWidth: 0, height: 48, borderWidth: 1, borderColor: '#DCDFE6', borderRadius: 8,
     backgroundColor: '#FFFFFF', textAlign: 'center', fontSize: 16, color: '#1A1A1A',
     paddingHorizontal: 6,
   },
