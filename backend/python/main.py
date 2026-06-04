@@ -75,6 +75,7 @@ from smartbi.api import (  # noqa: E402
     rfm,
     financial_ratios,
     supplier_price,
+    price_anomaly,
 )
 from smartbi.api import restaurant_sections  # noqa: E402
 from smartbi.api import intent_analysis  # noqa: E402
@@ -990,6 +991,7 @@ app.include_router(finance_extract.router, prefix="/api/finance", tags=["Finance
 app.include_router(restaurant_analytics.router, prefix="/api/smartbi", tags=["Restaurant Analytics"])
 app.include_router(restaurant_ops_gold.router, prefix="/api/smartbi", tags=["Restaurant Ops Gold"])
 app.include_router(supplier_price.router, prefix="/api/smartbi", tags=["Supplier Price Gold"])
+app.include_router(price_anomaly.router, prefix="/api/smartbi", tags=["Price Anomaly Deterrence"])
 app.include_router(restaurant_ops_recipes.router, prefix="/api/smartbi", tags=["Restaurant Ops Recipes"])
 app.include_router(restaurant_health_check.router, prefix="/api/smartbi", tags=["Restaurant Health Check"])
 app.include_router(restaurant_sections.router, tags=["Restaurant Sections"])
