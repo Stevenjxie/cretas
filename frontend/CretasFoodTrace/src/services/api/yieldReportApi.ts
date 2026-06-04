@@ -279,14 +279,18 @@ class YieldReportApi {
     );
   }
 
-  /** 工序任务列表 (该批次, 按 processOrder 升序). 端点见 WorkProcessTaskController.java:93-99. */
+  /** 工序任务列表 (该批次, 按 processOrder 升序). 端点见 WorkProcessTaskController.java:93-99.
+   *  assignedTo: 若提供, 后端仅返回该用户的任务 + 未分配 (null) 任务; 省略 → 返回全部 (主管视角). */
   async listWorkProcessTasks(
     batchId: number,
     factoryId?: string,
+    assignedTo?: number,
   ): Promise<ApiResponse<WorkProcessTask[]>> {
     const fid = requireFactoryId(factoryId);
+    const params = assignedTo != null ? { assignedTo } : undefined;
     return apiClient.get<ApiResponse<WorkProcessTask[]>>(
       `/api/mobile/${fid}/production/batches/${batchId}/work-process-tasks`,
+      { params },
     );
   }
 

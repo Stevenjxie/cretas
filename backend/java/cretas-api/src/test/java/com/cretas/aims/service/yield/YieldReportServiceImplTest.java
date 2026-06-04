@@ -45,6 +45,7 @@ import java.util.Map;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -2968,5 +2969,101 @@ class YieldReportServiceImplTest {
         // SEGMENT 阶段: effInput/effOutput 均 null → 调料/包材都无法计算 → materialCost null
         assertThat(saved.getMaterialCost()).isNull();
         assertThat(saved.getLaborCost()).isEqualByComparingTo("180.00");  // 2h × 3人 × 30 = 180
+    }
+
+    // ── M3 归属鉴权测试 ────────────────────────────────────────────────────────────
+
+    /**
+     * Helper: 创建一个设置了 assignedTo 的 WorkProcessTask.
+     * 无请求上下文 → currentRole()=null → isSupervisor=false.
+     */
+    private WorkProcessTask taskWithAssignedTo(long id, Long assignedTo) {
+        WorkProcessTask t = new WorkProcessTask();
+        t.setId(id); t.setFactoryId("F006"); t.setProductionBatchId(1L);
+        t.setProcessOrder(1); t.setWorkProcessId("WP-AUTH");
+        t.setStatus(WorkProcessTask.Status.IN_PROGRESS);
+        t.setAssignedTo(assignedTo);
+        return t;
+    }
+
+    @Test
+    @org.junit.jupiter.api.DisplayName("M3: submitReport — 任务指派给他人 (1616), 登录者 1615 非主管 → 403")
+    void submitReport_rejectsWhenTaskAssignedToOther() {
+        WorkProcessTask t = taskWithAssignedTo(20L, 1616L);  // assigned to 1616
+        when(taskRepo.findByFactoryIdAndId("F006", 20L)).thenReturn(Optional.of(t));
+
+        YieldReportRequest req = new YieldReportRequest();
+        req.setWorkProcessTaskId(20L);
+        req.setOutputQuantity(new BigDecimal("50"));
+
+        // workerId=1615, task assigned to 1616, no request context → isSupervisor=false → 403
+        assertThatThrownBy(() -> svc.submitReport("F006", 1L, 1615L, req))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(ex -> assertThat(((BusinessException) ex).getCode()).isEqualTo(403));
+    }
+
+    @Test
+    @org.junit.jupiter.api.DisplayName("M3: submitReport — 自己的任务 (assignedTo=1615) → 不抛异常")
+    void submitReport_allowsWhenAssignedToSelf() {
+        WorkProcessTask t = taskWithAssignedTo(21L, 1615L);  // assigned to self
+        when(taskRepo.findByFactoryIdAndId("F006", 21L)).thenReturn(Optional.of(t));
+        when(processRepo.findById("WP-AUTH")).thenReturn(Optional.empty());
+        when(reportRepo.findYieldReportsByBatch(anyString(), any())).thenReturn(List.of());
+        when(reportRepo.findYieldReportsByTask(anyString(), eq(21L))).thenReturn(List.of());
+        when(reportRepo.save(any(ProductionReport.class))).thenAnswer(i -> {
+            ProductionReport r = i.getArgument(0); r.setId(88L); return r;
+        });
+
+        YieldReportRequest req = new YieldReportRequest();
+        req.setWorkProcessTaskId(21L);
+        req.setOutputQuantity(new BigDecimal("50"));
+
+        // Should not throw 403
+        assertThatCode(() -> svc.submitReport("F006", 1L, 1615L, req))
+                .doesNotThrowAnyException();
+    }
+
+    @Test
+    @org.junit.jupiter.api.DisplayName("M3: submitReport — 未指派任务 (assignedTo=null) → 任何人均可 → 不抛异常")
+    void submitReport_allowsWhenUnassigned() {
+        WorkProcessTask t = taskWithAssignedTo(22L, null);  // unassigned
+        when(taskRepo.findByFactoryIdAndId("F006", 22L)).thenReturn(Optional.of(t));
+        when(processRepo.findById("WP-AUTH")).thenReturn(Optional.empty());
+        when(reportRepo.findYieldReportsByBatch(anyString(), any())).thenReturn(List.of());
+        when(reportRepo.findYieldReportsByTask(anyString(), eq(22L))).thenReturn(List.of());
+        when(reportRepo.save(any(ProductionReport.class))).thenAnswer(i -> {
+            ProductionReport r = i.getArgument(0); r.setId(88L); return r;
+        });
+
+        YieldReportRequest req = new YieldReportRequest();
+        req.setWorkProcessTaskId(22L);
+        req.setOutputQuantity(new BigDecimal("50"));
+
+        assertThatCode(() -> svc.submitReport("F006", 1L, 1615L, req))
+                .doesNotThrowAnyException();
+    }
+
+    @Test
+    @org.junit.jupiter.api.DisplayName("M3: submitReport — 无主管上下文时, targetWorkerId=9999 被忽略, 报工落登录者 1615")
+    void submitReport_operatorTargetWorkerIdIgnored() {
+        WorkProcessTask t = taskWithAssignedTo(23L, 1615L);  // assigned to self (so guard passes)
+        when(taskRepo.findByFactoryIdAndId("F006", 23L)).thenReturn(Optional.of(t));
+        when(processRepo.findById("WP-AUTH")).thenReturn(Optional.empty());
+        when(reportRepo.findYieldReportsByBatch(anyString(), any())).thenReturn(List.of());
+        when(reportRepo.findYieldReportsByTask(anyString(), eq(23L))).thenReturn(List.of());
+        ArgumentCaptor<ProductionReport> cap = ArgumentCaptor.forClass(ProductionReport.class);
+        when(reportRepo.save(cap.capture())).thenAnswer(i -> {
+            ProductionReport r = i.getArgument(0); r.setId(88L); return r;
+        });
+
+        YieldReportRequest req = new YieldReportRequest();
+        req.setWorkProcessTaskId(23L);
+        req.setOutputQuantity(new BigDecimal("50"));
+        req.setTargetWorkerId(9999L);  // operator tries to impersonate another worker
+
+        // No request context → isSupervisor=false → targetWorkerId ignored → effectiveWorker=1615
+        svc.submitReport("F006", 1L, 1615L, req);
+
+        assertThat(cap.getValue().getWorkerId()).isEqualTo(1615L);
     }
 }

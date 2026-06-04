@@ -1,6 +1,7 @@
 package com.cretas.aims.controller;
 
 import com.cretas.aims.annotation.RequireModule;
+import com.cretas.aims.config.RequireRole;
 import com.cretas.aims.dto.ProductWorkProcessDTO;
 import com.cretas.aims.annotation.RequirePermission;
 import com.cretas.aims.dto.common.ApiResponse;
@@ -45,6 +46,7 @@ public class ProductWorkProcessController {
     }
 
     @RequirePermission({"production:read_write"})
+    @RequireRole({"factory_super_admin", "workshop_supervisor", "department_admin"})
     @PutMapping("/{id}")
     @Operation(summary = "更新关联(顺序/覆写参数)")
     @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER')")

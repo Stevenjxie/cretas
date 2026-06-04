@@ -37,9 +37,25 @@ public interface WorkProcessTaskService {
             Pageable pageable);
 
     /**
-     * 列出某批次的全部工序任务 (按 processOrder 升序, 不分页).
+     * 列出某批次的工序任务 (按 processOrder 升序, 不分页).
+     *
+     * <p>过滤逻辑 (M1/M2):
+     * <ul>
+     *   <li>若 {@code assignedTo != null} 且批次内存在已分配的任务 → 只返回 assignedTo 匹配或 null 的任务.</li>
+     *   <li>若批次内全部任务 assigned_to = null (老批次/未配默认) → 返回全部 (M1 全null兜底, 防锁死).</li>
+     *   <li>若 {@code assignedTo == null} → 返回全部 (主管视图).</li>
+     * </ul>
      */
-    List<WorkProcessTaskDTO> listByBatch(String factoryId, Long productionBatchId);
+    List<WorkProcessTaskDTO> listByBatch(String factoryId, Long productionBatchId, Long assignedTo);
+
+    /**
+     * 列出某批次的全部工序任务 (按 processOrder 升序, 不分页) — 兼容旧内部调用, 不过滤.
+     *
+     * <p>默认委托至 {@link #listByBatch(String, Long, Long)} 传 {@code assignedTo=null}.
+     */
+    default List<WorkProcessTaskDTO> listByBatch(String factoryId, Long productionBatchId) {
+        return listByBatch(factoryId, productionBatchId, null);
+    }
 
     /**
      * 详情.

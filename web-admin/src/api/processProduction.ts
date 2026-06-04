@@ -55,6 +55,14 @@ export function batchSortProductWorkProcesses(
   return put(`/${factoryId}/product-work-processes/batch-sort`, { items });
 }
 
+export function updateProductWorkProcess(
+  factoryId: string,
+  id: number,
+  data: Partial<ProductWorkProcessItem>
+) {
+  return put<ProductWorkProcessItem>(`/${factoryId}/product-work-processes/${id}`, data);
+}
+
 // === Process Tasks ===
 
 export function getActiveTasks(factoryId: string) {
@@ -162,6 +170,10 @@ export interface ProductWorkProcessItem {
   processCategory: string;
   defaultUnit: string;
   defaultEstimatedMinutes: number | null;
+  /** 默认责任小组长 ID。null = 未设置；发送 -1 表示清空（后端 clear 语义）。 */
+  responsibleWorkerId?: number | null;
+  /** 只读：后端 join 填充，前端不发送。 */
+  responsibleWorkerName?: string | null;
 }
 
 export interface ProcessTaskItem {

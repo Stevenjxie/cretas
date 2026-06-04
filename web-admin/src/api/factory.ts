@@ -44,3 +44,12 @@ export function activateUser(factoryId: string, userId: number) {
 export function deactivateUser(factoryId: string, userId: number) {
   return post(`/${factoryId}/users/${userId}/deactivate`);
 }
+
+/**
+ * 获取"操作员"角色用户列表，供小组长下拉选择使用。
+ * 端点: GET /{factoryId}/users/role/operator
+ * 响应: { success, data: UserDTO[] }  — 每项含 id (Long), username, fullName/realName
+ */
+export function getOperatorUsers(factoryId: string) {
+  return get<Array<{ id: number; username: string; realName?: string; fullName?: string }>>(`/${factoryId}/users/role/operator`);
+}

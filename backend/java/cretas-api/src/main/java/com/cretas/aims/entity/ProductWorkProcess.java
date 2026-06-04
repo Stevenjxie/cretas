@@ -40,6 +40,9 @@ public class ProductWorkProcess {
     @Column(name = "estimated_minutes_override")
     private Integer estimatedMinutesOverride;
 
+    @Column(name = "responsible_worker_id")
+    private Long responsibleWorkerId;
+
     @Column(name = "is_active")
     @Builder.Default
     private Boolean isActive = true;

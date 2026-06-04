@@ -87,15 +87,22 @@ public class WorkProcessTaskController {
     }
 
     /**
-     * 列出某批次的全部工序任务 (不分页, 按 processOrder 升序).
-     * 供 ProductionBatch 详情页"工序任务"tab 用。
+     * 列出某批次的工序任务 (不分页, 按 processOrder 升序).
+     *
+     * <p>供 RN 报工屏 (YieldStepReportScreen) 和 ProductionBatch 详情页"工序任务"tab 使用.
+     * <ul>
+     *   <li>小组长传 {@code ?assignedTo={userId}} → 仅返回本人被分配的任务 + 未指派的任务</li>
+     *   <li>主管不传 {@code assignedTo} → 返回全部任务</li>
+     * </ul>
+     * 详见 WorkProcessTaskService#listByBatch(String, Long, Long) 过滤规则.
      */
     @GetMapping("/api/mobile/{factoryId}/production/batches/{batchId}/work-process-tasks")
-    @Operation(summary = "查询批次的全部工序任务 (按 processOrder 升序)")
+    @Operation(summary = "查询批次的工序任务 (按 processOrder 升序, 支持按小组长过滤)")
     public ApiResponse<List<WorkProcessTaskDTO>> listByBatch(
             @PathVariable String factoryId,
-            @PathVariable Long batchId) {
-        return ApiResponse.success(service.listByBatch(factoryId, batchId));
+            @PathVariable Long batchId,
+            @RequestParam(required = false) Long assignedTo) {
+        return ApiResponse.success(service.listByBatch(factoryId, batchId, assignedTo));
     }
 
     /**

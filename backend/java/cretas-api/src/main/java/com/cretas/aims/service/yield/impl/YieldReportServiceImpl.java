@@ -33,6 +33,7 @@ import com.cretas.aims.repository.workprocess.WorkProcessTaskRepository;
 import com.cretas.aims.service.ProcessingService;
 import com.cretas.aims.service.yield.YieldCalculationService;
 import com.cretas.aims.service.yield.YieldReportService;
+import com.cretas.aims.utils.ReportAuthGuard;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -105,6 +106,10 @@ public class YieldReportServiceImpl implements YieldReportService {
         WorkProcessTask t = taskRepo.findByFactoryIdAndId(factoryId, req.getWorkProcessTaskId())
                 .orElseThrow(() -> new BusinessException(404, "工序任务不存在: " + req.getWorkProcessTaskId()));
 
+        // M3: 归属鉴权 — 操作员只能报自己被指派的工序任务; 主管可代报任意任务。
+        boolean isSupervisor = ReportAuthGuard.isSupervisor(ReportAuthGuard.currentRole());
+        ReportAuthGuard.assertCanReport(t.getAssignedTo(), workerId, isSupervisor);
+
         // 三阶段字段隔离 (防御: 防止误填的非本阶段字段污染同 task 跨报工累加)。
         // "生效值": 阶段决定哪些请求字段被采纳, 其余强制 null。legacy (null) 全采纳 (行为完全不变)。
         //   INPUT  : 留 input/inputUnit/materialBatchRefs/sourceWipNo/evidenceImages; output/segment/byproduct/waste/sample 强制 null。
@@ -123,7 +128,8 @@ public class YieldReportServiceImpl implements YieldReportService {
         Integer effReqWorkMinutes = (isInput || isOutput) ? null : req.getWorkMinutes();
         Integer effReqWorkerCount = (isInput || isOutput) ? null : req.getWorkerCount();
 
-        Long effectiveWorker = req.getTargetWorkerId() != null ? req.getTargetWorkerId() : workerId;
+        // M3: targetWorkerId (代报) 仅主管可用; 操作员传则忽略, 强制为登录者。
+        Long effectiveWorker = (isSupervisor && req.getTargetWorkerId() != null) ? req.getTargetWorkerId() : workerId;
 
         // — G7 部分领用防呆 (Rule 1): 报工带 sourceWipNo 时, 校验 inputQuantity ≤ 源 WIP 余额 —
         // 校验在保存前 (超额不落库); 实际扣减在保存后 (order: validate → save → consume)。
@@ -942,6 +948,10 @@ public class YieldReportServiceImpl implements YieldReportService {
         }
         WorkProcessTask t = taskRepo.findByFactoryIdAndId(factoryId, req.getWorkProcessTaskId())
                 .orElseThrow(() -> new BusinessException(404, "工序任务不存在: " + req.getWorkProcessTaskId()));
+
+        // M3: 归属鉴权 — 操作员只能投料到自己被指派的工序任务; 主管不受限制。
+        ReportAuthGuard.assertCanReport(t.getAssignedTo(), workerId,
+                ReportAuthGuard.isSupervisor(ReportAuthGuard.currentRole()));
 
         ProductionReport r = ProductionReport.builder()
                 .factoryId(factoryId).batchId(batchId).reportType(YIELD)
