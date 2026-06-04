@@ -17,6 +17,7 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.web.bind.annotation.*;
 import com.cretas.aims.config.RequireRole;
+import com.cretas.aims.utils.ReportAuthGuard;
 
 import java.math.BigDecimal;
 import java.util.List;
@@ -84,7 +85,8 @@ public class ProcessWorkReportingController {
     public ApiResponse<Map<String, Object>> submitNormalReport(
             @PathVariable String factoryId,
             @RequestBody Map<String, Object> body,
-            @RequestAttribute("userId") Long workerId) {
+            @RequestAttribute("userId") Long workerId,
+            @RequestAttribute(value = "role", required = false) String role) {
         if (body.get("processTaskId") == null) {
             throw new BusinessException(400, "缺少必填字段: processTaskId").withHint("请提供工序任务ID").withHintTarget("processTaskId");
         }
@@ -95,9 +97,10 @@ public class ProcessWorkReportingController {
         String reporterName = (String) body.getOrDefault("reporterName", "");
         BigDecimal outputQuantity = new BigDecimal(body.get("outputQuantity").toString());
         String notes = (String) body.getOrDefault("notes", null);
-        // P1-7: 支持代报工 — 主管为不会用手机的工人提交报工
+        // M3: targetWorkerId (代报) 仅主管可用; 操作员传则忽略, 强制为登录者。
+        boolean isSupervisor = ReportAuthGuard.isSupervisor(role);
         Long effectiveWorkerId = workerId;
-        if (body.get("targetWorkerId") != null) {
+        if (isSupervisor && body.get("targetWorkerId") != null) {
             effectiveWorkerId = Long.valueOf(body.get("targetWorkerId").toString());
         }
         return ApiResponse.success(service.submitNormalReport(
