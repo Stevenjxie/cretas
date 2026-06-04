@@ -23,6 +23,7 @@ import {
 } from '../../services/api/yieldReportApi';
 import { processingApiClient } from '../../services/api/processingApiClient';
 import { handleError } from '../../utils/errorHandler';
+import { useAuthStore } from '../../store/authStore';
 
 type YieldStepReportParams = { batchId: number; batchNumber?: string };
 type RouteT = RouteProp<{ YieldStepReport: YieldStepReportParams }, 'YieldStepReport'>;
@@ -54,6 +55,13 @@ const YieldStepReportScreen: React.FC = () => {
   const navigation = useNavigation<NavT>();
   const route = useRoute<RouteT>();
   const { batchId } = route.params;
+
+  // 角色/身份 (Task 7 — 小组长过滤 + 完工入库主管权限)
+  const { getUserId, getUserRole } = useAuthStore();
+  const currentUserId = getUserId();
+  const currentRole = getUserRole();
+  // 操作工 (小组长) vs 主管: operator 只见自己的任务 + 不能完工入库
+  const isOperator = currentRole === 'operator';
 
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
@@ -124,8 +132,11 @@ const YieldStepReportScreen: React.FC = () => {
 
   const loadAll = useCallback(async () => {
     try {
+      // Task 7 (小组长过滤): operator 传自己的 userId → 后端只返回分配给自己 + 未分配的任务;
+      // 主管省略 assignedTo → 后端返回全部任务.
+      const assignedTo = isOperator && currentUserId != null ? currentUserId : undefined;
       const [tasksRes, batchRes, yieldRes] = await Promise.all([
-        yieldReportApi.listWorkProcessTasks(batchId),
+        yieldReportApi.listWorkProcessTasks(batchId, undefined, assignedTo),
         processingApiClient.getBatchById(String(batchId)),
         yieldReportApi.getYield(batchId),
       ]);
@@ -164,7 +175,7 @@ const YieldStepReportScreen: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  }, [batchId]);
+  }, [batchId, isOperator, currentUserId]);
 
   useEffect(() => {
     loadAll();
@@ -743,9 +754,12 @@ const YieldStepReportScreen: React.FC = () => {
               </View>
             ) : null}
           </NeoCard>
-          <NeoButton variant="primary" size="large" onPress={handleSettleDay} disabled={submitting} loading={submitting} style={styles.fullBtn}>
-            完工入库
-          </NeoButton>
+          {/* Task 7 (C6): 完工入库仅主管可见, operator 隐藏此按钮 */}
+          {!isOperator && (
+            <NeoButton variant="primary" size="large" onPress={handleSettleDay} disabled={submitting} loading={submitting} style={styles.fullBtn}>
+              完工入库
+            </NeoButton>
+          )}
           <NeoButton variant="outline" size="large" onPress={() => navigation.goBack()} style={styles.fullBtn}>
             返回选批次
           </NeoButton>
