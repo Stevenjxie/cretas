@@ -172,3 +172,38 @@ metrics:
     notes: |
       target_avg_ticket 来自 DynamicConfigResolver avg_ticket_target 配置,
       未配置时回退子行业 benchmark average_ticket 中位数. 偏差 < -15% 触发严重告警.
+
+  # ── Phase 2 #60 BOM 依赖诊断指标 (依赖 #57 agg_restaurant_product_cost) ──
+
+  gross_margin_per_dish:
+    name_zh: 菜品毛利率
+    name_en: Gross Margin per Dish
+    formula: (sum(dish_revenue) - sum(dish_food_cost)) / sum(dish_revenue)
+    threshold_inline:
+      healthy: ">= 0.55"
+      warning: ">= 0.40 and < 0.55"
+      critical: "< 0.40"
+    higher_is_worse: false  # 毛利率越低越糟
+    playbook: gross_margin_per_dish_low
+    description_zh: 有配方+食材单价的菜品聚合毛利率 (营收-食材成本)/营收
+    requires_cogs: true  # 依赖 #57 BOM 成本卡 (agg_restaurant_product_cost.food_cost)
+    notes: |
+      值以 0-1 比率传入引擎. 由分析器从 #57 agg_restaurant_product_cost 的逐菜 food_cost
+      + POS 营收聚合而成, 仅纳入 has_price_data=true 的菜 (无配方/无单价菜不污染真实毛利率).
+      GUARD: 有价菜 < 3 道时分析器不计算 (引擎跳过未知 key, 诚实不触发).
+
+  recipe_coverage_rate:
+    name_zh: 配方覆盖率
+    name_en: Recipe Coverage Rate
+    formula: dishes_with_has_price_data / total_active_dishes
+    threshold_inline:
+      healthy: ">= 0.70"
+      warning: ">= 0.40 and < 0.70"
+      critical: "< 0.40"
+    higher_is_worse: false  # 覆盖率越低越糟 (越少菜有成本数据)
+    playbook: recipe_coverage_low
+    description_zh: 已配置配方+食材单价 (has_price_data) 的菜品占在售菜品的比例
+    requires_cogs: true  # 依赖 #57 agg_restaurant_product_cost.has_price_data
+    notes: |
+      值以 0-1 比率传入引擎. 覆盖率低 = 大部分菜没法算真实成本/毛利, 成本分析失真.
+      GUARD: 与 gross_margin_per_dish 同步 — 有价菜 < 3 道时分析器不计算两个指标.

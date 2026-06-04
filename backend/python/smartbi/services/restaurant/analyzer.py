@@ -142,6 +142,13 @@ class FinancialMetrics:
     target_avg_ticket: Optional[float] = None        # 目标客单价 (config → benchmark median)
     avg_ticket_vs_target: Optional[float] = None      # actual / target - 1.0 (偏差率)
 
+    # Phase 2 #60: BOM 依赖诊断指标 (依赖 #57 agg_restaurant_product_cost)
+    # 由逐菜 food_cost + has_price_data + POS 营收聚合. GUARD: 有价菜 < 3 道时不计算.
+    gross_margin_per_dish: Optional[float] = None    # (Σ有价菜营收 - Σ有价菜成本) / Σ有价菜营收 (0-1)
+    recipe_coverage_rate: Optional[float] = None     # 有价菜 / 在售菜 (0-1)
+    priced_dish_count: Optional[int] = None          # has_price_data=true 的菜数 (诊断/UI 透明度)
+    active_dish_count: Optional[int] = None          # 在售菜总数
+
     def to_dict(self) -> dict:
         return {
             "revenue": self.revenue,
@@ -165,6 +172,10 @@ class FinancialMetrics:
             "actualAvgTicket": self.actual_avg_ticket,
             "targetAvgTicket": self.target_avg_ticket,
             "avgTicketVsTarget": self.avg_ticket_vs_target,
+            "grossMarginPerDish": self.gross_margin_per_dish,
+            "recipeCoverageRate": self.recipe_coverage_rate,
+            "pricedDishCount": self.priced_dish_count,
+            "activeDishCount": self.active_dish_count,
         }
 
 
@@ -919,7 +930,73 @@ class RestaurantAnalyzerV2:
                 metrics.target_avg_ticket = target
                 metrics.avg_ticket_vs_target = actual_avg_ticket / target - 1.0
 
+        # ── Phase 2 #60: 菜品毛利率 + 配方覆盖率 (依赖 #57 BOM 成本卡) ──
+        # 数据来源: financial_data["product_costs"] = [{food_cost, revenue, qty,
+        # has_price_data}, ...], 由调用方从 agg_restaurant_product_cost (逐菜 food_cost
+        # + has_price_data) join POS 营收得到. GUARD: 有价菜 < 3 道时两个指标都不计算
+        # (引擎跳过未知 key → 诚实不触发, 而非编造健康值).
+        self._compute_bom_dish_metrics(metrics, financial_data.get("product_costs"))
+
         return metrics
+
+    # Minimum priced dishes required before BOM-derived metrics fire. Below this
+    # the aggregate is too thin to be trustworthy → honest no-fire (skip key).
+    _MIN_PRICED_DISHES_FOR_DIAGNOSIS = 3
+
+    def _compute_bom_dish_metrics(
+        self, metrics: FinancialMetrics, product_costs: Optional[list]
+    ) -> None:
+        """Phase 2 #60: compute gross_margin_per_dish + recipe_coverage_rate from a
+        dish-level cost list (#57 agg_restaurant_product_cost rows joined with POS
+        revenue).
+
+        Each dish dict: {food_cost, revenue, qty, has_price_data}.
+        - recipe_coverage_rate = priced dishes / total active dishes
+        - gross_margin_per_dish = (Σ priced revenue - Σ priced food_cost) / Σ priced revenue
+          (only priced dishes — unpriced dishes have no real cost so would inflate margin)
+
+        GUARD: skip BOTH metrics (leave None → key absent in metric_dict) when fewer
+        than _MIN_PRICED_DISHES_FOR_DIAGNOSIS dishes carry has_price_data. The engine
+        skips unknown keys, so this is an honest no-fire, not a fabricated reading.
+        """
+        if not product_costs:
+            return
+
+        active_dishes = [d for d in product_costs if isinstance(d, dict)]
+        active_count = len(active_dishes)
+        if active_count == 0:
+            return
+
+        priced = [d for d in active_dishes if d.get("has_price_data")]
+        priced_count = len(priced)
+
+        # Always surface the raw counts for UI transparency even when the GUARD
+        # suppresses the diagnostic metrics (so the customer sees "2/8 dishes
+        # priced — need ≥3 to diagnose" rather than nothing).
+        metrics.active_dish_count = active_count
+        metrics.priced_dish_count = priced_count
+
+        if priced_count < self._MIN_PRICED_DISHES_FOR_DIAGNOSIS:
+            # Honest no-fire: too few priced dishes to trust the aggregate.
+            return
+
+        # recipe_coverage_rate (0-1): priced / active.
+        metrics.recipe_coverage_rate = priced_count / active_count
+
+        # gross_margin_per_dish (0-1): aggregate over priced dishes only, weighted
+        # by qty so high-volume dishes dominate (mirrors resolve_gross_margin in the
+        # gold router: revenue is total amount, cost is unit food_cost × qty).
+        total_revenue = 0.0
+        total_cost = 0.0
+        for d in priced:
+            revenue = self._safe_float(d.get("revenue")) or 0.0
+            food_cost = self._safe_float(d.get("food_cost")) or 0.0
+            qty = self._safe_float(d.get("qty"))
+            qty = qty if qty is not None else 1.0
+            total_revenue += revenue
+            total_cost += food_cost * qty
+        if total_revenue > 0:
+            metrics.gross_margin_per_dish = (total_revenue - total_cost) / total_revenue
 
     def _resolve_target_avg_ticket(self) -> Optional[float]:
         """解析目标客单价: config override → 子行业 benchmark average_ticket 中位数.
@@ -973,6 +1050,11 @@ class RestaurantAnalyzerV2:
             metric_dict["ingredient_waste_rate"] = metrics.ingredient_waste_rate
         if metrics.avg_ticket_vs_target is not None:
             metric_dict["avg_ticket_vs_target"] = metrics.avg_ticket_vs_target
+        # Phase 2 #60: BOM-dependent. None when GUARD suppresses (<3 priced dishes).
+        if metrics.gross_margin_per_dish is not None:
+            metric_dict["gross_margin_per_dish"] = metrics.gross_margin_per_dish
+        if metrics.recipe_coverage_rate is not None:
+            metric_dict["recipe_coverage_rate"] = metrics.recipe_coverage_rate
         return metric_dict
 
     def _run_diagnostics(self, metrics: FinancialMetrics) -> list:
