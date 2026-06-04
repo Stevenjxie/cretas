@@ -3,8 +3,9 @@ import { ref, computed, onMounted, reactive } from 'vue';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { Plus, Search, Refresh, Warning } from '@element-plus/icons-vue';
+import { Plus, Refresh, Warning } from '@element-plus/icons-vue';
 import { handleCatchError } from '@/utils/errorToast';
+import WorkProcessAIChatPanel from './WorkProcessAIChatPanel.vue';
 import {
   getWorkProcesses, createWorkProcess, updateWorkProcess,
   deleteWorkProcess, toggleWorkProcessStatus, getWorkProcessDuplicates,
@@ -121,6 +122,13 @@ async function handleDupToggle(member: WorkProcessItem) {
     await handleDetectDuplicates();
   } catch (e) {
     if (e !== 'cancel') handleCatchError(e, `${action}失败`);
+  }
+}
+
+async function handleAiApplied(): Promise<void> {
+  await loadData();
+  if (dupPanelVisible.value) {
+    await handleDetectDuplicates();
   }
 }
 
@@ -247,6 +255,12 @@ function handlePageChange(page: number) {
         </div>
       </div>
     </el-card>
+
+    <WorkProcessAIChatPanel
+      v-if="canWrite && factoryId"
+      :factory-id="factoryId"
+      @applied="handleAiApplied"
+    />
 
     <!-- C5: Duplicate clusters panel -->
     <el-card v-if="dupPanelVisible" style="margin-top: 16px; border: 1px solid #faad14">

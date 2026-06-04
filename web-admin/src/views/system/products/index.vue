@@ -5,7 +5,7 @@ import { useAuthStore } from '@/store/modules/auth';
 import ConceptDisambiguationAlert from '@/components/common/ConceptDisambiguationAlert.vue';
 import { usePermissionStore } from '@/store/modules/permission';
 import { get, post, put, del } from '@/api/request';
-import { ElMessage, ElMessageBox } from 'element-plus';
+import { ElMessage, ElMessageBox, ElNotification } from 'element-plus';
 import { handleCatchError } from '@/utils/errorToast';
 import { Plus, Search, Refresh, Download, Upload, Picture, ChatDotRound, Setting, Rank, Delete as DeleteIcon } from '@element-plus/icons-vue';
 import AiEntryDrawer from '@/components/ai-entry/AiEntryDrawer.vue';
@@ -37,6 +37,7 @@ import {
   createProductWorkProcess,
   deleteProductWorkProcess,
   batchSortProductWorkProcesses,
+  getProductWorkProcessRecommendation,
   type WorkProcessItem,
   type ProductWorkProcessItem,
 } from '@/api/processProduction';
@@ -354,17 +355,18 @@ async function handleSubmit() {
       payload.isActive = true;
     }
 
-    let response;
-    if (isEditing.value) {
-      response = await put(`/${factoryId.value}/product-types/${formData.id}`, payload);
-    } else {
-      response = await post(`/${factoryId.value}/product-types`, payload);
-    }
+    const response = isEditing.value
+      ? await put<ProductType>(`/${factoryId.value}/product-types/${formData.id}`, payload)
+      : await post<ProductType>(`/${factoryId.value}/product-types`, payload);
 
     if (response.success) {
       ElMessage.success(isEditing.value ? '编辑成功' : '新增成功');
       dialogVisible.value = false;
-      loadData();
+      await loadData();
+      if (!isEditing.value && response.data?.id) {
+        // fire-and-forget：推荐请求不阻塞 UI，LLM 冷启动 2-5s 会在后台进行，弹框异步出现
+        offerWorkProcessRecommendation(response.data);
+      }
     } else {
       ElMessage.error(response.message || '提交失败');
     }
@@ -373,6 +375,39 @@ async function handleSubmit() {
     console.error('提交失败:', error);
   } finally {
     submitting.value = false;
+  }
+}
+
+async function offerWorkProcessRecommendation(product: ProductType) {
+  if (!factoryId.value) return;
+  try {
+    const res = await getProductWorkProcessRecommendation(factoryId.value, product.id, 5);
+    const count = res.success && res.data ? res.data.recommendations.length : 0;
+    if (!res.success || !res.data || count === 0) {
+      ElMessage.warning(res.message || res.data?.message || '暂未生成推荐工序，请手动配置');
+      return;
+    }
+
+    // 非阻塞：用 ElNotification 代替 ElMessageBox.confirm，
+    // 用户可继续操作产品列表，通知自动展示在角落，点击"去查看"再跳转。
+    ElNotification({
+      title: 'AI 工序推荐',
+      message: `AI 已推荐 ${count} 道工序，点击"去查看"核对草稿`,
+      type: 'success',
+      duration: 0,
+      showClose: true,
+      onClick: () => {
+        router.push({
+          path: '/system/product-processes',
+          query: {
+            productTypeId: product.id,
+            recommend: '1',
+          },
+        });
+      },
+    });
+  } catch (error) {
+    handleCatchError(error, '推荐工序生成失败');
   }
 }
 

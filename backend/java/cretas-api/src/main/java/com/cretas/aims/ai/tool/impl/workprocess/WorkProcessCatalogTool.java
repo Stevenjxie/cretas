@@ -1,0 +1,209 @@
+package com.cretas.aims.ai.tool.impl.workprocess;
+
+import com.cretas.aims.ai.tool.AbstractBusinessTool;
+import com.cretas.aims.ai.tool.ToolExecutor;
+import com.cretas.aims.dto.WorkProcessDTO;
+import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.service.WorkProcessService;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.domain.Pageable;
+import org.springframework.stereotype.Component;
+
+import java.math.BigDecimal;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+
+/**
+ * 工序主数据 Canvas AI Tool.
+ *
+ * <p>支持工序管理页自然语言新增/修改工序，执行前对 create 做
+ * 名称+类别+单位重复检查，避免 AI 生成重复工序。
+ */
+@Slf4j
+@Component
+@RequiredArgsConstructor
+public class WorkProcessCatalogTool extends AbstractBusinessTool {
+
+    private static final String ACTION_CREATE = "create";
+    private static final String ACTION_UPDATE = "update";
+
+    private final WorkProcessService workProcessService;
+
+    @Override
+    public String getToolName() {
+        return "canvas_work_process_catalog";
+    }
+
+    @Override
+    public String getDescription() {
+        return "工序管理页用于新增或修改工序主数据。支持字段: 工序名称、类别、单位、标准工时、"
+                + "出成率上下限、需录投入量、产出单位、标准时薪、排序。"
+                + "新增前会按名称+类别+单位查重，避免重复创建。"
+                + "出成率请传小数，例如 30% 传 0.30。";
+    }
+
+    @Override
+    public Map<String, Object> getParametersSchema() {
+        Map<String, Object> schema = new HashMap<>();
+        schema.put("type", "object");
+
+        Map<String, Object> properties = new HashMap<>();
+        properties.put("action", Map.of(
+                "type", "string",
+                "enum", List.of(ACTION_CREATE, ACTION_UPDATE),
+                "description", "操作类型: create 新建工序, update 修改工序"));
+        properties.put("id", Map.of(
+                "type", "string",
+                "description", "更新时必填的工序ID"));
+        properties.put("processName", Map.of(
+                "type", "string",
+                "description", "工序名称，如 焯水、滚揉、装盒"));
+        properties.put("processCategory", Map.of(
+                "type", "string",
+                "description", "工序类别，如 前处理、加工、包装、质检"));
+        properties.put("unit", Map.of(
+                "type", "string",
+                "description", "投入计量单位，默认 kg"));
+        properties.put("estimatedMinutes", Map.of(
+                "type", "integer",
+                "description", "标准工时/预估工时，单位分钟"));
+        properties.put("standardYieldMin", Map.of(
+                "type", "number",
+                "description", "标准出成率下限，小数表示，如 30% 传 0.30"));
+        properties.put("standardYieldMax", Map.of(
+                "type", "number",
+                "description", "标准出成率上限，小数表示，如 60% 传 0.60"));
+        properties.put("needsInput", Map.of(
+                "type", "boolean",
+                "description", "是否需要录入投入量"));
+        properties.put("outputUnit", Map.of(
+                "type", "string",
+                "description", "产出单位，留空沿用投入单位"));
+        properties.put("standardHourlyRate", Map.of(
+                "type", "number",
+                "description", "标准时薪，单位元/小时"));
+        properties.put("sortOrder", Map.of(
+                "type", "integer",
+                "description", "排序值"));
+
+        schema.put("properties", properties);
+        schema.put("required", List.of("action"));
+        return schema;
+    }
+
+    @Override
+    protected List<String> getRequiredParameters() {
+        return List.of("action");
+    }
+
+    @Override
+    public ActionType getActionType() {
+        return ToolExecutor.ActionType.UPDATE;
+    }
+
+    @Override
+    public RiskLevel getRiskLevel() {
+        return ToolExecutor.RiskLevel.MEDIUM;
+    }
+
+    @Override
+    protected Map<String, Object> doExecute(
+            String factoryId, Map<String, Object> params, Map<String, Object> context) {
+        String action = getString(params, "action", "").trim().toLowerCase();
+        return switch (action) {
+            case ACTION_CREATE -> create(factoryId, params);
+            case ACTION_UPDATE -> update(factoryId, params);
+            default -> throw new BusinessException(400, "不支持的工序操作: " + action)
+                    .withHint("请使用 create 或 update")
+                    .withHintTarget("action");
+        };
+    }
+
+    private Map<String, Object> create(String factoryId, Map<String, Object> params) {
+        String processName = getRequiredText(params, "processName", "工序名称不能为空");
+        WorkProcessDTO dto = buildDto(params);
+        dto.setProcessName(processName);
+        if (dto.getUnit() == null || dto.getUnit().isBlank()) {
+            dto.setUnit("kg");
+        }
+
+        WorkProcessDTO existing = findExisting(factoryId, dto);
+        if (existing != null) {
+            log.info("AI 工序新增命中重复: factory={}, processName={}, category={}, unit={}",
+                    factoryId, dto.getProcessName(), dto.getProcessCategory(), dto.getUnit());
+            Map<String, Object> result = buildSimpleResult(
+                    "已存在相同名称+类别+单位的工序，未重复创建: " + dto.getProcessName(),
+                    existing);
+            result.put("status", "DUPLICATE");
+            result.put("existingId", existing.getId());
+            result.put("actionHint", "请直接复用已有工序，或修改名称/类别/单位后再创建");
+            return result;
+        }
+
+        WorkProcessDTO created = workProcessService.create(factoryId, dto);
+        return buildSimpleResult("已创建工序: " + created.getProcessName(), created);
+    }
+
+    private Map<String, Object> update(String factoryId, Map<String, Object> params) {
+        String id = getRequiredText(params, "id", "更新工序时必须提供 id");
+        WorkProcessDTO dto = buildDto(params);
+        WorkProcessDTO updated = workProcessService.update(factoryId, id, dto);
+        return buildSimpleResult("已更新工序: " + updated.getProcessName(), updated);
+    }
+
+    /**
+     * B-2 fix: query ALL work-processes (including disabled) to detect duplicates.
+     * Previously used listActive() which missed disabled entries — a disabled work-process
+     * with the same name/category/unit would slip through, causing create() to throw 409
+     * which surfaced to the user as a generic "操作失败" error.
+     * Using list(..., Pageable.unpaged()) returns all records regardless of active status,
+     * consistent with C5 detectDuplicates semantics (full scan, not active-only).
+     */
+    private WorkProcessDTO findExisting(String factoryId, WorkProcessDTO incoming) {
+        String processName = normalize(incoming.getProcessName());
+        String category = normalize(incoming.getProcessCategory());
+        String unit = normalize(incoming.getUnit());
+
+        return workProcessService.list(factoryId, Pageable.unpaged()).getContent().stream()
+                .filter(wp -> Objects.equals(normalize(wp.getProcessName()), processName)
+                        && Objects.equals(normalize(wp.getProcessCategory()), category)
+                        && Objects.equals(normalize(wp.getUnit()), unit))
+                .findFirst()
+                .orElse(null);
+    }
+
+    private WorkProcessDTO buildDto(Map<String, Object> params) {
+        return WorkProcessDTO.builder()
+                .processName(getString(params, "processName"))
+                .processCategory(getString(params, "processCategory"))
+                .unit(getString(params, "unit"))
+                .estimatedMinutes(getInteger(params, "estimatedMinutes"))
+                .sortOrder(getInteger(params, "sortOrder"))
+                .standardYieldMin(getBigDecimal(params, "standardYieldMin"))
+                .standardYieldMax(getBigDecimal(params, "standardYieldMax"))
+                .needsInput(getBoolean(params, "needsInput"))
+                .outputUnit(getString(params, "outputUnit"))
+                .standardHourlyRate(toScale2(getBigDecimal(params, "standardHourlyRate")))
+                .build();
+    }
+
+    private String getRequiredText(Map<String, Object> params, String key, String message) {
+        String value = getString(params, key);
+        if (value == null || value.isBlank()) {
+            throw new BusinessException(400, message)
+                    .withHintTarget(key);
+        }
+        return value.trim();
+    }
+
+    private BigDecimal toScale2(BigDecimal value) {
+        return value == null ? null : value.setScale(2, java.math.RoundingMode.HALF_UP);
+    }
+
+    private String normalize(String value) {
+        return value == null ? "" : value.trim();
+    }
+}
