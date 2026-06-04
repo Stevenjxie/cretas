@@ -6882,6 +6882,15 @@ public class IntentKnowledgeBase {
         restaurantPhraseMapping.put("客单价排行", "RESTAURANT_STORE_REVENUE_RANK");
         restaurantPhraseMapping.put("客单价最高的门店", "RESTAURANT_STORE_REVENUE_RANK");
         restaurantPhraseMapping.put("人均消费最高", "RESTAURANT_STORE_REVENUE_RANK");
+        // QA-fix R1 (2026-06-04): route comparative/review queries to working gold intents
+        restaurantPhraseMapping.put("周末周中对比", "RESTAURANT_WEEKDAY_WEEKEND");
+        restaurantPhraseMapping.put("周末与工作日营收对比", "RESTAURANT_WEEKDAY_WEEKEND");
+        restaurantPhraseMapping.put("周末与工作日对比", "RESTAURANT_WEEKDAY_WEEKEND");
+        restaurantPhraseMapping.put("各门店客单价对比", "RESTAURANT_STORE_REVENUE_RANK");
+        restaurantPhraseMapping.put("客单价对比", "RESTAURANT_STORE_REVENUE_RANK");
+        restaurantPhraseMapping.put("平台评价回复率", "RESTAURANT_REVIEW_REPLY_RATE");
+        restaurantPhraseMapping.put("评价回复率", "RESTAURANT_REVIEW_REPLY_RATE");
+        restaurantPhraseMapping.put("VIP客户分析", "RESTAURANT_REVIEW_VIP");
 
         // RESTAURANT_SLOW_SELLER_QUERY — 滞销菜品查询
         restaurantPhraseMapping.put("哪个菜卖不动", "RESTAURANT_SLOW_SELLER_QUERY");
@@ -7067,10 +7076,10 @@ public class IntentKnowledgeBase {
         restaurantPhraseMapping.put("外卖订单量", "RESTAURANT_ORDER_STATISTICS");
         restaurantPhraseMapping.put("今天外卖几单", "RESTAURANT_ORDER_STATISTICS");
         restaurantPhraseMapping.put("本月订单量", "RESTAURANT_ORDER_STATISTICS");
-        restaurantPhraseMapping.put("人均消费", "RESTAURANT_ORDER_STATISTICS");
-        restaurantPhraseMapping.put("客单价", "RESTAURANT_ORDER_STATISTICS");
-        restaurantPhraseMapping.put("平均每桌消费", "RESTAURANT_ORDER_STATISTICS");
-        restaurantPhraseMapping.put("今天客单价多少", "RESTAURANT_ORDER_STATISTICS");
+        restaurantPhraseMapping.put("人均消费", "RESTAURANT_STORE_REVENUE_RANK");
+        restaurantPhraseMapping.put("客单价", "RESTAURANT_STORE_REVENUE_RANK");
+        restaurantPhraseMapping.put("平均每桌消费", "RESTAURANT_STORE_REVENUE_RANK");
+        restaurantPhraseMapping.put("今天客单价多少", "RESTAURANT_STORE_REVENUE_RANK");
 
         // RESTAURANT_PEAK_HOURS_ANALYSIS — 高峰时段分析
         restaurantPhraseMapping.put("高峰时段", "RESTAURANT_PEAK_HOURS_ANALYSIS");
@@ -7199,9 +7208,11 @@ public class IntentKnowledgeBase {
         restaurantPhraseMapping.put("经营分析", "RESTAURANT_MARGIN_ANALYSIS");
 
         // === Wave-7e-sync: 从备份JAR恢复缺失短语 (29条餐饮意图) ===
-        // RESTAURANT_AVG_TICKET (2)
-        restaurantPhraseMapping.put("人均消费", "RESTAURANT_AVG_TICKET");
-        restaurantPhraseMapping.put("人均消费是多少", "RESTAURANT_AVG_TICKET");
+        // QA-fix R1 (2026-06-04): RESTAURANT_AVG_TICKET 是孤儿意图(tool_name=null 无执行器),
+        // 这两条曾覆盖上面 ~7079 的 R1 改动(LinkedHashMap 后者胜)→ 人均消费 仍落空 orphan。
+        // 改指 STORE_REVENUE_RANK(其 gold 工具输出客单价=营收/单数, 真数据)。
+        restaurantPhraseMapping.put("人均消费", "RESTAURANT_STORE_REVENUE_RANK");
+        restaurantPhraseMapping.put("人均消费是多少", "RESTAURANT_STORE_REVENUE_RANK");
         // RESTAURANT_DISH_CREATE — Wave-11 扩充 (含自然语言新增菜品)
         restaurantPhraseMapping.put("新增菜品", "RESTAURANT_DISH_CREATE");
         restaurantPhraseMapping.put("添加新菜品", "RESTAURANT_DISH_CREATE");
