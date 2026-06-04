@@ -222,6 +222,7 @@ public class JwtAuthInterceptor implements HandlerInterceptor {
                uri.equals("/api/mobile/auth/refresh-token") ||  // 刷新token（别名）
                uri.startsWith("/api/mobile/activation/") ||  // 设备激活
                uri.equals("/api/mobile/health") ||  // 健康检查（精确匹配）
+               uri.equals("/api/mobile/version/check") ||  // 版本检查（匿名 — App 启动期强制更新判定，登录前可达）
                uri.equals("/api/mobile/voice/health") ||  // 语音模块健康检查
                uri.equals("/api/mobile/ai/health") ||  // AI模块健康检查
                uri.startsWith("/api/mobile/edge/upload") ||  // IoT 边缘设备上传（无 JWT）
