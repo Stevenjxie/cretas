@@ -144,7 +144,8 @@ fi
 command -v "$OSSUTIL" >/dev/null 2>&1 || die "$OSSUTIL 未安装 (OSS). 见 .claude/rules/server-operations.md"
 [ -f "$OSS_CONFIG" ] || die "找不到 OSS 配置 $OSS_CONFIG (账号 A/C, 需对 $OSS_BUCKET 有写权限)"
 CT="Content-Type:application/vnd.android.package-archive"
-OSSARGS=(--config-file "$OSS_CONFIG" -f --meta "$CT" --acl public-read)
+# 不设 per-object ACL: 桶已是 public-read, 对象继承; 账号策略禁止单对象 public ACL.
+OSSARGS=(--config-file "$OSS_CONFIG" -f --meta "$CT")
 log "☁️  [oss] 上传 $APK_FILE → oss://$OSS_BUCKET/ ..."
 "$OSSUTIL" cp "${OSSARGS[@]}" "$APK_PATH" "oss://$OSS_BUCKET/$APK_FILE" >/dev/null
 log "   ✓ 上传 $APK_FILE"
