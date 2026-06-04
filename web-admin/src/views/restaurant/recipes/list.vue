@@ -446,7 +446,7 @@
         >
           <template #title>
             部分食材未配单价，食材总成本不完整。
-            <el-link type="primary" href="/restaurant/recipes" :underline="false" style="vertical-align: baseline">
+            <el-link type="primary" href="/warehouse/material-types" :underline="false" style="vertical-align: baseline">
               去原料管理补充单价
             </el-link>
           </template>
