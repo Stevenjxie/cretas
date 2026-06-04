@@ -92,6 +92,50 @@ class IntentContinuationAugmentTest {
     }
 
     @Test
+    @DisplayName("day-granularity '今天呢' after RESTAURANT_REVENUE_TREND -> augments")
+    void bareTimeTodayAugments() {
+        IntentRecognitionPipelineServiceImpl service = newService();
+        String result = service.maybeAugmentContinuation(
+                "今天呢", contextWithLastIntent("RESTAURANT_REVENUE_TREND"));
+        assertThat(result).isNotNull();
+        assertThat(result).contains("收入趋势");
+        assertThat(result).startsWith("今天");
+    }
+
+    @Test
+    @DisplayName("day-granularity '昨天' after RESTAURANT_REVENUE_TREND -> augments")
+    void bareTimeYesterdayAugments() {
+        IntentRecognitionPipelineServiceImpl service = newService();
+        String result = service.maybeAugmentContinuation(
+                "昨天", contextWithLastIntent("RESTAURANT_REVENUE_TREND"));
+        assertThat(result).isNotNull();
+        assertThat(result).contains("收入趋势");
+        assertThat(result).startsWith("昨天");
+    }
+
+    @Test
+    @DisplayName("half-year '上半年呢' after RESTAURANT_REVENUE_TREND -> augments")
+    void bareTimeHalfYearAugments() {
+        IntentRecognitionPipelineServiceImpl service = newService();
+        String result = service.maybeAugmentContinuation(
+                "上半年呢", contextWithLastIntent("RESTAURANT_REVENUE_TREND"));
+        assertThat(result).isNotNull();
+        assertThat(result).contains("收入趋势");
+        assertThat(result).startsWith("上半年");
+    }
+
+    @Test
+    @DisplayName("rolling window with 个 '近3个月' after RESTAURANT_REVENUE_TREND -> augments")
+    void rollingWindowWithGeAugments() {
+        IntentRecognitionPipelineServiceImpl service = newService();
+        String result = service.maybeAugmentContinuation(
+                "近3个月", contextWithLastIntent("RESTAURANT_REVENUE_TREND"));
+        assertThat(result).isNotNull();
+        assertThat(result).contains("收入趋势");
+        assertThat(result).startsWith("近3个月");
+    }
+
+    @Test
     @DisplayName("pure particle '呢' after RESTAURANT_BESTSELLER_QUERY -> canonical bestseller phrase")
     void pureParticleInheritsPriorIntent() {
         IntentRecognitionPipelineServiceImpl service = newService();
