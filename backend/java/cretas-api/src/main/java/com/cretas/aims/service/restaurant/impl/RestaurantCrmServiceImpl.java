@@ -146,7 +146,7 @@ public class RestaurantCrmServiceImpl implements RestaurantCrmService {
             try {
                 eventPublisher.publishEvent(new RestaurantVisitAttributedEvent(
                         this, factoryId, guestId, savedVisit.getId(), repSnapshot,
-                        spendAmount != null ? spendAmount : BigDecimal.ZERO));
+                        spendAmount != null ? spendAmount : BigDecimal.ZERO, visitAt));
             } catch (Exception e) {
                 log.warn("发布 RestaurantVisitAttributedEvent 失败 (不影响到访记录): {}", e.getMessage());
             }
