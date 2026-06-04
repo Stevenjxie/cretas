@@ -12,9 +12,11 @@ import {
   generateTasksFromProduct,
   deleteProductWorkProcess,
   batchSortProductWorkProcesses,
+  updateProductWorkProcess,
   type WorkProcessItem,
   type ProductWorkProcessItem
 } from '@/api/processProduction';
+import { getOperatorUsers } from '@/api/factory';
 
 const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
@@ -33,9 +35,13 @@ const linkedLoading = ref(false);
 // 可选工序（全部活跃工序）
 const allProcesses = ref<WorkProcessItem[]>([]);
 
+// 操作员列表（小组长下拉数据源）
+const operators = ref<Array<{ id: number; username: string; realName?: string; fullName?: string }>>([]);
+
 onMounted(async () => {
   await loadProducts();
   await loadAllProcesses();
+  await loadOperators();
 });
 
 watch(selectedProductId, () => {
@@ -78,6 +84,59 @@ async function loadAllProcesses() {
     }
   } catch {
     // silent
+  }
+}
+
+async function loadOperators() {
+  if (!factoryId.value) return;
+  try {
+    const res = await getOperatorUsers(factoryId.value);
+    if (res.success && res.data) {
+      operators.value = Array.isArray(res.data) ? res.data : [];
+    }
+  } catch (e) {
+    ElMessage.warning('小组长列表加载失败，请刷新后重试');
+  }
+}
+
+/**
+ * 返回操作员的显示名称：优先 realName（即 fullName），次选 username。
+ * UserDTO 的 @JsonProperty("realName") 将 fullName 序列化为 realName，
+ * 因此前端应首先使用 realName。
+ */
+function operatorDisplayName(op: { id: number; username: string; realName?: string; fullName?: string }) {
+  return op.realName || op.fullName || op.username;
+}
+
+/**
+ * 返回工序行的责任小组长显示名称（用于只读模式）。
+ */
+function responsibleLabel(item: ProductWorkProcessItem): string {
+  if (!item.responsibleWorkerId) return '';
+  const op = operators.value.find(o => o.id === item.responsibleWorkerId);
+  return op ? operatorDisplayName(op) : `#${item.responsibleWorkerId}`;
+}
+
+/**
+ * 小组长选择变更回调：立即 PUT 更新。
+ * el-select clearable 清空后 value 变为 undefined/null → 发送 -1 (clear sentinel)。
+ */
+async function handleResponsibleWorkerChange(item: ProductWorkProcessItem, value: number | null | undefined) {
+  if (!factoryId.value) return;
+  const responsibleWorkerId = (value == null) ? -1 : value;
+  try {
+    const res = await updateProductWorkProcess(factoryId.value, item.id, { responsibleWorkerId });
+    if (res.success && res.data) {
+      // Update local ref to reflect server state
+      item.responsibleWorkerId = res.data.responsibleWorkerId ?? null;
+    } else {
+      ElMessage.error(res.message || '更新责任小组长失败');
+      // Revert on error
+      await loadLinkedProcesses();
+    }
+  } catch (e) {
+    handleCatchError(e, '更新责任小组长失败');
+    await loadLinkedProcesses();
   }
 }
 
@@ -264,6 +323,29 @@ async function handleGenerateTasks() {
               <el-tag v-if="item.processCategory || ''" size="small" type="info">{{ item.processCategory || '' }}</el-tag>
               <span class="step-unit">单位: {{ item.unitOverride || item.defaultUnit || '-' }}</span>
             </div>
+            <!-- 默认责任小组长 (只读模式不显示，可写模式内联下拉) -->
+            <div class="step-leader" v-if="canWrite">
+              <el-select
+                :model-value="item.responsibleWorkerId ?? undefined"
+                placeholder="默认责任小组长"
+                clearable
+                size="small"
+                style="width: 160px"
+                @change="(val: number | undefined) => handleResponsibleWorkerChange(item, val)"
+              >
+                <el-option
+                  v-for="op in operators"
+                  :key="op.id"
+                  :label="operatorDisplayName(op)"
+                  :value="op.id"
+                />
+              </el-select>
+            </div>
+            <div class="step-leader-readonly" v-else-if="item.responsibleWorkerId">
+              <el-text type="info" size="small">
+                责任小组长: {{ responsibleLabel(item) }}
+              </el-text>
+            </div>
           </div>
           <div class="step-actions" v-if="canWrite">
             <el-button text size="small" :disabled="index === 0" @click="handleMoveUp(index)">
@@ -361,4 +443,6 @@ async function handleGenerateTasks() {
 
 .empty-state { padding: 20px 0; }
 .empty-hint { padding: 12px; text-align: center; }
+.step-leader { margin-top: 6px; }
+.step-leader-readonly { margin-top: 4px; }
 </style>
