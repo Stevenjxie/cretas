@@ -53,6 +53,7 @@ import com.cretas.aims.dto.ai.PreprocessedQuery;
 import com.cretas.aims.dto.clarification.ClarificationDecision;
 import com.cretas.aims.dto.clarification.ReferenceResult;
 import com.cretas.aims.dto.conversation.ConversationContext;
+import com.cretas.aims.dto.conversation.EntitySlot;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
@@ -65,6 +66,7 @@ import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
@@ -540,6 +542,8 @@ public class IntentRecognitionPipelineServiceImpl implements IntentRecognitionPi
                         if (preprocessedQuery != null && preprocessedQuery.getFinalQuery() != null) {
                             processedInput = preprocessedQuery.getFinalQuery();
                         }
+                        preprocessedQuery = ensureStoreReferenceResolved(userInput, processedInput,
+                                context, preprocessedQuery);
                     }
                 }
             } catch (Exception e) {
@@ -750,6 +754,38 @@ public class IntentRecognitionPipelineServiceImpl implements IntentRecognitionPi
 
     static boolean shouldBypassEarlyPhraseShortcutForStoreReference(String userInput) {
         return userInput != null && STORE_REFERENCE_PATTERN.matcher(userInput).find();
+    }
+
+    static PreprocessedQuery ensureStoreReferenceResolved(String originalInput, String processedInput,
+            ConversationContext context, PreprocessedQuery preprocessedQuery) {
+        if (originalInput == null || context == null || !STORE_REFERENCE_PATTERN.matcher(originalInput).find()) {
+            return preprocessedQuery;
+        }
+        EntitySlot slot = context.getSlot(EntitySlot.SlotType.STORE);
+        if (slot == null || slot.getName() == null || slot.getName().isBlank()) {
+            return preprocessedQuery;
+        }
+        PreprocessedQuery pq = preprocessedQuery;
+        if (pq == null) {
+            pq = PreprocessedQuery.builder()
+                    .originalInput(originalInput)
+                    .normalizedText(processedInput)
+                    .finalQuery(processedInput != null ? processedInput : originalInput)
+                    .build();
+        }
+        if (pq.getResolvedReferences() != null && pq.getResolvedReferences().values().stream()
+                .anyMatch(ref -> ref != null
+                        && ref.getEntityType() != null
+                        && "STORE".equalsIgnoreCase(ref.getEntityType()))) {
+            return pq;
+        }
+        Matcher matcher = STORE_REFERENCE_PATTERN.matcher(originalInput);
+        String reference = matcher.find() ? matcher.group() : originalInput;
+        pq.addResolvedReference(reference, "STORE", slot.getId(), slot.getName());
+        if (pq.getUnresolvedReferences() != null) {
+            pq.getUnresolvedReferences().remove(reference);
+        }
+        return pq;
     }
 
     @Override
