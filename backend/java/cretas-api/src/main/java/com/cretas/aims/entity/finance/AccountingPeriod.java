@@ -118,6 +118,60 @@ public class AccountingPeriod extends BaseEntity {
     @Column(name = "approval_workflow_instance_id", length = 191)
     private String approvalWorkflowInstanceId;
 
+    // ==================== Wave2 月结自动闭环字段 ====================
+
+    /**
+     * 调整窗口截止 (closed_at + 20 天). 兑现邓总 "留20天调整窗口".
+     *
+     * <p>CLOSED 期间在此之前 voucher 仍可写 (调整窗口内, {@code assertOpen} silent pass);
+     * 之后硬锁 (抛 PeriodClosedException). null = 旧 CLOSED 行立即硬锁 (backwards compat).
+     */
+    @Column(name = "adjust_deadline")
+    private LocalDateTime adjustDeadline;
+
+    /** 结账前对账校验结论: PASS | WARNING | null (未执行月结编排). */
+    @Column(name = "reconciliation_status", length = 32)
+    private String reconciliationStatus;
+
+    /** 对账校验摘要文本 (审计留痕). */
+    @Column(name = "reconciliation_summary", length = 2000)
+    private String reconciliationSummary;
+
+    /** 结账时冻结的营业收入合计 (来自 IncomeStatement P&L). */
+    @Column(name = "total_revenue_snapshot", precision = 18, scale = 2)
+    private java.math.BigDecimal totalRevenueSnapshot;
+
+    /** 结账时冻结的净利润 (来自 IncomeStatement P&L). */
+    @Column(name = "net_profit_snapshot", precision = 18, scale = 2)
+    private java.math.BigDecimal netProfitSnapshot;
+
+    /** 结账时冻结的完整利润表 JSON 快照. 调整窗口内 voucher 变动不影响此快照 (报表冻结). */
+    @Column(name = "income_statement_snapshot", columnDefinition = "TEXT")
+    private String incomeStatementSnapshot;
+
+    /** 报表生成完成时间 (邓总 "1-3号出报表" 达成标记). */
+    @Column(name = "report_ready_at")
+    private LocalDateTime reportReadyAt;
+
+    /**
+     * 调整窗口状态 (派生, 非持久). 供 UI / voucher gate 判断:
+     * <ul>
+     *   <li>{@link AdjustWindowState#NOT_CLOSED}: 未结账 (OPEN / PENDING_CLOSE)</li>
+     *   <li>{@link AdjustWindowState#OPEN_WINDOW}: 已 CLOSED 且在 adjust_deadline 内, voucher 可调整</li>
+     *   <li>{@link AdjustWindowState#LOCKED}: 已 CLOSED 且窗口已过 (或无 deadline), voucher 硬锁</li>
+     * </ul>
+     */
+    @Transient
+    public AdjustWindowState getAdjustWindowState() {
+        if (status != Status.CLOSED) {
+            return AdjustWindowState.NOT_CLOSED;
+        }
+        if (adjustDeadline != null && LocalDateTime.now().isBefore(adjustDeadline)) {
+            return AdjustWindowState.OPEN_WINDOW;
+        }
+        return AdjustWindowState.LOCKED;
+    }
+
     /**
      * 期间结账状态机.
      */
@@ -130,5 +184,17 @@ public class AccountingPeriod extends BaseEntity {
         /** 期间已正式关账. voucher 写操作抛 PeriodClosedException.
          *  仅反结账 (reopen) 可改回 OPEN. */
         CLOSED
+    }
+
+    /**
+     * 调整窗口状态 (Wave2 月结). {@link #getAdjustWindowState()} 派生返回.
+     */
+    public enum AdjustWindowState {
+        /** 未结账 (OPEN / PENDING_CLOSE) — voucher 正常可写. */
+        NOT_CLOSED,
+        /** 已结账且在 20 天调整窗口内 — voucher 仍可调整 (邓总调整窗口). */
+        OPEN_WINDOW,
+        /** 已结账且窗口已过 (或无 deadline) — voucher 硬锁. */
+        LOCKED
     }
 }
