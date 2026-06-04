@@ -1523,12 +1523,11 @@ public class IntentExecutionOrchestrator {
             conversationMemoryService.getOrCreateContext(factoryId, userId, request.getSessionId());
             IntentMatchResult syntheticMatch = IntentMatchResult.builder()
                     .bestMatch(intent)
-                    .userInput(request.getUserInput())
                     .build();
             updateConversationMemory(request.getSessionId(), request, response,
                     syntheticMatch, factoryId, userId);
         } catch (Exception e) {
-            log.warn("X1 explicit-intent path memory persist failed: {}", e.getMessage());
+            log.warn("X1 显式意图路径对话记忆持久化失败: sessionId={}, error={}", request.getSessionId(), e.getMessage());
         }
     }
 

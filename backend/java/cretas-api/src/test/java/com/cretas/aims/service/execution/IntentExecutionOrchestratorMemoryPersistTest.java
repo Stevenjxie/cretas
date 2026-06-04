@@ -25,9 +25,13 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.verifyNoMoreInteractions;
 
 @DisplayName("IntentExecutionOrchestrator — X1 explicit-intent memory persistence")
 class IntentExecutionOrchestratorMemoryPersistTest {
@@ -76,6 +80,8 @@ class IntentExecutionOrchestratorMemoryPersistTest {
 
         verify(memory).getOrCreateContext("RES_3101_009", 9L, "sess-mt-1");
         verify(memory).updateLastIntent("sess-mt-1", "RESTAURANT_REVENUE_TREND");
+        verify(memory, times(2)).addMessage(eq("sess-mt-1"), any());
+        verifyNoMoreInteractions(memory);
     }
 
     @Test
