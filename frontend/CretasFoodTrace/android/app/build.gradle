@@ -10,7 +10,13 @@ def projectRoot = rootDir.getAbsoluteFile().getParentFile().getAbsolutePath()
 // release builds fall back to the debug key, BUT the publish script
 // (scripts/deploy/deploy-apk.sh) hard-fails unless the shipped APK is signed by
 // the real release key (SHA-256 gate). Never distribute a fallback build.
-def keystorePropertiesFile = rootProject.file("keystore.properties")
+// Prefer env CRETAS_KEYSTORE_PROPERTIES (stable path outside repo) so any
+// worktree / main checkout builds the signed release without per-tree setup;
+// fall back to android/keystore.properties.
+def keystorePropEnv = System.getenv("CRETAS_KEYSTORE_PROPERTIES")
+def keystorePropertiesFile = (keystorePropEnv != null && !keystorePropEnv.isEmpty())
+        ? file(keystorePropEnv)
+        : rootProject.file("keystore.properties")
 def keystoreProperties = new Properties()
 if (keystorePropertiesFile.exists()) {
     keystoreProperties.load(new FileInputStream(keystorePropertiesFile))
