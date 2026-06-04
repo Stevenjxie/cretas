@@ -152,3 +152,33 @@ export function financeReject(
     { notes },
   );
 }
+
+// ============================================================================
+// B3 售价趋势
+// ============================================================================
+
+/** 单条售价趋势记录. */
+export interface SalesPriceTrendDTO {
+  orderNumber: string;
+  orderDate: string; // ISO date string, e.g. "2026-05-20"
+  unitPrice: number | null;
+  quantity: number | null;
+  unit: string | null;
+}
+
+/**
+ * B3 获取产品最近 N 笔成交售价 (财审辅助).
+ *
+ * @param factoryId     工厂 ID
+ * @param productTypeId 产品类型 ID
+ * @param limit         最多条数，默认 10
+ */
+export function getProductPriceTrend(
+  factoryId: string,
+  productTypeId: string,
+  limit = 10,
+): Promise<ApiResponse<SalesPriceTrendDTO[]>> {
+  return get<SalesPriceTrendDTO[]>(`/${factoryId}/sales/orders/price-trend`, {
+    params: { productTypeId, limit },
+  });
+}

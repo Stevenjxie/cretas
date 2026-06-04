@@ -22,9 +22,11 @@ import {
   getOrderCostBreakdown,
   financeApprove,
   financeReject,
+  getProductPriceTrend,
   type SalesOrderSummary,
   type FinanceCostBreakdown,
   type LineCostBreakdown,
+  type SalesPriceTrendDTO,
 } from '@/api/salesFinanceReview';
 
 const route = useRoute();
@@ -44,6 +46,10 @@ const notes = ref('');
 const overrideEstimatedCost = ref<number | null>(null);
 const loading = ref(false);
 const submitting = ref(false);
+
+// B3 售价趋势 — 按产品类型分组，key=productTypeId
+const priceTrendMap = ref<Record<string, SalesPriceTrendDTO[]>>({});
+const priceTrendLoading = ref(false);
 
 const canReview = computed(
   () => order.value?.status === 'PENDING_FINANCE_REVIEW',
@@ -84,10 +90,67 @@ async function load() {
       if (breakdownRes.data.currentEstimatedCost != null) {
         overrideEstimatedCost.value = breakdownRes.data.currentEstimatedCost;
       }
+      // B3: 异步加载各产品线的售价趋势 (非阻塞, 独立 loading)
+      void loadPriceTrends(breakdownRes.data.lines);
     }
   } finally {
     loading.value = false;
   }
+}
+
+/**
+ * B3: 为财审行级明细的每个产品类型加载近期售价趋势.
+ * 非阻塞 — 网络错误仅 warn 不影响主流程.
+ */
+async function loadPriceTrends(lines: LineCostBreakdown[]) {
+  if (!factoryId.value || !lines || lines.length === 0) return;
+  // 去重 productId (避免同产品多行重复请求)
+  const productIds = [...new Set(lines.map((l) => l.productId).filter(Boolean) as string[])];
+  if (productIds.length === 0) return;
+  priceTrendLoading.value = true;
+  try {
+    const results = await Promise.allSettled(
+      productIds.map((pid) =>
+        getProductPriceTrend(factoryId.value, pid, 10).then((res) => ({
+          productId: pid,
+          rows: res.success && res.data ? res.data : [],
+        })),
+      ),
+    );
+    const map: Record<string, SalesPriceTrendDTO[]> = {};
+    for (const r of results) {
+      if (r.status === 'fulfilled') {
+        map[r.value.productId] = r.value.rows;
+      }
+    }
+    priceTrendMap.value = map;
+  } catch (e) {
+    console.warn('[B3 price-trend] load failed, non-critical:', e);
+  } finally {
+    priceTrendLoading.value = false;
+  }
+}
+
+/**
+ * B3: 计算某产品在历史记录中的平均单价 (null 表示无数据).
+ */
+function avgPrice(productTypeId: string | null): number | null {
+  if (!productTypeId) return null;
+  const rows = priceTrendMap.value[productTypeId];
+  if (!rows || rows.length === 0) return null;
+  const prices = rows.map((r) => r.unitPrice).filter((p): p is number => p != null);
+  if (prices.length === 0) return null;
+  return prices.reduce((a, b) => a + b, 0) / prices.length;
+}
+
+/**
+ * B3: 本单价格偏差百分比 vs 历史均值.
+ * 正值=偏高(高于历史均价), 负值=偏低.
+ */
+function priceDiff(currentPrice: number | null, productTypeId: string | null): number | null {
+  const avg = avgPrice(productTypeId);
+  if (avg == null || !currentPrice || avg === 0) return null;
+  return ((currentPrice - avg) / avg) * 100;
 }
 
 function formatAmount(v: number | null | undefined): string {
@@ -308,6 +371,92 @@ onMounted(load);
       </el-table>
     </el-card>
 
+    <!-- B3 售价趋势 / 价格对比 (每产品一卡) -->
+    <template v-if="breakdown && breakdown.lines.length > 0">
+      <el-card
+        v-for="line in breakdown.lines"
+        :key="line.productId ?? line.productName ?? 'unknown'"
+        v-loading="priceTrendLoading"
+        shadow="never"
+        class="comparison-card"
+      >
+        <template #header>
+          <div class="card-header">
+            <span class="card-title">
+              售价趋势 — {{ line.productName || line.productId || '—' }}
+            </span>
+            <span class="card-subtitle">
+              本单单价 {{ formatAmount(line.unitPrice) }}
+              <template v-if="priceDiff(line.unitPrice, line.productId) != null">
+                <el-tag
+                  :type="
+                    (priceDiff(line.unitPrice, line.productId) ?? 0) > 10
+                      ? 'danger'
+                      : (priceDiff(line.unitPrice, line.productId) ?? 0) < -10
+                        ? 'warning'
+                        : 'success'
+                  "
+                  size="small"
+                  style="margin-left: 8px"
+                >
+                  {{ (priceDiff(line.unitPrice, line.productId) ?? 0) > 0 ? '+' : '' }}{{
+                    (priceDiff(line.unitPrice, line.productId) ?? 0).toFixed(1)
+                  }}% vs 历史均价
+                </el-tag>
+              </template>
+            </span>
+          </div>
+        </template>
+
+        <template v-if="line.productId && priceTrendMap[line.productId]?.length">
+          <el-table
+            :data="priceTrendMap[line.productId]"
+            size="small"
+            stripe
+            empty-text="暂无历史价格记录"
+          >
+            <el-table-column prop="orderDate" label="下单日期" min-width="110" />
+            <el-table-column prop="orderNumber" label="订单号" min-width="160" />
+            <el-table-column label="单价" align="right" min-width="110">
+              <template #default="{ row }">
+                <span
+                  :style="{
+                    fontWeight: '600',
+                    color:
+                      line.unitPrice != null && row.unitPrice != null
+                        ? line.unitPrice > row.unitPrice * 1.1
+                          ? '#e6a23c'
+                          : line.unitPrice < row.unitPrice * 0.9
+                            ? '#909399'
+                            : '#303133'
+                        : '#303133',
+                  }"
+                >{{ formatAmount(row.unitPrice) }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="数量" align="right" min-width="100">
+              <template #default="{ row }">
+                {{ row.quantity != null ? `${row.quantity} ${row.unit ?? ''}`.trim() : '-' }}
+              </template>
+            </el-table-column>
+          </el-table>
+          <!-- 均价摘要 -->
+          <div class="trend-summary" v-if="avgPrice(line.productId) != null">
+            <span class="label">近期均价:</span>
+            <span class="value">{{ formatAmount(avgPrice(line.productId)) }}</span>
+            <span class="label" style="margin-left: 16px">本单:</span>
+            <span
+              class="value"
+              :class="profitClass(priceDiff(line.unitPrice, line.productId))"
+            >
+              {{ formatAmount(line.unitPrice) }}
+            </span>
+          </div>
+        </template>
+        <el-empty v-else description="暂无历史价格记录" :image-size="60" />
+      </el-card>
+    </template>
+
     <!-- 审核操作 -->
     <el-card v-if="canReview && canFinanceWrite" shadow="never" class="action-card">
       <template #header>
@@ -483,5 +632,23 @@ onMounted(load);
 }
 :deep(.cost-deviation-row td) {
   background-color: #fff7e6 !important;
+}
+/* B3 trend summary bar */
+.trend-summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 12px;
+  padding: 8px 12px;
+  background: #f5f7fa;
+  border-radius: 6px;
+  font-size: 13px;
+}
+.trend-summary .label {
+  color: #909399;
+}
+.trend-summary .value {
+  font-weight: 600;
+  color: #303133;
 }
 </style>

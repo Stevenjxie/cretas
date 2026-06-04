@@ -126,11 +126,14 @@ public class SupplyChainOrchestrator {
      *
      * <p>业务规则变更（2026-03-26）：生产计划只有在财务审核通过后才可创建，
      * 确保每笔订单的预估成本和利润已经过财务确认。
+     *
+     * <p>B1 性能修复 (2026-06-04): 加 {@link org.springframework.scheduling.annotation.Async}
+     * 让供应链联动在 Spring 公共线程池执行，不阻塞财务审核 HTTP 响应。
+     * 原来 publishEvent 后 Spring 同步调用本方法（同 HTTP 线程），库存检查 + PP 创建
+     * 全部串行完成才返回给前端，造成"通过点击后卡很久"。
+     * REQUIRES_NEW 保证本方法独立事务，不影响 finance-approve 的事务语义。
      */
-    /**
-     * Use REQUIRES_NEW so that a failure in the supply-chain orchestration
-     * does NOT roll back the caller's finance-approve transaction.
-     */
+    @org.springframework.scheduling.annotation.Async
     @EventListener
     @Transactional(propagation = org.springframework.transaction.annotation.Propagation.REQUIRES_NEW)
     public void onSalesOrderFinanceApproved(SalesOrderFinanceApprovedEvent event) {
