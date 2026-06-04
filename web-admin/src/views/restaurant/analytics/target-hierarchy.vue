@@ -8,18 +8,148 @@
  * Rule 4: POST 幂等 upsert; saving=true 防双击
  * Rule 5: 保存成功后自动跳 /analytics/kpi
  */
-import { ref, computed, onMounted } from 'vue';
+import { ref, computed, onMounted, nextTick } from 'vue';
 import { useRouter } from 'vue-router';
 import { useAuthStore } from '@/store/modules/auth';
 import { ElMessage, ElMessageBox } from 'element-plus';
+import echarts from '@/utils/echarts';
 import {
   upsertTarget,
+  decomposeWeeks,
+  fetchForecast,
+  fetchPaceAlerts,
   type TargetUpsertRequest,
+  type ForecastResponse,
+  type PaceAlertResponse,
+  type DecomposeWeeksResponse,
 } from '@/api/smartbi/restaurant-targets';
 
 const router = useRouter();
 const authStore = useAuthStore();
 const factoryId = computed(() => authStore.factoryId ?? '');
+
+// ── #58 Phase 1 state ───────────────────────────────────────────────────────
+const activeTab = ref<'targets' | 'cascade' | 'forecast'>('targets');
+
+// 周/日拆分
+const decomposeMonth = ref(
+  `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}`,
+);
+const cascadeToDays = ref(false);
+const decomposing = ref(false);
+const decomposeResult = ref<DecomposeWeeksResponse | null>(null);
+
+// 滚动预测 + pace 预警
+const forecastHorizon = ref(30);
+const forecastLoading = ref(false);
+const forecastData = ref<ForecastResponse | null>(null);
+const paceLoading = ref(false);
+const pacePeriod = ref<'month' | 'week' | 'day'>('month');
+const paceAlert = ref<PaceAlertResponse | null>(null);
+
+const PACE_LEVEL_META: Record<string, { text: string; color: string; tag: string }> = {
+  OK: { text: '进度正常', color: '#67c23a', tag: 'success' },
+  WARN: { text: '略微落后', color: '#e6a23c', tag: 'warning' },
+  CRIT: { text: '明显落后', color: '#f56c6c', tag: 'danger' },
+  NO_TARGET: { text: '目标未设置', color: '#909399', tag: 'info' },
+};
+
+const paceMeta = computed(() => {
+  const lvl = paceAlert.value?.alertLevel ?? 'NO_TARGET';
+  return PACE_LEVEL_META[lvl] ?? PACE_LEVEL_META.NO_TARGET;
+});
+
+function fmtMoney(v: number | null | undefined): string {
+  if (v == null) return '—';
+  return `¥${Math.round(v).toLocaleString()}`;
+}
+
+async function runDecompose() {
+  if (!factoryId.value) return;
+  decomposing.value = true;
+  try {
+    const res = await decomposeWeeks({
+      periodKey: decomposeMonth.value,
+      kpiKind: kpiKind.value,
+      cascadeToDays: cascadeToDays.value,
+    });
+    decomposeResult.value = res.data;
+    if (res.data.weeks.length === 0) {
+      ElMessage({
+        message: res.data.message || '该月目标未设置，无法拆分',
+        type: 'warning', duration: 0, showClose: true,
+      });
+    } else {
+      ElMessage({ message: `已拆分为 ${res.data.weeks.length} 个周目标`, type: 'success' });
+    }
+  } catch (e: unknown) {
+    const msg = (e instanceof Error ? e.message : String(e)) || '拆分失败';
+    ElMessage({ message: msg, type: 'error', duration: 0, showClose: true });
+  } finally {
+    decomposing.value = false;
+  }
+}
+
+async function loadForecast() {
+  if (!factoryId.value) return;
+  forecastLoading.value = true;
+  try {
+    const res = await fetchForecast({ horizonDays: forecastHorizon.value });
+    forecastData.value = res.data;
+    await nextTick();
+    renderForecastChart();
+  } catch (e: unknown) {
+    const msg = (e instanceof Error ? e.message : String(e)) || '预测失败';
+    ElMessage({ message: msg, type: 'error', duration: 0, showClose: true });
+  } finally {
+    forecastLoading.value = false;
+  }
+}
+
+async function loadPaceAlert() {
+  if (!factoryId.value) return;
+  paceLoading.value = true;
+  try {
+    const res = await fetchPaceAlerts({ periodType: pacePeriod.value, kpiKind: kpiKind.value });
+    paceAlert.value = res.data;
+  } catch (e: unknown) {
+    const msg = (e instanceof Error ? e.message : String(e)) || '查询进度失败';
+    ElMessage({ message: msg, type: 'error', duration: 0, showClose: true });
+  } finally {
+    paceLoading.value = false;
+  }
+}
+
+function renderForecastChart() {
+  const el = document.getElementById('chart-forecast');
+  const data = forecastData.value;
+  if (!el || !data || data.points.length === 0) return;
+  const chart = echarts.getInstanceByDom(el) || echarts.init(el);
+  const dates = data.points.map(p => p.date);
+  // forecast/lower/upper may be null (RBAC-stripped); guard with ?? null.
+  const fc = data.points.map(p => p.forecastAmount);
+  const lo = data.points.map(p => p.lowerBound);
+  // upper is rendered as a stacked band on top of lower (upper - lower).
+  const band = data.points.map(p =>
+    p.upperBound != null && p.lowerBound != null ? p.upperBound - p.lowerBound : null,
+  );
+  chart.setOption({
+    tooltip: { trigger: 'axis', confine: true },
+    legend: { data: ['预测营收', '80% 区间'], top: 0 },
+    grid: { left: 60, right: 30, top: 36, bottom: 50 },
+    xAxis: { type: 'category', data: dates, axisLabel: { rotate: 40, interval: Math.ceil(dates.length / 12) } },
+    yAxis: {
+      type: 'value', name: '营收 (¥)',
+      axisLabel: { formatter: (v: number) => (v >= 10000 ? (v / 10000).toFixed(1) + '万' : String(Math.round(v))) },
+    },
+    series: [
+      // CI band: invisible lower baseline + translucent stacked band
+      { name: '_lower', type: 'line', data: lo, stack: 'ci', lineStyle: { opacity: 0 }, areaStyle: { opacity: 0 }, symbol: 'none', silent: true },
+      { name: '80% 区间', type: 'line', data: band, stack: 'ci', lineStyle: { opacity: 0 }, areaStyle: { color: 'rgba(64,158,255,0.18)' }, symbol: 'none' },
+      { name: '预测营收', type: 'line', data: fc, smooth: true, lineStyle: { width: 2, color: '#409eff' }, itemStyle: { color: '#409eff' }, symbol: 'circle', symbolSize: 5 },
+    ],
+  });
+}
 
 // ── State ─────────────────────────────────────────────────────────────────────
 const selectedYear = ref(new Date().getFullYear());
@@ -134,7 +264,20 @@ onMounted(() => {
   // Future: load existing targets via hierarchy_rollup endpoint
 });
 
-defineExpose({ saving, yearTargetValue, selectedReason, monthlyTargets });
+// Lazy-load forecast + pace when the user opens that tab (avoid eager calls
+// when they only want to set targets).
+function onTabChange() {
+  if (activeTab.value === 'forecast') {
+    if (!forecastData.value) loadForecast();
+    if (!paceAlert.value) loadPaceAlert();
+  }
+}
+
+defineExpose({
+  saving, yearTargetValue, selectedReason, monthlyTargets,
+  activeTab, decomposeResult, forecastData, paceAlert,
+  runDecompose, loadForecast, loadPaceAlert,
+});
 </script>
 
 <template>
@@ -144,6 +287,14 @@ defineExpose({ saving, yearTargetValue, selectedReason, monthlyTargets });
       <h2>{{ pageTitle }}</h2>
     </div>
 
+    <el-tabs v-model="activeTab" class="p1-tabs" @tab-change="onTabChange">
+      <el-tab-pane label="目标设置（年/月）" name="targets" />
+      <el-tab-pane label="周/日拆分" name="cascade" />
+      <el-tab-pane label="预测 & 实时预警" name="forecast" />
+    </el-tabs>
+
+    <!-- ════ TAB 1: 年/月 目标设置 (G2, unchanged) ════ -->
+    <template v-if="activeTab === 'targets'">
     <el-card class="section-card">
       <template #header>
         <div class="card-header">年度目标设置</div>
@@ -243,6 +394,155 @@ defineExpose({ saving, yearTargetValue, selectedReason, monthlyTargets });
         <el-button @click="router.push('/analytics/kpi')">返回 KPI 看板</el-button>
       </div>
     </el-card>
+    </template>
+
+    <!-- ════ TAB 2: 周/日拆分 ════ -->
+    <template v-if="activeTab === 'cascade'">
+    <el-card class="section-card">
+      <template #header>
+        <div class="card-header">月度目标 → 周/日 自动拆分</div>
+      </template>
+      <p class="hint-text">
+        将已设置的<b>月度目标</b>按历史营收占比自动拆分到各周（无历史则按天数均分），
+        子级之和严格等于月度目标。勾选"同时拆到每日"可继续按星期权重拆分到天。
+      </p>
+      <div class="cascade-row">
+        <label class="target-label">选择月份</label>
+        <el-date-picker
+          v-model="decomposeMonth"
+          type="month"
+          format="YYYY-MM"
+          value-format="YYYY-MM"
+          placeholder="选择月份"
+          style="width: 160px;"
+        />
+        <el-checkbox v-model="cascadeToDays" style="margin-left: 16px;">
+          同时拆到每日
+        </el-checkbox>
+        <el-button
+          type="primary"
+          :loading="decomposing"
+          :disabled="decomposing"
+          style="margin-left: 16px;"
+          @click="runDecompose"
+        >
+          拆分
+        </el-button>
+      </div>
+
+      <div v-if="decomposeResult && decomposeResult.weeks.length" class="cascade-result">
+        <el-alert
+          :title="`月度目标 ${fmtMoney(decomposeResult.monthTarget)} 已拆分（依据：${decomposeResult.basis === 'historical_week_share' ? '历史营收占比' : '按天数均分'}）`"
+          type="success"
+          :closable="false"
+          style="margin-bottom: 12px;"
+        />
+        <el-table :data="decomposeResult.weeks" size="small" border>
+          <el-table-column prop="periodKey" label="周" width="160" />
+          <el-table-column label="周目标">
+            <template #default="{ row }">{{ fmtMoney(row.targetValue) }}</template>
+          </el-table-column>
+        </el-table>
+        <div v-if="decomposeResult.dayCascade" class="day-cascade-note">
+          <el-tag type="info" size="small">
+            已同时拆分到日（共 {{ decomposeResult.dayCascade.length }} 周 ×7 天）
+          </el-tag>
+        </div>
+      </div>
+      <el-empty
+        v-else-if="decomposeResult"
+        :description="decomposeResult.message || '该月暂无目标可拆分'"
+      >
+        <el-button type="primary" @click="activeTab = 'targets'">前往设置月度目标</el-button>
+      </el-empty>
+    </el-card>
+    </template>
+
+    <!-- ════ TAB 3: 滚动预测 + 实时 pace 预警 ════ -->
+    <template v-if="activeTab === 'forecast'">
+    <!-- pace 预警卡片 -->
+    <el-card class="section-card">
+      <template #header>
+        <div class="card-header">
+          实时进度预警
+          <el-radio-group v-model="pacePeriod" size="small" style="margin-left: 16px;" @change="loadPaceAlert">
+            <el-radio-button value="month">本月</el-radio-button>
+            <el-radio-button value="week">本周</el-radio-button>
+            <el-radio-button value="day">今日</el-radio-button>
+          </el-radio-group>
+          <el-button size="small" :loading="paceLoading" style="margin-left: 12px;" @click="loadPaceAlert">
+            刷新
+          </el-button>
+        </div>
+      </template>
+      <div v-if="paceAlert && paceAlert.alertLevel !== 'NO_TARGET'" v-loading="paceLoading" class="pace-card">
+        <div class="pace-level" :style="{ color: paceMeta.color }">
+          <el-tag :type="paceMeta.tag" effect="dark" size="large">{{ paceMeta.text }}</el-tag>
+          <span class="pace-period">{{ paceAlert.periodKey }}</span>
+        </div>
+        <div class="pace-gauge">
+          <div class="gauge-row">
+            <span class="gauge-label">目标完成</span>
+            <el-progress
+              :percentage="Math.min(100, Math.round((paceAlert.completionPct ?? 0) * 100))"
+              :color="paceMeta.color"
+              :stroke-width="16"
+            />
+          </div>
+          <div class="gauge-row">
+            <span class="gauge-label">时间已过</span>
+            <el-progress
+              :percentage="Math.round((paceAlert.elapsedPct ?? 0) * 100)"
+              color="#909399"
+              :stroke-width="16"
+            />
+          </div>
+        </div>
+        <div class="pace-detail">
+          <span>目标 {{ fmtMoney(paceAlert.targetAmount) }}</span>
+          <span>已完成 {{ fmtMoney(paceAlert.actualAmount) }}</span>
+          <span v-if="paceAlert.dataMissing" class="data-missing">（POS 数据缺失，仅供参考）</span>
+        </div>
+      </div>
+      <el-empty
+        v-else
+        :description="paceAlert?.message || '当前周期目标未设置'"
+      >
+        <el-button type="primary" @click="activeTab = 'targets'">前往设置目标</el-button>
+      </el-empty>
+    </el-card>
+
+    <!-- 滚动预测图 -->
+    <el-card class="section-card">
+      <template #header>
+        <div class="card-header">
+          滚动营收预测（基于历史趋势，含 80% 置信区间）
+          <el-select v-model="forecastHorizon" size="small" style="width: 110px; margin-left: 16px;" @change="loadForecast">
+            <el-option :value="7" label="未来 7 天" />
+            <el-option :value="14" label="未来 14 天" />
+            <el-option :value="30" label="未来 30 天" />
+            <el-option :value="60" label="未来 60 天" />
+          </el-select>
+          <el-button size="small" :loading="forecastLoading" style="margin-left: 12px;" @click="loadForecast">
+            刷新预测
+          </el-button>
+        </div>
+      </template>
+      <div v-loading="forecastLoading">
+        <div v-if="forecastData && forecastData.points.length" class="forecast-meta">
+          <el-tag size="small" :type="forecastData.modelType === 'linear_trend' ? 'success' : 'warning'">
+            {{ forecastData.modelType === 'linear_trend' ? '线性趋势模型' : '近期均值（数据较少）' }}
+          </el-tag>
+          <span class="anchor-note">锚定日期 {{ forecastData.anchorDate }} · 拟合窗口 {{ forecastData.windowDays }} 天</span>
+        </div>
+        <div id="chart-forecast" class="forecast-chart"></div>
+        <el-empty
+          v-if="forecastData && forecastData.points.length === 0"
+          :description="forecastData.message || '暂无足够历史数据生成预测'"
+        />
+      </div>
+    </el-card>
+    </template>
   </div>
 </template>
 
@@ -260,4 +560,21 @@ defineExpose({ saving, yearTargetValue, selectedReason, monthlyTargets });
 .month-col { margin-bottom: 12px; }
 .month-label { font-size: 13px; color: #606266; margin-bottom: 4px; }
 .reason-row { display: flex; align-items: center; gap: 8px; }
+.p1-tabs { margin-bottom: 8px; }
+.hint-text { color: #909399; font-size: 13px; line-height: 1.6; margin: 0 0 16px; }
+.cascade-row { display: flex; align-items: center; gap: 8px; margin-bottom: 16px; }
+.cascade-result { margin-top: 8px; }
+.day-cascade-note { margin-top: 10px; }
+.pace-card { padding: 8px 0; }
+.pace-level { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
+.pace-period { font-size: 14px; color: #606266; }
+.pace-gauge { max-width: 520px; }
+.gauge-row { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
+.gauge-label { min-width: 72px; font-size: 13px; color: #606266; }
+.gauge-row :deep(.el-progress) { flex: 1; }
+.pace-detail { margin-top: 12px; display: flex; gap: 24px; font-size: 14px; color: #303133; }
+.data-missing { color: #e6a23c; font-size: 13px; }
+.forecast-meta { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
+.anchor-note { color: #909399; font-size: 13px; }
+.forecast-chart { width: 100%; height: 340px; }
 </style>

@@ -134,3 +134,114 @@ export async function upsertAlertConfig(
     body: JSON.stringify(req),
   });
 }
+
+// ── #58 Phase 1: 周/日拆分 + 滚动预测 + pace 预警 ────────────────────────────────
+
+export interface DecomposeWeeksRequest {
+  kpiKind?: string;          // 'revenue' (default) | 'bill_count'
+  periodKey: string;         // month key '2026-06'
+  storeId?: number | null;
+  cascadeToDays?: boolean;   // also split each week into 7 days
+}
+
+export interface DecomposedTargetRow {
+  id: number;
+  periodKey: string;
+  targetValue: number;
+}
+
+export interface DecomposeWeeksResponse {
+  factoryId: string;
+  periodKey: string;
+  level: string;
+  basis?: string;            // 'historical_week_share' | 'days_in_month_fallback'
+  monthTarget?: number;
+  weeks: DecomposedTargetRow[];
+  dayCascade?: Array<{ periodKey: string; basis?: string; days: DecomposedTargetRow[] }>;
+  message?: string;
+}
+
+export interface ForecastPoint {
+  date: string;
+  forecastAmount: number | null;  // null when RBAC-stripped for non-price role
+  lowerBound: number | null;
+  upperBound: number | null;
+}
+
+export interface ForecastResponse {
+  factoryId: string;
+  storeId: number | null;
+  modelType: string;              // 'linear_trend' | 'mean_fallback' | 'no_data'
+  anchorDate: string | null;
+  windowDays: number;
+  horizonDays: number;
+  points: ForecastPoint[];
+  message?: string;
+}
+
+export interface PaceAlertResponse {
+  factoryId: string;
+  kpiKind: string;
+  periodType: string;
+  periodKey: string;
+  storeId: number | null;
+  alertLevel: 'OK' | 'WARN' | 'CRIT' | 'NO_TARGET';
+  targetAmount: number | null;
+  actualAmount: number | null;
+  completionPct: number | null;   // 0..n
+  elapsedPct: number | null;      // 0..1
+  paceGapPct: number | null;      // completion - elapsed (negative = behind)
+  daysElapsed?: number;
+  daysTotal?: number;
+  dataMissing?: boolean;
+  message?: string;
+}
+
+export async function decomposeWeeks(
+  req: DecomposeWeeksRequest,
+): Promise<ApiEnvelope<DecomposeWeeksResponse>> {
+  return pythonFetch(`${BASE}/decompose-weeks`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(req),
+  });
+}
+
+export async function fetchForecast(params?: {
+  horizonDays?: number;
+  windowDays?: number;
+  storeId?: number | null;
+  persist?: boolean;
+}): Promise<ApiEnvelope<ForecastResponse>> {
+  const qp = new URLSearchParams({
+    horizon_days: String(params?.horizonDays ?? 30),
+    window_days: String(params?.windowDays ?? 90),
+    persist: String(params?.persist ?? false),
+  });
+  if (params?.storeId != null) qp.set('store_id', String(params.storeId));
+  return pythonFetch(`${BASE}/forecast?${qp.toString()}`);
+}
+
+export async function fetchPaceAlerts(params?: {
+  kpiKind?: string;
+  storeId?: number | null;
+  periodType?: string;
+}): Promise<ApiEnvelope<PaceAlertResponse>> {
+  const qp = new URLSearchParams({
+    kpi_kind: params?.kpiKind ?? 'revenue',
+    period_type: params?.periodType ?? 'month',
+  });
+  if (params?.storeId != null) qp.set('store_id', String(params.storeId));
+  return pythonFetch(`${BASE}/pace-alerts?${qp.toString()}`);
+}
+
+export async function suppressAlert(
+  alertId: number,
+  suppressUntil: string,  // YYYY-MM-DD
+): Promise<ApiEnvelope<{ id: number; periodType: string; periodKey: string; suppressedUntil: string }>> {
+  return pythonFetch(`${BASE}/alerts/${alertId}/suppress`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ suppressUntil }),
+  });
+}
