@@ -448,4 +448,31 @@ public interface ProductionReportRepository extends JpaRepository<ProductionRepo
             @Param("startDate") java.time.LocalDate startDate,
             @Param("endDate") java.time.LocalDate endDate,
             @Param("productTypeId") String productTypeId);
+
+    /**
+     * D4: 每个工序按批次聚合的自动标准计算样本.
+     * <p>每行代表同一 workProcessId 在一个批次/工序任务上的投入、产出、工时、人数、人工成本汇总.
+     * service 端负责过滤 0/null 样本、做 P20/P80 分位和手填优先写回.
+     */
+    @Query(value = """
+        SELECT
+            wpt.work_process_id AS work_process_id,
+            pr.batch_id AS batch_id,
+            COALESCE(SUM(CAST(pr.input_quantity AS DECIMAL(14,4))), 0) AS input_quantity,
+            COALESCE(SUM(CAST(pr.output_quantity AS DECIMAL(14,4))), 0) AS output_quantity,
+            COALESCE(SUM(pr.total_work_minutes), 0) AS total_work_minutes,
+            COALESCE(SUM(pr.total_workers), 0) AS total_workers,
+            COALESCE(SUM(CAST(pr.labor_cost AS DECIMAL(14,2))), 0) AS labor_cost
+        FROM production_reports pr
+        JOIN work_process_tasks wpt ON pr.work_process_task_id = wpt.id AND wpt.deleted_at IS NULL
+        WHERE pr.factory_id = :factoryId
+          AND wpt.factory_id = :factoryId
+          AND pr.report_type = 'YIELD'
+          AND pr.deleted_at IS NULL
+          AND pr.work_process_task_id IS NOT NULL
+          AND pr.batch_id IS NOT NULL
+        GROUP BY wpt.work_process_id, pr.batch_id, pr.work_process_task_id
+        ORDER BY wpt.work_process_id, pr.batch_id
+        """, nativeQuery = true)
+    List<Map<String, Object>> findYieldStandardSamples(@Param("factoryId") String factoryId);
 }
