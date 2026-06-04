@@ -305,13 +305,20 @@ public class WastageRecordController {
         // Wave2: section_code 必须是合法档口枚举 (防呆 Rule 3 — 约束选择)。
         // 容忍 null/空 (档口可选)，非法值给具体 400 而非脏数据落库。
         String section = record.getSectionCode();
-        if (section != null && !section.trim().isEmpty()
-                && com.cretas.aims.entity.enums.WastageSection.fromCode(section) == null) {
-            throw new BusinessException(400,
-                    "无效的档口编码: " + section)
-                    .withHint("可选: " + String.join(" / ", com.cretas.aims.entity.enums.WastageSection.codes()))
-                    .withSeverity("warning")
-                    .withHintTarget("sectionCode");
+        if (section != null && !section.trim().isEmpty()) {
+            com.cretas.aims.entity.enums.WastageSection parsed =
+                    com.cretas.aims.entity.enums.WastageSection.fromCode(section);
+            if (parsed == null) {
+                throw new BusinessException(400,
+                        "无效的档口编码: " + section)
+                        .withHint("可选: " + String.join(" / ", com.cretas.aims.entity.enums.WastageSection.codes()))
+                        .withSeverity("warning")
+                        .withHintTarget("sectionCode");
+            }
+            // 规范化为枚举标准 code, 避免大小写差异 (seafood vs SEAFOOD) 导致
+            // getStatisticsBySection 的 GROUP BY w.sectionCode 把同一档口拆成两行。
+            // 与 AI 工具路径 (RestaurantWastageRecordTool) 的归一行为一致。
+            record.setSectionCode(parsed.name());
         }
     }
 }

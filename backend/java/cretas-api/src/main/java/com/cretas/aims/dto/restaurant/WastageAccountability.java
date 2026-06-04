@@ -11,7 +11,10 @@ import java.util.List;
  * 损耗责任制汇总 DTO (Wave2 损耗按人/档口责任制)。
  *
  * <p>兑现邓总诉求：按人/按档口透明化损耗，"同样 1 万营业额哪个档口哪个人成本涨了"。
- * 仅统计 APPROVED 损耗记录。金额字段对无价权角色脱敏（service 层置 null）。</p>
+ * 仅统计 APPROVED 损耗记录。金额字段的可见性由<b>调用方</b>门控，不在 service 层脱敏：
+ * /accountability 端点经 {@code @RequirePermission} 限价权/财务角色 (无权直接 403)；
+ * AI 工具 {@code RestaurantWastageSummaryTool} 内显式校验价权后再决定是否输出金额。
+ * 本 DTO 的金额字段始终由 service 层按实计算填充。</p>
  *
  * @author Cretas Team
  * @since 2026-06-04
@@ -27,7 +30,7 @@ public class WastageAccountability {
     /** 结束日期 (YYYY-MM-DD) */
     private String endDate;
 
-    /** 时段内总损耗成本（元）；无价权角色为 null */
+    /** 时段内总损耗成本（元）；可见性由调用方价权门控，service 层不置 null */
     private BigDecimal totalCost;
 
     /** 时段内总损耗记录数 */
@@ -59,7 +62,7 @@ public class WastageAccountability {
         /** 该责任人损耗总数量 */
         private BigDecimal totalQuantity;
 
-        /** 该责任人损耗成本（元）；无价权角色为 null */
+        /** 该责任人损耗成本（元）；可见性由调用方价权门控，service 层不置 null */
         private BigDecimal totalCost;
     }
 
@@ -83,7 +86,7 @@ public class WastageAccountability {
         /** 该档口损耗总数量 */
         private BigDecimal totalQuantity;
 
-        /** 该档口损耗成本（元）；无价权角色为 null */
+        /** 该档口损耗成本（元）；可见性由调用方价权门控，service 层不置 null */
         private BigDecimal totalCost;
     }
 }
