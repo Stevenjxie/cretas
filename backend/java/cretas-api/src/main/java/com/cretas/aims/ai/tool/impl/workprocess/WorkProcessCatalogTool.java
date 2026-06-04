@@ -7,6 +7,7 @@ import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.service.WorkProcessService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
@@ -153,12 +154,20 @@ public class WorkProcessCatalogTool extends AbstractBusinessTool {
         return buildSimpleResult("已更新工序: " + updated.getProcessName(), updated);
     }
 
+    /**
+     * B-2 fix: query ALL work-processes (including disabled) to detect duplicates.
+     * Previously used listActive() which missed disabled entries — a disabled work-process
+     * with the same name/category/unit would slip through, causing create() to throw 409
+     * which surfaced to the user as a generic "操作失败" error.
+     * Using list(..., Pageable.unpaged()) returns all records regardless of active status,
+     * consistent with C5 detectDuplicates semantics (full scan, not active-only).
+     */
     private WorkProcessDTO findExisting(String factoryId, WorkProcessDTO incoming) {
         String processName = normalize(incoming.getProcessName());
         String category = normalize(incoming.getProcessCategory());
         String unit = normalize(incoming.getUnit());
 
-        return workProcessService.listActive(factoryId).stream()
+        return workProcessService.list(factoryId, Pageable.unpaged()).getContent().stream()
                 .filter(wp -> Objects.equals(normalize(wp.getProcessName()), processName)
                         && Objects.equals(normalize(wp.getProcessCategory()), category)
                         && Objects.equals(normalize(wp.getUnit()), unit))

@@ -116,12 +116,15 @@ async function send(): Promise<void> {
       },
     });
     const data = res.data ?? {};
+    // D1 B-1: when diffs are empty (tool failure surfaced as error reply), show guidance text
+    const hasDiffs = Array.isArray(data.diffs) && data.diffs.length > 0;
     messages.value.push({
       role: 'assistant',
-      content: data.reply || '已生成草稿，请审核后应用。',
+      content: data.reply || (hasDiffs ? '已生成草稿，请审核后应用。' : '无法生成草稿，请检查工序描述'),
       diffPreview: data.diffs || [],
     });
-  } catch {
+  } catch (e) {
+    console.error('[WorkProcessAIChatPanel] send failed:', e);
     messages.value.push({
       role: 'assistant',
       content: 'AI 服务暂不可用，请稍后重试。',

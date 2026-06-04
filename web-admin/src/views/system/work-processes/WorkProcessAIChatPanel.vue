@@ -49,6 +49,7 @@
 
 <script setup lang="ts">
 import { nextTick, ref } from 'vue';
+import { isAxiosError } from 'axios';
 import { ElMessage } from 'element-plus';
 import { aiApplyDiffs, aiChat } from '@/api/canvasApi';
 import type { AIAgentMode } from '@/types/canvas';
@@ -152,8 +153,11 @@ async function send(): Promise<void> {
       ElMessage.success('AI 已执行工序变更');
       emit('applied');
     }
-  } catch {
-    messages.value.push({ role: 'assistant', content: 'AI 处理失败，请查看错误提示后重试。' });
+  } catch (e) {
+    // D3 B-1: surface backend error message instead of generic fallback
+    const backendMsg = isAxiosError(e) ? e.response?.data?.message : null;
+    const displayMsg = backendMsg || 'AI 处理失败，请查看错误提示后重试。';
+    messages.value.push({ role: 'assistant', content: displayMsg });
   } finally {
     loading.value = false;
     await scrollToBottom();
@@ -168,8 +172,12 @@ async function applyDiff(diff: CanvasDiff): Promise<void> {
     await aiApplyDiffs(props.factoryId, [diff]);
     ElMessage.success('工序变更已应用');
     emit('applied');
-  } catch {
-    // request interceptor already shows backend detail
+  } catch (e) {
+    // D3 B-1: request interceptor shows backend toast, but also push a chat message
+    // so the failure is visible inline in the conversation (not just a transient toast)
+    const backendMsg = isAxiosError(e) ? e.response?.data?.message : null;
+    const errorText = backendMsg || '应用工序变更失败，请稍后重试';
+    messages.value.push({ role: 'assistant', content: `应用失败: ${errorText}` });
   } finally {
     applying.value = false;
   }

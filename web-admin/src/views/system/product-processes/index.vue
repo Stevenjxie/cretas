@@ -299,18 +299,27 @@ async function applyRouteRecommendationDraft() {
     }
 
     let addedCount = 0;
+    let skippedCount = 0;
     for (const recommendation of res.data.recommendations) {
       const alreadyInDraft = draftLinked.value.some(d => d.workProcessId === recommendation.workProcessId);
       if (alreadyInDraft) {
         continue;
       }
-      handleAdd(toWorkProcessItem(recommendation));
+      const item = toWorkProcessItem(recommendation);
+      if (item === null) {
+        skippedCount++;
+        continue;
+      }
+      handleAdd(item);
       addedCount++;
     }
 
-    recommendationNotice.value = `${res.data.notice}：已预填 ${addedCount} 道推荐工序，请检查顺序和责任小组长后再保存。`;
+    const skippedSuffix = skippedCount > 0 ? `（${skippedCount} 道推荐工序在工序库中不存在已跳过）` : '';
+    recommendationNotice.value = `${res.data.notice}：已预填 ${addedCount} 道推荐工序，请检查顺序和责任小组长后再保存。${skippedSuffix}`;
     if (addedCount > 0) {
       ElMessage.success(`已预填 ${addedCount} 道 AI 推荐工序，请核对后保存`);
+    } else if (skippedCount > 0) {
+      ElMessage.warning(`推荐工序在工序库中均不存在（${skippedCount} 道已跳过），请手动配置`);
     } else {
       ElMessage.info('推荐工序已在当前草稿/配置中，无需重复添加');
     }
@@ -319,27 +328,15 @@ async function applyRouteRecommendationDraft() {
   }
 }
 
-function toWorkProcessItem(recommendation: RecommendedWorkProcess): WorkProcessItem {
+function toWorkProcessItem(recommendation: RecommendedWorkProcess): WorkProcessItem | null {
   const existing = allProcesses.value.find(wp => wp.id === recommendation.workProcessId);
   if (existing) {
     return existing;
   }
-  return {
-    id: recommendation.workProcessId,
-    processName: recommendation.processName,
-    processCategory: recommendation.processCategory || '未分类',
-    unit: recommendation.unit || 'kg',
-    estimatedMinutes: recommendation.estimatedMinutes,
-    sortOrder: recommendation.processOrder,
-    isActive: true,
-    standardYieldMin: null,
-    standardYieldMax: null,
-    needsInput: true,
-    outputUnit: null,
-    standardHourlyRate: null,
-    createdAt: '',
-    updatedAt: '',
-  };
+  console.warn(
+    `[推荐工序] workProcessId="${recommendation.workProcessId}" (${recommendation.processName}) 在工序库中不存在，已跳过，不会伪造假记录`
+  );
+  return null;
 }
 
 // ─────────────────────────────────────────────

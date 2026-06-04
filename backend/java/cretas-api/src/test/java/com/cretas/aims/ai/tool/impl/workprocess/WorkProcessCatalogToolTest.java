@@ -17,6 +17,9 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import com.cretas.aims.dto.common.PageResponse;
+import com.cretas.aims.exception.BusinessException;
+
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
@@ -50,7 +53,10 @@ class WorkProcessCatalogToolTest {
     @Test
     @DisplayName("create: 新建前查重，未命中时映射全字段并调用 WorkProcessService.create")
     void createMapsFieldsAndCallsService() throws Exception {
-        when(workProcessService.listActive(FACTORY_ID)).thenReturn(List.of());
+        // B-2 fix: findExisting now uses list(..., Pageable.unpaged()) — return empty page
+        PageResponse<WorkProcessDTO> emptyPage = new PageResponse<>();
+        emptyPage.setContent(List.of());
+        when(workProcessService.list(eq(FACTORY_ID), any())).thenReturn(emptyPage);
         when(workProcessService.create(eq(FACTORY_ID), any(WorkProcessDTO.class)))
                 .thenAnswer(inv -> {
                     WorkProcessDTO dto = inv.getArgument(1);
@@ -72,7 +78,7 @@ class WorkProcessCatalogToolTest {
                 Map.entry("sortOrder", 7)
         ));
 
-        verify(workProcessService).listActive(FACTORY_ID);
+        verify(workProcessService).list(eq(FACTORY_ID), any());
         verify(workProcessService).create(eq(FACTORY_ID), dtoCaptor.capture());
         WorkProcessDTO dto = dtoCaptor.getValue();
         assertEquals("焯水", dto.getProcessName());
@@ -98,7 +104,10 @@ class WorkProcessCatalogToolTest {
                 .unit("kg")
                 .isActive(true)
                 .build();
-        when(workProcessService.listActive(FACTORY_ID)).thenReturn(List.of(existing));
+        // B-2 fix: findExisting now uses list(..., Pageable.unpaged()) instead of listActive()
+        PageResponse<WorkProcessDTO> allPage = new PageResponse<>();
+        allPage.setContent(List.of(existing));
+        when(workProcessService.list(eq(FACTORY_ID), any())).thenReturn(allPage);
 
         Map<String, Object> result = invokeDoExecute(Map.of(
                 "action", "create",
@@ -108,7 +117,7 @@ class WorkProcessCatalogToolTest {
                 "standardHourlyRate", "25.00"
         ));
 
-        verify(workProcessService).listActive(FACTORY_ID);
+        verify(workProcessService).list(eq(FACTORY_ID), any());
         verify(workProcessService, never()).create(anyString(), any());
         assertEquals("DUPLICATE", result.get("status"));
         assertTrue(result.get("message").toString().contains("已存在相同名称+类别+单位的工序"));
@@ -147,12 +156,77 @@ class WorkProcessCatalogToolTest {
         assertSame(updated, result.get("data"));
     }
 
+    @Test
+    @DisplayName("update: 缺少 id 时抛出 BusinessException，不调用 update service")
+    void updateWithoutIdThrowsBusinessException() {
+        assertThrows(BusinessException.class, () -> invokeDoExecute(Map.of(
+                "action", "update",
+                "processName", "焯水",
+                "processCategory", "加工"
+                // id deliberately omitted
+        )), "update without id must throw BusinessException");
+
+        verify(workProcessService, never()).update(anyString(), anyString(), any());
+    }
+
+    @Test
+    @DisplayName("非法 action 抛出 BusinessException 含 actionHint")
+    void illegalActionThrowsBusinessException() {
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> invokeDoExecute(Map.of("action", "delete")),
+                "unsupported action must throw BusinessException");
+
+        assertTrue(ex.getMessage().contains("delete") || ex.getActionHint() != null,
+                "Exception should mention the illegal action or include an actionHint");
+    }
+
+    @Test
+    @DisplayName("B-2: 命中已禁用同名工序时，result 的 existingId 和 actionHint 必须非空")
+    void duplicateOfDisabledProcessHasExistingIdAndActionHint() throws Exception {
+        // Simulate: a disabled work-process with the same triplet exists in list() but NOT in listActive()
+        WorkProcessDTO disabledExisting = WorkProcessDTO.builder()
+                .id("wp-disabled-焯水")
+                .processName("焯水")
+                .processCategory("加工")
+                .unit("kg")
+                .isActive(false)
+                .build();
+
+        // B-2 fix: findExisting now uses list(..., Pageable.unpaged()) instead of listActive()
+        PageResponse<WorkProcessDTO> allPage = new PageResponse<>();
+        allPage.setContent(List.of(disabledExisting));
+        when(workProcessService.list(eq(FACTORY_ID), any())).thenReturn(allPage);
+
+        Map<String, Object> result = invokeDoExecute(Map.of(
+                "action", "create",
+                "processName", "焯水",
+                "processCategory", "加工",
+                "unit", "kg"
+        ));
+
+        assertEquals("DUPLICATE", result.get("status"),
+                "Should detect the disabled duplicate and return DUPLICATE status");
+        assertNotNull(result.get("existingId"),
+                "existingId must not be null — caller needs it to know which record to re-enable");
+        assertNotNull(result.get("actionHint"),
+                "actionHint must not be null — user needs guidance on what to do next");
+        verify(workProcessService, never()).create(anyString(), any());
+    }
+
     @SuppressWarnings("unchecked")
     private Map<String, Object> invokeDoExecute(Map<String, Object> params) throws Exception {
         var method = WorkProcessCatalogTool.class.getDeclaredMethod(
                 "doExecute", String.class, Map.class, Map.class);
         method.setAccessible(true);
-        return (Map<String, Object>) method.invoke(tool, FACTORY_ID, params, ctx());
+        try {
+            return (Map<String, Object>) method.invoke(tool, FACTORY_ID, params, ctx());
+        } catch (java.lang.reflect.InvocationTargetException e) {
+            // reflection wraps the real exception; rethrow it so assertThrows sees BusinessException
+            if (e.getCause() instanceof Exception cause) {
+                throw cause;
+            }
+            throw e;
+        }
     }
 
     private Map<String, Object> ctx() {

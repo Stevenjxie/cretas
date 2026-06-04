@@ -117,16 +117,33 @@ public class ProductWorkProcessConfigTool extends AbstractBusinessTool {
             return buildResult(plan, false);
         }
 
+        // B-3: fail-soft apply — collect per-step errors instead of aborting mid-write
         List<ProductWorkProcessDTO> applied = new ArrayList<>();
+        List<String> warnings = new ArrayList<>();
         for (DraftStep step : plan.steps()) {
-            applied.add(applyStep(factoryId, plan.productTypeId(), step));
+            try {
+                applied.add(applyStep(factoryId, plan.productTypeId(), step));
+            } catch (Exception e) {
+                String stepLabel = step.processName() != null ? step.processName() : step.workProcessId();
+                String errorDetail = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
+                warnings.add("工序「" + stepLabel + "」保存失败: " + errorDetail);
+                log.warn("AI 产品工序配置步骤写入失败: productTypeId={}, step={}, error={}",
+                        plan.productTypeId(), stepLabel, e.getMessage(), e);
+            }
         }
 
-        log.info("AI 产品工序配置已应用: productTypeId={}, count={}, missing={}",
-                plan.productTypeId(), applied.size(), plan.missingProcesses().size());
+        log.info("AI 产品工序配置已应用: productTypeId={}, applied={}/{}, missing={}, warnings={}",
+                plan.productTypeId(), applied.size(), plan.steps().size(),
+                plan.missingProcesses().size(), warnings.size());
 
         Map<String, Object> result = buildResult(plan, true);
         result.put("appliedRows", applied);
+        if (!warnings.isEmpty()) {
+            result.put("warnings", warnings);
+            // Clarify in message that only some steps succeeded
+            result.put("message", result.get("message")
+                    + "；" + warnings.size() + " 道写入失败: " + String.join("；", warnings));
+        }
         return result;
     }
 
@@ -154,10 +171,19 @@ public class ProductWorkProcessConfigTool extends AbstractBusinessTool {
                         item -> item,
                         (left, right) -> left));
 
+        String normalizedMessage = normalize(message);
         List<DraftStep> steps = new ArrayList<>();
         for (int i = 0; i < matchedProcesses.size(); i++) {
             MatchedProcess matched = matchedProcesses.get(i);
-            UserDTO assignee = matchAssignee(message, matched, operators);
+            // B-2: compute right boundary = start of next matched process (or end of string)
+            // so assignee search for step N cannot bleed into step N+1's text
+            int nextBoundary;
+            if (i + 1 < matchedProcesses.size()) {
+                nextBoundary = matchedProcesses.get(i + 1).startIndex();
+            } else {
+                nextBoundary = normalizedMessage.length();
+            }
+            UserDTO assignee = matchAssignee(normalizedMessage, matched, operators, nextBoundary);
             ProductWorkProcessDTO existingRow = existingByProcessId.get(matched.workProcess().getId());
             steps.add(new DraftStep(
                     existingRow != null ? "update" : "create",
@@ -179,8 +205,9 @@ public class ProductWorkProcessConfigTool extends AbstractBusinessTool {
         List<UserDTO> result = new ArrayList<>();
         result.addAll(userService.getUsersByRole(factoryId, FactoryUserRole.operator));
         result.addAll(userService.getUsersByRole(factoryId, FactoryUserRole.group_leader));
+        // I-4: whitelist only explicitly-active users; isActive=null must NOT pass through
         return result.stream()
-                .filter(u -> !Boolean.FALSE.equals(u.getIsActive()))
+                .filter(u -> Boolean.TRUE.equals(u.getIsActive()))
                 .collect(Collectors.toMap(
                         UserDTO::getId,
                         u -> u,
@@ -203,14 +230,29 @@ public class ProductWorkProcessConfigTool extends AbstractBusinessTool {
                 .toList();
     }
 
+    /**
+     * B-2 fix: segment is now bounded on the right by {@code nextBoundary} (start index of the
+     * next matched process in the normalized message, or end-of-string for the last step).
+     * This prevents an assignee mentioned after a later process from being erroneously
+     * attributed to an earlier process (e.g. "修油，滚揉，焯水交给魏振江" — 修油 and 滚揉
+     * get no assignee; only 焯水 gets 魏振江).
+     *
+     * @param normalizedMessage already-normalized message (to avoid re-normalizing in each call)
+     * @param current           the process whose assignee we're looking for
+     * @param operators         candidate users (already filtered to active)
+     * @param nextBoundary      right bound in normalizedMessage (exclusive) for the search segment
+     */
     private UserDTO matchAssignee(
-            String message, MatchedProcess current, List<UserDTO> operators) {
+            String normalizedMessage, MatchedProcess current,
+            List<UserDTO> operators, int nextBoundary) {
         int segmentStart = current.startIndex();
-        String normalizedMessage = normalize(message);
         String currentName = normalize(current.workProcess().getProcessName());
         int currentNameEnd = segmentStart + currentName.length();
 
-        String segment = normalizedMessage.substring(currentNameEnd);
+        // Clamp nextBoundary to valid range and ensure currentNameEnd <= nextBoundary
+        int safeNextBoundary = Math.min(nextBoundary, normalizedMessage.length());
+        int safeSegmentEnd = Math.max(currentNameEnd, safeNextBoundary);
+        String segment = normalizedMessage.substring(currentNameEnd, safeSegmentEnd);
         UserDTO nearest = null;
         int nearestIndex = Integer.MAX_VALUE;
         for (UserDTO op : operators) {

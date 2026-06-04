@@ -37,6 +37,10 @@ public class CanvasAIController {
     private static final String PRODUCT_WORK_PROCESS_TOOL = "canvas_product_work_process_config";
     private static final String PRODUCT_WORK_PROCESS_DRAFT_REPLY = "已生成工序配置草稿";
 
+    // D3: narrow route for work-process catalog (create/update work-process master data)
+    private static final String WORK_PROCESS_CATALOG_MODULE = "work_process_catalog";
+    private static final String WORK_PROCESS_CATALOG_TOOL = "canvas_work_process_catalog";
+
     /**
      * Only canvas_* tools are allowed via AI chat to prevent prompt injection from
      * calling data-destructive or system-level tools.
@@ -120,6 +124,10 @@ public class CanvasAIController {
             if (PRODUCT_WORK_PROCESS_MODULE.equals(request.getModuleCode())) {
                 return ApiResponse.success(handleProductWorkProcessConfigChat(request, toolContext));
             }
+            // D3: work_process_catalog narrow route — bypasses LLM prompt entirely
+            if (WORK_PROCESS_CATALOG_MODULE.equals(request.getModuleCode())) {
+                return ApiResponse.success(handleWorkProcessCatalogChat(request, toolContext));
+            }
 
             switch (mode) {
                 case "autopilot" -> {
@@ -171,6 +179,17 @@ public class CanvasAIController {
                 : executor.execute(toolCall, toolContext);
 
         Map<String, Object> toolResponse = objectMapper.readValue(raw, new TypeReference<Map<String, Object>>() {});
+
+        // D1 B-1: surface tool failures instead of silently returning a fake success draft
+        if (!Boolean.TRUE.equals(toolResponse.get("success"))) {
+            String errorMsg = Objects.toString(toolResponse.get("error"), "工序配置工具执行失败，请检查输入后重试");
+            AIResponse errorResponse = new AIResponse();
+            errorResponse.setApplied(false);
+            errorResponse.setReply(errorMsg);
+            errorResponse.setDiffs(List.of());
+            return errorResponse;
+        }
+
         @SuppressWarnings("unchecked")
         Map<String, Object> data = (Map<String, Object>) toolResponse.getOrDefault("data", Map.of());
 
@@ -184,6 +203,56 @@ public class CanvasAIController {
                 "tool", PRODUCT_WORK_PROCESS_TOOL,
                 "params", data,
                 "description", response.getReply()
+        )));
+        return response;
+    }
+
+    /**
+     * D3 narrow module route: work-process catalog (create/update work-process master data).
+     * Mirrors handleProductWorkProcessConfigChat — directly calls the tool, no LLM intermediary.
+     * This ensures canvas_work_process_catalog is reachable without being listed in
+     * CANVAS_SYSTEM_PROMPT (where it was previously missing and thus never called via autopilot/plan).
+     */
+    private AIResponse handleWorkProcessCatalogChat(
+            AIRequest request, Map<String, Object> toolContext) throws Exception {
+        ToolExecutor executor = toolRegistry.getExecutor(WORK_PROCESS_CATALOG_TOOL)
+                .orElseThrow(() -> new BusinessException("工具不存在: " + WORK_PROCESS_CATALOG_TOOL));
+
+        Map<String, Object> params = new LinkedHashMap<>();
+        if (request.getParams() != null) {
+            params.putAll(request.getParams());
+        }
+        params.put("message", request.getMessage());
+
+        String argsJson = objectMapper.writeValueAsString(params);
+        ToolCall toolCall = ToolCall.of(
+                "d3-catalog-" + System.currentTimeMillis(), WORK_PROCESS_CATALOG_TOOL, argsJson);
+        String raw = executor.execute(toolCall, toolContext);
+
+        Map<String, Object> toolResponse = objectMapper.readValue(raw, new TypeReference<Map<String, Object>>() {});
+
+        // D3 B-1: surface tool failures — never return a fake success
+        if (!Boolean.TRUE.equals(toolResponse.get("success"))) {
+            String errorMsg = Objects.toString(toolResponse.get("error"), "工序管理工具执行失败，请检查输入后重试");
+            AIResponse errorResponse = new AIResponse();
+            errorResponse.setApplied(false);
+            errorResponse.setReply(errorMsg);
+            errorResponse.setDiffs(List.of());
+            return errorResponse;
+        }
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> data = (Map<String, Object>) toolResponse.getOrDefault("data", Map.of());
+        String replyMsg = Objects.toString(data.getOrDefault("message", "工序操作已完成"), "工序操作已完成");
+
+        AIResponse response = new AIResponse();
+        response.setApplied(true);
+        response.setReply(replyMsg);
+        response.setDiffs(List.of(Map.of(
+                "type", "WORK_PROCESS_CATALOG",
+                "tool", WORK_PROCESS_CATALOG_TOOL,
+                "params", data,
+                "description", replyMsg
         )));
         return response;
     }

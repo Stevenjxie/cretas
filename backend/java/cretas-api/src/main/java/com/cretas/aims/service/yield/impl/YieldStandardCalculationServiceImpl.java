@@ -12,11 +12,12 @@ import org.springframework.transaction.annotation.Transactional;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 @Slf4j
 @Service
@@ -26,8 +27,6 @@ public class YieldStandardCalculationServiceImpl implements YieldStandardCalcula
     private static final int MIN_SAMPLE_COUNT = 3;
     private static final BigDecimal PERCENTILE_20 = new BigDecimal("0.20");
     private static final BigDecimal PERCENTILE_80 = new BigDecimal("0.80");
-    private static final BigDecimal TWO = new BigDecimal("2");
-    private static final BigDecimal SIXTY = new BigDecimal("60");
 
     private final ProductionReportRepository productionReportRepository;
     private final WorkProcessRepository workProcessRepository;
@@ -39,11 +38,17 @@ public class YieldStandardCalculationServiceImpl implements YieldStandardCalcula
         Map<String, List<Map<String, Object>>> rowsByProcess = groupByWorkProcessId(
                 productionReportRepository.findYieldStandardSamples(factoryId));
 
+        // I-3: batch-load all WorkProcess entities in one query to avoid N+1
+        Set<String> workProcessIds = rowsByProcess.keySet();
+        Map<String, WorkProcess> processMap = workProcessRepository
+                .findByFactoryIdAndIdIn(factoryId, new ArrayList<>(workProcessIds))
+                .stream()
+                .collect(Collectors.toMap(WorkProcess::getId, wp -> wp));
+
         for (Map.Entry<String, List<Map<String, Object>>> entry : rowsByProcess.entrySet()) {
             result.incrementProcessed();
             String workProcessId = entry.getKey();
-            WorkProcess process = workProcessRepository.findByFactoryIdAndId(factoryId, workProcessId)
-                    .orElse(null);
+            WorkProcess process = processMap.get(workProcessId);
             if (process == null) {
                 result.incrementFailed();
                 log.warn("[YieldStandardCalculation] factory={} workProcess={} 不存在, skip",
@@ -62,9 +67,11 @@ public class YieldStandardCalculationServiceImpl implements YieldStandardCalcula
                     process.getStandardYieldMin(), standards.yieldMin());
             BigDecimal targetYieldMax = chooseExistingOrCalculated(
                     process.getStandardYieldMax(), standards.yieldMax());
+            // I-1: allow min == max (stable processes like blanching that always hit 0.95)
+            // only reject strictly invalid ranges where min > max
             if (targetYieldMin != null
                     && targetYieldMax != null
-                    && targetYieldMin.compareTo(targetYieldMax) >= 0) {
+                    && targetYieldMin.compareTo(targetYieldMax) > 0) {
                 result.incrementFailed();
                 log.warn("[YieldStandardCalculation] factory={} workProcess={} 推算后区间无效 min={} max={}, skip",
                         factoryId, workProcessId, targetYieldMin, targetYieldMax);
@@ -74,9 +81,8 @@ public class YieldStandardCalculationServiceImpl implements YieldStandardCalcula
             if (fillMissingStandards(process, standards)) {
                 workProcessRepository.save(process);
                 result.incrementUpdated();
-                log.info("[YieldStandardCalculation] factory={} workProcess={} 系统推算 sampleCount={} min={} max={} hourly={}",
-                        factoryId, workProcessId, samples.size(), standards.yieldMin(), standards.yieldMax(),
-                        standards.hourlyRate());
+                log.info("[YieldStandardCalculation] factory={} workProcess={} 系统推算 sampleCount={} min={} max={}",
+                        factoryId, workProcessId, samples.size(), standards.yieldMin(), standards.yieldMax());
             } else {
                 result.incrementSkippedManual();
             }
@@ -102,17 +108,20 @@ public class YieldStandardCalculationServiceImpl implements YieldStandardCalcula
         for (Map<String, Object> row : rows) {
             BigDecimal input = toBig(row.get("input_quantity"));
             BigDecimal output = toBig(row.get("output_quantity"));
-            BigDecimal minutes = toBig(row.get("total_work_minutes"));
-            BigDecimal workers = toBig(row.get("total_workers"));
-            BigDecimal laborCost = toBig(row.get("labor_cost"));
-            if (!isValidSample(input, output, minutes, workers, laborCost)) {
+            // B-1: labor_cost is itself derived from standardHourlyRate at report time
+            // (YieldReportServiceImpl: labor_cost = workers × minutes × standardHourlyRate).
+            // Reverse-computing labor_cost / (workers × hours) just reads back the original
+            // rate — it is a tautology, not new information. Worse, when standardHourlyRate
+            // is null (cold-start), labor_cost is null too, so every sample is filtered out
+            // and the auto-calculation never writes a rate — the exact scenario we are trying
+            // to bootstrap. Solution: yield rate does not depend on labor_cost at all;
+            // we drop the hourly-rate calculation entirely and only compute yieldRate here.
+            if (!isPositive(input) || !isPositive(output)) {
                 continue;
             }
 
             BigDecimal yieldRate = output.divide(input, 8, RoundingMode.HALF_UP);
-            BigDecimal laborHours = minutes.divide(SIXTY, 8, RoundingMode.HALF_UP).multiply(workers);
-            BigDecimal hourlyRate = laborCost.divide(laborHours, 8, RoundingMode.HALF_UP);
-            samples.add(new BatchStandardSample(yieldRate, hourlyRate));
+            samples.add(new BatchStandardSample(yieldRate));
         }
         return samples;
     }
@@ -121,14 +130,11 @@ public class YieldStandardCalculationServiceImpl implements YieldStandardCalcula
         List<BigDecimal> yieldRates = samples.stream()
                 .map(BatchStandardSample::yieldRate)
                 .toList();
-        List<BigDecimal> hourlyRates = samples.stream()
-                .map(BatchStandardSample::hourlyRate)
-                .toList();
 
+        // B-1: hourlyRate is intentionally not calculated here — see toValidSamples comment.
         return new CalculatedStandards(
                 percentile(yieldRates, PERCENTILE_20).setScale(4, RoundingMode.HALF_UP),
-                percentile(yieldRates, PERCENTILE_80).setScale(4, RoundingMode.HALF_UP),
-                median(hourlyRates).setScale(2, RoundingMode.HALF_UP));
+                percentile(yieldRates, PERCENTILE_80).setScale(4, RoundingMode.HALF_UP));
     }
 
     private static BigDecimal chooseExistingOrCalculated(BigDecimal existing, BigDecimal calculated) {
@@ -145,10 +151,13 @@ public class YieldStandardCalculationServiceImpl implements YieldStandardCalcula
             process.setStandardYieldMax(standards.yieldMax());
             changed = true;
         }
-        if (process.getStandardHourlyRate() == null) {
-            process.setStandardHourlyRate(standards.hourlyRate());
-            changed = true;
-        }
+        // B-1: standardHourlyRate is intentionally NOT auto-filled here.
+        // labor_cost in reports is derived from standardHourlyRate at report-write time
+        // (workers × minutes × rate). Computing rate = labor_cost / (workers × hours)
+        // would just read back the original value — a tautology with no new information.
+        // During cold-start (rate is null), labor_cost is also null, so no samples
+        // survive filtering and the auto-calculation can never bootstrap the rate anyway.
+        // standardHourlyRate remains a manual-only field.
         return changed;
     }
 
@@ -177,34 +186,6 @@ public class YieldStandardCalculationServiceImpl implements YieldStandardCalcula
         return lower.add(upper.subtract(lower).multiply(fraction));
     }
 
-    private static BigDecimal median(List<BigDecimal> values) {
-        List<BigDecimal> sorted = values.stream()
-                .filter(Objects::nonNull)
-                .sorted(Comparator.naturalOrder())
-                .toList();
-        if (sorted.isEmpty()) {
-            return BigDecimal.ZERO;
-        }
-        int mid = sorted.size() / 2;
-        if (sorted.size() % 2 == 1) {
-            return sorted.get(mid);
-        }
-        return sorted.get(mid - 1).add(sorted.get(mid)).divide(TWO, 8, RoundingMode.HALF_UP);
-    }
-
-    private static boolean isValidSample(
-            BigDecimal input,
-            BigDecimal output,
-            BigDecimal minutes,
-            BigDecimal workers,
-            BigDecimal laborCost) {
-        return isPositive(input)
-                && isPositive(output)
-                && isPositive(minutes)
-                && isPositive(workers)
-                && isPositive(laborCost);
-    }
-
     private static boolean isPositive(BigDecimal value) {
         return value != null && value.compareTo(BigDecimal.ZERO) > 0;
     }
@@ -226,9 +207,11 @@ public class YieldStandardCalculationServiceImpl implements YieldStandardCalcula
         return value == null ? null : value.toString();
     }
 
-    private record CalculatedStandards(BigDecimal yieldMin, BigDecimal yieldMax, BigDecimal hourlyRate) {
+    private record CalculatedStandards(BigDecimal yieldMin, BigDecimal yieldMax) {
     }
 
-    private record BatchStandardSample(BigDecimal yieldRate, BigDecimal hourlyRate) {
+    // B-1: hourlyRate removed — yield calculation does not depend on labor cost.
+    // standardHourlyRate is a manual-only field (see fillMissingStandards).
+    private record BatchStandardSample(BigDecimal yieldRate) {
     }
 }
