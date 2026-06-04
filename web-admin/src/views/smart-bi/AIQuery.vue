@@ -302,15 +302,7 @@ const RESTAURANT_TIME_FOLLOWUPS: Array<{
     followups: [
       { label: '上个月', question: '上个月外卖占比' },
       { label: '本季度', question: '本季度外卖占比' },
-      { label: '门店对比', question: '各门店外卖占比对比' },
-    ],
-  },
-  {
-    patterns: ['峰值时段', '时段'],
-    followups: [
-      { label: '工作日', question: '工作日峰值时段' },
-      { label: '周末', question: '周末峰值时段' },
-      { label: '门店对比', question: '各门店峰值时段对比' },
+      { label: '堂食外卖', question: '堂食外卖对比' },
     ],
   },
   {
@@ -325,7 +317,7 @@ const RESTAURANT_TIME_FOLLOWUPS: Array<{
     followups: [
       { label: '上个月', question: '上个月优惠券使用情况' },
       { label: '本季度', question: '本季度优惠券使用情况' },
-      { label: '门店对比', question: '各门店优惠券使用对比' },
+      { label: '本月', question: '本月优惠券使用情况' },
     ],
   },
 ];
