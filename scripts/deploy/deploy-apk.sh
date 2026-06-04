@@ -93,12 +93,26 @@ KS_PASS="$(get_prop RELEASE_STORE_PASSWORD)"
 KS_ALIAS="$(get_prop RELEASE_KEY_ALIAS)"
 [ -f "$KS_FILE" ] || die "keystore.properties 指向的 keystore 不存在: $KS_FILE"
 
+# 归一化: 去冒号/空白 + 小写 (keytool 出 E2:C5:.. 大写带冒号; apksigner 出小写无冒号)
+norm_sha() { tr -d ':[:space:]\r\n' | tr 'A-F' 'a-f'; }
 EXPECTED_SHA="$(keytool -list -v -keystore "$KS_FILE" -storepass "$KS_PASS" -alias "$KS_ALIAS" 2>/dev/null \
-  | grep -iE 'SHA256:' | head -1 | sed -E 's/.*SHA256:[[:space:]]*//' | tr -d '\r')"
-APK_SHA="$(keytool -printcert -jarfile "$APK_PATH" 2>/dev/null \
-  | grep -iE 'SHA256:' | head -1 | sed -E 's/.*SHA256:[[:space:]]*//' | tr -d '\r')"
+  | grep -iE 'SHA256:' | head -1 | sed -E 's/.*SHA256:[[:space:]]*//' | norm_sha)"
+# 优先 apksigner (支持 v1/v2/v3 签名方案); 回退 keytool -printcert (仅识别 v1 jar 签名)
+APKSIGNER=""
+for d in "${ANDROID_HOME:-}" "${ANDROID_SDK_ROOT:-}" "$HOME/AppData/Local/Android/Sdk" "$HOME/Android/Sdk"; do
+  [ -n "$d" ] || continue
+  cand="$(ls "$d"/build-tools/*/apksigner* 2>/dev/null | sort -V | tail -1)"
+  [ -n "$cand" ] && { APKSIGNER="$cand"; break; }
+done
+if [ -n "$APKSIGNER" ]; then
+  APK_SHA="$("$APKSIGNER" verify --print-certs "$APK_PATH" 2>/dev/null \
+    | grep -iE 'certificate SHA-256 digest' | head -1 | sed -E 's/.*digest:[[:space:]]*//' | norm_sha)"
+else
+  APK_SHA="$(keytool -printcert -jarfile "$APK_PATH" 2>/dev/null \
+    | grep -iE 'SHA256:' | head -1 | sed -E 's/.*SHA256:[[:space:]]*//' | norm_sha)"
+fi
 [ -n "$EXPECTED_SHA" ] || die "无法从 keystore 读取 SHA-256 (密码错误?)"
-[ -n "$APK_SHA" ] || die "无法从 APK 读取签名 SHA-256 (未签名? 仅 v2+ 无 v1?) — keytool -printcert -jarfile 失败"
+[ -n "$APK_SHA" ] || die "无法从 APK 读取签名 SHA-256 (未签名?) — apksigner/keytool 均失败"
 log "🔐 签名校验:"
 log "   release key : $EXPECTED_SHA"
 log "   APK signer  : $APK_SHA"
