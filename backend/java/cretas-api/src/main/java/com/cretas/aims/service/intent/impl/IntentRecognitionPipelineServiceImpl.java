@@ -523,6 +523,15 @@ public class IntentRecognitionPipelineServiceImpl implements IntentRecognitionPi
                     if (preprocessedQuery != null && preprocessedQuery.getFinalQuery() != null) {
                         processedInput = preprocessedQuery.getFinalQuery();
                     }
+                    // X1 Part B — continuation-intent inheritance. ONLY runs inside this
+                    // sessionId != null block, so standalone (sessionless) queries — including every
+                    // IntentParityTest / IntentGoldenAssertionTest case — are completely unaffected.
+                    String augmented = maybeAugmentContinuation(processedInput, context);
+                    if (augmented != null) {
+                        log.info("[X1-Continuation] inherit prior intent: lastIntent={}, '{}' -> '{}'",
+                                context.getLastIntentCode(), processedInput, augmented);
+                        processedInput = augmented;
+                    }
                 }
             } catch (Exception e) {
                 log.warn("Query preprocessing failed, using original input", e);
@@ -3766,6 +3775,108 @@ public class IntentRecognitionPipelineServiceImpl implements IntentRecognitionPi
         }
 
         return userInput;
+    }
+
+    // ==================== X1 Part B: continuation-intent inheritance ====================
+
+    /**
+     * lastIntentCode → 一个「短语表里存在」的代表短语。续接增强时把它接在时间词后面, 复用既有
+     * 短语匹配管线 (contains 匹配, 见 IntentKnowledgeBase.doMatchPhrase), 不引入新匹配路径。
+     *
+     * <p>只收录有 gold 执行器、续接语义明确的餐饮分析意图。刻意不放写意图/审批意图 —— 续接增强
+     * 永远不应把一个孤立的时间词放大成写操作。</p>
+     */
+    private static final Map<String, String> CONTINUATION_CANONICAL_PHRASE = Map.of(
+            "RESTAURANT_REVENUE_TREND", "收入趋势",
+            "RESTAURANT_DAILY_REVENUE", "今日营收",
+            "RESTAURANT_STORE_REVENUE_RANK", "门店营收排行",
+            "RESTAURANT_BESTSELLER_QUERY", "畅销菜品",
+            "RESTAURANT_ORDER_STATISTICS", "订单统计"
+    );
+
+    /**
+     * 续接判定: 出现这些「领域名词」即视为「自带主题的新问题」, 不增强 (即便在会话中)。
+     * 与 task spec 一致 —— 菜/门店/营收/评价/外卖/客单价/优惠券 等。
+     */
+    private static final Pattern CONTINUATION_DOMAIN_NOUN = Pattern.compile(
+            "菜|品|门店|店铺|店|营收|营业|收入|流水|业绩|评价|点评|外卖|堂食|客单价|人均|优惠券|订单|供应商|库存|成本|毛利|利润|排行|排名|对比");
+
+    /**
+     * 纯时间续接: 整句剥掉尾部语气词后, 必须「完全」是一个时间修饰词 (无其它内容)。
+     * 锚定 ^...$ 整体匹配, 防止 "上个月卖得最好的菜" 这类含主题的句子误判。
+     */
+    private static final Pattern CONTINUATION_BARE_TIME = Pattern.compile(
+            "^(?:" +
+            "这个月|上个月|本月|当月|上月" +
+            "|本季度|上季度|第[一二三四1-4]季度" +
+            "|本星期|这周|本周|上星期|上周" +
+            "|本年度|本年|今年|去年|前年" +
+            "|最近\\d{1,3}\\s*[天日周月年]|近\\d{1,3}\\s*[天日周月年]" +
+            "|\\d{4}\\s*[年/\\-]\\s*(?:1[0-2]|0?[1-9])\\s*月?" +
+            "|\\d{4}\\s*年" +
+            ")的?$");
+
+    /** 尾部语气/疑问词 —— "上个月呢" / "它的趋势怎么样" / "那本月如何" 的尾巴。 */
+    private static final Pattern CONTINUATION_TRAILING = Pattern.compile("(?:呢|怎么样|怎样|如何|啊|呀)[?？!！。.]*$");
+
+    /** 纯指代续接 (coref 未消解时的兜底): 整句就是一个指代词。 */
+    private static final Pattern CONTINUATION_BARE_PRONOUN = Pattern.compile("^(?:它|他们|这个|那个|这|那|该)的?$");
+
+    /**
+     * X1 Part B — 续接意图继承。当本轮是「续接型」短查询 (纯时间修饰 / 纯指代 / 纯语气词) 且上一轮
+     * 有确定的餐饮分析意图时, 把上一轮意图的代表短语接到当前时间词后, 让既有短语管线把它路由回
+     * 同一意图域。否则返回 null (不增强)。
+     *
+     * <p><b>安全</b>: 调用点已包在 {@code sessionId != null} 内, 故无会话的独立查询 (parity/golden)
+     * 永不触发。本方法再叠加 4 道闸: (1) lastIntentCode 必须在白名单 canonical map; (2) 长度 ≤ 8;
+     * (3) 不含任何领域名词 (含 → 视为自带主题的新问题); (4) 剥掉尾部语气词后必须「完全」是时间词或
+     * 指代词或空。任一不满足即返回 null。纯函数, 仅读入参, 便于单测。</p>
+     *
+     * @param processedInput coref + preprocess 之后的当前查询
+     * @param context        会话上下文 (携带 lastIntentCode)
+     * @return 增强后的查询字符串; 若不该增强则返回 null
+     */
+    String maybeAugmentContinuation(String processedInput, ConversationContext context) {
+        if (processedInput == null || context == null) {
+            return null;
+        }
+        String lastIntent = context.getLastIntentCode();
+        if (lastIntent == null) {
+            return null;
+        }
+        String canonicalPhrase = CONTINUATION_CANONICAL_PHRASE.get(lastIntent);
+        if (canonicalPhrase == null) {
+            return null; // 上一轮意图不在白名单 → 不继承 (保守)
+        }
+
+        String q = processedInput.trim();
+        // 闸 2: 续接句必须短 (一个时间词 + 语气词最多 ~8 字)。
+        if (q.isEmpty() || q.length() > 8) {
+            return null;
+        }
+        // 闸 3: 已带领域名词 → 自带主题的新问题, 不增强。
+        if (CONTINUATION_DOMAIN_NOUN.matcher(q).find()) {
+            return null;
+        }
+
+        // 闸 4: 剥掉尾部语气/疑问词, 剩余必须「完全」是时间词 / 指代词 / 空。
+        String core = CONTINUATION_TRAILING.matcher(q).replaceFirst("").trim();
+
+        // case (a) 纯语气词: "呢" / "怎么样" —— core 为空 → 继承意图, 无时间前缀。
+        if (core.isEmpty()) {
+            return canonicalPhrase;
+        }
+        // case (b) 纯时间修饰: "上个月" / "上个月呢" —— core 完全是时间词 → 时间词 + 代表短语。
+        if (CONTINUATION_BARE_TIME.matcher(core).matches()) {
+            // 去掉时间词尾部可能的助词「的」, 拼接更自然 (不影响 contains 匹配)。
+            String timePrefix = core.endsWith("的") ? core.substring(0, core.length() - 1) : core;
+            return timePrefix + canonicalPhrase;
+        }
+        // case (c) 纯指代: coref 没消解掉的 "它" / "这个" —— 继承意图, 无时间前缀。
+        if (CONTINUATION_BARE_PRONOUN.matcher(core).matches()) {
+            return canonicalPhrase;
+        }
+        return null; // core 含其它内容 (e.g. 动词/未知名词) → 不增强, 交给常规管线。
     }
 
     /**
