@@ -14,3 +14,9 @@ local.properties
 
 # Bundle artifacts
 *.jsbundle
+
+# Release signing — NEVER commit. Keystore lives outside the repo;
+# keystore.properties holds its absolute path + passwords.
+keystore.properties
+release.keystore
+*.jks
