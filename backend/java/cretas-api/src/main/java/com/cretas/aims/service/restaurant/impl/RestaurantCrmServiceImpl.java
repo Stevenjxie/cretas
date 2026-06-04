@@ -316,8 +316,8 @@ public class RestaurantCrmServiceImpl implements RestaurantCrmService {
         return g != null && StringUtils.hasText(g.getName()) ? g.getName() : "未具名客户";
     }
 
-    /** 手机号脱敏为前 3 后 4（如 138****1234）。 */
-    static String maskPhone(String phone) {
+    /** 手机号脱敏为前 3 后 4（如 138****1234）。public static 供 controller PII 脱敏复用。 */
+    public static String maskPhone(String phone) {
         if (phone == null) return null;
         String p = phone.trim();
         if (p.length() <= 4) return p;
