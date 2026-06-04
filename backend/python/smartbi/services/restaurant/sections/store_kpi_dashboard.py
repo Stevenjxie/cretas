@@ -259,12 +259,14 @@ async def compute_store_kpi_dashboard(
     target_value = "未设目标"
     config_exists = False
     needs_config = True
-    achieved = await _daily_achievement_summary(
-        pool, factory_id, date_range, kpi_kind="revenue", level="month",
-    ) if (date_range[0] is not None and date_range[1] is not None) else _empty_achievement()
-    # For all-history (open range) daily_achievement_summary requires bounded
-    # dates; if open, fall back to the factory's data window via hierarchy.
-    if date_range[0] is None or date_range[1] is None:
+    # daily_achievement_summary requires bounded dates. For a bounded range we
+    # call it directly; for all-history (open range) we resolve the factory's
+    # data window from agg_daily first (_achievement_all_history).
+    if date_range[0] is not None and date_range[1] is not None:
+        achieved = await _daily_achievement_summary(
+            pool, factory_id, date_range, kpi_kind="revenue", level="month",
+        )
+    else:
         achieved = await _achievement_all_history(pool, factory_id)
 
     points = achieved.get("points", []) if achieved else []

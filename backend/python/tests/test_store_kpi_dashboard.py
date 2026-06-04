@@ -272,6 +272,36 @@ def test_target_default_thresholds_no_alert_config(monkeypatch):
     assert tc.get("configExists") is False
 
 
+def test_target_all_history_open_range(monkeypatch):
+    # Open range (None, None) → compute resolves the factory data window via
+    # _achievement_all_history. Patch that seam to assert it's used (not the
+    # bounded _daily_achievement_summary path) and produces a rate.
+    _patch_gold(monkeypatch)
+    import smartbi.services.restaurant.sections.store_kpi_dashboard as mod
+
+    called = {"all_history": False}
+
+    async def fake_all_history(pool, factory_id):
+        called["all_history"] = True
+        return {
+            "points": [
+                {"period_key": "2025-01", "target": 800_000.0, "actual": 1_000_000.0,
+                 "achievement_rate": 1.25, "data_missing": False,
+                 "period_complete": True, "in_progress": False},
+            ],
+            "period_without_target": [],
+        }
+    monkeypatch.setattr(mod, "_achievement_all_history", fake_all_history)
+
+    data = asyncio.run(compute_store_kpi_dashboard(
+        pool=object(), factory_id="F-TEST", date_range=(None, None),
+        role="factory_super_admin", store_name="测试店",
+    ))
+    assert called["all_history"] is True
+    kpis = {k["key"]: k for k in data["kpis"]}
+    assert kpis["target_completion"]["rawValue"] == pytest.approx(1_000_000 / 800_000, rel=1e-3)
+
+
 def test_target_custom_alert_config(monkeypatch):
     # warn 0.95 crit 0.85; achievement 0.90 → between → WARNING
     _patch_gold(monkeypatch, achievement={
