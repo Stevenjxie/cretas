@@ -102,7 +102,7 @@ export default function ShipmentManagementScreen() {
         }),
         customerApiClient.getCustomers({
           factoryId: user?.factoryId,
-          page: 0,
+          page: 1, // 后端客户列表是 1-based 分页 (page>=1), 传 0 会 400 "页码必须大于0"
           size: 100,
         }),
         shipmentApiClient.getShipmentStats(user?.factoryId),
