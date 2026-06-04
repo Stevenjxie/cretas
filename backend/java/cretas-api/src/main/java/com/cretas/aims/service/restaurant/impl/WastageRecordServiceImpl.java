@@ -1,9 +1,13 @@
 package com.cretas.aims.service.restaurant.impl;
 
 import com.cretas.aims.dto.common.PageResponse;
+import com.cretas.aims.dto.restaurant.WastageAccountability;
+import com.cretas.aims.entity.User;
+import com.cretas.aims.entity.enums.WastageSection;
 import com.cretas.aims.entity.restaurant.WastageRecord;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.exception.ResourceNotFoundException;
+import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.repository.restaurant.WastageRecordRepository;
 import com.cretas.aims.service.restaurant.WastageRecordService;
 import org.slf4j.Logger;
@@ -19,6 +23,7 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
+import java.util.stream.Collectors;
 
 @Service
 public class WastageRecordServiceImpl implements WastageRecordService {
@@ -26,9 +31,12 @@ public class WastageRecordServiceImpl implements WastageRecordService {
     private static final Logger log = LoggerFactory.getLogger(WastageRecordServiceImpl.class);
 
     private final WastageRecordRepository wastageRecordRepository;
+    private final UserRepository userRepository;
 
-    public WastageRecordServiceImpl(WastageRecordRepository wastageRecordRepository) {
+    public WastageRecordServiceImpl(WastageRecordRepository wastageRecordRepository,
+                                    UserRepository userRepository) {
         this.wastageRecordRepository = wastageRecordRepository;
+        this.userRepository = userRepository;
     }
 
     @Override
@@ -156,6 +164,74 @@ public class WastageRecordServiceImpl implements WastageRecordService {
         result.put("period", period);
 
         return result;
+    }
+
+    @Override
+    public WastageAccountability getAccountability(String factoryId, LocalDate startDate, LocalDate endDate) {
+        List<Object[]> opRows = wastageRecordRepository.getStatisticsByOperator(factoryId, startDate, endDate);
+        List<Object[]> secRows = wastageRecordRepository.getStatisticsBySection(factoryId, startDate, endDate);
+        long totalCount = wastageRecordRepository.countApprovedByDateRange(factoryId, startDate, endDate);
+
+        // ---- 责任人姓名回填 (一次批量查) ----
+        Set<Long> operatorIds = opRows.stream()
+                .map(r -> (Long) r[0])
+                .filter(Objects::nonNull)
+                .collect(Collectors.toSet());
+        Map<Long, String> nameMap = new HashMap<>();
+        if (!operatorIds.isEmpty()) {
+            for (User u : userRepository.findByIdIn(operatorIds)) {
+                nameMap.put(u.getId(), u.getFullName());
+            }
+        }
+
+        BigDecimal totalCost = BigDecimal.ZERO;
+        List<WastageAccountability.ByOperator> byOperator = new ArrayList<>();
+        for (Object[] r : opRows) {
+            Long operatorId = (Long) r[0];
+            Long count = toLong(r[1]);
+            BigDecimal qty = toBigDecimal(r[2]);
+            BigDecimal cost = toBigDecimal(r[3]);
+            totalCost = totalCost.add(cost);
+            String name = operatorId == null ? "未指定"
+                    : nameMap.getOrDefault(operatorId, "用户#" + operatorId);
+            byOperator.add(new WastageAccountability.ByOperator(operatorId, name, count, qty, cost));
+        }
+
+        List<WastageAccountability.BySection> bySection = new ArrayList<>();
+        for (Object[] r : secRows) {
+            String sectionCode = (String) r[0];
+            Long count = toLong(r[1]);
+            BigDecimal qty = toBigDecimal(r[2]);
+            BigDecimal cost = toBigDecimal(r[3]);
+            String name = sectionCode == null ? "未指定" : WastageSection.labelOf(sectionCode);
+            bySection.add(new WastageAccountability.BySection(sectionCode, name, count, qty, cost));
+        }
+
+        WastageAccountability result = new WastageAccountability();
+        result.setStartDate(startDate.toString());
+        result.setEndDate(endDate.toString());
+        result.setTotalCost(totalCost);
+        result.setTotalCount(totalCount);
+        result.setByOperator(byOperator);
+        result.setBySection(bySection);
+        return result;
+    }
+
+    private static Long toLong(Object o) {
+        if (o == null) {
+            return 0L;
+        }
+        return ((Number) o).longValue();
+    }
+
+    private static BigDecimal toBigDecimal(Object o) {
+        if (o == null) {
+            return BigDecimal.ZERO;
+        }
+        if (o instanceof BigDecimal) {
+            return (BigDecimal) o;
+        }
+        return new BigDecimal(o.toString());
     }
 
     private String generateWastageNumber(String factoryId, LocalDate date) {

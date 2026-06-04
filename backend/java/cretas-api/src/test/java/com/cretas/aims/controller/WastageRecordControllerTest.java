@@ -46,6 +46,7 @@ import static org.mockito.Mockito.when;
 class WastageRecordControllerTest {
 
     @Mock WastageRecordRepository wastageRepository;
+    @Mock com.cretas.aims.service.restaurant.WastageRecordService wastageRecordService;
     @InjectMocks WastageRecordController controller;
 
     // ==================== AUD-5 B-A3: create.unit > 20 chars ====================
@@ -93,6 +94,54 @@ class WastageRecordControllerTest {
     void testNullUnitAccepted() {
         WastageRecord record = newBaseRecord();
         record.setUnit(null);
+
+        when(wastageRepository.countByFactoryIdAndDate(any(), any())).thenReturn(0L);
+        when(wastageRepository.save(any(WastageRecord.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        ApiResponse<WastageRecord> resp = controller.create("F001", 1L, record);
+        assertNotNull(resp);
+        verify(wastageRepository).save(any(WastageRecord.class));
+    }
+
+    // ==================== Wave2: section_code 校验 (防呆 Rule 3) ====================
+
+    @Test
+    @DisplayName("Wave2: create.sectionCode 非法值 → 400 with hintTarget=sectionCode (非脏数据落库)")
+    void testInvalidSectionCodeRejected() {
+        WastageRecord record = newBaseRecord();
+        record.setSectionCode("KITCHEN");   // not in enum
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> controller.create("F001", 1L, record));
+
+        assertEquals(400, ex.getCode());
+        assertTrue(ex.getMessage().contains("档口"), "message must reference 档口: " + ex.getMessage());
+        assertEquals("sectionCode", ex.getHintTarget(), "4-in-1 UX (d): hintTarget = sectionCode");
+        verify(wastageRepository, never()).save(any(WastageRecord.class));
+    }
+
+    @Test
+    @DisplayName("Wave2: create.sectionCode 合法值 (SEAFOOD) + operatorId 接受并落库")
+    void testValidSectionCodeAndOperatorAccepted() {
+        WastageRecord record = newBaseRecord();
+        record.setSectionCode("SEAFOOD");
+        record.setOperatorId(42L);
+
+        when(wastageRepository.countByFactoryIdAndDate(any(), any())).thenReturn(0L);
+        when(wastageRepository.save(any(WastageRecord.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        ApiResponse<WastageRecord> resp = controller.create("F001", 1L, record);
+        assertNotNull(resp);
+        assertEquals("SEAFOOD", resp.getData().getSectionCode());
+        assertEquals(42L, resp.getData().getOperatorId());
+        verify(wastageRepository).save(any(WastageRecord.class));
+    }
+
+    @Test
+    @DisplayName("Wave2: create.sectionCode null tolerated (档口可选)")
+    void testNullSectionCodeAccepted() {
+        WastageRecord record = newBaseRecord();
+        record.setSectionCode(null);
 
         when(wastageRepository.countByFactoryIdAndDate(any(), any())).thenReturn(0L);
         when(wastageRepository.save(any(WastageRecord.class))).thenAnswer(inv -> inv.getArgument(0));

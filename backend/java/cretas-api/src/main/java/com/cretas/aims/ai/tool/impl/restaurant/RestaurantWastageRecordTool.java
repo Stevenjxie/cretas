@@ -79,6 +79,18 @@ public class RestaurantWastageRecordTool extends AbstractBusinessTool {
         materialBatchId.put("description", "关联的食材批次ID（可选）");
         properties.put("materialBatchId", materialBatchId);
 
+        // Wave2 损耗按人/档口责任制
+        Map<String, Object> operatorId = new HashMap<>();
+        operatorId.put("type", "integer");
+        operatorId.put("description", "责任人用户ID（可选）。损耗发生时的操作责任人，用于按人归因。");
+        properties.put("operatorId", operatorId);
+
+        Map<String, Object> sectionCode = new HashMap<>();
+        sectionCode.put("type", "string");
+        sectionCode.put("description", "档口（可选）：SEAFOOD(海鲜)、COLD_DISH(冷菜)、HOT_DISH(热菜)、FRONT_HOUSE(前厅)、OTHER(其他)");
+        sectionCode.put("enum", com.cretas.aims.entity.enums.WastageSection.codes());
+        properties.put("sectionCode", sectionCode);
+
         schema.put("properties", properties);
         schema.put("required", List.of("rawMaterialTypeId", "quantity"));
 
@@ -149,6 +161,22 @@ public class RestaurantWastageRecordTool extends AbstractBusinessTool {
             record.setMaterialBatchId(materialBatchId);
         }
 
+        // Wave2 损耗按人/档口责任制
+        Long operatorId = getLong(params, "operatorId");
+        if (operatorId != null) {
+            record.setOperatorId(operatorId);
+        }
+        String sectionStr = getString(params, "sectionCode");
+        if (sectionStr != null && !sectionStr.trim().isEmpty()) {
+            com.cretas.aims.entity.enums.WastageSection section =
+                    com.cretas.aims.entity.enums.WastageSection.fromCode(sectionStr);
+            if (section == null) {
+                throw new IllegalArgumentException("无效的档口编码: " + sectionStr
+                        + "（可选: " + String.join(" / ", com.cretas.aims.entity.enums.WastageSection.codes()) + "）");
+            }
+            record.setSectionCode(section.name());
+        }
+
         wastageRecordRepository.save(record);
         log.info("记录损耗成功: factoryId={}, wastageNumber={}, id={}", factoryId, wastageNumber, record.getId());
 
@@ -158,6 +186,12 @@ public class RestaurantWastageRecordTool extends AbstractBusinessTool {
         result.put("食材ID", rawMaterialTypeId);
         result.put("数量", quantity);
         result.put("类型", wastageType.name());
+        if (record.getSectionCode() != null) {
+            result.put("档口", com.cretas.aims.entity.enums.WastageSection.labelOf(record.getSectionCode()));
+        }
+        if (record.getOperatorId() != null) {
+            result.put("责任人ID", record.getOperatorId());
+        }
         result.put("状态", "草稿");
         result.put("下一步", "损耗记录已创建（草稿），提交后由管理员审批，审批通过将自动扣减库存。");
         result.put("message", String.format("损耗记录「%s」已创建（%s，数量 %s），待提交审批。",
@@ -187,7 +221,9 @@ public class RestaurantWastageRecordTool extends AbstractBusinessTool {
             "type", "损耗类型",
             "reason", "损耗原因",
             "unit", "单位",
-            "materialBatchId", "食材批次ID"
+            "materialBatchId", "食材批次ID",
+            "operatorId", "责任人ID",
+            "sectionCode", "档口"
         );
         return displayNames.getOrDefault(paramName, paramName);
     }

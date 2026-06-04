@@ -2,10 +2,12 @@ package com.cretas.aims.controller.restaurant;
 
 import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.annotation.RequirePermission;
+import com.cretas.aims.dto.restaurant.WastageAccountability;
 import com.cretas.aims.entity.restaurant.WastageRecord;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.exception.ResourceNotFoundException;
 import com.cretas.aims.repository.restaurant.WastageRecordRepository;
+import com.cretas.aims.service.restaurant.WastageRecordService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -39,6 +41,7 @@ import com.cretas.aims.annotation.RequireModule;
 public class WastageRecordController {
 
     private final WastageRecordRepository wastageRepository;
+    private final WastageRecordService wastageRecordService;
 
     /**
      * AUD-5 B-A3 sister sweep batch 4b (edge audit 2026-05-20): explicit length caps mirror PG
@@ -253,6 +256,27 @@ public class WastageRecordController {
         return ApiResponse.success(result);
     }
 
+    // ==================== 责任制汇总 (Wave2 损耗按人/档口) ====================
+
+    /**
+     * 损耗责任制汇总：按责任人 + 档口聚合 APPROVED 损耗。
+     *
+     * <p>兑现邓总诉求："今天损耗明天屌你" / "同样 1 万营业额哪个档口哪个人成本涨了"。
+     * 与 {@link #statistics} 同 RBAC 模型：金额敏感，整体门控 price/finance，
+     * 无价权角色无法调用（R6 sibling sweep 防泄露）。</p>
+     */
+    @RequirePermission({"procurement:price:view", "finance:read", "finance:read_write"})
+    @GetMapping("/accountability")
+    @Operation(summary = "损耗责任制汇总", description = "按责任人和档口聚合损耗金额/数量/记录数，支持日期范围")
+    public ApiResponse<WastageAccountability> accountability(
+            @PathVariable String factoryId,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate startDate,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate endDate) {
+        LocalDate start = startDate != null ? startDate : LocalDate.now().withDayOfMonth(1);
+        LocalDate end = endDate != null ? endDate : LocalDate.now();
+        return ApiResponse.success(wastageRecordService.getAccountability(factoryId, start, end));
+    }
+
     // ==================== Boundary validators (AUD-5 B-A3 sister sweep batch 4b) ====================
 
     /**
@@ -276,6 +300,25 @@ public class WastageRecordController {
                     .withHint("请使用更短的计量单位 (如 kg / 箱 / 件)")
                     .withSeverity("warning")
                     .withHintTarget("unit");
+        }
+
+        // Wave2: section_code 必须是合法档口枚举 (防呆 Rule 3 — 约束选择)。
+        // 容忍 null/空 (档口可选)，非法值给具体 400 而非脏数据落库。
+        String section = record.getSectionCode();
+        if (section != null && !section.trim().isEmpty()) {
+            com.cretas.aims.entity.enums.WastageSection parsed =
+                    com.cretas.aims.entity.enums.WastageSection.fromCode(section);
+            if (parsed == null) {
+                throw new BusinessException(400,
+                        "无效的档口编码: " + section)
+                        .withHint("可选: " + String.join(" / ", com.cretas.aims.entity.enums.WastageSection.codes()))
+                        .withSeverity("warning")
+                        .withHintTarget("sectionCode");
+            }
+            // 规范化为枚举标准 code, 避免大小写差异 (seafood vs SEAFOOD) 导致
+            // getStatisticsBySection 的 GROUP BY w.sectionCode 把同一档口拆成两行。
+            // 与 AI 工具路径 (RestaurantWastageRecordTool) 的归一行为一致。
+            record.setSectionCode(parsed.name());
         }
     }
 }

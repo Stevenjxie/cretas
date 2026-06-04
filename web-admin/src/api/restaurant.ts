@@ -93,6 +93,15 @@ export const rejectWastage = (factoryId: string, id: string, data: { reason: str
 export const getWastageStatistics = (factoryId: string, params?: Record<string, unknown>) =>
   get(`/${factoryId}/restaurant/wastage/statistics`, { params });
 
+// Wave2 损耗责任制汇总（按责任人 + 档口）
+export const getWastageAccountability = (factoryId: string, params?: { startDate?: string; endDate?: string }) =>
+  get(`/${factoryId}/restaurant/wastage/accountability`, { params });
+
+// Wave2: 责任人下拉（工厂员工列表，dropdown 选择责任人，非自由文本 — 防呆 Rule 3）
+export const getFactoryUsersForSelect = (factoryId: string) =>
+  get<{ content?: { id: number; username: string; realName?: string }[] } | { id: number; username: string; realName?: string }[]>(
+    `/${factoryId}/users`, { params: { size: 500 } });
+
 // ==================== 基础数据 (选择器用) ====================
 
 export const getProductTypesActive = (factoryId: string) =>
