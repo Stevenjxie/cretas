@@ -3,9 +3,11 @@ package com.cretas.aims.controller.restaurant;
 import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.annotation.RequirePermission;
 import com.cretas.aims.entity.restaurant.Recipe;
+import com.cretas.aims.event.RecipeSavedEvent;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.exception.ResourceNotFoundException;
 import com.cretas.aims.repository.restaurant.RecipeRepository;
+import org.springframework.context.ApplicationEventPublisher;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -36,6 +38,7 @@ import com.cretas.aims.annotation.RequireModule;
 public class RecipeController {
 
     private final RecipeRepository recipeRepository;
+    private final ApplicationEventPublisher eventPublisher;
 
     // ==================== 列表查询 ====================
 
@@ -98,6 +101,8 @@ public class RecipeController {
             recipe.setIsActive(true);
         }
         Recipe saved = recipeRepository.save(recipe);
+        // #57: 配方变更 → 异步触发该菜品成本缓存重算 (REQUIRES_NEW 隔离, fail-soft)
+        eventPublisher.publishEvent(new RecipeSavedEvent(this, factoryId, saved.getProductTypeId(), saved.getId()));
         return ApiResponse.success("配方创建成功", saved);
     }
 
@@ -120,6 +125,8 @@ public class RecipeController {
         existing.setNotes(recipe.getNotes());
         existing.setIsActive(recipe.getIsActive());
         Recipe updated = recipeRepository.save(existing);
+        // #57: 配方变更 → 异步触发该菜品成本缓存重算 (REQUIRES_NEW 隔离, fail-soft)
+        eventPublisher.publishEvent(new RecipeSavedEvent(this, factoryId, updated.getProductTypeId(), updated.getId()));
         return ApiResponse.success("配方更新成功", updated);
     }
 

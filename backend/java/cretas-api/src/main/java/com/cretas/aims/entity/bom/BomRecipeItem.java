@@ -2,6 +2,7 @@ package com.cretas.aims.entity.bom;
 
 import com.cretas.aims.entity.BaseEntity;
 import com.cretas.aims.security.PriceSensitive;
+import com.cretas.aims.service.shared.CostRollupUtil;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import jakarta.persistence.*;
 import lombok.*;
@@ -118,26 +119,30 @@ public class BomRecipeItem extends BaseEntity {
      * {@code actualQuantity = standardQuantity / (yieldRate / 100)}, HALF_UP scale 6.
      *
      * <p>{@link #yieldRate} 为 null 或 0 时透传 standardQuantity (无损耗).
+     *
+     * <p>#57: math delegated to {@link CostRollupUtil#calcActualQuantity}
+     * (single source of truth shared with restaurant dish-cost). The {@code yieldRate}
+     * (percent 0–100) is normalised to a scale-6 fraction BEFORE the call so the
+     * rounding stays byte-identical to the historical two-step formula.
      */
     @Transient
     public BigDecimal calculateActualQuantity() {
         if (yieldRate == null || yieldRate.compareTo(BigDecimal.ZERO) == 0) {
             return standardQuantity;
         }
-        BigDecimal ratio = yieldRate.divide(new BigDecimal("100"), 6, RoundingMode.HALF_UP);
-        return standardQuantity.divide(ratio, 6, RoundingMode.HALF_UP);
+        BigDecimal fraction = yieldRate.divide(new BigDecimal("100"), 6, RoundingMode.HALF_UP);
+        return CostRollupUtil.calcActualQuantity(standardQuantity, fraction);
     }
 
     /**
      * 单项成本 (公式: actualQuantity × unitPrice), HALF_UP scale 4.
      * unitPrice 为 null 时 (RBAC strip 后) 返 null (而非 0), 避免误导.
+     *
+     * <p>#57: math delegated to {@link CostRollupUtil#calcItemCost}.
      */
     @Transient
     @PriceSensitive
     public BigDecimal computeItemCost() {
-        if (unitPrice == null) return null;
-        BigDecimal actual = calculateActualQuantity();
-        if (actual == null) return null;
-        return actual.multiply(unitPrice).setScale(4, RoundingMode.HALF_UP);
+        return CostRollupUtil.calcItemCost(calculateActualQuantity(), unitPrice);
     }
 }

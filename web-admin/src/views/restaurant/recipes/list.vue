@@ -108,6 +108,7 @@
         <el-table-column label="操作" width="180" fixed="right" align="center">
           <template #default="{ row }">
             <el-button type="primary" link size="small" @click="showDetail(row)">查看</el-button>
+            <el-button type="success" link size="small" @click="openCostCard(row.productTypeId)">成本卡</el-button>
             <el-button v-if="canWrite" type="primary" link size="small" @click="handleEdit(row)">编辑</el-button>
             <el-button v-if="canWrite && row.isActive" type="warning" link size="small" @click="handleDeactivate(row)">停用</el-button>
             <el-button v-if="canWrite && !row.isActive" type="success" link size="small" @click="handleActivate(row)">启用</el-button>
@@ -422,6 +423,105 @@
         </el-table>
       </div>
     </el-drawer>
+
+    <!-- #57: 成本卡 drawer (出菜反推) -->
+    <el-drawer v-model="costCardDrawer" title="菜品成本卡" size="560px" direction="rtl">
+      <div v-loading="costCardLoading">
+        <!-- 防呆 Rule 2: dish header (品名 + 编号 + 配方行数 + 更新时间) -->
+        <div v-if="costCard" class="cost-card-header">
+          <div class="cc-title">{{ costCard.productName }}</div>
+          <div class="cc-sub">
+            编号 {{ costCard.productTypeId }} · 配方 {{ costCard.recipeLineCount ?? 0 }} 种食材
+            <span v-if="costCard.recipeUpdatedAt">· 更新 {{ new Date(costCard.recipeUpdatedAt).toLocaleDateString('zh-CN') }}</span>
+          </div>
+        </div>
+
+        <!-- 防呆 Rule 1: pre-show missing-price warning (don't block partial) -->
+        <el-alert
+          v-if="costCard && costCard.hasMissingPrices"
+          type="warning"
+          :closable="false"
+          show-icon
+          style="margin: 10px 0"
+        >
+          <template #title>
+            部分食材未配单价，食材总成本不完整。
+            <el-link type="primary" href="/warehouse/material-types" :underline="false" style="vertical-align: baseline">
+              去原料管理补充单价
+            </el-link>
+          </template>
+        </el-alert>
+
+        <!-- portions input (防呆 Rule 1: max 9999, live scaling) -->
+        <div v-if="costCard" class="cc-portions">
+          <span>份数</span>
+          <el-input-number
+            v-model="costCardPortions"
+            :min="1"
+            :max="9999"
+            :step="1"
+            size="small"
+            @change="reloadCostCard"
+          />
+          <span class="cc-portions-hint">改份数后成本与售价按份数实时缩放</span>
+        </div>
+
+        <!-- summary KPIs (cost fields behind canViewPrice) -->
+        <el-descriptions v-if="costCard" :column="1" border style="margin: 10px 0">
+          <el-descriptions-item v-if="canViewPrice" label="食材总成本">
+            <span v-if="costCard.totalIngredientCost != null">¥{{ costCard.totalIngredientCost }}</span>
+            <span v-else style="color: var(--el-color-warning)">不完整 (部分食材缺单价)</span>
+          </el-descriptions-item>
+          <el-descriptions-item v-if="canViewPrice" label="售价">
+            <span v-if="costCard.sellPrice != null">¥{{ costCard.sellPrice }}</span>
+            <span v-else style="color: #909399">未设售价</span>
+          </el-descriptions-item>
+          <el-descriptions-item label="毛利率">
+            <el-tag v-if="costCard.grossMargin != null" :type="costCard.grossMargin >= 0.5 ? 'success' : 'warning'">
+              {{ (costCard.grossMargin * 100).toFixed(1) }}%
+            </el-tag>
+            <span v-else style="color: #909399">暂不可计 (缺成本或售价)</span>
+          </el-descriptions-item>
+        </el-descriptions>
+
+        <!-- ingredient breakdown -->
+        <el-table v-if="costCard && costCard.ingredients" :data="costCard.ingredients" size="small" border>
+          <el-table-column label="食材" prop="materialName" min-width="110" show-overflow-tooltip>
+            <template #default="{ row }">{{ row.materialName || row.rawMaterialTypeId }}</template>
+          </el-table-column>
+          <el-table-column label="标准用量" width="100" align="right">
+            <template #default="{ row }">{{ row.standardQty }} {{ row.unit }}</template>
+          </el-table-column>
+          <el-table-column label="净料率" width="80" align="center">
+            <template #default="{ row }">{{ row.netYieldRate != null ? (row.netYieldRate * 100).toFixed(0) + '%' : '-' }}</template>
+          </el-table-column>
+          <el-table-column label="实际用量" width="100" align="right">
+            <template #default="{ row }">{{ row.actualQty }} {{ row.unit }}</template>
+          </el-table-column>
+          <el-table-column v-if="canViewPrice" label="单价" width="90" align="right">
+            <template #default="{ row }">
+              <span v-if="row.unitPrice != null">¥{{ row.unitPrice }}</span>
+              <span v-else style="color: var(--el-color-warning)">缺价</span>
+            </template>
+          </el-table-column>
+          <el-table-column v-if="canViewPrice" label="小计" width="90" align="right">
+            <template #default="{ row }">
+              <span v-if="row.itemCost != null">¥{{ row.itemCost }}</span>
+              <span v-else style="color: var(--el-color-warning)">—</span>
+            </template>
+          </el-table-column>
+        </el-table>
+
+        <!-- 防呆 Rule 5: no recipe → message + nextAction link -->
+        <el-empty
+          v-if="!costCardLoading && !costCard"
+          description="该菜品尚未配置配方 (BOM)，无法生成成本卡"
+          :image-size="90"
+        >
+          <el-button type="primary" @click="handleCreate">去配方管理录入</el-button>
+        </el-empty>
+      </div>
+    </el-drawer>
   </div>
 </template>
 
@@ -432,7 +532,7 @@ import { Plus, Search, Refresh, Download } from '@element-plus/icons-vue';
 import { ElMessage, ElMessageBox, type FormInstance } from 'element-plus';
 import { useFactoryId } from '@/composables/useFactoryId';
 import { usePermissionStore } from '@/store/modules/permission';
-import { getRecipes, getRecipe, getRecipeSummary, createRecipe, updateRecipe, deleteRecipe, getProductTypesActive, getRawMaterialTypes } from '@/api/restaurant';
+import { getRecipes, getRecipe, getRecipeSummary, createRecipe, updateRecipe, deleteRecipe, getProductTypesActive, getRawMaterialTypes, getDishCostCard } from '@/api/restaurant';
 import { emptyCell, exportTableToExcel } from '@/utils/tableFormatters';
 import type { RecipeItem } from '@/types/restaurant';
 import AnalyticsStrip from '../components/AnalyticsStrip.vue';
@@ -1170,10 +1270,82 @@ async function bindAlias(posName: string, productTypeId: string) {
   }
 }
 
+// ====================================================================
+// #57: 成本卡 drawer (出菜反推)
+// ====================================================================
+interface IngredientCostLine {
+  rawMaterialTypeId: string;
+  materialName: string | null;
+  standardQty: number | null;
+  actualQty: number | null;
+  unit: string | null;
+  netYieldRate: number | null;
+  unitPrice: number | null;   // null when stripped (no price perm) or unconfigured
+  itemCost: number | null;
+}
+interface DishCostCard {
+  productTypeId: string;
+  productName: string;
+  portions: number;
+  totalIngredientCost: number | null;
+  sellPrice: number | null;
+  grossMargin: number | null;
+  hasMissingPrices: boolean;
+  recipeLineCount: number | null;
+  recipeUpdatedAt: string | null;
+  computedAt: string | null;
+  ingredients: IngredientCostLine[];
+}
+
+const costCardDrawer = ref(false);
+const costCardLoading = ref(false);
+const costCard = ref<DishCostCard | null>(null);
+const costCardPortions = ref(1);
+const costCardProductId = ref('');
+
+async function openCostCard(productTypeId: string) {
+  costCardProductId.value = productTypeId;
+  costCardPortions.value = 1;
+  costCardDrawer.value = true;
+  await reloadCostCard();
+}
+
+async function reloadCostCard() {
+  if (!costCardProductId.value) return;
+  costCardLoading.value = true;
+  costCard.value = null;
+  try {
+    const res = await getDishCostCard(factoryId.value, costCardProductId.value, costCardPortions.value);
+    if (res.success && res.data) {
+      costCard.value = res.data as DishCostCard;
+    } else {
+      // 404 (no recipe) or business error — show empty state (Rule 5 nextAction in template)
+      costCard.value = null;
+    }
+  } catch {
+    // Interceptor shows specific sticky toast; drawer falls to empty state
+    costCard.value = null;
+  } finally {
+    costCardLoading.value = false;
+  }
+}
+
 // Handle full-page reload: factoryId may not be ready at mount time
 watch(factoryId, (val) => { if (val) { loadData(); loadStatistics(); } });
 </script>
 
 <style scoped lang="scss">
 @import '../restaurant-shared.scss';
+
+.cost-card-header {
+  .cc-title { font-size: 16px; font-weight: 600; }
+  .cc-sub { font-size: 12px; color: #909399; margin-top: 4px; }
+}
+.cc-portions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 10px 0;
+  .cc-portions-hint { font-size: 12px; color: #909399; }
+}
 </style>
