@@ -1,0 +1,111 @@
+# 菜品毛利率偏低 — 操作建议手册
+#
+# trigger_metric: gross_margin_per_dish ((营收-食材成本)/营收, 0-1 比率)
+# threshold_inline: 健康 >=0.55 / 偏低 0.40-0.55 / 严重 <0.40
+# higher_is_worse: false (毛利率越低越糟)
+# 数据来源: #57 agg_restaurant_product_cost 逐菜 food_cost + POS 营收, 仅有价菜.
+
+diagnosis_code: gross_margin_per_dish_low
+trigger_metric: gross_margin_per_dish
+trigger_condition: "actual < 0.55"
+display_name: "菜品毛利率偏低"
+
+severity_levels:
+  warning:
+    condition: "0.40 <= actual < 0.55"
+    label: "毛利偏低"
+    color: yellow
+  critical:
+    condition: "actual < 0.40"
+    label: "毛利严重偏低"
+    color: red
+
+diagnosis_checklist:
+  - question: "毛利偏低集中在哪些菜 (引流款 vs 主力款)？"
+    if_yes: "引流款低毛利可接受, 主力款低毛利必须优化"
+  - question: "食材单价是否近期上涨而售价未调？"
+    if_yes: "复核进货价波动, 联动菜单定价"
+  - question: "配方用量是否偏高 (出成率/份量过大)？"
+    if_yes: "核定标准份量, 减少超量出餐"
+
+action_plans:
+  - id: 1
+    name: "高营收低毛利菜专项"
+    priority: "P0"
+    actions:
+      - "拉出营收 TOP20 菜品的毛利率, 锁定高销量低毛利的'失血'菜"
+      - "对失血主力菜调整定价或重构配方降本"
+      - "引流款单独标注, 不计入主力菜毛利考核"
+    expected_impact: "整体毛利率提升 3-6 个百分点"
+
+  - id: 2
+    name: "食材成本与定价联动"
+    priority: "P0"
+    actions:
+      - "建立食材单价波动预警, 进货价涨幅超阈值触发菜单复价"
+      - "按目标毛利率反推菜品最低售价, 守住毛利下限"
+      - "高价食材菜推动替代食材/规格优化"
+    expected_impact: "守住目标毛利, 降低成本波动冲击"
+
+  - id: 3
+    name: "配方份量标准化"
+    priority: "P1"
+    actions:
+      - "核定每道菜标准份量与出成率, 减少超量出餐"
+      - "培训后厨按标准配方/克重出餐, 减少凭手感"
+      - "定期抽检实际用量 vs 标准配方差异"
+    expected_impact: "单菜食材成本降低 2-4 个百分点"
+
+# ── 结构化处方行动 (P3.7 结构) ─────────────────────────
+rx_actions:
+  - id: GM-A01
+    title: 高营收低毛利菜专项整改
+    description: 拉出营收 TOP20 菜品的逐菜毛利率, 锁定高销量却低毛利的"失血"主力菜, 调价或重构配方降本; 引流款单独标注不计入主力菜毛利考核。
+    owner: 店长
+    timeframe: 本周内
+    priority: P0
+    effort: low
+    expected_impact: 整体毛利率提升 3-6pp, 锁定最大失血点
+
+  - id: GM-A02
+    title: 食材成本-菜单定价联动机制
+    description: 建立食材单价波动预警, 进货价涨幅超阈值自动触发菜单复价; 按目标毛利率反推每道菜最低售价, 守住毛利下限, 高价食材菜推动替代规格。
+    owner: 运营经理
+    timeframe: 2 周
+    priority: P0
+    effort: medium
+    expected_impact: 守住目标毛利率, 降低进货价波动冲击约 ¥8-15K/月
+
+  - id: GM-A03
+    title: 配方份量与出成率标准化
+    description: 核定每道菜标准份量与出成率卡, 培训后厨按标准克重出餐减少凭手感超量, 定期抽检实际用量 vs 标准配方差异。
+    owner: 中央厨房
+    timeframe: 4 周
+    priority: P1
+    effort: high
+    expected_impact: 单菜食材成本 -2~4pp, 毛利率稳定向健康线 (>=55%) 靠拢
+
+sub_sector_notes:
+  火锅:
+    - "火锅锅底+涮品结构, 锅底通常高毛利, 低毛利多来自高价海鲜/牛羊肉涮品"
+    - "套餐组合可拉平整体毛利, 高毛利锅底搭配引流肉品"
+  快餐:
+    - "标准化高, 低毛利通常是定价偏低或食材涨价未调价"
+    - "套餐定价按目标毛利反推, 单品引流款控制比例"
+  烧烤:
+    - "肉串类食材占比高, 低毛利常来自肉价上涨, 推荐绑定酒水高毛利组合"
+
+decision_tree:
+  root: "菜品聚合毛利率是否低于 55%？"
+  yes:
+    question: "低毛利是否集中在高营收主力菜？"
+    yes:
+      action: "优先执行: 高营收低毛利菜专项(P0) + 成本定价联动(P0)"
+    no:
+      question: "是否近期食材进货价上涨？"
+      yes:
+        action: "执行: 食材成本-定价联动(P0), 触发菜单复价"
+      no:
+        action: "执行: 配方份量标准化(P1), 核定标准份量降本"
+  no:
+    action: "当前毛利率健康, 定期监控食材价波动即可"

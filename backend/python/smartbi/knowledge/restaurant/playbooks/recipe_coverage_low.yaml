@@ -1,0 +1,107 @@
+# 配方覆盖率偏低 — 操作建议手册
+#
+# trigger_metric: recipe_coverage_rate (有配方+食材单价菜 / 在售菜, 0-1 比率)
+# threshold_inline: 健康 >=0.70 / 偏低 0.40-0.70 / 严重 <0.40
+# higher_is_worse: false (覆盖率越低越糟)
+# 数据来源: #57 agg_restaurant_product_cost.has_price_data 逐菜聚合.
+
+diagnosis_code: recipe_coverage_low
+trigger_metric: recipe_coverage_rate
+trigger_condition: "actual < 0.70"
+display_name: "配方覆盖率偏低"
+
+severity_levels:
+  warning:
+    condition: "0.40 <= actual < 0.70"
+    label: "覆盖偏低"
+    color: yellow
+  critical:
+    condition: "actual < 0.40"
+    label: "覆盖严重偏低"
+    color: red
+
+diagnosis_checklist:
+  - question: "哪些在售菜还没录配方？"
+    if_yes: "按营收 TOP 优先补录, 高营收菜先有成本数据"
+  - question: "已录配方的菜是否都绑定了食材单价？"
+    if_no: "缺单价的食材会让该菜 has_price_data=false, 补齐采购单价"
+  - question: "菜单是否频繁上新但配方录入滞后？"
+    if_yes: "把配方录入纳入上新流程, 上架前必录配方"
+
+action_plans:
+  - id: 1
+    name: "高营收菜配方补录"
+    priority: "P0"
+    actions:
+      - "按 POS 营收排序, 优先补录营收 TOP 缺配方的菜"
+      - "为每道菜绑定主料+辅料+食材单价, 确保 has_price_data 成立"
+      - "每周复盘新增覆盖率, 设阶段目标 (如月底达 70%)"
+    expected_impact: "覆盖率每周提升 10-20 个百分点"
+
+  - id: 2
+    name: "食材单价补齐"
+    priority: "P0"
+    actions:
+      - "盘点缺单价的食材, 从采购单/供应商报价批量补录"
+      - "建立食材单价维护责任人, 新食材入库即录价"
+      - "对长期缺价食材用移动加权均价临时兜底"
+    expected_impact: "已录配方菜的成本数据完整度显著提升"
+
+  - id: 3
+    name: "上新流程内嵌配方录入"
+    priority: "P1"
+    actions:
+      - "新菜上架前必录配方 (流程卡点), 杜绝新增缺口"
+      - "配方录入纳入菜品研发交接清单"
+      - "定期清理停售菜, 避免分母虚高拉低覆盖率"
+    expected_impact: "覆盖率不再因上新滞后倒退, 长期稳定"
+
+# ── 结构化处方行动 (P3.7 结构) ─────────────────────────
+rx_actions:
+  - id: RC-A01
+    title: 高营收缺配方菜优先补录
+    description: 按 POS 营收排序锁定营收 TOP 却没配方的菜, 优先补录主料+辅料+食材单价让 has_price_data 成立, 每周复盘覆盖率设阶段目标 (月底达 70%)。
+    owner: 店长
+    timeframe: 本周内
+    priority: P0
+    effort: medium
+    expected_impact: 覆盖率每周 +10~20pp, 高营收菜率先拿到真实成本
+
+  - id: RC-A02
+    title: 缺价食材批量补齐单价
+    description: 盘点导致 has_price_data=false 的缺单价食材, 从采购单/供应商报价批量补录, 设食材单价维护责任人, 新食材入库即录价, 长期缺价用移动加权均价兜底。
+    owner: 采购
+    timeframe: 2 周
+    priority: P0
+    effort: medium
+    expected_impact: 已录配方菜成本数据完整, 解锁毛利分析
+
+  - id: RC-A03
+    title: 上新流程内嵌配方录入卡点
+    description: 新菜上架前必录配方 (流程强制卡点) 杜绝新增缺口, 配方录入纳入研发交接清单, 定期清理停售菜避免分母虚高。
+    owner: 运营经理
+    timeframe: 4 周
+    priority: P1
+    effort: low
+    expected_impact: 覆盖率不因上新滞后倒退, 长期稳定在健康线以上
+
+sub_sector_notes:
+  火锅:
+    - "锅底+蘸料标准化高, 优先把锅底/招牌涮品配方录全"
+    - "称重涮品按克重配方, 单价绑定后毛利才准"
+  快餐:
+    - "SKU 少标准化高, 覆盖率应快速冲到 90%+"
+    - "套餐拆解为单品配方, 避免套餐整体无法核算成本"
+  烧烤:
+    - "串类 SKU 多, 按品类批量录配方 (同类串共用模板) 提效"
+
+decision_tree:
+  root: "配方覆盖率是否低于 70%？"
+  yes:
+    question: "缺口是配方未录还是食材缺单价？"
+    yes:
+      action: "优先执行: 高营收菜配方补录(P0) + 缺价食材补齐(P0)"
+    no:
+      action: "执行: 上新流程内嵌配方录入(P1), 清理停售菜"
+  no:
+    action: "当前覆盖率健康, 维持上新即录配方的流程即可"
