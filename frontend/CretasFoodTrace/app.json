@@ -13,7 +13,7 @@
     "updates": {
       "url": "https://ota.cretaceousfuture.com/api/ota/manifest",
       "checkAutomatically": "ON_LOAD",
-      "fallbackToCacheTimeout": 5000,
+      "fallbackToCacheTimeout": 0,
       "codeSigningCertificate": "./ota_cert.pem",
       "codeSigningMetadata": {
         "keyid": "main",
@@ -43,7 +43,7 @@
       },
       "edgeToEdgeEnabled": true,
       "package": "com.cretas.foodtrace",
-      "versionCode": 7,
+      "versionCode": 11,
       "permissions": [
         "CAMERA",
         "READ_EXTERNAL_STORAGE",
