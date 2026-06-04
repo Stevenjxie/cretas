@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue';
+import { useRoute } from 'vue-router';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { ElMessage, ElMessageBox } from 'element-plus';
@@ -12,13 +13,16 @@ import {
   deleteProductWorkProcess,
   batchSortProductWorkProcesses,
   updateProductWorkProcess,
+  getProductWorkProcessRecommendation,
   type WorkProcessItem,
-  type ProductWorkProcessItem
+  type ProductWorkProcessItem,
+  type RecommendedWorkProcess
 } from '@/api/processProduction';
 import { getOperatorUsers } from '@/api/factory';
 
 const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
+const route = useRoute();
 const factoryId = computed(() => authStore.factoryId);
 const canWrite = computed(() => permissionStore.canWrite('system'));
 
@@ -68,6 +72,7 @@ interface PendingSort { type: 'sort' }
 interface PendingResponsible { type: 'responsible'; serverId: number; workerId: number | null; productTypeId: string; workProcessId: string }
 type PendingOp = PendingAdd | PendingRemove | PendingSort | PendingResponsible;
 const pendingOps = ref<PendingOp[]>([]);
+const recommendationNotice = ref('');
 
 /** Convert server items to DraftItems */
 function toDraftItems(items: ProductWorkProcessItem[]): DraftItem[] {
@@ -183,6 +188,10 @@ onMounted(async () => {
   await loadProducts();
   await loadAllProcesses();
   await loadOperators();
+  if (selectedProductId.value) {
+    await loadLinkedProcesses();
+  }
+  await applyRouteRecommendationDraft();
 });
 
 // flag: suppress watch reload when guard-rejecting a product switch
@@ -210,7 +219,10 @@ async function loadProducts() {
     if (res.success && res.data?.content) {
       products.value = res.data.content;
       if (products.value.length > 0 && !selectedProductId.value) {
-        selectedProductId.value = products.value[0].id;
+        const preferredProductId = routeQueryString(route.query.productTypeId);
+        const preferredExists = preferredProductId && products.value.some(p => p.id === preferredProductId);
+        suppressNextWatch = true;
+        selectedProductId.value = preferredExists ? preferredProductId : products.value[0].id;
       }
     }
   } catch (e) {
@@ -218,6 +230,13 @@ async function loadProducts() {
   } finally {
     productsLoading.value = false;
   }
+}
+
+function routeQueryString(value: unknown): string {
+  if (Array.isArray(value)) {
+    return typeof value[0] === 'string' ? value[0] : '';
+  }
+  return typeof value === 'string' ? value : '';
 }
 
 async function loadAllProcesses() {
@@ -258,6 +277,61 @@ async function loadLinkedProcesses() {
     linkedLoading.value = false;
     resetDraftToServer(); // sync draft to fresh server state
   }
+}
+
+async function applyRouteRecommendationDraft() {
+  if (!factoryId.value || !selectedProductId.value) return;
+  if (routeQueryString(route.query.recommend) !== '1') return;
+
+  try {
+    const res = await getProductWorkProcessRecommendation(factoryId.value, selectedProductId.value, 5);
+    if (!res.success || !res.data || res.data.recommendations.length === 0) {
+      ElMessage.warning(res.message || res.data?.message || '暂未生成推荐工序，请手动配置');
+      return;
+    }
+
+    let addedCount = 0;
+    for (const recommendation of res.data.recommendations) {
+      const alreadyInDraft = draftLinked.value.some(d => d.workProcessId === recommendation.workProcessId);
+      if (alreadyInDraft) {
+        continue;
+      }
+      handleAdd(toWorkProcessItem(recommendation));
+      addedCount++;
+    }
+
+    recommendationNotice.value = `${res.data.notice}：已预填 ${addedCount} 道推荐工序，请检查顺序和责任小组长后再保存。`;
+    if (addedCount > 0) {
+      ElMessage.success(`已预填 ${addedCount} 道 AI 推荐工序，请核对后保存`);
+    } else {
+      ElMessage.info('推荐工序已在当前草稿/配置中，无需重复添加');
+    }
+  } catch (e) {
+    handleCatchError(e, '加载推荐工序失败');
+  }
+}
+
+function toWorkProcessItem(recommendation: RecommendedWorkProcess): WorkProcessItem {
+  const existing = allProcesses.value.find(wp => wp.id === recommendation.workProcessId);
+  if (existing) {
+    return existing;
+  }
+  return {
+    id: recommendation.workProcessId,
+    processName: recommendation.processName,
+    processCategory: recommendation.processCategory || '未分类',
+    unit: recommendation.unit || 'kg',
+    estimatedMinutes: recommendation.estimatedMinutes,
+    sortOrder: recommendation.processOrder,
+    isActive: true,
+    standardYieldMin: null,
+    standardYieldMax: null,
+    needsInput: true,
+    outputUnit: null,
+    standardHourlyRate: null,
+    createdAt: '',
+    updatedAt: '',
+  };
 }
 
 // ─────────────────────────────────────────────
@@ -546,7 +620,18 @@ async function handleRefresh() {
           <el-empty description="请在左侧选择产品" :image-size="80" />
         </div>
 
-        <div v-else class="two-column-layout">
+        <template v-else>
+          <el-alert
+            v-if="recommendationNotice"
+            :title="recommendationNotice"
+            type="warning"
+            show-icon
+            :closable="false"
+            style="margin-bottom: 12px"
+          />
+        </template>
+
+        <div v-if="selectedProductId" class="two-column-layout">
           <!-- ───── LEFT column: 工序链 (C1 drag + C4 draft) ───── -->
           <div class="chain-column">
             <div v-if="draftLinked.length === 0" class="empty-state">

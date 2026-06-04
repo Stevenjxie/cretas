@@ -1,5 +1,6 @@
 package com.cretas.aims.controller;
 
+import com.cretas.aims.ai.tool.impl.workprocess.ProductWorkProcessRecommendTool;
 import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.annotation.RequirePermission;
 import com.cretas.aims.dto.common.PageRequest;
@@ -47,6 +48,7 @@ public class ProductTypeController {
     private final ProductTypeService productTypeService;
     private final MobileService mobileService;
     private final SkuAssemblyService skuAssemblyService;
+    private final ProductWorkProcessRecommendTool productWorkProcessRecommendTool;
 
     /**
      * SKU组装: 产品模板 + 客户 + 配方 → 独立SKU
@@ -152,6 +154,20 @@ public class ProductTypeController {
         log.info("获取产品类型详情: factoryId={}, id={}", factoryId, id);
         ProductTypeDTO result = productTypeService.getProductTypeById(factoryId, id);
         return ApiResponse.success(result);
+    }
+
+    @GetMapping("/{id}/work-process-recommendation")
+    @Operation(summary = "推荐产品工序链", description = "基于同产品大类历史工序链推荐草稿；无历史时使用 LLM 冷启动建议，不自动写库")
+    public ApiResponse<ProductWorkProcessRecommendTool.RecommendationResult> recommendWorkProcesses(
+            @PathVariable @Parameter(description = "工厂ID") String factoryId,
+            @PathVariable @Parameter(description = "产品类型ID") String id,
+            @RequestParam(defaultValue = "5") @Parameter(description = "最多推荐几道工序") Integer limit) {
+        ProductWorkProcessRecommendTool.RecommendationResult result =
+                productWorkProcessRecommendTool.recommend(factoryId, id, limit == null ? 5 : limit);
+        String message = result.recommendations().isEmpty()
+                ? result.message()
+                : String.format("AI 已推荐 %d 道工序，去查看前请核对", result.recommendations().size());
+        return ApiResponse.success(message, result);
     }
 
     /**
