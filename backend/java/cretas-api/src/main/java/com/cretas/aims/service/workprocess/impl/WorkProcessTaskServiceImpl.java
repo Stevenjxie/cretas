@@ -147,9 +147,20 @@ public class WorkProcessTaskServiceImpl implements WorkProcessTaskService {
     }
 
     @Override
-    public List<WorkProcessTaskDTO> listByBatch(String factoryId, Long productionBatchId) {
+    public List<WorkProcessTaskDTO> listByBatch(String factoryId, Long productionBatchId, Long assignedTo) {
         List<WorkProcessTask> tasks = taskRepository
                 .findByFactoryIdAndProductionBatchIdOrderByProcessOrderAsc(factoryId, productionBatchId);
+
+        // M1 兜底: 该批工序全未指派 (assigned_to 全 null) → 不过滤, 返回全部
+        // 防止未配默认责任人的老批次把任何人锁死
+        boolean anyAssigned = tasks.stream().anyMatch(t -> t.getAssignedTo() != null);
+        if (assignedTo != null && anyAssigned) {
+            tasks = tasks.stream()
+                    .filter(t -> t.getAssignedTo() == null || t.getAssignedTo().equals(assignedTo))
+                    .collect(Collectors.toList());
+        }
+        // assignedTo == null → 主管视图, 不过滤 (返回全部)
+
         Map<String, WorkProcess> defs = loadDefinitionsForTasks(factoryId, tasks);
         return tasks.stream()
                 .map(t -> toDTO(t, defs.get(t.getWorkProcessId())))

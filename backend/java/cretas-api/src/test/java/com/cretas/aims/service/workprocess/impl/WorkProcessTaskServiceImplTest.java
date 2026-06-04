@@ -309,4 +309,84 @@ class WorkProcessTaskServiceImplTest {
         assertNull(task2.getAssignedTo(),
                 "template2 responsibleWorkerId=null → task2.assignedTo 应为 null");
     }
+
+    // ==================== Task 5: listByBatch 按小组长过滤 (M1/M2) ====================
+
+    /** 辅助: 构造一个 WorkProcessTask, 设定 assignedTo. */
+    private WorkProcessTask makeTask(Long id, String wpId, Long assignedTo) {
+        return WorkProcessTask.builder()
+                .id(id)
+                .factoryId(FACTORY_ID)
+                .productionBatchId(200L)
+                .workProcessId(wpId)
+                .processOrder(id.intValue())
+                .status(WorkProcessTask.Status.PENDING)
+                .assignedTo(assignedTo)
+                .build();
+    }
+
+    @Test
+    @DisplayName("listByBatch: 有已分配工序时, 按 assignedTo 过滤 (含 null 工序兜底)")
+    void listByBatch_filtersToAssignee_whenAnyAssigned() {
+        Long batchId = 200L;
+        // 三道工序: 1615, 1616, null (未指派)
+        WorkProcessTask t1 = makeTask(1L, "wp-a", 1615L);
+        WorkProcessTask t2 = makeTask(2L, "wp-b", 1616L);
+        WorkProcessTask t3 = makeTask(3L, "wp-c", null);
+
+        when(taskRepository.findByFactoryIdAndProductionBatchIdOrderByProcessOrderAsc(FACTORY_ID, batchId))
+                .thenReturn(List.of(t1, t2, t3));
+        when(workProcessRepository.findByFactoryIdAndIdIn(eq(FACTORY_ID), any()))
+                .thenReturn(List.of());  // no definitions needed for filter logic
+
+        List<WorkProcessTaskDTO> result = service.listByBatch(FACTORY_ID, batchId, 1615L);
+
+        assertEquals(2, result.size(), "应返回 assignedTo=1615 的任务 + assignedTo=null 的任务");
+        assertTrue(result.stream().noneMatch(dto -> Long.valueOf(1616L).equals(dto.getAssignedTo())),
+                "assignedTo=1616 的任务不应出现在 1615 的视图中");
+        assertTrue(result.stream().anyMatch(dto -> dto.getAssignedTo() == null),
+                "assignedTo=null 的未指派任务应出现 (M1 全null兜底规则: 未指派工序不锁人)");
+        assertTrue(result.stream().anyMatch(dto -> Long.valueOf(1615L).equals(dto.getAssignedTo())),
+                "assignedTo=1615 的任务必须在结果中");
+    }
+
+    @Test
+    @DisplayName("listByBatch: 全部工序 assignedTo=null 时, 无论传入 assignedTo 是谁 → 返回全部 (M1 全null兜底)")
+    void listByBatch_returnsAll_whenAllNull() {
+        Long batchId = 200L;
+        // 三道工序全未指派 (老批次 / 未配置默认人)
+        WorkProcessTask t1 = makeTask(1L, "wp-a", null);
+        WorkProcessTask t2 = makeTask(2L, "wp-b", null);
+        WorkProcessTask t3 = makeTask(3L, "wp-c", null);
+
+        when(taskRepository.findByFactoryIdAndProductionBatchIdOrderByProcessOrderAsc(FACTORY_ID, batchId))
+                .thenReturn(List.of(t1, t2, t3));
+        when(workProcessRepository.findByFactoryIdAndIdIn(eq(FACTORY_ID), any()))
+                .thenReturn(List.of());
+
+        // worker1 (userId=1311) 查自己的工序 → 全null应返回全部, 不锁死
+        List<WorkProcessTaskDTO> result = service.listByBatch(FACTORY_ID, batchId, 1311L);
+
+        assertEquals(3, result.size(), "全部 assignedTo=null 时, 任意 userId 查询应返回全部工序 (M1 全null兜底)");
+    }
+
+    @Test
+    @DisplayName("listByBatch: assignedTo=null (主管视图) → 返回全部工序")
+    void listByBatch_returnsAll_whenAssignedToNull() {
+        Long batchId = 200L;
+        // 混合: 部分已指派
+        WorkProcessTask t1 = makeTask(1L, "wp-a", 1615L);
+        WorkProcessTask t2 = makeTask(2L, "wp-b", 1616L);
+        WorkProcessTask t3 = makeTask(3L, "wp-c", null);
+
+        when(taskRepository.findByFactoryIdAndProductionBatchIdOrderByProcessOrderAsc(FACTORY_ID, batchId))
+                .thenReturn(List.of(t1, t2, t3));
+        when(workProcessRepository.findByFactoryIdAndIdIn(eq(FACTORY_ID), any()))
+                .thenReturn(List.of());
+
+        // 主管不传 assignedTo (null) → 应看到全部工序
+        List<WorkProcessTaskDTO> result = service.listByBatch(FACTORY_ID, batchId, null);
+
+        assertEquals(3, result.size(), "assignedTo=null 表示主管/不过滤, 应返回全部工序");
+    }
 }
