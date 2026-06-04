@@ -6,8 +6,8 @@
 --   价值回馈 / 帮我配合系统能省多少钱" 时, 命中 RestaurantValueSummaryTool 读取
 --   restaurant_value_snapshots 最新快照, 返回月度+年化两口径 (D3)。
 --
--- flyway 版本 20260918.01: origin/main 已应用 max 20260917.02 (out-of-order=false,
---   必须更大)。Wave2 的 V20260917_xx 在未合并分支 — 不在 origin/main, 但为隔离取 18。
+-- flyway 版本 20260919.01: origin/main 已应用 max 20260917.02 (out-of-order=false,
+--   必须更大)。Wave2 #54 占 V20260918_01, #56 隔离上移取 19 避免冲突。
 -- 幂等: ON CONFLICT (intent_code) DO UPDATE, 可重复执行。
 -- business_type='RESTAURANT' 让业态门控放行 (制造业态工厂不进此意图)。
 -- keywords ::jsonb cast 与既有迁移一致 (keywords 列跨环境 text/json/jsonb 不一致,

@@ -3,8 +3,9 @@ from __future__ import annotations
 """#56 价值可视化回馈回路 — Python → Java 内部通知 client。
 
 调 Java 内部端点 POST /api/internal/notifications/role 创建角色定向站内通知
-(复用 DbNotificationServiceImpl.notifyRole)。带 X-Internal-Key 内部密钥认证
-(对齐 OnboardingController 的 internal.api.key 模式)。
+(复用 DbNotificationServiceImpl.notifyRole)。带 X-Internal-Key 内部密钥认证,
+由 JwtAuthInterceptor 对 /api/internal/** 校验 X-Internal-Key == INTERNAL_API_SECRET
+(fail-closed: 密钥未设或不匹配一律 403)。
 
 失败返回 False (不抛) → 上层 value_notifier 不写防重日志, 下次可重试。
 """
