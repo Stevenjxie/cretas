@@ -48,6 +48,19 @@ _FOOD_COST_WARN = Decimal("0.50")        # 40..50% WARNING; > 50% CRITICAL
 _TARGET_DEFAULT_WARN = Decimal("0.90")
 _TARGET_DEFAULT_CRIT = Decimal("0.70")
 
+# Store KPI is a manager/finance dashboard. Do not reuse the global
+# PRICE_VIEW_ROLES verbatim: sales_manager may see sales module amounts in other
+# contexts, but Dengzong's restaurant operating dashboard requires absolute
+# revenue/ticket money to be hidden from sales/non-finance roles.
+STORE_KPI_MONEY_VIEW_ROLES = frozenset({
+    "factory_super_admin",
+    "platform_admin",
+    "finance_manager",
+    "restaurant_manager",
+    "permission_admin",
+    "department_admin",
+})
+
 # Lookback window (days) handed to resolve_gross_margin for the 毛利率 KPI when
 # the dashboard is "全部历史". Food costs are a snapshot ("current"), not
 # time-varying, so a wide window simply captures all POS history.
@@ -185,8 +198,6 @@ async def compute_store_kpi_dashboard(
     in place (null, never 0) for non price-view roles.
     """
     from smartbi.tenant_ctx import set_factory_id
-    from smartbi_compat._rbac_strip import PRICE_VIEW_ROLES
-
     # RLS: pool.setup reads current_factory_id contextvar per connection checkout.
     set_factory_id(factory_id)
 
@@ -364,7 +375,7 @@ async def compute_store_kpi_dashboard(
     #
     # null (never 0) preserves the missing-vs-zero distinction (Rule 4).
     # fail-closed: role None / unknown → strip.
-    if not (role and role in PRICE_VIEW_ROLES):
+    if not (role and role in STORE_KPI_MONEY_VIEW_ROLES):
         for k in kpis:
             if k.get("money"):
                 k["value"] = "—"

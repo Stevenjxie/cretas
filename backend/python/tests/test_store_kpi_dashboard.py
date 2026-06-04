@@ -344,6 +344,16 @@ def test_rbac_fail_closed_no_role(monkeypatch):
     assert kpis["order_count"]["rawValue"] == 5000     # count visible
 
 
+def test_rbac_sales_manager_stripped_for_store_kpi(monkeypatch):
+    _patch_gold(monkeypatch)
+    data = _run(role="sales_manager")
+    kpis = {k["key"]: k for k in data["kpis"]}
+    assert kpis["daily_revenue"]["rawValue"] is None
+    assert kpis["avg_ticket"]["rawValue"] is None
+    assert kpis["order_count"]["rawValue"] == 5000
+    assert kpis["gross_margin"]["rawValue"] == pytest.approx(0.60)
+
+
 def test_rbac_price_role_sees_money(monkeypatch):
     _patch_gold(monkeypatch)
     data = _run(role="restaurant_manager")  # in PRICE_VIEW_ROLES
