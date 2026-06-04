@@ -867,3 +867,51 @@ async def get_data_range(
     except Exception as e:
         logger.exception("data-range failed: %s", e)
         raise HTTPException(status_code=500, detail=f"Gold query failed: {e}")
+
+
+@router.get("/store-kpi-dashboard")
+async def get_store_kpi_dashboard(
+    request: Request,
+    start_date: Optional[str] = Query(None, description="YYYY-MM-DD inclusive; 省略=全部历史"),
+    end_date: Optional[str] = Query(None, description="YYYY-MM-DD inclusive; 省略=全部历史"),
+    factory_id: Optional[str] = Query(None, description="belt-and-suspenders; defaults to JWT tenant"),
+):
+    """店长经营 6-KPI 看板 (single-store / factory-level aggregation).
+
+    Returns {store_name, start_date, end_date, kpis:[6 cards], overall_health}.
+    Each card: {key, label, unit, value, rawValue, status (GOOD/WARNING/
+    CRITICAL/INSUFFICIENT/NO_TARGET), money, detail?}.
+
+    RBAC: the compute function itself nulls money KPIs (日营收 / 客单价) for
+    roles outside PRICE_VIEW_ROLES (NOT 0 — Rule 4 missing-vs-zero). Rates
+    (毛利率 / 食材成本率 / 目标完成率) and counts (订单数) stay visible. So we
+    do NOT re-apply the generic _apply_rbac_strip here (it would false-positive
+    the rate cards whose labels contain 毛利 / 成本).
+    """
+    from smartbi.services.restaurant.sections.store_kpi_dashboard import (
+        compute_store_kpi_dashboard,
+    )
+
+    fid = _resolve_tenant(factory_id)
+    start, end = _parse_range(start_date, end_date)
+    role = _get_role(request)
+    pool = await get_pg_pool()
+    try:
+        data = await compute_store_kpi_dashboard(
+            pool, fid, (start, end), role, store_name=None
+        )
+        if data is None:
+            # Honest empty: no agg_daily sales rows for this factory.
+            return {
+                "store_name": None,
+                "start_date": start.isoformat() if start else None,
+                "end_date": end.isoformat() if end else None,
+                "kpis": [],
+                "overall_health": "GOOD",
+                "empty": True,
+                "message": "未检测到经营数据，请先上传 POS 销售/财务数据",
+            }
+        return data
+    except Exception as e:
+        logger.exception("store-kpi-dashboard failed: %s", e)
+        raise HTTPException(status_code=500, detail=f"Gold query failed: {e}")
