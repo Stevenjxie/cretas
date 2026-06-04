@@ -13,7 +13,8 @@
 -- 敏感级 LOW: 只读预警 (威慑非处罚)。绝对价格的 RBAC 在 Python detect 端点按角色 strip,
 --   不在意图层 — 偏离率/方向/风险等级对所有角色可见。
 --
--- flyway 版本 20260923.01 > Java flyway 当前 max 20260922.04 (out-of-order=false, 必须更大)。
+-- flyway 版本 20260923.02: sister session 已合并 V20260923_01__fix_scale_brand_models 到 main
+--   (cross-session 撞车), 上移到 20260923_02 (Java flyway 现 max 20260923.01, _02 空)。
 -- 幂等: ON CONFLICT (intent_code) DO UPDATE, 可重复执行。
 --
 -- keywords 列在 prod 是 json/jsonb (ddl-auto columnDefinition="JSON"), 历史教训需 ::jsonb cast
