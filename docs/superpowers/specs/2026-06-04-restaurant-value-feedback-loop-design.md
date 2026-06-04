@@ -107,6 +107,19 @@ Python: 邓总火锅算例(cost_rigidity0.56,revenue731047→labor≈18349 对 p
 | D4 | 驾驶舱 API 路径 | 前端直调 Python(139 Nginx 已反代 47:8083) | 经 Java 转发(统一 JWT 多一跳) |
 | D5 | RN 通知改动 | 零改动复用 INFO 类型 | 新增 VALUE_FEEDBACK 专属类型+紫色图标 |
 
+## ✅ 决策已拍板 (2026-06-04, Steve)
+
+- **D1 = BOTH 双触发 (DECIDED)**: (a) 每月1日 cron 自动计算上月快照(遍历所有 RESTAURANT 工厂, 兜底保证每月有快照); (b) 月度数据上传时 hooks.py 物化尾部 fire-and-forget 也触发即时重算(上传即看见)。两路径走同一 `compute_and_upsert_snapshot`(幂等 upsert, 重复触发不产生重复行); cron 跑全工厂遍历, upload 只算当前工厂当前期间。
+- **D2 = 店长+老板 (DECIDED)**: 仅 `RESTAURANT_MANAGER` + `FACTORY_SUPER_ADMIN`/`FACTORY_ADMIN` 收推送通知。运营经理(`RESTAURANT_OPERATIONS`)可在 web 驾驶舱主动查看 ValueFeedbackStrip, 但不主动推送(避免噪音)。
+- **D3 = 月度+年化, 期间切换 (DECIDED)**: ValueFeedbackStrip 顶部加期间切换器(本月 / 年化), 两口径都展示按需切。月度=本月实测/预估数字; 年化=annualizedImpact 大数字。两者都带"预估/实测"标签(年化恒预估口径)。快照表两列都存(`total_est_month` + `total_est_annual`), 前端切换不重新请求(一次返回两口径)。
+- D4 = 默认: 前端 `restaurantValueApi.ts` 直调 Python(139 Nginx 已反代 47:8083), 与现有 gold 分析 API 一致。
+- D5 = 默认: RN 通知零改动复用 INFO 类型, actionUrl 跳驾驶舱 value tab。
+
+### D1/D3 对 schema 的影响 (实施必读)
+- V20260918_01 表加 `total_est_month NUMERIC(14,2)` 列(月度口径汇总), 与 `total_est_annual` 并存。
+- cron 脚本遍历所有 RESTAURANT 业态工厂 + 各自最近完整月份; per-factory `SET app.factory_id` 后再 upsert(RLS)。
+- API `GET /value-summary` 一次返回 `{month: {...}, annual: {...}}` 两口径; 前端期间切换本地切不二次请求。
+
 ## 依赖
 当前可开工(无阻塞): 两表迁移/ValueSignalExtractor(纯计算)/Snapshot+Notifier service/Java Tool(复用 AbstractRestaurantDiagnosticTool)/ValueFeedbackStrip/单测。
 依赖 Wave2: w2-wastage 合并后加 extract_from_wastage_agg() 读 agg_restaurant_daily_ops; w2-price-deterrence 合并后加 price_deterrence_savings_est 列(新迁移)。
