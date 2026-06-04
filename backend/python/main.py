@@ -82,6 +82,7 @@ from smartbi.api import restaurant_value  # noqa: E402  (#56 价值可视化回�
 from smartbi.api import restaurant_cost_card  # noqa: E402  (#57 成本卡/出菜反推, 2026-06-04)
 from smartbi.api import intent_analysis  # noqa: E402
 from smartbi.api import revenue_report  # noqa: E402  (Phase G2, PR #516 — was unwired)
+from smartbi.api import twodfire_ingest  # noqa: E402  (二维火 POS adapter SKELETON, 2026-06-04 — not-configured dead-end only)
 from smartbi.api import sales_preset  # noqa: E402  (Sprint 4 W2 S-REPORTS-PRESETS — top 5 active + 9 Sprint 5 stubs)
 from smartbi.api import upload_status  # noqa: E402  (Phase IIa ops dashboard, 2026-05-14)
 from smartbi.api import restaurant_health_check  # noqa: E402  (G4 AI 经营体检表, 2026-06-03)
@@ -1009,6 +1010,9 @@ app.include_router(financial_ratios.router, prefix="/api/smartbi", tags=["Financ
 app.include_router(materialized_analytics_router, prefix="/api/smartbi", tags=["MaterializedAnalytics"])
 # QHJ revenue report (Phase G2 / PR #516) — router has full prefix baked in
 app.include_router(revenue_report.router, tags=["Revenue Report"])
+# 二维火 POS ingest adapter SKELETON (2026-06-04) — router has full prefix baked in.
+# Only the not-configured dead-end is live; configured sync path is a TODO.
+app.include_router(twodfire_ingest.router, tags=["2dfire POS Ingest"])
 # Sprint 4 W2 S-REPORTS-PRESETS (preset sales reports, top 5 active + 9 Sprint 5 stubs)
 app.include_router(sales_preset.router, tags=["Sales Preset Reports"])
 # Upload Status Dashboard (Phase IIa, 2026-05-14) — router has full prefix baked in
