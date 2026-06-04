@@ -233,7 +233,9 @@ export const menuConfig: MenuItem[] = [
     hideForFactoryTypes: ['FACTORY'],
     children: [
       // -- 深度分析 (Gold 读层) --
-      { path: '/restaurant/analytics/dishes', title: '菜品分析', icon: '', module: 'restaurant', groupLabel: '深度分析' },
+      // 店长经营 KPI 看板 (single-store MVP 2026-06-04): 6 KPI 一屏 + 健康灯, 店长高频入口。
+      { path: '/restaurant/analytics/role-kpi', title: '经营看板', icon: '', module: 'restaurant', groupLabel: '深度分析' },
+      { path: '/restaurant/analytics/dishes', title: '菜品分析', icon: '', module: 'restaurant' },
       { path: '/restaurant/analytics/stores', title: '门店对比', icon: '', module: 'restaurant' },
       { path: '/restaurant/analytics/platform', title: '平台口碑', icon: '', module: 'restaurant' },
       // -- 日常录入 (写侧) — 配方置顶 (喂养分析层成本) --
