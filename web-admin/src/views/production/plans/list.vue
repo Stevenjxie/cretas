@@ -15,6 +15,7 @@ import {
   exportProductionPlans,
   getSupervisors,
 } from '@/api/productionPlan';
+import { getProductWorkProcesses } from '@/api/processProduction';
 import { copyProductionPlan } from '@/api/orderCopy';
 import CanvasDynamicFields from '@/components/canvas/CanvasDynamicFields.vue';
 import CanvasAwareWrapper from '@/components/canvas/CanvasAwareWrapper.vue';
@@ -115,7 +116,14 @@ const planForm = ref({
 });
 const productTypes = ref<TableRow[]>([]);
 const bomProcesses = ref<string[]>([]);
+// A3: full work-process objects for read-only display (ordered by processOrder)
+const productWorkProcessList = ref<TableRow[]>([]);
 const customers = ref<TableRow[]>([]);
+
+// A5: today helper
+function todayStr(): string {
+  return new Date().toISOString().slice(0, 10);
+}
 const selectableSalesOrders = ref<TableRow[]>([]);
 const salesOrdersLoading = ref(false);
 
@@ -159,8 +167,16 @@ function handleSalesOrderSelect(orderId: string) {
   const so = selectableSalesOrders.value.find((o) => String(o.id) === String(orderId));
   // 切换订单时清空已选行
   planForm.value.sourceOrderItemId = '';
+  planForm.value.productTypeId = '';
+  productWorkProcessList.value = [];
   if (so) {
     planForm.value.sourceCustomerName = String(so.customerName || '');
+    // A4: 若订单只有一个产品行，自动选中
+    const items = Array.isArray(so.items) ? (so.items as TableRow[]) : [];
+    if (items.length === 1) {
+      planForm.value.sourceOrderItemId = String(items[0].id);
+      handleSalesOrderItemSelect(String(items[0].id));
+    }
   }
 }
 
@@ -247,21 +263,26 @@ async function loadCustomers() {
 async function loadBomProcesses(productTypeId: string) {
   if (!factoryId.value || !productTypeId) {
     bomProcesses.value = [];
+    productWorkProcessList.value = [];
     return;
   }
   try {
     // B1 fix (2026-05-10): 工序下拉应读"产品工序配置"(ProductWorkProcess),
     // 不是 LaborCostConfig (人工成本). 后端按 processOrder asc 返回.
     // Ref: docs/qa-audits/2026-05-10-customer-meeting-9bug-audit.md §B1
-    const res = await get(`/${factoryId.value}/product-work-processes`, { params: { productTypeId } });
+    // A3: also populate productWorkProcessList for read-only display.
+    const res = await getProductWorkProcesses(factoryId.value, productTypeId);
     if (res.success && res.data && Array.isArray(res.data)) {
+      productWorkProcessList.value = res.data as TableRow[];
       const names = res.data.map((item: TableRow) => String(item.processName || '')).filter(Boolean);
       bomProcesses.value = [...new Set(names)];
     } else {
       bomProcesses.value = [];
+      productWorkProcessList.value = [];
     }
   } catch {
     bomProcesses.value = [];
+    productWorkProcessList.value = [];
   }
 }
 
@@ -306,21 +327,23 @@ function handleSizeChange(size: number) {
 }
 
 function handleCreate() {
+  const today = todayStr();
   planForm.value = {
     productTypeId: '',
     plannedQuantity: 0,
-    plannedDate: '',
+    plannedDate: today,
     notes: '',
     estimatedWorkers: undefined,
     assignedSupervisorId: '',
     sourceCustomerName: '',
     processName: '',
-    batchDate: '',
+    batchDate: today,
     sourceType: 'MANUAL',
     sourceOrderId: '',
     sourceOrderItemId: '',
     customFields: {} as TableRow,
   };
+  productWorkProcessList.value = [];
   dialogVisible.value = true;
 }
 
@@ -712,6 +735,37 @@ async function handleExport() {
   }
 }
 
+// ==================== A2: Dialog dirty-check close ====================
+
+function isPlanFormDirty(): boolean {
+  const f = planForm.value;
+  return !!(
+    f.productTypeId ||
+    (f.plannedQuantity && f.plannedQuantity !== 0) ||
+    f.notes ||
+    f.sourceCustomerName ||
+    f.processName ||
+    f.sourceOrderId ||
+    f.sourceOrderItemId
+  );
+}
+
+async function handleDialogClose() {
+  if (isPlanFormDirty()) {
+    try {
+      await ElMessageBox.confirm('有未保存内容，确定关闭？', '提示', {
+        confirmButtonText: '确定关闭',
+        cancelButtonText: '继续编辑',
+        type: 'warning',
+      });
+    } catch {
+      // 用户取消 → 不关闭
+      return;
+    }
+  }
+  dialogVisible.value = false;
+}
+
 // ==================== AI Entry ====================
 
 function handleAiFill(params: TableRow) {
@@ -721,16 +775,17 @@ function handleAiFill(params: TableRow) {
     (pt: TableRow) => String(pt.name || '').includes(name) || name.includes(String(pt.name || ''))
   );
 
+  const today = todayStr();
   planForm.value = {
     productTypeId: matched ? String(matched.id) : '',
     plannedQuantity: Number(params.plannedQuantity || 0),
-    plannedDate: String(params.plannedDate || ''),
+    plannedDate: String(params.plannedDate || today),
     notes: String(params.notes || ''),
     estimatedWorkers: undefined,
     assignedSupervisorId: '',
     sourceCustomerName: String(params.sourceCustomerName || ''),
     processName: String(params.processName || ''),
-    batchDate: String(params.batchDate || ''),
+    batchDate: String(params.batchDate || today),
     sourceType: 'MANUAL',
     sourceOrderId: '',
     sourceOrderItemId: '',
@@ -969,7 +1024,13 @@ function handleAiFill(params: TableRow) {
     </el-dialog>
 
     <!-- 新建计划对话框 -->
-    <el-dialog v-model="dialogVisible" title="新建生产计划" width="500px">
+    <el-dialog
+      v-model="dialogVisible"
+      title="新建生产计划"
+      width="500px"
+      :close-on-click-modal="false"
+      :before-close="handleDialogClose"
+    >
       <el-form :model="planForm" label-width="100px">
         <el-form-item label="来源类型" required>
           <el-radio-group v-model="planForm.sourceType" @change="handleSourceTypeChange">
@@ -1016,7 +1077,15 @@ function handleAiFill(params: TableRow) {
           </el-select>
         </el-form-item>
         <el-form-item label="产品类型" required>
-          <el-select v-model="planForm.productTypeId" placeholder="选择产品类型" filterable style="width: 100%" @change="handleProductChange">
+          <!-- A4: 来源=销售订单时锁定产品类型，不允许自由选择 -->
+          <el-select
+            v-model="planForm.productTypeId"
+            placeholder="选择产品类型"
+            filterable
+            :disabled="planForm.sourceType === 'CUSTOMER_ORDER'"
+            style="width: 100%"
+            @change="handleProductChange"
+          >
             <el-option
               v-for="item in productTypes"
               :key="item.id"
@@ -1024,39 +1093,62 @@ function handleAiFill(params: TableRow) {
               :value="item.id"
             />
           </el-select>
+          <div
+            v-if="planForm.sourceType === 'CUSTOMER_ORDER'"
+            style="font-size: 12px; color: var(--text-color-secondary, #909399); margin-top: 4px;"
+          >
+            来源为销售订单时，产品类型由所选订单行自动确定，不可手动更改
+          </div>
         </el-form-item>
         <el-form-item label="客户名称">
           <el-input v-model="planForm.sourceCustomerName" placeholder="选择产品后自动填充，也可手动输入" />
         </el-form-item>
+        <!-- A3: 工序改为只读展示，不允许编辑；工序由产品工序配置决定 -->
         <el-form-item label="工序">
-          <el-select
-            v-model="planForm.processName"
-            placeholder="选择产品后加载BOM工序"
-            filterable
-            allow-create
-            clearable
-            style="width: 100%"
-          >
-            <el-option v-for="p in bomProcesses" :key="p" :label="p" :value="p" />
-          </el-select>
+          <template v-if="!planForm.productTypeId">
+            <span style="color: var(--text-color-secondary, #909399); font-size: 13px;">请先选择产品类型</span>
+          </template>
+          <template v-else-if="productWorkProcessList.length === 0">
+            <span style="color: var(--el-color-warning, #e6a23c); font-size: 13px;">
+              该产品未配置工序，请先到
+              <el-link type="primary" @click="router.push('/system/product-processes')" style="font-size: 13px; vertical-align: baseline;">产品工序配置</el-link>
+              中配置
+            </span>
+          </template>
+          <template v-else>
+            <div style="width: 100%;">
+              <el-tag
+                v-for="(wp, idx) in productWorkProcessList"
+                :key="wp.id"
+                size="small"
+                style="margin-right: 6px; margin-bottom: 4px;"
+              >{{ idx + 1 }}. {{ wp.processName }}</el-tag>
+            </div>
+          </template>
+          <!-- hidden binding keeps processName in sync for backend (uses first process name or empty) -->
+          <input type="hidden" :value="planForm.processName" />
         </el-form-item>
+        <!-- A5/E3: batchDate 已被后端消费 (ProductionProgressDashboard 按批次日期过滤)，保留；加说明区分两个日期 -->
         <el-form-item label="批次日期">
           <el-date-picker
             v-model="planForm.batchDate"
             type="date"
-            placeholder="生产批次日期"
+            placeholder="实际转批次日期（默认今日）"
             value-format="YYYY-MM-DD"
             style="width: 100%"
           />
+          <div style="font-size: 12px; color: var(--text-color-secondary, #909399); margin-top: 2px;">
+            批次日期 = 实际开工/转批次日；计划日期 = 预期完成生产日
+          </div>
         </el-form-item>
         <el-form-item label="计划数量" required>
           <el-input-number v-model="planForm.plannedQuantity" :min="1" style="width: 100%" />
         </el-form-item>
-        <el-form-item label="计划日期" required>
+        <el-form-item label="计划生产日" required>
           <el-date-picker
             v-model="planForm.plannedDate"
             type="date"
-            placeholder="选择日期"
+            placeholder="预期完成生产日期（默认今日）"
             value-format="YYYY-MM-DD"
             style="width: 100%"
           />
@@ -1067,15 +1159,16 @@ function handleAiFill(params: TableRow) {
         <el-form-item label="预计工人数">
           <el-input-number v-model="planForm.estimatedWorkers" :min="1" :max="100" placeholder="可选" style="width: 100%" />
         </el-form-item>
-        <el-form-item label="指派主管">
-          <el-select v-model="planForm.assignedSupervisorId" clearable placeholder="可选 - 选择主管" style="width: 100%">
+        <!-- E2: 指派主管为可选字段，后端 DTO 无 @NotNull，前端亦无 required 规则 -->
+        <el-form-item label="指派主管(可选)">
+          <el-select v-model="planForm.assignedSupervisorId" clearable placeholder="可不填，稍后再指派" style="width: 100%">
             <el-option v-for="sup in supervisors" :key="sup.id" :label="sup.fullName || sup.username" :value="sup.id" />
           </el-select>
         </el-form-item>
         <CanvasDynamicFields v-model="planForm.customFields" module-code="production_plan" />
       </el-form>
       <template #footer>
-        <el-button @click="dialogVisible = false">取消</el-button>
+        <el-button @click="handleDialogClose">取消</el-button>
         <el-button type="primary" :loading="dialogLoading" @click="submitPlan">确定</el-button>
       </template>
     </el-dialog>
