@@ -3808,7 +3808,7 @@ public class IntentRecognitionPipelineServiceImpl implements IntentRecognitionPi
     private static final Pattern CONTINUATION_BARE_TIME = Pattern.compile(
             "^(?:" +
             "这个月|上个月|本月|当月|上月" +
-            "|今天|昨天|前天|今日|昨日" +                       // X1 P1: 日粒度
+            "|今天|昨天|前天|今日|昨日" +                      // X1 P1: 日粒度
             "|本周末|上周末|周末" +                            // X1 P1: 周末
             "|本季度|上季度|第[一二三四1-4]季度" +
             "|本星期|这周|本周|上星期|上周" +

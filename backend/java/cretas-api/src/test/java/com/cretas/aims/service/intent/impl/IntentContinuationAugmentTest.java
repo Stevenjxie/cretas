@@ -136,6 +136,17 @@ class IntentContinuationAugmentTest {
     }
 
     @Test
+    @DisplayName("rolling window with 个 '最近3个月' (最近 branch) after RESTAURANT_REVENUE_TREND -> augments")
+    void rollingWindowZuijinWithGeAugments() {
+        IntentRecognitionPipelineServiceImpl service = newService();
+        String result = service.maybeAugmentContinuation(
+                "最近3个月", contextWithLastIntent("RESTAURANT_REVENUE_TREND"));
+        assertThat(result).isNotNull();
+        assertThat(result).contains("收入趋势");
+        assertThat(result).startsWith("最近3个月");
+    }
+
+    @Test
     @DisplayName("pure particle '呢' after RESTAURANT_BESTSELLER_QUERY -> canonical bestseller phrase")
     void pureParticleInheritsPriorIntent() {
         IntentRecognitionPipelineServiceImpl service = newService();
