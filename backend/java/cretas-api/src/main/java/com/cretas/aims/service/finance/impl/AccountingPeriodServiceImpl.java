@@ -183,11 +183,27 @@ public class AccountingPeriodServiceImpl implements AccountingPeriodService {
             // 数据没准带不全; backwards compat 优先于严格性).
             return;
         }
-        AccountingPeriod.Status status = getStatus(factoryId, year, month);
-        if (status == AccountingPeriod.Status.CLOSED) {
-            throw new PeriodClosedException(factoryId, year, month);
+        Optional<AccountingPeriod> periodOpt =
+                repo.findByFactoryIdAndYearAndMonthAndDeletedAtIsNull(factoryId, year, month);
+        if (periodOpt.isEmpty()) {
+            return;  // backwards compat: 无 row 默认 OPEN, voucher 可写
         }
-        // OPEN / PENDING_CLOSE — voucher 写允许 (PENDING_CLOSE 是审批中, 审批未通过仍需 voucher edit)
+        AccountingPeriod period = periodOpt.get();
+        if (period.getStatus() != AccountingPeriod.Status.CLOSED) {
+            // OPEN / PENDING_CLOSE — voucher 写允许 (PENDING_CLOSE 是审批中, 审批未通过仍需 voucher edit)
+            return;
+        }
+
+        // Wave2 月结: CLOSED 时检查 20 天调整窗口 (兑现邓总 "留20天调整窗口").
+        // adjust_deadline 内 → voucher 仍可调整 (silent pass); 窗口已过 / 无 deadline → 硬锁.
+        AccountingPeriod.AdjustWindowState windowState = period.getAdjustWindowState();
+        if (windowState == AccountingPeriod.AdjustWindowState.OPEN_WINDOW) {
+            log.debug("[AccountingPeriod] {}-{}-{} CLOSED 但调整窗口内 (截止={}), voucher 允许调整",
+                    factoryId, year, month, period.getAdjustDeadline());
+            return;
+        }
+        // LOCKED — 窗口已过 (或旧 CLOSED 行无 deadline) → 硬锁
+        throw new PeriodClosedException(factoryId, year, month);
     }
 
     // ==================== private helpers ====================

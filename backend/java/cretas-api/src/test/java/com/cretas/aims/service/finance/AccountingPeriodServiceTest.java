@@ -303,6 +303,55 @@ class AccountingPeriodServiceTest {
         assertDoesNotThrow(() -> service.assertOpen(FACTORY, Y, null));
     }
 
+    // ==================== Phase 6b: Wave2 调整窗口 (邓总20天窗口) ====================
+
+    @Test
+    void assertOpen_closedWithinAdjustWindow_silentlyPasses() {
+        // Wave2: CLOSED 但在 adjust_deadline 内 → 调整窗口, voucher 仍可写 (邓总20天窗口)
+        AccountingPeriod closedInWindow = AccountingPeriod.builder()
+                .id("p-win")
+                .factoryId(FACTORY).year(Y).month(M)
+                .status(AccountingPeriod.Status.CLOSED)
+                .closedAt(LocalDateTime.now().minusDays(3))
+                .adjustDeadline(LocalDateTime.now().plusDays(17))  // 20天窗口还剩17天
+                .build();
+        when(repo.findByFactoryIdAndYearAndMonthAndDeletedAtIsNull(FACTORY, Y, M))
+                .thenReturn(Optional.of(closedInWindow));
+
+        assertDoesNotThrow(() -> service.assertOpen(FACTORY, Y, M),
+                "CLOSED 但调整窗口未过期 → voucher 可调整, 不抛");
+    }
+
+    @Test
+    void assertOpen_closedAdjustWindowExpired_throwsPeriodClosed() {
+        // Wave2: CLOSED 且 adjust_deadline 已过 → 硬锁, 抛 PeriodClosedException
+        AccountingPeriod expired = AccountingPeriod.builder()
+                .id("p-exp")
+                .factoryId(FACTORY).year(Y).month(M)
+                .status(AccountingPeriod.Status.CLOSED)
+                .closedAt(LocalDateTime.now().minusDays(25))
+                .adjustDeadline(LocalDateTime.now().minusDays(5))  // 窗口5天前已过
+                .build();
+        when(repo.findByFactoryIdAndYearAndMonthAndDeletedAtIsNull(FACTORY, Y, M))
+                .thenReturn(Optional.of(expired));
+
+        assertThrows(PeriodClosedException.class,
+                () -> service.assertOpen(FACTORY, Y, M),
+                "调整窗口已过 → 硬锁");
+    }
+
+    @Test
+    void assertOpen_closedNullAdjustDeadline_throwsPeriodClosed() {
+        // Wave2 backwards compat: 旧 CLOSED 行 (无 adjust_deadline) → 立即硬锁, 行为不变
+        // closedPeriod (setUp) adjustDeadline == null
+        when(repo.findByFactoryIdAndYearAndMonthAndDeletedAtIsNull(FACTORY, Y, M))
+                .thenReturn(Optional.of(closedPeriod));
+
+        assertThrows(PeriodClosedException.class,
+                () -> service.assertOpen(FACTORY, Y, M),
+                "无 adjust_deadline 的旧 CLOSED 行立即硬锁 (backwards compat)");
+    }
+
     // ==================== Phase 7: input validation ====================
 
     @Test
