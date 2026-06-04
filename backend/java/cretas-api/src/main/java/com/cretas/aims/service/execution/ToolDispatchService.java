@@ -206,6 +206,13 @@ public class ToolDispatchService {
                                     params.put("productId", ref.getEntityId());
                                     log.info("从上下文解析产品: {}", ref.getEntityId());
                                     break;
+                                case "STORE":
+                                    params.put("store_name", ref.getEntityName());
+                                    if (ref.getEntityId() != null) {
+                                        params.put("store_id", ref.getEntityId());
+                                    }
+                                    log.info("从上下文解析门店: id={}, name={}", ref.getEntityId(), ref.getEntityName());
+                                    break;
                             }
                         }
                     }

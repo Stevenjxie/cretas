@@ -29,6 +29,9 @@ import java.util.Map;
  */
 public class RestaurantStoreRevenueRankGoldTool extends GoldBackedRestaurantTool {
 
+    private static final String FILTER_STORE_NAME = "store_name";
+    private static final String FILTER_STORE_ID = "store_id";
+
     @Override
     public String getToolName() {
         return "restaurant_store_revenue_rank_gold";
@@ -45,8 +48,18 @@ public class RestaurantStoreRevenueRankGoldTool extends GoldBackedRestaurantTool
         monthProp.put("type", "string");
         monthProp.put("description", "分析月份, 如 '2026年3月' / '上月', 不传默认全部数据");
 
+        Map<String, Object> storeNameProp = new HashMap<>();
+        storeNameProp.put("type", "string");
+        storeNameProp.put("description", "可选。门店名称, 用于多轮续接后的单门店过滤");
+
+        Map<String, Object> storeIdProp = new HashMap<>();
+        storeIdProp.put("type", "string");
+        storeIdProp.put("description", "可选。门店ID, 优先于门店名称用于单门店过滤");
+
         Map<String, Object> properties = new HashMap<>();
         properties.put("month", monthProp);
+        properties.put(FILTER_STORE_NAME, storeNameProp);
+        properties.put(FILTER_STORE_ID, storeIdProp);
 
         Map<String, Object> schema = new HashMap<>();
         schema.put("type", "object");
@@ -61,7 +74,20 @@ public class RestaurantStoreRevenueRankGoldTool extends GoldBackedRestaurantTool
     protected Map<String, Object> queryGold(
             String factoryId, LocalDate start, LocalDate end, Map<String, Object> params)
             throws Exception {
-        return gold.fetchFinanceSummary(factoryId, start, end, 5);
+        Map<String, Object> result = gold.fetchFinanceSummary(factoryId, start, end, 50);
+        if (result == null) {
+            return null;
+        }
+        Map<String, Object> copy = new LinkedHashMap<>(result);
+        if (params != null) {
+            if (params.get(FILTER_STORE_NAME) != null) {
+                copy.put(FILTER_STORE_NAME, params.get(FILTER_STORE_NAME));
+            }
+            if (params.get(FILTER_STORE_ID) != null) {
+                copy.put(FILTER_STORE_ID, params.get(FILTER_STORE_ID));
+            }
+        }
+        return copy;
     }
 
     @Override
@@ -77,12 +103,29 @@ public class RestaurantStoreRevenueRankGoldTool extends GoldBackedRestaurantTool
                         ? (List<Map<String, Object>>) goldResult.get("top_stores")
                         : Collections.emptyList();
 
+        Object filterStoreId = goldResult.get(FILTER_STORE_ID);
+        Object filterStoreName = goldResult.get(FILTER_STORE_NAME);
+        boolean hasStoreFilter = hasText(filterStoreId) || hasText(filterStoreName);
+        if (hasStoreFilter) {
+            rawStores = rawStores.stream()
+                    .filter(row -> matchesStore(row, filterStoreId, filterStoreName))
+                    .toList();
+            if (rawStores.isEmpty()) {
+                Map<String, Object> emptyResult = new LinkedHashMap<>();
+                emptyResult.put("dataAvailable", false);
+                emptyResult.put("message", emptyMessage());
+                emptyResult.put("actionHint", "请先查询门店营收排行，确认要续接的门店名称。");
+                return emptyResult;
+            }
+        }
+
         Object storeCountObj = goldResult.get("store_count");
         int storeCount = storeCountObj instanceof Number ? ((Number) storeCountObj).intValue() : rawStores.size();
 
         List<Map<String, Object>> storeRank = new ArrayList<>();
         for (Map<String, Object> row : rawStores) {
             Map<String, Object> entry = new LinkedHashMap<>();
+            entry.put("store_id", row.get("store_id"));
             entry.put("门店", row.get("store_name"));
             entry.put("营收", row.get("revenue"));
             entry.put("单数", row.get("bill_count"));
@@ -121,6 +164,9 @@ public class RestaurantStoreRevenueRankGoldTool extends GoldBackedRestaurantTool
         result.put("总营收", goldResult.get("total_revenue"));
         result.put("门店数", goldResult.get("store_count"));
         result.put("门店营收排行", storeRank);
+        if (!storeRank.isEmpty()) {
+            result.put("top_store", storeRank.get(0));
+        }
         result.put("dataAvailable", true);
         result.put("message", sb.toString());
         if (!chartNames.isEmpty()) {
@@ -128,6 +174,22 @@ public class RestaurantStoreRevenueRankGoldTool extends GoldBackedRestaurantTool
                     "门店营收排行 (万元)", chartNames, chartVals, "万元"));
         }
         return result;
+    }
+
+    private static boolean matchesStore(Map<String, Object> row, Object storeId, Object storeName) {
+        if (hasText(storeId)) {
+            Object rowStoreId = row.get("store_id");
+            return rowStoreId != null && rowStoreId.toString().equals(storeId.toString());
+        }
+        if (hasText(storeName)) {
+            Object rowStoreName = row.get("store_name");
+            return rowStoreName != null && rowStoreName.toString().equals(storeName.toString());
+        }
+        return true;
+    }
+
+    private static boolean hasText(Object value) {
+        return value != null && !value.toString().trim().isEmpty();
     }
 
     private static String fmtAmt(double v) {

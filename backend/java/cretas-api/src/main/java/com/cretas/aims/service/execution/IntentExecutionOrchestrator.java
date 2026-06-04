@@ -52,6 +52,9 @@ import java.util.stream.Collectors;
 @Service
 public class IntentExecutionOrchestrator {
 
+    private static final Pattern STORE_REFERENCE_PATTERN = Pattern.compile(
+            "那家店|这家店|该店|那个店|这个店|该门店|那家|这家");
+
     // ===== 依赖 =====
     private final AIIntentService aiIntentService;
     private final IntentSemanticsParser semanticsParser;
@@ -254,7 +257,8 @@ public class IntentExecutionOrchestrator {
         // Phrase confidence is 0.96 (matching v33.1 EarlyPhrase tier so /recognize and /execute
         // produce consistent routing).
         String userInput = request.getUserInput();
-        if (!negationVetoWrite && userInput != null && !userInput.isEmpty()) {
+        if (!negationVetoWrite && userInput != null && !userInput.isEmpty()
+                && !shouldBypassEarlyPhraseShortcutForStoreReference(userInput)) {
             IntentMatchResult earlyPhraseMatch = tryOrchestratorPhraseShortcut(userInput, factoryId);
             if (earlyPhraseMatch != null && earlyPhraseMatch.hasMatch()) {
                 AIIntentConfig phraseIntent = earlyPhraseMatch.getBestMatch();
@@ -338,6 +342,10 @@ public class IntentExecutionOrchestrator {
         log.info("识别到意图: code={}, category={}, sensitivity={}, matchMethod={}, confidence={}",
                 intent.getIntentCode(), intent.getIntentCategory(), intent.getSensitivityLevel(),
                 matchResult.getMatchMethod(), matchResult.getConfidence());
+
+        if (requiresStoreReferenceClarification(request, matchResult, intent)) {
+            return buildStoreReferenceClarificationResponse(request);
+        }
 
         // 权限检查
         if (!aiIntentService.hasPermission(intent.getIntentCode(), userRole)) {
@@ -1111,6 +1119,41 @@ public class IntentExecutionOrchestrator {
                 .build();
     }
 
+    boolean requiresStoreReferenceClarification(
+            IntentExecuteRequest request, IntentMatchResult matchResult, AIIntentConfig intent) {
+        if (intent == null || !"RESTAURANT_STORE_REVENUE_RANK".equals(intent.getIntentCode())) {
+            return false;
+        }
+        String input = request != null ? request.getUserInput() : null;
+        if (input == null || !STORE_REFERENCE_PATTERN.matcher(input).find()) {
+            return false;
+        }
+        if (matchResult == null || matchResult.getPreprocessedQuery() == null
+                || matchResult.getPreprocessedQuery().getResolvedReferences() == null) {
+            return true;
+        }
+        return matchResult.getPreprocessedQuery().getResolvedReferences().values().stream()
+                .noneMatch(ref -> ref != null
+                        && ref.getEntityType() != null
+                        && "STORE".equalsIgnoreCase(ref.getEntityType()));
+    }
+
+    boolean shouldBypassEarlyPhraseShortcutForStoreReference(String userInput) {
+        return userInput != null && STORE_REFERENCE_PATTERN.matcher(userInput).find();
+    }
+
+    IntentExecuteResponse buildStoreReferenceClarificationResponse(IntentExecuteRequest request) {
+        final String msg = "请问您指的是哪家店？";
+        return IntentExecuteResponse.builder()
+                .intentRecognized(false)
+                .status("NEED_CLARIFICATION")
+                .message(msg)
+                .formattedText(msg)
+                .sessionId(request != null ? request.getSessionId() : null)
+                .executedAt(LocalDateTime.now())
+                .build();
+    }
+
     IntentExecuteResponse buildClarificationResponse(IntentMatchResult matchResult, String factoryId) {
         AIIntentConfig matchedIntent = matchResult.getBestMatch();
         List<IntentExecuteResponse.SuggestedAction> candidateActions = buildCandidateActions(matchResult, factoryId);
@@ -1571,6 +1614,7 @@ public class IntentExecutionOrchestrator {
             List<Map<String, Object>> items = null;
             if (data instanceof Map) {
                 Map<String, Object> dataMap = (Map<String, Object>) data;
+                extractTopStoreSlot(sessionId, dataMap.get("top_store"));
                 if (dataMap.containsKey("content") && dataMap.get("content") instanceof List)
                     items = (List<Map<String, Object>>) dataMap.get("content");
             } else if (data instanceof List) {
@@ -1590,6 +1634,30 @@ public class IntentExecutionOrchestrator {
             extractSlot(sessionId, firstItem, "SUPPLIER", "supplierId", "supplier_id");
             extractSlot(sessionId, firstItem, "PRODUCT", "productTypeId", "productId", "materialTypeId");
         } catch (Exception e) { log.debug("Entity extraction failed: {}", e.getMessage()); }
+    }
+
+    @SuppressWarnings("unchecked")
+    private void extractTopStoreSlot(String sessionId, Object topStoreObj) {
+        if (topStoreObj == null) return;
+        try {
+            Map<String, Object> topStore;
+            if (topStoreObj instanceof Map) {
+                topStore = (Map<String, Object>) topStoreObj;
+            } else {
+                topStore = objectMapper.convertValue(topStoreObj,
+                        new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>() {});
+            }
+            String id = getStringValue(topStore, "store_id", "id");
+            String name = getStringValue(topStore, "门店", "store_name", "name");
+            if (id == null || name == null) return;
+            var slot = com.cretas.aims.dto.conversation.EntitySlot.store(id, name);
+            conversationMemoryService.updateEntitySlot(
+                    sessionId,
+                    com.cretas.aims.dto.conversation.EntitySlot.SlotType.STORE,
+                    slot);
+        } catch (Exception e) {
+            log.debug("STORE entity extraction failed: {}", e.getMessage());
+        }
     }
 
     private void extractSlot(String sessionId, Map<String, Object> item, String entityType, String... idKeys) {
@@ -1614,6 +1682,7 @@ public class IntentExecutionOrchestrator {
         return switch (entityType.toUpperCase()) {
             case "BATCH", "MATERIAL_BATCH" -> com.cretas.aims.dto.conversation.EntitySlot.SlotType.BATCH;
             case "SUPPLIER" -> com.cretas.aims.dto.conversation.EntitySlot.SlotType.SUPPLIER;
+            case "STORE" -> com.cretas.aims.dto.conversation.EntitySlot.SlotType.STORE;
             case "CUSTOMER" -> com.cretas.aims.dto.conversation.EntitySlot.SlotType.CUSTOMER;
             case "PRODUCT", "PRODUCT_TYPE" -> com.cretas.aims.dto.conversation.EntitySlot.SlotType.PRODUCT;
             case "WAREHOUSE", "LOCATION" -> com.cretas.aims.dto.conversation.EntitySlot.SlotType.WAREHOUSE;

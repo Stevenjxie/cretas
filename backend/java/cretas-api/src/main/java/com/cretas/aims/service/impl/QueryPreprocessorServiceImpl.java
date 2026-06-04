@@ -792,6 +792,8 @@ public class QueryPreprocessorServiceImpl implements QueryPreprocessorService {
         switch (type) {
             case BATCH:
                 return new String[]{"这批", "那批", "该批次", "这个批次"};
+            case STORE:
+                return new String[]{"那家店", "这家店", "该店", "那家", "这家", "那个店", "这个店", "该门店"};
             case SUPPLIER:
                 return new String[]{"这家", "那家", "那个供应商", "他们"};
             case CUSTOMER:

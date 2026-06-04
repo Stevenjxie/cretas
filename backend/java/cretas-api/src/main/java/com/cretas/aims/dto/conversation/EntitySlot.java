@@ -31,6 +31,8 @@ public class EntitySlot {
         BATCH,
         /** 供应商 */
         SUPPLIER,
+        /** 门店 */
+        STORE,
         /** 客户 */
         CUSTOMER,
         /** 产品 */
@@ -118,6 +120,21 @@ public class EntitySlot {
                 .id(id)
                 .name(name)
                 .displayValue("供应商 " + name)
+                .mentionedAt(LocalDateTime.now())
+                .mentionCount(1)
+                .confidence(1.0)
+                .build();
+    }
+
+    /**
+     * 创建门店槽位
+     */
+    public static EntitySlot store(String id, String name) {
+        return EntitySlot.builder()
+                .type(SlotType.STORE)
+                .id(id)
+                .name(name)
+                .displayValue("门店 " + name)
                 .mentionedAt(LocalDateTime.now())
                 .mentionCount(1)
                 .confidence(1.0)

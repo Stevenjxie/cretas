@@ -6,6 +6,7 @@ import com.cretas.aims.config.DashScopeConfig;
 import com.cretas.aims.config.IntentKnowledgeBase;
 import com.cretas.aims.dto.ai.IntentExecuteRequest;
 import com.cretas.aims.dto.ai.IntentExecuteResponse;
+import com.cretas.aims.dto.conversation.EntitySlot;
 import com.cretas.aims.entity.config.AIIntentConfig;
 import com.cretas.aims.repository.AIAnalysisResultRepository;
 import com.cretas.aims.service.AIIntentService;
@@ -24,7 +25,11 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 
+import java.util.Map;
+
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
@@ -82,6 +87,35 @@ class IntentExecutionOrchestratorMemoryPersistTest {
         verify(memory).updateLastIntent("sess-mt-1", "RESTAURANT_REVENUE_TREND");
         verify(memory, times(2)).addMessage(eq("sess-mt-1"), any());
         verifyNoMoreInteractions(memory);
+    }
+
+    @Test
+    @DisplayName("显式门店排行结果 top_store → 写 STORE 槽位")
+    void withTopStoreResult_persistsStoreEntitySlot() {
+        AIIntentConfig intent = AIIntentConfig.builder()
+                .intentCode("RESTAURANT_STORE_REVENUE_RANK").build();
+        IntentExecuteRequest req = IntentExecuteRequest.builder()
+                .sessionId("sess-store").userInput("哪家店业绩最好").build();
+        IntentExecuteResponse resp = IntentExecuteResponse.builder()
+                .status("COMPLETED")
+                .resultData(Map.of(
+                        "top_store", Map.of(
+                                "store_id", 101,
+                                "门店", "人民广场店",
+                                "营收", 2000.0,
+                                "单数", 20)))
+                .build();
+
+        orchestrator.persistConversationMemoryForExplicitIntent(
+                "RES_3101_009", req, resp, intent, 9L);
+
+        ArgumentCaptor<EntitySlot> slotCaptor = ArgumentCaptor.forClass(EntitySlot.class);
+        verify(memory).updateEntitySlot(
+                eq("sess-store"), eq(EntitySlot.SlotType.STORE), slotCaptor.capture());
+        EntitySlot slot = slotCaptor.getValue();
+        assertThat(slot.getId()).isEqualTo("101");
+        assertThat(slot.getName()).isEqualTo("人民广场店");
+        assertThat(slot.getDisplayValue()).isEqualTo("门店 人民广场店");
     }
 
     @Test

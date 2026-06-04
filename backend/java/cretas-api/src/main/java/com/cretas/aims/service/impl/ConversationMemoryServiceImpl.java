@@ -72,6 +72,13 @@ public class ConversationMemoryServiceImpl implements ConversationMemoryService 
     );
 
     /**
+     * 门店指代模式
+     */
+    private static final Pattern STORE_REFERENCE_PATTERN = Pattern.compile(
+            "(那家店|这家店|该店|那个店|这个店|该门店|那家|这家)"
+    );
+
+    /**
      * 客户指代模式
      */
     private static final Pattern CUSTOMER_REFERENCE_PATTERN = Pattern.compile(
@@ -235,6 +242,7 @@ public class ConversationMemoryServiceImpl implements ConversationMemoryService 
 
         // 尝试匹配各种指代模式
         result = resolvePatternReference(result, BATCH_REFERENCE_PATTERN, slots, EntitySlot.SlotType.BATCH.name());
+        result = resolvePatternReference(result, STORE_REFERENCE_PATTERN, slots, EntitySlot.SlotType.STORE.name());
         result = resolvePatternReference(result, SUPPLIER_REFERENCE_PATTERN, slots, EntitySlot.SlotType.SUPPLIER.name());
         result = resolvePatternReference(result, CUSTOMER_REFERENCE_PATTERN, slots, EntitySlot.SlotType.CUSTOMER.name());
         result = resolvePatternReference(result, PRODUCT_REFERENCE_PATTERN, slots, EntitySlot.SlotType.PRODUCT.name());
@@ -607,6 +615,8 @@ public class ConversationMemoryServiceImpl implements ConversationMemoryService 
                 return "批次";
             case "SUPPLIER":
                 return "供应商";
+            case "STORE":
+                return "门店";
             case "CUSTOMER":
                 return "客户";
             case "PRODUCT":
