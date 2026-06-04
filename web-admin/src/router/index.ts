@@ -1500,6 +1500,13 @@ const businessRoutes: RouteRecordRaw[] = [
             name: 'SupplierDeliveryNoteDetail',
             component: () => import('@/views/restaurant/supplier-delivery/SupplierDeliveryNoteDetail.vue'),
             meta: { requiresAuth: true, title: '送货单详情', module: 'restaurant', hidden: true },
+          },
+          {
+            // Wave2 价格异常威慑引擎 (邓总差异化护城河): 同类物料相邻进价异常检测 + 解释录入
+            path: 'price-anomaly',
+            name: 'RestaurantPriceAnomaly',
+            component: () => import('@/views/restaurant/price-anomaly/index.vue'),
+            meta: { requiresAuth: true, title: '价格异常预警', module: 'restaurant' },
           }
         ]
       },
