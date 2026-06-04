@@ -6,6 +6,7 @@ import com.cretas.aims.ai.tool.ToolRegistry;
 import com.cretas.aims.ai.dto.ToolCall;
 import com.cretas.aims.config.RequireRole;
 import com.cretas.aims.dto.common.ApiResponse;
+import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.service.MobileService;
 import com.cretas.aims.utils.TokenUtils;
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -18,6 +19,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.*;
+import java.util.regex.Pattern;
 
 @Slf4j
 @RestController
@@ -31,19 +33,19 @@ public class CanvasAIController {
     private final DashScopeClient dashScopeClient;
     private final MobileService mobileService;
 
+    private static final String PRODUCT_WORK_PROCESS_MODULE = "product_work_process_config";
+    private static final String PRODUCT_WORK_PROCESS_TOOL = "canvas_product_work_process_config";
+    private static final String PRODUCT_WORK_PROCESS_DRAFT_REPLY = "已生成工序配置草稿";
+
     /**
-     * Build tool execution context with factoryId + userId.
-     * Canvas AI tools (e.g. canvas_set_user_permission, canvas_apply_template) require userId.
+     * Only canvas_* tools are allowed via AI chat to prevent prompt injection from
+     * calling data-destructive or system-level tools.
      */
-    /** Only canvas_* tools are allowed via AI chat — prevents prompt injection from
-     *  tricking the LLM into calling data-destructive or system-level tools. */
-    private static final java.util.regex.Pattern CANVAS_TOOL_PATTERN =
-        java.util.regex.Pattern.compile("^canvas_[a-z0-9_]+$");
+    private static final Pattern CANVAS_TOOL_PATTERN = Pattern.compile("^canvas_[a-z0-9_]+$");
 
     private void validateCanvasTool(String toolName) {
         if (toolName == null || !CANVAS_TOOL_PATTERN.matcher(toolName).matches()) {
-            throw new com.cretas.aims.exception.BusinessException(
-                "Canvas AI only allows canvas_* tools, rejected: " + toolName);
+            throw new BusinessException("Canvas AI only allows canvas_* tools, rejected: " + toolName);
         }
     }
 
@@ -86,6 +88,7 @@ public class CanvasAIController {
         private String message;
         private String mode; // autopilot, plan, action
         private String moduleCode;
+        private Map<String, Object> params;
     }
 
     @Data
@@ -114,6 +117,10 @@ public class CanvasAIController {
         Map<String, Object> toolContext = buildToolContext(factoryId, authorization);
 
         try {
+            if (PRODUCT_WORK_PROCESS_MODULE.equals(request.getModuleCode())) {
+                return ApiResponse.success(handleProductWorkProcessConfigChat(request, toolContext));
+            }
+
             switch (mode) {
                 case "autopilot" -> {
                     response.setReply(executeAutopilot(factoryId, message, toolContext));
@@ -137,6 +144,48 @@ public class CanvasAIController {
         }
 
         return ApiResponse.success(response);
+    }
+
+    /**
+     * D1 narrow module route: product work-process config needs catalog-aware
+     * parsing by a business Tool, not the generic Canvas prompt. Existing canvas
+     * modules keep the original LLM path above.
+     */
+    private AIResponse handleProductWorkProcessConfigChat(
+            AIRequest request, Map<String, Object> toolContext) throws Exception {
+        ToolExecutor executor = toolRegistry.getExecutor(PRODUCT_WORK_PROCESS_TOOL)
+                .orElseThrow(() -> new BusinessException("工具不存在: " + PRODUCT_WORK_PROCESS_TOOL));
+
+        Map<String, Object> params = new LinkedHashMap<>();
+        if (request.getParams() != null) {
+            params.putAll(request.getParams());
+        }
+        params.put("message", request.getMessage());
+        params.put("apply", false);
+
+        String argsJson = objectMapper.writeValueAsString(params);
+        ToolCall toolCall = ToolCall.of(
+                "d1-preview-" + System.currentTimeMillis(), PRODUCT_WORK_PROCESS_TOOL, argsJson);
+        String raw = executor.supportsPreview()
+                ? executor.preview(toolCall, toolContext)
+                : executor.execute(toolCall, toolContext);
+
+        Map<String, Object> toolResponse = objectMapper.readValue(raw, new TypeReference<Map<String, Object>>() {});
+        @SuppressWarnings("unchecked")
+        Map<String, Object> data = (Map<String, Object>) toolResponse.getOrDefault("data", Map.of());
+
+        AIResponse response = new AIResponse();
+        response.setApplied(false);
+        response.setReply(Objects.toString(
+                data.getOrDefault("message", PRODUCT_WORK_PROCESS_DRAFT_REPLY),
+                PRODUCT_WORK_PROCESS_DRAFT_REPLY));
+        response.setDiffs(List.of(Map.of(
+                "type", "PRODUCT_WORK_PROCESS_DRAFT",
+                "tool", PRODUCT_WORK_PROCESS_TOOL,
+                "params", data,
+                "description", response.getReply()
+        )));
+        return response;
     }
 
     @PostMapping("/apply-diffs")
