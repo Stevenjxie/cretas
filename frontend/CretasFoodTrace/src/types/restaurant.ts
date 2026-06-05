@@ -133,3 +133,55 @@ export interface WastageCreateRequest {
   estimatedCost?: number;
   notes?: string;
 }
+
+// ==================== Supplier Delivery (供应商送货验收入库) ====================
+
+export type SupplierDeliveryStatus = 'DRAFT' | 'CONFIRMED' | 'REJECTED';
+export type DeliveryPostingStatus = 'UNPOSTED' | 'POSTING' | 'POSTED' | 'FAILED';
+
+export interface SupplierDeliveryLine {
+  id?: number;
+  ingredientName: string;
+  rawMaterialTypeId?: string;
+  quantity?: number;
+  unit?: string;
+  unitPrice?: number | null;
+  lineAmount?: number | null;
+  qcResult?: string;
+  materialBatchId?: string;
+  remark?: string;
+  ocrConfidence?: number;
+}
+
+export interface SupplierDeliveryNote {
+  id: string;
+  factoryId: string;
+  sourceType?: 'OCR' | 'MANUAL';
+  photoOssUrl?: string;
+  supplierId?: string;
+  supplierName?: string;
+  deliveryDate: string;
+  warehouseId?: string;
+  noteNumber?: string;
+  totalAmount?: number | null;
+  ocrConfidence?: number;
+  ocrErrorMessage?: string;
+  status: SupplierDeliveryStatus;
+  postingStatus?: DeliveryPostingStatus;
+  receiveRecordId?: string;
+  postedAt?: string;
+  postingError?: string;
+  rejectReasonCode?: string;
+  rejectReasonNote?: string;
+  lowConfidenceWarning?: boolean;
+  lines?: SupplierDeliveryLine[];
+}
+
+export interface CreateSupplierDeliveryRequest {
+  supplierId: string;
+  supplierName?: string;
+  deliveryDate: string;
+  warehouseId?: string;
+  noteNumber?: string;
+  lines: SupplierDeliveryLine[];
+}

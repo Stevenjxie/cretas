@@ -64,6 +64,15 @@ public class SupplierDeliveryNoteLine {
     @Column(name = "line_amount", precision = 15, scale = 2)
     private BigDecimal lineAmount;
 
+    @Column(name = "qc_result", length = 50)
+    private String qcResult;
+
+    @Column(name = "material_batch_id", length = 191)
+    private String materialBatchId;
+
+    @Column(name = "remark", columnDefinition = "TEXT")
+    private String remark;
+
     /** 行级置信度 (OCR)。 */
     @Column(name = "ocr_confidence", precision = 4, scale = 3)
     private BigDecimal ocrConfidence;

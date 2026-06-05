@@ -11,6 +11,7 @@ import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.repository.restaurant.SupplierDeliveryNoteLineRepository;
 import com.cretas.aims.repository.restaurant.SupplierDeliveryNoteRepository;
 import com.cretas.aims.service.OssService;
+import com.cretas.aims.service.restaurant.RestaurantInventoryPostingService;
 import com.cretas.aims.service.restaurant.impl.SupplierDeliveryNoteServiceImpl;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -58,6 +59,7 @@ class SupplierDeliveryNoteServiceTest {
     @Mock OssService ossService;
     @Mock RawMaterialTypeRepository rawMaterialTypeRepository;
     @Mock SupplierPriceGoldClient goldClient;
+    @Mock RestaurantInventoryPostingService postingService;
 
     @InjectMocks SupplierDeliveryNoteServiceImpl service;
 
@@ -135,8 +137,9 @@ class SupplierDeliveryNoteServiceTest {
     @DisplayName("confirmNote 调 gold upsert 并标 CONFIRMED")
     void confirmNote_callsGoldUpsert() throws IOException {
         SupplierDeliveryNote note = draftWithLine();
-        when(noteRepository.findByIdAndFactoryId("N1", FACTORY)).thenReturn(Optional.of(note));
-        when(noteRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        note.setStatus(DeliveryNoteStatus.CONFIRMED);
+        note.setConfirmedBy(9L);
+        when(postingService.postSupplierDeliveryToInventory(FACTORY, "N1", 9L)).thenReturn(note);
         when(goldClient.upsertSupplierPriceBatch(eq(FACTORY), eq("N1"), anyList())).thenReturn(1);
 
         SupplierDeliveryNote result = service.confirmNote(FACTORY, "N1", 9L);
@@ -150,7 +153,9 @@ class SupplierDeliveryNoteServiceTest {
     @DisplayName("confirmNote gold upsert 失败不回滚确认 (fail-soft D5)")
     void confirmNote_goldUpsertFails_doesNotRollbackConfirm() throws IOException {
         SupplierDeliveryNote note = draftWithLine();
-        when(noteRepository.findByIdAndFactoryId("N1", FACTORY)).thenReturn(Optional.of(note));
+        note.setStatus(DeliveryNoteStatus.CONFIRMED);
+        note.setConfirmedBy(9L);
+        when(postingService.postSupplierDeliveryToInventory(FACTORY, "N1", 9L)).thenReturn(note);
         when(noteRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
         when(goldClient.upsertSupplierPriceBatch(anyString(), anyString(), anyList()))
                 .thenThrow(new IOException("gold down"));
@@ -166,11 +171,11 @@ class SupplierDeliveryNoteServiceTest {
     @Test
     @DisplayName("confirmNote 非 DRAFT 抛异常")
     void confirmNote_invalidStatus_throws() {
-        SupplierDeliveryNote note = draftWithLine();
-        note.setStatus(DeliveryNoteStatus.CONFIRMED);
-        when(noteRepository.findByIdAndFactoryId("N1", FACTORY)).thenReturn(Optional.of(note));
+        when(postingService.postSupplierDeliveryToInventory(FACTORY, "N1", 9L))
+                .thenThrow(new BusinessException(409, "只有草稿送货单可验收入库"));
 
         assertThrows(BusinessException.class, () -> service.confirmNote(FACTORY, "N1", 9L));
+        verify(postingService).markSupplierDeliveryPostingFailed(eq(FACTORY), eq("N1"), anyString());
     }
 
     // ---- 8. reject invalid status ----

@@ -13,6 +13,7 @@ import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.repository.restaurant.SupplierDeliveryNoteLineRepository;
 import com.cretas.aims.repository.restaurant.SupplierDeliveryNoteRepository;
 import com.cretas.aims.service.OssService;
+import com.cretas.aims.service.restaurant.RestaurantInventoryPostingService;
 import com.cretas.aims.service.restaurant.SupplierDeliveryNoteService;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -51,6 +52,7 @@ public class SupplierDeliveryNoteServiceImpl implements SupplierDeliveryNoteServ
     private final OssService ossService;
     private final RawMaterialTypeRepository rawMaterialTypeRepository;
     private final SupplierPriceGoldClient goldClient;
+    private final RestaurantInventoryPostingService postingService;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -241,6 +243,7 @@ public class SupplierDeliveryNoteServiceImpl implements SupplierDeliveryNoteServ
         note.setSupplierId(req.getSupplierId());
         note.setSupplierName(req.getSupplierName());
         note.setDeliveryDate(req.getDeliveryDate() != null ? req.getDeliveryDate() : LocalDate.now());
+        note.setWarehouseId(req.getWarehouseId());
         note.setNoteNumber(req.getNoteNumber());
         note.setStatus(DeliveryNoteStatus.DRAFT);
         note.setCreatedBy(userId);
@@ -267,17 +270,13 @@ public class SupplierDeliveryNoteServiceImpl implements SupplierDeliveryNoteServ
     @Override
     @Transactional
     public SupplierDeliveryNote confirmNote(String factoryId, String noteId, Long userId) {
-        SupplierDeliveryNote note = mustFindDraftOrAny(factoryId, noteId);
-        if (note.getStatus() != DeliveryNoteStatus.DRAFT) {
-            throw new BusinessException(409, "仅草稿状态可确认 (当前: " + note.getStatus() + ")")
-                    .withCode("INVALID_STATUS")
-                    .withHint("该送货单已确认或已拒绝, 无需再次确认");
+        SupplierDeliveryNote saved;
+        try {
+            saved = postingService.postSupplierDeliveryToInventory(factoryId, noteId, userId);
+        } catch (RuntimeException e) {
+            postingService.markSupplierDeliveryPostingFailed(factoryId, noteId, e.getMessage());
+            throw e;
         }
-        note.setStatus(DeliveryNoteStatus.CONFIRMED);
-        note.setConfirmedBy(userId);
-        note.setConfirmedAt(LocalDateTime.now());
-        // 先持久化确认状态 (主流程)
-        SupplierDeliveryNote saved = noteRepository.save(note);
 
         // 写 gold (D5 fail-soft: 失败不回滚确认, 记 error message)
         try {
@@ -408,6 +407,9 @@ public class SupplierDeliveryNoteServiceImpl implements SupplierDeliveryNoteServ
         line.setQuantity(dto.getQuantity());
         line.setUnit(dto.getUnit());
         line.setUnitPrice(dto.getUnitPrice());
+        line.setQcResult(dto.getQcResult());
+        line.setMaterialBatchId(dto.getMaterialBatchId());
+        line.setRemark(dto.getRemark());
         // 数字联动 (Rule 3): line_amount 缺失但有 qty×price 则自动算
         if (dto.getLineAmount() != null) {
             line.setLineAmount(dto.getLineAmount());

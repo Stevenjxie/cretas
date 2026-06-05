@@ -449,6 +449,9 @@ export type FAManagementStackParamList = {
   StocktakingList: undefined;
   StocktakingExecute: { recordId?: string } | undefined;
   StocktakingSummary: undefined;
+  SupplierDeliveryList: undefined;
+  SupplierDeliveryCreate: undefined;
+  SupplierDeliveryDetail: { noteId: string };
 
   // Track D2 — 工序管理 (M-WP-1) + 产品工序配置 (M-WP-2)
   WorkProcessList: undefined;

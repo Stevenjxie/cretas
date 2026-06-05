@@ -1,0 +1,108 @@
+import React, { useCallback, useState } from 'react';
+import { RefreshControl, ScrollView, StyleSheet, TouchableOpacity, View } from 'react-native';
+import { Chip, FAB, Surface, Text } from 'react-native-paper';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { MaterialCommunityIcons } from '@expo/vector-icons';
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
+import { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import { FAManagementStackParamList } from '../../../types/navigation';
+import { restaurantApiClient } from '../../../services/api/restaurantApiClient';
+import type { SupplierDeliveryNote, SupplierDeliveryStatus } from '../../../types/restaurant';
+import { handleError } from '../../../utils/errorHandler';
+
+type Nav = NativeStackNavigationProp<FAManagementStackParamList, 'SupplierDeliveryList'>;
+
+const STATUS_LABEL: Record<SupplierDeliveryStatus, string> = {
+  DRAFT: '待验收',
+  CONFIRMED: '已入库',
+  REJECTED: '已拒绝',
+};
+
+export function SupplierDeliveryListScreen() {
+  const navigation = useNavigation<Nav>();
+  const [status, setStatus] = useState<SupplierDeliveryStatus>('DRAFT');
+  const [notes, setNotes] = useState<SupplierDeliveryNote[]>([]);
+  const [loading, setLoading] = useState(false);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const { data } = await restaurantApiClient.getSupplierDeliveryNotes({ status, page: 1, size: 50 });
+      setNotes(data);
+    } catch (error) {
+      handleError(error, { title: '送货单加载失败' });
+    } finally {
+      setLoading(false);
+    }
+  }, [status]);
+
+  useFocusEffect(useCallback(() => { void load(); }, [load]));
+
+  return (
+    <SafeAreaView style={styles.container}>
+      <View style={styles.header}>
+        <Text style={styles.headerTitle}>待验收入库</Text>
+        <Text style={styles.headerSub}>供应商送货后，仓管确认生成真实库存批次</Text>
+      </View>
+
+      <ScrollView refreshControl={<RefreshControl refreshing={loading} onRefresh={load} />}>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.tabs}>
+          {(['DRAFT', 'CONFIRMED', 'REJECTED'] as SupplierDeliveryStatus[]).map(s => (
+            <Chip key={s} selected={status === s} onPress={() => setStatus(s)} style={styles.tab}>
+              {STATUS_LABEL[s]}
+            </Chip>
+          ))}
+        </ScrollView>
+
+        <View style={styles.list}>
+          {notes.length === 0 ? (
+            <View style={styles.empty}>
+              <MaterialCommunityIcons name="truck-delivery-outline" size={48} color="#C0C4CC" />
+              <Text style={styles.emptyText}>暂无{STATUS_LABEL[status]}送货单</Text>
+            </View>
+          ) : notes.map(note => (
+            <TouchableOpacity
+              key={note.id}
+              activeOpacity={0.86}
+              onPress={() => navigation.navigate('SupplierDeliveryDetail', { noteId: note.id })}
+            >
+              <Surface style={styles.card} elevation={1}>
+                <View style={styles.cardHeader}>
+                  <Text style={styles.noteNo}>{note.noteNumber || note.id}</Text>
+                  <Text style={styles.badge}>{note.postingStatus || 'UNPOSTED'}</Text>
+                </View>
+                <Text style={styles.supplier}>{note.supplierName || note.supplierId || '未绑定供应商'}</Text>
+                <Text style={styles.meta}>{note.deliveryDate} · {(note.lines || []).length} 行食材</Text>
+                {note.postingError ? <Text style={styles.error}>{note.postingError}</Text> : null}
+              </Surface>
+            </TouchableOpacity>
+          ))}
+        </View>
+      </ScrollView>
+
+      <FAB icon="plus" style={styles.fab} onPress={() => navigation.navigate('SupplierDeliveryCreate')} />
+    </SafeAreaView>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: '#f5f5f5' },
+  header: { backgroundColor: '#2563EB', paddingHorizontal: 16, paddingTop: 12, paddingBottom: 16 },
+  headerTitle: { fontSize: 20, fontWeight: '700', color: '#fff' },
+  headerSub: { fontSize: 12, color: 'rgba(255,255,255,0.84)', marginTop: 4 },
+  tabs: { paddingHorizontal: 16, paddingVertical: 10, flexGrow: 0 },
+  tab: { marginRight: 8 },
+  list: { paddingHorizontal: 16, paddingBottom: 90 },
+  card: { backgroundColor: '#fff', borderRadius: 10, padding: 14, marginBottom: 12 },
+  cardHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  noteNo: { fontSize: 15, fontWeight: '700', color: '#1F2937' },
+  badge: { fontSize: 11, color: '#2563EB', backgroundColor: '#EFF6FF', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 4 },
+  supplier: { fontSize: 14, color: '#374151', marginTop: 8 },
+  meta: { fontSize: 12, color: '#6B7280', marginTop: 6 },
+  error: { color: '#B91C1C', fontSize: 12, marginTop: 8 },
+  empty: { alignItems: 'center', paddingTop: 80 },
+  emptyText: { color: '#6B7280', marginTop: 12 },
+  fab: { position: 'absolute', right: 16, bottom: 24, backgroundColor: '#2563EB' },
+});
+
+export default SupplierDeliveryListScreen;
