@@ -6,6 +6,7 @@ import com.cretas.aims.entity.Attachment;
 import com.cretas.aims.entity.Attachment.EntityType;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.AttachmentRepository;
+import com.cretas.aims.repository.ProductionReportRepository;
 import com.cretas.aims.service.OssService;
 import com.cretas.aims.service.attachment.dto.RegisterAttachmentRequest;
 import com.cretas.aims.service.attachment.dto.UpdateAttachmentRequest;
@@ -41,6 +42,9 @@ class AttachmentServiceImplTest {
     private AttachmentRepository attachmentRepository;
 
     @Mock
+    private ProductionReportRepository productionReportRepository;
+
+    @Mock
     private OssService ossService;
 
     @Mock
@@ -59,7 +63,7 @@ class AttachmentServiceImplTest {
 
     @BeforeEach
     void setUp() {
-        service = new AttachmentServiceImpl(attachmentRepository, ossService, ossConfig);
+        service = new AttachmentServiceImpl(attachmentRepository, productionReportRepository, ossService, ossConfig);
         // ossClient is @Autowired(required=false) — inject via reflection for tests
         try {
             Field f = AttachmentServiceImpl.class.getDeclaredField("ossClient");

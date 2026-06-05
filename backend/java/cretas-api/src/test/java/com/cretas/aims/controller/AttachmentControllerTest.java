@@ -183,7 +183,7 @@ class AttachmentControllerTest {
     @Test
     @DisplayName("✅ DELETE /attachments/{id} 软删, 返成功消息")
     void softDelete_returnsSuccessMessage() {
-        ResponseEntity<ApiResponse<Void>> resp = controller.softDelete(FACTORY_ID, ATT_ID);
+        ResponseEntity<ApiResponse<Void>> resp = controller.softDelete(FACTORY_ID, ATT_ID, request);
 
         assertEquals(HttpStatus.OK, resp.getStatusCode());
         assertTrue(resp.getBody().getSuccess());
