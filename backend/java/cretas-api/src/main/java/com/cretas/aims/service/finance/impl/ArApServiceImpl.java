@@ -154,6 +154,11 @@ public class ArApServiceImpl implements ArApService {
     public ArApTransaction recordPayable(String factoryId, String supplierId,
                                           String purchaseOrderId, BigDecimal amount,
                                           LocalDate dueDate, Long operatedBy, String remark) {
+        if (amount == null) {
+            throw new BusinessException(400, "缺少金额，需补录单价/金额")
+                    .withHint("请先补录送货单总金额、行金额或单价后再确认挂账")
+                    .withHintTarget("amount");
+        }
         if (amount.compareTo(BigDecimal.ZERO) <= 0) {
             throw new BusinessException(400, "应付金额必须大于0")
                     .withHint("请输入大于 0 的金额").withHintTarget("amount");
@@ -192,6 +197,58 @@ public class ArApServiceImpl implements ArApService {
     }
 
     // ==================== 收付款 ====================
+
+    @Override
+    @Transactional
+    public ArApTransaction recordPayableFromSource(String factoryId, String supplierId,
+                                                   String sourceType, String sourceId,
+                                                   BigDecimal amount, LocalDate dueDate,
+                                                   Long operatedBy, String remark) {
+        if (amount == null) {
+            throw new BusinessException(400, "缺少金额，需补录单价/金额")
+                    .withHint("请先补录送货单总金额、行金额或单价后再确认挂账")
+                    .withHintTarget("amount");
+        }
+        if (amount.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new BusinessException(400, "应付金额必须大于0")
+                    .withHint("请补录大于 0 的送货单金额")
+                    .withHintTarget("amount");
+        }
+        if (sourceType == null || sourceType.isBlank() || sourceId == null || sourceId.isBlank()) {
+            throw new BusinessException(400, "应付挂账来源不能为空")
+                    .withHint("请传入 sourceType/sourceId 以便追溯和防重复")
+                    .withHintTarget("sourceId");
+        }
+
+        Optional<ArApTransaction> existing =
+                transactionRepository.findFirstByFactoryIdAndSourceTypeAndSourceIdAndTransactionTypeAndDeletedAtIsNull(
+                        factoryId, sourceType, sourceId, ArApTransactionType.AP_INVOICE);
+        if (existing.isPresent()) {
+            log.info("应付挂账幂等命中: factoryId={}, sourceType={}, sourceId={}, transactionId={}",
+                    factoryId, sourceType, sourceId, existing.get().getId());
+            return existing.get();
+        }
+
+        Supplier supplier = supplierRepository.findByIdAndFactoryId(supplierId, factoryId)
+                .orElseThrow(() -> new ResourceNotFoundException("供应商不存在"));
+
+        BigDecimal newBalance = (supplier.getCurrentBalance() != null ? supplier.getCurrentBalance() : BigDecimal.ZERO)
+                .add(amount);
+        supplier.setCurrentBalance(newBalance);
+        supplierRepository.save(supplier);
+
+        ArApTransaction transaction = buildTransaction(
+                factoryId, ArApTransactionType.AP_INVOICE,
+                CounterpartyType.SUPPLIER, supplierId, supplier.getName(),
+                amount, newBalance, dueDate, operatedBy, remark);
+        transaction.setSourceType(sourceType);
+        transaction.setSourceId(sourceId);
+
+        ArApTransaction saved = transactionRepository.save(transaction);
+        log.info("应付挂账: factoryId={}, supplierId={}, sourceType={}, sourceId={}, amount={}, balance={}",
+                factoryId, supplierId, sourceType, sourceId, amount, newBalance);
+        return saved;
+    }
 
     @Override
     @Transactional

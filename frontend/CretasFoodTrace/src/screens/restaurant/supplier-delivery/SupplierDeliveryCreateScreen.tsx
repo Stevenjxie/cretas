@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Alert, ScrollView, StyleSheet, TouchableOpacity, View } from 'react-native';
+import { Alert, Image, ScrollView, StyleSheet, TouchableOpacity, View } from 'react-native';
+import * as ImagePicker from 'expo-image-picker';
 import {
   ActivityIndicator,
   Appbar,
@@ -21,6 +22,7 @@ import { supplierApiClient, Supplier } from '../../../services/api/supplierApiCl
 import { materialTypeApiClient, MaterialType } from '../../../services/api/materialTypeApiClient';
 import { useAuthStore } from '../../../store/authStore';
 import { handleError } from '../../../utils/errorHandler';
+import { roleCanViewPrice } from '../../../config/rowActionsConfig';
 
 type Nav = NativeStackNavigationProp<FAManagementStackParamList, 'SupplierDeliveryCreate'>;
 
@@ -60,6 +62,8 @@ export function SupplierDeliveryCreateScreen() {
   const navigation = useNavigation<Nav>();
   const { user } = useAuthStore();
   const factoryId = user?.factoryId;
+  const roleCode = user?.userType === 'platform' ? user.platformUser?.role : user?.factoryUser?.role;
+  const canViewAmounts = roleCanViewPrice(roleCode);
 
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [materials, setMaterials] = useState<MaterialType[]>([]);
@@ -74,6 +78,8 @@ export function SupplierDeliveryCreateScreen() {
   const [noteNumber, setNoteNumber] = useState('');
   const [lines, setLines] = useState<DraftLine[]>([newLine()]);
   const [submitting, setSubmitting] = useState(false);
+  const [ocrSubmitting, setOcrSubmitting] = useState(false);
+  const [ocrPhotoUri, setOcrPhotoUri] = useState<string | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -157,9 +163,47 @@ export function SupplierDeliveryCreateScreen() {
       rawMaterialTypeId: material.id,
       materialSearch: `${material.name}${material.code ? ` (${material.code})` : ''}`,
       unit: line.unit || material.unit || 'kg',
-      unitPrice: line.unitPrice || (material.unitPrice == null ? '' : String(material.unitPrice)),
+      unitPrice: canViewAmounts ? line.unitPrice || (material.unitPrice == null ? '' : String(material.unitPrice)) : '',
       showManualMaterialId: false,
     });
+  };
+
+  const runOcr = async (source: 'camera' | 'library') => {
+    const permission = source === 'camera'
+      ? await ImagePicker.requestCameraPermissionsAsync()
+      : await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!permission.granted) {
+      Alert.alert('需要照片权限', '请允许访问相机或相册，才能识别送货单。下一步：也可以继续改用手工录入。');
+      return;
+    }
+
+    const result = source === 'camera'
+      ? await ImagePicker.launchCameraAsync({ mediaTypes: ['images'], quality: 0.82 })
+      : await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], quality: 0.82 });
+    if (result.canceled || !result.assets[0]?.uri) return;
+
+    const asset = result.assets[0];
+    setOcrPhotoUri(asset.uri);
+    setOcrSubmitting(true);
+    try {
+      const note = await restaurantApiClient.parseSupplierDeliveryOcr({
+        fileUri: asset.uri,
+        fileName: asset.fileName || `supplier_delivery_${Date.now()}.jpg`,
+        mimeType: asset.mimeType || 'image/jpeg',
+        deliveryDate,
+        supplierId: supplierId.trim() || undefined,
+        factoryId,
+      });
+      navigation.replace('SupplierDeliveryDetail', { noteId: note.id });
+    } catch (error) {
+      Alert.alert(
+        'OCR 识别失败',
+        `${extractErrorMessage(error)}\n\n下一步：改用手工录入，或重拍一张更清楚的送货单。`,
+        [{ text: '改用手工录入' }, { text: '知道了', style: 'cancel' }],
+      );
+    } finally {
+      setOcrSubmitting(false);
+    }
   };
 
   const validate = (): string | null => {
@@ -242,6 +286,37 @@ export function SupplierDeliveryCreateScreen() {
         <Card style={styles.card}>
           <Card.Content>
             <Text style={styles.sectionTitle}>送货信息</Text>
+            <View style={styles.ocrPanel}>
+              <View style={styles.ocrText}>
+                <Text style={styles.ocrTitle}>送货单照片 OCR</Text>
+                <Text style={styles.hint}>仓管先拍照或从相册选择送货单，系统识别后生成可校对草稿。</Text>
+              </View>
+              {ocrPhotoUri ? <Image source={{ uri: ocrPhotoUri }} style={styles.ocrThumb} /> : null}
+            </View>
+            <View style={styles.row}>
+              <Button
+                compact
+                mode="outlined"
+                icon="camera"
+                loading={ocrSubmitting}
+                disabled={ocrSubmitting}
+                onPress={() => { void runOcr('camera'); }}
+                style={styles.flex}
+              >
+                拍照 OCR
+              </Button>
+              <Button
+                compact
+                mode="outlined"
+                icon="image"
+                loading={ocrSubmitting}
+                disabled={ocrSubmitting}
+                onPress={() => { void runOcr('library'); }}
+                style={styles.flex}
+              >
+                相册 OCR
+              </Button>
+            </View>
             <TextInput
               label="供应商"
               mode="outlined"
@@ -380,14 +455,18 @@ export function SupplierDeliveryCreateScreen() {
                   style={[styles.field, styles.flex]}
                 />
               </View>
-              <TextInput
-                label="单价（可空）"
-                mode="outlined"
-                keyboardType="decimal-pad"
-                value={line.unitPrice}
-                onChangeText={(value) => updateLine(line.key, { unitPrice: value })}
-                style={styles.field}
-              />
+              {canViewAmounts ? (
+                <TextInput
+                  label="单价（可空）"
+                  mode="outlined"
+                  keyboardType="decimal-pad"
+                  value={line.unitPrice}
+                  onChangeText={(value) => updateLine(line.key, { unitPrice: value })}
+                  style={styles.field}
+                />
+              ) : (
+                <Text style={styles.maskedAmount}>单价：无权限</Text>
+              )}
               <View style={styles.chipRow}>
                 {QC_OPTIONS.map((option) => (
                   <Chip
@@ -418,7 +497,7 @@ export function SupplierDeliveryCreateScreen() {
           <Card.Content>
             <View style={styles.totalRow}>
               <Text style={styles.totalLabel}>预估金额</Text>
-              <Text style={styles.totalValue}>¥{totalAmount.toFixed(2)}</Text>
+              <Text style={styles.totalValue}>{canViewAmounts ? `¥${totalAmount.toFixed(2)}` : '无权限'}</Text>
             </View>
             <Text style={styles.hint}>金额只用于复核；确认入库以食材、数量、单位为准。</Text>
           </Card.Content>
@@ -434,6 +513,17 @@ export function SupplierDeliveryCreateScreen() {
   );
 }
 
+function extractErrorMessage(error: unknown): string {
+  if (error && typeof error === 'object' && 'response' in error) {
+    const response = (error as { response?: { data?: { message?: unknown } } }).response;
+    if (typeof response?.data?.message === 'string' && response.data.message.trim()) {
+      return response.data.message;
+    }
+  }
+  if (error instanceof Error && error.message.trim()) return error.message;
+  return '送货单照片没有识别成功';
+}
+
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#F5F5F5' },
   scroll: { flex: 1 },
@@ -441,6 +531,17 @@ const styles = StyleSheet.create({
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   loadingText: { marginTop: 12, color: '#6B7280' },
   card: { borderRadius: 8, marginBottom: 12, backgroundColor: '#FFFFFF' },
+  ocrPanel: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+    marginTop: 10,
+    marginBottom: 4,
+  },
+  ocrText: { flex: 1 },
+  ocrTitle: { fontSize: 14, fontWeight: '700', color: '#1F2937' },
+  ocrThumb: { width: 56, height: 56, borderRadius: 6, backgroundColor: '#E5E7EB' },
   sectionTitle: { fontSize: 16, fontWeight: '700', color: '#1F2937' },
   hint: { fontSize: 12, color: '#6B7280', marginTop: 4, lineHeight: 18 },
   field: { backgroundColor: '#FFFFFF', marginTop: 10 },
@@ -482,6 +583,7 @@ const styles = StyleSheet.create({
   totalRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   totalLabel: { fontSize: 14, color: '#166534' },
   totalValue: { fontSize: 22, color: '#166534', fontWeight: '800' },
+  maskedAmount: { marginTop: 10, color: '#6B7280', fontSize: 13 },
   footer: {
     padding: 12,
     backgroundColor: '#FFFFFF',

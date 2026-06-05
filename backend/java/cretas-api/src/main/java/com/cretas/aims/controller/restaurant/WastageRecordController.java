@@ -173,16 +173,7 @@ public class WastageRecordController {
             @PathVariable String factoryId,
             @PathVariable String wastageId,
             @RequestAttribute("userId") @Parameter(hidden = true) Long approverId) {
-        WastageRecord record = wastageRepository.findByIdAndFactoryId(wastageId, factoryId)
-                .orElseThrow(() -> new ResourceNotFoundException("损耗记录", "id", wastageId));
-        if (record.getStatus() != WastageRecord.Status.SUBMITTED) {
-            throw new BusinessException(409, "只有已提交的损耗记录可以审批")
-                    .withHint("请刷新损耗记录列表查看最新状态");
-        }
-        record.setStatus(WastageRecord.Status.APPROVED);
-        record.setApprovedBy(approverId);
-        record.setApprovedAt(LocalDateTime.now());
-        WastageRecord updated = wastageRepository.save(record);
+        WastageRecord updated = wastageRecordService.approveWastageRecord(factoryId, wastageId, approverId);
         return ApiResponse.success("损耗记录已审批", updated);
     }
 

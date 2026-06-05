@@ -122,6 +122,15 @@ public class SupplierDeliveryNote extends BaseEntity {
     @Column(name = "posting_error", columnDefinition = "TEXT")
     private String postingError;
 
+    @Column(name = "payable_transaction_id", length = 191)
+    private String payableTransactionId;
+
+    @Column(name = "payable_posted_at")
+    private LocalDateTime payablePostedAt;
+
+    @Column(name = "payable_posting_error", columnDefinition = "TEXT")
+    private String payablePostingError;
+
     @Column(name = "confirmed_by")
     private Long confirmedBy;
 

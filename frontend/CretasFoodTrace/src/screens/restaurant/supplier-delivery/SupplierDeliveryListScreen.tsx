@@ -1,5 +1,5 @@
 import React, { useCallback, useMemo, useState } from 'react';
-import { RefreshControl, ScrollView, StyleSheet, TouchableOpacity, View } from 'react-native';
+import { Image, RefreshControl, ScrollView, StyleSheet, TouchableOpacity, View } from 'react-native';
 import { Chip, FAB, Searchbar, Surface, Text } from 'react-native-paper';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
@@ -10,6 +10,8 @@ import { FAManagementStackParamList } from '../../../types/navigation';
 import { restaurantApiClient } from '../../../services/api/restaurantApiClient';
 import type { SupplierDeliveryNote, SupplierDeliveryStatus } from '../../../types/restaurant';
 import { handleError } from '../../../utils/errorHandler';
+import { useAuthStore } from '../../../store/authStore';
+import { roleCanViewPrice } from '../../../config/rowActionsConfig';
 
 type Nav = NativeStackNavigationProp<FAManagementStackParamList, 'SupplierDeliveryList'>;
 
@@ -28,6 +30,9 @@ const POSTING_LABEL: Record<string, string> = {
 
 export function SupplierDeliveryListScreen() {
   const navigation = useNavigation<Nav>();
+  const user = useAuthStore((state) => state.user);
+  const roleCode = user?.userType === 'platform' ? user.platformUser?.role : user?.factoryUser?.role;
+  const canViewAmounts = roleCanViewPrice(roleCode);
   const [status, setStatus] = useState<SupplierDeliveryStatus>('DRAFT');
   const [notes, setNotes] = useState<SupplierDeliveryNote[]>([]);
   const [loading, setLoading] = useState(false);
@@ -104,6 +109,13 @@ export function SupplierDeliveryListScreen() {
                 </View>
                 <Text style={styles.supplier}>{note.supplierName || note.supplierId || '未绑定供应商'}</Text>
                 <Text style={styles.meta}>{note.deliveryDate} · {STATUS_LABEL[note.status] || note.status}</Text>
+                <Text style={styles.meta}>金额：{formatAmount(note.totalAmount, canViewAmounts)}</Text>
+                {note.photoOssUrl ? (
+                  <View style={styles.photoRow}>
+                    <Image source={{ uri: note.photoOssUrl }} style={styles.photoThumb} />
+                    <Text style={styles.photoText}>已留存现场照片</Text>
+                  </View>
+                ) : null}
                 {note.receiveRecordId ? <Text style={styles.batch}>入库单：{note.receiveRecordId}</Text> : null}
                 {note.postingError ? <Text style={styles.error}>{note.postingError}</Text> : null}
               </Surface>
@@ -115,6 +127,12 @@ export function SupplierDeliveryListScreen() {
       <FAB icon="plus" style={styles.fab} onPress={() => navigation.navigate('SupplierDeliveryCreate')} />
     </SafeAreaView>
   );
+}
+
+function formatAmount(value: number | null | undefined, canViewAmounts: boolean): string {
+  if (!canViewAmounts) return '无权限';
+  if (value == null || !Number.isFinite(value)) return '未计算';
+  return `¥${Number(value).toFixed(2)}`;
 }
 
 const styles = StyleSheet.create({
@@ -133,6 +151,9 @@ const styles = StyleSheet.create({
   badgeError: { color: '#B91C1C', backgroundColor: '#FEE2E2' },
   supplier: { fontSize: 14, color: '#374151', marginTop: 8 },
   meta: { fontSize: 12, color: '#6B7280', marginTop: 6 },
+  photoRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 8 },
+  photoThumb: { width: 44, height: 44, borderRadius: 6, backgroundColor: '#E5E7EB' },
+  photoText: { fontSize: 12, color: '#047857' },
   batch: { fontSize: 12, color: '#047857', marginTop: 6 },
   error: { color: '#B91C1C', fontSize: 12, marginTop: 8 },
   empty: { alignItems: 'center', paddingTop: 80 },

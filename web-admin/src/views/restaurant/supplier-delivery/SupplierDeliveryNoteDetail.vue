@@ -13,6 +13,9 @@
             <el-tag v-if="note" size="small" :type="statusTagType(note.status)">
               {{ statusText(note.status) }}
             </el-tag>
+            <el-tag v-if="note" size="small" :type="postingTagType(note.postingStatus)">
+              {{ postingStatusText(note.postingStatus) }}
+            </el-tag>
           </div>
         </div>
       </template>
@@ -42,6 +45,49 @@
         style="margin-bottom: 16px"
         :title="note.ocrErrorMessage"
       />
+
+      <el-alert
+        v-if="note && note.postingStatus === 'FAILED'"
+        type="error"
+        show-icon
+        :closable="false"
+        class="posting-failed-alert"
+      >
+        <template #title>
+          库存批次生成失败：{{ note.postingError || '未返回具体原因' }}
+        </template>
+        <template #default>
+          请修正原料匹配、数量或单价后重试确认验收入库；如果数据无误仍失败，请联系管理员处理。
+        </template>
+      </el-alert>
+
+      <el-descriptions v-if="note" :column="3" border class="posting-summary">
+        <el-descriptions-item label="业务状态">
+          <el-tag size="small" :type="statusTagType(note.status)">
+            {{ statusText(note.status) }}
+          </el-tag>
+        </el-descriptions-item>
+        <el-descriptions-item label="库存过账">
+          <el-tag size="small" :type="postingTagType(note.postingStatus)">
+            {{ postingStatusText(note.postingStatus) }}
+          </el-tag>
+        </el-descriptions-item>
+        <el-descriptions-item label="收货记录">
+          <span v-if="note.receiveRecordId" class="mono-text">{{ note.receiveRecordId }}</span>
+          <span v-else>—</span>
+        </el-descriptions-item>
+        <el-descriptions-item label="过账时间">
+          {{ note.postedAt || '—' }}
+        </el-descriptions-item>
+        <el-descriptions-item label="过账人">
+          {{ note.postedBy || '—' }}
+        </el-descriptions-item>
+        <el-descriptions-item label="下一步">
+          <span v-if="note.postingStatus === 'POSTED'">已生成库存批次，可用于后续领料/损耗扣减。</span>
+          <span v-else-if="note.postingStatus === 'FAILED'">修正原料匹配/数量后重试，或联系管理员。</span>
+          <span v-else>确认验收入库后生成库存批次。</span>
+        </el-descriptions-item>
+      </el-descriptions>
 
       <!-- 头部信息 (Rule 2 context) -->
       <el-form :inline="false" label-width="90px" class="head-form">
@@ -112,6 +158,23 @@
             </span>
           </template>
         </el-table-column>
+        <el-table-column label="质检" width="110">
+          <template #default="{ row }">
+            <span>{{ row.qcResult || '—' }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="库存批次" min-width="170">
+          <template #default="{ row }">
+            <span v-if="row.materialBatchId" class="mono-text">{{ row.materialBatchId }}</span>
+            <span v-else>—</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="备注" min-width="140">
+          <template #default="{ row }">
+            <el-input v-if="editable" v-model="row.remark" placeholder="备注" />
+            <span v-else>{{ row.remark || '—' }}</span>
+          </template>
+        </el-table-column>
         <el-table-column v-if="editable" label="操作" width="70">
           <template #default="{ $index }">
             <el-button link type="danger" @click="removeLine($index)">删除</el-button>
@@ -134,7 +197,7 @@
         <el-button v-if="isManual" type="primary" :loading="saving" @click="saveManual">保存录入</el-button>
         <el-button v-if="!isManual" type="danger" plain @click="openReject">拒绝</el-button>
         <el-button v-if="!isManual" type="primary" :loading="confirming" @click="confirm">
-          确认并写入进价
+          确认验收入库 / 生成库存批次
         </el-button>
       </div>
     </el-card>
@@ -174,6 +237,7 @@ import { useFactoryId } from '@/composables/useFactoryId';
 import { get } from '@/api/request';
 import {
   getNoteDetail, confirmNote, rejectNote, updateNoteLines, createManualNote,
+  type DeliveryPostingStatus,
   type SupplierDeliveryNoteDto, type SupplierDeliveryNoteLineDto,
 } from '@/api/restaurant/supplierDeliveryNote';
 import { handleCatchError } from '@/utils/errorToast';
@@ -223,6 +287,31 @@ function statusTagType(s?: string): string {
   return { DRAFT: 'info', CONFIRMED: 'success', REJECTED: 'danger' }[s || ''] || 'info';
 }
 
+function postingStatusText(s?: DeliveryPostingStatus | null): string {
+  const normalized = s === 'UNPOSTED' || s === 'POSTING' ? 'PENDING' : s;
+  return {
+    PENDING: 'PENDING 待生成库存批次',
+    POSTED: 'POSTED 已生成库存批次',
+    FAILED: 'FAILED 过账失败',
+  }[normalized || 'PENDING'] || String(s || 'PENDING');
+}
+
+function postingTagType(s?: DeliveryPostingStatus | null): string {
+  if (s === 'POSTED') return 'success';
+  if (s === 'FAILED') return 'danger';
+  if (s === 'POSTING') return 'warning';
+  return 'info';
+}
+
+function syncNote(nextNote?: SupplierDeliveryNoteDto | null) {
+  if (!nextNote) return;
+  note.value = nextNote;
+  form.supplierId = nextNote.supplierId || '';
+  form.deliveryDate = nextNote.deliveryDate;
+  form.noteNumber = nextNote.noteNumber || '';
+  form.lines = (nextNote.lines || []).map((l) => ({ ...l }));
+}
+
 /** Rule 3 数字联动: 数量 × 单价 → 金额自动计算。 */
 function recalcLine(row: SupplierDeliveryNoteLineDto) {
   if (row.quantity != null && row.unitPrice != null) {
@@ -268,11 +357,7 @@ async function loadDetail() {
   try {
     const resp = await getNoteDetail(factoryId.value, noteId.value);
     if (resp.success && resp.data) {
-      note.value = resp.data;
-      form.supplierId = resp.data.supplierId || '';
-      form.deliveryDate = resp.data.deliveryDate;
-      form.noteNumber = resp.data.noteNumber || '';
-      form.lines = (resp.data.lines || []).map((l) => ({ ...l }));
+      syncNote(resp.data);
     }
   } catch (e) {
     handleCatchError(e, '加载送货单详情失败');
@@ -287,7 +372,7 @@ async function saveLines() {
     const resp = await updateNoteLines(factoryId.value, noteId.value, form.lines);
     if (resp.success) {
       ElMessage.success('行项已保存');
-      note.value = resp.data;
+      syncNote(resp.data);
     }
   } catch (e) {
     handleCatchError(e, '保存行项失败');
@@ -314,7 +399,7 @@ async function saveManual() {
     if (resp.success && resp.data) {
       ElMessage.success('录入成功');
       router.replace({ name: 'SupplierDeliveryNoteDetail', params: { id: resp.data.id } });
-      note.value = resp.data;
+      syncNote(resp.data);
     }
   } catch (e) {
     handleCatchError(e, '录入失败');
@@ -328,8 +413,8 @@ async function confirm() {
   try {
     const resp = await confirmNote(factoryId.value, noteId.value);
     if (resp.success) {
-      ElMessage.success('已确认，进价已写入');
-      note.value = resp.data;
+      ElMessage.success('已确认验收入库，库存批次已生成');
+      syncNote(resp.data);
     }
   } catch (e) {
     handleCatchError(e, '确认失败');
@@ -354,7 +439,7 @@ async function doReject() {
     if (resp.success) {
       ElMessage.success('已拒绝');
       rejectVisible.value = false;
-      note.value = resp.data;
+      syncNote(resp.data);
     }
   } catch (e) {
     handleCatchError(e, '拒绝失败');
@@ -390,6 +475,17 @@ onMounted(async () => {
 }
 .head-form {
   margin-bottom: 8px;
+}
+.posting-failed-alert {
+  margin-bottom: 16px;
+}
+.posting-summary {
+  margin-bottom: 16px;
+}
+.mono-text {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  word-break: break-all;
 }
 .total-row {
   text-align: right;

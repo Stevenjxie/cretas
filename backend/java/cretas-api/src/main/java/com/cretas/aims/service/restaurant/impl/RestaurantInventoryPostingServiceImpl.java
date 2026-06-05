@@ -1,17 +1,25 @@
 package com.cretas.aims.service.restaurant.impl;
 
 import com.cretas.aims.dto.inventory.CreateReceiveRecordRequest;
+import com.cretas.aims.dto.material.MaterialBatchDTO;
 import com.cretas.aims.entity.RawMaterialType;
 import com.cretas.aims.entity.inventory.PurchaseReceiveItem;
 import com.cretas.aims.entity.inventory.PurchaseReceiveRecord;
+import com.cretas.aims.entity.restaurant.MaterialRequisition;
+import com.cretas.aims.entity.restaurant.StocktakingRecord;
 import com.cretas.aims.entity.restaurant.SupplierDeliveryNote;
 import com.cretas.aims.entity.restaurant.SupplierDeliveryNoteLine;
+import com.cretas.aims.entity.restaurant.WastageRecord;
 import com.cretas.aims.entity.restaurant.enums.DeliveryNoteStatus;
 import com.cretas.aims.entity.restaurant.enums.DeliveryPostingStatus;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.repository.SupplierRepository;
+import com.cretas.aims.repository.restaurant.MaterialRequisitionRepository;
+import com.cretas.aims.repository.restaurant.StocktakingRecordRepository;
 import com.cretas.aims.repository.restaurant.SupplierDeliveryNoteRepository;
+import com.cretas.aims.repository.restaurant.WastageRecordRepository;
+import com.cretas.aims.service.MaterialBatchService;
 import com.cretas.aims.service.factory.WarehouseResolver;
 import com.cretas.aims.service.inventory.PurchaseService;
 import com.cretas.aims.service.restaurant.RestaurantInventoryPostingService;
@@ -22,6 +30,7 @@ import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
@@ -39,6 +48,10 @@ public class RestaurantInventoryPostingServiceImpl implements RestaurantInventor
     private final RawMaterialTypeRepository rawMaterialTypeRepository;
     private final PurchaseService purchaseService;
     private final WarehouseResolver warehouseResolver;
+    private final MaterialBatchService materialBatchService;
+    private final MaterialRequisitionRepository materialRequisitionRepository;
+    private final WastageRecordRepository wastageRecordRepository;
+    private final StocktakingRecordRepository stocktakingRecordRepository;
 
     @Override
     @Transactional
@@ -119,6 +132,84 @@ public class RestaurantInventoryPostingServiceImpl implements RestaurantInventor
     }
 
     @Override
+    @Transactional
+    public String postMaterialRequisitionIssue(String factoryId, MaterialRequisition requisition, Long userId) {
+        if (requisition.getInventoryPostedAt() != null) {
+            return requisition.getInventoryPostingDetail();
+        }
+        validateMaterial(factoryId, requisition.getRawMaterialTypeId(), "领料单");
+        BigDecimal quantity = positiveQuantity(requisition.getActualQuantity(), "领料实发数量", "actualQuantity");
+        String detail = consumeMaterial(factoryId, requisition.getRawMaterialTypeId(), requisition.getMaterialBatchId(),
+                quantity, "餐饮领料扣库存 " + displayId(requisition.getRequisitionNumber(), requisition.getId()));
+        requisition.setInventoryPostedAt(LocalDateTime.now());
+        requisition.setInventoryPostedBy(userId);
+        requisition.setInventoryPostingDetail(detail);
+        requisition.setInventoryPostingError(null);
+        if (!StringUtils.hasText(requisition.getMaterialBatchId())) {
+            requisition.setMaterialBatchId(firstBatchId(detail));
+        }
+        return detail;
+    }
+
+    @Override
+    @Transactional
+    public String postWastageDeduction(String factoryId, WastageRecord record, Long userId) {
+        if (record.getInventoryPostedAt() != null) {
+            return record.getInventoryPostingDetail();
+        }
+        validateMaterial(factoryId, record.getRawMaterialTypeId(), "损耗记录");
+        BigDecimal quantity = positiveQuantity(record.getQuantity(), "损耗数量", "quantity");
+        String detail = consumeMaterial(factoryId, record.getRawMaterialTypeId(), record.getMaterialBatchId(),
+                quantity, "餐饮损耗扣库存 " + displayId(record.getWastageNumber(), record.getId()));
+        record.setInventoryPostedAt(LocalDateTime.now());
+        record.setInventoryPostedBy(userId);
+        record.setInventoryPostingDetail(detail);
+        record.setInventoryPostingError(null);
+        if (!StringUtils.hasText(record.getMaterialBatchId())) {
+            record.setMaterialBatchId(firstBatchId(detail));
+        }
+        record.setEstimatedCost(calculatePostedCost(detail));
+        return detail;
+    }
+
+    @Override
+    @Transactional
+    public String postStocktakingAdjustment(String factoryId, StocktakingRecord record, Long userId) {
+        if (record.getInventoryPostedAt() != null) {
+            return record.getInventoryPostingDetail();
+        }
+        validateMaterial(factoryId, record.getRawMaterialTypeId(), "盘点单");
+        BigDecimal actualQuantity = nonNegativeQuantity(record.getActualQuantity(), "实盘数量", "actualQuantity");
+        BigDecimal systemQuantity = record.getSystemQuantity();
+        if (systemQuantity == null) {
+            systemQuantity = totalCurrentQuantity(factoryId, record.getRawMaterialTypeId());
+            record.setSystemQuantity(systemQuantity);
+        }
+        record.setActualQuantity(actualQuantity);
+        record.calculateDifference();
+
+        BigDecimal difference = record.getDifferenceQuantity() != null
+                ? record.getDifferenceQuantity()
+                : actualQuantity.subtract(systemQuantity);
+        String detail;
+        if (difference.signum() < 0) {
+            detail = consumeMaterial(factoryId, record.getRawMaterialTypeId(), null, difference.abs(),
+                    "餐饮盘亏扣库存 " + displayId(record.getStocktakingNumber(), record.getId()));
+        } else if (difference.signum() > 0) {
+            detail = increaseExistingBatch(factoryId, record.getRawMaterialTypeId(), difference,
+                    "餐饮盘盈调库存 " + displayId(record.getStocktakingNumber(), record.getId()), userId);
+        } else {
+            detail = "MATCH:0";
+        }
+
+        record.setInventoryPostedAt(LocalDateTime.now());
+        record.setInventoryPostedBy(userId);
+        record.setInventoryPostingDetail(detail);
+        record.setInventoryPostingError(null);
+        return detail;
+    }
+
+    @Override
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void markSupplierDeliveryPostingFailed(String factoryId, String noteId, String errorMessage) {
         noteRepository.findByIdAndFactoryId(noteId, factoryId).ifPresent(note -> {
@@ -130,6 +221,181 @@ public class RestaurantInventoryPostingServiceImpl implements RestaurantInventor
             note.setPostingError(trimError(errorMessage));
             noteRepository.save(note);
         });
+    }
+
+    @Override
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void markMaterialRequisitionPostingFailed(String factoryId, String requisitionId, String errorMessage) {
+        materialRequisitionRepository.findByIdAndFactoryId(requisitionId, factoryId).ifPresent(req -> {
+            if (req.getInventoryPostedAt() != null) {
+                return;
+            }
+            req.setInventoryPostingError(trimError(errorMessage));
+            materialRequisitionRepository.save(req);
+        });
+    }
+
+    @Override
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void markWastagePostingFailed(String factoryId, String wastageId, String errorMessage) {
+        wastageRecordRepository.findByIdAndFactoryId(wastageId, factoryId).ifPresent(record -> {
+            if (record.getInventoryPostedAt() != null) {
+                return;
+            }
+            record.setInventoryPostingError(trimError(errorMessage));
+            wastageRecordRepository.save(record);
+        });
+    }
+
+    @Override
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void markStocktakingPostingFailed(String factoryId, String recordId, String errorMessage) {
+        stocktakingRecordRepository.findByIdAndFactoryId(recordId, factoryId).ifPresent(record -> {
+            if (record.getInventoryPostedAt() != null) {
+                return;
+            }
+            record.setInventoryPostingError(trimError(errorMessage));
+            stocktakingRecordRepository.save(record);
+        });
+    }
+
+    private void validateMaterial(String factoryId, String rawMaterialTypeId, String docName) {
+        if (!StringUtils.hasText(rawMaterialTypeId)) {
+            throw new BusinessException(400, docName + "缺少食材主数据，不能扣减库存")
+                    .withCode("MISSING_RAW_MATERIAL")
+                    .withHint("请先选择正确食材，再重新提交审批")
+                    .withHintTarget("rawMaterialTypeId");
+        }
+        RawMaterialType material = rawMaterialTypeRepository.findById(rawMaterialTypeId)
+                .orElseThrow(() -> new BusinessException(400, docName + "食材主数据不存在: " + rawMaterialTypeId)
+                        .withCode("MISSING_RAW_MATERIAL")
+                        .withHint("请先维护食材主数据，或重新选择正确食材")
+                        .withHintTarget("rawMaterialTypeId"));
+        if (!factoryId.equals(material.getFactoryId())) {
+            throw new BusinessException(403, docName + "食材不属于当前组织: " + rawMaterialTypeId)
+                    .withCode("RAW_MATERIAL_FACTORY_MISMATCH")
+                    .withHint("请切换到正确组织，或重新选择当前门店下的食材")
+                    .withHintTarget("rawMaterialTypeId");
+        }
+    }
+
+    private BigDecimal positiveQuantity(BigDecimal quantity, String label, String hintTarget) {
+        if (quantity == null || quantity.signum() <= 0) {
+            throw new BusinessException(400, label + "必须大于 0")
+                    .withCode("INVALID_QUANTITY")
+                    .withHint("请填写大于 0 的数量后重试")
+                    .withHintTarget(hintTarget);
+        }
+        return quantity;
+    }
+
+    private BigDecimal nonNegativeQuantity(BigDecimal quantity, String label, String hintTarget) {
+        if (quantity == null || quantity.signum() < 0) {
+            throw new BusinessException(400, label + "不能为负数")
+                    .withCode("INVALID_QUANTITY")
+                    .withHint("请填写 0 或正数后重试")
+                    .withHintTarget(hintTarget);
+        }
+        return quantity;
+    }
+
+    private String consumeMaterial(String factoryId, String rawMaterialTypeId, String preferredBatchId,
+                                   BigDecimal quantity, String reason) {
+        List<MaterialBatchDTO> batches;
+        if (StringUtils.hasText(preferredBatchId)) {
+            MaterialBatchDTO batch = materialBatchService.getMaterialBatchById(factoryId, preferredBatchId);
+            if (!rawMaterialTypeId.equals(batch.getMaterialTypeId())) {
+                throw new BusinessException(400, "选择的批次不属于该食材，不能扣库存")
+                        .withCode("BATCH_MATERIAL_MISMATCH")
+                        .withHint("请重新选择该食材对应的库存批次")
+                        .withHintTarget("materialBatchId");
+            }
+            batches = List.of(batch);
+        } else {
+            batches = materialBatchService.getFIFOBatches(factoryId, rawMaterialTypeId, quantity);
+        }
+
+        BigDecimal available = batches.stream()
+                .map(this::currentQuantity)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        if (available.compareTo(quantity) < 0) {
+            throw new BusinessException(409, "库存不足，当前可用 " + available.toPlainString()
+                    + "，本次需要 " + quantity.toPlainString())
+                    .withCode("INSUFFICIENT_INVENTORY")
+                    .withHint("请先完成供应商验收入库，或选择有库存的批次后再审批")
+                    .withHintTarget("rawMaterialTypeId");
+        }
+
+        BigDecimal remaining = quantity;
+        List<String> details = new ArrayList<>();
+        for (MaterialBatchDTO batch : batches) {
+            if (remaining.signum() <= 0) {
+                break;
+            }
+            BigDecimal useQty = currentQuantity(batch).min(remaining);
+            if (useQty.signum() <= 0) {
+                continue;
+            }
+            materialBatchService.useBatchQuantity(factoryId, batch.getId(), useQty);
+            details.add(batch.getId() + ":" + useQty.toPlainString() + ":" + priceText(batch.getUnitPrice()));
+            remaining = remaining.subtract(useQty);
+        }
+        return String.join(";", details);
+    }
+
+    private String increaseExistingBatch(String factoryId, String rawMaterialTypeId, BigDecimal quantity,
+                                         String reason, Long userId) {
+        List<MaterialBatchDTO> batches = materialBatchService.getFIFOBatches(factoryId, rawMaterialTypeId, quantity);
+        if (batches.isEmpty()) {
+            throw new BusinessException(409, "没有可调整的库存批次，不能记录盘盈")
+                    .withCode("NO_ADJUSTABLE_BATCH")
+                    .withHint("请先为该食材完成一次验收入库，再重新完成盘点")
+                    .withHintTarget("rawMaterialTypeId");
+        }
+        MaterialBatchDTO batch = batches.get(0);
+        BigDecimal newQuantity = currentQuantity(batch).add(quantity);
+        materialBatchService.adjustBatchQuantity(factoryId, batch.getId(), newQuantity, reason, userId);
+        return batch.getId() + ":" + quantity.toPlainString() + ":" + priceText(batch.getUnitPrice());
+    }
+
+    private BigDecimal totalCurrentQuantity(String factoryId, String rawMaterialTypeId) {
+        return materialBatchService.getMaterialBatchesByType(factoryId, rawMaterialTypeId).stream()
+                .map(this::currentQuantity)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+    }
+
+    private BigDecimal calculatePostedCost(String detail) {
+        if (!StringUtils.hasText(detail)) {
+            return BigDecimal.ZERO;
+        }
+        BigDecimal total = BigDecimal.ZERO;
+        for (String item : detail.split(";")) {
+            String[] parts = item.split(":");
+            if (parts.length < 3 || "null".equals(parts[2])) {
+                continue;
+            }
+            total = total.add(new BigDecimal(parts[1]).multiply(new BigDecimal(parts[2])));
+        }
+        return total;
+    }
+
+    private BigDecimal currentQuantity(MaterialBatchDTO batch) {
+        return batch.getCurrentQuantity() != null ? batch.getCurrentQuantity() : BigDecimal.ZERO;
+    }
+
+    private String firstBatchId(String detail) {
+        if (!StringUtils.hasText(detail) || !detail.contains(":")) {
+            return null;
+        }
+        return detail.split(":", 2)[0];
+    }
+
+    private String priceText(BigDecimal unitPrice) {
+        return unitPrice == null ? "null" : unitPrice.toPlainString();
+    }
+
+    private String displayId(String number, String id) {
+        return StringUtils.hasText(number) ? number : id;
     }
 
     private void validateLine(String factoryId, SupplierDeliveryNoteLine line) {

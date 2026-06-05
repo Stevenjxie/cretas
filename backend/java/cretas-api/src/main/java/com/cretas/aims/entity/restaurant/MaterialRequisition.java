@@ -9,6 +9,7 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.UUID;
 import org.hibernate.annotations.Where;
 
@@ -137,6 +138,18 @@ public class MaterialRequisition extends BaseEntity {
      */
     @Column(name = "material_batch_id", length = 191)
     private String materialBatchId;
+
+    @Column(name = "inventory_posted_at")
+    private LocalDateTime inventoryPostedAt;
+
+    @Column(name = "inventory_posted_by")
+    private Long inventoryPostedBy;
+
+    @Column(name = "inventory_posting_detail", columnDefinition = "TEXT")
+    private String inventoryPostingDetail;
+
+    @Column(name = "inventory_posting_error", columnDefinition = "TEXT")
+    private String inventoryPostingError;
 
     /**
      * 计量单位

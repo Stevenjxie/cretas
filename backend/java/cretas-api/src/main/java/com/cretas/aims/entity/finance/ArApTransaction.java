@@ -95,6 +95,14 @@ public class ArApTransaction extends BaseEntity {
     @Column(name = "pos_order_sync_id")
     private Long posOrderSyncId;
 
+    /** Business source type for non-SO/PO finance posting, e.g. SUPPLIER_DELIVERY_NOTE. */
+    @Column(name = "source_type", length = 50)
+    private String sourceType;
+
+    /** Business source id for idempotent traceability when salesOrderId/purchaseOrderId is null. */
+    @Column(name = "source_id", length = 191)
+    private String sourceId;
+
     /** 交易金额（正数：挂账/增加应收应付；负数：付款/冲减应收应付） */
     @PriceSensitive
     @Column(name = "amount", nullable = false, precision = 15, scale = 2)

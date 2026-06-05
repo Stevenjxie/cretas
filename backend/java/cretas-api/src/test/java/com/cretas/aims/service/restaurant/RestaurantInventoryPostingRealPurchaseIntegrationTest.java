@@ -84,7 +84,11 @@ class RestaurantInventoryPostingRealPurchaseIntegrationTest {
                 supplierRepository,
                 rawMaterialTypeRepository,
                 purchaseService,
-                warehouseResolver);
+                warehouseResolver,
+                materialBatchService,
+                null,
+                null,
+                null);
 
         SupplierDeliveryNote note = draftNote();
         when(noteRepository.findByIdAndFactoryId(NOTE_ID, FACTORY)).thenReturn(Optional.of(note));

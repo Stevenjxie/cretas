@@ -6,6 +6,7 @@ import com.cretas.aims.entity.restaurant.StocktakingRecord;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.exception.ResourceNotFoundException;
 import com.cretas.aims.repository.restaurant.StocktakingRecordRepository;
+import com.cretas.aims.service.restaurant.StocktakingRecordService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -37,6 +38,7 @@ import com.cretas.aims.annotation.RequireModule;
 public class StocktakingRecordController {
 
     private final StocktakingRecordRepository stocktakingRepository;
+    private final StocktakingRecordService stocktakingRecordService;
 
     /**
      * AUD-5 B-A3 sister sweep batch 3 (edge audit 2026-05-20): explicit length caps mirror PG
@@ -135,30 +137,17 @@ public class StocktakingRecordController {
             @PathVariable String recordId,
             @RequestAttribute("userId") @Parameter(hidden = true) Long userId,
             @RequestBody Map<String, Object> body) {
-        StocktakingRecord record = stocktakingRepository.findByIdAndFactoryId(recordId, factoryId)
-                .orElseThrow(() -> new ResourceNotFoundException("盘点记录", "id", recordId));
-        if (record.getStatus() != StocktakingRecord.Status.IN_PROGRESS) {
-            throw new BusinessException(409, "只有进行中的盘点单可以完成")
-                    .withHint("请刷新盘点列表查看最新状态");
-        }
         if (body == null || !body.containsKey("actualQuantity")) {
             throw new BusinessException(400, "请填写实盘数量 (actualQuantity)")
                     .withHint("请在表单中填写实盘数量").withHintTarget("actualQuantity");
         }
 
-        record.setActualQuantity(new BigDecimal(body.get("actualQuantity").toString()));
-        record.setVerifiedBy(userId);
-        record.setCompletedAt(LocalDateTime.now());
-        record.setStatus(StocktakingRecord.Status.COMPLETED);
-
+        StocktakingRecord updated = stocktakingRecordService.completeRecord(
+                factoryId, recordId, new BigDecimal(body.get("actualQuantity").toString()), userId);
         if (body.containsKey("adjustmentReason")) {
-            record.setAdjustmentReason(body.get("adjustmentReason").toString());
+            updated.setAdjustmentReason(body.get("adjustmentReason").toString());
+            updated = stocktakingRepository.save(updated);
         }
-
-        // 自动计算差异
-        record.calculateDifference();
-
-        StocktakingRecord updated = stocktakingRepository.save(record);
         return ApiResponse.success("盘点完成", updated);
     }
 

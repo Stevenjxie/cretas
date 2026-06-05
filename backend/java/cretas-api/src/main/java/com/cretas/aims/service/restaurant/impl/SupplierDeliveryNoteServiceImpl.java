@@ -4,6 +4,7 @@ import com.cretas.aims.ai.client.DashScopeVisionClient;
 import com.cretas.aims.client.SupplierPriceGoldClient;
 import com.cretas.aims.dto.restaurant.SupplierDeliveryNoteDto;
 import com.cretas.aims.entity.RawMaterialType;
+import com.cretas.aims.entity.finance.ArApTransaction;
 import com.cretas.aims.entity.restaurant.SupplierDeliveryNote;
 import com.cretas.aims.entity.restaurant.SupplierDeliveryNoteLine;
 import com.cretas.aims.entity.restaurant.enums.DeliveryNoteSourceType;
@@ -13,6 +14,7 @@ import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.repository.restaurant.SupplierDeliveryNoteLineRepository;
 import com.cretas.aims.repository.restaurant.SupplierDeliveryNoteRepository;
 import com.cretas.aims.service.OssService;
+import com.cretas.aims.service.finance.ArApService;
 import com.cretas.aims.service.restaurant.RestaurantInventoryPostingService;
 import com.cretas.aims.service.restaurant.SupplierDeliveryNoteService;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -53,11 +55,13 @@ public class SupplierDeliveryNoteServiceImpl implements SupplierDeliveryNoteServ
     private final RawMaterialTypeRepository rawMaterialTypeRepository;
     private final SupplierPriceGoldClient goldClient;
     private final RestaurantInventoryPostingService postingService;
+    private final ArApService arApService;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     /** 低置信阈值 — 前端据此显示重拍提示 (Rule 5)。 */
     private static final BigDecimal LOW_CONFIDENCE_THRESHOLD = new BigDecimal("0.75");
+    private static final String PAYABLE_SOURCE_TYPE = "SUPPLIER_DELIVERY_NOTE";
 
     private static final String SUPPLIER_NOTE_OCR_PROMPT = """
             你是中餐厅供应链单据识别专家。请识别这张供应商送货单/进货单图片。
@@ -278,6 +282,20 @@ public class SupplierDeliveryNoteServiceImpl implements SupplierDeliveryNoteServ
             throw e;
         }
 
+        ArApTransaction payable = arApService.recordPayableFromSource(
+                factoryId,
+                saved.getSupplierId(),
+                PAYABLE_SOURCE_TYPE,
+                saved.getId(),
+                resolvePayableAmount(saved),
+                saved.getDeliveryDate() != null ? saved.getDeliveryDate().plusDays(30) : LocalDate.now().plusDays(30),
+                userId,
+                "餐饮送货验收入库自动挂账-" + displayNumber(saved));
+        saved.setPayableTransactionId(payable.getId());
+        saved.setPayablePostedAt(LocalDateTime.now());
+        saved.setPayablePostingError(null);
+        saved = noteRepository.save(saved);
+
         // 写 gold (D5 fail-soft: 失败不回滚确认, 记 error message)
         try {
             List<Map<String, Object>> goldLines = new ArrayList<>();
@@ -432,6 +450,45 @@ public class SupplierDeliveryNoteServiceImpl implements SupplierDeliveryNoteServ
         }
         line.setOcrConfidence(dto.getOcrConfidence());
         return line;
+    }
+
+    private BigDecimal resolvePayableAmount(SupplierDeliveryNote note) {
+        if (note.getTotalAmount() != null && note.getTotalAmount().compareTo(BigDecimal.ZERO) > 0) {
+            return note.getTotalAmount();
+        }
+        if (note.getLines() == null || note.getLines().isEmpty()) {
+            throw missingPayableAmount();
+        }
+        BigDecimal total = BigDecimal.ZERO;
+        for (SupplierDeliveryNoteLine line : note.getLines()) {
+            BigDecimal lineAmount = line.getLineAmount();
+            if (lineAmount == null && line.getQuantity() != null && line.getUnitPrice() != null) {
+                lineAmount = line.getQuantity().multiply(line.getUnitPrice());
+            }
+            if (lineAmount == null || lineAmount.compareTo(BigDecimal.ZERO) <= 0) {
+                throw missingPayableAmount();
+            }
+            total = total.add(lineAmount);
+        }
+        if (total.compareTo(BigDecimal.ZERO) <= 0) {
+            throw missingPayableAmount();
+        }
+        note.setTotalAmount(total);
+        return total;
+    }
+
+    private BusinessException missingPayableAmount() {
+        return new BusinessException(400, "缺少金额，需补录单价/金额")
+                .withCode("PAYABLE_AMOUNT_REQUIRED")
+                .withHint("请先补录送货单总金额，或为每个食材行补录行金额/单价后再确认入库")
+                .withHintTarget("amount");
+    }
+
+    private String displayNumber(SupplierDeliveryNote note) {
+        if (note.getNoteNumber() != null && !note.getNoteNumber().isBlank()) {
+            return note.getNoteNumber();
+        }
+        return note.getId();
     }
 
     private String sha256(byte[] bytes) {

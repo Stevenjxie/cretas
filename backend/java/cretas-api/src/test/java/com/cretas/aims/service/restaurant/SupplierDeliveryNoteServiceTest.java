@@ -3,6 +3,7 @@ package com.cretas.aims.service.restaurant;
 import com.cretas.aims.ai.client.DashScopeVisionClient;
 import com.cretas.aims.client.SupplierPriceGoldClient;
 import com.cretas.aims.entity.RawMaterialType;
+import com.cretas.aims.entity.finance.ArApTransaction;
 import com.cretas.aims.entity.restaurant.SupplierDeliveryNote;
 import com.cretas.aims.entity.restaurant.SupplierDeliveryNoteLine;
 import com.cretas.aims.entity.restaurant.enums.DeliveryNoteStatus;
@@ -11,6 +12,7 @@ import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.repository.restaurant.SupplierDeliveryNoteLineRepository;
 import com.cretas.aims.repository.restaurant.SupplierDeliveryNoteRepository;
 import com.cretas.aims.service.OssService;
+import com.cretas.aims.service.finance.ArApService;
 import com.cretas.aims.service.restaurant.RestaurantInventoryPostingService;
 import com.cretas.aims.service.restaurant.impl.SupplierDeliveryNoteServiceImpl;
 import org.junit.jupiter.api.DisplayName;
@@ -60,6 +62,7 @@ class SupplierDeliveryNoteServiceTest {
     @Mock RawMaterialTypeRepository rawMaterialTypeRepository;
     @Mock SupplierPriceGoldClient goldClient;
     @Mock RestaurantInventoryPostingService postingService;
+    @Mock ArApService arApService;
 
     @InjectMocks SupplierDeliveryNoteServiceImpl service;
 
@@ -140,12 +143,18 @@ class SupplierDeliveryNoteServiceTest {
         note.setStatus(DeliveryNoteStatus.CONFIRMED);
         note.setConfirmedBy(9L);
         when(postingService.postSupplierDeliveryToInventory(FACTORY, "N1", 9L)).thenReturn(note);
+        when(arApService.recordPayableFromSource(eq(FACTORY), eq("SUP1"), eq("SUPPLIER_DELIVERY_NOTE"),
+                eq("N1"), any(), any(), eq(9L), anyString())).thenReturn(payableTxn("AP1"));
+        when(noteRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
         when(goldClient.upsertSupplierPriceBatch(eq(FACTORY), eq("N1"), anyList())).thenReturn(1);
 
         SupplierDeliveryNote result = service.confirmNote(FACTORY, "N1", 9L);
 
         assertEquals(DeliveryNoteStatus.CONFIRMED, result.getStatus());
         assertEquals(9L, result.getConfirmedBy());
+        assertEquals("AP1", result.getPayableTransactionId());
+        verify(arApService).recordPayableFromSource(eq(FACTORY), eq("SUP1"), eq("SUPPLIER_DELIVERY_NOTE"),
+                eq("N1"), any(), any(), eq(9L), contains("餐饮送货验收入库自动挂账"));
         verify(goldClient).upsertSupplierPriceBatch(eq(FACTORY), eq("N1"), anyList());
     }
 
@@ -157,6 +166,8 @@ class SupplierDeliveryNoteServiceTest {
         note.setConfirmedBy(9L);
         when(postingService.postSupplierDeliveryToInventory(FACTORY, "N1", 9L)).thenReturn(note);
         when(noteRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(arApService.recordPayableFromSource(eq(FACTORY), eq("SUP1"), eq("SUPPLIER_DELIVERY_NOTE"),
+                eq("N1"), any(), any(), eq(9L), anyString())).thenReturn(payableTxn("AP1"));
         when(goldClient.upsertSupplierPriceBatch(anyString(), anyString(), anyList()))
                 .thenThrow(new IOException("gold down"));
 
@@ -176,6 +187,25 @@ class SupplierDeliveryNoteServiceTest {
 
         assertThrows(BusinessException.class, () -> service.confirmNote(FACTORY, "N1", 9L));
         verify(postingService).markSupplierDeliveryPostingFailed(eq(FACTORY), eq("N1"), anyString());
+    }
+
+    @Test
+    @DisplayName("confirmNote missing amount fails before AP creates zero payable")
+    void confirmNote_missingAmount_failsClosed() throws IOException {
+        SupplierDeliveryNote note = draftWithLine();
+        note.setTotalAmount(null);
+        note.getLines().get(0).setLineAmount(null);
+        note.getLines().get(0).setUnitPrice(null);
+        when(postingService.postSupplierDeliveryToInventory(FACTORY, "N1", 9L)).thenReturn(note);
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> service.confirmNote(FACTORY, "N1", 9L));
+
+        assertEquals(400, ex.getCode());
+        assertEquals("PAYABLE_AMOUNT_REQUIRED", ex.getErrorCode());
+        assertTrue(ex.getMessage().contains("缺少金额"));
+        verifyNoInteractions(arApService);
+        verify(goldClient, never()).upsertSupplierPriceBatch(anyString(), anyString(), anyList());
     }
 
     // ---- 8. reject invalid status ----
@@ -294,6 +324,7 @@ class SupplierDeliveryNoteServiceTest {
         note.setId("N1");
         note.setFactoryId(FACTORY);
         note.setStatus(DeliveryNoteStatus.DRAFT);
+        note.setSupplierId("SUP1");
         note.setSupplierName("鑫农");
         note.setDeliveryDate(LocalDate.of(2026, 6, 1));
         SupplierDeliveryNoteLine line = new SupplierDeliveryNoteLine();
@@ -314,5 +345,11 @@ class SupplierDeliveryNoteServiceTest {
                 .unit("kg")
                 .unitPrice(new java.math.BigDecimal("12.5"))
                 .build();
+    }
+
+    private ArApTransaction payableTxn(String id) {
+        ArApTransaction transaction = new ArApTransaction();
+        transaction.setId(id);
+        return transaction;
     }
 }
