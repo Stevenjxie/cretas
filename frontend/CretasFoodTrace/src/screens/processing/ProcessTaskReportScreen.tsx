@@ -27,6 +27,16 @@ interface ParsedReportFields {
   reportDate?: string;
   productionStartTime?: string;
   productionEndTime?: string;
+  sampleBoxes?: number;
+  remainingBoxes?: number;
+  trimWeightKg?: number;
+  upstreamInputKg?: number;
+  upstreamOutputKg?: number;
+  grossWeightKg?: number;
+  tareWeightKg?: number;
+  netWeightKg?: number;
+  byproductText?: string;
+  laborSegmentsText?: string;
 }
 
 function todayStr(): string {
@@ -73,6 +83,15 @@ function normalizeOptionalTime(raw: string, label: string): string | undefined {
   return value;
 }
 
+function trimOptionalText(raw: string): string | undefined {
+  const value = raw.trim();
+  return value ? value : undefined;
+}
+
+function formatCompactNumber(value: number): string {
+  return Number(value.toFixed(2)).toString();
+}
+
 function asRecord(value: unknown): Record<string, unknown> | null {
   return typeof value === 'object' && value !== null ? value as Record<string, unknown> : null;
 }
@@ -116,6 +135,16 @@ export default function ProcessTaskReportScreen() {
   const [submitting, setSubmitting] = useState(false);
   const [quantity, setQuantity] = useState('');
   const [inputQty, setInputQty] = useState('');
+  const [grossWeight, setGrossWeight] = useState('');
+  const [tareWeight, setTareWeight] = useState('');
+  const [netWeight, setNetWeight] = useState('');
+  const [sampleBoxes, setSampleBoxes] = useState('');
+  const [remainingBoxes, setRemainingBoxes] = useState('');
+  const [trimWeightKg, setTrimWeightKg] = useState('');
+  const [byproductText, setByproductText] = useState('');
+  const [upstreamInputKg, setUpstreamInputKg] = useState('');
+  const [upstreamOutputKg, setUpstreamOutputKg] = useState('');
+  const [laborSegmentsText, setLaborSegmentsText] = useState('');
   const [totalWorkers, setTotalWorkers] = useState('');
   const [totalWorkMinutes, setTotalWorkMinutes] = useState('');
   const [reportDate, setReportDate] = useState(todayStr());
@@ -145,14 +174,52 @@ export default function ProcessTaskReportScreen() {
 
   const isSupplemental = task?.status === 'SUPPLEMENTING' || task?.status === 'COMPLETED' || task?.status === 'CLOSED';
 
-  const buildParsedFields = (): ParsedReportFields => ({
-    inputQuantity: parseOptionalNumber(inputQty, '投入数量'),
-    totalWorkers: parseOptionalInteger(totalWorkers, '人数'),
-    totalWorkMinutes: parseOptionalInteger(totalWorkMinutes, '工时分钟'),
-    reportDate: normalizeOptionalDate(reportDate),
-    productionStartTime: normalizeOptionalTime(startTime, '开始时间'),
-    productionEndTime: normalizeOptionalTime(endTime, '结束时间'),
-  });
+  const buildParsedFields = (): ParsedReportFields => {
+    const gross = parseOptionalNumber(grossWeight, '毛重');
+    const tare = parseOptionalNumber(tareWeight, '皮重');
+    const manualNet = parseOptionalNumber(netWeight, '净重');
+    const calculatedNet = gross !== undefined && tare !== undefined ? gross - tare : undefined;
+    if (calculatedNet !== undefined && calculatedNet < 0) {
+      throw new Error('毛重不能小于皮重');
+    }
+    return {
+      inputQuantity: parseOptionalNumber(inputQty, '投入数量'),
+      totalWorkers: parseOptionalInteger(totalWorkers, '人数'),
+      totalWorkMinutes: parseOptionalInteger(totalWorkMinutes, '工时分钟'),
+      reportDate: normalizeOptionalDate(reportDate),
+      productionStartTime: normalizeOptionalTime(startTime, '开始时间'),
+      productionEndTime: normalizeOptionalTime(endTime, '结束时间'),
+      sampleBoxes: parseOptionalInteger(sampleBoxes, '留样盒数'),
+      remainingBoxes: parseOptionalInteger(remainingBoxes, '剩余盒数'),
+      trimWeightKg: parseOptionalNumber(trimWeightKg, '料头/损耗重量'),
+      upstreamInputKg: parseOptionalNumber(upstreamInputKg, '上游投入重量'),
+      upstreamOutputKg: parseOptionalNumber(upstreamOutputKg, '上游产出重量'),
+      grossWeightKg: gross,
+      tareWeightKg: tare,
+      netWeightKg: manualNet ?? calculatedNet,
+      byproductText: trimOptionalText(byproductText),
+      laborSegmentsText: trimOptionalText(laborSegmentsText),
+    };
+  };
+
+  const buildCustomFields = (parsed: ParsedReportFields): Record<string, unknown> => {
+    const fields: Record<string, unknown> = {
+      evidenceWorkflow: 'TEXT_INPUT_WITH_MEDIA_EVIDENCE',
+    };
+    const batch = trimOptionalText(batchNumber);
+    if (batch) fields.batchNumber = batch;
+    if (parsed.sampleBoxes !== undefined) fields.sampleBoxes = parsed.sampleBoxes;
+    if (parsed.remainingBoxes !== undefined) fields.remainingBoxes = parsed.remainingBoxes;
+    if (parsed.trimWeightKg !== undefined) fields.trimWeightKg = parsed.trimWeightKg;
+    if (parsed.byproductText) fields.byproductText = parsed.byproductText;
+    if (parsed.upstreamInputKg !== undefined) fields.upstreamInputKg = parsed.upstreamInputKg;
+    if (parsed.upstreamOutputKg !== undefined) fields.upstreamOutputKg = parsed.upstreamOutputKg;
+    if (parsed.grossWeightKg !== undefined) fields.grossWeightKg = parsed.grossWeightKg;
+    if (parsed.tareWeightKg !== undefined) fields.tareWeightKg = parsed.tareWeightKg;
+    if (parsed.netWeightKg !== undefined) fields.netWeightKg = parsed.netWeightKg;
+    if (parsed.laborSegmentsText) fields.laborSegmentsText = parsed.laborSegmentsText;
+    return fields;
+  };
 
   const addEvidenceFromAsset = useCallback(async (asset: ImagePicker.ImagePickerAsset) => {
     let size = asset.fileSize ?? 0;
@@ -286,6 +353,8 @@ export default function ProcessTaskReportScreen() {
         productionStartTime: parsed.productionStartTime,
         productionEndTime: parsed.productionEndTime,
         notes: notes || undefined,
+        batchNumber: batchNumber.trim() || undefined,
+        customFields: buildCustomFields(parsed),
       };
       let response: unknown;
       if (isSupplemental) {
@@ -294,7 +363,6 @@ export default function ProcessTaskReportScreen() {
         response = await processTaskApiClient.submitNormalReport({
           ...commonPayload,
           reportMode,
-          batchNumber: reportMode === 'MODE_2' ? batchNumber.trim() : undefined,
         });
       }
 
@@ -329,6 +397,12 @@ export default function ProcessTaskReportScreen() {
   }
 
   const remaining = task ? Math.max(0, task.plannedQuantity - task.completedQuantity - task.pendingQuantity) : 0;
+  const grossPreview = grossWeight.trim() ? Number(grossWeight) : undefined;
+  const tarePreview = tareWeight.trim() ? Number(tareWeight) : undefined;
+  const netPreview = grossPreview !== undefined && tarePreview !== undefined
+    && Number.isFinite(grossPreview) && Number.isFinite(tarePreview)
+    ? grossPreview - tarePreview
+    : undefined;
 
   return (
     <ScreenWrapper testID="process-task-report" edges={['top']} backgroundColor={theme.colors.background}>
@@ -408,16 +482,14 @@ export default function ProcessTaskReportScreen() {
                 </View>
               )}
 
-              {!isSupplemental && reportMode === 'MODE_2' && (
-                <TextInput
-                  testID="report-batch-number-input"
-                  label="批次号"
-                  value={batchNumber}
-                  onChangeText={setBatchNumber}
-                  mode="outlined"
-                  style={[styles.input, { marginBottom: 12 }]}
-                />
-              )}
+              <TextInput
+                testID="report-batch-number-input"
+                label={reportMode === 'MODE_2' ? '生产批次号 (必填)' : '生产批次号 (建议填写)'}
+                value={batchNumber}
+                onChangeText={setBatchNumber}
+                mode="outlined"
+                style={[styles.input, { marginBottom: 12 }]}
+              />
 
               <TextInput
                 testID="report-quantity-input"
@@ -459,6 +531,103 @@ export default function ProcessTaskReportScreen() {
                 right={<TextInput.Affix text={unit || 'kg'} />}
               />
 
+              <Text style={styles.groupTitle}>称重净重</Text>
+              <View style={styles.twoCol}>
+                <TextInput
+                  testID="report-gross-weight-input"
+                  label="毛重 kg"
+                  value={grossWeight}
+                  onChangeText={setGrossWeight}
+                  keyboardType="decimal-pad"
+                  mode="outlined"
+                  style={[styles.input, styles.colInput]}
+                />
+                <TextInput
+                  testID="report-tare-weight-input"
+                  label="皮重 kg"
+                  value={tareWeight}
+                  onChangeText={setTareWeight}
+                  keyboardType="decimal-pad"
+                  mode="outlined"
+                  style={[styles.input, styles.colInput]}
+                />
+              </View>
+              <TextInput
+                testID="report-net-weight-input"
+                label="净重 kg (可手填覆盖)"
+                value={netWeight}
+                onChangeText={setNetWeight}
+                keyboardType="decimal-pad"
+                mode="outlined"
+                style={[styles.input, { marginTop: 12 }]}
+              />
+              {netPreview !== undefined && netPreview >= 0 && !netWeight.trim() && (
+                <Text style={styles.helpText}>自动净重: {formatCompactNumber(netPreview)} kg</Text>
+              )}
+
+              <Text style={styles.groupTitle}>入库与结存</Text>
+              <View style={styles.twoCol}>
+                <TextInput
+                  testID="report-sample-boxes-input"
+                  label="留样盒数"
+                  value={sampleBoxes}
+                  onChangeText={setSampleBoxes}
+                  keyboardType="number-pad"
+                  mode="outlined"
+                  style={[styles.input, styles.colInput]}
+                />
+                <TextInput
+                  testID="report-remaining-boxes-input"
+                  label="剩余盒数"
+                  value={remainingBoxes}
+                  onChangeText={setRemainingBoxes}
+                  keyboardType="number-pad"
+                  mode="outlined"
+                  style={[styles.input, styles.colInput]}
+                />
+              </View>
+
+              <Text style={styles.groupTitle}>工序补充</Text>
+              <View style={styles.twoCol}>
+                <TextInput
+                  testID="report-upstream-input-input"
+                  label="上游投入 kg"
+                  value={upstreamInputKg}
+                  onChangeText={setUpstreamInputKg}
+                  keyboardType="decimal-pad"
+                  mode="outlined"
+                  style={[styles.input, styles.colInput]}
+                />
+                <TextInput
+                  testID="report-upstream-output-input"
+                  label="上游产出 kg"
+                  value={upstreamOutputKg}
+                  onChangeText={setUpstreamOutputKg}
+                  keyboardType="decimal-pad"
+                  mode="outlined"
+                  style={[styles.input, styles.colInput]}
+                />
+              </View>
+              <TextInput
+                testID="report-trim-weight-input"
+                label="料头/损耗 kg"
+                value={trimWeightKg}
+                onChangeText={setTrimWeightKg}
+                keyboardType="decimal-pad"
+                mode="outlined"
+                style={[styles.input, { marginTop: 12 }]}
+              />
+              <TextInput
+                testID="report-byproduct-input"
+                label="副产物说明 (如肥油100kg、骨头289kg)"
+                value={byproductText}
+                onChangeText={setByproductText}
+                mode="outlined"
+                multiline
+                numberOfLines={2}
+                style={[styles.input, { marginTop: 12 }]}
+              />
+
               <View style={styles.twoCol}>
                 <TextInput
                   testID="report-workers-input"
@@ -479,6 +648,17 @@ export default function ProcessTaskReportScreen() {
                   style={[styles.input, styles.colInput]}
                 />
               </View>
+
+              <TextInput
+                testID="report-labor-segments-input"
+                label="多时段人工 (如 7-8点11人；8-10点16人)"
+                value={laborSegmentsText}
+                onChangeText={setLaborSegmentsText}
+                mode="outlined"
+                multiline
+                numberOfLines={3}
+                style={[styles.input, { marginTop: 12 }]}
+              />
 
               <TextInput
                 testID="report-date-input"
@@ -591,6 +771,8 @@ const styles = StyleSheet.create({
   contextValue: { fontSize: 24, fontWeight: '700', color: '#333' },
   contextLabel: { fontSize: 15, color: '#666', marginTop: 2 },
   input: { backgroundColor: '#fff', fontSize: 20 },
+  groupTitle: { fontSize: 15, fontWeight: '700', color: '#333', marginTop: 18, marginBottom: 2 },
+  helpText: { color: '#1f7a3f', fontSize: 14, marginTop: 6 },
   twoCol: { flexDirection: 'row', gap: 10, marginTop: 12 },
   colInput: { flex: 1, minWidth: 0 },
   quickButtons: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 10 },

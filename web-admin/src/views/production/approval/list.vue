@@ -161,11 +161,49 @@ function reportModeLabel(mode: string | null | undefined) {
   return mode || '-';
 }
 
-function customFieldText(row: ApprovalItem) {
-  if (!row.customFields || Object.keys(row.customFields).length === 0) return '-';
+const customFieldLabels: Record<string, string> = {
+  evidenceWorkflow: '录入口径',
+  batchNumber: '生产批次',
+  sampleBoxes: '留样盒数',
+  remainingBoxes: '剩余盒数',
+  trimWeightKg: '料头/损耗kg',
+  byproductText: '副产物说明',
+  upstreamInputKg: '上游投入kg',
+  upstreamOutputKg: '上游产出kg',
+  grossWeightKg: '毛重kg',
+  tareWeightKg: '皮重kg',
+  netWeightKg: '净重kg',
+  laborSegmentsText: '多时段人工',
+  sourceExcel: '来源订单',
+  evidenceFiles: '原始证据文件',
+};
+
+function customFieldLabel(key: string) {
+  return customFieldLabels[key] || key;
+}
+
+function formatCustomFieldValue(value: unknown) {
+  if (value === null || value === undefined) return '-';
+  if (typeof value === 'number') {
+    return Number(value).toLocaleString('zh-CN', { maximumFractionDigits: 2 });
+  }
+  if (typeof value === 'string') {
+    return value === 'TEXT_INPUT_WITH_MEDIA_EVIDENCE' ? '文字录入 + 照片/视频证据' : value;
+  }
+  return JSON.stringify(value);
+}
+
+function customFieldEntries(row: ApprovalItem) {
+  if (!row.customFields || Object.keys(row.customFields).length === 0) {
+    return [] as Array<{ key: string; label: string; value: string }>;
+  }
   return Object.entries(row.customFields)
-    .map(([key, value]) => `${key}: ${value ?? '-'}`)
-    .join('；');
+    .filter(([, value]) => value !== null && value !== undefined && String(value).trim() !== '')
+    .map(([key, value]) => ({
+      key,
+      label: customFieldLabel(key),
+      value: formatCustomFieldValue(value),
+    }));
 }
 
 function isVideoEvidence(url: string): boolean {
@@ -228,7 +266,20 @@ function evidenceImageIndex(urls: string[], url: string): number {
                 <el-descriptions-item label="任务ID">{{ row.processTaskId }}</el-descriptions-item>
                 <el-descriptions-item label="证据数量">{{ row.photos?.length ?? 0 }}</el-descriptions-item>
                 <el-descriptions-item label="备注" :span="3">{{ row.notes || '-' }}</el-descriptions-item>
-                <el-descriptions-item label="扩展字段" :span="3">{{ customFieldText(row) }}</el-descriptions-item>
+                <el-descriptions-item label="文字录入明细" :span="3">
+                  <div v-if="customFieldEntries(row).length" class="custom-field-tags">
+                    <el-tag
+                      v-for="item in customFieldEntries(row)"
+                      :key="item.key"
+                      type="info"
+                      effect="plain"
+                      class="custom-field-tag"
+                    >
+                      {{ item.label }}: {{ item.value }}
+                    </el-tag>
+                  </div>
+                  <span v-else>-</span>
+                </el-descriptions-item>
               </el-descriptions>
               <div class="evidence-panel">
                 <div class="evidence-title">现场证据</div>
@@ -363,5 +414,18 @@ function evidenceImageIndex(urls: string[], url: string): number {
 .evidence-empty {
   color: #909399;
   font-size: 13px;
+}
+.custom-field-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.custom-field-tag {
+  max-width: 100%;
+  height: auto;
+  min-height: 24px;
+  white-space: normal;
+  line-height: 18px;
+  padding: 3px 8px;
 }
 </style>
