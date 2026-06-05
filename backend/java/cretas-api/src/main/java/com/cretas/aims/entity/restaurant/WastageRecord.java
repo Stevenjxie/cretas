@@ -175,6 +175,12 @@ public class WastageRecord extends BaseEntity {
     @Column(name = "section_code", length = 32)
     private String sectionCode;
 
+    @Column(name = "stall_code", length = 64)
+    private String stallCode;
+
+    @Column(name = "chef_id")
+    private Long chefId;
+
     // ========== 审批信息 ==========
 
     /**

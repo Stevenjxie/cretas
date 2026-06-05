@@ -2,7 +2,10 @@
   <div class="import-center-page">
     <div class="page-header">
       <h2>导入中心</h2>
-      <el-button type="primary" :icon="Plus" @click="openCreate">新建规则</el-button>
+      <div class="header-actions">
+        <el-button :icon="Plus" @click="openCreate">新建规则</el-button>
+        <el-button type="primary" :icon="Upload" @click="openUniversalUpload">通用上传</el-button>
+      </div>
     </div>
 
     <!-- Rules table -->
@@ -74,6 +77,63 @@
         </el-table-column>
       </el-table>
     </el-card>
+
+    <!-- Universal upload classifier -->
+    <el-dialog v-model="uploadClassifierOpen" title="选择导入文件类型" width="560px" destroy-on-close>
+      <el-radio-group v-model="uploadTarget" class="upload-type-list">
+        <label
+          class="upload-type-option"
+          :class="{ active: uploadTarget === 'restaurantSupplierDelivery' }"
+        >
+          <el-radio value="restaurantSupplierDelivery">
+            供应商送货 / 采购进货 Excel、CSV
+          </el-radio>
+          <span>进入供应商进货导入流程，解析后先生成草稿送货单，不自动入库。</span>
+        </label>
+        <label
+          class="upload-type-option"
+          :class="{ active: uploadTarget === 'genericImportRule' }"
+        >
+          <el-radio value="genericImportRule">
+            按系统导入规则处理
+          </el-radio>
+          <span>选择已配置的导入规则，继续执行 dryrun 校验和提交。</span>
+        </label>
+      </el-radio-group>
+
+      <el-form v-if="uploadTarget === 'genericImportRule'" label-width="90px" style="margin-top: 16px">
+        <el-form-item label="导入规则">
+          <el-select
+            v-model="genericRuleId"
+            placeholder="请选择导入规则"
+            filterable
+            style="width: 100%"
+            :disabled="selectableRules.length === 0"
+          >
+            <el-option
+              v-for="rule in selectableRules"
+              :key="rule.id"
+              :label="`${rule.ruleName} (${rule.moduleCode})`"
+              :value="rule.id"
+            />
+          </el-select>
+          <div v-if="selectableRules.length === 0" class="select-hint">
+            当前没有可用导入规则，请先新建规则。
+          </div>
+        </el-form-item>
+      </el-form>
+
+      <template #footer>
+        <el-button @click="uploadClassifierOpen = false">取消</el-button>
+        <el-button
+          type="primary"
+          :disabled="uploadTarget === 'genericImportRule' && !selectedGenericRule"
+          @click="continueUniversalUpload"
+        >
+          下一步
+        </el-button>
+      </template>
+    </el-dialog>
 
     <!-- Wizard -->
     <el-dialog v-model="wizardOpen" :title="'导入: ' + (wizardRule?.ruleName || '')" width="780px" destroy-on-close>
@@ -212,18 +272,32 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue';
+import { useRouter } from 'vue-router';
 import { ElMessage, ElMessageBox, type FormInstance, type UploadFile } from 'element-plus';
-import { Plus, Refresh, UploadFilled } from '@element-plus/icons-vue';
+import { Plus, Refresh, Upload, UploadFilled } from '@element-plus/icons-vue';
 import { useAuthStore } from '@/store/modules/auth';
 import { importRuleApi, type ImportRule, type ImportJob } from '@/api/dataCenter';
 
 const authStore = useAuthStore();
+const router = useRouter();
 const factoryId = computed(() => authStore.factoryId);
 
 const rules = ref<ImportRule[]>([]);
 const loadingRules = ref(false);
 const jobs = ref<ImportJob[]>([]);
 const loadingJobs = ref(false);
+
+type UniversalUploadTarget = 'restaurantSupplierDelivery' | 'genericImportRule';
+
+const uploadClassifierOpen = ref(false);
+const uploadTarget = ref<UniversalUploadTarget>('restaurantSupplierDelivery');
+const genericRuleId = ref<number | null>(null);
+const selectableRules = computed(() =>
+  rules.value.filter((rule): rule is ImportRule & { id: number } => typeof rule.id === 'number'),
+);
+const selectedGenericRule = computed<ImportRule | null>(
+  () => selectableRules.value.find((rule) => rule.id === genericRuleId.value) || null,
+);
 
 // Editor
 const editorOpen = ref(false);
@@ -296,6 +370,31 @@ function openCreate() {
   };
   editorTitle.value = '新建导入规则';
   editorOpen.value = true;
+}
+
+function openUniversalUpload() {
+  uploadTarget.value = 'restaurantSupplierDelivery';
+  genericRuleId.value = null;
+  uploadClassifierOpen.value = true;
+}
+
+function continueUniversalUpload() {
+  if (uploadTarget.value === 'restaurantSupplierDelivery') {
+    uploadClassifierOpen.value = false;
+    router.push({
+      name: 'SupplierDeliveryNoteList',
+      query: { openImport: 'supplier-delivery' },
+    });
+    return;
+  }
+
+  if (!selectedGenericRule.value) {
+    ElMessage.warning('请先选择一个导入规则');
+    return;
+  }
+
+  uploadClassifierOpen.value = false;
+  openImportWizard(selectedGenericRule.value);
 }
 
 function openEdit(rule: ImportRule) {
@@ -465,6 +564,20 @@ onMounted(() => {
 .import-center-page { padding: 16px; }
 .page-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
 .page-header h2 { margin: 0; font-size: 18px; }
+.header-actions { display: flex; gap: 8px; align-items: center; }
 .filter-card :deep(.el-form-item) { margin-bottom: 0; }
 .muted { color: #909399; font-size: 12px; }
+.upload-type-list { display: flex; flex-direction: column; gap: 10px; width: 100%; }
+.upload-type-option {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px;
+  border: 1px solid var(--el-border-color);
+  border-radius: 6px;
+  cursor: pointer;
+}
+.upload-type-option.active { border-color: var(--el-color-primary); background: var(--el-color-primary-light-9); }
+.upload-type-option span { padding-left: 24px; color: var(--el-text-color-secondary); font-size: 12px; line-height: 1.5; }
+.select-hint { margin-top: 6px; color: var(--el-color-warning); font-size: 12px; }
 </style>

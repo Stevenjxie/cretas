@@ -145,6 +145,7 @@ public class RestaurantInventoryPostingServiceImpl implements RestaurantInventor
         requisition.setInventoryPostedBy(userId);
         requisition.setInventoryPostingDetail(detail);
         requisition.setInventoryPostingError(null);
+        requisition.setActualCost(calculatePostedCost(detail));
         if (!StringUtils.hasText(requisition.getMaterialBatchId())) {
             requisition.setMaterialBatchId(firstBatchId(detail));
         }
@@ -206,6 +207,7 @@ public class RestaurantInventoryPostingServiceImpl implements RestaurantInventor
         record.setInventoryPostedBy(userId);
         record.setInventoryPostingDetail(detail);
         record.setInventoryPostingError(null);
+        record.setDifferenceAmount(calculatePostedCost(detail));
         return detail;
     }
 
@@ -376,7 +378,7 @@ public class RestaurantInventoryPostingServiceImpl implements RestaurantInventor
             }
             total = total.add(new BigDecimal(parts[1]).multiply(new BigDecimal(parts[2])));
         }
-        return total;
+        return total.setScale(2, java.math.RoundingMode.HALF_UP);
     }
 
     private BigDecimal currentQuantity(MaterialBatchDTO batch) {

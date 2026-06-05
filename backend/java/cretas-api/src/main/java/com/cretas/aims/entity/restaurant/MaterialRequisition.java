@@ -1,6 +1,7 @@
 package com.cretas.aims.entity.restaurant;
 
 import com.cretas.aims.entity.BaseEntity;
+import com.cretas.aims.security.PriceSensitive;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import lombok.*;
 
@@ -150,6 +151,25 @@ public class MaterialRequisition extends BaseEntity {
 
     @Column(name = "inventory_posting_error", columnDefinition = "TEXT")
     private String inventoryPostingError;
+
+    @Column(name = "section_code", length = 32)
+    private String sectionCode;
+
+    @Column(name = "operator_id")
+    private Long operatorId;
+
+    @Column(name = "stall_code", length = 64)
+    private String stallCode;
+
+    @Column(name = "chef_id")
+    private Long chefId;
+
+    @Column(name = "head_chef_id")
+    private Long headChefId;
+
+    @PriceSensitive
+    @Column(name = "actual_cost", precision = 15, scale = 2)
+    private BigDecimal actualCost;
 
     /**
      * 计量单位

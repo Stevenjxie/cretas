@@ -48,6 +48,12 @@ public class MaterialRequisitionServiceImpl implements MaterialRequisitionServic
 
         requisition.setFactoryId(factoryId);
         requisition.setRequestedBy(userId);
+        if (requisition.getOperatorId() == null) {
+            requisition.setOperatorId(userId);
+        }
+        if (requisition.getChefId() == null) {
+            requisition.setChefId(userId);
+        }
         requisition.setStatus(MaterialRequisition.Status.DRAFT);
 
         if (requisition.getRequisitionDate() == null) {
@@ -151,6 +157,9 @@ public class MaterialRequisitionServiceImpl implements MaterialRequisitionServic
             inventoryPostingService.postMaterialRequisitionIssue(factoryId, req, approvedBy);
             req.setStatus(MaterialRequisition.Status.APPROVED);
             req.setApprovedBy(approvedBy);
+            if (req.getHeadChefId() == null) {
+                req.setHeadChefId(approvedBy);
+            }
             req.setApprovedAt(LocalDateTime.now());
             req = requisitionRepository.save(req);
         } catch (BusinessException e) {

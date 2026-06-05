@@ -117,4 +117,17 @@ public interface MaterialRequisitionRepository extends JpaRepository<MaterialReq
      */
     Page<MaterialRequisition> findByFactoryIdAndRequestedByOrderByCreatedAtDesc(
             String factoryId, Long requestedBy, Pageable pageable);
+
+    @Query("SELECT r.sectionCode, r.stallCode, r.operatorId, r.requestedBy, r.chefId, " +
+            "COUNT(r), COALESCE(SUM(r.actualQuantity), 0), COALESCE(SUM(r.actualCost), 0) " +
+            "FROM MaterialRequisition r " +
+            "WHERE r.factoryId = :factoryId " +
+            "AND r.status = 'APPROVED' " +
+            "AND r.inventoryPostedAt IS NOT NULL " +
+            "AND r.requisitionDate BETWEEN :startDate AND :endDate " +
+            "GROUP BY r.sectionCode, r.stallCode, r.operatorId, r.requestedBy, r.chefId")
+    List<Object[]> getCostAttributionRows(
+            @Param("factoryId") String factoryId,
+            @Param("startDate") LocalDate startDate,
+            @Param("endDate") LocalDate endDate);
 }

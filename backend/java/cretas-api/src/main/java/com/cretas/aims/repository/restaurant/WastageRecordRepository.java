@@ -200,4 +200,17 @@ public interface WastageRecordRepository extends JpaRepository<WastageRecord, St
             @Param("factoryId") String factoryId,
             @Param("startDate") LocalDate startDate,
             @Param("endDate") LocalDate endDate);
+
+    @Query("SELECT w.sectionCode, w.stallCode, w.operatorId, w.chefId, " +
+            "COUNT(w), COALESCE(SUM(w.quantity), 0), COALESCE(SUM(w.estimatedCost), 0) " +
+            "FROM WastageRecord w " +
+            "WHERE w.factoryId = :factoryId " +
+            "AND w.status = 'APPROVED' " +
+            "AND w.inventoryPostedAt IS NOT NULL " +
+            "AND w.wastageDate BETWEEN :startDate AND :endDate " +
+            "GROUP BY w.sectionCode, w.stallCode, w.operatorId, w.chefId")
+    List<Object[]> getCostAttributionRows(
+            @Param("factoryId") String factoryId,
+            @Param("startDate") LocalDate startDate,
+            @Param("endDate") LocalDate endDate);
 }

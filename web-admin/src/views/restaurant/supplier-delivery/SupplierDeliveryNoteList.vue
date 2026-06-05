@@ -114,8 +114,9 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted } from 'vue';
-import { useRouter } from 'vue-router';
+import { ref, reactive, computed, onMounted, watch } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
+import { ElMessage } from 'element-plus';
 import { Camera, Search, Refresh, Document } from '@element-plus/icons-vue';
 import { useFactoryId } from '@/composables/useFactoryId';
 import { usePermissionStore } from '@/store/modules/permission';
@@ -130,6 +131,7 @@ import SupplierDeliveryNoteUploadDialog from './SupplierDeliveryNoteUploadDialog
 import SupplierDeliveryNoteImportDialog from './SupplierDeliveryNoteImportDialog.vue';
 
 const router = useRouter();
+const route = useRoute();
 const factoryId = useFactoryId();
 const permissionStore = usePermissionStore();
 const canWrite = computed(() => permissionStore.canWrite('restaurant'));
@@ -197,6 +199,22 @@ function openImport() {
   importVisible.value = true;
 }
 
+function openImportFromQuery() {
+  const value = route.query.openImport;
+  const openImport = Array.isArray(value) ? value[0] || '' : value || '';
+  if (openImport !== 'supplier-delivery') return;
+
+  if (canWrite.value) {
+    importVisible.value = true;
+  } else {
+    ElMessage.warning('当前账号没有餐饮写入权限，请联系管理员开通后再导入供应商进货表');
+  }
+
+  const nextQuery = { ...route.query };
+  delete nextQuery.openImport;
+  router.replace({ path: route.path, query: nextQuery });
+}
+
 function onParsed(note: SupplierDeliveryNoteDto) {
   uploadVisible.value = false;
   importVisible.value = false;
@@ -207,6 +225,8 @@ function onParsed(note: SupplierDeliveryNoteDto) {
 function goDetail(row: SupplierDeliveryNoteDto) {
   router.push({ name: 'SupplierDeliveryNoteDetail', params: { id: row.id } });
 }
+
+watch(() => route.query.openImport, openImportFromQuery, { immediate: true });
 
 onMounted(loadList);
 </script>
