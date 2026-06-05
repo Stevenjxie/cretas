@@ -8,6 +8,7 @@ import com.cretas.aims.exception.ResourceNotFoundException;
 import com.cretas.aims.repository.restaurant.MaterialRequisitionRepository;
 import com.cretas.aims.repository.restaurant.RecipeRepository;
 import com.cretas.aims.service.restaurant.MaterialRequisitionService;
+import com.cretas.aims.service.restaurant.RestaurantInventoryPostingService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.Page;
@@ -30,11 +31,14 @@ public class MaterialRequisitionServiceImpl implements MaterialRequisitionServic
 
     private final MaterialRequisitionRepository requisitionRepository;
     private final RecipeRepository recipeRepository;
+    private final RestaurantInventoryPostingService inventoryPostingService;
 
     public MaterialRequisitionServiceImpl(MaterialRequisitionRepository requisitionRepository,
-                                          RecipeRepository recipeRepository) {
+                                          RecipeRepository recipeRepository,
+                                          RestaurantInventoryPostingService inventoryPostingService) {
         this.requisitionRepository = requisitionRepository;
         this.recipeRepository = recipeRepository;
+        this.inventoryPostingService = inventoryPostingService;
     }
 
     @Override
@@ -134,16 +138,25 @@ public class MaterialRequisitionServiceImpl implements MaterialRequisitionServic
         MaterialRequisition req = requisitionRepository.findByIdAndFactoryId(requisitionId, factoryId)
                 .orElseThrow(() -> new ResourceNotFoundException("MaterialRequisition", "id", requisitionId));
 
+        if (req.getStatus() == MaterialRequisition.Status.APPROVED && req.getInventoryPostedAt() != null) {
+            return req;
+        }
         if (req.getStatus() != MaterialRequisition.Status.SUBMITTED) {
             throw new BusinessException(409, "只有已提交状态的领料单才能审批")
                     .withHint("请刷新领料单列表查看最新审批状态");
         }
 
-        req.setActualQuantity(actualQuantity);
-        req.setStatus(MaterialRequisition.Status.APPROVED);
-        req.setApprovedBy(approvedBy);
-        req.setApprovedAt(LocalDateTime.now());
-        req = requisitionRepository.save(req);
+        req.setActualQuantity(actualQuantity != null ? actualQuantity : req.getRequestedQuantity());
+        try {
+            inventoryPostingService.postMaterialRequisitionIssue(factoryId, req, approvedBy);
+            req.setStatus(MaterialRequisition.Status.APPROVED);
+            req.setApprovedBy(approvedBy);
+            req.setApprovedAt(LocalDateTime.now());
+            req = requisitionRepository.save(req);
+        } catch (BusinessException e) {
+            inventoryPostingService.markMaterialRequisitionPostingFailed(factoryId, requisitionId, e.getMessage());
+            throw e;
+        }
 
         log.info("领料单审批通过: id={}, actualQuantity={}", req.getId(), actualQuantity);
         return req;

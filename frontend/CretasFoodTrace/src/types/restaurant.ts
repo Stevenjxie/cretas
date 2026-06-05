@@ -170,6 +170,7 @@ export interface SupplierDeliveryNote {
   postingStatus?: DeliveryPostingStatus;
   receiveRecordId?: string;
   postedAt?: string;
+  postedBy?: number | string;
   postingError?: string;
   rejectReasonCode?: string;
   rejectReasonNote?: string;
@@ -189,4 +190,13 @@ export interface CreateSupplierDeliveryRequest {
 export interface RejectSupplierDeliveryRequest {
   rejectReasonCode: 'IMAGE_BLUR' | 'LOW_LIGHT' | 'WRONG_DOCUMENT' | 'SUPPLIER_NOT_FOUND' | 'OTHER';
   rejectReasonNote?: string;
+}
+
+export interface SupplierDeliveryOcrRequest {
+  fileUri: string;
+  fileName?: string;
+  mimeType?: string;
+  deliveryDate?: string;
+  supplierId?: string;
+  factoryId?: string;
 }

@@ -16,7 +16,12 @@ export interface SupplierDeliveryNoteLineDto {
   unitPrice?: number | null;
   lineAmount?: number | null;
   ocrConfidence?: number | null;
+  qcResult?: string | null;
+  materialBatchId?: string | null;
+  remark?: string | null;
 }
+
+export type DeliveryPostingStatus = 'UNPOSTED' | 'POSTING' | 'PENDING' | 'POSTED' | 'FAILED';
 
 export interface SupplierDeliveryNoteDto {
   id: string;
@@ -31,6 +36,11 @@ export interface SupplierDeliveryNoteDto {
   ocrConfidence?: number | null;
   ocrErrorMessage?: string | null;
   status: 'DRAFT' | 'CONFIRMED' | 'REJECTED';
+  postingStatus?: DeliveryPostingStatus | null;
+  receiveRecordId?: string | null;
+  postedAt?: string | null;
+  postedBy?: string | null;
+  postingError?: string | null;
   rejectReasonCode?: string | null;
   rejectReasonNote?: string | null;
   lowConfidenceWarning?: boolean;
@@ -107,7 +117,7 @@ export function getNoteDetail(
   return get(`${base(factoryId)}/${noteId}`);
 }
 
-/** 确认 → 写 gold 进价。 */
+/** 确认验收入库 → 生成库存批次。 */
 export function confirmNote(
   factoryId: string,
   noteId: string,

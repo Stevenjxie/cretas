@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Alert, RefreshControl, ScrollView, StyleSheet, TouchableOpacity, View } from 'react-native';
+import { Alert, Image, Linking, RefreshControl, ScrollView, StyleSheet, TouchableOpacity, View } from 'react-native';
 import {
   ActivityIndicator,
   Appbar,
@@ -24,6 +24,7 @@ import type { RejectSupplierDeliveryRequest, SupplierDeliveryLine, SupplierDeliv
 import { materialTypeApiClient, MaterialType } from '../../../services/api/materialTypeApiClient';
 import { useAuthStore } from '../../../store/authStore';
 import { handleError } from '../../../utils/errorHandler';
+import { roleCanViewPrice } from '../../../config/rowActionsConfig';
 
 type Nav = NativeStackNavigationProp<FAManagementStackParamList, 'SupplierDeliveryDetail'>;
 type DetailRoute = RouteProp<FAManagementStackParamList, 'SupplierDeliveryDetail'>;
@@ -76,6 +77,8 @@ export function SupplierDeliveryDetailScreen() {
   const route = useRoute<DetailRoute>();
   const { user } = useAuthStore();
   const factoryId = user?.factoryId;
+  const roleCode = user?.userType === 'platform' ? user.platformUser?.role : user?.factoryUser?.role;
+  const canViewAmounts = roleCanViewPrice(roleCode);
   const { noteId } = route.params;
 
   const [note, setNote] = useState<SupplierDeliveryNote | null>(null);
@@ -175,7 +178,7 @@ export function SupplierDeliveryDetailScreen() {
       rawMaterialTypeId: material.id,
       materialSearch: `${material.name}${material.code ? ` (${material.code})` : ''}`,
       unit: line.unit || material.unit || 'kg',
-      unitPrice: line.unitPrice || (material.unitPrice == null ? '' : String(material.unitPrice)),
+      unitPrice: canViewAmounts ? line.unitPrice || (material.unitPrice == null ? '' : String(material.unitPrice)) : '',
       showManualMaterialId: false,
     });
   };
@@ -313,7 +316,8 @@ export function SupplierDeliveryDetailScreen() {
         <Text style={styles.lineName}>{line.ingredientName}</Text>
         <Text style={styles.meta}>食材：{line.rawMaterialTypeId || '未匹配'}</Text>
         <Text style={styles.meta}>数量：{line.quantity ?? '-'} {line.unit || ''}</Text>
-        <Text style={styles.meta}>单价：{line.unitPrice == null ? '未填' : `¥${line.unitPrice}`}</Text>
+        <Text style={styles.meta}>单价：{formatAmount(line.unitPrice, canViewAmounts, '未填')}</Text>
+        <Text style={styles.meta}>行金额：{formatAmount(line.lineAmount ?? calcLineAmount(line), canViewAmounts, '未计算')}</Text>
         <Text style={styles.meta}>质检：{QC_LABEL[line.qcResult || ''] || line.qcResult || '-'}</Text>
         {line.remark ? <Text style={styles.meta}>备注：{line.remark}</Text> : null}
         {line.materialBatchId ? <Text style={styles.batch}>库存批次：{line.materialBatchId}</Text> : null}
@@ -387,14 +391,18 @@ export function SupplierDeliveryDetailScreen() {
             style={[styles.field, styles.flex]}
           />
         </View>
-        <TextInput
-          label="单价（可空）"
-          mode="outlined"
-          keyboardType="decimal-pad"
-          value={line.unitPrice}
-          onChangeText={(value) => updateLine(line.key, { unitPrice: value })}
-          style={styles.field}
-        />
+        {canViewAmounts ? (
+          <TextInput
+            label="单价（可空）"
+            mode="outlined"
+            keyboardType="decimal-pad"
+            value={line.unitPrice}
+            onChangeText={(value) => updateLine(line.key, { unitPrice: value })}
+            style={styles.field}
+          />
+        ) : (
+          <Text style={styles.maskedAmount}>单价：无权限</Text>
+        )}
         <View style={styles.chipRow}>
           {QC_OPTIONS.map((qc) => (
             <Chip key={qc} selected={line.qcResult === qc} onPress={() => updateLine(line.key, { qcResult: qc })}>
@@ -441,11 +449,26 @@ export function SupplierDeliveryDetailScreen() {
                 <Text style={styles.meta}>供应商：{note.supplierName || note.supplierId || '未绑定'}</Text>
                 <Text style={styles.meta}>送货日期：{note.deliveryDate}</Text>
                 <Text style={styles.meta}>单据状态：{STATUS_LABEL[note.status] || note.status}</Text>
+                <Text style={styles.meta}>过账状态：{POSTING_LABEL[note.postingStatus || 'UNPOSTED'] || note.postingStatus || '未过账'}</Text>
                 <Text style={styles.meta}>食材行数：{(note.lines || []).length}</Text>
-                <Text style={styles.meta}>预估金额：¥{totalAmount.toFixed(2)}</Text>
+                <Text style={styles.meta}>预估金额：{formatAmount(note.totalAmount ?? totalAmount, canViewAmounts, '未计算')}</Text>
                 {note.receiveRecordId ? <Text style={styles.batch}>入库单：{note.receiveRecordId}</Text> : null}
+                {note.postedAt ? <Text style={styles.batch}>过账时间：{note.postedAt}</Text> : null}
                 {note.rejectReasonCode ? <Text style={styles.error}>拒绝原因：{note.rejectReasonNote || note.rejectReasonCode}</Text> : null}
                 {note.postingError ? <Text style={styles.error}>过账失败：{note.postingError}</Text> : null}
+                {note.photoOssUrl ? (
+                  <TouchableOpacity
+                    activeOpacity={0.84}
+                    onPress={() => { void Linking.openURL(note.photoOssUrl as string); }}
+                    style={styles.photoEvidence}
+                  >
+                    <Image source={{ uri: note.photoOssUrl }} style={styles.photoThumb} />
+                    <View style={styles.photoText}>
+                      <Text style={styles.photoTitle}>现场送货单照片</Text>
+                      <Text style={styles.photoHint}>点击打开原图，作为验收证据</Text>
+                    </View>
+                  </TouchableOpacity>
+                ) : null}
               </Card.Content>
             </Card>
 
@@ -565,6 +588,18 @@ function formatLine(line: SupplierDeliveryLine) {
   return `${line.ingredientName}：${line.quantity ?? '-'} ${line.unit || ''}`;
 }
 
+function formatAmount(value: number | null | undefined, canViewAmounts: boolean, emptyLabel: string): string {
+  if (!canViewAmounts) return '无权限';
+  if (value == null || !Number.isFinite(value)) return emptyLabel;
+  return `¥${Number(value).toFixed(2)}`;
+}
+
+function calcLineAmount(line: SupplierDeliveryLine): number | null {
+  if (line.quantity == null || line.unitPrice == null) return null;
+  const amount = Number(line.quantity) * Number(line.unitPrice);
+  return Number.isFinite(amount) ? amount : null;
+}
+
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#F5F5F5' },
   content: { padding: 12, paddingBottom: 40 },
@@ -581,6 +616,21 @@ const styles = StyleSheet.create({
   batch: { fontSize: 13, color: '#047857', marginTop: 6 },
   error: { fontSize: 13, color: '#B91C1C', marginTop: 8, lineHeight: 19 },
   done: { textAlign: 'center', color: '#047857', marginTop: 8 },
+  photoEvidence: {
+    flexDirection: 'row',
+    gap: 10,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#D1FAE5',
+    backgroundColor: '#F0FDF4',
+    borderRadius: 8,
+    padding: 8,
+    marginTop: 10,
+  },
+  photoThumb: { width: 64, height: 64, borderRadius: 6, backgroundColor: '#E5E7EB' },
+  photoText: { flex: 1 },
+  photoTitle: { color: '#047857', fontWeight: '700', fontSize: 13 },
+  photoHint: { color: '#4B5563', fontSize: 12, marginTop: 4 },
   field: { backgroundColor: '#FFFFFF', marginTop: 10 },
   row: { flexDirection: 'row', gap: 8 },
   flex: { flex: 1 },
@@ -607,6 +657,7 @@ const styles = StyleSheet.create({
   },
   emptyOptionText: { fontSize: 12, color: '#92400E', lineHeight: 18, marginBottom: 6 },
   chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 8 },
+  maskedAmount: { marginTop: 10, color: '#6B7280', fontSize: 13 },
   actions: { gap: 10, marginTop: 4, marginBottom: 20 },
   dialogHint: { color: '#4B5563', lineHeight: 20, marginBottom: 8 },
 });

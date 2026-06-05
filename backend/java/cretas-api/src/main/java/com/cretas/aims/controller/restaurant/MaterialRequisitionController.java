@@ -6,6 +6,7 @@ import com.cretas.aims.entity.restaurant.MaterialRequisition;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.exception.ResourceNotFoundException;
 import com.cretas.aims.repository.restaurant.MaterialRequisitionRepository;
+import com.cretas.aims.service.restaurant.MaterialRequisitionService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -40,6 +41,7 @@ public class MaterialRequisitionController {
 
     private final MaterialRequisitionRepository requisitionRepository;
     private final com.cretas.aims.service.restaurant.VoiceRequisitionParserService voiceRequisitionParserService;
+    private final MaterialRequisitionService materialRequisitionService;
 
     /**
      * AUD-5 B-A3 sister sweep batch 4b (edge audit 2026-05-20): explicit length caps mirror PG
@@ -193,25 +195,12 @@ public class MaterialRequisitionController {
             @PathVariable String requisitionId,
             @RequestAttribute("userId") @Parameter(hidden = true) Long approverId,
             @RequestBody(required = false) Map<String, Object> body) {
-        MaterialRequisition req = requisitionRepository.findByIdAndFactoryId(requisitionId, factoryId)
-                .orElseThrow(() -> new ResourceNotFoundException("领料单", "id", requisitionId));
-        if (req.getStatus() != MaterialRequisition.Status.SUBMITTED) {
-            throw new BusinessException(409, "只有已提交的领料单可以审批")
-                    .withHint("请刷新领料单列表查看最新状态");
-        }
-        req.setStatus(MaterialRequisition.Status.APPROVED);
-        req.setApprovedBy(approverId);
-        req.setApprovedAt(LocalDateTime.now());
-
-        // 如果 body 包含 actualQuantity，更新实际领用量
+        BigDecimal actualQuantity = null;
         if (body != null && body.containsKey("actualQuantity")) {
-            req.setActualQuantity(new BigDecimal(body.get("actualQuantity").toString()));
-        } else if (req.getActualQuantity() == null) {
-            // 默认实际量等于申请量
-            req.setActualQuantity(req.getRequestedQuantity());
+            actualQuantity = new BigDecimal(body.get("actualQuantity").toString());
         }
-
-        MaterialRequisition updated = requisitionRepository.save(req);
+        MaterialRequisition updated = materialRequisitionService.approveRequisition(
+                factoryId, requisitionId, approverId, actualQuantity);
         return ApiResponse.success("领料单已审批通过", updated);
     }
 

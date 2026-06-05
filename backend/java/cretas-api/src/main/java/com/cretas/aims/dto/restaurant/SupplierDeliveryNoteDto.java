@@ -37,6 +37,9 @@ public class SupplierDeliveryNoteDto {
     private String receiveRecordId;
     private String postedAt;
     private String postingError;
+    private String payableTransactionId;
+    private String payablePostedAt;
+    private String payablePostingError;
     private String rejectReasonCode;
     private String rejectReasonNote;
 

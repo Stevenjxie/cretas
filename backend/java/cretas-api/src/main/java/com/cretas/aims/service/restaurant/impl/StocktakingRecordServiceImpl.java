@@ -5,6 +5,7 @@ import com.cretas.aims.entity.restaurant.StocktakingRecord;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.exception.ResourceNotFoundException;
 import com.cretas.aims.repository.restaurant.StocktakingRecordRepository;
+import com.cretas.aims.service.restaurant.RestaurantInventoryPostingService;
 import com.cretas.aims.service.restaurant.StocktakingRecordService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -26,9 +27,12 @@ public class StocktakingRecordServiceImpl implements StocktakingRecordService {
     private static final Logger log = LoggerFactory.getLogger(StocktakingRecordServiceImpl.class);
 
     private final StocktakingRecordRepository stocktakingRecordRepository;
+    private final RestaurantInventoryPostingService inventoryPostingService;
 
-    public StocktakingRecordServiceImpl(StocktakingRecordRepository stocktakingRecordRepository) {
+    public StocktakingRecordServiceImpl(StocktakingRecordRepository stocktakingRecordRepository,
+                                        RestaurantInventoryPostingService inventoryPostingService) {
         this.stocktakingRecordRepository = stocktakingRecordRepository;
+        this.inventoryPostingService = inventoryPostingService;
     }
 
     @Override
@@ -87,18 +91,26 @@ public class StocktakingRecordServiceImpl implements StocktakingRecordService {
         StocktakingRecord record = stocktakingRecordRepository.findByIdAndFactoryId(recordId, factoryId)
                 .orElseThrow(() -> new ResourceNotFoundException("StocktakingRecord", "id", recordId));
 
+        if (record.getStatus() == StocktakingRecord.Status.COMPLETED && record.getInventoryPostedAt() != null) {
+            return record;
+        }
         if (record.getStatus() != StocktakingRecord.Status.IN_PROGRESS) {
             throw new BusinessException(409, "只有进行中的盘点记录才能完成")
                     .withHint("请刷新盘点记录列表查看最新状态");
         }
 
         record.setActualQuantity(actualQuantity);
-        record.calculateDifference();
-        record.setStatus(StocktakingRecord.Status.COMPLETED);
-        record.setCompletedAt(LocalDateTime.now());
-        record.setVerifiedBy(userId);
-
-        record = stocktakingRecordRepository.save(record);
+        try {
+            inventoryPostingService.postStocktakingAdjustment(factoryId, record, userId);
+            record.calculateDifference();
+            record.setStatus(StocktakingRecord.Status.COMPLETED);
+            record.setCompletedAt(LocalDateTime.now());
+            record.setVerifiedBy(userId);
+            record = stocktakingRecordRepository.save(record);
+        } catch (BusinessException e) {
+            inventoryPostingService.markStocktakingPostingFailed(factoryId, recordId, e.getMessage());
+            throw e;
+        }
         log.info("盘点完成: id={}, differenceType={}, differenceQuantity={}",
                 record.getId(), record.getDifferenceType(), record.getDifferenceQuantity());
         return record;

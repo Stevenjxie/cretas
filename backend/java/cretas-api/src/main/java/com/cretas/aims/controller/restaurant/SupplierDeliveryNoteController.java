@@ -236,6 +236,9 @@ public class SupplierDeliveryNoteController {
                 .receiveRecordId(n.getReceiveRecordId())
                 .postedAt(n.getPostedAt() != null ? n.getPostedAt().toString() : null)
                 .postingError(n.getPostingError())
+                .payableTransactionId(n.getPayableTransactionId())
+                .payablePostedAt(n.getPayablePostedAt() != null ? n.getPayablePostedAt().toString() : null)
+                .payablePostingError(n.getPayablePostingError())
                 .rejectReasonCode(n.getRejectReasonCode())
                 .rejectReasonNote(n.getRejectReasonNote())
                 .lowConfidenceWarning(lowConf)
@@ -264,6 +267,9 @@ public class SupplierDeliveryNoteController {
                 .receiveRecordId(n.getReceiveRecordId())
                 .postedAt(n.getPostedAt() != null ? n.getPostedAt().toString() : null)
                 .postingError(n.getPostingError())
+                .payableTransactionId(n.getPayableTransactionId())
+                .payablePostedAt(n.getPayablePostedAt() != null ? n.getPayablePostedAt().toString() : null)
+                .payablePostingError(n.getPayablePostingError())
                 .lowConfidenceWarning(lowConf)
                 .build();
     }

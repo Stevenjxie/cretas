@@ -7,7 +7,7 @@ import type {
   WastageRecord, WastageCreateRequest,
   SupplierDeliveryNote, CreateSupplierDeliveryRequest,
   SupplierDeliveryStatus, SupplierDeliveryLine,
-  RejectSupplierDeliveryRequest,
+  RejectSupplierDeliveryRequest, SupplierDeliveryOcrRequest,
 } from '../../types/restaurant';
 
 /**
@@ -193,6 +193,33 @@ class RestaurantApiClient {
   async createSupplierDelivery(data: CreateSupplierDeliveryRequest, factoryId?: string): Promise<SupplierDeliveryNote> {
     const res = await apiClient.post<any>(`${this.basePath('supplier-delivery-notes', factoryId)}/manual`, data);
     return res?.data ?? res;
+  }
+
+  async parseSupplierDeliveryOcr(request: SupplierDeliveryOcrRequest): Promise<SupplierDeliveryNote> {
+    const mimeType = request.mimeType || 'image/jpeg';
+    const fileName = request.fileName || `supplier_delivery_${Date.now()}.jpg`;
+    const formData = new FormData();
+    formData.append('photo', {
+      uri: request.fileUri,
+      name: fileName,
+      type: mimeType,
+    } as unknown as Blob);
+    if (request.deliveryDate) {
+      formData.append('deliveryDate', request.deliveryDate);
+    }
+    if (request.supplierId) {
+      formData.append('supplierId', request.supplierId);
+    }
+
+    const res = await apiClient.post<{ success?: boolean; data?: SupplierDeliveryNote; message?: string }>(
+      `${this.basePath('supplier-delivery-notes', request.factoryId)}/ocr-parse`,
+      formData,
+      { headers: { 'Content-Type': 'multipart/form-data' } }
+    );
+    if (res.success === false || !res.data) {
+      throw new Error(res.message || '送货单 OCR 识别失败');
+    }
+    return res.data;
   }
 
   async confirmSupplierDelivery(noteId: string, factoryId?: string): Promise<SupplierDeliveryNote> {

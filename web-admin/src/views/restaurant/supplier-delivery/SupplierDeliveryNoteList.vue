@@ -57,9 +57,28 @@
             <span v-else>—</span>
           </template>
         </el-table-column>
-        <el-table-column label="状态" width="100">
+        <el-table-column label="业务状态" width="110">
           <template #default="{ row }">
             <el-tag size="small" :type="statusTagType(row.status)">{{ statusText(row.status) }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="库存过账" min-width="180">
+          <template #default="{ row }">
+            <div class="posting-cell">
+              <el-tag size="small" :type="postingTagType(row.postingStatus)">
+                {{ postingStatusText(row.postingStatus) }}
+              </el-tag>
+              <span v-if="row.postingStatus === 'POSTED' && row.receiveRecordId" class="posting-id">
+                收货记录 {{ row.receiveRecordId }}
+              </span>
+              <el-tooltip
+                v-else-if="row.postingStatus === 'FAILED' && row.postingError"
+                :content="row.postingError"
+                placement="top"
+              >
+                <span class="posting-error">查看失败原因</span>
+              </el-tooltip>
+            </div>
           </template>
         </el-table-column>
         <el-table-column label="操作" width="100" fixed="right">
@@ -100,7 +119,11 @@ import { useRouter } from 'vue-router';
 import { Camera, Search, Refresh, Document } from '@element-plus/icons-vue';
 import { useFactoryId } from '@/composables/useFactoryId';
 import { usePermissionStore } from '@/store/modules/permission';
-import { getNoteList, type SupplierDeliveryNoteDto } from '@/api/restaurant/supplierDeliveryNote';
+import {
+  getNoteList,
+  type DeliveryPostingStatus,
+  type SupplierDeliveryNoteDto,
+} from '@/api/restaurant/supplierDeliveryNote';
 import { handleCatchError } from '@/utils/errorToast';
 import CanvasAwareWrapper from '@/components/canvas/CanvasAwareWrapper.vue';
 import SupplierDeliveryNoteUploadDialog from './SupplierDeliveryNoteUploadDialog.vue';
@@ -123,6 +146,22 @@ function statusText(s: string): string {
 }
 function statusTagType(s: string): string {
   return { DRAFT: 'info', CONFIRMED: 'success', REJECTED: 'danger' }[s] || 'info';
+}
+
+function postingStatusText(s?: DeliveryPostingStatus | null): string {
+  const normalized = s === 'UNPOSTED' || s === 'POSTING' ? 'PENDING' : s;
+  return {
+    PENDING: 'PENDING 待生成库存批次',
+    POSTED: 'POSTED 已生成库存批次',
+    FAILED: 'FAILED 过账失败',
+  }[normalized || 'PENDING'] || String(s || 'PENDING');
+}
+
+function postingTagType(s?: DeliveryPostingStatus | null): string {
+  if (s === 'POSTED') return 'success';
+  if (s === 'FAILED') return 'danger';
+  if (s === 'POSTING') return 'warning';
+  return 'info';
 }
 
 async function loadList() {
@@ -196,5 +235,22 @@ onMounted(loadList);
   display: flex;
   gap: 12px;
   margin-bottom: 16px;
+}
+.posting-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  line-height: 1.35;
+}
+.posting-id {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  word-break: break-all;
+}
+.posting-error {
+  cursor: help;
+  font-size: 12px;
+  color: var(--el-color-danger);
 }
 </style>

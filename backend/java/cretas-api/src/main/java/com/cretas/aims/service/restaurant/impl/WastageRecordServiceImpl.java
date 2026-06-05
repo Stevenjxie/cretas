@@ -9,6 +9,7 @@ import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.exception.ResourceNotFoundException;
 import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.repository.restaurant.WastageRecordRepository;
+import com.cretas.aims.service.restaurant.RestaurantInventoryPostingService;
 import com.cretas.aims.service.restaurant.WastageRecordService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -32,11 +33,14 @@ public class WastageRecordServiceImpl implements WastageRecordService {
 
     private final WastageRecordRepository wastageRecordRepository;
     private final UserRepository userRepository;
+    private final RestaurantInventoryPostingService inventoryPostingService;
 
     public WastageRecordServiceImpl(WastageRecordRepository wastageRecordRepository,
-                                    UserRepository userRepository) {
+                                    UserRepository userRepository,
+                                    RestaurantInventoryPostingService inventoryPostingService) {
         this.wastageRecordRepository = wastageRecordRepository;
         this.userRepository = userRepository;
+        this.inventoryPostingService = inventoryPostingService;
     }
 
     @Override
@@ -113,15 +117,24 @@ public class WastageRecordServiceImpl implements WastageRecordService {
         WastageRecord record = wastageRecordRepository.findByIdAndFactoryId(wastageId, factoryId)
                 .orElseThrow(() -> new ResourceNotFoundException("WastageRecord", "id", wastageId));
 
+        if (record.getStatus() == WastageRecord.Status.APPROVED && record.getInventoryPostedAt() != null) {
+            return record;
+        }
         if (record.getStatus() != WastageRecord.Status.SUBMITTED) {
             throw new BusinessException(409, "只有已提交状态的损耗记录才能审批")
                     .withHint("请刷新损耗记录列表查看最新审批状态");
         }
 
-        record.setStatus(WastageRecord.Status.APPROVED);
-        record.setApprovedBy(approvedBy);
-        record.setApprovedAt(LocalDateTime.now());
-        record = wastageRecordRepository.save(record);
+        try {
+            inventoryPostingService.postWastageDeduction(factoryId, record, approvedBy);
+            record.setStatus(WastageRecord.Status.APPROVED);
+            record.setApprovedBy(approvedBy);
+            record.setApprovedAt(LocalDateTime.now());
+            record = wastageRecordRepository.save(record);
+        } catch (BusinessException e) {
+            inventoryPostingService.markWastagePostingFailed(factoryId, wastageId, e.getMessage());
+            throw e;
+        }
 
         log.info("损耗记录审批通过: id={}, estimatedCost={}", record.getId(), record.getEstimatedCost());
         return record;

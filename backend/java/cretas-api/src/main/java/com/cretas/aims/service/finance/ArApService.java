@@ -24,6 +24,12 @@ public interface ArApService {
                                    String purchaseOrderId, BigDecimal amount,
                                    LocalDate dueDate, Long operatedBy, String remark);
 
+    /** Non-PO payable source, e.g. restaurant supplier delivery note. Idempotent by sourceType/sourceId. */
+    ArApTransaction recordPayableFromSource(String factoryId, String supplierId,
+                                            String sourceType, String sourceId,
+                                            BigDecimal amount, LocalDate dueDate,
+                                            Long operatedBy, String remark);
+
     // ==================== 收付款（冲减应收/应付） ====================
 
     /**

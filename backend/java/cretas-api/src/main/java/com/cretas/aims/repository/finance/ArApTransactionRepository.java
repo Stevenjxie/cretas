@@ -13,6 +13,7 @@ import org.springframework.stereotype.Repository;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
+import java.util.Optional;
 
 @Repository
 public interface ArApTransactionRepository extends JpaRepository<ArApTransaction, String> {
@@ -141,6 +142,10 @@ public interface ArApTransactionRepository extends JpaRepository<ArApTransaction
     /** 检查采购订单是否已挂账 */
     boolean existsByFactoryIdAndPurchaseOrderIdAndTransactionType(
             String factoryId, String purchaseOrderId, ArApTransactionType transactionType);
+
+    /** Source-based idempotency for non-SO/PO AP invoices. */
+    Optional<ArApTransaction> findFirstByFactoryIdAndSourceTypeAndSourceIdAndTransactionTypeAndDeletedAtIsNull(
+            String factoryId, String sourceType, String sourceId, ArApTransactionType transactionType);
 
     /** 收款幂等检查：同一 paymentReference 不能重复 */
     boolean existsByFactoryIdAndPaymentReference(String factoryId, String paymentReference);
