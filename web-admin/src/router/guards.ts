@@ -31,6 +31,8 @@ const ROLE_PATH_WHITELIST: Record<string, string[]> = {
     '/smart-bi/query',
     '/smart-bi/query-templates',
     '/smart-bi/analysis',
+    '/restaurant/supplier-reconciliation',
+    '/restaurant/cost-attribution',
     '/403',
     '/404',
   ],

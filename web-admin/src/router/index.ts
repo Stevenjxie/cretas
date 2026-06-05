@@ -1521,25 +1521,46 @@ const businessRoutes: RouteRecordRaw[] = [
             path: 'supplier-delivery',
             name: 'SupplierDeliveryNoteList',
             component: () => import('@/views/restaurant/supplier-delivery/SupplierDeliveryNoteList.vue'),
-            meta: { requiresAuth: true, title: '供应商进货录入', module: 'restaurant' },
+            meta: {
+              requiresAuth: true,
+              title: '供应商进货录入',
+              module: 'dashboard',
+              roles: ['factory_super_admin', 'platform_admin', 'permission_admin', 'restaurant_manager', 'warehouse_manager', 'procurement_manager']
+            },
           },
           {
             path: 'supplier-reconciliation',
             name: 'RestaurantSupplierReconciliation',
             component: () => import('@/views/restaurant/supplier-reconciliation/list.vue'),
-            meta: { requiresAuth: true, title: '供应商月对账', module: 'restaurant' },
+            meta: {
+              requiresAuth: true,
+              title: '供应商月对账',
+              module: 'dashboard',
+              roles: ['factory_super_admin', 'platform_admin', 'permission_admin', 'restaurant_manager', 'finance_manager']
+            },
           },
           {
             path: 'cost-attribution',
             name: 'RestaurantCostAttribution',
             component: () => import('@/views/restaurant/cost-attribution/index.vue'),
-            meta: { requiresAuth: true, title: '成本归因', module: 'restaurant' },
+            meta: {
+              requiresAuth: true,
+              title: '成本归因',
+              module: 'dashboard',
+              roles: ['factory_super_admin', 'platform_admin', 'permission_admin', 'restaurant_manager', 'finance_manager']
+            },
           },
           {
             path: 'supplier-delivery/:id',
             name: 'SupplierDeliveryNoteDetail',
             component: () => import('@/views/restaurant/supplier-delivery/SupplierDeliveryNoteDetail.vue'),
-            meta: { requiresAuth: true, title: '送货单详情', module: 'restaurant', hidden: true },
+            meta: {
+              requiresAuth: true,
+              title: '送货单详情',
+              module: 'dashboard',
+              hidden: true,
+              roles: ['factory_super_admin', 'platform_admin', 'permission_admin', 'restaurant_manager', 'warehouse_manager', 'procurement_manager']
+            },
           },
           {
             // Wave2 价格异常威慑引擎 (邓总差异化护城河): 同类物料相邻进价异常检测 + 解释录入

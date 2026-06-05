@@ -20,6 +20,8 @@ export const financeManagerMenu: MenuItem[] = [
   { path: '/smart-bi/query', title: 'AI问答', icon: 'ChatDotRound', module: 'analytics' },
   { path: '/smart-bi/query-templates', title: '查询模板管理', icon: 'Tickets', module: 'analytics' },
   { path: '/smart-bi/analysis', title: '智能数据分析', icon: 'DataAnalysis', module: 'analytics' },
+  { path: '/restaurant/supplier-reconciliation', title: '供应商月对账', icon: 'Money', module: 'dashboard' },
+  { path: '/restaurant/cost-attribution', title: '成本归因', icon: 'Histogram', module: 'dashboard' },
   // Bug #40: finance_manager 需审核开票申请, 加 ERP 财务操作入口
   { path: '/finance/invoices?status=REQUESTED', title: '开票审核', icon: 'Tickets', module: 'finance' },
   { path: '/finance/payments', title: '收款管理', icon: 'Money', module: 'finance' },
@@ -229,7 +231,8 @@ export const menuConfig: MenuItem[] = [
     // 运营总览移除 (Excel 浏览器病症); 经营驾驶舱复用「数据与分析」组 /smart-bi/dashboard
     // (业态自适应, 不重复造); 菜品四象限+毛利合并为 菜品分析双tab; 点评改名平台口碑。
     // spec: 2026-06-01-restaurant-web-admin-ia-redesign-design.md v2。
-    path: '/restaurant', title: '餐饮运营', icon: 'KnifeFork', module: 'restaurant',
+    path: '/restaurant', title: '餐饮运营', icon: 'KnifeFork', module: 'dashboard',
+    roles: ['factory_super_admin', 'platform_admin', 'permission_admin', 'restaurant_manager', 'warehouse_manager', 'procurement_manager', 'finance_manager'],
     hideForFactoryTypes: ['FACTORY'],
     children: [
       // -- 深度分析 (Gold 读层) --
@@ -240,10 +243,15 @@ export const menuConfig: MenuItem[] = [
       { path: '/restaurant/analytics/platform', title: '平台口碑', icon: '', module: 'restaurant' },
       // -- 日常录入 (写侧) — 配方置顶 (喂养分析层成本) --
       { path: '/restaurant/recipes', title: '配方管理', icon: '', module: 'restaurant', groupLabel: '日常录入' },
-      { path: '/restaurant/supplier-delivery', title: '供应商进货录入', icon: '', module: 'restaurant' },
+      { path: '/restaurant/supplier-delivery', title: '供应商进货录入', icon: '', module: 'dashboard',
+        roles: ['factory_super_admin', 'platform_admin', 'permission_admin', 'restaurant_manager', 'warehouse_manager', 'procurement_manager'] },
       { path: '/restaurant/requisitions', title: '领料管理', icon: '', module: 'restaurant' },
       { path: '/restaurant/wastage', title: '损耗管理', icon: '', module: 'restaurant' },
       { path: '/restaurant/stocktaking', title: '盘点管理', icon: '', module: 'restaurant' },
+      { path: '/restaurant/supplier-reconciliation', title: '供应商月对账', icon: '', module: 'dashboard',
+        roles: ['factory_super_admin', 'platform_admin', 'permission_admin', 'restaurant_manager', 'finance_manager'] },
+      { path: '/restaurant/cost-attribution', title: '成本归因', icon: '', module: 'dashboard',
+        roles: ['factory_super_admin', 'platform_admin', 'permission_admin', 'restaurant_manager', 'finance_manager'] },
       // -- 数据与系统 (admin) --
       { path: '/restaurant/data-completeness', title: '数据完整度', icon: '', module: 'restaurant', groupLabel: '数据与系统' },
       { path: '/restaurant/admin/etl-status', title: 'ETL 状态', icon: '', module: 'restaurant',

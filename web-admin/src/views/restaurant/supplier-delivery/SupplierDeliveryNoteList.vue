@@ -119,6 +119,7 @@ import { useRoute, useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import { Camera, Search, Refresh, Document } from '@element-plus/icons-vue';
 import { useFactoryId } from '@/composables/useFactoryId';
+import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import {
   getNoteList,
@@ -133,8 +134,19 @@ import SupplierDeliveryNoteImportDialog from './SupplierDeliveryNoteImportDialog
 const router = useRouter();
 const route = useRoute();
 const factoryId = useFactoryId();
+const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
-const canWrite = computed(() => permissionStore.canWrite('restaurant'));
+const SUPPLIER_DELIVERY_WRITE_ROLES = new Set([
+  'factory_super_admin',
+  'platform_admin',
+  'permission_admin',
+  'restaurant_manager',
+  'warehouse_manager',
+  'procurement_manager',
+]);
+const canWrite = computed(() =>
+  permissionStore.canWrite('restaurant') || SUPPLIER_DELIVERY_WRITE_ROLES.has(authStore.currentRole),
+);
 
 const loading = ref(false);
 const tableData = ref<SupplierDeliveryNoteDto[]>([]);
