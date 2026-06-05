@@ -29,6 +29,10 @@ public interface AttachmentRepository extends JpaRepository<Attachment, String> 
     List<Attachment> findByFactoryIdAndEntityTypeAndEntityIdOrderByUploadedAtDesc(
             String factoryId, EntityType entityType, String entityId);
 
+    /** 批量拉取附件 — 报工审批列表合并现场证据 URL, 避免 N+1. */
+    List<Attachment> findByFactoryIdAndEntityTypeAndEntityIdInOrderByUploadedAtAsc(
+            String factoryId, EntityType entityType, List<String> entityIds);
+
     /**
      * 批量计数 — 列表页徽章场景. 一次查 N 个 entity 的附件数, 避免 N+1.
      *

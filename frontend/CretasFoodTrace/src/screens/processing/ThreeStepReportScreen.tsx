@@ -393,7 +393,6 @@ export default function ThreeStepReportScreen() {
         reporterName,
         targetWorkerId: worker?.id,
         notes: notes || undefined,
-        photos: evidenceAssets.length > 0 ? evidenceAssets.map((a) => a.fileName) : undefined,
       };
 
       let response: unknown;

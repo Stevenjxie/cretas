@@ -226,7 +226,7 @@ function evidenceImageIndex(urls: string[], url: string): number {
                 <el-descriptions-item label="报工模式">{{ reportModeLabel(row.reportMode) }}</el-descriptions-item>
                 <el-descriptions-item label="来源WIP">{{ row.sourceWipNo || '-' }}</el-descriptions-item>
                 <el-descriptions-item label="任务ID">{{ row.processTaskId }}</el-descriptions-item>
-                <el-descriptions-item label="原始照片名">{{ row.photos?.length ? row.photos.join('，') : '-' }}</el-descriptions-item>
+                <el-descriptions-item label="证据数量">{{ row.photos?.length ?? 0 }}</el-descriptions-item>
                 <el-descriptions-item label="备注" :span="3">{{ row.notes || '-' }}</el-descriptions-item>
                 <el-descriptions-item label="扩展字段" :span="3">{{ customFieldText(row) }}</el-descriptions-item>
               </el-descriptions>

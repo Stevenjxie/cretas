@@ -7,8 +7,10 @@ import com.cretas.aims.config.OssConfig;
 import com.cretas.aims.entity.Attachment;
 import com.cretas.aims.entity.Attachment.EntityType;
 import com.cretas.aims.entity.Attachment.FileCategory;
+import com.cretas.aims.entity.ProductionReport;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.AttachmentRepository;
+import com.cretas.aims.repository.ProductionReportRepository;
 import com.cretas.aims.service.OssService;
 import com.cretas.aims.service.attachment.AttachmentService;
 import com.cretas.aims.service.attachment.dto.RegisterAttachmentRequest;
@@ -64,6 +66,7 @@ public class AttachmentServiceImpl implements AttachmentService {
     private static final int THUMBNAIL_MAX_DIM = 200;          // 200x200 fit
 
     private final AttachmentRepository attachmentRepository;
+    private final ProductionReportRepository productionReportRepository;
     private final OssService ossService;
     private final OssConfig ossConfig;
 
@@ -112,6 +115,10 @@ public class AttachmentServiceImpl implements AttachmentService {
         Attachment saved = attachmentRepository.save(a);
         log.info("Attachment 注册: factory={} entityType={} entityId={} id={} fileName={}",
                 factoryId, req.getEntityType(), req.getEntityId(), saved.getId(), req.getFileName());
+
+        if (EntityType.PRODUCTION_REPORT.equals(req.getEntityType())) {
+            syncProductionReportPhoto(factoryId, req.getEntityId(), req.getFileUrl());
+        }
 
         // Async 异步生成图片缩略图 — 失败不阻塞 register
         if (saved.getFileCategory() == FileCategory.PHOTO && saved.getThumbnailUrl() == null) {
@@ -339,5 +346,34 @@ public class AttachmentServiceImpl implements AttachmentService {
         return SecurityUtils.hasRole("FACTORY_SUPER_ADMIN")
                 || SecurityUtils.hasRole("PLATFORM_ADMIN")
                 || SecurityUtils.hasRole("FACTORY_ADMIN");
+    }
+
+    /**
+     * PRODUCTION_REPORT 附件注册后, 把 OSS URL 同步进 production_reports.photos,
+     * 供 Web 审批页 row.photos 直接渲染 (审计 2026-06-05 六扇门闭环).
+     */
+    private void syncProductionReportPhoto(String factoryId, String entityId, String fileUrl) {
+        if (fileUrl == null || fileUrl.isBlank()) {
+            return;
+        }
+        try {
+            Long reportId = Long.parseLong(entityId);
+            ProductionReport report = productionReportRepository.findById(reportId).orElse(null);
+            if (report == null || !factoryId.equals(report.getFactoryId())) {
+                return;
+            }
+            List<String> photos = report.getPhotos() != null
+                    ? new ArrayList<>(report.getPhotos())
+                    : new ArrayList<>();
+            if (!photos.contains(fileUrl)) {
+                photos.add(fileUrl);
+                report.setPhotos(photos);
+                productionReportRepository.save(report);
+            }
+        } catch (NumberFormatException e) {
+            log.warn("PRODUCTION_REPORT entityId 非数字, 跳过 photos 同步: {}", entityId);
+        } catch (Exception e) {
+            log.warn("同步报工 photos 失败 (attachment 已注册): entityId={} err={}", entityId, e.getMessage());
+        }
     }
 }

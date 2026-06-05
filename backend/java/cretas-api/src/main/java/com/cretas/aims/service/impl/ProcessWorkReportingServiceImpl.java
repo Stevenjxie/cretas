@@ -7,6 +7,9 @@ import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.ProcessTask;
 import com.cretas.aims.entity.ProductionReport;
 import com.cretas.aims.entity.WorkProcess;
+import com.cretas.aims.entity.Attachment;
+import com.cretas.aims.entity.Attachment.EntityType;
+import com.cretas.aims.entity.Attachment.FileCategory;
 import com.cretas.aims.entity.enums.ProcessTaskStatus;
 import com.cretas.aims.entity.enums.ReportMode;
 import com.cretas.aims.exception.BusinessException;
@@ -15,6 +18,7 @@ import com.cretas.aims.repository.ProcessTaskRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.ProductionReportRepository;
 import com.cretas.aims.repository.WorkProcessRepository;
+import com.cretas.aims.repository.AttachmentRepository;
 import com.cretas.aims.service.ProcessWorkReportingService;
 import com.cretas.aims.service.canvas.ThresholdKeys;
 import com.cretas.aims.service.canvas.ThresholdResolverService;
@@ -41,6 +45,7 @@ public class ProcessWorkReportingServiceImpl implements ProcessWorkReportingServ
     private final ProcessTaskRepository taskRepository;
     private final WorkProcessRepository workProcessRepository;
     private final ProductTypeRepository productTypeRepository;
+    private final AttachmentRepository attachmentRepository;
 
     /** Canvas V2: DB-driven validation rules */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
@@ -418,8 +423,10 @@ public class ProcessWorkReportingServiceImpl implements ProcessWorkReportingServ
                 .findByFactoryIdAndApprovalStatusAndProcessTaskIdIsNotNullAndDeletedAtIsNull(
                         factoryId, "PENDING", pageable);
 
-        List<Map<String, Object>> content = page.getContent().stream()
-                .map(this::reportToMap)
+        List<ProductionReport> reports = page.getContent();
+        Map<String, List<String>> evidenceUrls = loadProductionReportEvidenceUrls(factoryId, reports);
+        List<Map<String, Object>> content = reports.stream()
+                .map(r -> reportToMap(r, evidenceUrls))
                 .collect(Collectors.toList());
 
         return PageResponse.of(content, page.getNumber() + 1, page.getSize(), page.getTotalElements());
@@ -427,9 +434,10 @@ public class ProcessWorkReportingServiceImpl implements ProcessWorkReportingServ
 
     @Override
     public List<Map<String, Object>> getReportsByTask(String factoryId, String taskId) {
-        return reportRepository.findByProcessTaskIdAndDeletedAtIsNull(taskId)
-                .stream()
-                .map(this::reportToMap)
+        List<ProductionReport> reports = reportRepository.findByProcessTaskIdAndDeletedAtIsNull(taskId);
+        Map<String, List<String>> evidenceUrls = loadProductionReportEvidenceUrls(factoryId, reports);
+        return reports.stream()
+                .map(r -> reportToMap(r, evidenceUrls))
                 .collect(Collectors.toList());
     }
 
@@ -632,6 +640,10 @@ public class ProcessWorkReportingServiceImpl implements ProcessWorkReportingServ
     }
 
     private Map<String, Object> reportToMap(ProductionReport r) {
+        return reportToMap(r, Map.of());
+    }
+
+    private Map<String, Object> reportToMap(ProductionReport r, Map<String, List<String>> attachmentUrlsByEntityId) {
         Map<String, Object> map = new LinkedHashMap<>();
         map.put("id", r.getId());
         map.put("factoryId", r.getFactoryId());
@@ -660,8 +672,47 @@ public class ProcessWorkReportingServiceImpl implements ProcessWorkReportingServ
         map.put("reversalOfId", r.getReversalOfId());
         map.put("notes", r.getNotes());
         map.put("customFields", r.getCustomFields());
-        map.put("photos", r.getPhotos());
+        map.put("photos", resolveEvidencePhotos(r, attachmentUrlsByEntityId));
         map.put("createdAt", r.getCreatedAt());
         return map;
+    }
+
+    private Map<String, List<String>> loadProductionReportEvidenceUrls(String factoryId, List<ProductionReport> reports) {
+        if (reports.isEmpty()) {
+            return Map.of();
+        }
+        List<String> entityIds = reports.stream().map(r -> String.valueOf(r.getId())).toList();
+        List<Attachment> attachments = attachmentRepository.findByFactoryIdAndEntityTypeAndEntityIdInOrderByUploadedAtAsc(
+                factoryId, EntityType.PRODUCTION_REPORT, entityIds);
+        Map<String, List<String>> byEntity = new LinkedHashMap<>();
+        for (Attachment attachment : attachments) {
+            String fileUrl = attachment.getFileUrl();
+            if (fileUrl == null || fileUrl.isBlank()) {
+                continue;
+            }
+            FileCategory category = attachment.getFileCategory();
+            if (category != FileCategory.PHOTO && category != FileCategory.VIDEO) {
+                continue;
+            }
+            byEntity.computeIfAbsent(attachment.getEntityId(), ignored -> new ArrayList<>()).add(fileUrl);
+        }
+        return byEntity;
+    }
+
+    /** 合并 Attachment OSS URL 与 jsonb 内已有 http(s) URL; 忽略 RN 误传的本地文件名. */
+    private List<String> resolveEvidencePhotos(ProductionReport r, Map<String, List<String>> attachmentUrlsByEntityId) {
+        LinkedHashSet<String> merged = new LinkedHashSet<>();
+        merged.addAll(attachmentUrlsByEntityId.getOrDefault(String.valueOf(r.getId()), List.of()));
+        if (r.getPhotos() != null) {
+            for (String photo : r.getPhotos()) {
+                if (photo == null || photo.isBlank()) {
+                    continue;
+                }
+                if (photo.startsWith("http://") || photo.startsWith("https://")) {
+                    merged.add(photo);
+                }
+            }
+        }
+        return merged.isEmpty() ? null : new ArrayList<>(merged);
     }
 }

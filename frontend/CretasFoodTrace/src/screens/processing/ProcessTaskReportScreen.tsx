@@ -286,7 +286,6 @@ export default function ProcessTaskReportScreen() {
         productionStartTime: parsed.productionStartTime,
         productionEndTime: parsed.productionEndTime,
         notes: notes || undefined,
-        photos: evidenceAssets.length > 0 ? evidenceAssets.map((a) => a.fileName) : undefined,
       };
       let response: unknown;
       if (isSupplemental) {

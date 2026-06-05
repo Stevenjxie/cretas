@@ -21,6 +21,13 @@
               :initial-index="0"
               class="thumb-img"
             />
+            <video
+              v-else-if="att.fileCategory === 'VIDEO'"
+              :src="att.fileUrl"
+              class="thumb-video"
+              controls
+              @click.stop
+            />
             <div v-else class="thumb-icon">{{ categoryIcon(att.fileCategory) }}</div>
           </div>
           <div class="att-meta">
@@ -187,6 +194,13 @@ defineExpose({ reload: load });
   width: 56px;
   height: 56px;
   border-radius: 6px;
+}
+.thumb-video {
+  width: 56px;
+  height: 56px;
+  border-radius: 6px;
+  object-fit: cover;
+  background: #000;
 }
 .thumb-icon {
   font-size: 11px;
