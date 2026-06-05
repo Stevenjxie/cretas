@@ -1524,6 +1524,18 @@ const businessRoutes: RouteRecordRaw[] = [
             meta: { requiresAuth: true, title: '供应商进货录入', module: 'restaurant' },
           },
           {
+            path: 'supplier-reconciliation',
+            name: 'RestaurantSupplierReconciliation',
+            component: () => import('@/views/restaurant/supplier-reconciliation/list.vue'),
+            meta: { requiresAuth: true, title: '供应商月对账', module: 'restaurant' },
+          },
+          {
+            path: 'cost-attribution',
+            name: 'RestaurantCostAttribution',
+            component: () => import('@/views/restaurant/cost-attribution/index.vue'),
+            meta: { requiresAuth: true, title: '成本归因', module: 'restaurant' },
+          },
+          {
             path: 'supplier-delivery/:id',
             name: 'SupplierDeliveryNoteDetail',
             component: () => import('@/views/restaurant/supplier-delivery/SupplierDeliveryNoteDetail.vue'),
