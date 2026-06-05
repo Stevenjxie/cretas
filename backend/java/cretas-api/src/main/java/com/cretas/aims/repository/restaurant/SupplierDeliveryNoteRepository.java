@@ -10,6 +10,7 @@ import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 import java.time.LocalDate;
+import java.util.List;
 import java.util.Optional;
 
 /**
@@ -44,4 +45,15 @@ public interface SupplierDeliveryNoteRepository extends JpaRepository<SupplierDe
             @Param("status") DeliveryNoteStatus status,
             @Param("monthStart") LocalDate monthStart,
             @Param("monthEnd") LocalDate monthEnd);
+
+    @Query("SELECT n FROM SupplierDeliveryNote n " +
+           "WHERE n.factoryId = :factoryId AND n.supplierId = :supplierId " +
+           "AND n.status = com.cretas.aims.entity.restaurant.enums.DeliveryNoteStatus.CONFIRMED " +
+           "AND n.deliveryDate BETWEEN :startDate AND :endDate " +
+           "ORDER BY n.deliveryDate ASC, n.createdAt ASC")
+    List<SupplierDeliveryNote> findConfirmedBySupplierAndDateRange(
+            @Param("factoryId") String factoryId,
+            @Param("supplierId") String supplierId,
+            @Param("startDate") LocalDate startDate,
+            @Param("endDate") LocalDate endDate);
 }

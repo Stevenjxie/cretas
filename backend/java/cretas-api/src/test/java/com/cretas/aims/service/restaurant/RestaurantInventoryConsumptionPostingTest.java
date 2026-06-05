@@ -85,6 +85,7 @@ class RestaurantInventoryConsumptionPostingTest {
         assertNotNull(req.getInventoryPostedAt());
         assertEquals(USER, req.getInventoryPostedBy());
         assertEquals("B1", req.getMaterialBatchId());
+        assertEquals(new BigDecimal("24.00"), req.getActualCost());
         verify(materialBatchService, times(1)).useBatchQuantity(FACTORY, "B1", new BigDecimal("3.0000"));
     }
 
@@ -129,7 +130,7 @@ class RestaurantInventoryConsumptionPostingTest {
         service.postWastageDeduction(FACTORY, record, USER);
 
         assertNotNull(record.getInventoryPostedAt());
-        assertEquals(new BigDecimal("16.000000"), record.getEstimatedCost());
+        assertEquals(new BigDecimal("16.00"), record.getEstimatedCost());
         assertEquals(99L, record.getOperatorId());
         assertEquals("HOT_DISH", record.getSectionCode());
         verify(materialBatchService).useBatchQuantity(FACTORY, "B1", new BigDecimal("2.0000"));
@@ -154,6 +155,7 @@ class RestaurantInventoryConsumptionPostingTest {
 
         assertEquals(StocktakingRecord.DifferenceType.SHORTAGE, record.getDifferenceType());
         assertEquals(new BigDecimal("-2.0000"), record.getDifferenceQuantity());
+        assertEquals(new BigDecimal("16.00"), record.getDifferenceAmount());
         assertNotNull(record.getInventoryPostedAt());
         verify(materialBatchService).useBatchQuantity(FACTORY, "B1", new BigDecimal("2.0000"));
     }

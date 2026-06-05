@@ -155,6 +155,14 @@ public class StocktakingRecord extends BaseEntity {
     /**
      * 差异原因说明
      */
+    // ========== Cost attribution ==========
+
+    @Column(name = "section_code", length = 32)
+    private String sectionCode;
+
+    @Column(name = "stall_code", length = 64)
+    private String stallCode;
+
     @Column(name = "adjustment_reason", columnDefinition = "TEXT")
     private String adjustmentReason;
 

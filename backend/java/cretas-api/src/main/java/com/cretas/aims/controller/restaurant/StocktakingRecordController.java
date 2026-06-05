@@ -53,6 +53,7 @@ public class StocktakingRecordController {
      * <p>Mirrors PR #48 / PR #76 / PR #78 length-pre-check pattern.
      */
     private static final int UNIT_MAX_LENGTH = 20;
+    private static final int STALL_CODE_MAX_LENGTH = 64;
 
     // ==================== 列表查询 ====================
 
@@ -229,6 +230,28 @@ public class StocktakingRecordController {
                     .withHint("请使用更短的计量单位 (如 kg / 箱 / 件)")
                     .withSeverity("warning")
                     .withHintTarget("unit");
+        }
+        String section = record.getSectionCode();
+        if (section != null && !section.trim().isEmpty()) {
+            com.cretas.aims.entity.enums.WastageSection parsed =
+                    com.cretas.aims.entity.enums.WastageSection.fromCode(section);
+            if (parsed == null) {
+                throw new BusinessException(400, "Invalid sectionCode: " + section)
+                        .withHint("Allowed values: " + String.join(" / ",
+                                com.cretas.aims.entity.enums.WastageSection.codes()))
+                        .withSeverity("warning")
+                        .withHintTarget("sectionCode");
+            }
+            record.setSectionCode(parsed.name());
+        }
+        String stallCode = record.getStallCode();
+        if (stallCode != null && stallCode.length() > STALL_CODE_MAX_LENGTH) {
+            throw new BusinessException(400,
+                    "stallCode max length is " + STALL_CODE_MAX_LENGTH + " characters (current "
+                            + stallCode.length() + ")")
+                    .withHint("Use a shorter stable stall code")
+                    .withSeverity("warning")
+                    .withHintTarget("stallCode");
         }
     }
 }

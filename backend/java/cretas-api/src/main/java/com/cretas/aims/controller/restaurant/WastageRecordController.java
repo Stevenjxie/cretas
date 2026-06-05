@@ -57,6 +57,7 @@ public class WastageRecordController {
      * <p>Mirrors PR #48 / PR #76 / PR #78 / PR #92 length-pre-check pattern.
      */
     private static final int UNIT_MAX_LENGTH = 20;
+    private static final int STALL_CODE_MAX_LENGTH = 64;
 
     // ==================== 列表查询 ====================
 
@@ -310,6 +311,15 @@ public class WastageRecordController {
             // getStatisticsBySection 的 GROUP BY w.sectionCode 把同一档口拆成两行。
             // 与 AI 工具路径 (RestaurantWastageRecordTool) 的归一行为一致。
             record.setSectionCode(parsed.name());
+        }
+        String stallCode = record.getStallCode();
+        if (stallCode != null && stallCode.length() > STALL_CODE_MAX_LENGTH) {
+            throw new BusinessException(400,
+                    "stallCode max length is " + STALL_CODE_MAX_LENGTH + " characters (current "
+                            + stallCode.length() + ")")
+                    .withHint("Use a shorter stable stall code")
+                    .withSeverity("warning")
+                    .withHintTarget("stallCode");
         }
     }
 }

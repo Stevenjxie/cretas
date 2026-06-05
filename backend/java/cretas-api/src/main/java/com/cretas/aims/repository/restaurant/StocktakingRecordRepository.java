@@ -91,4 +91,18 @@ public interface StocktakingRecordRepository extends JpaRepository<StocktakingRe
             "WHERE s.factoryId = :factoryId AND s.status = 'COMPLETED' " +
             "ORDER BY s.stocktakingDate DESC, s.completedAt DESC")
     List<StocktakingRecord> findLatestCompleted(@Param("factoryId") String factoryId, Pageable pageable);
+
+    @Query("SELECT s.sectionCode, s.stallCode, s.countedBy, " +
+            "COUNT(s), COALESCE(SUM(ABS(s.differenceQuantity)), 0), COALESCE(SUM(s.differenceAmount), 0) " +
+            "FROM StocktakingRecord s " +
+            "WHERE s.factoryId = :factoryId " +
+            "AND s.status = 'COMPLETED' " +
+            "AND s.inventoryPostedAt IS NOT NULL " +
+            "AND s.differenceType = 'SHORTAGE' " +
+            "AND s.stocktakingDate BETWEEN :startDate AND :endDate " +
+            "GROUP BY s.sectionCode, s.stallCode, s.countedBy")
+    List<Object[]> getShortageCostAttributionRows(
+            @Param("factoryId") String factoryId,
+            @Param("startDate") LocalDate startDate,
+            @Param("endDate") LocalDate endDate);
 }

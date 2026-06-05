@@ -147,6 +147,28 @@ public interface ArApTransactionRepository extends JpaRepository<ArApTransaction
     Optional<ArApTransaction> findFirstByFactoryIdAndSourceTypeAndSourceIdAndTransactionTypeAndDeletedAtIsNull(
             String factoryId, String sourceType, String sourceId, ArApTransactionType transactionType);
 
+    /** Source-based AP invoice queries for supplier delivery monthly reconciliation. */
+    List<ArApTransaction> findByFactoryIdAndSourceTypeAndSourceIdInAndTransactionTypeAndDeletedAtIsNull(
+            String factoryId, String sourceType, List<String> sourceIds, ArApTransactionType transactionType);
+
+    List<ArApTransaction> findByFactoryIdAndCounterpartyTypeAndCounterpartyIdAndTransactionTypeAndTransactionDateBetweenOrderByTransactionDateAscCreatedAtAsc(
+            String factoryId, CounterpartyType counterpartyType, String counterpartyId,
+            ArApTransactionType transactionType, LocalDate startDate, LocalDate endDate);
+
+    @Query("SELECT t FROM ArApTransaction t WHERE t.factoryId = :factoryId " +
+            "AND t.counterpartyType = :counterpartyType AND t.counterpartyId = :counterpartyId " +
+            "AND t.transactionType IN :transactionTypes " +
+            "AND t.transactionDate BETWEEN :startDate AND :endDate " +
+            "AND t.deletedAt IS NULL " +
+            "ORDER BY t.transactionDate ASC, t.createdAt ASC")
+    List<ArApTransaction> findByCounterpartyAndTypesAndDateRange(
+            @Param("factoryId") String factoryId,
+            @Param("counterpartyType") CounterpartyType counterpartyType,
+            @Param("counterpartyId") String counterpartyId,
+            @Param("transactionTypes") List<ArApTransactionType> transactionTypes,
+            @Param("startDate") LocalDate startDate,
+            @Param("endDate") LocalDate endDate);
+
     /** 收款幂等检查：同一 paymentReference 不能重复 */
     boolean existsByFactoryIdAndPaymentReference(String factoryId, String paymentReference);
 
