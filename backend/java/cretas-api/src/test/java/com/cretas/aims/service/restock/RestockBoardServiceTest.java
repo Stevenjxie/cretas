@@ -1,8 +1,10 @@
 package com.cretas.aims.service.restock;
 
+import com.cretas.aims.entity.MaterialProductConversion;
 import com.cretas.aims.entity.ProductType;
-import com.cretas.aims.entity.enums.ProductionPlanStatus;
-import com.cretas.aims.entity.enums.SalesOrderStatus;
+import com.cretas.aims.entity.RawMaterialType;
+import com.cretas.aims.repository.ConversionRepository;
+import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.ProductionPlanRepository;
 import com.cretas.aims.repository.SemiFinishedInventoryRepository;
@@ -10,6 +12,8 @@ import com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository;
 import com.cretas.aims.repository.inventory.ProductDemandProjection;
 import com.cretas.aims.repository.inventory.SalesOrderItemRepository;
 import com.cretas.aims.service.restock.dto.RestockBoardDTO;
+import com.cretas.aims.service.restock.dto.RestockHorizonDTO;
+import com.cretas.aims.service.restock.dto.RestockHorizonProductRow;
 import com.cretas.aims.service.restock.dto.RestockRow;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -23,126 +27,174 @@ import java.time.LocalDate;
 import java.util.List;
 import java.util.Optional;
 
-import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.ArgumentMatchers.*;
-import static org.mockito.Mockito.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.anyCollection;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
-@DisplayName("RestockBoardService 聚合")
+@DisplayName("RestockBoardService")
 class RestockBoardServiceTest {
+
+    private static final String FACTORY_ID = "F006";
+    private static final String BOX_UNIT = "\u76d2";
+    private static final LocalDate JUNE_1 = LocalDate.of(2026, 6, 1);
+    private static final LocalDate JUNE_2 = LocalDate.of(2026, 6, 2);
+    private static final LocalDate JUNE_3 = LocalDate.of(2026, 6, 3);
 
     @Mock SalesOrderItemRepository salesOrderItemRepository;
     @Mock FinishedGoodsBatchRepository finishedGoodsBatchRepository;
     @Mock SemiFinishedInventoryRepository semiFinishedInventoryRepository;
     @Mock ProductionPlanRepository productionPlanRepository;
     @Mock ProductTypeRepository productTypeRepository;
+    @Mock ConversionRepository conversionRepository;
+    @Mock MaterialBatchRepository materialBatchRepository;
     @InjectMocks RestockBoardService service;
 
-    private static final LocalDate D = LocalDate.of(2026, 6, 3);
-
-    private ProductDemandProjection demand(String id, String name, String minU, String maxU, String qty) {
-        return new ProductDemandProjection() {
-            public String getProductTypeId() { return id; }
-            public String getProductName() { return name; }
-            public String getMinUnit() { return minU; }
-            public String getMaxUnit() { return maxU; }
-            public BigDecimal getDemand() { return new BigDecimal(qty); }
-        };
-    }
-
-    private ProductType pt(String id, String grams, String yield) {
-        ProductType p = new ProductType();
-        p.setId(id);
-        p.setGramsPerUnit(grams == null ? null : new BigDecimal(grams));
-        p.setWipToFgYield(yield == null ? null : new BigDecimal(yield));
-        return p;
-    }
-
     @Test
-    @DisplayName("缺口: 需求7088, 成品1000+在产0+已排产2000 → 缺口4088 SHORTFALL")
-    void shortfall() {
-        when(salesOrderItemRepository.sumDemandByProductForDeliveryDate(eq("F006"), eq(D), anyCollection()))
-                .thenReturn(List.of(demand("PT-ZT", "猪蹄200g", "盒", "盒", "7088")));
-        when(productTypeRepository.findById("PT-ZT")).thenReturn(Optional.of(pt("PT-ZT", "200", null)));
-        when(finishedGoodsBatchRepository.sumAvailableQuantityByProductTypeAndUnit("F006", "PT-ZT", "盒")).thenReturn(new BigDecimal("1000"));
-        when(semiFinishedInventoryRepository.sumAvailableByProduct("F006", "PT-ZT")).thenReturn(BigDecimal.ZERO);
-        when(productionPlanRepository.sumPlannedQuantityByProductAndStatuses(eq("F006"), eq("PT-ZT"), anyCollection())).thenReturn(new BigDecimal("2000"));
+    @DisplayName("single-day board keeps original shortfall calculation")
+    void singleDayShortfall() {
+        when(salesOrderItemRepository.sumDemandByProductForDeliveryDate(eq(FACTORY_ID), eq(JUNE_3), anyCollection()))
+                .thenReturn(List.of(demand("PT-BEEF", "beef shank", BOX_UNIT, BOX_UNIT, "1473")));
+        when(productTypeRepository.findById("PT-BEEF")).thenReturn(Optional.of(productType("200", "1.0")));
+        when(finishedGoodsBatchRepository.sumAvailableQuantityByProductTypeAndUnit(FACTORY_ID, "PT-BEEF", BOX_UNIT))
+                .thenReturn(new BigDecimal("1000"));
+        when(semiFinishedInventoryRepository.sumAvailableByProduct(FACTORY_ID, "PT-BEEF")).thenReturn(BigDecimal.ZERO);
+        when(productionPlanRepository.sumPlannedQuantityByProductAndStatuses(eq(FACTORY_ID), eq("PT-BEEF"), anyCollection()))
+                .thenReturn(new BigDecimal("100"));
 
-        RestockBoardDTO board = service.getRestockBoard("F006", D);
-        assertEquals(1, board.getRows().size());
-        RestockRow r = board.getRows().get(0);
-        assertEquals(0, new BigDecimal("4088").compareTo(r.getShortfallQty()));
-        assertEquals("SHORTFALL", r.getStatus());
+        RestockBoardDTO board = service.getRestockBoard(FACTORY_ID, JUNE_3);
+        RestockRow row = board.getRows().get(0);
+
+        assertEquals(0, new BigDecimal("373").compareTo(row.getShortfallQty()));
+        assertEquals("SHORTFALL", row.getStatus());
         assertEquals(1, board.getSummary().getShortfallProducts());
     }
 
     @Test
-    @DisplayName("满足: 合计>=需求 → 缺口0 SATISFIED")
-    void satisfied() {
-        when(salesOrderItemRepository.sumDemandByProductForDeliveryDate(eq("F006"), eq(D), anyCollection()))
-                .thenReturn(List.of(demand("PT-ZS", "猪舌120g", "盒", "盒", "625")));
-        when(productTypeRepository.findById("PT-ZS")).thenReturn(Optional.of(pt("PT-ZS", "120", "1.0")));
-        when(finishedGoodsBatchRepository.sumAvailableQuantityByProductTypeAndUnit("F006", "PT-ZS", "盒")).thenReturn(new BigDecimal("700"));
-        when(semiFinishedInventoryRepository.sumAvailableByProduct("F006", "PT-ZS")).thenReturn(BigDecimal.ZERO);
-        when(productionPlanRepository.sumPlannedQuantityByProductAndStatuses(eq("F006"), eq("PT-ZS"), anyCollection())).thenReturn(BigDecimal.ZERO);
+    @DisplayName("WIP is converted with gramsPerUnit and wipToFgYield")
+    void wipConversion() {
+        when(salesOrderItemRepository.sumDemandByProductForDeliveryDate(eq(FACTORY_ID), eq(JUNE_3), anyCollection()))
+                .thenReturn(List.of(demand("PT-TONGUE", "pork tongue", BOX_UNIT, BOX_UNIT, "2000")));
+        when(productTypeRepository.findById("PT-TONGUE")).thenReturn(Optional.of(productType("120", "0.9")));
+        when(finishedGoodsBatchRepository.sumAvailableQuantityByProductTypeAndUnit(FACTORY_ID, "PT-TONGUE", BOX_UNIT))
+                .thenReturn(BigDecimal.ZERO);
+        when(semiFinishedInventoryRepository.sumAvailableByProduct(FACTORY_ID, "PT-TONGUE"))
+                .thenReturn(new BigDecimal("150"));
+        when(productionPlanRepository.sumPlannedQuantityByProductAndStatuses(eq(FACTORY_ID), eq("PT-TONGUE"), anyCollection()))
+                .thenReturn(BigDecimal.ZERO);
 
-        RestockRow r = service.getRestockBoard("F006", D).getRows().get(0);
-        assertEquals(0, BigDecimal.ZERO.compareTo(r.getShortfallQty()));
-        assertEquals("SATISFIED", r.getStatus());
+        RestockRow row = service.getRestockBoard(FACTORY_ID, JUNE_3).getRows().get(0);
+
+        assertEquals(0, new BigDecimal("1125.00").compareTo(row.getWipEstimatedQty()));
+        assertTrue(row.isWipIsEstimated());
     }
 
     @Test
-    @DisplayName("WIP折盒: 150kg × yield0.9 / 120g每盒 = 1125盒 计入可用")
-    void wipFold() {
-        when(salesOrderItemRepository.sumDemandByProductForDeliveryDate(eq("F006"), eq(D), anyCollection()))
-                .thenReturn(List.of(demand("PT-ZS", "猪舌120g", "盒", "盒", "2000")));
-        when(productTypeRepository.findById("PT-ZS")).thenReturn(Optional.of(pt("PT-ZS", "120", "0.9")));
-        when(finishedGoodsBatchRepository.sumAvailableQuantityByProductTypeAndUnit("F006", "PT-ZS", "盒")).thenReturn(BigDecimal.ZERO);
-        when(semiFinishedInventoryRepository.sumAvailableByProduct("F006", "PT-ZS")).thenReturn(new BigDecimal("150"));
-        when(productionPlanRepository.sumPlannedQuantityByProductAndStatuses(eq("F006"), eq("PT-ZS"), anyCollection())).thenReturn(BigDecimal.ZERO);
+    @DisplayName("missing gramsPerUnit does not silently estimate WIP")
+    void missingGramsWarning() {
+        when(salesOrderItemRepository.sumDemandByProductForDeliveryDate(eq(FACTORY_ID), eq(JUNE_3), anyCollection()))
+                .thenReturn(List.of(demand("PT-X", "x", BOX_UNIT, BOX_UNIT, "100")));
+        when(productTypeRepository.findById("PT-X")).thenReturn(Optional.of(productType(null, null)));
+        when(finishedGoodsBatchRepository.sumAvailableQuantityByProductTypeAndUnit(FACTORY_ID, "PT-X", BOX_UNIT))
+                .thenReturn(BigDecimal.ZERO);
+        when(semiFinishedInventoryRepository.sumAvailableByProduct(FACTORY_ID, "PT-X"))
+                .thenReturn(new BigDecimal("50"));
+        when(productionPlanRepository.sumPlannedQuantityByProductAndStatuses(eq(FACTORY_ID), eq("PT-X"), anyCollection()))
+                .thenReturn(BigDecimal.ZERO);
 
-        RestockRow r = service.getRestockBoard("F006", D).getRows().get(0);
-        assertEquals(0, new BigDecimal("1125.00").compareTo(r.getWipEstimatedQty()));
-        assertTrue(r.isWipIsEstimated());
+        RestockRow row = service.getRestockBoard(FACTORY_ID, JUNE_3).getRows().get(0);
+
+        assertNull(row.getWipEstimatedQty());
+        assertNotNull(row.getConversionWarning());
+        assertTrue(row.getConversionWarning().contains("gramsPerUnit"));
     }
 
     @Test
-    @DisplayName("gramsPerUnit null + 有WIP → wip列null + 警告, 不静默算错")
-    void noGramsWarning() {
-        when(salesOrderItemRepository.sumDemandByProductForDeliveryDate(eq("F006"), eq(D), anyCollection()))
-                .thenReturn(List.of(demand("PT-X", "X", "盒", "盒", "100")));
-        when(productTypeRepository.findById("PT-X")).thenReturn(Optional.of(pt("PT-X", null, null)));
-        when(finishedGoodsBatchRepository.sumAvailableQuantityByProductTypeAndUnit("F006", "PT-X", "盒")).thenReturn(BigDecimal.ZERO);
-        when(semiFinishedInventoryRepository.sumAvailableByProduct("F006", "PT-X")).thenReturn(new BigDecimal("50"));
-        when(productionPlanRepository.sumPlannedQuantityByProductAndStatuses(eq("F006"), eq("PT-X"), anyCollection())).thenReturn(BigDecimal.ZERO);
+    @DisplayName("horizon deducts daily demand in date order and keeps raw material estimate separate")
+    void horizonDeductsAcrossDays() {
+        when(salesOrderItemRepository.sumDemandByProductForDeliveryDate(eq(FACTORY_ID), eq(JUNE_1), anyCollection()))
+                .thenReturn(List.of(demand("PT-BEEF", "beef shank", BOX_UNIT, BOX_UNIT, "1912")));
+        when(salesOrderItemRepository.sumDemandByProductForDeliveryDate(eq(FACTORY_ID), eq(JUNE_2), anyCollection()))
+                .thenReturn(List.of(demand("PT-BEEF", "beef shank", BOX_UNIT, BOX_UNIT, "159")));
+        when(salesOrderItemRepository.sumDemandByProductForDeliveryDate(eq(FACTORY_ID), eq(JUNE_3), anyCollection()))
+                .thenReturn(List.of(demand("PT-BEEF", "beef shank", BOX_UNIT, BOX_UNIT, "1473")));
+        when(productTypeRepository.findById("PT-BEEF")).thenReturn(Optional.of(productType("200", "0.8")));
+        when(finishedGoodsBatchRepository.sumAvailableQuantityByProductTypeAndUnit(FACTORY_ID, "PT-BEEF", BOX_UNIT))
+                .thenReturn(new BigDecimal("1000"));
+        when(semiFinishedInventoryRepository.sumAvailableByProduct(FACTORY_ID, "PT-BEEF"))
+                .thenReturn(new BigDecimal("100"));
+        when(productionPlanRepository.sumPlannedQuantityByProductAndStatuses(eq(FACTORY_ID), eq("PT-BEEF"), anyCollection()))
+                .thenReturn(new BigDecimal("500"));
+        when(conversionRepository.findByFactoryIdAndProductTypeId(FACTORY_ID, "PT-BEEF"))
+                .thenReturn(List.of(conversion("MAT-BEEF", "beef raw", "kg", "2.0")));
+        when(materialBatchRepository.sumAvailableQuantityByMaterialType(FACTORY_ID, "MAT-BEEF"))
+                .thenReturn(new BigDecimal("100"));
 
-        RestockRow r = service.getRestockBoard("F006", D).getRows().get(0);
-        assertNull(r.getWipEstimatedQty());
-        assertNotNull(r.getConversionWarning());
-        assertTrue(r.getConversionWarning().contains("gramsPerUnit"));
+        RestockHorizonDTO horizon = service.getRestockHorizon(FACTORY_ID, JUNE_1, JUNE_3);
+        RestockHorizonProductRow row = horizon.getRows().get(0);
+
+        assertEquals(3, horizon.getDates().size());
+        assertEquals(0, new BigDecimal("3544").compareTo(row.getTotalDemandQty()));
+        assertEquals(0, new BigDecimal("400.00").compareTo(row.getWipEstimatedQty()));
+        assertEquals(0, new BigDecimal("200.0").compareTo(row.getRawEstimatedFgQty()));
+        assertEquals(0, new BigDecimal("1900.00").compareTo(row.getStartingCoverQty()));
+        assertEquals(0, new BigDecimal("1644.00").compareTo(row.getEndingShortfallQty()));
+        assertEquals("SHORTFALL", row.getDays().get(2).getStatus());
     }
 
     @Test
-    @DisplayName("F2 单位不一致 → demandQty null + UNIT_INCONSISTENT, 不累加")
-    void unitInconsistent() {
-        when(salesOrderItemRepository.sumDemandByProductForDeliveryDate(eq("F006"), eq(D), anyCollection()))
-                .thenReturn(List.of(demand("PT-X", "X", "盒", "箱", "12")));
-        when(productTypeRepository.findById("PT-X")).thenReturn(Optional.of(pt("PT-X", "120", null)));
-
-        RestockRow r = service.getRestockBoard("F006", D).getRows().get(0);
-        assertNull(r.getDemandQty());
-        assertNull(r.getShortfallQty());
-        assertEquals("UNIT_INCONSISTENT", r.getStatus());
-        assertNotNull(r.getConversionWarning());
+    @DisplayName("horizon rejects inverted date range")
+    void horizonRejectsInvertedRange() {
+        try {
+            service.getRestockHorizon(FACTORY_ID, JUNE_3, JUNE_1);
+        } catch (IllegalArgumentException ex) {
+            assertTrue(ex.getMessage().contains("endDate"));
+            return;
+        }
+        throw new AssertionError("expected IllegalArgumentException");
     }
 
-    @Test
-    @DisplayName("无订单 → 空看板")
-    void empty() {
-        when(salesOrderItemRepository.sumDemandByProductForDeliveryDate(eq("F006"), eq(D), anyCollection()))
-                .thenReturn(List.of());
-        RestockBoardDTO board = service.getRestockBoard("F006", D);
-        assertTrue(board.getRows().isEmpty());
-        assertEquals(0, board.getSummary().getTotalProducts());
+    private ProductDemandProjection demand(
+            String id,
+            String name,
+            String minUnit,
+            String maxUnit,
+            String quantity) {
+        return new ProductDemandProjection() {
+            @Override public String getProductTypeId() { return id; }
+            @Override public String getProductName() { return name; }
+            @Override public String getMinUnit() { return minUnit; }
+            @Override public String getMaxUnit() { return maxUnit; }
+            @Override public BigDecimal getDemand() { return new BigDecimal(quantity); }
+        };
+    }
+
+    private ProductType productType(String gramsPerUnit, String wipToFgYield) {
+        ProductType productType = new ProductType();
+        productType.setGramsPerUnit(gramsPerUnit == null ? null : new BigDecimal(gramsPerUnit));
+        productType.setWipToFgYield(wipToFgYield == null ? null : new BigDecimal(wipToFgYield));
+        return productType;
+    }
+
+    private MaterialProductConversion conversion(
+            String materialTypeId,
+            String materialName,
+            String materialUnit,
+            String conversionRate) {
+        RawMaterialType materialType = new RawMaterialType();
+        materialType.setId(materialTypeId);
+        materialType.setName(materialName);
+        materialType.setUnit(materialUnit);
+
+        MaterialProductConversion conversion = new MaterialProductConversion();
+        conversion.setMaterialTypeId(materialTypeId);
+        conversion.setMaterialType(materialType);
+        conversion.setConversionRate(new BigDecimal(conversionRate));
+        conversion.setIsActive(true);
+        return conversion;
     }
 }

@@ -1,8 +1,12 @@
 package com.cretas.aims.service.restock;
 
+import com.cretas.aims.entity.MaterialProductConversion;
 import com.cretas.aims.entity.ProductType;
+import com.cretas.aims.entity.RawMaterialType;
 import com.cretas.aims.entity.enums.ProductionPlanStatus;
 import com.cretas.aims.entity.enums.SalesOrderStatus;
+import com.cretas.aims.repository.ConversionRepository;
+import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.ProductionPlanRepository;
 import com.cretas.aims.repository.SemiFinishedInventoryRepository;
@@ -11,35 +15,34 @@ import com.cretas.aims.repository.inventory.ProductDemandProjection;
 import com.cretas.aims.repository.inventory.ProductWarehouseDemandProjection;
 import com.cretas.aims.repository.inventory.SalesOrderItemRepository;
 import com.cretas.aims.service.restock.dto.RestockBoardDTO;
+import com.cretas.aims.service.restock.dto.RestockHorizonDTO;
+import com.cretas.aims.service.restock.dto.RestockHorizonDayCell;
+import com.cretas.aims.service.restock.dto.RestockHorizonProductRow;
 import com.cretas.aims.service.restock.dto.RestockRow;
 import com.cretas.aims.service.restock.dto.WarehouseRestockBoardDTO;
 import com.cretas.aims.service.restock.dto.WarehouseRestockRow;
+import lombok.Builder;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.LocalDate;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 
-/**
- * 全天备货看板: 订单需求 vs 可用结存 (成品FG + 在产WIP折盒 + 已排产) vs 缺口, 产品级聚合, 只读实时。
- *
- * <p>三层互不相交:
- * <ul>
- *   <li>成品FG — FinishedGoodsBatch AVAILABLE (盒)</li>
- *   <li>在产WIP — SemiFinishedInventory availableQuantity (kg → 折盒)</li>
- *   <li>已排产 — ProductionPlan {PLANNED,PENDING} plannedQuantity (仅未开工, 避免 IN_PROGRESS 重复计算)</li>
- * </ul>
- */
 @Service
 @RequiredArgsConstructor
 public class RestockBoardService {
 
-    /** 有效需求订单状态 (排除 DRAFT/FINANCE_REJECTED/CANCELLED)。 */
+    private static final String BOX_UNIT = "\u76d2";
+
     private static final List<SalesOrderStatus> DEMAND_STATUSES = List.of(
             SalesOrderStatus.CONFIRMED,
             SalesOrderStatus.PENDING_FINANCE_REVIEW,
@@ -47,10 +50,6 @@ public class RestockBoardService {
             SalesOrderStatus.PROCESSING,
             SalesOrderStatus.PARTIAL_DELIVERED);
 
-    /**
-     * 已排产 = 仅未开工计划 (IN_PROGRESS/PAUSED 产出已进 WIP/FG, 再算则重复计算)。
-     * PREPARED/CANCELLED/COMPLETED 均排除。
-     */
     private static final List<ProductionPlanStatus> SCHEDULED_STATUSES = List.of(
             ProductionPlanStatus.PLANNED,
             ProductionPlanStatus.PENDING);
@@ -60,16 +59,17 @@ public class RestockBoardService {
     private final SemiFinishedInventoryRepository semiFinishedInventoryRepository;
     private final ProductionPlanRepository productionPlanRepository;
     private final ProductTypeRepository productTypeRepository;
+    private final ConversionRepository conversionRepository;
+    private final MaterialBatchRepository materialBatchRepository;
 
     @Transactional(readOnly = true)
     public RestockBoardDTO getRestockBoard(String factoryId, LocalDate deliveryDate) {
-        List<ProductDemandProjection> demands =
-                salesOrderItemRepository.sumDemandByProductForDeliveryDate(
-                        factoryId, deliveryDate, DEMAND_STATUSES);
+        List<ProductDemandProjection> demands = salesOrderItemRepository.sumDemandByProductForDeliveryDate(
+                factoryId, deliveryDate, DEMAND_STATUSES);
 
         List<RestockRow> rows = new ArrayList<>();
-        for (ProductDemandProjection d : demands) {
-            rows.add(buildRow(factoryId, d));
+        for (ProductDemandProjection demand : demands) {
+            rows.add(buildRow(factoryId, demand));
         }
 
         int shortfallCount = (int) rows.stream().filter(r -> "SHORTFALL".equals(r.getStatus())).count();
@@ -86,83 +86,56 @@ public class RestockBoardService {
                 .build();
     }
 
-    private RestockRow buildRow(String factoryId, ProductDemandProjection d) {
-        String productTypeId = d.getProductTypeId();
-        Optional<ProductType> ptOpt = productTypeRepository.findById(productTypeId);
-        BigDecimal gramsPerUnit = ptOpt.map(ProductType::getGramsPerUnit).orElse(null);
-        BigDecimal wipYield    = ptOpt.map(ProductType::getWipToFgYield).orElse(null);
-
-        String warning = null;
-
-        // F2: 同产品订单行 unit 不一致 → demandQty/total/shortfall null, 不静默累加
-        boolean unitInconsistent =
-                d.getMinUnit() != null && !Objects.equals(d.getMinUnit(), d.getMaxUnit());
-
-        // P4 防御: 只汇总 unit='盒' 的 FG 行, 防止换算前后混单位加和
-        BigDecimal fg = nz(finishedGoodsBatchRepository
-                .sumAvailableQuantityByProductTypeAndUnit(factoryId, productTypeId, "盒"));
-
-        // 在产 WIP (kg) → 折盒 (×出率 effYield / gramsPerUnit)
-        BigDecimal wipKg   = nz(semiFinishedInventoryRepository.sumAvailableByProduct(factoryId, productTypeId));
-        BigDecimal effYield = wipYield != null ? wipYield : BigDecimal.ONE;
-        BigDecimal wipBox   = RestockUnitConverter.kgToBox(wipKg.multiply(effYield), gramsPerUnit);
-
-        if (wipBox == null && wipKg.compareTo(BigDecimal.ZERO) > 0) {
-            // gramsPerUnit 未配置, 无法折盒
-            warning = append(warning, "未配置规格(gramsPerUnit), 在产无法折盒");
+    @Transactional(readOnly = true)
+    public RestockHorizonDTO getRestockHorizon(String factoryId, LocalDate startDate, LocalDate endDate) {
+        if (endDate.isBefore(startDate)) {
+            throw new IllegalArgumentException("endDate must not be before startDate");
         }
-        if (wipYield == null && wipKg.compareTo(BigDecimal.ZERO) > 0 && wipBox != null) {
-            // gramsPerUnit 存在但 wipToFgYield 未配置, 按 1:1 估算
-            warning = append(warning, "未配置在产出率, 按1:1估算");
+        long daysBetween = ChronoUnit.DAYS.between(startDate, endDate);
+        if (daysBetween > 31) {
+            throw new IllegalArgumentException("restock horizon supports at most 32 days");
         }
 
-        // 已排产 (盒, 仅未开工计划)
-        BigDecimal scheduled = nz(productionPlanRepository
-                .sumPlannedQuantityByProductAndStatuses(factoryId, productTypeId, SCHEDULED_STATUSES));
+        List<LocalDate> dates = startDate.datesUntil(endDate.plusDays(1)).toList();
+        Map<String, ProductHorizonDemand> products = new LinkedHashMap<>();
 
-        RestockRow.RestockRowBuilder b = RestockRow.builder()
-                .productTypeId(productTypeId)
-                .productName(d.getProductName())
-                .unit("盒")
-                .fgAvailableQty(fg)
-                .wipEstimatedQty(wipBox)
-                .scheduledQty(scheduled)
-                .wipIsEstimated(true);
-
-        if (unitInconsistent) {
-            warning = append(warning, "订单行单位不一致, 需人工核对");
-            b.demandQty(null)
-             .totalAvailableQty(null)
-             .shortfallQty(null)
-             .status("UNIT_INCONSISTENT");
-        } else {
-            BigDecimal demand    = nz(d.getDemand());
-            BigDecimal total     = fg.add(nz(wipBox)).add(scheduled);
-            BigDecimal shortfall = demand.subtract(total).max(BigDecimal.ZERO);
-            b.demandQty(demand)
-             .totalAvailableQty(total)
-             .shortfallQty(shortfall)
-             .status(shortfall.compareTo(BigDecimal.ZERO) == 0 ? "SATISFIED" : "SHORTFALL");
+        for (LocalDate date : dates) {
+            List<ProductDemandProjection> demands = salesOrderItemRepository.sumDemandByProductForDeliveryDate(
+                    factoryId, date, DEMAND_STATUSES);
+            for (ProductDemandProjection demand : demands) {
+                ProductHorizonDemand product = products.computeIfAbsent(
+                        demand.getProductTypeId(),
+                        id -> new ProductHorizonDemand(id, demand.getProductName()));
+                product.addDemand(date, nz(demand.getDemand()));
+                if (demand.getMinUnit() != null && !Objects.equals(demand.getMinUnit(), demand.getMaxUnit())) {
+                    product.warning = append(product.warning, "order units are inconsistent; manual check required");
+                    product.unitInconsistent = true;
+                }
+            }
         }
 
-        return b.conversionWarning(warning).build();
+        List<RestockHorizonProductRow> rows = products.values().stream()
+                .map(product -> buildHorizonRow(factoryId, dates, product))
+                .toList();
+
+        int shortfallCount = (int) rows.stream()
+                .filter(row -> nz(row.getEndingShortfallQty()).compareTo(BigDecimal.ZERO) > 0)
+                .count();
+
+        return RestockHorizonDTO.builder()
+                .startDate(startDate)
+                .endDate(endDate)
+                .dates(dates)
+                .rows(rows)
+                .summary(RestockHorizonDTO.Summary.builder()
+                        .totalProducts(rows.size())
+                        .shortfallProducts(shortfallCount)
+                        .fullyCoveredProducts(rows.size() - shortfallCount)
+                        .days(dates.size())
+                        .build())
+                .build();
     }
 
-    // ==================== P3 多仓备货看板 ====================
-
-    /**
-     * P3 多仓备货看板: 同交货日按产品 × 目的仓展开需求, 库存三层仍为全厂共享池。
-     *
-     * <p>向后兼容: 旧订单行 {@code destWarehouseCode = null} 被 COALESCE 归入"未分仓"桶,
-     * 与 {@link #getRestockBoard} 的产品级结果等价 (全在"未分仓"桶)。
-     *
-     * <p>注: 供给侧 (FG/WIP/已排产) 仍为全厂级, 一个产品在所有仓行共享同一库存数字。
-     * 这是 P3 建模设计决策 — 六扇门无仓级库存分区, 全厂统一调度。
-     *
-     * @param factoryId    工厂 ID
-     * @param deliveryDate 要求交货日期
-     * @return 按产品 × 仓分组的备货看板
-     */
     @Transactional(readOnly = true)
     public WarehouseRestockBoardDTO getRestockBoardByWarehouse(String factoryId, LocalDate deliveryDate) {
         List<ProductWarehouseDemandProjection> demands =
@@ -170,12 +143,12 @@ public class RestockBoardService {
                         factoryId, deliveryDate, DEMAND_STATUSES);
 
         List<WarehouseRestockRow> rows = new ArrayList<>();
-        for (ProductWarehouseDemandProjection d : demands) {
-            rows.add(buildWarehouseRow(factoryId, d));
+        for (ProductWarehouseDemandProjection demand : demands) {
+            rows.add(buildWarehouseRow(factoryId, demand));
         }
 
-        int shortfallCount  = (int) rows.stream().filter(r -> "SHORTFALL".equals(r.getStatus())).count();
-        int satisfiedCount  = (int) rows.stream().filter(r -> "SATISFIED".equals(r.getStatus())).count();
+        int shortfallCount = (int) rows.stream().filter(r -> "SHORTFALL".equals(r.getStatus())).count();
+        int satisfiedCount = (int) rows.stream().filter(r -> "SATISFIED".equals(r.getStatus())).count();
         long warehouseCount = rows.stream().map(WarehouseRestockRow::getDestWarehouseCode).distinct().count();
 
         return WarehouseRestockBoardDTO.builder()
@@ -190,73 +163,275 @@ public class RestockBoardService {
                 .build();
     }
 
-    private WarehouseRestockRow buildWarehouseRow(String factoryId, ProductWarehouseDemandProjection d) {
-        String productTypeId = d.getProductTypeId();
-        Optional<ProductType> ptOpt = productTypeRepository.findById(productTypeId);
-        BigDecimal gramsPerUnit = ptOpt.map(ProductType::getGramsPerUnit).orElse(null);
-        BigDecimal wipYield    = ptOpt.map(ProductType::getWipToFgYield).orElse(null);
+    private RestockHorizonProductRow buildHorizonRow(
+            String factoryId,
+            List<LocalDate> dates,
+            ProductHorizonDemand demand) {
+        Optional<ProductType> productType = productTypeRepository.findById(demand.productTypeId);
+        BigDecimal gramsPerUnit = productType.map(ProductType::getGramsPerUnit).orElse(null);
+        BigDecimal wipYield = productType.map(ProductType::getWipToFgYield).orElse(null);
+        BigDecimal effectiveWipYield = wipYield != null ? wipYield : BigDecimal.ONE;
 
-        String warning = null;
+        BigDecimal fg = finishedGoods(factoryId, demand.productTypeId);
+        BigDecimal wipKg = nz(semiFinishedInventoryRepository.sumAvailableByProduct(factoryId, demand.productTypeId));
+        BigDecimal wipBox = RestockUnitConverter.kgToBox(wipKg.multiply(effectiveWipYield), gramsPerUnit);
+        BigDecimal scheduled = scheduled(factoryId, demand.productTypeId);
+        ConversionSnapshot conversion = resolveConversion(factoryId, demand.productTypeId, effectiveWipYield);
 
-        // F2: 单位不一致检测 (同产品+仓组合, 跨行不同 unit)
-        boolean unitInconsistent =
-                d.getMinUnit() != null && !Objects.equals(d.getMinUnit(), d.getMaxUnit());
-
-        // 供给侧: 全厂共享池 (P4 防御: 只汇总 unit='盒' 的 FG 行)
-        BigDecimal fg = nz(finishedGoodsBatchRepository
-                .sumAvailableQuantityByProductTypeAndUnit(factoryId, productTypeId, "盒"));
-
-        BigDecimal wipKg    = nz(semiFinishedInventoryRepository.sumAvailableByProduct(factoryId, productTypeId));
-        BigDecimal effYield = wipYield != null ? wipYield : BigDecimal.ONE;
-        BigDecimal wipBox   = RestockUnitConverter.kgToBox(wipKg.multiply(effYield), gramsPerUnit);
-
+        String warning = demand.warning;
         if (wipBox == null && wipKg.compareTo(BigDecimal.ZERO) > 0) {
-            warning = append(warning, "未配置规格(gramsPerUnit), 在产无法折盒");
+            warning = append(warning, "gramsPerUnit is missing; WIP cannot be converted to finished goods");
         }
         if (wipYield == null && wipKg.compareTo(BigDecimal.ZERO) > 0 && wipBox != null) {
-            warning = append(warning, "未配置在产出率, 按1:1估算");
+            warning = append(warning, "wipToFgYield is missing; WIP is estimated as 1:1");
+        }
+        warning = append(warning, conversion.warning);
+
+        BigDecimal startingCover = fg.add(nz(wipBox)).add(scheduled);
+        BigDecimal remaining = startingCover;
+        BigDecimal endingShortfall = BigDecimal.ZERO;
+        List<RestockHorizonDayCell> cells = new ArrayList<>();
+
+        for (LocalDate date : dates) {
+            if (demand.unitInconsistent) {
+                cells.add(RestockHorizonDayCell.builder()
+                        .deliveryDate(date)
+                        .demandQty(null)
+                        .availableBeforeDemandQty(remaining)
+                        .availableAfterDemandQty(remaining)
+                        .shortfallQty(null)
+                        .warning("order units are inconsistent; demand cannot be allocated safely")
+                        .status("UNIT_INCONSISTENT")
+                        .build());
+                continue;
+            }
+            BigDecimal dayDemand = nz(demand.demandByDate.get(date));
+            BigDecimal before = remaining;
+            BigDecimal shortfall = dayDemand.subtract(before).max(BigDecimal.ZERO);
+            BigDecimal after = before.subtract(dayDemand).max(BigDecimal.ZERO);
+            endingShortfall = endingShortfall.add(shortfall);
+            remaining = after;
+            cells.add(RestockHorizonDayCell.builder()
+                    .deliveryDate(date)
+                    .demandQty(dayDemand)
+                    .availableBeforeDemandQty(before)
+                    .availableAfterDemandQty(after)
+                    .shortfallQty(shortfall)
+                    .status(shortfall.compareTo(BigDecimal.ZERO) > 0 ? "SHORTFALL" : "COVERED")
+                    .build());
         }
 
-        BigDecimal scheduled = nz(productionPlanRepository
-                .sumPlannedQuantityByProductAndStatuses(factoryId, productTypeId, SCHEDULED_STATUSES));
+        return RestockHorizonProductRow.builder()
+                .productTypeId(demand.productTypeId)
+                .productName(demand.productName)
+                .unit(BOX_UNIT)
+                .totalDemandQty(demand.totalDemand())
+                .fgAvailableQty(fg)
+                .wipAvailableQty(wipKg)
+                .wipEstimatedQty(wipBox)
+                .scheduledQty(scheduled)
+                .rawAvailableQty(conversion.rawAvailableQty)
+                .rawUnit(conversion.rawUnit)
+                .rawMaterialName(conversion.rawMaterialName)
+                .rawEstimatedFgQty(conversion.rawEstimatedFgQty)
+                .rawToWipYield(conversion.rawToWipYield)
+                .wipToFgYield(effectiveWipYield)
+                .rawToFgYield(conversion.rawToFgYield)
+                .startingCoverQty(startingCover)
+                .endingAvailableQty(remaining)
+                .endingShortfallQty(endingShortfall)
+                .conversionWarning(warning)
+                .days(cells)
+                .build();
+    }
 
-        WarehouseRestockRow.WarehouseRestockRowBuilder b = WarehouseRestockRow.builder()
+    private RestockRow buildRow(String factoryId, ProductDemandProjection demand) {
+        String productTypeId = demand.getProductTypeId();
+        Optional<ProductType> productType = productTypeRepository.findById(productTypeId);
+        BigDecimal gramsPerUnit = productType.map(ProductType::getGramsPerUnit).orElse(null);
+        BigDecimal wipYield = productType.map(ProductType::getWipToFgYield).orElse(null);
+        BigDecimal effectiveWipYield = wipYield != null ? wipYield : BigDecimal.ONE;
+
+        String warning = null;
+        boolean unitInconsistent =
+                demand.getMinUnit() != null && !Objects.equals(demand.getMinUnit(), demand.getMaxUnit());
+        BigDecimal fg = finishedGoods(factoryId, productTypeId);
+        BigDecimal wipKg = nz(semiFinishedInventoryRepository.sumAvailableByProduct(factoryId, productTypeId));
+        BigDecimal wipBox = RestockUnitConverter.kgToBox(wipKg.multiply(effectiveWipYield), gramsPerUnit);
+        BigDecimal scheduled = scheduled(factoryId, productTypeId);
+
+        if (wipBox == null && wipKg.compareTo(BigDecimal.ZERO) > 0) {
+            warning = append(warning, "gramsPerUnit is missing; WIP cannot be converted to boxes");
+        }
+        if (wipYield == null && wipKg.compareTo(BigDecimal.ZERO) > 0 && wipBox != null) {
+            warning = append(warning, "wipToFgYield is missing; WIP is estimated as 1:1");
+        }
+
+        RestockRow.RestockRowBuilder builder = RestockRow.builder()
                 .productTypeId(productTypeId)
-                .productName(d.getProductName())
-                .unit("盒")
-                .destWarehouseCode(d.getDestWarehouseCode())
-                .destWarehouseName(d.getDestWarehouseName())
+                .productName(demand.getProductName())
+                .unit(BOX_UNIT)
                 .fgAvailableQty(fg)
                 .wipEstimatedQty(wipBox)
                 .scheduledQty(scheduled)
                 .wipIsEstimated(true);
 
         if (unitInconsistent) {
-            warning = append(warning, "订单行单位不一致, 需人工核对");
-            b.warehouseDemandQty(null)
-             .totalAvailableQty(null)
-             .shortfallQty(null)
-             .status("UNIT_INCONSISTENT");
+            warning = append(warning, "order units are inconsistent; manual check required");
+            builder.demandQty(null)
+                    .totalAvailableQty(null)
+                    .shortfallQty(null)
+                    .status("UNIT_INCONSISTENT");
         } else {
-            BigDecimal demand    = nz(d.getDemand());
-            BigDecimal total     = fg.add(nz(wipBox)).add(scheduled);
-            BigDecimal shortfall = demand.subtract(total).max(BigDecimal.ZERO);
-            b.warehouseDemandQty(demand)
-             .totalAvailableQty(total)
-             .shortfallQty(shortfall)
-             .status(shortfall.compareTo(BigDecimal.ZERO) == 0 ? "SATISFIED" : "SHORTFALL");
+            BigDecimal demandQty = nz(demand.getDemand());
+            BigDecimal total = fg.add(nz(wipBox)).add(scheduled);
+            BigDecimal shortfall = demandQty.subtract(total).max(BigDecimal.ZERO);
+            builder.demandQty(demandQty)
+                    .totalAvailableQty(total)
+                    .shortfallQty(shortfall)
+                    .status(shortfall.compareTo(BigDecimal.ZERO) == 0 ? "SATISFIED" : "SHORTFALL");
         }
 
-        return b.conversionWarning(warning).build();
+        return builder.conversionWarning(warning).build();
     }
 
-    /** null 安全: 把 null 当 0 处理。 */
-    private static BigDecimal nz(BigDecimal v) {
-        return v != null ? v : BigDecimal.ZERO;
+    private WarehouseRestockRow buildWarehouseRow(String factoryId, ProductWarehouseDemandProjection demand) {
+        String productTypeId = demand.getProductTypeId();
+        Optional<ProductType> productType = productTypeRepository.findById(productTypeId);
+        BigDecimal gramsPerUnit = productType.map(ProductType::getGramsPerUnit).orElse(null);
+        BigDecimal wipYield = productType.map(ProductType::getWipToFgYield).orElse(null);
+        BigDecimal effectiveWipYield = wipYield != null ? wipYield : BigDecimal.ONE;
+
+        String warning = null;
+        boolean unitInconsistent =
+                demand.getMinUnit() != null && !Objects.equals(demand.getMinUnit(), demand.getMaxUnit());
+        BigDecimal fg = finishedGoods(factoryId, productTypeId);
+        BigDecimal wipKg = nz(semiFinishedInventoryRepository.sumAvailableByProduct(factoryId, productTypeId));
+        BigDecimal wipBox = RestockUnitConverter.kgToBox(wipKg.multiply(effectiveWipYield), gramsPerUnit);
+        BigDecimal scheduled = scheduled(factoryId, productTypeId);
+
+        if (wipBox == null && wipKg.compareTo(BigDecimal.ZERO) > 0) {
+            warning = append(warning, "gramsPerUnit is missing; WIP cannot be converted to boxes");
+        }
+        if (wipYield == null && wipKg.compareTo(BigDecimal.ZERO) > 0 && wipBox != null) {
+            warning = append(warning, "wipToFgYield is missing; WIP is estimated as 1:1");
+        }
+
+        WarehouseRestockRow.WarehouseRestockRowBuilder builder = WarehouseRestockRow.builder()
+                .productTypeId(productTypeId)
+                .productName(demand.getProductName())
+                .unit(BOX_UNIT)
+                .destWarehouseCode(demand.getDestWarehouseCode())
+                .destWarehouseName(demand.getDestWarehouseName())
+                .fgAvailableQty(fg)
+                .wipEstimatedQty(wipBox)
+                .scheduledQty(scheduled)
+                .wipIsEstimated(true);
+
+        if (unitInconsistent) {
+            warning = append(warning, "order units are inconsistent; manual check required");
+            builder.warehouseDemandQty(null)
+                    .totalAvailableQty(null)
+                    .shortfallQty(null)
+                    .status("UNIT_INCONSISTENT");
+        } else {
+            BigDecimal demandQty = nz(demand.getDemand());
+            BigDecimal total = fg.add(nz(wipBox)).add(scheduled);
+            BigDecimal shortfall = demandQty.subtract(total).max(BigDecimal.ZERO);
+            builder.warehouseDemandQty(demandQty)
+                    .totalAvailableQty(total)
+                    .shortfallQty(shortfall)
+                    .status(shortfall.compareTo(BigDecimal.ZERO) == 0 ? "SATISFIED" : "SHORTFALL");
+        }
+
+        return builder.conversionWarning(warning).build();
     }
 
-    /** 拼接警告字符串, 用"; "分隔。 */
+    private ConversionSnapshot resolveConversion(String factoryId, String productTypeId, BigDecimal wipToFgYield) {
+        Optional<MaterialProductConversion> active = conversionRepository
+                .findByFactoryIdAndProductTypeId(factoryId, productTypeId)
+                .stream()
+                .filter(conversion -> Boolean.TRUE.equals(conversion.getIsActive()))
+                .findFirst();
+
+        if (active.isEmpty()) {
+            return ConversionSnapshot.builder()
+                    .warning("raw-to-finished conversion is missing; raw material cannot be estimated")
+                    .build();
+        }
+
+        MaterialProductConversion conversion = active.get();
+        BigDecimal rawAvailable = nz(materialBatchRepository.sumAvailableQuantityByMaterialType(
+                factoryId, conversion.getMaterialTypeId()));
+        BigDecimal rawToFg = conversion.getConversionRate();
+        BigDecimal rawEstimatedFg = rawToFg != null ? rawAvailable.multiply(rawToFg) : null;
+        BigDecimal rawToWip = null;
+        if (rawToFg != null && wipToFgYield != null && wipToFgYield.compareTo(BigDecimal.ZERO) > 0) {
+            rawToWip = rawToFg.divide(wipToFgYield, 4, RoundingMode.HALF_UP);
+        }
+
+        RawMaterialType materialType = conversion.getMaterialType();
+        return ConversionSnapshot.builder()
+                .rawAvailableQty(rawAvailable)
+                .rawUnit(materialType != null ? materialType.getUnit() : null)
+                .rawMaterialName(materialType != null ? materialType.getName() : null)
+                .rawEstimatedFgQty(rawEstimatedFg)
+                .rawToFgYield(rawToFg)
+                .rawToWipYield(rawToWip)
+                .warning(rawToFg == null ? "raw-to-finished conversion is empty; raw material cannot be estimated" : null)
+                .build();
+    }
+
+    private BigDecimal finishedGoods(String factoryId, String productTypeId) {
+        return nz(finishedGoodsBatchRepository.sumAvailableQuantityByProductTypeAndUnit(
+                factoryId, productTypeId, BOX_UNIT));
+    }
+
+    private BigDecimal scheduled(String factoryId, String productTypeId) {
+        return nz(productionPlanRepository.sumPlannedQuantityByProductAndStatuses(
+                factoryId, productTypeId, SCHEDULED_STATUSES));
+    }
+
+    private static BigDecimal nz(BigDecimal value) {
+        return value != null ? value : BigDecimal.ZERO;
+    }
+
     private static String append(String existing, String add) {
+        if (add == null || add.isBlank()) {
+            return existing;
+        }
         return existing == null ? add : existing + "; " + add;
+    }
+
+    private static class ProductHorizonDemand {
+        private final String productTypeId;
+        private final String productName;
+        private final Map<LocalDate, BigDecimal> demandByDate = new LinkedHashMap<>();
+        private boolean unitInconsistent;
+        private String warning;
+
+        private ProductHorizonDemand(String productTypeId, String productName) {
+            this.productTypeId = productTypeId;
+            this.productName = productName;
+        }
+
+        private void addDemand(LocalDate date, BigDecimal quantity) {
+            demandByDate.merge(date, quantity, BigDecimal::add);
+        }
+
+        private BigDecimal totalDemand() {
+            return demandByDate.values().stream().reduce(BigDecimal.ZERO, BigDecimal::add);
+        }
+    }
+
+    @Builder
+    private static class ConversionSnapshot {
+        private BigDecimal rawAvailableQty;
+        private String rawUnit;
+        private String rawMaterialName;
+        private BigDecimal rawEstimatedFgQty;
+        private BigDecimal rawToWipYield;
+        private BigDecimal rawToFgYield;
+        private String warning;
     }
 }

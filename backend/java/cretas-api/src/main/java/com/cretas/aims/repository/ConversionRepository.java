@@ -3,6 +3,7 @@ package com.cretas.aims.repository;
 import com.cretas.aims.entity.MaterialProductConversion;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
@@ -41,6 +42,7 @@ public interface ConversionRepository extends JpaRepository<MaterialProductConve
     /**
      * 根据产品类型查找转换率
      */
+    @EntityGraph(attributePaths = {"materialType", "productType"})
     List<MaterialProductConversion> findByFactoryIdAndProductTypeId(String factoryId, String productTypeId);
 
     /**
