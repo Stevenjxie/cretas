@@ -31,17 +31,20 @@ type RouteT = RouteProp<{ YieldStepReport: YieldStepReportParams }, 'YieldStepRe
 type NavT = NativeStackNavigationProp<Record<string, object | undefined>>;
 
 const OVER_RECEIVE_TOLERANCE = 1.3; // A4 软上限: 计划 ×1.3 (含 30% 超收)
+const MAX_EVIDENCE_VIDEO_BYTES = 50 * 1024 * 1024;
+const MAX_EVIDENCE_VIDEO_DURATION_MS = 60 * 1000;
+const VIDEO_EXTENSIONS = ['mp4', 'mov', 'm4v', 'webm'];
 
 // 三阶段报工 (单元2): 该道当前所处阶段 (从 getYield 的 step.phase 推断)
 type StepPhase = 'AWAITING_INPUT' | 'IN_PRODUCTION' | 'COMPLETED';
 
-// 单元4 STEP 3: 图片证据本地态 (uri 上传中 / 上传完拿 serverUrl)
+type EvidenceMediaKind = 'image' | 'video';
+
+// 单元4 STEP 3: 图片/视频证据本地态 (uri 上传中 / 上传完拿 serverUrl)
 interface EvidencePhoto {
   uri: string;
   uploading: boolean;
-  mediaType: 'image' | 'video';
-  mimeType: string;
-  fileName: string;
+  mediaKind: EvidenceMediaKind;
   serverUrl?: string;
 }
 // 单元4 STEP 5: 副产物本地态 (名称 + 数量 + 单位)
@@ -57,6 +60,47 @@ const fmtMoney = (v: number | null | undefined): string =>
 
 const isVideoEvidenceUrl = (url: string): boolean =>
   /\.(mp4|mov|webm)(\?|#|$)/i.test(url) || url.includes('/videos/');
+
+function isEvidenceVideoAsset(asset: ImagePicker.ImagePickerAsset): boolean {
+  return asset.type === 'video' || asset.mimeType?.startsWith('video/') === true || isEvidenceVideoUrl(asset.uri);
+}
+
+function isEvidenceVideoUrl(url: string): boolean {
+  const clean = url.split(/[?#]/)[0]?.toLowerCase() || '';
+  return VIDEO_EXTENSIONS.some((ext) => clean.endsWith(`.${ext}`));
+}
+
+function evidenceMimeType(asset: ImagePicker.ImagePickerAsset, mediaKind: EvidenceMediaKind): string {
+  if (asset.mimeType) return asset.mimeType;
+  if (mediaKind === 'image') return 'image/jpeg';
+  const clean = asset.uri.split(/[?#]/)[0]?.toLowerCase() || '';
+  if (clean.endsWith('.mov')) return 'video/quicktime';
+  if (clean.endsWith('.webm')) return 'video/webm';
+  return 'video/mp4';
+}
+
+function evidenceFileName(mimeType: string): string {
+  const ext = mimeType.includes('quicktime')
+    ? 'mov'
+    : mimeType.includes('webm')
+      ? 'webm'
+      : mimeType.startsWith('video/')
+        ? 'mp4'
+        : 'jpg';
+  return `yield_evidence_${Date.now()}.${ext}`;
+}
+
+function validateEvidenceVideo(asset: ImagePicker.ImagePickerAsset): boolean {
+  if (typeof asset.fileSize === 'number' && asset.fileSize > MAX_EVIDENCE_VIDEO_BYTES) {
+    appAlert('视频太大', '单个视频不能超过 50MB。请截短后再上传，或改拍关键照片。');
+    return false;
+  }
+  if (typeof asset.duration === 'number' && asset.duration > MAX_EVIDENCE_VIDEO_DURATION_MS) {
+    appAlert('视频太长', '单个留证视频建议控制在 60 秒内。请截短后再上传。');
+    return false;
+  }
+  return true;
+}
 
 const YieldStepReportScreen: React.FC = () => {
   const navigation = useNavigation<NavT>();
@@ -303,37 +347,36 @@ const YieldStepReportScreen: React.FC = () => {
 
   // 单元D: 上道多笔 WIP 但未选领用批次 → 阻塞投入提交.
   const submitBlockedNoWip = needsWipPicker && selectedWip == null;
-  // 上传中 (任一图片) → 阻塞提交, 避免 evidenceImages 丢 URL
+  // 上传中 (任一证据) → 阻塞提交, 避免 evidenceImages 丢 URL
   const evidenceUploading = evidencePhotos.some((p) => p.uploading);
 
-  // ── 图片/视频证据 → 上传 OSS → 收集 URL (三阶段共用) ──
+  // ── 图片/视频证据 → 图片压缩 / 视频预检 → 上传 OSS → 收集 URL (三阶段共用) ──
   const uploadEvidence = useCallback(async (asset: ImagePicker.ImagePickerAsset) => {
-    const isVideo = asset.type === 'video' || asset.mimeType?.startsWith('video/') === true;
-    const localUri = isVideo
+    const mediaKind: EvidenceMediaKind = isEvidenceVideoAsset(asset) ? 'video' : 'image';
+    if (mediaKind === 'video' && !validateEvidenceVideo(asset)) return;
+
+    const localUri = mediaKind === 'video'
       ? asset.uri
       : (await ImageManipulator.manipulateAsync(
           asset.uri,
           [{ resize: { width: 1024 } }],
           { compress: 0.7, format: ImageManipulator.SaveFormat.JPEG },
         )).uri;
-    const mimeType = isVideo ? (asset.mimeType ?? 'video/mp4') : 'image/jpeg';
-    const fileName = asset.fileName ?? `yield_evidence_${Date.now()}${isVideo ? '.mp4' : '.jpg'}`;
-    setEvidencePhotos((prev) => [...prev, {
-      uri: localUri,
-      uploading: true,
-      mediaType: isVideo ? 'video' : 'image',
-      mimeType,
-      fileName,
-    }]);
+    const mimeType = evidenceMimeType(asset, mediaKind);
+
+    setEvidencePhotos((prev) => [...prev, { uri: localUri, uploading: true, mediaKind }]);
     try {
-      const url = await yieldReportApi.uploadYieldEvidence(localUri, { fileName, mimeType });
+      const url = await yieldReportApi.uploadYieldEvidence(localUri, {
+        mimeType,
+        fileName: evidenceFileName(mimeType),
+      });
       setEvidencePhotos((prev) =>
         prev.map((p) => (p.uri === localUri ? { ...p, uploading: false, serverUrl: url } : p)),
       );
     } catch (err) {
       setEvidencePhotos((prev) => prev.filter((p) => p.uri !== localUri));
       const e = err as { response?: { data?: { message?: string } } };
-      appAlert('证据上传失败', e.response?.data?.message ?? '请重试 (网络/格式)');
+      appAlert('证据上传失败', e.response?.data?.message ?? '请重试 (网络/格式/大小)');
     }
   }, []);
 
@@ -344,7 +387,7 @@ const YieldStepReportScreen: React.FC = () => {
       return;
     }
     const result = await ImagePicker.launchCameraAsync({
-      mediaTypes: ['images'],
+      mediaTypes: ['images', 'videos'],
       quality: 0.8,
       allowsEditing: false,
     });
@@ -360,7 +403,7 @@ const YieldStepReportScreen: React.FC = () => {
       return;
     }
     const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.All,
+      mediaTypes: ['images', 'videos'],
       quality: 0.8,
       allowsEditing: false,
     });
@@ -407,7 +450,7 @@ const YieldStepReportScreen: React.FC = () => {
       return;
     }
     if (evidenceUploading) {
-      appAlert('证据上传中', '请等照片/视频上传完成再提交');
+      appAlert('证据上传中', '请等照片或视频上传完成再提交');
       return;
     }
     const parseOptionalQty = (raw: string): number | undefined => {
@@ -498,7 +541,7 @@ const YieldStepReportScreen: React.FC = () => {
   const handleSubmitSegment = useCallback(async () => {
     if (!currentTask) return;
     if (evidenceUploading) {
-      appAlert('图片上传中', '请等照片上传完成再提交');
+      appAlert('证据上传中', '请等照片或视频上传完成再提交');
       return;
     }
     const hc = parseInt(segHeadcount, 10);
@@ -574,7 +617,7 @@ const YieldStepReportScreen: React.FC = () => {
   const doSubmitOutput = useCallback(async () => {
     if (!currentTask) return;
     if (evidenceUploading) {
-      appAlert('图片上传中', '请等照片上传完成再提交');
+      appAlert('证据上传中', '请等照片或视频上传完成再提交');
       return;
     }
     const output = parseFloat(outputQty);
@@ -897,9 +940,10 @@ const YieldStepReportScreen: React.FC = () => {
         <View style={styles.thumbRow}>
           {evidencePhotos.map((p) => (
             <View style={styles.thumbItem} key={p.uri}>
-              {p.mediaType === 'video' ? (
+              {p.mediaKind === 'video' ? (
                 <View style={[styles.thumb, styles.videoThumb]}>
-                  <Text style={styles.videoThumbText}>VIDEO</Text>
+                  <Text style={styles.videoThumbIcon}>▶</Text>
+                  <Text style={styles.videoThumbText}>视频</Text>
                 </View>
               ) : (
                 <Image source={{ uri: p.uri }} style={styles.thumb} />
@@ -922,7 +966,7 @@ const YieldStepReportScreen: React.FC = () => {
       ) : null}
       <View style={styles.photoBtnRow}>
         <TouchableOpacity style={styles.photoBtn} onPress={takeEvidencePhoto} disabled={submitting} testID={takeTestID}>
-          <Text style={styles.photoBtnText}>拍照留证 (产品+秤)</Text>
+          <Text style={styles.photoBtnText}>拍照/录像留证</Text>
         </TouchableOpacity>
         <TouchableOpacity style={styles.photoBtnOutline} onPress={pickEvidencePhoto} disabled={submitting} testID={pickTestID}>
           <Text style={styles.photoBtnOutlineText}>从相册选照片/视频</Text>
@@ -941,9 +985,10 @@ const YieldStepReportScreen: React.FC = () => {
       {Array.isArray(inputPhotosShown) && inputPhotosShown.length > 0 ? (
         <View style={styles.thumbRow}>
           {inputPhotosShown.map((url: string, i: number) => (
-            isVideoEvidenceUrl(url) ? (
+            isEvidenceVideoUrl(url) ? (
               <View key={`in-${i}`} style={[styles.thumbReadonly, styles.videoThumb]}>
-                <Text style={styles.videoThumbText}>VIDEO</Text>
+                <Text style={styles.videoThumbIcon}>▶</Text>
+                <Text style={styles.videoThumbText}>视频</Text>
               </View>
             ) : (
               <Image key={`in-${i}`} source={{ uri: url }} style={styles.thumbReadonly} />
@@ -1150,7 +1195,7 @@ const YieldStepReportScreen: React.FC = () => {
               />
 
               <View style={styles.divider} />
-              {renderEvidenceBlock('本段照片 (选填)', 'seg-take-photo', 'seg-pick-photo')}
+              {renderEvidenceBlock('本段证据 (照片/视频, 选填)', 'seg-take-photo', 'seg-pick-photo')}
 
               <NeoButton
                 variant="outline"
@@ -1194,7 +1239,7 @@ const YieldStepReportScreen: React.FC = () => {
               ) : null}
 
               <View style={styles.divider} />
-              {renderEvidenceBlock('产出照片 (产品+秤)', 'out-take-photo', 'out-pick-photo')}
+              {renderEvidenceBlock('产出证据 (照片/视频)', 'out-take-photo', 'out-pick-photo')}
 
               <View style={styles.divider} />
 
@@ -1537,6 +1582,13 @@ const styles = StyleSheet.create({
   videoThumb: { backgroundColor: '#303133', alignItems: 'center', justifyContent: 'center' },
   videoThumbText: { color: '#FFFFFF', fontSize: 12, fontWeight: '800' },
   thumbReadonly: { width: 80, height: 80, borderRadius: 8, marginRight: 8, marginBottom: 8 },
+  videoThumb: {
+    backgroundColor: '#1F2937',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  videoThumbIcon: { fontSize: 18, color: '#FFFFFF', fontWeight: '800', lineHeight: 22 },
+  videoThumbText: { marginTop: 2, fontSize: 12, color: '#FFFFFF', fontWeight: '700' },
   thumbOverlay: {
     ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.4)',
     alignItems: 'center', justifyContent: 'center',

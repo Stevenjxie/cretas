@@ -332,16 +332,17 @@ class YieldReportApi {
    */
   async uploadYieldEvidence(
     fileUri: string,
-    options: { fileName?: string; mimeType?: string } = {},
-    factoryId?: string,
+    options: { fileName?: string; mimeType?: string; factoryId?: string } = {},
   ): Promise<string> {
-    const fid = requireFactoryId(factoryId);
+    const mimeType = options.mimeType || 'image/jpeg';
+    const fileName = options.fileName || `yield_evidence_${Date.now()}${mimeType.startsWith('video/') ? '.mp4' : '.jpg'}`;
+    const fid = requireFactoryId(options.factoryId);
     const formData = new FormData();
     // React Native FormData 接受 {uri, name, type} 形状 (非 Blob), 见 PhotoEvidenceCapture.tsx:71
     formData.append('file', {
       uri: fileUri,
-      name: options.fileName ?? `yield_evidence_${Date.now()}.jpg`,
-      type: options.mimeType ?? 'image/jpeg',
+      name: fileName,
+      type: mimeType,
     } as unknown as Blob);
     const res = await apiClient.post<ApiResponse<{ url: string }>>(
       `/api/mobile/${fid}/upload/yield-evidence`,

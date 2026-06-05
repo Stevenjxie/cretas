@@ -627,6 +627,7 @@ function getTimelineIcon(type: string) {
                             :src="url"
                             class="trad-thumb trad-video"
                             controls
+                            preload="metadata"
                           />
                           <el-image
                             v-else
@@ -650,6 +651,7 @@ function getTimelineIcon(type: string) {
                             :src="url"
                             class="trad-thumb trad-video"
                             controls
+                            preload="metadata"
                           />
                           <el-image
                             v-else
@@ -673,6 +675,7 @@ function getTimelineIcon(type: string) {
                           :src="url"
                           class="trad-thumb trad-video"
                           controls
+                          preload="metadata"
                         />
                         <el-image
                           v-else
@@ -788,8 +791,9 @@ function getTimelineIcon(type: string) {
                   <video
                     v-if="isVideoEvidence(stepPhotos(row)[0])"
                     :src="stepPhotos(row)[0]"
-                    class="evidence-thumb"
+                    class="evidence-thumb trad-video"
                     controls
+                    preload="metadata"
                   />
                   <el-image
                     v-else
@@ -1174,6 +1178,12 @@ function getTimelineIcon(type: string) {
   height: 40px;
   border-radius: 4px;
   cursor: pointer;
+  object-fit: cover;
+  background: #111827;
+}
+
+.evidence-video {
+  display: block;
 }
 
 .evidence-badge {
@@ -1222,6 +1232,13 @@ function getTimelineIcon(type: string) {
   height: 56px;
   border-radius: 6px;
   cursor: pointer;
+  object-fit: cover;
+  background: #111827;
+}
+
+.trad-video {
+  display: inline-block;
+  vertical-align: middle;
 }
 
 .trad-video {
