@@ -53,6 +53,9 @@ public class YieldCalculationServiceImpl implements YieldCalculationService {
             // 三阶段 (单元1): 照片按 reportKind 分组 (INPUT/SEGMENT/legacy → inputPhotos; OUTPUT → outputPhotos)
             List<String> stepInputPhotos = null;     // 去重保序
             List<String> stepOutputPhotos = null;    // 去重保序
+            BigDecimal stepWarehouseOut = null;
+            BigDecimal stepFeedIn = null;
+            BigDecimal stepCarryoverQuantity = null;
             // 三阶段 phase 推断信号: 是否有 INPUT 报工 / 有 OUTPUT 报工 (或 legacy: 有投入 / 有产出)
             boolean hasInputSignal = false;
             boolean hasOutputSignal = false;
@@ -84,6 +87,18 @@ public class YieldCalculationServiceImpl implements YieldCalculationService {
                     }
                 }
                 if (r.getInputQuantity() != null) totalInput = totalInput.add(r.getInputQuantity());
+                if (r.getWarehouseOutQuantity() != null) {
+                    stepWarehouseOut = (stepWarehouseOut == null ? BigDecimal.ZERO : stepWarehouseOut)
+                            .add(r.getWarehouseOutQuantity());
+                }
+                if (r.getFeedInQuantity() != null) {
+                    stepFeedIn = (stepFeedIn == null ? BigDecimal.ZERO : stepFeedIn)
+                            .add(r.getFeedInQuantity());
+                }
+                if (r.getCarryoverQuantity() != null) {
+                    stepCarryoverQuantity = (stepCarryoverQuantity == null ? BigDecimal.ZERO : stepCarryoverQuantity)
+                            .add(r.getCarryoverQuantity());
+                }
                 // A3: 跨批带入计入当前道 input
                 if (r.getSourceBatchRefs() != null) {
                     for (Map<String, Object> ref : r.getSourceBatchRefs()) {
@@ -162,6 +177,9 @@ public class YieldCalculationServiceImpl implements YieldCalculationService {
                     .totalOutput(totalOutput)
                     .inputUnit(inUnit)
                     .outputUnit(outUnit)
+                    .warehouseOutQuantity(stepWarehouseOut)
+                    .feedInQuantity(stepFeedIn)
+                    .carryoverQuantity(stepCarryoverQuantity)
                     .yieldRate(yieldRate)
                     .unitComparable(comparable)
                     .carryover(carryover)

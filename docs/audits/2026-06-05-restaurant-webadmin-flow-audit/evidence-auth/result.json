@@ -1,0 +1,449 @@
+{
+  "target": "http://139.196.165.140:8086",
+  "account": {
+    "username": "qhj_prod",
+    "factoryId": "RES_3101_009",
+    "role": "factory_super_admin",
+    "factoryType": "RESTAURANT"
+  },
+  "generatedAt": "2026-06-05T02:47:40.136Z",
+  "consoleMessages": [
+    "[error] Failed to load resource: the server responded with a status of 403 (Forbidden)"
+  ],
+  "results": [
+    {
+      "id": "00-dashboard",
+      "path": "/smart-bi/dashboard",
+      "purpose": "餐饮经营总览消费 POS/财务数据",
+      "finalUrl": "http://139.196.165.140:8086/smart-bi/dashboard",
+      "textSnippet": "白垩纪AI Agent 首页 销售老板工作台 财务主管工作台 仓管员工作台 采购员工作台 销售管理 系统管理 餐饮运营 数据与分析 经营驾驶舱 AI 探索 AI 问答 / 数据分析 经营分析 经营分析 收入管理报表 AI 经营体检 异常预警 数据管理 Excel 上传 查询模板 数据完整度 分析概览 AI 运维 知识库反馈 AI 追问日志 数据与分析 / 经营驾驶舱 qhj_prod 工厂总监 经营驾驶舱 智能数据分析 · 业务经营一站式洞察 刷新数据 AI 问答 时间范围 至 全部历史 · 2025-01-01 至 2026-04-30 总营收 7877.2万 客单价 177.1 订单数量 44.5万 门店数 19 AI 智能洞察 生成于 10:46 AI 洞察 核心结论：青花椒徐汇日月光店订单量最大，但客单价仅129元（应收口径），远低于整体177元，是潜在增长点；美团套餐券金额占总折扣近四成，规模过大，需验证其效率。- **针对青花椒徐汇日月光店实施客单价提升试点**：基于其74,253单的高客流，通过优化菜单组合（如增设高价值套餐）提升客单价5~8%，预计月增营业额3.8~6.1万元。前置条件：需先分析青花椒徐汇日月光店各时段菜品销售明细及顾客搭配习惯，建议2周内完成数据分析，随后启动1个月试点。- **复盘美团套餐券的折扣效率**：美团套餐券累计折扣1,065万元（占折扣总额39.5%），若其带来的增量毛利低于30%，则存在较大优化空间。前置条件：需IT部门提供美团套餐券关联的订单数、用券客单价及复购率数据，在下季度前完成评估，并据此设定该活动预算上限，预计可控制无效折扣5~8万元/月。 分析生成于 2026-06-05 10:46 [1] 销售趋势 [2] 产品类别占比 快捷问答 畅销品 Top 5 哪家店业绩最好 员工里谁最厉害 外卖占比多少 慢销菜品 周末周中对比 峰值月份 优惠券使用情况 本月价值回馈 基于诊断引擎已算出的可节省金额 刷新 暂无价值快照 — 上传月度经营数据后系统将自动算出可节省金额。 前往上传 餐饮营收分析 基于全量经营数据 · 2025-01-01 至 2026-04-30 刷新 营收最高 青花椒大丸百货店 ¥1052.42万, 是末位 青花椒松江地中海店 的 4.0 倍。 门店营收排行 1 青花椒大丸百货店 ¥1052.42万 2 青花椒南方百联店 ¥989.82万 3 青花椒徐汇日月光店 ¥960.73万 4 青花椒徐汇光启城店 ¥849.35万 5 鲜行者打浦桥日月光店 ¥790.81万 6 青花椒川食山语颛桥龙湖店 ¥444.33万 7 青花椒新世界新丸中心店 ¥343.53万 8 青花椒杭州湖滨银泰城店 ¥328.92万 9 青花椒紫荆广场店 ¥303.72万 10 青花椒松江地中海店 ¥262.73万 渠道占",
+      "buttons": [
+        "刷新数据",
+        "AI 问答",
+        "畅销品 Top 5",
+        "哪家店业绩最好",
+        "员工里谁最厉害",
+        "外卖占比多少",
+        "慢销菜品",
+        "周末周中对比",
+        "峰值月份",
+        "优惠券使用情况",
+        "刷新",
+        "前往上传",
+        "刷新",
+        "一键上传"
+      ],
+      "signals": {
+        "hasUpload": true,
+        "hasWriteAction": true,
+        "hasEmpty": true,
+        "hasError": false
+      },
+      "failedResponses": [],
+      "screenshot": "docs\\audits\\2026-06-05-restaurant-webadmin-flow-audit\\evidence-auth\\00-dashboard.png"
+    },
+    {
+      "id": "01-upload",
+      "path": "/smart-bi/upload",
+      "purpose": "Excel/CSV POS 文件上传入口",
+      "finalUrl": "http://139.196.165.140:8086/smart-bi/upload",
+      "textSnippet": "白垩纪AI Agent 首页 销售老板工作台 财务主管工作台 仓管员工作台 采购员工作台 销售管理 系统管理 餐饮运营 数据与分析 经营驾驶舱 AI 探索 AI 问答 / 数据分析 经营分析 经营分析 收入管理报表 AI 经营体检 异常预警 数据管理 Excel 上传 查询模板 数据完整度 分析概览 AI 运维 知识库反馈 AI 追问日志 数据与分析 / Excel上传 qhj_prod 工厂总监 Smart BI / 数据导入 Excel 数据导入 下载模板 重新开始 1 上传文件 选择 Excel 文件 2 解析结果 预览解析数据 3 分析结果 AI 分析洞察 4 保存确认 保存并继续 将文件拖到此处，或点击上传 支持 .xlsx、.xls 和 .csv 格式，文件大小不超过 500MB 上传说明 支持 Excel 2007+ 格式 (.xlsx) 和 Excel 97-2003 格式 (.xls) 第一行应为列标题，从第二行开始为数据 建议使用系统提供的模板上传数据 日期格式推荐使用 YYYY-MM-DD (如 2026-01-15)",
+      "buttons": [
+        "下载模板",
+        "重新开始"
+      ],
+      "signals": {
+        "hasUpload": true,
+        "hasWriteAction": true,
+        "hasEmpty": false,
+        "hasError": true
+      },
+      "failedResponses": [],
+      "screenshot": "docs\\audits\\2026-06-05-restaurant-webadmin-flow-audit\\evidence-auth\\01-upload.png"
+    },
+    {
+      "id": "02-analysis",
+      "path": "/smart-bi/analysis",
+      "purpose": "上传文件分析与问数入口",
+      "finalUrl": "http://139.196.165.140:8086/smart-bi/analysis",
+      "textSnippet": "白垩纪AI Agent 首页 销售老板工作台 财务主管工作台 仓管员工作台 采购员工作台 销售管理 系统管理 餐饮运营 数据与分析 经营驾驶舱 AI 探索 AI 问答 / 数据分析 经营分析 经营分析 收入管理报表 AI 经营体检 异常预警 数据管理 Excel 上传 查询模板 数据完整度 分析概览 AI 运维 知识库反馈 AI 追问日志 数据与分析 / 智能数据分析 qhj_prod 工厂总监 传 Excel 分析 问数据 (AI) 智能数据分析 本厂数据来自 Gold 全量层（无需选文件） 您的经营数据已汇总到全量数据层, 下方直接展示门店营收排行与渠道占比。 如需查看完整经营图表, 可前往 经营驾驶舱。 分析上传文件 餐饮营收分析 基于全量经营数据 · 2025-01-01 至 2026-04-30 刷新 营收最高 青花椒大丸百货店 ¥1052.42万, 是末位 青花椒松江地中海店 的 4.0 倍。 门店营收排行 1 青花椒大丸百货店 ¥1052.42万 2 青花椒南方百联店 ¥989.82万 3 青花椒徐汇日月光店 ¥960.73万 4 青花椒徐汇光启城店 ¥849.35万 5 鲜行者打浦桥日月光店 ¥790.81万 6 青花椒川食山语颛桥龙湖店 ¥444.33万 7 青花椒新世界新丸中心店 ¥343.53万 8 青花椒杭州湖滨银泰城店 ¥328.92万 9 青花椒紫荆广场店 ¥303.72万 10 青花椒松江地中海店 ¥262.73万 渠道占比 (堂食 / 外卖) 微信 47.8% ¥1678.1万 饿了么 18.2% ¥640.2万 支付宝 13.8% ¥486.05万 美团 12.4% ¥435.21万 美团支付 2.0% ¥70.28万 现金 1.9% ¥65.94万 招行买单 1.5% ¥53.57万 交行买单 1.0% ¥35.99万 京东 0.9% ¥31.2万 银行卡 0.4% ¥13.13万",
+      "buttons": [
+        "分析上传文件",
+        "刷新"
+      ],
+      "signals": {
+        "hasUpload": true,
+        "hasWriteAction": true,
+        "hasEmpty": false,
+        "hasError": false
+      },
+      "failedResponses": [],
+      "screenshot": "docs\\audits\\2026-06-05-restaurant-webadmin-flow-audit\\evidence-auth\\02-analysis.png"
+    },
+    {
+      "id": "03-upload-status",
+      "path": "/smart-bi/upload-status",
+      "purpose": "POS/Excel 上传状态",
+      "finalUrl": "http://139.196.165.140:8086/smart-bi/upload-status",
+      "textSnippet": "白垩纪AI Agent 首页 销售老板工作台 财务主管工作台 仓管员工作台 采购员工作台 销售管理 系统管理 餐饮运营 数据与分析 经营驾驶舱 AI 探索 AI 问答 / 数据分析 经营分析 经营分析 收入管理报表 AI 经营体检 异常预警 数据管理 Excel 上传 查询模板 数据完整度 分析概览 AI 运维 知识库反馈 AI 追问日志 数据与分析 / 上传状态 qhj_prod 工厂总监 Smart BI / 上传状态 上传状态 查看 POS / Excel 上传情况，无需 SQL 查询。 最近 7 天 刷新 7 总上传数 (窗口内) 7 已完成 0 处理中 0 失败 文件名 报表类型 上传时间 状态 Bronze 行数 Silver 行数 错误消息 qhj_pos_2025_part4.csv POS 数据 2026-05-30 00:28:34 完成 49998 — — qhj_pos_2025_part3.csv POS 数据 2026-05-30 00:26:51 完成 50001 — — qhj_pos_2025_part2.csv POS 数据 2026-05-30 00:25:03 完成 50001 — — qhj_pos_2025_part1.csv POS 数据 2026-05-30 00:22:58 完成 50001 — — qhj_pos_2025_full_utf8.csv POS 数据 2026-05-30 00:13:48 完成 200001 — — qhj_pos_2026_03_04_v2.csv POS 数据 2026-05-29 23:39:52 完成 126402 — — qhj_pos_2026_01_02_v2.csv POS 数据 2026-05-29 23:35:11 完成 118381 — — 显示最近 7 条 (上限 50)；点击行展开查看详情。",
+      "buttons": [
+        "刷新"
+      ],
+      "signals": {
+        "hasUpload": true,
+        "hasWriteAction": true,
+        "hasEmpty": false,
+        "hasError": true
+      },
+      "failedResponses": [],
+      "screenshot": "docs\\audits\\2026-06-05-restaurant-webadmin-flow-audit\\evidence-auth\\03-upload-status.png"
+    },
+    {
+      "id": "04-role-kpi",
+      "path": "/restaurant/analytics/role-kpi",
+      "purpose": "店长 6 KPI 看板",
+      "finalUrl": "http://139.196.165.140:8086/restaurant/analytics/role-kpi",
+      "textSnippet": "白垩纪AI Agent 首页 销售老板工作台 财务主管工作台 仓管员工作台 采购员工作台 销售管理 系统管理 餐饮运营 深度分析 经营看板 菜品分析 门店对比 平台口碑 日常录入 配方管理 供应商进货录入 领料管理 损耗管理 盘点管理 数据与系统 数据完整度 ETL 状态 菜品名称匹配 数据与分析 餐饮运营 / 经营看板 qhj_prod 工厂总监 经营看板 门店: 本店 (单店直营) 期间: 全部历史 角色: factory_super_admin 整体经营健康度: 良好 刷新 日营收 良好 ¥162,417.42 区间 485 天日均 客单价 良好 ¥177.11 订单数 良好 444,762 毛利率 良好 74.3% 基于 174/859 个有配方成本菜品 (±15% Layer1 精度) 食材成本率 良好 0.0% 领料成本 ÷ 营收 (Layer1, 与配方理论 COGS 口径不同) 目标完成率 未设目标 未设目标 尚未配置经营目标 去配置目标",
+      "buttons": [
+        "刷新",
+        "去配置目标"
+      ],
+      "signals": {
+        "hasUpload": false,
+        "hasWriteAction": true,
+        "hasEmpty": true,
+        "hasError": false
+      },
+      "failedResponses": [],
+      "screenshot": "docs\\audits\\2026-06-05-restaurant-webadmin-flow-audit\\evidence-auth\\04-role-kpi.png"
+    },
+    {
+      "id": "05-dishes",
+      "path": "/restaurant/analytics/dishes",
+      "purpose": "菜品成本/毛利/四象限",
+      "finalUrl": "http://139.196.165.140:8086/restaurant/analytics/dishes",
+      "textSnippet": "白垩纪AI Agent 首页 销售老板工作台 财务主管工作台 仓管员工作台 采购员工作台 销售管理 系统管理 餐饮运营 深度分析 经营看板 菜品分析 门店对比 平台口碑 日常录入 配方管理 供应商进货录入 领料管理 损耗管理 盘点管理 数据与系统 数据完整度 ETL 状态 菜品名称匹配 数据与分析 餐饮运营 / 菜品分析 qhj_prod 工厂总监 菜品四象限 菜品毛利 菜品四象限分析 813 个菜品 按品均收入 按毛利率 (BCG 真实版) 明星菜 370 个 高销量 + 高收入 金牛菜 37 个 高销量 + 低收入 问题菜 37 个 低销量 + 高收入 瘦狗菜 369 个 低销量 + 低收入 全部 明星 金牛 问题 瘦狗 菜品名称 象限 营收(元) 销量 品均收入 招牌青花椒味 明星 6,133,231.8 80755.2 ¥75.9 抖音松叶蟹368套餐 明星 4,006,730 3094 ¥1295.0 米饭 明星 2,224,947.4 225868 ¥9.9 招牌青花椒鱼可乐单人套餐 明星 2,122,786 33490 ¥63.4 超值双人198套餐 明星 1,755,705.8 6885 ¥255.0 米饭(单人份) 明星 1,292,764 22288 ¥58.0 招牌青花椒鱼(微麻微辣)[小份活鱼现做] 明星 1,167,616 9122 ¥128.0 双人餐 明星 1,133,662 5276 ¥214.9 抖音松叶蟹小青龙499 明星 998,801 697 ¥1433.0 乌蒙山干锅牛肉2-3人餐 明星 984,756 4899 ¥201.0 招牌青花椒鱼(微麻微辣)[大份活鱼现做] 明星 903,504 5378 ¥168.0 小炒现切吊龙 明星 831,996 12075 ¥68.9 【抖音】松叶蟹4人餐 明星 828,390 795 ¥1042.0 经典红糖冰粉 明星 814,442 13786 ¥59.1 营养多C番茄味(单人份) 明星 655,322.6 11360 ¥57.7 特色青花椒鱼 明星 652,896 4802 ¥136.0 158元必点烤鱼双人套餐 明星 642,451.76 3087 ¥208.1 经典品质双人餐-26年1月 明星 634,040 2882 ¥220.0 成都冒烤鸭(单人份) 明星 573,650 8195 ¥70.0 打包盒 明星 546,637.4 184557 ¥3.0 多人餐 明星 502,037 1332 ¥376.9 特色青花椒鱼[活鱼现做] 明星 492,156 4557 ¥108.0 乌蒙山干锅牛肉 明星 490,728 3556 ¥138.0 招牌青花椒鱼(微麻微辣)[小份] 明星 483,072 3774 ¥128.0 经典品质多人餐-26年1月 明星 450,160 1",
+      "buttons": [
+        "一键上传"
+      ],
+      "signals": {
+        "hasUpload": true,
+        "hasWriteAction": true,
+        "hasEmpty": false,
+        "hasError": true
+      },
+      "failedResponses": [],
+      "screenshot": "docs\\audits\\2026-06-05-restaurant-webadmin-flow-audit\\evidence-auth\\05-dishes.png"
+    },
+    {
+      "id": "06-targets",
+      "path": "/restaurant/analytics/targets",
+      "purpose": "目标拆分与达成",
+      "finalUrl": "http://139.196.165.140:8086/restaurant/analytics/targets",
+      "textSnippet": "白垩纪AI Agent 首页 销售老板工作台 财务主管工作台 仓管员工作台 采购员工作台 销售管理 系统管理 餐饮运营 数据与分析 餐饮运营 / 目标管理 qhj_prod 工厂总监 设置目标 — RES_3101_009 / 2026 / 营业额 目标设置（年/月） 周/日拆分 预测 & 实时预警 年度目标设置 营业额 单量 年度目标（元） 保存年度目标 按年度均分到月度 月度目标（2026） 1月 2月 3月 4月 5月 6月 7月 8月 9月 10月 11月 12月 调整原因 选择原因（可选） 保存所有月度目标 返回 KPI 看板",
+      "buttons": [
+        "保存年度目标",
+        "按年度均分到月度",
+        "保存所有月度目标",
+        "返回 KPI 看板"
+      ],
+      "signals": {
+        "hasUpload": false,
+        "hasWriteAction": true,
+        "hasEmpty": false,
+        "hasError": false
+      },
+      "failedResponses": [],
+      "screenshot": "docs\\audits\\2026-06-05-restaurant-webadmin-flow-audit\\evidence-auth\\06-targets.png"
+    },
+    {
+      "id": "07-price-anomaly",
+      "path": "/restaurant/price-anomaly",
+      "purpose": "供应商价格异常预警",
+      "finalUrl": "http://139.196.165.140:8086/restaurant/price-anomaly",
+      "textSnippet": "白垩纪AI Agent 首页 销售老板工作台 财务主管工作台 仓管员工作台 采购员工作台 销售管理 系统管理 餐饮运营 数据与分析 餐饮运营 / 价格异常预警 qhj_prod 工厂总监 价格异常预警 检出 0 条 趋势窗口 异常容限 % 刷新 价格异常威慑 系统对同类物料相邻采购单价做异常检测。对每条异常请要求供应商录入解释 (不自动处罚)；连续同向异常累计三次，该供应商自动标记为「高风险」。 风险 物料 供应商 趋势均价 上次价 本次价 偏离 连续异常 送货日 操作 未检出价格异常 价格异常依赖供应商进价历史。请先在 供应商进货录入 录入/确认送货单，积累进价后再检测。",
+      "buttons": [
+        "刷新"
+      ],
+      "signals": {
+        "hasUpload": false,
+        "hasWriteAction": true,
+        "hasEmpty": true,
+        "hasError": false
+      },
+      "failedResponses": [],
+      "screenshot": "docs\\audits\\2026-06-05-restaurant-webadmin-flow-audit\\evidence-auth\\07-price-anomaly.png"
+    },
+    {
+      "id": "08-wastage",
+      "path": "/restaurant/wastage",
+      "purpose": "损耗责任制",
+      "finalUrl": "http://139.196.165.140:8086/restaurant/wastage",
+      "textSnippet": "白垩纪AI Agent 首页 销售老板工作台 财务主管工作台 仓管员工作台 采购员工作台 销售管理 系统管理 餐饮运营 深度分析 经营看板 菜品分析 门店对比 平台口碑 日常录入 配方管理 供应商进货录入 领料管理 损耗管理 盘点管理 数据与系统 数据完整度 ETL 状态 菜品名称匹配 数据与分析 餐饮运营 / 损耗管理 qhj_prod 工厂总监 损耗管理 共 6 条 损耗责任看板 AI 分析 导出 新建损耗记录 损耗总额 ¥0.00 损耗记录 6 条 损耗金额趋势 合计 ¥498 按损耗类型排行 Top 3 至 状态 损耗类型 搜索 重置 损耗单号 损耗日期 损耗类型 状态 食材 数量 档口 责任人 估算损失 原因 操作 W-DEMO-001 2026-04-23 过期 已审批 鲈鱼 3.5 kg - - ¥157.50 鲈鱼过冷藏期 3 天 查看 W-DEMO-002 2026-04-20 破损 已审批 豆腐 2 kg - - ¥16.00 豆腐运输破损 查看 W-DEMO-003 2026-04-18 过期 已审批 番茄 5 kg - - ¥50.00 番茄储存过期 查看 W-DEMO-004 2026-04-13 过期 已审批 鲈鱼 2.8 kg - - ¥126.00 鲈鱼备货过量 查看 W-DEMO-005 2026-04-07 其他 已审批 鸭腿 1.5 kg - - ¥52.50 鸭腿烹饪试菜报废 查看 W-DEMO-006 2026-03-31 破损 已审批 牛肉(吊龙) 0.8 kg - - ¥96.00 牛肉解冻时间过长 查看 共 6条 损耗数量 15.6 AI 分析 共 6 条 10条/页 1 前往 页",
+      "buttons": [
+        "损耗责任看板",
+        "AI 分析",
+        "导出",
+        "新建损耗记录",
+        "搜索",
+        "重置",
+        "查看",
+        "查看",
+        "查看",
+        "查看",
+        "查看",
+        "查看",
+        "AI 分析"
+      ],
+      "signals": {
+        "hasUpload": false,
+        "hasWriteAction": true,
+        "hasEmpty": false,
+        "hasError": false
+      },
+      "failedResponses": [],
+      "screenshot": "docs\\audits\\2026-06-05-restaurant-webadmin-flow-audit\\evidence-auth\\08-wastage.png"
+    },
+    {
+      "id": "09-recipes",
+      "path": "/restaurant/recipes",
+      "purpose": "配方管理",
+      "finalUrl": "http://139.196.165.140:8086/restaurant/recipes",
+      "textSnippet": "白垩纪AI Agent 首页 销售老板工作台 财务主管工作台 仓管员工作台 采购员工作台 销售管理 系统管理 餐饮运营 深度分析 经营看板 菜品分析 门店对比 平台口碑 日常录入 配方管理 供应商进货录入 领料管理 损耗管理 盘点管理 数据与系统 数据完整度 ETL 状态 菜品名称匹配 数据与分析 餐饮运营 / 配方管理 qhj_prod 工厂总监 配方管理 共 383 条 AI 分析 AI 录配方 AI 批量录配方 99+ 批量导入 菜名对齐 99+ 导出 新增配方 配方总数 383 涉及菜品 136 有配方菜品 136 列表总数 383 配方录入趋势 合计 3 kg 菜品食材用量 Top 10 Top 4 按菜品筛选 状态 搜索 重置 菜品 食材 标准用量 净料率 主料/辅料 状态 备注 操作 古法秘制酸菜鱼[小份] 食用油 0.15 L - 辅料 启用 PLAN_C_DEMO_SEED_2026_04_25_V5 查看 成本卡 编辑 停用 营养多C番茄鱼[小份手工去刺] 番茄 0.5 kg - 辅料 启用 PLAN_C_DEMO_SEED_2026_04_25_V5 查看 成本卡 编辑 停用 来吃鱼鸭约惠双人套餐 食用油 0.2 L - 辅料 启用 PLAN_C_DEMO_SEED_2026_04_25_V5 查看 成本卡 编辑 停用 古法秘制酸菜鱼[小份] 酸菜 0.15 kg - 辅料 启用 PLAN_C_DEMO_SEED_2026_04_25_V5 查看 成本卡 编辑 停用 年糕 年糕 0.1 kg - 主料 启用 PLAN_C_DEMO_SEED_2026_04_25_V5 查看 成本卡 编辑 停用 营养多C番茄鱼[小份手工去刺] 鲈鱼 0.55 kg - 主料 启用 PLAN_C_DEMO_SEED_2026_04_25_V5 查看 成本卡 编辑 停用 来吃鱼鸭约惠双人套餐 鲈鱼 0.4 kg - 主料 启用 PLAN_C_DEMO_SEED_2026_04_25_V5 查看 成本卡 编辑 停用 来吃鱼鸭约惠双人套餐 鸭腿 0.3 kg - 辅料 启用 PLAN_C_DEMO_SEED_2026_04_25_V5 查看 成本卡 编辑 停用 古法秘制酸菜鱼[小份] 鲈鱼 0.45 kg - 主料 启用 PLAN_C_DEMO_SEED_2026_04_25_V5 查看 成本卡 编辑 停用 营养多C番茄鱼[小份手工去刺] 食用油 0.2 L - 辅料 启用 PLAN_C_DEMO_SEED_2026_04_25_V5 查看 成本卡 编辑 停用 共 383 条 10条/页 1 2 3 4 5 6 39 前往 页",
+      "buttons": [
+        "AI 分析",
+        "AI 录配方",
+        "AI 批量录配方 99+",
+        "批量导入",
+        "菜名对齐 99+",
+        "导出",
+        "新增配方",
+        "搜索",
+        "重置",
+        "查看",
+        "成本卡",
+        "编辑",
+        "停用",
+        "查看",
+        "成本卡",
+        "编辑",
+        "停用",
+        "查看",
+        "成本卡",
+        "编辑",
+        "停用",
+        "查看",
+        "成本卡",
+        "编辑",
+        "停用",
+        "查看",
+        "成本卡",
+        "编辑",
+        "停用",
+        "查看"
+      ],
+      "signals": {
+        "hasUpload": false,
+        "hasWriteAction": true,
+        "hasEmpty": false,
+        "hasError": false
+      },
+      "failedResponses": [],
+      "screenshot": "docs\\audits\\2026-06-05-restaurant-webadmin-flow-audit\\evidence-auth\\09-recipes.png"
+    },
+    {
+      "id": "10-requisitions",
+      "path": "/restaurant/requisitions",
+      "purpose": "餐饮领料",
+      "finalUrl": "http://139.196.165.140:8086/restaurant/requisitions",
+      "textSnippet": "白垩纪AI Agent 首页 销售老板工作台 财务主管工作台 仓管员工作台 采购员工作台 销售管理 系统管理 餐饮运营 深度分析 经营看板 菜品分析 门店对比 平台口碑 日常录入 配方管理 供应商进货录入 领料管理 损耗管理 盘点管理 数据与系统 数据完整度 ETL 状态 菜品名称匹配 数据与分析 餐饮运营 / 领料管理 qhj_prod 工厂总监 领料管理 共 0 条 AI 分析 导出 新建领料单 领料总数 0 单 待审批 0 单 已审批 0 单 总记录数 0 至 状态 类型 搜索 重置 领料单号 日期 类型 状态 菜品 申请量 实发量 备注 操作 暂无领料记录，点击「新建领料单」创建 共 0 条 10条/页 1 前往 页",
+      "buttons": [
+        "AI 分析",
+        "导出",
+        "新建领料单",
+        "搜索",
+        "重置"
+      ],
+      "signals": {
+        "hasUpload": false,
+        "hasWriteAction": true,
+        "hasEmpty": true,
+        "hasError": false
+      },
+      "failedResponses": [],
+      "screenshot": "docs\\audits\\2026-06-05-restaurant-webadmin-flow-audit\\evidence-auth\\10-requisitions.png"
+    },
+    {
+      "id": "11-stocktaking",
+      "path": "/restaurant/stocktaking",
+      "purpose": "餐饮盘点",
+      "finalUrl": "http://139.196.165.140:8086/restaurant/stocktaking",
+      "textSnippet": "白垩纪AI Agent 首页 销售老板工作台 财务主管工作台 仓管员工作台 采购员工作台 销售管理 系统管理 餐饮运营 深度分析 经营看板 菜品分析 门店对比 平台口碑 日常录入 配方管理 供应商进货录入 领料管理 损耗管理 盘点管理 数据与系统 数据完整度 ETL 状态 菜品名称匹配 数据与分析 餐饮运营 / 盘点管理 qhj_prod 工厂总监 盘点管理 共 0 条 AI 分析 导出 新建盘点 盘点总数 0 条 盘盈次数 0 盘亏次数 0 最近盘点 暂无 至 状态 搜索 重置 盘点单号 盘点日期 状态 食材 账面库存 实盘数量 差异 差异类型 差异原因 操作 暂无盘点记录，点击「新建盘点」开始 共 0 条 10条/页 1 前往 页",
+      "buttons": [
+        "AI 分析",
+        "导出",
+        "新建盘点",
+        "搜索",
+        "重置"
+      ],
+      "signals": {
+        "hasUpload": false,
+        "hasWriteAction": true,
+        "hasEmpty": true,
+        "hasError": false
+      },
+      "failedResponses": [],
+      "screenshot": "docs\\audits\\2026-06-05-restaurant-webadmin-flow-audit\\evidence-auth\\11-stocktaking.png"
+    },
+    {
+      "id": "12-supplier-delivery",
+      "path": "/restaurant/supplier-delivery",
+      "purpose": "供应商进货/OCR/手工录入",
+      "finalUrl": "http://139.196.165.140:8086/restaurant/supplier-delivery",
+      "textSnippet": "白垩纪AI Agent 首页 销售老板工作台 财务主管工作台 仓管员工作台 采购员工作台 销售管理 系统管理 餐饮运营 深度分析 经营看板 菜品分析 门店对比 平台口碑 日常录入 配方管理 供应商进货录入 领料管理 损耗管理 盘点管理 数据与系统 数据完整度 ETL 状态 菜品名称匹配 数据与分析 餐饮运营 / 供应商进货录入 qhj_prod 工厂总监 供应商进货录入 共 0 条 上传送货单 状态 搜索 重置 送货日期 供应商 送货单号 合计金额 来源 置信度 状态 操作 暂无数据 共 0 条 1",
+      "buttons": [
+        "上传送货单",
+        "搜索",
+        "重置"
+      ],
+      "signals": {
+        "hasUpload": true,
+        "hasWriteAction": true,
+        "hasEmpty": true,
+        "hasError": false
+      },
+      "failedResponses": [],
+      "screenshot": "docs\\audits\\2026-06-05-restaurant-webadmin-flow-audit\\evidence-auth\\12-supplier-delivery.png"
+    },
+    {
+      "id": "13-name-resolution",
+      "path": "/restaurant/admin/name-resolution",
+      "purpose": "POS 菜品名称解析人工裁决",
+      "finalUrl": "http://139.196.165.140:8086/restaurant/admin/name-resolution",
+      "textSnippet": "餐饮运营 / 菜品名称匹配 qhj_prod 工厂总监 菜品名称匹配 POS 导出菜名未匹配到菜品时, 财务 ETL 无法计算该菜的食材成本 → 利润被高估。 确认绑定后将自动重跑财务 ETL, 修正成本卡片。 刷新 运行回填 (重新扫描) 已匹配 / 总菜名 174 / 859 匹配覆盖率 20.3% 待裁决 685 按营收风险敞口降序排列, 优先确认高营收菜名 — 它们对成本卡片准确性影响最大。 POS 菜名 出现次数 营收风险敞口 系统建议置信度 绑定到菜品 操作 抖音松叶蟹368套餐 3093 ¥4,006,730 无建议 选择菜品 确认 跳过 拒绝 超值双人198套餐 6846 ¥1,755,705.8 无建议 选择菜品 确认 跳过 拒绝 抖音松叶蟹小青龙499 696 ¥998,801 无建议 选择菜品 确认 跳过 拒绝 乌蒙山干锅牛肉2-3人餐 4893 ¥984,756 74% 乌蒙山干锅牛肉 确认 跳过 拒绝 【抖音】松叶蟹4人餐 795 ¥828,390 无建议 选择菜品 确认 跳过 拒绝 特色青花椒鱼 4749 ¥652,896 67% 低 特色青花椒鱼[活鱼现做] 确认 跳过 拒绝 158元必点烤鱼双人套餐 3015 ¥642,451.76 无建议 选择菜品 确认 跳过 拒绝 经典品质双人餐-26年1月 2880 ¥634,040 无建议 选择菜品 确认 跳过 拒绝 打包盒 183360 ¥546,637.4 无建议 选择菜品 确认 跳过 拒绝 多人餐 1332 ¥502,037 67% 低 双人餐 确认 跳过 拒绝 经典品质多人餐-26年1月 1320 ¥450,160 无建议 选择菜品 确认 跳过 拒绝 工作日双人餐216 2020 ¥436,536 无建议 选择菜品 确认 跳过 拒绝 松叶蟹3人餐268 631 ¥434,641 无建议 选择菜品 确认 跳过 拒绝 经典品质双人餐-9月 1851 ¥407,880 无建议 选择菜品 确认 跳过 拒绝 享库松叶蟹4人388套餐副本 309 ¥393,415 无建议 选择菜品 确认 跳过 拒绝 通用三人餐 1366 ¥378,819 无建议 选择菜品 确认 跳过 拒绝 118规格鱼锅双人餐 1801 ¥356,808 无建议 选择菜品 确认 跳过 拒绝 炭烤活鱼三至四人298套餐 887 ¥342,810.76 无建议 选择菜品 确认 跳过 拒绝 经典品质双人餐-25年3月 1502 ¥331,320 无建议 选择菜品 确认 跳过 拒绝 醉鸡煲生蚝鲍鱼双人餐 1561 ¥318,852 无建议 选择菜品 确认 跳过 拒绝 松叶蟹298双人套餐 1066 ¥317,668 无建议 选择菜品 确认 跳过 拒绝 干锅无刺黑鱼可乐套餐 4642 ¥298,432 76% 干锅无刺黑鱼配时蔬套",
+      "buttons": [
+        "刷新",
+        "运行回填 (重新扫描)",
+        "确认",
+        "跳过",
+        "拒绝",
+        "确认",
+        "跳过",
+        "拒绝",
+        "确认",
+        "跳过",
+        "拒绝",
+        "确认",
+        "跳过",
+        "拒绝",
+        "确认",
+        "跳过",
+        "拒绝",
+        "确认",
+        "跳过",
+        "拒绝",
+        "确认",
+        "跳过",
+        "拒绝",
+        "确认",
+        "跳过",
+        "拒绝",
+        "确认",
+        "跳过",
+        "拒绝",
+        "确认"
+      ],
+      "signals": {
+        "hasUpload": false,
+        "hasWriteAction": true,
+        "hasEmpty": false,
+        "hasError": true
+      },
+      "failedResponses": [],
+      "screenshot": "docs\\audits\\2026-06-05-restaurant-webadmin-flow-audit\\evidence-auth\\13-name-resolution.png"
+    },
+    {
+      "id": "14-data-completeness",
+      "path": "/restaurant/data-completeness",
+      "purpose": "餐饮数据完整度",
+      "finalUrl": "http://139.196.165.140:8086/restaurant/data-completeness",
+      "textSnippet": "白垩纪AI Agent 首页 销售老板工作台 财务主管工作台 仓管员工作台 采购员工作台 销售管理 系统管理 餐饮运营 深度分析 经营看板 菜品分析 门店对比 平台口碑 日常录入 配方管理 供应商进货录入 领料管理 损耗管理 盘点管理 数据与系统 数据完整度 ETL 状态 菜品名称匹配 数据与分析 餐饮运营 / 数据完整度 qhj_prod 工厂总监 数据完整度 数据质量 20% 整体完整度 RES_3101_009 建档 66 天 实时计算 更新于 2026/05/30 00:28 刷新 POS 销售数据 有数据 23% 记录数：7 · 最近更新：2026/05/30 00:28 菜品配方 有数据 100% 记录数：383 · 最近更新：2026/04/25 03:22 领料记录 暂无数据 0% 记录数：0 · 最近更新：— 在「领料管理」页面创建领料申请 上传缺失数据 损耗记录 暂无数据 0% 记录数：0 · 最近更新：— 在「损耗记录」页面录入日常损耗数据 上传缺失数据 盘点记录 暂无数据 0% 记录数：0 · 最近更新：— 在「盘点管理」页面创建盘点记录 上传缺失数据 顾客评价 暂无数据 0% 记录数：0 · 最近更新：— 上传顾客评价数据文件 上传缺失数据",
+      "buttons": [
+        "刷新",
+        "上传缺失数据",
+        "上传缺失数据",
+        "上传缺失数据",
+        "上传缺失数据"
+      ],
+      "signals": {
+        "hasUpload": true,
+        "hasWriteAction": true,
+        "hasEmpty": true,
+        "hasError": false
+      },
+      "failedResponses": [],
+      "screenshot": "docs\\audits\\2026-06-05-restaurant-webadmin-flow-audit\\evidence-auth\\14-data-completeness.png"
+    },
+    {
+      "id": "15-etl-status",
+      "path": "/restaurant/admin/etl-status",
+      "purpose": "餐饮 ETL 状态",
+      "finalUrl": "http://139.196.165.140:8086/restaurant/admin/etl-status",
+      "textSnippet": "白垩纪AI Agent 首页 销售老板工作台 财务主管工作台 仓管员工作台 采购员工作台 销售管理 系统管理 餐饮运营 深度分析 经营看板 菜品分析 门店对比 平台口碑 日常录入 配方管理 供应商进货录入 领料管理 损耗管理 盘点管理 数据与系统 数据完整度 ETL 状态 菜品名称匹配 数据与分析 餐饮运营 / 餐饮 ETL 状态 qhj_prod 工厂总监 餐饮 ETL 状态 刷新全部 工厂 ID 工厂名称 最近成功时间 状态 数据行数 操作 RES_3101_009 RES_3101_009 2026/06/05 10:07:23 成功 factPosItem: 1816258aggRestaurantDailyOps: 18dimIngredient: 53 刷新 立即同步",
+      "buttons": [
+        "刷新全部",
+        "刷新",
+        "立即同步"
+      ],
+      "signals": {
+        "hasUpload": false,
+        "hasWriteAction": true,
+        "hasEmpty": false,
+        "hasError": false
+      },
+      "failedResponses": [
+        {
+          "status": 403,
+          "url": "http://139.196.165.140:8086/smartbi-api/api/smartbi/restaurant/etl/all-status"
+        }
+      ],
+      "screenshot": "docs\\audits\\2026-06-05-restaurant-webadmin-flow-audit\\evidence-auth\\15-etl-status.png"
+    },
+    {
+      "id": "16-commission",
+      "path": "/restaurant/commission",
+      "purpose": "营销员提成",
+      "finalUrl": "http://139.196.165.140:8086/restaurant/commission",
+      "textSnippet": "白垩纪AI Agent 首页 销售老板工作台 财务主管工作台 仓管员工作台 采购员工作台 销售管理 系统管理 餐饮运营 数据与分析 餐饮运营 / 营销员提成 qhj_prod 工厂总监 营销员提成汇总 月度累计阶梯 · 复购业绩跨档 营销员 ID 月份 查询 结算时间 本次营收 档位 费率 本次提成 状态 操作 暂无数据",
+      "buttons": [
+        "查询"
+      ],
+      "signals": {
+        "hasUpload": false,
+        "hasWriteAction": false,
+        "hasEmpty": true,
+        "hasError": false
+      },
+      "failedResponses": [],
+      "screenshot": "docs\\audits\\2026-06-05-restaurant-webadmin-flow-audit\\evidence-auth\\16-commission.png"
+    },
+    {
+      "id": "17-health-report",
+      "path": "/smart-bi/health-report",
+      "purpose": "AI 经营体检",
+      "finalUrl": "http://139.196.165.140:8086/smart-bi/health-report",
+      "textSnippet": "白垩纪AI Agent 首页 销售老板工作台 财务主管工作台 仓管员工作台 采购员工作台 销售管理 系统管理 餐饮运营 数据与分析 经营驾驶舱 AI 探索 AI 问答 / 数据分析 经营分析 经营分析 收入管理报表 AI 经营体检 异常预警 数据管理 Excel 上传 查询模板 数据完整度 分析概览 AI 运维 知识库反馈 AI 追问日志 数据与分析 / AI 经营体检 qhj_prod 工厂总监 AI 经营体检 行业子品类 生成报告 正在生成体检报告...",
+      "buttons": [
+        "生成报告"
+      ],
+      "signals": {
+        "hasUpload": true,
+        "hasWriteAction": true,
+        "hasEmpty": false,
+        "hasError": false
+      },
+      "failedResponses": [],
+      "screenshot": "docs\\audits\\2026-06-05-restaurant-webadmin-flow-audit\\evidence-auth\\17-health-report.png"
+    }
+  ]
+}

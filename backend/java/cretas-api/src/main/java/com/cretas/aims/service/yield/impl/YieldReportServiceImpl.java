@@ -33,6 +33,7 @@ import com.cretas.aims.repository.workprocess.WorkProcessTaskRepository;
 import com.cretas.aims.service.ProcessingService;
 import com.cretas.aims.service.yield.YieldCalculationService;
 import com.cretas.aims.service.yield.YieldReportService;
+import com.cretas.aims.util.ProductionReportQuantityUtils;
 import com.cretas.aims.utils.ReportAuthGuard;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
@@ -115,10 +116,13 @@ public class YieldReportServiceImpl implements YieldReportService {
         //   INPUT  : 留 input/inputUnit/materialBatchRefs/sourceWipNo/evidenceImages; output/segment/byproduct/waste/sample 强制 null。
         //   SEGMENT: 留 laborSegments(单段回退 workerCount/workMinutes)/evidenceImages; input/output/material/byproduct/waste/sample 强制 null。
         //   OUTPUT : 留 output/outputUnit/byproducts/waste/sample/evidenceImages; input/segment 强制 null。
-        BigDecimal effInput = (isSegment || isOutput) ? null : req.getInputQuantity();
+        BigDecimal effInput = (isSegment || isOutput) ? null : effectiveInputQuantity(req);
         String effInputUnit = (isSegment || isOutput) ? null : req.getInputUnit();
         BigDecimal effOutput = (isInput || isSegment) ? null : req.getOutputQuantity();
         String effOutputUnit = (isInput || isSegment) ? null : req.getOutputUnit();
+        BigDecimal effWarehouseOut = (isSegment || isOutput) ? null : req.getWarehouseOutQuantity();
+        BigDecimal effFeedIn = (isSegment || isOutput) ? null : req.getFeedInQuantity();
+        BigDecimal effRequestedCarryover = (isSegment || isOutput) ? null : effectiveRequestedCarryover(req);
         List<YieldReportRequest.LaborSegment> effSegs = (isInput || isOutput) ? null : req.getLaborSegments();
         List<MaterialBatchRef> effMaterialRefs = (isSegment || isOutput) ? null : req.getMaterialBatchRefs();
         List<YieldReportRequest.Byproduct> effByproducts = (isInput || isSegment) ? null : req.getByproducts();
@@ -127,6 +131,7 @@ public class YieldReportServiceImpl implements YieldReportService {
         // 单段 workerCount/workMinutes (旧路径回退): SEGMENT/legacy 计工时; INPUT/OUTPUT 不计。
         Integer effReqWorkMinutes = (isInput || isOutput) ? null : req.getWorkMinutes();
         Integer effReqWorkerCount = (isInput || isOutput) ? null : req.getWorkerCount();
+        validateMaterialQuantities(req, isInput, effInput, effWarehouseOut, effFeedIn, effRequestedCarryover);
 
         // M3: targetWorkerId (代报) 仅主管可用; 操作员传则忽略, 强制为登录者。
         Long effectiveWorker = (isSupervisor && req.getTargetWorkerId() != null) ? req.getTargetWorkerId() : workerId;
@@ -157,7 +162,7 @@ public class YieldReportServiceImpl implements YieldReportService {
                         .withSeverity("BLOCKING")
                         .withHintTarget("inputUnit");
             }
-            BigDecimal want = req.getInputQuantity();
+            BigDecimal want = effInput;
             BigDecimal avail = sourceWip.getAvailableQuantity() == null
                     ? BigDecimal.ZERO : sourceWip.getAvailableQuantity();
             if (want != null && want.compareTo(avail) > 0) {
@@ -217,6 +222,8 @@ public class YieldReportServiceImpl implements YieldReportService {
                 .productTypeId(t.getProductTypeId())
                 .inputQuantity(effInput).inputUnit(effInputUnit)
                 .outputQuantity(effOutput).outputUnit(effOutputUnit)
+                .warehouseOutQuantity(effWarehouseOut)
+                .feedInQuantity(effFeedIn)
                 .totalWorkMinutes(effectiveWorkMinutes)   // 适配单元3: 多段=Σ段时长, 单段=effReqWorkMinutes
                 .totalWorkers(effectiveWorkers)           // 适配单元3: 多段=MAX headcount (修 M2), 单段=effReqWorkerCount
                 .laborCost(laborCost)                 // A.4: 本道人工成本 (null=缺输入); 三阶段: 仅 SEGMENT/legacy
@@ -238,7 +245,7 @@ public class YieldReportServiceImpl implements YieldReportService {
                 .build();
 
         // carryover = 上道总产出 - 本道投入 (单批记录值, 不进库存); 三阶段: 仅 INPUT/legacy 有投入
-        r.setCarryoverQuantity(computeCarryover(factoryId, batchId, t, effInput));
+        r.setCarryoverQuantity(resolveCarryoverForReport(factoryId, batchId, t, effInput, effRequestedCarryover));
 
         // — 超收检查 (A4) —
         // 基准量 = 本道投入 × WorkProcess.standardYieldMax。
@@ -532,6 +539,65 @@ public class YieldReportServiceImpl implements YieldReportService {
             return null;  // 0 笔 (无可领) 或 多笔 (歧义, 前端经 GET /wip 显式选)
         }
         return available.get(0).getIntermediateBatchNo();
+    }
+
+    private BigDecimal effectiveInputQuantity(YieldReportRequest req) {
+        return ProductionReportQuantityUtils.effectiveInputQuantity(
+                req.getInputQuantity(),
+                req.getWarehouseOutQuantity(),
+                req.getFeedInQuantity(),
+                req.getCarryoverQuantity());
+    }
+
+    private BigDecimal effectiveRequestedCarryover(YieldReportRequest req) {
+        return ProductionReportQuantityUtils.effectiveCarryoverQuantity(
+                req.getWarehouseOutQuantity(),
+                req.getFeedInQuantity(),
+                req.getCarryoverQuantity());
+    }
+
+    private void validateMaterialQuantities(
+            YieldReportRequest req,
+            boolean isInput,
+            BigDecimal effInput,
+            BigDecimal effWarehouseOut,
+            BigDecimal effFeedIn,
+            BigDecimal effRequestedCarryover) {
+        List<String> negativeFields = new ArrayList<>();
+        if (ProductionReportQuantityUtils.isNegative(req.getInputQuantity())) negativeFields.add("inputQuantity");
+        if (ProductionReportQuantityUtils.isNegative(effWarehouseOut)) negativeFields.add("warehouseOutQuantity");
+        if (ProductionReportQuantityUtils.isNegative(effFeedIn)) negativeFields.add("feedInQuantity");
+        if (ProductionReportQuantityUtils.isNegative(effRequestedCarryover)) negativeFields.add("carryoverQuantity");
+        if (!negativeFields.isEmpty()) {
+            throw new BusinessException(400, "领料、投料和结转数量不能为负数")
+                    .withHint("请检查字段: " + String.join(", ", negativeFields))
+                    .withHintTarget(negativeFields.get(0));
+        }
+        if (isInput && (effInput == null || effInput.compareTo(BigDecimal.ZERO) <= 0)) {
+            throw new BusinessException(400, "请填写实际投料量")
+                    .withHint("出成率按实际投料计算; 如果只知道领料出库, 还需要填写本批剩余/结转才能反推出实际投料")
+                    .withHintTarget("feedInQuantity");
+        }
+        if (effWarehouseOut != null && effFeedIn != null && effRequestedCarryover != null) {
+            BigDecimal usedAndLeft = effFeedIn.add(effRequestedCarryover);
+            if (usedAndLeft.compareTo(effWarehouseOut.add(new BigDecimal("0.01"))) > 0) {
+                throw new BusinessException(400, "实际投料 + 本批剩余/结转 不能大于领料出库量")
+                        .withHint("如果只是估算, 请优先填实际投料; 如果知道剩余, 请核对三个数字是否同一单位")
+                        .withHintTarget("feedInQuantity");
+            }
+        }
+    }
+
+    private BigDecimal resolveCarryoverForReport(
+            String factoryId,
+            Long batchId,
+            WorkProcessTask t,
+            BigDecimal thisInput,
+            BigDecimal requestedCarryover) {
+        if (requestedCarryover != null) {
+            return requestedCarryover;
+        }
+        return computeCarryover(factoryId, batchId, t, thisInput);
     }
 
     private BigDecimal computeCarryover(String factoryId, Long batchId, WorkProcessTask t, BigDecimal thisInput) {

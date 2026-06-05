@@ -59,6 +59,9 @@ export interface StepYieldDTO {
   totalOutput: number | null;       // Σ output — 下道预填用这个
   inputUnit: string | null;
   outputUnit: string | null;
+  warehouseOutQuantity?: number | null; // 领料出库量, 对账用, 不直接做出成率分母
+  feedInQuantity?: number | null;       // 实际投料量, 出成率分母优先口径
+  carryoverQuantity?: number | null;    // 本批剩余/结转
   yieldRate: number | null;         // Σoutput/Σinput; 量纲不可比时 null
   unitComparable: boolean | null;   // false → 只展示量
   carryover: number | null;         // 上道产出 − 本道投入 (>0 结转)
@@ -88,7 +91,7 @@ export interface StepYieldDTO {
 export interface BatchYieldDTO {
   batchId: number;
   batchNumber: string;
-  firstStepInput: number | null;    // 998
+  firstStepInput: number | null;    // 首道实际投料, 不是领料出库量
   lastStepOutput: number | null;    // 382.08 或 3184 盒
   firstStepInputUnit: string | null;
   lastStepOutputUnit: string | null;
@@ -131,6 +134,12 @@ export interface YieldReportRequest {
   inputUnit?: string;
   outputQuantity: number;           // 本道产出 (必填)
   outputUnit?: string;
+  /** 领料出库量, 对账用; 不能单独作为出成率分母。 */
+  warehouseOutQuantity?: number;
+  /** 实际投料量, 出成率分母优先使用该字段。 */
+  feedInQuantity?: number;
+  /** 本批剩余/结转量; 可由 领料出库 - 实际投料 自动推导。 */
+  carryoverQuantity?: number;
   /**
    * 三阶段报工标记 (单元1): INPUT (投入) / SEGMENT (生产中时段) / OUTPUT (完工出成)。
    * 后端按 reportKind 隔离字段 (INPUT 忽略 output, OUTPUT 忽略 input, SEGMENT 只取 laborSegments)。
@@ -321,14 +330,18 @@ class YieldReportApi {
    * 见 FileUploadController.java:100). 返回 ApiResponse<{url}>; 拿 url 写入 submitReport 的 evidenceImages.
    * 注: 不在 batch base 路径下 (是工厂级通用上传入口).
    */
-  async uploadYieldEvidence(fileUri: string, factoryId?: string): Promise<string> {
+  async uploadYieldEvidence(
+    fileUri: string,
+    options: { fileName?: string; mimeType?: string } = {},
+    factoryId?: string,
+  ): Promise<string> {
     const fid = requireFactoryId(factoryId);
     const formData = new FormData();
     // React Native FormData 接受 {uri, name, type} 形状 (非 Blob), 见 PhotoEvidenceCapture.tsx:71
     formData.append('file', {
       uri: fileUri,
-      name: `yield_evidence_${Date.now()}.jpg`,
-      type: 'image/jpeg',
+      name: options.fileName ?? `yield_evidence_${Date.now()}.jpg`,
+      type: options.mimeType ?? 'image/jpeg',
     } as unknown as Blob);
     const res = await apiClient.post<ApiResponse<{ url: string }>>(
       `/api/mobile/${fid}/upload/yield-evidence`,

@@ -1,0 +1,539 @@
+{
+  "target": "http://139.196.165.140:8086",
+  "account": {
+    "username": "qhj_prod",
+    "factoryId": "RES_3101_009",
+    "role": "factory_super_admin",
+    "factoryType": "RESTAURANT"
+  },
+  "generatedAt": "2026-06-05T02:44:56.976Z",
+  "consoleMessages": [
+    "[error] Failed to load resource: the server responded with a status of 401 (Unauthorized)",
+    "[error] Failed to load resource: the server responded with a status of 401 (Unauthorized)",
+    "[error] [capability] fetch failed, falling back to permissive mode: Error: capability fetch failed: 401\n    at http://139.196.165.140:8086/assets/useCapability-2I_734wW.js:1:5219",
+    "[error] Failed to load resource: the server responded with a status of 401 (Unauthorized)",
+    "[error] Failed to load resource: the server responded with a status of 401 (Unauthorized)",
+    "[error] Failed to load resource: the server responded with a status of 401 (Unauthorized)",
+    "[error] Failed to load resource: the server responded with a status of 401 (Unauthorized)",
+    "[error] Failed to load resource: the server responded with a status of 401 (Unauthorized)",
+    "[error] Failed to load resource: the server responded with a status of 401 (Unauthorized)",
+    "[warning] [ai-query] 加载推荐模板失败: Error: Python service error: 401 Unauthorized\n    at v (http://139.196.165.140:8086/assets/common-Uf1R__te.js:1:1686)\n    at async da (http://139.196.165.140:8086/assets/SmartBIAnalysis-WqW5e9Nx.js:2:16262)",
+    "[error] Failed to load resource: the server responded with a status of 401 (Unauthorized)",
+    "[error] [mat-panel] load failed Error: Python service error: 401 Unauthorized\n    at v (http://139.196.165.140:8086/assets/common-Uf1R__te.js:1:1686)\n    at async U (http://139.196.165.140:8086/assets/SmartBIAnalysis-WqW5e9Nx.js:2:7378)",
+    "[error] Failed to load resource: the server responded with a status of 401 (Unauthorized)",
+    "[warning] [upload-status] load failed: Error: Python service error: 401 Unauthorized\n    at v (http://139.196.165.140:8086/assets/common-Uf1R__te.js:1:1686)\n    at async me (http://139.196.165.140:8086/assets/UploadStatusDashboard-BEXOiwWR.js:1:832)\n    at async w (http://139.196.165.140:8086/assets/UploadStatusDashboard-BEXOiwWR.js:1:3796)",
+    "[error] Failed to load resource: the server responded with a status of 401 (Unauthorized)",
+    "[error] [role-kpi] load failed: Error: Python service error: 401 Unauthorized\n    at v (http://139.196.165.140:8086/assets/common-Uf1R__te.js:1:1686)\n    at async w (http://139.196.165.140:8086/assets/role-kpi-dashboard-BALLzRkR.js:1:1618)",
+    "[error] Failed to load resource: the server responded with a status of 401 (Unauthorized)",
+    "[error] [capability] fetch failed, falling back to permissive mode: Error: capability fetch failed: 401\n    at http://139.196.165.140:8086/assets/useCapability-2I_734wW.js:1:5219",
+    "[error] Failed to load resource: the server responded with a status of 401 (Unauthorized)",
+    "[error] [menu-board] quadrant load failed: Error: Python service error: 401 Unauthorized\n    at v (http://139.196.165.140:8086/assets/common-Uf1R__te.js:1:1686)\n    at async me (http://139.196.165.140:8086/assets/dishes-Dz01NrYP.js:1:2989)",
+    "[error] Failed to load resource: the server responded with a status of 401 (Unauthorized)",
+    "[error] [gross-margin] load failed: Error: Python service error: 401 Unauthorized\n    at v (http://139.196.165.140:8086/assets/common-Uf1R__te.js:1:1686)\n    at async W (http://139.196.165.140:8086/assets/dishes-Dz01NrYP.js:1:15190)",
+    "[error] Failed to load resource: the server responded with a status of 401 (Unauthorized)",
+    "[error] Failed to load resource: the server responded with a status of 401 (Unauthorized)",
+    "[error] Failed to load resource: the server responded with a status of 401 (Unauthorized)",
+    "[error] Failed to load resource: the server responded with a status of 401 (Unauthorized)",
+    "[error] Failed to load resource: the server responded with a status of 401 (Unauthorized)",
+    "[error] Failed to load resource: the server responded with a status of 401 (Unauthorized)",
+    "[error] Failed to load resource: the server responded with a status of 401 (Unauthorized)",
+    "[error] Failed to load resource: the server responded with a status of 401 (Unauthorized)",
+    "[error] Failed to load resource: the server responded with a status of 401 (Unauthorized)"
+  ],
+  "results": [
+    {
+      "id": "00-dashboard",
+      "path": "/smart-bi/dashboard",
+      "purpose": "餐饮经营总览消费 POS/财务数据",
+      "finalUrl": "http://139.196.165.140:8086/smart-bi/dashboard",
+      "textSnippet": "白垩纪AI Agent 首页 销售老板工作台 财务主管工作台 仓管员工作台 采购员工作台 销售管理 系统管理 餐饮运营 数据与分析 经营驾驶舱 AI 探索 AI 问答 / 数据分析 经营分析 经营分析 收入管理报表 AI 经营体检 异常预警 数据管理 Excel 上传 查询模板 数据完整度 分析概览 AI 运维 知识库反馈 AI 追问日志 数据与分析 / 经营驾驶舱 qhj_prod 工厂总监 经营驾驶舱 智能数据分析 · 业务经营一站式洞察 刷新数据 AI 问答 时间范围 至 默认: 本月 总营收 304万 客单价 176.4 订单数量 1.7万 门店数 5 销售趋势 产品类别占比 AI 智能洞察 生成于 10:44 销售分析 头部门店贡献超60%总营收，存在过度依赖少数门店的风险 建议评估其他门店的运营能力，推动区域均衡发展，可考虑对低贡献门店进行资源倾斜或优化策略 增长潜力 账单数达17231单，但未体现明显增长趋势，可能存在客户复购放缓风险[1] 建议启动客户分层运营，针对低频客户设计唤醒活动，提升复购率 门店表现 门店数量稳定在5家，整体规模保持可控 维持现有门店布局，关注各门店的坪效与人效提升，为未来扩张积累数据支持 分析生成于 2026-06-05 10:44 [1] 销售趋势 [2] 产品类别占比 展开更多 (1 条) 快捷问答 畅销品 Top 5 哪家店业绩最好 员工里谁最厉害 外卖占比多少 慢销菜品 周末周中对比 峰值月份 优惠券使用情况 本月价值回馈 基于诊断引擎已算出的可节省金额 刷新 加载价值回馈失败: Python service error: 401 Unauthorized 餐饮营收分析 基于全量经营数据 · 全部数据 刷新 门店营收排行 暂无门店营收数据 渠道占比 (堂食 / 外卖) 暂无渠道数据",
+      "buttons": [
+        "刷新数据",
+        "AI 问答",
+        "展开更多 (1 条)",
+        "畅销品 Top 5",
+        "哪家店业绩最好",
+        "员工里谁最厉害",
+        "外卖占比多少",
+        "慢销菜品",
+        "周末周中对比",
+        "峰值月份",
+        "优惠券使用情况",
+        "刷新",
+        "刷新"
+      ],
+      "signals": {
+        "hasUpload": true,
+        "hasWriteAction": true,
+        "hasEmpty": true,
+        "hasError": false
+      },
+      "failedResponses": [
+        {
+          "status": 401,
+          "url": "http://139.196.165.140:8086/smartbi-api/api/smartbi/restaurant-value/value-summary"
+        },
+        {
+          "status": 401,
+          "url": "http://139.196.165.140:8086/smartbi-api/api/smartbi/capability/RES_3101_009"
+        },
+        {
+          "status": 401,
+          "url": "http://139.196.165.140:8086/smartbi-api/api/smartbi/gold/data-range?factory_id=RES_3101_009"
+        },
+        {
+          "status": 401,
+          "url": "http://139.196.165.140:8086/smartbi-api/api/smartbi/gold/data-range?factory_id=RES_3101_009"
+        }
+      ],
+      "screenshot": "docs\\audits\\2026-06-05-restaurant-webadmin-flow-audit\\evidence\\00-dashboard.png"
+    },
+    {
+      "id": "01-upload",
+      "path": "/smart-bi/upload",
+      "purpose": "Excel/CSV POS 文件上传入口",
+      "finalUrl": "http://139.196.165.140:8086/smart-bi/upload",
+      "textSnippet": "白垩纪AI Agent 首页 销售老板工作台 财务主管工作台 仓管员工作台 采购员工作台 销售管理 系统管理 餐饮运营 数据与分析 经营驾驶舱 AI 探索 AI 问答 / 数据分析 经营分析 经营分析 收入管理报表 AI 经营体检 异常预警 数据管理 Excel 上传 查询模板 数据完整度 分析概览 AI 运维 知识库反馈 AI 追问日志 数据与分析 / Excel上传 qhj_prod 工厂总监 Smart BI / 数据导入 Excel 数据导入 下载模板 重新开始 1 上传文件 选择 Excel 文件 2 解析结果 预览解析数据 3 分析结果 AI 分析洞察 4 保存确认 保存并继续 将文件拖到此处，或点击上传 支持 .xlsx、.xls 和 .csv 格式，文件大小不超过 500MB 上传说明 支持 Excel 2007+ 格式 (.xlsx) 和 Excel 97-2003 格式 (.xls) 第一行应为列标题，从第二行开始为数据 建议使用系统提供的模板上传数据 日期格式推荐使用 YYYY-MM-DD (如 2026-01-15)",
+      "buttons": [
+        "下载模板",
+        "重新开始"
+      ],
+      "signals": {
+        "hasUpload": true,
+        "hasWriteAction": true,
+        "hasEmpty": false,
+        "hasError": true
+      },
+      "failedResponses": [],
+      "screenshot": "docs\\audits\\2026-06-05-restaurant-webadmin-flow-audit\\evidence\\01-upload.png"
+    },
+    {
+      "id": "02-analysis",
+      "path": "/smart-bi/analysis",
+      "purpose": "上传文件分析与问数入口",
+      "finalUrl": "http://139.196.165.140:8086/smart-bi/analysis",
+      "textSnippet": "白垩纪AI Agent 首页 销售老板工作台 财务主管工作台 仓管员工作台 采购员工作台 销售管理 系统管理 餐饮运营 数据与分析 经营驾驶舱 AI 探索 AI 问答 / 数据分析 经营分析 经营分析 收入管理报表 AI 经营体检 异常预警 数据管理 Excel 上传 查询模板 数据完整度 分析概览 AI 运维 知识库反馈 AI 追问日志 数据与分析 / 智能数据分析 qhj_prod 工厂总监 传 Excel 分析 问数据 (AI) 智能数据分析 本厂数据来自 Gold 全量层（无需选文件） 您的经营数据已汇总到全量数据层, 下方直接展示门店营收排行与渠道占比。 如需查看完整经营图表, 可前往 经营驾驶舱。 分析上传文件 餐饮营收分析 基于全量经营数据 · 2024-06-06 至 2026-06-05 刷新 加载营收分析失败: Python service error: 401 Unauthorized",
+      "buttons": [
+        "分析上传文件",
+        "刷新"
+      ],
+      "signals": {
+        "hasUpload": true,
+        "hasWriteAction": true,
+        "hasEmpty": false,
+        "hasError": false
+      },
+      "failedResponses": [
+        {
+          "status": 401,
+          "url": "http://139.196.165.140:8086/smartbi-api/api/smartbi/gold/data-range?factory_id=RES_3101_009"
+        },
+        {
+          "status": 401,
+          "url": "http://139.196.165.140:8086/smartbi-api/api/smartbi/gold/finance-summary?factory_id=RES_3101_009&start_date=2024-06-06&end_date=2026-06-05&top_n_stores=10"
+        },
+        {
+          "status": 401,
+          "url": "http://139.196.165.140:8086/smartbi-api/api/smartbi/gold/channel-breakdown?factory_id=RES_3101_009&start_date=2024-06-06&end_date=2026-06-05"
+        },
+        {
+          "status": 401,
+          "url": "http://139.196.165.140:8086/smartbi-api/api/smartbi/analytics/list-factory-templates?factory_id=RES_3101_009"
+        },
+        {
+          "status": 401,
+          "url": "http://139.196.165.140:8086/smartbi-api/api/smartbi/analytics/cached/4705"
+        }
+      ],
+      "screenshot": "docs\\audits\\2026-06-05-restaurant-webadmin-flow-audit\\evidence\\02-analysis.png"
+    },
+    {
+      "id": "03-upload-status",
+      "path": "/smart-bi/upload-status",
+      "purpose": "POS/Excel 上传状态",
+      "finalUrl": "http://139.196.165.140:8086/smart-bi/upload-status",
+      "textSnippet": "白垩纪AI Agent 首页 销售老板工作台 财务主管工作台 仓管员工作台 采购员工作台 销售管理 系统管理 餐饮运营 数据与分析 经营驾驶舱 AI 探索 AI 问答 / 数据分析 经营分析 经营分析 收入管理报表 AI 经营体检 异常预警 数据管理 Excel 上传 查询模板 数据完整度 分析概览 AI 运维 知识库反馈 AI 追问日志 数据与分析 / 上传状态 qhj_prod 工厂总监 Smart BI / 上传状态 上传状态 查看 POS / Excel 上传情况，无需 SQL 查询。 最近 7 天 刷新 加载失败: Python service error: 401 Unauthorized 重试 0 总上传数 (窗口内) 0 已完成 0 处理中 0 失败 文件名 报表类型 上传时间 状态 Bronze 行数 Silver 行数 错误消息 窗口内暂无上传记录 显示最近 0 条 (上限 50)；点击行展开查看详情。 上传状态加载失败",
+      "buttons": [
+        "刷新",
+        "重试"
+      ],
+      "signals": {
+        "hasUpload": true,
+        "hasWriteAction": true,
+        "hasEmpty": true,
+        "hasError": false
+      },
+      "failedResponses": [
+        {
+          "status": 401,
+          "url": "http://139.196.165.140:8086/smartbi-api/api/smartbi/RES_3101_009/uploads/list?limit=50&days=7"
+        }
+      ],
+      "screenshot": "docs\\audits\\2026-06-05-restaurant-webadmin-flow-audit\\evidence\\03-upload-status.png"
+    },
+    {
+      "id": "04-role-kpi",
+      "path": "/restaurant/analytics/role-kpi",
+      "purpose": "店长 6 KPI 看板",
+      "finalUrl": "http://139.196.165.140:8086/restaurant/analytics/role-kpi",
+      "textSnippet": "白垩纪AI Agent 首页 销售老板工作台 财务主管工作台 仓管员工作台 采购员工作台 销售管理 系统管理 餐饮运营 深度分析 经营看板 菜品分析 门店对比 平台口碑 日常录入 配方管理 供应商进货录入 领料管理 损耗管理 盘点管理 数据与系统 数据完整度 ETL 状态 菜品名称匹配 数据与分析 餐饮运营 / 经营看板 qhj_prod 工厂总监 经营看板 门店: 本店 (单店直营) 期间: 全部历史 角色: factory_super_admin 刷新 暂无经营数据。上传 POS 销售/财务数据后将自动汇总店长 6 项指标。 去配置目标 经营 KPI 看板加载失败，请稍后重试",
+      "buttons": [
+        "刷新",
+        "去配置目标"
+      ],
+      "signals": {
+        "hasUpload": true,
+        "hasWriteAction": true,
+        "hasEmpty": true,
+        "hasError": false
+      },
+      "failedResponses": [
+        {
+          "status": 401,
+          "url": "http://139.196.165.140:8086/smartbi-api/api/smartbi/gold/store-kpi-dashboard?factory_id=RES_3101_009"
+        }
+      ],
+      "screenshot": "docs\\audits\\2026-06-05-restaurant-webadmin-flow-audit\\evidence\\04-role-kpi.png"
+    },
+    {
+      "id": "05-dishes",
+      "path": "/restaurant/analytics/dishes",
+      "purpose": "菜品成本/毛利/四象限",
+      "finalUrl": "http://139.196.165.140:8086/restaurant/analytics/dishes",
+      "textSnippet": "白垩纪AI Agent 首页 销售老板工作台 财务主管工作台 仓管员工作台 采购员工作台 销售管理 系统管理 餐饮运营 深度分析 经营看板 菜品分析 门店对比 平台口碑 日常录入 配方管理 供应商进货录入 领料管理 损耗管理 盘点管理 数据与系统 数据完整度 ETL 状态 菜品名称匹配 数据与分析 餐饮运营 / 菜品分析 qhj_prod 工厂总监 菜品四象限 菜品毛利 菜品四象限分析 按品均收入 按毛利率 (BCG 真实版) 暂无菜品销售数据（全部历史）。上传POS销售明细后将自动展示四象限分析。 菜品四象限数据加载失败，请稍后重试 毛利数据加载失败",
+      "buttons": [],
+      "signals": {
+        "hasUpload": true,
+        "hasWriteAction": true,
+        "hasEmpty": true,
+        "hasError": false
+      },
+      "failedResponses": [
+        {
+          "status": 401,
+          "url": "http://139.196.165.140:8086/smartbi-api/api/smartbi/capability/RES_3101_009"
+        },
+        {
+          "status": 401,
+          "url": "http://139.196.165.140:8086/smartbi-api/api/smartbi/restaurant-ops/menu-quadrant?factory_id=RES_3101_009"
+        },
+        {
+          "status": 401,
+          "url": "http://139.196.165.140:8086/smartbi-api/api/smartbi/restaurant-ops/gross-margin?days=30"
+        }
+      ],
+      "screenshot": "docs\\audits\\2026-06-05-restaurant-webadmin-flow-audit\\evidence\\05-dishes.png"
+    },
+    {
+      "id": "06-targets",
+      "path": "/restaurant/analytics/targets",
+      "purpose": "目标拆分与达成",
+      "finalUrl": "http://139.196.165.140:8086/restaurant/analytics/targets",
+      "textSnippet": "白垩纪AI Agent 首页 销售老板工作台 财务主管工作台 仓管员工作台 采购员工作台 销售管理 系统管理 餐饮运营 数据与分析 餐饮运营 / 目标管理 qhj_prod 工厂总监 设置目标 — RES_3101_009 / 2026 / 营业额 目标设置（年/月） 周/日拆分 预测 & 实时预警 年度目标设置 营业额 单量 年度目标（元） 保存年度目标 按年度均分到月度 月度目标（2026） 1月 2月 3月 4月 5月 6月 7月 8月 9月 10月 11月 12月 调整原因 选择原因（可选） 保存所有月度目标 返回 KPI 看板",
+      "buttons": [
+        "保存年度目标",
+        "按年度均分到月度",
+        "保存所有月度目标",
+        "返回 KPI 看板"
+      ],
+      "signals": {
+        "hasUpload": false,
+        "hasWriteAction": true,
+        "hasEmpty": false,
+        "hasError": false
+      },
+      "failedResponses": [],
+      "screenshot": "docs\\audits\\2026-06-05-restaurant-webadmin-flow-audit\\evidence\\06-targets.png"
+    },
+    {
+      "id": "07-price-anomaly",
+      "path": "/restaurant/price-anomaly",
+      "purpose": "供应商价格异常预警",
+      "finalUrl": "http://139.196.165.140:8086/restaurant/price-anomaly",
+      "textSnippet": "白垩纪AI Agent 首页 销售老板工作台 财务主管工作台 仓管员工作台 采购员工作台 销售管理 系统管理 餐饮运营 数据与分析 餐饮运营 / 价格异常预警 qhj_prod 工厂总监 价格异常预警 检出 0 条 趋势窗口 异常容限 % 刷新 价格异常威慑 系统对同类物料相邻采购单价做异常检测。对每条异常请要求供应商录入解释 (不自动处罚)；连续同向异常累计三次，该供应商自动标记为「高风险」。 风险 物料 供应商 趋势均价 上次价 本次价 偏离 连续异常 送货日 操作 未检出价格异常 价格异常依赖供应商进价历史。请先在 供应商进货录入 录入/确认送货单，积累进价后再检测。 Python service error: 401 Unauthorized",
+      "buttons": [
+        "刷新"
+      ],
+      "signals": {
+        "hasUpload": false,
+        "hasWriteAction": true,
+        "hasEmpty": true,
+        "hasError": false
+      },
+      "failedResponses": [
+        {
+          "status": 401,
+          "url": "http://139.196.165.140:8086/smartbi-api/api/smartbi/gold/price-anomaly/detect?trailing_n=3&epsilon_pct=5"
+        },
+        {
+          "status": 401,
+          "url": "http://139.196.165.140:8086/smartbi-api/api/smartbi/gold/price-anomaly/acks"
+        }
+      ],
+      "screenshot": "docs\\audits\\2026-06-05-restaurant-webadmin-flow-audit\\evidence\\07-price-anomaly.png"
+    },
+    {
+      "id": "08-wastage",
+      "path": "/restaurant/wastage",
+      "purpose": "损耗责任制",
+      "finalUrl": "http://139.196.165.140:8086/restaurant/wastage",
+      "textSnippet": "白垩纪AI Agent 首页 销售老板工作台 财务主管工作台 仓管员工作台 采购员工作台 销售管理 系统管理 餐饮运营 深度分析 经营看板 菜品分析 门店对比 平台口碑 日常录入 配方管理 供应商进货录入 领料管理 损耗管理 盘点管理 数据与系统 数据完整度 ETL 状态 菜品名称匹配 数据与分析 餐饮运营 / 损耗管理 qhj_prod 工厂总监 损耗管理 共 6 条 损耗责任看板 AI 分析 导出 新建损耗记录 损耗总额 ¥0.00 损耗记录 6 条 损耗金额趋势 合计 ¥498 按损耗类型排行 Top 3 至 状态 损耗类型 搜索 重置 损耗单号 损耗日期 损耗类型 状态 食材 数量 档口 责任人 估算损失 原因 操作 W-DEMO-001 2026-04-23 过期 已审批 鲈鱼 3.5 kg - - ¥157.50 鲈鱼过冷藏期 3 天 查看 W-DEMO-002 2026-04-20 破损 已审批 豆腐 2 kg - - ¥16.00 豆腐运输破损 查看 W-DEMO-003 2026-04-18 过期 已审批 番茄 5 kg - - ¥50.00 番茄储存过期 查看 W-DEMO-004 2026-04-13 过期 已审批 鲈鱼 2.8 kg - - ¥126.00 鲈鱼备货过量 查看 W-DEMO-005 2026-04-07 其他 已审批 鸭腿 1.5 kg - - ¥52.50 鸭腿烹饪试菜报废 查看 W-DEMO-006 2026-03-31 破损 已审批 牛肉(吊龙) 0.8 kg - - ¥96.00 牛肉解冻时间过长 查看 共 6条 损耗数量 15.6 AI 分析 共 6 条 10条/页 1 前往 页",
+      "buttons": [
+        "损耗责任看板",
+        "AI 分析",
+        "导出",
+        "新建损耗记录",
+        "搜索",
+        "重置",
+        "查看",
+        "查看",
+        "查看",
+        "查看",
+        "查看",
+        "查看",
+        "AI 分析"
+      ],
+      "signals": {
+        "hasUpload": false,
+        "hasWriteAction": true,
+        "hasEmpty": false,
+        "hasError": false
+      },
+      "failedResponses": [],
+      "screenshot": "docs\\audits\\2026-06-05-restaurant-webadmin-flow-audit\\evidence\\08-wastage.png"
+    },
+    {
+      "id": "09-recipes",
+      "path": "/restaurant/recipes",
+      "purpose": "配方管理",
+      "finalUrl": "http://139.196.165.140:8086/restaurant/recipes",
+      "textSnippet": "白垩纪AI Agent 首页 销售老板工作台 财务主管工作台 仓管员工作台 采购员工作台 销售管理 系统管理 餐饮运营 深度分析 经营看板 菜品分析 门店对比 平台口碑 日常录入 配方管理 供应商进货录入 领料管理 损耗管理 盘点管理 数据与系统 数据完整度 ETL 状态 菜品名称匹配 数据与分析 餐饮运营 / 配方管理 qhj_prod 工厂总监 配方管理 共 383 条 AI 分析 AI 录配方 AI 批量录配方 批量导入 菜名对齐 导出 新增配方 配方总数 383 涉及菜品 136 有配方菜品 136 列表总数 383 配方录入趋势 合计 3 kg 菜品食材用量 Top 10 Top 4 按菜品筛选 状态 搜索 重置 菜品 食材 标准用量 净料率 主料/辅料 状态 备注 操作 古法秘制酸菜鱼[小份] 食用油 0.15 L - 辅料 启用 PLAN_C_DEMO_SEED_2026_04_25_V5 查看 成本卡 编辑 停用 营养多C番茄鱼[小份手工去刺] 番茄 0.5 kg - 辅料 启用 PLAN_C_DEMO_SEED_2026_04_25_V5 查看 成本卡 编辑 停用 来吃鱼鸭约惠双人套餐 食用油 0.2 L - 辅料 启用 PLAN_C_DEMO_SEED_2026_04_25_V5 查看 成本卡 编辑 停用 古法秘制酸菜鱼[小份] 酸菜 0.15 kg - 辅料 启用 PLAN_C_DEMO_SEED_2026_04_25_V5 查看 成本卡 编辑 停用 年糕 年糕 0.1 kg - 主料 启用 PLAN_C_DEMO_SEED_2026_04_25_V5 查看 成本卡 编辑 停用 营养多C番茄鱼[小份手工去刺] 鲈鱼 0.55 kg - 主料 启用 PLAN_C_DEMO_SEED_2026_04_25_V5 查看 成本卡 编辑 停用 来吃鱼鸭约惠双人套餐 鲈鱼 0.4 kg - 主料 启用 PLAN_C_DEMO_SEED_2026_04_25_V5 查看 成本卡 编辑 停用 来吃鱼鸭约惠双人套餐 鸭腿 0.3 kg - 辅料 启用 PLAN_C_DEMO_SEED_2026_04_25_V5 查看 成本卡 编辑 停用 古法秘制酸菜鱼[小份] 鲈鱼 0.45 kg - 主料 启用 PLAN_C_DEMO_SEED_2026_04_25_V5 查看 成本卡 编辑 停用 营养多C番茄鱼[小份手工去刺] 食用油 0.2 L - 辅料 启用 PLAN_C_DEMO_SEED_2026_04_25_V5 查看 成本卡 编辑 停用 共 383 条 10条/页 1 2 3 4 5 6 39 前往 页",
+      "buttons": [
+        "AI 分析",
+        "AI 录配方",
+        "AI 批量录配方",
+        "批量导入",
+        "菜名对齐",
+        "导出",
+        "新增配方",
+        "搜索",
+        "重置",
+        "查看",
+        "成本卡",
+        "编辑",
+        "停用",
+        "查看",
+        "成本卡",
+        "编辑",
+        "停用",
+        "查看",
+        "成本卡",
+        "编辑",
+        "停用",
+        "查看",
+        "成本卡",
+        "编辑",
+        "停用",
+        "查看",
+        "成本卡",
+        "编辑",
+        "停用",
+        "查看"
+      ],
+      "signals": {
+        "hasUpload": false,
+        "hasWriteAction": true,
+        "hasEmpty": false,
+        "hasError": false
+      },
+      "failedResponses": [
+        {
+          "status": 401,
+          "url": "http://139.196.165.140:8086/smartbi-api/api/smartbi/restaurant-ops/unmatched-dishes"
+        }
+      ],
+      "screenshot": "docs\\audits\\2026-06-05-restaurant-webadmin-flow-audit\\evidence\\09-recipes.png"
+    },
+    {
+      "id": "10-requisitions",
+      "path": "/restaurant/requisitions",
+      "purpose": "餐饮领料",
+      "finalUrl": "http://139.196.165.140:8086/restaurant/requisitions",
+      "textSnippet": "白垩纪AI Agent 首页 销售老板工作台 财务主管工作台 仓管员工作台 采购员工作台 销售管理 系统管理 餐饮运营 深度分析 经营看板 菜品分析 门店对比 平台口碑 日常录入 配方管理 供应商进货录入 领料管理 损耗管理 盘点管理 数据与系统 数据完整度 ETL 状态 菜品名称匹配 数据与分析 餐饮运营 / 领料管理 qhj_prod 工厂总监 领料管理 共 0 条 AI 分析 导出 新建领料单 领料总数 0 单 待审批 0 单 已审批 0 单 总记录数 0 至 状态 类型 搜索 重置 领料单号 日期 类型 状态 菜品 申请量 实发量 备注 操作 暂无领料记录，点击「新建领料单」创建 共 0 条 10条/页 1 前往 页",
+      "buttons": [
+        "AI 分析",
+        "导出",
+        "新建领料单",
+        "搜索",
+        "重置"
+      ],
+      "signals": {
+        "hasUpload": false,
+        "hasWriteAction": true,
+        "hasEmpty": true,
+        "hasError": false
+      },
+      "failedResponses": [],
+      "screenshot": "docs\\audits\\2026-06-05-restaurant-webadmin-flow-audit\\evidence\\10-requisitions.png"
+    },
+    {
+      "id": "11-stocktaking",
+      "path": "/restaurant/stocktaking",
+      "purpose": "餐饮盘点",
+      "finalUrl": "http://139.196.165.140:8086/restaurant/stocktaking",
+      "textSnippet": "白垩纪AI Agent 首页 销售老板工作台 财务主管工作台 仓管员工作台 采购员工作台 销售管理 系统管理 餐饮运营 深度分析 经营看板 菜品分析 门店对比 平台口碑 日常录入 配方管理 供应商进货录入 领料管理 损耗管理 盘点管理 数据与系统 数据完整度 ETL 状态 菜品名称匹配 数据与分析 餐饮运营 / 盘点管理 qhj_prod 工厂总监 盘点管理 共 0 条 AI 分析 导出 新建盘点 盘点总数 0 条 盘盈次数 0 盘亏次数 0 最近盘点 暂无 至 状态 搜索 重置 盘点单号 盘点日期 状态 食材 账面库存 实盘数量 差异 差异类型 差异原因 操作 暂无盘点记录，点击「新建盘点」开始 共 0 条 10条/页 1 前往 页",
+      "buttons": [
+        "AI 分析",
+        "导出",
+        "新建盘点",
+        "搜索",
+        "重置"
+      ],
+      "signals": {
+        "hasUpload": false,
+        "hasWriteAction": true,
+        "hasEmpty": true,
+        "hasError": false
+      },
+      "failedResponses": [],
+      "screenshot": "docs\\audits\\2026-06-05-restaurant-webadmin-flow-audit\\evidence\\11-stocktaking.png"
+    },
+    {
+      "id": "12-supplier-delivery",
+      "path": "/restaurant/supplier-delivery",
+      "purpose": "供应商进货/OCR/手工录入",
+      "finalUrl": "http://139.196.165.140:8086/restaurant/supplier-delivery",
+      "textSnippet": "白垩纪AI Agent 首页 销售老板工作台 财务主管工作台 仓管员工作台 采购员工作台 销售管理 系统管理 餐饮运营 深度分析 经营看板 菜品分析 门店对比 平台口碑 日常录入 配方管理 供应商进货录入 领料管理 损耗管理 盘点管理 数据与系统 数据完整度 ETL 状态 菜品名称匹配 数据与分析 餐饮运营 / 供应商进货录入 qhj_prod 工厂总监 供应商进货录入 共 0 条 上传送货单 状态 搜索 重置 送货日期 供应商 送货单号 合计金额 来源 置信度 状态 操作 暂无数据 共 0 条 1",
+      "buttons": [
+        "上传送货单",
+        "搜索",
+        "重置"
+      ],
+      "signals": {
+        "hasUpload": true,
+        "hasWriteAction": true,
+        "hasEmpty": true,
+        "hasError": false
+      },
+      "failedResponses": [],
+      "screenshot": "docs\\audits\\2026-06-05-restaurant-webadmin-flow-audit\\evidence\\12-supplier-delivery.png"
+    },
+    {
+      "id": "13-name-resolution",
+      "path": "/restaurant/admin/name-resolution",
+      "purpose": "POS 菜品名称解析人工裁决",
+      "finalUrl": "http://139.196.165.140:8086/restaurant/admin/name-resolution",
+      "textSnippet": "白垩纪AI Agent 首页 销售老板工作台 财务主管工作台 仓管员工作台 采购员工作台 销售管理 系统管理 餐饮运营 深度分析 经营看板 菜品分析 门店对比 平台口碑 日常录入 配方管理 供应商进货录入 领料管理 损耗管理 盘点管理 数据与系统 数据完整度 ETL 状态 菜品名称匹配 数据与分析 餐饮运营 / 菜品名称匹配 qhj_prod 工厂总监 菜品名称匹配 POS 导出菜名未匹配到菜品时, 财务 ETL 无法计算该菜的食材成本 → 利润被高估。 确认绑定后将自动重跑财务 ETL, 修正成本卡片。 刷新 运行回填 (重新扫描) 已匹配 / 总菜名 0 / 0 匹配覆盖率 0% 待裁决 0 POS 菜名 出现次数 营收风险敞口 系统建议置信度 绑定到菜品 操作 暂无待裁决菜名 — 全部已匹配或已处理 加载未解析队列失败: Python service error: 401 Unauthorized",
+      "buttons": [
+        "刷新",
+        "运行回填 (重新扫描)"
+      ],
+      "signals": {
+        "hasUpload": false,
+        "hasWriteAction": true,
+        "hasEmpty": true,
+        "hasError": false
+      },
+      "failedResponses": [
+        {
+          "status": 401,
+          "url": "http://139.196.165.140:8086/smartbi-api/api/smartbi/restaurant/name-resolution/stats"
+        },
+        {
+          "status": 401,
+          "url": "http://139.196.165.140:8086/smartbi-api/api/smartbi/restaurant/name-resolution/unresolved"
+        },
+        {
+          "status": 401,
+          "url": "http://139.196.165.140:8086/smartbi-api/api/smartbi/restaurant-ops/product-types"
+        }
+      ],
+      "screenshot": "docs\\audits\\2026-06-05-restaurant-webadmin-flow-audit\\evidence\\13-name-resolution.png"
+    },
+    {
+      "id": "14-data-completeness",
+      "path": "/restaurant/data-completeness",
+      "purpose": "餐饮数据完整度",
+      "finalUrl": "http://139.196.165.140:8086/restaurant/data-completeness",
+      "textSnippet": "白垩纪AI Agent 首页 销售老板工作台 财务主管工作台 仓管员工作台 采购员工作台 销售管理 系统管理 餐饮运营 深度分析 经营看板 菜品分析 门店对比 平台口碑 日常录入 配方管理 供应商进货录入 领料管理 损耗管理 盘点管理 数据与系统 数据完整度 ETL 状态 菜品名称匹配 数据与分析 餐饮运营 / 数据完整度 qhj_prod 工厂总监 Python service error: 401 Unauthorized",
+      "buttons": [],
+      "signals": {
+        "hasUpload": false,
+        "hasWriteAction": true,
+        "hasEmpty": false,
+        "hasError": false
+      },
+      "failedResponses": [
+        {
+          "status": 401,
+          "url": "http://139.196.165.140:8086/smartbi-api/api/smartbi/restaurant/completeness?factoryId=RES_3101_009"
+        }
+      ],
+      "screenshot": "docs\\audits\\2026-06-05-restaurant-webadmin-flow-audit\\evidence\\14-data-completeness.png"
+    },
+    {
+      "id": "15-etl-status",
+      "path": "/restaurant/admin/etl-status",
+      "purpose": "餐饮 ETL 状态",
+      "finalUrl": "http://139.196.165.140:8086/restaurant/admin/etl-status",
+      "textSnippet": "白垩纪AI Agent 首页 销售老板工作台 财务主管工作台 仓管员工作台 采购员工作台 销售管理 系统管理 餐饮运营 深度分析 经营看板 菜品分析 门店对比 平台口碑 日常录入 配方管理 供应商进货录入 领料管理 损耗管理 盘点管理 数据与系统 数据完整度 ETL 状态 菜品名称匹配 数据与分析 餐饮运营 / 餐饮 ETL 状态 qhj_prod 工厂总监 餐饮 ETL 状态 刷新全部 暂无餐饮工厂数据，请确认 all-status 接口返回正确 加载 ETL 状态失败: Python service error: 401 Unauthorized",
+      "buttons": [
+        "刷新全部"
+      ],
+      "signals": {
+        "hasUpload": false,
+        "hasWriteAction": true,
+        "hasEmpty": true,
+        "hasError": false
+      },
+      "failedResponses": [
+        {
+          "status": 401,
+          "url": "http://139.196.165.140:8086/smartbi-api/api/smartbi/restaurant/etl/all-status"
+        }
+      ],
+      "screenshot": "docs\\audits\\2026-06-05-restaurant-webadmin-flow-audit\\evidence\\15-etl-status.png"
+    },
+    {
+      "id": "16-commission",
+      "path": "/restaurant/commission",
+      "purpose": "营销员提成",
+      "finalUrl": "http://139.196.165.140:8086/restaurant/commission",
+      "textSnippet": "白垩纪AI Agent 首页 销售老板工作台 财务主管工作台 仓管员工作台 采购员工作台 销售管理 系统管理 餐饮运营 数据与分析 餐饮运营 / 营销员提成 qhj_prod 工厂总监 营销员提成汇总 月度累计阶梯 · 复购业绩跨档 营销员 ID 月份 查询 结算时间 本次营收 档位 费率 本次提成 状态 操作 暂无数据",
+      "buttons": [
+        "查询"
+      ],
+      "signals": {
+        "hasUpload": false,
+        "hasWriteAction": false,
+        "hasEmpty": true,
+        "hasError": false
+      },
+      "failedResponses": [],
+      "screenshot": "docs\\audits\\2026-06-05-restaurant-webadmin-flow-audit\\evidence\\16-commission.png"
+    },
+    {
+      "id": "17-health-report",
+      "path": "/smart-bi/health-report",
+      "purpose": "AI 经营体检",
+      "finalUrl": "http://139.196.165.140:8086/smart-bi/health-report",
+      "textSnippet": "白垩纪AI Agent 首页 销售老板工作台 财务主管工作台 仓管员工作台 采购员工作台 销售管理 系统管理 餐饮运营 数据与分析 经营驾驶舱 AI 探索 AI 问答 / 数据分析 经营分析 经营分析 收入管理报表 AI 经营体检 异常预警 数据管理 Excel 上传 查询模板 数据完整度 分析概览 AI 运维 知识库反馈 AI 追问日志 数据与分析 / AI 经营体检 qhj_prod 工厂总监 AI 经营体检 行业子品类 生成报告 Missing or invalid Authorization header Missing or invalid Authorization header",
+      "buttons": [
+        "生成报告"
+      ],
+      "signals": {
+        "hasUpload": true,
+        "hasWriteAction": true,
+        "hasEmpty": false,
+        "hasError": false
+      },
+      "failedResponses": [
+        {
+          "status": 401,
+          "url": "http://139.196.165.140:8086/smartbi-api/api/smartbi/restaurant/RES_3101_009/health-check-report"
+        }
+      ],
+      "screenshot": "docs\\audits\\2026-06-05-restaurant-webadmin-flow-audit\\evidence\\17-health-report.png"
+    }
+  ]
+}

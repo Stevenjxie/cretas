@@ -38,7 +38,7 @@ public class OssServiceImpl implements OssService {
     private final OssConfig ossConfig;
 
     private static final DateTimeFormatter DATE_FORMAT = DateTimeFormatter.ofPattern("yyyy/MM/dd");
-    private static final Set<String> IMAGE_TYPES = Set.of("image/jpeg", "image/png", "image/gif", "image/webp", "image/bmp");
+    private static final Set<String> IMAGE_TYPES = Set.of("image/jpeg", "image/jpg", "image/png", "image/gif", "image/webp", "image/bmp");
     private static final Set<String> VIDEO_TYPES = Set.of("video/mp4", "video/mpeg", "video/quicktime", "video/x-msvideo", "video/webm");
     private static final Set<String> AUDIO_TYPES = Set.of("audio/mpeg", "audio/wav", "audio/ogg", "audio/webm", "audio/x-raw");
 

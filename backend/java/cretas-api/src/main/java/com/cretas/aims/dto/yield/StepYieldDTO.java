@@ -22,6 +22,12 @@ public class StepYieldDTO {
     private BigDecimal totalOutput;      // Σ output
     private String inputUnit;
     private String outputUnit;
+    /** 首道领料出库量汇总; 只做库存对账, 不参与出成率分母。 */
+    private BigDecimal warehouseOutQuantity;
+    /** 实际投料量汇总; 出成率分母优先等于 totalInput/feedIn。 */
+    private BigDecimal feedInQuantity;
+    /** 本道报工记录里的剩余/结转汇总。首道表示未用完原料, 中后道表示未领用/结余 WIP。 */
+    private BigDecimal carryoverQuantity;
     /** 出成率 = Σoutput/Σinput; 单位不可比 (outputUnit!=inputUnit) 时为 null */
     private BigDecimal yieldRate;
     private Boolean unitComparable;      // false → yieldRate 不计, 仅展示量

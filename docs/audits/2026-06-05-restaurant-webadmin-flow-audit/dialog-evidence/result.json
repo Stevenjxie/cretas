@@ -1,0 +1,94 @@
+[
+  {
+    "id": "supplier-delivery-upload",
+    "path": "/restaurant/supplier-delivery",
+    "button": {},
+    "opened": true,
+    "screenshot": "docs\\audits\\2026-06-05-restaurant-webadmin-flow-audit\\dialog-evidence\\supplier-delivery-upload.png",
+    "text": "白垩纪AI Agent 首页 销售老板工作台 财务主管工作台 仓管员工作台 采购员工作台 销售管理 系统管理 餐饮运营 深度分析 经营看板 菜品分析 门店对比 平台口碑 日常录入 配方管理 供应商进货录入 领料管理 损耗管理 盘点管理 数据与系统 数据完整度 ETL 状态 菜品名称匹配 数据与分析 餐饮运营 / 供应商进货录入 qhj_prod 工厂总监 供应商进货录入 共 0 条 上传送货单 状态 搜索 重置 送货日期 供应商 送货单号 合计金额 来源 置信度 状态 操作 暂无数据 共 0 条 1 供应商进货录入 本月已录 0 张 (确认 0 / 草稿 0) 供应商 选择供应商 还未添加供应商， 前往供应商管理 送货日期 拖拽送货单照片到此处，或点击上传 支持 JPG / PNG，建议正对单据、光线充足、文字清晰 取消 改为手动录入 识别并录入",
+    "buttons": [
+      "上传送货单",
+      "搜索",
+      "重置",
+      "取消",
+      "改为手动录入",
+      "识别并录入"
+    ]
+  },
+  {
+    "id": "requisition-create",
+    "path": "/restaurant/requisitions",
+    "button": {},
+    "opened": true,
+    "screenshot": "docs\\audits\\2026-06-05-restaurant-webadmin-flow-audit\\dialog-evidence\\requisition-create.png",
+    "text": "白垩纪AI Agent 首页 销售老板工作台 财务主管工作台 仓管员工作台 采购员工作台 销售管理 系统管理 餐饮运营 深度分析 经营看板 菜品分析 门店对比 平台口碑 日常录入 配方管理 供应商进货录入 领料管理 损耗管理 盘点管理 数据与系统 数据完整度 ETL 状态 菜品名称匹配 数据与分析 餐饮运营 / 领料管理 qhj_prod 工厂总监 领料管理 共 0 条 AI 分析 导出 新建领料单 领料总数 0 单 待审批 0 单 已审批 0 单 总记录数 0 至 状态 类型 搜索 重置 领料单号 日期 类型 状态 菜品 申请量 实发量 备注 操作 暂无领料记录，点击「新建领料单」创建 共 0 条 10条/页 1 前往 页 新建领料单 类型 按菜品BOM 手动领料 食材 选择食材 申请数量 单位 备注 取消 确定",
+    "buttons": [
+      "AI 分析",
+      "导出",
+      "新建领料单",
+      "搜索",
+      "重置",
+      "取消",
+      "确定"
+    ]
+  },
+  {
+    "id": "stocktaking-create",
+    "path": "/restaurant/stocktaking",
+    "button": {},
+    "opened": true,
+    "screenshot": "docs\\audits\\2026-06-05-restaurant-webadmin-flow-audit\\dialog-evidence\\stocktaking-create.png",
+    "text": "白垩纪AI Agent 首页 销售老板工作台 财务主管工作台 仓管员工作台 采购员工作台 销售管理 系统管理 餐饮运营 深度分析 经营看板 菜品分析 门店对比 平台口碑 日常录入 配方管理 供应商进货录入 领料管理 损耗管理 盘点管理 数据与系统 数据完整度 ETL 状态 菜品名称匹配 数据与分析 餐饮运营 / 盘点管理 qhj_prod 工厂总监 盘点管理 共 0 条 AI 分析 导出 新建盘点 盘点总数 0 条 盘盈次数 0 盘亏次数 0 最近盘点 暂无 至 状态 搜索 重置 盘点单号 盘点日期 状态 食材 账面库存 实盘数量 差异 差异类型 差异原因 操作 暂无盘点记录，点击「新建盘点」开始 共 0 条 10条/页 1 前往 页 新建盘点 食材 选择食材 盘点日期 单位 备注 取消 确定",
+    "buttons": [
+      "AI 分析",
+      "导出",
+      "新建盘点",
+      "搜索",
+      "重置",
+      "取消",
+      "确定"
+    ]
+  },
+  {
+    "id": "recipe-batch-import",
+    "path": "/restaurant/recipes",
+    "button": {},
+    "opened": true,
+    "screenshot": "docs\\audits\\2026-06-05-restaurant-webadmin-flow-audit\\dialog-evidence\\recipe-batch-import.png",
+    "text": "白垩纪AI Agent 首页 销售老板工作台 财务主管工作台 仓管员工作台 采购员工作台 销售管理 系统管理 餐饮运营 深度分析 经营看板 菜品分析 门店对比 平台口碑 日常录入 配方管理 供应商进货录入 领料管理 损耗管理 盘点管理 数据与系统 数据完整度 ETL 状态 菜品名称匹配 数据与分析 餐饮运营 / 配方管理 qhj_prod 工厂总监 配方管理 共 383 条 AI 分析 AI 录配方 AI 批量录配方 99+ 批量导入 菜名对齐 99+ 导出 新增配方 配方总数 383 涉及菜品 136 有配方菜品 136 列表总数 383 配方录入趋势 合计 3 kg 菜品食材用量 Top 10 Top 4 按菜品筛选 状态 搜索 重置 菜品 食材 标准用量 净料率 主料/辅料 状态 备注 操作 古法秘制酸菜鱼[小份] 食用油 0.15 L - 辅料 启用 PLAN_C_DEMO_SEED_2026_04_25_V5 查看 成本卡 编辑 停用 营养多C番茄鱼[小份手工去刺] 番茄 0.5 kg - 辅料 启用 PLAN_C_DEMO_SEED_2026_04_25_V5 查看 成本卡 编辑 停用 来吃鱼鸭约惠双人套餐 食用油 0.2 L - 辅料 启用 PLAN_C_DEMO_SEED_2026_04_25_V5 查看 成本卡 编辑 停用 古法秘制酸菜鱼[小份] 酸菜 0.15 kg - 辅料 启用 PLAN_C_DEMO_SEED_2026_04_25_V5 查看 成本卡 编辑 停用 年糕 年糕 0.1 kg - 主料 启用 PLAN_C_DEMO_SEED_2026_04_25_V5 查看 成本卡 编辑 停用 营养多C番茄鱼[小份手工去刺] 鲈鱼 0.55 kg - 主料 启用 PLAN_C_DEMO_SEED_2026_04_25_V5 查看 成本卡 编辑 停用 来吃鱼鸭约惠双人套餐 鲈鱼 0.4 kg - 主料 启用 PLAN_C_DEMO_SEED_2026_04_25_V5 查看 成本卡 编辑 停用 来吃鱼鸭约惠双人套餐 鸭腿 0.3 kg - 辅料 启用 PLAN_C_DEMO_SEED_2026_04_25_V5 查看 成本卡 编辑 停用 古法秘制酸菜鱼[小份] 鲈鱼 0.45 kg - 主料 启用 PLAN_C_DEMO_SEED_2026_04_25_V5 查看 成本卡 编辑 停用 营养多C番茄鱼[小份手工去刺] 食用油 0.2 L - 辅料 启用 PLAN_C_DEMO_SEED_2026_04_25_V5 查看 成本卡 编辑 停用 共 383 条 10条/页 1 2 3 4 5 6 39 前往 页 批量导入配方 1. 下载模板 — Excel/CSV 格式, 6 列: 菜品名称 / 食材名称 / 用量 / 单位 / 食材单价 / 是",
+    "buttons": [
+      "成本卡",
+      "编辑",
+      "停用",
+      "查看",
+      "成本卡",
+      "编辑",
+      "停用",
+      "查看",
+      "成本卡",
+      "编辑",
+      "停用",
+      "查看",
+      "成本卡",
+      "编辑",
+      "停用",
+      "查看",
+      "成本卡",
+      "编辑",
+      "停用",
+      "下载 CSV 模板"
+    ]
+  },
+  {
+    "id": "smartbi-upload",
+    "path": "/smart-bi/upload",
+    "button": null,
+    "opened": true,
+    "screenshot": "docs\\audits\\2026-06-05-restaurant-webadmin-flow-audit\\dialog-evidence\\smartbi-upload.png",
+    "text": "白垩纪AI Agent 首页 销售老板工作台 财务主管工作台 仓管员工作台 采购员工作台 销售管理 系统管理 餐饮运营 数据与分析 经营驾驶舱 AI 探索 AI 问答 / 数据分析 经营分析 经营分析 收入管理报表 AI 经营体检 异常预警 数据管理 Excel 上传 查询模板 数据完整度 分析概览 AI 运维 知识库反馈 AI 追问日志 数据与分析 / Excel上传 qhj_prod 工厂总监 Smart BI / 数据导入 Excel 数据导入 下载模板 重新开始 1 上传文件 选择 Excel 文件 2 解析结果 预览解析数据 3 分析结果 AI 分析洞察 4 保存确认 保存并继续 将文件拖到此处，或点击上传 支持 .xlsx、.xls 和 .csv 格式，文件大小不超过 500MB 上传说明 支持 Excel 2007+ 格式 (.xlsx) 和 Excel 97-2003 格式 (.xls) 第一行应为列标题，从第二行开始为数据 建议使用系统提供的模板上传数据 日期格式推荐使用 YYYY-MM-DD (如 2026-01-15)",
+    "buttons": [
+      "下载模板",
+      "重新开始"
+    ]
+  }
+]

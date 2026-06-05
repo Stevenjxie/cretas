@@ -74,7 +74,21 @@ export interface ProcessReportItem {
   processTaskId: string;
   reportDate: string;
   processCategory?: string;
+  productName?: string;
+  inputQuantity?: number;
+  warehouseOutQuantity?: number;
+  feedInQuantity?: number;
+  carryoverQuantity?: number;
+  sourceWipNo?: string;
   outputQuantity: number;
+  totalWorkers?: number;
+  totalWorkMinutes?: number;
+  productionStartTime?: string;
+  productionEndTime?: string;
+  reportMode?: 'MODE_1' | 'MODE_2' | 'MODE_3';
+  photos?: string[];
+  notes?: string;
+  customFields?: Record<string, unknown>;
   reporterName?: string;
   isSupplemental: boolean;
   approvalStatus: string;
@@ -90,9 +104,47 @@ export interface ApprovalItem {
   reporterName: string;
   reportDate: string;
   processCategory: string;
+  productName?: string;
+  inputQuantity?: number;
+  warehouseOutQuantity?: number;
+  feedInQuantity?: number;
+  carryoverQuantity?: number;
+  sourceWipNo?: string;
   outputQuantity: number;
+  totalWorkers?: number;
+  totalWorkMinutes?: number;
+  productionStartTime?: string;
+  productionEndTime?: string;
+  reportMode?: 'MODE_1' | 'MODE_2' | 'MODE_3';
+  photos?: string[];
+  notes?: string;
+  customFields?: Record<string, unknown>;
   isSupplemental: boolean;
   processTaskId: string;
+}
+
+export interface SubmitProcessReportPayload {
+  processTaskId: string;
+  outputQuantity: number;
+  reporterName?: string;
+  targetWorkerId?: number;
+  processCategory?: string;
+  notes?: string;
+  reportMode?: 'MODE_1' | 'MODE_2' | 'MODE_3';
+  batchNumber?: string;
+  inputQuantity?: number;
+  warehouseOutQuantity?: number;
+  feedInQuantity?: number;
+  carryoverQuantity?: number;
+  sourceWipNo?: string;
+  totalWorkers?: number;
+  totalWorkMinutes?: number;
+  reportDate?: string;
+  productionStartTime?: string;
+  productionEndTime?: string;
+  photos?: string[];
+  workerIds?: number[];
+  customFields?: Record<string, unknown>;
 }
 
 // ========== API Client ==========
@@ -157,12 +209,12 @@ class ProcessTaskApiClient {
     return apiClient.put(`${base}/process-work-reporting/batch-approve`, reportIds);
   }
 
-  async submitNormalReport(data: { processTaskId: string; outputQuantity: number; reporterName?: string; targetWorkerId?: number; notes?: string; reportMode?: 'MODE_1' | 'MODE_2' | 'MODE_3'; batchNumber?: string; workerIds?: number[] }, factoryId?: string) {
+  async submitNormalReport(data: SubmitProcessReportPayload, factoryId?: string) {
     const base = this.getBase(factoryId);
     return apiClient.post(`${base}/process-work-reporting/normal`, data);
   }
 
-  async submitSupplement(data: { processTaskId: string; outputQuantity: number; reporterName?: string; processCategory?: string; notes?: string }, factoryId?: string) {
+  async submitSupplement(data: SubmitProcessReportPayload, factoryId?: string) {
     const base = this.getBase(factoryId);
     return apiClient.post(`${base}/process-work-reporting/supplement`, data);
   }

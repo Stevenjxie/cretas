@@ -5,11 +5,15 @@ import {
 } from 'react-native';
 import { Text, Appbar, Card, TextInput, ActivityIndicator, Chip, Divider } from 'react-native-paper';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
+import * as ImagePicker from 'expo-image-picker';
+import * as FileSystem from 'expo-file-system';
 import { ProcessingScreenProps } from '../../types/navigation';
 import {
   processTaskApiClient,
   ProcessTaskItem,
+  SubmitProcessReportPayload,
 } from '../../services/api/processTaskApiClient';
+import { attachmentApi, AttachmentFileCategory } from '../../services/api/attachmentApi';
 import { NeoButton, ScreenWrapper } from '../../components/ui';
 import { BarcodeScannerModal } from '../../components/processing/BarcodeScannerModal';
 import { TutorialOverlay } from '../../components/common/TutorialOverlay';
@@ -23,6 +27,91 @@ type Props = ProcessingScreenProps<'ThreeStepReport'>;
 interface ScannedWorker {
   id: number;
   name: string;
+}
+
+interface EvidenceAsset {
+  uri: string;
+  fileName: string;
+  mimeType: string;
+  size: number;
+  category: AttachmentFileCategory;
+}
+
+function todayStr(): string {
+  const d = new Date();
+  const month = `${d.getMonth() + 1}`.padStart(2, '0');
+  const day = `${d.getDate()}`.padStart(2, '0');
+  return `${d.getFullYear()}-${month}-${day}`;
+}
+
+function parseOptionalNumber(raw: string, label: string): number | undefined {
+  const value = raw.trim();
+  if (!value) return undefined;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    throw new Error(`${label}必须是大于等于 0 的数字`);
+  }
+  return parsed;
+}
+
+function parseOptionalInteger(raw: string, label: string): number | undefined {
+  const parsed = parseOptionalNumber(raw, label);
+  if (parsed === undefined) return undefined;
+  if (!Number.isInteger(parsed)) {
+    throw new Error(`${label}必须是整数`);
+  }
+  return parsed;
+}
+
+function normalizeOptionalDate(raw: string): string | undefined {
+  const value = raw.trim();
+  if (!value) return undefined;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    throw new Error('报工日期格式应为 YYYY-MM-DD');
+  }
+  return value;
+}
+
+function normalizeOptionalTime(raw: string, label: string): string | undefined {
+  const value = raw.trim();
+  if (!value) return undefined;
+  if (!/^\d{2}:\d{2}$/.test(value)) {
+    throw new Error(`${label}格式应为 HH:mm`);
+  }
+  return value;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return typeof value === 'object' && value !== null ? value as Record<string, unknown> : null;
+}
+
+function extractReportId(response: unknown): string | null {
+  const root = asRecord(response);
+  const data = asRecord(root?.data);
+  const reportId = data?.reportId ?? root?.reportId;
+  if (typeof reportId === 'number' || typeof reportId === 'string') return String(reportId);
+  return null;
+}
+
+function guessExt(uri: string, mime?: string): string {
+  if (mime?.startsWith('image/')) return mime.replace('image/', '');
+  if (mime?.startsWith('video/')) return mime.replace('video/', '') === 'quicktime' ? 'mov' : mime.replace('video/', '');
+  const dot = uri.lastIndexOf('.');
+  return dot > 0 ? uri.substring(dot + 1) : 'jpg';
+}
+
+function guessMime(uri: string): string {
+  const ext = uri.toLowerCase().split('.').pop() ?? '';
+  const map: Record<string, string> = {
+    jpg: 'image/jpeg',
+    jpeg: 'image/jpeg',
+    png: 'image/png',
+    webp: 'image/webp',
+    gif: 'image/gif',
+    mp4: 'video/mp4',
+    mov: 'video/quicktime',
+  };
+  return map[ext] ?? 'image/jpeg';
 }
 
 const STATUS_COLORS: Record<string, string> = {
@@ -50,8 +139,17 @@ export default function ThreeStepReportScreen() {
   // Step 3 state
   const [quantity, setQuantity] = useState('');
   const [inputQty, setInputQty] = useState('');
+  const [warehouseOutQty, setWarehouseOutQty] = useState('');
+  const [feedInQty, setFeedInQty] = useState('');
+  const [carryoverQty, setCarryoverQty] = useState('');
+  const [workersCount, setWorkersCount] = useState('');
+  const [workMinutes, setWorkMinutes] = useState('');
+  const [reportDate, setReportDate] = useState(todayStr());
+  const [startTime, setStartTime] = useState('');
+  const [endTime, setEndTime] = useState('');
   const [notes, setNotes] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [evidenceAssets, setEvidenceAssets] = useState<EvidenceAsset[]>([]);
 
   // Tutorial
   const tgtStepIndicator = useTutorialTarget('tsr-step-indicator');
@@ -69,8 +167,8 @@ export default function ThreeStepReportScreen() {
       };
       const list = Array.isArray(res?.data) ? res.data :
         (res?.data as { content?: ProcessTaskItem[] })?.content || [];
-      // Only show tasks that can be reported on
-      setTasks(list.filter(t => t.status === 'IN_PROGRESS' || t.status === 'SUPPLEMENTING'));
+      // PENDING tasks are valid here: a group leader can start reporting directly from the first on-site event.
+      setTasks(list.filter(t => t.status === 'PENDING' || t.status === 'IN_PROGRESS' || t.status === 'SUPPLEMENTING'));
     } catch {
       Alert.alert('错误', '加载工序任务失败');
     } finally {
@@ -147,9 +245,78 @@ export default function ThreeStepReportScreen() {
     setStep(3);
   };
 
+  const addEvidenceFromAsset = useCallback(async (asset: ImagePicker.ImagePickerAsset) => {
+    let size = asset.fileSize ?? 0;
+    if (!size) {
+      const info = await FileSystem.getInfoAsync(asset.uri, { size: true });
+      size = info.exists && 'size' in info ? (info.size as number) : 0;
+    }
+    const mimeType = asset.mimeType ?? guessMime(asset.uri);
+    const category: AttachmentFileCategory = mimeType.startsWith('video/') ? 'VIDEO' : 'PHOTO';
+    const fileName = asset.fileName ?? `process_report_${Date.now()}.${guessExt(asset.uri, mimeType)}`;
+    setEvidenceAssets((prev) => [...prev, { uri: asset.uri, fileName, mimeType, size, category }]);
+  }, []);
+
+  const takeEvidencePhoto = useCallback(async () => {
+    const perm = await ImagePicker.requestCameraPermissionsAsync();
+    if (!perm.granted) {
+      Alert.alert('需要相机权限', '请在系统设置中开启相机权限后再拍照。');
+      return;
+    }
+    const result = await ImagePicker.launchCameraAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      quality: 0.75,
+    });
+    if (!result.canceled && result.assets[0]) {
+      await addEvidenceFromAsset(result.assets[0]);
+    }
+  }, [addEvidenceFromAsset]);
+
+  const pickEvidenceMedia = useCallback(async () => {
+    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!perm.granted) {
+      Alert.alert('需要相册权限', '请在系统设置中开启相册权限后再上传照片或视频。');
+      return;
+    }
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.All,
+      quality: 0.75,
+      allowsMultipleSelection: true,
+    });
+    if (!result.canceled) {
+      for (const asset of result.assets) {
+        await addEvidenceFromAsset(asset);
+      }
+    }
+  }, [addEvidenceFromAsset]);
+
+  const removeEvidence = (index: number) => {
+    setEvidenceAssets((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  const uploadEvidence = async (reportId: string) => {
+    let uploaded = 0;
+    const errors: string[] = [];
+    for (const asset of evidenceAssets) {
+      try {
+        await attachmentApi.uploadAndRegister(
+          { uri: asset.uri, name: asset.fileName, type: asset.mimeType, size: asset.size },
+          'PRODUCTION_REPORT',
+          reportId,
+          { businessTag: 'PROCESS_REPORT_EVIDENCE', fileCategory: asset.category },
+        );
+        uploaded += 1;
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : '上传失败';
+        errors.push(`${asset.fileName}: ${msg}`);
+      }
+    }
+    return { uploaded, errors };
+  };
+
   // Step 3: Submit report
   const handleSubmit = async () => {
-    if (!selectedTask || !worker) return;
+    if (!selectedTask) return;
 
     const qty = parseFloat(quantity);
     if (isNaN(qty) || qty <= 0) {
@@ -157,8 +324,28 @@ export default function ThreeStepReportScreen() {
       return;
     }
 
+    try {
+      parseOptionalNumber(inputQty, '投入数量');
+      parseOptionalNumber(warehouseOutQty, '领料出库量');
+      parseOptionalNumber(feedInQty, '实际投料量');
+      parseOptionalNumber(carryoverQty, '本批剩余结转');
+      parseOptionalInteger(workersCount, '人数');
+      parseOptionalInteger(workMinutes, '工时分钟');
+      normalizeOptionalDate(reportDate);
+      normalizeOptionalTime(startTime, '开始时间');
+      normalizeOptionalTime(endTime, '结束时间');
+    } catch (err) {
+      Alert.alert('提示', err instanceof Error ? err.message : '请检查报工数据');
+      return;
+    }
+
     const remaining = Math.max(0, selectedTask.plannedQuantity - selectedTask.completedQuantity - selectedTask.pendingQuantity);
-    if (remaining > 0 && qty > remaining * 1.5) {
+    const needsOverConfirm = remaining > 0 && qty > remaining * 1.5;
+    const submitOrConfirmOver = () => {
+      if (!needsOverConfirm) {
+        void doSubmit(qty);
+        return;
+      }
       Alert.alert(
         '超量确认',
         `报工量 ${qty} 超过剩余量 ${remaining} 的150%，确定提交吗？`,
@@ -167,43 +354,75 @@ export default function ThreeStepReportScreen() {
           { text: '仍然提交', style: 'destructive', onPress: () => doSubmit(qty) },
         ]
       );
+    };
+
+    if (evidenceAssets.length === 0) {
+      Alert.alert(
+        '缺少现场证据',
+        '这次报工没有照片或视频。现场报工建议至少上传 1 张照片，方便主管核对。',
+        [
+          { text: '返回补拍', style: 'cancel' },
+          { text: '仍然提交', onPress: submitOrConfirmOver },
+        ],
+      );
       return;
     }
-    await doSubmit(qty);
+    submitOrConfirmOver();
   };
 
   const doSubmit = async (qty: number) => {
-    if (!selectedTask || !worker) return;
+    if (!selectedTask) return;
     setSubmitting(true);
     try {
-      // 1. Checkin worker to this task
-      await processTaskApiClient.processCheckin({
-        employeeId: worker.id,
-        processName: selectedTask.processName,
-        processCategory: selectedTask.processCategory,
-        checkinMethod: 'QR_SCAN',
-        processTaskId: selectedTask.id,
-      });
-
-      // 2. Submit report with targetWorkerId
-      const isSupplemental = selectedTask.status === 'SUPPLEMENTING' || selectedTask.status === 'COMPLETED' || selectedTask.status === 'CLOSED';
-      const reportData: Record<string, unknown> = {
-        processTaskId: selectedTask.id,
-        outputQuantity: qty,
-        reporterName: worker.name,
-        targetWorkerId: worker.id,
-        notes: notes || undefined,
-      };
-
-      if (isSupplemental) {
-        await processTaskApiClient.submitSupplement(reportData as Parameters<typeof processTaskApiClient.submitSupplement>[0]);
-      } else {
-        await processTaskApiClient.submitNormalReport(reportData as Parameters<typeof processTaskApiClient.submitNormalReport>[0]);
+      if (worker) {
+        await processTaskApiClient.processCheckin({
+          employeeId: worker.id,
+          processName: selectedTask.processName,
+          processCategory: selectedTask.processCategory,
+          checkinMethod: 'QR_SCAN',
+          processTaskId: selectedTask.id,
+        });
       }
 
+      const isSupplemental = selectedTask.status === 'SUPPLEMENTING' || selectedTask.status === 'COMPLETED' || selectedTask.status === 'CLOSED';
+      const reporterName = worker?.name || '主管自己';
+      const parsedWorkers = parseOptionalInteger(workersCount, '人数') ?? (worker ? 1 : undefined);
+      const reportData: SubmitProcessReportPayload = {
+        processTaskId: selectedTask.id,
+        outputQuantity: qty,
+        inputQuantity: parseOptionalNumber(inputQty, '投入数量') ?? parseOptionalNumber(feedInQty, '实际投料量'),
+        warehouseOutQuantity: parseOptionalNumber(warehouseOutQty, '领料出库量'),
+        feedInQuantity: parseOptionalNumber(feedInQty, '实际投料量'),
+        carryoverQuantity: parseOptionalNumber(carryoverQty, '本批剩余结转'),
+        totalWorkers: parsedWorkers,
+        totalWorkMinutes: parseOptionalInteger(workMinutes, '工时分钟'),
+        reportDate: normalizeOptionalDate(reportDate),
+        productionStartTime: normalizeOptionalTime(startTime, '开始时间'),
+        productionEndTime: normalizeOptionalTime(endTime, '结束时间'),
+        reporterName,
+        targetWorkerId: worker?.id,
+        notes: notes || undefined,
+        photos: evidenceAssets.length > 0 ? evidenceAssets.map((a) => a.fileName) : undefined,
+      };
+
+      let response: unknown;
+      if (isSupplemental) {
+        response = await processTaskApiClient.submitSupplement(reportData);
+      } else {
+        response = await processTaskApiClient.submitNormalReport(reportData);
+      }
+
+      const reportId = extractReportId(response);
+      const uploadResult = reportId && evidenceAssets.length > 0
+        ? await uploadEvidence(reportId)
+        : { uploaded: 0, errors: evidenceAssets.length > 0 ? ['报工已提交，但后端未返回 reportId，证据未上传'] : [] };
+      const evidenceMessage = evidenceAssets.length > 0
+        ? `\n现场证据: ${uploadResult.uploaded}/${evidenceAssets.length}`
+        : '\n现场证据: 未上传';
+      const errorMessage = uploadResult.errors.length > 0 ? `\n${uploadResult.errors.join('\n')}` : '';
       Alert.alert(
         '报工成功',
-        `${worker.name} — ${selectedTask.processName}\n产出: ${qty} ${selectedTask.unit || 'kg'}`,
+        `${reporterName} — ${selectedTask.processName}\n产出: ${qty} ${selectedTask.unit || 'kg'}${evidenceMessage}${errorMessage}`,
         [{
           text: '继续报工', onPress: () => {
             // Reset to step 1 for next worker
@@ -211,7 +430,15 @@ export default function ThreeStepReportScreen() {
             setSelectedTask(null);
             setQuantity('');
             setInputQty('');
+            setWarehouseOutQty('');
+            setFeedInQty('');
+            setCarryoverQty('');
+            setWorkersCount('');
+            setWorkMinutes('');
+            setStartTime('');
+            setEndTime('');
             setNotes('');
+            setEvidenceAssets([]);
             setStep(1);
             loadTasks();
           },
@@ -439,15 +666,88 @@ export default function ThreeStepReportScreen() {
                     </View>
                   )}
 
+                  <View style={styles.twoCol}>
+                    <TextInput
+                      testID="three-step-warehouse-out"
+                      label="领料出库"
+                      value={warehouseOutQty}
+                      onChangeText={setWarehouseOutQty}
+                      keyboardType="decimal-pad"
+                      mode="outlined"
+                      style={[styles.input, styles.colInput]}
+                    />
+                    <TextInput
+                      testID="three-step-feed-in"
+                      label="实际投料"
+                      value={feedInQty}
+                      onChangeText={setFeedInQty}
+                      keyboardType="decimal-pad"
+                      mode="outlined"
+                      style={[styles.input, styles.colInput]}
+                    />
+                  </View>
+
                   <TextInput
-                    testID="three-step-input-qty"
-                    label="投入量 (kg, 选填)"
-                    value={inputQty}
-                    onChangeText={setInputQty}
+                    testID="three-step-carryover"
+                    label="本批剩余/结转 (kg, 不填则自动算)"
+                    value={carryoverQty}
+                    onChangeText={setCarryoverQty}
                     keyboardType="decimal-pad"
                     mode="outlined"
                     style={[styles.input, { marginTop: 12 }]}
                   />
+
+                  <View style={styles.twoCol}>
+                    <TextInput
+                      testID="three-step-workers"
+                      label="人数"
+                      value={workersCount}
+                      onChangeText={setWorkersCount}
+                      keyboardType="number-pad"
+                      mode="outlined"
+                      style={[styles.input, styles.colInput]}
+                    />
+                    <TextInput
+                      testID="three-step-minutes"
+                      label="工时分钟"
+                      value={workMinutes}
+                      onChangeText={setWorkMinutes}
+                      keyboardType="number-pad"
+                      mode="outlined"
+                      style={[styles.input, styles.colInput]}
+                    />
+                  </View>
+
+                  <TextInput
+                    testID="three-step-report-date"
+                    label="报工日期"
+                    value={reportDate}
+                    onChangeText={setReportDate}
+                    mode="outlined"
+                    placeholder="YYYY-MM-DD"
+                    style={[styles.input, { marginTop: 12 }]}
+                  />
+
+                  <View style={styles.twoCol}>
+                    <TextInput
+                      testID="three-step-start-time"
+                      label="开始时间"
+                      value={startTime}
+                      onChangeText={setStartTime}
+                      mode="outlined"
+                      placeholder="HH:mm"
+                      style={[styles.input, styles.colInput]}
+                    />
+                    <TextInput
+                      testID="three-step-end-time"
+                      label="结束时间"
+                      value={endTime}
+                      onChangeText={setEndTime}
+                      mode="outlined"
+                      placeholder="HH:mm"
+                      style={[styles.input, styles.colInput]}
+                    />
+                  </View>
 
                   <TextInput
                     testID="three-step-notes"
@@ -459,6 +759,48 @@ export default function ThreeStepReportScreen() {
                     numberOfLines={2}
                     style={[styles.input, { marginTop: 12 }]}
                   />
+                </Card.Content>
+              </Card>
+
+              <Card style={styles.card}>
+                <Card.Content>
+                  <Text variant="titleLarge" style={styles.stepTitle}>现场证据</Text>
+                  <View style={styles.evidenceActions}>
+                    <NeoButton
+                      testID="three-step-add-photo"
+                      variant="outline"
+                      size="small"
+                      onPress={takeEvidencePhoto}
+                      style={styles.evidenceBtn}
+                    >
+                      拍照
+                    </NeoButton>
+                    <NeoButton
+                      testID="three-step-add-media"
+                      variant="outline"
+                      size="small"
+                      onPress={pickEvidenceMedia}
+                      style={styles.evidenceBtn}
+                    >
+                      照片/视频
+                    </NeoButton>
+                  </View>
+                  {evidenceAssets.length === 0 ? (
+                    <Text style={styles.evidenceHint}>建议上传现场照片；视频可用于核对关键工序。</Text>
+                  ) : (
+                    <View style={styles.evidenceList}>
+                      {evidenceAssets.map((asset, index) => (
+                        <Chip
+                          key={`${asset.fileName}-${index}`}
+                          testID={`three-step-evidence-chip-${index}`}
+                          onClose={() => removeEvidence(index)}
+                          style={styles.evidenceChip}
+                        >
+                          {asset.category === 'VIDEO' ? '视频' : '照片'} {index + 1}
+                        </Chip>
+                      ))}
+                    </View>
+                  )}
                 </Card.Content>
               </Card>
 
@@ -547,8 +889,15 @@ const styles = StyleSheet.create({
   summaryLabel: { fontSize: 13, color: '#888' },
   summaryValue: { fontSize: 15, fontWeight: '600', color: '#333' },
   input: { backgroundColor: '#fff', fontSize: 18 },
+  twoCol: { flexDirection: 'row', gap: 10, marginTop: 12 },
+  colInput: { flex: 1, minWidth: 0 },
   quickButtons: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 10 },
   quickLabel: { fontSize: 13, color: '#666' },
   quickBtn: { minWidth: 64, minHeight: 44 },
+  evidenceActions: { flexDirection: 'row', gap: 10, marginTop: 8 },
+  evidenceBtn: { flex: 1, minHeight: 46 },
+  evidenceHint: { color: '#666', fontSize: 14, lineHeight: 20, marginTop: 10 },
+  evidenceList: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 12 },
+  evidenceChip: { backgroundColor: '#f0f9ff' },
   submitBtn: { marginTop: 12, height: 56 },
 });

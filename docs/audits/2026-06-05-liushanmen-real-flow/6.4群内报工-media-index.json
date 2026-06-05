@@ -1,0 +1,902 @@
+[
+  {
+    "day": "6.4群内报工",
+    "sequence": 1,
+    "number": 1,
+    "fileName": "1.jpg",
+    "extension": ".jpg",
+    "mediaType": "image",
+    "sizeBytes": 837308,
+    "path": "C:\\Users\\Steve\\my-prototype-logistics\\六扇门工厂数据、\\6.1-6.3\\群内图片\\6.4群内报工\\1.jpg"
+  },
+  {
+    "day": "6.4群内报工",
+    "sequence": 2,
+    "number": 2,
+    "fileName": "2.jpg",
+    "extension": ".jpg",
+    "mediaType": "image",
+    "sizeBytes": 926736,
+    "path": "C:\\Users\\Steve\\my-prototype-logistics\\六扇门工厂数据、\\6.1-6.3\\群内图片\\6.4群内报工\\2.jpg"
+  },
+  {
+    "day": "6.4群内报工",
+    "sequence": 3,
+    "number": 3,
+    "fileName": "3.jpg",
+    "extension": ".jpg",
+    "mediaType": "image",
+    "sizeBytes": 1017297,
+    "path": "C:\\Users\\Steve\\my-prototype-logistics\\六扇门工厂数据、\\6.1-6.3\\群内图片\\6.4群内报工\\3.jpg"
+  },
+  {
+    "day": "6.4群内报工",
+    "sequence": 4,
+    "number": 3,
+    "fileName": "3b021557aac8f04b7ae56aaeeb1cf74a.png",
+    "extension": ".png",
+    "mediaType": "image",
+    "sizeBytes": 279486,
+    "path": "C:\\Users\\Steve\\my-prototype-logistics\\六扇门工厂数据、\\6.1-6.3\\群内图片\\6.4群内报工\\3b021557aac8f04b7ae56aaeeb1cf74a.png"
+  },
+  {
+    "day": "6.4群内报工",
+    "sequence": 5,
+    "number": 4,
+    "fileName": "4.jpg",
+    "extension": ".jpg",
+    "mediaType": "image",
+    "sizeBytes": 990250,
+    "path": "C:\\Users\\Steve\\my-prototype-logistics\\六扇门工厂数据、\\6.1-6.3\\群内图片\\6.4群内报工\\4.jpg"
+  },
+  {
+    "day": "6.4群内报工",
+    "sequence": 6,
+    "number": 4,
+    "fileName": "4f02f6826531b89a902bdb63f53c7e21.png",
+    "extension": ".png",
+    "mediaType": "image",
+    "sizeBytes": 246701,
+    "path": "C:\\Users\\Steve\\my-prototype-logistics\\六扇门工厂数据、\\6.1-6.3\\群内图片\\6.4群内报工\\4f02f6826531b89a902bdb63f53c7e21.png"
+  },
+  {
+    "day": "6.4群内报工",
+    "sequence": 7,
+    "number": 5,
+    "fileName": "5.jpg",
+    "extension": ".jpg",
+    "mediaType": "image",
+    "sizeBytes": 990250,
+    "path": "C:\\Users\\Steve\\my-prototype-logistics\\六扇门工厂数据、\\6.1-6.3\\群内图片\\6.4群内报工\\5.jpg"
+  },
+  {
+    "day": "6.4群内报工",
+    "sequence": 8,
+    "number": 6,
+    "fileName": "6.jpg",
+    "extension": ".jpg",
+    "mediaType": "image",
+    "sizeBytes": 966442,
+    "path": "C:\\Users\\Steve\\my-prototype-logistics\\六扇门工厂数据、\\6.1-6.3\\群内图片\\6.4群内报工\\6.jpg"
+  },
+  {
+    "day": "6.4群内报工",
+    "sequence": 9,
+    "number": 7,
+    "fileName": "7.jpg",
+    "extension": ".jpg",
+    "mediaType": "image",
+    "sizeBytes": 850491,
+    "path": "C:\\Users\\Steve\\my-prototype-logistics\\六扇门工厂数据、\\6.1-6.3\\群内图片\\6.4群内报工\\7.jpg"
+  },
+  {
+    "day": "6.4群内报工",
+    "sequence": 10,
+    "number": 7,
+    "fileName": "7ab6f66477a77be28088a47ee71c563b.png",
+    "extension": ".png",
+    "mediaType": "image",
+    "sizeBytes": 258759,
+    "path": "C:\\Users\\Steve\\my-prototype-logistics\\六扇门工厂数据、\\6.1-6.3\\群内图片\\6.4群内报工\\7ab6f66477a77be28088a47ee71c563b.png"
+  },
+  {
+    "day": "6.4群内报工",
+    "sequence": 11,
+    "number": 8,
+    "fileName": "8.jpg",
+    "extension": ".jpg",
+    "mediaType": "image",
+    "sizeBytes": 951968,
+    "path": "C:\\Users\\Steve\\my-prototype-logistics\\六扇门工厂数据、\\6.1-6.3\\群内图片\\6.4群内报工\\8.jpg"
+  },
+  {
+    "day": "6.4群内报工",
+    "sequence": 12,
+    "number": 8,
+    "fileName": "8ea5e0f7a7fd075e3181b515544e2679.png",
+    "extension": ".png",
+    "mediaType": "image",
+    "sizeBytes": 252211,
+    "path": "C:\\Users\\Steve\\my-prototype-logistics\\六扇门工厂数据、\\6.1-6.3\\群内图片\\6.4群内报工\\8ea5e0f7a7fd075e3181b515544e2679.png"
+  },
+  {
+    "day": "6.4群内报工",
+    "sequence": 13,
+    "number": 9,
+    "fileName": "9.jpg",
+    "extension": ".jpg",
+    "mediaType": "image",
+    "sizeBytes": 955340,
+    "path": "C:\\Users\\Steve\\my-prototype-logistics\\六扇门工厂数据、\\6.1-6.3\\群内图片\\6.4群内报工\\9.jpg"
+  },
+  {
+    "day": "6.4群内报工",
+    "sequence": 14,
+    "number": 9,
+    "fileName": "9b6b091d2e50eafb505114ab9ea98002.png",
+    "extension": ".png",
+    "mediaType": "image",
+    "sizeBytes": 242778,
+    "path": "C:\\Users\\Steve\\my-prototype-logistics\\六扇门工厂数据、\\6.1-6.3\\群内图片\\6.4群内报工\\9b6b091d2e50eafb505114ab9ea98002.png"
+  },
+  {
+    "day": "6.4群内报工",
+    "sequence": 15,
+    "number": 10,
+    "fileName": "10.jpg",
+    "extension": ".jpg",
+    "mediaType": "image",
+    "sizeBytes": 896606,
+    "path": "C:\\Users\\Steve\\my-prototype-logistics\\六扇门工厂数据、\\6.1-6.3\\群内图片\\6.4群内报工\\10.jpg"
+  },
+  {
+    "day": "6.4群内报工",
+    "sequence": 16,
+    "number": 11,
+    "fileName": "11.jpg",
+    "extension": ".jpg",
+    "mediaType": "image",
+    "sizeBytes": 930016,
+    "path": "C:\\Users\\Steve\\my-prototype-logistics\\六扇门工厂数据、\\6.1-6.3\\群内图片\\6.4群内报工\\11.jpg"
+  },
+  {
+    "day": "6.4群内报工",
+    "sequence": 17,
+    "number": 12,
+    "fileName": "12.jpg",
+    "extension": ".jpg",
+    "mediaType": "image",
+    "sizeBytes": 828671,
+    "path": "C:\\Users\\Steve\\my-prototype-logistics\\六扇门工厂数据、\\6.1-6.3\\群内图片\\6.4群内报工\\12.jpg"
+  },
+  {
+    "day": "6.4群内报工",
+    "sequence": 18,
+    "number": 13,
+    "fileName": "13.jpg",
+    "extension": ".jpg",
+    "mediaType": "image",
+    "sizeBytes": 906452,
+    "path": "C:\\Users\\Steve\\my-prototype-logistics\\六扇门工厂数据、\\6.1-6.3\\群内图片\\6.4群内报工\\13.jpg"
+  },
+  {
+    "day": "6.4群内报工",
+    "sequence": 19,
+    "number": 15,
+    "fileName": "15.jpg",
+    "extension": ".jpg",
+    "mediaType": "image",
+    "sizeBytes": 969965,
+    "path": "C:\\Users\\Steve\\my-prototype-logistics\\六扇门工厂数据、\\6.1-6.3\\群内图片\\6.4群内报工\\15.jpg"
+  },
+  {
+    "day": "6.4群内报工",
+    "sequence": 20,
+    "number": 16,
+    "fileName": "16.jpg",
+    "extension": ".jpg",
+    "mediaType": "image",
+    "sizeBytes": 996326,
+    "path": "C:\\Users\\Steve\\my-prototype-logistics\\六扇门工厂数据、\\6.1-6.3\\群内图片\\6.4群内报工\\16.jpg"
+  },
+  {
+    "day": "6.4群内报工",
+    "sequence": 21,
+    "number": 17,
+    "fileName": "17.jpg",
+    "extension": ".jpg",
+    "mediaType": "image",
+    "sizeBytes": 936095,
+    "path": "C:\\Users\\Steve\\my-prototype-logistics\\六扇门工厂数据、\\6.1-6.3\\群内图片\\6.4群内报工\\17.jpg"
+  },
+  {
+    "day": "6.4群内报工",
+    "sequence": 22,
+    "number": 18,
+    "fileName": "18.jpg",
+    "extension": ".jpg",
+    "mediaType": "image",
+    "sizeBytes": 906351,
+    "path": "C:\\Users\\Steve\\my-prototype-logistics\\六扇门工厂数据、\\6.1-6.3\\群内图片\\6.4群内报工\\18.jpg"
+  },
+  {
+    "day": "6.4群内报工",
+    "sequence": 23,
+    "number": 20,
+    "fileName": "20.jpg",
+    "extension": ".jpg",
+    "mediaType": "image",
+    "sizeBytes": 1078705,
+    "path": "C:\\Users\\Steve\\my-prototype-logistics\\六扇门工厂数据、\\6.1-6.3\\群内图片\\6.4群内报工\\20.jpg"
+  },
+  {
+    "day": "6.4群内报工",
+    "sequence": 24,
+    "number": 21,
+    "fileName": "21.jpg",
+    "extension": ".jpg",
+    "mediaType": "image",
+    "sizeBytes": 286887,
+    "path": "C:\\Users\\Steve\\my-prototype-logistics\\六扇门工厂数据、\\6.1-6.3\\群内图片\\6.4群内报工\\21.jpg"
+  },
+  {
+    "day": "6.4群内报工",
+    "sequence": 25,
+    "number": 22,
+    "fileName": "22.jpg",
+    "extension": ".jpg",
+    "mediaType": "image",
+    "sizeBytes": 165770,
+    "path": "C:\\Users\\Steve\\my-prototype-logistics\\六扇门工厂数据、\\6.1-6.3\\群内图片\\6.4群内报工\\22.jpg"
+  },
+  {
+    "day": "6.4群内报工",
+    "sequence": 26,
+    "number": 24,
+    "fileName": "24.jpg",
+    "extension": ".jpg",
+    "mediaType": "image",
+    "sizeBytes": 407711,
+    "path": "C:\\Users\\Steve\\my-prototype-logistics\\六扇门工厂数据、\\6.1-6.3\\群内图片\\6.4群内报工\\24.jpg"
+  },
+  {
+    "day": "6.4群内报工",
+    "sequence": 27,
+    "number": 25,
+    "fileName": "25.jpg",
+    "extension": ".jpg",
+    "mediaType": "image",
+    "sizeBytes": 206551,
+    "path": "C:\\Users\\Steve\\my-prototype-logistics\\六扇门工厂数据、\\6.1-6.3\\群内图片\\6.4群内报工\\25.jpg"
+  },
+  {
+    "day": "6.4群内报工",
+    "sequence": 28,
+    "number": 27,
+    "fileName": "27.jpg",
+    "extension": ".jpg",
+    "mediaType": "image",
+    "sizeBytes": 947434,
+    "path": "C:\\Users\\Steve\\my-prototype-logistics\\六扇门工厂数据、\\6.1-6.3\\群内图片\\6.4群内报工\\27.jpg"
+  },
+  {
+    "day": "6.4群内报工",
+    "sequence": 29,
+    "number": 28,
+    "fileName": "28.jpg",
+    "extension": ".jpg",
+    "mediaType": "image",
+    "sizeBytes": 586243,
+    "path": "C:\\Users\\Steve\\my-prototype-logistics\\六扇门工厂数据、\\6.1-6.3\\群内图片\\6.4群内报工\\28.jpg"
+  },
+  {
+    "day": "6.4群内报工",
+    "sequence": 30,
+    "number": 30,
+    "fileName": "30.jpg",
+    "extension": ".jpg",
+    "mediaType": "image",
+    "sizeBytes": 361521,
+    "path": "C:\\Users\\Steve\\my-prototype-logistics\\六扇门工厂数据、\\6.1-6.3\\群内图片\\6.4群内报工\\30.jpg"
+  },
+  {
+    "day": "6.4群内报工",
+    "sequence": 31,
+    "number": 31,
+    "fileName": "31.jpg",
+    "extension": ".jpg",
+    "mediaType": "image",
+    "sizeBytes": 212755,
+    "path": "C:\\Users\\Steve\\my-prototype-logistics\\六扇门工厂数据、\\6.1-6.3\\群内图片\\6.4群内报工\\31.jpg"
+  },
+  {
+    "day": "6.4群内报工",
+    "sequence": 32,
+    "number": 33,
+    "fileName": "33.jpg",
+    "extension": ".jpg",
+    "mediaType": "image",
+    "sizeBytes": 290578,
+    "path": "C:\\Users\\Steve\\my-prototype-logistics\\六扇门工厂数据、\\6.1-6.3\\群内图片\\6.4群内报工\\33.jpg"
+  },
+  {
+    "day": "6.4群内报工",
+    "sequence": 33,
+    "number": 34,
+    "fileName": "34.jpg",
+    "extension": ".jpg",
+    "mediaType": "image",
+    "sizeBytes": 125469,
+    "path": "C:\\Users\\Steve\\my-prototype-logistics\\六扇门工厂数据、\\6.1-6.3\\群内图片\\6.4群内报工\\34.jpg"
+  },
+  {
+    "day": "6.4群内报工",
+    "sequence": 34,
+    "number": 35,
+    "fileName": "35.jpg",
+    "extension": ".jpg",
+    "mediaType": "image",
+    "sizeBytes": 909715,
+    "path": "C:\\Users\\Steve\\my-prototype-logistics\\六扇门工厂数据、\\6.1-6.3\\群内图片\\6.4群内报工\\35.jpg"
+  },
+  {
+    "day": "6.4群内报工",
+    "sequence": 35,
+    "number": 36,
+    "fileName": "36.jpg",
+    "extension": ".jpg",
+    "mediaType": "image",
+    "sizeBytes": 264472,
+    "path": "C:\\Users\\Steve\\my-prototype-logistics\\六扇门工厂数据、\\6.1-6.3\\群内图片\\6.4群内报工\\36.jpg"
+  },
+  {
+    "day": "6.4群内报工",
+    "sequence": 36,
+    "number": 37,
+    "fileName": "37.mp4",
+    "extension": ".mp4",
+    "mediaType": "video",
+    "sizeBytes": 2918635,
+    "path": "C:\\Users\\Steve\\my-prototype-logistics\\六扇门工厂数据、\\6.1-6.3\\群内图片\\6.4群内报工\\37.mp4"
+  },
+  {
+    "day": "6.4群内报工",
+    "sequence": 37,
+    "number": 39,
+    "fileName": "39.jpg",
+    "extension": ".jpg",
+    "mediaType": "image",
+    "sizeBytes": 963598,
+    "path": "C:\\Users\\Steve\\my-prototype-logistics\\六扇门工厂数据、\\6.1-6.3\\群内图片\\6.4群内报工\\39.jpg"
+  },
+  {
+    "day": "6.4群内报工",
+    "sequence": 38,
+    "number": 40,
+    "fileName": "40.jpg",
+    "extension": ".jpg",
+    "mediaType": "image",
+    "sizeBytes": 302067,
+    "path": "C:\\Users\\Steve\\my-prototype-logistics\\六扇门工厂数据、\\6.1-6.3\\群内图片\\6.4群内报工\\40.jpg"
+  },
+  {
+    "day": "6.4群内报工",
+    "sequence": 39,
+    "number": 41,
+    "fileName": "41.jpg",
+    "extension": ".jpg",
+    "mediaType": "image",
+    "sizeBytes": 175873,
+    "path": "C:\\Users\\Steve\\my-prototype-logistics\\六扇门工厂数据、\\6.1-6.3\\群内图片\\6.4群内报工\\41.jpg"
+  },
+  {
+    "day": "6.4群内报工",
+    "sequence": 40,
+    "number": 43,
+    "fileName": "43.jpg",
+    "extension": ".jpg",
+    "mediaType": "image",
+    "sizeBytes": 951707,
+    "path": "C:\\Users\\Steve\\my-prototype-logistics\\六扇门工厂数据、\\6.1-6.3\\群内图片\\6.4群内报工\\43.jpg"
+  },
+  {
+    "day": "6.4群内报工",
+    "sequence": 41,
+    "number": 44,
+    "fileName": "44.jpg",
+    "extension": ".jpg",
+    "mediaType": "image",
+    "sizeBytes": 970516,
+    "path": "C:\\Users\\Steve\\my-prototype-logistics\\六扇门工厂数据、\\6.1-6.3\\群内图片\\6.4群内报工\\44.jpg"
+  },
+  {
+    "day": "6.4群内报工",
+    "sequence": 42,
+    "number": 45,
+    "fileName": "45.jpg",
+    "extension": ".jpg",
+    "mediaType": "image",
+    "sizeBytes": 895622,
+    "path": "C:\\Users\\Steve\\my-prototype-logistics\\六扇门工厂数据、\\6.1-6.3\\群内图片\\6.4群内报工\\45.jpg"
+  },
+  {
+    "day": "6.4群内报工",
+    "sequence": 43,
+    "number": 46,
+    "fileName": "46.jpg",
+    "extension": ".jpg",
+    "mediaType": "image",
+    "sizeBytes": 1233802,
+    "path": "C:\\Users\\Steve\\my-prototype-logistics\\六扇门工厂数据、\\6.1-6.3\\群内图片\\6.4群内报工\\46.jpg"
+  },
+  {
+    "day": "6.4群内报工",
+    "sequence": 44,
+    "number": 47,
+    "fileName": "47.mp4",
+    "extension": ".mp4",
+    "mediaType": "video",
+    "sizeBytes": 1635796,
+    "path": "C:\\Users\\Steve\\my-prototype-logistics\\六扇门工厂数据、\\6.1-6.3\\群内图片\\6.4群内报工\\47.mp4"
+  },
+  {
+    "day": "6.4群内报工",
+    "sequence": 45,
+    "number": 49,
+    "fileName": "49.jpg",
+    "extension": ".jpg",
+    "mediaType": "image",
+    "sizeBytes": 764183,
+    "path": "C:\\Users\\Steve\\my-prototype-logistics\\六扇门工厂数据、\\6.1-6.3\\群内图片\\6.4群内报工\\49.jpg"
+  },
+  {
+    "day": "6.4群内报工",
+    "sequence": 46,
+    "number": 50,
+    "fileName": "50.jpg",
+    "extension": ".jpg",
+    "mediaType": "image",
+    "sizeBytes": 856614,
+    "path": "C:\\Users\\Steve\\my-prototype-logistics\\六扇门工厂数据、\\6.1-6.3\\群内图片\\6.4群内报工\\50.jpg"
+  },
+  {
+    "day": "6.4群内报工",
+    "sequence": 47,
+    "number": 51,
+    "fileName": "51.jpg",
+    "extension": ".jpg",
+    "mediaType": "image",
+    "sizeBytes": 863077,
+    "path": "C:\\Users\\Steve\\my-prototype-logistics\\六扇门工厂数据、\\6.1-6.3\\群内图片\\6.4群内报工\\51.jpg"
+  },
+  {
+    "day": "6.4群内报工",
+    "sequence": 48,
+    "number": 51,
+    "fileName": "51a18510f4cac1dab95e8c33218e8168.png",
+    "extension": ".png",
+    "mediaType": "image",
+    "sizeBytes": 244708,
+    "path": "C:\\Users\\Steve\\my-prototype-logistics\\六扇门工厂数据、\\6.1-6.3\\群内图片\\6.4群内报工\\51a18510f4cac1dab95e8c33218e8168.png"
+  },
+  {
+    "day": "6.4群内报工",
+    "sequence": 49,
+    "number": 52,
+    "fileName": "52.jpg",
+    "extension": ".jpg",
+    "mediaType": "image",
+    "sizeBytes": 959624,
+    "path": "C:\\Users\\Steve\\my-prototype-logistics\\六扇门工厂数据、\\6.1-6.3\\群内图片\\6.4群内报工\\52.jpg"
+  },
+  {
+    "day": "6.4群内报工",
+    "sequence": 50,
+    "number": 53,
+    "fileName": "53.jpg",
+    "extension": ".jpg",
+    "mediaType": "image",
+    "sizeBytes": 819567,
+    "path": "C:\\Users\\Steve\\my-prototype-logistics\\六扇门工厂数据、\\6.1-6.3\\群内图片\\6.4群内报工\\53.jpg"
+  },
+  {
+    "day": "6.4群内报工",
+    "sequence": 51,
+    "number": 54,
+    "fileName": "54.jpg",
+    "extension": ".jpg",
+    "mediaType": "image",
+    "sizeBytes": 286664,
+    "path": "C:\\Users\\Steve\\my-prototype-logistics\\六扇门工厂数据、\\6.1-6.3\\群内图片\\6.4群内报工\\54.jpg"
+  },
+  {
+    "day": "6.4群内报工",
+    "sequence": 52,
+    "number": 55,
+    "fileName": "55.jpg",
+    "extension": ".jpg",
+    "mediaType": "image",
+    "sizeBytes": 132685,
+    "path": "C:\\Users\\Steve\\my-prototype-logistics\\六扇门工厂数据、\\6.1-6.3\\群内图片\\6.4群内报工\\55.jpg"
+  },
+  {
+    "day": "6.4群内报工",
+    "sequence": 53,
+    "number": 56,
+    "fileName": "56.jpg",
+    "extension": ".jpg",
+    "mediaType": "image",
+    "sizeBytes": 304179,
+    "path": "C:\\Users\\Steve\\my-prototype-logistics\\六扇门工厂数据、\\6.1-6.3\\群内图片\\6.4群内报工\\56.jpg"
+  },
+  {
+    "day": "6.4群内报工",
+    "sequence": 54,
+    "number": 57,
+    "fileName": "57.jpg",
+    "extension": ".jpg",
+    "mediaType": "image",
+    "sizeBytes": 1030760,
+    "path": "C:\\Users\\Steve\\my-prototype-logistics\\六扇门工厂数据、\\6.1-6.3\\群内图片\\6.4群内报工\\57.jpg"
+  },
+  {
+    "day": "6.4群内报工",
+    "sequence": 55,
+    "number": 58,
+    "fileName": "58.jpg",
+    "extension": ".jpg",
+    "mediaType": "image",
+    "sizeBytes": 977063,
+    "path": "C:\\Users\\Steve\\my-prototype-logistics\\六扇门工厂数据、\\6.1-6.3\\群内图片\\6.4群内报工\\58.jpg"
+  },
+  {
+    "day": "6.4群内报工",
+    "sequence": 56,
+    "number": 59,
+    "fileName": "59.jpg",
+    "extension": ".jpg",
+    "mediaType": "image",
+    "sizeBytes": 302000,
+    "path": "C:\\Users\\Steve\\my-prototype-logistics\\六扇门工厂数据、\\6.1-6.3\\群内图片\\6.4群内报工\\59.jpg"
+  },
+  {
+    "day": "6.4群内报工",
+    "sequence": 57,
+    "number": 60,
+    "fileName": "60.jpg",
+    "extension": ".jpg",
+    "mediaType": "image",
+    "sizeBytes": 189923,
+    "path": "C:\\Users\\Steve\\my-prototype-logistics\\六扇门工厂数据、\\6.1-6.3\\群内图片\\6.4群内报工\\60.jpg"
+  },
+  {
+    "day": "6.4群内报工",
+    "sequence": 58,
+    "number": 63,
+    "fileName": "63.jpg",
+    "extension": ".jpg",
+    "mediaType": "image",
+    "sizeBytes": 863068,
+    "path": "C:\\Users\\Steve\\my-prototype-logistics\\六扇门工厂数据、\\6.1-6.3\\群内图片\\6.4群内报工\\63.jpg"
+  },
+  {
+    "day": "6.4群内报工",
+    "sequence": 59,
+    "number": 64,
+    "fileName": "64.jpg",
+    "extension": ".jpg",
+    "mediaType": "image",
+    "sizeBytes": 332378,
+    "path": "C:\\Users\\Steve\\my-prototype-logistics\\六扇门工厂数据、\\6.1-6.3\\群内图片\\6.4群内报工\\64.jpg"
+  },
+  {
+    "day": "6.4群内报工",
+    "sequence": 60,
+    "number": 66,
+    "fileName": "66.jpg",
+    "extension": ".jpg",
+    "mediaType": "image",
+    "sizeBytes": 925698,
+    "path": "C:\\Users\\Steve\\my-prototype-logistics\\六扇门工厂数据、\\6.1-6.3\\群内图片\\6.4群内报工\\66.jpg"
+  },
+  {
+    "day": "6.4群内报工",
+    "sequence": 61,
+    "number": 67,
+    "fileName": "67.mp4",
+    "extension": ".mp4",
+    "mediaType": "video",
+    "sizeBytes": 1650281,
+    "path": "C:\\Users\\Steve\\my-prototype-logistics\\六扇门工厂数据、\\6.1-6.3\\群内图片\\6.4群内报工\\67.mp4"
+  },
+  {
+    "day": "6.4群内报工",
+    "sequence": 62,
+    "number": 68,
+    "fileName": "68.jpg",
+    "extension": ".jpg",
+    "mediaType": "image",
+    "sizeBytes": 1180214,
+    "path": "C:\\Users\\Steve\\my-prototype-logistics\\六扇门工厂数据、\\6.1-6.3\\群内图片\\6.4群内报工\\68.jpg"
+  },
+  {
+    "day": "6.4群内报工",
+    "sequence": 63,
+    "number": 73,
+    "fileName": "73.jpg",
+    "extension": ".jpg",
+    "mediaType": "image",
+    "sizeBytes": 934961,
+    "path": "C:\\Users\\Steve\\my-prototype-logistics\\六扇门工厂数据、\\6.1-6.3\\群内图片\\6.4群内报工\\73.jpg"
+  },
+  {
+    "day": "6.4群内报工",
+    "sequence": 64,
+    "number": 75,
+    "fileName": "75.jpg",
+    "extension": ".jpg",
+    "mediaType": "image",
+    "sizeBytes": 1075522,
+    "path": "C:\\Users\\Steve\\my-prototype-logistics\\六扇门工厂数据、\\6.1-6.3\\群内图片\\6.4群内报工\\75.jpg"
+  },
+  {
+    "day": "6.4群内报工",
+    "sequence": 65,
+    "number": 76,
+    "fileName": "76.jpg",
+    "extension": ".jpg",
+    "mediaType": "image",
+    "sizeBytes": 1063253,
+    "path": "C:\\Users\\Steve\\my-prototype-logistics\\六扇门工厂数据、\\6.1-6.3\\群内图片\\6.4群内报工\\76.jpg"
+  },
+  {
+    "day": "6.4群内报工",
+    "sequence": 66,
+    "number": 78,
+    "fileName": "78.jpg",
+    "extension": ".jpg",
+    "mediaType": "image",
+    "sizeBytes": 1055784,
+    "path": "C:\\Users\\Steve\\my-prototype-logistics\\六扇门工厂数据、\\6.1-6.3\\群内图片\\6.4群内报工\\78.jpg"
+  },
+  {
+    "day": "6.4群内报工",
+    "sequence": 67,
+    "number": 79,
+    "fileName": "79.jpg",
+    "extension": ".jpg",
+    "mediaType": "image",
+    "sizeBytes": 286604,
+    "path": "C:\\Users\\Steve\\my-prototype-logistics\\六扇门工厂数据、\\6.1-6.3\\群内图片\\6.4群内报工\\79.jpg"
+  },
+  {
+    "day": "6.4群内报工",
+    "sequence": 68,
+    "number": 80,
+    "fileName": "80.jpg",
+    "extension": ".jpg",
+    "mediaType": "image",
+    "sizeBytes": 184083,
+    "path": "C:\\Users\\Steve\\my-prototype-logistics\\六扇门工厂数据、\\6.1-6.3\\群内图片\\6.4群内报工\\80.jpg"
+  },
+  {
+    "day": "6.4群内报工",
+    "sequence": 69,
+    "number": 82,
+    "fileName": "82.jpg",
+    "extension": ".jpg",
+    "mediaType": "image",
+    "sizeBytes": 916128,
+    "path": "C:\\Users\\Steve\\my-prototype-logistics\\六扇门工厂数据、\\6.1-6.3\\群内图片\\6.4群内报工\\82.jpg"
+  },
+  {
+    "day": "6.4群内报工",
+    "sequence": 70,
+    "number": 83,
+    "fileName": "83.jpg",
+    "extension": ".jpg",
+    "mediaType": "image",
+    "sizeBytes": 1117615,
+    "path": "C:\\Users\\Steve\\my-prototype-logistics\\六扇门工厂数据、\\6.1-6.3\\群内图片\\6.4群内报工\\83.jpg"
+  },
+  {
+    "day": "6.4群内报工",
+    "sequence": 71,
+    "number": 85,
+    "fileName": "85.jpg",
+    "extension": ".jpg",
+    "mediaType": "image",
+    "sizeBytes": 947240,
+    "path": "C:\\Users\\Steve\\my-prototype-logistics\\六扇门工厂数据、\\6.1-6.3\\群内图片\\6.4群内报工\\85.jpg"
+  },
+  {
+    "day": "6.4群内报工",
+    "sequence": 72,
+    "number": 87,
+    "fileName": "87.jpg",
+    "extension": ".jpg",
+    "mediaType": "image",
+    "sizeBytes": 677934,
+    "path": "C:\\Users\\Steve\\my-prototype-logistics\\六扇门工厂数据、\\6.1-6.3\\群内图片\\6.4群内报工\\87.jpg"
+  },
+  {
+    "day": "6.4群内报工",
+    "sequence": 73,
+    "number": 88,
+    "fileName": "88.jpg",
+    "extension": ".jpg",
+    "mediaType": "image",
+    "sizeBytes": 1235714,
+    "path": "C:\\Users\\Steve\\my-prototype-logistics\\六扇门工厂数据、\\6.1-6.3\\群内图片\\6.4群内报工\\88.jpg"
+  },
+  {
+    "day": "6.4群内报工",
+    "sequence": 74,
+    "number": 89,
+    "fileName": "89.jpg",
+    "extension": ".jpg",
+    "mediaType": "image",
+    "sizeBytes": 941713,
+    "path": "C:\\Users\\Steve\\my-prototype-logistics\\六扇门工厂数据、\\6.1-6.3\\群内图片\\6.4群内报工\\89.jpg"
+  },
+  {
+    "day": "6.4群内报工",
+    "sequence": 75,
+    "number": 90,
+    "fileName": "90.jpg",
+    "extension": ".jpg",
+    "mediaType": "image",
+    "sizeBytes": 861991,
+    "path": "C:\\Users\\Steve\\my-prototype-logistics\\六扇门工厂数据、\\6.1-6.3\\群内图片\\6.4群内报工\\90.jpg"
+  },
+  {
+    "day": "6.4群内报工",
+    "sequence": 76,
+    "number": 91,
+    "fileName": "91.jpg",
+    "extension": ".jpg",
+    "mediaType": "image",
+    "sizeBytes": 865399,
+    "path": "C:\\Users\\Steve\\my-prototype-logistics\\六扇门工厂数据、\\6.1-6.3\\群内图片\\6.4群内报工\\91.jpg"
+  },
+  {
+    "day": "6.4群内报工",
+    "sequence": 77,
+    "number": 92,
+    "fileName": "92.jpg",
+    "extension": ".jpg",
+    "mediaType": "image",
+    "sizeBytes": 934481,
+    "path": "C:\\Users\\Steve\\my-prototype-logistics\\六扇门工厂数据、\\6.1-6.3\\群内图片\\6.4群内报工\\92.jpg"
+  },
+  {
+    "day": "6.4群内报工",
+    "sequence": 78,
+    "number": 93,
+    "fileName": "93.jpg",
+    "extension": ".jpg",
+    "mediaType": "image",
+    "sizeBytes": 980990,
+    "path": "C:\\Users\\Steve\\my-prototype-logistics\\六扇门工厂数据、\\6.1-6.3\\群内图片\\6.4群内报工\\93.jpg"
+  },
+  {
+    "day": "6.4群内报工",
+    "sequence": 79,
+    "number": 94,
+    "fileName": "94.jpg",
+    "extension": ".jpg",
+    "mediaType": "image",
+    "sizeBytes": 959207,
+    "path": "C:\\Users\\Steve\\my-prototype-logistics\\六扇门工厂数据、\\6.1-6.3\\群内图片\\6.4群内报工\\94.jpg"
+  },
+  {
+    "day": "6.4群内报工",
+    "sequence": 80,
+    "number": 507,
+    "fileName": "507ee16e33d1945e4e58c35f60dea66f.png",
+    "extension": ".png",
+    "mediaType": "image",
+    "sizeBytes": 230078,
+    "path": "C:\\Users\\Steve\\my-prototype-logistics\\六扇门工厂数据、\\6.1-6.3\\群内图片\\6.4群内报工\\507ee16e33d1945e4e58c35f60dea66f.png"
+  },
+  {
+    "day": "6.4群内报工",
+    "sequence": 81,
+    "number": 5238,
+    "fileName": "5238d8886a4fb02332d313a8f17f5ebd.png",
+    "extension": ".png",
+    "mediaType": "image",
+    "sizeBytes": 253180,
+    "path": "C:\\Users\\Steve\\my-prototype-logistics\\六扇门工厂数据、\\6.1-6.3\\群内图片\\6.4群内报工\\5238d8886a4fb02332d313a8f17f5ebd.png"
+  },
+  {
+    "day": "6.4群内报工",
+    "sequence": 82,
+    "number": 7087,
+    "fileName": "7087dc4b5526af47e20370abf8531c59.png",
+    "extension": ".png",
+    "mediaType": "image",
+    "sizeBytes": 257841,
+    "path": "C:\\Users\\Steve\\my-prototype-logistics\\六扇门工厂数据、\\6.1-6.3\\群内图片\\6.4群内报工\\7087dc4b5526af47e20370abf8531c59.png"
+  },
+  {
+    "day": "6.4群内报工",
+    "sequence": 83,
+    "number": 58718,
+    "fileName": "58718f23825e4346220dbc5371ea516a.png",
+    "extension": ".png",
+    "mediaType": "image",
+    "sizeBytes": 253150,
+    "path": "C:\\Users\\Steve\\my-prototype-logistics\\六扇门工厂数据、\\6.1-6.3\\群内图片\\6.4群内报工\\58718f23825e4346220dbc5371ea516a.png"
+  },
+  {
+    "day": "6.4群内报工",
+    "sequence": 84,
+    "number": 828964,
+    "fileName": "828964ffd572414f4a8ddd9ab3cd218b.png",
+    "extension": ".png",
+    "mediaType": "image",
+    "sizeBytes": 40346,
+    "path": "C:\\Users\\Steve\\my-prototype-logistics\\六扇门工厂数据、\\6.1-6.3\\群内图片\\6.4群内报工\\828964ffd572414f4a8ddd9ab3cd218b.png"
+  },
+  {
+    "day": "6.4群内报工",
+    "sequence": 85,
+    "number": null,
+    "fileName": "b179d05679684e5203119ec1e90e94a0.png",
+    "extension": ".png",
+    "mediaType": "image",
+    "sizeBytes": 242267,
+    "path": "C:\\Users\\Steve\\my-prototype-logistics\\六扇门工厂数据、\\6.1-6.3\\群内图片\\6.4群内报工\\b179d05679684e5203119ec1e90e94a0.png"
+  },
+  {
+    "day": "6.4群内报工",
+    "sequence": 86,
+    "number": null,
+    "fileName": "b32c5dd11d25e28946944aeff201cd8f.png",
+    "extension": ".png",
+    "mediaType": "image",
+    "sizeBytes": 270555,
+    "path": "C:\\Users\\Steve\\my-prototype-logistics\\六扇门工厂数据、\\6.1-6.3\\群内图片\\6.4群内报工\\b32c5dd11d25e28946944aeff201cd8f.png"
+  },
+  {
+    "day": "6.4群内报工",
+    "sequence": 87,
+    "number": null,
+    "fileName": "ba2cb2c9e8d58a6fc77e7f0e461de766.png",
+    "extension": ".png",
+    "mediaType": "image",
+    "sizeBytes": 278690,
+    "path": "C:\\Users\\Steve\\my-prototype-logistics\\六扇门工厂数据、\\6.1-6.3\\群内图片\\6.4群内报工\\ba2cb2c9e8d58a6fc77e7f0e461de766.png"
+  },
+  {
+    "day": "6.4群内报工",
+    "sequence": 88,
+    "number": null,
+    "fileName": "d0e2970eefdcde4a0092c9384e6199da.png",
+    "extension": ".png",
+    "mediaType": "image",
+    "sizeBytes": 154542,
+    "path": "C:\\Users\\Steve\\my-prototype-logistics\\六扇门工厂数据、\\6.1-6.3\\群内图片\\6.4群内报工\\d0e2970eefdcde4a0092c9384e6199da.png"
+  },
+  {
+    "day": "6.4群内报工",
+    "sequence": 89,
+    "number": null,
+    "fileName": "e926b757abc3e54ea388781254921316.png",
+    "extension": ".png",
+    "mediaType": "image",
+    "sizeBytes": 260663,
+    "path": "C:\\Users\\Steve\\my-prototype-logistics\\六扇门工厂数据、\\6.1-6.3\\群内图片\\6.4群内报工\\e926b757abc3e54ea388781254921316.png"
+  },
+  {
+    "day": "6.4群内报工",
+    "sequence": 90,
+    "number": null,
+    "fileName": "f7c5b968e41480eaf614393c5457f83b.png",
+    "extension": ".png",
+    "mediaType": "image",
+    "sizeBytes": 255777,
+    "path": "C:\\Users\\Steve\\my-prototype-logistics\\六扇门工厂数据、\\6.1-6.3\\群内图片\\6.4群内报工\\f7c5b968e41480eaf614393c5457f83b.png"
+  }
+]

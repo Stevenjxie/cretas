@@ -16,7 +16,7 @@ import java.util.List;
 public class BatchYieldDTO {
     private Long batchId;
     private String batchNumber;
-    private BigDecimal firstStepInput;       // 首道总投入 (998)
+    private BigDecimal firstStepInput;       // 首道实际投料汇总, 不是领料出库量
     private BigDecimal lastStepOutput;       // 末道总产出 (382.08 或 3184 盒)
     private String firstStepInputUnit;
     private String lastStepOutputUnit;

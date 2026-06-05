@@ -14,6 +14,12 @@ public class YieldReportRequest {
     private String inputUnit;
     private BigDecimal outputQuantity;    // 本道产出
     private String outputUnit;
+    /** 领料出库量, 例如仓库出库 998kg; 只做对账, 不能单独作为出成率分母。 */
+    private BigDecimal warehouseOutQuantity;
+    /** 实际投料量, 例如实际只投 935.5kg; 出成率分母优先使用该字段。 */
+    private BigDecimal feedInQuantity;
+    /** 本批剩余/结转量; 可由 领料出库 - 实际投料 自动推导。 */
+    private BigDecimal carryoverQuantity;
     private Integer workMinutes;          // 本道工时(分钟), 选填
     private Integer workerCount;          // 本道人数, 选填 (张权 G4: "用了多少人")
     private Boolean forceSubmit;          // A4 超收软告警后强制提交

@@ -122,15 +122,17 @@ async function handleDelete(att: Attachment): Promise<void> {
 function categoryIcon(c: AttachmentFileCategory): string {
   switch (c) {
     case 'VIDEO':
- return '';
+      return 'VIDEO';
     case 'DOCUMENT':
- return '';
+      return 'DOC';
     case 'VOUCHER':
- return '';
+      return 'VOUCHER';
     case 'SIGNATURE':
- return '️';
+      return 'SIGN';
+    case 'CONTRACT':
+      return 'CONTRACT';
     default:
- return '';
+      return 'FILE';
   }
 }
 
@@ -187,7 +189,11 @@ defineExpose({ reload: load });
   border-radius: 6px;
 }
 .thumb-icon {
-  font-size: 26px;
+  font-size: 11px;
+  font-weight: 700;
+  color: #606266;
+  text-align: center;
+  padding: 0 4px;
 }
 .att-meta {
   flex: 1;

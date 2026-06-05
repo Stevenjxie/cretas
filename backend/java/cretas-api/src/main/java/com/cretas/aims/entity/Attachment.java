@@ -139,6 +139,7 @@ public class Attachment extends BaseEntity {
         ECN,
         /** Sprint 6 W2-C-2 — 通话记录录音附件 (CallRecord audio 文件挂载到附件中心). */
         CALL_RECORD,
+        PRODUCTION_REPORT,
         GENERIC
     }
 

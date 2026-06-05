@@ -33,9 +33,14 @@ public class FileUploadController {
     private final OssService ossService;
 
     private static final long MAX_SIGNATURE_PHOTO_SIZE = 5L * 1024 * 1024; // 5MB
+    private static final long MAX_YIELD_EVIDENCE_SIZE = 50L * 1024 * 1024; // 50MB
     private static final long MAX_CONTRACT_SIZE = 20L * 1024 * 1024; // 20MB
     private static final long MAX_RECEIPT_SIZE = 10L * 1024 * 1024; // 10MB
     private static final Set<String> ALLOWED_PHOTO_TYPES = Set.of("image/jpeg", "image/jpg", "image/png");
+    private static final Set<String> ALLOWED_YIELD_EVIDENCE_TYPES = Set.of(
+            "image/jpeg", "image/jpg", "image/png",
+            "video/mp4", "video/quicktime", "video/webm"
+    );
     private static final Set<String> ALLOWED_RECEIPT_TYPES = Set.of(
             "application/pdf", "image/jpeg", "image/jpg", "image/png"
     );
@@ -91,18 +96,18 @@ public class FileUploadController {
     }
 
     /**
-     * 逐道报工图片证据上传 (产品+电子秤+盒数照片) — 后端中转到 OSS, 返回 URL 供 submitReport 的 evidenceImages 引用
+     * 逐道报工证据上传 (照片/视频) — 后端中转到 OSS, 返回 URL 供 submitReport 的 evidenceImages 引用
      *
-     * <p>文件限制: ≤5MB,仅支持 image/jpeg, image/png。
+     * <p>文件限制: ≤50MB,支持 image/jpeg, image/png, video/mp4, video/quicktime, video/webm。
      * 上传成功后返回公网 URL,前端拿到 URL 后写入逐道报工的 evidenceImages 字段。
      */
     @RequirePermission({"production:read_write"})
     @PostMapping(value = "/yield-evidence", consumes = "multipart/form-data")
-    @Operation(summary = "上传逐道报工图片证据", description = "产品+电子秤+盒数照片;≤5MB,仅 JPEG/PNG")
+    @Operation(summary = "上传逐道报工照片/视频证据", description = "产品+电子秤+盒数照片/现场视频; ≤50MB")
     public ApiResponse<Map<String, String>> uploadYieldEvidence(
             @Parameter(description = "工厂ID", example = "F001", required = true)
             @PathVariable @NotBlank String factoryId,
-            @Parameter(description = "报工证据照片(JPEG/PNG,≤5MB)", required = true)
+            @Parameter(description = "报工证据照片/视频(JPEG/PNG/MP4/MOV/WebM,≤50MB)", required = true)
             @RequestParam("file") MultipartFile file) {
 
         log.info("上传逐道报工图片证据: factoryId={}, filename={}, size={}, contentType={}",
@@ -111,17 +116,20 @@ public class FileUploadController {
         if (file.isEmpty()) {
             throw new BusinessException(400, "文件不能为空");
         }
-        if (file.getSize() > MAX_SIGNATURE_PHOTO_SIZE) {
-            throw new BusinessException(400, "报工证据照片不能超过 5MB");
+        if (file.getSize() > MAX_YIELD_EVIDENCE_SIZE) {
+            throw new BusinessException(400, "报工证据不能超过 50MB");
         }
         String contentType = file.getContentType();
-        if (contentType == null || !ALLOWED_PHOTO_TYPES.contains(contentType.toLowerCase())) {
-            throw new BusinessException(400, "仅支持 JPEG/PNG 格式,当前: " + contentType).withHint("请上传支持的文件格式");
+        String lowerContentType = contentType == null ? "" : contentType.toLowerCase();
+        if (!ALLOWED_YIELD_EVIDENCE_TYPES.contains(lowerContentType)) {
+            throw new BusinessException(400, "仅支持 JPEG/PNG/MP4/MOV/WebM 格式,当前: " + contentType)
+                    .withHint("请上传生产现场照片或视频");
         }
 
         try {
-            // category = "yield-evidence" → OSS 路径: {factoryId}/images/yield-evidence/yyyy/MM/dd/{uuid}_{filename}
-            String url = ossService.uploadImage(file, "yield-evidence", factoryId);
+            String url = lowerContentType.startsWith("video/")
+                    ? ossService.uploadVideo(file, factoryId)
+                    : ossService.uploadImage(file, "yield-evidence", factoryId);
             log.info("逐道报工图片证据上传成功: factoryId={}, url={}", factoryId, url);
             return ApiResponse.success("上传成功", Map.of("url", url));
         } catch (IllegalArgumentException e) {

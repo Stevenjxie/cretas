@@ -9,6 +9,7 @@ interface ScreenWrapperProps {
   withScrollView?: boolean; // We might want this later, for now just a placeholder
   edges?: ('top' | 'right' | 'bottom' | 'left')[];
   backgroundColor?: string;
+  testID?: string;
 }
 
 export const ScreenWrapper: React.FC<ScreenWrapperProps> = ({
@@ -16,6 +17,7 @@ export const ScreenWrapper: React.FC<ScreenWrapperProps> = ({
   style,
   edges = ['top', 'left', 'right', 'bottom'],
   backgroundColor = theme.colors.background,
+  testID,
 }) => {
   return (
     <SafeAreaView 
@@ -25,6 +27,7 @@ export const ScreenWrapper: React.FC<ScreenWrapperProps> = ({
         style
       ]} 
       edges={edges}
+      testID={testID}
     >
       <StatusBar
         barStyle="dark-content"
@@ -49,4 +52,3 @@ const styles = StyleSheet.create({
     alignSelf: 'center',
   },
 });
-

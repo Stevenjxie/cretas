@@ -39,6 +39,9 @@ type StepPhase = 'AWAITING_INPUT' | 'IN_PRODUCTION' | 'COMPLETED';
 interface EvidencePhoto {
   uri: string;
   uploading: boolean;
+  mediaType: 'image' | 'video';
+  mimeType: string;
+  fileName: string;
   serverUrl?: string;
 }
 // 单元4 STEP 5: 副产物本地态 (名称 + 数量 + 单位)
@@ -51,6 +54,9 @@ interface ByproductInput {
 // A.6 逐道成本格式化: null (未配工价 / 无原料单价) → "—" (非 ¥0).
 const fmtMoney = (v: number | null | undefined): string =>
   v == null || Number.isNaN(Number(v)) ? '—' : `¥${Number(v).toFixed(2)}`;
+
+const isVideoEvidenceUrl = (url: string): boolean =>
+  /\.(mp4|mov|webm)(\?|#|$)/i.test(url) || url.includes('/videos/');
 
 const YieldStepReportScreen: React.FC = () => {
   const navigation = useNavigation<NavT>();
@@ -77,6 +83,9 @@ const YieldStepReportScreen: React.FC = () => {
 
   // 投入阶段输入
   const [inputQty, setInputQty] = useState('');
+  const [warehouseOutQty, setWarehouseOutQty] = useState('');
+  const [feedInQty, setFeedInQty] = useState('');
+  const [carryoverQty, setCarryoverQty] = useState('');
   // A4: 投入超收预检
   const [yieldLimits, setYieldLimits] = useState<YieldLimitsDTO | null>(null);
   const limitsDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -185,6 +194,9 @@ const YieldStepReportScreen: React.FC = () => {
   // 切道时重置所有阶段输入态 (每道独立). 投入预填上道产出.
   const resetStepInputs = useCallback(() => {
     setInputQty(prevOutput != null ? String(prevOutput) : '');
+    setWarehouseOutQty('');
+    setFeedInQty('');
+    setCarryoverQty('');
     setOutputQty('');
     setLastAlert(null);
     setYieldLimits(null);
@@ -294,24 +306,34 @@ const YieldStepReportScreen: React.FC = () => {
   // 上传中 (任一图片) → 阻塞提交, 避免 evidenceImages 丢 URL
   const evidenceUploading = evidencePhotos.some((p) => p.uploading);
 
-  // ── 图片证据拍照/相册 → 压缩 → 上传 OSS → 收集 URL (三阶段共用) ──
-  const uploadEvidence = useCallback(async (uri: string) => {
-    const manipulated = await ImageManipulator.manipulateAsync(
-      uri,
-      [{ resize: { width: 1024 } }],
-      { compress: 0.7, format: ImageManipulator.SaveFormat.JPEG },
-    );
-    const localUri = manipulated.uri;
-    setEvidencePhotos((prev) => [...prev, { uri: localUri, uploading: true }]);
+  // ── 图片/视频证据 → 上传 OSS → 收集 URL (三阶段共用) ──
+  const uploadEvidence = useCallback(async (asset: ImagePicker.ImagePickerAsset) => {
+    const isVideo = asset.type === 'video' || asset.mimeType?.startsWith('video/') === true;
+    const localUri = isVideo
+      ? asset.uri
+      : (await ImageManipulator.manipulateAsync(
+          asset.uri,
+          [{ resize: { width: 1024 } }],
+          { compress: 0.7, format: ImageManipulator.SaveFormat.JPEG },
+        )).uri;
+    const mimeType = isVideo ? (asset.mimeType ?? 'video/mp4') : 'image/jpeg';
+    const fileName = asset.fileName ?? `yield_evidence_${Date.now()}${isVideo ? '.mp4' : '.jpg'}`;
+    setEvidencePhotos((prev) => [...prev, {
+      uri: localUri,
+      uploading: true,
+      mediaType: isVideo ? 'video' : 'image',
+      mimeType,
+      fileName,
+    }]);
     try {
-      const url = await yieldReportApi.uploadYieldEvidence(localUri);
+      const url = await yieldReportApi.uploadYieldEvidence(localUri, { fileName, mimeType });
       setEvidencePhotos((prev) =>
         prev.map((p) => (p.uri === localUri ? { ...p, uploading: false, serverUrl: url } : p)),
       );
     } catch (err) {
       setEvidencePhotos((prev) => prev.filter((p) => p.uri !== localUri));
       const e = err as { response?: { data?: { message?: string } } };
-      appAlert('图片上传失败', e.response?.data?.message ?? '请重试 (网络/格式)');
+      appAlert('证据上传失败', e.response?.data?.message ?? '请重试 (网络/格式)');
     }
   }, []);
 
@@ -327,7 +349,7 @@ const YieldStepReportScreen: React.FC = () => {
       allowsEditing: false,
     });
     if (!result.canceled && result.assets?.[0]) {
-      await uploadEvidence(result.assets[0].uri);
+      await uploadEvidence(result.assets[0]);
     }
   }, [uploadEvidence]);
 
@@ -338,12 +360,12 @@ const YieldStepReportScreen: React.FC = () => {
       return;
     }
     const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images'],
+      mediaTypes: ImagePicker.MediaTypeOptions.All,
       quality: 0.8,
       allowsEditing: false,
     });
     if (!result.canceled && result.assets?.[0]) {
-      await uploadEvidence(result.assets[0].uri);
+      await uploadEvidence(result.assets[0]);
     }
   }, [uploadEvidence]);
 
@@ -385,12 +407,44 @@ const YieldStepReportScreen: React.FC = () => {
       return;
     }
     if (evidenceUploading) {
-      appAlert('图片上传中', '请等照片上传完成再提交');
+      appAlert('证据上传中', '请等照片/视频上传完成再提交');
       return;
     }
-    const input = parseFloat(inputQty);
+    const parseOptionalQty = (raw: string): number | undefined => {
+      const value = raw.trim();
+      if (!value) return undefined;
+      const parsed = Number(value);
+      return Number.isFinite(parsed) && parsed >= 0 ? parsed : Number.NaN;
+    };
+    const warehouseOut = isFirstStep ? parseOptionalQty(warehouseOutQty) : undefined;
+    const feedIn = isFirstStep ? parseOptionalQty(feedInQty) : undefined;
+    const requestedCarryover = isFirstStep ? parseOptionalQty(carryoverQty) : undefined;
+    if ([warehouseOut, feedIn, requestedCarryover].some((v) => Number.isNaN(v))) {
+      appAlert('请检查数量', '领料出库、实际投料、结转都必须是大于等于 0 的数字');
+      return;
+    }
+    const inferredFirstInput =
+      feedIn ?? (
+        warehouseOut != null && requestedCarryover != null
+          ? Math.max(warehouseOut - requestedCarryover, 0)
+          : undefined
+      );
+    const input = isFirstStep ? (inferredFirstInput ?? Number.NaN) : parseFloat(inputQty);
     if (Number.isNaN(input) || input <= 0) {
-      appAlert('请填写本道投入量', '投入量必须大于 0');
+      appAlert(
+        isFirstStep ? '请填写实际投料量' : '请填写本道投入量',
+        isFirstStep
+          ? '出成率按实际投料计算。如果只知道领料出库, 还要填写本批剩余/结转。'
+          : '投入量必须大于 0',
+      );
+      return;
+    }
+    const effectiveCarryover = isFirstStep
+      ? (requestedCarryover ?? (warehouseOut != null ? Math.max(warehouseOut - input, 0) : undefined))
+      : undefined;
+    if (isFirstStep && warehouseOut != null && feedIn != null && effectiveCarryover != null
+        && feedIn + effectiveCarryover > warehouseOut + 0.01) {
+      appAlert('请检查数量', '实际投料 + 本批剩余/结转 不能大于领料出库量');
       return;
     }
     const req: YieldReportRequest = {
@@ -399,6 +453,9 @@ const YieldStepReportScreen: React.FC = () => {
       inputQuantity: input,
       inputUnit: unit,
       outputQuantity: 0,  // 后端按 reportKind=INPUT 强制忽略 output
+      ...(isFirstStep && warehouseOut != null ? { warehouseOutQuantity: warehouseOut } : {}),
+      ...(isFirstStep ? { feedInQuantity: input } : {}),
+      ...(isFirstStep && effectiveCarryover != null ? { carryoverQuantity: effectiveCarryover } : {}),
       ...(isFirstStep && materialBatchRefs.length > 0
         ? {
             materialBatchRefs: materialBatchRefs.map((r: MaterialBatchRef) => ({
@@ -434,7 +491,7 @@ const YieldStepReportScreen: React.FC = () => {
     } finally {
       setSubmitting(false);
     }
-  }, [currentTask, submitBlockedNoWip, evidenceUploading, inputQty, unit, isFirstStep,
+  }, [currentTask, submitBlockedNoWip, evidenceUploading, inputQty, warehouseOutQty, feedInQty, carryoverQty, unit, isFirstStep,
       materialBatchRefs, effectiveSourceWipNo, uploadedEvidenceUrls, batchId, refetchYield]);
 
   // ========================= 阶段 2a: 提交本段工时 (reportKind=SEGMENT) =========================
@@ -840,7 +897,13 @@ const YieldStepReportScreen: React.FC = () => {
         <View style={styles.thumbRow}>
           {evidencePhotos.map((p) => (
             <View style={styles.thumbItem} key={p.uri}>
-              <Image source={{ uri: p.uri }} style={styles.thumb} />
+              {p.mediaType === 'video' ? (
+                <View style={[styles.thumb, styles.videoThumb]}>
+                  <Text style={styles.videoThumbText}>VIDEO</Text>
+                </View>
+              ) : (
+                <Image source={{ uri: p.uri }} style={styles.thumb} />
+              )}
               {p.uploading ? (
                 <View style={styles.thumbOverlay}><ActivityIndicator color="#fff" /></View>
               ) : (
@@ -848,7 +911,7 @@ const YieldStepReportScreen: React.FC = () => {
                   style={styles.thumbRemove}
                   onPress={() => removeEvidencePhoto(p.uri)}
                   disabled={submitting}
-                  accessibilityLabel="删除照片"
+                  accessibilityLabel="删除证据"
                 >
                   <Text style={styles.thumbRemoveText}>✕</Text>
                 </TouchableOpacity>
@@ -862,7 +925,7 @@ const YieldStepReportScreen: React.FC = () => {
           <Text style={styles.photoBtnText}>拍照留证 (产品+秤)</Text>
         </TouchableOpacity>
         <TouchableOpacity style={styles.photoBtnOutline} onPress={pickEvidencePhoto} disabled={submitting} testID={pickTestID}>
-          <Text style={styles.photoBtnOutlineText}>从相册选</Text>
+          <Text style={styles.photoBtnOutlineText}>从相册选照片/视频</Text>
         </TouchableOpacity>
       </View>
     </View>
@@ -878,7 +941,13 @@ const YieldStepReportScreen: React.FC = () => {
       {Array.isArray(inputPhotosShown) && inputPhotosShown.length > 0 ? (
         <View style={styles.thumbRow}>
           {inputPhotosShown.map((url: string, i: number) => (
-            <Image key={`in-${i}`} source={{ uri: url }} style={styles.thumbReadonly} />
+            isVideoEvidenceUrl(url) ? (
+              <View key={`in-${i}`} style={[styles.thumbReadonly, styles.videoThumb]}>
+                <Text style={styles.videoThumbText}>VIDEO</Text>
+              </View>
+            ) : (
+              <Image key={`in-${i}`} source={{ uri: url }} style={styles.thumbReadonly} />
+            )
           ))}
         </View>
       ) : null}
@@ -927,18 +996,57 @@ const YieldStepReportScreen: React.FC = () => {
                 </View>
               ) : null}
 
-              <YieldQuantityInput
-                label="投入量"
-                value={inputQty}
-                onChangeText={setInputQty}
-                unit={unit}
-                max={inputMax}
-                maxHint={inputMaxHint}
-                prefillNote={prefillNote}
-                disabled={submitting}
-                calculatorMode
-                testID="yield-input-qty"
-              />
+              {isFirstStep ? (
+                <>
+                  <YieldQuantityInput
+                    label="领料出库"
+                    value={warehouseOutQty}
+                    onChangeText={setWarehouseOutQty}
+                    unit={unit}
+                    disabled={submitting}
+                    calculatorMode
+                    testID="yield-warehouse-out-qty"
+                  />
+                  <YieldQuantityInput
+                    label="实际投料"
+                    value={feedInQty}
+                    onChangeText={(v) => {
+                      setFeedInQty(v);
+                      setInputQty(v);
+                    }}
+                    unit={unit}
+                    max={inputMax}
+                    maxHint={inputMaxHint}
+                    prefillNote="出成率按这个数字计算"
+                    disabled={submitting}
+                    calculatorMode
+                    testID="yield-feed-in-qty"
+                  />
+                  <YieldQuantityInput
+                    label="本批剩余/结转"
+                    value={carryoverQty}
+                    onChangeText={setCarryoverQty}
+                    unit={unit}
+                    prefillNote="不填时按领料出库 - 实际投料自动算"
+                    disabled={submitting}
+                    calculatorMode
+                    testID="yield-carryover-qty"
+                  />
+                </>
+              ) : (
+                <YieldQuantityInput
+                  label="领用上道半成品"
+                  value={inputQty}
+                  onChangeText={setInputQty}
+                  unit={unit}
+                  max={inputMax}
+                  maxHint={inputMaxHint}
+                  prefillNote={prefillNote}
+                  disabled={submitting}
+                  calculatorMode
+                  testID="yield-input-qty"
+                />
+              )}
 
               {/* A4 + P0-3: 投入超收预检提示 */}
               {yieldLimits != null ? (
@@ -958,7 +1066,7 @@ const YieldStepReportScreen: React.FC = () => {
               ) : null}
 
               <View style={styles.divider} />
-              {renderEvidenceBlock('投入照片 (产品+秤)', 'evidence-take-photo', 'evidence-pick-photo')}
+              {renderEvidenceBlock('投入证据 (照片/视频)', 'evidence-take-photo', 'evidence-pick-photo')}
             </NeoCard>
 
             <NeoButton
@@ -1198,6 +1306,24 @@ const YieldStepReportScreen: React.FC = () => {
                   {currentStepYield?.totalInput != null ? `${currentStepYield.totalInput} ${currentStepYield.inputUnit ?? unit}` : '—'}
                 </Text>
               </View>
+              {currentStepYield?.warehouseOutQuantity != null ? (
+                <View style={styles.summaryRow}>
+                  <Text style={styles.summaryKey}>领料出库</Text>
+                  <Text style={styles.summaryVal}>{currentStepYield.warehouseOutQuantity} {unit}</Text>
+                </View>
+              ) : null}
+              {currentStepYield?.feedInQuantity != null ? (
+                <View style={styles.summaryRow}>
+                  <Text style={styles.summaryKey}>实际投料</Text>
+                  <Text style={styles.summaryVal}>{currentStepYield.feedInQuantity} {unit}</Text>
+                </View>
+              ) : null}
+              {currentStepYield?.carryoverQuantity != null ? (
+                <View style={styles.summaryRow}>
+                  <Text style={styles.summaryKey}>本批剩余/结转</Text>
+                  <Text style={styles.summaryVal}>{currentStepYield.carryoverQuantity} {unit}</Text>
+                </View>
+              ) : null}
               <View style={styles.summaryRow}>
                 <Text style={styles.summaryKey}>产出</Text>
                 <Text style={styles.summaryVal}>
@@ -1240,10 +1366,16 @@ const YieldStepReportScreen: React.FC = () => {
               {/* 投入照片 */}
               {Array.isArray(currentStepYield?.inputPhotos) && (currentStepYield?.inputPhotos?.length ?? 0) > 0 ? (
                 <View style={styles.photoGroup}>
-                  <Text style={styles.photoGroupTitle}>投入照片</Text>
+                  <Text style={styles.photoGroupTitle}>投入证据</Text>
                   <View style={styles.thumbRow}>
                     {currentStepYield!.inputPhotos!.map((url: string, i: number) => (
-                      <Image key={`cin-${i}`} source={{ uri: url }} style={styles.thumbReadonly} />
+                      isVideoEvidenceUrl(url) ? (
+                        <View key={`cin-${i}`} style={[styles.thumbReadonly, styles.videoThumb]}>
+                          <Text style={styles.videoThumbText}>VIDEO</Text>
+                        </View>
+                      ) : (
+                        <Image key={`cin-${i}`} source={{ uri: url }} style={styles.thumbReadonly} />
+                      )
                     ))}
                   </View>
                 </View>
@@ -1252,10 +1384,16 @@ const YieldStepReportScreen: React.FC = () => {
               {/* 产出照片 */}
               {Array.isArray(currentStepYield?.outputPhotos) && (currentStepYield?.outputPhotos?.length ?? 0) > 0 ? (
                 <View style={styles.photoGroup}>
-                  <Text style={styles.photoGroupTitle}>产出照片</Text>
+                  <Text style={styles.photoGroupTitle}>产出证据</Text>
                   <View style={styles.thumbRow}>
                     {currentStepYield!.outputPhotos!.map((url: string, i: number) => (
-                      <Image key={`cout-${i}`} source={{ uri: url }} style={styles.thumbReadonly} />
+                      isVideoEvidenceUrl(url) ? (
+                        <View key={`cout-${i}`} style={[styles.thumbReadonly, styles.videoThumb]}>
+                          <Text style={styles.videoThumbText}>VIDEO</Text>
+                        </View>
+                      ) : (
+                        <Image key={`cout-${i}`} source={{ uri: url }} style={styles.thumbReadonly} />
+                      )
                     ))}
                   </View>
                 </View>
@@ -1396,6 +1534,8 @@ const styles = StyleSheet.create({
   thumbRow: { flexDirection: 'row', flexWrap: 'wrap', marginBottom: 10 },
   thumbItem: { width: 80, height: 80, borderRadius: 8, overflow: 'hidden', marginRight: 8, marginBottom: 8 },
   thumb: { width: 80, height: 80 },
+  videoThumb: { backgroundColor: '#303133', alignItems: 'center', justifyContent: 'center' },
+  videoThumbText: { color: '#FFFFFF', fontSize: 12, fontWeight: '800' },
   thumbReadonly: { width: 80, height: 80, borderRadius: 8, marginRight: 8, marginBottom: 8 },
   thumbOverlay: {
     ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.4)',

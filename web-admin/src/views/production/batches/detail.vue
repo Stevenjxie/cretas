@@ -310,6 +310,16 @@ function stepOutputPhotos(row: Record<string, unknown>): string[] {
   const p = row?.outputPhotos;
   return Array.isArray(p) ? (p as string[]).filter((u) => !!u) : [];
 }
+function isVideoEvidence(url: string): boolean {
+  return /\.(mp4|mov|webm)(\?|#|$)/i.test(url) || url.includes('/videos/');
+}
+function evidenceImages(urls: string[]): string[] {
+  return urls.filter((url) => !isVideoEvidence(url));
+}
+function imagePreviewIndex(urls: string[], url: string): number {
+  const idx = evidenceImages(urls).indexOf(url);
+  return idx < 0 ? 0 : idx;
+}
 // legacy 回退: 旧数据无 input/output 分组 (两组都空), 仍用合并 photos 兜底展示, 不丢历史证据.
 function hasSplitPhotos(row: Record<string, unknown>): boolean {
   return stepInputPhotos(row).length > 0 || stepOutputPhotos(row).length > 0;
@@ -609,50 +619,71 @@ function getTimelineIcon(type: string) {
                     <!-- 单元3 (F006 三阶段): 证据照片拆分 投入照片 / 产出照片, 各自独立 lightbox 画廊.
                          空组 → "—". legacy 行 (两组都空) 回退到合并 photos, 旧数据仍可见. -->
                     <div class="trad-item">
-                      <span class="trad-label">投入照片</span>
+                      <span class="trad-label">投入证据</span>
                       <template v-if="stepInputPhotos(row).length > 0">
-                        <el-image
-                          v-for="(url, i) in stepInputPhotos(row)"
-                          :key="'in-' + i"
-                          :src="url"
-                          fit="cover"
-                          :preview-src-list="stepInputPhotos(row)"
-                          :initial-index="i"
-                          class="trad-thumb"
-                          preview-teleported
-                        />
+                        <template v-for="(url, i) in stepInputPhotos(row)" :key="'in-' + i">
+                          <video
+                            v-if="isVideoEvidence(url)"
+                            :src="url"
+                            class="trad-thumb trad-video"
+                            controls
+                          />
+                          <el-image
+                            v-else
+                            :src="url"
+                            fit="cover"
+                            :preview-src-list="evidenceImages(stepInputPhotos(row))"
+                            :initial-index="imagePreviewIndex(stepInputPhotos(row), url)"
+                            class="trad-thumb"
+                            preview-teleported
+                          />
+                        </template>
                       </template>
                       <span v-else class="trad-empty">—</span>
                     </div>
                     <div class="trad-item">
-                      <span class="trad-label">产出照片</span>
+                      <span class="trad-label">产出证据</span>
                       <template v-if="stepOutputPhotos(row).length > 0">
-                        <el-image
-                          v-for="(url, i) in stepOutputPhotos(row)"
-                          :key="'out-' + i"
-                          :src="url"
-                          fit="cover"
-                          :preview-src-list="stepOutputPhotos(row)"
-                          :initial-index="i"
-                          class="trad-thumb"
-                          preview-teleported
-                        />
+                        <template v-for="(url, i) in stepOutputPhotos(row)" :key="'out-' + i">
+                          <video
+                            v-if="isVideoEvidence(url)"
+                            :src="url"
+                            class="trad-thumb trad-video"
+                            controls
+                          />
+                          <el-image
+                            v-else
+                            :src="url"
+                            fit="cover"
+                            :preview-src-list="evidenceImages(stepOutputPhotos(row))"
+                            :initial-index="imagePreviewIndex(stepOutputPhotos(row), url)"
+                            class="trad-thumb"
+                            preview-teleported
+                          />
+                        </template>
                       </template>
                       <span v-else class="trad-empty">—</span>
                     </div>
                     <!-- legacy 回退: 旧数据无 input/output 分组时, 用合并 photos 兜底 (新数据此组不显示) -->
                     <div v-if="stepLegacyFallbackPhotos(row).length > 0" class="trad-item">
-                      <span class="trad-label">证据照片</span>
-                      <el-image
-                        v-for="(url, i) in stepLegacyFallbackPhotos(row)"
-                        :key="'legacy-' + i"
-                        :src="url"
-                        fit="cover"
-                        :preview-src-list="stepLegacyFallbackPhotos(row)"
-                        :initial-index="i"
-                        class="trad-thumb"
-                        preview-teleported
-                      />
+                      <span class="trad-label">证据</span>
+                      <template v-for="(url, i) in stepLegacyFallbackPhotos(row)" :key="'legacy-' + i">
+                        <video
+                          v-if="isVideoEvidence(url)"
+                          :src="url"
+                          class="trad-thumb trad-video"
+                          controls
+                        />
+                        <el-image
+                          v-else
+                          :src="url"
+                          fit="cover"
+                          :preview-src-list="evidenceImages(stepLegacyFallbackPhotos(row))"
+                          :initial-index="imagePreviewIndex(stepLegacyFallbackPhotos(row), url)"
+                          class="trad-thumb"
+                          preview-teleported
+                        />
+                      </template>
                     </div>
                     <!-- 工时段: 每段 起-止 N人 备注 -->
                     <div class="trad-item">
@@ -709,6 +740,16 @@ function getTimelineIcon(type: string) {
             <el-table-column label="投入" width="130" align="right">
               <template #default="{ row }">{{ formatNum(row.totalInput) }} {{ row.inputUnit || '' }}</template>
             </el-table-column>
+            <el-table-column label="用料" width="150">
+              <template #default="{ row }">
+                <div v-if="row.warehouseOutQuantity != null || row.feedInQuantity != null || row.carryoverQuantity != null" class="material-stack">
+                  <span v-if="row.warehouseOutQuantity != null">领 {{ formatNum(row.warehouseOutQuantity) }}</span>
+                  <span v-if="row.feedInQuantity != null">实 {{ formatNum(row.feedInQuantity) }}</span>
+                  <span v-if="row.carryoverQuantity != null">余 {{ formatNum(row.carryoverQuantity) }}</span>
+                </div>
+                <span v-else>—</span>
+              </template>
+            </el-table-column>
             <el-table-column label="产出" width="130" align="right">
               <template #default="{ row }">{{ formatNum(row.totalOutput) }} {{ row.outputUnit || '' }}</template>
             </el-table-column>
@@ -720,7 +761,7 @@ function getTimelineIcon(type: string) {
                 </span>
               </template>
             </el-table-column>
-            <el-table-column label="结转" width="110" align="right">
+            <el-table-column label="道间结转" width="110" align="right">
               <template #default="{ row }">
                 <span v-if="row.carryover == null">—</span>
                 <span v-else :class="{ 'text-warning': Number(row.carryover) > 0 }">{{ formatNum(row.carryover) }}</span>
@@ -744,15 +785,22 @@ function getTimelineIcon(type: string) {
             <el-table-column label="证据" width="92" align="center">
               <template #default="{ row }">
                 <div v-if="stepPhotos(row).length > 0" class="evidence-cell">
+                  <video
+                    v-if="isVideoEvidence(stepPhotos(row)[0])"
+                    :src="stepPhotos(row)[0]"
+                    class="evidence-thumb"
+                    controls
+                  />
                   <el-image
+                    v-else
                     :src="stepPhotos(row)[0]"
                     fit="cover"
-                    :preview-src-list="stepPhotos(row)"
-                    :initial-index="0"
+                    :preview-src-list="evidenceImages(stepPhotos(row))"
+                    :initial-index="imagePreviewIndex(stepPhotos(row), stepPhotos(row)[0])"
                     class="evidence-thumb"
                     preview-teleported
                   />
-                  <span v-if="stepPhotos(row).length > 1" class="evidence-badge">📷{{ stepPhotos(row).length }}</span>
+                  <span v-if="stepPhotos(row).length > 1" class="evidence-badge">证{{ stepPhotos(row).length }}</span>
                 </div>
                 <span v-else>—</span>
               </template>
@@ -1174,6 +1222,19 @@ function getTimelineIcon(type: string) {
   height: 56px;
   border-radius: 6px;
   cursor: pointer;
+}
+
+.trad-video {
+  object-fit: cover;
+  background: #111827;
+}
+
+.material-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  line-height: 1.25;
+  color: var(--text-color-secondary, #606266);
 }
 
 .trad-chip {

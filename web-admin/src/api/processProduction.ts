@@ -249,10 +249,24 @@ export interface ApprovalItem {
   workerId: number;
   reporterName: string;
   reportDate: string;
+  inputQuantity?: number | null;
+  warehouseOutQuantity?: number | null;
+  feedInQuantity?: number | null;
+  carryoverQuantity?: number | null;
+  sourceWipNo?: string | null;
   outputQuantity: number;
+  totalWorkers?: number | null;
+  totalWorkMinutes?: number | null;
+  productionStartTime?: string | null;
+  productionEndTime?: string | null;
+  reportMode?: 'MODE_1' | 'MODE_2' | 'MODE_3' | string | null;
   processCategory: string;
+  productName?: string | null;
   approvalStatus: string;
   isSupplemental: boolean;
+  notes?: string | null;
+  photos?: string[] | null;
+  customFields?: Record<string, unknown> | null;
   createdAt: string;
 }
 
