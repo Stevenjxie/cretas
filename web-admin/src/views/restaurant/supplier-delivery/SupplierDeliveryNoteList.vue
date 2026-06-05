@@ -9,6 +9,9 @@
             <span class="data-count">共 {{ pagination.total }} 条</span>
           </div>
           <div class="header-right">
+            <el-button v-if="canWrite" :icon="Document" @click="openImport">
+              导入草稿
+            </el-button>
             <el-button v-if="canWrite" type="primary" :icon="Camera" @click="openUpload">
               上传送货单
             </el-button>
@@ -81,6 +84,12 @@
       :factory-id="factoryId"
       @parsed="onParsed"
     />
+
+    <SupplierDeliveryNoteImportDialog
+      v-model="importVisible"
+      :factory-id="factoryId"
+      @created="onParsed"
+    />
   </div>
   </CanvasAwareWrapper>
 </template>
@@ -88,13 +97,14 @@
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted } from 'vue';
 import { useRouter } from 'vue-router';
-import { Camera, Search, Refresh } from '@element-plus/icons-vue';
+import { Camera, Search, Refresh, Document } from '@element-plus/icons-vue';
 import { useFactoryId } from '@/composables/useFactoryId';
 import { usePermissionStore } from '@/store/modules/permission';
 import { getNoteList, type SupplierDeliveryNoteDto } from '@/api/restaurant/supplierDeliveryNote';
 import { handleCatchError } from '@/utils/errorToast';
 import CanvasAwareWrapper from '@/components/canvas/CanvasAwareWrapper.vue';
 import SupplierDeliveryNoteUploadDialog from './SupplierDeliveryNoteUploadDialog.vue';
+import SupplierDeliveryNoteImportDialog from './SupplierDeliveryNoteImportDialog.vue';
 
 const router = useRouter();
 const factoryId = useFactoryId();
@@ -105,6 +115,7 @@ const loading = ref(false);
 const tableData = ref<SupplierDeliveryNoteDto[]>([]);
 const filterStatus = ref<string>('');
 const uploadVisible = ref(false);
+const importVisible = ref(false);
 const pagination = reactive({ page: 1, size: 20, total: 0 });
 
 function statusText(s: string): string {
@@ -143,8 +154,13 @@ function openUpload() {
   uploadVisible.value = true;
 }
 
+function openImport() {
+  importVisible.value = true;
+}
+
 function onParsed(note: SupplierDeliveryNoteDto) {
   uploadVisible.value = false;
+  importVisible.value = false;
   // 解析完成 → 直接进详情页校对行项
   router.push({ name: 'SupplierDeliveryNoteDetail', params: { id: note.id } });
 }
