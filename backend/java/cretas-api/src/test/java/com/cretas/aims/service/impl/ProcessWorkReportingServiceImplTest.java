@@ -1,11 +1,18 @@
 package com.cretas.aims.service.impl;
 
+import com.cretas.aims.dto.ProcessWorkReportSubmitRequest;
 import com.cretas.aims.entity.ProcessTask;
 import com.cretas.aims.entity.ProductionReport;
 import com.cretas.aims.entity.enums.ProcessTaskStatus;
+import com.cretas.aims.entity.workprocess.WorkProcessTask;
 import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.repository.AttachmentRepository;
 import com.cretas.aims.repository.ProcessTaskRepository;
+import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.ProductionReportRepository;
+import com.cretas.aims.repository.WorkProcessRepository;
+import com.cretas.aims.repository.workprocess.WorkProcessTaskRepository;
+import com.cretas.aims.service.wip.WipInventoryService;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -55,6 +62,21 @@ class ProcessWorkReportingServiceImplTest {
     @Mock
     private ProcessTaskRepository taskRepository;
 
+    @Mock
+    private WorkProcessRepository workProcessRepository;
+
+    @Mock
+    private ProductTypeRepository productTypeRepository;
+
+    @Mock
+    private AttachmentRepository attachmentRepository;
+
+    @Mock
+    private WorkProcessTaskRepository workProcessTaskRepository;
+
+    @Mock
+    private WipInventoryService wipInventoryService;
+
     @InjectMocks
     private ProcessWorkReportingServiceImpl service;
 
@@ -96,6 +118,20 @@ class ProcessWorkReportingServiceImplTest {
                 .status(status);
     }
 
+    private WorkProcessTask.WorkProcessTaskBuilder wipTask() {
+        return WorkProcessTask.builder()
+                .id(7001L)
+                .factoryId(FACTORY_ID)
+                .productionBatchId(9001L)
+                .productWorkProcessId(8001L)
+                .workProcessId("WP-001")
+                .productTypeId("PROD-001")
+                .processOrder(2)
+                .status(WorkProcessTask.Status.IN_PROGRESS)
+                .plannedQuantity(new BigDecimal("1000"))
+                .plannedUnit("kg");
+    }
+
     // ==================== 审批流程 ====================
 
     @Nested
@@ -131,6 +167,32 @@ class ProcessWorkReportingServiceImplTest {
             ProcessTask savedTask = taskCaptor.getValue();
             assertEquals(new BigDecimal("250"), savedTask.getCompletedQuantity());
             assertEquals(new BigDecimal("50"), savedTask.getPendingQuantity());
+        }
+
+        @Test
+        @DisplayName("UT-PWR-01B: 审批通过且绑定WorkProcessTask时才写入WIP权威账")
+        void approveReport_withWipBridge_postsWipAfterApproval() {
+            ProductionReport report = pendingReport()
+                    .workProcessTaskId(7001L)
+                    .batchId(9001L)
+                    .inputQuantity(new BigDecimal("35"))
+                    .inputUnit("kg")
+                    .sourceWipNo("WIP-S1")
+                    .outputUnit("kg")
+                    .build();
+            ProcessTask task = activeTask(ProcessTaskStatus.IN_PROGRESS).build();
+            WorkProcessTask workProcessTask = wipTask().build();
+
+            when(reportRepository.findById(REPORT_ID)).thenReturn(Optional.of(report));
+            when(taskRepository.findById(TASK_ID)).thenReturn(Optional.of(task));
+            when(reportRepository.save(any(ProductionReport.class))).thenReturn(report);
+            when(taskRepository.save(any(ProcessTask.class))).thenReturn(task);
+            when(workProcessTaskRepository.findByFactoryIdAndId(FACTORY_ID, 7001L))
+                    .thenReturn(Optional.of(workProcessTask));
+
+            service.approveReport(FACTORY_ID, REPORT_ID, APPROVER_ID);
+
+            verify(wipInventoryService).postApprovedOutput(FACTORY_ID, report, workProcessTask, APPROVER_ID);
         }
 
         @Test
@@ -685,6 +747,52 @@ class ProcessWorkReportingServiceImplTest {
             // 关键: in-memory 全表方法不再被调用
             verify(reportRepository, never())
                     .findByProcessTaskIdAndDeletedAtIsNull(anyString());
+        }
+
+        @Test
+        @DisplayName("UT-PWR-23B: 正常报工绑定WorkProcessTask时保存桥接字段并只做WIP来源校验")
+        void submitNormalReport_withWipBridge_persistsBridgeAndValidatesSourceWip() {
+            BigDecimal qty = new BigDecimal("75");
+            ProcessTask task = activeTask(ProcessTaskStatus.IN_PROGRESS)
+                    .pendingQuantity(new BigDecimal("100"))
+                    .build();
+            WorkProcessTask workProcessTask = wipTask().build();
+            ProductionReport saved = pendingReport().id(502L).outputQuantity(qty).build();
+            ProcessWorkReportSubmitRequest request = ProcessWorkReportSubmitRequest.builder()
+                    .processTaskId(TASK_ID)
+                    .reporterName("张三")
+                    .outputQuantity(qty)
+                    .inputQuantity(new BigDecimal("35"))
+                    .inputUnit("kg")
+                    .outputUnit("kg")
+                    .sourceWipNo("WIP-S1")
+                    .workProcessTaskId(7001L)
+                    .batchId(9001L)
+                    .build();
+
+            when(reportRepository.findRecentDuplicate(eq(TASK_ID), eq(WORKER_ID), eq(qty), any()))
+                    .thenReturn(Optional.empty());
+            when(taskRepository.findByFactoryIdAndId(FACTORY_ID, TASK_ID))
+                    .thenReturn(Optional.of(task));
+            when(workProcessTaskRepository.findByFactoryIdAndId(FACTORY_ID, 7001L))
+                    .thenReturn(Optional.of(workProcessTask));
+            when(reportRepository.save(any(ProductionReport.class))).thenReturn(saved);
+            when(taskRepository.save(any(ProcessTask.class))).thenReturn(task);
+
+            service.submitNormalReport(FACTORY_ID, WORKER_ID, request);
+
+            verify(wipInventoryService).validateSourceWip("WIP-S1", new BigDecimal("35"), "kg");
+            verify(wipInventoryService, never()).postApprovedOutput(anyString(), any(), any(), any());
+            verify(reportRepository).save(reportCaptor.capture());
+            ProductionReport createdReport = reportCaptor.getValue();
+            assertEquals(9001L, createdReport.getBatchId());
+            assertEquals(7001L, createdReport.getWorkProcessTaskId());
+            assertEquals(2, createdReport.getProcessOrder());
+            assertEquals("PROD-001", createdReport.getProductTypeId());
+            assertEquals(new BigDecimal("35"), createdReport.getInputQuantity());
+            assertEquals("kg", createdReport.getInputUnit());
+            assertEquals("kg", createdReport.getOutputUnit());
+            assertEquals("WIP-S1", createdReport.getSourceWipNo());
         }
 
         @Test

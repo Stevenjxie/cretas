@@ -34,7 +34,15 @@ public class ProcessWorkReportSubmitRequest {
     private String reportMode;
     private String batchNumber;
 
+    /**
+     * Optional bridge to the newer WorkProcessTask/YIELD stack.
+     * When present, approved ProcessWork reports can write authoritative WIP inventory.
+     */
+    private Long workProcessTaskId;
+    private Long batchId;
     private BigDecimal inputQuantity;
+    private String inputUnit;
+    private String outputUnit;
     private String sourceWipNo;
     private Integer totalWorkers;
     private Integer totalWorkMinutes;

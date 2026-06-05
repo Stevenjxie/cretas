@@ -3,6 +3,7 @@ package com.cretas.aims.service.impl;
 import com.cretas.aims.dto.common.ImportResult;
 import com.cretas.aims.dto.common.PageRequest;
 import com.cretas.aims.dto.common.PageResponse;
+import com.cretas.aims.dto.WorkProcessTaskDTO;
 import com.cretas.aims.dto.production.CreateProductionPlanRequest;
 import com.cretas.aims.dto.production.DeliveryWarnDTO;
 import com.cretas.aims.dto.production.ProductionPlanDTO;
@@ -12,6 +13,7 @@ import com.cretas.aims.entity.enums.MaterialBatchStatus;
 import com.cretas.aims.entity.enums.PlanSourceType;
 import com.cretas.aims.entity.enums.ProductionBatchStatus;
 import com.cretas.aims.entity.enums.ProductionPlanStatus;
+import com.cretas.aims.entity.enums.ProcessTaskStatus;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.exception.ResourceNotFoundException;
 import com.cretas.aims.mapper.ProductionPlanMapper;
@@ -1414,7 +1416,9 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         // fail-soft: 产品未配 product_work_processes 时 spawnTasks 抛异常, 不阻塞批次创建.
         if (workProcessTaskService != null) {
             try {
-                workProcessTaskService.spawnTasks(factoryId, saved.getId(), saved.getProductTypeId());
+                List<WorkProcessTaskDTO> spawnedTasks =
+                        workProcessTaskService.spawnTasks(factoryId, saved.getId(), saved.getProductTypeId());
+                mirrorWorkProcessTasksForRn(factoryId, saved, plan, spawnedTasks);
                 log.info("转批次已 spawn 工序任务: batchId={}, productTypeId={}", saved.getId(), saved.getProductTypeId());
             } catch (Exception e) {
                 log.warn("转批次 spawn 工序任务失败 (fail-soft, 不阻塞批次创建): batchId={}, err={}", saved.getId(), e.getMessage());
@@ -1428,6 +1432,60 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
 
         log.info("从计划创建批次: planId={}, batchId={}, batchNumber={}", planId, saved.getId(), saved.getBatchNumber());
         return saved;
+    }
+
+    private void mirrorWorkProcessTasksForRn(String factoryId, ProductionBatch batch, ProductionPlan plan,
+                                             List<WorkProcessTaskDTO> workTasks) {
+        if (workTasks == null || workTasks.isEmpty()) {
+            return;
+        }
+        for (WorkProcessTaskDTO workTask : workTasks) {
+            if (workTask.getId() == null || workTask.getWorkProcessId() == null) {
+                continue;
+            }
+            String legacyId = "WPT-" + workTask.getId();
+            if (processTaskRepository.existsById(legacyId)) {
+                continue;
+            }
+            ProcessTask mirror = ProcessTask.builder()
+                    .id(legacyId)
+                    .factoryId(factoryId)
+                    .productionRunId("BATCH-" + batch.getId())
+                    .productTypeId(firstNonBlank(workTask.getProductTypeId(), batch.getProductTypeId()))
+                    .workProcessId(workTask.getWorkProcessId())
+                    .sourceCustomerName(plan.getCustomerOrderNumber())
+                    .sourceDocType("BATCH")
+                    .sourceDocId(String.valueOf(batch.getId()))
+                    .plannedQuantity(firstPositive(workTask.getPlannedQuantity(), batch.getPlannedQuantity(), batch.getQuantity()))
+                    .completedQuantity(BigDecimal.ZERO)
+                    .pendingQuantity(BigDecimal.ZERO)
+                    .unit(firstNonBlank(workTask.getOutputUnit(), workTask.getPlannedUnit(), batch.getUnit(), "kg"))
+                    .startDate(LocalDate.now())
+                    .expectedEndDate(plan.getExpectedCompletionDate())
+                    .status(ProcessTaskStatus.PENDING)
+                    .createdBy(plan.getCreatedBy() == null ? 0L : plan.getCreatedBy())
+                    .notes("mirrorWorkProcessTaskId=" + workTask.getId())
+                    .build();
+            processTaskRepository.save(mirror);
+        }
+    }
+
+    private static BigDecimal firstPositive(BigDecimal... values) {
+        for (BigDecimal value : values) {
+            if (value != null && value.compareTo(BigDecimal.ZERO) > 0) {
+                return value;
+            }
+        }
+        return BigDecimal.ONE;
+    }
+
+    private static String firstNonBlank(String... values) {
+        for (String value : values) {
+            if (value != null && !value.isBlank()) {
+                return value;
+            }
+        }
+        return null;
     }
 
     private ProductionPlanImportDTO toImportDTO(ProductionPlan plan) {

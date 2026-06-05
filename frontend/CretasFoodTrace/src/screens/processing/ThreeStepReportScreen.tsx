@@ -383,8 +383,12 @@ export default function ThreeStepReportScreen() {
       const parsedWorkers = parseOptionalInteger(workersCount, '人数') ?? (worker ? 1 : undefined);
       const reportData: SubmitProcessReportPayload = {
         processTaskId: selectedTask.id,
+        batchId: selectedTask.batchId ?? selectedTask.productionBatchId,
+        workProcessTaskId: selectedTask.workProcessTaskId,
         outputQuantity: qty,
         inputQuantity: parseOptionalNumber(inputQty, '投入数量'),
+        inputUnit: selectedTask.inputUnit ?? selectedTask.unit,
+        outputUnit: selectedTask.outputUnit ?? selectedTask.plannedUnit ?? selectedTask.unit,
         totalWorkers: parsedWorkers,
         totalWorkMinutes: parseOptionalInteger(workMinutes, '工时分钟'),
         reportDate: normalizeOptionalDate(reportDate),

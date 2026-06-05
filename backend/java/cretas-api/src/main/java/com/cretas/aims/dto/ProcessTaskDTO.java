@@ -34,6 +34,8 @@ public class ProcessTaskDTO {
     private String sourceDocType;
     private String sourceDocId;
     private Integer workflowVersionId;
+    private Long batchId;
+    private Long workProcessTaskId;
 
     @NotNull(message = "计划量不能为空")
     @DecimalMin(value = "0.01", message = "计划量必须大于0")
@@ -44,6 +46,8 @@ public class ProcessTaskDTO {
     private BigDecimal inputQuantity;
 
     private String unit;
+    private String inputUnit;
+    private String outputUnit;
     private LocalDate startDate;
     private LocalDate expectedEndDate;
     private String status;

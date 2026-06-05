@@ -5,7 +5,7 @@ import { useNavigation, useRoute, useFocusEffect } from '@react-navigation/nativ
 import * as ImagePicker from 'expo-image-picker';
 import * as FileSystem from 'expo-file-system';
 import { ProcessingScreenProps } from '../../types/navigation';
-import { processTaskApiClient, ProcessTaskItem } from '../../services/api/processTaskApiClient';
+import { processTaskApiClient, ProcessTaskItem, SubmitProcessReportPayload } from '../../services/api/processTaskApiClient';
 import { attachmentApi, AttachmentFileCategory } from '../../services/api/attachmentApi';
 import { NeoButton, ScreenWrapper } from '../../components/ui';
 import { theme } from '../../theme';
@@ -343,10 +343,14 @@ export default function ProcessTaskReportScreen() {
     }
     setSubmitting(true);
     try {
-      const commonPayload = {
+      const commonPayload: SubmitProcessReportPayload = {
         processTaskId: taskId,
+        batchId: task?.batchId ?? task?.productionBatchId,
+        workProcessTaskId: task?.workProcessTaskId,
         outputQuantity: qty,
         inputQuantity: parsed.inputQuantity,
+        inputUnit: task?.inputUnit ?? task?.unit,
+        outputUnit: task?.outputUnit ?? task?.plannedUnit ?? task?.unit,
         totalWorkers: parsed.totalWorkers,
         totalWorkMinutes: parsed.totalWorkMinutes,
         reportDate: parsed.reportDate,

@@ -416,11 +416,15 @@ public class ProcessTaskServiceImpl implements ProcessTaskService {
                 .sourceDocType(entity.getSourceDocType())
                 .sourceDocId(entity.getSourceDocId())
                 .workflowVersionId(entity.getWorkflowVersionId())
+                .batchId(resolveBatchId(entity))
+                .workProcessTaskId(resolveWorkProcessTaskId(entity))
                 .plannedQuantity(entity.getPlannedQuantity())
                 .completedQuantity(entity.getCompletedQuantity())
                 .pendingQuantity(entity.getPendingQuantity())
                 .inputQuantity(entity.getInputQuantity())
                 .unit(entity.getUnit())
+                .inputUnit(entity.getUnit())
+                .outputUnit(entity.getUnit())
                 .startDate(entity.getStartDate())
                 .expectedEndDate(entity.getExpectedEndDate())
                 .status(entity.getStatus().name())
@@ -437,5 +441,28 @@ public class ProcessTaskServiceImpl implements ProcessTaskService {
                 .createdAt(entity.getCreatedAt())
                 .updatedAt(entity.getUpdatedAt())
                 .build();
+    }
+
+    private Long resolveBatchId(ProcessTask entity) {
+        if (!"BATCH".equals(entity.getSourceDocType()) || entity.getSourceDocId() == null) {
+            return null;
+        }
+        try {
+            return Long.valueOf(entity.getSourceDocId());
+        } catch (NumberFormatException ignored) {
+            return null;
+        }
+    }
+
+    private Long resolveWorkProcessTaskId(ProcessTask entity) {
+        String id = entity.getId();
+        if (id == null || !id.startsWith("WPT-")) {
+            return null;
+        }
+        try {
+            return Long.valueOf(id.substring(4));
+        } catch (NumberFormatException ignored) {
+            return null;
+        }
     }
 }

@@ -12,6 +12,7 @@ import com.cretas.aims.entity.Attachment.EntityType;
 import com.cretas.aims.entity.Attachment.FileCategory;
 import com.cretas.aims.entity.enums.ProcessTaskStatus;
 import com.cretas.aims.entity.enums.ReportMode;
+import com.cretas.aims.entity.workprocess.WorkProcessTask;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.exception.ResourceNotFoundException;
 import com.cretas.aims.repository.ProcessTaskRepository;
@@ -19,9 +20,11 @@ import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.ProductionReportRepository;
 import com.cretas.aims.repository.WorkProcessRepository;
 import com.cretas.aims.repository.AttachmentRepository;
+import com.cretas.aims.repository.workprocess.WorkProcessTaskRepository;
 import com.cretas.aims.service.ProcessWorkReportingService;
 import com.cretas.aims.service.canvas.ThresholdKeys;
 import com.cretas.aims.service.canvas.ThresholdResolverService;
+import com.cretas.aims.service.wip.WipInventoryService;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -46,6 +49,8 @@ public class ProcessWorkReportingServiceImpl implements ProcessWorkReportingServ
     private final WorkProcessRepository workProcessRepository;
     private final ProductTypeRepository productTypeRepository;
     private final AttachmentRepository attachmentRepository;
+    private final WorkProcessTaskRepository workProcessTaskRepository;
+    private final WipInventoryService wipInventoryService;
 
     /** Canvas V2: DB-driven validation rules */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
@@ -101,6 +106,7 @@ public class ProcessWorkReportingServiceImpl implements ProcessWorkReportingServ
         // Sync quantities to ProcessTask
         if (report.getProcessTaskId() != null) {
             syncQuantitiesToTask(report.getProcessTaskId(), report.getOutputQuantity(), true);
+            postWipForApprovedReport(factoryId, report, approvedBy);
             checkAndRestoreFromSupplementing(report.getProcessTaskId());
         }
 
@@ -185,6 +191,7 @@ public class ProcessWorkReportingServiceImpl implements ProcessWorkReportingServ
 
             if (report.getProcessTaskId() != null) {
                 syncQuantitiesToTask(report.getProcessTaskId(), report.getOutputQuantity(), true);
+                postWipForApprovedReport(factoryId, report, approvedBy);
                 affectedTaskIds.add(report.getProcessTaskId());
             }
 
@@ -243,6 +250,8 @@ public class ProcessWorkReportingServiceImpl implements ProcessWorkReportingServ
 
         ProcessTask task = taskRepository.findByFactoryIdAndId(factoryId, processTaskId)
                 .orElseThrow(() -> new ResourceNotFoundException("ProcessTask", "id", processTaskId));
+        WorkProcessTask wipTask = resolveWipTask(factoryId, request);
+        validateSourceWipIfPresent(request);
 
         // Normal report only for IN_PROGRESS or PENDING tasks
         if (task.getStatus() != ProcessTaskStatus.IN_PROGRESS
@@ -264,9 +273,15 @@ public class ProcessWorkReportingServiceImpl implements ProcessWorkReportingServ
                 .reportType(ProductionReport.ReportType.PROGRESS)
                 .reportMode(parseReportMode(request.getReportMode()))
                 .reportDate(request.getReportDate() != null ? request.getReportDate() : LocalDate.now())
+                .batchId(resolveBatchId(request, wipTask))
+                .workProcessTaskId(wipTask != null ? wipTask.getId() : request.getWorkProcessTaskId())
+                .processOrder(wipTask != null ? wipTask.getProcessOrder() : null)
+                .productTypeId(wipTask != null ? wipTask.getProductTypeId() : task.getProductTypeId())
                 .processCategory(resolveProcessName(factoryId, task, request.getProcessCategory()))
                 .productName(resolveProductName(factoryId, task))
                 .inputQuantity(request.getInputQuantity())
+                .inputUnit(request.getInputUnit())
+                .outputUnit(resolveOutputUnit(request, wipTask, task))
                 .sourceWipNo(request.getSourceWipNo())
                 .outputQuantity(outputQuantity)
                 .totalWorkers(request.getTotalWorkers())
@@ -313,6 +328,8 @@ public class ProcessWorkReportingServiceImpl implements ProcessWorkReportingServ
 
         ProcessTask task = taskRepository.findByFactoryIdAndId(factoryId, processTaskId)
                 .orElseThrow(() -> new ResourceNotFoundException("ProcessTask", "id", processTaskId));
+        WorkProcessTask wipTask = resolveWipTask(factoryId, request);
+        validateSourceWipIfPresent(request);
 
         // Must be COMPLETED, CLOSED, or already SUPPLEMENTING
         if (task.getStatus() != ProcessTaskStatus.COMPLETED
@@ -337,10 +354,16 @@ public class ProcessWorkReportingServiceImpl implements ProcessWorkReportingServ
                 .reportType(ProductionReport.ReportType.PROGRESS)
                 .reportMode(parseReportMode(request.getReportMode()))
                 .reportDate(request.getReportDate() != null ? request.getReportDate() : LocalDate.now())
+                .batchId(resolveBatchId(request, wipTask))
+                .workProcessTaskId(wipTask != null ? wipTask.getId() : request.getWorkProcessTaskId())
+                .processOrder(wipTask != null ? wipTask.getProcessOrder() : null)
+                .productTypeId(wipTask != null ? wipTask.getProductTypeId() : task.getProductTypeId())
                 .outputQuantity(outputQuantity)
                 .processCategory(resolveProcessName(factoryId, task, processCategory))
                 .productName(resolveProductName(factoryId, task))
                 .inputQuantity(request.getInputQuantity())
+                .inputUnit(request.getInputUnit())
+                .outputUnit(resolveOutputUnit(request, wipTask, task))
                 .sourceWipNo(request.getSourceWipNo())
                 .totalWorkers(request.getTotalWorkers())
                 .totalWorkMinutes(request.getTotalWorkMinutes())
@@ -540,8 +563,65 @@ public class ProcessWorkReportingServiceImpl implements ProcessWorkReportingServ
         }
         putIfPresent(fields, "batchNumber", request.getBatchNumber());
         putIfPresent(fields, "reportMode", request.getReportMode());
+        putIfPresent(fields, "batchId", request.getBatchId());
+        putIfPresent(fields, "workProcessTaskId", request.getWorkProcessTaskId());
         putIfPresent(fields, "workerIds", request.getWorkerIds());
         return fields.isEmpty() ? null : fields;
+    }
+
+    private WorkProcessTask resolveWipTask(String factoryId, ProcessWorkReportSubmitRequest request) {
+        if (request.getWorkProcessTaskId() == null) {
+            return null;
+        }
+        WorkProcessTask task = workProcessTaskRepository.findByFactoryIdAndId(factoryId, request.getWorkProcessTaskId())
+                .orElseThrow(() -> new BusinessException(404, "工序任务不存在: " + request.getWorkProcessTaskId())
+                        .withHint("请刷新任务后重新报工")
+                        .withHintTarget("workProcessTaskId"));
+        if (request.getBatchId() != null && !request.getBatchId().equals(task.getProductionBatchId())) {
+            throw new BusinessException(409, "报工批次与工序任务批次不一致")
+                    .withHint("请刷新任务后重新选择工序")
+                    .withHintTarget("batchId");
+        }
+        return task;
+    }
+
+    private void validateSourceWipIfPresent(ProcessWorkReportSubmitRequest request) {
+        if (request.getSourceWipNo() == null || request.getSourceWipNo().isBlank()) {
+            return;
+        }
+        wipInventoryService.validateSourceWip(
+                request.getSourceWipNo(), request.getInputQuantity(), request.getInputUnit());
+    }
+
+    private void postWipForApprovedReport(String factoryId, ProductionReport report, Long operatorId) {
+        if (report.getWorkProcessTaskId() == null) {
+            return;
+        }
+        WorkProcessTask task = workProcessTaskRepository.findByFactoryIdAndId(factoryId, report.getWorkProcessTaskId())
+                .orElse(null);
+        if (task == null) {
+            log.warn("Skip WIP posting for report {}: workProcessTask {} not found",
+                    report.getId(), report.getWorkProcessTaskId());
+            return;
+        }
+        wipInventoryService.postApprovedOutput(factoryId, report, task, operatorId);
+    }
+
+    private Long resolveBatchId(ProcessWorkReportSubmitRequest request, WorkProcessTask wipTask) {
+        if (request.getBatchId() != null) {
+            return request.getBatchId();
+        }
+        return wipTask == null ? null : wipTask.getProductionBatchId();
+    }
+
+    private String resolveOutputUnit(ProcessWorkReportSubmitRequest request, WorkProcessTask wipTask, ProcessTask processTask) {
+        if (request.getOutputUnit() != null && !request.getOutputUnit().isBlank()) {
+            return request.getOutputUnit();
+        }
+        if (wipTask != null && wipTask.getPlannedUnit() != null && !wipTask.getPlannedUnit().isBlank()) {
+            return wipTask.getPlannedUnit();
+        }
+        return processTask == null ? null : processTask.getUnit();
     }
 
     private void putIfPresent(Map<String, Object> fields, String key, Object value) {
@@ -648,15 +728,21 @@ public class ProcessWorkReportingServiceImpl implements ProcessWorkReportingServ
         map.put("id", r.getId());
         map.put("factoryId", r.getFactoryId());
         map.put("processTaskId", r.getProcessTaskId());
+        map.put("batchId", r.getBatchId());
+        map.put("workProcessTaskId", r.getWorkProcessTaskId());
+        map.put("processOrder", r.getProcessOrder());
+        map.put("productTypeId", r.getProductTypeId());
         map.put("workerId", r.getWorkerId());
         map.put("reporterName", r.getReporterName());
         map.put("reportDate", r.getReportDate());
         map.put("inputQuantity", r.getInputQuantity());
+        map.put("inputUnit", r.getInputUnit());
         map.put("warehouseOutQuantity", r.getWarehouseOutQuantity());
         map.put("feedInQuantity", r.getFeedInQuantity());
         map.put("carryoverQuantity", r.getCarryoverQuantity());
         map.put("sourceWipNo", r.getSourceWipNo());
         map.put("outputQuantity", r.getOutputQuantity());
+        map.put("outputUnit", r.getOutputUnit());
         map.put("totalWorkers", r.getTotalWorkers());
         map.put("totalWorkMinutes", r.getTotalWorkMinutes());
         map.put("productionStartTime", r.getProductionStartTime());
