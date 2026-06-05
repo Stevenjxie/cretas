@@ -2,6 +2,7 @@ package com.cretas.aims.service.attachment.impl;
 
 import com.aliyun.oss.HttpMethod;
 import com.aliyun.oss.OSS;
+import com.aliyun.oss.model.GeneratePresignedUrlRequest;
 import com.aliyun.oss.model.ObjectMetadata;
 import com.cretas.aims.config.OssConfig;
 import com.cretas.aims.entity.Attachment;
@@ -246,8 +247,13 @@ public class AttachmentServiceImpl implements AttachmentService {
         }
         String objectKey = buildObjectKey(factoryId, fileName);
         Date expiration = new Date(System.currentTimeMillis() + UPLOAD_URL_TTL_SECONDS * 1000L);
-        String url = ossClient.generatePresignedUrl(
-                ossConfig.getMediaBucket(), objectKey, expiration, HttpMethod.PUT).toString();
+        GeneratePresignedUrlRequest request = new GeneratePresignedUrlRequest(
+                ossConfig.getMediaBucket(), objectKey, HttpMethod.PUT);
+        request.setExpiration(expiration);
+        if (fileType != null && !fileType.isBlank()) {
+            request.setContentType(fileType);
+        }
+        String url = ossClient.generatePresignedUrl(request).toString();
         log.debug("Generated upload URL: factory={} key={} ttl={}s", factoryId, objectKey, UPLOAD_URL_TTL_SECONDS);
         return url;
     }
