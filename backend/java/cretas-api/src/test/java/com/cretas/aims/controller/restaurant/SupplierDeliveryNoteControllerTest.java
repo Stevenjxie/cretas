@@ -23,11 +23,11 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class SupplierDeliveryNoteControllerTest {
 
     @Test
-    @DisplayName("read endpoints require restaurant module and warehouse read permission")
+    @DisplayName("read endpoints require restaurant module and role-appropriate read permission")
     void readEndpointsHaveExplicitRestaurantAndReadPermission() throws Exception {
-        assertReadContract(method("getLimits", String.class, String.class), "/limits");
-        assertReadContract(method("list", String.class, String.class, int.class, int.class), "");
-        assertReadContract(method("detail", String.class, String.class), "/{id}");
+        assertReadContract(method("getLimits", String.class, String.class), "/limits", false);
+        assertReadContract(method("list", String.class, String.class, int.class, int.class), "", true);
+        assertReadContract(method("detail", String.class, String.class), "/{id}", true);
     }
 
     @Test
@@ -52,7 +52,7 @@ class SupplierDeliveryNoteControllerTest {
         assertArrayEquals(new String[]{"/{id}/delete"}, postMapping.value());
     }
 
-    private void assertReadContract(Method method, String path) {
+    private void assertReadContract(Method method, String path, boolean financeCanRead) {
         RequireModule module = method.getAnnotation(RequireModule.class);
         assertNotNull(module);
         assertEquals("restaurant", module.value());
@@ -62,6 +62,10 @@ class SupplierDeliveryNoteControllerTest {
         Set<String> permissions = Set.copyOf(Arrays.asList(permission.value()));
         assertTrue(permissions.contains("warehouse:read"));
         assertTrue(permissions.contains("warehouse:read_write"));
+        if (financeCanRead) {
+            assertTrue(permissions.contains("finance:read"));
+            assertTrue(permissions.contains("finance:read_write"));
+        }
 
         GetMapping mapping = method.getAnnotation(GetMapping.class);
         assertNotNull(mapping);

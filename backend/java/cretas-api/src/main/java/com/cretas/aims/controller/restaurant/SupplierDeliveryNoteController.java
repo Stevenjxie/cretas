@@ -103,7 +103,7 @@ public class SupplierDeliveryNoteController {
 
     // ==================== 列表 ====================
 
-    @RequirePermission({"warehouse:read", "warehouse:read_write"})
+    @RequirePermission({"warehouse:read", "warehouse:read_write", "finance:read", "finance:read_write"})
     @RequireModule("restaurant")
     @GetMapping
     @Operation(summary = "送货单列表")
@@ -131,7 +131,7 @@ public class SupplierDeliveryNoteController {
 
     // ==================== 详情 ====================
 
-    @RequirePermission({"warehouse:read", "warehouse:read_write"})
+    @RequirePermission({"warehouse:read", "warehouse:read_write", "finance:read", "finance:read_write"})
     @RequireModule("restaurant")
     @GetMapping("/{id}")
     @Operation(summary = "送货单详情 (含行项)")
