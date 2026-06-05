@@ -11,20 +11,16 @@ const route = useRoute()
 const factoryId = computed(() => authStore.factoryId)
 
 const loading = ref(false)
-
-function isoDate(offsetDays: number) {
-  const date = new Date()
-  date.setDate(date.getDate() + offsetDays)
-  return date.toISOString().slice(0, 10)
-}
+const DEFAULT_START_DATE = '2026-05-31'
+const DEFAULT_END_DATE = '2026-06-04'
 
 function queryDate(name: 'startDate' | 'endDate', fallback: string) {
   const value = route.query[name]
   return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : fallback
 }
 
-const startDate = ref(queryDate('startDate', isoDate(0)))
-const endDate = ref(queryDate('endDate', isoDate(4)))
+const startDate = ref(queryDate('startDate', DEFAULT_START_DATE))
+const endDate = ref(queryDate('endDate', DEFAULT_END_DATE))
 const dates = ref<string[]>([])
 const rows = ref<RestockHorizonProductRow[]>([])
 const summary = ref({ totalProducts: 0, shortfallProducts: 0, fullyCoveredProducts: 0, days: 0 })
@@ -60,6 +56,10 @@ function dayCell(row: RestockHorizonProductRow, date: string): RestockHorizonDay
 
 function statusType(row: RestockHorizonProductRow) {
   return row.endingShortfallQty > 0 ? 'warning' : 'success'
+}
+
+function hasWipEstimate(row: RestockHorizonProductRow) {
+  return row.wipEstimatedQty !== null && row.wipEstimatedQty !== undefined && row.wipEstimatedQty > 0
 }
 
 async function createPlan(row: RestockHorizonProductRow) {
@@ -147,17 +147,48 @@ onMounted(load)
       <el-table-column label="总需求" width="100">
         <template #default="{ row }">{{ fmt(row.totalDemandQty) }}</template>
       </el-table-column>
-      <el-table-column label="已可覆盖" width="120">
-        <template #default="{ row }">{{ fmt(row.startingCoverQty) }}</template>
+      <el-table-column width="128">
+        <template #header>
+          <div class="column-header">
+            <span>可扣减覆盖</span>
+            <span class="header-note">不含原料估算</span>
+          </div>
+        </template>
+        <template #default="{ row }">
+          <span class="cover-qty">{{ fmt(row.startingCoverQty) }}</span>
+        </template>
       </el-table-column>
       <el-table-column label="成品" width="90">
         <template #default="{ row }">{{ fmt(row.fgAvailableQty) }}</template>
       </el-table-column>
       <el-table-column label="半成品折算" width="110">
-        <template #default="{ row }">{{ fmt(row.wipEstimatedQty) }}</template>
+        <template #default="{ row }">
+          <div class="inline-value">
+            <span>{{ fmt(row.wipEstimatedQty) }}</span>
+            <el-tag v-if="hasWipEstimate(row)" size="small" type="warning" effect="plain">估</el-tag>
+          </div>
+        </template>
       </el-table-column>
-      <el-table-column label="原料估算" width="100">
-        <template #default="{ row }">{{ fmt(row.rawEstimatedFgQty) }}</template>
+      <el-table-column width="112">
+        <template #header>
+          <div class="column-header">
+            <span>原料估算</span>
+            <span class="header-note">参考，不扣减</span>
+          </div>
+        </template>
+        <template #default="{ row }">
+          <el-tooltip content="需投料生产，非现货，不参与缺口扣减" placement="top">
+            <el-tag
+              v-if="row.rawEstimatedFgQty !== null && row.rawEstimatedFgQty !== undefined"
+              type="info"
+              effect="plain"
+              class="raw-tag"
+            >
+              {{ fmt(row.rawEstimatedFgQty) }}
+            </el-tag>
+            <span v-else class="muted">未配置</span>
+          </el-tooltip>
+        </template>
       </el-table-column>
       <el-table-column label="已排产" width="90">
         <template #default="{ row }">{{ fmt(row.scheduledQty) }}</template>
@@ -236,6 +267,33 @@ onMounted(load)
   gap: 14px;
   grid-template-columns: repeat(4, minmax(180px, 1fr));
   padding: 8px 32px;
+}
+
+.column-header {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  line-height: 1.2;
+}
+
+.header-note {
+  color: #909399;
+  font-size: 11px;
+  font-weight: normal;
+}
+
+.cover-qty {
+  font-weight: 600;
+}
+
+.inline-value {
+  align-items: center;
+  display: flex;
+  gap: 4px;
+}
+
+.raw-tag {
+  border-style: dashed;
 }
 
 @media (max-width: 900px) {

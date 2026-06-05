@@ -110,7 +110,7 @@ class RestockBoardServiceTest {
 
         assertNull(row.getWipEstimatedQty());
         assertNotNull(row.getConversionWarning());
-        assertTrue(row.getConversionWarning().contains("gramsPerUnit"));
+        assertTrue(row.getConversionWarning().contains("规格克重"));
     }
 
     @Test
@@ -144,6 +144,30 @@ class RestockBoardServiceTest {
         assertEquals(0, new BigDecimal("1900.00").compareTo(row.getStartingCoverQty()));
         assertEquals(0, new BigDecimal("1644.00").compareTo(row.getEndingShortfallQty()));
         assertEquals("SHORTFALL", row.getDays().get(2).getStatus());
+    }
+
+    @Test
+    @DisplayName("horizon warns instead of choosing a random active conversion")
+    void horizonWarnsOnMultipleActiveConversions() {
+        when(salesOrderItemRepository.sumDemandByProductForDeliveryDate(eq(FACTORY_ID), eq(JUNE_1), anyCollection()))
+                .thenReturn(List.of(demand("PT-BEEF", "beef shank", BOX_UNIT, BOX_UNIT, "100")));
+        when(productTypeRepository.findById("PT-BEEF")).thenReturn(Optional.of(productType("200", "0.8")));
+        when(finishedGoodsBatchRepository.sumAvailableQuantityByProductTypeAndUnit(FACTORY_ID, "PT-BEEF", BOX_UNIT))
+                .thenReturn(BigDecimal.ZERO);
+        when(semiFinishedInventoryRepository.sumAvailableByProduct(FACTORY_ID, "PT-BEEF"))
+                .thenReturn(BigDecimal.ZERO);
+        when(productionPlanRepository.sumPlannedQuantityByProductAndStatuses(eq(FACTORY_ID), eq("PT-BEEF"), anyCollection()))
+                .thenReturn(BigDecimal.ZERO);
+        when(conversionRepository.findByFactoryIdAndProductTypeId(FACTORY_ID, "PT-BEEF"))
+                .thenReturn(List.of(
+                        conversion("MAT-BEEF-1", "beef raw 1", "kg", "2.0"),
+                        conversion("MAT-BEEF-2", "beef raw 2", "kg", "1.5")));
+
+        RestockHorizonProductRow row = service.getRestockHorizon(FACTORY_ID, JUNE_1, JUNE_1).getRows().get(0);
+
+        assertNull(row.getRawEstimatedFgQty());
+        assertNotNull(row.getConversionWarning());
+        assertTrue(row.getConversionWarning().contains("多个启用"));
     }
 
     @Test

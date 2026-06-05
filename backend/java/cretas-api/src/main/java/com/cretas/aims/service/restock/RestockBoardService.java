@@ -108,7 +108,7 @@ public class RestockBoardService {
                         id -> new ProductHorizonDemand(id, demand.getProductName()));
                 product.addDemand(date, nz(demand.getDemand()));
                 if (demand.getMinUnit() != null && !Objects.equals(demand.getMinUnit(), demand.getMaxUnit())) {
-                    product.warning = append(product.warning, "order units are inconsistent; manual check required");
+                    product.warning = append(product.warning, "订单单位不一致, 需人工核对");
                     product.unitInconsistent = true;
                 }
             }
@@ -180,10 +180,10 @@ public class RestockBoardService {
 
         String warning = demand.warning;
         if (wipBox == null && wipKg.compareTo(BigDecimal.ZERO) > 0) {
-            warning = append(warning, "gramsPerUnit is missing; WIP cannot be converted to finished goods");
+            warning = append(warning, "未配置规格克重, 半成品无法折成品");
         }
         if (wipYield == null && wipKg.compareTo(BigDecimal.ZERO) > 0 && wipBox != null) {
-            warning = append(warning, "wipToFgYield is missing; WIP is estimated as 1:1");
+            warning = append(warning, "未配置半成品到成品出成率, 半成品按 1:1 估算");
         }
         warning = append(warning, conversion.warning);
 
@@ -200,7 +200,7 @@ public class RestockBoardService {
                         .availableBeforeDemandQty(remaining)
                         .availableAfterDemandQty(remaining)
                         .shortfallQty(null)
-                        .warning("order units are inconsistent; demand cannot be allocated safely")
+                        .warning("订单单位不一致, 无法安全分配每日需求")
                         .status("UNIT_INCONSISTENT")
                         .build());
                 continue;
@@ -261,10 +261,10 @@ public class RestockBoardService {
         BigDecimal scheduled = scheduled(factoryId, productTypeId);
 
         if (wipBox == null && wipKg.compareTo(BigDecimal.ZERO) > 0) {
-            warning = append(warning, "gramsPerUnit is missing; WIP cannot be converted to boxes");
+            warning = append(warning, "未配置规格克重, 半成品无法折盒");
         }
         if (wipYield == null && wipKg.compareTo(BigDecimal.ZERO) > 0 && wipBox != null) {
-            warning = append(warning, "wipToFgYield is missing; WIP is estimated as 1:1");
+            warning = append(warning, "未配置半成品到成品出成率, 半成品按 1:1 估算");
         }
 
         RestockRow.RestockRowBuilder builder = RestockRow.builder()
@@ -277,7 +277,7 @@ public class RestockBoardService {
                 .wipIsEstimated(true);
 
         if (unitInconsistent) {
-            warning = append(warning, "order units are inconsistent; manual check required");
+            warning = append(warning, "订单单位不一致, 需人工核对");
             builder.demandQty(null)
                     .totalAvailableQty(null)
                     .shortfallQty(null)
@@ -311,10 +311,10 @@ public class RestockBoardService {
         BigDecimal scheduled = scheduled(factoryId, productTypeId);
 
         if (wipBox == null && wipKg.compareTo(BigDecimal.ZERO) > 0) {
-            warning = append(warning, "gramsPerUnit is missing; WIP cannot be converted to boxes");
+            warning = append(warning, "未配置规格克重, 半成品无法折盒");
         }
         if (wipYield == null && wipKg.compareTo(BigDecimal.ZERO) > 0 && wipBox != null) {
-            warning = append(warning, "wipToFgYield is missing; WIP is estimated as 1:1");
+            warning = append(warning, "未配置半成品到成品出成率, 半成品按 1:1 估算");
         }
 
         WarehouseRestockRow.WarehouseRestockRowBuilder builder = WarehouseRestockRow.builder()
@@ -329,7 +329,7 @@ public class RestockBoardService {
                 .wipIsEstimated(true);
 
         if (unitInconsistent) {
-            warning = append(warning, "order units are inconsistent; manual check required");
+            warning = append(warning, "订单单位不一致, 需人工核对");
             builder.warehouseDemandQty(null)
                     .totalAvailableQty(null)
                     .shortfallQty(null)
@@ -348,19 +348,25 @@ public class RestockBoardService {
     }
 
     private ConversionSnapshot resolveConversion(String factoryId, String productTypeId, BigDecimal wipToFgYield) {
-        Optional<MaterialProductConversion> active = conversionRepository
+        List<MaterialProductConversion> activeConversions = conversionRepository
                 .findByFactoryIdAndProductTypeId(factoryId, productTypeId)
                 .stream()
                 .filter(conversion -> Boolean.TRUE.equals(conversion.getIsActive()))
-                .findFirst();
+                .toList();
 
-        if (active.isEmpty()) {
+        if (activeConversions.isEmpty()) {
             return ConversionSnapshot.builder()
-                    .warning("raw-to-finished conversion is missing; raw material cannot be estimated")
+                    .warning("未配置原料到成品转换率, 原料无法估算可产成品")
                     .build();
         }
 
-        MaterialProductConversion conversion = active.get();
+        if (activeConversions.size() > 1) {
+            return ConversionSnapshot.builder()
+                    .warning("存在多个启用的原料转换率, 需配置主原料或瓶颈原料后再估算")
+                    .build();
+        }
+
+        MaterialProductConversion conversion = activeConversions.get(0);
         BigDecimal rawAvailable = nz(materialBatchRepository.sumAvailableQuantityByMaterialType(
                 factoryId, conversion.getMaterialTypeId()));
         BigDecimal rawToFg = conversion.getConversionRate();
@@ -378,7 +384,7 @@ public class RestockBoardService {
                 .rawEstimatedFgQty(rawEstimatedFg)
                 .rawToFgYield(rawToFg)
                 .rawToWipYield(rawToWip)
-                .warning(rawToFg == null ? "raw-to-finished conversion is empty; raw material cannot be estimated" : null)
+                .warning(rawToFg == null ? "原料到成品转换率为空, 原料无法估算可产成品" : null)
                 .build();
     }
 
