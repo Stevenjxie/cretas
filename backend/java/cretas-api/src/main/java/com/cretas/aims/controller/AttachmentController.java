@@ -4,6 +4,7 @@ import com.cretas.aims.annotation.RequirePermission;
 import com.cretas.aims.dto.attachment.LinkChipCountsDTO;
 import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.entity.Attachment;
+import com.cretas.aims.entity.User;
 import com.cretas.aims.entity.Attachment.EntityType;
 import com.cretas.aims.entity.Attachment.FileCategory;
 import com.cretas.aims.exception.BusinessException;
@@ -14,7 +15,6 @@ import com.cretas.aims.service.attachment.dto.RegisterAttachmentRequest;
 import com.cretas.aims.service.attachment.dto.UpdateAttachmentRequest;
 import com.cretas.aims.service.attachment.dto.UploadUrlResponse;
 import com.cretas.aims.service.attachment.impl.AttachmentServiceImpl;
-import com.cretas.aims.utils.SecurityUtils;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Min;
@@ -196,7 +196,8 @@ public class AttachmentController {
             @PathVariable String factoryId,
             @Valid @RequestBody RegisterAttachmentRequest req,
             HttpServletRequest request) {
-        permissionResolver.requireWrite(permissionResolver.resolveCurrentUser(request), req.getEntityType());
+        User currentUser = permissionResolver.resolveCurrentUser(request);
+        permissionResolver.requireWrite(currentUser, req.getEntityType());
         if (req.getFileSize() != null && req.getFileSize() > AttachmentPermissionResolver.MAX_UPLOAD_SIZE_BYTES) {
             throw new BusinessException(400, "文件超出 10MB 上限");
         }
@@ -205,7 +206,7 @@ public class AttachmentController {
             throw new BusinessException(400,
                     "不支持的文件类型: " + req.getFileType() + " — 仅允许 pdf / image / xlsx / docx / mp4");
         }
-        Long userId = SecurityUtils.getCurrentUserId();
+        Long userId = currentUser.getId();
         Attachment saved = attachmentService.register(factoryId, req, userId);
         return ResponseEntity.ok(ApiResponse.success("上传成功", saved));
     }
@@ -232,8 +233,9 @@ public class AttachmentController {
             @Valid @RequestBody UpdateAttachmentRequest req,
             HttpServletRequest request) {
         Attachment existing = attachmentService.getById(factoryId, id);
-        permissionResolver.requireWrite(permissionResolver.resolveCurrentUser(request), existing.getEntityType());
-        Long userId = SecurityUtils.getCurrentUserId();
+        User currentUser = permissionResolver.resolveCurrentUser(request);
+        permissionResolver.requireWrite(currentUser, existing.getEntityType());
+        Long userId = currentUser.getId();
         return ResponseEntity.ok(ApiResponse.success(attachmentService.update(factoryId, id, req, userId)));
     }
 
@@ -260,8 +262,9 @@ public class AttachmentController {
     })
     public ResponseEntity<ApiResponse<Void>> softDelete(
             @PathVariable String factoryId,
-            @PathVariable String id) {
-        Long userId = SecurityUtils.getCurrentUserId();
+            @PathVariable String id,
+            HttpServletRequest request) {
+        Long userId = currentUserId(request);
         attachmentService.softDelete(factoryId, id, userId);
         return ResponseEntity.ok(ApiResponse.successMessage("删除成功"));
     }
@@ -416,5 +419,10 @@ public class AttachmentController {
         private EntityType entityType;
         @NotNull
         private List<String> entityIds;
+    }
+
+    private Long currentUserId(HttpServletRequest request) {
+        User currentUser = permissionResolver.resolveCurrentUser(request);
+        return currentUser == null ? null : currentUser.getId();
     }
 }
