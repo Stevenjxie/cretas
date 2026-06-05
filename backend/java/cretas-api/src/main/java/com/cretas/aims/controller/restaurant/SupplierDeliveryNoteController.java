@@ -141,14 +141,14 @@ public class SupplierDeliveryNoteController {
 
     @RequirePermission({"warehouse:read_write"})
     @RequireModule("restaurant")
-    @PutMapping("/{id}/confirm")
-    @Operation(summary = "确认送货单 → 写 gold 进价")
+    @RequestMapping(value = "/{id}/confirm", method = {RequestMethod.PUT, RequestMethod.POST})
+    @Operation(summary = "验收入库", description = "草稿送货单确认后过账生成真实库存批次")
     public ApiResponse<SupplierDeliveryNoteDto> confirm(
             @PathVariable String factoryId,
             @PathVariable String id,
             @RequestAttribute("userId") @Parameter(hidden = true) Long userId) {
         SupplierDeliveryNote note = service.confirmNote(factoryId, id, userId);
-        return ApiResponse.success("已确认", toDto(note));
+        return ApiResponse.success("验收入库成功", toDto(note));
     }
 
     // ==================== 拒绝 (Rule 3) ====================
@@ -210,11 +210,16 @@ public class SupplierDeliveryNoteController {
                 .supplierId(n.getSupplierId())
                 .supplierName(n.getSupplierName())
                 .deliveryDate(n.getDeliveryDate())
+                .warehouseId(n.getWarehouseId())
                 .noteNumber(n.getNoteNumber())
                 .totalAmount(n.getTotalAmount())
                 .ocrConfidence(n.getOcrConfidence())
                 .ocrErrorMessage(n.getOcrErrorMessage())
                 .status(n.getStatus() != null ? n.getStatus().name() : null)
+                .postingStatus(n.getPostingStatus() != null ? n.getPostingStatus().name() : null)
+                .receiveRecordId(n.getReceiveRecordId())
+                .postedAt(n.getPostedAt() != null ? n.getPostedAt().toString() : null)
+                .postingError(n.getPostingError())
                 .rejectReasonCode(n.getRejectReasonCode())
                 .rejectReasonNote(n.getRejectReasonNote())
                 .lowConfidenceWarning(lowConf)
@@ -234,10 +239,15 @@ public class SupplierDeliveryNoteController {
                 .supplierId(n.getSupplierId())
                 .supplierName(n.getSupplierName())
                 .deliveryDate(n.getDeliveryDate())
+                .warehouseId(n.getWarehouseId())
                 .noteNumber(n.getNoteNumber())
                 .totalAmount(n.getTotalAmount())
                 .ocrConfidence(n.getOcrConfidence())
                 .status(n.getStatus() != null ? n.getStatus().name() : null)
+                .postingStatus(n.getPostingStatus() != null ? n.getPostingStatus().name() : null)
+                .receiveRecordId(n.getReceiveRecordId())
+                .postedAt(n.getPostedAt() != null ? n.getPostedAt().toString() : null)
+                .postingError(n.getPostingError())
                 .lowConfidenceWarning(lowConf)
                 .build();
     }
@@ -251,6 +261,9 @@ public class SupplierDeliveryNoteController {
                 .unit(l.getUnit())
                 .unitPrice(l.getUnitPrice())
                 .lineAmount(l.getLineAmount())
+                .qcResult(l.getQcResult())
+                .materialBatchId(l.getMaterialBatchId())
+                .remark(l.getRemark())
                 .ocrConfidence(l.getOcrConfidence())
                 .build();
     }

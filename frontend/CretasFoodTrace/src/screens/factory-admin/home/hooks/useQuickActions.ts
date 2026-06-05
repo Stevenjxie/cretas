@@ -20,6 +20,10 @@ const QUICK_ACTION_SCREEN_GUARD: Record<string, string> = {
   systemConfig: 'SystemSettings',
   newPurchase: 'PurchaseOrderList',
   newSales: 'SalesOrderList',
+  supplierDelivery: 'SupplierDeliveryList',
+  requisitionApproval: 'RequisitionApproval',
+  wastage: 'WastageList',
+  stocktaking: 'StocktakingList',
 };
 
 export function useQuickActions(isRestaurantMode: boolean) {
@@ -31,39 +35,39 @@ export function useQuickActions(isRestaurantMode: boolean) {
     const raw: QuickActionItem[] = isRestaurantMode
       ? [
           {
-            id: 'newPurchase',
-            icon: 'cart-arrow-down',
-            label: t('quickActions.newPurchase', 'New purchase'),
+            id: 'supplierDelivery',
+            icon: 'truck-delivery',
+            label: t('quickActions.supplierDelivery', 'Delivery check'),
             color: '#409eff',
             onPress: () => {
-              navigation.getParent()?.navigate('FAManagementTab', { screen: 'PurchaseOrderList' });
+              navigation.getParent()?.navigate('FAManagementTab', { screen: 'SupplierDeliveryList' });
             },
           },
           {
-            id: 'newSales',
-            icon: 'cart-arrow-up',
-            label: t('quickActions.newSales', 'New sale'),
+            id: 'requisitionApproval',
+            icon: 'clipboard-check-outline',
+            label: t('quickActions.requisitionApproval', 'Requisition approval'),
             color: '#67c23a',
             onPress: () => {
-              navigation.getParent()?.navigate('FAManagementTab', { screen: 'SalesOrderList' });
+              navigation.getParent()?.navigate('FAManagementTab', { screen: 'RequisitionApproval' });
             },
           },
           {
-            id: 'inventory',
-            icon: 'warehouse',
-            label: t('quickActions.inventoryQuery', 'Inventory'),
+            id: 'wastage',
+            icon: 'delete-alert-outline',
+            label: t('quickActions.wastage', 'Wastage'),
             color: '#38b2ac',
             onPress: () => {
-              navigation.getParent()?.navigate('FAManagementTab', { screen: 'FinishedGoodsList' });
+              navigation.getParent()?.navigate('FAManagementTab', { screen: 'WastageList' });
             },
           },
           {
-            id: 'staffManagement',
-            icon: 'account-group',
-            label: t('quickActions.staffManagement'),
+            id: 'stocktaking',
+            icon: 'clipboard-list-outline',
+            label: t('quickActions.stocktaking', 'Stocktaking'),
             color: '#ed8936',
             onPress: () => {
-              navigation.getParent()?.navigate('FAManagementTab', { screen: 'EmployeeList' });
+              navigation.getParent()?.navigate('FAManagementTab', { screen: 'StocktakingList' });
             },
           },
         ]

@@ -5,6 +5,8 @@ import type {
   MaterialRequisition, RequisitionCreateRequest,
   StocktakingRecord,
   WastageRecord, WastageCreateRequest,
+  SupplierDeliveryNote, CreateSupplierDeliveryRequest,
+  SupplierDeliveryStatus,
 } from '../../types/restaurant';
 
 /**
@@ -174,6 +176,26 @@ class RestaurantApiClient {
   async getWastageStats(params?: { startDate?: string; endDate?: string; factoryId?: string }): Promise<any> {
     const { factoryId, ...query } = params || {};
     const res = await apiClient.get<any>(`${this.basePath('wastage', factoryId)}/statistics`, { params: query });
+    return res?.data ?? res;
+  }
+
+  // ==================== Supplier Delivery ====================
+
+  async getSupplierDeliveryNotes(params?: { status?: SupplierDeliveryStatus; page?: number; size?: number; factoryId?: string }) {
+    return this.getList<SupplierDeliveryNote>('supplier-delivery-notes', params);
+  }
+
+  async getSupplierDeliveryNote(noteId: string, factoryId?: string): Promise<SupplierDeliveryNote> {
+    return this.getOne<SupplierDeliveryNote>('supplier-delivery-notes', noteId, factoryId);
+  }
+
+  async createSupplierDelivery(data: CreateSupplierDeliveryRequest, factoryId?: string): Promise<SupplierDeliveryNote> {
+    const res = await apiClient.post<any>(`${this.basePath('supplier-delivery-notes', factoryId)}/manual`, data);
+    return res?.data ?? res;
+  }
+
+  async confirmSupplierDelivery(noteId: string, factoryId?: string): Promise<SupplierDeliveryNote> {
+    const res = await apiClient.post<any>(`${this.basePath('supplier-delivery-notes', factoryId)}/${noteId}/confirm`);
     return res?.data ?? res;
   }
 }

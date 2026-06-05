@@ -27,11 +27,16 @@ public class SupplierDeliveryNoteDto {
     private String supplierId;
     private String supplierName;
     private LocalDate deliveryDate;
+    private String warehouseId;
     private String noteNumber;
     private BigDecimal totalAmount;
     private BigDecimal ocrConfidence;
     private String ocrErrorMessage;
     private String status;              // DRAFT | CONFIRMED | REJECTED
+    private String postingStatus;       // UNPOSTED | POSTING | POSTED | FAILED
+    private String receiveRecordId;
+    private String postedAt;
+    private String postingError;
     private String rejectReasonCode;
     private String rejectReasonNote;
 
@@ -53,6 +58,9 @@ public class SupplierDeliveryNoteDto {
         private String unit;
         private BigDecimal unitPrice;
         private BigDecimal lineAmount;
+        private String qcResult;
+        private String materialBatchId;
+        private String remark;
         private BigDecimal ocrConfidence;
     }
 
@@ -73,6 +81,7 @@ public class SupplierDeliveryNoteDto {
         private String supplierId;
         private String supplierName;
         private LocalDate deliveryDate;
+        private String warehouseId;
         private String noteNumber;
         private List<LineDto> lines;
     }

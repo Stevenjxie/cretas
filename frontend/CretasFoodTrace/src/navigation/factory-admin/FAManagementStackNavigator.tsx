@@ -113,6 +113,9 @@ import WastageCreateScreen from "../../screens/restaurant/wastage/WastageCreateS
 import StocktakingListScreen from "../../screens/restaurant/stocktaking/StocktakingListScreen";
 import StocktakingExecuteScreen from "../../screens/restaurant/stocktaking/StocktakingExecuteScreen";
 import StocktakingSummaryScreen from "../../screens/restaurant/stocktaking/StocktakingSummaryScreen";
+import SupplierDeliveryListScreen from "../../screens/restaurant/supplier-delivery/SupplierDeliveryListScreen";
+import SupplierDeliveryCreateScreen from "../../screens/restaurant/supplier-delivery/SupplierDeliveryCreateScreen";
+import SupplierDeliveryDetailScreen from "../../screens/restaurant/supplier-delivery/SupplierDeliveryDetailScreen";
 
 // Track D2 — 工序管理 (M-WP-1) + 产品工序配置 (M-WP-2)
 import WorkProcessListScreen from "../../screens/factory/workprocess/WorkProcessListScreen";
@@ -584,6 +587,9 @@ export function FAManagementStackNavigator() {
           <Stack.Screen name="StocktakingList" component={StocktakingListScreen} options={{ title: "盘点管理" }} />
           <Stack.Screen name="StocktakingExecute" component={StocktakingExecuteScreen} options={{ title: "执行盘点" }} />
           <Stack.Screen name="StocktakingSummary" component={StocktakingSummaryScreen} options={{ title: "盘点汇总" }} />
+          <Stack.Screen name="SupplierDeliveryList" component={SupplierDeliveryListScreen} options={{ title: "待验收入库" }} />
+          <Stack.Screen name="SupplierDeliveryCreate" component={SupplierDeliveryCreateScreen} options={{ title: "新建送货单" }} />
+          <Stack.Screen name="SupplierDeliveryDetail" component={SupplierDeliveryDetailScreen} options={{ title: "送货单详情" }} />
         </>
       )}
     </Stack.Navigator>

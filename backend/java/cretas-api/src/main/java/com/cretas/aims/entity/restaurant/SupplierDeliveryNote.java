@@ -3,6 +3,7 @@ package com.cretas.aims.entity.restaurant;
 import com.cretas.aims.entity.BaseEntity;
 import com.cretas.aims.entity.restaurant.enums.DeliveryNoteSourceType;
 import com.cretas.aims.entity.restaurant.enums.DeliveryNoteStatus;
+import com.cretas.aims.entity.restaurant.enums.DeliveryPostingStatus;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import lombok.*;
 import org.hibernate.annotations.Where;
@@ -79,6 +80,9 @@ public class SupplierDeliveryNote extends BaseEntity {
     @Column(name = "delivery_date", nullable = false)
     private LocalDate deliveryDate;
 
+    @Column(name = "warehouse_id", length = 191)
+    private String warehouseId;
+
     @Column(name = "note_number", length = 100)
     private String noteNumber;
 
@@ -101,6 +105,22 @@ public class SupplierDeliveryNote extends BaseEntity {
     @Enumerated(EnumType.STRING)
     @Column(name = "status", nullable = false, length = 20)
     private DeliveryNoteStatus status = DeliveryNoteStatus.DRAFT;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "posting_status", nullable = false, length = 20)
+    private DeliveryPostingStatus postingStatus = DeliveryPostingStatus.UNPOSTED;
+
+    @Column(name = "receive_record_id", length = 191)
+    private String receiveRecordId;
+
+    @Column(name = "posted_at")
+    private LocalDateTime postedAt;
+
+    @Column(name = "posted_by")
+    private Long postedBy;
+
+    @Column(name = "posting_error", columnDefinition = "TEXT")
+    private String postingError;
 
     @Column(name = "confirmed_by")
     private Long confirmedBy;
