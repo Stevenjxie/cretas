@@ -2,6 +2,7 @@ package com.cretas.aims.controller.restaurant;
 
 import com.cretas.aims.annotation.RequireModule;
 import com.cretas.aims.annotation.RequirePermission;
+import com.cretas.aims.config.RequireRole;
 import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.dto.common.PageResponse;
 import com.cretas.aims.dto.restaurant.SupplierMonthlyReconciliationDto;
@@ -28,6 +29,7 @@ import java.time.YearMonth;
 @RequiredArgsConstructor
 @Tag(name = "餐饮-供应商月对账")
 @RequireModule("restaurant")
+@RequireRole({"factory_super_admin", "platform_admin", "permission_admin", "restaurant_manager", "finance_manager"})
 public class SupplierMonthlyReconciliationController {
 
     private final SupplierMonthlyReconciliationService service;

@@ -2,6 +2,7 @@ package com.cretas.aims.controller.restaurant;
 
 import com.cretas.aims.annotation.RequireModule;
 import com.cretas.aims.annotation.RequirePermission;
+import com.cretas.aims.config.RequireRole;
 import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.dto.restaurant.RestaurantCostAttributionSummary;
 import com.cretas.aims.service.restaurant.RestaurantCostAttributionService;
@@ -27,6 +28,7 @@ public class RestaurantCostAttributionController {
 
     @RequireModule("restaurant")
     @RequirePermission({"procurement:price:view", "finance:read", "finance:read_write"})
+    @RequireRole({"factory_super_admin", "platform_admin", "permission_admin", "restaurant_manager", "finance_manager"})
     @GetMapping("/summary")
     @Operation(summary = "Restaurant material cost attribution summary")
     public ApiResponse<RestaurantCostAttributionSummary> summary(
