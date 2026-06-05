@@ -6,9 +6,10 @@ import { theme } from '../../theme';
 interface ScreenWrapperProps {
   children: React.ReactNode;
   style?: StyleProp<ViewStyle>;
-  withScrollView?: boolean; // We might want this later, for now just a placeholder
+  withScrollView?: boolean;
   edges?: ('top' | 'right' | 'bottom' | 'left')[];
   backgroundColor?: string;
+  testID?: string;
 }
 
 export const ScreenWrapper: React.FC<ScreenWrapperProps> = ({
@@ -16,9 +17,11 @@ export const ScreenWrapper: React.FC<ScreenWrapperProps> = ({
   style,
   edges = ['top', 'left', 'right', 'bottom'],
   backgroundColor = theme.colors.background,
+  testID,
 }) => {
   return (
     <SafeAreaView 
+      testID={testID}
       style={[
         styles.container, 
         { backgroundColor }, 

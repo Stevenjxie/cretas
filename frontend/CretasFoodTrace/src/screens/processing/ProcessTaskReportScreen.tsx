@@ -1,13 +1,110 @@
 import React, { useState, useCallback } from 'react';
 import { View, StyleSheet, ScrollView, Alert, KeyboardAvoidingView, Platform } from 'react-native';
-import { Text, Appbar, Card, TextInput, ActivityIndicator, SegmentedButtons } from 'react-native-paper';
+import { Text, Appbar, Card, TextInput, ActivityIndicator, SegmentedButtons, Chip } from 'react-native-paper';
 import { useNavigation, useRoute, useFocusEffect } from '@react-navigation/native';
+import * as ImagePicker from 'expo-image-picker';
+import * as FileSystem from 'expo-file-system';
 import { ProcessingScreenProps } from '../../types/navigation';
 import { processTaskApiClient, ProcessTaskItem } from '../../services/api/processTaskApiClient';
+import { attachmentApi, AttachmentFileCategory } from '../../services/api/attachmentApi';
 import { NeoButton, ScreenWrapper } from '../../components/ui';
 import { theme } from '../../theme';
 
 type Props = ProcessingScreenProps<'ProcessTaskReport'>;
+
+interface EvidenceAsset {
+  uri: string;
+  fileName: string;
+  mimeType: string;
+  size: number;
+  category: AttachmentFileCategory;
+}
+
+interface ParsedReportFields {
+  inputQuantity?: number;
+  totalWorkers?: number;
+  totalWorkMinutes?: number;
+  reportDate?: string;
+  productionStartTime?: string;
+  productionEndTime?: string;
+}
+
+function todayStr(): string {
+  const d = new Date();
+  const month = `${d.getMonth() + 1}`.padStart(2, '0');
+  const day = `${d.getDate()}`.padStart(2, '0');
+  return `${d.getFullYear()}-${month}-${day}`;
+}
+
+function parseOptionalNumber(raw: string, label: string): number | undefined {
+  const value = raw.trim();
+  if (!value) return undefined;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    throw new Error(`${label}必须是大于等于 0 的数字`);
+  }
+  return parsed;
+}
+
+function parseOptionalInteger(raw: string, label: string): number | undefined {
+  const parsed = parseOptionalNumber(raw, label);
+  if (parsed === undefined) return undefined;
+  if (!Number.isInteger(parsed)) {
+    throw new Error(`${label}必须是整数`);
+  }
+  return parsed;
+}
+
+function normalizeOptionalDate(raw: string): string | undefined {
+  const value = raw.trim();
+  if (!value) return undefined;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    throw new Error('报工日期格式应为 YYYY-MM-DD');
+  }
+  return value;
+}
+
+function normalizeOptionalTime(raw: string, label: string): string | undefined {
+  const value = raw.trim();
+  if (!value) return undefined;
+  if (!/^\d{2}:\d{2}$/.test(value)) {
+    throw new Error(`${label}格式应为 HH:mm`);
+  }
+  return value;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return typeof value === 'object' && value !== null ? value as Record<string, unknown> : null;
+}
+
+function extractReportId(response: unknown): string | null {
+  const root = asRecord(response);
+  const data = asRecord(root?.data);
+  const reportId = data?.reportId ?? root?.reportId;
+  if (typeof reportId === 'number' || typeof reportId === 'string') return String(reportId);
+  return null;
+}
+
+function guessExt(uri: string, mime?: string): string {
+  if (mime?.startsWith('image/')) return mime.replace('image/', '');
+  if (mime?.startsWith('video/')) return mime.replace('video/', '') === 'quicktime' ? 'mov' : mime.replace('video/', '');
+  const dot = uri.lastIndexOf('.');
+  return dot > 0 ? uri.substring(dot + 1) : 'jpg';
+}
+
+function guessMime(uri: string): string {
+  const ext = uri.toLowerCase().split('.').pop() ?? '';
+  const map: Record<string, string> = {
+    jpg: 'image/jpeg',
+    jpeg: 'image/jpeg',
+    png: 'image/png',
+    webp: 'image/webp',
+    gif: 'image/gif',
+    mp4: 'video/mp4',
+    mov: 'video/quicktime',
+  };
+  return map[ext] ?? 'image/jpeg';
+}
 
 export default function ProcessTaskReportScreen() {
   const navigation = useNavigation<Props['navigation']>();
@@ -18,9 +115,16 @@ export default function ProcessTaskReportScreen() {
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [quantity, setQuantity] = useState('');
+  const [inputQty, setInputQty] = useState('');
+  const [totalWorkers, setTotalWorkers] = useState('');
+  const [totalWorkMinutes, setTotalWorkMinutes] = useState('');
+  const [reportDate, setReportDate] = useState(todayStr());
+  const [startTime, setStartTime] = useState('');
+  const [endTime, setEndTime] = useState('');
   const [notes, setNotes] = useState('');
   const [reportMode, setReportMode] = useState<'MODE_1' | 'MODE_2' | 'MODE_3'>('MODE_1');
   const [batchNumber, setBatchNumber] = useState('');
+  const [evidenceAssets, setEvidenceAssets] = useState<EvidenceAsset[]>([]);
 
   const loadTask = useCallback(async () => {
     try {
@@ -41,57 +145,174 @@ export default function ProcessTaskReportScreen() {
 
   const isSupplemental = task?.status === 'SUPPLEMENTING' || task?.status === 'COMPLETED' || task?.status === 'CLOSED';
 
+  const buildParsedFields = (): ParsedReportFields => ({
+    inputQuantity: parseOptionalNumber(inputQty, '投入数量'),
+    totalWorkers: parseOptionalInteger(totalWorkers, '人数'),
+    totalWorkMinutes: parseOptionalInteger(totalWorkMinutes, '工时分钟'),
+    reportDate: normalizeOptionalDate(reportDate),
+    productionStartTime: normalizeOptionalTime(startTime, '开始时间'),
+    productionEndTime: normalizeOptionalTime(endTime, '结束时间'),
+  });
+
+  const addEvidenceFromAsset = useCallback(async (asset: ImagePicker.ImagePickerAsset) => {
+    let size = asset.fileSize ?? 0;
+    if (!size) {
+      const info = await FileSystem.getInfoAsync(asset.uri, { size: true });
+      size = info.exists && 'size' in info ? (info.size as number) : 0;
+    }
+    const mimeType = asset.mimeType ?? guessMime(asset.uri);
+    const category: AttachmentFileCategory = mimeType.startsWith('video/') ? 'VIDEO' : 'PHOTO';
+    const fileName = asset.fileName ?? `process_report_${Date.now()}.${guessExt(asset.uri, mimeType)}`;
+    setEvidenceAssets((prev) => [...prev, { uri: asset.uri, fileName, mimeType, size, category }]);
+  }, []);
+
+  const takeEvidencePhoto = useCallback(async () => {
+    const perm = await ImagePicker.requestCameraPermissionsAsync();
+    if (!perm.granted) {
+      Alert.alert('需要相机权限', '请在系统设置中开启相机权限后再拍照。');
+      return;
+    }
+    const result = await ImagePicker.launchCameraAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      quality: 0.75,
+    });
+    if (!result.canceled && result.assets[0]) {
+      await addEvidenceFromAsset(result.assets[0]);
+    }
+  }, [addEvidenceFromAsset]);
+
+  const pickEvidenceMedia = useCallback(async () => {
+    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!perm.granted) {
+      Alert.alert('需要相册权限', '请在系统设置中开启相册权限后再上传照片或视频。');
+      return;
+    }
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.All,
+      quality: 0.75,
+      allowsMultipleSelection: true,
+    });
+    if (!result.canceled) {
+      for (const asset of result.assets) {
+        await addEvidenceFromAsset(asset);
+      }
+    }
+  }, [addEvidenceFromAsset]);
+
+  const removeEvidence = (index: number) => {
+    setEvidenceAssets((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  const uploadEvidence = async (reportId: string) => {
+    let uploaded = 0;
+    const errors: string[] = [];
+    for (const asset of evidenceAssets) {
+      try {
+        await attachmentApi.uploadAndRegister(
+          { uri: asset.uri, name: asset.fileName, type: asset.mimeType, size: asset.size },
+          'PRODUCTION_REPORT',
+          reportId,
+          { businessTag: 'PROCESS_REPORT_EVIDENCE', fileCategory: asset.category },
+        );
+        uploaded += 1;
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : '上传失败';
+        errors.push(`${asset.fileName}: ${msg}`);
+      }
+    }
+    return { uploaded, errors };
+  };
+
   const handleSubmit = async () => {
     const qty = parseFloat(quantity);
     if (isNaN(qty) || qty <= 0) {
       Alert.alert('提示', '请输入有效的产出数量');
       return;
     }
+    let parsed: ParsedReportFields;
+    try {
+      parsed = buildParsedFields();
+    } catch (err) {
+      Alert.alert('提示', err instanceof Error ? err.message : '请检查报工数据');
+      return;
+    }
 
     const remaining = task ? task.plannedQuantity - task.completedQuantity - task.pendingQuantity : 0;
-    if (!isSupplemental && remaining > 0 && qty > remaining * 1.5) {
+    const needsOverConfirm = !isSupplemental && remaining > 0 && qty > remaining * 1.5;
+    const submitOrConfirmOver = () => {
+      if (!needsOverConfirm) {
+        void doSubmit(qty, parsed);
+        return;
+      }
       Alert.alert(
         '超量确认',
         `报工量 ${qty} 超过剩余量 ${remaining} 的150%，确定提交吗？`,
         [
           { text: '取消', style: 'cancel' },
-          { text: '仍然提交', style: 'destructive', onPress: () => doSubmit(qty) },
+          { text: '仍然提交', style: 'destructive', onPress: () => doSubmit(qty, parsed) },
         ]
+      );
+    };
+
+    if (evidenceAssets.length === 0) {
+      Alert.alert(
+        '缺少现场证据',
+        '这次报工没有照片或视频。现场报工建议至少上传 1 张照片，方便主管核对。',
+        [
+          { text: '返回补拍', style: 'cancel' },
+          { text: '仍然提交', onPress: submitOrConfirmOver },
+        ],
       );
       return;
     }
 
-    await doSubmit(qty);
+    submitOrConfirmOver();
   };
 
-  const doSubmit = async (qty: number) => {
+  const doSubmit = async (qty: number, parsed: ParsedReportFields) => {
     if (reportMode === 'MODE_2' && !batchNumber.trim()) {
       Alert.alert('提示', '按批次报工需填写批次号');
       return;
     }
     setSubmitting(true);
     try {
+      const commonPayload = {
+        processTaskId: taskId,
+        outputQuantity: qty,
+        inputQuantity: parsed.inputQuantity,
+        totalWorkers: parsed.totalWorkers,
+        totalWorkMinutes: parsed.totalWorkMinutes,
+        reportDate: parsed.reportDate,
+        productionStartTime: parsed.productionStartTime,
+        productionEndTime: parsed.productionEndTime,
+        notes: notes || undefined,
+        photos: evidenceAssets.length > 0 ? evidenceAssets.map((a) => a.fileName) : undefined,
+      };
+      let response: unknown;
       if (isSupplemental) {
-        await processTaskApiClient.submitSupplement({
-          processTaskId: taskId,
-          outputQuantity: qty,
-          notes: notes || undefined,
-        });
-        Alert.alert('成功', '补报已提交，等待审批', [
-          { text: '确定', onPress: () => navigation.goBack() },
-        ]);
+        response = await processTaskApiClient.submitSupplement(commonPayload);
       } else {
-        await processTaskApiClient.submitNormalReport({
-          processTaskId: taskId,
-          outputQuantity: qty,
-          notes: notes || undefined,
+        response = await processTaskApiClient.submitNormalReport({
+          ...commonPayload,
           reportMode,
           batchNumber: reportMode === 'MODE_2' ? batchNumber.trim() : undefined,
         });
-        Alert.alert('成功', '报工已提交，等待审批', [
-          { text: '确定', onPress: () => navigation.goBack() },
-        ]);
       }
+
+      const reportId = extractReportId(response);
+      const uploadResult = reportId && evidenceAssets.length > 0
+        ? await uploadEvidence(reportId)
+        : { uploaded: 0, errors: evidenceAssets.length > 0 ? ['报工已提交，但后端未返回 reportId，证据未上传'] : [] };
+
+      const evidenceMessage = evidenceAssets.length > 0
+        ? `\n现场证据: ${uploadResult.uploaded}/${evidenceAssets.length}`
+        : '\n现场证据: 未上传';
+      const errorMessage = uploadResult.errors.length > 0 ? `\n${uploadResult.errors.join('\n')}` : '';
+      Alert.alert(
+        '成功',
+        `${isSupplemental ? '补报' : '报工'}已提交，等待审批${evidenceMessage}${errorMessage}`,
+        [{ text: '确定', onPress: () => navigation.goBack() }],
+      );
     } catch (err) {
       Alert.alert('错误', err instanceof Error ? err.message : '提交失败');
     } finally {
@@ -229,6 +450,69 @@ export default function ProcessTaskReportScreen() {
               )}
 
               <TextInput
+                testID="report-input-quantity-input"
+                label={`投入数量 (${unit || 'kg'}, 可选)`}
+                value={inputQty}
+                onChangeText={setInputQty}
+                keyboardType="decimal-pad"
+                mode="outlined"
+                style={[styles.input, { marginTop: 12 }]}
+                right={<TextInput.Affix text={unit || 'kg'} />}
+              />
+
+              <View style={styles.twoCol}>
+                <TextInput
+                  testID="report-workers-input"
+                  label="人数"
+                  value={totalWorkers}
+                  onChangeText={setTotalWorkers}
+                  keyboardType="number-pad"
+                  mode="outlined"
+                  style={[styles.input, styles.colInput]}
+                />
+                <TextInput
+                  testID="report-minutes-input"
+                  label="工时分钟"
+                  value={totalWorkMinutes}
+                  onChangeText={setTotalWorkMinutes}
+                  keyboardType="number-pad"
+                  mode="outlined"
+                  style={[styles.input, styles.colInput]}
+                />
+              </View>
+
+              <TextInput
+                testID="report-date-input"
+                label="报工日期"
+                value={reportDate}
+                onChangeText={setReportDate}
+                mode="outlined"
+                placeholder="YYYY-MM-DD"
+                style={[styles.input, { marginTop: 12 }]}
+              />
+
+              <View style={styles.twoCol}>
+                <TextInput
+                  testID="report-start-time-input"
+                  label="开始时间"
+                  value={startTime}
+                  onChangeText={setStartTime}
+                  mode="outlined"
+                  placeholder="HH:mm"
+                  style={[styles.input, styles.colInput]}
+                />
+                <TextInput
+                  testID="report-end-time-input"
+                  label="结束时间"
+                  value={endTime}
+                  onChangeText={setEndTime}
+                  mode="outlined"
+                  placeholder="HH:mm"
+                  style={[styles.input, styles.colInput]}
+                />
+              </View>
+
+              <TextInput
                 testID="report-notes-input"
                 label="备注 (选填)"
                 value={notes}
@@ -238,6 +522,48 @@ export default function ProcessTaskReportScreen() {
                 numberOfLines={3}
                 style={[styles.input, { marginTop: 12 }]}
               />
+            </Card.Content>
+          </Card>
+
+          <Card style={styles.card}>
+            <Card.Content>
+              <Text variant="titleMedium" style={styles.sectionTitle}>现场证据</Text>
+              <View style={styles.evidenceActions}>
+                <NeoButton
+                  testID="report-add-photo-btn"
+                  variant="outline"
+                  size="small"
+                  onPress={takeEvidencePhoto}
+                  style={styles.evidenceBtn}
+                >
+                  拍照
+                </NeoButton>
+                <NeoButton
+                  testID="report-add-media-btn"
+                  variant="outline"
+                  size="small"
+                  onPress={pickEvidenceMedia}
+                  style={styles.evidenceBtn}
+                >
+                  照片/视频
+                </NeoButton>
+              </View>
+              {evidenceAssets.length === 0 ? (
+                <Text style={styles.evidenceHint}>建议至少上传 1 张现场照片；如有核对视频，可以从相册选择视频。</Text>
+              ) : (
+                <View style={styles.evidenceList}>
+                  {evidenceAssets.map((asset, index) => (
+                    <Chip
+                      key={`${asset.fileName}-${index}`}
+                      testID={`report-evidence-chip-${index}`}
+                      onClose={() => removeEvidence(index)}
+                      style={styles.evidenceChip}
+                    >
+                      {asset.category === 'VIDEO' ? '视频' : '照片'} {index + 1}
+                    </Chip>
+                  ))}
+                </View>
+              )}
             </Card.Content>
           </Card>
 
@@ -266,8 +592,15 @@ const styles = StyleSheet.create({
   contextValue: { fontSize: 24, fontWeight: '700', color: '#333' },
   contextLabel: { fontSize: 15, color: '#666', marginTop: 2 },
   input: { backgroundColor: '#fff', fontSize: 20 },
+  twoCol: { flexDirection: 'row', gap: 10, marginTop: 12 },
+  colInput: { flex: 1, minWidth: 0 },
   quickButtons: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 10 },
   quickLabel: { fontSize: 14, color: '#666' },
   quickBtn: { minWidth: 64, minHeight: 48 },
+  evidenceActions: { flexDirection: 'row', gap: 10 },
+  evidenceBtn: { flex: 1, minHeight: 46 },
+  evidenceHint: { color: '#666', fontSize: 14, lineHeight: 20, marginTop: 10 },
+  evidenceList: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 12 },
+  evidenceChip: { backgroundColor: '#f0f9ff' },
   submitBtn: { marginTop: 12, height: 52 },
 });

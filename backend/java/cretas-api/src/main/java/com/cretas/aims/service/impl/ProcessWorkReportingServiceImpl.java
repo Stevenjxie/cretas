@@ -1,14 +1,20 @@
 package com.cretas.aims.service.impl;
 
 import com.cretas.aims.dto.ProcessTaskDTO;
+import com.cretas.aims.dto.ProcessWorkReportSubmitRequest;
 import com.cretas.aims.dto.common.PageResponse;
+import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.ProcessTask;
 import com.cretas.aims.entity.ProductionReport;
+import com.cretas.aims.entity.WorkProcess;
 import com.cretas.aims.entity.enums.ProcessTaskStatus;
+import com.cretas.aims.entity.enums.ReportMode;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.exception.ResourceNotFoundException;
 import com.cretas.aims.repository.ProcessTaskRepository;
+import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.ProductionReportRepository;
+import com.cretas.aims.repository.WorkProcessRepository;
 import com.cretas.aims.service.ProcessWorkReportingService;
 import com.cretas.aims.service.canvas.ThresholdKeys;
 import com.cretas.aims.service.canvas.ThresholdResolverService;
@@ -33,6 +39,8 @@ public class ProcessWorkReportingServiceImpl implements ProcessWorkReportingServ
     private static final Logger log = LoggerFactory.getLogger(ProcessWorkReportingServiceImpl.class);
     private final ProductionReportRepository reportRepository;
     private final ProcessTaskRepository taskRepository;
+    private final WorkProcessRepository workProcessRepository;
+    private final ProductTypeRepository productTypeRepository;
 
     /** Canvas V2: DB-driven validation rules */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
@@ -204,9 +212,12 @@ public class ProcessWorkReportingServiceImpl implements ProcessWorkReportingServ
 
     @Override
     @Transactional
-    public Map<String, Object> submitNormalReport(String factoryId, String processTaskId,
-                                                    Long workerId, String reporterName,
-                                                    BigDecimal outputQuantity, String notes) {
+    public Map<String, Object> submitNormalReport(String factoryId, Long workerId,
+                                                    ProcessWorkReportSubmitRequest request) {
+        String processTaskId = request.getProcessTaskId();
+        BigDecimal outputQuantity = request.getOutputQuantity();
+        String reporterName = request.getReporterName() == null ? "" : request.getReporterName();
+        String notes = request.getNotes();
         runConfiguredValidation(factoryId, "CREATE", java.util.Map.of(
             "quantity", outputQuantity != null ? outputQuantity : java.math.BigDecimal.ZERO,
             "processId", processTaskId != null ? processTaskId : "",
@@ -239,7 +250,6 @@ public class ProcessWorkReportingServiceImpl implements ProcessWorkReportingServ
         if (task.getStatus() == ProcessTaskStatus.PENDING) {
             task.setStatus(ProcessTaskStatus.IN_PROGRESS);
         }
-
         // Create report — all reports need approval
         ProductionReport report = ProductionReport.builder()
                 .factoryId(factoryId)
@@ -247,8 +257,19 @@ public class ProcessWorkReportingServiceImpl implements ProcessWorkReportingServ
                 .workerId(workerId)
                 .reporterName(reporterName)
                 .reportType(ProductionReport.ReportType.PROGRESS)
-                .reportDate(LocalDate.now())
+                .reportMode(parseReportMode(request.getReportMode()))
+                .reportDate(request.getReportDate() != null ? request.getReportDate() : LocalDate.now())
+                .processCategory(resolveProcessName(factoryId, task, request.getProcessCategory()))
+                .productName(resolveProductName(factoryId, task))
+                .inputQuantity(request.getInputQuantity())
+                .sourceWipNo(request.getSourceWipNo())
                 .outputQuantity(outputQuantity)
+                .totalWorkers(request.getTotalWorkers())
+                .totalWorkMinutes(request.getTotalWorkMinutes())
+                .productionStartTime(request.getProductionStartTime())
+                .productionEndTime(request.getProductionEndTime())
+                .customFields(buildCustomFields(request))
+                .photos(request.getPhotos())
                 .isSupplemental(false)
                 .approvalStatus("PENDING")
                 .notes(notes)
@@ -276,9 +297,13 @@ public class ProcessWorkReportingServiceImpl implements ProcessWorkReportingServ
 
     @Override
     @Transactional
-    public Map<String, Object> submitSupplement(String factoryId, String processTaskId,
-                                                 Long workerId, String reporterName,
-                                                 BigDecimal outputQuantity, String processCategory, String notes) {
+    public Map<String, Object> submitSupplement(String factoryId, Long workerId,
+                                                 ProcessWorkReportSubmitRequest request) {
+        String processTaskId = request.getProcessTaskId();
+        BigDecimal outputQuantity = request.getOutputQuantity();
+        String reporterName = request.getReporterName() == null ? "" : request.getReporterName();
+        String processCategory = request.getProcessCategory();
+        String notes = request.getNotes();
         log.info("Submitting supplement for task {} by worker {}", processTaskId, workerId);
 
         ProcessTask task = taskRepository.findByFactoryIdAndId(factoryId, processTaskId)
@@ -298,7 +323,6 @@ public class ProcessWorkReportingServiceImpl implements ProcessWorkReportingServ
             task.setStatus(ProcessTaskStatus.SUPPLEMENTING);
             taskRepository.save(task);
         }
-
         // Create supplemental report
         ProductionReport report = ProductionReport.builder()
                 .factoryId(factoryId)
@@ -306,9 +330,19 @@ public class ProcessWorkReportingServiceImpl implements ProcessWorkReportingServ
                 .workerId(workerId)
                 .reporterName(reporterName)
                 .reportType(ProductionReport.ReportType.PROGRESS)
-                .reportDate(LocalDate.now())
+                .reportMode(parseReportMode(request.getReportMode()))
+                .reportDate(request.getReportDate() != null ? request.getReportDate() : LocalDate.now())
                 .outputQuantity(outputQuantity)
-                .processCategory(processCategory)
+                .processCategory(resolveProcessName(factoryId, task, processCategory))
+                .productName(resolveProductName(factoryId, task))
+                .inputQuantity(request.getInputQuantity())
+                .sourceWipNo(request.getSourceWipNo())
+                .totalWorkers(request.getTotalWorkers())
+                .totalWorkMinutes(request.getTotalWorkMinutes())
+                .productionStartTime(request.getProductionStartTime())
+                .productionEndTime(request.getProductionEndTime())
+                .customFields(buildCustomFields(request))
+                .photos(request.getPhotos())
                 .isSupplemental(true)
                 .approvalStatus("PENDING")
                 .notes(notes)
@@ -459,6 +493,59 @@ public class ProcessWorkReportingServiceImpl implements ProcessWorkReportingServ
 
     // ==================== Private helpers ====================
 
+    private ReportMode parseReportMode(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return ReportMode.MODE_1;
+        }
+        try {
+            return ReportMode.valueOf(raw);
+        } catch (IllegalArgumentException e) {
+            return ReportMode.MODE_1;
+        }
+    }
+
+    private String resolveProcessName(String factoryId, ProcessTask task, String fallback) {
+        if (fallback != null && !fallback.isBlank()) {
+            return fallback;
+        }
+        if (task == null || task.getWorkProcessId() == null) {
+            return null;
+        }
+        return workProcessRepository.findByFactoryIdAndId(factoryId, task.getWorkProcessId())
+                .map(WorkProcess::getProcessName)
+                .orElse(null);
+    }
+
+    private String resolveProductName(String factoryId, ProcessTask task) {
+        if (task == null || task.getProductTypeId() == null) {
+            return null;
+        }
+        return productTypeRepository.findByIdAndFactoryId(task.getProductTypeId(), factoryId)
+                .map(ProductType::getName)
+                .orElse(null);
+    }
+
+    private Map<String, Object> buildCustomFields(ProcessWorkReportSubmitRequest request) {
+        Map<String, Object> fields = new LinkedHashMap<>();
+        if (request.getCustomFields() != null) {
+            fields.putAll(request.getCustomFields());
+        }
+        putIfPresent(fields, "batchNumber", request.getBatchNumber());
+        putIfPresent(fields, "reportMode", request.getReportMode());
+        putIfPresent(fields, "workerIds", request.getWorkerIds());
+        return fields.isEmpty() ? null : fields;
+    }
+
+    private void putIfPresent(Map<String, Object> fields, String key, Object value) {
+        if (value == null) {
+            return;
+        }
+        if (value instanceof String s && s.isBlank()) {
+            return;
+        }
+        fields.put(key, value);
+    }
+
     /**
      * R70-FIX-D (R69-BUG-2): syncQuantitiesToTask 之前不 cap completedQuantity 也不 guard
      * CLOSED 状态. pt-001 实测 plannedQuantity=100 但 completedQuantity=1178 (10×over-completion).
@@ -552,7 +639,17 @@ public class ProcessWorkReportingServiceImpl implements ProcessWorkReportingServ
         map.put("workerId", r.getWorkerId());
         map.put("reporterName", r.getReporterName());
         map.put("reportDate", r.getReportDate());
+        map.put("inputQuantity", r.getInputQuantity());
+        map.put("warehouseOutQuantity", r.getWarehouseOutQuantity());
+        map.put("feedInQuantity", r.getFeedInQuantity());
+        map.put("carryoverQuantity", r.getCarryoverQuantity());
+        map.put("sourceWipNo", r.getSourceWipNo());
         map.put("outputQuantity", r.getOutputQuantity());
+        map.put("totalWorkers", r.getTotalWorkers());
+        map.put("totalWorkMinutes", r.getTotalWorkMinutes());
+        map.put("productionStartTime", r.getProductionStartTime());
+        map.put("productionEndTime", r.getProductionEndTime());
+        map.put("reportMode", r.getReportMode());
         map.put("processCategory", r.getProcessCategory());
         map.put("productName", r.getProductName());
         map.put("approvalStatus", r.getApprovalStatus());
@@ -562,6 +659,8 @@ public class ProcessWorkReportingServiceImpl implements ProcessWorkReportingServ
         map.put("rejectedReason", r.getRejectedReason());
         map.put("reversalOfId", r.getReversalOfId());
         map.put("notes", r.getNotes());
+        map.put("customFields", r.getCustomFields());
+        map.put("photos", r.getPhotos());
         map.put("createdAt", r.getCreatedAt());
         return map;
     }

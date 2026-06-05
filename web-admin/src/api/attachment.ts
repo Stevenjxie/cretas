@@ -25,6 +25,11 @@ export type AttachmentEntityType =
   | 'EXPENSE_REPORT'
   | 'LEAVE_REQUEST'
   | 'TIMECLOCK_PHOTO'
+  | 'SALES_ORDER'
+  | 'INVENTORY'
+  | 'ECN'
+  | 'CALL_RECORD'
+  | 'PRODUCTION_REPORT'
   | 'GENERIC';
 
 export type AttachmentFileCategory =
@@ -33,6 +38,7 @@ export type AttachmentFileCategory =
   | 'DOCUMENT'
   | 'VOUCHER'
   | 'SIGNATURE'
+  | 'CONTRACT'
   | 'OTHER';
 
 export interface Attachment {

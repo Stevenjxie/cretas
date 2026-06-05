@@ -49,7 +49,8 @@ public class AttachmentPermissionResolver {
             "application/vnd.ms-excel",
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             "application/msword",
-            "video/mp4"
+            "video/mp4",
+            "video/quicktime"
     );
 
     /** 10 MB hard ceiling on signed PUT URL issuance. */
@@ -65,21 +66,26 @@ public class AttachmentPermissionResolver {
         EnumMap<EntityType, String> m = new EnumMap<>(EntityType.class);
         m.put(EntityType.CUSTOMER, "sales");
         m.put(EntityType.CUSTOMER_TRACKING, "sales");
+        m.put(EntityType.SALES_ORDER, "sales");
         m.put(EntityType.PURCHASE_ORDER, "procurement");
         m.put(EntityType.PURCHASE_RECEIPT, "procurement");
         m.put(EntityType.QUALITY_CHECK, "quality");
         m.put(EntityType.PRODUCTION_BATCH, "production");
+        m.put(EntityType.PRODUCTION_REPORT, "production");
         m.put(EntityType.PAYMENT_VOUCHER, "finance");
         m.put(EntityType.INVOICE, "finance");
         m.put(EntityType.RD_SAMPLE, "rd");
         m.put(EntityType.RECEIPT, "finance");
         m.put(EntityType.RETURN_ORDER, "sales");
         m.put(EntityType.SHIPMENT, "sales");
+        m.put(EntityType.INVENTORY, "warehouse");
         m.put(EntityType.WASTAGE_RECORD, "restaurant");
         m.put(EntityType.GROUP_LEADER_REPORT, "work_report");
         m.put(EntityType.EXPENSE_REPORT, "finance");
         m.put(EntityType.LEAVE_REQUEST, "hr");
         m.put(EntityType.TIMECLOCK_PHOTO, "hr");
+        m.put(EntityType.ECN, "system");
+        m.put(EntityType.CALL_RECORD, "sales");
         m.put(EntityType.GENERIC, "system");
         ENTITY_MODULE = java.util.Collections.unmodifiableMap(m);
     }

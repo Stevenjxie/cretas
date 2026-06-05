@@ -136,6 +136,50 @@ function formatDate(dateStr: string | null) {
   if (!dateStr) return '-';
   return dateStr.substring(0, 10);
 }
+
+function formatQty(value: number | null | undefined) {
+  if (value === null || value === undefined) return '-';
+  return Number(value).toLocaleString('zh-CN', { maximumFractionDigits: 2 });
+}
+
+function formatTime(value: string | null | undefined) {
+  if (!value) return '-';
+  return String(value).substring(0, 5);
+}
+
+function formatTimeRange(row: ApprovalItem) {
+  const start = formatTime(row.productionStartTime);
+  const end = formatTime(row.productionEndTime);
+  if (start === '-' && end === '-') return '-';
+  return `${start} - ${end}`;
+}
+
+function reportModeLabel(mode: string | null | undefined) {
+  if (mode === 'MODE_1') return '按工序';
+  if (mode === 'MODE_2') return '按批次';
+  if (mode === 'MODE_3') return '按人头';
+  return mode || '-';
+}
+
+function customFieldText(row: ApprovalItem) {
+  if (!row.customFields || Object.keys(row.customFields).length === 0) return '-';
+  return Object.entries(row.customFields)
+    .map(([key, value]) => `${key}: ${value ?? '-'}`)
+    .join('；');
+}
+
+function isVideoEvidence(url: string): boolean {
+  return /\.(mp4|mov|webm)(\?|#|$)/i.test(url) || url.includes('/videos/');
+}
+
+function evidenceImages(urls: string[]): string[] {
+  return urls.filter((url) => !isVideoEvidence(url));
+}
+
+function evidenceImageIndex(urls: string[], url: string): number {
+  const idx = evidenceImages(urls).indexOf(url);
+  return idx < 0 ? 0 : idx;
+}
 </script>
 
 <template>
@@ -164,21 +208,77 @@ function formatDate(dateStr: string | null) {
       <el-table
         :data="tableData"
         v-loading="loading"
+        row-key="id"
         stripe
         @selection-change="handleSelectionChange"
       >
         <el-table-column type="selection" width="50" />
+        <el-table-column type="expand" width="44">
+          <template #default="{ row }">
+            <div class="report-detail">
+              <el-descriptions :column="3" border size="small">
+                <el-descriptions-item label="产品">{{ row.productName || '-' }}</el-descriptions-item>
+                <el-descriptions-item label="投入量">{{ formatQty(row.inputQuantity) }}</el-descriptions-item>
+                <el-descriptions-item label="产出量">{{ formatQty(row.outputQuantity) }}</el-descriptions-item>
+                <el-descriptions-item label="人数">{{ row.totalWorkers ?? '-' }}</el-descriptions-item>
+                <el-descriptions-item label="工时分钟">{{ row.totalWorkMinutes ?? '-' }}</el-descriptions-item>
+                <el-descriptions-item label="工序时间">{{ formatTimeRange(row) }}</el-descriptions-item>
+                <el-descriptions-item label="报工模式">{{ reportModeLabel(row.reportMode) }}</el-descriptions-item>
+                <el-descriptions-item label="来源WIP">{{ row.sourceWipNo || '-' }}</el-descriptions-item>
+                <el-descriptions-item label="任务ID">{{ row.processTaskId }}</el-descriptions-item>
+                <el-descriptions-item label="原始照片名">{{ row.photos?.length ? row.photos.join('，') : '-' }}</el-descriptions-item>
+                <el-descriptions-item label="备注" :span="3">{{ row.notes || '-' }}</el-descriptions-item>
+                <el-descriptions-item label="扩展字段" :span="3">{{ customFieldText(row) }}</el-descriptions-item>
+              </el-descriptions>
+              <div class="evidence-panel">
+                <div class="evidence-title">现场证据</div>
+                <div v-if="row.photos && row.photos.length" class="evidence-media">
+                  <template v-for="(url, i) in row.photos" :key="i">
+                    <video
+                      v-if="isVideoEvidence(url)"
+                      :src="url"
+                      class="evidence-item"
+                      controls
+                    />
+                    <el-image
+                      v-else
+                      :src="url"
+                      fit="cover"
+                      :preview-src-list="evidenceImages(row.photos)"
+                      :initial-index="evidenceImageIndex(row.photos, url)"
+                      class="evidence-item"
+                      preview-teleported
+                    />
+                  </template>
+                </div>
+                <div v-else class="evidence-empty">暂无现场证据</div>
+              </div>
+            </div>
+          </template>
+        </el-table-column>
         <el-table-column prop="reporterName" label="报工人" width="100" />
         <el-table-column prop="reportDate" label="报工日期" width="110">
           <template #default="{ row }">{{ formatDate(row.reportDate) }}</template>
         </el-table-column>
-        <el-table-column prop="processCategory" label="工序" min-width="100" />
-        <el-table-column prop="outputQuantity" label="数量" width="100">
+        <el-table-column prop="productName" label="产品" min-width="120" show-overflow-tooltip>
+          <template #default="{ row }">{{ row.productName || '-' }}</template>
+        </el-table-column>
+        <el-table-column prop="processCategory" label="工序" min-width="110" show-overflow-tooltip />
+        <el-table-column prop="inputQuantity" label="投入" width="90">
+          <template #default="{ row }">{{ formatQty(row.inputQuantity) }}</template>
+        </el-table-column>
+        <el-table-column prop="outputQuantity" label="产出" width="90">
           <template #default="{ row }">
             <span :class="{ 'text-warning': row.isSupplemental }">
-              {{ row.outputQuantity }}
+              {{ formatQty(row.outputQuantity) }}
             </span>
           </template>
+        </el-table-column>
+        <el-table-column prop="totalWorkers" label="人数" width="80">
+          <template #default="{ row }">{{ row.totalWorkers ?? '-' }}</template>
+        </el-table-column>
+        <el-table-column prop="totalWorkMinutes" label="工时" width="80">
+          <template #default="{ row }">{{ row.totalWorkMinutes ?? '-' }}</template>
         </el-table-column>
         <el-table-column prop="isSupplemental" label="类型" width="80">
           <template #default="{ row }">
@@ -235,4 +335,33 @@ function formatDate(dateStr: string | null) {
 .toolbar-left { display: flex; align-items: center; gap: 12px; }
 .toolbar-right { display: flex; gap: 8px; }
 .text-warning { color: #e6a23c; font-weight: 600; }
+.report-detail {
+  padding: 12px 24px 18px 24px;
+  background: #fafcff;
+}
+.evidence-panel {
+  margin-top: 12px;
+}
+.evidence-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: #303133;
+  margin-bottom: 8px;
+}
+.evidence-media {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.evidence-item {
+  width: 96px;
+  height: 96px;
+  border-radius: 6px;
+  object-fit: cover;
+  background: #111827;
+}
+.evidence-empty {
+  color: #909399;
+  font-size: 13px;
+}
 </style>
