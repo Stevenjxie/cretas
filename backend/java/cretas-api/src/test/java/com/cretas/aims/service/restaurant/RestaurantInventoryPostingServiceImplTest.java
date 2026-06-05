@@ -110,7 +110,32 @@ class RestaurantInventoryPostingServiceImplTest {
     }
 
     @Test
-    @DisplayName("失败状态使用独立保存方法持久化")
+    @DisplayName("invalid material stops posting and can be persisted as FAILED")
+    void postSupplierDeliveryToInventory_invalidMaterialCanBeMarkedFailed() {
+        SupplierDeliveryNote note = draftNote();
+        note.getLines().get(0).setRawMaterialTypeId("RMT_MISSING");
+        when(noteRepository.findByIdAndFactoryId("N1", FACTORY)).thenReturn(Optional.of(note));
+        when(noteRepository.saveAndFlush(any(SupplierDeliveryNote.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(noteRepository.save(any(SupplierDeliveryNote.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(supplierRepository.findByIdAndFactoryId("SUP1", FACTORY)).thenReturn(Optional.of(new Supplier()));
+        when(warehouseResolver.resolveLogisticsId(FACTORY)).thenReturn("WH-LOG-ID");
+        when(rawMaterialTypeRepository.findById("RMT_MISSING")).thenReturn(Optional.empty());
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> service.postSupplierDeliveryToInventory(FACTORY, "N1", USER));
+
+        assertEquals(400, ex.getCode());
+        verifyNoInteractions(purchaseService);
+
+        service.markSupplierDeliveryPostingFailed(FACTORY, "N1", ex.getMessage());
+
+        assertEquals(DeliveryPostingStatus.FAILED, note.getPostingStatus());
+        assertTrue(note.getPostingError().contains("RMT_MISSING"));
+        verify(noteRepository).save(note);
+    }
+
+    @Test
+    @DisplayName("posting failure marker persists FAILED status")
     void markSupplierDeliveryPostingFailed_setsFailedStatus() {
         SupplierDeliveryNote note = draftNote();
         when(noteRepository.findByIdAndFactoryId("N1", FACTORY)).thenReturn(Optional.of(note));

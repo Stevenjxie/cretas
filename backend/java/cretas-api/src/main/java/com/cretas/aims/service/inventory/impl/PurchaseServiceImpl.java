@@ -1495,7 +1495,10 @@ public class PurchaseServiceImpl implements PurchaseService {
         batch.setStatus(MaterialBatchStatus.AVAILABLE);
         batch.setCreatedBy(userId);
         // D1: 采购入库默认 WH-LOG (物流仓). per PR #310 spec — raw material persistent in logistics warehouse.
-        batch.setWarehouseId(warehouseResolver.resolveLogisticsId(factoryId));
+        String warehouseId = (record.getWarehouseId() != null && !record.getWarehouseId().isBlank())
+                ? record.getWarehouseId()
+                : warehouseResolver.resolveLogisticsId(factoryId);
+        batch.setWarehouseId(warehouseId);
 
         // 根据原料类型计算过期日期
         if (materialType != null && materialType.getShelfLifeDays() != null) {
