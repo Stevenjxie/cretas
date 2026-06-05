@@ -5,6 +5,7 @@ import com.cretas.aims.entity.SemiFinishedInventory;
 import com.cretas.aims.entity.lineage.BatchLineageEdge;
 import com.cretas.aims.entity.workprocess.WorkProcessTask;
 import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.repository.ProductionReportRepository;
 import com.cretas.aims.repository.SemiFinishedInventoryRepository;
 import com.cretas.aims.repository.lineage.BatchLineageEdgeRepository;
 import com.cretas.aims.service.wip.WipInventoryService;
@@ -25,10 +26,12 @@ import java.util.Map;
 public class WipInventoryServiceImpl implements WipInventoryService {
 
     private final SemiFinishedInventoryRepository wipRepo;
+    private final ProductionReportRepository reportRepo;
     private final BatchLineageEdgeRepository lineageEdgeRepo;
 
     @Override
-    public SemiFinishedInventory validateSourceWip(String sourceWipNo, BigDecimal inputQuantity, String inputUnit) {
+    public SemiFinishedInventory validateSourceWip(
+            String factoryId, String sourceWipNo, BigDecimal inputQuantity, String inputUnit, Long excludeReportId) {
         if (sourceWipNo == null || sourceWipNo.isBlank()) {
             return null;
         }
@@ -44,7 +47,7 @@ public class WipInventoryServiceImpl implements WipInventoryService {
                     .withHintTarget("inputQuantity");
         }
         validateUnit(sourceWip, inputUnit);
-        validateAvailable(sourceWip, inputQuantity);
+        validateAvailable(sourceWip, inputQuantity, pendingReserved(factoryId, sourceWipNo, excludeReportId));
         return sourceWip;
     }
 
@@ -57,7 +60,7 @@ public class WipInventoryServiceImpl implements WipInventoryService {
         if (report.getSourceWipNo() != null && !report.getSourceWipNo().isBlank()
                 && report.getInputQuantity() != null) {
             SemiFinishedInventory sourceWip = validateSourceWip(
-                    report.getSourceWipNo(), report.getInputQuantity(), report.getInputUnit());
+                    factoryId, report.getSourceWipNo(), report.getInputQuantity(), report.getInputUnit(), report.getId());
             consumeSourceWip(sourceWip, report.getInputQuantity(), report, task, operatorId);
         }
         if (report.getOutputQuantity() != null && report.getOutputQuantity().compareTo(BigDecimal.ZERO) > 0) {
@@ -137,13 +140,34 @@ public class WipInventoryServiceImpl implements WipInventoryService {
         }
     }
 
-    private void validateAvailable(SemiFinishedInventory sourceWip, BigDecimal inputQuantity) {
+    private BigDecimal pendingReserved(String factoryId, String sourceWipNo, Long excludeReportId) {
+        if (factoryId == null || factoryId.isBlank()) {
+            return BigDecimal.ZERO;
+        }
+        BigDecimal pending = reportRepo.sumPendingInputBySourceWipNo(factoryId, sourceWipNo, excludeReportId);
+        return pending == null ? BigDecimal.ZERO : pending;
+    }
+
+    private void validateAvailable(SemiFinishedInventory sourceWip, BigDecimal inputQuantity, BigDecimal pendingReserved) {
         if (inputQuantity == null) {
             return;
         }
         BigDecimal avail = nz(sourceWip.getAvailableQuantity());
-        if (inputQuantity.compareTo(avail) > 0) {
+        BigDecimal reserved = nz(pendingReserved);
+        BigDecimal claimable = avail.subtract(reserved).max(BigDecimal.ZERO);
+        if (inputQuantity.compareTo(claimable) > 0) {
             String u = sourceWip.getUnit() == null ? "" : sourceWip.getUnit();
+            if (reserved.compareTo(BigDecimal.ZERO) > 0) {
+                throw new BusinessException(409, "半成品可领余额不足（含待审批占用）")
+                        .withCode("WIP_RESERVED_INSUFFICIENT")
+                        .withHint(String.format("库存剩余 %s %s，待审批已占用 %s %s，本次申请 %s %s，最多还能申请 %s %s。请减少投入量，或先审批/驳回前面的报工。",
+                                avail.stripTrailingZeros().toPlainString(), u,
+                                reserved.stripTrailingZeros().toPlainString(), u,
+                                inputQuantity.stripTrailingZeros().toPlainString(), u,
+                                claimable.stripTrailingZeros().toPlainString(), u))
+                        .withSeverity("BLOCKING")
+                        .withHintTarget("inputQuantity");
+            }
             throw new BusinessException(409, "领用量超过半成品余额")
                     .withCode("WIP_INSUFFICIENT")
                     .withHint(String.format("WIP 余额仅 %s %s, 不能领 %s %s",

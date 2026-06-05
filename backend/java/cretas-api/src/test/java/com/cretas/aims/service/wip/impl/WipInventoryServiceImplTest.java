@@ -4,6 +4,7 @@ import com.cretas.aims.entity.ProductionReport;
 import com.cretas.aims.entity.SemiFinishedInventory;
 import com.cretas.aims.entity.workprocess.WorkProcessTask;
 import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.repository.ProductionReportRepository;
 import com.cretas.aims.repository.SemiFinishedInventoryRepository;
 import com.cretas.aims.repository.lineage.BatchLineageEdgeRepository;
 import org.junit.jupiter.api.DisplayName;
@@ -32,6 +33,9 @@ class WipInventoryServiceImplTest {
 
     @Mock
     private SemiFinishedInventoryRepository wipRepo;
+
+    @Mock
+    private ProductionReportRepository reportRepo;
 
     @Mock
     private BatchLineageEdgeRepository lineageEdgeRepo;
@@ -80,6 +84,29 @@ class WipInventoryServiceImplTest {
 
         assertEquals(409, ex.getCode());
         assertEquals("WIP_INPUT_REQUIRED", ex.getErrorCode());
+    }
+
+    @Test
+    @DisplayName("validateSourceWip subtracts pending report reservations before allowing new input")
+    void validateSourceWip_blocksWhenPendingReservationsWouldOverClaim() {
+        SemiFinishedInventory source = SemiFinishedInventory.builder()
+                .intermediateBatchNo("WIP-S1")
+                .availableQuantity(new BigDecimal("100"))
+                .producedQuantity(new BigDecimal("100"))
+                .consumedQuantity(BigDecimal.ZERO)
+                .unit("kg")
+                .build();
+        when(wipRepo.findByIntermediateBatchNoAndDeletedAtIsNull("WIP-S1"))
+                .thenReturn(Optional.of(source));
+        when(reportRepo.sumPendingInputBySourceWipNo(FACTORY_ID, "WIP-S1", null))
+                .thenReturn(new BigDecimal("70"));
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> service.validateSourceWip(FACTORY_ID, "WIP-S1", new BigDecimal("40"), "kg", null));
+
+        assertEquals(409, ex.getCode());
+        assertEquals("WIP_RESERVED_INSUFFICIENT", ex.getErrorCode());
+        org.junit.jupiter.api.Assertions.assertTrue(ex.getActionHint().contains("最多还能申请 30 kg"));
     }
 
     @Test

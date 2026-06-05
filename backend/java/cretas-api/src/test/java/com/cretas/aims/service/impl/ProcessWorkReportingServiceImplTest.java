@@ -781,7 +781,7 @@ class ProcessWorkReportingServiceImplTest {
 
             service.submitNormalReport(FACTORY_ID, WORKER_ID, request);
 
-            verify(wipInventoryService).validateSourceWip("WIP-S1", new BigDecimal("35"), "kg");
+            verify(wipInventoryService).validateSourceWip(FACTORY_ID, "WIP-S1", new BigDecimal("35"), "kg", null);
             verify(wipInventoryService, never()).postApprovedOutput(anyString(), any(), any(), any());
             verify(reportRepository).save(reportCaptor.capture());
             ProductionReport createdReport = reportCaptor.getValue();

@@ -280,6 +280,21 @@ public interface ProductionReportRepository extends JpaRepository<ProductionRepo
     Map<String, Object> sumPendingQuantityByTaskId(@Param("taskId") String taskId);
 
     @Query(value = """
+        SELECT COALESCE(SUM(CAST(input_quantity AS DECIMAL(12,2))), 0)
+        FROM production_reports
+        WHERE factory_id = :factoryId
+          AND source_wip_no = :sourceWipNo
+          AND approval_status = 'PENDING'
+          AND input_quantity IS NOT NULL
+          AND (:excludeReportId IS NULL OR id <> :excludeReportId)
+          AND deleted_at IS NULL
+        """, nativeQuery = true)
+    BigDecimal sumPendingInputBySourceWipNo(
+            @Param("factoryId") String factoryId,
+            @Param("sourceWipNo") String sourceWipNo,
+            @Param("excludeReportId") Long excludeReportId);
+
+    @Query(value = """
         SELECT
             worker_id,
             reporter_name as worker_name,

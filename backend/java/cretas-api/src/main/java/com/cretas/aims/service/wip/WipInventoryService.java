@@ -11,7 +11,12 @@ import java.math.BigDecimal;
  */
 public interface WipInventoryService {
 
-    SemiFinishedInventory validateSourceWip(String sourceWipNo, BigDecimal inputQuantity, String inputUnit);
+    default SemiFinishedInventory validateSourceWip(String sourceWipNo, BigDecimal inputQuantity, String inputUnit) {
+        return validateSourceWip(null, sourceWipNo, inputQuantity, inputUnit, null);
+    }
+
+    SemiFinishedInventory validateSourceWip(
+            String factoryId, String sourceWipNo, BigDecimal inputQuantity, String inputUnit, Long excludeReportId);
 
     void postApprovedOutput(String factoryId, ProductionReport report, WorkProcessTask task, Long operatorId);
 }

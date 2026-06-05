@@ -251,7 +251,7 @@ public class ProcessWorkReportingServiceImpl implements ProcessWorkReportingServ
         ProcessTask task = taskRepository.findByFactoryIdAndId(factoryId, processTaskId)
                 .orElseThrow(() -> new ResourceNotFoundException("ProcessTask", "id", processTaskId));
         WorkProcessTask wipTask = resolveWipTask(factoryId, request);
-        validateSourceWipIfPresent(request);
+        validateSourceWipIfPresent(factoryId, request);
 
         // Normal report only for IN_PROGRESS or PENDING tasks
         if (task.getStatus() != ProcessTaskStatus.IN_PROGRESS
@@ -329,7 +329,7 @@ public class ProcessWorkReportingServiceImpl implements ProcessWorkReportingServ
         ProcessTask task = taskRepository.findByFactoryIdAndId(factoryId, processTaskId)
                 .orElseThrow(() -> new ResourceNotFoundException("ProcessTask", "id", processTaskId));
         WorkProcessTask wipTask = resolveWipTask(factoryId, request);
-        validateSourceWipIfPresent(request);
+        validateSourceWipIfPresent(factoryId, request);
 
         // Must be COMPLETED, CLOSED, or already SUPPLEMENTING
         if (task.getStatus() != ProcessTaskStatus.COMPLETED
@@ -585,12 +585,12 @@ public class ProcessWorkReportingServiceImpl implements ProcessWorkReportingServ
         return task;
     }
 
-    private void validateSourceWipIfPresent(ProcessWorkReportSubmitRequest request) {
+    private void validateSourceWipIfPresent(String factoryId, ProcessWorkReportSubmitRequest request) {
         if (request.getSourceWipNo() == null || request.getSourceWipNo().isBlank()) {
             return;
         }
         wipInventoryService.validateSourceWip(
-                request.getSourceWipNo(), request.getInputQuantity(), request.getInputUnit());
+                factoryId, request.getSourceWipNo(), request.getInputQuantity(), request.getInputUnit(), null);
     }
 
     private void postWipForApprovedReport(String factoryId, ProductionReport report, Long operatorId) {
