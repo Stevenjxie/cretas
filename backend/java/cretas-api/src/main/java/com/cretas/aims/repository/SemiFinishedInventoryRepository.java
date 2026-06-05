@@ -1,7 +1,9 @@
 package com.cretas.aims.repository;
 
 import com.cretas.aims.entity.SemiFinishedInventory;
+import jakarta.persistence.LockModeType;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
@@ -27,6 +29,11 @@ public interface SemiFinishedInventoryRepository extends JpaRepository<SemiFinis
      * intermediate_batch_no 工厂内唯一 (partial unique uq_sfi_intermediate_batch_no), 故返 Optional。
      */
     Optional<SemiFinishedInventory> findByIntermediateBatchNoAndDeletedAtIsNull(String intermediateBatchNo);
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT w FROM SemiFinishedInventory w WHERE w.intermediateBatchNo = :intermediateBatchNo AND w.deletedAt IS NULL")
+    Optional<SemiFinishedInventory> findForUpdateByIntermediateBatchNoAndDeletedAtIsNull(
+            @Param("intermediateBatchNo") String intermediateBatchNo);
 
     /** 某生产批次的全部 WIP 行 (整批出成率在制量汇总用)。 */
     List<SemiFinishedInventory> findByFactoryIdAndBatchIdAndDeletedAtIsNull(String factoryId, Long batchId);

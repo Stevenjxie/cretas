@@ -35,7 +35,7 @@ public class WipInventoryServiceImpl implements WipInventoryService {
         if (sourceWipNo == null || sourceWipNo.isBlank()) {
             return null;
         }
-        SemiFinishedInventory sourceWip = wipRepo.findByIntermediateBatchNoAndDeletedAtIsNull(sourceWipNo)
+        SemiFinishedInventory sourceWip = loadSourceWipForValidation(factoryId, sourceWipNo)
                 .orElseThrow(() -> new BusinessException(404, "源半成品库存不存在: " + sourceWipNo)
                         .withHint("请重新选择要领用的上道半成品批次")
                         .withHintTarget("sourceWipNo"));
@@ -49,6 +49,13 @@ public class WipInventoryServiceImpl implements WipInventoryService {
         validateUnit(sourceWip, inputUnit);
         validateAvailable(sourceWip, inputQuantity, pendingReserved(factoryId, sourceWipNo, excludeReportId));
         return sourceWip;
+    }
+
+    private java.util.Optional<SemiFinishedInventory> loadSourceWipForValidation(String factoryId, String sourceWipNo) {
+        if (factoryId == null || factoryId.isBlank()) {
+            return wipRepo.findByIntermediateBatchNoAndDeletedAtIsNull(sourceWipNo);
+        }
+        return wipRepo.findForUpdateByIntermediateBatchNoAndDeletedAtIsNull(sourceWipNo);
     }
 
     @Override

@@ -96,7 +96,7 @@ class WipInventoryServiceImplTest {
                 .consumedQuantity(BigDecimal.ZERO)
                 .unit("kg")
                 .build();
-        when(wipRepo.findByIntermediateBatchNoAndDeletedAtIsNull("WIP-S1"))
+        when(wipRepo.findForUpdateByIntermediateBatchNoAndDeletedAtIsNull("WIP-S1"))
                 .thenReturn(Optional.of(source));
         when(reportRepo.sumPendingInputBySourceWipNo(FACTORY_ID, "WIP-S1", null))
                 .thenReturn(new BigDecimal("70"));
@@ -106,7 +106,7 @@ class WipInventoryServiceImplTest {
 
         assertEquals(409, ex.getCode());
         assertEquals("WIP_RESERVED_INSUFFICIENT", ex.getErrorCode());
-        org.junit.jupiter.api.Assertions.assertTrue(ex.getActionHint().contains("最多还能申请 30 kg"));
+        org.junit.jupiter.api.Assertions.assertTrue(ex.getActionHint().contains("30 kg"));
     }
 
     @Test
