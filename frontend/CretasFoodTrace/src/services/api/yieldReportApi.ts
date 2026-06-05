@@ -321,14 +321,19 @@ class YieldReportApi {
    * 见 FileUploadController.java:100). 返回 ApiResponse<{url}>; 拿 url 写入 submitReport 的 evidenceImages.
    * 注: 不在 batch base 路径下 (是工厂级通用上传入口).
    */
-  async uploadYieldEvidence(fileUri: string, factoryId?: string): Promise<string> {
-    const fid = requireFactoryId(factoryId);
+  async uploadYieldEvidence(
+    fileUri: string,
+    options: { fileName?: string; mimeType?: string; factoryId?: string } = {},
+  ): Promise<string> {
+    const mimeType = options.mimeType || 'image/jpeg';
+    const fileName = options.fileName || `yield_evidence_${Date.now()}${mimeType.startsWith('video/') ? '.mp4' : '.jpg'}`;
+    const fid = requireFactoryId(options.factoryId);
     const formData = new FormData();
     // React Native FormData 接受 {uri, name, type} 形状 (非 Blob), 见 PhotoEvidenceCapture.tsx:71
     formData.append('file', {
       uri: fileUri,
-      name: `yield_evidence_${Date.now()}.jpg`,
-      type: 'image/jpeg',
+      name: fileName,
+      type: mimeType,
     } as unknown as Blob);
     const res = await apiClient.post<ApiResponse<{ url: string }>>(
       `/api/mobile/${fid}/upload/yield-evidence`,

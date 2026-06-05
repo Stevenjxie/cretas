@@ -302,6 +302,37 @@ function stepPhotos(row: Record<string, unknown>): string[] {
 }
 // 单元3 (F006 三阶段): 投入照片 / 产出照片 分组 (后端 BatchYieldDTO.steps[].inputPhotos / outputPhotos).
 // 各自独立 lightbox 画廊; 空数组/null → []. legacy 行两组都空时回退到合并的 photos (见 stepLegacyFallbackPhotos).
+type EvidenceMediaKind = 'image' | 'video';
+interface EvidenceMediaItem {
+  url: string;
+  kind: EvidenceMediaKind;
+}
+
+function isEvidenceVideoUrl(url: string): boolean {
+  const clean = String(url || '').split(/[?#]/)[0]?.toLowerCase() || '';
+  return /\.(mp4|mov|m4v|webm)$/.test(clean);
+}
+
+function evidenceMediaItems(urls: string[]): EvidenceMediaItem[] {
+  return urls.map((url) => ({
+    url,
+    kind: isEvidenceVideoUrl(url) ? 'video' : 'image'
+  }));
+}
+
+function evidenceImageUrls(urls: string[]): string[] {
+  return urls.filter((url) => !isEvidenceVideoUrl(url));
+}
+
+function evidenceImageInitialIndex(urls: string[], url: string): number {
+  const idx = evidenceImageUrls(urls).indexOf(url);
+  return idx >= 0 ? idx : 0;
+}
+
+function firstEvidenceMedia(row: Record<string, unknown>): EvidenceMediaItem | null {
+  return evidenceMediaItems(stepPhotos(row))[0] || null;
+}
+
 function stepInputPhotos(row: Record<string, unknown>): string[] {
   const p = row?.inputPhotos;
   return Array.isArray(p) ? (p as string[]).filter((u) => !!u) : [];
@@ -611,48 +642,81 @@ function getTimelineIcon(type: string) {
                     <div class="trad-item">
                       <span class="trad-label">投入照片</span>
                       <template v-if="stepInputPhotos(row).length > 0">
-                        <el-image
-                          v-for="(url, i) in stepInputPhotos(row)"
+                        <template
+                          v-for="(media, i) in evidenceMediaItems(stepInputPhotos(row))"
                           :key="'in-' + i"
-                          :src="url"
-                          fit="cover"
-                          :preview-src-list="stepInputPhotos(row)"
-                          :initial-index="i"
-                          class="trad-thumb"
-                          preview-teleported
-                        />
+                        >
+                          <video
+                            v-if="media.kind === 'video'"
+                            :src="media.url"
+                            class="trad-thumb trad-video"
+                            controls
+                            preload="metadata"
+                          />
+                          <el-image
+                            v-else
+                            :src="media.url"
+                            fit="cover"
+                            :preview-src-list="evidenceImageUrls(stepInputPhotos(row))"
+                            :initial-index="evidenceImageInitialIndex(stepInputPhotos(row), media.url)"
+                            class="trad-thumb"
+                            preview-teleported
+                          />
+                        </template>
                       </template>
                       <span v-else class="trad-empty">—</span>
                     </div>
                     <div class="trad-item">
                       <span class="trad-label">产出照片</span>
                       <template v-if="stepOutputPhotos(row).length > 0">
-                        <el-image
-                          v-for="(url, i) in stepOutputPhotos(row)"
+                        <template
+                          v-for="(media, i) in evidenceMediaItems(stepOutputPhotos(row))"
                           :key="'out-' + i"
-                          :src="url"
-                          fit="cover"
-                          :preview-src-list="stepOutputPhotos(row)"
-                          :initial-index="i"
-                          class="trad-thumb"
-                          preview-teleported
-                        />
+                        >
+                          <video
+                            v-if="media.kind === 'video'"
+                            :src="media.url"
+                            class="trad-thumb trad-video"
+                            controls
+                            preload="metadata"
+                          />
+                          <el-image
+                            v-else
+                            :src="media.url"
+                            fit="cover"
+                            :preview-src-list="evidenceImageUrls(stepOutputPhotos(row))"
+                            :initial-index="evidenceImageInitialIndex(stepOutputPhotos(row), media.url)"
+                            class="trad-thumb"
+                            preview-teleported
+                          />
+                        </template>
                       </template>
                       <span v-else class="trad-empty">—</span>
                     </div>
                     <!-- legacy 回退: 旧数据无 input/output 分组时, 用合并 photos 兜底 (新数据此组不显示) -->
                     <div v-if="stepLegacyFallbackPhotos(row).length > 0" class="trad-item">
                       <span class="trad-label">证据照片</span>
-                      <el-image
-                        v-for="(url, i) in stepLegacyFallbackPhotos(row)"
+                      <template
+                        v-for="(media, i) in evidenceMediaItems(stepLegacyFallbackPhotos(row))"
                         :key="'legacy-' + i"
-                        :src="url"
-                        fit="cover"
-                        :preview-src-list="stepLegacyFallbackPhotos(row)"
-                        :initial-index="i"
-                        class="trad-thumb"
-                        preview-teleported
-                      />
+                      >
+                        <video
+                          v-if="media.kind === 'video'"
+                          :src="media.url"
+                          class="trad-thumb trad-video"
+                          controls
+                          preload="metadata"
+                        />
+                        <el-image
+                          v-else
+                          :src="media.url"
+                          fit="cover"
+                          :preview-src-list="evidenceImageUrls(stepLegacyFallbackPhotos(row))"
+                          :initial-index="evidenceImageInitialIndex(stepLegacyFallbackPhotos(row), media.url)"
+                          class="trad-thumb"
+                          preview-teleported
+                        />
+                      </template>
                     </div>
                     <!-- 工时段: 每段 起-止 N人 备注 -->
                     <div class="trad-item">
@@ -744,11 +808,19 @@ function getTimelineIcon(type: string) {
             <el-table-column label="证据" width="92" align="center">
               <template #default="{ row }">
                 <div v-if="stepPhotos(row).length > 0" class="evidence-cell">
+                  <video
+                    v-if="firstEvidenceMedia(row)?.kind === 'video'"
+                    :src="firstEvidenceMedia(row)?.url"
+                    class="evidence-thumb evidence-video"
+                    controls
+                    preload="metadata"
+                  />
                   <el-image
-                    :src="stepPhotos(row)[0]"
+                    v-else
+                    :src="firstEvidenceMedia(row)?.url || ''"
                     fit="cover"
-                    :preview-src-list="stepPhotos(row)"
-                    :initial-index="0"
+                    :preview-src-list="evidenceImageUrls(stepPhotos(row))"
+                    :initial-index="evidenceImageInitialIndex(stepPhotos(row), firstEvidenceMedia(row)?.url || '')"
                     class="evidence-thumb"
                     preview-teleported
                   />
@@ -1126,6 +1198,12 @@ function getTimelineIcon(type: string) {
   height: 40px;
   border-radius: 4px;
   cursor: pointer;
+  object-fit: cover;
+  background: #111827;
+}
+
+.evidence-video {
+  display: block;
 }
 
 .evidence-badge {
@@ -1174,6 +1252,13 @@ function getTimelineIcon(type: string) {
   height: 56px;
   border-radius: 6px;
   cursor: pointer;
+  object-fit: cover;
+  background: #111827;
+}
+
+.trad-video {
+  display: inline-block;
+  vertical-align: middle;
 }
 
 .trad-chip {
