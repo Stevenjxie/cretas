@@ -185,3 +185,8 @@ export interface CreateSupplierDeliveryRequest {
   noteNumber?: string;
   lines: SupplierDeliveryLine[];
 }
+
+export interface RejectSupplierDeliveryRequest {
+  rejectReasonCode: 'IMAGE_BLUR' | 'LOW_LIGHT' | 'WRONG_DOCUMENT' | 'SUPPLIER_NOT_FOUND' | 'OTHER';
+  rejectReasonNote?: string;
+}

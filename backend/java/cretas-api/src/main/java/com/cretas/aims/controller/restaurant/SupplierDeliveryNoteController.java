@@ -89,6 +89,8 @@ public class SupplierDeliveryNoteController {
 
     // ==================== Rule 1 限制 ====================
 
+    @RequirePermission({"warehouse:read", "warehouse:read_write"})
+    @RequireModule("restaurant")
     @GetMapping("/limits")
     @Operation(summary = "本月录入限制信息 (Rule 1)")
     public ApiResponse<Object> getLimits(
@@ -101,6 +103,8 @@ public class SupplierDeliveryNoteController {
 
     // ==================== 列表 ====================
 
+    @RequirePermission({"warehouse:read", "warehouse:read_write"})
+    @RequireModule("restaurant")
     @GetMapping
     @Operation(summary = "送货单列表")
     public ApiResponse<Page<SupplierDeliveryNoteDto>> list(
@@ -127,6 +131,8 @@ public class SupplierDeliveryNoteController {
 
     // ==================== 详情 ====================
 
+    @RequirePermission({"warehouse:read", "warehouse:read_write"})
+    @RequireModule("restaurant")
     @GetMapping("/{id}")
     @Operation(summary = "送货单详情 (含行项)")
     public ApiResponse<SupplierDeliveryNoteDto> detail(
@@ -155,7 +161,7 @@ public class SupplierDeliveryNoteController {
 
     @RequirePermission({"warehouse:read_write"})
     @RequireModule("restaurant")
-    @PutMapping("/{id}/reject")
+    @RequestMapping(value = "/{id}/reject", method = {RequestMethod.PUT, RequestMethod.POST})
     @Operation(summary = "拒绝送货单 (标准原因码)")
     public ApiResponse<SupplierDeliveryNoteDto> reject(
             @PathVariable String factoryId,
@@ -171,7 +177,7 @@ public class SupplierDeliveryNoteController {
 
     @RequirePermission({"warehouse:read_write"})
     @RequireModule("restaurant")
-    @PutMapping("/{id}/lines")
+    @RequestMapping(value = "/{id}/lines", method = {RequestMethod.PUT, RequestMethod.POST})
     @Operation(summary = "编辑解析行项")
     public ApiResponse<SupplierDeliveryNoteDto> updateLines(
             @PathVariable String factoryId,
@@ -192,6 +198,16 @@ public class SupplierDeliveryNoteController {
             @PathVariable String id) {
         service.deleteDraft(factoryId, id);
         return ApiResponse.successMessage("已删除");
+    }
+
+    @RequirePermission({"warehouse:read_write"})
+    @RequireModule("restaurant")
+    @PostMapping("/{id}/delete")
+    @Operation(summary = "POST 兼容删除草稿 (仅 DRAFT)")
+    public ApiResponse<Void> deleteByPost(
+            @PathVariable String factoryId,
+            @PathVariable String id) {
+        return delete(factoryId, id);
     }
 
     // ==================== entity → DTO ====================

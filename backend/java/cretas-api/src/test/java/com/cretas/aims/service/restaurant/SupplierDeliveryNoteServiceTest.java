@@ -186,8 +186,13 @@ class SupplierDeliveryNoteServiceTest {
         note.setStatus(DeliveryNoteStatus.CONFIRMED);
         when(noteRepository.findByIdAndFactoryId("N1", FACTORY)).thenReturn(Optional.of(note));
 
-        assertThrows(BusinessException.class, () ->
+        BusinessException ex = assertThrows(BusinessException.class, () ->
                 service.rejectNote(FACTORY, "N1", "IMAGE_BLUR", null, 9L));
+        assertEquals(409, ex.getCode());
+        assertEquals("INVALID_STATUS", ex.getErrorCode());
+        assertEquals("status", ex.getHintTarget());
+        assertNotNull(ex.getActionHint());
+        verify(noteRepository, never()).save(any());
     }
 
     @Test
@@ -200,6 +205,72 @@ class SupplierDeliveryNoteServiceTest {
         SupplierDeliveryNote result = service.rejectNote(FACTORY, "N1", "IMAGE_BLUR", "太糊了", 9L);
         assertEquals(DeliveryNoteStatus.REJECTED, result.getStatus());
         assertEquals("IMAGE_BLUR", result.getRejectReasonCode());
+    }
+
+    @Test
+    @DisplayName("rejectNote missing reason returns field-targeted 400")
+    void rejectNote_missingReason_returnsStructuredError() {
+        SupplierDeliveryNote note = draftWithLine();
+        when(noteRepository.findByIdAndFactoryId("N1", FACTORY)).thenReturn(Optional.of(note));
+
+        BusinessException ex = assertThrows(BusinessException.class, () ->
+                service.rejectNote(FACTORY, "N1", " ", null, 9L));
+
+        assertEquals(400, ex.getCode());
+        assertEquals("REJECT_REASON_REQUIRED", ex.getErrorCode());
+        assertEquals("rejectReasonCode", ex.getHintTarget());
+        assertNotNull(ex.getActionHint());
+        verify(noteRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("updateLines non-DRAFT returns structured 409 and does not save")
+    void updateLines_invalidStatus_returnsStructured409() {
+        SupplierDeliveryNote note = draftWithLine();
+        note.setStatus(DeliveryNoteStatus.CONFIRMED);
+        when(noteRepository.findByIdAndFactoryId("N1", FACTORY)).thenReturn(Optional.of(note));
+
+        BusinessException ex = assertThrows(BusinessException.class, () ->
+                service.updateLines(FACTORY, "N1", List.of(lineDto())));
+
+        assertEquals(409, ex.getCode());
+        assertEquals("INVALID_STATUS", ex.getErrorCode());
+        assertEquals("status", ex.getHintTarget());
+        assertNotNull(ex.getActionHint());
+        verify(noteRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("updateLines empty lines returns field-targeted 400")
+    void updateLines_emptyLines_returnsStructured400() {
+        SupplierDeliveryNote note = draftWithLine();
+        when(noteRepository.findByIdAndFactoryId("N1", FACTORY)).thenReturn(Optional.of(note));
+
+        BusinessException ex = assertThrows(BusinessException.class, () ->
+                service.updateLines(FACTORY, "N1", List.of()));
+
+        assertEquals(400, ex.getCode());
+        assertEquals("LINES_REQUIRED", ex.getErrorCode());
+        assertEquals("lines", ex.getHintTarget());
+        assertNotNull(ex.getActionHint());
+        verify(noteRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("deleteDraft non-DRAFT returns structured 409 and does not save")
+    void deleteDraft_invalidStatus_returnsStructured409() {
+        SupplierDeliveryNote note = draftWithLine();
+        note.setStatus(DeliveryNoteStatus.CONFIRMED);
+        when(noteRepository.findByIdAndFactoryId("N1", FACTORY)).thenReturn(Optional.of(note));
+
+        BusinessException ex = assertThrows(BusinessException.class, () ->
+                service.deleteDraft(FACTORY, "N1"));
+
+        assertEquals(409, ex.getCode());
+        assertEquals("INVALID_STATUS", ex.getErrorCode());
+        assertEquals("status", ex.getHintTarget());
+        assertNotNull(ex.getActionHint());
+        verify(noteRepository, never()).save(any());
     }
 
     // ---- 9. getLimits ----
@@ -233,5 +304,15 @@ class SupplierDeliveryNoteServiceTest {
         line.setLineAmount(new java.math.BigDecimal("125"));
         note.addLine(line);
         return note;
+    }
+
+    private com.cretas.aims.dto.restaurant.SupplierDeliveryNoteDto.LineDto lineDto() {
+        return com.cretas.aims.dto.restaurant.SupplierDeliveryNoteDto.LineDto.builder()
+                .ingredientName("鐚倝")
+                .rawMaterialTypeId("rmt-pork")
+                .quantity(new java.math.BigDecimal("10"))
+                .unit("kg")
+                .unitPrice(new java.math.BigDecimal("12.5"))
+                .build();
     }
 }

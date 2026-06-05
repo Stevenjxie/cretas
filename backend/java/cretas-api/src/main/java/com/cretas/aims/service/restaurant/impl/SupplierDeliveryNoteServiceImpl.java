@@ -325,11 +325,15 @@ public class SupplierDeliveryNoteServiceImpl implements SupplierDeliveryNoteServ
         SupplierDeliveryNote note = mustFindDraftOrAny(factoryId, noteId);
         if (note.getStatus() != DeliveryNoteStatus.DRAFT) {
             throw new BusinessException(409, "仅草稿状态可拒绝 (当前: " + note.getStatus() + ")")
-                    .withCode("INVALID_STATUS");
+                    .withCode("INVALID_STATUS")
+                    .withHint("Refresh the delivery note detail and check the latest status before retrying.")
+                    .withHintTarget("status");
         }
         if (rejectReasonCode == null || rejectReasonCode.isBlank()) {
             throw new BusinessException(400, "请选择拒绝原因")
-                    .withHint("可选: 图片模糊 / 光线不足 / 单据不对 / 供应商不存在 / 其他");
+                    .withCode("REJECT_REASON_REQUIRED")
+                    .withHint("可选: 图片模糊 / 光线不足 / 单据不对 / 供应商不存在 / 其他")
+                    .withHintTarget("rejectReasonCode");
         }
         note.setStatus(DeliveryNoteStatus.REJECTED);
         note.setRejectReasonCode(rejectReasonCode);
@@ -344,7 +348,15 @@ public class SupplierDeliveryNoteServiceImpl implements SupplierDeliveryNoteServ
         SupplierDeliveryNote note = mustFindDraftOrAny(factoryId, noteId);
         if (note.getStatus() != DeliveryNoteStatus.DRAFT) {
             throw new BusinessException(409, "仅草稿状态可编辑行项")
-                    .withCode("INVALID_STATUS");
+                    .withCode("INVALID_STATUS")
+                    .withHint("Refresh the delivery note detail and check the latest status before retrying.")
+                    .withHintTarget("status");
+        }
+        if (lines == null || lines.isEmpty()) {
+            throw new BusinessException(400, "Supplier delivery lines are required")
+                    .withCode("LINES_REQUIRED")
+                    .withHint("Add at least one ingredient line with quantity and unit before saving.")
+                    .withHintTarget("lines");
         }
         note.getLines().clear();  // orphanRemoval 删旧行
         BigDecimal total = BigDecimal.ZERO;
@@ -370,7 +382,9 @@ public class SupplierDeliveryNoteServiceImpl implements SupplierDeliveryNoteServ
         SupplierDeliveryNote note = mustFindDraftOrAny(factoryId, noteId);
         if (note.getStatus() != DeliveryNoteStatus.DRAFT) {
             throw new BusinessException(409, "仅草稿可删除")
-                    .withCode("INVALID_STATUS");
+                    .withCode("INVALID_STATUS")
+                    .withHint("Refresh the delivery note detail and check the latest status before retrying.")
+                    .withHintTarget("status");
         }
         note.softDelete();
         noteRepository.save(note);

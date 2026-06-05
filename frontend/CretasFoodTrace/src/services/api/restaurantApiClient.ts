@@ -6,7 +6,8 @@ import type {
   StocktakingRecord,
   WastageRecord, WastageCreateRequest,
   SupplierDeliveryNote, CreateSupplierDeliveryRequest,
-  SupplierDeliveryStatus,
+  SupplierDeliveryStatus, SupplierDeliveryLine,
+  RejectSupplierDeliveryRequest,
 } from '../../types/restaurant';
 
 /**
@@ -197,6 +198,26 @@ class RestaurantApiClient {
   async confirmSupplierDelivery(noteId: string, factoryId?: string): Promise<SupplierDeliveryNote> {
     const res = await apiClient.post<any>(`${this.basePath('supplier-delivery-notes', factoryId)}/${noteId}/confirm`);
     return res?.data ?? res;
+  }
+
+  async updateSupplierDeliveryLines(noteId: string, lines: SupplierDeliveryLine[], factoryId?: string): Promise<SupplierDeliveryNote> {
+    const res = await apiClient.put<{ data: SupplierDeliveryNote }>(
+      `${this.basePath('supplier-delivery-notes', factoryId)}/${noteId}/lines`,
+      lines
+    );
+    return res.data;
+  }
+
+  async rejectSupplierDelivery(noteId: string, data: RejectSupplierDeliveryRequest, factoryId?: string): Promise<SupplierDeliveryNote> {
+    const res = await apiClient.put<{ data: SupplierDeliveryNote }>(
+      `${this.basePath('supplier-delivery-notes', factoryId)}/${noteId}/reject`,
+      data
+    );
+    return res.data;
+  }
+
+  async deleteSupplierDelivery(noteId: string, factoryId?: string): Promise<void> {
+    await apiClient.delete(`${this.basePath('supplier-delivery-notes', factoryId)}/${noteId}`);
   }
 }
 
