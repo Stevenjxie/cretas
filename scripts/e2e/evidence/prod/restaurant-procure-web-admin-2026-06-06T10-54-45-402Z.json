@@ -1,0 +1,26 @@
+{
+  "startedAt": "2026-06-06T10:54:45.402Z",
+  "webBase": "http://139.196.165.140:8086",
+  "user": "qhj_prod",
+  "noteId": "4eb1df20-c6f7-4329-af69-ead24eafb725",
+  "steps": [
+    {
+      "name": "login",
+      "ok": true,
+      "message": "redirected to http://139.196.165.140:8086/dashboard"
+    },
+    {
+      "name": "pending-list-page",
+      "ok": true,
+      "message": "title=\"价格异常待审批刷新\" rows=0"
+    },
+    {
+      "name": "delivery-detail-page",
+      "ok": true,
+      "message": "approval UI visible",
+      "hasApprovalBlock": true
+    }
+  ],
+  "pass": true,
+  "finishedAt": "2026-06-06T10:54:58.304Z"
+}
