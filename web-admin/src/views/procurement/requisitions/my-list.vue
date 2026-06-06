@@ -30,7 +30,17 @@ const permissionStore = usePermissionStore();
 
 const factoryId = computed(() => authStore.factoryId);
 const currentUserId = computed(() => authStore.user?.id ?? null);
-const canWrite = computed(() => permissionStore.canWrite('procurement'));
+const isRestaurant = computed(() => authStore.factoryType === 'RESTAURANT');
+const canManageOwnDraft = computed(() => {
+  if (permissionStore.canWrite('procurement')) return true;
+  if (!isRestaurant.value || !permissionStore.canAccess('procurement')) return false;
+  return ['warehouse_manager', 'restaurant_manager'].includes(authStore.currentRole);
+});
+const pageTitle = computed(() => (isRestaurant.value ? '我的报货/采购计划' : '我的请购'));
+const createButtonText = computed(() => (isRestaurant.value ? '新建报货单' : '新建请购单'));
+const submitButtonText = computed(() => (isRestaurant.value ? '提交采购计划' : '提交审批'));
+const emptyText = computed(() => (isRestaurant.value ? '您还没有发起任何报货单' : '您还没有发起任何请购单'));
+const expectedDateLabel = computed(() => (isRestaurant.value ? '希望到货' : '期望交货'));
 
 const tableData = ref<PurchaseRequisition[]>([]);
 const loading = ref(false);
@@ -86,10 +96,12 @@ function goDetail(id: string) {
 async function handleSubmit(row: PurchaseRequisition) {
   // Fool-proof Rule 2: dialog 标题含单号 + 物料行数
   const lines = Array.isArray(row.requestedItems) ? row.requestedItems.length : 0;
+  const entityName = isRestaurant.value ? '报货单' : '请购单';
+  const nextStep = isRestaurant.value ? '提交给采购汇总/审批' : '提交审批';
   try {
     await ElMessageBox.confirm(
-      `确认提交请购单 ${row.requisitionNumber} (${lines} 行明细) 审批?`,
-      '提交审批',
+      `确认${nextStep}: ${row.requisitionNumber} (${lines} 行明细)?`,
+      isRestaurant.value ? '提交采购计划' : '提交审批',
       { type: 'warning' },
     );
   } catch {
@@ -99,7 +111,7 @@ async function handleSubmit(row: PurchaseRequisition) {
   try {
     const res = await submitRequisition(factoryId.value, row.id);
     if (res?.success) {
-      ElMessage.success('已提交审批');
+      ElMessage.success(isRestaurant.value ? `${entityName}已提交给采购` : '已提交审批');
       await loadData();
     }
   } catch (e) {
@@ -148,17 +160,17 @@ function onCreated() {
       <template #header>
         <div class="card-header">
           <div class="header-left">
-            <span class="page-title">我的请购</span>
+            <span class="page-title">{{ pageTitle }}</span>
             <span class="data-count">共 {{ pagination.total }} 条</span>
           </div>
           <div class="header-right">
             <el-button
-              v-if="canWrite"
+              v-if="canManageOwnDraft"
               type="primary"
               :icon="Plus"
               @click="createDialogVisible = true"
             >
-              新建请购单
+              {{ createButtonText }}
             </el-button>
           </div>
         </div>
@@ -185,7 +197,7 @@ function onCreated() {
       <el-table
         v-loading="loading"
         :data="tableData"
-        empty-text="您还没有发起任何请购单"
+        :empty-text="emptyText"
         stripe
         border
         style="width: 100%"
@@ -207,7 +219,7 @@ function onCreated() {
             </span>
           </template>
         </el-table-column>
-        <el-table-column prop="expectedDate" label="期望交货" width="120" />
+        <el-table-column prop="expectedDate" :label="expectedDateLabel" width="120" />
         <el-table-column label="状态" width="110" align="center">
           <template #default="{ row }">
             <el-tag
@@ -229,16 +241,16 @@ function onCreated() {
               详情
             </el-button>
             <el-button
-              v-if="row.status === 'DRAFT' && canWrite"
+              v-if="row.status === 'DRAFT' && canManageOwnDraft"
               type="warning"
               link
               size="small"
               @click="handleSubmit(row)"
             >
-              提交审批
+              {{ submitButtonText }}
             </el-button>
             <el-button
-              v-if="row.status === 'DRAFT' && canWrite"
+              v-if="row.status === 'DRAFT' && canManageOwnDraft"
               type="danger"
               link
               size="small"

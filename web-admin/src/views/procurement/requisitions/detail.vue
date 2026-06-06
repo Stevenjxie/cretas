@@ -39,6 +39,19 @@ const factoryId = computed(() => authStore.factoryId);
 const requisitionId = computed(() => route.params.id as string);
 const currentUserId = computed(() => authStore.user?.id ?? null);
 const canWrite = computed(() => permissionStore.canWrite('procurement'));
+const isRestaurant = computed(() => authStore.factoryType === 'RESTAURANT');
+const canManageOwnDraft = computed(() => {
+  if (canWrite.value) return true;
+  if (!isRestaurant.value || !permissionStore.canAccess('procurement')) return false;
+  return ['warehouse_manager', 'restaurant_manager'].includes(authStore.currentRole);
+});
+const detailTitle = computed(() => (isRestaurant.value ? '报货单详情' : '请购单详情'));
+const submitButtonText = computed(() => (isRestaurant.value ? '提交采购计划' : '提交审批'));
+const expectedDateLabel = computed(() => (isRestaurant.value ? '希望到货' : '期望交货'));
+const requesterLabel = computed(() => (isRestaurant.value ? '报货人ID' : '请购人ID'));
+const requesterDeptLabel = computed(() => (isRestaurant.value ? '报货部门' : '请购部门'));
+const reasonLabel = computed(() => (isRestaurant.value ? '报货原因' : '申请原因'));
+const detailDividerText = computed(() => (isRestaurant.value ? '报货明细' : '请购明细'));
 
 const loading = ref(false);
 const submitting = ref(false);
@@ -49,7 +62,7 @@ const notFoundMessage = ref('');
 // Bug #6 (PR #96): 仅 DRAFT + requester 本人 可删 (backend 同步 enforce)
 const canDelete = computed(
   () =>
-    canWrite.value &&
+    canManageOwnDraft.value &&
     requisition.value?.status === 'DRAFT' &&
     currentUserId.value !== null &&
     requisition.value?.requesterId === currentUserId.value,
@@ -137,10 +150,10 @@ async function handleSubmit() {
   const r = requisition.value;
   try {
     await ElMessageBox.confirm(
-      `确认提交请购单 ${r.requisitionNumber} (${lineCount.value} 行明细) 审批?\n\n` +
-      `请购人 #${r.requesterId}` +
-      `${r.expectedDate ? ' · 期望交货 ' + r.expectedDate : ''}`,
-      '提交审批',
+      `确认${isRestaurant.value ? '提交采购计划' : '提交审批'}: ${r.requisitionNumber} (${lineCount.value} 行明细)?\n\n` +
+      `${isRestaurant.value ? '报货人' : '请购人'} #${r.requesterId}` +
+      `${r.expectedDate ? ` · ${expectedDateLabel.value} ${r.expectedDate}` : ''}`,
+      isRestaurant.value ? '提交采购计划' : '提交审批',
       { type: 'warning' },
     );
   } catch {
@@ -150,7 +163,7 @@ async function handleSubmit() {
   try {
     const res = await submitRequisition(factoryId.value, r.id);
     if (res?.success) {
-      ElMessage.success('已提交审批');
+      ElMessage.success(isRestaurant.value ? '已提交给采购' : '已提交审批');
       await loadRequisition();
     }
   } catch (e) {
@@ -166,7 +179,7 @@ async function handleApprove() {
   try {
     await ElMessageBox.confirm(
       `确认审批通过请购单 ${r.requisitionNumber}?\n\n` +
-      `明细 ${lineCount.value} 行 · 请购人 #${r.requesterId}`,
+      `明细 ${lineCount.value} 行 · ${isRestaurant.value ? '报货人' : '请购人'} #${r.requesterId}`,
       '审批通过',
       { type: 'success', confirmButtonText: '通过' },
     );
@@ -306,7 +319,7 @@ function goBack() {
   <div class="page-wrapper">
     <el-page-header :icon="ArrowLeft" @back="goBack">
       <template #content>
-        <span class="page-header-title">请购单详情</span>
+        <span class="page-header-title">{{ detailTitle }}</span>
       </template>
     </el-page-header>
 
@@ -330,12 +343,12 @@ function goBack() {
           </div>
           <div class="header-actions">
             <el-button
-              v-if="requisition.status === 'DRAFT' && canWrite"
+              v-if="requisition.status === 'DRAFT' && canManageOwnDraft"
               type="warning"
               :loading="submitting"
               @click="handleSubmit"
             >
-              提交审批
+              {{ submitButtonText }}
             </el-button>
             <el-button
               v-if="canDelete"
@@ -380,13 +393,13 @@ function goBack() {
         </div>
 
         <el-descriptions :column="2" border style="margin-top: 16px">
-          <el-descriptions-item label="请购人 ID">
+          <el-descriptions-item :label="requesterLabel">
             #{{ requisition.requesterId }}
           </el-descriptions-item>
-          <el-descriptions-item label="请购部门">
+          <el-descriptions-item :label="requesterDeptLabel">
             {{ requisition.requesterDeptId || '-' }}
           </el-descriptions-item>
-          <el-descriptions-item label="期望交货">
+          <el-descriptions-item :label="expectedDateLabel">
             {{ requisition.expectedDate || '-' }}
           </el-descriptions-item>
           <el-descriptions-item label="创建时间">
@@ -409,7 +422,7 @@ function goBack() {
               {{ String(requisition.convertedAt).replace('T', ' ').slice(0, 19) }}
             </span>
           </el-descriptions-item>
-          <el-descriptions-item v-if="requisition.reason" label="申请原因" :span="2">
+          <el-descriptions-item v-if="requisition.reason" :label="reasonLabel" :span="2">
             {{ requisition.reason }}
           </el-descriptions-item>
           <el-descriptions-item v-if="requisition.remark" label="备注" :span="2">
@@ -417,7 +430,7 @@ function goBack() {
           </el-descriptions-item>
         </el-descriptions>
 
-        <el-divider>请购明细 ({{ lineCount }} 行)</el-divider>
+        <el-divider>{{ detailDividerText }} ({{ lineCount }} 行)</el-divider>
 
         <el-table
           :data="requisition.requestedItems || []"

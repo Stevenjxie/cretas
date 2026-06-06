@@ -272,8 +272,13 @@ public class PurchaseServiceImpl implements PurchaseService {
             items.add(item);
 
             BigDecimal lineAmount = item.getLineAmount();
-            totalAmount = totalAmount.add(lineAmount);
-            taxAmount = taxAmount.add(item.getLineAmountWithTax().subtract(lineAmount));
+            if (lineAmount != null) {
+                totalAmount = totalAmount.add(lineAmount);
+                BigDecimal lineAmountWithTax = item.getLineAmountWithTax();
+                if (lineAmountWithTax != null) {
+                    taxAmount = taxAmount.add(lineAmountWithTax.subtract(lineAmount));
+                }
+            }
         }
 
         purchaseOrderItemRepository.saveAll(items);
@@ -887,8 +892,13 @@ public class PurchaseServiceImpl implements PurchaseService {
             items.add(item);
 
             BigDecimal lineAmount = item.getLineAmount();
-            totalAmount = totalAmount.add(lineAmount);
-            taxAmount = taxAmount.add(item.getLineAmountWithTax().subtract(lineAmount));
+            if (lineAmount != null) {
+                totalAmount = totalAmount.add(lineAmount);
+                BigDecimal lineAmountWithTax = item.getLineAmountWithTax();
+                if (lineAmountWithTax != null) {
+                    taxAmount = taxAmount.add(lineAmountWithTax.subtract(lineAmount));
+                }
+            }
         }
 
         purchaseOrderItemRepository.saveAll(items);
