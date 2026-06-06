@@ -217,13 +217,9 @@ test.describe('G3 生产 6 步 @pr-gate', () => {
     await planQtyInput.fill(String(PLAN_QTY));
     await adminPage.keyboard.press('Tab');
 
-    // Fill planned date — the form has two el-date-picker:
-    //   1st = 批次日期 (placeholder="生产批次日期")
-    //   2nd = 计划日期 (placeholder="选择日期", required)
+    // Fill planned production date — label renamed 计划日期 → 计划生产日 (list.vue A5/E3).
     // el-date-picker input requires direct type (not fill) to trigger Vue reactivity.
-    const planDateInput = planDialog.locator(
-      `.el-form-item:has(.el-form-item__label:has-text("计划日期")) input`
-    );
+    const planDateInput = planDialog.locator(S.form.input('计划生产日'));
     await planDateInput.click();
     await adminPage.keyboard.press('Control+A');
     await adminPage.keyboard.type(PLAN_DATE);
