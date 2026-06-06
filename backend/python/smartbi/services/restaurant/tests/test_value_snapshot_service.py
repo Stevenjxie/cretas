@@ -9,9 +9,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Optional
-
-import pytest
+from typing import Optional
 
 from smartbi.services.restaurant import value_snapshot_service as svc
 from smartbi.services.restaurant.value_signal_extractor import ValueSignal
@@ -127,7 +125,7 @@ def test_upsert_all_null_signals_total_is_none_not_zero():
     asyncio.run(svc.compute_and_upsert_snapshot(
         pool, "F-X", "2026-02", None, null_signals, 1, 0, 0,
     ))
-    insert_call = next(c for c in conn.execute_calls if "INSERT INTO restaurant_value_snapshots" in c[0])
+    assert any("INSERT INTO restaurant_value_snapshots" in c[0] for c in conn.execute_calls)
     total = svc._aggregate_total(null_signals)  # direct helper assertion
     assert total is None  # NOT 0.0
 

@@ -3,8 +3,6 @@ from __future__ import annotations
 
 import asyncio
 
-import pytest
-
 from smartbi.services.restaurant import value_refresh_pipeline as p
 
 

@@ -13,7 +13,6 @@ from __future__ import annotations
 import datetime as dt
 from contextlib import asynccontextmanager
 
-import pytest
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 

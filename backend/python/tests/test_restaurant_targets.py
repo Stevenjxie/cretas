@@ -43,8 +43,8 @@ def test_migration_has_unique_constraint():
 
 
 # ─── Task 2: query function tests ──────────────────────────────────────────────
-from datetime import date
-from decimal import Decimal
+from datetime import date  # noqa: E402
+from decimal import Decimal  # noqa: E402
 
 
 class _FakeConn:
@@ -108,7 +108,7 @@ class _FakePool:
 
 
 # ── Import query functions (will fail until Task 2 implemented) ──────────────
-from smartbi.gold.queries import (
+from smartbi.gold.queries import (  # noqa: E402
     daily_achievement_summary,
     hierarchy_rollup,
     alert_preview,
@@ -382,10 +382,10 @@ async def test_complete_past_period_not_in_progress(monkeypatch):
 
 
 # ─── Task 3: REST endpoint contract tests ──────────────────────────────────────
-import datetime as _dtmod
-from fastapi.testclient import TestClient
-from fastapi import FastAPI
-from unittest.mock import AsyncMock, patch
+import datetime as _dtmod  # noqa: E402
+from fastapi.testclient import TestClient  # noqa: E402
+from fastapi import FastAPI  # noqa: E402
+from unittest.mock import AsyncMock, patch  # noqa: E402
 
 
 def _make_test_app(role: str = "factory_super_admin"):

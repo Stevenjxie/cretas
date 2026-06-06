@@ -5,6 +5,7 @@ import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.entity.Attachment;
 import com.cretas.aims.entity.Attachment.EntityType;
 import com.cretas.aims.entity.Attachment.FileCategory;
+import com.cretas.aims.entity.User;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.AttachmentRepository;
 import com.cretas.aims.security.AttachmentPermissionResolver;
@@ -13,6 +14,7 @@ import com.cretas.aims.service.attachment.dto.RegisterAttachmentRequest;
 import com.cretas.aims.service.attachment.dto.UpdateAttachmentRequest;
 import com.cretas.aims.service.attachment.dto.UploadUrlResponse;
 import jakarta.servlet.http.HttpServletRequest;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -54,6 +56,13 @@ class AttachmentControllerTest {
 
     private static final String FACTORY_ID = "F006";
     private static final String ATT_ID = "att-uuid-001";
+
+    @BeforeEach
+    void stubCurrentUser() {
+        User user = new User();
+        user.setId(42L);
+        when(permissionResolver.resolveCurrentUser(request)).thenReturn(user);
+    }
 
     @Test
     @DisplayName("✅ GET /attachments?entityType=PURCHASE_ORDER&entityId=PO-001 返列表")
