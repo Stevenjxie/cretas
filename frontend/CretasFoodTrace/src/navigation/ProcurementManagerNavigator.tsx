@@ -20,6 +20,9 @@ import ReturnOrderListScreen from "../screens/factory-admin/inventory/ReturnOrde
 import ReturnOrderDetailScreen from "../screens/factory-admin/inventory/ReturnOrderDetailScreen";
 import PriceListScreen from "../screens/factory-admin/inventory/PriceListScreen";
 import ArApOverviewScreen from "../screens/factory-admin/inventory/ArApOverviewScreen";
+import ProcurementDeliveryConfirmScreen from "../screens/restaurant/procurement/ProcurementDeliveryConfirmScreen";
+import SupplierDeliveryDetailScreen from "../screens/restaurant/supplier-delivery/SupplierDeliveryDetailScreen";
+import SupplierDeliveryListScreen from "../screens/restaurant/supplier-delivery/SupplierDeliveryListScreen";
 
 // 供应商管理
 import SupplierManagementScreen from "../screens/management/SupplierManagementScreen";
@@ -46,6 +49,9 @@ function PurchaseStackNavigator() {
       <PurchaseStack.Screen name="ReturnOrderDetail" component={ReturnOrderDetailScreen} />
       <PurchaseStack.Screen name="PriceList" component={PriceListScreen} />
       <PurchaseStack.Screen name="ArApOverview" component={ArApOverviewScreen} />
+      <PurchaseStack.Screen name="ProcurementDeliveryConfirm" component={ProcurementDeliveryConfirmScreen} />
+      <PurchaseStack.Screen name="SupplierDeliveryList" component={SupplierDeliveryListScreen} />
+      <PurchaseStack.Screen name="SupplierDeliveryDetail" component={SupplierDeliveryDetailScreen} />
     </PurchaseStack.Navigator>
   );
 }

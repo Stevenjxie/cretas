@@ -20,7 +20,9 @@ const QUICK_ACTION_SCREEN_GUARD: Record<string, string> = {
   systemConfig: 'SystemSettings',
   newPurchase: 'PurchaseOrderList',
   newSales: 'SalesOrderList',
+  chefRequisition: 'ChefRequisitionList',
   supplierDelivery: 'SupplierDeliveryList',
+  priceAnomalyApproval: 'PriceAnomalyApproval',
   requisitionApproval: 'RequisitionApproval',
   wastage: 'WastageList',
   stocktaking: 'StocktakingList',
@@ -35,12 +37,30 @@ export function useQuickActions(isRestaurantMode: boolean) {
     const raw: QuickActionItem[] = isRestaurantMode
       ? [
           {
+            id: 'chefRequisition',
+            icon: 'clipboard-text-outline',
+            label: t('quickActions.chefRequisition', 'Stall requisition'),
+            color: '#1B65A8',
+            onPress: () => {
+              navigation.getParent()?.navigate('FAManagementTab', { screen: 'ChefRequisitionList' });
+            },
+          },
+          {
             id: 'supplierDelivery',
             icon: 'truck-delivery',
             label: t('quickActions.supplierDelivery', 'Delivery check'),
             color: '#409eff',
             onPress: () => {
               navigation.getParent()?.navigate('FAManagementTab', { screen: 'SupplierDeliveryList' });
+            },
+          },
+          {
+            id: 'priceAnomalyApproval',
+            icon: 'cash-multiple',
+            label: t('quickActions.priceAnomalyApproval', 'Price anomaly approval'),
+            color: '#e6a23c',
+            onPress: () => {
+              navigation.getParent()?.navigate('FAManagementTab', { screen: 'PriceAnomalyApproval' });
             },
           },
           {
