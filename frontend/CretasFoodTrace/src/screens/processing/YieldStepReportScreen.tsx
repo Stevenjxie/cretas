@@ -43,6 +43,7 @@ const VIDEO_EXTENSIONS = ['mp4', 'mov', 'm4v', 'webm'];
 
 // 三阶段报工 (单元2): 该道当前所处阶段 (从 getYield 的 step.phase 推断)
 type StepPhase = 'AWAITING_INPUT' | 'IN_PRODUCTION' | 'COMPLETED';
+type ProductionStepMode = 'SEGMENT' | 'OUTPUT';
 
 type EvidenceMediaKind = 'image' | 'video';
 
@@ -157,6 +158,7 @@ const YieldStepReportScreen: React.FC = () => {
 
   // 图片证据 (投入阶段 / 生产时段段 / 完工出成 各自一份, 切阶段清空)
   const [evidencePhotos, setEvidencePhotos] = useState<EvidencePhoto[]>([]);
+  const [productionStepMode, setProductionStepMode] = useState<ProductionStepMode>('SEGMENT');
 
   const [lastAlert, setLastAlert] = useState<'BELOW_MIN' | 'ABOVE_MAX' | null>(null);
 
@@ -270,6 +272,7 @@ const YieldStepReportScreen: React.FC = () => {
     setSegEnd('');
     setSegHeadcount('');
     setSegNote('');
+    setProductionStepMode('SEGMENT');
   }, [prevOutput]);
 
   useEffect(() => {
@@ -278,6 +281,12 @@ const YieldStepReportScreen: React.FC = () => {
     // 仅在切道时 reset (currentStepIndex 变); resetStepInputs 依赖 prevOutput 已含进去.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentStepIndex, screenPhase]);
+
+  useEffect(() => {
+    if (currentPhase === 'IN_PRODUCTION') {
+      setProductionStepMode('SEGMENT');
+    }
+  }, [currentTask?.id, currentPhase]);
 
   // A4: 投入量变化后 debounce 500ms 拉超收上限 (仅投入阶段需要)
   useEffect(() => {
@@ -457,6 +466,33 @@ const YieldStepReportScreen: React.FC = () => {
     () => evidencePhotos.map((p) => p.serverUrl).filter((u): u is string => !!u),
     [evidencePhotos],
   );
+
+  const switchProductionStepMode = useCallback((nextMode: ProductionStepMode) => {
+    if (productionStepMode === nextMode) return;
+    if (evidenceUploading) {
+      appAlert('证据上传中', '请等照片或视频上传完成后再切换步骤');
+      return;
+    }
+
+    const applySwitch = () => {
+      setEvidencePhotos([]);
+      setProductionStepMode(nextMode);
+    };
+
+    if (evidencePhotos.length > 0) {
+      appAlert(
+        '当前证据还没提交',
+        '这些照片/视频只属于当前步骤。请先提交当前步骤，或放弃这些证据后再切换。',
+        [
+          { text: '先不切换', style: 'cancel' },
+          { text: '放弃证据并切换', style: 'destructive', onPress: applySwitch },
+        ],
+      );
+      return;
+    }
+
+    applySwitch();
+  }, [productionStepMode, evidenceUploading, evidencePhotos.length]);
 
   // ========================= 阶段 1: 提交投入 (reportKind=INPUT) =========================
   const handleSubmitInput = useCallback(async () => {
@@ -861,7 +897,8 @@ const YieldStepReportScreen: React.FC = () => {
   // ========================= 共享头 (进度 + 卡片头) =========================
   const phaseBadge =
     currentPhase === 'AWAITING_INPUT' ? '① 投入阶段'
-      : currentPhase === 'IN_PRODUCTION' ? '② 生产阶段'
+      : currentPhase === 'IN_PRODUCTION'
+        ? productionStepMode === 'SEGMENT' ? '② 过程报工' : '③ 完工出成'
         : '③ 已完成';
   const alertText =
     lastAlert === 'ABOVE_MAX' ? '⚠ 出成率偏高, 请核对'
@@ -1085,6 +1122,8 @@ const YieldStepReportScreen: React.FC = () => {
           <>
             {renderInputSummary()}
 
+            {productionStepMode === 'SEGMENT' ? (
+              <>
             {/* 时段报工块 (一次提交一段, 累加) */}
             <NeoCard variant="elevated" style={styles.card}>
               <Text style={styles.sectionTitle} testID="yield-segment-block">时段报工 (几点到几点, 几个人)</Text>
@@ -1162,6 +1201,21 @@ const YieldStepReportScreen: React.FC = () => {
               </NeoButton>
             </NeoCard>
 
+            <NeoButton
+              variant="primary"
+              size="large"
+              onPress={() => switchProductionStepMode('OUTPUT')}
+              disabled={submitting || evidenceUploading}
+              style={styles.fullBtn}
+              testID="yield-go-output-step-btn"
+            >
+              本工序已做完, 去填完工出成
+            </NeoButton>
+              </>
+            ) : null}
+
+            {productionStepMode === 'OUTPUT' ? (
+              <>
             {/* 完工出成块 */}
             <NeoCard variant="elevated" style={styles.card}>
               <Text style={styles.sectionTitle} testID="yield-output-block">完工出成 (本道做完才填)</Text>
@@ -1286,6 +1340,18 @@ const YieldStepReportScreen: React.FC = () => {
                 完工出成  ✓
               </NeoButton>
             </NeoCard>
+            <NeoButton
+              variant="outline"
+              size="large"
+              onPress={() => switchProductionStepMode('SEGMENT')}
+              disabled={submitting || evidenceUploading}
+              style={styles.fullBtn}
+              testID="yield-back-segment-step-btn"
+            >
+              返回过程报工
+            </NeoButton>
+              </>
+            ) : null}
           </>
         ) : null}
 
