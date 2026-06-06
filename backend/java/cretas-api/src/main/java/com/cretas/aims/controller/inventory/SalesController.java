@@ -32,6 +32,10 @@ import com.cretas.aims.annotation.RequirePermission;
 
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Positive;
+import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
 
@@ -77,6 +81,27 @@ public class SalesController {
             @RequestParam(defaultValue = "20") int size) {
         PageResponse<SalesOrder> result = salesService.getSalesOrders(factoryId, keyword, page, size);
         return ApiResponse.success("查询成功", result);
+    }
+
+    @PostMapping("/finished-goods/opening")
+    @Operation(summary = "E2E/期初成品入库")
+    @RequirePermission("sales:read_write")
+    public ApiResponse<FinishedGoodsBatch> createOpeningFinishedGoods(
+            @PathVariable @NotBlank String factoryId,
+            @RequestHeader("Authorization") String authorization,
+            @Valid @RequestBody OpeningFinishedGoodsRequest request) {
+        Long userId = extractUserId(authorization);
+        FinishedGoodsBatch batch = new FinishedGoodsBatch();
+        batch.setProductTypeId(request.productTypeId());
+        batch.setBatchNumber(request.batchNumber());
+        batch.setProducedQuantity(request.producedQuantity());
+        batch.setShippedQuantity(BigDecimal.ZERO);
+        batch.setReservedQuantity(BigDecimal.ZERO);
+        batch.setUnit(request.unit());
+        batch.setProductionDate(request.productionDate());
+        batch.setRemark(request.remark());
+        FinishedGoodsBatch created = salesService.createFinishedGoodsBatch(factoryId, batch, userId);
+        return ApiResponse.success("期初成品入库成功", created);
     }
 
     /**
@@ -497,5 +522,14 @@ public class SalesController {
     private Long extractUserId(String authorization) {
         String token = TokenUtils.extractToken(authorization);
         return mobileService.getUserFromToken(token).getId();
+    }
+
+    public record OpeningFinishedGoodsRequest(
+            @NotBlank String productTypeId,
+            @NotBlank String batchNumber,
+            @NotNull @Positive BigDecimal producedQuantity,
+            @NotBlank String unit,
+            @NotNull LocalDate productionDate,
+            String remark) {
     }
 }
