@@ -29,11 +29,13 @@ beforeEach(() => {
 describe('priceAnomaly API client', () => {
   it('detectPriceAnomalies builds /detect with trailing_n + epsilon_pct', async () => {
     mockFetch.mockResolvedValue({ success: true, data: [] } as never);
-    await detectPriceAnomalies({ trailingN: 5, epsilonPct: 8.5 });
+    await detectPriceAnomalies({ trailingN: 5, epsilonPct: 8.5, baselineMode: 'days', windowDays: 90 });
     const url = mockFetch.mock.calls[0][0] as string;
     expect(url).toContain('/api/smartbi/gold/price-anomaly/detect');
     expect(url).toContain('trailing_n=5');
     expect(url).toContain('epsilon_pct=8.5');
+    expect(url).toContain('baseline_mode=days');
+    expect(url).toContain('window_days=90');
   });
 
   it('detectPriceAnomalies omits params when not provided', async () => {

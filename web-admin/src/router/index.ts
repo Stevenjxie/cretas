@@ -1567,7 +1567,12 @@ const businessRoutes: RouteRecordRaw[] = [
             path: 'price-anomaly',
             name: 'RestaurantPriceAnomaly',
             component: () => import('@/views/restaurant/price-anomaly/index.vue'),
-            meta: { requiresAuth: true, title: '价格异常预警', module: 'restaurant' },
+            meta: {
+              requiresAuth: true,
+              title: '价格异常预警',
+              module: 'restaurant',
+              roles: ['factory_super_admin', 'platform_admin', 'permission_admin', 'restaurant_manager'],
+            },
           }
         ]
       },

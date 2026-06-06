@@ -64,6 +64,8 @@ interface Envelope<T> {
 export interface DetectArgs {
   trailingN?: number; // trailing 均价窗口 (default 3)
   epsilonPct?: number; // 异常容限 (default 5%)
+  baselineMode?: 'count' | 'days'; // days = 邓总锁定的自身 90 天移动均价
+  windowDays?: number; // days 模式窗口天数
 }
 
 /** 检测同类物料相邻采购单价异常。 */
@@ -71,6 +73,8 @@ export async function detectPriceAnomalies(args: DetectArgs = {}): Promise<Price
   const p = new URLSearchParams();
   if (args.trailingN !== undefined) p.set('trailing_n', String(args.trailingN));
   if (args.epsilonPct !== undefined) p.set('epsilon_pct', String(args.epsilonPct));
+  if (args.baselineMode !== undefined) p.set('baseline_mode', args.baselineMode);
+  if (args.windowDays !== undefined) p.set('window_days', String(args.windowDays));
   const qs = p.toString();
   const resp = (await pythonFetch(
     `/api/smartbi/gold/price-anomaly/detect${qs ? `?${qs}` : ''}`,

@@ -201,6 +201,28 @@ def test_ack_maps_body_and_returns_id(patch_pool, monkeypatch):
     assert str(captured["anomaly_delivery_date"]) == "2026-06-03"
 
 
+def test_ack_rejects_non_write_role_before_db(patch_pool, monkeypatch):
+    async def fake_ack(pool, factory_id, **kwargs):
+        raise AssertionError("warehouse role must not reach record_anomaly_ack")
+
+    import smartbi.gold.price_anomaly as mod
+    monkeypatch.setattr(mod, "record_anomaly_ack", fake_ack)
+
+    client = TestClient(_make_app(role="warehouse_manager"))
+    resp = client.post(
+        "/api/smartbi/gold/price-anomaly/ack",
+        json={
+            "normalizedName": "洗洁精", "ingredientName": "洗洁精",
+            "supplierId": "sup-1", "supplierName": "鑫农",
+            "anomalyDeliveryDate": "2026-06-03",
+            "oldPrice": 110.0, "newPrice": 150.0, "deltaPct": 36.36,
+            "reasonCode": "SEASONAL", "reasonNote": None,
+        },
+    )
+    assert resp.status_code == 403
+    assert "无权记录价格异常解释" in resp.text
+
+
 def test_ack_other_without_note_surfaces_validation_error(patch_pool, monkeypatch):
     # Use the REAL record_anomaly_ack to validate the ValueError → success=false path,
     # but stub the pool acquire so we never hit DB (it raises before DB).

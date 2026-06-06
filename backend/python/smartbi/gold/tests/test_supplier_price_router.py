@@ -18,13 +18,14 @@ from fastapi.testclient import TestClient
 import smartbi.api.supplier_price as sp
 
 
-def _make_app(factory_id="F006", role="factory_super_admin"):
+def _make_app(factory_id="F006", role="factory_super_admin", auth_method="internal"):
     app = FastAPI()
 
     @app.middleware("http")
     async def _inject_state(request: Request, call_next):
         request.state.factory_id = factory_id
         request.state.role = role
+        request.state.auth_method = auth_method
         return await call_next(request)
 
     app.include_router(sp.router, prefix="/api/smartbi")
@@ -97,6 +98,22 @@ def test_batch_upsert_rejects_factory_mismatch(patch_pool, monkeypatch):
     assert resp.status_code == 200
     assert resp.json()["success"] is False
     assert "mismatch" in resp.json()["message"]
+
+
+def test_batch_upsert_rejects_jwt_user_before_db(patch_pool, monkeypatch):
+    import smartbi.gold.supplier_price_etl as etl
+
+    async def fake_upsert(pool, factory_id, rows):
+        raise AssertionError("JWT caller must not reach supplier price upsert")
+    monkeypatch.setattr(etl, "upsert_supplier_price_batch", fake_upsert)
+
+    client = TestClient(_make_app(auth_method="jwt"))
+    resp = client.post(
+        "/api/smartbi/gold/supplier-price/batch-upsert",
+        json={"noteId": "SDN-1", "lines": []},
+    )
+    assert resp.status_code == 403
+    assert "仅允许 Java 后端内部同步调用" in resp.text
 
 
 def test_trend_strips_money_for_non_price_role(patch_pool, monkeypatch):

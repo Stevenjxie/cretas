@@ -9,8 +9,8 @@
             <span class="data-count">检出 {{ anomalies.length }} 条</span>
           </div>
           <div class="header-right">
-            <span class="cfg-label">趋势窗口</span>
-            <el-input-number v-model="trailingN" :min="1" :max="20" size="small" style="width: 110px" @change="loadAnomalies" />
+            <span class="cfg-label">基线</span>
+            <el-tag size="small" effect="plain">近 90 天移动均价</el-tag>
             <span class="cfg-label">异常容限</span>
             <el-input-number v-model="epsilonPct" :min="0" :max="100" :step="1" size="small" style="width: 120px" @change="loadAnomalies">
               <template #suffix>%</template>
@@ -197,8 +197,8 @@ const loading = ref(false);
 const submitting = ref(false);
 const anomalies = ref<PriceAnomaly[]>([]);
 const acks = ref<PriceAnomalyAck[]>([]);
-const trailingN = ref(3);
 const epsilonPct = ref(5);
+const BASELINE_WINDOW_DAYS = 90;
 
 const explainVisible = ref(false);
 const current = ref<PriceAnomaly | null>(null);
@@ -236,7 +236,11 @@ async function loadAnomalies() {
   loading.value = true;
   try {
     const [det, ackList] = await Promise.all([
-      detectPriceAnomalies({ trailingN: trailingN.value, epsilonPct: epsilonPct.value }),
+      detectPriceAnomalies({
+        epsilonPct: epsilonPct.value,
+        baselineMode: 'days',
+        windowDays: BASELINE_WINDOW_DAYS,
+      }),
       listPriceAnomalyAcks(),
     ]);
     anomalies.value = det;

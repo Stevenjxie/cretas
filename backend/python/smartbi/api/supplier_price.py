@@ -15,7 +15,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Body, Query, Request
+from fastapi import APIRouter, Body, HTTPException, Query, Request
 
 from smartbi_compat._rbac_strip import PRICE_VIEW_ROLES, strip_price_for_role
 
@@ -29,6 +29,18 @@ def _get_factory_id(request: Request) -> Optional[str]:
 
 def _get_role(request: Request) -> Optional[str]:
     return getattr(request.state, "role", None)
+
+
+def _get_auth_method(request: Request) -> Optional[str]:
+    return getattr(request.state, "auth_method", None)
+
+
+def _require_internal_write(request: Request) -> None:
+    if _get_auth_method(request) != "internal":
+        raise HTTPException(
+            status_code=403,
+            detail="供应商进价 gold 写入仅允许 Java 后端内部同步调用",
+        )
 
 
 def _apply_rbac_strip(data: Any, role: Optional[str]) -> Any:
@@ -55,6 +67,7 @@ async def batch_upsert(
     factory_id 优先取请求上下文 (X-Factory-Id / JWT); 缺失才回落 body.factoryId
     (内部 Java 调用都带 X-Factory-Id, 但保留 body 兼容)。
     """
+    _require_internal_write(request)
     ctx_factory = _get_factory_id(request)
     body_factory = body.get("factoryId")
     factory_id = ctx_factory or body_factory

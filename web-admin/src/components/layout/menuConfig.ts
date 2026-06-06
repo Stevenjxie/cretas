@@ -240,6 +240,8 @@ export const menuConfig: MenuItem[] = [
       { path: '/restaurant/analytics/role-kpi', title: '经营看板', icon: '', module: 'analytics', groupLabel: '深度分析',
         roles: ['factory_super_admin', 'platform_admin', 'permission_admin', 'restaurant_manager', 'finance_manager', 'sales_manager'] },
       { path: '/restaurant/analytics/dishes', title: '菜品分析', icon: '', module: 'restaurant' },
+      { path: '/restaurant/price-anomaly', title: '价格异常预警', icon: '', module: 'restaurant',
+        roles: ['factory_super_admin', 'platform_admin', 'permission_admin', 'restaurant_manager'] },
       { path: '/restaurant/analytics/stores', title: '门店对比', icon: '', module: 'restaurant' },
       { path: '/restaurant/analytics/platform', title: '平台口碑', icon: '', module: 'restaurant' },
       // -- 日常录入 (写侧) — 配方置顶 (喂养分析层成本) --

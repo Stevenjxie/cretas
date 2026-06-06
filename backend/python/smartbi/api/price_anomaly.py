@@ -20,12 +20,19 @@ import logging
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Body, Query, Request
+from fastapi import APIRouter, Body, HTTPException, Query, Request
 
 from smartbi_compat._rbac_strip import PRICE_VIEW_ROLES, strip_price_for_role
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["PriceAnomaly"])
+
+_ACK_WRITE_ROLES: frozenset[str] = frozenset({
+    "factory_super_admin",
+    "platform_admin",
+    "permission_admin",
+    "restaurant_manager",
+})
 
 # 绝对金额 camelCase keys not matched by the shared _MONEY_PATTERN. deltaPct is a
 # RATE (conveys trend/deterrence without leaking the amount) so it stays visible.
@@ -42,6 +49,18 @@ def _get_role(request: Request) -> Optional[str]:
 
 def _get_username(request: Request) -> Optional[str]:
     return getattr(request.state, "username", None)
+
+
+def _require_ack_write_role(request: Request) -> None:
+    role = _get_role(request)
+    if role not in _ACK_WRITE_ROLES:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "无权记录价格异常解释；请由店长/老板账号处理，"
+                "仓管现场涨价说明请在送货单验收入库页填写。"
+            ),
+        )
 
 
 def _strip_extras(node: Any) -> None:
@@ -138,6 +157,7 @@ async def ack(
 
     acknowledged_by 取自 JWT username (审计留痕)。幂等 (ON CONFLICT 更新解释)。
     """
+    _require_ack_write_role(request)
     ctx_factory = _get_factory_id(request)
     body_factory = body.get("factoryId")
     factory_id = ctx_factory or body_factory
