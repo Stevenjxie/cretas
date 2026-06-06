@@ -180,10 +180,8 @@ test.describe('Cross-End Phase 1 — Web 建单→写 shared state @post-deploy'
     await planQtyInput.fill(String(PLAN_QTY));
     await adminPage.keyboard.press('Tab');
 
-    // Plan date
-    const planDateInput = planDialog.locator(
-      `.el-form-item:has(.el-form-item__label:has-text("计划日期")) input`
-    );
+    // Planned production date (label: 计划生产日)
+    const planDateInput = planDialog.locator(S.form.input('计划生产日'));
     await planDateInput.click();
     await adminPage.keyboard.press('Control+A');
     await adminPage.keyboard.type(PLAN_DATE);
