@@ -41,7 +41,18 @@ def test_prefix_is_factory_scoped():
 def _mk_app_with_router():
     """Build a FastAPI app with our router for TestClient."""
     from fastapi import FastAPI
+    from smartbi_compat._rbac_role import (
+        RbacForbiddenException,
+        rbac_forbidden_handler,
+    )
     app = FastAPI()
+
+    @app.middleware("http")
+    async def inject_test_role(request, call_next):
+        request.state.role = request.headers.get("x-test-role", "factory_super_admin")
+        return await call_next(request)
+
+    app.add_exception_handler(RbacForbiddenException, rbac_forbidden_handler)
     app.include_router(router)
     return app
 
@@ -136,6 +147,7 @@ async def test_prepare_returns_download_url_and_summary(fake_pool):
          "gold_materialized_at": "2025-10-07T18:00:00",
          "file_size_bytes": 1024, "cache_hit": False, "is_stale": False},
         io.BytesIO(b"PKfakexlsx"),
+        {"block1_yoy": [], "block2_mom": [], "block3_meal_split": [], "meta": {}},
     ))
     fake_resolve = AsyncMock(return_value=[1, 2])
 
@@ -175,6 +187,7 @@ async def test_generate_streams_xlsx_with_response_headers(fake_pool):
          "gold_materialized_at": "2025-10-07T18:00:00",
          "file_size_bytes": 1024, "cache_hit": False, "is_stale": False},
         io.BytesIO(b"PKfakexlsx"),
+        {"block1_yoy": [], "block2_mom": [], "block3_meal_split": [], "meta": {}},
     ))
     fake_resolve = AsyncMock(return_value=[1])
 
@@ -222,6 +235,34 @@ async def test_factory_mismatch_returns_403():
                 "/api/smartbi/R_OTHER_FACTORY/revenue-report/stores"
             )
     assert resp.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_sales_manager_is_forbidden_from_revenue_report_upload(fake_pool):
+    """Revenue report exposes full POS revenue Excel; sales_manager is not allowed."""
+    pool, _ = fake_pool
+
+    with patch("smartbi.api.revenue_report._get_pool", new=AsyncMock(return_value=pool)), \
+         patch(
+             "smartbi.api.revenue_report._enforce_factory_match",
+             return_value="R_QINGHUAJIAO_REAL",
+         ):
+        from httpx import ASGITransport, AsyncClient
+        app = _mk_app_with_router()
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test",
+        ) as ac:
+            resp = await ac.post(
+                "/api/smartbi/R_QINGHUAJIAO_REAL/revenue-report/upload",
+                headers={"x-test-role": "sales_manager"},
+                files={"files": ("详细日报表.csv", b"a,b\n1,2", "text/csv")},
+            )
+
+    assert resp.status_code == 403
+    body = resp.json()
+    assert body["success"] is False
+    assert body["meta"]["role"] == "sales_manager"
+    assert body["meta"]["action"] == "write"
 
 
 @pytest.mark.asyncio

@@ -13,6 +13,7 @@
  * in router meta + sidebar).
  */
 import { ref, computed, onMounted, watch } from 'vue';
+import { useRouter } from 'vue-router';
 import { ElMessage, ElAlert } from 'element-plus';
 import type { UploadUserFile } from 'element-plus';
 import {
@@ -31,7 +32,9 @@ import { useAuthStore } from '@/store/modules/auth';
 import SmartBIUploader from '@/components/smartbi/SmartBIUploader.vue';
 
 const authStore = useAuthStore();
+const router = useRouter();
 const activeTab = ref<'generate' | 'audit'>('generate');
+const tenantLabel = computed(() => authStore.factoryId || '餐饮门店');
 
 // ─── Stores list (loaded once at mount) ───────────────────────────────
 const stores = ref<StoreEntry[]>([]);
@@ -51,6 +54,39 @@ const filterStorageKey = computed(() =>
 const uploadFiles = ref<UploadUserFile[]>([]);
 const uploading = ref(false);
 const uploadResults = ref<UploadResultItem[]>([]);
+const uploadPurposeDialogVisible = ref(false);
+const uploadPurpose = ref<'pos' | 'supplier-delivery' | 'finance-excel' | 'review-data'>('pos');
+
+const uploadPurposeOptions = [
+  {
+    value: 'pos',
+    title: 'POS 销售/收入流水',
+    desc: '二维火详细日报表、营业概况、堂食外卖占比、商品销售明细等。',
+    action: '继续上传并生成收入报表',
+  },
+  {
+    value: 'supplier-delivery',
+    title: '供应商送货/采购入库单',
+    desc: '供应商、送货日期、食材、规格、数量、单价等入库数据。',
+    action: '前往供应商进货录入',
+  },
+  {
+    value: 'finance-excel',
+    title: '财务费用/银行流水',
+    desc: '费用、收入、成本、银行流水、损益类 Excel。',
+    action: '前往通用 Excel 上传',
+  },
+  {
+    value: 'review-data',
+    title: '顾客评价/平台口碑',
+    desc: '大众点评、美团评价、评分、评论文本等口碑数据。',
+    action: '前往数据完整度查看缺口',
+  },
+] as const;
+
+const selectedUploadPurpose = computed(() =>
+  uploadPurposeOptions.find((item) => item.value === uploadPurpose.value) ?? uploadPurposeOptions[0],
+);
 
 // ─── Generation state ─────────────────────────────────────────────────
 const generating = ref(false);
@@ -159,7 +195,7 @@ async function loadStores() {
   try {
     stores.value = await listStores(true);
   } catch (e: any) {
-    ElMessage.error(`门店列表加载失败: ${e?.message || e}`);
+    showStickyError(`门店列表加载失败: ${e?.message || e}。请确认当前账号有收入报表权限，或刷新后重试。`);
   } finally {
     storesLoading.value = false;
   }
@@ -196,13 +232,42 @@ function saveFiltersToStorage() {
 // ─── Upload handler ───────────────────────────────────────────────────
 async function handleFilesChange(files: UploadUserFile[]) {
   uploadFiles.value = files;
+  uploadPurpose.value = 'pos';
 }
 
 async function handleUpload() {
+  if (uploadFiles.value.length === 0) {
+    ElMessage.warning('请先选择文件');
+    return;
+  }
+  uploadPurposeDialogVisible.value = true;
+}
+
+async function confirmUploadPurpose() {
+  if (uploadPurpose.value === 'supplier-delivery') {
+    uploadPurposeDialogVisible.value = false;
+    await router.push('/restaurant/supplier-delivery');
+    return;
+  }
+  if (uploadPurpose.value === 'finance-excel') {
+    uploadPurposeDialogVisible.value = false;
+    await router.push('/smart-bi/upload');
+    return;
+  }
+  if (uploadPurpose.value === 'review-data') {
+    uploadPurposeDialogVisible.value = false;
+    await router.push('/restaurant/data-completeness');
+    return;
+  }
+  uploadPurposeDialogVisible.value = false;
+  await uploadPosReports();
+}
+
+async function uploadPosReports() {
   if (uploading.value) return;
   const raws = uploadFiles.value
     .map((f) => f.raw)
-    .filter((r): r is File => !!r);
+    .filter((r): r is NonNullable<UploadUserFile['raw']> => !!r);
   if (raws.length === 0) {
     ElMessage.warning('请先选择文件');
     return;
@@ -218,10 +283,10 @@ async function handleUpload() {
     let msg = `上传完成: ${ok} 成功`;
     if (dup) msg += ` / ${dup} 重复（已跳过）`;
     if (unk) msg += ` / ${unk} 无法识别`;
-    if (unk > 0) ElMessage.warning(msg);
+    if (unk > 0) showStickyWarning(`${msg}。请确认文件名包含“详细日报表 / 营业概况报表 / 堂食外卖占比表 / 商品销售明细表”，或改选正确的数据类型入口。`);
     else ElMessage.success(msg);
   } catch (e: any) {
-    ElMessage.error(`上传失败: ${e?.response?.data?.message || e?.message || e}`);
+    showStickyError(`上传失败: ${e?.response?.data?.message || e?.message || e}。请检查文件类型、账号权限后重试。`);
   } finally {
     uploading.value = false;
   }
@@ -279,7 +344,7 @@ async function handlePreview() {
         `点 "下载 Excel" 获取文件`,
     );
   } catch (e: any) {
-    ElMessage.error(`预览失败: ${e?.response?.data?.message || e?.message || e}`);
+    showStickyError(`预览失败: ${e?.response?.data?.message || e?.message || e}。请确认日期范围内已有 POS 数据。`);
   } finally {
     generating.value = false;
     stopElapsedTimer();
@@ -336,7 +401,7 @@ async function handleDownload() {
     // Refresh audit log so the new generation appears immediately.
     await loadAuditLog();
   } catch (e: any) {
-    ElMessage.error(`下载失败: ${e?.response?.data?.message || e?.message || e}`);
+    showStickyError(`下载失败: ${e?.response?.data?.message || e?.message || e}。请先预览确认数据范围，或稍后重试。`);
   } finally {
     generating.value = false;
     stopElapsedTimer();
@@ -352,7 +417,7 @@ async function handleOneClickDefault() {
   if (oneClickLoading.value || generating.value) return;
   const factoryId = authStore.factoryId;
   if (!factoryId) {
-    ElMessage.error('无法获取工厂信息，请重新登录');
+    showStickyError('无法获取工厂信息，请重新登录后再生成报表。');
     return;
   }
   oneClickLoading.value = true;
@@ -360,7 +425,7 @@ async function handleOneClickDefault() {
   try {
     const dr = await getGoldDataRange(factoryId);
     if (!dr.minDate || !dr.maxDate) {
-      ElMessage.error('暂无可用数据：尚未上传任何 POS 报表，请先在上方上传文件');
+      showStickyError('暂无可用数据：尚未上传任何 POS 报表，请先在上方选择 POS 文件上传。');
       return;
     }
     const params: RevenueReportParams = {
@@ -386,9 +451,7 @@ async function handleOneClickDefault() {
     );
     await loadAuditLog();
   } catch (e: any) {
-    ElMessage.error(
-      `一键生成失败: ${e?.response?.data?.message || e?.message || e}`,
-    );
+    showStickyError(`一键生成失败: ${e?.response?.data?.message || e?.message || e}。请确认已有 POS 数据并稍后重试。`);
   } finally {
     oneClickLoading.value = false;
     stopElapsedTimer();
@@ -401,7 +464,7 @@ async function loadAuditLog() {
   try {
     auditRows.value = await getAuditLog(20);
   } catch (e: any) {
-    ElMessage.error(`历史记录加载失败: ${e?.message || e}`);
+    showStickyError(`历史记录加载失败: ${e?.message || e}。请刷新页面后重试。`);
   } finally {
     auditLoading.value = false;
   }
@@ -417,14 +480,38 @@ function fmtDuration(ms: number | null | undefined) {
   if (ms < 1000) return `${ms} ms`;
   return `${(ms / 1000).toFixed(1)} s`;
 }
+
+function showStickyError(message: string) {
+  const messenger = ElMessage as unknown as {
+    (options: { message: string; type: 'error' | 'warning'; duration: number; showClose: boolean }): void;
+    error?: (message: string) => void;
+  };
+  if (typeof messenger === 'function') {
+    messenger({ message, type: 'error', duration: 0, showClose: true });
+  } else {
+    messenger.error?.(message);
+  }
+}
+
+function showStickyWarning(message: string) {
+  const messenger = ElMessage as unknown as {
+    (options: { message: string; type: 'error' | 'warning'; duration: number; showClose: boolean }): void;
+    warning?: (message: string) => void;
+  };
+  if (typeof messenger === 'function') {
+    messenger({ message, type: 'warning', duration: 0, showClose: true });
+  } else {
+    messenger.warning?.(message);
+  }
+}
 </script>
 
 <template>
   <div class="revenue-report-page">
-    <h1 class="page-title">收入管理报表</h1>
-    <p class="page-subtitle">
-      {{ authStore.factoryName || '餐饮门店' }} — 同比 / 环比 / 堂食外卖占比 / 客单人数分析
-    </p>
+      <h1 class="page-title">收入管理报表</h1>
+      <p class="page-subtitle">
+      {{ tenantLabel }} — 同比 / 环比 / 堂食外卖占比 / 客单人数分析
+      </p>
 
     <!-- Stale-data warning banner (spec §11.4) -->
     <el-alert
@@ -470,6 +557,36 @@ function fmtDuration(ms: number | null | undefined) {
           >
             开始上传 {{ uploadFiles.length }} 个文件
           </el-button>
+
+          <el-dialog
+            v-model="uploadPurposeDialogVisible"
+            title="确认这批文件是什么业务数据"
+            width="680px"
+            :close-on-click-modal="false"
+            :close-on-press-escape="false"
+            destroy-on-close
+          >
+            <p class="purpose-dialog-hint">
+              系统会按用途把文件送到对应模块。POS 销售流水会写入收入报表；采购、财务、评价类文件不会在这里强行导入。
+            </p>
+            <el-radio-group v-model="uploadPurpose" class="purpose-options">
+              <el-radio
+                v-for="item in uploadPurposeOptions"
+                :key="item.value"
+                :value="item.value"
+                class="purpose-option"
+              >
+                <div class="purpose-option-title">{{ item.title }}</div>
+                <div class="purpose-option-desc">{{ item.desc }}</div>
+              </el-radio>
+            </el-radio-group>
+            <template #footer>
+              <el-button @click="uploadPurposeDialogVisible = false">取消</el-button>
+              <el-button type="primary" @click="confirmUploadPurpose">
+                {{ selectedUploadPurpose.action }}
+              </el-button>
+            </template>
+          </el-dialog>
 
           <!-- Upload results table -->
           <el-table
@@ -801,6 +918,46 @@ function fmtDuration(ms: number | null | undefined) {
   padding: 1px 6px;
   border-radius: 3px;
   font-size: 12px;
+}
+
+.purpose-dialog-hint {
+  margin: 0 0 16px;
+  color: #606266;
+  line-height: 1.6;
+}
+
+.purpose-options {
+  display: grid;
+  gap: 10px;
+  width: 100%;
+}
+
+.purpose-option {
+  width: 100%;
+  min-height: 72px;
+  margin-right: 0;
+  padding: 12px 14px;
+  border: 1px solid #e4e7ed;
+  border-radius: 8px;
+  align-items: flex-start;
+  white-space: normal;
+}
+
+.purpose-option :deep(.el-radio__label) {
+  white-space: normal;
+}
+
+.purpose-option-title {
+  color: #303133;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.purpose-option-desc {
+  margin-top: 4px;
+  color: #86909c;
+  font-size: 13px;
+  line-height: 1.5;
 }
 
 .hint {
