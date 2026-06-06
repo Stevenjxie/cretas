@@ -1,12 +1,16 @@
-import React, { useEffect, useState } from 'react';
-import { Alert, ScrollView, StyleSheet, TouchableOpacity, View } from 'react-native';
+import React, { useCallback, useEffect, useState } from 'react';
+import { Alert, Image, ScrollView, StyleSheet, TouchableOpacity, View } from 'react-native';
+import * as FileSystem from 'expo-file-system';
+import * as ImagePicker from 'expo-image-picker';
 import { Button, Card, Text, TextInput } from 'react-native-paper';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 
+import { attachmentApi } from '../../../services/api/attachmentApi';
 import { materialTypeApiClient, MaterialType } from '../../../services/api/materialTypeApiClient';
 import { purchaseRequisitionApiClient, PurchaseRequisition } from '../../../services/api/purchaseRequisitionApiClient';
 import { restaurantApiClient } from '../../../services/api/restaurantApiClient';
+import { speechRecognitionService } from '../../../services/voice/SpeechRecognitionService';
 import { useAuthStore } from '../../../store/authStore';
 import { handleError } from '../../../utils/errorHandler';
 
@@ -18,6 +22,15 @@ interface LineDraft {
   quantity: string;
   unit: string;
   unitPrice: string;
+}
+
+interface QuotePhoto {
+  key: string;
+  uri: string;
+  fileName: string;
+  mimeType: string;
+  uploading?: boolean;
+  fileUrl?: string;
 }
 
 export function ProcurementDeliveryConfirmScreen() {
@@ -33,6 +46,8 @@ export function ProcurementDeliveryConfirmScreen() {
   const [expectedDeliveryDate, setExpectedDeliveryDate] = useState('');
   const [supplierContactNote, setSupplierContactNote] = useState('');
   const [voiceTranscriptText, setVoiceTranscriptText] = useState('');
+  const [voiceRecording, setVoiceRecording] = useState(false);
+  const [quotePhotos, setQuotePhotos] = useState<QuotePhoto[]>([]);
   const [materials, setMaterials] = useState<MaterialType[]>([]);
   const [lines, setLines] = useState<LineDraft[]>([newLine()]);
   const [submitting, setSubmitting] = useState(false);
@@ -80,6 +95,84 @@ export function ProcurementDeliveryConfirmScreen() {
       .slice(0, 5);
   };
 
+  const guessExt = (uri: string, mime?: string): string => {
+    if (mime?.startsWith('image/')) return mime.replace('image/', '');
+    const dot = uri.lastIndexOf('.');
+    return dot > 0 ? uri.substring(dot + 1) : 'jpg';
+  };
+
+  const addQuotePhoto = useCallback(async (asset: ImagePicker.ImagePickerAsset) => {
+    let size = asset.fileSize ?? 0;
+    if (!size) {
+      const info = await FileSystem.getInfoAsync(asset.uri, { size: true });
+      size = info.exists && 'size' in info ? (info.size as number) : 0;
+    }
+    const fileName = asset.fileName ?? `supplier_quote_${Date.now()}.${guessExt(asset.uri, asset.mimeType)}`;
+    const mimeType = asset.mimeType ?? 'image/jpeg';
+    const key = `photo-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    setQuotePhotos((prev) => [...prev, { key, uri: asset.uri, fileName, mimeType, uploading: true }]);
+    try {
+      const fileUrl = await attachmentApi.uploadToOss({ uri: asset.uri, name: fileName, type: mimeType }, factoryId);
+      setQuotePhotos((prev) => prev.map((p) => (p.key === key ? { ...p, uploading: false, fileUrl } : p)));
+    } catch (error) {
+      setQuotePhotos((prev) => prev.filter((p) => p.key !== key));
+      handleError(error, { title: '报价照片上传失败' });
+    }
+  }, [factoryId]);
+
+  const pickQuotePhoto = async (source: 'camera' | 'library') => {
+    const permission = source === 'camera'
+      ? await ImagePicker.requestCameraPermissionsAsync()
+      : await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!permission.granted) {
+      Alert.alert('需要照片权限', '请允许访问相机或相册后再上传供应商报价照片。');
+      return;
+    }
+    const result = source === 'camera'
+      ? await ImagePicker.launchCameraAsync({ mediaTypes: ['images'], quality: 0.82 })
+      : await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], quality: 0.82, allowsMultipleSelection: true });
+    if (result.canceled) return;
+    for (const asset of result.assets) {
+      await addQuotePhoto(asset);
+    }
+  };
+
+  const removeQuotePhoto = (key: string) => {
+    setQuotePhotos((prev) => prev.filter((p) => p.key !== key));
+  };
+
+  const toggleVoiceRecording = async () => {
+    if (voiceRecording) {
+      try {
+        const result = await speechRecognitionService.stopListening();
+        const text = result?.text?.trim();
+        if (text && !text.includes('[语音识别需要配置讯飞密钥]')) {
+          setVoiceTranscriptText((prev) => (prev.trim() ? `${prev.trim()}\n${text}` : text));
+        } else if (!voiceTranscriptText.trim()) {
+          Alert.alert('未识别到语音', '可重试录音，或直接粘贴供应商联系记录。');
+        }
+      } catch (error) {
+        handleError(error, { title: '语音识别失败' });
+      } finally {
+        setVoiceRecording(false);
+      }
+      return;
+    }
+
+    try {
+      const hasPermission = await speechRecognitionService.requestPermissions();
+      if (!hasPermission) {
+        Alert.alert('需要麦克风权限', '请在系统设置中开启麦克风后再录音。');
+        return;
+      }
+      setVoiceRecording(true);
+      await speechRecognitionService.startListening();
+    } catch (error) {
+      setVoiceRecording(false);
+      handleError(error, { title: '无法开始录音' });
+    }
+  };
+
   const submit = async () => {
     const validLines = lines.filter((line) => line.rawMaterialTypeId && Number(line.quantity) > 0);
     if (!supplierName.trim() && !supplierId.trim()) {
@@ -90,8 +183,14 @@ export function ProcurementDeliveryConfirmScreen() {
       Alert.alert('请填写明细', '至少一行食材数量大于 0。');
       return;
     }
+    if (quotePhotos.some((p) => p.uploading)) {
+      Alert.alert('照片上传中', '请等待报价照片上传完成后再提交。');
+      return;
+    }
+
     setSubmitting(true);
     try {
+      const supplierQuotePhotoUrls = quotePhotos.map((p) => p.fileUrl).filter((url): url is string => Boolean(url));
       const note = await restaurantApiClient.createProcurementDelivery({
         sourceRequisitionId: selectedReqId || undefined,
         supplierId: supplierId.trim() || undefined,
@@ -100,6 +199,7 @@ export function ProcurementDeliveryConfirmScreen() {
         expectedDeliveryDate: expectedDeliveryDate || undefined,
         supplierContactNote: supplierContactNote.trim() || undefined,
         voiceTranscriptText: voiceTranscriptText.trim() || undefined,
+        supplierQuotePhotoUrls: supplierQuotePhotoUrls.length > 0 ? supplierQuotePhotoUrls : undefined,
         lines: validLines.map((line) => ({
           ingredientName: line.ingredientName,
           rawMaterialTypeId: line.rawMaterialTypeId,
@@ -152,8 +252,49 @@ export function ProcurementDeliveryConfirmScreen() {
         <TextInput mode="outlined" value={deliveryDate} onChangeText={setDeliveryDate} style={styles.input} />
         <Text style={styles.label}>供应商联系记录</Text>
         <TextInput mode="outlined" value={supplierContactNote} onChangeText={setSupplierContactNote} multiline style={styles.input} />
-        <Text style={styles.label}>语音转录（可粘贴）</Text>
-        <TextInput mode="outlined" value={voiceTranscriptText} onChangeText={setVoiceTranscriptText} multiline style={styles.input} />
+
+        <View style={styles.sectionRow}>
+          <Text style={styles.sectionTitle}>供应商报价照片</Text>
+          <View style={styles.photoActions}>
+            <Button compact mode="outlined" icon="camera" onPress={() => { void pickQuotePhoto('camera'); }}>拍照</Button>
+            <Button compact mode="outlined" icon="image" onPress={() => { void pickQuotePhoto('library'); }}>相册</Button>
+          </View>
+        </View>
+        {quotePhotos.length === 0 ? (
+          <Text style={styles.meta}>可上传微信报价截图或纸质报价单，照片会直传 OSS 并关联送货单。</Text>
+        ) : (
+          <View style={styles.photoGrid}>
+            {quotePhotos.map((photo) => (
+              <View key={photo.key} style={styles.photoItem}>
+                <Image source={{ uri: photo.uri }} style={styles.photoThumb} />
+                {photo.uploading ? <Text style={styles.photoStatus}>上传中…</Text> : null}
+                {!photo.uploading ? (
+                  <Button compact mode="text" textColor="#B91C1C" onPress={() => removeQuotePhoto(photo.key)}>删除</Button>
+                ) : null}
+              </View>
+            ))}
+          </View>
+        )}
+
+        <View style={styles.sectionRow}>
+          <Text style={styles.sectionTitle}>语音联系记录</Text>
+          <Button
+            compact
+            mode={voiceRecording ? 'contained' : 'outlined'}
+            icon={voiceRecording ? 'stop' : 'microphone'}
+            onPress={() => { void toggleVoiceRecording(); }}
+          >
+            {voiceRecording ? '结束录音' : '开始录音'}
+          </Button>
+        </View>
+        <TextInput
+          mode="outlined"
+          value={voiceTranscriptText}
+          onChangeText={setVoiceTranscriptText}
+          multiline
+          placeholder="录音转写会填入此处，也可手动粘贴或编辑"
+          style={styles.input}
+        />
 
         <View style={styles.sectionRow}>
           <Text style={styles.sectionTitle}>送货明细</Text>
@@ -220,6 +361,11 @@ const styles = StyleSheet.create({
   row: { flexDirection: 'row', gap: 8 },
   flex: { flex: 1 },
   submit: { marginTop: 20, borderRadius: 8 },
+  photoActions: { flexDirection: 'row', gap: 8 },
+  photoGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 8 },
+  photoItem: { width: 108, alignItems: 'center' },
+  photoThumb: { width: 96, height: 96, borderRadius: 8, backgroundColor: '#E5E7EB' },
+  photoStatus: { fontSize: 12, color: '#6B7280', marginTop: 4 },
 });
 
 export default ProcurementDeliveryConfirmScreen;
