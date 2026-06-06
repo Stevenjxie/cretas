@@ -126,14 +126,14 @@ export const WORKSHOP_SUP_ACTIONS: QuickAction[] = [
   { id: 'my-reports', label: '我的报工', icon: 'clipboard-check', iconColor: '#059669', iconBg: '#F0FDF4', screen: 'MyWorkReports' },
   // 默认隐藏 — 用户可通过编辑模式开启
   { id: 'process-tasks', label: '工序任务', icon: 'format-list-checks', iconColor: '#EA580C', iconBg: '#FFF7ED', screen: 'ProcessTaskList' },
-  { id: 'three-step', label: '三步报工', icon: 'numeric-3-circle', iconColor: '#7C3AED', iconBg: '#F5F3FF', screen: 'ThreeStepReport' },
+  { id: 'yield-report', label: '逐道报工', icon: 'clipboard-edit-outline', iconColor: '#7C3AED', iconBg: '#F5F3FF', screen: 'YieldBatchSelect' },
   { id: 'checkin', label: '扫码签到', icon: 'qrcode-scan', iconColor: '#059669', iconBg: '#ECFDF5', screen: 'NfcCheckin' },
   { id: 'team-report', label: '班组报工', icon: 'account-group', iconColor: '#059669', iconBg: '#ECFDF5', screen: 'TeamBatchReport' },
   { id: 'equipment', label: '设备监控', icon: 'tools', iconColor: '#0891B2', iconBg: '#ECFEFF', screen: 'EquipmentMonitoring' },
 ];
 
 // 默认隐藏的操作ID
-export const WORKSHOP_SUP_DEFAULT_HIDDEN = ['process-tasks', 'three-step', 'checkin', 'team-report', 'equipment'];
+export const WORKSHOP_SUP_DEFAULT_HIDDEN = ['process-tasks', 'yield-report', 'checkin', 'team-report', 'equipment'];
 
 export const DISPATCHER_ACTIONS: QuickAction[] = [
   { id: 'create-plan', label: '创建计划', icon: 'plus-circle', iconColor: '#7C3AED', iconBg: '#F5F3FF', screen: 'PlanCreate' },

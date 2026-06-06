@@ -13,7 +13,9 @@ import {
   buildReportableTaskIds,
   compareTasksByWorkOrder,
   extractProcessTaskList,
+  getTaskBatchId,
   getBatchKey,
+  getTaskWorkProcessTaskId,
 } from '../../utils/processTaskFlow';
 
 type Props = ProcessingScreenProps<'ProcessTaskList'>;
@@ -192,11 +194,18 @@ export default function ProcessTaskListScreen() {
                 testID={`process-task-report-btn-${item.id}`}
                 variant="primary"
                 size="medium"
-                onPress={() => navigation.navigate('ProcessTaskReport', {
-                  taskId: item.id,
-                  processName: item.processName,
-                  unit: item.unit,
-                })}
+                onPress={() => {
+                  const batchId = getTaskBatchId(item);
+                  if (batchId == null) {
+                    Alert.alert('不能报工', '当前工序没有绑定生产批次，请联系管理员重新转批次。');
+                    return;
+                  }
+                  navigation.navigate('YieldStepReport', {
+                    batchId,
+                    assignedWorkProcessTaskId: getTaskWorkProcessTaskId(item) ?? undefined,
+                    assignedProcessOrder: item.processOrder,
+                  });
+                }}
               >
                 报工
               </NeoButton>
@@ -218,7 +227,7 @@ export default function ProcessTaskListScreen() {
           <Appbar.BackAction testID="process-task-list-back" onPress={() => navigation.goBack()} />
         ) : null}
         <Appbar.Content title="工序任务" titleStyle={{ fontWeight: '600' }} />
-        <Appbar.Action testID="three-step-report-btn" icon="qrcode-scan" onPress={() => navigation.navigate('ThreeStepReport')} />
+        <Appbar.Action testID="yield-batch-select-btn" icon="qrcode-scan" onPress={() => navigation.navigate('YieldBatchSelect')} />
         {!isOperator ? (
           <Appbar.Action testID="process-task-approval-btn" icon="clipboard-check-outline" onPress={() => navigation.navigate('ProcessTaskApproval' as never)} />
         ) : null}

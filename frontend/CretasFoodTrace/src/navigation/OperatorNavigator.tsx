@@ -5,7 +5,7 @@ import { Icon } from 'react-native-paper';
 import ProfileStackNavigator from './ProfileStackNavigator';
 
 import OperatorAssignedProcessScreen from '../screens/processing/OperatorAssignedProcessScreen';
-import ThreeStepReportScreen from '../screens/processing/ThreeStepReportScreen';
+import YieldStepReportScreen from '../screens/processing/YieldStepReportScreen';
 
 const Tab = createBottomTabNavigator<any>();
 const ReportStack = createNativeStackNavigator<any>();
@@ -18,7 +18,7 @@ function OperatorReportStackNavigator() {
   return (
     <ReportStack.Navigator initialRouteName="OperatorAssignedProcess" screenOptions={{ headerShown: false }}>
       <ReportStack.Screen name="OperatorAssignedProcess" component={OperatorAssignedProcessScreen} />
-      <ReportStack.Screen name="ThreeStepReport" component={ThreeStepReportScreen} />
+      <ReportStack.Screen name="YieldStepReport" component={YieldStepReportScreen} />
     </ReportStack.Navigator>
   );
 }

@@ -12,6 +12,10 @@ import {
 } from '../../services/api/processTaskApiClient';
 import { NeoButton, ScreenWrapper } from '../../components/ui';
 import { theme } from '../../theme';
+import {
+  getTaskBatchId,
+  getTaskWorkProcessTaskId,
+} from '../../utils/processTaskFlow';
 
 type Props = ProcessingScreenProps<'ProcessTaskDetail'>;
 
@@ -235,11 +239,18 @@ export default function ProcessTaskDetailScreen() {
             <NeoButton
               testID="task-detail-report-btn"
               variant="primary"
-              onPress={() => navigation.navigate('ProcessTaskReport', {
-                taskId: task.id,
-                processName: task.processName,
-                unit: task.unit,
-              })}
+              onPress={() => {
+                const batchId = getTaskBatchId(task);
+                if (batchId == null) {
+                  Alert.alert('不能报工', '当前工序没有绑定生产批次，请联系管理员重新转批次。');
+                  return;
+                }
+                navigation.navigate('YieldStepReport', {
+                  batchId,
+                  assignedWorkProcessTaskId: getTaskWorkProcessTaskId(task) ?? undefined,
+                  assignedProcessOrder: task.processOrder,
+                });
+              }}
               style={styles.actionBtn}
             >
               {task.status === 'SUPPLEMENTING' ? '补报' : '报工'}

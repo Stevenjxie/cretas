@@ -449,19 +449,18 @@ describe('RN-SCR-06: ProcessTaskDetailScreen displays quantities', () => {
   });
 });
 
-// ========== ProcessTaskReportScreen Tests ==========
+// ========== YieldStepReport data contract tests ==========
 
-describe('RN-SCR-07: ProcessTaskReportScreen submit form with quantity validation', () => {
-  it('should reject supplement with zero quantity (validation pattern)', () => {
-    // Validate the supplement data structure matches API expectations
+describe('RN-SCR-07: YieldStepReport staged report payload validation', () => {
+  it('should keep staged report payload quantities positive', () => {
     const validData = {
-      processTaskId: 'task-1',
+      workProcessTaskId: 1,
       outputQuantity: 25,
       reportDate: '2026-03-12',
       notes: '正常报工',
     };
     expect(validData.outputQuantity).toBeGreaterThan(0);
-    expect(validData.processTaskId).toBeTruthy();
+    expect(validData.workProcessTaskId).toBeGreaterThan(0);
     expect(validData.reportDate).toMatch(/^\d{4}-\d{2}-\d{2}$/);
   });
 
@@ -474,26 +473,26 @@ describe('RN-SCR-07: ProcessTaskReportScreen submit form with quantity validatio
   });
 });
 
-describe('RN-SCR-08: ProcessTaskReportScreen supplement mode indicator', () => {
-  it('should distinguish supplemental reports in API data', () => {
-    const supplementReport = {
+describe('RN-SCR-08: YieldStepReport staged report kind indicator', () => {
+  it('should distinguish staged input and output report data', () => {
+    const inputReport = {
       id: 101,
-      processTaskId: 'task-1',
-      outputQuantity: 10,
-      isSupplemental: true,
+      workProcessTaskId: 1,
+      reportKind: 'INPUT',
+      inputQuantity: 998,
       approvalStatus: 'PENDING',
     };
 
-    const normalReport = {
+    const outputReport = {
       id: 100,
-      processTaskId: 'task-1',
+      workProcessTaskId: 1,
+      reportKind: 'OUTPUT',
       outputQuantity: 50,
-      isSupplemental: false,
       approvalStatus: 'APPROVED',
     };
 
-    expect(supplementReport.isSupplemental).toBe(true);
-    expect(normalReport.isSupplemental).toBe(false);
+    expect(inputReport.reportKind).toBe('INPUT');
+    expect(outputReport.reportKind).toBe('OUTPUT');
   });
 });
 

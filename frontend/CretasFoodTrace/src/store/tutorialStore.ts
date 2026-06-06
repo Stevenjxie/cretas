@@ -291,18 +291,6 @@ export const TUTORIAL_HOME: TutorialConfig = {
       highlightBorderRadius: 14,
     },
     {
-      icon: 'numeric-3-circle',
-      iconColor: '#7C3AED',
-      iconBg: '#F5F3FF',
-      title: '三步报工',
-      text: '最快的报工方式：扫人 → 选工序 → 报数量。点击下一步进去看看。',
-      targetKey: 'ws-home-qa-three-step',
-      tooltipPosition: 'bottom',
-      highlightBorderRadius: 14,
-      navigateTo: 'ThreeStepReport',
-      nextButtonText: '进入体验 →',
-    },
-    {
       icon: 'clipboard-list',
       iconColor: '#2563EB',
       iconBg: '#EFF6FF',

@@ -26,7 +26,13 @@ import { handleError } from '../../utils/errorHandler';
 import { useAuthStore } from '../../store/authStore';
 import { appAlert, AppDialogHost } from '../../components/ui/AppDialog';
 
-type YieldStepReportParams = { batchId: number; batchNumber?: string };
+type YieldStepReportParams = {
+  batchId: number;
+  batchNumber?: string;
+  assignedWorkProcessTaskId?: number;
+  assignedProcessOrder?: number;
+  autoAssigned?: boolean;
+};
 type RouteT = RouteProp<{ YieldStepReport: YieldStepReportParams }, 'YieldStepReport'>;
 type NavT = NativeStackNavigationProp<Record<string, object | undefined>>;
 
@@ -102,7 +108,12 @@ function validateEvidenceVideo(asset: ImagePicker.ImagePickerAsset): boolean {
 const YieldStepReportScreen: React.FC = () => {
   const navigation = useNavigation<NavT>();
   const route = useRoute<RouteT>();
-  const { batchId } = route.params;
+  const {
+    batchId,
+    assignedWorkProcessTaskId,
+    assignedProcessOrder,
+    autoAssigned = false,
+  } = route.params;
 
   // 角色/身份 (Task 7 — 小组长过滤 + 完工入库主管权限)
   const { getUserId, getUserRole } = useAuthStore();
@@ -201,14 +212,25 @@ const YieldStepReportScreen: React.FC = () => {
       const yd = yieldRes.success ? yieldRes.data : null;
       if (yd) setYieldData(yd);
 
-      // 三阶段 (单元2): 首次加载自动跳到第一道未完成 (phase != COMPLETED) 的道.
-      // 全部 COMPLETED → 跳 done 卡; 否则定位到首个待办道.
+      // 三阶段 (单元2): operator 自动分配模式锁定后台分配的本道;
+      // 普通模式首次加载自动跳到第一道未完成 (phase != COMPLETED) 的道.
       if (sortedTasks.length > 0) {
         const phaseFor = (task: WorkProcessTask): StepPhase => {
           if (!yd) return 'AWAITING_INPUT';
           const s = yd.steps.find((st: StepYieldDTO) => st.processOrder === task.processOrder);
           return (s?.phase as StepPhase) ?? 'AWAITING_INPUT';
         };
+        if (autoAssigned) {
+          const assignedIndex = sortedTasks.findIndex((task) => {
+            if (assignedWorkProcessTaskId != null && task.id === assignedWorkProcessTaskId) return true;
+            return assignedProcessOrder != null && task.processOrder === assignedProcessOrder;
+          });
+          if (assignedIndex !== -1) {
+            setCurrentStepIndex(assignedIndex);
+            setScreenPhase('reporting');
+            return;
+          }
+        }
         const firstUnfinished = sortedTasks.findIndex((t) => phaseFor(t) !== 'COMPLETED');
         if (firstUnfinished === -1) {
           setScreenPhase('done');
@@ -223,7 +245,7 @@ const YieldStepReportScreen: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  }, [batchId, isOperator, currentUserId]);
+  }, [batchId, isOperator, currentUserId, autoAssigned, assignedWorkProcessTaskId, assignedProcessOrder]);
 
   useEffect(() => {
     loadAll();
@@ -732,6 +754,14 @@ const YieldStepReportScreen: React.FC = () => {
     );
   }, [batchStatus, productType, batchNumber, yieldData, doSettle, navigation]);
 
+  const returnOrRefreshAssignedTask = useCallback(() => {
+    if (autoAssigned) {
+      navigation.replace('OperatorAssignedProcess');
+      return;
+    }
+    navigation.goBack();
+  }, [autoAssigned, navigation]);
+
   if (loading) {
     return (
       <ScreenWrapper>
@@ -749,8 +779,8 @@ const YieldStepReportScreen: React.FC = () => {
         <View style={styles.centered}>
           <Text style={styles.emptyTitle}>该批次未生成工序任务</Text>
           <Text style={styles.emptyDesc}>请联系主管为该批次 spawn 工序后再报工</Text>
-          <NeoButton variant="outline" size="large" onPress={() => navigation.goBack()} style={styles.fullBtn}>
-            返回选批次
+          <NeoButton variant="outline" size="large" onPress={returnOrRefreshAssignedTask} style={styles.fullBtn}>
+            {autoAssigned ? '刷新当前工序' : '返回选批次'}
           </NeoButton>
         </View>
       </ScreenWrapper>
@@ -817,8 +847,8 @@ const YieldStepReportScreen: React.FC = () => {
               完工入库
             </NeoButton>
           )}
-          <NeoButton variant="outline" size="large" onPress={() => navigation.goBack()} style={styles.fullBtn}>
-            返回选批次
+          <NeoButton variant="outline" size="large" onPress={returnOrRefreshAssignedTask} style={styles.fullBtn}>
+            {autoAssigned ? '刷新当前工序' : '返回选批次'}
           </NeoButton>
         </ScrollView>
       </ScreenWrapper>
@@ -845,7 +875,9 @@ const YieldStepReportScreen: React.FC = () => {
     <>
       <View style={styles.progressWrap}>
         <View style={styles.progressTopRow}>
-          <Text style={styles.progressText}>报工 {currentStepIndex + 1} / {totalSteps}</Text>
+          <Text style={styles.progressText}>
+            {autoAssigned ? '当前分配工序' : `报工 ${currentStepIndex + 1} / ${totalSteps}`}
+          </Text>
           <View style={styles.phaseBadge} testID="yield-phase-badge">
             <Text style={styles.phaseBadgeText}>{phaseBadge}</Text>
           </View>
@@ -1335,12 +1367,12 @@ const YieldStepReportScreen: React.FC = () => {
             <NeoButton
               variant="primary"
               size="large"
-              onPress={goNextStep}
+              onPress={autoAssigned ? returnOrRefreshAssignedTask : goNextStep}
               disabled={submitting}
               style={styles.fullBtn}
               testID="yield-next-step-btn"
             >
-              {isLastStep ? '查看整批汇总  ▶' : '下一道  ▶'}
+              {autoAssigned ? '刷新当前工序' : isLastStep ? '查看整批汇总  ▶' : '下一道  ▶'}
             </NeoButton>
           </>
         ) : null}

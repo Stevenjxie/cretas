@@ -23,13 +23,22 @@ function toNumber(value: unknown): number | null {
   return null;
 }
 
-function getBatchRank(task: ProcessTaskItem): number {
+export function getTaskBatchId(task: ProcessTaskItem): number | null {
   const batchId = toNumber(task.batchId ?? task.productionBatchId);
-  if (batchId != null) return -batchId;
+  if (batchId != null) return batchId;
   if (typeof task.productionRunId === 'string' && task.productionRunId.startsWith('BATCH-')) {
-    const runBatchId = toNumber(task.productionRunId.replace('BATCH-', ''));
-    return runBatchId != null ? -runBatchId : 0;
+    return toNumber(task.productionRunId.replace('BATCH-', ''));
   }
+  return null;
+}
+
+export function getTaskWorkProcessTaskId(task: ProcessTaskItem): number | null {
+  return toNumber(task.workProcessTaskId);
+}
+
+function getBatchRank(task: ProcessTaskItem): number {
+  const batchId = getTaskBatchId(task);
+  if (batchId != null) return -batchId;
   return Number.MAX_SAFE_INTEGER;
 }
 

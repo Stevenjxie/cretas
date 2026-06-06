@@ -31,9 +31,10 @@ import AIAnalysisScreen from "../../screens/processing/AIAnalysisScreen";
 // 工序制生产页面
 import ProcessTaskListScreen from "../../screens/processing/ProcessTaskListScreen";
 import ProcessTaskDetailScreen from "../../screens/processing/ProcessTaskDetailScreen";
-import ProcessTaskReportScreen from "../../screens/processing/ProcessTaskReportScreen";
 import ProcessTaskHistoryScreen from "../../screens/processing/ProcessTaskHistoryScreen";
 import ProcessRunOverviewScreen from "../../screens/processing/ProcessRunOverviewScreen";
+import YieldBatchSelectScreen from "../../screens/processing/YieldBatchSelectScreen";
+import YieldStepReportScreen from "../../screens/processing/YieldStepReportScreen";
 
 // 质检相关 - 已迁移至 QualityInspectorNavigator
 // import CreateQualityRecordScreen from "../../screens/processing/CreateQualityRecordScreen";
@@ -142,11 +143,6 @@ export function WSBatchesStackNavigator() {
         options={{ title: "任务详情" }}
       />
       <Stack.Screen
-        name="ProcessTaskReport"
-        component={ProcessTaskReportScreen}
-        options={{ title: "工序报工" }}
-      />
-      <Stack.Screen
         name="ProcessTaskHistory"
         component={ProcessTaskHistoryScreen}
         options={{ title: "任务历史" }}
@@ -155,6 +151,16 @@ export function WSBatchesStackNavigator() {
         name="ProcessRunOverview"
         component={ProcessRunOverviewScreen}
         options={{ title: "生产运行概览" }}
+      />
+      <Stack.Screen
+        name="YieldBatchSelect"
+        component={YieldBatchSelectScreen}
+        options={{ title: "逐道报工" }}
+      />
+      <Stack.Screen
+        name="YieldStepReport"
+        component={YieldStepReportScreen}
+        options={{ title: "逐道报工" }}
       />
 
       {/* 质检已迁移至 QualityInspectorNavigator */}

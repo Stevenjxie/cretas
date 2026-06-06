@@ -41,6 +41,14 @@ export type MainTabParamList = {
 
 // ==================== 生产模块导航参数 ====================
 
+export type YieldStepReportParams = {
+  batchId: number;
+  batchNumber?: string;
+  assignedWorkProcessTaskId?: number;
+  assignedProcessOrder?: number;
+  autoAssigned?: boolean;
+};
+
 export type ProcessingStackParamList = {
   ProcessingDashboard: undefined;
 
@@ -122,7 +130,8 @@ export type ProcessingStackParamList = {
   TeamBatchReport: undefined;
   DynamicReport: { reportType: 'PROGRESS' | 'HOURS' };
   NfcCheckin: undefined;
-  ThreeStepReport: { assignedTaskId?: string; autoAssigned?: boolean } | undefined;
+  YieldBatchSelect: undefined;
+  YieldStepReport: YieldStepReportParams;
 
   // 标签扫描 - 通用组件
   LabelScan: {
@@ -141,7 +150,6 @@ export type ProcessingStackParamList = {
   // 工序制生产 - Process Mode
   ProcessTaskList: { status?: string };
   ProcessTaskDetail: { taskId: string };
-  ProcessTaskReport: { taskId: string; processName?: string; unit?: string };
   ProcessTaskHistory: undefined;
   ProcessRunOverview: { productionRunId: string };
 };
@@ -433,9 +441,10 @@ export type FAManagementStackParamList = {
   // 工序制生产页面
   ProcessTaskList: { status?: string };
   ProcessTaskDetail: { taskId: string };
-  ProcessTaskReport: { taskId: string; processName?: string; unit?: string };
   ProcessTaskHistory: undefined;
   ProcessRunOverview: { productionRunId: string };
+  YieldBatchSelect: undefined;
+  YieldStepReport: YieldStepReportParams;
   // 餐饮模块 (restaurant mode)
   RecipeList: undefined;
   RecipeDetail: { productTypeId: string; dishName: string };
@@ -520,11 +529,11 @@ export type WSHomeStackParamList = {
   // 生产报工
   DynamicReport: { reportType: 'PROGRESS' | 'HOURS' };
   NfcCheckin: undefined;
-  ThreeStepReport: { assignedTaskId?: string; autoAssigned?: boolean } | undefined;
   ProcessTaskList: undefined;
   ProcessTaskDetail: { taskId: string };
-  ProcessTaskReport: { taskId: string; processName?: string; unit?: string };
   ProcessRunOverview: { productionRunId: string };
+  YieldBatchSelect: undefined;
+  YieldStepReport: YieldStepReportParams;
   ProcessOperation: undefined;
   MyWorkReports: undefined;
 };
@@ -562,9 +571,10 @@ export type WSBatchesStackParamList = {
   // 工序制生产页面
   ProcessTaskList: { status?: string };
   ProcessTaskDetail: { taskId: string };
-  ProcessTaskReport: { taskId: string; processName?: string; unit?: string };
   ProcessTaskHistory: undefined;
   ProcessRunOverview: { productionRunId: string };
+  YieldBatchSelect: undefined;
+  YieldStepReport: YieldStepReportParams;
 };
 
 export type WSWorkersStackParamList = {

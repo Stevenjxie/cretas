@@ -6,11 +6,22 @@ import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { NeoButton, ScreenWrapper } from '../../components/ui';
 import { processTaskApiClient } from '../../services/api/processTaskApiClient';
 import { theme } from '../../theme';
-import { extractProcessTaskList, pickCurrentReportTask } from '../../utils/processTaskFlow';
+import {
+  extractProcessTaskList,
+  getTaskBatchId,
+  getTaskWorkProcessTaskId,
+  pickCurrentReportTask,
+} from '../../utils/processTaskFlow';
 
 type OperatorAssignedProcessStackParamList = {
   OperatorAssignedProcess: undefined;
-  ThreeStepReport: { assignedTaskId?: string; autoAssigned?: boolean };
+  YieldStepReport: {
+    batchId: number;
+    batchNumber?: string;
+    assignedWorkProcessTaskId?: number;
+    assignedProcessOrder?: number;
+    autoAssigned?: boolean;
+  };
 };
 
 type NavigationProp = NativeStackNavigationProp<
@@ -33,8 +44,15 @@ export default function OperatorAssignedProcessScreen() {
       setTaskCount(tasks.length);
       const currentTask = pickCurrentReportTask(tasks);
       if (currentTask) {
-        navigation.replace('ThreeStepReport', {
-          assignedTaskId: currentTask.id,
+        const batchId = getTaskBatchId(currentTask);
+        if (batchId == null) {
+          setError('当前工序没有绑定生产批次，请联系管理员重新转批次。');
+          return;
+        }
+        navigation.replace('YieldStepReport', {
+          batchId,
+          assignedWorkProcessTaskId: getTaskWorkProcessTaskId(currentTask) ?? undefined,
+          assignedProcessOrder: currentTask.processOrder,
           autoAssigned: true,
         });
         return;

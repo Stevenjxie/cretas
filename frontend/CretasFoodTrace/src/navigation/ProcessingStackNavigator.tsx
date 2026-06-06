@@ -70,16 +70,16 @@ import LabelScanScreen from '../screens/shared/LabelScanScreen';
 // 工序制生产页面
 import ProcessTaskListScreen from '../screens/processing/ProcessTaskListScreen';
 import ProcessTaskDetailScreen from '../screens/processing/ProcessTaskDetailScreen';
-import ProcessTaskReportScreen from '../screens/processing/ProcessTaskReportScreen';
 import ProcessTaskHistoryScreen from '../screens/processing/ProcessTaskHistoryScreen';
 import ProcessRunOverviewScreen from '../screens/processing/ProcessRunOverviewScreen';
+import YieldBatchSelectScreen from '../screens/processing/YieldBatchSelectScreen';
+import YieldStepReportScreen from '../screens/processing/YieldStepReportScreen';
 
 // 报工页面
 import ScanReportScreen from '../screens/processing/ScanReportScreen';
 import TeamBatchReportScreen from '../screens/processing/TeamBatchReportScreen';
 import DynamicReportScreen from '../screens/processing/DynamicReportScreen';
 import NfcCheckinScreen from '../screens/processing/NfcCheckinScreen';
-import ThreeStepReportScreen from '../screens/processing/ThreeStepReportScreen';
 
 // 溯源功能 - Phase 3
 import {
@@ -299,16 +299,20 @@ export function ProcessingStackNavigator() {
         component={ProcessTaskDetailScreen}
       />
       <Stack.Screen
-        name="ProcessTaskReport"
-        component={ProcessTaskReportScreen}
-      />
-      <Stack.Screen
         name="ProcessTaskHistory"
         component={ProcessTaskHistoryScreen}
       />
       <Stack.Screen
         name="ProcessRunOverview"
         component={ProcessRunOverviewScreen}
+      />
+      <Stack.Screen
+        name="YieldBatchSelect"
+        component={YieldBatchSelectScreen}
+      />
+      <Stack.Screen
+        name="YieldStepReport"
+        component={YieldStepReportScreen}
       />
 
       {/* 报工 */}
@@ -327,10 +331,6 @@ export function ProcessingStackNavigator() {
       <Stack.Screen
         name="NfcCheckin"
         component={NfcCheckinScreen}
-      />
-      <Stack.Screen
-        name="ThreeStepReport"
-        component={ThreeStepReportScreen}
       />
     </Stack.Navigator>
   );
