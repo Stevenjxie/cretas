@@ -29,7 +29,7 @@ export function PriceAnomalyApprovalScreen() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const { data } = await restaurantApiClient.getPendingPriceAnomalyApprovals({ page: 0, size: 50 });
+      const { data } = await restaurantApiClient.getPendingPriceAnomalyApprovals({ page: 1, size: 50 });
       setNotes(data);
     } catch (error) {
       handleError(error, { title: '待审批列表加载失败' });

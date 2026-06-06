@@ -130,6 +130,20 @@ export function FAManagementScreen() {
               color="#FFAB00"
               onPress={() => navigation.navigate('StocktakingList')}
             />
+            <GridItem
+              icon="clipboard-edit-outline"
+              title={t('management.chefRequisition', '报货追踪')}
+              color="#1B65A8"
+              testID="fa-chef-requisition-btn"
+              onPress={() => navigation.navigate('ChefRequisitionList')}
+            />
+            <GridItem
+              icon="truck-check"
+              title={t('management.supplierDelivery', '待验收入库')}
+              color="#409eff"
+              testID="fa-supplier-delivery-btn"
+              onPress={() => navigation.navigate('SupplierDeliveryList')}
+            />
           </View>
         </View>
         )}

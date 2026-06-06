@@ -57,7 +57,7 @@ export function ProcurementDeliveryConfirmScreen() {
     (async () => {
       try {
         const [reqRes, matRes] = await Promise.all([
-          purchaseRequisitionApiClient.list({ status: 'APPROVED', page: 0, size: 30 }),
+          purchaseRequisitionApiClient.list({ status: 'APPROVED', page: 1, size: 30 }),
           materialTypeApiClient.getActiveMaterialTypes(factoryId),
         ]);
         if (!alive) return;

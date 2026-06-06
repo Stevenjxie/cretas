@@ -54,7 +54,7 @@ export function ChefRequisitionCreateScreen() {
           materialTypeApiClient.getActiveMaterialTypes(factoryId),
           purchaseRequisitionApiClient.list({
             requesterId: user?.id,
-            page: 0,
+            page: 1,
             size: 12,
             factoryId,
           }),

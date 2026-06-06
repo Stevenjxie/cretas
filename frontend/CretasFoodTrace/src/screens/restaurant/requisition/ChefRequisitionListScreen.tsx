@@ -29,7 +29,7 @@ export function ChefRequisitionListScreen() {
     try {
       const { data } = await purchaseRequisitionApiClient.list({
         status: filter === 'ALL' ? undefined : filter,
-        page: 0,
+        page: 1,
         size: 50,
       });
       setRows(data);
@@ -47,7 +47,11 @@ export function ChefRequisitionListScreen() {
       <Appbar.Header>
         <Appbar.BackAction onPress={() => navigation.goBack()} />
         <Appbar.Content title="报货追踪" />
-        <Appbar.Action icon="plus" onPress={() => navigation.navigate('ChefRequisitionCreate')} />
+        <Appbar.Action
+          testID="chef-requisition-create-btn"
+          icon="plus"
+          onPress={() => navigation.navigate('ChefRequisitionCreate')}
+        />
       </Appbar.Header>
 
       <ScrollView
