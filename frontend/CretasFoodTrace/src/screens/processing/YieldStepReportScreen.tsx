@@ -201,7 +201,10 @@ const YieldStepReportScreen: React.FC = () => {
       ]);
       let sortedTasks: WorkProcessTask[] = [];
       if (tasksRes.success) {
-        sortedTasks = [...tasksRes.data].sort((a, b) => a.processOrder - b.processOrder);
+        const visibleTasks = isOperator && currentUserId != null
+          ? tasksRes.data.filter((task) => task.assignedTo === currentUserId)
+          : tasksRes.data;
+        sortedTasks = [...visibleTasks].sort((a, b) => a.processOrder - b.processOrder);
         setTasks(sortedTasks);
       }
       if (batchRes.success && batchRes.data) {

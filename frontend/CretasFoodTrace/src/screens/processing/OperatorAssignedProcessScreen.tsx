@@ -4,14 +4,9 @@ import { ActivityIndicator, Appbar, IconButton, Text } from 'react-native-paper'
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { NeoButton, ScreenWrapper } from '../../components/ui';
-import { processTaskApiClient } from '../../services/api/processTaskApiClient';
+import { yieldReportApi, WorkProcessTask, WorkProcessTaskStatus } from '../../services/api/yieldReportApi';
+import { useAuthStore } from '../../store/authStore';
 import { theme } from '../../theme';
-import {
-  extractProcessTaskList,
-  getTaskBatchId,
-  getTaskWorkProcessTaskId,
-  pickCurrentReportTask,
-} from '../../utils/processTaskFlow';
 
 type OperatorAssignedProcessStackParamList = {
   OperatorAssignedProcess: undefined;
@@ -29,45 +24,114 @@ type NavigationProp = NativeStackNavigationProp<
   'OperatorAssignedProcess'
 >;
 
+const ACTIVE_STATUSES: WorkProcessTaskStatus[] = ['IN_PROGRESS', 'PENDING'];
+
+function statusRank(status: WorkProcessTaskStatus): number {
+  if (status === 'IN_PROGRESS') return 0;
+  if (status === 'PENDING') return 1;
+  return 2;
+}
+
+function isTerminalStatus(status: WorkProcessTaskStatus): boolean {
+  return status === 'COMPLETED' || status === 'SKIPPED' || status === 'CANCELLED';
+}
+
+function compareAssignedTasks(a: WorkProcessTask, b: WorkProcessTask): number {
+  return (
+    b.productionBatchId - a.productionBatchId
+    || statusRank(a.status) - statusRank(b.status)
+    || a.processOrder - b.processOrder
+    || a.id - b.id
+  );
+}
+
+function uniqueTasks(tasks: WorkProcessTask[]): WorkProcessTask[] {
+  const seen = new Set<number>();
+  const out: WorkProcessTask[] = [];
+  for (const task of tasks) {
+    if (seen.has(task.id)) continue;
+    seen.add(task.id);
+    out.push(task);
+  }
+  return out;
+}
+
 export default function OperatorAssignedProcessScreen() {
   const navigation = useNavigation<NavigationProp>();
+  const { getUserId } = useAuthStore();
+  const currentUserId = getUserId();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [taskCount, setTaskCount] = useState(0);
+
+  const loadExactAssignedTasks = useCallback(async (assignedTo: number): Promise<WorkProcessTask[]> => {
+    const chunks = await Promise.all(
+      ACTIVE_STATUSES.map(async (status) => {
+        const res = await yieldReportApi.listAssignedWorkProcessTasks({
+          assignedTo,
+          status,
+          page: 1,
+          size: 100,
+        });
+        if (!res.success) {
+          throw new Error(res.message || '加载分配工序失败');
+        }
+        return res.data?.content ?? [];
+      }),
+    );
+    return uniqueTasks(chunks.flat())
+      .filter((task) => task.assignedTo === assignedTo)
+      .sort(compareAssignedTasks);
+  }, []);
+
+  const findCurrentReportableTask = useCallback(
+    async (assignedTasks: WorkProcessTask[], assignedTo: number): Promise<WorkProcessTask | null> => {
+      for (const candidate of assignedTasks) {
+        const batchRes = await yieldReportApi.listWorkProcessTasks(candidate.productionBatchId);
+        if (!batchRes.success) {
+          throw new Error(batchRes.message || '加载批次工序链失败');
+        }
+        const batchTasks = [...(batchRes.data ?? [])].sort((a, b) => a.processOrder - b.processOrder || a.id - b.id);
+        const firstOpenTask = batchTasks.find((task) => !isTerminalStatus(task.status));
+        if (firstOpenTask?.id === candidate.id && firstOpenTask.assignedTo === assignedTo) {
+          return firstOpenTask;
+        }
+      }
+      return null;
+    },
+    [],
+  );
 
   const loadAssignedTask = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const result = await processTaskApiClient.getActiveTasks();
-      const tasks = extractProcessTaskList(result);
+      if (currentUserId == null) {
+        setError('无法识别当前账号，请退出后重新登录');
+        return;
+      }
+      const tasks = await loadExactAssignedTasks(currentUserId);
       setTaskCount(tasks.length);
-      const currentTask = pickCurrentReportTask(tasks);
+      const currentTask = await findCurrentReportableTask(tasks, currentUserId);
       if (currentTask) {
-        const batchId = getTaskBatchId(currentTask);
-        if (batchId == null) {
-          setError('当前工序没有绑定生产批次，请联系管理员重新转批次。');
-          return;
-        }
         navigation.replace('YieldStepReport', {
-          batchId,
-          assignedWorkProcessTaskId: getTaskWorkProcessTaskId(currentTask) ?? undefined,
+          batchId: currentTask.productionBatchId,
+          assignedWorkProcessTaskId: currentTask.id,
           assignedProcessOrder: currentTask.processOrder,
           autoAssigned: true,
         });
-        return;
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : '加载当前工序失败，请稍后重试');
     } finally {
       setLoading(false);
     }
-  }, [navigation]);
+  }, [currentUserId, findCurrentReportableTask, loadExactAssignedTasks, navigation]);
 
   useFocusEffect(
     useCallback(() => {
       loadAssignedTask();
-    }, [loadAssignedTask])
+    }, [loadAssignedTask]),
   );
 
   const message = useMemo(() => {

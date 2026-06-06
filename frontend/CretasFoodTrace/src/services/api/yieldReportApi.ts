@@ -9,6 +9,14 @@ export interface ApiResponse<T> {
   data: T;
 }
 
+export interface PageResponse<T> {
+  content: T[];
+  totalElements?: number;
+  totalPages?: number;
+  page?: number;
+  size?: number;
+}
+
 // ============ 工序任务状态 (mirror WorkProcessTask.Status) ============
 export type WorkProcessTaskStatus =
   | 'PENDING'
@@ -290,6 +298,23 @@ class YieldReportApi {
     const params = assignedTo != null ? { assignedTo } : undefined;
     return apiClient.get<ApiResponse<WorkProcessTask[]>>(
       `/api/mobile/${fid}/production/batches/${batchId}/work-process-tasks`,
+      { params },
+    );
+  }
+
+  /** Operator 当前工序入口: 按当前账号精确查询已分配 WorkProcessTask, 不包含未分配任务. */
+  async listAssignedWorkProcessTasks(
+    params: {
+      assignedTo: number;
+      status?: WorkProcessTaskStatus;
+      page?: number;
+      size?: number;
+    },
+    factoryId?: string,
+  ): Promise<ApiResponse<PageResponse<WorkProcessTask>>> {
+    const fid = requireFactoryId(factoryId);
+    return apiClient.get<ApiResponse<PageResponse<WorkProcessTask>>>(
+      `/api/mobile/${fid}/work-process-tasks`,
       { params },
     );
   }
