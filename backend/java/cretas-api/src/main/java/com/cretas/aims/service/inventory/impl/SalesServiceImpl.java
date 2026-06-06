@@ -4,6 +4,7 @@ import com.cretas.aims.dto.common.PageResponse;
 import com.cretas.aims.dto.inventory.CreateDeliveryRequest;
 import com.cretas.aims.dto.inventory.CreateSalesOrderRequest;
 import com.cretas.aims.dto.inventory.UpdateSalesOrderRequest;
+import com.cretas.aims.entity.enums.ArApTransactionType;
 import com.cretas.aims.entity.enums.SalesDeliveryStatus;
 import com.cretas.aims.entity.enums.SalesOrderStatus;
 import com.cretas.aims.entity.inventory.*;
@@ -14,6 +15,7 @@ import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.repository.CustomerRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.UserRepository;
+import com.cretas.aims.repository.finance.ArApTransactionRepository;
 import com.cretas.aims.repository.inventory.*;
 import com.cretas.aims.event.SalesOrderConfirmedEvent;
 import com.cretas.aims.event.SalesOrderFinanceApprovedEvent;
@@ -62,6 +64,10 @@ public class SalesServiceImpl implements SalesService {
     /** P0-13 批次分配校验（可选注入，避免破坏现有构造器）。 */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.service.sales.SalesDeliveryBatchAllocationService batchAllocationService;
+
+    /** Sales shipment auto-AR idempotency guard. Optional for legacy unit tests. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private ArApTransactionRepository arApTransactionRepository;
 
     /** Canvas Config — 可选注入，模块未部署时不影响现有逻辑 */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
@@ -1266,10 +1272,17 @@ public class SalesServiceImpl implements SalesService {
             try {
                 SalesOrder order = salesOrderRepository.findById(record.getSalesOrderId()).orElse(null);
                 if (order != null && order.getCustomerId() != null && order.getTotalAmount() != null) {
-                    arApService.recordReceivable(factoryId, order.getCustomerId(), order.getId(),
+                    boolean arExists = arApTransactionRepository != null
+                            && arApTransactionRepository.existsByFactoryIdAndSalesOrderIdAndTransactionType(
+                                    factoryId, order.getId(), ArApTransactionType.AR_INVOICE);
+                    if (arExists) {
+                        log.info("应收自动挂账跳过: salesOrderId={} 已存在 AR_INVOICE", order.getId());
+                    } else {
+                        arApService.recordReceivable(factoryId, order.getCustomerId(), order.getId(),
                             order.getTotalAmount(), LocalDate.now().plusDays(30), userId,
                             "销售发货自动挂账-" + record.getDeliveryNumber());
                     log.info("自动创建应收: orderId={}, amount={}", order.getId(), order.getTotalAmount());
+                    }
                 }
             } catch (BusinessException e) {
                 log.warn("应收自动挂账跳过(可能已存在): {}", e.getMessage());
