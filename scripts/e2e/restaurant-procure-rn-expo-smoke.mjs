@@ -224,6 +224,33 @@ async function chefRecentFillSmoke(page) {
   }
 }
 
+async function warehouseRestaurantInboundSmoke(page) {
+  const inboundTab = page.getByText('入库', { exact: true }).first();
+  if (!(await inboundTab.isVisible({ timeout: 12_000 }).catch(() => false))) {
+    step('warehouse-inbound-tab', false, { message: '未找到入库 Tab' });
+    return;
+  }
+  await inboundTab.click();
+  await page.waitForTimeout(2000);
+  step('warehouse-inbound-tab', true, { message: '已进入入库模块' });
+
+  const restaurantBtn = page.getByText('餐饮待验收', { exact: true }).first();
+  const hasRestaurantEntry = await restaurantBtn.isVisible({ timeout: 12_000 }).catch(() => false);
+  step('warehouse-restaurant-entry', hasRestaurantEntry, {
+    message: hasRestaurantEntry ? '餐饮待验收入口可见' : '未找到餐饮待验收入口',
+  });
+  await page.screenshot({ path: path.join(shotDir, 'wh-01-inbound-list.png'), fullPage: true });
+  if (!hasRestaurantEntry) return;
+
+  await restaurantBtn.click();
+  await page.waitForTimeout(2500);
+  const hasDeliveryList = await page.getByText('待验收入库').first().isVisible({ timeout: 12_000 }).catch(() => false);
+  step('warehouse-supplier-delivery-list', hasDeliveryList, {
+    message: hasDeliveryList ? '待验收入库列表已打开' : '未进入送货单列表',
+  });
+  await page.screenshot({ path: path.join(shotDir, 'wh-02-delivery-list.png'), fullPage: true });
+}
+
 async function procurementPhotoSmoke(page) {
   await page.getByText('采购', { exact: true }).first().click({ timeout: 15_000 });
   await page.waitForTimeout(2500);
@@ -303,6 +330,13 @@ async function procurementPhotoSmoke(page) {
     await chefRecentFillSmoke(page);
 
     await browser.close();
+
+    const browserWh = await chromium.launch({ headless: true });
+    const pageWh = await browserWh.newPage({ viewport: { width: 390, height: 844 } });
+    await loginExpo(pageWh, prodBase, 'qhj_warehouse_mgr', '123456');
+    step('login-prod-qhj_warehouse_mgr', true);
+    await warehouseRestaurantInboundSmoke(pageWh);
+    await browserWh.close();
     if (expoProc) {
       expoProc.kill('SIGTERM');
       expoProc = null;

@@ -239,7 +239,7 @@ class SpeechRecognitionService {
           // 读取音频文件并发送到讯飞
           const result = await this.sendAudioToIFlyTek(uri);
           this.updateStatus('idle');
-          return result;
+          return { ...result, audioUri: uri };
         }
       }
 
