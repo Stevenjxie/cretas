@@ -340,8 +340,9 @@
 import { ref, reactive, computed, onMounted } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { ArrowLeft, Plus } from '@element-plus/icons-vue';
-import { ElMessage } from 'element-plus';
+import { ElMessage, ElMessageBox } from 'element-plus';
 import { useFactoryId } from '@/composables/useFactoryId';
+import { useAuthStore } from '@/store/modules/auth';
 import { get } from '@/api/request';
 import {
   getNoteDetail, confirmNote, rejectNote, updateNoteLines, createManualNote,
@@ -353,6 +354,7 @@ import { handleCatchError } from '@/utils/errorToast';
 const route = useRoute();
 const router = useRouter();
 const factoryId = useFactoryId();
+const authStore = useAuthStore();
 
 const noteId = computed(() => route.params.id as string);
 const isManual = computed(() => noteId.value === 'new' || route.query.mode === 'manual');
@@ -383,6 +385,10 @@ const moneyFormatter = new Intl.NumberFormat('zh-CN', {
 
 const editable = computed(() => isManual.value || note.value?.status === 'DRAFT');
 const canReject = computed(() => !!rejectForm.code && (rejectForm.code !== 'OTHER' || !!rejectForm.note));
+const operatorLabel = computed(() => {
+  const username = authStore.user?.username || '当前账号';
+  return `${username} / ${authStore.currentRole}`;
+});
 
 const materialNameMap = computed<Record<string, string>>(() => {
   const m: Record<string, string> = {};
@@ -460,6 +466,36 @@ function formatVariance(rate?: number | null): string {
 function formatMoney(value?: number | null): string {
   if (value == null) return '—';
   return moneyFormatter.format(Number(value));
+}
+
+function buildConfirmPreviewMessage(): string {
+  const supplierName = note.value?.supplierName
+    || suppliers.value.find((x) => x.id === form.supplierId)?.name
+    || form.supplierId
+    || '未指定供应商';
+  const lineSummary = form.lines
+    .map((line, index) => {
+      const name = line.ingredientName || materialNameMap.value[line.rawMaterialTypeId || ''] || `第 ${index + 1} 行食材`;
+      const qty = line.quantity ?? '未填数量';
+      const unit = line.unit || '';
+      const unitPrice = line.unitPrice != null ? `，单价 ${formatMoney(line.unitPrice)}` : '';
+      const amount = line.lineAmount != null ? `，金额 ${formatMoney(line.lineAmount)}` : '';
+      return `${index + 1}. ${name}：${qty}${unit}${unitPrice}${amount}`;
+    })
+    .join('\n');
+  return [
+    `送货单：${form.noteNumber || note.value?.noteNumber || note.value?.id || noteId.value}`,
+    `供应商：${supplierName}`,
+    `送货日期：${form.deliveryDate || note.value?.deliveryDate || '未填写'}`,
+    `操作人：${operatorLabel.value}`,
+    `将生成 ${form.lines.length} 个库存批次，入库仓：${note.value?.warehouseId || '默认餐饮仓库'}`,
+    `合计金额：${formatMoney(Number(totalAmount.value))}`,
+    '',
+    '入库明细：',
+    lineSummary || '无行项目',
+    '',
+    '确认后会生成真实库存批次，并用于后续领料、损耗、盘点扣减。请先核对供应商、数量和单价。'
+  ].join('\n');
 }
 
 function isPriceAnomalyMissing(line: SupplierDeliveryNoteLineDto): boolean {
@@ -565,6 +601,24 @@ async function confirm() {
       showClose: true,
     });
     priceAnomalyPanelRef.value?.scrollIntoView({ block: 'center' });
+    return;
+  }
+  if (!note.value) {
+    ElMessage.warning('送货单尚未加载完成，请稍后再确认验收入库');
+    return;
+  }
+  try {
+    await ElMessageBox.confirm(
+      buildConfirmPreviewMessage(),
+      '确认验收入库',
+      {
+        type: 'warning',
+        confirmButtonText: '确认入库',
+        cancelButtonText: '再核对',
+        closeOnClickModal: false,
+      },
+    );
+  } catch {
     return;
   }
   confirming.value = true;
