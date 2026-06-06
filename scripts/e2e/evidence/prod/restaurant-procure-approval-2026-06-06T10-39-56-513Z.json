@@ -1,0 +1,59 @@
+{
+  "startedAt": "2026-06-06T10:39:55.819Z",
+  "apiBase": "http://139.196.165.140:8086",
+  "factoryId": "RES_3101_009",
+  "steps": [
+    {
+      "name": "health",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "name": "pending-approvals",
+      "status": 200,
+      "count": 0,
+      "ok": true,
+      "skipped": false,
+      "message": "操作成功"
+    },
+    {
+      "name": "draft-list",
+      "status": 200,
+      "draftId": "4eb1df20-c6f7-4329-af69-ead24eafb725",
+      "ok": true
+    },
+    {
+      "name": "detail-readback",
+      "status": 200,
+      "noteId": "4eb1df20-c6f7-4329-af69-ead24eafb725",
+      "approvalStatus": "NONE",
+      "quotePhotos": [],
+      "voiceTranscript": null,
+      "ok": true
+    },
+    {
+      "name": "confirm-attempt",
+      "status": 409,
+      "hasAnomaly": true,
+      "message": "进价异常需先填写供应商解释: 鲈鱼",
+      "code": 409,
+      "ok": true
+    },
+    {
+      "name": "submit-approval",
+      "status": 409,
+      "approvalStatus": null,
+      "ok": false
+    },
+    {
+      "name": "procurement-confirm",
+      "status": 200,
+      "noteId": "c45718f4-7654-4b99-9b42-f5aa97e0d981",
+      "ok": true,
+      "skipped": false,
+      "message": "采购确认单已生成"
+    }
+  ],
+  "pass": true,
+  "finishedAt": "2026-06-06T10:39:56.512Z"
+}
