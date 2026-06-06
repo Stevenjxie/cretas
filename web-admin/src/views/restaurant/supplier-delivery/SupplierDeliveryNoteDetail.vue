@@ -69,9 +69,68 @@
         style="margin-bottom: 16px"
       >
         <template #title>
-          有 {{ unexplainedPriceAnomalies.length }} 行进价超过历史基线 5%，需填写供应商解释后才能确认入库。
+          有 {{ unexplainedPriceAnomalies.length }} 行进价超过历史基线 5%，请在下方“进价异常处理”填写原因和现场解释后再确认入库。
         </template>
       </el-alert>
+
+      <section
+        v-if="priceAnomalyRows.length > 0"
+        ref="priceAnomalyPanelRef"
+        class="price-anomaly-panel"
+      >
+        <div class="anomaly-panel-head">
+          <div>
+            <h3>进价异常处理</h3>
+            <p>仓管先核对供应商解释和现场询价情况，处理完成后才能入库。</p>
+          </div>
+          <el-tag type="danger" effect="plain">{{ priceAnomalyRows.length }} 行异常</el-tag>
+        </div>
+        <div
+          v-for="{ line, index } in priceAnomalyRows"
+          :key="line.id || `${line.ingredientName}-${index}`"
+          class="anomaly-item"
+          :class="{ 'is-missing': isPriceAnomalyMissing(line) }"
+        >
+          <div class="anomaly-item-head">
+            <strong>{{ line.ingredientName || `第 ${index + 1} 行食材` }}</strong>
+            <el-tag type="danger" size="small">{{ formatVariance(line.priceVarianceRate) }}</el-tag>
+          </div>
+          <div class="anomaly-facts">
+            <span>历史基线：{{ formatMoney(line.baselineUnitPrice) }}</span>
+            <span>本次单价：{{ formatMoney(line.unitPrice) }}</span>
+            <span>数量：{{ line.quantity ?? '—' }} {{ line.unit || '' }}</span>
+            <span>供应商：{{ note?.supplierName || '未指定供应商' }}</span>
+          </div>
+          <div v-if="editable" class="anomaly-controls">
+            <el-form-item label="涨价原因" required>
+              <el-select
+                v-model="line.priceAnomalyReasonCode"
+                placeholder="选择涨价原因"
+                style="width: 100%"
+              >
+                <el-option label="市场涨价" value="MARKET_PRICE_UP" />
+                <el-option label="规格升级" value="SPEC_UPGRADE" />
+                <el-option label="临时缺货换货" value="SUBSTITUTE_SHORTAGE" />
+                <el-option label="供应商补充说明" value="SUPPLIER_EXPLAINED" />
+                <el-option label="其他" value="OTHER" />
+              </el-select>
+            </el-form-item>
+            <el-form-item label="现场解释" required>
+              <el-input
+                v-model="line.priceAnomalyExplanation"
+                type="textarea"
+                :rows="2"
+                maxlength="200"
+                show-word-limit
+                placeholder="例如：供应商说明菜场今日涨价，仓管已现场询价确认。"
+              />
+            </el-form-item>
+          </div>
+          <p v-else class="anomaly-readonly">
+            解释：{{ line.priceAnomalyExplanation || '—' }}
+          </p>
+        </div>
+      </section>
 
       <el-descriptions v-if="note" :column="3" border class="posting-summary">
         <el-descriptions-item label="业务状态">
@@ -305,6 +364,7 @@ const rejecting = ref(false);
 const note = ref<SupplierDeliveryNoteDto | null>(null);
 const suppliers = ref<Array<{ id: string; name: string }>>([]);
 const materialTypes = ref<Array<{ id: string; name: string }>>([]);
+const priceAnomalyPanelRef = ref<HTMLElement | null>(null);
 
 const form = reactive<{
   supplierId: string;
@@ -315,6 +375,11 @@ const form = reactive<{
 
 const rejectVisible = ref(false);
 const rejectForm = reactive({ code: '', note: '' });
+const moneyFormatter = new Intl.NumberFormat('zh-CN', {
+  style: 'currency',
+  currency: 'CNY',
+  maximumFractionDigits: 4,
+});
 
 const editable = computed(() => isManual.value || note.value?.status === 'DRAFT');
 const canReject = computed(() => !!rejectForm.code && (rejectForm.code !== 'OTHER' || !!rejectForm.note));
@@ -330,7 +395,13 @@ const totalAmount = computed(() =>
 );
 
 const unexplainedPriceAnomalies = computed(() =>
-  form.lines.filter((l) => l.priceAnomalyFlag && !String(l.priceAnomalyExplanation || '').trim()),
+  form.lines.filter((l) => l.priceAnomalyFlag && isPriceAnomalyMissing(l)),
+);
+
+const priceAnomalyRows = computed(() =>
+  form.lines
+    .map((line, index) => ({ line, index }))
+    .filter(({ line }) => line.priceAnomalyFlag),
 );
 
 function statusText(s?: string): string {
@@ -384,6 +455,16 @@ function recalcLine(row: SupplierDeliveryNoteLineDto) {
 function formatVariance(rate?: number | null): string {
   if (rate == null) return '—';
   return `${rate > 0 ? '+' : ''}${(rate * 100).toFixed(1)}%`;
+}
+
+function formatMoney(value?: number | null): string {
+  if (value == null) return '—';
+  return moneyFormatter.format(Number(value));
+}
+
+function isPriceAnomalyMissing(line: SupplierDeliveryNoteLineDto): boolean {
+  return !String(line.priceAnomalyReasonCode || '').trim()
+    || !String(line.priceAnomalyExplanation || '').trim();
 }
 
 function addLine() {
@@ -478,11 +559,12 @@ async function saveManual() {
 async function confirm() {
   if (unexplainedPriceAnomalies.value.length > 0) {
     ElMessage({
-      message: '进价异常需先填写供应商解释，再确认验收入库',
+      message: '进价异常需先填写涨价原因和现场解释，再确认验收入库',
       type: 'warning',
       duration: 0,
       showClose: true,
     });
+    priceAnomalyPanelRef.value?.scrollIntoView({ block: 'center' });
     return;
   }
   confirming.value = true;
@@ -562,6 +644,80 @@ onMounted(async () => {
 .posting-summary {
   margin-bottom: 16px;
 }
+.price-anomaly-panel {
+  margin-bottom: 16px;
+  padding: 14px 16px;
+  border: 1px solid var(--el-color-warning-light-5);
+  border-radius: 6px;
+  background: var(--el-color-warning-light-9);
+}
+.anomaly-panel-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+
+  h3 {
+    margin: 0 0 4px;
+    font-size: 15px;
+    font-weight: 600;
+    line-height: 1.3;
+  }
+
+  p {
+    margin: 0;
+    color: var(--el-text-color-secondary);
+    font-size: 13px;
+  }
+}
+.anomaly-item {
+  padding: 12px;
+  border: 1px solid var(--el-border-color);
+  border-radius: 6px;
+  background: var(--el-bg-color);
+
+  & + & {
+    margin-top: 10px;
+  }
+
+  &.is-missing {
+    border-color: var(--el-color-danger-light-5);
+  }
+}
+.anomaly-item-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+.anomaly-facts {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px 12px;
+  margin-bottom: 12px;
+  color: var(--el-text-color-regular);
+  font-size: 13px;
+
+  span {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+}
+.anomaly-controls {
+  display: grid;
+  grid-template-columns: minmax(180px, 240px) minmax(280px, 1fr);
+  gap: 12px;
+
+  :deep(.el-form-item) {
+    margin-bottom: 0;
+  }
+}
+.anomaly-readonly {
+  margin: 0;
+  color: var(--el-text-color-regular);
+}
 .mono-text {
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
   font-size: 12px;
@@ -580,5 +736,19 @@ onMounted(async () => {
 }
 .auto-calc {
   color: var(--el-color-primary);
+}
+@media (max-width: 900px) {
+  .anomaly-panel-head,
+  .anomaly-controls {
+    display: block;
+  }
+
+  .anomaly-facts {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .anomaly-controls :deep(.el-form-item) {
+    margin-bottom: 12px;
+  }
 }
 </style>
