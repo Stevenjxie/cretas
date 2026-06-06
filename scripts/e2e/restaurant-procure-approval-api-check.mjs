@@ -73,6 +73,33 @@ function writeEvidence(report) {
   return file;
 }
 
+function pickAnomalyDraft(notes) {
+  return (notes || []).find((note) => (note.lines || []).some((line) => line.priceAnomalyFlag)) || null;
+}
+
+function buildLinePayload(lines) {
+  return (lines || []).map((line) => ({
+    id: line.id,
+    ingredientName: line.ingredientName,
+    rawMaterialTypeId: line.rawMaterialTypeId,
+    quantity: line.quantity,
+    unit: line.unit,
+    unitPrice: line.unitPrice,
+    qcResult: line.qcResult || 'PASS',
+    remark: line.remark,
+    priceAnomalyReasonCode: line.priceAnomalyFlag
+      ? (line.priceAnomalyReasonCode || 'SUPPLIER_EXPLAINED')
+      : line.priceAnomalyReasonCode,
+    priceAnomalyExplanation: line.priceAnomalyFlag
+      ? (line.priceAnomalyExplanation || 'E2E: 供应商电话确认临时市场涨价，已留存报价截图。')
+      : line.priceAnomalyExplanation,
+  }));
+}
+
+function anomalyLinesNeedExplanation(lines) {
+  return (lines || []).some((line) => line.priceAnomalyFlag && !line.priceAnomalyExplanation);
+}
+
 async function main() {
   const warehouseUser = process.env.CRETAS_WAREHOUSE_USER;
   const warehousePass = process.env.CRETAS_WAREHOUSE_PASS;
@@ -134,13 +161,15 @@ async function main() {
     }
   }
 
-  const list = await api(whToken, 'GET', `${base}?status=DRAFT&page=0&size=5`);
+  const list = await api(whToken, 'GET', `${base}?status=DRAFT&page=1&size=10`);
   assert(list.status === 200, `draft list failed: ${list.status}`);
-  const draft = list.json?.data?.content?.[0];
+  const drafts = list.json?.data?.content || [];
+  const draft = pickAnomalyDraft(drafts) || drafts[0] || null;
   report.steps.push({
     name: 'draft-list',
     status: list.status,
     draftId: draft?.id ?? null,
+    pickedAnomalyDraft: Boolean(pickAnomalyDraft(drafts)),
     ok: true,
   });
 
@@ -163,20 +192,41 @@ async function main() {
     ok: true,
   });
 
-  const hasAnomaly = (draft.lines || detailBefore.json?.data?.lines || []).some((l) => l.priceAnomalyFlag);
+  const noteData = detailBefore.json?.data || {};
+  const lines = noteData.lines || draft.lines || [];
+  const hasAnomaly = lines.some((l) => l.priceAnomalyFlag);
+  const approvalStatus = noteData.priceAnomalyApprovalStatus || 'NONE';
+
   const confirmBlocked = await api(whToken, 'PUT', `${base}/${draft.id}/confirm`, {});
   report.steps.push({
     name: 'confirm-attempt',
     status: confirmBlocked.status,
     hasAnomaly,
+    approvalStatus,
     message: confirmBlocked.json?.message ?? null,
     code: confirmBlocked.json?.code ?? null,
-    ok: hasAnomaly ? confirmBlocked.status >= 400 : true,
+    ok: hasAnomaly && approvalStatus !== 'APPROVED' ? confirmBlocked.status >= 400 : true,
   });
 
   if (hasAnomaly) {
-    assert(confirmBlocked.status >= 400, 'Expected confirm blocked for price anomaly without approval');
-    console.log('PASS confirm blocked without approval', confirmBlocked.json?.message || confirmBlocked.status);
+    if (approvalStatus !== 'APPROVED') {
+      assert(confirmBlocked.status >= 400, 'Expected confirm blocked for price anomaly without approval');
+      console.log('PASS confirm blocked without approval', confirmBlocked.json?.message || confirmBlocked.status);
+    }
+
+    let workingLines = lines;
+    if (anomalyLinesNeedExplanation(workingLines) && approvalStatus === 'NONE') {
+      const patch = await api(whToken, 'PUT', `${base}/${draft.id}/lines`, buildLinePayload(workingLines));
+      report.steps.push({
+        name: 'fill-anomaly-explanation',
+        status: patch.status,
+        ok: patch.status === 200,
+        message: patch.json?.message ?? null,
+      });
+      assert(patch.status === 200, `fill anomaly explanation failed: ${patch.status}`);
+      workingLines = patch.json?.data?.lines || workingLines;
+      console.log('PASS filled anomaly explanation on lines');
+    }
 
     const submit = await api(whToken, 'POST', `${base}/${draft.id}/price-anomaly/submit`, {});
     report.steps.push({
@@ -185,8 +235,16 @@ async function main() {
       approvalStatus: submit.json?.data?.priceAnomalyApprovalStatus ?? null,
       ok: submit.status === 200,
     });
+    const submitted = submit.status === 200
+      || submit.json?.code === 'PRICE_ANOMALY_ALREADY_PENDING'
+      || approvalStatus === 'PENDING';
     if (submit.status === 200) {
       console.log('PASS submit approval', submit.json?.data?.priceAnomalyApprovalStatus);
+    } else if (submitted) {
+      console.log('INFO submit skipped — already pending', submit.json?.message || submit.status);
+    }
+
+    if (submitted) {
       const confirmAfterSubmit = await api(whToken, 'PUT', `${base}/${draft.id}/confirm`, {});
       report.steps.push({
         name: 'confirm-after-submit',
@@ -198,15 +256,37 @@ async function main() {
       console.log('PASS confirm still blocked while pending', confirmAfterSubmit.json?.message || confirmAfterSubmit.status);
 
       if (bossToken) {
+        const pendingAfterSubmit = await api(bossToken, 'GET', `${base}/price-anomaly/pending?page=1&size=10`);
+        report.steps.push({
+          name: 'pending-after-submit',
+          status: pendingAfterSubmit.status,
+          count: pendingAfterSubmit.json?.data?.content?.length ?? 0,
+          containsDraft: (pendingAfterSubmit.json?.data?.content || []).some((n) => n.id === draft.id),
+          ok: pendingAfterSubmit.status === 200,
+        });
+
         const approve = await api(bossToken, 'POST', `${base}/${draft.id}/price-anomaly/approve`, { comment: 'E2E approve' });
         report.steps.push({
           name: 'boss-approve',
           status: approve.status,
           approvalStatus: approve.json?.data?.priceAnomalyApprovalStatus ?? null,
-          ok: approve.status === 200,
+          ok: approve.status === 200 || approve.json?.code === 'PRICE_ANOMALY_ALREADY_APPROVED',
         });
         if (approve.status === 200) {
           console.log('PASS boss approve', approve.json?.data?.priceAnomalyApprovalStatus);
+        } else if (approve.json?.code === 'PRICE_ANOMALY_ALREADY_APPROVED') {
+          console.log('INFO boss approve skipped — already approved');
+        }
+
+        const detailAfter = await api(whToken, 'GET', `${base}/${draft.id}`);
+        report.steps.push({
+          name: 'detail-after-approve',
+          status: detailAfter.status,
+          approvalStatus: detailAfter.json?.data?.priceAnomalyApprovalStatus ?? null,
+          ok: detailAfter.status === 200 && detailAfter.json?.data?.priceAnomalyApprovalStatus === 'APPROVED',
+        });
+        if (detailAfter.json?.data?.priceAnomalyApprovalStatus === 'APPROVED') {
+          console.log('PASS readback after approve', detailAfter.json?.data?.priceAnomalyApprovalStatus);
         }
       } else {
         report.steps.push({
