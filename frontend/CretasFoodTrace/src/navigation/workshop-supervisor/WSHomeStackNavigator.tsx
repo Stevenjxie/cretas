@@ -45,6 +45,7 @@ const Stack = createNativeStackNavigator<WSHomeStackParamList>();
 export function WSHomeStackNavigator() {
   return (
     <Stack.Navigator
+      initialRouteName="ProcessTaskList"
       screenOptions={{
         headerShown: false,
       }}

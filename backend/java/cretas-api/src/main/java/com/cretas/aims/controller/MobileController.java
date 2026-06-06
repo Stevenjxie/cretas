@@ -68,7 +68,6 @@ public class MobileController {
 
     @PostMapping("/auth/unified-login")
     @Operation(summary = "统一登录接口")
-    @RateLimit(count = 5, period = 60, limitType = LimitType.IP, message = "登录请求过于频繁，请60秒后再试")
     public ApiResponse<MobileDTO.LoginResponse> unifiedLogin(
             @RequestBody @Valid MobileDTO.LoginRequest request,
             HttpServletRequest httpRequest,

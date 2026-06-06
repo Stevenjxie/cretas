@@ -2,8 +2,6 @@ import React from 'react';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { Icon } from 'react-native-paper';
-import AttendanceStackNavigator from './AttendanceStackNavigator';
-import WorkStackNavigator from './WorkStackNavigator';
 import ProfileStackNavigator from './ProfileStackNavigator';
 
 // 报工页面 - operator 仅限个人扫码报工（不含团队报工）
@@ -12,6 +10,11 @@ import ScanReportSuccessScreen from '../screens/processing/ScanReportSuccessScre
 import DraftReportsScreen from '../screens/processing/DraftReportsScreen';
 import YieldBatchSelectScreen from '../screens/processing/YieldBatchSelectScreen';
 import YieldStepReportScreen from '../screens/processing/YieldStepReportScreen';
+import ProcessTaskListScreen from '../screens/processing/ProcessTaskListScreen';
+import ProcessTaskDetailScreen from '../screens/processing/ProcessTaskDetailScreen';
+import ProcessTaskReportScreen from '../screens/processing/ProcessTaskReportScreen';
+import ProcessTaskHistoryScreen from '../screens/processing/ProcessTaskHistoryScreen';
+import ThreeStepReportScreen from '../screens/processing/ThreeStepReportScreen';
 
 const Tab = createBottomTabNavigator<any>();
 const ReportStack = createNativeStackNavigator<any>();
@@ -22,7 +25,12 @@ const ReportStack = createNativeStackNavigator<any>();
  */
 function OperatorReportStackNavigator() {
   return (
-    <ReportStack.Navigator screenOptions={{ headerShown: false }}>
+    <ReportStack.Navigator initialRouteName="ProcessTaskList" screenOptions={{ headerShown: false }}>
+      <ReportStack.Screen name="ProcessTaskList" component={ProcessTaskListScreen} />
+      <ReportStack.Screen name="ProcessTaskDetail" component={ProcessTaskDetailScreen} />
+      <ReportStack.Screen name="ProcessTaskReport" component={ProcessTaskReportScreen} />
+      <ReportStack.Screen name="ProcessTaskHistory" component={ProcessTaskHistoryScreen} />
+      <ReportStack.Screen name="ThreeStepReport" component={ThreeStepReportScreen} />
       <ReportStack.Screen name="ScanReport" component={ScanReportScreen} />
       <ReportStack.Screen name="ScanReportSuccess" component={ScanReportSuccessScreen} />
       <ReportStack.Screen name="DraftReports" component={DraftReportsScreen} />
@@ -39,6 +47,7 @@ function OperatorReportStackNavigator() {
 export function OperatorNavigator() {
   return (
     <Tab.Navigator
+      initialRouteName="OperatorReportTab"
       screenOptions={{
         headerShown: false,
         tabBarActiveTintColor: '#2196F3',
@@ -57,38 +66,14 @@ export function OperatorNavigator() {
         },
       }}
     >
-      {/* 考勤Tab - 打卡、工时查询等 */}
-      <Tab.Screen
-        name="OperatorAttendanceTab"
-        component={AttendanceStackNavigator}
-        options={{
-          title: '考勤',
-          tabBarIcon: ({ color, size }) => (
-            <Icon source="clock-outline" size={size} color={color} />
-          ),
-        }}
-      />
-
-      {/* 报工Tab - 个人扫码报工 */}
+      {/* 工序Tab - 小组长/操作员登录后直接进入被分配工序 */}
       <Tab.Screen
         name="OperatorReportTab"
         component={OperatorReportStackNavigator}
         options={{
-          title: '报工',
+          title: '工序',
           tabBarIcon: ({ color, size }) => (
-            <Icon source="qrcode-scan" size={size} color={color} />
-          ),
-        }}
-      />
-
-      {/* 工作Tab - 工作类型、工作记录 */}
-      <Tab.Screen
-        name="OperatorWorkTab"
-        component={WorkStackNavigator}
-        options={{
-          title: '工作',
-          tabBarIcon: ({ color, size }) => (
-            <Icon source="briefcase-outline" size={size} color={color} />
+            <Icon source="format-list-checks" size={size} color={color} />
           ),
         }}
       />

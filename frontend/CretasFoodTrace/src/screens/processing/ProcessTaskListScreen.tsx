@@ -2,12 +2,13 @@ import React, { useState, useCallback, useMemo, useEffect } from 'react';
 import { View, StyleSheet, FlatList, RefreshControl, TouchableOpacity, Alert } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Text, Appbar, Searchbar, SegmentedButtons, IconButton } from 'react-native-paper';
-import { useNavigation, useFocusEffect } from '@react-navigation/native';
+import { useNavigation, useFocusEffect, useNavigationState } from '@react-navigation/native';
 import { ProcessingScreenProps } from '../../types/navigation';
 import { processTaskApiClient, ProcessTaskItem } from '../../services/api/processTaskApiClient';
 import { handleError } from '../../utils/errorHandler';
 import { NeoCard, NeoButton, ScreenWrapper } from '../../components/ui';
 import { theme } from '../../theme';
+import { useAuthStore } from '../../store/authStore';
 
 type Props = ProcessingScreenProps<'ProcessTaskList'>;
 
@@ -19,8 +20,122 @@ const STATUS_CONFIG: Record<string, { label: string; color: string }> = {
   SUPPLEMENTING: { label: '补报中', color: '#e6a23c' },
 };
 
+const PROCESS_NAME_ORDER: Array<[string, number]> = [
+  ['修油', 10],
+  ['水解', 10],
+  ['化冻', 10],
+  ['滚揉', 20],
+  ['注射', 20],
+  ['焯水', 30],
+  ['熟制', 40],
+  ['卤制', 40],
+  ['气调', 50],
+  ['装盒', 50],
+  ['包装', 50],
+];
+
+function toNumber(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string' && value.trim()) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+function getBatchRank(task: ProcessTaskItem): number {
+  const batchId = toNumber(task.batchId ?? task.productionBatchId);
+  if (batchId != null) return -batchId;
+  if (typeof task.productionRunId === 'string' && task.productionRunId.startsWith('BATCH-')) {
+    const runBatchId = toNumber(task.productionRunId.replace('BATCH-', ''));
+    return runBatchId != null ? -runBatchId : 0;
+  }
+  return Number.MAX_SAFE_INTEGER;
+}
+
+function getBatchKey(task: ProcessTaskItem): string | null {
+  const batchId = task.batchId ?? task.productionBatchId;
+  if (batchId != null) return `batch:${batchId}`;
+  if (typeof task.productionRunId === 'string' && task.productionRunId.startsWith('BATCH-')) {
+    return task.productionRunId;
+  }
+  return null;
+}
+
+function getProcessOrder(task: ProcessTaskItem): number {
+  const explicitOrder = toNumber(task.processOrder);
+  if (explicitOrder != null) return explicitOrder;
+
+  if (typeof task.workProcessId === 'string') {
+    const suffix = task.workProcessId.match(/(\d+)$/)?.[1];
+    const parsedSuffix = toNumber(suffix);
+    if (parsedSuffix != null) return parsedSuffix;
+  }
+
+  const name = task.processName || '';
+  const matched = PROCESS_NAME_ORDER.find(([keyword]) => name.includes(keyword));
+  if (matched) return matched[1];
+
+  const taskId = toNumber(task.workProcessTaskId);
+  if (taskId != null) return taskId;
+
+  return Number.MAX_SAFE_INTEGER;
+}
+
+function getStatusRank(status: ProcessTaskItem['status']): number {
+  if (status === 'IN_PROGRESS' || status === 'SUPPLEMENTING') return 0;
+  if (status === 'PENDING') return 1;
+  if (status === 'COMPLETED') return 2;
+  return 3;
+}
+
+function isTerminalTask(status: ProcessTaskItem['status']): boolean {
+  return status === 'COMPLETED' || status === 'CLOSED';
+}
+
+function compareTasksByWorkOrder(a: ProcessTaskItem, b: ProcessTaskItem): number {
+  return (
+    getBatchRank(a) - getBatchRank(b)
+    || getProcessOrder(a) - getProcessOrder(b)
+    || getStatusRank(a.status) - getStatusRank(b.status)
+    || String(a.createdAt || '').localeCompare(String(b.createdAt || ''))
+    || String(a.id).localeCompare(String(b.id))
+  );
+}
+
+function buildReportableTaskIds(orderedTasks: ProcessTaskItem[]): Set<string> {
+  const reportableIds = new Set<string>();
+  const batchTasks = new Map<string, ProcessTaskItem[]>();
+
+  for (const task of orderedTasks) {
+    const key = getBatchKey(task);
+    if (!key) {
+      if (task.status === 'IN_PROGRESS' || task.status === 'SUPPLEMENTING') {
+        reportableIds.add(task.id);
+      }
+      continue;
+    }
+    const group = batchTasks.get(key) || [];
+    group.push(task);
+    batchTasks.set(key, group);
+  }
+
+  for (const group of batchTasks.values()) {
+    const sortedGroup = [...group].sort(compareTasksByWorkOrder);
+    const nextTask = sortedGroup.find(task => !isTerminalTask(task.status));
+    if (nextTask && nextTask.status !== 'CLOSED') {
+      reportableIds.add(nextTask.id);
+    }
+  }
+
+  return reportableIds;
+}
+
 export default function ProcessTaskListScreen() {
   const navigation = useNavigation<Props['navigation']>();
+  const canGoBack = useNavigationState(state => state.routes.length > 1);
+  const currentRole = useAuthStore(state => state.getUserRole());
+  const isOperator = currentRole === 'operator';
 
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedStatus, setSelectedStatus] = useState<string>('active');
@@ -86,16 +201,24 @@ export default function ProcessTaskListScreen() {
     setRefreshing(false);
   };
 
-  const filteredTasks = useMemo(() => tasks.filter(task => {
-    if (!searchQuery) return true;
-    const q = searchQuery.toLowerCase();
-    return (
-      task.processName?.toLowerCase().includes(q) ||
-      task.productTypeName?.toLowerCase().includes(q) ||
-      task.processCategory?.toLowerCase().includes(q) ||
-      task.id.toLowerCase().includes(q)
-    );
-  }), [tasks, searchQuery]);
+  const orderedTasks = useMemo(() => [...tasks].sort(compareTasksByWorkOrder), [tasks]);
+
+  const filteredTasks = useMemo(() => orderedTasks
+    .filter(task => {
+      if (!searchQuery) return true;
+      const q = searchQuery.toLowerCase();
+      return (
+        task.processName?.toLowerCase().includes(q) ||
+        task.productTypeName?.toLowerCase().includes(q) ||
+        task.processCategory?.toLowerCase().includes(q) ||
+        task.id.toLowerCase().includes(q)
+      );
+    }), [orderedTasks, searchQuery]);
+
+  const reportableTaskIds = useMemo(
+    () => buildReportableTaskIds(orderedTasks),
+    [orderedTasks]
+  );
 
   const getProgress = (task: ProcessTaskItem) => {
     if (!task.plannedQuantity || task.plannedQuantity === 0) return 0;
@@ -105,6 +228,8 @@ export default function ProcessTaskListScreen() {
   const renderTaskCard = useCallback(({ item }: { item: ProcessTaskItem }) => {
     const status = STATUS_CONFIG[item.status] || { label: item.status, color: '#909399' };
     const progress = getProgress(item);
+    const canReport = reportableTaskIds.has(item.id);
+    const waitingPrevious = item.status === 'PENDING' && !canReport && getBatchKey(item) != null;
 
     return (
       <TouchableOpacity
@@ -172,7 +297,7 @@ export default function ProcessTaskListScreen() {
             </View>
           </View>
 
-          {item.status === 'IN_PROGRESS' || item.status === 'SUPPLEMENTING' ? (
+          {canReport ? (
             <View style={styles.cardFooter}>
               <NeoButton
                 testID={`process-task-report-btn-${item.id}`}
@@ -187,19 +312,27 @@ export default function ProcessTaskListScreen() {
                 报工
               </NeoButton>
             </View>
+          ) : waitingPrevious ? (
+            <View style={styles.cardFooter}>
+              <Text style={styles.waitingText}>等上一道完成后再报</Text>
+            </View>
           ) : null}
         </NeoCard>
       </TouchableOpacity>
     );
-  }, [navigation]);
+  }, [navigation, reportableTaskIds]);
 
   return (
     <ScreenWrapper testID="process-task-list" edges={['top']} backgroundColor={theme.colors.background}>
       <Appbar.Header elevated style={{ backgroundColor: theme.colors.surface }}>
-        <Appbar.BackAction testID="process-task-list-back" onPress={() => navigation.goBack()} />
+        {canGoBack ? (
+          <Appbar.BackAction testID="process-task-list-back" onPress={() => navigation.goBack()} />
+        ) : null}
         <Appbar.Content title="工序任务" titleStyle={{ fontWeight: '600' }} />
         <Appbar.Action testID="three-step-report-btn" icon="qrcode-scan" onPress={() => navigation.navigate('ThreeStepReport')} />
-        <Appbar.Action testID="process-task-approval-btn" icon="clipboard-check-outline" onPress={() => navigation.navigate('ProcessTaskApproval' as never)} />
+        {!isOperator ? (
+          <Appbar.Action testID="process-task-approval-btn" icon="clipboard-check-outline" onPress={() => navigation.navigate('ProcessTaskApproval' as never)} />
+        ) : null}
         <Appbar.Action testID="process-task-history-btn" icon="history" onPress={() => navigation.navigate('ProcessTaskHistory')} />
       </Appbar.Header>
 
@@ -216,18 +349,19 @@ export default function ProcessTaskListScreen() {
         />
       </View>
 
-      <SegmentedButtons
-        testID="process-task-filter"
-        value={selectedStatus}
-        onValueChange={setSelectedStatus}
-        buttons={[
-          { value: 'active', label: '进行中' },
-          { value: 'COMPLETED', label: '已完成' },
-          { value: 'all', label: '全部' },
-        ]}
-        style={styles.segmentedButtons}
-        density="small"
-      />
+      <View testID="process-task-filter">
+        <SegmentedButtons
+          value={selectedStatus}
+          onValueChange={setSelectedStatus}
+          buttons={[
+            { value: 'active', label: '进行中' },
+            { value: 'COMPLETED', label: '已完成' },
+            { value: 'all', label: '全部' },
+          ]}
+          style={styles.segmentedButtons}
+          density="small"
+        />
+      </View>
 
       <FlatList
         testID="process-task-flatlist"
@@ -306,6 +440,7 @@ const styles = StyleSheet.create({
   },
   progressText: { fontSize: 12, color: theme.colors.textSecondary, width: 36, textAlign: 'right' },
   cardFooter: { marginTop: 12, flexDirection: 'row', justifyContent: 'flex-end' },
+  waitingText: { color: theme.colors.textSecondary, fontSize: 14, fontWeight: '600' },
   emptyContainer: { alignItems: 'center', padding: 48 },
   emptyText: { color: theme.colors.textSecondary, marginTop: 16 },
   errorText: { color: theme.colors.error, marginTop: 16, marginBottom: 16 },
