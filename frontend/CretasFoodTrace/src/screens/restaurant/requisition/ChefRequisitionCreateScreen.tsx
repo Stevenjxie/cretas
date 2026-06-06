@@ -5,7 +5,11 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 
 import { materialTypeApiClient, MaterialType } from '../../../services/api/materialTypeApiClient';
-import { purchaseRequisitionApiClient, RequisitionItem } from '../../../services/api/purchaseRequisitionApiClient';
+import {
+  purchaseRequisitionApiClient,
+  PurchaseRequisition,
+  RequisitionItem,
+} from '../../../services/api/purchaseRequisitionApiClient';
 import { useAuthStore } from '../../../store/authStore';
 import { handleError } from '../../../utils/errorHandler';
 
@@ -38,6 +42,7 @@ export function ChefRequisitionCreateScreen() {
   const [reason, setReason] = useState('');
   const [remark, setRemark] = useState('');
   const [lines, setLines] = useState<LineDraft[]>([newLine()]);
+  const [recentRequisitions, setRecentRequisitions] = useState<PurchaseRequisition[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
 
@@ -45,14 +50,32 @@ export function ChefRequisitionCreateScreen() {
     let alive = true;
     (async () => {
       try {
-        const res = await materialTypeApiClient.getActiveMaterialTypes(factoryId);
-        if (alive) setMaterials(res?.data || []);
+        const [matRes, reqRes] = await Promise.all([
+          materialTypeApiClient.getActiveMaterialTypes(factoryId),
+          purchaseRequisitionApiClient.list({
+            requesterId: user?.id,
+            page: 0,
+            size: 12,
+            factoryId,
+          }),
+        ]);
+        if (!alive) return;
+        setMaterials(matRes?.data || []);
+        setRecentRequisitions(reqRes.data || []);
       } catch (error) {
         handleError(error, { title: '食材主数据加载失败', showAlert: false });
       }
     })();
     return () => { alive = false; };
-  }, [factoryId]);
+  }, [factoryId, user?.id]);
+
+  const recentForStall = useMemo(
+    () => recentRequisitions
+      .filter((req) => (req.requestedItems || []).length > 0)
+      .filter((req) => !stallCode || req.requesterDeptId === stallCode)
+      .slice(0, 5),
+    [recentRequisitions, stallCode],
+  );
 
   const stallLabel = STALL_OPTIONS.find((s) => s.value === stallCode)?.label || stallCode;
 
@@ -89,6 +112,27 @@ export function ChefRequisitionCreateScreen() {
       materialSearch: material.name,
       unit: line.unit || material.unit || 'kg',
     });
+  };
+
+  const applyRecentRequisition = (req: PurchaseRequisition) => {
+    const nextLines = (req.requestedItems || []).map((item, index) => ({
+      key: `recent-${req.id}-${index}`,
+      materialSearch: item.materialName || item.materialTypeId,
+      materialTypeId: item.materialTypeId,
+      materialName: item.materialName || item.materialTypeId,
+      quantity: String(item.quantity),
+      unit: item.unit || 'kg',
+      remark: item.remark || '',
+    }));
+    if (nextLines.length === 0) {
+      Alert.alert('无法套用', '该报货单没有可复用的明细行。');
+      return;
+    }
+    if (req.requesterDeptId) setStallCode(req.requesterDeptId);
+    if (req.expectedDate) setExpectedDate(req.expectedDate);
+    if (req.reason) setReason(req.reason);
+    setLines(nextLines);
+    Alert.alert('已套用最近报货', `${req.requisitionNumber} · ${nextLines.length} 行明细已填入，请核对数量后提交。`);
   };
 
   const validate = (): string | null => {
@@ -167,6 +211,31 @@ export function ChefRequisitionCreateScreen() {
 
         <Text style={styles.label}>报货原因</Text>
         <TextInput mode="outlined" value={reason} onChangeText={setReason} placeholder="明日备货 / 厨房急用" style={styles.input} />
+
+        {recentForStall.length > 0 ? (
+          <>
+            <Text style={styles.sectionTitle}>最近报货</Text>
+            <Text style={styles.meta}>点选可套用明细，提交前请核对数量与到货日。</Text>
+            {recentForStall.map((req) => (
+              <Card key={req.id} style={styles.recentCard} onPress={() => applyRecentRequisition(req)}>
+                <Card.Content>
+                  <View style={styles.recentTitleRow}>
+                    <Text style={styles.recentTitle}>{req.requisitionNumber}</Text>
+                    <Chip compact>{(req.requestedItems || []).length} 行</Chip>
+                  </View>
+                  <Text style={styles.meta}>
+                    {STALL_OPTIONS.find((s) => s.value === req.requesterDeptId)?.label || req.requesterDeptId || '—'}
+                    {' · '}
+                    到货 {req.expectedDate || '—'}
+                  </Text>
+                  <Text style={styles.recentPreview} numberOfLines={2}>
+                    {(req.requestedItems || []).map((item) => item.materialName || item.materialTypeId).join('、')}
+                  </Text>
+                </Card.Content>
+              </Card>
+            ))}
+          </>
+        ) : null}
 
         <View style={styles.sectionRow}>
           <Text style={styles.sectionTitle}>报货明细</Text>
@@ -272,7 +341,11 @@ const styles = StyleSheet.create({
   input: { backgroundColor: '#fff', marginTop: 8 },
   chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 4 },
   sectionRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 16, marginBottom: 8 },
-  sectionTitle: { fontSize: 16, fontWeight: '700', color: '#1F2937' },
+  sectionTitle: { fontSize: 16, fontWeight: '700', color: '#1F2937', marginTop: 16 },
+  recentCard: { marginTop: 8, marginBottom: 4, borderRadius: 8, borderColor: '#BFDBFE', borderWidth: 1 },
+  recentTitleRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 8 },
+  recentTitle: { flex: 1, fontWeight: '700', color: '#1D4ED8' },
+  recentPreview: { fontSize: 12, color: '#6B7280', marginTop: 6 },
   card: { marginBottom: 10, borderRadius: 8 },
   lineTitle: { fontWeight: '700', marginBottom: 4 },
   optionList: { marginTop: 8 },
