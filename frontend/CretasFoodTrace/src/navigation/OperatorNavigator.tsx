@@ -4,16 +4,7 @@ import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { Icon } from 'react-native-paper';
 import ProfileStackNavigator from './ProfileStackNavigator';
 
-// 报工页面 - operator 仅限个人扫码报工（不含团队报工）
-import ScanReportScreen from '../screens/processing/ScanReportScreen';
-import ScanReportSuccessScreen from '../screens/processing/ScanReportSuccessScreen';
-import DraftReportsScreen from '../screens/processing/DraftReportsScreen';
-import YieldBatchSelectScreen from '../screens/processing/YieldBatchSelectScreen';
-import YieldStepReportScreen from '../screens/processing/YieldStepReportScreen';
-import ProcessTaskListScreen from '../screens/processing/ProcessTaskListScreen';
-import ProcessTaskDetailScreen from '../screens/processing/ProcessTaskDetailScreen';
-import ProcessTaskReportScreen from '../screens/processing/ProcessTaskReportScreen';
-import ProcessTaskHistoryScreen from '../screens/processing/ProcessTaskHistoryScreen';
+import OperatorAssignedProcessScreen from '../screens/processing/OperatorAssignedProcessScreen';
 import ThreeStepReportScreen from '../screens/processing/ThreeStepReportScreen';
 
 const Tab = createBottomTabNavigator<any>();
@@ -21,21 +12,13 @@ const ReportStack = createNativeStackNavigator<any>();
 
 /**
  * Operator 报工 Stack 导航器
- * 仅包含个人扫码报工（ScanReport），不含 TeamBatchReport/DynamicReport
+ * 小组长只处理系统分配好的当前工序，不暴露任务列表/三步报工/选批次入口。
  */
 function OperatorReportStackNavigator() {
   return (
-    <ReportStack.Navigator initialRouteName="ProcessTaskList" screenOptions={{ headerShown: false }}>
-      <ReportStack.Screen name="ProcessTaskList" component={ProcessTaskListScreen} />
-      <ReportStack.Screen name="ProcessTaskDetail" component={ProcessTaskDetailScreen} />
-      <ReportStack.Screen name="ProcessTaskReport" component={ProcessTaskReportScreen} />
-      <ReportStack.Screen name="ProcessTaskHistory" component={ProcessTaskHistoryScreen} />
+    <ReportStack.Navigator initialRouteName="OperatorAssignedProcess" screenOptions={{ headerShown: false }}>
+      <ReportStack.Screen name="OperatorAssignedProcess" component={OperatorAssignedProcessScreen} />
       <ReportStack.Screen name="ThreeStepReport" component={ThreeStepReportScreen} />
-      <ReportStack.Screen name="ScanReport" component={ScanReportScreen} />
-      <ReportStack.Screen name="ScanReportSuccess" component={ScanReportSuccessScreen} />
-      <ReportStack.Screen name="DraftReports" component={DraftReportsScreen} />
-      <ReportStack.Screen name="YieldBatchSelect" component={YieldBatchSelectScreen} />
-      <ReportStack.Screen name="YieldStepReport" component={YieldStepReportScreen} />
     </ReportStack.Navigator>
   );
 }

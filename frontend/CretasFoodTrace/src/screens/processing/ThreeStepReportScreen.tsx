@@ -4,7 +4,7 @@ import {
   KeyboardAvoidingView, Platform,
 } from 'react-native';
 import { Text, Appbar, Card, TextInput, ActivityIndicator, Chip, Divider } from 'react-native-paper';
-import { useNavigation, useFocusEffect } from '@react-navigation/native';
+import { StackActions, useNavigation, useRoute, useFocusEffect } from '@react-navigation/native';
 import * as ImagePicker from 'expo-image-picker';
 import * as FileSystem from 'expo-file-system';
 import { ProcessingScreenProps } from '../../types/navigation';
@@ -21,6 +21,7 @@ import { useTutorialStore, TUTORIAL_THREE_STEP, useTutorialTarget, useTutorial }
 import { theme } from '../../theme';
 import { apiClient } from '../../services/api/apiClient';
 import { requireFactoryId } from '../../utils/factoryIdHelper';
+import { extractProcessTaskList, pickCurrentReportTask } from '../../utils/processTaskFlow';
 
 type Props = ProcessingScreenProps<'ThreeStepReport'>;
 
@@ -122,9 +123,12 @@ const STATUS_COLORS: Record<string, string> = {
 
 export default function ThreeStepReportScreen() {
   const navigation = useNavigation<Props['navigation']>();
+  const route = useRoute<Props['route']>();
+  const assignedTaskId = route.params?.assignedTaskId;
+  const autoAssigned = route.params?.autoAssigned === true;
 
   // Step tracking: 1=scan worker, 2=select task, 3=input quantity
-  const [step, setStep] = useState(1);
+  const [step, setStep] = useState(autoAssigned ? 3 : 1);
 
   // Step 1 state
   const [scannerVisible, setScannerVisible] = useState(false);
@@ -148,6 +152,10 @@ export default function ThreeStepReportScreen() {
   const [submitting, setSubmitting] = useState(false);
   const [evidenceAssets, setEvidenceAssets] = useState<EvidenceAsset[]>([]);
 
+  const returnToAssignedTask = useCallback(() => {
+    navigation.dispatch(StackActions.replace('OperatorAssignedProcess'));
+  }, [navigation]);
+
   // Tutorial
   const tgtStepIndicator = useTutorialTarget('tsr-step-indicator');
   const tgtScanArea = useTutorialTarget('tsr-scan-area');
@@ -159,19 +167,36 @@ export default function ThreeStepReportScreen() {
   const loadTasks = useCallback(async () => {
     setTasksLoading(true);
     try {
-      const res = await processTaskApiClient.getActiveTasks() as {
-        data?: ProcessTaskItem[] | { content?: ProcessTaskItem[] };
-      };
-      const list = Array.isArray(res?.data) ? res.data :
-        (res?.data as { content?: ProcessTaskItem[] })?.content || [];
+      const res = await processTaskApiClient.getActiveTasks();
+      const list = extractProcessTaskList(res);
       // PENDING tasks are valid here: a group leader can start reporting directly from the first on-site event.
-      setTasks(list.filter(t => t.status === 'PENDING' || t.status === 'IN_PROGRESS' || t.status === 'SUPPLEMENTING'));
+      const activeTasks = list.filter(t => t.status === 'PENDING' || t.status === 'IN_PROGRESS' || t.status === 'SUPPLEMENTING');
+      setTasks(activeTasks);
+      if (autoAssigned) {
+        const assigned = assignedTaskId
+          ? activeTasks.find(task => task.id === assignedTaskId)
+          : pickCurrentReportTask(activeTasks);
+        if (assigned) {
+          setSelectedTask(assigned);
+          setStep(3);
+        } else {
+          Alert.alert('当前工序不可报', '当前没有可以报工的分配工序，请等上一道完成后刷新。', [
+            { text: '刷新', onPress: returnToAssignedTask },
+          ]);
+        }
+      }
     } catch {
-      Alert.alert('错误', '加载工序任务失败');
+      if (autoAssigned) {
+        Alert.alert('加载失败', '加载当前工序失败，请刷新后重试。', [
+          { text: '刷新', onPress: returnToAssignedTask },
+        ]);
+      } else {
+        Alert.alert('错误', '加载工序任务失败');
+      }
     } finally {
       setTasksLoading(false);
     }
-  }, []);
+  }, [assignedTaskId, autoAssigned, returnToAssignedTask]);
 
   useFocusEffect(
     useCallback(() => {
@@ -379,7 +404,7 @@ export default function ThreeStepReportScreen() {
       }
 
       const isSupplemental = selectedTask.status === 'SUPPLEMENTING' || selectedTask.status === 'COMPLETED' || selectedTask.status === 'CLOSED';
-      const reporterName = worker?.name || '主管自己';
+      const reporterName = autoAssigned ? '当前登录账号' : worker?.name || '主管自己';
       const parsedWorkers = parseOptionalInteger(workersCount, '人数') ?? (worker ? 1 : undefined);
       const reportData: SubmitProcessReportPayload = {
         processTaskId: selectedTask.id,
@@ -419,6 +444,18 @@ export default function ThreeStepReportScreen() {
         `${reporterName} — ${selectedTask.processName}\n产出: ${qty} ${selectedTask.unit || 'kg'}${evidenceMessage}${errorMessage}`,
         [{
           text: '继续报工', onPress: () => {
+            if (autoAssigned) {
+              setQuantity('');
+              setInputQty('');
+              setWorkersCount('');
+              setWorkMinutes('');
+              setStartTime('');
+              setEndTime('');
+              setNotes('');
+              setEvidenceAssets([]);
+              returnToAssignedTask();
+              return;
+            }
             // Reset to step 1 for next worker
             setWorker(null);
             setSelectedTask(null);
@@ -434,7 +471,10 @@ export default function ThreeStepReportScreen() {
             loadTasks();
           },
         }, {
-          text: '返回', onPress: () => navigation.goBack(),
+          text: '返回', onPress: () => {
+            if (autoAssigned) returnToAssignedTask();
+            else navigation.goBack();
+          },
         }]
       );
     } catch (err) {
@@ -458,12 +498,16 @@ export default function ThreeStepReportScreen() {
     <ScreenWrapper edges={['top']} backgroundColor={theme.colors.background}>
       <Appbar.Header elevated style={{ backgroundColor: theme.colors.surface }}>
         <Appbar.BackAction testID="three-step-back" onPress={() => {
+          if (autoAssigned) {
+            returnToAssignedTask();
+            return;
+          }
           if (step > 1) setStep(step - 1);
           else navigation.goBack();
         }} />
         <Appbar.Content
-          title="报工"
-          subtitle={`第 ${step} 步 / 共 3 步`}
+          title={autoAssigned ? '当前工序报工' : '报工'}
+          subtitle={autoAssigned ? '系统已打开分配给你的工序' : `第 ${step} 步 / 共 3 步`}
           titleStyle={{ fontWeight: '600' }}
         />
       </Appbar.Header>
@@ -472,25 +516,52 @@ export default function ThreeStepReportScreen() {
         <ScrollView contentContainerStyle={styles.scrollContent}>
 
           {/* Step Indicator */}
-          <View ref={tgtStepIndicator.ref} onLayout={tgtStepIndicator.onLayout} style={styles.stepIndicator}>
-            {[1, 2, 3].map(s => (
-              <React.Fragment key={s}>
-                <TouchableOpacity
-                  onPress={() => { if (s < step) setStep(s); }}
-                  disabled={s >= step}
-                  style={[styles.stepDot, s <= step && styles.stepDotActive, s === step && styles.stepDotCurrent]}
-                >
-                  <Text style={[styles.stepDotText, s <= step && styles.stepDotTextActive]}>
-                    {s === 1 ? '扫人' : s === 2 ? '工序' : '报量'}
-                  </Text>
-                </TouchableOpacity>
-                {s < 3 && <View style={[styles.stepLine, s < step && styles.stepLineActive]} />}
-              </React.Fragment>
-            ))}
-          </View>
+          {autoAssigned ? (
+            <View style={styles.assignedBanner}>
+              <Text style={styles.assignedBannerTitle}>当前只需要填这道工序</Text>
+              <Text style={styles.assignedBannerText}>工序由后台分配，不能手动改选，避免报错工序。</Text>
+            </View>
+          ) : (
+            <View ref={tgtStepIndicator.ref} onLayout={tgtStepIndicator.onLayout} style={styles.stepIndicator}>
+              {[1, 2, 3].map(s => (
+                <React.Fragment key={s}>
+                  <TouchableOpacity
+                    onPress={() => { if (s < step) setStep(s); }}
+                    disabled={s >= step}
+                    style={[styles.stepDot, s <= step && styles.stepDotActive, s === step && styles.stepDotCurrent]}
+                  >
+                    <Text style={[styles.stepDotText, s <= step && styles.stepDotTextActive]}>
+                      {s === 1 ? '扫人' : s === 2 ? '工序' : '报量'}
+                    </Text>
+                  </TouchableOpacity>
+                  {s < 3 && <View style={[styles.stepLine, s < step && styles.stepLineActive]} />}
+                </React.Fragment>
+              ))}
+            </View>
+          )}
+
+          {autoAssigned && !selectedTask && (
+            <Card style={styles.card}>
+              <Card.Content style={styles.autoLoadingCard}>
+                {tasksLoading ? (
+                  <>
+                    <ActivityIndicator size="large" />
+                    <Text style={styles.emptyText}>正在加载当前工序...</Text>
+                  </>
+                ) : (
+                  <>
+                    <Text style={styles.emptyText}>当前没有可以报工的工序</Text>
+                    <NeoButton variant="outline" onPress={returnToAssignedTask} style={styles.retryBtn}>
+                      刷新
+                    </NeoButton>
+                  </>
+                )}
+              </Card.Content>
+            </Card>
+          )}
 
           {/* ==================== STEP 1: Scan Worker ==================== */}
-          {step === 1 && (
+          {!autoAssigned && step === 1 && (
             <Card ref={tgtScanArea.ref} onLayout={tgtScanArea.onLayout} style={styles.card}>
               <Card.Content>
                 <Text variant="titleLarge" style={styles.stepTitle}>扫描员工工牌</Text>
@@ -518,7 +589,7 @@ export default function ThreeStepReportScreen() {
           )}
 
           {/* ==================== STEP 2: Select Task ==================== */}
-          {step === 2 && (
+          {!autoAssigned && step === 2 && (
             <>
               {/* Worker badge (collapsible) */}
               {worker && (
@@ -598,7 +669,7 @@ export default function ThreeStepReportScreen() {
                 <Card.Content>
                   <View style={styles.summaryRow}>
                     <Text style={styles.summaryLabel}>员工</Text>
-                    <Text style={styles.summaryValue}>{worker?.name || '主管自己'}</Text>
+                    <Text style={styles.summaryValue}>{autoAssigned ? '当前登录账号' : worker?.name || '主管自己'}</Text>
                   </View>
                   <Divider style={{ marginVertical: 6 }} />
                   <View style={styles.summaryRow}>
@@ -795,7 +866,7 @@ export default function ThreeStepReportScreen() {
         onScan={handleWorkerScan}
       />
       <TutorialOverlay
-        visible={tut.visible}
+        visible={!autoAssigned && tut.visible}
         steps={TUTORIAL_THREE_STEP.steps}
         currentStep={tut.step}
         onNext={tut.onNext}
@@ -820,9 +891,21 @@ const styles = StyleSheet.create({
   stepDotTextActive: { color: theme.colors.primary },
   stepLine: { flex: 1, height: 2, backgroundColor: '#e8e8e8', marginHorizontal: 4 },
   stepLineActive: { backgroundColor: theme.colors.primary },
+  assignedBanner: {
+    backgroundColor: '#f0f9ff',
+    borderWidth: 1,
+    borderColor: '#bae7ff',
+    borderRadius: 12,
+    padding: 14,
+    marginBottom: 12,
+  },
+  assignedBannerTitle: { fontSize: 18, fontWeight: '700', color: '#1890ff' },
+  assignedBannerText: { fontSize: 14, color: '#4b5563', lineHeight: 20, marginTop: 4 },
 
   // Cards
   card: { marginBottom: 12, borderRadius: 12, backgroundColor: '#fff', elevation: 2 },
+  autoLoadingCard: { alignItems: 'center', paddingVertical: 28 },
+  retryBtn: { marginTop: 14, minWidth: 120 },
   stepTitle: { fontWeight: '700', color: '#333', marginBottom: 4, fontSize: 22 },
   stepDesc: { fontSize: 16, color: '#888', marginBottom: 16 },
 

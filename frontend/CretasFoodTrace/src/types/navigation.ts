@@ -122,7 +122,7 @@ export type ProcessingStackParamList = {
   TeamBatchReport: undefined;
   DynamicReport: { reportType: 'PROGRESS' | 'HOURS' };
   NfcCheckin: undefined;
-  ThreeStepReport: undefined;
+  ThreeStepReport: { assignedTaskId?: string; autoAssigned?: boolean } | undefined;
 
   // 标签扫描 - 通用组件
   LabelScan: {
@@ -520,7 +520,7 @@ export type WSHomeStackParamList = {
   // 生产报工
   DynamicReport: { reportType: 'PROGRESS' | 'HOURS' };
   NfcCheckin: undefined;
-  ThreeStepReport: undefined;
+  ThreeStepReport: { assignedTaskId?: string; autoAssigned?: boolean } | undefined;
   ProcessTaskList: undefined;
   ProcessTaskDetail: { taskId: string };
   ProcessTaskReport: { taskId: string; processName?: string; unit?: string };
