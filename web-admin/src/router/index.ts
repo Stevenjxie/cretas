@@ -1551,6 +1551,17 @@ const businessRoutes: RouteRecordRaw[] = [
             },
           },
           {
+            path: 'supplier-delivery/price-anomaly/pending',
+            name: 'PriceAnomalyApprovalList',
+            component: () => import('@/views/restaurant/supplier-delivery/PriceAnomalyApprovalList.vue'),
+            meta: {
+              requiresAuth: true,
+              title: '价格异常待审批',
+              module: 'dashboard',
+              roles: ['factory_super_admin', 'platform_admin', 'permission_admin', 'restaurant_manager']
+            },
+          },
+          {
             path: 'supplier-delivery/:id',
             name: 'SupplierDeliveryNoteDetail',
             component: () => import('@/views/restaurant/supplier-delivery/SupplierDeliveryNoteDetail.vue'),

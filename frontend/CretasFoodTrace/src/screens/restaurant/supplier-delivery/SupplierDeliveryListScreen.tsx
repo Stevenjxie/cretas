@@ -6,14 +6,14 @@ import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 
-import { FAManagementStackParamList } from '../../../types/navigation';
+import { FAManagementStackParamList, WHInboundStackParamList } from '../../../types/navigation';
 import { restaurantApiClient } from '../../../services/api/restaurantApiClient';
 import type { SupplierDeliveryNote, SupplierDeliveryStatus } from '../../../types/restaurant';
 import { handleError } from '../../../utils/errorHandler';
 import { useAuthStore } from '../../../store/authStore';
 import { roleCanViewPrice } from '../../../config/rowActionsConfig';
 
-type Nav = NativeStackNavigationProp<FAManagementStackParamList, 'SupplierDeliveryList'>;
+type Nav = NativeStackNavigationProp<FAManagementStackParamList & WHInboundStackParamList, 'SupplierDeliveryList'>;
 
 const STATUS_LABEL: Record<SupplierDeliveryStatus, string> = {
   DRAFT: '待验收',

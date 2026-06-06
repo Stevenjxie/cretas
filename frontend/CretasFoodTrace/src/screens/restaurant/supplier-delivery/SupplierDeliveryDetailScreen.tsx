@@ -18,16 +18,22 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { RouteProp, useFocusEffect, useNavigation, useRoute } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 
-import { FAManagementStackParamList } from '../../../types/navigation';
+import { FAManagementStackParamList, WHInboundStackParamList } from '../../../types/navigation';
 import { restaurantApiClient } from '../../../services/api/restaurantApiClient';
-import type { RejectSupplierDeliveryRequest, SupplierDeliveryLine, SupplierDeliveryNote } from '../../../types/restaurant';
+import type {
+  PriceAnomalyApprovalStatus,
+  RejectSupplierDeliveryRequest,
+  SupplierDeliveryLine,
+  SupplierDeliveryNote,
+} from '../../../types/restaurant';
 import { materialTypeApiClient, MaterialType } from '../../../services/api/materialTypeApiClient';
 import { useAuthStore } from '../../../store/authStore';
 import { handleError } from '../../../utils/errorHandler';
 import { roleCanViewPrice } from '../../../config/rowActionsConfig';
 
-type Nav = NativeStackNavigationProp<FAManagementStackParamList, 'SupplierDeliveryDetail'>;
-type DetailRoute = RouteProp<FAManagementStackParamList, 'SupplierDeliveryDetail'>;
+type DeliveryRoutes = FAManagementStackParamList & WHInboundStackParamList;
+type Nav = NativeStackNavigationProp<DeliveryRoutes, 'SupplierDeliveryDetail'>;
+type DetailRoute = RouteProp<DeliveryRoutes, 'SupplierDeliveryDetail'>;
 type RejectReason = RejectSupplierDeliveryRequest['rejectReasonCode'];
 
 interface EditableLine {
@@ -42,7 +48,20 @@ interface EditableLine {
   qcResult: string;
   remark: string;
   showManualMaterialId: boolean;
+  priceAnomalyFlag?: boolean;
+  priceAnomalyReasonCode: string;
+  priceAnomalyExplanation: string;
+  baselineUnitPrice?: number | null;
+  priceVarianceRate?: number | null;
 }
+
+const ANOMALY_REASONS: Array<{ value: string; label: string }> = [
+  { value: 'MARKET_PRICE_UP', label: '市场涨价' },
+  { value: 'SPEC_UPGRADE', label: '规格升级' },
+  { value: 'SUBSTITUTE_SHORTAGE', label: '临时缺货换货' },
+  { value: 'SUPPLIER_EXPLAINED', label: '供应商补充说明' },
+  { value: 'OTHER', label: '其他' },
+];
 
 const STATUS_LABEL: Record<string, string> = {
   DRAFT: '待验收',
@@ -56,6 +75,15 @@ const POSTING_LABEL: Record<string, string> = {
   POSTED: '已生成库存',
   FAILED: '过账失败',
 };
+
+const APPROVAL_LABEL: Record<PriceAnomalyApprovalStatus, string> = {
+  NONE: '未提交审批',
+  PENDING: '等待老板审批',
+  APPROVED: '老板已批准',
+  REJECTED: '老板已驳回',
+};
+
+const BOSS_ROLES = new Set(['factory_super_admin', 'restaurant_manager', 'platform_admin']);
 
 const REJECT_REASONS: Array<{ value: RejectReason; label: string; hint: string }> = [
   { value: 'WRONG_DOCUMENT', label: '不是本店送货单', hint: '单据拿错或供应商送错门店' },
@@ -93,8 +121,26 @@ export function SupplierDeliveryDetailScreen() {
   const [rejectDialogVisible, setRejectDialogVisible] = useState(false);
   const [rejectReason, setRejectReason] = useState<RejectReason>('WRONG_DOCUMENT');
   const [rejectNote, setRejectNote] = useState('');
+  const [submittingApproval, setSubmittingApproval] = useState(false);
+  const [stickyError, setStickyError] = useState<string | null>(null);
+  const [stickyHint, setStickyHint] = useState<string | null>(null);
 
   const isDraft = note?.status === 'DRAFT';
+  const canBossApprove = BOSS_ROLES.has(roleCode || '');
+  const priceAnomalyLines = useMemo(
+    () => (note?.lines || []).filter((line) => line.priceAnomalyFlag),
+    [note?.lines],
+  );
+  const hasPriceAnomalies = priceAnomalyLines.length > 0;
+  const unexplainedAnomalies = useMemo(
+    () => priceAnomalyLines.filter((line) => !String(line.priceAnomalyExplanation || '').trim()),
+    [priceAnomalyLines],
+  );
+  const approvalStatus = note?.priceAnomalyApprovalStatus || 'NONE';
+  const canSubmitApproval = isDraft
+    && hasPriceAnomalies
+    && unexplainedAnomalies.length === 0
+    && (approvalStatus === 'NONE' || approvalStatus === 'REJECTED');
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -153,6 +199,9 @@ export function SupplierDeliveryDetailScreen() {
         qcResult: 'PASS',
         remark: '',
         showManualMaterialId: false,
+        priceAnomalyFlag: false,
+        priceAnomalyReasonCode: '',
+        priceAnomalyExplanation: '',
       },
     ]);
   };
@@ -201,6 +250,10 @@ export function SupplierDeliveryDetailScreen() {
       if (!line.unit.trim()) return `${lineName} 需要填写单位。`;
       if (price !== undefined && (!Number.isFinite(price) || price < 0)) return `${lineName} 的单价不能为负数。`;
       if (line.qcResult === 'FAIL' && !line.remark.trim()) return `${lineName} 不合格时请写明问题。`;
+      if (line.priceAnomalyFlag) {
+        if (!line.priceAnomalyReasonCode.trim()) return `${lineName} 价格异常需选择涨价原因。`;
+        if (!line.priceAnomalyExplanation.trim()) return `${lineName} 价格异常需填写现场解释。`;
+      }
     }
     return null;
   };
@@ -242,7 +295,21 @@ export function SupplierDeliveryDetailScreen() {
     );
   };
 
+  const extractApiHint = (error: unknown): { message: string; hint?: string } => {
+    const payload = (error as { response?: { data?: Record<string, unknown> } })?.response?.data;
+    const message = String(payload?.message || payload?.errorMessage || getErrorText(error));
+    const hint = String(payload?.actionHint || payload?.hint || '').trim() || undefined;
+    return { message, hint };
+  };
+
+  const getErrorText = (error: unknown): string => {
+    if (error instanceof Error) return error.message;
+    return '操作失败，请稍后重试。';
+  };
+
   const doConfirm = async () => {
+    setStickyError(null);
+    setStickyHint(null);
     setConfirming(true);
     try {
       const updated = await restaurantApiClient.confirmSupplierDelivery(noteId);
@@ -250,10 +317,49 @@ export function SupplierDeliveryDetailScreen() {
       setDraftLines(toEditableLines(updated.lines || []));
       Alert.alert('验收入库成功', '已生成真实库存批次，后续领料/损耗可扣这批库存。');
     } catch (error) {
-      handleError(error, { title: '验收入库失败' });
+      const { message, hint } = extractApiHint(error);
+      setStickyError(message);
+      setStickyHint(hint || (hasPriceAnomalies && approvalStatus !== 'APPROVED' ? '请先提交老板审批，待批准后再确认入库。' : undefined) || null);
+      handleError(error, { title: '验收入库失败', customMessage: hint ? `${message}\n${hint}` : message });
       void load();
     } finally {
       setConfirming(false);
+    }
+  };
+
+  const submitApproval = () => {
+    if (!canSubmitApproval) {
+      Alert.alert('还不能提交审批', unexplainedAnomalies.length > 0
+        ? '请先在行项中填写涨价解释，再提交老板审批。'
+        : '当前状态不需要重复提交。');
+      return;
+    }
+    Alert.alert(
+      '提交老板审批',
+      `送货单 ${note?.noteNumber || noteId} 有 ${priceAnomalyLines.length} 行进价异常，提交后需老板/店长批准才能入库。`,
+      [
+        { text: '取消', style: 'cancel' },
+        { text: '提交审批', onPress: () => { void doSubmitApproval(); } },
+      ],
+    );
+  };
+
+  const doSubmitApproval = async () => {
+    setSubmittingApproval(true);
+    setStickyError(null);
+    setStickyHint(null);
+    try {
+      const updated = await restaurantApiClient.submitPriceAnomalyApproval(noteId);
+      setNote(updated);
+      setDraftLines(toEditableLines(updated.lines || []));
+      Alert.alert('已提交审批', '已通知老板/店长，请等待批准后再确认入库。');
+    } catch (error) {
+      const { message, hint } = extractApiHint(error);
+      setStickyError(message);
+      setStickyHint(hint || null);
+      handleError(error, { title: '提交审批失败', customMessage: hint ? `${message}\n${hint}` : message });
+    } finally {
+      setSubmittingApproval(false);
     }
   };
 
@@ -311,12 +417,25 @@ export function SupplierDeliveryDetailScreen() {
   };
 
   const renderLineView = (line: SupplierDeliveryLine, index: number) => (
-    <Card key={line.id || `${line.rawMaterialTypeId}-${index}`} style={styles.card}>
+    <Card
+      key={line.id || `${line.rawMaterialTypeId}-${index}`}
+      style={[styles.card, line.priceAnomalyFlag ? styles.anomalyCard : null]}
+    >
       <Card.Content>
-        <Text style={styles.lineName}>{line.ingredientName}</Text>
+        <View style={styles.titleRow}>
+          <Text style={styles.lineName}>{line.ingredientName}</Text>
+          {line.priceAnomalyFlag ? <Chip compact textStyle={styles.chipText}>价格异常</Chip> : null}
+        </View>
         <Text style={styles.meta}>食材：{line.rawMaterialTypeId || '未匹配'}</Text>
         <Text style={styles.meta}>数量：{line.quantity ?? '-'} {line.unit || ''}</Text>
         <Text style={styles.meta}>单价：{formatAmount(line.unitPrice, canViewAmounts, '未填')}</Text>
+        {line.priceAnomalyFlag ? (
+          <>
+            <Text style={styles.meta}>历史基线：{formatAmount(line.baselineUnitPrice, canViewAmounts, '—')}</Text>
+            <Text style={styles.anomaly}>涨幅：{formatVariance(line.priceVarianceRate)}</Text>
+            <Text style={styles.meta}>涨价解释：{line.priceAnomalyExplanation || '未填写'}</Text>
+          </>
+        ) : null}
         <Text style={styles.meta}>行金额：{formatAmount(line.lineAmount ?? calcLineAmount(line), canViewAmounts, '未计算')}</Text>
         <Text style={styles.meta}>质检：{QC_LABEL[line.qcResult || ''] || line.qcResult || '-'}</Text>
         {line.remark ? <Text style={styles.meta}>备注：{line.remark}</Text> : null}
@@ -417,6 +536,39 @@ export function SupplierDeliveryDetailScreen() {
           onChangeText={(value) => updateLine(line.key, { remark: value })}
           style={styles.field}
         />
+        {line.priceAnomalyFlag ? (
+          <View style={styles.anomalyEditor}>
+            <Text style={styles.anomalyEditorTitle}>进价异常处理（必填）</Text>
+            {line.baselineUnitPrice != null ? (
+              <Text style={styles.meta}>
+                历史基线 {formatAmount(line.baselineUnitPrice, canViewAmounts, '—')}
+                {line.priceVarianceRate != null ? ` · 涨幅 ${formatVariance(line.priceVarianceRate)}` : ''}
+              </Text>
+            ) : null}
+            <Text style={styles.labelCompact}>涨价原因</Text>
+            <View style={styles.chipRow}>
+              {ANOMALY_REASONS.map((reason) => (
+                <Chip
+                  key={reason.value}
+                  compact
+                  selected={line.priceAnomalyReasonCode === reason.value}
+                  onPress={() => updateLine(line.key, { priceAnomalyReasonCode: reason.value })}
+                >
+                  {reason.label}
+                </Chip>
+              ))}
+            </View>
+            <TextInput
+              label="现场解释（必填）"
+              mode="outlined"
+              value={line.priceAnomalyExplanation}
+              onChangeText={(value) => updateLine(line.key, { priceAnomalyExplanation: value })}
+              multiline
+              style={styles.field}
+              placeholder="例如：供应商说明菜场今日涨价，仓管已现场询价确认。"
+            />
+          </View>
+        ) : null}
         <HelperText type="info" visible>
           保存后再确认入库，避免按旧数量生成库存批次。
         </HelperText>
@@ -433,6 +585,26 @@ export function SupplierDeliveryDetailScreen() {
       </Appbar.Header>
 
       <ScrollView refreshControl={<RefreshControl refreshing={loading} onRefresh={load} />} contentContainerStyle={styles.content}>
+        {stickyError ? (
+          <Card style={styles.stickyErrorCard}>
+            <Card.Content>
+              <Text style={styles.stickyErrorTitle}>还不能确认入库</Text>
+              <Text style={styles.error}>{stickyError}</Text>
+              {stickyHint ? <Text style={styles.stickyHint}>{stickyHint}</Text> : null}
+              {canSubmitApproval ? (
+                <Button mode="contained" style={styles.stickyAction} loading={submittingApproval} onPress={submitApproval}>
+                  提交老板审批
+                </Button>
+              ) : null}
+              {approvalStatus === 'PENDING' && canBossApprove ? (
+                <Button mode="outlined" style={styles.stickyAction} onPress={() => navigation.navigate('PriceAnomalyApproval')}>
+                  去审批待办
+                </Button>
+              ) : null}
+            </Card.Content>
+          </Card>
+        ) : null}
+
         {!note ? (
           <View style={styles.center}>
             <ActivityIndicator />
@@ -456,6 +628,22 @@ export function SupplierDeliveryDetailScreen() {
                 {note.postedAt ? <Text style={styles.batch}>过账时间：{note.postedAt}</Text> : null}
                 {note.rejectReasonCode ? <Text style={styles.error}>拒绝原因：{note.rejectReasonNote || note.rejectReasonCode}</Text> : null}
                 {note.postingError ? <Text style={styles.error}>过账失败：{note.postingError}</Text> : null}
+                {hasPriceAnomalies ? (
+                  <View style={styles.approvalBox}>
+                    <Text style={styles.approvalTitle}>
+                      价格异常审批：{APPROVAL_LABEL[approvalStatus]}
+                    </Text>
+                    {note.priceAnomalyApprovalComment ? (
+                      <Text style={styles.meta}>审批意见：{note.priceAnomalyApprovalComment}</Text>
+                    ) : null}
+                    {approvalStatus === 'PENDING' ? (
+                      <Text style={styles.stickyHint}>已提交老板审批，批准前不能入库。</Text>
+                    ) : null}
+                    {approvalStatus === 'REJECTED' ? (
+                      <Text style={styles.error}>老板已驳回，请重新核对价格或联系采购。</Text>
+                    ) : null}
+                  </View>
+                ) : null}
                 {note.photoOssUrl ? (
                   <TouchableOpacity
                     activeOpacity={0.84}
@@ -505,9 +693,25 @@ export function SupplierDeliveryDetailScreen() {
                     <Button mode="outlined" icon="pencil" onPress={beginEdit}>
                       编辑明细
                     </Button>
+                    {canSubmitApproval ? (
+                      <Button
+                        mode="contained-tonal"
+                        icon="account-check"
+                        loading={submittingApproval}
+                        disabled={submittingApproval}
+                        onPress={submitApproval}
+                      >
+                        提交老板审批
+                      </Button>
+                    ) : null}
                     <Button mode="contained" icon="check" loading={confirming} disabled={confirming} onPress={confirm}>
                       确认验收入库
                     </Button>
+                    {canBossApprove ? (
+                      <Button mode="outlined" icon="cash-multiple" onPress={() => navigation.navigate('PriceAnomalyApproval')}>
+                        价格异常待审批
+                      </Button>
+                    ) : null}
                     <Button mode="outlined" icon="close-circle" textColor="#B91C1C" onPress={() => setRejectDialogVisible(true)} disabled={rejecting}>
                       拒绝送货单
                     </Button>
@@ -568,6 +772,11 @@ function toEditableLines(lines: SupplierDeliveryLine[]): EditableLine[] {
     qcResult: line.qcResult || 'PASS',
     remark: line.remark || '',
     showManualMaterialId: false,
+    priceAnomalyFlag: line.priceAnomalyFlag,
+    priceAnomalyReasonCode: line.priceAnomalyReasonCode || '',
+    priceAnomalyExplanation: line.priceAnomalyExplanation || '',
+    baselineUnitPrice: line.baselineUnitPrice,
+    priceVarianceRate: line.priceVarianceRate,
   }));
 }
 
@@ -581,6 +790,11 @@ function toLinePayload(line: EditableLine): SupplierDeliveryLine {
     unitPrice: line.unitPrice.trim() ? Number(line.unitPrice) : undefined,
     qcResult: line.qcResult,
     remark: line.remark.trim() || undefined,
+    priceAnomalyFlag: line.priceAnomalyFlag,
+    priceAnomalyReasonCode: line.priceAnomalyReasonCode.trim() || undefined,
+    priceAnomalyExplanation: line.priceAnomalyExplanation.trim() || undefined,
+    baselineUnitPrice: line.baselineUnitPrice,
+    priceVarianceRate: line.priceVarianceRate,
   };
 }
 
@@ -598,6 +812,11 @@ function calcLineAmount(line: SupplierDeliveryLine): number | null {
   if (line.quantity == null || line.unitPrice == null) return null;
   const amount = Number(line.quantity) * Number(line.unitPrice);
   return Number.isFinite(amount) ? amount : null;
+}
+
+function formatVariance(rate?: number | null): string {
+  if (rate == null || !Number.isFinite(rate)) return '—';
+  return `${rate > 0 ? '+' : ''}${(rate * 100).toFixed(1)}%`;
 }
 
 const styles = StyleSheet.create({
@@ -660,6 +879,38 @@ const styles = StyleSheet.create({
   maskedAmount: { marginTop: 10, color: '#6B7280', fontSize: 13 },
   actions: { gap: 10, marginTop: 4, marginBottom: 20 },
   dialogHint: { color: '#4B5563', lineHeight: 20, marginBottom: 8 },
+  anomalyCard: { borderColor: '#FECACA', borderWidth: 1, backgroundColor: '#FEF2F2' },
+  anomaly: { fontSize: 13, color: '#B91C1C', marginTop: 4, fontWeight: '700' },
+  chipText: { fontSize: 11 },
+  approvalBox: {
+    marginTop: 10,
+    padding: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#FDE68A',
+    backgroundColor: '#FFFBEB',
+  },
+  approvalTitle: { fontSize: 14, fontWeight: '700', color: '#92400E' },
+  stickyErrorCard: {
+    marginBottom: 12,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#FECACA',
+    backgroundColor: '#FEF2F2',
+  },
+  stickyErrorTitle: { fontSize: 15, fontWeight: '800', color: '#991B1B', marginBottom: 6 },
+  stickyHint: { fontSize: 13, color: '#92400E', marginTop: 6, lineHeight: 19 },
+  stickyAction: { marginTop: 10 },
+  anomalyEditor: {
+    marginTop: 10,
+    padding: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#FECACA',
+    backgroundColor: '#FEF2F2',
+  },
+  anomalyEditorTitle: { fontSize: 14, fontWeight: '700', color: '#991B1B', marginBottom: 6 },
+  labelCompact: { fontSize: 13, fontWeight: '600', color: '#374151', marginTop: 4, marginBottom: 4 },
 });
 
 export default SupplierDeliveryDetailScreen;

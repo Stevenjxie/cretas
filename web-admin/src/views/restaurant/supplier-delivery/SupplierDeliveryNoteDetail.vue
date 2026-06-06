@@ -69,7 +69,37 @@
         style="margin-bottom: 16px"
       >
         <template #title>
-          有 {{ unexplainedPriceAnomalies.length }} 行进价超过历史基线 5%，请在下方“进价异常处理”填写原因和现场解释后再确认入库。
+          有 {{ unexplainedPriceAnomalies.length }} 行进价超过历史基线 5%，请在下方“进价异常处理”填写原因和现场解释后再提交老板审批。
+        </template>
+      </el-alert>
+
+      <el-alert
+        v-if="priceAnomalyRows.length > 0"
+        :type="approvalAlertType"
+        show-icon
+        :closable="false"
+        class="approval-status-alert"
+      >
+        <template #title>
+          价格异常审批：{{ approvalStatusText }}
+        </template>
+        <template #default>
+          <p v-if="note?.priceAnomalyApprovalComment" class="approval-comment">
+            审批意见：{{ note.priceAnomalyApprovalComment }}
+          </p>
+          <p v-if="approvalStatus === 'PENDING'">已提交老板审批，批准前不能确认入库。</p>
+          <p v-else-if="approvalStatus === 'REJECTED'">老板已驳回，请重新核对价格或联系采购。</p>
+          <p v-else-if="canSubmitApproval">解释已填写，请提交老板审批后再确认入库。</p>
+          <el-input
+            v-if="canBossApprove && approvalStatus === 'PENDING'"
+            v-model="approvalComment"
+            type="textarea"
+            :rows="2"
+            maxlength="200"
+            show-word-limit
+            placeholder="审批意见（驳回必填）"
+            style="margin-top: 8px"
+          />
         </template>
       </el-alert>
 
@@ -303,6 +333,18 @@
         <el-button @click="goBack">取消</el-button>
         <el-button v-if="!isManual" :loading="saving" @click="saveLines">保存行项</el-button>
         <el-button v-if="isManual" type="primary" :loading="saving" @click="saveManual">保存录入</el-button>
+        <el-button
+          v-if="!isManual && canSubmitApproval"
+          type="warning"
+          :loading="submittingApproval"
+          @click="submitApproval"
+        >
+          提交老板审批
+        </el-button>
+        <template v-if="!isManual && canBossApprove && approvalStatus === 'PENDING'">
+          <el-button type="success" :loading="approving" @click="approveAnomaly">批准</el-button>
+          <el-button type="danger" plain :loading="rejectingApproval" @click="rejectAnomaly">驳回</el-button>
+        </template>
         <el-button v-if="!isManual" type="danger" plain @click="openReject">拒绝</el-button>
         <el-button v-if="!isManual" type="primary" :loading="confirming" @click="confirm">
           确认验收入库 / 生成库存批次
@@ -346,7 +388,9 @@ import { useAuthStore } from '@/store/modules/auth';
 import { get } from '@/api/request';
 import {
   getNoteDetail, confirmNote, rejectNote, updateNoteLines, createManualNote,
+  submitPriceAnomalyApproval, approvePriceAnomaly, rejectPriceAnomaly,
   type DeliveryPostingStatus,
+  type PriceAnomalyApprovalStatus,
   type SupplierDeliveryNoteDto, type SupplierDeliveryNoteLineDto,
 } from '@/api/restaurant/supplierDeliveryNote';
 import { handleCatchError } from '@/utils/errorToast';
@@ -363,6 +407,10 @@ const loading = ref(false);
 const saving = ref(false);
 const confirming = ref(false);
 const rejecting = ref(false);
+const submittingApproval = ref(false);
+const approving = ref(false);
+const rejectingApproval = ref(false);
+const approvalComment = ref('');
 const note = ref<SupplierDeliveryNoteDto | null>(null);
 const suppliers = ref<Array<{ id: string; name: string }>>([]);
 const materialTypes = ref<Array<{ id: string; name: string }>>([]);
@@ -409,6 +457,33 @@ const priceAnomalyRows = computed(() =>
     .map((line, index) => ({ line, index }))
     .filter(({ line }) => line.priceAnomalyFlag),
 );
+
+const approvalStatus = computed<PriceAnomalyApprovalStatus>(() =>
+  note.value?.priceAnomalyApprovalStatus || 'NONE',
+);
+
+const BOSS_ROLES = new Set(['factory_super_admin', 'restaurant_manager', 'platform_admin']);
+const canBossApprove = computed(() => BOSS_ROLES.has(authStore.currentRole || ''));
+const canSubmitApproval = computed(() =>
+  editable.value
+  && priceAnomalyRows.value.length > 0
+  && unexplainedPriceAnomalies.value.length === 0
+  && (approvalStatus.value === 'NONE' || approvalStatus.value === 'REJECTED'),
+);
+
+const approvalStatusText = computed(() => ({
+  NONE: '未提交审批',
+  PENDING: '等待老板审批',
+  APPROVED: '老板已批准',
+  REJECTED: '老板已驳回',
+}[approvalStatus.value] || approvalStatus.value));
+
+const approvalAlertType = computed(() => {
+  if (approvalStatus.value === 'APPROVED') return 'success';
+  if (approvalStatus.value === 'REJECTED') return 'error';
+  if (approvalStatus.value === 'PENDING') return 'warning';
+  return 'info';
+});
 
 function statusText(s?: string): string {
   return { DRAFT: '草稿', CONFIRMED: '已确认', REJECTED: '已拒绝' }[s || ''] || s || '';
@@ -592,15 +667,83 @@ async function saveManual() {
   }
 }
 
+async function submitApproval() {
+  submittingApproval.value = true;
+  try {
+    if (editable.value && !isManual.value) {
+      const saved = await updateNoteLines(factoryId.value, noteId.value, form.lines);
+      if (saved.success && saved.data) syncNote(saved.data);
+    }
+    const resp = await submitPriceAnomalyApproval(factoryId.value, noteId.value);
+    if (resp.success) {
+      ElMessage.success('已提交老板审批');
+      syncNote(resp.data);
+    }
+  } catch (e) {
+    handleCatchError(e, '提交审批失败');
+  } finally {
+    submittingApproval.value = false;
+  }
+}
+
+async function approveAnomaly() {
+  approving.value = true;
+  try {
+    const resp = await approvePriceAnomaly(factoryId.value, noteId.value, {
+      comment: approvalComment.value.trim() || undefined,
+    });
+    if (resp.success) {
+      ElMessage.success('已批准价格异常，仓管可确认入库');
+      syncNote(resp.data);
+    }
+  } catch (e) {
+    handleCatchError(e, '批准失败');
+  } finally {
+    approving.value = false;
+  }
+}
+
+async function rejectAnomaly() {
+  if (!approvalComment.value.trim()) {
+    ElMessage.warning('驳回时必须填写审批意见');
+    return;
+  }
+  rejectingApproval.value = true;
+  try {
+    const resp = await rejectPriceAnomaly(factoryId.value, noteId.value, {
+      comment: approvalComment.value.trim(),
+    });
+    if (resp.success) {
+      ElMessage.success('已驳回价格异常');
+      syncNote(resp.data);
+    }
+  } catch (e) {
+    handleCatchError(e, '驳回失败');
+  } finally {
+    rejectingApproval.value = false;
+  }
+}
+
 async function confirm() {
   if (unexplainedPriceAnomalies.value.length > 0) {
     ElMessage({
-      message: '进价异常需先填写涨价原因和现场解释，再确认验收入库',
+      message: '进价异常需先填写涨价原因和现场解释，再提交老板审批',
       type: 'warning',
       duration: 0,
       showClose: true,
     });
     priceAnomalyPanelRef.value?.scrollIntoView({ block: 'center' });
+    return;
+  }
+  if (priceAnomalyRows.value.length > 0 && approvalStatus.value !== 'APPROVED') {
+    ElMessage({
+      message: approvalStatus.value === 'PENDING'
+        ? '等待老板审批，暂不能确认入库'
+        : '价格异常需先提交并获得老板批准，才能确认入库',
+      type: 'warning',
+      duration: 0,
+      showClose: true,
+    });
     return;
   }
   if (!note.value) {
@@ -692,8 +835,12 @@ onMounted(async () => {
 .head-form {
   margin-bottom: 8px;
 }
-.posting-failed-alert {
+.posting-failed-alert,
+.approval-status-alert {
   margin-bottom: 16px;
+}
+.approval-comment {
+  margin: 0 0 6px;
 }
 .posting-summary {
   margin-bottom: 16px;

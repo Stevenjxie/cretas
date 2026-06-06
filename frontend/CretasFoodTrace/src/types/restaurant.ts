@@ -146,12 +146,19 @@ export interface SupplierDeliveryLine {
   quantity?: number;
   unit?: string;
   unitPrice?: number | null;
+  baselineUnitPrice?: number | null;
+  priceVarianceRate?: number | null;
+  priceAnomalyFlag?: boolean;
+  priceAnomalyReasonCode?: string | null;
+  priceAnomalyExplanation?: string | null;
   lineAmount?: number | null;
   qcResult?: string;
   materialBatchId?: string;
   remark?: string;
   ocrConfidence?: number;
 }
+
+export type PriceAnomalyApprovalStatus = 'NONE' | 'PENDING' | 'APPROVED' | 'REJECTED';
 
 export interface SupplierDeliveryNote {
   id: string;
@@ -174,6 +181,22 @@ export interface SupplierDeliveryNote {
   postingError?: string;
   rejectReasonCode?: string;
   rejectReasonNote?: string;
+  priceAnomalyApprovalStatus?: PriceAnomalyApprovalStatus;
+  priceAnomalySubmittedBy?: number;
+  priceAnomalySubmittedAt?: string;
+  priceAnomalyApprovedBy?: number;
+  priceAnomalyApprovedAt?: string;
+  priceAnomalyRejectedBy?: number;
+  priceAnomalyRejectedAt?: string;
+  priceAnomalyApprovalComment?: string;
+  sourceRequisitionId?: string;
+  procurementConfirmedBy?: number;
+  procurementConfirmedAt?: string;
+  supplierContactNote?: string;
+  voiceAudioUrl?: string;
+  voiceTranscriptText?: string;
+  supplierQuotePhotoUrls?: string[];
+  expectedDeliveryDate?: string;
   lowConfidenceWarning?: boolean;
   lines?: SupplierDeliveryLine[];
 }
@@ -199,4 +222,17 @@ export interface SupplierDeliveryOcrRequest {
   deliveryDate?: string;
   supplierId?: string;
   factoryId?: string;
+}
+
+export interface ProcurementConfirmRequest {
+  sourceRequisitionId?: string;
+  supplierId?: string;
+  supplierName?: string;
+  deliveryDate?: string;
+  expectedDeliveryDate?: string;
+  supplierContactNote?: string;
+  voiceAudioUrl?: string;
+  voiceTranscriptText?: string;
+  supplierQuotePhotoUrls?: string[];
+  lines: SupplierDeliveryLine[];
 }

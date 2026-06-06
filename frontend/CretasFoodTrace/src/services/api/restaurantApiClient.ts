@@ -246,6 +246,44 @@ class RestaurantApiClient {
   async deleteSupplierDelivery(noteId: string, factoryId?: string): Promise<void> {
     await apiClient.delete(`${this.basePath('supplier-delivery-notes', factoryId)}/${noteId}`);
   }
+
+  async submitPriceAnomalyApproval(noteId: string, factoryId?: string): Promise<SupplierDeliveryNote> {
+    const res = await apiClient.post<any>(`${this.basePath('supplier-delivery-notes', factoryId)}/${noteId}/price-anomaly/submit`);
+    return res?.data ?? res;
+  }
+
+  async approvePriceAnomaly(noteId: string, comment?: string, factoryId?: string): Promise<SupplierDeliveryNote> {
+    const res = await apiClient.post<any>(
+      `${this.basePath('supplier-delivery-notes', factoryId)}/${noteId}/price-anomaly/approve`,
+      { comment },
+    );
+    return res?.data ?? res;
+  }
+
+  async rejectPriceAnomaly(noteId: string, comment?: string, factoryId?: string): Promise<SupplierDeliveryNote> {
+    const res = await apiClient.post<any>(
+      `${this.basePath('supplier-delivery-notes', factoryId)}/${noteId}/price-anomaly/reject`,
+      { comment },
+    );
+    return res?.data ?? res;
+  }
+
+  async getPendingPriceAnomalyApprovals(params?: { page?: number; size?: number; factoryId?: string }) {
+    const { factoryId, ...query } = params || {};
+    const res = await apiClient.get<any>(
+      `${this.basePath('supplier-delivery-notes', factoryId)}/price-anomaly/pending`,
+      { params: query },
+    );
+    const payload = res?.data ?? res;
+    const content = payload?.content ?? payload?.data?.content ?? [];
+    const totalElements = payload?.totalElements ?? payload?.data?.totalElements ?? 0;
+    return { data: Array.isArray(content) ? content : [], totalElements };
+  }
+
+  async createProcurementDelivery(data: import('../../types/restaurant').ProcurementConfirmRequest, factoryId?: string): Promise<SupplierDeliveryNote> {
+    const res = await apiClient.post<any>(`${this.basePath('supplier-delivery-notes', factoryId)}/procurement-confirm`, data);
+    return res?.data ?? res;
+  }
 }
 
 export const restaurantApiClient = new RestaurantApiClient();
