@@ -60,6 +60,11 @@ public class SupplierDeliveryNoteDto {
         private BigDecimal quantity;
         private String unit;
         private BigDecimal unitPrice;
+        private BigDecimal baselineUnitPrice;
+        private BigDecimal priceVarianceRate;
+        private Boolean priceAnomalyFlag;
+        private String priceAnomalyReasonCode;
+        private String priceAnomalyExplanation;
         private BigDecimal lineAmount;
         private String qcResult;
         private String materialBatchId;

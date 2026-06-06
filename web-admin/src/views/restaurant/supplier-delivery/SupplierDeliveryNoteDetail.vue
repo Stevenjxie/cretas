@@ -61,6 +61,18 @@
         </template>
       </el-alert>
 
+      <el-alert
+        v-if="unexplainedPriceAnomalies.length > 0"
+        type="warning"
+        show-icon
+        :closable="false"
+        style="margin-bottom: 16px"
+      >
+        <template #title>
+          有 {{ unexplainedPriceAnomalies.length }} 行进价超过历史基线 5%，需填写供应商解释后才能确认入库。
+        </template>
+      </el-alert>
+
       <el-descriptions v-if="note" :column="3" border class="posting-summary">
         <el-descriptions-item label="业务状态">
           <el-tag size="small" :type="statusTagType(note.status)">
@@ -151,6 +163,19 @@
             <span v-else>{{ row.unitPrice ?? '—' }}</span>
           </template>
         </el-table-column>
+        <el-table-column label="历史基线" width="120" align="right">
+          <template #default="{ row }">
+            <span>{{ row.baselineUnitPrice != null ? '¥' + row.baselineUnitPrice : '—' }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="价格差异" width="130">
+          <template #default="{ row }">
+            <el-tag v-if="row.priceAnomalyFlag" type="danger" size="small">
+              {{ formatVariance(row.priceVarianceRate) }}
+            </el-tag>
+            <span v-else>{{ row.priceVarianceRate != null ? formatVariance(row.priceVarianceRate) : '—' }}</span>
+          </template>
+        </el-table-column>
         <el-table-column label="金额" width="120" align="right">
           <template #default="{ row }">
             <span :class="{ 'auto-calc': editable && row.quantity != null && row.unitPrice != null }">
@@ -173,6 +198,30 @@
           <template #default="{ row }">
             <el-input v-if="editable" v-model="row.remark" placeholder="备注" />
             <span v-else>{{ row.remark || '—' }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="涨价解释" min-width="220">
+          <template #default="{ row }">
+            <template v-if="editable && row.priceAnomalyFlag">
+              <el-select
+                v-model="row.priceAnomalyReasonCode"
+                placeholder="选择原因"
+                size="small"
+                style="width: 100%; margin-bottom: 6px"
+              >
+                <el-option label="市场涨价" value="MARKET_PRICE_UP" />
+                <el-option label="规格升级" value="SPEC_UPGRADE" />
+                <el-option label="临时缺货换货" value="SUBSTITUTE_SHORTAGE" />
+                <el-option label="供应商补充说明" value="SUPPLIER_EXPLAINED" />
+                <el-option label="其他" value="OTHER" />
+              </el-select>
+              <el-input
+                v-model="row.priceAnomalyExplanation"
+                size="small"
+                placeholder="填写供应商解释"
+              />
+            </template>
+            <span v-else>{{ row.priceAnomalyExplanation || '—' }}</span>
           </template>
         </el-table-column>
         <el-table-column v-if="editable" label="操作" width="70">
@@ -280,6 +329,10 @@ const totalAmount = computed(() =>
   form.lines.reduce((sum, l) => sum + (Number(l.lineAmount) || 0), 0).toFixed(2),
 );
 
+const unexplainedPriceAnomalies = computed(() =>
+  form.lines.filter((l) => l.priceAnomalyFlag && !String(l.priceAnomalyExplanation || '').trim()),
+);
+
 function statusText(s?: string): string {
   return { DRAFT: '草稿', CONFIRMED: '已确认', REJECTED: '已拒绝' }[s || ''] || s || '';
 }
@@ -317,6 +370,20 @@ function recalcLine(row: SupplierDeliveryNoteLineDto) {
   if (row.quantity != null && row.unitPrice != null) {
     row.lineAmount = Number((Number(row.quantity) * Number(row.unitPrice)).toFixed(2));
   }
+  if (row.unitPrice != null && row.baselineUnitPrice != null && Number(row.baselineUnitPrice) > 0) {
+    const rate = (Number(row.unitPrice) - Number(row.baselineUnitPrice)) / Number(row.baselineUnitPrice);
+    row.priceVarianceRate = Number(rate.toFixed(4));
+    row.priceAnomalyFlag = rate > 0.05;
+    if (!row.priceAnomalyFlag) {
+      row.priceAnomalyReasonCode = null;
+      row.priceAnomalyExplanation = null;
+    }
+  }
+}
+
+function formatVariance(rate?: number | null): string {
+  if (rate == null) return '—';
+  return `${rate > 0 ? '+' : ''}${(rate * 100).toFixed(1)}%`;
 }
 
 function addLine() {
@@ -409,8 +476,21 @@ async function saveManual() {
 }
 
 async function confirm() {
+  if (unexplainedPriceAnomalies.value.length > 0) {
+    ElMessage({
+      message: '进价异常需先填写供应商解释，再确认验收入库',
+      type: 'warning',
+      duration: 0,
+      showClose: true,
+    });
+    return;
+  }
   confirming.value = true;
   try {
+    if (editable.value && !isManual.value) {
+      const saved = await updateNoteLines(factoryId.value, noteId.value, form.lines);
+      if (saved.success && saved.data) syncNote(saved.data);
+    }
     const resp = await confirmNote(factoryId.value, noteId.value);
     if (resp.success) {
       ElMessage.success('已确认验收入库，库存批次已生成');

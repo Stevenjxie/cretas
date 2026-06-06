@@ -27,6 +27,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.security.MessageDigest;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -61,6 +62,7 @@ public class SupplierDeliveryNoteServiceImpl implements SupplierDeliveryNoteServ
 
     /** 低置信阈值 — 前端据此显示重拍提示 (Rule 5)。 */
     private static final BigDecimal LOW_CONFIDENCE_THRESHOLD = new BigDecimal("0.75");
+    private static final BigDecimal PRICE_ANOMALY_THRESHOLD = new BigDecimal("0.05");
     private static final String PAYABLE_SOURCE_TYPE = "SUPPLIER_DELIVERY_NOTE";
 
     private static final String SUPPLIER_NOTE_OCR_PROMPT = """
@@ -158,6 +160,7 @@ public class SupplierDeliveryNoteServiceImpl implements SupplierDeliveryNoteServ
 
         // 5. 解析 JSON
         parseOcrJsonIntoNote(note, factoryId, rawResponse);
+        refreshPriceAnomalies(note);
 
         return noteRepository.save(note);
     }
@@ -268,12 +271,35 @@ public class SupplierDeliveryNoteServiceImpl implements SupplierDeliveryNoteServ
         if (total.compareTo(BigDecimal.ZERO) > 0) {
             note.setTotalAmount(total);
         }
+        refreshPriceAnomalies(note);
         return noteRepository.save(note);
     }
 
     @Override
     @Transactional
     public SupplierDeliveryNote confirmNote(String factoryId, String noteId, Long userId) {
+        SupplierDeliveryNote draft = mustFindDraftOrAny(factoryId, noteId);
+        if (draft.getStatus() != DeliveryNoteStatus.DRAFT) {
+            throw new BusinessException(409, "只有草稿送货单可验收入库 (当前: " + draft.getStatus() + ")")
+                    .withCode("INVALID_STATUS")
+                    .withHint("请刷新送货单详情，确认当前状态后再操作")
+                    .withHintTarget("status");
+        }
+        refreshPriceAnomalies(draft);
+        List<SupplierDeliveryNoteLine> unexplained = draft.getLines() == null ? List.of() : draft.getLines().stream()
+                .filter(line -> Boolean.TRUE.equals(line.getPriceAnomalyFlag()))
+                .filter(line -> isBlank(line.getPriceAnomalyExplanation()))
+                .toList();
+        if (!unexplained.isEmpty()) {
+            noteRepository.save(draft);
+            SupplierDeliveryNoteLine first = unexplained.get(0);
+            throw new BusinessException(409, "进价异常需先填写供应商解释: " + first.getIngredientName())
+                    .withCode("PRICE_ANOMALY_EXPLANATION_REQUIRED")
+                    .withHint("请在送货单行项目里填写涨价原因和供应商解释，再确认验收入库")
+                    .withHintTarget("priceAnomalyExplanation");
+        }
+        noteRepository.save(draft);
+
         SupplierDeliveryNote saved;
         try {
             saved = postingService.postSupplierDeliveryToInventory(factoryId, noteId, userId);
@@ -391,6 +417,7 @@ public class SupplierDeliveryNoteServiceImpl implements SupplierDeliveryNoteServ
             }
         }
         note.setTotalAmount(total.compareTo(BigDecimal.ZERO) > 0 ? total : null);
+        refreshPriceAnomalies(note);
         return noteRepository.save(note);
     }
 
@@ -439,6 +466,11 @@ public class SupplierDeliveryNoteServiceImpl implements SupplierDeliveryNoteServ
         line.setQuantity(dto.getQuantity());
         line.setUnit(dto.getUnit());
         line.setUnitPrice(dto.getUnitPrice());
+        line.setBaselineUnitPrice(dto.getBaselineUnitPrice());
+        line.setPriceVarianceRate(dto.getPriceVarianceRate());
+        line.setPriceAnomalyFlag(Boolean.TRUE.equals(dto.getPriceAnomalyFlag()));
+        line.setPriceAnomalyReasonCode(dto.getPriceAnomalyReasonCode());
+        line.setPriceAnomalyExplanation(dto.getPriceAnomalyExplanation());
         line.setQcResult(dto.getQcResult());
         line.setMaterialBatchId(dto.getMaterialBatchId());
         line.setRemark(dto.getRemark());
@@ -450,6 +482,58 @@ public class SupplierDeliveryNoteServiceImpl implements SupplierDeliveryNoteServ
         }
         line.setOcrConfidence(dto.getOcrConfidence());
         return line;
+    }
+
+    private void refreshPriceAnomalies(SupplierDeliveryNote note) {
+        if (note == null || note.getLines() == null || note.getLines().isEmpty()) {
+            return;
+        }
+        LocalDate deliveryDate = note.getDeliveryDate() != null ? note.getDeliveryDate() : LocalDate.now();
+        for (SupplierDeliveryNoteLine line : note.getLines()) {
+            BigDecimal unitPrice = line.getUnitPrice();
+            BigDecimal baseline = resolveBaselineUnitPrice(note.getFactoryId(), deliveryDate, line);
+            line.setBaselineUnitPrice(baseline);
+            if (unitPrice == null || baseline == null || baseline.compareTo(BigDecimal.ZERO) <= 0) {
+                line.setPriceVarianceRate(null);
+                line.setPriceAnomalyFlag(false);
+                continue;
+            }
+            BigDecimal varianceRate = unitPrice.subtract(baseline)
+                    .divide(baseline, 4, RoundingMode.HALF_UP);
+            line.setPriceVarianceRate(varianceRate);
+            line.setPriceAnomalyFlag(varianceRate.compareTo(PRICE_ANOMALY_THRESHOLD) > 0);
+            if (!Boolean.TRUE.equals(line.getPriceAnomalyFlag())) {
+                line.setPriceAnomalyReasonCode(null);
+                line.setPriceAnomalyExplanation(null);
+            }
+        }
+    }
+
+    private BigDecimal resolveBaselineUnitPrice(String factoryId, LocalDate deliveryDate, SupplierDeliveryNoteLine line) {
+        if (line == null || isBlank(factoryId)) {
+            return null;
+        }
+        try {
+            if (!isBlank(line.getRawMaterialTypeId())) {
+                BigDecimal byMaterial = lineRepository.averageRecentConfirmedPriceByMaterial(
+                        factoryId, line.getRawMaterialTypeId(), deliveryDate);
+                if (byMaterial != null) {
+                    return byMaterial;
+                }
+            }
+            if (!isBlank(line.getIngredientName())) {
+                return lineRepository.averageRecentConfirmedPriceByIngredientName(
+                        factoryId, line.getIngredientName(), deliveryDate);
+            }
+        } catch (Exception e) {
+            log.warn("送货单价格基线计算失败 factory={} ingredient={}: {}",
+                    factoryId, line.getIngredientName(), e.getMessage());
+        }
+        return null;
+    }
+
+    private boolean isBlank(String value) {
+        return value == null || value.trim().isEmpty();
     }
 
     private BigDecimal resolvePayableAmount(SupplierDeliveryNote note) {

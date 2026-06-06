@@ -14,6 +14,11 @@ export interface SupplierDeliveryNoteLineDto {
   quantity?: number | null;
   unit?: string | null;
   unitPrice?: number | null;
+  baselineUnitPrice?: number | null;
+  priceVarianceRate?: number | null;
+  priceAnomalyFlag?: boolean | null;
+  priceAnomalyReasonCode?: string | null;
+  priceAnomalyExplanation?: string | null;
   lineAmount?: number | null;
   ocrConfidence?: number | null;
   qcResult?: string | null;

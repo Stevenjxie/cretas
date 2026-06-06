@@ -61,6 +61,21 @@ public class SupplierDeliveryNoteLine {
     @Column(name = "unit_price", precision = 12, scale = 4)
     private BigDecimal unitPrice;
 
+    @Column(name = "baseline_unit_price", precision = 12, scale = 4)
+    private BigDecimal baselineUnitPrice;
+
+    @Column(name = "price_variance_rate", precision = 8, scale = 4)
+    private BigDecimal priceVarianceRate;
+
+    @Column(name = "price_anomaly_flag", nullable = false)
+    private Boolean priceAnomalyFlag = false;
+
+    @Column(name = "price_anomaly_reason_code", length = 50)
+    private String priceAnomalyReasonCode;
+
+    @Column(name = "price_anomaly_explanation", columnDefinition = "TEXT")
+    private String priceAnomalyExplanation;
+
     @Column(name = "line_amount", precision = 15, scale = 2)
     private BigDecimal lineAmount;
 

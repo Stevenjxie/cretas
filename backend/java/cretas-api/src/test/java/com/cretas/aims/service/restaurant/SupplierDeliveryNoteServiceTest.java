@@ -142,6 +142,7 @@ class SupplierDeliveryNoteServiceTest {
         SupplierDeliveryNote note = draftWithLine();
         note.setStatus(DeliveryNoteStatus.CONFIRMED);
         note.setConfirmedBy(9L);
+        when(noteRepository.findByIdAndFactoryId("N1", FACTORY)).thenReturn(Optional.of(draftWithLine()));
         when(postingService.postSupplierDeliveryToInventory(FACTORY, "N1", 9L)).thenReturn(note);
         when(arApService.recordPayableFromSource(eq(FACTORY), eq("SUP1"), eq("SUPPLIER_DELIVERY_NOTE"),
                 eq("N1"), any(), any(), eq(9L), anyString())).thenReturn(payableTxn("AP1"));
@@ -164,6 +165,7 @@ class SupplierDeliveryNoteServiceTest {
         SupplierDeliveryNote note = draftWithLine();
         note.setStatus(DeliveryNoteStatus.CONFIRMED);
         note.setConfirmedBy(9L);
+        when(noteRepository.findByIdAndFactoryId("N1", FACTORY)).thenReturn(Optional.of(draftWithLine()));
         when(postingService.postSupplierDeliveryToInventory(FACTORY, "N1", 9L)).thenReturn(note);
         when(noteRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
         when(arApService.recordPayableFromSource(eq(FACTORY), eq("SUP1"), eq("SUPPLIER_DELIVERY_NOTE"),
@@ -182,11 +184,12 @@ class SupplierDeliveryNoteServiceTest {
     @Test
     @DisplayName("confirmNote 非 DRAFT 抛异常")
     void confirmNote_invalidStatus_throws() {
-        when(postingService.postSupplierDeliveryToInventory(FACTORY, "N1", 9L))
-                .thenThrow(new BusinessException(409, "只有草稿送货单可验收入库"));
+        SupplierDeliveryNote note = draftWithLine();
+        note.setStatus(DeliveryNoteStatus.CONFIRMED);
+        when(noteRepository.findByIdAndFactoryId("N1", FACTORY)).thenReturn(Optional.of(note));
 
         assertThrows(BusinessException.class, () -> service.confirmNote(FACTORY, "N1", 9L));
-        verify(postingService).markSupplierDeliveryPostingFailed(eq(FACTORY), eq("N1"), anyString());
+        verifyNoInteractions(postingService);
     }
 
     @Test
@@ -196,6 +199,7 @@ class SupplierDeliveryNoteServiceTest {
         note.setTotalAmount(null);
         note.getLines().get(0).setLineAmount(null);
         note.getLines().get(0).setUnitPrice(null);
+        when(noteRepository.findByIdAndFactoryId("N1", FACTORY)).thenReturn(Optional.of(draftWithLine()));
         when(postingService.postSupplierDeliveryToInventory(FACTORY, "N1", 9L)).thenReturn(note);
 
         BusinessException ex = assertThrows(BusinessException.class,
@@ -206,6 +210,64 @@ class SupplierDeliveryNoteServiceTest {
         assertTrue(ex.getMessage().contains("缺少金额"));
         verifyNoInteractions(arApService);
         verify(goldClient, never()).upsertSupplierPriceBatch(anyString(), anyString(), anyList());
+    }
+
+    @Test
+    @DisplayName("confirmNote 进价异常无解释时阻断，不过账")
+    void confirmNote_priceAnomalyWithoutExplanation_blocksPosting() {
+        SupplierDeliveryNote note = draftWithLine();
+        note.getLines().get(0).setRawMaterialTypeId("rmt-pork");
+        note.getLines().get(0).setUnitPrice(new java.math.BigDecimal("13.00"));
+        when(noteRepository.findByIdAndFactoryId("N1", FACTORY)).thenReturn(Optional.of(note));
+        when(noteRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(lineRepository.averageRecentConfirmedPriceByMaterial(
+                eq(FACTORY), eq("rmt-pork"), eq(LocalDate.of(2026, 6, 1))))
+                .thenReturn(new java.math.BigDecimal("10.00"));
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> service.confirmNote(FACTORY, "N1", 9L));
+
+        assertEquals(409, ex.getCode());
+        assertEquals("PRICE_ANOMALY_EXPLANATION_REQUIRED", ex.getErrorCode());
+        assertEquals("priceAnomalyExplanation", ex.getHintTarget());
+        assertTrue(note.getLines().get(0).getPriceAnomalyFlag());
+        assertEquals(0, note.getLines().get(0).getPriceVarianceRate()
+                .compareTo(new java.math.BigDecimal("0.3000")));
+        verifyNoInteractions(postingService);
+        verifyNoInteractions(arApService);
+    }
+
+    @Test
+    @DisplayName("confirmNote 进价异常已有解释时允许过账")
+    void confirmNote_priceAnomalyWithExplanation_allowsPosting() throws IOException {
+        SupplierDeliveryNote draft = draftWithLine();
+        SupplierDeliveryNoteLine draftLine = draft.getLines().get(0);
+        draftLine.setRawMaterialTypeId("rmt-pork");
+        draftLine.setUnitPrice(new java.math.BigDecimal("13.00"));
+        draftLine.setPriceAnomalyReasonCode("MARKET_PRICE_UP");
+        draftLine.setPriceAnomalyExplanation("供应商解释为批发市场涨价");
+        SupplierDeliveryNote posted = draftWithLine();
+        posted.setStatus(DeliveryNoteStatus.CONFIRMED);
+        posted.setConfirmedBy(9L);
+        posted.getLines().get(0).setRawMaterialTypeId("rmt-pork");
+        posted.getLines().get(0).setPriceAnomalyExplanation("供应商解释为批发市场涨价");
+
+        when(noteRepository.findByIdAndFactoryId("N1", FACTORY)).thenReturn(Optional.of(draft));
+        when(noteRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(lineRepository.averageRecentConfirmedPriceByMaterial(
+                eq(FACTORY), eq("rmt-pork"), eq(LocalDate.of(2026, 6, 1))))
+                .thenReturn(new java.math.BigDecimal("10.00"));
+        when(postingService.postSupplierDeliveryToInventory(FACTORY, "N1", 9L)).thenReturn(posted);
+        when(arApService.recordPayableFromSource(eq(FACTORY), eq("SUP1"), eq("SUPPLIER_DELIVERY_NOTE"),
+                eq("N1"), any(), any(), eq(9L), anyString())).thenReturn(payableTxn("AP1"));
+        when(goldClient.upsertSupplierPriceBatch(eq(FACTORY), eq("N1"), anyList())).thenReturn(1);
+
+        SupplierDeliveryNote result = service.confirmNote(FACTORY, "N1", 9L);
+
+        assertEquals(DeliveryNoteStatus.CONFIRMED, result.getStatus());
+        verify(postingService).postSupplierDeliveryToInventory(FACTORY, "N1", 9L);
+        verify(arApService).recordPayableFromSource(eq(FACTORY), eq("SUP1"), eq("SUPPLIER_DELIVERY_NOTE"),
+                eq("N1"), any(), any(), eq(9L), anyString());
     }
 
     // ---- 8. reject invalid status ----
