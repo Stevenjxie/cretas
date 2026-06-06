@@ -43,6 +43,26 @@ const emit = defineEmits<{
 
 const authStore = useAuthStore();
 const factoryId = computed(() => authStore.factoryId);
+const isRestaurant = computed(() => authStore.factoryType === 'RESTAURANT');
+const dialogTitle = computed(() => (isRestaurant.value ? '新建报货单' : '新建请购单'));
+const supplierLabelText = computed(() => (isRestaurant.value ? '建议供应商' : '建议供应商'));
+const supplierPlaceholder = computed(() =>
+  isRestaurant.value
+    ? '可选: 厨师长不确定供应商时留空, 采购转单时再选'
+    : '选择供应商 (整张请购单走同一供应商)',
+);
+const expectedDateLabel = computed(() => (isRestaurant.value ? '希望到货日' : '期望交货日'));
+const reasonLabel = computed(() => (isRestaurant.value ? '报货原因' : '申请原因'));
+const reasonPlaceholder = computed(() =>
+  isRestaurant.value
+    ? '可选: 明日备货 / 厨房急用 / 库存不够 / 临时加菜'
+    : '可选: 简要说明请购理由 (生产急用 / 库存告缺 / 客户专单)',
+);
+const remarkPlaceholder = computed(() => (isRestaurant.value ? '可选: 档口、厨师长、验收备注等' : '可选: 补充说明'));
+const itemDividerText = computed(() => (isRestaurant.value ? '报货明细' : '请购明细'));
+const addLineText = computed(() => (isRestaurant.value ? '添加报货明细' : '添加明细行'));
+const createReadyText = computed(() => (isRestaurant.value ? '创建报货草稿' : '创建草稿'));
+const createdMessagePrefix = computed(() => (isRestaurant.value ? '已创建报货单' : '已创建请购单'));
 
 const visible = computed<boolean>({
   get: () => props.modelValue,
@@ -140,7 +160,7 @@ function removeItem(idx: number) {
 }
 
 const canSubmit = computed(() => {
-  if (!form.suggestedSupplierId) return false;
+  if (!isRestaurant.value && !form.suggestedSupplierId) return false;
   if (!form.items.length) return false;
   return form.items.every(
     (it) =>
@@ -160,7 +180,7 @@ async function handleCreate() {
       materialName: it.materialName || null,
       quantity: Number(it.quantity),
       unit: it.unit,
-      suggestedSupplierId: form.suggestedSupplierId,
+      suggestedSupplierId: form.suggestedSupplierId || null,
       remark: it.remark || null,
     }));
     const payload: CreatePurchaseRequisitionRequest = {
@@ -172,7 +192,7 @@ async function handleCreate() {
     const res = await createRequisition(factoryId.value, payload);
     if (res?.success) {
       const created = res.data;
-      ElMessage.success(`已创建请购单 ${created?.requisitionNumber || ''}`);
+      ElMessage.success(`${createdMessagePrefix.value} ${created?.requisitionNumber || ''}`);
       visible.value = false;
       emit('created');
     } else {
@@ -209,17 +229,18 @@ void _avoidUnusedWarning;
 <template>
   <el-dialog
     v-model="visible"
-    title="新建请购单"
+    :title="dialogTitle"
     width="900px"
     destroy-on-close
     :close-on-click-modal="false"
   >
     <el-form :model="form" label-width="110px">
-      <el-form-item label="建议供应商" required>
+      <el-form-item :label="supplierLabelText" :required="!isRestaurant">
         <el-select
           v-model="form.suggestedSupplierId"
-          placeholder="选择供应商 (整张请购单走同一供应商)"
+          :placeholder="supplierPlaceholder"
           filterable
+          clearable
           style="width: 100%"
         >
           <el-option
@@ -233,7 +254,7 @@ void _avoidUnusedWarning;
           已选: <strong>{{ supplierLabel }}</strong>
         </div>
       </el-form-item>
-      <el-form-item label="期望交货日">
+      <el-form-item :label="expectedDateLabel">
         <el-date-picker
           v-model="form.expectedDate"
           type="date"
@@ -241,14 +262,14 @@ void _avoidUnusedWarning;
           style="width: 220px"
         />
       </el-form-item>
-      <el-form-item label="申请原因">
+      <el-form-item :label="reasonLabel">
         <el-input
           v-model="form.reason"
           type="textarea"
           :rows="2"
           maxlength="5000"
           show-word-limit
-          placeholder="可选 — 简要说明请购理由 (生产急用 / 库存告罄 / 客户专单)"
+          :placeholder="reasonPlaceholder"
         />
       </el-form-item>
       <el-form-item label="备注">
@@ -258,11 +279,11 @@ void _avoidUnusedWarning;
           :rows="2"
           maxlength="5000"
           show-word-limit
-          placeholder="可选 — 补充说明"
+          :placeholder="remarkPlaceholder"
         />
       </el-form-item>
 
-      <el-divider>请购明细</el-divider>
+      <el-divider>{{ itemDividerText }}</el-divider>
 
       <div class="item-row item-header">
         <span style="width: 240px">物料</span>
@@ -331,7 +352,7 @@ void _avoidUnusedWarning;
         style="width: 100%; margin-top: 8px"
         @click="addItem"
       >
-        添加明细行
+        {{ addLineText }}
       </el-button>
     </el-form>
     <template #footer>
@@ -342,7 +363,7 @@ void _avoidUnusedWarning;
         :disabled="!canSubmit"
         @click="handleCreate"
       >
-        {{ canSubmit ? '创建草稿' : '请填写必填项' }}
+        {{ canSubmit ? createReadyText : '请填写必填项' }}
       </el-button>
     </template>
   </el-dialog>
