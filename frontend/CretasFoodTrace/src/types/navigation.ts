@@ -451,6 +451,8 @@ export type FAManagementStackParamList = {
   RecipeEdit: { recipeId?: string } | undefined;
   RequisitionList: undefined;
   RequisitionCreate: undefined;
+  ChefRequisitionList: undefined;
+  ChefRequisitionCreate: undefined;
   RequisitionApproval: undefined;
   RequisitionDetail: { requisitionId: string };
   WastageList: undefined;
@@ -461,6 +463,7 @@ export type FAManagementStackParamList = {
   SupplierDeliveryList: undefined;
   SupplierDeliveryCreate: undefined;
   SupplierDeliveryDetail: { noteId: string };
+  PriceAnomalyApproval: undefined;
 
   // Track D2 — 工序管理 (M-WP-1) + 产品工序配置 (M-WP-2)
   WorkProcessList: undefined;
@@ -648,6 +651,10 @@ export type WHInboundStackParamList = {
   WHInboundList: undefined;
   WHInboundDetail: { batchId: string };
   WHInboundCreate: undefined;
+  SupplierDeliveryList: undefined;
+  SupplierDeliveryCreate: undefined;
+  SupplierDeliveryDetail: { noteId: string };
+  PriceAnomalyApproval: undefined;
   WHInspect: { batchId: string };
   WHPutaway: { batchId: string };
   WHScanOperation: { type: 'inbound' | 'outbound'; orderId?: string; mode?: string };
