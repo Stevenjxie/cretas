@@ -29,7 +29,7 @@ import java.util.HashSet;
 public class RestaurantCostAttributionServiceImpl implements RestaurantCostAttributionService {
 
     private static final String UNASSIGNED = "UNASSIGNED";
-    private static final String UNASSIGNED_LABEL = "Unassigned";
+    private static final String UNASSIGNED_LABEL = "未指定";
 
     private final MaterialRequisitionRepository materialRequisitionRepository;
     private final WastageRecordRepository wastageRecordRepository;
@@ -89,7 +89,7 @@ public class RestaurantCostAttributionServiceImpl implements RestaurantCostAttri
         BigDecimal quantity = toBigDecimal(row[6]);
         BigDecimal cost = toBigDecimal(row[7]);
 
-        add(bySource, "REQUISITION", "Material requisition", count, quantity, cost);
+        add(bySource, "REQUISITION", "领料出库", count, quantity, cost);
         add(bySection, sectionKey(sectionCode), sectionLabel(sectionCode), count, quantity, cost);
         add(byStall, key(stallCode), label(stallCode), count, quantity, cost);
         Long personId = firstNonNull(operatorId, requestedBy);
@@ -112,7 +112,7 @@ public class RestaurantCostAttributionServiceImpl implements RestaurantCostAttri
         BigDecimal quantity = toBigDecimal(row[5]);
         BigDecimal cost = toBigDecimal(row[6]);
 
-        add(bySource, "WASTAGE", "Wastage", count, quantity, cost);
+        add(bySource, "WASTAGE", "损耗", count, quantity, cost);
         add(bySection, sectionKey(sectionCode), sectionLabel(sectionCode), count, quantity, cost);
         add(byStall, key(stallCode), label(stallCode), count, quantity, cost);
         addUserBucket(byPerson, operatorId, count, quantity, cost, userIds);
@@ -132,7 +132,7 @@ public class RestaurantCostAttributionServiceImpl implements RestaurantCostAttri
         BigDecimal quantity = toBigDecimal(row[4]);
         BigDecimal cost = toBigDecimal(row[5]);
 
-        add(bySource, "STOCKTAKING_SHORTAGE", "Stocktaking shortage", count, quantity, cost);
+        add(bySource, "STOCKTAKING_SHORTAGE", "盘点短缺", count, quantity, cost);
         add(bySection, sectionKey(sectionCode), sectionLabel(sectionCode), count, quantity, cost);
         add(byStall, key(stallCode), label(stallCode), count, quantity, cost);
         addUserBucket(byPerson, countedBy, count, quantity, cost, userIds);

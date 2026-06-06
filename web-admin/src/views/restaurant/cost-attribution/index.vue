@@ -117,10 +117,14 @@ async function loadSummary() {
     const resp = await getRestaurantCostAttributionSummary(factoryId.value, { startDate, endDate });
     summary.value = resp.data;
   } catch (error) {
-    ElMessage.error(getErrorMessage(error, '成本归因加载失败'));
+    showStickyError(`${getErrorMessage(error, '成本归因加载失败')}。请确认当前账号有财务查看权限，或刷新后重试。`);
   } finally {
     loading.value = false;
   }
+}
+
+function showStickyError(message: string) {
+  ElMessage({ message, type: 'error', duration: 0, showClose: true });
 }
 
 function money(value?: number | null) {
