@@ -27,6 +27,13 @@ vi.mock('@/store/modules/auth', () => ({
   }),
 }));
 
+vi.mock('@/store/modules/permission', () => ({
+  usePermissionStore: () => ({
+    canWrite: () => true,
+    canViewPrice: true,
+  }),
+}));
+
 const mockUpsertTarget = vi.fn().mockResolvedValue({
   success: true,
   data: { id: 1, periodKey: '2026-06', targetValue: 500000, updatedAt: '2026-06-03T10:00:00' },
@@ -81,6 +88,14 @@ const globalStubs = {
 };
 
 const vLoadingStub = { mounted() {}, updated() {}, unmounted() {} };
+
+vi.mock('@/utils/echarts', () => ({
+  default: {
+    init: () => ({ setOption: vi.fn(), resize: vi.fn(), dispose: vi.fn() }),
+    connect: vi.fn(),
+    graphic: { LinearGradient: class { constructor() {} } },
+  },
+}));
 
 import TargetHierarchy from '../target-hierarchy.vue';
 

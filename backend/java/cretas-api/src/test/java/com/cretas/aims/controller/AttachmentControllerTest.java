@@ -14,7 +14,6 @@ import com.cretas.aims.service.attachment.dto.RegisterAttachmentRequest;
 import com.cretas.aims.service.attachment.dto.UpdateAttachmentRequest;
 import com.cretas.aims.service.attachment.dto.UploadUrlResponse;
 import jakarta.servlet.http.HttpServletRequest;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -57,8 +56,7 @@ class AttachmentControllerTest {
     private static final String FACTORY_ID = "F006";
     private static final String ATT_ID = "att-uuid-001";
 
-    @BeforeEach
-    void stubCurrentUser() {
+    private void stubCurrentUser() {
         User user = new User();
         user.setId(42L);
         when(permissionResolver.resolveCurrentUser(request)).thenReturn(user);
@@ -141,6 +139,7 @@ class AttachmentControllerTest {
     @Test
     @DisplayName("✅ POST /attachments 注册 — 路径 factoryId 透传给 service")
     void register_passesFactoryIdToService() {
+        stubCurrentUser();
         RegisterAttachmentRequest req = new RegisterAttachmentRequest();
         req.setEntityType(EntityType.PURCHASE_ORDER);
         req.setEntityId("PO-001");
@@ -169,6 +168,7 @@ class AttachmentControllerTest {
     @Test
     @DisplayName("✅ PUT /attachments/{id} 更新")
     void update_invokesService() {
+        stubCurrentUser();
         Attachment existing = new Attachment();
         existing.setId(ATT_ID);
         existing.setEntityType(EntityType.PURCHASE_ORDER);
