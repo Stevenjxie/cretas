@@ -1535,7 +1535,7 @@ const businessRoutes: RouteRecordRaw[] = [
             meta: {
               requiresAuth: true,
               title: '供应商月对账',
-              module: 'dashboard',
+              module: 'finance',
               roles: ['factory_super_admin', 'platform_admin', 'permission_admin', 'restaurant_manager', 'finance_manager']
             },
           },
@@ -1546,7 +1546,7 @@ const businessRoutes: RouteRecordRaw[] = [
             meta: {
               requiresAuth: true,
               title: '成本归因',
-              module: 'dashboard',
+              module: 'finance',
               roles: ['factory_super_admin', 'platform_admin', 'permission_admin', 'restaurant_manager', 'finance_manager']
             },
           },

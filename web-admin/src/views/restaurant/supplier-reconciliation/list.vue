@@ -192,6 +192,10 @@ const canLoad = computed(() => Boolean(factoryId.value));
 
 onMounted(loadAll);
 
+function showStickyError(message: string) {
+  ElMessage({ message, type: 'error', duration: 0, showClose: true });
+}
+
 async function loadAll() {
   await Promise.all([loadRows(), loadSupplierOptions()]);
 }
@@ -204,7 +208,7 @@ async function loadRows() {
     rows.value = resp.data.content || [];
     total.value = resp.data.totalElements || 0;
   } catch (error) {
-    ElMessage.error(getErrorMessage(error, '供应商月对账加载失败'));
+    showStickyError(getErrorMessage(error, '供应商月对账加载失败'));
   } finally {
     loading.value = false;
   }
@@ -237,7 +241,7 @@ async function createDraft() {
     draftVisible.value = false;
     await loadRows();
   } catch (error) {
-    ElMessage.error(getErrorMessage(error, '生成月对账草稿失败'));
+    showStickyError(getErrorMessage(error, '生成月对账草稿失败'));
   } finally {
     drafting.value = false;
   }
@@ -254,7 +258,7 @@ async function confirmRow(row: SupplierMonthlyReconciliationDto) {
     ElMessage.success('月对账已确认');
     await loadRows();
   } catch (error) {
-    ElMessage.error(getErrorMessage(error, '确认月对账失败'));
+    showStickyError(getErrorMessage(error, '确认月对账失败'));
   }
 }
 
