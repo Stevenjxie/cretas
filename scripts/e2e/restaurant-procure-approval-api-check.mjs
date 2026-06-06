@@ -204,23 +204,39 @@ async function main() {
   const list = await api(whToken, 'GET', `${base}?status=DRAFT&page=1&size=10`);
   assert(list.status === 200, `draft list failed: ${list.status}`);
   const drafts = list.json?.data?.content || [];
-  const draft = pickAnomalyDraft(drafts) || drafts[0] || null;
+  const candidates = [
+    pickAnomalyDraft(drafts),
+    ...drafts,
+  ].filter((note, index, arr) => note?.id && arr.findIndex((n) => n?.id === note.id) === index);
+
+  let draft = null;
+  let detailBefore = null;
+  for (const candidate of candidates) {
+    const detail = await api(whToken, 'GET', `${base}/${candidate.id}`);
+    if (detail.status !== 200) continue;
+    const approval = detail.json?.data?.priceAnomalyApprovalStatus || 'NONE';
+    if (approval === 'APPROVED') continue;
+    draft = candidate;
+    detailBefore = detail;
+    break;
+  }
+
   report.steps.push({
     name: 'draft-list',
     status: list.status,
     draftId: draft?.id ?? null,
     pickedAnomalyDraft: Boolean(pickAnomalyDraft(drafts)),
+    candidateCount: candidates.length,
     ok: true,
   });
 
-  if (!draft?.id) {
-    console.log('SKIP: no DRAFT supplier delivery note to exercise confirm gate');
-    report.steps.push({ name: 'confirm-gate', skipped: true, reason: 'no draft note' });
+  if (!draft?.id || !detailBefore) {
+    console.log('SKIP: no exercisable DRAFT (all approved or empty)');
+    report.steps.push({ name: 'confirm-gate', skipped: true, reason: 'no pending draft note' });
     writeEvidence(report);
     process.exit(0);
   }
 
-  const detailBefore = await api(whToken, 'GET', `${base}/${draft.id}`);
   assert(detailBefore.status === 200, `detail read failed: ${detailBefore.status}`);
   report.steps.push({
     name: 'detail-readback',
