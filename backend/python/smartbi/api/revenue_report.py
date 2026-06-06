@@ -28,6 +28,7 @@ from fastapi import APIRouter, File, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
+from smartbi_compat._rbac_role import RbacForbiddenException
 from smartbi.api._revenue_report_helpers import (
     REVENUE_REPORT_CACHE,
     _enforce_factory_match,
@@ -39,6 +40,15 @@ logger = logging.getLogger(__name__)
 
 
 router = APIRouter(prefix="/api/smartbi/{factory_id}/revenue-report")
+
+_REVENUE_REPORT_ROLES = {
+    "factory_super_admin",
+    "platform_admin",
+    "platform_super_admin",
+    "permission_admin",
+    "finance_manager",
+    "restaurant_manager",
+}
 
 
 # ─── DI helper ──────────────────────────────────────────────────────────
@@ -132,6 +142,13 @@ def _user_id_from_request(request: Request) -> str:
     return request.headers.get("x-user-id") or "anonymous"
 
 
+def _require_revenue_report_role(request: Request, action: str) -> None:
+    """Revenue report streams full POS revenue, so it is stricter than analytics:read."""
+    role = getattr(request.state, "role", None) if hasattr(request, "state") else None
+    if role not in _REVENUE_REPORT_ROLES:
+        raise RbacForbiddenException(role, "analytics", action)
+
+
 # ─── Endpoints ──────────────────────────────────────────────────────────
 
 @router.post("/upload")
@@ -151,6 +168,7 @@ async def upload_pos_files(
       4. After all files: materialize Gold for the affected date range
     """
     caller_factory = _enforce_factory_match(factory_id, request)
+    _require_revenue_report_role(request, "write")
     user_id = _extract_caller_user_id(request)
     pool = await _get_pool()
     batch_id = uuid.uuid4()
@@ -322,6 +340,7 @@ async def prepare_revenue_report(
 ):
     """LLM Tool path. Returns metadata + download_url (no streaming xlsx)."""
     caller_factory = _enforce_factory_match(factory_id, request)
+    _require_revenue_report_role(request, "read")
     pool = await _get_pool()
 
     store_ids = await _resolve_store_ids(pool, caller_factory, body.store_names)
@@ -354,6 +373,7 @@ async def generate_revenue_report(
 ):
     """Web UI path. Streams xlsx + carries X-Cache-Hit/X-Gold-Materialized-At headers."""
     caller_factory = _enforce_factory_match(factory_id, request)
+    _require_revenue_report_role(request, "read")
     pool = await _get_pool()
 
     store_ids = await _resolve_store_ids(pool, caller_factory, body.store_names)
@@ -387,6 +407,7 @@ async def generate_revenue_report(
 async def download_cached(factory_id: str, cache_key: str, request: Request):
     """Stream cached xlsx bytes; cache miss → 410 (re-generate explicitly via /generate)."""
     caller_factory = _enforce_factory_match(factory_id, request)
+    _require_revenue_report_role(request, "read")
     if not cache_key.startswith(f"revenue_report:{caller_factory}:"):
         raise HTTPException(status_code=403, detail="cache_key 不属于本 factory")
 
@@ -415,6 +436,7 @@ async def list_stores(
 ):
     """dim_store list. Frontend uses for multi-select dropdown."""
     caller_factory = _enforce_factory_match(factory_id, request)
+    _require_revenue_report_role(request, "read")
     pool = await _get_pool()
 
     async with pool.acquire() as conn:
@@ -443,6 +465,7 @@ async def list_audit_log(
 ):
     """Recent N generation events. Spec §10.7 + §11.6."""
     caller_factory = _enforce_factory_match(factory_id, request)
+    _require_revenue_report_role(request, "read")
     if not (1 <= limit <= 100):
         raise HTTPException(status_code=400, detail="limit must be in [1, 100]")
 

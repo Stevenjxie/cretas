@@ -113,6 +113,7 @@ const smartBIRoutes: RouteRecordRaw[] = [
           title: '收入管理报表',
           icon: 'Money',
           module: 'analytics',
+          roles: ['factory_super_admin', 'platform_admin', 'permission_admin', 'finance_manager', 'restaurant_manager'],
           hideForFactoryTypes: ['FACTORY'],  // restaurant tenants only
         },
       },
