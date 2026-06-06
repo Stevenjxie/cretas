@@ -232,12 +232,13 @@ export const menuConfig: MenuItem[] = [
     // (业态自适应, 不重复造); 菜品四象限+毛利合并为 菜品分析双tab; 点评改名平台口碑。
     // spec: 2026-06-01-restaurant-web-admin-ia-redesign-design.md v2。
     path: '/restaurant', title: '餐饮运营', icon: 'KnifeFork', module: 'dashboard',
-    roles: ['factory_super_admin', 'platform_admin', 'permission_admin', 'restaurant_manager', 'warehouse_manager', 'procurement_manager', 'finance_manager'],
+    roles: ['factory_super_admin', 'platform_admin', 'permission_admin', 'restaurant_manager', 'warehouse_manager', 'procurement_manager', 'finance_manager', 'sales_manager'],
     hideForFactoryTypes: ['FACTORY'],
     children: [
       // -- 深度分析 (Gold 读层) --
       // 店长经营 KPI 看板 (single-store MVP 2026-06-04): 6 KPI 一屏 + 健康灯, 店长高频入口。
-      { path: '/restaurant/analytics/role-kpi', title: '经营看板', icon: '', module: 'restaurant', groupLabel: '深度分析' },
+      { path: '/restaurant/analytics/role-kpi', title: '经营看板', icon: '', module: 'analytics', groupLabel: '深度分析',
+        roles: ['factory_super_admin', 'platform_admin', 'permission_admin', 'restaurant_manager', 'finance_manager', 'sales_manager'] },
       { path: '/restaurant/analytics/dishes', title: '菜品分析', icon: '', module: 'restaurant' },
       { path: '/restaurant/analytics/stores', title: '门店对比', icon: '', module: 'restaurant' },
       { path: '/restaurant/analytics/platform', title: '平台口碑', icon: '', module: 'restaurant' },

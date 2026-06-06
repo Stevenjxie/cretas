@@ -1436,7 +1436,7 @@ const businessRoutes: RouteRecordRaw[] = [
             path: 'analytics/role-kpi',
             name: 'RestaurantRoleKpiDashboard',
             component: () => import('@/views/restaurant/analytics/role-kpi-dashboard.vue'),
-            meta: { requiresAuth: true, title: '经营看板', module: 'restaurant' }
+            meta: { requiresAuth: true, title: '经营看板', module: 'analytics' }
           },
           {
             // IA v2: 菜品分析双tab (整合 菜品四象限 + 菜品毛利)

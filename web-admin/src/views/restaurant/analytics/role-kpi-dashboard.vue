@@ -93,7 +93,7 @@
         </el-card>
       </div>
 
-      <p v-if="!isEmpty && !canViewPrice" class="rbac-hint">
+      <p v-if="!isEmpty && hasMaskedMoney" class="rbac-hint">
         ⓘ 当前角色无价格查看权限，营收/客单价等金额已隐藏 (显示 "—")；比率与计数正常展示。
       </p>
     </el-card>
@@ -131,7 +131,6 @@ interface DashboardPayload {
 }
 
 const permissionStore = usePermissionStore()
-const canViewPrice = computed(() => permissionStore.canViewPrice)
 const roleLabel = computed(() => {
   const r = permissionStore.currentRole || '—'
   return `角色: ${r}`
@@ -145,6 +144,7 @@ const kpis = computed<KpiCard[]>(() => payload.value?.kpis ?? [])
 const overallHealth = computed(() => payload.value?.overallHealth ?? '')
 const isEmpty = computed(() => !payload.value || payload.value.empty === true || kpis.value.length === 0)
 const emptyMessage = computed(() => payload.value?.message ?? '')
+const hasMaskedMoney = computed(() => kpis.value.some((k) => isMasked(k)))
 
 const storeLabel = computed(() => {
   const n = payload.value?.storeName
