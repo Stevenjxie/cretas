@@ -8,6 +8,7 @@ import com.cretas.aims.entity.finance.ArApTransaction;
 import com.cretas.aims.entity.restaurant.SupplierDeliveryNote;
 import com.cretas.aims.entity.restaurant.SupplierMonthlyReconciliation;
 import com.cretas.aims.entity.restaurant.enums.DeliveryNoteStatus;
+import com.cretas.aims.entity.restaurant.enums.PriceAnomalyApprovalStatus;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.SupplierRepository;
 import com.cretas.aims.repository.finance.ArApTransactionRepository;
@@ -21,6 +22,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.time.YearMonth;
 import java.util.List;
 import java.util.Optional;
@@ -122,6 +124,42 @@ class SupplierMonthlyReconciliationServiceImplTest {
     }
 
     @Test
+    void createOrRefreshDraft_enrichesDeliveryEvidenceFromNote() {
+        SupplierMonthlyReconciliation existing = draft("REC1");
+        SupplierDeliveryNote note = deliveryNoteWithEvidence("DN1", "SDN-001", "100.00");
+        ArApTransaction invoice = apInvoice("AP1", "DN1", "100.00");
+
+        when(supplierRepository.findByIdAndFactoryId(SUPPLIER_ID, FACTORY)).thenReturn(Optional.of(supplier()));
+        when(reconciliationRepository.findByFactoryIdAndSupplierIdAndReconciliationMonthAndDeletedAtIsNull(
+                FACTORY, SUPPLIER_ID, MONTH.atDay(1))).thenReturn(Optional.of(existing));
+        when(deliveryNoteRepository.findConfirmedBySupplierAndDateRange(
+                FACTORY, SUPPLIER_ID, MONTH.atDay(1), MONTH.atEndOfMonth())).thenReturn(List.of(note));
+        when(deliveryNoteRepository.findByIdAndFactoryId("DN1", FACTORY)).thenReturn(Optional.of(note));
+        when(arApTransactionRepository.findByFactoryIdAndSourceTypeAndSourceIdInAndTransactionTypeAndDeletedAtIsNull(
+                FACTORY, "SUPPLIER_DELIVERY_NOTE", List.of("DN1"), ArApTransactionType.AP_INVOICE))
+                .thenReturn(List.of(invoice));
+        when(arApTransactionRepository.findByFactoryIdAndCounterpartyTypeAndCounterpartyIdAndTransactionTypeAndTransactionDateBetweenOrderByTransactionDateAscCreatedAtAsc(
+                FACTORY, CounterpartyType.SUPPLIER, SUPPLIER_ID, ArApTransactionType.AP_INVOICE,
+                MONTH.atDay(1), MONTH.atEndOfMonth())).thenReturn(List.of(invoice));
+        when(arApTransactionRepository.findByCounterpartyAndTypesAndDateRange(any(), any(), any(), any(), any(), any()))
+                .thenReturn(List.of());
+        when(reconciliationRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        SupplierMonthlyReconciliationDto dto =
+                service.createOrRefreshDraft(FACTORY, SUPPLIER_ID, MONTH, 7L);
+
+        assertThat(dto.getLines()).hasSize(1);
+        SupplierMonthlyReconciliationDto.LineDto line = dto.getLines().get(0);
+        assertThat(line.getPhotoOssUrl()).isEqualTo("https://oss/delivery.jpg");
+        assertThat(line.getVoiceTranscriptText()).isEqualTo("供应商电话确认今日涨价");
+        assertThat(line.getSupplierContactNote()).isEqualTo("已电话询价");
+        assertThat(line.getPriceAnomalyApprovalStatus()).isEqualTo("APPROVED");
+        assertThat(line.getPriceAnomalyApprovedBy()).isEqualTo(99L);
+        assertThat(line.getPriceAnomalyApprovalComment()).isEqualTo("老板同意按供应商报价入库");
+        assertThat(line.getPayableTransactionId()).isEqualTo("AP-PAY-1");
+    }
+
+    @Test
     void confirm_blocksWhenDeliveryAndApAmountsDiffer() {
         SupplierMonthlyReconciliation existing = draft("REC1");
         SupplierDeliveryNote note = deliveryNote("DN1", "SDN-001", "100.00");
@@ -176,6 +214,20 @@ class SupplierMonthlyReconciliationServiceImplTest {
         note.setDeliveryDate(LocalDate.of(2026, 6, 5));
         note.setStatus(DeliveryNoteStatus.CONFIRMED);
         note.setTotalAmount(amount == null ? null : new BigDecimal(amount));
+        return note;
+    }
+
+    private SupplierDeliveryNote deliveryNoteWithEvidence(String id, String number, String amount) {
+        SupplierDeliveryNote note = deliveryNote(id, number, amount);
+        note.setPhotoOssUrl("https://oss/delivery.jpg");
+        note.setVoiceTranscriptText("供应商电话确认今日涨价");
+        note.setSupplierContactNote("已电话询价");
+        note.setPriceAnomalyApprovalStatus(PriceAnomalyApprovalStatus.APPROVED);
+        note.setPriceAnomalyApprovedBy(99L);
+        note.setPriceAnomalyApprovedAt(LocalDateTime.of(2026, 6, 5, 10, 0));
+        note.setPriceAnomalyApprovalComment("老板同意按供应商报价入库");
+        note.setPayableTransactionId("AP-PAY-1");
+        note.setPayablePostedAt(LocalDateTime.of(2026, 6, 5, 11, 0));
         return note;
     }
 

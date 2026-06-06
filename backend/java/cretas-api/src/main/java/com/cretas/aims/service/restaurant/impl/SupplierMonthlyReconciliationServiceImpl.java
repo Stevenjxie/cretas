@@ -350,12 +350,15 @@ public class SupplierMonthlyReconciliationServiceImpl implements SupplierMonthly
                 .confirmedAt(r.getConfirmedAt() != null ? r.getConfirmedAt().toString() : null)
                 .createdAt(r.getCreatedAt() != null ? r.getCreatedAt().toString() : null)
                 .updatedAt(r.getUpdatedAt() != null ? r.getUpdatedAt().toString() : null)
-                .lines(r.getLines() == null ? List.of() : r.getLines().stream().map(this::toLineDto).toList())
+                .lines(r.getLines() == null ? List.of() : r.getLines().stream()
+                        .map(line -> toLineDto(r.getFactoryId(), line)).toList())
                 .build();
     }
 
-    private SupplierMonthlyReconciliationDto.LineDto toLineDto(SupplierMonthlyReconciliationLine line) {
-        return SupplierMonthlyReconciliationDto.LineDto.builder()
+    private SupplierMonthlyReconciliationDto.LineDto toLineDto(String factoryId,
+            SupplierMonthlyReconciliationLine line) {
+        SupplierMonthlyReconciliationDto.LineDto.LineDtoBuilder builder =
+                SupplierMonthlyReconciliationDto.LineDto.builder()
                 .id(line.getId())
                 .lineType(line.getLineType() != null ? line.getLineType().name() : null)
                 .deliveryNoteId(line.getDeliveryNoteId())
@@ -369,7 +372,24 @@ public class SupplierMonthlyReconciliationServiceImpl implements SupplierMonthly
                 .apAmount(line.getApAmount())
                 .differenceAmount(line.getDifferenceAmount())
                 .lineStatus(line.getLineStatus() != null ? line.getLineStatus().name() : null)
-                .remark(line.getRemark())
-                .build();
+                .remark(line.getRemark());
+        if (StringUtils.hasText(line.getDeliveryNoteId())) {
+            deliveryNoteRepository.findByIdAndFactoryId(line.getDeliveryNoteId(), factoryId)
+                    .ifPresent(note -> builder
+                            .photoOssUrl(note.getPhotoOssUrl())
+                            .voiceAudioUrl(note.getVoiceAudioUrl())
+                            .voiceTranscriptText(note.getVoiceTranscriptText())
+                            .supplierContactNote(note.getSupplierContactNote())
+                            .priceAnomalyApprovalStatus(note.getPriceAnomalyApprovalStatus() != null
+                                    ? note.getPriceAnomalyApprovalStatus().name() : null)
+                            .priceAnomalyApprovedBy(note.getPriceAnomalyApprovedBy())
+                            .priceAnomalyApprovedAt(note.getPriceAnomalyApprovedAt() != null
+                                    ? note.getPriceAnomalyApprovedAt().toString() : null)
+                            .priceAnomalyApprovalComment(note.getPriceAnomalyApprovalComment())
+                            .payableTransactionId(note.getPayableTransactionId())
+                            .payablePostedAt(note.getPayablePostedAt() != null
+                                    ? note.getPayablePostedAt().toString() : null));
+        }
+        return builder.build();
     }
 }

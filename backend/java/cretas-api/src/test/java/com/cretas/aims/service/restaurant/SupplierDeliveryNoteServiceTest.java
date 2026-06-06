@@ -7,7 +7,9 @@ import com.cretas.aims.entity.finance.ArApTransaction;
 import com.cretas.aims.entity.restaurant.SupplierDeliveryNote;
 import com.cretas.aims.entity.restaurant.SupplierDeliveryNoteLine;
 import com.cretas.aims.entity.restaurant.enums.DeliveryNoteStatus;
+import com.cretas.aims.entity.restaurant.enums.PriceAnomalyApprovalStatus;
 import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.service.notification.NotificationService;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.repository.restaurant.SupplierDeliveryNoteLineRepository;
 import com.cretas.aims.repository.restaurant.SupplierDeliveryNoteRepository;
@@ -63,6 +65,7 @@ class SupplierDeliveryNoteServiceTest {
     @Mock SupplierPriceGoldClient goldClient;
     @Mock RestaurantInventoryPostingService postingService;
     @Mock ArApService arApService;
+    @Mock NotificationService notificationService;
 
     @InjectMocks SupplierDeliveryNoteServiceImpl service;
 
@@ -238,19 +241,30 @@ class SupplierDeliveryNoteServiceTest {
     }
 
     @Test
-    @DisplayName("confirmNote 进价异常已有解释时允许过账")
-    void confirmNote_priceAnomalyWithExplanation_allowsPosting() throws IOException {
-        SupplierDeliveryNote draft = draftWithLine();
-        SupplierDeliveryNoteLine draftLine = draft.getLines().get(0);
-        draftLine.setRawMaterialTypeId("rmt-pork");
-        draftLine.setUnitPrice(new java.math.BigDecimal("13.00"));
-        draftLine.setPriceAnomalyReasonCode("MARKET_PRICE_UP");
-        draftLine.setPriceAnomalyExplanation("供应商解释为批发市场涨价");
+    @DisplayName("confirmNote 进价异常已有解释但未审批时阻断")
+    void confirmNote_priceAnomalyWithExplanationWithoutApproval_blocksPosting() {
+        SupplierDeliveryNote draft = draftWithAnomalyLine();
+        when(noteRepository.findByIdAndFactoryId("N1", FACTORY)).thenReturn(Optional.of(draft));
+        when(lineRepository.averageRecentConfirmedPriceByMaterial(
+                eq(FACTORY), eq("rmt-pork"), eq(LocalDate.of(2026, 6, 1))))
+                .thenReturn(new java.math.BigDecimal("10.00"));
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> service.confirmNote(FACTORY, "N1", 9L));
+
+        assertEquals(400, ex.getCode());
+        assertEquals("PRICE_ANOMALY_APPROVAL_REQUIRED", ex.getErrorCode());
+        verifyNoInteractions(postingService);
+    }
+
+    @Test
+    @DisplayName("confirmNote 进价异常已批准后允许过账")
+    void confirmNote_priceAnomalyApproved_allowsPosting() throws IOException {
+        SupplierDeliveryNote draft = draftWithAnomalyLine();
+        draft.setPriceAnomalyApprovalStatus(PriceAnomalyApprovalStatus.APPROVED);
         SupplierDeliveryNote posted = draftWithLine();
         posted.setStatus(DeliveryNoteStatus.CONFIRMED);
         posted.setConfirmedBy(9L);
-        posted.getLines().get(0).setRawMaterialTypeId("rmt-pork");
-        posted.getLines().get(0).setPriceAnomalyExplanation("供应商解释为批发市场涨价");
 
         when(noteRepository.findByIdAndFactoryId("N1", FACTORY)).thenReturn(Optional.of(draft));
         when(noteRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
@@ -266,8 +280,84 @@ class SupplierDeliveryNoteServiceTest {
 
         assertEquals(DeliveryNoteStatus.CONFIRMED, result.getStatus());
         verify(postingService).postSupplierDeliveryToInventory(FACTORY, "N1", 9L);
-        verify(arApService).recordPayableFromSource(eq(FACTORY), eq("SUP1"), eq("SUPPLIER_DELIVERY_NOTE"),
-                eq("N1"), any(), any(), eq(9L), anyString());
+    }
+
+    @Test
+    @DisplayName("submit 审批后 confirm 仍被 PENDING 阻断")
+    void confirmNote_afterSubmitApproval_blocksPosting() {
+        SupplierDeliveryNote draft = draftWithAnomalyLine();
+        draft.setPriceAnomalyApprovalStatus(PriceAnomalyApprovalStatus.PENDING);
+        when(noteRepository.findByIdAndFactoryId("N1", FACTORY)).thenReturn(Optional.of(draft));
+        when(lineRepository.averageRecentConfirmedPriceByMaterial(
+                eq(FACTORY), eq("rmt-pork"), eq(LocalDate.of(2026, 6, 1))))
+                .thenReturn(new java.math.BigDecimal("10.00"));
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> service.confirmNote(FACTORY, "N1", 9L));
+
+        assertEquals(409, ex.getCode());
+        assertEquals("PRICE_ANOMALY_PENDING_APPROVAL", ex.getErrorCode());
+        assertEquals("priceAnomalyApprovalStatus", ex.getHintTarget());
+        verifyNoInteractions(postingService);
+    }
+
+    @Test
+    @DisplayName("submitPriceAnomalyApproval 设置 PENDING 并通知老板")
+    void submitPriceAnomalyApproval_setsPending() {
+        SupplierDeliveryNote draft = draftWithAnomalyLine();
+        when(noteRepository.findByIdAndFactoryId("N1", FACTORY)).thenReturn(Optional.of(draft));
+        when(noteRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(lineRepository.averageRecentConfirmedPriceByMaterial(
+                eq(FACTORY), eq("rmt-pork"), eq(LocalDate.of(2026, 6, 1))))
+                .thenReturn(new java.math.BigDecimal("10.00"));
+
+        SupplierDeliveryNote result = service.submitPriceAnomalyApproval(FACTORY, "N1", 9L);
+
+        assertEquals(PriceAnomalyApprovalStatus.PENDING, result.getPriceAnomalyApprovalStatus());
+        assertEquals(9L, result.getPriceAnomalySubmittedBy());
+        verify(notificationService, times(2)).notifyRole(eq(FACTORY), anyString(), anyString(), anyString());
+    }
+
+    @Test
+    @DisplayName("approvePriceAnomaly 非老板角色 403")
+    void approvePriceAnomaly_forbiddenRole() {
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> service.approvePriceAnomaly(FACTORY, "N1", "ok", 9L, "warehouse_manager"));
+
+        assertEquals(403, ex.getCode());
+        verify(noteRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("approvePriceAnomaly 重复批准 409")
+    void approvePriceAnomaly_duplicateApproved() {
+        SupplierDeliveryNote draft = draftWithAnomalyLine();
+        draft.setPriceAnomalyApprovalStatus(PriceAnomalyApprovalStatus.APPROVED);
+        when(noteRepository.findByIdAndFactoryId("N1", FACTORY)).thenReturn(Optional.of(draft));
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> service.approvePriceAnomaly(FACTORY, "N1", "ok", 9L, "factory_super_admin"));
+
+        assertEquals(409, ex.getCode());
+        assertEquals("PRICE_ANOMALY_ALREADY_APPROVED", ex.getErrorCode());
+    }
+
+    @Test
+    @DisplayName("rejectPriceAnomaly 后 confirm 失败")
+    void confirmNote_afterReject_blocksPosting() {
+        SupplierDeliveryNote draft = draftWithAnomalyLine();
+        draft.setPriceAnomalyApprovalStatus(PriceAnomalyApprovalStatus.REJECTED);
+        when(noteRepository.findByIdAndFactoryId("N1", FACTORY)).thenReturn(Optional.of(draft));
+        when(lineRepository.averageRecentConfirmedPriceByMaterial(
+                eq(FACTORY), eq("rmt-pork"), eq(LocalDate.of(2026, 6, 1))))
+                .thenReturn(new java.math.BigDecimal("10.00"));
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> service.confirmNote(FACTORY, "N1", 9L));
+
+        assertEquals(409, ex.getCode());
+        assertEquals("PRICE_ANOMALY_REJECTED", ex.getErrorCode());
+        verifyNoInteractions(postingService);
     }
 
     // ---- 8. reject invalid status ----
@@ -381,6 +471,17 @@ class SupplierDeliveryNoteServiceTest {
     }
 
     // ---- helper ----
+    private SupplierDeliveryNote draftWithAnomalyLine() {
+        SupplierDeliveryNote note = draftWithLine();
+        SupplierDeliveryNoteLine line = note.getLines().get(0);
+        line.setRawMaterialTypeId("rmt-pork");
+        line.setUnitPrice(new java.math.BigDecimal("13.00"));
+        line.setPriceAnomalyFlag(true);
+        line.setPriceAnomalyReasonCode("MARKET_PRICE_UP");
+        line.setPriceAnomalyExplanation("供应商解释为批发市场涨价");
+        return note;
+    }
+
     private SupplierDeliveryNote draftWithLine() {
         SupplierDeliveryNote note = new SupplierDeliveryNote();
         note.setId("N1");

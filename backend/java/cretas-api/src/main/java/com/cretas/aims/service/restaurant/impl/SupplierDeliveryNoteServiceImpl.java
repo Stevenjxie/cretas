@@ -7,14 +7,17 @@ import com.cretas.aims.entity.RawMaterialType;
 import com.cretas.aims.entity.finance.ArApTransaction;
 import com.cretas.aims.entity.restaurant.SupplierDeliveryNote;
 import com.cretas.aims.entity.restaurant.SupplierDeliveryNoteLine;
+import com.cretas.aims.entity.enums.FactoryUserRole;
 import com.cretas.aims.entity.restaurant.enums.DeliveryNoteSourceType;
 import com.cretas.aims.entity.restaurant.enums.DeliveryNoteStatus;
+import com.cretas.aims.entity.restaurant.enums.PriceAnomalyApprovalStatus;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.repository.restaurant.SupplierDeliveryNoteLineRepository;
 import com.cretas.aims.repository.restaurant.SupplierDeliveryNoteRepository;
 import com.cretas.aims.service.OssService;
 import com.cretas.aims.service.finance.ArApService;
+import com.cretas.aims.service.notification.NotificationService;
 import com.cretas.aims.service.restaurant.RestaurantInventoryPostingService;
 import com.cretas.aims.service.restaurant.SupplierDeliveryNoteService;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -23,6 +26,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -36,6 +40,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -57,8 +62,15 @@ public class SupplierDeliveryNoteServiceImpl implements SupplierDeliveryNoteServ
     private final SupplierPriceGoldClient goldClient;
     private final RestaurantInventoryPostingService postingService;
     private final ArApService arApService;
+    private final NotificationService notificationService;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
+
+    private static final Set<String> PRICE_ANOMALY_APPROVER_ROLES = Set.of(
+            FactoryUserRole.factory_super_admin.name(),
+            FactoryUserRole.restaurant_manager.name(),
+            FactoryUserRole.platform_admin.name()
+    );
 
     /** 低置信阈值 — 前端据此显示重拍提示 (Rule 5)。 */
     private static final BigDecimal LOW_CONFIDENCE_THRESHOLD = new BigDecimal("0.75");
@@ -298,6 +310,9 @@ public class SupplierDeliveryNoteServiceImpl implements SupplierDeliveryNoteServ
                     .withHint("请在送货单行项目里填写涨价原因和供应商解释，再确认验收入库")
                     .withHintTarget("priceAnomalyExplanation");
         }
+        if (hasPriceAnomaly(draft)) {
+            assertPriceAnomalyApproved(draft);
+        }
         noteRepository.save(draft);
 
         SupplierDeliveryNote saved;
@@ -436,6 +451,173 @@ public class SupplierDeliveryNoteServiceImpl implements SupplierDeliveryNoteServ
     }
 
     @Override
+    @Transactional
+    public SupplierDeliveryNote submitPriceAnomalyApproval(String factoryId, String noteId, Long userId) {
+        SupplierDeliveryNote note = mustFindDraftOrAny(factoryId, noteId);
+        if (note.getStatus() != DeliveryNoteStatus.DRAFT) {
+            throw invalidDraftStatus();
+        }
+        refreshPriceAnomalies(note);
+        if (!hasPriceAnomaly(note)) {
+            throw new BusinessException(400, "该送货单无价格异常，无需提交老板审批")
+                    .withCode("PRICE_ANOMALY_NOT_FOUND")
+                    .withHint("请直接确认验收入库")
+                    .withHintTarget("priceAnomalyApprovalStatus");
+        }
+        List<SupplierDeliveryNoteLine> unexplained = note.getLines().stream()
+                .filter(line -> Boolean.TRUE.equals(line.getPriceAnomalyFlag()))
+                .filter(line -> isBlank(line.getPriceAnomalyExplanation()))
+                .toList();
+        if (!unexplained.isEmpty()) {
+            throw new BusinessException(409, "进价异常需先填写供应商解释: " + unexplained.get(0).getIngredientName())
+                    .withCode("PRICE_ANOMALY_EXPLANATION_REQUIRED")
+                    .withHint("请在送货单行项目里填写涨价原因和供应商解释，再提交老板审批")
+                    .withHintTarget("priceAnomalyExplanation");
+        }
+        PriceAnomalyApprovalStatus current = note.getPriceAnomalyApprovalStatus() != null
+                ? note.getPriceAnomalyApprovalStatus() : PriceAnomalyApprovalStatus.NONE;
+        if (current == PriceAnomalyApprovalStatus.PENDING) {
+            throw new BusinessException(409, "该异常已在等待老板审批")
+                    .withCode("PRICE_ANOMALY_ALREADY_PENDING")
+                    .withHint("请通知老板/店长处理价格异常待办")
+                    .withHintTarget("priceAnomalyApprovalStatus");
+        }
+        if (current == PriceAnomalyApprovalStatus.APPROVED) {
+            throw new BusinessException(409, "该异常已批准，可直接确认入库")
+                    .withCode("PRICE_ANOMALY_ALREADY_APPROVED")
+                    .withHint("请返回送货单详情点击确认验收入库")
+                    .withHintTarget("priceAnomalyApprovalStatus");
+        }
+        note.setPriceAnomalyApprovalStatus(PriceAnomalyApprovalStatus.PENDING);
+        note.setPriceAnomalySubmittedBy(userId);
+        note.setPriceAnomalySubmittedAt(LocalDateTime.now());
+        note.setPriceAnomalyApprovedBy(null);
+        note.setPriceAnomalyApprovedAt(null);
+        note.setPriceAnomalyRejectedBy(null);
+        note.setPriceAnomalyRejectedAt(null);
+        note.setPriceAnomalyApprovalComment(null);
+        SupplierDeliveryNote saved = noteRepository.save(note);
+        notifyPriceAnomalyApprovers(factoryId, saved);
+        return saved;
+    }
+
+    @Override
+    @Transactional
+    public SupplierDeliveryNote approvePriceAnomaly(String factoryId, String noteId, String comment,
+            Long userId, String userRole) {
+        assertCanApprovePriceAnomaly(userRole);
+        SupplierDeliveryNote note = mustFindDraftOrAny(factoryId, noteId);
+        if (note.getStatus() != DeliveryNoteStatus.DRAFT) {
+            throw invalidDraftStatus();
+        }
+        if (note.getPriceAnomalyApprovalStatus() == PriceAnomalyApprovalStatus.APPROVED) {
+            throw new BusinessException(409, "该异常已批准，无需重复审批")
+                    .withCode("PRICE_ANOMALY_ALREADY_APPROVED")
+                    .withHint("仓管可直接确认验收入库")
+                    .withHintTarget("priceAnomalyApprovalStatus");
+        }
+        if (note.getPriceAnomalyApprovalStatus() != PriceAnomalyApprovalStatus.PENDING) {
+            throw new BusinessException(409, "该送货单未处于待审批状态")
+                    .withCode("PRICE_ANOMALY_NOT_PENDING")
+                    .withHint("请仓管先提交价格异常审批")
+                    .withHintTarget("priceAnomalyApprovalStatus");
+        }
+        note.setPriceAnomalyApprovalStatus(PriceAnomalyApprovalStatus.APPROVED);
+        note.setPriceAnomalyApprovedBy(userId);
+        note.setPriceAnomalyApprovedAt(LocalDateTime.now());
+        note.setPriceAnomalyApprovalComment(comment);
+        return noteRepository.save(note);
+    }
+
+    @Override
+    @Transactional
+    public SupplierDeliveryNote rejectPriceAnomaly(String factoryId, String noteId, String comment,
+            Long userId, String userRole) {
+        assertCanApprovePriceAnomaly(userRole);
+        SupplierDeliveryNote note = mustFindDraftOrAny(factoryId, noteId);
+        if (note.getStatus() != DeliveryNoteStatus.DRAFT) {
+            throw invalidDraftStatus();
+        }
+        if (note.getPriceAnomalyApprovalStatus() == PriceAnomalyApprovalStatus.REJECTED) {
+            throw new BusinessException(409, "该异常已驳回")
+                    .withCode("PRICE_ANOMALY_ALREADY_REJECTED")
+                    .withHint("请采购/仓管重新核对价格或与供应商沟通后修改送货单")
+                    .withHintTarget("priceAnomalyApprovalStatus");
+        }
+        if (note.getPriceAnomalyApprovalStatus() != PriceAnomalyApprovalStatus.PENDING) {
+            throw new BusinessException(409, "该送货单未处于待审批状态")
+                    .withCode("PRICE_ANOMALY_NOT_PENDING")
+                    .withHint("请仓管先提交价格异常审批")
+                    .withHintTarget("priceAnomalyApprovalStatus");
+        }
+        note.setPriceAnomalyApprovalStatus(PriceAnomalyApprovalStatus.REJECTED);
+        note.setPriceAnomalyRejectedBy(userId);
+        note.setPriceAnomalyRejectedAt(LocalDateTime.now());
+        note.setPriceAnomalyApprovalComment(comment);
+        return noteRepository.save(note);
+    }
+
+    @Override
+    public Page<SupplierDeliveryNote> listPendingPriceAnomalyApprovals(
+            String factoryId, String userRole, Pageable pageable) {
+        assertCanApprovePriceAnomaly(userRole);
+        return noteRepository.findByFactoryIdAndPriceAnomalyApprovalStatus(
+                factoryId, PriceAnomalyApprovalStatus.PENDING, pageable);
+    }
+
+    @Override
+    @Transactional
+    public SupplierDeliveryNote createFromProcurementConfirmation(String factoryId, Long userId,
+            SupplierDeliveryNoteDto.ProcurementConfirmRequest req) {
+        if (req == null) {
+            throw new BusinessException(400, "采购确认内容为空");
+        }
+        if (req.getLines() == null || req.getLines().isEmpty()) {
+            throw new BusinessException(400, "请至少添加一行物料")
+                    .withCode("LINES_REQUIRED")
+                    .withHintTarget("lines");
+        }
+        SupplierDeliveryNote note = new SupplierDeliveryNote();
+        note.setFactoryId(factoryId);
+        note.setSourceType(DeliveryNoteSourceType.MANUAL);
+        note.setStatus(DeliveryNoteStatus.DRAFT);
+        note.setCreatedBy(userId);
+        note.setSupplierId(req.getSupplierId());
+        note.setSupplierName(req.getSupplierName());
+        note.setDeliveryDate(req.getDeliveryDate() != null ? req.getDeliveryDate() : LocalDate.now());
+        note.setExpectedDeliveryDate(req.getExpectedDeliveryDate());
+        note.setSourceRequisitionId(req.getSourceRequisitionId());
+        note.setProcurementConfirmedBy(userId);
+        note.setProcurementConfirmedAt(LocalDateTime.now());
+        note.setSupplierContactNote(req.getSupplierContactNote());
+        note.setVoiceAudioUrl(req.getVoiceAudioUrl());
+        note.setVoiceTranscriptText(req.getVoiceTranscriptText());
+        if (req.getSupplierQuotePhotoUrls() != null && !req.getSupplierQuotePhotoUrls().isEmpty()) {
+            try {
+                note.setSupplierQuotePhotoUrls(objectMapper.writeValueAsString(req.getSupplierQuotePhotoUrls()));
+            } catch (Exception e) {
+                throw new BusinessException(400, "报价照片列表格式无效");
+            }
+        }
+        BigDecimal total = BigDecimal.ZERO;
+        for (SupplierDeliveryNoteDto.LineDto dto : req.getLines()) {
+            SupplierDeliveryNoteLine line = toLineEntity(dto);
+            line.setRawMaterialTypeId(dto.getRawMaterialTypeId() != null
+                    ? dto.getRawMaterialTypeId()
+                    : softMatchMaterial(factoryId, dto.getIngredientName()));
+            note.addLine(line);
+            if (line.getLineAmount() != null) {
+                total = total.add(line.getLineAmount());
+            }
+        }
+        if (total.compareTo(BigDecimal.ZERO) > 0) {
+            note.setTotalAmount(total);
+        }
+        refreshPriceAnomalies(note);
+        return noteRepository.save(note);
+    }
+
+    @Override
     public Map<String, Object> getLimits(String factoryId, LocalDate month) {
         YearMonth ym = YearMonth.from(month != null ? month : LocalDate.now());
         LocalDate start = ym.atDay(1);
@@ -507,6 +689,71 @@ public class SupplierDeliveryNoteServiceImpl implements SupplierDeliveryNoteServ
                 line.setPriceAnomalyExplanation(null);
             }
         }
+        if (!hasPriceAnomaly(note)) {
+            note.setPriceAnomalyApprovalStatus(PriceAnomalyApprovalStatus.NONE);
+            note.setPriceAnomalySubmittedBy(null);
+            note.setPriceAnomalySubmittedAt(null);
+            note.setPriceAnomalyApprovedBy(null);
+            note.setPriceAnomalyApprovedAt(null);
+            note.setPriceAnomalyRejectedBy(null);
+            note.setPriceAnomalyRejectedAt(null);
+            note.setPriceAnomalyApprovalComment(null);
+        }
+    }
+
+    private boolean hasPriceAnomaly(SupplierDeliveryNote note) {
+        return note.getLines() != null && note.getLines().stream()
+                .anyMatch(line -> Boolean.TRUE.equals(line.getPriceAnomalyFlag()));
+    }
+
+    private void assertPriceAnomalyApproved(SupplierDeliveryNote note) {
+        PriceAnomalyApprovalStatus status = note.getPriceAnomalyApprovalStatus() != null
+                ? note.getPriceAnomalyApprovalStatus() : PriceAnomalyApprovalStatus.NONE;
+        if (status == PriceAnomalyApprovalStatus.NONE) {
+            throw new BusinessException(400, "该单存在价格异常，请先提交老板审批")
+                    .withCode("PRICE_ANOMALY_APPROVAL_REQUIRED")
+                    .withHint("填写解释后点击“提交老板审批”，等待老板/店长批准后再确认入库")
+                    .withHintTarget("priceAnomalyApprovalStatus");
+        }
+        if (status == PriceAnomalyApprovalStatus.PENDING) {
+            throw new BusinessException(409, "该异常仍在等待审批，暂不能入库")
+                    .withCode("PRICE_ANOMALY_PENDING_APPROVAL")
+                    .withHint("请通知老板/店长处理价格异常待办")
+                    .withHintTarget("priceAnomalyApprovalStatus");
+        }
+        if (status == PriceAnomalyApprovalStatus.REJECTED) {
+            throw new BusinessException(409, "该异常已被驳回，不能确认入库")
+                    .withCode("PRICE_ANOMALY_REJECTED")
+                    .withHint("请采购/仓管重新核对价格或与供应商沟通后修改送货单")
+                    .withHintTarget("priceAnomalyApprovalStatus");
+        }
+    }
+
+    private void assertCanApprovePriceAnomaly(String userRole) {
+        if (userRole == null || !PRICE_ANOMALY_APPROVER_ROLES.contains(userRole)) {
+            throw new BusinessException(403, "仅老板/店长可审批价格异常")
+                    .withCode("PRICE_ANOMALY_APPROVAL_FORBIDDEN")
+                    .withHint("请使用老板或店长账号登录后操作")
+                    .withHintTarget("role");
+        }
+    }
+
+    private void notifyPriceAnomalyApprovers(String factoryId, SupplierDeliveryNote note) {
+        String title = "送货单价格异常待审批";
+        String body = "送货单 " + displayNumber(note) + " 存在进价异常，请审批后再允许入库";
+        try {
+            notificationService.notifyRole(factoryId, FactoryUserRole.factory_super_admin.name(), title, body);
+            notificationService.notifyRole(factoryId, FactoryUserRole.restaurant_manager.name(), title, body);
+        } catch (Exception e) {
+            log.warn("价格异常审批通知发送失败 note={}: {}", note.getId(), e.getMessage());
+        }
+    }
+
+    private BusinessException invalidDraftStatus() {
+        return new BusinessException(409, "只有草稿送货单可操作")
+                .withCode("INVALID_STATUS")
+                .withHint("请刷新送货单详情，确认当前状态后再操作")
+                .withHintTarget("status");
     }
 
     private BigDecimal resolveBaselineUnitPrice(String factoryId, LocalDate deliveryDate, SupplierDeliveryNoteLine line) {

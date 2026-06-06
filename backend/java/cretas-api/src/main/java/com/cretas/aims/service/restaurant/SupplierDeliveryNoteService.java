@@ -2,6 +2,8 @@ package com.cretas.aims.service.restaurant;
 
 import com.cretas.aims.dto.restaurant.SupplierDeliveryNoteDto;
 import com.cretas.aims.entity.restaurant.SupplierDeliveryNote;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 
 import java.time.LocalDate;
 import java.util.List;
@@ -55,4 +57,18 @@ public interface SupplierDeliveryNoteService {
      * Rule 1: 限制信息 — 当月已录 N 张 (确认 / 草稿)。无业务上限, 返回计数。
      */
     Map<String, Object> getLimits(String factoryId, LocalDate month);
+
+    SupplierDeliveryNote submitPriceAnomalyApproval(String factoryId, String noteId, Long userId);
+
+    SupplierDeliveryNote approvePriceAnomaly(String factoryId, String noteId, String comment,
+            Long userId, String userRole);
+
+    SupplierDeliveryNote rejectPriceAnomaly(String factoryId, String noteId, String comment,
+            Long userId, String userRole);
+
+    Page<SupplierDeliveryNote> listPendingPriceAnomalyApprovals(
+            String factoryId, String userRole, Pageable pageable);
+
+    SupplierDeliveryNote createFromProcurementConfirmation(String factoryId, Long userId,
+            SupplierDeliveryNoteDto.ProcurementConfirmRequest req);
 }
