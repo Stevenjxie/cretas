@@ -78,6 +78,17 @@ public class SupplierMonthlyReconciliationDto {
 
         private String lineStatus;
         private String remark;
+
+        private String photoOssUrl;
+        private String voiceAudioUrl;
+        private String voiceTranscriptText;
+        private String supplierContactNote;
+        private String priceAnomalyApprovalStatus;
+        private Long priceAnomalyApprovedBy;
+        private String priceAnomalyApprovedAt;
+        private String priceAnomalyApprovalComment;
+        private String payableTransactionId;
+        private String payablePostedAt;
     }
 
     @Data

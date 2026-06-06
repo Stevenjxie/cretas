@@ -2,6 +2,7 @@ package com.cretas.aims.repository.restaurant;
 
 import com.cretas.aims.entity.restaurant.SupplierDeliveryNote;
 import com.cretas.aims.entity.restaurant.enums.DeliveryNoteStatus;
+import com.cretas.aims.entity.restaurant.enums.PriceAnomalyApprovalStatus;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -56,4 +57,7 @@ public interface SupplierDeliveryNoteRepository extends JpaRepository<SupplierDe
             @Param("supplierId") String supplierId,
             @Param("startDate") LocalDate startDate,
             @Param("endDate") LocalDate endDate);
+
+    Page<SupplierDeliveryNote> findByFactoryIdAndPriceAnomalyApprovalStatus(
+            String factoryId, PriceAnomalyApprovalStatus status, Pageable pageable);
 }

@@ -9,9 +9,6 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any
-
-import pytest
 
 from smartbi.services.restaurant import value_notifier as vn
 

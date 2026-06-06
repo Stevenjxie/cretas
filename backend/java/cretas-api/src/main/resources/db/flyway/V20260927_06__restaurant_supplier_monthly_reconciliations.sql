@@ -1,52 +1,61 @@
 -- Restaurant supplier monthly reconciliation (P2P-F) and cost attribution substrate.
 -- One immutable-confirmable snapshot per factory + supplier + month.
+-- Guard: material_requisitions / wastage_records / stocktaking_records are Hibernate entity tables.
 
-ALTER TABLE material_requisitions
-    ADD COLUMN IF NOT EXISTS section_code VARCHAR(32),
-    ADD COLUMN IF NOT EXISTS operator_id BIGINT,
-    ADD COLUMN IF NOT EXISTS stall_code VARCHAR(64),
-    ADD COLUMN IF NOT EXISTS chef_id BIGINT,
-    ADD COLUMN IF NOT EXISTS head_chef_id BIGINT,
-    ADD COLUMN IF NOT EXISTS actual_cost NUMERIC(15,2);
+DO $$
+BEGIN
+    IF to_regclass('public.material_requisitions') IS NULL THEN
+        RAISE NOTICE 'V20260927_06 skipped: material_requisitions not yet created (fresh-DB Flyway-before-Hibernate)';
+        RETURN;
+    END IF;
 
-CREATE INDEX IF NOT EXISTS idx_req_factory_section_date
-    ON material_requisitions (factory_id, section_code, requisition_date);
+    ALTER TABLE material_requisitions
+        ADD COLUMN IF NOT EXISTS section_code VARCHAR(32),
+        ADD COLUMN IF NOT EXISTS operator_id BIGINT,
+        ADD COLUMN IF NOT EXISTS stall_code VARCHAR(64),
+        ADD COLUMN IF NOT EXISTS chef_id BIGINT,
+        ADD COLUMN IF NOT EXISTS head_chef_id BIGINT,
+        ADD COLUMN IF NOT EXISTS actual_cost NUMERIC(15,2);
 
-CREATE INDEX IF NOT EXISTS idx_req_factory_stall_date
-    ON material_requisitions (factory_id, stall_code, requisition_date);
+    CREATE INDEX IF NOT EXISTS idx_req_factory_section_date
+        ON material_requisitions (factory_id, section_code, requisition_date);
 
-CREATE INDEX IF NOT EXISTS idx_req_factory_operator_date
-    ON material_requisitions (factory_id, operator_id, requisition_date);
+    CREATE INDEX IF NOT EXISTS idx_req_factory_stall_date
+        ON material_requisitions (factory_id, stall_code, requisition_date);
 
-ALTER TABLE wastage_records
-    ADD COLUMN IF NOT EXISTS operator_id BIGINT,
-    ADD COLUMN IF NOT EXISTS section_code VARCHAR(32),
-    ADD COLUMN IF NOT EXISTS stall_code VARCHAR(64),
-    ADD COLUMN IF NOT EXISTS chef_id BIGINT,
-    ADD COLUMN IF NOT EXISTS estimated_cost NUMERIC(15,2);
+    CREATE INDEX IF NOT EXISTS idx_req_factory_operator_date
+        ON material_requisitions (factory_id, operator_id, requisition_date);
 
-CREATE INDEX IF NOT EXISTS idx_wastage_factory_stall_date
-    ON wastage_records (factory_id, stall_code, wastage_date);
+    ALTER TABLE wastage_records
+        ADD COLUMN IF NOT EXISTS operator_id BIGINT,
+        ADD COLUMN IF NOT EXISTS section_code VARCHAR(32),
+        ADD COLUMN IF NOT EXISTS stall_code VARCHAR(64),
+        ADD COLUMN IF NOT EXISTS chef_id BIGINT,
+        ADD COLUMN IF NOT EXISTS estimated_cost NUMERIC(15,2);
 
-CREATE INDEX IF NOT EXISTS idx_wastage_cost_attr_date
-    ON wastage_records (factory_id, wastage_date, status, section_code, stall_code);
+    CREATE INDEX IF NOT EXISTS idx_wastage_factory_stall_date
+        ON wastage_records (factory_id, stall_code, wastage_date);
 
-CREATE INDEX IF NOT EXISTS idx_wastage_cost_attr_person
-    ON wastage_records (factory_id, wastage_date, operator_id, chef_id);
+    CREATE INDEX IF NOT EXISTS idx_wastage_cost_attr_date
+        ON wastage_records (factory_id, wastage_date, status, section_code, stall_code);
 
-ALTER TABLE stocktaking_records
-    ADD COLUMN IF NOT EXISTS section_code VARCHAR(32),
-    ADD COLUMN IF NOT EXISTS stall_code VARCHAR(64),
-    ADD COLUMN IF NOT EXISTS difference_amount NUMERIC(15,2);
+    CREATE INDEX IF NOT EXISTS idx_wastage_cost_attr_person
+        ON wastage_records (factory_id, wastage_date, operator_id, chef_id);
 
-CREATE INDEX IF NOT EXISTS idx_stocktaking_factory_section_date
-    ON stocktaking_records (factory_id, section_code, stocktaking_date);
+    ALTER TABLE stocktaking_records
+        ADD COLUMN IF NOT EXISTS section_code VARCHAR(32),
+        ADD COLUMN IF NOT EXISTS stall_code VARCHAR(64),
+        ADD COLUMN IF NOT EXISTS difference_amount NUMERIC(15,2);
 
-CREATE INDEX IF NOT EXISTS idx_stocktaking_cost_attr_date
-    ON stocktaking_records (factory_id, stocktaking_date, status, difference_type, section_code, stall_code);
+    CREATE INDEX IF NOT EXISTS idx_stocktaking_factory_section_date
+        ON stocktaking_records (factory_id, section_code, stocktaking_date);
 
-CREATE INDEX IF NOT EXISTS idx_stocktaking_cost_attr_person
-    ON stocktaking_records (factory_id, stocktaking_date, counted_by);
+    CREATE INDEX IF NOT EXISTS idx_stocktaking_cost_attr_date
+        ON stocktaking_records (factory_id, stocktaking_date, status, difference_type, section_code, stall_code);
+
+    CREATE INDEX IF NOT EXISTS idx_stocktaking_cost_attr_person
+        ON stocktaking_records (factory_id, stocktaking_date, counted_by);
+END $$;
 
 CREATE TABLE IF NOT EXISTS restaurant_supplier_monthly_reconciliations (
     id                     VARCHAR(191) PRIMARY KEY,

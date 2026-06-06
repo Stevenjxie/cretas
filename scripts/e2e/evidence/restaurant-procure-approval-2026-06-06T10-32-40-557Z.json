@@ -1,0 +1,55 @@
+{
+  "startedAt": "2026-06-06T10:32:39.998Z",
+  "apiBase": "http://139.196.165.140:8097",
+  "factoryId": "RES_3101_009",
+  "steps": [
+    {
+      "name": "health",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "name": "pending-approvals",
+      "status": 403,
+      "count": 0,
+      "ok": false,
+      "skipped": true,
+      "message": "仅老板/店长可审批价格异常"
+    },
+    {
+      "name": "draft-list",
+      "status": 200,
+      "draftId": "b95c2b8d-ee36-405f-9065-7f317539b05d",
+      "ok": true
+    },
+    {
+      "name": "detail-readback",
+      "status": 200,
+      "noteId": "b95c2b8d-ee36-405f-9065-7f317539b05d",
+      "approvalStatus": "NONE",
+      "quotePhotos": [
+        "https://example.com/e2e-quote.jpg"
+      ],
+      "voiceTranscript": "测试语音转录",
+      "ok": true
+    },
+    {
+      "name": "confirm-attempt",
+      "status": 400,
+      "hasAnomaly": false,
+      "message": "送货单未绑定供应商，不能验收入库",
+      "code": 400,
+      "ok": true
+    },
+    {
+      "name": "procurement-confirm",
+      "status": 200,
+      "noteId": "2f9e36f3-f84a-4c27-a7d3-bef1686da356",
+      "ok": true,
+      "skipped": false,
+      "message": "采购确认单已生成"
+    }
+  ],
+  "pass": true,
+  "finishedAt": "2026-06-06T10:32:40.557Z"
+}

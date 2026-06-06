@@ -246,6 +246,15 @@ export function WHInboundListScreen() {
           >
             {t('inbound.list.scanInbound')}
           </Button>
+          <Button
+            mode="outlined"
+            icon="truck-delivery"
+            onPress={() => navigation.navigate("SupplierDeliveryList")}
+            style={styles.actionButton}
+            labelStyle={styles.actionButtonLabelOutlined}
+          >
+            餐饮待验收
+          </Button>
         </View>
 
         {/* 搜索栏 */}

@@ -5,6 +5,7 @@ import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.entity.Attachment;
 import com.cretas.aims.entity.Attachment.EntityType;
 import com.cretas.aims.entity.Attachment.FileCategory;
+import com.cretas.aims.entity.User;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.AttachmentRepository;
 import com.cretas.aims.security.AttachmentPermissionResolver;
@@ -54,6 +55,12 @@ class AttachmentControllerTest {
 
     private static final String FACTORY_ID = "F006";
     private static final String ATT_ID = "att-uuid-001";
+
+    private void stubCurrentUser() {
+        User user = new User();
+        user.setId(42L);
+        when(permissionResolver.resolveCurrentUser(request)).thenReturn(user);
+    }
 
     @Test
     @DisplayName("✅ GET /attachments?entityType=PURCHASE_ORDER&entityId=PO-001 返列表")
@@ -132,6 +139,7 @@ class AttachmentControllerTest {
     @Test
     @DisplayName("✅ POST /attachments 注册 — 路径 factoryId 透传给 service")
     void register_passesFactoryIdToService() {
+        stubCurrentUser();
         RegisterAttachmentRequest req = new RegisterAttachmentRequest();
         req.setEntityType(EntityType.PURCHASE_ORDER);
         req.setEntityId("PO-001");
@@ -160,6 +168,7 @@ class AttachmentControllerTest {
     @Test
     @DisplayName("✅ PUT /attachments/{id} 更新")
     void update_invokesService() {
+        stubCurrentUser();
         Attachment existing = new Attachment();
         existing.setId(ATT_ID);
         existing.setEntityType(EntityType.PURCHASE_ORDER);

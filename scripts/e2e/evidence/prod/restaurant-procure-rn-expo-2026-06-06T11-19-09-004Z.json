@@ -1,0 +1,72 @@
+{
+  "startedAt": "2026-06-06T11:19:09.005Z",
+  "steps": [
+    {
+      "name": "expo-prod-up",
+      "ok": true,
+      "message": "http://127.0.0.1:3012"
+    },
+    {
+      "name": "chef-seed-requisition",
+      "ok": true,
+      "message": "已预置一条报货草稿供最近套用",
+      "skipped": false
+    },
+    {
+      "name": "login-prod-qhj_prod",
+      "ok": true
+    },
+    {
+      "name": "chef-nav",
+      "ok": true,
+      "message": "已进入报货追踪"
+    },
+    {
+      "name": "chef-create-screen",
+      "ok": true,
+      "message": "档口报货页已打开"
+    },
+    {
+      "name": "chef-recent-section",
+      "ok": true,
+      "message": "最近报货区块可见",
+      "skipped": false
+    },
+    {
+      "name": "chef-recent-apply",
+      "ok": true,
+      "message": "已点击最近报货卡片"
+    },
+    {
+      "name": "expo-test-up",
+      "ok": true,
+      "message": "http://127.0.0.1:3013"
+    },
+    {
+      "name": "login-test-e2e_purchase_mgr",
+      "ok": true
+    },
+    {
+      "name": "procurement-confirm-screen",
+      "ok": true,
+      "message": "采购确认送货页已打开"
+    },
+    {
+      "name": "procurement-photo-ui",
+      "ok": true,
+      "message": "照片区=true 相册按钮=true"
+    },
+    {
+      "name": "procurement-photo-upload",
+      "ok": true,
+      "message": "缩略图数量=1"
+    },
+    {
+      "name": "procurement-voice-ui",
+      "ok": true,
+      "message": "语音录入按钮可见"
+    }
+  ],
+  "pass": true,
+  "finishedAt": "2026-06-06T11:20:46.335Z"
+}

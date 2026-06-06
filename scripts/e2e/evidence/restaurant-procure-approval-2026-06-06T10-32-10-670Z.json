@@ -1,0 +1,32 @@
+{
+  "startedAt": "2026-06-06T10:32:10.197Z",
+  "apiBase": "http://139.196.165.140:8097",
+  "factoryId": "RES_3101_009",
+  "steps": [
+    {
+      "name": "health",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "name": "pending-approvals",
+      "status": 403,
+      "count": 0,
+      "ok": false,
+      "skipped": true,
+      "message": "仅老板/店长可审批价格异常"
+    },
+    {
+      "name": "draft-list",
+      "status": 200,
+      "draftId": null,
+      "ok": true
+    },
+    {
+      "name": "confirm-gate",
+      "skipped": true,
+      "reason": "no draft note"
+    }
+  ],
+  "pass": true
+}

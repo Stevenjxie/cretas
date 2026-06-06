@@ -21,10 +21,14 @@ import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
 import java.io.IOException;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.YearMonth;
+import java.util.Collections;
 import java.util.List;
 import java.util.stream.Collectors;
 
@@ -42,6 +46,7 @@ public class SupplierDeliveryNoteController {
 
     private final SupplierDeliveryNoteService service;
     private final SupplierDeliveryNoteRepository noteRepository;
+    private final ObjectMapper objectMapper;
 
     /** 低置信阈值 — 与 service 保持一致 (Rule 5)。 */
     private static final BigDecimal LOW_CONFIDENCE_THRESHOLD = new BigDecimal("0.75");
@@ -143,6 +148,76 @@ public class SupplierDeliveryNoteController {
         return ApiResponse.success(toDto(note));
     }
 
+    // ==================== 价格异常老板审批 ====================
+
+    @RequirePermission({"warehouse:read_write", "procurement:write"})
+    @RequireModule("restaurant")
+    @PostMapping("/{id}/price-anomaly/submit")
+    @Operation(summary = "提交价格异常老板审批")
+    public ApiResponse<SupplierDeliveryNoteDto> submitPriceAnomalyApproval(
+            @PathVariable String factoryId,
+            @PathVariable String id,
+            @RequestAttribute("userId") @Parameter(hidden = true) Long userId) {
+        SupplierDeliveryNote note = service.submitPriceAnomalyApproval(factoryId, id, userId);
+        return ApiResponse.success("已提交老板审批", toDto(note));
+    }
+
+    @RequirePermission({"warehouse:read", "warehouse:read_write", "finance:read", "finance:read_write"})
+    @RequireModule("restaurant")
+    @PostMapping("/{id}/price-anomaly/approve")
+    @Operation(summary = "老板/店长批准价格异常")
+    public ApiResponse<SupplierDeliveryNoteDto> approvePriceAnomaly(
+            @PathVariable String factoryId,
+            @PathVariable String id,
+            @RequestAttribute("userId") @Parameter(hidden = true) Long userId,
+            @RequestAttribute(value = "role", required = false) @Parameter(hidden = true) String role,
+            @RequestBody(required = false) SupplierDeliveryNoteDto.PriceAnomalyApprovalRequest req) {
+        String comment = req != null ? req.getComment() : null;
+        SupplierDeliveryNote note = service.approvePriceAnomaly(factoryId, id, comment, userId, role);
+        return ApiResponse.success("价格异常已批准", toDto(note));
+    }
+
+    @RequirePermission({"warehouse:read", "warehouse:read_write", "finance:read", "finance:read_write"})
+    @RequireModule("restaurant")
+    @PostMapping("/{id}/price-anomaly/reject")
+    @Operation(summary = "老板/店长驳回价格异常")
+    public ApiResponse<SupplierDeliveryNoteDto> rejectPriceAnomaly(
+            @PathVariable String factoryId,
+            @PathVariable String id,
+            @RequestAttribute("userId") @Parameter(hidden = true) Long userId,
+            @RequestAttribute(value = "role", required = false) @Parameter(hidden = true) String role,
+            @RequestBody(required = false) SupplierDeliveryNoteDto.PriceAnomalyApprovalRequest req) {
+        String comment = req != null ? req.getComment() : null;
+        SupplierDeliveryNote note = service.rejectPriceAnomaly(factoryId, id, comment, userId, role);
+        return ApiResponse.success("价格异常已驳回", toDto(note));
+    }
+
+    @RequirePermission({"warehouse:read", "warehouse:read_write", "finance:read", "finance:read_write"})
+    @RequireModule("restaurant")
+    @GetMapping("/price-anomaly/pending")
+    @Operation(summary = "价格异常待审批列表")
+    public ApiResponse<Page<SupplierDeliveryNoteDto>> listPendingPriceAnomalyApprovals(
+            @PathVariable String factoryId,
+            @RequestAttribute(value = "role", required = false) @Parameter(hidden = true) String role,
+            @RequestParam(defaultValue = "1") int page,
+            @RequestParam(defaultValue = "20") int size) {
+        PageRequest pageable = PageRequest.of(Math.max(0, page - 1), size);
+        Page<SupplierDeliveryNote> notes = service.listPendingPriceAnomalyApprovals(factoryId, role, pageable);
+        return ApiResponse.success(notes.map(this::toSummaryDto));
+    }
+
+    @RequirePermission({"procurement:write", "warehouse:read_write"})
+    @RequireModule("restaurant")
+    @PostMapping("/procurement-confirm")
+    @Operation(summary = "采购确认生成待验收送货单")
+    public ApiResponse<SupplierDeliveryNoteDto> createFromProcurementConfirmation(
+            @PathVariable String factoryId,
+            @RequestAttribute("userId") @Parameter(hidden = true) Long userId,
+            @RequestBody SupplierDeliveryNoteDto.ProcurementConfirmRequest req) {
+        SupplierDeliveryNote note = service.createFromProcurementConfirmation(factoryId, userId, req);
+        return ApiResponse.success("采购确认单已生成", toDto(note));
+    }
+
     // ==================== 确认 ====================
 
     @RequirePermission({"warehouse:read_write"})
@@ -241,6 +316,27 @@ public class SupplierDeliveryNoteController {
                 .payablePostingError(n.getPayablePostingError())
                 .rejectReasonCode(n.getRejectReasonCode())
                 .rejectReasonNote(n.getRejectReasonNote())
+                .priceAnomalyApprovalStatus(n.getPriceAnomalyApprovalStatus() != null
+                        ? n.getPriceAnomalyApprovalStatus().name() : null)
+                .priceAnomalySubmittedBy(n.getPriceAnomalySubmittedBy())
+                .priceAnomalySubmittedAt(n.getPriceAnomalySubmittedAt() != null
+                        ? n.getPriceAnomalySubmittedAt().toString() : null)
+                .priceAnomalyApprovedBy(n.getPriceAnomalyApprovedBy())
+                .priceAnomalyApprovedAt(n.getPriceAnomalyApprovedAt() != null
+                        ? n.getPriceAnomalyApprovedAt().toString() : null)
+                .priceAnomalyRejectedBy(n.getPriceAnomalyRejectedBy())
+                .priceAnomalyRejectedAt(n.getPriceAnomalyRejectedAt() != null
+                        ? n.getPriceAnomalyRejectedAt().toString() : null)
+                .priceAnomalyApprovalComment(n.getPriceAnomalyApprovalComment())
+                .sourceRequisitionId(n.getSourceRequisitionId())
+                .procurementConfirmedBy(n.getProcurementConfirmedBy())
+                .procurementConfirmedAt(n.getProcurementConfirmedAt() != null
+                        ? n.getProcurementConfirmedAt().toString() : null)
+                .supplierContactNote(n.getSupplierContactNote())
+                .voiceAudioUrl(n.getVoiceAudioUrl())
+                .voiceTranscriptText(n.getVoiceTranscriptText())
+                .supplierQuotePhotoUrls(parseQuotePhotoUrls(n.getSupplierQuotePhotoUrls()))
+                .expectedDeliveryDate(n.getExpectedDeliveryDate())
                 .lowConfidenceWarning(lowConf)
                 .lines(lineDtos)
                 .build();
@@ -270,6 +366,10 @@ public class SupplierDeliveryNoteController {
                 .payableTransactionId(n.getPayableTransactionId())
                 .payablePostedAt(n.getPayablePostedAt() != null ? n.getPayablePostedAt().toString() : null)
                 .payablePostingError(n.getPayablePostingError())
+                .priceAnomalyApprovalStatus(n.getPriceAnomalyApprovalStatus() != null
+                        ? n.getPriceAnomalyApprovalStatus().name() : null)
+                .sourceRequisitionId(n.getSourceRequisitionId())
+                .expectedDeliveryDate(n.getExpectedDeliveryDate())
                 .lowConfidenceWarning(lowConf)
                 .build();
     }
@@ -293,5 +393,16 @@ public class SupplierDeliveryNoteController {
                 .remark(l.getRemark())
                 .ocrConfidence(l.getOcrConfidence())
                 .build();
+    }
+
+    private List<String> parseQuotePhotoUrls(String raw) {
+        if (!StringUtils.hasText(raw)) {
+            return Collections.emptyList();
+        }
+        try {
+            return objectMapper.readValue(raw, new TypeReference<List<String>>() {});
+        } catch (Exception e) {
+            return List.of(raw);
+        }
     }
 }

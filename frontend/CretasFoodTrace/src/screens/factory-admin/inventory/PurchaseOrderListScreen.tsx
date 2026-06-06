@@ -149,6 +149,11 @@ export default function PurchaseOrderListScreen() {
         <Appbar.BackAction onPress={() => navigation.goBack()} />
         <Appbar.Content title="采购订单" />
         <Appbar.Action icon="robot-outline" onPress={() => navigation.dispatch(CommonActions.navigate('FAAITab', { screen: 'AIChat', params: { entityType: 'PURCHASE', initialMessage: '我要创建采购订单' } }))} />
+        <Appbar.Action
+          testID="pm-procurement-confirm-btn"
+          icon="truck-check"
+          onPress={() => (navigation as Nav & { navigate: (name: string) => void }).navigate('ProcurementDeliveryConfirm')}
+        />
         <Appbar.Action icon="refresh" onPress={onRefresh} />
       </Appbar.Header>
 

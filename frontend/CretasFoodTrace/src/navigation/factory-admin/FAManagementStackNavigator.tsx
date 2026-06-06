@@ -107,6 +107,8 @@ import RecipeListScreen from "../../screens/restaurant/recipes/RecipeListScreen"
 import RecipeDetailScreen from "../../screens/restaurant/recipes/RecipeDetailScreen";
 import RecipeEditScreen from "../../screens/restaurant/recipes/RecipeEditScreen";
 import RequisitionCreateScreen from "../../screens/restaurant/requisition/RequisitionCreateScreen";
+import ChefRequisitionListScreen from "../../screens/restaurant/requisition/ChefRequisitionListScreen";
+import ChefRequisitionCreateScreen from "../../screens/restaurant/requisition/ChefRequisitionCreateScreen";
 import RequisitionApprovalScreen from "../../screens/restaurant/requisition/RequisitionApprovalScreen";
 import RequisitionDetailScreen from "../../screens/restaurant/requisition/RequisitionDetailScreen";
 import WastageListScreen from "../../screens/restaurant/wastage/WastageListScreen";
@@ -117,6 +119,7 @@ import StocktakingSummaryScreen from "../../screens/restaurant/stocktaking/Stock
 import SupplierDeliveryListScreen from "../../screens/restaurant/supplier-delivery/SupplierDeliveryListScreen";
 import SupplierDeliveryCreateScreen from "../../screens/restaurant/supplier-delivery/SupplierDeliveryCreateScreen";
 import SupplierDeliveryDetailScreen from "../../screens/restaurant/supplier-delivery/SupplierDeliveryDetailScreen";
+import PriceAnomalyApprovalScreen from "../../screens/restaurant/supplier-delivery/PriceAnomalyApprovalScreen";
 
 // Track D2 — 工序管理 (M-WP-1) + 产品工序配置 (M-WP-2)
 import WorkProcessListScreen from "../../screens/factory/workprocess/WorkProcessListScreen";
@@ -586,6 +589,8 @@ export function FAManagementStackNavigator() {
           <Stack.Screen name="RecipeDetail" component={RecipeDetailScreen} options={{ title: "配方详情" }} />
           <Stack.Screen name="RecipeEdit" component={RecipeEditScreen} options={{ title: "编辑配方" }} />
           <Stack.Screen name="RequisitionCreate" component={RequisitionCreateScreen} options={{ title: "新建领料" }} />
+          <Stack.Screen name="ChefRequisitionList" component={ChefRequisitionListScreen} options={{ title: "报货追踪" }} />
+          <Stack.Screen name="ChefRequisitionCreate" component={ChefRequisitionCreateScreen} options={{ title: "档口报货" }} />
           <Stack.Screen name="RequisitionApproval" component={RequisitionApprovalScreen} options={{ title: "领料审批" }} />
           <Stack.Screen name="RequisitionDetail" component={RequisitionDetailScreen} options={{ title: "领料详情" }} />
           <Stack.Screen name="WastageList" component={WastageListScreen} options={{ title: "损耗记录" }} />
@@ -596,6 +601,7 @@ export function FAManagementStackNavigator() {
           <Stack.Screen name="SupplierDeliveryList" component={SupplierDeliveryListScreen} options={{ title: "待验收入库" }} />
           <Stack.Screen name="SupplierDeliveryCreate" component={SupplierDeliveryCreateScreen} options={{ title: "新建送货单" }} />
           <Stack.Screen name="SupplierDeliveryDetail" component={SupplierDeliveryDetailScreen} options={{ title: "送货单详情" }} />
+          <Stack.Screen name="PriceAnomalyApproval" component={PriceAnomalyApprovalScreen} options={{ title: "价格异常审批" }} />
         </>
       )}
     </Stack.Navigator>

@@ -128,6 +128,22 @@ class AttachmentApi {
     return r.data;
   }
 
+  /** 4b. 直传 OSS 并返回 fileUrl（不注册附件元数据）. */
+  async uploadToOss(
+    file: { uri: string; name: string; type: string },
+    factoryId?: string,
+  ): Promise<string> {
+    const { uploadUrl, fileUrl } = await this.getUploadUrl(file.name, file.type, factoryId);
+    const blob = await (await fetch(file.uri)).blob();
+    const putRes = await fetch(uploadUrl, {
+      method: 'PUT',
+      headers: { 'Content-Type': file.type },
+      body: blob,
+    });
+    if (!putRes.ok) throw new Error(`OSS 上传失败 HTTP ${putRes.status}`);
+    return fileUrl;
+  }
+
   /** 5. 注册元数据 (前端 OSS 直传完后调). */
   async register(req: RegisterAttachmentRequest, factoryId?: string): Promise<Attachment> {
     const r = await apiClient.post<{ data: Attachment }>(this.base(factoryId), req);

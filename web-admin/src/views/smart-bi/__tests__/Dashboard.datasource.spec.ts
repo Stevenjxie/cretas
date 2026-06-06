@@ -96,6 +96,7 @@ vi.mock('@/composables/useCapability', () => ({
 vi.mock('@/utils/echarts', () => ({
   default: {
     init: () => ({ setOption: vi.fn(), resize: vi.fn(), dispose: vi.fn() }),
+    connect: vi.fn(),
     graphic: { LinearGradient: class { constructor() {} } },
   },
 }));

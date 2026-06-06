@@ -27,6 +27,7 @@ export interface SupplierDeliveryNoteLineDto {
 }
 
 export type DeliveryPostingStatus = 'UNPOSTED' | 'POSTING' | 'PENDING' | 'POSTED' | 'FAILED';
+export type PriceAnomalyApprovalStatus = 'NONE' | 'PENDING' | 'APPROVED' | 'REJECTED';
 
 export interface SupplierDeliveryNoteDto {
   id: string;
@@ -48,8 +49,28 @@ export interface SupplierDeliveryNoteDto {
   postingError?: string | null;
   rejectReasonCode?: string | null;
   rejectReasonNote?: string | null;
+  priceAnomalyApprovalStatus?: PriceAnomalyApprovalStatus | null;
+  priceAnomalySubmittedBy?: number | null;
+  priceAnomalySubmittedAt?: string | null;
+  priceAnomalyApprovedBy?: number | null;
+  priceAnomalyApprovedAt?: string | null;
+  priceAnomalyRejectedBy?: number | null;
+  priceAnomalyRejectedAt?: string | null;
+  priceAnomalyApprovalComment?: string | null;
+  sourceRequisitionId?: string | null;
+  procurementConfirmedBy?: number | null;
+  procurementConfirmedAt?: string | null;
+  supplierContactNote?: string | null;
+  voiceAudioUrl?: string | null;
+  voiceTranscriptText?: string | null;
+  supplierQuotePhotoUrls?: string[] | null;
+  expectedDeliveryDate?: string | null;
   lowConfidenceWarning?: boolean;
   lines?: SupplierDeliveryNoteLineDto[];
+}
+
+export interface PriceAnomalyApprovalBody {
+  comment?: string;
 }
 
 export interface NoteLimits {
@@ -154,4 +175,38 @@ export function deleteNote(
   noteId: string,
 ): Promise<ApiResponse<void>> {
   return del(`${base(factoryId)}/${noteId}`);
+}
+
+/** 提交价格异常老板审批。 */
+export function submitPriceAnomalyApproval(
+  factoryId: string,
+  noteId: string,
+): Promise<ApiResponse<SupplierDeliveryNoteDto>> {
+  return post(`${base(factoryId)}/${noteId}/price-anomaly/submit`);
+}
+
+/** 老板批准价格异常。 */
+export function approvePriceAnomaly(
+  factoryId: string,
+  noteId: string,
+  body?: PriceAnomalyApprovalBody,
+): Promise<ApiResponse<SupplierDeliveryNoteDto>> {
+  return post(`${base(factoryId)}/${noteId}/price-anomaly/approve`, body || {});
+}
+
+/** 老板驳回价格异常。 */
+export function rejectPriceAnomaly(
+  factoryId: string,
+  noteId: string,
+  body?: PriceAnomalyApprovalBody,
+): Promise<ApiResponse<SupplierDeliveryNoteDto>> {
+  return post(`${base(factoryId)}/${noteId}/price-anomaly/reject`, body || {});
+}
+
+/** 待审批价格异常列表。 */
+export function getPendingPriceAnomalyApprovals(
+  factoryId: string,
+  params?: { page?: number; size?: number },
+): Promise<ApiResponse<PageResult<SupplierDeliveryNoteDto>>> {
+  return get(`${base(factoryId)}/price-anomaly/pending`, { params });
 }

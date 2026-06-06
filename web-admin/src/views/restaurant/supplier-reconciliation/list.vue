@@ -53,6 +53,31 @@
                 </template>
               </el-table-column>
               <el-table-column prop="remark" label="说明" min-width="180" />
+              <el-table-column label="送货照片" width="100">
+                <template #default="{ row: line }">
+                  <el-link v-if="line.photoOssUrl" :href="line.photoOssUrl" target="_blank" type="primary">查看</el-link>
+                  <span v-else>—</span>
+                </template>
+              </el-table-column>
+              <el-table-column label="语音转录" min-width="160">
+                <template #default="{ row: line }">
+                  <span class="evidence-text">{{ line.voiceTranscriptText || '—' }}</span>
+                </template>
+              </el-table-column>
+              <el-table-column label="价格审批" width="110">
+                <template #default="{ row: line }">
+                  <el-tag v-if="line.priceAnomalyApprovalStatus" size="small" :type="line.priceAnomalyApprovalStatus === 'APPROVED' ? 'success' : 'warning'">
+                    {{ line.priceAnomalyApprovalStatus }}
+                  </el-tag>
+                  <span v-else>—</span>
+                </template>
+              </el-table-column>
+              <el-table-column label="审批意见" min-width="140">
+                <template #default="{ row: line }">{{ line.priceAnomalyApprovalComment || '—' }}</template>
+              </el-table-column>
+              <el-table-column label="应付单号" min-width="140">
+                <template #default="{ row: line }">{{ line.payableTransactionId || line.apTransactionNumber || '—' }}</template>
+              </el-table-column>
             </el-table>
           </template>
         </el-table-column>
@@ -301,6 +326,13 @@ function currentMonth() {
 .main-table { margin-top: 12px; }
 .pager { margin-top: 12px; justify-content: flex-end; }
 .danger { color: var(--el-color-danger); font-weight: 600; }
+.evidence-text {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-word;
+}
 .muted { color: var(--el-text-color-secondary); font-size: 12px; }
 .empty-state { padding: 16px 0; }
 .empty-state p { margin: 4px 0; }

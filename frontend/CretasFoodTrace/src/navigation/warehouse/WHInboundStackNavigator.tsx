@@ -15,6 +15,10 @@ import WHInspectScreen from "../../screens/warehouse/inbound/WHInspectScreen";
 import WHPutawayScreen from "../../screens/warehouse/inbound/WHPutawayScreen";
 import WHReceiptCreateScreen from "../../screens/warehouse/inbound/WHReceiptCreateScreen";
 import WHScanOperationScreen from "../../screens/warehouse/shared/WHScanOperationScreen";
+import SupplierDeliveryListScreen from "../../screens/restaurant/supplier-delivery/SupplierDeliveryListScreen";
+import SupplierDeliveryCreateScreen from "../../screens/restaurant/supplier-delivery/SupplierDeliveryCreateScreen";
+import SupplierDeliveryDetailScreen from "../../screens/restaurant/supplier-delivery/SupplierDeliveryDetailScreen";
+import PriceAnomalyApprovalScreen from "../../screens/restaurant/supplier-delivery/PriceAnomalyApprovalScreen";
 
 const Stack = createNativeStackNavigator<WHInboundStackParamList>();
 
@@ -69,6 +73,11 @@ export function WHInboundStackNavigator() {
         component={WHReceiptCreateScreen}
         options={{ title: "扫码入库录入" }}
       />
+
+      <Stack.Screen name="SupplierDeliveryList" component={SupplierDeliveryListScreen} options={{ title: "待验收入库" }} />
+      <Stack.Screen name="SupplierDeliveryCreate" component={SupplierDeliveryCreateScreen} options={{ title: "新建送货单" }} />
+      <Stack.Screen name="SupplierDeliveryDetail" component={SupplierDeliveryDetailScreen} options={{ title: "送货单详情" }} />
+      <Stack.Screen name="PriceAnomalyApproval" component={PriceAnomalyApprovalScreen} options={{ title: "价格异常审批" }} />
     </Stack.Navigator>
   );
 }

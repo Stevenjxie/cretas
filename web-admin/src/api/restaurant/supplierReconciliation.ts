@@ -24,6 +24,16 @@ export interface SupplierMonthlyReconciliationLineDto {
   differenceAmount?: number | null;
   lineStatus: SupplierReconciliationLineStatus;
   remark?: string | null;
+  photoOssUrl?: string | null;
+  voiceAudioUrl?: string | null;
+  voiceTranscriptText?: string | null;
+  supplierContactNote?: string | null;
+  priceAnomalyApprovalStatus?: string | null;
+  priceAnomalyApprovedBy?: number | null;
+  priceAnomalyApprovedAt?: string | null;
+  priceAnomalyApprovalComment?: string | null;
+  payableTransactionId?: string | null;
+  payablePostedAt?: string | null;
 }
 
 export interface SupplierMonthlyReconciliationDto {

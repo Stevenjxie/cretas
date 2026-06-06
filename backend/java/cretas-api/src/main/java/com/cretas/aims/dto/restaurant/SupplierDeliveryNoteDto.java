@@ -43,6 +43,24 @@ public class SupplierDeliveryNoteDto {
     private String rejectReasonCode;
     private String rejectReasonNote;
 
+    private String priceAnomalyApprovalStatus;
+    private Long priceAnomalySubmittedBy;
+    private String priceAnomalySubmittedAt;
+    private Long priceAnomalyApprovedBy;
+    private String priceAnomalyApprovedAt;
+    private Long priceAnomalyRejectedBy;
+    private String priceAnomalyRejectedAt;
+    private String priceAnomalyApprovalComment;
+
+    private String sourceRequisitionId;
+    private Long procurementConfirmedBy;
+    private String procurementConfirmedAt;
+    private String supplierContactNote;
+    private String voiceAudioUrl;
+    private String voiceTranscriptText;
+    private List<String> supplierQuotePhotoUrls;
+    private LocalDate expectedDeliveryDate;
+
     /** Rule 5: 置信度 < 阈值时前端显橙色重拍提示。 */
     private Boolean lowConfidenceWarning;
 
@@ -79,6 +97,29 @@ public class SupplierDeliveryNoteDto {
     public static class RejectRequest {
         private String rejectReasonCode;    // IMAGE_BLUR | LOW_LIGHT | WRONG_DOCUMENT | SUPPLIER_NOT_FOUND | OTHER
         private String rejectReasonNote;
+    }
+
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class PriceAnomalyApprovalRequest {
+        private String comment;
+    }
+
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class ProcurementConfirmRequest {
+        private String sourceRequisitionId;
+        private String supplierId;
+        private String supplierName;
+        private LocalDate deliveryDate;
+        private LocalDate expectedDeliveryDate;
+        private String supplierContactNote;
+        private String voiceAudioUrl;
+        private String voiceTranscriptText;
+        private List<String> supplierQuotePhotoUrls;
+        private List<LineDto> lines;
     }
 
     /** 人工录入 (createManual, 决策 D2) / 行项批量编辑请求体。 */

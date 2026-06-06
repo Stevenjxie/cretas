@@ -9,6 +9,7 @@
             <span class="data-count">共 {{ pagination.total }} 条</span>
           </div>
           <div class="header-right">
+            <el-button @click="goPendingApprovals">价格异常待审批</el-button>
             <el-button v-if="canWrite" :icon="Document" @click="openImport">
               导入草稿
             </el-button>
@@ -236,6 +237,10 @@ function onParsed(note: SupplierDeliveryNoteDto) {
 
 function goDetail(row: SupplierDeliveryNoteDto) {
   router.push({ name: 'SupplierDeliveryNoteDetail', params: { id: row.id } });
+}
+
+function goPendingApprovals() {
+  router.push({ name: 'PriceAnomalyApprovalList' });
 }
 
 watch(() => route.query.openImport, openImportFromQuery, { immediate: true });

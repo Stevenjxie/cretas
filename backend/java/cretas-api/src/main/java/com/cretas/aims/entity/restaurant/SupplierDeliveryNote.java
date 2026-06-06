@@ -4,6 +4,7 @@ import com.cretas.aims.entity.BaseEntity;
 import com.cretas.aims.entity.restaurant.enums.DeliveryNoteSourceType;
 import com.cretas.aims.entity.restaurant.enums.DeliveryNoteStatus;
 import com.cretas.aims.entity.restaurant.enums.DeliveryPostingStatus;
+import com.cretas.aims.entity.restaurant.enums.PriceAnomalyApprovalStatus;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import lombok.*;
 import org.hibernate.annotations.Where;
@@ -143,6 +144,55 @@ public class SupplierDeliveryNote extends BaseEntity {
 
     @Column(name = "reject_reason_note", columnDefinition = "TEXT")
     private String rejectReasonNote;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "price_anomaly_approval_status", nullable = false, length = 20)
+    private PriceAnomalyApprovalStatus priceAnomalyApprovalStatus = PriceAnomalyApprovalStatus.NONE;
+
+    @Column(name = "price_anomaly_submitted_by")
+    private Long priceAnomalySubmittedBy;
+
+    @Column(name = "price_anomaly_submitted_at")
+    private LocalDateTime priceAnomalySubmittedAt;
+
+    @Column(name = "price_anomaly_approved_by")
+    private Long priceAnomalyApprovedBy;
+
+    @Column(name = "price_anomaly_approved_at")
+    private LocalDateTime priceAnomalyApprovedAt;
+
+    @Column(name = "price_anomaly_rejected_by")
+    private Long priceAnomalyRejectedBy;
+
+    @Column(name = "price_anomaly_rejected_at")
+    private LocalDateTime priceAnomalyRejectedAt;
+
+    @Column(name = "price_anomaly_approval_comment", columnDefinition = "TEXT")
+    private String priceAnomalyApprovalComment;
+
+    @Column(name = "source_requisition_id", length = 191)
+    private String sourceRequisitionId;
+
+    @Column(name = "procurement_confirmed_by")
+    private Long procurementConfirmedBy;
+
+    @Column(name = "procurement_confirmed_at")
+    private LocalDateTime procurementConfirmedAt;
+
+    @Column(name = "supplier_contact_note", columnDefinition = "TEXT")
+    private String supplierContactNote;
+
+    @Column(name = "voice_audio_url", length = 500)
+    private String voiceAudioUrl;
+
+    @Column(name = "voice_transcript_text", columnDefinition = "TEXT")
+    private String voiceTranscriptText;
+
+    @Column(name = "supplier_quote_photo_urls", columnDefinition = "TEXT")
+    private String supplierQuotePhotoUrls;
+
+    @Column(name = "expected_delivery_date")
+    private LocalDate expectedDeliveryDate;
 
     @Column(name = "created_by")
     private Long createdBy;
