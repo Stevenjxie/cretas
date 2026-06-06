@@ -46,6 +46,8 @@ export function ProcurementDeliveryConfirmScreen() {
   const [expectedDeliveryDate, setExpectedDeliveryDate] = useState('');
   const [supplierContactNote, setSupplierContactNote] = useState('');
   const [voiceTranscriptText, setVoiceTranscriptText] = useState('');
+  const [voiceAudioUrl, setVoiceAudioUrl] = useState('');
+  const [voiceUploading, setVoiceUploading] = useState(false);
   const [voiceRecording, setVoiceRecording] = useState(false);
   const [quotePhotos, setQuotePhotos] = useState<QuotePhoto[]>([]);
   const [materials, setMaterials] = useState<MaterialType[]>([]);
@@ -141,6 +143,22 @@ export function ProcurementDeliveryConfirmScreen() {
     setQuotePhotos((prev) => prev.filter((p) => p.key !== key));
   };
 
+  const uploadVoiceRecording = useCallback(async (audioUri: string) => {
+    setVoiceUploading(true);
+    try {
+      const fileUrl = await attachmentApi.uploadToOss({
+        uri: audioUri,
+        name: `supplier_voice_${Date.now()}.wav`,
+        type: 'audio/wav',
+      }, factoryId);
+      setVoiceAudioUrl(fileUrl);
+    } catch (error) {
+      handleError(error, { title: '语音录音上传失败', showAlert: false });
+    } finally {
+      setVoiceUploading(false);
+    }
+  }, [factoryId]);
+
   const toggleVoiceRecording = async () => {
     if (voiceRecording) {
       try {
@@ -150,6 +168,9 @@ export function ProcurementDeliveryConfirmScreen() {
           setVoiceTranscriptText((prev) => (prev.trim() ? `${prev.trim()}\n${text}` : text));
         } else if (!voiceTranscriptText.trim()) {
           Alert.alert('未识别到语音', '可重试录音，或直接粘贴供应商联系记录。');
+        }
+        if (result?.audioUri) {
+          await uploadVoiceRecording(result.audioUri);
         }
       } catch (error) {
         handleError(error, { title: '语音识别失败' });
@@ -187,6 +208,10 @@ export function ProcurementDeliveryConfirmScreen() {
       Alert.alert('照片上传中', '请等待报价照片上传完成后再提交。');
       return;
     }
+    if (voiceUploading) {
+      Alert.alert('语音上传中', '请等待录音上传完成后再提交。');
+      return;
+    }
 
     setSubmitting(true);
     try {
@@ -199,6 +224,7 @@ export function ProcurementDeliveryConfirmScreen() {
         expectedDeliveryDate: expectedDeliveryDate || undefined,
         supplierContactNote: supplierContactNote.trim() || undefined,
         voiceTranscriptText: voiceTranscriptText.trim() || undefined,
+        voiceAudioUrl: voiceAudioUrl.trim() || undefined,
         supplierQuotePhotoUrls: supplierQuotePhotoUrls.length > 0 ? supplierQuotePhotoUrls : undefined,
         lines: validLines.map((line) => ({
           ingredientName: line.ingredientName,
@@ -295,6 +321,10 @@ export function ProcurementDeliveryConfirmScreen() {
           placeholder="录音转写会填入此处，也可手动粘贴或编辑"
           style={styles.input}
         />
+        {voiceUploading ? <Text style={styles.meta}>语音录音上传中…</Text> : null}
+        {!voiceUploading && voiceAudioUrl ? (
+          <Text style={styles.meta}>原音频已保存，将随送货单一并归档。</Text>
+        ) : null}
 
         <View style={styles.sectionRow}>
           <Text style={styles.sectionTitle}>送货明细</Text>

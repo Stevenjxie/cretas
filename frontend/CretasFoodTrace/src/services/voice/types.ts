@@ -31,6 +31,8 @@ export interface SpeechRecognitionResult {
   confidence?: number;
   /** 识别耗时 (ms) */
   duration?: number;
+  /** 本地录音文件 URI（停止录音后可用于上传 OSS） */
+  audioUri?: string;
 }
 
 export type SpeechRecognitionStatus =
