@@ -106,9 +106,9 @@ public class ProcessWorkReportingServiceImpl implements ProcessWorkReportingServ
         // Sync quantities to ProcessTask
         if (report.getProcessTaskId() != null) {
             syncQuantitiesToTask(report.getProcessTaskId(), report.getOutputQuantity(), true);
-            postWipForApprovedReport(factoryId, report, approvedBy);
             checkAndRestoreFromSupplementing(report.getProcessTaskId());
         }
+        postWipForApprovedReport(factoryId, report, approvedBy);
 
         return Map.of("reportId", reportId, "status", "APPROVED");
     }
@@ -191,9 +191,9 @@ public class ProcessWorkReportingServiceImpl implements ProcessWorkReportingServ
 
             if (report.getProcessTaskId() != null) {
                 syncQuantitiesToTask(report.getProcessTaskId(), report.getOutputQuantity(), true);
-                postWipForApprovedReport(factoryId, report, approvedBy);
                 affectedTaskIds.add(report.getProcessTaskId());
             }
+            postWipForApprovedReport(factoryId, report, approvedBy);
 
             results.add(Map.of("reportId", reportId, "status", "APPROVED"));
         }
@@ -443,8 +443,7 @@ public class ProcessWorkReportingServiceImpl implements ProcessWorkReportingServ
     @Override
     public PageResponse<Map<String, Object>> getPendingApprovals(String factoryId, Pageable pageable) {
         Page<ProductionReport> page = reportRepository
-                .findByFactoryIdAndApprovalStatusAndProcessTaskIdIsNotNullAndDeletedAtIsNull(
-                        factoryId, "PENDING", pageable);
+                .findPendingApprovalsForFactory(factoryId, "PENDING", pageable);
 
         List<ProductionReport> reports = page.getContent();
         Map<String, List<String>> evidenceUrls = loadProductionReportEvidenceUrls(factoryId, reports);
@@ -597,6 +596,10 @@ public class ProcessWorkReportingServiceImpl implements ProcessWorkReportingServ
         if (report.getWorkProcessTaskId() == null) {
             return;
         }
+        if (report.getProcessTaskId() == null && !isApprovalWipPostingReport(report)) {
+            log.info("Skip WIP posting for legacy Yield report {}: no approval posting marker", report.getId());
+            return;
+        }
         WorkProcessTask task = workProcessTaskRepository.findByFactoryIdAndId(factoryId, report.getWorkProcessTaskId())
                 .orElse(null);
         if (task == null) {
@@ -605,6 +608,14 @@ public class ProcessWorkReportingServiceImpl implements ProcessWorkReportingServ
             return;
         }
         wipInventoryService.postApprovedOutput(factoryId, report, task, operatorId);
+    }
+
+    private boolean isApprovalWipPostingReport(ProductionReport report) {
+        Map<String, Object> fields = report.getCustomFields();
+        if (fields == null) {
+            return false;
+        }
+        return "APPROVAL".equals(fields.get("wipPostingMode"));
     }
 
     private Long resolveBatchId(ProcessWorkReportSubmitRequest request, WorkProcessTask wipTask) {
@@ -731,6 +742,7 @@ public class ProcessWorkReportingServiceImpl implements ProcessWorkReportingServ
         map.put("batchId", r.getBatchId());
         map.put("workProcessTaskId", r.getWorkProcessTaskId());
         map.put("processOrder", r.getProcessOrder());
+        map.put("reportKind", r.getReportKind());
         map.put("productTypeId", r.getProductTypeId());
         map.put("workerId", r.getWorkerId());
         map.put("reporterName", r.getReporterName());
@@ -758,6 +770,10 @@ public class ProcessWorkReportingServiceImpl implements ProcessWorkReportingServ
         map.put("reversalOfId", r.getReversalOfId());
         map.put("notes", r.getNotes());
         map.put("customFields", r.getCustomFields());
+        map.put("laborSegments", r.getLaborSegments());
+        map.put("byproducts", r.getByproducts());
+        map.put("wasteQuantity", r.getWasteQuantity());
+        map.put("sampleRetainQuantity", r.getSampleRetainQuantity());
         map.put("photos", resolveEvidencePhotos(r, attachmentUrlsByEntityId));
         map.put("createdAt", r.getCreatedAt());
         return map;

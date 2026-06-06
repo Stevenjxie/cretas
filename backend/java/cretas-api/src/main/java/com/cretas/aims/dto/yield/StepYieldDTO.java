@@ -46,6 +46,12 @@ public class StepYieldDTO {
     private List<String> photos;
     /** 多时段×人数工时明细 (本道各次报工 laborSegments 拼接; 无则 null) */
     private List<Map<String, Object>> laborSegments;
+    private BigDecimal processedQuantity;
+    private String processedUnit;
+    private BigDecimal stageOutputQuantity;
+    private String stageOutputUnit;
+    private BigDecimal segmentWasteQuantity;
+    private String segmentWasteUnit;
     /** 副产物明细 (本道各次报工 byproducts 拼接; 无则 null) */
     private List<Map<String, Object>> byproducts;
     /** Σ 本道损耗量 (null-safe; 全 null → null, 绝不默认 0) */

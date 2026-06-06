@@ -196,6 +196,61 @@ class ProcessWorkReportingServiceImplTest {
         }
 
         @Test
+        @DisplayName("UT-PWR-01C: RN Yield 报工只有 WorkProcessTask 且带审批入账标记时, Web 审批后写入 WIP")
+        void approveReport_rnYieldApprovalMarker_postsWipWithoutProcessTask() {
+            ProductionReport report = ProductionReport.builder()
+                    .id(REPORT_ID)
+                    .factoryId(FACTORY_ID)
+                    .processTaskId(null)
+                    .workProcessTaskId(7001L)
+                    .batchId(9001L)
+                    .reportType("YIELD")
+                    .reportKind("INPUT")
+                    .inputQuantity(new BigDecimal("35"))
+                    .inputUnit("kg")
+                    .sourceWipNo("WIP-S1")
+                    .approvalStatus("PENDING")
+                    .status(ProductionReport.Status.SUBMITTED)
+                    .customFields(Map.of("reportStack", "YIELD", "wipPostingMode", "APPROVAL"))
+                    .build();
+            WorkProcessTask workProcessTask = wipTask().build();
+
+            when(reportRepository.findById(REPORT_ID)).thenReturn(Optional.of(report));
+            when(reportRepository.save(any(ProductionReport.class))).thenReturn(report);
+            when(workProcessTaskRepository.findByFactoryIdAndId(FACTORY_ID, 7001L))
+                    .thenReturn(Optional.of(workProcessTask));
+
+            service.approveReport(FACTORY_ID, REPORT_ID, APPROVER_ID);
+
+            verify(taskRepository, never()).findById(anyString());
+            verify(wipInventoryService).postApprovedOutput(FACTORY_ID, report, workProcessTask, APPROVER_ID);
+        }
+
+        @Test
+        @DisplayName("UT-PWR-01D: 历史 RN Yield 报工无审批入账标记时跳过 WIP, 防止重复过账")
+        void approveReport_legacyRnYieldWithoutMarker_skipsWipPosting() {
+            ProductionReport report = ProductionReport.builder()
+                    .id(REPORT_ID)
+                    .factoryId(FACTORY_ID)
+                    .processTaskId(null)
+                    .workProcessTaskId(7001L)
+                    .batchId(9001L)
+                    .reportType("YIELD")
+                    .outputQuantity(new BigDecimal("50"))
+                    .approvalStatus("PENDING")
+                    .status(ProductionReport.Status.SUBMITTED)
+                    .build();
+
+            when(reportRepository.findById(REPORT_ID)).thenReturn(Optional.of(report));
+            when(reportRepository.save(any(ProductionReport.class))).thenReturn(report);
+
+            service.approveReport(FACTORY_ID, REPORT_ID, APPROVER_ID);
+
+            verify(workProcessTaskRepository, never()).findByFactoryIdAndId(anyString(), anyLong());
+            verify(wipInventoryService, never()).postApprovedOutput(anyString(), any(), any(), any());
+        }
+
+        @Test
         @DisplayName("UT-PWR-02: 工厂ID不匹配 — 抛出BusinessException")
         void approveReport_wrongFactory_throwsException() {
             ProductionReport report = pendingReport().build();

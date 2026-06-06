@@ -55,13 +55,17 @@ public class WipInventoryServiceImpl implements WipInventoryService {
         if (factoryId == null || factoryId.isBlank()) {
             return wipRepo.findByIntermediateBatchNoAndDeletedAtIsNull(sourceWipNo);
         }
-        return wipRepo.findForUpdateByIntermediateBatchNoAndDeletedAtIsNull(sourceWipNo);
+        return wipRepo.findForUpdateByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(factoryId, sourceWipNo);
     }
 
     @Override
     @Transactional
     public void postApprovedOutput(String factoryId, ProductionReport report, WorkProcessTask task, Long operatorId) {
         if (report == null || task == null || task.getProductionBatchId() == null) {
+            return;
+        }
+        if (Boolean.TRUE.equals(report.getCustomFields() == null ? null : report.getCustomFields().get("wipPosted"))) {
+            log.info("Skip WIP posting for report {}: already posted", report.getId());
             return;
         }
         if (report.getSourceWipNo() != null && !report.getSourceWipNo().isBlank()
@@ -71,14 +75,37 @@ public class WipInventoryServiceImpl implements WipInventoryService {
             consumeSourceWip(sourceWip, report.getInputQuantity(), report, task, operatorId);
         }
         if (report.getOutputQuantity() != null && report.getOutputQuantity().compareTo(BigDecimal.ZERO) > 0) {
-            upsertProducedWip(factoryId, report, task);
+            BigDecimal rollLabor = report.getLaborCost();
+            BigDecimal rollMaterial = report.getMaterialCost();
+            if ("OUTPUT".equals(report.getReportKind())) {
+                CostRollup rollup = calculateTaskCostRollup(factoryId, task.getId());
+                rollLabor = rollup.laborCost();
+                rollMaterial = rollup.materialCost();
+            }
+            upsertProducedWip(factoryId, report, task, rollLabor, rollMaterial);
         }
+        markWipPosted(report);
     }
 
-    private void upsertProducedWip(String factoryId, ProductionReport report, WorkProcessTask task) {
+    private void markWipPosted(ProductionReport report) {
+        Map<String, Object> fields = report.getCustomFields();
+        if (fields == null) {
+            fields = new HashMap<>();
+        } else {
+            fields = new HashMap<>(fields);
+        }
+        fields.put("wipPosted", true);
+        fields.put("wipPostedAt", LocalDateTime.now().toString());
+        report.setCustomFields(fields);
+    }
+
+    private void upsertProducedWip(String factoryId, ProductionReport report, WorkProcessTask task,
+                                   BigDecimal rollLaborCost, BigDecimal rollMaterialCost) {
         String wipNo = generateBatchNo(task);
         BigDecimal out = nz(report.getOutputQuantity());
-        SemiFinishedInventory wip = wipRepo.findByIntermediateBatchNoAndDeletedAtIsNull(wipNo).orElse(null);
+        SemiFinishedInventory wip = wipRepo
+                .findByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(factoryId, wipNo)
+                .orElse(null);
         String outputUnit = firstNonBlank(report.getOutputUnit(), task.getPlannedUnit());
 
         if (wip == null) {
@@ -110,7 +137,7 @@ public class WipInventoryServiceImpl implements WipInventoryService {
             }
         }
 
-        wip.setAccumulatedCost(nullSafeAdd(wip.getAccumulatedCost(), report.getLaborCost(), report.getMaterialCost()));
+        wip.setAccumulatedCost(nullSafeAdd(wip.getAccumulatedCost(), rollLaborCost, rollMaterialCost));
         BigDecimal produced = wip.getProducedQuantity();
         if (wip.getAccumulatedCost() != null && produced != null && produced.signum() > 0) {
             wip.setUnitCost(wip.getAccumulatedCost().divide(produced, 4, RoundingMode.HALF_UP));
@@ -119,6 +146,22 @@ public class WipInventoryServiceImpl implements WipInventoryService {
         }
         wipRepo.save(wip);
     }
+
+    private CostRollup calculateTaskCostRollup(String factoryId, Long workProcessTaskId) {
+        BigDecimal labor = null;
+        BigDecimal material = null;
+        for (ProductionReport r : reportRepo.findYieldReportsByTask(factoryId, workProcessTaskId)) {
+            if (r.getLaborCost() != null) {
+                labor = (labor == null ? BigDecimal.ZERO : labor).add(r.getLaborCost());
+            }
+            if (r.getMaterialCost() != null) {
+                material = (material == null ? BigDecimal.ZERO : material).add(r.getMaterialCost());
+            }
+        }
+        return new CostRollup(labor, material);
+    }
+
+    private record CostRollup(BigDecimal laborCost, BigDecimal materialCost) {}
 
     private void consumeSourceWip(SemiFinishedInventory sourceWip, BigDecimal input,
                                   ProductionReport report, WorkProcessTask task, Long operatorId) {

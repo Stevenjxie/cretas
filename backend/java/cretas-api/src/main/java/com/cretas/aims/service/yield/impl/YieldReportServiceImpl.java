@@ -31,6 +31,7 @@ import com.cretas.aims.repository.lineage.BatchLineageEdgeRepository;
 import com.cretas.aims.repository.recipe.ProcessMaterialRecipeRepository;
 import com.cretas.aims.repository.workprocess.WorkProcessTaskRepository;
 import com.cretas.aims.service.ProcessingService;
+import com.cretas.aims.service.wip.WipInventoryService;
 import com.cretas.aims.service.yield.YieldCalculationService;
 import com.cretas.aims.service.yield.YieldReportService;
 import com.cretas.aims.utils.ReportAuthGuard;
@@ -84,6 +85,7 @@ public class YieldReportServiceImpl implements YieldReportService {
     private final BatchLineageEdgeRepository lineageEdgeRepo;
     private final ObjectMapper objectMapper;
     private final ProcessMaterialRecipeRepository recipeRepository;
+    private final WipInventoryService wipInventoryService;
 
     @Override
     @Transactional
@@ -131,45 +133,14 @@ public class YieldReportServiceImpl implements YieldReportService {
         // M3: targetWorkerId (代报) 仅主管可用; 操作员传则忽略, 强制为登录者。
         Long effectiveWorker = (isSupervisor && req.getTargetWorkerId() != null) ? req.getTargetWorkerId() : workerId;
 
-        // — G7 部分领用防呆 (Rule 1): 报工带 sourceWipNo 时, 校验 inputQuantity ≤ 源 WIP 余额 —
-        // 校验在保存前 (超额不落库); 实际扣减在保存后 (order: validate → save → consume)。
+        // — G7 部分领用防呆 (Rule 1): 报工带 sourceWipNo 时, 校验 inputQuantity ≤ 源 WIP 可申领余额 —
+        // 可申领余额 = 库存余额 - 待审批占用; 校验在保存前, 通过 WipInventoryService 保持两条报工栈口径一致。
         // sourceWipNo=null → 走旧路径 (首道领原料 / 老批次, 向后兼容, 不查 WIP)。
         // 三阶段 (单元1): 领料发生在 INPUT 阶段 (或 legacy); SEGMENT/OUTPUT 阶段不消耗源 WIP (input 已被隔离为 null)。
         SemiFinishedInventory sourceWip = null;
         if ((isInput || isLegacy) && req.getSourceWipNo() != null && !req.getSourceWipNo().isBlank()) {
-            sourceWip = wipRepo.findByIntermediateBatchNoAndDeletedAtIsNull(req.getSourceWipNo())
-                    .orElseThrow(() -> new BusinessException(404, "源半成品库存不存在: " + req.getSourceWipNo())
-                            .withHint("请重新选择要领用的上道半成品批次")
-                            .withHintTarget("sourceWipNo"));
-            // — 跨单位一致性校验 (P0-2 类): WIP 余额单位 (= 上道 outputUnit) 与本道 inputUnit 必须一致 —
-            // available − inputQuantity 在不同单位 (kg vs 份) 间相减无意义, 会静默混算余额。
-            // inputUnit 为空 → 跳过 (向后兼容: 旧客户端不传单位, 由现网全 kg 数据保证一致);
-            // 两单位都非空且不等 → 拒绝, 不降级 (需配单位换算系数才能跨单位领用)。
-            String wipUnit = sourceWip.getUnit();
-            String reqInputUnit = req.getInputUnit();
-            if (wipUnit != null && !wipUnit.isBlank()
-                    && reqInputUnit != null && !reqInputUnit.isBlank()
-                    && !wipUnit.equals(reqInputUnit)) {
-                throw new BusinessException(409, "半成品单位与本道投入单位不一致")
-                        .withCode("WIP_UNIT_MISMATCH")
-                        .withHint(String.format("WIP 单位为 %s, 本道投入单位为 %s, 跨单位领用需先配置换算系数",
-                                wipUnit, reqInputUnit))
-                        .withSeverity("BLOCKING")
-                        .withHintTarget("inputUnit");
-            }
-            BigDecimal want = req.getInputQuantity();
-            BigDecimal avail = sourceWip.getAvailableQuantity() == null
-                    ? BigDecimal.ZERO : sourceWip.getAvailableQuantity();
-            if (want != null && want.compareTo(avail) > 0) {
-                String u = sourceWip.getUnit() == null ? "" : sourceWip.getUnit();
-                throw new BusinessException(409, "领用量超过半成品余额")
-                        .withCode("WIP_INSUFFICIENT")
-                        .withHint(String.format("WIP 余额仅 %s %s, 不能领 %s %s",
-                                avail.stripTrailingZeros().toPlainString(), u,
-                                want.stripTrailingZeros().toPlainString(), u))
-                        .withSeverity("BLOCKING")
-                        .withHintTarget("inputQuantity");
-            }
+            sourceWip = wipInventoryService.validateSourceWip(
+                    factoryId, req.getSourceWipNo(), effInput, effInputUnit, null);
         }
 
         // 前置查该 task 已有 YIELD 报工: 决定是否首条 + 作双写求和基数
@@ -230,6 +201,7 @@ public class YieldReportServiceImpl implements YieldReportService {
                 .byproducts(toByproductMaps(effByproducts))
                 .wasteQuantity(effWaste)
                 .sampleRetainQuantity(effSampleRetain)
+                .customFields(buildYieldCustomFields(reportKind))
                 // 工序批次号是任务级: 仅首条报工生成, 后续条 null (避免 uq_pr_intermediate_batch_no 冲突)
                 .intermediateBatchNo(isFirstReportForTask ? generateBatchNo(t, batchId) : null)
                 // G7: 本道领用的源 WIP 工序批次号 (向后兼容: null 走旧路径); 三阶段: 仅 INPUT/legacy 消耗
@@ -313,32 +285,8 @@ public class YieldReportServiceImpl implements YieldReportService {
         t.setActualQuantity(taskTotal);
         taskRepo.save(t);
 
-        // — G7: 扣减源 WIP (报工保存后, 同事务) —
-        // sourceWip 已在保存前防呆校验过 (inputQuantity ≤ available); 此处实际递减。
-        // 三阶段: sourceWip 仅在 INPUT/legacy 被解析, effInput 即本道投入。
-        if (sourceWip != null && effInput != null) {
-            consumeSourceWip(sourceWip, effInput, saved, t, effectiveWorker);
-        }
-
-        // — G6: 本道产出进 WIP (报工保存后, 同事务; 按 intermediateBatchNo 幂等, 跨天累加) —
-        // 三阶段: 产出在 OUTPUT 阶段锁定 (effOutput 仅 OUTPUT/legacy 非空); INPUT/SEGMENT 无产出 → 不 upsert。
-        if (saved.getOutputQuantity() != null && saved.getOutputQuantity().compareTo(BigDecimal.ZERO) > 0) {
-            // OUTPUT 阶段本报工 laborCost/materialCost 均 null (成本在 INPUT/SEGMENT 报工上),
-            // WIP 成本滚动须用整道汇总 (Σ INPUT materialCost + Σ SEGMENT laborCost); legacy 用本报工成本。
-            BigDecimal wipRollLabor = saved.getLaborCost();
-            BigDecimal wipRollMaterial = saved.getMaterialCost();
-            if (isOutput) {
-                BigDecimal taskLabor = existingTaskReports.stream()
-                        .map(ProductionReport::getLaborCost).filter(Objects::nonNull)
-                        .reduce(BigDecimal::add).orElse(null);
-                BigDecimal taskMaterial = existingTaskReports.stream()
-                        .map(ProductionReport::getMaterialCost).filter(Objects::nonNull)
-                        .reduce(BigDecimal::add).orElse(null);
-                wipRollLabor = taskLabor;
-                wipRollMaterial = taskMaterial;
-            }
-            upsertProducedWip(factoryId, batchId, t, saved, wipRollLabor, wipRollMaterial);
-        }
+        // WIP 正式消耗/产出统一在 Web 审批通过后由 WipInventoryService.postApprovedOutput 过账。
+        // PENDING 报工只作为待审批占用参与后续可领余额计算, 避免驳回时库存已被提前扣减。
 
         Map<String, Object> out = new HashMap<>();
         out.put("reportId", saved.getId());
@@ -579,7 +527,9 @@ public class YieldReportServiceImpl implements YieldReportService {
                                    BigDecimal rollLaborCost, BigDecimal rollMaterialCost) {
         String wipNo = generateBatchNo(t, batchId);
         BigDecimal out = saved.getOutputQuantity();
-        SemiFinishedInventory wip = wipRepo.findByIntermediateBatchNoAndDeletedAtIsNull(wipNo).orElse(null);
+        SemiFinishedInventory wip = wipRepo
+                .findByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(factoryId, wipNo)
+                .orElse(null);
         if (wip == null) {
             wip = SemiFinishedInventory.builder()
                     .factoryId(factoryId)
@@ -808,8 +758,32 @@ public class YieldReportServiceImpl implements YieldReportService {
             m.put("endTime", s.getEndTime());
             m.put("headcount", s.getHeadcount());
             if (s.getNote() != null) m.put("note", s.getNote());
+            if (s.getProcessedQuantity() != null) m.put("processedQuantity", s.getProcessedQuantity());
+            if (s.getProcessedUnit() != null && !s.getProcessedUnit().isBlank()) {
+                m.put("processedUnit", s.getProcessedUnit());
+            }
+            if (s.getStageOutputQuantity() != null) m.put("stageOutputQuantity", s.getStageOutputQuantity());
+            if (s.getStageOutputUnit() != null && !s.getStageOutputUnit().isBlank()) {
+                m.put("stageOutputUnit", s.getStageOutputUnit());
+            }
+            if (s.getSegmentWasteQuantity() != null) m.put("segmentWasteQuantity", s.getSegmentWasteQuantity());
+            if (s.getSegmentWasteUnit() != null && !s.getSegmentWasteUnit().isBlank()) {
+                m.put("segmentWasteUnit", s.getSegmentWasteUnit());
+            }
+            List<Map<String, Object>> byproductMaps = toByproductMaps(s.getByproducts());
+            if (byproductMaps != null) m.put("byproducts", byproductMaps);
             return m;
         }).collect(Collectors.toList());
+    }
+
+    private Map<String, Object> buildYieldCustomFields(String reportKind) {
+        Map<String, Object> fields = new LinkedHashMap<>();
+        fields.put("reportStack", "YIELD");
+        fields.put("wipPostingMode", "APPROVAL");
+        if (reportKind != null) {
+            fields.put("reportKind", reportKind);
+        }
+        return fields;
     }
 
     /**

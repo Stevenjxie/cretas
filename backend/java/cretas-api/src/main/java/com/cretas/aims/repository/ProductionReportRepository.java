@@ -259,6 +259,18 @@ public interface ProductionReportRepository extends JpaRepository<ProductionRepo
     Page<ProductionReport> findByFactoryIdAndApprovalStatusAndProcessTaskIdIsNotNullAndDeletedAtIsNull(
             String factoryId, String approvalStatus, Pageable pageable);
 
+    @Query("""
+            SELECT r FROM ProductionReport r
+            WHERE r.factoryId = :factoryId
+              AND r.approvalStatus = :approvalStatus
+              AND r.deletedAt IS NULL
+              AND (r.processTaskId IS NOT NULL OR r.workProcessTaskId IS NOT NULL)
+            """)
+    Page<ProductionReport> findPendingApprovalsForFactory(
+            @Param("factoryId") String factoryId,
+            @Param("approvalStatus") String approvalStatus,
+            Pageable pageable);
+
     @Query(value = """
         SELECT
             COALESCE(SUM(CAST(output_quantity AS DECIMAL(12,2))), 0) as total

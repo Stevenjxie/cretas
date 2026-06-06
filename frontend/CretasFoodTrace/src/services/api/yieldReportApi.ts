@@ -80,6 +80,12 @@ export interface StepYieldDTO {
   // ── 适配单元3: 传统报工证据/工时段/副产物/损耗/留样 (本道各次报工合并; 无则 null) ──
   photos?: string[] | null;         // 证据图片 URL (本道各次报工 photos 合并去重)
   laborSegments?: Array<Record<string, unknown>> | null;  // 多时段×人数工时明细 (startTime/endTime/headcount/note)
+  processedQuantity?: number | null;
+  processedUnit?: string | null;
+  stageOutputQuantity?: number | null;
+  stageOutputUnit?: string | null;
+  segmentWasteQuantity?: number | null;
+  segmentWasteUnit?: string | null;
   byproducts?: Array<Record<string, unknown>> | null;     // 副产物明细 (name/quantity/unit)
   wasteQuantity?: number | null;    // Σ 本道损耗量
   sampleRetainQuantity?: number | null;  // Σ 本道留样数 (盒/份)
@@ -164,7 +170,19 @@ export interface YieldReportRequest {
   /** 图片证据 URL 列表 (先传 OSS 拿 URL, 存入 ProductionReport.photos). 六扇门: 产品+电子秤+盒数照. */
   evidenceImages?: string[];
   /** 多时段×人数工时 (张权 多段开工/收工). startTime/endTime = "HH:mm". */
-  laborSegments?: { startTime: string; endTime: string; headcount: number; note?: string }[];
+  laborSegments?: Array<{
+    startTime: string;
+    endTime: string;
+    headcount: number;
+    note?: string;
+    processedQuantity?: number;
+    processedUnit?: string;
+    stageOutputQuantity?: number;
+    stageOutputUnit?: string;
+    segmentWasteQuantity?: number;
+    segmentWasteUnit?: string;
+    byproducts?: { name: string; quantity: number; unit?: string }[];
+  }>;
   /** 副产物明细 (料头/肥油/骨头). */
   byproducts?: { name: string; quantity: number; unit?: string }[];
   /** 损耗量; 选填. */

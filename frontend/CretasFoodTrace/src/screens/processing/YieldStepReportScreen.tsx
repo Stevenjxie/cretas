@@ -155,6 +155,10 @@ const YieldStepReportScreen: React.FC = () => {
   const [segEnd, setSegEnd] = useState('');
   const [segHeadcount, setSegHeadcount] = useState('');
   const [segNote, setSegNote] = useState('');
+  const [segProcessedQty, setSegProcessedQty] = useState('');
+  const [segStageOutputQty, setSegStageOutputQty] = useState('');
+  const [segWasteQty, setSegWasteQty] = useState('');
+  const [segByproducts, setSegByproducts] = useState<ByproductInput[]>([]);
 
   // 图片证据 (投入阶段 / 生产时段段 / 完工出成 各自一份, 切阶段清空)
   const [evidencePhotos, setEvidencePhotos] = useState<EvidencePhoto[]>([]);
@@ -272,6 +276,10 @@ const YieldStepReportScreen: React.FC = () => {
     setSegEnd('');
     setSegHeadcount('');
     setSegNote('');
+    setSegProcessedQty('');
+    setSegStageOutputQty('');
+    setSegWasteQty('');
+    setSegByproducts([]);
     setProductionStepMode('SEGMENT');
   }, [prevOutput]);
 
@@ -455,6 +463,19 @@ const YieldStepReportScreen: React.FC = () => {
     setByproducts((prev) => prev.filter((_, i) => i !== idx));
   }, []);
 
+  const addSegByproduct = useCallback(() => {
+    setSegByproducts((prev) => [...prev, { name: '', quantity: '', unit: '' }]);
+  }, []);
+  const updateSegByproduct = useCallback(
+    (idx: number, field: keyof ByproductInput, val: string) => {
+      setSegByproducts((prev) => prev.map((b, i) => (i === idx ? { ...b, [field]: val } : b)));
+    },
+    [],
+  );
+  const removeSegByproduct = useCallback((idx: number) => {
+    setSegByproducts((prev) => prev.filter((_, i) => i !== idx));
+  }, []);
+
   // 提交后刷新 yield (供阶段重渲染 / 下道预填)
   const refetchYield = useCallback(async () => {
     const yieldRes = await yieldReportApi.getYield(batchId);
@@ -566,11 +587,35 @@ const YieldStepReportScreen: React.FC = () => {
       appAlert('请填写本段工时', '开始时间 / 结束时间 / 人数都要填 (人数 > 0)');
       return;
     }
+    const processed = segProcessedQty.trim() ? parseFloat(segProcessedQty) : null;
+    const stageOut = segStageOutputQty.trim() ? parseFloat(segStageOutputQty) : null;
+    const segWaste = segWasteQty.trim() ? parseFloat(segWasteQty) : null;
+    if ((processed != null && (Number.isNaN(processed) || processed <= 0))
+      || (stageOut != null && (Number.isNaN(stageOut) || stageOut < 0))
+      || (segWaste != null && (Number.isNaN(segWaste) || segWaste < 0))) {
+      appAlert('请核对过程数量', '本段处理量必须大于 0；阶段产出和损耗不能为负数');
+      return;
+    }
+    const validSegByproducts = segByproducts
+      .filter((bp) => bp.name.trim() || bp.quantity.trim())
+      .map((bp) => ({
+        name: bp.name.trim(),
+        quantity: parseFloat(bp.quantity),
+        ...(bp.unit.trim() ? { unit: bp.unit.trim() } : { unit }),
+      }));
+    if (validSegByproducts.some((bp) => !bp.name || Number.isNaN(bp.quantity) || bp.quantity <= 0)) {
+      appAlert('请核对本段副产物', '副产物需要同时填写名称和大于 0 的数量');
+      return;
+    }
     const seg = {
       startTime: segStart.trim(),
       endTime: segEnd.trim(),
       headcount: hc,
       ...(segNote.trim() ? { note: segNote.trim() } : {}),
+      ...(processed != null ? { processedQuantity: processed, processedUnit: unit } : {}),
+      ...(stageOut != null ? { stageOutputQuantity: stageOut, stageOutputUnit: unit } : {}),
+      ...(segWaste != null ? { segmentWasteQuantity: segWaste, segmentWasteUnit: unit } : {}),
+      ...(validSegByproducts.length > 0 ? { byproducts: validSegByproducts } : {}),
     };
     const req: YieldReportRequest = {
       workProcessTaskId: currentTask.id,
@@ -593,6 +638,10 @@ const YieldStepReportScreen: React.FC = () => {
       setSegEnd('');
       setSegHeadcount('');
       setSegNote('');
+      setSegProcessedQty('');
+      setSegStageOutputQty('');
+      setSegWasteQty('');
+      setSegByproducts([]);
       setEvidencePhotos([]);
     } catch (error) {
       handleError(error, { showAlert: false, logError: true });
@@ -607,6 +656,7 @@ const YieldStepReportScreen: React.FC = () => {
       setSubmitting(false);
     }
   }, [currentTask, evidenceUploading, segStart, segEnd, segHeadcount, segNote,
+      segProcessedQty, segStageOutputQty, segWasteQty, segByproducts, unit,
       uploadedEvidenceUrls, batchId, refetchYield]);
 
   // ========================= 阶段 2b: 完工出成 (reportKind=OUTPUT) =========================
@@ -1135,6 +1185,9 @@ const YieldStepReportScreen: React.FC = () => {
                   {reportedSegments.map((seg, i) => (
                     <Text key={`rseg-${i}`} style={styles.reportedSegLine}>
                       · {String(seg.startTime ?? '?')}~{String(seg.endTime ?? '?')}  {String(seg.headcount ?? '?')}人
+                      {seg.processedQuantity ? `  处理 ${String(seg.processedQuantity)}${String(seg.processedUnit ?? unit)}` : ''}
+                      {seg.stageOutputQuantity ? `  阶段产出 ${String(seg.stageOutputQuantity)}${String(seg.stageOutputUnit ?? unit)}` : ''}
+                      {seg.segmentWasteQuantity ? `  损耗 ${String(seg.segmentWasteQuantity)}${String(seg.segmentWasteUnit ?? unit)}` : ''}
                       {seg.note ? `  (${String(seg.note)})` : ''}
                     </Text>
                   ))}
@@ -1184,6 +1237,83 @@ const YieldStepReportScreen: React.FC = () => {
                 editable={!submitting}
                 testID="seg-note"
               />
+
+              <YieldQuantityInput
+                label="本段处理量 (选填)"
+                value={segProcessedQty}
+                onChangeText={setSegProcessedQty}
+                unit={unit}
+                disabled={submitting}
+                testID="seg-processed-qty"
+              />
+              <YieldQuantityInput
+                label="阶段产出 (选填, 不是完工入库)"
+                value={segStageOutputQty}
+                onChangeText={setSegStageOutputQty}
+                unit={unit}
+                disabled={submitting}
+                testID="seg-stage-output-qty"
+              />
+              <YieldQuantityInput
+                label="过程损耗 (选填)"
+                value={segWasteQty}
+                onChangeText={setSegWasteQty}
+                unit={unit}
+                disabled={submitting}
+                testID="seg-waste-qty"
+              />
+
+              <View style={styles.section} testID="seg-byproducts-section">
+                <Text style={styles.sectionTitle}>本段副产物 (选填)</Text>
+                {segByproducts.map((bp, idx) => (
+                  <View style={styles.segRow} key={`seg-bp-${idx}`}>
+                    <TextInput
+                      style={styles.bpNameInput}
+                      value={bp.name}
+                      onChangeText={(v) => updateSegByproduct(idx, 'name', v)}
+                      placeholder="名称"
+                      placeholderTextColor="#C0C4CC"
+                      editable={!submitting}
+                      testID={`seg-bp-name-${idx}`}
+                    />
+                    <TextInput
+                      style={styles.segNumInput}
+                      keyboardType="decimal-pad"
+                      value={bp.quantity}
+                      onChangeText={(v) => updateSegByproduct(idx, 'quantity', v.replace(/[^0-9.]/g, ''))}
+                      placeholder="数量"
+                      placeholderTextColor="#C0C4CC"
+                      editable={!submitting}
+                      testID={`seg-bp-qty-${idx}`}
+                    />
+                    <TextInput
+                      style={styles.bpUnitInput}
+                      value={bp.unit}
+                      onChangeText={(v) => updateSegByproduct(idx, 'unit', v)}
+                      placeholder={unit}
+                      placeholderTextColor="#C0C4CC"
+                      editable={!submitting}
+                      testID={`seg-bp-unit-${idx}`}
+                    />
+                    <TouchableOpacity
+                      style={styles.rowRemoveBtn}
+                      onPress={() => removeSegByproduct(idx)}
+                      disabled={submitting}
+                      accessibilityLabel="删除这行本段副产物"
+                    >
+                      <Text style={styles.rowRemoveText}>×</Text>
+                    </TouchableOpacity>
+                  </View>
+                ))}
+                <TouchableOpacity
+                  style={styles.addRowBtn}
+                  onPress={addSegByproduct}
+                  disabled={submitting}
+                  testID="add-seg-byproduct"
+                >
+                  <Text style={styles.addRowText}>＋ 加一行</Text>
+                </TouchableOpacity>
+              </View>
 
               <View style={styles.divider} />
               {renderEvidenceBlock('本段证据 (照片/视频, 选填)', 'seg-take-photo', 'seg-pick-photo')}

@@ -62,6 +62,17 @@ public class YieldReportRequest {
         private String endTime;     // "HH:mm"
         private Integer headcount;
         private String note;
+        /** 本段实际处理量, 如修油/清洗/装盒过程中的本段处理 kg/盒数. */
+        private BigDecimal processedQuantity;
+        private String processedUnit;
+        /** 本段阶段产出量, 只代表过程产出, 不等于完工入库产出. */
+        private BigDecimal stageOutputQuantity;
+        private String stageOutputUnit;
+        /** 本段过程损耗, 与完工损耗分开记录. */
+        private BigDecimal segmentWasteQuantity;
+        private String segmentWasteUnit;
+        /** 本段过程副产物, 如料头/肥油/骨头. */
+        private List<Byproduct> byproducts;
     }
 
     @Data

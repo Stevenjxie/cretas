@@ -375,11 +375,20 @@ function hasTraditionalDetail(row: Record<string, unknown>): boolean {
     stepOutputPhotos(row).length > 0 ||
     stepSegments(row).length > 0 ||
     stepByproducts(row).length > 0 ||
+    row?.processedQuantity != null ||
+    row?.stageOutputQuantity != null ||
+    row?.segmentWasteQuantity != null ||
     row?.wasteQuantity != null ||
     row?.sampleRetainQuantity != null
   );
 }
 // 工时段单行文案: "08:00-10:00 3人 焯水" (note 可缺省)
+function segmentQtyText(seg: Record<string, unknown>, qtyKey: string, unitKey: string, label: string): string {
+  const qty = seg?.[qtyKey];
+  if (qty == null || String(qty).trim() === '') return '';
+  const unit = (seg?.[unitKey] as string) || '';
+  return `${label}${fmtDash(qty)}${unit}`;
+}
 function segmentText(seg: Record<string, unknown>): string {
   const st = (seg?.startTime as string) || '';
   const et = (seg?.endTime as string) || '';
@@ -828,6 +837,15 @@ function getTimelineIcon(type: string) {
                 </div>
                 <span v-else>—</span>
               </template>
+            </el-table-column>
+            <el-table-column label="过程处理" width="120" align="right">
+              <template #default="{ row }">{{ fmtDash(row.processedQuantity, row.processedUnit || '') }}</template>
+            </el-table-column>
+            <el-table-column label="阶段产出" width="120" align="right">
+              <template #default="{ row }">{{ fmtDash(row.stageOutputQuantity, row.stageOutputUnit || '') }}</template>
+            </el-table-column>
+            <el-table-column label="过程损耗" width="120" align="right">
+              <template #default="{ row }">{{ fmtDash(row.segmentWasteQuantity, row.segmentWasteUnit || '') }}</template>
             </el-table-column>
             <!-- A.6 逐道成本: 人工/材料/小计. null (未配工价 / 无原料单价) → "—" (非 ¥0). canViewPrice 门控. -->
             <el-table-column v-if="canViewPrice" label="人工成本" width="120" align="right">

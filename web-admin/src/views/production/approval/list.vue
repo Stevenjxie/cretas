@@ -161,6 +161,35 @@ function reportModeLabel(mode: string | null | undefined) {
   return mode || '-';
 }
 
+function reportKindLabel(kind: string | null | undefined) {
+  if (kind === 'INPUT') return '投入';
+  if (kind === 'SEGMENT') return '过程';
+  if (kind === 'OUTPUT') return '完工';
+  return kind || '整合报工';
+}
+
+function taskDisplayId(row: ApprovalItem) {
+  return row.processTaskId || row.workProcessTaskId || '-';
+}
+
+function textValue(value: unknown) {
+  if (value === null || value === undefined || String(value).trim() === '') return '-';
+  return String(value);
+}
+
+function segmentQty(seg: Record<string, unknown>, qtyKey: string, unitKey: string) {
+  const qty = seg[qtyKey];
+  if (qty === null || qty === undefined || String(qty).trim() === '') return '-';
+  return `${formatQty(Number(qty))} ${textValue(seg[unitKey]) === '-' ? '' : textValue(seg[unitKey])}`.trim();
+}
+
+function hasProcessDetail(row: ApprovalItem) {
+  return (row.laborSegments?.length ?? 0) > 0
+    || (row.byproducts?.length ?? 0) > 0
+    || row.wasteQuantity !== null && row.wasteQuantity !== undefined
+    || row.sampleRetainQuantity !== null && row.sampleRetainQuantity !== undefined;
+}
+
 const customFieldLabels: Record<string, string> = {
   evidenceWorkflow: '录入口径',
   batchNumber: '生产批次',
@@ -262,10 +291,49 @@ function evidenceImageIndex(urls: string[], url: string): number {
                 <el-descriptions-item label="工时分钟">{{ row.totalWorkMinutes ?? '-' }}</el-descriptions-item>
                 <el-descriptions-item label="工序时间">{{ formatTimeRange(row) }}</el-descriptions-item>
                 <el-descriptions-item label="报工模式">{{ reportModeLabel(row.reportMode) }}</el-descriptions-item>
+                <el-descriptions-item label="报工阶段">{{ reportKindLabel(row.reportKind) }}</el-descriptions-item>
                 <el-descriptions-item label="来源WIP">{{ row.sourceWipNo || '-' }}</el-descriptions-item>
-                <el-descriptions-item label="任务ID">{{ row.processTaskId }}</el-descriptions-item>
+                <el-descriptions-item label="任务ID">{{ taskDisplayId(row) }}</el-descriptions-item>
                 <el-descriptions-item label="证据数量">{{ row.photos?.length ?? 0 }}</el-descriptions-item>
                 <el-descriptions-item label="备注" :span="3">{{ row.notes || '-' }}</el-descriptions-item>
+                <el-descriptions-item v-if="hasProcessDetail(row)" label="过程报工明细" :span="3">
+                  <div class="process-detail-block">
+                    <div v-if="row.laborSegments?.length" class="process-segments">
+                      <div
+                        v-for="(seg, idx) in row.laborSegments"
+                        :key="idx"
+                        class="process-segment-line"
+                      >
+                        <el-tag size="small" effect="plain">第 {{ idx + 1 }} 段</el-tag>
+                        <span>{{ textValue(seg.startTime) }}~{{ textValue(seg.endTime) }}</span>
+                        <span>{{ textValue(seg.headcount) }} 人</span>
+                        <span>处理 {{ segmentQty(seg, 'processedQuantity', 'processedUnit') }}</span>
+                        <span>阶段产出 {{ segmentQty(seg, 'stageOutputQuantity', 'stageOutputUnit') }}</span>
+                        <span>过程损耗 {{ segmentQty(seg, 'segmentWasteQuantity', 'segmentWasteUnit') }}</span>
+                        <span v-if="seg.note">备注 {{ textValue(seg.note) }}</span>
+                      </div>
+                    </div>
+                    <div v-if="row.byproducts?.length" class="custom-field-tags">
+                      <el-tag
+                        v-for="(bp, idx) in row.byproducts"
+                        :key="idx"
+                        type="warning"
+                        effect="plain"
+                        class="custom-field-tag"
+                      >
+                        副产物 {{ textValue(bp.name) }}: {{ formatQty(Number(bp.quantity)) }} {{ textValue(bp.unit) }}
+                      </el-tag>
+                    </div>
+                    <div class="custom-field-tags">
+                      <el-tag v-if="row.wasteQuantity !== null && row.wasteQuantity !== undefined" type="danger" effect="plain" class="custom-field-tag">
+                        完工损耗: {{ formatQty(row.wasteQuantity) }}
+                      </el-tag>
+                      <el-tag v-if="row.sampleRetainQuantity !== null && row.sampleRetainQuantity !== undefined" type="info" effect="plain" class="custom-field-tag">
+                        留样: {{ row.sampleRetainQuantity }}
+                      </el-tag>
+                    </div>
+                  </div>
+                </el-descriptions-item>
                 <el-descriptions-item label="文字录入明细" :span="3">
                   <div v-if="customFieldEntries(row).length" class="custom-field-tags">
                     <el-tag
@@ -419,6 +487,24 @@ function evidenceImageIndex(urls: string[], url: string): number {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+}
+.process-detail-block {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.process-segments {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.process-segment-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  color: #303133;
+  font-size: 13px;
 }
 .custom-field-tag {
   max-width: 100%;

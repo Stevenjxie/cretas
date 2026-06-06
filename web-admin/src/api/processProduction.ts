@@ -254,7 +254,12 @@ export interface ApprovalItem {
   feedInQuantity?: number | null;
   carryoverQuantity?: number | null;
   sourceWipNo?: string | null;
-  outputQuantity: number;
+  outputQuantity?: number | null;
+  reportKind?: 'INPUT' | 'SEGMENT' | 'OUTPUT' | string | null;
+  workProcessTaskId?: number | null;
+  processOrder?: number | null;
+  inputUnit?: string | null;
+  outputUnit?: string | null;
   totalWorkers?: number | null;
   totalWorkMinutes?: number | null;
   productionStartTime?: string | null;
@@ -266,6 +271,10 @@ export interface ApprovalItem {
   isSupplemental: boolean;
   notes?: string | null;
   photos?: string[] | null;
+  laborSegments?: Array<Record<string, unknown>> | null;
+  byproducts?: Array<Record<string, unknown>> | null;
+  wasteQuantity?: number | null;
+  sampleRetainQuantity?: number | null;
   customFields?: Record<string, unknown> | null;
   createdAt: string;
 }

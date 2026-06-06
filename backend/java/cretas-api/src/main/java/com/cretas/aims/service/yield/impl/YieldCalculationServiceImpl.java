@@ -45,6 +45,12 @@ public class YieldCalculationServiceImpl implements YieldCalculationService {
             BigDecimal stepMaterialCost = null;
             // 适配单元3: 证据/工时段/副产物 合并 — 全空保持 null; 损耗/留样 null-safe Σ; 人数 MAX peak (修 M2)
             List<String> stepPhotos = null;          // 合并去重 (保序)
+            BigDecimal stepProcessedQuantity = null;
+            String stepProcessedUnit = null;
+            BigDecimal stepStageOutputQuantity = null;
+            String stepStageOutputUnit = null;
+            BigDecimal stepSegmentWasteQuantity = null;
+            String stepSegmentWasteUnit = null;
             List<Map<String, Object>> stepLaborSegments = null;  // 拼接 (全段明细)
             List<Map<String, Object>> stepByproducts = null;     // 拼接
             BigDecimal stepWaste = null;
@@ -118,6 +124,14 @@ public class YieldCalculationServiceImpl implements YieldCalculationService {
                 if (r.getLaborSegments() != null && !r.getLaborSegments().isEmpty()) {
                     if (stepLaborSegments == null) stepLaborSegments = new ArrayList<>();
                     stepLaborSegments.addAll(r.getLaborSegments());
+                    for (Map<String, Object> segment : r.getLaborSegments()) {
+                        stepProcessedQuantity = addMapDecimal(stepProcessedQuantity, segment, "processedQuantity");
+                        stepProcessedUnit = firstMapString(stepProcessedUnit, segment, "processedUnit");
+                        stepStageOutputQuantity = addMapDecimal(stepStageOutputQuantity, segment, "stageOutputQuantity");
+                        stepStageOutputUnit = firstMapString(stepStageOutputUnit, segment, "stageOutputUnit");
+                        stepSegmentWasteQuantity = addMapDecimal(stepSegmentWasteQuantity, segment, "segmentWasteQuantity");
+                        stepSegmentWasteUnit = firstMapString(stepSegmentWasteUnit, segment, "segmentWasteUnit");
+                    }
                 }
                 // 副产物拼接
                 if (r.getByproducts() != null && !r.getByproducts().isEmpty()) {
@@ -172,6 +186,12 @@ public class YieldCalculationServiceImpl implements YieldCalculationService {
                     .stepCost(stepCost)
                     .photos(stepPhotos)
                     .laborSegments(stepLaborSegments)
+                    .processedQuantity(stepProcessedQuantity)
+                    .processedUnit(stepProcessedUnit)
+                    .stageOutputQuantity(stepStageOutputQuantity)
+                    .stageOutputUnit(stepStageOutputUnit)
+                    .segmentWasteQuantity(stepSegmentWasteQuantity)
+                    .segmentWasteUnit(stepSegmentWasteUnit)
                     .byproducts(stepByproducts)
                     .wasteQuantity(stepWaste)
                     .sampleRetainQuantity(stepSampleRetain)
@@ -265,5 +285,33 @@ public class YieldCalculationServiceImpl implements YieldCalculationService {
             }
         }
         return sum;
+    }
+
+    private static BigDecimal addMapDecimal(BigDecimal current, Map<String, Object> map, String key) {
+        if (map == null || map.get(key) == null) {
+            return current;
+        }
+        BigDecimal value;
+        Object raw = map.get(key);
+        if (raw instanceof BigDecimal decimal) {
+            value = decimal;
+        } else if (raw instanceof Number number) {
+            value = new BigDecimal(number.toString());
+        } else {
+            String s = raw.toString();
+            if (s.isBlank()) {
+                return current;
+            }
+            value = new BigDecimal(s);
+        }
+        return (current == null ? BigDecimal.ZERO : current).add(value);
+    }
+
+    private static String firstMapString(String current, Map<String, Object> map, String key) {
+        if (current != null || map == null || map.get(key) == null) {
+            return current;
+        }
+        String value = map.get(key).toString();
+        return value.isBlank() ? null : value;
     }
 }

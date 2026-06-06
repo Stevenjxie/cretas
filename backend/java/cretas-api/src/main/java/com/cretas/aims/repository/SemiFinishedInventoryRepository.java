@@ -30,9 +30,19 @@ public interface SemiFinishedInventoryRepository extends JpaRepository<SemiFinis
      */
     Optional<SemiFinishedInventory> findByIntermediateBatchNoAndDeletedAtIsNull(String intermediateBatchNo);
 
+    Optional<SemiFinishedInventory> findByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(
+            String factoryId, String intermediateBatchNo);
+
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("SELECT w FROM SemiFinishedInventory w WHERE w.intermediateBatchNo = :intermediateBatchNo AND w.deletedAt IS NULL")
     Optional<SemiFinishedInventory> findForUpdateByIntermediateBatchNoAndDeletedAtIsNull(
+            @Param("intermediateBatchNo") String intermediateBatchNo);
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT w FROM SemiFinishedInventory w WHERE w.factoryId = :factoryId "
+            + "AND w.intermediateBatchNo = :intermediateBatchNo AND w.deletedAt IS NULL")
+    Optional<SemiFinishedInventory> findForUpdateByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(
+            @Param("factoryId") String factoryId,
             @Param("intermediateBatchNo") String intermediateBatchNo);
 
     /** 某生产批次的全部 WIP 行 (整批出成率在制量汇总用)。 */
