@@ -329,6 +329,13 @@ public class SupplierMonthlyReconciliationServiceImpl implements SupplierMonthly
     }
 
     private SupplierMonthlyReconciliationDto toDto(SupplierMonthlyReconciliation r) {
+        List<SupplierMonthlyReconciliationDto.UnReconciledNoteDto> unReconciledNotes = List.of();
+        if (r.getStatus() == SupplierMonthlyReconciliation.Status.CONFIRMED
+                && r.getId() != null
+                && r.getPeriodStart() != null
+                && r.getPeriodEnd() != null) {
+            unReconciledNotes = buildUnReconciledNotes(r);
+        }
         return SupplierMonthlyReconciliationDto.builder()
                 .id(r.getId())
                 .factoryId(r.getFactoryId())
@@ -352,7 +359,31 @@ public class SupplierMonthlyReconciliationServiceImpl implements SupplierMonthly
                 .updatedAt(r.getUpdatedAt() != null ? r.getUpdatedAt().toString() : null)
                 .lines(r.getLines() == null ? List.of() : r.getLines().stream()
                         .map(line -> toLineDto(r.getFactoryId(), line)).toList())
+                .unReconciledNotes(unReconciledNotes)
                 .build();
+    }
+
+    /**
+     * Reads delivery notes that were confirmed (have AP invoice) within the reconciliation
+     * period but are NOT present in any reconciliation line of this frozen reconciliation.
+     * Pure read-only: does not write or modify any financial data.
+     */
+    private List<SupplierMonthlyReconciliationDto.UnReconciledNoteDto> buildUnReconciledNotes(
+            SupplierMonthlyReconciliation r) {
+        List<SupplierDeliveryNote> orphans = deliveryNoteRepository.findOrphanNotesNotInReconciliation(
+                r.getFactoryId(), r.getSupplierId(),
+                r.getPeriodStart(), r.getPeriodEnd(),
+                r.getId());
+        return orphans.stream()
+                .map(note -> SupplierMonthlyReconciliationDto.UnReconciledNoteDto.builder()
+                        .deliveryNoteId(note.getId())
+                        .noteNumber(note.getNoteNumber())
+                        .deliveryDate(note.getDeliveryDate())
+                        .totalAmount(note.getTotalAmount())
+                        .payableTransactionId(note.getPayableTransactionId())
+                        .confirmedAt(note.getConfirmedAt() != null ? note.getConfirmedAt().toString() : null)
+                        .build())
+                .toList();
     }
 
     private SupplierMonthlyReconciliationDto.LineDto toLineDto(String factoryId,

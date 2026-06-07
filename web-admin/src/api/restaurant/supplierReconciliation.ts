@@ -36,6 +36,19 @@ export interface SupplierMonthlyReconciliationLineDto {
   payablePostedAt?: string | null;
 }
 
+/**
+ * A delivery note confirmed after the reconciliation was frozen.
+ * Read-only informational field — does not affect any financial totals.
+ */
+export interface UnReconciledNoteDto {
+  deliveryNoteId: string;
+  noteNumber?: string | null;
+  deliveryDate?: string | null;
+  totalAmount?: number | null;
+  payableTransactionId?: string | null;
+  confirmedAt?: string | null;
+}
+
 export interface SupplierMonthlyReconciliationDto {
   id: string;
   factoryId: string;
@@ -58,6 +71,8 @@ export interface SupplierMonthlyReconciliationDto {
   createdAt?: string | null;
   updatedAt?: string | null;
   lines?: SupplierMonthlyReconciliationLineDto[];
+  /** Orphan notes confirmed after this reconciliation was frozen. Empty list when none. */
+  unReconciledNotes?: UnReconciledNoteDto[];
 }
 
 export interface DraftReconciliationBody {
