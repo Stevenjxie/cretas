@@ -128,6 +128,51 @@ wait_for_health_via_ssh() {
     return 1
 }
 
+# ==================== Git 同步检查 ====================
+
+# check_git_sync <project_root> [step_label]
+# 部署前确认本地 HEAD 与 origin/main 一致 (防 stale-local-deploy, May 11 2026 bug fix;
+# per HARD rule feedback_organizer_must_git_pull_before_deploy.md):
+# - 在 main 分支且与 origin/main 不一致 → ERROR + exit 1 (除非 SKIP_GIT_CHECK=1)
+# - 非 main 分支 → WARN 提示确认部署源
+# - 工作树有未提交改动 → WARN (非致命)
+# 依赖调用方已 source 本库 (用 log). 注意: 函数内 cd 会改变调用方 cwd (与原内联行为一致).
+check_git_sync() {
+    local project_root="$1"
+    local step_label="${2:-Git sync pre-check...}"
+    cd "$project_root" || { log "ERROR" "check_git_sync: 无法 cd 到 $project_root"; exit 1; }
+    log "INFO" "$step_label"
+    git fetch origin main 2>/dev/null || log "WARN" "git fetch origin main failed (offline?), continue with caution"
+
+    local local_sha origin_sha current_branch
+    local_sha=$(git rev-parse HEAD 2>/dev/null || echo "unknown")
+    origin_sha=$(git rev-parse origin/main 2>/dev/null || echo "unknown")
+    current_branch=$(git branch --show-current 2>/dev/null || echo "unknown")
+
+    if [ "$local_sha" != "$origin_sha" ] && [ "$local_sha" != "unknown" ] && [ "$origin_sha" != "unknown" ]; then
+        if [ "$current_branch" = "main" ]; then
+            log "ERROR" "Local main HEAD != origin/main HEAD"
+            log "ERROR" "  local : $local_sha"
+            log "ERROR" "  origin: $origin_sha"
+            log "ERROR" "Run: cd $project_root && git pull origin main"
+            log "ERROR" "Override: SKIP_GIT_CHECK=1 重新运行部署脚本"
+            if [ "${SKIP_GIT_CHECK:-}" != "1" ]; then
+                exit 1
+            fi
+            log "WARN" "SKIP_GIT_CHECK=1 set, continuing deploy with stale local"
+        else
+            log "WARN" "Current branch is '$current_branch' (not main). Verify intended deploy source."
+        fi
+    else
+        log "INFO" "  Git: local HEAD matches origin/main ✓"
+    fi
+
+    # Dirty tree warning (non-fatal)
+    if ! git diff --quiet 2>/dev/null || ! git diff --cached --quiet 2>/dev/null; then
+        log "WARN" "Working tree has uncommitted changes — deploy will use local working tree state"
+    fi
+}
+
 # ==================== 备份管理 ====================
 
 # archive_backup <file_path> [keep_count]

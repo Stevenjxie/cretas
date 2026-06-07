@@ -78,35 +78,7 @@ echo "=========================================="
 # Pre-flight: git sync check (May 11 2026 stale-local-deploy bug fix)
 # Stale local working tree → deploy ships stale code → prod gets pre-PR fixes.
 # Per HARD rule feedback_organizer_must_git_pull_before_deploy.md.
-cd "$PROJECT_ROOT"
-log "INFO" "[0/5] Git sync pre-check..."
-git fetch origin main 2>/dev/null || log "WARN" "git fetch origin main failed (offline?), continue with caution"
-LOCAL_SHA=$(git rev-parse HEAD 2>/dev/null || echo "unknown")
-ORIGIN_SHA=$(git rev-parse origin/main 2>/dev/null || echo "unknown")
-CURRENT_BRANCH=$(git branch --show-current 2>/dev/null || echo "unknown")
-
-if [ "$LOCAL_SHA" != "$ORIGIN_SHA" ] && [ "$LOCAL_SHA" != "unknown" ] && [ "$ORIGIN_SHA" != "unknown" ]; then
-    if [ "$CURRENT_BRANCH" = "main" ]; then
-        log "ERROR" "Local main HEAD != origin/main HEAD"
-        log "ERROR" "  local : $LOCAL_SHA"
-        log "ERROR" "  origin: $ORIGIN_SHA"
-        log "ERROR" "Run: cd $PROJECT_ROOT && git pull origin main"
-        log "ERROR" "Override: SKIP_GIT_CHECK=1 $0 ..."
-        if [ "${SKIP_GIT_CHECK:-}" != "1" ]; then
-            exit 1
-        fi
-        log "WARN" "SKIP_GIT_CHECK=1 set, continuing deploy with stale local"
-    else
-        log "WARN" "Current branch is '$CURRENT_BRANCH' (not main). Verify intended deploy source."
-    fi
-else
-    log "INFO" "  Git: local HEAD matches origin/main ✓"
-fi
-
-# Dirty tree warning (non-fatal)
-if ! git diff --quiet 2>/dev/null || ! git diff --cached --quiet 2>/dev/null; then
-    log "WARN" "Working tree has uncommitted changes — deploy will use local working tree state"
-fi
+check_git_sync "$PROJECT_ROOT" "[0/5] Git sync pre-check..."
 
 # 1. 检查本地文件
 log "INFO" "[1/5] 检查本地文件..."
@@ -296,44 +268,16 @@ case "$DEPLOY_ENV" in
         ;;
 esac
 
-# SG Phase 3 收紧 (2026-04-11, per .claude/rules/aliyun-credentials.md) 后 47:8083/8084
-# 仅允许 nginx 139 source IP (139.196.165.140/32). 本地开发机 curl 拿 HTTP 000 被
-# 防火墙 reject, deploy script 误判为 server down. 改走 SSH 进 47 本机 curl
-# localhost:${port}/health 绕过 SG 限制 — 服务真实状态跟 deploy success 都能正确反映.
-wait_for_health_via_ssh() {
-    local port="$1"
-    local retries="${2:-15}"
-    local interval="${3:-2}"
-    local total_wait=$((retries * interval))
-
-    log "INFO" "健康检查 (SSH localhost): port=${port} (最多等待 ${total_wait}s)"
-
-    local i status=""
-    for i in $(seq 1 "$retries"); do
-        status=$(ssh "$SERVER" "curl -s -o /dev/null --connect-timeout 2 --max-time 3 -w '%{http_code}' http://localhost:${port}/health 2>/dev/null || echo '000'" 2>/dev/null | tail -1)
-
-        if [ "$status" = "200" ]; then
-            log "INFO" "服务正常 (HTTP 200, 等待 $((i * interval))s)"
-            return 0
-        fi
-
-        if [ $((i % 5)) -eq 0 ]; then
-            log "INFO" "等待服务启动... ($((i * interval))/${total_wait}s, HTTP $status)"
-        fi
-
-        sleep "$interval"
-    done
-
-    log "ERROR" "健康检查超时 (${total_wait}s), 最后状态: HTTP $status"
-    return 1
-}
+# 健康检查走 deploy-common.sh 的 wait_for_health_via_ssh: SSH 进 47 本机 curl
+# localhost:<port>/health, 绕过 SG Phase 3 对 47:8083/8084 的 nginx-139-only 限制
+# (本地开发机直连拿 HTTP 000 会误判服务挂). 签名: <ssh_target> <port> <path> <retries> <interval>
 
 # 5. 验证服务
 log "INFO" "[5/5] 验证服务..."
 sleep 3
 
 if [[ "$DEPLOY_ENV" == "prod" || "$DEPLOY_ENV" == "all" ]]; then
-    if wait_for_health_via_ssh 8083 15 2; then
+    if wait_for_health_via_ssh "$SERVER" 8083 /health 15 2; then
         log "INFO" "[生产] Python 服务 (8083) 部署成功"
     else
         log "WARN" "[生产] 健康检查超时，请检查: ssh $SERVER 'tail -50 $REMOTE_CRETAS_DIR/python-prod.log'"
@@ -341,7 +285,7 @@ if [[ "$DEPLOY_ENV" == "prod" || "$DEPLOY_ENV" == "all" ]]; then
 fi
 
 if [[ "$DEPLOY_ENV" == "test" || "$DEPLOY_ENV" == "all" ]]; then
-    if wait_for_health_via_ssh 8084 15 2; then
+    if wait_for_health_via_ssh "$SERVER" 8084 /health 15 2; then
         log "INFO" "[测试] Python 服务 (8084) 部署成功"
     else
         log "WARN" "[测试] 健康检查超时，请检查: ssh $SERVER 'tail -50 $REMOTE_CRETAS_DIR/python-test.log'"

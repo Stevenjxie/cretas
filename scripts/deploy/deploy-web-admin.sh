@@ -71,43 +71,21 @@ LOCAL_BUILD_DIR="web-admin/dist"
 TMP_TAR="/tmp/web-admin-dist.$$.tar.gz"
 BACKUP_KEEP=3
 
-# ==================== Git Sync Pre-check ====================
-# May 11 2026 stale-local-deploy bug fix: deploy builds Vite dist from local
-# working tree. If local is behind origin/main (e.g. organizer admin-merged via
-# gh CLI without `git pull`), deploy ships stale code. Bundle gets new hash but
-# missing post-PR fixes.
-# Per HARD rule feedback_organizer_must_git_pull_before_deploy.md.
-echo "[$(date '+%H:%M:%S')] [0/4] Git sync pre-check..."
-SCRIPT_DIR_GIT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT_GIT="$(cd "$SCRIPT_DIR_GIT/../.." && pwd)"
-cd "$PROJECT_ROOT_GIT"
-git fetch origin main 2>/dev/null || echo "[$(date '+%H:%M:%S')] [WARN] git fetch origin main failed (offline?), continue with caution"
-LOCAL_SHA=$(git rev-parse HEAD 2>/dev/null || echo "unknown")
-ORIGIN_SHA=$(git rev-parse origin/main 2>/dev/null || echo "unknown")
-CURRENT_BRANCH=$(git branch --show-current 2>/dev/null || echo "unknown")
-
-if [ "$LOCAL_SHA" != "$ORIGIN_SHA" ] && [ "$LOCAL_SHA" != "unknown" ] && [ "$ORIGIN_SHA" != "unknown" ]; then
-    if [ "$CURRENT_BRANCH" = "main" ]; then
-        echo "[$(date '+%H:%M:%S')] [ERROR] Local main HEAD != origin/main HEAD"
-        echo "[$(date '+%H:%M:%S')] [ERROR]   local : $LOCAL_SHA"
-        echo "[$(date '+%H:%M:%S')] [ERROR]   origin: $ORIGIN_SHA"
-        echo "[$(date '+%H:%M:%S')] [ERROR] Run: cd $PROJECT_ROOT_GIT && git pull origin main"
-        echo "[$(date '+%H:%M:%S')] [ERROR] Override: SKIP_GIT_CHECK=1 $0 ..."
-        if [ "${SKIP_GIT_CHECK:-}" != "1" ]; then
-            exit 1
-        fi
-        echo "[$(date '+%H:%M:%S')] [WARN] SKIP_GIT_CHECK=1 set, continuing deploy with stale local"
-    else
-        echo "[$(date '+%H:%M:%S')] [WARN] Current branch is '$CURRENT_BRANCH' (not main). Verify intended deploy source."
-    fi
+# ==================== 加载共享函数库 ====================
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+if [ -f "$PROJECT_ROOT/scripts/lib/deploy-common.sh" ]; then
+    source "$PROJECT_ROOT/scripts/lib/deploy-common.sh"
 else
-    echo "[$(date '+%H:%M:%S')] [INFO]   Git: local HEAD matches origin/main ✓"
+    echo "❌ 未找到 $PROJECT_ROOT/scripts/lib/deploy-common.sh"; exit 1
 fi
+# 注: source 引入 common 的 log() (双参数 LEVEL msg); 本脚本下方重新定义单参数 log() 覆盖之.
+# check_git_sync 在覆盖前调用, 用的是 common log; 之后的 log "..." 用本脚本单参数版.
 
-# Dirty tree warning (non-fatal)
-if ! git diff --quiet 2>/dev/null || ! git diff --cached --quiet 2>/dev/null; then
-    echo "[$(date '+%H:%M:%S')] [WARN] Working tree has uncommitted changes — deploy will use local working tree state"
-fi
+# ==================== Git Sync Pre-check ====================
+# 防 stale-local-deploy (May 11 2026 bug fix; per feedback_organizer_must_git_pull_before_deploy.md):
+# deploy 从本地工作树 build Vite dist, 本地落后 origin/main → ship stale code.
+check_git_sync "$PROJECT_ROOT" "[0/4] Git sync pre-check..."
 
 # 根据 --env 决定目标路径
 if [ "$ENV" = "prod" ]; then
@@ -134,6 +112,52 @@ fi
 
 log() {
     echo "[$(date '+%H:%M:%S')] $*"
+}
+
+# 原子交换部署: 远端解压 tarball 到 staging → 备份旧版 → mv staging→current → 清理旧 backup.
+# 用 staging+mv 实现原子替换 (避免 nginx 读到新旧 chunk 混合的半成品).
+# $1 = 远程目标路径 (test: /www/wwwroot/web-admin-test, prod: /www/wwwroot/web-admin)
+# 依赖全局: $GATEWAY $REMOTE_TAR $REMOTE_BACKUP_DIR $BACKUP_KEEP (调用时须已定义)
+atomic_swap_webadmin() {
+    local target_path="$1"
+    ssh "$GATEWAY" bash <<REMOTE_DEPLOY
+set -e
+TS=\$(date +%Y%m%d_%H%M%S)
+STAGING="${target_path}.staging"
+CURRENT="$target_path"
+BACKUP_DIR="$REMOTE_BACKUP_DIR"
+
+mkdir -p "\$BACKUP_DIR"
+
+# 解压到 staging
+rm -rf "\$STAGING"
+mkdir -p "\$STAGING"
+tar xzf "$REMOTE_TAR" -C "\$STAGING"
+
+# 记录旧/新 assets 数量 (用于对比)
+OLD_ASSET_COUNT=0
+if [ -d "\$CURRENT/assets" ]; then
+    OLD_ASSET_COUNT=\$(find "\$CURRENT/assets" -type f 2>/dev/null | wc -l)
+fi
+NEW_ASSET_COUNT=\$(find "\$STAGING/assets" -type f 2>/dev/null | wc -l)
+echo "   旧 assets: \$OLD_ASSET_COUNT → 新 assets: \$NEW_ASSET_COUNT"
+
+# 原子交换 (备份旧版 + mv)
+if [ -e "\$CURRENT" ]; then
+    mv "\$CURRENT" "\$BACKUP_DIR/web-admin.bak.\$TS"
+fi
+mv "\$STAGING" "\$CURRENT"
+echo "   ✓ 原子交换完成 (backup: web-admin.bak.\$TS)"
+
+# 清理旧 backups (保留最近 $BACKUP_KEEP 份)
+ls -1dt "\$BACKUP_DIR"/web-admin.bak.* 2>/dev/null | tail -n +$(($BACKUP_KEEP + 1)) | while read old; do
+    rm -rf "\$old"
+    echo "   - removed: \$(basename \$old)"
+done
+
+rm -f "$REMOTE_TAR"
+echo "   ✓ index.html mtime: \$(stat -c '%y' "\$CURRENT/index.html" 2>/dev/null | cut -d. -f1)"
+REMOTE_DEPLOY
 }
 
 # ==================== 1. 本地构建 ====================
@@ -218,46 +242,7 @@ log "   ✓ 上传完成 (verified ${LOCAL_SIZE}B match)"
 
 # ==================== 4. 原子部署 + 旧版本清理 ====================
 log "🚀 [4/4] 原子交换 + 清理旧 backups..."
-ssh "$GATEWAY" bash <<REMOTE_DEPLOY
-set -e
-TS=\$(date +%Y%m%d_%H%M%S)
-STAGING="${REMOTE_PATH}.staging"
-CURRENT="$REMOTE_PATH"
-BACKUP_DIR="$REMOTE_BACKUP_DIR"
-
-mkdir -p "\$BACKUP_DIR"
-
-# 解压到 staging
-rm -rf "\$STAGING"
-mkdir -p "\$STAGING"
-tar xzf "$REMOTE_TAR" -C "\$STAGING"
-
-# 记录旧 assets 数量 (用于对比)
-OLD_ASSET_COUNT=0
-if [ -d "\$CURRENT/assets" ]; then
-    OLD_ASSET_COUNT=\$(find "\$CURRENT/assets" -type f 2>/dev/null | wc -l)
-fi
-NEW_ASSET_COUNT=\$(find "\$STAGING/assets" -type f 2>/dev/null | wc -l)
-echo "   旧 assets: \$OLD_ASSET_COUNT → 新 assets: \$NEW_ASSET_COUNT"
-
-# 原子交换
-if [ -e "\$CURRENT" ]; then
-    mv "\$CURRENT" "\$BACKUP_DIR/web-admin.bak.\$TS"
-fi
-mv "\$STAGING" "\$CURRENT"
-echo "   ✓ 原子交换完成 (backup: web-admin.bak.\$TS)"
-
-# 清理旧 backups (保留最近 $BACKUP_KEEP 份)
-ls -1dt "\$BACKUP_DIR"/web-admin.bak.* 2>/dev/null | tail -n +$(($BACKUP_KEEP + 1)) | while read old; do
-    rm -rf "\$old"
-    echo "   - removed: \$(basename \$old)"
-done
-
-# 清理 tmp
-rm -f "$REMOTE_TAR"
-
-echo "   ✓ index.html mtime: \$(stat -c '%y' "\$CURRENT/index.html" 2>/dev/null | cut -d. -f1)"
-REMOTE_DEPLOY
+atomic_swap_webadmin "$REMOTE_PATH"
 
 rm -f "$TMP_TAR"
 
@@ -307,39 +292,7 @@ if [ "$ENV" = "all" ]; then
 
     log "🚀 [prod 3/3] 原子交换 prod..."
     REMOTE_PATH="/www/wwwroot/web-admin"  # prod target
-    ssh "$GATEWAY" bash <<REMOTE_DEPLOY_PROD
-set -e
-TS=\$(date +%Y%m%d_%H%M%S)
-STAGING="${REMOTE_PATH}.staging"
-CURRENT="$REMOTE_PATH"
-BACKUP_DIR="$REMOTE_BACKUP_DIR"
-
-mkdir -p "\$BACKUP_DIR"
-rm -rf "\$STAGING"
-mkdir -p "\$STAGING"
-tar xzf "$REMOTE_TAR" -C "\$STAGING"
-
-OLD_ASSET_COUNT=0
-if [ -d "\$CURRENT/assets" ]; then
-    OLD_ASSET_COUNT=\$(find "\$CURRENT/assets" -type f 2>/dev/null | wc -l)
-fi
-NEW_ASSET_COUNT=\$(find "\$STAGING/assets" -type f 2>/dev/null | wc -l)
-echo "   旧 assets: \$OLD_ASSET_COUNT → 新 assets: \$NEW_ASSET_COUNT"
-
-if [ -e "\$CURRENT" ]; then
-    mv "\$CURRENT" "\$BACKUP_DIR/web-admin.bak.\$TS"
-fi
-mv "\$STAGING" "\$CURRENT"
-echo "   ✓ Prod 原子交换完成 (backup: web-admin.bak.\$TS)"
-
-ls -1dt "\$BACKUP_DIR"/web-admin.bak.* 2>/dev/null | tail -n +$(($BACKUP_KEEP + 1)) | while read old; do
-    rm -rf "\$old"
-    echo "   - removed: \$(basename \$old)"
-done
-
-rm -f "$REMOTE_TAR"
-echo "   ✓ Prod index.html mtime: \$(stat -c '%y' "\$CURRENT/index.html" 2>/dev/null | cut -d. -f1)"
-REMOTE_DEPLOY_PROD
+    atomic_swap_webadmin "$REMOTE_PATH"
     rm -f "$TMP_TAR"
 
     log "🔍 验证 prod..."
