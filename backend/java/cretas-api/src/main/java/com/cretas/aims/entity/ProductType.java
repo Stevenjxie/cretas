@@ -248,6 +248,26 @@ public class ProductType extends BaseEntity {
     @Column(name = "recipe_version", length = 50)
     private String recipeVersion;
 
+    // ==================== T123: 规格两级单位 + 名称分离 ====================
+
+    /**
+     * 一级单位 (如: 筐, 箱, 件, 袋, 桶, 盒).
+     * 与 boxConversionCoefficient 联用: 1 level1Unit = boxConversionCoefficient 个 unit(二级单位).
+     * 客户原话: "一级单位和二级单位的转换系数", "箱数嘛根据转换系数自动转好来"
+     */
+    @Column(name = "level1_unit", length = 20)
+    private String level1Unit;
+
+    /**
+     * 产品基础名 (名称分离).
+     * 如 "好食光卤猪蹄" — 不含规格/客户后缀.
+     * RN 展示优先使用此字段, 无则 fallback 到 name.
+     */
+    @Column(name = "base_product_name", length = 200)
+    private String baseProductName;
+
+    // ==================== End T123 ====================
+
     // ==================== End SKU 组装模型 ====================
 
     @Column(name = "is_active", nullable = false)

@@ -1647,6 +1647,22 @@ const businessRoutes: RouteRecordRaw[] = [
           roles: ['factory_super_admin', 'platform_admin', 'permission_admin'],
         },
       },
+      // T123: 计量单位字典管理 — 客户要求"留个给我自己修改"的单位配置模块
+      // 后端: GET/POST/PUT/DELETE /api/mobile/{factoryId}/system-config/units
+      // 功能: 工厂级 UnitOfMeasurement CRUD (一级/二级单位: 筐/箱/件/袋/桶/盒)
+      {
+        path: 'unit-dictionary',
+        name: 'UnitDictionary',
+        component: () => import('@/views/platform/unit-dictionary-editor/index.vue'),
+        meta: {
+          title: '计量单位字典',
+          icon: 'Tickets',
+          requiresAuth: true,
+          showInMenu: true,
+          roles: ['factory_super_admin', 'platform_admin', 'permission_admin'],
+        },
+      },
+
       // 动态模块页 (Canvas配置系统)
       {
         path: 'modules/:moduleCode',

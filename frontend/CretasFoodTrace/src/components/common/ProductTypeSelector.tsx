@@ -7,6 +7,7 @@ import { conversionApiClient } from '../../services/api/conversionApiClient';
 interface ProductType {
   id: string;
   name: string;
+  baseProductName?: string; // T123: 产品基础名 (名称分离), RN 展示优先使用, 无则 fallback 到 name
   code: string;
   category?: string;
   description?: string;
@@ -81,8 +82,12 @@ export const ProductTypeSelector: React.FC<ProductTypeSelectorProps> = ({
     p.category?.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
+  // T123: 优先使用 baseProductName (产品基础名), 无则 fallback 到 name
+  const getDisplayName = (product: ProductType): string =>
+    product.baseProductName || product.name;
+
   const handleSelect = (product: ProductType) => {
-    onSelect(product.id, product.name, product.code);
+    onSelect(product.id, getDisplayName(product), product.code);
     setModalVisible(false);
     setSearchQuery('');
   };
@@ -143,7 +148,7 @@ export const ProductTypeSelector: React.FC<ProductTypeSelectorProps> = ({
                 renderItem={({ item }) => (
                   <>
                     <List.Item
-                      title={item.name}
+                      title={getDisplayName(item)}
                       description={`SKU: ${item.code}${item.category ? ' • ' + item.category : ''}`}
                       onPress={() => handleSelect(item)}
                       right={props => (
@@ -161,8 +166,8 @@ export const ProductTypeSelector: React.FC<ProductTypeSelectorProps> = ({
                           >
                             {item.hasConversionRate ? '已配置' : '未配置'}
                           </Chip>
-                          {/* 选中图标 */}
-                          {value === item.name && <List.Icon {...props} icon="check" color="#2196F3" />}
+                          {/* 选中图标 — T123: 比较 displayName (baseProductName || name) */}
+                          {value === getDisplayName(item) && <List.Icon {...props} icon="check" color="#2196F3" />}
                         </View>
                       )}
                     />
