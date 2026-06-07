@@ -72,7 +72,7 @@ async function createPlan(row: RestockHorizonProductRow) {
       { confirmButtonText: '生成草稿', cancelButtonText: '取消', type: 'warning' },
     )
     const res = await post(`/${factoryId.value}/production-plans`, {
-      sourceType: 'MANUAL',
+      sourceType: 'SAFETY_STOCK',
       productTypeId: row.productTypeId,
       plannedQuantity: row.endingShortfallQty,
       plannedDate: today,

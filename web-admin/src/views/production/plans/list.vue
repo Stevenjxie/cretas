@@ -109,7 +109,7 @@ const planForm = ref({
   sourceCustomerName: '',
   processName: '',
   batchDate: '',
-  sourceType: 'MANUAL' as 'MANUAL' | 'CUSTOMER_ORDER' | 'AI_FORECAST',
+  sourceType: 'MANUAL' as 'MANUAL' | 'CUSTOMER_ORDER' | 'AI_FORECAST' | 'SAFETY_STOCK',
   sourceOrderId: '' as string | undefined,
   sourceOrderItemId: '' as string | undefined,
   customFields: {} as TableRow,
@@ -919,6 +919,9 @@ function handleAiFill(params: TableRow) {
           <template #default="{ row }">
             <el-tag v-if="row.sourceType === 'EXCEL_IMPORT'" type="warning" size="small">Excel导入</el-tag>
             <el-tag v-else-if="row.sourceType === 'AI_CHAT'" type="success" size="small">AI创建</el-tag>
+            <el-tag v-else-if="row.sourceType === 'SAFETY_STOCK'" type="info" size="small">存货生产</el-tag>
+            <el-tag v-else-if="row.sourceType === 'CUSTOMER_ORDER'" type="primary" size="small">销售订单</el-tag>
+            <el-tag v-else-if="row.sourceType === 'AI_FORECAST'" type="success" size="small">AI预测</el-tag>
             <el-tag v-else size="small">手动</el-tag>
           </template>
         </el-table-column>
@@ -1016,6 +1019,9 @@ function handleAiFill(params: TableRow) {
         <el-descriptions-item label="来源">
           <el-tag v-if="viewPlan.sourceType === 'EXCEL_IMPORT'" type="warning" size="small">Excel导入</el-tag>
           <el-tag v-else-if="viewPlan.sourceType === 'AI_CHAT'" type="success" size="small">AI创建</el-tag>
+          <el-tag v-else-if="viewPlan.sourceType === 'SAFETY_STOCK'" type="info" size="small">存货生产</el-tag>
+          <el-tag v-else-if="viewPlan.sourceType === 'CUSTOMER_ORDER'" type="primary" size="small">销售订单</el-tag>
+          <el-tag v-else-if="viewPlan.sourceType === 'AI_FORECAST'" type="success" size="small">AI预测</el-tag>
           <el-tag v-else size="small">手动</el-tag>
         </el-descriptions-item>
         <el-descriptions-item label="指派主管">{{ viewPlan.assignedSupervisorName || '-' }}</el-descriptions-item>
@@ -1035,9 +1041,16 @@ function handleAiFill(params: TableRow) {
         <el-form-item label="来源类型" required>
           <el-radio-group v-model="planForm.sourceType" @change="handleSourceTypeChange">
             <el-radio label="MANUAL">手动</el-radio>
+            <el-radio label="SAFETY_STOCK">存货生产</el-radio>
             <el-radio label="CUSTOMER_ORDER">销售订单</el-radio>
             <el-radio label="AI_FORECAST">AI预测</el-radio>
           </el-radio-group>
+          <div
+            v-if="planForm.sourceType === 'SAFETY_STOCK'"
+            style="font-size: 12px; color: var(--text-color-secondary, #909399); margin-top: 4px;"
+          >
+            存货生产将走完整报工流程，完工后自动入库成品批次，无需关联销售订单
+          </div>
         </el-form-item>
         <el-form-item v-if="planForm.sourceType === 'CUSTOMER_ORDER'" label="销售订单" required>
           <el-select
