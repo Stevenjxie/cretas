@@ -101,6 +101,13 @@ public class IntentRecognitionPipelineServiceImpl implements IntentRecognitionPi
     private static final Pattern STORE_REFERENCE_PATTERN = Pattern.compile(
             "那家店|这家店|该店|那个店|这个店|该门店|那家|这家");
 
+    /**
+     * T108/D2 fix: mirror of STORE_REFERENCE_PATTERN for dish coref.
+     * Must match ConversationMemoryServiceImpl.DISH_REFERENCE_PATTERN exactly.
+     */
+    private static final Pattern DISH_REFERENCE_PATTERN = Pattern.compile(
+            "那道菜|这道菜|该菜品|这个菜|那个菜|这款菜|那款菜|它");
+
     // ==================== Constructor-injected dependencies ====================
 
     private final AIIntentConfigRepository intentRepository;
@@ -544,6 +551,13 @@ public class IntentRecognitionPipelineServiceImpl implements IntentRecognitionPi
                         }
                         preprocessedQuery = ensureStoreReferenceResolved(userInput, processedInput,
                                 context, preprocessedQuery);
+                        // T108/D2 fix: same fallback for DISH coref. ensureStoreReferenceResolved works
+                        // because it checks the ORIGINAL userInput (before coref substitution) for patterns,
+                        // then directly injects DISH slot into resolvedReferences. Without this call,
+                        // processedInput already has "那道菜" replaced → preprocess finds no match →
+                        // resolvedReferences stays empty → ToolDispatch never injects dish_name/dish_id.
+                        preprocessedQuery = ensureDishReferenceResolved(userInput, processedInput,
+                                context, preprocessedQuery);
                     }
                 }
             } catch (Exception e) {
@@ -785,6 +799,56 @@ public class IntentRecognitionPipelineServiceImpl implements IntentRecognitionPi
         if (pq.getUnresolvedReferences() != null) {
             pq.getUnresolvedReferences().remove(reference);
         }
+        return pq;
+    }
+
+    /**
+     * T108/D2 fix: mirror of ensureStoreReferenceResolved for DISH coref.
+     *
+     * <p>Root cause of D2 dormancy: {@link #performCoreferenceResolution} replaces "那道菜" with the
+     * actual dish name in {@code processedInput} BEFORE {@code queryPreprocessorService.preprocess()}
+     * runs. Inside preprocess → resolveReference → detectResolvedReferences, the original text
+     * pattern check uses the ALREADY-replaced {@code processedInput} as "original", so "那道菜"
+     * is gone and {@code resolvedReferences} stays empty. ToolDispatchService section 2.5 then finds
+     * no DISH entry → never injects dish_name/dish_id into tool params → tool returns all Top5
+     * unfiltered.
+     *
+     * <p>This method inspects the RAW {@code originalInput} (before any coref) for dish reference
+     * patterns, then directly injects the DISH slot into {@code preprocessedQuery.resolvedReferences}
+     * — exactly mirroring ensureStoreReferenceResolved which was already deployed and working for
+     * STORE coref (D4 verified).
+     */
+    static PreprocessedQuery ensureDishReferenceResolved(String originalInput, String processedInput,
+            ConversationContext context, PreprocessedQuery preprocessedQuery) {
+        if (originalInput == null || context == null || !DISH_REFERENCE_PATTERN.matcher(originalInput).find()) {
+            return preprocessedQuery;
+        }
+        EntitySlot slot = context.getSlot(EntitySlot.SlotType.DISH);
+        if (slot == null || slot.getName() == null || slot.getName().isBlank()) {
+            return preprocessedQuery;
+        }
+        PreprocessedQuery pq = preprocessedQuery;
+        if (pq == null) {
+            pq = PreprocessedQuery.builder()
+                    .originalInput(originalInput)
+                    .normalizedText(processedInput)
+                    .finalQuery(processedInput != null ? processedInput : originalInput)
+                    .build();
+        }
+        // Skip if DISH already resolved (e.g. by detectResolvedReferences in a future code path)
+        if (pq.getResolvedReferences() != null && pq.getResolvedReferences().values().stream()
+                .anyMatch(ref -> ref != null
+                        && ref.getEntityType() != null
+                        && "DISH".equalsIgnoreCase(ref.getEntityType()))) {
+            return pq;
+        }
+        Matcher matcher = DISH_REFERENCE_PATTERN.matcher(originalInput);
+        String reference = matcher.find() ? matcher.group() : originalInput;
+        pq.addResolvedReference(reference, "DISH", slot.getId(), slot.getName());
+        if (pq.getUnresolvedReferences() != null) {
+            pq.getUnresolvedReferences().remove(reference);
+        }
+        log.debug("[T108/D2] Dish coref resolved: '{}' → id={}, name={}", reference, slot.getId(), slot.getName());
         return pq;
     }
 
