@@ -18,9 +18,9 @@
 | ID | 任务 | model | effort | orchestration | 分支 | scope 锁 | 状态 | PR | 阻塞 |
 |---|---|---|---|---|---|---|---|---|---|
 | T103 | S1 🖐️真机走一单 录音→`voiceAudioUrl` OSS 验证 | Steve(手动) | - | - | - | - | ⬜ pending | - | ✅已解锁(真实餐饮角色 qhj_chef/qhj_purchase_mgr/qhj_owner 已建+验登录);需真机(APK 已装小米 f79c50d6) |
-| T112 | 餐饮问答优化 impl(①反投毒守卫+②绑峰值+清毒) | Sonnet→Opus gate | locked | inline | feat/restaurant-routing-antipoison | IntentRecognitionPipelineServiceImpl + Flyway(ai_intent_configs/ai_learned_expressions) | 🟠 待终审(有疑点) | #553 | 🔒 Opus 深 gate 中:⚠️ 清了 **25 行**(recon 只锤 2)需逐行核 / "非空数据"守卫是否实现 / IntentParityTest 本地没跑(infra) |
+| T112 | 餐饮问答优化 impl(①反投毒守卫+②绑峰值+清毒) | Sonnet→Opus gate | locked | inline | (merged) | IntentRecognitionPipelineServiceImpl + Flyway | 🟢 merged 待部署 | #553✅ | 🔒 Opus 深 gate 过:25行 DISH_DELETE 确是真毒(含SQL注入串);守卫保守(tool_name代理+业态);**deploy held 等 T116 批量**(T116 在 prod debug,切端口会断它) |
 | T116 | 修菜品 coref D2 dormant(D1→D2 wiring 断,debug+fix) | Sonnet→Opus gate | locked | inline | fix/dish-coref-d2-wiring | IntentExecutionOrchestrator/ToolDispatchService/ConversationMemoryServiceImpl | 🟡 in-progress | - | 🔒 AI路由;与 T112-impl 不同文件可并行。必 live 真验 D2 过滤(T108 翻车教训) |
-| T115 | 飞轮分层+二次分析(中置信0.70-0.89→staged is_active=false + promote pipeline) | Sonnet→Opus gate | locked | inline | (待 T112-impl merge) | IntentRecognitionPipelineServiceImpl 学习路径 + learning_* 表 | 🔴 blocked | - | 🔒 撞 T112-impl 同文件,等其 merge 后开。复用 learning_suggestions/tasks 表 |
+| T115 | 飞轮分层+二次分析(中置信→staged + promote pipeline + **2588 NULL 行存量审计**) | Sonnet→Opus gate | locked | inline | (待 T112 部署后开) | IntentRecognitionPipelineServiceImpl 学习路径 + learning_* 表 + ai_learned_expressions | 🔴 blocked | - | 🔒 T112 merge 解锁。**新增 scope**: is_active=NULL=active(2588行,247=true)→二次分析须复核存量 NULL 行(含 vip→PROCESSING_BATCH_CREATE hit6 等存量毒)+ 厘清 NULL 语义 + 中置信0.70-0.89→staged。复用 learning_suggestions/tasks |
 
 <!--
 状态: ⬜ pending / 🟡 in-progress / 🟠 review/待终审 / 🟢 已合并待部署 / ✅ done / 🔴 blocked
