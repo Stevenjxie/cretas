@@ -142,6 +142,21 @@ export const COMMON_ACTIONS = {
     // purchaseOrder SUBMITTED/PENDING_APPROVAL) still pending wiring.
   },
  VIEW_DETAIL: { id: 'view-detail', icon: '', label: '查看详情', aiHint: '看这单详情' },
+  ADJUST_INVENTORY: {
+    id: 'adjust-inventory',
+    icon: '⚖️',
+    label: '调整库存',
+    requiresConfirm: false,
+    aiHint: '手动调整这批次的可用库存数量',
+  },
+  VOID_BATCH: {
+    id: 'void-batch',
+    icon: '🚫',
+    label: '作废批次',
+    danger: true,
+    requiresConfirm: true,
+    aiHint: '作废这个成品批次 (不可逆)',
+  },
 } as const satisfies Record<string, Omit<RowAction, never>>;
 
 export type CommonActionId = (typeof COMMON_ACTIONS)[keyof typeof COMMON_ACTIONS]['id'];

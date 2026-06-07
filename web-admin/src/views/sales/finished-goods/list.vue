@@ -6,12 +6,20 @@ import { usePermissionStore } from '@/store/modules/permission';
 import { useBusinessMode } from '@/composables/useBusinessMode';
 import { get } from '@/api/request';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { Refresh, Search } from '@element-plus/icons-vue';
+import { Refresh, Search, Plus } from '@element-plus/icons-vue';
 import { formatAmount } from '@/utils/tableFormatters';
 import type { TableRow } from '@/types/api';
 import { RowActionMenu } from '@/components/list';
 import { computeRowActions } from '@/composables/useRowActions';
 import PriceHistoryDialog from '@/components/dialog/PriceHistoryDialog.vue';
+import {
+  createOpeningFgBatch,
+  adjustFgBatch,
+  voidFgBatch,
+  type FgOpeningRequest,
+  type FgAdjustRequest,
+  type FgAdjustmentReferenceType,
+} from '@/api/finishedGoods';
 
 const router = useRouter();
 const authStore = useAuthStore();
@@ -19,10 +27,14 @@ const permissionStore = usePermissionStore();
 const { label } = useBusinessMode();
 const factoryId = computed(() => authStore.factoryId);
 const canViewPrice = computed(() => permissionStore.canViewPrice);
+// T126: writes need production:read_write OR sales:read_write
+const canEdit = computed(
+  () => permissionStore.canWrite('production') || permissionStore.canWrite('sales')
+);
 
 function deriveStockStatus(row: TableRow): string {
-  const available = Number((row as any).availableQuantity ?? (row as any).producedQuantity ?? 0);
-  const total = Number((row as any).producedQuantity ?? 1);
+  const available = Number((row as Record<string, unknown>).availableQuantity ?? (row as Record<string, unknown>).producedQuantity ?? 0);
+  const total = Number((row as Record<string, unknown>).producedQuantity ?? 1);
   if (available <= 0) return 'OUT_OF_STOCK';
   if (available < total * 0.2) return 'LOW_STOCK';
   return 'IN_STOCK';
@@ -30,7 +42,11 @@ function deriveStockStatus(row: TableRow): string {
 function rowActionsFor(row: TableRow) {
   return computeRowActions(
     'inventory',
-    { status: deriveStockStatus(row), id: String(row.id || '') },
+    {
+      status: deriveStockStatus(row),
+      id: String(row.id || ''),
+      canEdit: canEdit.value,
+    },
     { canViewPrice: canViewPrice.value }
   );
 }
@@ -50,8 +66,6 @@ const priceHistoryDialog = ref({
 });
 
 function openPriceHistory(row: TableRow) {
-  // 从 row 上提取 productTypeId — entity 字段对应 customer_price_history.product_type_id.
-  // finished-goods 行的来源是 FinishedGoodsBatch, 字段名 productTypeId. fallback 兼容 productType.id.
   const ptid = String(
     (row as TableRow & { productTypeId?: string; productType?: { id?: string } }).productTypeId
     || (row as TableRow & { productType?: { id?: string } }).productType?.id
@@ -61,7 +75,7 @@ function openPriceHistory(row: TableRow) {
     ElMessage.warning('当前行缺少产品类型 ID, 无法查询价格历史');
     return;
   }
-  const label = String(
+  const lbl = String(
     row.productName
     || (row as TableRow & { productType?: { name?: string } }).productType?.name
     || ptid
@@ -69,15 +83,250 @@ function openPriceHistory(row: TableRow) {
   priceHistoryDialog.value = {
     visible: true,
     productId: ptid,
-    productLabel: label,
+    productLabel: lbl,
   };
+}
+
+// ---------- 期初入库 dialog ----------
+const openingDialogVisible = ref(false);
+const openingSubmitting = ref(false);
+const productTypes = ref<Array<{ id: string; name: string; code?: string }>>([]);
+const productTypesLoading = ref(false);
+
+const openingForm = ref<FgOpeningRequest>({
+  productTypeId: '',
+  batchNumber: '',
+  producedQuantity: 0,
+  unit: 'kg',
+  productionDate: '',
+  remark: '',
+});
+
+async function loadProductTypes() {
+  if (!factoryId.value || productTypes.value.length > 0) return;
+  productTypesLoading.value = true;
+  try {
+    const res = await get<Array<{ id: string; name: string; code?: string }>>(
+      `/${factoryId.value}/product-types/active`
+    );
+    if (res.success && res.data) {
+      productTypes.value = res.data;
+    }
+  } catch {
+    // interceptor handles toast
+  } finally {
+    productTypesLoading.value = false;
+  }
+}
+
+function openOpeningDialog() {
+  openingForm.value = {
+    productTypeId: '',
+    batchNumber: '',
+    producedQuantity: 0,
+    unit: 'kg',
+    productionDate: '',
+    remark: '',
+  };
+  openingDialogVisible.value = true;
+  void loadProductTypes();
+}
+
+async function submitOpening() {
+  if (!factoryId.value) return;
+  if (!openingForm.value.productTypeId) { ElMessage.warning('请选择产品类型'); return; }
+  if (!openingForm.value.batchNumber.trim()) { ElMessage.warning('请输入批次号'); return; }
+  if (!openingForm.value.producedQuantity || openingForm.value.producedQuantity <= 0) {
+    ElMessage.warning('请输入有效的期初数量'); return;
+  }
+  if (!openingForm.value.unit.trim()) { ElMessage.warning('请输入单位'); return; }
+  if (!openingForm.value.productionDate) { ElMessage.warning('请选择生产日期'); return; }
+
+  openingSubmitting.value = true;
+  try {
+    const res = await createOpeningFgBatch(factoryId.value, {
+      ...openingForm.value,
+      batchNumber: openingForm.value.batchNumber.trim(),
+      unit: openingForm.value.unit.trim(),
+      remark: openingForm.value.remark?.trim() || undefined,
+    });
+    if (res.success) {
+      ElMessage.success('期初入库成功');
+      openingDialogVisible.value = false;
+      void loadData();
+    } else {
+      ElMessage({ message: res.message || '期初入库失败', type: 'error', duration: 0, showClose: true });
+    }
+  } catch (e: unknown) {
+    const err = e as {
+      response?: { status?: number; data?: { message?: string; actionHint?: string } };
+      actionHint?: string;
+    };
+    const status = err?.response?.status;
+    const msg = err?.response?.data?.message;
+    const hint = err?.response?.data?.actionHint;
+
+    if (status === 409) {
+      // 批次号重复 — fool-proof: offer to view existing
+      const displayMsg = msg || `批次号 "${openingForm.value.batchNumber}" 已存在`;
+      try {
+        await ElMessageBox.confirm(
+          `${displayMsg}${hint ? `\n提示: ${hint}` : ''}`,
+          '批次号重复',
+          { confirmButtonText: '查看现有批次', cancelButtonText: '重新填写', type: 'warning' }
+        );
+        // Navigate to list with search for duplicate batch number
+        searchKeyword.value = openingForm.value.batchNumber;
+        openingDialogVisible.value = false;
+        void loadData();
+      } catch {
+        // user chose to re-fill — keep dialog open
+      }
+    } else if (!err?.actionHint) {
+      ElMessage({ message: msg || '期初入库失败', type: 'error', duration: 0, showClose: true });
+    }
+  } finally {
+    openingSubmitting.value = false;
+  }
+}
+
+// ---------- 调整库存 dialog ----------
+const adjustDialogVisible = ref(false);
+const adjustSubmitting = ref(false);
+const adjustTargetRow = ref<TableRow | null>(null);
+
+const ADJUST_REF_TYPES: Array<{ value: FgAdjustmentReferenceType; label: string }> = [
+  { value: 'OPENING_CORRECTION', label: '期初修正' },
+  { value: 'STOCKTAKE', label: '盘点差异' },
+  { value: 'SCRAP', label: '报废损耗' },
+  { value: 'OTHER', label: '其他' },
+];
+
+const adjustForm = ref<FgAdjustRequest>({
+  adjustmentQuantity: 0,
+  reason: '',
+  referenceType: 'OPENING_CORRECTION',
+});
+
+function openAdjustDialog(row: TableRow) {
+  adjustTargetRow.value = row;
+  adjustForm.value = {
+    adjustmentQuantity: 0,
+    reason: '',
+    referenceType: 'OPENING_CORRECTION',
+  };
+  adjustDialogVisible.value = true;
+}
+
+function adjustAvailableQty(row: TableRow): number {
+  return (Number(row.producedQuantity) || 0)
+    - (Number(row.shippedQuantity) || 0)
+    - (Number(row.reservedQuantity) || 0);
+}
+
+async function submitAdjust() {
+  if (!factoryId.value || !adjustTargetRow.value) return;
+  if (adjustForm.value.adjustmentQuantity === 0) { ElMessage.warning('调整数量不能为 0'); return; }
+  if (!adjustForm.value.reason.trim()) { ElMessage.warning('请填写调整原因'); return; }
+
+  adjustSubmitting.value = true;
+  try {
+    const res = await adjustFgBatch(
+      factoryId.value,
+      String(adjustTargetRow.value.id),
+      {
+        ...adjustForm.value,
+        reason: adjustForm.value.reason.trim(),
+      }
+    );
+    if (res.success) {
+      ElMessage.success('库存调整成功');
+      adjustDialogVisible.value = false;
+      void loadData();
+    } else {
+      ElMessage({ message: res.message || '库存调整失败', type: 'error', duration: 0, showClose: true });
+    }
+  } catch (e: unknown) {
+    const err = e as {
+      response?: { status?: number; data?: { message?: string; actionHint?: string } };
+      actionHint?: string;
+    };
+    const msg = err?.response?.data?.message;
+    const hint = err?.response?.data?.actionHint;
+    if (!err?.actionHint) {
+      const fullMsg = msg
+        ? `${msg}${hint ? `\n提示: ${hint}` : ''}`
+        : '库存调整失败';
+      ElMessage({ message: fullMsg, type: 'error', duration: 0, showClose: true });
+    }
+  } finally {
+    adjustSubmitting.value = false;
+  }
+}
+
+// ---------- 作废批次 ----------
+async function handleVoidBatch(row: TableRow) {
+  if (!factoryId.value) return;
+  const batchLabel = row.batchNumber || row.id || '-';
+  const productLabel = String(
+    row.productName
+    || (row as TableRow & { productType?: { name?: string } }).productType?.name
+    || (row as TableRow & { productTypeId?: string }).productTypeId
+    || '-'
+  );
+
+  try {
+    // fool-proof Rule 2: context header with 批次号 + 产品名
+    await ElMessageBox.confirm(
+      '作废后该批次将不可恢复，且无法再出库或预留。请确认操作。',
+      `作废批次 — ${batchLabel} (${productLabel})`,
+      {
+        confirmButtonText: '确认作废',
+        cancelButtonText: '取消',
+        type: 'warning',
+        confirmButtonClass: 'el-button--danger',
+      }
+    );
+  } catch {
+    // user cancelled
+    return;
+  }
+
+  try {
+    const res = await voidFgBatch(factoryId.value, String(row.id));
+    // 204 returns null data — success if no error thrown
+    if (res === undefined || res === null || (res as { success?: boolean }).success !== false) {
+      ElMessage.success(`批次 ${batchLabel} 已作废`);
+      void loadData();
+    } else {
+      const msg = (res as { message?: string }).message;
+      ElMessage({ message: msg || '作废失败', type: 'error', duration: 0, showClose: true });
+    }
+  } catch (e: unknown) {
+    const err = e as {
+      response?: { status?: number; data?: { message?: string; actionHint?: string } };
+      actionHint?: string;
+    };
+    const status = err?.response?.status;
+    const msg = err?.response?.data?.message;
+    const hint = err?.response?.data?.actionHint;
+
+    if (status === 409) {
+      // 已有出库/预留记录 — fool-proof: sticky error with backend message
+      const fullMsg = msg
+        ? `${msg}${hint ? `\n提示: ${hint}` : ''}`
+        : `批次 ${batchLabel} 已有出库或预留记录，无法作废`;
+      ElMessage({ message: fullMsg, type: 'error', duration: 0, showClose: true });
+    } else if (!err?.actionHint) {
+      ElMessage({ message: msg || '作废失败', type: 'error', duration: 0, showClose: true });
+    }
+  }
 }
 
 async function handleRowActionClick(actionId: string, row: TableRow): Promise<void> {
   const batchLabel = row.batchNumber || row.id || '-';
   switch (actionId) {
     case 'view-detail': {
-      // Issue #761: 跳独立 detail route, 不再用 ElMessageBox 占位.
       router.push({
         name: 'SalesFinishedGoodsDetail',
         params: { id: String(row.id || '') },
@@ -85,7 +334,6 @@ async function handleRowActionClick(actionId: string, row: TableRow): Promise<vo
       break;
     }
     case 'transfer': {
-      // Issue #749: 调拨工作流未配置时弹 confirm → 跳工作流设计器, 不再 dead-end toast.
       try {
         await ElMessageBox.confirm(
           `批次 ${batchLabel} 的调拨工作流尚未配置. 是否前去工作流设计器配置 TRANSFER 流程?`,
@@ -99,8 +347,15 @@ async function handleRowActionClick(actionId: string, row: TableRow): Promise<vo
       break;
     }
     case 'view-price-history': {
-      // #860 follow-up: 接真实 GET /customer-price-history — 跨客户的销售成交价历史.
       openPriceHistory(row);
+      break;
+    }
+    case 'adjust-inventory': {
+      openAdjustDialog(row);
+      break;
+    }
+    case 'void-batch': {
+      await handleVoidBatch(row);
       break;
     }
     default:
@@ -122,7 +377,7 @@ async function loadData() {
   if (!factoryId.value) return;
   loading.value = true;
   try {
-    const params: TableRow = {
+    const params: Record<string, unknown> = {
       page: pagination.value.page,
       size: pagination.value.size,
     };
@@ -145,13 +400,13 @@ function handleSearch() { pagination.value.page = 1; loadData(); }
 function handleSearchClear() { searchKeyword.value = ''; handleSearch(); }
 
 function availableQty(row: TableRow) {
-  return (row.producedQuantity || 0) - (row.shippedQuantity || 0) - (row.reservedQuantity || 0);
+  return (Number(row.producedQuantity) || 0) - (Number(row.shippedQuantity) || 0) - (Number(row.reservedQuantity) || 0);
 }
 
 function statusType(row: TableRow) {
   const avail = availableQty(row);
   if (avail <= 0) return 'danger';
-  if (avail < (row.producedQuantity || 1) * 0.2) return 'warning';
+  if (avail < (Number(row.producedQuantity) || 1) * 0.2) return 'warning';
   return 'success';
 }
 </script>
@@ -177,9 +432,25 @@ function statusType(row: TableRow) {
             />
             <el-button type="primary" @click="handleSearch">搜索</el-button>
             <el-button :icon="Refresh" @click="loadData">刷新</el-button>
+            <el-button
+              v-if="canEdit"
+              type="success"
+              :icon="Plus"
+              @click="openOpeningDialog"
+            >期初入库</el-button>
           </div>
         </div>
       </template>
+
+      <!-- fool-proof: explain when 期初入库 is appropriate -->
+      <el-alert
+        type="info"
+        :closable="false"
+        show-icon
+        style="margin-bottom: 16px;"
+        title="入库渠道说明"
+        description="正常入库来自「生产完工确认」自动写入。期初入库仅用于系统上线初始化 / Excel 结存导入，请勿日常使用。"
+      />
 
       <el-table :data="tableData" v-loading="loading" empty-text="暂无数据" stripe border style="width: 100%">
         <el-table-column prop="batchNumber" label="批次号" width="170" />
@@ -206,7 +477,7 @@ function statusType(row: TableRow) {
         <el-table-column label="状态" width="100" align="center">
           <template #default="{ row }">
             <el-tag :type="statusType(row)" size="small">
-              {{ availableQty(row) <= 0 ? '已售罄' : availableQty(row) < (row.producedQuantity || 1) * 0.2 ? '库存低' : '充足' }}
+              {{ availableQty(row) <= 0 ? '已售罄' : availableQty(row) < (Number(row.producedQuantity) || 1) * 0.2 ? '库存低' : '充足' }}
             </el-tag>
           </template>
         </el-table-column>
@@ -236,6 +507,155 @@ function statusType(row: TableRow) {
       :product-id="priceHistoryDialog.productId"
       :product-label="priceHistoryDialog.productLabel"
     />
+
+    <!-- ===== 期初入库 Dialog ===== -->
+    <el-dialog
+      v-model="openingDialogVisible"
+      title="期初入库"
+      width="520px"
+      :close-on-click-modal="false"
+      destroy-on-close
+    >
+      <el-alert
+        type="warning"
+        :closable="false"
+        show-icon
+        style="margin-bottom: 16px;"
+        title="仅限期初导入"
+        description="期初入库仅用于系统上线 / Excel 结存导入。批次号工厂内唯一，多 SKU 建议加后缀区分（如 46173-ZS / 46173-NJ / 46173-ZZB）。"
+      />
+      <el-form label-width="90px">
+        <el-form-item label="产品" required>
+          <el-select
+            v-model="openingForm.productTypeId"
+            placeholder="请选择产品类型"
+            filterable
+            clearable
+            :loading="productTypesLoading"
+            style="width: 100%"
+          >
+            <el-option
+              v-for="pt in productTypes"
+              :key="pt.id"
+              :label="pt.name"
+              :value="pt.id"
+            />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="批次号" required>
+          <el-input
+            v-model="openingForm.batchNumber"
+            placeholder="如 OPN-20260101-001 或 OPN-001-ZS"
+            clearable
+          />
+        </el-form-item>
+        <el-form-item label="期初数量" required>
+          <el-input-number
+            v-model="openingForm.producedQuantity"
+            :min="0.01"
+            :precision="2"
+            style="width: 160px;"
+          />
+          <el-input
+            v-model="openingForm.unit"
+            placeholder="单位"
+            style="width: 80px; margin-left: 8px;"
+          />
+        </el-form-item>
+        <el-form-item label="生产日期" required>
+          <el-date-picker
+            v-model="openingForm.productionDate"
+            type="date"
+            placeholder="选择生产日期"
+            value-format="YYYY-MM-DD"
+            style="width: 100%"
+          />
+        </el-form-item>
+        <el-form-item label="备注">
+          <el-input
+            v-model="openingForm.remark"
+            type="textarea"
+            :rows="2"
+            placeholder="可选备注"
+            clearable
+          />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="openingDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="openingSubmitting" @click="submitOpening">确认入库</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- ===== 调整库存 Dialog ===== -->
+    <el-dialog
+      v-model="adjustDialogVisible"
+      :title="`调整库存 — ${adjustTargetRow?.batchNumber || ''} (${adjustTargetRow?.productName || adjustTargetRow?.productTypeId || '-'})`"
+      width="480px"
+      :close-on-click-modal="false"
+      destroy-on-close
+    >
+      <!-- fool-proof Rule 1: 预先显示当前库存边界 -->
+      <el-descriptions v-if="adjustTargetRow" :column="3" border size="small" style="margin-bottom: 16px;">
+        <el-descriptions-item label="可用库存">
+          <span :style="{ fontWeight: 600, color: adjustAvailableQty(adjustTargetRow) <= 0 ? '#f56c6c' : '#303133' }">
+            {{ adjustAvailableQty(adjustTargetRow) }} {{ adjustTargetRow.unit || '' }}
+          </span>
+        </el-descriptions-item>
+        <el-descriptions-item label="已发货">
+          {{ Number(adjustTargetRow.shippedQuantity) || 0 }} {{ adjustTargetRow.unit || '' }}
+        </el-descriptions-item>
+        <el-descriptions-item label="已预留">
+          {{ Number(adjustTargetRow.reservedQuantity) || 0 }} {{ adjustTargetRow.unit || '' }}
+        </el-descriptions-item>
+      </el-descriptions>
+
+      <el-form label-width="90px">
+        <el-form-item label="调整数量" required>
+          <el-input-number
+            v-model="adjustForm.adjustmentQuantity"
+            :precision="2"
+            placeholder="正数增加，负数减少"
+            style="width: 180px;"
+          />
+          <span v-if="adjustTargetRow" style="margin-left: 8px; font-size: 12px; color: #909399;">
+            调整后可用:
+            <strong :style="{ color: (adjustAvailableQty(adjustTargetRow) + adjustForm.adjustmentQuantity) < 0 ? '#f56c6c' : '#303133' }">
+              {{ (adjustAvailableQty(adjustTargetRow) + adjustForm.adjustmentQuantity).toFixed(2) }}
+            </strong>
+            {{ adjustTargetRow.unit || '' }}
+          </span>
+        </el-form-item>
+        <el-form-item label="原因类型" required>
+          <el-select v-model="adjustForm.referenceType" style="width: 100%">
+            <el-option
+              v-for="opt in ADJUST_REF_TYPES"
+              :key="opt.value"
+              :label="opt.label"
+              :value="opt.value"
+            />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="调整原因" required>
+          <el-input
+            v-model="adjustForm.reason"
+            type="textarea"
+            :rows="2"
+            placeholder="请说明调整原因"
+            clearable
+          />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="adjustDialogVisible = false">取消</el-button>
+        <el-button
+          type="primary"
+          :loading="adjustSubmitting"
+          :disabled="adjustForm.adjustmentQuantity === 0"
+          @click="submitAdjust"
+        >确认调整</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 

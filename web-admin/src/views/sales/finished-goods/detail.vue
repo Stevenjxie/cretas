@@ -10,17 +10,27 @@
  *
  * #809 (2026-05-17): 切换到 PR #791 引入的 GET /sales/finished-goods/{id} endpoint,
  * 取消之前的 list-filter fallback. 大工厂 ( >200 batches) 之前会假报"未找到".
+ *
+ * T126 (Phase 1): 新增 调整库存 / 作废批次 操作 + 调整历史 section.
+ * 注: GET /sales/finished-goods/{id}/adjustments 端点在后端 T126-A 未包含; Phase 1
+ * 只展示批次当前状态 (可用/发货/预留). 调整历史 section 保留结构待后续补接.
  */
 import { ref, computed, onMounted } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { get } from '@/api/request';
-import { ElMessage } from 'element-plus';
+import { ElMessage, ElMessageBox } from 'element-plus';
 import { ArrowLeft, Refresh } from '@element-plus/icons-vue';
 import { formatAmount } from '@/utils/tableFormatters';
 import type { TableRow } from '@/types/api';
 import { ApiError } from '@/types/api';
+import {
+  adjustFgBatch,
+  voidFgBatch,
+  type FgAdjustRequest,
+  type FgAdjustmentReferenceType,
+} from '@/api/finishedGoods';
 
 const route = useRoute();
 const router = useRouter();
@@ -30,6 +40,10 @@ const permissionStore = usePermissionStore();
 const factoryId = computed(() => authStore.factoryId);
 const batchId = computed(() => String(route.params.id || ''));
 const canViewPrice = computed(() => permissionStore.canViewPrice);
+// T126: writes need production:read_write OR sales:read_write
+const canEdit = computed(
+  () => permissionStore.canWrite('production') || permissionStore.canWrite('sales')
+);
 
 const loading = ref(false);
 const batch = ref<TableRow | null>(null);
@@ -107,6 +121,134 @@ function statusText(row: TableRow): string {
   if (avail < (Number(row.producedQuantity) || 1) * 0.2) return '库存低';
   return '充足';
 }
+
+// ---------- 调整库存 dialog ----------
+const adjustDialogVisible = ref(false);
+const adjustSubmitting = ref(false);
+
+const ADJUST_REF_TYPES: Array<{ value: FgAdjustmentReferenceType; label: string }> = [
+  { value: 'OPENING_CORRECTION', label: '期初修正' },
+  { value: 'STOCKTAKE', label: '盘点差异' },
+  { value: 'SCRAP', label: '报废损耗' },
+  { value: 'OTHER', label: '其他' },
+];
+
+const adjustForm = ref<FgAdjustRequest>({
+  adjustmentQuantity: 0,
+  reason: '',
+  referenceType: 'OPENING_CORRECTION',
+});
+
+function openAdjustDialog() {
+  adjustForm.value = {
+    adjustmentQuantity: 0,
+    reason: '',
+    referenceType: 'OPENING_CORRECTION',
+  };
+  adjustDialogVisible.value = true;
+}
+
+function adjustAvailableQty(): number {
+  if (!batch.value) return 0;
+  return availableQty(batch.value);
+}
+
+async function submitAdjust() {
+  if (!factoryId.value || !batch.value) return;
+  if (adjustForm.value.adjustmentQuantity === 0) { ElMessage.warning('调整数量不能为 0'); return; }
+  if (!adjustForm.value.reason.trim()) { ElMessage.warning('请填写调整原因'); return; }
+
+  adjustSubmitting.value = true;
+  try {
+    const res = await adjustFgBatch(
+      factoryId.value,
+      batchId.value,
+      {
+        ...adjustForm.value,
+        reason: adjustForm.value.reason.trim(),
+      }
+    );
+    if (res.success) {
+      ElMessage.success('库存调整成功');
+      adjustDialogVisible.value = false;
+      void loadBatch();
+    } else {
+      ElMessage({ message: res.message || '库存调整失败', type: 'error', duration: 0, showClose: true });
+    }
+  } catch (e: unknown) {
+    const err = e as {
+      response?: { status?: number; data?: { message?: string; actionHint?: string } };
+      actionHint?: string;
+    };
+    const msg = err?.response?.data?.message;
+    const hint = err?.response?.data?.actionHint;
+    if (!err?.actionHint) {
+      const fullMsg = msg
+        ? `${msg}${hint ? `\n提示: ${hint}` : ''}`
+        : '库存调整失败';
+      ElMessage({ message: fullMsg, type: 'error', duration: 0, showClose: true });
+    }
+  } finally {
+    adjustSubmitting.value = false;
+  }
+}
+
+// ---------- 作废批次 ----------
+async function handleVoidBatch() {
+  if (!factoryId.value || !batch.value) return;
+  const batchLabel = String(batch.value.batchNumber || batchId.value || '-');
+  const productLabel = String(
+    batch.value.productName
+    || (batch.value as TableRow & { productType?: { name?: string } }).productType?.name
+    || (batch.value as TableRow & { productTypeId?: string }).productTypeId
+    || '-'
+  );
+
+  try {
+    // fool-proof Rule 2: context header
+    await ElMessageBox.confirm(
+      '作废后该批次将不可恢复，且无法再出库或预留。请确认操作。',
+      `作废批次 — ${batchLabel} (${productLabel})`,
+      {
+        confirmButtonText: '确认作废',
+        cancelButtonText: '取消',
+        type: 'warning',
+        confirmButtonClass: 'el-button--danger',
+      }
+    );
+  } catch {
+    return;
+  }
+
+  try {
+    const res = await voidFgBatch(factoryId.value, batchId.value);
+    if (res === undefined || res === null || (res as { success?: boolean }).success !== false) {
+      ElMessage.success(`批次 ${batchLabel} 已作废`);
+      // Navigate back to list after void
+      router.push('/sales/finished-goods');
+    } else {
+      const msg = (res as { message?: string }).message;
+      ElMessage({ message: msg || '作废失败', type: 'error', duration: 0, showClose: true });
+    }
+  } catch (e: unknown) {
+    const err = e as {
+      response?: { status?: number; data?: { message?: string; actionHint?: string } };
+      actionHint?: string;
+    };
+    const status = err?.response?.status;
+    const msg = err?.response?.data?.message;
+    const hint = err?.response?.data?.actionHint;
+
+    if (status === 409) {
+      const fullMsg = msg
+        ? `${msg}${hint ? `\n提示: ${hint}` : ''}`
+        : `批次 ${batchLabel} 已有出库或预留记录，无法作废`;
+      ElMessage({ message: fullMsg, type: 'error', duration: 0, showClose: true });
+    } else if (!err?.actionHint) {
+      ElMessage({ message: msg || '作废失败', type: 'error', duration: 0, showClose: true });
+    }
+  }
+}
 </script>
 
 <template>
@@ -124,7 +266,19 @@ function statusText(row: TableRow): string {
           <h2 class="page-title">{{ batch.batchNumber || batch.id }}</h2>
           <el-tag :type="statusType(batch)" size="large">{{ statusText(batch) }}</el-tag>
         </div>
-        <el-button :icon="Refresh" @click="loadBatch">刷新</el-button>
+        <div class="header-actions">
+          <el-button :icon="Refresh" @click="loadBatch">刷新</el-button>
+          <el-button
+            v-if="canEdit"
+            type="primary"
+            @click="openAdjustDialog"
+          >调整库存</el-button>
+          <el-button
+            v-if="canEdit"
+            type="danger"
+            @click="handleVoidBatch"
+          >作废批次</el-button>
+        </div>
       </div>
 
       <!-- 基础信息 -->
@@ -158,6 +312,26 @@ function statusText(row: TableRow): string {
             {{ batch.unitPrice != null ? formatAmount(batch.unitPrice) : '-' }}
           </el-descriptions-item>
         </el-descriptions>
+      </el-card>
+
+      <!-- 调整历史 -->
+      <!-- T126 Phase 1 note: GET /sales/finished-goods/{id}/adjustments endpoint not
+           included in T126-A backend. Section shows placeholder pending Phase 2 wiring. -->
+      <el-card class="section-card" shadow="never">
+        <template #header>
+          <div class="section-header">
+            <span class="section-title">调整历史</span>
+            <el-tag size="small" type="info">待接后端端点</el-tag>
+          </div>
+        </template>
+        <el-alert
+          type="info"
+          :closable="false"
+          show-icon
+          style="margin-bottom: 12px"
+          title="调整历史待接"
+          description="GET /sales/finished-goods/{id}/adjustments 端点在 T126 Phase 1 后端未包含。调整记录将在后续 Phase 补接后显示。"
+        />
       </el-card>
 
       <!-- 价格历史 (canViewPrice gated) -->
@@ -194,6 +368,77 @@ function statusText(row: TableRow): string {
       </el-card>
     </template>
   </div>
+
+  <!-- ===== 调整库存 Dialog ===== -->
+  <el-dialog
+    v-if="batch"
+    v-model="adjustDialogVisible"
+    :title="`调整库存 — ${batch.batchNumber || batchId} (${batch.productName || batch.productTypeId || '-'})`"
+    width="480px"
+    :close-on-click-modal="false"
+    destroy-on-close
+  >
+    <!-- fool-proof Rule 1: 预先显示当前库存边界 -->
+    <el-descriptions :column="3" border size="small" style="margin-bottom: 16px;">
+      <el-descriptions-item label="可用库存">
+        <span :style="{ fontWeight: 600, color: adjustAvailableQty() <= 0 ? '#f56c6c' : '#303133' }">
+          {{ adjustAvailableQty() }} {{ batch.unit || '' }}
+        </span>
+      </el-descriptions-item>
+      <el-descriptions-item label="已发货">
+        {{ Number(batch.shippedQuantity) || 0 }} {{ batch.unit || '' }}
+      </el-descriptions-item>
+      <el-descriptions-item label="已预留">
+        {{ Number(batch.reservedQuantity) || 0 }} {{ batch.unit || '' }}
+      </el-descriptions-item>
+    </el-descriptions>
+
+    <el-form label-width="90px">
+      <el-form-item label="调整数量" required>
+        <el-input-number
+          v-model="adjustForm.adjustmentQuantity"
+          :precision="2"
+          placeholder="正数增加，负数减少"
+          style="width: 180px;"
+        />
+        <span style="margin-left: 8px; font-size: 12px; color: #909399;">
+          调整后可用:
+          <strong :style="{ color: (adjustAvailableQty() + adjustForm.adjustmentQuantity) < 0 ? '#f56c6c' : '#303133' }">
+            {{ (adjustAvailableQty() + adjustForm.adjustmentQuantity).toFixed(2) }}
+          </strong>
+          {{ batch.unit || '' }}
+        </span>
+      </el-form-item>
+      <el-form-item label="原因类型" required>
+        <el-select v-model="adjustForm.referenceType" style="width: 100%">
+          <el-option
+            v-for="opt in ADJUST_REF_TYPES"
+            :key="opt.value"
+            :label="opt.label"
+            :value="opt.value"
+          />
+        </el-select>
+      </el-form-item>
+      <el-form-item label="调整原因" required>
+        <el-input
+          v-model="adjustForm.reason"
+          type="textarea"
+          :rows="2"
+          placeholder="请说明调整原因"
+          clearable
+        />
+      </el-form-item>
+    </el-form>
+    <template #footer>
+      <el-button @click="adjustDialogVisible = false">取消</el-button>
+      <el-button
+        type="primary"
+        :loading="adjustSubmitting"
+        :disabled="adjustForm.adjustmentQuantity === 0"
+        @click="submitAdjust"
+      >确认调整</el-button>
+    </template>
+  </el-dialog>
 </template>
 
 <style scoped>
@@ -210,6 +455,11 @@ function statusText(row: TableRow): string {
   display: flex;
   align-items: center;
   gap: 12px;
+}
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 .page-title {
   font-size: 18px;
