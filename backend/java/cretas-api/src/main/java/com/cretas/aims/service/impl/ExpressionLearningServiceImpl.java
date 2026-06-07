@@ -44,6 +44,20 @@ public class ExpressionLearningServiceImpl implements ExpressionLearningService 
     @Lazy
     private ExpressionLearningService self;
 
+    // ========== 飞轮 v2 常量 ==========
+
+    /**
+     * 分层阈值: confidence >= HIGH_CONF_THRESHOLD → 新行直接 active=true。
+     * 低于此值 (mid-conf zone 0.70-0.89) → staged (is_active=false)，等重提议激活。
+     */
+    static final double HIGH_CONF_THRESHOLD = 0.90;
+
+    /**
+     * 重提议 promote 阈值。
+     * dedup 命中同一 staged/dormant 行 {@value} 次后（含首次写入），自动激活。
+     */
+    static final int PROMOTE_THRESHOLD = 3;
+
     // ========== 表达学习 ==========
 
     @Override
@@ -59,12 +73,22 @@ public class ExpressionLearningServiceImpl implements ExpressionLearningService 
         String normalized = expression.toLowerCase().trim();
         String hash = LearnedExpression.computeHash(normalized);
 
-        // 检查是否已存在
-        if (expressionRepository.existsByHashAndFactory(hash, factoryId)) {
-            log.debug("表达已存在: factory={}, intent={}, expr={}",
-                    factoryId, intentCode, truncate(normalized, 50));
-            return null;
+        // 飞轮 v2: dedup 命中时，不只 skip — 追踪重提议并尝试 promote
+        Optional<LearnedExpression> existing = expressionRepository.findOneByHashAndFactory(hash, factoryId);
+        if (existing.isPresent()) {
+            LearnedExpression row = existing.get();
+            // 已经 active 的行无需处理
+            if (Boolean.TRUE.equals(row.getIsActive())) {
+                log.debug("表达已存在且活跃，跳过: factory={}, intent={}, expr={}",
+                        factoryId, intentCode, truncate(normalized, 50));
+                return null;
+            }
+            // staged (false) 或 dormant (null): 追踪重提议
+            return incrementProposalAndMaybePromote(row, intentCode, confidence, factoryId);
         }
+
+        // 飞轮 v2 分层写入: confidence >= 0.90 → active; 0.70-0.89 → staged
+        boolean shouldBeActive = confidence >= HIGH_CONF_THRESHOLD;
 
         LearnedExpression entity = LearnedExpression.builder()
                 .factoryId(factoryId)
@@ -75,7 +99,9 @@ public class ExpressionLearningServiceImpl implements ExpressionLearningService 
                 .confidence(java.math.BigDecimal.valueOf(confidence))
                 .hitCount(0)
                 .isVerified(false)
-                .isActive(true)
+                .isActive(shouldBeActive)
+                .proposalCount(1)
+                .lastProposedAt(LocalDateTime.now())
                 .build();
 
         // 生成 embedding (用于 Layer 4 统一语义搜索, 使用请求级缓存)
@@ -92,11 +118,12 @@ public class ExpressionLearningServiceImpl implements ExpressionLearningService 
         }
 
         LearnedExpression saved = expressionRepository.save(entity);
-        log.info("学习新表达: factory={}, intent={}, source={}, hasEmbedding={}, expr={}",
-                factoryId, intentCode, sourceType, saved.hasEmbedding(), truncate(normalized, 50));
+        log.info("学习新表达: factory={}, intent={}, tier={}, source={}, hasEmbedding={}, expr={}",
+                factoryId, intentCode, shouldBeActive ? "active" : "staged",
+                sourceType, saved.hasEmbedding(), truncate(normalized, 50));
 
-        // 更新内存缓存 (异步添加到 Layer 4 搜索)
-        if (saved.hasEmbedding() && embeddingCacheService != null) {
+        // 更新内存缓存 (异步添加到 Layer 4 搜索 — 仅 active 行)
+        if (shouldBeActive && saved.hasEmbedding() && embeddingCacheService != null) {
             try {
                 embeddingCacheService.cacheExpression(saved);
             } catch (Exception e) {
@@ -105,6 +132,57 @@ public class ExpressionLearningServiceImpl implements ExpressionLearningService 
         }
 
         return saved;
+    }
+
+    /**
+     * 飞轮 v2 重提议 promote 逻辑。
+     *
+     * <p>当 dedup 命中一个 staged (is_active=false) 或 dormant (is_active=null) 行时：
+     * <ol>
+     *   <li>递增 proposal_count，更新 last_proposed_at。</li>
+     *   <li>若 proposal_count >= {@link #PROMOTE_THRESHOLD} AND confidence >= 0.70 → promote (is_active=true)。</li>
+     *   <li>返回更新后的行（activate 时返回含 is_active=true；否则返回仍 staged 的行）。</li>
+     * </ol>
+     *
+     * <p>含义：LLM 跨 session 反复提议同一映射 → 一致同意 → 激活；仅提议一次的映射保持 dormant 安全。
+     *
+     * @param existing   已存在的 staged/dormant 行
+     * @param intentCode 本次提议的意图（用于日志；行的 intentCode 不变以保持幂等）
+     * @param confidence 本次提议的置信度
+     * @param factoryId  工厂 ID（用于日志）
+     * @return 更新后的实体（已 save）
+     */
+    @Transactional
+    LearnedExpression incrementProposalAndMaybePromote(
+            LearnedExpression existing,
+            String intentCode,
+            double confidence,
+            String factoryId) {
+        int newCount = (existing.getProposalCount() == null ? 1 : existing.getProposalCount()) + 1;
+        existing.setProposalCount(newCount);
+        existing.setLastProposedAt(LocalDateTime.now());
+
+        boolean canPromote = newCount >= PROMOTE_THRESHOLD && confidence >= 0.70;
+        if (canPromote) {
+            existing.setIsActive(true);
+            log.info("飞轮 v2 promote: factory={}, intent={}, expr={}, proposalCount={}, confidence={}",
+                    factoryId, existing.getIntentCode(),
+                    truncate(existing.getExpression(), 50), newCount, confidence);
+            // 更新内存 embedding 缓存
+            if (existing.hasEmbedding() && embeddingCacheService != null) {
+                try {
+                    embeddingCacheService.cacheExpression(existing);
+                } catch (Exception e) {
+                    log.warn("promote 后缓存 embedding 失败: {}", e.getMessage());
+                }
+            }
+        } else {
+            log.debug("飞轮 v2 重提议 (未达阈值): factory={}, intent={}, proposalCount={}/{}, expr={}",
+                    factoryId, intentCode, newCount, PROMOTE_THRESHOLD,
+                    truncate(existing.getExpression(), 50));
+        }
+
+        return expressionRepository.save(existing);
     }
 
     @Override

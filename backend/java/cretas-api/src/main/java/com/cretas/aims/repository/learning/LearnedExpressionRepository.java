@@ -48,6 +48,23 @@ public interface LearnedExpressionRepository extends JpaRepository<LearnedExpres
         @Param("factoryId") String factoryId
     );
 
+    /**
+     * 取出现有行（用于 flywheel v2 重提议追踪）
+     *
+     * 与 {@link #existsByHashAndFactory} 不同，返回完整实体（含 is_active / proposal_count），
+     * 供 dedup 命中时判断是否可 promote。
+     * 包含所有活跃状态（active=true/false/null），因为 staged 和 dormant 都需要被重提议追踪。
+     */
+    @Query(value = "SELECT * FROM ai_learned_expressions e " +
+           "WHERE e.expression_hash = :hash " +
+           "AND ((CAST(:factoryId AS varchar) IS NULL AND e.factory_id IS NULL) OR e.factory_id = :factoryId) " +
+           "LIMIT 1",
+           nativeQuery = true)
+    java.util.Optional<LearnedExpression> findOneByHashAndFactory(
+        @Param("hash") String expressionHash,
+        @Param("factoryId") String factoryId
+    );
+
     // ========== 按意图查询 ==========
 
     /**
