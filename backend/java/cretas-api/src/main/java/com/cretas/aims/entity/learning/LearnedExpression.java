@@ -110,6 +110,24 @@ public class LearnedExpression {
     private Boolean isActive = true;
 
     /**
+     * 重提议计数 (flywheel v2)
+     *
+     * 每次学习流 dedup 命中同一表达时递增。
+     * 达到阈值 ({@link com.cretas.aims.service.impl.ExpressionLearningServiceImpl#PROMOTE_THRESHOLD})
+     * 且通过 shouldLearnExpression 守卫时自动激活 (staged→active)。
+     * 新行写入时默认 1。
+     */
+    @Column(name = "proposal_count")
+    @Builder.Default
+    private Integer proposalCount = 1;
+
+    /**
+     * 最后重提议时间 (flywheel v2)
+     */
+    @Column(name = "last_proposed_at")
+    private LocalDateTime lastProposedAt;
+
+    /**
      * 创建时间
      */
     @Column(name = "created_at", updatable = false)
