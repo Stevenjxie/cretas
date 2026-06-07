@@ -29,6 +29,9 @@ import java.util.Map;
  */
 public class RestaurantDishBestsellerGoldTool extends GoldBackedRestaurantTool {
 
+    private static final String FILTER_DISH_NAME = "dish_name";
+    private static final String FILTER_DISH_ID   = "dish_id";
+
     @Override
     public String getToolName() {
         return "restaurant_dish_bestseller_gold";
@@ -36,7 +39,7 @@ public class RestaurantDishBestsellerGoldTool extends GoldBackedRestaurantTool {
 
     @Override
     public String getDescription() {
-        return "查询畅销菜品 Top N(按销售额, 来自 gold 层 agg_product)。适用: 畅销品/热销菜/卖得最好的菜。";
+        return "查询畅销菜品 Top N(按销售额, 来自 gold 层 agg_product)。适用: 畅销品/热销菜/卖得最好的菜/那道菜的趋势。";
     }
 
     @Override
@@ -45,8 +48,18 @@ public class RestaurantDishBestsellerGoldTool extends GoldBackedRestaurantTool {
         monthProp.put("type", "string");
         monthProp.put("description", "分析月份, 如 '2026年3月' / '上月', 不传默认全部数据");
 
+        Map<String, Object> dishNameProp = new HashMap<>();
+        dishNameProp.put("type", "string");
+        dishNameProp.put("description", "可选。菜品名称, 用于多轮续接后的单菜品过滤");
+
+        Map<String, Object> dishIdProp = new HashMap<>();
+        dishIdProp.put("type", "string");
+        dishIdProp.put("description", "可选。菜品ID (product_id), 优先于菜品名称用于单菜品过滤");
+
         Map<String, Object> properties = new HashMap<>();
         properties.put("month", monthProp);
+        properties.put(FILTER_DISH_NAME, dishNameProp);
+        properties.put(FILTER_DISH_ID, dishIdProp);
 
         Map<String, Object> schema = new HashMap<>();
         schema.put("type", "object");
@@ -61,7 +74,20 @@ public class RestaurantDishBestsellerGoldTool extends GoldBackedRestaurantTool {
     protected Map<String, Object> queryGold(
             String factoryId, LocalDate start, LocalDate end, Map<String, Object> params)
             throws Exception {
-        return gold.fetchTopProducts(factoryId, start, end, 5, "desc");
+        Map<String, Object> result = gold.fetchTopProducts(factoryId, start, end, 5, "desc");
+        if (result == null) {
+            return null;
+        }
+        Map<String, Object> copy = new LinkedHashMap<>(result);
+        if (params != null) {
+            if (params.get(FILTER_DISH_NAME) != null) {
+                copy.put(FILTER_DISH_NAME, params.get(FILTER_DISH_NAME));
+            }
+            if (params.get(FILTER_DISH_ID) != null) {
+                copy.put(FILTER_DISH_ID, params.get(FILTER_DISH_ID));
+            }
+        }
+        return copy;
     }
 
     @Override
@@ -77,9 +103,27 @@ public class RestaurantDishBestsellerGoldTool extends GoldBackedRestaurantTool {
                         ? (List<Map<String, Object>>) goldResult.get("top_products")
                         : Collections.emptyList();
 
+        // Apply dish filter if present (for multi-turn coref)
+        Object filterDishId   = goldResult.get(FILTER_DISH_ID);
+        Object filterDishName = goldResult.get(FILTER_DISH_NAME);
+        boolean hasDishFilter = hasText(filterDishId) || hasText(filterDishName);
+        if (hasDishFilter) {
+            raw = raw.stream()
+                    .filter(row -> matchesDish(row, filterDishId, filterDishName))
+                    .toList();
+            if (raw.isEmpty()) {
+                Map<String, Object> emptyResult = new LinkedHashMap<>();
+                emptyResult.put("dataAvailable", false);
+                emptyResult.put("message", emptyMessage());
+                emptyResult.put("actionHint", "请先查询畅销菜品排行，确认要续接的菜品名称。");
+                return emptyResult;
+            }
+        }
+
         List<Map<String, Object>> formatted = new ArrayList<>();
         for (Map<String, Object> row : raw) {
             Map<String, Object> entry = new LinkedHashMap<>();
+            entry.put("dish_id", row.get("product_id"));
             entry.put("菜品", row.get("product_name"));
             entry.put("销量", row.get("qty_sold"));
             entry.put("销售额", row.get("revenue"));
@@ -114,6 +158,9 @@ public class RestaurantDishBestsellerGoldTool extends GoldBackedRestaurantTool {
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("统计周期", period);
         result.put("畅销TOP5", formatted);
+        if (!formatted.isEmpty()) {
+            result.put("top_dish", formatted.get(0));
+        }
         result.put("dataAvailable", true);
         result.put("message", sb.toString());
         if (!chartNames.isEmpty()) {
@@ -121,6 +168,22 @@ public class RestaurantDishBestsellerGoldTool extends GoldBackedRestaurantTool {
                     "畅销菜品 Top5 (销售额/万元)", chartNames, chartVals, "万元"));
         }
         return result;
+    }
+
+    private static boolean matchesDish(Map<String, Object> row, Object dishId, Object dishName) {
+        if (hasText(dishId)) {
+            Object rowId = row.get("product_id");
+            return rowId != null && rowId.toString().equals(dishId.toString());
+        }
+        if (hasText(dishName)) {
+            Object rowName = row.get("product_name");
+            return rowName != null && rowName.toString().equals(dishName.toString());
+        }
+        return true;
+    }
+
+    private static boolean hasText(Object value) {
+        return value != null && !value.toString().trim().isEmpty();
     }
 
     private static String fmtAmt(double v) {

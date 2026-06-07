@@ -55,6 +55,9 @@ public class IntentExecutionOrchestrator {
     private static final Pattern STORE_REFERENCE_PATTERN = Pattern.compile(
             "那家店|这家店|该店|那个店|这个店|该门店|那家|这家");
 
+    private static final Pattern DISH_REFERENCE_PATTERN = Pattern.compile(
+            "那道菜|这道菜|该菜品|这个菜|那个菜|这款菜|那款菜|它");
+
     // ===== 依赖 =====
     private final AIIntentService aiIntentService;
     private final IntentSemanticsParser semanticsParser;
@@ -345,6 +348,10 @@ public class IntentExecutionOrchestrator {
 
         if (requiresStoreReferenceClarification(request, matchResult, intent)) {
             return buildStoreReferenceClarificationResponse(request);
+        }
+
+        if (requiresDishReferenceClarification(request, matchResult, intent)) {
+            return buildDishReferenceClarificationResponse(request);
         }
 
         // 权限检查
@@ -1154,6 +1161,41 @@ public class IntentExecutionOrchestrator {
                 .build();
     }
 
+    boolean requiresDishReferenceClarification(
+            IntentExecuteRequest request, IntentMatchResult matchResult, AIIntentConfig intent) {
+        if (intent == null || !"RESTAURANT_BESTSELLER_QUERY".equals(intent.getIntentCode())) {
+            return false;
+        }
+        String input = request != null ? request.getUserInput() : null;
+        if (input == null || !DISH_REFERENCE_PATTERN.matcher(input).find()) {
+            return false;
+        }
+        if (matchResult == null || matchResult.getPreprocessedQuery() == null
+                || matchResult.getPreprocessedQuery().getResolvedReferences() == null) {
+            return true;
+        }
+        return matchResult.getPreprocessedQuery().getResolvedReferences().values().stream()
+                .noneMatch(ref -> ref != null
+                        && ref.getEntityType() != null
+                        && "DISH".equalsIgnoreCase(ref.getEntityType()));
+    }
+
+    boolean shouldBypassEarlyPhraseShortcutForDishReference(String userInput) {
+        return userInput != null && DISH_REFERENCE_PATTERN.matcher(userInput).find();
+    }
+
+    IntentExecuteResponse buildDishReferenceClarificationResponse(IntentExecuteRequest request) {
+        final String msg = "请问您指的是哪道菜？";
+        return IntentExecuteResponse.builder()
+                .intentRecognized(false)
+                .status("NEED_CLARIFICATION")
+                .message(msg)
+                .formattedText(msg)
+                .sessionId(request != null ? request.getSessionId() : null)
+                .executedAt(LocalDateTime.now())
+                .build();
+    }
+
     IntentExecuteResponse buildClarificationResponse(IntentMatchResult matchResult, String factoryId) {
         AIIntentConfig matchedIntent = matchResult.getBestMatch();
         List<IntentExecuteResponse.SuggestedAction> candidateActions = buildCandidateActions(matchResult, factoryId);
@@ -1615,6 +1657,7 @@ public class IntentExecutionOrchestrator {
             if (data instanceof Map) {
                 Map<String, Object> dataMap = (Map<String, Object>) data;
                 extractTopStoreSlot(sessionId, dataMap.get("top_store"));
+                extractTopDishSlot(sessionId, dataMap.get("top_dish"));
                 if (dataMap.containsKey("content") && dataMap.get("content") instanceof List)
                     items = (List<Map<String, Object>>) dataMap.get("content");
             } else if (data instanceof List) {
@@ -1660,6 +1703,30 @@ public class IntentExecutionOrchestrator {
         }
     }
 
+    @SuppressWarnings("unchecked")
+    private void extractTopDishSlot(String sessionId, Object topDishObj) {
+        if (topDishObj == null) return;
+        try {
+            Map<String, Object> topDish;
+            if (topDishObj instanceof Map) {
+                topDish = (Map<String, Object>) topDishObj;
+            } else {
+                topDish = objectMapper.convertValue(topDishObj,
+                        new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>() {});
+            }
+            String id = getStringValue(topDish, "dish_id", "product_id", "id");
+            String name = getStringValue(topDish, "菜品", "dish_name", "product_name", "name");
+            if (id == null || name == null) return;
+            var slot = com.cretas.aims.dto.conversation.EntitySlot.dish(id, name);
+            conversationMemoryService.updateEntitySlot(
+                    sessionId,
+                    com.cretas.aims.dto.conversation.EntitySlot.SlotType.DISH,
+                    slot);
+        } catch (Exception e) {
+            log.debug("DISH entity extraction failed: {}", e.getMessage());
+        }
+    }
+
     private void extractSlot(String sessionId, Map<String, Object> item, String entityType, String... idKeys) {
         String id = getStringValue(item, idKeys);
         if (id != null) {
@@ -1683,6 +1750,7 @@ public class IntentExecutionOrchestrator {
             case "BATCH", "MATERIAL_BATCH" -> com.cretas.aims.dto.conversation.EntitySlot.SlotType.BATCH;
             case "SUPPLIER" -> com.cretas.aims.dto.conversation.EntitySlot.SlotType.SUPPLIER;
             case "STORE" -> com.cretas.aims.dto.conversation.EntitySlot.SlotType.STORE;
+            case "DISH" -> com.cretas.aims.dto.conversation.EntitySlot.SlotType.DISH;
             case "CUSTOMER" -> com.cretas.aims.dto.conversation.EntitySlot.SlotType.CUSTOMER;
             case "PRODUCT", "PRODUCT_TYPE" -> com.cretas.aims.dto.conversation.EntitySlot.SlotType.PRODUCT;
             case "WAREHOUSE", "LOCATION" -> com.cretas.aims.dto.conversation.EntitySlot.SlotType.WAREHOUSE;
