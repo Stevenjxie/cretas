@@ -112,17 +112,19 @@ class BomYieldEstimateServiceImplTest {
     }
 
     @Test
-    @DisplayName("computeMedian: result capped at 100.00 when raw value > 1")
-    void computeMedian_capAt100() {
-        // cumulativeYieldRate > 1 is theoretically impossible from real data
-        // but service must defensively cap it
+    @DisplayName("computeMedian: B3 — >100% samples yield >100 result (water-gain processes, NOT capped)")
+    void computeMedian_aboveHundred_notCapped() {
+        // 保水/腌制等工序 cumulativeYieldRate > 1 是合法的 (六扇门猪舌保水 105–126%)
+        // B3 fix: the ≤100 cap is removed; result must be the true median, not 100.00
         List<BigDecimal> samples = Arrays.asList(
-                new BigDecimal("1.05"),
-                new BigDecimal("1.10"),
-                new BigDecimal("1.08")
+                new BigDecimal("1.05"),  // 105%
+                new BigDecimal("1.10"),  // 110%
+                new BigDecimal("1.08")   // 108%
         );
         BigDecimal result = service.computeMedian(samples);
-        assertThat(result).isEqualByComparingTo(new BigDecimal("100.00"));
+        // sorted: [1.05, 1.08, 1.10] → median = 1.08 → ×100 = 108.00
+        assertThat(result).isEqualByComparingTo(new BigDecimal("108.00"));
+        assertThat(result.compareTo(BigDecimal.valueOf(100))).isGreaterThan(0);
     }
 
     @Test
@@ -369,7 +371,7 @@ class BomYieldEstimateServiceImplTest {
         savedLog.setId("cl-uuid-001");
         when(bomChangeLogRepository.save(any(BomChangeLog.class))).thenReturn(savedLog);
 
-        BomYieldApplyRequest req = new BomYieldApplyRequest(42L, new BigDecimal("65.00"));
+        BomYieldApplyRequest req = BomYieldApplyRequest.builder().bomItemId(42L).yieldRate(new BigDecimal("65.00")).build();
         BomYieldApplyResultDTO result = service.recalculateApply(FACTORY, List.of(req));
 
         assertThat(result.getApplied()).isEqualTo(1);
@@ -398,7 +400,7 @@ class BomYieldEstimateServiceImplTest {
         BomItem packagingItem = makeBomItem(99L, FACTORY, PRODUCT_A, "PACKAGING", new BigDecimal("100.00"));
         when(bomItemRepository.findById(99L)).thenReturn(Optional.of(packagingItem));
 
-        BomYieldApplyRequest req = new BomYieldApplyRequest(99L, new BigDecimal("50.00"));
+        BomYieldApplyRequest req = BomYieldApplyRequest.builder().bomItemId(99L).yieldRate(new BigDecimal("50.00")).build();
         BomYieldApplyResultDTO result = service.recalculateApply(FACTORY, List.of(req));
 
         assertThat(result.getApplied()).isEqualTo(0);
@@ -413,7 +415,7 @@ class BomYieldEstimateServiceImplTest {
         BomItem item = makeBomItem(77L, OTHER_FACTORY, PRODUCT_A, "RAW", new BigDecimal("80.00"));
         when(bomItemRepository.findById(77L)).thenReturn(Optional.of(item));
 
-        BomYieldApplyRequest req = new BomYieldApplyRequest(77L, new BigDecimal("55.00"));
+        BomYieldApplyRequest req = BomYieldApplyRequest.builder().bomItemId(77L).yieldRate(new BigDecimal("55.00")).build();
         BomYieldApplyResultDTO result = service.recalculateApply(FACTORY, List.of(req));
 
         // Must be silently skipped — not leaked, not written
@@ -427,7 +429,7 @@ class BomYieldEstimateServiceImplTest {
     void apply_notFound_skipped() {
         when(bomItemRepository.findById(anyLong())).thenReturn(Optional.empty());
 
-        BomYieldApplyRequest req = new BomYieldApplyRequest(999L, new BigDecimal("60.00"));
+        BomYieldApplyRequest req = BomYieldApplyRequest.builder().bomItemId(999L).yieldRate(new BigDecimal("60.00")).build();
         BomYieldApplyResultDTO result = service.recalculateApply(FACTORY, List.of(req));
 
         assertThat(result.getApplied()).isEqualTo(0);
@@ -453,12 +455,142 @@ class BomYieldEstimateServiceImplTest {
         savedLog.setId("cl-scale");
         when(bomChangeLogRepository.save(any())).thenReturn(savedLog);
 
-        BomYieldApplyRequest req = new BomYieldApplyRequest(50L, new BigDecimal("65.555"));
+        BomYieldApplyRequest req = BomYieldApplyRequest.builder().bomItemId(50L).yieldRate(new BigDecimal("65.555")).build();
         service.recalculateApply(FACTORY, List.of(req));
 
         ArgumentCaptor<BomItem> captor = ArgumentCaptor.forClass(BomItem.class);
         verify(bomItemRepository).save(captor.capture());
         assertThat(captor.getValue().getYieldRate()).isEqualByComparingTo(new BigDecimal("65.56"));
+    }
+
+    // ─── B3: >100% yield (water-gain process) ─────────────────────────────────
+
+    @Test
+    @DisplayName("B3: estimateForProduct with >100% samples returns >100 suggestedYieldRate (not capped)")
+    void estimate_aboveHundredPercent_notCapped() {
+        ProductType pt = new ProductType();
+        pt.setGramsPerUnit(new BigDecimal("200"));
+        when(productTypeRepository.findByIdAndFactoryId(eq(PRODUCT_A), eq(FACTORY)))
+                .thenReturn(Optional.of(pt));
+
+        List<ProductionBatch> batches = mockBatchList(3);
+        when(productionBatchRepository.findRecentCompletedByFactoryAndProductType(
+                eq(FACTORY), eq(PRODUCT_A), any()))
+                .thenReturn(batches);
+        // 保水工序: 105%, 108%, 112%  → P50 = 1.08 → 108.00%
+        when(yieldReportService.getYield(FACTORY, 1L))
+                .thenReturn(BatchYieldDTO.builder().cumulativeYieldRate(new BigDecimal("1.05")).build());
+        when(yieldReportService.getYield(FACTORY, 2L))
+                .thenReturn(BatchYieldDTO.builder().cumulativeYieldRate(new BigDecimal("1.08")).build());
+        when(yieldReportService.getYield(FACTORY, 3L))
+                .thenReturn(BatchYieldDTO.builder().cumulativeYieldRate(new BigDecimal("1.12")).build());
+
+        BomYieldEstimateDTO dto = service.estimateForProduct(FACTORY, PRODUCT_A, "RAW");
+
+        assertThat(dto.getSuggestedYieldRate()).isNotNull();
+        assertThat(dto.getSuggestedYieldRate()).isEqualByComparingTo(new BigDecimal("108.00"));
+        assertThat(dto.getSuggestedYieldRate().compareTo(BigDecimal.valueOf(100))).isGreaterThan(0);
+        assertThat(dto.getYieldMin()).isEqualByComparingTo(new BigDecimal("105.00"));
+        assertThat(dto.getYieldMax()).isEqualByComparingTo(new BigDecimal("112.00"));
+        assertThat(dto.getSource()).isEqualTo("BATCH_REPORTING");
+    }
+
+    // ─── H5: changedBy populated from SecurityContext ─────────────────────────
+
+    @Test
+    @DisplayName("H5: apply writes changedBy=null and changedByName=null when no SecurityContext (unit test context)")
+    void apply_changedBy_nullWhenNoSecurityContext() {
+        // In unit tests there is no Spring Security context → SecurityUtils returns null.
+        // The service must tolerate this and not throw.
+        BomItem item = makeBomItem(42L, FACTORY, PRODUCT_A, "RAW", new BigDecimal("80.00"));
+        when(bomItemRepository.findById(42L)).thenReturn(Optional.of(item));
+        when(bomItemRepository.save(any(BomItem.class))).thenAnswer(i -> i.getArgument(0));
+        BomChangeLog savedLog = new BomChangeLog();
+        savedLog.setId("cl-h5");
+        when(bomChangeLogRepository.save(any(BomChangeLog.class))).thenReturn(savedLog);
+
+        BomYieldApplyRequest req = BomYieldApplyRequest.builder()
+                .bomItemId(42L).yieldRate(new BigDecimal("65.00")).build();
+        service.recalculateApply(FACTORY, List.of(req));
+
+        ArgumentCaptor<BomChangeLog> logCaptor = ArgumentCaptor.forClass(BomChangeLog.class);
+        verify(bomChangeLogRepository).save(logCaptor.capture());
+        // No authentication context in unit tests → both null (tolerated, not an error)
+        assertThat(logCaptor.getValue().getChangedBy()).isNull();
+        assertThat(logCaptor.getValue().getChangedByName()).isNull();
+    }
+
+    // ─── M10: optimistic staleness check ──────────────────────────────────────
+
+    @Test
+    @DisplayName("M10: apply with fresh expectedCurrentYieldRate (matches DB) → applies normally")
+    void apply_m10_fresh_applies() {
+        BomItem item = makeBomItem(42L, FACTORY, PRODUCT_A, "RAW", new BigDecimal("80.00"));
+        when(bomItemRepository.findById(42L)).thenReturn(Optional.of(item));
+        when(bomItemRepository.save(any(BomItem.class))).thenAnswer(i -> i.getArgument(0));
+        BomChangeLog savedLog = new BomChangeLog();
+        savedLog.setId("cl-m10-fresh");
+        when(bomChangeLogRepository.save(any(BomChangeLog.class))).thenReturn(savedLog);
+
+        // expectedCurrentYieldRate matches DB value (80.00) → not stale
+        BomYieldApplyRequest req = BomYieldApplyRequest.builder()
+                .bomItemId(42L)
+                .yieldRate(new BigDecimal("65.00"))
+                .expectedCurrentYieldRate(new BigDecimal("80.00"))
+                .build();
+        BomYieldApplyResultDTO result = service.recalculateApply(FACTORY, List.of(req));
+
+        assertThat(result.getApplied()).isEqualTo(1);
+        verify(bomItemRepository).save(any());
+    }
+
+    @Test
+    @DisplayName("M10: apply with stale expectedCurrentYieldRate (differs from DB) → throws BomYieldStaleException, no write")
+    void apply_m10_stale_throws409() {
+        // DB current = 80.00, caller expected 75.00 → stale
+        BomItem item = makeBomItem(42L, FACTORY, PRODUCT_A, "RAW", new BigDecimal("80.00"));
+        when(bomItemRepository.findById(42L)).thenReturn(Optional.of(item));
+
+        BomYieldApplyRequest req = BomYieldApplyRequest.builder()
+                .bomItemId(42L)
+                .yieldRate(new BigDecimal("65.00"))
+                .expectedCurrentYieldRate(new BigDecimal("75.00")) // mismatch → stale
+                .build();
+
+        com.cretas.aims.exception.BomYieldStaleException ex =
+                org.assertj.core.api.Assertions.catchThrowableOfType(
+                        () -> service.recalculateApply(FACTORY, List.of(req)),
+                        com.cretas.aims.exception.BomYieldStaleException.class);
+        assertThat(ex).isNotNull();
+        assertThat(ex.getStaleRows()).hasSize(1);
+        assertThat(ex.getStaleRows().get(0).getBomItemId()).isEqualTo(42L);
+        assertThat(ex.getStaleRows().get(0).getDbCurrent()).isEqualByComparingTo(new BigDecimal("80.00"));
+        assertThat(ex.getStaleRows().get(0).getExpected()).isEqualByComparingTo(new BigDecimal("75.00"));
+        // No write should have happened
+        verify(bomItemRepository, never()).save(any());
+        verify(bomChangeLogRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("M10: apply without expectedCurrentYieldRate (null) → no staleness check, applies normally")
+    void apply_m10_noExpected_skipsCheck() {
+        BomItem item = makeBomItem(42L, FACTORY, PRODUCT_A, "RAW", new BigDecimal("80.00"));
+        when(bomItemRepository.findById(42L)).thenReturn(Optional.of(item));
+        when(bomItemRepository.save(any(BomItem.class))).thenAnswer(i -> i.getArgument(0));
+        BomChangeLog savedLog = new BomChangeLog();
+        savedLog.setId("cl-m10-nocheck");
+        when(bomChangeLogRepository.save(any(BomChangeLog.class))).thenReturn(savedLog);
+
+        // null expectedCurrentYieldRate → backward-compat, no staleness check
+        BomYieldApplyRequest req = BomYieldApplyRequest.builder()
+                .bomItemId(42L)
+                .yieldRate(new BigDecimal("65.00"))
+                // expectedCurrentYieldRate intentionally omitted (null)
+                .build();
+        BomYieldApplyResultDTO result = service.recalculateApply(FACTORY, List.of(req));
+
+        assertThat(result.getApplied()).isEqualTo(1);
+        verify(bomItemRepository).save(any());
     }
 
     // ─── helpers ──────────────────────────────────────────────────────────────

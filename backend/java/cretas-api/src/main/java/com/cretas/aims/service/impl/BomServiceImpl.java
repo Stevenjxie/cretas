@@ -141,11 +141,16 @@ public class BomServiceImpl implements BomService {
         }
 
         // 设置默认值（优先从 Canvas Config 读取，不可用时使用硬编码 fallback）
+        // B1 (BOM yield null sentinel removed): yieldRate null = 待评估, 持久化 null,
+        // 不再强制填充 100.00. getActualQuantity() 已对 null yieldRate 回退到 standardQuantity.
         if (bomItem.getYieldRate() == null) {
-            Object configDefault = getConfigDefault(bomItem.getFactoryId(), "yieldRate", new BigDecimal("100.00"));
-            bomItem.setYieldRate(configDefault instanceof Number
-                    ? new BigDecimal(configDefault.toString())
-                    : new BigDecimal("100.00"));
+            // Canvas config override only (factory may configure a custom default).
+            // If no config, persist null (待评估 signal) instead of hardcoded 100.00.
+            Object configDefault = getConfigDefault(bomItem.getFactoryId(), "yieldRate", null);
+            if (configDefault instanceof Number) {
+                bomItem.setYieldRate(new BigDecimal(configDefault.toString()));
+            }
+            // else: leave null (待评估)
         }
         if (bomItem.getTaxRate() == null) {
             Object configDefault = getConfigDefault(bomItem.getFactoryId(), "taxRate", BigDecimal.ZERO);

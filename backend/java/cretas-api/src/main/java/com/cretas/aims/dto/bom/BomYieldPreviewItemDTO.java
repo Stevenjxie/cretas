@@ -38,7 +38,13 @@ public class BomYieldPreviewItemDTO {
     /** 原料名称 */
     private String materialName;
 
-    /** 当前 bom_items.yield_rate (null 表示未配置) */
+    /**
+     * 当前 bom_items.yield_rate (null 表示未配置/待评估).
+     *
+     * <p>前端应将此值在调用 recalculate-apply 时回传为
+     * {@link BomYieldApplyRequest#getExpectedCurrentYieldRate()},
+     * 以启用 M10 乐观并发保护 (stale 检测).
+     */
     private BigDecimal currentYieldRate;
 
     /**

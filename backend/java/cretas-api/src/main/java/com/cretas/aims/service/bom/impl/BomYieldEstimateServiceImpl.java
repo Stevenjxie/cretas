@@ -12,9 +12,12 @@ import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.bom.BomChangeLogRepository;
 import com.cretas.aims.repository.bom.BomItemRepository;
+import com.cretas.aims.dto.bom.BomYieldStaleRowDTO;
+import com.cretas.aims.exception.BomYieldStaleException;
 import com.cretas.aims.service.bom.BomYieldEstimateService;
 import com.cretas.aims.service.yield.YieldReportService;
 import com.cretas.aims.dto.yield.BatchYieldDTO;
+import com.cretas.aims.utils.SecurityUtils;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.PageRequest;
@@ -39,7 +42,7 @@ import java.util.stream.Collectors;
  *   <li>查询该产品最近 N={@link #MAX_SAMPLE_BATCHES} 个已完成批次 (factoryId 隔离)</li>
  *   <li>每批次调用 {@link YieldReportService#getYield} 取 cumulativeYieldRate (0~1 小数)</li>
  *   <li>cumulativeYieldRate 为 null 的批次排除 (跨单位/无克重数据)</li>
- *   <li>有效样本 ≥ {@link #MIN_SAMPLES} 时取 P50 中位数 ×100, 精度 2dp HALF_UP, 上限 100</li>
+ *   <li>有效样本 ≥ {@link #MIN_SAMPLES} 时取 P50 中位数 ×100, 精度 2dp HALF_UP (无上限, 保水工序可合法超 100%)</li>
  *   <li>结果写入 bom_items.yield_rate 时同写 BomChangeLog (old→new)</li>
  * </ul>
  *
@@ -214,6 +217,51 @@ public class BomYieldEstimateServiceImpl implements BomYieldEstimateService {
     public BomYieldApplyResultDTO recalculateApply(
             String factoryId, List<BomYieldApplyRequest> requests) {
 
+        // ── H5: read acting user once per call (null-safe: unit tests have no request context) ──
+        Long actingUserId = SecurityUtils.getCurrentUserId();
+        String actingUsername = SecurityUtils.getCurrentUsername();
+
+        // ── M10 Phase 1: pre-flight staleness check (all-or-nothing) ────────────────────────────
+        // Load each RAW item that has a non-null expectedCurrentYieldRate and verify the DB value
+        // still matches. Collect all stale rows before touching anything; if any are stale, throw
+        // 409 immediately so no writes happen (fool-proof Rule 4: idempotent / detect race).
+        List<BomYieldStaleRowDTO> staleRows = new ArrayList<>();
+        for (BomYieldApplyRequest req : requests) {
+            BigDecimal expected = req.getExpectedCurrentYieldRate();
+            if (expected == null) {
+                continue; // caller chose not to pass expectedCurrentYieldRate — skip check for this row
+            }
+            Optional<BomItem> itemOpt = bomItemRepository.findById(req.getBomItemId());
+            if (itemOpt.isEmpty()) {
+                continue; // not-found rows are handled in the write loop below
+            }
+            BomItem item = itemOpt.get();
+            // Only check ownership + RAW rows (mirrors write loop guards)
+            if (!factoryId.equals(item.getFactoryId())) {
+                continue;
+            }
+            if (!"RAW".equalsIgnoreCase(item.getMaterialCategory())) {
+                continue;
+            }
+            BigDecimal dbCurrent = item.getYieldRate(); // may be null (待评估)
+            boolean matches = (dbCurrent == null && expected == null)
+                    || (dbCurrent != null && expected != null && dbCurrent.compareTo(expected) == 0);
+            if (!matches) {
+                staleRows.add(BomYieldStaleRowDTO.builder()
+                        .bomItemId(req.getBomItemId())
+                        .dbCurrent(dbCurrent)
+                        .expected(expected)
+                        .build());
+                log.warn("[BomYieldApply] M10 stale: bomItemId={} expected={} dbCurrent={}",
+                        req.getBomItemId(), expected, dbCurrent);
+            }
+        }
+        if (!staleRows.isEmpty()) {
+            throw new BomYieldStaleException(staleRows,
+                    "部分行的出成率已被其他操作修改，请重新预览后再应用。共 " + staleRows.size() + " 行数据过期。");
+        }
+        // ─────────────────────────────────────────────────────────────────────────────────────────
+
         int applied = 0;
         List<String> changeLogIds = new ArrayList<>();
 
@@ -262,11 +310,14 @@ public class BomYieldEstimateServiceImpl implements BomYieldEstimateService {
             changeLog.setOldValue(oldSnapshot);
             changeLog.setNewValue(newSnapshot);
             changeLog.setChangeReason("BOM出成率评估系统建议更新 (旧值: " + oldYieldRate + " → 新值: " + newYieldRate + ")");
+            // H5: populate acting user identity (null-safe for unit-test / system contexts)
+            changeLog.setChangedBy(actingUserId);
+            changeLog.setChangedByName(actingUsername);
             BomChangeLog saved = bomChangeLogRepository.save(changeLog);
             changeLogIds.add(saved.getId());
 
-            log.info("[BomYieldApply] factoryId={} bomItemId={} yieldRate {} → {}",
-                    factoryId, bomItemId, oldYieldRate, newYieldRate);
+            log.info("[BomYieldApply] factoryId={} bomItemId={} yieldRate {} → {} by userId={}",
+                    factoryId, bomItemId, oldYieldRate, newYieldRate, actingUserId);
         }
 
         return BomYieldApplyResultDTO.builder()
@@ -302,9 +353,12 @@ public class BomYieldEstimateServiceImpl implements BomYieldEstimateService {
     }
 
     /**
-     * 计算中位数 P50, ×100 转为百分比, scale=2 HALF_UP, 上限 100.
+     * 计算中位数 P50, ×100 转为百分比, scale=2 HALF_UP.
      *
-     * @param samples 原始 cumulativeYieldRate (0~1) 列表; 调用方保证非空且 ≥ MIN_SAMPLES
+     * <p><b>注意</b>: 不设 ≤100 上限 — 保水/腌制等工序出成率合法超过 100%
+     * (e.g. 六扇门猪舌保水工序实测 105–126%). capping 会静默腐蚀这些 BOM 行的数据.
+     *
+     * @param samples 原始 cumulativeYieldRate (0~1 小数, 也可 >1) 列表; 调用方保证非空且 ≥ MIN_SAMPLES
      */
     BigDecimal computeMedian(List<BigDecimal> samples) {
         List<BigDecimal> sorted = new ArrayList<>(samples);
@@ -319,9 +373,8 @@ public class BomYieldEstimateServiceImpl implements BomYieldEstimateService {
             BigDecimal hi = sorted.get(n / 2);
             median = lo.add(hi).divide(BigDecimal.valueOf(2), 10, RoundingMode.HALF_UP);
         }
-        // × 100 → 百分比, scale=2 HALF_UP, cap ≤100
-        BigDecimal pct = median.multiply(BigDecimal.valueOf(100)).setScale(2, RoundingMode.HALF_UP);
-        return pct.compareTo(BigDecimal.valueOf(100)) > 0 ? new BigDecimal("100.00") : pct;
+        // × 100 → 百分比, scale=2 HALF_UP. No ≤100 cap (water-gain processes legitimately > 100).
+        return median.multiply(BigDecimal.valueOf(100)).setScale(2, RoundingMode.HALF_UP);
     }
 
     /**

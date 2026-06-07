@@ -350,11 +350,12 @@ public class BomController {
     // ========== Request DTO → Entity mappers (Rule 17.1 cleanup, PR #370) ==========
 
     /**
-     * Map CreateBomItemRequest → BomItem entity. Defaults align with the
-     * legacy @Builder.Default values on BomItem (yieldRate=100.00, taxRate=0,
-     * materialCategory="RAW", sortOrder=0) so the wire contract stays
-     * permissive: callers may omit these and persistence sees the same
-     * defaults as before the refactor.
+     * Map CreateBomItemRequest → BomItem entity.
+     *
+     * <p>B1: yieldRate null is now passed through as null (待评估) — the old
+     * sentinel {@code != null ? ... : new BigDecimal("100.00")} is removed.
+     * {@link com.cretas.aims.service.impl.BomServiceImpl#saveBomItem} may still
+     * apply a Canvas-configured factory default; absent that, null persists.
      */
     private static BomItem toBomItem(CreateBomItemRequest r) {
         BomItem b = new BomItem();
@@ -363,7 +364,7 @@ public class BomController {
         b.setMaterialTypeId(r.getMaterialTypeId());
         b.setMaterialName(r.getMaterialName());
         b.setStandardQuantity(r.getStandardQuantity());
-        b.setYieldRate(r.getYieldRate() != null ? r.getYieldRate() : new BigDecimal("100.00"));
+        b.setYieldRate(r.getYieldRate()); // null → 待评估; service may apply canvas default
         b.setUnit(r.getUnit());
         b.setUnitPrice(r.getUnitPrice());
         b.setTaxRate(r.getTaxRate() != null ? r.getTaxRate() : BigDecimal.ZERO);
@@ -373,7 +374,11 @@ public class BomController {
         return b;
     }
 
-    /** Update variant — same shape as create (PUT is full-replace). */
+    /**
+     * Update variant — same shape as create (PUT is full-replace).
+     *
+     * <p>B1: yieldRate null passed through; see {@link #toBomItem(CreateBomItemRequest)}.
+     */
     private static BomItem toBomItem(UpdateBomItemRequest r) {
         BomItem b = new BomItem();
         b.setProductTypeId(r.getProductTypeId());
@@ -381,7 +386,7 @@ public class BomController {
         b.setMaterialTypeId(r.getMaterialTypeId());
         b.setMaterialName(r.getMaterialName());
         b.setStandardQuantity(r.getStandardQuantity());
-        b.setYieldRate(r.getYieldRate() != null ? r.getYieldRate() : new BigDecimal("100.00"));
+        b.setYieldRate(r.getYieldRate()); // null → 待评估; service may apply canvas default
         b.setUnit(r.getUnit());
         b.setUnitPrice(r.getUnitPrice());
         b.setTaxRate(r.getTaxRate() != null ? r.getTaxRate() : BigDecimal.ZERO);
