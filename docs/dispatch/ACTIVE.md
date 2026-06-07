@@ -18,6 +18,9 @@
 | ID | 任务 | model | effort | orchestration | 分支 | scope 锁 | 状态 | PR | 阻塞 |
 |---|---|---|---|---|---|---|---|---|---|
 | T103 | S1 🖐️真机走一单 录音→`voiceAudioUrl` OSS 验证 | Steve(手动) | - | - | - | - | ⬜ pending | - | 需真机(不可自动化;APK 已装小米 f79c50d6, API 指向 prod 8086) |
+| T107 | #3 澄清 padding 去制造业(业态分池) | Sonnet→Opus gate | locked-default | inline | feat/clarify-padding-business-type | `IntentExecutionOrchestrator`(ensureMinChoices/buildDefaultSuggestions) | 🟡 in-progress | - | 碰 AI 路由→Opus 审 |
+| T108 | #1 菜品续接 Phase2b(DISH coref 镜 2a) | Sonnet(Steve high chat)→Opus gate | high(Steve 拨) | inline | feat/restaurant-dish-coref-p2b | EntitySlot/ConversationMemory/QueryPreprocessor/ToolDispatch/orchestrator/gold dish tool | 🔴 blocked | - | 等 T107 merge(共享 orchestrator);卡已出给 Steve high chat |
+| T109 | #2 全天备货看板(restock board) | Sonnet→Opus gate | locked-default | inline | feat/restock-board | ProductType/restock service/web-admin view(+可能 Flyway) | 🟡 in-progress | - | 🔒 Flyway+三层去重→Opus 审+部署 |
 
 <!--
 状态: ⬜ pending / 🟡 in-progress / 🟠 review/待终审 / 🟢 已合并待部署 / ✅ done / 🔴 blocked
@@ -33,7 +36,9 @@
 
 | 文件 / 目录 | 锁定 task | 预计解锁 |
 |---|---|---|
-| — (无在飞代码任务) | — | — |
+| `IntentExecutionOrchestrator.java` | T107(ensureMinChoices/buildDefaultSuggestions 区)→ 之后 T108(slot/coref 区) | T107 merge 后 T108 才动此文件 |
+| EntitySlot/ConversationMemory/QueryPreprocessor/ToolDispatch + 餐饮菜品 gold tool | T108 | T108 PR merge 后 |
+| ProductType + restock service + web-admin restock view(+Flyway) | T109 | T109 PR merge 后 |
 
 ---
 
