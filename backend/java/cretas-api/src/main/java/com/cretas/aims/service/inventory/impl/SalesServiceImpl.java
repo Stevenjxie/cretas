@@ -1485,6 +1485,27 @@ public class SalesServiceImpl implements SalesService {
     @Override
     @Transactional
     public FinishedGoodsBatch createFinishedGoodsBatch(String factoryId, FinishedGoodsBatch batch, Long userId) {
+        return doCreateFinishedGoodsBatch(factoryId, batch, userId, null);
+    }
+
+    // ==================== T126 Phase 1: 成品库存 Web 闭环 ====================
+
+    /**
+     * T126 Phase 1 (F8) — 期初入库路径。委托共享 worker, sourceType="OPENING"。
+     * 不再 delegate-then-republish (旧实现会触发 trigger chain 两次)。
+     */
+    @Override
+    @Transactional
+    public FinishedGoodsBatch createOpeningFinishedGoodsBatch(String factoryId, FinishedGoodsBatch batch, Long userId) {
+        return doCreateFinishedGoodsBatch(factoryId, batch, userId, "OPENING");
+    }
+
+    /**
+     * 共享创建 worker。发布 <b>单个</b> FinishedGoodsCreatedEvent 携带 sourceType
+     * (null=普通直接创建, "OPENING"=期初入库), 使 trigger chain 恰好触发一次且可过滤期初条目 (T126 F8)。
+     * 运行在 caller 的 @Transactional 内 (private 自调用不开新事务)。
+     */
+    private FinishedGoodsBatch doCreateFinishedGoodsBatch(String factoryId, FinishedGoodsBatch batch, Long userId, String sourceType) {
         // Round 11 T3: Canvas Integration Template hook 1 — DB-driven validation
         if (validationRuleEvaluator != null) {
             try {
@@ -1508,11 +1529,9 @@ public class SalesServiceImpl implements SalesService {
         }
         batch = finishedGoodsBatchRepository.save(batch);
 
-        // Round 11 T3 — close the FinishedGoodsCreatedEvent gap. Previously the event only
-        // fired from SupplyChainOrchestrator after production plan completion with a
-        // sourceOrderId. Direct createFinishedGoodsBatch calls (manual entry, re-packaging,
-        // rework) were invisible to trigger chains even though the event is already
-        // whitelisted. This hook makes every finished-goods creation path observable.
+        // Round 11 T3 — close the FinishedGoodsCreatedEvent gap. Every finished-goods creation
+        // path (manual / rework / 期初) is observable to trigger chains. T126 F8: single event
+        // carrying sourceType so chains fire once and can filter opening entries.
         try {
             applicationEventPublisher.publishEvent(new com.cretas.aims.event.FinishedGoodsCreatedEvent(
                     this,
@@ -1520,42 +1539,15 @@ public class SalesServiceImpl implements SalesService {
                     null,  // sourceOrderId: null for direct creation (no production plan link)
                     batch.getProductTypeId(),
                     batch.getProducedQuantity(),
-                    batch.getId()));
+                    batch.getId(),
+                    sourceType));
         } catch (Exception e) {
             log.warn("Publish FinishedGoodsCreatedEvent failed for {}: {}", batch.getId(), e.getMessage());
         }
 
-        log.info("创建成品批次: factoryId={}, batchNumber={}, productTypeId={}", factoryId, batch.getBatchNumber(), batch.getProductTypeId());
+        log.info("创建成品批次: factoryId={}, batchNumber={}, productTypeId={}, sourceType={}",
+                factoryId, batch.getBatchNumber(), batch.getProductTypeId(), sourceType);
         return batch;
-    }
-
-    // ==================== T126 Phase 1: 成品库存 Web 闭环 ====================
-
-    /**
-     * T126 Phase 1 (F8) — 期初入库路径，事件 sourceType="OPENING"。
-     * 复用 createFinishedGoodsBatch 的完整路径（Canvas 校验/batchNumber 生成/WH-WKS 默认），
-     * 然后单独 re-publish 事件附 sourceType。
-     */
-    @Override
-    @Transactional
-    public FinishedGoodsBatch createOpeningFinishedGoodsBatch(String factoryId, FinishedGoodsBatch batch, Long userId) {
-        // Delegate to the standard create path (Canvas validation, batchNumber gen, WH-WKS default).
-        // The standard path also publishes FinishedGoodsCreatedEvent(sourceType=null) — acceptable;
-        // we then publish a second event with sourceType="OPENING" for any listeners that need it.
-        FinishedGoodsBatch created = createFinishedGoodsBatch(factoryId, batch, userId);
-        try {
-            applicationEventPublisher.publishEvent(new com.cretas.aims.event.FinishedGoodsCreatedEvent(
-                    this,
-                    created.getFactoryId(),
-                    null,
-                    created.getProductTypeId(),
-                    created.getProducedQuantity(),
-                    created.getId(),
-                    "OPENING"));
-        } catch (Exception e) {
-            log.warn("Publish FinishedGoodsCreatedEvent(OPENING) failed for {}: {}", created.getId(), e.getMessage());
-        }
-        return created;
     }
 
     @Override
