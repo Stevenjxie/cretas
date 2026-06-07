@@ -19,8 +19,7 @@
 |---|---|---|---|---|---|---|---|---|---|
 | T103 | S1 🖐️真机走一单 录音→`voiceAudioUrl` OSS 验证 | Steve(手动) | - | - | - | - | ⬜ pending | - | 需真机(不可自动化;APK 已装小米 f79c50d6, API 指向 prod 8086) |
 | T107 | #3 澄清 padding 去制造业(业态分池) | Sonnet→Opus gate | locked-default | inline | feat/clarify-padding-business-type | `IntentExecutionOrchestrator`(ensureMinChoices/buildDefaultSuggestions) | 🟡 in-progress | - | 碰 AI 路由→Opus 审 |
-| T108 | #1 菜品续接 Phase2b(DISH coref 镜 2a) | Sonnet(Steve high chat)→Opus gate | high(Steve 拨) | inline | feat/restaurant-dish-coref-p2b | EntitySlot/ConversationMemory/QueryPreprocessor/ToolDispatch/orchestrator/gold dish tool | 🔴 blocked | - | 等 T107 merge(共享 orchestrator);卡已出给 Steve high chat |
-| T109 | #2 全天备货看板(restock board) | Sonnet→Opus gate | locked-default | inline | feat/restock-board | ProductType/restock service/web-admin view(+可能 Flyway) | 🟡 in-progress | - | 🔒 Flyway+三层去重→Opus 审+部署 |
+| T108 | #1 菜品续接 Phase2b(DISH coref 镜 2a) | Sonnet subagent→Opus gate | locked(判断走 Opus 本体) | inline | feat/restaurant-dish-coref-p2b | EntitySlot/ConversationMemory/QueryPreprocessor/ToolDispatch/orchestrator/gold dish tool | 🔴 blocked | - | 等 T107 merge(共享 orchestrator)后我 spawn;判断=我 brief+终审,impl=Sonnet subagent |
 
 <!--
 状态: ⬜ pending / 🟡 in-progress / 🟠 review/待终审 / 🟢 已合并待部署 / ✅ done / 🔴 blocked
@@ -53,6 +52,7 @@
 | T104 | S2 发货应收幂等 | #542 | 2026-06-07 | 守卫早 live(`3f26931f5` on main);#542 仅补缺失回归测试(3 case)test-only |
 | T105 | S3 Phase2a coref prod live 验收 | 证据 md | 2026-06-07 | 4/4 判据 PASS;active jar 确含 STORE coref;工厂 SUPPLIER 零回归。证据: `docs/superpowers/handoffs/2026-06-07-phase2a-store-coref-prod-live-verification.md` |
 | T106 | f006p1 两 bug(carry-over override + preview LLM 抽参) | #544 | 2026-06-07 | 🔒AI执行路径 Opus 终审过;**已部署 prod** — jar 含 `getEstimatedMinutesOverride` carry-over;backend blue:10010 v20260607_104835 |
+| T109 | #2 全天备货看板(restock board) | #466 | 2026-06-07 | 🔎 侦察发现**早已 shipped+部署** — spec/plan/Flyway `V20260913_01`(无撞号)/16测试/web-admin view 全在 main(+horizon `0f31657f9`+audit `21ab30dfe`)。三层去重已正确(FG/WIP/PLANNED+PENDING 互斥)。未造重复。 |
 
 ---
 
