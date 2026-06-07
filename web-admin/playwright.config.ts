@@ -334,6 +334,29 @@ export default defineConfig({
     //   E2E_BASE_URL=http://139.196.165.140:8097 \
     //   npx playwright test --project restaurant-ia
     // Self-injects auth (qhj_prod) via e2e-auth-helper; no vue-auth dep.
+    // fix/ai-workprocess-draft-render verification (headed, zh-CN)
+    {
+      name: 'ai-workprocess-draft-render',
+      testMatch: 'ai-workprocess-draft-render.spec.ts',
+      fullyParallel: false,
+      workers: 1,
+      use: {
+        headless: false,
+        viewport: { width: 1920, height: 1080 },
+        locale: 'zh-CN',
+        launchOptions: {
+          args: [
+            '--lang=zh-CN',
+            '--font-render-hinting=none',
+            '--disable-blink-features=AutomationControlled',
+            '--window-position=0,0',
+            '--window-size=1920,1080',
+          ],
+          slowMo: 80,
+        },
+        screenshot: { mode: 'on', fullPage: true },
+      },
+    },
     {
       name: 'restaurant-ia',
       testMatch: 'tests/restaurant-ia.spec.ts',
