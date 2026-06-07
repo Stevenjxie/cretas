@@ -8,7 +8,9 @@ import type {
   YieldEstimateResponse,
   RecalculatePreviewRow,
   RecalculateApplyItem,
+  RecalculateApplyStaleResponse,
 } from '@/api/bom';
+import { isAxiosError } from 'axios';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Plus, Edit, Delete, Download, Refresh, MagicStick } from '@element-plus/icons-vue';
 import BomChangeLog from './BomChangeLog.vue'
@@ -93,10 +95,12 @@ const estimateLoading = ref(false);
 const estimateResult = ref<YieldEstimateResponse | null>(null);
 
 // D2 (2026-05-10 客户会议): 实时计算实际原料用量 = 成品含量 / (出成率/100)
-// 镜像后端 BomItem.getActualQuantity(); 出成率为 null 时显示 0
-const computedActualQuantity = computed(() => {
+// 镜像后端 BomItem.getActualQuantity()
+// GAP F7: 出成率为 null (待评估) 时返回 null, 不用 100% 兜底 (防止 sq/1.0=sq 误导为真实 100%)
+const computedActualQuantity = computed<number | null>(() => {
+  if (bomForm.value.yieldRate == null) return null;
   const sq = Number(bomForm.value.standardQuantity) || 0;
-  const yr = bomForm.value.yieldRate != null ? (Number(bomForm.value.yieldRate) || 100) / 100 : 1;
+  const yr = Number(bomForm.value.yieldRate) / 100;
   if (yr <= 0 || sq <= 0) return 0;
   return Number((sq / yr).toFixed(4));
 });
@@ -239,9 +243,14 @@ async function handleOpenRecalcPreview() {
 /** 应用勾选行的建议出成率 */
 async function handleApplyRecalc() {
   if (!factoryId.value) return;
+  // GAP M10: 同时发送 expectedCurrentYieldRate (乐观锁), 后端检测是否 stale
   const items: RecalculateApplyItem[] = recalcPreviewRows.value
     .filter((r) => recalcSelectedIds.value.includes(r.bomItemId) && r.status === 'UPDATABLE' && r.suggestedYieldRate != null)
-    .map((r) => ({ bomItemId: r.bomItemId, yieldRate: r.suggestedYieldRate as number }));
+    .map((r) => ({
+      bomItemId: r.bomItemId,
+      yieldRate: r.suggestedYieldRate as number,
+      expectedCurrentYieldRate: r.currentYieldRate, // null 表示预览时就是未填
+    }));
 
   if (items.length === 0) {
     ElMessage.warning('没有可应用的行');
@@ -266,6 +275,19 @@ async function handleApplyRecalc() {
       });
     }
   } catch (error: unknown) {
+    // GAP M10: 409 乐观锁冲突 — 数据已变化, 提示重新预览
+    if (isAxiosError(error) && error.response?.status === 409) {
+      const body = error.response.data as RecalculateApplyStaleResponse;
+      ElMessage({
+        message: body?.message || '数据已变化，请重新评估',
+        type: 'error',
+        duration: 0,
+        showClose: true,
+      });
+      // 关闭抽屉让用户重新打开预览 (Rule 5: dead-end 改导航)
+      recalcPreviewVisible.value = false;
+      return;
+    }
     const err = error as { actionHint?: string };
     if (!err?.actionHint) {
       ElMessage({
@@ -1008,10 +1030,20 @@ function refreshData() {
             </template>
           </el-table-column>
           <!-- Phase A: yieldRate null → 显示待评估 badge -->
-          <el-table-column prop="yieldRate" label="出成率%" width="100" align="right">
+          <!-- GAP F3: 出成率 >100 (保水/腌制等增重工序) 合法, 带 tooltip 说明 -->
+          <el-table-column prop="yieldRate" label="出成率%" width="110" align="right">
             <template #default="{ row }">
               <el-tag v-if="row.yieldRate == null" type="warning" size="small" disable-transitions>待评估</el-tag>
-              <span v-else>{{ (row.yieldRate as number).toFixed(2) }}%</span>
+              <template v-else>
+                <el-tooltip
+                  v-if="(row.yieldRate as number) > 100"
+                  content="增重工序（如保水）出成率可超过100%"
+                  placement="top"
+                >
+                  <span class="yield-over100">{{ (row.yieldRate as number).toFixed(2) }}%</span>
+                </el-tooltip>
+                <span v-else>{{ (row.yieldRate as number).toFixed(2) }}%</span>
+              </template>
             </template>
           </el-table-column>
           <!-- Issue 13: Conversion rate inline -->
@@ -1250,6 +1282,7 @@ function refreshData() {
           </div>
         </el-form-item>
         <!-- 出成率输入 (在评估按钮之后, 成品含量之后) -->
+        <!-- GAP F3: 无客户端 ≤100 校验, 增重工序 (保水/腌制) 出成率合法超 100% -->
         <el-form-item label="出成率%">
           <el-input-number
             v-model="bomForm.yieldRate"
@@ -1263,14 +1296,24 @@ function refreshData() {
           <div v-if="bomForm.yieldRate == null" class="form-tip form-tip--warning">
             出成率为空时保存后显示「待评估」，后端使用标准克重原样展开
           </div>
+          <div v-else-if="bomForm.yieldRate > 100" class="form-tip form-tip--over100">
+            增重工序（如保水、腌制）出成率可超过100%，属正常情况
+          </div>
           <div v-else class="form-tip">输入百分比数值，如 61 表示 61%</div>
         </el-form-item>
         <!-- D2: 实时显示实际原料用量 (考虑出成率) -->
+        <!-- GAP F7: yieldRate null → 显示「待评估」, 不显示误导性数字 -->
         <el-form-item label="实际原料用量">
-          <div class="bom-computed-quantity">
-            {{ computedActualQuantity.toFixed(4) }}
-            <span v-if="bomForm.materialCategory !== 'PACKAGING'"> 克 (g)</span>
-            <span v-else> {{ bomForm.unit }}</span>
+          <div :class="computedActualQuantity == null ? 'bom-computed-quantity bom-computed-quantity--pending' : 'bom-computed-quantity'">
+            <template v-if="computedActualQuantity == null">
+              <el-tag type="warning" size="small" disable-transitions>待评估</el-tag>
+              <span class="bom-computed-quantity__hint"> (出成率未填，暂无法计算)</span>
+            </template>
+            <template v-else>
+              {{ computedActualQuantity.toFixed(4) }}
+              <span v-if="bomForm.materialCategory !== 'PACKAGING'"> 克 (g)</span>
+              <span v-else> {{ bomForm.unit }}</span>
+            </template>
           </div>
           <div class="form-tip">
             = 成品含量 ÷ (出成率/100) | 示例: 200g 成品 × 58% 出成率 → 自动算原料 344.83g
@@ -1407,15 +1450,34 @@ function refreshData() {
             <el-table-column type="selection" width="44" :selectable="(row: RecalculatePreviewRow) => row.status === 'UPDATABLE'" />
             <el-table-column prop="productName" label="产品" min-width="110" show-overflow-tooltip />
             <el-table-column prop="materialName" label="主原料" min-width="110" show-overflow-tooltip />
-            <el-table-column label="当前出成率%" width="100" align="right">
+            <!-- GAP F3: >100 带 tooltip 说明 -->
+            <el-table-column label="当前出成率%" width="110" align="right">
               <template #default="{ row }">
                 <el-tag v-if="row.currentYieldRate == null" type="warning" size="small" disable-transitions>待评估</el-tag>
-                <span v-else>{{ (row.currentYieldRate as number).toFixed(2) }}%</span>
+                <template v-else>
+                  <el-tooltip
+                    v-if="(row.currentYieldRate as number) > 100"
+                    content="增重工序（如保水）出成率可超过100%"
+                    placement="top"
+                  >
+                    <span class="yield-over100">{{ (row.currentYieldRate as number).toFixed(2) }}%</span>
+                  </el-tooltip>
+                  <span v-else>{{ (row.currentYieldRate as number).toFixed(2) }}%</span>
+                </template>
               </template>
             </el-table-column>
-            <el-table-column label="建议出成率%" width="110" align="right">
+            <el-table-column label="建议出成率%" width="120" align="right">
               <template #default="{ row }">
-                <span v-if="row.suggestedYieldRate != null" class="yield-suggested">{{ (row.suggestedYieldRate as number).toFixed(2) }}%</span>
+                <template v-if="row.suggestedYieldRate != null">
+                  <el-tooltip
+                    v-if="(row.suggestedYieldRate as number) > 100"
+                    content="增重工序（如保水）出成率可超过100%"
+                    placement="top"
+                  >
+                    <span class="yield-suggested yield-over100">{{ (row.suggestedYieldRate as number).toFixed(2) }}%</span>
+                  </el-tooltip>
+                  <span v-else class="yield-suggested">{{ (row.suggestedYieldRate as number).toFixed(2) }}%</span>
+                </template>
                 <span v-else class="yield-na">—</span>
               </template>
             </el-table-column>
@@ -1615,13 +1677,7 @@ function refreshData() {
   line-height: 32px;
 }
 
-/* D2: 实际原料用量实时计算显示 */
-.bom-computed-quantity {
-  font-size: 16px;
-  font-weight: 600;
-  color: #67c23a;
-  line-height: 32px;
-}
+/* D2: 实际原料用量实时计算显示 — 样式迁移到 GAP F7 block 下方 */
 
 .cost-item.serving {
   display: flex;
@@ -1696,5 +1752,42 @@ function refreshData() {
 
 .yield-na {
   color: #c0c4cc;
+}
+
+/* GAP F7: 待评估实际原料用量 */
+.bom-computed-quantity {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 16px;
+  font-weight: 600;
+  color: #67c23a;
+  line-height: 32px;
+
+  &--pending {
+    color: #e6a23c;
+    font-size: 14px;
+    font-weight: normal;
+  }
+
+  &__hint {
+    font-size: 12px;
+    color: #909399;
+    font-weight: normal;
+  }
+}
+
+/* GAP F3: 出成率 >100 的显示 */
+.yield-over100 {
+  color: #409eff;
+  cursor: help;
+  border-bottom: 1px dashed #409eff;
+}
+
+/* GAP F3: 出成率输入 >100 提示 */
+.form-tip--over100 {
+  font-size: 12px;
+  color: #409eff;
+  margin-top: 4px;
 }
 </style>

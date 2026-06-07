@@ -59,12 +59,27 @@ export interface RecalculatePreviewRow {
 export interface RecalculateApplyItem {
   bomItemId: number;
   yieldRate: number;
+  /** 乐观锁: 预览时拿到的当前出成率, null 表示预览时未填 (原值也为 null) */
+  expectedCurrentYieldRate: number | null;
 }
 
 /** 一键重算应用响应 */
 export interface RecalculateApplyResponse {
   applied: number;
   changeLogIds: string[];
+}
+
+/**
+ * 409 Conflict 响应体 — 数据已变化 (乐观锁冲突)
+ * 后端在应用时发现 DB 值已被其他操作修改时返回此结构。
+ */
+export interface RecalculateApplyStaleResponse {
+  staleRows: Array<{
+    bomItemId: number;
+    dbCurrent: number | null;
+    expected: number | null;
+  }>;
+  message: string;
 }
 
 const base = (factoryId: string) => `/${factoryId}/bom/yield-estimate`;
