@@ -86,6 +86,18 @@ public interface SalesService {
      */
     SalesOrder copySalesOrder(String factoryId, String sourceOrderId, Long userId);
 
+    /**
+     * 删除草稿销售订单 (软删除, 仅 DRAFT 状态).
+     *
+     * <p>触发 @SQLDelete 设 deleted_at — 订单在所有 @Where 查询中消失。
+     * factoryId 隔离通过 getSalesOrderById(403) 保证。
+     * 权限: sales:read_write (与 createSalesOrder 一致, MVP 无 creator-only 限制)。
+     *
+     * @throws com.cretas.aims.exception.ResourceNotFoundException 订单不存在
+     * @throws com.cretas.aims.exception.BusinessException 403 跨工厂 / 409 非 DRAFT 状态
+     */
+    void deleteDraft(String factoryId, String orderId, Long userId);
+
     // ==================== 发货/出库 ====================
 
     SalesDeliveryRecord createDeliveryRecord(String factoryId, CreateDeliveryRequest request, Long userId);

@@ -369,6 +369,24 @@ public class SalesController {
     }
 
     /**
+     * T129: 删除草稿销售订单 (软删除).
+     * 仅 DRAFT 状态可删；其他状态返回 409。
+     * factoryId 隔离 + sales:read_write 权限校验。
+     */
+    @DeleteMapping("/orders/{orderId}")
+    @Operation(summary = "删除草稿销售订单 (软删除, 仅 DRAFT)")
+    @RequirePermission("sales:read_write")
+    public ApiResponse<Void> deleteDraftOrder(
+            @PathVariable @NotBlank String factoryId,
+            @PathVariable @NotBlank String orderId,
+            @RequestHeader("Authorization") String authorization) {
+        Long userId = extractUserId(authorization);
+        log.info("删除销售订单草稿: factoryId={}, orderId={}", factoryId, orderId);
+        salesService.deleteDraft(factoryId, orderId, userId);
+        return ApiResponse.success("删除成功", null);
+    }
+
+    /**
      * 复制销售订单 — #860 follow-up.
      * 基于现有订单创建新草稿, 复制客户/品项/价格, 不复制审批/发货/收款状态.
      */

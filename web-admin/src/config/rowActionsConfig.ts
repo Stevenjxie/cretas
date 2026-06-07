@@ -14,20 +14,25 @@ import { COMMON_ACTIONS, type EntityType } from '@/types/rowActions';
 type ActionId = (typeof COMMON_ACTIONS)[keyof typeof COMMON_ACTIONS]['id'];
 
 export const STATUS_ACTIONS_MAP: Readonly<Record<EntityType, Readonly<Record<string, readonly ActionId[]>>>> = {
+  // T129 Part 2 — dedupe: 详情/编辑/确认/取消 are hardcoded inline buttons in list.vue;
+  // only uncommon actions belong here (appear in RowActionMenu "更多" dropdown).
   salesOrder: {
-    DRAFT: ['edit', 'submit', 'copy', 'delete', 'view-detail', 'edit-price'],
-    PENDING_APPROVAL: ['approve', 'reject', 'view-price-history', 'view-detail'],
-    CONFIRMED: ['convert-to-production', 'convert-to-purchase', 'print-pdf', 'cancel', 'view-detail'],
-    APPROVED: ['convert-to-production', 'convert-to-purchase', 'print-pdf', 'undo-approval', 'cancel', 'view-detail'],
-    PENDING_FINANCE_REVIEW: ['view-detail'],
-    FINANCE_APPROVED: ['convert-to-production', 'convert-to-purchase', 'print-pdf', 'cancel', 'view-detail'],
-    FINANCE_REJECTED: ['edit', 'view-detail'],
-    PROCESSING: ['view-detail', 'print-pdf'],
-    IN_PRODUCTION: ['view-detail', 'print-pdf'],
-    PARTIAL_DELIVERED: ['view-detail', 'print-pdf', 'return'],
-    SHIPPED: ['view-detail', 'print-pdf', 'return'],
-    COMPLETED: ['view-detail', 'print-pdf', 'copy', 'return'],
-    CANCELLED: ['view-detail', 'copy'],
+    // 详情(hardcoded) + 编辑(hardcoded) + 确认(hardcoded) are already inline buttons for DRAFT.
+    // Remaining uncommon actions: copy, delete, edit-price.
+    DRAFT: ['copy', 'delete', 'edit-price'],
+    PENDING_APPROVAL: ['approve', 'reject', 'view-price-history'],
+    // 取消 is hardcoded for DRAFT+CONFIRMED; remove from CONFIRMED to avoid duplicate.
+    CONFIRMED: ['convert-to-production', 'convert-to-purchase', 'print-pdf'],
+    APPROVED: ['convert-to-production', 'convert-to-purchase', 'print-pdf', 'undo-approval', 'cancel'],
+    PENDING_FINANCE_REVIEW: [],
+    FINANCE_APPROVED: ['convert-to-production', 'convert-to-purchase', 'print-pdf', 'cancel'],
+    FINANCE_REJECTED: ['edit'],
+    PROCESSING: ['print-pdf'],
+    IN_PRODUCTION: ['print-pdf'],
+    PARTIAL_DELIVERED: ['print-pdf', 'return'],
+    SHIPPED: ['print-pdf', 'return'],
+    COMPLETED: ['print-pdf', 'copy', 'return'],
+    CANCELLED: ['copy'],
   },
   purchaseOrder: {
     DRAFT: ['edit', 'submit', 'copy', 'delete', 'view-detail', 'edit-price'],
