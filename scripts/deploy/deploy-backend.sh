@@ -212,7 +212,7 @@ while [[ $# -gt 0 ]]; do
             echo "          超时: 15 分钟 (163MB @ ~10 MB/s ≈ 16s scp, rsync 通常更快)"
             echo ""
             echo "环境变量:"
-            echo "  SKIP_RSYNC=1              禁用 rsync 加速通道 (默认 ~/.bashrc 设置)"
+            echo "  SKIP_RSYNC=1              临时禁用 rsync 走 scp 兜底 (~/.bashrc 已不再默认设置)"
             echo "  SKIP_BUILD=1              跳过本地 Maven 打包 (使用 target/ 已有 jar)"
             echo "  ENABLE_R2=1               紧急 rollback: 启用 R2 通道 (scp 全失败时)"
             echo "  R2_ACCESS_KEY_ID/SECRET   R2 凭证 (配合 ENABLE_R2=1 使用)"
@@ -261,7 +261,7 @@ if command -v aws &> /dev/null; then
 fi
 
 # rsync 健康检查 (Windows 上 rsync 二进制经常缺 DLL，能 which 但执行 exit 127)
-# 也支持 SKIP_RSYNC=1 环境变量短路 (某些网络环境下 rsync over SSH 双向 stream 会被中间设备 RST)
+# 也支持 SKIP_RSYNC=1 短路 (仅在 rsync over SSH 不稳定的网络环境下临时使用; Steve 国外跨境时曾需要, 回国后默认走 rsync)
 HAS_RSYNC=false
 RSYNC_FAIL_REASON=""
 if [ "${SKIP_RSYNC:-0}" = "1" ]; then
@@ -788,7 +788,7 @@ deploy_jar() {
     elif [ "$IS_PRIVATE_REPO" = "true" ]; then
         echo "   [阶段1] 跳过 GitHub (private repo — 见预检警告)"
     elif [ "$SKIP_GITHUB" = "1" ]; then
-        echo "   [阶段1] 跳过 GitHub (SKIP_GITHUB=1, 直接 R2 优先 — R4 2026-04-16 默认)"
+        echo "   [阶段1] 跳过 GitHub (SKIP_GITHUB=1, 走 SSH 直传 rsync/scp — 默认)"
     fi
 
     # 等待 GitHub 方式完成 (最多60秒)

@@ -81,7 +81,7 @@ allowed-tools:
 ./scripts/deploy/deploy-backend.sh --env all        # 部署后重启两套
 ```
 
-脚本 v4.2 自动完成: Maven 打包 → 检测 private repo / rsync / OSS / R2 通道可用性 → 并行上传 → 服务器备份 → 部署 → 重启 → 健康检查 (30次重试) + **防御 ping 另一环境**.
+脚本 v5.0 自动完成: Maven 打包 → rsync 主 (scp 兜底) 上传 → 服务器备份 → Blue-Green 部署 → 重启 → 健康检查 (30次重试) + **防御 ping 另一环境**.
 
 可选参数:
 ```bash
@@ -94,7 +94,7 @@ allowed-tools:
 
 | 变量 | 作用 |
 |---|---|
-| `SKIP_RSYNC=1` | 永久禁用 rsync 通道 (本地 SSH 双向 stream 被 RST) |
+| `SKIP_RSYNC=1` | escape hatch: 跳过 rsync 走 scp 兜底 (默认不设; 仅 SSH 链路不稳时临时用) |
 | `SKIP_BUILD=1` | 跳过 Maven 打包 (用 target/ 已有 jar) |
 | `R2_ACCOUNT_ID/ACCESS_KEY_ID/SECRET_ACCESS_KEY/PUBLIC_URL` | 启用 R2 备份通道 |
 
@@ -184,22 +184,18 @@ curl -s http://47.100.235.168:8084/health    # 测试
 ## Phase 3: Web 前端部署
 
 ```bash
-# 1. 本地构建
-cd web-admin
-npm run build
-
-# 2. 上传到服务器
-rsync -az --delete dist/ root@47.100.235.168:/www/wwwroot/web-admin/
-
-# 3. 验证
-curl -s -o /dev/null -w "%{http_code}" http://47.100.235.168:8088/
+# 用专门的部署脚本 (内部: npm build → tar 打包 → scp → 远端解压 atomic-swap)
+./scripts/deploy/deploy-web-admin.sh --env test    # 测试 (139:8097, 默认)
+./scripts/deploy/deploy-web-admin.sh --env prod    # 生产 (139:8086 / admin.cretaceousfuture.com, 需输 YES-PROD 确认)
 ```
 
 ### 前端注意事项
 
+- ⚠️ **web-admin 在 139 (网关), 不是 47**! prod 路径 `/www/wwwroot/web-admin/` (139:8086 + admin.cretaceousfuture.com:443), test 路径 `/www/wwwroot/web-admin-test/` (139:8097).
+- **传输用 tar+scp 不用 rsync**: dist 是大量 hash chunk 小文件, 打包成单 tar 一次传 + 远端解压 atomic-swap (整体替换避免新旧 chunk 混合的半成品). 不是因为 rsync 不可用 (rsync 现已恢复), 而是原子替换更安全.
+- ❌ **不要手动 scp dist 目录**: 会丢目录权限 (assets 变 700 → nginx 403) 且容易传错服务器. 必须用脚本.
 - **环境变量**: `.env.production` 中 `VITE_SMARTBI_URL=/smartbi-api` (代理路径，不是直连)
-- **Nginx**: 47.100.235.168 上的 Nginx 代理 `/api/mobile/` → `localhost:10010`，`/smartbi-api/` → `localhost:8083`
-- **无需重启**: 上传 dist 后 Nginx 自动生效
+- **无需重启**: 部署后 nginx 自动生效
 
 ---
 
@@ -280,17 +276,20 @@ EOF
 
 ---
 
-## 上传策略详情 (deploy-backend.sh v4.2)
+## 上传策略详情 (deploy-backend.sh v5.0)
 
-### 实测速度 (Apr 7 2026)
+### 上传通道 (Steve 2026-05-28 切 rsync 主; 2026-06-07 回国后确认 rsync 稳定)
 
 | 通道 | 实测速度 | 启用条件 | 当前状态 |
 |---|---|---|---|
-| OSS 加速 | **6 MB/s (并行竞争时)** | `~/.ossutilconfig` 有效 (账号 B) | ✅ 主力 |
-| OSS 加速 (单连接) | 1.7 MB/s | 同上 | |
-| Cloudflare R2 | 1.5 MB/s | `R2_*` 环境变量 (`~/.r2-env`) | ✅ 备份 |
-| ~~rsync~~ | 60 KB/s + 经常 RST | `SKIP_RSYNC=1` | ❌ 永久禁用 |
-| ~~GitHub 镜像~~ | 永远失败 (9 字节 "Not Found") | private repo | ❌ 自动跳过 |
+| **rsync** | 通常跑满带宽 | 默认 (rsync 二进制可用) | ✅ 主力 |
+| rsync + compress | 视内容 | 默认 fallback | ✅ 次选 |
+| scp 直传 | 10.85 MB/s | 任何环境都能跑 | ✅ 兜底 |
+| OSS 加速 | 6 MB/s | `ENABLE_R2` 系紧急 opt-in | ⏸ 默认禁用 (国外遗留) |
+| Cloudflare R2 | 1.5 MB/s | `ENABLE_R2=1` + `R2_*` | ⏸ 默认禁用 (国外遗留) |
+| ~~GitHub 镜像~~ | 永远失败 (private repo) | - | ❌ 自动跳过 |
+
+> 旧"rsync 60KB/s 被 RST 永久禁用"结论是 Steve 在**国外**时跨境 SSH 的问题, 现已回国, rsync 恢复为主通道.
 
 ### 关键事实
 
@@ -300,15 +299,11 @@ EOF
 
 ### 阶段流程
 
-**阶段 1**: GitHub 并行 (private repo 自动跳过, public repo 时直连+5镜像 60s 超时)
+**阶段 1 (传输)**: rsync 主 → rsync+compress → scp 兜底 (全 SSH-based, 谁可用谁上). R2/OSS/GitHub 默认禁用 (`ENABLE_R2=1` 紧急 opt-in).
 
-**阶段 2**: Fallback (按 HAS_xxx 检测启动)
-- OSS 加速 (有 ossutil) → 上传到 oss-accelerate.aliyuncs.com → 服务器走内网 oss-cn-shanghai-internal 下载 (~100 MB/s)
-- R2 (有 aws CLI + R2_*) → 上传到 R2 → 服务器走 r2.dev public URL 下载
+**阶段 2**: 服务器 MD5 验证 + 备份 + Blue-Green 替换 + systemctl restart + 健康检查
 
-**阶段 3**: 服务器 MD5 验证 + 备份 + 替换 + systemctl restart + 健康检查
-
-**阶段 4**: 防御性 ping 另一环境 (DEPLOY_ENV=prod 时 ping test, 反之亦然)
+**阶段 3**: 防御性 ping 另一环境 (DEPLOY_ENV=prod 时 ping test, 反之亦然)
 
 ### 健康检查 + 防御 ping
 

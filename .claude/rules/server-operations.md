@@ -1,6 +1,6 @@
 # 服务器运维规范
 
-**最后更新**: 2026-04-07
+**最后更新**: 2026-06-07
 
 ## 服务器架构
 
@@ -197,7 +197,7 @@ ssh root@47.100.235.168 "journalctl -u cretas-backend --since '5 min ago' --no-p
 
 | 部署目标 | 脚本 | 说明 |
 |----------|------|------|
-| Java 后端 | `./scripts/deploy/deploy-backend.sh [--env prod\|test\|all]` | Maven 打包 → OSS 加速 / R2 并行上传 → 备份 → 部署 → 健康检查 + 防御 ping 另一环境 |
+| Java 后端 | `./scripts/deploy/deploy-backend.sh [--env prod\|test\|all]` | Maven 打包 → rsync 主 (scp 兜底) → 备份 → Blue-Green 部署 → 健康检查 + 防御 ping 另一环境 |
 | Python 服务 | `./scripts/deploy/deploy-smartbi-python.sh [--env prod\|test\|all]` | rsync 增量同步 → 安装依赖 → 重启 → 健康检查 |
 | 全栈部署 | 使用 `/deploy-backend` skill | 根据指令自动选择部署范围 |
 
@@ -273,5 +273,5 @@ WARN level 日志 + 跳过 Step 3.5。完后立即修 runner 重新部署。
 9. **修改 systemd 服务文件后**: 必须 `systemctl daemon-reload` 再 `systemctl restart <service>`
 10. **生产环境变量**: 集中在 `.env.prod`，修改后需重启对应服务才生效
 11. **本地启动 Java 后端**: 用 `mvn spring-boot:run` 不要用 `java -jar` (后者 mmap 锁 fat jar 会阻断 deploy 的 mvn package). 见 `feedback_deploy_pipeline.md`.
-12. **R2/OSS 凭证位置**: R2 在 `~/.r2-env` (NTFS ACL 仅 Steve+SYSTEM); OSS 在 `~/.ossutilconfig` (账号 B, **`cretas-media` bucket 属账号 B 不是 A**); `~/.bashrc` source 它们 + `SKIP_RSYNC=1`. deploy script v4.2 启动时自动 source ~/.bashrc.
+12. **R2/OSS 凭证位置 (legacy, 默认禁用)**: R2 在 `~/.r2-env` (NTFS ACL 仅 Steve+SYSTEM); OSS 在 `~/.ossutilconfig` (账号 B, **`cretas-media` bucket 属账号 B 不是 A**). 这些是 Steve 在国外期间为绕过跨境 RST 用的中转通道; 现已回国, rsync 主 + scp 兜底, R2/OSS 默认禁用 (`ENABLE_R2=1` 紧急 opt-in). `SKIP_RSYNC=1` 已移除 (见注意事项 7). deploy script 启动时仍自动 source ~/.bashrc (取 R2 凭证供紧急 opt-in).
 13. **Backup 文件清理**: deploy script 自动保留最近 3 份 `*.bak.YYYYMMDD_HHMMSS`. 历史命名 (`.bak4/5/6/.broken/.bak.pre_fix`) 不会被自动清理, 需手动 rm.

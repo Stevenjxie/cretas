@@ -491,7 +491,7 @@ npx expo export --platform "${PLATFORM}"
 test -f dist/metadata.json
 test -f dist/expoConfig.json  # NOTE: may need explicit flag — see §7.1
 
-# 3. Upload via SSH (rsync disabled per .claude/rules/server-operations.md — use scp + tar)
+# 3. Upload via SSH (scp + tar 原子替换 — 适合 OTA bundle 整体替换; 不依赖 rsync)
 cd ../..
 tar -czf /tmp/ota-bundle-${TIMESTAMP}.tar.gz -C frontend/CretasFoodTrace/dist .
 scp /tmp/ota-bundle-${TIMESTAMP}.tar.gz \
