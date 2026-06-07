@@ -20,6 +20,7 @@
 | T103 | S1 🖐️真机走一单 录音→`voiceAudioUrl` OSS 验证 | Steve(手动) | - | - | - | - | ⬜ pending | - | 需真机(不可自动化;APK 已装小米 f79c50d6, API 指向 prod 8086) |
 | T107 | #3 澄清 padding 去制造业(业态分池) | Sonnet→Opus gate | locked-default | inline | feat/clarify-padding-business-type | `IntentExecutionOrchestrator`(ensureMinChoices/buildDefaultSuggestions) | 🟡 in-progress | - | 碰 AI 路由→Opus 审 |
 | T108 | #1 菜品续接 Phase2b(DISH coref 镜 2a) | Sonnet subagent→Opus gate | locked(判断走 Opus 本体) | inline | feat/restaurant-dish-coref-p2b | EntitySlot/ConversationMemory/QueryPreprocessor/ToolDispatch/orchestrator/gold dish tool | 🔴 blocked | - | 等 T107 merge(共享 orchestrator)后我 spawn;判断=我 brief+终审,impl=Sonnet subagent |
+| T110 | 餐饮专属角色(chef/purchaser/owner)增量 scope A | Sonnet subagent→Opus gate | locked | inline | feat/restaurant-roles-chef-purchaser | FactoryUserRole.java + PermissionServiceImpl.java(+可选 Flyway/账号 SQL) | 🟡 in-progress | - | 🔒 权限+业态;执行到 PR+账号SQL 停,Opus 终审+部署+亲建账号;解锁 T103 真实角色走单 |
 
 <!--
 状态: ⬜ pending / 🟡 in-progress / 🟠 review/待终审 / 🟢 已合并待部署 / ✅ done / 🔴 blocked
