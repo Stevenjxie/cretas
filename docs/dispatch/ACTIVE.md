@@ -18,10 +18,8 @@
 | ID | 任务 | model | effort | orchestration | 分支 | scope 锁 | 状态 | PR | 阻塞 |
 |---|---|---|---|---|---|---|---|---|---|
 | T103 | S1 🖐️真机走一单 录音→`voiceAudioUrl` OSS 验证 | Steve(手动) | - | - | - | - | ⬜ pending | - | ✅已解锁(真实餐饮角色 qhj_chef/qhj_purchase_mgr/qhj_owner 已建+验登录);需真机(APK 已装小米 f79c50d6) |
-| T112 | 餐饮问答优化 impl(①反投毒守卫+②绑峰值+清毒) | Sonnet→Opus gate | locked | inline | (merged) | IntentRecognitionPipelineServiceImpl + Flyway | 🟢 merged 待部署 | #553✅ | 🔒 Opus 深 gate 过:25行 DISH_DELETE 确是真毒(含SQL注入串);守卫保守(tool_name代理+业态);**deploy held 等 T116 批量**(T116 在 prod debug,切端口会断它) |
-| T117 | 修 AI配工序草稿渲染bug(PRODUCT_WORK_PROCESS_DRAFT 吐 raw type 没渲染10工序卡) | Sonnet→Opus gate | locked | inline | fix/ai-workprocess-draft-render | web-admin AIChat/canvas 渲染(+可能后端响应shape) | 🟡 in-progress | - | 前端渲染缺口;headed 验;到 PR gate+部署 web-admin |
-| T116 | 修菜品 coref D2 dormant | Sonnet→Opus gate | locked | inline | (merged) | IntentRecognitionPipelineServiceImpl(ensureDishReferenceResolved 镜 STORE) | 🟢 merged 待部署 | #554✅ | 🔒 Opus gate 过(根因: STORE 读 originalInput 有 fallback, DISH 缺→补;100/100含 IntentParity 70/70)。与 #553 同文件**已确认共存**(不同方法,auto-merge)。**deploy held 等 T117 批量** |
-| T115 | 飞轮分层+二次分析(中置信→staged + promote pipeline + **2588 NULL 行存量审计**) | Sonnet→Opus gate | locked | inline | (待 T112 部署后开) | IntentRecognitionPipelineServiceImpl 学习路径 + learning_* 表 + ai_learned_expressions | 🔴 blocked | - | 🔒 T112 merge 解锁。**新增 scope**: is_active=NULL=active(2588行,247=true)→二次分析须复核存量 NULL 行(含 vip→PROCESSING_BATCH_CREATE hit6 等存量毒)+ 厘清 NULL 语义 + 中置信0.70-0.89→staged。复用 learning_suggestions/tasks |
+| T118 | 菜品 coref round-3: D1 slot-写入侧(BESTSELLER 不写 DISH 槽) | TBD | locked | inline | (待决策) | IntentExecutionOrchestrator extractAndUpdateEntitySlots / updateConversationMemory@491,1612 | 🟠 待决策 | - | 🔒 root-caused: BESTSELLER 路径不持久化 DISH 槽(STORE 写;top_dish 在 resultData 顶层但 hook 对此路径没持久化). 2次已miss(#551/#554)→精准 round-3 或 park, 等 Steve 定 |
+| T115 | 飞轮分层+二次分析(中置信→staged + promote pipeline + **2588 NULL 行存量审计**) | Sonnet→Opus gate | locked | inline | (待 T112 部署后开) | IntentRecognitionPipelineServiceImpl 学习路径 + learning_* 表 + ai_learned_expressions | ⬜ ready | - | ✅ T112 已部署解锁。**新增 scope**: is_active=NULL=active(2588行,247=true)→二次分析须复核存量 NULL 行(含 vip→PROCESSING_BATCH_CREATE hit6 等存量毒)+ 厘清 NULL 语义 + 中置信0.70-0.89→staged。复用 learning_suggestions/tasks |
 
 <!--
 状态: ⬜ pending / 🟡 in-progress / 🟠 review/待终审 / 🟢 已合并待部署 / ✅ done / 🔴 blocked
@@ -58,6 +56,9 @@
 | T110 | 餐饮专属角色 chef/purchaser/owner(scope A 增量) | #550 | 2026-06-07 | 🔒权限+业态 Opus 终审过。enum+权限矩阵最小化(chef warehouse:rw/purchaser procurement:rw+价格可见/owner 全+财务审核),@RequireRole 增量,**无 Flyway**,42测试。**已部署** green:10020 + **prod 建 3 账号验登录**(qhj_chef/qhj_purchase_mgr/qhj_owner /123456,factoryType=RESTAURANT)。界面已由 factoryType 分开,本次只分角色命名空间。 |
 | T108 | 菜品续接 Phase2b(DISH coref 镜 2a) | #551 | 2026-06-07 | 🔒AI执行路径 Opus 终审过("它"仅 DISH 槽+解析序 DISH→STORE→SUPPLIER,107测试+70/70+15/15)。**已部署** blue:10010 v20260607_132848。D4 STORE/SUPPLIER 零回归实测 PASS。**⚠️ T113 复验暴露: 菜品数据其实存在(D1 返真 Top5),但 D2"那道菜"返全 Top5 未过滤=coref DORMANT**(gate miss: 我只验单测+D4 没 live 验真功能)→ **T116 修中**。 |
 | — | 📌 餐饮问答 A+B+C 基线侦察结论 | — | 2026-06-07 | speed agent("消灭LLM")+ content agent("8%/0 gold 实现")**均过度声称,Opus 交叉验证否决**。真相: gold 工具全在+营收返真数据(¥940 6月/¥11.57M 3月峰),"暂无菜品数据"=诚实空(demo工厂)。真问题窄=跨域误路由(平台/VIP/美团)+飞轮投毒+少数真缺维度→T112。 |
+| T112 | 餐饮问答 反投毒(守卫+绑峰值+清毒) | #553 | 2026-06-07 | 🔒 **deployed+verified**: 守卫 live(jar shouldLearnExpression✓)/峰值绑定(DB✓)/25 DISH_DELETE 毒行 deactivated(DB✓ 25). green:10020 v20260607_151634 |
+| T116 | 修菜品 coref D2(ensureDishReferenceResolved) | #554 | 2026-06-07 | ⚠️ deployed 但 **D2 仍 dormant**(post-deploy live: 返全Top5 未过滤). #554 修 D2 解析侧, 真因在 D1 slot-写入侧→ T118. ✅gate教训: 这次 post-deploy live 验抓到(没像 T108 漏) |
+| T117 | AI配工序草稿渲染 bug | #555 | 2026-06-07 | 前端 WorkProcessAIChatPanel.vue 缺 PRODUCT_WORK_PROCESS_DRAFT renderer→吐 raw type; 修=渲染工序卡+应用按钮. **deployed** web-admin 8086 HTTP200(rsync) |
 | T114 | §8 基建 deploy-staging CI libcrypto | #552 | 2026-06-07 | CI-only(`echo key>id_rsa` 丢尾换行→OpenSSH8.9+严格PEM拒→改 `webfactory/ssh-agent@v0.9.0`,secret不变)。1文件10/10,下次CI生效无需部署。§8b test采购账号401=**非bug**(e2e_purchase_mgr 实测存在+active+登录success,历史401是seed未跑;无码改)。 |
 
 ---

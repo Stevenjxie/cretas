@@ -268,7 +268,7 @@ WARN level 日志 + 跳过 Step 3.5。完后立即修 runner 重新部署。
 4. **数据库**: 已迁移到 PostgreSQL，不再使用 MySQL
 5. **旧服务器 (139)**: 后端已停用，仅保留 Nginx 反代 + **Showcase 静态站** (www.cretaceousfuture.com)
 6. **Showcase 只部署到 139**: 不要向 47 传 showcase 文件，47 是纯后端服务器
-7. ~~文件传输使用 rsync~~ — **本地 rsync over SSH 在国内 ISP 下双向 stream 会被 RST**, 已永久禁用 (`SKIP_RSYNC=1` 在 `~/.bashrc`). 改用 OSS 加速 (~6 MB/s 并行) + R2 备份 (~1.5 MB/s).
+7. **文件传输: rsync 为主, scp 兜底** (deploy script v5.0, Steve 2026-05-28; 全 SSH-based 谁快谁赢). `rsync` (主, 更长久更快) + `rsync+compress` + `scp` (兜底, 任何环境都能跑, 实测 10.85 MB/s). **R2/OSS/GitHub 默认禁用** (代码保留, `ENABLE_R2=1` 紧急 opt-in). ⚠️ **`SKIP_RSYNC=1` 已于 2026-06-07 从 `~/.bashrc` 移除** —— 旧"rsync 被 RST 永久禁用"结论已过期, 残留的 flag 一直在 forcing scp 兜底; 现 deploy 默认走 rsync 主通道.
 8. **两套环境共享 JAR + Python 代码**: 部署一次代码后按需重启对应环境. **进程独立**, 默认部 prod 不动 test, 见上方"双环境部署最佳实践".
 9. **修改 systemd 服务文件后**: 必须 `systemctl daemon-reload` 再 `systemctl restart <service>`
 10. **生产环境变量**: 集中在 `.env.prod`，修改后需重启对应服务才生效
