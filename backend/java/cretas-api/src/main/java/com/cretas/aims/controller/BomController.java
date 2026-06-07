@@ -4,6 +4,10 @@ import com.cretas.aims.annotation.RequireModule;
 import com.cretas.aims.annotation.RequirePermission;
 import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.dto.bom.BomCostSummaryDTO;
+import com.cretas.aims.dto.bom.BomYieldApplyRequest;
+import com.cretas.aims.dto.bom.BomYieldApplyResultDTO;
+import com.cretas.aims.dto.bom.BomYieldEstimateDTO;
+import com.cretas.aims.dto.bom.BomYieldPreviewItemDTO;
 import com.cretas.aims.dto.bom.CreateBomItemRequest;
 import com.cretas.aims.dto.bom.CreateLaborCostRequest;
 import com.cretas.aims.dto.bom.UpdateBomItemRequest;
@@ -15,6 +19,7 @@ import com.cretas.aims.entity.bom.OverheadCostConfig;
 import com.cretas.aims.repository.bom.BomChangeLogRepository;
 import com.cretas.aims.dto.orchestration.BomTreeResult;
 import com.cretas.aims.service.BomService;
+import com.cretas.aims.service.bom.BomYieldEstimateService;
 import com.cretas.aims.service.orchestration.RecursiveBomExpansionService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
@@ -25,6 +30,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.*;
 
 import java.math.BigDecimal;
+import java.util.Collections;
 import java.util.List;
 
 /**
@@ -48,6 +54,7 @@ public class BomController {
 
     private final BomService bomService;
     private final RecursiveBomExpansionService recursiveBomExpansionService;
+    private final BomYieldEstimateService bomYieldEstimateService;
 
     /** P1-9 BOM 变更痕迹查询 Repository (可选注入, 老环境未部署 migration 时不阻塞) */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
@@ -279,6 +286,65 @@ public class BomController {
             @PathVariable @Parameter(description = "工厂ID") String factoryId) {
         log.info("Getting product types with BOM: factoryId={}", factoryId);
         return ApiResponse.success(bomService.getProductTypesWithBom(factoryId));
+    }
+
+    // ========== BOM 出成率评估 (yield-estimate) ==========
+
+    /**
+     * 单产品出成率评估 (只读).
+     * GET /api/mobile/{factoryId}/bom/yield-estimate?productTypeId={id}&materialCategory=RAW
+     */
+    @GetMapping("/yield-estimate")
+    @Operation(summary = "BOM 出成率评估 (单产品)",
+            description = "基于最近 10 个已完成批次的 cumulativeYieldRate 中位数推荐出成率. 样本 <3 时返回 null + reason.")
+    public ApiResponse<BomYieldEstimateDTO> getYieldEstimate(
+            @PathVariable @Parameter(description = "工厂ID") String factoryId,
+            @RequestParam @Parameter(description = "产品类型ID") String productTypeId,
+            @RequestParam(defaultValue = "RAW") @Parameter(description = "物料分类 (默认 RAW)") String materialCategory) {
+        log.info("[BomYieldEstimate] estimate: factoryId={}, productTypeId={}, materialCategory={}",
+                factoryId, productTypeId, materialCategory);
+        return ApiResponse.success(
+                bomYieldEstimateService.estimateForProduct(factoryId, productTypeId, materialCategory));
+    }
+
+    /**
+     * 批量预览 (只读, 不写).
+     * POST /api/mobile/{factoryId}/bom/yield-estimate/recalculate-preview
+     * body: {} 或 { productTypeIds: [...] }
+     */
+    @PostMapping("/yield-estimate/recalculate-preview")
+    @Operation(summary = "BOM 出成率批量预览 (只读)",
+            description = "对全部或指定产品评估出成率, 返回 UPDATABLE/INSUFFICIENT_SAMPLES/SKIP 三种状态行. 不修改任何数据.")
+    public ApiResponse<List<BomYieldPreviewItemDTO>> recalculatePreview(
+            @PathVariable @Parameter(description = "工厂ID") String factoryId,
+            @RequestBody(required = false) java.util.Map<String, Object> body) {
+        @SuppressWarnings("unchecked")
+        List<String> productTypeIds = (body != null && body.containsKey("productTypeIds"))
+                ? (List<String>) body.get("productTypeIds")
+                : Collections.emptyList();
+        log.info("[BomYieldEstimate] preview: factoryId={}, productTypeIds size={}",
+                factoryId, productTypeIds == null ? 0 : productTypeIds.size());
+        return ApiResponse.success(
+                bomYieldEstimateService.recalculatePreview(factoryId,
+                        (productTypeIds != null && !productTypeIds.isEmpty()) ? productTypeIds : null));
+    }
+
+    /**
+     * 批量应用用户选中行 (写操作, 需 production:read_write).
+     * POST /api/mobile/{factoryId}/bom/yield-estimate/recalculate-apply
+     * body: [ { bomItemId, yieldRate }, ... ]
+     */
+    @RequirePermission({"production:read_write"})
+    @PostMapping("/yield-estimate/recalculate-apply")
+    @Operation(summary = "BOM 出成率批量应用 (写)",
+            description = "将用户选中的出成率更新写入 bom_items.yield_rate, 每行记录 BomChangeLog. 需 production:read_write.")
+    public ApiResponse<BomYieldApplyResultDTO> recalculateApply(
+            @PathVariable @Parameter(description = "工厂ID") String factoryId,
+            @Valid @RequestBody List<@Valid BomYieldApplyRequest> requests) {
+        log.info("[BomYieldEstimate] apply: factoryId={}, requests count={}", factoryId, requests.size());
+        BomYieldApplyResultDTO result = bomYieldEstimateService.recalculateApply(factoryId, requests);
+        return ApiResponse.success(
+                "已更新 " + result.getApplied() + " 条出成率配置", result);
     }
 
     // ========== Request DTO → Entity mappers (Rule 17.1 cleanup, PR #370) ==========
