@@ -4731,6 +4731,52 @@ public class IntentRecognitionPipelineServiceImpl implements IntentRecognitionPi
     }
 
     /**
+     * 反投毒守卫: 判断是否应该学习该表达。
+     *
+     * <p>三个守卫任一不满足则拒绝学习，保守策略(只拦明显坏的,不动正常蒸馏)：
+     * <ol>
+     *   <li><b>Guard B — tool_name 非空</b>: 意图未绑定工具时无法执行，永远不应学习。
+     *       这也是 Guard A(执行结果非空)的代理 — 识别阶段无执行结果可查，但 tool_name=NULL
+     *       的意图在执行阶段必然静默失败，学习它等于永久制造死路由。</li>
+     *   <li><b>Guard C — 业态兼容</b>: 餐饮工厂不学制造业意图，制造业工厂不学餐饮意图。</li>
+     * </ol>
+     *
+     * <p>fail-open: 任何异常(配置查询失败/factoryId 为 null)均放行，不阻断既有学习逻辑。
+     *
+     * @param cfg       意图配置，可为 null (null 时 Guard B 无法检查，直接放行)
+     * @param factoryId 工厂 ID
+     * @return true = 应该学习; false = 拦截，不学习
+     */
+    boolean shouldLearnExpression(AIIntentConfig cfg, String factoryId) {
+        if (cfg == null) {
+            // 配置未找到: 无法判断, 放行 (保守)
+            return true;
+        }
+
+        // Guard B: tool_name 必须非空 — 无 executor 的意图学习 = 死路由投毒
+        String toolName = cfg.getToolName();
+        if (toolName == null || toolName.isBlank()) {
+            log.warn("拒绝中毒学习(Guard B — tool_name=NULL): intent={}, factory={}",
+                    cfg.getIntentCode(), factoryId);
+            return false;
+        }
+
+        // Guard C: 业态兼容 (Track C 防跨域路由污染)
+        try {
+            String biz = configService.resolveBusinessDomain(factoryId);
+            if (!BusinessTypeScope.isCompatible(cfg.getBusinessType(), biz)) {
+                log.warn("拒绝中毒学习(Guard C — 业态不兼容): intent={} business_type={} factory_biz={}",
+                        cfg.getIntentCode(), cfg.getBusinessType(), biz);
+                return false;
+            }
+        } catch (Exception e) {
+            /* 解析失败不阻断既有学习, 保守放行 */
+        }
+
+        return true;
+    }
+
+    /**
      * 尝试自动学习表达
      *
      * 将完整的用户输入作为表达模式学习，用于后续精确匹配。
@@ -4748,18 +4794,15 @@ public class IntentRecognitionPipelineServiceImpl implements IntentRecognitionPi
             return;
         }
 
-        // Track C 防中毒: 拒绝学习业态不兼容的意图(餐饮工厂永不学 SKU_GROSS_MARGIN 等 FACTORY 意图)
+        // 反投毒守卫 (Guard B + Guard C): 拒绝 tool_name=NULL 或业态不兼容的意图
         try {
-            String biz = configService.resolveBusinessDomain(factoryId);
             AIIntentConfig cfg = configService.getAllIntents(factoryId).stream()
                     .filter(i -> intentCode.equals(i.getIntentCode())).findFirst().orElse(null);
-            if (cfg != null && !BusinessTypeScope.isCompatible(cfg.getBusinessType(), biz)) {
-                log.warn("拒绝中毒学习: intent={} business_type={} 与工厂 biz={} 不兼容",
-                        intentCode, cfg.getBusinessType(), biz);
+            if (!shouldLearnExpression(cfg, factoryId)) {
                 return;
             }
         } catch (Exception e) {
-            /* 解析失败不阻断既有学习, 保守放行 */
+            /* 配置查询失败不阻断既有学习, 保守放行 */
         }
 
         try {
