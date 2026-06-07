@@ -11,6 +11,13 @@
 > 📌 **基线 (2026-06-07 organizer intake)**: 三份交接线侦察 + 收尾。S1 采购到付款 / S2 六扇门报工 / S3 Phase2a coref 侦察结论 = 大部分已 shipped。本轮收尾 T101–T106 已全部完成(除 T103 需 Steve 真机)。详见 Done 区。
 > ⚠️ effort×model 路由按 memory `project_2026_06_07_organizer_routing_refinements_pending` 执行(未落规则);不需要 high 的活输出给 Steve 自己拨(subagent effort 锁死)。
 
+> 🔄 **SESSION 2→3 HANDOFF (2026-06-07 晚)** — 本 chat 极长(重启过1次),换新 chat `/organizer` 接手。新 chat 必做:
+> 1. **检查在飞 background agent**(切 chat 可能丢, 同重启恢复套路): **T122-impl** branch `feat/fk-block-nav-guard`(有 PR→gate, 无→按 T122 设计重派)。用 `git -C <worktree> log origin/main..HEAD` + `gh pr list --repo Stevenjxie/cretas --state open` 查状态。
+> 2. **待部署**: #559(飞轮v2,已merge)未部署 → 攒 T120/T122 批量后端 deploy。rsync 已是主通道(SKIP_RSYNC 已删)。⚠️ 部署后**必 live 验**(本 chat 教训: 单测过≠live 好, 尤其 AI 路由)。
+> 3. **ready 可直接派**: T120(dish coref 收尾, **实测与#559不同文件, 无需串行**)、T121(工序多人负责, 设计已定 Option B)。
+> 4. **T123 规格/名称**: 设计完成(方案A 两级单位 level1_unit/level1_qty/level2_unit + 复用 gramsPerUnit + base_product_name + 名称 autocomplete 推荐), **5 个产品决策待 Steve 定**(见 T123 行)→ 定后派 impl。
+> 5. 部署从 main / `cretas-organizer` worktree(组织 ledger 写者); 单一前门+出货闸。
+
 ---
 
 ## In-flight 任务表
@@ -18,11 +25,10 @@
 | ID | 任务 | model | effort | orchestration | 分支 | scope 锁 | 状态 | PR | 阻塞 |
 |---|---|---|---|---|---|---|---|---|---|
 | T103 | S1 🖐️真机走一单 录音→`voiceAudioUrl` OSS 验证 | Steve(手动) | - | - | - | - | ⬜ pending | - | ✅已解锁(真实餐饮角色 qhj_chef/qhj_purchase_mgr/qhj_owner 已建+验登录);需真机(APK 已装小米 f79c50d6) |
-| T122 | FK 引用阻删 → 通用防呆导航(说清模块+跳转处理+快速返回, 全站) | Sonnet recon→Opus 设计 | locked | inline | (只读) | 后端 FK异常映射 + web-admin request.ts + 全局快速返回 | 🟡 recon | - | fool-proof Rule 5 扩展。recon 摸 FK错误生成+前端处理→Opus 设计 |
-| T123 | 规格两级单位(g/盒/框 下拉)+ 产品名称/产品分离 + 名称记忆推荐 | Sonnet recon→Opus 设计 | locked | inline | (只读) | ProductType entity(规格/单位/gramsPerUnit)+ 下游(批次/出成率/备货看板)+ web-admin 产品 form | 🟡 recon | - | 🔒 数据模型大改+牵动 gramsPerUnit consumer。recon 出选项(两级单位 A/B + 名称分离)+标产品决策点→Opus+Steve 定 |
+| T122 | FK 引用阻删 → 通用防呆导航(全站) | Sonnet→Opus gate | locked | inline | feat/fk-block-nav-guard | GlobalExceptionHandler(FK_MODULE_MAP) + request.ts(FK_BLOCK拦截) + ReturnBanner.vue + AppLayout | 🟡 impl(切chat可能丢) | - | 🔒跨切面。设计已定(interceptor级,41 handler 自动覆盖, 19 FK表映射)。新 chat 查 PR/分支, 有则 gate(headed 验弹窗→跳转→返回浮条), 无则按设计重派 |
+| T123 | 规格两级单位 + 产品名称/产品分离 + 名称推荐 | Sonnet→Opus gate | locked | inline | (待 Steve 决策) | ProductType + Flyway V20260930_01 + web-admin products/index.vue | 🟠 待Steve决策 | - | 设计完成(方案A: +level1_unit/level1_qty/level2_unit, 复用 gramsPerUnit; +base_product_name; el-autocomplete 推荐; 单位下拉枚举+allow-create)。**5 决策待定**: ①一级单位叫"筐"还是"框"+有哪些 ②level2_grams 复用 gramsPerUnit 否 ③unit 下拉(固定枚举 vs 接 unit_of_measurements 字典) ④名称分离这期做否+RN 是否改用 base_product_name 优先展示 ⑤relatedCustomer(名称)与 customerId(ID)是否打通。⚠️ recon 发现现状 bug: gramsPerUnit 对成品 FINISHED_PRODUCT 被"商务信息"组隐藏(顺手修)。无冲突, ~6-7h |
 | T121 | 工序**多人负责**(级联下拉, 任一负责人可报) | Sonnet→Opus gate | locked | inline | (待 T119 merge) | 新建 join表 product_work_process_assignees + entity/repo + ProductWorkProcessServiceImpl + ReportAuthGuard(Set) + YieldReportServiceImpl + web-admin product-processes/index.vue + Flyway V20260930_01 | 🟢 ready(T119 已merge) | - | 🔒 schema+报工权限。**Opus 设计已定: Option B 加 join表保留 responsible_worker_id, AI草稿仍单值(解耦T119), 手动UI多值, 报工读join表任一可报+fallback, spawn assigned_to=assignees[0]+查join表, 前端级联下拉数组**。向后兼容回填1行。**排 T119 后派**(ProductWorkProcessServiceImpl create/update 同文件) |
-| T120 | 菜品 coref **收尾**: 续接分支跳过 coref 解析(X1-continuation) | Sonnet→Opus gate | locked | inline | (待 T115-v2 merge,同文件) | IntentRecognitionPipelineServiceImpl execute() preprocess 调用点(~540-560) | 🔴 blocked | - | 🔒 **完整根因**: D2"那道菜"被 maybeAugmentContinuation 命中→走 `if(augmented!=null)` 分支→**跳过 ensureDishReferenceResolved**→无 ref→不注入→不过滤。修=在续接分支也调 ensureStore/Dish 解析(或移到 if/else 后)。其余层全 live 验过好(slot写#557✓/gold过滤✓/ToolDispatch注入✓)。等 T115-v2 merge(同文件)后派,该 1 轮落地 |
-| T115 | 飞轮治理 v2: 分层写入 + **一致性重提议 promote**(非 hits) | Sonnet→Opus gate | locked | inline | feat/flywheel-tiering-v2 | ExpressionLearningServiceImpl + LearnedExpressionRepository + Flyway(proposal_count列) | 🟡 in-progress | (#556 closed) | 🔒 #556 promote 硬伤(staged 不路由→无 hits→永不 promote)已关。**修正认知: NULL+staged 都不路由=dormant 安全, 非活跃毒(活跃毒早 #553 处理)**。v2: ≥0.9 active/0.70-0.89 staged; dedup 命中 staged/NULL→proposal_count++, 第3次+守卫→promote(有机复活好 NULL, 毒保持 dormant)。无 mass NULL 动作 |
+| T120 | 菜品 coref **收尾**: 续接分支跳过 coref 解析(X1-continuation) | Sonnet→Opus gate | locked | inline | (可直接派) | IntentRecognitionPipelineServiceImpl execute() preprocess 调用点(~540-560) | 🟢 ready | - | 🔒 **完整根因**: D2"那道菜"被 maybeAugmentContinuation 命中→走 `if(augmented!=null)` 分支→**跳过 ensureDishReferenceResolved**→无 ref→不注入→不过滤。修=在续接分支也调 ensureStore/Dish 解析(或移到 if/else 后)。其余层全 live 验过好(slot写#557✓/gold过滤✓/ToolDispatch注入✓)。**实测与#559不同文件→无需串行可直接派**, 该 1 轮落地。部署后**必 live 验** D1写槽+D2单菜过滤 |
 
 <!--
 状态: ⬜ pending / 🟡 in-progress / 🟠 review/待终审 / 🟢 已合并待部署 / ✅ done / 🔴 blocked
@@ -64,6 +70,7 @@
 | T117 | AI配工序草稿渲染 bug | #555 | 2026-06-07 | 前端 WorkProcessAIChatPanel.vue 缺 PRODUCT_WORK_PROCESS_DRAFT renderer→吐 raw type; 修=渲染工序卡+应用按钮. **deployed** web-admin 8086 HTTP200(rsync) |
 | T114 | §8 基建 deploy-staging CI libcrypto | #552 | 2026-06-07 | CI-only(`echo key>id_rsa` 丢尾换行→OpenSSH8.9+严格PEM拒→改 `webfactory/ssh-agent@v0.9.0`,secret不变)。1文件10/10,下次CI生效无需部署。§8b test采购账号401=**非bug**(e2e_purchase_mgr 实测存在+active+登录success,历史401是seed未跑;无码改)。 |
 | T119 | AI配工序解析保真(不凑数) | #558 | 2026-06-07 | 根因=F006 catalog **3行都叫焯水**→单个输入焯水全匹配→焯水×3 + 子串误配(滚揉保水⊂二次滚揉保水/气调⊂气调包装)。修=E1 catalog 去重 + E2 **分段驱动**(切用户输入为N段→N步, 50%长度守卫防子串)+ E3 重复警告。非catalog步→"请先新建"(不丢不替)。11/11。**已部署** green:10020 v20260607_191026。**Steve UI 复验 10 步忠实**。 |
+| T115 | 飞轮治理 v2(分层写入 + 一致性重提议 promote) | #559 | 2026-06-07 | #556 promote 硬伤(staged 不路由→无 hits→永不 promote)关闭重设计。**修正认知: NULL+staged 都不路由=dormant 安全**(我曾误判 NULL=活跃毒, 读 query 纠正)。v2: ≥0.9 active/0.70-0.89 staged; dedup 命中→proposal_count++, 第3次+**#553守卫(fail-closed)**→promote(防遗留跨域毒复活)。Flyway V20260929_02。18/18+70/70+15/15。**已 merge, 待部署**(攒 T120/T122 批量)。 |
 | T118 | 菜品 coref round-3 D1 slot-写入 | #557 | 2026-06-07 | getOrCreateContext 补在 normal execute 路径(updateEntitySlot 无 session 行时静默 bail)。**已部署** v20260607_184448。**live 验: D1 现在真写 DISH 槽**(DB 实证 `{"DISH":{"id":505,...}}`,rounds 1-2 是 0 行)。**但 D2 仍全 Top5** —— 暴露第4层(续接分支跳过 coref)→ T120 收尾。多轮慢=4层 bug 层层遮挡。 |
 
 ---
