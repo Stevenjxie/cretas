@@ -163,6 +163,9 @@ public class IntentMatchResult {
         SIMILAR,    // 相似表达匹配 (编辑距离)
         LLM,        // LLM fallback 匹配
         DOMAIN_DEFAULT, // 域默认意图匹配 (Layer 3.5)
+        CONTINUATION_INHERIT, // T128: 续接继承 — 当前轮是白名单 READ 意图的续接型查询，
+                               // 直接继承上一轮意图，跳过语义/LLM 重识别和 W0 ABSTAIN 门。
+                               // 仅在 CONTINUATION_CANONICAL_PHRASE 白名单全 READ 意图下触发。
         REJECTED,   // v11.7: 输入被拒绝 (不完整/无效输入)
         NONE        // 未匹配
     }
