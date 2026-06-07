@@ -18,7 +18,7 @@
 | ID | 任务 | model | effort | orchestration | 分支 | scope 锁 | 状态 | PR | 阻塞 |
 |---|---|---|---|---|---|---|---|---|---|
 | T103 | S1 🖐️真机走一单 录音→`voiceAudioUrl` OSS 验证 | Steve(手动) | - | - | - | - | ⬜ pending | - | ✅已解锁(真实餐饮角色 qhj_chef/qhj_purchase_mgr/qhj_owner 已建+验登录);需真机(APK 已装小米 f79c50d6) |
-| T108 | #1 菜品续接 Phase2b(DISH coref 镜 2a) | Sonnet subagent→Opus gate | locked(判断走 Opus 本体) | inline | feat/restaurant-dish-coref-p2b | EntitySlot/ConversationMemory/QueryPreprocessor/ToolDispatch/orchestrator/gold dish tool | 🟡 in-progress | - | running(#549 未碰 orchestrator 故无撞);判断我做,待 PR 我终审+部署 |
+| T112 | 餐饮问答优化(校准后)①反投毒+abstain ②跨域路由修 ③选择性ETL | Sonnet recon→Opus 设计 | locked | inline | (设计 recon 只读) | TBD 待设计 | 🟡 recon | - | 🔒 AI路由;recon 映射 飞轮学习/abstain阈值/跨域误路由 代码+复现 → Opus 设计 → 派 impl。③ ETL 待确认二维火 creds/值 |
 
 <!--
 状态: ⬜ pending / 🟡 in-progress / 🟠 review/待终审 / 🟢 已合并待部署 / ✅ done / 🔴 blocked
@@ -53,6 +53,8 @@
 | T109 | #2 全天备货看板(restock board) | #466 | 2026-06-07 | 🔎 侦察发现**早已 shipped+部署** — spec/plan/Flyway `V20260913_01`(无撞号)/16测试/web-admin view 全在 main(+horizon `0f31657f9`+audit `21ab30dfe`)。三层去重已正确(FG/WIP/PLANNED+PENDING 互斥)。未造重复。 |
 | T107 | #3 澄清 padding COMMON-overload | #549 | 2026-06-07 | 🔒Flyway Opus 终审过(`V20260928_03` 幂等)。根因=`MATERIAL_BATCH_QUERY`/`PROCESSING_BATCH_LIST` business_type=COMMON 泄漏餐饮澄清→重标 FACTORY。测试 6/6+70/70+15/15。**已部署** green:10020 v20260607_122604(prod 实证 business_type=FACTORY)。 |
 | T110 | 餐饮专属角色 chef/purchaser/owner(scope A 增量) | #550 | 2026-06-07 | 🔒权限+业态 Opus 终审过。enum+权限矩阵最小化(chef warehouse:rw/purchaser procurement:rw+价格可见/owner 全+财务审核),@RequireRole 增量,**无 Flyway**,42测试。**已部署** green:10020 + **prod 建 3 账号验登录**(qhj_chef/qhj_purchase_mgr/qhj_owner /123456,factoryType=RESTAURANT)。界面已由 factoryType 分开,本次只分角色命名空间。 |
+| T108 | 菜品续接 Phase2b(DISH coref 镜 2a) | #551 | 2026-06-07 | 🔒AI执行路径 Opus 终审过("它"仅 DISH 槽+解析序 DISH→STORE→SUPPLIER,107测试+70/70+15/15)。**已部署** blue:10010 v20260607_132848。D4 STORE/SUPPLIER 零回归实测 PASS;D1/D2 demo 工厂无菜品数据 live 受限(逻辑单测覆盖);D3 dish 澄清被短语抢路由(小 follow-up)。 |
+| — | 📌 餐饮问答 A+B+C 基线侦察结论 | — | 2026-06-07 | speed agent("消灭LLM")+ content agent("8%/0 gold 实现")**均过度声称,Opus 交叉验证否决**。真相: gold 工具全在+营收返真数据(¥940 6月/¥11.57M 3月峰),"暂无菜品数据"=诚实空(demo工厂)。真问题窄=跨域误路由(平台/VIP/美团)+飞轮投毒+少数真缺维度→T112。 |
 
 ---
 
