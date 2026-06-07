@@ -1,5 +1,7 @@
 package com.cretas.aims.service.impl;
 
+import com.cretas.aims.ai.tool.BusinessTypeScope;
+import com.cretas.aims.entity.config.AIIntentConfig;
 import com.cretas.aims.entity.learning.LearnedExpression;
 import com.cretas.aims.entity.learning.TrainingSample;
 import com.cretas.aims.repository.learning.LearnedExpressionRepository;
@@ -8,6 +10,7 @@ import com.cretas.aims.service.EmbeddingClient;
 import com.cretas.aims.service.ExpressionLearningService;
 import com.cretas.aims.service.IntentEmbeddingCacheService;
 import com.cretas.aims.service.RequestScopedEmbeddingCache;
+import com.cretas.aims.service.intent.IntentConfigManagementService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -43,6 +46,15 @@ public class ExpressionLearningServiceImpl implements ExpressionLearningService 
     @Autowired
     @Lazy
     private ExpressionLearningService self;
+
+    /**
+     * #553 守卫: 意图配置管理服务, 用于 promote 阶段的业态/tool_name 校验。
+     * @Lazy 避免循环依赖 (IntentConfigManagementService → 无 ExpressionLearning 依赖, 但 @Lazy 作保险)。
+     * 可为 null (测试中 mock 可选注入, 或未配 Spring 上下文时); null 时 promote 守卫保守**不 promote**。
+     */
+    @Autowired(required = false)
+    @Lazy
+    private IntentConfigManagementService intentConfigService;
 
     // ========== 飞轮 v2 常量 ==========
 
@@ -162,7 +174,8 @@ public class ExpressionLearningServiceImpl implements ExpressionLearningService 
         existing.setProposalCount(newCount);
         existing.setLastProposedAt(LocalDateTime.now());
 
-        boolean canPromote = newCount >= PROMOTE_THRESHOLD && confidence >= 0.70;
+        boolean canPromote = newCount >= PROMOTE_THRESHOLD && confidence >= 0.70
+                && isPromoteAllowedByGuard(existing.getIntentCode(), factoryId);
         if (canPromote) {
             existing.setIsActive(true);
             log.info("飞轮 v2 promote: factory={}, intent={}, expr={}, proposalCount={}, confidence={}",
@@ -183,6 +196,67 @@ public class ExpressionLearningServiceImpl implements ExpressionLearningService 
         }
 
         return expressionRepository.save(existing);
+    }
+
+    /**
+     * #553 promote 守卫 (防御纵深) — 镜像 IntentRecognitionPipelineServiceImpl.shouldLearnExpression。
+     *
+     * <p>两道守卫:
+     * <ul>
+     *   <li><b>Guard B</b>: tool_name 非空 — 无 executor 的意图 promote = 激活死路由毒。</li>
+     *   <li><b>Guard C</b>: 业态兼容 (BusinessTypeScope.isCompatible) — 跨域毒(如餐饮意图
+     *       被工厂租户重提议)不得 promote。</li>
+     * </ul>
+     *
+     * <p>Fail-closed 策略:
+     * <ul>
+     *   <li>intentConfigService 未注入(null) → 无法判断守卫 → 保守 <b>拒绝</b> promote。</li>
+     *   <li>cfg 未找到 → 无法判断 → 保守 <b>拒绝</b> promote。</li>
+     *   <li>业态解析异常 → 无法判断兼容性 → 保守 <b>拒绝</b> promote。</li>
+     * </ul>
+     *
+     * <p>正常路径(cfg 已找到 + tool_name 非空 + 业态兼容) → 放行 true。
+     *
+     * @param intentCode 被 promote 行的意图 code
+     * @param factoryId  工厂 ID
+     * @return true = 允许 promote; false = 守卫拒绝, 保持 staged/dormant
+     */
+    boolean isPromoteAllowedByGuard(String intentCode, String factoryId) {
+        if (intentConfigService == null) {
+            // 未注入 (纯单元测试 without Spring / 意外未配置): fail-closed
+            log.warn("promote 守卫: intentConfigService 未注入, 保守拒绝 promote (intent={}, factory={})",
+                    intentCode, factoryId);
+            return false;
+        }
+        try {
+            AIIntentConfig cfg = intentConfigService.getIntentConfigByCode(factoryId, intentCode);
+            if (cfg == null) {
+                log.warn("promote 守卫(Guard B): 意图配置未找到, 保守拒绝 promote (intent={}, factory={})",
+                        intentCode, factoryId);
+                return false;
+            }
+            // Guard B: tool_name 必须非空
+            String toolName = cfg.getToolName();
+            if (toolName == null || toolName.isBlank()) {
+                log.warn("promote 守卫(Guard B — tool_name=NULL): 拒绝 promote 遗留中毒行 (intent={}, factory={})",
+                        intentCode, factoryId);
+                return false;
+            }
+            // Guard C: 业态兼容
+            String biz = intentConfigService.resolveBusinessDomain(factoryId);
+            if (!BusinessTypeScope.isCompatible(cfg.getBusinessType(), biz)) {
+                log.warn("promote 守卫(Guard C — 业态不兼容): 拒绝 promote 跨域毒行 " +
+                                "(intent={}, business_type={}, factory_biz={}, factory={})",
+                        intentCode, cfg.getBusinessType(), biz, factoryId);
+                return false;
+            }
+            return true;
+        } catch (Exception e) {
+            // 任何异常: fail-closed, 不激活毒
+            log.warn("promote 守卫查询异常, 保守拒绝 promote (intent={}, factory={}, error={})",
+                    intentCode, factoryId, e.getMessage());
+            return false;
+        }
     }
 
     @Override

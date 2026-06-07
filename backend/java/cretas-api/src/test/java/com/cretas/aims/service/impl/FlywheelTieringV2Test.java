@@ -1,5 +1,6 @@
 package com.cretas.aims.service.impl;
 
+import com.cretas.aims.entity.config.AIIntentConfig;
 import com.cretas.aims.entity.learning.LearnedExpression;
 import com.cretas.aims.repository.learning.LearnedExpressionRepository;
 import com.cretas.aims.repository.learning.TrainingSampleRepository;
@@ -7,10 +8,12 @@ import com.cretas.aims.service.EmbeddingClient;
 import com.cretas.aims.service.IntentEmbeddingCacheService;
 import com.cretas.aims.service.RequestScopedEmbeddingCache;
 import com.cretas.aims.service.impl.ExpressionLearningServiceImpl;
+import com.cretas.aims.service.intent.IntentConfigManagementService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Nested;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.util.Optional;
 
@@ -38,6 +41,7 @@ import static org.mockito.Mockito.*;
 class FlywheelTieringV2Test {
 
     private LearnedExpressionRepository repo;
+    private IntentConfigManagementService configService;
     private ExpressionLearningServiceImpl service;
 
     private static final String FACTORY_ID   = "F001";
@@ -55,6 +59,18 @@ class FlywheelTieringV2Test {
                 null,    // RequestScopedEmbeddingCache
                 null     // IntentEmbeddingCacheService
         );
+
+        // #553 守卫: inject a default "allow-promote" configService mock so that existing
+        // promote-positive tests (2b, 2c, 2d, 4a, 4c) continue to pass unmodified.
+        // The guard checks tool_name != null && BusinessTypeScope.isCompatible.
+        configService = mock(IntentConfigManagementService.class);
+        AIIntentConfig validCfg = new AIIntentConfig();
+        validCfg.setIntentCode(INTENT_CODE);
+        validCfg.setToolName("inventory_query");    // non-blank → Guard B passes
+        validCfg.setBusinessType("FACTORY");        // FACTORY intent on FACTORY domain → Guard C passes
+        when(configService.getIntentConfigByCode(anyString(), anyString())).thenReturn(validCfg);
+        when(configService.resolveBusinessDomain(anyString())).thenReturn("FACTORY");
+        ReflectionTestUtils.setField(service, "intentConfigService", configService);
 
         // Default: no existing row (fresh insert path)
         when(repo.findOneByHashAndFactory(anyString(), anyString())).thenReturn(Optional.empty());
@@ -300,16 +316,92 @@ class FlywheelTieringV2Test {
     }
 
     // =====================================================================
+    // 5. #553 Promote 守卫 — 跨域/NULL-tool 遗留行不得 promote
+    // =====================================================================
+
+    @Nested
+    @DisplayName("5. #553 Promote 守卫 — 跨域毒/NULL-tool 行即便 3x 提议也不 promote")
+    class PromoteGuard {
+
+        @Test
+        @DisplayName("5a. Guard C: 餐饮专属意图 (business_type=RESTAURANT) 在工厂租户 3x 重提议 → 不 promote")
+        void crossDomainIntent_thirdProposal_doesNotPromote() {
+            // Arrange: intent is RESTAURANT-only, but factory domain is FACTORY (non-restaurant)
+            AIIntentConfig restaurantCfg = new AIIntentConfig();
+            restaurantCfg.setIntentCode("RESTAURANT_PEAK_HOURS");
+            restaurantCfg.setToolName("restaurant_peak_hours_query");
+            restaurantCfg.setBusinessType("RESTAURANT");         // 餐饮专属
+            when(configService.getIntentConfigByCode(eq(FACTORY_ID), eq("RESTAURANT_PEAK_HOURS")))
+                    .thenReturn(restaurantCfg);
+            when(configService.resolveBusinessDomain(eq(FACTORY_ID))).thenReturn("FACTORY");
+
+            LearnedExpression dormant = buildRowForIntent("RESTAURANT_PEAK_HOURS", null, 2);
+
+            // Act
+            LearnedExpression result = service.incrementProposalAndMaybePromote(
+                    dormant, "RESTAURANT_PEAK_HOURS", 0.85, FACTORY_ID);
+
+            // Assert: proposalCount incremented but NOT promoted (cross-domain guard blocks)
+            assertThat(result.getProposalCount()).isEqualTo(3);
+            assertThat(result.getIsActive()).isNull();   // stays dormant (null), not promoted
+        }
+
+        @Test
+        @DisplayName("5b. Guard B: tool_name=NULL 的遗留行 3x 重提议 → 不 promote (死路由投毒防御)")
+        void nullToolIntent_thirdProposal_doesNotPromote() {
+            // Arrange: cfg exists but tool_name is null (legacy orphan intent)
+            AIIntentConfig orphanCfg = new AIIntentConfig();
+            orphanCfg.setIntentCode("ORPHAN_INTENT");
+            orphanCfg.setToolName(null);                        // NULL tool_name → Guard B blocks
+            orphanCfg.setBusinessType("COMMON");
+            when(configService.getIntentConfigByCode(eq(FACTORY_ID), eq("ORPHAN_INTENT")))
+                    .thenReturn(orphanCfg);
+            when(configService.resolveBusinessDomain(eq(FACTORY_ID))).thenReturn("FACTORY");
+
+            LearnedExpression staged = buildRowForIntent("ORPHAN_INTENT", false, 2);
+
+            // Act
+            LearnedExpression result = service.incrementProposalAndMaybePromote(
+                    staged, "ORPHAN_INTENT", 0.80, FACTORY_ID);
+
+            // Assert: NOT promoted; stays staged
+            assertThat(result.getProposalCount()).isEqualTo(3);
+            assertThat(result.getIsActive()).isFalse();  // stays staged (false)
+        }
+
+        @Test
+        @DisplayName("5c. 正路径: 同业态 + tool_name 非空 → 3x 提议正常 promote (守卫不误伤)")
+        void compatibleIntent_thirdProposal_promotesNormally() {
+            // Arrange: factory intent on factory domain — should be allowed through guards
+            // (uses the default setUp configService mock which already returns FACTORY/non-null tool)
+            LearnedExpression staged = buildRow(false, 2);  // uses default INTENT_CODE
+
+            // Act
+            LearnedExpression result = service.incrementProposalAndMaybePromote(
+                    staged, INTENT_CODE, 0.80, FACTORY_ID);
+
+            // Assert: promoted as normal
+            assertThat(result.getProposalCount()).isEqualTo(3);
+            assertThat(result.getIsActive()).isTrue();
+        }
+    }
+
+    // =====================================================================
     // Helper
     // =====================================================================
 
     /** Build a minimal LearnedExpression with given is_active and proposalCount. */
     private static LearnedExpression buildRow(Boolean isActive, int proposalCount) {
+        return buildRowForIntent(INTENT_CODE, isActive, proposalCount);
+    }
+
+    /** Build a minimal LearnedExpression with a custom intentCode (for guard tests). */
+    private static LearnedExpression buildRowForIntent(String intentCode, Boolean isActive, int proposalCount) {
         String normalized = EXPRESSION.toLowerCase().trim();
         return LearnedExpression.builder()
                 .id(java.util.UUID.randomUUID().toString())
                 .factoryId(FACTORY_ID)
-                .intentCode(INTENT_CODE)
+                .intentCode(intentCode)
                 .expression(normalized)
                 .expressionHash(LearnedExpression.computeHash(normalized))
                 .sourceType(LearnedExpression.SourceType.LLM_FALLBACK)
