@@ -2,7 +2,9 @@ package com.cretas.aims.controller.inventory;
 
 import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.dto.common.PageResponse;
+import com.cretas.aims.dto.inventory.AdjustFinishedGoodsRequest;
 import com.cretas.aims.dto.inventory.CreateDeliveryRequest;
+import com.cretas.aims.dto.inventory.EditFinishedGoodsRequest;
 import com.cretas.aims.dto.inventory.SignatureUploadRequest;
 import com.cretas.aims.dto.inventory.CreateSalesOrderRequest;
 import com.cretas.aims.dto.inventory.FinanceCostBreakdown;
@@ -16,7 +18,9 @@ import com.cretas.aims.entity.inventory.SalesDeliveryRecord;
 import com.cretas.aims.entity.inventory.SalesOrder;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.BusinessLinkRepository;
+import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.UserRepository;
+import com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository;
 import com.cretas.aims.repository.inventory.SalesOrderRepository;
 import com.cretas.aims.service.MobileService;
 import com.cretas.aims.service.PermissionService;
@@ -30,6 +34,7 @@ import org.springframework.web.bind.annotation.*;
 
 import com.cretas.aims.annotation.RequirePermission;
 
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
@@ -52,6 +57,9 @@ public class SalesController {
     private final UserRepository userRepository;
     private final SalesOrderRepository salesOrderRepository;
     private final BusinessLinkRepository businessLinkRepository;
+    // T126 Phase 1: validation dependencies for opening + new CRUD endpoints
+    private final ProductTypeRepository productTypeRepository;
+    private final FinishedGoodsBatchRepository finishedGoodsBatchRepository;
 
     /** Sprint 5 Track C-2 — owner_type / target_type literal pinned to SalesOrder. */
     private static final String SO_ENTITY_TYPE = "SALES_ORDER";
@@ -91,6 +99,19 @@ public class SalesController {
             @RequestHeader("Authorization") String authorization,
             @Valid @RequestBody OpeningFinishedGoodsRequest request) {
         Long userId = extractUserId(authorization);
+
+        // F3: duplicate batch number validation
+        finishedGoodsBatchRepository.findByFactoryIdAndBatchNumber(factoryId, request.batchNumber())
+                .ifPresent(existing -> {
+                    throw new BusinessException(409, "批次号 " + request.batchNumber() + " 已存在")
+                            .withHint("已有批次 " + existing.getId() + ", 请修改批次号或查看");
+                });
+
+        // F9: productTypeId existence validation
+        productTypeRepository.findByIdAndFactoryId(request.productTypeId(), factoryId)
+                .orElseThrow(() -> new BusinessException(404, "产品类型不存在或不属于该工厂")
+                        .withHint("productTypeId=" + request.productTypeId() + " 在工厂 " + factoryId + " 中未找到"));
+
         FinishedGoodsBatch batch = new FinishedGoodsBatch();
         batch.setProductTypeId(request.productTypeId());
         batch.setBatchNumber(request.batchNumber());
@@ -100,8 +121,76 @@ public class SalesController {
         batch.setUnit(request.unit());
         batch.setProductionDate(request.productionDate());
         batch.setRemark(request.remark());
-        FinishedGoodsBatch created = salesService.createFinishedGoodsBatch(factoryId, batch, userId);
+        // F8: sourceType = "OPENING" so event listeners can filter bulk opening entries
+        batch.setCreatedBy(userId);
+
+        // Delegate to service (which publishes FinishedGoodsCreatedEvent with sourceType)
+        FinishedGoodsBatch created = salesService.createOpeningFinishedGoodsBatch(factoryId, batch, userId);
         return ApiResponse.success("期初成品入库成功", created);
+    }
+
+    // ==================== T126 Phase 1: 成品库存 Web 闭环 ====================
+
+    /**
+     * PUT /finished-goods/{batchId} — 编辑成品批次元数据（备注/库位/过期日/成本单价）.
+     * <p>⛔ producedQuantity 和 unit 不可通过此接口修改。
+     */
+    @PutMapping("/finished-goods/{batchId}")
+    @Operation(summary = "编辑成品批次元数据 (T126 P1)",
+            description = "仅允许修改 remark/storageLocation/expireDate/unitPrice。" +
+                    "producedQuantity 通过 /adjust 修改；unit 不可变。")
+    @RequirePermission("sales:read_write")
+    public ApiResponse<FinishedGoodsBatch> editFinishedGoods(
+            @PathVariable @NotBlank String factoryId,
+            @PathVariable @NotBlank String batchId,
+            @RequestHeader("Authorization") String authorization,
+            @Valid @RequestBody EditFinishedGoodsRequest request,
+            HttpServletRequest httpRequest) {
+        // F1: get userId from request attribute (NOT SecurityContextHolder — it's always empty here)
+        Long userId = (Long) httpRequest.getAttribute("userId");
+        FinishedGoodsBatch updated = salesService.editFinishedGoodsBatch(factoryId, batchId, request, userId);
+        return ApiResponse.success("编辑成功", updated);
+    }
+
+    /**
+     * POST /finished-goods/{batchId}/adjust — 调整成品库存数量.
+     * <p>adjustmentQuantity 可正可负；调整后可用量不得为负。
+     */
+    @PostMapping("/finished-goods/{batchId}/adjust")
+    @Operation(summary = "调整成品库存数量 (T126 P1)",
+            description = "adjustmentQuantity 正数=增加，负数=减少。调整后可用量不得为负（422）。" +
+                    "每次调整写一行 finished_goods_adjustment_log。")
+    @RequirePermission("sales:read_write")
+    public ApiResponse<FinishedGoodsBatch> adjustFinishedGoods(
+            @PathVariable @NotBlank String factoryId,
+            @PathVariable @NotBlank String batchId,
+            @RequestHeader("Authorization") String authorization,
+            @Valid @RequestBody AdjustFinishedGoodsRequest request,
+            HttpServletRequest httpRequest) {
+        // F1: get userId from request attribute (NOT SecurityContextHolder)
+        Long userId = (Long) httpRequest.getAttribute("userId");
+        FinishedGoodsBatch updated = salesService.adjustFinishedGoodsQuantity(factoryId, batchId, request, userId);
+        return ApiResponse.success("调整成功", updated);
+    }
+
+    /**
+     * POST /finished-goods/{batchId}/void — 软删除成品批次.
+     * <p>前提：shippedQuantity == 0 AND reservedQuantity == 0，否则 409。
+     */
+    @PostMapping("/finished-goods/{batchId}/void")
+    @Operation(summary = "作废成品批次 (T126 P1)",
+            description = "软删除（设 deleted_at）。前提：无已出库/预留记录，否则 409。" +
+                    "禁止物理删除。")
+    @RequirePermission("sales:read_write")
+    public ApiResponse<Void> voidFinishedGoods(
+            @PathVariable @NotBlank String factoryId,
+            @PathVariable @NotBlank String batchId,
+            @RequestHeader("Authorization") String authorization,
+            HttpServletRequest httpRequest) {
+        // F1: get userId from request attribute (NOT SecurityContextHolder)
+        Long userId = (Long) httpRequest.getAttribute("userId");
+        salesService.voidFinishedGoodsBatch(factoryId, batchId, userId);
+        return ApiResponse.successMessage("批次已作废");
     }
 
     /**
