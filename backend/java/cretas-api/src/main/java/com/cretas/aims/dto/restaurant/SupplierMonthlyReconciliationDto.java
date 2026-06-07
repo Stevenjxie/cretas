@@ -51,6 +51,14 @@ public class SupplierMonthlyReconciliationDto {
     private String updatedAt;
     private List<LineDto> lines;
 
+    /**
+     * Read-only list of delivery notes that were confirmed (with AP invoice) within the
+     * reconciliation period but are NOT included in any reconciliation line.
+     * This can happen when a delivery note is confirmed after the reconciliation was frozen.
+     * Only populated for CONFIRMED (frozen) reconciliations. Never null — empty list when none.
+     */
+    private List<UnReconciledNoteDto> unReconciledNotes;
+
     @Data
     @Builder
     @NoArgsConstructor
@@ -98,5 +106,27 @@ public class SupplierMonthlyReconciliationDto {
         private String supplierId;
         /** Format: yyyy-MM. */
         private String month;
+    }
+
+    /**
+     * A delivery note that is confirmed (has payableTransactionId) within the reconciliation
+     * period but was NOT captured in any reconciliation line — typically because it was
+     * confirmed after the reconciliation was frozen (CONFIRMED status).
+     * This is read-only / informational; it does not affect any financial totals.
+     */
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class UnReconciledNoteDto {
+        private String deliveryNoteId;
+        private String noteNumber;
+        private LocalDate deliveryDate;
+
+        @PriceSensitive
+        private BigDecimal totalAmount;
+
+        private String payableTransactionId;
+        private String confirmedAt;
     }
 }

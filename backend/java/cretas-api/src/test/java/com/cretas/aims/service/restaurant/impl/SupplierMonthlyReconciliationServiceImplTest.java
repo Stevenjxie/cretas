@@ -246,4 +246,92 @@ class SupplierMonthlyReconciliationServiceImplTest {
         transaction.setBalanceAfter(new BigDecimal(amount));
         return transaction;
     }
+
+    // ── Option B: unReconciledNotes on frozen reconciliation ──────────────────
+
+    @Test
+    void getById_confirmedReconciliation_populatesUnReconciledNotesWithOrphans() {
+        // Arrange: frozen reconciliation with one matched line
+        SupplierMonthlyReconciliation confirmed = draft("REC_FROZEN");
+        confirmed.setStatus(SupplierMonthlyReconciliation.Status.CONFIRMED);
+        confirmed.setPeriodStart(MONTH.atDay(1));
+        confirmed.setPeriodEnd(MONTH.atEndOfMonth());
+
+        // An orphan note: confirmed after freeze, has payableTransactionId, not in any line
+        SupplierDeliveryNote orphan = deliveryNote("DN_ORPHAN", "SDN-ORPHAN-01", "250.00");
+        orphan.setPayableTransactionId("AP_ORPHAN_TX");
+        orphan.setConfirmedAt(LocalDateTime.of(2026, 6, 20, 9, 0));
+
+        when(reconciliationRepository.findByIdAndFactoryId("REC_FROZEN", FACTORY))
+                .thenReturn(Optional.of(confirmed));
+        when(deliveryNoteRepository.findOrphanNotesNotInReconciliation(
+                FACTORY, SUPPLIER_ID, MONTH.atDay(1), MONTH.atEndOfMonth(), "REC_FROZEN"))
+                .thenReturn(List.of(orphan));
+
+        // Act
+        SupplierMonthlyReconciliationDto dto = service.getById(FACTORY, "REC_FROZEN");
+
+        // Assert: orphan visible in read-only field
+        assertThat(dto.getStatus()).isEqualTo("CONFIRMED");
+        assertThat(dto.getUnReconciledNotes()).hasSize(1);
+        SupplierMonthlyReconciliationDto.UnReconciledNoteDto note = dto.getUnReconciledNotes().get(0);
+        assertThat(note.getDeliveryNoteId()).isEqualTo("DN_ORPHAN");
+        assertThat(note.getNoteNumber()).isEqualTo("SDN-ORPHAN-01");
+        assertThat(note.getTotalAmount()).isEqualByComparingTo("250.00");
+        assertThat(note.getPayableTransactionId()).isEqualTo("AP_ORPHAN_TX");
+        assertThat(note.getConfirmedAt()).isNotNull();
+    }
+
+    @Test
+    void getById_confirmedReconciliation_emptyUnReconciledNotesWhenAllCaptured() {
+        // Arrange: frozen reconciliation, no orphan notes
+        SupplierMonthlyReconciliation confirmed = draft("REC_CLEAN");
+        confirmed.setStatus(SupplierMonthlyReconciliation.Status.CONFIRMED);
+        confirmed.setPeriodStart(MONTH.atDay(1));
+        confirmed.setPeriodEnd(MONTH.atEndOfMonth());
+
+        when(reconciliationRepository.findByIdAndFactoryId("REC_CLEAN", FACTORY))
+                .thenReturn(Optional.of(confirmed));
+        when(deliveryNoteRepository.findOrphanNotesNotInReconciliation(
+                FACTORY, SUPPLIER_ID, MONTH.atDay(1), MONTH.atEndOfMonth(), "REC_CLEAN"))
+                .thenReturn(List.of());
+
+        // Act
+        SupplierMonthlyReconciliationDto dto = service.getById(FACTORY, "REC_CLEAN");
+
+        // Assert: unReconciledNotes is present but empty
+        assertThat(dto.getStatus()).isEqualTo("CONFIRMED");
+        assertThat(dto.getUnReconciledNotes()).isNotNull().isEmpty();
+    }
+
+    @Test
+    void createOrRefreshDraft_draftReconciliation_unReconciledNotesIsEmptyList() {
+        // DRAFT reconciliations should not query for orphans — field is empty list
+        SupplierMonthlyReconciliation existing = draft("REC_DRAFT");
+        SupplierDeliveryNote note = deliveryNote("DN1", "SDN-001", "100.00");
+        ArApTransaction invoice = apInvoice("AP1", "DN1", "100.00");
+
+        when(supplierRepository.findByIdAndFactoryId(SUPPLIER_ID, FACTORY)).thenReturn(Optional.of(supplier()));
+        when(reconciliationRepository.findByFactoryIdAndSupplierIdAndReconciliationMonthAndDeletedAtIsNull(
+                FACTORY, SUPPLIER_ID, MONTH.atDay(1))).thenReturn(Optional.of(existing));
+        when(deliveryNoteRepository.findConfirmedBySupplierAndDateRange(
+                FACTORY, SUPPLIER_ID, MONTH.atDay(1), MONTH.atEndOfMonth())).thenReturn(List.of(note));
+        when(arApTransactionRepository.findByFactoryIdAndSourceTypeAndSourceIdInAndTransactionTypeAndDeletedAtIsNull(
+                FACTORY, "SUPPLIER_DELIVERY_NOTE", List.of("DN1"), ArApTransactionType.AP_INVOICE))
+                .thenReturn(List.of(invoice));
+        when(arApTransactionRepository.findByFactoryIdAndCounterpartyTypeAndCounterpartyIdAndTransactionTypeAndTransactionDateBetweenOrderByTransactionDateAscCreatedAtAsc(
+                FACTORY, CounterpartyType.SUPPLIER, SUPPLIER_ID, ArApTransactionType.AP_INVOICE,
+                MONTH.atDay(1), MONTH.atEndOfMonth())).thenReturn(List.of(invoice));
+        when(arApTransactionRepository.findByCounterpartyAndTypesAndDateRange(any(), any(), any(), any(), any(), any()))
+                .thenReturn(List.of());
+        when(reconciliationRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        SupplierMonthlyReconciliationDto dto =
+                service.createOrRefreshDraft(FACTORY, SUPPLIER_ID, MONTH, 7L);
+
+        // DRAFT: should not call orphan query, unReconciledNotes is empty
+        assertThat(dto.getStatus()).isEqualTo("DRAFT");
+        assertThat(dto.getUnReconciledNotes()).isNotNull().isEmpty();
+        verify(deliveryNoteRepository, never()).findOrphanNotesNotInReconciliation(any(), any(), any(), any(), any());
+    }
 }

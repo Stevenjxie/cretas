@@ -60,4 +60,32 @@ public interface SupplierDeliveryNoteRepository extends JpaRepository<SupplierDe
 
     Page<SupplierDeliveryNote> findByFactoryIdAndPriceAnomalyApprovalStatus(
             String factoryId, PriceAnomalyApprovalStatus status, Pageable pageable);
+
+    /**
+     * Finds confirmed delivery notes (with a linked AP transaction) within the given date range,
+     * whose IDs are NOT present in any reconciliation line of the specified reconciliation.
+     * Used to surface "orphan" notes that were confirmed after the reconciliation was frozen.
+     *
+     * <p>Uses NOT EXISTS for NULL-safe semantics (per database-entity-sync.md).</p>
+     */
+    @Query("""
+            SELECT n FROM SupplierDeliveryNote n
+            WHERE n.factoryId = :factoryId
+              AND n.supplierId = :supplierId
+              AND n.status = com.cretas.aims.entity.restaurant.enums.DeliveryNoteStatus.CONFIRMED
+              AND n.payableTransactionId IS NOT NULL
+              AND n.deliveryDate BETWEEN :startDate AND :endDate
+              AND NOT EXISTS (
+                  SELECT 1 FROM SupplierMonthlyReconciliationLine rl
+                  WHERE rl.reconciliation.id = :reconciliationId
+                    AND rl.deliveryNoteId = n.id
+              )
+            ORDER BY n.deliveryDate ASC, n.createdAt ASC
+            """)
+    List<SupplierDeliveryNote> findOrphanNotesNotInReconciliation(
+            @Param("factoryId") String factoryId,
+            @Param("supplierId") String supplierId,
+            @Param("startDate") LocalDate startDate,
+            @Param("endDate") LocalDate endDate,
+            @Param("reconciliationId") String reconciliationId);
 }

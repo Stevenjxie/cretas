@@ -79,6 +79,35 @@
                 <template #default="{ row: line }">{{ line.payableTransactionId || line.apTransactionNumber || '—' }}</template>
               </el-table-column>
             </el-table>
+
+            <!-- Option B: orphan notes confirmed after freeze — read-only visibility only -->
+            <div
+              v-if="row.status === 'CONFIRMED' && row.unReconciledNotes && row.unReconciledNotes.length > 0"
+              class="orphan-notes-section"
+            >
+              <el-alert
+                type="warning"
+                :closable="false"
+                show-icon
+                :title="`本月有 ${row.unReconciledNotes.length} 张送货单在对账冻结后确认，未纳入本期对账`"
+                description="以下送货单已完成审批并生成应付挂账，但因对账已冻结未列入本期明细。可在下月生成对账草稿时自动纳入，或由财务与供应商协商调整。"
+              />
+              <el-table :data="row.unReconciledNotes" size="small" border class="orphan-table">
+                <el-table-column label="单号" min-width="180">
+                  <template #default="{ row: n }">{{ n.noteNumber || n.deliveryNoteId || '—' }}</template>
+                </el-table-column>
+                <el-table-column prop="deliveryDate" label="送货日" width="110" />
+                <el-table-column label="金额" width="120" align="right">
+                  <template #default="{ row: n }">{{ money(n.totalAmount) }}</template>
+                </el-table-column>
+                <el-table-column label="应付交易ID" min-width="200">
+                  <template #default="{ row: n }">{{ n.payableTransactionId || '—' }}</template>
+                </el-table-column>
+                <el-table-column label="确认时间" min-width="170">
+                  <template #default="{ row: n }">{{ n.confirmedAt || '—' }}</template>
+                </el-table-column>
+              </el-table>
+            </div>
           </template>
         </el-table-column>
         <el-table-column prop="month" label="月份" width="100" />
@@ -336,4 +365,6 @@ function currentMonth() {
 .muted { color: var(--el-text-color-secondary); font-size: 12px; }
 .empty-state { padding: 16px 0; }
 .empty-state p { margin: 4px 0; }
+.orphan-notes-section { margin-top: 12px; }
+.orphan-table { margin-top: 8px; }
 </style>
