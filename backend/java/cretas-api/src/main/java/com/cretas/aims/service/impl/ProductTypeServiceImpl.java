@@ -91,6 +91,7 @@ public class ProductTypeServiceImpl implements ProductTypeService {
         productType.setProductCategory(dto.getProductCategory());
         productType.setTemperatureZone(dto.getTemperatureZone());
         productType.setGramsPerUnit(dto.getGramsPerUnit());
+        productType.setWipToFgYield(dto.getWipToFgYield());
         productType.setNotes(dto.getNotes());
         productType.setIsActive(true);
         productType.setCreatedBy(dto.getCreatedBy() != null ? Long.valueOf(dto.getCreatedBy()) : null);
@@ -159,6 +160,7 @@ public class ProductTypeServiceImpl implements ProductTypeService {
         if (dto.getProductCategory() != null) productType.setProductCategory(dto.getProductCategory());
         if (dto.getTemperatureZone() != null) productType.setTemperatureZone(dto.getTemperatureZone());
         if (dto.getGramsPerUnit() != null) productType.setGramsPerUnit(dto.getGramsPerUnit());
+        if (dto.getWipToFgYield() != null) productType.setWipToFgYield(dto.getWipToFgYield());
 
         // Sprint 2 S2-1: Form Template Association
         if (dto.getFormTemplateId() != null) productType.setFormTemplateId(dto.getFormTemplateId());
@@ -496,6 +498,7 @@ public class ProductTypeServiceImpl implements ProductTypeService {
                 .productCategory(productType.getProductCategory())
                 .temperatureZone(productType.getTemperatureZone())
                 .gramsPerUnit(productType.getGramsPerUnit())
+                .wipToFgYield(productType.getWipToFgYield())
                 .isActive(productType.getIsActive())
                 .notes(productType.getNotes())
                 .createdBy(productType.getCreatedBy())

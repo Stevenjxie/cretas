@@ -55,6 +55,9 @@ public class ProductTypeDTO {
     @Schema(description = "P0-2 标准克重: 1 份/盒 = X 克 (报工末道折算/成品入库换算用; null=无标准)")
     private BigDecimal gramsPerUnit;
 
+    @Schema(description = "T133 半成品→成品出成率 (0~1 乘数; null=备货看板按 1.0 即偏乐观; 如 0.55 表示 55% 出成率)")
+    private BigDecimal wipToFgYield;
+
     private Boolean isActive;
     private String notes;
     private Long createdBy;
