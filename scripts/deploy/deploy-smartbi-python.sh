@@ -19,13 +19,15 @@ if [ -f "$PROJECT_ROOT/scripts/lib/deploy-common.sh" ]; then
 else
     echo "警告: 未找到 $PROJECT_ROOT/scripts/lib/deploy-common.sh，使用内联函数"
     log() { echo "[$(date '+%Y-%m-%dT%H:%M:%S')] [$1] ${*:2}"; }
-    # Minimal fallback so downstream `wait_for_health` calls don't crash deploy.
-    # Returns 0 iff url responds within retries*interval seconds.
-    wait_for_health() {
-        local url="$1" retries="${2:-15}" interval="${3:-2}"
+    # Minimal fallback so downstream wait_for_health_via_ssh calls don't crash deploy.
+    # 镜像 common 版签名 <ssh_target> <port> <path> <retries> <interval>: SSH 进服务器
+    # 本机 curl localhost:<port><path> (绕 SG). (改动1 后实际调用的是 _via_ssh, 此 fallback
+    # 原本错误地定义 wait_for_health 导致 common 丢时仍崩 — 修正为匹配的函数名/签名.)
+    wait_for_health_via_ssh() {
+        local ssh_target="$1" port="$2" path="${3:-/health}" retries="${4:-15}" interval="${5:-2}"
         local i
         for ((i=0; i<retries; i++)); do
-            if curl -fsS -m 3 "$url" >/dev/null 2>&1; then return 0; fi
+            if ssh -o ConnectTimeout=3 "$ssh_target" "curl -fsS -m 3 http://localhost:${port}${path} >/dev/null 2>&1"; then return 0; fi
             sleep "$interval"
         done
         return 1
