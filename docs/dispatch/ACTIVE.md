@@ -19,7 +19,7 @@
 |---|---|---|---|---|---|---|---|---|---|
 | T103 | S1 🖐️真机走一单 录音→`voiceAudioUrl` OSS 验证 | Steve(手动) | - | - | - | - | ⬜ pending | - | ✅已解锁(真实餐饮角色 qhj_chef/qhj_purchase_mgr/qhj_owner 已建+验登录);需真机(APK 已装小米 f79c50d6) |
 | T118 | 菜品 coref round-3: D1 slot-写入侧(BESTSELLER 不写 DISH 槽) | TBD | locked | inline | (待决策) | IntentExecutionOrchestrator extractAndUpdateEntitySlots / updateConversationMemory@491,1612 | 🟡 in-progress | - | 🔒 round-3, branch fix/dish-coref-d1-slot-write. root-caused: BESTSELLER 路径不持久化 DISH 槽(STORE 写;top_dish 在 resultData 顶层但 hook 对此路径没持久化). 2次已miss(#551/#554)→精准 round-3 或 park, 等 Steve 定 |
-| T115 | 飞轮分层+二次分析(中置信→staged + promote pipeline + **2588 NULL 行存量审计**) | Sonnet→Opus gate | locked | inline | (待 T112 部署后开) | IntentRecognitionPipelineServiceImpl 学习路径 + learning_* 表 + ai_learned_expressions | 🟡 in-progress | - | ✅ T112已部署解锁; branch feat/flywheel-tiering-null-audit; NULL审计候选先报 Opus 审。**新增 scope**: is_active=NULL=active(2588行,247=true)→二次分析须复核存量 NULL 行(含 vip→PROCESSING_BATCH_CREATE hit6 等存量毒)+ 厘清 NULL 语义 + 中置信0.70-0.89→staged。复用 learning_suggestions/tasks |
+| T115 | 飞轮治理 v2: 分层写入 + **一致性重提议 promote**(非 hits) | Sonnet→Opus gate | locked | inline | feat/flywheel-tiering-v2 | ExpressionLearningServiceImpl + LearnedExpressionRepository + Flyway(proposal_count列) | 🟡 in-progress | (#556 closed) | 🔒 #556 promote 硬伤(staged 不路由→无 hits→永不 promote)已关。**修正认知: NULL+staged 都不路由=dormant 安全, 非活跃毒(活跃毒早 #553 处理)**。v2: ≥0.9 active/0.70-0.89 staged; dedup 命中 staged/NULL→proposal_count++, 第3次+守卫→promote(有机复活好 NULL, 毒保持 dormant)。无 mass NULL 动作 |
 
 <!--
 状态: ⬜ pending / 🟡 in-progress / 🟠 review/待终审 / 🟢 已合并待部署 / ✅ done / 🔴 blocked
