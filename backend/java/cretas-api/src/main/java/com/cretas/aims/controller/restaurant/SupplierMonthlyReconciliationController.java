@@ -29,7 +29,9 @@ import java.time.YearMonth;
 @RequiredArgsConstructor
 @Tag(name = "餐饮-供应商月对账")
 @RequireModule("restaurant")
-@RequireRole({"factory_super_admin", "platform_admin", "permission_admin", "restaurant_manager", "finance_manager"})
+@RequireRole({"factory_super_admin", "platform_admin", "permission_admin",
+        "restaurant_manager", "restaurant_owner",
+        "finance_manager"})
 public class SupplierMonthlyReconciliationController {
 
     private final SupplierMonthlyReconciliationService service;
