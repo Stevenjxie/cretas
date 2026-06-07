@@ -17,9 +17,8 @@
 
 | ID | 任务 | model | effort | orchestration | 分支 | scope 锁 | 状态 | PR | 阻塞 |
 |---|---|---|---|---|---|---|---|---|---|
-| T103 | S1 🖐️真机走一单 录音→`voiceAudioUrl` OSS 验证 | Steve(手动) | - | - | - | - | ⬜ pending | - | 需真机(不可自动化;APK 已装小米 f79c50d6, API 指向 prod 8086) |
+| T103 | S1 🖐️真机走一单 录音→`voiceAudioUrl` OSS 验证 | Steve(手动) | - | - | - | - | ⬜ pending | - | ✅已解锁(真实餐饮角色 qhj_chef/qhj_purchase_mgr/qhj_owner 已建+验登录);需真机(APK 已装小米 f79c50d6) |
 | T108 | #1 菜品续接 Phase2b(DISH coref 镜 2a) | Sonnet subagent→Opus gate | locked(判断走 Opus 本体) | inline | feat/restaurant-dish-coref-p2b | EntitySlot/ConversationMemory/QueryPreprocessor/ToolDispatch/orchestrator/gold dish tool | 🟡 in-progress | - | running(#549 未碰 orchestrator 故无撞);判断我做,待 PR 我终审+部署 |
-| T110 | 餐饮专属角色(chef/purchaser/owner)增量 scope A | Sonnet subagent→Opus gate | locked | inline | feat/restaurant-roles-chef-purchaser | FactoryUserRole.java + PermissionServiceImpl.java(+可选 Flyway/账号 SQL) | 🟡 in-progress | - | 🔒 权限+业态;执行到 PR+账号SQL 停,Opus 终审+部署+亲建账号;解锁 T103 真实角色走单 |
 
 <!--
 状态: ⬜ pending / 🟡 in-progress / 🟠 review/待终审 / 🟢 已合并待部署 / ✅ done / 🔴 blocked
@@ -36,7 +35,7 @@
 | 文件 / 目录 | 锁定 task | 预计解锁 |
 |---|---|---|
 | `IntentExecutionOrchestrator.java` + EntitySlot/ConversationMemory/QueryPreprocessor/ToolDispatch + 餐饮菜品 gold tool | T108 | T108 PR merge 后 |
-| FactoryUserRole.java + PermissionServiceImpl.java | T110 | T110 PR merge 后 |
+| — (T110 已合并部署,锁释放) | — | — |
 
 ---
 
@@ -52,7 +51,8 @@
 | T105 | S3 Phase2a coref prod live 验收 | 证据 md | 2026-06-07 | 4/4 判据 PASS;active jar 确含 STORE coref;工厂 SUPPLIER 零回归。证据: `docs/superpowers/handoffs/2026-06-07-phase2a-store-coref-prod-live-verification.md` |
 | T106 | f006p1 两 bug(carry-over override + preview LLM 抽参) | #544 | 2026-06-07 | 🔒AI执行路径 Opus 终审过;**已部署 prod** — jar 含 `getEstimatedMinutesOverride` carry-over;backend blue:10010 v20260607_104835 |
 | T109 | #2 全天备货看板(restock board) | #466 | 2026-06-07 | 🔎 侦察发现**早已 shipped+部署** — spec/plan/Flyway `V20260913_01`(无撞号)/16测试/web-admin view 全在 main(+horizon `0f31657f9`+audit `21ab30dfe`)。三层去重已正确(FG/WIP/PLANNED+PENDING 互斥)。未造重复。 |
-| T107 | #3 澄清 padding COMMON-overload | #549 | 2026-06-07 | 🔒Flyway Opus 终审过(`V20260928_03` 无撞号,幂等)。根因=`MATERIAL_BATCH_QUERY`/`PROCESSING_BATCH_LIST` business_type=COMMON 泄漏餐饮澄清→重标 FACTORY(餐饮过滤/工厂零回归)。测试 6/6+70/70+15/15。**merged,待部署**(批入 T110 一次后端 deploy)。 |
+| T107 | #3 澄清 padding COMMON-overload | #549 | 2026-06-07 | 🔒Flyway Opus 终审过(`V20260928_03` 幂等)。根因=`MATERIAL_BATCH_QUERY`/`PROCESSING_BATCH_LIST` business_type=COMMON 泄漏餐饮澄清→重标 FACTORY。测试 6/6+70/70+15/15。**已部署** green:10020 v20260607_122604(prod 实证 business_type=FACTORY)。 |
+| T110 | 餐饮专属角色 chef/purchaser/owner(scope A 增量) | #550 | 2026-06-07 | 🔒权限+业态 Opus 终审过。enum+权限矩阵最小化(chef warehouse:rw/purchaser procurement:rw+价格可见/owner 全+财务审核),@RequireRole 增量,**无 Flyway**,42测试。**已部署** green:10020 + **prod 建 3 账号验登录**(qhj_chef/qhj_purchase_mgr/qhj_owner /123456,factoryType=RESTAURANT)。界面已由 factoryType 分开,本次只分角色命名空间。 |
 
 ---
 
