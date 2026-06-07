@@ -94,6 +94,27 @@ public enum FactoryUserRole {
      */
     restaurant_manager("餐饮管理", "菜单、配方、餐厅运营", 10, "restaurant"),
 
+    /**
+     * 餐饮老板
+     * 全餐饮运营视角: restaurant/procurement/finance/warehouse/analytics 完整读写
+     * 价格异常审批、月对账确认、采购付款等老板级操作
+     */
+    restaurant_owner("餐饮老板", "全餐饮运营、价格异常审批、月对账", 5, "restaurant"),
+
+    /**
+     * 厨师长
+     * 负责厨房生产侧: 报货(领料申请)、验收入库
+     * 需要 restaurant:rw + warehouse:rw
+     */
+    restaurant_chef("厨师长", "报货、领料、验收入库", 15, "restaurant"),
+
+    /**
+     * 餐饮采购
+     * 负责采购到付款全链路: 请购、采购订单确认/审批
+     * 需要 restaurant:rw + procurement:rw
+     */
+    restaurant_purchaser("餐饮采购", "请购、采购确认、采购审批", 15, "restaurant"),
+
     // ===== Level 20: 车间管理层 =====
     /**
      * 车间主任
@@ -240,6 +261,9 @@ public enum FactoryUserRole {
             case factory_super_admin:
                 return "*";
             case restaurant_manager:
+            case restaurant_owner:
+            case restaurant_chef:
+            case restaurant_purchaser:
                 return "restaurant";
             case hr_admin:
                 return "hr";

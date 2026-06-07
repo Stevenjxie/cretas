@@ -241,6 +241,39 @@ public class PermissionServiceImpl implements PermissionService {
         restaurantManagerPerms.put("analytics", "read");
         PERMISSION_MATRIX.put(FactoryUserRole.restaurant_manager, restaurantManagerPerms);
 
+        // restaurant_owner: 餐饮老板 — 全餐饮运营 + 价格异常审批 + 月对账确认
+        // 涵盖 restaurant/procurement/finance/warehouse/analytics 完整读写
+        Map<String, String> restaurantOwnerPerms = new HashMap<>();
+        restaurantOwnerPerms.put("dashboard", "read_write");
+        restaurantOwnerPerms.put("restaurant", "read_write");
+        restaurantOwnerPerms.put("procurement", "read_write"); // 采购审批、请购确认
+        restaurantOwnerPerms.put("finance", "read_write");     // 月对账确认、财务审核通过/驳回
+        restaurantOwnerPerms.put("warehouse", "read_write");   // 报货/领料审批、验收入库
+        restaurantOwnerPerms.put("analytics", "read_write");   // 经营分析
+        restaurantOwnerPerms.put("report", "read");
+        PERMISSION_MATRIX.put(FactoryUserRole.restaurant_owner, restaurantOwnerPerms);
+
+        // restaurant_chef: 厨师长 — 报货/领料(MaterialRequisition) + 验收入库(SupplierDeliveryNote)
+        // 需要 restaurant:rw + warehouse:rw; 不需要 procurement:rw (不审采购单)
+        Map<String, String> restaurantChefPerms = new HashMap<>();
+        restaurantChefPerms.put("dashboard", "read");
+        restaurantChefPerms.put("restaurant", "read_write");   // RestaurantModule 访问
+        restaurantChefPerms.put("warehouse", "read_write");    // 报货/领料 create+submit+approve + 验收入库 confirm
+        restaurantChefPerms.put("procurement", "read");        // 只读采购单 (查看状态)
+        restaurantChefPerms.put("analytics", "read");          // 基础数据查看
+        PERMISSION_MATRIX.put(FactoryUserRole.restaurant_chef, restaurantChefPerms);
+
+        // restaurant_purchaser: 餐饮采购 — 请购单+采购订单 全链路
+        // 需要 restaurant:rw + procurement:rw; 不需要 warehouse:rw (不验收入库)
+        Map<String, String> restaurantPurchaserPerms = new HashMap<>();
+        restaurantPurchaserPerms.put("dashboard", "read");
+        restaurantPurchaserPerms.put("restaurant", "read_write");    // RestaurantModule 访问
+        restaurantPurchaserPerms.put("procurement", "read_write");   // 请购 create/submit/approve + 采购 confirm/approve
+        restaurantPurchaserPerms.put("warehouse", "read");           // 只读仓库 (查看库存状态)
+        restaurantPurchaserPerms.put("finance", "read");             // 查看采购金额 (不能财务审核)
+        restaurantPurchaserPerms.put("analytics", "read");           // 基础数据查看
+        PERMISSION_MATRIX.put(FactoryUserRole.restaurant_purchaser, restaurantPurchaserPerms);
+
         // viewer: 所有模块只读
         Map<String, String> viewerPerms = new HashMap<>();
         ALL_MODULES.stream()
@@ -278,6 +311,9 @@ public class PermissionServiceImpl implements PermissionService {
             FactoryUserRole.production_manager,
             // 餐饮主管查看食材/菜品成本
             FactoryUserRole.restaurant_manager,
+            // 餐饮老板/采购需查看采购价格 (价格异常审批需对比价格)
+            FactoryUserRole.restaurant_owner,
+            FactoryUserRole.restaurant_purchaser,
             // 向后兼容
             FactoryUserRole.permission_admin,
             FactoryUserRole.department_admin
@@ -302,6 +338,8 @@ public class PermissionServiceImpl implements PermissionService {
             FactoryUserRole.procurement_manager,
             FactoryUserRole.finance_manager,
             FactoryUserRole.dispatcher,
+            // 餐饮老板需查看财务待审采购单 (采购金额审批)
+            FactoryUserRole.restaurant_owner,
             // 向后兼容
             FactoryUserRole.permission_admin,
             FactoryUserRole.department_admin
