@@ -35,6 +35,7 @@ import java.net.ConnectException;
 import java.net.SocketTimeoutException;
 import org.slf4j.MDC;
 import java.sql.SQLException;
+import java.util.Map;
 import java.util.UUID;
 import java.util.stream.Collectors;
 /**
@@ -52,6 +53,33 @@ import java.util.stream.Collectors;
 @Slf4j
 @RestControllerAdvice
 public class GlobalExceptionHandler {
+
+    // =====================================================================
+    // FK 引用阻删 — 模块导航映射
+    // tableName → (中文模块名, 前端路由, filterParam)
+    // route 必须对照 router/index.ts 真实存在的路由; 拿不准的保持 null (fallback 裸表名)
+    // =====================================================================
+    private record FkModuleMeta(String moduleName, String targetRoute, String filterParam) {}
+
+    private static final Map<String, FkModuleMeta> FK_MODULE_MAP = Map.ofEntries(
+        // 生产 BOM
+        Map.entry("conversion_change_history", new FkModuleMeta("换算变更历史", "/production/conversions", "conversionId")),
+        Map.entry("bom_recipe_items",           new FkModuleMeta("BOM 配方明细", "/production/bom", "recipeId")),
+        Map.entry("bom_recipes",                new FkModuleMeta("BOM 配方",     "/production/bom", null)),
+        // 仓储
+        Map.entry("raw_material_types",         new FkModuleMeta("原料类型字典", "/warehouse/material-types", null)),
+        // 采购
+        Map.entry("suppliers",                  new FkModuleMeta("供应商管理",   "/procurement/suppliers", null)),
+        Map.entry("inquiry_quote_supplier_prices", new FkModuleMeta("核价供应商报价", "/procurement/inquiry-quotes", "inquiryQuoteId")),
+        // 销售
+        Map.entry("customers",                  new FkModuleMeta("客户管理",     "/sales/customers", null)),
+        Map.entry("customer_sales_user_history",new FkModuleMeta("客户归属历史", "/sales/customers", null)),
+        Map.entry("sales_opportunities",        new FkModuleMeta("CRM 商机",     "/crm/opportunity", "customerId")),
+        // 质量
+        Map.entry("quality_return_orders",      new FkModuleMeta("质检退回单",   "/quality/returns", "qualityInspectionId")),
+        // 财务
+        Map.entry("accounts",                   new FkModuleMeta("会计科目",     "/finance/ar-ap", null))
+    );
 
     /**
      * 生成错误追踪ID，用于关联日志和用户反馈。
@@ -552,12 +580,31 @@ public class GlobalExceptionHandler {
                     hintTarget = target;
                 }
             } else {
-                // DELETE / 其他 (legacy 行为, 保持向后兼容)
-                message = "无法删除: 该数据仍被其他记录引用";
-                actionHint = "先处理引用该数据的相关记录后再删除";
+                // DELETE / 其他: 引用阻删场景
+                // FK_BLOCK 防呆导航: 从 PG 错误消息提取 referenced 表名 → 查模块映射表
+                // 未命中保留原有裸表名行为 (graceful fallback)
                 if (mReferenced.find()) {
-                    message = "无法删除: 该数据仍被 " + mReferenced.group(1) + " 引用，请先处理相关数据";
-                    hintTarget = mReferenced.group(1);
+                    String referencingTable = mReferenced.group(1);
+                    FkModuleMeta meta = FK_MODULE_MAP.get(referencingTable);
+                    if (meta != null) {
+                        // 命中: 中文模块名 + 导航 route + FK_BLOCK errorCode
+                        message = "无法删除: 该数据被「" + meta.moduleName() + "」引用，请先处理相关数据";
+                        actionHint = "前往「" + meta.moduleName() + "」处理引用后再删除";
+                        hintTarget = meta.targetRoute();
+                        // 使用 errorWithCode builder 追加 FK_BLOCK + targetRoute
+                        ApiResponse<?> resp = ApiResponse.errorWithCode(409, "FK_BLOCK", message, actionHint, "warning");
+                        resp.setHintTarget(hintTarget);
+                        return resp;
+                    } else {
+                        // 未命中: fallback 裸表名 (原有行为)
+                        message = "无法删除: 该数据仍被 " + referencingTable + " 引用，请先处理相关数据";
+                        actionHint = "先处理引用该数据的相关记录后再删除";
+                        hintTarget = referencingTable;
+                    }
+                } else {
+                    // 无法从错误消息提取 referenced 表名 (非 PG / 旧驱动)
+                    message = "无法删除: 该数据仍被其他记录引用";
+                    actionHint = "先处理引用该数据的相关记录后再删除";
                 }
             }
         } else {

@@ -4,6 +4,7 @@ import { useAppStore } from '@/store/modules/app';
 import AppSidebar from './AppSidebar.vue';
 import AppHeader from './AppHeader.vue';
 import InlineCustomerService from '@/components/support/InlineCustomerService.vue';
+import ReturnBanner from './ReturnBanner.vue';
 
 const appStore = useAppStore();
 
@@ -30,6 +31,9 @@ const mainStyle = computed(() => ({
     <div class="app-main" :style="mainStyle">
       <!-- 顶部栏 -->
       <AppHeader />
+
+      <!-- FK_BLOCK 防呆导航浮条: 从关联页跳转处理完毕后引导返回 -->
+      <ReturnBanner />
 
       <!-- 内容区 -->
       <main class="app-content">
