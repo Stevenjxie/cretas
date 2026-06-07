@@ -24,6 +24,9 @@ const productExtendedFields: FieldConfig[] = [
     placeholder: '1 level1Unit = ? unit (如 1筐=10盒 填 10)' },
   { key: 'gramsPerUnit', label: '标准克重(克/份)', type: 'decimal', group: '规格信息', precision: 2, suffix: '克', order: 3,
     placeholder: '如 1盒=120克 填 120 (报工末道份→kg折算用; 留空=无标准)' },
+  { key: 'wipToFgYield', label: '半成品出成率(0~1)', type: 'decimal', group: '规格信息', precision: 4, order: 4,
+    placeholder: '如 0.55 表示 55% 出成率 (备货看板 WIP→成品估算; 留空=按 1:1 偏乐观)',
+    tooltip: '半成品折算成品的出成率，备货看板用此估算可产成品；未配置时按 1:1（偏乐观）' },
   // ---- 商务信息 (成品隐藏, 原辅料显示) ----
   { key: 'brand', label: '品牌', type: 'text', group: '商务信息', order: 1 },
   { key: 'taxIncludedUnitPrice', label: '含税单价', type: 'decimal', group: '商务信息', precision: 4, suffix: '元', order: 2 },
@@ -81,6 +84,7 @@ interface ProductType {
   // 六扇门扩展字段
   boxConversionCoefficient?: number;
   gramsPerUnit?: number;   // P0-2: 标准克重(克/份), 报工末道份→kg折算用
+  wipToFgYield?: number;   // T133: 半成品→成品出成率 (0~1), 备货看板 WIP 估算; null=按 1.0
   level1Unit?: string;     // T123: 一级单位 (如 筐, 箱) 与 boxConversionCoefficient 联用
   baseProductName?: string; // T123: 产品基础名 (名称分离), RN 展示优先使用, 无则 fallback 到 name
   inventoryWarningThreshold?: number;
