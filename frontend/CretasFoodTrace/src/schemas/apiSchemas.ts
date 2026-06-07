@@ -69,6 +69,7 @@ export const EmployeeDTOSchema = z.object({
 export const ProductTypeSchema = z.object({
   id: z.string(),
   name: z.string(),
+  baseProductName: z.string().optional(), // T123: 产品基础名 (名称分离), RN 优先显示, 无则 fallback 到 name
   category: z.string().optional(),
   unit: z.string(),
   description: z.string().optional(),

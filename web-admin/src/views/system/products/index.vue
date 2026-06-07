@@ -14,7 +14,17 @@ import DynamicEntityForm from '@/components/DynamicEntityForm.vue';
 import type { FieldConfig } from '@/config/entityFieldConfigs';
 
 // 产品扩展字段 — 添加新字段只需在此数组加一行
+// T123 重组: gramsPerUnit + boxConversionCoefficient 移到 '规格信息' 组
+//   (成品也需要标准克重设置,不应被'商务信息'隐藏逻辑屏蔽)
 const productExtendedFields: FieldConfig[] = [
+  // ---- 规格信息 (成品/原料均显示) ----
+  { key: 'level1Unit', label: '一级单位', type: 'text', group: '规格信息', order: 1,
+    placeholder: '如: 筐, 箱, 件, 袋, 桶, 盒' },
+  { key: 'boxConversionCoefficient', label: '一级→二级转换数', type: 'decimal', group: '规格信息', precision: 4, order: 2,
+    placeholder: '1 level1Unit = ? unit (如 1筐=10盒 填 10)' },
+  { key: 'gramsPerUnit', label: '标准克重(克/份)', type: 'decimal', group: '规格信息', precision: 2, suffix: '克', order: 3,
+    placeholder: '如 1盒=120克 填 120 (报工末道份→kg折算用; 留空=无标准)' },
+  // ---- 商务信息 (成品隐藏, 原辅料显示) ----
   { key: 'brand', label: '品牌', type: 'text', group: '商务信息', order: 1 },
   { key: 'taxIncludedUnitPrice', label: '含税单价', type: 'decimal', group: '商务信息', precision: 4, suffix: '元', order: 2 },
   { key: 'settlementMethod', label: '结算方式', type: 'select', group: '商务信息', order: 3,
@@ -24,10 +34,7 @@ const productExtendedFields: FieldConfig[] = [
       { label: '预付', value: 'PREPAID' },
       { label: '货到付款', value: 'COD' },
     ] },
-  { key: 'boxConversionCoefficient', label: '箱规转换系数', type: 'decimal', group: '商务信息', precision: 4, order: 4,
-    placeholder: '如 10kg/箱 填 10' },
-  { key: 'gramsPerUnit', label: '标准克重(克/份)', type: 'decimal', group: '商务信息', precision: 2, suffix: '克', order: 5,
-    placeholder: '如 1份/盒=120克 填 120 (报工末道份→kg折算用; 留空=无标准)' },
+  // ---- 库存采购 ----
   { key: 'inventoryWarningThreshold', label: '库存预警值', type: 'decimal', group: '库存采购', precision: 2, order: 6 },
   { key: 'minimumOrderQuantity', label: '起订量(MOQ)', type: 'decimal', group: '库存采购', precision: 2, order: 7 },
 ];
@@ -64,6 +71,7 @@ interface ProductType {
   unit: string;
   specification?: string;
   relatedCustomer?: string;
+  customerId?: string;       // T123: 关联客户 ID (entity link)
   temperatureZone?: string;
   imageUrl?: string;
   notes?: string;
@@ -73,6 +81,8 @@ interface ProductType {
   // 六扇门扩展字段
   boxConversionCoefficient?: number;
   gramsPerUnit?: number;   // P0-2: 标准克重(克/份), 报工末道份→kg折算用
+  level1Unit?: string;     // T123: 一级单位 (如 筐, 箱) 与 boxConversionCoefficient 联用
+  baseProductName?: string; // T123: 产品基础名 (名称分离), RN 展示优先使用, 无则 fallback 到 name
   inventoryWarningThreshold?: number;
   minimumOrderQuantity?: number;
   brand?: string;
@@ -164,10 +174,58 @@ const formData = reactive<Partial<ProductType>>({
   unit: '',
   specification: '',
   relatedCustomer: '',
+  customerId: '',      // T123: 关联客户 ID (entity link)
+  baseProductName: '', // T123: 产品基础名 (名称分离)
   temperatureZone: '',
   imageUrl: '',
   notes: ''
 });
+
+// T123: 两级单位实时转换提示 ("1筐=10盒" 等)
+const unitConversionHint = computed(() => {
+  const l1 = (formData.level1Unit as string | undefined)?.trim();
+  const coef = formData.boxConversionCoefficient;
+  const l2 = formData.unit?.trim();
+  if (l1 && coef && l2) {
+    const n = typeof coef === 'number' ? coef : parseFloat(String(coef));
+    if (!isNaN(n) && n > 0) return `当前: 1 ${l1} = ${n} ${l2}`;
+  }
+  return '';
+});
+
+// T123: baseProductName autocomplete 建议 (从已加载产品名/baseProductName 去重)
+const baseProductNameSuggestions = ref<{ value: string }[]>([]);
+function queryBaseProductName(query: string, cb: (suggestions: { value: string }[]) => void) {
+  const existing = new Set<string>();
+  for (const p of tableData.value) {
+    const bpn = (p as ProductType).baseProductName;
+    if (bpn) existing.add(bpn);
+    if (p.name) existing.add(p.name);
+  }
+  const arr = Array.from(existing)
+    .filter(s => !query || s.toLowerCase().includes(query.toLowerCase()))
+    .map(v => ({ value: v }));
+  cb(arr);
+}
+
+// T123: 关联客户 autocomplete — 选中后同步 customerId + relatedCustomer
+function handleCustomerSelect(item: { id: string; name: string } | string) {
+  if (typeof item === 'string') {
+    // allow-create: 用户手输客户名, 不清除已有 customerId (兼容旧数据)
+    formData.relatedCustomer = item;
+  } else {
+    formData.relatedCustomer = item.name;
+    formData.customerId = item.id;
+  }
+}
+
+function customerSearchFn(query: string, cb: (items: { id: string; name: string; value: string }[]) => void) {
+  const q = query.toLowerCase();
+  const matched = customers.value
+    .filter(c => !q || c.name.toLowerCase().includes(q))
+    .map(c => ({ ...c, value: c.name }));
+  cb(matched);
+}
 
 // P1-NEW-2: 产品大类=成品时隐藏"商务信息"组 (客户需求 1567-1572s: 成品不展示, 原辅料才展示)
 const visibleExtendedFields = computed<FieldConfig[]>(() => {
@@ -276,6 +334,9 @@ function resetForm() {
   formData.unit = '';
   formData.specification = '';
   formData.relatedCustomer = '';
+  formData.customerId = '';      // T123
+  formData.baseProductName = ''; // T123
+  formData.level1Unit = undefined; // T123 — part of extendedFields, cleared separately
   formData.temperatureZone = '';
   formData.imageUrl = '';
   formData.notes = '';
@@ -298,6 +359,8 @@ function handleEdit(row: ProductType) {
   formData.unit = row.unit;
   formData.specification = row.specification || '';
   formData.relatedCustomer = row.relatedCustomer || '';
+  formData.customerId = row.customerId || '';        // T123
+  formData.baseProductName = row.baseProductName || ''; // T123
   formData.temperatureZone = row.temperatureZone || '';
   formData.imageUrl = row.imageUrl || '';
   formData.notes = row.notes || '';
@@ -343,6 +406,8 @@ async function handleSubmit() {
       unit: formData.unit,
       specification: formData.specification,
       relatedCustomer: formData.relatedCustomer,
+      customerId: formData.customerId || null,        // T123: 客户 ID entity link
+      baseProductName: formData.baseProductName || null, // T123: 产品基础名
       temperatureZone: formData.temperatureZone,
       imageUrl: formData.imageUrl,
       notes: formData.notes,
@@ -747,15 +812,35 @@ function handleAiFill(params: TableRow) {
         <el-form-item label="规格" prop="specification">
           <el-input v-model="formData.specification" placeholder="请输入规格（如：310g*42袋/箱）" />
         </el-form-item>
+        <!-- T123: 客户打通 — el-autocomplete 同时填 relatedCustomer(名称) + customerId(ID) -->
         <el-form-item label="关联客户" prop="relatedCustomer">
-          <el-select v-model="formData.relatedCustomer" placeholder="请选择关联客户" filterable clearable allow-create style="width: 100%">
-            <el-option
-              v-for="c in customers"
-              :key="c.id"
-              :label="c.name"
-              :value="c.name"
-            />
-          </el-select>
+          <el-autocomplete
+            v-model="formData.relatedCustomer"
+            :fetch-suggestions="customerSearchFn"
+            placeholder="搜索客户名称（同步设置客户ID）"
+            clearable
+            style="width: 100%"
+            @select="handleCustomerSelect"
+            @clear="() => { formData.customerId = ''; }"
+          >
+            <template #suffix>
+              <span v-if="formData.customerId" style="font-size:11px; color:#67c23a; padding-right:4px;">
+                已绑定
+              </span>
+            </template>
+          </el-autocomplete>
+          <div v-if="formData.customerId" class="form-tip">客户ID: {{ formData.customerId }}</div>
+        </el-form-item>
+        <!-- T123: 产品基础名 (名称分离) — 如"好食光卤猪蹄"，RN 优先显示此字段 -->
+        <el-form-item label="基础名称">
+          <el-autocomplete
+            v-model="formData.baseProductName"
+            :fetch-suggestions="queryBaseProductName"
+            placeholder="如: 好食光卤猪蹄（RN优先显示，留空用产品名）"
+            clearable
+            style="width: 100%"
+          />
+          <div class="form-tip">仅含产品本身名称，不含客户/规格后缀；RN 展示优先用此字段，为空则回退到产品名称</div>
         </el-form-item>
         <el-form-item label="温区" prop="temperatureZone">
           <el-select v-model="formData.temperatureZone" placeholder="请选择温区" clearable style="width: 100%">
@@ -796,6 +881,12 @@ function handleAiFill(params: TableRow) {
           :columns="2"
           label-width="120px"
         />
+        <!-- T123: 两级单位实时换算提示 — 当 level1Unit + boxConversionCoefficient + unit 均填时显示 -->
+        <el-form-item v-if="unitConversionHint" label=" ">
+          <el-tag type="success" effect="plain">
+            {{ unitConversionHint }}
+          </el-tag>
+        </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="dialogVisible = false">取消</el-button>
