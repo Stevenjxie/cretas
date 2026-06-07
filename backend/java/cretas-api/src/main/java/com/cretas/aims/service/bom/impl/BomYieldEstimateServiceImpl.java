@@ -17,12 +17,13 @@ import com.cretas.aims.exception.BomYieldStaleException;
 import com.cretas.aims.service.bom.BomYieldEstimateService;
 import com.cretas.aims.service.yield.YieldReportService;
 import com.cretas.aims.dto.yield.BatchYieldDTO;
-import com.cretas.aims.utils.SecurityUtils;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.context.request.RequestAttributes;
+import org.springframework.web.context.request.RequestContextHolder;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -217,9 +218,27 @@ public class BomYieldEstimateServiceImpl implements BomYieldEstimateService {
     public BomYieldApplyResultDTO recalculateApply(
             String factoryId, List<BomYieldApplyRequest> requests) {
 
-        // ── H5: read acting user once per call (null-safe: unit tests have no request context) ──
-        Long actingUserId = SecurityUtils.getCurrentUserId();
-        String actingUsername = SecurityUtils.getCurrentUsername();
+        // ── H5: read acting user from JWT request attributes. JwtAuthInterceptor sets request
+        //    attributes "userId"(Long) / "username"(String); SecurityContextHolder is NOT populated
+        //    in this codebase (see ReportAuthGuard) so SecurityUtils.getCurrentUserId() would return
+        //    null. null-safe: unit tests / async have no request context → changedBy stays null. ──
+        Long actingUserId = null;
+        String actingUsername = null;
+        RequestAttributes reqAttrs = RequestContextHolder.getRequestAttributes();
+        if (reqAttrs != null) {
+            Object uid = reqAttrs.getAttribute("userId", RequestAttributes.SCOPE_REQUEST);
+            if (uid instanceof Long) {
+                actingUserId = (Long) uid;
+            } else if (uid instanceof Integer) {
+                actingUserId = ((Integer) uid).longValue();
+            } else if (uid instanceof String) {
+                try { actingUserId = Long.parseLong((String) uid); } catch (NumberFormatException ignored) { }
+            }
+            Object uname = reqAttrs.getAttribute("username", RequestAttributes.SCOPE_REQUEST);
+            if (uname != null) {
+                actingUsername = uname.toString();
+            }
+        }
 
         // ── M10 Phase 1: pre-flight staleness check (all-or-nothing) ────────────────────────────
         // Load each RAW item that has a non-null expectedCurrentYieldRate and verify the DB value
