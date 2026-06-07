@@ -18,8 +18,8 @@
 | ID | 任务 | model | effort | orchestration | 分支 | scope 锁 | 状态 | PR | 阻塞 |
 |---|---|---|---|---|---|---|---|---|---|
 | T103 | S1 🖐️真机走一单 录音→`voiceAudioUrl` OSS 验证 | Steve(手动) | - | - | - | - | ⬜ pending | - | ✅已解锁(真实餐饮角色 qhj_chef/qhj_purchase_mgr/qhj_owner 已建+验登录);需真机(APK 已装小米 f79c50d6) |
-| T112 | 餐饮问答优化 impl(①反投毒守卫+②绑峰值+清毒) | Sonnet→Opus gate | locked | inline | feat/restaurant-routing-antipoison | IntentRecognitionPipelineServiceImpl + Flyway(ai_intent_configs/ai_learned_expressions) | 🟡 in-progress | - | 🔒 AI路由高爆炸半径。recon 实锤毒行(vip→PROCESSING_BATCH_CREATE hit=6)。Piece4 前置业态门只提案。到 PR Opus gate+部署 |
-| T113 | T109 备货看板深验(三层去重)+ T108 菜品 coref D1/D2 live | Sonnet 只读 | locked | inline | (只读验证) | — | 🟡 in-progress | - | 验证 T109/T108 caveat,无码改 |
+| T112 | 餐饮问答优化 impl(①反投毒守卫+②绑峰值+清毒) | Sonnet→Opus gate | locked | inline | feat/restaurant-routing-antipoison | IntentRecognitionPipelineServiceImpl + Flyway(ai_intent_configs/ai_learned_expressions) | 🟠 待终审(有疑点) | #553 | 🔒 Opus 深 gate 中:⚠️ 清了 **25 行**(recon 只锤 2)需逐行核 / "非空数据"守卫是否实现 / IntentParityTest 本地没跑(infra) |
+| T116 | 修菜品 coref D2 dormant(D1→D2 wiring 断,debug+fix) | Sonnet→Opus gate | locked | inline | fix/dish-coref-d2-wiring | IntentExecutionOrchestrator/ToolDispatchService/ConversationMemoryServiceImpl | 🟡 in-progress | - | 🔒 AI路由;与 T112-impl 不同文件可并行。必 live 真验 D2 过滤(T108 翻车教训) |
 | T115 | 飞轮分层+二次分析(中置信0.70-0.89→staged is_active=false + promote pipeline) | Sonnet→Opus gate | locked | inline | (待 T112-impl merge) | IntentRecognitionPipelineServiceImpl 学习路径 + learning_* 表 | 🔴 blocked | - | 🔒 撞 T112-impl 同文件,等其 merge 后开。复用 learning_suggestions/tasks 表 |
 
 <!--
@@ -52,10 +52,10 @@
 | T104 | S2 发货应收幂等 | #542 | 2026-06-07 | 守卫早 live(`3f26931f5` on main);#542 仅补缺失回归测试(3 case)test-only |
 | T105 | S3 Phase2a coref prod live 验收 | 证据 md | 2026-06-07 | 4/4 判据 PASS;active jar 确含 STORE coref;工厂 SUPPLIER 零回归。证据: `docs/superpowers/handoffs/2026-06-07-phase2a-store-coref-prod-live-verification.md` |
 | T106 | f006p1 两 bug(carry-over override + preview LLM 抽参) | #544 | 2026-06-07 | 🔒AI执行路径 Opus 终审过;**已部署 prod** — jar 含 `getEstimatedMinutesOverride` carry-over;backend blue:10010 v20260607_104835 |
-| T109 | #2 全天备货看板(restock board) | #466 | 2026-06-07 | 🔎 侦察发现**早已 shipped+部署** — spec/plan/Flyway `V20260913_01`(无撞号)/16测试/web-admin view 全在 main(+horizon `0f31657f9`+audit `21ab30dfe`)。三层去重已正确(FG/WIP/PLANNED+PENDING 互斥)。未造重复。 |
+| T109 | #2 全天备货看板(restock board) | #466 | 2026-06-07 | **✅ T113 深验 PASS**:2 产品(白卤猪舌/猪蹄)逐层 DB 对账=API 完全吻合;FG 软删过滤/WIP deletedAt/Scheduled仅PLANNED+PENDING(IN_PROGRESS排除无双计)/shortfall=max(0,需求−合计)。三层去重真确认正确(不止"存在于main")。 |
 | T107 | #3 澄清 padding COMMON-overload | #549 | 2026-06-07 | 🔒Flyway Opus 终审过(`V20260928_03` 幂等)。根因=`MATERIAL_BATCH_QUERY`/`PROCESSING_BATCH_LIST` business_type=COMMON 泄漏餐饮澄清→重标 FACTORY。测试 6/6+70/70+15/15。**已部署** green:10020 v20260607_122604(prod 实证 business_type=FACTORY)。 |
 | T110 | 餐饮专属角色 chef/purchaser/owner(scope A 增量) | #550 | 2026-06-07 | 🔒权限+业态 Opus 终审过。enum+权限矩阵最小化(chef warehouse:rw/purchaser procurement:rw+价格可见/owner 全+财务审核),@RequireRole 增量,**无 Flyway**,42测试。**已部署** green:10020 + **prod 建 3 账号验登录**(qhj_chef/qhj_purchase_mgr/qhj_owner /123456,factoryType=RESTAURANT)。界面已由 factoryType 分开,本次只分角色命名空间。 |
-| T108 | 菜品续接 Phase2b(DISH coref 镜 2a) | #551 | 2026-06-07 | 🔒AI执行路径 Opus 终审过("它"仅 DISH 槽+解析序 DISH→STORE→SUPPLIER,107测试+70/70+15/15)。**已部署** blue:10010 v20260607_132848。D4 STORE/SUPPLIER 零回归实测 PASS;D1/D2 demo 工厂无菜品数据 live 受限(逻辑单测覆盖);D3 dish 澄清被短语抢路由(小 follow-up)。 |
+| T108 | 菜品续接 Phase2b(DISH coref 镜 2a) | #551 | 2026-06-07 | 🔒AI执行路径 Opus 终审过("它"仅 DISH 槽+解析序 DISH→STORE→SUPPLIER,107测试+70/70+15/15)。**已部署** blue:10010 v20260607_132848。D4 STORE/SUPPLIER 零回归实测 PASS。**⚠️ T113 复验暴露: 菜品数据其实存在(D1 返真 Top5),但 D2"那道菜"返全 Top5 未过滤=coref DORMANT**(gate miss: 我只验单测+D4 没 live 验真功能)→ **T116 修中**。 |
 | — | 📌 餐饮问答 A+B+C 基线侦察结论 | — | 2026-06-07 | speed agent("消灭LLM")+ content agent("8%/0 gold 实现")**均过度声称,Opus 交叉验证否决**。真相: gold 工具全在+营收返真数据(¥940 6月/¥11.57M 3月峰),"暂无菜品数据"=诚实空(demo工厂)。真问题窄=跨域误路由(平台/VIP/美团)+飞轮投毒+少数真缺维度→T112。 |
 | T114 | §8 基建 deploy-staging CI libcrypto | #552 | 2026-06-07 | CI-only(`echo key>id_rsa` 丢尾换行→OpenSSH8.9+严格PEM拒→改 `webfactory/ssh-agent@v0.9.0`,secret不变)。1文件10/10,下次CI生效无需部署。§8b test采购账号401=**非bug**(e2e_purchase_mgr 实测存在+active+登录success,历史401是seed未跑;无码改)。 |
 
