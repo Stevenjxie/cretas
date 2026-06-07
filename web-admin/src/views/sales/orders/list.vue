@@ -5,7 +5,7 @@ import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { useBusinessMode } from '@/composables/useBusinessMode';
 import { get, post, put, del } from '@/api/request';
-import { ElMessage, ElMessageBox } from 'element-plus';
+import { ElMessage, ElMessageBox, ElNotification } from 'element-plus';
 import { Plus, Refresh, Search, ChatDotRound, QuestionFilled } from '@element-plus/icons-vue';
 import AiEntryDrawer from '@/components/ai-entry/AiEntryDrawer.vue';
 import AuditLogDrawer from '@/components/AuditLogDrawer.vue';
@@ -298,7 +298,10 @@ function handleRowActionClick(actionId: string, row: TableRow) {
   switch (actionId) {
     case 'view-detail': goDetail(String(row.id)); break;
     case 'edit': handleEdit(row); break;
-    case 'submit': case 'approve': handleAction(String(row.id), 'confirm'); break;
+    // T131 Part 1 — 'approve' (DRAFT→CONFIRMED) 仍走 confirm; 提交财务审核走独立的链式/单次路径.
+    case 'approve': handleAction(String(row.id), 'confirm'); break;
+    case 'submit': case 'submit-for-review':
+      void handleSubmitForReviewRow(row); break;
     case 'cancel': handleAction(String(row.id), 'cancel'); break;
     case 'print-pdf': void safePrint('sales-order', factoryId.value, String(row.id), { fileName: `销售订单_${row.orderNumber || row.id}` }); break;
     case 'copy': void handleCopyOrder(row); break;
@@ -381,6 +384,40 @@ const loading = ref(false);
 const tableData = ref<TableRow[]>([]);
 const pagination = ref({ page: 1, size: 10, total: 0 });
 const statusFilter = ref('');
+
+// T131 Part 1 (F5) — per-row 提审 loading. List 不能用单一共享 ref (多行可并发操作).
+const submittingIds = ref<Set<string>>(new Set());
+
+// T131 Part 3 — 多选批量操作 (table view only).
+const selectedRows = ref<TableRow[]>([]);
+const batchLoading = ref(false);
+// 批量提审/确认/取消/删除各自的资格状态集合 (用于 bulk-bar 按钮可见/可用).
+const BATCH_SUBMIT_STATUSES = ['DRAFT', 'CONFIRMED', 'FINANCE_REJECTED'];
+const BATCH_CONFIRM_STATUSES = ['DRAFT'];
+const BATCH_CANCEL_STATUSES = ['DRAFT', 'CONFIRMED'];
+const BATCH_DELETE_STATUSES = ['DRAFT'];
+// el-table type=selection 的 :selectable 用 (写权限 + 至少能进入某个批量操作的状态).
+function canSelectRow(row: TableRow): boolean {
+  if (!canWrite.value) return false;
+  const status = String(row.status || '');
+  return BATCH_SUBMIT_STATUSES.includes(status) || BATCH_CANCEL_STATUSES.includes(status);
+}
+function handleSelectionChange(rows: TableRow[]) {
+  selectedRows.value = rows;
+}
+// bulk-bar 各按钮的可用性 (有任一选中行匹配该操作资格).
+const hasBatchSubmittable = computed(() =>
+  selectedRows.value.some((r) => BATCH_SUBMIT_STATUSES.includes(String(r.status || '')))
+);
+const hasBatchConfirmable = computed(() =>
+  selectedRows.value.some((r) => BATCH_CONFIRM_STATUSES.includes(String(r.status || '')))
+);
+const hasBatchCancellable = computed(() =>
+  selectedRows.value.some((r) => BATCH_CANCEL_STATUSES.includes(String(r.status || '')))
+);
+const hasBatchDeletable = computed(() =>
+  selectedRows.value.some((r) => BATCH_DELETE_STATUSES.includes(String(r.status || '')))
+);
 
 // U-FOOTER-1: sticky summary stats
 const summaryRequest = computed<ListSummaryRequest>(() => ({
@@ -635,6 +672,8 @@ onBeforeUnmount(() => { window.removeEventListener('beforeunload', handleBeforeU
 async function loadData() {
   if (!factoryId.value) return;
   loading.value = true;
+  // T131 Part 3 — 每次刷新/翻页/筛选清空选择, 避免跨页 stale selection (mirror finance/adjustments).
+  selectedRows.value = [];
   try {
     const url = statusFilter.value
       ? `/${factoryId.value}/sales/orders/by-status`
@@ -967,6 +1006,8 @@ async function handleAction(orderId: string, action: string) {
     // R23-Pre3: FINANCE_REJECTED → resubmit for finance review (backend already
     // supports CONFIRMED || FINANCE_REJECTED → PENDING_FINANCE_REVIEW transition).
     resubmit: { label: '重新提交', url: `/${factoryId.value}/sales/orders/${orderId}/submit-for-review` },
+    // T131 Part 1 — CONFIRMED/FINANCE_REJECTED 单次提交财务审核 (与 resubmit 同端点, 文案不同).
+    'submit-for-review': { label: '提交财务审核', url: `/${factoryId.value}/sales/orders/${orderId}/submit-for-review` },
   };
   const a = map[action];
   if (!a) return;
@@ -976,6 +1017,248 @@ async function handleAction(orderId: string, action: string) {
     if (res.success) { ElMessage.success(`${a.label}成功`); loadData(); }
     else { ElMessage.error(res.message || `${a.label}失败`); }
   } catch (error) { if (error !== 'cancel') ElMessage.error(`${a.label}失败`); }
+}
+
+// ==================== T131 提交财务审核 (链式) + 多选批量 ====================
+//
+// 后端状态机 (不变):
+//   confirm:              DRAFT → CONFIRMED
+//   submit-for-review:    CONFIRMED | FINANCE_REJECTED → PENDING_FINANCE_REVIEW
+// DRAFT 行"提交财务审核"需链式: 先 confirm 再 submit-for-review.
+//
+// 链式部分失败语义 (审计 #1 风险):
+//   confirm OK + submit-for-review 失败 → 订单停在 CONFIRMED (可对"已确认"行重试提审, 可恢复).
+//   必须用 'confirmed_only' 桶 / sticky toast 与彻底失败区分.
+
+type SubmitOutcome = 'success' | 'confirmed_only' | 'failed';
+
+/** 取后端错误信息 (api-response-handling: error.response.data.message). */
+function extractErrMessage(e: unknown, fallback: string): string {
+  const err = e as { response?: { data?: { message?: string } }; message?: string };
+  return err?.response?.data?.message || err?.message || fallback;
+}
+
+/**
+ * 提交财务审核底层 helper. 不弹 toast / 不 loadData — 由调用方 (单行/批量) 统一处理结果.
+ * @returns 'success' (DRAFT 链式两步都成 或 非 DRAFT 单次成) /
+ *          'confirmed_only' (DRAFT 已 confirm 但 submit 失败) /
+ *          抛错 (confirm 本身失败, 由调用方 catch → 'failed').
+ */
+async function submitOrderForFinanceReview(
+  orderId: string,
+  opts: { fromDraft: boolean }
+): Promise<SubmitOutcome> {
+  if (opts.fromDraft) {
+    // 链式: confirm → submit-for-review.
+    const confirmRes = await post(`/${factoryId.value}/sales/orders/${orderId}/confirm`);
+    if (!confirmRes?.success) {
+      // confirm 失败 → 订单仍 DRAFT, 当彻底失败抛出.
+      throw new Error(confirmRes?.message || '确认订单失败');
+    }
+    try {
+      const submitRes = await post(`/${factoryId.value}/sales/orders/${orderId}/submit-for-review`);
+      if (!submitRes?.success) {
+        throw new Error(submitRes?.message || '提交审核失败');
+      }
+      return 'success';
+    } catch (e) {
+      // confirm OK 但 submit 失败 → 订单现为 CONFIRMED, 可恢复. 标 confirmed_only.
+      const err = new Error(extractErrMessage(e, '提交审核失败')) as Error & { confirmedOnly?: boolean };
+      err.confirmedOnly = true;
+      throw err;
+    }
+  }
+  // 非 DRAFT (CONFIRMED / FINANCE_REJECTED) — 单次.
+  const res = await post(`/${factoryId.value}/sales/orders/${orderId}/submit-for-review`);
+  if (!res?.success) {
+    throw new Error(res?.message || '提交审核失败');
+  }
+  return 'success';
+}
+
+/** 单行"提交财务审核"入口 (fool-proof Rule 2 带订单号确认 + Rule 4 per-row loading). */
+async function handleSubmitForReviewRow(row: TableRow): Promise<void> {
+  const orderId = String(row.id || '');
+  const orderNumber = String(row.orderNumber || row.id || '');
+  const status = String(row.status || '');
+  const fromDraft = status === 'DRAFT';
+  if (submittingIds.value.has(orderId)) return; // 防重复点击
+  // fool-proof Rule 2: 确认 dialog 带订单号 + 链式说明.
+  const confirmMsg = fromDraft
+    ? `确认将销售订单 ${orderNumber} 提交财务审核？(将先确认订单，再送交财务)`
+    : `确认将销售订单 ${orderNumber} 提交财务审核？`;
+  try {
+    await ElMessageBox.confirm(confirmMsg, '提交财务审核', {
+      confirmButtonText: '提交',
+      cancelButtonText: '取消',
+      type: 'info',
+    });
+  } catch {
+    return; // 用户取消
+  }
+  submittingIds.value.add(orderId);
+  try {
+    await submitOrderForFinanceReview(orderId, { fromDraft });
+    ElMessage.success(`订单 ${orderNumber} 已提交财务审核`);
+    await loadData();
+  } catch (e) {
+    const err = e as Error & { confirmedOnly?: boolean };
+    if (err.confirmedOnly) {
+      // 链式部分失败 — sticky toast 明示"已确认但提审失败", 引导对已确认行重试.
+      ElMessage({
+        message: `订单 ${orderNumber} 已确认，但提交审核失败：${err.message} — 请对「已确认」行重试提审`,
+        type: 'error',
+        duration: 0,
+        showClose: true,
+      });
+    } else {
+      // confirm 本身失败 (订单仍 DRAFT) — 标准错误 toast.
+      ElMessage({ message: `订单 ${orderNumber} 提交失败：${err.message}`, type: 'error', duration: 0, showClose: true });
+    }
+    await loadData();
+  } finally {
+    submittingIds.value.delete(orderId);
+  }
+}
+
+// ---- T131 Part 3 批量操作 (v1 前端循环 Promise.allSettled) ----
+// TODO(v2): 若批量规模常 >10, 改后端批量端点减少 N 次往返.
+
+/** 弹批量确认框, 列前 5 个订单号 + "等共 N 条". 返回 true=确认 / false=取消. */
+async function confirmBatch(actionLabel: string, rows: TableRow[]): Promise<boolean> {
+  const nums = rows.map((r) => String(r.orderNumber || r.id || ''));
+  const preview = nums.slice(0, 5).join('、');
+  const tail = nums.length > 5 ? ` 等共 ${nums.length} 条` : ` 共 ${nums.length} 条`;
+  try {
+    await ElMessageBox.confirm(`确认对 ${preview}${tail} 执行「${actionLabel}」？`, `批量${actionLabel}`, {
+      confirmButtonText: '执行',
+      cancelButtonText: '取消',
+      type: 'warning',
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** 批量提交财务审核 — three-bucket (success / confirmed_only / failed). */
+async function handleBatchSubmitForReview(): Promise<void> {
+  const eligible = selectedRows.value.filter((r) => BATCH_SUBMIT_STATUSES.includes(String(r.status || '')));
+  if (eligible.length === 0) {
+    ElMessage.warning('选中订单中没有可提交财务审核的 (需为草稿/已确认/已驳回)');
+    return;
+  }
+  if (!(await confirmBatch('提交财务审核', eligible))) return;
+  batchLoading.value = true;
+  try {
+    const results = await Promise.allSettled(
+      eligible.map((r) =>
+        submitOrderForFinanceReview(String(r.id), { fromDraft: String(r.status || '') === 'DRAFT' })
+          .then((outcome) => ({ row: r, outcome }))
+      )
+    );
+    let success = 0;
+    let confirmedOnly = 0;
+    let failed = 0;
+    const failedList: string[] = [];
+    for (let i = 0; i < results.length; i++) {
+      const res = results[i];
+      const orderNumber = String(eligible[i].orderNumber || eligible[i].id || '');
+      if (res.status === 'fulfilled') {
+        if (res.value.outcome === 'confirmed_only') confirmedOnly++;
+        else success++;
+      } else {
+        const err = res.reason as Error & { confirmedOnly?: boolean };
+        if (err?.confirmedOnly) {
+          confirmedOnly++;
+        } else {
+          failed++;
+          failedList.push(`${orderNumber}: ${err?.message || '提交失败'}`);
+        }
+      }
+    }
+    let msg = `已完成提审 ${success} 条；已确认待提审 ${confirmedOnly} 条（可对「已确认」行重试）；失败 ${failed} 条。`;
+    if (confirmedOnly > 0) {
+      msg += '已确认订单可直接「提交财务审核」重试，无需重走确认。';
+    }
+    ElNotification({
+      title: '批量提交财务审核结果',
+      message: msg,
+      type: failed > 0 ? 'warning' : 'success',
+      duration: 0,
+    });
+    if (failedList.length > 0) {
+      void ElMessageBox.alert(failedList.join('\n'), '失败明细', { confirmButtonText: '知道了' });
+    }
+  } finally {
+    await loadData();
+    selectedRows.value = [];
+    batchLoading.value = false;
+  }
+}
+
+/** 批量执行单步操作 (确认/取消/删除) — two-bucket (success / failed). */
+async function runBatchSimple(
+  actionLabel: string,
+  eligibleStatuses: string[],
+  doOne: (row: TableRow) => Promise<void>
+): Promise<void> {
+  const eligible = selectedRows.value.filter((r) => eligibleStatuses.includes(String(r.status || '')));
+  if (eligible.length === 0) {
+    ElMessage.warning(`选中订单中没有可${actionLabel}的`);
+    return;
+  }
+  if (!(await confirmBatch(actionLabel, eligible))) return;
+  batchLoading.value = true;
+  try {
+    const results = await Promise.allSettled(eligible.map((r) => doOne(r)));
+    let success = 0;
+    let failed = 0;
+    const failedList: string[] = [];
+    for (let i = 0; i < results.length; i++) {
+      const res = results[i];
+      const orderNumber = String(eligible[i].orderNumber || eligible[i].id || '');
+      if (res.status === 'fulfilled') success++;
+      else {
+        failed++;
+        failedList.push(`${orderNumber}: ${extractErrMessage(res.reason, actionLabel + '失败')}`);
+      }
+    }
+    ElNotification({
+      title: `批量${actionLabel}结果`,
+      message: `成功 ${success} 条，失败 ${failed} 条。`,
+      type: failed > 0 ? 'warning' : 'success',
+      duration: 0,
+    });
+    if (failedList.length > 0) {
+      void ElMessageBox.alert(failedList.join('\n'), '失败明细', { confirmButtonText: '知道了' });
+    }
+  } finally {
+    await loadData();
+    selectedRows.value = [];
+    batchLoading.value = false;
+  }
+}
+
+async function handleBatchConfirm(): Promise<void> {
+  await runBatchSimple('确认', BATCH_CONFIRM_STATUSES, async (row) => {
+    const res = await post(`/${factoryId.value}/sales/orders/${row.id}/confirm`);
+    if (!res?.success) throw new Error(res?.message || '确认失败');
+  });
+}
+
+async function handleBatchCancel(): Promise<void> {
+  await runBatchSimple('取消', BATCH_CANCEL_STATUSES, async (row) => {
+    const res = await post(`/${factoryId.value}/sales/orders/${row.id}/cancel`);
+    if (!res?.success) throw new Error(res?.message || '取消失败');
+  });
+}
+
+async function handleBatchDelete(): Promise<void> {
+  await runBatchSimple('删除', BATCH_DELETE_STATUSES, async (row) => {
+    const res = await del(`/${factoryId.value}/sales/orders/${row.id}`);
+    if (!res?.success) throw new Error(res?.message || '删除失败');
+  });
 }
 
 const editingOrderId = ref<string | null>(null);
@@ -1351,6 +1634,39 @@ async function submitQuickPayment() {
         </div>
       </div>
 
+      <!--
+        T131 Part 3 — 多选批量操作栏 (仅 table 视图; 本列表有 table/kanban/grid/timeline/calendar 多模式,
+        多选只在 table 模式生效). 每按钮按选中行资格 disable; batchLoading 期间全 disable.
+        批量执行走前端 Promise.allSettled 循环. TODO(v2): 大批量 (>10) 改后端批量端点.
+      -->
+      <div v-if="viewMode === 'table' && selectedRows.length > 0" class="bulk-bar">
+        <span class="bulk-bar-count">已选 <strong>{{ selectedRows.length }}</strong> 条</span>
+        <el-button
+          type="primary" size="small"
+          :disabled="!hasBatchSubmittable || batchLoading"
+          :loading="batchLoading"
+          @click="handleBatchSubmitForReview"
+        >批量提交财务审核</el-button>
+        <el-button
+          type="success" size="small"
+          :disabled="!hasBatchConfirmable || batchLoading"
+          :loading="batchLoading"
+          @click="handleBatchConfirm"
+        >批量确认</el-button>
+        <el-button
+          type="warning" size="small"
+          :disabled="!hasBatchCancellable || batchLoading"
+          :loading="batchLoading"
+          @click="handleBatchCancel"
+        >批量取消</el-button>
+        <el-button
+          type="danger" size="small"
+          :disabled="!hasBatchDeletable || batchLoading"
+          :loading="batchLoading"
+          @click="handleBatchDelete"
+        >批量删除</el-button>
+      </div>
+
       <GridView
         v-if="viewMode === 'grid'"
         :rows="filteredTableData"
@@ -1370,7 +1686,18 @@ async function submitQuickPayment() {
       />
       <TimelinePlaceholder v-else-if="viewMode === 'timeline'" />
       <CalendarPlaceholder v-else-if="viewMode === 'calendar'" />
-      <el-table v-else :data="filteredTableData" v-loading="loading" empty-text="暂无数据" stripe border style="width: 100%">
+      <el-table
+        v-else
+        :data="filteredTableData"
+        v-loading="loading"
+        empty-text="暂无数据"
+        stripe
+        border
+        style="width: 100%"
+        @selection-change="handleSelectionChange"
+      >
+        <!-- T131 Part 3 — 多选列 (Element Plus 在 COLUMN 上用 :selectable, 非 table 的 rowSelectable). -->
+        <el-table-column type="selection" width="48" :selectable="canSelectRow" />
         <!-- U-MARKER-1 row marker column (Sprint 4 Wave 2 Chat L) -->
         <el-table-column label="" width="36" align="center">
           <template #default="{ row }">
@@ -1503,10 +1830,21 @@ async function submitQuickPayment() {
             <LinkChipCell :counts="linkCountsFor(row.id)" />
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="320" fixed="right" align="center">
+        <el-table-column label="操作" width="380" fixed="right" align="center">
           <template #default="{ row }">
             <el-button type="primary" link size="small" @click="goDetail(row.id)">详情</el-button>
             <el-button v-if="row.status === 'DRAFT' && canWrite" type="warning" link size="small" @click="handleEdit(row)">编辑</el-button>
+            <!-- T131 — 提交财务审核 (primary). DRAFT 链式 (先确认再送财务); CONFIRMED 单次. per-row loading. -->
+            <el-button
+              v-if="['DRAFT','CONFIRMED'].includes(row.status) && canWrite"
+              type="primary"
+              link
+              size="small"
+              :loading="submittingIds.has(row.id)"
+              :disabled="submittingIds.has(row.id)"
+              @click="handleSubmitForReviewRow(row)"
+            >提交财务审核</el-button>
+            <!-- T131 — 「确认」保留为 DRAFT 的次要操作 (仅 DRAFT→CONFIRMED, 不送财务). -->
             <el-button v-if="row.status === 'DRAFT' && canWrite" type="success" link size="small" @click="handleAction(row.id, 'confirm')">确认</el-button>
             <el-button v-if="['DRAFT','CONFIRMED'].includes(row.status) && canWrite" type="danger" link size="small" @click="handleAction(row.id, 'cancel')">取消</el-button>
             <el-button v-if="row.status === 'FINANCE_REJECTED' && canWrite" type="success" link size="small" @click="handleAction(row.id, 'resubmit')">重新提交</el-button>
@@ -1952,6 +2290,11 @@ async function submitQuickPayment() {
   }
 }
 .search-bar { display: flex; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; }
+/* T131 Part 3 — 多选批量操作栏 */
+.bulk-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  margin-bottom: 12px; padding: 8px 12px; background: #ecf5ff; border: 1px solid #d9ecff; border-radius: 4px;
+  .bulk-bar-count { font-size: 13px; color: #606266; margin-right: 4px; strong { color: #409eff; } }
+}
 .pagination-wrapper { display: flex; justify-content: flex-end; padding-top: 16px; border-top: 1px solid #ebeef5; margin-top: 16px; }
 .item-row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
 /* Sprint 4 W2 S-PRICE-1 R1: unitPrice + 上次成交价 chip 垂直堆 */
