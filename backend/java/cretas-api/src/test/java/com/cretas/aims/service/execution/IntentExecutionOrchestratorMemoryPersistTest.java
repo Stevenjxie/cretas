@@ -29,6 +29,10 @@ import org.mockito.ArgumentCaptor;
 
 import java.util.Map;
 
+import com.cretas.aims.dto.intent.IntentMatchResult;
+import com.cretas.aims.entity.config.AIIntentConfig;
+import org.springframework.test.util.ReflectionTestUtils;
+
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
@@ -144,6 +148,56 @@ class IntentExecutionOrchestratorMemoryPersistTest {
         assertThat(slot.getId()).isEqualTo("201");
         assertThat(slot.getName()).isEqualTo("叮咚卤猪蹄");
         assertThat(slot.getDisplayValue()).isEqualTo("菜品 叮咚卤猪蹄");
+    }
+
+    /**
+     * D1-fix regression: The normal execute() path calls updateConversationMemory directly
+     * (not through persistConversationMemoryForExplicitIntent). This test verifies that
+     * updateConversationMemory correctly extracts the DISH slot from a BESTSELLER response
+     * and writes it via conversationMemoryService.updateEntitySlot — provided the session
+     * row already exists (getOrCreateContext was called first, as the fix ensures).
+     */
+    @Test
+    @DisplayName("D1-fix: normal execute path — BESTSELLER response → DISH slot written via updateConversationMemory")
+    void normalPath_bestsellerResponse_writesDishSlot() {
+        // Simulate the normal execute() path: getOrCreateContext is now called first (D1-fix),
+        // then updateConversationMemory is invoked. We call updateConversationMemory directly
+        // here (via reflection) to isolate the slot-writing logic independently of the full
+        // execute() pipeline.
+        IntentExecuteRequest req = IntentExecuteRequest.builder()
+                .sessionId("sess-d1-fix")
+                .userInput("哪道菜卖得最好")
+                .build();
+        IntentExecuteResponse resp = IntentExecuteResponse.builder()
+                .status("SUCCESS")
+                .message("本月畅销菜品")
+                .resultData(Map.of(
+                        "top_dish", Map.of(
+                                "dish_id", 505,
+                                "菜品", "招牌青花椒味",
+                                "销量", 1200.0,
+                                "销售额", 36000.0)))
+                .build();
+        AIIntentConfig intent = AIIntentConfig.builder()
+                .intentCode("RESTAURANT_BESTSELLER_QUERY")
+                .build();
+        IntentMatchResult matchResult = IntentMatchResult.builder()
+                .bestMatch(intent)
+                .build();
+
+        // Call private updateConversationMemory directly (mirrors what execute() does after D1-fix)
+        ReflectionTestUtils.invokeMethod(orchestrator, "updateConversationMemory",
+                "sess-d1-fix", req, resp, matchResult, "RES_3101_009", 9L);
+
+        ArgumentCaptor<EntitySlot> slotCaptor = ArgumentCaptor.forClass(EntitySlot.class);
+        verify(memory).updateEntitySlot(
+                eq("sess-d1-fix"), eq(EntitySlot.SlotType.DISH), slotCaptor.capture());
+        EntitySlot slot = slotCaptor.getValue();
+        assertThat(slot.getId()).isEqualTo("505");
+        assertThat(slot.getName()).isEqualTo("招牌青花椒味");
+        assertThat(slot.getDisplayValue()).isEqualTo("菜品 招牌青花椒味");
+        // Also verify lastIntentCode was updated
+        verify(memory).updateLastIntent("sess-d1-fix", "RESTAURANT_BESTSELLER_QUERY");
     }
 
     @Test

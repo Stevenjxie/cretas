@@ -487,7 +487,19 @@ public class IntentExecutionOrchestrator {
         processResponseCaching(factoryId, request, matchResult, response);
 
         // 8. 对话记忆
+        // D1-fix: Ensure ConversationMemory row exists before writing slots/messages.
+        // ConversationMemoryServiceImpl.updateEntitySlot / addMessage silently bail out
+        // when the session row does not yet exist (no auto-create). The explicit-intent
+        // path (executeWithExplicitIntent → persistConversationMemoryForExplicitIntent)
+        // already calls getOrCreateContext first; mirror that guarantee here so DISH /
+        // STORE slots written by extractAndUpdateEntitySlots are actually persisted.
         if (request.getSessionId() != null && !request.getSessionId().isEmpty()) {
+            try {
+                conversationMemoryService.getOrCreateContext(factoryId, userId, request.getSessionId());
+            } catch (Exception e) {
+                log.warn("对话记忆 getOrCreateContext 失败 (非阻断): sessionId={}, error={}",
+                        request.getSessionId(), e.getMessage());
+            }
             updateConversationMemory(request.getSessionId(), request, response, matchResult, factoryId, userId);
         }
 
