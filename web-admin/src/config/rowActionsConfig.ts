@@ -58,15 +58,15 @@ export const STATUS_ACTIONS_MAP: Readonly<Record<EntityType, Readonly<Record<str
     CANCELLED: ['view-detail'],
   },
   inventory: {
-    IN_STOCK: ['transfer', 'view-detail', 'view-price-history'],
-    LOW_STOCK: ['transfer', 'view-detail', 'view-price-history'],
-    OUT_OF_STOCK: ['view-detail', 'view-price-history'],
-    EXPIRED: ['view-detail', 'view-price-history'],
-    EXPIRE: ['view-detail', 'view-price-history'],
-    LOW: ['transfer', 'view-detail', 'view-price-history'],
-    NORMAL: ['transfer', 'view-detail', 'view-price-history'],
-    SUFFICIENT: ['transfer', 'view-detail', 'view-price-history'],
-    SOLD_OUT: ['view-detail', 'view-price-history'],
+    IN_STOCK: ['transfer', 'adjust-inventory', 'view-detail', 'view-price-history', 'void-batch'],
+    LOW_STOCK: ['transfer', 'adjust-inventory', 'view-detail', 'view-price-history', 'void-batch'],
+    OUT_OF_STOCK: ['adjust-inventory', 'view-detail', 'view-price-history', 'void-batch'],
+    EXPIRED: ['adjust-inventory', 'view-detail', 'view-price-history', 'void-batch'],
+    EXPIRE: ['adjust-inventory', 'view-detail', 'view-price-history', 'void-batch'],
+    LOW: ['transfer', 'adjust-inventory', 'view-detail', 'view-price-history', 'void-batch'],
+    NORMAL: ['transfer', 'adjust-inventory', 'view-detail', 'view-price-history', 'void-batch'],
+    SUFFICIENT: ['transfer', 'adjust-inventory', 'view-detail', 'view-price-history', 'void-batch'],
+    SOLD_OUT: ['adjust-inventory', 'view-detail', 'view-price-history', 'void-batch'],
   },
   whInbound: {
     PENDING: ['edit', 'submit', 'delete', 'view-detail'],
@@ -143,6 +143,8 @@ export const WRITE_ACTION_IDS: ReadonlySet<string> = new Set([
   'convert-to-outsource',
   'transfer',
   'return',
+  'adjust-inventory',
+  'void-batch',
 ]);
 
 export function isWriteAction(id: string): boolean {
