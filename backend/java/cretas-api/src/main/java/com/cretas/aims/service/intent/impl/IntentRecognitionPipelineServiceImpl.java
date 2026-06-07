@@ -543,6 +543,17 @@ public class IntentRecognitionPipelineServiceImpl implements IntentRecognitionPi
                         log.info("[X1-Continuation] inherit prior intent: lastIntent={}, '{}' -> '{}'",
                                 context.getLastIntentCode(), userInput, augmented);
                         processedInput = augmented;
+                        // T120 fix: the continuation path augments processedInput (e.g. "它呢" →
+                        // "畅销菜品") but previously skipped store/dish coref resolution. When the
+                        // raw userInput contains a store/dish pronoun ("它", "那家店"), the slot must
+                        // still be injected into preprocessedQuery.resolvedReferences so ToolDispatch
+                        // can apply the entity filter. We reuse the same fallback helpers that the
+                        // normal (non-continuation) path already calls, passing the RAW userInput so
+                        // the pattern check sees the pronoun before any substitution.
+                        preprocessedQuery = ensureStoreReferenceResolved(userInput, processedInput,
+                                context, preprocessedQuery);
+                        preprocessedQuery = ensureDishReferenceResolved(userInput, processedInput,
+                                context, preprocessedQuery);
                     } else {
                         processedInput = performCoreferenceResolution(processedInput, context);
                         preprocessedQuery = queryPreprocessorService.preprocess(processedInput, context);
