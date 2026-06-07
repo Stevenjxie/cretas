@@ -12,15 +12,58 @@
       <div v-for="(msg, index) in messages" :key="index" :class="['message', msg.role]">
         <div class="message-content">{{ msg.content }}</div>
         <div v-if="msg.diffPreview?.length" class="diff-preview">
-          <div v-for="(diff, diffIndex) in msg.diffPreview" :key="diffIndex" class="diff-item">
-            <div class="diff-text">
-              <el-tag size="small" type="warning">{{ diff.type }}</el-tag>
-              <span>{{ diff.description }}</span>
-            </div>
-            <el-button size="small" type="primary" link @click="emitDraft(diff.params)">
-              应用到草稿
-            </el-button>
-          </div>
+          <template v-for="(diff, diffIndex) in msg.diffPreview" :key="diffIndex">
+            <!-- PRODUCT_WORK_PROCESS_DRAFT: render individual step cards -->
+            <template v-if="diff.type === 'PRODUCT_WORK_PROCESS_DRAFT' && isDraftParams(diff.params)">
+              <div class="draft-step-list">
+                <div
+                  v-for="(step, stepIndex) in getDraftSteps(diff.params)"
+                  :key="stepIndex"
+                  class="draft-step-card"
+                >
+                  <span class="step-order">{{ step.processOrder }}</span>
+                  <span class="step-name">{{ step.processName }}</span>
+                  <el-tag v-if="step.processCategory" size="small" type="info">
+                    {{ step.processCategory }}
+                  </el-tag>
+                  <span v-if="step.responsibleWorkerName" class="step-assignee">
+                    {{ step.responsibleWorkerName }}
+                  </span>
+                  <el-tag size="small" :type="step.operation === 'update' ? 'warning' : 'success'">
+                    {{ step.operation === 'update' ? '更新' : '新建' }}
+                  </el-tag>
+                </div>
+                <div v-if="getMissingProcesses(diff.params).length" class="missing-warning">
+                  <el-alert
+                    :title="`${getMissingProcesses(diff.params).length} 个工序未匹配，请先在工序管理中新建`"
+                    type="warning"
+                    :closable="false"
+                    show-icon
+                  />
+                </div>
+                <el-button
+                  class="apply-draft-btn"
+                  size="small"
+                  type="primary"
+                  @click="emitDraft(diff.params)"
+                >
+                  应用 {{ getDraftSteps(diff.params).length }} 道工序到草稿
+                </el-button>
+              </div>
+            </template>
+            <!-- Generic diff: single-line display -->
+            <template v-else>
+              <div class="diff-item">
+                <div class="diff-text">
+                  <el-tag size="small" type="warning">{{ diff.type }}</el-tag>
+                  <span>{{ diff.description }}</span>
+                </div>
+                <el-button size="small" type="primary" link @click="emitDraft(diff.params)">
+                  应用到草稿
+                </el-button>
+              </div>
+            </template>
+          </template>
         </div>
       </div>
     </div>
@@ -144,6 +187,37 @@ function scrollMessagesToBottom(): void {
 function emitDraft(draft: Record<string, unknown>): void {
   emit('applyDraft', draft);
 }
+
+interface DraftStep {
+  operation: string;
+  productWorkProcessId: unknown;
+  workProcessId: string;
+  processName: string;
+  processCategory: string | null;
+  unit: string | null;
+  processOrder: number;
+  responsibleWorkerId: number | null;
+  responsibleWorkerName: string | null;
+}
+
+interface MissingProcess {
+  name: string;
+  reason: string;
+}
+
+function isDraftParams(params: Record<string, unknown>): boolean {
+  return Array.isArray(params.draft);
+}
+
+function getDraftSteps(params: Record<string, unknown>): DraftStep[] {
+  if (!Array.isArray(params.draft)) return [];
+  return params.draft as DraftStep[];
+}
+
+function getMissingProcesses(params: Record<string, unknown>): MissingProcess[] {
+  if (!Array.isArray(params.missingProcesses)) return [];
+  return params.missingProcesses as MissingProcess[];
+}
 </script>
 
 <style scoped>
@@ -180,7 +254,7 @@ function emitDraft(draft: Record<string, unknown>): void {
   flex: 1;
   flex-direction: column;
   gap: 8px;
-  max-height: 220px;
+  max-height: 400px;
   overflow-y: auto;
 }
 
@@ -231,6 +305,55 @@ function emitDraft(draft: Record<string, unknown>): void {
   align-items: center;
   gap: 6px;
   min-width: 0;
+}
+
+/* PRODUCT_WORK_PROCESS_DRAFT step card renderer */
+.draft-step-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.draft-step-card {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  border: 1px solid var(--el-border-color-light);
+  border-radius: 6px;
+  background: var(--el-bg-color);
+  font-size: 12px;
+}
+
+.step-order {
+  min-width: 20px;
+  font-weight: 700;
+  color: var(--el-color-primary);
+  text-align: center;
+}
+
+.step-name {
+  flex: 1;
+  font-weight: 500;
+  color: var(--el-text-color-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.step-assignee {
+  font-size: 11px;
+  color: var(--el-text-color-secondary);
+}
+
+.missing-warning {
+  margin-top: 4px;
+}
+
+.apply-draft-btn {
+  margin-top: 8px;
+  align-self: flex-start;
 }
 
 .chat-input {
