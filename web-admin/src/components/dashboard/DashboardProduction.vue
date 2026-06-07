@@ -58,10 +58,10 @@ const statCards = computed(() => [
 ]);
 
 // 快捷操作
+// T125: 转换率配置入口已移除 (后端 API/fallback 仍保留, 维护路径: BOM成本管理 → 转换率 tab)
 const quickActions = [
   { title: '生产批次', icon: DataLine, route: '/production/batches', color: '#409eff' },
-  { title: '生产计划', icon: Calendar, route: '/production/plans', color: '#67c23a' },
-  { title: '转换率配置', icon: Document, route: '/production/conversions', color: '#e6a23c' }
+  { title: '生产计划', icon: Calendar, route: '/production/plans', color: '#67c23a' }
 ];
 
 onMounted(async () => {

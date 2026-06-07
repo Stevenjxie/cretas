@@ -164,14 +164,7 @@ export function FAManagementScreen() {
               color="#eb2f96"
               onPress={() => navigation.navigate('MaterialTypeManagement')}
             />
-            {!isRestaurantMode && (
-            <GridItem
-              icon="swap-horizontal"
-              title={t('management.conversionRate')}
-              color="#722ed1"
-              onPress={() => navigation.navigate('ConversionRate')}
-            />
-            )}
+            {/* T125: 転换率配置入口已移除 — 后端 API/fallback 仍保留 (F001等BomExpansionService依赖) */}
             <GridItem
               icon="cog-transfer-outline"
               title={t('management.workProcesses', '工序管理')}

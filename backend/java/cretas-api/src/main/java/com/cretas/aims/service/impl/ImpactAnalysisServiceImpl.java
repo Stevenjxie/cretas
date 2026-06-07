@@ -9,7 +9,6 @@ import com.cretas.aims.repository.EquipmentRepository;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.ProductionPlanRepository;
 import com.cretas.aims.repository.TimeClockRecordRepository;
-import com.cretas.aims.repository.ConversionRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.service.ImpactAnalysisService;
 import lombok.RequiredArgsConstructor;
@@ -49,7 +48,6 @@ public class ImpactAnalysisServiceImpl implements ImpactAnalysisService {
     private final MaterialBatchRepository materialBatchRepository;
     private final EquipmentRepository equipmentRepository;
     private final TimeClockRecordRepository timeClockRecordRepository;
-    private final ConversionRepository conversionRepository;
     private final ProductTypeRepository productTypeRepository;
 
     // 权重配置
