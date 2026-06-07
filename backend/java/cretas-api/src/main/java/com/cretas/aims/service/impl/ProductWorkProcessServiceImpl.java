@@ -2,9 +2,11 @@ package com.cretas.aims.service.impl;
 
 import com.cretas.aims.dto.ProductWorkProcessDTO;
 import com.cretas.aims.entity.ProductWorkProcess;
+import com.cretas.aims.entity.ProductWorkProcessAssignee;
 import com.cretas.aims.entity.WorkProcess;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.exception.ResourceNotFoundException;
+import com.cretas.aims.repository.ProductWorkProcessAssigneeRepository;
 import com.cretas.aims.repository.ProductWorkProcessRepository;
 import com.cretas.aims.repository.WorkProcessRepository;
 import com.cretas.aims.service.ProductWorkProcessService;
@@ -14,8 +16,10 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
@@ -26,6 +30,7 @@ public class ProductWorkProcessServiceImpl implements ProductWorkProcessService 
     private static final Logger log = LoggerFactory.getLogger(ProductWorkProcessServiceImpl.class);
     private final ProductWorkProcessRepository repository;
     private final WorkProcessRepository workProcessRepository;
+    private final ProductWorkProcessAssigneeRepository assigneeRepository;
 
     @Override
     @Transactional
@@ -42,9 +47,21 @@ public class ProductWorkProcessServiceImpl implements ProductWorkProcessService 
         workProcessRepository.findByFactoryIdAndId(factoryId, dto.getWorkProcessId())
                 .orElseThrow(() -> new ResourceNotFoundException("WorkProcess", "id", dto.getWorkProcessId()));
 
+        // T121: if assigneeWorkerIds provided, use assignees[0] as primary; else fall back to responsibleWorkerId field.
+        List<Long> assignees = dto.getAssigneeWorkerIds();
+        boolean hasAssignees = assignees != null && !assignees.isEmpty();
+
         // Normalize -1L sentinel to null so it never lands in DB via create
         Long rw = dto.getResponsibleWorkerId();
-        Long normalizedRw = (rw != null && rw == -1L) ? null : rw;
+        Long normalizedRw;
+        if (hasAssignees) {
+            // multi-assignee path: primary = assignees[0]
+            normalizedRw = assignees.get(0);
+        } else if (rw != null && rw == -1L) {
+            normalizedRw = null;
+        } else {
+            normalizedRw = rw;
+        }
 
         ProductWorkProcess entity = ProductWorkProcess.builder()
                 .factoryId(factoryId)
@@ -57,7 +74,11 @@ public class ProductWorkProcessServiceImpl implements ProductWorkProcessService 
                 .build();
 
         ProductWorkProcess saved = repository.save(entity);
-        return toDTO(saved, null);
+
+        // T121: upsert join table
+        upsertAssignees(saved.getId(), hasAssignees ? assignees : toSingletonList(normalizedRw));
+
+        return toDTO(saved, null, loadAssigneeIds(saved.getId()));
     }
 
     @Override
@@ -75,8 +96,12 @@ public class ProductWorkProcessServiceImpl implements ProductWorkProcessService 
                 .stream()
                 .collect(Collectors.toMap(WorkProcess::getId, Function.identity()));
 
+        // T121: pre-load all assignees for these product_work_process ids in one query
+        List<Long> pwpIds = associations.stream().map(ProductWorkProcess::getId).collect(Collectors.toList());
+        Map<Long, List<Long>> assigneeMap = loadAssigneeIdsForAll(pwpIds);
+
         return associations.stream()
-                .map(a -> toDTO(a, wpMap.get(a.getWorkProcessId())))
+                .map(a -> toDTO(a, wpMap.get(a.getWorkProcessId()), assigneeMap.getOrDefault(a.getId(), List.of())))
                 .collect(Collectors.toList());
     }
 
@@ -91,17 +116,37 @@ public class ProductWorkProcessServiceImpl implements ProductWorkProcessService 
         if (dto.getUnitOverride() != null) entity.setUnitOverride(dto.getUnitOverride());
         if (dto.getEstimatedMinutesOverride() != null) entity.setEstimatedMinutesOverride(dto.getEstimatedMinutesOverride());
 
-        // Three-state responsibleWorkerId:
-        //   null        → no change (partial update — leave existing value alone)
-        //   -1L         → clear (set null; sentinel must never persist as a real user id)
-        //   positive id → set
-        Long rw = dto.getResponsibleWorkerId();
-        if (rw != null) {
-            entity.setResponsibleWorkerId(rw == -1L ? null : rw);
+        // T121: if assigneeWorkerIds provided, they govern responsible_worker_id + join table.
+        List<Long> assignees = dto.getAssigneeWorkerIds();
+        boolean hasAssignees = assignees != null && !assignees.isEmpty();
+
+        if (hasAssignees) {
+            // multi-assignee update: primary = assignees[0], update join table
+            entity.setResponsibleWorkerId(assignees.get(0));
+        } else {
+            // Single-value path (backward-compat):
+            // Three-state responsibleWorkerId:
+            //   null        → no change (partial update — leave existing value alone)
+            //   -1L         → clear (set null; sentinel must never persist as a real user id)
+            //   positive id → set
+            Long rw = dto.getResponsibleWorkerId();
+            if (rw != null) {
+                entity.setResponsibleWorkerId(rw == -1L ? null : rw);
+            }
         }
 
         ProductWorkProcess saved = repository.save(entity);
-        return toDTO(saved, null);
+
+        // T121: upsert join table when assignees explicitly provided
+        if (hasAssignees) {
+            upsertAssignees(saved.getId(), assignees);
+        } else if (dto.getResponsibleWorkerId() != null) {
+            // Single-value changed → sync join table to reflect new primary
+            Long effectiveRw = dto.getResponsibleWorkerId() == -1L ? null : dto.getResponsibleWorkerId();
+            upsertAssignees(saved.getId(), toSingletonList(effectiveRw));
+        }
+
+        return toDTO(saved, null, loadAssigneeIds(saved.getId()));
     }
 
     @Override
@@ -126,7 +171,12 @@ public class ProductWorkProcessServiceImpl implements ProductWorkProcessService 
         }
     }
 
+    /** Legacy overload — called from batchSort / delete (no assignee enrichment needed). */
     private ProductWorkProcessDTO toDTO(ProductWorkProcess entity, WorkProcess wp) {
+        return toDTO(entity, wp, List.of());
+    }
+
+    private ProductWorkProcessDTO toDTO(ProductWorkProcess entity, WorkProcess wp, List<Long> assigneeIds) {
         ProductWorkProcessDTO.ProductWorkProcessDTOBuilder builder = ProductWorkProcessDTO.builder()
                 .id(entity.getId())
                 .productTypeId(entity.getProductTypeId())
@@ -135,6 +185,7 @@ public class ProductWorkProcessServiceImpl implements ProductWorkProcessService 
                 .unitOverride(entity.getUnitOverride())
                 .estimatedMinutesOverride(entity.getEstimatedMinutesOverride())
                 .responsibleWorkerId(entity.getResponsibleWorkerId())
+                .assigneeWorkerIds(assigneeIds.isEmpty() ? null : assigneeIds)
                 .isActive(entity.getIsActive())
                 .createdAt(entity.getCreatedAt());
 
@@ -146,5 +197,69 @@ public class ProductWorkProcessServiceImpl implements ProductWorkProcessService 
         }
 
         return builder.build();
+    }
+
+    // ── T121 helpers ────────────────────────────────────────────────────────
+
+    /**
+     * Upsert join table: soft-delete rows not in {@code desiredWorkerIds}; add missing ones.
+     * If {@code desiredWorkerIds} is empty (cleared), soft-delete all existing rows.
+     */
+    @Transactional
+    protected void upsertAssignees(Long pwpId, List<Long> desiredWorkerIds) {
+        List<Long> desired = desiredWorkerIds == null ? List.of() : desiredWorkerIds;
+        Set<Long> desiredSet = new java.util.HashSet<>(desired);
+
+        // Soft-delete rows not in desired list
+        List<ProductWorkProcessAssignee> existing = assigneeRepository.findByProductWorkProcessId(pwpId);
+        for (ProductWorkProcessAssignee row : existing) {
+            if (!desiredSet.contains(row.getWorkerId())) {
+                row.softDelete();
+                assigneeRepository.save(row);
+            }
+        }
+
+        // Add missing rows
+        Set<Long> existingWorkerIds = existing.stream()
+                .map(ProductWorkProcessAssignee::getWorkerId)
+                .collect(Collectors.toSet());
+        for (Long workerId : desired) {
+            if (!existingWorkerIds.contains(workerId)) {
+                assigneeRepository.save(ProductWorkProcessAssignee.builder()
+                        .productWorkProcessId(pwpId)
+                        .workerId(workerId)
+                        .build());
+            }
+        }
+    }
+
+    /** Load active assignee worker_ids for a single PWP row. */
+    private List<Long> loadAssigneeIds(Long pwpId) {
+        return assigneeRepository.findByProductWorkProcessId(pwpId).stream()
+                .map(ProductWorkProcessAssignee::getWorkerId)
+                .collect(Collectors.toList());
+    }
+
+    /**
+     * Batch-load assignee worker_ids for multiple PWP ids (avoids N+1).
+     * Returns map: pwpId → list of worker_ids.
+     */
+    private Map<Long, List<Long>> loadAssigneeIdsForAll(List<Long> pwpIds) {
+        if (pwpIds.isEmpty()) return Map.of();
+        // Fetch all assignees for the given pwp ids in one query via Spring Data findAll + filter.
+        // For small lists this is fine; could be a @Query for very large lists.
+        Map<Long, List<Long>> result = new java.util.HashMap<>();
+        for (Long pwpId : pwpIds) {
+            List<Long> ids = assigneeRepository.findByProductWorkProcessId(pwpId).stream()
+                    .map(ProductWorkProcessAssignee::getWorkerId)
+                    .collect(Collectors.toList());
+            if (!ids.isEmpty()) result.put(pwpId, ids);
+        }
+        return result;
+    }
+
+    /** Helper: wrap a nullable Long into a singleton list (empty if null). */
+    private static List<Long> toSingletonList(Long v) {
+        return v == null ? List.of() : List.of(v);
     }
 }

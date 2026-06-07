@@ -28,6 +28,7 @@ import com.cretas.aims.repository.SemiFinishedInventoryRepository;
 import com.cretas.aims.repository.WorkProcessRepository;
 import com.cretas.aims.entity.recipe.ProcessMaterialRecipe;
 import com.cretas.aims.repository.lineage.BatchLineageEdgeRepository;
+import com.cretas.aims.repository.ProductWorkProcessAssigneeRepository;
 import com.cretas.aims.repository.recipe.ProcessMaterialRecipeRepository;
 import com.cretas.aims.repository.workprocess.WorkProcessTaskRepository;
 import com.cretas.aims.service.ProcessingService;
@@ -86,6 +87,7 @@ public class YieldReportServiceImpl implements YieldReportService {
     private final ObjectMapper objectMapper;
     private final ProcessMaterialRecipeRepository recipeRepository;
     private final WipInventoryService wipInventoryService;
+    private final ProductWorkProcessAssigneeRepository pwpAssigneeRepository;
 
     @Override
     @Transactional
@@ -108,9 +110,21 @@ public class YieldReportServiceImpl implements YieldReportService {
         WorkProcessTask t = taskRepo.findByFactoryIdAndId(factoryId, req.getWorkProcessTaskId())
                 .orElseThrow(() -> new BusinessException(404, "工序任务不存在: " + req.getWorkProcessTaskId()));
 
-        // M3: 归属鉴权 — 操作员只能报自己被指派的工序任务; 主管可代报任意任务。
+        // T121 归属鉴权 — 操作员必须是工序 join 表中的负责人之一 (或兜底 responsible_worker_id); 主管可代报任意任务。
         boolean isSupervisor = ReportAuthGuard.isSupervisor(ReportAuthGuard.currentRole());
-        ReportAuthGuard.assertCanReport(t.getAssignedTo(), workerId, isSupervisor);
+        if (t.getProductWorkProcessId() != null) {
+            // T121: load multi-assignee set from join table (fallback to assigned_to for old tasks)
+            java.util.List<Long> joinAssigneeIds = pwpAssigneeRepository
+                    .findByProductWorkProcessId(t.getProductWorkProcessId())
+                    .stream()
+                    .map(a -> a.getWorkerId())
+                    .collect(java.util.stream.Collectors.toList());
+            // Determine the responsible_worker_id from the PWP row (task.assignedTo is the primary)
+            ReportAuthGuard.assertCanReport(t.getAssignedTo(), joinAssigneeIds, workerId, isSupervisor);
+        } else {
+            // Legacy path: no productWorkProcessId → single-value check
+            ReportAuthGuard.assertCanReport(t.getAssignedTo(), workerId, isSupervisor);
+        }
 
         // 三阶段字段隔离 (防御: 防止误填的非本阶段字段污染同 task 跨报工累加)。
         // "生效值": 阶段决定哪些请求字段被采纳, 其余强制 null。legacy (null) 全采纳 (行为完全不变)。

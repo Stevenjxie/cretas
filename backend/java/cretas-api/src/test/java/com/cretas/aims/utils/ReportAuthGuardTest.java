@@ -131,4 +131,77 @@ class ReportAuthGuardTest {
                     assertThat(be.getActionHint()).isNotNull().contains("责任小组长");
                 });
     }
+
+    // ==================== T121 多人负责 assertCanReport(responsibleWorkerId, joinTableAssignees, workerId, isSupervisor) ====================
+
+    @Test
+    @DisplayName("T121-01: join 表包含 workerId → 允许报工 (任一成员均可)")
+    void assertCanReport_multiAssignee_workerInList_allows() {
+        assertThatCode(() -> ReportAuthGuard.assertCanReport(1001L, java.util.List.of(1001L, 1002L, 1003L), 1002L, false))
+                .doesNotThrowAnyException();
+    }
+
+    @Test
+    @DisplayName("T121-02: join 表不含 workerId, 非主管 → 403")
+    void assertCanReport_multiAssignee_workerNotInList_nonSupervisor_throws403() {
+        assertThatThrownBy(() -> ReportAuthGuard.assertCanReport(1001L, java.util.List.of(1001L, 1002L), 9999L, false))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(ex -> {
+                    BusinessException be = (BusinessException) ex;
+                    assertThat(be.getCode()).isEqualTo(403);
+                    assertThat(be.getMessage()).contains("无权报工");
+                });
+    }
+
+    @Test
+    @DisplayName("T121-03: join 表不含 workerId, 但是主管 → 豁免允许")
+    void assertCanReport_multiAssignee_workerNotInList_supervisor_allows() {
+        assertThatCode(() -> ReportAuthGuard.assertCanReport(1001L, java.util.List.of(1001L, 1002L), 9999L, true))
+                .doesNotThrowAnyException();
+    }
+
+    @Test
+    @DisplayName("T121-04: join 表为空, responsibleWorkerId=workerId → 兜底允许")
+    void assertCanReport_emptyJoinTable_fallbackToResponsibleWorkerId_self_allows() {
+        assertThatCode(() -> ReportAuthGuard.assertCanReport(1615L, java.util.List.of(), 1615L, false))
+                .doesNotThrowAnyException();
+    }
+
+    @Test
+    @DisplayName("T121-05: join 表为空, responsibleWorkerId=他人, 非主管 → 兜底 403")
+    void assertCanReport_emptyJoinTable_fallbackToResponsibleWorkerId_other_throws403() {
+        assertThatThrownBy(() -> ReportAuthGuard.assertCanReport(1616L, java.util.List.of(), 1615L, false))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(ex -> assertThat(((BusinessException) ex).getCode()).isEqualTo(403));
+    }
+
+    @Test
+    @DisplayName("T121-06: join 表和 responsibleWorkerId 均为空/null → 未指派, 任何人均可 (开放)")
+    void assertCanReport_noAssigneeNoPrimary_allowsAnyone() {
+        assertThatCode(() -> ReportAuthGuard.assertCanReport(null, java.util.List.of(), 9999L, false))
+                .doesNotThrowAnyException();
+    }
+
+    @Test
+    @DisplayName("T121-07: buildPermittedSet — join 表非空时忽略 responsibleWorkerId")
+    void buildPermittedSet_joinTableNonEmpty_ignoresResponsibleWorkerId() {
+        // responsibleWorkerId=1001 but joinTable=[1002,1003] → permitted set should be {1002,1003}
+        java.util.Set<Long> permitted = ReportAuthGuard.buildPermittedSet(1001L, java.util.List.of(1002L, 1003L));
+        assertThat(permitted).containsExactlyInAnyOrder(1002L, 1003L);
+        assertThat(permitted).doesNotContain(1001L);
+    }
+
+    @Test
+    @DisplayName("T121-08: buildPermittedSet — join 表为空时回退到 responsibleWorkerId")
+    void buildPermittedSet_emptyJoinTable_fallsBackToResponsibleWorkerId() {
+        java.util.Set<Long> permitted = ReportAuthGuard.buildPermittedSet(1001L, java.util.List.of());
+        assertThat(permitted).containsExactly(1001L);
+    }
+
+    @Test
+    @DisplayName("T121-09: buildPermittedSet — 全空 → 空集合 (未指派)")
+    void buildPermittedSet_bothNull_returnsEmpty() {
+        java.util.Set<Long> permitted = ReportAuthGuard.buildPermittedSet(null, null);
+        assertThat(permitted).isEmpty();
+    }
 }
