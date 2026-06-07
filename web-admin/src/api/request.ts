@@ -382,6 +382,41 @@ request.interceptors.response.use(
     } else {
       message = error.message;
     }
+    // FK_BLOCK 防呆导航 (fool-proof-design Rule 5: dead-end → 导航)
+    // 后端 DELETE FK violation 命中 FK_MODULE_MAP → status=409 + errorCode=FK_BLOCK
+    // + message=中文 + actionHint=前往XX + hintTarget=targetRoute
+    // 用 ElMessageBox.confirm 询问用户是否跳转，确认则带 _returnTo 参数导航
+    const richAll = (error.response?.data as unknown as Record<string, string | null>) || {};
+    if (status === 409 && richAll.errorCode === 'FK_BLOCK' && !originalRequest._silent) {
+      const fkMessage = (error.response?.data?.message as string) || '无法删除: 该数据被其他记录引用';
+      const fkHint = richAll.actionHint || '请先处理引用该数据的相关记录';
+      const targetRoute = richAll.hintTarget;
+      try {
+        const { ElMessageBox } = await import('element-plus');
+        await ElMessageBox.confirm(
+          `${fkMessage}\n\n${fkHint}`,
+          '删除被阻止',
+          {
+            confirmButtonText: '前往处理',
+            cancelButtonText: '稍后处理',
+            distinguishCancelAndClose: true,
+            type: 'warning',
+          }
+        );
+        // 用户确认 → 跳转目标模块，携带 _returnTo 参数
+        if (targetRoute) {
+          const router = await getRouter();
+          const currentRoute = router.currentRoute.value;
+          const returnTo = encodeURIComponent(currentRoute.fullPath);
+          const separator = targetRoute.includes('?') ? '&' : '?';
+          router.push(`${targetRoute}${separator}_returnTo=${returnTo}`);
+        }
+      } catch {
+        // 用户选择「稍后处理」或关闭弹窗 — 静默
+      }
+      return Promise.reject(new ApiError(fkMessage, 'FK_BLOCK', 409));
+    }
+
     // 409 differentiation (R24 P2 real-window finding):
     //   - Optimistic lock 409: GlobalExceptionHandler emits {code:409, message:"数据已被其他用户修改..."}
     //     with NO actionHint. Callers (suppliers/customers/sales-orders/DynamicModulePage)
