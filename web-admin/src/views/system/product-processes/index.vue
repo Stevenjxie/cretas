@@ -349,6 +349,24 @@ const availableProcesses = computed(() => {
   return allProcesses.value.filter(p => !linkedIds.has(p.id));
 });
 
+// Pool category filter (筛选可添加工序按类型: 前处理/加工/包装...)
+const poolCategoryFilter = ref('');
+
+// Distinct categories present in the available pool
+const poolCategories = computed(() => {
+  const set = new Set<string>();
+  for (const p of availableProcesses.value) {
+    if (p.processCategory) set.add(p.processCategory);
+  }
+  return Array.from(set);
+});
+
+// Available pool filtered by selected category
+const filteredAvailableProcesses = computed(() => {
+  if (!poolCategoryFilter.value) return availableProcesses.value;
+  return availableProcesses.value.filter(p => p.processCategory === poolCategoryFilter.value);
+});
+
 const selectedProductName = computed(() => {
   return products.value.find(p => p.id === selectedProductId.value)?.name || '';
 });
@@ -820,13 +838,27 @@ async function handleRefresh() {
 
           <!-- ───── RIGHT column: 可添加工序池 ───── -->
           <div class="pool-column" v-if="canWrite">
-            <div v-if="availableProcesses.length === 0" class="empty-hint">
-              <el-text type="info" size="small">所有工序已关联，或尚未创建工序</el-text>
+            <div class="pool-filter">
+              <el-select
+                v-model="poolCategoryFilter"
+                placeholder="全部类型"
+                clearable
+                size="small"
+                style="width: 100%"
+              >
+                <el-option label="全部类型" value="" />
+                <el-option v-for="cat in poolCategories" :key="cat" :label="cat" :value="cat" />
+              </el-select>
             </div>
-            <div v-for="wp in availableProcesses" :key="wp.id" class="available-item">
+            <div v-if="filteredAvailableProcesses.length === 0" class="empty-hint">
+              <el-text type="info" size="small">
+                {{ availableProcesses.length === 0 ? '所有工序已关联，或尚未创建工序' : '该类型下暂无可添加工序' }}
+              </el-text>
+            </div>
+            <div v-for="wp in filteredAvailableProcesses" :key="wp.id" class="available-item">
               <div class="available-info">
                 <span class="available-name">{{ wp.processName }}</span>
-                <el-tag v-if="wp.processCategory" size="small" type="info" style="margin-left: 6px">{{ wp.processCategory }}</el-tag>
+                <el-tag v-if="wp.processCategory" size="small" type="info">{{ wp.processCategory }}</el-tag>
                 <span class="available-unit">{{ wp.unit }}</span>
               </div>
               <el-button type="primary" text size="small" :icon="Plus" @click="handleAdd(wp)">添加</el-button>
@@ -853,7 +885,7 @@ async function handleRefresh() {
   gap: 16px;
   margin-top: 16px;
 }
-.product-panel { width: 280px; flex-shrink: 0; }
+.product-panel { width: 340px; flex-shrink: 0; }
 .process-panel { flex: 1; min-width: 0; }
 
 .card-header { display: flex; justify-content: space-between; align-items: center; }
@@ -871,7 +903,7 @@ async function handleRefresh() {
   font-size: 14px;
 }
 .panel-title-right {
-  width: 240px;
+  width: 320px;
   flex-shrink: 0;
   font-weight: 600;
   font-size: 14px;
@@ -908,11 +940,21 @@ async function handleRefresh() {
 
 /* Right pool column */
 .pool-column {
-  width: 240px;
+  width: 320px;
   flex-shrink: 0;
   padding-left: 16px;
   overflow-y: auto;
   max-height: 70vh;
+}
+
+/* Pool category filter (sticky on top while scrolling) */
+.pool-filter {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: #fff;
+  padding-bottom: 8px;
+  margin-bottom: 4px;
 }
 
 /* Linked item row (C1 drag-enabled) */
@@ -976,9 +1018,9 @@ async function handleRefresh() {
   border-bottom: 1px solid #f0f0f0;
 }
 .available-item:last-child { border-bottom: none; }
-.available-info { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; min-width: 0; }
-.available-name { font-size: 13px; color: #333; }
-.available-unit { font-size: 12px; color: #909399; margin-left: 4px; }
+.available-info { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; }
+.available-name { font-size: 13px; color: #333; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.available-unit { font-size: 12px; color: #909399; flex-shrink: 0; }
 
 .empty-state { padding: 20px 0; }
 .empty-hint { padding: 12px; text-align: center; }
