@@ -14,7 +14,6 @@ import org.springframework.stereotype.Component;
 
 import java.text.Normalizer;
 import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -37,7 +36,9 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class ProductWorkProcessConfigTool extends AbstractBusinessTool {
 
-    private static final Pattern SEPARATOR = Pattern.compile("[，,。；;、\\n]+");
+    // Separators: Chinese/ASCII punctuation + Chinese arrow (→) + ASCII arrow (->)
+    // Spaces around arrows are consumed so "解冻 → 分切" splits cleanly.
+    private static final Pattern SEPARATOR = Pattern.compile("\\s*[，,。；;、\\n→]+\\s*|\\s*->\\s*");
     private static final Pattern STEP_PREFIX = Pattern.compile(
             "^(第?[一二三四五六七八九十百\\d]+步|步骤[一二三四五六七八九十百\\d]+|\\d+[.)、])");
     private static final Pattern ASSIGNEE_SUFFIX = Pattern.compile(
@@ -118,9 +119,15 @@ public class ProductWorkProcessConfigTool extends AbstractBusinessTool {
         }
 
         // B-3: fail-soft apply — collect per-step errors instead of aborting mid-write
+        // E2: skip "new" steps (workProcessId==null) — those need the process to be
+        // created in the catalog first before they can be linked to a product.
         List<ProductWorkProcessDTO> applied = new ArrayList<>();
         List<String> warnings = new ArrayList<>();
         for (DraftStep step : plan.steps()) {
+            if (step.workProcessId() == null) {
+                warnings.add("工序「" + step.processName() + "」尚未在工序管理中创建，无法写入，请先新建该工序");
+                continue;
+            }
             try {
                 applied.add(applyStep(factoryId, plan.productTypeId(), step));
             } catch (Exception e) {
@@ -164,41 +171,182 @@ public class ProductWorkProcessConfigTool extends AbstractBusinessTool {
         List<ProductWorkProcessDTO> existing =
                 productWorkProcessService.listByProduct(factoryId, productTypeId);
 
-        List<MatchedProcess> matchedProcesses = matchProcesses(message, catalog);
+        // E1: Deduplicated catalog — when multiple entries have the same normalized name
+        // (e.g. "焯水" appears 3 times across different product-specific catalogs),
+        // keep the entry with the smallest sort_order to break ties deterministically.
+        List<WorkProcessDTO> deduplicatedCatalog = deduplicateCatalogByName(catalog);
+
+        // E2: Segment-driven matching: split user input into ordered segments first,
+        // then find the best catalog match for each segment.  This guarantees exactly
+        // N input segments → N draft steps, preventing the old catalog-driven loop that
+        // produced duplicate/collapsed steps when multiple catalog entries matched the
+        // same position in the message (e.g. "焯水" ×3 from three catalog rows all
+        // matching the single "焯水" in the input).
+        List<String> inputSegments = splitInputSegments(message);
+        List<SegmentMatch> segmentMatches = matchSegmentsToCatalog(inputSegments, deduplicatedCatalog);
+
         Map<String, ProductWorkProcessDTO> existingByProcessId = existing.stream()
                 .collect(Collectors.toMap(
                         ProductWorkProcessDTO::getWorkProcessId,
                         item -> item,
                         (left, right) -> left));
 
-        String normalizedMessage = normalize(message);
         List<DraftStep> steps = new ArrayList<>();
-        for (int i = 0; i < matchedProcesses.size(); i++) {
-            MatchedProcess matched = matchedProcesses.get(i);
-            // B-2: compute right boundary = start of next matched process (or end of string)
-            // so assignee search for step N cannot bleed into step N+1's text
-            int nextBoundary;
-            if (i + 1 < matchedProcesses.size()) {
-                nextBoundary = matchedProcesses.get(i + 1).startIndex();
+        List<Map<String, Object>> missing = new ArrayList<>();
+        Set<String> seenMissing = new HashSet<>();
+
+        for (int i = 0; i < segmentMatches.size(); i++) {
+            SegmentMatch sm = segmentMatches.get(i);
+            // B-2 preserved: assignee search bounded by the raw segment text only
+            UserDTO assignee = matchAssigneeInSegment(sm.rawSegment(), operators);
+
+            if (sm.catalogEntry() == null) {
+                // Not found in catalog — surface as missing/new process
+                String candidate = sm.rawSegment().trim();
+                String norm = normalize(candidate);
+                if (!norm.isBlank() && norm.length() >= 2 && seenMissing.add(norm)) {
+                    missing.add(Map.of(
+                            "name", candidate,
+                            "reason", "本厂工序 catalog 中未找到，请先去工序管理新建"));
+                }
+                // Still include a placeholder step so the UI knows this input was parsed
+                steps.add(new DraftStep(
+                        "new",
+                        null,
+                        null,
+                        candidate,
+                        null,
+                        null,
+                        i + 1,
+                        assignee != null ? assignee.getId() : null,
+                        assignee != null ? displayUserName(assignee) : null));
             } else {
-                nextBoundary = normalizedMessage.length();
+                ProductWorkProcessDTO existingRow = existingByProcessId.get(sm.catalogEntry().getId());
+                steps.add(new DraftStep(
+                        existingRow != null ? "update" : "create",
+                        existingRow != null ? existingRow.getId() : null,
+                        sm.catalogEntry().getId(),
+                        sm.catalogEntry().getProcessName(),
+                        sm.catalogEntry().getProcessCategory(),
+                        sm.catalogEntry().getUnit(),
+                        i + 1,
+                        assignee != null ? assignee.getId() : null,
+                        assignee != null ? displayUserName(assignee) : null));
             }
-            UserDTO assignee = matchAssignee(normalizedMessage, matched, operators, nextBoundary);
-            ProductWorkProcessDTO existingRow = existingByProcessId.get(matched.workProcess().getId());
-            steps.add(new DraftStep(
-                    existingRow != null ? "update" : "create",
-                    existingRow != null ? existingRow.getId() : null,
-                    matched.workProcess().getId(),
-                    matched.workProcess().getProcessName(),
-                    matched.workProcess().getProcessCategory(),
-                    matched.workProcess().getUnit(),
-                    i + 1,
-                    assignee != null ? assignee.getId() : null,
-                    assignee != null ? displayUserName(assignee) : null));
         }
 
-        List<Map<String, Object>> missing = detectMissingProcessNames(message, matchedProcesses);
-        return new ProductProcessPlan(productTypeId, steps, missing);
+        // E3: Post-processing duplicate detection — if the draft still contains duplicate
+        // processName values (which can only happen when the user genuinely typed the same
+        // step twice), surface a warning rather than silently delivering a confusing draft.
+        List<String> duplicateWarnings = detectDuplicateStepNames(steps);
+
+        return new ProductProcessPlan(productTypeId, steps, missing, duplicateWarnings);
+    }
+
+    /**
+     * E1: Deduplicate catalog entries by normalized process name.
+     * When the factory has the same process name in multiple product-specific catalogs
+     * (e.g. "焯水" for 猪舌, 牛腱 and 掌中宝 are three separate rows), keep only the
+     * entry with the smallest sort_order so downstream logic sees each name exactly once.
+     */
+    private List<WorkProcessDTO> deduplicateCatalogByName(List<WorkProcessDTO> catalog) {
+        Map<String, WorkProcessDTO> byNormalizedName = new LinkedHashMap<>();
+        for (WorkProcessDTO wp : catalog) {
+            if (wp.getId() == null || wp.getProcessName() == null) continue;
+            String key = normalize(wp.getProcessName());
+            if (key.isBlank()) continue;
+            byNormalizedName.merge(key, wp, (existing, incoming) -> {
+                // Keep the one with the smaller sort_order (treat null as MAX)
+                int existingOrder = existing.getSortOrder() != null ? existing.getSortOrder() : Integer.MAX_VALUE;
+                int incomingOrder = incoming.getSortOrder() != null ? incoming.getSortOrder() : Integer.MAX_VALUE;
+                return incomingOrder < existingOrder ? incoming : existing;
+            });
+        }
+        return new ArrayList<>(byNormalizedName.values());
+    }
+
+    /**
+     * E2 helper: split the user's natural-language message into ordered segments.
+     * Handles arrow separators (→, ->) as well as the original Chinese/ASCII punctuation.
+     */
+    private List<String> splitInputSegments(String message) {
+        List<String> segments = new ArrayList<>();
+        for (String raw : SEPARATOR.split(message)) {
+            String cleaned = cleanupCandidate(raw);
+            if (!cleaned.isBlank()) {
+                segments.add(raw.trim()); // keep raw for assignee search; cleaned is for matching
+            }
+        }
+        return segments;
+    }
+
+    /**
+     * E2: For each user-input segment, find the best catalog match.
+     * Matching priority:
+     *   1. Exact normalized equality (e.g. "焯水" == "焯水")
+     *   2. Catalog name is fully contained in the segment (e.g. "滚揉(保水)" ⊆ "二次滚揉保水")
+     *      — only if the catalog entry's normalized name appears as a COMPLETE token in the
+     *      segment, not as an arbitrary substring (prevents "焯水" matching in "保水").
+     *   3. Segment is fully contained in the catalog name (e.g. "气调" ⊆ "气调(分切装盒)")
+     * If no match, catalogEntry is null → surfaces as missing/new.
+     */
+    private List<SegmentMatch> matchSegmentsToCatalog(
+            List<String> inputSegments, List<WorkProcessDTO> catalog) {
+        List<SegmentMatch> results = new ArrayList<>();
+        for (String rawSegment : inputSegments) {
+            String cleaned = cleanupCandidate(rawSegment);
+            String normSegment = normalize(cleaned.isBlank() ? rawSegment : cleaned);
+
+            WorkProcessDTO best = null;
+            int bestPriority = Integer.MAX_VALUE;
+            int bestNameLen = 0; // among equal priority, prefer longer (more specific) name
+
+            for (WorkProcessDTO wp : catalog) {
+                String normName = normalize(wp.getProcessName());
+                if (normName.isBlank()) continue;
+
+                int priority;
+                if (normSegment.equals(normName)) {
+                    // Priority 1: exact match
+                    priority = 1;
+                } else if (normSegment.contains(normName) && normName.length() >= 2) {
+                    // Priority 2: catalog name found inside segment — but only accept if
+                    // it is not a pure suffix/prefix substring of a longer word.
+                    // Guard: the catalog name must cover at least half the segment's length
+                    // to prevent "焯水" (2 chars) from matching "二次滚揉保水" (6 chars)
+                    // where the name only contributes 2/6 = 33% — below the 50% threshold.
+                    if ((double) normName.length() / normSegment.length() >= 0.5) {
+                        priority = 2;
+                    } else {
+                        continue; // too short to be a reliable match
+                    }
+                } else if (normName.contains(normSegment) && normSegment.length() >= 2) {
+                    // Priority 3: segment is a prefix/abbreviation of the catalog name
+                    // e.g. user typed "气调" and catalog has "气调(分切装盒)".
+                    // Guard: segment must cover ≥ 50% of the catalog name length to be a
+                    // genuine abbreviation.  This prevents "分切" (2 chars) from matching
+                    // "气调(分切装盒)" normalized "气调分切装盒" (6 chars) where 分切 is
+                    // only 2/6 = 33% — it's a coincidental substring, not an abbreviation.
+                    if ((double) normSegment.length() / normName.length() >= 0.5) {
+                        priority = 3;
+                    } else {
+                        continue; // incidental substring, not an abbreviation
+                    }
+                } else {
+                    continue;
+                }
+
+                if (priority < bestPriority
+                        || (priority == bestPriority && normName.length() > bestNameLen)) {
+                    best = wp;
+                    bestPriority = priority;
+                    bestNameLen = normName.length();
+                }
+            }
+
+            results.add(new SegmentMatch(rawSegment, best));
+        }
+        return results;
     }
 
     private List<UserDTO> loadAssignableUsers(String factoryId) {
@@ -218,45 +366,17 @@ public class ProductWorkProcessConfigTool extends AbstractBusinessTool {
                 .toList();
     }
 
-    private List<MatchedProcess> matchProcesses(String message, List<WorkProcessDTO> catalog) {
-        String normalizedMessage = normalize(message);
-        return catalog.stream()
-                .filter(wp -> wp.getId() != null && wp.getProcessName() != null)
-                .map(wp -> new MatchedProcess(
-                        wp,
-                        normalizedMessage.indexOf(normalize(wp.getProcessName()))))
-                .filter(m -> m.startIndex() >= 0)
-                .sorted(Comparator.comparingInt(MatchedProcess::startIndex))
-                .toList();
-    }
-
     /**
-     * B-2 fix: segment is now bounded on the right by {@code nextBoundary} (start index of the
-     * next matched process in the normalized message, or end-of-string for the last step).
-     * This prevents an assignee mentioned after a later process from being erroneously
-     * attributed to an earlier process (e.g. "修油，滚揉，焯水交给魏振江" — 修油 and 滚揉
-     * get no assignee; only 焯水 gets 魏振江).
-     *
-     * @param normalizedMessage already-normalized message (to avoid re-normalizing in each call)
-     * @param current           the process whose assignee we're looking for
-     * @param operators         candidate users (already filtered to active)
-     * @param nextBoundary      right bound in normalizedMessage (exclusive) for the search segment
+     * E2 assignee matching: search for an operator name within the raw segment text only.
+     * Because each segment is already isolated (one step's text), the old B-2 right-boundary
+     * logic is no longer needed — the segment IS the boundary.
      */
-    private UserDTO matchAssignee(
-            String normalizedMessage, MatchedProcess current,
-            List<UserDTO> operators, int nextBoundary) {
-        int segmentStart = current.startIndex();
-        String currentName = normalize(current.workProcess().getProcessName());
-        int currentNameEnd = segmentStart + currentName.length();
-
-        // Clamp nextBoundary to valid range and ensure currentNameEnd <= nextBoundary
-        int safeNextBoundary = Math.min(nextBoundary, normalizedMessage.length());
-        int safeSegmentEnd = Math.max(currentNameEnd, safeNextBoundary);
-        String segment = normalizedMessage.substring(currentNameEnd, safeSegmentEnd);
+    private UserDTO matchAssigneeInSegment(String rawSegment, List<UserDTO> operators) {
+        String normalizedSegment = normalize(rawSegment);
         UserDTO nearest = null;
         int nearestIndex = Integer.MAX_VALUE;
         for (UserDTO op : operators) {
-            int idx = indexOfAnyName(segment, op);
+            int idx = indexOfAnyName(normalizedSegment, op);
             if (idx >= 0 && idx < nearestIndex) {
                 nearest = op;
                 nearestIndex = idx;
@@ -285,34 +405,28 @@ public class ProductWorkProcessConfigTool extends AbstractBusinessTool {
         return -1;
     }
 
-    private List<Map<String, Object>> detectMissingProcessNames(
-            String message, List<MatchedProcess> matchedProcesses) {
-        Set<String> matchedNames = matchedProcesses.stream()
-                .map(m -> normalize(m.workProcess().getProcessName()))
-                .collect(Collectors.toCollection(HashSet::new));
-
-        List<Map<String, Object>> missing = new ArrayList<>();
-        Set<String> seen = new HashSet<>();
-        for (String rawPart : SEPARATOR.split(message)) {
-            String candidate = cleanupCandidate(rawPart);
-            if (candidate.isBlank()) {
-                continue;
+    /**
+     * E3: Detect duplicate processName values in the draft (after catalog matching).
+     * Duplicates are only expected if the user genuinely typed the same process twice.
+     * Returns human-readable warning messages for surface in the AI reply.
+     */
+    private List<String> detectDuplicateStepNames(List<DraftStep> steps) {
+        Map<String, Long> nameCounts = steps.stream()
+                .filter(s -> s.processName() != null && s.workProcessId() != null)
+                .collect(Collectors.groupingBy(s -> normalize(s.processName()), Collectors.counting()));
+        List<String> warnings = new ArrayList<>();
+        nameCounts.forEach((normName, count) -> {
+            if (count > 1) {
+                // Find original display name from first occurrence
+                String displayName = steps.stream()
+                        .filter(s -> s.processName() != null && normalize(s.processName()).equals(normName))
+                        .map(DraftStep::processName)
+                        .findFirst()
+                        .orElse(normName);
+                warnings.add("「" + displayName + "」出现 " + count + " 次，请确认是否为重复工序");
             }
-            String normalized = normalize(candidate);
-            if (normalized.length() < 2 || matchedNames.contains(normalized)) {
-                continue;
-            }
-            boolean alreadyCovered = matchedNames.stream().anyMatch(normalized::contains);
-            if (alreadyCovered) {
-                continue;
-            }
-            if (seen.add(normalized)) {
-                missing.add(Map.of(
-                        "name", candidate,
-                        "reason", "本厂工序 catalog 中未找到，请先去工序管理新建"));
-            }
-        }
-        return missing;
+        });
+        return warnings;
     }
 
     private String cleanupCandidate(String rawPart) {
@@ -332,11 +446,18 @@ public class ProductWorkProcessConfigTool extends AbstractBusinessTool {
         result.put("draft", plan.steps().stream().map(DraftStep::toMap).toList());
         result.put("missingProcesses", plan.missingProcesses());
 
+        long newSteps = plan.steps().stream().filter(s -> s.workProcessId() == null).count();
+
         String message = (applied ? "已应用 " : "已生成 ")
                 + plan.steps().size() + " 道工序草稿";
-        if (!plan.missingProcesses().isEmpty()) {
+        if (newSteps > 0) {
+            message += "（含 " + newSteps + " 道未找到匹配工序，请先去工序管理新建）";
+        } else if (!plan.missingProcesses().isEmpty()) {
             message += "；有 " + plan.missingProcesses().size()
                     + " 个工序未匹配，请先去工序管理新建";
+        }
+        if (!plan.duplicateWarnings().isEmpty()) {
+            message += "；注意：" + String.join("、", plan.duplicateWarnings());
         }
         result.put("message", message);
         return result;
@@ -358,10 +479,12 @@ public class ProductWorkProcessConfigTool extends AbstractBusinessTool {
     private record ProductProcessPlan(
             String productTypeId,
             List<DraftStep> steps,
-            List<Map<String, Object>> missingProcesses) {
+            List<Map<String, Object>> missingProcesses,
+            List<String> duplicateWarnings) {
     }
 
-    private record MatchedProcess(WorkProcessDTO workProcess, int startIndex) {
+    /** E2: Pairs a raw user-input segment with the best-matched catalog entry (null = not found). */
+    private record SegmentMatch(String rawSegment, WorkProcessDTO catalogEntry) {
     }
 
     private record DraftStep(

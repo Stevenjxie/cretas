@@ -230,6 +230,153 @@ class ProductWorkProcessConfigToolTest {
         }
     }
 
+    // ----------------------------------------------------------------
+    // E1+E2: Fidelity regression — 10-step input with duplicate catalog names
+    // ----------------------------------------------------------------
+
+    @Test
+    @DisplayName("E2 fidelity: 10-step arrow-separated input produces exactly 10 draft steps, no duplicates")
+    @SuppressWarnings("unchecked")
+    void tenStepArrowInput_faithfullyMapsAllSteps() throws Exception {
+        // Reproduce the exact F006 catalog that caused the original bug:
+        // three separate "焯水" rows (for 猪舌, 牛腱, 掌中宝) all with the same name.
+        // Old algorithm: all 3 match the single "焯水" in the message → 焯水×3 in draft.
+        // New algorithm: deduplication + segment-driven → exactly 1 焯水 matched.
+        when(workProcessService.listActive(FACTORY_ID)).thenReturn(List.of(
+                workProcess("WP-F006-ZS-01", "修油",            1),
+                workProcess("WP-F006-ZS-02", "滚揉(保水)",      2),
+                workProcess("WP-F006-ZS-03", "焯水",            3),   // ← duplicate name row 1
+                workProcess("WP-F006-ZS-04", "去舌苔",          4),
+                workProcess("WP-F006-ZS-05", "熟制(卤制)",      5),
+                workProcess("WP-F006-ZS-06", "气调(分切装盒)",  6),
+                workProcess("WP-F006-NT-01", "修油",            1),   // ← duplicate 修油 row
+                workProcess("WP-F006-NT-02", "滚揉(注射保水)",  2),
+                workProcess("WP-F006-NT-03", "焯水",            3),   // ← duplicate name row 2
+                workProcess("WP-F006-NT-04", "熟制(卤制)",      5),
+                workProcess("WP-F006-NT-05", "气调(抛片装盒)",  5),
+                workProcess("WP-F006-ZZB-01", "水解化冻",       1),
+                workProcess("WP-F006-ZZB-02", "焯水",           3),   // ← duplicate name row 3
+                workProcess("WP-F006-ZZB-03", "油炸",           3),
+                workProcess("WP-F006-ZZB-04", "熟制伴汁",       4),
+                workProcess("WP-F006-ZZB-05", "气调",           5)
+        ));
+        when(userService.getUsersByRole(FACTORY_ID, FactoryUserRole.operator)).thenReturn(List.of());
+        when(userService.getUsersByRole(FACTORY_ID, FactoryUserRole.group_leader)).thenReturn(List.of());
+        when(productWorkProcessService.listByProduct(FACTORY_ID, PRODUCT_TYPE_ID)).thenReturn(List.of());
+
+        // The exact 10-step input from Steve's bug report
+        String input = "解冻 → 分切 → 腌制 → 二次滚揉保水 → 焯水 → 沥干 → 油炸 → 修猪舌 → 滚揉配酱 → 气调包装";
+        Map<String, Object> result = invoke("doPreview", params(input));
+
+        List<Map<String, Object>> draft = (List<Map<String, Object>>) result.get("draft");
+
+        // Must produce exactly 10 steps
+        assertEquals(10, draft.size(),
+                "Expected 10 draft steps matching the 10 input segments, got: "
+                        + draft.size() + " steps: "
+                        + draft.stream().map(s -> s.get("processName")).toList());
+
+        // Verify no duplicate processName values from catalog entries
+        List<String> names = draft.stream()
+                .filter(s -> s.get("workProcessId") != null)
+                .map(s -> (String) s.get("processName"))
+                .toList();
+        long distinctNames = names.stream().distinct().count();
+        assertEquals(names.size(), distinctNames,
+                "Draft should have no duplicate catalog process names, but found duplicates in: " + names);
+
+        // Step 1: 解冻 — not in catalog (no "解冻" row in F006), should be a placeholder
+        assertEquals("new", draft.get(0).get("operation"),
+                "解冻 not in catalog → should be 'new' placeholder");
+        assertEquals("解冻", draft.get(0).get("processName"));
+
+        // Step 5: 焯水 — exactly one match (deduplicated from 3 rows)
+        assertEquals("焯水", draft.get(4).get("processName"),
+                "Step 5 should be 焯水");
+        assertNotNull(draft.get(4).get("workProcessId"),
+                "焯水 should be matched to a catalog entry");
+
+        // Steps that are NOT in catalog should be "new" (腌制, 沥干, 修猪舌, 滚揉配酱, 气调包装)
+        List<String> newSteps = draft.stream()
+                .filter(s -> "new".equals(s.get("operation")))
+                .map(s -> (String) s.get("processName"))
+                .toList();
+        assertTrue(newSteps.contains("腌制"), "腌制 not in catalog → must be 'new'");
+        assertTrue(newSteps.contains("沥干"), "沥干 not in catalog → must be 'new'");
+
+        // The reply message must not claim 10 matched catalog steps — it should mention missing processes
+        String message = (String) result.get("message");
+        assertTrue(message.contains("未找到匹配工序") || message.contains("请先去工序管理新建"),
+                "Message should mention that some processes need to be created first: " + message);
+    }
+
+    @Test
+    @DisplayName("E1 dedup: catalog with 3 identical 'name' entries matches correctly without fanout")
+    @SuppressWarnings("unchecked")
+    void catalogDedup_threeSameNameEntriesDoNotFanout() throws Exception {
+        // Scenario: three rows all named "焯水", user types "焯水" once.
+        // Old: all 3 match → 3 steps. New: deduplicated to 1, exactly 1 step.
+        when(workProcessService.listActive(FACTORY_ID)).thenReturn(List.of(
+                workProcess("wp-blanch-1", "焯水", 3),
+                workProcess("wp-blanch-2", "焯水", 3),
+                workProcess("wp-blanch-3", "焯水", 3)
+        ));
+        when(userService.getUsersByRole(FACTORY_ID, FactoryUserRole.operator)).thenReturn(List.of());
+        when(userService.getUsersByRole(FACTORY_ID, FactoryUserRole.group_leader)).thenReturn(List.of());
+        when(productWorkProcessService.listByProduct(FACTORY_ID, PRODUCT_TYPE_ID)).thenReturn(List.of());
+
+        Map<String, Object> result = invoke("doPreview", params("焯水"));
+        List<Map<String, Object>> draft = (List<Map<String, Object>>) result.get("draft");
+
+        assertEquals(1, draft.size(), "One input segment 'name' → exactly 1 draft step (not 3)");
+        assertEquals("焯水", draft.get(0).get("processName"));
+    }
+
+    @Test
+    @DisplayName("E2 substring guard: '二次滚揉保水' does NOT match catalog '焯水' as substring")
+    @SuppressWarnings("unchecked")
+    void substringGuard_shortCatalogNameDoesNotMatchLongSegment() throws Exception {
+        // "焯水" is 2 chars; "二次滚揉保水" normalized = 6 chars → 2/6 < 0.5 → should not match
+        when(workProcessService.listActive(FACTORY_ID)).thenReturn(List.of(
+                workProcess("wp-tumble", "滚揉(保水)", 2),  // normalized "滚揉保水" = 4 chars; 4/6 = 0.67 → should match
+                workProcess("wp-blanch", "焯水", 3)          // normalized "焯水" = 2 chars; 2/6 = 0.33 → should NOT match
+        ));
+        when(userService.getUsersByRole(FACTORY_ID, FactoryUserRole.operator)).thenReturn(List.of());
+        when(userService.getUsersByRole(FACTORY_ID, FactoryUserRole.group_leader)).thenReturn(List.of());
+        when(productWorkProcessService.listByProduct(FACTORY_ID, PRODUCT_TYPE_ID)).thenReturn(List.of());
+
+        Map<String, Object> result = invoke("doPreview", params("二次滚揉保水"));
+        List<Map<String, Object>> draft = (List<Map<String, Object>>) result.get("draft");
+
+        assertEquals(1, draft.size(), "One input segment → one draft step");
+        // Should match 滚揉(保水) not 焯水
+        assertEquals("滚揉(保水)", draft.get(0).get("processName"),
+                "二次滚揉保水 should match 滚揉(保水) (4/6 chars ≥ 0.5) not 焯水 (2/6 < 0.5)");
+        assertEquals("wp-tumble", draft.get(0).get("workProcessId"));
+    }
+
+    @Test
+    @DisplayName("E3 duplicate warning: user genuinely types same step twice gets a warning")
+    @SuppressWarnings("unchecked")
+    void duplicateStepWarning_sameStepTwiceInInput() throws Exception {
+        when(workProcessService.listActive(FACTORY_ID)).thenReturn(List.of(
+                workProcess("wp-blanch", "焯水", 3)
+        ));
+        when(userService.getUsersByRole(FACTORY_ID, FactoryUserRole.operator)).thenReturn(List.of());
+        when(userService.getUsersByRole(FACTORY_ID, FactoryUserRole.group_leader)).thenReturn(List.of());
+        when(productWorkProcessService.listByProduct(FACTORY_ID, PRODUCT_TYPE_ID)).thenReturn(List.of());
+
+        Map<String, Object> result = invoke("doPreview", params("焯水，焯水"));
+        List<Map<String, Object>> draft = (List<Map<String, Object>>) result.get("draft");
+        String message = (String) result.get("message");
+
+        // 2 input segments → 2 draft steps (user deliberately typed it twice)
+        assertEquals(2, draft.size(), "Two input segments → two draft steps");
+        // But a duplicate warning should appear
+        assertTrue(message.contains("出现") && message.contains("次"),
+                "Should warn about duplicate step name, but got: " + message);
+    }
+
     private void mockCatalogAndOperators() {
         when(workProcessService.listActive(FACTORY_ID)).thenReturn(List.of(
                 workProcess("wp-oil", "修油"),
@@ -244,11 +391,16 @@ class ProductWorkProcessConfigToolTest {
     }
 
     private WorkProcessDTO workProcess(String id, String name) {
+        return workProcess(id, name, 1);
+    }
+
+    private WorkProcessDTO workProcess(String id, String name, int sortOrder) {
         return WorkProcessDTO.builder()
                 .id(id)
                 .processName(name)
                 .processCategory("前处理")
                 .unit("kg")
+                .sortOrder(sortOrder)
                 .isActive(true)
                 .build();
     }
