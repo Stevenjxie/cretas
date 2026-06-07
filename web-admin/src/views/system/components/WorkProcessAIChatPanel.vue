@@ -85,7 +85,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, ref } from 'vue';
+import { computed, nextTick, ref, watch } from 'vue';
 import request from '@/api/request';
 
 type ChatRole = 'system' | 'user' | 'assistant';
@@ -139,6 +139,11 @@ const messagesRef = ref<HTMLElement>();
 const messages = ref<ChatMessage[]>([
   { role: 'system', content: '选择产品后，描述工序顺序和责任小组长，AI 会生成草稿供你保存。' },
 ]);
+
+// Reset input on product change or mount
+watch(() => props.productTypeId, () => {
+  input.value = '';
+}, { immediate: true });
 
 async function send(): Promise<void> {
   const text = input.value.trim();
