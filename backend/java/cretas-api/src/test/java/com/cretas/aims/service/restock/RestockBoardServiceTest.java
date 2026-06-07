@@ -27,6 +27,8 @@ import java.time.LocalDate;
 import java.util.List;
 import java.util.Optional;
 
+import com.cretas.aims.entity.factory.WarehouseCodes;
+
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -168,6 +170,44 @@ class RestockBoardServiceTest {
         assertNull(row.getRawEstimatedFgQty());
         assertNotNull(row.getConversionWarning());
         assertTrue(row.getConversionWarning().contains("多个启用"));
+    }
+
+    @Test
+    @DisplayName("T134: fgShippableQty reflects WH-LOG-only stock (WH-WKS batch not counted)")
+    void fgShippableQtyWhLogOnly() {
+        // Scenario: 200 boxes in WH-LOG (shippable) + 300 boxes in WH-WKS (non-shippable)
+        // fgAvailableQty (all-warehouse) = 500; fgShippableQty (WH-LOG only) = 200
+        when(salesOrderItemRepository.sumDemandByProductForDeliveryDate(eq(FACTORY_ID), eq(JUNE_1), anyCollection()))
+                .thenReturn(List.of(demand("PT-BEEF", "beef shank", BOX_UNIT, BOX_UNIT, "1912")));
+        when(salesOrderItemRepository.sumDemandByProductForDeliveryDate(eq(FACTORY_ID), eq(JUNE_2), anyCollection()))
+                .thenReturn(List.of(demand("PT-BEEF", "beef shank", BOX_UNIT, BOX_UNIT, "159")));
+        when(salesOrderItemRepository.sumDemandByProductForDeliveryDate(eq(FACTORY_ID), eq(JUNE_3), anyCollection()))
+                .thenReturn(List.of(demand("PT-BEEF", "beef shank", BOX_UNIT, BOX_UNIT, "0")));
+        when(productTypeRepository.findById("PT-BEEF")).thenReturn(Optional.of(productType("200", "1.0")));
+        // All-warehouse FG: 500 boxes (WH-LOG 200 + WH-WKS 300)
+        when(finishedGoodsBatchRepository.sumAvailableQuantityByProductTypeAndUnit(FACTORY_ID, "PT-BEEF", BOX_UNIT))
+                .thenReturn(new BigDecimal("500"));
+        // WH-LOG only: 200 boxes (WH-WKS 300 are NOT shippable)
+        when(finishedGoodsBatchRepository.sumShippableQuantityByProductTypeAndWarehouseCodeAndUnit(
+                FACTORY_ID, "PT-BEEF", WarehouseCodes.WH_LOG, BOX_UNIT))
+                .thenReturn(new BigDecimal("200"));
+        when(semiFinishedInventoryRepository.sumAvailableByProduct(FACTORY_ID, "PT-BEEF")).thenReturn(BigDecimal.ZERO);
+        when(productionPlanRepository.sumPlannedQuantityByProductAndStatuses(eq(FACTORY_ID), eq("PT-BEEF"), anyCollection()))
+                .thenReturn(BigDecimal.ZERO);
+        when(conversionRepository.findByFactoryIdAndProductTypeId(FACTORY_ID, "PT-BEEF"))
+                .thenReturn(List.of());
+
+        RestockHorizonProductRow row = service.getRestockHorizon(FACTORY_ID, JUNE_1, JUNE_3).getRows().get(0);
+
+        // fgAvailableQty counts all warehouses (WH-LOG + WH-WKS = 500)
+        assertEquals(0, new BigDecimal("500").compareTo(row.getFgAvailableQty()),
+                "fgAvailableQty should count all warehouses (WH-LOG + WH-WKS)");
+        // fgShippableQty counts WH-LOG only (200)
+        assertEquals(0, new BigDecimal("200").compareTo(row.getFgShippableQty()),
+                "fgShippableQty must reflect WH-LOG-only stock; WH-WKS batch must NOT be counted");
+        // startingCoverQty uses fgAvailableQty (not shippable), so coverage formula is unchanged
+        assertEquals(0, new BigDecimal("500").compareTo(row.getStartingCoverQty()),
+                "startingCoverQty (coverage formula) must be unchanged — uses fgAvailableQty not fgShippableQty");
     }
 
     @Test

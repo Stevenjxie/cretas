@@ -35,6 +35,20 @@ const dates = ref<string[]>([])
 const rows = ref<RestockHorizonProductRow[]>([])
 const summary = ref({ totalProducts: 0, shortfallProducts: 0, fullyCoveredProducts: 0, days: 0 })
 
+/**
+ * T134: "计划覆盖充足但 WH-LOG 不足" banner 条件。
+ * 当任意产品满足以下条件时显示 warning banner：
+ *   - endingShortfallQty == 0（区间缺口为零，计划已覆盖）
+ *   - fgShippableQty < totalDemandQty（WH-LOG 现货不足以满足需求，无法立即发货）
+ */
+const hasCoveredButNotShippable = computed(() =>
+  rows.value.some(
+    (r) =>
+      r.endingShortfallQty === 0 &&
+      r.fgShippableQty < r.totalDemandQty,
+  ),
+)
+
 async function load() {
   if (!factoryId.value) return
   loading.value = true
@@ -119,6 +133,22 @@ onMounted(load)
         <el-tag type="info">{{ summary.days }} 天</el-tag>
       </el-space>
     </div>
+
+    <!-- T134 banner: 计划覆盖充足但 WH-LOG 物流仓现货不足 -->
+    <el-alert
+      v-if="hasCoveredButNotShippable"
+      type="warning"
+      :closable="true"
+      show-icon
+      class="wh-log-banner"
+    >
+      <template #title>
+        部分产品计划覆盖充足，但 WH-LOG（物流仓）成品不足，尚不可立即发货 —— 需等生产完工 / 反向调拨到物流仓
+      </template>
+      <template #default>
+        查看各行「可发(WH-LOG)」列了解物流仓现货，或检查车间仓是否有待调拨批次。
+      </template>
+    </el-alert>
 
     <el-table
       :data="rows"
@@ -231,6 +261,20 @@ onMounted(load)
           </el-tooltip>
         </template>
         <template #default="{ row }">{{ fmt(row.fgAvailableQty) }}</template>
+      </el-table-column>
+      <el-table-column width="120">
+        <template #header>
+          <span>可发(WH-LOG)</span>
+          <el-tooltip placement="top">
+            <template #content>WH-LOG 物流仓现货（盒），只有此仓成品能直接发货。<br />车间仓（WH-WKS）成品需先调拨到物流仓才可发货。<br />此值 &lt; 总需求时即使区间覆盖充足也无法立即发货。</template>
+            <el-icon class="head-help"><QuestionFilled /></el-icon>
+          </el-tooltip>
+        </template>
+        <template #default="{ row }">
+          <span :class="row.fgShippableQty < row.totalDemandQty && row.endingShortfallQty === 0 ? 'shippable-warning' : ''">
+            {{ fmt(row.fgShippableQty) }}
+          </span>
+        </template>
       </el-table-column>
       <el-table-column width="120">
         <template #header>
@@ -436,6 +480,15 @@ onMounted(load)
 
 .raw-tag {
   border-style: dashed;
+}
+
+.wh-log-banner {
+  margin-bottom: 10px;
+}
+
+.shippable-warning {
+  color: #e6a23c;
+  font-weight: 600;
 }
 
 @media (max-width: 900px) {

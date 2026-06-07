@@ -37,6 +37,8 @@ export interface RestockHorizonProductRow {
   unit: string
   totalDemandQty: number
   fgAvailableQty: number
+  /** WH-LOG 物流仓现货（盒）。只有此仓成品可直接发货；车间仓需先调拨过来。T134 */
+  fgShippableQty: number
   wipAvailableQty: number
   wipEstimatedQty: number | null
   scheduledQty: number

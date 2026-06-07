@@ -5,6 +5,7 @@ import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.RawMaterialType;
 import com.cretas.aims.entity.enums.ProductionPlanStatus;
 import com.cretas.aims.entity.enums.SalesOrderStatus;
+import com.cretas.aims.entity.factory.WarehouseCodes;
 import com.cretas.aims.repository.ConversionRepository;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
@@ -173,6 +174,7 @@ public class RestockBoardService {
         BigDecimal effectiveWipYield = wipYield != null ? wipYield : BigDecimal.ONE;
 
         BigDecimal fg = finishedGoods(factoryId, demand.productTypeId);
+        BigDecimal fgShippable = finishedGoodsShippable(factoryId, demand.productTypeId);
         BigDecimal wipKg = nz(semiFinishedInventoryRepository.sumAvailableByProduct(factoryId, demand.productTypeId));
         BigDecimal wipBox = RestockUnitConverter.kgToBox(wipKg.multiply(effectiveWipYield), gramsPerUnit);
         BigDecimal scheduled = scheduled(factoryId, demand.productTypeId);
@@ -227,6 +229,7 @@ public class RestockBoardService {
                 .unit(BOX_UNIT)
                 .totalDemandQty(demand.totalDemand())
                 .fgAvailableQty(fg)
+                .fgShippableQty(fgShippable)
                 .wipAvailableQty(wipKg)
                 .wipEstimatedQty(wipBox)
                 .scheduledQty(scheduled)
@@ -391,6 +394,15 @@ public class RestockBoardService {
     private BigDecimal finishedGoods(String factoryId, String productTypeId) {
         return nz(finishedGoodsBatchRepository.sumAvailableQuantityByProductTypeAndUnit(
                 factoryId, productTypeId, BOX_UNIT));
+    }
+
+    /**
+     * WH-LOG 物流仓可发量（盒）。仅统计物流仓，车间仓（WH-WKS）成品不计入。
+     * 不替代 {@link #finishedGoods} 用于覆盖率计算——两者独立并存（T134 spec）。
+     */
+    private BigDecimal finishedGoodsShippable(String factoryId, String productTypeId) {
+        return nz(finishedGoodsBatchRepository.sumShippableQuantityByProductTypeAndWarehouseCodeAndUnit(
+                factoryId, productTypeId, WarehouseCodes.WH_LOG, BOX_UNIT));
     }
 
     private BigDecimal scheduled(String factoryId, String productTypeId) {

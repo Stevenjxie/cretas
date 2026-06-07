@@ -208,4 +208,34 @@ public interface FinishedGoodsBatchRepository extends JpaRepository<FinishedGood
      * 默认 @Where(deleted_at IS NULL) 已在 entity 起作用。
      */
     List<FinishedGoodsBatch> findByFactoryIdAndWarehouseId(String factoryId, String warehouseId);
+
+    /**
+     * WH-LOG 可发量汇总（单工厂，按 warehouse code + unit 双过滤）。备货看板 T134 用。
+     *
+     * <p>物流仓（WH-LOG）是唯一参与销售发货的仓库（InventoryMatchingService 固定 WH-LOG）。
+     * 车间仓（WH-WKS）成品不能直接发货，需先通过反向调拨转入 WH-LOG。此方法仅统计
+     * WH-LOG 中单位为 '盒' 的可用成品，作为「可发量」展示给运营人员判断是否需要催调拨。
+     *
+     * <p>注意：此方法 {@code NOT} 替代 {@link #sumAvailableQuantityByProductTypeAndUnit} —— 后者
+     * 统计全仓库（用于覆盖率计算），此方法仅统计 WH-LOG（用于可发量展示）。两个字段并存。
+     *
+     * @param factoryId      工厂 ID
+     * @param productTypeId  产品类型 ID
+     * @param warehouseCode  仓库 code，传 {@link com.cretas.aims.entity.factory.WarehouseCodes#WH_LOG}
+     * @param unit           库存单位，传 {@code "盒"}
+     * @since T134 (2026-06-08, feat/restock-wh-log-split)
+     */
+    @Query("SELECT COALESCE(SUM(b.producedQuantity - b.shippedQuantity - b.reservedQuantity), 0) " +
+            "FROM FinishedGoodsBatch b, com.cretas.aims.entity.factory.FactoryWarehouse w " +
+            "WHERE b.warehouseId = w.id AND w.factoryId = :factoryId AND w.code = :warehouseCode " +
+            "AND b.factoryId = :factoryId " +
+            "AND b.productTypeId = :productTypeId " +
+            "AND b.unit = :unit " +
+            "AND b.status = 'AVAILABLE' " +
+            "AND (b.producedQuantity - b.shippedQuantity - b.reservedQuantity) > 0")
+    BigDecimal sumShippableQuantityByProductTypeAndWarehouseCodeAndUnit(
+            @Param("factoryId") String factoryId,
+            @Param("productTypeId") String productTypeId,
+            @Param("warehouseCode") String warehouseCode,
+            @Param("unit") String unit);
 }
