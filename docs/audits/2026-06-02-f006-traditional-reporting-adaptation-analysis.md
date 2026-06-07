@@ -102,3 +102,15 @@
 1. 适配范围: 5 个全做 / 先做图片证据(适配1) / 图片+工时(适配1+2)?
 2. 图片存储: 阿里云 OSS(已有 cretas-media bucket) — 直传 vs 后端中转?
 3. 工时口径: 多时段×人数(person-hours) 是否替换现有单一 workerCount, 还是并存?
+
+---
+
+## 附：三种成品入库路径对比 (T127 补充)
+
+| 路径 | 走报工? | API | 来源 | 适用场景 |
+|---|---|---|---|---|
+| **期初建账** (`opening`) | ❌ 直接入库 | `POST .../finished-goods/opening` | 历史结存 | 5/31 冷启动导入 Excel 存量 |
+| **存货/备货生产** | ✅ 完整计划→转批次→RN逐道报工→完工自动 FG-AUTO | `POST .../production-plans` + 转批次 + 报工 | `sourceType: SAFETY_STOCK` | 为备库而产，不绑销售订单；备货看板缺口快捷入口 |
+| **订单驱动生产** | ✅ 同报工链 | `POST .../production-plans` (财审后 shortfall 自动建) | `sourceType: CUSTOMER_ORDER` | 销售订单财审通过后库存缺口自动建计划 |
+
+> **关键**: 存货生产与订单驱动生产走完全相同的报工→ FG 链 (`onBatchCompleted` → `createFinishedGoodsFromBatch`)，区别仅在于无 `sourceOrderId`。完工后均自动生成 `FG-AUTO-*` 成品批次并入库。
