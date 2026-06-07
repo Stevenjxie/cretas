@@ -213,6 +213,13 @@ public class ToolDispatchService {
                                     }
                                     log.info("从上下文解析门店: id={}, name={}", ref.getEntityId(), ref.getEntityName());
                                     break;
+                                case "DISH":
+                                    params.put("dish_name", ref.getEntityName());
+                                    if (ref.getEntityId() != null) {
+                                        params.put("dish_id", ref.getEntityId());
+                                    }
+                                    log.info("从上下文解析菜品: id={}, name={}", ref.getEntityId(), ref.getEntityName());
+                                    break;
                             }
                         }
                     }

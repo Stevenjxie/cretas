@@ -79,6 +79,15 @@ public class ConversationMemoryServiceImpl implements ConversationMemoryService 
     );
 
     /**
+     * 菜品指代模式。"它" 仅在 DISH 优先于 STORE/SUPPLIER 解析，防止歧义：
+     * resolveReference 按 DISH → STORE → SUPPLIER 顺序执行，
+     * resolvePatternReference 只在对应 slotType 存在时替换，天然隔离。
+     */
+    private static final Pattern DISH_REFERENCE_PATTERN = Pattern.compile(
+            "(那道菜|这道菜|该菜品|这个菜|那个菜|这款菜|那款菜|它)"
+    );
+
+    /**
      * 客户指代模式
      */
     private static final Pattern CUSTOMER_REFERENCE_PATTERN = Pattern.compile(
@@ -241,7 +250,9 @@ public class ConversationMemoryServiceImpl implements ConversationMemoryService 
         String result = referenceText;
 
         // 尝试匹配各种指代模式
+        // 注意顺序：DISH 先于 STORE/SUPPLIER，防止"它"被错误匹配到非菜品实体
         result = resolvePatternReference(result, BATCH_REFERENCE_PATTERN, slots, EntitySlot.SlotType.BATCH.name());
+        result = resolvePatternReference(result, DISH_REFERENCE_PATTERN,  slots, EntitySlot.SlotType.DISH.name());
         result = resolvePatternReference(result, STORE_REFERENCE_PATTERN, slots, EntitySlot.SlotType.STORE.name());
         result = resolvePatternReference(result, SUPPLIER_REFERENCE_PATTERN, slots, EntitySlot.SlotType.SUPPLIER.name());
         result = resolvePatternReference(result, CUSTOMER_REFERENCE_PATTERN, slots, EntitySlot.SlotType.CUSTOMER.name());

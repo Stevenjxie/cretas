@@ -48,7 +48,9 @@ public class EntitySlot {
         /** 员工 */
         EMPLOYEE,
         /** 订单 */
-        ORDER
+        ORDER,
+        /** 菜品 */
+        DISH
     }
 
     /**
@@ -135,6 +137,21 @@ public class EntitySlot {
                 .id(id)
                 .name(name)
                 .displayValue("门店 " + name)
+                .mentionedAt(LocalDateTime.now())
+                .mentionCount(1)
+                .confidence(1.0)
+                .build();
+    }
+
+    /**
+     * 创建菜品槽位
+     */
+    public static EntitySlot dish(String id, String name) {
+        return EntitySlot.builder()
+                .type(SlotType.DISH)
+                .id(id)
+                .name(name)
+                .displayValue("菜品 " + name)
                 .mentionedAt(LocalDateTime.now())
                 .mentionCount(1)
                 .confidence(1.0)

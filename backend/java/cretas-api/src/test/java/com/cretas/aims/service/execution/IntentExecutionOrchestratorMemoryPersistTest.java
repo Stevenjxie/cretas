@@ -119,6 +119,34 @@ class IntentExecutionOrchestratorMemoryPersistTest {
     }
 
     @Test
+    @DisplayName("显式畅销菜品结果 top_dish → 写 DISH 槽位")
+    void withTopDishResult_persistsDishEntitySlot() {
+        AIIntentConfig intent = AIIntentConfig.builder()
+                .intentCode("RESTAURANT_BESTSELLER_QUERY").build();
+        IntentExecuteRequest req = IntentExecuteRequest.builder()
+                .sessionId("sess-dish").userInput("哪道菜卖得最好").build();
+        IntentExecuteResponse resp = IntentExecuteResponse.builder()
+                .status("COMPLETED")
+                .resultData(Map.of(
+                        "top_dish", Map.of(
+                                "dish_id", 201,
+                                "菜品", "叮咚卤猪蹄",
+                                "销量", 1500.0)))
+                .build();
+
+        orchestrator.persistConversationMemoryForExplicitIntent(
+                "RES_3101_009", req, resp, intent, 9L);
+
+        ArgumentCaptor<EntitySlot> slotCaptor = ArgumentCaptor.forClass(EntitySlot.class);
+        verify(memory).updateEntitySlot(
+                eq("sess-dish"), eq(EntitySlot.SlotType.DISH), slotCaptor.capture());
+        EntitySlot slot = slotCaptor.getValue();
+        assertThat(slot.getId()).isEqualTo("201");
+        assertThat(slot.getName()).isEqualTo("叮咚卤猪蹄");
+        assertThat(slot.getDisplayValue()).isEqualTo("菜品 叮咚卤猪蹄");
+    }
+
+    @Test
     @DisplayName("无 session 的显式意图执行 → 完全不碰对话记忆 (parity/golden 安全)")
     void withoutSession_noMemoryInteraction() {
         AIIntentConfig intent = AIIntentConfig.builder()
