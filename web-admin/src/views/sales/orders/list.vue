@@ -475,7 +475,7 @@ const form = ref({
   shippingIncluded: false,
   shippingFee: 0,
   extraFees: [] as Array<{ name: string; amount: number; remark: string }>,
-  items: [{ productTypeId: '', quantity: 0, unit: 'kg', unitPrice: 0, taxRate: 13 }] as OrderItem[],
+  items: [{ productTypeId: '', quantity: 0, unit: '份', unitPrice: 0, taxRate: 13 }] as OrderItem[],
   contractFileUrl: '' as string | null,
   contractFileName: '' as string | null,
   customFields: {} as TableRow,
@@ -512,6 +512,72 @@ function clearContract() {
 const customers = ref<TableRow[]>([]);
 const products = ref<TableRow[]>([]);
 const salesEmployees = ref<TableRow[]>([]);
+
+// T130 Feature C — 来源仓库 = OPERATOR memory. 记住该操作员上次选的仓库, 新行预填.
+// Key 按 user.id 隔离 (不同操作员各自记忆), anon 兜底.
+const warehouseMemoryKey = computed(
+  () => `cretas_so_last_warehouse_${authStore.user?.id ?? 'anon'}`
+);
+function getRememberedWarehouse(): string {
+  try {
+    return localStorage.getItem(warehouseMemoryKey.value) || 'WH-LOG';
+  } catch {
+    return 'WH-LOG';
+  }
+}
+function rememberWarehouse(code: string) {
+  // 只在用户主动选择时持久化 (template @change 调用), 不在程序赋值时触发.
+  if (!code) return;
+  try {
+    localStorage.setItem(warehouseMemoryKey.value, code);
+  } catch { /* localStorage 不可用 — 记忆是 nice-to-have, 不阻塞 */ }
+}
+
+// T130 Feature C+D — 统一空明细行工厂. 单位默认 '份' (D: 份=下单主单位),
+// 来源仓库取操作员记忆 (C). addItem / ensureTrailingEmptyRow / handleEdit / openCreateDialog 全走这里.
+function emptyOrderItem(): OrderItem {
+  return {
+    productTypeId: '',
+    quantity: 0,
+    unit: '份',
+    unitPrice: 0,
+    taxRate: 13,
+    specification: '',
+    boxQuantity: null,
+    sourceWarehouseCode: getRememberedWarehouse(),
+    priceMemoryHint: null,
+    contractPriceHint: null,
+  };
+}
+
+// T130 Feature A — 自动加行: 保证末尾恰有一个空行 (无 productTypeId) 供继续录入.
+// 去重多余的尾部空行 (product-clear 后不累积), 若末行已填则追加一个新空行.
+function ensureTrailingEmptyRow() {
+  const items = form.value.items;
+  // 移除中间出现的"全空"行只在末尾保留一个 — 这里仅处理末尾: 砍掉多余的尾部空行.
+  while (
+    items.length > 1 &&
+    !items[items.length - 1].productTypeId &&
+    !items[items.length - 2].productTypeId
+  ) {
+    items.pop();
+  }
+  const last = items[items.length - 1];
+  if (!last || last.productTypeId) {
+    items.push(emptyOrderItem());
+  }
+}
+
+// T130 Feature A — 提交时只取已选产品的行, 忽略末尾空行 (不入 payload).
+function getSubmittableItems(): OrderItem[] {
+  return form.value.items.filter((i) => Boolean(i.productTypeId));
+}
+
+// T130 Feature B — 业务员是否被用户手动改过 (改过则不再自动预填覆盖).
+const salespersonTouched = ref(false);
+
+// T130 Feature D6 — 下单数量列的 el-input-number ref 集合, 供 Tab 跨行跳转.
+const quantityRefs = ref<Array<{ focus: () => void } | null>>([]);
 
 const statusMap: Record<string, { text: string; type: string }> = {
   DRAFT: { text: '草稿', type: 'info' },
@@ -648,19 +714,30 @@ async function loadSalesEmployees() {
   } catch { /* silently fail — user can still type manually */ }
 }
 
-function addItem() { form.value.items.push({ productTypeId: '', quantity: 0, unit: 'kg', unitPrice: 0, specification: '', boxQuantity: null, taxRate: 13, sourceWarehouseCode: '' }); }
-function removeItem(idx: number) { if (form.value.items.length > 1) form.value.items.splice(idx, 1); }
+function addItem() { form.value.items.push(emptyOrderItem()); }
+function removeItem(idx: number) {
+  if (form.value.items.length > 1) form.value.items.splice(idx, 1);
+  // T130 Feature A — 删行后仍保证末尾一个空行可继续录入.
+  ensureTrailingEmptyRow();
+}
 
 function onProductSelect(item: TableRow, productId: string) {
   const p = products.value.find((x: TableRow) => x.id === productId);
   if (p) {
     item.specification = p.specification || p.packageSpec || '';
-    item.unit = p.unit || item.unit || 'kg';
+    // T130 Feature D — 单位口径: 份=下单主单位, 盒=包装形态(F006 1份=1盒).
+    // 产品字典若标 '盒' → 规范成 '份' (否则单位 el-select 没 '盒' 选项会显空白).
+    const pu = String(p.unit || '份');
+    item.unit = pu === '盒' ? '份' : (pu || item.unit || '份');
     if (p.unitPrice != null && (item.unitPrice == null || item.unitPrice === 0)) {
       item.unitPrice = Number(p.unitPrice);
     }
-    // P1-3: spec 自动填后立即调 calcBox, 抄码品会清空 boxQuantity (内部判断)
-    if (item.quantity) calcBox(item);
+    // P1-3: spec 自动填后立即调 calcBox, 抄码品会清空 boxQuantity (内部判断).
+    // T130: calcBox 现支持两分支 (份→qty/coeff, 箱→qty), 总是重算箱数 (只读列).
+    calcBox(item);
+  } else {
+    // T130 Feature A — 用户清空产品 → 该行变回空行; 收口尾部空行, 不累积重复空行.
+    ensureTrailingEmptyRow();
   }
   // Issue #793 — 客户协议价 lookup. Customer + product 都选好后查协议价, 命中即覆盖 unitPrice.
   // Priority: 协议价 (合同) > 上次成交价 > BOM 默认价. 用户仍可手动覆盖.
@@ -668,6 +745,8 @@ function onProductSelect(item: TableRow, productId: string) {
   // Sprint 4 W2 S-PRICE-1 (R1) — 上次成交价 hint:
   // 选完产品立即异步查记忆价, 显在 unitPrice 输入框下. 用户**预先看到**, 不是输完后再被告知偏离.
   fetchPriceMemory(item, productId);
+  // T130 Feature A — 选好产品后保证末尾仍有空行可继续录入.
+  if (productId) ensureTrailingEmptyRow();
 }
 
 /**
@@ -752,28 +831,111 @@ function calcBox(item: TableRow) {
     return;
   }
   const p = products.value.find((x: TableRow) => x.id === item.productTypeId);
-  if (p?.boxConversionCoefficient && Number(p.boxConversionCoefficient) > 0 && Number(item.quantity) > 0) {
-    item.boxQuantity = Math.round((Number(item.quantity) / Number(p.boxConversionCoefficient)) * 100) / 100;
+  if (!p) return;
+  // 未配置箱规 → 箱数 null (模板会提示去产品字典维护, fool-proof Rule 5).
+  if (!p.boxConversionCoefficient || Number(p.boxConversionCoefficient) <= 0) {
+    item.boxQuantity = null;
+    return;
+  }
+  const coeff = Number(p.boxConversionCoefficient);
+  const qty = Number(item.quantity || 0);
+  if (qty <= 0) return;
+  // T130 Feature D — 两分支口径:
+  //   一级单位 (份, 或与产品单位一致) → 箱数 = 数量 / 箱规系数
+  //   二级单位 (箱)                   → 箱数 = 数量本身 (用户直接按箱下单)
+  const unit = String(item.unit || '');
+  const pu = String(p.unit || '份');
+  if (!unit || unit === pu || unit === '份') {
+    item.boxQuantity = Math.round((qty / coeff) * 100) / 100;
+  } else if (unit === '箱') {
+    item.boxQuantity = qty;
+  }
+  // 其他单位 → 不动 (defensive)
+}
+
+// T130 Feature D — 产品是否未配置箱规 (模板用来显警告 + 决定箱数列是否可显数字).
+function isBoxUnconfigured(item: TableRow): boolean {
+  if (!item.productTypeId || isAbacaItem(item)) return false;
+  const p = products.value.find((x: TableRow) => x.id === item.productTypeId);
+  if (!p) return false;
+  return !p.boxConversionCoefficient || Number(p.boxConversionCoefficient) <= 0;
+}
+
+// T130 Feature D — 该行规格展示 (只读): 产品字典 specification / packageSpec.
+function specDisplay(item: TableRow): string {
+  if (item.specification) return String(item.specification);
+  const p = products.value.find((x: TableRow) => x.id === item.productTypeId);
+  return String(p?.specification || p?.packageSpec || '');
+}
+
+// T130 Feature D — 单位下拉选项: 份 + (产品配了箱规才给 箱).
+function unitOptions(item: TableRow): string[] {
+  const p = products.value.find((x: TableRow) => x.id === item.productTypeId);
+  const opts = ['份'];
+  if (p && Number(p.boxConversionCoefficient) > 0) opts.push('箱');
+  return opts;
+}
+
+// T130 Feature B — 客户选择 → 智能预填业务员 (frontend-only).
+// 优先级: ① 上一单业务员 (DEFER, 需后端 last-order 查询) → ② 客户归属业务员 (CustomerDTO.assignedSalesUserName)
+//          → ③ 当前登录用户. salespersonTouched=true (用户手动改过) 则不覆盖.
+// TODO(T130 priority ①): 接后端 "该客户最近一单业务员" 端点后, 在 ② 之前插入 last-order 优先级.
+function onCustomerSelect(customerId: string) {
+  // Option A (Steve-confirmed): 换客户即重算业务员 → 重置 touched 后立即按优先级预填.
+  // 用户之后仍可在业务员下拉手动覆盖 (那会再次置 touched=true).
+  // 其他客户相关 hint (协议价/记忆价) 由各行 onProductSelect 在用户选产品时查, 这里不动.
+  salespersonTouched.value = false;
+  let prefill = '';
+  // ② 客户归属业务员 — 但必须在 salesEmployees 选项中存在 (否则 el-select 显空白) 才用, 否则落到 ③.
+  const cust = customers.value.find((c) => String(c.id) === String(customerId));
+  const assigned = cust ? String((cust as TableRow).assignedSalesUserName || '') : '';
+  if (assigned && salesEmployees.value.some((e) => String(e.fullName || '') === assigned)) {
+    prefill = assigned;
+  }
+  // ③ 当前登录用户
+  if (!prefill) {
+    prefill = String(authStore.user?.fullName || authStore.user?.username || '');
+  }
+  form.value.salesperson = prefill;
+}
+
+// T130 Feature D6 — Tab 跨行跳到下一行下单数量; Shift+Tab 跳上一行; 末行 Tab → 创建按钮.
+// 只把"下单数量"列纳入 Tab 链 (录入热路径). inline 实现, 不抽 composable.
+const submitButtonRef = ref<{ ref?: HTMLElement } | { $el?: HTMLElement } | null>(null);
+function handleQuantityTab(e: KeyboardEvent, idx: number) {
+  e.preventDefault();
+  if (e.shiftKey) {
+    quantityRefs.value[idx - 1]?.focus();
+    return;
+  }
+  const next = quantityRefs.value[idx + 1];
+  if (next) {
+    next.focus();
+  } else {
+    // 末行 Tab → 聚焦"创建/保存"按钮 (Steve-default).
+    const btn = submitButtonRef.value as { ref?: HTMLElement; $el?: HTMLElement } | null;
+    const el = btn?.ref || btn?.$el;
+    el?.focus?.();
   }
 }
 
 async function handleCreate() {
   if (!form.value.customerId) return ElMessage.warning('请选择客户');
-  if (!form.value.items || form.value.items.length === 0) return ElMessage.warning('请至少添加一个订单明细');
-  // Apr 18 2026 bug #54: 用户报告"信息填写完整 无法提交 显示不为空" — 实际是前端
-  // 缺 productTypeId 空值校验, 漏到后端才 reject, 用户看文案困惑。
-  if (form.value.items.some((i: TableRow) => !i.productTypeId)) return ElMessage.warning('请为所有明细选择产品');
-  // 数量校验: 不允许0或负数
-  if (form.value.items.some((i: TableRow) => !i.quantity || Number(i.quantity) <= 0)) return ElMessage.warning('产品数量必须大于0');
+  // T130 Feature A — 只校验/提交"已选产品"的行, 忽略末尾自动空行 (不再因尾部空行报"请为所有明细选择产品").
+  const selectedItems = getSubmittableItems();
+  if (selectedItems.length === 0) return ElMessage.warning('请至少添加一个订单明细');
+  // 数量校验: 已选产品行不允许0或负数 (有产品但数量空 → 报错, 不静默丢弃)
+  if (selectedItems.some((i) => !i.quantity || Number(i.quantity) <= 0)) return ElMessage.warning('产品数量必须大于0');
   // 单位校验
-  if (form.value.items.some((i: TableRow) => !i.unit)) return ElMessage.warning('请填写所有明细的单位');
+  if (selectedItems.some((i) => !i.unit)) return ElMessage.warning('请填写所有明细的单位');
   // 销售单价校验
-  if (form.value.items.some((i: TableRow) => i.unitPrice == null || Number(i.unitPrice) < 0)) return ElMessage.warning('请填写所有明细的销售单价');
-  // SKU 重复校验
-  const productIds = form.value.items.map((i: TableRow) => i.productTypeId).filter(Boolean);
+  if (selectedItems.some((i) => i.unitPrice == null || Number(i.unitPrice) < 0)) return ElMessage.warning('请填写所有明细的销售单价');
+  // SKU 重复校验 (只看已选行)
+  const productIds = selectedItems.map((i) => i.productTypeId).filter(Boolean);
   if (new Set(productIds).size !== productIds.length) return ElMessage.warning('同一订单不能添加重复的产品');
   try {
-    const res = await post(`/${factoryId.value}/sales/orders`, form.value);
+    // 提交体只带已选行, 末尾空行永不发后端.
+    const res = await post(`/${factoryId.value}/sales/orders`, { ...form.value, items: selectedItems });
     if (res.success) { ElMessage.success('创建成功'); dialogVisible.value = false; loadData(); }
     else { ElMessage.error(res.message || '创建失败'); }
   } catch (e: unknown) {
@@ -839,7 +1001,7 @@ function handleEdit(row: TableRow) {
       ? row.items.map((item: TableRow) => ({
           productTypeId: String(item.productTypeId || item.productType?.id || ''),
           quantity: Number(item.quantity || 0),
-          unit: String(item.unit || 'kg'),
+          unit: String(item.unit || '份'),
           unitPrice: Number(item.unitPrice || 0),
           // PR #173 reviewer follow-up M-4 (May 9 2026): preserve specification + boxQuantity
           // on edit. 旧 bug: handleEdit 重建 form.items 时漏了这两字段, 用户编辑现有订单后
@@ -848,13 +1010,22 @@ function handleEdit(row: TableRow) {
           specification: String(item.specification || ''),
           boxQuantity: item.boxQuantity != null ? Number(item.boxQuantity) : null,
           taxRate: item.taxRate != null ? Number(item.taxRate) : 13,
+          // T130 Feature C / F9 fix (issue #525): handleEdit 之前漏带 sourceWarehouseCode,
+          // 编辑现有订单后提交会把来源仓库覆盖为空 → 补回.
+          sourceWarehouseCode: String(item.sourceWarehouseCode || 'WH-LOG'),
         }))
-      : [{ productTypeId: '', quantity: 0, unit: 'kg', unitPrice: 0, specification: '', boxQuantity: null, taxRate: 13 }],
+      : [emptyOrderItem()],
     contractFileUrl: (row.contractFileUrl ? String(row.contractFileUrl) : null) as string | null,
     contractFileName: (row.contractFileName ? String(row.contractFileName) : null) as string | null,
     customFields: {} as TableRow,
     version: typeof row.version === 'number' ? row.version : null,
   };
+  // T130 Feature B — handleEdit 是程序赋值 form.customerId (非用户 @change), 不触发 onCustomerSelect,
+  // 故业务员保留订单原值; 显式标 touched 防止后续误覆盖.
+  salespersonTouched.value = true;
+  // T130 Feature A — 编辑态也追加一个尾部空行, 便于继续加品. calcBox 重算已有行箱数 (只读列).
+  form.value.items.forEach((it) => calcBox(it));
+  ensureTrailingEmptyRow();
   dialogVisible.value = true;
 }
 
@@ -862,8 +1033,16 @@ async function handleSave() {
   if (editingOrderId.value) {
     // Update existing order
     if (!form.value.customerId) return ElMessage.warning('请选择客户');
+    // T130 Feature A — 编辑提交同样剔除末尾空行, 并对已选行做与创建一致的校验.
+    const selectedItems = getSubmittableItems();
+    if (selectedItems.length === 0) return ElMessage.warning('请至少添加一个订单明细');
+    if (selectedItems.some((i) => !i.quantity || Number(i.quantity) <= 0)) return ElMessage.warning('产品数量必须大于0');
+    if (selectedItems.some((i) => !i.unit)) return ElMessage.warning('请填写所有明细的单位');
+    if (selectedItems.some((i) => i.unitPrice == null || Number(i.unitPrice) < 0)) return ElMessage.warning('请填写所有明细的销售单价');
+    const editProductIds = selectedItems.map((i) => i.productTypeId).filter(Boolean);
+    if (new Set(editProductIds).size !== editProductIds.length) return ElMessage.warning('同一订单不能添加重复的产品');
     try {
-      const res = await put(`/${factoryId.value}/sales/orders/${editingOrderId.value}`, form.value);
+      const res = await put(`/${factoryId.value}/sales/orders/${editingOrderId.value}`, { ...form.value, items: selectedItems });
       if (res.success) { ElMessage.success('保存成功'); dialogVisible.value = false; editingOrderId.value = null; loadData(); }
       else { ElMessage.error(res.message || '保存失败'); }
     } catch (err) {
@@ -890,6 +1069,8 @@ async function handleSave() {
 
 async function openCreateDialog() {
   editingOrderId.value = null;
+  // T130 Feature B — 新建时业务员未被用户碰过, 选客户后允许自动预填.
+  salespersonTouched.value = false;
   form.value = {
     customerId: '',
     requiredDeliveryDate: '',
@@ -899,7 +1080,8 @@ async function openCreateDialog() {
     shippingIncluded: false,
     shippingFee: 0,
     extraFees: [] as Array<{ name: string; amount: number; remark: string }>,
-    items: [{ productTypeId: '', quantity: 0, unit: 'kg', unitPrice: 0, taxRate: 13 }] as OrderItem[],
+    // T130 Feature C+D — 首行走 emptyOrderItem() (单位='份' + 仓库记忆 + 全字段一致).
+    items: [emptyOrderItem()] as OrderItem[],
     customFields: {} as TableRow,
     contractFileUrl: null,
     contractFileName: null,
@@ -1476,14 +1658,16 @@ async function submitQuickPayment() {
     <el-dialog v-model="dialogVisible" :title="editingOrderId ? `编辑${label('salesOrder')}` : `新建${label('salesOrder')}`" width="80%" destroy-on-close>
       <el-form :model="form" label-width="100px">
         <el-form-item :label="label('customer')">
-          <el-select v-model="form.customerId" placeholder="请选择" filterable style="width: 100%">
+          <!-- T130 Feature B — 选客户后智能预填业务员 (归属业务员 → 当前用户). -->
+          <el-select v-model="form.customerId" placeholder="请选择" filterable style="width: 100%" @change="onCustomerSelect">
             <el-option v-for="c in customers" :key="c.id" :label="c.name" :value="c.id" />
           </el-select>
         </el-form-item>
         <el-form-item label="交货日期"><el-date-picker v-model="form.requiredDeliveryDate" type="date" value-format="YYYY-MM-DD" /></el-form-item>
         <el-form-item label="交货地址"><el-input v-model="form.deliveryAddress" /></el-form-item>
         <el-form-item label="业务员">
-          <el-select v-model="form.salesperson" placeholder="请选择业务员" filterable allow-create style="width: 100%">
+          <!-- T130 Feature B — 用户手动改业务员 → touched=true, 不再被客户切换自动覆盖. -->
+          <el-select v-model="form.salesperson" placeholder="请选择业务员" filterable allow-create style="width: 100%" @change="salespersonTouched = true">
             <el-option v-for="emp in salesEmployees" :key="emp.id" :label="emp.fullName" :value="emp.fullName" />
           </el-select>
         </el-form-item>
@@ -1536,12 +1720,24 @@ async function submitQuickPayment() {
           <span style="width: 40px">操作</span>
         </div>
         <div v-for="(item, idx) in form.items" :key="idx" class="item-row">
-          <el-select v-model="item.productTypeId" placeholder="选择产品" filterable style="width: 200px" @change="(v: string) => onProductSelect(item, v)">
+          <el-select v-model="item.productTypeId" placeholder="选择产品" filterable clearable style="width: 200px" @change="(v: string) => onProductSelect(item, v)">
             <el-option v-for="p in products" :key="p.id" :label="p.name" :value="p.id" />
           </el-select>
-          <el-input v-model="item.specification" placeholder="规格" style="width: 120px" @change="calcBox(item)" />
-          <el-input-number v-model="item.quantity" :min="1" style="width: 130px" @change="() => calcBox(item)" />
-          <el-input v-model="item.unit" style="width: 80px" />
+          <!-- T130 Feature D — 规格只读: 取产品字典 specification/packageSpec, 抄码品由 onProductSelect 识别. -->
+          <el-input :model-value="specDisplay(item)" placeholder="规格" style="width: 120px" disabled />
+          <!-- T130 Feature D6 — 下单数量纳入 Tab 链; Tab/Shift+Tab 跨行跳, 末行 Tab → 创建按钮. -->
+          <el-input-number
+            v-model="item.quantity"
+            :min="0"
+            :ref="(el: any) => { quantityRefs[idx] = el; }"
+            style="width: 130px"
+            @change="() => calcBox(item)"
+            @keydown.tab="(e: KeyboardEvent) => handleQuantityTab(e, idx)"
+          />
+          <!-- T130 Feature D — 单位下拉: 份 + (产品配箱规才给 箱). NO allow-create. 默认 份. -->
+          <el-select v-model="item.unit" filterable style="width: 80px" @change="() => calcBox(item)">
+            <el-option v-for="u in unitOptions(item)" :key="u" :label="u" :value="u" />
+          </el-select>
           <!-- Sprint 4 W2 S-PRICE-1 R1: unitPrice + 上次成交价 hint chip (一键采纳) -->
           <!-- Issue #793: 客户协议价 hint (CUSTOMER 自动覆盖, GLOBAL 仅提示) -->
           <div class="unit-price-wrap">
@@ -1578,9 +1774,12 @@ async function submitQuickPayment() {
             </el-tooltip>
           </div>
           <!-- P1-3 R2 fix: el-tag 替换 inline-styled div, 跟随 Element Plus 主题 -->
-          <!-- 2026-05-22 hotfix: 箱数 80→130px — Steve 客户报 -/+ 按钮挤掉数字看不见 -->
+          <!-- T130 Feature D — 箱数只读 (由数量×箱规自动计算, 非第二销售单位); 抄码品/未配置箱规分别提示. -->
           <el-tag v-if="isAbacaItem(item)" type="warning" effect="light" size="default" style="width: 130px; text-align: center;">抄码品</el-tag>
-          <el-input-number v-else v-model="item.boxQuantity" :min="0" :precision="2" style="width: 130px" placeholder="箱" />
+          <el-text v-else-if="isBoxUnconfigured(item)" type="warning" size="small" style="width: 130px; line-height: 1.2;">未配置箱规，请到产品字典维护</el-text>
+          <el-tooltip v-else content="由数量与箱规自动计算，非第二销售单位" placement="top">
+            <el-input-number v-model="item.boxQuantity" :min="0" :precision="2" disabled style="width: 130px" placeholder="箱" />
+          </el-tooltip>
           <el-select v-model="item.taxRate" placeholder="税率" style="width: 90px" size="default">
             <el-option :value="0" label="0% 免税" />
             <el-option :value="3" label="3% 小规模" />
@@ -1589,7 +1788,8 @@ async function submitQuickPayment() {
             <el-option :value="13" label="13% 加工" />
           </el-select>
           <!-- T4-D1 (issue #525): 来源仓库 select — labels 总仓 / 线边仓 per utils/warehouse.ts. -->
-          <el-select v-model="item.sourceWarehouseCode" placeholder="选择" clearable style="width: 110px" size="default">
+          <!-- T130 Feature C — 用户选仓库即记忆 (按操作员), 下次新行预填. -->
+          <el-select v-model="item.sourceWarehouseCode" placeholder="选择" clearable style="width: 110px" size="default" @change="(v: string) => rememberWarehouse(v)">
             <el-option label="总仓 (WH-LOG)" value="WH-LOG" />
             <el-option label="线边仓 (WH-WKS)" value="WH-WKS" />
           </el-select>
@@ -1599,7 +1799,8 @@ async function submitQuickPayment() {
       </el-form>
       <template #footer>
         <el-button @click="dialogVisible = false">取消</el-button>
-        <el-button type="primary" @click="handleSave">{{ editingOrderId ? '保存' : '创建' }}</el-button>
+        <!-- T130 Feature D6 — 末行下单数量 Tab 跳到此按钮. -->
+        <el-button ref="submitButtonRef" type="primary" @click="handleSave">{{ editingOrderId ? '保存' : '创建' }}</el-button>
       </template>
     </el-dialog>
 
