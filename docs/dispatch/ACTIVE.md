@@ -18,7 +18,7 @@
 | ID | 任务 | model | effort | orchestration | 分支 | scope 锁 | 状态 | PR | 阻塞 |
 |---|---|---|---|---|---|---|---|---|---|
 | T103 | S1 🖐️真机走一单 录音→`voiceAudioUrl` OSS 验证 | Steve(手动) | - | - | - | - | ⬜ pending | - | ✅已解锁(真实餐饮角色 qhj_chef/qhj_purchase_mgr/qhj_owner 已建+验登录);需真机(APK 已装小米 f79c50d6) |
-| T118 | 菜品 coref round-3: D1 slot-写入侧(BESTSELLER 不写 DISH 槽) | TBD | locked | inline | (待决策) | IntentExecutionOrchestrator extractAndUpdateEntitySlots / updateConversationMemory@491,1612 | 🟡 in-progress | - | 🔒 round-3, branch fix/dish-coref-d1-slot-write. root-caused: BESTSELLER 路径不持久化 DISH 槽(STORE 写;top_dish 在 resultData 顶层但 hook 对此路径没持久化). 2次已miss(#551/#554)→精准 round-3 或 park, 等 Steve 定 |
+| T120 | 菜品 coref **收尾**: 续接分支跳过 coref 解析(X1-continuation) | Sonnet→Opus gate | locked | inline | (待 T115-v2 merge,同文件) | IntentRecognitionPipelineServiceImpl execute() preprocess 调用点(~540-560) | 🔴 blocked | - | 🔒 **完整根因**: D2"那道菜"被 maybeAugmentContinuation 命中→走 `if(augmented!=null)` 分支→**跳过 ensureDishReferenceResolved**→无 ref→不注入→不过滤。修=在续接分支也调 ensureStore/Dish 解析(或移到 if/else 后)。其余层全 live 验过好(slot写#557✓/gold过滤✓/ToolDispatch注入✓)。等 T115-v2 merge(同文件)后派,该 1 轮落地 |
 | T115 | 飞轮治理 v2: 分层写入 + **一致性重提议 promote**(非 hits) | Sonnet→Opus gate | locked | inline | feat/flywheel-tiering-v2 | ExpressionLearningServiceImpl + LearnedExpressionRepository + Flyway(proposal_count列) | 🟡 in-progress | (#556 closed) | 🔒 #556 promote 硬伤(staged 不路由→无 hits→永不 promote)已关。**修正认知: NULL+staged 都不路由=dormant 安全, 非活跃毒(活跃毒早 #553 处理)**。v2: ≥0.9 active/0.70-0.89 staged; dedup 命中 staged/NULL→proposal_count++, 第3次+守卫→promote(有机复活好 NULL, 毒保持 dormant)。无 mass NULL 动作 |
 
 <!--
@@ -60,6 +60,7 @@
 | T116 | 修菜品 coref D2(ensureDishReferenceResolved) | #554 | 2026-06-07 | ⚠️ deployed 但 **D2 仍 dormant**(post-deploy live: 返全Top5 未过滤). #554 修 D2 解析侧, 真因在 D1 slot-写入侧→ T118. ✅gate教训: 这次 post-deploy live 验抓到(没像 T108 漏) |
 | T117 | AI配工序草稿渲染 bug | #555 | 2026-06-07 | 前端 WorkProcessAIChatPanel.vue 缺 PRODUCT_WORK_PROCESS_DRAFT renderer→吐 raw type; 修=渲染工序卡+应用按钮. **deployed** web-admin 8086 HTTP200(rsync) |
 | T114 | §8 基建 deploy-staging CI libcrypto | #552 | 2026-06-07 | CI-only(`echo key>id_rsa` 丢尾换行→OpenSSH8.9+严格PEM拒→改 `webfactory/ssh-agent@v0.9.0`,secret不变)。1文件10/10,下次CI生效无需部署。§8b test采购账号401=**非bug**(e2e_purchase_mgr 实测存在+active+登录success,历史401是seed未跑;无码改)。 |
+| T118 | 菜品 coref round-3 D1 slot-写入 | #557 | 2026-06-07 | getOrCreateContext 补在 normal execute 路径(updateEntitySlot 无 session 行时静默 bail)。**已部署** v20260607_184448。**live 验: D1 现在真写 DISH 槽**(DB 实证 `{"DISH":{"id":505,...}}`,rounds 1-2 是 0 行)。**但 D2 仍全 Top5** —— 暴露第4层(续接分支跳过 coref)→ T120 收尾。多轮慢=4层 bug 层层遮挡。 |
 
 ---
 
