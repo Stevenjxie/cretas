@@ -4,7 +4,7 @@ import { useRouter } from 'vue-router';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { useBusinessMode } from '@/composables/useBusinessMode';
-import { get, post, put } from '@/api/request';
+import { get, post, put, del } from '@/api/request';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Plus, Refresh, Search, ChatDotRound, QuestionFilled } from '@element-plus/icons-vue';
 import AiEntryDrawer from '@/components/ai-entry/AiEntryDrawer.vue';
@@ -227,12 +227,8 @@ async function handleInlineIconClick(id: InlineIconId, row: TableRow): Promise<v
       forwardDialogVisible.value = true;
       break;
     case 'delete':
-      try {
-        await ElMessageBox.confirm(`确认删除订单 ${row.orderNumber}？`, '删除确认', { type: 'warning' });
-        handleRowActionClick('delete', row);
-      } catch {
-        // user cancelled
-      }
+      // T129: single confirm lives inside handleDeleteOrder — no double-confirm here
+      await handleDeleteOrder(row);
       break;
     case 'audit':
       // PR #861: open AuditLogDrawer scoped to this row. Backend
@@ -306,6 +302,7 @@ function handleRowActionClick(actionId: string, row: TableRow) {
     case 'cancel': handleAction(String(row.id), 'cancel'); break;
     case 'print-pdf': void safePrint('sales-order', factoryId.value, String(row.id), { fileName: `销售订单_${row.orderNumber || row.id}` }); break;
     case 'copy': void handleCopyOrder(row); break;
+    case 'delete': void handleDeleteOrder(row); break;
     case 'convert-to-production': ElMessage.info('转生产任务 (待 Track E N31 集成)'); break;
     default: ElMessage.info(`Action: ${actionId}`);
   }
@@ -328,6 +325,33 @@ async function handleCopyOrder(row: TableRow): Promise<void> {
   if (res?.success && res.data) {
     ElMessage.success(`已复制为 ${res.data.orderNumber}`);
     await loadData();
+  }
+}
+// T129 Part 1 — 删除草稿销售订单 (软删除, 仅 DRAFT).
+// Fool-proof Rule 2: confirm dialog carries 订单号 context.
+// Fool-proof Rule 4: idempotent — backend 409 if non-DRAFT, handled as sticky error.
+async function handleDeleteOrder(row: TableRow): Promise<void> {
+  const orderNumber = String(row.orderNumber || row.id || '');
+  try {
+    await ElMessageBox.confirm(
+      `确认删除草稿销售单 ${orderNumber}？此操作不可恢复。`,
+      '删除草稿',
+      { confirmButtonText: '删除', cancelButtonText: '取消', type: 'warning' }
+    );
+  } catch {
+    return; // 用户取消
+  }
+  try {
+    const res = await del(`/${factoryId.value}/sales/orders/${row.id}`);
+    if (res?.success) {
+      ElMessage.success(`已删除草稿 ${orderNumber}`);
+      await loadData();
+    } else {
+      ElMessage({ message: res?.message || '删除失败', type: 'error', duration: 0, showClose: true });
+    }
+  } catch (e: unknown) {
+    const msg = (e as { response?: { data?: { message?: string } } })?.response?.data?.message || '删除失败';
+    ElMessage({ message: msg, type: 'error', duration: 0, showClose: true });
   }
 }
 function openAiForRow(row: TableRow) {

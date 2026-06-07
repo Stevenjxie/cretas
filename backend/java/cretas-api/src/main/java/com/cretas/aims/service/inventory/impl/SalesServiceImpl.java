@@ -1053,6 +1053,26 @@ public class SalesServiceImpl implements SalesService {
         return newOrder;
     }
 
+    @Override
+    @Transactional
+    @Loggable(module = "SALES_ORDER", action = "DELETE", entityType = "SalesOrder",
+              entityIdParam = "orderId")
+    public void deleteDraft(String factoryId, String orderId, Long userId) {
+        // getSalesOrderById 已含 404 + 403 跨工厂隔离
+        SalesOrder order = getSalesOrderById(factoryId, orderId);
+        // 状态机约束: 仅 DRAFT 可删
+        if (order.getStatus() != SalesOrderStatus.DRAFT) {
+            throw new BusinessException(409,
+                    "仅 DRAFT 草稿状态可删除 (当前状态: " + order.getStatus().getDisplayName() + ")")
+                    .withHint("如需取消已确认的订单, 请使用取消操作");
+        }
+        // MVP: 有 sales:read_write 权限的工厂内管理员均可删除草稿 (无 creator-only 限制)
+        // 软删除 via BaseEntity @SQLDelete (UPDATE deleted_at = NOW())
+        salesOrderRepository.delete(order);
+        log.info("删除销售订单草稿: orderId={}, orderNumber={}, operatorId={}",
+                orderId, order.getOrderNumber(), userId);
+    }
+
     /**
      * Round 14: Compute all aggregate formulas configured for a sales order.
      * Returns formula results keyed by formula_code (e.g., "tax_group_sum").
