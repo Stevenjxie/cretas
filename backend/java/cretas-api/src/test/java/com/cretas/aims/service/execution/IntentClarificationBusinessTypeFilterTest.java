@@ -163,30 +163,49 @@ class IntentClarificationBusinessTypeFilterTest {
     }
 
     @Test
-    @DisplayName("isCandidateCompatible: filters FACTORY-tagged intents for a restaurant; COMMON-tagged is NOT caught (COMMON-overload — see comment)")
+    @DisplayName("isCandidateCompatible: FACTORY-tagged intents (including retagged MATERIAL_BATCH_QUERY/PROCESSING_BATCH_LIST) are filtered for restaurant")
     void isCandidateCompatibleFiltersByBusinessType() {
         when(configService.resolveBusinessDomain(RESTAURANT_FACTORY)).thenReturn("RESTAURANT");
-        // A genuinely FACTORY-tagged intent (e.g. SKU_GROSS_MARGIN, retagged COMMON→FACTORY in #485) → filtered out.
+        // SKU_GROSS_MARGIN was retagged COMMON→FACTORY in #485.
         when(configService.getIntentByCode(eq(RESTAURANT_FACTORY), eq("SKU_GROSS_MARGIN")))
                 .thenReturn(Optional.of(intentWithBiz("SKU_GROSS_MARGIN", "FACTORY")));
         when(configService.getIntentByCode(eq(RESTAURANT_FACTORY), eq("RESTAURANT_BESTSELLER_QUERY")))
                 .thenReturn(Optional.of(intentWithBiz("RESTAURANT_BESTSELLER_QUERY", "RESTAURANT")));
-        // ⚠️ Real-world COMMON-overload (honest test): MATERIAL_BATCH_QUERY ("查询原料库存") is business_type=COMMON
-        // in the DB, NOT FACTORY. isCompatible(COMMON, RESTAURANT)=true → the per-candidate filter does NOT catch it.
-        // The user-reported "查询原料库存" leak is removed by the buildDefaultSuggestions/ensureMinChoices SWAP
-        // (covered by restaurantDefaultsExcludeManufacturing + ensureMinChoicesRestaurantPadding above), NOT by this
-        // candidate filter. Retagging the broader COMMON-manufacturing set → FACTORY is backlog (see #485 residual).
+        // MATERIAL_BATCH_QUERY and PROCESSING_BATCH_LIST are retagged COMMON→FACTORY by
+        // V20260928_03__retag_manufacturing_batch_intents.sql (COMMON-overload fix).
+        // After the migration isCandidateCompatible must return false for a RESTAURANT tenant.
         when(configService.getIntentByCode(eq(RESTAURANT_FACTORY), eq("MATERIAL_BATCH_QUERY")))
-                .thenReturn(Optional.of(intentWithBiz("MATERIAL_BATCH_QUERY", "COMMON")));
+                .thenReturn(Optional.of(intentWithBiz("MATERIAL_BATCH_QUERY", "FACTORY")));
+        when(configService.getIntentByCode(eq(RESTAURANT_FACTORY), eq("PROCESSING_BATCH_LIST")))
+                .thenReturn(Optional.of(intentWithBiz("PROCESSING_BATCH_LIST", "FACTORY")));
 
         String domain = orchestrator.resolveFactoryDomainSafe(RESTAURANT_FACTORY);
         assertThat(orchestrator.isCandidateCompatible(RESTAURANT_FACTORY, domain, "SKU_GROSS_MARGIN"))
                 .as("FACTORY-tagged intent must be filtered out for a restaurant tenant").isFalse();
         assertThat(orchestrator.isCandidateCompatible(RESTAURANT_FACTORY, domain, "RESTAURANT_BESTSELLER_QUERY"))
                 .as("restaurant intent must pass for a restaurant tenant").isTrue();
+        // COMMON-overload fix: MATERIAL_BATCH_QUERY and PROCESSING_BATCH_LIST are now FACTORY-tagged
+        // → filtered out for restaurant tenants via isCandidateCompatible.
         assertThat(orchestrator.isCandidateCompatible(RESTAURANT_FACTORY, domain, "MATERIAL_BATCH_QUERY"))
-                .as("COMMON-tagged manufacturing intent is NOT caught by the candidate filter (COMMON-overload); "
-                        + "the default/padding swap removes the actual leak").isTrue();
+                .as("FACTORY-retagged MATERIAL_BATCH_QUERY must be filtered out for a restaurant tenant").isFalse();
+        assertThat(orchestrator.isCandidateCompatible(RESTAURANT_FACTORY, domain, "PROCESSING_BATCH_LIST"))
+                .as("FACTORY-retagged PROCESSING_BATCH_LIST must be filtered out for a restaurant tenant").isFalse();
+    }
+
+    @Test
+    @DisplayName("FACTORY-retagged manufacturing intents still pass for a FACTORY tenant (zero regression)")
+    void retaggedManufacturingIntentsPassForFactoryTenant() {
+        when(configService.resolveBusinessDomain(MANUFACTURING_FACTORY)).thenReturn("FACTORY");
+        when(configService.getIntentByCode(eq(MANUFACTURING_FACTORY), eq("MATERIAL_BATCH_QUERY")))
+                .thenReturn(Optional.of(intentWithBiz("MATERIAL_BATCH_QUERY", "FACTORY")));
+        when(configService.getIntentByCode(eq(MANUFACTURING_FACTORY), eq("PROCESSING_BATCH_LIST")))
+                .thenReturn(Optional.of(intentWithBiz("PROCESSING_BATCH_LIST", "FACTORY")));
+
+        String domain = orchestrator.resolveFactoryDomainSafe(MANUFACTURING_FACTORY);
+        assertThat(orchestrator.isCandidateCompatible(MANUFACTURING_FACTORY, domain, "MATERIAL_BATCH_QUERY"))
+                .as("FACTORY-tagged MATERIAL_BATCH_QUERY must pass for a factory tenant (no regression)").isTrue();
+        assertThat(orchestrator.isCandidateCompatible(MANUFACTURING_FACTORY, domain, "PROCESSING_BATCH_LIST"))
+                .as("FACTORY-tagged PROCESSING_BATCH_LIST must pass for a factory tenant (no regression)").isTrue();
     }
 
     @Test
