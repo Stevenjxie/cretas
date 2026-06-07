@@ -70,11 +70,13 @@ public class BomItem extends BaseEntity {
     private BigDecimal standardQuantity;
 
     /**
-     * 出成率 (0-100的百分比，如90表示90%出成率)
+     * 出成率 (百分比; 保水工序可 >100, 如六扇门猪舌保水 105–126%).
+     * null = 待评估 (B1: 不再强制填充 100.00, 允许前端/UI 展示"待评估"状态).
+     * {@link #getActualQuantity()} null 时回退到 standardQuantity (等效 100% 数学上一致).
      */
     @Column(name = "yield_rate", precision = 6, scale = 2)
     @Builder.Default
-    private BigDecimal yieldRate = new BigDecimal("100.00");
+    private BigDecimal yieldRate = null;
 
     /**
      * 计量单位

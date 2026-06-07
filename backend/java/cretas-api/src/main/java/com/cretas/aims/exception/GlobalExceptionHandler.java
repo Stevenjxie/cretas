@@ -154,6 +154,32 @@ public class GlobalExceptionHandler {
     }
 
     /**
+     * M10: BOM 出成率应用 — 乐观并发保护. 返回 409 + staleRows 列表.
+     *
+     * <p>前端凭 {@code errorCode="BOM_YIELD_STALE"} 区分此 409 与其他 409,
+     * 渲染 "数据已变更, 请重新预览" 提示并刷新预览列表.
+     */
+    @ExceptionHandler(BomYieldStaleException.class)
+    public org.springframework.http.ResponseEntity<ApiResponse<?>> handleBomYieldStale(
+            BomYieldStaleException e) {
+        log.warn("[BomYieldApply] M10 staleness detected: {} rows stale, message={}",
+                e.getStaleRows().size(), e.getMessage());
+        ApiResponse<java.util.List<com.cretas.aims.dto.bom.BomYieldStaleRowDTO>> body =
+                new ApiResponse<>();
+        body.setCode(409);
+        body.setSuccess(false);
+        body.setMessage(e.getMessage());
+        body.setData(e.getStaleRows());
+        body.setTimestamp(java.time.LocalDateTime.now());
+        body.setErrorCode("BOM_YIELD_STALE");
+        body.setSeverity("warning");
+        body.setActionHint("请重新点击「预览」获取最新建议值，然后再次应用");
+        return org.springframework.http.ResponseEntity
+                .status(org.springframework.http.HttpStatus.CONFLICT)
+                .body(body);
+    }
+
+    /**
      * 处理业务异常 - 业务异常消息通常是安全的
      */
     @ExceptionHandler(BusinessException.class)

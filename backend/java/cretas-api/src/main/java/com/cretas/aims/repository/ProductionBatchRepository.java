@@ -316,4 +316,23 @@ public interface ProductionBatchRepository extends JpaRepository<ProductionBatch
         return findRecentCompletedByFactory(factoryId,
                 org.springframework.data.domain.PageRequest.of(0, 50));
     }
+
+    /**
+     * 查询工厂下某产品最近 N 个已完成批次 (按 endTime 倒序, endTime null 降最后).
+     *
+     * <p>BOM 出成率评估服务 ({@link com.cretas.aims.service.bom.impl.BomYieldEstimateServiceImpl})
+     * 用此方法取最近 10 个批次计算 P50 中位数建议出成率.
+     *
+     * @param factoryId     工厂 ID (租户隔离)
+     * @param productTypeId 产品类型 ID
+     * @param pageable      分页 (通常 PageRequest.of(0, 10))
+     * @return 已完成批次列表, 按 endTime DESC NULLS LAST
+     */
+    @Query("SELECT b FROM ProductionBatch b WHERE b.factoryId = :factoryId "
+            + "AND b.productTypeId = :productTypeId AND b.status = 'COMPLETED' "
+            + "ORDER BY b.endTime DESC NULLS LAST")
+    java.util.List<ProductionBatch> findRecentCompletedByFactoryAndProductType(
+            @Param("factoryId") String factoryId,
+            @Param("productTypeId") String productTypeId,
+            org.springframework.data.domain.Pageable pageable);
 }
