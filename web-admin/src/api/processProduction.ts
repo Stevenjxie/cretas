@@ -195,10 +195,17 @@ export interface ProductWorkProcessItem {
   processCategory: string;
   defaultUnit: string;
   defaultEstimatedMinutes: number | null;
-  /** 默认责任小组长 ID。null = 未设置；发送 -1 表示清空（后端 clear 语义）。 */
+  /** 默认责任小组长 ID（primary，向后兼容）。null = 未设置；发送 -1 表示清空。 */
   responsibleWorkerId?: number | null;
   /** 只读：后端 join 填充，前端不发送。 */
   responsibleWorkerName?: string | null;
+  /**
+   * T121 多人负责列表（worker id 数组）。
+   * 写操作：前端传此数组，后端对 join 表做 upsert；非空时覆盖 responsibleWorkerId。
+   * 读操作：后端填充 join 表结果，供多选下拉回显。
+   * null / 空数组 → 回退到 responsibleWorkerId 单值语义。
+   */
+  assigneeWorkerIds?: number[] | null;
 }
 
 export interface RecommendedWorkProcess {

@@ -28,6 +28,7 @@ import com.cretas.aims.repository.ProductionReportRepository;
 import com.cretas.aims.repository.SemiFinishedInventoryRepository;
 import com.cretas.aims.repository.WorkProcessRepository;
 import com.cretas.aims.entity.recipe.ProcessMaterialRecipe;
+import com.cretas.aims.repository.ProductWorkProcessAssigneeRepository;
 import com.cretas.aims.repository.lineage.BatchLineageEdgeRepository;
 import com.cretas.aims.repository.recipe.ProcessMaterialRecipeRepository;
 import com.cretas.aims.repository.workprocess.WorkProcessTaskRepository;
@@ -70,6 +71,7 @@ class YieldReportServiceImplTest {
     private ObjectMapper objectMapper;
     private ProcessMaterialRecipeRepository recipeRepo;
     private WipInventoryService wipInventoryService;
+    private ProductWorkProcessAssigneeRepository pwpAssigneeRepository;
     private YieldReportServiceImpl svc;
 
     @BeforeEach
@@ -89,6 +91,7 @@ class YieldReportServiceImplTest {
         objectMapper = new ObjectMapper();
         recipeRepo = mock(ProcessMaterialRecipeRepository.class);
         wipInventoryService = mock(WipInventoryService.class);
+        pwpAssigneeRepository = mock(ProductWorkProcessAssigneeRepository.class);
         // default: no source WIP found (向后兼容旧测试: sourceWipNo=null 不查 WIP)
         when(wipRepo.findByIntermediateBatchNoAndDeletedAtIsNull(anyString())).thenReturn(Optional.empty());
         when(wipRepo.findByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(anyString(), anyString()))
@@ -98,9 +101,12 @@ class YieldReportServiceImplTest {
         when(lineageEdgeRepo.save(any(BatchLineageEdge.class))).thenAnswer(i -> i.getArgument(0));
         // default: no recipe (向后兼容旧测试: 无配方时行为不变)
         when(recipeRepo.findActiveByFactoryIdAndWorkProcessId(anyString(), anyString())).thenReturn(List.of());
+        // T121: default — no multi-assignees (向后兼容: 旧测试任务 productWorkProcessId=null, 不进 multi-assignee guard)
+        when(pwpAssigneeRepository.findByProductWorkProcessId(any())).thenReturn(List.of());
         svc = new YieldReportServiceImpl(reportRepo, taskRepo, processRepo, calcSvc, processingService,
                 factorySettingsRepo, materialBatchRepo, productTypeRepo, productionBatchRepo,
-                productionPlanRepo, wipRepo, lineageEdgeRepo, objectMapper, recipeRepo, wipInventoryService);
+                productionPlanRepo, wipRepo, lineageEdgeRepo, objectMapper, recipeRepo, wipInventoryService,
+                pwpAssigneeRepository);
     }
 
     private WorkProcessTask task(long id, int order, String wpId) {

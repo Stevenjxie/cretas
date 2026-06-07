@@ -70,7 +70,8 @@ const saving = ref(false);
 interface PendingAdd { type: 'add'; wp: WorkProcessItem }
 interface PendingRemove { type: 'remove'; serverId: number }
 interface PendingSort { type: 'sort' }
-interface PendingResponsible { type: 'responsible'; serverId: number; workerId: number | null; productTypeId: string; workProcessId: string }
+/** T121: multi-assignee pending op replaces single-workerId op */
+interface PendingResponsible { type: 'responsible'; serverId: number; assigneeWorkerIds: number[]; productTypeId: string; workProcessId: string }
 type PendingOp = PendingAdd | PendingRemove | PendingSort | PendingResponsible;
 const pendingOps = ref<PendingOp[]>([]);
 const recommendationNotice = ref('');
@@ -135,15 +136,18 @@ async function handleSave() {
       await deleteProductWorkProcess(factoryId.value, op.serverId);
     }
 
-    // 2. Additions (include responsibleWorkerId if user set it on draft item)
+    // 2. Additions (T121: send assigneeWorkerIds if set; else fall back to responsibleWorkerId)
     for (const op of toAdd) {
       const draftItem = draftLinked.value.find(d => d.workProcessId === op.wp.id && d.isPending);
+      const assigneeWorkerIds = draftItem?.assigneeWorkerIds ?? null;
       const responsibleWorkerId = draftItem?.responsibleWorkerId ?? undefined;
       await createProductWorkProcess(factoryId.value, {
         productTypeId: selectedProductId.value,
         workProcessId: op.wp.id,
         processOrder: 999, // corrected by sort step below
-        ...(responsibleWorkerId != null ? { responsibleWorkerId } : {}),
+        ...(assigneeWorkerIds && assigneeWorkerIds.length > 0
+          ? { assigneeWorkerIds }
+          : responsibleWorkerId != null ? { responsibleWorkerId } : {}),
       });
     }
 
@@ -154,16 +158,16 @@ async function handleSave() {
       freshItems = Array.isArray(freshRes.data) ? freshRes.data : [];
     }
 
-    // 4. Responsible worker changes (use fresh server IDs)
+    // 4. Assignee changes (T121: use assigneeWorkerIds; fall back to legacy responsibleWorkerId clear)
     const freshByWpId = new Map(freshItems.map(i => [i.workProcessId, i]));
     for (const op of toResponsible) {
       const freshItem = freshByWpId.get(op.workProcessId);
       if (!freshItem) continue;
-      const workerId = op.workerId == null ? -1 : op.workerId;
+      // T121: always send assigneeWorkerIds (empty array = clear all assignees)
       await updateProductWorkProcess(factoryId.value, freshItem.id, {
         productTypeId: freshItem.productTypeId,
         workProcessId: freshItem.workProcessId,
-        responsibleWorkerId: workerId,
+        assigneeWorkerIds: op.assigneeWorkerIds,
       });
     }
 
@@ -401,12 +405,18 @@ function operatorDisplayName(op: { id: number; username: string; realName?: stri
 }
 
 /**
- * 返回工序行的责任小组长显示名称（只读模式）。
+ * T121: 返回工序行的负责人显示名称（只读模式，支持多人）。
  */
 function responsibleLabel(item: ProductWorkProcessItem): string {
-  if (!item.responsibleWorkerId) return '';
-  const op = operators.value.find(o => o.id === item.responsibleWorkerId);
-  return op ? operatorDisplayName(op) : `#${item.responsibleWorkerId}`;
+  // T121: prefer assigneeWorkerIds (multi-assignee); fall back to single responsibleWorkerId
+  const ids = (item.assigneeWorkerIds && item.assigneeWorkerIds.length > 0)
+    ? item.assigneeWorkerIds
+    : (item.responsibleWorkerId ? [item.responsibleWorkerId] : []);
+  if (ids.length === 0) return '';
+  return ids.map(id => {
+    const op = operators.value.find(o => o.id === id);
+    return op ? operatorDisplayName(op) : `#${id}`;
+  }).join('、');
 }
 
 // ─────────────────────────────────────────────
@@ -453,6 +463,7 @@ function handleAdd(wp: WorkProcessItem) {
     estimatedMinutesOverride: null,
     defaultEstimatedMinutes: null,
     responsibleWorkerId: null,
+    assigneeWorkerIds: null,
   };
   draftLinked.value = [...draftLinked.value, draftItem];
   markDirty({ type: 'add', wp });
@@ -506,7 +517,8 @@ function handleApplyAIDraft(payload: Record<string, unknown>): void {
       draftItem = draftLinked.value.find(d => d.workProcessId === step.workProcessId);
     }
     if (draftItem && step.responsibleWorkerId != null) {
-      handleResponsibleWorkerChange(draftItem, step.responsibleWorkerId);
+      // T121: wrap single responsibleWorkerId as single-element assigneeWorkerIds list
+      handleAssigneesChange(draftItem, [step.responsibleWorkerId]);
     }
   }
 
@@ -568,27 +580,37 @@ function handleRemove(item: DraftItem) {
   }
 }
 
-/** Responsible worker change → draft only (C4) */
-function handleResponsibleWorkerChange(item: DraftItem, value: number | null | undefined) {
-  const workerId = value == null ? null : value;
+/**
+ * T121: Multi-assignee change handler (replaces single responsibleWorkerChange).
+ * @param item - the DraftItem being edited
+ * @param values - array of selected worker ids (empty array = clear all)
+ */
+function handleAssigneesChange(item: DraftItem, values: number[]) {
+  const assigneeWorkerIds = values.length === 0 ? [] : values;
+  // Keep responsibleWorkerId in sync with primary (first in list)
+  const responsibleWorkerId = assigneeWorkerIds.length > 0 ? assigneeWorkerIds[0] : null;
   const idx = draftLinked.value.findIndex(d => d.draftKey === item.draftKey);
   if (idx !== -1) {
-    draftLinked.value[idx] = { ...draftLinked.value[idx], responsibleWorkerId: workerId };
+    draftLinked.value[idx] = {
+      ...draftLinked.value[idx],
+      assigneeWorkerIds,
+      responsibleWorkerId,
+    };
   }
   if (!item.isPending) {
-    // Server item — dedupe and queue responsible op
+    // Server item — dedupe and queue responsible op (T121: using assigneeWorkerIds)
     pendingOps.value = pendingOps.value.filter(
       o => !(o.type === 'responsible' && o.serverId === item.id)
     );
     markDirty({
       type: 'responsible',
       serverId: item.id,
-      workerId,
+      assigneeWorkerIds,
       productTypeId: item.productTypeId,
       workProcessId: item.workProcessId,
     });
   } else {
-    // Draft-only item — responsible is tracked in local state; will be set on POST in save
+    // Draft-only item — tracked in local draft; sent on POST in save
     if (!dirty.value) dirty.value = true;
   }
 }
@@ -792,17 +814,20 @@ async function handleRefresh() {
                   <span class="step-unit">单位: {{ item.unitOverride || item.defaultUnit || '-' }}</span>
                 </div>
 
-                <!-- C3 — 责任人下拉加搜索 (filterable) -->
+                <!-- C3 / T121 — 多人负责多选下拉 (filterable, multiple) -->
                 <div class="step-leader" v-if="canWrite">
                   <el-select
-                    :model-value="item.responsibleWorkerId ?? undefined"
-                    placeholder="默认责任小组长"
+                    :model-value="item.assigneeWorkerIds ?? (item.responsibleWorkerId ? [item.responsibleWorkerId] : [])"
+                    multiple
+                    collapse-tags
+                    collapse-tags-tooltip
+                    placeholder="设置负责人（可多选）"
                     clearable
                     filterable
                     :filter-method="(q: string) => { operatorFilterQuery[item.draftKey] = q }"
                     size="small"
-                    style="width: 170px"
-                    @change="(val: number | undefined) => handleResponsibleWorkerChange(item, val)"
+                    style="width: 200px"
+                    @change="(vals: number[]) => handleAssigneesChange(item, vals)"
                   >
                     <el-option
                       v-for="op in filteredOperators(item.draftKey)"
@@ -812,9 +837,9 @@ async function handleRefresh() {
                     />
                   </el-select>
                 </div>
-                <div class="step-leader-readonly" v-else-if="item.responsibleWorkerId">
+                <div class="step-leader-readonly" v-else-if="item.responsibleWorkerId || (item.assigneeWorkerIds && item.assigneeWorkerIds.length > 0)">
                   <el-text type="info" size="small">
-                    责任小组长: {{ responsibleLabel(item) }}
+                    负责人: {{ responsibleLabel(item) }}
                   </el-text>
                 </div>
               </div>

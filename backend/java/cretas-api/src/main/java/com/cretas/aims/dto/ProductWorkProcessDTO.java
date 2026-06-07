@@ -31,7 +31,7 @@ public class ProductWorkProcessDTO {
     private Integer estimatedMinutesOverride;
 
     /**
-     * 默认责任小组长 ID。
+     * 默认责任小组长 ID（主/AI 草稿值）。
      * <ul>
      *   <li>null (omitted) — 不修改现有值 (update 语义: no-change)</li>
      *   <li>-1L (sentinel) — 清空，wire-only，不持久化</li>
@@ -39,6 +39,17 @@ public class ProductWorkProcessDTO {
      * </ul>
      */
     private Long responsibleWorkerId;
+
+    /**
+     * T121: 多人负责列表。
+     *
+     * <p><b>写操作 (create/update)</b>: 前端传 worker id 数组，后端对 join 表做 upsert（删旧加新）。
+     * 若为 null 或空 → 行为回退到 responsibleWorkerId 单值语义（向后兼容）。
+     * 若非空 → assigneeWorkerIds[0] 同时被写入 responsible_worker_id（primary 保持同步）。
+     *
+     * <p><b>读操作 (list/get)</b>: 后端填充 join 表查询结果，供前端多选下拉回显。
+     */
+    private List<Long> assigneeWorkerIds;
 
     private Boolean isActive;
 

@@ -5,8 +5,11 @@ import com.cretas.aims.entity.ProductWorkProcess;
 import com.cretas.aims.entity.WorkProcess;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.exception.ResourceNotFoundException;
+import com.cretas.aims.entity.ProductWorkProcessAssignee;
+import com.cretas.aims.repository.ProductWorkProcessAssigneeRepository;
 import com.cretas.aims.repository.ProductWorkProcessRepository;
 import com.cretas.aims.repository.WorkProcessRepository;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -47,13 +50,28 @@ class ProductWorkProcessServiceImplTest {
     @Mock
     private WorkProcessRepository workProcessRepository;
 
+    @Mock
+    private ProductWorkProcessAssigneeRepository assigneeRepository;
+
     @InjectMocks
     private ProductWorkProcessServiceImpl service;
 
     @Captor
     private ArgumentCaptor<ProductWorkProcess> entityCaptor;
 
+    @Captor
+    private ArgumentCaptor<ProductWorkProcessAssignee> assigneeCaptor;
+
     private static final String FACTORY_ID = "F001";
+
+    @BeforeEach
+    void setUp() {
+        // T121: default stub — no existing assignees (向后兼容旧测试).
+        // lenient() 防止 UnnecessaryStubbingException: 某些旧测试不触发 join 表路径。
+        lenient().when(assigneeRepository.findByProductWorkProcessId(any())).thenReturn(List.of());
+        lenient().when(assigneeRepository.save(any(ProductWorkProcessAssignee.class)))
+                .thenAnswer(inv -> inv.getArgument(0));
+    }
     private static final String PRODUCT_TYPE_ID = "pt-1";
     private static final String WORK_PROCESS_ID = "wp-1";
 
@@ -529,6 +547,132 @@ class ProductWorkProcessServiceImplTest {
             verify(repository).save(entityCaptor.capture());
             assertNull(entityCaptor.getValue().getResponsibleWorkerId(),
                     "create 时哨兵 -1 应被规范化为 null, 不得持久化到 DB");
+        }
+    }
+
+    // ==================== T121 多人负责测试 ====================
+
+    @Nested
+    @DisplayName("T121 多人负责 — upsert join 表测试")
+    class MultiAssigneeTests {
+
+        private void stubCreateHappyPath() {
+            when(repository.existsByFactoryIdAndProductTypeIdAndWorkProcessId(
+                    FACTORY_ID, PRODUCT_TYPE_ID, WORK_PROCESS_ID)).thenReturn(false);
+            when(workProcessRepository.findByFactoryIdAndId(FACTORY_ID, WORK_PROCESS_ID))
+                    .thenReturn(Optional.of(buildDefaultWorkProcess()));
+            when(repository.save(any(ProductWorkProcess.class))).thenAnswer(inv -> {
+                ProductWorkProcess arg = inv.getArgument(0);
+                arg.setId(20L);
+                return arg;
+            });
+        }
+
+        @Test
+        @DisplayName("UT-T121-01: create() 传入 assigneeWorkerIds → join 表被 upsert, primary=assignees[0]")
+        void create_withAssigneeList_upsertsJoinTable() {
+            // Arrange
+            stubCreateHappyPath();
+            ProductWorkProcessDTO dto = ProductWorkProcessDTO.builder()
+                    .productTypeId(PRODUCT_TYPE_ID)
+                    .workProcessId(WORK_PROCESS_ID)
+                    .assigneeWorkerIds(List.of(1001L, 1002L, 1003L))
+                    .build();
+
+            // Act
+            ProductWorkProcessDTO result = service.create(FACTORY_ID, dto);
+
+            // Assert — join table insertions: 3 workers
+            verify(assigneeRepository, times(3)).save(assigneeCaptor.capture());
+            List<ProductWorkProcessAssignee> saved = assigneeCaptor.getAllValues();
+            List<Long> savedWorkerIds = saved.stream()
+                    .map(ProductWorkProcessAssignee::getWorkerId)
+                    .toList();
+            assertTrue(savedWorkerIds.containsAll(List.of(1001L, 1002L, 1003L)),
+                    "join 表应插入 3 个 worker");
+
+            // primary (responsible_worker_id) = assignees[0]
+            verify(repository).save(entityCaptor.capture());
+            assertEquals(1001L, entityCaptor.getValue().getResponsibleWorkerId(),
+                    "primary = assigneeWorkerIds[0] = 1001");
+        }
+
+        @Test
+        @DisplayName("UT-T121-02: create() assigneeWorkerIds=null → 回退到 responsibleWorkerId 单值语义")
+        void create_noAssigneeList_fallsBackToSingleValue() {
+            // Arrange
+            stubCreateHappyPath();
+            ProductWorkProcessDTO dto = ProductWorkProcessDTO.builder()
+                    .productTypeId(PRODUCT_TYPE_ID)
+                    .workProcessId(WORK_PROCESS_ID)
+                    .responsibleWorkerId(999L)
+                    .build();
+
+            // Act
+            service.create(FACTORY_ID, dto);
+
+            // Assert — join table gets singleton insert (backfill logic)
+            verify(assigneeRepository, times(1)).save(assigneeCaptor.capture());
+            assertEquals(999L, assigneeCaptor.getValue().getWorkerId(),
+                    "单值语义时 join 表插入 responsibleWorkerId");
+        }
+
+        @Test
+        @DisplayName("UT-T121-03: update() 传入 assigneeWorkerIds — join 表更新, 旧行软删除")
+        void update_withNewAssigneeList_softDeletesOldAndAddsNew() {
+            // Arrange — existing PWP with one assignee (worker 1001)
+            ProductWorkProcess existing = buildDefaultAssociation();
+            existing.setId(30L);
+            existing.setResponsibleWorkerId(1001L);
+            when(repository.findByFactoryIdAndId(FACTORY_ID, 30L))
+                    .thenReturn(Optional.of(existing));
+            when(repository.save(any(ProductWorkProcess.class))).thenAnswer(inv -> inv.getArgument(0));
+
+            // Existing join-table row for worker 1001
+            ProductWorkProcessAssignee existingRow = new ProductWorkProcessAssignee();
+            existingRow.setId(5L);
+            existingRow.setProductWorkProcessId(30L);
+            existingRow.setWorkerId(1001L);
+            when(assigneeRepository.findByProductWorkProcessId(30L))
+                    .thenReturn(List.of(existingRow));
+
+            // Update: replace with [1002, 1003]
+            ProductWorkProcessDTO dto = ProductWorkProcessDTO.builder()
+                    .assigneeWorkerIds(List.of(1002L, 1003L))
+                    .build();
+
+            // Act
+            service.update(FACTORY_ID, 30L, dto);
+
+            // Assert — worker 1001 row should be soft-deleted (save called on it with deletedAt set)
+            verify(assigneeRepository, atLeastOnce()).save(
+                    argThat((ProductWorkProcessAssignee a) ->
+                            a.getWorkerId().equals(1001L) && a.getDeletedAt() != null));
+            // Workers 1002 and 1003 should be inserted
+            verify(assigneeRepository, atLeastOnce()).save(
+                    argThat((ProductWorkProcessAssignee a) ->
+                            a.getWorkerId().equals(1002L) && a.getDeletedAt() == null));
+            verify(assigneeRepository, atLeastOnce()).save(
+                    argThat((ProductWorkProcessAssignee a) ->
+                            a.getWorkerId().equals(1003L) && a.getDeletedAt() == null));
+        }
+
+        @Test
+        @DisplayName("UT-T121-04: create() assigneeWorkerIds=empty list → 无 join 行插入")
+        void create_emptyAssigneeList_noJoinTableInserts() {
+            // Arrange
+            stubCreateHappyPath();
+            ProductWorkProcessDTO dto = ProductWorkProcessDTO.builder()
+                    .productTypeId(PRODUCT_TYPE_ID)
+                    .workProcessId(WORK_PROCESS_ID)
+                    .assigneeWorkerIds(List.of())    // empty → fall back to single-value
+                    .build();
+
+            // Act
+            service.create(FACTORY_ID, dto);
+
+            // Assert — empty list treated as "no multi-assignee", no insertions since no rw either
+            verify(assigneeRepository, never()).save(any());
         }
     }
 }
