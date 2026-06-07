@@ -519,6 +519,12 @@ public class IntentRecognitionPipelineServiceImpl implements IntentRecognitionPi
         PreprocessedQuery preprocessedQuery = null;
         QueryPreprocessorService.EnhancedPreprocessResult enhancedResult = null;
         IntentKnowledgeBase.VerbNounDisambiguationResult verbNounResult = null;
+        // T128: holds the inherited intent code when a continuation-inherit route fires.
+        // Non-null iff maybeAugmentContinuation returned a phrase AND the safety guard passed
+        // (inherited intent is in whitelist and is NOT a write/sensitive intent).
+        // When non-null, the preprocessing block set processedInput + preprocessedQuery and we
+        // skip full re-recognition + W0 ABSTAIN, returning the inherited result directly.
+        String inheritedIntentCode = null;
 
         if (preprocessEnabled) {
             try {
@@ -554,6 +560,25 @@ public class IntentRecognitionPipelineServiceImpl implements IntentRecognitionPi
                                 context, preprocessedQuery);
                         preprocessedQuery = ensureDishReferenceResolved(userInput, processedInput,
                                 context, preprocessedQuery);
+                        // T128: Force-route to inherited intent.
+                        // We already know the intent from context.getLastIntentCode() — no need to run
+                        // full semantic/LLM re-recognition that would land in the ambiguous/abstain zone.
+                        // Safety guard: the inherited intent MUST (a) be in the CONTINUATION_CANONICAL_PHRASE
+                        // whitelist (already guaranteed by maybeAugmentContinuation returning non-null) AND
+                        // (b) NOT be a write/sensitive intent (defense-in-depth: if someone adds a write
+                        // intent to the whitelist by mistake, we MUST NOT bypass W0 for it).
+                        // If either guard fails → fall through to normal re-recognition (conservative).
+                        String candidateInheritCode = context.getLastIntentCode();
+                        boolean safeToInherit = isSafeToInheritIntent(candidateInheritCode, factoryId);
+                        if (safeToInherit) {
+                            log.info("[T128-ContinuationInherit] force-routing to inherited intent: '{}' -> intent={}",
+                                    userInput, candidateInheritCode);
+                            inheritedIntentCode = candidateInheritCode;
+                        } else {
+                            log.warn("[T128-ContinuationInherit] safety guard rejected inherit for intent={} " +
+                                    "(write/sensitive or not found) — falling through to normal recognition",
+                                    candidateInheritCode);
+                        }
                     } else {
                         processedInput = performCoreferenceResolution(processedInput, context);
                         preprocessedQuery = queryPreprocessorService.preprocess(processedInput, context);
@@ -576,6 +601,23 @@ public class IntentRecognitionPipelineServiceImpl implements IntentRecognitionPi
             }
         }
         preprocessEndMs = System.currentTimeMillis();
+
+        // T128: Early exit — force-route to inherited intent for confirmed continuation queries.
+        // This happens AFTER coref/entity resolution (preprocessedQuery already has resolved refs),
+        // but BEFORE long-text extraction / vague-input / full semantic re-recognition / W0 abstain.
+        // The safety guard inside the preprocessing block guarantees: (1) intent is in the READ-only
+        // CONTINUATION_CANONICAL_PHRASE whitelist, (2) intent is NOT write/sensitive.
+        if (inheritedIntentCode != null) {
+            IntentMatchResult inheritResult = buildContinuationInheritResult(
+                    userInput, inheritedIntentCode, factoryId, preprocessedQuery);
+            if (inheritResult != null) {
+                saveIntentMatchRecord(inheritResult, factoryId, userId, sessionId, false);
+                return attachTiming(inheritResult, startTimeMs, preprocessEndMs);
+            }
+            // Config lookup failed (intent not found for this factory) — fall through to normal recognition.
+            log.warn("[T128-ContinuationInherit] intent config not found for code={} factory={} — falling through",
+                    inheritedIntentCode, factoryId);
+        }
 
         // Long text handling
         if (longTextEnabled && longTextHandler != null && longTextHandler.needsProcessing(processedInput)) {
@@ -4004,6 +4046,128 @@ public class IntentRecognitionPipelineServiceImpl implements IntentRecognitionPi
             return canonicalPhrase;
         }
         return null; // core 含其它内容 (e.g. 动词/未知名词) → 不增强, 交给常规管线。
+    }
+
+    // ==================== T128: Continuation-inherit safety + result builder ====================
+
+    /**
+     * T128 safety guard: returns {@code true} only when it is safe to force-route to the inherited
+     * intent, bypassing re-recognition and W0 ABSTAIN.
+     *
+     * <p>Two conditions must BOTH hold:</p>
+     * <ol>
+     *   <li>The intent code must be in {@link #CONTINUATION_CANONICAL_PHRASE} (already guaranteed
+     *       by {@code maybeAugmentContinuation} returning non-null — checked here as defense in
+     *       depth since this method may be called independently).</li>
+     *   <li>The intent must NOT be a write or sensitive intent per
+     *       {@link WriteGuardService#isWriteIntent}. This is the critical safety guard: if someone
+     *       accidentally adds a write intent to the whitelist in future, force-routing must NOT
+     *       bypass W0's protection for it.</li>
+     * </ol>
+     *
+     * <p>Fail-closed: any exception during lookup returns {@code false} (conservative fallthrough).
+     * Pure instance logic (reads only fields already present for tests that inject writeGuardService
+     * via ReflectionTestUtils). Package-private for direct unit testing.</p>
+     *
+     * @param intentCode the intent code candidate for inheritance
+     * @param factoryId  factory context for config lookup
+     * @return {@code true} iff force-routing is safe
+     */
+    boolean isSafeToInheritIntent(String intentCode, String factoryId) {
+        if (intentCode == null) return false;
+        // Guard 1: must be in the READ-only whitelist (defense in depth).
+        if (!CONTINUATION_CANONICAL_PHRASE.containsKey(intentCode)) {
+            log.warn("[T128-SafetyGuard] intent '{}' NOT in CONTINUATION_CANONICAL_PHRASE whitelist — reject inherit",
+                    intentCode);
+            return false;
+        }
+        // Guard 2: must NOT be a write/sensitive intent.
+        if (writeGuardService != null) {
+            try {
+                // Check by name/suffix first (fast, no DB lookup).
+                if (writeGuardService.hasWriteSuffix(intentCode)) {
+                    log.warn("[T128-SafetyGuard] intent '{}' has write suffix — reject inherit", intentCode);
+                    return false;
+                }
+                // Check sensitivity level via config lookup (catches CRITICAL/HIGH sensitivityLevel).
+                if (configService != null && factoryId != null) {
+                    AIIntentConfig cfg = configService.getIntentConfigByCode(factoryId, intentCode);
+                    if (cfg != null && writeGuardService.isWriteIntent(cfg)) {
+                        log.warn("[T128-SafetyGuard] intent '{}' is write/sensitive (sensitivityLevel={}) — reject inherit",
+                                intentCode, cfg.getSensitivityLevel());
+                        return false;
+                    }
+                }
+            } catch (Exception e) {
+                log.warn("[T128-SafetyGuard] exception during write-guard check for intent={} — reject inherit (fail-closed): {}",
+                        intentCode, e.getMessage());
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * T128: Build an {@link IntentMatchResult} that force-routes to the inherited intent.
+     *
+     * <p>The result carries:</p>
+     * <ul>
+     *   <li>{@code bestMatch} = the inherited intent config</li>
+     *   <li>{@code confidence} = 0.97 (high, indicating deterministic inheritance)</li>
+     *   <li>{@code matchMethod} = {@link com.cretas.aims.dto.intent.IntentMatchResult.MatchMethod#CONTINUATION_INHERIT}</li>
+     *   <li>{@code isStrongSignal} = true, {@code requiresConfirmation} = false</li>
+     *   <li>{@code preprocessedQuery} set to the entity-resolved PQ (carries dish/store refs for ToolDispatch)</li>
+     * </ul>
+     *
+     * <p>Returns {@code null} if the intent config cannot be found for the given factory
+     * (caller must then fall through to normal recognition).</p>
+     *
+     * @param userInput      original raw user input
+     * @param intentCode     the inherited intent code
+     * @param factoryId      factory context
+     * @param preprocessedQuery entity-resolved PQ (may be null if no entity ref detected)
+     * @return the force-route result, or {@code null} if config not found
+     */
+    private IntentMatchResult buildContinuationInheritResult(String userInput, String intentCode,
+                                                              String factoryId,
+                                                              PreprocessedQuery preprocessedQuery) {
+        if (configService == null || factoryId == null) return null;
+        AIIntentConfig intentConfig;
+        try {
+            intentConfig = configService.getIntentConfigByCode(factoryId, intentCode);
+        } catch (Exception e) {
+            log.warn("[T128-ContinuationInherit] config lookup failed for intent={} factory={}: {}",
+                    intentCode, factoryId, e.getMessage());
+            return null;
+        }
+        if (intentConfig == null) return null;
+
+        ActionType opType = knowledgeBase != null
+                ? knowledgeBase.detectActionType(userInput.toLowerCase().trim())
+                : ActionType.QUERY;
+        CandidateIntent candidate = CandidateIntent.builder()
+                .intentCode(intentCode)
+                .intentName(intentConfig.getIntentName())
+                .confidence(0.97)
+                .matchScore(97)
+                .matchedKeywords(java.util.Collections.emptyList())
+                .matchMethod(IntentMatchResult.MatchMethod.CONTINUATION_INHERIT)
+                .build();
+        IntentMatchResult result = IntentMatchResult.builder()
+                .userInput(userInput)
+                .bestMatch(intentConfig)
+                .topCandidates(java.util.Collections.singletonList(candidate))
+                .confidence(0.97)
+                .matchMethod(IntentMatchResult.MatchMethod.CONTINUATION_INHERIT)
+                .matchedKeywords(java.util.Collections.emptyList())
+                .isStrongSignal(true)
+                .requiresConfirmation(false)
+                .actionType(opType)
+                .build();
+        if (preprocessedQuery != null) {
+            result.setPreprocessedQuery(preprocessedQuery);
+        }
+        return result;
     }
 
     /**
