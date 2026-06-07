@@ -322,8 +322,16 @@ public class ProductWorkProcessConfigTool extends AbstractBusinessTool {
                     }
                 } else if (normName.contains(normSegment) && normSegment.length() >= 2) {
                     // Priority 3: segment is a prefix/abbreviation of the catalog name
-                    // e.g. user typed "气调" and catalog has "气调(分切装盒)"
-                    priority = 3;
+                    // e.g. user typed "气调" and catalog has "气调(分切装盒)".
+                    // Guard: segment must cover ≥ 50% of the catalog name length to be a
+                    // genuine abbreviation.  This prevents "分切" (2 chars) from matching
+                    // "气调(分切装盒)" normalized "气调分切装盒" (6 chars) where 分切 is
+                    // only 2/6 = 33% — it's a coincidental substring, not an abbreviation.
+                    if ((double) normSegment.length() / normName.length() >= 0.5) {
+                        priority = 3;
+                    } else {
+                        continue; // incidental substring, not an abbreviation
+                    }
                 } else {
                     continue;
                 }
