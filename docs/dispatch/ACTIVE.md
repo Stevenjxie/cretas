@@ -61,6 +61,12 @@
 
 ---
 
+## Deferred (Opus organizer 有意决定 2026-06-07)
+
+- **Maestro 9 步原生 E2E** → DEFER。程序流已有 RN Expo Web smoke + API 全链 E2E 覆盖;Maestro 原生设备自动化边际价值低 + 装/testID/跑需真机(半阻塞)+ demo 无真实客户 = gold-plating。有真原生回归需求时再投。
+- **③ 平台/VIP 营收拆分 ETL** → BLOCKED on 二维火 POS creds(gold 无渠道维度,无数据源)。用户面风险已由 T112 反投毒+abstain 兜底(诚实空状态非自信错答)。Steve 给二维火 creds 时解锁:ETL + gold 渠道维度 + 绑工具。
+- **③ 平台/VIP 评价** → 工具就绪(17 个 RESTAURANT_REVIEW_* 已绑+emptyMessage),仅缺数据上传(大众点评报表),非代码问题。
+
 ## housekeeping (非任务,待清理)
 
 - `git worktree prune` — `cretas-liushanmen-wip-close` / `cretas-liushanmen-e2e-run` 目录已消失但 ref 还在 (prunable)。
