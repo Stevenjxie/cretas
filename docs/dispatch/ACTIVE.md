@@ -20,7 +20,6 @@
 | T103 | S1 🖐️真机走一单 录音→`voiceAudioUrl` OSS 验证 | Steve(手动) | - | - | - | - | ⬜ pending | - | ✅已解锁(真实餐饮角色 qhj_chef/qhj_purchase_mgr/qhj_owner 已建+验登录);需真机(APK 已装小米 f79c50d6) |
 | T112 | 餐饮问答优化 impl(①反投毒守卫+②绑峰值+清毒) | Sonnet→Opus gate | locked | inline | feat/restaurant-routing-antipoison | IntentRecognitionPipelineServiceImpl + Flyway(ai_intent_configs/ai_learned_expressions) | 🟡 in-progress | - | 🔒 AI路由高爆炸半径。recon 实锤毒行(vip→PROCESSING_BATCH_CREATE hit=6)。Piece4 前置业态门只提案。到 PR Opus gate+部署 |
 | T113 | T109 备货看板深验(三层去重)+ T108 菜品 coref D1/D2 live | Sonnet 只读 | locked | inline | (只读验证) | — | 🟡 in-progress | - | 验证 T109/T108 caveat,无码改 |
-| T114 | §8 基建: deploy-staging CI libcrypto + test 采购账号401 | Sonnet→Opus gate | locked | inline | fix/staging-ci-and-test-purchase-account | .github/workflows/* + test 账号 SQL | 🟡 in-progress | - | 低价值 backlog;到 PR gate |
 | T115 | 飞轮分层+二次分析(中置信0.70-0.89→staged is_active=false + promote pipeline) | Sonnet→Opus gate | locked | inline | (待 T112-impl merge) | IntentRecognitionPipelineServiceImpl 学习路径 + learning_* 表 | 🔴 blocked | - | 🔒 撞 T112-impl 同文件,等其 merge 后开。复用 learning_suggestions/tasks 表 |
 
 <!--
@@ -58,6 +57,7 @@
 | T110 | 餐饮专属角色 chef/purchaser/owner(scope A 增量) | #550 | 2026-06-07 | 🔒权限+业态 Opus 终审过。enum+权限矩阵最小化(chef warehouse:rw/purchaser procurement:rw+价格可见/owner 全+财务审核),@RequireRole 增量,**无 Flyway**,42测试。**已部署** green:10020 + **prod 建 3 账号验登录**(qhj_chef/qhj_purchase_mgr/qhj_owner /123456,factoryType=RESTAURANT)。界面已由 factoryType 分开,本次只分角色命名空间。 |
 | T108 | 菜品续接 Phase2b(DISH coref 镜 2a) | #551 | 2026-06-07 | 🔒AI执行路径 Opus 终审过("它"仅 DISH 槽+解析序 DISH→STORE→SUPPLIER,107测试+70/70+15/15)。**已部署** blue:10010 v20260607_132848。D4 STORE/SUPPLIER 零回归实测 PASS;D1/D2 demo 工厂无菜品数据 live 受限(逻辑单测覆盖);D3 dish 澄清被短语抢路由(小 follow-up)。 |
 | — | 📌 餐饮问答 A+B+C 基线侦察结论 | — | 2026-06-07 | speed agent("消灭LLM")+ content agent("8%/0 gold 实现")**均过度声称,Opus 交叉验证否决**。真相: gold 工具全在+营收返真数据(¥940 6月/¥11.57M 3月峰),"暂无菜品数据"=诚实空(demo工厂)。真问题窄=跨域误路由(平台/VIP/美团)+飞轮投毒+少数真缺维度→T112。 |
+| T114 | §8 基建 deploy-staging CI libcrypto | #552 | 2026-06-07 | CI-only(`echo key>id_rsa` 丢尾换行→OpenSSH8.9+严格PEM拒→改 `webfactory/ssh-agent@v0.9.0`,secret不变)。1文件10/10,下次CI生效无需部署。§8b test采购账号401=**非bug**(e2e_purchase_mgr 实测存在+active+登录success,历史401是seed未跑;无码改)。 |
 
 ---
 
