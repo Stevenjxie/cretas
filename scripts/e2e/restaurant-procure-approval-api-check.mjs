@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 /**
  * API-level acceptance for restaurant procure-to-pay approval gate.
- * Requires local Java backend on :10010 and seeded qhj restaurant accounts.
+ * Includes automatic seed-data creation so every run exercises the full
+ * approval chain even when prod has no pending high-price-anomaly DRAFTs.
  *
  * Usage:
  *   node scripts/e2e/restaurant-procure-approval-api-check.mjs
@@ -15,6 +16,19 @@
  *   CRETAS_FINANCE_USER / CRETAS_FINANCE_PASS
  *   CRETAS_E2E_EVIDENCE_DIR=scripts/e2e/evidence
  *   CRETAS_SKIP_CONFIRM=1   # skip final inbound posting (dev only)
+ *   CRETAS_NO_SEED=1        # disable auto-seed (use only existing DRAFTs)
+ *   CRETAS_SEED_CLEANUP=1   # delete seeded DRAFT after test regardless of outcome
+ *
+ * Seed-data strategy (§ P0 fix from handoff 2026-06-07):
+ *   1. Fetch active suppliers for the factory.
+ *   2. Scan CONFIRMED notes for ingredients with prior price history.
+ *   3. Create a MANUAL DRAFT with:
+ *        - supplierId  = first active supplier (so /confirm does not 400)
+ *        - line.unitPrice = historicalAvg × 1.20  (20 % above baseline → fires anomaly flag)
+ *        - noteNumber  = "E2E-SEED-<datestamp>" (recognisable / idempotent key)
+ *   4. Idempotency: reuse an existing E2E-SEED DRAFT if one already exists (Rule 4).
+ *   5. Fallback: if no CONFIRMED history exists yet (clean env), log a guidance message
+ *      and fall back to the existing "find any DRAFT" behaviour.
  */
 
 import fs from 'node:fs';
@@ -23,6 +37,15 @@ import path from 'node:path';
 const API_BASE = process.env.CRETAS_API_BASE || 'http://localhost:10010';
 const FACTORY_ID = process.env.CRETAS_FACTORY_ID || 'FACTORY-QHJ';
 const EVIDENCE_DIR = process.env.CRETAS_E2E_EVIDENCE_DIR || 'scripts/e2e/evidence';
+const NO_SEED = process.env.CRETAS_NO_SEED === '1';
+const SEED_CLEANUP = process.env.CRETAS_SEED_CLEANUP === '1';
+
+/** Recognisable prefix for seeded DRAFTs — used for idempotency look-up. */
+const SEED_NOTE_NUMBER_PREFIX = 'E2E-SEED-';
+
+// ───────────────────────────────────────────────────────────
+// HTTP helpers
+// ───────────────────────────────────────────────────────────
 
 async function login(username, password) {
   const attempts = [
@@ -30,8 +53,8 @@ async function login(username, password) {
     '/api/mobile/auth/unified-login',
   ];
   let lastError = 'no attempt';
-  for (const path of attempts) {
-    const res = await fetch(`${API_BASE}${path}`, {
+  for (const urlPath of attempts) {
+    const res = await fetch(`${API_BASE}${urlPath}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ username, password }),
@@ -44,13 +67,13 @@ async function login(username, password) {
     if (res.ok && token) {
       return token;
     }
-    lastError = `${path} ${res.status} ${JSON.stringify(json).slice(0, 200)}`;
+    lastError = `${urlPath} ${res.status} ${JSON.stringify(json).slice(0, 200)}`;
   }
   throw new Error(`Login failed for ${username}: ${lastError}`);
 }
 
-async function api(token, method, path, body) {
-  const res = await fetch(`${API_BASE}${path}`, {
+async function api(token, method, urlPath, body) {
+  const res = await fetch(`${API_BASE}${urlPath}`, {
     method,
     headers: {
       Authorization: `Bearer ${token}`,
@@ -74,6 +97,327 @@ function writeEvidence(report) {
   console.log('EVIDENCE', file);
   return file;
 }
+
+// ───────────────────────────────────────────────────────────
+// Seed-data helpers
+// ───────────────────────────────────────────────────────────
+
+/**
+ * Return the first active supplier for the factory, or null.
+ */
+async function fetchFirstActiveSupplier(token) {
+  const res = await api(token, 'GET', `/api/mobile/${FACTORY_ID}/suppliers/active`);
+  if (res.status !== 200) {
+    console.log('SEED warn: could not fetch active suppliers', res.status, res.json?.message || '');
+    return null;
+  }
+  const suppliers = res.json?.data || [];
+  return suppliers[0] || null;
+}
+
+/**
+ * Scan CONFIRMED notes (up to 3 pages) for a line we can use to seed a price anomaly.
+ *
+ * Returns { ingredientName, rawMaterialTypeId, unit, baselineUnitPrice } or null,
+ * where baselineUnitPrice is the value we should multiply by 1.20 to guarantee
+ * the backend's priceAnomalyFlag fires (varianceRate > 5%).
+ *
+ * Key insight: the backend computes baseline = avg of last 5 confirmed prices
+ * for that material, stored on each note's line as `baselineUnitPrice`.  So if
+ * a confirmed note's line has baselineUnitPrice = X, then any future note for
+ * that material with unitPrice > X × 1.05 will trigger the flag.
+ *
+ * We therefore always use line.baselineUnitPrice (not line.unitPrice) as the
+ * reference.  If baselineUnitPrice is null or 0 (the first-ever delivery for
+ * that material had no prior history), we fall back to unitPrice as a proxy.
+ *
+ * We read the detail of up to MAX_DETAIL_SCANS confirmed notes.
+ */
+async function fetchPriceHistoryLine(token) {
+  const MAX_DETAIL_SCANS = 10;
+  let scanned = 0;
+  let fallback = null; // line with unitPrice but no baselineUnitPrice
+  for (let page = 1; page <= 3; page++) {
+    const listRes = await api(
+      token, 'GET',
+      `/api/mobile/${FACTORY_ID}/restaurant/supplier-delivery-notes?status=CONFIRMED&page=${page}&size=20`,
+    );
+    if (listRes.status !== 200) break;
+    const notes = listRes.json?.data?.content || [];
+    if (notes.length === 0) break;
+    for (const note of notes) {
+      if (scanned >= MAX_DETAIL_SCANS) break;
+      const detail = await api(
+        token, 'GET',
+        `/api/mobile/${FACTORY_ID}/restaurant/supplier-delivery-notes/${note.id}`,
+      );
+      scanned++;
+      if (detail.status !== 200) continue;
+      const lines = detail.json?.data?.lines || [];
+      for (const line of lines) {
+        if (!line.rawMaterialTypeId) continue;
+        const baseline = Number(line.baselineUnitPrice);
+        const price = Number(line.unitPrice);
+        if (baseline > 0) {
+          // Perfect: use the persisted baseline as reference.
+          // newPrice = baseline × 1.20 is guaranteed to cross the 5% threshold.
+          return {
+            ingredientName: line.ingredientName,
+            rawMaterialTypeId: line.rawMaterialTypeId,
+            unit: line.unit || 'kg',
+            baselineUnitPrice: baseline,
+          };
+        }
+        if (price > 0 && !fallback) {
+          // Fallback: no persisted baseline (first ever confirmed delivery for this
+          // material).  The "new" baseline when we create a seed note will be computed
+          // from the confirmed price we just read, so using it as reference is correct.
+          fallback = {
+            ingredientName: line.ingredientName,
+            rawMaterialTypeId: line.rawMaterialTypeId,
+            unit: line.unit || 'kg',
+            baselineUnitPrice: price,
+          };
+        }
+      }
+    }
+    if (scanned >= MAX_DETAIL_SCANS) break;
+  }
+  return fallback;
+}
+
+/**
+ * Look for an existing E2E-SEED DRAFT so we can reuse it (idempotency Rule 4).
+ * Returns the first DRAFT whose noteNumber starts with E2E-SEED-, or null.
+ */
+async function findExistingSeedDraft(token) {
+  const base = `/api/mobile/${FACTORY_ID}/restaurant/supplier-delivery-notes`;
+  for (let page = 1; page <= 3; page++) {
+    const res = await api(token, 'GET', `${base}?status=DRAFT&page=${page}&size=20`);
+    if (res.status !== 200) break;
+    const notes = res.json?.data?.content || [];
+    if (notes.length === 0) break;
+    const found = notes.find((n) => String(n.noteNumber || '').startsWith(SEED_NOTE_NUMBER_PREFIX));
+    if (found) return found;
+  }
+  return null;
+}
+
+/**
+ * Soft-delete a DRAFT note (best-effort, failures are logged not thrown).
+ */
+async function cleanupSeedDraft(token, noteId) {
+  const res = await api(token, 'POST',
+    `/api/mobile/${FACTORY_ID}/restaurant/supplier-delivery-notes/${noteId}/delete`, {});
+  if (res.status === 200) {
+    console.log('SEED cleanup: deleted seeded DRAFT', noteId);
+  } else {
+    console.log('SEED cleanup warn: could not delete', noteId, res.status, res.json?.message || '');
+  }
+}
+
+/**
+ * Create (or reuse) a seeded DRAFT note that is guaranteed to:
+ *   (a) have supplierId bound (so /confirm won't 400 with "未绑定供应商")
+ *   (b) trigger priceAnomalyFlag on at least one line (so the approval gate fires)
+ *
+ * Returns { noteId, supplierId, seeded: true, reused: boolean } on success,
+ * or { noteId: null, seeded: false, reason: string } when prerequisites are absent.
+ *
+ * Never throws — seed failure is surfaced as a report step, not a crash.
+ */
+async function ensureSeedDraft(whToken, report) {
+  if (NO_SEED) {
+    return { noteId: null, seeded: false, reason: 'CRETAS_NO_SEED=1 — seed disabled' };
+  }
+
+  // ── idempotency: reuse existing SEED DRAFT if present ──────────────────
+  const existing = await findExistingSeedDraft(whToken);
+  if (existing) {
+    // Verify it hasn't been approved already (which means it's been through the chain)
+    const detail = await api(whToken, 'GET',
+      `/api/mobile/${FACTORY_ID}/restaurant/supplier-delivery-notes/${existing.id}`);
+    if (detail.status === 200) {
+      const approval = detail.json?.data?.priceAnomalyApprovalStatus;
+      if (approval !== 'APPROVED') {
+        console.log('SEED idempotent: reusing existing SEED DRAFT', existing.id, existing.noteNumber);
+        report.steps.push({
+          name: 'seed-draft',
+          reused: true,
+          noteId: existing.id,
+          noteNumber: existing.noteNumber,
+          supplierId: detail.json?.data?.supplierId ?? null,
+          ok: true,
+        });
+        return {
+          noteId: existing.id,
+          supplierId: detail.json?.data?.supplierId,
+          seeded: true,
+          reused: true,
+        };
+      }
+      // Already APPROVED — clean it up and create fresh
+      console.log('SEED: existing SEED DRAFT already APPROVED, creating fresh one');
+      await cleanupSeedDraft(whToken, existing.id);
+    }
+  }
+
+  // ── prerequisites: active supplier ─────────────────────────────────────
+  const supplier = await fetchFirstActiveSupplier(whToken);
+  if (!supplier) {
+    const reason = 'no active supplier in factory — cannot bind supplierId on DRAFT';
+    console.log('SEED skip:', reason);
+    report.steps.push({ name: 'seed-draft', skipped: true, reason, ok: true });
+    return { noteId: null, seeded: false, reason };
+  }
+
+  // ── prerequisites: price history (to guarantee anomaly flag) ───────────
+  const histLine = await fetchPriceHistoryLine(whToken);
+  if (!histLine) {
+    const reason = [
+      'No CONFIRMED delivery notes with price history found in factory.',
+      'To prime the baseline: manually create and confirm a delivery note at a normal price,',
+      'then re-run this script — it will create a DRAFT at 120% of that price to trigger the anomaly.',
+    ].join(' ');
+    console.log('SEED skip:', reason);
+    report.steps.push({ name: 'seed-draft', skipped: true, reason, ok: true });
+    return { noteId: null, seeded: false, reason };
+  }
+
+  // ── build anomaly line: 20% above historical baseline ───────────────────
+  // PRICE_ANOMALY_THRESHOLD = 5% (service impl), so 20% comfortably triggers it.
+  const anomalyPrice = parseFloat((histLine.baselineUnitPrice * 1.20).toFixed(4));
+  const quantity = 5;
+  const datestamp = new Date().toISOString().slice(0, 10);
+  const noteNumber = `${SEED_NOTE_NUMBER_PREFIX}${datestamp}`;
+
+  const base = `/api/mobile/${FACTORY_ID}/restaurant/supplier-delivery-notes`;
+  const createRes = await api(whToken, 'POST', `${base}/manual`, {
+    supplierId: supplier.id,
+    supplierName: supplier.name || supplier.supplierName,
+    deliveryDate: datestamp,
+    noteNumber,
+    lines: [
+      {
+        ingredientName: histLine.ingredientName,
+        rawMaterialTypeId: histLine.rawMaterialTypeId,
+        quantity,
+        unit: histLine.unit,
+        unitPrice: anomalyPrice,
+      },
+    ],
+  });
+
+  if (createRes.status !== 200 && createRes.status !== 201) {
+    const reason = `POST /manual failed: ${createRes.status} ${createRes.json?.message || ''}`;
+    console.error('SEED FAIL:', reason);
+    report.steps.push({ name: 'seed-draft', error: reason, ok: false });
+    // Hard fail — the task requires a seed-able DRAFT
+    throw new Error(`Seed DRAFT creation failed: ${reason}`);
+  }
+
+  const created = createRes.json?.data || {};
+  console.log(
+    `SEED created DRAFT ${created.id} (${noteNumber})`,
+    `supplier=${supplier.id}`,
+    `ingredient=${histLine.ingredientName}`,
+    `price=${anomalyPrice} (baseline=${histLine.baselineUnitPrice}, +20%)`,
+  );
+
+  // Verify the anomaly flag was actually set; if not, adaptively reprice using
+  // the backend's computed baselineUnitPrice (which may differ from our estimate).
+  let detailCheck = await api(whToken, 'GET', `${base}/${created.id}`);
+  let currentLines = detailCheck.json?.data?.lines || [];
+  let anomalyLines = currentLines.filter((l) => l.priceAnomalyFlag);
+
+  if (anomalyLines.length === 0) {
+    // The backend computed a different baseline from what we estimated.
+    // Read it back and reprice at baseline × 1.20 via updateLines.
+    const firstLine = currentLines[0];
+    const backendBaseline = firstLine ? Number(firstLine.baselineUnitPrice) : 0;
+    if (backendBaseline > 0) {
+      const repriceAmount = parseFloat((backendBaseline * 1.20).toFixed(4));
+      console.log(
+        `SEED reprice: backend baseline=${backendBaseline}, repricing to ${repriceAmount}`,
+        `(was ${anomalyPrice}, histEstimate=${histLine.baselineUnitPrice})`,
+      );
+      const patchLines = currentLines.map((l) => ({
+        id: l.id,
+        ingredientName: l.ingredientName,
+        rawMaterialTypeId: l.rawMaterialTypeId,
+        quantity: l.quantity,
+        unit: l.unit,
+        unitPrice: repriceAmount,
+        qcResult: l.qcResult || 'PASS',
+        remark: l.remark,
+      }));
+      const reprice = await api(whToken, 'PUT', `${base}/${created.id}/lines`, patchLines);
+      if (reprice.status === 200) {
+        detailCheck = await api(whToken, 'GET', `${base}/${created.id}`);
+        currentLines = detailCheck.json?.data?.lines || [];
+        anomalyLines = currentLines.filter((l) => l.priceAnomalyFlag);
+        if (anomalyLines.length > 0) {
+          console.log(`SEED reprice success: anomaly flag set at price=${repriceAmount}`);
+        } else {
+          console.log(`SEED reprice warn: still no anomaly flag after reprice to ${repriceAmount}`);
+          console.log('  lines=', JSON.stringify(currentLines).slice(0, 400));
+        }
+      } else {
+        console.log(`SEED reprice failed: ${reprice.status} ${reprice.json?.message || ''}`);
+      }
+    } else {
+      console.log(
+        'SEED warn: anomaly flag NOT set and backend baseline is 0/null —',
+        'this material has no price history yet; gate cannot be exercised via seed.',
+        'Hint: confirm one delivery at a normal price first, then re-run.',
+        `lines=`, JSON.stringify(currentLines).slice(0, 300),
+      );
+    }
+  }
+
+  if (anomalyLines.length === 0) {
+    // After reprice attempt, still no flag — give up and clean up this DRAFT.
+    await cleanupSeedDraft(whToken, created.id);
+    report.steps.push({
+      name: 'seed-draft',
+      noteId: created.id,
+      skipped: true,
+      reason: 'anomaly flag not set after seed and reprice — no usable baseline',
+      ingredient: histLine.ingredientName,
+      baselinePrice: histLine.baselineUnitPrice,
+      seedPrice: anomalyPrice,
+      ok: true,
+    });
+    return {
+      noteId: null,
+      seeded: false,
+      reason: 'anomaly flag not set after seed and reprice',
+    };
+  }
+
+  const finalLine = currentLines[0];
+  report.steps.push({
+    name: 'seed-draft',
+    noteId: created.id,
+    noteNumber,
+    supplierId: supplier.id,
+    supplierName: supplier.name || supplier.supplierName,
+    ingredient: histLine.ingredientName,
+    rawMaterialTypeId: histLine.rawMaterialTypeId,
+    estimatedBaseline: histLine.baselineUnitPrice,
+    backendBaseline: finalLine ? Number(finalLine.baselineUnitPrice) : null,
+    finalSeedPrice: finalLine ? Number(finalLine.unitPrice) : anomalyPrice,
+    anomalyFlagSet: anomalyLines.length > 0,
+    reused: false,
+    ok: true,
+  });
+
+  return { noteId: created.id, supplierId: supplier.id, seeded: true, reused: false };
+}
+
+// ───────────────────────────────────────────────────────────
+// Gate / approval helpers (unchanged from original)
+// ───────────────────────────────────────────────────────────
 
 function pickAnomalyDraft(notes) {
   return (notes || []).find((note) => (note.lines || []).some((line) => line.priceAnomalyFlag)) || null;
@@ -132,6 +476,10 @@ function isExplanationRequiredResponse(status, json) {
   return code === 'PRICE_ANOMALY_EXPLANATION_REQUIRED'
     || /需先填写供应商解释/.test(String(json?.message || ''));
 }
+
+// ───────────────────────────────────────────────────────────
+// Main
+// ───────────────────────────────────────────────────────────
 
 async function main() {
   const warehouseUser = process.env.CRETAS_WAREHOUSE_USER;
@@ -201,22 +549,36 @@ async function main() {
     }
   }
 
-  const list = await api(whToken, 'GET', `${base}?status=DRAFT&page=1&size=10`);
+  // ── SEED: ensure we have a testable DRAFT before scanning the list ───────
+  let seedNoteId = null;
+  {
+    const seedResult = await ensureSeedDraft(whToken, report);
+    seedNoteId = seedResult.noteId;
+    if (seedResult.seeded && !seedResult.reused) {
+      console.log(`SEED new DRAFT created: ${seedNoteId}`);
+    }
+  }
+
+  // ── scan DRAFT list (seed DRAFT will appear here if just created) ─────────
+  const list = await api(whToken, 'GET', `${base}?status=DRAFT&page=1&size=20`);
   assert(list.status === 200, `draft list failed: ${list.status}`);
   const drafts = list.json?.data?.content || [];
-  const candidates = [
-    pickAnomalyDraft(drafts),
-    ...drafts,
-  ].filter((note, index, arr) => note?.id && arr.findIndex((n) => n?.id === note.id) === index);
+
+  // Prioritise: (1) seed DRAFT by ID, (2) any anomaly DRAFT, (3) first DRAFT with details
+  const candidateIds = [
+    seedNoteId,
+    pickAnomalyDraft(drafts)?.id,
+    ...drafts.map((n) => n.id),
+  ].filter((id, idx, arr) => id && arr.indexOf(id) === idx);
 
   let draft = null;
   let detailBefore = null;
-  for (const candidate of candidates) {
-    const detail = await api(whToken, 'GET', `${base}/${candidate.id}`);
+  for (const candidateId of candidateIds) {
+    const detail = await api(whToken, 'GET', `${base}/${candidateId}`);
     if (detail.status !== 200) continue;
     const approval = detail.json?.data?.priceAnomalyApprovalStatus || 'NONE';
     if (approval === 'APPROVED') continue;
-    draft = candidate;
+    draft = detail.json?.data;
     detailBefore = detail;
     break;
   }
@@ -225,8 +587,9 @@ async function main() {
     name: 'draft-list',
     status: list.status,
     draftId: draft?.id ?? null,
+    seedNoteId,
     pickedAnomalyDraft: Boolean(pickAnomalyDraft(drafts)),
-    candidateCount: candidates.length,
+    candidateCount: candidateIds.length,
     ok: true,
   });
 
@@ -397,6 +760,9 @@ async function main() {
         assert(confirmedData.status === 'CONFIRMED', `Expected CONFIRMED status, got ${confirmedData.status}`);
         console.log('PASS readback CONFIRMED', confirmedData.payableTransactionId || 'no-payable');
 
+        // Mark seed note as consumed so next run creates a fresh one
+        // (confirmed notes are no longer DRAFT, so findExistingSeedDraft won't pick them up)
+
         if (financeToken && confirmedData.supplierId) {
           const month = (confirmedData.deliveryDate || new Date().toISOString().slice(0, 10)).slice(0, 7);
           const reconDraft = await api(financeToken, 'POST', `${reconBase}/draft`, {
@@ -501,6 +867,14 @@ async function main() {
       skipped: true,
       reason: 'CRETAS_PROCUREMENT_USER/PASS not set',
     });
+  }
+
+  // ── optional cleanup of seeded DRAFT (only relevant if NOT confirmed) ─────
+  // If the DRAFT was confirmed by this run it's now CONFIRMED, not DRAFT, so
+  // findExistingSeedDraft won't find it next run — no cleanup needed.
+  // If the run ended before confirm (e.g. no bossToken), the DRAFT stays for re-use.
+  if (SEED_CLEANUP && seedNoteId) {
+    await cleanupSeedDraft(whToken, seedNoteId);
   }
 
   report.finishedAt = new Date().toISOString();
