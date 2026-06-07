@@ -130,6 +130,10 @@ public class SalesServiceImpl implements SalesService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private DataScopeResolver dataScopeResolver;
 
+    /** T126 Phase 1: 成品库存调整日志 Repository (optional for test ctor). */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.repository.inventory.FinishedGoodsAdjustmentLogRepository finishedGoodsAdjustmentLogRepository;
+
     @jakarta.persistence.PersistenceContext
     private jakarta.persistence.EntityManager entityManager;
 
@@ -1481,6 +1485,27 @@ public class SalesServiceImpl implements SalesService {
     @Override
     @Transactional
     public FinishedGoodsBatch createFinishedGoodsBatch(String factoryId, FinishedGoodsBatch batch, Long userId) {
+        return doCreateFinishedGoodsBatch(factoryId, batch, userId, null);
+    }
+
+    // ==================== T126 Phase 1: 成品库存 Web 闭环 ====================
+
+    /**
+     * T126 Phase 1 (F8) — 期初入库路径。委托共享 worker, sourceType="OPENING"。
+     * 不再 delegate-then-republish (旧实现会触发 trigger chain 两次)。
+     */
+    @Override
+    @Transactional
+    public FinishedGoodsBatch createOpeningFinishedGoodsBatch(String factoryId, FinishedGoodsBatch batch, Long userId) {
+        return doCreateFinishedGoodsBatch(factoryId, batch, userId, "OPENING");
+    }
+
+    /**
+     * 共享创建 worker。发布 <b>单个</b> FinishedGoodsCreatedEvent 携带 sourceType
+     * (null=普通直接创建, "OPENING"=期初入库), 使 trigger chain 恰好触发一次且可过滤期初条目 (T126 F8)。
+     * 运行在 caller 的 @Transactional 内 (private 自调用不开新事务)。
+     */
+    private FinishedGoodsBatch doCreateFinishedGoodsBatch(String factoryId, FinishedGoodsBatch batch, Long userId, String sourceType) {
         // Round 11 T3: Canvas Integration Template hook 1 — DB-driven validation
         if (validationRuleEvaluator != null) {
             try {
@@ -1504,11 +1529,9 @@ public class SalesServiceImpl implements SalesService {
         }
         batch = finishedGoodsBatchRepository.save(batch);
 
-        // Round 11 T3 — close the FinishedGoodsCreatedEvent gap. Previously the event only
-        // fired from SupplyChainOrchestrator after production plan completion with a
-        // sourceOrderId. Direct createFinishedGoodsBatch calls (manual entry, re-packaging,
-        // rework) were invisible to trigger chains even though the event is already
-        // whitelisted. This hook makes every finished-goods creation path observable.
+        // Round 11 T3 — close the FinishedGoodsCreatedEvent gap. Every finished-goods creation
+        // path (manual / rework / 期初) is observable to trigger chains. T126 F8: single event
+        // carrying sourceType so chains fire once and can filter opening entries.
         try {
             applicationEventPublisher.publishEvent(new com.cretas.aims.event.FinishedGoodsCreatedEvent(
                     this,
@@ -1516,13 +1539,114 @@ public class SalesServiceImpl implements SalesService {
                     null,  // sourceOrderId: null for direct creation (no production plan link)
                     batch.getProductTypeId(),
                     batch.getProducedQuantity(),
-                    batch.getId()));
+                    batch.getId(),
+                    sourceType));
         } catch (Exception e) {
             log.warn("Publish FinishedGoodsCreatedEvent failed for {}: {}", batch.getId(), e.getMessage());
         }
 
-        log.info("创建成品批次: factoryId={}, batchNumber={}, productTypeId={}", factoryId, batch.getBatchNumber(), batch.getProductTypeId());
+        log.info("创建成品批次: factoryId={}, batchNumber={}, productTypeId={}, sourceType={}",
+                factoryId, batch.getBatchNumber(), batch.getProductTypeId(), sourceType);
         return batch;
+    }
+
+    @Override
+    @Transactional
+    public com.cretas.aims.entity.inventory.FinishedGoodsBatch editFinishedGoodsBatch(
+            String factoryId, String batchId,
+            com.cretas.aims.dto.inventory.EditFinishedGoodsRequest request,
+            Long operatorId) {
+        // F12: isolation check first — getFinishedGoodsBatchById does the 403 guard
+        FinishedGoodsBatch batch = getFinishedGoodsBatchById(factoryId, batchId);
+
+        // ⛔ producedQuantity and unit are intentionally NOT touched here
+        if (request.remark() != null) {
+            batch.setRemark(request.remark());
+        }
+        if (request.storageLocation() != null) {
+            batch.setStorageLocation(request.storageLocation());
+        }
+        if (request.expireDate() != null) {
+            batch.setExpireDate(request.expireDate());
+        }
+        if (request.unitPrice() != null) {
+            batch.setUnitPrice(request.unitPrice());
+        }
+
+        batch = finishedGoodsBatchRepository.save(batch);
+        log.info("编辑成品批次: factoryId={}, batchId={}, operatorId={}", factoryId, batchId, operatorId);
+        return batch;
+    }
+
+    @Override
+    @Transactional
+    public com.cretas.aims.entity.inventory.FinishedGoodsBatch adjustFinishedGoodsQuantity(
+            String factoryId, String batchId,
+            com.cretas.aims.dto.inventory.AdjustFinishedGoodsRequest request,
+            Long operatorId) {
+        // F12: isolation check first
+        FinishedGoodsBatch batch = getFinishedGoodsBatchById(factoryId, batchId);
+
+        BigDecimal beforeProduced = batch.getProducedQuantity();
+        BigDecimal newProduced = beforeProduced.add(request.adjustmentQuantity());
+
+        // F2: check new available quantity (newProduced - shipped - reserved >= 0)
+        BigDecimal shipped  = batch.getShippedQuantity()  != null ? batch.getShippedQuantity()  : BigDecimal.ZERO;
+        BigDecimal reserved = batch.getReservedQuantity() != null ? batch.getReservedQuantity() : BigDecimal.ZERO;
+        BigDecimal newAvailable = newProduced.subtract(shipped).subtract(reserved);
+        if (newAvailable.compareTo(BigDecimal.ZERO) < 0) {
+            throw new BusinessException(422, "调整后可用量为负数")
+                    .withHint(String.format(
+                            "当前已出库 %s 件, 已占用 %s 件, 调整量不得低于 %s",
+                            shipped.toPlainString(),
+                            reserved.toPlainString(),
+                            shipped.add(reserved).subtract(beforeProduced).toPlainString()));
+        }
+
+        batch.setProducedQuantity(newProduced);
+        batch = finishedGoodsBatchRepository.save(batch);
+
+        // Write adjustment log (F1: operatorId from request attr, not SecurityContextHolder)
+        if (finishedGoodsAdjustmentLogRepository != null) {
+            com.cretas.aims.entity.inventory.FinishedGoodsAdjustmentLog logEntry =
+                    com.cretas.aims.entity.inventory.FinishedGoodsAdjustmentLog.builder()
+                            .factoryId(factoryId)
+                            .batchId(batchId)
+                            .adjustmentQuantity(request.adjustmentQuantity())
+                            .beforeProduced(beforeProduced)
+                            .afterProduced(newProduced)
+                            .reason(request.reason())
+                            .referenceType(request.referenceType() != null ? request.referenceType().name() : null)
+                            .operatorId(operatorId)
+                            .build();
+            finishedGoodsAdjustmentLogRepository.save(logEntry);
+        }
+
+        log.info("调整成品批次数量: factoryId={}, batchId={}, delta={}, newProduced={}, operatorId={}",
+                factoryId, batchId, request.adjustmentQuantity(), newProduced, operatorId);
+        return batch;
+    }
+
+    @Override
+    @Transactional
+    public void voidFinishedGoodsBatch(String factoryId, String batchId, Long operatorId) {
+        // F12: isolation check first
+        FinishedGoodsBatch batch = getFinishedGoodsBatchById(factoryId, batchId);
+
+        // F5: precondition — no shipped or reserved records
+        BigDecimal shipped  = batch.getShippedQuantity()  != null ? batch.getShippedQuantity()  : BigDecimal.ZERO;
+        BigDecimal reserved = batch.getReservedQuantity() != null ? batch.getReservedQuantity() : BigDecimal.ZERO;
+        if (shipped.compareTo(BigDecimal.ZERO) > 0 || reserved.compareTo(BigDecimal.ZERO) > 0) {
+            throw new BusinessException(409, "该批次已有出库/预留记录, 无法作废")
+                    .withHint(String.format(
+                            "已出库 %s 件, 已预留 %s 件, 请先撤销相关出库/预留后再作废",
+                            shipped.toPlainString(), reserved.toPlainString()));
+        }
+
+        // Soft-delete via BaseEntity.softDelete() (sets deleted_at, @Where filters it out)
+        batch.softDelete();
+        finishedGoodsBatchRepository.save(batch);
+        log.info("作废成品批次: factoryId={}, batchId={}, operatorId={}", factoryId, batchId, operatorId);
     }
 
     // ==================== 统计 ====================

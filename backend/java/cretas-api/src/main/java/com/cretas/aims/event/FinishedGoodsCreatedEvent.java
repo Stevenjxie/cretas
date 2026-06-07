@@ -20,8 +20,26 @@ public class FinishedGoodsCreatedEvent extends ApplicationEvent {
     private final String batchId;
     private final LocalDateTime createdAt;
 
+    /**
+     * T126 Phase 1 (F8) — 来源类型，供监听者过滤批量期初入库条目。
+     * <ul>
+     *   <li>"OPENING" — 期初/手工入库（POST /finished-goods/opening）</li>
+     *   <li>"PRODUCTION" — 生产计划完工入库（SupplyChainOrchestrator 路径）</li>
+     *   <li>null — 未指定（老代码路径，向后兼容）</li>
+     * </ul>
+     */
+    private final String sourceType;
+
+    /** Backward-compatible constructor (sourceType = null). */
     public FinishedGoodsCreatedEvent(Object source, String factoryId, String sourceOrderId,
                                       String productTypeId, BigDecimal quantity, String batchId) {
+        this(source, factoryId, sourceOrderId, productTypeId, quantity, batchId, null);
+    }
+
+    /** Full constructor with sourceType. */
+    public FinishedGoodsCreatedEvent(Object source, String factoryId, String sourceOrderId,
+                                      String productTypeId, BigDecimal quantity, String batchId,
+                                      String sourceType) {
         super(source);
         this.factoryId = factoryId;
         this.sourceOrderId = sourceOrderId;
@@ -29,6 +47,7 @@ public class FinishedGoodsCreatedEvent extends ApplicationEvent {
         this.quantity = quantity;
         this.batchId = batchId;
         this.createdAt = LocalDateTime.now();
+        this.sourceType = sourceType;
     }
 
     @Override

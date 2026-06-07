@@ -147,6 +147,40 @@ public interface SalesService {
 
     FinishedGoodsBatch createFinishedGoodsBatch(String factoryId, FinishedGoodsBatch batch, Long userId);
 
+    /**
+     * T126 Phase 1 (F8) — 期初入库专用路径，发布 FinishedGoodsCreatedEvent 时设
+     * {@code sourceType="OPENING"}，供监听者过滤批量期初条目。
+     */
+    FinishedGoodsBatch createOpeningFinishedGoodsBatch(String factoryId, FinishedGoodsBatch batch, Long userId);
+
+    // ==================== T126 Phase 1: 成品库存 Web 闭环 ====================
+
+    /**
+     * PUT /finished-goods/{id} — 编辑元数据（备注/库位/过期日/成本单价）.
+     * <p>⛔ producedQuantity 和 unit 不可通过此方法修改。
+     *
+     * @throws com.cretas.aims.exception.BusinessException 403 跨工厂, 409 乐观锁冲突
+     */
+    FinishedGoodsBatch editFinishedGoodsBatch(String factoryId, String batchId,
+            com.cretas.aims.dto.inventory.EditFinishedGoodsRequest request, Long operatorId);
+
+    /**
+     * POST /finished-goods/{id}/adjust — 调整数量.
+     * <p>可用量不得为负，否则抛 422。成功写 finished_goods_adjustment_log。
+     *
+     * @throws com.cretas.aims.exception.BusinessException 422 调整后可用量为负, 409 乐观锁冲突
+     */
+    FinishedGoodsBatch adjustFinishedGoodsQuantity(String factoryId, String batchId,
+            com.cretas.aims.dto.inventory.AdjustFinishedGoodsRequest request, Long operatorId);
+
+    /**
+     * POST /finished-goods/{id}/void — 软删除（设 deleted_at）.
+     * <p>前提：shippedQuantity == 0 AND reservedQuantity == 0，否则抛 409。
+     *
+     * @throws com.cretas.aims.exception.BusinessException 409 已有出库/预留记录
+     */
+    void voidFinishedGoodsBatch(String factoryId, String batchId, Long operatorId);
+
     // ==================== 公式计算 ====================
 
     Map<String, Object> computeOrderFormulas(String factoryId, String orderId);
