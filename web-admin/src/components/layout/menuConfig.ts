@@ -64,7 +64,8 @@ export const menuConfig: MenuItem[] = [
       { path: '/production/batches', title: '生产批次', icon: '', module: 'production' },
       { path: '/production/plans', title: '生产计划', icon: '', module: 'production' },
       { path: '/production/restock-board', title: '备货看板', icon: '', module: 'production' },
-      { path: '/production/conversions', title: '转换率配置', icon: '', module: 'production' },
+      // T125: 转换率配置菜单入口已隐藏 — 后端 API/表/fallback 仍保留 (F001等老工厂 BomExpansionService 依赖)
+      // 维护路径: /production/bom → bom-unified 「转换率」tab (高级维护用)
       { path: '/production/bom', title: 'BOM成本管理', icon: '', module: 'production' },
       { path: '/production/approval', title: '报工审批', icon: '', module: 'production' },
       { path: '/production/bom-achievement', title: 'BOM达成率分析', icon: '', module: 'production' },
@@ -212,6 +213,10 @@ export const menuConfig: MenuItem[] = [
         hideForFactoryTypes: ['RESTAURANT'] },
       // 餐饮 Phase A A-3 Task 3.5: data quality queue admin page
       { path: '/system/data-quality-queue', title: '数据质量队列', icon: '', module: 'system',
+        roles: ['factory_super_admin', 'platform_admin', 'permission_admin'] },
+      // T123: 计量单位字典 — 客户要求"留个给我自己修改"的单位配置模块
+      // 后端: GET/POST/PUT/DELETE /api/mobile/{factoryId}/system-config/units
+      { path: '/unit-dictionary', title: '计量单位字典', icon: '', module: 'system',
         roles: ['factory_super_admin', 'platform_admin', 'permission_admin'] }
     ]
   },
