@@ -44,6 +44,15 @@ public class ExpressionLearningServiceImpl implements ExpressionLearningService 
     @Lazy
     private ExpressionLearningService self;
 
+    // ========== 置信度分层常量 ==========
+
+    /**
+     * 置信度 ≥ 此值的新学习表达直接标记为 active（可立即路由）。
+     * 0.70-0.89 的表达标记为 staged（is_active=false），
+     * 待后续二次分析确认后通过 promoteStaged() 升为 active。
+     */
+    static final double STAGED_PROMOTION_THRESHOLD = 0.90;
+
     // ========== 表达学习 ==========
 
     @Override
@@ -66,6 +75,12 @@ public class ExpressionLearningServiceImpl implements ExpressionLearningService 
             return null;
         }
 
+        // Confidence-tiered is_active:
+        //   >= 0.90 → true  (active, directly routable)
+        //   0.70-0.89 → false (staged, isolated from routing until promoted)
+        //   < 0.70 should not reach here (caller-side gate), defaults to staged for safety
+        boolean initiallyActive = confidence >= STAGED_PROMOTION_THRESHOLD;
+
         LearnedExpression entity = LearnedExpression.builder()
                 .factoryId(factoryId)
                 .intentCode(intentCode)
@@ -75,7 +90,7 @@ public class ExpressionLearningServiceImpl implements ExpressionLearningService 
                 .confidence(java.math.BigDecimal.valueOf(confidence))
                 .hitCount(0)
                 .isVerified(false)
-                .isActive(true)
+                .isActive(initiallyActive)
                 .build();
 
         // 生成 embedding (用于 Layer 4 统一语义搜索, 使用请求级缓存)
@@ -92,8 +107,9 @@ public class ExpressionLearningServiceImpl implements ExpressionLearningService 
         }
 
         LearnedExpression saved = expressionRepository.save(entity);
-        log.info("学习新表达: factory={}, intent={}, source={}, hasEmbedding={}, expr={}",
-                factoryId, intentCode, sourceType, saved.hasEmbedding(), truncate(normalized, 50));
+        log.info("学习新表达: factory={}, intent={}, source={}, active={}, confidence={:.3f}, hasEmbedding={}, expr={}",
+                factoryId, intentCode, sourceType, saved.getIsActive(), confidence,
+                saved.hasEmbedding(), truncate(normalized, 50));
 
         // 更新内存缓存 (异步添加到 Layer 4 搜索)
         if (saved.hasEmbedding() && embeddingCacheService != null) {
@@ -513,6 +529,53 @@ public class ExpressionLearningServiceImpl implements ExpressionLearningService 
         }
 
         return deleted;
+    }
+
+    // ========== 置信度分层 / 二次分析 promote ==========
+
+    @Override
+    @Transactional
+    public int promoteStaged(String factoryId, double minConfidence, int minHits) {
+        List<LearnedExpression> candidates = expressionRepository
+                .findStagedForPromotion(factoryId, minConfidence, minHits);
+
+        if (candidates.isEmpty()) {
+            log.info("promoteStaged: 无候选 (factory={}, minConf={}, minHits={})",
+                    factoryId, minConfidence, minHits);
+            return 0;
+        }
+
+        List<String> ids = candidates.stream()
+                .map(LearnedExpression::getId)
+                .collect(java.util.stream.Collectors.toList());
+
+        int promoted = expressionRepository.promoteToActive(ids, LocalDateTime.now());
+        log.info("promoteStaged: factory={}, promoted={}, minConf={}, minHits={}",
+                factoryId, promoted, minConfidence, minHits);
+
+        // 刷新 embedding 缓存（让新 active 行加入路由检索）
+        if (embeddingCacheService != null && factoryId != null) {
+            try {
+                embeddingCacheService.refreshFactoryCache(factoryId);
+            } catch (Exception e) {
+                log.warn("promoteStaged: 刷新 embedding 缓存失败: {}", e.getMessage());
+            }
+        }
+
+        return promoted;
+    }
+
+    // ========== NULL 存量审计 ==========
+
+    @Override
+    @Transactional(readOnly = true)
+    public NullAuditResult auditNullIsActive(int sampleSize) {
+        long nullCount = expressionRepository.countNullIsActive();
+        List<LearnedExpression> sample = expressionRepository.sampleNullIsActive(sampleSize);
+
+        log.info("auditNullIsActive: nullCount={}, sampleReturned={}",
+                nullCount, sample.size());
+        return new NullAuditResult(nullCount, sample);
     }
 
     // ========== 统计 ==========

@@ -172,6 +172,51 @@ public interface LearnedExpressionRepository extends JpaRepository<LearnedExpres
            "AND e.embeddingVector IS NOT NULL")
     List<LearnedExpression> findAllWithEmbedding();
 
+    // ========== 置信度分层 / 二次分析 promote ==========
+
+    /**
+     * 查找 staged 行 (is_active=false, 来自 LLM 路径, 置信度 >= threshold, 命中次数 >= minHits)。
+     * 用于二次分析 promote 候选：staged 行经重验后升为 active。
+     */
+    @Query(value = "SELECT * FROM ai_learned_expressions " +
+           "WHERE is_active = false " +
+           "AND source_type IN ('LLM_FALLBACK', 'LLM_RERANKING') " +
+           "AND confidence >= :minConfidence " +
+           "AND hit_count >= :minHits " +
+           "AND ((CAST(:factoryId AS varchar) IS NULL AND factory_id IS NULL) OR factory_id = :factoryId) " +
+           "ORDER BY confidence DESC, hit_count DESC",
+           nativeQuery = true)
+    List<LearnedExpression> findStagedForPromotion(
+        @Param("factoryId") String factoryId,
+        @Param("minConfidence") double minConfidence,
+        @Param("minHits") int minHits
+    );
+
+    /**
+     * 将 staged 行批量提升为 active (by id list).
+     */
+    @Modifying
+    @Query("UPDATE LearnedExpression e SET e.isActive = true, e.updatedAt = :now " +
+           "WHERE e.id IN :ids")
+    int promoteToActive(@Param("ids") List<String> ids, @Param("now") java.time.LocalDateTime now);
+
+    // ========== NULL 存量审计 ==========
+
+    /**
+     * 统计 is_active=NULL 的行数 (存量投毒候选)。
+     */
+    @Query(value = "SELECT COUNT(*) FROM ai_learned_expressions WHERE is_active IS NULL",
+           nativeQuery = true)
+    long countNullIsActive();
+
+    /**
+     * 采样 is_active=NULL 的行 (用于审计报告, 限制 sampleSize)。
+     */
+    @Query(value = "SELECT * FROM ai_learned_expressions WHERE is_active IS NULL " +
+           "ORDER BY created_at DESC LIMIT :sampleSize",
+           nativeQuery = true)
+    List<LearnedExpression> sampleNullIsActive(@Param("sampleSize") int sampleSize);
+
     /**
      * 获取工厂的所有有 embedding 的活跃表达
      */

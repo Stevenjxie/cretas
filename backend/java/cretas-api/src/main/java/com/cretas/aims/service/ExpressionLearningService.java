@@ -138,6 +138,55 @@ public interface ExpressionLearningService {
      */
     int cleanupIneffectiveExpressions(String factoryId, int minHits, int daysThreshold);
 
+    // ========== 置信度分层 / 二次分析 promote ==========
+
+    /**
+     * 将置信度达标的 staged 行 (is_active=false, LLM 来源) 升为 active。
+     *
+     * <p>promote 条件（确定性，无 LLM 调用）：
+     * <ol>
+     *   <li>is_active = false（staged 状态）</li>
+     *   <li>source_type IN (LLM_FALLBACK, LLM_RERANKING)</li>
+     *   <li>confidence >= minConfidence（默认 0.90，即已被多次高置信度 LLM 确认）</li>
+     *   <li>hit_count >= minHits（默认 3，已有实际命中积累）</li>
+     * </ol>
+     *
+     * @param factoryId     工厂ID（null = 全局）
+     * @param minConfidence 最低置信度阈值（推荐 0.90）
+     * @param minHits       最低命中次数（推荐 3）
+     * @return promote 的行数
+     */
+    int promoteStaged(String factoryId, double minConfidence, int minHits);
+
+    // ========== NULL 存量审计 ==========
+
+    /**
+     * 审计 is_active=NULL 的存量行。
+     *
+     * <p>返回结构：{@code nullCount}、{@code sample}（最多 30 行快照用于 Opus 人工审查）。
+     * 不执行任何写操作。
+     *
+     * @param sampleSize 采样行数（推荐 30）
+     * @return 审计结果（nullCount + sample list）
+     */
+    NullAuditResult auditNullIsActive(int sampleSize);
+
+    /**
+     * NULL 存量审计结果。
+     */
+    class NullAuditResult {
+        private final long nullCount;
+        private final List<LearnedExpression> sample;
+
+        public NullAuditResult(long nullCount, List<LearnedExpression> sample) {
+            this.nullCount = nullCount;
+            this.sample = sample;
+        }
+
+        public long getNullCount() { return nullCount; }
+        public List<LearnedExpression> getSample() { return sample; }
+    }
+
     /**
      * 清理过期的未反馈样本
      */
