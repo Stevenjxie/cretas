@@ -645,6 +645,20 @@ public class ToolDispatchService {
             params.put("userInput", request.getUserInput());
             params.put("intentCode", intent.getIntentCode());
 
+            // F2 修复: preview 路径也要抽参. 否则纯自然语言走 preview 时, 必填参数 (如 productTypeId /
+            // workProcessNames) 为 null → tool.preview 内 resolve 抛 422, "NL→配工序"第一步就跑不通.
+            // 与主执行路径 (executeWithTool 的 LLM 抽参) 一致: 只填缺失的必填项, 不覆盖 context 已有值.
+            try {
+                Map<String, Object> llmExtractedParams =
+                        extractParametersWithLLM(request.getUserInput(), tool, params);
+                if (!llmExtractedParams.isEmpty()) {
+                    params.putAll(llmExtractedParams);
+                    log.info("Preview 路径 LLM 抽取参数: {}", llmExtractedParams.keySet());
+                }
+            } catch (Exception ex) {
+                log.warn("Preview 路径参数抽取失败 (继续用已有 params): {}", ex.getMessage());
+            }
+
             String argumentsJson = objectMapper.writeValueAsString(params);
             ToolCall toolCall = ToolCall.of(
                     java.util.UUID.randomUUID().toString(),
