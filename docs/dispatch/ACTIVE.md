@@ -18,7 +18,10 @@
 | ID | 任务 | model | effort | orchestration | 分支 | scope 锁 | 状态 | PR | 阻塞 |
 |---|---|---|---|---|---|---|---|---|---|
 | T103 | S1 🖐️真机走一单 录音→`voiceAudioUrl` OSS 验证 | Steve(手动) | - | - | - | - | ⬜ pending | - | ✅已解锁(真实餐饮角色 qhj_chef/qhj_purchase_mgr/qhj_owner 已建+验登录);需真机(APK 已装小米 f79c50d6) |
-| T112 | 餐饮问答优化(校准后)①反投毒+abstain ②跨域路由修 ③选择性ETL | Sonnet recon→Opus 设计 | locked | inline | (设计 recon 只读) | TBD 待设计 | 🟡 recon | - | 🔒 AI路由;recon 映射 飞轮学习/abstain阈值/跨域误路由 代码+复现 → Opus 设计 → 派 impl。③ ETL 待确认二维火 creds/值 |
+| T112 | 餐饮问答优化 impl(①反投毒守卫+②绑峰值+清毒) | Sonnet→Opus gate | locked | inline | feat/restaurant-routing-antipoison | IntentRecognitionPipelineServiceImpl + Flyway(ai_intent_configs/ai_learned_expressions) | 🟡 in-progress | - | 🔒 AI路由高爆炸半径。recon 实锤毒行(vip→PROCESSING_BATCH_CREATE hit=6)。Piece4 前置业态门只提案。到 PR Opus gate+部署 |
+| T113 | T109 备货看板深验(三层去重)+ T108 菜品 coref D1/D2 live | Sonnet 只读 | locked | inline | (只读验证) | — | 🟡 in-progress | - | 验证 T109/T108 caveat,无码改 |
+| T114 | §8 基建: deploy-staging CI libcrypto + test 采购账号401 | Sonnet→Opus gate | locked | inline | fix/staging-ci-and-test-purchase-account | .github/workflows/* + test 账号 SQL | 🟡 in-progress | - | 低价值 backlog;到 PR gate |
+| T115 | 飞轮分层+二次分析(中置信0.70-0.89→staged is_active=false + promote pipeline) | Sonnet→Opus gate | locked | inline | (待 T112-impl merge) | IntentRecognitionPipelineServiceImpl 学习路径 + learning_* 表 | 🔴 blocked | - | 🔒 撞 T112-impl 同文件,等其 merge 后开。复用 learning_suggestions/tasks 表 |
 
 <!--
 状态: ⬜ pending / 🟡 in-progress / 🟠 review/待终审 / 🟢 已合并待部署 / ✅ done / 🔴 blocked
