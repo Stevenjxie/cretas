@@ -195,11 +195,11 @@ jobs:
         working-directory: backend/java/cretas-api
         run: mvn -B clean package -DskipTests
       - name: Configure SSH
-        run: |
-          mkdir -p ~/.ssh
-          echo "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/id_rsa
-          chmod 600 ~/.ssh/id_rsa
-          ssh-keyscan -H 47.100.235.168 >> ~/.ssh/known_hosts
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.DEPLOY_SSH_KEY }}
+      - name: Add server to known_hosts
+        run: ssh-keyscan -H 47.100.235.168 >> ~/.ssh/known_hosts
       - name: Deploy to test env (10011/8084)
         run: |
           rsync -az backend/java/cretas-api/target/cretas-backend-system-1.0.0.jar \
@@ -232,11 +232,11 @@ jobs:
         working-directory: backend/java/cretas-api
         run: mvn -B clean package -DskipTests
       - name: Configure SSH
-        run: |
-          mkdir -p ~/.ssh
-          echo "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/id_rsa
-          chmod 600 ~/.ssh/id_rsa
-          ssh-keyscan -H 47.100.235.168 >> ~/.ssh/known_hosts
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.DEPLOY_SSH_KEY }}
+      - name: Add server to known_hosts
+        run: ssh-keyscan -H 47.100.235.168 >> ~/.ssh/known_hosts
       - name: Backup + deploy to prod (10010/8083)
         run: |
           ssh root@47.100.235.168 "cd /www/wwwroot/cretas && cp aims-0.0.1-SNAPSHOT.jar aims-0.0.1-SNAPSHOT.jar.bak.\$(date +%Y%m%d%H%M)"
