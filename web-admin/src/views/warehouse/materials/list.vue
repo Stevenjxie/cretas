@@ -141,6 +141,7 @@ const formData = reactive({
   receiptDate: new Date().toISOString().slice(0, 10),
   receiptQuantity: null as number | null,
   quantityUnit: 'kg',
+  boxCount: null as number | null,
   totalWeight: null as number | null,
   totalValue: null as number | null,
   expireDate: '',
@@ -187,7 +188,7 @@ function handleCreate() {
   editingId.value = null;
   formDialogTitle.value = '入库登记';
   w02HintShown = false;
-  Object.assign(formData, { batchNumber: '', materialTypeId: '', supplierId: '', receiptDate: new Date().toISOString().slice(0, 10), receiptQuantity: null, quantityUnit: 'kg', totalWeight: null, totalValue: null, expireDate: '', notes: '' });
+  Object.assign(formData, { batchNumber: '', materialTypeId: '', supplierId: '', receiptDate: new Date().toISOString().slice(0, 10), receiptQuantity: null, quantityUnit: 'kg', boxCount: null, totalWeight: null, totalValue: null, expireDate: '', notes: '' });
   formDialogVisible.value = true;
 }
 
@@ -202,6 +203,7 @@ function handleEdit(row: TableRow) {
     receiptDate: row.receiptDate || row.inboundDate || new Date().toISOString().slice(0, 10),
     receiptQuantity: row.receiptQuantity ?? row.quantity ?? row.currentQuantity ?? null,
     quantityUnit: row.quantityUnit || row.unit || 'kg',
+    boxCount: row.boxCount ?? null,
     totalWeight: row.totalWeight ?? null,
     totalValue: row.totalValue ?? null,
     expireDate: row.expireDate || row.expiryDate || '',
@@ -292,6 +294,12 @@ async function handleFormSubmit() {
           <template #default="{ row }">{{ row.quantity ?? row.currentQuantity ?? row.receiptQuantity ?? '-' }}</template>
         </el-table-column>
         <el-table-column prop="unit" label="单位" width="80" align="center" />
+        <el-table-column label="箱数" width="90" align="right">
+          <template #default="{ row }">
+            <span v-if="row.boxCount != null">约 {{ row.boxCount }} 箱</span>
+            <span v-else class="text-secondary">-</span>
+          </template>
+        </el-table-column>
         <el-table-column prop="status" label="状态" width="100" align="center">
           <template #default="{ row }">
             <el-tag :type="getStatusType(row.status)" size="small">
@@ -329,6 +337,10 @@ async function handleFormSubmit() {
         <el-descriptions-item label="原料类型">{{ viewRecord.materialTypeName || viewRecord.materialName || '-' }}</el-descriptions-item>
         <el-descriptions-item label="供应商">{{ viewRecord.supplierName || '-' }}</el-descriptions-item>
         <el-descriptions-item label="数量">{{ viewRecord.quantity ?? viewRecord.currentQuantity ?? '-' }} {{ viewRecord.unit || '' }}</el-descriptions-item>
+        <el-descriptions-item label="箱数">
+          <span v-if="viewRecord.boxCount != null">约 {{ viewRecord.boxCount }} 箱 <span class="text-secondary">(粗略统计, 实际库存以称重 kg 为准)</span></span>
+          <span v-else>-</span>
+        </el-descriptions-item>
         <el-descriptions-item label="状态">
           <el-tag :type="getStatusType(String(viewRecord.status || ''))">{{ getStatusText(String(viewRecord.status || '')) }}</el-tag>
         </el-descriptions-item>
@@ -369,6 +381,10 @@ async function handleFormSubmit() {
             <el-option label="箱" value="箱" />
           </el-select>
         </el-form-item>
+        <el-form-item label="箱数">
+          <el-input-number v-model="formData.boxCount" :min="0" :precision="0" :controls="true" placeholder="可选" style="width: 100%" />
+          <div class="field-hint">粗略统计用, 实际库存以称重(kg)为准</div>
+        </el-form-item>
         <el-form-item label="入库日期" prop="receiptDate">
           <el-date-picker v-model="formData.receiptDate" type="date" value-format="YYYY-MM-DD" placeholder="选择入库日期" style="width: 100%" />
         </el-form-item>
@@ -400,6 +416,18 @@ async function handleFormSubmit() {
   width: 100%;
   display: flex;
   flex-direction: column;
+}
+
+.field-hint {
+  font-size: 12px;
+  color: var(--text-color-secondary, #909399);
+  line-height: 1.4;
+  margin-top: 4px;
+}
+
+.text-secondary {
+  font-size: 12px;
+  color: var(--text-color-secondary, #909399);
 }
 
 .page-card {

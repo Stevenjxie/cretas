@@ -94,6 +94,16 @@ public class MaterialBatch extends BaseEntity {
     @Column(name = "quantity_unit", nullable = false, length = 20)
     private String quantityUnit;
 
+    /**
+     * T145: 粗略统计用箱数, 与称重 kg 并存。
+     * 仅用于展示/粗略统计, 不参与任何库存充足性/可用量/成本/换算计算
+     * (kg 库存校验由 receiptQuantity + quantity_unit=kg 负责, 见 validateMaterialStockSufficient)。
+     * 可空 — 未填写时为 null, 不从 kg 推导。
+     */
+    @PositiveOrZero(message = "箱数不能为负数")
+    @Column(name = "box_count")
+    private Integer boxCount;
+
     @PositiveOrZero(message = "每单位重量不能为负数")
     @Column(name = "weight_per_unit", precision = 10, scale = 3)
     private BigDecimal weightPerUnit;

@@ -40,6 +40,7 @@ public class MaterialBatchMapper {
                 .expireDate(batch.getExpireDate())
                 .receiptQuantity(batch.getReceiptQuantity())
                 .quantityUnit(batch.getQuantityUnit())
+                .boxCount(batch.getBoxCount())
                 .weightPerUnit(batch.getWeightPerUnit())
                 .totalWeight(batch.getTotalWeight())
                 .currentQuantity(batch.getCurrentQuantity())
@@ -109,6 +110,8 @@ public class MaterialBatchMapper {
         batch.setReceiptDate(request.getReceiptDate());
         batch.setReceiptQuantity(request.getReceiptQuantity());
         batch.setQuantityUnit(request.getQuantityUnit());
+        // T145: 箱数 (粗略统计用, 可空; 不参与任何库存计算). null 时不填.
+        batch.setBoxCount(request.getBoxCount());
         // 处理weightPerUnit: 如果用户未提供，则从totalWeight反算
         if (request.getWeightPerUnit() != null) {
             batch.setWeightPerUnit(request.getWeightPerUnit());
@@ -220,6 +223,10 @@ public class MaterialBatchMapper {
         }
         if (request.getQuantityUnit() != null) {
             batch.setQuantityUnit(request.getQuantityUnit());
+        }
+        // T145: 箱数 (粗略统计用, 不参与库存计算).
+        if (request.getBoxCount() != null) {
+            batch.setBoxCount(request.getBoxCount());
         }
         // R24 P1 (qa-prompt v2.4 Rule 17.2 sweep): pre-R24 weightPerUnit was only set
         // indirectly via totalWeight.divide(qty). API consumers / mobile / AI tools

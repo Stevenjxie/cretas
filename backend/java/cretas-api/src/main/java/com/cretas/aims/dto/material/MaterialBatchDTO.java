@@ -72,6 +72,9 @@ public class MaterialBatchDTO {
     @Schema(description = "数量单位")
     private String quantityUnit;
 
+    @Schema(description = "箱数 (粗略统计用, 不参与库存计算; 实际库存以称重 kg 为准)")
+    private Integer boxCount;
+
     @Schema(description = "每单位重量(kg)")
     private BigDecimal weightPerUnit;
 

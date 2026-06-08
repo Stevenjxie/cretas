@@ -44,6 +44,10 @@ public class CreateMaterialBatchRequest {
     @NotBlank(message = "数量单位不能为空")
     private String quantityUnit;
 
+    @Schema(description = "箱数 (可选, 粗略统计用, 不参与库存计算; 实际库存以称重 kg 为准)", example = "8")
+    @PositiveOrZero(message = "箱数不能为负数")
+    private Integer boxCount;
+
     @Schema(description = "每单位重量(kg)", example = "10.5")
     @DecimalMin(value = "0.001", message = "每单位重量必须大于0")
     private BigDecimal weightPerUnit;
