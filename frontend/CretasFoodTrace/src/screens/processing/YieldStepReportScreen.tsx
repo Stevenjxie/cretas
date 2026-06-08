@@ -1160,7 +1160,7 @@ const YieldStepReportScreen: React.FC = () => {
                   prefillNote={prefillNote}
                   disabled={submitting}
                   calculatorMode
-                  defaultTrayWeighing={isFirstStep}
+                  defaultTrayWeighing={false}
                   testID="yield-input-qty"
                 />
               )}
