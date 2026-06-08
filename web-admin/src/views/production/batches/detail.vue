@@ -355,6 +355,16 @@ function stepOutputPhotos(row: Record<string, unknown>): string[] {
   const p = row?.outputPhotos;
   return Array.isArray(p) ? (p as string[]).filter((u) => !!u) : [];
 }
+// T161: per-photo annotation helpers — null-safe, backward-compat (old records have no annotations)
+interface PhotoAnnotation { url?: string; label?: string | null; note?: string | null }
+function stepInputPhotoAnnotations(row: Record<string, unknown>): (PhotoAnnotation | null)[] {
+  const a = row?.inputPhotoAnnotations;
+  return Array.isArray(a) ? (a as (PhotoAnnotation | null)[]) : [];
+}
+function stepOutputPhotoAnnotations(row: Record<string, unknown>): (PhotoAnnotation | null)[] {
+  const a = row?.outputPhotoAnnotations;
+  return Array.isArray(a) ? (a as (PhotoAnnotation | null)[]) : [];
+}
 // legacy 回退: 旧数据无 input/output 分组 (两组都空), 仍用合并 photos 兜底展示, 不丢历史证据.
 function hasSplitPhotos(row: Record<string, unknown>): boolean {
   return stepInputPhotos(row).length > 0 || stepOutputPhotos(row).length > 0;
@@ -760,12 +770,14 @@ function getTimelineIcon(type: string) {
                   <template v-if="hasTraditionalDetail(row)">
                     <!-- 单元3 (F006 三阶段): 证据照片拆分 投入照片 / 产出照片, 各自独立 lightbox 画廊.
                          空组 → "—". legacy 行 (两组都空) 回退到合并 photos, 旧数据仍可见. -->
+                    <!-- T161: 投入照片 (含逐张标注) -->
                     <div class="trad-item">
                       <span class="trad-label">投入照片</span>
                       <template v-if="stepInputPhotos(row).length > 0">
-                        <template
+                        <div
                           v-for="(media, i) in evidenceMediaItems(stepInputPhotos(row))"
                           :key="'in-' + i"
+                          class="photo-annot-wrap"
                         >
                           <video
                             v-if="media.kind === 'video'"
@@ -783,16 +795,33 @@ function getTimelineIcon(type: string) {
                             class="trad-thumb"
                             preview-teleported
                           />
-                        </template>
+                          <!-- T161 annotation badge (label + note), only shown when present -->
+                          <template v-if="stepInputPhotoAnnotations(row)[i]?.label || stepInputPhotoAnnotations(row)[i]?.note">
+                            <div class="photo-annot-badge">
+                              <el-tag
+                                v-if="stepInputPhotoAnnotations(row)[i]?.label"
+                                size="small"
+                                type="warning"
+                                class="annot-label-tag"
+                              >{{ stepInputPhotoAnnotations(row)[i]?.label }}</el-tag>
+                              <span
+                                v-if="stepInputPhotoAnnotations(row)[i]?.note"
+                                class="annot-note-text"
+                              >{{ stepInputPhotoAnnotations(row)[i]?.note }}</span>
+                            </div>
+                          </template>
+                        </div>
                       </template>
                       <span v-else class="trad-empty">—</span>
                     </div>
+                    <!-- T161: 产出照片 (含逐张标注) -->
                     <div class="trad-item">
                       <span class="trad-label">产出照片</span>
                       <template v-if="stepOutputPhotos(row).length > 0">
-                        <template
+                        <div
                           v-for="(media, i) in evidenceMediaItems(stepOutputPhotos(row))"
                           :key="'out-' + i"
+                          class="photo-annot-wrap"
                         >
                           <video
                             v-if="media.kind === 'video'"
@@ -810,7 +839,22 @@ function getTimelineIcon(type: string) {
                             class="trad-thumb"
                             preview-teleported
                           />
-                        </template>
+                          <!-- T161 annotation badge (label + note), only shown when present -->
+                          <template v-if="stepOutputPhotoAnnotations(row)[i]?.label || stepOutputPhotoAnnotations(row)[i]?.note">
+                            <div class="photo-annot-badge">
+                              <el-tag
+                                v-if="stepOutputPhotoAnnotations(row)[i]?.label"
+                                size="small"
+                                type="success"
+                                class="annot-label-tag"
+                              >{{ stepOutputPhotoAnnotations(row)[i]?.label }}</el-tag>
+                              <span
+                                v-if="stepOutputPhotoAnnotations(row)[i]?.note"
+                                class="annot-note-text"
+                              >{{ stepOutputPhotoAnnotations(row)[i]?.note }}</span>
+                            </div>
+                          </template>
+                        </div>
                       </template>
                       <span v-else class="trad-empty">—</span>
                     </div>
@@ -1560,6 +1604,40 @@ function getTimelineIcon(type: string) {
 .trad-video {
   display: inline-block;
   vertical-align: middle;
+}
+
+/* T161: per-photo annotation badge wrapper */
+.photo-annot-wrap {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  margin-right: 8px;
+  margin-bottom: 6px;
+  vertical-align: top;
+}
+
+.photo-annot-badge {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+  max-width: 72px;
+}
+
+.annot-label-tag {
+  font-size: 10px;
+  line-height: 1.2;
+  padding: 1px 4px;
+  height: auto;
+}
+
+.annot-note-text {
+  font-size: 10px;
+  color: #606266;
+  word-break: break-all;
+  line-height: 1.3;
 }
 
 .trad-chip {

@@ -211,6 +211,7 @@ public class YieldReportServiceImpl implements YieldReportService {
                 .materialBatchRefs(toMaterialBatchRefMaps(effMaterialRefs))
                 // 适配单元3: 传统报工证据/工时段/副产物/损耗/留样 (各报工携带自身明细, 聚合时合并)
                 .photos(req.getEvidenceImages())          // 证据图片各阶段都可带 (按 reportKind 分组到 input/outputPhotos)
+                .photoAnnotations(toPhotoAnnotationMaps(req.getPhotoAnnotations()))  // T161 per-photo annotation
                 .laborSegments(toLaborSegmentMaps(segs))
                 .byproducts(toByproductMaps(effByproducts))
                 .wasteQuantity(effWaste)
@@ -811,6 +812,22 @@ public class YieldReportServiceImpl implements YieldReportService {
             m.put("name", b.getName());
             m.put("quantity", b.getQuantity());
             if (b.getUnit() != null) m.put("unit", b.getUnit());
+            return m;
+        }).collect(Collectors.toList());
+    }
+
+    /**
+     * T161: 把 List&lt;PhotoAnnotation&gt; 转 List&lt;Map&gt; 用于 jsonb 序列化。
+     * null/empty → null (back-compat: 旧记录无标注)。
+     */
+    private List<Map<String, Object>> toPhotoAnnotationMaps(
+            List<YieldReportRequest.PhotoAnnotation> annotations) {
+        if (annotations == null || annotations.isEmpty()) return null;
+        return annotations.stream().map(a -> {
+            Map<String, Object> m = new LinkedHashMap<>();
+            if (a.getUrl() != null) m.put("url", a.getUrl());
+            if (a.getLabel() != null) m.put("label", a.getLabel());
+            if (a.getNote() != null) m.put("note", a.getNote());
             return m;
         }).collect(Collectors.toList());
     }

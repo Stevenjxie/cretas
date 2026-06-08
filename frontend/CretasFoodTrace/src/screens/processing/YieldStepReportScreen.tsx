@@ -54,7 +54,16 @@ interface EvidencePhoto {
   uploading: boolean;
   mediaKind: EvidenceMediaKind;
   serverUrl?: string;
+  /** T161 per-photo annotation: 预设分类标签. null = 未选. */
+  label?: string | null;
+  /** T161 per-photo annotation: 自由文字备注, 如 "猪舌第1车 320盒". */
+  note?: string | null;
 }
+
+/** T161: 预设标签列表 */
+const PHOTO_LABEL_CHIPS = [
+  '称重投入', '称重产出', '装盒', '副产物', '损耗', '托盘重', '工序中', '留样', '其它',
+] as const;
 // 单元4 STEP 5: 副产物本地态 (名称 + 数量 + 单位)
 interface ByproductInput {
   name: string;
@@ -809,6 +818,8 @@ const YieldStepReportScreen: React.FC = () => {
         : {}),
       ...(!isFirstStep && effectiveSourceWipNo ? { sourceWipNo: effectiveSourceWipNo } : {}),
       ...(uploadedEvidenceUrls.length > 0 ? { evidenceImages: uploadedEvidenceUrls } : {}),
+      // T161: per-photo annotation (仅含已标注的照片)
+      ...(buildPhotoAnnotations() ? { photoAnnotations: buildPhotoAnnotations() } : {}),
     };
     setSubmitting(true);
     try {
@@ -875,6 +886,8 @@ const YieldStepReportScreen: React.FC = () => {
       outputQuantity: 0,
       laborSegments: [seg],
       ...(uploadedEvidenceUrls.length > 0 ? { evidenceImages: uploadedEvidenceUrls } : {}),
+      // T161: per-photo annotation (仅含已标注的照片)
+      ...(buildPhotoAnnotations() ? { photoAnnotations: buildPhotoAnnotations() } : {}),
     };
     setSubmitting(true);
     try {
@@ -958,6 +971,8 @@ const YieldStepReportScreen: React.FC = () => {
       ...(Number.isNaN(wasteNum) || wasteNum < 0 ? {} : { wasteQuantity: wasteNum }),
       ...(Number.isNaN(sampleNum) || sampleNum <= 0 ? {} : { sampleRetainQuantity: sampleNum }),
       ...(uploadedEvidenceUrls.length > 0 ? { evidenceImages: uploadedEvidenceUrls } : {}),
+      // T161: per-photo annotation (仅含已标注的照片)
+      ...(buildPhotoAnnotations() ? { photoAnnotations: buildPhotoAnnotations() } : {}),
     };
     setSubmitting(true);
     try {
@@ -1258,34 +1273,86 @@ const YieldStepReportScreen: React.FC = () => {
     </>
   );
 
+  // T161: 更新单张照片的标签
+  const setPhotoLabel = useCallback((uri: string, label: string | null) => {
+    setEvidencePhotos((prev) => prev.map((p) => p.uri === uri ? { ...p, label } : p));
+  }, []);
+
+  // T161: 更新单张照片的备注
+  const setPhotoNote = useCallback((uri: string, note: string) => {
+    setEvidencePhotos((prev) => prev.map((p) => p.uri === uri ? { ...p, note: note || null } : p));
+  }, []);
+
+  // T161: 把本地 evidencePhotos 转成 API photoAnnotations (只包含已上传完的)
+  const buildPhotoAnnotations = useCallback(() => {
+    const annotated = evidencePhotos.filter((p) => p.serverUrl && (p.label || p.note));
+    if (annotated.length === 0) return undefined;
+    return annotated.map((p) => ({
+      url: p.serverUrl!,
+      label: p.label ?? null,
+      note: p.note ?? null,
+    }));
+  }, [evidencePhotos]);
+
   // 照片证据块 (三阶段共用; title 区分投入照 / 时段照 / 产出照)
   const renderEvidenceBlock = (title: string, takeTestID: string, pickTestID: string) => (
     <View style={styles.section} testID="yield-evidence-section">
       <Text style={styles.sectionTitle}>{title}</Text>
       {evidencePhotos.length > 0 ? (
-        <View style={styles.thumbRow}>
+        <View>
           {evidencePhotos.map((p) => (
-            <View style={styles.thumbItem} key={p.uri}>
-              {p.mediaKind === 'video' ? (
-                <View style={[styles.thumb, styles.videoThumb]}>
-                  <Text style={styles.videoThumbIcon}>▶</Text>
-                  <Text style={styles.videoThumbText}>视频</Text>
+            <View key={p.uri} style={styles.photoAnnotItem}>
+              {/* 缩略图 + 删除按钮 */}
+              <View style={styles.thumbItem}>
+                {p.mediaKind === 'video' ? (
+                  <View style={[styles.thumb, styles.videoThumb]}>
+                    <Text style={styles.videoThumbIcon}>▶</Text>
+                    <Text style={styles.videoThumbText}>视频</Text>
+                  </View>
+                ) : (
+                  <Image source={{ uri: p.uri }} style={styles.thumb} />
+                )}
+                {p.uploading ? (
+                  <View style={styles.thumbOverlay}><ActivityIndicator color="#fff" /></View>
+                ) : (
+                  <TouchableOpacity
+                    style={styles.thumbRemove}
+                    onPress={() => removeEvidencePhoto(p.uri)}
+                    disabled={submitting}
+                    accessibilityLabel="删除证据"
+                  >
+                    <Text style={styles.thumbRemoveText}>✕</Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+              {/* T161: 标签 chip 行 + 备注输入 */}
+              {!p.uploading ? (
+                <View style={styles.photoAnnotRight}>
+                  <View style={styles.chipRow}>
+                    {PHOTO_LABEL_CHIPS.map((chip) => (
+                      <TouchableOpacity
+                        key={chip}
+                        style={[styles.chip, p.label === chip && styles.chipSelected]}
+                        onPress={() => setPhotoLabel(p.uri, p.label === chip ? null : chip)}
+                        disabled={submitting}
+                        accessibilityLabel={`标注 ${chip}`}
+                      >
+                        <Text style={[styles.chipText, p.label === chip && styles.chipTextSelected]}>
+                          {chip}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                  <TextInput
+                    style={styles.photoNoteInput}
+                    value={p.note ?? ''}
+                    onChangeText={(v) => setPhotoNote(p.uri, v)}
+                    placeholder="备注 (如: 猪舌第1车 320盒)"
+                    placeholderTextColor="#C0C4CC"
+                    editable={!submitting}
+                  />
                 </View>
-              ) : (
-                <Image source={{ uri: p.uri }} style={styles.thumb} />
-              )}
-              {p.uploading ? (
-                <View style={styles.thumbOverlay}><ActivityIndicator color="#fff" /></View>
-              ) : (
-                <TouchableOpacity
-                  style={styles.thumbRemove}
-                  onPress={() => removeEvidencePhoto(p.uri)}
-                  disabled={submitting}
-                  accessibilityLabel="删除证据"
-                >
-                  <Text style={styles.thumbRemoveText}>✕</Text>
-                </TouchableOpacity>
-              )}
+              ) : null}
             </View>
           ))}
         </View>
@@ -1785,27 +1852,59 @@ const YieldStepReportScreen: React.FC = () => {
                 </View>
               ) : null}
 
-              {/* 投入照片 */}
+              {/* 投入照片 (T161: 含标注) */}
               {Array.isArray(currentStepYield?.inputPhotos) && (currentStepYield?.inputPhotos?.length ?? 0) > 0 ? (
                 <View style={styles.photoGroup}>
                   <Text style={styles.photoGroupTitle}>投入照片</Text>
-                  <View style={styles.thumbRow}>
-                    {currentStepYield!.inputPhotos!.map((url: string, i: number) => (
-                      <Image key={`cin-${i}`} source={{ uri: url }} style={styles.thumbReadonly} />
-                    ))}
-                  </View>
+                  {currentStepYield!.inputPhotos!.map((url: string, i: number) => {
+                    const annot = currentStepYield?.inputPhotoAnnotations?.[i];
+                    return (
+                      <View key={`cin-${i}`} style={styles.photoAnnotItemReadonly}>
+                        {isEvidenceVideoUrl(url) ? (
+                          <View style={[styles.thumbReadonly, styles.videoThumb]}>
+                            <Text style={styles.videoThumbIcon}>▶</Text>
+                            <Text style={styles.videoThumbText}>视频</Text>
+                          </View>
+                        ) : (
+                          <Image source={{ uri: url }} style={styles.thumbReadonly} />
+                        )}
+                        {(annot?.label || annot?.note) ? (
+                          <View style={styles.annotReadout}>
+                            {annot.label ? <View style={styles.chipReadonly}><Text style={styles.chipReadonlyText}>{annot.label}</Text></View> : null}
+                            {annot.note ? <Text style={styles.annotNoteReadout}>{annot.note}</Text> : null}
+                          </View>
+                        ) : null}
+                      </View>
+                    );
+                  })}
                 </View>
               ) : null}
 
-              {/* 产出照片 */}
+              {/* 产出照片 (T161: 含标注) */}
               {Array.isArray(currentStepYield?.outputPhotos) && (currentStepYield?.outputPhotos?.length ?? 0) > 0 ? (
                 <View style={styles.photoGroup}>
                   <Text style={styles.photoGroupTitle}>产出照片</Text>
-                  <View style={styles.thumbRow}>
-                    {currentStepYield!.outputPhotos!.map((url: string, i: number) => (
-                      <Image key={`cout-${i}`} source={{ uri: url }} style={styles.thumbReadonly} />
-                    ))}
-                  </View>
+                  {currentStepYield!.outputPhotos!.map((url: string, i: number) => {
+                    const annot = currentStepYield?.outputPhotoAnnotations?.[i];
+                    return (
+                      <View key={`cout-${i}`} style={styles.photoAnnotItemReadonly}>
+                        {isEvidenceVideoUrl(url) ? (
+                          <View style={[styles.thumbReadonly, styles.videoThumb]}>
+                            <Text style={styles.videoThumbIcon}>▶</Text>
+                            <Text style={styles.videoThumbText}>视频</Text>
+                          </View>
+                        ) : (
+                          <Image source={{ uri: url }} style={styles.thumbReadonly} />
+                        )}
+                        {(annot?.label || annot?.note) ? (
+                          <View style={styles.annotReadout}>
+                            {annot.label ? <View style={styles.chipReadonly}><Text style={styles.chipReadonlyText}>{annot.label}</Text></View> : null}
+                            {annot.note ? <Text style={styles.annotNoteReadout}>{annot.note}</Text> : null}
+                          </View>
+                        ) : null}
+                      </View>
+                    );
+                  })}
                 </View>
               ) : null}
             </NeoCard>
@@ -1986,7 +2085,44 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   autoWasteText: { fontSize: 14, color: '#67C23A', fontWeight: '500' },
-  // 图片证据
+  // 图片证据 (T161 per-photo annotation)
+  photoAnnotItem: {
+    flexDirection: 'row', marginBottom: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#EBEEF5', paddingBottom: 10,
+  },
+  photoAnnotItemReadonly: {
+    flexDirection: 'row', marginBottom: 10, alignItems: 'flex-start',
+  },
+  photoAnnotRight: {
+    flex: 1, paddingLeft: 10, paddingVertical: 2,
+  },
+  chipRow: {
+    flexDirection: 'row', flexWrap: 'wrap', marginBottom: 6,
+  },
+  chip: {
+    borderWidth: 1, borderColor: '#DCDFE6', borderRadius: 14,
+    paddingHorizontal: 10, paddingVertical: 4, marginRight: 6, marginBottom: 4,
+    backgroundColor: '#FFFFFF',
+  },
+  chipSelected: {
+    borderColor: '#E8732E', backgroundColor: '#FFF3EC',
+  },
+  chipText: { fontSize: 12, color: '#606266' },
+  chipTextSelected: { color: '#E8732E', fontWeight: '600' },
+  photoNoteInput: {
+    height: 36, borderWidth: 1, borderColor: '#DCDFE6', borderRadius: 6,
+    fontSize: 13, color: '#1A1A1A', paddingHorizontal: 8,
+    backgroundColor: '#FAFAFA',
+  },
+  annotReadout: {
+    marginTop: 4, flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap',
+  },
+  chipReadonly: {
+    borderRadius: 10, paddingHorizontal: 8, paddingVertical: 2,
+    backgroundColor: '#FFF3EC', borderWidth: 1, borderColor: '#E8732E', marginRight: 6,
+  },
+  chipReadonlyText: { fontSize: 11, color: '#E8732E', fontWeight: '600' },
+  annotNoteReadout: { fontSize: 12, color: '#606266', flexShrink: 1 },
   thumbRow: { flexDirection: 'row', flexWrap: 'wrap', marginBottom: 10 },
   thumbItem: { width: 80, height: 80, borderRadius: 8, overflow: 'hidden', marginRight: 8, marginBottom: 8 },
   thumb: { width: 80, height: 80 },

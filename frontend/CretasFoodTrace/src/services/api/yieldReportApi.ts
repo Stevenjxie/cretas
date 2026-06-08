@@ -100,6 +100,10 @@ export interface StepYieldDTO {
   inputPhotos?: string[] | null;
   /** 产出阶段照片 (reportKind == OUTPUT); 无则 null */
   outputPhotos?: string[] | null;
+  /** T161 per-photo annotation parallel to inputPhotos; null = no annotations */
+  inputPhotoAnnotations?: Array<{ url: string; label?: string | null; note?: string | null }> | null;
+  /** T161 per-photo annotation parallel to outputPhotos; null = no annotations */
+  outputPhotoAnnotations?: Array<{ url: string; label?: string | null; note?: string | null }> | null;
 }
 
 export interface BatchYieldDTO {
@@ -172,6 +176,9 @@ export interface YieldReportRequest {
   // ==================== 传统报工适配 (适配单元4; mirror backend YieldReportRequest.java:34-49) ====================
   /** 图片证据 URL 列表 (先传 OSS 拿 URL, 存入 ProductionReport.photos). 六扇门: 产品+电子秤+盒数照. */
   evidenceImages?: string[];
+  /** T161 per-photo annotation; parallel to evidenceImages, same order.
+   *  null or absent = no annotations (backward-compat). */
+  photoAnnotations?: Array<{ url: string; label?: string | null; note?: string | null }>;
   /** 多时段×人数工时 (张权 多段开工/收工). startTime/endTime = "HH:mm". */
   laborSegments?: Array<{
     startTime: string;
