@@ -318,7 +318,8 @@ export interface WorkProcessTaskItem {
   actualStartAt: string | null;
   actualEndAt: string | null;
   actualMinutes: number | null;
-  assignedTo: number | null;       // 责任人 user ID (后端无 name join; T140-FLAG: 需后端补 assignedToName)
+  assignedTo: number | null;       // 责任人 user ID
+  assignedToName?: string | null;  // T142: 责任人姓名 (后端 batch join, 无 N+1)
   completedBy: number | null;
   completedAt: string | null;
   standardYieldMin: number | null; // 标准出成率下限

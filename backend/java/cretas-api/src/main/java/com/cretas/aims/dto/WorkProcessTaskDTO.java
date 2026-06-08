@@ -55,6 +55,8 @@ public class WorkProcessTaskDTO {
     private Integer actualMinutes;
 
     private Long assignedTo;
+    /** T142: 责任人姓名 (后端 batch join, 不查 DB 逐条, 参照 T135 responsibleWorkerName 模式). null = 未分配或用户已删除. */
+    private String assignedToName;
     private Long completedBy;
 
     @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss")

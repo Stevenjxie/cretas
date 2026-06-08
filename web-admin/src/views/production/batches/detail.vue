@@ -1029,11 +1029,11 @@ function getTimelineIcon(type: string) {
                   {{ getTaskStatusText(task.status) }}
                 </el-tag>
               </div>
-              <!-- 负责人 (仅 ID 可用, 后端未 join name — 诚实展示 ID 或"已分配") -->
+              <!-- 负责人 (T142: 显示真实姓名; fallback 到 #ID; 未分配时 "未分配") -->
               <div class="task-assignee">
                 <span v-if="task.assignedTo != null" class="task-assignee-text">
                   <el-icon style="vertical-align: middle; margin-right: 2px"><User /></el-icon>
-                  负责人 #{{ task.assignedTo }}
+                  {{ task.assignedToName || '#' + task.assignedTo }}
                 </span>
                 <span v-else class="task-assignee-empty">未分配</span>
               </div>
@@ -1117,12 +1117,9 @@ function getTimelineIcon(type: string) {
               {{ getTaskStatusText(selectedTask.status) }}
             </el-tag>
           </el-descriptions-item>
-          <el-descriptions-item label="责任人 ID">
+          <el-descriptions-item label="负责人">
             <template v-if="selectedTask.assignedTo != null">
-              {{ selectedTask.assignedTo }}
-              <el-text type="info" size="small" style="margin-left: 4px">
-                (后端 join name 待补 — T140-FLAG)
-              </el-text>
+              {{ selectedTask.assignedToName || '#' + selectedTask.assignedTo }}
             </template>
             <span v-else>未分配</span>
           </el-descriptions-item>
