@@ -7471,6 +7471,39 @@ public class IntentKnowledgeBase {
         restaurantPhraseMapping.put("门店销售排名", "RESTAURANT_STORE_REVENUE_RANK");
         restaurantPhraseMapping.put("各店销售对比", "RESTAURANT_STORE_REVENUE_RANK");
 
+        // ===== GAP-06-A (QA 组5): 营业收入 → gold 分析层 =====
+        // "本月营业收入" 和 "营业收入" 不在 restaurantPhraseMapping 中 → 落入关键词/语义评分
+        // → 命中制造业意图(REPORT_KPI/MONTHLY_FINANCIAL_CLOSE) → FAILED → 前端回落 CSV session
+        // 修: 餐饮 tenant 的营收/营业收入类查询锁定 RESTAURANT_REVENUE_TREND(绑 gold 工具)
+        restaurantPhraseMapping.put("本月营业收入", "RESTAURANT_REVENUE_TREND");
+        restaurantPhraseMapping.put("营业收入", "RESTAURANT_REVENUE_TREND");
+        restaurantPhraseMapping.put("本月总收入", "RESTAURANT_REVENUE_TREND");
+        restaurantPhraseMapping.put("总营业额", "RESTAURANT_REVENUE_TREND");
+        restaurantPhraseMapping.put("今年营收", "RESTAURANT_REVENUE_TREND");
+        restaurantPhraseMapping.put("本季度营收", "RESTAURANT_REVENUE_TREND");
+        restaurantPhraseMapping.put("这个月营业额", "RESTAURANT_REVENUE_TREND");
+        restaurantPhraseMapping.put("营收多少", "RESTAURANT_REVENUE_TREND");
+        restaurantPhraseMapping.put("营业额多少", "RESTAURANT_REVENUE_TREND");
+        restaurantPhraseMapping.put("总收入多少", "RESTAURANT_REVENUE_TREND");
+        restaurantPhraseMapping.put("收入多少", "RESTAURANT_REVENUE_TREND");
+        restaurantPhraseMapping.put("营收是多少", "RESTAURANT_REVENUE_TREND");
+        restaurantPhraseMapping.put("月营业额", "RESTAURANT_REVENUE_TREND");
+
+        // ===== GAP-06-C (QA 组5): 应付 → 供应商 AP (ArApTransaction PAYABLE) =====
+        // "应付多少" 不在 restaurantPhraseMapping → 语义命中 RESTAURANT_REP_COMMISSION_QUERY (提成)
+        // → 返回佣金应付 ¥0 而非供应商应付账款 (ArApTransaction AP-20260608-7699 ¥458.30)
+        // 修: 餐饮 tenant 应付/欠款类查询路由到专用意图 RESTAURANT_ARAP_PAYABLE_QUERY
+        restaurantPhraseMapping.put("应付多少", "RESTAURANT_ARAP_PAYABLE_QUERY");
+        restaurantPhraseMapping.put("应付账款", "RESTAURANT_ARAP_PAYABLE_QUERY");
+        restaurantPhraseMapping.put("欠款多少", "RESTAURANT_ARAP_PAYABLE_QUERY");
+        restaurantPhraseMapping.put("供应商应付", "RESTAURANT_ARAP_PAYABLE_QUERY");
+        restaurantPhraseMapping.put("需要付多少", "RESTAURANT_ARAP_PAYABLE_QUERY");
+        restaurantPhraseMapping.put("要付多少钱", "RESTAURANT_ARAP_PAYABLE_QUERY");
+        restaurantPhraseMapping.put("还欠多少", "RESTAURANT_ARAP_PAYABLE_QUERY");
+        restaurantPhraseMapping.put("未付款多少", "RESTAURANT_ARAP_PAYABLE_QUERY");
+        restaurantPhraseMapping.put("应付供应商多少", "RESTAURANT_ARAP_PAYABLE_QUERY");
+        restaurantPhraseMapping.put("欠供应商多少", "RESTAURANT_ARAP_PAYABLE_QUERY");
+
         log.debug("v33 餐饮短语映射初始化完成，共 {} 条映射", restaurantPhraseMapping.size());
 
         // ========== v32: 业态隔离 — 公共短语映射（两种业态共享） ==========
