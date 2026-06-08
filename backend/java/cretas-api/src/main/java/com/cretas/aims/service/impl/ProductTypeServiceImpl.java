@@ -152,6 +152,8 @@ public class ProductTypeServiceImpl implements ProductTypeService {
         productType.setTemperatureZone(dto.getTemperatureZone());
         productType.setGramsPerUnit(dto.getGramsPerUnit());
         productType.setWipToFgYield(dto.getWipToFgYield());
+        productType.setLevel1Unit(dto.getLevel1Unit());
+        productType.setBoxConversionCoefficient(dto.getBoxConversionCoefficient());
         productType.setNotes(dto.getNotes());
         productType.setIsActive(true);
         productType.setCreatedBy(dto.getCreatedBy() != null ? Long.valueOf(dto.getCreatedBy()) : null);
@@ -218,6 +220,8 @@ public class ProductTypeServiceImpl implements ProductTypeService {
         if (dto.getTemperatureZone() != null) productType.setTemperatureZone(dto.getTemperatureZone());
         if (dto.getGramsPerUnit() != null) productType.setGramsPerUnit(dto.getGramsPerUnit());
         if (dto.getWipToFgYield() != null) productType.setWipToFgYield(dto.getWipToFgYield());
+        if (dto.getLevel1Unit() != null) productType.setLevel1Unit(dto.getLevel1Unit());
+        if (dto.getBoxConversionCoefficient() != null) productType.setBoxConversionCoefficient(dto.getBoxConversionCoefficient());
 
         // Sprint 2 S2-1: Form Template Association
         if (dto.getFormTemplateId() != null) productType.setFormTemplateId(dto.getFormTemplateId());
@@ -735,6 +739,8 @@ public class ProductTypeServiceImpl implements ProductTypeService {
                 .temperatureZone(productType.getTemperatureZone())
                 .gramsPerUnit(productType.getGramsPerUnit())
                 .wipToFgYield(productType.getWipToFgYield())
+                .level1Unit(productType.getLevel1Unit())
+                .boxConversionCoefficient(productType.getBoxConversionCoefficient())
                 .isActive(productType.getIsActive())
                 .notes(productType.getNotes())
                 .createdBy(productType.getCreatedBy())
