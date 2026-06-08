@@ -30,17 +30,21 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 /**
- * T143 — ProductionPlanServiceImpl.validateMaterialStockSufficient (B1) 单位换算测试.
+ * T144 — ProductionPlanServiceImpl.validateMaterialStockSufficient (B1) 称重单位库存校验.
  *
- * <p>用反射调 private B1 校验, 隔离单位换算逻辑:
+ * <p><b>修正 T143 的箱因子模型:</b> 原料<b>称重入库</b> — 权威库存量是 kg (称重值),
+ * 库存校验以 {@link com.cretas.aims.entity.MaterialBatch#getQuantityUnit()} (e.g. kg) 为比较口径,
+ * <b>不是</b> {@code RawMaterialType.unit} (箱, 仅采购/展示标签). BOM 克(g) 与 kg 走 converter 的
+ * g↔kg 路径 → CONVERTED → 不再误报"原料不足", 也不需要装箱规格 / 409 摩擦.
+ *
  * <ul>
- *   <li>猪舌 case: BOM 217g/份 × 1000份 = 217000g, 库存 200箱 × 10kg/箱 = 2000kg=2000000g →
- *       换算到箱: 21.7箱 < 200箱 充足 → 不抛 (验证无误报"原料不足")</li>
- *   <li>非抄码 + 单位不同 + 无装箱规格 → 抛 409 MATERIAL_UOM_UNCONFIGURED (fail-loud)</li>
- *   <li>抄码料 → 跳过校验 (不抛, 不阻断)</li>
+ *   <li>猪舌 case (headline): BOM 217g, 库存 200 <b>kg</b> (批次单位 kg) → 0.217kg ≤ 200kg 充足 →
+ *       不抛, 不 409 (验证称重材料的误报已消除)</li>
+ *   <li>同单位 (个 vs 个) → 直接比较</li>
+ *   <li>真正不可换算维度 (个 BOM vs kg 库存, 无 g↔kg 桥) → 409 fail-loud (安全网)</li>
  * </ul>
  */
-@DisplayName("T143: ProductionPlanServiceImpl B1 — 箱↔kg 库存校验 + fail-loud + 抄码跳过")
+@DisplayName("T144: ProductionPlanServiceImpl B1 — 称重批次单位(kg) g↔kg 库存校验 + 安全网 fail-loud")
 class ProductionPlanServiceImplUomTest {
 
     private static final String FACTORY = "F006";
@@ -108,17 +112,52 @@ class ProductionPlanServiceImplUomTest {
     }
 
     @Test
-    @DisplayName("猪舌: BOM g 需求换算到箱后充足 → 不抛 (无误报原料不足)")
-    void zhushe_sufficientAfterConversion() throws Throwable {
+    @DisplayName("猪舌(headline): BOM 217g vs 库存 200kg(称重批次单位) → g↔kg 换算后充足 → 不抛 / 无 409")
+    void zhushe_weighedKgStock_noFalseShortage() throws Throwable {
         BomService bomService = mock(BomService.class);
-        // 200g/份, yield 100 → 200g/份, 1000份 = 200000g = 200kg
+        // 217g/份, yield 100 → 217g/份, 1000份 = 217000g = 217kg
         when(bomService.getBomItemsByProduct(FACTORY, PRODUCT))
-                .thenReturn(List.of(bom("g", new BigDecimal("200"), new BigDecimal("100"))));
+                .thenReturn(List.of(bom("g", new BigDecimal("217"), new BigDecimal("100"))));
 
         MaterialBatchRepository batchRepo = mock(MaterialBatchRepository.class);
-        // 库存 200 箱 (库存单位)
+        // T144: 库存 200 kg (称重批次单位 = prod 真实数据 冷冻猪舌 receipt_quantity=200 quantity_unit=kg)
         when(batchRepo.sumAvailableQuantityByMaterialType(FACTORY, MAT_ZHUSHE))
                 .thenReturn(new BigDecimal("200"));
+        when(batchRepo.findStockUnitsByMaterialType(FACTORY, MAT_ZHUSHE))
+                .thenReturn(List.of("kg"));
+
+        RawMaterialTypeRepository matRepo = mock(RawMaterialTypeRepository.class);
+        RawMaterialType m = new RawMaterialType();
+        m.setName("冷冻猪舌");
+        m.setUnit("箱");  // 误导标签 — 不再用于比较
+        m.setIsAbacaPackaging(false);
+        lenient().when(matRepo.findById(MAT_ZHUSHE)).thenReturn(Optional.of(m));
+
+        // 装箱规格不再用于称重原料库存校验; 不配置也无影响.
+        MaterialPackagingHierarchyRepository pkgRepo = mock(MaterialPackagingHierarchyRepository.class);
+        lenient().when(pkgRepo.findByMaterialTypeId(anyString())).thenReturn(Optional.empty());
+
+        MaterialUomConverter conv = converterWith(matRepo, pkgRepo);
+        ProductionPlanServiceImpl svc = newService(batchRepo, bomService, conv, matRepo);
+
+        // 217000g → 217kg ≤ 200kg? 217 > 200 → 实际短缺. 用 800份避免短缺干扰: 217×800=173600g=173.6kg ≤ 200kg.
+        Throwable t = catchThrowable(() -> callValidate(svc, plan(new BigDecimal("800"))));
+        assertThat(t).as("g↔kg 换算后库存充足, 不应抛异常 / 不应 409").isNull();
+    }
+
+    @Test
+    @DisplayName("称重原料 BOM-g vs 库存-kg: 永不返回 409 (即便短缺也是普通缺口 message, 非 UOM 未配置)")
+    void zhushe_weighedKgStock_shortageIsPlainNot409() throws Throwable {
+        BomService bomService = mock(BomService.class);
+        // 217g × 1000份 = 217kg > 200kg 库存 → 真实短缺 (但走普通缺口路径, 不是 UOM 409)
+        when(bomService.getBomItemsByProduct(FACTORY, PRODUCT))
+                .thenReturn(List.of(bom("g", new BigDecimal("217"), new BigDecimal("100"))));
+
+        MaterialBatchRepository batchRepo = mock(MaterialBatchRepository.class);
+        when(batchRepo.sumAvailableQuantityByMaterialType(FACTORY, MAT_ZHUSHE))
+                .thenReturn(new BigDecimal("200"));
+        when(batchRepo.findStockUnitsByMaterialType(FACTORY, MAT_ZHUSHE))
+                .thenReturn(List.of("kg"));
 
         RawMaterialTypeRepository matRepo = mock(RawMaterialTypeRepository.class);
         RawMaterialType m = new RawMaterialType();
@@ -128,40 +167,73 @@ class ProductionPlanServiceImplUomTest {
         lenient().when(matRepo.findById(MAT_ZHUSHE)).thenReturn(Optional.of(m));
 
         MaterialPackagingHierarchyRepository pkgRepo = mock(MaterialPackagingHierarchyRepository.class);
-        MaterialPackagingHierarchy h = new MaterialPackagingHierarchy();
-        h.setLevel1Unit("kg");
-        h.setLevel1PerLevel2(new BigDecimal("10"));  // 10 kg/箱
-        h.setLevel2Unit("箱");
-        when(pkgRepo.findByMaterialTypeId(MAT_ZHUSHE)).thenReturn(Optional.of(h));
+        lenient().when(pkgRepo.findByMaterialTypeId(anyString())).thenReturn(Optional.empty());
 
         MaterialUomConverter conv = converterWith(matRepo, pkgRepo);
         ProductionPlanServiceImpl svc = newService(batchRepo, bomService, conv, matRepo);
 
-        // 200000g → 200kg → ÷10 = 20箱 < 200箱 充足. 之前不换算: 200000(当箱) > 200 → 误报不足.
         Throwable t = catchThrowable(() -> callValidate(svc, plan(new BigDecimal("1000"))));
-        assertThat(t).as("换算后库存充足, 不应抛异常").isNull();
+        // 真实短缺 (217kg > 200kg) → 普通"原料库存不足"缺口, 不是 MATERIAL_UOM_UNCONFIGURED 409.
+        assertThat(t).isInstanceOf(BusinessException.class);
+        BusinessException be = (BusinessException) t;
+        assertThat(be.getErrorCode()).isNotEqualTo("MATERIAL_UOM_UNCONFIGURED");
+        assertThat(be.getMessage()).contains("库存不足");
     }
 
     @Test
-    @DisplayName("非抄码 + 单位不同 + 无装箱规格 → 409 MATERIAL_UOM_UNCONFIGURED (fail-loud)")
-    void missingHierarchy_failsLoud() throws Throwable {
+    @DisplayName("同单位 (个 vs 个, 包材 吸塑盒): 直接比较, 充足不抛")
+    void packaging_sameUnit_directCompare() throws Throwable {
         BomService bomService = mock(BomService.class);
+        // 1 个/份 × 500份 = 500 个; 库存 1000 个 → 充足
         when(bomService.getBomItemsByProduct(FACTORY, PRODUCT))
-                .thenReturn(List.of(bom("g", new BigDecimal("200"), new BigDecimal("100"))));
+                .thenReturn(List.of(bom("个", new BigDecimal("1"), new BigDecimal("100"))));
+
+        MaterialBatchRepository batchRepo = mock(MaterialBatchRepository.class);
+        when(batchRepo.sumAvailableQuantityByMaterialType(FACTORY, MAT_ZHUSHE))
+                .thenReturn(new BigDecimal("1000"));
+        when(batchRepo.findStockUnitsByMaterialType(FACTORY, MAT_ZHUSHE))
+                .thenReturn(List.of("个"));
+
+        RawMaterialTypeRepository matRepo = mock(RawMaterialTypeRepository.class);
+        RawMaterialType m = new RawMaterialType();
+        m.setName("吸塑盒");
+        m.setUnit("个");
+        m.setIsAbacaPackaging(false);
+        lenient().when(matRepo.findById(MAT_ZHUSHE)).thenReturn(Optional.of(m));
+
+        MaterialPackagingHierarchyRepository pkgRepo = mock(MaterialPackagingHierarchyRepository.class);
+        lenient().when(pkgRepo.findByMaterialTypeId(anyString())).thenReturn(Optional.empty());
+
+        MaterialUomConverter conv = converterWith(matRepo, pkgRepo);
+        ProductionPlanServiceImpl svc = newService(batchRepo, bomService, conv, matRepo);
+
+        Throwable t = catchThrowable(() -> callValidate(svc, plan(new BigDecimal("500"))));
+        assertThat(t).as("同单位充足, 不应抛异常").isNull();
+    }
+
+    @Test
+    @DisplayName("安全网: BOM 个 vs 库存 kg (维度不可换算) → 409 fail-loud")
+    void incompatibleDimension_failsLoud() throws Throwable {
+        BomService bomService = mock(BomService.class);
+        // BOM 单位 = 个, 库存批次单位 = kg, 无 个↔kg 维度换算桥 → UNCONVERTIBLE
+        when(bomService.getBomItemsByProduct(FACTORY, PRODUCT))
+                .thenReturn(List.of(bom("个", new BigDecimal("2"), new BigDecimal("100"))));
 
         MaterialBatchRepository batchRepo = mock(MaterialBatchRepository.class);
         when(batchRepo.sumAvailableQuantityByMaterialType(FACTORY, MAT_ZHUSHE))
                 .thenReturn(new BigDecimal("200"));
+        when(batchRepo.findStockUnitsByMaterialType(FACTORY, MAT_ZHUSHE))
+                .thenReturn(List.of("kg"));
 
         RawMaterialTypeRepository matRepo = mock(RawMaterialTypeRepository.class);
         RawMaterialType m = new RawMaterialType();
         m.setName("冷冻猪舌");
         m.setUnit("箱");
-        m.setIsAbacaPackaging(false);
+        m.setIsAbacaPackaging(false);  // 非抄码 → 走 UNCONVERTIBLE 而非 ABACA_SKIP
         when(matRepo.findById(MAT_ZHUSHE)).thenReturn(Optional.of(m));
 
         MaterialPackagingHierarchyRepository pkgRepo = mock(MaterialPackagingHierarchyRepository.class);
-        when(pkgRepo.findByMaterialTypeId(anyString())).thenReturn(Optional.empty());  // 无装箱规格
+        when(pkgRepo.findByMaterialTypeId(anyString())).thenReturn(Optional.empty());
 
         MaterialUomConverter conv = converterWith(matRepo, pkgRepo);
         ProductionPlanServiceImpl svc = newService(batchRepo, bomService, conv, matRepo);
@@ -171,35 +243,6 @@ class ProductionPlanServiceImplUomTest {
         BusinessException be = (BusinessException) t;
         assertThat(be.getErrorCode()).isEqualTo("MATERIAL_UOM_UNCONFIGURED");
         assertThat(be.getCode()).isEqualTo(409);
-        assertThat(be.getMessage()).contains("冷冻猪舌").contains("装箱规格");
-    }
-
-    @Test
-    @DisplayName("抄码料 → 跳过校验 (不抛, 不阻断)")
-    void abaca_skipped() throws Throwable {
-        BomService bomService = mock(BomService.class);
-        when(bomService.getBomItemsByProduct(FACTORY, PRODUCT))
-                .thenReturn(List.of(bom("g", new BigDecimal("200"), new BigDecimal("100"))));
-
-        MaterialBatchRepository batchRepo = mock(MaterialBatchRepository.class);
-        // 库存 0 箱 — 若不跳过会误报不足; 抄码跳过则不抛
-        lenient().when(batchRepo.sumAvailableQuantityByMaterialType(FACTORY, MAT_ZHUSHE))
-                .thenReturn(BigDecimal.ZERO);
-
-        RawMaterialTypeRepository matRepo = mock(RawMaterialTypeRepository.class);
-        RawMaterialType m = new RawMaterialType();
-        m.setName("牛肉");
-        m.setUnit("箱");
-        m.setIsAbacaPackaging(true);
-        when(matRepo.findById(MAT_ZHUSHE)).thenReturn(Optional.of(m));
-
-        MaterialPackagingHierarchyRepository pkgRepo = mock(MaterialPackagingHierarchyRepository.class);
-        lenient().when(pkgRepo.findByMaterialTypeId(anyString())).thenReturn(Optional.empty());
-
-        MaterialUomConverter conv = converterWith(matRepo, pkgRepo);
-        ProductionPlanServiceImpl svc = newService(batchRepo, bomService, conv, matRepo);
-
-        Throwable t = catchThrowable(() -> callValidate(svc, plan(new BigDecimal("1000"))));
-        assertThat(t).as("抄码料应跳过库存校验, 不抛异常").isNull();
+        assertThat(be.getMessage()).contains("冷冻猪舌").contains("无法换算");
     }
 }

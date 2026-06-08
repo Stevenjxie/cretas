@@ -417,14 +417,15 @@ request.interceptors.response.use(
       return Promise.reject(new ApiError(fkMessage, 'FK_BLOCK', 409));
     }
 
-    // T143 MATERIAL_UOM_UNCONFIGURED 防呆导航 (fool-proof-design Rule 5: dead-end → 导航).
-    // 后端 BomItem 库存校验 / 调拨 / 物料需求单 在物料缺装箱规格(箱↔kg)且非抄码时
-    // 抛 409 + errorCode=MATERIAL_UOM_UNCONFIGURED. 引导用户「去配置装箱规格」(原料管理页).
+    // T144 MATERIAL_UOM_UNCONFIGURED 防呆导航 (fool-proof-design Rule 5: dead-end → 导航).
+    // 注: 原料称重入库, 库存校验以称重批次单位(kg)为口径, BOM 克(g)↔kg 自动换算 →
+    // 称重原料不再触发此 409. 现在此 409 = BOM 单位与库存单位维度不可换算 (e.g. 个 vs kg)
+    // 的真实配置错误 (安全网), 引导用户核对/修正物料单位配置 (原料管理页).
     // 权限门控: 仅当用户可访问 warehouse 模块时才提供跳转 (镜像 T136 canAccess pattern).
     if (status === 409 && richAll.errorCode === 'MATERIAL_UOM_UNCONFIGURED' && !originalRequest._silent) {
       const uomMessage = (error.response?.data?.message as string)
-        || '原料未配置装箱规格(箱↔kg)，无法校验库存';
-      const uomHint = richAll.actionHint || '请前往「原料管理」为该原料配置装箱规格(箱↔kg)后再继续';
+        || '原料 BOM 单位与库存单位无法换算，无法校验库存';
+      const uomHint = richAll.actionHint || '请核对该原料 BOM 配方单位与入库称重单位是否同一计量维度';
       try {
         const { useAuthStore } = await import('@/store/modules/auth');
         const { canAccessModule } = await import('@/utils/permission');
@@ -434,9 +435,9 @@ request.interceptors.response.use(
         if (canConfig) {
           await ElMessageBox.confirm(
             `${uomMessage}\n\n${uomHint}`,
-            '缺少装箱规格',
+            '原料单位无法换算',
             {
-              confirmButtonText: '去配置装箱规格',
+              confirmButtonText: '去核对单位配置',
               cancelButtonText: '稍后处理',
               distinguishCancelAndClose: true,
               type: 'warning',
@@ -451,7 +452,7 @@ request.interceptors.response.use(
           // 无权限配置 → 仅显示信息 + 提示联系管理员 (不给 dead-end 跳转)
           await ElMessageBox.alert(
             `${uomMessage}\n\n${uomHint}\n\n(需要仓库管理权限配置, 请联系管理员)`,
-            '缺少装箱规格',
+            '原料单位无法换算',
             { confirmButtonText: '我知道了', type: 'warning' }
           );
         }

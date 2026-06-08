@@ -53,9 +53,13 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.service.uom.MaterialUomConverter materialUomConverter;
 
-    /** T143: 读库存单位 (RawMaterialType.unit). required=false. */
+    /** T144: 读库存单位 (回退用 RawMaterialType.unit). required=false. */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.repository.RawMaterialTypeRepository rawMaterialTypeRepository;
+
+    /** T144: 物料实际库存单位以 MaterialBatch.quantityUnit (称重口径 kg) 为准. required=false 兼容单测. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.repository.MaterialBatchRepository materialBatchRepository;
 
     /** Canvas V2: DB-driven validation rules */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
@@ -75,10 +79,31 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
     private static final DateTimeFormatter DATE_FMT = DateTimeFormatter.ofPattern("yyyyMMdd");
 
     /**
-     * T143: 读取物料库存单位 (RawMaterialType.unit). 无 repo / 物料不存在 → null.
+     * T144: 读取物料的实际库存单位 = AVAILABLE 批次的 {@code MaterialBatch.quantityUnit} (称重口径 kg),
+     * <b>不是</b> {@code RawMaterialType.unit} (箱). 物料需求单需求量与仓库实际称重领料口径一致.
+     *
+     * <p>无可用批次时回退 RawMaterialType.unit. 各批次单位混用时记 warning 取最常见.
      */
-    private String resolveMaterialStockUnit(String materialTypeId) {
-        if (rawMaterialTypeRepository == null || materialTypeId == null) {
+    private String resolveMaterialStockUnit(String factoryId, String materialTypeId) {
+        if (materialTypeId == null) {
+            return null;
+        }
+        if (materialBatchRepository != null) {
+            try {
+                java.util.List<String> units = materialBatchRepository
+                        .findStockUnitsByMaterialType(factoryId, materialTypeId);
+                if (units != null && !units.isEmpty()) {
+                    if (units.size() > 1) {
+                        log.warn("物料 {} 可用批次单位混用 {}, 取最常见 {}", materialTypeId, units, units.get(0));
+                    }
+                    return units.get(0);
+                }
+            } catch (Exception e) {
+                log.debug("读取批次库存单位失败: {} ({})", materialTypeId, e.getMessage());
+            }
+        }
+        // 无可用批次: 回退 RawMaterialType.unit
+        if (rawMaterialTypeRepository == null) {
             return null;
         }
         try {
@@ -152,8 +177,8 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
             BigDecimal requiredBom = plannedQty.multiply(perUnit);
             String bomUnit = bom.getUnit();
 
-            // T143: 把需求量换算到库存单位 (箱), 与仓库实际领料口径一致.
-            String stockUnit = resolveMaterialStockUnit(bom.getMaterialTypeId());
+            // T144: 把需求量换算到称重批次单位 (kg), 与仓库实际称重领料口径一致.
+            String stockUnit = resolveMaterialStockUnit(factoryId, bom.getMaterialTypeId());
             BigDecimal requiredQty = requiredBom;
             String requiredUnit = bomUnit;
             if (materialUomConverter != null && bomUnit != null && stockUnit != null
@@ -168,13 +193,13 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
                     // 抄码料: 无确定箱重, 需求量保留 BOM 单位 (领料时按实际称重).
                     log.info("T143 抄码料 {} 物料需求单保留源单位 {}", bom.getMaterialName(), bomUnit);
                 } else {
-                    // UNCONVERTIBLE: 非抄码 + 无装箱规格 → fail-loud.
+                    // T144 安全网: BOM 单位与库存批次单位维度不可换算 (e.g. 个 vs kg) → 真实配置错误.
                     String matName = bom.getMaterialName() != null ? bom.getMaterialName() : bom.getMaterialTypeId();
                     throw new BusinessException(409,
-                            String.format("原料「%s」未配置装箱规格(%s↔%s)，无法生成物料需求单，请先配置",
-                                    matName, stockUnit, bomUnit))
+                            String.format("原料「%s」BOM单位(%s)与库存单位(%s)无法换算，请核对单位配置",
+                                    matName, bomUnit, stockUnit))
                             .withCode("MATERIAL_UOM_UNCONFIGURED")
-                            .withHint("请前往「原料管理」为该原料配置装箱规格(箱↔kg)后再生成物料需求单")
+                            .withHint("请核对该原料 BOM 配方单位与入库称重单位是否同一计量维度")
                             .withHintTarget(bom.getMaterialTypeId())
                             .withSeverity("BLOCKING");
                 }

@@ -52,6 +52,12 @@ public class ProductionWorkflowOrchestrator {
     private com.cretas.aims.service.uom.MaterialUomConverter materialUomConverter;
 
     /**
+     * T144: 调拨目标单位以 MaterialBatch.quantityUnit (称重口径 kg) 为准. required=false 兼容单测.
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.repository.MaterialBatchRepository materialBatchRepository;
+
+    /**
      * 排产确认 → 自动生成调拨单
      *
      * @param factoryId 工厂ID (调出方=物流仓 factoryId)
@@ -126,19 +132,13 @@ public class ProductionWorkflowOrchestrator {
             item.setMaterialTypeId(req.getMaterialTypeId());
             item.setItemName(req.getMaterialTypeName());
 
-            // 从 RawMaterialType 获取目标单位
-            String targetUnit = "kg"; // 默认
-            try {
-                RawMaterialType mt = rawMaterialTypeRepository.findById(req.getMaterialTypeId()).orElse(null);
-                if (mt != null && mt.getUnit() != null) {
-                    targetUnit = mt.getUnit();
-                }
-            } catch (Exception e) {
-                log.debug("获取原料单位失败: {}", req.getMaterialTypeId());
-            }
+            // T144: 调拨目标单位 = 称重批次单位 (MaterialBatch.quantityUnit, e.g. kg), 不是
+            // RawMaterialType.unit (箱). 原料称重入库, 调拨的也是称重量. 无可用批次时回退
+            // RawMaterialType.unit 再回退 "kg".
+            String targetUnit = resolveTransferUnit(sourceFactoryId, req.getMaterialTypeId());
 
-            // D3 (2026-05-10 客户会议) + T143: BOM 配方层用 g/箱, 仓库 / 调拨层用 targetUnit (RawMaterialType.unit).
-            // 调拨数量必须换算到 targetUnit, 否则会出现 "217 箱" (g 当 箱) 这种错误数量+错误单位.
+            // D3 (2026-05-10 客户会议) + T144: BOM 配方层用 g, 仓库 / 调拨层用称重批次单位 (kg).
+            // 调拨数量必须换算到 targetUnit (g↔kg), 否则会出现 "217 箱" (g 当 箱) 这种错误数量+错误单位.
             BigDecimal quantity = req.getRequiredQuantity();
             String sourceUnit = req.getSourceUnit();
             String finalUnit = targetUnit;
@@ -190,6 +190,37 @@ public class ProductionWorkflowOrchestrator {
         }
         request.setItems(items);
         return request;
+    }
+
+    /**
+     * T144: 解析调拨目标单位 = 源工厂 AVAILABLE 批次的 {@code MaterialBatch.quantityUnit} (称重口径 kg).
+     * 无可用批次时回退 {@code RawMaterialType.unit}, 再回退默认 "kg".
+     */
+    private String resolveTransferUnit(String factoryId, String materialTypeId) {
+        if (materialTypeId != null && materialBatchRepository != null) {
+            try {
+                java.util.List<String> units = materialBatchRepository
+                        .findStockUnitsByMaterialType(factoryId, materialTypeId);
+                if (units != null && !units.isEmpty()) {
+                    if (units.size() > 1) {
+                        log.warn("物料 {} 可用批次单位混用 {}, 调拨取最常见 {}", materialTypeId, units, units.get(0));
+                    }
+                    return units.get(0);
+                }
+            } catch (Exception e) {
+                log.debug("读取批次库存单位失败: {} ({})", materialTypeId, e.getMessage());
+            }
+        }
+        // 无可用批次: 回退 RawMaterialType.unit
+        try {
+            RawMaterialType mt = rawMaterialTypeRepository.findById(materialTypeId).orElse(null);
+            if (mt != null && mt.getUnit() != null) {
+                return mt.getUnit();
+            }
+        } catch (Exception e) {
+            log.debug("获取原料单位失败: {}", materialTypeId);
+        }
+        return "kg";
     }
 
     /**

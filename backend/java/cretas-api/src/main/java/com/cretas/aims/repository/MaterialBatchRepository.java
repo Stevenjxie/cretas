@@ -293,6 +293,27 @@ public interface MaterialBatchRepository extends JpaRepository<MaterialBatch, St
             @Param("materialTypeId") String materialTypeId);
 
     /**
+     * T144: 读取指定原料类型的可用批次实际库存单位 (MaterialBatch.quantityUnit, e.g. "kg")。
+     *
+     * <p><b>背景:</b> 原料是<b>称重入库</b> — 权威库存量是 kg (称重值), {@code RawMaterialType.unit}
+     * (e.g. "箱") 只是采购/展示标签, 不代表批次的实际计量口径。库存校验必须用批次的
+     * {@code quantity_unit} 作为比较口径, 否则会把 BOM 克(g) 当作 箱 去比, 误报"原料不足"。
+     *
+     * <p>返回 AVAILABLE 且有正余量的批次中出现次数最多的 quantity_unit (假设同一物料各批次单位
+     * 一致, 通常如此)。结果按出现次数降序, caller 取首行。若各批次单位混用, 取最常见的并由 caller
+     * 记 warning。无可用批次时返回空列表。
+     */
+    @Query("SELECT m.quantityUnit FROM MaterialBatch m " +
+           "WHERE m.factoryId = :factoryId " +
+           "AND m.materialTypeId = :materialTypeId AND m.status = 'AVAILABLE' " +
+           "AND (m.receiptQuantity - m.usedQuantity - m.reservedQuantity) > 0 " +
+           "GROUP BY m.quantityUnit " +
+           "ORDER BY COUNT(m) DESC")
+    List<String> findStockUnitsByMaterialType(
+            @Param("factoryId") String factoryId,
+            @Param("materialTypeId") String materialTypeId);
+
+    /**
      * 汇总指定原料类型在指定 warehouse 的可用库存总量。D1 双仓流转 (PR #309 A1=A, 2026-05-10 spec)。
      * 用途：调拨单 detail 页"现有库存"按 source warehouse 展示。
      */

@@ -137,7 +137,10 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.service.uom.MaterialUomConverter materialUomConverter;
 
-    /** T143: 读库存单位 (RawMaterialType.unit). required=false 兼容单测. */
+    /**
+     * T144: 物料库存单位改读 MaterialBatch.quantityUnit (称重批次单位, e.g. kg) 而非
+     * RawMaterialType.unit (箱). 保留 rawMaterialTypeRepository 仅作 fallback (无可用批次时).
+     */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.repository.RawMaterialTypeRepository rawMaterialTypeRepository;
 
@@ -224,15 +227,15 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             BigDecimal perUnitRequired = item.getActualQuantity();
             BigDecimal totalRequiredBom = perUnitRequired.multiply(plannedQty);
 
-            // 库存量 (库存单位, e.g. 箱)
+            // 库存量 (称重批次单位, e.g. kg)
             BigDecimal available = materialBatchRepository.sumAvailableQuantityByMaterialType(
                     factoryId, item.getMaterialTypeId());
             if (available == null) {
                 available = BigDecimal.ZERO;
             }
 
-            // T143: 把 BOM 需求量 (g) 换算到库存单位 (箱) 再比较. 不同单位且无换算器 → 保守跳过.
-            String stockUnit = resolveMaterialStockUnit(item.getMaterialTypeId());
+            // T144: 把 BOM 需求量 (g) 换算到称重批次单位 (kg) 再比较. g↔kg 走 converter → CONVERTED.
+            String stockUnit = resolveMaterialStockUnit(factoryId, item.getMaterialTypeId());
             String bomUnit = item.getUnit();
             BigDecimal totalRequired = totalRequiredBom;  // 默认: 单位一致或无换算器, 沿用原值
 
@@ -247,16 +250,17 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                     continue;
                 }
                 if (conv.isUnconvertible()) {
-                    // 非抄码 + 单位不同 + 无装箱规格 → fail-loud, 引导去配置.
+                    // T144 安全网: BOM 单位与库存批次单位维度不可换算 (e.g. 个 vs kg, 无 g↔kg 桥)
+                    // → 真实配置错误, fail-loud 引导核对单位.
                     throw new BusinessException(409,
-                            String.format("原料「%s」未配置装箱规格(%s↔%s)，无法校验库存，请先配置",
-                                    materialName, stockUnit, bomUnit))
+                            String.format("原料「%s」BOM单位(%s)与库存单位(%s)无法换算，请核对单位配置",
+                                    materialName, bomUnit, stockUnit))
                             .withCode("MATERIAL_UOM_UNCONFIGURED")
-                            .withHint("请前往「原料管理」为该原料配置装箱规格(箱↔kg)后再开始生产")
+                            .withHint("请核对该原料 BOM 配方单位与入库称重单位是否同一计量维度")
                             .withHintTarget(item.getMaterialTypeId())
                             .withSeverity("BLOCKING");
                 }
-                totalRequired = conv.getQuantity();  // 已换算到库存单位 (箱)
+                totalRequired = conv.getQuantity();  // 已换算到称重批次单位 (kg)
             }
 
             if (available.compareTo(totalRequired) < 0) {
@@ -284,21 +288,43 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
     }
 
     /**
-     * T143: 读取物料的库存单位 (RawMaterialType.unit, e.g. "箱").
-     * 无 repo (单测) 或物料不存在时返 null (caller 退回原单位比较).
+     * T144: 读取物料的实际库存单位 = AVAILABLE 批次的 {@code MaterialBatch.quantityUnit}
+     * (称重入库口径, e.g. "kg"), <b>不是</b> {@code RawMaterialType.unit} (箱, 仅采购/展示标签).
+     *
+     * <p>原料称重入库 — 权威库存量是 kg. BOM 克(g) 与 kg 走 converter 的 g↔kg 路径 → CONVERTED,
+     * 不再误报"原料不足", 也不需要装箱规格/409 摩擦.
+     *
+     * <p>各批次单位混用时取最常见的并记 warning. 无可用批次时回退 RawMaterialType.unit
+     * (无库存场景, 后续 available=0 仍会正确判短缺).
      */
-    private String resolveMaterialStockUnit(String materialTypeId) {
-        if (rawMaterialTypeRepository == null || materialTypeId == null) {
+    private String resolveMaterialStockUnit(String factoryId, String materialTypeId) {
+        if (materialTypeId == null) {
             return null;
         }
         try {
-            return rawMaterialTypeRepository.findById(materialTypeId)
-                    .map(RawMaterialType::getUnit)
-                    .orElse(null);
+            java.util.List<String> units = materialBatchRepository
+                    .findStockUnitsByMaterialType(factoryId, materialTypeId);
+            if (units != null && !units.isEmpty()) {
+                if (units.size() > 1) {
+                    log.warn("物料 {} 可用批次单位混用 {}, 取最常见 {}",
+                            materialTypeId, units, units.get(0));
+                }
+                return units.get(0);
+            }
         } catch (Exception e) {
-            log.debug("读取物料库存单位失败: {} ({})", materialTypeId, e.getMessage());
-            return null;
+            log.debug("读取批次库存单位失败: {} ({})", materialTypeId, e.getMessage());
         }
+        // 无可用批次: 回退 RawMaterialType.unit (后续 available=0 判短缺, 不影响正确性)
+        if (rawMaterialTypeRepository != null) {
+            try {
+                return rawMaterialTypeRepository.findById(materialTypeId)
+                        .map(RawMaterialType::getUnit)
+                        .orElse(null);
+            } catch (Exception e) {
+                log.debug("读取物料库存单位失败: {} ({})", materialTypeId, e.getMessage());
+            }
+        }
+        return null;
     }
 
     /**
