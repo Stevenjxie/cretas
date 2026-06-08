@@ -3,6 +3,7 @@ package com.cretas.aims.service;
 import com.cretas.aims.dto.common.ImportResult;
 import com.cretas.aims.dto.common.PageRequest;
 import com.cretas.aims.dto.common.PageResponse;
+import com.cretas.aims.dto.material.MaterialSuggestDTO;
 import com.cretas.aims.dto.material.RawMaterialTypeDTO;
 import com.cretas.aims.entity.RawMaterialType;
 import java.io.InputStream;
@@ -99,4 +100,22 @@ public interface RawMaterialTypeService {
      * 无匹配时返回 null, 由前端保留默认值.
      */
     String suggestUnit(String factoryId, String name, String category);
+
+    /**
+     * T159-B-codegen: 预览将为该 category 生成的原料编码 (不写库).
+     * 前缀规则: 原料→YL, 肉类→RL, 包材→BC, 其他→WL.
+     * 序号: 扫 raw_material_types.code 取同前缀最大数字后缀+1, 零填充3位.
+     *
+     * @return 例如 "YL006"
+     */
+    String previewMaterialCode(String factoryId, String category);
+
+    /**
+     * T159-B-codegen: 多字段智能建议 (扩展自 suggestUnit).
+     * 按 name+category 找最相似历史原料, 返回 unit/category/storageType/shelfLifeDays/
+     * level1PerLevel2/level2Unit 全量. 任何字段无匹配时返回 null.
+     *
+     * @return null-safe DTO (所有字段可为 null); 无任何匹配时各字段均为 null.
+     */
+    MaterialSuggestDTO suggestFields(String factoryId, String name, String category);
 }

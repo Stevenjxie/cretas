@@ -4,6 +4,7 @@ import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.annotation.RequirePermission;
 import com.cretas.aims.dto.common.PageRequest;
 import com.cretas.aims.dto.common.PageResponse;
+import com.cretas.aims.dto.material.MaterialSuggestDTO;
 import com.cretas.aims.dto.material.RawMaterialTypeDTO;
 import com.cretas.aims.dto.supplier.SupplierDTO;
 import com.cretas.aims.service.RawMaterialTypeService;
@@ -20,6 +21,7 @@ import org.springframework.web.bind.annotation.*;
 
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotEmpty;
+import java.util.Map;
 import java.util.List;
 import com.cretas.aims.util.ErrorSanitizer;
 
@@ -280,5 +282,44 @@ public class RawMaterialTypeController {
         log.info("按 material_type_id 查询供应商列表: factoryId={}, materialTypeId={}", factoryId, id);
         List<SupplierDTO> suppliers = supplierService.getSuppliersByMaterialTypeId(factoryId, id);
         return ApiResponse.success(suppliers);
+    }
+
+    // ==================== T159-B-codegen: 编码预览 + 多字段建议 ====================
+
+    /**
+     * T159-B-codegen: 预览将为该 category 自动生成的原料编码 (只读, 不写库).
+     * 前缀规则: 原料→YL, 肉类→RL, 包材→BC, 其他→WL.
+     * 序号: 同前缀最大数字后缀 +1, 零填充3位. 无同前缀记录时从 001 开始.
+     *
+     * @return { "success": true, "data": { "code": "YL006" }, "message": ... }
+     */
+    @GetMapping("/preview-code")
+    @Operation(summary = "预览原料编码 (T159-B)",
+            description = "根据类别预览将自动生成的原料编码, 不写库. 前缀: 原料→YL, 肉类→RL, 包材→BC, 其他→WL.")
+    public ApiResponse<Map<String, String>> previewMaterialCode(
+            @PathVariable @Parameter(description = "工厂ID", example = "F001") String factoryId,
+            @RequestParam @Parameter(description = "原料类别", example = "原料") String category) {
+        log.info("预览原料编码: factoryId={}, category={}", factoryId, category);
+        String code = materialTypeService.previewMaterialCode(factoryId, category);
+        return ApiResponse.success("编码预览成功", Map.of("code", code));
+    }
+
+    /**
+     * T159-B-codegen: 多字段智能建议 — 按 name+category 找最相似历史原料,
+     * 返回 unit / category / storageType / shelfLifeDays / level1PerLevel2 / level2Unit.
+     * 无匹配时各字段均为 null.  保留 /suggest-unit 兼容旧前端.
+     *
+     * @return { "success": true, "data": { "unit": "kg", "category": "肉类", ... } }
+     */
+    @GetMapping("/suggest")
+    @Operation(summary = "多字段智能建议 (T159-B)",
+            description = "按名称+类别返回最相似历史原料的 unit/category/storageType/shelfLifeDays/level1PerLevel2/level2Unit, 任何字段无匹配时为 null.")
+    public ApiResponse<MaterialSuggestDTO> suggestFields(
+            @PathVariable @Parameter(description = "工厂ID", example = "F001") String factoryId,
+            @RequestParam @Parameter(description = "原料名称片段", example = "猪舌") String name,
+            @RequestParam(required = false) @Parameter(description = "类别(可选)", example = "肉类") String category) {
+        log.info("多字段智能建议: factoryId={}, name={}, category={}", factoryId, name, category);
+        MaterialSuggestDTO result = materialTypeService.suggestFields(factoryId, name, category);
+        return ApiResponse.success(result);
     }
 }

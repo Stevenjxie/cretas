@@ -3,6 +3,7 @@ package com.cretas.aims.service.impl;
 import com.cretas.aims.dto.common.ImportResult;
 import com.cretas.aims.dto.common.PageRequest;
 import com.cretas.aims.dto.common.PageResponse;
+import com.cretas.aims.dto.material.MaterialSuggestDTO;
 import com.cretas.aims.dto.material.RawMaterialTypeDTO;
 import com.cretas.aims.dto.materialtype.MaterialTypeExportDTO;
 import com.cretas.aims.entity.RawMaterialType;
@@ -87,9 +88,17 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
     @Transactional
     @CacheEvict(value = "materialTypes", key = "#factoryId")
     public RawMaterialTypeDTO createMaterialType(String factoryId, RawMaterialTypeDTO dto) {
+        // T159-B-codegen: auto-generate code when caller does not provide one.
+        // Mirrors ProductTypeServiceImpl.createProductType code-gen logic.
+        if (dto.getCode() == null || dto.getCode().trim().isEmpty()) {
+            String generated = generateNextCode(factoryId, dto.getCategory());
+            dto.setCode(generated);
+            log.info("自动生成原材料编码: factoryId={}, code={}", factoryId, generated);
+        }
+
         log.info("创建原材料类型: factoryId={}, code={}", factoryId, dto.getCode());
 
-        // 检查编码是否已存在
+        // 检查编码是否已存在 (handles collision on manually-supplied codes)
         if (materialTypeRepository.existsByFactoryIdAndCode(factoryId, dto.getCode())) {
             throw new BusinessException(409, "原材料编码已存在: " + dto.getCode())
                     .withHint("请使用其他原材料编码").withHintTarget("code");
@@ -572,6 +581,98 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
             }
         }
         return null;
+    }
+
+    // ========== T159-B-codegen: 编码生成 + 多字段建议 ==========
+
+    /**
+     * 根据 category 决定编码前缀.
+     * <ul>
+     *   <li>原料 → YL</li>
+     *   <li>肉类 → RL</li>
+     *   <li>包材 → BC</li>
+     *   <li>其他/null → WL</li>
+     * </ul>
+     */
+    static String getMaterialCategoryPrefix(String category) {
+        if (category == null || category.trim().isEmpty()) {
+            return "WL";
+        }
+        switch (category.trim()) {
+            case "原料": return "YL";
+            case "肉类": return "RL";
+            case "包材": return "BC";
+            default:   return "WL";
+        }
+    }
+
+    /**
+     * 扫描工厂内该前缀的所有编码, 取最大数字后缀 +1, 零填充3位.
+     * 无同前缀编码时从 001 开始.
+     * 结果编码不做唯一性检查 — 调用方在写库前做 existsByFactoryIdAndCode 兜底.
+     */
+    String generateNextCode(String factoryId, String category) {
+        String prefix = getMaterialCategoryPrefix(category);
+        List<String> existingCodes = materialTypeRepository.findCodesByFactoryIdAndCodePrefix(factoryId, prefix);
+        int maxSeq = 0;
+        int prefixLen = prefix.length();
+        for (String code : existingCodes) {
+            if (code.length() > prefixLen) {
+                String suffix = code.substring(prefixLen);
+                try {
+                    int seq = Integer.parseInt(suffix);
+                    if (seq > maxSeq) {
+                        maxSeq = seq;
+                    }
+                } catch (NumberFormatException ignored) {
+                    // non-numeric suffix — skip
+                }
+            }
+        }
+        return String.format("%s%03d", prefix, maxSeq + 1);
+    }
+
+    @Override
+    public String previewMaterialCode(String factoryId, String category) {
+        return generateNextCode(factoryId, category);
+    }
+
+    @Override
+    public MaterialSuggestDTO suggestFields(String factoryId, String name, String category) {
+        if (name == null || name.trim().isEmpty()) {
+            return MaterialSuggestDTO.builder().build();
+        }
+        String keyword = name.trim();
+        String categoryFilter = (category != null && !category.trim().isEmpty()) ? category.trim() : null;
+        Pageable top1 = org.springframework.data.domain.PageRequest.of(0, 1);
+
+        List<RawMaterialType> matches = materialTypeRepository.findSimilarByNameAndCategory(
+                factoryId, keyword, categoryFilter, top1);
+
+        // 退化: 取前2字再匹配
+        if (matches.isEmpty() && keyword.length() >= 2) {
+            matches = materialTypeRepository.findSimilarByNameAndCategory(
+                    factoryId, keyword.substring(0, Math.min(2, keyword.length())), categoryFilter, top1);
+        }
+
+        if (matches.isEmpty()) {
+            return MaterialSuggestDTO.builder().build();
+        }
+
+        RawMaterialType match = matches.get(0);
+        MaterialSuggestDTO.MaterialSuggestDTOBuilder builder = MaterialSuggestDTO.builder()
+                .unit(match.getUnit())
+                .category(match.getCategory())
+                .storageType(match.getStorageType())
+                .shelfLifeDays(match.getShelfLifeDays());
+
+        // Enrich packaging hierarchy fields (same pattern as getMaterialTypeById)
+        packagingRepository.findByMaterialTypeId(match.getId()).ifPresent(pkg -> {
+            builder.level1PerLevel2(pkg.getLevel1PerLevel2());
+            builder.level2Unit(pkg.getLevel2Unit());
+        });
+
+        return builder.build();
     }
 
     /**
