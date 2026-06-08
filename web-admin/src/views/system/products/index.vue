@@ -248,26 +248,32 @@ const formData = reactive<Partial<ProductType>>({
   notes: ''
 });
 
-// T123 / T146 Fix2: 两级单位实时转换提示 ("1筐=20盒" 等)
-// Fix2: 当 l1 === l2 (如两者都是 "盒") 时, 预览是无意义的废话 "1盒=20盒" → 改为 ⚠️ 警告
-const unitConversionHint = computed<{ type: 'ok' | 'warning' | ''; text: string }>(() => {
-  const l1 = (formData.level1Unit as string | undefined)?.trim();
-  const coef = formData.boxConversionCoefficient;
-  const l2 = formData.unit?.trim();
-  if (l1 && l2 && l1 === l2) {
-    // 一级和二级单位相同 → 废话预览, 改为警告提示
-    return {
-      type: 'warning',
-      text: `⚠️ 一级单位应与二级单位不同（一级是大包装如「筐」，二级是最小单位如「盒」）`,
-    };
+// T147 Fix4: 规格信息组的「关系摘要」— 把 二级单位(=顶部单位, 只读回显) / 标准克重 / 一级单位+换算
+// 三者摆在一起, 让 "1 筐 = 20 盒, 每盒 120 克" 的关系一目了然.
+// 二级单位 不另建可编辑绑定, 只 read-only echo 顶部「单位」字段 (单一事实源).
+const specRelationSummary = computed<{
+  l2: string; l1: string; coef: string; grams: string;
+  conversionText: string; hasConversion: boolean; warn: boolean;
+}>(() => {
+  const l2 = formData.unit?.trim() || '';
+  const l1 = (formData.level1Unit as string | undefined)?.trim() || '';
+  const coefRaw = formData.boxConversionCoefficient;
+  const coefNum = typeof coefRaw === 'number' ? coefRaw : parseFloat(String(coefRaw ?? ''));
+  const grams = formData.gramsPerUnit != null && String(formData.gramsPerUnit) !== ''
+    ? String(formData.gramsPerUnit) : '';
+  const warn = !!(l1 && l2 && l1 === l2); // T146 守卫: 一级=二级 是废话
+  let conversionText = '';
+  let hasConversion = false;
+  if (!warn && l1 && l2 && !isNaN(coefNum) && coefNum > 0) {
+    conversionText = `1 ${l1} = ${coefNum} ${l2}`;
+    hasConversion = true;
   }
-  if (l1 && coef && l2) {
-    const n = typeof coef === 'number' ? coef : parseFloat(String(coef));
-    if (!isNaN(n) && n > 0) {
-      return { type: 'ok', text: `当前: 1 ${l1} = ${n} ${l2}` };
-    }
-  }
-  return { type: '', text: '' };
+  return {
+    l2, l1,
+    coef: !isNaN(coefNum) && coefNum > 0 ? String(coefNum) : '',
+    grams,
+    conversionText, hasConversion, warn,
+  };
 });
 
 // T123: baseProductName autocomplete 建议 (从已加载产品名/baseProductName 去重)
@@ -285,23 +291,73 @@ function queryBaseProductName(query: string, cb: (suggestions: { value: string }
   cb(arr);
 }
 
-// T123: 关联客户 autocomplete — 选中后同步 customerId + relatedCustomer
-function handleCustomerSelect(item: { id: string; name: string } | string) {
-  if (typeof item === 'string') {
-    // allow-create: 用户手输客户名, 不清除已有 customerId (兼容旧数据)
-    formData.relatedCustomer = item;
-  } else {
-    formData.relatedCustomer = item.name;
-    formData.customerId = item.id;
+// T147 Fix1: 关联客户改「下拉」(el-select filterable + allow-create).
+// v-model 绑 relatedCustomer(名称); change 时按名称回查 customerId 同步 entity link.
+// - 选中已有客户名 → 设置对应 customerId (绑定)
+// - allow-create 手输新客户名 → 找不到匹配 → 清空 customerId (新客户, 仅存名称, 兼容 T123 行为)
+function handleCustomerChange(name: string | null) {
+  if (!name) {
+    formData.relatedCustomer = '';
+    formData.customerId = '';
+    return;
+  }
+  formData.relatedCustomer = name;
+  const matched = customers.value.find(c => c.name === name);
+  formData.customerId = matched ? matched.id : '';
+  // Fix2: 客户变化触发编号预览刷新
+  refreshCodePreview();
+}
+
+// T147 Fix2: 产品编号实时预览 (仅新增模式). 调用只读 preview-code 端点, 复用后端生成逻辑.
+// codePreview 仅作占位/提示文案, 真正的 code 仍可被用户手输覆盖; 提交时若 code 为空后端会再生成 (与预览同逻辑).
+const codePreview = ref('');           // 后端预览出的将生成编号 (如 CPDD0012)
+const codePreviewLoading = ref(false);
+// 用户是否手动改过编号 — 一旦手动覆盖, 预览不再回填 code 输入框
+const codeManuallyEdited = ref(false);
+let codePreviewTimer: ReturnType<typeof setTimeout> | null = null;
+
+async function fetchCodePreview() {
+  if (isEditing.value || !factoryId.value) return;
+  if (!formData.productCategory) { codePreview.value = ''; return; }
+  codePreviewLoading.value = true;
+  try {
+    const res = await get<{ code: string }>(`/${factoryId.value}/product-types/preview-code`, {
+      params: {
+        productCategory: formData.productCategory,
+        customerId: formData.customerId || undefined,
+        relatedCustomer: formData.relatedCustomer || undefined,
+      },
+    });
+    if (res.success && res.data?.code) {
+      codePreview.value = res.data.code;
+      // 仅在用户未手动改过编号时回填 (用户手输优先)
+      if (!codeManuallyEdited.value) formData.code = res.data.code;
+    } else {
+      // 禁止假数据: 预览失败不编造编号, 留空 + 由 placeholder/提示说明
+      codePreview.value = '';
+    }
+  } catch {
+    codePreview.value = '';
+  } finally {
+    codePreviewLoading.value = false;
   }
 }
 
-function customerSearchFn(query: string, cb: (items: { id: string; name: string; value: string }[]) => void) {
-  const q = query.toLowerCase();
-  const matched = customers.value
-    .filter(c => !q || c.name.toLowerCase().includes(q))
-    .map(c => ({ ...c, value: c.name }));
-  cb(matched);
+// debounce 包装, 供大类/客户变化时调用
+function refreshCodePreview() {
+  if (isEditing.value) return;
+  if (codePreviewTimer) clearTimeout(codePreviewTimer);
+  codePreviewTimer = setTimeout(fetchCodePreview, 300);
+}
+
+// 用户手动编辑编号 → 标记, 停止自动回填
+function handleCodeInput() {
+  codeManuallyEdited.value = true;
+}
+
+// 大类变化 (含 tab 默认值与下拉切换) → 刷新预览
+function handleCategoryChange() {
+  refreshCodePreview();
 }
 
 // P1-NEW-2: 产品大类=成品时隐藏"商务信息"组 (客户需求 1567-1572s: 成品不展示, 原辅料才展示)
@@ -425,7 +481,11 @@ function handleAdd() {
   resetForm();
   dialogTitle.value = '新增产品';
   isEditing.value = false;
+  // T147 Fix2: 重置编号预览状态, 大类已由 resetForm 默认为当前 tab (Fix3) → 触发预览
+  codePreview.value = '';
+  codeManuallyEdited.value = false;
   dialogVisible.value = true;
+  refreshCodePreview();
 }
 
 function handleEdit(row: ProductType) {
@@ -694,12 +754,17 @@ function handleAiFill(params: TableRow) {
   formData.specification = String(params.specification || '');
   formData.relatedCustomer = String(params.relatedCustomer || '');
   formData.notes = String(params.notes || '');
+  formData.customerId = '';     // AI 填充仅给客户名, 编号预览按名后备生成
   formData.id = '';
   formData.code = '';
   formData.imageUrl = '';
   dialogTitle.value = '新增产品 (AI 填充)';
   isEditing.value = false;
+  // T147 Fix2/Fix3: 重置预览状态并触发 (productCategory 已由 AI 或 activeTab 默认)
+  codePreview.value = '';
+  codeManuallyEdited.value = false;
   dialogVisible.value = true;
+  refreshCodePreview();
 }
 </script>
 
@@ -868,15 +933,26 @@ function handleAiFill(params: TableRow) {
         label-width="100px"
         label-position="right"
       >
+        <!-- T147 Fix2: 新增模式下实时预览将生成的编号并回填 (用户可手输覆盖); 编辑模式显示既有编号(禁用) -->
         <el-form-item label="产品编号" prop="code">
-          <el-input v-model="formData.code" placeholder="留空自动生成，如: CPDD0001" :disabled="isEditing" />
-          <div class="form-tip">留空则系统自动生成编号（如 CP + 客户首字母 + 序号: CPDD0001）</div>
+          <el-input
+            v-model="formData.code"
+            :placeholder="isEditing ? '' : (codePreviewLoading ? '生成中…' : '将根据大类+客户自动生成')"
+            :disabled="isEditing"
+            @input="handleCodeInput"
+          />
+          <div v-if="isEditing" class="form-tip">编辑模式下产品编号不可修改</div>
+          <div v-else-if="codePreview" class="form-tip">
+            将生成: <strong>{{ codePreview }}</strong>（CP + 客户首字母 + 序号）— 可手动覆盖，留空则保存时自动生成
+          </div>
+          <div v-else class="form-tip">选定「产品大类」与「关联客户」后将自动生成编号（如 CPDD0001）；也可手动输入</div>
         </el-form-item>
         <el-form-item label="产品名称" prop="name">
           <el-input v-model="formData.name" placeholder="请输入产品名称" />
         </el-form-item>
+        <!-- T147 Fix3: 新增时默认=当前 tab 的大类 (resetForm/handleAdd 已置), 变化时刷新编号预览 (Fix2) -->
         <el-form-item label="产品大类" prop="productCategory">
-          <el-select v-model="formData.productCategory" placeholder="请选择产品大类" style="width: 100%">
+          <el-select v-model="formData.productCategory" placeholder="请选择产品大类" style="width: 100%" @change="handleCategoryChange">
             <el-option
               v-for="category in PRODUCT_CATEGORIES"
               :key="category.value"
@@ -907,24 +983,28 @@ function handleAiFill(params: TableRow) {
         <el-form-item label="规格" prop="specification">
           <el-input v-model="formData.specification" placeholder="请输入规格（如：310g*42袋/箱）" />
         </el-form-item>
-        <!-- T123: 客户打通 — el-autocomplete 同时填 relatedCustomer(名称) + customerId(ID) -->
+        <!-- T147 Fix1: 关联客户改「下拉」(el-select filterable + allow-create) — 既是客户下拉, 也可手输新客户名.
+             选中已有客户同步 customerId(entity link); 手输新名清空 customerId (保留 T123 双绑行为) -->
         <el-form-item label="关联客户" prop="relatedCustomer">
-          <el-autocomplete
+          <el-select
             v-model="formData.relatedCustomer"
-            :fetch-suggestions="customerSearchFn"
-            placeholder="搜索客户名称（同步设置客户ID）"
+            placeholder="选择客户（可输入新客户名）"
+            filterable
+            allow-create
+            default-first-option
             clearable
             style="width: 100%"
-            @select="handleCustomerSelect"
-            @clear="() => { formData.customerId = ''; }"
+            @change="handleCustomerChange"
           >
-            <template #suffix>
-              <span v-if="formData.customerId" style="font-size:11px; color:#67c23a; padding-right:4px;">
-                已绑定
-              </span>
-            </template>
-          </el-autocomplete>
-          <div v-if="formData.customerId" class="form-tip">客户ID: {{ formData.customerId }}</div>
+            <el-option
+              v-for="c in customers"
+              :key="c.id"
+              :label="c.name"
+              :value="c.name"
+            />
+          </el-select>
+          <div v-if="formData.customerId" class="form-tip" style="color:#67c23a;">已绑定客户ID: {{ formData.customerId }}</div>
+          <div v-else-if="formData.relatedCustomer" class="form-tip">新客户（仅记录名称，未绑定客户档案）</div>
         </el-form-item>
         <!-- T123: 产品基础名 (名称分离) — 如"好食光卤猪蹄"，RN 优先显示此字段 -->
         <el-form-item label="基础名称">
@@ -976,14 +1056,34 @@ function handleAiFill(params: TableRow) {
           :columns="2"
           label-width="120px"
         />
-        <!-- T123 / T146 Fix2: 两级单位实时换算提示 — ok 时显示绿 tag, warning 时显示橙 tag (一级=二级废话预览守卫) -->
-        <el-form-item v-if="unitConversionHint.type" label=" ">
-          <el-tag
-            :type="unitConversionHint.type === 'warning' ? 'warning' : 'success'"
-            effect="plain"
-          >
-            {{ unitConversionHint.text }}
-          </el-tag>
+        <!-- T147 Fix4: 规格关系摘要 — 二级单位(=顶部单位,只读回显) / 标准克重 / 一级单位+换算 摆一起.
+             让 "1 筐 = 20 盒, 每盒 120 克" 一眼读懂. 二级单位只读 echo, 不另建可编辑绑定. -->
+        <el-form-item
+          v-if="specRelationSummary.l2 || specRelationSummary.l1"
+          label="规格关系"
+        >
+          <div class="spec-relation">
+            <!-- 二级单位 read-only echo (=顶部「单位」字段) -->
+            <el-tag v-if="specRelationSummary.l2" type="info" effect="plain">
+              二级单位（最小）：{{ specRelationSummary.l2 }}
+            </el-tag>
+            <el-tag v-if="specRelationSummary.grams" type="info" effect="plain">
+              每{{ specRelationSummary.l2 || '单位' }} {{ specRelationSummary.grams }} 克
+            </el-tag>
+            <!-- 一级单位 + 换算 → 关系 -->
+            <el-tag v-if="specRelationSummary.l1" type="info" effect="plain">
+              一级单位（大包装）：{{ specRelationSummary.l1 }}
+            </el-tag>
+            <el-tag v-if="specRelationSummary.warn" type="warning" effect="plain">
+              ⚠️ 一级单位应与二级单位不同（一级是大包装如「筐」，二级是最小单位如「盒」）
+            </el-tag>
+            <el-tag v-else-if="specRelationSummary.hasConversion" type="success" effect="plain">
+              {{ specRelationSummary.conversionText }}
+            </el-tag>
+            <el-tag v-else-if="specRelationSummary.l1 && !specRelationSummary.coef" type="info" effect="plain">
+              填写「装箱换算」后显示 1 {{ specRelationSummary.l1 }} = ? {{ specRelationSummary.l2 || '二级单位' }}
+            </el-tag>
+          </div>
         </el-form-item>
       </el-form>
       <template #footer>
@@ -1267,6 +1367,14 @@ function handleAiFill(params: TableRow) {
   color: #909399;
   margin-top: 4px;
   line-height: 1.4;
+}
+
+/* T147 Fix4: 规格关系摘要 — 标签横排自动换行 */
+.spec-relation {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
 }
 
 .process-config {

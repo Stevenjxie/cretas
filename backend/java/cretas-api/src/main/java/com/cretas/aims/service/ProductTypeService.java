@@ -69,6 +69,20 @@ public interface ProductTypeService {
      * 检查产品编码是否存在
       */
     boolean checkCodeExists(String factoryId, String code, String excludeId);
+
+    /**
+     * T147 Fix2: 预览将自动生成的产品编号 (不持久化, 无副作用).
+     * 复用 createProductType 的同一套生成逻辑 (前缀 + 客户首字母 + 4位序号),
+     * 让前端在新增表单中实时展示「将生成」的编号.
+     *
+     * @param factoryId        工厂 ID
+     * @param productCategory  产品大类 (FINISHED_PRODUCT/RAW_MATERIAL/...), 决定前缀 (CP/YL/...)
+     * @param customerId       客户 ID (优先, 解析为客户名取拼音首字母), 可空
+     * @param relatedCustomer  客户名 (customerId 为空时的后备), 可空
+     * @return 预览编号 (如 CPDD0012); 无客户时用 factoryId 作后备首字母段
+     */
+    String previewGeneratedCode(String factoryId, String productCategory,
+                                String customerId, String relatedCustomer);
      /**
      * 初始化默认产品类型
       */

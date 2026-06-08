@@ -289,6 +289,25 @@ public class ProductTypeController {
     }
 
     /**
+     * T147 Fix2: 预览将自动生成的产品编号 (只读, 无副作用).
+     * 前端新增表单在选定大类 + 客户后实时调用, 把「将生成」的编号展示在产品编号字段,
+     * 复用 createProductType 的同一套生成逻辑 (前缀 + 客户首字母 + 4位序号).
+     */
+    @GetMapping("/preview-code")
+    @Operation(summary = "预览产品编号", description = "按大类+客户预览将自动生成的产品编号, 不持久化")
+    public ApiResponse<Map<String, String>> previewProductCode(
+            @PathVariable @Parameter(description = "工厂ID") String factoryId,
+            @RequestParam(required = false) @Parameter(description = "产品大类") String productCategory,
+            @RequestParam(required = false) @Parameter(description = "客户ID (优先)") String customerId,
+            @RequestParam(required = false) @Parameter(description = "客户名 (customerId 为空时后备)") String relatedCustomer) {
+        log.info("预览产品编号: factoryId={}, productCategory={}, customerId={}", factoryId, productCategory, customerId);
+        String code = productTypeService.previewGeneratedCode(factoryId, productCategory, customerId, relatedCustomer);
+        Map<String, String> data = new HashMap<>();
+        data.put("code", code);
+        return ApiResponse.success(data);
+    }
+
+    /**
      * 初始化默认产品类型
      */
     @RequirePermission({"production:read_write", "rd:read_write"})
