@@ -73,18 +73,11 @@ const gramsPerUnitPlaceholder = computed(() => {
 // 产品扩展字段 — 添加新字段只需在此数组加一行
 // T123 重组: gramsPerUnit + boxConversionCoefficient 移到 '规格信息' 组
 //   (成品也需要标准克重设置,不应被'商务信息'隐藏逻辑屏蔽)
-// T137: level1Unit 改为 dict-backed el-select (type:'select' + 动态 options)
+// T148: level1Unit + boxConversionCoefficient 移出 productExtendedFields,
+//   改为内联行渲染「1 [一级单位▼] ＝ [换算数] [二级单位▼]」,始终显示
 const productExtendedFields = computed<FieldConfig[]>(() => [
   // ---- 规格信息 (成品/原料均显示) ----
-  // 一级单位 = 大包装（如 筐、箱），二级单位 = 最小计量（如 盒），在下方 unit 字段已配
-  { key: 'level1Unit', label: '一级单位', type: 'select', group: '规格信息', order: 1,
-    placeholder: '大包装单位（如 筐、框、箱），与下方换算数联用',
-    allowCreate: true,
-    options: unitSelectOptions.value },
-  // T146 Fix1: label 缩短为「装箱换算」(5字), 防止长标签在 label-width 内折行"数"乱字
-  { key: 'boxConversionCoefficient', label: '装箱换算', type: 'decimal', group: '规格信息', precision: 4, order: 2,
-    span: 24,
-    placeholder: conversionPlaceholder.value },
+  // T148: level1Unit + boxConversionCoefficient 已移为内联行 (见模板中「装箱换算」el-form-item)
   // T146 Fix4: gramsPerUnit placeholder 动态替换二级单位名 (如 "每盒多少克")
   { key: 'gramsPerUnit', label: '标准克重', type: 'decimal', group: '规格信息', precision: 2, suffix: '克', order: 3,
     placeholder: gramsPerUnitPlaceholder.value },
@@ -471,7 +464,8 @@ function resetForm() {
   formData.relatedCustomer = '';
   formData.customerId = '';      // T123
   formData.baseProductName = ''; // T123
-  formData.level1Unit = undefined; // T123 — part of extendedFields, cleared separately
+  formData.level1Unit = undefined; // T148: 装箱换算内联行字段
+  formData.boxConversionCoefficient = undefined; // T148: 装箱换算内联行字段
   formData.temperatureZone = '';
   formData.imageUrl = '';
   formData.notes = '';
@@ -503,6 +497,9 @@ function handleEdit(row: ProductType) {
   formData.temperatureZone = row.temperatureZone || '';
   formData.imageUrl = row.imageUrl || '';
   formData.notes = row.notes || '';
+  // T148: 装箱换算内联行字段 — 编辑时从 row 回填
+  formData.level1Unit = row.level1Unit ?? undefined;
+  formData.boxConversionCoefficient = row.boxConversionCoefficient ?? undefined;
   dialogVisible.value = true;
 }
 
@@ -554,6 +551,10 @@ async function handleSubmit() {
       ...Object.fromEntries(
         productExtendedFields.value.map(f => [f.key, formData[f.key as keyof typeof formData] ?? null])
       ),
+      // T148: level1Unit + boxConversionCoefficient 已移出 productExtendedFields (改内联行渲染),
+      //   但仍需随产品提交 — 显式追加 (后者覆盖前者同名 key 优先级: 上方 Object.fromEntries 无这两key 所以无冲突)
+      level1Unit: formData.level1Unit ?? null,
+      boxConversionCoefficient: formData.boxConversionCoefficient ?? null,
     };
     if (!isEditing.value) {
       payload.isActive = true;
@@ -1049,6 +1050,64 @@ function handleAiFill(params: TableRow) {
 
         <!-- 扩展字段 (动态渲染，添加新字段只需修改 productExtendedFields 数组) -->
         <el-divider content-position="left">扩展信息</el-divider>
+
+        <!-- T148: 规格信息 — 装箱换算内联行「1 [一级单位▼] ＝ [换算数] [二级单位▼]」始终显示
+             二级单位下拉 v-model 绑 formData.unit (同顶部「单位」字段, 单一事实源, 双向同步)
+             一级单位 → formData.level1Unit; 换算数 → formData.boxConversionCoefficient -->
+        <el-form-item label="装箱换算" label-width="120px">
+          <div class="spec-conversion-row">
+            <span class="spec-conversion-one">1</span>
+            <el-select
+              v-model="formData.level1Unit"
+              placeholder="一级单位"
+              filterable
+              allow-create
+              clearable
+              class="spec-unit-select"
+            >
+              <el-option
+                v-for="opt in unitSelectOptions"
+                :key="opt.value"
+                :label="opt.label"
+                :value="opt.value"
+              />
+            </el-select>
+            <span class="spec-conversion-eq">＝</span>
+            <el-input-number
+              v-model="formData.boxConversionCoefficient"
+              :min="0"
+              :precision="4"
+              :controls="false"
+              placeholder="换算数"
+              class="spec-coef-input"
+            />
+            <el-select
+              v-model="formData.unit"
+              placeholder="二级单位"
+              filterable
+              allow-create
+              clearable
+              class="spec-unit-select"
+            >
+              <el-option
+                v-for="opt in unitSelectOptions"
+                :key="opt.value"
+                :label="opt.label"
+                :value="opt.value"
+              />
+            </el-select>
+          </div>
+          <!-- T146 守卫: 一级=二级 警告 -->
+          <div v-if="specRelationSummary.warn" class="spec-same-warn">
+            ⚠️ 一级单位应与二级单位不同（一级是大包装如「筐」，二级是最小单位如「盒」）
+          </div>
+          <!-- 换算完整时给出确认回显 -->
+          <div v-else-if="specRelationSummary.hasConversion" class="spec-echo">
+            = {{ specRelationSummary.conversionText }}
+          </div>
+          <div class="form-tip">如 1 筐 = 20 盒；二级单位与上方「单位」字段同步</div>
+        </el-form-item>
+
         <DynamicEntityForm
           :fields="visibleExtendedFields"
           :model-value="formData as TableRow"
@@ -1056,35 +1115,6 @@ function handleAiFill(params: TableRow) {
           :columns="2"
           label-width="120px"
         />
-        <!-- T147 Fix4: 规格关系摘要 — 二级单位(=顶部单位,只读回显) / 标准克重 / 一级单位+换算 摆一起.
-             让 "1 筐 = 20 盒, 每盒 120 克" 一眼读懂. 二级单位只读 echo, 不另建可编辑绑定. -->
-        <el-form-item
-          v-if="specRelationSummary.l2 || specRelationSummary.l1"
-          label="规格关系"
-        >
-          <div class="spec-relation">
-            <!-- 二级单位 read-only echo (=顶部「单位」字段) -->
-            <el-tag v-if="specRelationSummary.l2" type="info" effect="plain">
-              二级单位（最小）：{{ specRelationSummary.l2 }}
-            </el-tag>
-            <el-tag v-if="specRelationSummary.grams" type="info" effect="plain">
-              每{{ specRelationSummary.l2 || '单位' }} {{ specRelationSummary.grams }} 克
-            </el-tag>
-            <!-- 一级单位 + 换算 → 关系 -->
-            <el-tag v-if="specRelationSummary.l1" type="info" effect="plain">
-              一级单位（大包装）：{{ specRelationSummary.l1 }}
-            </el-tag>
-            <el-tag v-if="specRelationSummary.warn" type="warning" effect="plain">
-              ⚠️ 一级单位应与二级单位不同（一级是大包装如「筐」，二级是最小单位如「盒」）
-            </el-tag>
-            <el-tag v-else-if="specRelationSummary.hasConversion" type="success" effect="plain">
-              {{ specRelationSummary.conversionText }}
-            </el-tag>
-            <el-tag v-else-if="specRelationSummary.l1 && !specRelationSummary.coef" type="info" effect="plain">
-              填写「装箱换算」后显示 1 {{ specRelationSummary.l1 }} = ? {{ specRelationSummary.l2 || '二级单位' }}
-            </el-tag>
-          </div>
-        </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="dialogVisible = false">取消</el-button>
@@ -1369,12 +1399,50 @@ function handleAiFill(params: TableRow) {
   line-height: 1.4;
 }
 
-/* T147 Fix4: 规格关系摘要 — 标签横排自动换行 */
-.spec-relation {
+/* T148: 装箱换算内联行 — 「1 [一级单位▼] ＝ [换算数] [二级单位▼]」始终显示 */
+.spec-conversion-row {
   display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
   align-items: center;
+  gap: 6px;
+  flex-wrap: nowrap;
+}
+
+.spec-conversion-one {
+  font-size: 14px;
+  color: #303133;
+  font-weight: 500;
+  flex-shrink: 0;
+}
+
+.spec-conversion-eq {
+  font-size: 16px;
+  color: #606266;
+  flex-shrink: 0;
+  padding: 0 2px;
+}
+
+.spec-unit-select {
+  width: 100px;
+  flex-shrink: 0;
+}
+
+.spec-coef-input {
+  width: 110px;
+  flex-shrink: 0;
+}
+
+.spec-same-warn {
+  font-size: 12px;
+  color: #e6a23c;
+  margin-top: 4px;
+  line-height: 1.4;
+}
+
+.spec-echo {
+  font-size: 12px;
+  color: #67c23a;
+  margin-top: 4px;
+  font-weight: 500;
 }
 
 .process-config {
