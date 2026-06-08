@@ -56,4 +56,8 @@ assert(t8.stdout.includes('上下文显示'), 'T8 fail: missing 上下文显示 
 assert(t8.stdout.includes('边界防呆'), 'T8 fail: missing 边界防呆 section');
 assert(t8.stdout.includes('Dead-end'), 'T8 fail: missing Dead-end section');
 
-console.log('✅ All 8 tests passed');
+// T9: Windows backslash 路径规范化（在 Windows 上 CLAUDE_TOOL_INPUT 可能含反斜杠）
+const t9 = run('frontend\\CretasFoodTrace\\src\\screens\\processing\\Screen.tsx');
+assert(t9.stdout.includes('UX Advisory'), 'T9 fail: Windows backslash paths should normalize and trigger advisory');
+
+console.log('✅ All 9 tests passed');
