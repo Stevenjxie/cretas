@@ -21,9 +21,18 @@ interface YieldQuantityInputProps {
   disabled?: boolean;
   /**
    * 单元4 STEP 6: 允许"按托称重"计算器模式 (六扇门毛重-皮重算净重).
-   * true → 输入框旁显示"按托称重"切换钮; 打开后录多笔毛重 + 单托皮重, 自动算净重写回 value.
+   * true → 数量字段下方显示"按托称重"全宽按钮; 打开后录多笔毛重 + 单托皮重, 自动算净重写回 value.
    */
   calculatorMode?: boolean;
+  /**
+   * B4: When true the tray-weighing calculator panel is pre-expanded on mount.
+   * Used by YieldStepReportScreen for first-step (投入) input where tray-weighing
+   * is the norm. Defaults to false (opt-in toggle for all other steps).
+   *
+   * Note: which products/steps default-expand can later be refined to a
+   * per-product-type flag on ProductType when needed.
+   */
+  defaultTrayWeighing?: boolean;
   testID?: string;
 }
 
@@ -67,6 +76,7 @@ export const YieldQuantityInput: React.FC<YieldQuantityInputProps> = ({
   prefillNote,
   disabled = false,
   calculatorMode = false,
+  defaultTrayWeighing = false,
   testID,
 }) => {
   const numeric = parseFloat(value);
@@ -75,8 +85,8 @@ export const YieldQuantityInput: React.FC<YieldQuantityInputProps> = ({
     [max, numeric],
   );
 
-  // STEP 6: 按托称重计算器状态
-  const [calcOpen, setCalcOpen] = useState(false);
+  // STEP 6 / B4: 按托称重计算器状态. defaultTrayWeighing pre-expands for first-step.
+  const [calcOpen, setCalcOpen] = useState(defaultTrayWeighing);
   const [grossRows, setGrossRows] = useState<string[]>(['']);
   const [tare, setTare] = useState('');
 
@@ -171,28 +181,16 @@ export const YieldQuantityInput: React.FC<YieldQuantityInputProps> = ({
     <View style={styles.wrap} testID={testID}>
       <View style={styles.labelRow}>
         <Text style={styles.label}>{label}</Text>
-        {calculatorMode ? (
-          <TouchableOpacity
-            style={[styles.calcToggle, calcOpen && styles.calcToggleOn]}
-            onPress={toggleCalc}
-            disabled={disabled}
-            testID={testID ? `${testID}-calc-toggle` : undefined}
-            accessibilityLabel="按托称重计算器"
-          >
-            <Text style={[styles.calcToggleText, calcOpen && styles.calcToggleTextOn]}>
-              {calcOpen ? '✓ 按托称重' : '按托称重'}
-            </Text>
-          </TouchableOpacity>
-        ) : null}
       </View>
 
-      {/* STEP 6: 按托称重计算器面板 (毛重多笔 + 单托皮重 → 自动算净重) */}
+      {/* B4: 按托称重计算器面板 — shown above qty row when open */}
+      {/* STEP 6 / B4: relabeled 毛重→秤上数字, 皮重→每个托盘重; updated help text */}
       {calculatorMode && calcOpen ? (
         <View style={styles.calcPanel} testID={testID ? `${testID}-calc-panel` : undefined}>
-          <Text style={styles.calcHelp}>每托一笔毛重, 填单托皮重, 自动算净重</Text>
+          <Text style={styles.calcHelp}>净重 = 每个秤上数字之和 − 托盘数 × 每个托盘重</Text>
           {grossRows.map((g, idx) => (
             <View style={styles.calcGrossRow} key={`gross-${idx}`}>
-              <Text style={styles.calcGrossLabel}>毛重{idx + 1}</Text>
+              <Text style={styles.calcGrossLabel}>秤上数字{idx + 1}</Text>
               <TextInput
                 style={styles.calcGrossInput}
                 keyboardType="decimal-pad"
@@ -226,7 +224,8 @@ export const YieldQuantityInput: React.FC<YieldQuantityInputProps> = ({
           </TouchableOpacity>
 
           <View style={styles.calcTareRow}>
-            <Text style={styles.calcTareLabel}>单托皮重</Text>
+            {/* B4: relabeled 单托皮重 → 每个托盘重 (kg) */}
+            <Text style={styles.calcTareLabel}>每个托盘重 (kg)</Text>
             <TextInput
               style={styles.calcGrossInput}
               keyboardType="decimal-pad"
@@ -284,6 +283,21 @@ export const YieldQuantityInput: React.FC<YieldQuantityInputProps> = ({
         </TouchableOpacity>
       </View>
 
+      {/* B4: full-width outlined "按托称重" toggle below the quantity row (replaces the small pill in the label row) */}
+      {calculatorMode ? (
+        <TouchableOpacity
+          style={[styles.calcToggleFull, calcOpen && styles.calcToggleFullOn]}
+          onPress={toggleCalc}
+          disabled={disabled}
+          testID={testID ? `${testID}-calc-toggle` : undefined}
+          accessibilityLabel="按托称重计算器"
+        >
+          <Text style={[styles.calcToggleFullText, calcOpen && styles.calcToggleFullTextOn]}>
+            {calcOpen ? '✓ 按托称重（点击收起）' : '按托称重（点击展开）'}
+          </Text>
+        </TouchableOpacity>
+      ) : null}
+
       {prefillNote ? <Text style={styles.prefillNote}>{prefillNote}</Text> : null}
       {overMax && maxHint ? <Text style={styles.maxHint}>{maxHint}</Text> : null}
     </View>
@@ -294,7 +308,16 @@ const styles = StyleSheet.create({
   wrap: { marginBottom: 16 },
   labelRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 },
   label: { fontSize: 16, fontWeight: '600', color: '#303133' },
-  // STEP 6: 按托称重计算器
+  // B4: full-width outlined toggle below the quantity row
+  calcToggleFull: {
+    marginTop: 10, height: 44, borderRadius: 8, borderWidth: 1.5,
+    borderColor: '#409EFF', backgroundColor: '#FFFFFF',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  calcToggleFullOn: { backgroundColor: '#409EFF' },
+  calcToggleFullText: { fontSize: 15, color: '#409EFF', fontWeight: '600' },
+  calcToggleFullTextOn: { color: '#FFFFFF' },
+  // STEP 6: legacy small pill styles kept for reference but no longer rendered
   calcToggle: {
     paddingHorizontal: 14, paddingVertical: 8, borderRadius: 16, borderWidth: 1,
     borderColor: '#409EFF', backgroundColor: '#FFFFFF',

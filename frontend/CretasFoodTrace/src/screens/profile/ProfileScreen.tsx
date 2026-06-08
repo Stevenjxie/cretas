@@ -138,6 +138,8 @@ export default function ProfileScreen() {
 
   const displayName = user?.fullName || user?.username || '未知用户';
   const roleCode = user?.userType === 'platform' ? user?.platformUser?.role : user?.factoryUser?.role;
+  // A1: operators see only user-facing items; dev/admin tools are hidden.
+  const isOperator = roleCode === 'operator';
 
   const getRoleName = (role: string | undefined) => {
     const roleMap: Record<string, string> = {
@@ -286,21 +288,25 @@ export default function ProfileScreen() {
               </>
             )}
 
-            {/* 数据导出 */}
-            <TouchableOpacity
-              style={styles.settingItem}
-              onPress={() => {
-                profileLogger.info('数据导出');
-                Alert.alert('数据导出', '可导出个人数据和操作记录');
-              }}
-            >
-                <View style={styles.settingLeft}>
-                    <List.Icon icon="download-outline" color="#4CAF50" />
-                    <Text style={styles.settingText}>数据导出</Text>
-                </View>
-                <List.Icon icon="chevron-right" color={theme.colors.textTertiary} />
-            </TouchableOpacity>
-            <Divider style={styles.divider} />
+            {/* 数据导出 — A1: hidden for operators */}
+            {!isOperator && (
+              <>
+                <TouchableOpacity
+                  style={styles.settingItem}
+                  onPress={() => {
+                    profileLogger.info('数据导出');
+                    Alert.alert('数据导出', '可导出个人数据和操作记录');
+                  }}
+                >
+                    <View style={styles.settingLeft}>
+                        <List.Icon icon="download-outline" color="#4CAF50" />
+                        <Text style={styles.settingText}>数据导出</Text>
+                    </View>
+                    <List.Icon icon="chevron-right" color={theme.colors.textTertiary} />
+                </TouchableOpacity>
+                <Divider style={styles.divider} />
+              </>
+            )}
 
             {/* 帮助文档 */}
             <TouchableOpacity
@@ -370,35 +376,39 @@ export default function ProfileScreen() {
             </TouchableOpacity>
             <Divider style={styles.divider} />
 
-            {/* 开发者工具 - 服务器连接测试 */}
-            <TouchableOpacity
-              style={styles.settingItem}
-              onPress={() => {
-                profileLogger.info('打开服务器连接测试');
-                navigation.dispatch(CommonActions.navigate('ServerConnectivityTest'));
-              }}
-            >
-                <View style={styles.settingLeft}>
-                    <List.Icon icon="server-network" color="#E91E63" />
-                    <Text style={styles.settingText}>服务器连接测试</Text>
-                </View>
-                <Chip mode="flat" style={{ backgroundColor: '#FFF3E0' }} textStyle={{ fontSize: 10, color: '#FF9800' }}>开发</Chip>
-            </TouchableOpacity>
+            {/* 开发者工具 - 服务器连接测试 — A1: hidden for operators */}
+            {!isOperator && (
+              <TouchableOpacity
+                style={styles.settingItem}
+                onPress={() => {
+                  profileLogger.info('打开服务器连接测试');
+                  navigation.dispatch(CommonActions.navigate('ServerConnectivityTest'));
+                }}
+              >
+                  <View style={styles.settingLeft}>
+                      <List.Icon icon="server-network" color="#E91E63" />
+                      <Text style={styles.settingText}>服务器连接测试</Text>
+                  </View>
+                  <Chip mode="flat" style={{ backgroundColor: '#FFF3E0' }} textStyle={{ fontSize: 10, color: '#FF9800' }}>开发</Chip>
+              </TouchableOpacity>
+            )}
 
-            {/* 开发者工具 - 意图执行测试 */}
-            <TouchableOpacity
-              style={styles.settingItem}
-              onPress={() => {
-                profileLogger.info('打开意图执行测试');
-                navigation.dispatch(CommonActions.navigate('IntentExecutionTest'));
-              }}
-            >
-                <View style={styles.settingLeft}>
-                    <List.Icon icon="brain" color="#9C27B0" />
-                    <Text style={styles.settingText}>意图执行测试</Text>
-                </View>
-                <Chip mode="flat" style={{ backgroundColor: '#F3E5F5' }} textStyle={{ fontSize: 10, color: '#9C27B0' }}>AI</Chip>
-            </TouchableOpacity>
+            {/* 开发者工具 - 意图执行测试 — A1: hidden for operators */}
+            {!isOperator && (
+              <TouchableOpacity
+                style={styles.settingItem}
+                onPress={() => {
+                  profileLogger.info('打开意图执行测试');
+                  navigation.dispatch(CommonActions.navigate('IntentExecutionTest'));
+                }}
+              >
+                  <View style={styles.settingLeft}>
+                      <List.Icon icon="brain" color="#9C27B0" />
+                      <Text style={styles.settingText}>意图执行测试</Text>
+                  </View>
+                  <Chip mode="flat" style={{ backgroundColor: '#F3E5F5' }} textStyle={{ fontSize: 10, color: '#9C27B0' }}>AI</Chip>
+              </TouchableOpacity>
+            )}
         </NeoCard>
 
         <NeoButton variant="danger" onPress={handleLogout} style={styles.logoutButton} icon="logout">退出登录</NeoButton>

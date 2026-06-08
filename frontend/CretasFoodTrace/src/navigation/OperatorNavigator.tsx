@@ -2,6 +2,7 @@ import React from 'react';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { Icon } from 'react-native-paper';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import ProfileStackNavigator from './ProfileStackNavigator';
 
 import OperatorAssignedProcessScreen from '../screens/processing/OperatorAssignedProcessScreen';
@@ -28,6 +29,10 @@ function OperatorReportStackNavigator() {
  * 考勤、报工、工作、个人中心 四个tab
  */
 export function OperatorNavigator() {
+  // C1: Use safe-area insets so the tab bar clears Android gesture navigation bar.
+  // insets.bottom is 0 on devices with hardware buttons; positive on gesture-nav devices.
+  const insets = useSafeAreaInsets();
+
   return (
     <Tab.Navigator
       initialRouteName="OperatorReportTab"
@@ -39,9 +44,9 @@ export function OperatorNavigator() {
           backgroundColor: "#ffffff",
           borderTopWidth: 1,
           borderTopColor: "#e0e0e0",
-          paddingBottom: 5,
+          paddingBottom: insets.bottom + 5,
           paddingTop: 5,
-          height: 60,
+          height: 60 + insets.bottom,
         },
         tabBarLabelStyle: {
           fontSize: 12,
