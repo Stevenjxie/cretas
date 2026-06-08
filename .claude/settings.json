@@ -7,5 +7,18 @@
   "enabledPlugins": {
     "playwright@claude-plugins-official": true,
     "ralph-loop@claude-plugins-official": true
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node .claude/hooks/ux-advisory.js"
+          }
+        ]
+      }
+    ]
   }
 }
