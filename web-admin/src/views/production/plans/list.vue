@@ -47,11 +47,25 @@ function rowActionsFor(row: TableRow) {
     { status: String(row.status || ''), id: String(row.id || '') },
     { canViewPrice: canViewPrice.value }
   );
-  return all.filter((a) => a.id !== 'view-detail');
+  const filtered = all.filter((a) => a.id !== 'view-detail');
+  // T138 方案A: "开始"(仅标进行中,不建批次)降级到"更多".
+  // 后端 startProduction 只标计划→进行中, 不建批次/不 spawn 工序任务,
+  // 用于不需逐道报工、直接 PC 录产量的轻量场景. 仅 PENDING 可见.
+  if (canWrite.value && isStartable(String(row.status || ''))) {
+    filtered.unshift({
+      id: 'start-only',
+      icon: '▶️',
+      label: '仅标进行中(不建批次)',
+      requiresConfirm: true,
+      aiHint: '只把计划标成进行中, 不建批次',
+    });
+  }
+  return filtered;
 }
 function handleRowActionClick(actionId: string, row: TableRow) {
   switch (actionId) {
     case 'view-detail': handleViewPlan(row); break;
+    case 'start-only': void handleStart(row); break;
     case 'cancel': handleCancel(row); break;
     case 'print-pdf': void safePrint('production-task', factoryId.value, String(row.id), { fileName: `生产计划_${row.planNumber || row.id}` }); break;
     case 'copy': void handleCopyPlan(row); break;
@@ -624,6 +638,14 @@ function isPendingStatus(status: string) {
   return status === 'PLANNED' || status === 'PENDING';
 }
 
+// T138 方案A: 开工/开始/生成调拨单 的可操作 gate.
+// 后端 startProduction / createBatchFromPlan 严格只接受 PENDING (PLANNED → 409),
+// 所以这三个动作只在 PENDING 时展示, 避免对 PLANNED 计划点了直接报错.
+// (isPendingStatus 保留给取消按钮的展示范围, 不收窄.)
+function isStartable(status: string) {
+  return status === 'PENDING';
+}
+
 function getStatusType(status: string) {
   const map: Record<string, string> = {
     PLANNED: 'info',
@@ -868,8 +890,8 @@ function handleAiFill(params: TableRow) {
           <strong>计划确认后，根据 BOM 配方和库存情况选择以下路径之一：</strong>
           <ul style="margin: 4px 0 4px 18px; padding: 0;">
             <li><strong>生成调拨单</strong>：根据 BOM 自动计算所需原辅料/包材，发申请给仓库审批。库存不足或需要从其他仓库调料时使用。</li>
-            <li><strong>转为批次</strong>：直接将计划转为生产批次并开启生产（前提：仓库已收到所需原料）。</li>
-            <li><strong>开始</strong>：手动开启生产，与"转为批次"语义相近（建议系统会先校验库存是否足够）。</li>
+            <li><strong>开工（转为批次）</strong>：主操作。将计划转为生产批次并开始生产（自动建批次 + 工序任务，供 APP 逐道报工）。开工前系统先校验原料库存是否充足，不足会阻断并提示缺口。</li>
+            <li><strong>仅标进行中（不建批次）</strong>：在「更多」菜单中。只把计划标成进行中、不建批次，适用于不需逐道报工、直接在 PC 端录产量的场景（同样先校验库存）。</li>
           </ul>
           <strong>完成后</strong>：可通过 APP「报工审批」逐工序上报，或在 PC 端「完成生产」录入实际产量结束计划。
           <span style="color: var(--text-color-secondary, #909399);">
@@ -969,31 +991,24 @@ function handleAiFill(params: TableRow) {
         <el-table-column label="操作" width="280" fixed="right" align="center">
           <template #default="{ row }">
             <el-button type="primary" link size="small" @click="handleViewPlan(row)">查看</el-button>
+            <!-- T138 方案A: 转为批次 = 开工主路径(建批次+spawn工序任务, F006逐道报工), 单一主操作显著按钮 -->
             <el-button
-              v-if="canWrite && isPendingStatus(row.status)"
-              type="warning"
-              link
+              v-if="canWrite && isStartable(row.status)"
+              type="primary"
               size="small"
+              :icon="VideoPlay"
               :disabled="actionLoading"
+              title="转为生产批次并开工(建批次+工序任务, 用于 APP 逐道报工)"
               @click="handleCreateBatch(row)"
-            >转为批次</el-button>
+            >开工</el-button>
             <el-button
-              v-if="canWrite && isPendingStatus(row.status)"
+              v-if="canWrite && isStartable(row.status)"
               type="warning"
               link
               size="small"
               :disabled="actionLoading"
               @click="handleGenerateTransfer(row)"
             >生成调拨单</el-button>
-            <el-button
-              v-if="canWrite && isPendingStatus(row.status)"
-              type="success"
-              link
-              size="small"
-              :icon="VideoPlay"
-              :disabled="actionLoading"
-              @click="handleStart(row)"
-            >开始</el-button>
             <el-button
               v-if="canWrite && row.status === 'IN_PROGRESS'"
               type="primary"

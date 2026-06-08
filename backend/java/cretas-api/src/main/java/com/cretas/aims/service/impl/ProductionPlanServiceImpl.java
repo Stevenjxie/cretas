@@ -1449,6 +1449,13 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                     .withHint("请刷新生产计划列表查看最新状态");
         }
 
+        // T138 方案A: 转为批次(开工)继承 startProduction 的开工前校验.
+        // 转批次=开工主路径(F006 逐道报工), 之前漏跑库存校验直接建批次,
+        // 现与"开始"一致: 先跑配置化校验 + 硬校验原料库存是否充足.
+        // 在任何 DB 写入前调用; 抛异常则批次不创建(同 @Transactional 回滚).
+        runConfiguredValidation(factoryId, "START", java.util.Map.of("planId", planId));
+        validateMaterialStockSufficient(factoryId, plan);
+
         // 查产品名称
         String productName = "未知产品";
         Optional<ProductType> ptOpt = productTypeRepository.findById(plan.getProductTypeId());
