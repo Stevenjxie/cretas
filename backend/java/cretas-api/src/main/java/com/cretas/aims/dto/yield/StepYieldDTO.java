@@ -67,4 +67,8 @@ public class StepYieldDTO {
     private List<String> inputPhotos;
     /** 产出阶段照片 (来自 reportKind == OUTPUT 的报工); 去重保序; 无则 null */
     private List<String> outputPhotos;
+    /** T161 per-photo annotation parallel to inputPhotos; each element: {url, label, note}; null = no annotations */
+    private List<Map<String, Object>> inputPhotoAnnotations;
+    /** T161 per-photo annotation parallel to outputPhotos; each element: {url, label, note}; null = no annotations */
+    private List<Map<String, Object>> outputPhotoAnnotations;
 }

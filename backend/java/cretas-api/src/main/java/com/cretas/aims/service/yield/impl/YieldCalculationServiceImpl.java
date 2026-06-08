@@ -59,6 +59,9 @@ public class YieldCalculationServiceImpl implements YieldCalculationService {
             // 三阶段 (单元1): 照片按 reportKind 分组 (INPUT/SEGMENT/legacy → inputPhotos; OUTPUT → outputPhotos)
             List<String> stepInputPhotos = null;     // 去重保序
             List<String> stepOutputPhotos = null;    // 去重保序
+            // T161 per-photo annotation 与照片并行分组 (保序; null = 无标注)
+            List<Map<String, Object>> stepInputPhotoAnnotations = null;
+            List<Map<String, Object>> stepOutputPhotoAnnotations = null;
             // 三阶段 phase 推断信号: 是否有 INPUT 报工 / 有 OUTPUT 报工 (或 legacy: 有投入 / 有产出)
             boolean hasInputSignal = false;
             boolean hasOutputSignal = false;
@@ -87,6 +90,16 @@ public class YieldCalculationServiceImpl implements YieldCalculationService {
                         for (String p : r.getPhotos()) {
                             if (p != null && !stepInputPhotos.contains(p)) stepInputPhotos.add(p);
                         }
+                    }
+                }
+                // T161 per-photo annotation: 同 kindOutput 逻辑与 photos 并行分组 (保全量, 无去重)
+                if (r.getPhotoAnnotations() != null && !r.getPhotoAnnotations().isEmpty()) {
+                    if (kindOutput) {
+                        if (stepOutputPhotoAnnotations == null) stepOutputPhotoAnnotations = new ArrayList<>();
+                        stepOutputPhotoAnnotations.addAll(r.getPhotoAnnotations());
+                    } else {
+                        if (stepInputPhotoAnnotations == null) stepInputPhotoAnnotations = new ArrayList<>();
+                        stepInputPhotoAnnotations.addAll(r.getPhotoAnnotations());
                     }
                 }
                 if (r.getInputQuantity() != null) totalInput = totalInput.add(r.getInputQuantity());
@@ -199,6 +212,9 @@ public class YieldCalculationServiceImpl implements YieldCalculationService {
                     .phase(phase)
                     .inputPhotos(stepInputPhotos)
                     .outputPhotos(stepOutputPhotos)
+                    // T161 per-photo annotation (并行分组结果)
+                    .inputPhotoAnnotations(stepInputPhotoAnnotations)
+                    .outputPhotoAnnotations(stepOutputPhotoAnnotations)
                     .build());
             prevOutput = totalOutput;
         }

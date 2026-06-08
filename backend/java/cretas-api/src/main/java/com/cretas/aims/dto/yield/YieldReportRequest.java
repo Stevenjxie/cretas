@@ -44,6 +44,10 @@ public class YieldReportRequest {
     /** 图片证据 URL 列表 (前端先传 OSS 拿 URL, 存入 ProductionReport.photos) */
     private List<String> evidenceImages;
 
+    /** T161 per-photo annotation; parallel to evidenceImages, same order.
+     *  null or absent = no annotations (backward-compat). */
+    private List<PhotoAnnotation> photoAnnotations;
+
     /** 多时段×人数工时 (张权 多段开工/收工) */
     private List<LaborSegment> laborSegments;
 
@@ -55,6 +59,17 @@ public class YieldReportRequest {
 
     /** 留样(盒/份, 末道装盒) */
     private Integer sampleRetainQuantity;
+
+    /** T161: per-photo annotation attached to each evidence image. */
+    @Data
+    public static class PhotoAnnotation {
+        /** The OSS URL this annotation belongs to (must match evidenceImages[i]). */
+        private String url;
+        /** Preset label chip. One of: 称重投入/称重产出/装盒/副产物/损耗/托盘重/工序中/留样/其它 */
+        private String label;
+        /** Optional free-text note, e.g. "猪舌第1车 320盒". May be null. */
+        private String note;
+    }
 
     @Data
     public static class LaborSegment {

@@ -123,6 +123,12 @@ public class ProductionReport {
     @Column(name = "photos", columnDefinition = "jsonb")
     private List<String> photos;
 
+    // T161 per-photo annotation: parallel to photos; each element {url, label, note}.
+    // null = no annotations (backward-compat for old records).
+    @Type(JsonType.class)
+    @Column(name = "photo_annotations", columnDefinition = "jsonb")
+    private List<Map<String, Object>> photoAnnotations;
+
     @Enumerated(EnumType.STRING)
     @Column(name = "status", length = 20)
     @Builder.Default
