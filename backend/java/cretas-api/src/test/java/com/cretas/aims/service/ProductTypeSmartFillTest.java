@@ -156,6 +156,8 @@ class ProductTypeSmartFillTest {
         assertThat(s.getSpecification()).isEqualTo("200g/盒 20盒/筐");
         assertThat(s.getGramsPerUnit()).isEqualByComparingTo("200.00");
         assertThat(s.getWipToFgYield()).isEqualByComparingTo("0.5500");
+        // T153: 基础名称从匹配产品带入
+        assertThat(s.getBaseProductName()).isEqualTo("好食光卤猪蹄");
     }
 
     @Test
@@ -184,6 +186,25 @@ class ProductTypeSmartFillTest {
         assertThat(s.getSpecification()).isNull();
         assertThat(s.getGramsPerUnit()).isNull();
         assertThat(s.getWipToFgYield()).isNull();
+        // T153: 该产品 baseProductName=掌中宝 → 带入
+        assertThat(s.getBaseProductName()).isEqualTo("掌中宝");
+    }
+
+    @Test
+    @DisplayName("B7 (T153): 匹配产品 baseProductName 为空 → suggest 透传 null (禁假数据, 不臆造基础名称)")
+    void suggest_nameMatch_baseProductNameNullWhenNotSetOnMatchedProduct() {
+        ProductType existing = new ProductType();
+        existing.setName("叮咚好食光卤猪蹄 200g");
+        existing.setBaseProductName(null);  // 历史产品没填基础名称
+        existing.setProductCategory("FINISHED_PRODUCT");
+        existing.setUnit("盒");
+
+        when(productTypeRepository.findByFactoryId("F001")).thenReturn(List.of(existing));
+
+        ProductTypeSuggestionDTO s = service.suggestDefaults("F001", "好食光卤猪蹄 500g", null);
+
+        assertThat(s.getMatchedFrom()).isEqualTo("叮咚好食光卤猪蹄 200g"); // 确实匹配到
+        assertThat(s.getBaseProductName()).isNull();                    // 透传 null, 不臆造
     }
 
     @Test
