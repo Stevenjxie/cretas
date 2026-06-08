@@ -56,7 +56,14 @@ public class RestaurantInventoryPostingServiceImpl implements RestaurantInventor
     private final MaterialUomConverter materialUomConverter;
 
     @Override
-    @Transactional
+    // BUG-03-01: cap the outer transaction at 30 s.  If the caller's HTTP
+    // connection is dropped after saveAndFlush(POSTING) but before save(POSTED),
+    // PostgreSQL idle_in_transaction_session_timeout (set via connectionInitSql)
+    // terminates the backend session; Spring's @Transactional timeout forces a
+    // local rollback that releases the row lock before that timeout fires.
+    // Together these two guards ensure a stuck POSTING row is always cleared
+    // within 30 s and never blocks the next confirmation attempt indefinitely.
+    @Transactional(timeout = 30)
     public SupplierDeliveryNote postSupplierDeliveryToInventory(String factoryId, String noteId, Long userId) {
         SupplierDeliveryNote note = noteRepository.findByIdAndFactoryId(noteId, factoryId)
                 .orElseThrow(() -> new BusinessException(404, "送货单不存在: " + noteId)
