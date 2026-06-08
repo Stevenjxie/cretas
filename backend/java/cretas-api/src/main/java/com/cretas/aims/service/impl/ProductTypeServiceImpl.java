@@ -6,6 +6,7 @@ import com.cretas.aims.dto.producttype.ProductTypeDTO;
 import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.exception.ResourceNotFoundException;
+import com.cretas.aims.repository.CustomerRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.service.ProductTypeService;
 import com.fasterxml.jackson.core.JsonProcessingException;
@@ -44,11 +45,14 @@ public class ProductTypeServiceImpl implements ProductTypeService {
 
     private final ProductTypeRepository productTypeRepository;
     private final ObjectMapper objectMapper;
+    private final CustomerRepository customerRepository;
 
     // Manual constructor (Lombok @RequiredArgsConstructor not working)
-    public ProductTypeServiceImpl(ProductTypeRepository productTypeRepository, ObjectMapper objectMapper) {
+    public ProductTypeServiceImpl(ProductTypeRepository productTypeRepository, ObjectMapper objectMapper,
+                                  CustomerRepository customerRepository) {
         this.productTypeRepository = productTypeRepository;
         this.objectMapper = objectMapper;
+        this.customerRepository = customerRepository;
     }
 
     @Override
@@ -58,10 +62,8 @@ public class ProductTypeServiceImpl implements ProductTypeService {
         // 如果没有提供 code，自动生成 SKU
         // 规则: CP{客户首字母拼音}{4位序号}，如 CPDD0001
         if (dto.getCode() == null || dto.getCode().trim().isEmpty()) {
-            String prefix = getCategoryPrefix(dto.getCategory() != null ? dto.getCategory() : dto.getProductCategory());
-            String customerInitials = getCustomerInitials(dto.getRelatedCustomer(), factoryId);
-            long count = productTypeRepository.countByFactoryId(factoryId);
-            String generatedCode = String.format("%s%s%04d", prefix, customerInitials, count + 1);
+            String category = dto.getCategory() != null ? dto.getCategory() : dto.getProductCategory();
+            String generatedCode = buildGeneratedCode(factoryId, category, dto.getRelatedCustomer());
             dto.setCode(generatedCode);
             log.info("自动生成产品代码: {}", generatedCode);
         }
@@ -422,6 +424,33 @@ public class ProductTypeServiceImpl implements ProductTypeService {
             case "CUSTOMER_MATERIAL": return "KH";
             default: return "PT";
         }
+    }
+
+    /**
+     * T147 Fix2: 统一的编号生成逻辑 (前缀 + 客户首字母 + 4位序号),
+     * createProductType 与 previewGeneratedCode 共用, 保证预览与最终落库一致.
+     */
+    private String buildGeneratedCode(String factoryId, String category, String relatedCustomer) {
+        String prefix = getCategoryPrefix(category);
+        String customerInitials = getCustomerInitials(relatedCustomer, factoryId);
+        long count = productTypeRepository.countByFactoryId(factoryId);
+        return String.format("%s%s%04d", prefix, customerInitials, count + 1);
+    }
+
+    @Override
+    public String previewGeneratedCode(String factoryId, String productCategory,
+                                       String customerId, String relatedCustomer) {
+        // 优先用 customerId 解析客户名 (与表单的 entity link 对齐); 解析不到则用传入的 relatedCustomer 名后备
+        String customerName = relatedCustomer;
+        if (customerId != null && !customerId.trim().isEmpty()) {
+            customerName = customerRepository.findByIdAndFactoryId(customerId, factoryId)
+                    .map(c -> c.getName())
+                    .orElse(relatedCustomer);
+        }
+        String code = buildGeneratedCode(factoryId, productCategory, customerName);
+        log.info("预览产品编号: factoryId={}, category={}, customerId={}, name={}, code={}",
+                factoryId, productCategory, customerId, customerName, code);
+        return code;
     }
 
     @Override
