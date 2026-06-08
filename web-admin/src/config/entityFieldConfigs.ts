@@ -32,6 +32,10 @@ export interface FieldConfig {
   order?: number
   /** 是否默认隐藏 (可通过配置开启) */
   hidden?: boolean
+  /** select: 允许用户手动输入创建新选项 (filterable + allow-create) */
+  allowCreate?: boolean
+  /** tooltip 说明文字 */
+  tooltip?: string
 }
 
 export interface EntityFieldGroup {

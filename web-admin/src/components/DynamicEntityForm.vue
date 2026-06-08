@@ -121,6 +121,8 @@ function displayValue(field: FieldConfig): string {
                 :model-value="getFieldValue(field.key) as string"
                 :placeholder="field.placeholder || `请选择${field.label}`"
                 clearable
+                filterable
+                :allow-create="field.allowCreate"
                 style="width: 100%"
                 @update:model-value="updateField(field.key, $event)"
               >
