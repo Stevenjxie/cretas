@@ -183,8 +183,58 @@ export const YieldQuantityInput: React.FC<YieldQuantityInputProps> = ({
         <Text style={styles.label}>{label}</Text>
       </View>
 
-      {/* B4: 按托称重计算器面板 — shown above qty row when open */}
-      {/* STEP 6 / B4: relabeled 毛重→秤上数字, 皮重→每个托盘重; updated help text */}
+      <View style={styles.row}>
+        <TouchableOpacity
+          style={[styles.stepBtn, disabled && styles.stepBtnDisabled]}
+          onPress={() => handleStep(-step)}
+          disabled={disabled}
+          testID={testID ? `${testID}-minus` : undefined}
+          accessibilityLabel="减少"
+        >
+          <Text style={styles.stepText}>−</Text>
+        </TouchableOpacity>
+
+        <View style={styles.valueBox}>
+          <TextInput
+            style={styles.valueInput}
+            keyboardType="decimal-pad"
+            value={value}
+            onChangeText={handleChange}
+            editable={!disabled}
+            placeholder="0"
+            placeholderTextColor="#C0C4CC"
+            testID={testID ? `${testID}-input` : undefined}
+          />
+          {unit ? <Text style={styles.unit}>{unit}</Text> : null}
+        </View>
+
+        <TouchableOpacity
+          style={[styles.stepBtn, disabled && styles.stepBtnDisabled]}
+          onPress={() => handleStep(step)}
+          disabled={disabled}
+          testID={testID ? `${testID}-plus` : undefined}
+          accessibilityLabel="增加"
+        >
+          <Text style={styles.stepText}>＋</Text>
+        </TouchableOpacity>
+      </View>
+
+      {/* B4: full-width outlined "按托称重" toggle below the quantity row (replaces the small pill in the label row) */}
+      {calculatorMode ? (
+        <TouchableOpacity
+          style={[styles.calcToggleFull, calcOpen && styles.calcToggleFullOn]}
+          onPress={toggleCalc}
+          disabled={disabled}
+          testID={testID ? `${testID}-calc-toggle` : undefined}
+          accessibilityLabel="按托称重计算器"
+        >
+          <Text style={[styles.calcToggleFullText, calcOpen && styles.calcToggleFullTextOn]}>
+            {calcOpen ? '✓ 按托称重（点击收起）' : '按托称重（点击展开）'}
+          </Text>
+        </TouchableOpacity>
+      ) : null}
+
+      {/* B4: 按托称重计算器面板 — 在切换按钮下方向下展开 (按钮位置不变, 默认收起) */}
       {calculatorMode && calcOpen ? (
         <View style={styles.calcPanel} testID={testID ? `${testID}-calc-panel` : undefined}>
           <Text style={styles.calcHelp}>净重 = 每个秤上数字之和 − 托盘数 × 每个托盘重</Text>
@@ -245,57 +295,6 @@ export const YieldQuantityInput: React.FC<YieldQuantityInputProps> = ({
             </Text>
           ) : null}
         </View>
-      ) : null}
-
-      <View style={styles.row}>
-        <TouchableOpacity
-          style={[styles.stepBtn, disabled && styles.stepBtnDisabled]}
-          onPress={() => handleStep(-step)}
-          disabled={disabled}
-          testID={testID ? `${testID}-minus` : undefined}
-          accessibilityLabel="减少"
-        >
-          <Text style={styles.stepText}>−</Text>
-        </TouchableOpacity>
-
-        <View style={styles.valueBox}>
-          <TextInput
-            style={styles.valueInput}
-            keyboardType="decimal-pad"
-            value={value}
-            onChangeText={handleChange}
-            editable={!disabled}
-            placeholder="0"
-            placeholderTextColor="#C0C4CC"
-            testID={testID ? `${testID}-input` : undefined}
-          />
-          {unit ? <Text style={styles.unit}>{unit}</Text> : null}
-        </View>
-
-        <TouchableOpacity
-          style={[styles.stepBtn, disabled && styles.stepBtnDisabled]}
-          onPress={() => handleStep(step)}
-          disabled={disabled}
-          testID={testID ? `${testID}-plus` : undefined}
-          accessibilityLabel="增加"
-        >
-          <Text style={styles.stepText}>＋</Text>
-        </TouchableOpacity>
-      </View>
-
-      {/* B4: full-width outlined "按托称重" toggle below the quantity row (replaces the small pill in the label row) */}
-      {calculatorMode ? (
-        <TouchableOpacity
-          style={[styles.calcToggleFull, calcOpen && styles.calcToggleFullOn]}
-          onPress={toggleCalc}
-          disabled={disabled}
-          testID={testID ? `${testID}-calc-toggle` : undefined}
-          accessibilityLabel="按托称重计算器"
-        >
-          <Text style={[styles.calcToggleFullText, calcOpen && styles.calcToggleFullTextOn]}>
-            {calcOpen ? '✓ 按托称重（点击收起）' : '按托称重（点击展开）'}
-          </Text>
-        </TouchableOpacity>
       ) : null}
 
       {prefillNote ? <Text style={styles.prefillNote}>{prefillNote}</Text> : null}

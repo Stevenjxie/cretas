@@ -1139,7 +1139,7 @@ const YieldStepReportScreen: React.FC = () => {
               ) : null}
 
               {/* Q1 单一数据源: 多批次时投入量 = Σ(各批次用量), 只读自动算; 单批次时正常可编辑
-               * B4: defaultTrayWeighing pre-expands the tray calc for first-step (投入) */}
+               * B4: 按托称重默认收起 (Steve 2026-06-08), 操作员需要时点全宽按钮展开, 面板在按钮下方向下展开 */}
               {isFirstStep && materialBatchRefs.length > 1 ? (
                 // 多批次选中: 投入量 = Σ 各批次用量, 显示只读汇总
                 <View style={styles.multiQtyReadonly} testID="yield-input-qty-multi-readonly">
