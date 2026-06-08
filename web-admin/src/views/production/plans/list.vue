@@ -109,7 +109,8 @@ const planForm = ref({
   sourceCustomerName: '',
   processName: '',
   batchDate: '',
-  sourceType: 'MANUAL' as 'MANUAL' | 'CUSTOMER_ORDER' | 'AI_FORECAST' | 'SAFETY_STOCK',
+  // T135 ITEM #1: 默认「销售订单」(CUSTOMER_ORDER); handleCreate() 重置时也遵循此默认
+  sourceType: 'CUSTOMER_ORDER' as 'MANUAL' | 'CUSTOMER_ORDER' | 'AI_FORECAST' | 'SAFETY_STOCK',
   sourceOrderId: '' as string | undefined,
   sourceOrderItemId: '' as string | undefined,
   customFields: {} as TableRow,
@@ -123,6 +124,13 @@ const customers = ref<TableRow[]>([]);
 // A5: today helper
 function todayStr(): string {
   return new Date().toISOString().slice(0, 10);
+}
+
+// T135: tomorrow helper (计划生产日默认 = 今天 + 1)
+function tomorrowStr(): string {
+  const d = new Date();
+  d.setDate(d.getDate() + 1);
+  return d.toISOString().slice(0, 10);
 }
 const selectableSalesOrders = ref<TableRow[]>([]);
 const salesOrdersLoading = ref(false);
@@ -276,13 +284,19 @@ async function loadBomProcesses(productTypeId: string) {
       productWorkProcessList.value = res.data as TableRow[];
       const names = res.data.map((item: TableRow) => String(item.processName || '')).filter(Boolean);
       bomProcesses.value = [...new Set(names)];
+      // T135 ITEM #4 (BLOCKING): wire all process names into planForm.processName so the
+      // CUSTOMER_ORDER backend validation (processName required) passes.
+      // Backend checks: request.getProcessName() != null && !isBlank().
+      planForm.value.processName = names.join('、');
     } else {
       bomProcesses.value = [];
       productWorkProcessList.value = [];
+      planForm.value.processName = '';
     }
   } catch {
     bomProcesses.value = [];
     productWorkProcessList.value = [];
+    planForm.value.processName = '';
   }
 }
 
@@ -331,19 +345,23 @@ function handleCreate() {
   planForm.value = {
     productTypeId: '',
     plannedQuantity: 0,
-    plannedDate: today,
+    // T135 ITEM #3: 计划生产日默认 = 今天 + 1 天
+    plannedDate: tomorrowStr(),
     notes: '',
     estimatedWorkers: undefined,
     assignedSupervisorId: '',
     sourceCustomerName: '',
     processName: '',
     batchDate: today,
-    sourceType: 'MANUAL',
+    // T135 ITEM #1: 来源类型默认「销售订单」
+    sourceType: 'CUSTOMER_ORDER',
     sourceOrderId: '',
     sourceOrderItemId: '',
     customFields: {} as TableRow,
   };
   productWorkProcessList.value = [];
+  // T135 ITEM #1: 默认 CUSTOMER_ORDER — 预加载可选销售订单列表
+  if (selectableSalesOrders.value.length === 0) loadSelectableSalesOrders();
   dialogVisible.value = true;
 }
 
@@ -1135,11 +1153,10 @@ function handleAiFill(params: TableRow) {
                 :key="wp.id"
                 size="small"
                 style="margin-right: 6px; margin-bottom: 4px;"
-              >{{ idx + 1 }}. {{ wp.processName }}</el-tag>
+              >{{ idx + 1 }}. {{ wp.processName }}<template v-if="wp.responsibleWorkerName"> ({{ wp.responsibleWorkerName }})</template></el-tag>
             </div>
           </template>
-          <!-- hidden binding keeps processName in sync for backend (uses first process name or empty) -->
-          <input type="hidden" :value="planForm.processName" />
+          <!-- processName is kept in sync via loadBomProcesses (T135 ITEM #4) -->
         </el-form-item>
         <!-- A5/E3: batchDate 已被后端消费 (ProductionProgressDashboard 按批次日期过滤)，保留；加说明区分两个日期 -->
         <el-form-item label="批次日期">
