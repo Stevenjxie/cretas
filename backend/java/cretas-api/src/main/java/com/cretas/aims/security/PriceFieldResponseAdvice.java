@@ -80,20 +80,27 @@ public class PriceFieldResponseAdvice implements ResponseBodyAdvice<Object> {
      * Permission gate for SmartBI finance-upload column masking (Rule 2b).
      *
      * <p>Finance P&amp;L columns (金额/租金/工资/利润/营收 etc. in SmartBI Excel uploads)
-     * are masked unless the caller holds {@code finance:read} (or higher).
-     * This is intentionally stricter than {@code procurement:price:view}:
+     * are masked unless the caller holds {@code finance:read_write}.
+     * Using {@code read_write} (not {@code read}) is intentional:
      * <ul>
-     *   <li>sales_manager has {@code procurement:price:view} → sees delivery-note
-     *       unit prices, but does NOT see finance P&amp;L upload rows.</li>
-     *   <li>finance_manager has both → sees everything.</li>
-     *   <li>factory_super_admin short-circuits all permission checks → sees everything.</li>
+     *   <li>sales_manager has {@code finance:read} (NOT read_write) → canViewFinance=FALSE
+     *       → finance P&amp;L columns (金额/工资/租金/利润/营收) <strong>MASKED</strong>. ✓</li>
+     *   <li>finance_manager has {@code finance:read_write} → canViewFinance=TRUE → visible. ✓</li>
+     *   <li>restaurant_owner has {@code finance:read_write} (hardcoded matrix fallback) →
+     *       canViewFinance=TRUE → visible. ✓  Owner must see finance P&amp;L.</li>
+     *   <li>factory_super_admin short-circuits all permission checks → sees everything. ✓</li>
      * </ul>
+     *
+     * <p>Bug fix (#615 A corrected): the original gate used {@code finance:read}, which
+     * incorrectly allowed sales_manager (who has finance=r) to see finance P&amp;L upload
+     * data. Raising the gate to {@code finance:read_write} closes this gap while keeping
+     * finance_manager and restaurant_owner unaffected (both have finance=rw).
      *
      * <p>PR #547 QA live-verify fix: sales_manager was seeing finance upload data
      * because the old gate was a single {@code canViewPrices} flag that covered both
      * procurement prices and finance P&amp;L. This constant decouples them.
      */
-    public static final String FINANCE_READ_PERMISSION = "finance:read";
+    public static final String FINANCE_READ_PERMISSION = "finance:read_write";
 
     /** Per-class cache: Class → list of @PriceSensitive fields. Made accessible. */
     private static final Map<Class<?>, List<Field>> PRICE_FIELD_CACHE = new ConcurrentHashMap<>();
@@ -315,7 +322,7 @@ public class PriceFieldResponseAdvice implements ResponseBodyAdvice<Object> {
         //       unit prices, BOM cost, etc.) and SmartBI analysis map keys
         //       (Rules 1, 2, 3, 4 in walkMapForKeyPatternStripping).
         //
-        //   canViewFinance  (finance:read)
+        //   canViewFinance  (finance:read_write)
         //       Controls ONLY Rule 2b — SmartBI upload column masking
         //       (FINANCE_COLUMN_KEY_REGEX: 金额/租金/工资/利润/营收 etc.).
         //
@@ -387,8 +394,10 @@ public class PriceFieldResponseAdvice implements ResponseBodyAdvice<Object> {
      *   <li>{@code canViewFinance} — when {@code false}, Rule 2b fires:
      *       SmartBI upload column map keys matching FINANCE_COLUMN_KEY_REGEX
      *       (金额/租金/工资/利润/营收 etc.) are nulled. This is decoupled from
-     *       {@code canViewPrices} so sales_manager sees procurement prices but
-     *       NOT finance P&amp;L upload rows (PR #547 fix).</li>
+     *       {@code canViewPrices} so sales_manager (finance=r, NOT rw) sees
+     *       procurement prices but NOT finance P&amp;L upload rows (PR #615 fix).
+     *       Gate requires {@code finance:read_write} — sales_manager with only
+     *       {@code finance:read} does NOT pass this gate.</li>
      * </ul>
      *
      * <p>Callers must ensure this method is only invoked when at least one of
