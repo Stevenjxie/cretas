@@ -6,11 +6,13 @@ import com.cretas.aims.dto.bom.UpdateBomRecipeRequest;
 import com.cretas.aims.entity.RawMaterialType;
 import com.cretas.aims.entity.bom.BomRecipe;
 import com.cretas.aims.entity.bom.BomRecipeItem;
+import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.exception.EntityNotFoundException;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.repository.bom.BomRecipeItemRepository;
 import com.cretas.aims.repository.bom.BomRecipeRepository;
 import com.cretas.aims.service.bom.BomRecipeService;
+import com.cretas.aims.service.uom.MaterialUomConverter;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
@@ -54,6 +56,7 @@ public class BomRecipeServiceImpl implements BomRecipeService {
     private final BomRecipeRepository recipeRepo;
     private final BomRecipeItemRepository itemRepo;
     private final RawMaterialTypeRepository materialTypeRepo;
+    private final MaterialUomConverter materialUomConverter;
 
     @Override
     @Transactional
@@ -293,6 +296,14 @@ public class BomRecipeServiceImpl implements BomRecipeService {
             throw new IllegalStateException(
                     "只有 DRAFT 状态可改 item; 当前 status=" + recipe.getStatus());
         }
+        // T159-B R3: UoM dimension guard on update path.
+        // Look up the live material name (for 防呆 message) + canonical unit via item's materialTypeId.
+        if (dto.getUnit() != null && !dto.getUnit().isBlank()) {
+            RawMaterialType mt = materialTypeRepo.findById(item.getMaterialTypeId()).orElse(null);
+            if (mt != null) {
+                checkBomUnitCompatible(mt, dto.getUnit());
+            }
+        }
         applyDtoToItem(dto, item);
         item = itemRepo.save(item);
         recipe.setItems(itemRepo.findByRecipeIdOrderBySortOrderAsc(recipe.getId()));
@@ -352,6 +363,9 @@ public class BomRecipeServiceImpl implements BomRecipeService {
         }
         item.setMaterialName(mt.get().getName());
 
+        // T159-B R3: UoM dimension guard at BOM write time.
+        checkBomUnitCompatible(mt.get(), dto.getUnit());
+
         applyDtoToItem(dto, item);
         return item;
     }
@@ -402,6 +416,33 @@ public class BomRecipeServiceImpl implements BomRecipeService {
             recipe.setTotalCost(recipe.getTotalMaterialCost().add(labor).add(overhead));
         } else {
             recipe.setTotalCost(null);
+        }
+    }
+
+    /**
+     * T159-B R3: 防呆 — 校验 BOM 单位与原料主数据规范单位的计量维度.
+     *
+     * <p>传入已加载的 {@link RawMaterialType} (caller 已确认非 null) 和 dtoUnit.
+     * 调用 {@link MaterialUomConverter#isWriteUnitCompatible} 判断是否跨维度.
+     * 如不兼容则抛 {@link BusinessException} 并附上 4-位一体防呆消息.
+     *
+     * @param material 原料主数据 (非 null)
+     * @param dtoUnit  BOM DTO 中的单位字段 (可 null/blank, 会被 isWriteUnitCompatible 放行)
+     */
+    private void checkBomUnitCompatible(RawMaterialType material, String dtoUnit) {
+        if (dtoUnit == null || dtoUnit.isBlank()) {
+            return;   // fail-OPEN: 空单位留后验证
+        }
+        if (!materialUomConverter.isWriteUnitCompatible(material.getId(), dtoUnit)) {
+            String materialName = material.getName() != null ? material.getName() : material.getId();
+            String canonicalUnit = material.getUnit() != null ? material.getUnit() : "?";
+            throw new BusinessException(409,
+                    String.format("「%s」BOM单位(%s)与原料主数据单位(%s)计量维度不符，" +
+                                    "请改为同维度单位（如该原料按%s计量）",
+                            materialName, dtoUnit, canonicalUnit, canonicalUnit))
+                    .withHint(String.format("请将BOM单位改为与「%s」主数据单位(%s)同维度的单位",
+                            materialName, canonicalUnit))
+                    .withSeverity("BLOCKING");
         }
     }
 

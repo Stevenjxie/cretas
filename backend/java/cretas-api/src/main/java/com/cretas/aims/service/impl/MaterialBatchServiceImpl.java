@@ -13,6 +13,7 @@ import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.MaterialBatchAdjustment;
 import com.cretas.aims.entity.MaterialConsumption;
 import com.cretas.aims.entity.ProductionPlanBatchUsage;
+import com.cretas.aims.entity.RawMaterialType;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.exception.ResourceNotFoundException;
@@ -154,6 +155,10 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
     @Autowired
     private com.cretas.aims.service.factory.WarehouseResolver warehouseResolver;
 
+    /** T159-B R4: 写入时维度单位校验 (optional — null → fail-open). */
+    @Autowired(required = false)
+    private com.cretas.aims.service.uom.MaterialUomConverter materialUomConverter;
+
     /** Sprint 6 W2-B: 数据权限解析器 (optional). */
     @Autowired(required = false)
     private DataScopeResolver dataScopeResolver;
@@ -202,6 +207,9 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
         // 验证并获取原材料类型
         var materialType = materialTypeRepository.findById(request.getMaterialTypeId())
             .orElseThrow(() -> new ResourceNotFoundException("原材料类型不存在"));
+
+        // T159-B R4: UoM dimension guard at 入库 (receipt) write time.
+        checkInboundUnitCompatible(materialType, request.getQuantityUnit());
 
         // 创建批次
         MaterialBatch batch = materialBatchMapper.toEntity(request, factoryId, userId.longValue());
@@ -276,6 +284,31 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
      * - MANUAL_ADJUST: 必填 remark (notes)
      * - 其他类型: sourceDocId 必填, 且验证单据存在
      */
+    /**
+     * T159-B R4: 防呆 — 校验入库单位与原料主数据规范单位的计量维度.
+     *
+     * <p>如 {@code materialUomConverter} 未注入 (旧测试环境) → fail-open.
+     * 如 {@code quantityUnit} 为空 → fail-open (兼容未填单位的存量数据).
+     *
+     * @param materialType  已加载的原料主数据
+     * @param quantityUnit  入库请求中的单位
+     */
+    private void checkInboundUnitCompatible(RawMaterialType materialType, String quantityUnit) {
+        if (materialUomConverter == null) return;   // fail-OPEN: converter not wired
+        if (quantityUnit == null || quantityUnit.isBlank()) return;  // fail-OPEN: unit missing
+        if (!materialUomConverter.isWriteUnitCompatible(materialType.getId(), quantityUnit)) {
+            String materialName = materialType.getName() != null ? materialType.getName() : materialType.getId();
+            String canonicalUnit = materialType.getUnit() != null ? materialType.getUnit() : "?";
+            throw new BusinessException(409,
+                    String.format("「%s」入库单位(%s)与原料主数据单位(%s)计量维度不符，" +
+                                    "请改为同维度单位（如该原料按%s计量）",
+                            materialName, quantityUnit, canonicalUnit, canonicalUnit))
+                    .withHint(String.format("请将入库单位改为与「%s」主数据单位(%s)同维度的单位",
+                            materialName, canonicalUnit))
+                    .withSeverity("BLOCKING");
+        }
+    }
+
     private void validateSourceDoc(CreateMaterialBatchRequest request) {
         String type = request.getSourceDocType();
         String id = request.getSourceDocId();

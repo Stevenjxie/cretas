@@ -219,9 +219,8 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             if (item.getMaterialTypeId() == null || item.getStandardQuantity() == null) {
                 continue;
             }
-            String materialName = item.getMaterialName() != null && !item.getMaterialName().isBlank()
-                    ? item.getMaterialName()
-                    : ("原料 " + item.getMaterialTypeId());
+            // T159-B Change4: prefer live RawMaterialType.name over BOM snapshot (snapshot may be stale).
+            String materialName = resolveLiveMaterialName(item.getMaterialTypeId(), item.getMaterialName());
 
             // 单位需求 (已含出成率: standardQuantity / (yieldRate/100)), 单位 = BOM unit (e.g. g)
             BigDecimal perUnitRequired = item.getActualQuantity();
@@ -297,6 +296,34 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
      * <p>各批次单位混用时取最常见的并记 warning. 无可用批次时回退 RawMaterialType.unit
      * (无库存场景, 后续 available=0 仍会正确判短缺).
      */
+    /**
+     * T159-B Change4: 优先从 RawMaterialType 主数据读取原料真实名称, BOM 快照作 fallback.
+     *
+     * <p>BOM 快照 (item.getMaterialName()) 在重命名后可能陈旧 (例如"气调盒"变更为"吸塑盒").
+     * 使用主数据真名可以让 UNCONVERTIBLE 错误消息向用户展示正确的原料名, 减少误导.
+     *
+     * @param materialTypeId 原料类型 ID
+     * @param snapshotName   BOM 快照名称 (fallback)
+     * @return 优先返回主数据真名; 快照名次选; 兜底 "原料 {id}"
+     */
+    private String resolveLiveMaterialName(String materialTypeId, String snapshotName) {
+        if (rawMaterialTypeRepository != null && materialTypeId != null) {
+            try {
+                var mt = rawMaterialTypeRepository.findById(materialTypeId).orElse(null);
+                if (mt != null && mt.getName() != null && !mt.getName().isBlank()) {
+                    return mt.getName();
+                }
+            } catch (Exception e) {
+                log.debug("[T159] 读取原料名失败 {} ({})", materialTypeId, e.getMessage());
+            }
+        }
+        // Fallback to BOM snapshot
+        if (snapshotName != null && !snapshotName.isBlank()) {
+            return snapshotName;
+        }
+        return "原料 " + (materialTypeId != null ? materialTypeId : "?");
+    }
+
     private String resolveMaterialStockUnit(String factoryId, String materialTypeId) {
         if (materialTypeId == null) {
             return null;

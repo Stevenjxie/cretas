@@ -127,9 +127,8 @@ public class BomExpansionService {
 
             MaterialRequirement req = new MaterialRequirement();
             req.setMaterialTypeId(item.getMaterialTypeId());
-            req.setMaterialTypeName(
-                    item.getMaterialName() != null ? item.getMaterialName() : item.getMaterialTypeId()
-            );
+            // T159-B Change4: prefer live RawMaterialType.name over BOM snapshot.
+            req.setMaterialTypeName(resolveLiveMaterialName(item.getMaterialTypeId(), item.getMaterialName()));
             req.setRequiredQuantity(required);
             // BomItem 的"损耗率"概念来自 yieldRate (出成率% → 100-yieldRate = 损耗%)
             // 仅用于展示 (BomExpansionTool / ProductionPlanServiceImpl)，不参与 checkMaterialAvailability 算术
@@ -218,6 +217,26 @@ public class BomExpansionService {
      * 从 BomItem 的出成率 (yieldRate, 0-100%) 推导损耗率 (wastageRate, 0-100%)。
      * 100 - yieldRate = wastageRate (近似)，仅供展示用，不参与库存检查算术。
      */
+    /**
+     * T159-B Change4: 优先从 RawMaterialType 主数据读取原料真实名称, BOM 快照作 fallback.
+     */
+    private String resolveLiveMaterialName(String materialTypeId, String snapshotName) {
+        if (rawMaterialTypeRepository != null && materialTypeId != null) {
+            try {
+                RawMaterialType mt = rawMaterialTypeRepository.findById(materialTypeId).orElse(null);
+                if (mt != null && mt.getName() != null && !mt.getName().isBlank()) {
+                    return mt.getName();
+                }
+            } catch (Exception e) {
+                log.debug("[T159] 读取原料名失败 {} ({})", materialTypeId, e.getMessage());
+            }
+        }
+        if (snapshotName != null && !snapshotName.isBlank()) {
+            return snapshotName;
+        }
+        return materialTypeId != null ? materialTypeId : "?";
+    }
+
     private BigDecimal deriveWastageFromYield(BigDecimal yieldRate) {
         if (yieldRate == null) return null;
         return HUNDRED.subtract(yieldRate).max(BigDecimal.ZERO);
