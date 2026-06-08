@@ -3,6 +3,7 @@ package com.cretas.aims.service;
 import com.cretas.aims.dto.common.PageRequest;
 import com.cretas.aims.dto.common.PageResponse;
 import com.cretas.aims.dto.producttype.ProductTypeDTO;
+import com.cretas.aims.dto.producttype.ProductTypeSuggestionDTO;
 import java.util.List;
 /**
  * 产品类型服务接口
@@ -83,6 +84,27 @@ public interface ProductTypeService {
      */
     String previewGeneratedCode(String factoryId, String productCategory,
                                 String customerId, String relatedCustomer);
+
+    /**
+     * T149: SKU 智能防呆填充 — 按产品名称从历史 SKU 记忆推断填充建议
+     * (大类/单位/一级单位/装箱换算系数).
+     *
+     * <p>匹配策略:
+     * <ol>
+     *   <li>名称相似度: 对输入 name 分词后与同工厂已有产品的 name + baseProductName
+     *       做关键词/子串重叠打分, 取最高分 (超过阈值) 的产品, 返回其大类/单位/一级单位/装箱系数,
+     *       matchedFrom = 该产品名 (透明展示);</li>
+     *   <li>名称无匹配 → 仅按关键词规则推断大类 (单位等留 null, 禁假数据);</li>
+     *   <li>都没把握 → 对应字段返 null (不臆造).</li>
+     * </ol>
+     * 只读, 无任何写副作用.
+     *
+     * @param factoryId        工厂 ID
+     * @param name             产品名称 (驱动匹配)
+     * @param productCategory  当前已选大类 (可空, 用作 tie-break / 兜底, 不强制)
+     * @return 填充建议 (各字段无把握时为 null)
+     */
+    ProductTypeSuggestionDTO suggestDefaults(String factoryId, String name, String productCategory);
      /**
      * 初始化默认产品类型
       */

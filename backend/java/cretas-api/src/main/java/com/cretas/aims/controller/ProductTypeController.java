@@ -308,6 +308,24 @@ public class ProductTypeController {
     }
 
     /**
+     * T149: SKU 智能防呆填充 — 按产品名称从历史 SKU 记忆推断填充建议
+     * (大类/单位/一级单位/装箱换算系数). 只读, 前端输名称后实时调用,
+     * 仅回填用户尚未手动设置的字段, 全部可被用户覆盖.
+     * 无把握的字段返 null (禁假数据).
+     */
+    @GetMapping("/suggest")
+    @Operation(summary = "智能填充建议", description = "按产品名称从历史 SKU 记忆推断 大类/单位/一级单位/装箱换算 建议, 只读")
+    public ApiResponse<com.cretas.aims.dto.producttype.ProductTypeSuggestionDTO> suggestDefaults(
+            @PathVariable @Parameter(description = "工厂ID") String factoryId,
+            @RequestParam(required = false) @Parameter(description = "产品名称 (驱动匹配)") String name,
+            @RequestParam(required = false) @Parameter(description = "当前已选大类 (可空, 兜底用)") String productCategory) {
+        log.info("智能填充建议: factoryId={}, name={}, productCategory={}", factoryId, name, productCategory);
+        com.cretas.aims.dto.producttype.ProductTypeSuggestionDTO result =
+                productTypeService.suggestDefaults(factoryId, name, productCategory);
+        return ApiResponse.success(result);
+    }
+
+    /**
      * 初始化默认产品类型
      */
     @RequirePermission({"production:read_write", "rd:read_write"})

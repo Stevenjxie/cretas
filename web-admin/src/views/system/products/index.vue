@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, reactive } from 'vue';
+import { ref, computed, onMounted, reactive, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { useAuthStore } from '@/store/modules/auth';
 import ConceptDisambiguationAlert from '@/components/common/ConceptDisambiguationAlert.vue';
@@ -350,8 +350,103 @@ function handleCodeInput() {
 
 // 大类变化 (含 tab 默认值与下拉切换) → 刷新预览
 function handleCategoryChange() {
+  // T149: 用户手动改大类 → 标记, 智能填充不再覆盖大类
+  categoryManuallyEdited.value = true;
   refreshCodePreview();
 }
+
+// ==================== T149: SKU 智能防呆填充 (名称→大类/单位/装箱 历史记忆) ====================
+// 输产品名称后, 调用只读 /suggest 端点按历史 SKU 记忆推断默认值,
+// 仅回填用户尚未手动设置的字段 (非覆盖), 全部仍可被用户覆盖.
+
+// 手动编辑追踪标志 — 一旦用户手动改过, 智能填充不再覆盖该字段
+const categoryManuallyEdited = ref(false);
+const unitManuallyEdited = ref(false);
+const level1UnitManuallyEdited = ref(false);
+const boxCoefManuallyEdited = ref(false);
+
+// 智能填充命中提示 (展示匹配来源产品名)
+const suggestHint = ref('');
+let suggestTimer: ReturnType<typeof setTimeout> | null = null;
+
+function markUnitEdited() { unitManuallyEdited.value = true; }
+function markLevel1UnitEdited() { level1UnitManuallyEdited.value = true; }
+function markBoxCoefEdited() { boxCoefManuallyEdited.value = true; }
+
+function resetSuggestFlags() {
+  categoryManuallyEdited.value = false;
+  unitManuallyEdited.value = false;
+  level1UnitManuallyEdited.value = false;
+  boxCoefManuallyEdited.value = false;
+  suggestHint.value = '';
+}
+
+interface SuggestResult {
+  productCategory?: string | null;
+  unit?: string | null;
+  level1Unit?: string | null;
+  boxConversionCoefficient?: number | null;
+  matchedFrom?: string | null;
+}
+
+async function fetchSuggest() {
+  // 仅新增模式; 编辑模式不自动改用户既有数据
+  if (isEditing.value || !factoryId.value) return;
+  const name = (formData.name || '').trim();
+  if (!name) { suggestHint.value = ''; return; }
+  try {
+    const res = await get<SuggestResult>(`/${factoryId.value}/product-types/suggest`, {
+      params: { name, productCategory: formData.productCategory || undefined },
+    });
+    if (!res.success || !res.data) { suggestHint.value = ''; return; }
+    const s = res.data;
+    let filledAny = false;
+
+    // 大类: 仅当用户未手动改过 (仍是 tab 默认/未触碰) 时回填
+    if (s.productCategory && !categoryManuallyEdited.value && formData.productCategory !== s.productCategory) {
+      formData.productCategory = s.productCategory as ProductCategory;
+      refreshCodePreview(); // 大类变化需刷新编号预览
+      filledAny = true;
+    }
+    // 单位 (二级): 仅当为空且用户未手动改过
+    if (s.unit && !unitManuallyEdited.value && !formData.unit) {
+      formData.unit = s.unit;
+      filledAny = true;
+    }
+    // 一级单位: 仅当为空且未手动改过
+    if (s.level1Unit && !level1UnitManuallyEdited.value && !formData.level1Unit) {
+      formData.level1Unit = s.level1Unit;
+      filledAny = true;
+    }
+    // 装箱换算系数: 仅当为空且未手动改过
+    if (s.boxConversionCoefficient != null && !boxCoefManuallyEdited.value
+        && (formData.boxConversionCoefficient == null || formData.boxConversionCoefficient === undefined)) {
+      formData.boxConversionCoefficient = s.boxConversionCoefficient;
+      filledAny = true;
+    }
+
+    // 命中提示 (仅名称匹配到历史产品时, matchedFrom 才有值)
+    suggestHint.value = (filledAny && s.matchedFrom)
+      ? `已按历史产品「${s.matchedFrom}」匹配，可修改`
+      : '';
+  } catch {
+    // 静默: 建议失败不影响录入, 不编造默认值
+    suggestHint.value = '';
+  }
+}
+
+// 名称输入 debounce 触发智能填充 (仅新增)
+function handleNameInput() {
+  if (isEditing.value) return;
+  if (suggestTimer) clearTimeout(suggestTimer);
+  suggestTimer = setTimeout(fetchSuggest, 400);
+}
+
+// 名称变化也用 watch 兜底 (AI 填充 / 程序化赋值场景)
+watch(() => formData.name, () => {
+  if (!dialogVisible.value || isEditing.value) return;
+  handleNameInput();
+});
 
 // P1-NEW-2: 产品大类=成品时隐藏"商务信息"组 (客户需求 1567-1572s: 成品不展示, 原辅料才展示)
 const visibleExtendedFields = computed<FieldConfig[]>(() => {
@@ -478,6 +573,7 @@ function handleAdd() {
   // T147 Fix2: 重置编号预览状态, 大类已由 resetForm 默认为当前 tab (Fix3) → 触发预览
   codePreview.value = '';
   codeManuallyEdited.value = false;
+  resetSuggestFlags(); // T149: 重置智能填充手动编辑标志
   dialogVisible.value = true;
   refreshCodePreview();
 }
@@ -759,13 +855,20 @@ function handleAiFill(params: TableRow) {
   formData.id = '';
   formData.code = '';
   formData.imageUrl = '';
+  formData.level1Unit = undefined;              // T149: AI 填充不带装箱, 留给智能填充
+  formData.boxConversionCoefficient = undefined;
   dialogTitle.value = '新增产品 (AI 填充)';
   isEditing.value = false;
   // T147 Fix2/Fix3: 重置预览状态并触发 (productCategory 已由 AI 或 activeTab 默认)
   codePreview.value = '';
   codeManuallyEdited.value = false;
+  // T149: AI 已给名称/大类/单位 → 视为已设置, 智能填充只补 AI 没给的空字段 (装箱等)
+  resetSuggestFlags();
+  if (params.productCategory) categoryManuallyEdited.value = true;
+  if (params.unit) unitManuallyEdited.value = true;
   dialogVisible.value = true;
   refreshCodePreview();
+  fetchSuggest(); // 立即按 AI 给的名称补充装箱等历史记忆
 }
 </script>
 
@@ -949,7 +1052,11 @@ function handleAiFill(params: TableRow) {
           <div v-else class="form-tip">选定「产品大类」与「关联客户」后将自动生成编号（如 CPDD0001）；也可手动输入</div>
         </el-form-item>
         <el-form-item label="产品名称" prop="name">
-          <el-input v-model="formData.name" placeholder="请输入产品名称" />
+          <el-input v-model="formData.name" placeholder="请输入产品名称" @input="handleNameInput" />
+          <!-- T149: 智能填充命中提示 (按历史产品匹配出大类/单位/装箱) -->
+          <div v-if="suggestHint && !isEditing" class="form-tip" style="color:#67c23a;">
+            ✨ {{ suggestHint }}
+          </div>
         </el-form-item>
         <!-- T147 Fix3: 新增时默认=当前 tab 的大类 (resetForm/handleAdd 已置), 变化时刷新编号预览 (Fix2) -->
         <el-form-item label="产品大类" prop="productCategory">
@@ -971,6 +1078,7 @@ function handleAiFill(params: TableRow) {
             allow-create
             clearable
             style="width: 100%"
+            @change="markUnitEdited"
           >
             <el-option
               v-for="opt in unitSelectOptions"
@@ -1064,6 +1172,7 @@ function handleAiFill(params: TableRow) {
               allow-create
               clearable
               class="spec-unit-select"
+              @change="markLevel1UnitEdited"
             >
               <el-option
                 v-for="opt in unitSelectOptions"
@@ -1080,6 +1189,7 @@ function handleAiFill(params: TableRow) {
               :controls="false"
               placeholder="换算数"
               class="spec-coef-input"
+              @change="markBoxCoefEdited"
             />
             <el-select
               v-model="formData.unit"
@@ -1088,6 +1198,7 @@ function handleAiFill(params: TableRow) {
               allow-create
               clearable
               class="spec-unit-select"
+              @change="markUnitEdited"
             >
               <el-option
                 v-for="opt in unitSelectOptions"
