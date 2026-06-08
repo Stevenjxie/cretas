@@ -369,6 +369,8 @@ const temperatureZoneManuallyEdited = ref(false);
 const specificationManuallyEdited = ref(false);
 const gramsPerUnitManuallyEdited = ref(false);
 const wipToFgYieldManuallyEdited = ref(false);
+// T153: 基础名称手动编辑追踪 — 一旦用户手输/选择, 自动推导不再覆盖
+const baseProductNameManuallyEdited = ref(false);
 
 // 智能填充命中提示 (展示匹配来源产品名)
 const suggestHint = ref('');
@@ -379,6 +381,8 @@ function markLevel1UnitEdited() { level1UnitManuallyEdited.value = true; }
 function markBoxCoefEdited() { boxCoefManuallyEdited.value = true; }
 function markTemperatureZoneEdited() { temperatureZoneManuallyEdited.value = true; }
 function markSpecificationEdited() { specificationManuallyEdited.value = true; }
+// T153: 用户手输/选择基础名称 → 标记, 自动推导不再覆盖
+function markBaseProductNameEdited() { baseProductNameManuallyEdited.value = true; }
 
 function resetSuggestFlags() {
   categoryManuallyEdited.value = false;
@@ -389,6 +393,7 @@ function resetSuggestFlags() {
   specificationManuallyEdited.value = false;
   gramsPerUnitManuallyEdited.value = false;
   wipToFgYieldManuallyEdited.value = false;
+  baseProductNameManuallyEdited.value = false; // T153
   suggestHint.value = '';
 }
 
@@ -402,6 +407,7 @@ interface SuggestResult {
   specification?: string | null;
   gramsPerUnit?: number | null;
   wipToFgYield?: number | null;
+  baseProductName?: string | null; // T153
   matchedFrom?: string | null;
 }
 
@@ -474,6 +480,11 @@ async function fetchSuggest() {
       formData.wipToFgYield = s.wipToFgYield;
       filledAny = true;
     }
+    // T153: 基础名称 — 仅当为空且未手动改过 (匹配产品带出的优先于本地推导)
+    if (s.baseProductName && !baseProductNameManuallyEdited.value && !formData.baseProductName) {
+      formData.baseProductName = s.baseProductName;
+      filledAny = true;
+    }
 
     // 命中提示 (仅名称匹配到历史产品时, matchedFrom 才有值)
     suggestHint.value = (filledAny && s.matchedFrom)
@@ -497,6 +508,79 @@ watch(() => formData.name, () => {
   if (!dialogVisible.value || isEditing.value) return;
   handleNameInput();
 });
+
+// ==================== T153 Fix A: 规格 (specification) 由结构化字段自动拼 ====================
+// 结构化字段是单一事实源, 规格只是展示文字, 从「标准克重 + 二级单位 + 装箱系数 + 一级单位」拼出.
+// 格式: {克重}g/{二级单位} {装箱系数}{二级单位}/{一级单位} → 如 "80g/盒 20盒/框".
+// 只拼存在的部分: 仅克重→"80g/盒"; 仅装箱→"20盒/框"; 都有→两段空格相连; 都无→空串.
+// 非覆盖: 用户手动改过规格 (specificationManuallyEdited) 后停止自动拼, 用户始终可覆盖.
+function composeSpecification(): string {
+  const grams = formData.gramsPerUnit;
+  const l2 = formData.unit?.trim() || '';
+  const coefRaw = formData.boxConversionCoefficient;
+  const coefNum = typeof coefRaw === 'number' ? coefRaw : parseFloat(String(coefRaw ?? ''));
+  const l1 = (formData.level1Unit as string | undefined)?.trim() || '';
+
+  const parts: string[] = [];
+  // 克重段: 需要 克重 + 二级单位 (如 "80g/盒")
+  const gramsNum = grams != null && String(grams) !== '' ? Number(grams) : NaN;
+  if (!isNaN(gramsNum) && gramsNum > 0 && l2) {
+    parts.push(`${gramsNum}g/${l2}`);
+  }
+  // 装箱段: 需要 装箱系数 + 二级单位 + 一级单位 (如 "20盒/框")
+  if (!isNaN(coefNum) && coefNum > 0 && l2 && l1 && l1 !== l2) {
+    parts.push(`${coefNum}${l2}/${l1}`);
+  }
+  return parts.join(' ');
+}
+
+// 监听结构化字段 → 自动重拼规格 (仅新增, 非覆盖)
+watch(
+  () => [formData.gramsPerUnit, formData.unit, formData.boxConversionCoefficient, formData.level1Unit],
+  () => {
+    if (!dialogVisible.value) return;
+    // 用户手动改过规格 → 停止自动拼 (尊重用户输入)
+    if (specificationManuallyEdited.value) return;
+    const composed = composeSpecification();
+    // 只在能拼出内容时回填; 结构化字段全空时不清掉用户/历史已有规格
+    if (composed && formData.specification !== composed) {
+      formData.specification = composed;
+    }
+  },
+);
+
+// ==================== T153 Fix B1: 基础名称从「产品名称 - 客户前缀 - 规格后缀」自动推导 ====================
+// 去客户前缀 (名称以关联客户名开头时剥离) + 去尾部规格 (如 "120g"/"(...)" 括号规格).
+// best-effort 非覆盖: 用户手动设置过 (baseProductNameManuallyEdited) 则不覆盖; 推导为空则留空 (不过度剥离).
+function deriveBaseProductName(): string {
+  let s = (formData.name || '').trim();
+  if (!s) return '';
+  // 1) 剥客户前缀 (名称以客户名开头)
+  const cust = (formData.relatedCustomer || '').trim();
+  if (cust && s.startsWith(cust)) {
+    s = s.slice(cust.length).trim();
+  }
+  // 2) 剥尾部规格: 末尾「数字+单位」(如 "120g" "1.5kg" "200份")
+  s = s.replace(/\s*\d+(\.\d+)?\s*(g|kg|克|ml|l|份|盒|袋|箱)\b\.?$/i, '').trim();
+  // 3) 剥尾部括号规格 (如 "(去大骨)" "（200g）")
+  s = s.replace(/[（(][^（()）]*[)）]\s*$/, '').trim();
+  return s;
+}
+
+// 监听 产品名称 + 关联客户 → 自动推导基础名称 (仅新增, 非覆盖, 不过度剥离到空)
+watch(
+  () => [formData.name, formData.relatedCustomer],
+  () => {
+    if (!dialogVisible.value || isEditing.value) return;
+    if (baseProductNameManuallyEdited.value) return;
+    if (!formData.name || !formData.name.trim()) return;
+    const derived = deriveBaseProductName();
+    // 不过度剥离: 推导为空 → 留空 (不写空串去覆盖已有值, 也不臆造)
+    if (derived && formData.baseProductName !== derived) {
+      formData.baseProductName = derived;
+    }
+  },
+);
 
 // P1-NEW-2: 产品大类=成品时隐藏"商务信息"组 (客户需求 1567-1572s: 成品不展示, 原辅料才展示)
 const visibleExtendedFields = computed<FieldConfig[]>(() => {
@@ -646,6 +730,11 @@ function handleEdit(row: ProductType) {
   // T148: 装箱换算内联行字段 — 编辑时从 row 回填
   formData.level1Unit = row.level1Unit ?? undefined;
   formData.boxConversionCoefficient = row.boxConversionCoefficient ?? undefined;
+  // T153: 编辑模式下, 已有规格视为「用户已设置」→ 改结构化字段不覆盖既有规格 (仅用户清空后才自动重拼).
+  //       基础名称推导本就跳过编辑模式 (watch isEditing 守卫), 此处显式置标志保持一致.
+  resetSuggestFlags();
+  specificationManuallyEdited.value = !!(row.specification && row.specification.trim());
+  baseProductNameManuallyEdited.value = true;
   dialogVisible.value = true;
 }
 
@@ -916,6 +1005,8 @@ function handleAiFill(params: TableRow) {
   resetSuggestFlags();
   if (params.productCategory) categoryManuallyEdited.value = true;
   if (params.unit) unitManuallyEdited.value = true;
+  // T153: AI 已给规格 → 视为已设置, 自动拼不覆盖; AI 给的名称用于推导基础名称 (未给则留空)
+  if (params.specification) specificationManuallyEdited.value = true;
   dialogVisible.value = true;
   refreshCodePreview();
   fetchSuggest(); // 立即按 AI 给的名称补充装箱等历史记忆
@@ -1174,6 +1265,8 @@ function handleAiFill(params: TableRow) {
             placeholder="如: 好食光卤猪蹄（RN优先显示，留空用产品名）"
             clearable
             style="width: 100%"
+            @input="markBaseProductNameEdited"
+            @select="markBaseProductNameEdited"
           />
           <div class="form-tip">仅含产品本身名称，不含客户/规格后缀；RN 展示优先用此字段，为空则回退到产品名称</div>
         </el-form-item>

@@ -555,6 +555,7 @@ public class ProductTypeServiceImpl implements ProductTypeService {
                     .specification(emptyToNull(best.getSpecification()))
                     .gramsPerUnit(best.getGramsPerUnit())
                     .wipToFgYield(best.getWipToFgYield())
+                    .baseProductName(emptyToNull(best.getBaseProductName())) // T153: 带入基础名称 (历史未配则 null, 禁假数据)
                     .matchedFrom(best.getName())
                     .build();
         }

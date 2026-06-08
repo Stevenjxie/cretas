@@ -53,6 +53,9 @@ public class ProductTypeSuggestionDTO {
     @Schema(description = "建议半成品出成率 (0~1); 无名称匹配或历史产品未配置时为 null")
     private BigDecimal wipToFgYield;
 
+    @Schema(description = "建议基础名称 (RN 优先展示的干净产品名); 无名称匹配或历史产品未配置时为 null (T153)")
+    private String baseProductName;
+
     @Schema(description = "匹配来源产品名称 (透明展示, 让用户知道按哪条历史记忆匹配); 仅按关键词推断大类或无匹配时为 null")
     private String matchedFrom;
 }
