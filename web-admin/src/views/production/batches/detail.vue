@@ -4,9 +4,9 @@ import { useRoute, useRouter } from 'vue-router';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { get } from '@/api/request';
-import { getBatchWip, getOrderYieldSummary, type WipRowItem, type OrderYieldSummary } from '@/api/processProduction';
+import { getBatchWip, getOrderYieldSummary, getBatchWorkProcessTasks, type WipRowItem, type OrderYieldSummary, type WorkProcessTaskItem } from '@/api/processProduction';
 import { ElMessage } from 'element-plus';
-import { ArrowLeft, Refresh } from '@element-plus/icons-vue';
+import { ArrowLeft, Refresh, User } from '@element-plus/icons-vue';
 import { formatDateTime } from '@/utils/dateFormat';
 import AttachmentList from '@/components/attachment/AttachmentList.vue';
 import AttachmentUploadButton from '@/components/attachment/AttachmentUploadButton.vue';
@@ -42,6 +42,12 @@ const yieldData = ref<any | null>(null);
 // G6/G7 Wave 4: 半成品库存 (WIP) — 每道工序中间品存量 (产出/已领/余额/状态)
 const wipRows = ref<WipRowItem[]>([]);
 
+// T140: 工序任务明细
+const workProcessTasks = ref<WorkProcessTaskItem[]>([]);
+// T140: 工序详情抽屉
+const taskDrawerVisible = ref(false);
+const selectedTask = ref<WorkProcessTaskItem | null>(null);
+
 // 单元 F (F006 REQ-21): 分订单出成率 — 本订单下全部批次聚合 (弹窗惰性加载)
 const orderYieldVisible = ref(false);
 const orderYieldLoading = ref(false);
@@ -57,11 +63,12 @@ async function loadData() {
 
   loading.value = true;
   try {
-    const [batchRes, timelineRes, yieldRes, wipRes] = await Promise.allSettled([
+    const [batchRes, timelineRes, yieldRes, wipRes, tasksRes] = await Promise.allSettled([
       get(`/${factoryId.value}/processing/batches/${batchId.value}`),
       get(`/${factoryId.value}/processing/batches/${batchId.value}/timeline`),
       get(`/${factoryId.value}/production/batches/${batchId.value}/yield`),
-      getBatchWip(factoryId.value, batchId.value)
+      getBatchWip(factoryId.value, batchId.value),
+      getBatchWorkProcessTasks(factoryId.value, batchId.value)
     ]);
 
     if (batchRes.status === 'fulfilled' && batchRes.value.success) {
@@ -89,6 +96,13 @@ async function loadData() {
       wipRows.value = wipRes.value.data;
     } else {
       wipRows.value = [];
+    }
+
+    // T140: 工序任务 (无则空数组 → 工序区显"暂未生成工序任务", 诚实空态)
+    if (tasksRes.status === 'fulfilled' && tasksRes.value.success && Array.isArray(tasksRes.value.data)) {
+      workProcessTasks.value = tasksRes.value.data;
+    } else {
+      workProcessTasks.value = [];
     }
   } catch (error) {
     // Interceptor already shows specific sticky toast for ApiError.
@@ -441,6 +455,34 @@ const efficiencyDisplay = computed(() =>
   isCrossUnit.value ? '跨单位不可比' : formatPercent(batch.value?.efficiency));
 const unitCostDisplay = computed(() =>
   isCrossUnit.value ? '跨单位不可比' : formatCost(batch.value?.unitCost));
+
+// T140: 工序任务 helpers
+function getTaskStatusText(status: string): string {
+  const map: Record<string, string> = {
+    PENDING: '待开工',
+    IN_PROGRESS: '进行中',
+    COMPLETED: '已完工',
+    SKIPPED: '已跳过',
+    CANCELLED: '已取消'
+  };
+  return map[status?.toUpperCase()] || status || '-';
+}
+
+function getTaskStatusType(status: string): 'info' | 'primary' | 'success' | 'warning' | 'danger' {
+  const map: Record<string, 'info' | 'primary' | 'success' | 'warning' | 'danger'> = {
+    PENDING: 'info',
+    IN_PROGRESS: 'primary',
+    COMPLETED: 'success',
+    SKIPPED: 'warning',
+    CANCELLED: 'danger'
+  };
+  return map[status?.toUpperCase()] || 'info';
+}
+
+function openTaskDrawer(task: WorkProcessTaskItem) {
+  selectedTask.value = task;
+  taskDrawerVisible.value = true;
+}
 
 function getTimelineIcon(type: string) {
   const map: Record<string, string> = {
@@ -951,7 +993,61 @@ function getTimelineIcon(type: string) {
           </el-table>
         </el-card>
 
-        <!-- Timeline -->
+        <!-- T140: 工序明细 section (from WorkProcessTask list) -->
+        <el-card shadow="never" class="detail-card process-tasks-card">
+          <template #header>
+            <div class="section-header-row">
+              <span class="section-title">工序明细</span>
+              <span v-if="workProcessTasks.length > 0" class="section-meta">共 {{ workProcessTasks.length }} 道</span>
+            </div>
+          </template>
+          <!-- 诚实空态: 批次未 spawn 工序任务 (转为批次时还未点"生成工序任务") -->
+          <el-empty
+            v-if="workProcessTasks.length === 0"
+            description="暂无工序任务 (批次生产启动后可生成)"
+            :image-size="60"
+          />
+          <div v-else class="process-task-list">
+            <div
+              v-for="task in workProcessTasks"
+              :key="task.id"
+              class="process-task-row"
+              @click="openTaskDrawer(task)"
+            >
+              <!-- 道序号 -->
+              <div class="task-order">
+                <span class="order-badge">{{ task.processOrder }}</span>
+              </div>
+              <!-- 工序名 + 状态 -->
+              <div class="task-main">
+                <span class="task-name">{{ task.processName || ('第' + task.processOrder + '道工序') }}</span>
+                <el-tag
+                  :type="getTaskStatusType(task.status)"
+                  size="small"
+                  class="task-status-tag"
+                >
+                  {{ getTaskStatusText(task.status) }}
+                </el-tag>
+              </div>
+              <!-- 负责人 (仅 ID 可用, 后端未 join name — 诚实展示 ID 或"已分配") -->
+              <div class="task-assignee">
+                <span v-if="task.assignedTo != null" class="task-assignee-text">
+                  <el-icon style="vertical-align: middle; margin-right: 2px"><User /></el-icon>
+                  负责人 #{{ task.assignedTo }}
+                </span>
+                <span v-else class="task-assignee-empty">未分配</span>
+              </div>
+              <!-- 实际产出 (已完工时显示) -->
+              <div v-if="task.status === 'COMPLETED' && task.actualQuantity != null" class="task-output">
+                产出 {{ formatNum(task.actualQuantity) }} {{ task.outputUnit || task.plannedUnit || '' }}
+              </div>
+              <!-- 箭头 -->
+              <div class="task-arrow">›</div>
+            </div>
+          </div>
+        </el-card>
+
+        <!-- Timeline (T140 fixed: backend returns {time, event, status}; also handle {timestamp, title, action}) -->
         <el-card v-if="timeline.length > 0" shadow="never" class="detail-card">
           <template #header>
             <span class="section-title">生产时间线</span>
@@ -960,17 +1056,24 @@ function getTimelineIcon(type: string) {
             <el-timeline-item
               v-for="(item, index) in timeline"
               :key="index"
-              :type="getTimelineIcon(item.type || item.action)"
-              :timestamp="formatDateTime(item.timestamp || item.createdAt)"
+              :type="getTimelineIcon(item.status || item.type || item.action)"
+              :timestamp="formatDateTime(item.time || item.timestamp || item.createdAt)"
               placement="top"
             >
               <div class="timeline-content">
-                <strong>{{ item.title || item.action || '-' }}</strong>
+                <strong>{{ item.event || item.title || item.action || '-' }}</strong>
                 <p v-if="item.description || item.notes">{{ item.description || item.notes }}</p>
                 <p v-if="item.operatorName" class="timeline-operator">操作人: {{ item.operatorName }}</p>
               </div>
             </el-timeline-item>
           </el-timeline>
+        </el-card>
+        <!-- Fallback: timeline empty (no events yet, batch just created without startTime/endTime) -->
+        <el-card v-else shadow="never" class="detail-card">
+          <template #header>
+            <span class="section-title">生产时间线</span>
+          </template>
+          <el-empty description="暂无时间线记录" :image-size="60" />
         </el-card>
 
         <!-- 附件 (C-ATT-1) — 现场照片 / 出料单据 / 质检报告 -->
@@ -996,6 +1099,70 @@ function getTimelineIcon(type: string) {
         </el-card>
       </div>
     </template>
+
+    <!-- T140: 工序任务详情抽屉 (点击工序行弹出) -->
+    <el-drawer
+      v-model="taskDrawerVisible"
+      :title="selectedTask ? (selectedTask.processName || ('第' + selectedTask.processOrder + '道工序')) + ' 详情' : '工序详情'"
+      direction="rtl"
+      size="420px"
+    >
+      <template v-if="selectedTask">
+        <el-descriptions :column="1" border size="small">
+          <el-descriptions-item label="道序号">第 {{ selectedTask.processOrder }} 道</el-descriptions-item>
+          <el-descriptions-item label="工序名">{{ selectedTask.processName || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="工序类别">{{ selectedTask.processCategory || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="状态">
+            <el-tag :type="getTaskStatusType(selectedTask.status)" size="small">
+              {{ getTaskStatusText(selectedTask.status) }}
+            </el-tag>
+          </el-descriptions-item>
+          <el-descriptions-item label="责任人 ID">
+            <template v-if="selectedTask.assignedTo != null">
+              {{ selectedTask.assignedTo }}
+              <el-text type="info" size="small" style="margin-left: 4px">
+                (后端 join name 待补 — T140-FLAG)
+              </el-text>
+            </template>
+            <span v-else>未分配</span>
+          </el-descriptions-item>
+          <el-descriptions-item label="计划数量">
+            <template v-if="selectedTask.plannedQuantity != null">
+              {{ formatNum(selectedTask.plannedQuantity) }} {{ selectedTask.plannedUnit || '' }}
+            </template>
+            <span v-else>—</span>
+          </el-descriptions-item>
+          <el-descriptions-item label="实际产出">
+            <template v-if="selectedTask.status === 'COMPLETED' && selectedTask.actualQuantity != null">
+              {{ formatNum(selectedTask.actualQuantity) }} {{ selectedTask.outputUnit || selectedTask.plannedUnit || '' }}
+            </template>
+            <span v-else-if="selectedTask.status === 'COMPLETED'">—</span>
+            <span v-else class="text-warning">待报工</span>
+          </el-descriptions-item>
+          <el-descriptions-item label="标准出成率">
+            <template v-if="selectedTask.standardYieldMin != null || selectedTask.standardYieldMax != null">
+              {{ selectedTask.standardYieldMin != null ? formatPercent(selectedTask.standardYieldMin * 100) : '—' }}
+              ~
+              {{ selectedTask.standardYieldMax != null ? formatPercent(selectedTask.standardYieldMax * 100) : '—' }}
+            </template>
+            <span v-else>—</span>
+          </el-descriptions-item>
+          <el-descriptions-item label="计划开始">{{ formatDateTime(selectedTask.plannedStartAt) || '—' }}</el-descriptions-item>
+          <el-descriptions-item label="计划结束">{{ formatDateTime(selectedTask.plannedEndAt) || '—' }}</el-descriptions-item>
+          <el-descriptions-item label="实际开始">{{ formatDateTime(selectedTask.actualStartAt) || '—' }}</el-descriptions-item>
+          <el-descriptions-item label="实际结束">{{ formatDateTime(selectedTask.actualEndAt) || '—' }}</el-descriptions-item>
+          <el-descriptions-item label="耗时">
+            <template v-if="selectedTask.actualMinutes != null">{{ formatDuration(selectedTask.actualMinutes) }}</template>
+            <template v-else-if="selectedTask.estimatedMinutes != null">预计 {{ formatDuration(selectedTask.estimatedMinutes) }}</template>
+            <span v-else>—</span>
+          </el-descriptions-item>
+          <el-descriptions-item label="完成时间">{{ formatDateTime(selectedTask.completedAt) || '—' }}</el-descriptions-item>
+          <el-descriptions-item v-if="selectedTask.notes" label="备注" :span="1">
+            {{ selectedTask.notes }}
+          </el-descriptions-item>
+        </el-descriptions>
+      </template>
+    </el-drawer>
 
     <!-- 单元 F (F006 REQ-21 "以订单的模式呈现…分订单分产品分工序"): 订单整体出成率弹窗 -->
     <el-dialog
@@ -1350,6 +1517,108 @@ function getTimelineIcon(type: string) {
     font-size: 12px;
     color: var(--text-color-placeholder, #C0C4CC);
   }
+}
+
+/* T140: 工序明细 section */
+.process-tasks-card {
+  :deep(.el-card__body) {
+    padding: 0;
+  }
+}
+
+.section-header-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.process-task-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.process-task-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  cursor: pointer;
+  transition: background 0.15s;
+  border-bottom: 1px solid var(--border-color-lighter, #ebeef5);
+
+  &:last-child {
+    border-bottom: none;
+  }
+
+  &:hover {
+    background: var(--el-fill-color-light, #f5f7fa);
+  }
+}
+
+.task-order {
+  flex-shrink: 0;
+}
+
+.order-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--el-color-primary-light-9, #ecf5ff);
+  color: var(--el-color-primary, #409eff);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.task-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.task-name {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-color-primary, #303133);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-status-tag {
+  flex-shrink: 0;
+}
+
+.task-assignee {
+  flex-shrink: 0;
+  font-size: 13px;
+}
+
+.task-assignee-text {
+  color: var(--text-color-secondary, #606266);
+}
+
+.task-assignee-empty {
+  color: var(--text-color-placeholder, #c0c4cc);
+  font-size: 12px;
+}
+
+.task-output {
+  flex-shrink: 0;
+  font-size: 13px;
+  color: #67C23A;
+  font-weight: 500;
+}
+
+.task-arrow {
+  flex-shrink: 0;
+  font-size: 18px;
+  color: var(--text-color-placeholder, #c0c4cc);
+  line-height: 1;
 }
 
 @media (max-width: 1200px) {
