@@ -15,15 +15,16 @@ import type { FieldConfig } from '@/config/entityFieldConfigs';
 
 // T137: 计量单位字典 — 从 /system-config/units 加载, 供一级单位/二级单位下拉用
 const unitDictOptions = ref<{ label: string; value: string }[]>([]);
-// 静态兜底列表 (API 为空或加载失败时使用)
+// 静态兜底列表 (API 为空或加载失败时使用) — common-first 顺序, 含 框 (六扇门规格用)
 const UNIT_FALLBACK: { label: string; value: string }[] = [
+  { label: '盒', value: '盒' },
+  { label: '份', value: '份' },
   { label: '筐', value: '筐' },
+  { label: '框', value: '框' },
   { label: '箱', value: '箱' },
   { label: '件', value: '件' },
   { label: '袋', value: '袋' },
   { label: '桶', value: '桶' },
-  { label: '盒', value: '盒' },
-  { label: '份', value: '份' },
   { label: '瓶', value: '瓶' },
   { label: 'kg', value: 'kg' },
   { label: '克', value: '克' },
@@ -53,13 +54,20 @@ async function loadUnitDict() {
   }
 }
 
-// T137: 转换数 placeholder 动态显示实际单位名 ("1 筐 = ? 盒 填 10")
+// T137: 转换数 placeholder 动态显示实际单位名 ("1 筐 = ? 盒 填 20")
 const conversionPlaceholder = computed(() => {
   const l1 = (formData.level1Unit as string | undefined)?.trim();
   const l2 = formData.unit?.trim();
-  if (l1 && l2) return `1 ${l1} = ? ${l2}（如 1筐=10盒 填 10）`;
-  if (l1) return `1 ${l1} = ? 二级单位（如 1筐=10盒 填 10）`;
-  return '先填一级单位，再填换算数（如 1筐=10盒 填 10）';
+  if (l1 && l2) return `1 ${l1} = ? ${l2}（如 1筐=20盒 填 20）`;
+  if (l1) return `1 ${l1} = ? 二级单位（如 1筐=20盒 填 20）`;
+  return '先填一级单位，再填换算数（如 1筐=20盒 填 20）';
+});
+
+// T146: 标准克重 placeholder — 动态替换二级单位名 (如 "每盒多少克")
+const gramsPerUnitPlaceholder = computed(() => {
+  const l2 = formData.unit?.trim();
+  if (l2) return `每${l2}多少克（如 1${l2}=120克 填 120）`;
+  return '每二级单位多少克（如 1盒=120克 填 120），末道报工折算用';
 });
 
 // 产品扩展字段 — 添加新字段只需在此数组加一行
@@ -68,15 +76,18 @@ const conversionPlaceholder = computed(() => {
 // T137: level1Unit 改为 dict-backed el-select (type:'select' + 动态 options)
 const productExtendedFields = computed<FieldConfig[]>(() => [
   // ---- 规格信息 (成品/原料均显示) ----
+  // 一级单位 = 大包装（如 筐、箱），二级单位 = 最小计量（如 盒），在下方 unit 字段已配
   { key: 'level1Unit', label: '一级单位', type: 'select', group: '规格信息', order: 1,
-    placeholder: '选择或输入一级单位（如 筐、箱）',
+    placeholder: '大包装单位（如 筐、框、箱），与下方换算数联用',
     allowCreate: true,
     options: unitSelectOptions.value },
-  { key: 'boxConversionCoefficient', label: '一级→二级转换数', type: 'decimal', group: '规格信息', precision: 4, order: 2,
+  // T146 Fix1: label 缩短为「装箱换算」(5字), 防止长标签在 label-width 内折行"数"乱字
+  { key: 'boxConversionCoefficient', label: '装箱换算', type: 'decimal', group: '规格信息', precision: 4, order: 2,
     span: 24,
     placeholder: conversionPlaceholder.value },
+  // T146 Fix4: gramsPerUnit placeholder 动态替换二级单位名 (如 "每盒多少克")
   { key: 'gramsPerUnit', label: '标准克重', type: 'decimal', group: '规格信息', precision: 2, suffix: '克', order: 3,
-    placeholder: '克/份，末道报工折算用（留空=无标准）' },
+    placeholder: gramsPerUnitPlaceholder.value },
   { key: 'wipToFgYield', label: '半成品出成率', type: 'decimal', group: '规格信息', precision: 4, order: 4,
     placeholder: '0~1，如 0.55=55%（留空按 1:1）' },
   // ---- 商务信息 (成品隐藏, 原辅料显示) ----
@@ -237,16 +248,26 @@ const formData = reactive<Partial<ProductType>>({
   notes: ''
 });
 
-// T123: 两级单位实时转换提示 ("1筐=10盒" 等)
-const unitConversionHint = computed(() => {
+// T123 / T146 Fix2: 两级单位实时转换提示 ("1筐=20盒" 等)
+// Fix2: 当 l1 === l2 (如两者都是 "盒") 时, 预览是无意义的废话 "1盒=20盒" → 改为 ⚠️ 警告
+const unitConversionHint = computed<{ type: 'ok' | 'warning' | ''; text: string }>(() => {
   const l1 = (formData.level1Unit as string | undefined)?.trim();
   const coef = formData.boxConversionCoefficient;
   const l2 = formData.unit?.trim();
+  if (l1 && l2 && l1 === l2) {
+    // 一级和二级单位相同 → 废话预览, 改为警告提示
+    return {
+      type: 'warning',
+      text: `⚠️ 一级单位应与二级单位不同（一级是大包装如「筐」，二级是最小单位如「盒」）`,
+    };
+  }
   if (l1 && coef && l2) {
     const n = typeof coef === 'number' ? coef : parseFloat(String(coef));
-    if (!isNaN(n) && n > 0) return `当前: 1 ${l1} = ${n} ${l2}`;
+    if (!isNaN(n) && n > 0) {
+      return { type: 'ok', text: `当前: 1 ${l1} = ${n} ${l2}` };
+    }
   }
-  return '';
+  return { type: '', text: '' };
 });
 
 // T123: baseProductName autocomplete 建议 (从已加载产品名/baseProductName 去重)
@@ -881,7 +902,7 @@ function handleAiFill(params: TableRow) {
               :value="opt.value"
             />
           </el-select>
-          <div class="form-tip">二级单位是最小计量单位（如「盒」）；一级单位是大包装（如「筐=10盒」），在规格信息中配置</div>
+          <div class="form-tip">二级单位 = 最小计量（如「盒」120克/盒）；大包装一级单位（如「筐」1筐=20盒）在下方「规格信息」中配置</div>
         </el-form-item>
         <el-form-item label="规格" prop="specification">
           <el-input v-model="formData.specification" placeholder="请输入规格（如：310g*42袋/箱）" />
@@ -955,10 +976,13 @@ function handleAiFill(params: TableRow) {
           :columns="2"
           label-width="120px"
         />
-        <!-- T123: 两级单位实时换算提示 — 当 level1Unit + boxConversionCoefficient + unit 均填时显示 -->
-        <el-form-item v-if="unitConversionHint" label=" ">
-          <el-tag type="success" effect="plain">
-            {{ unitConversionHint }}
+        <!-- T123 / T146 Fix2: 两级单位实时换算提示 — ok 时显示绿 tag, warning 时显示橙 tag (一级=二级废话预览守卫) -->
+        <el-form-item v-if="unitConversionHint.type" label=" ">
+          <el-tag
+            :type="unitConversionHint.type === 'warning' ? 'warning' : 'success'"
+            effect="plain"
+          >
+            {{ unitConversionHint.text }}
           </el-tag>
         </el-form-item>
       </el-form>
