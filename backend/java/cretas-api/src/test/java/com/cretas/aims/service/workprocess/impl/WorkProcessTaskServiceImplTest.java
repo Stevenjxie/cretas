@@ -2,9 +2,11 @@ package com.cretas.aims.service.workprocess.impl;
 
 import com.cretas.aims.dto.WorkProcessTaskDTO;
 import com.cretas.aims.entity.ProductWorkProcess;
+import com.cretas.aims.entity.User;
 import com.cretas.aims.entity.WorkProcess;
 import com.cretas.aims.entity.workprocess.WorkProcessTask;
 import com.cretas.aims.repository.ProductWorkProcessRepository;
+import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.repository.WorkProcessRepository;
 import com.cretas.aims.repository.workprocess.WorkProcessTaskRepository;
 import org.junit.jupiter.api.DisplayName;
@@ -44,6 +46,9 @@ class WorkProcessTaskServiceImplTest {
 
     @Mock
     private WorkProcessRepository workProcessRepository;
+
+    @Mock
+    private UserRepository userRepository;
 
     @InjectMocks
     private WorkProcessTaskServiceImpl service;
@@ -284,6 +289,7 @@ class WorkProcessTaskServiceImplTest {
                 .thenReturn(List.of(template1, template2));
         when(workProcessRepository.findByFactoryIdAndIdIn(eq(FACTORY_ID), any()))
                 .thenReturn(List.of(def1, def2));
+        when(userRepository.findByIdIn(any())).thenReturn(List.of());  // T142: stub name lookup
 
         @SuppressWarnings("unchecked")
         ArgumentCaptor<List<WorkProcessTask>> captor = ArgumentCaptor.forClass(List.class);
@@ -338,6 +344,7 @@ class WorkProcessTaskServiceImplTest {
                 .thenReturn(List.of(t1, t2, t3));
         when(workProcessRepository.findByFactoryIdAndIdIn(eq(FACTORY_ID), any()))
                 .thenReturn(List.of());  // no definitions needed for filter logic
+        when(userRepository.findByIdIn(any())).thenReturn(List.of());  // T142: stub name lookup
 
         List<WorkProcessTaskDTO> result = service.listByBatch(FACTORY_ID, batchId, 1615L);
 
@@ -363,6 +370,7 @@ class WorkProcessTaskServiceImplTest {
                 .thenReturn(List.of(t1, t2, t3));
         when(workProcessRepository.findByFactoryIdAndIdIn(eq(FACTORY_ID), any()))
                 .thenReturn(List.of());
+        // all assignedTo=null → loadAssigneeNames returns early (no ids to query), no stub needed
 
         // worker1 (userId=1311) 查自己的工序 → 全null应返回全部, 不锁死
         List<WorkProcessTaskDTO> result = service.listByBatch(FACTORY_ID, batchId, 1311L);
@@ -383,10 +391,70 @@ class WorkProcessTaskServiceImplTest {
                 .thenReturn(List.of(t1, t2, t3));
         when(workProcessRepository.findByFactoryIdAndIdIn(eq(FACTORY_ID), any()))
                 .thenReturn(List.of());
+        when(userRepository.findByIdIn(any())).thenReturn(List.of());
 
         // 主管不传 assignedTo (null) → 应看到全部工序
         List<WorkProcessTaskDTO> result = service.listByBatch(FACTORY_ID, batchId, null);
 
         assertEquals(3, result.size(), "assignedTo=null 表示主管/不过滤, 应返回全部工序");
+    }
+
+    // ==================== T142: assignedToName batch join ====================
+
+    @Test
+    @DisplayName("T142 listByBatch: assignedTo 有对应 User → assignedToName 透出真实姓名")
+    void listByBatch_exposesAssignedToName() {
+        Long batchId = 300L;
+        WorkProcessTask t1 = makeTask(10L, "wp-x", 1615L);  // 有责任人
+        WorkProcessTask t2 = makeTask(11L, "wp-y", null);   // 未指派
+
+        User user1615 = new User();
+        user1615.setId(1615L);
+        user1615.setFullName("张权");
+        user1615.setUsername("zhangquan");
+
+        when(taskRepository.findByFactoryIdAndProductionBatchIdOrderByProcessOrderAsc(FACTORY_ID, batchId))
+                .thenReturn(List.of(t1, t2));
+        when(workProcessRepository.findByFactoryIdAndIdIn(eq(FACTORY_ID), any()))
+                .thenReturn(List.of());
+        when(userRepository.findByIdIn(any())).thenReturn(List.of(user1615));
+
+        List<WorkProcessTaskDTO> result = service.listByBatch(FACTORY_ID, batchId, null);
+
+        assertEquals(2, result.size());
+        WorkProcessTaskDTO dto1 = result.stream()
+                .filter(d -> Long.valueOf(1615L).equals(d.getAssignedTo()))
+                .findFirst().orElseThrow();
+        assertEquals("张权", dto1.getAssignedToName(),
+                "assignedTo=1615 → assignedToName 应为 fullName '张权'");
+
+        WorkProcessTaskDTO dto2 = result.stream()
+                .filter(d -> d.getAssignedTo() == null)
+                .findFirst().orElseThrow();
+        assertNull(dto2.getAssignedToName(), "assignedTo=null → assignedToName 应为 null");
+    }
+
+    @Test
+    @DisplayName("T142 listByBatch: User 无 fullName → 使用 username 作为 assignedToName fallback")
+    void listByBatch_fallsBackToUsernameWhenFullNameBlank() {
+        Long batchId = 301L;
+        WorkProcessTask t1 = makeTask(20L, "wp-z", 1700L);
+
+        User user1700 = new User();
+        user1700.setId(1700L);
+        user1700.setFullName(null);   // no fullName
+        user1700.setUsername("wangfang");
+
+        when(taskRepository.findByFactoryIdAndProductionBatchIdOrderByProcessOrderAsc(FACTORY_ID, batchId))
+                .thenReturn(List.of(t1));
+        when(workProcessRepository.findByFactoryIdAndIdIn(eq(FACTORY_ID), any()))
+                .thenReturn(List.of());
+        when(userRepository.findByIdIn(any())).thenReturn(List.of(user1700));
+
+        List<WorkProcessTaskDTO> result = service.listByBatch(FACTORY_ID, batchId, null);
+
+        assertEquals(1, result.size());
+        assertEquals("wangfang", result.get(0).getAssignedToName(),
+                "fullName=null → assignedToName 应 fallback 到 username");
     }
 }

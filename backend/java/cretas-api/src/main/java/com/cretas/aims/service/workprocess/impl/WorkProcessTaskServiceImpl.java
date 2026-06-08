@@ -3,12 +3,14 @@ package com.cretas.aims.service.workprocess.impl;
 import com.cretas.aims.dto.WorkProcessTaskDTO;
 import com.cretas.aims.dto.common.PageResponse;
 import com.cretas.aims.entity.ProductWorkProcess;
+import com.cretas.aims.entity.User;
 import com.cretas.aims.entity.WorkProcess;
 import com.cretas.aims.entity.workprocess.WorkProcessTask;
 import com.cretas.aims.entity.workprocess.WorkProcessTask.Status;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.exception.ResourceNotFoundException;
 import com.cretas.aims.repository.ProductWorkProcessRepository;
+import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.repository.WorkProcessRepository;
 import com.cretas.aims.repository.workprocess.WorkProcessTaskRepository;
 import com.cretas.aims.service.workprocess.WorkProcessTaskService;
@@ -25,6 +27,7 @@ import java.time.LocalDateTime;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
@@ -42,6 +45,28 @@ public class WorkProcessTaskServiceImpl implements WorkProcessTaskService {
     private final WorkProcessTaskRepository taskRepository;
     private final ProductWorkProcessRepository productWorkProcessRepository;
     private final WorkProcessRepository workProcessRepository;
+    private final UserRepository userRepository;
+
+    // ==================== T142: batch assignedToName helper ====================
+
+    /**
+     * 批量加载 assignedTo user IDs → 姓名映射 (单次查询, 无 N+1).
+     * 镜像 T135 ProductWorkProcessServiceImpl.listByProduct 中的 workerNameMap 模式。
+     * fullName 优先, 无 fullName 时 fallback 到 username.
+     */
+    private Map<Long, String> loadAssigneeNames(List<WorkProcessTask> tasks) {
+        Set<Long> ids = tasks.stream()
+                .map(WorkProcessTask::getAssignedTo)
+                .filter(id -> id != null)
+                .collect(Collectors.toSet());
+        if (ids.isEmpty()) return Map.of();
+        return userRepository.findByIdIn(ids).stream()
+                .collect(Collectors.toMap(
+                        User::getId,
+                        u -> u.getFullName() != null && !u.getFullName().isBlank()
+                                ? u.getFullName() : u.getUsername()
+                ));
+    }
 
     @Override
     @Transactional
@@ -123,8 +148,11 @@ public class WorkProcessTaskServiceImpl implements WorkProcessTaskService {
         log.info("批次 {} 已 spawn {} 道工序任务 (productType={})",
                 productionBatchId, saved.size(), productTypeId);
 
+        // T142: batch-load assignee names (no N+1); null-safe lookup (assignedTo may be null)
+        Map<Long, String> nameMap = loadAssigneeNames(saved);
         return saved.stream()
-                .map(t -> toDTO(t, definitions.get(t.getWorkProcessId())))
+                .map(t -> toDTO(t, definitions.get(t.getWorkProcessId()),
+                        t.getAssignedTo() != null ? nameMap.get(t.getAssignedTo()) : null))
                 .collect(Collectors.toList());
     }
 
@@ -139,9 +167,12 @@ public class WorkProcessTaskServiceImpl implements WorkProcessTaskService {
         Page<WorkProcessTask> page = taskRepository.findByFilters(
                 factoryId, status, productionBatchId, assignedTo, pageable);
         Map<String, WorkProcess> defs = loadDefinitionsForTasks(factoryId, page.getContent());
+        // T142: batch-load assignee names (no N+1); null-safe lookup (assignedTo may be null)
+        Map<Long, String> nameMap = loadAssigneeNames(page.getContent());
 
         List<WorkProcessTaskDTO> content = page.getContent().stream()
-                .map(t -> toDTO(t, defs.get(t.getWorkProcessId())))
+                .map(t -> toDTO(t, defs.get(t.getWorkProcessId()),
+                        t.getAssignedTo() != null ? nameMap.get(t.getAssignedTo()) : null))
                 .collect(Collectors.toList());
         return PageResponse.of(content, page.getNumber() + 1, page.getSize(), page.getTotalElements());
     }
@@ -162,8 +193,11 @@ public class WorkProcessTaskServiceImpl implements WorkProcessTaskService {
         // assignedTo == null → 主管视图, 不过滤 (返回全部)
 
         Map<String, WorkProcess> defs = loadDefinitionsForTasks(factoryId, tasks);
+        // T142: batch-load assignee names (no N+1); null-safe lookup (assignedTo may be null)
+        Map<Long, String> nameMap = loadAssigneeNames(tasks);
         return tasks.stream()
-                .map(t -> toDTO(t, defs.get(t.getWorkProcessId())))
+                .map(t -> toDTO(t, defs.get(t.getWorkProcessId()),
+                        t.getAssignedTo() != null ? nameMap.get(t.getAssignedTo()) : null))
                 .collect(Collectors.toList());
     }
 
@@ -346,7 +380,27 @@ public class WorkProcessTaskServiceImpl implements WorkProcessTaskService {
         return "非法状态转换 " + from + " → " + to;
     }
 
+    /** Single-task overload used by mutating endpoints (start/complete/skip/updatePlan/getById). */
     private WorkProcessTaskDTO toDTO(WorkProcessTask task, WorkProcess definition) {
+        // T142: single-task path → look up user name in isolation (1 user query max, never N+1 on lists).
+        String assignedToName = null;
+        if (task.getAssignedTo() != null) {
+            assignedToName = userRepository.findByIdIn(List.of(task.getAssignedTo()))
+                    .stream()
+                    .findFirst()
+                    .map(u -> u.getFullName() != null && !u.getFullName().isBlank()
+                            ? u.getFullName() : u.getUsername())
+                    .orElse(null);
+        }
+        return toDTO(task, definition, assignedToName);
+    }
+
+    /**
+     * Core toDTO — used by list paths (passes pre-loaded nameMap to avoid N+1).
+     *
+     * @param assignedToName pre-resolved name (null = not assigned or not found)
+     */
+    private WorkProcessTaskDTO toDTO(WorkProcessTask task, WorkProcess definition, String assignedToName) {
         WorkProcessTaskDTO dto = WorkProcessTaskDTO.builder()
                 .id(task.getId())
                 .factoryId(task.getFactoryId())
@@ -366,6 +420,7 @@ public class WorkProcessTaskServiceImpl implements WorkProcessTaskService {
                 .actualEndAt(task.getActualEndAt())
                 .actualMinutes(task.getActualMinutes())
                 .assignedTo(task.getAssignedTo())
+                .assignedToName(assignedToName)  // T142: enriched name
                 .completedBy(task.getCompletedBy())
                 .completedAt(task.getCompletedAt())
                 .notes(task.getNotes())
