@@ -348,6 +348,41 @@ public class PermissionServiceImpl implements PermissionService {
     /** 财务待审采购单查看权限代码 (Issue #736). */
     public static final String FINANCE_REVIEW_VIEW_PERMISSION = "procurement:finance_review:view";
 
+    /**
+     * GAP-05-C fix (2026-06-09): Critical role+module permission overrides that
+     * bypass L1/L2 DB lookup.
+     *
+     * <p>The {@code platform_role_permissions} table seed ({@code V20260422_01})
+     * uses {@code ON CONFLICT DO NOTHING}, which means stale rows (e.g. an
+     * earlier migration that set {@code finance_manager:finance = "none"}) are
+     * never corrected by later deploys. This caused {@code finance_manager} to
+     * receive 403 on the three-statements APIs (资产负债表/利润表/现金流量表) even
+     * though the hardcoded matrix correctly grants {@code finance:read_write}.
+     *
+     * <p>These overrides apply BEFORE L1/L2 DB lookup, making the code the
+     * authoritative source for business-critical permissions. Each override maps
+     * {@code "roleCode:moduleCode"} → level (legacy {@code read_write/read} format
+     * matching {@code checkAction} signature).
+     *
+     * <p>Only role+module pairs whose correct value is WELL ESTABLISHED by product
+     * design belong here — do NOT add speculative permissions.
+     */
+    private static final Map<String, String> CRITICAL_PERMISSION_OVERRIDES;
+
+    static {
+        Map<String, String> overrides = new HashMap<>();
+        // finance_manager MUST have finance:read_write — they run the three-statement
+        // reports, financial review, and reconciliation. Stale DB rows can't block this.
+        overrides.put("finance_manager:finance", "read_write");
+        // restaurant_owner also has finance:read_write per product design (月对账确认)
+        overrides.put("restaurant_owner:finance", "read_write");
+        // factory_super_admin / platform_admin are already short-circuited above,
+        // but include here as documentation of the invariant.
+        overrides.put("factory_super_admin:finance", "read_write");
+        overrides.put("platform_admin:finance", "read_write");
+        CRITICAL_PERMISSION_OVERRIDES = Collections.unmodifiableMap(overrides);
+    }
+
     @Override
     public boolean hasPermission(User user, String permissionCode) {
         if (user == null || permissionCode == null || permissionCode.isEmpty()) {
@@ -395,8 +430,20 @@ public class PermissionServiceImpl implements PermissionService {
             if (cached != null) return cached;
         }
 
-        // 按 L2 → L1 → hardcoded fallback 顺序解析 permission level
+        // 按 L0(critical override) → L2 → L1 → hardcoded fallback 顺序解析 permission level
         String permType = null;
+
+        // L0: GAP-05-C critical override — bypasses stale DB rows for business-critical
+        // role+module pairs. See CRITICAL_PERMISSION_OVERRIDES javadoc for rationale.
+        String criticalKey = role.name() + ":" + module;
+        String criticalOverride = CRITICAL_PERMISSION_OVERRIDES.get(criticalKey);
+        if (criticalOverride != null) {
+            // Short-circuit: known-correct business design, do not consult DB.
+            boolean critResult = checkAction(criticalOverride, action);
+            resolveCache.put(cacheKey, new long[]{now + CACHE_TTL_MS});
+            resolveResult.put(cacheKey, critResult);
+            return critResult;
+        }
 
         // L2: factory-level override
         if (user.getFactoryId() != null && factoryConfigRepo != null) {
