@@ -59,6 +59,12 @@ public class ProductWorkProcessDTO {
     private String defaultUnit;
     private Integer defaultEstimatedMinutes;
 
+    /**
+     * T135: Read-only display name for the responsible worker (primary assignee).
+     * Populated by listByProduct only; not sent on writes.
+     */
+    private String responsibleWorkerName;
+
     @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss")
     private LocalDateTime createdAt;
 

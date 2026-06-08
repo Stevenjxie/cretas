@@ -3,11 +3,13 @@ package com.cretas.aims.service.impl;
 import com.cretas.aims.dto.ProductWorkProcessDTO;
 import com.cretas.aims.entity.ProductWorkProcess;
 import com.cretas.aims.entity.ProductWorkProcessAssignee;
+import com.cretas.aims.entity.User;
 import com.cretas.aims.entity.WorkProcess;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.exception.ResourceNotFoundException;
 import com.cretas.aims.repository.ProductWorkProcessAssigneeRepository;
 import com.cretas.aims.repository.ProductWorkProcessRepository;
+import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.repository.WorkProcessRepository;
 import com.cretas.aims.service.ProductWorkProcessService;
 import lombok.RequiredArgsConstructor;
@@ -31,6 +33,7 @@ public class ProductWorkProcessServiceImpl implements ProductWorkProcessService 
     private final ProductWorkProcessRepository repository;
     private final WorkProcessRepository workProcessRepository;
     private final ProductWorkProcessAssigneeRepository assigneeRepository;
+    private final UserRepository userRepository;
 
     @Override
     @Transactional
@@ -100,8 +103,28 @@ public class ProductWorkProcessServiceImpl implements ProductWorkProcessService 
         List<Long> pwpIds = associations.stream().map(ProductWorkProcess::getId).collect(Collectors.toList());
         Map<Long, List<Long>> assigneeMap = loadAssigneeIdsForAll(pwpIds);
 
+        // T135: batch-load user names for responsible workers to display on chips
+        Set<Long> workerIds = associations.stream()
+                .map(ProductWorkProcess::getResponsibleWorkerId)
+                .filter(id -> id != null)
+                .collect(Collectors.toSet());
+        Map<Long, String> workerNameMap = workerIds.isEmpty() ? Map.of() :
+                userRepository.findByIdIn(workerIds).stream()
+                        .collect(Collectors.toMap(
+                                User::getId,
+                                u -> u.getFullName() != null && !u.getFullName().isBlank()
+                                        ? u.getFullName() : u.getUsername()
+                        ));
+
         return associations.stream()
-                .map(a -> toDTO(a, wpMap.get(a.getWorkProcessId()), assigneeMap.getOrDefault(a.getId(), List.of())))
+                .map(a -> {
+                    ProductWorkProcessDTO dto = toDTO(a, wpMap.get(a.getWorkProcessId()),
+                            assigneeMap.getOrDefault(a.getId(), List.of()));
+                    if (a.getResponsibleWorkerId() != null) {
+                        dto.setResponsibleWorkerName(workerNameMap.get(a.getResponsibleWorkerId()));
+                    }
+                    return dto;
+                })
                 .collect(Collectors.toList());
     }
 
