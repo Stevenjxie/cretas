@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   View,
   Text,
@@ -12,7 +12,23 @@ import {
   ActivityIndicator,
   Animated,
   Image,
+  Modal,
+  Pressable,
 } from 'react-native';
+// expo-updates: gracefully guarded — null in dev/Expo Go/embedded launch
+let Updates: {
+  updateId?: string | null;
+  createdAt?: Date | null;
+  channel?: string | null;
+  runtimeVersion?: string | null;
+  isEmbeddedLaunch?: boolean;
+} = {};
+try {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  Updates = require('expo-updates');
+} catch (_e) {
+  // expo-updates not available (e.g. bare web); leave empty object
+}
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { useTranslation } from 'react-i18next';
@@ -144,6 +160,17 @@ interface LoginFormViewProps {
   retry: () => void;
 }
 
+// ---- OTA date formatter (local time, 年月日 时:分, zero-padded) ----
+const two = (n: number) => String(n).padStart(2, '0');
+const fmtDate = (d: Date | null | undefined): string => {
+  if (!d) return '—';
+  try {
+    return `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())} ${two(d.getHours())}:${two(d.getMinutes())}`;
+  } catch {
+    return '—';
+  }
+};
+
 const LoginFormView: React.FC<LoginFormViewProps> = ({
   username,
   password,
@@ -167,6 +194,34 @@ const LoginFormView: React.FC<LoginFormViewProps> = ({
 }) => {
   const { t } = useTranslation('auth');
   const { t: tCommon } = useTranslation('common');
+
+  // ---- OTA diagnostics panel state ----
+  const [otaPanelVisible, setOtaPanelVisible] = useState(false);
+  const tapCountRef = useRef(0);
+  const tapTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const handleVersionTap = useCallback(() => {
+    tapCountRef.current += 1;
+    // Reset counter if no tap arrives within 2 seconds
+    if (tapTimerRef.current) clearTimeout(tapTimerRef.current);
+    tapTimerRef.current = setTimeout(() => {
+      tapCountRef.current = 0;
+    }, 2000);
+    if (tapCountRef.current >= 5) {
+      tapCountRef.current = 0;
+      if (tapTimerRef.current) clearTimeout(tapTimerRef.current);
+      setOtaPanelVisible(true);
+    }
+  }, []);
+
+  // ---- OTA data ----
+  const isEmbedded = Updates.isEmbeddedLaunch ?? true;
+  const updateId: string = isEmbedded
+    ? '（开发环境/内置包，无 OTA）'
+    : (Updates.updateId ?? '（开发环境/内置包，无 OTA）');
+  const updateTime: string = isEmbedded ? '—' : fmtDate(Updates.createdAt);
+  const runtimeVersion: string = Updates.runtimeVersion ?? '—';
+  const channel: string = Updates.channel ?? '—';
 
   const renderNetworkStatus = () => {
     if (!networkStatus) {
@@ -326,9 +381,56 @@ const LoginFormView: React.FC<LoginFormViewProps> = ({
           </TouchableOpacity>
         </View>
 
-        {/* 版本号 */}
-        <Text style={styles.versionText}>v{APP_VERSION}</Text>
+        {/* 版本号 — 连点5次弹出 OTA 诊断面板 */}
+        <TouchableOpacity onPress={handleVersionTap} activeOpacity={1}>
+          <Text style={styles.versionText}>v{APP_VERSION}</Text>
+        </TouchableOpacity>
       </ScrollView>
+
+      {/* OTA 诊断面板 */}
+      <Modal
+        visible={otaPanelVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setOtaPanelVisible(false)}
+      >
+        <Pressable
+          style={styles.otaOverlay}
+          onPress={() => setOtaPanelVisible(false)}
+        >
+          <Pressable style={styles.otaPanel} onPress={() => { /* stop propagation */ }}>
+            <Text style={styles.otaPanelTitle}>OTA 更新诊断</Text>
+
+            <View style={styles.otaRow}>
+              <Text style={styles.otaLabel}>更新编号</Text>
+              <Text style={styles.otaValue} selectable>{updateId}</Text>
+            </View>
+
+            <View style={styles.otaRow}>
+              <Text style={styles.otaLabel}>更新时间</Text>
+              <Text style={styles.otaValue}>{updateTime}</Text>
+            </View>
+
+            <View style={styles.otaRow}>
+              <Text style={styles.otaLabel}>runtimeVersion</Text>
+              <Text style={styles.otaValue}>{runtimeVersion}</Text>
+            </View>
+
+            <View style={styles.otaRow}>
+              <Text style={styles.otaLabel}>channel</Text>
+              <Text style={styles.otaValue}>{channel}</Text>
+            </View>
+
+            <TouchableOpacity
+              style={styles.otaCloseButton}
+              onPress={() => setOtaPanelVisible(false)}
+              activeOpacity={0.8}
+            >
+              <Text style={styles.otaCloseButtonText}>关闭</Text>
+            </TouchableOpacity>
+          </Pressable>
+        </Pressable>
+      </Modal>
     </View>
   );
 };
@@ -756,6 +858,75 @@ const styles = StyleSheet.create({
     color: theme.custom.colors.textTertiary,
     fontSize: 12,
     marginTop: 24,
+    paddingVertical: 8,
+  },
+
+  // ===== OTA 诊断面板样式 =====
+  otaOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+  },
+  otaPanel: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    padding: 24,
+    width: '100%',
+    maxWidth: 380,
+    ...Platform.select({
+      ios: {
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.2,
+        shadowRadius: 12,
+      },
+      android: {
+        elevation: 8,
+      },
+    }),
+  },
+  otaPanelTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: theme.custom.colors.text,
+    marginBottom: 20,
+    textAlign: 'center',
+  },
+  otaRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F0F0F0',
+  },
+  otaLabel: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: theme.custom.colors.textSecondary,
+    flexShrink: 0,
+    marginRight: 12,
+  },
+  otaValue: {
+    fontSize: 13,
+    color: theme.custom.colors.text,
+    flex: 1,
+    textAlign: 'right',
+  },
+  otaCloseButton: {
+    marginTop: 20,
+    backgroundColor: '#4a7c2c',
+    borderRadius: 8,
+    height: 44,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  otaCloseButtonText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#FFFFFF',
   },
 });
 
