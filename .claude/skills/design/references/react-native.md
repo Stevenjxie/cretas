@@ -74,3 +74,17 @@ export default function MyScreen() {
 
 `ScreenWrapper` 包含 SafeAreaView + max-width 500 居中。
 
+---
+
+### 低技术素养用户屏幕强制规范
+
+适用角色：operator（操作员）/ warehouse（仓管员）/ quality_inspector（质检员）
+
+设计任何此类屏幕前，**必须先通过 ux-flow Phase 1 门控**：
+- invoke `ui-ux-pro-max` + `expo/building-native-ui`
+- 对照 `.claude/rules/fool-proof-design.md` 5 条规则
+- spec 里产出「UX Flow Analysis」章节（含用户旅程 + 摩擦点清单 + 设计回应）
+
+实现阶段：编辑 `screens/processing/`、`screens/warehouse/`、`screens/quality-inspector/` 下的 `.tsx` 文件时，PostToolUse hook 自动输出 advisory 清单。
+
+详见 `.claude/skills/ux-flow/SKILL.md`。
