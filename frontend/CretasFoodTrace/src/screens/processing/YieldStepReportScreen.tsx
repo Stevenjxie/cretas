@@ -710,6 +710,26 @@ const YieldStepReportScreen: React.FC = () => {
     setEvidencePhotos((prev) => prev.filter((p) => p.uri !== uri));
   }, []);
 
+  // T161 照片标注 hooks — ⚠️必须在早返回(loading/totalSteps/done)之前声明,
+  // 否则 loading→reporting 渲染 hook 数变化 → "Rendered more hooks" 崩溃(2026-06-09 prod闪退根因)
+  const setPhotoLabel = useCallback((uri: string, label: string | null) => {
+    setEvidencePhotos((prev) => prev.map((p) => p.uri === uri ? { ...p, label } : p));
+  }, []);
+
+  const setPhotoNote = useCallback((uri: string, note: string) => {
+    setEvidencePhotos((prev) => prev.map((p) => p.uri === uri ? { ...p, note: note || null } : p));
+  }, []);
+
+  const buildPhotoAnnotations = useCallback(() => {
+    const annotated = evidencePhotos.filter((p) => p.serverUrl && (p.label || p.note));
+    if (annotated.length === 0) return undefined;
+    return annotated.map((p) => ({
+      url: p.serverUrl!,
+      label: p.label ?? null,
+      note: p.note ?? null,
+    }));
+  }, [evidencePhotos]);
+
   // ── 副产物 (完工出成块) ──
   const addByproduct = useCallback(() => {
     setByproducts((prev) => [...prev, { name: '', quantity: '', unit: '' }]);
@@ -1272,27 +1292,6 @@ const YieldStepReportScreen: React.FC = () => {
       </NeoCard>
     </>
   );
-
-  // T161: 更新单张照片的标签
-  const setPhotoLabel = useCallback((uri: string, label: string | null) => {
-    setEvidencePhotos((prev) => prev.map((p) => p.uri === uri ? { ...p, label } : p));
-  }, []);
-
-  // T161: 更新单张照片的备注
-  const setPhotoNote = useCallback((uri: string, note: string) => {
-    setEvidencePhotos((prev) => prev.map((p) => p.uri === uri ? { ...p, note: note || null } : p));
-  }, []);
-
-  // T161: 把本地 evidencePhotos 转成 API photoAnnotations (只包含已上传完的)
-  const buildPhotoAnnotations = useCallback(() => {
-    const annotated = evidencePhotos.filter((p) => p.serverUrl && (p.label || p.note));
-    if (annotated.length === 0) return undefined;
-    return annotated.map((p) => ({
-      url: p.serverUrl!,
-      label: p.label ?? null,
-      note: p.note ?? null,
-    }));
-  }, [evidencePhotos]);
 
   // 照片证据块 (三阶段共用; title 区分投入照 / 时段照 / 产出照)
   const renderEvidenceBlock = (title: string, takeTestID: string, pickTestID: string) => (
