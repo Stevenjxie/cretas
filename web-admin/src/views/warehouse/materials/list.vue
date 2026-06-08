@@ -148,6 +148,9 @@ const formData = reactive({
   notes: '',
 });
 
+// Track the selected material's canonical unit for the UI hint
+const selectedMaterialUnit = ref<string | null>(null);
+
 const formRules = {
   batchNumber: [{ required: true, message: '请输入批次号', trigger: 'blur' }],
   materialTypeId: [{ required: true, message: '请选择原料类型', trigger: 'change' }],
@@ -161,11 +164,25 @@ const formRules = {
 // Bug C5: auto-calculate totalWeight and totalValue from selected material's base info
 // W-02 fix (Round 7): when material has no unit price, hint the user so they don't
 // stare at an empty required field wondering why auto-calc skipped it.
+// T158 fix: auto-sync quantityUnit to the material's master unit when user selects/changes
+// a material in add mode, preventing kg/个 mismatch (防呆 Rule 2 — unit anchored to master).
 let w02HintShown = false;
 function autoCalcWeightAndValue() {
   const qty = formData.receiptQuantity;
-  if (!formData.materialTypeId || qty == null || qty <= 0) return;
   const mat = materialTypes.value.find((m: TableRow) => m.id === formData.materialTypeId) as TableRow | undefined;
+
+  // T158: sync unit on every material-selection change, even before qty is entered.
+  // Only apply in add mode (editingId === null) to avoid clobbering a saved batch's unit on edit-open.
+  if (mat) {
+    selectedMaterialUnit.value = (mat.unit as string) || null;
+    if (editingId.value === null && mat.unit) {
+      formData.quantityUnit = String(mat.unit);
+    }
+  } else {
+    selectedMaterialUnit.value = null;
+  }
+
+  if (!formData.materialTypeId || qty == null || qty <= 0) return;
   if (!mat) return;
   // totalWeight = quantity (unit is typically kg; use quantity directly as weight)
   formData.totalWeight = Number((qty).toFixed(3));
@@ -188,6 +205,7 @@ function handleCreate() {
   editingId.value = null;
   formDialogTitle.value = '入库登记';
   w02HintShown = false;
+  selectedMaterialUnit.value = null;
   Object.assign(formData, { batchNumber: '', materialTypeId: '', supplierId: '', receiptDate: new Date().toISOString().slice(0, 10), receiptQuantity: null, quantityUnit: 'kg', boxCount: null, totalWeight: null, totalValue: null, expireDate: '', notes: '' });
   formDialogVisible.value = true;
 }
@@ -196,6 +214,7 @@ function handleEdit(row: TableRow) {
   editingId.value = String(row.id || '');
   formDialogTitle.value = '编辑批次';
   w02HintShown = false;
+  selectedMaterialUnit.value = null;
   Object.assign(formData, {
     batchNumber: row.batchNumber || '',
     materialTypeId: row.materialTypeId || '',
@@ -379,7 +398,16 @@ async function handleFormSubmit() {
             <el-option label="L" value="L" />
             <el-option label="个" value="个" />
             <el-option label="箱" value="箱" />
+            <!-- T158: include master unit as an option if it's not in the standard list above -->
+            <el-option
+              v-if="selectedMaterialUnit && !['kg','g','L','个','箱'].includes(selectedMaterialUnit)"
+              :label="selectedMaterialUnit"
+              :value="selectedMaterialUnit"
+            />
           </el-select>
+          <div v-if="selectedMaterialUnit && editingId === null" class="field-hint">
+            已自动锁定为原料主数据单位「{{ selectedMaterialUnit }}」，如有特殊情况可手动修改
+          </div>
         </el-form-item>
         <el-form-item label="箱数">
           <el-input-number v-model="formData.boxCount" :min="0" :precision="0" :controls="true" placeholder="可选" style="width: 100%" />
