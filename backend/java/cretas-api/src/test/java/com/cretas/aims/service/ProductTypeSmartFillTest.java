@@ -28,13 +28,14 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * T149/T150: SKU 智能防呆填充 + 编号去重健壮性.
+ * T149/T150/T151/T152: SKU 智能防呆填充 + 编号去重健壮性.
  *
  * <p>覆盖:
  * <ul>
  *   <li>Part A — 自动生成编号撞唯一约束 → 重新生成重试; 手输重复编号 → 友好 409 不重试;</li>
  *   <li>Part B — suggestDefaults 名称匹配返回历史产品属性 / 无匹配→关键词大类+其余 null / 完全无把握→全 null;
  *       T150 扩展: 匹配时带温区/规格/标准克重/出成率; 历史产品字段为 null 时透传 null (禁假数据).</li>
+ *   <li>Part C — T151/T152 LCS 公共子串信号: LCS ≥ 2 中文字即匹配 (T152 简化去占比限制).</li>
  * </ul>
  */
 @ExtendWith(MockitoExtension.class)
@@ -370,23 +371,116 @@ class ProductTypeSmartFillTest {
     }
 
     @Test
-    @DisplayName("C7 (T151): 2字 LCS 占比不足 (共享「好食」碎片) → 不误匹配")
-    void suggest_incidental2CharLcs_doesNotMatch() {
-        // 两个都包含「好食」的产品
+    @DisplayName("C7 (T152): 2字 LCS 「好食」→ T152 简化规则下 NOW 匹配 (Steve 批准的 trade-off: 偶然 2 字重叠可接受)")
+    void suggest_incidental2CharLcs_nowMatchesUnderT152() {
+        // T152 设计决策: LCS ≥ 2 中文字即匹配, 去掉 T151 的 ≥40% 占比限制.
+        // 「好食堂特供餐具盒」与「叮咚好食光卤猪蹄 200g」共享「好食」(2字) → 现在匹配 (可接受的误匹配).
+        // 匹配结果 non-clobbering + 可覆盖 + 显示"匹配自 X" 提示 — Steve 明确接受此 trade-off.
         ProductType p1 = new ProductType();
         p1.setName("叮咚好食光卤猪蹄 200g");
         p1.setBaseProductName("猪蹄");   // 2字
         p1.setProductCategory("FINISHED_PRODUCT");
+        p1.setUnit("盒");
 
         when(productTypeRepository.findByFactoryId("F001")).thenReturn(List.of(p1));
 
-        // 输入「好食堂特供餐具盒」— 与猪蹄只共享「好食」2字(占 baseProductName「猪蹄」0/2=0%)
-        // → 「好食」不在「猪蹄」里, LCS(「猪蹄」vs 中文部分)=0; LCS(「好食光卤猪蹄」) = 「好食」
-        // 占 tgtNameHan「好食光卤猪蹄」= 2/6=33% < 40% → 不加 LCS 分
-        // coverage 也低 → 不应匹配
         ProductTypeSuggestionDTO s = service.suggestDefaults("F001", "好食堂特供餐具盒", null);
 
-        // 可能走关键词兜底 (PACKAGING/FINISHED) 但 matchedFrom 应 null (无名称匹配)
+        // T152 简化: 共享「好食」(2字 LCS) → lcsScore=0.8 → 超过阈值 → 匹配
+        assertThat(s.getMatchedFrom()).isEqualTo("叮咚好食光卤猪蹄 200g");
+    }
+
+    // ==================== Part D: T152 真实 F006 名称 + 全无关名称 ====================
+
+    @Test
+    @DisplayName("D1 (T152): Steve 真实 case — '啊iOS的哈佛牛腱' 共享「牛腱」(2字) → 匹配「叮咚好食光纸片牛腱肉 80g」")
+    void suggest_realF006_noisyInputNiuJian_matchesViaLcs2() {
+        // F006 真实产品 (空 baseProductName, 长品牌名)
+        ProductType pNiuJian = new ProductType();
+        pNiuJian.setName("叮咚好食光纸片牛腱肉 80g");
+        pNiuJian.setBaseProductName(null);          // F006 产品 baseProductName 为空 — 用 name LCS
+        pNiuJian.setProductCategory("FINISHED_PRODUCT");
+        pNiuJian.setUnit("盒");
+        pNiuJian.setGramsPerUnit(new BigDecimal("80.00"));
+
+        ProductType pZhuShe = new ProductType();
+        pZhuShe.setName("叮咚好食光轻卤门腔（猪舌）120g");
+        pZhuShe.setBaseProductName(null);
+        pZhuShe.setProductCategory("FINISHED_PRODUCT");
+        pZhuShe.setUnit("盒");
+
+        when(productTypeRepository.findByFactoryId("F006")).thenReturn(List.of(pNiuJian, pZhuShe));
+
+        // T151 会拒绝: 「牛腱」2字占「好食光纸片牛腱肉」10字 = 20% < 40%.
+        // T152 接受: LCS ≥ 2 即匹配.
+        ProductTypeSuggestionDTO s = service.suggestDefaults("F006", "啊iOS的哈佛牛腱", null);
+
+        assertThat(s.getMatchedFrom()).isEqualTo("叮咚好食光纸片牛腱肉 80g");
+        assertThat(s.getProductCategory()).isEqualTo("FINISHED_PRODUCT");
+        assertThat(s.getUnit()).isEqualTo("盒");
+        assertThat(s.getGramsPerUnit()).isEqualByComparingTo("80.00");
+    }
+
+    @Test
+    @DisplayName("D2 (T152): 真实 F006 — 'XX猪蹄' baseProductName=null → name LCS「猪蹄」(2字) 匹配")
+    void suggest_realF006_noBaseProductName_matchesByNameLcs() {
+        ProductType pZhuTi = new ProductType();
+        pZhuTi.setName("叮咚好食光卤猪蹄(去大骨) 200g");
+        pZhuTi.setBaseProductName(null);
+        pZhuTi.setProductCategory("FINISHED_PRODUCT");
+        pZhuTi.setUnit("盒");
+        pZhuTi.setGramsPerUnit(new BigDecimal("200.00"));
+
+        when(productTypeRepository.findByFactoryId("F006")).thenReturn(List.of(pZhuTi));
+
+        ProductTypeSuggestionDTO s = service.suggestDefaults("F006", "测试猪蹄半成品", null);
+
+        assertThat(s.getMatchedFrom()).isEqualTo("叮咚好食光卤猪蹄(去大骨) 200g");
+        assertThat(s.getProductCategory()).isEqualTo("FINISHED_PRODUCT");
+    }
+
+    @Test
+    @DisplayName("D3 (T152): 多个产品竞争时最长 LCS 获胜 — '特制牛腱掌中宝' → 匹配 LCS=3「掌中宝」非 LCS=2「牛腱」")
+    void suggest_multipleProducts_longestLcsWins() {
+        ProductType pNiuJian = new ProductType();
+        pNiuJian.setName("叮咚好食光卤牛腱 250g");
+        pNiuJian.setBaseProductName("牛腱");
+        pNiuJian.setProductCategory("FINISHED_PRODUCT");
+        pNiuJian.setUnit("盒");
+
+        ProductType pZhangZhongBao = new ProductType();
+        pZhangZhongBao.setName("叮咚椒麻掌中宝 120g");
+        pZhangZhongBao.setBaseProductName("掌中宝");
+        pZhangZhongBao.setProductCategory("FINISHED_PRODUCT");
+        pZhangZhongBao.setUnit("袋");
+
+        when(productTypeRepository.findByFactoryId("F006")).thenReturn(List.of(pNiuJian, pZhangZhongBao));
+
+        // 输入含「牛腱」(2字)和「掌中宝」(3字): 掌中宝的 LCS=3 得分更高应获胜
+        ProductTypeSuggestionDTO s = service.suggestDefaults("F006", "特制牛腱掌中宝", null);
+
+        assertThat(s.getMatchedFrom()).isEqualTo("叮咚椒麻掌中宝 120g");
+        assertThat(s.getUnit()).isEqualTo("袋");
+    }
+
+    @Test
+    @DisplayName("D4 (T152): 完全无 ≥2 中文字公共子串 → 无名称匹配 (禁假数据)")
+    void suggest_noSharedChineseSubstring_noMatch() {
+        ProductType pZhuTi = new ProductType();
+        pZhuTi.setName("叮咚好食光卤猪蹄 200g");
+        pZhuTi.setBaseProductName("猪蹄");
+        pZhuTi.setProductCategory("FINISHED_PRODUCT");
+
+        ProductType pZhuShe = new ProductType();
+        pZhuShe.setName("叮咚好食光卤猪舌 200g");
+        pZhuShe.setBaseProductName("猪舌");
+        pZhuShe.setProductCategory("FINISHED_PRODUCT");
+
+        when(productTypeRepository.findByFactoryId("F006")).thenReturn(List.of(pZhuTi, pZhuShe));
+
+        // 输入纯英文+数字: 无中文字符 → LCS=0 → 无名称匹配
+        ProductTypeSuggestionDTO s = service.suggestDefaults("F006", "ABC123XYZ", null);
+
         assertThat(s.getMatchedFrom()).isNull();
     }
 
