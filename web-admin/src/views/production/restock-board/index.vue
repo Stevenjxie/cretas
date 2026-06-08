@@ -1,15 +1,26 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { QuestionFilled } from '@element-plus/icons-vue'
 import { getRestockHorizon, type RestockHorizonProductRow, type RestockHorizonDayCell } from '@/api/restockBoard'
 import { post } from '@/api/request'
 import { useAuthStore } from '@/store/modules/auth'
+import { usePermissionStore } from '@/store/modules/permission'
 
 const authStore = useAuthStore()
+const permissionStore = usePermissionStore()
+const router = useRouter()
 const route = useRoute()
 const factoryId = computed(() => authStore.factoryId)
+
+// T136 — 产品字典跳转权限门控 (fool-proof Rule 5: dead-end → next-action navigation)
+const canAccessProducts = computed(() => permissionStore.canAccess('system'))
+
+function goConfigureProduct() {
+  const returnTo = encodeURIComponent(route.fullPath)
+  router.push(`/system/products?_returnTo=${returnTo}`)
+}
 
 const loading = ref(false)
 
@@ -218,12 +229,19 @@ onMounted(load)
                 : {{ fmt(row.rawToFgYield, 4) }}
               </div>
             </div>
-            <!-- 出成率未配置等告警: 收成 ⚠️ icon + tooltip, 不再每行长文案刷屏 -->
-            <!-- TODO(T132): 缺可靠的产品字典/出成率配置页路由, 暂不加"去配置"跳转, 避免发明假路由 -->
+            <!-- T136: 出成率未配置等告警 + 权限门控「去配置」跳转 (fool-proof Rule 5) -->
             <div v-if="row.conversionWarning" class="warning-icon-line">
               <el-tooltip :content="row.conversionWarning" placement="top">
                 <span class="warning-text">⚠️ 配置提示</span>
               </el-tooltip>
+              <el-button
+                v-if="canAccessProducts"
+                link
+                type="primary"
+                size="small"
+                style="padding: 0 0 0 4px; font-size: 12px; vertical-align: middle;"
+                @click="goConfigureProduct()"
+              >去配置</el-button>
             </div>
           </div>
         </template>

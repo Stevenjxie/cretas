@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue';
-import { useRouter } from 'vue-router';
+import { useRouter, useRoute } from 'vue-router';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { useBusinessMode } from '@/composables/useBusinessMode';
@@ -74,6 +74,7 @@ const paymentDialogVisible = ref(false);
 const paymentForm = ref({ orderId: '', counterpartyId: '', amount: 0, paymentMethod: 'BANK_TRANSFER', notes: '' });
 
 const router = useRouter();
+const route = useRoute();
 const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
 const { label } = useBusinessMode();
@@ -83,6 +84,19 @@ const isRestaurantTenant = computed(() => authStore.factoryType === 'RESTAURANT'
 const canWrite = computed(() => permissionStore.canWrite('sales'));
 
 const canViewPrice = computed(() => permissionStore.canViewPrice);
+
+// T136 — 产品字典跳转权限门控: system 模块有访问权限才显示「去配置」按钮
+// (fool-proof Rule 5: dead-end → next-action navigation, gated on permission)
+const canAccessProducts = computed(() => permissionStore.canAccess('system'));
+
+/**
+ * T136 — 跳转到产品字典并带 _returnTo 参数，让用户配置完后可回到此页
+ * @param productTypeId 可选，目前产品字典不支持直接定位到某产品，预留供未来使用
+ */
+function goConfigureProduct(_productTypeId?: string) {
+  const returnTo = encodeURIComponent(route.fullPath);
+  router.push(`/system/products?_returnTo=${returnTo}`);
+}
 
 // U-VIEW-1 (Sprint 4 Wave 2 Chat L) — view-mode switcher (5 modes).
 // Persistence handled by ViewModeSwitcher via route.name + localStorage.
@@ -2114,7 +2128,18 @@ async function submitQuickPayment() {
           <!-- P1-3 R2 fix: el-tag 替换 inline-styled div, 跟随 Element Plus 主题 -->
           <!-- T130 Feature D — 箱数只读 (由数量×箱规自动计算, 非第二销售单位); 抄码品/未配置箱规分别提示. -->
           <el-tag v-if="isAbacaItem(item)" type="warning" effect="light" size="default" style="width: 130px; text-align: center;">抄码品</el-tag>
-          <el-text v-else-if="isBoxUnconfigured(item)" type="warning" size="small" style="width: 130px; line-height: 1.2;">未配置箱规，请到产品字典维护</el-text>
+          <!-- T136: 未配置箱规 → 权限门控跳转 (fool-proof Rule 5). 有 system 权限显示「去配置」按钮，无权限仅显文案 -->
+          <div v-else-if="isBoxUnconfigured(item)" style="width: 130px; line-height: 1.4;">
+            <el-text type="warning" size="small">未配置箱规</el-text>
+            <el-button
+              v-if="canAccessProducts"
+              link
+              type="primary"
+              size="small"
+              style="padding: 0; font-size: 12px;"
+              @click.stop="goConfigureProduct(item.productTypeId as string | undefined)"
+            >去配置</el-button>
+          </div>
           <el-tooltip v-else content="由数量与箱规自动计算，非第二销售单位" placement="top">
             <el-input-number v-model="item.boxQuantity" :min="0" :precision="2" disabled style="width: 130px" placeholder="箱" />
           </el-tooltip>
