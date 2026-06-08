@@ -105,4 +105,13 @@ public interface RawMaterialTypeRepository extends JpaRepository<RawMaterialType
                                                        @Param("keyword") String keyword,
                                                        @Param("category") String category,
                                                        Pageable pageable);
+
+    /**
+     * T159-B-codegen: 按编码前缀查找该工厂的原料编码列表 (用于生成序列号).
+     * 仅取 code 字段减少传输量; 前缀区分大小写(编码全大写).
+     */
+    @Query("SELECT r.code FROM RawMaterialType r WHERE r.factoryId = :factoryId " +
+           "AND r.code LIKE CONCAT(:prefix, '%') ESCAPE '\\'")
+    List<String> findCodesByFactoryIdAndCodePrefix(@Param("factoryId") String factoryId,
+                                                   @Param("prefix") String prefix);
 }
