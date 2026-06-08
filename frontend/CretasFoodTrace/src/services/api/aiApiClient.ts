@@ -974,6 +974,32 @@ class AIApiClient {
   }
 
   /**
+   * 确认参数并执行 (Tool preview → 点确认即生成)
+   *
+   * 用户在 preview 看到 proposedBindings diff 后点"确认", 用 preview 阶段已解析的参数
+   * 直接落库 (复用后端 /params/confirm executeAfterConfirm=true, 不重抽 LLM → 0 漂移)。
+   * 配套 P1 端到端样板: NL → executeIntent(previewOnly) → status=PREVIEW → confirmParams → 落库。
+   *
+   * @param intentCode 意图代码 (如 WORK_PROCESS_CONFIG_UPDATE)
+   * @param userInput 原始自然语言 (后端用于参数提取规则学习)
+   * @param confirmedParams preview 已解析的参数 (如 { productTypeId, workProcessNames })
+   * @param factoryId 工厂ID（可选）
+   * @returns 执行结果 (executeAfterConfirm=true 时为 doExecute 的结果)
+   */
+  async confirmParams(
+    intentCode: string,
+    userInput: string,
+    confirmedParams: Record<string, unknown>,
+    factoryId?: string
+  ): Promise<IntentExecuteResponse> {
+    const response = await apiClient.post<ApiResponseWrapper<IntentExecuteResponse>>(
+      `${this.getIntentBasePath(factoryId)}/params/confirm`,
+      { intentCode, userInput, confirmedParams, executeAfterConfirm: true }
+    );
+    return response.data;
+  }
+
+  /**
    * 流式执行用户意图 (SSE)
    *
    * 通过 Server-Sent Events 实时返回执行进度:
