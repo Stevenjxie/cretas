@@ -7,12 +7,16 @@ import com.cretas.aims.dto.orchestration.MaterialShortfall;
 import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.MaterialProductConversion;
 import com.cretas.aims.entity.ProductionPlan;
+import com.cretas.aims.entity.RawMaterialType;
 import com.cretas.aims.entity.bom.BomItem;
+import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.ConversionRepository;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.ProductionPlanRepository;
+import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.service.BomService;
 import com.cretas.aims.service.factory.WarehouseResolver;
+import com.cretas.aims.service.uom.MaterialUomConverter;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -52,6 +56,17 @@ public class BomExpansionService {
     private final ProductionPlanRepository productionPlanRepository;
     private final BomService bomService;
     private final WarehouseResolver warehouseResolver;
+
+    /**
+     * T143: 物料单位换算器 (箱↔kg). 字段注入 (required=false) 不破坏 @RequiredArgsConstructor
+     * 与既有单测 (@InjectMocks). 未注入时退回原同单位比较 (RPF 路径单位一致, 向后兼容).
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private MaterialUomConverter materialUomConverter;
+
+    /** T143: 读库存单位 (RawMaterialType.unit). 字段注入 required=false. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private RawMaterialTypeRepository rawMaterialTypeRepository;
 
     /**
      * BOM展开：根据产品类型和生产数量，计算所有需要的原辅料（含损耗）。
@@ -163,6 +178,23 @@ public class BomExpansionService {
     }
 
     /**
+     * T143: 读取物料库存单位 (RawMaterialType.unit). 无 repo / 物料不存在 → null.
+     */
+    private String resolveMaterialStockUnit(String materialTypeId) {
+        if (rawMaterialTypeRepository == null || materialTypeId == null) {
+            return null;
+        }
+        try {
+            return rawMaterialTypeRepository.findById(materialTypeId)
+                    .map(RawMaterialType::getUnit)
+                    .orElse(null);
+        } catch (Exception e) {
+            log.debug("[BOM-CHECK] 读取物料库存单位失败: {} ({})", materialTypeId, e.getMessage());
+            return null;
+        }
+    }
+
+    /**
      * 从 BomItem 的出成率 (yieldRate, 0-100%) 推导损耗率 (wastageRate, 0-100%)。
      * 100 - yieldRate = wastageRate (近似)，仅供展示用，不参与库存检查算术。
      */
@@ -202,27 +234,74 @@ public class BomExpansionService {
             List<MaterialBatch> batches = new ArrayList<>(workshopBatches);
             batches.addAll(logisticsBatches);
 
-            // 汇总可用数量
+            // 汇总可用数量 (库存单位, e.g. 箱)
             BigDecimal totalAvailable = batches.stream()
                     .map(b -> b.getReceiptQuantity()
                             .subtract(b.getUsedQuantity() != null ? b.getUsedQuantity() : BigDecimal.ZERO)
                             .subtract(b.getReservedQuantity() != null ? b.getReservedQuantity() : BigDecimal.ZERO))
                     .reduce(BigDecimal.ZERO, BigDecimal::add);
 
-            if (totalAvailable.compareTo(req.getRequiredQuantity()) < 0) {
-                // 库存不足，记录短缺
+            // T143: 把需求量 (sourceUnit, e.g. g) 换算到库存单位 (箱) 再比较 + 分配.
+            // requiredInStockUnit 默认 = req.getRequiredQuantity() (单位一致 / 无换算器 / RPF 路径).
+            BigDecimal requiredInStockUnit = req.getRequiredQuantity();
+            boolean abacaSkip = false;
+            String stockUnit = resolveMaterialStockUnit(req.getMaterialTypeId());
+            String bomUnit = req.getSourceUnit();
+
+            if (materialUomConverter != null && bomUnit != null && stockUnit != null
+                    && !bomUnit.trim().equalsIgnoreCase(stockUnit.trim())) {
+                MaterialUomConverter.ConversionResult conv = materialUomConverter.toComparableQuantity(
+                        req.getMaterialTypeId(), req.getRequiredQuantity(), bomUnit, stockUnit);
+                if (conv.isAbacaSkip()) {
+                    // 抄码料: 跳过库存校验 (不阻断 transfer 自动生成 / 唤醒).
+                    abacaSkip = true;
+                    log.info("[BOM-CHECK] 抄码料 {} 跳过库存校验", req.getMaterialTypeName());
+                } else if (conv.isUnconvertible()) {
+                    // 非抄码 + 单位不同 + 无装箱规格 → fail-loud (不放过错误数据).
+                    throw new BusinessException(409,
+                            String.format("原料「%s」未配置装箱规格(%s↔%s)，无法校验库存，请先配置",
+                                    req.getMaterialTypeName(), stockUnit, bomUnit))
+                            .withCode("MATERIAL_UOM_UNCONFIGURED")
+                            .withHint("请前往「原料管理」为该原料配置装箱规格(箱↔kg)后再继续")
+                            .withHintTarget(req.getMaterialTypeId())
+                            .withSeverity("BLOCKING");
+                } else {
+                    requiredInStockUnit = conv.getQuantity();
+                }
+            }
+
+            if (abacaSkip) {
+                // 抄码料: 不阻断, 把全部可用批次按需 (无法精确分配) 直接列为可用, 不计入短缺.
+                // 仍按 FEFO 顺序逐批次分配 totalAvailable (尽量满足), 但不标记短缺.
+                BigDecimal remaining = totalAvailable;
+                for (MaterialBatch batch : batches) {
+                    if (remaining.compareTo(BigDecimal.ZERO) <= 0) break;
+                    BigDecimal available = batch.getReceiptQuantity()
+                            .subtract(batch.getUsedQuantity() != null ? batch.getUsedQuantity() : BigDecimal.ZERO)
+                            .subtract(batch.getReservedQuantity() != null ? batch.getReservedQuantity() : BigDecimal.ZERO);
+                    BigDecimal alloc = remaining.min(available);
+                    MaterialAllocation allocation = new MaterialAllocation();
+                    allocation.setMaterialTypeId(req.getMaterialTypeId());
+                    allocation.setMaterialBatchId(batch.getId());
+                    allocation.setBatchNumber(batch.getBatchNumber());
+                    allocation.setAllocatedQuantity(alloc);
+                    allocations.add(allocation);
+                    remaining = remaining.subtract(alloc);
+                }
+            } else if (totalAvailable.compareTo(requiredInStockUnit) < 0) {
+                // 库存不足，记录短缺 (用换算后的库存单位口径)
                 allSatisfied = false;
 
                 MaterialShortfall sf = new MaterialShortfall();
                 sf.setMaterialTypeId(req.getMaterialTypeId());
                 sf.setMaterialTypeName(req.getMaterialTypeName());
-                sf.setRequiredQuantity(req.getRequiredQuantity());
+                sf.setRequiredQuantity(requiredInStockUnit);
                 sf.setAvailableQuantity(totalAvailable);
-                sf.setShortfallQuantity(req.getRequiredQuantity().subtract(totalAvailable));
+                sf.setShortfallQuantity(requiredInStockUnit.subtract(totalAvailable));
                 shortfalls.add(sf);
             } else {
-                // 库存充足，按FEFO逐批次分配
-                BigDecimal remaining = req.getRequiredQuantity();
+                // 库存充足，按FEFO逐批次分配 (库存单位口径)
+                BigDecimal remaining = requiredInStockUnit;
                 for (MaterialBatch batch : batches) {
                     if (remaining.compareTo(BigDecimal.ZERO) <= 0) {
                         break;

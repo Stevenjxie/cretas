@@ -131,6 +131,17 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
     private org.springframework.context.ApplicationEventPublisher applicationEventPublisher;
 
     /**
+     * T143: 物料单位换算器 (箱↔kg via MaterialPackagingHierarchy). required=false 兼容单测:
+     * 未注入时 B3 库存校验退回旧的同单位比较 (历史 F001 RPF 路径单位一致, 不受影响).
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.uom.MaterialUomConverter materialUomConverter;
+
+    /** T143: 读库存单位 (RawMaterialType.unit). required=false 兼容单测. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.repository.RawMaterialTypeRepository rawMaterialTypeRepository;
+
+    /**
      * 完工链 GAP 3/4 (F006 — 2026-06-02): 转批次时从 product_work_processes 模板 spawn 工序任务.
      * {@code WorkProcessTaskServiceImpl} 不注入 ProductionPlanService → 无循环依赖, 普通注入即可.
      * required=false 兼容单测 (反射注入 mock) 与无工序配置场景.
@@ -205,22 +216,52 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             if (item.getMaterialTypeId() == null || item.getStandardQuantity() == null) {
                 continue;
             }
-            // 单位需求 (已含出成率: standardQuantity / (yieldRate/100))
-            BigDecimal perUnitRequired = item.getActualQuantity();
-            BigDecimal totalRequired = perUnitRequired.multiply(plannedQty);
+            String materialName = item.getMaterialName() != null && !item.getMaterialName().isBlank()
+                    ? item.getMaterialName()
+                    : ("原料 " + item.getMaterialTypeId());
 
+            // 单位需求 (已含出成率: standardQuantity / (yieldRate/100)), 单位 = BOM unit (e.g. g)
+            BigDecimal perUnitRequired = item.getActualQuantity();
+            BigDecimal totalRequiredBom = perUnitRequired.multiply(plannedQty);
+
+            // 库存量 (库存单位, e.g. 箱)
             BigDecimal available = materialBatchRepository.sumAvailableQuantityByMaterialType(
                     factoryId, item.getMaterialTypeId());
             if (available == null) {
                 available = BigDecimal.ZERO;
             }
 
+            // T143: 把 BOM 需求量 (g) 换算到库存单位 (箱) 再比较. 不同单位且无换算器 → 保守跳过.
+            String stockUnit = resolveMaterialStockUnit(item.getMaterialTypeId());
+            String bomUnit = item.getUnit();
+            BigDecimal totalRequired = totalRequiredBom;  // 默认: 单位一致或无换算器, 沿用原值
+
+            if (materialUomConverter != null && bomUnit != null && stockUnit != null
+                    && !bomUnit.trim().equalsIgnoreCase(stockUnit.trim())) {
+                com.cretas.aims.service.uom.MaterialUomConverter.ConversionResult conv =
+                        materialUomConverter.toComparableQuantity(
+                                item.getMaterialTypeId(), totalRequiredBom, bomUnit, stockUnit);
+                if (conv.isAbacaSkip()) {
+                    // 抄码料: 每箱重量不一, 跳过按规格的库存校验 (不阻断), 仅记录.
+                    log.info("B3 库存校验: 抄码料 {} 跳过库存校验 (planId={})", materialName, plan.getId());
+                    continue;
+                }
+                if (conv.isUnconvertible()) {
+                    // 非抄码 + 单位不同 + 无装箱规格 → fail-loud, 引导去配置.
+                    throw new BusinessException(409,
+                            String.format("原料「%s」未配置装箱规格(%s↔%s)，无法校验库存，请先配置",
+                                    materialName, stockUnit, bomUnit))
+                            .withCode("MATERIAL_UOM_UNCONFIGURED")
+                            .withHint("请前往「原料管理」为该原料配置装箱规格(箱↔kg)后再开始生产")
+                            .withHintTarget(item.getMaterialTypeId())
+                            .withSeverity("BLOCKING");
+                }
+                totalRequired = conv.getQuantity();  // 已换算到库存单位 (箱)
+            }
+
             if (available.compareTo(totalRequired) < 0) {
                 BigDecimal shortageQty = totalRequired.subtract(available);
-                String materialName = item.getMaterialName() != null && !item.getMaterialName().isBlank()
-                        ? item.getMaterialName()
-                        : ("原料 " + item.getMaterialTypeId());
-                String unit = item.getUnit() != null ? item.getUnit() : "";
+                String unit = stockUnit != null ? stockUnit : (bomUnit != null ? bomUnit : "");
                 shortages.add(String.format(
                         "%s: 需要 %s%s, 可用 %s%s, 缺口 %s%s",
                         materialName,
@@ -240,6 +281,24 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
 
         log.debug("B3 库存校验通过: planId={}, productTypeId={}, plannedQuantity={}, bomItems={}",
                 plan.getId(), plan.getProductTypeId(), plannedQty, bomItems.size());
+    }
+
+    /**
+     * T143: 读取物料的库存单位 (RawMaterialType.unit, e.g. "箱").
+     * 无 repo (单测) 或物料不存在时返 null (caller 退回原单位比较).
+     */
+    private String resolveMaterialStockUnit(String materialTypeId) {
+        if (rawMaterialTypeRepository == null || materialTypeId == null) {
+            return null;
+        }
+        try {
+            return rawMaterialTypeRepository.findById(materialTypeId)
+                    .map(RawMaterialType::getUnit)
+                    .orElse(null);
+        } catch (Exception e) {
+            log.debug("读取物料库存单位失败: {} ({})", materialTypeId, e.getMessage());
+            return null;
+        }
     }
 
     /**

@@ -10,6 +10,7 @@ import com.cretas.aims.entity.inventory.InternalTransfer;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.service.ProductionPlanService;
+import com.cretas.aims.service.UnitConversionService;
 import com.cretas.aims.repository.inventory.InternalTransferRepository;
 import com.cretas.aims.service.inventory.TransferService;
 import lombok.RequiredArgsConstructor;
@@ -41,6 +42,14 @@ public class ProductionWorkflowOrchestrator {
     private final ProductionPlanService productionPlanService;
     private final RawMaterialTypeRepository rawMaterialTypeRepository;
     private final InternalTransferRepository transferRepository;
+
+    /**
+     * T143: 物料单位换算器. 字段注入 (required=false) 不破坏 @RequiredArgsConstructor 与
+     * 反射单测 ({@code ProductionWorkflowOrchestratorUnitConversionTest}). 未注入时
+     * 退回 private convertUnit (g↔kg) — 但调拨数量换算应优先走 converter (支持 箱).
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.uom.MaterialUomConverter materialUomConverter;
 
     /**
      * 排产确认 → 自动生成调拨单
@@ -128,20 +137,49 @@ public class ProductionWorkflowOrchestrator {
                 log.debug("获取原料单位失败: {}", req.getMaterialTypeId());
             }
 
-            // D3 (2026-05-10 客户会议): g → kg 1:1000 后台自动换算
-            // BOM 配方层用 g, 仓库 / 调拨层用 kg
-            // 当 sourceUnit=g 且 targetUnit=kg 时, quantity = required / 1000
+            // D3 (2026-05-10 客户会议) + T143: BOM 配方层用 g/箱, 仓库 / 调拨层用 targetUnit (RawMaterialType.unit).
+            // 调拨数量必须换算到 targetUnit, 否则会出现 "217 箱" (g 当 箱) 这种错误数量+错误单位.
             BigDecimal quantity = req.getRequiredQuantity();
             String sourceUnit = req.getSourceUnit();
             String finalUnit = targetUnit;
             if (quantity != null && sourceUnit != null && targetUnit != null
                     && !sourceUnit.equalsIgnoreCase(targetUnit)) {
-                BigDecimal converted = convertUnit(quantity, sourceUnit, targetUnit);
-                if (converted != null) {
-                    log.info("D3 单位换算: material={}, {}{} → {}{}",
-                            req.getMaterialTypeId(), quantity, sourceUnit, converted, targetUnit);
-                    quantity = converted;
-                    finalUnit = targetUnit;
+                if (materialUomConverter != null) {
+                    // T143: 优先走 converter (支持 箱↔kg via MaterialPackagingHierarchy + 抄码 + fail-loud).
+                    com.cretas.aims.service.uom.MaterialUomConverter.ConversionResult conv =
+                            materialUomConverter.toComparableQuantity(
+                                    req.getMaterialTypeId(), quantity, sourceUnit, targetUnit);
+                    if (conv.isConverted()) {
+                        log.info("T143 调拨单位换算: material={}, {}{} → {}{}",
+                                req.getMaterialTypeId(), quantity, sourceUnit, conv.getQuantity(), targetUnit);
+                        quantity = conv.getQuantity();
+                        finalUnit = targetUnit;
+                    } else if (conv.isAbacaSkip()) {
+                        // 抄码料: 无确定箱重, 不能算出 箱 数量. 用原始 sourceUnit 量 + sourceUnit 标签
+                        // (入库时按实际称重逐箱录入). 绝不输出错误的 箱 数量.
+                        log.info("T143 抄码料 {} 调拨保留源单位 {}{} (入库逐箱称重)",
+                                req.getMaterialTypeId(), quantity, sourceUnit);
+                        finalUnit = sourceUnit;
+                    } else {
+                        // UNCONVERTIBLE: 非抄码 + 无装箱规格 → fail-loud, 绝不输出错误单位的调拨单.
+                        throw new BusinessException(409,
+                                String.format("原料「%s」未配置装箱规格(%s↔%s)，无法生成调拨单，请先配置",
+                                        req.getMaterialTypeName() != null ? req.getMaterialTypeName() : req.getMaterialTypeId(),
+                                        targetUnit, sourceUnit))
+                                .withCode("MATERIAL_UOM_UNCONFIGURED")
+                                .withHint("请前往「原料管理」为该原料配置装箱规格(箱↔kg)后再生成调拨单")
+                                .withHintTarget(req.getMaterialTypeId())
+                                .withSeverity("BLOCKING");
+                    }
+                } else {
+                    // Converter 未注入 (单测): 退回旧 g↔kg 同维度换算, 不支持的换算保留原值原单位.
+                    BigDecimal converted = convertUnit(quantity, sourceUnit, targetUnit);
+                    if (converted != null) {
+                        quantity = converted;
+                        finalUnit = targetUnit;
+                    } else {
+                        finalUnit = sourceUnit;  // 不支持: 保留源单位, 不伪装成 targetUnit
+                    }
                 }
             }
 
@@ -155,9 +193,11 @@ public class ProductionWorkflowOrchestrator {
     }
 
     /**
-     * D3 单位换算 (固定 1:1000 g↔kg, 其他单位返回 null 不换算).
+     * D3 单位换算 (g↔kg / ml↔L 1:1000, 其他单位返回 null 不换算).
      *
-     * 暂用硬编码 — 后续可改为查 UnitOfMeasurement.conversionFactor 实现通用换算。
+     * <p>T143 (B7 collapse): 不再内联硬编码 1:1000 算术, 委托给共享的
+     * {@link UnitConversionService} (单一事实源, 避免与 BomItem/库存出库/采购入库 drift).
+     * {@code UnitConversionService} 无状态无依赖, 反射单测可直接 new 一个调用.
      *
      * @param value      原值
      * @param fromUnit   源单位 (如 "g")
@@ -165,27 +205,9 @@ public class ProductionWorkflowOrchestrator {
      * @return 换算后的值, 不支持的换算返 null
      */
     private BigDecimal convertUnit(BigDecimal value, String fromUnit, String toUnit) {
-        if (value == null || fromUnit == null || toUnit == null) return null;
-        String from = fromUnit.trim().toLowerCase();
-        String to = toUnit.trim().toLowerCase();
-        if (from.equals(to)) return value;
-        // g → kg: ÷ 1000
-        if ("g".equals(from) && "kg".equals(to)) {
-            return value.divide(new BigDecimal("1000"), 6, java.math.RoundingMode.HALF_UP);
-        }
-        // kg → g: × 1000
-        if ("kg".equals(from) && "g".equals(to)) {
-            return value.multiply(new BigDecimal("1000"));
-        }
-        // ml → L
-        if ("ml".equals(from) && "l".equals(to)) {
-            return value.divide(new BigDecimal("1000"), 6, java.math.RoundingMode.HALF_UP);
-        }
-        // L → ml
-        if ("l".equals(from) && "ml".equals(to)) {
-            return value.multiply(new BigDecimal("1000"));
-        }
-        // 不支持的换算: null 表示沿用原 1:1 透传逻辑
-        return null;
+        return UNIT_CONVERSION.convert(value, fromUnit, toUnit);
     }
+
+    /** B7 collapse: 共享换算逻辑 (无状态), 取代原 private 1:1000 硬编码副本. */
+    private static final UnitConversionService UNIT_CONVERSION = new UnitConversionService();
 }
