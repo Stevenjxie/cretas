@@ -417,6 +417,50 @@ request.interceptors.response.use(
       return Promise.reject(new ApiError(fkMessage, 'FK_BLOCK', 409));
     }
 
+    // T143 MATERIAL_UOM_UNCONFIGURED 防呆导航 (fool-proof-design Rule 5: dead-end → 导航).
+    // 后端 BomItem 库存校验 / 调拨 / 物料需求单 在物料缺装箱规格(箱↔kg)且非抄码时
+    // 抛 409 + errorCode=MATERIAL_UOM_UNCONFIGURED. 引导用户「去配置装箱规格」(原料管理页).
+    // 权限门控: 仅当用户可访问 warehouse 模块时才提供跳转 (镜像 T136 canAccess pattern).
+    if (status === 409 && richAll.errorCode === 'MATERIAL_UOM_UNCONFIGURED' && !originalRequest._silent) {
+      const uomMessage = (error.response?.data?.message as string)
+        || '原料未配置装箱规格(箱↔kg)，无法校验库存';
+      const uomHint = richAll.actionHint || '请前往「原料管理」为该原料配置装箱规格(箱↔kg)后再继续';
+      try {
+        const { useAuthStore } = await import('@/store/modules/auth');
+        const { canAccessModule } = await import('@/utils/permission');
+        const authUser = useAuthStore().user;
+        const canConfig = canAccessModule(authUser, 'warehouse');
+        const { ElMessageBox } = await import('element-plus');
+        if (canConfig) {
+          await ElMessageBox.confirm(
+            `${uomMessage}\n\n${uomHint}`,
+            '缺少装箱规格',
+            {
+              confirmButtonText: '去配置装箱规格',
+              cancelButtonText: '稍后处理',
+              distinguishCancelAndClose: true,
+              type: 'warning',
+            }
+          );
+          // 用户确认 → 跳转原料管理页, 携带 _returnTo 便于回到原页面
+          const router = await getRouter();
+          const currentRoute = router.currentRoute.value;
+          const returnTo = encodeURIComponent(currentRoute.fullPath);
+          router.push(`/warehouse/material-types?_returnTo=${returnTo}`);
+        } else {
+          // 无权限配置 → 仅显示信息 + 提示联系管理员 (不给 dead-end 跳转)
+          await ElMessageBox.alert(
+            `${uomMessage}\n\n${uomHint}\n\n(需要仓库管理权限配置, 请联系管理员)`,
+            '缺少装箱规格',
+            { confirmButtonText: '我知道了', type: 'warning' }
+          );
+        }
+      } catch {
+        // 用户选择「稍后处理」或关闭弹窗 — 静默
+      }
+      return Promise.reject(new ApiError(uomMessage, 'MATERIAL_UOM_UNCONFIGURED', 409, uomHint));
+    }
+
     // 409 differentiation (R24 P2 real-window finding):
     //   - Optimistic lock 409: GlobalExceptionHandler emits {code:409, message:"数据已被其他用户修改..."}
     //     with NO actionHint. Callers (suppliers/customers/sales-orders/DynamicModulePage)

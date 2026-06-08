@@ -46,6 +46,17 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
     private final TransferService transferService;
     private final FactoryWarehouseRepository warehouseRepository;
 
+    /**
+     * T143: 物料单位换算器 (箱↔kg). required=false 兼容单测. 物料需求单的需求量应以
+     * 库存单位 (箱) 记录, 与仓库实际领料口径一致, 而不是 BOM 配方单位 (g).
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.uom.MaterialUomConverter materialUomConverter;
+
+    /** T143: 读库存单位 (RawMaterialType.unit). required=false. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.repository.RawMaterialTypeRepository rawMaterialTypeRepository;
+
     /** Canvas V2: DB-driven validation rules */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.engine.ValidationRuleEvaluator validationRuleEvaluator;
@@ -62,6 +73,23 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
     }
 
     private static final DateTimeFormatter DATE_FMT = DateTimeFormatter.ofPattern("yyyyMMdd");
+
+    /**
+     * T143: 读取物料库存单位 (RawMaterialType.unit). 无 repo / 物料不存在 → null.
+     */
+    private String resolveMaterialStockUnit(String materialTypeId) {
+        if (rawMaterialTypeRepository == null || materialTypeId == null) {
+            return null;
+        }
+        try {
+            return rawMaterialTypeRepository.findById(materialTypeId)
+                    .map(com.cretas.aims.entity.RawMaterialType::getUnit)
+                    .orElse(null);
+        } catch (Exception e) {
+            log.debug("读取物料库存单位失败: {} ({})", materialTypeId, e.getMessage());
+            return null;
+        }
+    }
 
     @Override
     @Transactional
@@ -119,10 +147,40 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
             }
             item.setMaterialCategory(category);
             item.setBomItemId(bom.getId());
-            // required_qty = planned_quantity * actual_quantity (按出成率调整)
+            // required_qty = planned_quantity * actual_quantity (按出成率调整), 单位 = BOM unit (e.g. g)
             BigDecimal perUnit = bom.getActualQuantity();
-            item.setRequiredQty(plannedQty.multiply(perUnit));
-            item.setUnit(bom.getUnit());
+            BigDecimal requiredBom = plannedQty.multiply(perUnit);
+            String bomUnit = bom.getUnit();
+
+            // T143: 把需求量换算到库存单位 (箱), 与仓库实际领料口径一致.
+            String stockUnit = resolveMaterialStockUnit(bom.getMaterialTypeId());
+            BigDecimal requiredQty = requiredBom;
+            String requiredUnit = bomUnit;
+            if (materialUomConverter != null && bomUnit != null && stockUnit != null
+                    && !bomUnit.trim().equalsIgnoreCase(stockUnit.trim())) {
+                com.cretas.aims.service.uom.MaterialUomConverter.ConversionResult conv =
+                        materialUomConverter.toComparableQuantity(
+                                bom.getMaterialTypeId(), requiredBom, bomUnit, stockUnit);
+                if (conv.isConverted()) {
+                    requiredQty = conv.getQuantity();
+                    requiredUnit = stockUnit;
+                } else if (conv.isAbacaSkip()) {
+                    // 抄码料: 无确定箱重, 需求量保留 BOM 单位 (领料时按实际称重).
+                    log.info("T143 抄码料 {} 物料需求单保留源单位 {}", bom.getMaterialName(), bomUnit);
+                } else {
+                    // UNCONVERTIBLE: 非抄码 + 无装箱规格 → fail-loud.
+                    String matName = bom.getMaterialName() != null ? bom.getMaterialName() : bom.getMaterialTypeId();
+                    throw new BusinessException(409,
+                            String.format("原料「%s」未配置装箱规格(%s↔%s)，无法生成物料需求单，请先配置",
+                                    matName, stockUnit, bomUnit))
+                            .withCode("MATERIAL_UOM_UNCONFIGURED")
+                            .withHint("请前往「原料管理」为该原料配置装箱规格(箱↔kg)后再生成物料需求单")
+                            .withHintTarget(bom.getMaterialTypeId())
+                            .withSeverity("BLOCKING");
+                }
+            }
+            item.setRequiredQty(requiredQty);
+            item.setUnit(requiredUnit);
             mr.getItems().add(item);
         }
 
