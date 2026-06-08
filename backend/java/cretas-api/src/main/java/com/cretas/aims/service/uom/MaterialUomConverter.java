@@ -11,6 +11,7 @@ import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.util.Map;
 
 /**
  * MaterialUomConverter — 物料单位换算器 (T143, 2026-06-08).
@@ -71,7 +72,9 @@ public class MaterialUomConverter {
         }
 
         // 2. 同维度 weight/volume (g↔kg, ml↔L) → 用 UnitConversionService.
-        BigDecimal dimConverted = unitConversionService.convert(qty, fromUnit, materialStockUnit);
+        //    传归一后的 token (from/stock), 使中文重量别名 (克→g, 千克/公斤→kg)
+        //    也能命中 UnitConversionService 的 g↔kg 系数换算 (T156).
+        BigDecimal dimConverted = unitConversionService.convert(qty, from, stock);
         if (dimConverted != null) {
             return ConversionResult.converted(dimConverted, materialStockUnit);
         }
@@ -184,8 +187,63 @@ public class MaterialUomConverter {
         return fallbackId != null ? fallbackId : "未知原料";
     }
 
-    private static String normalize(String unit) {
-        return unit == null ? null : unit.trim().toLowerCase();
+    /**
+     * 单位别名 → 规范 token 映射 (T156, 2026-06-08).
+     *
+     * <p><b>背景 (六扇门 F006 prod 事故):</b> 气调盒 BOM 单位 = {@code pcs}, 库存单位
+     * (RawMaterialType.unit) = {@code 个}. 二者本是<b>同一计数单位</b> (件/个/piece),
+     * 但旧 {@code normalize()} 只 trim+lowercase → {@code pcs} ≠ {@code 个} → 走到
+     * UNCONVERTIBLE → 转批次/开工时误报 409 "原料单位无法换算" 阻断生产.
+     *
+     * <p>本表把已知等同单位归一到<b>单一规范 token</b>, 使其 {@link #normalize}
+     * 后 equals 比较相等 → 同单位 1:1 透传, 不再误判.
+     *
+     * <p><b>归一规则 (只归一真正等同的单位, 不过度别名):</b>
+     * <ul>
+     *   <li><b>计数 → "个"</b>: pcs / pc / pces / pieces / piece / 个 / 件 / 只
+     *       (本域 个/件/只 均为离散计数单位; 气调盒计数)</li>
+     *   <li><b>重量 g → "g"</b>: g / 克 ; <b>kg → "kg"</b>: kg / 千克 / 公斤
+     *       (归到 {@link UnitConversionService} 认得的 latin token, 保 g↔kg 通路)</li>
+     *   <li><b>斤 → "斤"</b>: 斤 (本身已是规范, 仅占位; 无装箱规格时仍 UNCONVERTIBLE)</li>
+     * </ul>
+     *
+     * <p>查表前先 trim + lowercase (latin part), 故 "PCS" / "Pcs" / " pcs " 均命中.
+     * 表中 key 全为已 lowercase 形式 (中文不受 lowercase 影响).
+     *
+     * <p><b>不在表中的单位</b> (e.g. 箱 / ml / l / 桶 / 袋) 原样返回 (lowercased),
+     * 走原有 维度换算 / 装箱规格 / UNCONVERTIBLE 路径 — 行为不变.
+     */
+    private static final Map<String, String> UNIT_ALIASES = Map.ofEntries(
+            // 计数 / piece → 个
+            Map.entry("pcs", "个"),
+            Map.entry("pc", "个"),
+            Map.entry("pce", "个"),
+            Map.entry("pces", "个"),
+            Map.entry("piece", "个"),
+            Map.entry("pieces", "个"),
+            Map.entry("个", "个"),
+            Map.entry("件", "个"),
+            Map.entry("只", "个"),
+            // 重量 → latin token (保 UnitConversionService g↔kg 通路)
+            Map.entry("g", "g"),
+            Map.entry("克", "g"),
+            Map.entry("kg", "kg"),
+            Map.entry("千克", "kg"),
+            Map.entry("公斤", "kg")
+    );
+
+    /**
+     * 归一单位 token: trim + lowercase, 再查别名表把等同单位折到单一规范 token.
+     *
+     * <p>表外单位返回 lowercased 原值 (不改变旧行为). 表内别名返回规范 token,
+     * 使 {@code pcs}/{@code 个}/{@code 件} 等等同单位 equals 比较相等.
+     */
+    static String normalize(String unit) {
+        if (unit == null) {
+            return null;
+        }
+        String trimmed = unit.trim().toLowerCase();
+        return UNIT_ALIASES.getOrDefault(trimmed, trimmed);
     }
 
     // ================================================================
