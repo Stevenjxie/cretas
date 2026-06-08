@@ -16,10 +16,11 @@ import {
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { useTranslation } from 'react-i18next';
-import Constants from 'expo-constants';
 import { useLogin } from '../../hooks/useLogin';
 
-const APP_VERSION = Constants.expoConfig?.version ?? Constants.nativeAppVersion ?? '1.0.0';
+// 登录页底部显示版本标签。注意: 与 app.json 真实 version(1.0.1) 解耦 —
+// runtimeVersion.policy=appVersion, 改真实 version 会令已装 APK 收不到 OTA。
+const APP_VERSION = '1.0.0.1';
 import { getPostLoginRoute } from '../../utils/navigationHelper';
 import { useAuthStore } from '../../store/authStore';
 import { useLanguageStore, LANGUAGE_NAMES, type SupportedLanguage } from '../../store/languageStore';
