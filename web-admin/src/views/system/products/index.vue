@@ -356,8 +356,11 @@ function handleCategoryChange() {
 }
 
 // ==================== T149: SKU 智能防呆填充 (名称→大类/单位/装箱 历史记忆) ====================
-// 输产品名称后, 调用只读 /suggest 端点按历史 SKU 记忆推断默认值,
-// 仅回填用户尚未手动设置的字段 (非覆盖), 全部仍可被用户覆盖.
+// 输产品名称后, 调用只读 /suggest 端点按历史 SKU 记忆推断默认值.
+// T154 reactive cascade: 改/删名称后自动填字段随之更新/清空 (非首次填入才有效的旧行为).
+// - 非手动编辑字段: 始终跟随当前匹配结果; 名称清空则清空这些字段.
+// - 手动编辑字段: 保留用户输入, 不覆盖.
+// - cascadeWriting 守卫: cascade 自己写字段时不触发手动编辑标志 (防循环).
 
 // 手动编辑追踪标志 — 一旦用户手动改过, 智能填充不再覆盖该字段
 const categoryManuallyEdited = ref(false);
@@ -371,6 +374,9 @@ const gramsPerUnitManuallyEdited = ref(false);
 const wipToFgYieldManuallyEdited = ref(false);
 // T153: 基础名称手动编辑追踪 — 一旦用户手输/选择, 自动推导不再覆盖
 const baseProductNameManuallyEdited = ref(false);
+
+// T154: cascade 正在写字段时置 true, 防止 handleExtendedFormUpdate 把 cascade 写入误标为手动编辑
+let cascadeWriting = false;
 
 // 智能填充命中提示 (展示匹配来源产品名)
 const suggestHint = ref('');
@@ -397,6 +403,29 @@ function resetSuggestFlags() {
   suggestHint.value = '';
 }
 
+// T154: 清空所有 cascade 管控字段 (名称被清空时调用; 手动编辑字段保留)
+function clearCascadeFields() {
+  cascadeWriting = true;
+  try {
+    if (!categoryManuallyEdited.value) {
+      // 大类重置为当前 tab 默认值 (大类是必填, 不能置 null)
+      formData.productCategory = activeTab.value;
+    }
+    if (!unitManuallyEdited.value) formData.unit = '';
+    if (!level1UnitManuallyEdited.value) formData.level1Unit = undefined;
+    if (!boxCoefManuallyEdited.value) formData.boxConversionCoefficient = undefined;
+    if (!temperatureZoneManuallyEdited.value) formData.temperatureZone = '';
+    if (!gramsPerUnitManuallyEdited.value) formData.gramsPerUnit = undefined;
+    if (!wipToFgYieldManuallyEdited.value) formData.wipToFgYield = undefined;
+    if (!baseProductNameManuallyEdited.value) formData.baseProductName = '';
+    // 规格: 若未手动编辑, 清空 (结构化字段都清了, 重新拼会得到空串)
+    if (!specificationManuallyEdited.value) formData.specification = '';
+    suggestHint.value = '';
+  } finally {
+    cascadeWriting = false;
+  }
+}
+
 interface SuggestResult {
   productCategory?: string | null;
   unit?: string | null;
@@ -412,13 +441,16 @@ interface SuggestResult {
 }
 
 // T150: DynamicEntityForm 更新处理 — 透传 formData 并追踪 gramsPerUnit/wipToFgYield 手动编辑
+// T154: cascadeWriting 守卫 — cascade 写字段时不触发手动编辑标志
 function handleExtendedFormUpdate(event: Record<string, unknown>) {
-  // 若用户改了 gramsPerUnit/wipToFgYield (从非空改 或 从 null/undefined 改为有值), 标记已手动编辑
-  if (event.gramsPerUnit !== undefined && event.gramsPerUnit !== formData.gramsPerUnit) {
-    gramsPerUnitManuallyEdited.value = true;
-  }
-  if (event.wipToFgYield !== undefined && event.wipToFgYield !== formData.wipToFgYield) {
-    wipToFgYieldManuallyEdited.value = true;
+  if (!cascadeWriting) {
+    // 若用户改了 gramsPerUnit/wipToFgYield (从非空改 或 从 null/undefined 改为有值), 标记已手动编辑
+    if (event.gramsPerUnit !== undefined && event.gramsPerUnit !== formData.gramsPerUnit) {
+      gramsPerUnitManuallyEdited.value = true;
+    }
+    if (event.wipToFgYield !== undefined && event.wipToFgYield !== formData.wipToFgYield) {
+      wipToFgYieldManuallyEdited.value = true;
+    }
   }
   Object.assign(formData, event);
 }
@@ -427,71 +459,79 @@ async function fetchSuggest() {
   // 仅新增模式; 编辑模式不自动改用户既有数据
   if (isEditing.value || !factoryId.value) return;
   const name = (formData.name || '').trim();
-  if (!name) { suggestHint.value = ''; return; }
+  // T154: 名称为空 → 清空所有 cascade 管控的非手动编辑字段
+  if (!name) { clearCascadeFields(); return; }
   try {
     const res = await get<SuggestResult>(`/${factoryId.value}/product-types/suggest`, {
       params: { name, productCategory: formData.productCategory || undefined },
     });
-    if (!res.success || !res.data) { suggestHint.value = ''; return; }
-    const s = res.data;
-    let filledAny = false;
+    // T154: cascade 开始写字段, 防 handleExtendedFormUpdate 误标手动编辑
+    cascadeWriting = true;
+    try {
+      if (!res.success || !res.data) { suggestHint.value = ''; return; }
+      const s = res.data;
+      let filledAny = false;
 
-    // 大类: 仅当用户未手动改过 (仍是 tab 默认/未触碰) 时回填
-    if (s.productCategory && !categoryManuallyEdited.value && formData.productCategory !== s.productCategory) {
-      formData.productCategory = s.productCategory as ProductCategory;
-      refreshCodePreview(); // 大类变化需刷新编号预览
-      filledAny = true;
-    }
-    // 单位 (二级): 仅当为空且用户未手动改过
-    if (s.unit && !unitManuallyEdited.value && !formData.unit) {
-      formData.unit = s.unit;
-      filledAny = true;
-    }
-    // 一级单位: 仅当为空且未手动改过
-    if (s.level1Unit && !level1UnitManuallyEdited.value && !formData.level1Unit) {
-      formData.level1Unit = s.level1Unit;
-      filledAny = true;
-    }
-    // 装箱换算系数: 仅当为空且未手动改过
-    if (s.boxConversionCoefficient != null && !boxCoefManuallyEdited.value
-        && (formData.boxConversionCoefficient == null || formData.boxConversionCoefficient === undefined)) {
-      formData.boxConversionCoefficient = s.boxConversionCoefficient;
-      filledAny = true;
-    }
-    // T150: 温区 — 仅当为空且未手动改过
-    if (s.temperatureZone && !temperatureZoneManuallyEdited.value && !formData.temperatureZone) {
-      formData.temperatureZone = s.temperatureZone;
-      filledAny = true;
-    }
-    // T150: 规格 — 仅当为空且未手动改过
-    if (s.specification && !specificationManuallyEdited.value && !formData.specification) {
-      formData.specification = s.specification;
-      filledAny = true;
-    }
-    // T150: 标准克重 — 仅当为空且未手动改过
-    if (s.gramsPerUnit != null && !gramsPerUnitManuallyEdited.value
-        && (formData.gramsPerUnit == null || formData.gramsPerUnit === undefined)) {
-      formData.gramsPerUnit = s.gramsPerUnit;
-      filledAny = true;
-    }
-    // T150: 半成品出成率 — 仅当为空且未手动改过
-    if (s.wipToFgYield != null && !wipToFgYieldManuallyEdited.value
-        && (formData.wipToFgYield == null || formData.wipToFgYield === undefined)) {
-      formData.wipToFgYield = s.wipToFgYield;
-      filledAny = true;
-    }
-    // T153: 基础名称 — 仅当为空且未手动改过 (匹配产品带出的优先于本地推导)
-    if (s.baseProductName && !baseProductNameManuallyEdited.value && !formData.baseProductName) {
-      formData.baseProductName = s.baseProductName;
-      filledAny = true;
-    }
+      // T154 reactive: 对每个非手动编辑字段, 始终写入新匹配值 (或清空 null); 不再限制"仅当为空".
+      // 大类: 未手动改过 → 跟随匹配结果; 匹配无结果时保持 tab 默认 (大类是必填)
+      if (!categoryManuallyEdited.value) {
+        const newCat = (s.productCategory as ProductCategory | null) ?? null;
+        if (newCat && formData.productCategory !== newCat) {
+          formData.productCategory = newCat;
+          refreshCodePreview(); // 大类变化需刷新编号预览
+          filledAny = true;
+        }
+      }
+      // 单位 (二级): 未手动改过 → 写入或清空
+      if (!unitManuallyEdited.value) {
+        const newUnit = s.unit ?? '';
+        if (formData.unit !== newUnit) { formData.unit = newUnit; filledAny = true; }
+      }
+      // 一级单位: 未手动改过 → 写入或清空
+      if (!level1UnitManuallyEdited.value) {
+        const newL1 = s.level1Unit ?? undefined;
+        if (formData.level1Unit !== newL1) { formData.level1Unit = newL1; filledAny = true; }
+      }
+      // 装箱换算系数: 未手动改过 → 写入或清空
+      if (!boxCoefManuallyEdited.value) {
+        const newCoef = s.boxConversionCoefficient ?? undefined;
+        if (formData.boxConversionCoefficient !== newCoef) { formData.boxConversionCoefficient = newCoef; filledAny = true; }
+      }
+      // 温区: 未手动改过 → 写入或清空
+      if (!temperatureZoneManuallyEdited.value) {
+        const newTz = s.temperatureZone ?? '';
+        if (formData.temperatureZone !== newTz) { formData.temperatureZone = newTz; filledAny = true; }
+      }
+      // 规格 (从 /suggest 直接给的原始规格字符串): 未手动改过 → 写入; 无匹配则让结构化字段重拼
+      if (!specificationManuallyEdited.value && s.specification) {
+        if (formData.specification !== s.specification) { formData.specification = s.specification; filledAny = true; }
+      }
+      // 标准克重: 未手动改过 → 写入或清空
+      if (!gramsPerUnitManuallyEdited.value) {
+        const newGrams = s.gramsPerUnit ?? undefined;
+        if (formData.gramsPerUnit !== newGrams) { formData.gramsPerUnit = newGrams; filledAny = true; }
+      }
+      // 半成品出成率: 未手动改过 → 写入或清空
+      if (!wipToFgYieldManuallyEdited.value) {
+        const newYield = s.wipToFgYield ?? undefined;
+        if (formData.wipToFgYield !== newYield) { formData.wipToFgYield = newYield; filledAny = true; }
+      }
+      // T153: 基础名称 (匹配产品带出的优先于本地推导): 未手动改过 → 写入或清空
+      if (!baseProductNameManuallyEdited.value) {
+        const newBpn = s.baseProductName ?? '';
+        if (formData.baseProductName !== newBpn) { formData.baseProductName = newBpn; filledAny = true; }
+      }
 
-    // 命中提示 (仅名称匹配到历史产品时, matchedFrom 才有值)
-    suggestHint.value = (filledAny && s.matchedFrom)
-      ? `已按历史产品「${s.matchedFrom}」匹配，可修改`
-      : '';
+      // 命中提示 (仅名称匹配到历史产品时, matchedFrom 才有值)
+      suggestHint.value = (filledAny && s.matchedFrom)
+        ? `已按历史产品「${s.matchedFrom}」匹配，可修改`
+        : '';
+    } finally {
+      cascadeWriting = false;
+    }
   } catch {
     // 静默: 建议失败不影响录入, 不编造默认值
+    cascadeWriting = false;
     suggestHint.value = '';
   }
 }
@@ -542,8 +582,8 @@ watch(
     // 用户手动改过规格 → 停止自动拼 (尊重用户输入)
     if (specificationManuallyEdited.value) return;
     const composed = composeSpecification();
-    // 只在能拼出内容时回填; 结构化字段全空时不清掉用户/历史已有规格
-    if (composed && formData.specification !== composed) {
+    // T154: cascade 清空结构化字段后 composed 为空串 → 也清掉规格 (不保留旧自动拼结果)
+    if (formData.specification !== composed) {
       formData.specification = composed;
     }
   },
@@ -573,7 +613,11 @@ watch(
   () => {
     if (!dialogVisible.value || isEditing.value) return;
     if (baseProductNameManuallyEdited.value) return;
-    if (!formData.name || !formData.name.trim()) return;
+    if (!formData.name || !formData.name.trim()) {
+      // T154: 名称清空 → 基础名称也清空 (cascade 已设置过的)
+      if (formData.baseProductName) formData.baseProductName = '';
+      return;
+    }
     const derived = deriveBaseProductName();
     // 不过度剥离: 推导为空 → 留空 (不写空串去覆盖已有值, 也不臆造)
     if (derived && formData.baseProductName !== derived) {
