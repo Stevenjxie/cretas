@@ -609,13 +609,16 @@ public class ProductTypeServiceImpl implements ProductTypeService {
      * 名称匹配打分: 输入 token 与目标产品 (name + baseProductName) 的 token 重叠占比 (Jaccard-ish),
      * 叠加子串包含奖励, 再叠加 LCS (最长公共连续子串) 信号.
      *
-     * <p>T151: 增加 LCS 信号, 使"出纳士大夫地方掌中宝"等噪声前缀场景也能匹配到含「掌中宝」的历史产品.
+     * <p>T152: 简化为关键词包含逻辑 (Steve 指令: "只要名称里面有关键词就匹配").
+     * LCS ≥ 2 中文字即为匹配, 去掉 T151 的 ≥40% 占比限制.
+     * 分数按 LCS 长度线性升, 使更长的共享子串排名更高 (最具体的匹配获胜).
      *
      * <ul>
-     *   <li>LCS ≥ 3 中文字: 强信号 — 直接给高分 (0.5 + lcsLen/10, 远超阈值 0.34);</li>
-     *   <li>LCS = 2 中文字 且占目标中文串 ≥ 40%: 中信号 (0.35, 刚好过阈值) — 覆盖猪舌/牛腱等 2 字产品名;</li>
-     *   <li>LCS = 2 中文字 但占比 &lt; 40%: 不加分 (避免巧合 2 字碎片误匹配);</li>
-     *   <li>最终 score = max(coverage + substrBonus, lcsScore).</li>
+     *   <li>LCS ≥ 2 中文字: lcsScore = min(1.0, 0.4 + 0.2 * lcsLen)
+     *       — LCS=2 → 0.8, LCS=3 → 1.0, 全部超过阈值 0.34;</li>
+     *   <li>LCS = 1 或 0: 不加分 (单字噪声太多, 如「的」「光」);</li>
+     *   <li>最终 score = max(coverage + substrBonus, lcsScore);</li>
+     *   <li>最高分产品获胜 — 更长 LCS (更具体的关键词) 优先于更短的偶然 2 字重叠.</li>
      * </ul>
      */
     private double nameMatchScore(List<String> inputTokens, String inputName, ProductType target) {
@@ -644,37 +647,20 @@ public class ProductTypeServiceImpl implements ProductTypeService {
         }
         double baseScore = Math.min(1.0, coverage + substrBonus);
 
-        // T151: LCS (最长公共连续子串) 信号 — 仅对中文字符计算, 排除数字/规格/英文噪声
+        // T152: LCS (最长公共连续子串) 信号 — 仅对中文字符计算, 排除数字/规格/英文噪声.
+        // 简化规则: LCS ≥ 2 即匹配 (关键词包含), 去掉 T151 的 ≥40% 占比限制.
         String inHan = inputName.replaceAll("[^\\u4e00-\\u9fff]", "");
-        // 对比 name 和 baseProductName 分别计算 LCS, 记录各自长度和对应目标串
         String tgtNameHan = target.getName().replaceAll("[^\\u4e00-\\u9fff]", "");
         String tgtBaseHan = (target.getBaseProductName() != null)
                 ? target.getBaseProductName().replaceAll("[^\\u4e00-\\u9fff]", "")
                 : "";
         int lcsFromName = longestCommonSubstring(inHan, tgtNameHan);
         int lcsFromBase = tgtBaseHan.isEmpty() ? 0 : longestCommonSubstring(inHan, tgtBaseHan);
+        int maxLcs = Math.max(lcsFromName, lcsFromBase);
 
-        double lcsScore = 0.0;
-        // 评估来自 baseProductName 的 LCS
-        if (lcsFromBase >= 3) {
-            lcsScore = Math.min(1.0, 0.5 + lcsFromBase / 10.0);
-        } else if (lcsFromBase == 2 && !tgtBaseHan.isEmpty()
-                && (double) lcsFromBase / tgtBaseHan.length() >= 0.40) {
-            // 2 字 LCS 且占 baseProductName 字数 ≥ 40% (猪舌/牛腱/猪蹄等 2 字产品名: 2/2=100%)
-            lcsScore = 0.35;
-        }
-        // 评估来自 name 的 LCS (优先 base; name 更长噪声更多, 阈值更严)
-        if (lcsScore == 0.0) {
-            if (lcsFromName >= 3) {
-                // 3+ 字 LCS 在完整 name 里 (baseProductName 为 null 时仍能命中「掌中宝」等)
-                lcsScore = Math.min(1.0, 0.5 + lcsFromName / 10.0);
-            } else if (lcsFromName == 2 && !tgtNameHan.isEmpty()
-                    && (double) lcsFromName / tgtNameHan.length() >= 0.40) {
-                // 2 字 LCS 占 name 中文部分 ≥ 40% (短名产品且 baseProductName 未设)
-                lcsScore = 0.35;
-            }
-            // 2 字 LCS 占 tgtNameHan < 40% → 碎片巧合 (如「好食」占「好食光卤猪蹄」= 33%), 不加分
-        }
+        // LCS ≥ 2: score = 0.4 + 0.2 * lcsLen (capped 1.0); LCS=2 → 0.8, LCS=3 → 1.0
+        // 长 LCS 产品优先 (更具体关键词排名更高, 相同 LCS 时 coverage 决定)
+        double lcsScore = maxLcs >= 2 ? Math.min(1.0, 0.4 + 0.2 * maxLcs) : 0.0;
 
         return Math.max(baseScore, lcsScore);
     }
