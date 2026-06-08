@@ -116,7 +116,7 @@ android {
         applicationId 'com.cretas.foodtrace'
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 11
+        versionCode 12
         versionName "1.0.1"
     }
     signingConfigs {

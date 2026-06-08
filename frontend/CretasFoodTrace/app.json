@@ -43,7 +43,7 @@
       },
       "edgeToEdgeEnabled": true,
       "package": "com.cretas.foodtrace",
-      "versionCode": 11,
+      "versionCode": 12,
       "permissions": [
         "CAMERA",
         "READ_EXTERNAL_STORAGE",
