@@ -3,8 +3,15 @@
  *
  * 用途: 让操作员选择本次领料的原料批次 (1 or N) + 每批次用量, 生成 materialBatchRefs 数组.
  * 调用方: YieldStepReportScreen (currentStepIndex === 0, 首道).
+ *
+ * ── 单一数据源规则 (Q1) ─────────────────────────────────────────────────────
+ * 单批次已选时: 无独立的 per-batch 用量输入。该批次的 quantity = 屏幕的 inputQty
+ * (由 singleBatchQty prop 传入)。屏幕的 YieldQuantityInput "投入量" IS 用量。
+ * 多批次已选时: 每批显示独立用量输入；投入量 = Σ(各批次用量)，在屏幕层只读展示。
+ * 效果：两字段永远不会产生分歧。
+ * ────────────────────────────────────────────────────────────────────────────
  */
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -31,6 +38,12 @@ interface MaterialBatchPickerProps {
   value: MaterialBatchRef[];
   /** 变更回调 */
   onChange: (refs: MaterialBatchRef[]) => void;
+  /**
+   * Q1 单一数据源: 单批次已选时, 该批次的 quantity 由此 prop 驱动 (= 屏幕投入量).
+   * 仅在单批次模式生效; 多批次模式下忽略 (各批次用独立输入).
+   * 屏幕在 onChange 返回的 refs 里 quantity 若是 single-batch 会自动同步最新 singleBatchQty.
+   */
+  singleBatchQty?: string;
   /** 是否禁用 (提交进行中) */
   disabled?: boolean;
   /**
@@ -44,7 +57,7 @@ interface MaterialBatchPickerProps {
 interface RowState {
   batch: MaterialBatch;
   selected: boolean;
-  qtyStr: string; // string 便于 TextInput
+  qtyStr: string; // 仅多批次模式使用; 单批次模式下忽略 (由 singleBatchQty 驱动)
 }
 
 export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
@@ -52,6 +65,7 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
   factoryId,
   value,
   onChange,
+  singleBatchQty = '',
   disabled = false,
   required = false,
 }) => {
@@ -59,25 +73,47 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
   const [loadError, setLoadError] = useState<string | null>(null);
   const [rows, setRows] = useState<RowState[]>([]);
   const [expanded, setExpanded] = useState(false);
+  // Q2: picker 已通过「确定选择」按钮确认收起 → 显示 summary + 确认反馈
+  const [confirmed, setConfirmed] = useState(false);
+  const [confirmFeedback, setConfirmFeedback] = useState(false);
+  const confirmTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  const selectedRows = rows.filter((r) => r.selected);
+  const isMultiBatch = selectedRows.length > 1;
+
+  // ── onChange 防抖机制 ────────────────────────────────────────────────────
   // Issue #3 fix: emit onChange in a useEffect keyed on rows, NOT inside setRows updater.
   // Calling parent setState (onChange → setMaterialBatchRefs) from inside setRows updater
   // triggers "Cannot update a component while rendering" warning.
-  const onChangeRef = React.useRef(onChange);
+  const onChangeRef = useRef(onChange);
   onChangeRef.current = onChange;
+
+  // Q1: 每当 rows / singleBatchQty / unit 变化时重新 emit refs
+  // 单批次: quantity = singleBatchQty (父的 投入量 即用量, 单一真相)
+  // 多批次: quantity = 各自独立输入的 qtyStr
   useEffect(() => {
     const refs: MaterialBatchRef[] = [];
-    for (const row of rows) {
-      if (!row.selected) continue;
-      const qty = parseFloat(row.qtyStr);
-      if (!Number.isNaN(qty) && qty > 0) {
-        refs.push({ materialBatchId: row.batch.id, quantity: qty, unit });
+    const selected = rows.filter((r) => r.selected);
+    const isSingle = selected.length === 1;
+
+    for (const row of selected) {
+      if (isSingle) {
+        // 单批次: qty 由屏幕 投入量 驱动
+        const qty = parseFloat(singleBatchQty);
+        if (!Number.isNaN(qty) && qty > 0) {
+          refs.push({ materialBatchId: row.batch.id, quantity: qty, unit });
+        }
+      } else {
+        // 多批次: 使用各自 qtyStr
+        const qty = parseFloat(row.qtyStr);
+        if (!Number.isNaN(qty) && qty > 0) {
+          refs.push({ materialBatchId: row.batch.id, quantity: qty, unit });
+        }
       }
     }
     onChangeRef.current(refs);
-    // unit is intentionally included: if the picker unit changes, re-emit with new unit
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rows, unit]);
+  }, [rows, singleBatchQty, unit]);
 
   // 从 value prop 初始化/同步 rows (仅在 batches 加载完成后)
   const syncRowsFromValue = useCallback(
@@ -123,8 +159,18 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
     }
   }, [expanded, rows.length, loading, loadBatches]);
 
+  // Q2: 清理定时器
+  useEffect(() => {
+    return () => {
+      if (confirmTimerRef.current) clearTimeout(confirmTimerRef.current);
+    };
+  }, []);
+
   const toggleRow = useCallback(
     (idx: number) => {
+      // 切换选中时清除 confirmed 状态 (用户在重新选)
+      setConfirmed(false);
+      setConfirmFeedback(false);
       setRows((prev: RowState[]) =>
         prev.map((r: RowState, i: number) =>
           i === idx ? { ...r, selected: !r.selected, qtyStr: !r.selected ? '' : r.qtyStr } : r,
@@ -136,7 +182,7 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
 
   const setQty = useCallback(
     (idx: number, raw: string) => {
-      // 只允许数字 + 小数点
+      // 只允许数字 + 小数点 (仅多批次模式使用)
       const cleaned = raw.replace(/[^0-9.]/g, '');
       const parts = cleaned.split('.');
       const normalized =
@@ -150,14 +196,81 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
     [],
   );
 
+  // Q2: 「确定选择」按钮点击: 校验 → 折叠 + 显示确认反馈
+  const handleConfirm = useCallback(() => {
+    const selected = rows.filter((r) => r.selected);
+    if (selected.length === 0) {
+      // 不满足最少选 1 批
+      return;
+    }
+    const isSingle = selected.length === 1;
+    if (isSingle) {
+      const qty = parseFloat(singleBatchQty);
+      if (Number.isNaN(qty) || qty <= 0) {
+        // 单批次 qty 来自屏幕 投入量, 为空时提示先填投入量
+        return;
+      }
+    } else {
+      // 多批次: 每批 qtyStr 都要有效
+      const anyInvalid = selected.some((r) => {
+        const q = parseFloat(r.qtyStr);
+        return Number.isNaN(q) || q <= 0;
+      });
+      if (anyInvalid) return;
+    }
+
+    setConfirmed(true);
+    setExpanded(false);
+    // 短暂反馈 (1.5s 后消失)
+    setConfirmFeedback(true);
+    if (confirmTimerRef.current) clearTimeout(confirmTimerRef.current);
+    confirmTimerRef.current = setTimeout(() => {
+      setConfirmFeedback(false);
+    }, 1500);
+  }, [rows, singleBatchQty]);
+
+  // Q2 验证按钮是否可以点击
+  const canConfirm = useCallback((): boolean => {
+    const selected = rows.filter((r) => r.selected);
+    if (selected.length === 0) return false;
+    const isSingle = selected.length === 1;
+    if (isSingle) {
+      const qty = parseFloat(singleBatchQty);
+      return !Number.isNaN(qty) && qty > 0;
+    }
+    return selected.every((r) => {
+      const q = parseFloat(r.qtyStr);
+      return !Number.isNaN(q) && q > 0;
+    });
+  }, [rows, singleBatchQty]);
+
   const selectedCount = value.length;
+
+  // Q3: 折叠摘要文案 (已确认后显示)
+  const collapsedSummary = (() => {
+    if (selectedCount === 0) return null;
+    const isSingle = selectedCount === 1;
+    const firstRef = value[0];
+    if (isSingle && firstRef) {
+      const row = rows.find((r) => r.batch.id === firstRef.materialBatchId);
+      const name = row?.batch.materialName ?? row?.batch.batchNumber ?? '—';
+      const qty = firstRef.quantity;
+      return `已选 ${name} · 用量 ${qty} ${unit}`;
+    }
+    const total = value.reduce((s, r) => s + r.quantity, 0);
+    return `已选 ${selectedCount} 批次 · 合计 ${total.toFixed(2)} ${unit}`;
+  })();
 
   return (
     <View style={styles.wrap}>
       {/* 折叠 header */}
       <TouchableOpacity
         style={styles.header}
-        onPress={() => setExpanded((e: boolean) => !e)}
+        onPress={() => {
+          setExpanded((e: boolean) => !e);
+          // 重新展开时清除 confirmed 状态, 让用户重新确认
+          if (!expanded) setConfirmed(false);
+        }}
         disabled={disabled}
         accessibilityLabel="展开/折叠领料批次选择"
       >
@@ -174,6 +287,31 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
         </Text>
         <Text style={styles.chevron}>{expanded ? '▲' : '▼'}</Text>
       </TouchableOpacity>
+
+      {/* Q2 + Q3: 已确认折叠后显示摘要行 + 「修改」按钮 */}
+      {!expanded && confirmed && collapsedSummary ? (
+        <View style={styles.summaryRow}>
+          <Text style={styles.summaryText} numberOfLines={1}>{collapsedSummary}</Text>
+          <TouchableOpacity
+            onPress={() => {
+              setExpanded(true);
+              setConfirmed(false);
+            }}
+            disabled={disabled}
+            style={styles.modifyBtn}
+            accessibilityLabel="修改领料批次"
+          >
+            <Text style={styles.modifyText}>修改</Text>
+          </TouchableOpacity>
+        </View>
+      ) : null}
+
+      {/* Q2: 已确认反馈 (短暂) */}
+      {confirmFeedback ? (
+        <View style={styles.feedbackRow}>
+          <Text style={styles.feedbackText}>已确认 ✓</Text>
+        </View>
+      ) : null}
 
       {expanded ? (
         <View style={styles.body}>
@@ -219,8 +357,12 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
                     </Text>
                   </View>
 
-                  {/* 用量输入 (选中时显示) */}
-                  {row.selected ? (
+                  {/*
+                   * Q1 单一数据源:
+                   * 单批次已选 → 不显示 per-batch 用量输入，qty 由屏幕「投入量」驱动
+                   * 多批次已选 → 显示各自用量输入
+                   */}
+                  {row.selected && isMultiBatch ? (
                     <View style={styles.qtyBox}>
                       <TextInput
                         style={[styles.qtyInput, disabled && styles.qtyInputDisabled]}
@@ -234,20 +376,50 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
                       />
                       <Text style={styles.qtyUnit}>{unit}</Text>
                     </View>
+                  ) : row.selected && !isMultiBatch ? (
+                    // 单批次: 显示提示, 投入量由屏幕控制
+                    <View style={styles.singleQtyHint}>
+                      <Text style={styles.singleQtyHintText}>用量 = 投入量</Text>
+                    </View>
                   ) : null}
                 </View>
               ))}
             </ScrollView>
           )}
 
-          {/* 选中提示 */}
-          {selectedCount > 0 ? (
+          {/* 多批次合计 */}
+          {selectedCount > 0 && isMultiBatch ? (
             <View style={styles.selectedHint}>
               <Text style={styles.selectedHintText}>
                 已选 {selectedCount} 批次 · 合计领料{' '}
                 {value.reduce((s: number, r: MaterialBatchRef) => s + r.quantity, 0).toFixed(2)} {unit}
               </Text>
             </View>
+          ) : null}
+
+          {/* Q1: 单批次时提示投入量即用量 */}
+          {selectedCount === 1 && !isMultiBatch ? (
+            <View style={styles.singleBatchNote}>
+              <Text style={styles.singleBatchNoteText}>
+                单批次: 投入量即该批次的领用量，请在下方「投入量」填写
+              </Text>
+            </View>
+          ) : null}
+
+          {/* Q2: 「确定选择」按钮 */}
+          {selectedCount > 0 ? (
+            <TouchableOpacity
+              style={[styles.confirmBtn, !canConfirm() && styles.confirmBtnDisabled]}
+              onPress={handleConfirm}
+              disabled={disabled || !canConfirm()}
+              accessibilityLabel="确定选择领料批次"
+            >
+              <Text style={[styles.confirmBtnText, !canConfirm() && styles.confirmBtnTextDisabled]}>
+                {isMultiBatch
+                  ? (canConfirm() ? '确定选择' : '请为每批次填写用量')
+                  : (canConfirm() ? '确定选择' : '请先在下方填写投入量')}
+              </Text>
+            </TouchableOpacity>
           ) : null}
         </View>
       ) : null}
@@ -266,6 +438,30 @@ const styles = StyleSheet.create({
   optional: { color: '#909399', fontWeight: '400' },
   requiredMark: { color: '#F56C6C', fontWeight: '700' },
   chevron: { fontSize: 12, color: '#909399' },
+
+  // Q3: 折叠后摘要行
+  summaryRow: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: 14, paddingVertical: 8,
+    borderTopWidth: 1, borderTopColor: '#EBEEF5',
+    backgroundColor: '#FFF7F0',
+  },
+  summaryText: { flex: 1, fontSize: 13, color: '#E8732E', fontWeight: '600' },
+  modifyBtn: {
+    paddingHorizontal: 12, paddingVertical: 4,
+    backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#E8732E', borderRadius: 12,
+    marginLeft: 8,
+  },
+  modifyText: { fontSize: 13, color: '#E8732E', fontWeight: '600' },
+
+  // Q2: 已确认反馈 (短暂)
+  feedbackRow: {
+    paddingHorizontal: 14, paddingVertical: 6,
+    borderTopWidth: 1, borderTopColor: '#EBEEF5',
+    backgroundColor: '#F0F9EB',
+  },
+  feedbackText: { fontSize: 13, color: '#67C23A', fontWeight: '600', textAlign: 'center' },
+
   body: { borderTopWidth: 1, borderTopColor: '#EBEEF5', paddingHorizontal: 12, paddingTop: 10, paddingBottom: 6 },
   center: { alignItems: 'center', paddingVertical: 16 },
   loadingText: { marginTop: 8, fontSize: 13, color: '#909399' },
@@ -298,10 +494,34 @@ const styles = StyleSheet.create({
   },
   qtyInputDisabled: { opacity: 0.5 },
   qtyUnit: { fontSize: 13, color: '#909399', marginLeft: 4 },
+
+  // Q1: 单批次时 per-row 提示
+  singleQtyHint: {
+    paddingHorizontal: 8, paddingVertical: 4,
+    backgroundColor: '#F0F9EB', borderRadius: 6,
+  },
+  singleQtyHintText: { fontSize: 12, color: '#67C23A', fontWeight: '500' },
+
   selectedHint: {
     backgroundColor: '#F0F9EB', borderRadius: 6, paddingHorizontal: 10, paddingVertical: 6, marginTop: 8,
   },
   selectedHintText: { fontSize: 13, color: '#67C23A', fontWeight: '500' },
+
+  // Q1: 单批次提示
+  singleBatchNote: {
+    backgroundColor: '#ECF5FF', borderRadius: 6, paddingHorizontal: 10, paddingVertical: 6, marginTop: 8,
+  },
+  singleBatchNoteText: { fontSize: 12, color: '#409EFF' },
+
+  // Q2: 确定选择按钮
+  confirmBtn: {
+    marginTop: 12, height: 44, borderRadius: 8,
+    backgroundColor: '#E8732E',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  confirmBtnDisabled: { backgroundColor: '#F5F7FA', borderWidth: 1, borderColor: '#DCDFE6' },
+  confirmBtnText: { fontSize: 15, fontWeight: '700', color: '#FFFFFF' },
+  confirmBtnTextDisabled: { color: '#C0C4CC' },
 });
 
 export default MaterialBatchPicker;

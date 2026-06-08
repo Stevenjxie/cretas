@@ -536,7 +536,11 @@ const YieldStepReportScreen: React.FC = () => {
       appAlert('证据上传中', '请等照片或视频上传完成再提交');
       return;
     }
-    const input = parseFloat(inputQty);
+    // Q1 单一数据源: 多批次时投入量 = Σ 各批次用量 (materialBatchRefs 已含各 qty), 不用 inputQty
+    const isMultiBatchSubmit = isFirstStep && materialBatchRefs.length > 1;
+    const input = isMultiBatchSubmit
+      ? materialBatchRefs.reduce((s, r) => s + r.quantity, 0)
+      : parseFloat(inputQty);
     if (Number.isNaN(input) || input <= 0) {
       appAlert('请填写本道投入量', '投入量必须大于 0');
       return;
@@ -1099,12 +1103,16 @@ const YieldStepReportScreen: React.FC = () => {
             <NeoCard variant="elevated" style={styles.card}>
               <Text style={styles.phaseHint}>第一步: 录入本道投入量, 领料/选半成品, 拍投料照</Text>
 
-              {/* A2b: 首道领料批次选择 (仅首道) — B1: required prop signals red asterisk */}
+              {/* A2b: 首道领料批次选择 (仅首道) — B1: required prop signals red asterisk
+               * Q1 单一数据源: singleBatchQty 把屏幕的 inputQty 传进 picker, 单批次模式下
+               * picker 不显示独立用量输入框, 该批次 quantity = inputQty (投入量 IS 用量).
+               * 多批次模式下 picker 显示各批独立输入, inputQty 由 Σ 自动算只读展示. */}
               {isFirstStep ? (
                 <MaterialBatchPicker
                   unit={unit}
                   value={materialBatchRefs}
                   onChange={setMaterialBatchRefs}
+                  singleBatchQty={inputQty}
                   disabled={submitting}
                   required
                 />
@@ -1130,20 +1138,32 @@ const YieldStepReportScreen: React.FC = () => {
                 </View>
               ) : null}
 
-              {/* B4: defaultTrayWeighing pre-expands the tray calc for first-step (投入) */}
-              <YieldQuantityInput
-                label="投入量"
-                value={inputQty}
-                onChangeText={setInputQty}
-                unit={unit}
-                max={inputMax}
-                maxHint={inputMaxHint}
-                prefillNote={prefillNote}
-                disabled={submitting}
-                calculatorMode
-                defaultTrayWeighing={isFirstStep}
-                testID="yield-input-qty"
-              />
+              {/* Q1 单一数据源: 多批次时投入量 = Σ(各批次用量), 只读自动算; 单批次时正常可编辑
+               * B4: defaultTrayWeighing pre-expands the tray calc for first-step (投入) */}
+              {isFirstStep && materialBatchRefs.length > 1 ? (
+                // 多批次选中: 投入量 = Σ 各批次用量, 显示只读汇总
+                <View style={styles.multiQtyReadonly} testID="yield-input-qty-multi-readonly">
+                  <Text style={styles.multiQtyLabel}>投入量 (多批次合计)</Text>
+                  <Text style={styles.multiQtyValue}>
+                    {materialBatchRefs.reduce((s, r) => s + r.quantity, 0).toFixed(2)} {unit}
+                  </Text>
+                  <Text style={styles.multiQtyHint}>投入量 = 各批次用量之和 (在上方各批次分别填写)</Text>
+                </View>
+              ) : (
+                <YieldQuantityInput
+                  label="投入量"
+                  value={inputQty}
+                  onChangeText={setInputQty}
+                  unit={unit}
+                  max={inputMax}
+                  maxHint={inputMaxHint}
+                  prefillNote={prefillNote}
+                  disabled={submitting}
+                  calculatorMode
+                  defaultTrayWeighing={isFirstStep}
+                  testID="yield-input-qty"
+                />
+              )}
 
               {/* A4 + P0-3: 投入超收预检提示 */}
               {yieldLimits != null ? (
@@ -1738,6 +1758,13 @@ const styles = StyleSheet.create({
     alignItems: 'center', justifyContent: 'center',
   },
   photoBtnOutlineText: { fontSize: 15, color: '#E8732E', fontWeight: '600' },
+  // Q1 多批次只读投入量
+  multiQtyReadonly: {
+    backgroundColor: '#F0F9EB', borderRadius: 8, padding: 12, marginBottom: 16,
+  },
+  multiQtyLabel: { fontSize: 14, color: '#67C23A', fontWeight: '600', marginBottom: 4 },
+  multiQtyValue: { fontSize: 26, fontWeight: '700', color: '#303133' },
+  multiQtyHint: { fontSize: 12, color: '#909399', marginTop: 4 },
 });
 
 export default YieldStepReportScreen;
