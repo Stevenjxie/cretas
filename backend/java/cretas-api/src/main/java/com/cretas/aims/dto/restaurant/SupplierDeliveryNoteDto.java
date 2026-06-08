@@ -1,5 +1,6 @@
 package com.cretas.aims.dto.restaurant;
 
+import com.cretas.aims.security.PriceSensitive;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -29,6 +30,8 @@ public class SupplierDeliveryNoteDto {
     private LocalDate deliveryDate;
     private String warehouseId;
     private String noteNumber;
+    /** BUG-02-RBAC (2026-06-09): total invoice amount — masked for roles without finance permission. */
+    @PriceSensitive
     private BigDecimal totalAmount;
     private BigDecimal ocrConfidence;
     private String ocrErrorMessage;
@@ -77,12 +80,20 @@ public class SupplierDeliveryNoteDto {
         private String rawMaterialTypeId;
         private BigDecimal quantity;
         private String unit;
+        /** BUG-02-RBAC (2026-06-09): per-unit price — masked for roles without finance permission. */
+        @PriceSensitive
         private BigDecimal unitPrice;
+        /** BUG-02-RBAC: baseline price for anomaly comparison — masked. */
+        @PriceSensitive
         private BigDecimal baselineUnitPrice;
+        /** BUG-02-RBAC: price variance rate derived from unit/baseline — masked. */
+        @PriceSensitive
         private BigDecimal priceVarianceRate;
         private Boolean priceAnomalyFlag;
         private String priceAnomalyReasonCode;
         private String priceAnomalyExplanation;
+        /** BUG-02-RBAC: line total amount — masked for roles without finance permission. */
+        @PriceSensitive
         private BigDecimal lineAmount;
         private String qcResult;
         private String materialBatchId;

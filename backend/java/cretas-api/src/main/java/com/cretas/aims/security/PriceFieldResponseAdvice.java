@@ -149,6 +149,7 @@ public class PriceFieldResponseAdvice implements ResponseBodyAdvice<Object> {
      * values. Match is case-insensitive and supports the {@code *Ranking}
      * suffix family (salespersonRanking, customerRanking, productRanking,
      * supplierRanking, regionRanking, …) plus singular {@code ranking}.
+     *
      */
     private static final Pattern PRICE_CONTAINER_PATH_REGEX = Pattern.compile(
             "(?i)^(" +
@@ -172,6 +173,36 @@ public class PriceFieldResponseAdvice implements ResponseBodyAdvice<Object> {
                     "|agingBuckets?" +
                     "|inventoryValuation" +
                     ")$"
+    );
+
+    /**
+     * BUG-01-RBAC (2026-06-09): Finance column name pattern for SmartBI
+     * upload raw data rows ({@code GET /smart-bi/uploads/{id}/data} and
+     * {@code /fields}).
+     *
+     * <p>When a Map entry key matches this pattern AND the value is a numeric
+     * scalar, the value is redacted to null. This prevents finance data sheets
+     * (containing labor cost 3200, rent 8500, etc.) from being read by
+     * {@code sales_manager} who has {@code analytics:read} but not
+     * {@code finance:read_write}.
+     *
+     * <p>The pattern matches common Chinese finance column header names used in
+     * SmartBI Excel uploads. Non-finance columns (quantity, product name, date,
+     * store ID, etc.) are preserved so POS/restaurant data stays readable by the
+     * analytics module.
+     *
+     * <p>Applies: any ancestor path segment == "uploadData" (see
+     * PRICE_CONTAINER_PATH_REGEX above) OR the key itself matches here AND
+     * the value is numeric (leaf scalar).
+     */
+    private static final Pattern FINANCE_COLUMN_KEY_REGEX = Pattern.compile(
+            "(?i).*(" +
+                    "金额|amount|价格|单价|售价|成本|利润|收入|营收|营业" +
+                    "|费用|支出|租金|工资|薪酬|薪资|奖金|补贴|社保" +
+                    "|税|增值税|税额|发票|报销|预算|实际额" +
+                    "|revenue|profit|cost|expense|salary|wage|bonus|rent|tax" +
+                    "|price|labor|labour" +
+                    ").*"
     );
 
     /** Path segments where dynamic Map keys (e.g. department name) are the column header for numeric price data. */
@@ -411,6 +442,21 @@ public class PriceFieldResponseAdvice implements ResponseBodyAdvice<Object> {
                 // Rule 2 — known price-value keys inside a price-container path.
                 if (inPriceContainer && PRICE_VALUE_KEYS.contains(key) && isLeafScalar(value)) {
                     trySetEntryNull((Map.Entry<Object, Object>) entry, "PRICE_VALUE_KEY in container");
+                    continue;
+                }
+
+                // Rule 2b — BUG-01-RBAC (2026-06-09): finance column name keys anywhere
+                // in the response graph. This catches Chinese finance column headers (金额,
+                // 劳动力成本, 租金, 工资, etc.) that appear as Map keys in SmartBI upload raw
+                // data rows (GET /uploads/{id}/data). The rule is path-independent because
+                // (a) these Chinese-language finance terms are sufficiently specific to not
+                //     appear in non-financial contexts, and
+                // (b) only fires on Number leaf scalars — product names, dates, and
+                //     quantity columns (which have different column header names) are
+                //     preserved, so POS/restaurant dish-count data is unaffected.
+                if (value instanceof Number
+                        && FINANCE_COLUMN_KEY_REGEX.matcher(key).matches()) {
+                    trySetEntryNull((Map.Entry<Object, Object>) entry, "FINANCE_COLUMN_KEY numeric leaf");
                     continue;
                 }
 
