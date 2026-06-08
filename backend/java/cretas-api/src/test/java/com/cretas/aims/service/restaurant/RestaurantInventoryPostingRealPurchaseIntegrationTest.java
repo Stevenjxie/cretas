@@ -88,7 +88,8 @@ class RestaurantInventoryPostingRealPurchaseIntegrationTest {
                 materialBatchService,
                 null,
                 null,
-                null);
+                null,
+                org.mockito.Mockito.mock(com.cretas.aims.service.uom.MaterialUomConverter.class));
 
         SupplierDeliveryNote note = draftNote();
         when(noteRepository.findByIdAndFactoryId(NOTE_ID, FACTORY)).thenReturn(Optional.of(note));

@@ -17,6 +17,7 @@ import com.cretas.aims.repository.restaurant.SupplierDeliveryNoteLineRepository;
 import com.cretas.aims.repository.restaurant.SupplierDeliveryNoteRepository;
 import com.cretas.aims.service.OssService;
 import com.cretas.aims.service.finance.ArApService;
+import com.cretas.aims.service.intent.IntentConfigManagementService;
 import com.cretas.aims.service.notification.NotificationService;
 import com.cretas.aims.service.restaurant.RestaurantInventoryPostingService;
 import com.cretas.aims.service.restaurant.SupplierDeliveryNoteService;
@@ -24,6 +25,8 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
@@ -64,6 +67,14 @@ public class SupplierDeliveryNoteServiceImpl implements SupplierDeliveryNoteServ
     private final ArApService arApService;
     private final NotificationService notificationService;
 
+    /**
+     * 业态解析 (FACTORY / RESTAURANT) — 用于选择 OCR prompt (T155-B chunk1)。
+     * {@code @Lazy} 打破潜在循环依赖 (AI 意图子系统 → 本 service)。
+     */
+    @Autowired
+    @Lazy
+    private IntentConfigManagementService intentConfigManagementService;
+
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     private static final Set<String> PRICE_ANOMALY_APPROVER_ROLES = Set.of(
@@ -98,6 +109,49 @@ public class SupplierDeliveryNoteServiceImpl implements SupplierDeliveryNoteServ
             }
             要点:1.数量/金额为纯数字无单位 2.日期无法识别返回null 3.confidence<0.5时items返回空数组
             """;
+
+    /**
+     * 工厂业态中性 prompt (T155-B chunk1) — 物料名称而非"食材", 单位覆盖
+     * 冻品/包材/辅料常见单位 (kg/个/件/箱/包)。供应商送货单/进货单识别专家。
+     */
+    private static final String FACTORY_SUPPLIER_NOTE_OCR_PROMPT = """
+            你是供应商送货单识别专家。请识别这张供应商送货单/进货单图片。
+            严格以 JSON 返回(无其他文字):
+            {
+              "note_number": "送货单号(无则null)",
+              "delivery_date": "YYYY-MM-DD(无则今日)",
+              "supplier_name": "供应商名称",
+              "items": [
+                {
+                  "ingredient_name": "物料名称(原料/冻品/包材/辅料)",
+                  "quantity": 数量数值,
+                  "unit": "单位(kg/个/件/箱/包等)",
+                  "unit_price": 单价数值或null,
+                  "line_amount": 金额数值或null
+                }
+              ],
+              "total_amount": 合计金额数值或null,
+              "confidence": 0.0-1.0整体置信度
+            }
+            要点:1.数量/金额为纯数字无单位 2.日期无法识别返回null 3.confidence<0.5时items返回空数组
+            """;
+
+    /**
+     * 按业态选择 OCR prompt: RESTAURANT → 中餐厅食材 prompt; FACTORY → 物料中性 prompt。
+     * 业态解析失败 (任何异常) 默认走餐饮 prompt — 保持餐饮原行为字节不变。
+     */
+    private String resolveOcrPrompt(String factoryId) {
+        try {
+            String domain = intentConfigManagementService.resolveBusinessDomain(factoryId);
+            if ("FACTORY".equals(domain)) {
+                return FACTORY_SUPPLIER_NOTE_OCR_PROMPT;
+            }
+        } catch (Exception e) {
+            log.warn("送货单 OCR prompt 业态解析失败 factory={}, 默认餐饮 prompt: {}",
+                    factoryId, e.getMessage());
+        }
+        return SUPPLIER_NOTE_OCR_PROMPT;
+    }
 
     @Override
     @Transactional
@@ -155,7 +209,7 @@ public class SupplierDeliveryNoteServiceImpl implements SupplierDeliveryNoteServ
         try {
             // analyzeImage 优先 (OSS 可读时); 无 OSS URL 则直接走 bytes 路径 (兜底)。
             if (ossUrl != null) {
-                rawResponse = visionClient.analyzeImage(ossUrl, SUPPLIER_NOTE_OCR_PROMPT);
+                rawResponse = visionClient.analyzeImage(ossUrl, resolveOcrPrompt(factoryId));
             } else {
                 // 无 OSS 时无法用 URL 路径 — 此处明确报错 (不降级假数据)。
                 throw new BusinessException(503, "照片未能留存且无法直接识别, 请重试或手动录入")

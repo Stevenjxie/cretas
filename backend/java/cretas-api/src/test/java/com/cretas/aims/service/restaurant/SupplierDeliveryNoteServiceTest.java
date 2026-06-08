@@ -15,6 +15,7 @@ import com.cretas.aims.repository.restaurant.SupplierDeliveryNoteLineRepository;
 import com.cretas.aims.repository.restaurant.SupplierDeliveryNoteRepository;
 import com.cretas.aims.service.OssService;
 import com.cretas.aims.service.finance.ArApService;
+import com.cretas.aims.service.intent.IntentConfigManagementService;
 import com.cretas.aims.service.restaurant.RestaurantInventoryPostingService;
 import com.cretas.aims.service.restaurant.impl.SupplierDeliveryNoteServiceImpl;
 import org.junit.jupiter.api.DisplayName;
@@ -66,11 +67,19 @@ class SupplierDeliveryNoteServiceTest {
     @Mock RestaurantInventoryPostingService postingService;
     @Mock ArApService arApService;
     @Mock NotificationService notificationService;
+    @Mock IntentConfigManagementService intentConfigManagementService;
 
     @InjectMocks SupplierDeliveryNoteServiceImpl service;
 
     private static final String FACTORY = "F006";
     private static final byte[] PHOTO = "fake-jpeg-bytes".getBytes();
+
+    @org.junit.jupiter.api.BeforeEach
+    void wireLazyField() {
+        // @Lazy @Autowired 字段不是构造器参数 → Mockito @InjectMocks 不会注入, 手动注入。
+        org.springframework.test.util.ReflectionTestUtils.setField(
+                service, "intentConfigManagementService", intentConfigManagementService);
+    }
 
     // ---- 1. duplicate hash → 409 ----
     @Test
@@ -136,6 +145,51 @@ class SupplierDeliveryNoteServiceTest {
         assertEquals("猪肉", line.getIngredientName());
         assertEquals("rmt-pork", line.getRawMaterialTypeId());
         assertEquals(0, line.getUnitPrice().compareTo(new java.math.BigDecimal("12.5")));
+    }
+
+    // ---- Chunk 1: OCR prompt 业态化 ----
+    @Test
+    @DisplayName("parseAndDraft FACTORY 业态选用物料中性 prompt")
+    void parseAndDraft_factoryDomain_usesNeutralPrompt() {
+        when(noteRepository.findByPhotoHash(anyString())).thenReturn(Optional.empty());
+        when(visionClient.isAvailable()).thenReturn(true);
+        when(ossService.isAvailable()).thenReturn(true);
+        when(ossService.uploadBytes(any(), anyString(), anyString(), anyString(), anyString()))
+                .thenReturn("https://oss/x.jpg");
+        when(intentConfigManagementService.resolveBusinessDomain("F999")).thenReturn("FACTORY");
+        when(visionClient.analyzeImage(anyString(), anyString()))
+                .thenReturn("{\"items\":[],\"confidence\":0.9}");
+        when(noteRepository.save(any(SupplierDeliveryNote.class)))
+                .thenAnswer(inv -> inv.getArgument(0));
+
+        service.parseAndDraft("F999", 1L, PHOTO, "image/jpeg", LocalDate.now(), null);
+
+        org.mockito.ArgumentCaptor<String> promptCaptor = org.mockito.ArgumentCaptor.forClass(String.class);
+        verify(visionClient).analyzeImage(anyString(), promptCaptor.capture());
+        String prompt = promptCaptor.getValue();
+        assertTrue(prompt.contains("物料名称"), "工厂 prompt 应含『物料名称』");
+        assertFalse(prompt.contains("中餐厅供应链单据识别专家"), "工厂 prompt 不应含中餐厅措辞");
+    }
+
+    @Test
+    @DisplayName("parseAndDraft RESTAURANT 业态保持中餐厅 prompt (字节不变)")
+    void parseAndDraft_restaurantDomain_usesRestaurantPrompt() {
+        when(noteRepository.findByPhotoHash(anyString())).thenReturn(Optional.empty());
+        when(visionClient.isAvailable()).thenReturn(true);
+        when(ossService.isAvailable()).thenReturn(true);
+        when(ossService.uploadBytes(any(), anyString(), anyString(), anyString(), anyString()))
+                .thenReturn("https://oss/x.jpg");
+        when(intentConfigManagementService.resolveBusinessDomain(FACTORY)).thenReturn("RESTAURANT");
+        when(visionClient.analyzeImage(anyString(), anyString()))
+                .thenReturn("{\"items\":[],\"confidence\":0.9}");
+        when(noteRepository.save(any(SupplierDeliveryNote.class)))
+                .thenAnswer(inv -> inv.getArgument(0));
+
+        service.parseAndDraft(FACTORY, 1L, PHOTO, "image/jpeg", LocalDate.now(), null);
+
+        org.mockito.ArgumentCaptor<String> promptCaptor = org.mockito.ArgumentCaptor.forClass(String.class);
+        verify(visionClient).analyzeImage(anyString(), promptCaptor.capture());
+        assertTrue(promptCaptor.getValue().contains("中餐厅供应链单据识别专家"));
     }
 
     // ---- 5 & 6. confirm calls gold; gold failure does not roll back confirm ----

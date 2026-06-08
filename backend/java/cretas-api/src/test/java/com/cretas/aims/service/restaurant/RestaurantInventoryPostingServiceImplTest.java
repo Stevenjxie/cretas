@@ -16,6 +16,7 @@ import com.cretas.aims.repository.restaurant.SupplierDeliveryNoteRepository;
 import com.cretas.aims.service.factory.WarehouseResolver;
 import com.cretas.aims.service.inventory.PurchaseService;
 import com.cretas.aims.service.restaurant.impl.RestaurantInventoryPostingServiceImpl;
+import com.cretas.aims.service.uom.MaterialUomConverter;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -41,6 +42,7 @@ class RestaurantInventoryPostingServiceImplTest {
     @Mock RawMaterialTypeRepository rawMaterialTypeRepository;
     @Mock PurchaseService purchaseService;
     @Mock WarehouseResolver warehouseResolver;
+    @Mock MaterialUomConverter materialUomConverter;
 
     @InjectMocks RestaurantInventoryPostingServiceImpl service;
 
@@ -161,6 +163,128 @@ class RestaurantInventoryPostingServiceImplTest {
         assertEquals(DeliveryPostingStatus.POSTED, note.getPostingStatus());
         assertNull(note.getPostingError());
         verify(noteRepository, never()).save(any(SupplierDeliveryNote.class));
+    }
+
+    // ==================== Chunk 3: 落库单位归一化守卫 ====================
+
+    @Test
+    @DisplayName("OCR 单位斤 + 物料标准单位 kg → 经 converter 换算落 kg 批次")
+    void postSupplierDeliveryToInventory_jinToKg_convertsViaConverter() {
+        SupplierDeliveryNote note = draftNote();
+        // OCR 行: 20 斤 @ 单价 10/斤 (行金额 200)
+        SupplierDeliveryNoteLine line = note.getLines().get(0);
+        line.setUnit("斤");
+        line.setQuantity(new BigDecimal("20"));
+        line.setUnitPrice(new BigDecimal("10"));
+
+        when(noteRepository.findByIdAndFactoryId("N1", FACTORY)).thenReturn(Optional.of(note));
+        when(noteRepository.saveAndFlush(any(SupplierDeliveryNote.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(noteRepository.save(any(SupplierDeliveryNote.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(supplierRepository.findByIdAndFactoryId("SUP1", FACTORY)).thenReturn(Optional.of(new Supplier()));
+        RawMaterialType material = new RawMaterialType();
+        material.setId("RMT_QHJ");
+        material.setFactoryId(FACTORY);
+        material.setName("青花椒");
+        material.setUnit("kg");  // 物料标准单位 kg
+        when(rawMaterialTypeRepository.findById("RMT_QHJ")).thenReturn(Optional.of(material));
+        when(warehouseResolver.resolveLogisticsId(FACTORY)).thenReturn("WH-LOG-ID");
+        // converter: 20 斤 → 10 kg
+        when(materialUomConverter.toComparableQuantity("RMT_QHJ", new BigDecimal("20"), "斤", "kg"))
+                .thenReturn(MaterialUomConverter.ConversionResult.converted(new BigDecimal("10"), "kg"));
+
+        PurchaseReceiveRecord draftReceive = new PurchaseReceiveRecord();
+        draftReceive.setId("RCV1");
+        when(purchaseService.createReceiveRecord(eq(FACTORY), any(CreateReceiveRecordRequest.class), eq(USER)))
+                .thenReturn(draftReceive);
+        PurchaseReceiveRecord confirmed = new PurchaseReceiveRecord();
+        confirmed.setId("RCV1");
+        PurchaseReceiveItem ri = new PurchaseReceiveItem();
+        ri.setMaterialTypeId("RMT_QHJ");
+        ri.setMaterialBatchId("BATCH1");
+        confirmed.getItems().add(ri);
+        when(purchaseService.confirmReceive(FACTORY, "RCV1", USER)).thenReturn(confirmed);
+
+        service.postSupplierDeliveryToInventory(FACTORY, "N1", USER);
+
+        ArgumentCaptor<CreateReceiveRecordRequest> captor = ArgumentCaptor.forClass(CreateReceiveRecordRequest.class);
+        verify(purchaseService).createReceiveRecord(eq(FACTORY), captor.capture(), eq(USER));
+        CreateReceiveRecordRequest.ReceiveItemDTO item = captor.getValue().getItems().get(0);
+        // 落库量 = 10 kg (换算后), 单位 = kg (物料标准单位)
+        assertEquals(0, item.getReceivedQuantity().compareTo(new BigDecimal("10")));
+        assertEquals("kg", item.getUnit());
+        // 行金额守恒: 20 斤 × 10/斤 = 200 = 10 kg × 20/kg
+        assertEquals(0, item.getUnitPrice().compareTo(new BigDecimal("20")));
+    }
+
+    @Test
+    @DisplayName("OCR 单位与物料标准单位不可换算 → fail-loud 不创建错误单位批次")
+    void postSupplierDeliveryToInventory_incompatibleUnit_failsLoud() {
+        SupplierDeliveryNote note = draftNote();
+        SupplierDeliveryNoteLine line = note.getLines().get(0);
+        line.setUnit("个");  // 离散计件
+        line.setQuantity(new BigDecimal("5"));
+
+        when(noteRepository.findByIdAndFactoryId("N1", FACTORY)).thenReturn(Optional.of(note));
+        when(noteRepository.saveAndFlush(any(SupplierDeliveryNote.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(supplierRepository.findByIdAndFactoryId("SUP1", FACTORY)).thenReturn(Optional.of(new Supplier()));
+        RawMaterialType material = new RawMaterialType();
+        material.setId("RMT_QHJ");
+        material.setFactoryId(FACTORY);
+        material.setName("青花椒");
+        material.setUnit("kg");  // kg, 与 "个" 不可换算
+        when(rawMaterialTypeRepository.findById("RMT_QHJ")).thenReturn(Optional.of(material));
+        when(warehouseResolver.resolveLogisticsId(FACTORY)).thenReturn("WH-LOG-ID");
+        when(materialUomConverter.toComparableQuantity("RMT_QHJ", new BigDecimal("5"), "个", "kg"))
+                .thenReturn(MaterialUomConverter.ConversionResult.unconvertible("个↔kg 不可换算"));
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> service.postSupplierDeliveryToInventory(FACTORY, "N1", USER));
+
+        assertEquals(400, ex.getCode());
+        assertEquals("DELIVERY_UNIT_MISMATCH", ex.getErrorCode());
+        assertEquals("unit", ex.getHintTarget());
+        assertTrue(ex.getMessage().contains("青花椒"));
+        verify(purchaseService, never()).createReceiveRecord(anyString(), any(), anyLong());
+    }
+
+    @Test
+    @DisplayName("OCR 单位与物料标准单位相同 → 透传不调 converter")
+    void postSupplierDeliveryToInventory_sameUnit_passThrough() {
+        SupplierDeliveryNote note = draftNote();  // kg / kg
+        when(noteRepository.findByIdAndFactoryId("N1", FACTORY)).thenReturn(Optional.of(note));
+        when(noteRepository.saveAndFlush(any(SupplierDeliveryNote.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(noteRepository.save(any(SupplierDeliveryNote.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(supplierRepository.findByIdAndFactoryId("SUP1", FACTORY)).thenReturn(Optional.of(new Supplier()));
+        RawMaterialType material = new RawMaterialType();
+        material.setId("RMT_QHJ");
+        material.setFactoryId(FACTORY);
+        material.setName("青花椒");
+        material.setUnit("kg");
+        when(rawMaterialTypeRepository.findById("RMT_QHJ")).thenReturn(Optional.of(material));
+        when(warehouseResolver.resolveLogisticsId(FACTORY)).thenReturn("WH-LOG-ID");
+
+        PurchaseReceiveRecord draftReceive = new PurchaseReceiveRecord();
+        draftReceive.setId("RCV1");
+        when(purchaseService.createReceiveRecord(eq(FACTORY), any(CreateReceiveRecordRequest.class), eq(USER)))
+                .thenReturn(draftReceive);
+        PurchaseReceiveRecord confirmed = new PurchaseReceiveRecord();
+        confirmed.setId("RCV1");
+        PurchaseReceiveItem ri = new PurchaseReceiveItem();
+        ri.setMaterialTypeId("RMT_QHJ");
+        ri.setMaterialBatchId("BATCH1");
+        confirmed.getItems().add(ri);
+        when(purchaseService.confirmReceive(FACTORY, "RCV1", USER)).thenReturn(confirmed);
+
+        service.postSupplierDeliveryToInventory(FACTORY, "N1", USER);
+
+        // 同单位不应调 converter
+        verifyNoInteractions(materialUomConverter);
+        ArgumentCaptor<CreateReceiveRecordRequest> captor = ArgumentCaptor.forClass(CreateReceiveRecordRequest.class);
+        verify(purchaseService).createReceiveRecord(eq(FACTORY), captor.capture(), eq(USER));
+        CreateReceiveRecordRequest.ReceiveItemDTO item = captor.getValue().getItems().get(0);
+        assertEquals(0, item.getReceivedQuantity().compareTo(new BigDecimal("10.0000")));
+        assertEquals("kg", item.getUnit());
+        assertEquals(0, item.getUnitPrice().compareTo(new BigDecimal("40.00")));
     }
 
     private SupplierDeliveryNote draftNote() {
