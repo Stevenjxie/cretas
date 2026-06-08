@@ -14,6 +14,8 @@ public class RestockHorizonProductRow {
     private String unit;
     private BigDecimal totalDemandQty;
     private BigDecimal fgAvailableQty;
+    /** WH-LOG 物流仓现货（盒）——仅此仓成品可直接发货。车间仓（WH-WKS）成品需先调拨到此仓。T134. */
+    private BigDecimal fgShippableQty;
     private BigDecimal wipAvailableQty;
     private BigDecimal wipEstimatedQty;
     private BigDecimal scheduledQty;
