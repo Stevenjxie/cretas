@@ -9,7 +9,9 @@ import com.cretas.aims.entity.workprocess.WorkProcessTask;
 import com.cretas.aims.entity.workprocess.WorkProcessTask.Status;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.exception.ResourceNotFoundException;
+import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.ProductWorkProcessRepository;
+import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.repository.WorkProcessRepository;
 import com.cretas.aims.repository.workprocess.WorkProcessTaskRepository;
@@ -46,6 +48,8 @@ public class WorkProcessTaskServiceImpl implements WorkProcessTaskService {
     private final ProductWorkProcessRepository productWorkProcessRepository;
     private final WorkProcessRepository workProcessRepository;
     private final UserRepository userRepository;
+    private final ProductionBatchRepository productionBatchRepository;
+    private final ProductTypeRepository productTypeRepository;
 
     // ==================== T142: batch assignedToName helper ====================
 
@@ -65,6 +69,44 @@ public class WorkProcessTaskServiceImpl implements WorkProcessTaskService {
                         User::getId,
                         u -> u.getFullName() != null && !u.getFullName().isBlank()
                                 ? u.getFullName() : u.getUsername()
+                ));
+    }
+
+    // ==================== T157: batch batchNumber / productTypeName helpers ====================
+
+    /**
+     * 批量加载 productionBatchId → batchNumber 映射 (单次查询, 无 N+1).
+     * 镜像 loadAssigneeNames 的 batch-resolve 模式。null/缺失批次不进 map → toDTO 取 null (禁假数据).
+     */
+    private Map<Long, String> loadBatchNumbers(List<WorkProcessTask> tasks) {
+        Set<Long> ids = tasks.stream()
+                .map(WorkProcessTask::getProductionBatchId)
+                .filter(id -> id != null)
+                .collect(Collectors.toSet());
+        if (ids.isEmpty()) return Map.of();
+        return productionBatchRepository.findByIdIn(ids).stream()
+                .filter(b -> b.getBatchNumber() != null)
+                .collect(Collectors.toMap(
+                        com.cretas.aims.entity.ProductionBatch::getId,
+                        com.cretas.aims.entity.ProductionBatch::getBatchNumber
+                ));
+    }
+
+    /**
+     * 批量加载 productTypeId → productTypeName 映射 (单次查询, 无 N+1).
+     * null/缺失产品不进 map → toDTO 取 null (禁假数据).
+     */
+    private Map<String, String> loadProductTypeNames(List<WorkProcessTask> tasks) {
+        Set<String> ids = tasks.stream()
+                .map(WorkProcessTask::getProductTypeId)
+                .filter(id -> id != null && !id.isBlank())
+                .collect(Collectors.toSet());
+        if (ids.isEmpty()) return Map.of();
+        return productTypeRepository.findByIdIn(ids).stream()
+                .filter(p -> p.getName() != null)
+                .collect(Collectors.toMap(
+                        com.cretas.aims.entity.ProductType::getId,
+                        com.cretas.aims.entity.ProductType::getName
                 ));
     }
 
@@ -169,10 +211,14 @@ public class WorkProcessTaskServiceImpl implements WorkProcessTaskService {
         Map<String, WorkProcess> defs = loadDefinitionsForTasks(factoryId, page.getContent());
         // T142: batch-load assignee names (no N+1); null-safe lookup (assignedTo may be null)
         Map<Long, String> nameMap = loadAssigneeNames(page.getContent());
+        // T157: batch-load batchNumber / productTypeName (no N+1); null when not resolvable
+        Map<Long, String> batchNumberMap = loadBatchNumbers(page.getContent());
+        Map<String, String> productNameMap = loadProductTypeNames(page.getContent());
 
         List<WorkProcessTaskDTO> content = page.getContent().stream()
                 .map(t -> toDTO(t, defs.get(t.getWorkProcessId()),
-                        t.getAssignedTo() != null ? nameMap.get(t.getAssignedTo()) : null))
+                        t.getAssignedTo() != null ? nameMap.get(t.getAssignedTo()) : null,
+                        batchNumberMap, productNameMap))
                 .collect(Collectors.toList());
         return PageResponse.of(content, page.getNumber() + 1, page.getSize(), page.getTotalElements());
     }
@@ -195,9 +241,13 @@ public class WorkProcessTaskServiceImpl implements WorkProcessTaskService {
         Map<String, WorkProcess> defs = loadDefinitionsForTasks(factoryId, tasks);
         // T142: batch-load assignee names (no N+1); null-safe lookup (assignedTo may be null)
         Map<Long, String> nameMap = loadAssigneeNames(tasks);
+        // T157: batch-load batchNumber / productTypeName (no N+1); null when not resolvable
+        Map<Long, String> batchNumberMap = loadBatchNumbers(tasks);
+        Map<String, String> productNameMap = loadProductTypeNames(tasks);
         return tasks.stream()
                 .map(t -> toDTO(t, defs.get(t.getWorkProcessId()),
-                        t.getAssignedTo() != null ? nameMap.get(t.getAssignedTo()) : null))
+                        t.getAssignedTo() != null ? nameMap.get(t.getAssignedTo()) : null,
+                        batchNumberMap, productNameMap))
                 .collect(Collectors.toList());
     }
 
@@ -393,6 +443,22 @@ public class WorkProcessTaskServiceImpl implements WorkProcessTaskService {
                     .orElse(null);
         }
         return toDTO(task, definition, assignedToName);
+    }
+
+    /**
+     * T157 list-path overload — enriches batchNumber + productTypeName from pre-loaded maps (no N+1).
+     * null when batch/product not resolvable (禁假数据).
+     */
+    private WorkProcessTaskDTO toDTO(WorkProcessTask task, WorkProcess definition, String assignedToName,
+            Map<Long, String> batchNumberMap, Map<String, String> productNameMap) {
+        WorkProcessTaskDTO dto = toDTO(task, definition, assignedToName);
+        if (task.getProductionBatchId() != null && batchNumberMap != null) {
+            dto.setBatchNumber(batchNumberMap.get(task.getProductionBatchId()));
+        }
+        if (task.getProductTypeId() != null && productNameMap != null) {
+            dto.setProductTypeName(productNameMap.get(task.getProductTypeId()));
+        }
+        return dto;
     }
 
     /**
