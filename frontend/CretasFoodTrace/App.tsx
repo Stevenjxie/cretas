@@ -82,7 +82,14 @@ export default function App() {
         if (!cancelled && result?.isAvailable) {
           // 有新版本: 下载 → 重载（用户看到 UpdateOverlay 直到新 bundle 启动）
           if (typeof Updates.fetchUpdateAsync === 'function') {
-            await Updates.fetchUpdateAsync();
+            // 下载也加超时(25s): 弱网/工厂网下载卡住时不让遮罩无限转圈,
+            // 超时则 throw → 外层 catch → 用缓存包正常启动 (原生层保留部分下载, 下次/后台续传)
+            await Promise.race([
+              Updates.fetchUpdateAsync(),
+              new Promise<never>((_, rej) =>
+                setTimeout(() => rej(new Error('OTA fetch timeout')), 25000)
+              ),
+            ]);
           }
           // reloadAsync 触发 JS 引擎重启，下面代码不会执行
           if (typeof Updates.reloadAsync === 'function') {
