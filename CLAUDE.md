@@ -198,6 +198,18 @@ frontend/CretasFoodTrace/src/
 3. **统一响应格式** - `{ success, data, message }`
 4. **Tool-Skill Only** - AI 意图处理只用 Tool/Skill，禁止创建 IntentHandler（已废弃）
 
+### UX Flow Gate（低技术素养用户屏幕）
+
+任何涉及以下角色/路径/功能的 RN 屏幕设计，**brainstorming 阶段必须在 propose approaches 之前先 invoke `ux-flow` skill**：
+
+- **角色词**：operator、操作员、仓管、warehouse_worker、quality_inspector、质检员
+- **路径词**：screens/processing、screens/warehouse、screens/quality-inspector
+- **功能词**：报工、入库、出库、盘点、质检、扫码收货
+
+`ux-flow` Phase 1 产出的「UX Flow Analysis」章节是 spec 的强制组成部分，缺失则不进入 writing-plans。
+
+详见 `.claude/skills/ux-flow/SKILL.md`。
+
 ---
 
 ## Documentation
