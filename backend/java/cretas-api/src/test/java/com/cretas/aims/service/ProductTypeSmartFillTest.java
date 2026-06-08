@@ -28,12 +28,13 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * T149: SKU 智能防呆填充 + 编号去重健壮性.
+ * T149/T150: SKU 智能防呆填充 + 编号去重健壮性.
  *
  * <p>覆盖:
  * <ul>
  *   <li>Part A — 自动生成编号撞唯一约束 → 重新生成重试; 手输重复编号 → 友好 409 不重试;</li>
- *   <li>Part B — suggestDefaults 名称匹配返回历史产品属性 / 无匹配→关键词大类+其余 null / 完全无把握→全 null.</li>
+ *   <li>Part B — suggestDefaults 名称匹配返回历史产品属性 / 无匹配→关键词大类+其余 null / 完全无把握→全 null;
+ *       T150 扩展: 匹配时带温区/规格/标准克重/出成率; 历史产品字段为 null 时透传 null (禁假数据).</li>
  * </ul>
  */
 @ExtendWith(MockitoExtension.class)
@@ -125,7 +126,7 @@ class ProductTypeSmartFillTest {
     // ==================== Part B: suggestDefaults 历史记忆建议 ====================
 
     @Test
-    @DisplayName("B1: 名称相似匹配历史产品 → 返回其 大类/单位/一级单位/装箱系数 + matchedFrom")
+    @DisplayName("B1: 名称相似匹配历史产品 → 返回其 大类/单位/一级单位/装箱系数 + T150扩展(温区/规格/标准克重/出成率) + matchedFrom")
     void suggest_nameMatch_returnsMatchedProductAttrs() {
         ProductType existing = new ProductType();
         existing.setName("叮咚好食光卤猪蹄 200g");
@@ -134,6 +135,11 @@ class ProductTypeSmartFillTest {
         existing.setUnit("盒");
         existing.setLevel1Unit("筐");
         existing.setBoxConversionCoefficient(new BigDecimal("20"));
+        // T150: 新增扩展字段
+        existing.setTemperatureZone("冷藏");
+        existing.setSpecification("200g/盒 20盒/筐");
+        existing.setGramsPerUnit(new BigDecimal("200.00"));
+        existing.setWipToFgYield(new BigDecimal("0.5500"));
 
         when(productTypeRepository.findByFactoryId("F001")).thenReturn(List.of(existing));
 
@@ -144,6 +150,39 @@ class ProductTypeSmartFillTest {
         assertThat(s.getLevel1Unit()).isEqualTo("筐");
         assertThat(s.getBoxConversionCoefficient()).isEqualByComparingTo("20");
         assertThat(s.getMatchedFrom()).isEqualTo("叮咚好食光卤猪蹄 200g");
+        // T150: 扩展字段断言
+        assertThat(s.getTemperatureZone()).isEqualTo("冷藏");
+        assertThat(s.getSpecification()).isEqualTo("200g/盒 20盒/筐");
+        assertThat(s.getGramsPerUnit()).isEqualByComparingTo("200.00");
+        assertThat(s.getWipToFgYield()).isEqualByComparingTo("0.5500");
+    }
+
+    @Test
+    @DisplayName("B6 (T150): 匹配历史产品但扩展字段为 null → 透传 null, 不臆造 (禁假数据)")
+    void suggest_nameMatch_extendedFieldsNullWhenNotSetOnMatchedProduct() {
+        ProductType existing = new ProductType();
+        existing.setName("叮咚椒麻掌中宝 120g");
+        existing.setBaseProductName("掌中宝");
+        existing.setProductCategory("FINISHED_PRODUCT");
+        existing.setUnit("盒");
+        existing.setLevel1Unit("框");
+        existing.setBoxConversionCoefficient(new BigDecimal("30"));
+        // T150: 扩展字段全部 null (历史产品未配置)
+        existing.setTemperatureZone(null);
+        existing.setSpecification(null);
+        existing.setGramsPerUnit(null);
+        existing.setWipToFgYield(null);
+
+        when(productTypeRepository.findByFactoryId("F001")).thenReturn(List.of(existing));
+
+        ProductTypeSuggestionDTO s = service.suggestDefaults("F001", "椒麻掌中宝 120g", null);
+
+        assertThat(s.getMatchedFrom()).isEqualTo("叮咚椒麻掌中宝 120g"); // 确实匹配到
+        // 扩展字段: 历史产品未配 → 透传 null (禁假数据)
+        assertThat(s.getTemperatureZone()).isNull();
+        assertThat(s.getSpecification()).isNull();
+        assertThat(s.getGramsPerUnit()).isNull();
+        assertThat(s.getWipToFgYield()).isNull();
     }
 
     @Test

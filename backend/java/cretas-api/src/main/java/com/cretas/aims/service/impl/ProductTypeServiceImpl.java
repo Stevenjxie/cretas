@@ -545,11 +545,16 @@ public class ProductTypeServiceImpl implements ProductTypeService {
 
         if (best != null && bestScore >= SUGGEST_MATCH_THRESHOLD) {
             log.info("智能填充: name='{}' 匹配历史产品 '{}' (score={})", trimmedName, best.getName(), bestScore);
+            // T150: 扩展带入温区/规格/标准克重/出成率 — null 原样透传 (禁假数据)
             return ProductTypeSuggestionDTO.builder()
                     .productCategory(best.getProductCategory())
                     .unit(emptyToNull(best.getUnit()))
                     .level1Unit(emptyToNull(best.getLevel1Unit()))
                     .boxConversionCoefficient(best.getBoxConversionCoefficient())
+                    .temperatureZone(emptyToNull(best.getTemperatureZone()))
+                    .specification(emptyToNull(best.getSpecification()))
+                    .gramsPerUnit(best.getGramsPerUnit())
+                    .wipToFgYield(best.getWipToFgYield())
                     .matchedFrom(best.getName())
                     .build();
         }
