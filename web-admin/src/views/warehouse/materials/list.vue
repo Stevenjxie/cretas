@@ -312,7 +312,11 @@ async function handleFormSubmit() {
         <el-table-column label="数量" width="100" align="right">
           <template #default="{ row }">{{ row.quantity ?? row.currentQuantity ?? row.receiptQuantity ?? '-' }}</template>
         </el-table-column>
-        <el-table-column prop="unit" label="单位" width="80" align="center" />
+        <!-- T159-A foldable #1: 显示批次实际称重/入库单位 (quantityUnit), 非主数据 unit
+             Steve反馈: "改批次单位列表不变" — row.unit=主数据unit(箱/kg等), row.quantityUnit=实际入库单位 -->
+        <el-table-column label="单位" width="80" align="center">
+          <template #default="{ row }">{{ row.quantityUnit || row.unit || '-' }}</template>
+        </el-table-column>
         <el-table-column label="箱数" width="90" align="right">
           <template #default="{ row }">
             <span v-if="row.boxCount != null">约 {{ row.boxCount }} 箱</span>

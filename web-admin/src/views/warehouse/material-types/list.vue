@@ -13,6 +13,20 @@
  * 3. 单位下拉 + 智能默认 (suggest-unit 按相似名称+类别取最近原料的 unit)
  * 4. 去掉单价 (按采购价浮动, 在采购订单里录)
  * 5. 包装层级: 一级 (kg, 必填=unit) + 二/三级 (10kg/箱, 12箱/柜)
+ *
+ * T159-A-form (2026-06-08): 防呆复刻 SKU 表单模式
+ *   1. 编码预览 (create mode): GET .../raw-material-types/preview-code?category=
+ *      → 实时展示预期编码 (如 YL006), category 变化时重新 fetch
+ *   2. 全字段智能匹配 cascade: GET .../raw-material-types/suggest?name=&category=
+ *      → 填 unit/category/storageType/shelfLifeDays/level1PerLevel2/level2Unit
+ *      + *ManuallyEdited flags + cascadeWriting guard (exact SKU pattern)
+ *      + clearCascadeFields when name cleared
+ *      null 字段 → 不覆盖; 端点 404/error → graceful degrade to suggest-unit fallback
+ *   3. 包装层级内联换算行 (SKU-style):
+ *      「1 [二级单位] = [换算数] [一级单位]」+ live preview tag
+ *      一级单位 = 只读 echo 主单位 (single source of truth)
+ *   4. 单位下拉: filterable + allow-create (复用 /system-config/units)
+ *   foldable #1: 批次列表单位列 → 修 materials/list.vue 显示 quantityUnit 而非 unit
  */
 import { ref, computed, onMounted, watch } from 'vue';
 import { useAuthStore } from '@/store/modules/auth';
@@ -79,11 +93,17 @@ function mergeHistoricStorage(current?: string): { value: string; label: string 
   }
   return opts;
 }
-function mergeHistoricUnit(current?: string): { value: string; label: string }[] {
-  const opts = unitOptions.value.map((u) => {
+
+// T159-A: 单位选项统一用 /system-config/units + allow-create (复用 SKU unitSelectOptions 模式)
+const unitSelectOptions = computed(() => {
+  return unitOptions.value.map((u) => {
     const sym = u.unitSymbol || u.unitCode;
     return { value: sym, label: `${u.unitName} (${sym})` };
   });
+});
+
+function mergeHistoricUnit(current?: string): { value: string; label: string }[] {
+  const opts = unitSelectOptions.value;
   if (current && current.trim() !== '' && !opts.find((o) => o.value === current)) {
     return [{ value: current, label: `${current} (历史)` }, ...opts];
   }
@@ -132,6 +152,171 @@ const packaging = ref({
 });
 const dialogTitle = computed(() => (editingId.value ? '编辑原料类型' : '新建原料类型'));
 
+// ==================== T159-A: Code Preview ====================
+// Create mode only: when category changes → fetch preview code.
+// Degrades gracefully if endpoint not yet deployed (404/error → silent).
+const codePreview = ref('');
+const codePreviewLoading = ref(false);
+
+async function fetchCodePreview(category: string) {
+  if (!factoryId.value || !category.trim()) { codePreview.value = ''; return; }
+  codePreviewLoading.value = true;
+  try {
+    const res = await get<{ code: string }>(
+      `/${factoryId.value}/raw-material-types/preview-code`,
+      { params: { category } },
+    );
+    if (res.success && res.data?.code) {
+      codePreview.value = res.data.code;
+    } else {
+      codePreview.value = '';
+    }
+  } catch {
+    // endpoint not yet deployed — degrade gracefully, don't break the form
+    codePreview.value = '';
+  } finally {
+    codePreviewLoading.value = false;
+  }
+}
+
+// Watch category in create mode for code preview
+watch(
+  () => [form.value.category, dialogVisible.value, editingId.value] as const,
+  ([cat, visible, eid]) => {
+    if (!visible || eid) { codePreview.value = ''; return; }
+    fetchCodePreview(String(cat || ''));
+  },
+);
+
+// ==================== T159-A: *ManuallyEdited flags + cascadeWriting guard ====================
+// Exact mirror of SKU's pattern:
+//   - cascadeWriting=true while cascade writes → watchers skip marking as manual
+//   - User direct edits → *ManuallyEdited=true → cascade will NOT overwrite that field
+const cascadeWriting = ref(false);
+const unitManuallyEdited = ref(false);
+const categoryManuallyEdited = ref(false);
+const storageTypeManuallyEdited = ref(false);
+const shelfLifeManuallyEdited = ref(false);
+const packagingManuallyEdited = ref(false); // covers level1PerLevel2 + level2Unit together
+
+// Watch each field — if cascadeWriting, skip flagging as manual (cascade write)
+watch(() => form.value.unit, () => {
+  if (!cascadeWriting.value) unitManuallyEdited.value = true;
+});
+watch(() => form.value.category, () => {
+  if (!cascadeWriting.value) categoryManuallyEdited.value = true;
+});
+watch(() => form.value.storageType, () => {
+  if (!cascadeWriting.value) storageTypeManuallyEdited.value = true;
+});
+watch(() => form.value.shelfLifeDays, () => {
+  if (!cascadeWriting.value) shelfLifeManuallyEdited.value = true;
+});
+watch(() => packaging.value.level1PerLevel2, () => {
+  if (!cascadeWriting.value) packagingManuallyEdited.value = true;
+});
+watch(() => packaging.value.level2Unit, () => {
+  if (!cascadeWriting.value) packagingManuallyEdited.value = true;
+});
+
+function resetManuallyEditedFlags() {
+  unitManuallyEdited.value = false;
+  categoryManuallyEdited.value = false;
+  storageTypeManuallyEdited.value = false;
+  shelfLifeManuallyEdited.value = false;
+  packagingManuallyEdited.value = false;
+}
+
+// clearCascadeFields: when name is cleared entirely, reset cascade-filled fields
+// ONLY for fields the user hasn't manually edited
+function clearCascadeFields() {
+  cascadeWriting.value = true;
+  try {
+    if (!unitManuallyEdited.value) form.value.unit = 'kg';
+    if (!categoryManuallyEdited.value) form.value.category = '';
+    if (!storageTypeManuallyEdited.value) form.value.storageType = storageTypeOptions.value[0]?.enumLabel || '';
+    if (!shelfLifeManuallyEdited.value) form.value.shelfLifeDays = null;
+    if (!packagingManuallyEdited.value) {
+      packaging.value.level1PerLevel2 = '';
+      packaging.value.level2Unit = '';
+    }
+  } finally {
+    cascadeWriting.value = false;
+  }
+}
+
+// ==================== T159-A: Full smart-match cascade ====================
+// Debounced watch: name (or name+category) change → call suggest endpoint → fill fields.
+// null fields from suggest → leave as-is (don't overwrite with null).
+// Endpoint 404/error → fallback to suggest-unit only (backward compat).
+let suggestTimer: number | undefined;
+watch(
+  () => [form.value.name, form.value.category, dialogVisible.value, editingId.value] as const,
+  ([name, _cat, visible, eid]) => {
+    if (!visible || eid) return; // edit mode: no cascade
+    if (suggestTimer) clearTimeout(suggestTimer);
+    const trimmedName = String(name || '').trim();
+
+    // Name cleared → reset cascade fields (graceful)
+    if (trimmedName.length === 0) {
+      clearCascadeFields();
+      return;
+    }
+    if (trimmedName.length < 2) return;
+
+    suggestTimer = window.setTimeout(async () => {
+      try {
+        const params: Record<string, string> = { name: trimmedName };
+        const cat = String(form.value.category || '').trim();
+        if (cat) params.category = cat;
+
+        // Try full suggest endpoint (T159-B-codegen provides this)
+        const res = await get<{
+          unit?: string | null;
+          category?: string | null;
+          storageType?: string | null;
+          shelfLifeDays?: number | null;
+          level1PerLevel2?: number | null;
+          level2Unit?: string | null;
+        }>(`/${factoryId.value}/raw-material-types/suggest`, { params });
+
+        if (!res.success) {
+          // Fallback: old suggest-unit endpoint (original behavior)
+          const unitRes = await get<string>(
+            `/${factoryId.value}/raw-material-types/suggest-unit`,
+            { params },
+          );
+          if (unitRes.success && unitRes.data && !unitManuallyEdited.value) {
+            cascadeWriting.value = true;
+            try { form.value.unit = unitRes.data; } finally { cascadeWriting.value = false; }
+          }
+          return;
+        }
+
+        const d = res.data;
+        if (!d) return;
+
+        // Apply cascade — only fields user hasn't manually edited, skip null values
+        cascadeWriting.value = true;
+        try {
+          if (d.unit != null && !unitManuallyEdited.value) form.value.unit = d.unit;
+          if (d.category != null && !categoryManuallyEdited.value) form.value.category = d.category;
+          if (d.storageType != null && !storageTypeManuallyEdited.value) form.value.storageType = d.storageType;
+          if (d.shelfLifeDays != null && !shelfLifeManuallyEdited.value) form.value.shelfLifeDays = d.shelfLifeDays;
+          if (!packagingManuallyEdited.value) {
+            if (d.level1PerLevel2 != null) packaging.value.level1PerLevel2 = d.level1PerLevel2;
+            if (d.level2Unit != null) packaging.value.level2Unit = d.level2Unit;
+          }
+        } finally {
+          cascadeWriting.value = false;
+        }
+      } catch {
+        // silent — endpoint may not be deployed yet
+      }
+    }, 400);
+  },
+);
+
 function resetPackaging() {
   packaging.value = { level1PerLevel2: '', level2Unit: '', level2PerLevel3: '', level3Unit: '' };
 }
@@ -148,6 +333,8 @@ function openCreate() {
     notes: '',
   };
   resetPackaging();
+  resetManuallyEditedFlags();
+  codePreview.value = '';
   dialogVisible.value = true;
 }
 
@@ -163,6 +350,8 @@ async function openEdit(row: TableRow) {
     notes: String(row.notes || ''),
   };
   resetPackaging();
+  resetManuallyEditedFlags();
+  codePreview.value = '';
   // 加载现有包装层级
   try {
     const res = await get<{ level1PerLevel2: number | null; level2Unit: string | null; level2PerLevel3: number | null; level3Unit: string | null }>(
@@ -176,31 +365,27 @@ async function openEdit(row: TableRow) {
         level3Unit: res.data.level3Unit || '',
       };
     }
-  } catch (e) { /* 无配置时正常空 */ }
+  } catch { /* 无配置时正常空 */ }
   dialogVisible.value = true;
 }
 
-// 智能默认单位: 新建模式下, name + category 变化时取最近相似原料的 unit
-let suggestTimer: number | undefined;
-watch(
-  () => [form.value.name, form.value.category, dialogVisible.value, editingId.value] as const,
-  ([name, cat, visible, eid]) => {
-    if (!visible || eid) return;
-    if (suggestTimer) clearTimeout(suggestTimer);
-    const trimmedName = String(name || '').trim();
-    if (trimmedName.length < 2) return;
-    suggestTimer = window.setTimeout(async () => {
-      try {
-        const params: Record<string, string> = { name: trimmedName };
-        if (cat) params.category = String(cat);
-        const res = await get<string>(`/${factoryId.value}/raw-material-types/suggest-unit`, { params });
-        if (res.success && res.data) {
-          form.value.unit = res.data;
-        }
-      } catch (e) { /* 静默 */ }
-    }, 400);
-  },
-);
+// ==================== T159-A: Packaging inline live preview (SKU-style) ====================
+// 「1 [二级单位] = [换算数] [一级单位]」
+const packagingL2Preview = computed(() => {
+  const qty = Number(packaging.value.level1PerLevel2);
+  const l1 = form.value.unit || '主单位';
+  const l2 = packaging.value.level2Unit;
+  if (!l2 || !qty || qty <= 0) return '';
+  return `1 ${l2} = ${qty} ${l1}`;
+});
+
+const packagingL3Preview = computed(() => {
+  const qty = Number(packaging.value.level2PerLevel3);
+  const l2 = packaging.value.level2Unit || '二级单位';
+  const l3 = packaging.value.level3Unit;
+  if (!l3 || !qty || qty <= 0) return '';
+  return `1 ${l3} = ${qty} ${l2}`;
+});
 
 const submitting = ref(false);
 async function handleSave() {
@@ -305,7 +490,7 @@ async function handleDelete(row: TableRow) {
       ElMessage.success('删除成功');
       loadData();
     }
-  } catch (e) { /* user cancelled or interceptor toasted */ }
+  } catch { /* user cancelled or interceptor toasted */ }
 }
 
 function handleSearch() {
@@ -404,15 +589,39 @@ function handleSizeChange(size: number) {
       />
     </el-card>
 
-    <el-dialog v-model="dialogVisible" :title="dialogTitle" width="640px" destroy-on-close>
+    <!-- ==================== T159-A: Create / Edit Dialog ==================== -->
+    <el-dialog v-model="dialogVisible" :title="dialogTitle" width="660px" destroy-on-close>
       <el-form :model="form" label-width="120px">
-        <!-- 编码: 创建时自动生成不显示, 编辑时只读 -->
+
+        <!-- 编码: 创建时显示实时预览, 编辑时只读锁定 -->
         <el-form-item v-if="editingId" label="原料编码">
           <el-input v-model="form.code" disabled :prefix-icon="Lock" />
         </el-form-item>
-        <el-form-item label="原料名称" required>
-          <el-input v-model="form.name" placeholder="如 冻猪蹄 / 三文鱼" />
+        <el-form-item v-else label="原料编码">
+          <!-- T159-A: code preview — re-fetches whenever category changes -->
+          <div class="code-preview-row">
+            <el-tag
+              v-if="codePreview"
+              type="info"
+              class="code-preview-tag"
+              :class="{ 'code-preview-loading': codePreviewLoading }"
+            >
+              预计编码: {{ codePreview }}
+            </el-tag>
+            <span v-else-if="form.category" class="code-preview-hint">
+              {{ codePreviewLoading ? '生成中...' : '编码将在保存后自动生成' }}
+            </span>
+            <span v-else class="code-preview-hint">
+              选择类别后可预览自动编码（如 YL006）
+            </span>
+          </div>
         </el-form-item>
+
+        <el-form-item label="原料名称" required>
+          <el-input v-model="form.name" placeholder="如 冻猪蹄 / 三文鱼 / 吸塑盒2014-3.5" />
+          <div class="field-hint">输入名称后自动匹配历史同类原料，智能填充单位 / 类别 / 保质期 / 包装换算</div>
+        </el-form-item>
+
         <el-form-item label="类别" required>
           <el-select v-model="form.category" placeholder="请选择类别" style="width: 100%" filterable>
             <el-option
@@ -423,8 +632,17 @@ function handleSizeChange(size: number) {
             />
           </el-select>
         </el-form-item>
+
+        <!-- T159-A: 单位 — filterable + allow-create, 复用 /system-config/units -->
         <el-form-item label="单位" required>
-          <el-select v-model="form.unit" placeholder="请选择单位" style="width: 100%" filterable>
+          <el-select
+            v-model="form.unit"
+            placeholder="请选择或输入单位"
+            style="width: 100%"
+            filterable
+            allow-create
+            default-first-option
+          >
             <el-option
               v-for="opt in mergeHistoricUnit(form.unit)"
               :key="opt.value"
@@ -432,7 +650,11 @@ function handleSizeChange(size: number) {
               :value="opt.value"
             />
           </el-select>
+          <div v-if="unitManuallyEdited && !editingId" class="field-hint field-hint--manual">
+            已手动设置，自动填充将不再覆盖此字段
+          </div>
         </el-form-item>
+
         <el-form-item label="储存类型" required>
           <el-select v-model="form.storageType" placeholder="请选择储存类型" style="width: 100%">
             <el-option
@@ -443,38 +665,40 @@ function handleSizeChange(size: number) {
             />
           </el-select>
         </el-form-item>
+
         <el-form-item label="保质期 (天)">
           <el-input-number v-model="form.shelfLifeDays" :min="0" style="width: 100%" />
         </el-form-item>
+
         <el-form-item label="备注">
           <el-input v-model="form.notes" type="textarea" :rows="2" />
         </el-form-item>
 
+        <!-- ==================== T159-A: 包装层级 内联换算行 (SKU-style) ==================== -->
         <el-divider>
           <span class="divider-title">包装层级（可选）</span>
         </el-divider>
-        <div class="packaging-hint">
-          例: 三文鱼 一级 kg, 10 kg / 箱 (二级), 12 箱 / 柜 (三级)
-        </div>
-        <el-form-item label="一级单位">
-          <el-input :value="form.unit" disabled :prefix-icon="Lock" />
-          <div class="field-hint">基础单位 = 上方"单位"字段, 不可单独改</div>
+
+        <!-- 一级: 显示主单位 (read-only echo — single source of truth = 上方单位字段) -->
+        <el-form-item label="一级 (主单位)">
+          <div class="packaging-inline-row">
+            <el-tag type="info" class="unit-tag">{{ form.unit || '请先填单位' }}</el-tag>
+            <span class="packaging-equals-hint">← 同「单位」字段（主数据 canonical 单位，不可单独更改）</span>
+          </div>
         </el-form-item>
+
+        <!-- 二级换算: SKU-style inline row -->
+        <!-- 布局: 1 [二级单位 select] = [换算数] [一级单位 tag] -->
         <el-form-item label="二级换算">
-          <div class="packaging-row">
-            <el-input-number
-              v-model="packaging.level1PerLevel2"
-              :min="0"
-              placeholder="数量 (10)"
-              :controls="false"
-              style="width: 140px"
-            />
-            <span class="packaging-sep">{{ form.unit || '/' }} /</span>
+          <div class="packaging-conversion-row">
+            <span class="conversion-label">1</span>
             <el-select
               v-model="packaging.level2Unit"
               placeholder="二级单位 (箱)"
-              style="width: 180px"
+              style="width: 155px"
               filterable
+              allow-create
+              default-first-option
               clearable
             >
               <el-option
@@ -484,25 +708,40 @@ function handleSizeChange(size: number) {
                 :value="opt.value"
               />
             </el-select>
+            <span class="conversion-equals">=</span>
+            <el-input-number
+              v-model="packaging.level1PerLevel2"
+              :min="0"
+              :controls="false"
+              placeholder="换算数"
+              style="width: 100px"
+            />
+            <el-tag type="info" class="unit-tag-echo">{{ form.unit || '主单位' }}</el-tag>
+          </div>
+          <!-- Live preview summary (SKU-style) -->
+          <div v-if="packagingL2Preview" class="packaging-preview">
+            <el-tag size="small" type="success">{{ packagingL2Preview }}</el-tag>
+          </div>
+          <div
+            v-else-if="(packaging.level2Unit || packaging.level1PerLevel2)"
+            class="packaging-preview packaging-preview--warn"
+          >
+            请同时填写二级单位和换算数量
           </div>
         </el-form-item>
+
+        <!-- 三级换算 -->
         <el-form-item label="三级换算">
-          <div class="packaging-row">
-            <el-input-number
-              v-model="packaging.level2PerLevel3"
-              :min="0"
-              placeholder="数量 (12)"
-              :controls="false"
-              :disabled="!packaging.level2Unit"
-              style="width: 140px"
-            />
-            <span class="packaging-sep">{{ packaging.level2Unit || '/' }} /</span>
+          <div class="packaging-conversion-row">
+            <span class="conversion-label">1</span>
             <el-select
               v-model="packaging.level3Unit"
               placeholder="三级单位 (柜)"
+              style="width: 155px"
               :disabled="!packaging.level2Unit"
-              style="width: 180px"
               filterable
+              allow-create
+              default-first-option
               clearable
             >
               <el-option
@@ -512,8 +751,26 @@ function handleSizeChange(size: number) {
                 :value="opt.value"
               />
             </el-select>
+            <span class="conversion-equals">=</span>
+            <el-input-number
+              v-model="packaging.level2PerLevel3"
+              :min="0"
+              :controls="false"
+              placeholder="换算数"
+              style="width: 100px"
+              :disabled="!packaging.level2Unit"
+            />
+            <el-tag type="info" class="unit-tag-echo">{{ packaging.level2Unit || '二级单位' }}</el-tag>
+          </div>
+          <!-- Live preview summary -->
+          <div v-if="packagingL3Preview" class="packaging-preview">
+            <el-tag size="small" type="success">{{ packagingL3Preview }}</el-tag>
+          </div>
+          <div v-if="!packaging.level2Unit" class="field-hint">
+            请先配置二级单位才能配置三级
           </div>
         </el-form-item>
+
       </el-form>
       <template #footer>
         <el-button @click="dialogVisible = false">取消</el-button>
@@ -558,8 +815,83 @@ function handleSizeChange(size: number) {
 .data-count { font-size: 13px; color: #909399; }
 .search-bar { display: flex; gap: 8px; margin-bottom: 16px; }
 .divider-title { font-size: 14px; color: #606266; font-weight: 500; }
-.packaging-hint { font-size: 12px; color: #909399; margin-bottom: 12px; padding-left: 120px; }
-.packaging-row { display: flex; align-items: center; gap: 8px; width: 100%; }
-.packaging-sep { color: #909399; min-width: 28px; text-align: center; }
-.field-hint { font-size: 12px; color: #909399; margin-top: 4px; }
+
+/* T159-A: Code preview row */
+.code-preview-row {
+  display: flex;
+  align-items: center;
+  min-height: 32px;
+}
+.code-preview-tag {
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 1px;
+}
+.code-preview-tag.code-preview-loading {
+  opacity: 0.6;
+}
+.code-preview-hint {
+  font-size: 12px;
+  color: #909399;
+}
+
+/* T159-A: Field hints */
+.field-hint {
+  font-size: 12px;
+  color: #909399;
+  margin-top: 4px;
+  line-height: 1.4;
+}
+.field-hint--manual {
+  color: #e6a23c;
+}
+
+/* T159-A: Packaging inline row (SKU-style) */
+.packaging-inline-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.packaging-equals-hint {
+  font-size: 12px;
+  color: #909399;
+}
+.unit-tag {
+  font-size: 13px;
+  padding: 0 10px;
+  height: 28px;
+  line-height: 26px;
+}
+.unit-tag-echo {
+  font-size: 13px;
+  padding: 0 10px;
+  height: 28px;
+  line-height: 26px;
+  flex-shrink: 0;
+}
+.packaging-conversion-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.conversion-label {
+  font-size: 15px;
+  font-weight: 600;
+  color: #303133;
+  min-width: 10px;
+}
+.conversion-equals {
+  font-size: 16px;
+  color: #606266;
+  padding: 0 2px;
+}
+.packaging-preview {
+  margin-top: 6px;
+  font-size: 12px;
+}
+.packaging-preview--warn {
+  color: #e6a23c;
+  font-size: 12px;
+}
 </style>
