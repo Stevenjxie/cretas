@@ -583,7 +583,11 @@ public class SmartBIUploadController {
         return body;
     }
 
-    @RequirePermission({"analytics:read"})
+    // BUG-01-RBAC-001: finance raw-data endpoints require finance:read_write.
+    // analytics:read is granted to sales_manager/restaurant_manager/etc., so it cannot guard
+    // finance-sensitive raw rows. Only finance_manager / factory_super_admin / restaurant_owner
+    // hold finance:read_write. This mirrors the FinanceReportController class-level guard.
+    @RequirePermission({"finance:read_write"})
     @GetMapping("/uploads/{uploadId}/fields")
     @Operation(summary = "Get upload fields", description = "Get field definitions for uploaded data")
     public ResponseEntity<ApiResponse<List<DynamicAnalysisService.FieldDefinitionDTO>>> getUploadFields(
@@ -606,7 +610,7 @@ public class SmartBIUploadController {
         }
     }
 
-    @RequirePermission({"analytics:read"})
+    @RequirePermission({"finance:read_write"})
     @GetMapping("/uploads/{uploadId}/data")
     @Operation(summary = "Get upload data", description = "Paginated view of persisted Excel data rows")
     public ResponseEntity<ApiResponse<TableDataResponse>> getUploadData(
