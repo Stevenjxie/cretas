@@ -13,20 +13,72 @@ import { PRODUCT_CONFIG } from '@/components/ai-entry/types';
 import DynamicEntityForm from '@/components/DynamicEntityForm.vue';
 import type { FieldConfig } from '@/config/entityFieldConfigs';
 
+// T137: 计量单位字典 — 从 /system-config/units 加载, 供一级单位/二级单位下拉用
+const unitDictOptions = ref<{ label: string; value: string }[]>([]);
+// 静态兜底列表 (API 为空或加载失败时使用)
+const UNIT_FALLBACK: { label: string; value: string }[] = [
+  { label: '筐', value: '筐' },
+  { label: '箱', value: '箱' },
+  { label: '件', value: '件' },
+  { label: '袋', value: '袋' },
+  { label: '桶', value: '桶' },
+  { label: '盒', value: '盒' },
+  { label: '份', value: '份' },
+  { label: '瓶', value: '瓶' },
+  { label: 'kg', value: 'kg' },
+  { label: '克', value: '克' },
+];
+// 合并字典 + 兜底 (去重)
+const unitSelectOptions = computed<{ label: string; value: string }[]>(() => {
+  const dict = unitDictOptions.value.length > 0 ? unitDictOptions.value : UNIT_FALLBACK;
+  const seen = new Set(dict.map(o => o.value));
+  // ensure fallback entries that aren't in dict are also available (兜底补充)
+  const extra = UNIT_FALLBACK.filter(o => !seen.has(o.value));
+  return [...dict, ...extra];
+});
+
+async function loadUnitDict() {
+  if (!factoryId.value) return;
+  try {
+    const res = await get<{ unitName: string; unitSymbol?: string; isActive?: boolean }[]>(
+      `/${factoryId.value}/system-config/units`
+    );
+    if (res.success && Array.isArray(res.data) && res.data.length > 0) {
+      unitDictOptions.value = res.data
+        .filter(u => u.isActive !== false)
+        .map(u => ({ label: u.unitName, value: u.unitName }));
+    }
+  } catch {
+    // 加载失败 → 静默, 使用兜底列表
+  }
+}
+
+// T137: 转换数 placeholder 动态显示实际单位名 ("1 筐 = ? 盒 填 10")
+const conversionPlaceholder = computed(() => {
+  const l1 = (formData.level1Unit as string | undefined)?.trim();
+  const l2 = formData.unit?.trim();
+  if (l1 && l2) return `1 ${l1} = ? ${l2}（如 1筐=10盒 填 10）`;
+  if (l1) return `1 ${l1} = ? 二级单位（如 1筐=10盒 填 10）`;
+  return '先填一级单位，再填换算数（如 1筐=10盒 填 10）';
+});
+
 // 产品扩展字段 — 添加新字段只需在此数组加一行
 // T123 重组: gramsPerUnit + boxConversionCoefficient 移到 '规格信息' 组
 //   (成品也需要标准克重设置,不应被'商务信息'隐藏逻辑屏蔽)
-const productExtendedFields: FieldConfig[] = [
+// T137: level1Unit 改为 dict-backed el-select (type:'select' + 动态 options)
+const productExtendedFields = computed<FieldConfig[]>(() => [
   // ---- 规格信息 (成品/原料均显示) ----
-  { key: 'level1Unit', label: '一级单位', type: 'text', group: '规格信息', order: 1,
-    placeholder: '如: 筐, 箱, 件, 袋, 桶, 盒' },
+  { key: 'level1Unit', label: '一级单位', type: 'select', group: '规格信息', order: 1,
+    placeholder: '选择或输入一级单位（如 筐、箱）',
+    allowCreate: true,
+    options: unitSelectOptions.value },
   { key: 'boxConversionCoefficient', label: '一级→二级转换数', type: 'decimal', group: '规格信息', precision: 4, order: 2,
-    placeholder: '1 level1Unit = ? unit (如 1筐=10盒 填 10)' },
-  { key: 'gramsPerUnit', label: '标准克重(克/份)', type: 'decimal', group: '规格信息', precision: 2, suffix: '克', order: 3,
-    placeholder: '如 1盒=120克 填 120 (报工末道份→kg折算用; 留空=无标准)' },
-  { key: 'wipToFgYield', label: '半成品出成率(0~1)', type: 'decimal', group: '规格信息', precision: 4, order: 4,
-    placeholder: '如 0.55 表示 55% 出成率 (备货看板 WIP→成品估算; 留空=按 1:1 偏乐观)',
-    tooltip: '半成品折算成品的出成率，备货看板用此估算可产成品；未配置时按 1:1（偏乐观）' },
+    span: 24,
+    placeholder: conversionPlaceholder.value },
+  { key: 'gramsPerUnit', label: '标准克重', type: 'decimal', group: '规格信息', precision: 2, suffix: '克', order: 3,
+    placeholder: '克/份，末道报工折算用（留空=无标准）' },
+  { key: 'wipToFgYield', label: '半成品出成率', type: 'decimal', group: '规格信息', precision: 4, order: 4,
+    placeholder: '0~1，如 0.55=55%（留空按 1:1）' },
   // ---- 商务信息 (成品隐藏, 原辅料显示) ----
   { key: 'brand', label: '品牌', type: 'text', group: '商务信息', order: 1 },
   { key: 'taxIncludedUnitPrice', label: '含税单价', type: 'decimal', group: '商务信息', precision: 4, suffix: '元', order: 2 },
@@ -40,7 +92,7 @@ const productExtendedFields: FieldConfig[] = [
   // ---- 库存采购 ----
   { key: 'inventoryWarningThreshold', label: '库存预警值', type: 'decimal', group: '库存采购', precision: 2, order: 6 },
   { key: 'minimumOrderQuantity', label: '起订量(MOQ)', type: 'decimal', group: '库存采购', precision: 2, order: 7 },
-];
+]);
 import {
   getActiveWorkProcesses,
   getProductWorkProcesses,
@@ -233,9 +285,10 @@ function customerSearchFn(query: string, cb: (items: { id: string; name: string;
 
 // P1-NEW-2: 产品大类=成品时隐藏"商务信息"组 (客户需求 1567-1572s: 成品不展示, 原辅料才展示)
 const visibleExtendedFields = computed<FieldConfig[]>(() => {
+  const all = productExtendedFields.value;
   const base = formData.productCategory === 'FINISHED_PRODUCT'
-    ? productExtendedFields.filter(f => f.group !== '商务信息')
-    : productExtendedFields;
+    ? all.filter(f => f.group !== '商务信息')
+    : all;
   return canViewPrice.value ? base : base.filter(f => f.key !== 'taxIncludedUnitPrice');
 });
 
@@ -262,8 +315,8 @@ const formRules = {
     { max: 100, message: '产品名称不能超过100个字符', trigger: 'blur' }
   ],
   unit: [
-    { required: true, message: '请输入单位', trigger: 'blur' },
-    { max: 20, message: '单位不能超过20个字符', trigger: 'blur' }
+    { required: true, message: '请选择或输入单位', trigger: ['blur', 'change'] },
+    { max: 20, message: '单位不能超过20个字符', trigger: ['blur', 'change'] }
   ],
   productCategory: [
     { required: true, message: '请选择产品大类', trigger: 'change' }
@@ -273,6 +326,7 @@ const formRules = {
 onMounted(() => {
   loadData();
   loadCustomers();
+  loadUnitDict(); // T137: 计量单位字典 (供一级/二级单位下拉)
 });
 
 async function loadData() {
@@ -417,7 +471,7 @@ async function handleSubmit() {
       notes: formData.notes,
       // 扩展字段 — 从 productExtendedFields 自动收集
       ...Object.fromEntries(
-        productExtendedFields.map(f => [f.key, formData[f.key as keyof typeof formData] ?? null])
+        productExtendedFields.value.map(f => [f.key, formData[f.key as keyof typeof formData] ?? null])
       ),
     };
     if (!isEditing.value) {
@@ -810,8 +864,24 @@ function handleAiFill(params: TableRow) {
             />
           </el-select>
         </el-form-item>
+        <!-- T137: 二级单位(unit) 改为字典下拉, filterable + allow-create 兼容手输 -->
         <el-form-item label="单位" prop="unit">
-          <el-input v-model="formData.unit" placeholder="请输入单位（如：kg、箱、袋）" />
+          <el-select
+            v-model="formData.unit"
+            placeholder="选择或输入二级单位（如 盒、份、kg）"
+            filterable
+            allow-create
+            clearable
+            style="width: 100%"
+          >
+            <el-option
+              v-for="opt in unitSelectOptions"
+              :key="opt.value"
+              :label="opt.label"
+              :value="opt.value"
+            />
+          </el-select>
+          <div class="form-tip">二级单位是最小计量单位（如「盒」）；一级单位是大包装（如「筐=10盒」），在规格信息中配置</div>
         </el-form-item>
         <el-form-item label="规格" prop="specification">
           <el-input v-model="formData.specification" placeholder="请输入规格（如：310g*42袋/箱）" />
