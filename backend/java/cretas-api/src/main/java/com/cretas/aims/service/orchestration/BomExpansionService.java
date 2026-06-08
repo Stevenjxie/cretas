@@ -178,9 +178,29 @@ public class BomExpansionService {
     }
 
     /**
-     * T143: 读取物料库存单位 (RawMaterialType.unit). 无 repo / 物料不存在 → null.
+     * T144: 物料实际库存单位 = AVAILABLE 批次的 {@code MaterialBatch.quantityUnit} (称重口径, e.g. kg),
+     * <b>不是</b> {@code RawMaterialType.unit} (箱). 原料称重入库 — 权威库存量是 kg.
+     *
+     * <p>从已加载的批次列表里取最常见的 quantityUnit (避免额外查询). 各批次单位混用时记 warning.
+     * 批次为空时回退 RawMaterialType.unit (无库存场景).
      */
-    private String resolveMaterialStockUnit(String materialTypeId) {
+    private String resolveMaterialStockUnit(String materialTypeId, List<MaterialBatch> batches) {
+        if (batches != null && !batches.isEmpty()) {
+            java.util.Map<String, Long> byUnit = batches.stream()
+                    .map(MaterialBatch::getQuantityUnit)
+                    .filter(u -> u != null && !u.isBlank())
+                    .collect(java.util.stream.Collectors.groupingBy(u -> u, java.util.stream.Collectors.counting()));
+            if (!byUnit.isEmpty()) {
+                if (byUnit.size() > 1) {
+                    log.warn("[BOM-CHECK] 物料 {} 可用批次单位混用 {}, 取最常见", materialTypeId, byUnit.keySet());
+                }
+                return byUnit.entrySet().stream()
+                        .max(java.util.Map.Entry.comparingByValue())
+                        .map(java.util.Map.Entry::getKey)
+                        .orElse(null);
+            }
+        }
+        // 无可用批次: 回退 RawMaterialType.unit
         if (rawMaterialTypeRepository == null || materialTypeId == null) {
             return null;
         }
@@ -241,11 +261,11 @@ public class BomExpansionService {
                             .subtract(b.getReservedQuantity() != null ? b.getReservedQuantity() : BigDecimal.ZERO))
                     .reduce(BigDecimal.ZERO, BigDecimal::add);
 
-            // T143: 把需求量 (sourceUnit, e.g. g) 换算到库存单位 (箱) 再比较 + 分配.
+            // T144: 把需求量 (sourceUnit, e.g. g) 换算到称重批次单位 (kg) 再比较 + 分配.
             // requiredInStockUnit 默认 = req.getRequiredQuantity() (单位一致 / 无换算器 / RPF 路径).
             BigDecimal requiredInStockUnit = req.getRequiredQuantity();
             boolean abacaSkip = false;
-            String stockUnit = resolveMaterialStockUnit(req.getMaterialTypeId());
+            String stockUnit = resolveMaterialStockUnit(req.getMaterialTypeId(), batches);
             String bomUnit = req.getSourceUnit();
 
             if (materialUomConverter != null && bomUnit != null && stockUnit != null
@@ -257,12 +277,12 @@ public class BomExpansionService {
                     abacaSkip = true;
                     log.info("[BOM-CHECK] 抄码料 {} 跳过库存校验", req.getMaterialTypeName());
                 } else if (conv.isUnconvertible()) {
-                    // 非抄码 + 单位不同 + 无装箱规格 → fail-loud (不放过错误数据).
+                    // T144 安全网: BOM 单位与库存批次单位维度不可换算 (e.g. 个 vs kg) → 真实配置错误.
                     throw new BusinessException(409,
-                            String.format("原料「%s」未配置装箱规格(%s↔%s)，无法校验库存，请先配置",
-                                    req.getMaterialTypeName(), stockUnit, bomUnit))
+                            String.format("原料「%s」BOM单位(%s)与库存单位(%s)无法换算，请核对单位配置",
+                                    req.getMaterialTypeName(), bomUnit, stockUnit))
                             .withCode("MATERIAL_UOM_UNCONFIGURED")
-                            .withHint("请前往「原料管理」为该原料配置装箱规格(箱↔kg)后再继续")
+                            .withHint("请核对该原料 BOM 配方单位与入库称重单位是否同一计量维度")
                             .withHintTarget(req.getMaterialTypeId())
                             .withSeverity("BLOCKING");
                 } else {
