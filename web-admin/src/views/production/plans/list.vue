@@ -16,6 +16,7 @@ import {
   getSupervisors,
 } from '@/api/productionPlan';
 import { getProductWorkProcesses } from '@/api/processProduction';
+import type { ProductWorkProcessItem } from '@/api/processProduction';
 import { copyProductionPlan } from '@/api/orderCopy';
 import CanvasDynamicFields from '@/components/canvas/CanvasDynamicFields.vue';
 import CanvasAwareWrapper from '@/components/canvas/CanvasAwareWrapper.vue';
@@ -653,9 +654,30 @@ function getStatusText(status: string) {
 const viewDialogVisible = ref(false);
 const viewPlan = ref<TableRow | null>(null);
 
-function handleViewPlan(row: TableRow) {
+const viewProcessList = ref<ProductWorkProcessItem[]>([]);
+const viewProcessLoading = ref(false);
+
+async function handleViewPlan(row: TableRow) {
   viewPlan.value = row;
   viewDialogVisible.value = true;
+  // Fetch 工序+负责人 for the plan's product type
+  const ptId = row.productTypeId as string | undefined;
+  if (ptId && factoryId.value) {
+    viewProcessLoading.value = true;
+    viewProcessList.value = [];
+    try {
+      const res = await getProductWorkProcesses(factoryId.value, ptId);
+      if (res.success && Array.isArray(res.data)) {
+        viewProcessList.value = res.data as ProductWorkProcessItem[];
+      }
+    } catch (e) {
+      console.warn('[计划详情] 加载工序失败', e);
+    } finally {
+      viewProcessLoading.value = false;
+    }
+  } else {
+    viewProcessList.value = [];
+  }
 }
 
 // ==================== Reference Data ====================
@@ -1021,30 +1043,73 @@ function handleAiFill(params: TableRow) {
     </el-card>
 
     <!-- 查看计划详情 -->
-    <el-dialog v-model="viewDialogVisible" title="计划详情" width="560px" destroy-on-close>
-      <el-descriptions v-if="viewPlan" :column="2" border>
-        <el-descriptions-item label="计划编号">{{ viewPlan.planNumber }}</el-descriptions-item>
-        <el-descriptions-item label="产品类型">{{ viewPlan.productTypeName || viewPlan.productName || viewPlan.productTypeId || '-' }}</el-descriptions-item>
-        <el-descriptions-item label="客户">{{ viewPlan.sourceCustomerName || '-' }}</el-descriptions-item>
-        <el-descriptions-item label="工序">{{ viewPlan.processName || '-' }}</el-descriptions-item>
-        <el-descriptions-item label="计划数量">{{ viewPlan.plannedQuantity }}</el-descriptions-item>
-        <el-descriptions-item label="实际数量">{{ viewPlan.actualQuantity || '-' }}</el-descriptions-item>
-        <el-descriptions-item label="计划日期">{{ viewPlan.plannedDate }}</el-descriptions-item>
-        <el-descriptions-item label="批次日期">{{ viewPlan.batchDate || '-' }}</el-descriptions-item>
-        <el-descriptions-item label="状态">
-          <el-tag :type="getStatusType(viewPlan.status)" size="small">{{ getStatusText(viewPlan.status) }}</el-tag>
-        </el-descriptions-item>
-        <el-descriptions-item label="来源">
-          <el-tag v-if="viewPlan.sourceType === 'EXCEL_IMPORT'" type="warning" size="small">Excel导入</el-tag>
-          <el-tag v-else-if="viewPlan.sourceType === 'AI_CHAT'" type="success" size="small">AI创建</el-tag>
-          <el-tag v-else-if="viewPlan.sourceType === 'SAFETY_STOCK'" type="info" size="small">存货生产</el-tag>
-          <el-tag v-else-if="viewPlan.sourceType === 'CUSTOMER_ORDER'" type="primary" size="small">销售订单</el-tag>
-          <el-tag v-else-if="viewPlan.sourceType === 'AI_FORECAST'" type="success" size="small">AI预测</el-tag>
-          <el-tag v-else size="small">手动</el-tag>
-        </el-descriptions-item>
-        <el-descriptions-item label="指派主管">{{ viewPlan.assignedSupervisorName || '-' }}</el-descriptions-item>
-        <el-descriptions-item label="备注" :span="2">{{ viewPlan.notes || '-' }}</el-descriptions-item>
-      </el-descriptions>
+    <el-dialog v-model="viewDialogVisible" title="计划详情" width="680px" destroy-on-close>
+      <div v-if="viewPlan" class="plan-detail">
+        <!-- 基本信息 -->
+        <div class="detail-section">
+          <div class="detail-section-title">基本信息</div>
+          <el-descriptions :column="2" border size="small">
+            <el-descriptions-item label="计划编号">{{ viewPlan.planNumber }}</el-descriptions-item>
+            <el-descriptions-item label="产品类型">{{ viewPlan.productTypeName || viewPlan.productName || viewPlan.productTypeId || '-' }}</el-descriptions-item>
+            <el-descriptions-item label="客户">{{ viewPlan.sourceCustomerName || '-' }}</el-descriptions-item>
+            <el-descriptions-item label="指派主管">{{ viewPlan.assignedSupervisorName || '-' }}</el-descriptions-item>
+            <el-descriptions-item label="计划数量">{{ viewPlan.plannedQuantity }}</el-descriptions-item>
+            <el-descriptions-item label="实际数量">{{ viewPlan.actualQuantity || '-' }}</el-descriptions-item>
+            <el-descriptions-item label="状态">
+              <el-tag :type="getStatusType(viewPlan.status as string)" size="small">{{ getStatusText(viewPlan.status as string) }}</el-tag>
+            </el-descriptions-item>
+            <el-descriptions-item label="来源">
+              <el-tag v-if="viewPlan.sourceType === 'EXCEL_IMPORT'" type="warning" size="small">Excel导入</el-tag>
+              <el-tag v-else-if="viewPlan.sourceType === 'AI_CHAT'" type="success" size="small">AI创建</el-tag>
+              <el-tag v-else-if="viewPlan.sourceType === 'SAFETY_STOCK'" type="info" size="small">存货生产</el-tag>
+              <el-tag v-else-if="viewPlan.sourceType === 'CUSTOMER_ORDER'" type="primary" size="small">销售订单</el-tag>
+              <el-tag v-else-if="viewPlan.sourceType === 'AI_FORECAST'" type="success" size="small">AI预测</el-tag>
+              <el-tag v-else size="small">手动</el-tag>
+            </el-descriptions-item>
+          </el-descriptions>
+        </div>
+
+        <!-- 时间 -->
+        <div class="detail-section">
+          <div class="detail-section-title">时间</div>
+          <el-descriptions :column="2" border size="small">
+            <el-descriptions-item label="计划日期">{{ viewPlan.plannedDate || '-' }}</el-descriptions-item>
+            <el-descriptions-item label="批次日期">{{ viewPlan.batchDate || '-' }}</el-descriptions-item>
+          </el-descriptions>
+        </div>
+
+        <!-- 工序 + 负责人 -->
+        <div class="detail-section">
+          <div class="detail-section-title">
+            工序
+            <span v-if="viewProcessLoading" class="detail-section-hint">加载中…</span>
+            <span v-else-if="viewProcessList.length > 0" class="detail-section-hint">{{ viewProcessList.length }} 道</span>
+          </div>
+          <div v-if="viewProcessLoading" class="process-list-loading">
+            <el-icon class="is-loading"><Refresh /></el-icon>
+            <span>加载工序配置…</span>
+          </div>
+          <ol v-else-if="viewProcessList.length > 0" class="process-list">
+            <li v-for="(wp, idx) in viewProcessList" :key="wp.id" class="process-item">
+              <span class="process-order">{{ idx + 1 }}.</span>
+              <span class="process-name">{{ wp.processName }}</span>
+              <span class="process-assignee">
+                <el-tag v-if="wp.responsibleWorkerName" type="primary" size="small" effect="plain">{{ wp.responsibleWorkerName }}</el-tag>
+                <span v-else class="process-unassigned">未指派</span>
+              </span>
+            </li>
+          </ol>
+          <div v-else class="process-list-empty">
+            {{ viewPlan.processName || '暂无工序配置' }}
+          </div>
+        </div>
+
+        <!-- 备注 -->
+        <div v-if="viewPlan.notes" class="detail-section">
+          <div class="detail-section-title">备注</div>
+          <div class="detail-notes">{{ viewPlan.notes }}</div>
+        </div>
+      </div>
     </el-dialog>
 
     <!-- 新建计划对话框 -->
@@ -1363,6 +1428,101 @@ function handleAiFill(params: TableRow) {
   padding-top: 16px;
   border-top: 1px solid var(--border-color-lighter, #ebeef5);
   margin-top: 16px;
+}
+
+// ==================== Plan Detail Dialog ====================
+.plan-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.detail-section {
+  .detail-section-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-color-regular, #606266);
+    margin-bottom: 8px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+
+    .detail-section-hint {
+      font-size: 12px;
+      font-weight: 400;
+      color: var(--text-color-secondary, #909399);
+    }
+  }
+}
+
+.process-list-loading {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 12px 0;
+  font-size: 13px;
+  color: var(--text-color-secondary, #909399);
+}
+
+.process-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border: 1px solid var(--border-color-lighter, #ebeef5);
+  border-radius: 4px;
+  overflow: hidden;
+
+  .process-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    font-size: 13px;
+    border-bottom: 1px solid var(--border-color-extra-light, #f2f6fc);
+
+    &:last-child {
+      border-bottom: none;
+    }
+
+    &:nth-child(even) {
+      background: var(--fill-color-light, #f5f7fa);
+    }
+
+    .process-order {
+      color: var(--text-color-secondary, #909399);
+      min-width: 20px;
+      flex-shrink: 0;
+    }
+
+    .process-name {
+      flex: 1;
+      color: var(--text-color-primary, #303133);
+    }
+
+    .process-assignee {
+      flex-shrink: 0;
+    }
+
+    .process-unassigned {
+      font-size: 12px;
+      color: var(--text-color-placeholder, #c0c4cc);
+    }
+  }
+}
+
+.process-list-empty {
+  font-size: 13px;
+  color: var(--text-color-secondary, #909399);
+  padding: 8px 0;
+}
+
+.detail-notes {
+  font-size: 13px;
+  color: var(--text-color-regular, #606266);
+  line-height: 1.6;
+  padding: 8px 12px;
+  background: var(--fill-color-light, #f5f7fa);
+  border-radius: 4px;
 }
 
 </style>
