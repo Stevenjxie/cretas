@@ -123,6 +123,17 @@ export function getBatchWip(factoryId: string, batchId: string | number) {
   return get<WipRowItem[]>(`/${factoryId}/production/batches/${batchId}/wip`);
 }
 
+// === 工序任务 (WorkProcessTask) — T140 批次详情工序明细 ===
+
+/**
+ * 查询某生产批次的工序任务列表 (按 processOrder 升序)。
+ * 端点: WorkProcessTaskController GET /production/batches/{batchId}/work-process-tasks。
+ * 无任务 (批次未 spawn 工序) → 空数组。
+ */
+export function getBatchWorkProcessTasks(factoryId: string, batchId: string | number) {
+  return get<WorkProcessTaskItem[]>(`/${factoryId}/production/batches/${batchId}/work-process-tasks`);
+}
+
 // === 单元 F (F006 REQ-21): 分订单出成率聚合 ===
 
 /**
@@ -284,6 +295,38 @@ export interface ApprovalItem {
   sampleRetainQuantity?: number | null;
   customFields?: Record<string, unknown> | null;
   createdAt: string;
+}
+
+// mirror backend dto/WorkProcessTaskDTO.java — T140 batch detail 工序明细
+export interface WorkProcessTaskItem {
+  id: number;
+  factoryId: string;
+  productionBatchId: number;
+  productWorkProcessId: number;
+  workProcessId: string;
+  productTypeId: string;
+  processOrder: number;
+  status: 'PENDING' | 'IN_PROGRESS' | 'COMPLETED' | 'SKIPPED' | 'CANCELLED' | string;
+  processName: string | null;
+  processCategory: string | null;
+  plannedQuantity: number | null;
+  plannedUnit: string | null;
+  plannedStartAt: string | null;
+  plannedEndAt: string | null;
+  estimatedMinutes: number | null;
+  actualQuantity: number | null;
+  actualStartAt: string | null;
+  actualEndAt: string | null;
+  actualMinutes: number | null;
+  assignedTo: number | null;       // 责任人 user ID (后端无 name join; T140-FLAG: 需后端补 assignedToName)
+  completedBy: number | null;
+  completedAt: string | null;
+  standardYieldMin: number | null; // 标准出成率下限
+  standardYieldMax: number | null; // 标准出成率上限
+  outputUnit: string | null;
+  notes: string | null;
+  createdAt: string;
+  updatedAt: string;
 }
 
 // mirror backend dto/yield/WipRowDTO.java
