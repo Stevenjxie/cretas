@@ -16,7 +16,7 @@ import { useFactoryFeatureStore } from '../../store/factoryFeatureStore';
 const profileLogger = logger.createContextLogger('ProfileScreen');
 
 export default function ProfileScreen() {
-  const { user, logout } = useAuthStore();
+  const { user, logout, getUserRole } = useAuthStore();
   const navigation = useNavigation();
   const { language, setLanguage } = useLanguageStore();
   const { isScreenEnabled } = useFactoryFeatureStore();
@@ -137,16 +137,20 @@ export default function ProfileScreen() {
   };
 
   const displayName = user?.fullName || user?.username || '未知用户';
-  const roleCode = user?.userType === 'platform' ? user?.platformUser?.role : user?.factoryUser?.role;
+  // A1 defensive fix: derive roleCode via the established Zustand getter getUserRole()
+  // instead of reading user?.factoryUser?.role directly. This is consistent with how
+  // other screens (e.g. YieldStepReportScreen) obtain the role, and is robust against
+  // persisted-user-shape edge cases (e.g. platform vs factory discriminated union).
+  const roleCode = getUserRole();
   // A1: operators see only user-facing items; dev/admin tools are hidden.
   const isOperator = roleCode === 'operator';
 
-  const getRoleName = (role: string | undefined) => {
+  const getRoleName = (role: string | undefined | null) => {
     const roleMap: Record<string, string> = {
       'developer': '系统开发者', 'platform_admin': '平台管理员', 'factory_super_admin': '工厂超级管理员',
       'permission_admin': '权限管理员', 'operator': '操作员', 'viewer': '查看者'
     };
-    return roleMap[role || ''] || role || '未知角色';
+    return roleMap[role ?? ''] || role || '未知角色';
   };
 
   return (
