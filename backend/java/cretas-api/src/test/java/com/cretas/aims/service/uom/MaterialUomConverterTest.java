@@ -130,6 +130,82 @@ class MaterialUomConverterTest {
         assertThat(r.getReason()).contains("冷冻猪舌");
     }
 
+    // ================================================================
+    // T156 — 单位别名归一化 (pcs ≡ 个 ≡ 件): 等同单位不再误判 UNCONVERTIBLE.
+    // 背景: 气调盒 BOM 单位 pcs, 库存单位 个, 本是同一计数单位, 旧 normalize
+    // 只 trim+lowercase → pcs ≠ 个 → 误报 409 阻断开工.
+    // ================================================================
+
+    @Test
+    @DisplayName("T156: pcs vs 个 → CONVERTED 1:1 (气调盒, 不再误判 UNCONVERTIBLE)")
+    void aliasPcsVsGe_converted1to1() {
+        // 气调盒: BOM 单位 pcs, 库存单位 个 → 同一计数单位.
+        MaterialUomConverter.ConversionResult r =
+                converter.toComparableQuantity(MAT_ZHUSHE, new BigDecimal("100"), "pcs", "个");
+        assertThat(r.isConverted()).isTrue();
+        assertThat(r.getQuantity()).isEqualByComparingTo("100");   // 1:1, 无系数
+        assertThat(r.getUnit()).isEqualTo("个");                    // 用库存单位
+        assertThat(r.isUnconvertible()).isFalse();
+    }
+
+    @Test
+    @DisplayName("T156: 件 vs 个 → CONVERTED 1:1 (同计数单位)")
+    void aliasJianVsGe_converted1to1() {
+        MaterialUomConverter.ConversionResult r =
+                converter.toComparableQuantity(MAT_ZHUSHE, new BigDecimal("50"), "件", "个");
+        assertThat(r.isConverted()).isTrue();
+        assertThat(r.getQuantity()).isEqualByComparingTo("50");
+    }
+
+    @Test
+    @DisplayName("T156: PCS / Pcs / ' pcs ' 大小写+空格不敏感 → CONVERTED 1:1")
+    void aliasPcsCaseInsensitive_converted() {
+        for (String bomUnit : new String[]{"PCS", "Pcs", " pcs ", "pieces", "pc"}) {
+            MaterialUomConverter.ConversionResult r =
+                    converter.toComparableQuantity(MAT_ZHUSHE, new BigDecimal("7"), bomUnit, "个");
+            assertThat(r.isConverted())
+                    .as("BOM 单位 '%s' vs 个 应可换算", bomUnit)
+                    .isTrue();
+            assertThat(r.getQuantity()).isEqualByComparingTo("7");
+        }
+    }
+
+    @Test
+    @DisplayName("T156: g vs kg 仍走系数换算 (别名不破坏 UnitConversionService g↔kg)")
+    void aliasDoesNotRegress_gToKg() {
+        // 2000g → 2kg, 经 UnitConversionService 维度换算 (非 1:1)
+        MaterialUomConverter.ConversionResult r =
+                converter.toComparableQuantity(MAT_ZHUSHE, new BigDecimal("2000"), "g", "kg");
+        assertThat(r.isConverted()).isTrue();
+        assertThat(r.getQuantity()).isEqualByComparingTo("2");
+    }
+
+    @Test
+    @DisplayName("T156: 克 vs kg 仍正确换算 (中文重量别名归一到 g → 走 g↔kg 系数)")
+    void aliasChineseWeight_keToKg() {
+        // 克 → g 规范, 2000克 → 2kg
+        MaterialUomConverter.ConversionResult r =
+                converter.toComparableQuantity(MAT_ZHUSHE, new BigDecimal("2000"), "克", "kg");
+        assertThat(r.isConverted()).isTrue();
+        assertThat(r.getQuantity()).isEqualByComparingTo("2");
+    }
+
+    @Test
+    @DisplayName("T156: 个 vs kg (无关维度, 无装箱规格) → 仍 UNCONVERTIBLE (别名不让其假换算)")
+    void aliasGeVsKg_stillUnconvertible() {
+        RawMaterialType m = new RawMaterialType();
+        m.setName("气调盒");
+        m.setUnit("kg");
+        m.setIsAbacaPackaging(false);
+        when(materialRepo.findById(MAT_ZHUSHE)).thenReturn(Optional.of(m));
+        // packagingRepo 默认 empty → 无 个↔kg 装箱规格
+
+        MaterialUomConverter.ConversionResult r =
+                converter.toComparableQuantity(MAT_ZHUSHE, new BigDecimal("100"), "个", "kg");
+        assertThat(r.isUnconvertible()).isTrue();   // 个 与 kg 无关, 不别名硬换
+        assertThat(r.getQuantity()).isNull();
+    }
+
     @Test
     @DisplayName("null 数量 → UNCONVERTIBLE (不静默)")
     void nullQty_unconvertible() {
