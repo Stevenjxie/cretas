@@ -68,6 +68,12 @@ public class WorkProcessTaskDTO {
     private String processName;
     private String processCategory;
 
+    /** T157: 产品名称 (list 路径 batch join 透出, 无 N+1; 给 RN 小组长跨批次选择屏分组用). null = 批次/产品已删除. */
+    private String productTypeName;
+
+    /** T157: 批次号 (list 路径 batch join 透出, 无 N+1). null = 批次已删除. */
+    private String batchNumber;
+
     /** 标准出成率下限 (张权 A7; 来自该工序 WorkProcess, join 透出; null=不校验). */
     private BigDecimal standardYieldMin;
 

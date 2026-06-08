@@ -1,11 +1,15 @@
 package com.cretas.aims.service.workprocess.impl;
 
 import com.cretas.aims.dto.WorkProcessTaskDTO;
+import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.ProductWorkProcess;
+import com.cretas.aims.entity.ProductionBatch;
 import com.cretas.aims.entity.User;
 import com.cretas.aims.entity.WorkProcess;
 import com.cretas.aims.entity.workprocess.WorkProcessTask;
+import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.ProductWorkProcessRepository;
+import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.repository.WorkProcessRepository;
 import com.cretas.aims.repository.workprocess.WorkProcessTaskRepository;
@@ -49,6 +53,12 @@ class WorkProcessTaskServiceImplTest {
 
     @Mock
     private UserRepository userRepository;
+
+    @Mock
+    private ProductionBatchRepository productionBatchRepository;
+
+    @Mock
+    private ProductTypeRepository productTypeRepository;
 
     @InjectMocks
     private WorkProcessTaskServiceImpl service;
@@ -456,5 +466,107 @@ class WorkProcessTaskServiceImplTest {
         assertEquals(1, result.size());
         assertEquals("wangfang", result.get(0).getAssignedToName(),
                 "fullName=null → assignedToName 应 fallback 到 username");
+    }
+
+    // ==================== T157: batchNumber / productTypeName batch join ====================
+
+    /** 辅助: 构造一个带 productTypeId + productionBatchId 的任务 (T157 join 用). */
+    private WorkProcessTask makeTaskWithProduct(Long id, String wpId, Long batchId, String productTypeId) {
+        return WorkProcessTask.builder()
+                .id(id)
+                .factoryId(FACTORY_ID)
+                .productionBatchId(batchId)
+                .productTypeId(productTypeId)
+                .workProcessId(wpId)
+                .processOrder(id.intValue())
+                .status(WorkProcessTask.Status.PENDING)
+                .build();
+    }
+
+    @Test
+    @DisplayName("T157 listByBatch: 批次/产品存在 → DTO 透出 batchNumber + productTypeName (batch join, 无 N+1)")
+    void listByBatch_exposesBatchNumberAndProductTypeName() {
+        Long batchId = 400L;
+        WorkProcessTask t1 = makeTaskWithProduct(30L, "wp-a", batchId, "PT-zst");
+        WorkProcessTask t2 = makeTaskWithProduct(31L, "wp-b", batchId, "PT-zst");
+
+        ProductionBatch batch = ProductionBatch.builder()
+                .id(batchId)
+                .batchNumber("ZST-20260608")
+                .build();
+
+        ProductType pt = new ProductType();
+        pt.setId("PT-zst");
+        pt.setName("叮咚猪舌");
+
+        when(taskRepository.findByFactoryIdAndProductionBatchIdOrderByProcessOrderAsc(FACTORY_ID, batchId))
+                .thenReturn(List.of(t1, t2));
+        when(workProcessRepository.findByFactoryIdAndIdIn(eq(FACTORY_ID), any()))
+                .thenReturn(List.of());
+        when(productionBatchRepository.findByIdIn(any())).thenReturn(List.of(batch));
+        when(productTypeRepository.findByIdIn(any())).thenReturn(List.of(pt));
+
+        List<WorkProcessTaskDTO> result = service.listByBatch(FACTORY_ID, batchId, null);
+
+        assertEquals(2, result.size());
+        assertTrue(result.stream().allMatch(d -> "ZST-20260608".equals(d.getBatchNumber())),
+                "所有任务的 batchNumber 应透出 'ZST-20260608'");
+        assertTrue(result.stream().allMatch(d -> "叮咚猪舌".equals(d.getProductTypeName())),
+                "所有任务的 productTypeName 应透出 '叮咚猪舌'");
+    }
+
+    @Test
+    @DisplayName("T157 listByBatch: 批次/产品缺失 (已删除) → batchNumber/productTypeName 为 null (禁假数据), 不 NPE")
+    void listByBatch_nullWhenBatchOrProductMissing() {
+        Long batchId = 401L;
+        WorkProcessTask t1 = makeTaskWithProduct(40L, "wp-a", batchId, "PT-gone");
+
+        when(taskRepository.findByFactoryIdAndProductionBatchIdOrderByProcessOrderAsc(FACTORY_ID, batchId))
+                .thenReturn(List.of(t1));
+        when(workProcessRepository.findByFactoryIdAndIdIn(eq(FACTORY_ID), any()))
+                .thenReturn(List.of());
+        // batch / product 查不到 (空) → 模拟已删除
+        when(productionBatchRepository.findByIdIn(any())).thenReturn(List.of());
+        when(productTypeRepository.findByIdIn(any())).thenReturn(List.of());
+
+        List<WorkProcessTaskDTO> result = service.listByBatch(FACTORY_ID, batchId, null);
+
+        assertEquals(1, result.size());
+        assertNull(result.get(0).getBatchNumber(), "批次缺失 → batchNumber 应 null (禁假数据)");
+        assertNull(result.get(0).getProductTypeName(), "产品缺失 → productTypeName 应 null (禁假数据)");
+    }
+
+    @Test
+    @DisplayName("T157 listByBatch: 跨产品 (掌中宝+猪舌) → 各自正确 productTypeName, 单次 join 无 N+1")
+    void listByBatch_crossProductNamesResolveIndependently() {
+        Long batchId = 402L;
+        // 同批次理论同产品, 但 list 路径 (跨批次) 才会混产品; 这里用 listByBatch 验 map 解析正确性
+        WorkProcessTask t1 = makeTaskWithProduct(50L, "wp-a", batchId, "PT-zzb");
+        WorkProcessTask t2 = makeTaskWithProduct(51L, "wp-b", batchId, "PT-zzb");
+
+        ProductionBatch batch = ProductionBatch.builder()
+                .id(batchId)
+                .batchNumber("ZZB-20260608")
+                .build();
+        ProductType ptZzb = new ProductType();
+        ptZzb.setId("PT-zzb");
+        ptZzb.setName("掌中宝");
+        // map 里多放一个不相关产品, 验只取匹配的
+        ProductType ptOther = new ProductType();
+        ptOther.setId("PT-zst");
+        ptOther.setName("叮咚猪舌");
+
+        when(taskRepository.findByFactoryIdAndProductionBatchIdOrderByProcessOrderAsc(FACTORY_ID, batchId))
+                .thenReturn(List.of(t1, t2));
+        when(workProcessRepository.findByFactoryIdAndIdIn(eq(FACTORY_ID), any()))
+                .thenReturn(List.of());
+        when(productionBatchRepository.findByIdIn(any())).thenReturn(List.of(batch));
+        when(productTypeRepository.findByIdIn(any())).thenReturn(List.of(ptZzb, ptOther));
+
+        List<WorkProcessTaskDTO> result = service.listByBatch(FACTORY_ID, batchId, null);
+
+        assertEquals(2, result.size());
+        assertTrue(result.stream().allMatch(d -> "掌中宝".equals(d.getProductTypeName())),
+                "PT-zzb 任务应解析为 '掌中宝', 不被 map 中其他产品干扰");
     }
 }

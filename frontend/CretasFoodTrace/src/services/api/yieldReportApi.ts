@@ -41,10 +41,13 @@ export interface WorkProcessTask {
   estimatedMinutes?: number | null;
   actualQuantity?: number | null;   // 累计产出 (Phase A 双写)
   assignedTo?: number | null;
+  assignedToName?: string | null;   // T142: 责任人姓名 (join 透出; null=未分配/已删除)
   completedBy?: number | null;
   notes?: string | null;
   processName?: string | null;      // 工序名 (焯水/卤制..., join 提供, 选填) — 卡片头用
   processCategory?: string | null;
+  productTypeName?: string | null;  // T157: 产品名 (list 路径 join 透出; null=批次/产品已删除) — 跨批次选择屏分组用
+  batchNumber?: string | null;      // T157: 批次号 (list 路径 join 透出; null=批次已删除)
   standardYieldMin?: number | null; // Task 0 透出: A7 标准出成率下限 (null=未配)
   standardYieldMax?: number | null; // Task 0 透出: A7 标准出成率上限 (null=未配)
   outputUnit?: string | null;       // P0-2: 工序产出单位 (kg→份/盒, join 透出; null=沿用投入单位)
