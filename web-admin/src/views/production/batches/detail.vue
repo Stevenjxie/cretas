@@ -424,6 +424,66 @@ const hasBatchTraditionalSummary = computed(() => {
   return !!yd && (yd.totalWaste != null || yd.totalSampleRetain != null);
 });
 
+// T161: 批次所有逐道报工证据照片/视频 — 跨步骤平铺 (用于总数徽章 + 报工证据相册卡).
+// 覆盖三种来源: inputPhotos (三阶段投入) / outputPhotos (三阶段产出) / photos (legacy 合并).
+// legacy 行 (input+output 都空) 只取 photos 避免重复计数.
+interface GalleryItem {
+  url: string;
+  kind: EvidenceMediaKind;
+  processOrder: number;
+  processName: string;
+  phase: 'input' | 'output' | 'legacy';
+}
+
+const evidenceGallery = computed((): GalleryItem[] => {
+  const steps: Record<string, unknown>[] = yieldData.value?.steps ?? [];
+  const items: GalleryItem[] = [];
+  const seen = new Set<string>();
+
+  for (const step of steps) {
+    const order = (step.processOrder as number) ?? 0;
+    const name = (step.processName as string) || ('第' + order + '道');
+
+    const addUrls = (urls: string[], phase: GalleryItem['phase']) => {
+      for (const url of urls) {
+        if (url && !seen.has(url)) {
+          seen.add(url);
+          items.push({ url, kind: isEvidenceVideoUrl(url) ? 'video' : 'image', processOrder: order, processName: name, phase });
+        }
+      }
+    };
+
+    const inPhotos = stepInputPhotos(step);
+    const outPhotos = stepOutputPhotos(step);
+    if (inPhotos.length > 0 || outPhotos.length > 0) {
+      // Split-phase data: add input then output
+      addUrls(inPhotos, 'input');
+      addUrls(outPhotos, 'output');
+    } else {
+      // Legacy data: use combined photos
+      addUrls(stepPhotos(step), 'legacy');
+    }
+  }
+  return items;
+});
+
+const totalEvidenceCount = computed(() => evidenceGallery.value.length);
+const hasEvidenceGallery = computed(() => hasYield.value && totalEvidenceCount.value > 0);
+
+// Gallery lightbox: image-only URLs in order (for el-image preview-src-list)
+const galleryImageUrls = computed(() => evidenceGallery.value.filter(i => i.kind === 'image').map(i => i.url));
+
+function galleryImageInitialIndex(url: string): number {
+  const idx = galleryImageUrls.value.indexOf(url);
+  return idx >= 0 ? idx : 0;
+}
+
+function phaseLabel(phase: GalleryItem['phase']): string {
+  if (phase === 'input') return '投入';
+  if (phase === 'output') return '产出';
+  return '证据';
+}
+
 // G6/G7 Wave 4: WIP 区 — 仅有 WIP 行时显示
 const hasWip = computed(() => wipRows.value.length > 0);
 function getWipStatusText(status: string) {
@@ -659,6 +719,16 @@ function getTimelineIcon(type: string) {
             <!-- G8 Wave 4 (C): 进行中标注 (展示层防呆) -->
             <el-tag v-if="yieldInProgress" type="warning" size="small" effect="plain" style="margin-left: 12px">
               进行中
+            </el-tag>
+            <!-- T161: 证据照片总数徽章 — 提示审核员有多少证据可查 (见下方「报工证据」相册卡) -->
+            <el-tag
+              v-if="totalEvidenceCount > 0"
+              type="info"
+              size="small"
+              effect="plain"
+              style="margin-left: 12px"
+            >
+              · 共 {{ totalEvidenceCount }} 张证据照片
             </el-tag>
             <!-- 单元 F (F006 REQ-21): 以订单的模式呈现 — 查看本订单下全部批次整体出成率 -->
             <el-button
@@ -921,6 +991,53 @@ function getTimelineIcon(type: string) {
           </div>
         </el-card>
 
+        <!-- T161: 报工证据相册卡 — 跨步骤平铺所有证据照片/视频, 无需逐行展开.
+             只在有逐道报工数据 (hasYield) 且至少有 1 张证据 (hasEvidenceGallery) 时显示.
+             总数 = 0 时整块隐藏, 诚实空态由各步骤展开行内承载. -->
+        <el-card v-if="hasEvidenceGallery" shadow="never" class="detail-card gallery-card">
+          <template #header>
+            <span class="section-title">报工证据</span>
+            <span class="section-meta">共 {{ totalEvidenceCount }} 张 · 按工序顺序排列</span>
+          </template>
+          <div class="gallery-grid">
+            <div
+              v-for="(item, idx) in evidenceGallery"
+              :key="idx"
+              class="gallery-item"
+            >
+              <!-- video -->
+              <video
+                v-if="item.kind === 'video'"
+                :src="item.url"
+                class="gallery-thumb gallery-thumb-video"
+                controls
+                preload="metadata"
+              />
+              <!-- image — opens lightbox for all images in the gallery -->
+              <el-image
+                v-else
+                :src="item.url"
+                fit="cover"
+                :preview-src-list="galleryImageUrls"
+                :initial-index="galleryImageInitialIndex(item.url)"
+                class="gallery-thumb"
+                preview-teleported
+              />
+              <!-- label: 道序 · 工序名 · 阶段 -->
+              <div class="gallery-label">
+                <span class="gallery-order">第{{ item.processOrder }}道</span>
+                <span class="gallery-process-name">{{ item.processName }}</span>
+                <el-tag
+                  :type="item.phase === 'input' ? 'primary' : item.phase === 'output' ? 'success' : 'info'"
+                  size="small"
+                  effect="plain"
+                  class="gallery-phase-tag"
+                >{{ phaseLabel(item.phase) }}</el-tag>
+              </div>
+            </div>
+          </div>
+        </el-card>
+
         <!-- G6/G7 Wave 4: 半成品库存 (WIP) — 每道工序中间品产出/已领/余额/状态.
              端点 YieldReportController GET /wip. 无 WIP → 整块隐藏 (诚实空态). -->
         <el-card v-if="hasWip" shadow="never" class="detail-card">
@@ -1076,10 +1193,12 @@ function getTimelineIcon(type: string) {
           <el-empty description="暂无时间线记录" :image-size="60" />
         </el-card>
 
-        <!-- 附件 (C-ATT-1) — 现场照片 / 出料单据 / 质检报告 -->
+        <!-- T161: 附件卡澄清 — 此处是通用附件 (上传的单据/质检报告), 非逐道报工证据.
+             报工证据照片见上方「报工证据」相册卡 (来自手机端逐道报工). -->
         <el-card class="section-card" shadow="never" style="margin-top: 16px">
           <template #header>
-            <span>附件</span>
+            <span class="section-title">附件 <span class="attachment-card-note">(非报工证据)</span></span>
+            <div class="attachment-card-hint">报工证据照片见上方「报工证据」相册 / 逐道展开</div>
           </template>
           <AttachmentList
             entity-type="PRODUCTION_BATCH"
@@ -1632,5 +1751,84 @@ function getTimelineIcon(type: string) {
   .kpi-row {
     grid-template-columns: repeat(2, 1fr);
   }
+}
+
+/* T161: 附件卡澄清 */
+.attachment-card-note {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--text-color-placeholder, #c0c4cc);
+  margin-left: 4px;
+}
+
+.attachment-card-hint {
+  font-size: 12px;
+  color: var(--text-color-placeholder, #c0c4cc);
+  margin-top: 2px;
+}
+
+/* T161: 报工证据相册卡 */
+.gallery-card {
+  :deep(.el-card__header) {
+    padding: 12px 20px 8px;
+  }
+}
+
+.gallery-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 4px 0;
+}
+
+.gallery-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  width: 100px;
+}
+
+.gallery-thumb {
+  width: 100px;
+  height: 100px;
+  border-radius: 6px;
+  cursor: pointer;
+  object-fit: cover;
+  background: #111827;
+  display: block;
+  border: 1px solid var(--border-color-lighter, #ebeef5);
+}
+
+.gallery-thumb-video {
+  cursor: default;
+}
+
+.gallery-label {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  width: 100%;
+}
+
+.gallery-order {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--el-color-primary, #409eff);
+}
+
+.gallery-process-name {
+  font-size: 11px;
+  color: var(--text-color-secondary, #606266);
+  text-align: center;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gallery-phase-tag {
+  font-size: 10px;
 }
 </style>
