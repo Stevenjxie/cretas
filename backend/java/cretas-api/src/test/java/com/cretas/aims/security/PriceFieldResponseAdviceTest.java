@@ -87,13 +87,27 @@ class PriceFieldResponseAdviceTest {
 
     // ───────── Helpers ─────────
 
-    private void asUser(Long userId, boolean canViewPrice) {
+    /**
+     * Convenience: both price and finance gates share the same bool value.
+     * Backward-compat for existing tests where the two gates were not split.
+     */
+    private void asUser(Long userId, boolean canViewBoth) {
+        asUser(userId, canViewBoth, canViewBoth);
+    }
+
+    /**
+     * Full two-gate stub: independent {@code canViewPrice} and {@code canViewFinance}.
+     * PR #547 split: sales_manager has canViewPrice=T but canViewFinance=F.
+     */
+    private void asUser(Long userId, boolean canViewPrice, boolean canViewFinance) {
         httpRequest.setAttribute("userId", userId);
         User user = new User();
         user.setId(userId);
         lenient().when(userRepository.findById(userId)).thenReturn(Optional.of(user));
         lenient().when(permissionService.hasPermission(eq(user),
                 eq(PriceFieldResponseAdvice.PRICE_VIEW_PERMISSION))).thenReturn(canViewPrice);
+        lenient().when(permissionService.hasPermission(eq(user),
+                eq(PriceFieldResponseAdvice.FINANCE_READ_PERMISSION))).thenReturn(canViewFinance);
     }
 
     private Object run(Object body) {
@@ -842,5 +856,110 @@ class PriceFieldResponseAdviceTest {
         // any @PriceSensitive methods downstream.
         assertTrue(PriceSensitiveContext.shouldHide("procurement:price:view"),
                 "ThreadLocal hide flag set even when permission check throws (defense-in-depth)");
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // PR #547 — Finance gate split (2026-06-09)
+    // Verify: sales_manager (canViewPrice=T, canViewFinance=F) sees procurement
+    // prices but NOT finance P&L upload columns (FINANCE_COLUMN_KEY_REGEX).
+    // ═══════════════════════════════════════════════════════════════════════
+
+    @Test
+    @DisplayName("#547: sales_manager (price=T, finance=F) — @PriceSensitive fields NOT stripped (sees procurement prices)")
+    void pr547_salesManager_priceSensitiveFields_notStripped() {
+        // canViewPrice=T, canViewFinance=F — mirrors sales_manager RBAC
+        asUser(50L, true, false);
+
+        PurchaseOrder order = samplePurchaseOrder();
+        run(order);
+
+        // @PriceSensitive fields MUST be preserved for sales_manager
+        assertEquals(new BigDecimal("12345.67"), order.getTotalAmount(),
+                "sales_manager should see totalAmount (procurement price)");
+        assertEquals(new BigDecimal("123.4567"), order.getItems().get(0).getUnitPrice(),
+                "sales_manager should see item unitPrice (procurement price)");
+        // Non-price fields also preserved
+        assertEquals("PO-2026-001", order.getOrderNumber());
+    }
+
+    @Test
+    @DisplayName("#547: sales_manager (price=T, finance=F) — finance upload Map columns ARE stripped (FINANCE_COLUMN_KEY_REGEX)")
+    void pr547_salesManager_financeUploadColumns_stripped() {
+        // canViewPrice=T, canViewFinance=F
+        asUser(50L, true, false);
+
+        // Simulate a SmartBI upload raw data row: Map<String,Object>
+        // Contains procurement-style key + finance-P&L keys.
+        java.util.Map<String, Object> uploadRow = new java.util.LinkedHashMap<>();
+        uploadRow.put("产品名称", "叮咚猪蹄");   // non-finance — preserved
+        uploadRow.put("数量", 200);               // non-finance — preserved
+        uploadRow.put("金额", 32000.00);           // finance column → MUST be nulled
+        uploadRow.put("工资", 8500.00);            // finance column → MUST be nulled
+        uploadRow.put("租金", 12000.00);           // finance column → MUST be nulled
+        uploadRow.put("利润", 5000.00);            // finance column → MUST be nulled
+        uploadRow.put("营收", 45000.00);           // finance column → MUST be nulled
+
+        run(uploadRow);
+
+        // Finance columns stripped for sales_manager
+        assertNull(uploadRow.get("金额"), "#547: 金额 (revenue amount) stripped for sales_manager");
+        assertNull(uploadRow.get("工资"), "#547: 工资 (salary) stripped for sales_manager");
+        assertNull(uploadRow.get("租金"), "#547: 租金 (rent) stripped for sales_manager");
+        assertNull(uploadRow.get("利润"), "#547: 利润 (profit) stripped for sales_manager");
+        assertNull(uploadRow.get("营收"), "#547: 营收 (revenue) stripped for sales_manager");
+
+        // Non-finance columns preserved
+        assertEquals("叮咚猪蹄", uploadRow.get("产品名称"), "product name preserved");
+        assertEquals(200, uploadRow.get("数量"), "quantity preserved");
+    }
+
+    @Test
+    @DisplayName("#547: finance_manager (price=T, finance=T) — finance upload columns NOT stripped (full access)")
+    void pr547_financeManager_financeUploadColumns_visible() {
+        // canViewPrice=T, canViewFinance=T — mirrors finance_manager
+        asUser(60L, true, true);
+
+        java.util.Map<String, Object> uploadRow = new java.util.LinkedHashMap<>();
+        uploadRow.put("金额", 32000.00);
+        uploadRow.put("工资", 8500.00);
+        uploadRow.put("利润", 5000.00);
+
+        run(uploadRow);
+
+        // Full access — finance columns preserved
+        assertEquals(32000.00, uploadRow.get("金额"), "finance_manager sees 金额 (full access)");
+        assertEquals(8500.00, uploadRow.get("工资"), "finance_manager sees 工资 (full access)");
+        assertEquals(5000.00, uploadRow.get("利润"), "finance_manager sees 利润 (full access)");
+    }
+
+    @Test
+    @DisplayName("#547: operator (price=F, finance=F) — both @PriceSensitive AND finance columns stripped")
+    void pr547_operator_allStripped() {
+        // canViewPrice=F, canViewFinance=F — mirrors operator role
+        asUser(70L, false, false);
+
+        PurchaseOrder order = samplePurchaseOrder();
+
+        java.util.Map<String, Object> uploadRow = new java.util.LinkedHashMap<>();
+        uploadRow.put("数量", 200);
+        uploadRow.put("金额", 32000.00);
+
+        run(order);
+        run(uploadRow);
+
+        // @PriceSensitive stripped
+        assertNull(order.getTotalAmount(), "operator: totalAmount stripped");
+        assertNull(order.getItems().get(0).getUnitPrice(), "operator: unitPrice stripped");
+        // Finance columns also stripped
+        assertNull(uploadRow.get("金额"), "operator: 金额 stripped");
+        // Non-price preserved
+        assertEquals(200, uploadRow.get("数量"), "quantity preserved");
+    }
+
+    @Test
+    @DisplayName("#547: finance_manager CONSTANT is 'finance:read' (matches PermissionService matrix key)")
+    void pr547_financeReadPermissionConstant() {
+        assertEquals("finance:read", PriceFieldResponseAdvice.FINANCE_READ_PERMISSION,
+                "FINANCE_READ_PERMISSION must match the 'finance' module key in PermissionServiceImpl");
     }
 }

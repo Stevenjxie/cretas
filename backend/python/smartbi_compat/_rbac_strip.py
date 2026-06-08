@@ -40,7 +40,8 @@ from typing import Any, Optional
 
 # ──────────────────────────────────────────────────────────────────────────
 # Role white-list — mirror of Java PermissionServiceImpl.PRICE_VIEW_ROLES
-# (backend/java/cretas-api/.../service/impl/PermissionServiceImpl.java:264-278)
+# (backend/java/cretas-api/.../service/impl/PermissionServiceImpl.java:303-320)
+# Keep in sync when Java PRICE_VIEW_ROLES changes.
 # ──────────────────────────────────────────────────────────────────────────
 PRICE_VIEW_ROLES: frozenset[str] = frozenset({
     "factory_super_admin",
@@ -51,6 +52,14 @@ PRICE_VIEW_ROLES: frozenset[str] = frozenset({
     "dispatcher",
     "production_manager",
     "restaurant_manager",
+    # PR #547 fix (2026-06-09): restaurant_owner was missing — owner's own revenue
+    # was being stripped to None by _apply_rbac_strip, showing ¥0 on the AI gold
+    # "本月营业收入" query. Java PermissionServiceImpl.PRICE_VIEW_ROLES line 315
+    # already includes restaurant_owner; Python mirror was incomplete.
+    # restaurant_purchaser also carried by Java PRICE_VIEW_ROLES (line 316) —
+    # add here for consistency so the two mirrors stay in sync.
+    "restaurant_owner",
+    "restaurant_purchaser",
     # Backward-compatibility aliases (Java line 246-247 / 276-277)
     "permission_admin",
     "department_admin",

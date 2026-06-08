@@ -353,3 +353,96 @@ def test_returns_same_reference_for_caller_convenience():
     body = {"revenue": 100.0}
     out = _apply_rbac_strip(body, "warehouse_manager")
     assert out is body
+
+
+# ============================================================
+# PR #547 fix — restaurant_owner (and restaurant_purchaser) must be
+# in PRICE_VIEW_ROLES so gold revenue is NOT stripped for owner queries.
+# Live-verify symptom: "本月营业收入" as restaurant_owner → ¥0 (bug).
+# ============================================================
+
+
+def test_restaurant_owner_in_price_view_roles():
+    """PR #547: restaurant_owner must be in PRICE_VIEW_ROLES.
+
+    Java PermissionServiceImpl.PRICE_VIEW_ROLES line 315 includes
+    restaurant_owner; the Python mirror was missing it — owner's own
+    revenue was being nulled by _apply_rbac_strip.
+    """
+    assert "restaurant_owner" in PRICE_VIEW_ROLES, (
+        "restaurant_owner must be in PRICE_VIEW_ROLES — "
+        "owner's gold revenue was stripped to None (PR #547 bug)"
+    )
+
+
+def test_restaurant_purchaser_in_price_view_roles():
+    """PR #547: restaurant_purchaser is in Java PRICE_VIEW_ROLES (line 316);
+    Python mirror should include it for parity."""
+    assert "restaurant_purchaser" in PRICE_VIEW_ROLES, (
+        "restaurant_purchaser must be in PRICE_VIEW_ROLES "
+        "(mirrors Java PermissionServiceImpl.PRICE_VIEW_ROLES)"
+    )
+
+
+def test_restaurant_owner_revenue_not_stripped():
+    """restaurant_owner query for 本月营业收入 must return real revenue value."""
+    body = {
+        "factory_id": "F_RESTAURANT",
+        "total_revenue": 2_100_000.0,
+        "bill_count": 3_120,
+        "avg_bill_value": 673.08,
+        "store_count": 1,
+        "top_stores": [
+            {
+                "store_id": 1,
+                "store_name": "总店",
+                "revenue": 2_100_000.0,
+                "bill_count": 3_120,
+            }
+        ],
+    }
+    _apply_rbac_strip(body, "restaurant_owner")
+    # Revenue MUST NOT be stripped for owner
+    assert body["total_revenue"] == 2_100_000.0, (
+        "restaurant_owner must see total_revenue — "
+        "PR #547 fix: owner was seeing ¥0 before this patch"
+    )
+    assert body["avg_bill_value"] == 673.08, (
+        "restaurant_owner must see avg_bill_value"
+    )
+    assert body["top_stores"][0]["revenue"] == 2_100_000.0, (
+        "restaurant_owner must see per-store revenue"
+    )
+    # Non-money counts also preserved
+    assert body["bill_count"] == 3_120
+    assert body["store_count"] == 1
+
+
+def test_restaurant_owner_trend_bundle_revenue_not_stripped():
+    """Regression: trend-bundle / daily-trend revenue also intact for owner."""
+    body = {
+        "points": [
+            {"date": "2026-06-01", "revenue": 70_000.0, "bill_count": 104},
+            {"date": "2026-06-02", "revenue": 68_500.0, "bill_count": 99},
+        ]
+    }
+    _apply_rbac_strip(body, "restaurant_owner")
+    for p in body["points"]:
+        assert p["revenue"] is not None, (
+            "restaurant_owner must see per-day revenue in trend-bundle"
+        )
+    assert body["points"][0]["revenue"] == 70_000.0
+    assert body["points"][1]["revenue"] == 68_500.0
+    assert body["points"][0]["bill_count"] == 104
+
+
+def test_restaurant_chef_revenue_still_stripped():
+    """restaurant_chef is NOT in PRICE_VIEW_ROLES — should still be stripped."""
+    assert "restaurant_chef" not in PRICE_VIEW_ROLES, (
+        "restaurant_chef must NOT be in PRICE_VIEW_ROLES — "
+        "chefs should not see monetary data"
+    )
+    body = {"revenue": 50_000.0, "bill_count": 80}
+    _apply_rbac_strip(body, "restaurant_chef")
+    assert body["revenue"] is None
+    assert body["bill_count"] == 80
