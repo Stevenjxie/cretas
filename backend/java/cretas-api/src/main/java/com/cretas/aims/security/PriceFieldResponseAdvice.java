@@ -73,8 +73,34 @@ public class PriceFieldResponseAdvice implements ResponseBodyAdvice<Object> {
 
     private static final Logger log = LoggerFactory.getLogger(PriceFieldResponseAdvice.class);
 
-    /** Default permission gate for price field visibility. */
+    /** Default permission gate for price field visibility (@PriceSensitive fields, delivery-note unit prices). */
     public static final String PRICE_VIEW_PERMISSION = "procurement:price:view";
+
+    /**
+     * Permission gate for SmartBI finance-upload column masking (Rule 2b).
+     *
+     * <p>Finance P&amp;L columns (金额/租金/工资/利润/营收 etc. in SmartBI Excel uploads)
+     * are masked unless the caller holds {@code finance:read_write}.
+     * Using {@code read_write} (not {@code read}) is intentional:
+     * <ul>
+     *   <li>sales_manager has {@code finance:read} (NOT read_write) → canViewFinance=FALSE
+     *       → finance P&amp;L columns (金额/工资/租金/利润/营收) <strong>MASKED</strong>. ✓</li>
+     *   <li>finance_manager has {@code finance:read_write} → canViewFinance=TRUE → visible. ✓</li>
+     *   <li>restaurant_owner has {@code finance:read_write} (hardcoded matrix fallback) →
+     *       canViewFinance=TRUE → visible. ✓  Owner must see finance P&amp;L.</li>
+     *   <li>factory_super_admin short-circuits all permission checks → sees everything. ✓</li>
+     * </ul>
+     *
+     * <p>Bug fix (#615 A corrected): the original gate used {@code finance:read}, which
+     * incorrectly allowed sales_manager (who has finance=r) to see finance P&amp;L upload
+     * data. Raising the gate to {@code finance:read_write} closes this gap while keeping
+     * finance_manager and restaurant_owner unaffected (both have finance=rw).
+     *
+     * <p>PR #547 QA live-verify fix: sales_manager was seeing finance upload data
+     * because the old gate was a single {@code canViewPrices} flag that covered both
+     * procurement prices and finance P&amp;L. This constant decouples them.
+     */
+    public static final String FINANCE_READ_PERMISSION = "finance:read_write";
 
     /** Per-class cache: Class → list of @PriceSensitive fields. Made accessible. */
     private static final Map<Class<?>, List<Field>> PRICE_FIELD_CACHE = new ConcurrentHashMap<>();
@@ -288,27 +314,54 @@ public class PriceFieldResponseAdvice implements ResponseBodyAdvice<Object> {
             return body;
         }
 
-        // Check permission once — short-circuit for users with full access.
-        // Wrapped to fail-CLOSED on PermissionService faults (DB outage,
-        // cache misconfig, NPE). An unhandled exception here would
-        // propagate to a 500 response on every request — bad UX and brittle.
-        // On exception we treat the user as NOT permitted (strip prices),
-        // which preserves data confidentiality.
+        // ── Dual permission check ────────────────────────────────────────────
+        // Two independent gates control what gets stripped:
+        //
+        //   canViewPrices  (procurement:price:view)
+        //       Controls @PriceSensitive annotated entity fields (delivery-note
+        //       unit prices, BOM cost, etc.) and SmartBI analysis map keys
+        //       (Rules 1, 2, 3, 4 in walkMapForKeyPatternStripping).
+        //
+        //   canViewFinance  (finance:read_write)
+        //       Controls ONLY Rule 2b — SmartBI upload column masking
+        //       (FINANCE_COLUMN_KEY_REGEX: 金额/租金/工资/利润/营收 etc.).
+        //
+        // Fail-CLOSED on PermissionService faults: treat as NOT permitted.
+        //
+        // Short-circuit table:
+        //   canViewPrices=T AND canViewFinance=T  → skip all stripping (return early)
+        //   canViewPrices=T AND canViewFinance=F  → skip @PriceSensitive field walk,
+        //                                          but still run map walk (Rule 2b fires)
+        //   canViewPrices=F AND canViewFinance=*  → run full strip (Rule 2b also fires
+        //                                          because !canViewFinance is implied)
         boolean canViewPrices;
         try {
             canViewPrices = permissionService.hasPermission(currentUser, PRICE_VIEW_PERMISSION);
         } catch (Exception e) {
-            log.warn("PriceFieldResponseAdvice: permission check failed for userId={}, defaulting fail-CLOSED (strip): {}",
+            log.warn("PriceFieldResponseAdvice: permission check failed for userId={} (price), defaulting fail-CLOSED (strip): {}",
                     currentUser.getId(), e.getMessage());
             canViewPrices = false;
         }
-        if (canViewPrices) {
+
+        boolean canViewFinance;
+        try {
+            canViewFinance = permissionService.hasPermission(currentUser, FINANCE_READ_PERMISSION);
+        } catch (Exception e) {
+            log.warn("PriceFieldResponseAdvice: permission check failed for userId={} (finance), defaulting fail-CLOSED (strip): {}",
+                    currentUser.getId(), e.getMessage());
+            canViewFinance = false;
+        }
+
+        // Full access — skip all stripping.
+        if (canViewPrices && canViewFinance) {
             return body;
         }
 
-        // User lacks price view permission — strip @PriceSensitive fields recursively.
+        // User lacks at least one permission — strip the relevant fields.
+        // canViewPrices=T + canViewFinance=F: only Rule 2b (finance upload columns) fires.
+        // canViewPrices=F + canViewFinance=*: full strip including @PriceSensitive fields.
         try {
-            stripPriceFields(body, new IdentityHashMap<>(), new ArrayDeque<>());
+            stripPriceFields(body, new IdentityHashMap<>(), new ArrayDeque<>(), canViewPrices, canViewFinance);
         } catch (Exception e) {
             // Defensive: never fail the response on a stripping error. Log and
             // pass through the body — admin-role parity preserved (no regression).
@@ -330,9 +383,26 @@ public class PriceFieldResponseAdvice implements ResponseBodyAdvice<Object> {
     }
 
     /**
-     * Recursively visit the response body graph and null-out any field annotated
-     * with {@link PriceSensitive}. Visits collections (List/Set), maps and
-     * nested project objects. Skips JDK types (String, Number, Date, etc).
+     * Recursively visit the response body graph and strip price/finance fields
+     * based on the caller's permissions.
+     *
+     * <p>Two independent permission flags control what gets stripped:
+     * <ul>
+     *   <li>{@code canViewPrices} — when {@code false}, @PriceSensitive entity
+     *       fields are nulled and SmartBI analysis map keys (Rules 1, 2, 3, 4)
+     *       are stripped.</li>
+     *   <li>{@code canViewFinance} — when {@code false}, Rule 2b fires:
+     *       SmartBI upload column map keys matching FINANCE_COLUMN_KEY_REGEX
+     *       (金额/租金/工资/利润/营收 etc.) are nulled. This is decoupled from
+     *       {@code canViewPrices} so sales_manager (finance=r, NOT rw) sees
+     *       procurement prices but NOT finance P&amp;L upload rows (PR #615 fix).
+     *       Gate requires {@code finance:read_write} — sales_manager with only
+     *       {@code finance:read} does NOT pass this gate.</li>
+     * </ul>
+     *
+     * <p>Callers must ensure this method is only invoked when at least one of
+     * the two permissions is absent (the top-level early-return handles the
+     * both-granted case).
      *
      * <p>The {@code pathStack} parameter tracks ancestor Map keys / collection
      * descents so the Map-walking branch can apply path-aware key-pattern
@@ -340,7 +410,9 @@ public class PriceFieldResponseAdvice implements ResponseBodyAdvice<Object> {
      */
     private void stripPriceFields(Object obj,
                                    IdentityHashMap<Object, Boolean> visited,
-                                   Deque<String> pathStack) {
+                                   Deque<String> pathStack,
+                                   boolean canViewPrices,
+                                   boolean canViewFinance) {
         if (obj == null) {
             return;
         }
@@ -354,7 +426,7 @@ public class PriceFieldResponseAdvice implements ResponseBodyAdvice<Object> {
         // their contents are what we care about).
         if (obj instanceof Collection<?>) {
             for (Object item : (Collection<?>) obj) {
-                stripPriceFields(item, visited, pathStack);
+                stripPriceFields(item, visited, pathStack, canViewPrices, canViewFinance);
             }
             return;
         }
@@ -365,7 +437,7 @@ public class PriceFieldResponseAdvice implements ResponseBodyAdvice<Object> {
         // value-recursion when the key/path combination doesn't match a
         // price-pattern.
         if (obj instanceof Map<?, ?>) {
-            walkMapForKeyPatternStripping((Map<?, ?>) obj, visited, pathStack);
+            walkMapForKeyPatternStripping((Map<?, ?>) obj, visited, pathStack, canViewPrices, canViewFinance);
             return;
         }
 
@@ -373,7 +445,7 @@ public class PriceFieldResponseAdvice implements ResponseBodyAdvice<Object> {
         if (clazz.isArray() && !clazz.getComponentType().isPrimitive()) {
             Object[] arr = (Object[]) obj;
             for (Object item : arr) {
-                stripPriceFields(item, visited, pathStack);
+                stripPriceFields(item, visited, pathStack, canViewPrices, canViewFinance);
             }
             return;
         }
@@ -388,42 +460,51 @@ public class PriceFieldResponseAdvice implements ResponseBodyAdvice<Object> {
             visited.put(obj, Boolean.TRUE);
         }
 
-        // Project object — locate & null @PriceSensitive fields, then descend
+        // Project object — locate & null @PriceSensitive fields, then descend.
+        // When canViewPrices=T, the caller already has procurement prices — skip
+        // the @PriceSensitive walk (only Rule 2b / finance gate is needed).
         if (!clazz.getName().startsWith(PROJECT_PACKAGE)) {
             return;
         }
 
-        if (CLEAN_CLASSES.contains(clazz)) {
-            // Class has no @PriceSensitive fields anywhere — still descend
-            // into non-primitive fields (graph may contain dirty children)
-            descendChildren(obj, clazz, visited, pathStack);
-            return;
-        }
-
-        List<Field> priceFields = PRICE_FIELD_CACHE.computeIfAbsent(clazz, this::scanPriceFields);
-        for (Field f : priceFields) {
-            try {
-                f.set(obj, null);
-            } catch (IllegalAccessException e) {
-                log.debug("Failed to null @PriceSensitive field {}.{}: {}", clazz.getSimpleName(), f.getName(), e.getMessage());
+        if (!canViewPrices) {
+            // Only null @PriceSensitive fields when user lacks procurement:price:view.
+            if (!CLEAN_CLASSES.contains(clazz)) {
+                List<Field> priceFields = PRICE_FIELD_CACHE.computeIfAbsent(clazz, this::scanPriceFields);
+                for (Field f : priceFields) {
+                    try {
+                        f.set(obj, null);
+                    } catch (IllegalAccessException e) {
+                        log.debug("Failed to null @PriceSensitive field {}.{}: {}", clazz.getSimpleName(), f.getName(), e.getMessage());
+                    }
+                }
             }
         }
 
-        descendChildren(obj, clazz, visited, pathStack);
+        descendChildren(obj, clazz, visited, pathStack, canViewPrices, canViewFinance);
     }
 
     /**
      * Iterate a Map's entries and apply PR #470 key-pattern stripping rules.
      * When a Map is immutable, individual entry mutations are silently skipped
      * (graceful degrade — better to leak than to 500 the entire response).
+     *
+     * <p>{@code canViewPrices} / {@code canViewFinance} are threaded through
+     * to guard individual rules:
+     * <ul>
+     *   <li>Rules 1, 2, 3, 4 — guarded by {@code !canViewPrices}.</li>
+     *   <li>Rule 2b (FINANCE_COLUMN_KEY_REGEX) — guarded by {@code !canViewFinance}.</li>
+     * </ul>
      */
     @SuppressWarnings("unchecked")
     private void walkMapForKeyPatternStripping(Map<?, ?> rawMap,
                                                 IdentityHashMap<Object, Boolean> visited,
-                                                Deque<String> pathStack) {
-        boolean inPriceContainer = pathContainsPriceContainer(pathStack);
-        boolean inAIInsight = pathContainsAIInsight(pathStack);
-        boolean inDynamicContainer = pathContainsDynamicPriceContainer(pathStack);
+                                                Deque<String> pathStack,
+                                                boolean canViewPrices,
+                                                boolean canViewFinance) {
+        boolean inPriceContainer = !canViewPrices && pathContainsPriceContainer(pathStack);
+        boolean inAIInsight = !canViewPrices && pathContainsAIInsight(pathStack);
+        boolean inDynamicContainer = !canViewPrices && pathContainsDynamicPriceContainer(pathStack);
 
         // Iterate via entrySet so we can mutate values in-place.
         for (Map.Entry<?, ?> entry : rawMap.entrySet()) {
@@ -434,7 +515,8 @@ public class PriceFieldResponseAdvice implements ResponseBodyAdvice<Object> {
             try {
                 // Rule 1 — keys that are always price-data regardless of path
                 // (formattedValue is Cretas-specific naming, never non-monetary).
-                if (ALWAYS_PRICE_KEYS.contains(key) && isLeafScalar(value)) {
+                // Guarded by canViewPrices — procurement price holders see these.
+                if (!canViewPrices && ALWAYS_PRICE_KEYS.contains(key) && isLeafScalar(value)) {
                     trySetEntryNull((Map.Entry<Object, Object>) entry, "ALWAYS_PRICE_KEY");
                     continue;
                 }
@@ -445,16 +527,14 @@ public class PriceFieldResponseAdvice implements ResponseBodyAdvice<Object> {
                     continue;
                 }
 
-                // Rule 2b — BUG-01-RBAC (2026-06-09): finance column name keys anywhere
-                // in the response graph. This catches Chinese finance column headers (金额,
-                // 劳动力成本, 租金, 工资, etc.) that appear as Map keys in SmartBI upload raw
-                // data rows (GET /uploads/{id}/data). The rule is path-independent because
-                // (a) these Chinese-language finance terms are sufficiently specific to not
-                //     appear in non-financial contexts, and
-                // (b) only fires on Number leaf scalars — product names, dates, and
-                //     quantity columns (which have different column header names) are
-                //     preserved, so POS/restaurant dish-count data is unaffected.
-                if (value instanceof Number
+                // Rule 2b — Finance column name keys (PR #547 fix, 2026-06-09).
+                // Guarded INDEPENDENTLY by canViewFinance (NOT canViewPrices).
+                // This decouples finance P&L upload masking from procurement price visibility:
+                //   sales_manager (procurement:price:view=Y, finance:read=N) → finance columns masked
+                //   finance_manager (both=Y) → finance columns visible (early-return above)
+                //   operator (both=N) → finance columns masked (this branch fires)
+                if (!canViewFinance
+                        && value instanceof Number
                         && FINANCE_COLUMN_KEY_REGEX.matcher(key).matches()) {
                     trySetEntryNull((Map.Entry<Object, Object>) entry, "FINANCE_COLUMN_KEY numeric leaf");
                     continue;
@@ -478,7 +558,7 @@ public class PriceFieldResponseAdvice implements ResponseBodyAdvice<Object> {
                 }
 
                 // Default — recurse normally with the updated path.
-                stripPriceFields(value, visited, pathStack);
+                stripPriceFields(value, visited, pathStack, canViewPrices, canViewFinance);
             } finally {
                 pathStack.pop();
             }
@@ -549,7 +629,9 @@ public class PriceFieldResponseAdvice implements ResponseBodyAdvice<Object> {
     /** Walk reference fields of a project class and recurse into each non-null value. */
     private void descendChildren(Object obj, Class<?> clazz,
                                   IdentityHashMap<Object, Boolean> visited,
-                                  Deque<String> pathStack) {
+                                  Deque<String> pathStack,
+                                  boolean canViewPrices,
+                                  boolean canViewFinance) {
         // Walk all fields (including inherited up to Object). Recurse into project objects + containers.
         Class<?> walk = clazz;
         while (walk != null && walk != Object.class) {
@@ -568,7 +650,7 @@ public class PriceFieldResponseAdvice implements ResponseBodyAdvice<Object> {
                     if (child != null) {
                         pathStack.push(f.getName());
                         try {
-                            stripPriceFields(child, visited, pathStack);
+                            stripPriceFields(child, visited, pathStack, canViewPrices, canViewFinance);
                         } finally {
                             pathStack.pop();
                         }

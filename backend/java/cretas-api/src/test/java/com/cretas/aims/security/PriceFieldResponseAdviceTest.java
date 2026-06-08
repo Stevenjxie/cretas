@@ -87,13 +87,28 @@ class PriceFieldResponseAdviceTest {
 
     // ───────── Helpers ─────────
 
-    private void asUser(Long userId, boolean canViewPrice) {
+    /**
+     * Convenience: both price and finance gates share the same bool value.
+     * Backward-compat for existing tests where the two gates were not split.
+     */
+    private void asUser(Long userId, boolean canViewBoth) {
+        asUser(userId, canViewBoth, canViewBoth);
+    }
+
+    /**
+     * Full two-gate stub: independent {@code canViewPrice} and {@code canViewFinance}.
+     * PR #547/#615(A) split: sales_manager has canViewPrice=T but canViewFinance=F
+     * (finance:read_write gate — sales_manager has only finance:read, NOT rw).
+     */
+    private void asUser(Long userId, boolean canViewPrice, boolean canViewFinance) {
         httpRequest.setAttribute("userId", userId);
         User user = new User();
         user.setId(userId);
         lenient().when(userRepository.findById(userId)).thenReturn(Optional.of(user));
         lenient().when(permissionService.hasPermission(eq(user),
                 eq(PriceFieldResponseAdvice.PRICE_VIEW_PERMISSION))).thenReturn(canViewPrice);
+        lenient().when(permissionService.hasPermission(eq(user),
+                eq(PriceFieldResponseAdvice.FINANCE_READ_PERMISSION))).thenReturn(canViewFinance);
     }
 
     private Object run(Object body) {
@@ -842,5 +857,159 @@ class PriceFieldResponseAdviceTest {
         // any @PriceSensitive methods downstream.
         assertTrue(PriceSensitiveContext.shouldHide("procurement:price:view"),
                 "ThreadLocal hide flag set even when permission check throws (defense-in-depth)");
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // PR #547 / #615(A) — Finance gate corrected to finance:read_write (2026-06-09)
+    //
+    // Prod permission facts (verified via platform_role_permissions + hardcoded matrix):
+    //   sales_manager     finance=r      → canViewFinance=FALSE  → finance P&L MASKED   ✓
+    //   finance_manager   finance=rw     → canViewFinance=TRUE   → finance P&L visible   ✓
+    //   restaurant_owner  finance=rw (hardcoded fallback, no DB row) → visible           ✓
+    //   operator          finance=-      → canViewFinance=FALSE  → finance P&L MASKED   ✓
+    //   warehouse_manager finance=-      → canViewFinance=FALSE  → finance P&L MASKED   ✓
+    //
+    // Original #615 bug: gate was finance:read → sales_manager (finance=r) passed the
+    // gate → finance P&L NOT masked. Fix: raise gate to finance:read_write.
+    // ═══════════════════════════════════════════════════════════════════════
+
+    @Test
+    @DisplayName("#615A: sales_manager (price:view=T, finance=r→rw-gate=F) — @PriceSensitive fields NOT stripped (sees procurement prices)")
+    void pr615a_salesManager_priceSensitiveFields_notStripped() {
+        // sales_manager: procurement:price:view=T, finance:read_write=F (has only finance:read)
+        asUser(50L, true, false);
+
+        PurchaseOrder order = samplePurchaseOrder();
+        run(order);
+
+        // @PriceSensitive fields MUST be preserved for sales_manager (price gate still passes)
+        assertEquals(new BigDecimal("12345.67"), order.getTotalAmount(),
+                "sales_manager should see totalAmount (procurement price, price:view=T)");
+        assertEquals(new BigDecimal("123.4567"), order.getItems().get(0).getUnitPrice(),
+                "sales_manager should see item unitPrice (procurement price)");
+        // Non-price fields also preserved
+        assertEquals("PO-2026-001", order.getOrderNumber());
+    }
+
+    @Test
+    @DisplayName("#615A: sales_manager (finance=r → rw-gate=FALSE) — finance upload Map columns ARE stripped")
+    void pr615a_salesManager_financeUploadColumns_stripped() {
+        // sales_manager: canViewPrice=T (price:view whitelist), canViewFinance=F (finance=r, NOT rw)
+        // This is the #615 bug scenario: with the old finance:read gate sales_manager passed →
+        // finance columns were NOT masked. With finance:read_write gate they ARE masked.
+        asUser(50L, true, false);
+
+        java.util.Map<String, Object> uploadRow = new java.util.LinkedHashMap<>();
+        uploadRow.put("产品名称", "叮咚猪蹄");   // non-finance — preserved
+        uploadRow.put("数量", 200);               // non-finance — preserved
+        uploadRow.put("金额", 32000.00);           // finance P&L column → MUST be masked
+        uploadRow.put("工资", 8500.00);            // finance P&L column → MUST be masked
+        uploadRow.put("租金", 12000.00);           // finance P&L column → MUST be masked
+        uploadRow.put("利润", 5000.00);            // finance P&L column → MUST be masked
+        uploadRow.put("营收", 45000.00);           // finance P&L column → MUST be masked
+
+        run(uploadRow);
+
+        // Finance P&L columns stripped (sales_manager has finance=r, gate requires rw)
+        assertNull(uploadRow.get("金额"),  "#615A: 金额 (revenue amount) masked for sales_manager");
+        assertNull(uploadRow.get("工资"),  "#615A: 工资 (salary) masked for sales_manager");
+        assertNull(uploadRow.get("租金"),  "#615A: 租金 (rent) masked for sales_manager");
+        assertNull(uploadRow.get("利润"),  "#615A: 利润 (profit) masked for sales_manager");
+        assertNull(uploadRow.get("营收"),  "#615A: 营收 (revenue) masked for sales_manager");
+
+        // Non-finance columns preserved
+        assertEquals("叮咚猪蹄", uploadRow.get("产品名称"), "product name preserved");
+        assertEquals(200, uploadRow.get("数量"), "quantity preserved");
+    }
+
+    @Test
+    @DisplayName("#615A: finance_manager (price=T, finance:rw=T) — finance upload columns NOT stripped (full access)")
+    void pr615a_financeManager_financeUploadColumns_visible() {
+        // finance_manager: canViewPrice=T, canViewFinance=T (finance=rw → gate passes)
+        asUser(60L, true, true);
+
+        java.util.Map<String, Object> uploadRow = new java.util.LinkedHashMap<>();
+        uploadRow.put("金额", 32000.00);
+        uploadRow.put("工资", 8500.00);
+        uploadRow.put("利润", 5000.00);
+
+        run(uploadRow);
+
+        // Full access — finance columns preserved
+        assertEquals(32000.00, uploadRow.get("金额"), "finance_manager sees 金额 (full access, finance=rw)");
+        assertEquals(8500.00,  uploadRow.get("工资"), "finance_manager sees 工资 (full access)");
+        assertEquals(5000.00,  uploadRow.get("利润"), "finance_manager sees 利润 (full access)");
+    }
+
+    @Test
+    @DisplayName("#615A: restaurant_owner (finance=rw via hardcoded matrix fallback) — finance P&L visible")
+    void pr615a_restaurantOwner_financeVisible() {
+        // restaurant_owner has NO row in platform_role_permissions (prod verified 2026-06-09).
+        // Falls back to hardcoded PERMISSION_MATRIX: finance="read_write".
+        // Gate is finance:read_write → checkAction("read_write","read_write") = TRUE → visible.
+        // canViewPrice=T (in PRICE_VIEW_ROLES), canViewFinance=T (finance=rw)
+        asUser(80L, true, true);
+
+        java.util.Map<String, Object> uploadRow = new java.util.LinkedHashMap<>();
+        uploadRow.put("金额", 78700000.00);  // qhj_prod total revenue scale
+        uploadRow.put("工资", 15000.00);
+        uploadRow.put("利润", 12000000.00);
+
+        run(uploadRow);
+
+        // Owner MUST see finance P&L (his own business data)
+        assertEquals(78700000.00, uploadRow.get("金额"),  "restaurant_owner sees 金额 (finance=rw via matrix fallback)");
+        assertEquals(15000.00,    uploadRow.get("工资"),  "restaurant_owner sees 工资");
+        assertEquals(12000000.00, uploadRow.get("利润"),  "restaurant_owner sees 利润");
+    }
+
+    @Test
+    @DisplayName("#615A: operator (price=F, finance=F) — both @PriceSensitive AND finance columns stripped")
+    void pr615a_operator_allStripped() {
+        // operator: no price:view, no finance:rw → both gates fail
+        asUser(70L, false, false);
+
+        PurchaseOrder order = samplePurchaseOrder();
+
+        java.util.Map<String, Object> uploadRow = new java.util.LinkedHashMap<>();
+        uploadRow.put("数量", 200);
+        uploadRow.put("金额", 32000.00);
+
+        run(order);
+        run(uploadRow);
+
+        // @PriceSensitive stripped
+        assertNull(order.getTotalAmount(), "operator: totalAmount stripped");
+        assertNull(order.getItems().get(0).getUnitPrice(), "operator: unitPrice stripped");
+        // Finance columns also stripped
+        assertNull(uploadRow.get("金额"), "operator: 金额 stripped");
+        // Non-price preserved
+        assertEquals(200, uploadRow.get("数量"), "quantity preserved");
+    }
+
+    @Test
+    @DisplayName("#615A: warehouse_manager (price=F, finance=-) — finance columns stripped")
+    void pr615a_warehouseManager_financeStripped() {
+        // warehouse_manager: finance=- (no finance access at all) → canViewFinance=FALSE
+        asUser(90L, false, false);
+
+        java.util.Map<String, Object> uploadRow = new java.util.LinkedHashMap<>();
+        uploadRow.put("数量", 500);
+        uploadRow.put("金额", 55000.00);
+        uploadRow.put("成本", 40000.00);
+
+        run(uploadRow);
+
+        assertNull(uploadRow.get("金额"), "warehouse_manager: 金额 stripped (finance=-)");
+        assertNull(uploadRow.get("成本"), "warehouse_manager: 成本 stripped (finance=-)");
+        assertEquals(500, uploadRow.get("数量"), "quantity preserved");
+    }
+
+    @Test
+    @DisplayName("#615A: FINANCE_READ_PERMISSION constant is 'finance:read_write' — gate requires rw not just r")
+    void pr615a_financeReadWritePermissionConstant() {
+        assertEquals("finance:read_write", PriceFieldResponseAdvice.FINANCE_READ_PERMISSION,
+                "FINANCE_READ_PERMISSION must be 'finance:read_write' (not 'finance:read') — " +
+                "sales_manager has finance=r and must NOT pass this gate (#615 fix)");
     }
 }
