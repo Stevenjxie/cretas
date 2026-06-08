@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, Image, ScrollView, StyleSheet,
-  ActivityIndicator,
+  ActivityIndicator, PanResponder, Dimensions,
 } from 'react-native';
 import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -25,6 +25,7 @@ import { processingApiClient } from '../../services/api/processingApiClient';
 import { handleError } from '../../utils/errorHandler';
 import { useAuthStore } from '../../store/authStore';
 import { appAlert, AppDialogHost } from '../../components/ui/AppDialog';
+import { useCanViewPrice } from '../../store/canViewPriceStore';
 
 type YieldStepReportParams = {
   batchId: number;
@@ -64,6 +65,254 @@ interface ByproductInput {
 // A.6 逐道成本格式化: null (未配工价 / 无原料单价) → "—" (非 ¥0).
 const fmtMoney = (v: number | null | undefined): string =>
   v == null || Number.isNaN(Number(v)) ? '—' : `¥${Number(v).toFixed(2)}`;
+
+// ───────────────────────────────────────────────────
+// TimeRangeSlider: 0–24h 拖拽滑轨, 防呆无需打字
+// ───────────────────────────────────────────────────
+const SLIDER_WIDTH = Math.min(Dimensions.get('window').width - 64, 340);
+const SLIDER_HOURS = 24;
+const HANDLE_SIZE = 36;
+
+function minutesToHHMM(minutes: number): string {
+  const h = Math.floor(minutes / 60) % 24;
+  const m = minutes % 60;
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+}
+
+function hhmmToMinutes(hhmm: string): number {
+  const parts = hhmm.split(':');
+  if (parts.length !== 2) return 0;
+  return parseInt(parts[0] ?? '0', 10) * 60 + parseInt(parts[1] ?? '0', 10);
+}
+
+interface TimeRangeSliderProps {
+  startTime: string;   // "HH:MM"
+  endTime: string;     // "HH:MM"
+  onStartChange: (v: string) => void;
+  onEndChange: (v: string) => void;
+  disabled?: boolean;
+}
+
+/** Horizontal 0–24h drag-handle time range selector. No keyboard needed. */
+const TimeRangeSlider: React.FC<TimeRangeSliderProps> = ({
+  startTime, endTime, onStartChange, onEndChange, disabled = false,
+}) => {
+  const totalMinutes = SLIDER_HOURS * 60;
+  const startMin = hhmmToMinutes(startTime);
+  const endMin = hhmmToMinutes(endTime);
+
+  const snapToStep = (min: number, step = 15): number =>
+    Math.round(Math.max(0, Math.min(min, totalMinutes)) / step) * step;
+
+  const minutesToX = (min: number): number => (min / totalMinutes) * SLIDER_WIDTH;
+
+  // PanResponder for start handle
+  const startRef = useRef(startMin);
+  const startPan = useMemo(() =>
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => !disabled,
+      onMoveShouldSetPanResponder: () => !disabled,
+      onPanResponderGrant: () => { startRef.current = hhmmToMinutes(startTime); },
+      onPanResponderMove: (_, gs) => {
+        const delta = (gs.dx / SLIDER_WIDTH) * totalMinutes;
+        const next = snapToStep(startRef.current + delta);
+        const curEnd = hhmmToMinutes(endTime);
+        if (next < curEnd - 15) onStartChange(minutesToHHMM(next));
+      },
+    }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [disabled, startTime, endTime],
+  );
+
+  // PanResponder for end handle
+  const endRef = useRef(endMin);
+  const endPan = useMemo(() =>
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => !disabled,
+      onMoveShouldSetPanResponder: () => !disabled,
+      onPanResponderGrant: () => { endRef.current = hhmmToMinutes(endTime); },
+      onPanResponderMove: (_, gs) => {
+        const delta = (gs.dx / SLIDER_WIDTH) * totalMinutes;
+        const next = snapToStep(endRef.current + delta);
+        const curStart = hhmmToMinutes(startTime);
+        if (next > curStart + 15) onEndChange(minutesToHHMM(next));
+      },
+    }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [disabled, startTime, endTime],
+  );
+
+  // Quick preset chips
+  const PRESETS = [
+    { label: '早班 7–14', start: '07:00', end: '14:00' },
+    { label: '午班 14–20', start: '14:00', end: '20:00' },
+    { label: '晚班 20–02', start: '20:00', end: '26:00' },
+  ];
+
+  const startX = minutesToX(startMin);
+  const endX = minutesToX(endMin > totalMinutes ? totalMinutes : endMin);
+  const durationMin = endMin - startMin;
+  const durationStr = durationMin > 0
+    ? `${Math.floor(durationMin / 60)}h${durationMin % 60 > 0 ? `${durationMin % 60}m` : ''}`
+    : '—';
+
+  // Hour tick marks (every 4 h = 0,4,8,12,16,20,24)
+  const ticks = [0, 4, 8, 12, 16, 20, 24];
+
+  return (
+    <View style={sliderStyles.wrap} testID="time-range-slider">
+      {/* Preset chips */}
+      <View style={sliderStyles.presets}>
+        {PRESETS.map((p) => (
+          <TouchableOpacity
+            key={p.label}
+            style={[sliderStyles.chip, disabled && sliderStyles.chipDisabled]}
+            onPress={() => { if (!disabled) { onStartChange(p.start); onEndChange(p.end); } }}
+            disabled={disabled}
+          >
+            <Text style={sliderStyles.chipText}>{p.label}</Text>
+          </TouchableOpacity>
+        ))}
+      </View>
+
+      {/* Time labels */}
+      <View style={sliderStyles.timeLabels}>
+        <Text style={sliderStyles.timeLabel}>{startTime}</Text>
+        <Text style={sliderStyles.durationLabel}>{durationStr}</Text>
+        <Text style={sliderStyles.timeLabel}>{endTime}</Text>
+      </View>
+
+      {/* Track + handles */}
+      <View style={[sliderStyles.trackWrap, { width: SLIDER_WIDTH + HANDLE_SIZE }]}>
+        {/* Tick marks */}
+        {ticks.map((h) => {
+          const x = (h / SLIDER_HOURS) * SLIDER_WIDTH + HANDLE_SIZE / 2;
+          return (
+            <View key={h} style={[sliderStyles.tick, { left: x }]}>
+              <Text style={sliderStyles.tickLabel}>{h}</Text>
+            </View>
+          );
+        })}
+        {/* Track line */}
+        <View style={[sliderStyles.track, { marginLeft: HANDLE_SIZE / 2, width: SLIDER_WIDTH }]}>
+          {/* Filled range */}
+          <View
+            style={[
+              sliderStyles.filled,
+              { left: startX, width: Math.max(0, endX - startX) },
+            ]}
+          />
+        </View>
+        {/* Start handle */}
+        <View
+          style={[sliderStyles.handle, sliderStyles.handleStart, { left: startX }]}
+          {...startPan.panHandlers}
+          testID="time-slider-start"
+        >
+          <Text style={sliderStyles.handleText}>◀</Text>
+        </View>
+        {/* End handle */}
+        <View
+          style={[sliderStyles.handle, sliderStyles.handleEnd, { left: endX }]}
+          {...endPan.panHandlers}
+          testID="time-slider-end"
+        >
+          <Text style={sliderStyles.handleText}>▶</Text>
+        </View>
+      </View>
+    </View>
+  );
+};
+
+const sliderStyles = StyleSheet.create({
+  wrap: { marginBottom: 16 },
+  presets: { flexDirection: 'row', flexWrap: 'wrap', marginBottom: 8 },
+  chip: {
+    paddingHorizontal: 12, paddingVertical: 6, borderRadius: 16, borderWidth: 1,
+    borderColor: '#409EFF', marginRight: 8, marginBottom: 4, backgroundColor: '#ECF5FF',
+  },
+  chipDisabled: { opacity: 0.4 },
+  chipText: { fontSize: 13, color: '#409EFF', fontWeight: '600' },
+  timeLabels: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
+  timeLabel: { fontSize: 20, fontWeight: '700', color: '#1A1A1A', minWidth: 64, textAlign: 'center' },
+  durationLabel: { fontSize: 14, color: '#909399' },
+  trackWrap: { height: 60, position: 'relative', alignSelf: 'center' },
+  track: {
+    position: 'absolute', top: 24, height: 6, borderRadius: 3, backgroundColor: '#DCDFE6',
+  },
+  filled: {
+    position: 'absolute', top: 0, height: 6, borderRadius: 3, backgroundColor: '#409EFF',
+  },
+  tick: { position: 'absolute', top: 34, alignItems: 'center', width: 1 },
+  tickLabel: { fontSize: 10, color: '#C0C4CC', marginTop: 2 },
+  handle: {
+    position: 'absolute', top: 12, width: HANDLE_SIZE, height: HANDLE_SIZE,
+    borderRadius: HANDLE_SIZE / 2, borderWidth: 2, borderColor: '#409EFF',
+    backgroundColor: '#FFFFFF', alignItems: 'center', justifyContent: 'center',
+    shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.15,
+    shadowRadius: 3, elevation: 3,
+  },
+  handleStart: { marginLeft: 0 },
+  handleEnd: { marginLeft: 0 },
+  handleText: { fontSize: 12, color: '#409EFF', fontWeight: '700' },
+});
+
+// ───────────────────────────────────────────────────
+// HeadcountStepper: big tap +/− (no keyboard needed)
+// ───────────────────────────────────────────────────
+interface HeadcountStepperProps {
+  value: number;
+  onChange: (v: number) => void;
+  min?: number;
+  max?: number;
+  disabled?: boolean;
+}
+
+const HeadcountStepper: React.FC<HeadcountStepperProps> = ({
+  value, onChange, min = 1, max = 99, disabled = false,
+}) => {
+  const dec = () => onChange(Math.max(min, value - 1));
+  const inc = () => onChange(Math.min(max, value + 1));
+  return (
+    <View style={hcStyles.wrap} testID="headcount-stepper">
+      <TouchableOpacity
+        style={[hcStyles.btn, disabled && hcStyles.btnDisabled]}
+        onPress={dec} disabled={disabled || value <= min}
+        testID="headcount-minus" accessibilityLabel="减少人数"
+      >
+        <Text style={hcStyles.btnText}>−</Text>
+      </TouchableOpacity>
+      <View style={hcStyles.valBox}>
+        <Text style={hcStyles.val}>{value}</Text>
+        <Text style={hcStyles.unit}>人</Text>
+      </View>
+      <TouchableOpacity
+        style={[hcStyles.btn, disabled && hcStyles.btnDisabled]}
+        onPress={inc} disabled={disabled || value >= max}
+        testID="headcount-plus" accessibilityLabel="增加人数"
+      >
+        <Text style={hcStyles.btnText}>＋</Text>
+      </TouchableOpacity>
+    </View>
+  );
+};
+
+const hcStyles = StyleSheet.create({
+  wrap: { flexDirection: 'row', alignItems: 'center', marginBottom: 16 },
+  btn: {
+    width: 56, height: 56, borderRadius: 10, borderWidth: 1, borderColor: '#DCDFE6',
+    backgroundColor: '#F5F7FA', alignItems: 'center', justifyContent: 'center',
+  },
+  btnDisabled: { opacity: 0.4 },
+  btnText: { fontSize: 30, color: '#303133', fontWeight: '600', lineHeight: 34 },
+  valBox: {
+    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    marginHorizontal: 10, borderWidth: 1, borderColor: '#DCDFE6', borderRadius: 10,
+    backgroundColor: '#FFFFFF', height: 60, paddingHorizontal: 12,
+  },
+  val: { fontSize: 34, fontWeight: '700', color: '#1A1A1A', textAlign: 'center' },
+  unit: { fontSize: 18, color: '#909399', marginLeft: 8 },
+});
 
 function isEvidenceVideoAsset(asset: ImagePicker.ImagePickerAsset): boolean {
   return asset.type === 'video' || asset.mimeType?.startsWith('video/') === true || isEvidenceVideoUrl(asset.uri);
@@ -120,8 +369,10 @@ const YieldStepReportScreen: React.FC = () => {
   const { getUserId, getUserRole } = useAuthStore();
   const currentUserId = getUserId();
   const currentRole = getUserRole();
-  // 操作工 (小组长) vs 主管: operator 只见自己的任务 + 不能完工入库
+  // 操作工 (小组长) vs 主管: operator 只见自己的任务 + 不能完工入库 + 不能看成本
   const isOperator = currentRole === 'operator';
+  // 成本可见性: 仅 PRICE_VIEW_ROLES 内的角色可见 (operator 不在其中)
+  const canViewPrice = useCanViewPrice();
 
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
@@ -151,13 +402,12 @@ const YieldStepReportScreen: React.FC = () => {
   const [sampleRetainQty, setSampleRetainQty] = useState('');                  // 留样
 
   // 生产阶段 — 单段工时报工块 (一次提交一段, 累加; 张权 多段开工/收工)
-  const [segStart, setSegStart] = useState('');
-  const [segEnd, setSegEnd] = useState('');
-  const [segHeadcount, setSegHeadcount] = useState('');
+  // 低输入重设计: 时间用滑动控件(HH:MM 字符串), 人数用大步进器(number)
+  const [segStart, setSegStart] = useState('07:00');
+  const [segEnd, setSegEnd] = useState('15:00');
+  const [segHeadcount, setSegHeadcount] = useState(1);  // number (HeadcountStepper)
   const [segNote, setSegNote] = useState('');
-  const [segProcessedQty, setSegProcessedQty] = useState('');
-  const [segStageOutputQty, setSegStageOutputQty] = useState('');
-  const [segWasteQty, setSegWasteQty] = useState('');
+  // 已移除: segProcessedQty, segStageOutputQty, segWasteQty (防呆: 损耗=投入−产出 auto-computed)
   const [segByproducts, setSegByproducts] = useState<ByproductInput[]>([]);
 
   // 图片证据 (投入阶段 / 生产时段段 / 完工出成 各自一份, 切阶段清空)
@@ -272,13 +522,10 @@ const YieldStepReportScreen: React.FC = () => {
     setByproducts([]);
     setWasteQty('');
     setSampleRetainQty('');
-    setSegStart('');
-    setSegEnd('');
-    setSegHeadcount('');
+    setSegStart('07:00');
+    setSegEnd('15:00');
+    setSegHeadcount(1);
     setSegNote('');
-    setSegProcessedQty('');
-    setSegStageOutputQty('');
-    setSegWasteQty('');
     setSegByproducts([]);
     setProductionStepMode('SEGMENT');
   }, [prevOutput]);
@@ -596,18 +843,9 @@ const YieldStepReportScreen: React.FC = () => {
       appAlert('证据上传中', '请等照片或视频上传完成再提交');
       return;
     }
-    const hc = parseInt(segHeadcount, 10);
-    if (!segStart.trim() || !segEnd.trim() || Number.isNaN(hc) || hc <= 0) {
+    // 低输入重设计: segHeadcount 是 number (HeadcountStepper), segStart/segEnd 是 HH:MM (TimeRangeSlider)
+    if (!segStart || !segEnd || segHeadcount <= 0) {
       appAlert('请填写本段工时', '开始时间 / 结束时间 / 人数都要填 (人数 > 0)');
-      return;
-    }
-    const processed = segProcessedQty.trim() ? parseFloat(segProcessedQty) : null;
-    const stageOut = segStageOutputQty.trim() ? parseFloat(segStageOutputQty) : null;
-    const segWaste = segWasteQty.trim() ? parseFloat(segWasteQty) : null;
-    if ((processed != null && (Number.isNaN(processed) || processed <= 0))
-      || (stageOut != null && (Number.isNaN(stageOut) || stageOut < 0))
-      || (segWaste != null && (Number.isNaN(segWaste) || segWaste < 0))) {
-      appAlert('请核对过程数量', '本段处理量必须大于 0；阶段产出和损耗不能为负数');
       return;
     }
     const validSegByproducts = segByproducts
@@ -622,13 +860,12 @@ const YieldStepReportScreen: React.FC = () => {
       return;
     }
     const seg = {
-      startTime: segStart.trim(),
-      endTime: segEnd.trim(),
-      headcount: hc,
+      startTime: segStart,
+      endTime: segEnd,
+      headcount: segHeadcount,
       ...(segNote.trim() ? { note: segNote.trim() } : {}),
-      ...(processed != null ? { processedQuantity: processed, processedUnit: unit } : {}),
-      ...(stageOut != null ? { stageOutputQuantity: stageOut, stageOutputUnit: unit } : {}),
-      ...(segWaste != null ? { segmentWasteQuantity: segWaste, segmentWasteUnit: unit } : {}),
+      // processedQuantity / stageOutputQuantity / segmentWasteQuantity 已移除
+      // 损耗由后端从 投入−产出 自动计算 (前端 auto-display, 无需操作工手填)
       ...(validSegByproducts.length > 0 ? { byproducts: validSegByproducts } : {}),
     };
     const req: YieldReportRequest = {
@@ -648,13 +885,10 @@ const YieldStepReportScreen: React.FC = () => {
       }
       await refetchYield();
       // 留在生产阶段, 清空本段输入可再加一段
-      setSegStart('');
-      setSegEnd('');
-      setSegHeadcount('');
+      setSegStart('07:00');
+      setSegEnd('15:00');
+      setSegHeadcount(1);
       setSegNote('');
-      setSegProcessedQty('');
-      setSegStageOutputQty('');
-      setSegWasteQty('');
       setSegByproducts([]);
       setEvidencePhotos([]);
     } catch (error) {
@@ -670,8 +904,7 @@ const YieldStepReportScreen: React.FC = () => {
       setSubmitting(false);
     }
   }, [currentTask, evidenceUploading, segStart, segEnd, segHeadcount, segNote,
-      segProcessedQty, segStageOutputQty, segWasteQty, segByproducts, unit,
-      uploadedEvidenceUrls, batchId, refetchYield]);
+      segByproducts, unit, uploadedEvidenceUrls, batchId, refetchYield]);
 
   // ========================= 阶段 2b: 完工出成 (reportKind=OUTPUT) =========================
   // A4: 强制提交 (OVER_RECEIPT 确认后调用)
@@ -932,7 +1165,8 @@ const YieldStepReportScreen: React.FC = () => {
                 {yieldData.firstStepInput}{yieldData.firstStepInputUnit ?? ''} → {yieldData.lastStepOutput}{yieldData.lastStepOutputUnit ?? ''}
               </Text>
             ) : null}
-            {yieldData != null ? (
+            {/* 🔴 成本/价格: operator 角色不可见 (fool-proof-design §3 + canViewPrice gate) */}
+            {yieldData != null && canViewPrice ? (
               <View style={styles.doneCostWrap} testID="yield-batch-cost">
                 {yieldData.totalLaborCost == null && yieldData.totalMaterialCost == null && yieldData.totalCost == null ? (
                   <Text style={styles.doneCostMuted}>整批成本: 未配工价 / 无原料单价</Text>
@@ -1229,38 +1463,32 @@ const YieldStepReportScreen: React.FC = () => {
                 <Text style={styles.emptySegHint}>还没报工时段, 填下面一段提交</Text>
               )}
 
-              {/* 本段录入 */}
-              <View style={styles.segRow}>
-                <TextInput
-                  style={styles.segTimeInput}
-                  value={segStart}
-                  onChangeText={setSegStart}
-                  placeholder="开始"
-                  placeholderTextColor="#C0C4CC"
-                  editable={!submitting}
-                  testID="seg-start"
-                />
-                <Text style={styles.segSep}>~</Text>
-                <TextInput
-                  style={styles.segTimeInput}
-                  value={segEnd}
-                  onChangeText={setSegEnd}
-                  placeholder="结束"
-                  placeholderTextColor="#C0C4CC"
-                  editable={!submitting}
-                  testID="seg-end"
-                />
-                <TextInput
-                  style={styles.segNumInput}
-                  keyboardType="number-pad"
-                  value={segHeadcount}
-                  onChangeText={(v) => setSegHeadcount(v.replace(/[^0-9]/g, ''))}
-                  placeholder="人数"
-                  placeholderTextColor="#C0C4CC"
-                  editable={!submitting}
-                  testID="seg-headcount"
-                />
-              </View>
+              {/* 本段录入 — 低输入重设计: 时间滑动控件 + 人数步进器, 无需打字 */}
+              <Text style={styles.segInputLabel}>工作时段</Text>
+              <TimeRangeSlider
+                startTime={segStart}
+                endTime={segEnd}
+                onStartChange={setSegStart}
+                onEndChange={setSegEnd}
+                disabled={submitting}
+              />
+
+              <Text style={styles.segInputLabel}>出勤人数</Text>
+              <HeadcountStepper
+                value={segHeadcount}
+                onChange={setSegHeadcount}
+                disabled={submitting}
+              />
+
+              {/* 损耗自动计算提示 (read-only; 投入−产出 由后端算, 操作工无需填) */}
+              {reportedInput != null ? (
+                <View style={styles.autoWasteBanner} testID="auto-waste-banner">
+                  <Text style={styles.autoWasteText}>
+                    损耗 = 已投入 {reportedInput}{reportedInputUnit} − 完工产出 (完工时填入后自动计算)
+                  </Text>
+                </View>
+              ) : null}
+
               <TextInput
                 style={styles.segNoteInput}
                 value={segNote}
@@ -1269,31 +1497,6 @@ const YieldStepReportScreen: React.FC = () => {
                 placeholderTextColor="#C0C4CC"
                 editable={!submitting}
                 testID="seg-note"
-              />
-
-              <YieldQuantityInput
-                label="本段处理量 (选填)"
-                value={segProcessedQty}
-                onChangeText={setSegProcessedQty}
-                unit={unit}
-                disabled={submitting}
-                testID="seg-processed-qty"
-              />
-              <YieldQuantityInput
-                label="阶段产出 (选填, 不是完工入库)"
-                value={segStageOutputQty}
-                onChangeText={setSegStageOutputQty}
-                unit={unit}
-                disabled={submitting}
-                testID="seg-stage-output-qty"
-              />
-              <YieldQuantityInput
-                label="过程损耗 (选填)"
-                value={segWasteQty}
-                onChangeText={setSegWasteQty}
-                unit={unit}
-                disabled={submitting}
-                testID="seg-waste-qty"
               />
 
               <View style={styles.section} testID="seg-byproducts-section">
@@ -1399,6 +1602,22 @@ const YieldStepReportScreen: React.FC = () => {
                 testID="yield-output-qty"
               />
 
+              {/* 损耗 auto-computed display: 投入−产出 (read-only, 操作工无需手填) */}
+              {(() => {
+                const inp = reportedInput ?? 0;
+                const out = parseFloat(outputQty);
+                const computed = !Number.isNaN(out) && out > 0 && inp > 0
+                  ? Math.max(0, Number((inp - out).toFixed(2)))
+                  : null;
+                return computed != null ? (
+                  <View style={styles.autoWasteBanner} testID="output-auto-waste">
+                    <Text style={styles.autoWasteText}>
+                      损耗 (自动) = 投入 {inp}{reportedInputUnit} − 产出 {out}{outUnit} = {computed}{unit}
+                    </Text>
+                  </View>
+                ) : null;
+              })()}
+
               {outputOverHardCap ? (
                 <View style={styles.hardcapBanner} testID="yield-hardcap-banner">
                   <Text style={styles.hardcapText}>
@@ -1465,15 +1684,7 @@ const YieldStepReportScreen: React.FC = () => {
                 </TouchableOpacity>
               </View>
 
-              {/* 损耗 */}
-              <YieldQuantityInput
-                label="损耗量 (选填)"
-                value={wasteQty}
-                onChangeText={setWasteQty}
-                unit={unit}
-                disabled={submitting}
-                testID="yield-waste-qty"
-              />
+              {/* 损耗量 已移除: 由 auto-computed display 替代 (投入−产出, 防呆无需操作工手填) */}
 
               {/* 留样 */}
               <YieldQuantityInput
@@ -1546,17 +1757,20 @@ const YieldStepReportScreen: React.FC = () => {
                     : currentStepYield?.unitComparable === false ? '跨单位不可比' : '—'}
                 </Text>
               </View>
-              <View style={styles.summaryRow}>
-                <Text style={styles.summaryKey}>本道成本</Text>
-                <Text style={styles.summaryVal} testID="yield-step-cost">
-                  {currentStepYield != null
-                    && currentStepYield.laborCost == null
-                    && currentStepYield.materialCost == null
-                    && currentStepYield.stepCost == null
-                    ? '未配工价 / 无原料单价'
-                    : `人工${fmtMoney(currentStepYield?.laborCost)} + 材料${fmtMoney(currentStepYield?.materialCost)} = ${fmtMoney(currentStepYield?.stepCost)}`}
-                </Text>
-              </View>
+              {/* 🔴 本道成本: operator 角色不可见 (canViewPrice gate) */}
+              {canViewPrice ? (
+                <View style={styles.summaryRow} testID="yield-step-cost-row">
+                  <Text style={styles.summaryKey}>本道成本</Text>
+                  <Text style={styles.summaryVal} testID="yield-step-cost">
+                    {currentStepYield != null
+                      && currentStepYield.laborCost == null
+                      && currentStepYield.materialCost == null
+                      && currentStepYield.stepCost == null
+                      ? '未配工价 / 无原料单价'
+                      : `人工${fmtMoney(currentStepYield?.laborCost)} + 材料${fmtMoney(currentStepYield?.materialCost)} = ${fmtMoney(currentStepYield?.stepCost)}`}
+                  </Text>
+                </View>
+              ) : null}
 
               {/* 全工时段 */}
               {Array.isArray(reportedSegments) && reportedSegments.length > 0 ? (
@@ -1596,16 +1810,55 @@ const YieldStepReportScreen: React.FC = () => {
               ) : null}
             </NeoCard>
 
-            <NeoButton
-              variant="primary"
-              size="large"
-              onPress={autoAssigned ? returnOrRefreshAssignedTask : goNextStep}
-              disabled={submitting}
-              style={styles.fullBtn}
-              testID="yield-next-step-btn"
-            >
-              {autoAssigned ? '刷新当前工序' : isLastStep ? '查看整批汇总  ▶' : '下一道  ▶'}
-            </NeoButton>
+            {/* 下一任务导航 (防呆: 完成后不卡在当前道; fool-proof Rule 5 dead-end 改导航) */}
+            {autoAssigned ? (
+              <NeoButton
+                variant="primary"
+                size="large"
+                onPress={returnOrRefreshAssignedTask}
+                disabled={submitting}
+                style={styles.fullBtn}
+                testID="yield-next-step-btn"
+              >
+                刷新当前工序
+              </NeoButton>
+            ) : (
+              <>
+                {!isLastStep ? (
+                  <NeoButton
+                    variant="primary"
+                    size="large"
+                    onPress={goNextStep}
+                    disabled={submitting}
+                    style={styles.fullBtn}
+                    testID="yield-next-step-btn"
+                  >
+                    下一道工序  ▶
+                  </NeoButton>
+                ) : (
+                  <NeoButton
+                    variant="primary"
+                    size="large"
+                    onPress={goNextStep}
+                    disabled={submitting}
+                    style={styles.fullBtn}
+                    testID="yield-next-step-btn"
+                  >
+                    查看整批汇总  ▶
+                  </NeoButton>
+                )}
+                <NeoButton
+                  variant="outline"
+                  size="large"
+                  onPress={() => navigation.goBack()}
+                  disabled={submitting}
+                  style={styles.fullBtn}
+                  testID="yield-return-tasklist-btn"
+                >
+                  返回我的任务
+                </NeoButton>
+              </>
+            )}
           </>
         ) : null}
       </ScrollView>
@@ -1726,6 +1979,13 @@ const styles = StyleSheet.create({
     alignItems: 'center', justifyContent: 'center', marginTop: 2,
   },
   addRowText: { fontSize: 16, color: '#409EFF', fontWeight: '600' },
+  // 低输入重设计: 时段/人数 label + 损耗 auto banner
+  segInputLabel: { fontSize: 16, fontWeight: '600', color: '#303133', marginBottom: 8 },
+  autoWasteBanner: {
+    backgroundColor: '#F0F9EB', borderRadius: 8, paddingHorizontal: 12, paddingVertical: 8,
+    marginBottom: 12,
+  },
+  autoWasteText: { fontSize: 14, color: '#67C23A', fontWeight: '500' },
   // 图片证据
   thumbRow: { flexDirection: 'row', flexWrap: 'wrap', marginBottom: 10 },
   thumbItem: { width: 80, height: 80, borderRadius: 8, overflow: 'hidden', marginRight: 8, marginBottom: 8 },
