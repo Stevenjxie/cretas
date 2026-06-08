@@ -15,6 +15,7 @@ import {
   Modal,
   Pressable,
 } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 // expo-updates: gracefully guarded — null in dev/Expo Go/embedded launch
 let Updates: {
   updateId?: string | null;
@@ -148,6 +149,8 @@ interface LoginFormViewProps {
   retryCount: number;
   networkStatus: boolean;
   biometricStatus: { available: boolean; isEnrolled: boolean };
+  /** F2: 最近登录账号列表 (最多3个), 点击 chip 填入用户名 */
+  recentAccounts: string[];
   onUsernameChange: (text: string) => void;
   onPasswordChange: (text: string) => void;
   onTogglePassword: () => void;
@@ -158,6 +161,8 @@ interface LoginFormViewProps {
   onNavigateForgotPassword: () => void;
   clearError: () => void;
   retry: () => void;
+  /** F2: 点击最近账号 chip 时回调 */
+  onSelectRecentAccount: (account: string) => void;
 }
 
 // ---- OTA date formatter (local time, 年月日 时:分, zero-padded) ----
@@ -181,6 +186,7 @@ const LoginFormView: React.FC<LoginFormViewProps> = ({
   retryCount,
   networkStatus,
   biometricStatus,
+  recentAccounts,
   onUsernameChange,
   onPasswordChange,
   onTogglePassword,
@@ -191,6 +197,7 @@ const LoginFormView: React.FC<LoginFormViewProps> = ({
   onNavigateForgotPassword,
   clearError,
   retry,
+  onSelectRecentAccount,
 }) => {
   const { t } = useTranslation('auth');
   const { t: tCommon } = useTranslation('common');
@@ -267,6 +274,42 @@ const LoginFormView: React.FC<LoginFormViewProps> = ({
 
         {/* 表单卡片 */}
         <View style={styles.formCard}>
+          {/* F2: 最近登录账号快选 chips — 低识字操作工点头像选账号免打字 */}
+          {recentAccounts.length > 0 && (
+            <View style={styles.recentAccountsWrap}>
+              <Text style={styles.recentAccountsLabel}>最近登录</Text>
+              <View style={styles.recentAccountsRow}>
+                {recentAccounts.map((acc) => (
+                  <TouchableOpacity
+                    key={acc}
+                    style={[
+                      styles.recentAccountChip,
+                      username === acc && styles.recentAccountChipActive,
+                    ]}
+                    onPress={() => onSelectRecentAccount(acc)}
+                    disabled={isLoading}
+                    accessibilityLabel={`使用账号 ${acc} 登录`}
+                  >
+                    <View style={styles.recentAccountAvatar}>
+                      <Text style={styles.recentAccountAvatarText}>
+                        {acc.charAt(0).toUpperCase()}
+                      </Text>
+                    </View>
+                    <Text
+                      style={[
+                        styles.recentAccountName,
+                        username === acc && styles.recentAccountNameActive,
+                      ]}
+                      numberOfLines={1}
+                    >
+                      {acc}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </View>
+          )}
+
           {/* 用户名输入 */}
           <Text style={styles.inputLabel}>{t('login.username')}</Text>
           <View style={styles.inputContainer}>
@@ -435,6 +478,31 @@ const LoginFormView: React.FC<LoginFormViewProps> = ({
   );
 };
 
+// ========== 最近账号 AsyncStorage 工具 ==========
+const RECENT_ACCOUNTS_KEY = '@cretas:recent_accounts';
+const MAX_RECENT = 3;
+
+async function loadRecentAccounts(): Promise<string[]> {
+  try {
+    const raw = await AsyncStorage.getItem(RECENT_ACCOUNTS_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+async function saveRecentAccount(username: string): Promise<void> {
+  try {
+    const existing = await loadRecentAccounts();
+    const next = [username, ...existing.filter((u) => u !== username)].slice(0, MAX_RECENT);
+    await AsyncStorage.setItem(RECENT_ACCOUNTS_KEY, JSON.stringify(next));
+  } catch {
+    // 静默失败, 不影响登录主流程
+  }
+}
+
 // ========== 主组件 ==========
 export const EnhancedLoginScreen: React.FC<LoginScreenProps> = ({ navigation }) => {
   const { t } = useTranslation('auth');
@@ -447,6 +515,16 @@ export const EnhancedLoginScreen: React.FC<LoginScreenProps> = ({ navigation }) 
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [rememberMe, setRememberMe] = useState(false);
+
+  // F2: 最近账号
+  const [recentAccounts, setRecentAccounts] = useState<string[]>([]);
+  useEffect(() => {
+    loadRecentAccounts().then(setRecentAccounts).catch(() => setRecentAccounts([]));
+  }, []);
+
+  const handleSelectRecentAccount = useCallback((acc: string) => {
+    setUsername(acc);
+  }, []);
 
   const {
     login,
@@ -496,6 +574,10 @@ export const EnhancedLoginScreen: React.FC<LoginScreenProps> = ({ navigation }) 
       });
 
       if (success) {
+        // F2: 登录成功 → 保存账号到最近列表
+        saveRecentAccount(username.trim()).then(() => {
+          loadRecentAccounts().then(setRecentAccounts).catch(() => {});
+        });
         navigateToMain();
       }
     } catch (error) {
@@ -576,6 +658,7 @@ export const EnhancedLoginScreen: React.FC<LoginScreenProps> = ({ navigation }) 
         retryCount={retryCount}
         networkStatus={networkStatus}
         biometricStatus={biometricStatus}
+        recentAccounts={recentAccounts}
         onUsernameChange={setUsername}
         onPasswordChange={setPassword}
         onTogglePassword={() => setShowPassword(!showPassword)}
@@ -586,6 +669,7 @@ export const EnhancedLoginScreen: React.FC<LoginScreenProps> = ({ navigation }) 
         onNavigateForgotPassword={handleForgotPassword}
         clearError={clearError}
         retry={retry}
+        onSelectRecentAccount={handleSelectRecentAccount}
       />
     </ScreenWrapper>
   );
@@ -927,6 +1011,59 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '600',
     color: '#FFFFFF',
+  },
+  // F2: 最近登录账号快选样式
+  recentAccountsWrap: {
+    marginBottom: 16,
+  },
+  recentAccountsLabel: {
+    fontSize: 13,
+    color: '#909399',
+    marginBottom: 10,
+  },
+  recentAccountsRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+  },
+  recentAccountChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 1.5,
+    borderColor: '#DCDFE6',
+    borderRadius: 24,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    backgroundColor: '#F5F7FA',
+    minHeight: 48,  // touch target ≥44pt
+  },
+  recentAccountChipActive: {
+    borderColor: '#4a7c2c',
+    backgroundColor: '#EEF5E9',
+  },
+  recentAccountAvatar: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: '#4a7c2c',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 8,
+  },
+  recentAccountAvatarText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#FFFFFF',
+  },
+  recentAccountName: {
+    fontSize: 15,
+    color: '#303133',
+    fontWeight: '500',
+    maxWidth: 100,
+  },
+  recentAccountNameActive: {
+    color: '#4a7c2c',
+    fontWeight: '700',
   },
 });
 
