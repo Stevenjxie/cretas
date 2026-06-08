@@ -45,6 +45,10 @@ public class UpdateMaterialBatchRequest {
     @Schema(description = "数量单位", example = "箱")
     private String quantityUnit;
 
+    @Schema(description = "箱数 (粗略统计用, 不参与库存计算)", example = "8")
+    @PositiveOrZero(message = "箱数不能为负数")
+    private Integer boxCount;
+
     @Schema(description = "每单位重量(kg)", example = "10.5")
     @DecimalMin(value = "0.001", message = "每单位重量必须大于0")
     private BigDecimal weightPerUnit;
