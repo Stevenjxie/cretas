@@ -14,11 +14,38 @@
 
 ### 执行顺序
 
-1. 使用 `Skill` tool invoke `ui-ux-pro-max`，提供屏幕功能描述，获取相关 UX 规则子集
-2. 使用 `Skill` tool invoke `building-native-ui`，获取 Expo 原生组件建议
-3. 读取 `.claude/rules/fool-proof-design.md`，对照 5 条规则逐一检查
-4. 产出强制 spec 章节（格式见下方）
-5. 门控检查：进入 writing-plans 前，spec 必须包含完整的「UX Flow Analysis」章节
+1. 读取 `.claude/rules/fool-proof-design.md`，对照 5 条规则逐一检查
+2. 应用内联 UX 规则（见下方「内联 UX 规则」）对屏幕功能逐项评估
+3. 产出强制 spec 章节（格式见下方「强制 spec 章节格式」）
+4. 门控检查：进入 writing-plans 前，spec 必须包含完整的「UX Flow Analysis」章节
+
+### 内联 UX 规则（低技术素养用户 RN 屏幕）
+
+**触摸目标**
+- 所有可点击元素 ≥ 44×44pt（Paper `TouchableRipple` / `Button` 默认满足，自定义 View 需显式设 minHeight/minWidth）
+- 相邻可点击元素间距 ≥ 8px，防误触
+- 点击后 80-150ms 内有视觉反馈（ripple / opacity）
+
+**信息密度**
+- 每屏只暴露当前步骤需要的信息，不堆叠下一步的字段
+- 主操作按钮唯一，副操作降级为文本链接或 icon
+- 数字输入用大字号（≥ 24px），避免仓管员看错
+
+**错误恢复**
+- 错误文案用「发生了什么 + 怎么解决」双句式，禁止纯技术 message（"500 Internal Server Error"）
+- 错误后保留已填数据，不清空表单
+- 网络失败显示重试按钮，不显示空白屏
+
+**扫码 / 批次选择**
+- 扫码结果立即回显品名 + 数量，操作员目视确认后才允许提交
+- 多批次选择屏每卡带「产品名 + 批次号 + 当前工序」（fool-proof Rule 2）
+- 单批次自动跳转，不让用户多点一次
+
+**Expo / React Native Paper 具体约束**
+- 用 `TouchableRipple` 替代 `TouchableOpacity`（Material ripple 反馈更明显）
+- 数量输入用 `keyboardType="numeric"` + `TextInput` Paper 组件
+- 底部安全区用 `ScreenWrapper` / `SafeAreaView` edges={['bottom']}
+- 加载中用 `ActivityIndicator`，不用 skeleton（仓管员不熟悉 skeleton 语义）
 
 ### 强制 spec 章节格式
 
@@ -38,7 +65,7 @@ spec 文件里必须包含以下章节，缺失则拒绝进入 writing-plans 并
 ### 摩擦点清单
 | # | 摩擦点描述 | 严重程度 | 来源规则 |
 |---|-----------|---------|---------|
-| F1 | ... | HIGH/MED/LOW | fool-proof Rule N / ui-ux-pro-max |
+| F1 | ... | HIGH/MED/LOW | fool-proof Rule N / 内联 UX 规则 |
 
 ### 每个摩擦点的设计回应
 - F1 → [具体设计决策]
