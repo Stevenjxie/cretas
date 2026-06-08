@@ -25,6 +25,7 @@ import { processingApiClient } from '../../services/api/processingApiClient';
 import { handleError } from '../../utils/errorHandler';
 import { useAuthStore } from '../../store/authStore';
 import { appAlert, AppDialogHost } from '../../components/ui/AppDialog';
+import { isAxiosError } from 'axios';
 import { useCanViewPrice } from '../../store/canViewPriceStore';
 
 type YieldStepReportParams = {
@@ -74,6 +75,44 @@ interface ByproductInput {
 // A.6 逐道成本格式化: null (未配工价 / 无原料单价) → "—" (非 ¥0).
 const fmtMoney = (v: number | null | undefined): string =>
   v == null || Number.isNaN(Number(v)) ? '—' : `¥${Number(v).toFixed(2)}`;
+
+/**
+ * F3 网络错误恢复: 把技术性错误转为操作工看得懂的双句提示.
+ * 格式: "发生了什么。怎么解决。"
+ * 返回 { title, msg } 供 appAlert 使用.
+ */
+function friendlySubmitError(error: unknown, fallbackTitle = '提交失败'): { title: string; msg: string } {
+  if (isAxiosError(error)) {
+    const status = error.response?.status;
+    const backendMsg: string = (error.response?.data as { message?: string })?.message ?? '';
+    const hint: string = (error.response?.data as { hint?: string })?.hint ?? '';
+    if (!error.response) {
+      // 纯网络错误 (timeout / offline / DNS)
+      return {
+        title: '网络连接失败',
+        msg: '手机暂时连不上服务器。请检查 WiFi 或移动数据后点"重试"重新提交，已填内容不会丢失。',
+      };
+    }
+    if (status === 503 || status === 504) {
+      return {
+        title: '服务器繁忙',
+        msg: '服务器暂时无响应。请稍等片刻后点"重试"重新提交，已填内容不会丢失。',
+      };
+    }
+    if (status === 401) {
+      return {
+        title: '登录已过期',
+        msg: '登录状态已超时。请返回重新登录后再提交。',
+      };
+    }
+    if (backendMsg) {
+      return { title: fallbackTitle, msg: hint ? `${backendMsg}\n${hint}` : backendMsg };
+    }
+    return { title: fallbackTitle, msg: `提交时发生错误 (${status ?? '未知'})。请重试，已填内容不会丢失。` };
+  }
+  const msg = error instanceof Error ? error.message : String(error);
+  return { title: fallbackTitle, msg: msg || '提交失败，请重试，已填内容不会丢失。' };
+}
 
 // ───────────────────────────────────────────────────
 // TimeRangeSlider: 0–24h 拖拽滑轨, 防呆无需打字
@@ -854,13 +893,16 @@ const YieldStepReportScreen: React.FC = () => {
       appAlert('投入已提交', '本道进入生产阶段, 可分多段报工时, 完工时录产出');
     } catch (error) {
       handleError(error, { showAlert: false, logError: true });
-      const e = error as { response?: { data?: { message?: string; hint?: string } } };
-      const backendMsg = e.response?.data?.message;
-      const hint = e.response?.data?.hint;
-      const msg = backendMsg
-        ? hint ? `${backendMsg}\n${hint}` : backendMsg
-        : error instanceof Error ? error.message : '提交失败, 请重试';
-      appAlert('提交失败', msg);
+      const { title, msg } = friendlySubmitError(error);
+      // F3: 网络失败 → 重试按钮 (表单数据已由 state 保留)
+      if (isAxiosError(error) && !error.response) {
+        appAlert(title, msg, [
+          { text: '关闭', style: 'cancel' },
+          { text: '重试', onPress: () => handleSubmitInput() },
+        ]);
+      } else {
+        appAlert(title, msg);
+      }
     } finally {
       setSubmitting(false);
     }
@@ -926,13 +968,16 @@ const YieldStepReportScreen: React.FC = () => {
       setEvidencePhotos([]);
     } catch (error) {
       handleError(error, { showAlert: false, logError: true });
-      const e = error as { response?: { data?: { message?: string; hint?: string } } };
-      const backendMsg = e.response?.data?.message;
-      const hint = e.response?.data?.hint;
-      const msg = backendMsg
-        ? hint ? `${backendMsg}\n${hint}` : backendMsg
-        : error instanceof Error ? error.message : '提交失败, 请重试';
-      appAlert('提交失败', msg);
+      const { title, msg } = friendlySubmitError(error);
+      // F3: 网络失败 → 重试按钮 (表单数据已由 state 保留)
+      if (isAxiosError(error) && !error.response) {
+        appAlert(title, msg, [
+          { text: '关闭', style: 'cancel' },
+          { text: '重试', onPress: () => handleSubmitSegment() },
+        ]);
+      } else {
+        appAlert(title, msg);
+      }
     } finally {
       setSubmitting(false);
     }
@@ -1005,7 +1050,7 @@ const YieldStepReportScreen: React.FC = () => {
       await refetchYield();
       setEvidencePhotos([]);
     } catch (error) {
-      // A4: OVER_RECEIPT (HTTP 409) → 弹超收确认框
+      // A4: OVER_RECEIPT (HTTP 409) → 弹超收确认框 (优先于通用错误处理)
       const e = error as { response?: { data?: { success?: boolean; message?: string; errorCode?: string; actionHint?: string; hint?: string } } };
       const errorCode = e.response?.data?.errorCode;
       if (errorCode === 'OVER_RECEIPT') {
@@ -1018,12 +1063,16 @@ const YieldStepReportScreen: React.FC = () => {
         return;
       }
       handleError(error, { showAlert: false, logError: true });
-      const backendMsg = e.response?.data?.message;
-      const hint = e.response?.data?.hint;
-      const msg = backendMsg
-        ? hint ? `${backendMsg}\n${hint}` : backendMsg
-        : error instanceof Error ? error.message : '提交失败, 请重试';
-      appAlert('提交失败', msg);
+      const { title, msg } = friendlySubmitError(error);
+      // F3: 网络失败 → 重试按钮 (表单数据已由 state 保留)
+      if (isAxiosError(error) && !error.response) {
+        appAlert(title, msg, [
+          { text: '关闭', style: 'cancel' },
+          { text: '重试', onPress: () => doSubmitOutput() },
+        ]);
+      } else {
+        appAlert(title, msg);
+      }
     } finally {
       setSubmitting(false);
     }
@@ -2100,13 +2149,15 @@ const styles = StyleSheet.create({
   },
   chip: {
     borderWidth: 1, borderColor: '#DCDFE6', borderRadius: 14,
-    paddingHorizontal: 10, paddingVertical: 4, marginRight: 6, marginBottom: 4,
+    paddingHorizontal: 14, paddingVertical: 10, marginRight: 6, marginBottom: 6,
     backgroundColor: '#FFFFFF',
+    minHeight: 44,  // F4: touch target ≥44pt (low-literacy operators, gloved hands)
+    justifyContent: 'center',
   },
   chipSelected: {
     borderColor: '#E8732E', backgroundColor: '#FFF3EC',
   },
-  chipText: { fontSize: 12, color: '#606266' },
+  chipText: { fontSize: 14, color: '#606266' },
   chipTextSelected: { color: '#E8732E', fontWeight: '600' },
   photoNoteInput: {
     height: 36, borderWidth: 1, borderColor: '#DCDFE6', borderRadius: 6,

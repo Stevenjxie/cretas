@@ -1,5 +1,15 @@
-import React, { useCallback, useMemo, useState } from 'react';
-import { View, Text, TextInput, TouchableOpacity, StyleSheet } from 'react-native';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
+import {
+  Keyboard,
+  Modal,
+  SafeAreaView,
+  TouchableWithoutFeedback,
+  View,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  StyleSheet,
+} from 'react-native';
 
 interface YieldQuantityInputProps {
   /** 标签, 如 "投入量" / "产出量" */
@@ -84,6 +94,33 @@ export const YieldQuantityInput: React.FC<YieldQuantityInputProps> = ({
     () => max != null && !Number.isNaN(numeric) && numeric > max,
     [max, numeric],
   );
+
+  // F1: 大数字键盘直填 modal
+  const [bigKeypadOpen, setBigKeypadOpen] = useState(false);
+  const [bigKeypadValue, setBigKeypadValue] = useState('');
+  const bigKeypadInputRef = useRef<TextInput>(null);
+
+  const openBigKeypad = useCallback(() => {
+    if (disabled) return;
+    setBigKeypadValue(value);
+    setBigKeypadOpen(true);
+    // 延迟 focus 让 Modal 先渲染
+    setTimeout(() => bigKeypadInputRef.current?.focus(), 150);
+  }, [disabled, value]);
+
+  const confirmBigKeypad = useCallback(() => {
+    const cleaned = bigKeypadValue.replace(/[^0-9.]/g, '');
+    const parts = cleaned.split('.');
+    const normalized = parts.length > 2 ? `${parts[0]}.${parts.slice(1).join('')}` : cleaned;
+    onChangeText(normalized);
+    setBigKeypadOpen(false);
+    Keyboard.dismiss();
+  }, [bigKeypadValue, onChangeText]);
+
+  const cancelBigKeypad = useCallback(() => {
+    setBigKeypadOpen(false);
+    Keyboard.dismiss();
+  }, []);
 
   // STEP 6 / B4: 按托称重计算器状态. defaultTrayWeighing pre-expands for first-step.
   const [calcOpen, setCalcOpen] = useState(defaultTrayWeighing);
@@ -179,6 +216,54 @@ export const YieldQuantityInput: React.FC<YieldQuantityInputProps> = ({
 
   return (
     <View style={styles.wrap} testID={testID}>
+      {/* F1: 大数字直填 Modal */}
+      <Modal
+        visible={bigKeypadOpen}
+        transparent
+        animationType="slide"
+        onRequestClose={cancelBigKeypad}
+      >
+        <TouchableWithoutFeedback onPress={cancelBigKeypad}>
+          <View style={styles.modalOverlay} />
+        </TouchableWithoutFeedback>
+        <SafeAreaView style={styles.modalSheet}>
+          <View style={styles.modalHeader}>
+            <Text style={styles.modalTitle}>输入{label}</Text>
+            <TouchableOpacity onPress={cancelBigKeypad} style={styles.modalCancelBtn}>
+              <Text style={styles.modalCancelText}>取消</Text>
+            </TouchableOpacity>
+          </View>
+          <View style={styles.modalInputRow}>
+            <TextInput
+              ref={bigKeypadInputRef}
+              style={styles.modalInput}
+              keyboardType="decimal-pad"
+              value={bigKeypadValue}
+              onChangeText={(raw) => {
+                const cleaned = raw.replace(/[^0-9.]/g, '');
+                const parts = cleaned.split('.');
+                setBigKeypadValue(
+                  parts.length > 2 ? `${parts[0]}.${parts.slice(1).join('')}` : cleaned,
+                );
+              }}
+              placeholder="请输入数量"
+              placeholderTextColor="#C0C4CC"
+              autoFocus
+              testID={testID ? `${testID}-modal-input` : undefined}
+            />
+            {unit ? <Text style={styles.modalUnit}>{unit}</Text> : null}
+          </View>
+          {maxHint ? <Text style={styles.modalHint}>{maxHint}</Text> : null}
+          <TouchableOpacity
+            style={styles.modalConfirmBtn}
+            onPress={confirmBigKeypad}
+            testID={testID ? `${testID}-modal-confirm` : undefined}
+          >
+            <Text style={styles.modalConfirmText}>确认</Text>
+          </TouchableOpacity>
+        </SafeAreaView>
+      </Modal>
+
       <View style={styles.labelRow}>
         <Text style={styles.label}>{label}</Text>
       </View>
@@ -194,19 +279,19 @@ export const YieldQuantityInput: React.FC<YieldQuantityInputProps> = ({
           <Text style={styles.stepText}>−</Text>
         </TouchableOpacity>
 
-        <View style={styles.valueBox}>
-          <TextInput
-            style={styles.valueInput}
-            keyboardType="decimal-pad"
-            value={value}
-            onChangeText={handleChange}
-            editable={!disabled}
-            placeholder="0"
-            placeholderTextColor="#C0C4CC"
-            testID={testID ? `${testID}-input` : undefined}
-          />
+        {/* F1: 点数字区打开大键盘 modal */}
+        <TouchableOpacity
+          style={styles.valueBox}
+          onPress={openBigKeypad}
+          disabled={disabled}
+          testID={testID ? `${testID}-tap-to-edit` : undefined}
+          accessibilityLabel={`${label} ${value || '0'} ${unit ?? ''}，点击直接填写`}
+        >
+          <Text style={[styles.valueInput, !value && { color: '#C0C4CC' }]}>
+            {value || '0'}
+          </Text>
           {unit ? <Text style={styles.unit}>{unit}</Text> : null}
-        </View>
+        </TouchableOpacity>
 
         <TouchableOpacity
           style={[styles.stepBtn, disabled && styles.stepBtnDisabled]}
@@ -304,6 +389,33 @@ export const YieldQuantityInput: React.FC<YieldQuantityInputProps> = ({
 };
 
 const styles = StyleSheet.create({
+  // F1: 大数字直填 Modal 样式
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)' },
+  modalSheet: {
+    backgroundColor: '#FFFFFF', borderTopLeftRadius: 20, borderTopRightRadius: 20,
+    paddingHorizontal: 20, paddingBottom: 20, paddingTop: 12,
+    shadowColor: '#000', shadowOffset: { width: 0, height: -3 }, shadowOpacity: 0.15, elevation: 10,
+  },
+  modalHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 },
+  modalTitle: { fontSize: 18, fontWeight: '700', color: '#303133' },
+  modalCancelBtn: { paddingHorizontal: 12, paddingVertical: 8 },
+  modalCancelText: { fontSize: 16, color: '#909399' },
+  modalInputRow: {
+    flexDirection: 'row', alignItems: 'center',
+    borderWidth: 2, borderColor: '#E8732E', borderRadius: 12,
+    paddingHorizontal: 16, marginBottom: 12, height: 72,
+  },
+  modalInput: {
+    flex: 1, fontSize: 40, fontWeight: '800', color: '#1A1A1A', textAlign: 'right', padding: 0,
+  },
+  modalUnit: { fontSize: 22, color: '#909399', marginLeft: 10, fontWeight: '500' },
+  modalHint: { fontSize: 14, color: '#E6A23C', marginBottom: 12 },
+  modalConfirmBtn: {
+    height: 56, backgroundColor: '#E8732E', borderRadius: 12,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  modalConfirmText: { fontSize: 20, color: '#FFFFFF', fontWeight: '800' },
+  // end F1 modal styles
   wrap: { marginBottom: 16 },
   labelRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 },
   label: { fontSize: 16, fontWeight: '600', color: '#303133' },
@@ -361,7 +473,7 @@ const styles = StyleSheet.create({
     marginHorizontal: 10, borderWidth: 1, borderColor: '#DCDFE6', borderRadius: 8,
     backgroundColor: '#FFFFFF', height: 56, paddingHorizontal: 12,
   },
-  valueInput: { flex: 1, fontSize: 28, fontWeight: '700', color: '#1A1A1A', textAlign: 'center', padding: 0 },
+  valueInput: { flex: 1, fontSize: 28, fontWeight: '700', color: '#1A1A1A', textAlign: 'center' },
   unit: { fontSize: 16, color: '#909399', marginLeft: 6 },
   prefillNote: { fontSize: 14, color: '#E8732E', marginTop: 8, fontWeight: '500' },
   maxHint: { fontSize: 13, color: '#E6A23C', marginTop: 6 },
