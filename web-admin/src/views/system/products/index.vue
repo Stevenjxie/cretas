@@ -364,6 +364,11 @@ const categoryManuallyEdited = ref(false);
 const unitManuallyEdited = ref(false);
 const level1UnitManuallyEdited = ref(false);
 const boxCoefManuallyEdited = ref(false);
+// T150: 扩展字段手动编辑追踪
+const temperatureZoneManuallyEdited = ref(false);
+const specificationManuallyEdited = ref(false);
+const gramsPerUnitManuallyEdited = ref(false);
+const wipToFgYieldManuallyEdited = ref(false);
 
 // 智能填充命中提示 (展示匹配来源产品名)
 const suggestHint = ref('');
@@ -372,12 +377,18 @@ let suggestTimer: ReturnType<typeof setTimeout> | null = null;
 function markUnitEdited() { unitManuallyEdited.value = true; }
 function markLevel1UnitEdited() { level1UnitManuallyEdited.value = true; }
 function markBoxCoefEdited() { boxCoefManuallyEdited.value = true; }
+function markTemperatureZoneEdited() { temperatureZoneManuallyEdited.value = true; }
+function markSpecificationEdited() { specificationManuallyEdited.value = true; }
 
 function resetSuggestFlags() {
   categoryManuallyEdited.value = false;
   unitManuallyEdited.value = false;
   level1UnitManuallyEdited.value = false;
   boxCoefManuallyEdited.value = false;
+  temperatureZoneManuallyEdited.value = false;
+  specificationManuallyEdited.value = false;
+  gramsPerUnitManuallyEdited.value = false;
+  wipToFgYieldManuallyEdited.value = false;
   suggestHint.value = '';
 }
 
@@ -386,7 +397,24 @@ interface SuggestResult {
   unit?: string | null;
   level1Unit?: string | null;
   boxConversionCoefficient?: number | null;
+  // T150: 扩展字段
+  temperatureZone?: string | null;
+  specification?: string | null;
+  gramsPerUnit?: number | null;
+  wipToFgYield?: number | null;
   matchedFrom?: string | null;
+}
+
+// T150: DynamicEntityForm 更新处理 — 透传 formData 并追踪 gramsPerUnit/wipToFgYield 手动编辑
+function handleExtendedFormUpdate(event: Record<string, unknown>) {
+  // 若用户改了 gramsPerUnit/wipToFgYield (从非空改 或 从 null/undefined 改为有值), 标记已手动编辑
+  if (event.gramsPerUnit !== undefined && event.gramsPerUnit !== formData.gramsPerUnit) {
+    gramsPerUnitManuallyEdited.value = true;
+  }
+  if (event.wipToFgYield !== undefined && event.wipToFgYield !== formData.wipToFgYield) {
+    wipToFgYieldManuallyEdited.value = true;
+  }
+  Object.assign(formData, event);
 }
 
 async function fetchSuggest() {
@@ -422,6 +450,28 @@ async function fetchSuggest() {
     if (s.boxConversionCoefficient != null && !boxCoefManuallyEdited.value
         && (formData.boxConversionCoefficient == null || formData.boxConversionCoefficient === undefined)) {
       formData.boxConversionCoefficient = s.boxConversionCoefficient;
+      filledAny = true;
+    }
+    // T150: 温区 — 仅当为空且未手动改过
+    if (s.temperatureZone && !temperatureZoneManuallyEdited.value && !formData.temperatureZone) {
+      formData.temperatureZone = s.temperatureZone;
+      filledAny = true;
+    }
+    // T150: 规格 — 仅当为空且未手动改过
+    if (s.specification && !specificationManuallyEdited.value && !formData.specification) {
+      formData.specification = s.specification;
+      filledAny = true;
+    }
+    // T150: 标准克重 — 仅当为空且未手动改过
+    if (s.gramsPerUnit != null && !gramsPerUnitManuallyEdited.value
+        && (formData.gramsPerUnit == null || formData.gramsPerUnit === undefined)) {
+      formData.gramsPerUnit = s.gramsPerUnit;
+      filledAny = true;
+    }
+    // T150: 半成品出成率 — 仅当为空且未手动改过
+    if (s.wipToFgYield != null && !wipToFgYieldManuallyEdited.value
+        && (formData.wipToFgYield == null || formData.wipToFgYield === undefined)) {
+      formData.wipToFgYield = s.wipToFgYield;
       filledAny = true;
     }
 
@@ -1090,7 +1140,8 @@ function handleAiFill(params: TableRow) {
           <div class="form-tip">二级单位 = 最小计量（如「盒」120克/盒）；大包装一级单位（如「筐」1筐=20盒）在下方「规格信息」中配置</div>
         </el-form-item>
         <el-form-item label="规格" prop="specification">
-          <el-input v-model="formData.specification" placeholder="请输入规格（如：310g*42袋/箱）" />
+          <el-input v-model="formData.specification" placeholder="请输入规格（如：310g*42袋/箱）"
+            @input="markSpecificationEdited" />
         </el-form-item>
         <!-- T147 Fix1: 关联客户改「下拉」(el-select filterable + allow-create) — 既是客户下拉, 也可手输新客户名.
              选中已有客户同步 customerId(entity link); 手输新名清空 customerId (保留 T123 双绑行为) -->
@@ -1127,7 +1178,8 @@ function handleAiFill(params: TableRow) {
           <div class="form-tip">仅含产品本身名称，不含客户/规格后缀；RN 展示优先用此字段，为空则回退到产品名称</div>
         </el-form-item>
         <el-form-item label="温区" prop="temperatureZone">
-          <el-select v-model="formData.temperatureZone" placeholder="请选择温区" clearable style="width: 100%">
+          <el-select v-model="formData.temperatureZone" placeholder="请选择温区" clearable style="width: 100%"
+            @change="markTemperatureZoneEdited">
             <el-option label="常温" value="常温" />
             <el-option label="冷藏" value="冷藏" />
             <el-option label="冷冻" value="冷冻" />
@@ -1219,10 +1271,11 @@ function handleAiFill(params: TableRow) {
           <div class="form-tip">如 1 筐 = 20 盒；二级单位与上方「单位」字段同步</div>
         </el-form-item>
 
+        <!-- T150: @update 改用 handleExtendedFormUpdate 以追踪 gramsPerUnit/wipToFgYield 手动编辑标志 -->
         <DynamicEntityForm
           :fields="visibleExtendedFields"
           :model-value="formData as TableRow"
-          @update:model-value="Object.assign(formData, $event)"
+          @update:model-value="handleExtendedFormUpdate"
           :columns="2"
           label-width="120px"
         />
