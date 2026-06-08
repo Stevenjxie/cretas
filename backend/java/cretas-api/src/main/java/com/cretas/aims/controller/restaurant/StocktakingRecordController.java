@@ -19,7 +19,6 @@ import org.springframework.web.bind.annotation.*;
 import jakarta.validation.Valid;
 import java.math.BigDecimal;
 import java.time.LocalDate;
-import java.time.LocalDateTime;
 import java.util.*;
 import java.util.stream.Collectors;
 import com.cretas.aims.annotation.RequireModule;
@@ -103,27 +102,12 @@ public class StocktakingRecordController {
         // dispatching to repository where PG would surface a generic 409.
         validateEntityLengths(record);
 
-        // 检查是否已有该食材的进行中盘点
-        if (stocktakingRepository.existsByFactoryIdAndRawMaterialTypeIdAndStatus(
-                factoryId, record.getRawMaterialTypeId(), StocktakingRecord.Status.IN_PROGRESS)) {
-            throw new BusinessException(409, "该食材已有进行中的盘点单，请先完成或取消")
-                    .withHint("请前往盘点列表查看进行中的盘点");
-        }
-
+        // GAP-04-C-SYS: route through service so systemQuantity is snapshotted at
+        // creation time.  The previous direct stocktakingRepository.save() bypassed
+        // StocktakingRecordServiceImpl.createRecord(), which is the only place that
+        // computes and persists the per-batch 账面库存 the operator needs before counting.
         record.setId(null);
-        record.setFactoryId(factoryId);
-        record.setCountedBy(userId);
-        record.setStatus(StocktakingRecord.Status.IN_PROGRESS);
-        if (record.getStocktakingDate() == null) {
-            record.setStocktakingDate(LocalDate.now());
-        }
-
-        // 自动生成单号
-        long todayCount = stocktakingRepository.countByFactoryIdAndDate(factoryId, record.getStocktakingDate());
-        String dateStr = record.getStocktakingDate().toString().replace("-", "");
-        record.setStocktakingNumber(String.format("STK-%s-%03d", dateStr, todayCount + 1));
-
-        StocktakingRecord saved = stocktakingRepository.save(record);
+        StocktakingRecord saved = stocktakingRecordService.createRecord(factoryId, record, userId);
         return ApiResponse.success("盘点单创建成功", saved);
     }
 

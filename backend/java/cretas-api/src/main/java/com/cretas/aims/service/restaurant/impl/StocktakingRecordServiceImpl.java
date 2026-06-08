@@ -1,10 +1,12 @@
 package com.cretas.aims.service.restaurant.impl;
 
 import com.cretas.aims.dto.common.PageResponse;
+import com.cretas.aims.dto.material.MaterialBatchDTO;
 import com.cretas.aims.entity.restaurant.StocktakingRecord;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.exception.ResourceNotFoundException;
 import com.cretas.aims.repository.restaurant.StocktakingRecordRepository;
+import com.cretas.aims.service.MaterialBatchService;
 import com.cretas.aims.service.restaurant.RestaurantInventoryPostingService;
 import com.cretas.aims.service.restaurant.StocktakingRecordService;
 import org.slf4j.Logger;
@@ -28,11 +30,14 @@ public class StocktakingRecordServiceImpl implements StocktakingRecordService {
 
     private final StocktakingRecordRepository stocktakingRecordRepository;
     private final RestaurantInventoryPostingService inventoryPostingService;
+    private final MaterialBatchService materialBatchService;
 
     public StocktakingRecordServiceImpl(StocktakingRecordRepository stocktakingRecordRepository,
-                                        RestaurantInventoryPostingService inventoryPostingService) {
+                                        RestaurantInventoryPostingService inventoryPostingService,
+                                        MaterialBatchService materialBatchService) {
         this.stocktakingRecordRepository = stocktakingRecordRepository;
         this.inventoryPostingService = inventoryPostingService;
+        this.materialBatchService = materialBatchService;
     }
 
     @Override
@@ -56,8 +61,23 @@ public class StocktakingRecordServiceImpl implements StocktakingRecordService {
 
         record.setStocktakingNumber(generateStocktakingNumber(factoryId, record.getStocktakingDate()));
 
+        // GAP-04-C-SYS: snapshot 账面库存 at creation time so the operator sees
+        // the per-batch total BEFORE they count, making the variance meaningful.
+        // Previously systemQuantity was only set (lazily) inside postStocktakingAdjustment
+        // at completion time — the operator had no reference figure during counting.
+        if (record.getSystemQuantity() == null
+                && record.getRawMaterialTypeId() != null) {
+            BigDecimal systemQty = materialBatchService
+                    .getMaterialBatchesByType(factoryId, record.getRawMaterialTypeId())
+                    .stream()
+                    .map(b -> b.getCurrentQuantity() != null ? b.getCurrentQuantity() : BigDecimal.ZERO)
+                    .reduce(BigDecimal.ZERO, BigDecimal::add);
+            record.setSystemQuantity(systemQty);
+        }
+
         record = stocktakingRecordRepository.save(record);
-        log.info("盘点记录创建成功: id={}, number={}", record.getId(), record.getStocktakingNumber());
+        log.info("盘点记录创建成功: id={}, number={}, systemQuantity={}",
+                record.getId(), record.getStocktakingNumber(), record.getSystemQuantity());
         return record;
     }
 
