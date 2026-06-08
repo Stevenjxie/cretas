@@ -376,10 +376,22 @@ class FinanceRbacBugFixTest {
 
     // ═══════════════════════════════════════════════════════════════════════════
     // GAP-05-C — FinanceReportController: finance_manager must access 三表
+    //
+    // INVESTIGATION RESULT (2026-06-09):
+    //   prod verification confirmed GAP-05-C is NOT a real bug.
+    //   - platform_role_permissions: finance_manager:finance = "rw" (correct, present)
+    //   - curl prod qhj_finance_mgr → all three endpoints return HTTP 200
+    //   - Prior diagnosis ("stale DB row") was wrong; CRITICAL_PERMISSION_OVERRIDES
+    //     L0 layer was a redundant no-op AND a latent foot-gun (code overriding DB).
+    //     It has been removed.
+    //
+    // Tests below verify the CORRECT gate: controller annotation allows finance roles,
+    // and the hardcoded PERMISSION_MATRIX fallback grants finance_manager finance:rw
+    // (which activates when repos are not wired, e.g. in unit-test context).
     // ═══════════════════════════════════════════════════════════════════════════
 
     @Nested
-    @DisplayName("GAP-05-C — FinanceReportController: finance_manager must access 三表 APIs")
+    @DisplayName("GAP-05-C — FinanceReportController: correct @RequirePermission gate")
     class Gap05cFinanceReportControllerAccess {
 
         private static final String FINANCE_READ       = "finance:read";
@@ -417,7 +429,6 @@ class FinanceRbacBugFixTest {
         @Test
         @DisplayName("incomeStatement has no method-level override that blocks finance_manager")
         void incomeStatement_noMethodOverrideThatBlocksFinanceManager() throws Exception {
-            // incomeStatement(String, Integer, Integer, Integer, Integer)
             Method method = FinanceReportController.class.getDeclaredMethod(
                     "incomeStatement",
                     String.class, Integer.class, Integer.class, Integer.class, Integer.class);
@@ -432,7 +443,6 @@ class FinanceRbacBugFixTest {
         @Test
         @DisplayName("cashFlow has no method-level override that blocks finance_manager")
         void cashFlow_noMethodOverrideThatBlocksFinanceManager() throws Exception {
-            // cashFlow(String, Integer, Integer, Integer, Integer)
             Method method = FinanceReportController.class.getDeclaredMethod(
                     "cashFlow",
                     String.class, Integer.class, Integer.class, Integer.class, Integer.class);
@@ -446,45 +456,49 @@ class FinanceRbacBugFixTest {
     }
 
     @Nested
-    @DisplayName("GAP-05-C — PermissionServiceImpl critical override: finance_manager:finance bypasses stale DB")
-    class Gap05cPermissionServiceOverride {
+    @DisplayName("GAP-05-C — PermissionServiceImpl fallback matrix: finance_manager has finance access")
+    class Gap05cPermissionServiceFallbackMatrix {
 
+        /**
+         * Instantiates PermissionServiceImpl without DB repos (both null).
+         * hasPermission() falls through L2(skip) → L1(skip) → PERMISSION_MATRIX fallback,
+         * which is the hardcoded safety net and gives the same result as L1 DB.
+         * This mirrors what would happen on a fresh DB where L1 has no row for a role.
+         */
         private PermissionServiceImpl permissionServiceImpl;
 
         @BeforeEach
         void setup() {
-            // Use the real implementation (no Spring context needed — we test the
-            // CRITICAL_PERMISSION_OVERRIDES path which is pure in-memory).
             permissionServiceImpl = new PermissionServiceImpl();
         }
 
         private User userWithRole(FactoryUserRole role, String factoryId) {
             User u = new User();
             u.setId(999L);
-            u.setRoleCode(role.name());   // User stores role as String roleCode; getRoleEnum() parses it
+            u.setRoleCode(role.name());
             u.setFactoryId(factoryId);
             return u;
         }
 
         @Test
-        @DisplayName("finance_manager: finance:read → true (critical override, DB row irrelevant)")
-        void financeManager_financeRead_allowedViaCriticalOverride() {
+        @DisplayName("finance_manager: finance:read → true (PERMISSION_MATRIX fallback)")
+        void financeManager_financeRead_allowedViaMatrix() {
             User fm = userWithRole(FactoryUserRole.finance_manager, "F006");
-            // No DB repos wired (both null) → critical override must fire before L1/L2 reach DB
+            // No DB repos → falls through to PERMISSION_MATRIX which has finance:read_write
             assertTrue(permissionServiceImpl.hasPermission(fm, "finance:read"),
-                    "GAP-05-C: finance_manager must have finance:read via critical override");
+                    "finance_manager must have finance:read via PERMISSION_MATRIX fallback");
         }
 
         @Test
-        @DisplayName("finance_manager: finance:read_write → true (critical override)")
-        void financeManager_financeReadWrite_allowedViaCriticalOverride() {
+        @DisplayName("finance_manager: finance:read_write → true (PERMISSION_MATRIX fallback)")
+        void financeManager_financeReadWrite_allowedViaMatrix() {
             User fm = userWithRole(FactoryUserRole.finance_manager, "F006");
             assertTrue(permissionServiceImpl.hasPermission(fm, "finance:read_write"),
-                    "GAP-05-C: finance_manager must have finance:read_write via critical override");
+                    "finance_manager must have finance:read_write via PERMISSION_MATRIX fallback");
         }
 
         @Test
-        @DisplayName("restaurant_owner: finance:read → true (critical override)")
+        @DisplayName("restaurant_owner: finance:read → true (PERMISSION_MATRIX fallback)")
         void restaurantOwner_financeRead_allowed() {
             User owner = userWithRole(FactoryUserRole.restaurant_owner, "R001");
             assertTrue(permissionServiceImpl.hasPermission(owner, "finance:read"),
@@ -500,15 +514,16 @@ class FinanceRbacBugFixTest {
         }
 
         @Test
-        @DisplayName("sales_manager: finance:read_write → false (not in critical override)")
+        @DisplayName("sales_manager: finance:read_write → false (matrix only grants finance:read)")
         void salesManager_financeReadWrite_denied() {
             User sm = userWithRole(FactoryUserRole.sales_manager, "F006");
+            // sales_manager has finance:read in matrix but NOT finance:read_write
             assertFalse(permissionServiceImpl.hasPermission(sm, "finance:read_write"),
-                    "sales_manager must NOT have finance:read_write — three-statements require full finance access");
+                    "sales_manager must NOT have finance:read_write");
         }
 
         @Test
-        @DisplayName("warehouse_manager: finance:read → false (no finance module access)")
+        @DisplayName("warehouse_manager: finance:read → false (no finance in matrix)")
         void warehouseManager_financeRead_denied() {
             User wm = userWithRole(FactoryUserRole.warehouse_manager, "F006");
             assertFalse(permissionServiceImpl.hasPermission(wm, "finance:read"),
@@ -524,13 +539,11 @@ class FinanceRbacBugFixTest {
         }
 
         @Test
-        @DisplayName("finance_manager: other module (warehouse:read) NOT over-granted by override")
-        void financeManager_warehouseRead_notGrantedByOverride() {
+        @DisplayName("finance_manager: warehouse:read → false (not in matrix for finance_manager)")
+        void financeManager_warehouseRead_denied() {
             User fm = userWithRole(FactoryUserRole.finance_manager, "F006");
-            // Warehouse is not in CRITICAL_PERMISSION_OVERRIDES — must fall through to PERMISSION_MATRIX
-            // PERMISSION_MATRIX has no warehouse entry for finance_manager → denied
             assertFalse(permissionServiceImpl.hasPermission(fm, "warehouse:read"),
-                    "Critical override only covers finance module — must not spill to warehouse");
+                    "finance_manager has no warehouse permission in matrix");
         }
     }
 }
