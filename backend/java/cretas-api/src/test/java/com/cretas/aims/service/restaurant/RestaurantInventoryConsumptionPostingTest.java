@@ -47,6 +47,7 @@ class RestaurantInventoryConsumptionPostingTest {
     @Mock MaterialRequisitionRepository requisitionRepository;
     @Mock WastageRecordRepository wastageRecordRepository;
     @Mock StocktakingRecordRepository stocktakingRecordRepository;
+    @Mock com.cretas.aims.service.uom.MaterialUomConverter materialUomConverter;
 
     RestaurantInventoryPostingServiceImpl service;
 
@@ -61,7 +62,8 @@ class RestaurantInventoryConsumptionPostingTest {
                 materialBatchService,
                 requisitionRepository,
                 wastageRecordRepository,
-                stocktakingRecordRepository);
+                stocktakingRecordRepository,
+                materialUomConverter);
     }
 
     @Test
