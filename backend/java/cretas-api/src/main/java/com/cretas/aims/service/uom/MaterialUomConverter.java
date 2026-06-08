@@ -187,6 +187,79 @@ public class MaterialUomConverter {
         return fallbackId != null ? fallbackId : "未知原料";
     }
 
+    // ================================================================
+    // T159-B: write-time dimensional guard
+    // ================================================================
+
+    /**
+     * 写入时维度兼容性检查 (T159-B-anchor, 2026-06-08).
+     *
+     * <p>在没有库存批次存在的写入场景 (BOM 配方新建/更新, 入库新建) 中,
+     * 校验 {@code writeUnit} 与原料<b>主数据规范单位</b> ({@link RawMaterialType#unit}) 的
+     * 计量维度是否兼容. 不同于 {@link #toComparableQuantity} (需要 stock 单位),
+     * 本方法直接拿主数据单位做标尺, 所以 <b>写入时无需已有库存批次</b>.
+     *
+     * <p><b>返回 true (允许写入)</b> 的三种情形:
+     * <ul>
+     *   <li>写入单位与主数据单位同维度 ({@link Status#CONVERTED}): 如 g vs kg, 个 vs 件</li>
+     *   <li>抄码料 ({@link Status#ABACA_SKIP}): 每箱重量不一, fail-open</li>
+     *   <li>无法判断 (materialTypeId/writeUnit 为 null/空白, 或主数据不存在): fail-open,
+     *       避免误拦合法数据</li>
+     * </ul>
+     *
+     * <p><b>返回 false (硬阻断)</b> 的唯一情形:
+     * <ul>
+     *   <li>写入单位与主数据单位<b>确定为跨维度不兼容</b> ({@link Status#UNCONVERTIBLE}),
+     *       如个 (计数) vs kg (重量). Caller 应抛 409 防呆异常.</li>
+     * </ul>
+     *
+     * @param materialTypeId  原料类型 ID; null/未知 → fail-open true
+     * @param writeUnit       要写入的单位 (BOM dto.unit 或 入库 request.quantityUnit);
+     *                        null/空白 → fail-open true
+     * @return true = 允许写入; false = 计量维度不符, 必须阻断
+     */
+    public boolean isWriteUnitCompatible(String materialTypeId, String writeUnit) {
+        // fail-OPEN: null/blank writeUnit → unknown, allow
+        if (writeUnit == null || writeUnit.isBlank()) {
+            return true;
+        }
+        // fail-OPEN: null materialTypeId → unknown, allow
+        if (materialTypeId == null) {
+            return true;
+        }
+
+        RawMaterialType material = loadMaterial(materialTypeId);
+        // fail-OPEN: material not found → unknown, allow
+        if (material == null) {
+            return true;
+        }
+
+        // ABACA_SKIP → fail-OPEN (every-box-different weight)
+        if (Boolean.TRUE.equals(material.getIsAbacaPackaging())) {
+            return true;
+        }
+
+        String canonicalUnit = material.getUnit();
+        // fail-OPEN: no canonical unit configured → allow
+        if (canonicalUnit == null || canonicalUnit.isBlank()) {
+            return true;
+        }
+
+        // Use toComparableQuantity with canonical unit as stock unit
+        // to reuse the existing g↔kg / 个↔件 / hierarchy dimension logic.
+        ConversionResult result = toComparableQuantity(materialTypeId, BigDecimal.ONE, writeUnit, canonicalUnit);
+
+        // UNCONVERTIBLE = confirmed cross-dimension mismatch → block
+        if (result.isUnconvertible()) {
+            log.debug("[UOM-WRITE] 单位维度不符 material={} canonical={} writeUnit={}",
+                    materialTypeId, canonicalUnit, writeUnit);
+            return false;
+        }
+
+        // CONVERTED or ABACA_SKIP → allow
+        return true;
+    }
+
     /**
      * 单位别名 → 规范 token 映射 (T156, 2026-06-08).
      *

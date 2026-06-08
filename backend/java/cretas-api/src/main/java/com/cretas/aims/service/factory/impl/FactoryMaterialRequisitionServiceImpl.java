@@ -116,6 +116,26 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
         }
     }
 
+    /**
+     * T159-B Change4: 优先从 RawMaterialType 主数据读取原料真实名称, BOM 快照作 fallback.
+     */
+    private String resolveLiveMaterialName(String materialTypeId, String snapshotName) {
+        if (rawMaterialTypeRepository != null && materialTypeId != null) {
+            try {
+                var mt = rawMaterialTypeRepository.findById(materialTypeId).orElse(null);
+                if (mt != null && mt.getName() != null && !mt.getName().isBlank()) {
+                    return mt.getName();
+                }
+            } catch (Exception e) {
+                log.debug("[T159] 读取原料名失败 {} ({})", materialTypeId, e.getMessage());
+            }
+        }
+        if (snapshotName != null && !snapshotName.isBlank()) {
+            return snapshotName;
+        }
+        return materialTypeId != null ? materialTypeId : "?";
+    }
+
     @Override
     @Transactional
     public FactoryMaterialRequisition generateFromPlan(String factoryId, String productionPlanId, Long requestedBy) {
@@ -194,7 +214,8 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
                     log.info("T143 抄码料 {} 物料需求单保留源单位 {}", bom.getMaterialName(), bomUnit);
                 } else {
                     // T144 安全网: BOM 单位与库存批次单位维度不可换算 (e.g. 个 vs kg) → 真实配置错误.
-                    String matName = bom.getMaterialName() != null ? bom.getMaterialName() : bom.getMaterialTypeId();
+                    // T159-B Change4: prefer live RawMaterialType.name over BOM snapshot.
+                    String matName = resolveLiveMaterialName(bom.getMaterialTypeId(), bom.getMaterialName());
                     throw new BusinessException(409,
                             String.format("原料「%s」BOM单位(%s)与库存单位(%s)无法换算，请核对单位配置",
                                     matName, bomUnit, stockUnit))
