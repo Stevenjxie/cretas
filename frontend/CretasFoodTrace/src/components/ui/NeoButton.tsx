@@ -110,7 +110,9 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     letterSpacing: 0.5,
     marginVertical: 0,
-    marginHorizontal: 0,
+    // A2: removed marginHorizontal: 0 — it collapsed the gap between RNP icon SVG
+    // and the button label text (e.g. 退出登录 danger button icon="logout" overlap).
+    // Restoring RNP default icon spacing app-wide.
   },
   content: {
     height: '100%',

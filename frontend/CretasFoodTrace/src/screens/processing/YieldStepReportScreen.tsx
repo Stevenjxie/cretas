@@ -435,13 +435,18 @@ const YieldStepReportScreen: React.FC = () => {
       appAlert('需要相册权限', '请在系统设置开启相册权限后再选图');
       return;
     }
+    // B5: allowsMultipleSelection so operators can pick several photos in one tap.
+    // The upload loop already handles arrays (uploadEvidence is called per-asset).
+    // Camera remains single-shot (custom multi-shot = out of scope).
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ['images', 'videos'],
       quality: 0.8,
       allowsEditing: false,
+      allowsMultipleSelection: true,
     });
-    if (!result.canceled && result.assets?.[0]) {
-      await uploadEvidence(result.assets[0]);
+    if (!result.canceled && result.assets && result.assets.length > 0) {
+      // Upload all selected assets in parallel
+      await Promise.all(result.assets.map((asset) => uploadEvidence(asset)));
     }
   }, [uploadEvidence]);
 
@@ -520,6 +525,11 @@ const YieldStepReportScreen: React.FC = () => {
     if (!currentTask) return;
     if (submitBlockedNoWip) {
       appAlert('请选择半成品批次', '上道有多笔半成品, 请先选择本道要领用的那一笔再提交');
+      return;
+    }
+    // B1: first-step (投入) requires at least one material batch to be selected.
+    if (isFirstStep && materialBatchRefs.length === 0) {
+      appAlert('请先选择领料批次', '首道投入需要指定领用的原料批次，请展开"领料批次 *"并选择至少一批');
       return;
     }
     if (evidenceUploading) {
@@ -1089,13 +1099,14 @@ const YieldStepReportScreen: React.FC = () => {
             <NeoCard variant="elevated" style={styles.card}>
               <Text style={styles.phaseHint}>第一步: 录入本道投入量, 领料/选半成品, 拍投料照</Text>
 
-              {/* A2b: 首道领料批次选择 (仅首道) */}
+              {/* A2b: 首道领料批次选择 (仅首道) — B1: required prop signals red asterisk */}
               {isFirstStep ? (
                 <MaterialBatchPicker
                   unit={unit}
                   value={materialBatchRefs}
                   onChange={setMaterialBatchRefs}
                   disabled={submitting}
+                  required
                 />
               ) : null}
 
@@ -1119,6 +1130,7 @@ const YieldStepReportScreen: React.FC = () => {
                 </View>
               ) : null}
 
+              {/* B4: defaultTrayWeighing pre-expands the tray calc for first-step (投入) */}
               <YieldQuantityInput
                 label="投入量"
                 value={inputQty}
@@ -1129,6 +1141,7 @@ const YieldStepReportScreen: React.FC = () => {
                 prefillNote={prefillNote}
                 disabled={submitting}
                 calculatorMode
+                defaultTrayWeighing={isFirstStep}
                 testID="yield-input-qty"
               />
 

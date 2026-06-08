@@ -33,6 +33,11 @@ interface MaterialBatchPickerProps {
   onChange: (refs: MaterialBatchRef[]) => void;
   /** 是否禁用 (提交进行中) */
   disabled?: boolean;
+  /**
+   * B1: When true the header shows a red asterisk (领料批次 *) to signal this field
+   * is required. Caller (YieldStepReportScreen first-step) passes required={true}.
+   */
+  required?: boolean;
 }
 
 /** 组件内部行状态 */
@@ -48,6 +53,7 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
   value,
   onChange,
   disabled = false,
+  required = false,
 }) => {
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -156,9 +162,12 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
         accessibilityLabel="展开/折叠领料批次选择"
       >
         <Text style={styles.headerTitle}>
-          领料批次
+          {/* B1: asterisk when required and nothing selected yet; badge when batches chosen */}
+          {'领料批次'}
           {selectedCount > 0 ? (
             <Text style={styles.badge}> · 已选 {selectedCount} 批</Text>
+          ) : required ? (
+            <Text style={styles.requiredMark}> *</Text>
           ) : (
             <Text style={styles.optional}> (可选)</Text>
           )}
@@ -183,7 +192,8 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
           ) : rows.length === 0 ? (
             <Text style={styles.emptyText}>暂无可用原料批次</Text>
           ) : (
-            <ScrollView style={styles.listScroll} nestedScrollEnabled scrollEnabled={false}>
+            // B2: removed scrollEnabled={false} — the 320dp clip was preventing scroll to lower batches
+            <ScrollView style={styles.listScroll} nestedScrollEnabled>
               {rows.map((row: RowState, idx: number) => (
                 <View
                   key={row.batch.id}
@@ -254,6 +264,7 @@ const styles = StyleSheet.create({
   headerTitle: { fontSize: 15, fontWeight: '600', color: '#303133' },
   badge: { color: '#E8732E', fontWeight: '700' },
   optional: { color: '#909399', fontWeight: '400' },
+  requiredMark: { color: '#F56C6C', fontWeight: '700' },
   chevron: { fontSize: 12, color: '#909399' },
   body: { borderTopWidth: 1, borderTopColor: '#EBEEF5', paddingHorizontal: 12, paddingTop: 10, paddingBottom: 6 },
   center: { alignItems: 'center', paddingVertical: 16 },
