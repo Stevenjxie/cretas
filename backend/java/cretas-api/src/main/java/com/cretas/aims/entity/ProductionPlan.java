@@ -14,6 +14,7 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import org.hibernate.annotations.Type;
 import org.hibernate.annotations.Where;
 /**
  * 生产计划实体类
@@ -180,6 +181,16 @@ public class ProductionPlan extends BaseEntity {
      */
     @Column(name = "source_order_id", length = 50)
     private String sourceOrderId;
+
+    /**
+     * SP5: 本计划覆盖的全部销售订单ID列表 (JSONB string array).
+     * 支持"合并计划"场景 (一张计划覆盖多张订单).
+     * 单订单场景: [sourceOrderId]; 多订单合并: [id1, id2, ...].
+     * null / 空 = 遗留数据 (未迁移).
+     */
+    @Type(io.hypersistence.utils.hibernate.type.json.JsonBinaryType.class)
+    @Column(name = "source_order_ids", columnDefinition = "jsonb")
+    private java.util.List<String> sourceOrderIds = new java.util.ArrayList<>();
 
     /**
      * 关联销售订单行ID (P0-12 字段粒度修正)

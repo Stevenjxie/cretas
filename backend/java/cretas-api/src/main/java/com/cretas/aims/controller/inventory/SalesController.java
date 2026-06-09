@@ -33,6 +33,9 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.*;
 
 import com.cretas.aims.annotation.RequirePermission;
+import com.cretas.aims.config.RequireRole;
+import com.cretas.aims.dto.pricing.GrossMarginCheckResult;
+import com.cretas.aims.service.pricing.GrossMarginRedlineService;
 
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
@@ -60,6 +63,8 @@ public class SalesController {
     // T126 Phase 1: validation dependencies for opening + new CRUD endpoints
     private final ProductTypeRepository productTypeRepository;
     private final FinishedGoodsBatchRepository finishedGoodsBatchRepository;
+    // SP5: 毛利红线校验
+    private final GrossMarginRedlineService grossMarginRedlineService;
 
     /** Sprint 5 Track C-2 — owner_type / target_type literal pinned to SalesOrder. */
     private static final String SO_ENTITY_TYPE = "SALES_ORDER";
@@ -622,6 +627,31 @@ public class SalesController {
             @PathVariable @NotBlank String factoryId) {
         Map<String, Object> stats = salesService.getSalesStatistics(factoryId);
         return ApiResponse.success("查询成功", stats);
+    }
+
+    // ==================== SP5: 毛利红线校验 ====================
+
+    /**
+     * SP5: 报价毛利红线校验.
+     *
+     * <p>校验给定品类报价是否低于毛利红线，仅返回 {@code belowRedline} + {@code warningMessage}，
+     * 不暴露 minPrice / standardCost / targetGrossMargin 等价格敏感数据。
+     */
+    @PostMapping("/check-margin")
+    @Operation(summary = "报价毛利红线校验（SP5）")
+    @RequireRole({"factory_super_admin", "sales_manager", "finance_manager"})
+    public ApiResponse<GrossMarginCheckResult> checkMargin(
+            @PathVariable @NotBlank String factoryId,
+            @RequestBody @Valid CheckMarginRequest request) {
+        GrossMarginCheckResult result = grossMarginRedlineService.checkMargin(
+                factoryId, request.productTypeId(), request.quotedPrice());
+        return ApiResponse.success("校验完成", result);
+    }
+
+    /** SP5 check-margin 请求体。 */
+    public record CheckMarginRequest(
+            @NotBlank String productTypeId,
+            @NotNull @Positive BigDecimal quotedPrice) {
     }
 
     // ==================== 内部方法 ====================
