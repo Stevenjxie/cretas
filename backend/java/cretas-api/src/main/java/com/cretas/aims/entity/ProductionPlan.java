@@ -156,6 +156,26 @@ public class ProductionPlan extends BaseEntity {
     @Column(name = "source_type", length = 30)
     private PlanSourceType sourceType = PlanSourceType.MANUAL;
 
+    // ==================== SP2 二次加工字段 ====================
+
+    /**
+     * SP2 计划来源子类型: NORMAL(默认正常生产) | SECONDARY(跨单独立二次加工).
+     * <p>不同于已有 source_type (PlanSourceType), 本字段专门标记"使用半成品库存作为原料输入"的二次加工场景.
+     * V20260910_11 新增列.
+     */
+    @Column(name = "plan_source_type", length = 30)
+    @Builder.Default
+    private String planSourceType = "NORMAL";
+
+    /**
+     * SP2 二次加工: 跨单领用的半成品库存 ID (FK → semi_finished_inventory.id).
+     * <p>开工时从该 SemiFinishedInventory 行扣减 availableQuantity.
+     * 仅 planSourceType=SECONDARY 时有值; 正常生产计划为 null.
+     * V20260910_11 新增列.
+     */
+    @Column(name = "secondary_source_wip_id")
+    private Long secondarySourceWipId;
+
     /**
      * 关联订单ID
      */

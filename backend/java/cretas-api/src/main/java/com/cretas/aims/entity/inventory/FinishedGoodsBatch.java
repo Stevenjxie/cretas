@@ -118,7 +118,19 @@ public class FinishedGoodsBatch extends BaseEntity {
     @Column(name = "warehouse_id", nullable = false, length = 64)
     private String warehouseId;
 
-    /** 状态: AVAILABLE / DEPLETED / EXPIRED / FROZEN */
+    /** 成品批次状态常量 */
+    public static final class Status {
+        public static final String AVAILABLE = "AVAILABLE";
+        public static final String DEPLETED   = "DEPLETED";
+        public static final String EXPIRED    = "EXPIRED";
+        public static final String FROZEN     = "FROZEN";
+        /** SP2 整单撤回完成后置为此状态 */
+        public static final String REVERSED   = "REVERSED";
+
+        private Status() {}
+    }
+
+    /** 状态: AVAILABLE / DEPLETED / EXPIRED / FROZEN / REVERSED(SP2撤回) */
     @Column(name = "status", nullable = false, length = 32)
     private String status = "AVAILABLE";
 
@@ -131,6 +143,13 @@ public class FinishedGoodsBatch extends BaseEntity {
     @Version
     @Column(name = "version")
     private Long version;
+
+    /**
+     * SP2 整单撤回: 关联 report_reversal_logs.id.
+     * 撤回完成后写入, 未撤回为 null. V20260910_14 新增列.
+     */
+    @Column(name = "reversal_log_id")
+    private Long reversalLogId;
 
     // ==================== 关联 ====================
 
