@@ -336,22 +336,20 @@ public class SalesServiceImpl implements SalesService {
                             // null 不阻断 strategy 应用 (per PricingRequest customerId 字段 javadoc).
                         }
                     }
-                    // F3 (Phase 4b follow-up): fool-proof "below cost" warning needs costEstimate.
-                    // Current state: ProductType has NO standardCost / unitCost field
-                    // (grep ProductType.java — only sales-side fields). MaterialBatch.unitCost
-                    // exists but is for raw materials, not finished products + would require
-                    // BOM lookup per SO line (P3 work).
-                    //
-                    // Decision: pass null until proper cost source wired (tracked as follow-up
-                    // issue). PricingEngineImpl.checkWarnings() already short-circuits on
-                    // costEstimate==null (see line 473), so warning is silently disabled,
-                    // pricing path otherwise unaffected.
-                    //
-                    // Future work (P3 enhancement):
-                    //   1. Add ProductType.standardCost (DB migration + entity field), OR
-                    //   2. Compute from BOM: sum(componentMaterial.unitCost * qty per unit), OR
-                    //   3. Pull latest MaterialBatch.unitCost via BOM mapping at query time.
-                    // See: spec §4 "fool-proof below-cost warning" + spec §10 Q1.
+                    // SP5 F3: ProductType.standardCost is now available (V20260910_43 migration).
+                    // Pass it as costEstimate so PricingEngineImpl.checkWarnings() can surface
+                    // below-cost warnings. Null guard: if standardCost not configured, pass null
+                    // and warning is silently disabled (same as pre-SP5 behaviour).
+                    java.math.BigDecimal costEstimateForLine = null;
+                    try {
+                        costEstimateForLine = productTypeRepository.findById(itemDTO.getProductTypeId())
+                                .map(com.cretas.aims.entity.ProductType::getStandardCost)
+                                .orElse(null);
+                    } catch (Exception e) {
+                        log.debug("SP5 F3: failed to resolve standardCost for productType {} — "
+                                + "below-cost check disabled for this line: {}",
+                                itemDTO.getProductTypeId(), e.getMessage());
+                    }
                     com.cretas.aims.service.pricing.PricingRequest pricingReq =
                             com.cretas.aims.service.pricing.PricingRequest.builder()
                                     .factoryId(factoryId)
@@ -363,7 +361,7 @@ public class SalesServiceImpl implements SalesService {
                                     .customerId(customerIdLong)
                                     .customerGroup(customerGroup)
                                     .productCategory(productCategory)
-                                    .costEstimate(null)  // F3: gap explicit — see comment above
+                                    .costEstimate(costEstimateForLine)  // SP5 F3: from ProductType.standardCost
                                     .businessEntityType("SO_LINE")
                                     .businessEntityId(order.getOrderNumber()
                                             + "/" + itemDTO.getProductTypeId())

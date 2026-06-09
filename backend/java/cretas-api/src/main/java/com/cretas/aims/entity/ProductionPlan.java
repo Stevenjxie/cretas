@@ -14,6 +14,7 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import org.hibernate.annotations.Type;
 import org.hibernate.annotations.Where;
 /**
  * 生产计划实体类
