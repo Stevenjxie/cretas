@@ -322,4 +322,18 @@ public class RawMaterialTypeController {
         MaterialSuggestDTO result = materialTypeService.suggestFields(factoryId, name, category);
         return ApiResponse.success(result);
     }
+
+    // ========== SP8: 按编码前缀搜索 ==========
+
+    @RequirePermission({"production:read_write"})
+    @GetMapping("/search-by-code")
+    @Operation(summary = "SP8: 按编码前缀搜索物料 (级联选择用)",
+            description = "按 code 前缀搜索原材料类型; 最多返回 50 条; 用于16位编码级联下拉验证/搜索.")
+    public ApiResponse<List<RawMaterialTypeDTO>> searchByCode(
+            @PathVariable @Parameter(description = "工厂ID", example = "F006") String factoryId,
+            @RequestParam @Parameter(description = "编码前缀", example = "001001") String q) {
+        log.info("SP8按编码前缀搜索: factoryId={}, q={}", factoryId, ErrorSanitizer.sanitize(q));
+        List<RawMaterialTypeDTO> results = materialTypeService.searchByCodePrefix(factoryId, q);
+        return ApiResponse.success(results);
+    }
 }

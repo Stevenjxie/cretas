@@ -369,6 +369,13 @@ public class BomRecipeServiceImpl implements BomRecipeService {
         // T159-B R3: UoM dimension guard at BOM write time.
         checkBomUnitCompatible(mt.get(), dto.getUnit());
 
+        // SP8: primaryCodeRef — auto-backfill from RawMaterialType.primaryCode when DTO doesn't supply it
+        if (dto.getPrimaryCodeRef() != null) {
+            item.setPrimaryCodeRef(dto.getPrimaryCodeRef());
+        } else if (mt.get().getPrimaryCode() != null) {
+            item.setPrimaryCodeRef(mt.get().getPrimaryCode());
+        }
+
         applyDtoToItem(dto, item);
         return item;
     }
@@ -388,6 +395,10 @@ public class BomRecipeServiceImpl implements BomRecipeService {
         // SP4-T3: 按份计量 + 半成品引用
         item.setPerPortion(dto.getPerPortion() != null ? dto.getPerPortion() : false);
         item.setSemiFinishedRefCode(dto.getSemiFinishedRefCode());
+        // SP8: primaryCodeRef null-guard update (only update if DTO supplies it; auto-backfill done in buildItem)
+        if (dto.getPrimaryCodeRef() != null) {
+            item.setPrimaryCodeRef(dto.getPrimaryCodeRef());
+        }
         // Cache actual_quantity + item_cost (also computable @Transient, but cached for query speed).
         item.setActualQuantity(item.calculateActualQuantity());
         item.setItemCost(item.computeItemCost());

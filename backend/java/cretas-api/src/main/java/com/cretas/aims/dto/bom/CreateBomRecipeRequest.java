@@ -124,5 +124,11 @@ public class CreateBomRecipeRequest {
         @Schema(description = "半成品引用编码, 追踪原料→半成品→成品链路 (可选)")
         @Size(max = 100, message = "半成品引用编码长度不能超过100个字符")
         private String semiFinishedRefCode;
+
+        // ========== SP8: 物料前三位主编码冗余 ==========
+
+        @Schema(description = "SP8: 物料前三位主编码 (如 001/002/003); 可选, 不传则从关联物料自动回填")
+        @Size(max = 3, message = "主编码长度不超过3个字符")
+        private String primaryCodeRef;
     }
 }

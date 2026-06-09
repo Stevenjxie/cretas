@@ -8,6 +8,7 @@ import com.cretas.aims.repository.ConversionRepository;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.MaterialPackagingHierarchyRepository;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
+import com.cretas.aims.repository.material.MaterialCodeSegmentRepository;
 import com.cretas.aims.utils.ExcelUtil;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -54,6 +55,8 @@ class RawMaterialTypeServiceTaxRateTest {
     private ConversionRepository conversionRepository;
     @Mock
     private MaterialPackagingHierarchyRepository packagingRepository;
+    @Mock
+    private MaterialCodeSegmentRepository materialCodeSegmentRepository;
     @Mock
     private ExcelUtil excelUtil;
 

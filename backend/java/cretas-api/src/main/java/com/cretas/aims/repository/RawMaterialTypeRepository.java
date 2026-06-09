@@ -114,4 +114,24 @@ public interface RawMaterialTypeRepository extends JpaRepository<RawMaterialType
            "AND r.code LIKE CONCAT(:prefix, '%') ESCAPE '\\'")
     List<String> findCodesByFactoryIdAndCodePrefix(@Param("factoryId") String factoryId,
                                                    @Param("prefix") String prefix);
+
+    /**
+     * SP8: 按16位分段编码前10位前缀检索所有已用编码 (用于生成后6位序号).
+     * prefix 为10位 segmentCode, 返回所有匹配的16位 code.
+     */
+    @Query("SELECT r.code FROM RawMaterialType r WHERE r.factoryId = :factoryId " +
+           "AND LENGTH(r.code) = 16 AND r.code LIKE CONCAT(:segmentPrefix, '%') ESCAPE '\\'")
+    List<String> findCodesByFactoryIdAndSegmentPrefix(@Param("factoryId") String factoryId,
+                                                      @Param("segmentPrefix") String segmentPrefix);
+
+    /**
+     * SP8: 按编码前缀搜索物料 (前端级联选择用).
+     * 最多返回 50 条.
+     */
+    @Query("SELECT r FROM RawMaterialType r WHERE r.factoryId = :factoryId " +
+           "AND r.code LIKE CONCAT(:codePrefix, '%') ESCAPE '\\' " +
+           "ORDER BY r.code ASC")
+    List<RawMaterialType> findByFactoryIdAndCodeStartingWith(@Param("factoryId") String factoryId,
+                                                              @Param("codePrefix") String codePrefix,
+                                                              Pageable pageable);
 }

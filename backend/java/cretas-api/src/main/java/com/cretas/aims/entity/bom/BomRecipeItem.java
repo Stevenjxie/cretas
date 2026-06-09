@@ -125,6 +125,17 @@ public class BomRecipeItem extends BaseEntity {
     @Column(name = "semi_finished_ref_code", length = 100)
     private String semiFinishedRefCode;
 
+    // ========== SP8: BOM 物料前三位主编码冗余列 ==========
+
+    /**
+     * SP8: 物料前三位主编码冗余列 (如 001/002/003).
+     * 与 materialTypeId 不替代; 仅供按类型搜索/统计.
+     * 创建时优先用 DTO 传入, 次选从关联 RawMaterialType.primaryCode 自动回填.
+     * DB: primary_code_ref VARCHAR(3) NULL
+     */
+    @Column(name = "primary_code_ref", length = 3)
+    private String primaryCodeRef;
+
     /** Back-ref to parent recipe; insertable/updatable=false because recipeId column drives FK. */
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "recipe_id", insertable = false, updatable = false)

@@ -118,4 +118,14 @@ public interface RawMaterialTypeService {
      * @return null-safe DTO (所有字段可为 null); 无任何匹配时各字段均为 null.
      */
     MaterialSuggestDTO suggestFields(String factoryId, String name, String category);
+
+    /**
+     * SP8: 按编码前缀搜索物料 (级联选择用).
+     * 最多返回 50 条; 工厂隔离.
+     *
+     * @param factoryId  工厂ID
+     * @param codePrefix 编码前缀 (如 "001001")
+     * @return 最多50条匹配物料 DTO
+     */
+    List<RawMaterialTypeDTO> searchByCodePrefix(String factoryId, String codePrefix);
 }

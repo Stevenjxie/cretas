@@ -15,6 +15,7 @@ import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.ConversionRepository;
 import com.cretas.aims.repository.MaterialPackagingHierarchyRepository;
+import com.cretas.aims.repository.material.MaterialCodeSegmentRepository;
 import com.cretas.aims.entity.MaterialPackagingHierarchy;
 import com.cretas.aims.service.RawMaterialTypeService;
 import com.cretas.aims.utils.ExcelUtil;
@@ -52,6 +53,7 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
     private final MaterialBatchRepository materialBatchRepository;
     private final ConversionRepository conversionRepository;
     private final MaterialPackagingHierarchyRepository packagingRepository;  // C-6: enrich getById with packaging
+    private final MaterialCodeSegmentRepository materialCodeSegmentRepository; // SP8: 16位分段字典
     private final ExcelUtil excelUtil;
 
     @PersistenceContext
@@ -90,11 +92,11 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
     @CacheEvict(value = "materialTypes", key = "#factoryId")
     public RawMaterialTypeDTO createMaterialType(String factoryId, RawMaterialTypeDTO dto) {
         // T159-B-codegen: auto-generate code when caller does not provide one.
-        // Mirrors ProductTypeServiceImpl.createProductType code-gen logic.
+        // SP8: if segmentCode is provided (10-digit), use 16-digit generator; else fallback SP4 flat.
         if (dto.getCode() == null || dto.getCode().trim().isEmpty()) {
-            String generated = generateNextCode(factoryId, dto.getCategory());
+            String generated = generateNextCode(factoryId, dto.getCategory(), dto.getSegmentCode());
             dto.setCode(generated);
-            log.info("自动生成原材料编码: factoryId={}, code={}", factoryId, generated);
+            log.info("自动生成原材料编码: factoryId={}, segmentCode={}, code={}", factoryId, dto.getSegmentCode(), generated);
         }
 
         log.info("创建原材料类型: factoryId={}, code={}", factoryId, dto.getCode());
@@ -135,6 +137,13 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
         materialType.setTaxIncludedUnitPrice(dto.getTaxIncludedUnitPrice());
         if (dto.getTaxRate() != null && dto.getTaxIncludedUnitPrice() != null) {
             materialType.setUnitPrice(dto.getTaxRate().preTaxPrice(dto.getTaxIncludedUnitPrice()));
+        }
+
+        // SP8: primaryCode — 优先 DTO 传入, 否则从 code 前三位自动提取
+        if (dto.getPrimaryCode() != null && !dto.getPrimaryCode().isBlank()) {
+            materialType.setPrimaryCode(dto.getPrimaryCode());
+        } else if (materialType.getCode() != null && materialType.getCode().length() >= 3) {
+            materialType.setPrimaryCode(materialType.getCode().substring(0, 3));
         }
 
         materialType = materialTypeRepository.save(materialType);
@@ -183,6 +192,11 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
         // 仅当 taxRate + taxIncludedUnitPrice 都已配置 (含本次更新后的值) 才换算
         if (materialType.getTaxRate() != null && materialType.getTaxIncludedUnitPrice() != null) {
             materialType.setUnitPrice(materialType.getTaxRate().preTaxPrice(materialType.getTaxIncludedUnitPrice()));
+        }
+
+        // SP8: primaryCode null-guard 更新
+        if (dto.getPrimaryCode() != null) {
+            materialType.setPrimaryCode(dto.getPrimaryCode());
         }
 
         materialType.setUpdatedAt(LocalDateTime.now());
@@ -452,6 +466,8 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
                 // SP4-A8: 税率 + 含税单价
                 .taxRate(materialType.getTaxRate())
                 .taxIncludedUnitPrice(materialType.getTaxIncludedUnitPrice())
+                // SP8: 前三位主编码
+                .primaryCode(materialType.getPrimaryCode())
                 .build();
     }
 
@@ -670,7 +686,7 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
     }
 
     /**
-     * 扫描工厂内该前缀的所有编码, 取最大数字后缀 +1, 零填充3位.
+     * SP4 扁平方案: 扫描工厂内该前缀的所有编码, 取最大数字后缀 +1, 零填充3位.
      * 无同前缀编码时从 001 开始.
      * 结果编码不做唯一性检查 — 调用方在写库前做 existsByFactoryIdAndCode 兜底.
      */
@@ -693,6 +709,41 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
             }
         }
         return String.format("%s%03d", prefix, maxSeq + 1);
+    }
+
+    /**
+     * SP8: 16位分段编码生成器.
+     * 当工厂已配置分段字典 AND segmentCode 为10位数字串时, 走16位路径:
+     *   前10位 = segmentCode (L3 cumulative code), 后6位 = 同前缀最大序号+1 零填充.
+     * 否则 fallback 到 SP4 扁平方案.
+     *
+     * @param factoryId   工厂ID
+     * @param category    物料类别 (fallback 路径用)
+     * @param segmentCode 前端级联选择的 L3 cumulative segment code (10位纯数字), 可为 null
+     * @return 生成的物料编码
+     */
+    String generateNextCode(String factoryId, String category, String segmentCode) {
+        // 16位路径: segmentCode 非空且为10位数字, 且工厂已配置分段字典
+        if (segmentCode != null && segmentCode.matches("[0-9]{10}")
+                && materialCodeSegmentRepository.countByFactoryIdAndLevel(factoryId, (short) 1) > 0) {
+            List<String> existing = materialTypeRepository
+                    .findCodesByFactoryIdAndSegmentPrefix(factoryId, segmentCode);
+            int maxSeq = 0;
+            for (String code : existing) {
+                if (code.length() == 16) {
+                    String seqPart = code.substring(10); // last 6 digits
+                    try {
+                        int seq = Integer.parseInt(seqPart);
+                        if (seq > maxSeq) maxSeq = seq;
+                    } catch (NumberFormatException ignored) {
+                        // skip non-numeric suffix
+                    }
+                }
+            }
+            return String.format("%s%06d", segmentCode, maxSeq + 1);
+        }
+        // Fallback: SP4 扁平方案
+        return generateNextCode(factoryId, category);
     }
 
     @Override
@@ -736,6 +787,17 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
         });
 
         return builder.build();
+    }
+
+    @Override
+    public List<RawMaterialTypeDTO> searchByCodePrefix(String factoryId, String codePrefix) {
+        if (codePrefix == null || codePrefix.isBlank()) {
+            return Collections.emptyList();
+        }
+        Pageable top50 = org.springframework.data.domain.PageRequest.of(0, 50);
+        List<RawMaterialType> types = materialTypeRepository
+                .findByFactoryIdAndCodeStartingWith(factoryId, codePrefix.trim(), top50);
+        return types.stream().map(this::convertToDTO).collect(Collectors.toList());
     }
 
     /**
