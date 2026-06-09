@@ -29,6 +29,10 @@ public interface BomRecipeRepository extends JpaRepository<BomRecipe, String> {
     Optional<BomRecipe> findByFactoryIdAndProductTypeIdAndIsCurrentTrueAndStatus(
             String factoryId, String productTypeId, Status status);
 
+    /** 取产品当前 BOM (is_current=TRUE, 不论 DRAFT/ACTIVE) — picker 软过滤用, 定义即生效无需激活仪式. */
+    Optional<BomRecipe> findByFactoryIdAndProductTypeIdAndIsCurrentTrue(
+            String factoryId, String productTypeId);
+
     /** 取产品所有版本 (含 DRAFT/ARCHIVED), 按 version DESC. */
     List<BomRecipe> findByFactoryIdAndProductTypeIdOrderByVersionDesc(
             String factoryId, String productTypeId);

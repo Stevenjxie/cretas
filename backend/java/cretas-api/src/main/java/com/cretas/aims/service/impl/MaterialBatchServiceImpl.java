@@ -560,10 +560,10 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
             return getMaterialBatchesByStatus(factoryId, status);
         }
 
-        // 1. 查产品的 ACTIVE BOM
+        // 1. 查产品的当前 BOM (is_current, 不论 DRAFT/ACTIVE — 定义即生效, 无需"激活"仪式)
         Optional<BomRecipe> activeRecipe = bomRecipeRepository
-                .findByFactoryIdAndProductTypeIdAndIsCurrentTrueAndStatus(
-                        factoryId, productTypeId, BomRecipe.Status.ACTIVE);
+                .findByFactoryIdAndProductTypeIdAndIsCurrentTrue(
+                        factoryId, productTypeId);
 
         // 2. FALLBACK: 无 ACTIVE BOM → 返回全部 (不阻断操作员)
         if (activeRecipe.isEmpty()) {
