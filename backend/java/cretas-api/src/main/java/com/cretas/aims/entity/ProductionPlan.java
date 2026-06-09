@@ -182,6 +182,16 @@ public class ProductionPlan extends BaseEntity {
     private String sourceOrderId;
 
     /**
+     * SP5: 本计划覆盖的全部销售订单ID列表 (JSONB string array).
+     * 支持"合并计划"场景 (一张计划覆盖多张订单).
+     * 单订单场景: [sourceOrderId]; 多订单合并: [id1, id2, ...].
+     * null / 空 = 遗留数据 (未迁移).
+     */
+    @Type(io.hypersistence.utils.hibernate.type.json.JsonBinaryType.class)
+    @Column(name = "source_order_ids", columnDefinition = "jsonb")
+    private java.util.List<String> sourceOrderIds = new java.util.ArrayList<>();
+
+    /**
      * 关联销售订单行ID (P0-12 字段粒度修正)
      * 客户原话 4216s: "关联销售订单产品" — 关联到行项目而非订单主表
      */

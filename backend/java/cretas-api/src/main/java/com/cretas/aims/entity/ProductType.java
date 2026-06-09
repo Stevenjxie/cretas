@@ -280,6 +280,26 @@ public class ProductType extends BaseEntity {
 
     // ==================== End SKU 组装模型 ====================
 
+    // ==================== SP5 毛利红线字段 ====================
+
+    /**
+     * SP5 gap-fill (SP3 未落): 标准单位成本 (price-sensitive).
+     * 用于毛利红线检查: minPrice = standardCost / (1 - targetGrossMargin).
+     * null = 未配置成本 (毛利检查跳过).
+     */
+    @PriceSensitive
+    @Column(name = "standard_cost", precision = 12, scale = 4)
+    private java.math.BigDecimal standardCost;
+
+    /**
+     * SP5: 产品级目标毛利率 override (0-1, e.g. 0.30 = 30%).
+     * null = 回退到工厂级 FactoryGrossMarginConfig 全局配置.
+     */
+    @Column(name = "target_gross_margin", precision = 6, scale = 4)
+    private java.math.BigDecimal targetGrossMargin;
+
+    // ==================== End SP5 毛利红线字段 ====================
+
     @Column(name = "is_active", nullable = false)
     private Boolean isActive = true;
     @Column(name = "notes", columnDefinition = "TEXT")

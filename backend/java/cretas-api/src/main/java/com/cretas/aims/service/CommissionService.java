@@ -1,5 +1,6 @@
 package com.cretas.aims.service;
 
+import com.cretas.aims.dto.pricing.CommissionPreviewDTO;
 import com.cretas.aims.entity.Commission;
 import com.cretas.aims.entity.CommissionRule;
 import com.cretas.aims.entity.Customer;
@@ -148,6 +149,67 @@ public class CommissionService {
             score += 1;
         }
         return score;
+    }
+
+    // ==================== SP5: Commission preview for sales order ====================
+
+    /**
+     * SP5: 根据订单金额 + 销售员 + 客户类型预览提成金额.
+     *
+     * <p>用于销售订单确认时向销售人员实时展示预计提成，不创建提成记录。
+     * 若有 tierConfig 配置，通过 {@link #resolveTier} 匹配阶梯费率；
+     * 否则使用 flat {@code percentage}（0-1 小数, e.g. 0.05 = 5%）。
+     *
+     * <p>commissionAmount = orderAmount × rate (HALF_UP scale 2).
+     *
+     * @param factoryId     工厂 ID (租户隔离)
+     * @param orderAmount   订单金额 (计算基数)
+     * @param salespersonId 销售人员 ID
+     * @param customerType  客户类型
+     * @param date          订单日期 (用于规则有效期过滤)
+     * @return 提成预览 DTO；若无适用规则 hasRule=false
+     */
+    @Transactional(readOnly = true)
+    public CommissionPreviewDTO previewByGrossMargin(String factoryId, BigDecimal orderAmount,
+                                                      Long salespersonId, String customerType,
+                                                      LocalDate date) {
+        Optional<CommissionRule> ruleOpt = findApplicableRule(factoryId, salespersonId, customerType, date);
+        if (ruleOpt.isEmpty()) {
+            return CommissionPreviewDTO.builder()
+                    .hasRule(false)
+                    .orderAmount(orderAmount)
+                    .build();
+        }
+
+        CommissionRule rule = ruleOpt.get();
+        BigDecimal effectiveAmount = orderAmount != null ? orderAmount : BigDecimal.ZERO;
+
+        // Resolve rate via tier or flat percentage
+        TierResolution resolved = resolveTier(effectiveAmount, rule.getTierConfig(), rule.getPercentage());
+        BigDecimal rate = resolved.rate();
+
+        // commissionAmount = orderAmount × rate (rate is 0-1 decimal, e.g. 0.05 = 5%)
+        BigDecimal commissionAmount = effectiveAmount
+                .multiply(rate)
+                .setScale(2, RoundingMode.HALF_UP);
+
+        // Build tier description if tier was matched
+        String tierDescription = null;
+        if (resolved.tierIndex() != null && rule.getTierConfig() != null
+                && resolved.tierIndex() < rule.getTierConfig().size()) {
+            java.util.Map<String, Object> tier = rule.getTierConfig().get(resolved.tierIndex());
+            Object minAmt = tier.get("minAmount");
+            tierDescription = String.format("满 %s 元适用 %.0f%% 阶梯",
+                    minAmt, rate.multiply(new BigDecimal("100")).doubleValue());
+        }
+
+        return CommissionPreviewDTO.builder()
+                .hasRule(true)
+                .commissionAmount(commissionAmount)
+                .commissionRate(rate)
+                .orderAmount(effectiveAmount)
+                .tierDescription(tierDescription)
+                .build();
     }
 
     // ==================== Auto-calculate on CLOSED_WON ====================

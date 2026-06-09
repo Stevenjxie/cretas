@@ -222,6 +222,25 @@ public class SalesOrder extends BaseEntity {
     @Column(name = "paid_amount", precision = 15, scale = 2)
     private BigDecimal paidAmount;
 
+    // ==================== SP5 提成预览字段 ====================
+
+    /**
+     * SP5: 提成预览金额 (按订单总额 × 适用提成费率预估).
+     * 仅供展示 — 不替代 Commission.amount 的结算逻辑.
+     * price-sensitive: 仅特权角色可见.
+     */
+    @PriceSensitive
+    @Column(name = "commission_preview", precision = 12, scale = 2)
+    private BigDecimal commissionPreview;
+
+    /**
+     * SP5: 套用的提成费率 (百分比, 0-100, scale=4).
+     * price-sensitive: 仅特权角色可见.
+     */
+    @PriceSensitive
+    @Column(name = "commission_rate_pct", precision = 6, scale = 4)
+    private BigDecimal commissionRatePct;
+
     /** 关联报价单ID */
     @Column(name = "quote_id", length = 191)
     private String quoteId;
