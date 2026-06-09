@@ -157,11 +157,19 @@ class MaterialBatchApiClient {
     return await apiClient.get(`${this.getPath(factoryId)}/material-type/${materialTypeId}`);
   }
 
-  // 13. 按状态获取批次
-  async getBatchesByStatus(status: string, factoryId?: string): Promise<ApiResponse<MaterialBatch[]>> {
+  // 13. 按状态获取批次 (可选 productTypeId BOM 过滤 — 防呆)
+  async getBatchesByStatus(
+    status: string,
+    factoryId?: string,
+    productTypeId?: string,
+  ): Promise<ApiResponse<MaterialBatch[]>> {
     // 后端枚举使用大写，需要转换
     const upperStatus = status.toUpperCase();
-    return await apiClient.get(`${this.getPath(factoryId)}/status/${upperStatus}`);
+    const params: Record<string, string> = {};
+    if (productTypeId) params['productTypeId'] = productTypeId;
+    return await apiClient.get(`${this.getPath(factoryId)}/status/${upperStatus}`, {
+      params: Object.keys(params).length > 0 ? params : undefined,
+    });
   }
 
   // 14. 获取FIFO批次（先进先出）

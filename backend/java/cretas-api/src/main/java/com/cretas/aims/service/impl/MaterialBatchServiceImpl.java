@@ -23,6 +23,9 @@ import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.MaterialConsumptionRepository;
 import com.cretas.aims.repository.ProductionPlanBatchUsageRepository;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
+import com.cretas.aims.repository.bom.BomRecipeItemRepository;
+import com.cretas.aims.repository.bom.BomRecipeRepository;
+import com.cretas.aims.entity.bom.BomRecipe;
 import com.cretas.aims.repository.factory.FactoryMaterialRequisitionRepository;
 import com.cretas.aims.repository.inventory.PurchaseReceiveRecordRepository;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -162,6 +165,14 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
     /** Sprint 6 W2-B: 数据权限解析器 (optional). */
     @Autowired(required = false)
     private DataScopeResolver dataScopeResolver;
+
+    /** BOM 过滤 (领料批次防呆, T-BOM-FILTER): 查产品 ACTIVE BOM. */
+    @Autowired
+    private BomRecipeRepository bomRecipeRepository;
+
+    /** BOM 过滤 (领料批次防呆, T-BOM-FILTER): 取 BOM 明细原料类型列表. */
+    @Autowired
+    private BomRecipeItemRepository bomRecipeItemRepository;
 
     // Manual constructor (Lombok @RequiredArgsConstructor not working)
     public MaterialBatchServiceImpl(
@@ -539,6 +550,61 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
                 .stream()
                 .map(materialBatchMapper::toDTO)
                 .collect(Collectors.toList());
+    }
+
+    @Override
+    public List<MaterialBatchDTO> getMaterialBatchesByStatus(String factoryId, MaterialBatchStatus status,
+                                                              String productTypeId) {
+        // 无 productTypeId → 直接走旧逻辑 (不过滤)
+        if (productTypeId == null || productTypeId.isBlank()) {
+            return getMaterialBatchesByStatus(factoryId, status);
+        }
+
+        // 1. 查产品的 ACTIVE BOM
+        Optional<BomRecipe> activeRecipe = bomRecipeRepository
+                .findByFactoryIdAndProductTypeIdAndIsCurrentTrueAndStatus(
+                        factoryId, productTypeId, BomRecipe.Status.ACTIVE);
+
+        // 2. FALLBACK: 无 ACTIVE BOM → 返回全部 (不阻断操作员)
+        if (activeRecipe.isEmpty()) {
+            log.debug("BOM 过滤 fallback: 产品 {} 无 ACTIVE BOM, 返回全部 {} 批次",
+                    productTypeId, status);
+            return getMaterialBatchesByStatus(factoryId, status);
+        }
+
+        // 3. 取 BOM 明细原料类型集合
+        List<String> materialTypeIds = bomRecipeItemRepository
+                .findByRecipeIdOrderBySortOrderAsc(activeRecipe.get().getId())
+                .stream()
+                .map(item -> item.getMaterialTypeId())
+                .collect(Collectors.toList());
+
+        // 4. FALLBACK: BOM 无明细行 → 返回全部 (不阻断操作员)
+        if (materialTypeIds.isEmpty()) {
+            log.debug("BOM 过滤 fallback: 产品 {} 的 ACTIVE BOM {} 无明细行, 返回全部批次",
+                    productTypeId, activeRecipe.get().getId());
+            return getMaterialBatchesByStatus(factoryId, status);
+        }
+
+        // 5. 按状态查全部批次, 再按 BOM 原料类型过滤
+        Set<String> bomMaterialTypeIds = new HashSet<>(materialTypeIds);
+        List<MaterialBatchDTO> filtered = materialBatchRepository
+                .findByFactoryIdAndStatus(factoryId, status)
+                .stream()
+                .filter(b -> bomMaterialTypeIds.contains(b.getMaterialTypeId()))
+                .map(materialBatchMapper::toDTO)
+                .collect(Collectors.toList());
+
+        log.debug("BOM 过滤: 产品 {} BOM 含 {} 原料类型, 从全部 AVAILABLE 批次中筛出 {} 批",
+                productTypeId, bomMaterialTypeIds.size(), filtered.size());
+
+        // 6. FALLBACK: 过滤后为空 (BOM 与现有库存无交集) → 返回全部 (不阻断操作员)
+        if (filtered.isEmpty()) {
+            log.debug("BOM 过滤 fallback: 过滤后无匹配批次 (BOM 原料与库存无交集), 返回全部批次");
+            return getMaterialBatchesByStatus(factoryId, status);
+        }
+
+        return filtered;
     }
 
     @Override

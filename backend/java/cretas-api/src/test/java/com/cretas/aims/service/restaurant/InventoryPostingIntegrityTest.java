@@ -541,6 +541,8 @@ class InventoryPostingIntegrityTest {
             @Override public List<com.cretas.aims.dto.material.MaterialBatchDTO>
             getMaterialBatchesByStatus(String f, com.cretas.aims.entity.enums.MaterialBatchStatus s) { return List.of(); }
             @Override public List<com.cretas.aims.dto.material.MaterialBatchDTO>
+            getMaterialBatchesByStatus(String f, com.cretas.aims.entity.enums.MaterialBatchStatus s, String productTypeId) { return List.of(); }
+            @Override public List<com.cretas.aims.dto.material.MaterialBatchDTO>
             getWipBatches(String f) { return List.of(); }
             @Override public List<com.cretas.aims.dto.material.MaterialBatchDTO>
             getAllWipBatches() { return List.of(); }

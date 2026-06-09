@@ -34,6 +34,12 @@ interface MaterialBatchPickerProps {
   unit: string;
   /** 当前工厂 ID (可选, 不传则 materialBatchApiClient 自动解析) */
   factoryId?: string;
+  /**
+   * 产品类型 ID (可选, 防呆 BOM 过滤).
+   * 传入时后端只返回该产品 ACTIVE BOM 中的原料类型批次;
+   * 若产品无 ACTIVE BOM 或 BOM 无明细, 后端回退返回全部 (不阻断操作员).
+   */
+  productTypeId?: string;
   /** 选中的 refs (受控) */
   value: MaterialBatchRef[];
   /** 变更回调 */
@@ -63,6 +69,7 @@ interface RowState {
 export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
   unit,
   factoryId,
+  productTypeId,
   value,
   onChange,
   singleBatchQty = '',
@@ -133,12 +140,12 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
     [value],
   );
 
-  // 加载 AVAILABLE 批次
+  // 加载 AVAILABLE 批次 (传入 productTypeId 时后端按 BOM 过滤, 无 BOM 回退全部)
   const loadBatches = useCallback(async () => {
     setLoading(true);
     setLoadError(null);
     try {
-      const res = await materialBatchApiClient.getBatchesByStatus('AVAILABLE', factoryId);
+      const res = await materialBatchApiClient.getBatchesByStatus('AVAILABLE', factoryId, productTypeId);
       if (res.success && Array.isArray(res.data)) {
         syncRowsFromValue(res.data);
         // F6: 单批次自动选中 — 不让操作工还要多点一次复选框
@@ -162,7 +169,7 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
     } finally {
       setLoading(false);
     }
-  }, [factoryId, syncRowsFromValue, value.length, unit]);
+  }, [factoryId, productTypeId, syncRowsFromValue, value.length, unit]);
 
   // 展开时加载
   useEffect(() => {
