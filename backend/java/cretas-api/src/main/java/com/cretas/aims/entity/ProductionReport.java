@@ -249,6 +249,29 @@ public class ProductionReport {
     @Column(name = "report_kind", length = 10)
     private String reportKind;
 
+    // ==================== SP1 双产出字段 ====================
+    /**
+     * SP1 产出种类: FINISHED(→成品) / SEMI(→半成品库) / BOTH(双产出) / null(旧式兼容).
+     * null = 旧式报工, postApprovedOutput 走原 WIP 路径, 向后兼容零回归。
+     */
+    @Column(name = "output_kind", length = 10)
+    private String outputKind;
+
+    /** SP1 半成品产出量 (outputKind=SEMI/BOTH 时有值); null=不入半成品库 */
+    @Column(name = "semi_output_quantity", precision = 12, scale = 2)
+    private BigDecimal semiOutputQuantity;
+
+    /** SP1 半成品产出单位 */
+    @Column(name = "semi_output_unit", length = 16)
+    private String semiOutputUnit;
+
+    /**
+     * SP1 半成品编码 (WorkProcess.semiFinishedOutputCode 继承值, 也可报工时覆盖).
+     * 对应 SemiFinishedInventory.intermediateBatchNo 的业务前缀, 实际批次号由 generateBatchNo 生成。
+     */
+    @Column(name = "semi_code", length = 50)
+    private String semiCode;
+
     /** 是否已结清 (每日结清打标) */
     @Column(name = "settled")
     @Builder.Default

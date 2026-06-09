@@ -39,6 +39,25 @@ public class YieldReportRequest {
      */
     private String reportKind;
 
+    // ==================== SP1 双产出字段 ====================
+    /**
+     * SP1 产出种类: FINISHED / SEMI / BOTH / null(旧式兼容).
+     * null → 旧路径 (普通 WIP 产出); SEMI/BOTH → 同时写 SemiFinishedInventory 台账。
+     */
+    private String outputKind;
+
+    /** SP1 半成品产出量 (outputKind=SEMI/BOTH 时填写) */
+    private BigDecimal semiOutputQuantity;
+
+    /** SP1 半成品产出单位 */
+    private String semiOutputUnit;
+
+    /**
+     * SP1 半成品编码 (可选, 不填则继承 WorkProcess.semiFinishedOutputCode).
+     * 用于指定本次产出归入哪个半成品编号前缀。
+     */
+    private String semiCode;
+
     // ==================== 传统报工适配 (适配单元1 地基; 算法在后续任务) ====================
 
     /** 图片证据 URL 列表 (前端先传 OSS 拿 URL, 存入 ProductionReport.photos) */

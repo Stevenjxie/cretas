@@ -83,4 +83,12 @@ public class WorkProcess extends BaseEntity {
     @Type(JsonType.class)
     @Column(name = "expected_byproducts", columnDefinition = "jsonb")
     private List<Map<String, Object>> expectedByproducts;
+
+    /**
+     * SP1: 本道产出的半成品编码前缀 (如 "猪舌-滚揉后");
+     * 非空时 outputKind=SEMI/BOTH 的报工可将产出写入 SemiFinishedInventory。
+     * null = 本道不产出半成品 (普通工序)。
+     */
+    @Column(name = "semi_finished_output_code", length = 50)
+    private String semiFinishedOutputCode;
 }
