@@ -108,6 +108,23 @@ public class BomRecipeItem extends BaseEntity {
     @Column(name = "remark", length = 500)
     private String remark;
 
+    // ========== SP4-T3: 按份计量标志 + 半成品引用编码 ==========
+
+    /**
+     * 该 BOM 行是否按"份"计算（true = 每份用量，默认 false = 按批次总量）。
+     * DB: per_portion BOOLEAN NOT NULL DEFAULT FALSE
+     */
+    @Column(name = "per_portion", nullable = false)
+    @Builder.Default
+    private Boolean perPortion = false;
+
+    /**
+     * 指向半成品（WIP）的引用编码，用于追踪原料→半成品→成品链路。
+     * DB: semi_finished_ref_code VARCHAR(100) NULL
+     */
+    @Column(name = "semi_finished_ref_code", length = 100)
+    private String semiFinishedRefCode;
+
     /** Back-ref to parent recipe; insertable/updatable=false because recipeId column drives FK. */
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "recipe_id", insertable = false, updatable = false)
