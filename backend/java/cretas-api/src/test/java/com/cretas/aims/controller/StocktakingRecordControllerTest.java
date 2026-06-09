@@ -4,6 +4,7 @@ import com.cretas.aims.controller.restaurant.StocktakingRecordController;
 import com.cretas.aims.entity.restaurant.StocktakingRecord;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.restaurant.StocktakingRecordRepository;
+import com.cretas.aims.service.restaurant.StocktakingRecordService;
 import com.cretas.aims.dto.common.ApiResponse;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -45,6 +46,9 @@ import static org.mockito.Mockito.when;
 class StocktakingRecordControllerTest {
 
     @Mock StocktakingRecordRepository stocktakingRepository;
+    // SP7 changed StocktakingRecordController.create() to delegate to StocktakingRecordService
+    // instead of calling stocktakingRepository.save() directly — mock required for @InjectMocks.
+    @Mock StocktakingRecordService stocktakingRecordService;
     @InjectMocks StocktakingRecordController controller;
 
     // ==================== AUD-5 B-A3: create.unit > 20 chars ====================
@@ -79,15 +83,16 @@ class StocktakingRecordControllerTest {
         StocktakingRecord record = newBaseRecord();
         record.setUnit("X".repeat(20));   // exactly at limit
 
-        // Stub out the in-progress check (returns false, allows save) + count + save.
-        when(stocktakingRepository.existsByFactoryIdAndRawMaterialTypeIdAndStatus(
-                any(), any(), any())).thenReturn(false);
-        when(stocktakingRepository.countByFactoryIdAndDate(any(), any())).thenReturn(0L);
-        when(stocktakingRepository.save(any(StocktakingRecord.class))).thenAnswer(inv -> inv.getArgument(0));
+        // SP7: controller now delegates to stocktakingRecordService.createRecord() (GAP-04-C-SYS:
+        // systemQuantity snapshot). Stub the service; the old stocktakingRepository.save() stub
+        // is no longer on the hot path.
+        StocktakingRecord saved = newBaseRecord();
+        when(stocktakingRecordService.createRecord(any(), any(StocktakingRecord.class), any()))
+                .thenReturn(saved);
 
         ApiResponse<StocktakingRecord> resp = controller.create("F001", 1L, record);
         assertNotNull(resp);
-        verify(stocktakingRepository).save(any(StocktakingRecord.class));
+        verify(stocktakingRecordService).createRecord(any(), any(StocktakingRecord.class), any());
     }
 
     @Test
@@ -96,14 +101,14 @@ class StocktakingRecordControllerTest {
         StocktakingRecord record = newBaseRecord();
         record.setUnit(null);
 
-        when(stocktakingRepository.existsByFactoryIdAndRawMaterialTypeIdAndStatus(
-                any(), any(), any())).thenReturn(false);
-        when(stocktakingRepository.countByFactoryIdAndDate(any(), any())).thenReturn(0L);
-        when(stocktakingRepository.save(any(StocktakingRecord.class))).thenAnswer(inv -> inv.getArgument(0));
+        // SP7: controller now delegates to stocktakingRecordService.createRecord().
+        StocktakingRecord saved = newBaseRecord();
+        when(stocktakingRecordService.createRecord(any(), any(StocktakingRecord.class), any()))
+                .thenReturn(saved);
 
         ApiResponse<StocktakingRecord> resp = controller.create("F001", 1L, record);
         assertNotNull(resp);
-        verify(stocktakingRepository).save(any(StocktakingRecord.class));
+        verify(stocktakingRecordService).createRecord(any(), any(StocktakingRecord.class), any());
     }
 
     // ==================== Helpers ====================
