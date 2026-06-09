@@ -58,4 +58,9 @@ public class UpdateLaborCostRequest {
     @Schema(description = "备注")
     @Size(max = 500, message = "备注长度不能超过500个字符")
     private String remark;
+
+    /** SP3: 每公斤标准人工成本 (元/kg). NULL = 未配置. */
+    @Schema(description = "SP3: 每公斤标准人工成本 (元/kg), null=未配置")
+    @PositiveOrZero(message = "每公斤人工成本必须 >= 0")
+    private BigDecimal laborCostPerKg;
 }

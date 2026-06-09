@@ -97,6 +97,10 @@ public class SalesServiceImpl implements SalesService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.service.bom.BomRecipeService bomRecipeService;
 
+    /** SP3: 成本超支阈值解析. Optional — 未注册时超支字段返 null. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.bom.CostVarianceService costVarianceService;
+
     /**
      * Issue #793: 客户协议价 lookup — auto-applies customer-specific or global selling price
      * at SO creation when caller does not explicitly set {@code unitPrice}.
@@ -737,6 +741,18 @@ public class SalesServiceImpl implements SalesService {
                 anyActualMissing = true;
             }
 
+            // SP3: 行级超支百分比
+            BigDecimal lineVariancePct = null;
+            Boolean lineBelowThreshold = null;
+            BigDecimal actualCostPerUnit = (costUnit != null && costUnit.compareTo(BigDecimal.ZERO) > 0) ? costUnit : null;
+            if (costVarianceService != null && actualCostPerUnit != null && bomUnit != null) {
+                lineVariancePct = costVarianceService.computeVariancePct(actualCostPerUnit, bomUnit);
+                if (lineVariancePct != null) {
+                    BigDecimal thresh = costVarianceService.resolveThreshold(factoryId, item.getProductTypeId());
+                    lineBelowThreshold = lineVariancePct.compareTo(thresh) <= 0;
+                }
+            }
+
             lines.add(com.cretas.aims.dto.inventory.FinanceCostBreakdown.LineCostBreakdown.builder()
                     .productId(item.getProductTypeId())
                     .productName(item.getProductName())
@@ -746,6 +762,10 @@ public class SalesServiceImpl implements SalesService {
                     .bomStandardUnitCost(bomUnit)
                     .bomStandardLineCost(bomLine)
                     .actualLineCost(actualLine)
+                    .standardCostPerUnit(bomUnit)
+                    .actualCostPerUnit(actualCostPerUnit)
+                    .variancePct(lineVariancePct)
+                    .belowThreshold(lineBelowThreshold)
                     .build());
         }
 
@@ -785,6 +805,28 @@ public class SalesServiceImpl implements SalesService {
         }
         String hintStr = hint.length() > 0 ? hint.toString().trim() : null;
 
+        // SP3: 订单级超支计算
+        java.math.BigDecimal orderVariancePct = null;
+        java.math.BigDecimal orderVarianceAbsolute = null;
+        Boolean orderBelowThreshold = null;
+        String orderAlarmMessage = null;
+        if (costVarianceService != null && actualCost != null && bomStandardCost != null) {
+            orderVariancePct = costVarianceService.computeVariancePct(actualCost, bomStandardCost);
+            if (orderVariancePct != null) {
+                orderVarianceAbsolute = actualCost.subtract(bomStandardCost);
+                // 订单级阈值用第一行产品类型作为 hint (或 null → 工厂全局)
+                String firstProductTypeId = order.getItems().isEmpty() ? null
+                        : order.getItems().get(0).getProductTypeId();
+                java.math.BigDecimal thresh = costVarianceService.resolveThreshold(factoryId, firstProductTypeId);
+                orderBelowThreshold = orderVariancePct.compareTo(thresh) <= 0;
+                if (Boolean.FALSE.equals(orderBelowThreshold)) {
+                    orderAlarmMessage = String.format(
+                            "实际成本超支 %.2f%% (阈值 %.2f%%), 超支金额 ¥%.2f",
+                            orderVariancePct, thresh, orderVarianceAbsolute);
+                }
+            }
+        }
+
         return com.cretas.aims.dto.inventory.FinanceCostBreakdown.builder()
                 .totalAmount(totalAmount)
                 .bomStandardCost(bomStandardCost)
@@ -795,6 +837,10 @@ public class SalesServiceImpl implements SalesService {
                 .profitMarginEstimated(marginEst)
                 .profitMarginActual(marginAct)
                 .dataSourceHint(hintStr)
+                .varianceAbsolute(orderVarianceAbsolute)
+                .variancePct(orderVariancePct)
+                .belowThreshold(orderBelowThreshold)
+                .alarmMessage(orderAlarmMessage)
                 .lines(lines)
                 .build();
     }

@@ -101,6 +101,16 @@ public class LaborCostConfig extends BaseEntity {
     private String remark;
 
     /**
+     * SP3: 每公斤标准人工成本 (元/kg).
+     *
+     * <p>用于 BOM 标准成本引擎的 per-kg 折算基准. NULL = 未配置 (诚实 gap).
+     * 标记 @PriceSensitive — 仅 finance:read 角色可见.
+     */
+    @PriceSensitive
+    @Column(name = "labor_cost_per_kg", precision = 15, scale = 4)
+    private BigDecimal laborCostPerKg;
+
+    /**
      * 计算人工成本
      * 成本 = 单价 * 数量
      */
