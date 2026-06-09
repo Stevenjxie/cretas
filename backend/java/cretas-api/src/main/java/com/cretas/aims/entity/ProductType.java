@@ -205,6 +205,15 @@ public class ProductType extends BaseEntity {
     @Column(name = "wip_to_fg_yield", precision = 5, scale = 4)
     private java.math.BigDecimal wipToFgYield;
 
+    /**
+     * SP9-M1: 研发预估人工成本(元/kg成品).
+     * <p>null = 未填写; 前端必须显示"-"而非"0"; 不可将 null 解释为成本为零.</p>
+     * <p>精度 NUMERIC(12,4) 与 CostRollupUtil 一致.</p>
+     */
+    @PriceSensitive
+    @Column(name = "quoted_labor_cost_per_kg", precision = 12, scale = 4)
+    private java.math.BigDecimal quotedLaborCostPerKg;
+
     /** 库存预警值 */
     @Column(name = "inventory_warning_threshold", precision = 15, scale = 2)
     private java.math.BigDecimal inventoryWarningThreshold;

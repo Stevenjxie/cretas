@@ -58,6 +58,9 @@ public class ProductTypeDTO {
     @Schema(description = "T133 半成品→成品出成率 (0~1 乘数; null=备货看板按 1.0 即偏乐观; 如 0.55 表示 55% 出成率)")
     private BigDecimal wipToFgYield;
 
+    @Schema(description = "SP9-M1 研发预估人工成本(元/kg成品); null=未填, 前端显示'-'; @PriceSensitive")
+    private BigDecimal quotedLaborCostPerKg;
+
     @Schema(description = "T123 一级单位(大包装, 如 筐/框/箱), 与 boxConversionCoefficient 联用")
     private String level1Unit;
 
