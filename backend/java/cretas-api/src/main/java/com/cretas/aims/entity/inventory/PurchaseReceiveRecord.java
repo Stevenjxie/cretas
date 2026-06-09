@@ -5,6 +5,8 @@ import com.cretas.aims.entity.Factory;
 import com.cretas.aims.entity.Supplier;
 import com.cretas.aims.entity.User;
 import com.cretas.aims.entity.enums.PurchaseReceiveStatus;
+import com.cretas.aims.entity.enums.ReceiveDecisionStatus;
+import com.cretas.aims.entity.enums.ReceiveExceptionType;
 import com.cretas.aims.security.PriceSensitive;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import io.hypersistence.utils.hibernate.type.json.JsonBinaryType;
@@ -103,6 +105,30 @@ public class PurchaseReceiveRecord extends BaseEntity {
 
     @Column(name = "remark", columnDefinition = "TEXT")
     private String remark;
+
+    // ==================== SP6: 收货异常 ====================
+
+    /**
+     * SP6 — 收货异常类型（超收 / 少收）。null = 正常收货。
+     * 系统在 confirmReceive 时根据 PO 数量 vs 实收数量自动推算并写入。
+     */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "exception_type", length = 32)
+    private ReceiveExceptionType exceptionType;
+
+    /**
+     * SP6 — 异常数量（超收为正，少收为正绝对值）。
+     */
+    @Column(name = "exception_qty", precision = 15, scale = 4)
+    private BigDecimal exceptionQty;
+
+    /**
+     * SP6 — 异常决策状态（待决策 / 已接受 / 已退回）。
+     * null = 无异常；有异常单 PurchaseException 决策后同步更新至此。
+     */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "decision_status", length = 32)
+    private ReceiveDecisionStatus decisionStatus;
 
     // ==================== 关联 ====================
 
