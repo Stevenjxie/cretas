@@ -1,5 +1,7 @@
 package com.cretas.aims.dto.material;
 
+import com.cretas.aims.entity.enums.TaxRate;
+import com.cretas.aims.security.PriceSensitive;
 import com.fasterxml.jackson.annotation.JsonAlias;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import lombok.AllArgsConstructor;
@@ -70,4 +72,19 @@ public class RawMaterialTypeDTO {
     // null 表示该 material 没配置包装 — 前端 boxQuantity computed 表达式必须 null-guard.
     private BigDecimal level1PerLevel2;
     private String level2Unit;
+
+    // ========== SP4-A8: 税率 + 含税单价 ==========
+    /**
+     * SP4-A8: 采购税率枚举 (TAX_9 / TAX_13).
+     * 创建/更新时传入此值 + taxIncludedUnitPrice → service 自动换算 unitPrice (未税).
+     * null = 未配置, 不触发换算.
+     */
+    private TaxRate taxRate;
+
+    /**
+     * SP4-A8: 含税单价 (发票价). Price-sensitive: 同 unitPrice.
+     * service 层在 taxRate 非 null 时自动换算 → unitPrice (未税).
+     */
+    @PriceSensitive
+    private BigDecimal taxIncludedUnitPrice;
 }
