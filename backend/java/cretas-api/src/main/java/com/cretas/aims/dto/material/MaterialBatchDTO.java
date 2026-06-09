@@ -132,6 +132,14 @@ public class MaterialBatchDTO {
     @Schema(description = "备注")
     private String notes;
 
+    /** SP4-A4: 生产厂家编号，用于一物一码标签 */
+    @Schema(description = "生产厂家编号 (SP4-A4)")
+    private String factoryNumber;
+
+    /** SP4-A4: 产地，用于一物一码标签 */
+    @Schema(description = "产地 (SP4-A4)")
+    private String originPlace;
+
     @Schema(description = "创建人ID")
     private Long createdBy;
 

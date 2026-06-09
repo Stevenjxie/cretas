@@ -109,4 +109,14 @@ public class CreateMaterialBatchRequest {
      */
     @Schema(description = "Canvas 动态字段值 (Round 9 Fix)")
     private Map<String, Object> customFields;
+
+    /** SP4-A4: 生产厂家编号，用于一物一码标签 */
+    @Schema(description = "生产厂家编号 (SP4-A4, 可选)", example = "GY-2026-001")
+    @Size(max = 100, message = "厂家编号不能超过100个字符")
+    private String factoryNumber;
+
+    /** SP4-A4: 产地，用于一物一码标签 */
+    @Schema(description = "产地 (SP4-A4, 可选)", example = "山东省青岛市")
+    @Size(max = 200, message = "产地不能超过200个字符")
+    private String originPlace;
 }

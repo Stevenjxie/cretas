@@ -129,6 +129,20 @@ public class MaterialBatch extends BaseEntity {
     @Column(name = "notes", columnDefinition = "TEXT")
     private String notes;
 
+    /**
+     * SP4-A4: 生产厂家编号 (factory_number) — 用于一物一码标签.
+     * Nullable; 六扇门仓管入库时填写供应商厂家批号.
+     */
+    @Column(name = "factory_number", length = 100)
+    private String factoryNumber;
+
+    /**
+     * SP4-A4: 产地 (origin_place) — 用于一物一码标签.
+     * Nullable; 例如"山东省青岛市". 最长 200 字符.
+     */
+    @Column(name = "origin_place", length = 200)
+    private String originPlace;
+
     /** 入库类型 */
     @Enumerated(EnumType.STRING)
     @Column(name = "inbound_type", length = 30)
