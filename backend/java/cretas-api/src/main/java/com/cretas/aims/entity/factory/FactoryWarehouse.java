@@ -104,6 +104,8 @@ public class FactoryWarehouse extends BaseEntity {
         /** 委外仓 - 委外加工方持有的物料 */
         OUTSOURCE,
         /** 调拨在途仓 - 跨厂 / 跨仓库调拨中物料 */
-        TRANSFER
+        TRANSFER,
+        /** 盐化仓 - 盐水/腌制工序专属仓库，独立出量记录 (SP7 §3.1) */
+        SALTED
     }
 }
