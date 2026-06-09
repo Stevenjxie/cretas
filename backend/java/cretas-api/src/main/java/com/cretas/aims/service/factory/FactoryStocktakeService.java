@@ -107,4 +107,24 @@ public interface FactoryStocktakeService {
      * @return 盘点任务 DTO
      */
     StocktakeDTO getDetail(String stocktakeId, String factoryId);
+
+    /**
+     * SP12 §5.2: 提交审批并启动 INVENTORY_ADJUSTMENT workflow。
+     * 替代旧的 submit()，状态 COUNTING/INITIATED/REJECTED → PENDING_APPROVAL + workflowInstanceId 设置。
+     *
+     * @param stocktakeId 盘点任务 ID
+     * @param factoryId   工厂 ID
+     * @param userId      提交人 ID
+     * @return workflowInstanceId (供前端跳转审批中心)
+     */
+    String submitForApproval(String stocktakeId, String factoryId, Long userId);
+
+    /**
+     * SP12 §5.2: 仅供 workflow callback 调用 — 审批通过后执行盘点调账 (APPROVED → APPLIED)。
+     * 不对外暴露 REST 端点，只能被 WorkflowEngineService onApproved callback 触发。
+     * 红线 §7.R1: 校验 workflowInstanceId 不为 null 且实例状态 APPROVED，否则 403。
+     *
+     * @param stocktakeId 盘点任务 ID
+     */
+    void executeAdjustment(String stocktakeId);
 }

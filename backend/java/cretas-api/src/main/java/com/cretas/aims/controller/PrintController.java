@@ -1,9 +1,13 @@
 package com.cretas.aims.controller;
 
 import com.cretas.aims.annotation.RequirePermission;
+import com.cretas.aims.dto.production.ProductionPlanDTO;
 import com.cretas.aims.dto.template.PrintPreviewTemplateRequest;
+import com.cretas.aims.entity.factory.FactoryMaterialRequisition;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.security.PriceMaskResolver;
+import com.cretas.aims.service.ProductionPlanService;
+import com.cretas.aims.service.factory.FactoryMaterialRequisitionService;
 import jakarta.validation.Valid;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -17,6 +21,7 @@ import org.springframework.web.bind.annotation.*;
 import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestTemplate;
 
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -83,6 +88,14 @@ public class PrintController {
     private final RestTemplate pythonRestTemplate;
     private final String pythonBaseUrl;
     private final PriceMaskResolver priceMaskResolver;
+
+    /** Optional: 生产计划服务 (SP12 T8 公单打印取数). */
+    @Autowired(required = false)
+    private ProductionPlanService productionPlanService;
+
+    /** Optional: 物料需求单服务 (SP12 T8 汇总领料单取数). */
+    @Autowired(required = false)
+    private FactoryMaterialRequisitionService factoryMaterialRequisitionService;
 
     @Autowired
     public PrintController(
@@ -217,6 +230,48 @@ public class PrintController {
             @RequestHeader(value = "Authorization", required = false) String authorization) {
         Map<String, Object> payload = buildPackingListPayload(factoryId, id, overrides);
         return proxyToPython("packing-list", payload, "packing-list-" + id, authorization);
+    }
+
+    // ==================== SP12 T8 — 2 新端点: 公单 + 汇总领料单 ====================
+
+    /**
+     * 生产工单 (公单) PDF (SP12 T8).
+     *
+     * <p>按计划 ID 拉取计划详情 + 工序列表，组装后 POST 到 Python 渲染。
+     * 不含金额字段 (工序/数量/工时 only), 仅 RBAC 门禁即可。
+     *
+     * <p>G4 要求: ProductionPlanService.getProductionPlanById + 工序列表 + 汇总材料.
+     */
+    @GetMapping("/production-work-order/{planId}")
+    @RequirePermission({"production:read", "production:read_write"})
+    public ResponseEntity<byte[]> printProductionWorkOrder(
+            @PathVariable String factoryId,
+            @PathVariable String planId,
+            @RequestParam(required = false) Map<String, String> overrides,
+            @RequestHeader(value = "Authorization", required = false) String authorization) {
+        Map<String, Object> payload = buildProductionWorkOrderPayload(factoryId, planId, overrides);
+        return proxyToPython("production-work-order", payload, "work-order-" + planId, authorization);
+    }
+
+    /**
+     * 汇总领料单 PDF (SP12 T8).
+     *
+     * <p>跨批次汇总同一计划下所有领料需求，POST 到 Python 渲染。
+     * 不含金额字段 (物料/数量/规格 only), 仅 RBAC 门禁即可.
+     *
+     * <p>G4 要求: FactoryMaterialRequisitionService.listByPlan 跨批次汇总.
+     */
+    @GetMapping("/consolidated-material-requisition/{planId}")
+    @RequirePermission({"production:read", "production:read_write",
+            "warehouse:read", "warehouse:read_write"})
+    public ResponseEntity<byte[]> printConsolidatedMaterialRequisition(
+            @PathVariable String factoryId,
+            @PathVariable String planId,
+            @RequestParam(required = false) Map<String, String> overrides,
+            @RequestHeader(value = "Authorization", required = false) String authorization) {
+        Map<String, Object> payload = buildConsolidatedMaterialRequisitionPayload(factoryId, planId, overrides);
+        return proxyToPython("consolidated-material-requisition", payload,
+                "consolidated-req-" + planId, authorization);
     }
 
     // ==================== C-PRT-EDITOR-1 (Sprint 3 Track-J) ====================
@@ -530,6 +585,114 @@ public class PrintController {
         p.put("weightUnit", or(overrides, "weightUnit", "kg"));
         p.put("remark", or(overrides, "remark", null));
         p.put("cartons", java.util.List.of());
+        return p;
+    }
+
+    // ==================== SP12 T8 — payload builders ====================
+
+    /**
+     * 生产工单 payload builder.
+     *
+     * <p>尽量从 {@link ProductionPlanService} 取真实数据; service 未注入时 fallback 到 stub.
+     * 工序列表 (processes) 由 Python 模板渲染, 后续 PR 可从 ProductionBatch.getWorkProcessTasks() 填入.
+     */
+    private Map<String, Object> buildProductionWorkOrderPayload(
+            String factoryId, String planId, Map<String, String> overrides) {
+        Map<String, Object> p = new HashMap<>();
+        p.put("factoryName", or(overrides, "factoryName", "白垩纪食品 — " + factoryId));
+        p.put("planId", planId);
+
+        if (productionPlanService != null) {
+            try {
+                ProductionPlanDTO plan = productionPlanService.getProductionPlanById(factoryId, planId);
+                p.put("planNumber", plan.getPlanNumber() != null ? plan.getPlanNumber() : planId);
+                p.put("productName", plan.getProductName() != null ? plan.getProductName() : "(产品)");
+                p.put("productUnit", plan.getProductUnit() != null ? plan.getProductUnit() : "kg");
+                p.put("plannedQuantity", plan.getPlannedQuantity() != null
+                        ? plan.getPlannedQuantity().toPlainString() : "0");
+                p.put("status", plan.getStatus() != null ? plan.getStatus().name() : "-");
+                p.put("plannedDate", plan.getPlannedDate() != null
+                        ? plan.getPlannedDate().toString()
+                        : java.time.LocalDate.now().toString());
+                p.put("expectedCompletionDate", plan.getExpectedCompletionDate() != null
+                        ? plan.getExpectedCompletionDate().toString() : "-");
+            } catch (Exception e) {
+                log.warn("printProductionWorkOrder: failed to load plan {} — using stub data: {}",
+                        planId, e.getMessage());
+                fillProductionWorkOrderStub(p, planId, overrides);
+            }
+        } else {
+            fillProductionWorkOrderStub(p, planId, overrides);
+        }
+
+        // 工序列表: 后续 PR 从 ProductionBatch WorkProcessTask 取
+        p.put("processes", java.util.List.of());
+        p.put("remark", or(overrides, "remark", null));
+        return p;
+    }
+
+    private void fillProductionWorkOrderStub(Map<String, Object> p, String planId,
+            Map<String, String> overrides) {
+        p.put("planNumber", or(overrides, "planNumber", planId));
+        p.put("productName", or(overrides, "productName", "(产品)"));
+        p.put("productUnit", or(overrides, "productUnit", "kg"));
+        p.put("plannedQuantity", or(overrides, "plannedQuantity", "0"));
+        p.put("status", or(overrides, "status", "-"));
+        p.put("plannedDate", or(overrides, "plannedDate",
+                java.time.LocalDate.now().toString()));
+        p.put("expectedCompletionDate", or(overrides, "expectedCompletionDate", "-"));
+    }
+
+    /**
+     * 汇总领料单 payload builder.
+     *
+     * <p>从 {@link FactoryMaterialRequisitionService#listByPlan} 跨批次汇总同一计划下的所有领料需求.
+     * service 未注入时 fallback 到 stub.
+     */
+    private Map<String, Object> buildConsolidatedMaterialRequisitionPayload(
+            String factoryId, String planId, Map<String, String> overrides) {
+        Map<String, Object> p = new HashMap<>();
+        p.put("factoryName", or(overrides, "factoryName", "白垩纪食品 — " + factoryId));
+        p.put("planId", planId);
+        p.put("printDate", java.time.LocalDate.now().toString());
+
+        // 尝试从生产计划取产品名
+        if (productionPlanService != null) {
+            try {
+                ProductionPlanDTO plan = productionPlanService.getProductionPlanById(factoryId, planId);
+                p.put("planNumber", plan.getPlanNumber() != null ? plan.getPlanNumber() : planId);
+                p.put("productName", plan.getProductName() != null ? plan.getProductName() : "(产品)");
+            } catch (Exception e) {
+                log.warn("printConsolidatedMaterialRequisition: plan {} not found: {}", planId, e.getMessage());
+                p.put("planNumber", or(overrides, "planNumber", planId));
+                p.put("productName", or(overrides, "productName", "(产品)"));
+            }
+        } else {
+            p.put("planNumber", or(overrides, "planNumber", planId));
+            p.put("productName", or(overrides, "productName", "(产品)"));
+        }
+
+        // 跨批次汇总领料单明细
+        List<Map<String, Object>> items = new ArrayList<>();
+        if (factoryMaterialRequisitionService != null) {
+            try {
+                List<FactoryMaterialRequisition> requisitions =
+                        factoryMaterialRequisitionService.listByPlan(factoryId, planId);
+                int requisitionCount = requisitions != null ? requisitions.size() : 0;
+                p.put("requisitionCount", requisitionCount);
+                // 后续 PR: 展开 requisitions[].items 按 materialTypeId 汇总, 消除重复行
+                // 当前 MVP: items 留空, Python 模板展示 requisitionCount + planId 即可
+            } catch (Exception e) {
+                log.warn("printConsolidatedMaterialRequisition: failed to load requisitions for plan {}: {}",
+                        planId, e.getMessage());
+                p.put("requisitionCount", 0);
+            }
+        } else {
+            p.put("requisitionCount", 0);
+        }
+
+        p.put("items", items);
+        p.put("remark", or(overrides, "remark", null));
         return p;
     }
 

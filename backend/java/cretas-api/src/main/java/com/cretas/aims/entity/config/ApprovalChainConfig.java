@@ -206,6 +206,13 @@ public class ApprovalChainConfig extends BaseEntity {
          */
         WORK_ORDER_APPROVAL,
 
+        /**
+         * 生产撤回审批 (SP12 T2 新增) —— 生产计划已完成后申请撤回/重置.
+         * 六扇门红线: 撤回操作必须主管审批, 不允许操作员自主执行.
+         * 接入: ProductionPlanServiceImpl.requestCancelWithApproval
+         */
+        PRODUCTION_REVERSAL_APPROVAL,
+
         // ============================================
         // 质检 / 物料 类 (quality / material)
         // ============================================

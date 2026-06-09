@@ -148,4 +148,43 @@ public class PaymentRequest extends BaseEntity {
 
     @Column(name = "cancelled_at")
     private LocalDateTime cancelledAt;
+
+    // ─── SP12 §5.4 工作流字段 ──────────────────────────────────────────────────
+
+    /**
+     * SP12 §5.4: 工作流实例 ID，关联 ApprovalWorkflowInstance.id。
+     * 通过 submitForApproval() 设置。
+     */
+    @Column(name = "workflow_instance_id", length = 191)
+    private String workflowInstanceId;
+
+    /**
+     * SP12 §5.4: 付款用途分类（如 RAW_MATERIAL_PURCHASE / SERVICE_FEE / EQUIPMENT）。
+     */
+    @Column(name = "purpose_code", length = 50)
+    private String purposeCode;
+
+    /**
+     * SP12 §5.4: 付款用途详细说明。
+     */
+    @Column(name = "purpose_description", columnDefinition = "TEXT")
+    private String purposeDescription;
+
+    /**
+     * SP12 §5.4: 收款方姓名/公司名。
+     */
+    @Column(name = "payee_name", length = 200)
+    private String payeeName;
+
+    /**
+     * SP12 §5.4: 预计付款截止日期。
+     */
+    @Column(name = "due_date")
+    private LocalDateTime dueDate;
+
+    /**
+     * SP12 §5.4: 提交人 userId（提交至工作流时设置）。
+     */
+    @Column(name = "submitted_by")
+    private Long submittedBy;
 }

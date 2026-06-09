@@ -98,6 +98,10 @@ public class FactoryStocktake extends BaseEntity {
     @Column(name = "notes", columnDefinition = "TEXT")
     private String notes;
 
+    /** SP12 §5.2: 工作流实例 ID，关联 ApprovalWorkflowInstance.id */
+    @Column(name = "workflow_instance_id", length = 191)
+    private String workflowInstanceId;
+
     @OneToMany(mappedBy = "stocktake", cascade = CascadeType.ALL, orphanRemoval = true, fetch = FetchType.LAZY)
     private List<FactoryStocktakeItem> items = new ArrayList<>();
 }

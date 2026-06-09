@@ -51,4 +51,17 @@ public interface PaymentRequestService {
 
     /** 查询某工厂已审批等待付款的申请单（出纳视图） */
     List<PaymentRequest> listApprovedForPayment(String factoryId);
+
+    /**
+     * SP12 §5.4: 提交付款申请单至审批工作流。
+     *
+     * <p>前置条件：申请单处于 PENDING 状态且 {@code workflowInstanceId == null}。
+     * 重复提交（已有 workflowInstanceId）→ 409。状态不对 → 400。
+     *
+     * @param requestId 申请单 ID
+     * @param factoryId 工厂 ID
+     * @param userId 提交人 userId
+     * @return 工作流实例 ID（引擎不可用时返回 null）
+     */
+    String submitForApproval(String requestId, String factoryId, Long userId);
 }

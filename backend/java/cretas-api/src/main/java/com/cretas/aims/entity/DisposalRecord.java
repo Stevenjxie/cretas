@@ -156,6 +156,13 @@ public class DisposalRecord extends BaseEntity {
     @Builder.Default
     private Boolean isApproved = false;
 
+    /**
+     * SP12 §5.3: 工作流实例 ID，关联 ApprovalWorkflowInstance.id。
+     * 非空时表示已通过审批工作流审批；直接调用 approveDisposal() 绕过流程时保持 null。
+     */
+    @Column(name = "workflow_instance_id", length = 191)
+    private String workflowInstanceId;
+
     // ===================================================================
     // 关联关系
     // ===================================================================

@@ -11,9 +11,12 @@ import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.SupplierRepository;
 import com.cretas.aims.repository.finance.ArApTransactionRepository;
 import com.cretas.aims.repository.inventory.PaymentRequestRepository;
+import com.cretas.aims.entity.workflow.ApprovalWorkflowInstance;
 import com.cretas.aims.service.inventory.PaymentRequestService;
+import com.cretas.aims.service.workflow.WorkflowEngineService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -22,6 +25,7 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
+import java.util.Map;
 
 /**
  * 付款申请单 Service 实现（SP6 P0）
@@ -41,6 +45,10 @@ public class PaymentRequestServiceImpl implements PaymentRequestService {
     private final PaymentRequestRepository paymentRequestRepository;
     private final ArApTransactionRepository arApTransactionRepository;
     private final SupplierRepository supplierRepository;
+
+    /** SP12 §5.4: 可选工作流引擎（无配置时降级运行，不抛 NPE）。 */
+    @Autowired(required = false)
+    private WorkflowEngineService workflowEngine;
 
     // ─── 活跃状态（幂等性检查用） ────────────────────────────────────────────
 
@@ -208,6 +216,61 @@ public class PaymentRequestServiceImpl implements PaymentRequestService {
     public List<PaymentRequest> listApprovedForPayment(String factoryId) {
         return paymentRequestRepository.findByFactoryIdAndStatusOrderByApprovedAtAsc(
                 factoryId, PaymentRequestStatus.APPROVED);
+    }
+
+    // ─── submitForApproval (SP12 §5.4) ───────────────────────────────────────
+
+    /**
+     * SP12 §5.4: 提交付款申请单至审批工作流。
+     *
+     * <p>前置条件：申请单处于 PENDING 状态且 {@code workflowInstanceId == null}。
+     * 重复提交（已有 workflowInstanceId）→ 409。状态不对 → 400。
+     *
+     * @param requestId 申请单 ID
+     * @param factoryId 工厂 ID
+     * @param userId    提交人 userId
+     * @return 工作流实例 ID（引擎不可用时返回 null）
+     */
+    @Override
+    @Transactional
+    public String submitForApproval(String requestId, String factoryId, Long userId) {
+        PaymentRequest pr = paymentRequestRepository.findById(requestId)
+                .orElseThrow(() -> new BusinessException(404, "付款申请单不存在: " + requestId));
+
+        // 幂等防重：已在工作流中则 409
+        if (pr.getWorkflowInstanceId() != null) {
+            throw new BusinessException(409, "付款申请单已提交工作流: " + pr.getWorkflowInstanceId());
+        }
+
+        // 前置状态检查：必须是 PENDING
+        if (pr.getStatus() != PaymentRequestStatus.PENDING) {
+            throw new BusinessException(400, "只有 PENDING 状态的申请单可以提交工作流（当前: " + pr.getStatus() + "）");
+        }
+
+        String instanceId = null;
+        if (workflowEngine != null) {
+            try {
+                Map<String, Object> context = Map.of(
+                        "requestId", requestId,
+                        "factoryId", factoryId,
+                        "amount", pr.getAmount().toPlainString(),
+                        "supplierId", pr.getSupplierId() != null ? pr.getSupplierId() : ""
+                );
+                ApprovalWorkflowInstance instance = workflowEngine.startWorkflow(
+                        factoryId, "PAYMENT_APPROVAL", requestId, context, userId);
+                if (instance != null) {
+                    instanceId = instance.getId();
+                    pr.setWorkflowInstanceId(instanceId);
+                }
+            } catch (Exception e) {
+                log.warn("启动付款审批工作流失败 (requestId={}), 降级处理: {}", requestId, e.getMessage());
+            }
+        }
+
+        pr.setSubmittedBy(userId);
+        paymentRequestRepository.save(pr);
+        log.info("[SP12] 付款申请单 {} 已提交审批: instanceId={}", pr.getRequestNumber(), instanceId);
+        return instanceId;
     }
 
     // ─── 私有辅助 ─────────────────────────────────────────────────────────────

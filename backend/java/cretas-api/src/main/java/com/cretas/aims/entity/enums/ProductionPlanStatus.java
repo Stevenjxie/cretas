@@ -38,7 +38,15 @@ public enum ProductionPlanStatus {
      /**
       * 暂停
       */
-    PAUSED("暂停", "生产暂时停止");
+    PAUSED("暂停", "生产暂时停止"),
+     /**
+      * 待审批 (SP12 T3 生产撤回审批流).
+      *
+      * <p>已完成计划申请撤回/取消时进入此状态，由 WorkflowEngineService
+      * 驱动 PRODUCTION_REVERSAL 审批流。审批通过 → CANCELLED；审批拒绝 → COMPLETED。
+      * 六扇门红线：操作员不可直接撤回已完成计划，必须主管审批。
+      */
+    PENDING_APPROVAL("待审批", "已申请撤回/取消，等待主管审批");
     private final String displayName;
     private final String description;
     ProductionPlanStatus(String displayName, String description) {

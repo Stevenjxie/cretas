@@ -1,9 +1,13 @@
 package com.cretas.aims.service;
 
 import com.cretas.aims.entity.DisposalRecord;
+import com.cretas.aims.entity.workflow.ApprovalWorkflowInstance;
+import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.DisposalRecordRepository;
+import com.cretas.aims.service.workflow.WorkflowEngineService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
@@ -31,6 +35,10 @@ import java.util.Optional;
 public class DisposalRecordService implements IDisposalRecordService {
 
     private final DisposalRecordRepository disposalRecordRepository;
+
+    /** SP12 §5.3: 可选工作流引擎（无配置时降级运行，不抛 NPE）。 */
+    @Autowired(required = false)
+    private WorkflowEngineService workflowEngine;
 
     /**
      * 创建报废记录
@@ -202,5 +210,43 @@ public class DisposalRecordService implements IDisposalRecordService {
         record.softDelete();
         disposalRecordRepository.save(record);
         log.info("删除报废记录: id={}", id);
+    }
+
+    /**
+     * SP12 §5.3: 提交报废记录至审批工作流。
+     */
+    @Override
+    @Transactional
+    public String submitForApproval(Long id, String factoryId, Long userId) {
+        DisposalRecord record = disposalRecordRepository.findById(id)
+                .orElseThrow(() -> new BusinessException(404, "报废记录不存在: " + id));
+
+        // 幂等防重：已在工作流中则 409
+        if (record.getWorkflowInstanceId() != null) {
+            throw new BusinessException(409, "报废记录已提交工作流: " + record.getWorkflowInstanceId());
+        }
+
+        String instanceId = null;
+        if (workflowEngine != null) {
+            try {
+                Map<String, Object> context = Map.of(
+                        "disposalId", id,
+                        "factoryId", factoryId,
+                        "disposalType", record.getDisposalType() != null ? record.getDisposalType() : ""
+                );
+                ApprovalWorkflowInstance instance = workflowEngine.startWorkflow(
+                        factoryId, "DISPOSAL_APPROVAL", String.valueOf(id), context, userId);
+                if (instance != null) {
+                    instanceId = instance.getId();
+                    record.setWorkflowInstanceId(instanceId);
+                }
+            } catch (Exception e) {
+                log.warn("启动报废审批工作流失败 (id={}), 降级处理: {}", id, e.getMessage());
+            }
+        }
+
+        disposalRecordRepository.save(record);
+        log.info("报废记录已提交审批: id={}, instanceId={}", id, instanceId);
+        return instanceId;
     }
 }
