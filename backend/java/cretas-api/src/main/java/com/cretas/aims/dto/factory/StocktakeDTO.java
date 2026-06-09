@@ -31,6 +31,7 @@ public class StocktakeDTO {
     private LocalDateTime appliedAt;
     private String notes;
     private LocalDateTime createdAt;
+    private String workflowInstanceId;
     private List<StocktakeItemDTO> items;
 
     @Data
@@ -80,6 +81,7 @@ public class StocktakeDTO {
         dto.setAppliedAt(stocktake.getAppliedAt());
         dto.setNotes(stocktake.getNotes());
         dto.setCreatedAt(stocktake.getCreatedAt());
+        dto.setWorkflowInstanceId(stocktake.getWorkflowInstanceId());
         if (stocktake.getItems() != null) {
             dto.setItems(stocktake.getItems().stream()
                     .map(StocktakeItemDTO::from)

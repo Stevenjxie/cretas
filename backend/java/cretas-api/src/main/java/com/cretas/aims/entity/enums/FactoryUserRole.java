@@ -83,10 +83,22 @@ public enum FactoryUserRole {
     quality_manager("质量经理", "质量体系、质检审核", 10, "quality"),
 
     /**
+     * 品控 (SP12 T1 新增)
+     * 质量标准制定、特批、处置审核
+     */
+    quality_controller("品控", "质量标准制定、特批、处置审核", 15, "quality"),
+
+    /**
      * 财务主管
      * 成本核算、费用管理、财务报表
      */
     finance_manager("财务主管", "成本核算、费用、报表", 10, "finance"),
+
+    /**
+     * 出纳 (SP12 T1 新增)
+     * 负责付款操作、银行对账
+     */
+    cashier("出纳", "负责付款操作、银行对账", 15, "finance"),
 
     /**
      * 餐饮管理
@@ -284,9 +296,11 @@ public enum FactoryUserRole {
             case equipment_admin:
                 return "equipment";
             case quality_manager:
+            case quality_controller:
             case quality_inspector:
                 return "quality";
             case finance_manager:
+            case cashier:
                 return "finance";
             case viewer:
                 return "view";

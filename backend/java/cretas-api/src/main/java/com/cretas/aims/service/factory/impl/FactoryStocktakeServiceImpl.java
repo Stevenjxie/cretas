@@ -8,14 +8,17 @@ import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.MaterialBatchAdjustment;
 import com.cretas.aims.entity.factory.FactoryStocktake;
 import com.cretas.aims.entity.factory.FactoryStocktakeItem;
+import com.cretas.aims.entity.workflow.ApprovalWorkflowInstance;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.MaterialBatchAdjustmentRepository;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.factory.FactoryStocktakeItemRepository;
 import com.cretas.aims.repository.factory.FactoryStocktakeRepository;
 import com.cretas.aims.service.factory.FactoryStocktakeService;
+import com.cretas.aims.service.workflow.WorkflowEngineService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
@@ -29,6 +32,7 @@ import java.time.YearMonth;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
@@ -52,6 +56,10 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
     private final FactoryStocktakeItemRepository stocktakeItemRepo;
     private final MaterialBatchRepository materialBatchRepo;
     private final MaterialBatchAdjustmentRepository adjustmentRepo;
+
+    /** SP12 §5.2: optional — 测试时不注入 (required=false 打破构造器注入限制) */
+    @Autowired(required = false)
+    private WorkflowEngineService workflowEngine;
 
     // -------------------------------------------------------
     // 月底约束：>=29 日才允许发起盘点（可提取为配置）
@@ -325,6 +333,82 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
     public StocktakeDTO getDetail(String stocktakeId, String factoryId) {
         FactoryStocktake stocktake = findAndValidate(stocktakeId, factoryId);
         return StocktakeDTO.from(stocktake);
+    }
+
+    @Override
+    @Transactional
+    public String submitForApproval(String stocktakeId, String factoryId, Long userId) {
+        FactoryStocktake stocktake = findAndValidate(stocktakeId, factoryId);
+        if (stocktake.getStatus() != FactoryStocktake.Status.COUNTING &&
+            stocktake.getStatus() != FactoryStocktake.Status.INITIATED &&
+            stocktake.getStatus() != FactoryStocktake.Status.REJECTED) {
+            throw new BusinessException(409,
+                    "当前盘点任务状态 [" + stocktake.getStatus() + "] 不支持提交审批，需要 COUNTING 或 INITIATED 或 REJECTED（重提）"
+                    + " — 请前往[审批中心]查看进行中的审批")
+                    .withHint("前往审批中心");
+        }
+
+        // 幂等: 如果已有 workflowInstanceId 且状态 PENDING_APPROVAL → 不重复创建
+        if (stocktake.getWorkflowInstanceId() != null &&
+                stocktake.getStatus() == FactoryStocktake.Status.PENDING_APPROVAL) {
+            throw new BusinessException(409,
+                    "盘点审批已提交 (PENDING_APPROVAL)，请勿重复提交 — 请前往[审批中心]查看")
+                    .withCode("DUPLICATE_APPROVAL_REQUEST")
+                    .withHint("前往审批中心: /approval-center");
+        }
+
+        stocktake.setStatus(FactoryStocktake.Status.PENDING_APPROVAL);
+        stocktake.setSubmittedBy(userId);
+        stocktake.setSubmittedAt(LocalDateTime.now());
+
+        // 启动 INVENTORY_ADJUSTMENT workflow（若 workflowEngine 可用）
+        if (workflowEngine != null && workflowEngine.hasActiveWorkflow(factoryId, "INVENTORY_ADJUSTMENT")) {
+            ApprovalWorkflowInstance instance = workflowEngine.startWorkflow(
+                    factoryId,
+                    "INVENTORY_ADJUSTMENT",
+                    stocktakeId,
+                    Map.of("stocktakeNo", stocktake.getStocktakeNo(),
+                           "periodMonth", stocktake.getPeriodMonth(),
+                           "warehouseId", stocktake.getWarehouseId()),
+                    userId);
+            stocktake.setWorkflowInstanceId(instance.getId());
+        }
+
+        stocktakeRepo.save(stocktake);
+        log.info("SP12: 盘点任务已提交审批 stocktakeId={} workflowInstanceId={}",
+                stocktakeId, stocktake.getWorkflowInstanceId());
+        return stocktake.getWorkflowInstanceId();
+    }
+
+    /**
+     * SP12 §5.2 + 红线 R1: 仅供 workflow callback 调用，不对外暴露 REST。
+     * 校验 workflowInstanceId 不为 null（有审批流经历），状态必须 APPROVED。
+     */
+    @Override
+    @Transactional
+    public void executeAdjustment(String stocktakeId) {
+        FactoryStocktake stocktake = stocktakeRepo.findById(stocktakeId)
+                .orElseThrow(() -> new BusinessException(404, "盘点任务不存在: " + stocktakeId));
+
+        // 红线 R1: 必须有 workflowInstanceId（不允许绕过 workflow）
+        if (stocktake.getWorkflowInstanceId() == null) {
+            throw new BusinessException(403,
+                    "盘点调账必须经过 INVENTORY_ADJUSTMENT 工作流审批，无法直接调账")
+                    .withCode("WORKFLOW_BYPASS_FORBIDDEN")
+                    .withHint("请先通过工作流提交审批");
+        }
+
+        // 幂等防重
+        if (stocktake.getStatus() == FactoryStocktake.Status.APPLIED) {
+            throw new BusinessException(409,
+                    "盘点任务已于 " + stocktake.getAppliedAt() + " 生效，请勿重复操作")
+                    .withCode("ALREADY_APPLIED")
+                    .withHint("查看已生效记录");
+        }
+        assertStatus(stocktake, FactoryStocktake.Status.APPROVED, "生效");
+
+        // 复用 apply() 的库存调整逻辑
+        apply(stocktakeId, stocktake.getFactoryId(), null);
     }
 
     // -------------------------------------------------------

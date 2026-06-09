@@ -123,6 +123,10 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.service.wip.WipInventoryService wipInventoryService;
 
+    /** SP12 T3: 生产撤回审批流引擎. required=false 兼容无 WorkflowEngine 环境 (e.g. 单测). */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.workflow.WorkflowEngineService workflowEngine;
+
     /** Canvas V2: DB-driven validation rules */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.engine.ValidationRuleEvaluator validationRuleEvaluator;
@@ -1023,6 +1027,82 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         }
 
         log.info("取消生产计划: planId={}, reason={}", planId, reason);
+    }
+
+    /**
+     * SP12 T3: 申请撤回/取消已完成的生产计划（触发审批流）.
+     * COMPLETED → PENDING_APPROVAL，启动 PRODUCTION_REVERSAL 审批流。
+     */
+    @Override
+    @org.springframework.transaction.annotation.Transactional
+    public String requestCancelWithApproval(String factoryId, String planId, String reason, Long userId) {
+        ProductionPlan plan = productionPlanRepository.findById(planId)
+                .orElseThrow(() -> new ResourceNotFoundException("生产计划", "id", planId));
+
+        if (!plan.getFactoryId().equals(factoryId)) {
+            throw new BusinessException(403, "无权操作该生产计划")
+                    .withHint("当前生产计划不属于该工厂");
+        }
+        if (plan.getStatus() != ProductionPlanStatus.COMPLETED) {
+            throw new BusinessException(409, "只有已完成的计划才能申请撤回")
+                    .withHint("请刷新生产计划列表查看最新状态");
+        }
+        if (workflowEngine == null || !workflowEngine.hasActiveWorkflow(factoryId, "PRODUCTION_REVERSAL")) {
+            throw new BusinessException(409, "该工厂未配置生产撤回审批流程，请联系管理员配置")
+                    .withHint("前往工作流设计器配置 PRODUCTION_REVERSAL 审批流");
+        }
+
+        plan.setStatus(ProductionPlanStatus.PENDING_APPROVAL);
+        plan.setNotes(plan.getNotes() != null
+                ? plan.getNotes() + "\n撤回申请原因：" + reason
+                : "撤回申请原因：" + reason);
+        productionPlanRepository.save(plan);
+
+        java.util.Map<String, Object> context = java.util.Map.of(
+                "planId", planId,
+                "reason", reason,
+                "factoryId", factoryId);
+        var instance = workflowEngine.startWorkflow(factoryId, "PRODUCTION_REVERSAL", planId, context, userId);
+        log.info("生产撤回审批已发起: planId={}, instanceId={}", planId, instance.getId());
+        return instance.getId();
+    }
+
+    /**
+     * SP12 T3: 审批通过后执行撤回（仅供 workflow 回调调用）.
+     * PENDING_APPROVAL → CANCELLED，级联关闭关联工序任务。
+     */
+    @Override
+    @org.springframework.transaction.annotation.Transactional
+    public void executeCancelApproved(String planId) {
+        ProductionPlan plan = productionPlanRepository.findById(planId)
+                .orElseThrow(() -> new ResourceNotFoundException("生产计划", "id", planId));
+
+        if (plan.getStatus() != ProductionPlanStatus.PENDING_APPROVAL) {
+            throw new BusinessException(409, "生产计划不处于待审批状态，无法执行撤回")
+                    .withHint("请刷新生产计划列表查看最新状态");
+        }
+
+        plan.setStatus(ProductionPlanStatus.CANCELLED);
+        productionPlanRepository.save(plan);
+
+        // 级联关闭关联的工序任务（复用 cancelProductionPlan 逻辑）
+        if (plan.getProductTypeId() != null) {
+            var tasks = processTaskRepository.findByFactoryIdAndProductTypeId(
+                    plan.getFactoryId(), plan.getProductTypeId());
+            int closedCount = 0;
+            for (var task : tasks) {
+                if (task.getStatus() != com.cretas.aims.entity.enums.ProcessTaskStatus.CLOSED
+                        && task.getStatus() != com.cretas.aims.entity.enums.ProcessTaskStatus.COMPLETED) {
+                    task.setStatus(com.cretas.aims.entity.enums.ProcessTaskStatus.CLOSED);
+                    processTaskRepository.save(task);
+                    closedCount++;
+                }
+            }
+            if (closedCount > 0) {
+                log.info("SP12 T3 级联关闭 {} 个工序任务: planId={}", closedCount, planId);
+            }
+        }
+        log.info("SP12 T3 生产撤回审批通过，计划已取消: planId={}", planId);
     }
 
     /**

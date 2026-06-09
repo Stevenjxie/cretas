@@ -125,4 +125,20 @@ public interface IDisposalRecordService {
      * @param id 记录ID
      */
     void deleteDisposalRecord(Long id);
+
+    /**
+     * SP12 §5.3: 提交报废记录至审批工作流。
+     *
+     * <p>前置条件: 记录存在且 {@code isApproved == false}，且未已在流程中
+     * ({@code workflowInstanceId == null})。违反时抛 409。
+     *
+     * <p>若工作流引擎不可用 (optional bean)，仍将 {@code workflowInstanceId} 置 null
+     * 并标记已申请（由外部流程兜底），不抛异常。
+     *
+     * @param id 报废记录 ID
+     * @param factoryId 工厂 ID（用于启动工作流）
+     * @param userId 提交人 userId
+     * @return 工作流实例 ID，若引擎不可用则返回 null
+     */
+    String submitForApproval(Long id, String factoryId, Long userId);
 }

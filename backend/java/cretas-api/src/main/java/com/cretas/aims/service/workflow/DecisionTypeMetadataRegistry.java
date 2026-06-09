@@ -111,6 +111,16 @@ public class DecisionTypeMetadataRegistry {
                 .wired(false)
                 .build());
 
+        register(DecisionTypeMetadata.builder()
+                .decisionType(DecisionType.PRODUCTION_REVERSAL_APPROVAL)
+                .chineseName("生产撤回审批")
+                .description("生产计划已完成后申请撤回/重置，六扇门红线：撤回操作必须主管审批，不允许操作员自主执行")
+                .category(Category.PRODUCTION)
+                .defaultApproverRoles(List.of("factory_super_admin", "dispatcher", "workshop_supervisor"))
+                .moduleCode("PRODUCTION_REVERSAL")
+                .wired(false)  // SP12 T3 接入后改为 true
+                .build());
+
         // ============================================
         // 质检 / 物料 类 (5)
         // ============================================

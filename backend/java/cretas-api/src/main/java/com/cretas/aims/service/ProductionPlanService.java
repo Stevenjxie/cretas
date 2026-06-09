@@ -104,6 +104,33 @@ public interface ProductionPlanService {
      * 取消生产计划
       */
     void cancelProductionPlan(String factoryId, String planId, String reason);
+
+    /**
+     * SP12 T3: 申请撤回/取消已完成的生产计划（触发审批流）.
+     *
+     * <p>六扇门红线：已完成计划不可被操作员直接取消，必须主管审批。
+     * <p>流程：COMPLETED → PENDING_APPROVAL，启动 PRODUCTION_REVERSAL 审批流。
+     *
+     * @param factoryId 工厂 ID
+     * @param planId    计划 ID
+     * @param reason    撤回原因
+     * @param userId    申请人 user ID (来自 RequestContextHolder "userId")
+     * @return 创建的 workflow 实例 ID
+     * @throws BusinessException 409 若计划不是 COMPLETED 状态
+     * @throws BusinessException 409 若无 active PRODUCTION_REVERSAL workflow 配置
+     */
+    String requestCancelWithApproval(String factoryId, String planId, String reason, Long userId);
+
+    /**
+     * SP12 T3: 审批通过后执行撤回（仅供 workflow 回调调用）.
+     *
+     * <p>将 PENDING_APPROVAL 计划设为 CANCELLED，并级联关闭关联工序任务。
+     * 直接从业务 API 调用此方法将返回 403（需先通过 requestCancelWithApproval）。
+     *
+     * @param planId 计划 ID
+     * @throws BusinessException 409 若计划状态不是 PENDING_APPROVAL
+     */
+    void executeCancelApproved(String planId);
      /**
      * 锁定生产计划 (Issue #759, 2026-05-17). 锁定后不可编辑数量/日期/取消.
      */

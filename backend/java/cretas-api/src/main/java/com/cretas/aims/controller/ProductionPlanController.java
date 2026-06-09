@@ -336,6 +336,29 @@ public class ProductionPlanController {
     }
 
     /**
+     * SP12 T3: 申请撤回已完成的生产计划（触发审批流）.
+     * 六扇门红线：COMPLETED 计划不可操作员直接撤回，必须主管审批。
+     * COMPLETED → PENDING_APPROVAL → (审批通过) → CANCELLED
+     */
+    @PostMapping("/{planId}/request-cancel")
+    @Operation(summary = "申请撤回已完成的生产计划（触发 PRODUCTION_REVERSAL 审批流）")
+    public ApiResponse<String> requestCancelWithApproval(
+            @Parameter(description = "工厂ID", required = true, example = "F001")
+            @PathVariable @NotBlank String factoryId,
+            @Parameter(description = "计划ID", required = true)
+            @PathVariable @NotNull String planId,
+            @Parameter(description = "撤回原因", required = true)
+            @RequestParam @NotBlank String reason,
+            @RequestHeader("Authorization") String authorization) {
+
+        Long userId = extractUserId(authorization);
+        log.info("申请撤回生产计划: factoryId={}, planId={}, reason={}, userId={}",
+                factoryId, planId, reason, userId);
+        String instanceId = productionPlanService.requestCancelWithApproval(factoryId, planId, reason, userId);
+        return ApiResponse.success("撤回申请已提交，等待主管审批", instanceId);
+    }
+
+    /**
      * 复制生产计划 — #860 follow-up.
      * 基于现有计划创建新草稿, 复制产品/数量/日期/成本预估, 不复制实际值/审批/锁定状态.
      */

@@ -309,6 +309,33 @@ class DecisionTypeMetadataRegistryTest {
         assertEquals(DecisionType.SALES_ORDER_APPROVAL, registry.lookupByModuleCode("SALES_ORDER"));
         assertEquals(DecisionType.BOM_VERSION_APPROVAL, registry.lookupByModuleCode("BOM_VERSION"));
         assertEquals(DecisionType.ECN_APPROVAL, registry.lookupByModuleCode("ECN"));
+        // SP12 T2
+        assertEquals(DecisionType.PRODUCTION_REVERSAL_APPROVAL, registry.lookupByModuleCode("PRODUCTION_REVERSAL"));
+    }
+
+    // ==================== SP12 T2: PRODUCTION_REVERSAL_APPROVAL ====================
+
+    @Test
+    @DisplayName("UT-MR-32: PRODUCTION_REVERSAL_APPROVAL — SP12 T2, category=PRODUCTION, moduleCode=PRODUCTION_REVERSAL, wired=false")
+    void productionReversalApprovalMetadata() {
+        DecisionTypeMetadata m = registry.get(DecisionType.PRODUCTION_REVERSAL_APPROVAL);
+        assertNotNull(m, "PRODUCTION_REVERSAL_APPROVAL 未注册 — 检查 DecisionTypeMetadataRegistry.init()");
+        assertEquals("生产撤回审批", m.getChineseName());
+        assertEquals(Category.PRODUCTION, m.getCategory());
+        assertEquals("PRODUCTION_REVERSAL", m.getModuleCode());
+        assertFalse(m.isWired(), "SP12 T3 接入前 wired 应为 false");
+        assertTrue(m.getDefaultApproverRoles().contains("factory_super_admin")
+                        || m.getDefaultApproverRoles().contains("dispatcher")
+                        || m.getDefaultApproverRoles().contains("workshop_supervisor"),
+                "默认审批人应含主管相关角色 (factory_super_admin / dispatcher / workshop_supervisor)");
+    }
+
+    @Test
+    @DisplayName("UT-MR-33: PRODUCTION_REVERSAL_APPROVAL — lookupByModuleCode 双向验证")
+    void productionReversalModuleCodeLookup() {
+        DecisionType dt = registry.lookupByModuleCode("PRODUCTION_REVERSAL");
+        assertEquals(DecisionType.PRODUCTION_REVERSAL_APPROVAL, dt,
+                "lookupByModuleCode(\"PRODUCTION_REVERSAL\") 应返 PRODUCTION_REVERSAL_APPROVAL");
     }
 
     @Test
