@@ -39,7 +39,7 @@ type RouteT = RouteProp<{ YieldStepReport: YieldStepReportParams }, 'YieldStepRe
 type NavT = NativeStackNavigationProp<Record<string, object | undefined>>;
 
 const OVER_RECEIVE_TOLERANCE = 1.3; // A4 软上限: 计划 ×1.3 (含 30% 超收)
-const MAX_EVIDENCE_VIDEO_BYTES = 50 * 1024 * 1024;
+const MAX_EVIDENCE_VIDEO_BYTES = 100 * 1024 * 1024;
 const MAX_EVIDENCE_VIDEO_DURATION_MS = 60 * 1000;
 const VIDEO_EXTENSIONS = ['mp4', 'mov', 'm4v', 'webm'];
 
