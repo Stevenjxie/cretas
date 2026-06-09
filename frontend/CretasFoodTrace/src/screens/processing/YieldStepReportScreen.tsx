@@ -1959,16 +1959,30 @@ const YieldStepReportScreen: React.FC = () => {
 
             {/* 下一任务导航 (防呆: 完成后不卡在当前道; fool-proof Rule 5 dead-end 改导航) */}
             {autoAssigned ? (
-              <NeoButton
-                variant="primary"
-                size="large"
-                onPress={returnOrRefreshAssignedTask}
-                disabled={submitting}
-                style={styles.fullBtn}
-                testID="yield-next-step-btn"
-              >
-                刷新当前工序
-              </NeoButton>
+              <>
+                {/* Primary: 返回操作员任务列表 (OperatorAssignedProcess) 领取下一道分配工序 */}
+                <NeoButton
+                  variant="primary"
+                  size="large"
+                  onPress={() => navigation.replace('OperatorAssignedProcess')}
+                  disabled={submitting}
+                  style={styles.fullBtn}
+                  testID="yield-return-tasklist-btn"
+                >
+                  返回我的任务
+                </NeoButton>
+                {/* Secondary: 留在此屏刷新(如同一工序有新分配) */}
+                <NeoButton
+                  variant="outline"
+                  size="large"
+                  onPress={returnOrRefreshAssignedTask}
+                  disabled={submitting}
+                  style={styles.fullBtn}
+                  testID="yield-next-step-btn"
+                >
+                  刷新当前工序
+                </NeoButton>
+              </>
             ) : (
               <>
                 {!isLastStep ? (
