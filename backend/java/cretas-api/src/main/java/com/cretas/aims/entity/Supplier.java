@@ -1,5 +1,6 @@
 package com.cretas.aims.entity;
 
+import com.cretas.aims.entity.enums.SettlementType;
 import com.cretas.aims.security.PriceSensitive;
 import lombok.*;
 import org.hibernate.annotations.BatchSize;
@@ -79,6 +80,22 @@ public class Supplier extends BaseEntity {
     private String paymentTerms;
     @Column(name = "delivery_days")
     private Integer deliveryDays;
+
+    // ==================== SP6: 结算条件 ====================
+
+    /**
+     * SP6 — 供应商结算类型（预付/月结/账期等）。
+     * 与 PurchaseOrder.settlementType 搭配使用，单据级可覆盖供应商默认。
+     */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "payment_terms_type", length = 32)
+    private SettlementType paymentTermsType;
+
+    /**
+     * SP6 — 账期天数（CREDIT_PERIOD 结算时的默认天数）。null = 未配置。
+     */
+    @Column(name = "credit_days")
+    private Integer creditDays;
 
     // 前端兼容字段
     @Column(name = "business_type", length = 50)

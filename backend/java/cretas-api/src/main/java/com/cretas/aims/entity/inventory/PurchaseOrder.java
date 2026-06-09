@@ -6,6 +6,7 @@ import com.cretas.aims.entity.Supplier;
 import com.cretas.aims.entity.User;
 import com.cretas.aims.entity.enums.PurchaseOrderStatus;
 import com.cretas.aims.entity.enums.PurchaseType;
+import com.cretas.aims.entity.enums.SettlementType;
 import com.cretas.aims.security.PriceSensitive;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import io.hypersistence.utils.hibernate.type.json.JsonBinaryType;
@@ -177,6 +178,26 @@ public class PurchaseOrder extends BaseEntity {
     /** 财务审核意见 */
     @Column(name = "finance_review_notes", columnDefinition = "TEXT")
     private String financeReviewNotes;
+
+    // ==================== SP6: 结算 & 发票提醒 ====================
+
+    /**
+     * SP6 — 结算方式（预付/月结/账期等）。null = 历史数据未填。
+     */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "settlement_type", length = 32)
+    private SettlementType settlementType;
+
+    /** SP6 — 合同编号（对应纸质合同/框架合同号）。 */
+    @Column(name = "contract_number", length = 100)
+    private String contractNumber;
+
+    /**
+     * SP6 — 开票提醒天数（收货后 N 天未收到发票则提醒）。
+     * null = 使用工厂默认；0 = 不提醒。
+     */
+    @Column(name = "invoice_reminder_days")
+    private Integer invoiceReminderDays;
 
     // ==================== 关联 ====================
 

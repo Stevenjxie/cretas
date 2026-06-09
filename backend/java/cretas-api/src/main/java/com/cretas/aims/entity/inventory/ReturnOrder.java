@@ -3,6 +3,8 @@ package com.cretas.aims.entity.inventory;
 import com.cretas.aims.entity.BaseEntity;
 import com.cretas.aims.entity.enums.ReturnOrderStatus;
 import com.cretas.aims.entity.enums.ReturnType;
+import io.hypersistence.utils.hibernate.type.json.JsonBinaryType;
+import org.hibernate.annotations.Type;
 import com.cretas.aims.security.PriceSensitive;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import lombok.*;
@@ -16,6 +18,7 @@ import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
+import java.util.Map;
 import org.hibernate.annotations.Where;
 
 @Data
@@ -124,6 +127,29 @@ public class ReturnOrder extends BaseEntity {
     @Version
     @Column(name = "version")
     private Long version;
+
+    // ==================== SP6: 仓库执行字段 ====================
+
+    /**
+     * SP6 — 仓库人员执行退货的时间（供应商到现场领货 / 快递取件确认时间）。
+     * null = 尚未执行。
+     */
+    @Column(name = "warehouse_executed_at")
+    private LocalDateTime warehouseExecutedAt;
+
+    /**
+     * SP6 — 执行仓库操作的操作员用户 ID。null = 尚未执行。
+     */
+    @Column(name = "warehouse_executed_by")
+    private Long warehouseExecutedBy;
+
+    /**
+     * SP6 — 涉及的原料批次 ID 列表（用于 decideException(RETURN_OVER) 关联批次）。
+     * 存 JSON array of batch IDs。null = 无对应批次（退货前未入库）。
+     */
+    @Type(JsonBinaryType.class)
+    @Column(name = "batch_ids", columnDefinition = "jsonb")
+    private List<String> batchIds;
 
     // ==================== 关联 ====================
 

@@ -90,6 +90,14 @@ public class PurchaseServiceImpl implements PurchaseService {
     private final ApplicationEventPublisher applicationEventPublisher;
     private final MaterialBatchService materialBatchService;
 
+    /**
+     * SP6 — 采购异常单生成（SP6 新增 bean）。@Lazy 防止循环依赖（PurchaseService ↔ PurchaseExceptionService）。
+     * required=false 兼容旧 ApplicationContext（SP6 migration 未 apply 时保持 PurchaseService 可启动）。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    @org.springframework.context.annotation.Lazy
+    private com.cretas.aims.service.inventory.PurchaseExceptionService purchaseExceptionService;
+
     /** Rule 2 hydration: lookup SO orderNumber for PO.salesOrderNumber @Transient. */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private SalesOrderRepository salesOrderRepository;
@@ -1162,6 +1170,41 @@ public class PurchaseServiceImpl implements PurchaseService {
                 log.info("已发布MaterialReceivedEvent: material={}, qty={}", item.getMaterialTypeId(), qty);
             } catch (Exception e) {
                 log.error("发布MaterialReceivedEvent失败(不影响主流程): material={}", item.getMaterialTypeId(), e);
+            }
+        }
+
+        // SP6 — 生成采购异常单（超收/少收检查）
+        // fail-soft: 异常单生成失败不阻塞入库确认主流程
+        if (purchaseExceptionService != null && record.getPurchaseOrderId() != null) {
+            List<PurchaseOrderItem> poItems =
+                    purchaseOrderItemRepository.findByPurchaseOrderId(record.getPurchaseOrderId());
+            // 按 materialTypeId 建索引，快速查 PO 计划数量
+            Map<String, PurchaseOrderItem> poItemMap = new HashMap<>();
+            for (PurchaseOrderItem pi : poItems) {
+                if (pi.getMaterialTypeId() != null) {
+                    poItemMap.put(pi.getMaterialTypeId(), pi);
+                }
+            }
+            for (PurchaseReceiveItem item : record.getItems()) {
+                try {
+                    PurchaseOrderItem poItem =
+                            item.getMaterialTypeId() != null ? poItemMap.get(item.getMaterialTypeId()) : null;
+                    BigDecimal poQty = poItem != null ? poItem.getQuantity() : null;
+                    purchaseExceptionService.generateExceptionsForReceive(
+                            factoryId,
+                            record.getId(),
+                            record.getPurchaseOrderId(),
+                            record.getSupplierId(),
+                            item.getMaterialTypeId(),
+                            item.getMaterialName(),
+                            poQty,
+                            item.getReceivedQuantity(),
+                            item.getUnit(),
+                            userId);
+                } catch (Exception e) {
+                    log.warn("[SP6] 生成采购异常单失败（不影响入库主流程）: receiveId={}, material={}, error={}",
+                            receiveId, item.getMaterialTypeId(), e.getMessage());
+                }
             }
         }
 
