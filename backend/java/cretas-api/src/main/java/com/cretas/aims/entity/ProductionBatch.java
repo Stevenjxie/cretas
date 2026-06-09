@@ -276,6 +276,24 @@ public class ProductionBatch extends BaseEntity {
     @Column(name = "planned_unit", length = 20)
     private String plannedUnit;
 
+    // ==================== SP10: 试制批次标记 ====================
+
+    /**
+     * 是否为研发试制批次 (SP10).
+     * 试制批次用于中报价成本汇算, 不计入常规生产统计.
+     */
+    @Builder.Default
+    @Column(name = "is_trial")
+    private Boolean isTrial = false;
+
+    /**
+     * 关联的研发试样 ID (SP10).
+     * FK → quotation_tasks.sample_id (业务键).
+     * 非 null 时此批次属于指定试样的试制链路.
+     */
+    @Column(name = "trial_sample_id", length = 191)
+    private String trialSampleId;
+
     // ==========================================
     // 注意: createdAt 和 updatedAt 字段已从 BaseEntity 继承
     // 不再需要在此定义，避免字段重复

@@ -95,4 +95,27 @@ public class QuotationTask extends BaseEntity {
 
     @Column(name = "remark", columnDefinition = "TEXT")
     private String remark;
+
+    // ==================== SP10 扩字段 ====================
+
+    /** 人工成本 元/kg成品 — R&D经验值填写, 非BOM来源 */
+    @PriceSensitive
+    @Column(name = "labor_per_kg", precision = 12, scale = 4)
+    private BigDecimal laborPerKg;
+
+    /**
+     * 报价阶段: PRE=预报价 | MID_PENDING=等待中试 | MID=中报价已汇算 | FINAL=最终确认.
+     * SampleApprovedEventListener 创建时设 PRE.
+     */
+    @Column(name = "quote_stage", nullable = false, length = 20)
+    private String quoteStage = "PRE";
+
+    /** 自动从 BomRecipe.totalCost 带入, 展示用 */
+    @PriceSensitive
+    @Column(name = "bom_material_cost", precision = 15, scale = 2)
+    private BigDecimal bomMaterialCost;
+
+    /** FK → product_mid_quotes.id, 中报价关联 */
+    @Column(name = "mid_quote_id", length = 191)
+    private String midQuoteId;
 }
