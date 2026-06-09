@@ -44,6 +44,23 @@ public interface MaterialBatchService {
      * 根据状态获取批次
       */
     List<MaterialBatchDTO> getMaterialBatchesByStatus(String factoryId, MaterialBatchStatus status);
+
+    /**
+     * 按状态获取批次，可选 BOM 过滤 (防呆: 操作员只看产品所需原料).
+     *
+     * <p>当 {@code productTypeId} 非空时，查找该产品的 ACTIVE BOM 的 material_type_id 集合，
+     * 仅返回那些原料类型的批次。
+     *
+     * <p><b>FALLBACK 铁律</b>: 若产品无 ACTIVE BOM 或 BOM 无明细行，
+     * 回退返回全部 AVAILABLE 批次 (与无 productTypeId 行为一致)，绝不返回空列表阻断操作员。
+     *
+     * @param factoryId     工厂 ID
+     * @param status        批次状态
+     * @param productTypeId 产品类型 ID (可选, null = 不过滤)
+     */
+    List<MaterialBatchDTO> getMaterialBatchesByStatus(String factoryId, MaterialBatchStatus status,
+                                                      String productTypeId);
+
      /**
      * 获取在制品 (WIP) 批次列表 — 状态 = PRODUCING_RESERVED, 当前工厂.
      * Sprint 4 Wave 2 M-WIP-1: 关联到进行中的生产批次的物料批次。

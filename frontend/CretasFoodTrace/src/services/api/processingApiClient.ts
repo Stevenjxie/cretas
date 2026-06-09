@@ -63,6 +63,8 @@ export interface ProcessingBatch {
   id: number;
   batchNumber: string;
   productType: string;
+  /** 产品类型 ID (用于 BOM 过滤, 由后端 productTypeId 字段序列化) */
+  productTypeId?: string;
   status: string;
   targetQuantity: number;
   actualQuantity?: number;

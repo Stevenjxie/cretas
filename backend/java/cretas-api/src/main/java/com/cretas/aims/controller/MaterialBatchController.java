@@ -322,17 +322,23 @@ public class MaterialBatchController {
     }
 
     /**
-     * 按状态获取批次
+     * 按状态获取批次，可选 BOM 过滤 (防呆).
+     *
+     * <p>当传入 {@code productTypeId} 时，仅返回该产品 ACTIVE BOM 中包含的原料类型对应的批次。
+     * 若产品无 ACTIVE BOM 或 BOM 无明细，回退返回全部批次（不阻断操作员）。
      */
     @GetMapping("/status/{status}")
-    @Operation(summary = "按状态获取批次")
+    @Operation(summary = "按状态获取批次", description = "可选传 productTypeId 按 BOM 过滤 (防呆)")
     public ApiResponse<List<MaterialBatchDTO>> getMaterialBatchesByStatus(
             @Parameter(description = "工厂ID", required = true, example = "F001")
             @PathVariable @NotBlank String factoryId,
             @Parameter(description = "状态", required = true, example = "AVAILABLE")
-            @PathVariable MaterialBatchStatus status) {
+            @PathVariable MaterialBatchStatus status,
+            @Parameter(description = "产品类型ID (可选, 传入则按 BOM 原料过滤)", example = "PT-F001-001")
+            @RequestParam(required = false) String productTypeId) {
 
-        List<MaterialBatchDTO> batches = materialBatchService.getMaterialBatchesByStatus(factoryId, status);
+        List<MaterialBatchDTO> batches = materialBatchService.getMaterialBatchesByStatus(
+                factoryId, status, productTypeId);
         return ApiResponse.success(batches);
     }
 

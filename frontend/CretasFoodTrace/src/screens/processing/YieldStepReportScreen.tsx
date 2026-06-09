@@ -427,6 +427,8 @@ const YieldStepReportScreen: React.FC = () => {
   const [screenPhase, setScreenPhase] = useState<'reporting' | 'done'>('reporting');
 
   const [productType, setProductType] = useState<string>('');
+  /** 产品类型 ID (用于 BOM 过滤, 来自 ProductionBatch.productTypeId) */
+  const [productTypeId, setProductTypeId] = useState<string | undefined>(undefined);
   const [batchNumber, setBatchNumber] = useState<string>(route.params.batchNumber ?? '');
   const [batchStatus, setBatchStatus] = useState<string>('');  // P1-1: 完工幂等判断
   const [tasks, setTasks] = useState<WorkProcessTask[]>([]);
@@ -513,6 +515,8 @@ const YieldStepReportScreen: React.FC = () => {
       }
       if (batchRes.success && batchRes.data) {
         setProductType(batchRes.data.productType ?? '');
+        // BOM 过滤: 存下 productTypeId 供 MaterialBatchPicker 防呆用
+        if (batchRes.data.productTypeId) setProductTypeId(batchRes.data.productTypeId);
         if (batchRes.data.batchNumber) setBatchNumber(batchRes.data.batchNumber);
         setBatchStatus(batchRes.data.status ?? '');  // P1-1: 完工幂等判断
       }
@@ -1459,6 +1463,7 @@ const YieldStepReportScreen: React.FC = () => {
               {isFirstStep ? (
                 <MaterialBatchPicker
                   unit={unit}
+                  productTypeId={productTypeId}
                   value={materialBatchRefs}
                   onChange={setMaterialBatchRefs}
                   singleBatchQty={inputQty}
