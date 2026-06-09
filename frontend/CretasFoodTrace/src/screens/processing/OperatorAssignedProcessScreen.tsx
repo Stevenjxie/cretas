@@ -40,6 +40,8 @@ interface BatchEntry {
   currentReportableTask: WorkProcessTask | null;  // reportable 时 = 当前可报的那道(我的)
   blockingProcessName: string | null;             // 非 reportable 时 = 当前卡住的那道工序名(在等它)
   blockingProcessOrder: number | null;
+  blockingAssignedToName: string | null;          // 卡住那道的负责人姓名 (在等谁做)
+  blockingStatus: WorkProcessTaskStatus | null;   // 卡住那道的实时状态 (未开始/进行中)
   myNextProcessName: string | null;               // 我在这批次最近一道待报工序名
   myNextProcessOrder: number | null;
   myTaskCount: number;                            // 我在这批次的待报工序数
@@ -142,6 +144,8 @@ export default function OperatorAssignedProcessScreen() {
           currentReportableTask: reportable ? firstOpenTask : null,
           blockingProcessName: reportable ? null : firstOpenTask?.processName ?? null,
           blockingProcessOrder: reportable ? null : firstOpenTask?.processOrder ?? null,
+          blockingAssignedToName: reportable ? null : firstOpenTask?.assignedToName ?? null,
+          blockingStatus: reportable ? null : firstOpenTask?.status ?? null,
           myNextProcessName: myNext.processName ?? null,
           myNextProcessOrder: myNext.processOrder,
           myTaskCount: myOpen.length,
@@ -263,11 +267,15 @@ export default function OperatorAssignedProcessScreen() {
                     {entry.currentReportableTask!.processName ? ` · ${entry.currentReportableTask!.processName}` : ''}
                   </Text>
                 ) : (
-                  <Text style={styles.waitProcess} numberOfLines={2}>
+                  <Text style={styles.waitProcess} numberOfLines={3}>
                     我的工序：第 {entry.myNextProcessOrder} 道
                     {entry.myNextProcessName ? ` · ${entry.myNextProcessName}` : ''}
                     {'\n'}⏳ 在等第 {entry.blockingProcessOrder} 道
                     {entry.blockingProcessName ? ` · ${entry.blockingProcessName}` : ''} 完成
+                    {'\n'}负责人：{entry.blockingAssignedToName ?? '未分配'}
+                    {entry.blockingStatus
+                      ? ` · ${entry.blockingStatus === 'IN_PROGRESS' ? '进行中' : '未开始'}`
+                      : ''}
                   </Text>
                 )}
               </Card.Content>
