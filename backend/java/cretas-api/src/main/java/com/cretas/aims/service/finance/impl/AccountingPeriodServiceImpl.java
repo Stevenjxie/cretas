@@ -6,6 +6,7 @@ import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.exception.PeriodClosedException;
 import com.cretas.aims.repository.finance.AccountingPeriodRepository;
 import com.cretas.aims.service.finance.AccountingPeriodService;
+import com.cretas.aims.service.inventory.InventoryLedgerSnapshotService;
 import com.cretas.aims.service.workflow.WorkflowEngineService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -24,6 +25,9 @@ import java.util.Optional;
  *
  * <p>WorkflowEngineService 为可选注入 — 测试 / 早期 factory 没配 BUDGET workflow 时
  * fail-open: requestClose 直接进 PENDING_CLOSE state, 不抛错也不报错.
+ *
+ * <p>SP11 D1 月结钩子: confirmClose 成功后触发 {@link InventoryLedgerSnapshotService#createForPeriod}
+ * 创建期末快照, fail-soft (快照失败不回滚结账).
  */
 @Slf4j
 @Service
@@ -35,6 +39,13 @@ public class AccountingPeriodServiceImpl implements AccountingPeriodService {
     /** 工作流可选 — 没配 BUDGET workflow 时 requestClose 仍能 ship, 走人工 confirm. */
     @Autowired(required = false)
     private WorkflowEngineService workflowEngineService;
+
+    /**
+     * SP11 D1: 期末快照 (可选注入, 旧工厂/测试环境无此 bean 时 fail-open).
+     * fail-soft: 快照失败只 warn, 不回滚结账主事务.
+     */
+    @Autowired(required = false)
+    private InventoryLedgerSnapshotService inventoryLedgerSnapshotService;
 
     @Override
     @Transactional
@@ -123,6 +134,10 @@ public class AccountingPeriodServiceImpl implements AccountingPeriodService {
         p.setClosedBy(userId);
         AccountingPeriod saved = repo.save(p);
         log.info("[AccountingPeriod] CLOSED {}-{}-{} by user={}", factoryId, year, month, userId);
+
+        // SP11 D1: 月结后创建期末快照 (fail-soft — 快照失败不回滚结账事务)
+        createInventorySnapshotFailSoft(factoryId, saved.getId());
+
         return saved;
     }
 
@@ -207,6 +222,26 @@ public class AccountingPeriodServiceImpl implements AccountingPeriodService {
     }
 
     // ==================== private helpers ====================
+
+    /**
+     * SP11 D1: fail-soft wrapper for inventory snapshot creation.
+     * <p>快照失败 (DB error / 数据不一致) 只 warn, 不回滚已成功的结账事务.
+     * 避免因快照 bug 导致所有月结操作失败 (结账比快照更重要).
+     */
+    private void createInventorySnapshotFailSoft(String factoryId, String accountingPeriodId) {
+        if (inventoryLedgerSnapshotService == null) {
+            log.debug("[AccountingPeriod] InventoryLedgerSnapshotService 未注入, 跳过快照");
+            return;
+        }
+        try {
+            inventoryLedgerSnapshotService.createForPeriod(factoryId, accountingPeriodId);
+            log.info("[SP11] D1 inventory snapshot created: factoryId={} periodId={}",
+                    factoryId, accountingPeriodId);
+        } catch (Exception e) {
+            log.warn("[SP11] D1 inventory snapshot FAILED (fail-soft, 结账不受影响): factoryId={} periodId={} error={}",
+                    factoryId, accountingPeriodId, e.getMessage(), e);
+        }
+    }
 
     private void validateInput(String factoryId, Integer year, Integer month) {
         if (factoryId == null || factoryId.isEmpty()) {
