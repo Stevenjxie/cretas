@@ -221,6 +221,12 @@ public class YieldReportServiceImpl implements YieldReportService {
                 .intermediateBatchNo(isFirstReportForTask ? generateBatchNo(t, batchId) : null)
                 // G7: 本道领用的源 WIP 工序批次号 (向后兼容: null 走旧路径); 三阶段: 仅 INPUT/legacy 消耗
                 .sourceWipNo((isInput || isLegacy) ? req.getSourceWipNo() : null)
+                // ==================== SP1 双产出字段 ====================
+                // null = 旧式报工 (向后兼容零回归); postApprovedOutput 按 outputKind 分支处理
+                .outputKind(req.getOutputKind())
+                .semiOutputQuantity(req.getSemiOutputQuantity())
+                .semiOutputUnit(req.getSemiOutputUnit())
+                .semiCode(req.getSemiCode())
                 .status(ProductionReport.Status.SUBMITTED)
                 .build();
 

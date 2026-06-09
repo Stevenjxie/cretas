@@ -1,13 +1,19 @@
 package com.cretas.aims.service.wip.impl;
 
+import com.cretas.aims.dto.yield.OutputOptionsResponse;
 import com.cretas.aims.entity.ProductionReport;
 import com.cretas.aims.entity.SemiFinishedInventory;
+import com.cretas.aims.entity.SemiFinishedInventoryTransaction;
+import com.cretas.aims.entity.WorkProcess;
 import com.cretas.aims.entity.lineage.BatchLineageEdge;
 import com.cretas.aims.entity.workprocess.WorkProcessTask;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.ProductionReportRepository;
 import com.cretas.aims.repository.SemiFinishedInventoryRepository;
+import com.cretas.aims.repository.SemiFinishedInventoryTransactionRepository;
+import com.cretas.aims.repository.WorkProcessRepository;
 import com.cretas.aims.repository.lineage.BatchLineageEdgeRepository;
+import com.cretas.aims.repository.workprocess.WorkProcessTaskRepository;
 import com.cretas.aims.service.wip.WipInventoryService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -17,7 +23,9 @@ import org.springframework.transaction.annotation.Transactional;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 @Slf4j
@@ -26,8 +34,11 @@ import java.util.Map;
 public class WipInventoryServiceImpl implements WipInventoryService {
 
     private final SemiFinishedInventoryRepository wipRepo;
+    private final SemiFinishedInventoryTransactionRepository txnRepo;
     private final ProductionReportRepository reportRepo;
     private final BatchLineageEdgeRepository lineageEdgeRepo;
+    private final WorkProcessTaskRepository taskRepo;
+    private final WorkProcessRepository workProcessRepo;
 
     @Override
     public SemiFinishedInventory validateSourceWip(
@@ -74,7 +85,16 @@ public class WipInventoryServiceImpl implements WipInventoryService {
                     factoryId, report.getSourceWipNo(), report.getInputQuantity(), report.getInputUnit(), report.getId());
             consumeSourceWip(sourceWip, report.getInputQuantity(), report, task, operatorId);
         }
-        if (report.getOutputQuantity() != null && report.getOutputQuantity().compareTo(BigDecimal.ZERO) > 0) {
+        String outputKind = report.getOutputKind();
+        // SP1: SEMI/BOTH → post semi-finished ledger; FINISHED/null(legacy) → existing WIP path
+        boolean isSemi = "SEMI".equals(outputKind) || "BOTH".equals(outputKind);
+        boolean isFinished = outputKind == null || "FINISHED".equals(outputKind) || "BOTH".equals(outputKind);
+
+        if (isSemi) {
+            postSemiOutputLedger(factoryId, report, task, operatorId);
+        }
+
+        if (isFinished && report.getOutputQuantity() != null && report.getOutputQuantity().compareTo(BigDecimal.ZERO) > 0) {
             BigDecimal rollLabor = report.getLaborCost();
             BigDecimal rollMaterial = report.getMaterialCost();
             if ("OUTPUT".equals(report.getReportKind())) {
@@ -85,6 +105,127 @@ public class WipInventoryServiceImpl implements WipInventoryService {
             upsertProducedWip(factoryId, report, task, rollLabor, rollMaterial);
         }
         markWipPosted(report);
+    }
+
+    /**
+     * SP1: 半成品产出 ledger posting.
+     *
+     * <p>Rules enforced:
+     * <ol>
+     *   <li>R1 — SELECT FOR UPDATE on SemiFinishedInventory to prevent concurrent moving-average divergence.</li>
+     *   <li>R2 — Runs inside caller's @Transactional (single transaction).</li>
+     *   <li>R3 — SemiFinishedInventoryTransaction rows are immutable (no update, only REVERSE rows).</li>
+     *   <li>R4 — semiCode/semiOutputQuantity null → skip gracefully (backward compat for old reports).</li>
+     *   <li>Fool-Proof Rule 4 — idempotency: same (factoryId, semiCode, IN) guard against double-post.</li>
+     * </ol>
+     *
+     * <p>Moving-average cost formula:
+     * <pre>newUnitCost = (oldQty × oldUnitCost + inQty × inUnitCost) / (oldQty + inQty)</pre>
+     * Scale-4, ROUND_HALF_UP.  inUnitCost = (laborCost + materialCost) / semiOutputQuantity (honest null if zero qty).
+     */
+    private void postSemiOutputLedger(String factoryId, ProductionReport report,
+                                       WorkProcessTask task, Long operatorId) {
+        String semiCode = report.getSemiCode();
+        BigDecimal inQty = report.getSemiOutputQuantity();
+        // R4: backward-compat — skip if fields absent
+        if (semiCode == null || semiCode.isBlank() || inQty == null || inQty.compareTo(BigDecimal.ZERO) <= 0) {
+            log.debug("[SP1-semi] skip postSemiOutputLedger for report {}: semiCode={} qty={}", report.getId(), semiCode, inQty);
+            return;
+        }
+
+        // Fool-Proof Rule 4 — idempotency guard
+        if (txnRepo.findByFactoryIdAndSourceRefAndTxnType(
+                factoryId, semiCode, SemiFinishedInventoryTransaction.TxnType.IN).isPresent()) {
+            log.info("[SP1-semi] idempotent skip for report {} semiCode={}: IN txn already exists", report.getId(), semiCode);
+            return;
+        }
+
+        // R1 — pessimistic lock to prevent concurrent moving-average divergence
+        SemiFinishedInventory sfi = wipRepo
+                .findForUpdateByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(factoryId, semiCode)
+                .orElse(null);
+
+        String outputUnit = firstNonBlank(report.getSemiOutputUnit(),
+                firstNonBlank(report.getOutputUnit(), task.getPlannedUnit()));
+
+        // Compute in-unit cost from this report's cost roll-up
+        BigDecimal rollLabor = report.getLaborCost();
+        BigDecimal rollMaterial = report.getMaterialCost();
+        if ("OUTPUT".equals(report.getReportKind())) {
+            CostRollup rollup = calculateTaskCostRollup(factoryId, task.getId());
+            rollLabor = rollup.laborCost();
+            rollMaterial = rollup.materialCost();
+        }
+        BigDecimal totalCost = nullSafeAdd(null, rollLabor, rollMaterial);
+        BigDecimal inUnitCost = null;
+        if (totalCost != null && inQty.signum() > 0) {
+            inUnitCost = totalCost.divide(inQty, 4, RoundingMode.HALF_UP);
+        }
+
+        if (sfi == null) {
+            // First IN — create new SemiFinishedInventory row
+            sfi = SemiFinishedInventory.builder()
+                    .factoryId(factoryId)
+                    .batchId(task.getProductionBatchId())
+                    .intermediateBatchNo(semiCode)
+                    .sourceWorkProcessTaskId(task.getId())
+                    .processOrder(task.getProcessOrder())
+                    .productTypeId(task.getProductTypeId())
+                    .producedQuantity(inQty)
+                    .consumedQuantity(BigDecimal.ZERO)
+                    .availableQuantity(inQty)
+                    .unit(outputUnit)
+                    .status(SemiFinishedInventory.Status.AVAILABLE)
+                    .accumulatedCost(totalCost)
+                    .unitCost(inUnitCost)
+                    .materialBatchRefs(report.getMaterialBatchRefs())
+                    .build();
+        } else {
+            // Moving-average cost update (R1 lock already held)
+            BigDecimal oldQty = nz(sfi.getProducedQuantity());
+            BigDecimal oldUnitCost = sfi.getUnitCost() == null ? BigDecimal.ZERO : sfi.getUnitCost();
+            BigDecimal newProduced = oldQty.add(inQty);
+            sfi.setProducedQuantity(newProduced);
+            BigDecimal consumed = nz(sfi.getConsumedQuantity());
+            sfi.setAvailableQuantity(newProduced.subtract(consumed));
+            if (sfi.getAvailableQuantity().compareTo(BigDecimal.ZERO) > 0
+                    && !SemiFinishedInventory.Status.RETURNED.equals(sfi.getStatus())) {
+                sfi.setStatus(SemiFinishedInventory.Status.AVAILABLE);
+            }
+            if (sfi.getUnit() == null) {
+                sfi.setUnit(outputUnit);
+            }
+            // Moving average: (oldQty×oldUnitCost + inQty×inUnitCost) / newProduced
+            BigDecimal newUnitCost = null;
+            if (newProduced.signum() > 0) {
+                BigDecimal oldComponent = oldQty.multiply(oldUnitCost);
+                BigDecimal inComponent = inUnitCost == null ? BigDecimal.ZERO : inQty.multiply(inUnitCost);
+                newUnitCost = oldComponent.add(inComponent).divide(newProduced, 4, RoundingMode.HALF_UP);
+            }
+            sfi.setUnitCost(newUnitCost);
+            sfi.setAccumulatedCost(nullSafeAdd(sfi.getAccumulatedCost(), totalCost));
+        }
+        wipRepo.save(sfi);
+
+        // Write immutable ledger entry (R3 — no update ever, only REVERSE rows for cancellation)
+        BigDecimal balanceAfter = sfi.getAvailableQuantity();
+        BigDecimal balanceCostAfter = sfi.getUnitCost();
+        SemiFinishedInventoryTransaction txn = SemiFinishedInventoryTransaction.builder()
+                .factoryId(factoryId)
+                .semiFinishedId(sfi.getId())
+                .txnType(SemiFinishedInventoryTransaction.TxnType.IN)
+                .sourceType(SemiFinishedInventoryTransaction.SourceType.PRODUCTION_OUTPUT)
+                .sourceRef(semiCode)
+                .quantity(inQty)
+                .unitCostAtTxn(inUnitCost)
+                .balanceAfter(balanceAfter)
+                .balanceCostAfter(balanceCostAfter)
+                .reportId(report.getId())
+                .operatorId(operatorId)
+                .build();
+        txnRepo.save(txn);
+        log.info("[SP1-semi] posted IN txn for report {} semiCode={} qty={} unitCost={} balanceAfter={}",
+                report.getId(), semiCode, inQty, inUnitCost, balanceAfter);
     }
 
     private void markWipPosted(ProductionReport report) {
@@ -283,5 +424,34 @@ public class WipInventoryServiceImpl implements WipInventoryService {
             return first;
         }
         return second;
+    }
+
+    // ========== SP1 T4 — Output options endpoint ==========
+
+    @Override
+    public OutputOptionsResponse getOutputOptions(String factoryId, Long batchId) {
+        List<WorkProcessTask> tasks =
+                taskRepo.findByFactoryIdAndProductionBatchIdOrderByProcessOrderAsc(factoryId, batchId);
+
+        List<OutputOptionsResponse.OutputOptionItem> items = new ArrayList<>();
+        for (WorkProcessTask task : tasks) {
+            if (task.getWorkProcessId() == null) {
+                continue;
+            }
+            workProcessRepo.findByFactoryIdAndId(factoryId, task.getWorkProcessId())
+                    .filter(wp -> wp.getSemiFinishedOutputCode() != null
+                            && !wp.getSemiFinishedOutputCode().isBlank())
+                    .ifPresent(wp -> items.add(
+                            OutputOptionsResponse.OutputOptionItem.builder()
+                                    .taskId(task.getId())
+                                    .processName(wp.getProcessName())
+                                    .semiCode(wp.getSemiFinishedOutputCode())
+                                    .processOrder(task.getProcessOrder())
+                                    .build()
+                    ));
+        }
+
+        log.debug("[SP1-T4] getOutputOptions factoryId={} batchId={} → {} items", factoryId, batchId, items.size());
+        return OutputOptionsResponse.builder().items(items).build();
     }
 }

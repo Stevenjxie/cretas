@@ -13,6 +13,8 @@ import com.cretas.aims.dto.processing.CreateMaterialReceiptRequest;
 import com.cretas.aims.dto.processing.CreateProductionBatchRequest;
 import com.cretas.aims.dto.processing.ProcessingStageRecordDTO;
 import com.cretas.aims.dto.quality.*;
+import com.cretas.aims.dto.yield.OutputOptionsResponse;
+import com.cretas.aims.service.wip.WipInventoryService;
 import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.ProductionBatch;
 import com.cretas.aims.entity.QualityInspection;
@@ -63,6 +65,7 @@ public class ProcessingController {
     private final QualityDispositionRuleService qualityDispositionRuleService;
     private final SpecialApprovalService specialApprovalService;
     private final QualityInspectionRepository qualityInspectionRepository;
+    private final WipInventoryService wipInventoryService;
 
     // ========== 批次管理接口 ==========
 
@@ -201,6 +204,23 @@ public class ProcessingController {
         log.info("获取批次时间线: factoryId={}, batchId={}", factoryId, batchId);
         List<Map<String, Object>> timeline = processingService.getBatchTimeline(factoryId, batchId);
         return ApiResponse.success(timeline);
+    }
+
+    /**
+     * SP1 T4 — 获取批次半成品产出选项
+     *
+     * <p>RN 报工屏幕在 outputKind=SEMI|BOTH 时调用此接口，填充"半成品产出编号"下拉框。
+     * 返回该批次下所有配置了 {@code semiFinishedOutputCode} 的工序任务列表。
+     */
+    @GetMapping("/batches/{batchId}/output-options")
+    @Operation(summary = "获取批次半成品产出选项",
+               description = "返回该批次下配置了半成品产出编号的工序任务列表，用于 RN 报工屏幕选择半成品产出码")
+    public ApiResponse<OutputOptionsResponse> getBatchOutputOptions(
+            @PathVariable @Parameter(description = "工厂ID", example = "F001") String factoryId,
+            @PathVariable @Parameter(description = "批次ID", example = "123") Long batchId) {
+        log.info("获取批次半成品产出选项: factoryId={}, batchId={}", factoryId, batchId);
+        OutputOptionsResponse response = wipInventoryService.getOutputOptions(factoryId, batchId);
+        return ApiResponse.success(response);
     }
 
     // ========== 批次员工分配接口 ==========
