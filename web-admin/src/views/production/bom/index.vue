@@ -3,16 +3,18 @@ import { ref, computed, onMounted, watch } from 'vue';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { get, post, put, del } from '@/api/request';
-import { bomYieldEstimateApi } from '@/api/bom';
+import { bomYieldEstimateApi, bomRecipeApi } from '@/api/bom';
 import type {
   YieldEstimateResponse,
   RecalculatePreviewRow,
   RecalculateApplyItem,
   RecalculateApplyStaleResponse,
+  BomRecipeSummary,
+  BomRecipeStatus,
 } from '@/api/bom';
 import { isAxiosError } from 'axios';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { Plus, Edit, Delete, Download, Refresh, MagicStick } from '@element-plus/icons-vue';
+import { Plus, Edit, Delete, Download, Refresh, MagicStick, InfoFilled } from '@element-plus/icons-vue';
 import BomChangeLog from './BomChangeLog.vue'
 import CanvasAwareWrapper from '@/components/canvas/CanvasAwareWrapper.vue'
 import ConceptDisambiguationAlert from '@/components/common/ConceptDisambiguationAlert.vue'
@@ -23,6 +25,107 @@ const permissionStore = usePermissionStore();
 const factoryId = computed(() => authStore.factoryId);
 const canWrite = computed(() => permissionStore.canWrite('production'));
 const canViewPrice = computed(() => permissionStore.canViewPrice);
+
+// =========================================================================
+// BOM Recipe status panel (DRAFT → ACTIVE 激活)
+// =========================================================================
+
+/** BOM recipe status tag display config */
+const recipeStatusTagType: Record<BomRecipeStatus, '' | 'success' | 'info' | 'warning' | 'danger'> = {
+  DRAFT: 'info',
+  ACTIVE: 'success',
+  ARCHIVED: '',
+};
+const recipeStatusLabel: Record<BomRecipeStatus, string> = {
+  DRAFT: '草稿',
+  ACTIVE: '已生效',
+  ARCHIVED: '已归档',
+};
+
+/** All BOM recipes for the currently selected product (newest first) */
+const bomRecipes = ref<BomRecipeSummary[]>([]);
+const bomRecipesLoading = ref(false);
+const activatingRecipeId = ref<string | null>(null);
+
+async function loadBomRecipes() {
+  if (!factoryId.value || !selectedProductTypeId.value) {
+    bomRecipes.value = [];
+    return;
+  }
+  bomRecipesLoading.value = true;
+  try {
+    const res = await bomRecipeApi.listRecipes(factoryId.value);
+    if (res.success && res.data) {
+      // Filter to current product only; backend sorts by updatedAt desc
+      const all: BomRecipeSummary[] = Array.isArray(res.data)
+        ? (res.data as BomRecipeSummary[])
+        : ((res.data as { content: BomRecipeSummary[] }).content ?? []);
+      bomRecipes.value = all.filter(
+        (r) => r.productTypeId === selectedProductTypeId.value,
+      );
+    }
+  } catch (error: unknown) {
+    const err = error as { actionHint?: string };
+    if (!err?.actionHint) {
+      // Non-critical: BOM recipe list is supplemental info; don't block the main page
+      console.warn('加载 BOM 配方列表失败', error);
+    }
+  } finally {
+    bomRecipesLoading.value = false;
+  }
+}
+
+async function handleActivateRecipe(recipe: BomRecipeSummary) {
+  if (!factoryId.value) return;
+  try {
+    await ElMessageBox.confirm(
+      `激活后此 BOM（${recipe.productName} v${recipe.version}）成为产品当前生效配方，原有生效配方将自动归档。确认激活？`,
+      '激活 BOM 配方',
+      {
+        confirmButtonText: '激活',
+        cancelButtonText: '取消',
+        type: 'warning',
+      },
+    );
+  } catch {
+    // user cancelled
+    return;
+  }
+
+  activatingRecipeId.value = recipe.id;
+  try {
+    const operatorId = authStore.user?.id ?? null;
+    const res = await bomRecipeApi.activate(factoryId.value, recipe.id, operatorId);
+    if (res.success) {
+      ElMessage.success('已激活 — BOM 配方已设为生效状态');
+      await loadBomRecipes();
+      // Refresh BOM items and cost summary since active recipe may differ
+      await loadBomItems();
+      await loadCostSummary();
+    } else {
+      ElMessage({
+        message: res.message || '激活失败',
+        type: 'error',
+        duration: 0,
+        showClose: true,
+      });
+    }
+  } catch (error: unknown) {
+    const err = error as { actionHint?: string };
+    if (!err?.actionHint) {
+      const msg = (error as { response?: { data?: { message?: string } } })?.response?.data?.message
+        || '激活 BOM 配方失败，请稍后重试';
+      ElMessage({
+        message: msg,
+        type: 'error',
+        duration: 0,
+        showClose: true,
+      });
+    }
+  } finally {
+    activatingRecipeId.value = null;
+  }
+}
 
 // State
 const loading = ref(false);
@@ -314,10 +417,12 @@ watch(selectedProductTypeId, async (newVal) => {
     await loadBomItems();
     await loadLaborCosts();
     await loadCostSummary();
+    await loadBomRecipes();
   } else {
     bomItems.value = [];
     laborCosts.value = [];
     costSummary.value = null;
+    bomRecipes.value = [];
   }
 });
 
@@ -897,6 +1002,7 @@ function refreshData() {
   loadLaborCosts();
   loadOverheadCosts();
   loadCostSummary();
+  loadBomRecipes();
 }
 </script>
 
@@ -990,6 +1096,91 @@ function refreshData() {
             </div>
           </el-card>
         </div>
+      </div>
+    </el-card>
+
+    <!-- BOM Recipe Status Card — shows DRAFT/ACTIVE/ARCHIVED status + 激活 button -->
+    <el-card
+      v-if="selectedProductTypeId && (bomRecipesLoading || bomRecipes.length > 0)"
+      class="recipe-status-card table-card"
+      shadow="never"
+    >
+      <template #header>
+        <div class="table-header">
+          <span class="table-title">BOM 配方版本</span>
+          <div class="table-actions">
+            <el-button size="small" :icon="Refresh" :loading="bomRecipesLoading" @click="loadBomRecipes">
+              刷新
+            </el-button>
+          </div>
+        </div>
+      </template>
+      <el-table
+        v-loading="bomRecipesLoading"
+        :data="bomRecipes"
+        stripe
+        border
+        size="small"
+        style="width: 100%"
+        empty-text="该产品暂无 BOM 配方记录"
+      >
+        <el-table-column prop="recipeCode" label="配方编号" width="160" show-overflow-tooltip />
+        <el-table-column prop="productName" label="产品名称" min-width="120" show-overflow-tooltip />
+        <el-table-column prop="version" label="版本" width="60" align="center">
+          <template #default="{ row }">
+            v{{ row.version }}
+          </template>
+        </el-table-column>
+        <el-table-column label="状态" width="100" align="center">
+          <template #default="{ row }">
+            <el-tag
+              :type="recipeStatusTagType[row.status as BomRecipeStatus]"
+              size="small"
+              disable-transitions
+            >
+              {{ recipeStatusLabel[row.status as BomRecipeStatus] ?? row.status }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="当前生效" width="80" align="center">
+          <template #default="{ row }">
+            <el-tag v-if="row.isCurrent" type="success" size="small" disable-transitions>是</el-tag>
+            <span v-else class="text-secondary">—</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="激活时间" width="130" align="center">
+          <template #default="{ row }">
+            <span v-if="row.activatedAt">{{ row.activatedAt.substring(0, 10) }}</span>
+            <span v-else class="text-secondary">—</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="总成本" width="100" align="right">
+          <template #default="{ row }">
+            <span v-if="canViewPrice && row.totalCost != null">
+              {{ Number(row.totalCost).toFixed(2) }}
+            </span>
+            <span v-else class="text-secondary">—</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="操作" width="100" fixed="right" align="center">
+          <template #default="{ row }">
+            <el-button
+              v-if="canWrite && row.status === 'DRAFT'"
+              type="success"
+              size="small"
+              :loading="activatingRecipeId === row.id"
+              @click="handleActivateRecipe(row)"
+            >
+              激活
+            </el-button>
+            <span v-else-if="row.status === 'ACTIVE'" class="recipe-active-label">已生效</span>
+            <span v-else class="text-secondary">—</span>
+          </template>
+        </el-table-column>
+      </el-table>
+      <div class="recipe-status-hint">
+        <el-icon><InfoFilled /></el-icon>
+        <span>仅 <strong>草稿 (DRAFT)</strong> 配方可激活；激活后同产品其他配方自动归档。</span>
       </div>
     </el-card>
 
@@ -1789,5 +1980,35 @@ function refreshData() {
   font-size: 12px;
   color: #409eff;
   margin-top: 4px;
+}
+
+/* BOM Recipe Status Card */
+.recipe-status-card {
+  flex-shrink: 0;
+}
+
+.recipe-status-hint {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+  font-size: 12px;
+  color: #909399;
+
+  .el-icon {
+    color: #909399;
+    flex-shrink: 0;
+  }
+}
+
+.recipe-active-label {
+  font-size: 12px;
+  color: #67c23a;
+  font-weight: 500;
+}
+
+.text-secondary {
+  color: #c0c4cc;
+  font-size: 12px;
 }
 </style>
