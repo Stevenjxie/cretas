@@ -50,4 +50,19 @@ public interface SemiFinishedInventoryTransactionRepository
     List<SemiFinishedInventoryTransaction> findByFactoryIdAndTxnType(
             @Param("factoryId") String factoryId,
             @Param("txnType") String txnType);
+
+    /**
+     * SP2 整单撤回 Guard #1: 检查某批次是否已有下游领用 (OUT/SECONDARY_CONSUME).
+     * source_ref 存的是 productionBatch.batchId 的 String 表示。
+     * 有任一行 → 说明该批次的 WIP 已被下道工序消费，不允许整单撤回。
+     */
+    @Query("SELECT CASE WHEN COUNT(t) > 0 THEN true ELSE false END " +
+            "FROM SemiFinishedInventoryTransaction t " +
+            "WHERE t.factoryId = :factoryId " +
+            "AND t.sourceRef = :batchRef " +
+            "AND t.txnType = 'OUT' " +
+            "AND t.sourceType IN ('SECONDARY_CONSUME', 'TRANSFER_OUT')")
+    boolean existsDownstreamConsumed(
+            @Param("factoryId") String factoryId,
+            @Param("batchRef") String batchRef);
 }

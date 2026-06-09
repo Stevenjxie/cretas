@@ -442,6 +442,65 @@ public class WipInventoryServiceImpl implements WipInventoryService {
         return second;
     }
 
+    // ========== SP2 新增方法 ====================
+
+    /**
+     * SP2 二次加工 — 悲观锁扣减 WIP 余量（二次加工计划创建时调用）。
+     * 调用方必须持有 @Transactional。
+     */
+    @Override
+    public void deductForSecondaryPlan(Long wipId, BigDecimal qty, String factoryId, Long operatorId) {
+        if (qty == null || qty.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new BusinessException(400, "扣减数量必须大于 0");
+        }
+        // 悲观写锁防并发超扣
+        SemiFinishedInventory wip = wipRepo.findByIdForUpdate(wipId)
+                .orElseThrow(() -> new BusinessException(404, "半成品库存行不存在: id=" + wipId));
+        if (!factoryId.equals(wip.getFactoryId())) {
+            throw new BusinessException(403, "工厂 ID 不匹配，无权操作该 WIP");
+        }
+        BigDecimal avail = nz(wip.getAvailableQuantity());
+        if (qty.compareTo(avail) > 0) {
+            throw new BusinessException(409, String.format(
+                    "WIP 余量不足: 请求 %.2f, 可用 %.2f (批次号: %s)",
+                    qty, avail, wip.getIntermediateBatchNo()))
+                    .withCode("WIP_INSUFFICIENT")
+                    .withHint("请减少领用数量或选择其他 WIP 批次");
+        }
+        BigDecimal newAvail = avail.subtract(qty);
+        wip.setAvailableQuantity(newAvail);
+        wip.setConsumedQuantity(nz(wip.getConsumedQuantity()).add(qty));
+        if (newAvail.compareTo(BigDecimal.ZERO) == 0) {
+            wip.setStatus(SemiFinishedInventory.Status.DEPLETED);
+        }
+        wipRepo.save(wip);
+
+        // 写 OUT/SECONDARY_CONSUME 流水
+        SemiFinishedInventoryTransaction outTxn = SemiFinishedInventoryTransaction.builder()
+                .factoryId(factoryId)
+                .semiFinishedId(wip.getId())
+                .txnType(SemiFinishedInventoryTransaction.TxnType.OUT)
+                .sourceType(SemiFinishedInventoryTransaction.SourceType.SECONDARY_CONSUME)
+                .sourceRef("secondary-plan-deduct:" + wipId)
+                .quantity(qty.negate())
+                .unitCostAtTxn(wip.getUnitCost())
+                .balanceAfter(newAvail)
+                .balanceCostAfter(wip.getUnitCost())
+                .operatorId(operatorId)
+                .build();
+        txnRepo.save(outTxn);
+        log.info("[SP2] deductForSecondaryPlan wipId={} qty={} newAvail={} factoryId={}",
+                wipId, qty, newAvail, factoryId);
+    }
+
+    /**
+     * SP2 二次加工 — 列出工厂所有可用 WIP。
+     */
+    @Override
+    public List<SemiFinishedInventory> listAvailableWip(String factoryId) {
+        return wipRepo.findAvailableByFactory(factoryId);
+    }
+
     // ========== SP1 T4 — Output options endpoint ==========
 
     @Override
