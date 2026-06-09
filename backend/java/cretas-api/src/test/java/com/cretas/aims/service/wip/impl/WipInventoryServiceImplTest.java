@@ -21,6 +21,7 @@ import org.mockito.Captor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.context.ApplicationEventPublisher;
 
 import java.math.BigDecimal;
 import java.util.List;
@@ -61,6 +62,11 @@ class WipInventoryServiceImplTest {
 
     @Mock
     private WorkProcessRepository workProcessRepo;
+
+    // SP3 added ApplicationEventPublisher.publishEvent(ProductionCostUpdatedEvent) to
+    // WipInventoryServiceImpl.postSemiOutputLedger — mock required so @InjectMocks can inject it.
+    @Mock
+    private ApplicationEventPublisher eventPublisher;
 
     @InjectMocks
     private WipInventoryServiceImpl service;
