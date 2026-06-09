@@ -820,9 +820,10 @@ public class SalesServiceImpl implements SalesService {
                 java.math.BigDecimal thresh = costVarianceService.resolveThreshold(factoryId, firstProductTypeId);
                 orderBelowThreshold = orderVariancePct.compareTo(thresh) <= 0;
                 if (Boolean.FALSE.equals(orderBelowThreshold)) {
-                    orderAlarmMessage = String.format(
-                            "实际成本超支 %.2f%% (阈值 %.2f%%), 超支金额 ¥%.2f",
-                            orderVariancePct, thresh, orderVarianceAbsolute);
+                    // 通用预警文案 — 不内嵌绝对成本金额或具体百分比，
+                    // 避免向无 finance:read 权限的销售角色泄露敏感数值。
+                    // variancePct / varianceAbsolute 已在各自 @PriceSensitive 字段独立脱敏。
+                    orderAlarmMessage = "成本超出标准阈值，请关注";
                 }
             }
         }

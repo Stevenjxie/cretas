@@ -8,12 +8,17 @@ import org.junit.jupiter.params.provider.CsvSource;
 import java.lang.reflect.Field;
 
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 
 /**
  * SP3 regression guard: new variance fields on FinanceCostBreakdown carry @PriceSensitive.
  *
- * <p>Order-level: varianceAbsolute, variancePct, alarmMessage — must be @PriceSensitive.
- * belowThreshold is intentionally NOT @PriceSensitive (boolean gate; OK for any role to see).
+ * <p>Order-level: varianceAbsolute, variancePct — must be @PriceSensitive (numeric cost values).
+ * alarmMessage is intentionally NOT @PriceSensitive: it is a generic warning string
+ * ("成本超出标准阈值，请关注") with no embedded cost figures or percentages, so it is
+ * safe to expose to sales roles. The sensitive numeric data lives in variancePct /
+ * varianceAbsolute which are separately @PriceSensitive-gated.
+ * belowThreshold is also NOT @PriceSensitive (boolean status gate).
  *
  * <p>LineCostBreakdown: standardCostPerUnit, actualCostPerUnit, variancePct — @PriceSensitive.
  * belowThreshold again is not @PriceSensitive.
@@ -25,7 +30,6 @@ class FinanceCostBreakdownSp3FieldsTest {
     @CsvSource({
             "varianceAbsolute",
             "variancePct",
-            "alarmMessage",
     })
     void orderLevelField_priceSensitive(String fieldName) throws NoSuchFieldException {
         Field field = FinanceCostBreakdown.class.getDeclaredField(fieldName);
@@ -51,14 +55,20 @@ class FinanceCostBreakdownSp3FieldsTest {
         );
     }
 
-    @ParameterizedTest(name = "FinanceCostBreakdown.{0} is NOT @PriceSensitive (boolean gate)")
+    @ParameterizedTest(name = "FinanceCostBreakdown.{0} is NOT @PriceSensitive (non-sensitive status/text field)")
     @CsvSource({
             "belowThreshold",
+            "alarmMessage",
     })
-    void orderLevelBooleanGate_notPriceSensitive(String fieldName) throws NoSuchFieldException {
-        // belowThreshold is a boolean flag visible to all roles; cost values are what's sensitive
+    void orderLevelNonSensitiveField_notPriceSensitive(String fieldName) throws NoSuchFieldException {
+        // belowThreshold: boolean flag visible to all roles; cost values are what's sensitive.
+        // alarmMessage: generic warning text ("成本超出标准阈值，请关注") — no embedded ¥ amounts or
+        // percentages, so safe for sales roles. Sensitive numeric data is in variancePct /
+        // varianceAbsolute which are separately @PriceSensitive-gated.
         Field field = FinanceCostBreakdown.class.getDeclaredField(fieldName);
-        // We deliberately do not annotate belowThreshold — just verify the field exists
-        assertNotNull(field, "FinanceCostBreakdown." + fieldName + " should exist");
+        assertNull(
+                field.getAnnotation(PriceSensitive.class),
+                "FinanceCostBreakdown." + fieldName + " must NOT be @PriceSensitive"
+        );
     }
 }
