@@ -196,6 +196,9 @@ public class BomRecipeServiceImpl implements BomRecipeService {
             item.setIsOptional(src.getIsOptional());
             item.setSubstituteGroup(src.getSubstituteGroup());
             item.setRemark(src.getRemark());
+            // SP4-T3: propagate per_portion + semi_finished_ref_code on clone
+            item.setPerPortion(src.getPerPortion() != null ? src.getPerPortion() : false);
+            item.setSemiFinishedRefCode(src.getSemiFinishedRefCode());
             clonedItems.add(item);
         }
         itemRepo.saveAll(clonedItems);
@@ -382,6 +385,9 @@ public class BomRecipeServiceImpl implements BomRecipeService {
         item.setIsOptional(dto.getIsOptional() != null ? dto.getIsOptional() : false);
         item.setSubstituteGroup(dto.getSubstituteGroup());
         item.setRemark(dto.getRemark());
+        // SP4-T3: 按份计量 + 半成品引用
+        item.setPerPortion(dto.getPerPortion() != null ? dto.getPerPortion() : false);
+        item.setSemiFinishedRefCode(dto.getSemiFinishedRefCode());
         // Cache actual_quantity + item_cost (also computable @Transient, but cached for query speed).
         item.setActualQuantity(item.calculateActualQuantity());
         item.setItemCost(item.computeItemCost());

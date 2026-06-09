@@ -1,5 +1,6 @@
 package com.cretas.aims.controller;
 
+import com.cretas.aims.dto.label.MaterialBatchLabelScanResponse;
 import com.cretas.aims.entity.Label;
 import com.cretas.aims.annotation.RequirePermission;
 import com.cretas.aims.service.LabelService;
@@ -471,6 +472,60 @@ public class LabelController {
             ));
         } catch (Exception e) {
             log.error("生成追溯码失败", e);
+            return ResponseEntity.badRequest().body(Map.of(
+                "success", false,
+                "message", ErrorSanitizer.sanitize(e)
+            ));
+        }
+    }
+
+    // ========== SP4-T5: 物料批次标签生成 + 扫码查询 ==========
+
+    /**
+     * SP4-T5: 为物料批次生成 MATERIAL 类型标签.
+     * POST /api/mobile/{factoryId}/labels/material-batch/{batchId}
+     */
+    @RequirePermission({"production:read_write"})
+    @PostMapping("/material-batch/{batchId}")
+    @Operation(summary = "生成物料批次标签", description = "SP4-T5: 为指定物料批次生成可扫描的 MATERIAL 标签")
+    public ResponseEntity<?> generateMaterialBatchLabel(
+            @PathVariable @Parameter(description = "工厂ID") String factoryId,
+            @PathVariable @Parameter(description = "物料批次ID") String batchId,
+            @RequestAttribute("userId") @Parameter(hidden = true) Long userId) {
+        try {
+            Label label = labelService.generateMaterialBatchLabel(factoryId, batchId, userId);
+            return ResponseEntity.status(201).body(Map.of(
+                "success", true,
+                "data", label,
+                "message", "物料批次标签生成成功"
+            ));
+        } catch (Exception e) {
+            log.error("生成物料批次标签失败: factoryId={}, batchId={}", factoryId, batchId, e);
+            return ResponseEntity.badRequest().body(Map.of(
+                "success", false,
+                "message", ErrorSanitizer.sanitize(e)
+            ));
+        }
+    }
+
+    /**
+     * SP4-T5: 扫描物料标签, 返回批次完整信息.
+     * GET /api/mobile/{factoryId}/labels/scan/{labelCode}
+     */
+    @GetMapping("/scan/{labelCode}")
+    @Operation(summary = "扫码查询物料批次", description = "SP4-T5: 通过扫描标签编码获取物料批次完整信息")
+    public ResponseEntity<?> scanLabel(
+            @PathVariable @Parameter(description = "工厂ID") String factoryId,
+            @PathVariable @Parameter(description = "标签编码 (扫码值)") String labelCode) {
+        try {
+            MaterialBatchLabelScanResponse response = labelService.scanLabel(factoryId, labelCode);
+            return ResponseEntity.ok(Map.of(
+                "success", true,
+                "data", response,
+                "message", "扫码查询成功"
+            ));
+        } catch (Exception e) {
+            log.error("扫码查询失败: factoryId={}, labelCode={}", factoryId, labelCode, e);
             return ResponseEntity.badRequest().body(Map.of(
                 "success", false,
                 "message", ErrorSanitizer.sanitize(e)

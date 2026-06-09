@@ -55,6 +55,8 @@ public class MaterialBatchMapper {
                 .storageLocation(batch.getStorageLocation())
                 .qualityCertificate(batch.getQualityCertificate())
                 .notes(batch.getNotes())
+                .factoryNumber(batch.getFactoryNumber())
+                .originPlace(batch.getOriginPlace())
                 .createdBy(batch.getCreatedBy())
                 .lastUsedAt(batch.getLastUsedAt())
                 .createdAt(batch.getCreatedAt())
@@ -168,6 +170,10 @@ public class MaterialBatchMapper {
         }
         batch.setCreatedBy(createdBy);
 
+        // SP4-A4: 生产厂家编号 + 产地 (nullable, 一物一码标签用)
+        batch.setFactoryNumber(request.getFactoryNumber());
+        batch.setOriginPlace(request.getOriginPlace());
+
         // P0-17: 发起单来源
         batch.setSourceDocType(request.getSourceDocType());
         batch.setSourceDocId(request.getSourceDocId());
@@ -277,6 +283,13 @@ public class MaterialBatchMapper {
         }
         if (request.getNotes() != null) {
             batch.setNotes(request.getNotes());
+        }
+        // SP4-A4: null-guard — don't overwrite existing value with null
+        if (request.getFactoryNumber() != null) {
+            batch.setFactoryNumber(request.getFactoryNumber());
+        }
+        if (request.getOriginPlace() != null) {
+            batch.setOriginPlace(request.getOriginPlace());
         }
     }
 

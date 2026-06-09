@@ -1,5 +1,6 @@
 package com.cretas.aims.entity;
 
+import com.cretas.aims.entity.enums.TaxRate;
 import com.cretas.aims.security.PriceSensitive;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
@@ -200,6 +201,26 @@ public class RawMaterialType extends BaseEntity {
 
     @Column(name = "moving_avg_price", precision = 12, scale = 4)
     private BigDecimal movingAvgPrice;
+
+    // ========== SP4-A8: 税率 + 含税单价 ==========
+
+    /**
+     * SP4-A8: 采购税率枚举 (9%农产品 / 13%一般货物).
+     * <p>设置后, 含税单价 → 未税单价自动换算并更新 {@link #unitPrice}.</p>
+     * <p>null = 未配置税率 (不换算).</p>
+     */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "tax_rate", length = 10)
+    private TaxRate taxRate;
+
+    /**
+     * SP4-A8: 含税单价 (仓管录入时的发票价).
+     * <p>Service 层在 taxRate 非 null 时自动换算 → {@link #unitPrice} (未税).</p>
+     * <p>Price-sensitive: 同 {@link #unitPrice}.</p>
+     */
+    @PriceSensitive
+    @Column(name = "tax_included_unit_price", precision = 15, scale = 4)
+    private BigDecimal taxIncludedUnitPrice;
 
     // ========== W-ABA-1 抄码品标记 (六扇门 F006 卤制品工厂刚需) ==========
 

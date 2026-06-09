@@ -1,7 +1,10 @@
 package com.cretas.aims.service.impl;
 
+import com.cretas.aims.dto.label.MaterialBatchLabelScanResponse;
 import com.cretas.aims.entity.Label;
+import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.repository.LabelRepository;
+import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.service.LabelService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -30,6 +33,7 @@ import java.util.UUID;
 public class LabelServiceImpl implements LabelService {
 
     private final LabelRepository labelRepository;
+    private final MaterialBatchRepository materialBatchRepository;
 
     @Override
     public Page<Label> getLabels(String factoryId, Pageable pageable) {
@@ -204,5 +208,97 @@ public class LabelServiceImpl implements LabelService {
         String dateStr = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd"));
         String seq = String.format("%06d", (int) (Math.random() * 1000000));
         return "TRACE-" + factoryId + "-" + dateStr + "-" + seq;
+    }
+
+    // ========== SP4-T5: 物料批次标签生成 + 扫码查询 ==========
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public Label generateMaterialBatchLabel(String factoryId, String batchId, Long userId) {
+        // 1. 批次存在校验
+        MaterialBatch batch = materialBatchRepository.findByIdAndFactoryId(batchId, factoryId)
+                .orElseThrow(() -> new RuntimeException("物料批次不存在: batchId=" + batchId));
+
+        // 2. 防呆: 已有 ACTIVE 标签则拒绝重复生成
+        List<Label> existing = labelRepository.findByBatchIdAndDeletedAtIsNull(batchId);
+        boolean hasActive = existing.stream()
+                .anyMatch(l -> "ACTIVE".equals(l.getStatus())
+                        || "PRINTED".equals(l.getStatus()));
+        if (hasActive) {
+            throw new RuntimeException("该物料批次已存在有效标签, batchId=" + batchId
+                    + " — 请先作废旧标签再重新生成 (already have active/printed label)");
+        }
+
+        // 3. 构建 MATERIAL 类型标签
+        Label label = new Label();
+        label.setId(UUID.randomUUID().toString());
+        label.setFactoryId(factoryId);
+        label.setBatchType("MATERIAL");
+        label.setBatchId(batchId);
+        label.setStatus("ACTIVE");
+        label.setPrintCount(0);
+        label.setCreatedBy(userId);
+        label.setLabelCode(generateLabelCode(factoryId, "MA"));        // MA = Material
+        label.setTraceCode(generateTraceCode(factoryId, batch.getBatchNumber()));
+        // 物料名称从 materialType 关联实体获取 (lazy, but within transaction)
+        if (batch.getMaterialType() != null) {
+            label.setProductName(batch.getMaterialType().getName());
+        }
+        log.info("SP4-T5: 生成物料批次标签 batchId={}, labelCode={}", batchId, label.getLabelCode());
+        return labelRepository.save(label);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public MaterialBatchLabelScanResponse scanLabel(String factoryId, String labelCode) {
+        // 1. 标签存在
+        Label label = labelRepository.findByLabelCodeAndDeletedAtIsNull(labelCode)
+                .orElseThrow(() -> new RuntimeException("标签不存在: labelCode=" + labelCode));
+
+        // 2. 跨工厂访问防护
+        if (!factoryId.equals(label.getFactoryId())) {
+            throw new RuntimeException("无权访问该标签: 标签属于工厂 "
+                    + label.getFactoryId() + ", 当前工厂 " + factoryId
+                    + " (cross-factory access denied)");
+        }
+
+        // 3. VOIDED 标签禁止使用
+        if ("VOIDED".equals(label.getStatus())) {
+            throw new RuntimeException("标签已作废 (VOIDED), 禁止使用: labelCode=" + labelCode);
+        }
+
+        // 4. 获取批次信息 (MATERIAL 类型绑定到 MaterialBatch)
+        MaterialBatch batch = null;
+        if ("MATERIAL".equals(label.getBatchType()) && label.getBatchId() != null) {
+            batch = materialBatchRepository
+                    .findByIdAndFactoryId(label.getBatchId(), factoryId)
+                    .orElse(null); // 标签可能在批次删除后仍存在
+        }
+
+        // 5. 组装响应 DTO
+        MaterialBatchLabelScanResponse.MaterialBatchLabelScanResponseBuilder builder =
+                MaterialBatchLabelScanResponse.builder()
+                        .labelId(label.getId())
+                        .labelCode(label.getLabelCode())
+                        .labelStatus(label.getStatus())
+                        .traceCode(label.getTraceCode())
+                        .batchId(label.getBatchId())
+                        .labelCreatedAt(label.getCreatedAt());
+
+        if (batch != null) {
+            // 物料名称从 materialType 关联实体获取, specification 用数量单位代替
+            String materialName = (batch.getMaterialType() != null)
+                    ? batch.getMaterialType().getName() : null;
+            String specification = batch.getQuantityUnit();   // e.g. "kg" / "箱"
+            builder.batchNumber(batch.getBatchNumber())
+                    .materialName(materialName)
+                    .specification(specification)
+                    .factoryNumber(batch.getFactoryNumber())
+                    .originPlace(batch.getOriginPlace())
+                    .batchCreatedAt(batch.getCreatedAt());
+        }
+
+        log.info("SP4-T5: 扫码查询 labelCode={}, batchId={}", labelCode, label.getBatchId());
+        return builder.build();
     }
 }

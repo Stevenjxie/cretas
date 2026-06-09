@@ -8,6 +8,7 @@ import com.cretas.aims.dto.material.RawMaterialTypeDTO;
 import com.cretas.aims.dto.materialtype.MaterialTypeExportDTO;
 import com.cretas.aims.entity.RawMaterialType;
 import com.cretas.aims.entity.MaterialBatch;
+import com.cretas.aims.entity.enums.TaxRate;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.exception.ResourceNotFoundException;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
@@ -129,6 +130,13 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
         materialType.setCreatedAt(LocalDateTime.now());
         materialType.setUpdatedAt(LocalDateTime.now());
 
+        // SP4-A8: 税率 + 含税单价 → 自动换算未税单价
+        materialType.setTaxRate(dto.getTaxRate());
+        materialType.setTaxIncludedUnitPrice(dto.getTaxIncludedUnitPrice());
+        if (dto.getTaxRate() != null && dto.getTaxIncludedUnitPrice() != null) {
+            materialType.setUnitPrice(dto.getTaxRate().preTaxPrice(dto.getTaxIncludedUnitPrice()));
+        }
+
         materialType = materialTypeRepository.save(materialType);
 
         log.info("原材料类型创建成功: id={}", materialType.getId());
@@ -168,6 +176,14 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
         if (dto.getMaxStock() != null) materialType.setMaxStock(dto.getMaxStock());
         if (dto.getNotes() != null) materialType.setNotes(dto.getNotes());
         if (dto.getIsActive() != null) materialType.setIsActive(dto.getIsActive());
+
+        // SP4-A8: 税率 + 含税单价 null-guard 更新 → 自动换算未税单价
+        if (dto.getTaxRate() != null) materialType.setTaxRate(dto.getTaxRate());
+        if (dto.getTaxIncludedUnitPrice() != null) materialType.setTaxIncludedUnitPrice(dto.getTaxIncludedUnitPrice());
+        // 仅当 taxRate + taxIncludedUnitPrice 都已配置 (含本次更新后的值) 才换算
+        if (materialType.getTaxRate() != null && materialType.getTaxIncludedUnitPrice() != null) {
+            materialType.setUnitPrice(materialType.getTaxRate().preTaxPrice(materialType.getTaxIncludedUnitPrice()));
+        }
 
         materialType.setUpdatedAt(LocalDateTime.now());
         materialType = materialTypeRepository.save(materialType);
@@ -433,6 +449,9 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
                 .createdAt(materialType.getCreatedAt())
                 .updatedAt(materialType.getUpdatedAt())
                 .movingAvgPrice(materialType.getMovingAvgPrice())
+                // SP4-A8: 税率 + 含税单价
+                .taxRate(materialType.getTaxRate())
+                .taxIncludedUnitPrice(materialType.getTaxIncludedUnitPrice())
                 .build();
     }
 
@@ -604,6 +623,50 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
             case "包材": return "BC";
             default:   return "WL";
         }
+    }
+
+    // ========== SP4-T4: 一物一码标签数字前缀 (2位) ==========
+
+    /** 一物一码标签编码数字前缀映射表 (category → 2-digit numeric code). */
+    static final java.util.Map<String, String> NUMERIC_PREFIX_MAP =
+            java.util.Map.of(
+                    "肉类",   "01",
+                    "禽类",   "02",
+                    "水产类", "03",
+                    "海水鱼", "03",
+                    "淡水鱼", "03",
+                    "虾类",   "03",
+                    "贝类",   "03",
+                    "调料",   "04",
+                    "包材",   "05",
+                    "原料",   "06"
+            );
+
+    /**
+     * 根据物料类别返回一物一码标签编码的2位数字前缀 (SP4-T4).
+     *
+     * <ul>
+     *   <li>肉类   → "01"</li>
+     *   <li>禽类   → "02"</li>
+     *   <li>水产类/海水鱼/淡水鱼/虾类/贝类 → "03"</li>
+     *   <li>调料   → "04"</li>
+     *   <li>包材   → "05"</li>
+     *   <li>原料   → "06"</li>
+     *   <li>null/空/未知 → "99"</li>
+     * </ul>
+     *
+     * <p>与 {@link #getMaterialCategoryPrefix(String)} 完全独立 — 后者产出字母编码 (YL/RL/BC/WL)
+     * 供物料编号自增序列使用; 本方法产出数字编码供一物一码标签生成使用。
+     *
+     * @param category 物料类别字符串 (允许 null)
+     * @return 2位数字字符串, 未知类别返回 "99"
+     * @since SP4 V20261002_05
+     */
+    static String getNumericPrefix(String category) {
+        if (category == null || category.trim().isEmpty()) {
+            return "99";
+        }
+        return NUMERIC_PREFIX_MAP.getOrDefault(category.trim(), "99");
     }
 
     /**

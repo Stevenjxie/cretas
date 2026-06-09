@@ -1,5 +1,6 @@
 package com.cretas.aims.entity;
 
+import com.cretas.aims.entity.enums.TaxRate;
 import com.cretas.aims.security.PriceSensitive;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
@@ -224,6 +225,15 @@ public class ProductType extends BaseEntity {
     @PriceSensitive
     @Column(name = "tax_included_unit_price", precision = 15, scale = 4)
     private java.math.BigDecimal taxIncludedUnitPrice;
+
+    /**
+     * SP4-A8: 出货税率枚举 (9%农产品 / 13%一般货物).
+     * <p>设置后, 含税单价 → 未税单价自动换算并更新 {@link #unitPrice}.</p>
+     * <p>null = 未配置税率 (不换算).</p>
+     */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "tax_rate", length = 10)
+    private TaxRate taxRate;
 
     // ==================== End 产品信息管理增强字段 ====================
 

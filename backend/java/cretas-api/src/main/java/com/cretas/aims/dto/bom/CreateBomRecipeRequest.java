@@ -115,5 +115,14 @@ public class CreateBomRecipeRequest {
         @Schema(description = "备注")
         @Size(max = 500)
         private String remark;
+
+        // ========== SP4-T3: 按份计量 + 半成品引用 ==========
+
+        @Schema(description = "是否按份计量 (true = 每份用量, false = 按批次总量), 默认 false")
+        private Boolean perPortion;
+
+        @Schema(description = "半成品引用编码, 追踪原料→半成品→成品链路 (可选)")
+        @Size(max = 100, message = "半成品引用编码长度不能超过100个字符")
+        private String semiFinishedRefCode;
     }
 }
