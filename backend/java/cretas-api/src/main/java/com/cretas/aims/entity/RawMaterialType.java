@@ -272,6 +272,15 @@ public class RawMaterialType extends BaseEntity {
     @Column(name = "created_by", nullable = false)
     private Long createdBy;
 
+    // ========== SP8: 16位分段编码主编码 ==========
+
+    /**
+     * SP8: 16位编码前三位主编码 (类型段), 如 001=原料/002=包材/003=辅料.
+     * 历史数据可为空; 新建物料时由 Service 自动提取 code 前三位或从级联选择结果写入.
+     */
+    @Column(name = "primary_code", length = 3)
+    private String primaryCode;
+
     // ========== 关联关系 ==========
 
     /**

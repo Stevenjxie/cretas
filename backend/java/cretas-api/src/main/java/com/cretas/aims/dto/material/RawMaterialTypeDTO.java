@@ -87,4 +87,18 @@ public class RawMaterialTypeDTO {
      */
     @PriceSensitive
     private BigDecimal taxIncludedUnitPrice;
+
+    // ========== SP8: 16位分段编码 ==========
+
+    /**
+     * SP8: 16位编码前三位主编码 (类型段), 如 001/002/003.
+     * 历史数据可为空; 新建时从 code 前三位自动提取或由前端级联选择传入.
+     */
+    private String primaryCode;
+
+    /**
+     * SP8: 前端级联选择的 L3 cumulative segment code (10位), 供16位生成器用.
+     * 不持久化到 DB — 仅用于建档请求中传递级联选择结果.
+     */
+    private String segmentCode;
 }
