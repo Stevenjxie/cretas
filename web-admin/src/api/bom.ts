@@ -1,14 +1,71 @@
 /**
- * BOM Yield Estimate API — Phase B/C endpoints (2026-06-07).
- *
- * 对应后端 BomYieldEstimateController:
- *   GET  /{factoryId}/bom/yield-estimate
- *   POST /{factoryId}/bom/yield-estimate/recalculate-preview
- *   POST /{factoryId}/bom/yield-estimate/recalculate-apply
+ * BOM API — includes:
+ *   - BOM Recipe lifecycle (BomRecipeController): activate DRAFT → ACTIVE
+ *   - BOM Yield Estimate (BomYieldEstimateController): Phase B/C endpoints
  *
  * Base URL is /api/mobile (set in request.ts baseURL).
+ * Endpoint prefix: /{factoryId}/bom/recipes/{recipeId}/...
  */
 import { get, post } from './request';
+
+// =========================================================================
+// BOM Recipe — status types + activate API
+// =========================================================================
+
+/** BomRecipe.Status enum values (mirrors backend BomRecipe.Status) */
+export type BomRecipeStatus = 'DRAFT' | 'ACTIVE' | 'ARCHIVED';
+
+/**
+ * Minimal BomRecipe shape returned by the list/activate endpoints.
+ * Fields match BomRecipe entity JSON serialization (camelCase via Jackson).
+ */
+export interface BomRecipeSummary {
+  id: string;
+  factoryId: string;
+  recipeCode: string;
+  productTypeId: string;
+  productName: string;
+  version: number;
+  isCurrent: boolean;
+  status: BomRecipeStatus;
+  activatedAt?: string | null;
+  activatedBy?: number | null;
+  totalCost?: number | null;
+  totalMaterialCost?: number | null;
+  totalLaborCost?: number | null;
+  totalOverheadCost?: number | null;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+}
+
+const recipeBase = (factoryId: string) => `/${factoryId}/bom/recipes`;
+
+export const bomRecipeApi = {
+  /**
+   * 分页查询 BOM 配方列表, 可按 status 过滤.
+   * 对应: GET /api/mobile/{factoryId}/bom/recipes
+   */
+  listRecipes: (
+    factoryId: string,
+    options?: { status?: BomRecipeStatus; page?: number; size?: number },
+  ) =>
+    get<{ content: BomRecipeSummary[]; totalElements: number; totalPages: number }>(
+      recipeBase(factoryId),
+      { params: { ...options } },
+    ),
+
+  /**
+   * 激活 BOM 配方 (DRAFT → ACTIVE).
+   * 同产品其他 is_current 配方自动降级。
+   * 对应: POST /api/mobile/{factoryId}/bom/recipes/{recipeId}/activate
+   */
+  activate: (factoryId: string, recipeId: string, operatorId?: number | null) =>
+    post<BomRecipeSummary>(
+      `${recipeBase(factoryId)}/${recipeId}/activate`,
+      null,
+      { params: operatorId != null ? { operatorId } : {} },
+    ),
+};
 
 /** 单个 BOM Item 出成率评估响应 */
 export interface YieldEstimateResponse {
