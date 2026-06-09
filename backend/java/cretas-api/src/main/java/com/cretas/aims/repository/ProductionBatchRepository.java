@@ -335,4 +335,26 @@ public interface ProductionBatchRepository extends JpaRepository<ProductionBatch
             @Param("factoryId") String factoryId,
             @Param("productTypeId") String productTypeId,
             org.springframework.data.domain.Pageable pageable);
+
+    /**
+     * SP9-M3: 查询时间区间内已完工批次, 可选产品类型过滤.
+     *
+     * <p>CAST(:productTypeId AS string) IS NULL 处理可选过滤参数 (PG 严格类型推断兜底).
+     * 结果按 createdAt 倒序.</p>
+     *
+     * @param factoryId     工厂 ID (租户隔离)
+     * @param startDate     区间开始 (inclusive)
+     * @param endDate       区间结束 (inclusive, end-of-day)
+     * @param productTypeId 产品类型 ID 过滤 (null = 全部)
+     */
+    @Query("SELECT b FROM ProductionBatch b WHERE b.factoryId = :factoryId "
+            + "AND b.status = 'COMPLETED' "
+            + "AND b.createdAt >= :startDate AND b.createdAt <= :endDate "
+            + "AND (CAST(:productTypeId AS string) IS NULL OR b.productTypeId = :productTypeId) "
+            + "ORDER BY b.createdAt DESC")
+    java.util.List<ProductionBatch> findCompletedBatchesForLaborComparison(
+            @Param("factoryId") String factoryId,
+            @Param("startDate") java.time.LocalDateTime startDate,
+            @Param("endDate") java.time.LocalDateTime endDate,
+            @Param("productTypeId") String productTypeId);
 }
