@@ -1,5 +1,6 @@
 package com.cretas.aims.service;
 
+import com.cretas.aims.dto.label.MaterialBatchLabelScanResponse;
 import com.cretas.aims.entity.Label;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -121,4 +122,28 @@ public interface LabelService {
      * 生成追溯码
      */
     String generateTraceCode(String factoryId, String batchNumber);
+
+    // ========== SP4-T5: 物料批次标签生成 + 扫码查询 ==========
+
+    /**
+     * SP4-T5: 为物料批次生成 MATERIAL 类型标签.
+     * 防呆: 同一批次已有 ACTIVE 标签时抛出 RuntimeException (409 场景).
+     *
+     * @param factoryId 工厂 ID
+     * @param batchId   物料批次 ID
+     * @param userId    操作人 ID
+     * @return 新建的 ACTIVE 标签
+     */
+    Label generateMaterialBatchLabel(String factoryId, String batchId, Long userId);
+
+    /**
+     * SP4-T5: 扫描物料标签, 返回批次完整信息.
+     * VOIDED 标签返回 HTTP 400 (通过抛 RuntimeException).
+     * 跨工厂访问返回 HTTP 400.
+     *
+     * @param factoryId 工厂 ID
+     * @param labelCode 标签编码 (扫描值)
+     * @return 标签 + 批次关键信息 DTO
+     */
+    MaterialBatchLabelScanResponse scanLabel(String factoryId, String labelCode);
 }
