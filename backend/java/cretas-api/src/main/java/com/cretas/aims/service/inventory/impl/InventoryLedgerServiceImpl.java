@@ -5,7 +5,7 @@ import com.cretas.aims.entity.RawMaterialType;
 import com.cretas.aims.entity.enums.SnapshotType;
 import com.cretas.aims.entity.finance.AccountingPeriod;
 import com.cretas.aims.entity.inventory.InventoryLedgerSnapshot;
-import com.cretas.aims.repository.AccountingPeriodRepository;
+import com.cretas.aims.repository.finance.AccountingPeriodRepository;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.repository.inventory.InventoryLedgerSnapshotRepository;
