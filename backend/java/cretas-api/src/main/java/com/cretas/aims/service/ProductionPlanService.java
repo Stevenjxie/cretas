@@ -184,4 +184,26 @@ public interface ProductionPlanService {
      * 映射：suggestedProductionLineId→equipmentId, estimatedWorkers→workerCount, assignedSupervisorId→supervisorId
      */
     ProductionBatch createBatchFromPlan(String factoryId, String planId);
+
+    /**
+     * SP2 二次加工: 基于 WIP 半成品创建二次加工计划。
+     *
+     * <p>区别于普通计划:
+     * <ul>
+     *   <li>planSourceType = "SECONDARY"</li>
+     *   <li>secondarySourceWipId = wipId (原料来源半成品库存行)</li>
+     *   <li>startProduction 时自动调用 WipInventoryService.deductForSecondaryPlan 扣减 WIP 库存</li>
+     * </ul>
+     *
+     * @param factoryId     工厂 ID
+     * @param wipId         来源半成品库存 ID (SemiFinishedInventory.id)
+     * @param quantity      计划加工数量 (不超过 WIP availableQuantity)
+     * @param productTypeId 目标成品类型 ID
+     * @param plannedDate   计划日期
+     * @param submittedBy   提交人 userId
+     * @since SP2 (2026-06-10, feat/liushanmen-sp2-reversal)
+     */
+    ProductionPlanDTO createSecondaryPlan(String factoryId, Long wipId, java.math.BigDecimal quantity,
+                                          String productTypeId, java.time.LocalDate plannedDate,
+                                          Long submittedBy);
 }

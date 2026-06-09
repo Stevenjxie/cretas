@@ -184,6 +184,19 @@ public interface FinishedGoodsBatchRepository extends JpaRepository<FinishedGood
             @Param("warehouseCode") String warehouseCode);
 
     /**
+     * SP2 整单撤回 Guard #2: 检查某 plan 是否已有成品被出货 (shippedQuantity > 0).
+     * FGB 通过 productionPlanId (String) 关联生产计划.
+     * 注意: 使用列侧 IS NULL check, 不用 CAST (列类型 PG 已知, 非参数侧).
+     */
+    @Query("SELECT CASE WHEN COUNT(b) > 0 THEN true ELSE false END " +
+            "FROM FinishedGoodsBatch b WHERE b.factoryId = :factoryId " +
+            "AND b.productionPlanId = :planId AND b.shippedQuantity > 0 " +
+            "AND b.deletedAt IS NULL")
+    boolean existsShippedByFactoryIdAndProductionPlanId(
+            @Param("factoryId") String factoryId,
+            @Param("planId") String planId);
+
+    /**
      * D5 (cross-factory sales + WH-LOG filter) — 跨工厂的 WH-LOG 可用成品批次（FEFO）。
      *
      * <p>当 A5 feature flag {@code cretas.sales.cross-factory.enabled=true} 时使用：
@@ -201,6 +214,19 @@ public interface FinishedGoodsBatchRepository extends JpaRepository<FinishedGood
     List<FinishedGoodsBatch> findAvailableBatchesAllFactoriesByWarehouseCode(
             @Param("productTypeId") String productTypeId,
             @Param("warehouseCode") String warehouseCode);
+
+    /**
+     * SP2 撤回: 查找某计划下的所有成品批次（用于标记 REVERSED 状态）.
+     * FinishedGoodsBatch 继承 BaseEntity, @Where(deleted_at IS NULL) 已生效,
+     * 但 SP2 需要精确控制所以用 @Query 显式加 deletedAt IS NULL 守护.
+     *
+     * @since SP2 (2026-06-10, feat/liushanmen-sp2-reversal)
+     */
+    @Query("SELECT b FROM FinishedGoodsBatch b WHERE b.factoryId = :factoryId " +
+            "AND b.productionPlanId = :planId AND b.deletedAt IS NULL")
+    List<FinishedGoodsBatch> findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(
+            @Param("factoryId") String factoryId,
+            @Param("planId") String planId);
 
     /**
      * 分仓库存查询 (PR #309 B2=B, 2026-05-11 spec).

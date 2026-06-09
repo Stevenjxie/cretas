@@ -164,7 +164,6 @@ public class ProductionPlan extends BaseEntity {
      * V20260910_11 新增列.
      */
     @Column(name = "plan_source_type", length = 30)
-    @Builder.Default
     private String planSourceType = "NORMAL";
 
     /**

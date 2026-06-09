@@ -86,4 +86,20 @@ public interface SemiFinishedInventoryRepository extends JpaRepository<SemiFinis
     BigDecimal sumAvailableByProduct(
             @Param("factoryId") String factoryId,
             @Param("productTypeId") String productTypeId);
+
+    /**
+     * SP2 二次加工: 列出工厂所有 AVAILABLE 且余量 > 0 的 WIP 行.
+     * 用于 RN/web-admin 的"选择源 WIP"下拉列表。
+     * 按工序序正序展示，同工序按批次创建时间排序。
+     */
+    @Query("SELECT w FROM SemiFinishedInventory w WHERE w.factoryId = :factoryId " +
+           "AND w.status = 'AVAILABLE' AND w.availableQuantity > 0 " +
+           "AND w.deletedAt IS NULL " +
+           "ORDER BY w.processOrder ASC, w.createdAt ASC")
+    List<SemiFinishedInventory> findAvailableByFactory(@Param("factoryId") String factoryId);
+
+    /** 按 ID 加悲观写锁 (SP2 二次加工计划创建时扣减 WIP 用)。 */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT w FROM SemiFinishedInventory w WHERE w.id = :id AND w.deletedAt IS NULL")
+    Optional<SemiFinishedInventory> findByIdForUpdate(@Param("id") Long id);
 }

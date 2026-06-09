@@ -6,6 +6,7 @@ import com.cretas.aims.entity.SemiFinishedInventory;
 import com.cretas.aims.entity.workprocess.WorkProcessTask;
 
 import java.math.BigDecimal;
+import java.util.List;
 
 /**
  * Authoritative WIP inventory operations shared by reporting entry points.
@@ -32,4 +33,31 @@ public interface WipInventoryService {
      * @return response object containing the list of output options (may be empty)
      */
     OutputOptionsResponse getOutputOptions(String factoryId, Long batchId);
+
+    // ==================== SP2 新增方法 ====================
+
+    /**
+     * SP2 二次加工 — 按悲观锁扣减 WIP 余量（创建二次加工计划时调用）。
+     *
+     * <p>此方法必须在调用方的 {@code @Transactional} 内执行，不自行开事务。
+     * 扣减后写入 SemiFinishedInventoryTransaction(OUT/SECONDARY_CONSUME) 流水。
+     * 余量 = 0 → 自动将 WIP 状态置 DEPLETED。
+     *
+     * @param wipId      SemiFinishedInventory.id
+     * @param qty        扣减数量 (必须 > 0, 且 ≤ availableQuantity)
+     * @param factoryId  工厂 ID (幂等守卫 + 流水账写入)
+     * @param operatorId 操作人 ID (可为 null)
+     * @throws org.springframework.web.server.ResponseStatusException 409 如余量不足
+     */
+    void deductForSecondaryPlan(Long wipId, BigDecimal qty, String factoryId, Long operatorId);
+
+    /**
+     * SP2 二次加工 — 列出工厂所有 AVAILABLE 且 availableQuantity > 0 的 WIP 行。
+     *
+     * <p>用于 RN/web-admin "选择源 WIP" 下拉列表。
+     *
+     * @param factoryId 工厂 ID
+     * @return 可用 WIP 列表 (按 processOrder ASC, createdAt ASC 排序)
+     */
+    List<SemiFinishedInventory> listAvailableWip(String factoryId);
 }

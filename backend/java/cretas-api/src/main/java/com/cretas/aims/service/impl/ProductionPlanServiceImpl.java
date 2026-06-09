@@ -119,6 +119,10 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         this.bomService = bomService;
     }
 
+    /** SP2 二次加工: WIP 半成品库存扣减. required=false 避免循环依赖风险. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.wip.WipInventoryService wipInventoryService;
+
     /** Canvas V2: DB-driven validation rules */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.engine.ValidationRuleEvaluator validationRuleEvaluator;
@@ -873,6 +877,20 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         // 客户原话: "那这个开始的话点的时候会有一个判断吗就是我的库存够不够"
         // 不足时阻断开始, 提示具体原料/需求/可用/缺口, 客户去采购或调拨.
         validateMaterialStockSufficient(factoryId, plan);
+
+        // SP2 二次加工: 开始生产时扣减 WIP 半成品库存
+        // 注: 在事务内执行, 扣减失败直接抛出异常回滚整个 startProduction (fail-closed, 无 fail-soft)
+        if ("SECONDARY".equals(plan.getPlanSourceType()) && plan.getSecondarySourceWipId() != null) {
+            if (wipInventoryService == null) {
+                throw new BusinessException(500, "二次加工服务未初始化, 无法扣减半成品库存");
+            }
+            wipInventoryService.deductForSecondaryPlan(
+                    plan.getSecondarySourceWipId(),
+                    plan.getPlannedQuantity() != null ? plan.getPlannedQuantity() : java.math.BigDecimal.ZERO,
+                    factoryId,
+                    null /* operatorId — startProduction does not receive userId, set null */);
+            log.info("SP2 二次加工 WIP 扣减完成: planId={}, wipId={}", planId, plan.getSecondarySourceWipId());
+        }
 
         plan.setStatus(ProductionPlanStatus.IN_PROGRESS);
         plan.setStartTime(LocalDateTime.now());
@@ -1633,5 +1651,78 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                     .ifPresent(user -> dto.setSupervisorUsername(user.getUsername()));
         }
         return dto;
+    }
+
+    // -------------------------------------------------------------------------
+    // SP2 二次加工
+    // -------------------------------------------------------------------------
+
+    /**
+     * SP2 二次加工: 基于 WIP 半成品创建二次加工计划。
+     *
+     * <p>此方法只创建计划 (PENDING), 不扣减 WIP 库存。
+     * WIP 扣减在 {@link #startProduction} 时执行 (fail-closed 事务内)。
+     *
+     * @since SP2 (2026-06-10, feat/liushanmen-sp2-reversal)
+     */
+    @Override
+    @Transactional
+    public ProductionPlanDTO createSecondaryPlan(
+            String factoryId, Long wipId, java.math.BigDecimal quantity,
+            String productTypeId, java.time.LocalDate plannedDate, Long submittedBy) {
+
+        if (wipInventoryService == null) {
+            throw new BusinessException(500, "二次加工服务未初始化");
+        }
+
+        // 1. 校验 WIP 存在且余量充足 (查询不扣减)
+        var availableList = wipInventoryService.listAvailableWip(factoryId);
+        com.cretas.aims.entity.SemiFinishedInventory wip = availableList.stream()
+                .filter(w -> w.getId().equals(wipId))
+                .findFirst()
+                .orElseThrow(() -> new ResourceNotFoundException("半成品库存", "id", wipId));
+
+        if (quantity == null || quantity.compareTo(java.math.BigDecimal.ZERO) <= 0) {
+            throw new BusinessException(400, "计划加工数量必须大于 0");
+        }
+        if (wip.getAvailableQuantity() == null ||
+                quantity.compareTo(wip.getAvailableQuantity()) > 0) {
+            throw new BusinessException(409, String.format(
+                    "半成品可用量不足: 需要 %s, 可用 %s",
+                    quantity.stripTrailingZeros().toPlainString(),
+                    wip.getAvailableQuantity() != null
+                            ? wip.getAvailableQuantity().stripTrailingZeros().toPlainString()
+                            : "0"));
+        }
+
+        // 2. 校验目标产品类型存在
+        com.cretas.aims.entity.ProductType productType = productTypeRepository.findById(productTypeId)
+                .orElseThrow(() -> new ResourceNotFoundException("产品类型", "id", productTypeId));
+
+        // 3. 生成计划编号
+        String planNumber = "SEC-" + factoryId + "-"
+                + java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd").format(
+                        plannedDate != null ? plannedDate : java.time.LocalDate.now())
+                + "-" + java.util.UUID.randomUUID().toString().substring(0, 6).toUpperCase();
+
+        // 4. 构建并保存计划
+        ProductionPlan plan = new ProductionPlan();
+        plan.setFactoryId(factoryId);
+        plan.setPlanNumber(planNumber);
+        plan.setProductTypeId(productTypeId);
+        plan.setPlannedQuantity(quantity);
+        plan.setPlannedDate(plannedDate != null ? plannedDate : java.time.LocalDate.now());
+        plan.setStatus(ProductionPlanStatus.PENDING);
+        plan.setCreatedBy(submittedBy);
+        // SP2 特有字段
+        plan.setPlanSourceType("SECONDARY");
+        plan.setSecondarySourceWipId(wipId);
+
+        plan = productionPlanRepository.save(plan);
+
+        log.info("SP2 创建二次加工计划: planId={}, wipId={}, quantity={}, factoryId={}",
+                plan.getId(), wipId, quantity, factoryId);
+
+        return toDTOWithConversionInfo(plan);
     }
 }
