@@ -7,6 +7,7 @@ import com.cretas.aims.entity.SemiFinishedInventoryTransaction;
 import com.cretas.aims.entity.WorkProcess;
 import com.cretas.aims.entity.lineage.BatchLineageEdge;
 import com.cretas.aims.entity.workprocess.WorkProcessTask;
+import com.cretas.aims.event.ProductionCostUpdatedEvent;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.ProductionReportRepository;
 import com.cretas.aims.repository.SemiFinishedInventoryRepository;
@@ -17,6 +18,7 @@ import com.cretas.aims.repository.workprocess.WorkProcessTaskRepository;
 import com.cretas.aims.service.wip.WipInventoryService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -39,6 +41,8 @@ public class WipInventoryServiceImpl implements WipInventoryService {
     private final BatchLineageEdgeRepository lineageEdgeRepo;
     private final WorkProcessTaskRepository taskRepo;
     private final WorkProcessRepository workProcessRepo;
+    /** SP3: 成本更新事件发布 — 异步回填+预警. */
+    private final ApplicationEventPublisher eventPublisher;
 
     @Override
     public SemiFinishedInventory validateSourceWip(
@@ -226,6 +230,18 @@ public class WipInventoryServiceImpl implements WipInventoryService {
         txnRepo.save(txn);
         log.info("[SP1-semi] posted IN txn for report {} semiCode={} qty={} unitCost={} balanceAfter={}",
                 report.getId(), semiCode, inQty, inUnitCost, balanceAfter);
+
+        // SP3: 发布成本更新事件 → 异步回填 costUnitPrice + 超支预警
+        if (task.getProductionBatchId() != null) {
+            eventPublisher.publishEvent(new ProductionCostUpdatedEvent(
+                    this,
+                    factoryId,
+                    task.getProductionBatchId(),
+                    task.getProductTypeId(),
+                    sfi.getUnitCost(),
+                    sfi.getAccumulatedCost()
+            ));
+        }
     }
 
     private void markWipPosted(ProductionReport report) {

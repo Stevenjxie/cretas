@@ -412,6 +412,8 @@ public class BomController {
         c.setIsActive(r.getIsActive() != null ? r.getIsActive() : Boolean.TRUE);
         c.setSortOrder(r.getSortOrder() != null ? r.getSortOrder() : 0);
         c.setRemark(r.getRemark());
+        // SP3 Place 3a: set per-kg labor cost (null = not configured, honest gap)
+        c.setLaborCostPerKg(r.getLaborCostPerKg());
         return c;
     }
 
@@ -427,6 +429,9 @@ public class BomController {
         c.setIsActive(r.getIsActive() != null ? r.getIsActive() : Boolean.TRUE);
         c.setSortOrder(r.getSortOrder() != null ? r.getSortOrder() : 0);
         c.setRemark(r.getRemark());
+        // SP3 Place 3b: update per-kg labor cost; null allowed (null-guard: preserve if absent handled
+        // by caller supplying explicit null to clear, not by silently ignoring)
+        c.setLaborCostPerKg(r.getLaborCostPerKg());
         return c;
     }
 }

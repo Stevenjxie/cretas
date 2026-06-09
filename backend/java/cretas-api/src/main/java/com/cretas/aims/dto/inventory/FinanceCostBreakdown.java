@@ -76,6 +76,24 @@ public class FinanceCostBreakdown {
     /** 提示信息 — 当 BOM/实际成本缺失时给财务的友好说明. */
     private String dataSourceHint;
 
+    // ========== SP3 三价对比新增字段 ==========
+
+    /** SP3: 订单级成本超支绝对值 (actualCost - bomStandardCost). 两者有一为 null 则 null. */
+    @PriceSensitive
+    private BigDecimal varianceAbsolute;
+
+    /** SP3: 订单级成本超支百分比 ((actualCost - bomStandardCost) / bomStandardCost * 100).
+     * 正数=超支, 负数=节约. 任一为 null 或 bomStandardCost=0 则 null. */
+    @PriceSensitive
+    private BigDecimal variancePct;
+
+    /** SP3: 实际成本是否低于超支阈值 (true=未超支, false=超支, null=数据不完整).
+     * 不标 @PriceSensitive — 状态信息可见. */
+    private Boolean belowThreshold;
+
+    /** SP3: 超支告警文案. 未超支时 null. */
+    private String alarmMessage;
+
     /** 行级成本明细. */
     private List<LineCostBreakdown> lines;
 
@@ -108,5 +126,23 @@ public class FinanceCostBreakdown {
         /** 实际行成本 (qty * SalesOrderItem.costUnitPrice). */
         @PriceSensitive
         private BigDecimal actualLineCost;
+
+        // ========== SP3 行级三价对比新增字段 ==========
+
+        /** SP3: 行级标准单位成本 (= bomStandardUnitCost 别名, 语义更明确). */
+        @PriceSensitive
+        private BigDecimal standardCostPerUnit;
+
+        /** SP3: 行级实际单位成本 (= SalesOrderItem.costUnitPrice). */
+        @PriceSensitive
+        private BigDecimal actualCostPerUnit;
+
+        /** SP3: 行级成本超支百分比 ((actualCostPerUnit - standardCostPerUnit) / standardCostPerUnit * 100).
+         * 正=超支, 负=节约, null=数据不完整. */
+        @PriceSensitive
+        private BigDecimal variancePct;
+
+        /** SP3: 行级实际成本是否低于超支阈值. null=数据不完整. */
+        private Boolean belowThreshold;
     }
 }
