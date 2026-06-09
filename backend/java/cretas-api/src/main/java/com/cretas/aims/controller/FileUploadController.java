@@ -34,7 +34,7 @@ public class FileUploadController {
     private final OssService ossService;
 
     private static final long MAX_SIGNATURE_PHOTO_SIZE = 5L * 1024 * 1024; // 5MB
-    private static final long MAX_YIELD_EVIDENCE_VIDEO_SIZE = 50L * 1024 * 1024; // 50MB
+    private static final long MAX_YIELD_EVIDENCE_VIDEO_SIZE = 100L * 1024 * 1024; // 100MB
     private static final long MAX_CONTRACT_SIZE = 20L * 1024 * 1024; // 20MB
     private static final long MAX_RECEIPT_SIZE = 10L * 1024 * 1024; // 10MB
     private static final Set<String> ALLOWED_PHOTO_TYPES = Set.of("image/jpeg", "image/jpg", "image/png");
@@ -132,7 +132,7 @@ public class FileUploadController {
             throw new BusinessException(400, "报工证据照片不能超过 5MB");
         }
         if (isVideo && file.getSize() > MAX_YIELD_EVIDENCE_VIDEO_SIZE) {
-            throw new BusinessException(400, "报工证据视频不能超过 50MB");
+            throw new BusinessException(400, "报工证据视频不能超过 100MB");
         }
 
         try {
