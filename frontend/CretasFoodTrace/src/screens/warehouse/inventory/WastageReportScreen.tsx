@@ -11,7 +11,7 @@
  * 提交: POST /api/mobile/{factoryId}/wastage-reports (create DRAFT + 自动 submit)
  */
 
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import {
   View,
   StyleSheet,
@@ -32,11 +32,12 @@ import {
 import { BatchSelectorModal, BatchSelection } from '../../../components/warehouse/BatchSelectorModal';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import * as ImagePicker from 'expo-image-picker';
 import * as ImageManipulator from 'expo-image-manipulator';
 import { WHInventoryStackParamList } from '../../../types/navigation';
+import { materialBatchApiClient } from '../../../services/api/materialBatchApiClient';
 import { NeoButton } from '../../../components/ui/NeoButton';
 import { NeoCard } from '../../../components/ui/NeoCard';
 import { AppDialogHost, appAlert } from '../../../components/ui/AppDialog';
@@ -72,6 +73,9 @@ interface PhotoItem {
 
 export function WastageReportScreen(): React.JSX.Element {
   const navigation = useNavigation<NavProp>();
+  // Route params: batchId 可由 WHExpireHandle 或 WHInventoryCheck 预传, 用于防呆预填批次
+  const route = useRoute<RouteProp<WHInventoryStackParamList, 'WastageReport'>>();
+  const prefillBatchId = route.params?.batchId;
 
   // ── 表单状态 ──────────────────────────────────
   const [trackType, setTrackType] = useState<WastageTrackType>('WAREHOUSE');
@@ -91,6 +95,27 @@ export function WastageReportScreen(): React.JSX.Element {
     setMaterialBatchId(sel.materialBatchId);
     setBatchSelectorVisible(false);
   }, []);
+
+  // ── 防呆预填: 来自路由的 batchId 自动加载批次信息 ────────
+  useEffect(() => {
+    if (!prefillBatchId) return;
+    const fid = getCurrentFactoryId();
+    materialBatchApiClient.getBatchById(prefillBatchId, fid ?? undefined).then((res) => {
+      if (res.success && res.data) {
+        const b = res.data;
+        setMaterialBatchId(b.id);
+        setSelectedBatch({
+          materialBatchId: b.id,
+          batchNumber: b.batchNumber,
+          materialName: b.materialName ?? b.batchNumber,
+          remainingQuantity: b.remainingQuantity,
+          unit: undefined,
+        });
+      }
+    }).catch(() => {
+      // 预填失败不阻断操作, 用户可手动选择批次
+    });
+  }, [prefillBatchId]);
 
   // ── 审批路由说明 ──────────────────────────────
   const approvalNote =
