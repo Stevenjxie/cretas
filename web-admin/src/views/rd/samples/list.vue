@@ -5,7 +5,10 @@ import { usePermissionStore } from '@/store/modules/permission';
 import { get, post } from '@/api/request';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Search, Refresh } from '@element-plus/icons-vue';
+import { useRouter } from 'vue-router';
 import type { TableRow } from '@/types/api';
+
+const router = useRouter();
 
 const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
@@ -347,6 +350,12 @@ async function addTrackingRecord() {
             <el-tag :type="(({ PENDING: 'warning', IN_PROGRESS: '', QUOTED: 'success', CONFIRMED: 'success' } as Record<string, string>)[row.status] || 'info')" size="small">
               {{ ({ PENDING: '待报价', IN_PROGRESS: '报价中', QUOTED: '已报价', CONFIRMED: '已确认' } as Record<string, string>)[row.status] || row.status }}
             </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="操作" width="160" fixed="right">
+          <template #default="{ row }">
+            <el-button type="primary" link size="small" @click="router.push(`/rd/quotations/${row.id}`)">查看详情</el-button>
+            <el-button type="info" link size="small" @click="router.push(`/rd/quotations/${row.id}/three-price`)">三价对比</el-button>
           </template>
         </el-table-column>
       </el-table>

@@ -49,8 +49,8 @@
         style="width: 100%"
       >
         <el-table-column label="异常单号" prop="exceptionNumber" width="160" />
-        <el-table-column label="采购单号" prop="purchaseOrderNumber" width="160" />
-        <el-table-column label="供应商" prop="supplierName" min-width="120" />
+        <el-table-column label="采购单ID" prop="purchaseOrderId" width="160" />
+        <el-table-column label="供应商ID" prop="supplierId" min-width="120" />
         <el-table-column label="物料名称" prop="materialName" min-width="120" />
         <el-table-column label="异常类型" prop="exceptionType" width="120">
           <template #default="{ row }">
@@ -59,9 +59,9 @@
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="异常数量" prop="quantity" width="100">
+        <el-table-column label="异常数量" prop="exceptionQty" width="100">
           <template #default="{ row }">
-            {{ row.quantity }} {{ row.unit }}
+            {{ row.exceptionQty }} {{ row.unit }}
           </template>
         </el-table-column>
         <el-table-column label="状态" prop="status" width="90">
@@ -117,16 +117,16 @@
     <!-- 处理决定 Dialog（Fool-proof Rule 2: 标题含 PO 号+供应商; Rule 3: dropdown原因） -->
     <el-dialog
       v-model="decisionDialogVisible"
-      :title="`处理异常 — ${currentRow?.materialName || ''} (${currentRow?.purchaseOrderNumber || ''})`"
+      :title="`处理异常 — ${currentRow?.materialName || ''} (${currentRow?.purchaseOrderId || ''})`"
       width="520px"
       :close-on-click-modal="false"
     >
       <div v-if="currentRow" class="decision-context">
         <el-descriptions :column="2" border size="small" class="mb-16">
-          <el-descriptions-item label="供应商">{{ currentRow.supplierName }}</el-descriptions-item>
+          <el-descriptions-item label="供应商ID">{{ currentRow.supplierId }}</el-descriptions-item>
           <el-descriptions-item label="异常类型">{{ exceptionTypeLabel(currentRow.exceptionType) }}</el-descriptions-item>
-          <el-descriptions-item label="异常数量">{{ currentRow.quantity }} {{ currentRow.unit }}</el-descriptions-item>
-          <el-descriptions-item label="说明">{{ currentRow.description || '—' }}</el-descriptions-item>
+          <el-descriptions-item label="异常数量">{{ currentRow.exceptionQty }} {{ currentRow.unit }}</el-descriptions-item>
+          <el-descriptions-item label="物料名称">{{ currentRow.materialName || '—' }}</el-descriptions-item>
         </el-descriptions>
       </div>
 
@@ -172,11 +172,11 @@
       <div v-if="currentRow">
         <el-descriptions :column="2" border>
           <el-descriptions-item label="异常单号">{{ currentRow.exceptionNumber }}</el-descriptions-item>
-          <el-descriptions-item label="采购单号">{{ currentRow.purchaseOrderNumber }}</el-descriptions-item>
-          <el-descriptions-item label="供应商">{{ currentRow.supplierName }}</el-descriptions-item>
+          <el-descriptions-item label="采购单ID">{{ currentRow.purchaseOrderId }}</el-descriptions-item>
+          <el-descriptions-item label="供应商ID">{{ currentRow.supplierId }}</el-descriptions-item>
           <el-descriptions-item label="物料名称">{{ currentRow.materialName }}</el-descriptions-item>
           <el-descriptions-item label="异常类型">{{ exceptionTypeLabel(currentRow.exceptionType) }}</el-descriptions-item>
-          <el-descriptions-item label="异常数量">{{ currentRow.quantity }} {{ currentRow.unit }}</el-descriptions-item>
+          <el-descriptions-item label="异常数量">{{ currentRow.exceptionQty }} {{ currentRow.unit }}</el-descriptions-item>
           <el-descriptions-item label="状态">
             <el-tag :type="statusTag(currentRow.status)" size="small">
               {{ statusLabel(currentRow.status) }}
@@ -185,10 +185,9 @@
           <el-descriptions-item label="处理决定">
             {{ currentRow.decision ? decisionLabel(currentRow.decision) : '—' }}
           </el-descriptions-item>
-          <el-descriptions-item label="异常说明" :span="2">{{ currentRow.description || '—' }}</el-descriptions-item>
-          <el-descriptions-item label="处理备注" :span="2">{{ currentRow.notes || '—' }}</el-descriptions-item>
+          <el-descriptions-item label="处理备注" :span="2">{{ currentRow.decisionNotes || '—' }}</el-descriptions-item>
           <el-descriptions-item label="创建时间">{{ formatDate(currentRow.createdAt) }}</el-descriptions-item>
-          <el-descriptions-item label="处理时间">{{ formatDate(currentRow.resolvedAt) }}</el-descriptions-item>
+          <el-descriptions-item label="处理时间">{{ formatDate(currentRow.decisionAt) }}</el-descriptions-item>
         </el-descriptions>
       </div>
       <template #footer>
@@ -207,23 +206,24 @@ import { useAuthStore } from '@/store/modules/auth'
 import { usePermissionStore } from '@/store/modules/permission'
 
 // ─── 类型定义 ───────────────────────────────────────────────
+// Field names mirror the PurchaseException entity returned directly by the backend (SP6).
+// Entity fields: exceptionNumber, purchaseOrderId, supplierId, materialName,
+//                exceptionType (OVER_RECEIVE/UNDER_RECEIVE), exceptionQty, unit,
+//                decision, decisionNotes, decisionAt, status (PENDING/RESOLVED), createdAt
 interface ExceptionRow {
   id: string
   exceptionNumber: string
-  purchaseOrderId: string
-  purchaseOrderNumber: string
-  supplierId: string
-  supplierName: string
+  purchaseOrderId: string   // raw ID (no denormalized purchaseOrderNumber in entity)
+  supplierId: string        // raw ID (no denormalized supplierName in entity)
   materialName: string
-  exceptionType: 'QUANTITY_OVER' | 'QUANTITY_UNDER' | 'QUALITY' | 'OTHER'
-  quantity: number
+  exceptionType: 'OVER_RECEIVE' | 'UNDER_RECEIVE'
+  exceptionQty: number      // was 'quantity' — entity field is exceptionQty
   unit: string
   status: 'PENDING' | 'RESOLVED'
   decision: 'ACCEPT_OVER' | 'RETURN_OVER' | 'ACCEPT_UNDER' | 'REORDER' | null
-  description: string | null
-  notes: string | null
+  decisionNotes: string | null   // was 'notes' — entity field is decisionNotes
+  decisionAt: string | null      // was 'resolvedAt' — entity field is decisionAt
   createdAt: string | null
-  resolvedAt: string | null
 }
 
 interface DecisionForm {
@@ -260,21 +260,18 @@ const decisionRules: FormRules = {
 
 // ─── 标签映射 ────────────────────────────────────────────────
 function exceptionTypeLabel(t: string): string {
+  // Matches ReceiveExceptionType enum: OVER_RECEIVE / UNDER_RECEIVE
   const map: Record<string, string> = {
-    QUANTITY_OVER: '数量超收',
-    QUANTITY_UNDER: '数量短少',
-    QUALITY: '品质异常',
-    OTHER: '其他'
+    OVER_RECEIVE: '数量超收',
+    UNDER_RECEIVE: '数量短少',
   }
   return map[t] ?? t
 }
 
 function exceptionTypeTag(t: string): '' | 'warning' | 'danger' | 'info' {
   const map: Record<string, '' | 'warning' | 'danger' | 'info'> = {
-    QUANTITY_OVER: 'warning',
-    QUANTITY_UNDER: 'warning',
-    QUALITY: 'danger',
-    OTHER: 'info'
+    OVER_RECEIVE: 'warning',
+    UNDER_RECEIVE: 'warning',
   }
   return map[t] ?? 'info'
 }
@@ -328,8 +325,10 @@ async function fetchData() {
         total.value = data.length
       }
     }
-  } catch (err) {
-    console.error('获取入库异常列表失败', err)
+  } catch (err: unknown) {
+    const msg = (err as { response?: { data?: { message?: string } } })
+      ?.response?.data?.message || '加载入库异常列表失败，请稍后重试'
+    ElMessage({ message: msg, type: 'error', duration: 0, showClose: true })
   } finally {
     loading.value = false
   }
