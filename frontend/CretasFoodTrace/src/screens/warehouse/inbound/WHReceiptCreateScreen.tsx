@@ -59,6 +59,7 @@ import {
 } from '../../../services/api/materialTypeApiClient';
 import { abacaApiClient } from '../../../services/api/abacaApiClient';
 import { attachmentApi } from '../../../services/api/attachmentApi';
+import { materialBatchApiClient } from '../../../services/api/materialBatchApiClient';
 import { handleError } from '../../../utils/errorHandler';
 import { useAuthStore } from '../../../store/authStore';
 
@@ -97,6 +98,9 @@ export default function WHReceiptCreateScreen() {
   const [submitting, setSubmitting] = useState(false);
   // Issue #794: 提交前 stash 照片, 提交成功后批量上传
   const [photos, setPhotos] = useState<PendingPhoto[]>([]);
+  // SP4: 可选录入厂号/产地 (入库时记录, 提交后写入批次)
+  const [factoryNumber, setFactoryNumber] = useState('');
+  const [originPlace, setOriginPlace] = useState('');
 
   // ============================================================
   // 加载 PO + 关联 MaterialType (含 abaca flag)
@@ -279,6 +283,28 @@ export default function WHReceiptCreateScreen() {
       const confirmRes = await purchaseApiClient.confirmReceive(receive.id, factoryId);
       const confirmed: PurchaseReceiveRecord = confirmRes.data;
 
+      // SP4: 写入厂号/产地 (非必填, 有值时 patch 每个批次)
+      if (factoryNumber.trim() || originPlace.trim()) {
+        const batchMetaUpdate = {
+          ...(factoryNumber.trim() ? { factoryNumber: factoryNumber.trim() } : {}),
+          ...(originPlace.trim() ? { originPlace: originPlace.trim() } : {}),
+        };
+        for (const item of (confirmed.items || [])) {
+          if (item.batchNumber) {
+            try {
+              // 先按 batchNumber 查出批次 UUID, 再 patch
+              const listRes = await materialBatchApiClient.getMaterialBatches({ batchNumber: item.batchNumber, factoryId });
+              const batchId = listRes?.data?.content?.[0]?.id;
+              if (batchId) {
+                await materialBatchApiClient.updateBatch(batchId, batchMetaUpdate, factoryId);
+              }
+            } catch {
+              // 非阻塞: 厂号/产地写入失败不影响入库主流程
+            }
+          }
+        }
+      }
+
       // 3. 对每个抄码品行 → POST /material/abaca-log (用 batchNumber 自动 lookup batchId)
       const abacaItems = validItems.filter((it) => isAbacaItem(it));
       const confirmedItemsByMaterial = new Map<string, PurchaseReceiveItem>();
@@ -360,7 +386,7 @@ export default function WHReceiptCreateScreen() {
     } finally {
       setSubmitting(false);
     }
-  }, [order, rows, orderNumber, factoryId, navigation, unitFor, isAbacaItem, photos]);
+  }, [order, rows, orderNumber, factoryId, navigation, unitFor, isAbacaItem, photos, factoryNumber, originPlace]);
 
   // ============================================================
   // Render
@@ -449,6 +475,7 @@ export default function WHReceiptCreateScreen() {
 
           {/* 收货明细 — 只要 2 字段必填 */}
           <Text style={styles.outerHeader}>收货明细 (仅录数量 + 日期)</Text>
+          <Text style={styles.deBlameHint}>按实际到货填写即可，差异由采购处理</Text>
           {(order.items || []).map((it, idx) => {
             const abaca = isAbacaItem(it);
             const m = materialsById[it.materialTypeId];
@@ -502,6 +529,7 @@ export default function WHReceiptCreateScreen() {
                       mode="outlined"
                       keyboardType="numeric"
                       style={[styles.field, styles.flex1]}
+                      contentStyle={{ fontSize: 24 }}
                       placeholder={abaca ? '入库以实际称重为准' : ''}
                     />
                     <TextInput
@@ -517,6 +545,34 @@ export default function WHReceiptCreateScreen() {
               </Card>
             );
           })}
+
+          {/* SP4: 可选录入厂号/产地 — 填写后提交时写入每个批次 */}
+          <Card style={styles.card}>
+            <Card.Content>
+              <Text style={styles.sectionTitle}>厂号 / 产地（可选）</Text>
+              <Text style={styles.helperText}>
+                如需追溯来源，可在此录入。留空则跳过。
+              </Text>
+              <TextInput
+                label="厂号"
+                value={factoryNumber}
+                onChangeText={setFactoryNumber}
+                mode="outlined"
+                style={styles.field}
+                placeholder="如: S-2024-008"
+                disabled={submitting}
+              />
+              <TextInput
+                label="产地"
+                value={originPlace}
+                onChangeText={setOriginPlace}
+                mode="outlined"
+                style={[styles.field, { marginTop: 8 }]}
+                placeholder="如: 山东章丘"
+                disabled={submitting}
+              />
+            </Card.Content>
+          </Card>
 
           {/* Issue #794: 收货拍照附件 — 提交后随入库单一起上传 */}
           <Card style={styles.card}>
@@ -633,6 +689,7 @@ const styles = StyleSheet.create({
   flex1: { flex: 1 },
 
   helperText: { fontSize: 12, color: '#718096', lineHeight: 18, marginBottom: 8 },
+  deBlameHint: { fontSize: 12, color: '#718096', lineHeight: 18, marginBottom: 10, fontStyle: 'italic' },
 
   // Issue #794: 拍照附件样式
   photoGrid: {

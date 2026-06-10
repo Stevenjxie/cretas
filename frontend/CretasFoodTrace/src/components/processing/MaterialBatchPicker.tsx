@@ -371,6 +371,9 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
                     {row.batch.materialName ? (
                       <Text style={styles.materialName}>{row.batch.materialName}</Text>
                     ) : null}
+                    {row.batch.factoryNumber ? (
+                      <Text style={[styles.materialName, { color: '#888', fontSize: 11 }]}>厂号: {row.batch.factoryNumber}</Text>
+                    ) : null}
                     <Text style={styles.remaining}>
                       剩余 {row.batch.remainingQuantity} {unit}
                     </Text>

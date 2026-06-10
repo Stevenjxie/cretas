@@ -41,6 +41,8 @@ export interface MaterialBatch {
   storageLocation?: string;
   notes?: string;
   movingAvgPrice?: number;      // 移动均价
+  factoryNumber?: string | null;  // SP4: 厂号 (VARCHAR 100)
+  originPlace?: string | null;    // SP4: 产地 (VARCHAR 200)
   createdAt: string;
   updatedAt?: string;
   createdByName?: string;       // 创建人姓名
