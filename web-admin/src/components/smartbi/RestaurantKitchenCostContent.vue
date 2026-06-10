@@ -29,6 +29,7 @@ import { Refresh, Calendar, Promotion, InfoFilled } from '@element-plus/icons-vu
 import DynamicChartRenderer from './DynamicChartRenderer.vue';
 import SmartBIEmptyState from './SmartBIEmptyState.vue';
 import CapabilityGate from '@/components/CapabilityGate.vue';
+import ChartInsightProvider from '@/views/smart-bi/components/ChartInsightProvider.vue';
 import { toApiDateString } from '@/utils/dateFormat';
 import {
   getKitchenCostAnalysis,
@@ -39,6 +40,7 @@ import {
   type AlertLevel,
 } from '@/api/smartbi/kitchen-cost';
 import type { ChartConfig } from '@/types/smartbi';
+import type { ChartWithMeta } from '@/views/smart-bi/components/chartInsight';
 
 // ==================== Props ====================
 interface Props {
@@ -235,6 +237,80 @@ const wastageTrendConfig = computed(() => makeWastageTrendChart());
 const wastageByTypeConfig = computed(() => makeWastageByTypePie());
 const requisitionTrendConfig = computed(() => makeRequisitionTrendChart());
 const requisitionByCategoryConfig = computed(() => makeRequisitionByCategoryChart());
+
+// ---- ChartWithMeta for ChartInsightProvider ----
+
+/** LINE 食材损耗成本趋势. xDim=time. yMetric=cost. TREND. */
+const wastageTrendMeta = computed<ChartWithMeta | null>(() => {
+  const trend = data.value?.wastageAnalytics.trend ?? [];
+  if (trend.length === 0) return null;
+  return {
+    chartType: 'line',
+    title: '食材损耗成本趋势',
+    meta: { xDim: 'time', yMetric: 'cost', aggregation: 'sum', domain: 'restaurant' },
+    config: {
+      xAxis: { data: trend.map((p) => p.period) },
+      series: [{ type: 'line', data: trend.map((p) => p.totalCost) }],
+    },
+  };
+});
+
+/** PIE 损耗类型分布. xDim=category. yMetric=cost. PROPORTION. */
+const wastageByTypeMeta = computed<ChartWithMeta | null>(() => {
+  const byType = data.value?.wastageAnalytics.wastageByType ?? [];
+  if (byType.length === 0) return null;
+  const labelMap: Record<string, string> = {
+    DAMAGED: '损坏',
+    EXPIRED: '过期',
+    OTHER: '其他',
+    PROCESSING: '加工损耗',
+    SPOILED: '变质',
+  };
+  return {
+    chartType: 'pie',
+    title: '损耗类型分布',
+    meta: { xDim: 'category', yMetric: 'cost', aggregation: 'sum', domain: 'restaurant' },
+    config: {
+      xAxis: { data: byType.map((b) => labelMap[b.type] || b.type) },
+      series: [
+        {
+          type: 'pie',
+          data: byType.map((b) => ({ name: labelMap[b.type] || b.type, value: b.totalCost })),
+        },
+      ],
+    },
+  };
+});
+
+/** LINE 领料成本趋势. xDim=time. yMetric=cost. TREND. */
+const requisitionTrendMeta = computed<ChartWithMeta | null>(() => {
+  const trend = data.value?.requisitionTrend.trend ?? [];
+  if (trend.length === 0) return null;
+  return {
+    chartType: 'line',
+    title: '领料成本趋势',
+    meta: { xDim: 'time', yMetric: 'cost', aggregation: 'sum', domain: 'restaurant' },
+    config: {
+      xAxis: { data: trend.map((p) => p.period) },
+      series: [{ type: 'line', data: trend.map((p) => p.totalCost) }],
+    },
+  };
+});
+
+/** BAR 领料成本（按食材类别）. xDim=category. yMetric=cost. RANKING. */
+const requisitionByCategoryMeta = computed<ChartWithMeta | null>(() => {
+  const byCat = data.value?.requisitionTrend.byCategory ?? [];
+  if (byCat.length === 0) return null;
+  return {
+    chartType: 'bar',
+    title: '领料成本（按食材类别）',
+    meta: { xDim: 'category', yMetric: 'cost', aggregation: 'sum', domain: 'restaurant' },
+    config: {
+      xAxis: { data: byCat.map((c) => c.category) },
+      series: [{ type: 'bar', data: byCat.map((c) => c.totalCost) }],
+    },
+  };
+});
 
 // ==================== Benchmark band visualization ====================
 
@@ -568,12 +644,24 @@ onUnmounted(() => {
                 :config="wastageTrendConfig"
                 :height="280"
               />
+              <ChartInsightProvider
+                :chart="wastageTrendMeta"
+                :perms="{ canViewFinance: canViewPrice }"
+                :factory-id="props.factoryId"
+                depth="detailed"
+              />
             </div>
             <div class="wastage-pie-col">
               <DynamicChartRenderer
                 v-if="wastageByTypeConfig"
                 :config="wastageByTypeConfig"
                 :height="280"
+              />
+              <ChartInsightProvider
+                :chart="wastageByTypeMeta"
+                :perms="{ canViewFinance: canViewPrice }"
+                :factory-id="props.factoryId"
+                depth="detailed"
               />
             </div>
           </div>
@@ -642,12 +730,24 @@ onUnmounted(() => {
                 :config="requisitionTrendConfig"
                 :height="280"
               />
+              <ChartInsightProvider
+                :chart="requisitionTrendMeta"
+                :perms="{ canViewFinance: canViewPrice }"
+                :factory-id="props.factoryId"
+                depth="detailed"
+              />
             </div>
             <div class="requisition-cat-col">
               <DynamicChartRenderer
                 v-if="requisitionByCategoryConfig"
                 :config="requisitionByCategoryConfig"
                 :height="280"
+              />
+              <ChartInsightProvider
+                :chart="requisitionByCategoryMeta"
+                :perms="{ canViewFinance: canViewPrice }"
+                :factory-id="props.factoryId"
+                depth="detailed"
               />
               <p class="category-note">
                 <el-icon><InfoFilled /></el-icon>

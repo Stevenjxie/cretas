@@ -15,9 +15,11 @@ import { Refresh, Calendar } from '@element-plus/icons-vue';
 import DynamicChartRenderer from './DynamicChartRenderer.vue';
 import SmartBIEmptyState from './SmartBIEmptyState.vue';
 import CapabilityGate from '@/components/CapabilityGate.vue';
+import ChartInsightProvider from '@/views/smart-bi/components/ChartInsightProvider.vue';
 import { getGoldDataRange } from '@/api/smartbi/dataRange';
 import { resolveAllHistoryRange } from '@/views/smart-bi/analysisDefaults';
 import type { ChartConfig } from '@/types/smartbi';
+import type { ChartWithMeta } from '@/views/smart-bi/components/chartInsight';
 
 interface SalesOverview {
   totalRevenue: number;
@@ -191,6 +193,95 @@ const channelBreakdownConfig = computed<ChartConfig | null>(() => {
     xAxis: { data: rows.map((r) => r.channelName) },
     series: [{ name: '渠道营收', type: 'bar', data: rows.map((r) => r.amount) }],
   } as ChartConfig;
+});
+
+// ---- ChartWithMeta for ChartInsightProvider ----
+
+/** BAR stacked 日营收趋势 (堂食+外卖). xDim=time (x-axis = dates). yMetric=revenue. */
+const revenueTrendMeta = computed<ChartWithMeta | null>(() => {
+  const cfg = revenueTrendConfig.value;
+  if (!cfg) return null;
+  const c = cfg as { xAxis?: { data?: string[] }; series?: Array<{ name?: string; type?: string; data?: number[] }> };
+  return {
+    chartType: 'bar',
+    title: '日营收趋势',
+    meta: { xDim: 'time', yMetric: 'revenue', aggregation: 'sum', domain: 'restaurant' },
+    config: {
+      xAxis: { data: c.xAxis?.data ?? [] },
+      series: (c.series ?? []).map((s) => ({ type: s.type, data: s.data ?? [] })),
+    },
+  };
+});
+
+/** PIE 堂食/外卖占比. xDim=channel. yMetric=revenue. */
+const orderTypeSplitMeta = computed<ChartWithMeta | null>(() => {
+  const cfg = orderTypeSplitConfig.value;
+  if (!cfg) return null;
+  const c = cfg as { xAxis?: { data?: string[] }; series?: Array<{ name?: string; type?: string; data?: number[] }> };
+  const labels = c.xAxis?.data ?? [];
+  const values = c.series?.[0]?.data ?? [];
+  return {
+    chartType: 'pie',
+    title: '堂食/外卖占比',
+    meta: { xDim: 'channel', yMetric: 'revenue', aggregation: 'sum', domain: 'restaurant' },
+    config: {
+      xAxis: { data: labels },
+      series: [
+        {
+          type: 'pie',
+          data: labels.map((name, i) => ({ name, value: Number(values[i] ?? 0) })),
+        },
+      ],
+    },
+  };
+});
+
+/** BAR 时段营收 (午市/晚市). xDim=category. yMetric=revenue. RANKING. */
+const mealPeriodMeta = computed<ChartWithMeta | null>(() => {
+  const cfg = mealPeriodConfig.value;
+  if (!cfg) return null;
+  const c = cfg as { xAxis?: { data?: string[] }; series?: Array<{ name?: string; type?: string; data?: number[] }> };
+  return {
+    chartType: 'bar',
+    title: '时段营收分布',
+    meta: { xDim: 'category', yMetric: 'revenue', aggregation: 'sum', domain: 'restaurant' },
+    config: {
+      xAxis: { data: c.xAxis?.data ?? [] },
+      series: (c.series ?? []).map((s) => ({ type: s.type, data: s.data ?? [] })),
+    },
+  };
+});
+
+/** LINE 客单价趋势. xDim=time. yMetric=revenue (per-capita). TREND. */
+const avgPerCapitaTrendMeta = computed<ChartWithMeta | null>(() => {
+  const cfg = avgPerCapitaTrendConfig.value;
+  if (!cfg) return null;
+  const c = cfg as { xAxis?: { data?: string[] }; series?: Array<{ name?: string; type?: string; data?: number[] }> };
+  return {
+    chartType: 'line',
+    title: '客单价趋势',
+    meta: { xDim: 'time', yMetric: 'revenue', aggregation: 'avg', domain: 'restaurant' },
+    config: {
+      xAxis: { data: c.xAxis?.data ?? [] },
+      series: (c.series ?? []).map((s) => ({ type: s.type, data: s.data ?? [] })),
+    },
+  };
+});
+
+/** BAR 支付渠道营收分布. xDim=channel. yMetric=revenue. RANKING. */
+const channelBreakdownMeta = computed<ChartWithMeta | null>(() => {
+  const cfg = channelBreakdownConfig.value;
+  if (!cfg) return null;
+  const c = cfg as { xAxis?: { data?: string[] }; series?: Array<{ name?: string; type?: string; data?: number[] }> };
+  return {
+    chartType: 'bar',
+    title: '支付渠道营收分布',
+    meta: { xDim: 'channel', yMetric: 'revenue', aggregation: 'sum', domain: 'restaurant' },
+    config: {
+      xAxis: { data: c.xAxis?.data ?? [] },
+      series: (c.series ?? []).map((s) => ({ type: s.type, data: s.data ?? [] })),
+    },
+  };
 });
 
 // ---- formatting helpers ----
@@ -402,6 +493,12 @@ onUnmounted(() => {
           <span class="chart-title">{{ revenueTrendConfig.title || '日营收趋势' }}</span>
         </template>
         <DynamicChartRenderer :config="revenueTrendConfig" :height="340" />
+        <ChartInsightProvider
+          :chart="revenueTrendMeta"
+          :perms="{ canViewFinance: canViewPrice }"
+          :factory-id="factoryId ?? ''"
+          depth="detailed"
+        />
       </el-card>
 
       <!-- Order type split (PIE) + Meal period (BAR) side by side -->
@@ -412,6 +509,12 @@ onUnmounted(() => {
               <span class="chart-title">{{ orderTypeSplitConfig.title || '堂食/外卖占比' }}</span>
             </template>
             <DynamicChartRenderer :config="orderTypeSplitConfig" :height="320" />
+            <ChartInsightProvider
+              :chart="orderTypeSplitMeta"
+              :perms="{ canViewFinance: canViewPrice }"
+              :factory-id="factoryId ?? ''"
+              depth="detailed"
+            />
           </el-card>
         </el-col>
         <el-col :xs="24" :md="12">
@@ -420,6 +523,12 @@ onUnmounted(() => {
               <span class="chart-title">{{ mealPeriodConfig.title || '时段营收分布' }}</span>
             </template>
             <DynamicChartRenderer :config="mealPeriodConfig" :height="320" />
+            <ChartInsightProvider
+              :chart="mealPeriodMeta"
+              :perms="{ canViewFinance: canViewPrice }"
+              :factory-id="factoryId ?? ''"
+              depth="detailed"
+            />
           </el-card>
         </el-col>
       </el-row>
@@ -430,6 +539,12 @@ onUnmounted(() => {
           <span class="chart-title">客单价趋势</span>
         </template>
         <DynamicChartRenderer :config="avgPerCapitaTrendConfig" :height="300" />
+        <ChartInsightProvider
+          :chart="avgPerCapitaTrendMeta"
+          :perms="{ canViewFinance: canViewPrice }"
+          :factory-id="factoryId ?? ''"
+          depth="detailed"
+        />
       </el-card>
 
       <!-- Product ranking table (top 20, monthly grain) -->
@@ -464,6 +579,12 @@ onUnmounted(() => {
               <span class="chart-title">支付渠道营收分布</span>
             </template>
             <DynamicChartRenderer :config="channelBreakdownConfig" :height="320" />
+            <ChartInsightProvider
+              :chart="channelBreakdownMeta"
+              :perms="{ canViewFinance: canViewPrice }"
+              :factory-id="factoryId ?? ''"
+              depth="detailed"
+            />
           </el-card>
         </el-col>
         <el-col :xs="24" :md="10">

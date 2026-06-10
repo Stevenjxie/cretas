@@ -16,7 +16,9 @@ import { Refresh, Calendar, Promotion } from '@element-plus/icons-vue';
 import DynamicChartRenderer from './DynamicChartRenderer.vue';
 import SmartBIEmptyState from './SmartBIEmptyState.vue';
 import CapabilityGate from '@/components/CapabilityGate.vue';
+import ChartInsightProvider from '@/views/smart-bi/components/ChartInsightProvider.vue';
 import type { ChartConfig } from '@/types/smartbi';
+import type { ChartWithMeta } from '@/views/smart-bi/components/chartInsight';
 
 interface FinanceKPI {
   totalRevenue: number;
@@ -120,6 +122,24 @@ function adaptChart(raw: RawChart | undefined, kind: 'bar' | 'line'): ChartConfi
 }
 
 const revenueChartConfig = computed(() => adaptChart(data.value?.revenueChart, 'bar'));
+
+// ---- ChartWithMeta for ChartInsightProvider ----
+
+/** BAR 月度营收. xAxis contains month labels (time series). xDim=time. yMetric=revenue. TREND. */
+const revenueChartMeta = computed<ChartWithMeta | null>(() => {
+  const cfg = revenueChartConfig.value;
+  if (!cfg) return null;
+  const c = cfg as { xAxis?: { data?: string[] }; series?: Array<{ name?: string; type?: string; data?: number[] }> };
+  return {
+    chartType: 'bar',
+    title: '月度营收',
+    meta: { xDim: 'time', yMetric: 'revenue', aggregation: 'sum', domain: 'restaurant' },
+    config: {
+      xAxis: { data: c.xAxis?.data ?? [] },
+      series: (c.series ?? []).map((s) => ({ type: s.type, data: s.data ?? [] })),
+    },
+  };
+});
 
 const moneyFmt = new Intl.NumberFormat('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const intFmt = new Intl.NumberFormat('zh-CN');
@@ -331,6 +351,12 @@ onUnmounted(() => {
           <span class="chart-title">{{ revenueChartConfig.title || '月度营收' }}</span>
         </template>
         <DynamicChartRenderer :config="revenueChartConfig" :height="340" />
+        <ChartInsightProvider
+          :chart="revenueChartMeta"
+          :perms="{ canViewFinance: canViewPrice }"
+          :factory-id="factoryId"
+          depth="detailed"
+        />
       </el-card>
 
       <!-- Phase IIb preview placeholder -->
