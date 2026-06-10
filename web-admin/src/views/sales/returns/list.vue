@@ -71,6 +71,7 @@ const STATUS_OPTIONS = [
   { value: 'DRAFT', label: '草稿' },
   { value: 'SUBMITTED', label: '已提交' },
   { value: 'APPROVED', label: '已审批' },
+  { value: 'FINANCE_APPROVED', label: '财务已审' },
   { value: 'REJECTED', label: '已驳回' },
   { value: 'PROCESSING', label: '处理中' },
   { value: 'COMPLETED', label: '已完成' },
@@ -80,7 +81,8 @@ function statusType(s: string) {
   switch (s) {
     case 'DRAFT': return 'info';
     case 'SUBMITTED': return 'warning';
-    case 'APPROVED': return 'success';
+    case 'APPROVED': return 'primary';
+    case 'FINANCE_APPROVED': return 'success';
     case 'REJECTED': return 'danger';
     case 'PROCESSING': return 'warning';
     case 'COMPLETED': return 'success';

@@ -21,6 +21,8 @@ const permissionStore = usePermissionStore();
 const factoryId = computed(() => authStore.factoryId);
 const canViewPrice = computed(() => permissionStore.canViewPrice);
 const canApprove = computed(() => permissionStore.canWrite('sales'));
+// 六扇门 Tier0 #16: 退货财审门. 只有财务角色 (finance:read_write) 可财务审批.
+const canFinanceApprove = computed(() => permissionStore.canWrite('finance'));
 
 const returnOrderId = computed(() => route.params.id as string);
 const loading = ref(false);
@@ -31,7 +33,8 @@ function statusType(s: string) {
   switch (s) {
     case 'DRAFT': return 'info';
     case 'SUBMITTED': return 'warning';
-    case 'APPROVED': return 'success';
+    case 'APPROVED': return 'primary';
+    case 'FINANCE_APPROVED': return 'success';
     case 'REJECTED': return 'danger';
     case 'PROCESSING': return 'warning';
     case 'COMPLETED': return 'success';
@@ -42,6 +45,7 @@ function statusType(s: string) {
 function statusLabel(s: string) {
   const map: Record<string, string> = {
     DRAFT: '草稿', SUBMITTED: '已提交', APPROVED: '已审批',
+    FINANCE_APPROVED: '财务已审',
     REJECTED: '已驳回', PROCESSING: '处理中', COMPLETED: '已完成',
   };
   return map[s] || s || '-';
@@ -63,24 +67,31 @@ async function loadData() {
   finally { loading.value = false; }
 }
 
-async function handleAction(action: 'submit' | 'approve' | 'reject' | 'complete') {
+async function handleAction(action: 'submit' | 'approve' | 'finance-approve' | 'reject' | 'complete') {
   // T-RTA business logic (#571): messages reflect actual backend branching by withGoods.
   // Old confirm message LIED ("approve triggers inbound") — fixed to match real flow.
   const withGoods = order.value?.withGoods !== false; // null/undefined defaults to true (legacy + new primary)
+  // 防呆: 确认框带单据上下文 (单号 + 金额).
+  const ctx = order.value
+    ? `退货单 ${order.value.returnNumber || '-'}　金额 ¥${order.value.totalAmount ?? '-'}\n`
+    : '';
   const approveMsg = withGoods
-    ? '审批通过后, 退货单状态置为 已审批, 等待仓库实物入库. 完成时才触发 AR/AP 冲减. 确认审批?'
-    : '审批通过后, 立即触发 AR/AP 冲减 (无库存动作). 完成动作仅标记状态. 确认审批?';
+    ? '审批通过后, 退货单状态置为 已审批, 等待财务审批. 完成时才触发 AR/AP 冲减. 确认审批?'
+    : '审批通过后, 立即触发 AR/AP 冲减 (无库存动作). 后续需财务审批 + 完成标记状态. 确认审批?';
+  // 六扇门 Tier0 #16: 退货跟钱有关, 业务审批后必须财务审批才能完成/出货.
+  const financeMsg = '财务审批通过后, 退货单状态置为 财务已审, 可交仓管完成出货. 确认财务审批?';
   const completeMsg = withGoods
     ? '标记完成: 触发 AR/AP 冲减. 注意: 库存入库到总仓 + 不良品状态 暂未自动实现 (issue #571 Phase C), 需仓管员手动入库. 确认完成?'
     : '标记完成: 仅状态置为已完成. AR/AP 冲减已在审批时完成. 确认?';
   const messages: Record<string, string> = {
     submit: '确认提交本退货单进入审批?',
     approve: approveMsg,
+    'finance-approve': financeMsg,
     reject: '驳回后退货单状态置为已驳回, 不再处理. 确认驳回?',
     complete: completeMsg,
   };
   try {
-    await ElMessageBox.confirm(messages[action], '退货单操作', { type: 'warning' });
+    await ElMessageBox.confirm(ctx + messages[action], '退货单操作', { type: 'warning' });
   } catch { return; }
   submitting.value = true;
   try {
@@ -89,7 +100,7 @@ async function handleAction(action: 'submit' | 'approve' | 'reject' | 'complete'
       ElMessage.success('操作成功');
       await loadData();
     }
-  } catch { /* interceptor */ }
+  } catch { /* interceptor 透传后端 message (含 409 状态机/防呆 hint) */ }
   finally { submitting.value = false; }
 }
 
@@ -119,7 +130,12 @@ function goBack() { router.push('/sales/returns'); }
             <el-button type="success" :loading="submitting" @click="handleAction('approve')">审批通过</el-button>
             <el-button type="danger" :loading="submitting" @click="handleAction('reject')">驳回</el-button>
           </template>
-          <el-button v-if="order.status === 'APPROVED' || order.status === 'PROCESSING'"
+          <!-- 六扇门 Tier0 #16: APPROVED 必须先财务审批 (仅财务角色) 才能完成. -->
+          <el-button v-if="order.status === 'APPROVED' && canFinanceApprove" type="primary"
+                     :loading="submitting" @click="handleAction('finance-approve')">财务审批</el-button>
+          <el-tag v-else-if="order.status === 'APPROVED'" type="info" size="large">等待财务审批</el-tag>
+          <!-- FINANCE_APPROVED / PROCESSING: 财务已审, 仓管可完成出货. -->
+          <el-button v-if="order.status === 'FINANCE_APPROVED' || order.status === 'PROCESSING'"
                      type="primary" :loading="submitting" @click="handleAction('complete')">标记完成</el-button>
         </div>
       </div>

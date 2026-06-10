@@ -7,8 +7,9 @@
  * axios baseURL = '/api/mobile' (see request.ts:109), so caller-side
  * URLs start with "/{factoryId}/return-orders/...".
  *
- * Status machine (ReturnOrderStatus.java):
- *   DRAFT → SUBMITTED → (APPROVED | REJECTED) → PROCESSING → COMPLETED
+ * Status machine (ReturnOrderStatus.java) — 六扇门 Tier0 #16 财审门:
+ *   DRAFT → SUBMITTED → (APPROVED → FINANCE_APPROVED | REJECTED) → COMPLETED
+ *   退货跟钱有关, 业务审批后必须先财务审批 (finance:read_write) 才能完成.
  *
  * Customer business rule (第四次:956-1037, T-RTA #571):
  *   withGoods=TRUE  → 有食物退货 (库存入库总仓 + 完成时触发 AR 冲减)
@@ -31,6 +32,8 @@ export type ReturnOrderStatus =
   | 'DRAFT'
   | 'SUBMITTED'
   | 'APPROVED'
+  // 六扇门 Tier0 #16: 退货财审门 APPROVED → FINANCE_APPROVED → COMPLETED.
+  | 'FINANCE_APPROVED'
   | 'REJECTED'
   | 'PROCESSING'
   | 'COMPLETED';
@@ -180,6 +183,23 @@ export async function approveReturnOrder(
   return res.data;
 }
 
+/**
+ * POST /{id}/finance-approve — APPROVED → FINANCE_APPROVED.
+ * 六扇门 Tier0 #16: 退货跟钱有关, 业务审批后必须先财务审批才能完成. 仅财务角色 (finance:read_write).
+ */
+export async function financeApproveReturnOrder(
+  factoryId: string,
+  returnOrderId: string,
+): Promise<ReturnOrder> {
+  const res = await post<ReturnOrder>(
+    `${basePath(factoryId)}/${returnOrderId}/finance-approve`,
+  );
+  if (!res.success || !res.data) {
+    throw new Error(res.message || '财务审批退货单失败');
+  }
+  return res.data;
+}
+
 /** POST /{id}/reject — SUBMITTED → REJECTED. */
 export async function rejectReturnOrder(
   factoryId: string,
@@ -194,7 +214,7 @@ export async function rejectReturnOrder(
   return res.data;
 }
 
-/** POST /{id}/complete — APPROVED/PROCESSING → COMPLETED (有食物时触发 AR 冲减). */
+/** POST /{id}/complete — FINANCE_APPROVED/PROCESSING → COMPLETED (有食物时触发 AR 冲减). */
 export async function completeReturnOrder(
   factoryId: string,
   returnOrderId: string,

@@ -9,7 +9,8 @@ import { getCurrentFactoryId } from '../../utils/factoryIdHelper';
 // ========== 类型定义 ==========
 
 export type ReturnType = 'PURCHASE_RETURN' | 'SALES_RETURN';
-export type ReturnOrderStatus = 'DRAFT' | 'SUBMITTED' | 'APPROVED' | 'REJECTED' | 'PROCESSING' | 'COMPLETED';
+// 六扇门 Tier0 #16: 退货财审门. 状态机 APPROVED → FINANCE_APPROVED → COMPLETED.
+export type ReturnOrderStatus = 'DRAFT' | 'SUBMITTED' | 'APPROVED' | 'FINANCE_APPROVED' | 'REJECTED' | 'PROCESSING' | 'COMPLETED';
 
 export interface ReturnOrder {
   id: string;
@@ -108,6 +109,14 @@ class ReturnOrderApiClient {
   /** 审批通过 */
   async approveReturnOrder(returnOrderId: string, factoryId?: string): Promise<{ success: boolean; data: ReturnOrder }> {
     return apiClient.post(this.getPath(factoryId) + `/${returnOrderId}/approve`);
+  }
+
+  /**
+   * 财务审批 (六扇门 Tier0 #16): APPROVED → FINANCE_APPROVED.
+   * 退货跟钱有关，业务审批后必须先经财务审批才能完成。仅财务角色 (finance:read_write) 可调用。
+   */
+  async financeApproveReturnOrder(returnOrderId: string, factoryId?: string): Promise<{ success: boolean; data: ReturnOrder }> {
+    return apiClient.post(this.getPath(factoryId) + `/${returnOrderId}/finance-approve`);
   }
 
   /** 驳回 */
