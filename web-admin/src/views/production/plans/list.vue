@@ -14,7 +14,10 @@ import {
   importProductionPlans,
   exportProductionPlans,
   getSupervisors,
+  listAvailableWip,
+  createSecondaryPlan,
 } from '@/api/productionPlan';
+import type { WipInventoryItem } from '@/api/productionPlan';
 import { getProductWorkProcesses } from '@/api/processProduction';
 import type { ProductWorkProcessItem } from '@/api/processProduction';
 import { copyProductionPlan } from '@/api/orderCopy';
@@ -110,6 +113,105 @@ const summaryRequest = computed<ListSummaryRequest>(() => ({
   filterConditions: searchForm.value.status ? { status: searchForm.value.status } : {},
 }));
 const { summary: footerSummary, loading: footerLoading } = useListSummary('productionPlan', summaryRequest);
+
+// ========== SP2 二次加工计划对话框 ==========
+const secondaryDialogVisible = ref(false);
+const secondaryDialogLoading = ref(false);
+const wipListLoading = ref(false);
+const wipList = ref<WipInventoryItem[]>([]);
+const secondaryForm = ref<{
+  wipId: number | null;
+  quantity: number;
+  productTypeId: string;
+  plannedDate: string;
+}>({
+  wipId: null,
+  quantity: 0,
+  productTypeId: '',
+  plannedDate: '',
+});
+const selectedWip = computed(() =>
+  wipList.value.find((w) => w.id === secondaryForm.value.wipId) ?? null
+);
+
+async function handleCreateSecondary() {
+  if (!factoryId.value) return;
+  wipListLoading.value = true;
+  secondaryForm.value = { wipId: null, quantity: 0, productTypeId: '', plannedDate: tomorrowStr() };
+  secondaryDialogVisible.value = true;
+  try {
+    const res = await listAvailableWip(factoryId.value);
+    if (res.success && Array.isArray(res.data)) {
+      wipList.value = res.data;
+    } else {
+      ElMessage({ message: res.message || '加载半成品库存失败', type: 'error', duration: 0, showClose: true });
+    }
+  } catch (e) {
+    handleCatchError(e, '加载半成品库存失败');
+  } finally {
+    wipListLoading.value = false;
+  }
+}
+
+function handleWipSelect(wipId: number) {
+  const wip = wipList.value.find((w) => w.id === wipId);
+  if (wip) {
+    // 防呆 Rule 1: 预填最大可用量
+    secondaryForm.value.quantity = Number(wip.availableQuantity) || 0;
+    // 防呆 Rule 2: 自动填充目标产品 (来源产品与目标产品通常相同)
+    if (wip.productTypeId) {
+      secondaryForm.value.productTypeId = wip.productTypeId;
+    }
+  }
+}
+
+async function submitSecondaryPlan() {
+  if (!factoryId.value) return;
+  const form = secondaryForm.value;
+  if (!form.wipId) {
+    ElMessage.warning('请选择源半成品 WIP');
+    return;
+  }
+  if (form.quantity <= 0) {
+    ElMessage.warning('计划加工数量必须大于 0');
+    return;
+  }
+  if (!form.productTypeId) {
+    ElMessage.warning('请选择目标产品类型');
+    return;
+  }
+  const wip = selectedWip.value;
+  if (wip && form.quantity > Number(wip.availableQuantity)) {
+    ElMessage({
+      message: `超出可用量: 需要 ${form.quantity}，可用 ${wip.availableQuantity}`,
+      type: 'error',
+      duration: 0,
+      showClose: true,
+    });
+    return;
+  }
+  secondaryDialogLoading.value = true;
+  try {
+    const res = await createSecondaryPlan(factoryId.value, {
+      wipId: form.wipId,
+      quantity: form.quantity,
+      productTypeId: form.productTypeId,
+      plannedDate: form.plannedDate || undefined,
+    });
+    if (res.success) {
+      ElMessage.success('二次加工计划创建成功');
+      secondaryDialogVisible.value = false;
+      loadData();
+    } else {
+      ElMessage({ message: res.message || '创建失败', type: 'error', duration: 0, showClose: true });
+    }
+  } catch (e) {
+    handleCatchError(e, '创建二次加工计划失败');
+  } finally {
+    secondaryDialogLoading.value = false;
+  }
+}
+// ========== /SP2 ==========
 
 // 新建计划对话框
 const dialogVisible = ref(false);
@@ -928,6 +1030,9 @@ function handleAiFill(params: TableRow) {
             <el-button v-if="canWrite" type="success" :icon="ChatDotRound" @click="aiEntryVisible = true" style="margin-left: 8px;">
               AI对话创建
             </el-button>
+            <el-button v-if="canWrite" type="warning" :icon="Plus" @click="handleCreateSecondary" style="margin-left: 8px;">
+              二次加工计划
+            </el-button>
             <el-button v-if="canWrite" type="primary" :icon="Plus" @click="handleCreate" style="margin-left: 8px;">
               新建计划
             </el-button>
@@ -979,7 +1084,9 @@ function handleAiFill(params: TableRow) {
         <el-table-column prop="assignedSupervisorName" label="指派主管" width="100" show-overflow-tooltip />
         <el-table-column prop="sourceType" label="来源" width="90" align="center">
           <template #default="{ row }">
-            <el-tag v-if="row.sourceType === 'EXCEL_IMPORT'" type="warning" size="small">Excel导入</el-tag>
+            <!-- SP2: planNumber 前缀 SEC- 标识二次加工 (planSourceType 字段未暴露在 DTO) -->
+            <el-tag v-if="String(row.planNumber || '').startsWith('SEC-')" type="warning" size="small">二次加工</el-tag>
+            <el-tag v-else-if="row.sourceType === 'EXCEL_IMPORT'" type="warning" size="small">Excel导入</el-tag>
             <el-tag v-else-if="row.sourceType === 'AI_CHAT'" type="success" size="small">AI创建</el-tag>
             <el-tag v-else-if="row.sourceType === 'SAFETY_STOCK'" type="info" size="small">存货生产</el-tag>
             <el-tag v-else-if="row.sourceType === 'CUSTOMER_ORDER'" type="primary" size="small">销售订单</el-tag>
@@ -1090,7 +1197,9 @@ function handleAiFill(params: TableRow) {
               <el-tag :type="getStatusType(viewPlan.status as string)" size="small">{{ getStatusText(viewPlan.status as string) }}</el-tag>
             </el-descriptions-item>
             <el-descriptions-item label="来源">
-              <el-tag v-if="viewPlan.sourceType === 'EXCEL_IMPORT'" type="warning" size="small">Excel导入</el-tag>
+              <!-- SP2 -->
+              <el-tag v-if="String(viewPlan.planNumber || '').startsWith('SEC-')" type="warning" size="small">二次加工</el-tag>
+              <el-tag v-else-if="viewPlan.sourceType === 'EXCEL_IMPORT'" type="warning" size="small">Excel导入</el-tag>
               <el-tag v-else-if="viewPlan.sourceType === 'AI_CHAT'" type="success" size="small">AI创建</el-tag>
               <el-tag v-else-if="viewPlan.sourceType === 'SAFETY_STOCK'" type="info" size="small">存货生产</el-tag>
               <el-tag v-else-if="viewPlan.sourceType === 'CUSTOMER_ORDER'" type="primary" size="small">销售订单</el-tag>
@@ -1371,6 +1480,100 @@ function handleAiFill(params: TableRow) {
       <template #footer>
         <el-button @click="cancelDialogVisible = false">关闭</el-button>
         <el-button type="danger" :loading="actionLoading" @click="submitCancel">确认取消计划</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- SP2 二次加工计划创建 dialog -->
+    <el-dialog
+      v-model="secondaryDialogVisible"
+      title="创建二次加工计划"
+      width="520px"
+      :close-on-click-modal="false"
+      destroy-on-close
+      append-to-body
+    >
+      <el-form :model="secondaryForm" label-width="110px" v-loading="wipListLoading">
+        <!-- 防呆 Rule 1: 源 WIP 可用量前置显示，不等提交才报错 -->
+        <el-form-item label="源半成品 WIP" required>
+          <el-select
+            v-model="secondaryForm.wipId"
+            placeholder="选择可用半成品库存"
+            filterable
+            style="width: 100%"
+            :loading="wipListLoading"
+            @change="handleWipSelect"
+          >
+            <el-option
+              v-for="wip in wipList"
+              :key="wip.id"
+              :value="wip.id"
+              :label="`${wip.intermediateBatchNo} | 可用 ${wip.availableQuantity}${wip.unit || ''}`"
+            >
+              <span style="float: left; font-weight: 500;">{{ wip.intermediateBatchNo }}</span>
+              <span style="float: right; font-size: 12px; color: #909399; margin-left: 12px;">
+                可用 {{ wip.availableQuantity }}{{ wip.unit || '' }}
+              </span>
+            </el-option>
+          </el-select>
+          <!-- 防呆 Rule 1: 实时显示所选 WIP 可用量 -->
+          <div v-if="selectedWip" style="margin-top: 6px; font-size: 12px; color: var(--el-color-success);">
+            可用余量: <strong>{{ selectedWip.availableQuantity }} {{ selectedWip.unit || '' }}</strong>
+            <template v-if="selectedWip.unitCost != null">
+              ｜ 单位成本: ¥{{ Number(selectedWip.unitCost).toFixed(4) }}
+            </template>
+          </div>
+          <div v-if="wipList.length === 0 && !wipListLoading" style="margin-top: 6px; font-size: 12px; color: var(--el-color-warning);">
+            暂无可用半成品库存。请先完成报工产出 WIP，再创建二次加工计划。
+          </div>
+        </el-form-item>
+
+        <el-form-item label="计划加工数量" required>
+          <!-- 防呆 Rule 1: :max 限制不超过可用量 -->
+          <el-input-number
+            v-model="secondaryForm.quantity"
+            :min="0.01"
+            :max="selectedWip ? Number(selectedWip.availableQuantity) : undefined"
+            :precision="2"
+            style="width: 100%"
+          />
+          <div v-if="selectedWip" style="font-size: 12px; color: var(--text-color-secondary, #909399); margin-top: 4px;">
+            最大可用 {{ selectedWip.availableQuantity }} {{ selectedWip.unit || '' }}（超出将被后端拒绝）
+          </div>
+        </el-form-item>
+
+        <el-form-item label="目标产品类型" required>
+          <el-select
+            v-model="secondaryForm.productTypeId"
+            placeholder="选择目标成品类型"
+            filterable
+            style="width: 100%"
+          >
+            <el-option
+              v-for="item in productTypes"
+              :key="item.id"
+              :label="item.name"
+              :value="item.id"
+            />
+          </el-select>
+          <!-- 防呆 Rule 2: 来源上下文 -->
+          <div v-if="selectedWip && secondaryForm.productTypeId" style="margin-top: 4px; font-size: 12px; color: var(--text-color-secondary, #909399);">
+            源 WIP 批次: {{ selectedWip.intermediateBatchNo }}
+          </div>
+        </el-form-item>
+
+        <el-form-item label="计划日期">
+          <el-date-picker
+            v-model="secondaryForm.plannedDate"
+            type="date"
+            placeholder="预期完成日期（默认明日）"
+            value-format="YYYY-MM-DD"
+            style="width: 100%"
+          />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="secondaryDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="secondaryDialogLoading" @click="submitSecondaryPlan">创建二次加工计划</el-button>
       </template>
     </el-dialog>
 
