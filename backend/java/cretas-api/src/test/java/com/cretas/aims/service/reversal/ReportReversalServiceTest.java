@@ -26,6 +26,7 @@ import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
 
 import java.math.BigDecimal;
+import java.time.LocalDateTime;
 import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
@@ -507,6 +508,281 @@ class ReportReversalServiceTest {
             assertThatThrownBy(() -> service.listReversals(FACTORY_ID, "INVALID_STATUS"))
                     .isInstanceOf(BusinessException.class)
                     .hasMessageContaining("无效的状态值");
+        }
+    }
+
+    // ==================== SP12 快速撤回通道 (resolveFastPathDeniedReason) ====================
+
+    /**
+     * SP12 快速撤回辅助方法单元测试。
+     * 直接测试 package-visible 的 resolveFastPathDeniedReason, 覆盖所有边界条件。
+     *
+     * <p>核心安全原则验证:
+     * <ul>
+     *   <li>G1/G2 守卫 (下游消费/成品出货) 不在此方法内 — 调用前已通过守卫</li>
+     *   <li>快速通道仅免"审批人"环节, 不免安全守卫</li>
+     *   <li>三条件全满足才 null (放行): 本人 + workerId一致 + 5min 窗口内</li>
+     * </ul>
+     *
+     * @since SP12 (fix/w7-reversal-fastpath)
+     */
+    @Nested
+    @DisplayName("SP12: resolveFastPathDeniedReason — 快速撤回资格判断")
+    class ResolveFastPathDeniedReason {
+
+        /** 构建一个刚刚提交 (n 分钟前) 的报工记录，workerId = submitter */
+        private ProductionReport reportBySubmitter(int minutesAgo) {
+            ProductionReport r = new ProductionReport();
+            r.setWorkerId(SUBMITTED_BY);
+            r.setCreatedAt(LocalDateTime.now().minusMinutes(minutesAgo));
+            return r;
+        }
+
+        /** 构建一个由其他操作员提交的报工记录 */
+        private ProductionReport reportByOther(int minutesAgo) {
+            ProductionReport r = new ProductionReport();
+            r.setWorkerId(999L); // 不是 SUBMITTED_BY
+            r.setCreatedAt(LocalDateTime.now().minusMinutes(minutesAgo));
+            return r;
+        }
+
+        @Test
+        @DisplayName("本人 + 窗口内 (1 min) + workerId 一致 → null (快速撤回放行)")
+        void selfSubmitter_withinWindow_sameWorker_returnsNull() {
+            ProductionReport r = reportBySubmitter(1);
+            String result = service.resolveFastPathDeniedReason(SUBMITTED_BY, List.of(r));
+            assertThat(result).isNull(); // 快速撤回放行
+        }
+
+        @Test
+        @DisplayName("本人 + 窗口边界 (5 min) → null (放行, 窗口内含边界)")
+        void selfSubmitter_atWindowBoundary_returnsNull() {
+            // 4 min 59s ago ≈ 4 minutes by Duration.toMinutes()，仍在窗口内
+            ProductionReport r = reportBySubmitter(4);
+            r.setCreatedAt(LocalDateTime.now().minusSeconds(270)); // 4.5min < 5min
+            String result = service.resolveFastPathDeniedReason(SUBMITTED_BY, List.of(r));
+            assertThat(result).isNull();
+        }
+
+        @Test
+        @DisplayName("本人 + 超时 (6 min) → 非 null (退回审批, 含超时原因)")
+        void selfSubmitter_overtime_returnsReason() {
+            ProductionReport r = reportBySubmitter(6);
+            String result = service.resolveFastPathDeniedReason(SUBMITTED_BY, List.of(r));
+            assertThat(result).isNotNull();
+            assertThat(result).contains("超出快速撤回时限");
+            assertThat(result).contains("需要主管审批");
+        }
+
+        @Test
+        @DisplayName("其他操作员的报工 + 窗口内 → 非 null (退回审批, 含他人操作员原因)")
+        void otherWorker_withinWindow_returnsReason() {
+            ProductionReport r = reportByOther(1);
+            String result = service.resolveFastPathDeniedReason(SUBMITTED_BY, List.of(r));
+            assertThat(result).isNotNull();
+            assertThat(result).contains("其他操作员");
+        }
+
+        @Test
+        @DisplayName("混合报工 (部分本人部分他人) + 窗口内 → 非 null (退回审批)")
+        void mixedWorkers_withinWindow_returnsReason() {
+            ProductionReport myReport = reportBySubmitter(1);
+            ProductionReport otherReport = reportByOther(2);
+            String result = service.resolveFastPathDeniedReason(
+                    SUBMITTED_BY, List.of(myReport, otherReport));
+            assertThat(result).isNotNull();
+            assertThat(result).contains("其他操作员");
+        }
+
+        @Test
+        @DisplayName("本人 + 窗口内 + 多笔报工 (最新在窗口内) → null (放行)")
+        void multipleReports_latestInWindow_returnsNull() {
+            // 最新报工 1 min 前, 旧报工 30 min 前 (都是本人)
+            ProductionReport older = reportBySubmitter(30);
+            ProductionReport newer = reportBySubmitter(1);
+            String result = service.resolveFastPathDeniedReason(
+                    SUBMITTED_BY, List.of(older, newer));
+            // 最新报工时间 = 1min 前，在窗口内 → 放行
+            assertThat(result).isNull();
+        }
+
+        @Test
+        @DisplayName("本人 + 多笔报工 (最新超时) → 非 null (退回审批)")
+        void multipleReports_latestOvertime_returnsReason() {
+            // 最新报工 10 min 前 (都是本人)
+            ProductionReport older = reportBySubmitter(30);
+            ProductionReport newer = reportBySubmitter(10);
+            String result = service.resolveFastPathDeniedReason(
+                    SUBMITTED_BY, List.of(older, newer));
+            assertThat(result).isNotNull();
+            assertThat(result).contains("超出快速撤回时限");
+        }
+
+        @Test
+        @DisplayName("submittedBy=null → 非 null (退回审批, 提交人未知)")
+        void nullSubmitter_returnsReason() {
+            ProductionReport r = reportBySubmitter(1);
+            String result = service.resolveFastPathDeniedReason(null, List.of(r));
+            assertThat(result).isNotNull();
+            assertThat(result).contains("提交人未知");
+        }
+
+        @Test
+        @DisplayName("报工 createdAt=null → 非 null (保守退回审批)")
+        void nullCreatedAt_returnsReason() {
+            ProductionReport r = new ProductionReport();
+            r.setWorkerId(SUBMITTED_BY);
+            r.setCreatedAt(null); // 无时间信息
+            String result = service.resolveFastPathDeniedReason(SUBMITTED_BY, List.of(r));
+            assertThat(result).isNotNull();
+            assertThat(result).contains("报工时间信息缺失");
+        }
+    }
+
+    // ==================== SP12: submitReversal 快速撤回集成路径 ====================
+
+    @Nested
+    @DisplayName("SP12: submitReversal — 快速撤回集成路径")
+    class SubmitReversalFastPathIntegration {
+
+        private void setupPassingGuards(ProductionBatch batch) {
+            when(txnRepo.existsDownstreamConsumed(anyString(), anyString())).thenReturn(false);
+            when(batchRepo.findByIdAndFactoryId(BATCH_ID, FACTORY_ID)).thenReturn(Optional.of(batch));
+            when(fgbRepo.existsShippedByFactoryIdAndProductionPlanId(anyString(), anyString()))
+                    .thenReturn(false);
+            when(reversalLogRepo.findByBatchIdAndReversalScopeAndDeletedAtIsNull(any(), any()))
+                    .thenReturn(Optional.empty());
+        }
+
+        @Test
+        @DisplayName("SP12: 本人+无消费+窗口内 → status=DONE + fastPath=true (快速撤回成功)")
+        void fastPath_selfWithinWindow_createsDone() {
+            ProductionBatch batch = new ProductionBatch();
+            setupPassingGuards(batch);
+
+            // 报工: 本人提交, 1 min 前
+            ProductionReport report = new ProductionReport();
+            report.setWorkerId(SUBMITTED_BY);
+            report.setCreatedAt(LocalDateTime.now().minusMinutes(1));
+            when(reportRepo.findYieldReportsByBatch(FACTORY_ID, BATCH_ID))
+                    .thenReturn(List.of(report));
+
+            ReportReversalLog saved = ReportReversalLog.builder()
+                    .id(LOG_ID).factoryId(FACTORY_ID).batchId(BATCH_ID)
+                    .status(ReportReversalLog.ReversalStatus.DONE)
+                    .fastPath(true)
+                    .reversalScope(ReportReversalLog.ReversalScope.WHOLE_ORDER)
+                    .build();
+            when(reversalLogRepo.save(any())).thenReturn(saved);
+            when(reversalLogRepo.findById(LOG_ID)).thenReturn(Optional.of(saved));
+
+            ReportReversalLog result = service.submitReversal(FACTORY_ID, BATCH_ID, SUBMITTED_BY, "误填");
+
+            // 验证保存时 fastPath=true, status=DONE
+            ArgumentCaptor<ReportReversalLog> captor = ArgumentCaptor.forClass(ReportReversalLog.class);
+            verify(reversalLogRepo, atLeastOnce()).save(captor.capture());
+            ReportReversalLog capturedLog = captor.getAllValues().get(0);
+            assertThat(capturedLog.getFastPath()).isTrue();
+            assertThat(capturedLog.getStatus()).isEqualTo(ReportReversalLog.ReversalStatus.DONE);
+        }
+
+        @Test
+        @DisplayName("SP12: 超时报工 → status=PENDING + fastPath=false (退回审批，附诚实提示)")
+        void fastPath_overtime_createsPending_withHint() {
+            ProductionBatch batch = new ProductionBatch();
+            setupPassingGuards(batch);
+
+            // 报工: 本人提交, 10 min 前 (超窗口)
+            ProductionReport report = new ProductionReport();
+            report.setWorkerId(SUBMITTED_BY);
+            report.setCreatedAt(LocalDateTime.now().minusMinutes(10));
+            when(reportRepo.findYieldReportsByBatch(FACTORY_ID, BATCH_ID))
+                    .thenReturn(List.of(report));
+
+            ReportReversalLog saved = ReportReversalLog.builder()
+                    .id(LOG_ID).factoryId(FACTORY_ID).batchId(BATCH_ID)
+                    .status(ReportReversalLog.ReversalStatus.PENDING)
+                    .fastPath(false)
+                    .reversalScope(ReportReversalLog.ReversalScope.WHOLE_ORDER)
+                    .build();
+            when(reversalLogRepo.save(any())).thenReturn(saved);
+            when(reversalLogRepo.findById(LOG_ID)).thenReturn(Optional.of(saved));
+
+            service.submitReversal(FACTORY_ID, BATCH_ID, SUBMITTED_BY, "填错了");
+
+            // 验证: fastPath=false, status=PENDING
+            ArgumentCaptor<ReportReversalLog> captor = ArgumentCaptor.forClass(ReportReversalLog.class);
+            verify(reversalLogRepo, atLeastOnce()).save(captor.capture());
+            ReportReversalLog capturedLog = captor.getAllValues().get(0);
+            assertThat(capturedLog.getFastPath()).isFalse();
+            assertThat(capturedLog.getStatus()).isEqualTo(ReportReversalLog.ReversalStatus.PENDING);
+            // reason 字段包含诚实提示 (需审批原因)
+            assertThat(capturedLog.getReason()).contains("需审批原因");
+            assertThat(capturedLog.getReason()).contains("超出快速撤回时限");
+        }
+
+        @Test
+        @DisplayName("SP12: 他人报工 + 窗口内 → status=PENDING + fastPath=false (退回审批)")
+        void fastPath_otherWorker_createsPending() {
+            ProductionBatch batch = new ProductionBatch();
+            setupPassingGuards(batch);
+
+            // 报工: 他人操作员, 1 min 前
+            ProductionReport report = new ProductionReport();
+            report.setWorkerId(999L); // 不是 SUBMITTED_BY
+            report.setCreatedAt(LocalDateTime.now().minusMinutes(1));
+            when(reportRepo.findYieldReportsByBatch(FACTORY_ID, BATCH_ID))
+                    .thenReturn(List.of(report));
+
+            ReportReversalLog saved = ReportReversalLog.builder()
+                    .id(LOG_ID).factoryId(FACTORY_ID).batchId(BATCH_ID)
+                    .status(ReportReversalLog.ReversalStatus.PENDING)
+                    .fastPath(false)
+                    .reversalScope(ReportReversalLog.ReversalScope.WHOLE_ORDER)
+                    .build();
+            when(reversalLogRepo.save(any())).thenReturn(saved);
+            when(reversalLogRepo.findById(LOG_ID)).thenReturn(Optional.of(saved));
+
+            service.submitReversal(FACTORY_ID, BATCH_ID, SUBMITTED_BY, "测试");
+
+            ArgumentCaptor<ReportReversalLog> captor = ArgumentCaptor.forClass(ReportReversalLog.class);
+            verify(reversalLogRepo, atLeastOnce()).save(captor.capture());
+            ReportReversalLog capturedLog = captor.getAllValues().get(0);
+            assertThat(capturedLog.getFastPath()).isFalse();
+            assertThat(capturedLog.getStatus()).isEqualTo(ReportReversalLog.ReversalStatus.PENDING);
+        }
+
+        @Test
+        @DisplayName("SP12: G1 下游消费存在 → 409 (快速撤回绝不绕过 G1 安全守卫)")
+        void fastPath_doesNotBypassG1Guard() {
+            // G1 拦截: 有下游消费
+            when(txnRepo.existsDownstreamConsumed(FACTORY_ID, String.valueOf(BATCH_ID)))
+                    .thenReturn(true);
+
+            // 即使是本人+窗口内的报工，G1 也必须拦截
+            assertThatThrownBy(() -> service.submitReversal(FACTORY_ID, BATCH_ID, SUBMITTED_BY, "误填"))
+                    .isInstanceOf(BusinessException.class)
+                    .hasMessageContaining("已被下道工序领用");
+
+            // 不应创建任何 log
+            verify(reversalLogRepo, never()).save(any());
+        }
+
+        @Test
+        @DisplayName("SP12: G2 成品已出货 → 409 (快速撤回绝不绕过 G2 安全守卫)")
+        void fastPath_doesNotBypassG2Guard() {
+            when(txnRepo.existsDownstreamConsumed(anyString(), anyString())).thenReturn(false);
+            ProductionBatch batch = new ProductionBatch();
+            batch.setProductionPlanId("plan-001");
+            when(batchRepo.findByIdAndFactoryId(BATCH_ID, FACTORY_ID)).thenReturn(Optional.of(batch));
+            when(fgbRepo.existsShippedByFactoryIdAndProductionPlanId(FACTORY_ID, "plan-001"))
+                    .thenReturn(true);
+
+            assertThatThrownBy(() -> service.submitReversal(FACTORY_ID, BATCH_ID, SUBMITTED_BY, "误填"))
+                    .isInstanceOf(BusinessException.class)
+                    .hasMessageContaining("已出货");
+
+            verify(reversalLogRepo, never()).save(any());
         }
     }
 }

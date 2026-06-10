@@ -15,7 +15,8 @@ import java.util.List;
  * <p>三层守卫结果驱动 status 流转:
  * <ul>
  *   <li>Guard 通过 + 无历史报工 → status=DONE (直接撤回)</li>
- *   <li>Guard 通过 + 有历史报工 → status=PENDING (需审批)</li>
+ *   <li>Guard 通过 + 有历史报工 + SP12 快速通道满足 → status=DONE (快速撤回, 无需审批)</li>
+ *   <li>Guard 通过 + 有历史报工 + 不满足快速通道 → status=PENDING (需审批)</li>
  *   <li>Guard 不通过 → 不创建 Log, 直接返 409</li>
  * </ul>
  *
@@ -100,6 +101,16 @@ public class ReportReversalLog extends BaseEntity {
 
     @Column(name = "approved_at")
     private LocalDateTime approvedAt;
+
+    /**
+     * SP12 快速撤回标记。
+     * true = 本次撤回走快速通道 (本人+无下游消费+时间窗口内, 免审批直接执行)。
+     * false/null = 走完整审批流或无报工直通。
+     * 审计用途: 便于追踪哪些撤回是免审批的快速通道执行。
+     */
+    @Column(name = "fast_path")
+    @Builder.Default
+    private Boolean fastPath = false;
 
     // ==================== BUG-4 修复: 显示姓名字段 (非持久化, 由 Service 层填充) ====================
 
