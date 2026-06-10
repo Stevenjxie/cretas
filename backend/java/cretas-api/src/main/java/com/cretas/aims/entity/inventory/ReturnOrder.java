@@ -121,6 +121,17 @@ public class ReturnOrder extends BaseEntity {
     @Column(name = "approved_at")
     private LocalDateTime approvedAt;
 
+    // ==================== 六扇门 Tier0 #16: 财务审批字段 ====================
+    // 退货跟钱有关，APPROVED 后必须先经财务审批 (FINANCE_APPROVED) 才能完成/出货。
+
+    /** 财务审批人用户 ID。null = 尚未财务审批。 */
+    @Column(name = "finance_approved_by")
+    private Long financeApprovedBy;
+
+    /** 财务审批时间。null = 尚未财务审批。 */
+    @Column(name = "finance_approved_at")
+    private LocalDateTime financeApprovedAt;
+
     @Column(name = "remark", columnDefinition = "TEXT")
     private String remark;
 

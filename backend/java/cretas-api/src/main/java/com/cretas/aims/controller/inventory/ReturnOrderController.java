@@ -88,6 +88,23 @@ public class ReturnOrderController {
         return ApiResponse.success("退货单已审批", order);
     }
 
+    /**
+     * 六扇门 Tier0 #16 (catalog 行2399-2416): 退货财务审批门。
+     * 退货跟钱有关，业务审批 (APPROVED) 后必须经财务审批 (FINANCE_APPROVED) 才能交仓管完成/出货。
+     * 仅 finance:read_write (财务角色) 可调用 — 镜像 PaymentRequest finance-approve 权限范式。
+     */
+    @PostMapping("/{returnOrderId}/finance-approve")
+    @Operation(summary = "退货财务审批 (退货跟钱有关，完成前必须先财务审批)")
+    @RequirePermission({"finance:read_write"})
+    public ApiResponse<ReturnOrder> financeApproveReturnOrder(
+            @PathVariable @NotBlank String factoryId,
+            @PathVariable @NotBlank String returnOrderId,
+            @RequestHeader("Authorization") String authorization) {
+        Long userId = extractUserId(authorization);
+        ReturnOrder order = returnOrderService.financeApproveReturnOrder(factoryId, returnOrderId, userId);
+        return ApiResponse.success("退货单财务审批通过", order);
+    }
+
     @PostMapping("/{returnOrderId}/reject")
     @Operation(summary = "驳回退货单")
     public ApiResponse<ReturnOrder> rejectReturnOrder(

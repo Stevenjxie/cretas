@@ -29,8 +29,9 @@ public class ReturnOrderApproveTool extends AbstractBusinessTool {
 
     @Override
     public String getDescription() {
-        return "退货单审批和状态推进。支持操作：提交(submit)、审批通过(approve)、拒绝(reject)、完成(complete)。" +
-                "适用场景：提交退货审批、审批退货单、确认退货完成。";
+        return "退货单审批和状态推进。支持操作：提交(submit)、业务审批通过(approve)、财务审批(finance-approve)、拒绝(reject)、完成(complete)。" +
+                "退货跟钱有关，业务审批后必须先财务审批(finance-approve)才能完成(complete)交仓管出货。" +
+                "适用场景：提交退货审批、审批退货单、财务审批退货单、确认退货完成。";
     }
 
     @Override
@@ -48,7 +49,7 @@ public class ReturnOrderApproveTool extends AbstractBusinessTool {
         Map<String, Object> action = new HashMap<>();
         action.put("type", "string");
         action.put("description", "操作类型");
-        action.put("enum", Arrays.asList("submit", "approve", "reject", "complete"));
+        action.put("enum", Arrays.asList("submit", "approve", "finance-approve", "reject", "complete"));
         properties.put("action", action);
 
         schema.put("properties", properties);
@@ -65,7 +66,7 @@ public class ReturnOrderApproveTool extends AbstractBusinessTool {
     protected String getParameterQuestion(String paramName) {
         return switch (paramName) {
             case "returnOrderId" -> "请提供退货单ID或编号。";
-            case "action" -> "请选择操作：提交(submit)、审批通过(approve)、拒绝(reject)、完成(complete)。";
+            case "action" -> "请选择操作：提交(submit)、业务审批通过(approve)、财务审批(finance-approve)、拒绝(reject)、完成(complete)。";
             default -> super.getParameterQuestion(paramName);
         };
     }
@@ -81,6 +82,7 @@ public class ReturnOrderApproveTool extends AbstractBusinessTool {
         ReturnOrder result = switch (action.toLowerCase()) {
             case "submit" -> returnOrderService.submitReturnOrder(factoryId, returnOrderId);
             case "approve" -> returnOrderService.approveReturnOrder(factoryId, returnOrderId, userId);
+            case "finance-approve", "finance_approve" -> returnOrderService.financeApproveReturnOrder(factoryId, returnOrderId, userId);
             case "reject" -> returnOrderService.rejectReturnOrder(factoryId, returnOrderId);
             case "complete" -> returnOrderService.completeReturnOrder(factoryId, returnOrderId);
             default -> throw new IllegalArgumentException("不支持的操作: " + action);
@@ -88,7 +90,8 @@ public class ReturnOrderApproveTool extends AbstractBusinessTool {
 
         String actionName = switch (action.toLowerCase()) {
             case "submit" -> "已提交";
-            case "approve" -> "已审批通过";
+            case "approve" -> "已业务审批通过";
+            case "finance-approve", "finance_approve" -> "已财务审批通过";
             case "reject" -> "已拒绝";
             case "complete" -> "已完成";
             default -> action;

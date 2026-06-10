@@ -333,6 +333,33 @@ public class ReturnOrderServiceImpl implements ReturnOrderService {
         return returnOrderRepository.save(order);
     }
 
+    /**
+     * 六扇门 Tier0 #16 (catalog 行2399-2416): 退货财务审批门。
+     * 客户原话: "退货单发财务审批，审批后给仓管把实物拿走" / "退货跟钱有关要先财务审批确认；
+     * 跟钱有关的东西都要审批"。
+     *
+     * <p>状态机: APPROVED → FINANCE_APPROVED。只有 finance:read_write (财务角色) 可调用
+     * (Controller 层 @RequirePermission 把关)。财务审批后才能 completeReturnOrder 交仓管出货。
+     *
+     * <p>幂等/防呆: 非 APPROVED 状态调用 → 409 + 明确 hint。
+     */
+    @Override
+    @Transactional
+    public ReturnOrder financeApproveReturnOrder(String factoryId, String returnOrderId, Long financeUserId) {
+        ReturnOrder order = getReturnOrderById(factoryId, returnOrderId);
+        if (order.getStatus() != ReturnOrderStatus.APPROVED) {
+            throw new BusinessException(409, "只有已通过业务审批(已审批)的退货单可以提交财务审批")
+                    .withHint("当前状态: " + order.getStatus().getDisplayName()
+                            + "。退货跟资金相关，需先完成业务审批再由财务审批，请刷新列表查看最新状态");
+        }
+        order.setStatus(ReturnOrderStatus.FINANCE_APPROVED);
+        order.setFinanceApprovedBy(financeUserId);
+        order.setFinanceApprovedAt(LocalDateTime.now());
+        log.info("财务审批退货单: returnOrderId={}, returnNumber={}, financeApprovedBy={}",
+                returnOrderId, order.getReturnNumber(), financeUserId);
+        return returnOrderRepository.save(order);
+    }
+
     @Override
     @Transactional
     public ReturnOrder rejectReturnOrder(String factoryId, String returnOrderId) {
@@ -350,9 +377,14 @@ public class ReturnOrderServiceImpl implements ReturnOrderService {
     @Transactional
     public ReturnOrder completeReturnOrder(String factoryId, String returnOrderId) {
         ReturnOrder order = getReturnOrderById(factoryId, returnOrderId);
-        if (order.getStatus() != ReturnOrderStatus.APPROVED) {
-            throw new BusinessException(409, "只有已审批状态的退货单可以完成")
-                    .withHint("请刷新退货单列表查看最新状态");
+        // 六扇门 Tier0 #16: 财务审批门 — 退货跟钱有关，完成/出货前必须先经财务审批。
+        // 完成的前置状态从 APPROVED 收紧为 FINANCE_APPROVED。防呆: 未财务审批直接完成 → 拒绝 + hint。
+        if (order.getStatus() != ReturnOrderStatus.FINANCE_APPROVED) {
+            String hint = order.getStatus() == ReturnOrderStatus.APPROVED
+                    ? "该退货单已通过业务审批，但尚未经财务审批。退货涉及资金，需财务审批通过后才能交仓管完成/出货"
+                    : "请刷新退货单列表查看最新状态";
+            throw new BusinessException(409, "只有财务审批通过(财务已审)的退货单可以完成")
+                    .withHint(hint);
         }
 
         // T-RTA business logic (issue #571 Phase B): for withGoods=true, trigger
