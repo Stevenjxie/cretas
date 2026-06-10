@@ -140,11 +140,11 @@ const reviewTrendSource = (): { chart: ChartWithMeta } | null => {
   if (trend.length < 2) return null
   return {
     chart: {
-      chartType: 'BAR',
-      meta: { xDim: 'channel', yMetric: 'revenue', aggregation: 'sum', domain: 'restaurant' },
+      chartType: 'LINE',
+      meta: { xDim: 'time', yMetric: 'quantity', aggregation: 'sum', domain: 'restaurant' },
       config: {
         xAxis: { data: trend.map((m) => m.month) },
-        series: [{ type: 'bar', data: trend.map((m) => m.reviewCount) }],
+        series: [{ type: 'line', data: trend.map((m) => m.reviewCount) }],
       },
     },
   }
