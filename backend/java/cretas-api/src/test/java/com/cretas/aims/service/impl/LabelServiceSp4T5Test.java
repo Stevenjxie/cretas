@@ -3,6 +3,7 @@ package com.cretas.aims.service.impl;
 import com.cretas.aims.dto.label.MaterialBatchLabelScanResponse;
 import com.cretas.aims.entity.Label;
 import com.cretas.aims.entity.MaterialBatch;
+import com.cretas.aims.entity.RawMaterialType;
 import com.cretas.aims.repository.LabelRepository;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -164,6 +165,71 @@ class LabelServiceSp4T5Test {
                 () -> labelService.scanLabel(FACTORY_ID, labelCode));
         assertTrue(ex.getMessage().contains("VOIDED") || ex.getMessage().contains("作废"),
                 "Exception message should indicate voided status: " + ex.getMessage());
+    }
+
+    // ──────────────── SP4-A3: SP8 primaryCode 前缀 ────────────────
+
+    @Test
+    @DisplayName("T5-A3-1: SP8 primaryCode='001' → 标签前缀取前2字符 '00' (generateLabelCode substring(0,2))")
+    void generateLabel_withSp8PrimaryCode_usesPrefixFromMaterialType() {
+        RawMaterialType materialType = new RawMaterialType();
+        materialType.setPrimaryCode("001");
+        batch.setMaterialType(materialType);
+
+        when(materialBatchRepository.findByIdAndFactoryId(BATCH_ID, FACTORY_ID))
+                .thenReturn(Optional.of(batch));
+        when(labelRepository.findByBatchIdAndDeletedAtIsNull(BATCH_ID))
+                .thenReturn(java.util.List.of());
+        when(labelRepository.save(any(Label.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        Label result = labelService.generateMaterialBatchLabel(FACTORY_ID, BATCH_ID, 1L);
+
+        assertNotNull(result);
+        assertNotNull(result.getLabelCode(), "labelCode should be generated");
+        // generateLabelCode internally does labelType.substring(0, 2)
+        // SP8 primaryCode "001" → substring(0,2) → "00" as prefix in label code
+        assertTrue(result.getLabelCode().startsWith("00"),
+                "label code should start with '00' (primaryCode '001' substring(0,2)), got: " + result.getLabelCode());
+    }
+
+    @Test
+    @DisplayName("T5-A3-2: materialType.primaryCode=null → fallback 前缀 'MA'")
+    void generateLabel_nullPrimaryCode_fallsBackToMA() {
+        RawMaterialType materialType = new RawMaterialType();
+        materialType.setPrimaryCode(null); // null → fallback
+        batch.setMaterialType(materialType);
+
+        when(materialBatchRepository.findByIdAndFactoryId(BATCH_ID, FACTORY_ID))
+                .thenReturn(Optional.of(batch));
+        when(labelRepository.findByBatchIdAndDeletedAtIsNull(BATCH_ID))
+                .thenReturn(java.util.List.of());
+        when(labelRepository.save(any(Label.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        Label result = labelService.generateMaterialBatchLabel(FACTORY_ID, BATCH_ID, 1L);
+
+        assertNotNull(result.getLabelCode(), "labelCode should be generated");
+        // "MA".substring(0,2) = "MA"
+        assertTrue(result.getLabelCode().startsWith("MA"),
+                "label code should start with 'MA' (fallback when primaryCode null), got: " + result.getLabelCode());
+    }
+
+    @Test
+    @DisplayName("T5-A3-3: materialType=null → fallback 前缀 'MA'")
+    void generateLabel_noMaterialType_fallsBackToMA() {
+        // batch has no materialType set (null)
+        batch.setMaterialType(null);
+
+        when(materialBatchRepository.findByIdAndFactoryId(BATCH_ID, FACTORY_ID))
+                .thenReturn(Optional.of(batch));
+        when(labelRepository.findByBatchIdAndDeletedAtIsNull(BATCH_ID))
+                .thenReturn(java.util.List.of());
+        when(labelRepository.save(any(Label.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        Label result = labelService.generateMaterialBatchLabel(FACTORY_ID, BATCH_ID, 1L);
+
+        assertNotNull(result.getLabelCode());
+        assertTrue(result.getLabelCode().startsWith("MA"),
+                "label code should start with 'MA' (fallback when materialType null), got: " + result.getLabelCode());
     }
 
     @Test

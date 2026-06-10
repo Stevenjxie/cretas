@@ -1,5 +1,6 @@
 package com.cretas.aims.dto.producttype;
 
+import com.cretas.aims.entity.enums.TaxRate;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.constraints.NotBlank;
@@ -66,6 +67,24 @@ public class ProductTypeDTO {
 
     @Schema(description = "装箱换算: 1 一级单位 = N 二级单位 (如 1筐=20盒 → 20)")
     private BigDecimal boxConversionCoefficient;
+
+    // ==================== 商务/税务字段 ====================
+
+    /** 含税单价 (scale=4). 与 taxRate 联动: 有税率时 service 层自动推导 unitPrice = 含税/(1+rate). */
+    @Schema(description = "含税单价; 与 taxRate 联动自动推导未税 unitPrice")
+    private BigDecimal taxIncludedUnitPrice;
+
+    // ==================== SP4-A8: 税率换算 ====================
+
+    /**
+     * SP4-A8: 含税单价对应的税率枚举 (9%农产品 / 13%一般货物).
+     * <p>设置后 service 层自动计算 unitPrice = taxIncludedUnitPrice / (1 + rate), scale=4, HALF_UP.</p>
+     * <p>null = 未配置税率 (unitPrice 不自动换算, 由调用方直接传入).</p>
+     */
+    @Schema(description = "SP4-A8 税率: TAX_9=9%农产品 / TAX_13=13%一般货物 / null=未配置")
+    private TaxRate taxRate;
+
+    // ==================== End SP4-A8 ====================
 
     private Boolean isActive;
     private String notes;
