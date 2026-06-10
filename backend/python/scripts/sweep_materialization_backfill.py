@@ -240,8 +240,51 @@ async def run_sweep(
     dry_run: bool,
     *,
     concurrency: int = 2,
+    probe: bool = False,
 ) -> None:
     """Enumerate uploads, rematerialize each, report census delta."""
+    if probe:
+        # --probe: run ONE upload (first factory, first upload) for real;
+        # print whether distillation rows were written.  Does NOT persist nothing
+        # extra — the pipeline writes its own ON CONFLICT idempotent rows.
+        logger.info(f"[probe] mode enabled — running ONE upload from first factory")
+        from smartbi.config import get_pg_pool
+        pool = await get_pg_pool()
+        if pool is None:
+            print("[probe] ERROR: could not obtain DB pool")
+            return
+        # Pick one upload from the first factory
+        probe_uploads = await _list_uploads(pool, factory_ids[:1], limit=1)
+        if not probe_uploads:
+            print(f"[probe] NO UPLOADS found for factory={factory_ids[0]!r}")
+            return
+        u = probe_uploads[0]
+        fid = u["factory_id"]
+        upload_id = u["id"]
+        fname = u.get("file_name") or "?"
+        before = await _count_corpus_rows(pool, "materialization")
+        logger.info(f"[probe] calling _rematerialize_upload: upload_id={upload_id} factory={fid} file={fname!r}")
+        ok = await _rematerialize_upload(pool, upload_id, fid, dry_run=False)
+        after = await _count_corpus_rows(pool, "materialization")
+        added = (after - before) if before >= 0 and after >= 0 else "?"
+        if ok and added != "?" and int(str(added)) > 0:
+            print(
+                f"[probe] OK: factory={fid} upload_id={upload_id} file={fname!r}"
+                f"  rows_before={before} rows_after={after} added={added}"
+            )
+        elif ok:
+            print(
+                f"[probe] COMPLETED (no new rows — likely idempotent re-run or no LLM output):"
+                f" factory={fid} upload_id={upload_id} file={fname!r}"
+                f" rows_before={before} rows_after={after}"
+            )
+        else:
+            print(
+                f"[probe] FAILED: factory={fid} upload_id={upload_id} file={fname!r}"
+                f" (check logs for exception)"
+            )
+        return
+
     if dry_run:
         logger.info(
             f"[sweep] DRY-RUN: factories={factory_ids} limit_per_factory={limit or 'all'}"
@@ -342,6 +385,16 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="List uploads without running LLM / persisting",
     )
+    p.add_argument(
+        "--probe",
+        action="store_true",
+        help=(
+            "Run ONE real materialization (first factory, first upload) and print "
+            "whether distillation rows were written. Pipeline: set_factory_id → "
+            "materialize_upload → generate_llm_insights → save_materialization_results. "
+            "Data-rich factories by default: F001, F006, qhj_prod, RES_3101_009. Does NOT skip persist."
+        ),
+    )
     return p
 
 
@@ -354,6 +407,7 @@ def main() -> None:
             limit=args.limit,
             dry_run=args.dry_run,
             concurrency=args.concurrency,
+            probe=args.probe,
         )
     )
 

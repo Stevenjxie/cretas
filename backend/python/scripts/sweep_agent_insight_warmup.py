@@ -223,12 +223,14 @@ async def run_sweep(
     no_cache: bool,
     *,
     concurrency: int = 2,
+    probe: bool = False,
 ) -> None:
     logger.info(
         f"[sweep] factories={factory_ids} windows={window_keys} "
         f"questions={len(questions)} concurrency={concurrency}"
         + (" DRY-RUN" if dry_run else "")
         + (" NO-CACHE" if no_cache else "")
+        + (" PROBE" if probe else "")
     )
 
     from smartbi.config import get_pg_pool, get_settings
@@ -273,6 +275,36 @@ async def run_sweep(
                 budget_tracker=budget,
                 cache=cache,
             )
+
+    if probe:
+        # Probe mode: run exactly ONE (first factory, first window, first question)
+        # for real and print whether answer_insight returned a non-empty narrative.
+        # Gold tables: agg_daily, agg_product, fact_pos_discount (verified in queries.py).
+        # Data-rich factories with confirmed gold data: qhj_prod (real POS data from
+        # restaurant_ops_etl), RES_3101_009. R_GML_DEMO / R_XMX_CHAIN may be empty.
+        fid = factory_ids[0]
+        wk = window_keys[0]
+        q = questions[0]
+        orch = orchestrators.get(fid)
+        logger.info(f"[probe] running ONE: factory={fid} window={wk!r} question={q!r}")
+        try:
+            start, end = _resolve_date_range(wk)
+            resp = await orch.answer_insight(fid, q, (start, end), cache_ttl_hours=0)
+            if resp.answer and resp.answer not in (
+                "今日 AI 预算已用完，建议明天再问。如需提前恢复，请联系管理员调整预算上限。",
+                "AI 服务暂时不可用，请稍后重试。如问题持续，请联系管理员。",
+            ):
+                print(
+                    f"[probe] OK: factory={fid} window={wk!r} src={resp.source} "
+                    f"tokens={resp.tokens}\n  answer_snippet={resp.answer[:120]!r}"
+                )
+            else:
+                print(
+                    f"[probe] DEGRADED/EMPTY: factory={fid} answer={resp.answer[:80]!r}"
+                )
+        except Exception as e:
+            print(f"[probe] EXCEPTION: factory={fid}: {e}")
+        return
 
     # Build work list
     work: List[Tuple[str, str, str]] = [
@@ -346,6 +378,16 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Bypass narrative cache — force LLM re-call even for recently-asked questions",
     )
+    p.add_argument(
+        "--probe",
+        action="store_true",
+        help=(
+            "Run ONE real LLM call (first factory × first window × first question) "
+            "via AgentOrchestrator and print whether a non-empty narrative was produced. "
+            "Gold tables used: agg_daily, agg_product, fact_pos_discount (see gold/queries.py). "
+            "Data-rich tenants: qhj_prod, RES_3101_009. Does NOT persist."
+        ),
+    )
     return p
 
 
@@ -361,6 +403,7 @@ def main() -> None:
             dry_run=args.dry_run,
             no_cache=args.no_cache,
             concurrency=args.concurrency,
+            probe=args.probe,
         )
     )
 

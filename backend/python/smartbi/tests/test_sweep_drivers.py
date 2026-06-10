@@ -398,3 +398,293 @@ class TestQuestionBankCoverage:
         from scripts.sweep_agent_insight_warmup import DEFAULT_RESTAURANT_FACTORIES as agent_facs
         assert len(mat_facs) > 0
         assert len(agent_facs) > 0
+
+
+# ===========================================================================
+# 6. _extract_answer_from_insights_result — new helper in sweep_chat_qa_replay
+# ===========================================================================
+
+class TestExtractAnswerFromInsightsResult:
+    """Tests for _extract_answer_from_insights_result(), the root-cause fix for
+    sweep_chat_qa_replay always producing zero corpus rows.
+
+    generate_insights() returns:
+        {"success": bool, "insights": [...], "totalGenerated": int, "method": str}
+    There is NO top-level "summary" key.  The helper must extract answer text
+    from the _meta insight's executive_summary, or fall back to any insight text.
+    """
+
+    def _fn(self):
+        from scripts.sweep_chat_qa_replay import _extract_answer_from_insights_result
+        return _extract_answer_from_insights_result
+
+    def test_extracts_meta_executive_summary(self) -> None:
+        """Primary path: _meta insight with executive_summary."""
+        fn = self._fn()
+        result = fn(
+            {
+                "success": True,
+                "insights": [
+                    {"type": "_meta", "executive_summary": "本月营业额增长15%，主要由堂食驱动。",
+                     "risk_alerts": [], "opportunities": []},
+                    {"type": "trend", "text": "趋势向好"},
+                ],
+                "totalGenerated": 2,
+                "method": "llm",
+            },
+            question="本月营业情况？",
+        )
+        assert result == "本月营业额增长15%，主要由堂食驱动。"
+
+    def test_falls_back_to_meta_text_when_no_exec_summary(self) -> None:
+        """_meta insight with no executive_summary but with text — use text."""
+        fn = self._fn()
+        result = fn(
+            {
+                "success": True,
+                "insights": [
+                    {"type": "_meta", "executive_summary": "", "text": "总体经营平稳，建议关注损耗。"},
+                ],
+                "totalGenerated": 1,
+                "method": "llm",
+            },
+            question="整体情况？",
+        )
+        assert result == "总体经营平稳，建议关注损耗。"
+
+    def test_falls_back_to_any_insight_text(self) -> None:
+        """No _meta insight: falls back to first insight with non-trivial text."""
+        fn = self._fn()
+        result = fn(
+            {
+                "success": True,
+                "insights": [
+                    {"type": "trend", "text": "门店A营业额领先其余三家门店总和。"},
+                ],
+                "totalGenerated": 1,
+                "method": "llm",
+            },
+            question="哪家门店最好？",
+        )
+        assert len(result) > 10
+
+    def test_returns_empty_for_no_insights(self) -> None:
+        """Empty insights list → return empty string, no crash."""
+        fn = self._fn()
+        result = fn({"success": True, "insights": [], "totalGenerated": 0, "method": "llm"}, "？")
+        assert result == ""
+
+    def test_returns_empty_for_non_dict(self) -> None:
+        """Non-dict input → return empty string, no crash."""
+        fn = self._fn()
+        assert fn(None, "q") == ""
+        assert fn("string", "q") == ""
+
+    def test_returns_empty_when_summary_key_absent(self) -> None:
+        """The OLD bug: result.get('summary', '') would always return '' — verify
+        the NEW helper does NOT rely on 'summary' key."""
+        fn = self._fn()
+        # Simulate exact return from InsightGenerator.generate_insights() — no 'summary' key
+        real_shaped_result = {
+            "success": True,
+            "insights": [
+                {"type": "_meta", "executive_summary": "综合分析：毛利率下降2个点。",
+                 "risk_alerts": ["原料成本上涨"], "opportunities": ["堂食增长机会"]},
+            ],
+            "totalGenerated": 1,
+            "method": "llm",
+        }
+        # OLD code: real_shaped_result.get("summary", "") == "" (always empty → zero corpus rows)
+        assert real_shaped_result.get("summary", "") == "", "test sanity: no summary key"
+        # NEW code: extracts from _meta.executive_summary
+        result = fn(real_shaped_result, "毛利率")
+        assert result == "综合分析：毛利率下降2个点。"
+
+    def test_trivially_short_text_is_skipped(self) -> None:
+        """Insights with text shorter than 10 chars are skipped."""
+        fn = self._fn()
+        result = fn(
+            {
+                "success": True,
+                "insights": [
+                    {"type": "_meta", "executive_summary": "短", "text": "也短"},  # < 10 chars
+                    {"type": "kpi", "text": "这是一个足够长的分析文字来通过长度检查。"},
+                ],
+                "totalGenerated": 2,
+                "method": "llm",
+            },
+            question="？",
+        )
+        # Skips trivially short _meta text, falls through to Pass 2
+        assert len(result) >= 10
+
+
+# ===========================================================================
+# 7. Probe mode: sweep_chat_qa_replay — probe=True returns True without persist
+# ===========================================================================
+
+class TestChatQaReplayProbeMode:
+
+    def _import(self):
+        from scripts import sweep_chat_qa_replay as mod
+        return mod
+
+    def test_probe_mode_does_not_persist(self) -> None:
+        """probe=True: _process_one returns True but must NOT call persist_distillation_sample.
+
+        InsightGenerator and persist_distillation_sample are lazy-imported inside
+        _process_one, so we patch at the source module path.
+        """
+        mod = self._import()
+
+        persist_calls: List[Any] = []
+
+        async def fake_persist(pool, **kwargs) -> None:
+            persist_calls.append(kwargs)
+
+        async def fake_generate_insights(data, analysis_context=""):
+            return {
+                "success": True,
+                "insights": [
+                    {"type": "_meta", "executive_summary": "门店营业良好，毛利率稳定在35%。",
+                     "risk_alerts": [], "opportunities": []},
+                ],
+                "totalGenerated": 1,
+                "method": "llm",
+            }
+
+        data = [{"col_a": 5000.0, "col_b": "A"} for _ in range(50)]
+
+        with patch("smartbi.services.distillation_capture.persist_distillation_sample", fake_persist), \
+             patch("smartbi.services.insights.generator.InsightGenerator.generate_insights",
+                   new=AsyncMock(side_effect=fake_generate_insights)):
+
+            async def _test():
+                return await mod._process_one(
+                    pool=None,
+                    factory_id="qhj_prod",
+                    question="营业情况如何？",
+                    data=data,
+                    upload_id=1,
+                    dry_run=False,
+                    probe=True,
+                )
+
+            result = _run(_test())
+
+        assert result is True
+        # probe=True must NOT persist
+        assert persist_calls == [], f"probe mode must not persist, got {persist_calls}"
+
+    def test_non_probe_mode_does_persist(self) -> None:
+        """probe=False: when answer is non-empty, persist_distillation_sample IS called.
+
+        InsightGenerator and persist_distillation_sample are lazy-imported inside
+        _process_one, so we patch at the source module path.
+        """
+        mod = self._import()
+
+        persist_calls: List[Any] = []
+
+        async def fake_persist(pool, **kwargs) -> None:
+            # persist_distillation_sample called with all kwargs
+            persist_calls.append(kwargs.get("teacher_output", ""))
+
+        async def fake_generate_insights(data, analysis_context=""):
+            return {
+                "success": True,
+                "insights": [
+                    {"type": "_meta",
+                     "executive_summary": "门店本月营业额增长12%，外卖占比提升明显。",
+                     "risk_alerts": [], "opportunities": []},
+                ],
+                "totalGenerated": 1,
+                "method": "llm",
+            }
+
+        data = [{"col_a": 5000.0, "col_b": "A"} for _ in range(50)]
+
+        with patch("smartbi.services.distillation_capture.persist_distillation_sample", fake_persist), \
+             patch("smartbi.services.insights.generator.InsightGenerator.generate_insights",
+                   new=AsyncMock(side_effect=fake_generate_insights)):
+
+            async def _test():
+                return await mod._process_one(
+                    pool=None,
+                    factory_id="qhj_prod",
+                    question="营业情况如何？",
+                    data=data,
+                    upload_id=1,
+                    dry_run=False,
+                    probe=False,
+                )
+
+            result = _run(_test())
+
+        assert result is True
+        # non-probe mode MUST persist when answer is substantive
+        assert len(persist_calls) == 1
+        assert "12%" in persist_calls[0] or len(persist_calls[0]) > 5
+
+
+# ===========================================================================
+# 8. No-data path: sweep_chat_qa_replay uses generate_text_analysis, not fake dict
+# ===========================================================================
+
+class TestChatQaReplayNoDataPath:
+    """Verify the no-data path calls InsightGenerator.generate_text_analysis()
+    instead of the old fake dict approach (which always produced empty answer)."""
+
+    def _import(self):
+        from scripts import sweep_chat_qa_replay as mod
+        return mod
+
+    def test_no_data_calls_generate_text_analysis(self) -> None:
+        """When data=[], _process_one must call generate_text_analysis, not generate_insights.
+
+        InsightGenerator is lazy-imported inside _process_one, so we patch at
+        the source module path.  persist_distillation_sample likewise.
+        """
+        mod = self._import()
+
+        text_analysis_calls: List[str] = []
+        insights_calls: List[Any] = []
+        persist_calls: List[Any] = []
+
+        async def fake_text_analysis(question: str) -> str:
+            text_analysis_calls.append(question)
+            return "本月数据暂无，但从历史趋势来看营业情况稳定。"
+
+        async def fake_generate_insights(data, analysis_context=""):
+            insights_calls.append(data)
+            return {"success": True, "insights": [], "totalGenerated": 0, "method": "llm"}
+
+        async def fake_persist(pool, **kwargs) -> None:
+            persist_calls.append(kwargs.get("teacher_output", ""))
+
+        with patch("smartbi.services.distillation_capture.persist_distillation_sample", fake_persist), \
+             patch("smartbi.services.insights.generator.InsightGenerator.generate_text_analysis",
+                   new=AsyncMock(side_effect=fake_text_analysis)), \
+             patch("smartbi.services.insights.generator.InsightGenerator.generate_insights",
+                   new=AsyncMock(side_effect=fake_generate_insights)):
+
+            async def _test():
+                return await mod._process_one(
+                    pool=None,
+                    factory_id="F001",
+                    question="今日销售如何？",
+                    data=[],  # empty data → no-data path
+                    upload_id=None,
+                    dry_run=False,
+                    probe=False,
+                )
+
+            result = _run(_test())
+
+        # generate_text_analysis must have been called
+        assert len(text_analysis_calls) == 1
+        assert text_analysis_calls[0] == "今日销售如何？"
+        # generate_insights must NOT have been called for empty data
+        assert insights_calls == [], "generate_insights must not be called when data is empty"
+        # answer from generate_text_analysis must be persisted
+        assert len(persist_calls) == 1

@@ -275,6 +275,55 @@ async def _count_corpus_rows(pool, source: str = "chat_qa") -> int:
 # Per-question processing
 # ---------------------------------------------------------------------------
 
+def _extract_answer_from_insights_result(
+    insights_result: Dict[str, Any],
+    question: str,
+) -> str:
+    """Extract the best answer string from InsightGenerator.generate_insights() result.
+
+    generate_insights() returns::
+
+        {"success": bool, "insights": [...], "totalGenerated": int, "method": str}
+
+    There is NO top-level "summary" key — that's the P0-1 bug: the old code did
+    ``insights_result.get("summary", "")`` which always returned "".
+
+    The *real* ``general_analysis`` endpoint (chat.py:1095-1103) uses:
+    1. ``insights_result.get("summary", "数据分析完成。")`` → "数据分析完成。" (fallback)
+    2. Then falls back to first insight's ``executive_summary`` or ``text``
+
+    The *actual* content lives in ``insights[0]`` when type == "_meta":
+      - ``executive_summary`` field on the _meta dict (injected by _parse_llm_insights)
+      - or a plain ``text`` field on any insight
+
+    So we mirror the same two-level extraction chat.py uses, but corrected to not
+    treat the missing "summary" key as empty (which caused the sweep to always skip).
+    """
+    if not isinstance(insights_result, dict):
+        return ""
+    insights = insights_result.get("insights") or []
+    # Pass 1: look for the _meta insight that carries executive_summary
+    for ins in insights:
+        if not isinstance(ins, dict):
+            continue
+        if ins.get("type") == "_meta":
+            es = ins.get("executive_summary", "")
+            if es and len(es) > 10:
+                return es
+            # _meta may also carry plain text
+            t = ins.get("text", "")
+            if t and len(t) > 10:
+                return t
+    # Pass 2: any insight with non-trivial text or executive_summary
+    for ins in insights:
+        if not isinstance(ins, dict):
+            continue
+        better = ins.get("executive_summary") or ins.get("text")
+        if better and len(better) > 10:
+            return better
+    return ""
+
+
 async def _process_one(
     pool,
     factory_id: str,
@@ -282,8 +331,15 @@ async def _process_one(
     data: List[Dict[str, Any]],
     upload_id: Optional[int],
     dry_run: bool,
+    *,
+    probe: bool = False,
 ) -> bool:
-    """Run one question through InsightGenerator and persist the pair."""
+    """Run one question through InsightGenerator and persist the pair.
+
+    probe=True: run a single real LLM call and print whether a non-empty
+    corpus pair was produced — without persisting.  Useful for Opus to
+    verify cheaply that the pipeline produces output before a full sweep.
+    """
     business_type = _derive_business_type(factory_id)
 
     if dry_run:
@@ -300,31 +356,59 @@ async def _process_one(
         t0 = time.monotonic()
         insight_gen = InsightGenerator()
 
-        # Use the factory's real upload data as grounding context
         if data:
+            # ----------------------------------------------------------------
+            # WITH-DATA PATH: mirrors general_analysis lines 1086-1103.
+            # Pass the raw rows to generate_insights; the generator summarises
+            # them, builds the LLM prompt, and returns a result dict with shape:
+            #   {"success": bool, "insights": [...], "totalGenerated": int, …}
+            # NOTE: there is NO top-level "summary" key in that result — the old
+            # ``insights_result.get("summary", "")`` always returned "" and made
+            # the sweep silently skip every pair.  _extract_answer_from_insights_result
+            # correctly pulls the answer from the _meta insight.
+            # ----------------------------------------------------------------
             insights_result = await insight_gen.generate_insights(
                 data,
                 analysis_context=question,
             )
+            answer = _extract_answer_from_insights_result(insights_result, question)
         else:
-            # No data available — still useful as a bare QA pair (quality=3)
-            insights_result = {"summary": "", "insights": []}
-
-        answer = insights_result.get("summary", "")
-        if not answer or answer == "数据分析完成。":
-            for ins in (insights_result.get("insights") or []):
-                if isinstance(ins, dict):
-                    better = ins.get("executive_summary") or ins.get("text")
-                    if better and len(better) > 10:
-                        answer = better
-                        break
+            # ----------------------------------------------------------------
+            # NO-DATA PATH: mirrors general_analysis lines 1017-1048.
+            # Use generate_text_analysis (bare LLM text call) so we still
+            # produce a useful corpus pair even without upload data.
+            # ----------------------------------------------------------------
+            llm_result = await insight_gen.generate_text_analysis(question)
+            answer = llm_result if (llm_result and llm_result.strip()) else ""
+            insights_result = {}
 
         if not answer:
             logger.info(
                 f"[replay] factory={factory_id} q={question[:40]!r}: "
                 "InsightGenerator returned empty — skipping"
             )
+            if probe:
+                print(
+                    f"[probe] EMPTY: factory={factory_id} q={question[:60]!r} "
+                    f"data_rows={len(data)} — no corpus pair produced"
+                )
             return False
+
+        elapsed = int((time.monotonic() - t0) * 1000)
+
+        # Build self-contained corpus pair
+        data_context = _build_data_context(data, answer) if data else None
+        input_text = _build_qa_input_text(question, data_context)
+        quality = 4 if _qa_lint_has_data_context(data_context) else 3
+
+        if probe:
+            print(
+                f"[probe] OK: factory={factory_id} q={question[:60]!r} "
+                f"quality={quality} data_rows={len(data)} elapsed={elapsed}ms\n"
+                f"  answer_snippet={answer[:120]!r}"
+            )
+            # probe mode: do not persist
+            return True
 
         elapsed = int((time.monotonic() - t0) * 1000)
 
@@ -356,6 +440,7 @@ async def _process_one(
         )
         return True
 
+
     except Exception as e:
         logger.warning(
             f"[replay] FAILED factory={factory_id} q={question[:40]!r}: {e}"
@@ -374,11 +459,13 @@ async def run_sweep(
     dry_run: bool,
     *,
     concurrency: int = 2,
+    probe: bool = False,
 ) -> None:
     logger.info(
         f"[sweep] factories={factory_ids} questions={len(questions)} "
         f"limit_data={limit_data or 'all'} concurrency={concurrency}"
         + (" DRY-RUN" if dry_run else "")
+        + (" PROBE" if probe else "")
     )
 
     from smartbi.config import get_pg_pool
@@ -403,6 +490,17 @@ async def run_sweep(
     else:
         for fid in factory_ids:
             factory_data[fid] = (None, [])
+
+    if probe:
+        # Probe mode: run exactly ONE (first factory, first question) for real
+        # and print whether a non-empty corpus pair was produced.
+        fid = factory_ids[0]
+        q = questions[0]
+        upload_id, rows = factory_data.get(fid, (None, []))
+        logger.info(f"[probe] running ONE pair: factory={fid} q={q!r} data_rows={len(rows)}")
+        ok = await _process_one(pool, fid, q, rows, upload_id, dry_run=False, probe=True)
+        logger.info(f"[probe] result: {'OK — corpus pair captured' if ok else 'FAILED — empty answer'}")
+        return
 
     # Build work list: factory × question
     work = [(fid, q) for fid in factory_ids for q in questions]
@@ -463,6 +561,15 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Max concurrent InsightGenerator calls (default 2)",
     )
     p.add_argument(
+        "--probe",
+        action="store_true",
+        help=(
+            "Run ONE real LLM call (first factory × first question) and print "
+            "whether a non-empty corpus pair was produced — without persisting. "
+            "Use this to verify the pipeline produces output before a full sweep."
+        ),
+    )
+    p.add_argument(
         "--dry-run",
         action="store_true",
         help="List questions / data source without running LLM / persisting",
@@ -491,6 +598,7 @@ def main() -> None:
             limit_data=args.limit_data,
             dry_run=args.dry_run,
             concurrency=args.concurrency,
+            probe=args.probe,
         )
     )
 
