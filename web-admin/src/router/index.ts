@@ -1044,6 +1044,26 @@ const businessRoutes: RouteRecordRaw[] = [
             name: 'RdConverted',
             component: () => import('@/views/rd/converted/list.vue'),
             meta: { requiresAuth: true, title: '已转样品库', module: 'production' }
+          },
+          // SP10: 报价详情 + 三价对比
+          {
+            path: 'quotations/:taskId',
+            name: 'RdQuotationDetail',
+            component: () => import('@/views/rd/quotations/detail.vue'),
+            meta: { requiresAuth: true, title: '报价详情', module: 'production' }
+          },
+          {
+            path: 'quotations/:taskId/three-price',
+            name: 'RdThreePrice',
+            component: () => import('@/views/rd/quotations/three-price.vue'),
+            meta: { requiresAuth: true, title: '三价对比', module: 'production' }
+          },
+          // SP10: 中报价汇算
+          {
+            path: 'mid-quotes/:taskId',
+            name: 'RdMidQuote',
+            component: () => import('@/views/rd/mid-quotes/detail.vue'),
+            meta: { requiresAuth: true, title: '中报价汇算', module: 'production' }
           }
         ]
       },

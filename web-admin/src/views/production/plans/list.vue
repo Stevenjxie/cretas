@@ -1027,6 +1027,22 @@ function handleAiFill(params: TableRow) {
               :disabled="actionLoading"
               @click="handleCancel(row)"
             >取消</el-button>
+            <!-- SP12: 打印生产工单 (PrintController /print/production-work-order/{planId}) -->
+            <el-button
+              v-if="['CONFIRMED','APPROVED','IN_PROGRESS','COMPLETED'].includes(String(row.status))"
+              type="info"
+              link
+              size="small"
+              @click="safePrint('production-work-order', factoryId.value, String(row.id), { fileName: `生产工单_${row.planNumber || row.id}` })"
+            >打印工单</el-button>
+            <!-- SP12: 打印汇总领料单 (PrintController /print/consolidated-material-requisition/{planId}) -->
+            <el-button
+              v-if="['CONFIRMED','APPROVED','IN_PROGRESS','COMPLETED'].includes(String(row.status))"
+              type="info"
+              link
+              size="small"
+              @click="safePrint('consolidated-material-requisition', factoryId.value, String(row.id), { fileName: `汇总领料单_${row.planNumber || row.id}` })"
+            >领料单</el-button>
             <RowActionMenu
               :actions="rowActionsFor(row)"
               button-label="更多"

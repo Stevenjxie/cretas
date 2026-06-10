@@ -253,6 +253,23 @@ const roles = ref([
     description: '管理成本和财务报表',
     userCount: 0,
     level: 2
+  },
+  // SP12: 六扇门新增角色
+  {
+    id: 15,
+    name: 'cashier',
+    displayName: '出纳',
+    description: '负责资金收付、银行对账及付款审核',
+    userCount: 0,
+    level: 3
+  },
+  {
+    id: 16,
+    name: 'quality_controller',
+    displayName: '品控',
+    description: '产品品控标准管理、原料验收及成品放行',
+    userCount: 0,
+    level: 3
   }
 ]);
 

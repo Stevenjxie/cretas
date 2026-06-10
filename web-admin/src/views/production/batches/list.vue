@@ -107,7 +107,10 @@ const createForm = ref({
   productTypeId: '',
   plannedQuantity: null as number | null,
   unit: 'kg',
-  notes: ''
+  notes: '',
+  // SP10: 试制批次标记
+  isTrial: false,
+  trialSampleId: '',
 });
 
 onMounted(() => {
@@ -171,7 +174,7 @@ function generateBatchNumber() {
 }
 
 async function handleCreate() {
-  createForm.value = { batchNumber: generateBatchNumber(), productTypeId: '', plannedQuantity: null, unit: 'kg', notes: '' };
+  createForm.value = { batchNumber: generateBatchNumber(), productTypeId: '', plannedQuantity: null, unit: 'kg', notes: '', isTrial: false, trialSampleId: '' };
   createDialogVisible.value = true;
   // Load product types for dropdown
   if (productTypes.value.length === 0 && factoryId.value) {
@@ -213,7 +216,10 @@ async function submitCreate() {
       plannedQuantity: createForm.value.plannedQuantity,
       quantity: createForm.value.plannedQuantity,
       unit: createForm.value.unit,
-      notes: createForm.value.notes
+      notes: createForm.value.notes,
+      // SP10: 试制批次字段
+      isTrial: createForm.value.isTrial || false,
+      trialSampleId: createForm.value.isTrial && createForm.value.trialSampleId ? createForm.value.trialSampleId : null
     });
     if (response.success) {
       ElMessage.success('批次创建成功');
@@ -372,6 +378,19 @@ function getStatusText(status: string) {
         </el-form-item>
         <el-form-item label="备注">
           <el-input v-model="createForm.notes" type="textarea" :rows="3" placeholder="可选备注信息" />
+        </el-form-item>
+        <!-- SP10: 试制批次 -->
+        <el-form-item label="试制批次">
+          <el-checkbox v-model="createForm.isTrial">标记为试制批次（小试/中试）</el-checkbox>
+        </el-form-item>
+        <el-form-item v-if="createForm.isTrial" label="关联样品">
+          <el-input
+            v-model="createForm.trialSampleId"
+            placeholder="输入研发样品 ID（可选）"
+            clearable
+            style="width:280px"
+          />
+          <el-text type="info" style="margin-left:8px;font-size:12px">对应 RD 样品编号</el-text>
         </el-form-item>
       </el-form>
       <template #footer>
