@@ -19,6 +19,11 @@ import java.util.Optional;
  *
  * <p>查 IngredientNutritionFact (中国食物成分表 第 6 版).
  *
+ * <p><b>factoryId 隔离豁免说明</b>: 本 Tool 查询的是中国食物成分表第 6 版营养数据库
+ * ({@code ingredient_nutrition_facts} 表)。该表是全局参考数据，无 {@code factory_id} 列，
+ * 天然不存在租户归属。所有工厂共享同一份营养参考数据，无需按工厂过滤。
+ * {@code @FactoryIsolationExempt}
+ *
  * <p>LLM 触发场景:
  * <ul>
  *   <li>"猪蹄的营养成分"</li>

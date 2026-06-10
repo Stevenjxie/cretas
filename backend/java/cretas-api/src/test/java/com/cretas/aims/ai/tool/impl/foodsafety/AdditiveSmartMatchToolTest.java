@@ -145,7 +145,39 @@ class AdditiveSmartMatchToolTest {
         assertEquals(0, data.get("matchCount"));
     }
 
+    // ── factoryId 隔离豁免验证 (EXEMPT: 全局参考数据 GB 2760-2014) ──────────
+
+    @Test
+    @DisplayName("UT-ASM-ISO-01: EXEMPT — global GB 2760 data, same result for any factoryId")
+    @SuppressWarnings("unchecked")
+    void exemptGlobalDataSameForAllFactories() throws Exception {
+        AdditiveLimit sodium = buildLimit("亚硝酸钠", "INS 250", "腌制肉品", new BigDecimal("150"), null);
+        when(additiveLimitRepository.findByAdditiveCodeAndActiveTrue("INS 250"))
+                .thenReturn(List.of(sodium));
+
+        Map<String, Object> params = Map.of("additiveQuery", "INS 250");
+
+        // Factory A result
+        Map<String, Object> resultA = invoke("doExecute", "F001", params, ctxFor("F001"));
+        // Factory B result — same global GB 2760 data
+        Map<String, Object> resultB = invoke("doExecute", "F999", params, ctxFor("F999"));
+
+        Map<String, Object> dataA = (Map<String, Object>) resultA.get("data");
+        Map<String, Object> dataB = (Map<String, Object>) resultB.get("data");
+        assertEquals(dataA.get("matchCount"), dataB.get("matchCount"),
+                "GB 2760-2014 national standard data must return same result for all factories (EXEMPT)");
+        assertEquals(1, dataA.get("matchCount"));
+        assertEquals("EXACT_CODE", dataA.get("matchStrategy"));
+    }
+
     // ── helpers ──
+    private Map<String, Object> ctxFor(String factoryId) {
+        Map<String, Object> ctx = new HashMap<>();
+        ctx.put("factoryId", factoryId);
+        ctx.put("userId", 1L);
+        return ctx;
+    }
+
     private AdditiveLimit buildLimit(String name, String code, String category,
                                      BigDecimal maxLimit, List<String> aliases) {
         return AdditiveLimit.builder()

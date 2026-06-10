@@ -132,17 +132,18 @@ public class ReceiveWithLimitTool extends AbstractBusinessTool {
         BigDecimal proposed = getBigDecimal(params, "receivedQty");
         validateBasic(poId, lineId, proposed);
 
-        // 1. 取 PO + 行项目
-        Optional<PurchaseOrder> poOpt = purchaseOrderRepository.findById(poId);
-        if (poOpt.isEmpty() || !factoryId.equals(poOpt.get().getFactoryId())) {
+        // 1. 取 PO + 行项目（使用 factory-scoped finder — 防跨租户 ID 猜测）
+        Optional<PurchaseOrder> poOpt = purchaseOrderRepository.findByIdAndFactoryId(poId, factoryId);
+        if (poOpt.isEmpty()) {
             return buildInvalid("PO_NOT_FOUND",
                     String.format("⚠️ 采购单 %s 不存在或非本工厂", poId));
         }
         PurchaseOrder po = poOpt.get();
 
-        Optional<PurchaseOrderItem> itemOpt = purchaseOrderItemRepository.findById(lineId);
-        if (itemOpt.isEmpty()
-                || !poId.equals(itemOpt.get().getPurchaseOrderId())) {
+        // item 通过 poId (已 factoryId 验证) + lineId 双键查，防跨 PO 行访问
+        Optional<PurchaseOrderItem> itemOpt = purchaseOrderItemRepository
+                .findByIdAndPurchaseOrderId(lineId, poId);
+        if (itemOpt.isEmpty()) {
             return buildInvalid("LINE_NOT_FOUND",
                     String.format("⚠️ PO %s 下不存在行项目 %d", po.getOrderNumber(), lineId));
         }
@@ -226,17 +227,18 @@ public class ReceiveWithLimitTool extends AbstractBusinessTool {
         validateBasic(poId, lineId, proposed);
         Long userId = getUserId(context);
 
-        // 重做 R1 校验 — 防止 client 绕 preview 直接 execute 超收
-        Optional<PurchaseOrder> poOpt = purchaseOrderRepository.findById(poId);
-        if (poOpt.isEmpty() || !factoryId.equals(poOpt.get().getFactoryId())) {
+        // 重做 R1 校验 — 防止 client 绕 preview 直接 execute 超收（使用 factory-scoped finder）
+        Optional<PurchaseOrder> poOpt = purchaseOrderRepository.findByIdAndFactoryId(poId, factoryId);
+        if (poOpt.isEmpty()) {
             throw new IllegalArgumentException(
                     String.format("采购单 %s 不存在或非本工厂", poId));
         }
         PurchaseOrder po = poOpt.get();
 
-        Optional<PurchaseOrderItem> itemOpt = purchaseOrderItemRepository.findById(lineId);
-        if (itemOpt.isEmpty()
-                || !poId.equals(itemOpt.get().getPurchaseOrderId())) {
+        // item 通过 poId (已 factoryId 验证) + lineId 双键查，防跨 PO 行访问
+        Optional<PurchaseOrderItem> itemOpt = purchaseOrderItemRepository
+                .findByIdAndPurchaseOrderId(lineId, poId);
+        if (itemOpt.isEmpty()) {
             throw new IllegalArgumentException(
                     String.format("PO %s 下不存在行项目 %d", po.getOrderNumber(), lineId));
         }

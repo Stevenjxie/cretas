@@ -64,11 +64,11 @@ class ReceiveWithLimitToolTest {
     @DisplayName("UT-RWL-02: preview — within limit returns PREVIEW + canDo=true")
     void previewWithinLimit() throws Exception {
         PurchaseOrder po = po("po1", "PO-001");
-        when(purchaseOrderRepository.findById("po1")).thenReturn(Optional.of(po));
+        when(purchaseOrderRepository.findByIdAndFactoryId("po1", FACTORY_ID)).thenReturn(Optional.of(po));
 
         PurchaseOrderItem item = item(10L, "po1",
                 new BigDecimal("100"), new BigDecimal("30")); // pending=70, cap=100
-        when(purchaseOrderItemRepository.findById(10L)).thenReturn(Optional.of(item));
+        when(purchaseOrderItemRepository.findByIdAndPurchaseOrderId(10L, "po1")).thenReturn(Optional.of(item));
 
         Map<String, Object> result = invokeDoPreview(
                 Map.of("poId", "po1", "lineId", 10, "receivedQty", 50), ctx());
@@ -84,10 +84,10 @@ class ReceiveWithLimitToolTest {
     @DisplayName("UT-RWL-03: preview — over 30% over-receive → OVER_LIMIT canDo=false")
     void previewOverLimit() throws Exception {
         PurchaseOrder po = po("po1", "PO-001");
-        when(purchaseOrderRepository.findById("po1")).thenReturn(Optional.of(po));
+        when(purchaseOrderRepository.findByIdAndFactoryId("po1", FACTORY_ID)).thenReturn(Optional.of(po));
         PurchaseOrderItem item = item(10L, "po1",
                 new BigDecimal("100"), new BigDecimal("30")); // remainingCap=100, propose 110
-        when(purchaseOrderItemRepository.findById(10L)).thenReturn(Optional.of(item));
+        when(purchaseOrderItemRepository.findByIdAndPurchaseOrderId(10L, "po1")).thenReturn(Optional.of(item));
 
         Map<String, Object> result = invokeDoPreview(
                 Map.of("poId", "po1", "lineId", 10, "receivedQty", 110), ctx());
@@ -100,10 +100,10 @@ class ReceiveWithLimitToolTest {
     @DisplayName("UT-RWL-04: preview — fully received line → ALREADY_COMPLETED canDo=false")
     void previewAlreadyCompleted() throws Exception {
         PurchaseOrder po = po("po1", "PO-001");
-        when(purchaseOrderRepository.findById("po1")).thenReturn(Optional.of(po));
+        when(purchaseOrderRepository.findByIdAndFactoryId("po1", FACTORY_ID)).thenReturn(Optional.of(po));
         PurchaseOrderItem item = item(10L, "po1",
                 new BigDecimal("100"), new BigDecimal("100"));
-        when(purchaseOrderItemRepository.findById(10L)).thenReturn(Optional.of(item));
+        when(purchaseOrderItemRepository.findByIdAndPurchaseOrderId(10L, "po1")).thenReturn(Optional.of(item));
 
         Map<String, Object> result = invokeDoPreview(
                 Map.of("poId", "po1", "lineId", 10, "receivedQty", 10), ctx());
@@ -114,7 +114,7 @@ class ReceiveWithLimitToolTest {
     @Test
     @DisplayName("UT-RWL-05: preview — PO not found returns PO_NOT_FOUND")
     void previewPoNotFound() throws Exception {
-        when(purchaseOrderRepository.findById("missing")).thenReturn(Optional.empty());
+        when(purchaseOrderRepository.findByIdAndFactoryId("missing", FACTORY_ID)).thenReturn(Optional.empty());
 
         Map<String, Object> result = invokeDoPreview(
                 Map.of("poId", "missing", "lineId", 1, "receivedQty", 5), ctx());
@@ -126,14 +126,58 @@ class ReceiveWithLimitToolTest {
     @DisplayName("UT-RWL-06: execute over limit raises IllegalArgumentException")
     void executeOverLimitRejected() throws Exception {
         PurchaseOrder po = po("po1", "PO-001");
-        when(purchaseOrderRepository.findById("po1")).thenReturn(Optional.of(po));
+        when(purchaseOrderRepository.findByIdAndFactoryId("po1", FACTORY_ID)).thenReturn(Optional.of(po));
         PurchaseOrderItem item = item(10L, "po1",
                 new BigDecimal("100"), new BigDecimal("30"));
-        when(purchaseOrderItemRepository.findById(10L)).thenReturn(Optional.of(item));
+        when(purchaseOrderItemRepository.findByIdAndPurchaseOrderId(10L, "po1")).thenReturn(Optional.of(item));
 
         IllegalArgumentException ex = assertThrows(IllegalArgumentException.class, () ->
                 invokeDoExecute(Map.of("poId", "po1", "lineId", 10, "receivedQty", 200), ctx()));
         assertTrue(ex.getMessage().contains("超") || ex.getMessage().contains("30"));
+    }
+
+    // ──────────────────────────────────────────────────────────────────────
+    // Cross-tenant isolation tests (factoryId 多租户隔离)
+    // ──────────────────────────────────────────────────────────────────────
+
+    @Test
+    @DisplayName("UT-RWL-ISO-01: preview — factory-A token cannot preview factory-B PO → PO_NOT_FOUND")
+    void previewCrossTenantPoBlocked() throws Exception {
+        // Factory B owns this PO; findByIdAndFactoryId returns empty for factory A
+        when(purchaseOrderRepository.findByIdAndFactoryId("po-factory-b", FACTORY_ID))
+                .thenReturn(Optional.empty());
+
+        Map<String, Object> result = invokeDoPreview(
+                Map.of("poId", "po-factory-b", "lineId", 1, "receivedQty", 10), ctx());
+        assertEquals("PO_NOT_FOUND", result.get("status"));
+        assertEquals(false, result.get("canDo"));
+    }
+
+    @Test
+    @DisplayName("UT-RWL-ISO-02: execute — factory-A token cannot execute against factory-B PO → IllegalArgumentException")
+    void executeCrossTenantPoBlocked() throws Exception {
+        // DB rejects factory-A querying factory-B's PO
+        when(purchaseOrderRepository.findByIdAndFactoryId("po-factory-b", FACTORY_ID))
+                .thenReturn(Optional.empty());
+
+        IllegalArgumentException ex = assertThrows(IllegalArgumentException.class, () ->
+                invokeDoExecute(Map.of("poId", "po-factory-b", "lineId", 1, "receivedQty", 10), ctx()));
+        assertTrue(ex.getMessage().contains("不存在") || ex.getMessage().contains("非本工厂"));
+    }
+
+    @Test
+    @DisplayName("UT-RWL-ISO-03: preview — cross-PO line access blocked (lineId belongs to different PO) → LINE_NOT_FOUND")
+    void previewCrossPoLineBlocked() throws Exception {
+        PurchaseOrder po = po("po1", "PO-001");
+        when(purchaseOrderRepository.findByIdAndFactoryId("po1", FACTORY_ID)).thenReturn(Optional.of(po));
+        // lineId=99 belongs to a different PO, not "po1"
+        when(purchaseOrderItemRepository.findByIdAndPurchaseOrderId(99L, "po1"))
+                .thenReturn(Optional.empty());
+
+        Map<String, Object> result = invokeDoPreview(
+                Map.of("poId", "po1", "lineId", 99, "receivedQty", 10), ctx());
+        assertEquals("LINE_NOT_FOUND", result.get("status"));
+        assertEquals(false, result.get("canDo"));
     }
 
     // ── helpers ──
