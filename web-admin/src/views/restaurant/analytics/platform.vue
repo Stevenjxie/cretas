@@ -7,6 +7,9 @@ import { useChartResize } from '@/composables/useChartResize'
 import { useGoldAnalytics } from '@/composables/useGoldAnalytics'
 import { getFactoryId } from '@/api/smartbi/common'
 import { buildPlatformReviewVM } from './platformReviewGold'
+import type { ChartWithMeta } from '@/views/smart-bi/components/chartInsight'
+import ChartInsight from '@/views/smart-bi/components/ChartInsight.vue'
+import { useChartInsight } from '@/composables/useChartInsight'
 
 const router = useRouter()
 function goUpload() { router.push('/smart-bi/upload') }
@@ -113,6 +116,54 @@ onUnmounted(() => {
     if (el) echarts.getInstanceByDom(el)?.dispose()
   }
 })
+
+// ==================== Chart Insight ====================
+// Chart 1: platform comparison BAR (评价量 by platform, RANKING family, domain='restaurant').
+const platformCompareSource = (): { chart: ChartWithMeta } | null => {
+  const platforms = vm.value.platforms
+  if (platforms.length < 2) return null
+  return {
+    chart: {
+      chartType: 'BAR',
+      meta: { xDim: 'channel', yMetric: 'revenue', aggregation: 'sum', domain: 'restaurant' },
+      config: {
+        xAxis: { data: platforms.map((p) => p.platform) },
+        series: [{ type: 'bar', data: platforms.map((p) => p.reviewCount) }],
+      },
+    },
+  }
+}
+
+// Chart 2: review trend BAR+LINE (月度评价趋势, RANKING family with channel dim, domain='restaurant').
+const reviewTrendSource = (): { chart: ChartWithMeta } | null => {
+  const trend = vm.value.trend
+  if (trend.length < 2) return null
+  return {
+    chart: {
+      chartType: 'BAR',
+      meta: { xDim: 'channel', yMetric: 'revenue', aggregation: 'sum', domain: 'restaurant' },
+      config: {
+        xAxis: { data: trend.map((m) => m.month) },
+        series: [{ type: 'bar', data: trend.map((m) => m.reviewCount) }],
+      },
+    },
+  }
+}
+
+// platform.vue has no finance gate — reviews are public within the tenant.
+const platformPerms = () => ({ canViewFinance: false })
+
+const { insight: platformCompareInsight, loading: platformCompareInsightLoading } = useChartInsight(
+  platformCompareSource,
+  platformPerms,
+  { factoryId: () => factoryId, autoTier2: true },
+)
+
+const { insight: reviewTrendInsight, loading: reviewTrendInsightLoading } = useChartInsight(
+  reviewTrendSource,
+  platformPerms,
+  { factoryId: () => factoryId, autoTier2: true },
+)
 </script>
 
 <template>
@@ -171,6 +222,8 @@ onUnmounted(() => {
         <el-card shadow="hover" class="section-card" v-if="vm.platforms.length">
           <template #header><div class="section-title"><el-icon><ChatLineSquare /></el-icon> 平台评价量对比 (柱顶为平均星级)</div></template>
           <div id="chart-platform-compare" style="height: 280px" />
+          <!-- U6: useChartInsight — Tier1 instant, Tier2 auto on null (飞轮接通) -->
+          <ChartInsight :insight="platformCompareInsight" :loading="platformCompareInsightLoading" depth="detailed" />
         </el-card>
 
         <!-- Top good tags -->
@@ -216,6 +269,8 @@ onUnmounted(() => {
         <el-card shadow="hover" class="section-card" v-if="vm.trend.length">
           <template #header><div class="section-title">评价趋势 (按月)</div></template>
           <div id="chart-review-trend" style="height: 300px" />
+          <!-- U6: useChartInsight — Tier1 instant, Tier2 auto on null (飞轮接通) -->
+          <ChartInsight :insight="reviewTrendInsight" :loading="reviewTrendInsightLoading" depth="detailed" />
         </el-card>
       </template>
     </el-card>

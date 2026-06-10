@@ -23,6 +23,9 @@ import {
   type WhatIfSensitivityCell,
   type WhatIfComparisonChart,
 } from '@/api/smartbi/python-service';
+import type { ChartWithMeta } from '@/views/smart-bi/components/chartInsight';
+import ChartInsight from '@/views/smart-bi/components/ChartInsight.vue';
+import { useChartInsight } from '@/composables/useChartInsight';
 
 const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
@@ -400,6 +403,69 @@ onUnmounted(() => {
   comparisonChart?.dispose();
   if (debounceTimer) clearTimeout(debounceTimer);
 });
+
+// ==================== Chart Insight ====================
+// Impact LINE chart (revenue series across price-change range, TREND family, domain='finance').
+// We derive the revenue data points the same way renderImpactChart does, using revenue series only.
+const impactLineSource = (): { chart: ChartWithMeta } | null => {
+  const cs = costStructure.value;
+  if (!cs) return null;
+  const priceSteps: number[] = [];
+  for (let p = -30; p <= 30; p += 5) priceSteps.push(p);
+  const el = elasticity.value;
+  const costMult = 1 + costChange.value / 100;
+  void costMult; // cost not needed for revenue-only series
+  const revenues: number[] = priceSteps.map((p) => {
+    const priceMult = 1 + p / 100;
+    const trafficAdj = trafficChange.value + el * p;
+    const trafficMult = 1 + trafficAdj / 100;
+    return Math.round(cs.totalRevenue * priceMult * trafficMult);
+  });
+  if (revenues.length < 4) return null;
+  return {
+    chart: {
+      chartType: 'LINE',
+      meta: { xDim: 'time', yMetric: 'revenue', aggregation: 'sum', domain: 'finance' },
+      config: {
+        xAxis: { data: priceSteps.map((p) => `${p >= 0 ? '+' : ''}${p}`) },
+        series: [{ name: '收入', type: 'line', data: revenues }],
+      },
+    },
+  };
+};
+
+// Comparison BAR chart (三情景对比: optimistic/baseline/pessimistic, COMPARISON family, domain='finance').
+const comparisonBarSource = (): { chart: ChartWithMeta } | null => {
+  const cd = comparisonData.value;
+  if (!cd || cd.labels.length < 2) return null;
+  return {
+    chart: {
+      chartType: 'comparison',
+      meta: { xDim: 'category', yMetric: 'revenue', aggregation: 'sum', domain: 'finance' },
+      config: {
+        xAxis: { data: cd.labels },
+        series: [
+          { name: '收入', type: 'bar', data: cd.revenues },
+          { name: '成本', type: 'bar', data: cd.costs },
+        ],
+      },
+    },
+  };
+};
+
+const whatIfPerms = () => ({ canViewFinance: canViewPrice.value });
+
+const { insight: impactLineInsight, loading: impactLineInsightLoading } = useChartInsight(
+  impactLineSource,
+  whatIfPerms,
+  { factoryId: () => factoryId.value ?? '', autoTier2: true },
+);
+
+const { insight: comparisonBarInsight, loading: comparisonBarInsightLoading } = useChartInsight(
+  comparisonBarSource,
+  whatIfPerms,
+  { factoryId: () => factoryId.value ?? '', autoTier2: true },
+);
 </script>
 
 <template>
@@ -578,6 +644,8 @@ onUnmounted(() => {
         <!-- Impact chart -->
         <el-card shadow="hover" style="margin-bottom: 16px;">
           <div ref="impactChartRef" class="chart-container" />
+          <!-- U6: useChartInsight — Tier1 instant, Tier2 auto on null (飞轮接通) -->
+          <ChartInsight :insight="impactLineInsight" :loading="impactLineInsightLoading" depth="detailed" />
         </el-card>
 
         <!-- Heatmap + Comparison -->
@@ -590,6 +658,8 @@ onUnmounted(() => {
           <el-col :span="10">
             <el-card shadow="hover">
               <div ref="comparisonChartRef" class="chart-container" />
+              <!-- U6: useChartInsight — Tier1 instant, Tier2 auto on null (飞轮接通) -->
+              <ChartInsight :insight="comparisonBarInsight" :loading="comparisonBarInsightLoading" depth="detailed" />
             </el-card>
           </el-col>
         </el-row>

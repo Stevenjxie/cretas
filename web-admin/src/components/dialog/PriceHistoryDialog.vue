@@ -14,6 +14,9 @@ import { formatAmount } from '@/utils/tableFormatters';
 import echarts from '@/utils/echarts';
 import type { ECharts } from 'echarts/core';
 import { listPriceHistory, type PriceHistoryEntry } from '@/api/priceHistory';
+import type { ChartWithMeta } from '@/views/smart-bi/components/chartInsight';
+import ChartInsight from '@/views/smart-bi/components/ChartInsight.vue';
+import { useChartInsight } from '@/composables/useChartInsight';
 
 const props = withDefaults(
   defineProps<{
@@ -191,6 +194,34 @@ watch(
     }
   }
 );
+
+// ==================== Chart Insight ====================
+// Price history LINE chart (成交单价 over time, TREND family, domain='factory').
+// Mirrors the withPrice filter in renderChart(): only rows with unitPrice + orderDate, asc order.
+const priceHistorySource = (): { chart: ChartWithMeta } | null => {
+  if (!canViewPrice.value) return null;
+  const withPrice = rows.value
+    .filter((r) => r.unitPrice != null && r.orderDate)
+    .slice()
+    .reverse(); // backend DESC → asc for chart
+  if (withPrice.length < 2) return null;
+  return {
+    chart: {
+      chartType: 'LINE',
+      meta: { xDim: 'time', yMetric: 'cost', aggregation: 'avg', domain: 'factory' },
+      config: {
+        xAxis: { data: withPrice.map((r) => r.orderDate as string) },
+        series: [{ type: 'line', data: withPrice.map((r) => r.unitPrice as number) }],
+      },
+    },
+  };
+};
+
+const { insight: priceHistoryInsight, loading: priceHistoryInsightLoading } = useChartInsight(
+  priceHistorySource,
+  () => ({ canViewFinance: canViewPrice.value }),
+  { factoryId: () => factoryId.value ?? '', autoTier2: true },
+);
 </script>
 
 <template>
@@ -208,6 +239,8 @@ watch(
 
     <!-- Chart (only if canViewPrice + ≥2 priced rows) -->
     <div v-show="canViewPrice && rows.length > 1" ref="chartRef" class="ph-chart" />
+    <!-- U6: useChartInsight — Tier1 instant, Tier2 auto on null (飞轮接通) -->
+    <ChartInsight v-if="canViewPrice && rows.length > 1" :insight="priceHistoryInsight" :loading="priceHistoryInsightLoading" depth="detailed" />
 
     <!-- Mask hint for users without price permission -->
     <div v-if="!canViewPrice" class="ph-mask-hint">

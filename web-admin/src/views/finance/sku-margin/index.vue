@@ -7,6 +7,9 @@ import { ElMessage } from 'element-plus';
 import { Refresh } from '@element-plus/icons-vue';
 import echarts from '@/utils/echarts';
 import type { ECharts } from 'echarts/core';
+import type { ChartWithMeta } from '@/views/smart-bi/components/chartInsight';
+import ChartInsight from '@/views/smart-bi/components/ChartInsight.vue';
+import { useChartInsight } from '@/composables/useChartInsight';
 
 // ---------- auth ----------
 const authStore = useAuthStore();
@@ -365,6 +368,33 @@ function handleRefresh() {
   pagination.value.page = 1;
   loadData();
 }
+
+// ==================== Chart Insight ====================
+// Horizontal BAR chart: top-10 SKUs ranked by margin rate (RANKING family, domain='finance').
+// Source getter mirrors what initChart() renders — top 10 sorted desc, displayed asc.
+// We pass them desc (highest first) so RANKING engine correctly identifies top/bottom.
+const skuMarginSource = (): { chart: ChartWithMeta } | null => {
+  const top10 = [...tableData.value]
+    .sort((a, b) => b.marginRate - a.marginRate)
+    .slice(0, 10);
+  if (top10.length < 2) return null;
+  return {
+    chart: {
+      chartType: 'BAR',
+      meta: { xDim: 'category', yMetric: 'margin', aggregation: 'sum', domain: 'finance' },
+      config: {
+        xAxis: { data: top10.map((r) => r.productName) },
+        series: [{ type: 'bar', data: top10.map((r) => r.marginRate) }],
+      },
+    },
+  };
+};
+
+const { insight: skuMarginInsight, loading: skuMarginInsightLoading } = useChartInsight(
+  skuMarginSource,
+  () => ({ canViewFinance: canViewPrice.value }),
+  { factoryId: () => factoryId.value ?? '', autoTier2: true },
+);
 </script>
 
 <template>
@@ -455,6 +485,8 @@ function handleRefresh() {
       <div v-if="!noCostDataNotice.show" class="chart-section">
         <h3 class="section-title">Top 10 SKU 毛利率排名</h3>
         <div ref="chartRef" class="chart-container"></div>
+        <!-- U6: useChartInsight — Tier1 instant, Tier2 auto on null (飞轮接通) -->
+        <ChartInsight :insight="skuMarginInsight" :loading="skuMarginInsightLoading" depth="detailed" />
       </div>
 
       <!-- Main Table (隐藏 when 数据未接入) -->
