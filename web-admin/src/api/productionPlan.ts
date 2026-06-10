@@ -43,3 +43,35 @@ export function getSupervisors(factoryId: string) {
     params: { role: 'WORKSHOP_SUPERVISOR' },
   })
 }
+
+/** SP2: WIP 半成品可用库存列表 (GET /processing/wip/available) */
+export interface WipInventoryItem {
+  id: number
+  intermediateBatchNo: string
+  productTypeId: string
+  producedQuantity: number
+  consumedQuantity: number
+  availableQuantity: number
+  unit: string | null
+  status: string
+  accumulatedCost: number | null
+  unitCost: number | null
+  batchId: number | null
+  createdAt: string | null
+}
+
+export function listAvailableWip(factoryId: string) {
+  return get<WipInventoryItem[]>(`/${factoryId}/processing/wip/available`)
+}
+
+/** SP2: 创建二次加工计划 (POST /processing/secondary-plan) */
+export interface CreateSecondaryPlanRequest {
+  wipId: number
+  quantity: number
+  productTypeId: string
+  plannedDate?: string
+}
+
+export function createSecondaryPlan(factoryId: string, data: CreateSecondaryPlanRequest) {
+  return post<Record<string, unknown>>(`/${factoryId}/processing/secondary-plan`, data)
+}
