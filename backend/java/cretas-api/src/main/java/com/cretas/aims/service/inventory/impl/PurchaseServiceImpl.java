@@ -127,6 +127,13 @@ public class PurchaseServiceImpl implements PurchaseService {
     private com.cretas.aims.service.factory.WarehouseResolver warehouseResolver;
 
     /**
+     * SP7 §3.3 仓库库存守卫 (W1 红线 #03): 采购确认收货前校验仓库类型 ↔ 物料大类.
+     * 采购入库的是原料 (RAW), legacy/null 类型仓库自动放行 (防误拦 F006 现有 legacy 仓).
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.factory.WarehouseInventoryGuardService warehouseInventoryGuardService;
+
+    /**
      * 三价对比偏差预警阈值最终兜底值 (10%).
      *
      * <p>Resolution chain: PurchaseOrderApprovalRule.priceVarianceThreshold (per-factory rule) →
@@ -1579,6 +1586,12 @@ public class PurchaseServiceImpl implements PurchaseService {
                 ? record.getWarehouseId()
                 : warehouseResolver.resolveLogisticsId(factoryId);
         batch.setWarehouseId(warehouseId);
+
+        // SP7 §3.3 (W1 红线 #03): 采购收货前校验目标仓库类型 — 原料只能入 RAW/SALTED/legacy 仓.
+        // 守卫在 save 之前抛 422, 不污染事务. legacy/null 类型仓库自动放行.
+        if (warehouseInventoryGuardService != null) {
+            warehouseInventoryGuardService.assertCanReceive(warehouseId, factoryId, "RAW");
+        }
 
         // 根据原料类型计算过期日期
         if (materialType != null && materialType.getShelfLifeDays() != null) {

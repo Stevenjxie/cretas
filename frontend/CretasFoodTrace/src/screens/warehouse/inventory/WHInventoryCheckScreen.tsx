@@ -1,197 +1,154 @@
 /**
- * 库存盘点页面
- * 对应原型: warehouse/inventory-check.html
+ * 库存盘点（发起）页面
+ *
+ * W1 红线 #02 重做（2026-06-11）:
+ *   旧实现直接调用 materialBatchApiClient.updateBatch 改 remainingQuantity 调整库存，
+ *   绕过盘点流程与财务审批 —— 违反"仓管员无库存自主权"铁律（张权 F006）。
+ *
+ *   新实现 = 盘点发起入口（launcher）:
+ *     仓管员只能"发起盘点任务" → 进入逐品录入屏（StocktakeEntry）
+ *     → 录入实盘数 → 提交 → 状态变"待财务审批"
+ *     → 差异由财务审批后才通过 MaterialBatchAdjustment 留痕生效。
+ *   仓管员全程无法直接写库存数量。
+ *
+ * 对应后端: POST /api/mobile/{factoryId}/stocktakes (FactoryStocktakeService.initiate)
+ *   - 月底约束: 只能在每月 N 日后发起（后端 409）
+ *   - 防重复: 同仓同月已有进行中盘点 → 409 DUPLICATE_STOCKTAKE
+ *   两类业务规则前置说明 + 失败时原样显示后端 message（防呆 4 位一体）。
  */
 
 import React, { useState, useEffect, useCallback } from "react";
-import {
-  View,
-  ScrollView,
-  StyleSheet,
-  TouchableOpacity,
-  Alert,
-  ActivityIndicator,
-} from "react-native";
+import { View, ScrollView, StyleSheet, ActivityIndicator } from "react-native";
 import {
   Text,
   Surface,
-  Button,
-  TextInput,
-  ProgressBar,
-  useTheme,
+  TouchableRipple,
+  Divider,
 } from "react-native-paper";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { useNavigation } from "@react-navigation/native";
 import { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { WHInventoryStackParamList } from "../../../types/navigation";
-import { Picker } from "@react-native-picker/picker";
-import { materialBatchApiClient, MaterialBatch } from "../../../services/api/materialBatchApiClient";
-import { handleError } from "../../../utils/errorHandler";
+import { NeoButton } from "../../../components/ui/NeoButton";
+import { AppDialogHost, appAlert } from "../../../components/ui/AppDialog";
+import {
+  stocktakeApiClient,
+  FactoryWarehouseDTO,
+} from "../../../services/api/stocktakeApiClient";
 
 type NavigationProp = NativeStackNavigationProp<WHInventoryStackParamList>;
 
-interface CheckItem {
-  id: string;
-  name: string;
-  type: string;
-  batchNumber: string;
-  location: string;
-  systemQty: number;
-  actualQty: number | null;
-  status: "pending" | "completed" | "diff";
+const PRIMARY = "#1890FF";
+const GREEN = "#52C41A";
+
+/** 当前月份 YYYY-MM */
+function currentPeriodMonth(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 }
 
+const WAREHOUSE_TYPE_LABEL: Record<string, string> = {
+  RAW: "原料仓",
+  WIP: "在制品仓",
+  FINISHED: "成品仓",
+  SALTED: "盐化仓",
+  TEMP: "暂存仓",
+  QC: "质检仓",
+  LINESIDE: "线边仓",
+  RETURNS: "退货仓",
+  OUTSOURCE: "外协仓",
+  SCRAP: "废品仓",
+  TRANSFER: "调拨在途仓",
+  LOGISTICS: "物流仓",
+  WORKSHOP: "车间仓",
+};
+
 export function WHInventoryCheckScreen() {
-  const theme = useTheme();
   const navigation = useNavigation<NavigationProp>();
 
-  // 状态管理
   const [loading, setLoading] = useState(true);
-  const [submitting, setSubmitting] = useState(false);
-  const [selectedLocation, setSelectedLocation] = useState("A");
-  const [checkItems, setCheckItems] = useState<CheckItem[]>([]);
+  const [warehouses, setWarehouses] = useState<FactoryWarehouseDTO[]>([]);
+  const [selectedWarehouseId, setSelectedWarehouseId] = useState<string | null>(null);
+  const [initiating, setInitiating] = useState(false);
+  const periodMonth = currentPeriodMonth();
 
-  // 获取存储类型显示名称
-  const getStorageTypeLabel = (type?: string): string => {
-    switch (type) {
-      case 'fresh': return '鲜品';
-      case 'frozen': return '冻品';
-      case 'dry': return '干货';
-      default: return '其他';
-    }
-  };
-
-  // 加载库存数据
-  const loadInventoryData = useCallback(async () => {
+  // 加载工厂仓库列表（排除调拨在途仓 — 后端 assertCanStocktake 也会拦）
+  const loadWarehouses = useCallback(async () => {
+    setLoading(true);
     try {
-      const response = await materialBatchApiClient.getMaterialBatches({
-        status: 'available',
-        size: 50
-      }) as { data?: { content?: MaterialBatch[] } | MaterialBatch[] };
-
-      const batches: MaterialBatch[] = (response.data as { content?: MaterialBatch[] })?.content || response.data as MaterialBatch[] || [];
-
-      const items: CheckItem[] = batches.map((batch: MaterialBatch) => ({
-        id: batch.id,
-        name: batch.materialName || '未知物料',
-        type: getStorageTypeLabel(batch.storageType),
-        batchNumber: batch.batchNumber,
-        location: batch.storageLocation || 'A区-冷藏库',
-        systemQty: batch.remainingQuantity || 0,
-        actualQty: null,
-        status: 'pending' as const,
-      }));
-
-      setCheckItems(items);
-    } catch (error) {
-      handleError(error, { title: '加载库存数据失败' });
+      const res = await stocktakeApiClient.listWarehouses();
+      const list = (res.data ?? []).filter((w) => w.type !== "TRANSFER");
+      setWarehouses(list);
+      if (list.length === 1 && list[0]) setSelectedWarehouseId(list[0].id);
+    } catch (err) {
+      const e = err as { response?: { data?: { message?: string } } };
+      appAlert(
+        "加载仓库列表失败",
+        e.response?.data?.message ?? "请检查网络后重试",
+        [
+          { text: "重试", onPress: loadWarehouses },
+          { text: "返回", style: "cancel", onPress: () => navigation.goBack() },
+        ],
+      );
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [navigation]);
 
   useEffect(() => {
-    loadInventoryData();
-  }, [loadInventoryData]);
+    loadWarehouses();
+  }, [loadWarehouses]);
 
-  const completedCount = checkItems.filter(
-    (item) => item.status !== "pending"
-  ).length;
-  const totalCount = checkItems.length;
-  const progress = completedCount / totalCount;
-  const diffCount = checkItems.filter((item) => item.status === "diff").length;
-  const noDiffCount = completedCount - diffCount;
-  const totalDiff = checkItems
-    .filter((item) => item.status === "diff")
-    .reduce(
-      (sum, item) => sum + ((item.actualQty ?? 0) - item.systemQty),
-      0
-    );
-
-  const updateActualQty = (id: string, value: string) => {
-    const qty = value ? parseFloat(value) || null : null;
-    setCheckItems((prev) =>
-      prev.map((item) => {
-        if (item.id === id) {
-          const newStatus =
-            qty === null
-              ? "pending"
-              : qty === item.systemQty
-              ? "completed"
-              : "diff";
-          return { ...item, actualQty: qty, status: newStatus };
-        }
-        return item;
-      })
-    );
-  };
-
-  // 提交盘点结果
-  const submitInventoryCheck = useCallback(async () => {
-    setSubmitting(true);
-    try {
-      // 更新有差异的批次数量
-      const diffItems = checkItems.filter(item => item.status === 'diff');
-
-      for (const item of diffItems) {
-        if (item.actualQty !== null && item.actualQty !== item.systemQty) {
-          // TODO: 后端需要提供库存调整API
-          // 暂时使用updateBatch来调整数量
-          await materialBatchApiClient.updateBatch(item.id, {
-            remainingQuantity: item.actualQty,
-            notes: `盘点调整: 系统${item.systemQty}kg → 实际${item.actualQty}kg`,
-          });
-        }
-      }
-
-      Alert.alert('成功', '盘点已提交', [
-        { text: '确定', onPress: () => navigation.goBack() }
-      ]);
-    } catch (error) {
-      handleError(error, { title: '提交盘点失败' });
-    } finally {
-      setSubmitting(false);
-    }
-  }, [checkItems, navigation]);
-
-  const handleSubmit = () => {
-    const pendingItems = checkItems.filter((item) => item.status === "pending");
-    if (pendingItems.length > 0) {
-      Alert.alert("提示", `还有 ${pendingItems.length} 项未盘点，请完成所有项目`);
+  // 发起盘点任务 → 进入逐品录入屏
+  const handleInitiate = useCallback(async () => {
+    if (!selectedWarehouseId) {
+      appAlert("请选择仓库", "请先选择要盘点的仓库，再发起盘点任务");
       return;
     }
+    setInitiating(true);
+    try {
+      const res = await stocktakeApiClient.initiate({
+        warehouseId: selectedWarehouseId,
+        periodMonth,
+      });
+      if (!res.success || !res.data) {
+        throw new Error(res.message ?? "发起失败");
+      }
+      navigation.navigate("StocktakeEntry", { stocktakeId: res.data.id });
+    } catch (err) {
+      const e = err as { response?: { data?: { message?: string } } };
+      // 防呆: 原样显示后端 message（月底约束 / 重复发起等业务规则）
+      appAlert(
+        "无法发起盘点",
+        e.response?.data?.message ?? "请检查网络后重试",
+      );
+    } finally {
+      setInitiating(false);
+    }
+  }, [selectedWarehouseId, periodMonth, navigation]);
 
-    Alert.alert("确认提交", "确定提交盘点结果吗？", [
-      { text: "取消", style: "cancel" },
-      {
-        text: "确定",
-        onPress: submitInventoryCheck,
-      },
-    ]);
-  };
+  const Header = (
+    <View style={styles.header}>
+      <TouchableRipple onPress={() => navigation.goBack()} style={styles.backBtn} borderless>
+        <MaterialCommunityIcons name="arrow-left" size={24} color="#fff" />
+      </TouchableRipple>
+      <View style={styles.headerCenter}>
+        <Text style={styles.headerTitle}>发起盘点</Text>
+        <Text style={styles.headerSubtitle}>盘点月份 {periodMonth}</Text>
+      </View>
+      <View style={styles.headerRight} />
+    </View>
+  );
 
-  const handleSave = () => {
-    // TODO: 实现暂存功能，可能需要AsyncStorage或后端API
-    Alert.alert("成功", "盘点进度已暂存");
-  };
-
-  // 加载状态
   if (loading) {
     return (
       <SafeAreaView style={styles.container} edges={["top"]}>
-        <View style={styles.header}>
-          <TouchableOpacity style={styles.backButton} onPress={() => navigation.goBack()}>
-            <MaterialCommunityIcons name="arrow-left" size={24} color="#fff" />
-          </TouchableOpacity>
-          <View style={styles.headerCenter}>
-            <Text style={styles.headerTitle}>库存盘点</Text>
-          </View>
-          <View style={styles.headerRight} />
-        </View>
-        <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color="#4CAF50" />
-          <Text style={styles.loadingText}>加载中...</Text>
+        <AppDialogHost />
+        {Header}
+        <View style={styles.centered}>
+          <ActivityIndicator size="large" color={PRIMARY} />
+          <Text style={styles.loadingText}>加载仓库列表...</Text>
         </View>
       </SafeAreaView>
     );
@@ -199,255 +156,104 @@ export function WHInventoryCheckScreen() {
 
   return (
     <SafeAreaView style={styles.container} edges={["top"]}>
-      {/* Header */}
-      <View style={styles.header}>
-        <TouchableOpacity
-          style={styles.backButton}
-          onPress={() => navigation.goBack()}
-        >
-          <MaterialCommunityIcons name="arrow-left" size={24} color="#fff" />
-        </TouchableOpacity>
-        <View style={styles.headerCenter}>
-          <Text style={styles.headerTitle}>库存盘点</Text>
-          <Text style={styles.headerSubtitle}>A区-冷藏库</Text>
-        </View>
-        <View style={styles.headerRight} />
-      </View>
+      <AppDialogHost />
+      {Header}
 
-      <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
-        {/* 盘点进度 */}
-        <Surface style={styles.progressCard} elevation={1}>
-          <View style={styles.progressHeader}>
-            <Text style={styles.progressTitle}>盘点进度</Text>
-            <Text style={styles.progressValue}>
-              {completedCount}/{totalCount} 项
-            </Text>
+      <ScrollView style={styles.content} contentContainerStyle={{ paddingBottom: 120 }}>
+        {/* 流程说明（防呆 Rule 2: 明确告诉操作员能做什么） */}
+        <Surface style={styles.noticeCard} elevation={1}>
+          <View style={styles.noticeRow}>
+            <MaterialCommunityIcons name="information-outline" size={20} color={PRIMARY} />
+            <Text style={styles.noticeTitle}>盘点流程</Text>
           </View>
-          <ProgressBar
-            progress={progress}
-            color="#4CAF50"
-            style={styles.progressBar}
-          />
-          <View style={styles.progressInfo}>
-            <Text style={styles.progressInfoText}>
-              已完成 {Math.round(progress * 100)}%
-            </Text>
-            <Text style={styles.progressInfoText}>
-              剩余 {totalCount - completedCount} 项
-            </Text>
-          </View>
+          <Text style={styles.noticeText}>
+            选择仓库后发起盘点 → 逐品录入实盘数量 → 提交。{"\n"}
+            盘点差异将自动报给财务审批，审批通过后库存才会调整。{"\n"}
+            您无法直接修改库存数量。
+          </Text>
         </Surface>
 
-        {/* 盘点范围 */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>盘点范围</Text>
-          <View style={styles.pickerContainer}>
-            <Text style={styles.formLabel}>选择库位</Text>
-            <View style={styles.pickerWrapper}>
-              <Picker
-                selectedValue={selectedLocation}
-                onValueChange={setSelectedLocation}
-                style={styles.picker}
-              >
-                <Picker.Item label="A区-冷藏库 (全部)" value="A" />
-                <Picker.Item label="A区-冷藏库-01" value="A-01" />
-                <Picker.Item label="A区-冷藏库-02" value="A-02" />
-                <Picker.Item label="A区-冷藏库-03" value="A-03" />
-                <Picker.Item label="B区-冷冻库 (全部)" value="B" />
-              </Picker>
+        {/* 仓库选择 */}
+        <Surface style={styles.section} elevation={1}>
+          <Text style={styles.sectionTitle}>选择盘点仓库</Text>
+          {warehouses.length === 0 ? (
+            <View style={styles.emptyBox}>
+              <MaterialCommunityIcons name="warehouse" size={40} color="#ccc" />
+              <Text style={styles.emptyText}>暂无可盘点的仓库</Text>
             </View>
-          </View>
-        </View>
-
-        {/* 盘点清单 */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>盘点清单</Text>
-
-          {checkItems.map((item) => (
-            <View
-              key={item.id}
-              style={[
-                styles.checkItem,
-                item.status === "completed" && styles.checkItemCompleted,
-                item.status === "diff" && styles.checkItemDiff,
-              ]}
-            >
-              <View style={styles.checkInfo}>
-                <Text style={styles.checkName}>
-                  {item.name} ({item.type})
-                </Text>
-                <Text style={styles.checkBatch}>
-                  {item.batchNumber} | {item.location}
-                </Text>
-              </View>
-              {item.status === "pending" ? (
-                <View style={styles.checkInput}>
-                  <Text style={styles.checkSystem}>系统: {item.systemQty}kg</Text>
-                  <TextInput
-                    mode="outlined"
-                    placeholder="实际数量"
-                    keyboardType="numeric"
-                    value={item.actualQty?.toString() || ""}
-                    onChangeText={(value) => updateActualQty(item.id, value)}
-                    style={styles.qtyInput}
-                    outlineColor="#ddd"
-                    activeOutlineColor="#4CAF50"
-                  />
+          ) : (
+            warehouses.map((wh, idx) => {
+              const selected = wh.id === selectedWarehouseId;
+              return (
+                <View key={wh.id}>
+                  {idx > 0 && <Divider />}
+                  <TouchableRipple onPress={() => setSelectedWarehouseId(wh.id)}>
+                    <View style={styles.whRow}>
+                      <View style={styles.whInfo}>
+                        <Text style={styles.whName}>{wh.name}</Text>
+                        <Text style={styles.whMeta}>
+                          {wh.code}
+                          {wh.type ? ` · ${WAREHOUSE_TYPE_LABEL[wh.type] ?? wh.type}` : ""}
+                        </Text>
+                      </View>
+                      <MaterialCommunityIcons
+                        name={selected ? "radiobox-marked" : "radiobox-blank"}
+                        size={24}
+                        color={selected ? PRIMARY : "#ccc"}
+                      />
+                    </View>
+                  </TouchableRipple>
                 </View>
-              ) : (
-                <View style={styles.checkQty}>
-                  <Text style={styles.checkSystem}>系统: {item.systemQty}kg</Text>
-                  <Text
-                    style={[
-                      styles.checkActual,
-                      item.status === "completed" && styles.checkActualSuccess,
-                      item.status === "diff" && styles.checkActualDiff,
-                    ]}
-                  >
-                    实际: {item.actualQty}kg{" "}
-                    {item.status === "completed"
-                      ? "✓"
-                      : `(${(item.actualQty ?? 0) - item.systemQty}kg)`}
-                  </Text>
-                </View>
-              )}
-            </View>
-          ))}
-        </View>
-
-        {/* 差异汇总 */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>差异汇总</Text>
-          <View style={styles.diffSummary}>
-            <View style={styles.diffItem}>
-              <Text style={styles.diffLabel}>已盘点</Text>
-              <Text style={styles.diffValue}>{completedCount} 项</Text>
-            </View>
-            <View style={styles.diffItem}>
-              <Text style={styles.diffLabel}>无差异</Text>
-              <Text style={[styles.diffValue, { color: "#4CAF50" }]}>
-                {noDiffCount} 项
-              </Text>
-            </View>
-            <View style={styles.diffItem}>
-              <Text style={styles.diffLabel}>有差异</Text>
-              <Text style={[styles.diffValue, { color: "#f57c00" }]}>
-                {diffCount} 项 ({totalDiff > 0 ? "+" : ""}{totalDiff}kg)
-              </Text>
-            </View>
-          </View>
-        </View>
-
-        <View style={{ height: 100 }} />
+              );
+            })
+          )}
+        </Surface>
       </ScrollView>
 
       {/* 底部操作 */}
-      <View style={styles.bottomActions}>
-        <Button
-          mode="outlined"
-          onPress={handleSave}
-          style={styles.saveButton}
-          labelStyle={{ color: "#666" }}
+      <View style={styles.bottomBar}>
+        <NeoButton
+          variant="primary"
+          size="large"
+          onPress={handleInitiate}
+          loading={initiating}
+          disabled={initiating || !selectedWarehouseId}
+          style={{ flex: 1 }}
         >
-          暂存
-        </Button>
-        <Button
-          mode="contained"
-          onPress={handleSubmit}
-          style={styles.submitButton}
-          labelStyle={{ color: "#fff" }}
-          disabled={submitting}
-          loading={submitting}
-        >
-          {submitting ? '提交中...' : '提交盘点'}
-        </Button>
+          {initiating ? "发起中..." : "发起盘点"}
+        </NeoButton>
       </View>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: "#f5f5f5",
-  },
-  loadingContainer: {
-    flex: 1,
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  loadingText: {
-    marginTop: 12,
-    fontSize: 14,
-    color: "#666",
-  },
+  container: { flex: 1, backgroundColor: "#F4F6F9" },
   header: {
-    backgroundColor: "#4CAF50",
+    backgroundColor: PRIMARY,
     flexDirection: "row",
     alignItems: "center",
     paddingHorizontal: 16,
     paddingVertical: 12,
   },
-  backButton: {
-    padding: 4,
-  },
-  headerCenter: {
-    flex: 1,
-    alignItems: "center",
-    marginRight: 28,
-  },
-  headerTitle: {
-    fontSize: 18,
-    fontWeight: "600",
-    color: "#fff",
-  },
-  headerSubtitle: {
-    fontSize: 12,
-    color: "rgba(255,255,255,0.8)",
-    marginTop: 2,
-  },
-  headerRight: {
-    width: 28,
-  },
-  content: {
-    flex: 1,
-  },
-  progressCard: {
-    backgroundColor: "#fff",
+  backBtn: { padding: 8, borderRadius: 20 },
+  headerCenter: { flex: 1, alignItems: "center" },
+  headerTitle: { fontSize: 18, fontWeight: "700", color: "#fff" },
+  headerSubtitle: { fontSize: 12, color: "rgba(255,255,255,0.8)", marginTop: 2 },
+  headerRight: { width: 40 },
+  content: { flex: 1 },
+  centered: { flex: 1, justifyContent: "center", alignItems: "center", padding: 24 },
+  loadingText: { marginTop: 12, fontSize: 14, color: "#666" },
+  noticeCard: {
+    backgroundColor: "#E6F7FF",
     marginHorizontal: 16,
     marginTop: 16,
     borderRadius: 12,
     padding: 16,
   },
-  progressHeader: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    marginBottom: 12,
-  },
-  progressTitle: {
-    fontSize: 14,
-    fontWeight: "600",
-    color: "#333",
-  },
-  progressValue: {
-    fontSize: 14,
-    color: "#4CAF50",
-    fontWeight: "600",
-  },
-  progressBar: {
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: "#e0e0e0",
-  },
-  progressInfo: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    marginTop: 8,
-  },
-  progressInfoText: {
-    fontSize: 12,
-    color: "#999",
-  },
+  noticeRow: { flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 8 },
+  noticeTitle: { fontSize: 15, fontWeight: "700", color: PRIMARY },
+  noticeText: { fontSize: 14, color: "#333", lineHeight: 22 },
   section: {
     backgroundColor: "#fff",
     marginHorizontal: 16,
@@ -455,118 +261,30 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     padding: 16,
   },
-  sectionTitle: {
-    fontSize: 14,
-    fontWeight: "600",
-    color: "#999",
-    marginBottom: 12,
-  },
-  pickerContainer: {},
-  formLabel: {
-    fontSize: 14,
-    color: "#333",
-    marginBottom: 8,
-  },
-  pickerWrapper: {
-    backgroundColor: "#f5f5f5",
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: "#ddd",
-  },
-  picker: {
-    height: 50,
-  },
-  checkItem: {
-    backgroundColor: "#f9f9f9",
-    borderRadius: 8,
-    padding: 12,
-    marginBottom: 10,
-    borderLeftWidth: 3,
-    borderLeftColor: "#e0e0e0",
-  },
-  checkItemCompleted: {
-    borderLeftColor: "#4CAF50",
-    backgroundColor: "#f1f8e9",
-  },
-  checkItemDiff: {
-    borderLeftColor: "#f57c00",
-    backgroundColor: "#fff8e1",
-  },
-  checkInfo: {
-    marginBottom: 8,
-  },
-  checkName: {
-    fontSize: 14,
-    fontWeight: "600",
-    color: "#333",
-  },
-  checkBatch: {
-    fontSize: 12,
-    color: "#999",
-    marginTop: 2,
-  },
-  checkInput: {},
-  checkQty: {},
-  checkSystem: {
-    fontSize: 13,
-    color: "#666",
-    marginBottom: 4,
-  },
-  qtyInput: {
-    backgroundColor: "#fff",
-    height: 40,
-    fontSize: 14,
-  },
-  checkActual: {
-    fontSize: 13,
-  },
-  checkActualSuccess: {
-    color: "#4CAF50",
-    fontWeight: "500",
-  },
-  checkActualDiff: {
-    color: "#f57c00",
-    fontWeight: "500",
-  },
-  diffSummary: {
+  sectionTitle: { fontSize: 14, fontWeight: "600", color: "#999", marginBottom: 8 },
+  whRow: {
     flexDirection: "row",
-    justifyContent: "space-around",
-  },
-  diffItem: {
     alignItems: "center",
+    justifyContent: "space-between",
+    paddingVertical: 14,
   },
-  diffLabel: {
-    fontSize: 13,
-    color: "#999",
-    marginBottom: 4,
-  },
-  diffValue: {
-    fontSize: 15,
-    fontWeight: "600",
-    color: "#333",
-  },
-  bottomActions: {
+  whInfo: { flex: 1 },
+  whName: { fontSize: 16, fontWeight: "600", color: "#222" },
+  whMeta: { fontSize: 13, color: "#999", marginTop: 2 },
+  emptyBox: { alignItems: "center", paddingVertical: 32 },
+  emptyText: { marginTop: 8, fontSize: 14, color: "#999" },
+  bottomBar: {
     position: "absolute",
     bottom: 0,
     left: 0,
     right: 0,
     backgroundColor: "#fff",
     flexDirection: "row",
-    padding: 16,
-    paddingBottom: 34,
-    gap: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    paddingBottom: 28,
     borderTopWidth: 1,
-    borderTopColor: "#f0f0f0",
-  },
-  saveButton: {
-    flex: 1,
-    borderRadius: 8,
-    borderColor: "#ddd",
-  },
-  submitButton: {
-    flex: 1,
-    borderRadius: 8,
-    backgroundColor: "#4CAF50",
+    borderTopColor: "#e8e8e8",
   },
 });
 
