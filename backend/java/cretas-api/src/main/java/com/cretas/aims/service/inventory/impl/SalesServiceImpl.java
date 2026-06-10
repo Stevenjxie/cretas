@@ -130,6 +130,17 @@ public class SalesServiceImpl implements SalesService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.service.pricing.PricingEngine pricingEngine;
 
+    /**
+     * E-5 毛利红线守卫 (W1 六扇门追溯矩阵 E-5, 2026-06-10).
+     *
+     * <p>Optional injection — 未部署时跳过毛利红线检查 (不影响现有逻辑).
+     * 注入存在时, createSalesOrder 在 resolve unitPrice 后对每行逐一检查,
+     * belowRedline=true → 409 BusinessException (fool-proof Rule 1: 预先拦截).
+     * belowRedline=null (成本未配置) → WARN log + 放行 (不假装拦截, 不静默放行).
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.pricing.GrossMarginRedlineService grossMarginRedlineService;
+
     /** Sprint 6 W2-B: 数据权限解析器 (optional). */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private DataScopeResolver dataScopeResolver;
@@ -405,6 +416,36 @@ public class SalesServiceImpl implements SalesService {
                 }
             }
             item.setUnitPrice(resolvedUnitPrice);
+
+            // ── E-5 毛利红线守卫 (W1 追溯矩阵 E-5, 2026-06-10) ──────────────────────────
+            // 决策②: 不要"建议价", 用毛利红线硬性拦截低价单.
+            // 在 unitPrice 最终确定后 (含策略引擎折扣) 才做红线检查, 保证检查的是真实报价.
+            // resolvedUnitPrice=null 表示未填价格 → 跳过 (BOM/价格缺失不是红线语义).
+            if (grossMarginRedlineService != null && resolvedUnitPrice != null
+                    && resolvedUnitPrice.signum() > 0
+                    && itemDTO.getProductTypeId() != null) {
+                com.cretas.aims.dto.pricing.GrossMarginCheckResult marginResult =
+                        grossMarginRedlineService.checkMargin(
+                                factoryId, itemDTO.getProductTypeId(), resolvedUnitPrice);
+                if (Boolean.TRUE.equals(marginResult.getBelowRedline())) {
+                    // 低于毛利红线 → 409 (fool-proof Rule 1: 预先显示边界, 不让用户提交后才报错)
+                    String displayName = item.getProductName() != null
+                            ? item.getProductName() : itemDTO.getProductTypeId();
+                    throw new BusinessException(409,
+                            "行项目「" + displayName + "」报价 ¥" + resolvedUnitPrice.toPlainString()
+                            + " 低于毛利红线 — " + marginResult.getWarningMessage())
+                            .withHint("请调整报价至毛利红线以上，或联系销售经理审核");
+                } else if (marginResult.getBelowRedline() == null) {
+                    // 成本数据缺失 / 未配置毛利红线 → WARN log + 放行
+                    // 按"禁止降级"原则: 不静默放行也不假装拦截; 明确 WARN 让运营可见配置缺口
+                    log.warn("E-5 毛利红线: 无法核算 productTypeId={} 报价 ¥{} — {} (SO 仍创建, 请补配置标准成本/毛利率)",
+                            itemDTO.getProductTypeId(), resolvedUnitPrice.toPlainString(),
+                            marginResult.getWarningMessage());
+                }
+                // belowRedline=false → 报价合规, 静默
+            }
+            // ── end E-5 毛利红线守卫 ────────────────────────────────────────────────────
+
             // Sprint 4 W2 S-INVOICE-CLIENT-1 Option 3 三层 default 链 — 第 2→3 层 prefill:
             // Item 显式 > SO defaultTaxRate (已 prefill 自客户) > 0. 用户改 SO 级 default 触发批量重算
             // 由前端 watch 处理, 后端只兜底防 NPE.
