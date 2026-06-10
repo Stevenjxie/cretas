@@ -80,6 +80,8 @@
         <el-skeleton v-if="loading && !trendVm" :rows="4" animated />
         <div v-else-if="trendVm" ref="trendChartEl" class="fpgv-trend-chart"></div>
         <el-empty v-else description="暂无营收趋势数据" :image-size="60" />
+        <!-- U6: useChartInsight — Tier1 instant, Tier2 auto on null (飞轮接通) -->
+        <ChartInsight :insight="financeTrendInsight" :loading="financeTrendInsightLoading" depth="detailed" />
       </el-card>
 
       <!-- 门店营收排行 + 渠道占比 — 复用经营驾驶舱组件 (全量 agg_daily, 不依赖上传) -->
@@ -101,6 +103,9 @@ import { buildRestaurantKpiBoard, type RestaurantKpiBoard } from '@/views/analyt
 import { goldTrendBundleToViewModel, type TrendBundleViewModel } from '@/views/analytics/trends/goldTrendBundle';
 import { formatNumber } from '@/utils/format-number';
 import RestaurantGoldGrid from './RestaurantGoldGrid.vue';
+import type { ChartWithMeta } from './chartInsight';
+import ChartInsight from './ChartInsight.vue';
+import { useChartInsight } from '@/composables/useChartInsight';
 
 const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
@@ -230,6 +235,36 @@ async function loadGold() {
 async function reload() {
   await Promise.all([probeRange(), loadGold()]);
 }
+
+// ==================== Chart Insight ====================
+// Single LINE chart: monthly revenue trend (TREND family, domain='finance').
+// trendVm.value?.revenue is the numeric array; categories are the x labels.
+const financeTrendSource = (): { chart: ChartWithMeta } | null => {
+  const vm = trendVm.value;
+  if (!vm || vm.revenue.length < 4) return null;
+  // Filter out null/undefined from revenue array (TrendBundleViewModel may have gaps)
+  const values = vm.revenue.map((v) => (typeof v === 'number' && isFinite(v) ? v : 0));
+  const nonZero = values.filter((v) => v !== 0);
+  if (nonZero.length < 4) return null;
+  return {
+    chart: {
+      chartType: 'LINE',
+      meta: { xDim: 'time', yMetric: 'revenue', aggregation: 'sum', domain: 'finance' },
+      config: {
+        xAxis: { data: vm.categories },
+        series: [{ type: 'line', data: values }],
+      },
+    },
+  };
+};
+
+const financePerms = () => ({ canViewFinance: permissionStore.canViewPrice });
+
+const { insight: financeTrendInsight, loading: financeTrendInsightLoading } = useChartInsight(
+  financeTrendSource,
+  financePerms,
+  { factoryId: () => factoryId.value, autoTier2: true },
+);
 
 // factoryId 可能在挂载时尚未就绪 (auth 异步) → watch 重试一次。
 watch(factoryId, (id, prev) => {

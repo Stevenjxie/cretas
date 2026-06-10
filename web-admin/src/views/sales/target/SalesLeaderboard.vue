@@ -6,6 +6,14 @@ import { ref, computed, onMounted, watch, nextTick } from 'vue';
 import { handleCatchError } from '@/utils/errorToast';
 import { getLeaderboard, type Leaderboard, type TargetPeriod } from '@/api/salesTarget';
 import * as echarts from 'echarts';
+import { useAuthStore } from '@/store/modules/auth';
+import { usePermissionStore } from '@/store/modules/permission';
+import type { ChartWithMeta } from '@/views/smart-bi/components/chartInsight';
+import ChartInsight from '@/views/smart-bi/components/ChartInsight.vue';
+import { useChartInsight } from '@/composables/useChartInsight';
+
+const authStore = useAuthStore();
+const permissionStore = usePermissionStore();
 
 const period = ref<TargetPeriod>('MONTH');
 const year = ref<number>(new Date().getFullYear());
@@ -86,6 +94,32 @@ function renderChart(): void {
 
 window.addEventListener('resize', () => chartInstance?.resize());
 onMounted(load);
+
+// ==================== Chart Insight ====================
+// Single BAR chart: sales persons ranked by actual revenue (RANKING family).
+// xDim='store' maps to person-level categorical ranking; domain='factory'.
+const leaderboardSource = (): { chart: ChartWithMeta } | null => {
+  const d = data.value;
+  if (!d || d.entries.length < 2) return null;
+  return {
+    chart: {
+      chartType: 'BAR',
+      meta: { xDim: 'store', yMetric: 'revenue', aggregation: 'sum', domain: 'factory' },
+      config: {
+        xAxis: { data: d.entries.map((e) => `用户${e.ownerId}`) },
+        series: [{ type: 'bar', data: d.entries.map((e) => Number(e.actual)) }],
+      },
+    },
+  };
+};
+
+const leaderboardPerms = () => ({ canViewFinance: permissionStore.canWrite('finance') });
+
+const { insight: leaderboardInsight, loading: leaderboardInsightLoading } = useChartInsight(
+  leaderboardSource,
+  leaderboardPerms,
+  { factoryId: () => authStore.factoryId ?? '', autoTier2: true },
+);
 </script>
 
 <template>
@@ -142,6 +176,8 @@ onMounted(load);
       </div>
 
       <div ref="chartContainer" class="chart-box"></div>
+      <!-- U6: useChartInsight — Tier1 instant, Tier2 auto on null (飞轮接通) -->
+      <ChartInsight :insight="leaderboardInsight" :loading="leaderboardInsightLoading" depth="detailed" />
 
       <el-table :data="data.entries" border>
         <el-table-column prop="rank" label="排名" width="80" />

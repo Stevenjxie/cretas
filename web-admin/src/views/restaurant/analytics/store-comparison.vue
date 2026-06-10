@@ -23,6 +23,8 @@
         <el-card shadow="hover">
           <template #header><div class="chart-title">门店营收排名</div></template>
           <div id="chart-store-bar" style="height: 400px" />
+          <!-- U6: useChartInsight — Tier1 instant, Tier2 auto on null (飞轮接通) -->
+          <ChartInsight :insight="storeComparisonInsight" :loading="storeComparisonInsightLoading" depth="detailed" />
         </el-card>
 
         <!-- Table -->
@@ -97,13 +99,18 @@ import { ArrowLeft } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import echarts from '@/utils/echarts'
 import { usePermissionStore } from '@/store/modules/permission'
+import { useAuthStore } from '@/store/modules/auth'
 import { useChartResize } from '@/composables/useChartResize'
 import { formatAmount } from '@/utils/tableFormatters'
 import { pythonFetch, getFactoryId } from '@/api/smartbi/common'
 import type { StoreComparisonData } from '@/types/restaurant-analytics'
 import { goldStoreComparisonToData, type GoldStoreComparisonPayload } from './storeComparisonGold'
+import type { ChartWithMeta } from '@/views/smart-bi/components/chartInsight'
+import ChartInsight from '@/views/smart-bi/components/ChartInsight.vue'
+import { useChartInsight } from '@/composables/useChartInsight'
 
 const permissionStore = usePermissionStore()
+const authStore = useAuthStore()
 const canViewPrice = computed(() => permissionStore.canViewPrice)
 
 const containerRef = ref<HTMLElement>()
@@ -230,6 +237,33 @@ function renderChart() {
     }],
   })
 }
+
+// ==================== Chart Insight ====================
+// Single BAR chart: stores ranked by revenue (RANKING family, domain='restaurant').
+// renderChart() sorts stores asc and slices to max 20, but for insight purposes
+// we use all stores (the insight engine takes the full dataset and ranks internally).
+const storeComparisonSource = (): { chart: ChartWithMeta } | null => {
+  if (stores.value.length < 2) return null;
+  const sorted = [...stores.value].sort((a, b) => b.revenue - a.revenue);
+  return {
+    chart: {
+      chartType: 'BAR',
+      meta: { xDim: 'store', yMetric: 'revenue', aggregation: 'sum', domain: 'restaurant' },
+      config: {
+        xAxis: { data: sorted.map((s) => s.name) },
+        series: [{ type: 'bar', data: sorted.map((s) => s.revenue) }],
+      },
+    },
+  };
+};
+
+const storeComparisonPerms = () => ({ canViewFinance: permissionStore.canWrite('finance') });
+
+const { insight: storeComparisonInsight, loading: storeComparisonInsightLoading } = useChartInsight(
+  storeComparisonSource,
+  storeComparisonPerms,
+  { factoryId: () => authStore.factoryId ?? '', autoTier2: true },
+);
 
 onMounted(() => {
   // Only fetch when the user can view price/financial data — otherwise the page
