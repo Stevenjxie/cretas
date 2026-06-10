@@ -1,5 +1,6 @@
 package com.cretas.aims.service.inventory;
 
+import com.cretas.aims.dto.inventory.PaymentRequestApprovedDTO;
 import com.cretas.aims.entity.inventory.PaymentRequest;
 
 import java.math.BigDecimal;
@@ -18,6 +19,8 @@ public interface PaymentRequestService {
     /**
      * 创建付款申请单。
      * 幂等：同一 purchaseOrderId 若已有 PENDING/FINANCE_REVIEW/APPROVED 的申请单则抛 BusinessException(409)。
+     * G2：非预付类（PREPAID）结算方式的 PO 要求全入库（status=COMPLETED）后才可创建。
+     * G7：创建时继承 PO.settlementType → PaymentRequest.settlementType。
      */
     PaymentRequest create(
             String factoryId,
@@ -49,19 +52,16 @@ public interface PaymentRequestService {
      */
     PaymentRequest markPaid(String requestId, Long userId, String evidence);
 
-    /** 查询某工厂已审批等待付款的申请单（出纳视图） */
-    List<PaymentRequest> listApprovedForPayment(String factoryId);
+    /**
+     * D-9 G1 出纳付款视图（替代裸实体 listApprovedForPayment）。
+     * 返回带供应商名/PO单号/原料明细行的结构化 DTO，按 approvedAt ASC。
+     * 批量加载 PO items（N+1 安全）。
+     */
+    List<PaymentRequestApprovedDTO> listApprovedForPaymentWithDetails(String factoryId);
 
     /**
-     * SP12 §5.4: 提交付款申请单至审批工作流。
-     *
-     * <p>前置条件：申请单处于 PENDING 状态且 {@code workflowInstanceId == null}。
-     * 重复提交（已有 workflowInstanceId）→ 409。状态不对 → 400。
-     *
-     * @param requestId 申请单 ID
-     * @param factoryId 工厂 ID
-     * @param userId 提交人 userId
-     * @return 工作流实例 ID（引擎不可用时返回 null）
+     * 内部使用：查询某工厂已审批等待付款的裸实体（供其他 Service 使用）。
+     * 前端调用请使用 {@link #listApprovedForPaymentWithDetails(String)}。
      */
-    String submitForApproval(String requestId, String factoryId, Long userId);
+    List<PaymentRequest> listApprovedForPayment(String factoryId);
 }
