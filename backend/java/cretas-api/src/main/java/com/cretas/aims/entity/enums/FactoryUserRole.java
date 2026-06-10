@@ -161,6 +161,13 @@ public enum FactoryUserRole {
     operator("操作员", "生产执行、打卡记录", 30, "production"),
 
     /**
+     * 报工操作员 (X-6 六扇门补全)
+     * 仅负责报工写入 (产量/工时/工序报告), 无管理界面
+     * V20261011_02 liushanmen_rbac_matrix 引用此角色; 无此枚举值则 fromRoleCode 静默返回 unactivated
+     */
+    yield_operator("报工操作员", "报工写入: 产量/工时/工序报告", 30, "production"),
+
+    /**
      * 仓库员
      * 出入库操作、盘点、库存维护
      */
@@ -289,6 +296,7 @@ public enum FactoryUserRole {
             case team_leader:
             case group_leader:
             case operator:
+            case yield_operator:
                 return "production";
             case warehouse_manager:
             case warehouse_worker:
