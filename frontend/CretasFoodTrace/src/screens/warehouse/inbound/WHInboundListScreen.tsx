@@ -246,6 +246,16 @@ export function WHInboundListScreen() {
           >
             {t('inbound.list.scanInbound')}
           </Button>
+          {/* SP6 Tier1 #25: 无扫码直接选单收货 */}
+          <Button
+            mode="contained"
+            icon="clipboard-check-outline"
+            onPress={() => navigation.navigate("WHPurchaseReceiveList")}
+            style={[styles.actionButton, { backgroundColor: '#1565c0' }]}
+            labelStyle={styles.actionButtonLabel}
+          >
+            采购收货
+          </Button>
           <Button
             mode="outlined"
             icon="truck-delivery"
