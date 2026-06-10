@@ -948,13 +948,37 @@ async function loadLLMInsightsStream(
   signal: AbortSignal | undefined,
 ): Promise<boolean> {
   if (!factoryId.value) return false;
-  // Deterministic guard (2026-06-03): strip [ ]/【】 wrapping any CJK entity name
-  // (折扣/门店/菜品名) — the insight LLM sometimes wraps names like 「[美团套餐券]」
-  // which reads like JSON. orchestrator SYSTEM_PROMPT also forbids it, but streamed
-  // deltas can't be un-sent, so we clean the display here. Numeric citations [1]/[2]
-  // (no CJK) are preserved.
-  const stripEntityBrackets = (s: string): string =>
-    s ? s.replace(/[\[【]([^\[\]【】]*[一-鿿][^\[\]【】]*)[\]】]/g, '$1') : s;
+  // Deterministic guard (2026-06-03 + 2026-06-10 markdown clean):
+  // 1) Strip [ ]/【】 wrapping any CJK entity name (no [1]/[2] numeric citations stripped).
+  // 2) Normalize LLM markdown to clean prose so the plain-text insight panel doesn't
+  //    show raw **bold** / ## headings / - bullets / backticks / > blockquotes.
+  const cleanInsightText = (s: string): string => {
+    if (!s) return s;
+    let t = s;
+    // Strip CJK entity brackets: [美团套餐券] → 美团套餐券; preserve [1]/[2] citations.
+    t = t.replace(/[\[【]([^\[\]【】]*[一-鿿][^\[\]【】]*)[\]】]/g, '$1');
+    // Remove markdown emphasis markers: **x** / __x__ / *x* / _x_
+    t = t.replace(/\*\*([^*]+)\*\*/g, '$1');
+    t = t.replace(/__([^_]+)__/g, '$1');
+    t = t.replace(/\*([^*]+)\*/g, '$1');
+    t = t.replace(/_([^_]+)_/g, '$1');
+    // Remove heading markers at line start: # / ## / ###
+    t = t.replace(/^#{1,6}\s+/gm, '');
+    // Convert list markers to bullet dot: - / * / + / 1. 2. etc. at line start
+    t = t.replace(/^[-*+]\s+/gm, '· ');
+    t = t.replace(/^\d+\.\s+/gm, '· ');
+    // Remove blockquote markers: > at line start
+    t = t.replace(/^>\s*/gm, '');
+    // Strip fenced code blocks FIRST (before inline backtick, else ``` gets eaten one ` at a time)
+    t = t.replace(/```[\s\S]*?```/g, '');
+    // Strip inline backtick code: `code`
+    t = t.replace(/`([^`]+)`/g, '$1');
+    // Normalize: collapse 3+ consecutive newlines → 2; trim each line; strip leading/trailing blank lines
+    t = t.replace(/\n{3,}/g, '\n\n');
+    t = t.split('\n').map((l) => l.trim()).join('\n');
+    t = t.replace(/^\n+/, '').replace(/\n+$/, '');
+    return t;
+  };
   // Use the same key that request.ts interceptor reads
   const authHeader = localStorage.getItem('cretas_access_token') || '';
   const url = `/api/mobile/${factoryId.value}/smart-bi/dashboard/executive/insights/custom/stream?startDate=${startDate}&endDate=${endDate}`;
@@ -1008,7 +1032,7 @@ async function loadLLMInsightsStream(
             };
           } else if (event.type === 'delta' && event.text) {
             accumulated += event.text;
-            streamingInsightText.value = stripEntityBrackets(accumulated);
+            streamingInsightText.value = cleanInsightText(accumulated);
             gotAnyDelta = true;
           } else if (event.type === 'done') {
             // Finalize: append as regular insight
@@ -1018,7 +1042,7 @@ async function loadLLMInsightsStream(
                 ...dashboardData.value,
                 aiInsights: [
                   ...existing,
-                  { level: 'normal', category: 'AI 洞察', message: stripEntityBrackets(accumulated), actionSuggestion: null } as never
+                  { level: 'normal', category: 'AI 洞察', message: cleanInsightText(accumulated), actionSuggestion: null } as never
                 ],
               };
               insightTimestamp.value = new Date();
@@ -2487,6 +2511,7 @@ onUnmounted(() => {
         line-height: 1.6;
         flex: 1;
         min-width: 200px;
+        white-space: pre-line;
       }
 
       .insight-suggestion {
