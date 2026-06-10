@@ -34,6 +34,11 @@ function cleanInsightText(s: string): string {
   t = t.replace(/```[\s\S]*?```/g, '');
   // Strip inline backtick code: `code`
   t = t.replace(/`([^`]+)`/g, '$1');
+  // Break each INLINE bullet onto its own line (preceded by non-newline, non-space char;
+  // store-name middle-dots like 蜀三味·IFS have no trailing space → untouched).
+  t = t.replace(/([^\n \t])[ \t]*·[ \t]+/g, '$1\n· ');
+  // Trailing note clause "执行。注：…" → its own line.
+  t = t.replace(/([。！？])[ \t]*(注\s*[:：])/g, '$1\n$2');
   // Normalize: collapse 3+ consecutive newlines → 2; trim each line; strip leading/trailing blank lines
   t = t.replace(/\n{3,}/g, '\n\n');
   t = t.split('\n').map((l) => l.trim()).join('\n');
@@ -91,6 +96,23 @@ describe('cleanInsightText — markdown stripping', () => {
 
   it('strips > blockquote markers', () => {
     expect(cleanInsightText('> 重要提示: 营收下降')).toBe('重要提示: 营收下降');
+  });
+
+  it('breaks run-on inline · bullets and 注 clause onto their own lines', () => {
+    const input = '核心结论：营收偏低。· 针对A店：提升空间。· 针对B店：优化折扣。注：需数据支撑。';
+    const out = cleanInsightText(input);
+    expect(out).toContain('\n· 针对A店');
+    expect(out).toContain('\n· 针对B店');
+    expect(out).toContain('\n注：');
+    expect(out).not.toContain('· ·'); // no doubled bullets
+  });
+
+  it('does NOT split store-name middle-dots (no trailing space)', () => {
+    expect(cleanInsightText('蜀三味·IFS国际店营收第一')).toBe('蜀三味·IFS国际店营收第一');
+  });
+
+  it('does NOT double line-start bullets (single newline between)', () => {
+    expect(cleanInsightText('- 第一点\n- 第二点')).toBe('· 第一点\n· 第二点');
   });
 });
 

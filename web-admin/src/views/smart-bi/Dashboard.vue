@@ -973,6 +973,13 @@ async function loadLLMInsightsStream(
     t = t.replace(/```[\s\S]*?```/g, '');
     // Strip inline backtick code: `code`
     t = t.replace(/`([^`]+)`/g, '$1');
+    // Break each INLINE bullet onto its own line so the pre-line panel reads cleanly.
+    // Match only a "· " preceded by a non-newline, non-space char (so bullets already
+    // at line start are not doubled). Store-name middle-dots (蜀三味·IFS, no trailing
+    // space) are untouched because a trailing space is required.
+    t = t.replace(/([^\n \t])[ \t]*·[ \t]+/g, '$1\n· ');
+    // Trailing note clause "执行。注：…" → its own line.
+    t = t.replace(/([。！？])[ \t]*(注\s*[:：])/g, '$1\n$2');
     // Normalize: collapse 3+ consecutive newlines → 2; trim each line; strip leading/trailing blank lines
     t = t.replace(/\n{3,}/g, '\n\n');
     t = t.split('\n').map((l) => l.trim()).join('\n');
