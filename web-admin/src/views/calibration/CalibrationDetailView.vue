@@ -33,6 +33,10 @@ import {
   InfoFilled
 } from '@element-plus/icons-vue';
 import echarts from '@/utils/echarts';
+// chart-insight: LINE trend → TREND; RADAR is exotic → SKIP
+import ChartInsight from '@/views/smart-bi/components/ChartInsight.vue';
+import { useChartInsight } from '@/composables/useChartInsight';
+import type { ChartWithMeta } from '@/views/smart-bi/components/chartInsight';
 
 const route = useRoute();
 const router = useRouter();
@@ -52,6 +56,18 @@ const radarChart = ref<echarts.ECharts | null>(null);
 const radarContainer = ref<HTMLElement | null>(null);
 const trendChart = ref<echarts.ECharts | null>(null);
 const trendContainer = ref<HTMLElement | null>(null);
+
+// chart-insight: LINE trend → TREND (RADAR = exotic radar → SKIP)
+// Data source updated by updateTrendChart when real data arrives.
+const trendChartData = ref<ChartWithMeta | null>(null);
+
+const calibrationPerms = { canViewFinance: false };
+
+const { insight: trendInsight, loading: trendInsightLoading } = useChartInsight(
+  () => trendChartData.value ? { chart: trendChartData.value } : null,
+  () => calibrationPerms,
+  { factoryId: () => authStore.factoryId ?? '' },
+);
 
 // 自动刷新
 const refreshInterval = ref<number | null>(null);
@@ -332,6 +348,11 @@ function updateTrendChart() {
       subtextStyle: { color: '#C0C4CC', fontSize: 12 }
     }
   }, true);
+
+  // chart-insight LINE source: no real data yet (empty state).
+  // trendChartData stays null → useChartInsight returns null → ChartInsight renders nothing.
+  // When a real trend API is wired, set trendChartData here with xDim:'time'.
+  trendChartData.value = null;
 }
 
 // ==================== 事件处理 ====================
@@ -704,7 +725,7 @@ function getSeverityText(severity: string) {
           </el-card>
         </el-col>
 
-        <!-- 雷达图 -->
+        <!-- 雷达图 — exotic RADAR type → chart-insight SKIP -->
         <el-col :xs="24" :lg="8">
           <el-card class="chart-card">
             <template #header>
@@ -717,7 +738,7 @@ function getSeverityText(severity: string) {
           </el-card>
         </el-col>
 
-        <!-- 趋势图 -->
+        <!-- 趋势图 — LINE → TREND insight; empty state until trend API is wired -->
         <el-col :xs="24" :lg="8">
           <el-card class="chart-card">
             <template #header>
@@ -727,6 +748,8 @@ function getSeverityText(severity: string) {
               </div>
             </template>
             <div ref="trendContainer" class="chart-container"></div>
+            <!-- chart-insight: null source while trend API pending → renders nothing (honest-null) -->
+            <ChartInsight :insight="trendInsight" :loading="trendInsightLoading" depth="concise" />
           </el-card>
         </el-col>
       </el-row>

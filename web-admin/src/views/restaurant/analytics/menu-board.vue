@@ -48,7 +48,11 @@
         <!-- Scatter chart — WS4: gold /restaurant-ops/menu-quadrant 已提供
              {name,qty,revenue,unitProfit,quadrant}, 散点只需这些 quadrant items,
              不需 combo_string。data 非空即 gold-mode → :force 跳过上传能力门控
-             (镜像 WS2 Dashboard.vue 的 :force="isGoldMode")。 -->
+             (镜像 WS2 Dashboard.vue 的 :force="isGoldMode")。
+             chart-insight: SCATTER (BCG quadrant) is an exotic type → SKIP.
+             The spec-mentioned LINE does not exist as a standalone chart element
+             in this view (the only 'line' series is a markLine median overlay
+             inside the scatter; no separate ECharts LINE instance is rendered). -->
         <CapabilityGate card-id="menu_top_dishes" :requires="['combo_string']" :force="isGoldMode">
         <el-card shadow="hover" style="margin-top: 16px">
           <div id="chart-quadrant-full" style="height: 480px" />

@@ -10,6 +10,10 @@ import TemplateGrid from '@/views/smart-bi/components/TemplateGrid.vue';
 import { getDailyTrend, type DailyTrend } from '@/api/smartbi/gold';
 import { getGoldDataRange } from '@/api/smartbi/dataRange';
 import { resolveAllHistoryRange } from '@/views/smart-bi/analysisDefaults';
+// chart-insight: LINE×(production/quality/gold-revenue/gold-bundle-revenue) + BAR×(cost/ww) wired
+import ChartInsight from '@/views/smart-bi/components/ChartInsight.vue';
+import { useChartInsight } from '@/composables/useChartInsight';
+import type { ChartWithMeta } from '@/views/smart-bi/components/chartInsight';
 import {
   goldTrendBundleToViewModel,
   type GoldTrendBundlePayload,
@@ -35,6 +39,50 @@ const isRestaurantTenant = computed(() => authStore.factoryType === 'RESTAURANT'
 const loading = ref(false);
 // WS4 #12: 默认"全部历史" (而非近7天) — 餐饮 POS 趋势第一眼即看到完整历史曲线。
 const selectedPeriod = ref('all');
+
+// ── chart-insight reactive sources ──────────────────────────────────────────
+// Each ref is updated inside the corresponding chart-update function so that
+// useChartInsight's watcher picks up new data and re-evaluates Tier1/Tier2.
+const productionChartData = ref<ChartWithMeta | null>(null); // LINE TREND factory
+const qualityChartData    = ref<ChartWithMeta | null>(null); // LINE TREND factory (pct)
+const costChartData       = ref<ChartWithMeta | null>(null); // BAR  RANKING factory
+const goldRevChartData    = ref<ChartWithMeta | null>(null); // LINE TREND restaurant (revenue)
+const goldBundleRevData   = ref<ChartWithMeta | null>(null); // LINE TREND restaurant (revenue)
+const goldBundleWwData    = ref<ChartWithMeta | null>(null); // BAR  RANKING restaurant (revenue)
+
+// perms: use canViewPrice as the finance gate (revenue/cost metrics gate on price view)
+const trendsPerms = computed(() => ({ canViewFinance: canViewPrice.value }));
+
+const { insight: productionInsight, loading: productionInsightLoading } = useChartInsight(
+  () => productionChartData.value ? { chart: productionChartData.value } : null,
+  () => trendsPerms.value,
+  { factoryId: () => factoryId.value ?? '' },
+);
+const { insight: qualityInsight, loading: qualityInsightLoading } = useChartInsight(
+  () => qualityChartData.value ? { chart: qualityChartData.value } : null,
+  () => trendsPerms.value,
+  { factoryId: () => factoryId.value ?? '' },
+);
+const { insight: costInsight, loading: costInsightLoading } = useChartInsight(
+  () => costChartData.value ? { chart: costChartData.value } : null,
+  () => trendsPerms.value,
+  { factoryId: () => factoryId.value ?? '' },
+);
+const { insight: goldRevInsight, loading: goldRevInsightLoading } = useChartInsight(
+  () => goldRevChartData.value ? { chart: goldRevChartData.value } : null,
+  () => trendsPerms.value,
+  { factoryId: () => factoryId.value ?? '' },
+);
+const { insight: goldBundleRevInsight, loading: goldBundleRevInsightLoading } = useChartInsight(
+  () => goldBundleRevData.value ? { chart: goldBundleRevData.value } : null,
+  () => trendsPerms.value,
+  { factoryId: () => factoryId.value ?? '' },
+);
+const { insight: goldBundleWwInsight, loading: goldBundleWwInsightLoading } = useChartInsight(
+  () => goldBundleWwData.value ? { chart: goldBundleWwData.value } : null,
+  () => trendsPerms.value,
+  { factoryId: () => factoryId.value ?? '' },
+);
 
 // 趋势数据
 const trendData = ref({
@@ -189,7 +237,7 @@ async function updateGoldBundleCharts() {
 
   if (goldBundleRevenueChart) {
     const granLabel = vm.granularity === 'monthly' ? '按月' : '按日';
-    goldBundleRevenueChart.setOption({
+    const option = {
       title: { text: `POS 营收趋势 · ${granLabel} (Gold)`, left: 'center', textStyle: { fontSize: 14 } },
       tooltip: {
         trigger: 'axis', confine: true,
@@ -220,11 +268,28 @@ async function updateGoldBundleCharts() {
         itemStyle: { color: '#67C23A' },
         data: vm.revenue,
       }],
-    }, true);
+    };
+    goldBundleRevenueChart.setOption(option, true);
+    // chart-insight: update reactive source (LINE TREND restaurant revenue)
+    goldBundleRevData.value = {
+      chartType: 'line',
+      title: `POS 营收趋势 · ${granLabel} (Gold)`,
+      meta: { xDim: 'time', yMetric: 'revenue', aggregation: granLabel.includes('月') ? 'avg' : 'sum', domain: 'restaurant' },
+      config: {
+        xAxis: { data: vm.categories },
+        series: [{ type: 'line', data: vm.revenue }],
+      },
+    };
   }
 
   if (goldBundleWwChart) {
     const ww = vm.weekdayWeekend;
+    const wwData = ww
+      ? [
+          { value: ww.weekdayAvg, itemStyle: { color: '#409EFF' } },
+          { value: ww.weekendAvg, itemStyle: { color: '#E6A23C' } },
+        ]
+      : [];
     goldBundleWwChart.setOption({
       title: { text: '工作日 vs 周末 · 日均营收', left: 'center', textStyle: { fontSize: 14 } },
       tooltip: {
@@ -246,15 +311,20 @@ async function updateGoldBundleCharts() {
         name: '日均营收',
         type: 'bar',
         barWidth: '45%',
-        data: ww
-          ? [
-              { value: ww.weekdayAvg, itemStyle: { color: '#409EFF' } },
-              { value: ww.weekendAvg, itemStyle: { color: '#E6A23C' } },
-            ]
-          : [],
+        data: wwData,
         label: { show: true, position: 'top', formatter: (p: { value: number }) => fmtRevenue(p.value) },
       }],
     }, true);
+    // chart-insight: update reactive source (BAR RANKING restaurant revenue)
+    goldBundleWwData.value = {
+      chartType: 'bar',
+      title: '工作日 vs 周末 · 日均营收',
+      meta: { xDim: 'category', yMetric: 'revenue', aggregation: 'avg', domain: 'restaurant' },
+      config: {
+        xAxis: { data: ['工作日', '周末'] },
+        series: [{ type: 'bar', data: ww ? [ww.weekdayAvg, ww.weekendAvg] : [] }],
+      },
+    };
   }
 }
 
@@ -388,6 +458,7 @@ function updateGoldChart() {
     ? (v: number) => String(Math.round(v))
     : (v: number) => `¥${v.toFixed(2)}`;
   const granularitySuffix = agg.granularity === 'weekly' ? ' · 按周' : agg.granularity === 'monthly' ? ' · 按月' : '';
+  const revenueData = pts.map(p => Number(p.revenue));
   goldRevenueChart.setOption({
     title: { text: `POS 营收趋势 (Gold)${granularitySuffix}`, left: 'center', textStyle: { fontSize: 14 } },
     tooltip: {
@@ -417,7 +488,7 @@ function updateGoldChart() {
         smooth: true,
         areaStyle: { opacity: 0.3 },
         itemStyle: { color: '#67C23A' },
-        data: pts.map(p => Number(p.revenue)),
+        data: revenueData,
       },
       {
         name: secondMeta.name,
@@ -429,6 +500,21 @@ function updateGoldChart() {
       },
     ],
   }, true);
+  // chart-insight: update reactive source (LINE TREND restaurant revenue gold daily)
+  goldRevChartData.value = {
+    chartType: 'line',
+    title: `POS 营收趋势 (Gold)${granularitySuffix}`,
+    meta: {
+      xDim: 'time',
+      yMetric: 'revenue',
+      aggregation: agg.granularity === 'monthly' ? 'avg' : agg.granularity === 'weekly' ? 'sum' : 'sum',
+      domain: 'restaurant',
+    },
+    config: {
+      xAxis: { data: pts.map(p => p.date) },
+      series: [{ type: 'line', data: revenueData }],
+    },
+  };
 }
 
 function onTrendMetricChange() {
@@ -513,65 +599,92 @@ function updateCharts() {
   // 生产趋势图
   if (productionChart) {
     const data = trendData.value.productionTrend || [];
+    const xData = data.map((d: Record<string, unknown>) => d.date || d.label);
+    const yData = data.map((d: Record<string, unknown>) => d.output || d.value || 0);
     productionChart.setOption({
       title: { text: '生产趋势', left: 'center' },
       tooltip: { trigger: 'axis', confine: true },
-      xAxis: {
-        type: 'category',
-        data: data.map((d: Record<string, unknown>) => d.date || d.label)
-      },
+      xAxis: { type: 'category', data: xData },
       yAxis: { type: 'value', name: '产量' },
       series: [{
         name: '产量',
         type: 'line',
         smooth: true,
-        data: data.map((d: Record<string, unknown>) => d.output || d.value || 0),
+        data: yData,
         areaStyle: { opacity: 0.3 },
         itemStyle: { color: '#409EFF' }
       }]
     });
+    // chart-insight: LINE TREND factory quantity
+    productionChartData.value = {
+      chartType: 'line',
+      title: '生产趋势',
+      meta: { xDim: 'time', yMetric: 'quantity', aggregation: 'sum', domain: 'factory' },
+      config: {
+        xAxis: { data: xData as string[] },
+        series: [{ type: 'line', data: yData }],
+      },
+    };
   }
 
   // 质量趋势图
   if (qualityChart) {
     const data = trendData.value.qualityTrend || [];
+    const xData = data.map((d: Record<string, unknown>) => d.date || d.label);
+    const yData = data.map((d: Record<string, unknown>) => (Number(d.passRate || d.value || 0) * 100).toFixed(1));
     qualityChart.setOption({
       title: { text: '质量趋势', left: 'center' },
       tooltip: { trigger: 'axis', confine: true, formatter: '{b}: {c}%' },
-      xAxis: {
-        type: 'category',
-        data: data.map((d: Record<string, unknown>) => d.date || d.label)
-      },
+      xAxis: { type: 'category', data: xData },
       yAxis: { type: 'value', name: '合格率 (%)', max: 100 },
       series: [{
         name: '合格率',
         type: 'line',
         smooth: true,
-        data: data.map((d: Record<string, unknown>) => (Number(d.passRate || d.value || 0) * 100).toFixed(1)),
+        data: yData,
         areaStyle: { opacity: 0.3 },
         itemStyle: { color: '#67C23A' }
       }]
     });
+    // chart-insight: LINE TREND factory pct
+    qualityChartData.value = {
+      chartType: 'line',
+      title: '质量趋势',
+      meta: { xDim: 'time', yMetric: 'pct', aggregation: 'avg', domain: 'factory' },
+      config: {
+        xAxis: { data: xData as string[] },
+        series: [{ type: 'line', data: yData }],
+      },
+    };
   }
 
   // 成本趋势图
   if (costChart) {
     const data = trendData.value.costTrend || [];
+    const xData = data.map((d: Record<string, unknown>) => d.date || d.label);
+    const yData = data.map((d: Record<string, unknown>) => d.totalCost || d.value || 0);
     costChart.setOption({
       title: { text: '成本趋势', left: 'center' },
       tooltip: { trigger: 'axis', confine: true },
-      xAxis: {
-        type: 'category',
-        data: data.map((d: Record<string, unknown>) => d.date || d.label)
-      },
+      xAxis: { type: 'category', data: xData },
       yAxis: { type: 'value', name: '成本 (元)' },
       series: [{
         name: '总成本',
         type: 'bar',
-        data: data.map((d: Record<string, unknown>) => d.totalCost || d.value || 0),
+        data: yData,
         itemStyle: { color: '#E6A23C' }
       }]
     });
+    // chart-insight: BAR RANKING factory cost
+    costChartData.value = {
+      chartType: 'bar',
+      title: '成本趋势',
+      meta: { xDim: 'category', yMetric: 'cost', aggregation: 'sum', domain: 'factory' },
+      config: {
+        xAxis: { data: xData as string[] },
+        series: [{ type: 'bar', data: yData }],
+      },
+    };
   }
 }
 
@@ -676,9 +789,11 @@ onUnmounted(() => {
         <el-row :gutter="16">
           <el-col :span="goldBundle && goldBundle.weekdayWeekend ? 16 : 24">
             <div id="gold-bundle-revenue-chart" class="chart" style="height: 320px;"></div>
+            <ChartInsight :insight="goldBundleRevInsight" :loading="goldBundleRevInsightLoading" depth="concise" />
           </el-col>
           <el-col v-if="goldBundle && goldBundle.weekdayWeekend" :span="8">
             <div id="gold-bundle-ww-chart" class="chart" style="height: 320px;"></div>
+            <ChartInsight :insight="goldBundleWwInsight" :loading="goldBundleWwInsightLoading" depth="concise" />
           </el-col>
         </el-row>
       </el-card>
@@ -728,6 +843,7 @@ onUnmounted(() => {
         </div>
       </template>
       <div id="gold-revenue-chart" class="chart" style="height: 320px;"></div>
+      <ChartInsight :insight="goldRevInsight" :loading="goldRevInsightLoading" depth="concise" />
     </el-card>
     </CapabilityGate>
 
@@ -737,6 +853,7 @@ onUnmounted(() => {
         <el-col :span="24">
           <el-card class="chart-card">
             <div id="production-chart" class="chart"></div>
+            <ChartInsight :insight="productionInsight" :loading="productionInsightLoading" depth="concise" />
           </el-card>
         </el-col>
       </el-row>
@@ -745,11 +862,13 @@ onUnmounted(() => {
         <el-col :span="canViewPrice ? 12 : 24">
           <el-card class="chart-card">
             <div id="quality-chart" class="chart"></div>
+            <ChartInsight :insight="qualityInsight" :loading="qualityInsightLoading" depth="concise" />
           </el-card>
         </el-col>
         <el-col v-if="canViewPrice" :span="12">
           <el-card class="chart-card">
             <div id="cost-chart" class="chart"></div>
+            <ChartInsight :insight="costInsight" :loading="costInsightLoading" depth="concise" />
           </el-card>
         </el-col>
       </el-row>

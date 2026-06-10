@@ -15,6 +15,10 @@ import {
 import { ElMessage } from 'element-plus';
 import { Refresh, Warning, User, Timer, TrendCharts } from '@element-plus/icons-vue';
 import echarts from '@/utils/echarts';
+// chart-insight: BAR (progress → RANKING) + PIE (probability → PROPORTION)
+import ChartInsight from '@/views/smart-bi/components/ChartInsight.vue';
+import { useChartInsight } from '@/composables/useChartInsight';
+import type { ChartWithMeta } from '@/views/smart-bi/components/chartInsight';
 
 const authStore = useAuthStore();
 const factoryId = computed(() => authStore.factoryId);
@@ -31,6 +35,25 @@ const progressChart = ref<echarts.ECharts | null>(null);
 const probabilityChart = ref<echarts.ECharts | null>(null);
 const progressContainer = ref<HTMLElement | null>(null);
 const probabilityContainer = ref<HTMLElement | null>(null);
+
+// chart-insight reactive sources (updated whenever chart data changes)
+const progressChartData = ref<ChartWithMeta | null>(null);   // BAR → RANKING
+const probabilityChartData = ref<ChartWithMeta | null>(null); // PIE → PROPORTION
+
+// perms: scheduling realtime has no finance metrics (quantity/pct domain)
+const schedulePerms = { canViewFinance: false };
+
+const { insight: progressInsight, loading: progressInsightLoading } = useChartInsight(
+  () => progressChartData.value ? { chart: progressChartData.value } : null,
+  () => schedulePerms,
+  { factoryId: () => factoryId.value ?? '' },
+);
+
+const { insight: probabilityInsight, loading: probabilityInsightLoading } = useChartInsight(
+  () => probabilityChartData.value ? { chart: probabilityChartData.value } : null,
+  () => schedulePerms,
+  { factoryId: () => factoryId.value ?? '' },
+);
 
 onMounted(async () => {
   await loadPlans();
@@ -198,6 +221,17 @@ function updateProgressChart() {
   };
 
   progressChart.value.setOption(option);
+
+  // Update insight source: BAR (horizontal progress) → xDim:category (batch names), yMetric:pct
+  progressChartData.value = {
+    chartType: 'bar',
+    title: '排程进度',
+    meta: { xDim: 'category', yMetric: 'pct', aggregation: 'sum', domain: 'factory' },
+    config: {
+      xAxis: { data: data.map(d => d.name) },
+      series: [{ type: 'bar', data: data.map(d => d.value) }],
+    },
+  };
 }
 
 function updateProbabilityChart() {
@@ -238,6 +272,19 @@ function updateProbabilityChart() {
   };
 
   probabilityChart.value.setOption(option);
+
+  // Update insight source: PIE → PROPORTION family
+  probabilityChartData.value = {
+    chartType: 'pie',
+    title: '完成概率分布',
+    meta: { xDim: 'category', yMetric: 'pct', aggregation: 'avg', domain: 'factory' },
+    config: {
+      series: [{
+        type: 'pie',
+        data: data.map(d => ({ name: d.name, value: d.value })),
+      }],
+    },
+  };
 }
 
 function handlePlanChange() {
@@ -356,9 +403,13 @@ function getProbabilityColor(prob: number) {
     <div class="charts-row">
       <el-card class="chart-card">
         <div ref="progressContainer" class="chart-container"></div>
+        <!-- BAR progress → RANKING insight (canViewFinance:false, no finance metrics) -->
+        <ChartInsight :insight="progressInsight" :loading="progressInsightLoading" depth="concise" />
       </el-card>
       <el-card class="chart-card">
         <div ref="probabilityContainer" class="chart-container"></div>
+        <!-- PIE probability → PROPORTION insight -->
+        <ChartInsight :insight="probabilityInsight" :loading="probabilityInsightLoading" depth="concise" />
       </el-card>
     </div>
 
