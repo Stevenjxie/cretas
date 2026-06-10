@@ -1,17 +1,25 @@
 /**
- * 出入库统计页面
- * 对应原型: warehouse/io-statistics.html
+ * 出入库统计页面 — SP11 进销存台账对接
+ *
+ * F-049~052 修复: 删掉硬编码 mock 数组, 改为调用真实后端
+ *   GET /api/mobile/{factoryId}/inventory/ledger
+ *
+ * 防呆原则:
+ * - 加载/错误/空数据三态齐全, 禁止降级返回假数据
+ * - 错误明确显示后端 message, 不静默吞掉
  */
 
-import React, { useState } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import {
   View,
   ScrollView,
   StyleSheet,
   TouchableOpacity,
   Alert,
+  ActivityIndicator,
+  RefreshControl,
 } from "react-native";
-import { Text, Surface, Button, useTheme } from "react-native-paper";
+import { Text, Button } from "react-native-paper";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { useNavigation } from "@react-navigation/native";
@@ -19,90 +27,174 @@ import { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { useTranslation } from 'react-i18next';
 import { WHInventoryStackParamList } from "../../../types/navigation";
 import { formatNumberWithCommas } from "../../../utils/formatters";
+import {
+  inventoryLedgerApiClient,
+  InventoryLedgerLineDTO,
+  InventoryLedgerDTO,
+} from "../../../services/api/inventoryLedgerApiClient";
 
 type NavigationProp = NativeStackNavigationProp<WHInventoryStackParamList>;
 
 type TimeFilter = "today" | "week" | "month" | "custom";
-type AIPredictionPeriod = "7" | "14" | "30";
 
-interface DailyStat {
-  day: string;
-  weekday: string;
-  inbound: number;
-  outbound: number;
+// ============================================================
+// Date helpers
+// ============================================================
+
+function toISODate(d: Date): string {
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
 }
 
-interface CategoryStat {
-  name: string;
-  percent: number;
-  inbound: number;
-  outbound: number;
+function getDateRange(filter: TimeFilter): { startDate: string; endDate: string } {
+  const today = new Date();
+  const end = toISODate(today);
+
+  if (filter === 'today') {
+    return { startDate: end, endDate: end };
+  }
+  if (filter === 'week') {
+    const start = new Date(today);
+    start.setDate(today.getDate() - 6);
+    return { startDate: toISODate(start), endDate: end };
+  }
+  if (filter === 'month') {
+    const start = new Date(today.getFullYear(), today.getMonth(), 1);
+    return { startDate: toISODate(start), endDate: end };
+  }
+  // custom — caller manages date range separately; fallback = today
+  return { startDate: end, endDate: end };
 }
+
+// ============================================================
+// Summary helpers
+// ============================================================
+
+function sumField(lines: InventoryLedgerLineDTO[], field: keyof InventoryLedgerLineDTO): number {
+  return lines.reduce((acc, line) => {
+    const v = line[field];
+    return acc + (typeof v === 'number' ? v : 0);
+  }, 0);
+}
+
+// ============================================================
+// Component
+// ============================================================
 
 export function WHIOStatisticsScreen() {
   const { t } = useTranslation('warehouse');
-  const theme = useTheme();
   const navigation = useNavigation<NavigationProp>();
 
   const [activeFilter, setActiveFilter] = useState<TimeFilter>("week");
-  const [aiPeriod, setAIPeriod] = useState<AIPredictionPeriod>("7");
+  const [loading, setLoading] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [ledger, setLedger] = useState<InventoryLedgerDTO | null>(null);
 
-  const overviewData = {
-    inboundTotal: 2580,
-    inboundChange: 12,
-    outboundTotal: 2150,
-    outboundChange: 8,
+  // ============================================================
+  // Data fetch
+  // ============================================================
+
+  const fetchLedger = useCallback(async (filter: TimeFilter, isRefresh = false) => {
+    if (isRefresh) {
+      setRefreshing(true);
+    } else {
+      setLoading(true);
+    }
+    setError(null);
+
+    try {
+      const { startDate, endDate } = getDateRange(filter);
+      const data = await inventoryLedgerApiClient.getLedger({ startDate, endDate });
+      setLedger(data);
+    } catch (err: unknown) {
+      const msg =
+        err instanceof Error
+          ? err.message
+          : '进销存台账查询失败，请稍后重试';
+      setError(msg);
+      setLedger(null);
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchLedger(activeFilter);
+  }, [activeFilter, fetchLedger]);
+
+  const handleFilterChange = (filter: TimeFilter) => {
+    setActiveFilter(filter);
   };
 
-  const dailyStats: DailyStat[] = [
-    { day: "26", weekday: "周四", inbound: 430, outbound: 380 },
-    { day: "25", weekday: "周三", inbound: 520, outbound: 450 },
-    { day: "24", weekday: "周二", inbound: 380, outbound: 420 },
-    { day: "23", weekday: "周一", inbound: 450, outbound: 350 },
-  ];
-
-  const categoryStats: CategoryStat[] = [
-    { name: "带鱼", percent: 35, inbound: 903, outbound: 752 },
-    { name: "虾仁", percent: 28, inbound: 722, outbound: 602 },
-    { name: "鲈鱼", percent: 22, inbound: 568, outbound: 473 },
-    { name: "蟹类", percent: 15, inbound: 387, outbound: 323 },
-  ];
-
-  const aiPrediction = {
-    expectedConsumption: -180,
-    fishStockDays: 5,
-    suggestedRestock: 200,
-    confidence: 92,
-    insights: [
-      {
-        type: "warning" as const,
-        icon: "⚠️",
-        text: "基于历史消耗趋势，带鱼库存将在5天后低于安全线，建议提前补货",
-      },
-      {
-        type: "info" as const,
-        icon: "📅",
-        text: "下周为年货采购高峰期，预计出库量将增加30%",
-      },
-      {
-        type: "success" as const,
-        icon: "✅",
-        text: "虾仁、鲈鱼库存充足，可支撑未来14天需求",
-      },
-    ],
+  const handleRefresh = () => {
+    fetchLedger(activeFilter, true);
   };
+
+  // ============================================================
+  // Derived data from real API
+  // ============================================================
+
+  const lines: InventoryLedgerLineDTO[] = ledger?.lines ?? [];
+
+  const totalInbound = sumField(lines, 'inboundQty');
+  const totalOutboundProduction = sumField(lines, 'outboundProductionQty');
+  const totalOutboundSales = sumField(lines, 'outboundSalesQty');
+  const totalOutbound = totalOutboundProduction + totalOutboundSales;
+  const totalClosing = sumField(lines, 'closingQty');
+  const totalAdjust = sumField(lines, 'adjustQty');
+
+  // ============================================================
+  // Export stub — real xlsx export is web-admin's responsibility;
+  // RN shows summary only.
+  // ============================================================
 
   const handleExport = () => {
-    Alert.alert(t('inbound.create.success'), t('conversion.exportReport'));
+    Alert.alert(
+      t('inbound.create.alert'),
+      '台账导出请使用 Web 管理后台',
+    );
   };
 
-  const handleShare = () => {
-    Alert.alert(t('inbound.create.alert'), t('conversion.generateReport'));
+  // ============================================================
+  // Render helpers
+  // ============================================================
+
+  const fmtQty = (v: number | null): string => {
+    if (v === null || v === undefined) return '—';
+    return formatNumberWithCommas(Number(v.toFixed(3)));
   };
 
-  const getBalance = (inbound: number, outbound: number) => {
-    return inbound - outbound;
-  };
+  // ============================================================
+  // Loading / Error states
+  // ============================================================
+
+  if (loading && !refreshing) {
+    return (
+      <SafeAreaView style={styles.container} edges={["top"]}>
+        <View style={styles.header}>
+          <TouchableOpacity style={styles.backButton} onPress={() => navigation.goBack()}>
+            <MaterialCommunityIcons name="arrow-left" size={24} color="#fff" />
+          </TouchableOpacity>
+          <View style={styles.headerCenter}>
+            <Text style={styles.headerTitle}>{t('ioStatistics.title')}</Text>
+          </View>
+          <View style={styles.headerRight} />
+        </View>
+        <View style={styles.centerState}>
+          <ActivityIndicator size="large" color="#4CAF50" />
+          <Text style={styles.centerStateText}>加载进销存台账中…</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  // ============================================================
+  // Main render
+  // ============================================================
 
   return (
     <SafeAreaView style={styles.container} edges={["top"]}>
@@ -116,19 +208,33 @@ export function WHIOStatisticsScreen() {
         </TouchableOpacity>
         <View style={styles.headerCenter}>
           <Text style={styles.headerTitle}>{t('ioStatistics.title')}</Text>
-          <Text style={styles.headerSubtitle}>{t('ioStatistics.headerSubtitle')}</Text>
+          {ledger && (
+            <Text style={styles.headerSubtitle}>
+              {ledger.startDate} ~ {ledger.endDate}
+            </Text>
+          )}
         </View>
         <View style={styles.headerRight} />
       </View>
 
-      <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
+      <ScrollView
+        style={styles.content}
+        showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={handleRefresh}
+            colors={["#4CAF50"]}
+            tintColor="#4CAF50"
+          />
+        }
+      >
         {/* 时间筛选 */}
         <View style={styles.filterTabs}>
           {[
             { key: "today" as TimeFilter, label: t('conversion.period.today') },
             { key: "week" as TimeFilter, label: t('conversion.period.week') },
             { key: "month" as TimeFilter, label: t('conversion.period.month') },
-            { key: "custom" as TimeFilter, label: t('ioStatistics.dateRange') },
           ].map((filter) => (
             <TouchableOpacity
               key={filter.key}
@@ -136,7 +242,7 @@ export function WHIOStatisticsScreen() {
                 styles.filterTab,
                 activeFilter === filter.key && styles.filterTabActive,
               ]}
-              onPress={() => setActiveFilter(filter.key)}
+              onPress={() => handleFilterChange(filter.key)}
             >
               <Text
                 style={[
@@ -150,252 +256,182 @@ export function WHIOStatisticsScreen() {
           ))}
         </View>
 
-        {/* 总览数据 */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>{t('conversion.period.week')}</Text>
-          <View style={styles.overviewRow}>
-            <View style={[styles.overviewCard, styles.overviewCardInbound]}>
-              <View style={styles.overviewIconContainer}>
-                <Text style={styles.overviewIcon}>IN</Text>
-              </View>
-              <View style={styles.overviewContent}>
-                <Text style={styles.overviewLabel}>{t('ioStatistics.totalInbound')}</Text>
-                <Text style={styles.overviewValue}>
-                  {formatNumberWithCommas(overviewData.inboundTotal)} kg
-                </Text>
-                <Text style={styles.overviewChangePositive}>
-                  ↑ {overviewData.inboundChange}%
-                </Text>
-              </View>
-            </View>
-            <View style={[styles.overviewCard, styles.overviewCardOutbound]}>
-              <View
-                style={[
-                  styles.overviewIconContainer,
-                  styles.overviewIconOutbound,
-                ]}
-              >
-                <Text style={styles.overviewIconOut}>OUT</Text>
-              </View>
-              <View style={styles.overviewContent}>
-                <Text style={styles.overviewLabel}>{t('ioStatistics.totalOutbound')}</Text>
-                <Text style={styles.overviewValue}>
-                  {formatNumberWithCommas(overviewData.outboundTotal)} kg
-                </Text>
-                <Text style={styles.overviewChangePositive}>
-                  ↑ {overviewData.outboundChange}%
-                </Text>
-              </View>
-            </View>
+        {/* 错误态 */}
+        {error && (
+          <View style={styles.errorCard}>
+            <MaterialCommunityIcons name="alert-circle-outline" size={20} color="#f44336" />
+            <Text style={styles.errorText}>{error}</Text>
+            <TouchableOpacity onPress={handleRefresh} style={styles.retryBtn}>
+              <Text style={styles.retryBtnText}>重试</Text>
+            </TouchableOpacity>
           </View>
-        </View>
+        )}
 
-        {/* 每日明细 */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>{t('ioStatistics.inboundStats')}</Text>
-          {dailyStats.map((stat, index) => {
-            const balance = getBalance(stat.inbound, stat.outbound);
-            return (
-              <View key={index} style={styles.dailyStatItem}>
-                <View style={styles.dailyDate}>
-                  <Text style={styles.dailyDay}>{stat.day}</Text>
-                  <Text style={styles.dailyWeekday}>{stat.weekday}</Text>
-                </View>
-                <View style={styles.dailyData}>
-                  <View style={styles.dailyRow}>
-                    <Text style={styles.dailyLabel}>{t('conversion.input')}</Text>
-                    <Text style={styles.dailyValue}>{stat.inbound} kg</Text>
-                  </View>
-                  <View style={styles.dailyRow}>
-                    <Text style={styles.dailyLabel}>{t('conversion.output')}</Text>
-                    <Text style={styles.dailyValue}>{stat.outbound} kg</Text>
-                  </View>
-                </View>
-                <Text
-                  style={[
-                    styles.dailyBalance,
-                    balance >= 0
-                      ? styles.balancePositive
-                      : styles.balanceNegative,
-                  ]}
-                >
-                  {balance >= 0 ? "+" : ""}
-                  {balance}
-                </Text>
-              </View>
-            );
-          })}
-        </View>
+        {/* 空数据态 */}
+        {!error && !loading && lines.length === 0 && (
+          <View style={styles.emptyCard}>
+            <MaterialCommunityIcons name="package-variant-closed" size={40} color="#bbb" />
+            <Text style={styles.emptyText}>
+              {ledger ? '该时间段内暂无出入库记录' : '暂无数据'}
+            </Text>
+          </View>
+        )}
 
-        {/* 品类分析 */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>{t('conversion.categoryAnalysis')}</Text>
-          {categoryStats.map((category, index) => (
-            <View key={index} style={styles.categoryItem}>
-              <View style={styles.categoryInfo}>
-                <Text style={styles.categoryName}>{category.name}</Text>
-                <Text style={styles.categoryPercent}>{category.percent}%</Text>
+        {/* 总览数据 */}
+        {lines.length > 0 && (
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>
+              {activeFilter === 'today' ? '今日汇总' :
+               activeFilter === 'week' ? '近7天汇总' : '本月汇总'}
+            </Text>
+            <View style={styles.overviewRow}>
+              <View style={[styles.overviewCard, styles.overviewCardInbound]}>
+                <View style={styles.overviewIconContainer}>
+                  <Text style={styles.overviewIcon}>IN</Text>
+                </View>
+                <View style={styles.overviewContent}>
+                  <Text style={styles.overviewLabel}>{t('ioStatistics.totalInbound')}</Text>
+                  <Text style={styles.overviewValue}>
+                    {fmtQty(totalInbound)} kg
+                  </Text>
+                </View>
               </View>
-              <View style={styles.categoryBarContainer}>
+              <View style={[styles.overviewCard, styles.overviewCardOutbound]}>
                 <View
                   style={[
-                    styles.categoryBar,
-                    { width: `${category.percent}%` },
+                    styles.overviewIconContainer,
+                    styles.overviewIconOutbound,
                   ]}
-                />
-              </View>
-              <View style={styles.categoryValues}>
-                <Text style={styles.categoryIn}>{t('conversion.input')}: {category.inbound} kg</Text>
-                <Text style={styles.categoryOut}>
-                  {t('conversion.output')}: {category.outbound} kg
-                </Text>
-              </View>
-            </View>
-          ))}
-        </View>
-
-        {/* 趋势图表 */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>{t('conversion.trendAnalysis')}</Text>
-          <View style={styles.chartPlaceholder}>
-            <View style={styles.chartBars}>
-              {dailyStats.map((stat, index) => (
-                <View key={index} style={styles.chartBarGroup}>
-                  <View
-                    style={[
-                      styles.chartBarInbound,
-                      { height: `${(stat.inbound / 600) * 100}%` },
-                    ]}
-                  />
-                  <View
-                    style={[
-                      styles.chartBarOutbound,
-                      { height: `${(stat.outbound / 600) * 100}%` },
-                    ]}
-                  />
-                  <Text style={styles.chartBarLabel}>{stat.weekday}</Text>
-                </View>
-              ))}
-            </View>
-            <View style={styles.chartLegend}>
-              <View style={styles.legendItem}>
-                <View style={[styles.legendDot, { backgroundColor: "#4CAF50" }]} />
-                <Text style={styles.legendText}>{t('conversion.input')}</Text>
-              </View>
-              <View style={styles.legendItem}>
-                <View style={[styles.legendDot, { backgroundColor: "#f57c00" }]} />
-                <Text style={styles.legendText}>{t('conversion.output')}</Text>
-              </View>
-            </View>
-          </View>
-        </View>
-
-        {/* AI 库存预测 */}
-        <View style={styles.aiSection}>
-          <View style={styles.aiHeader}>
-            <View style={styles.aiTitleRow}>
-              <Text style={styles.aiIcon}>🤖</Text>
-              <Text style={styles.aiTitle}>{t('batch.detail.smartAnalysis')}</Text>
-            </View>
-            <View style={styles.aiPeriodTabs}>
-              {(["7", "14", "30"] as AIPredictionPeriod[]).map((period) => (
-                <TouchableOpacity
-                  key={period}
-                  style={[
-                    styles.aiPeriodTab,
-                    aiPeriod === period && styles.aiPeriodTabActive,
-                  ]}
-                  onPress={() => setAIPeriod(period)}
                 >
-                  <Text
-                    style={[
-                      styles.aiPeriodText,
-                      aiPeriod === period && styles.aiPeriodTextActive,
-                    ]}
-                  >
-                    {period}天
+                  <Text style={styles.overviewIconOut}>OUT</Text>
+                </View>
+                <View style={styles.overviewContent}>
+                  <Text style={styles.overviewLabel}>{t('ioStatistics.totalOutbound')}</Text>
+                  <Text style={styles.overviewValue}>
+                    {fmtQty(totalOutbound)} kg
                   </Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-          </View>
-
-          {/* 预测图表 */}
-          <View style={styles.aiChart}>
-            <View style={[styles.aiChartBar, { height: 48 }]} />
-            <View style={[styles.aiChartBar, { height: 44 }]} />
-            <View style={[styles.aiChartBar, { height: 56 }]} />
-            <View style={[styles.aiChartBar, { height: 40 }]} />
-            <View style={[styles.aiChartBar, styles.aiChartBarPredicted, { height: 36 }]} />
-            <View style={[styles.aiChartBar, styles.aiChartBarPredicted, { height: 32 }]} />
-            <View style={[styles.aiChartBar, styles.aiChartBarPredicted, { height: 28 }]} />
-          </View>
-
-          <View style={styles.aiChartLegend}>
-            <View style={styles.aiLegendItem}>
-              <View style={[styles.aiLegendDot, { backgroundColor: "#4CAF50" }]} />
-              <Text style={styles.aiLegendText}>{t('conversion.actualRate')}</Text>
-            </View>
-            <View style={styles.aiLegendItem}>
-              <View style={[styles.aiLegendDot, { backgroundColor: "#81c784" }]} />
-              <Text style={styles.aiLegendText}>{t('batch.detail.smartAnalysis')}</Text>
-            </View>
-          </View>
-
-          {/* 预测摘要 */}
-          <View style={styles.aiSummary}>
-            <View style={styles.aiSummaryItem}>
-              <Text style={styles.aiSummaryValue}>
-                {aiPrediction.expectedConsumption} kg
-              </Text>
-              <Text style={styles.aiSummaryLabel}>{t('batch.detail.consumed')}</Text>
-            </View>
-            <View style={styles.aiSummaryItem}>
-              <Text style={styles.aiSummaryValue}>
-                {aiPrediction.fishStockDays} {String(t('inventoryStats.batchNumber')).split('/')[0]}
-              </Text>
-              <Text style={styles.aiSummaryLabel}>{t('inventoryDetail.availableStock')}</Text>
-            </View>
-            <View style={styles.aiSummaryItem}>
-              <Text style={styles.aiSummaryValue}>
-                {aiPrediction.suggestedRestock} kg
-              </Text>
-              <Text style={styles.aiSummaryLabel}>{t('inventory.warning.lowStock')}</Text>
-            </View>
-          </View>
-
-          {/* 置信度 */}
-          <View style={styles.aiConfidence}>
-            <Text style={styles.aiConfidenceLabel}>{t('batch.detail.qualityScore')}:</Text>
-            <View style={styles.aiConfidenceBadge}>
-              <Text style={styles.aiConfidenceText}>
-                高 ({aiPrediction.confidence}%)
-              </Text>
-            </View>
-          </View>
-
-          {/* AI 洞察 */}
-          <View style={styles.aiInsights}>
-            <View style={styles.aiInsightHeader}>
-              <Text style={styles.aiInsightIcon}>💡</Text>
-              <Text style={styles.aiInsightTitle}>{t('conversion.aiOptimization')}</Text>
-            </View>
-            {aiPrediction.insights.map((insight, index) => (
-              <View
-                key={index}
-                style={[
-                  styles.aiInsightItem,
-                  insight.type === "warning" && styles.aiInsightWarning,
-                  insight.type === "info" && styles.aiInsightInfo,
-                  insight.type === "success" && styles.aiInsightSuccess,
-                ]}
-              >
-                <Text style={styles.aiInsightItemIcon}>{insight.icon}</Text>
-                <Text style={styles.aiInsightText}>{insight.text}</Text>
+                </View>
               </View>
-            ))}
+            </View>
+
+            {/* 期末结存 + 盘调 */}
+            <View style={styles.summaryRow}>
+              <View style={styles.summaryItem}>
+                <Text style={styles.summaryLabel}>期末结存</Text>
+                <Text style={styles.summaryValue}>{fmtQty(totalClosing)} kg</Text>
+              </View>
+              <View style={styles.summaryItem}>
+                <Text style={styles.summaryLabel}>领用出库</Text>
+                <Text style={styles.summaryValue}>{fmtQty(totalOutboundProduction)} kg</Text>
+              </View>
+              <View style={styles.summaryItem}>
+                <Text style={styles.summaryLabel}>销售出库</Text>
+                <Text style={styles.summaryValue}>{fmtQty(totalOutboundSales)} kg</Text>
+              </View>
+              {totalAdjust !== 0 && (
+                <View style={styles.summaryItem}>
+                  <Text style={styles.summaryLabel}>盘盈/损</Text>
+                  <Text style={[
+                    styles.summaryValue,
+                    totalAdjust < 0 ? styles.textDanger : styles.textSuccess,
+                  ]}>
+                    {totalAdjust > 0 ? '+' : ''}{fmtQty(totalAdjust)} kg
+                  </Text>
+                </View>
+              )}
+            </View>
           </View>
-        </View>
+        )}
+
+        {/* 物料明细列表 */}
+        {lines.length > 0 && (
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>物料明细（{lines.length} 种）</Text>
+            {lines.map((line, index) => {
+              const net = (line.inboundQty ?? 0) - (line.outboundProductionQty ?? 0) - (line.outboundSalesQty ?? 0);
+              return (
+                <View key={line.materialTypeId || String(index)} style={styles.lineItem}>
+                  <View style={styles.lineHeader}>
+                    <View style={styles.lineNameBlock}>
+                      <Text style={styles.lineName} numberOfLines={1}>
+                        {line.materialName || '未知物料'}
+                      </Text>
+                      {line.materialCode && (
+                        <Text style={styles.lineCode}>{line.materialCode}</Text>
+                      )}
+                    </View>
+                    <Text
+                      style={[
+                        styles.lineNet,
+                        net >= 0 ? styles.balancePositive : styles.balanceNegative,
+                      ]}
+                    >
+                      净: {net >= 0 ? '+' : ''}{fmtQty(net)}
+                      {line.unit ? ` ${line.unit}` : ' kg'}
+                    </Text>
+                  </View>
+
+                  <View style={styles.lineDetails}>
+                    <View style={styles.lineDetailCol}>
+                      <Text style={styles.lineDetailLabel}>期初</Text>
+                      <Text style={styles.lineDetailValue}>
+                        {fmtQty(line.openingQty)}{line.unit ? ` ${line.unit}` : ''}
+                      </Text>
+                    </View>
+                    <View style={styles.lineDetailCol}>
+                      <Text style={styles.lineDetailLabel}>入库</Text>
+                      <Text style={[styles.lineDetailValue, styles.textSuccess]}>
+                        +{fmtQty(line.inboundQty)}{line.unit ? ` ${line.unit}` : ''}
+                      </Text>
+                    </View>
+                    <View style={styles.lineDetailCol}>
+                      <Text style={styles.lineDetailLabel}>领用</Text>
+                      <Text style={[styles.lineDetailValue, styles.textOrange]}>
+                        -{fmtQty(line.outboundProductionQty)}{line.unit ? ` ${line.unit}` : ''}
+                      </Text>
+                    </View>
+                    <View style={styles.lineDetailCol}>
+                      <Text style={styles.lineDetailLabel}>期末</Text>
+                      <Text style={[styles.lineDetailValue, { fontWeight: '700' }]}>
+                        {fmtQty(line.closingQty)}{line.unit ? ` ${line.unit}` : ''}
+                      </Text>
+                    </View>
+                  </View>
+
+                  {/* 销售出库 + 盘调 (when non-zero) */}
+                  {((line.outboundSalesQty ?? 0) > 0 || (line.adjustQty ?? 0) !== 0 ||
+                    (line.transferInQty ?? 0) !== 0 || (line.transferOutQty ?? 0) !== 0) && (
+                    <View style={styles.lineExtra}>
+                      {(line.outboundSalesQty ?? 0) > 0 && (
+                        <Text style={styles.lineExtraText}>
+                          销售出库: {fmtQty(line.outboundSalesQty)}{line.unit ? ` ${line.unit}` : ''}
+                        </Text>
+                      )}
+                      {(line.transferInQty ?? 0) !== 0 && (
+                        <Text style={styles.lineExtraText}>
+                          调拨入: {fmtQty(line.transferInQty)}{line.unit ? ` ${line.unit}` : ''}
+                        </Text>
+                      )}
+                      {(line.transferOutQty ?? 0) !== 0 && (
+                        <Text style={styles.lineExtraText}>
+                          调拨出: {fmtQty(line.transferOutQty)}{line.unit ? ` ${line.unit}` : ''}
+                        </Text>
+                      )}
+                      {(line.adjustQty ?? 0) !== 0 && (
+                        <Text style={[
+                          styles.lineExtraText,
+                          (line.adjustQty ?? 0) < 0 ? styles.textDanger : styles.textSuccess,
+                        ]}>
+                          盘点调整: {(line.adjustQty ?? 0) > 0 ? '+' : ''}{fmtQty(line.adjustQty)}{line.unit ? ` ${line.unit}` : ''}
+                        </Text>
+                      )}
+                    </View>
+                  )}
+                </View>
+              );
+            })}
+          </View>
+        )}
 
         {/* 操作按钮 */}
         <View style={styles.actionButtons}>
@@ -408,12 +444,13 @@ export function WHIOStatisticsScreen() {
             {t('conversion.exportReport')}
           </Button>
           <Button
-            mode="contained"
-            onPress={handleShare}
-            style={styles.actionBtnPrimary}
-            labelStyle={{ color: "#fff" }}
+            mode="outlined"
+            onPress={handleRefresh}
+            style={styles.actionBtnSecondary}
+            labelStyle={{ color: "#4CAF50" }}
+            disabled={loading || refreshing}
           >
-            {t('conversion.generateReport')}
+            刷新
           </Button>
         </View>
 
@@ -449,8 +486,8 @@ const styles = StyleSheet.create({
     color: "#fff",
   },
   headerSubtitle: {
-    fontSize: 12,
-    color: "rgba(255,255,255,0.8)",
+    fontSize: 11,
+    color: "rgba(255,255,255,0.85)",
     marginTop: 2,
   },
   headerRight: {
@@ -459,6 +496,7 @@ const styles = StyleSheet.create({
   content: {
     flex: 1,
   },
+  // ---- Filter tabs ----
   filterTabs: {
     flexDirection: "row",
     paddingHorizontal: 16,
@@ -466,8 +504,8 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   filterTab: {
-    paddingHorizontal: 12,
-    paddingVertical: 6,
+    paddingHorizontal: 14,
+    paddingVertical: 7,
     borderRadius: 16,
     backgroundColor: "#fff",
   },
@@ -482,6 +520,58 @@ const styles = StyleSheet.create({
     color: "#fff",
     fontWeight: "500",
   },
+  // ---- Center states ----
+  centerState: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 12,
+  },
+  centerStateText: {
+    fontSize: 14,
+    color: "#999",
+  },
+  // ---- Error / Empty ----
+  errorCard: {
+    marginHorizontal: 16,
+    marginTop: 12,
+    backgroundColor: "#fff",
+    borderRadius: 12,
+    padding: 16,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    borderLeftWidth: 3,
+    borderLeftColor: "#f44336",
+  },
+  errorText: {
+    flex: 1,
+    fontSize: 13,
+    color: "#f44336",
+    lineHeight: 18,
+  },
+  retryBtn: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    backgroundColor: "#f44336",
+    borderRadius: 6,
+  },
+  retryBtnText: {
+    color: "#fff",
+    fontSize: 12,
+    fontWeight: "500",
+  },
+  emptyCard: {
+    marginHorizontal: 16,
+    marginTop: 32,
+    alignItems: "center",
+    gap: 12,
+  },
+  emptyText: {
+    fontSize: 14,
+    color: "#bbb",
+  },
+  // ---- Section ----
   section: {
     backgroundColor: "#fff",
     marginHorizontal: 16,
@@ -490,14 +580,18 @@ const styles = StyleSheet.create({
     padding: 16,
   },
   sectionTitle: {
-    fontSize: 14,
+    fontSize: 13,
     fontWeight: "600",
     color: "#999",
     marginBottom: 12,
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
   },
+  // ---- Overview cards ----
   overviewRow: {
     flexDirection: "row",
     gap: 12,
+    marginBottom: 12,
   },
   overviewCard: {
     flex: 1,
@@ -542,325 +636,97 @@ const styles = StyleSheet.create({
     color: "#666",
   },
   overviewValue: {
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: "bold",
     color: "#333",
-    marginVertical: 2,
+    marginTop: 2,
   },
-  overviewChangePositive: {
-    fontSize: 11,
-    color: "#4CAF50",
-  },
-  dailyStatItem: {
+  // ---- Summary row ----
+  summaryRow: {
     flexDirection: "row",
-    alignItems: "center",
-    paddingVertical: 10,
+    flexWrap: "wrap",
+    gap: 8,
+    marginTop: 4,
+  },
+  summaryItem: {
+    backgroundColor: "#f9f9f9",
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    minWidth: "45%",
+    flex: 1,
+  },
+  summaryLabel: {
+    fontSize: 11,
+    color: "#999",
+    marginBottom: 2,
+  },
+  summaryValue: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: "#333",
+  },
+  // ---- Line items ----
+  lineItem: {
+    paddingVertical: 12,
     borderBottomWidth: 1,
     borderBottomColor: "#f0f0f0",
   },
-  dailyDate: {
-    width: 50,
-    alignItems: "center",
-  },
-  dailyDay: {
-    fontSize: 18,
-    fontWeight: "bold",
-    color: "#333",
-  },
-  dailyWeekday: {
-    fontSize: 11,
-    color: "#999",
-  },
-  dailyData: {
-    flex: 1,
-    marginLeft: 12,
-  },
-  dailyRow: {
+  lineHeader: {
     flexDirection: "row",
     justifyContent: "space-between",
-    marginBottom: 2,
-  },
-  dailyLabel: {
-    fontSize: 12,
-    color: "#999",
-  },
-  dailyValue: {
-    fontSize: 13,
-    color: "#333",
-  },
-  dailyBalance: {
-    fontSize: 14,
-    fontWeight: "600",
-    minWidth: 50,
-    textAlign: "right",
-  },
-  balancePositive: {
-    color: "#4CAF50",
-  },
-  balanceNegative: {
-    color: "#f44336",
-  },
-  categoryItem: {
-    marginBottom: 12,
-  },
-  categoryInfo: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    marginBottom: 4,
-  },
-  categoryName: {
-    fontSize: 13,
-    fontWeight: "500",
-    color: "#333",
-  },
-  categoryPercent: {
-    fontSize: 13,
-    color: "#4CAF50",
-    fontWeight: "600",
-  },
-  categoryBarContainer: {
-    height: 6,
-    backgroundColor: "#e0e0e0",
-    borderRadius: 3,
-    marginBottom: 4,
-  },
-  categoryBar: {
-    height: "100%",
-    backgroundColor: "#4CAF50",
-    borderRadius: 3,
-  },
-  categoryValues: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-  },
-  categoryIn: {
-    fontSize: 11,
-    color: "#4CAF50",
-  },
-  categoryOut: {
-    fontSize: 11,
-    color: "#f57c00",
-  },
-  chartPlaceholder: {
-    backgroundColor: "#f9f9f9",
-    borderRadius: 8,
-    padding: 16,
-  },
-  chartBars: {
-    flexDirection: "row",
-    justifyContent: "space-around",
-    alignItems: "flex-end",
-    height: 100,
-    marginBottom: 12,
-  },
-  chartBarGroup: {
-    alignItems: "center",
-    gap: 4,
-  },
-  chartBarInbound: {
-    width: 16,
-    backgroundColor: "#4CAF50",
-    borderRadius: 2,
-  },
-  chartBarOutbound: {
-    width: 16,
-    backgroundColor: "#f57c00",
-    borderRadius: 2,
-  },
-  chartBarLabel: {
-    fontSize: 10,
-    color: "#999",
-    marginTop: 4,
-  },
-  chartLegend: {
-    flexDirection: "row",
-    justifyContent: "center",
-    gap: 20,
-  },
-  legendItem: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 4,
-  },
-  legendDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-  },
-  legendText: {
-    fontSize: 11,
-    color: "#666",
-  },
-  aiSection: {
-    backgroundColor: "#fff",
-    marginHorizontal: 16,
-    marginTop: 12,
-    borderRadius: 12,
-    padding: 16,
-    borderWidth: 1,
-    borderColor: "#e8f5e9",
-  },
-  aiHeader: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginBottom: 16,
-  },
-  aiTitleRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-  },
-  aiIcon: {
-    fontSize: 18,
-  },
-  aiTitle: {
-    fontSize: 15,
-    fontWeight: "600",
-    color: "#333",
-  },
-  aiPeriodTabs: {
-    flexDirection: "row",
-    gap: 4,
-  },
-  aiPeriodTab: {
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 12,
-    backgroundColor: "#f5f5f5",
-  },
-  aiPeriodTabActive: {
-    backgroundColor: "#4CAF50",
-  },
-  aiPeriodText: {
-    fontSize: 11,
-    color: "#666",
-  },
-  aiPeriodTextActive: {
-    color: "#fff",
-    fontWeight: "500",
-  },
-  aiChart: {
-    flexDirection: "row",
-    justifyContent: "space-around",
-    alignItems: "flex-end",
-    height: 80,
-    marginBottom: 12,
-  },
-  aiChartBar: {
-    width: 24,
-    backgroundColor: "#4CAF50",
-    borderRadius: 4,
-  },
-  aiChartBarPredicted: {
-    backgroundColor: "#81c784",
-  },
-  aiChartLegend: {
-    flexDirection: "row",
-    justifyContent: "center",
-    gap: 20,
-    marginBottom: 16,
-  },
-  aiLegendItem: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 4,
-  },
-  aiLegendDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-  },
-  aiLegendText: {
-    fontSize: 11,
-    color: "#666",
-  },
-  aiSummary: {
-    flexDirection: "row",
-    justifyContent: "space-around",
-    marginBottom: 12,
-  },
-  aiSummaryItem: {
-    alignItems: "center",
-  },
-  aiSummaryValue: {
-    fontSize: 16,
-    fontWeight: "bold",
-    color: "#333",
-  },
-  aiSummaryLabel: {
-    fontSize: 11,
-    color: "#999",
-    marginTop: 2,
-  },
-  aiConfidence: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    marginBottom: 16,
-  },
-  aiConfidenceLabel: {
-    fontSize: 12,
-    color: "#666",
-    marginRight: 8,
-  },
-  aiConfidenceBadge: {
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    backgroundColor: "#e8f5e9",
-    borderRadius: 12,
-  },
-  aiConfidenceText: {
-    fontSize: 12,
-    color: "#4CAF50",
-    fontWeight: "500",
-  },
-  aiInsights: {
-    backgroundColor: "#f9f9f9",
-    borderRadius: 8,
-    padding: 12,
-  },
-  aiInsightHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-    marginBottom: 12,
-  },
-  aiInsightIcon: {
-    fontSize: 14,
-  },
-  aiInsightTitle: {
-    fontSize: 13,
-    fontWeight: "600",
-    color: "#333",
-  },
-  aiInsightItem: {
-    flexDirection: "row",
     alignItems: "flex-start",
-    padding: 8,
-    borderRadius: 6,
     marginBottom: 8,
   },
-  aiInsightWarning: {
-    backgroundColor: "#fff3e0",
+  lineNameBlock: {
+    flex: 1,
+    marginRight: 12,
   },
-  aiInsightInfo: {
-    backgroundColor: "#e3f2fd",
+  lineName: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: "#333",
   },
-  aiInsightSuccess: {
-    backgroundColor: "#e8f5e9",
-  },
-  aiInsightItemIcon: {
-    fontSize: 12,
-    marginRight: 8,
+  lineCode: {
+    fontSize: 11,
+    color: "#aaa",
     marginTop: 1,
   },
-  aiInsightText: {
+  lineNet: {
+    fontSize: 13,
+    fontWeight: "600",
+  },
+  lineDetails: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+  },
+  lineDetailCol: {
+    alignItems: "center",
     flex: 1,
+  },
+  lineDetailLabel: {
+    fontSize: 10,
+    color: "#aaa",
+    marginBottom: 2,
+  },
+  lineDetailValue: {
     fontSize: 12,
     color: "#333",
-    lineHeight: 18,
   },
+  lineExtra: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+    marginTop: 6,
+    paddingTop: 6,
+    borderTopWidth: 1,
+    borderTopColor: "#f5f5f5",
+  },
+  lineExtraText: {
+    fontSize: 11,
+    color: "#999",
+  },
+  // ---- Action buttons ----
   actionButtons: {
     flexDirection: "row",
     paddingHorizontal: 16,
@@ -872,10 +738,21 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     borderColor: "#ddd",
   },
-  actionBtnPrimary: {
-    flex: 1,
-    borderRadius: 8,
-    backgroundColor: "#4CAF50",
+  // ---- Colour utils ----
+  balancePositive: {
+    color: "#4CAF50",
+  },
+  balanceNegative: {
+    color: "#f44336",
+  },
+  textSuccess: {
+    color: "#4CAF50",
+  },
+  textOrange: {
+    color: "#f57c00",
+  },
+  textDanger: {
+    color: "#f44336",
   },
 });
 
