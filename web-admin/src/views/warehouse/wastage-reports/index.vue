@@ -1,0 +1,653 @@
+<script setup lang="ts">
+import { ref, computed, onMounted, watch } from 'vue';
+import { useAuthStore } from '@/store/modules/auth';
+import { usePermissionStore } from '@/store/modules/permission';
+import { get, post } from '@/api/request';
+import { ElMessage } from 'element-plus';
+import { Plus, Search, Refresh, View, Check, Close, Picture } from '@element-plus/icons-vue';
+import type { TableRow } from '@/types/api';
+import { warehouseTypeBadge } from '@/utils/warehouse';
+
+// Safe helpers — Vue template compiler does not support optional chaining (?.)
+// in attribute bindings; delegate to these plain functions instead.
+function wBadgeColor(type: unknown): string | undefined {
+  return warehouseTypeBadge(String(type || ''))?.color;
+}
+function wBadgeLabel(type: unknown): string | undefined {
+  return warehouseTypeBadge(String(type || ''))?.label;
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Auth / permissions
+// ────────────────────────────────────────────────────────────────────────────
+const authStore = useAuthStore();
+const permissionStore = usePermissionStore();
+const factoryId = computed(() => authStore.factoryId);
+const canWrite = computed(() => permissionStore.canWrite('warehouse'));
+
+// ────────────────────────────────────────────────────────────────────────────
+// Tab: WAREHOUSE / FACTORY
+// ────────────────────────────────────────────────────────────────────────────
+const activeTab = ref<'WAREHOUSE' | 'FACTORY'>('WAREHOUSE');
+
+// ────────────────────────────────────────────────────────────────────────────
+// Status / reason maps
+// ────────────────────────────────────────────────────────────────────────────
+const statusMap: Record<string, { label: string; type: string }> = {
+  DRAFT: { label: '草稿', type: 'info' },
+  PENDING_APPROVAL: { label: '待审批', type: 'warning' },
+  APPROVED: { label: '已审批', type: 'success' },
+  REJECTED: { label: '已驳回', type: 'danger' },
+  APPLIED: { label: '已应用', type: 'success' },
+};
+
+const reasonOptions = [
+  { value: 'EXPIRED', label: '过期/变质' },
+  { value: 'DAMAGED', label: '物理损坏' },
+  { value: 'CONTAMINATED', label: '污染/不合格' },
+  { value: 'THEFT', label: '丢失/盗失' },
+  { value: 'PRODUCTION_WASTE', label: '生产损耗' },
+  { value: 'OTHER', label: '其他' },
+];
+
+function reasonLabel(val: string) {
+  return reasonOptions.find((o) => o.value === val)?.label || val;
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// List state
+// ────────────────────────────────────────────────────────────────────────────
+const loading = ref(false);
+const tableData = ref<TableRow[]>([]);
+const pagination = ref({ page: 1, size: 20, total: 0 });
+const statusFilter = ref('');
+
+async function loadData() {
+  if (!factoryId.value) return;
+  loading.value = true;
+  try {
+    const params: Record<string, unknown> = {
+      page: pagination.value.page,
+      size: pagination.value.size,
+      trackType: activeTab.value,
+    };
+    if (statusFilter.value) params.status = statusFilter.value;
+    const res = await get(`/${factoryId.value}/wastage-reports`, { params });
+    if (res.success && res.data) {
+      const d = res.data;
+      tableData.value = d.content || d || [];
+      pagination.value.total = d.totalElements ?? tableData.value.length;
+    }
+  } catch (e) {
+    ElMessage({ message: String((e as Error).message || '加载失败'), type: 'error', duration: 0, showClose: true });
+  } finally {
+    loading.value = false;
+  }
+}
+
+function handlePageChange(page: number) {
+  pagination.value.page = page;
+  loadData();
+}
+
+function handleTabChange() {
+  pagination.value.page = 1;
+  statusFilter.value = '';
+  loadData();
+}
+
+function handleFilterChange() {
+  pagination.value.page = 1;
+  loadData();
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Warehouses dropdown
+// ────────────────────────────────────────────────────────────────────────────
+const warehouses = ref<TableRow[]>([]);
+
+async function loadWarehouses() {
+  if (!factoryId.value) return;
+  try {
+    const res = await get(`/${factoryId.value}/factory/warehouses`);
+    if (res.success && Array.isArray(res.data)) warehouses.value = res.data;
+  } catch { /* silent */ }
+}
+
+function warehouseName(id: string) {
+  const w = warehouses.value.find((x) => String(x.id) === String(id));
+  return w ? String(w.name || id) : id;
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Create wastage report dialog
+// ────────────────────────────────────────────────────────────────────────────
+const createDialogVisible = ref(false);
+const createLoading = ref(false);
+const createForm = ref({
+  warehouseId: '',
+  materialBatchId: '',
+  rawMaterialTypeId: '',
+  wastageQty: null as number | null,
+  wastageReason: '',
+  reasonDetail: '',
+  photoUrls: [] as string[],
+  notes: '',
+});
+
+// Photo URL input (comma or newline separated)
+const photoInput = ref('');
+
+function parsePhotoUrls(raw: string): string[] {
+  return raw
+    .split(/[\n,]+/)
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+}
+
+watch(photoInput, (v) => {
+  createForm.value.photoUrls = parsePhotoUrls(v);
+});
+
+function openCreateDialog() {
+  createForm.value = {
+    warehouseId: '',
+    materialBatchId: '',
+    rawMaterialTypeId: '',
+    wastageQty: null,
+    wastageReason: '',
+    reasonDetail: '',
+    photoUrls: [],
+    notes: '',
+  };
+  photoInput.value = '';
+  createDialogVisible.value = true;
+}
+
+async function submitCreate() {
+  const form = createForm.value;
+  if (!form.warehouseId) {
+    ElMessage({ message: '请选择仓库', type: 'warning', duration: 3000 });
+    return;
+  }
+  if (!form.wastageQty || form.wastageQty <= 0) {
+    ElMessage({ message: '请填写报损数量', type: 'warning', duration: 3000 });
+    return;
+  }
+  if (!form.wastageReason) {
+    ElMessage({ message: '请选择报损原因', type: 'warning', duration: 3000 });
+    return;
+  }
+  if (form.photoUrls.length === 0) {
+    ElMessage({ message: '至少需要上传1张照片证据（请填写照片URL）', type: 'warning', duration: 3000 });
+    return;
+  }
+  createLoading.value = true;
+  try {
+    const payload = {
+      trackType: activeTab.value,
+      warehouseId: form.warehouseId,
+      materialBatchId: form.materialBatchId || undefined,
+      rawMaterialTypeId: form.rawMaterialTypeId || undefined,
+      wastageQty: form.wastageQty,
+      wastageReason: form.wastageReason,
+      reasonDetail: form.wastageReason === 'OTHER' ? form.reasonDetail : undefined,
+      photoUrls: form.photoUrls,
+      notes: form.notes || undefined,
+    };
+    const res = await post(`/${factoryId.value}/wastage-reports`, payload);
+    if (res.success) {
+      ElMessage({ message: '报损记录已创建（草稿）', type: 'success', duration: 3000 });
+      createDialogVisible.value = false;
+      loadData();
+    } else {
+      ElMessage({ message: res.message || '创建失败', type: 'error', duration: 0, showClose: true });
+    }
+  } catch (e) {
+    ElMessage({ message: String((e as Error).message || '创建失败'), type: 'error', duration: 0, showClose: true });
+  } finally {
+    createLoading.value = false;
+  }
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Submit for approval
+// ────────────────────────────────────────────────────────────────────────────
+const submitLoading = ref(false);
+
+async function submitForApproval(row: TableRow) {
+  submitLoading.value = true;
+  try {
+    const res = await post(`/${factoryId.value}/wastage-reports/${row.id}/submit`, {});
+    if (res.success) {
+      ElMessage({ message: '已提交审批', type: 'success', duration: 3000 });
+      loadData();
+    } else {
+      ElMessage({ message: res.message || '提交失败', type: 'error', duration: 0, showClose: true });
+    }
+  } catch (e) {
+    ElMessage({ message: String((e as Error).message || '提交失败'), type: 'error', duration: 0, showClose: true });
+  } finally {
+    submitLoading.value = false;
+  }
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Approve dialog
+// ────────────────────────────────────────────────────────────────────────────
+const approveDialogVisible = ref(false);
+const approveLoading = ref(false);
+const approveRow = ref<TableRow | null>(null);
+const approveNote = ref('');
+
+function openApproveDialog(row: TableRow) {
+  approveRow.value = row;
+  approveNote.value = '';
+  approveDialogVisible.value = true;
+}
+
+async function submitApprove() {
+  if (!approveRow.value) return;
+  approveLoading.value = true;
+  try {
+    const res = await post(`/${factoryId.value}/wastage-reports/${approveRow.value.id}/approve`, { notes: approveNote.value });
+    if (res.success) {
+      ElMessage({ message: '审批通过', type: 'success', duration: 3000 });
+      approveDialogVisible.value = false;
+      loadData();
+    } else {
+      ElMessage({ message: res.message || '审批失败', type: 'error', duration: 0, showClose: true });
+    }
+  } catch (e) {
+    ElMessage({ message: String((e as Error).message || '审批失败'), type: 'error', duration: 0, showClose: true });
+  } finally {
+    approveLoading.value = false;
+  }
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Reject dialog
+// ────────────────────────────────────────────────────────────────────────────
+const rejectDialogVisible = ref(false);
+const rejectLoading = ref(false);
+const rejectRow = ref<TableRow | null>(null);
+const rejectReasonSelect = ref('');
+const rejectReasonOther = ref('');
+
+const rejectReasonOptions = [
+  { value: 'PHOTO_MISSING', label: '照片证据不足' },
+  { value: 'QTY_MISMATCH', label: '数量与实物不符' },
+  { value: 'REASON_INVALID', label: '报损原因不充分' },
+  { value: 'WRONG_BATCH', label: '批次信息有误' },
+  { value: 'OTHER', label: '其他' },
+];
+
+function openRejectDialog(row: TableRow) {
+  rejectRow.value = row;
+  rejectReasonSelect.value = '';
+  rejectReasonOther.value = '';
+  rejectDialogVisible.value = true;
+}
+
+async function submitReject() {
+  if (!rejectRow.value) return;
+  const reason = rejectReasonSelect.value === 'OTHER'
+    ? rejectReasonOther.value.trim()
+    : rejectReasonOptions.find((o) => o.value === rejectReasonSelect.value)?.label || '';
+  if (!reason) {
+    ElMessage({ message: '请选择驳回原因', type: 'warning', duration: 3000 });
+    return;
+  }
+  rejectLoading.value = true;
+  try {
+    const res = await post(`/${factoryId.value}/wastage-reports/${rejectRow.value.id}/reject`, { reason });
+    if (res.success) {
+      ElMessage({ message: '已驳回', type: 'success', duration: 3000 });
+      rejectDialogVisible.value = false;
+      loadData();
+    } else {
+      ElMessage({ message: res.message || '驳回失败', type: 'error', duration: 0, showClose: true });
+    }
+  } catch (e) {
+    ElMessage({ message: String((e as Error).message || '驳回失败'), type: 'error', duration: 0, showClose: true });
+  } finally {
+    rejectLoading.value = false;
+  }
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Photo viewer dialog
+// ────────────────────────────────────────────────────────────────────────────
+const photoViewerVisible = ref(false);
+const viewingPhotos = ref<string[]>([]);
+
+function openPhotoViewer(row: TableRow) {
+  const urls = row.photoUrls;
+  if (Array.isArray(urls)) {
+    viewingPhotos.value = urls.map(String);
+  } else if (typeof urls === 'string') {
+    try {
+      viewingPhotos.value = JSON.parse(urls);
+    } catch {
+      viewingPhotos.value = [urls];
+    }
+  } else {
+    viewingPhotos.value = [];
+  }
+  if (viewingPhotos.value.length === 0) {
+    ElMessage({ message: '该记录暂无照片', type: 'info', duration: 3000 });
+    return;
+  }
+  photoViewerVisible.value = true;
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Init
+// ────────────────────────────────────────────────────────────────────────────
+onMounted(async () => {
+  await loadWarehouses();
+  await loadData();
+});
+</script>
+
+<template>
+  <div class="page-container">
+    <div class="page-header">
+      <h2>报损管理</h2>
+      <div class="header-actions">
+        <el-select
+          v-model="statusFilter"
+          placeholder="全部状态"
+          clearable
+          style="width: 140px; margin-right: 12px"
+          @change="handleFilterChange"
+        >
+          <el-option v-for="(v, k) in statusMap" :key="k" :label="v.label" :value="k" />
+        </el-select>
+        <el-button :icon="Refresh" @click="loadData">刷新</el-button>
+        <el-button v-if="canWrite" type="primary" :icon="Plus" @click="openCreateDialog">
+          新建报损
+        </el-button>
+      </div>
+    </div>
+
+    <!-- Cost note banner -->
+    <el-alert
+      type="info"
+      show-icon
+      :closable="false"
+      title="报损出库将计入损耗成本，审批通过并应用后自动扣减库存。"
+      style="margin-bottom: 16px"
+    />
+
+    <!-- Dual-track tabs -->
+    <el-tabs v-model="activeTab" type="border-card" style="margin-bottom: 16px" @tab-change="handleTabChange">
+      <el-tab-pane label="仓库报损 → 财务审批" name="WAREHOUSE" />
+      <el-tab-pane label="生产报损 → 厂长审批" name="FACTORY" />
+    </el-tabs>
+
+    <el-card>
+      <el-table v-loading="loading" :data="tableData" row-key="id" stripe>
+        <el-table-column label="报损单号" prop="reportNo" min-width="150" />
+        <el-table-column label="仓库" min-width="110">
+          <template #default="{ row }">{{ warehouseName(String(row.warehouseId)) }}</template>
+        </el-table-column>
+        <el-table-column label="批次" prop="materialBatchId" min-width="110">
+          <template #default="{ row }">{{ row.materialBatchId || '—' }}</template>
+        </el-table-column>
+        <el-table-column label="报损数量" prop="wastageQty" width="100" align="right" />
+        <el-table-column label="报损原因" width="120">
+          <template #default="{ row }">{{ reasonLabel(String(row.wastageReason)) }}</template>
+        </el-table-column>
+        <el-table-column label="状态" width="100">
+          <template #default="{ row }">
+            <el-tag :type="(statusMap[String(row.status)]?.type as 'info' | 'warning' | 'success' | 'danger') || 'info'" size="small">
+              {{ statusMap[String(row.status)]?.label || row.status }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="提交人" prop="submittedBy" width="100">
+          <template #default="{ row }">{{ row.submittedBy || '—' }}</template>
+        </el-table-column>
+        <el-table-column label="创建时间" prop="createdAt" min-width="150">
+          <template #default="{ row }">
+            {{ row.createdAt ? String(row.createdAt).replace('T', ' ').slice(0, 16) : '—' }}
+          </template>
+        </el-table-column>
+        <el-table-column label="操作" width="280" fixed="right">
+          <template #default="{ row }">
+            <!-- 查看照片 -->
+            <el-button size="small" :icon="Picture" @click="openPhotoViewer(row)">照片</el-button>
+            <!-- 提交审批: DRAFT -->
+            <el-button
+              v-if="canWrite && row.status === 'DRAFT'"
+              size="small"
+              type="warning"
+              :loading="submitLoading"
+              @click="submitForApproval(row)"
+            >提交审批</el-button>
+            <!-- 审批: PENDING_APPROVAL -->
+            <el-button
+              v-if="canWrite && row.status === 'PENDING_APPROVAL'"
+              size="small"
+              type="success"
+              :icon="Check"
+              @click="openApproveDialog(row)"
+            >审批</el-button>
+            <el-button
+              v-if="canWrite && row.status === 'PENDING_APPROVAL'"
+              size="small"
+              type="danger"
+              :icon="Close"
+              @click="openRejectDialog(row)"
+            >驳回</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+
+      <div style="display: flex; justify-content: flex-end; margin-top: 16px">
+        <el-pagination
+          v-model:current-page="pagination.page"
+          :page-size="pagination.size"
+          :total="pagination.total"
+          layout="total, prev, pager, next"
+          @current-change="handlePageChange"
+        />
+      </div>
+    </el-card>
+
+    <!-- ──────────────── Create Dialog ──────────────── -->
+    <el-dialog v-model="createDialogVisible" title="新建报损记录" width="560px">
+      <el-alert
+        type="warning"
+        show-icon
+        :closable="false"
+        title="报损出库计入损耗成本。至少上传1张照片证据（照片URL）。"
+        style="margin-bottom: 16px"
+      />
+      <el-form label-width="110px">
+        <el-form-item label="报损类型">
+          <el-radio-group v-model="activeTab">
+            <el-radio-button value="WAREHOUSE">仓库报损</el-radio-button>
+            <el-radio-button value="FACTORY">生产报损</el-radio-button>
+          </el-radio-group>
+          <el-text type="info" style="font-size: 12px; margin-left: 8px">
+            {{ activeTab === 'WAREHOUSE' ? '财务审批' : '厂长审批' }}
+          </el-text>
+        </el-form-item>
+        <el-form-item label="仓库" required>
+          <el-select v-model="createForm.warehouseId" placeholder="选择仓库" style="width: 100%">
+            <el-option v-for="w in warehouses" :key="String(w.id)" :label="String(w.name)" :value="String(w.id)">
+              <span>{{ w.name }}</span>
+              <el-tag
+                v-if="wBadgeLabel(w.type)"
+                size="small"
+                style="margin-left: 8px; font-size: 11px"
+                :color="wBadgeColor(w.type)"
+                effect="plain"
+              >{{ wBadgeLabel(w.type) }}</el-tag>
+            </el-option>
+          </el-select>
+        </el-form-item>
+        <el-form-item label="批次ID">
+          <el-input v-model="createForm.materialBatchId" placeholder="可选，填批次ID" />
+        </el-form-item>
+        <el-form-item label="报损数量" required>
+          <el-input-number
+            v-model="createForm.wastageQty"
+            :min="0.001"
+            :precision="3"
+            style="width: 200px"
+            placeholder="数量"
+          />
+        </el-form-item>
+        <el-form-item label="报损原因" required>
+          <el-select v-model="createForm.wastageReason" placeholder="选择原因" style="width: 100%">
+            <el-option v-for="opt in reasonOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
+          </el-select>
+        </el-form-item>
+        <el-form-item v-if="createForm.wastageReason === 'OTHER'" label="补充说明" required>
+          <el-input v-model="createForm.reasonDetail" type="textarea" :rows="2" placeholder="请填写具体原因" />
+        </el-form-item>
+        <el-form-item label="照片证据" required>
+          <el-input
+            v-model="photoInput"
+            type="textarea"
+            :rows="3"
+            placeholder="每行或逗号分隔填写照片URL（至少1张）"
+          />
+          <el-text type="info" style="font-size: 12px">已录入 {{ createForm.photoUrls.length }} 张</el-text>
+        </el-form-item>
+        <el-form-item label="备注">
+          <el-input v-model="createForm.notes" type="textarea" :rows="2" placeholder="可选" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="createDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="createLoading" @click="submitCreate">保存草稿</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- ──────────────── Approve Dialog ──────────────── -->
+    <el-dialog v-model="approveDialogVisible" title="审批报损申请" width="520px">
+      <template v-if="approveRow">
+        <el-descriptions :column="2" border style="margin-bottom: 16px">
+          <el-descriptions-item label="报损单号">{{ approveRow.reportNo }}</el-descriptions-item>
+          <el-descriptions-item label="审批路径">
+            <el-tag type="info" size="small">
+              {{ activeTab === 'WAREHOUSE' ? '仓库报损 → 财务审批' : '生产报损 → 厂长审批' }}
+            </el-tag>
+          </el-descriptions-item>
+          <el-descriptions-item label="仓库">{{ warehouseName(String(approveRow.warehouseId)) }}</el-descriptions-item>
+          <el-descriptions-item label="报损数量">{{ approveRow.wastageQty }}</el-descriptions-item>
+          <el-descriptions-item label="报损原因">{{ reasonLabel(String(approveRow.wastageReason)) }}</el-descriptions-item>
+          <el-descriptions-item label="提交人">{{ approveRow.submittedBy || '—' }}</el-descriptions-item>
+        </el-descriptions>
+
+        <!-- Photo thumbnails -->
+        <div v-if="approveRow.photoUrls && (Array.isArray(approveRow.photoUrls) ? approveRow.photoUrls.length > 0 : true)" style="margin-bottom: 16px">
+          <div style="font-size: 13px; color: #606266; margin-bottom: 6px">照片证据：</div>
+          <div style="display: flex; gap: 8px; flex-wrap: wrap">
+            <el-image
+              v-for="(url, i) in (Array.isArray(approveRow.photoUrls) ? approveRow.photoUrls : [])"
+              :key="i"
+              :src="String(url)"
+              :preview-src-list="Array.isArray(approveRow.photoUrls) ? approveRow.photoUrls.map(String) : []"
+              fit="cover"
+              style="width: 80px; height: 80px; border-radius: 4px; object-fit: cover"
+            />
+          </div>
+        </div>
+
+        <el-alert type="warning" show-icon :closable="false" title="审批通过后，报损数量将计入损耗成本并扣减对应库存。" style="margin-bottom: 12px" />
+
+        <el-form label-width="80px">
+          <el-form-item label="审批备注">
+            <el-input v-model="approveNote" type="textarea" :rows="2" placeholder="可选" />
+          </el-form-item>
+        </el-form>
+      </template>
+      <template #footer>
+        <el-button @click="approveDialogVisible = false">取消</el-button>
+        <el-button type="success" :loading="approveLoading" @click="submitApprove">确认审批通过</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- ──────────────── Reject Dialog ──────────────── -->
+    <el-dialog v-model="rejectDialogVisible" title="驳回报损申请" width="480px">
+      <template v-if="rejectRow">
+        <el-descriptions :column="2" border style="margin-bottom: 16px">
+          <el-descriptions-item label="报损单号">{{ rejectRow.reportNo }}</el-descriptions-item>
+          <el-descriptions-item label="仓库">{{ warehouseName(String(rejectRow.warehouseId)) }}</el-descriptions-item>
+          <el-descriptions-item label="报损数量">{{ rejectRow.wastageQty }}</el-descriptions-item>
+          <el-descriptions-item label="原因">{{ reasonLabel(String(rejectRow.wastageReason)) }}</el-descriptions-item>
+        </el-descriptions>
+        <el-form label-width="100px">
+          <el-form-item label="驳回原因" required>
+            <el-select v-model="rejectReasonSelect" placeholder="选择驳回原因" style="width: 100%">
+              <el-option v-for="opt in rejectReasonOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
+            </el-select>
+          </el-form-item>
+          <el-form-item v-if="rejectReasonSelect === 'OTHER'" label="补充说明" required>
+            <el-input v-model="rejectReasonOther" type="textarea" :rows="2" placeholder="请填写具体原因" />
+          </el-form-item>
+        </el-form>
+      </template>
+      <template #footer>
+        <el-button @click="rejectDialogVisible = false">取消</el-button>
+        <el-button type="danger" :loading="rejectLoading" @click="submitReject">确认驳回</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- ──────────────── Photo Viewer Dialog ──────────────── -->
+    <el-dialog v-model="photoViewerVisible" title="照片证据查看" width="640px">
+      <div style="display: flex; flex-wrap: wrap; gap: 12px; justify-content: center">
+        <el-image
+          v-for="(url, i) in viewingPhotos"
+          :key="i"
+          :src="url"
+          :preview-src-list="viewingPhotos"
+          fit="contain"
+          style="width: 180px; height: 180px; border: 1px solid #e4e7ed; border-radius: 6px"
+        >
+          <template #error>
+            <div style="display: flex; align-items: center; justify-content: center; height: 100%; color: #c0c4cc; font-size: 12px">
+              图片加载失败
+            </div>
+          </template>
+        </el-image>
+      </div>
+      <template #footer>
+        <el-button @click="photoViewerVisible = false">关闭</el-button>
+      </template>
+    </el-dialog>
+  </div>
+</template>
+
+<style scoped>
+.page-container {
+  padding: 20px;
+  background: #F4F6F9;
+  min-height: 100%;
+}
+.page-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+.page-header h2 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+  color: #1B65A8;
+}
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.el-card {
+  border-radius: 10px;
+}
+</style>

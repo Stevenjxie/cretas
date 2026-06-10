@@ -49,3 +49,35 @@ export function warehouseDisplayName(
   if (code) return code;
   return '-';
 }
+
+/**
+ * WarehouseType enum → customer-facing badge label (SP7 六扇门 ERP-lite).
+ *
+ * Mapping based on FactoryWarehouse.WarehouseType Java enum:
+ *   RAW / WIP / FINISHED / LINESIDE / RETURNS / SCRAP / TEMP / QC / OUTSOURCE / TRANSFER / SALTED
+ *
+ * Four visible badge types per SP7 spec: 原料仓 / 生产仓 / 外仓 / 盐化仓
+ */
+export type WarehouseTypeBadge = {
+  label: string;
+  color: string;
+};
+
+const WAREHOUSE_TYPE_BADGE_MAP: Record<string, WarehouseTypeBadge> = {
+  RAW:       { label: '原料仓', color: '#409eff' },
+  WIP:       { label: '生产仓', color: '#e6a23c' },
+  FINISHED:  { label: '生产仓', color: '#e6a23c' },
+  LINESIDE:  { label: '生产仓', color: '#e6a23c' },
+  OUTSOURCE: { label: '外仓',   color: '#909399' },
+  TRANSFER:  { label: '外仓',   color: '#909399' },
+  SALTED:    { label: '盐化仓', color: '#67c23a' },
+  RETURNS:   { label: '退货仓', color: '#f56c6c' },
+  SCRAP:     { label: '报废仓', color: '#f56c6c' },
+  TEMP:      { label: '临时仓', color: '#909399' },
+  QC:        { label: '质检仓', color: '#9b59b6' },
+};
+
+export function warehouseTypeBadge(type: string | null | undefined): WarehouseTypeBadge | null {
+  if (!type) return null;
+  return WAREHOUSE_TYPE_BADGE_MAP[type.toUpperCase()] ?? null;
+}
