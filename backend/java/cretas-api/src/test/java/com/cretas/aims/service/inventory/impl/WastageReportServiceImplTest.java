@@ -323,19 +323,19 @@ class WastageReportServiceImplTest {
     // 12. listPending: finance_manager → 仅 WAREHOUSE 轨
     // -------------------------------------------------------
     @Test
-    @DisplayName("T12: listPending finance_manager → 调用 findPendingByTrackTypes([WAREHOUSE])")
+    @DisplayName("T12: listPending finance_manager → 调用 findByFactoryIdAndStatusAndTrackTypeInOrderBySubmittedAtAsc([WAREHOUSE])")
     void listPending_financeManager_queriesWarehouseOnly() {
         Pageable pageable = PageRequest.of(0, 20);
-        when(wastageReportRepo.findPendingByTrackTypes(
-                eq(FACTORY_ID),
+        when(wastageReportRepo.findByFactoryIdAndStatusAndTrackTypeInOrderBySubmittedAtAsc(
+                eq(FACTORY_ID), eq(WastageReport.Status.PENDING_APPROVAL),
                 eq(List.of(WastageReport.TrackType.WAREHOUSE)),
                 eq(pageable)))
                 .thenReturn(new PageImpl<>(Collections.emptyList()));
 
         service.listPending(FACTORY_ID, "finance_manager", pageable);
 
-        verify(wastageReportRepo).findPendingByTrackTypes(
-                eq(FACTORY_ID),
+        verify(wastageReportRepo).findByFactoryIdAndStatusAndTrackTypeInOrderBySubmittedAtAsc(
+                eq(FACTORY_ID), eq(WastageReport.Status.PENDING_APPROVAL),
                 eq(List.of(WastageReport.TrackType.WAREHOUSE)),
                 eq(pageable));
     }
@@ -344,19 +344,19 @@ class WastageReportServiceImplTest {
     // 13. listPending: production_manager → 仅 FACTORY 轨
     // -------------------------------------------------------
     @Test
-    @DisplayName("T13: listPending production_manager → 调用 findPendingByTrackTypes([FACTORY])")
+    @DisplayName("T13: listPending production_manager → 调用 findByFactoryIdAndStatusAndTrackTypeInOrderBySubmittedAtAsc([FACTORY])")
     void listPending_productionManager_queriesFactoryOnly() {
         Pageable pageable = PageRequest.of(0, 20);
-        when(wastageReportRepo.findPendingByTrackTypes(
-                eq(FACTORY_ID),
+        when(wastageReportRepo.findByFactoryIdAndStatusAndTrackTypeInOrderBySubmittedAtAsc(
+                eq(FACTORY_ID), eq(WastageReport.Status.PENDING_APPROVAL),
                 eq(List.of(WastageReport.TrackType.FACTORY)),
                 eq(pageable)))
                 .thenReturn(new PageImpl<>(Collections.emptyList()));
 
         service.listPending(FACTORY_ID, "production_manager", pageable);
 
-        verify(wastageReportRepo).findPendingByTrackTypes(
-                eq(FACTORY_ID),
+        verify(wastageReportRepo).findByFactoryIdAndStatusAndTrackTypeInOrderBySubmittedAtAsc(
+                eq(FACTORY_ID), eq(WastageReport.Status.PENDING_APPROVAL),
                 eq(List.of(WastageReport.TrackType.FACTORY)),
                 eq(pageable));
     }
@@ -365,24 +365,24 @@ class WastageReportServiceImplTest {
     // 14. listPending: factory_super_admin → WAREHOUSE + FACTORY 双轨
     // -------------------------------------------------------
     @Test
-    @DisplayName("T14: listPending factory_super_admin → 调用 findPendingByTrackTypes([WAREHOUSE, FACTORY])")
+    @DisplayName("T14: listPending factory_super_admin → 调用 findByFactoryIdAndStatusAndTrackTypeInOrderBySubmittedAtAsc([WAREHOUSE, FACTORY])")
     void listPending_superAdmin_queriesBothTracks() {
         Pageable pageable = PageRequest.of(0, 20);
         List<WastageReport.TrackType> bothTracks = List.of(
                 WastageReport.TrackType.WAREHOUSE, WastageReport.TrackType.FACTORY);
-        when(wastageReportRepo.findPendingByTrackTypes(eq(FACTORY_ID), eq(bothTracks), eq(pageable)))
+        when(wastageReportRepo.findByFactoryIdAndStatusAndTrackTypeInOrderBySubmittedAtAsc(eq(FACTORY_ID), eq(WastageReport.Status.PENDING_APPROVAL), eq(bothTracks), eq(pageable)))
                 .thenReturn(new PageImpl<>(Collections.emptyList()));
 
         service.listPending(FACTORY_ID, "factory_super_admin", pageable);
 
-        verify(wastageReportRepo).findPendingByTrackTypes(eq(FACTORY_ID), eq(bothTracks), eq(pageable));
+        verify(wastageReportRepo).findByFactoryIdAndStatusAndTrackTypeInOrderBySubmittedAtAsc(eq(FACTORY_ID), eq(WastageReport.Status.PENDING_APPROVAL), eq(bothTracks), eq(pageable));
     }
 
     // -------------------------------------------------------
     // 15. listPending: operator → 空 Page，不调 repo
     // -------------------------------------------------------
     @Test
-    @DisplayName("T15: listPending operator → 空 Page，不调 findPendingByTrackTypes")
+    @DisplayName("T15: listPending operator → 空 Page，不调 findByFactoryIdAndStatusAndTrackTypeInOrderBySubmittedAtAsc")
     void listPending_operator_returnsEmptyPage() {
         Pageable pageable = PageRequest.of(0, 20);
 
@@ -390,7 +390,7 @@ class WastageReportServiceImplTest {
 
         assertThat(result).isNotNull();
         assertThat(result.isEmpty()).isTrue();
-        verify(wastageReportRepo, never()).findPendingByTrackTypes(any(), any(), any());
+        verify(wastageReportRepo, never()).findByFactoryIdAndStatusAndTrackTypeInOrderBySubmittedAtAsc(any(), any(), any(), any());
     }
 
     // -------------------------------------------------------

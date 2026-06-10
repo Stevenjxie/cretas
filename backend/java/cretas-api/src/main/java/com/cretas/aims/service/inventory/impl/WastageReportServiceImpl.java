@@ -221,7 +221,8 @@ public class WastageReportServiceImpl implements WastageReportService {
         } else {
             return Page.empty(pageable);
         }
-        return wastageReportRepo.findPendingByTrackTypes(factoryId, visibleTracks, pageable)
+        return wastageReportRepo.findByFactoryIdAndStatusAndTrackTypeInOrderBySubmittedAtAsc(
+                factoryId, WastageReport.Status.PENDING_APPROVAL, visibleTracks, pageable)
                 .map(WastageReportDTO::from);
     }
 
