@@ -813,6 +813,17 @@ function goToReversalList() {
             >
               · 共 {{ totalEvidenceCount }} 张证据照片
             </el-tag>
+            <!-- SP1 T6: 半成品库存流水入口 (有 WIP 行时才显示, 运营可从批次直接跳 SFI 明细) -->
+            <el-button
+              v-if="hasWip"
+              type="warning"
+              link
+              size="small"
+              style="float: right; margin-right: 8px"
+              @click="router.push({ path: '/warehouse/wip-batches', query: { batchId: String(batchId) } })"
+            >
+              查看半成品库存流水
+            </el-button>
             <!-- 单元 F (F006 REQ-21): 以订单的模式呈现 — 查看本订单下全部批次整体出成率 -->
             <el-button
               v-if="hasOrderContext"
@@ -1013,6 +1024,24 @@ function goToReversalList() {
             </el-table-column>
             <el-table-column label="产出" width="130" align="right">
               <template #default="{ row }">{{ formatNum(row.totalOutput) }} {{ row.outputUnit || '' }}</template>
+            </el-table-column>
+            <!-- SP1 双产出: outputKind=SEMI/BOTH 时展示半成品产出量 + semiCode; null/FINISHED → 隐藏 -->
+            <el-table-column label="产出类型" width="90" align="center">
+              <template #default="{ row }">
+                <span v-if="!row.outputKind || row.outputKind === 'FINISHED'">—</span>
+                <el-tag v-else-if="row.outputKind === 'SEMI'" type="warning" size="small">纯半成品</el-tag>
+                <el-tag v-else-if="row.outputKind === 'BOTH'" type="success" size="small">双产出</el-tag>
+                <span v-else>{{ row.outputKind }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="半成品产出" width="160" align="right">
+              <template #default="{ row }">
+                <template v-if="row.semiOutputQuantity != null">
+                  <span>{{ formatNum(row.semiOutputQuantity) }} {{ row.semiOutputUnit || '' }}</span>
+                  <div v-if="row.semiCode" class="semi-code-text">{{ row.semiCode }}</div>
+                </template>
+                <span v-else>—</span>
+              </template>
             </el-table-column>
             <el-table-column label="出成率" width="110" align="center">
               <template #default="{ row }">
@@ -2081,5 +2110,16 @@ function goToReversalList() {
 
 .gallery-phase-tag {
   font-size: 10px;
+}
+
+/* SP1 T6 双产出: semiCode 副标题 (在半成品产出量下方小字) */
+.semi-code-text {
+  font-size: 11px;
+  color: var(--text-color-secondary, #606266);
+  margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 140px;
 }
 </style>

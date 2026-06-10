@@ -71,4 +71,15 @@ public class StepYieldDTO {
     private List<Map<String, Object>> inputPhotoAnnotations;
     /** T161 per-photo annotation parallel to outputPhotos; each element: {url, label, note}; null = no annotations */
     private List<Map<String, Object>> outputPhotoAnnotations;
+
+    // ── SP1 双产出: outputKind/semiOutputQuantity/semiCode (本道各次报工聚合) ──────────────
+    /** 产出类型: FINISHED / SEMI / BOTH / null (旧式, 视同 FINISHED).
+     *  多次报工时取首个非 null 值 (同批同道 outputKind 应一致). */
+    private String outputKind;
+    /** Σ 本道半成品产出量 (outputKind=SEMI/BOTH 时有值); null=本道无半成品产出 */
+    private BigDecimal semiOutputQuantity;
+    /** 半成品产出单位; semiOutputQuantity 为 null 时此字段也为 null */
+    private String semiOutputUnit;
+    /** 半成品编号/批次号 (对应 SemiFinishedInventory.intermediateBatchNo); null=未指定 */
+    private String semiCode;
 }
