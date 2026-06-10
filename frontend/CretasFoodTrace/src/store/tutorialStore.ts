@@ -263,7 +263,7 @@ export const TUTORIAL_HOME: TutorialConfig = {
       iconColor: '#4F46E5',
       iconBg: '#EEF2FF',
       title: '工序操作',
-      text: '最常用的功能！选工序后可以给员工扫码签到/签退，也可以直接报产量。点击下一步进去看看。',
+      text: '最常用的功能！选工序后可以给员工扫码签到/签退，点击「进入三阶段报工」按分投入→时段→产出三步完整记录产量。点击下一步进去看看。',
       targetKey: 'ws-home-qa-process-operation',
       tooltipPosition: 'bottom',
       highlightBorderRadius: 14,
