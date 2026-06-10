@@ -37,9 +37,9 @@ import { enhanceChartDefaults } from '@/composables/useChartEnhancer';
 import TemplateGrid from './components/TemplateGrid.vue';
 import RestaurantGoldGrid from './components/RestaurantGoldGrid.vue';
 import ValueFeedbackStrip from './components/ValueFeedbackStrip.vue';
-import { buildChartInsight } from './components/chartInsight';
-import type { InsightResult, ChartWithMeta } from './components/chartInsight';
+import type { ChartWithMeta } from './components/chartInsight';
 import ChartInsight from './components/ChartInsight.vue';
+import { useChartInsight } from '@/composables/useChartInsight';
 // Day 8 数据织网 Sub-Project A: capability-driven card visibility
 import { useCapability } from '@/composables/useCapability';
 import CapabilityGate from '@/components/CapabilityGate.vue';
@@ -493,17 +493,21 @@ const INSIGHT_COLLAPSE_LIMIT = 3;
 // Chart titles for citation references
 const chartTitles = ['销售趋势', '产品类别占比'];
 
-// ==================== 数据驱动图表洞察 (chart-insight engine, Tier 1) ====================
+// ==================== 数据驱动图表洞察 (chart-insight engine, Tier 1 + Tier 2 飞轮) ====================
+// U6: migrated to useChartInsight composable (autoTier2=true).
 // Reads dashboardData.value?.charts independently — does NOT touch echarts init paths.
-// Returns InsightResult | null; null → v-if renders nothing (honest-null, no fabrication).
+// source getter returns null when data not ready → composable honest-null (no fabrication).
 
-/** 销售趋势 / 按类别排行 chart insight (TREND or RANKING family). */
-const trendInsight = computed<InsightResult | null>(() => {
+/**
+ * Source getter for 销售趋势 / 按类别排行 chart (TREND or RANKING family).
+ * Returns null when data not ready → composable shows nothing (honest-null).
+ */
+const trendSource = (): { chart: ChartWithMeta } | null => {
   const charts = dashboardData.value?.charts as Record<string, unknown> | undefined;
   if (!charts) return null;
   const raw = charts['sales_trend'] || charts['销售趋势'];
   if (!raw) return null;
-  // Backend sends legacy {chartType,data,xaxisField,yaxisField}; normalize → {xAxis,series} (same as initCharts)
+  // Backend sends legacy {chartType,data,xaxisField,yaxisField}; normalize → {xAxis,series}
   const cfg = normalizeLegacyChart(raw as AnyChartConfig);
   const labels = (((cfg.xAxis as { data?: unknown[] } | undefined)?.data) ?? []).map(String);
   const firstX = labels.length > 0 ? labels[0] : '';
@@ -530,12 +534,16 @@ const trendInsight = computed<InsightResult | null>(() => {
       series: [{ type: isTime ? 'line' : 'bar', data: numericData }],
     },
   };
-  const perms = { canViewFinance: permissionStore.canWrite('finance') };
-  return buildChartInsight(chart, perms);
-});
+  return { chart };
+};
 
-/** 产品类别占比 pie chart insight — normalized to BAR shape so RANKING fires (not pie-null). */
-const categoryInsight = computed<InsightResult | null>(() => {
+/**
+ * Source getter for 产品类别占比 — PIE→BAR normalization preserved.
+ * The normalization (Dashboard.vue §538-604) converts pie series data to parallel
+ * BAR arrays so the RANKING family fires (PIE chartType → null per engine spec).
+ * Returns null when data not ready or < 2 categories.
+ */
+const categorySource = (): { chart: ChartWithMeta } | null => {
   const charts = dashboardData.value?.charts as Record<string, unknown> | undefined;
   if (!charts) return null;
   // Mirror the pie resolution logic from initCharts ~line 1104
@@ -560,7 +568,7 @@ const categoryInsight = computed<InsightResult | null>(() => {
     }
   }
   if (!raw) return null;
-  // Normalize legacy {data,xaxisField,yaxisField} → {xAxis,series} parallel arrays (same as initCharts)
+  // Normalize legacy {data,xaxisField,yaxisField} → {xAxis,series} parallel arrays
   const cfg = normalizeLegacyChart(raw as AnyChartConfig);
   const labels = (((cfg.xAxis as { data?: unknown[] } | undefined)?.data) ?? []).map(String);
   const sData = Array.isArray(cfg.series?.[0]?.data) ? (cfg.series![0].data as unknown[]) : [];
@@ -585,8 +593,9 @@ const categoryInsight = computed<InsightResult | null>(() => {
       categoryValues.push(val);
     }
   }
+  // Minimum 2 slices required for RANKING insight (PIE→BAR归一后)
   if (categoryValues.length < 2) return null;
-  // Normalize to BAR shape so RANKING family fires (PIE chartType → null per engine spec)
+  // Normalized to BAR shape so RANKING family fires (PIE chartType → null per engine spec)
   const chart: ChartWithMeta = {
     chartType: 'BAR',
     meta: {
@@ -600,9 +609,24 @@ const categoryInsight = computed<InsightResult | null>(() => {
       series: [{ type: 'bar', data: categoryValues }],
     },
   };
-  const perms = { canViewFinance: permissionStore.canWrite('finance') };
-  return buildChartInsight(chart, perms);
-});
+  return { chart };
+};
+
+const dashboardPermsGetter = () => ({ canViewFinance: permissionStore.canWrite('finance') });
+
+// U6: 销售趋势 insight — Tier1 instant (rules), Tier2 auto on null (飞轮接通)
+const { insight: trendInsight, loading: trendInsightLoading } = useChartInsight(
+  trendSource,
+  dashboardPermsGetter,
+  { factoryId: () => authStore.factoryId ?? '', autoTier2: true },
+);
+
+// U6: 产品类别占比 insight — PIE→BAR 归一已在 categorySource 中保留
+const { insight: categoryInsight, loading: categoryInsightLoading } = useChartInsight(
+  categorySource,
+  dashboardPermsGetter,
+  { factoryId: () => authStore.factoryId ?? '', autoTier2: true },
+);
 
 function formatInsightTime(date: Date | string) {
   const d = new Date(date);
@@ -1902,7 +1926,8 @@ onUnmounted(() => {
           </template>
           <ChartSkeleton v-if="loading && !hasTrendData" type="chart" />
           <div ref="trendChartRef" class="chart-container" v-show="hasTrendData"></div>
-          <ChartInsight v-if="trendInsight" :insight="trendInsight" depth="detailed" />
+          <!-- U6: useChartInsight — Tier1 instant, Tier2 auto on null (飞轮接通) -->
+          <ChartInsight :insight="trendInsight" :loading="trendInsightLoading" depth="detailed" />
         </el-card>
         </CapabilityGate>
       </el-col>
@@ -1917,7 +1942,8 @@ onUnmounted(() => {
           </template>
           <ChartSkeleton v-if="loading && !hasPieData" type="chart" />
           <div ref="pieChartRef" class="chart-container" v-show="hasPieData"></div>
-          <ChartInsight v-if="categoryInsight" :insight="categoryInsight" depth="detailed" />
+          <!-- U6: useChartInsight — PIE→BAR归一已在 source getter 中保留 -->
+          <ChartInsight :insight="categoryInsight" :loading="categoryInsightLoading" depth="detailed" />
         </el-card>
         </CapabilityGate>
       </el-col>
