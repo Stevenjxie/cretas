@@ -864,6 +864,32 @@ function applyPriceMemory(item: TableRow) {
   }
 }
 
+// U-SP5: 毛利红线 check — 单价 blur 时调后端 check-margin 端点
+// GrossMarginCheckResult: { belowRedline: boolean | null, warningMessage: string | null }
+// belowRedline=true  → sticky 红色警告 (不卡死提交, fool-proof)
+// belowRedline=null  → 未配置毛利红线, 静默
+// belowRedline=false → 合格, 静默
+async function checkMarginOnBlur(item: OrderItem) {
+  if (!factoryId.value || !item.productTypeId || item.unitPrice == null || item.unitPrice <= 0) return;
+  try {
+    const res = await post<{ belowRedline: boolean | null; warningMessage: string | null }>(
+      `/${factoryId.value}/sales/check-margin`,
+      { productTypeId: item.productTypeId, quotedPrice: item.unitPrice },
+    );
+    if (res.success && res.data?.belowRedline === true && res.data?.warningMessage) {
+      ElMessage({
+        message: res.data.warningMessage,
+        type: 'warning',
+        duration: 0,
+        showClose: true,
+      });
+    }
+    // belowRedline=false or null → 静默 (未配置 or 合格)
+  } catch {
+    // 静默失败 — 红线 check 是 advisory, 不阻塞下单
+  }
+}
+
 /**
  * P1-3 (audio May 7 客户通话): 抄码品识别.
  * 抄码 = 餐饮/食品行业称重商品 (每箱重量不一致, 不能按箱计).
@@ -1770,6 +1796,44 @@ async function submitQuickPayment() {
             <span v-else>-</span>
           </template>
         </el-table-column>
+        <!-- U-SP5: 开票状态列 (NOT @PriceSensitive — 所有角色可见) -->
+        <el-table-column prop="invoiceStatus" label="开票状态" width="110" align="center">
+          <template #default="{ row }">
+            <el-tag
+              v-if="row.invoiceStatus"
+              :type="row.invoiceStatus === 'FULLY_INVOICED' ? 'success' : row.invoiceStatus === 'PARTIAL_INVOICED' ? 'warning' : 'info'"
+              size="small"
+            >
+              {{ row.invoiceStatus === 'FULLY_INVOICED' ? '已开票' : row.invoiceStatus === 'PARTIAL_INVOICED' ? '部分开票' : '未开票' }}
+            </el-tag>
+            <span v-else class="price-masked">—</span>
+          </template>
+        </el-table-column>
+        <!-- U-SP5: 提成预览 (@PriceSensitive — null→"—" when canViewPrice=false) -->
+        <el-table-column
+          v-if="canViewPrice"
+          prop="commissionPreview"
+          label="提成(预估)"
+          width="110"
+          align="right"
+        >
+          <template #default="{ row }">
+            <span v-if="row.commissionPreview != null">{{ formatAmount(row.commissionPreview) }}</span>
+            <span v-else class="price-masked">—</span>
+          </template>
+        </el-table-column>
+        <el-table-column
+          v-if="canViewPrice"
+          prop="commissionRatePct"
+          label="提成率"
+          width="90"
+          align="right"
+        >
+          <template #default="{ row }">
+            <span v-if="row.commissionRatePct != null">{{ Number(row.commissionRatePct).toFixed(2) }}%</span>
+            <span v-else class="price-masked">—</span>
+          </template>
+        </el-table-column>
         <!--
           Sprint3-G S-LOCK-1: 行内 锁/备/缺 3 chip. 销售员看销售单不用切去库存页.
           数据源: SalesOrder @Transient getTotalLockedQty/getTotalReservedQty/getTotalShortageQty
@@ -2093,7 +2157,8 @@ async function submitQuickPayment() {
           <!-- Sprint 4 W2 S-PRICE-1 R1: unitPrice + 上次成交价 hint chip (一键采纳) -->
           <!-- Issue #793: 客户协议价 hint (CUSTOMER 自动覆盖, GLOBAL 仅提示) -->
           <div class="unit-price-wrap">
-            <el-input-number v-model="item.unitPrice" :min="0" :precision="2" style="width: 130px" />
+            <!-- U-SP5: @blur 触发毛利红线 check (advisory, 不卡死提交) -->
+            <el-input-number v-model="item.unitPrice" :min="0" :precision="2" style="width: 130px" @blur="() => checkMarginOnBlur(item)" />
             <el-tooltip
               v-if="item.contractPriceHint"
               :content="`${item.contractPriceHint.source === 'CUSTOMER' ? '协议价' : '全局价'} ¥${item.contractPriceHint.price} · ${item.contractPriceHint.priceListName}${item.contractPriceHint.source === 'CUSTOMER' ? ' · 已自动应用' : ' · 点击采用'}`"
