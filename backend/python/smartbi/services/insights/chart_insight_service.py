@@ -31,6 +31,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence
@@ -804,9 +805,21 @@ class ChartInsightService:
             "max_tokens": 2000,
         }
 
+        # Distillation teacher override: the seeder/sweeps set CHART_INSIGHT_LLM_SLOT=REVIEW
+        # to route corpus generation through a HIGH-QUALITY teacher (qwen3-max) instead of the
+        # fast live-serve model (glm-5/SLOT.CHART). Teacher quality = corpus quality = (via
+        # serve-from-corpus read-back) user-facing quality. Live serve (no env) keeps SLOT.CHART
+        # for low latency. Quota: qwen3-max(REVIEW) healthy across aliyun_b/c.
+        _slot = SLOT.CHART
+        _slot_name = os.getenv("CHART_INSIGHT_LLM_SLOT")
+        if _slot_name:
+            try:
+                _slot = SLOT[_slot_name.strip().upper()]
+            except KeyError:
+                logger.warning("[chart-insight] unknown CHART_INSIGHT_LLM_SLOT=%r, using CHART", _slot_name)
         try:
             with llm_caller_context("chart_insight", factory_id=ctx.factory_id):
-                resp = await call_chain(SLOT.CHART, payload)
+                resp = await call_chain(_slot, payload)
         except Exception as exc:
             logger.warning("[chart-insight] LLM call failed: %s", exc)
             return None
