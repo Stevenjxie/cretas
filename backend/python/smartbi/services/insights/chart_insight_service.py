@@ -792,34 +792,36 @@ def _build_insight_prompt(ctx: ChartInsightContext) -> str:
     names like {topChannel}, {storeName}, {brandX} which would survive as literal
     {slot} markers in the output (caught by _safe_fill safety net).
     """
-    values_preview = ", ".join(
-        f"{l}={v}" for l, v in zip(ctx.series_labels[:5], ctx.series_values[:5])
-    ) if ctx.series_labels else str(ctx.series_values[:5])
+    return f"""请为以下图表生成一个**可复用的结构化洞察模板**（JSON格式）。
 
-    return f"""请为以下图表生成一个**结构化洞察模板**（JSON格式），要求：
+⚠️ 你**不知道也不需要知道**任何具体数值或名称——系统会在使用时自动把占位符替换成真实值。
+你的唯一任务是产出**模板句式**，句中**所有**数值和名称**必须**写成 {{占位符}}。
 
-图表信息：
+图表信息（仅用于决定模板句式，不含真实数据）：
 - 图表类型: {ctx.chart_type}
 - X轴维度: {ctx.x_dim}
 - Y轴指标: {ctx.y_metric}
 - 聚合方式: {ctx.aggregation}
 - 业务域: {ctx.domain}
 - 数据模式: {ctx.data_pattern}
-- 数据样例: {values_preview}
 
 输出格式（严格JSON，禁止代码块）：
 {{
-  "finding_tpl": "用{{placeholder}}表示的发现句，如：{{topName}}占{{topShare}}%，是末位{{botName}}的{{ratio}}倍",
+  "finding_tpl": "发现句，所有数值/名称用占位符，如：{{topName}}占{{topShare}}，是末位{{botName}}的{{ratio}}倍",
   "implication_tpl": "含义句（可选，可为null）",
   "suggestion_tpl": "建议句（可选，可为null；只用观察动词：关注/排查/分析/了解）",
-  "slots": ["placeholder1", "placeholder2"]
+  "slots": ["topName", "topShare", "botName", "ratio"]
 }}
 
+❌ 错误示例（含字面量，将被系统拒绝）：
+   {{"finding_tpl": "堂食占62.0%，是外卖的1.6倍"}}
+✅ 正确示例（全占位符）：
+   {{"finding_tpl": "{{topName}}占{{topShare}}，是末位{{botName}}的{{ratio}}倍"}}
+
 重要规则：
-1. 所有数值、名称必须用{{placeholder}}占位符表示，不得写入字面量
-2. 如果数据不足以得出有意义的业务观察，finding_tpl返回null
-3. 建议只使用观察动词（关注/排查/分析/了解），严禁因果归因（复制/引流/加大/扩张/推广）
-4. 只返回JSON，不要任何解释或代码块
-5. 【重要】占位符白名单（ONLY these are allowed — NO others）：
-   {{topName}} {{botName}} {{topShare}} {{ratio}} {{concLevel}} {{growthRate}} {{changeAmt}} {{changeDir}}
-   严禁使用白名单之外的占位符（如 {{storeName}}, {{topChannel}}, {{brandX}} 等均非法）。"""
+1. finding_tpl 中**严禁**出现任何具体数字（如 62、1.6）或具体名称（如 堂食、蜀三味）——全部用占位符。注意 {{topShare}} 已自带 % 号，模板里不要再加 %。
+2. 如果数据不足以得出有意义的业务观察，finding_tpl 返回 null。
+3. 建议只用观察动词（关注/排查/分析/了解），严禁因果归因（复制/引流/加大/扩张/推广）。
+4. 只返回 JSON，不要任何解释或代码块。
+5. 【占位符白名单】只能用以下占位符，严禁白名单外（如 {{storeName}}, {{topChannel}}, {{brandX}} 均非法）：
+   {{topName}} {{botName}} {{topShare}} {{ratio}} {{concLevel}} {{growthRate}} {{changeAmt}} {{changeDir}}"""
