@@ -67,7 +67,7 @@ async function loadData() {
   loading.value = true;
   try {
     const params: Record<string, unknown> = {
-      page: pagination.value.page,
+      page: pagination.value.page - 1,  // backend is 0-based; pagination.page is 1-based
       size: pagination.value.size,
       trackType: activeTab.value,
     };
@@ -321,23 +321,27 @@ async function submitReject() {
 const photoViewerVisible = ref(false);
 const viewingPhotos = ref<string[]>([]);
 
-function openPhotoViewer(row: TableRow) {
-  const urls = row.photoUrls;
-  if (Array.isArray(urls)) {
-    viewingPhotos.value = urls.map(String);
-  } else if (typeof urls === 'string') {
-    try {
-      viewingPhotos.value = JSON.parse(urls);
-    } catch {
-      viewingPhotos.value = [urls];
-    }
-  } else {
-    viewingPhotos.value = [];
+/**
+ * WastageReportDTO.photoUrls is serialized as a JSON string by the backend
+ * (e.g., '["url1","url2"]'). Normalize to string[] regardless of whether the
+ * value arrives as a parsed array (unlikely) or a raw JSON string.
+ */
+function parsePhotoUrlsFromRow(raw: unknown): string[] {
+  if (Array.isArray(raw)) return (raw as unknown[]).map(String);
+  if (typeof raw === 'string' && raw.trim().startsWith('[')) {
+    try { return JSON.parse(raw) as string[]; } catch { /* fall through */ }
   }
-  if (viewingPhotos.value.length === 0) {
+  if (typeof raw === 'string' && raw.length > 0) return [raw];
+  return [];
+}
+
+function openPhotoViewer(row: TableRow) {
+  const urls = parsePhotoUrlsFromRow(row.photoUrls);
+  if (urls.length === 0) {
     ElMessage({ message: '该记录暂无照片', type: 'info', duration: 3000 });
     return;
   }
+  viewingPhotos.value = urls;
   photoViewerVisible.value = true;
 }
 
@@ -544,15 +548,15 @@ onMounted(async () => {
           <el-descriptions-item label="提交人">{{ approveRow.submittedBy || '—' }}</el-descriptions-item>
         </el-descriptions>
 
-        <!-- Photo thumbnails -->
-        <div v-if="approveRow.photoUrls && (Array.isArray(approveRow.photoUrls) ? approveRow.photoUrls.length > 0 : true)" style="margin-bottom: 16px">
+        <!-- Photo thumbnails: photoUrls is a JSON string from the backend DTO -->
+        <div v-if="parsePhotoUrlsFromRow(approveRow.photoUrls).length > 0" style="margin-bottom: 16px">
           <div style="font-size: 13px; color: #606266; margin-bottom: 6px">照片证据：</div>
           <div style="display: flex; gap: 8px; flex-wrap: wrap">
             <el-image
-              v-for="(url, i) in (Array.isArray(approveRow.photoUrls) ? approveRow.photoUrls : [])"
+              v-for="(url, i) in parsePhotoUrlsFromRow(approveRow.photoUrls)"
               :key="i"
-              :src="String(url)"
-              :preview-src-list="Array.isArray(approveRow.photoUrls) ? approveRow.photoUrls.map(String) : []"
+              :src="url"
+              :preview-src-list="parsePhotoUrlsFromRow(approveRow.photoUrls)"
               fit="cover"
               style="width: 80px; height: 80px; border-radius: 4px; object-fit: cover"
             />

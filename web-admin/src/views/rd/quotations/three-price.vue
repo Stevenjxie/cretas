@@ -9,6 +9,7 @@ import { useRoute, useRouter } from 'vue-router';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { get } from '@/api/request';
+import { ElMessage } from 'element-plus';
 import { Refresh, ArrowRight, Money } from '@element-plus/icons-vue';
 
 const route = useRoute();
@@ -41,6 +42,12 @@ const threePrice = ref<ThreePriceData | null>(null);
 
 async function loadData() {
   if (!factoryId.value || !taskId.value) return;
+  // Guard: if taskId looks like a keyword (not a UUID/numeric ID), redirect to list
+  if (taskId.value === 'three-price' || taskId.value === 'new') {
+    ElMessage({ message: '请从报价列表选择具体任务再查看三价对比', type: 'warning', duration: 4000, showClose: true });
+    router.replace('/rd/samples');
+    return;
+  }
   loading.value = true;
   try {
     const res = await get(`/${factoryId.value}/rd/quotations/${taskId.value}/three-price-comparison`);
