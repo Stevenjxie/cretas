@@ -26,6 +26,9 @@
 
 ## In-flight 任务表
 
+> 🆕 **CIG-PHASE-A 程序 (2026-06-10, brainstorm→spec v2(4-critic审计)→plan→subagent-driven)**: "全局所有图表都有 图表+洞察 + 全飞轮". 拆 4 阶段. spec `docs/superpowers/specs/2026-06-10-chart-insight-foundation-phase-a-design.md` / plan `docs/superpowers/plans/2026-06-10-chart-insight-foundation-phase-a.md`. 决策: 全~44面+补族 / Tier1主+Tier2-on-null自动 / 跨租户模板(签名去factoryId) / 富 Phase A. **Wave1 在飞**: U1 飞轮硬化8项(feat/ci-fly-u1, 🔒RBAC/迁移) ‖ U2+U3 族补全+deriveChartMeta(feat/ci-fly-u2u3, 🔒KPI¥). 两 worktree off origin/main. SDD two-stage review + Opus 红线终审 + headed real-path 验真. 后续 Wave2 U4‖U5 → Wave3 U6. **rollout 工量诚实化: 无万能机制, B/C/D 远大于~3行×44.**
+
+
 > ✅ **CRITICAL 2026-06-09 RN闪退 已修(#618, OTA推送中)** — 根因: **T163(#616)把照片标注3个useCallback(setPhotoLabel/setPhotoNote/buildPhotoAnnotations)放在早返回(loading/done)之后** → loading渲染少3hook,数据回来多3hook → "Rendered more hooks" 进报工屏即崩白屏. 设备错误栈+诊断agent双确认. 修=移到顶部hook块(早返回前). tsc净, #618 merged, OTA推送中. 教训: **RN加hook必在所有早返回之前**(rules of hooks). ⚠️gh pr create需--head(误删分支已重推救回).
 > **#617 T164 polish 待rebase**: 基于崩溃旧base+也改YieldStepReportScreen(F3) → 需rebase到#618后main再合(否则带崩溃). #615 masking过宽(单价采购价也遮)=backlog精修.
 
