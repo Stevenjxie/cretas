@@ -1,4 +1,4 @@
-"""Chart Auto-Insight API endpoint (U4).
+"""Chart Auto-Insight API endpoint (U4 + U1.4 permission_tier server push).
 
 POST /api/smartbi/chart-insight
 
@@ -8,14 +8,18 @@ POST /api/smartbi/chart-insight
 - The request body's factory_id field is IGNORED for all authorization decisions.
 - Cross-tenant: if jwt_factory_id != body.factory_id → 403 blocked at endpoint level.
 - Missing JWT → 401 (missing factory context, not authenticated).
+- U1.4: permission_tier is ALWAYS derived server-side from caller_role.
+  body.permission_tier is IGNORED (attacker cannot self-elevate to finance_visible).
+  Finance roles → finance_visible; everyone else → finance_hidden.
 
 Auth chain:
   1. JWTAuthMiddleware (auth_middleware.py) verifies Bearer HS256 JWT.
   2. Extracts factoryId + role from JWT claims → stores in request.state.factory_id / .role.
   3. set_factory_id(factory_id) sets the ContextVar for asyncpg RLS (tenant_ctx.py).
   4. This endpoint reads request.state.factory_id as the ONLY trusted factory identifier.
-  5. ChartInsightService receives jwt_factory_id=trusted_factory_id.
-  6. Service enforces cross-tenant guard internally (ctx.factory_id != jwt_factory_id → None).
+  5. U1.4: endpoint derives permission_tier from request.state.role (NOT body.permission_tier).
+  6. ChartInsightService receives jwt_factory_id=trusted_factory_id + server-derived permission_tier.
+  7. Service enforces cross-tenant guard internally (ctx.factory_id != jwt_factory_id → None).
 
 No /api/smartbi/chart/ prefix bypass — this endpoint REQUIRES auth (not in PUBLIC_PREFIXES).
 """
@@ -31,6 +35,39 @@ from pydantic import BaseModel, Field
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["Chart Auto-Insight"])
 
+# ---------------------------------------------------------------------------
+# U1.4: FINANCE_ROLES — roles allowed to receive finance_visible permission tier.
+# Mirrors FINANCE_ROLES in chart_insight_service.py (single source of truth is the
+# service; this local copy is used for the API-layer tier derivation).
+# Any role NOT in this set receives finance_hidden (fail-safe default).
+# ---------------------------------------------------------------------------
+FINANCE_ROLES: frozenset[str] = frozenset({
+    "factory_super_admin",
+    "platform_admin",
+    "procurement_manager",
+    "finance_manager",
+    "sales_manager",
+    "dispatcher",
+    "production_manager",
+    "restaurant_manager",
+    "restaurant_owner",
+    "restaurant_purchaser",
+    "permission_admin",
+    "department_admin",
+})
+
+
+def _derive_permission_tier(caller_role: Optional[str]) -> str:
+    """U1.4: Derive permission_tier from JWT role — server-side, never from body.
+
+    Returns:
+        'finance_visible' if caller_role is in FINANCE_ROLES
+        'finance_hidden'  otherwise (fail-safe — non-finance or unknown role)
+    """
+    if caller_role and caller_role in FINANCE_ROLES:
+        return "finance_visible"
+    return "finance_hidden"
+
 
 # ---------------------------------------------------------------------------
 # Request / Response models
@@ -39,18 +76,20 @@ router = APIRouter(tags=["Chart Auto-Insight"])
 class ChartInsightRequest(BaseModel):
     """Request body for POST /api/smartbi/chart-insight.
 
-    Note: factory_id in the body is used ONLY for computing the signature and
-    filling slots in context — the authoritative factory_id for all DB and RBAC
-    decisions comes from the JWT (request.state.factory_id), NOT this field.
-    If body.factory_id != jwt_factory_id → 403.
+    Note: factory_id in the body is used ONLY for the cross-tenant guard check —
+    the authoritative factory_id for all DB and RBAC decisions comes from the JWT
+    (request.state.factory_id), NOT this field. If body.factory_id != jwt_factory_id → 403.
+
+    U1.4: permission_tier is NOT accepted from the body — it is always derived
+    server-side from the caller's JWT role. This prevents a non-finance user from
+    sending permission_tier='finance_visible' to receive finance-gated templates.
     """
     chart_type: str = Field(..., description="e.g. BAR, LINE, PIE")
     x_dim: str = Field(..., description="time|store|product|channel|category|other")
     y_metric: str = Field(..., description="revenue|quantity|margin|cost|count|pct|other")
     aggregation: str = Field("sum", description="sum|avg|max|count")
     domain: str = Field("restaurant", description="restaurant|factory|finance")
-    data_pattern: str = Field(..., description="Canonical bucket string e.g. ranking:top-share:65-80")
-    permission_tier: str = Field("finance_visible", description="finance_visible|price_hidden|finance_hidden")
+    data_pattern: str = Field(..., description="Canonical bucket string e.g. ranking:top-share:65-80:n4-8")
     factory_id: str = Field(..., description="Tenant ID (must match JWT factoryId; body value used for context only)")
     series_values: List[float] = Field(default_factory=list, description="Numeric series data")
     series_labels: List[str] = Field(default_factory=list, description="Labels for series items")
@@ -63,7 +102,14 @@ _service = None
 
 
 async def _get_service():
-    """Lazily create ChartInsightService singleton with the shared pool."""
+    """Lazily create ChartInsightService singleton with the shared pool.
+
+    U1.3 eager init: if pool is None (DB not available), we do NOT cache a
+    ChartInsightService with None budget_tracker in _service.  Instead, we
+    return None so the endpoint returns 503 and a subsequent call (after DB
+    comes up) will re-attempt init.  This prevents caching a broken service
+    singleton that would then fail with AttributeError on every call.
+    """
     global _service
     if _service is None:
         try:
@@ -76,7 +122,15 @@ async def _get_service():
             import os
 
             pool = await get_pg_pool()
-            budget_tracker = AgentBudgetTracker(pool) if pool else None
+            if pool is None:
+                # U1.3: pool not ready — do NOT cache a broken service; caller gets 503
+                logger.warning(
+                    "[chart-insight] _get_service: pool is None — service not initialized, "
+                    "will retry on next request"
+                )
+                return None
+
+            budget_tracker = AgentBudgetTracker(pool)
             # Allow per-deployment threshold override via env
             threshold = int(os.environ.get("CHART_INSIGHT_PROMOTE_THRESHOLD", DEFAULT_PROMOTE_THRESHOLD))
             _service = ChartInsightService(
@@ -157,6 +211,10 @@ async def chart_insight(request: Request, body: ChartInsightRequest) -> Dict[str
         ChartInsightService,
     )
 
+    # U1.4: derive permission_tier server-side from JWT role — NEVER trust body.permission_tier
+    # Internal calls (auth_method=='internal') also derive from X-User-Role header (set in state)
+    server_permission_tier = _derive_permission_tier(caller_role)
+
     ctx = ChartInsightContext(
         chart_type=body.chart_type,
         x_dim=body.x_dim,
@@ -164,7 +222,7 @@ async def chart_insight(request: Request, body: ChartInsightRequest) -> Dict[str
         aggregation=body.aggregation,
         domain=body.domain,
         data_pattern=body.data_pattern,
-        permission_tier=body.permission_tier,
+        permission_tier=server_permission_tier,  # U1.4: server-derived, body ignored
         factory_id=jwt_factory_id,  # Use JWT factoryId, NOT body.factory_id
         series_values=body.series_values,
         series_labels=body.series_labels,
