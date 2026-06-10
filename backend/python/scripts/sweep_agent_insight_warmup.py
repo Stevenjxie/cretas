@@ -81,8 +81,9 @@ DEFAULT_RESTAURANT_FACTORIES: List[str] = [
     "R_XMX_CHAIN",
 ]
 
-# Time windows: (label, lookback_days | "all")
-# "all" = from 2025-01-01 to today (full history available in gold)
+# Static time windows: (label, lookback_days | "all")
+# "all" uses a static 2025-01-01 start.
+# For data-aware windows (recommended for prod use), see _resolve_data_covering_windows().
 _WINDOW_SPECS: Dict[str, Tuple[Optional[int], Optional[date]]] = {
     "30":  (30, None),
     "90":  (90, None),
@@ -169,6 +170,84 @@ def _resolve_date_range(window_key: str) -> Tuple[date, date]:
     return start_override, today  # type: ignore[return-value]
 
 
+async def _resolve_data_covering_windows(
+    pool,
+    factory_id: str,
+    requested_window_keys: List[str],
+) -> List[Tuple[date, date]]:
+    """Return date ranges that actually COVER the factory's gold data.
+
+    Problem (prod recon): qhj_prod gold data is in a historical range (e.g.
+    2025-01-01 ~ 2025-12-31).  Static windows "30d / 90d from today" (2026-06-11)
+    resolve to 2026-05-12~now and 2026-03-13~now — no overlap with 2025 data →
+    AgentOrchestrator._gather_data fetches all-zero KPIs → LLM produces generic
+    advice, not data-grounded answers.
+
+    Fix: query gold.queries.data_range() to get (min_date, max_date) for the
+    factory's agg_daily rows, then build windows that are guaranteed to overlap:
+      - last 30d of real data  (max_date - 30d  →  max_date)
+      - last 90d of real data  (max_date - 90d  →  max_date)
+      - full history           (min_date         →  max_date)
+
+    Falls back to static _resolve_date_range() if data_range returns None (factory
+    has no gold rows), so the caller always gets at least one window.
+
+    Requires tenant context to be set BEFORE calling so the RLS-gated agg_daily
+    SELECT returns rows.  Caller (run_sweep) sets set_factory_id(fid) per factory.
+    """
+    try:
+        from smartbi.gold.queries import data_range as gold_data_range
+
+        info = await gold_data_range(pool, factory_id)
+        min_d_str = info.get("min_date")
+        max_d_str = info.get("max_date")
+        day_count = info.get("day_count", 0)
+
+        if not min_d_str or not max_d_str or not day_count:
+            logger.info(
+                f"[windows] {factory_id}: no gold data found "
+                f"(day_count={day_count}) — falling back to static windows"
+            )
+            return [_resolve_date_range(wk) for wk in requested_window_keys]
+
+        min_date = date.fromisoformat(min_d_str)
+        max_date = date.fromisoformat(max_d_str)
+        logger.info(
+            f"[windows] {factory_id}: gold data {min_d_str} → {max_d_str} "
+            f"({day_count} days) — building data-covering windows"
+        )
+
+        windows: List[Tuple[date, date]] = []
+        seen: set = set()
+        # Build windows anchored to the REAL data range
+        for wk in requested_window_keys:
+            if wk == "all":
+                w = (min_date, max_date)
+            elif wk == "30":
+                w = (max(min_date, max_date - timedelta(days=30)), max_date)
+            elif wk == "90":
+                w = (max(min_date, max_date - timedelta(days=90)), max_date)
+            else:
+                # Numeric days: anchor to max_date
+                try:
+                    days = int(wk)
+                    w = (max(min_date, max_date - timedelta(days=days)), max_date)
+                except ValueError:
+                    w = _resolve_date_range(wk)  # fallback for unknown keys
+            key = (w[0].isoformat(), w[1].isoformat())
+            if key not in seen:
+                seen.add(key)
+                windows.append(w)
+        return windows
+
+    except Exception as e:
+        logger.warning(
+            f"[windows] {factory_id}: data_range query failed ({e}) — "
+            f"falling back to static windows"
+        )
+        return [_resolve_date_range(wk) for wk in requested_window_keys]
+
+
 # ---------------------------------------------------------------------------
 # Per-factory × window × question sweep
 # ---------------------------------------------------------------------------
@@ -176,19 +255,26 @@ def _resolve_date_range(window_key: str) -> Tuple[date, date]:
 async def _run_one(
     orchestrator,
     factory_id: str,
-    window_key: str,
+    date_range: Tuple[date, date],
     question: str,
     dry_run: bool,
+    *,
+    window_label: str = "",
 ) -> bool:
-    """Call answer_insight for one combination.  Returns True on success."""
+    """Call answer_insight for one combination.  Returns True on success.
+
+    date_range is resolved by the caller (either static _resolve_date_range or
+    data-covering _resolve_data_covering_windows).  window_label is a display
+    string for logging only.
+    """
     if dry_run:
         logger.info(
-            f"[dry-run] would run: factory={factory_id} window={window_key!r} "
-            f"question={question!r}"
+            f"[dry-run] would run: factory={factory_id} window={window_label!r} "
+            f"date_range={date_range[0]}~{date_range[1]} question={question!r}"
         )
         return True
     try:
-        start, end = _resolve_date_range(window_key)
+        start, end = date_range
         t0 = time.monotonic()
         resp = await orchestrator.answer_insight(
             factory_id,
@@ -198,15 +284,15 @@ async def _run_one(
         )
         elapsed = int((time.monotonic() - t0) * 1000)
         logger.info(
-            f"[warmup] factory={factory_id} window={window_key!r} "
-            f"src={resp.source} tokens={resp.tokens} elapsed={elapsed}ms "
-            f"q={question[:40]!r}"
+            f"[warmup] factory={factory_id} window={window_label!r} "
+            f"date={start}~{end} src={resp.source} tokens={resp.tokens} "
+            f"elapsed={elapsed}ms q={question[:40]!r}"
         )
         return True
     except Exception as e:
         logger.warning(
-            f"[warmup] FAILED factory={factory_id} window={window_key!r} "
-            f"q={question[:40]!r}: {e}"
+            f"[warmup] FAILED factory={factory_id} window={window_label!r} "
+            f"date={date_range[0]}~{date_range[1]} q={question[:40]!r}: {e}"
         )
         return False
 
@@ -276,58 +362,95 @@ async def run_sweep(
                 cache=cache,
             )
 
+    # Per-factory data-covering window resolution.
+    # RLS note: agg_daily has FORCE ROW LEVEL SECURITY.  We must set the tenant
+    # ContextVar before calling data_range() so the asyncpg pool setup callback
+    # applies the correct GUC.  Mirrors hooks._trigger_materialization pattern.
+    from smartbi.tenant_ctx import set_factory_id as _set_fid, reset_factory_id as _reset_fid
+
+    factory_date_ranges: Dict[str, List[Tuple[date, date]]] = {}
+    for fid in factory_ids:
+        token = None
+        try:
+            token = _set_fid(fid)
+            if pool is not None:
+                ranges = await _resolve_data_covering_windows(pool, fid, window_keys)
+            else:
+                # dry-run: use static windows
+                ranges = [_resolve_date_range(wk) for wk in window_keys]
+        finally:
+            if token is not None:
+                _reset_fid(token)
+        factory_date_ranges[fid] = ranges
+
     if probe:
-        # Probe mode: run exactly ONE (first factory, first window, first question)
+        # Probe mode: run exactly ONE (first factory, first resolved range, first question)
         # for real and print whether answer_insight returned a non-empty narrative.
-        # Gold tables: agg_daily, agg_product, fact_pos_discount (verified in queries.py).
-        # Data-rich factories with confirmed gold data: qhj_prod (real POS data from
-        # restaurant_ops_etl), RES_3101_009. R_GML_DEMO / R_XMX_CHAIN may be empty.
+        # Gold tables: agg_daily, agg_product, fact_pos_discount (gold/queries.py).
+        # Data-rich factories: qhj_prod (real POS data), RES_3101_009.
         fid = factory_ids[0]
-        wk = window_keys[0]
         q = questions[0]
         orch = orchestrators.get(fid)
-        logger.info(f"[probe] running ONE: factory={fid} window={wk!r} question={q!r}")
+        ranges = factory_date_ranges.get(fid, [_resolve_date_range(window_keys[0])])
+        date_range = ranges[0]
+        logger.info(
+            f"[probe] running ONE: factory={fid} date={date_range[0]}~{date_range[1]} "
+            f"question={q!r}"
+        )
+        # Set tenant context for probe call too
+        token = None
         try:
-            start, end = _resolve_date_range(wk)
-            resp = await orch.answer_insight(fid, q, (start, end), cache_ttl_hours=0)
-            if resp.answer and resp.answer not in (
-                "今日 AI 预算已用完，建议明天再问。如需提前恢复，请联系管理员调整预算上限。",
-                "AI 服务暂时不可用，请稍后重试。如问题持续，请联系管理员。",
-            ):
-                print(
-                    f"[probe] OK: factory={fid} window={wk!r} src={resp.source} "
-                    f"tokens={resp.tokens}\n  answer_snippet={resp.answer[:120]!r}"
-                )
-            else:
-                print(
-                    f"[probe] DEGRADED/EMPTY: factory={fid} answer={resp.answer[:80]!r}"
-                )
-        except Exception as e:
-            print(f"[probe] EXCEPTION: factory={fid}: {e}")
+            token = _set_fid(fid)
+            resp = await orch.answer_insight(fid, q, date_range, cache_ttl_hours=0)
+        finally:
+            if token is not None:
+                _reset_fid(token)
+        if resp.answer and resp.answer not in (
+            "今日 AI 预算已用完，建议明天再问。如需提前恢复，请联系管理员调整预算上限。",
+            "AI 服务暂时不可用，请稍后重试。如问题持续，请联系管理员。",
+        ):
+            print(
+                f"[probe] OK: factory={fid} date={date_range[0]}~{date_range[1]} "
+                f"src={resp.source} tokens={resp.tokens}\n"
+                f"  answer_snippet={resp.answer[:120]!r}"
+            )
+        else:
+            print(
+                f"[probe] DEGRADED/EMPTY: factory={fid} answer={resp.answer[:80]!r}"
+            )
         return
 
-    # Build work list
-    work: List[Tuple[str, str, str]] = [
-        (fid, wk, q)
-        for fid in factory_ids
-        for wk in window_keys
-        for q in questions
-    ]
+    # Build work list with resolved (factory, date_range, question) triples.
+    # date_range is already data-covering; window_label is derived for logging.
+    work: List[Tuple[str, Tuple[date, date], str, str]] = []
+    for fid in factory_ids:
+        ranges = factory_date_ranges.get(fid, [_resolve_date_range(wk) for wk in window_keys])
+        for idx, dr in enumerate(ranges):
+            wk = window_keys[idx] if idx < len(window_keys) else f"range{idx}"
+            for q in questions:
+                work.append((fid, dr, q, wk))
     logger.info(f"[sweep] total combinations: {len(work)}")
 
     attempted = succeeded = 0
     sem = asyncio.Semaphore(concurrency)
 
-    async def _process(fid: str, wk: str, q: str) -> None:
+    async def _process(fid: str, dr: Tuple[date, date], q: str, wk: str) -> None:
         nonlocal attempted, succeeded
         async with sem:
             attempted += 1
             orch = orchestrators.get(fid)
-            ok = await _run_one(orch, fid, wk, q, dry_run)
+            # Set tenant context per task so agg_daily RLS GUC is correct
+            tok = None
+            try:
+                tok = _set_fid(fid)
+                ok = await _run_one(orch, fid, dr, q, dry_run, window_label=wk)
+            finally:
+                if tok is not None:
+                    _reset_fid(tok)
             if ok:
                 succeeded += 1
 
-    tasks = [asyncio.create_task(_process(fid, wk, q)) for fid, wk, q in work]
+    tasks = [asyncio.create_task(_process(fid, dr, q, wk)) for fid, dr, q, wk in work]
     await asyncio.gather(*tasks, return_exceptions=True)
 
     after = await _count_corpus_rows(pool, "agent_insight") if pool else -1

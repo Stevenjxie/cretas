@@ -113,10 +113,25 @@ async def _list_uploads(
     limit: int,
 ) -> List[Dict[str, Any]]:
     """Return upload rows (id, factory_id, file_name, row_count) for the
-    requested factories, newest first.  limit=0 → no limit."""
+    requested factories, newest first.  limit=0 → no limit.
+
+    RLS note (V20260502_03): smart_bi_pg_excel_uploads has FORCE ROW LEVEL
+    SECURITY.  The SELECT policy allows rows when:
+        factory_id = app.factory_id  OR  app.factory_id = ''  OR  app.factory_id IS NULL
+    The asyncpg pool setup callback (tenant_ctx.set_pg_connection_tenant) sets
+    app.factory_id to '__internal__' when no ContextVar is in scope, which does
+    NOT match the permissive '' / NULL path → every query returns 0 rows.
+    Fix: set the ContextVar to `fid` before each pool.acquire() so the pool
+    setup callback applies the correct GUC, then reset it afterwards.
+    Mirrors hooks._trigger_materialization which does the same thing.
+    """
+    from smartbi.tenant_ctx import set_factory_id, reset_factory_id
+
     rows: List[Dict[str, Any]] = []
     for fid in factory_ids:
+        tenant_token = None
         try:
+            tenant_token = set_factory_id(fid)
             async with pool.acquire() as conn:
                 if limit > 0:
                     fetched = await conn.fetch(
@@ -139,6 +154,9 @@ async def _list_uploads(
             logger.info(f"[enum] {fid}: found {len(fetched)} uploads")
         except Exception as e:
             logger.warning(f"[enum] {fid}: query failed: {e}")
+        finally:
+            if tenant_token is not None:
+                reset_factory_id(tenant_token)
     return rows
 
 

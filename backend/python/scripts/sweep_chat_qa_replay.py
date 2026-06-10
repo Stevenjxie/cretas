@@ -209,8 +209,22 @@ async def _load_factory_data(
     """Load the largest completed upload's dynamic_data rows for a factory.
 
     Returns (upload_id, rows).  Rows are sampled to ``limit_rows`` if set.
+
+    RLS note (V20260502_03): smart_bi_pg_excel_uploads has FORCE ROW LEVEL
+    SECURITY with SELECT policy:
+        factory_id = app.factory_id  OR  app.factory_id = ''  OR  app.factory_id IS NULL
+    The asyncpg pool setup callback sets app.factory_id to '__internal__' sentinel
+    when no ContextVar is in scope, which does NOT match any of the permissive
+    paths → query returns 0 rows → no upload found → data_rows=0 for every factory.
+    Fix: set the ContextVar to `factory_id` before pool.acquire() so the pool
+    setup callback applies the correct tenant GUC.
+    Mirrors hooks._trigger_materialization which does the same thing.
     """
+    from smartbi.tenant_ctx import set_factory_id, reset_factory_id
+
+    tenant_token = None
     try:
+        tenant_token = set_factory_id(factory_id)
         async with pool.acquire() as conn:
             row = await conn.fetchrow(
                 """SELECT id, row_count FROM smart_bi_pg_excel_uploads
@@ -252,6 +266,9 @@ async def _load_factory_data(
     except Exception as e:
         logger.warning(f"[data] {factory_id}: data load failed: {e}")
         return None, []
+    finally:
+        if tenant_token is not None:
+            reset_factory_id(tenant_token)
 
 
 # ---------------------------------------------------------------------------

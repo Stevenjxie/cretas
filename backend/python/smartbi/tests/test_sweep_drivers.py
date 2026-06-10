@@ -111,17 +111,79 @@ class TestMaterializationBackfill:
         assert result == -1
 
     def test_list_uploads_empty_on_db_error(self) -> None:
-        """_list_uploads returns [] when DB query fails (swallows exception)."""
+        """_list_uploads returns [] when DB query fails (swallows exception).
+
+        Also verifies that set_factory_id / reset_factory_id are called so RLS
+        GUC is applied (V20260502_03 fix).  Patching tenant_ctx so tests don't
+        require a real asyncpg pool.
+        """
         mod = self._import()
 
         failing_pool = MagicMock()
         failing_pool.acquire = MagicMock(side_effect=Exception("DB error"))
 
+        set_calls: List[str] = []
+        reset_calls: List[Any] = []
+
+        def fake_set(fid):
+            set_calls.append(fid)
+            return object()  # opaque token
+
+        def fake_reset(token):
+            reset_calls.append(token)
+
+        with patch("smartbi.tenant_ctx.set_factory_id", fake_set), \
+             patch("smartbi.tenant_ctx.reset_factory_id", fake_reset):
+            async def _test():
+                return await mod._list_uploads(failing_pool, ["F001"], limit=10)
+            result = _run(_test())
+
+        assert result == []
+        # RLS fix: set_factory_id must have been called with the factory_id
+        assert "F001" in set_calls, "set_factory_id must be called for RLS GUC"
+        # reset must be called even on failure (finally block)
+        assert len(reset_calls) == len(set_calls), "reset_factory_id must always be called"
+
+    def test_list_uploads_sets_tenant_context_per_factory(self) -> None:
+        """_list_uploads calls set_factory_id for each factory before querying.
+
+        Root cause of 'found 0 uploads': smart_bi_pg_excel_uploads has
+        FORCE ROW LEVEL SECURITY (V20260502_03).  Without the correct
+        app.factory_id GUC the SELECT policy evaluates false → 0 rows.
+        Fix: set/reset ContextVar per-factory before pool.acquire().
+        """
+        mod = self._import()
+
+        tenant_context_at_query: List[Optional[str]] = []
+        fid_contextvar = None
+
+        # Capture which factory_id ContextVar was set when fetch() was called
+        from smartbi import tenant_ctx
+
+        fake_rows = [
+            asyncio.coroutine(lambda *a, **k: [])() if False else None  # unused
+        ]
+
+        async def fake_fetch(*args, **kwargs) -> list:
+            tenant_context_at_query.append(tenant_ctx.get_factory_id())
+            return []
+
+        mock_conn = AsyncMock()
+        mock_conn.fetch = AsyncMock(side_effect=fake_fetch)
+
+        mock_pool = MagicMock()
+        mock_pool.acquire = MagicMock()
+        mock_pool.acquire.return_value.__aenter__ = AsyncMock(return_value=mock_conn)
+        mock_pool.acquire.return_value.__aexit__ = AsyncMock(return_value=False)
+
         async def _test():
-            return await mod._list_uploads(failing_pool, ["F001"], limit=10)
+            return await mod._list_uploads(mock_pool, ["F001", "F002"], limit=5)
 
         result = _run(_test())
         assert result == []
+        # The ContextVar must have been F001 when F001's query ran, F002 for F002
+        assert "F001" in tenant_context_at_query
+        assert "F002" in tenant_context_at_query
 
     def test_dry_run_does_not_call_materialize(self) -> None:
         """In dry-run mode, _rematerialize_upload must not import the materializer."""
@@ -219,18 +281,77 @@ class TestAgentInsightWarmup:
 
     def test_dry_run_returns_true(self) -> None:
         mod = self._import()
+        # _run_one now accepts date_range tuple instead of window_key
+        dr = (date(2025, 5, 1), date(2025, 5, 31))
 
         async def _test():
             return await mod._run_one(
                 orchestrator=None,
                 factory_id="qhj_prod",
-                window_key="30",
+                date_range=dr,
                 question="本期营业情况？",
                 dry_run=True,
+                window_label="30",
             )
 
         result = _run(_test())
         assert result is True
+
+    def test_resolve_data_covering_windows_uses_gold_range(self) -> None:
+        """_resolve_data_covering_windows builds windows anchored to real gold data.
+
+        When agg_daily has data in 2025, windows "30"/"90"/"all" must be anchored
+        to the real max_date (not today in 2026), so the orchestrator gets non-zero KPIs.
+        """
+        mod = self._import()
+
+        gold_max = date(2025, 12, 31)
+        gold_min = date(2025, 1, 1)
+
+        async def fake_data_range(pool, factory_id):
+            return {
+                "factory_id": factory_id,
+                "min_date": gold_min.isoformat(),
+                "max_date": gold_max.isoformat(),
+                "day_count": 365,
+            }
+
+        with patch("smartbi.gold.queries.data_range", fake_data_range):
+            async def _test():
+                return await mod._resolve_data_covering_windows(
+                    pool=MagicMock(),
+                    factory_id="qhj_prod",
+                    requested_window_keys=["30", "90", "all"],
+                )
+            ranges = _run(_test())
+
+        assert len(ranges) == 3
+        for start, end in ranges:
+            # All windows must end at or before gold_max, not at today 2026
+            assert end == gold_max, f"end date {end} should be gold_max {gold_max}"
+            assert start >= gold_min, f"start date {start} before gold_min {gold_min}"
+            assert start <= end
+
+    def test_resolve_data_covering_windows_falls_back_on_no_data(self) -> None:
+        """Falls back to static windows when factory has no gold data."""
+        mod = self._import()
+
+        async def fake_data_range(pool, factory_id):
+            return {"factory_id": factory_id, "min_date": None, "max_date": None, "day_count": 0}
+
+        with patch("smartbi.gold.queries.data_range", fake_data_range):
+            async def _test():
+                return await mod._resolve_data_covering_windows(
+                    pool=MagicMock(),
+                    factory_id="R_GML_DEMO",
+                    requested_window_keys=["30", "all"],
+                )
+            ranges = _run(_test())
+
+        # Falls back: 2 ranges (static)
+        assert len(ranges) == 2
+        for start, end in ranges:
+            assert start <= end
 
 
 # ===========================================================================
@@ -337,6 +458,42 @@ class TestChatQaReplay:
         upload_id, rows = _run(_test())
         assert upload_id is None
         assert rows == []
+
+    def test_load_factory_data_sets_tenant_context(self) -> None:
+        """_load_factory_data sets tenant ContextVar before querying the uploads table.
+
+        Root cause of data_rows=0 (FOOD_3101_048 / F001): smart_bi_pg_excel_uploads
+        has FORCE ROW LEVEL SECURITY (V20260502_03).  Without correct app.factory_id
+        GUC the SELECT policy evaluates false → fetchrow returns None → no upload found.
+        Fix: set_factory_id(factory_id) before pool.acquire(); reset in finally.
+        """
+        mod = self._import()
+
+        from smartbi import tenant_ctx as tc
+
+        tenant_at_query: List[Optional[str]] = []
+
+        async def capture_fetchrow(*args, **kwargs):
+            tenant_at_query.append(tc.get_factory_id())
+            return None  # no upload found
+
+        mock_conn = AsyncMock()
+        mock_conn.fetchrow = AsyncMock(side_effect=capture_fetchrow)
+        mock_pool = MagicMock()
+        mock_pool.acquire = MagicMock()
+        mock_pool.acquire.return_value.__aenter__ = AsyncMock(return_value=mock_conn)
+        mock_pool.acquire.return_value.__aexit__ = AsyncMock(return_value=False)
+
+        async def _test():
+            return await mod._load_factory_data(mock_pool, "FOOD_3101_048", limit_rows=100)
+
+        _run(_test())
+        # The ContextVar must have been FOOD_3101_048 when the query executed
+        assert tenant_at_query, "fetchrow was never called"
+        assert tenant_at_query[0] == "FOOD_3101_048", (
+            f"Expected FOOD_3101_048, got {tenant_at_query[0]!r} — "
+            "set_factory_id was not called before pool.acquire()"
+        )
 
     def test_dry_run_process_one(self) -> None:
         """Dry-run _process_one returns True without calling InsightGenerator."""
