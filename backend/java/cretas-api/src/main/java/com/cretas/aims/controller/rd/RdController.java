@@ -185,11 +185,15 @@ public class RdController {
                 return ResponseEntity.badRequest().body(Map.of("success", false, "message", "缺少必填字段: " + field));
             }
         }
+        // feedback_dto_roundtrip_silent_drop fix: 第1处 — controller 层提取 laborPerKg (可选, null 透传)
+        BigDecimal laborPerKg = body.get("laborPerKg") != null
+                ? new BigDecimal(body.get("laborPerKg").toString()) : null;
         var task = sampleService.submitQuotation(taskId,
                 new BigDecimal(body.get("materialCost").toString()),
                 new BigDecimal(body.get("laborCost").toString()),
                 new BigDecimal(body.get("overheadCost").toString()),
-                new BigDecimal(body.get("suggestedPrice").toString()), userId);
+                new BigDecimal(body.get("suggestedPrice").toString()),
+                laborPerKg, userId);
         return ResponseEntity.ok(Map.of("success", true, "data", task, "message", "报价已提交"));
     }
 

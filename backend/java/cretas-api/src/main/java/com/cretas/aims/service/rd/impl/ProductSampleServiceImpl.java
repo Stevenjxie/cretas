@@ -213,7 +213,8 @@ public class ProductSampleServiceImpl implements ProductSampleService {
     @Override
     @Transactional
     public QuotationTask submitQuotation(String taskId, BigDecimal materialCost, BigDecimal laborCost,
-                                          BigDecimal overheadCost, BigDecimal suggestedPrice, Long quotedBy) {
+                                          BigDecimal overheadCost, BigDecimal suggestedPrice,
+                                          BigDecimal laborPerKg, Long quotedBy) {
         QuotationTask task = quotationTaskRepository.findById(taskId)
                 .orElseThrow(() -> new IllegalArgumentException("报价任务不存在"));
         task.setMaterialCost(materialCost);
@@ -221,6 +222,10 @@ public class ProductSampleServiceImpl implements ProductSampleService {
         task.setOverheadCost(overheadCost);
         task.setTotalCost(materialCost.add(laborCost).add(overheadCost));
         task.setSuggestedPrice(suggestedPrice);
+        // feedback_dto_roundtrip_silent_drop fix: 第3处 — service 层 set, laborPerKg 可为 null (可选字段)
+        if (laborPerKg != null) {
+            task.setLaborPerKg(laborPerKg);
+        }
         task.setStatus("QUOTED");
         task.setQuotedBy(quotedBy);
         task.setQuotedAt(LocalDateTime.now());

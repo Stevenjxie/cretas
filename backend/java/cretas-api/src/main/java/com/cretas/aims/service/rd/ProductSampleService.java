@@ -30,9 +30,14 @@ public interface ProductSampleService {
 
     // ==================== 报价任务 ====================
     QuotationTask getQuotationBySample(String sampleId);
+    /**
+     * 提交报价. laborPerKg 为 R&D 经验估算 元/kg, 可为 null (旧数据向后兼容).
+     * feedback_dto_roundtrip_silent_drop: 第3处 — service 层接收并持久化 laborPerKg.
+     */
     QuotationTask submitQuotation(String taskId, java.math.BigDecimal materialCost,
                                    java.math.BigDecimal laborCost, java.math.BigDecimal overheadCost,
-                                   java.math.BigDecimal suggestedPrice, Long quotedBy);
+                                   java.math.BigDecimal suggestedPrice, java.math.BigDecimal laborPerKg,
+                                   Long quotedBy);
     QuotationTask confirmQuotation(String taskId, java.math.BigDecimal finalPrice, Long confirmedBy);
     Page<QuotationTask> listQuotations(String factoryId, String status, Pageable pageable);
 }
