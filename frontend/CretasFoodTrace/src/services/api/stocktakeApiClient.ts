@@ -48,6 +48,15 @@ export interface CreateStocktakeRequest {
   notes?: string;
 }
 
+/** 工厂仓库（盘点发起时选择目标仓库） */
+export interface FactoryWarehouseDTO {
+  id: string;
+  factoryId: string;
+  code: string;
+  name: string;
+  type?: string;
+}
+
 export interface StocktakeItemUpdateDTO {
   itemId: string;
   actualQty: number;
@@ -138,6 +147,13 @@ class StocktakeApiClient {
   /** 提交盘点审批 */
   async submit(stocktakeId: string, factoryId?: string): Promise<{ success: boolean; data: null }> {
     return apiClient.post(`${this.getPath(factoryId)}/${stocktakeId}/submit`);
+  }
+
+  /** 工厂仓库列表（盘点发起时选择目标仓库） */
+  async listWarehouses(factoryId?: string): Promise<{ success: boolean; data: FactoryWarehouseDTO[] }> {
+    const fid = getCurrentFactoryId(factoryId);
+    if (!fid) throw new Error('factoryId 是必需的，请先登录');
+    return apiClient.get(`/api/mobile/${fid}/factory/warehouses`);
   }
 }
 

@@ -158,6 +158,16 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
     @Autowired
     private com.cretas.aims.service.factory.WarehouseResolver warehouseResolver;
 
+    /**
+     * SP7 §3.3 仓库库存守卫 (W1 红线 #03): 入库前校验仓库类型 ↔ 物料大类匹配.
+     * 仓管员无库存自主权 — 不能往错类型仓库收货.
+     * optional + fail-open: 守卫对 legacy (LOGISTICS/WORKSHOP/null) 仓库自动放行,
+     * 仅对已设阶段语义类型 (RAW/WIP/FINISHED/SALTED) 的仓库强制约束,
+     * 防止误拦 F006 现有 legacy 仓库入库.
+     */
+    @Autowired(required = false)
+    private com.cretas.aims.service.factory.WarehouseInventoryGuardService warehouseInventoryGuardService;
+
     /** T159-B R4: 写入时维度单位校验 (optional — null → fail-open). */
     @Autowired(required = false)
     private com.cretas.aims.service.uom.MaterialUomConverter materialUomConverter;
@@ -238,6 +248,12 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
         // D1 双仓流转 (PR #310 §5.5): 入库默认 WH-LOG (物流仓). DTO 显式传则用 DTO 值.
         if (batch.getWarehouseId() == null) {
             batch.setWarehouseId(warehouseResolver.resolveLogisticsId(factoryId));
+        }
+
+        // SP7 §3.3 (W1 红线 #03): 原料入库前校验目标仓库类型 — 原料只能入 RAW/SALTED/legacy 仓.
+        // 守卫在 save 之前抛 422, 不污染事务. legacy/null 类型仓库自动放行.
+        if (warehouseInventoryGuardService != null) {
+            warehouseInventoryGuardService.assertCanReceive(batch.getWarehouseId(), factoryId, "RAW");
         }
 
         // 自动计算到期日期（如果未提供）
