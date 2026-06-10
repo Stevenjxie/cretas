@@ -38,7 +38,9 @@ public interface PaymentRequestRepository extends JpaRepository<PaymentRequest, 
 
     /**
      * 出纳专用：仅查询 APPROVED 状态（等待付款）。
+     * 内部 listApprovedForPayment 仍保留用于 markPaid 校验等场景。
      */
     List<PaymentRequest> findByFactoryIdAndStatusOrderByApprovedAtAsc(
             String factoryId, PaymentRequestStatus status);
+
 }

@@ -2,6 +2,7 @@ package com.cretas.aims.controller.inventory;
 
 import com.cretas.aims.annotation.RequirePermission;
 import com.cretas.aims.dto.common.ApiResponse;
+import com.cretas.aims.dto.inventory.PaymentRequestApprovedDTO;
 import com.cretas.aims.entity.inventory.PaymentRequest;
 import com.cretas.aims.service.MobileService;
 import com.cretas.aims.service.inventory.PaymentRequestService;
@@ -127,12 +128,22 @@ public class PaymentRequestController {
 
     // ─── 查询已审批待付款列表 ─────────────────────────────────────────────────
 
+    /**
+     * D-9 G1 出纳付款视图：返回带供应商名/PO单号/原料明细的结构化 DTO，不再是裸实体。
+     *
+     * <p>权限：finance:read_write（含出纳角色）+ procurement 读权限。
+     * 本 DTO 中价格字段为 PO 行明细，非 {@code @PriceSensitive} 标注字段，
+     * PriceFieldResponseAdvice 不做反射剥除。finance 角色（canViewFinance=true）
+     * 已触发 early-return，即使未持有 procurement:price:view 也可见。
+     */
     @GetMapping("/approved")
-    @Operation(summary = "查询已审批待付款列表", description = "出纳台账：status=APPROVED 的付款申请，按 approvedAt 升序")
+    @Operation(summary = "查询已审批待付款列表（G1出纳视图）",
+            description = "出纳台账：status=APPROVED，按 approvedAt 升序，带供应商名/PO单号/明细行")
     @RequirePermission({"finance:read_write", "finance:read", "procurement:read_write", "procurement:read"})
-    public ApiResponse<List<PaymentRequest>> listApproved(
+    public ApiResponse<List<PaymentRequestApprovedDTO>> listApproved(
             @PathVariable @NotBlank String factoryId) {
-        List<PaymentRequest> list = paymentRequestService.listApprovedForPayment(factoryId);
+        List<PaymentRequestApprovedDTO> list =
+                paymentRequestService.listApprovedForPaymentWithDetails(factoryId);
         return ApiResponse.success("查询成功", list);
     }
 

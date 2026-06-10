@@ -1,22 +1,26 @@
 package com.cretas.aims.service.inventory.impl;
 
+import com.cretas.aims.dto.inventory.PaymentRequestApprovedDTO;
 import com.cretas.aims.entity.Supplier;
 import com.cretas.aims.entity.enums.ArApApprovalStatus;
 import com.cretas.aims.entity.enums.ArApTransactionType;
 import com.cretas.aims.entity.enums.CounterpartyType;
 import com.cretas.aims.entity.enums.PaymentRequestStatus;
+import com.cretas.aims.entity.enums.PurchaseOrderStatus;
+import com.cretas.aims.entity.enums.SettlementType;
 import com.cretas.aims.entity.finance.ArApTransaction;
 import com.cretas.aims.entity.inventory.PaymentRequest;
+import com.cretas.aims.entity.inventory.PurchaseOrder;
+import com.cretas.aims.entity.inventory.PurchaseOrderItem;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.SupplierRepository;
 import com.cretas.aims.repository.finance.ArApTransactionRepository;
 import com.cretas.aims.repository.inventory.PaymentRequestRepository;
-import com.cretas.aims.entity.workflow.ApprovalWorkflowInstance;
+import com.cretas.aims.repository.inventory.PurchaseOrderItemRepository;
+import com.cretas.aims.repository.inventory.PurchaseOrderRepository;
 import com.cretas.aims.service.inventory.PaymentRequestService;
-import com.cretas.aims.service.workflow.WorkflowEngineService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -24,8 +28,10 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 /**
  * 付款申请单 Service 实现（SP6 P0）
@@ -36,6 +42,15 @@ import java.util.Map;
  *
  * <p>C1 孪生陷阱：角色检查通过 {@code RequestContextHolder} 读取 JwtAuthInterceptor
  * 设置的 "role" request attribute，SecurityContextHolder 在此项目中永远为空。
+ *
+ * <p>D-9 G2 全入库前置：非预付类（{@link SettlementType#PREPAID}）结算方式的 PO 要求
+ * status=COMPLETED 才可创建付款申请（防止货未到先付款）。PREPAID 按定义先付后货，豁免。
+ * PO 查不到时跳过检查（降级，不阻塞创建）。
+ *
+ * <p>D-9 G6：{@code submitForApproval()} 已删除（死代码，无 Controller 端点暴露，
+ * X-4 确认付款申请链走硬编码状态机而非 WorkflowEngine）。
+ *
+ * <p>D-9 G7：{@code create()} 继承 PO.settlementType → PR.settlementType。
  */
 @Slf4j
 @Service
@@ -45,10 +60,8 @@ public class PaymentRequestServiceImpl implements PaymentRequestService {
     private final PaymentRequestRepository paymentRequestRepository;
     private final ArApTransactionRepository arApTransactionRepository;
     private final SupplierRepository supplierRepository;
-
-    /** SP12 §5.4: 可选工作流引擎（无配置时降级运行，不抛 NPE）。 */
-    @Autowired(required = false)
-    private WorkflowEngineService workflowEngine;
+    private final PurchaseOrderRepository purchaseOrderRepository;
+    private final PurchaseOrderItemRepository purchaseOrderItemRepository;
 
     // ─── 活跃状态（幂等性检查用） ────────────────────────────────────────────
 
@@ -64,8 +77,28 @@ public class PaymentRequestServiceImpl implements PaymentRequestService {
             PaymentRequestStatus.CANCELLED
     );
 
+    /**
+     * 豁免全入库检查的结算方式集合（D-9 G2）。
+     * PREPAID = 预付，按定义先付款后到货，不要求入库完成。
+     */
+    private static final java.util.Set<SettlementType> PREPAID_EXEMPT = java.util.Set.of(
+            SettlementType.PREPAID
+    );
+
     // ─── create ───────────────────────────────────────────────────────────────
 
+    /**
+     * D-9 G2 全入库前置检查 + D-9 G7 settlementType 继承。
+     *
+     * <p>G2 规则：
+     * <ol>
+     *   <li>查 PO（找不到 → 降级跳过，不阻塞）。</li>
+     *   <li>若 PO.settlementType 属于 PREPAID_EXEMPT → 豁免，直接通过。</li>
+     *   <li>否则：PO.status 必须是 COMPLETED（全量入库），不满足 → 拒绝，返回具体 hint。</li>
+     * </ol>
+     *
+     * <p>G7 规则：将 PO.settlementType 写入 PR.settlementType（nullable，老数据降级 null）。
+     */
     @Override
     @Transactional
     public PaymentRequest create(String factoryId, String poId, String supplierId,
@@ -79,6 +112,29 @@ public class PaymentRequestServiceImpl implements PaymentRequestService {
                     "采购订单 " + poId + " 已有活跃付款申请单（ID=" + active.get(0).getId() + "）");
         }
 
+        // D-9 G7 + G2: 查 PO，继承 settlementType 并做入库前置检查
+        SettlementType inheritedSettlementType = null;
+        PurchaseOrder po = purchaseOrderRepository.findById(poId).orElse(null);
+        if (po != null) {
+            // G7: 继承结算方式
+            inheritedSettlementType = po.getSettlementType();
+
+            // G2: 全入库前置检查（PREPAID 豁免）
+            SettlementType st = po.getSettlementType();
+            boolean isExempt = st != null && PREPAID_EXEMPT.contains(st);
+            if (!isExempt && po.getStatus() != PurchaseOrderStatus.COMPLETED) {
+                // 防呆 4 位一体：具体状态 + 下一步
+                String stDisplay = st != null ? st.getDisplayName() : "未设置";
+                String hint = "采购订单 " + po.getOrderNumber() + " 结算方式为【" + stDisplay
+                        + "】，须在货物全量入库后（订单状态：已完成）才能提付款申请。"
+                        + "当前状态：" + po.getStatus().getDisplayName()
+                        + "。请确认到货并完成全量入库后，再发起付款申请。";
+                throw new BusinessException(422, hint);
+            }
+        } else {
+            log.warn("[D9-G2] 付款申请创建：找不到 PO id={}，跳过入库前置检查（降级）", poId);
+        }
+
         PaymentRequest pr = new PaymentRequest();
         pr.setFactoryId(factoryId);
         pr.setPurchaseOrderId(poId);
@@ -89,9 +145,12 @@ public class PaymentRequestServiceImpl implements PaymentRequestService {
         pr.setRemark(remark);
         pr.setStatus(PaymentRequestStatus.PENDING);
         pr.setRequestNumber(generateRequestNumber(factoryId));
+        // G7: 继承结算方式
+        pr.setSettlementType(inheritedSettlementType);
 
         PaymentRequest saved = paymentRequestRepository.save(pr);
-        log.info("[SP6] 创建付款申请单 {} 金额={} 供应商={}", saved.getRequestNumber(), amount, supplierId);
+        log.info("[SP6] 创建付款申请单 {} 金额={} 供应商={} 结算方式={}",
+                saved.getRequestNumber(), amount, supplierId, inheritedSettlementType);
         return saved;
     }
 
@@ -209,72 +268,106 @@ public class PaymentRequestServiceImpl implements PaymentRequestService {
         supplier.setCurrentBalance(newBalance);
         supplierRepository.save(supplier);
 
-        log.info("[SP6] 付款申请单 {} 已标记付款 amount={} supplierBalance: {} → {} tx={}",
-                pr.getRequestNumber(), amount, supplier.getCurrentBalance(), newBalance, savedTx.getId());
+        log.info("[SP6] 付款申请单 {} 已标记付款 amount={} supplierBalance → {} tx={}",
+                pr.getRequestNumber(), amount, newBalance, savedTx.getId());
         return savedPr;
     }
 
-    // ─── listApprovedForPayment ───────────────────────────────────────────────
+    // ─── listApprovedForPaymentWithDetails (D-9 G1) ──────────────────────────
+
+    /**
+     * D-9 G1 出纳付款视图。
+     *
+     * <p>实现步骤（batch 安全，无 N+1）：
+     * <ol>
+     *   <li>查所有 APPROVED 的 PaymentRequest（按 approvedAt ASC）。</li>
+     *   <li>批量查关联 PO（{@code purchaseOrderRepository.findAllById}）。</li>
+     *   <li>批量查关联 Supplier（{@code supplierRepository.findAllById}）。</li>
+     *   <li>批量查所有 PO items（{@code purchaseOrderItemRepository.findByPurchaseOrderIdIn}）。</li>
+     *   <li>在内存中组装 DTO（3 次 DB 查询，O(n) 合并）。</li>
+     * </ol>
+     */
+    @Override
+    public List<PaymentRequestApprovedDTO> listApprovedForPaymentWithDetails(String factoryId) {
+        List<PaymentRequest> prs = paymentRequestRepository
+                .findByFactoryIdAndStatusOrderByApprovedAtAsc(factoryId, PaymentRequestStatus.APPROVED);
+        if (prs.isEmpty()) {
+            return Collections.emptyList();
+        }
+
+        // Batch load POs
+        List<String> poIds = prs.stream().map(PaymentRequest::getPurchaseOrderId)
+                .filter(id -> id != null).distinct().collect(Collectors.toList());
+        Map<String, PurchaseOrder> poMap = purchaseOrderRepository.findAllById(poIds)
+                .stream().collect(Collectors.toMap(PurchaseOrder::getId, po -> po));
+
+        // Batch load Suppliers
+        List<String> supplierIds = prs.stream().map(PaymentRequest::getSupplierId)
+                .filter(id -> id != null).distinct().collect(Collectors.toList());
+        Map<String, Supplier> supplierMap = supplierRepository.findAllById(supplierIds)
+                .stream().collect(Collectors.toMap(Supplier::getId, s -> s));
+
+        // Batch load PO items
+        Map<String, List<PurchaseOrderItem>> itemsByPoId = poIds.isEmpty()
+                ? Collections.emptyMap()
+                : purchaseOrderItemRepository.findByPurchaseOrderIdIn(poIds)
+                        .stream().collect(Collectors.groupingBy(PurchaseOrderItem::getPurchaseOrderId));
+
+        return prs.stream().map(pr -> {
+            PurchaseOrder po = poMap.get(pr.getPurchaseOrderId());
+            Supplier supplier = supplierMap.get(pr.getSupplierId());
+            List<PurchaseOrderItem> items = itemsByPoId.getOrDefault(pr.getPurchaseOrderId(),
+                    Collections.emptyList());
+
+            List<PaymentRequestApprovedDTO.ItemLine> itemLines = items.stream()
+                    .map(item -> {
+                        BigDecimal qty = item.getQuantity();
+                        BigDecimal price = item.getUnitPrice();
+                        BigDecimal lineAmt = (qty != null && price != null)
+                                ? qty.multiply(price) : null;
+                        return PaymentRequestApprovedDTO.ItemLine.builder()
+                                .itemId(item.getId())
+                                .materialName(item.getMaterialName())
+                                .quantity(qty)
+                                .unit(item.getUnit())
+                                .unitPrice(price)
+                                .lineAmount(lineAmt)
+                                .specification(item.getSpecification())
+                                .build();
+                    })
+                    .collect(Collectors.toList());
+
+            SettlementType st = pr.getSettlementType();
+            return PaymentRequestApprovedDTO.builder()
+                    .id(pr.getId())
+                    .requestNumber(pr.getRequestNumber())
+                    .purchaseOrderId(pr.getPurchaseOrderId())
+                    .purchaseOrderNumber(po != null ? po.getOrderNumber() : null)
+                    .supplierId(pr.getSupplierId())
+                    .supplierName(supplier != null ? supplier.getName() : null)
+                    .amount(pr.getAmount())
+                    .settlementType(st)
+                    .settlementTypeDisplayName(st != null ? st.getDisplayName() : null)
+                    .paymentMethod(pr.getPaymentMethod())
+                    .bankName(pr.getBankName())
+                    .bankAccount(pr.getBankAccount())
+                    .approvedAt(pr.getApprovedAt())
+                    .approvedBy(pr.getApprovedBy())
+                    .remark(pr.getRemark())
+                    .status(pr.getStatus())
+                    .createdBy(pr.getCreatedBy())
+                    .createdAt(pr.getCreatedAt())
+                    .items(itemLines)
+                    .build();
+        }).collect(Collectors.toList());
+    }
+
+    // ─── listApprovedForPayment (内部使用) ────────────────────────────────────
 
     @Override
     public List<PaymentRequest> listApprovedForPayment(String factoryId) {
         return paymentRequestRepository.findByFactoryIdAndStatusOrderByApprovedAtAsc(
                 factoryId, PaymentRequestStatus.APPROVED);
-    }
-
-    // ─── submitForApproval (SP12 §5.4) ───────────────────────────────────────
-
-    /**
-     * SP12 §5.4: 提交付款申请单至审批工作流。
-     *
-     * <p>前置条件：申请单处于 PENDING 状态且 {@code workflowInstanceId == null}。
-     * 重复提交（已有 workflowInstanceId）→ 409。状态不对 → 400。
-     *
-     * @param requestId 申请单 ID
-     * @param factoryId 工厂 ID
-     * @param userId    提交人 userId
-     * @return 工作流实例 ID（引擎不可用时返回 null）
-     */
-    @Override
-    @Transactional
-    public String submitForApproval(String requestId, String factoryId, Long userId) {
-        PaymentRequest pr = paymentRequestRepository.findById(requestId)
-                .orElseThrow(() -> new BusinessException(404, "付款申请单不存在: " + requestId));
-
-        // 幂等防重：已在工作流中则 409
-        if (pr.getWorkflowInstanceId() != null) {
-            throw new BusinessException(409, "付款申请单已提交工作流: " + pr.getWorkflowInstanceId());
-        }
-
-        // 前置状态检查：必须是 PENDING
-        if (pr.getStatus() != PaymentRequestStatus.PENDING) {
-            throw new BusinessException(400, "只有 PENDING 状态的申请单可以提交工作流（当前: " + pr.getStatus() + "）");
-        }
-
-        String instanceId = null;
-        if (workflowEngine != null) {
-            try {
-                Map<String, Object> context = Map.of(
-                        "requestId", requestId,
-                        "factoryId", factoryId,
-                        "amount", pr.getAmount().toPlainString(),
-                        "supplierId", pr.getSupplierId() != null ? pr.getSupplierId() : ""
-                );
-                ApprovalWorkflowInstance instance = workflowEngine.startWorkflow(
-                        factoryId, "PAYMENT_APPROVAL", requestId, context, userId);
-                if (instance != null) {
-                    instanceId = instance.getId();
-                    pr.setWorkflowInstanceId(instanceId);
-                }
-            } catch (Exception e) {
-                log.warn("启动付款审批工作流失败 (requestId={}), 降级处理: {}", requestId, e.getMessage());
-            }
-        }
-
-        pr.setSubmittedBy(userId);
-        paymentRequestRepository.save(pr);
-        log.info("[SP12] 付款申请单 {} 已提交审批: instanceId={}", pr.getRequestNumber(), instanceId);
-        return instanceId;
     }
 
     // ─── 私有辅助 ─────────────────────────────────────────────────────────────
