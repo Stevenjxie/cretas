@@ -5,6 +5,7 @@ import com.cretas.aims.dto.inventory.CreateTransferRequest;
 import com.cretas.aims.entity.inventory.InternalTransfer;
 import com.cretas.aims.entity.inventory.InternalTransferItem;
 
+import java.math.BigDecimal;
 import java.util.List;
 import java.util.Map;
 
@@ -31,6 +32,13 @@ public interface TransferService {
     InternalTransfer shipTransfer(String factoryId, String transferId, Long userId);
 
     InternalTransfer receiveTransfer(String factoryId, String transferId, Long userId);
+
+    /**
+     * BUG-3 修复: 签收时可传入各 item 实收量 (itemId → actualQuantity)。
+     * null = 向后兼容, 全部回退为发货量。
+     */
+    InternalTransfer receiveTransfer(String factoryId, String transferId, Long userId,
+                                     Map<Long, BigDecimal> itemActualQuantities);
 
     InternalTransfer confirmTransfer(String factoryId, String transferId, Long userId);
 

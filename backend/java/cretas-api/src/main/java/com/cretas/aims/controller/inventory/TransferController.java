@@ -17,6 +17,7 @@ import com.cretas.aims.annotation.RequirePermission;
 
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
+import java.math.BigDecimal;
 import java.util.List;
 import java.util.Map;
 import com.cretas.aims.annotation.RequireModule;
@@ -122,14 +123,30 @@ public class TransferController {
 
     @RequireModule("warehouse")
     @PostMapping("/{transferId}/receive")
-    @Operation(summary = "调拨签收")
+    @Operation(summary = "调拨签收", description = "可选传入 {itemActualQuantities: {itemId: actualQty}} 覆盖各行实收量")
     @RequirePermission("inventory:write")
     public ApiResponse<InternalTransfer> receiveTransfer(
             @PathVariable @NotBlank String factoryId,
             @PathVariable @NotBlank String transferId,
-            @RequestHeader("Authorization") String authorization) {
+            @RequestHeader("Authorization") String authorization,
+            @RequestBody(required = false) Map<String, Object> body) {
         Long userId = extractUserId(authorization);
-        InternalTransfer transfer = transferService.receiveTransfer(factoryId, transferId, userId);
+        // BUG-3 修复: 从可选 body 提取 itemActualQuantities map (itemId Long → actualQuantity BigDecimal)。
+        // body=null 或不含该字段时向后兼容 (全部回退为发货量)。
+        Map<Long, BigDecimal> itemActualQuantities = null;
+        if (body != null && body.containsKey("itemActualQuantities")) {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> raw = (Map<String, Object>) body.get("itemActualQuantities");
+            if (raw != null) {
+                itemActualQuantities = new java.util.HashMap<>();
+                for (Map.Entry<String, Object> e : raw.entrySet()) {
+                    Long id = Long.parseLong(e.getKey());
+                    BigDecimal qty = new BigDecimal(e.getValue().toString());
+                    itemActualQuantities.put(id, qty);
+                }
+            }
+        }
+        InternalTransfer transfer = transferService.receiveTransfer(factoryId, transferId, userId, itemActualQuantities);
         return ApiResponse.success("调拨已签收", transfer);
     }
 
