@@ -305,6 +305,10 @@ public class YieldReportServiceImpl implements YieldReportService {
             }
         }
 
+        // M2 SP9: 每次报工后增量回写 ProductionBatch.laborCost = Σ YIELD 报工人工成本聚合。
+        // fail-soft: 不影响主线报工。standard_hourly_rate 未配时 laborCost=null → null 诚实传播。
+        rollupLaborCostToBatch(factoryId, batchId);
+
         // 双写 WorkProcessTask.actualQuantity = Σ该任务 YIELD output (权威=YIELD, 老字段保兼容)
         // 已有报工产出 + 本次 (显式加本次, 不依赖 JPQL flush 时序)
         BigDecimal taskTotal = existingTaskReports.stream()
@@ -1364,6 +1368,39 @@ public class YieldReportServiceImpl implements YieldReportService {
         }
     }
 
+    /**
+     * M2 SP9: 聚合该批次全部 YIELD 报工的人工成本, 回写到 ProductionBatch.laborCost。
+     *
+     * <p>语义: laborCost = Σ production_reports.labor_cost (reportType=YIELD, 未删除)。
+     * 诚实 null 传播: 若所有报工的 laborCost 均为 null (standard_hourly_rate 未配) → 批次 laborCost 保持 null;
+     * 若至少一笔有值 → 累加 (null 视 0 贡献, 最终 > 0 则写回)。
+     * fail-soft: 任何异常仅记 WARN, 不阻塞调用方事务。</p>
+     */
+    private void rollupLaborCostToBatch(String factoryId, Long batchId) {
+        try {
+            List<ProductionReport> reports = reportRepo.findYieldReportsByBatch(factoryId, batchId);
+            BigDecimal total = null;
+            for (ProductionReport rpt : reports) {
+                if (rpt.getLaborCost() != null) {
+                    total = (total == null ? BigDecimal.ZERO : total).add(rpt.getLaborCost());
+                }
+            }
+            if (total == null) {
+                // 全部 null: 保持现有批次 laborCost 不动 (可能来自其他路径)
+                return;
+            }
+            ProductionBatch pb = productionBatchRepository.findByIdAndFactoryId(batchId, factoryId).orElse(null);
+            if (pb == null) return;
+            pb.setLaborCost(total);
+            pb.calculateMetrics(); // 重算 totalCost
+            productionBatchRepository.save(pb);
+            log.debug("[M2] batch={} laborCost rollup → {}", batchId, total);
+        } catch (Exception e) {
+            log.warn("[M2] 批次人工成本回写失败 (fail-soft): factoryId={} batchId={} err={}",
+                    factoryId, batchId, e.getMessage());
+        }
+    }
+
     @Override
     @Transactional
     public Map<String, Object> settleDay(String factoryId, Long batchId, Long workerId, LocalDate date, boolean triggerComplete) {
@@ -1374,6 +1411,9 @@ public class YieldReportServiceImpl implements YieldReportService {
             r.setSettledAt(LocalDateTime.now());
         }
         reportRepo.saveAll(unsettled);
+
+        // M2 SP9: 结清时也同步回写批次人工成本聚合 (确保完工口径准确)
+        rollupLaborCostToBatch(factoryId, batchId);
 
         Map<String, Object> out = new HashMap<>();
         out.put("settledCount", unsettled.size());

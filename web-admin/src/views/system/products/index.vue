@@ -83,6 +83,9 @@ const productExtendedFields = computed<FieldConfig[]>(() => [
     placeholder: gramsPerUnitPlaceholder.value },
   { key: 'wipToFgYield', label: '半成品出成率', type: 'decimal', group: '规格信息', precision: 4, order: 4,
     placeholder: '0~1，如 0.55=55%（留空按 1:1）' },
+  // SP9-M1: 研发预估人工成本 (quotedLaborCost); 供人效双口径对比用; 成品才有意义, 原辅料留空即可
+  { key: 'quotedLaborCostPerKg', label: '研发人工成本(元/kg)', type: 'decimal', group: '规格信息', precision: 4, order: 5,
+    suffix: '元/kg', placeholder: '研发预估人工, 不填则双口径对比中报价列显示"-"' },
   // ---- 商务信息 (成品隐藏, 原辅料显示) ----
   { key: 'brand', label: '品牌', type: 'text', group: '商务信息', order: 1 },
   { key: 'taxIncludedUnitPrice', label: '含税单价', type: 'decimal', group: '商务信息', precision: 4, suffix: '元', order: 2 },
@@ -141,6 +144,7 @@ interface ProductType {
   boxConversionCoefficient?: number;
   gramsPerUnit?: number;   // P0-2: 标准克重(克/份), 报工末道份→kg折算用
   wipToFgYield?: number;   // T133: 半成品→成品出成率 (0~1), 备货看板 WIP 估算; null=按 1.0
+  quotedLaborCostPerKg?: number; // SP9-M1: 研发预估人工成本(元/kg), 人效双口径对比报价侧
   level1Unit?: string;     // T123: 一级单位 (如 筐, 箱) 与 boxConversionCoefficient 联用
   baseProductName?: string; // T123: 产品基础名 (名称分离), RN 展示优先使用, 无则 fallback 到 name
   inventoryWarningThreshold?: number;

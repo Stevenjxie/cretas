@@ -71,7 +71,9 @@ export const menuConfig: MenuItem[] = [
       { path: '/production/bom-achievement', title: 'BOM达成率分析', icon: '', module: 'production' },
       { path: '/production/process-io', title: '工序投入产出对比', icon: '', module: 'production' },
       { path: '/production/material-requisitions', title: '物料需求单', icon: '', module: 'production' },
-      { path: '/rd/samples', title: '研发样品', icon: '', module: 'production' }
+      { path: '/rd/samples', title: '研发样品', icon: '', module: 'production' },
+      // SP9: 人效双口径对比 (报价 quotedLaborCost vs 实际 actualLaborCost)
+      { path: '/production/labor-efficiency', title: '人效双口径对比', icon: '', module: 'production' }
     ]
   },
   {
