@@ -69,12 +69,132 @@ async def _log_template_hit_safe(pool, query, factory_id, upload_id, template_co
         return None
 
 
-async def _capture_qa_distillation(query, answer, http_request) -> None:
-    """Capture an AI Q&A teacher pair (question → final LLM answer) into the
-    distillation corpus. Fire-and-forget — wrapped so it NEVER raises and never
-    affects the response. Only called on freshly-generated LLM answers in the
-    non-stream ``general_analysis`` path (cache-hit returns at the top of that
-    function, so reaching the call sites means a fresh teacher pair)."""
+def _build_qa_input_text(query: str, data_context: Optional[str]) -> str:
+    """Build a self-contained input_text for chat_qa corpus samples.
+
+    The (input_text → teacher_output) pair must be self-contained so a future
+    model learns to answer FROM data, not hallucinate numbers.  A bare user
+    query gives zero grounding — we mirror the pattern used by
+    ``_corpus_input_text`` in chart_insight_service.py: embed the query PLUS
+    a summary of the structured data / aggregates that produced the answer.
+
+    data_context: a pre-built string of aggregated facts / stats (ideally
+    key-value pairs like "revenue=¥1.2M, top_item=猪舌×531盒").  If None or
+    empty, the query is still captured but tagged quality=3 (bare organic).
+    """
+    header = "chat_qa|general_analysis"
+    if data_context:
+        return f"{header}|query:{query}|data_context:{data_context}"
+    # No data context available — still useful, but lower quality
+    return f"{header}|query:{query}"
+
+
+def _derive_business_type(factory_id: Optional[str], table_type: Optional[str]) -> str:
+    """Derive business_type (restaurant/factory/unknown) from available context.
+
+    Uses the same logic convention as chart_insight_service._map_domain:
+    - factory_ids prefixed with restaurant-domain knowledge (qhj → restaurant)
+    - table_type hint if passed by the Java caller
+    - falls back to "unknown" (honest fallback, never pollutes bucket with wrong type)
+    """
+    if table_type:
+        t = table_type.lower()
+        if "restaurant" in t or "餐" in t:
+            return "restaurant"
+        if "factory" in t or "manufacture" in t or "工厂" in t or "制造" in t:
+            return "factory"
+    # Known restaurant factory prefixes (qhj = 青花椒餐饮)
+    if factory_id:
+        fid = factory_id.upper()
+        if fid.startswith("QHJ") or fid.startswith("RESTAURANT"):
+            return "restaurant"
+        # Default Cretas factory customers → factory
+        if fid.startswith("F") and len(fid) <= 6:
+            return "factory"
+    return "unknown"
+
+
+def _qa_lint_has_data_context(data_context: Optional[str]) -> bool:
+    """Return True if data_context is substantive enough to justify quality=4.
+
+    Criteria (per spec §4 G1): has data context + passes basic no-fake-data
+    lint. We check that data_context is non-empty, reasonably long (>20 chars),
+    and contains at least one numeric figure (¥ amount, row count, percentage…).
+    """
+    if not data_context or len(data_context.strip()) < 20:
+        return False
+    import re
+    # Must contain at least one numeric token (number / ¥ / % / 条/行/条)
+    return bool(re.search(r'[\d¥%]', data_context))
+
+
+def _build_qa_data_context(
+    data: Optional[list],
+    insights_result: Optional[dict],
+) -> Optional[str]:
+    """Build a compact data-context string from the structured data and analysis
+    aggregates that produced the chat answer.
+
+    Mirrors the spirit of ``_corpus_input_text`` in chart_insight_service.py:
+    bake the real underlying figures into the input_text so the (input→output)
+    pair is self-contained and a future model learns from data, not from
+    memorising the question.
+
+    Returns a compact key=value summary string, or None if no usable facts found.
+    """
+    try:
+        parts: list = []
+        if data:
+            parts.append(f"rows={len(data)}")
+            # Column names give domain context
+            if data[0] and isinstance(data[0], dict):
+                cols = list(data[0].keys())[:8]
+                parts.append(f"cols=[{','.join(str(c) for c in cols)}]")
+                # Collect numeric column totals / ranges as grounding figures
+                import pandas as pd
+                try:
+                    df = pd.DataFrame(data)
+                    numeric_cols = df.select_dtypes(include=["number"]).columns.tolist()
+                    for col in numeric_cols[:4]:
+                        col_sum = df[col].sum()
+                        col_max = df[col].max()
+                        if col_sum != 0:
+                            parts.append(f"{col}_sum={col_sum:.2f}")
+                        elif col_max != 0:
+                            parts.append(f"{col}_max={col_max:.2f}")
+                except Exception:
+                    pass
+        if insights_result and isinstance(insights_result, dict):
+            summary = insights_result.get("summary", "")
+            if summary and summary not in ("数据分析完成。", ""):
+                # First 120 chars of summary as grounding context
+                parts.append(f"summary_snippet={summary[:120]}")
+        if not parts:
+            return None
+        return "; ".join(parts)
+    except Exception:
+        return None
+
+
+async def _capture_qa_distillation(
+    query: str,
+    answer: str,
+    http_request,
+    *,
+    data_context: Optional[str] = None,
+    table_type: Optional[str] = None,
+) -> None:
+    """Capture an AI Q&A teacher pair into the distillation corpus.
+
+    **P0-1 fix (2026-06-11)**:
+    - input_text now embeds a data-context summary (not just the bare query)
+      so the (input→output) pair teaches FROM data, not hallucination.
+    - business_type derived from factory_id/table_type instead of hard-coded "unknown".
+    - quality assigned: 4 if data context passes lint (substantive numerics), else 3.
+
+    Fire-and-forget — NEVER raises, never affects the response.
+    Only called on freshly-generated LLM answers (cache-hit returns upstream).
+    """
     try:
         if not query or not answer:
             return
@@ -84,15 +204,20 @@ async def _capture_qa_distillation(query, answer, http_request) -> None:
             getattr(http_request.state, 'factory_id', None)
             if hasattr(http_request, 'state') else None
         )
+        business_type = _derive_business_type(factory_id, table_type)
+        input_text = _build_qa_input_text(query, data_context)
+        quality = 4 if _qa_lint_has_data_context(data_context) else 3
         pool = await get_pg_pool()
         await persist_distillation_sample(
             pool,
             source="chat_qa",
             task_type="qa",
-            input_text=query,
+            input_text=input_text,
             teacher_output=answer,
-            business_type="unknown",
+            business_type=business_type,
             factory_id=factory_id,
+            quality=quality,
+            metadata={"has_data_context": data_context is not None and len((data_context or "")) >= 20},
         )
     except Exception as e:  # belt-and-suspenders; helper already swallows
         logger.debug(f"[distill] qa capture skipped (non-blocking): {e}")
@@ -910,8 +1035,13 @@ async def general_analysis(request: GeneralAnalysisRequest, http_request: Reques
                     # Distillation capture (training corpus): freshly-generated
                     # LLM answer (text-only, no-data branch). Cache-hit returns
                     # above this point so this is always a fresh teacher pair.
+                    # No structured data available → data_context=None → quality=3.
                     if llm_result:
-                        await _capture_qa_distillation(query, answer, http_request)
+                        await _capture_qa_distillation(
+                            query, answer, http_request,
+                            data_context=None,
+                            table_type=request.table_type,
+                        )
                     return response
                 except Exception as e:
                     logger.warning(f"Direct LLM analysis failed: {e}")
@@ -1186,7 +1316,14 @@ async def general_analysis(request: GeneralAnalysisRequest, http_request: Reques
         # Distillation capture (training corpus): freshly-generated LLM answer
         # (with-data insights branch). Cache-hit returns near the top of this
         # function, so reaching here means a fresh teacher pair.
-        await _capture_qa_distillation(query, answer, http_request)
+        # Build data_context summary so the corpus pair is self-contained:
+        # future model learns to answer FROM data, not hallucinate numbers.
+        _qa_data_ctx = _build_qa_data_context(data, insights_result)
+        await _capture_qa_distillation(
+            query, answer, http_request,
+            data_context=_qa_data_ctx,
+            table_type=request.table_type,
+        )
 
         return response
 

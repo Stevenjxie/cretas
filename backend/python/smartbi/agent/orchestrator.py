@@ -614,6 +614,7 @@ async def _capture_insight_distillation(
             factory_id=factory_id,
             system_prompt=SYSTEM_PROMPT,
             teacher_model="qwen3-max",
+            quality=4,  # structural-verified + served to user: high quality
             metadata={
                 "slot": "insights",
                 "tokens": tokens,

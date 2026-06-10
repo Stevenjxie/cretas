@@ -295,6 +295,7 @@ async def _persist_distillation_sample(
             system_prompt=system_prompt,
             teacher_model=teacher_model,
             template_codes=template_codes,
+            quality=4,  # structural-verified + normal served: high quality
             metadata=metadata,
         )
     except Exception as e:  # belt-and-suspenders; helper already swallows

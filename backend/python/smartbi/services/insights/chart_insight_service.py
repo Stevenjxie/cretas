@@ -713,6 +713,7 @@ class ChartInsightService:
             factory_id=resolved_ctx.factory_id,
             system_prompt=_SYSTEM_PROMPT,
             teacher_model=self._get_teacher_model(),
+            quality=5,  # claims-pinning verified: highest quality tier
             metadata={
                 "permission_tier": resolved_ctx.permission_tier,
                 "gate": "passed",

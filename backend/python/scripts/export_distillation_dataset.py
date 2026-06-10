@@ -58,7 +58,12 @@ async def _fetch_rows(
         where.append(f"business_type = ${len(args)}")
     if min_quality is not None:
         args.append(min_quality)
-        where.append(f"(quality IS NULL OR quality >= ${len(args)})")
+        # P0-1 fix: NULL rows are EXCLUDED — only rows with quality >= N are
+        # exported.  The old "(quality IS NULL OR quality >= N)" let every
+        # unscored row leak into the training set, making the quality gate a
+        # no-op.  NULL means "not yet scored / polluted bare-query" and must
+        # never reach training.
+        where.append(f"quality >= ${len(args)}")
 
     sql = f"""
         SELECT id, source, business_type, factory_id, task_type, template_codes,
