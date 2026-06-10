@@ -1014,6 +1014,13 @@ public class ProcessingController {
         if (r.getCustomFields() != null) {
             b.setCustomFields(r.getCustomFields());
         }
+        // feedback_dto_roundtrip_silent_drop fix: 第2处 — mapper 层映射 isTrial / trialSampleId
+        if (r.getIsTrial() != null) {
+            b.setIsTrial(r.getIsTrial());
+        }
+        if (r.getTrialSampleId() != null) {
+            b.setTrialSampleId(r.getTrialSampleId());
+        }
         return b;
     }
 

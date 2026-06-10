@@ -123,4 +123,13 @@ public class CreateProductionBatchRequest {
 
     @Schema(description = "AI 配置的自定义字段 (JSON, 例: {\"drying_temp\": 85})")
     private Map<String, Object> customFields;
+
+    // ========== SP10 研发试制扩字段 (feedback_dto_roundtrip_silent_drop fix) ==========
+
+    @Schema(description = "是否为研发试制批次 (SP10, 默认 false)", defaultValue = "false")
+    private Boolean isTrial;
+
+    @Schema(description = "试制批次关联的样品 ID (FK → product_samples.id, SP10)")
+    @Size(max = 191, message = "试制样品ID长度不能超过191个字符")
+    private String trialSampleId;
 }
