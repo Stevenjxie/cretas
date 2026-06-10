@@ -37,6 +37,9 @@ import { enhanceChartDefaults } from '@/composables/useChartEnhancer';
 import TemplateGrid from './components/TemplateGrid.vue';
 import RestaurantGoldGrid from './components/RestaurantGoldGrid.vue';
 import ValueFeedbackStrip from './components/ValueFeedbackStrip.vue';
+import { buildChartInsight } from './components/chartInsight';
+import type { InsightResult, ChartWithMeta } from './components/chartInsight';
+import ChartInsight from './components/ChartInsight.vue';
 // Day 8 数据织网 Sub-Project A: capability-driven card visibility
 import { useCapability } from '@/composables/useCapability';
 import CapabilityGate from '@/components/CapabilityGate.vue';
@@ -489,6 +492,124 @@ const INSIGHT_COLLAPSE_LIMIT = 3;
 
 // Chart titles for citation references
 const chartTitles = ['销售趋势', '产品类别占比'];
+
+// ==================== 数据驱动图表洞察 (chart-insight engine, Tier 1) ====================
+// Reads dashboardData.value?.charts independently — does NOT touch echarts init paths.
+// Returns InsightResult | null; null → v-if renders nothing (honest-null, no fabrication).
+
+/** 销售趋势 / 按类别排行 chart insight (TREND or RANKING family). */
+const trendInsight = computed<InsightResult | null>(() => {
+  const charts = dashboardData.value?.charts as Record<string, unknown> | undefined;
+  if (!charts) return null;
+  const raw = charts['sales_trend'] || charts['销售趋势'];
+  if (!raw) return null;
+  const cfg = raw as Record<string, unknown>;
+  // Determine if the x-axis contains time labels (mirror initTrendChart isTime regex ~line 1159)
+  const xAxisData: unknown[] = (
+    (cfg.xAxis as Record<string, unknown> | undefined)?.data as unknown[] | undefined
+  ) ?? [];
+  const firstX = xAxisData.length > 0 ? String(xAxisData[0]) : '';
+  const isTime =
+    /^\d{4}[-/]\d{1,2}/.test(firstX) ||
+    /\d{1,4}[年月日]/.test(firstX) ||
+    /^Q[1-4]$/i.test(firstX) ||
+    /^\d{4}$/.test(firstX);
+  // Extract first numeric series data (parallel to xAxis.data)
+  const series = cfg.series as Array<Record<string, unknown>> | undefined;
+  const firstSeries = series?.[0];
+  const rawData = Array.isArray(firstSeries?.data) ? (firstSeries!.data as unknown[]) : [];
+  const numericData = rawData
+    .map((v) => (typeof v === 'number' && isFinite(v) ? v : null))
+    .filter((v): v is number => v !== null);
+  if (numericData.length === 0) return null;
+  const labels = xAxisData.map(String);
+  const chart: ChartWithMeta = {
+    chartType: isTime ? 'LINE' : 'BAR',
+    meta: {
+      xDim: isTime ? 'time' : 'product',
+      yMetric: 'revenue',
+      aggregation: 'sum',
+      domain: 'restaurant',
+    },
+    config: {
+      xAxis: { data: labels },
+      series: [{ type: isTime ? 'line' : 'bar', data: numericData }],
+    },
+  };
+  const perms = { canViewFinance: permissionStore.canWrite('finance') };
+  return buildChartInsight(chart, perms);
+});
+
+/** 产品类别占比 pie chart insight — normalized to BAR shape so RANKING fires (not pie-null). */
+const categoryInsight = computed<InsightResult | null>(() => {
+  const charts = dashboardData.value?.charts as Record<string, unknown> | undefined;
+  if (!charts) return null;
+  // Mirror the pie resolution logic from initCharts ~line 1104
+  let raw: unknown =
+    charts['category_distribution'] ||
+    charts['产品占比'] ||
+    charts['类别分布'] ||
+    charts['产品销售占比'] ||
+    charts['产品分布'];
+  if (!raw) {
+    // Fallback: first pie-type chart
+    for (const cfg of Object.values(charts)) {
+      const c = cfg as Record<string, unknown>;
+      if (
+        String(c.chartType).toLowerCase() === 'pie' ||
+        (Array.isArray(c.series) &&
+          String((c.series as Record<string, unknown>[])[0]?.type).toLowerCase() === 'pie')
+      ) {
+        raw = cfg;
+        break;
+      }
+    }
+  }
+  if (!raw) return null;
+  const cfg = raw as Record<string, unknown>;
+  const series = cfg.series as Array<Record<string, unknown>> | undefined;
+  const firstSeries = series?.[0];
+  if (!firstSeries) return null;
+  const rawData = Array.isArray(firstSeries.data) ? (firstSeries.data as unknown[]) : [];
+  // Extract names + values — support both [{name, value}] and parallel xAxis.data + numeric array
+  const categoryNames: string[] = [];
+  const categoryValues: number[] = [];
+  for (let i = 0; i < rawData.length; i++) {
+    const d = rawData[i];
+    if (typeof d === 'number' && isFinite(d) && d > 0) {
+      // Parallel array format: names come from xAxis.data
+      const xData = (cfg.xAxis as Record<string, unknown> | undefined)?.data as unknown[] | undefined;
+      const name = xData?.[i] != null ? String(xData[i]) : `类别${i + 1}`;
+      categoryNames.push(name);
+      categoryValues.push(d);
+    } else if (d !== null && typeof d === 'object') {
+      const obj = d as Record<string, unknown>;
+      const v = typeof obj.value === 'number' && isFinite(obj.value) ? obj.value : 0;
+      if (v > 0) {
+        const name = obj.name != null ? String(obj.name) : `类别${i + 1}`;
+        categoryNames.push(name);
+        categoryValues.push(v);
+      }
+    }
+  }
+  if (categoryValues.length < 2) return null;
+  // Normalize to BAR shape so RANKING family fires (PIE chartType → null per engine spec)
+  const chart: ChartWithMeta = {
+    chartType: 'BAR',
+    meta: {
+      xDim: 'category',
+      yMetric: 'revenue',
+      aggregation: 'sum',
+      domain: 'restaurant',
+    },
+    config: {
+      xAxis: { data: categoryNames },
+      series: [{ type: 'bar', data: categoryValues }],
+    },
+  };
+  const perms = { canViewFinance: permissionStore.canWrite('finance') };
+  return buildChartInsight(chart, perms);
+});
 
 function formatInsightTime(date: Date | string) {
   const d = new Date(date);
@@ -1788,6 +1909,7 @@ onUnmounted(() => {
           </template>
           <ChartSkeleton v-if="loading && !hasTrendData" type="chart" />
           <div ref="trendChartRef" class="chart-container" v-show="hasTrendData"></div>
+          <ChartInsight v-if="trendInsight" :insight="trendInsight" depth="detailed" />
         </el-card>
         </CapabilityGate>
       </el-col>
@@ -1802,6 +1924,7 @@ onUnmounted(() => {
           </template>
           <ChartSkeleton v-if="loading && !hasPieData" type="chart" />
           <div ref="pieChartRef" class="chart-container" v-show="hasPieData"></div>
+          <ChartInsight v-if="categoryInsight" :insight="categoryInsight" depth="detailed" />
         </el-card>
         </CapabilityGate>
       </el-col>
