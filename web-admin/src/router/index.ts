@@ -525,6 +525,37 @@ const businessRoutes: RouteRecordRaw[] = [
             name: 'PurchaseRequisitionDetail',
             component: () => import('@/views/procurement/requisitions/detail.vue'),
             meta: { requiresAuth: true, title: '请购单详情', module: 'procurement', hidden: true }
+          },
+          // 六扇门 U-SP6 — 入库异常处理
+          {
+            path: 'exceptions',
+            name: 'PurchaseExceptions',
+            component: () => import('@/views/procurement/exceptions/list.vue'),
+            meta: { requiresAuth: true, title: '入库异常', module: 'procurement' }
+          },
+          // 六扇门 U-SP6 — 付款申请 (PENDING→FINANCE_REVIEW→APPROVED→PAID 状态机)
+          {
+            path: 'payment-requests',
+            name: 'PaymentRequests',
+            component: () => import('@/views/procurement/payment-requests/list.vue'),
+            meta: {
+              requiresAuth: true,
+              title: '付款申请',
+              module: 'procurement',
+              roles: ['factory_super_admin', 'platform_admin', 'procurement_manager', 'finance_manager', 'cashier']
+            }
+          },
+          // 六扇门 U-SP6 — 采购发票 (上传/核对/逾期提醒)
+          {
+            path: 'invoices',
+            name: 'PurchaseInvoices',
+            component: () => import('@/views/procurement/invoices/list.vue'),
+            meta: {
+              requiresAuth: true,
+              title: '采购发票',
+              module: 'procurement',
+              roles: ['factory_super_admin', 'platform_admin', 'procurement_manager', 'finance_manager', 'cashier']
+            }
           }
         ]
       },
