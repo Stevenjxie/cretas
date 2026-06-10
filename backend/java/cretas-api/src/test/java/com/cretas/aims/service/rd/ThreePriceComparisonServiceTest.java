@@ -13,6 +13,8 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import jakarta.persistence.EntityNotFoundException;
+
 import java.math.BigDecimal;
 import java.util.Optional;
 
@@ -143,5 +145,39 @@ class ThreePriceComparisonServiceTest {
 
         assertNull(dto.getPreQuote(), "任务不存在时 preQuote 应为 null");
         assertNull(dto.getMidQuote(), "任务不存在时 midQuote 应为 null");
+    }
+
+    // ==================== getThreePriceComparisonByTaskId 测试 ====================
+
+    @Test
+    @DisplayName("getThreePriceComparisonByTaskId() — 通过 taskId 解析 sampleId 并返回三价对比")
+    void threePriceByTaskId_resolvesSampleId() {
+        // 模拟 QuotationTask → sampleId 解析
+        QuotationTask task = buildTask("sample-001", new BigDecimal("2000.00"));
+        task.setId("task-abc");
+        when(quotationTaskRepository.findById("task-abc")).thenReturn(Optional.of(task));
+
+        // 中报价有数据
+        ProductMidQuote mid = buildMidQuote(new BigDecimal("47.5000"), new BigDecimal("50.0"), null);
+        when(midQuoteRepository.findFirstByFactoryIdAndSampleIdOrderByCreatedAtDesc("F006", "sample-001"))
+                .thenReturn(Optional.of(mid));
+        when(quotationTaskRepository.findBySampleIdAndDeletedAtIsNull("sample-001"))
+                .thenReturn(task);
+
+        ThreePriceComparisonDTO dto = service.getThreePriceComparisonByTaskId("F006", "task-abc");
+
+        assertNotNull(dto);
+        // 确认不是用 taskId 当 sampleId 查到的 (taskId≠sampleId → 若出 preQuote 说明路由正确)
+        assertNotNull(dto.getMidQuote(), "通过 taskId 解析后应取到中报价");
+    }
+
+    @Test
+    @DisplayName("getThreePriceComparisonByTaskId() — 报价任务不存在 → EntityNotFoundException")
+    void threePriceByTaskId_taskNotFound_throws() {
+        when(quotationTaskRepository.findById("no-task")).thenReturn(Optional.empty());
+
+        assertThrows(EntityNotFoundException.class,
+                () -> service.getThreePriceComparisonByTaskId("F006", "no-task"),
+                "报价任务不存在应抛出 EntityNotFoundException");
     }
 }

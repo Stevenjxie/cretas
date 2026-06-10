@@ -109,4 +109,13 @@ public class ThreePriceComparisonServiceImpl implements ThreePriceComparisonServ
                 .varianceAlerts(alerts)
                 .build();
     }
+
+    @Override
+    @Transactional(readOnly = true)
+    public ThreePriceComparisonDTO getThreePriceComparisonByTaskId(String factoryId, String quotationTaskId) {
+        QuotationTask task = quotationTaskRepository.findById(quotationTaskId)
+                .orElseThrow(() -> new jakarta.persistence.EntityNotFoundException(
+                        "报价任务不存在: " + quotationTaskId));
+        return getThreePriceComparison(factoryId, task.getSampleId());
+    }
 }

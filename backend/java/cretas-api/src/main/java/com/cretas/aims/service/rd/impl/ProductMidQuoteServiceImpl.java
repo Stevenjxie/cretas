@@ -124,6 +124,47 @@ public class ProductMidQuoteServiceImpl implements ProductMidQuoteService {
                 .build();
     }
 
+    // ==================== 确认 + 查询 ====================
+
+    @Override
+    @Transactional
+    public com.cretas.aims.entity.rd.ProductMidQuote confirmMidQuote(
+            String factoryId, String midQuoteId, String notes, Long confirmedBy) {
+
+        ProductMidQuote midQuote = midQuoteRepository.findById(midQuoteId)
+                .filter(q -> factoryId.equals(q.getFactoryId()))
+                .orElseThrow(() -> new EntityNotFoundException(
+                        "中报价不存在或不属于该工厂: id=" + midQuoteId + " factoryId=" + factoryId));
+
+        if (!"CALCULATED".equals(midQuote.getStatus())) {
+            throw new IllegalStateException(
+                    "中报价状态必须为 CALCULATED 才能确认, 当前状态: " + midQuote.getStatus()
+                            + " (id=" + midQuoteId + ")");
+        }
+
+        midQuote.setStatus("CONFIRMED");
+        if (notes != null && !notes.isBlank()) {
+            midQuote.setNotes(notes);
+        }
+        midQuote.setConfirmedBy(confirmedBy);
+        midQuote.setConfirmedAt(java.time.LocalDateTime.now());
+
+        midQuote = midQuoteRepository.save(midQuote);
+        log.info("[SP10] midQuote CONFIRMED id={} confirmedBy={}", midQuoteId, confirmedBy);
+        return midQuote;
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public com.cretas.aims.entity.rd.ProductMidQuote getMidQuoteById(
+            String factoryId, String midQuoteId) {
+
+        return midQuoteRepository.findById(midQuoteId)
+                .filter(q -> factoryId.equals(q.getFactoryId()))
+                .orElseThrow(() -> new EntityNotFoundException(
+                        "中报价不存在或不属于该工厂: id=" + midQuoteId + " factoryId=" + factoryId));
+    }
+
     /**
      * 汇总三项成本. 任一为 null → 整体 null (诚实空值规则).
      */

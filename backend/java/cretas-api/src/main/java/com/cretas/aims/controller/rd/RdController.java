@@ -259,17 +259,16 @@ public class RdController {
      * SP10: 获取三价对比.
      *
      * <p>GET /api/mobile/{factoryId}/rd/quotations/{taskId}/three-price-comparison</p>
+     * <p>通过报价任务 ID 解析 sampleId 后返回预报价/中报价/实际成本三价对比.</p>
      */
     @RequirePermission({"rd:read"})
     @GetMapping("/quotations/{taskId}/three-price-comparison")
     public ResponseEntity<?> getThreePriceComparison(
             @PathVariable String factoryId,
             @PathVariable String taskId) {
-
-        // taskId 即 quotationTask.id, sampleId 需从 task 查; 这里传 taskId 作 sampleId fallback
-        // 实际上三价对比按 sampleId 聚合, 从 QuotationTask 取 sampleId
-        // 简洁方案: 先查 task, 再用 sampleId
-        var dto = threePriceService.getThreePriceComparison(factoryId, taskId);
+        // 修复: 原实现直接把 taskId 当 sampleId 传入, 导致三价对比永远查不到数据.
+        // 正确做法: 通过 QuotationTask 解析 sampleId, 再按 sampleId 聚合三价.
+        var dto = threePriceService.getThreePriceComparisonByTaskId(factoryId, taskId);
         return ResponseEntity.ok(Map.of("success", true, "data", dto));
     }
 
@@ -283,10 +282,28 @@ public class RdController {
     public ResponseEntity<?> getMidQuoteById(
             @PathVariable String factoryId,
             @PathVariable String midQuoteId) {
-        // direct repository lookup via service would be ideal, but for thin controller
-        // we expose the repo via the service interface — minimal approach here
-        // returns 404 if not found (GlobalExceptionHandler handles EntityNotFoundException)
-        return ResponseEntity.ok(Map.of("success", true,
-                "message", "中报价详情接口已注册, 请通过 sampleId 查询三价对比"));
+        var midQuote = midQuoteService.getMidQuoteById(factoryId, midQuoteId);
+        return ResponseEntity.ok(Map.of("success", true, "data", midQuote));
+    }
+
+    /**
+     * SP10: 确认中报价 (CALCULATED → CONFIRMED).
+     *
+     * <p>POST /api/mobile/{factoryId}/rd/mid-quotes/{midQuoteId}/confirm</p>
+     * <p>Body: { notes? } — 可选备注, 无则忽略.</p>
+     */
+    @RequirePermission({"rd:read_write"})
+    @PostMapping("/mid-quotes/{midQuoteId}/confirm")
+    public ResponseEntity<?> confirmMidQuote(
+            @PathVariable String factoryId,
+            @PathVariable String midQuoteId,
+            @RequestBody(required = false) Map<String, Object> body,
+            @RequestAttribute(value = "userId", required = false) Long userId) {
+
+        String notes = (body != null && body.get("notes") != null)
+                ? body.get("notes").toString() : null;
+
+        var confirmed = midQuoteService.confirmMidQuote(factoryId, midQuoteId, notes, userId);
+        return ResponseEntity.ok(Map.of("success", true, "data", confirmed, "message", "中报价已确认"));
     }
 }
