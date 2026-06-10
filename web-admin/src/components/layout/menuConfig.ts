@@ -179,7 +179,8 @@ export const menuConfig: MenuItem[] = [
       { path: '/finance/invoices', title: '开票管理', icon: '', module: 'finance' },
       { path: '/finance/payments', title: '收款管理', icon: '', module: 'finance' },
       { path: '/finance/adjustments', title: '调整审批', icon: '', module: 'finance' },
-      { path: '/finance/sku-margin', title: 'SKU毛利率分析', icon: '', module: 'finance' }
+      { path: '/finance/sku-margin', title: 'SKU毛利率分析', icon: '', module: 'finance' },
+      { path: '/finance/gross-margin-redline', title: '毛利红线配置', icon: '', module: 'finance' }
     ]
   },
   // UX P2-5 merged into 生产管理: /rd 原独立顶级组 (1 项), 研发样品并入生产
