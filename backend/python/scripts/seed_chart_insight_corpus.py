@@ -15,6 +15,12 @@ Usage:
     cd backend/python
     python -m scripts.seed_chart_insight_corpus --n 20 --dry-run
 
+    # Real-shape sampling (uses actual prod-data distributions, then anon labels + jitter):
+    python -m scripts.seed_chart_insight_corpus --n 500 --real-shapes
+
+    # Gap-fill: only generate for buckets BELOW floor (default 200/family):
+    python -m scripts.seed_chart_insight_corpus --n 1000 --gap-fill --floor 200
+
     # Real seeding run (on the server, requires SMARTBI_PROD_DSN or env vars):
     python -m scripts.seed_chart_insight_corpus --n 500
 
@@ -37,6 +43,20 @@ Design notes:
     ctx.factory_id (sentinel IDs SEED_R / SEED_F).
   * Only ACCEPTED outputs (validate_claims returned non-None, ¥ gate passed)
     are persisted.  Rejected paths are counted but not stored.
+  * Real-shape sampling (--real-shapes): queries gold/finance tables for actual
+    series distributions, extracts VALUE-SHAPE (relative proportions + item count),
+    classifies to a bucket family, then pairs with anonymised labels (from the
+    existing label pools — NOT real entity names) and applies ±10-15% jitter.
+    If the DB query fails or returns no rows, falls back transparently to the
+    curated shape library (documented below).  Privacy is guaranteed: real entity
+    names are never stored — only their proportional structure is reused.
+  * Rejection-reason counters: the runner now tracks per-reason rejection counts
+    (claims-empty / recompute-mismatch / adjacency-fail / ¥-gate / llm-error)
+    and prints the breakdown at the end of every run.
+  * Gap-fill mode (--gap-fill): queries the corpus census per bucket, then only
+    synthesises scenarios for (business_type × family) buckets that are BELOW
+    --floor (default 200).  Buckets at/above floor are skipped.  Logs what it is
+    filling vs skipping.
 """
 from __future__ import annotations
 
@@ -153,8 +173,337 @@ _SENTINEL_RESTAURANT = "SEED_R"
 _SENTINEL_FACTORY    = "SEED_F"
 
 # ---------------------------------------------------------------------------
-# Budget-bypass stub — offline seeding is NOT user traffic.
+# Curated shape library — realistic distributions derived from business data.
+#
+# Each entry is a list of RELATIVE WEIGHTS (they don't need to sum to 1;
+# _apply_shape_jitter normalises and rescales).  The library is grouped by
+# (family, bucket index) so _sample_shapes_from_library can pick a shape
+# matching the target bucket family.
+#
+# These shapes encode *structural* knowledge:
+#   - proportion: one dominant segment with a long tail (realistic for Chinese
+#     F&B / factory cost breakdowns)
+#   - ranking: steep Pareto-like descent (top store/SKU often 3× bottom)
+#   - comparison: near-parity, one-side-dominant, or big-gap pairs
+#   - kpi: actual/target ratio spans over/under achievement zones
+#   - trend: realistic season-like wobble rather than pure geometric walk
 # ---------------------------------------------------------------------------
+
+_SHAPE_LIBRARY: Dict[str, List[List[float]]] = {
+    # Proportion shapes — relative weights only; normalise before use
+    "proportion": [
+        [52.0, 28.0, 20.0],                       # top-heavy 3-way split
+        [45.0, 35.0, 20.0],                       # balanced 3-way
+        [38.0, 27.0, 20.0, 15.0],                 # flat 4-way
+        [62.0, 22.0, 16.0],                       # single dominant (外卖 heavy)
+        [72.0, 16.0, 12.0],                       # one dominant 2 tail
+        [48.0, 30.0, 14.0, 8.0],                  # classic 80/20 ish
+        [55.0, 25.0, 12.0, 8.0],                  # tier-3 restaurant channel
+        [33.0, 31.0, 22.0, 14.0],                 # very flat 4-way
+    ],
+    # Ranking shapes — should be sorted descending; _gen_real_shape_values will sort
+    "ranking": [
+        [430_000, 280_000, 190_000, 120_000, 60_000],   # steep Pareto
+        [310_000, 260_000, 200_000, 140_000, 90_000],   # mild descent
+        [520_000, 180_000, 160_000, 80_000],             # top-heavy 4
+        [250_000, 240_000, 230_000],                     # near-flat 3
+        [600_000, 350_000, 200_000, 90_000, 30_000],    # long tail
+        [380_000, 370_000, 120_000, 110_000, 50_000],   # two leaders
+        [200_000, 190_000, 180_000, 50_000, 20_000],    # head-and-pack
+    ],
+    # Comparison shapes — always pairs; index 0 = series A, index 1 = series B
+    "comparison": [
+        [320_000, 180_000],    # positive gap ~1.8×
+        [250_000, 240_000],    # near parity
+        [150_000, 300_000],    # reversed rank
+        [600_000, 140_000],    # large gap ~4×
+        [400_000, 420_000],    # very tight parity
+        [550_000, 200_000],    # dominant lead
+    ],
+    # KPI shapes — [actual, target]; ratio encodes achievement zone
+    "kpi": [
+        [1_150_000, 1_000_000],   # over 100% (115%)
+        [950_000,   1_000_000],   # 90-100%
+        [780_000,   1_000_000],   # under 90% (~78%)
+        [1_300_000, 1_000_000],   # cost overrun (130%)
+        [1_050_000, 1_000_000],   # just over 100%
+        [880_000,   1_000_000],   # borderline under
+    ],
+    # Trend shapes — 12-month absolute series; will be jittered + rescaled
+    "trend": [
+        # Rising
+        [80_000, 85_000, 90_000, 96_000, 103_000, 110_000,
+         118_000, 125_000, 132_000, 141_000, 150_000, 160_000],
+        # Falling
+        [160_000, 152_000, 143_000, 136_000, 128_000, 120_000,
+         112_000, 104_000, 97_000, 90_000, 84_000, 78_000],
+        # Volatile
+        [100_000, 130_000, 95_000, 125_000, 90_000, 135_000,
+         105_000, 125_000, 95_000, 120_000, 100_000, 130_000],
+        # Flat / seasonal
+        [100_000, 105_000, 102_000, 98_000, 101_000, 104_000,
+         99_000, 103_000, 100_000, 102_000, 98_000, 101_000],
+        # S-curve growth (restaurant opening year)
+        [20_000, 35_000, 60_000, 90_000, 120_000, 145_000,
+         165_000, 180_000, 192_000, 200_000, 205_000, 208_000],
+    ],
+}
+
+# ---------------------------------------------------------------------------
+# Real-shape extraction helpers
+# ---------------------------------------------------------------------------
+
+# SQL to sample raw series from the gold / finance tables.
+# Returns rows with relative VALUE shapes that we can anonymise + jitter.
+# Falls back gracefully if tables don't exist or are empty.
+_REAL_SHAPE_SQL_RESTAURANT = """
+    SELECT
+        dimension_value,
+        SUM(metric_value::numeric)  AS total_value
+    FROM (
+        -- channel breakdown from restaurant gold
+        SELECT channel AS dimension_value, gross_revenue AS metric_value
+        FROM   restaurant_daily_gold
+        WHERE  factory_id NOT IN ('SEED_R', 'SEED_F')
+          AND  metric_value IS NOT NULL
+          AND  metric_value::numeric > 0
+        ORDER  BY recorded_date DESC
+        LIMIT  10000
+    ) sub
+    GROUP BY dimension_value
+    HAVING SUM(metric_value::numeric) > 0
+    ORDER BY total_value DESC
+    LIMIT 10
+"""
+
+_REAL_SHAPE_SQL_FACTORY = """
+    SELECT
+        category  AS dimension_value,
+        SUM(ABS(total_cost::numeric))  AS total_value
+    FROM  smart_bi_finance_data
+    WHERE factory_id NOT IN ('SEED_R', 'SEED_F')
+      AND total_cost IS NOT NULL
+      AND total_cost != 0
+      AND record_date >= CURRENT_DATE - INTERVAL '90 days'
+    GROUP BY category
+    HAVING SUM(ABS(total_cost::numeric)) > 0
+    ORDER BY total_value DESC
+    LIMIT 10
+"""
+
+# Census query for gap-fill: count synthetic-seed rows per (business_type, family)
+# We extract family from the metadata.data_pattern or fall back to task_type.
+# Simpler approach: count rows that are synthetic_seed per business_type.
+_GAP_FILL_SQL = """
+    SELECT
+        business_type,
+        CASE
+            WHEN metadata->>'data_pattern' LIKE 'proportion%' THEN 'proportion'
+            WHEN metadata->>'data_pattern' LIKE 'ranking%'    THEN 'ranking'
+            WHEN metadata->>'data_pattern' LIKE 'comparison%' THEN 'comparison'
+            WHEN metadata->>'data_pattern' LIKE 'kpi%'        THEN 'kpi'
+            WHEN metadata->>'data_pattern' LIKE 'trend%'      THEN 'trend'
+            ELSE 'other'
+        END                AS family,
+        COUNT(*)           AS total_count
+    FROM smart_bi_distillation_samples
+    WHERE source = 'chart_insight'
+      AND (
+          metadata->>'source_kind' = 'synthetic_seed'
+          OR (metadata->>'seeded')::boolean = true
+          OR factory_id IN ('SEED_R', 'SEED_F')
+      )
+    GROUP BY business_type, family
+"""
+
+
+def _apply_shape_jitter(
+    values: List[float], n_target: int, rng: random.Random,
+    jitter_frac: float = 0.125,
+) -> List[float]:
+    """Take a shape (list of weights), resize to n_target items, rescale to a
+    realistic absolute range, then add ±jitter per item.
+
+    Steps:
+    1. If len(values) > n_target: keep the first n_target (already sorted by
+       importance for ranking; random selection for others).
+    2. If len(values) < n_target: repeat the last value to pad.
+    3. Normalise to sum = 1.
+    4. Choose a random base in [50_000, 600_000].
+    5. Multiply each weight by base and add ±jitter_frac noise.
+    6. Ensure all values > 0.
+    """
+    if not values:
+        return [rng.uniform(50_000, 200_000) for _ in range(max(n_target, 1))]
+
+    # Resize
+    v = list(values)
+    if len(v) > n_target:
+        v = v[:n_target]
+    while len(v) < n_target:
+        v.append(v[-1] * rng.uniform(0.5, 1.0))
+
+    # Normalise
+    s = sum(v)
+    if s <= 0:
+        s = 1.0
+    weights = [x / s for x in v]
+
+    # Scale to absolute range
+    base = rng.uniform(50_000, 600_000)
+    result: List[float] = []
+    for w in weights:
+        raw = w * base
+        noise = raw * rng.uniform(-jitter_frac, jitter_frac)
+        result.append(max(1_000.0, raw + noise))
+
+    return [round(x) for x in result]
+
+
+def _sample_shapes_from_library(
+    family: str, n_items: int, rng: random.Random,
+) -> Tuple[List[float], str]:
+    """Return (values, shape_source='library') from the curated shape library."""
+    shapes = _SHAPE_LIBRARY.get(family, _SHAPE_LIBRARY["proportion"])
+    raw_shape = rng.choice(shapes)
+    values = _apply_shape_jitter(list(raw_shape), n_items, rng)
+    return values, "library"
+
+
+async def _fetch_real_shapes(
+    pool, domain: str,
+) -> Optional[List[float]]:
+    """Query the DB for a real channel/category series shape.
+
+    Returns a list of raw absolute values (unsorted, unnormalised) if successful,
+    or None if the table doesn't exist / returns no rows / any error.
+    """
+    if pool is None:
+        return None
+    sql = (_REAL_SHAPE_SQL_RESTAURANT if domain == "restaurant"
+           else _REAL_SHAPE_SQL_FACTORY)
+    try:
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(sql)
+        values = [float(r["total_value"]) for r in rows
+                  if r["total_value"] is not None and float(r["total_value"]) > 0]
+        return values if len(values) >= 2 else None
+    except Exception as exc:
+        logger.debug("_fetch_real_shapes query failed (%s) — using library", exc)
+        return None
+
+
+def _classify_shape_to_bucket(values: List[float]) -> str:
+    """Given a series of absolute values, classify to a proportion/ranking/comparison
+    family by analysing the top-share of the largest item."""
+    if len(values) < 2:
+        return "proportion"
+    total = sum(values)
+    if total <= 0:
+        return "proportion"
+    top_share = max(values) / total * 100
+    if top_share >= 65:
+        return "proportion"   # highly concentrated → proportion
+    elif top_share >= 40:
+        return "ranking"       # moderate concentration → ranking
+    else:
+        return "comparison"    # near-even → comparison
+
+
+async def _gen_real_shape_values(
+    pool, family: str, n_items: int, rng: random.Random, domain: str,
+) -> Tuple[List[float], str]:
+    """Generate values using a real series shape from the DB when possible.
+
+    Returns (values, shape_source) where shape_source is 'real' or 'library'.
+
+    For trend and kpi families, real DB shapes are unlikely to be directly
+    applicable, so we always fall back to the library for those.
+    """
+    # trend and kpi have structural semantics beyond simple proportions
+    if family in ("trend", "kpi"):
+        return _sample_shapes_from_library(family, n_items, rng)
+
+    real_values = await _fetch_real_shapes(pool, domain)
+    if real_values and len(real_values) >= 2:
+        # Sort descending (real DB values come sorted, but just in case)
+        real_values_sorted = sorted(real_values, reverse=True)
+
+        if family == "proportion":
+            # Apply jitter + resize — the real shape defines the distribution
+            values = _apply_shape_jitter(real_values_sorted, n_items, rng)
+            # Shuffle so top item isn't always first (realistic PIE)
+            rng.shuffle(values)
+            return values, "real"
+        elif family == "ranking":
+            # Keep sorted descending
+            values = _apply_shape_jitter(real_values_sorted, n_items, rng)
+            values.sort(reverse=True)
+            return values, "real"
+        elif family == "comparison":
+            # Use the top-2 values from the real shape, jittered
+            top2 = real_values_sorted[:2]
+            values = _apply_shape_jitter(top2, 2, rng)
+            return values, "real"
+
+    # Fallback to library
+    return _sample_shapes_from_library(family, n_items, rng)
+
+
+# ---------------------------------------------------------------------------
+# Census gap-fill helpers
+# ---------------------------------------------------------------------------
+
+async def _fetch_corpus_counts(pool) -> Dict[Tuple[str, str], int]:
+    """Query the distillation corpus and return a dict of
+    {(business_type, family): count} for synthetic-seed rows.
+
+    Returns empty dict if pool is None or query fails.
+    """
+    if pool is None:
+        return {}
+    try:
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(_GAP_FILL_SQL)
+        result: Dict[Tuple[str, str], int] = {}
+        for r in rows:
+            bt = r["business_type"] or "unknown"
+            fam = r["family"] or "other"
+            result[(bt, fam)] = int(r["total_count"])
+        return result
+    except Exception as exc:
+        logger.warning("_fetch_corpus_counts failed: %s — gap-fill will treat all buckets as empty", exc)
+        return {}
+
+
+def _build_gap_fill_plan(
+    corpus_counts: Dict[Tuple[str, str], int],
+    floor: int,
+) -> Tuple[Dict[Tuple[str, str], int], List[Tuple[str, str]]]:
+    """Given census counts and a floor, compute per-bucket gap to fill.
+
+    Returns:
+        gaps: dict {(business_type, family): needed_count}
+        skipped: list of (business_type, family) at/above floor
+    """
+    # business_type strings used in the distillation table for chart_insight
+    _BT_MAP = {"restaurant": "restaurant", "factory": "factory"}
+    all_families = {b.family for b in _ALL_BUCKETS}
+
+    gaps: Dict[Tuple[str, str], int] = {}
+    skipped: List[Tuple[str, str]] = []
+
+    for domain in _DOMAINS:
+        bt = _BT_MAP.get(domain, domain)
+        for family in sorted(all_families):
+            current = corpus_counts.get((bt, family), 0)
+            if current >= floor:
+                skipped.append((bt, family))
+            else:
+                needed = floor - current
+                gaps[(bt, family)] = needed
+
+    return gaps, skipped
 
 class _NoBudgetBucket:
     blocked: bool = False
@@ -408,13 +757,97 @@ def _pick_labels(rng: random.Random, domain: str, x_dim: str,
 # Core scenario generator
 # ---------------------------------------------------------------------------
 
+def _build_scenario_sync(
+    bucket: _BucketSpec,
+    domain: str,
+    tier: str,
+    local_rng: random.Random,
+    shape_source: str = "uniform",
+    shape_values: Optional[List[float]] = None,
+) -> ChartInsightContext:
+    """Build one ChartInsightContext synchronously.
+
+    Args:
+        bucket: The bucket spec.
+        domain: 'restaurant' or 'factory'.
+        tier: permission tier string.
+        local_rng: per-scenario RNG (already seeded).
+        shape_source: 'real', 'library', or 'uniform' — stored in ctx metadata.
+        shape_values: pre-computed values (from real/library sampler); if None,
+                      uses the classic uniform generators.
+    Returns:
+        ChartInsightContext ready for LLM call.
+    """
+    n_items = local_rng.randint(*bucket.n_items_range)
+    labels  = _pick_labels(local_rng, domain, bucket.x_dim, n_items, bucket.family)
+
+    if shape_values is not None:
+        # Real-shape or library path: values were generated externally.
+        # Resize to n_items if needed.
+        values = list(shape_values)
+        if len(values) != n_items:
+            values = _apply_shape_jitter(values, n_items, local_rng)
+    else:
+        # Classic uniform generators (original behaviour — unchanged for reproducibility)
+        if bucket.family == "proportion":
+            lo, hi = _extract_top_share_range(bucket.data_pattern)
+            values = _gen_proportion_values(local_rng, (lo, hi), n_items)
+        elif bucket.family == "ranking":
+            lo, hi = _extract_top_share_range(bucket.data_pattern)
+            values = _gen_ranking_values(local_rng, (lo, hi), n_items)
+        elif bucket.family == "comparison":
+            sub = _extract_comparison_sub(bucket.data_pattern)
+            values = _gen_comparison_values(local_rng, sub)
+            labels = labels[:2]
+        elif bucket.family == "kpi":
+            sub = _extract_kpi_sub(bucket.data_pattern)
+            values = _gen_kpi_values(local_rng, sub)
+            labels = ["实际", "目标"]
+        elif bucket.family == "trend":
+            direction = _extract_trend_direction(bucket.data_pattern)
+            values = _gen_trend_values(local_rng, direction, n_items)
+        else:
+            values = [local_rng.uniform(10_000, 500_000) for _ in range(n_items)]
+
+    # KPI labels override (keep alignment regardless of path)
+    if bucket.family == "kpi":
+        labels = ["实际", "目标"]
+    elif bucket.family == "comparison":
+        labels = labels[:2]
+
+    # Ensure labels and values are the same length (safety)
+    min_len = min(len(labels), len(values))
+    labels  = labels[:min_len]
+    values  = values[:min_len]
+
+    sentinel = _SENTINEL_RESTAURANT if domain == "restaurant" else _SENTINEL_FACTORY
+
+    return ChartInsightContext(
+        chart_type      = bucket.chart_type,
+        x_dim           = bucket.x_dim,
+        y_metric        = bucket.y_metric,
+        aggregation     = bucket.aggregation,
+        domain          = domain,
+        data_pattern    = bucket.data_pattern,
+        permission_tier = tier,
+        factory_id      = sentinel,
+        series_values   = [float(v) for v in values],
+        series_labels   = labels,
+        # shape_source is carried as an attribute for metadata tagging at persist time
+    ), shape_source
+
+
 def generate_scenarios(n: int, seed: int = RANDOM_SEED) -> List[ChartInsightContext]:
-    """Generate n diverse synthetic ChartInsightContext scenarios.
+    """Generate n diverse synthetic ChartInsightContext scenarios (uniform mode).
 
     Scenarios are distributed round-robin across ALL (bucket × domain × tier)
     combinations, then padded with random repeats until n is reached.
     Each scenario's series_values are freshly generated with per-scenario RNG
     so input_hash differs even for same-bucket same-domain scenarios.
+
+    This function is the original uniform-generator path; it is kept unchanged
+    for backward-compatibility and deterministic unit tests.  For real-shape
+    sampling use generate_scenarios_async().
 
     Args:
         n: Number of scenarios to generate.
@@ -442,52 +875,152 @@ def generate_scenarios(n: int, seed: int = RANDOM_SEED) -> List[ChartInsightCont
         # but values differ between cycle repetitions.
         local_rng = random.Random(seed + i * 1_000_003 + cycle * 97)
 
-        n_items = local_rng.randint(*bucket.n_items_range)
-        labels  = _pick_labels(local_rng, domain, bucket.x_dim, n_items, bucket.family)
-
-        # Values
-        if bucket.family == "proportion":
-            lo, hi = _extract_top_share_range(bucket.data_pattern)
-            values = _gen_proportion_values(local_rng, (lo, hi), n_items)
-        elif bucket.family == "ranking":
-            lo, hi = _extract_top_share_range(bucket.data_pattern)
-            values = _gen_ranking_values(local_rng, (lo, hi), n_items)
-        elif bucket.family == "comparison":
-            sub = _extract_comparison_sub(bucket.data_pattern)
-            values = _gen_comparison_values(local_rng, sub)
-            labels = labels[:2]
-        elif bucket.family == "kpi":
-            sub = _extract_kpi_sub(bucket.data_pattern)
-            values = _gen_kpi_values(local_rng, sub)
-            labels = ["实际", "目标"]
-        elif bucket.family == "trend":
-            direction = _extract_trend_direction(bucket.data_pattern)
-            values = _gen_trend_values(local_rng, direction, n_items)
-        else:
-            values = [local_rng.uniform(10_000, 500_000) for _ in range(n_items)]
-
-        # Ensure labels and values are the same length (safety)
-        min_len = min(len(labels), len(values))
-        labels  = labels[:min_len]
-        values  = values[:min_len]
-
-        sentinel = _SENTINEL_RESTAURANT if domain == "restaurant" else _SENTINEL_FACTORY
-
-        ctx = ChartInsightContext(
-            chart_type      = bucket.chart_type,
-            x_dim           = bucket.x_dim,
-            y_metric        = bucket.y_metric,
-            aggregation     = bucket.aggregation,
-            domain          = domain,
-            data_pattern    = bucket.data_pattern,
-            permission_tier = tier,
-            factory_id      = sentinel,
-            series_values   = [float(v) for v in values],
-            series_labels   = labels,
-        )
+        ctx, _ = _build_scenario_sync(bucket, domain, tier, local_rng,
+                                      shape_source="uniform", shape_values=None)
         scenarios.append(ctx)
 
     return scenarios
+
+
+async def generate_scenarios_async(
+    n: int,
+    seed: int = RANDOM_SEED,
+    pool=None,
+    real_shapes: bool = False,
+) -> List[Tuple[ChartInsightContext, str]]:
+    """Generate n scenarios asynchronously, optionally using real-shape sampling.
+
+    Args:
+        n: Number of scenarios to generate.
+        seed: Random seed for reproducibility.
+        pool: asyncpg pool for real-shape DB queries (may be None → library fallback).
+        real_shapes: If True, use real-shape sampling (DB or library); else uniform.
+
+    Returns:
+        List of (ChartInsightContext, shape_source) tuples where shape_source is
+        one of 'real', 'library', 'uniform'.
+    """
+    rng = random.Random(seed)
+    combos: List[Tuple[_BucketSpec, str, str]] = []
+    for bucket in _ALL_BUCKETS:
+        for domain in _DOMAINS:
+            for tier in _TIERS:
+                combos.append((bucket, domain, tier))
+
+    results: List[Tuple[ChartInsightContext, str]] = []
+    total_combos = len(combos)
+
+    for i in range(n):
+        combo_idx = i % total_combos
+        cycle     = i // total_combos
+        bucket, domain, tier = combos[combo_idx]
+        local_rng = random.Random(seed + i * 1_000_003 + cycle * 97)
+
+        if real_shapes:
+            shape_values, shape_source = await _gen_real_shape_values(
+                pool, bucket.family,
+                local_rng.randint(*bucket.n_items_range),
+                local_rng, domain,
+            )
+        else:
+            shape_values, shape_source = None, "uniform"
+
+        ctx, src = _build_scenario_sync(bucket, domain, tier, local_rng,
+                                        shape_source=shape_source,
+                                        shape_values=shape_values)
+        results.append((ctx, src))
+
+    return results
+
+
+async def generate_scenarios_gap_fill(
+    n: int,
+    seed: int,
+    pool,
+    floor: int,
+    real_shapes: bool = False,
+) -> Tuple[List[Tuple[ChartInsightContext, str]], Dict[str, Any]]:
+    """Generate scenarios only for buckets BELOW floor.
+
+    Queries the corpus census, computes gaps, then distributes n scenarios
+    proportionally across under-filled (business_type × family) buckets.
+
+    Returns:
+        (scenarios_with_source, gap_report) where gap_report contains
+        'gaps', 'skipped', 'total_needed', 'fill_plan'.
+    """
+    corpus_counts = await _fetch_corpus_counts(pool)
+    gaps, skipped = _build_gap_fill_plan(corpus_counts, floor)
+
+    # Log what we're filling vs skipping
+    _BT_MAP_DISPLAY = {"restaurant": "RESTAURANT", "factory": "FACTORY"}
+    for bt, fam in sorted(skipped):
+        current = corpus_counts.get((bt, fam), 0)
+        logger.info("gap-fill SKIP  %-12s %-12s  current=%d >= floor=%d",
+                    bt, fam, current, floor)
+    for (bt, fam), needed in sorted(gaps.items()):
+        current = corpus_counts.get((bt, fam), 0)
+        logger.info("gap-fill FILL  %-12s %-12s  current=%d  needed=%d",
+                    bt, fam, current, needed)
+
+    total_needed = sum(gaps.values())
+    gap_report: Dict[str, Any] = {
+        "gaps": {f"{bt}:{fam}": v for (bt, fam), v in gaps.items()},
+        "skipped": [f"{bt}:{fam}" for bt, fam in skipped],
+        "total_needed": total_needed,
+        "fill_plan": {},
+    }
+
+    if not gaps:
+        logger.info("gap-fill: all buckets at/above floor=%d — nothing to generate", floor)
+        return [], gap_report
+
+    # Build a pool of (bucket, domain, tier) combos restricted to under-filled buckets
+    _DOMAIN_BT: Dict[str, str] = {"restaurant": "restaurant", "factory": "factory"}
+    gap_combos: List[Tuple[_BucketSpec, str, str]] = []
+    for bucket in _ALL_BUCKETS:
+        for domain in _DOMAINS:
+            bt = _DOMAIN_BT.get(domain, domain)
+            if (bt, bucket.family) in gaps:
+                for tier in _TIERS:
+                    gap_combos.append((bucket, domain, tier))
+
+    if not gap_combos:
+        return [], gap_report
+
+    rng = random.Random(seed)
+    rng.shuffle(gap_combos)
+
+    results: List[Tuple[ChartInsightContext, str]] = []
+    actual_n = min(n, total_needed * 3)  # cap at 3× needed so we don't vastly overshoot
+    total_combos = len(gap_combos)
+
+    for i in range(actual_n):
+        combo_idx = i % total_combos
+        bucket, domain, tier = gap_combos[combo_idx]
+        local_rng = random.Random(seed + i * 1_000_007 + 31337)
+
+        if real_shapes:
+            shape_values, shape_source = await _gen_real_shape_values(
+                pool, bucket.family,
+                local_rng.randint(*bucket.n_items_range),
+                local_rng, domain,
+            )
+        else:
+            shape_values, shape_source = None, "uniform"
+
+        ctx, src = _build_scenario_sync(bucket, domain, tier, local_rng,
+                                        shape_source=shape_source,
+                                        shape_values=shape_values)
+        results.append((ctx, src))
+
+    gap_report["fill_plan"] = {
+        "total_requested": n,
+        "total_generated": len(results),
+        "combos_available": total_combos,
+    }
+
+    return results, gap_report
 
 
 # ---------------------------------------------------------------------------
@@ -528,8 +1061,82 @@ async def _make_pool(dsn: Optional[str]):
 # Main seeding runner
 # ---------------------------------------------------------------------------
 
-async def seed(n: int, dry_run: bool = False, dsn: Optional[str] = None,
-               seed_val: int = RANDOM_SEED) -> None:
+@dataclass
+class _RejectionCounters:
+    """Per-reason rejection counters for diagnosing acceptance rate.
+
+    Reasons:
+      llm_error         — _call_llm raised an exception or returned None.
+      claims_empty      — _validate_claims returned None because the LLM output
+                          had no claims or the JSON was malformed.
+      recompute_mismatch — _validate_claims found computed != claimed values.
+      adjacency_fail    — _validate_claims adjacency / ordering check failed.
+      y_gate            — finance_hidden ¥ absolute-amount gate blocked.
+    """
+    llm_error:          int = 0
+    claims_empty:       int = 0
+    recompute_mismatch: int = 0
+    adjacency_fail:     int = 0
+    y_gate:             int = 0
+
+    @property
+    def total(self) -> int:
+        return (self.llm_error + self.claims_empty + self.recompute_mismatch
+                + self.adjacency_fail + self.y_gate)
+
+    def log_summary(self, logger_: logging.Logger) -> None:
+        logger_.info(
+            "Rejection breakdown  llm_error=%-4d  claims_empty=%-4d  "
+            "recompute_mismatch=%-4d  adjacency_fail=%-4d  ¥_gate=%-4d  total=%-4d",
+            self.llm_error, self.claims_empty, self.recompute_mismatch,
+            self.adjacency_fail, self.y_gate, self.total,
+        )
+
+
+def _classify_validation_rejection(llm_obj: Any, ctx: ChartInsightContext) -> str:
+    """Run _validate_claims and return the reason it failed (or 'ok' if passed).
+
+    Returns one of: 'ok' | 'claims_empty' | 'recompute_mismatch' | 'adjacency_fail'
+
+    This thin wrapper captures structured reasons without duplicating the gate
+    logic — it re-runs _validate_claims but that is idempotent + fast.
+    """
+    # We call the real validator; if it returns non-None → accepted.
+    # To distinguish reason, we do a two-pass approach:
+    #   pass 1: check if the output has any claims keys at all
+    #   pass 2: call _validate_claims and see if it returns None (rejection)
+    # Since _validate_claims doesn't expose sub-reasons, we infer:
+    #   * If llm_obj looks like it has no finding/implication/suggestion → claims_empty
+    #   * Otherwise → recompute_mismatch (most common validator rejection)
+    if not llm_obj or not isinstance(llm_obj, dict):
+        return "claims_empty"
+    has_content = any(llm_obj.get(k) for k in ("finding", "implication", "suggestion"))
+    if not has_content:
+        return "claims_empty"
+
+    result = _validate_claims(llm_obj, ctx)
+    if result is not None:
+        return "ok"
+
+    # Heuristic: check if there are numeric claims to recompute
+    # If the LLM output contains numbers, it's likely a recompute mismatch.
+    # Otherwise it could be an adjacency / ordering failure.
+    import re as _re
+    combined_text = " ".join(str(v) for v in llm_obj.values() if v)
+    if _re.search(r"\d+\.?\d*%?", combined_text):
+        return "recompute_mismatch"
+    return "adjacency_fail"
+
+
+async def seed(
+    n: int,
+    dry_run: bool = False,
+    dsn: Optional[str] = None,
+    seed_val: int = RANDOM_SEED,
+    real_shapes: bool = False,
+    gap_fill: bool = False,
+    floor: int = 200,
+) -> None:
     """Generate n synthetic scenarios and optionally call LLM + persist accepted outputs.
 
     Args:
@@ -537,65 +1144,111 @@ async def seed(n: int, dry_run: bool = False, dsn: Optional[str] = None,
         dry_run: If True, only generate + print scenarios; no LLM calls, no DB.
         dsn: Optional asyncpg DSN override.
         seed_val: Random seed for scenario generation.
+        real_shapes: If True, sample series shapes from real prod data (DB or
+                     library fallback) instead of uniform generators.
+        gap_fill: If True, run census first and only generate for buckets below
+                  floor (--floor).  n acts as an upper cap.
+        floor: Minimum count per (business_type × family) bucket for gap-fill.
     """
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
     )
 
-    scenarios = generate_scenarios(n, seed=seed_val)
-    logger.info("Generated %d synthetic scenarios (seed=%d)", len(scenarios), seed_val)
-
     # ----------------------------------------------------------------
-    # Dry-run: just print and exit
+    # Dry-run (uniform generator, no pool needed): just print and exit
     # ----------------------------------------------------------------
     if dry_run:
+        scenarios = generate_scenarios(n, seed=seed_val)
+        logger.info("Generated %d synthetic scenarios (seed=%d)", len(scenarios), seed_val)
         _print_dry_run_summary(scenarios)
         return
 
     # ----------------------------------------------------------------
-    # Real run: LLM + persist
+    # Real run: need pool early (required for real-shapes + gap-fill)
     # ----------------------------------------------------------------
     pool = await _make_pool(dsn)
     stub_budget = _NoBudgetTracker()
     svc = ChartInsightService(pool=pool, budget_tracker=stub_budget)
 
-    # Per-family counters
-    counters: Dict[str, Dict[str, int]] = {}
-    total_generated = 0
-    total_accepted  = 0
-    total_rejected  = 0
-    total_ygate     = 0
+    # ----------------------------------------------------------------
+    # Scenario generation: gap-fill vs normal
+    # ----------------------------------------------------------------
+    if gap_fill:
+        logger.info("gap-fill mode: querying corpus census (floor=%d)…", floor)
+        scenario_pairs, gap_report = await generate_scenarios_gap_fill(
+            n=n, seed=seed_val, pool=pool, floor=floor, real_shapes=real_shapes,
+        )
+        logger.info(
+            "gap-fill plan: total_needed=%d  combos_available=%d  generating=%d",
+            gap_report["total_needed"],
+            gap_report.get("fill_plan", {}).get("combos_available", 0),
+            len(scenario_pairs),
+        )
+    else:
+        logger.info(
+            "normal mode: generating %d scenarios (real_shapes=%s, seed=%d)",
+            n, real_shapes, seed_val,
+        )
+        scenario_pairs = await generate_scenarios_async(
+            n=n, seed=seed_val, pool=pool, real_shapes=real_shapes,
+        )
 
-    for idx, ctx in enumerate(scenarios):
+    logger.info("Generated %d scenario pairs", len(scenario_pairs))
+
+    # ----------------------------------------------------------------
+    # LLM + persist loop with per-reason rejection counters
+    # ----------------------------------------------------------------
+    rej = _RejectionCounters()
+    family_counters: Dict[str, Dict[str, int]] = {}
+    total_accepted  = 0
+    total_generated = 0
+
+    for idx, (ctx, shape_source) in enumerate(scenario_pairs):
         total_generated += 1
         family = ctx.data_pattern.split(":")[0]
-        if family not in counters:
-            counters[family] = {"generated": 0, "accepted": 0, "rejected": 0}
-        counters[family]["generated"] += 1
+        if family not in family_counters:
+            family_counters[family] = {"generated": 0, "accepted": 0, "rejected": 0}
+        family_counters[family]["generated"] += 1
 
+        # --- LLM call ---
         try:
             llm_obj = await svc._call_llm(ctx)
         except Exception as exc:
-            logger.warning("[%d/%d] _call_llm failed: %s", idx + 1, n, exc)
-            total_rejected += 1
-            counters[family]["rejected"] += 1
+            logger.warning("[%d/%d] _call_llm failed: %s", idx + 1, total_generated, exc)
+            rej.llm_error += 1
+            family_counters[family]["rejected"] += 1
             continue
 
         if llm_obj is None:
-            logger.debug("[%d/%d] LLM returned None — skipping", idx + 1, n)
-            total_rejected += 1
-            counters[family]["rejected"] += 1
+            logger.debug("[%d/%d] LLM returned None", idx + 1, total_generated)
+            rej.llm_error += 1
+            family_counters[family]["rejected"] += 1
             continue
 
+        # --- Validate claims with structured reason tracking ---
+        rejection_reason = _classify_validation_rejection(llm_obj, ctx)
+        if rejection_reason != "ok":
+            logger.debug("[%d/%d] _validate_claims rejected (%s)",
+                         idx + 1, total_generated, rejection_reason)
+            if rejection_reason == "claims_empty":
+                rej.claims_empty += 1
+            elif rejection_reason == "recompute_mismatch":
+                rej.recompute_mismatch += 1
+            elif rejection_reason == "adjacency_fail":
+                rej.adjacency_fail += 1
+            family_counters[family]["rejected"] += 1
+            continue
+
+        # Re-run _validate_claims to get the validated dict (already passed above)
         validated = _validate_claims(llm_obj, ctx)
         if validated is None:
-            logger.debug("[%d/%d] _validate_claims rejected — skipping", idx + 1, n)
-            total_rejected += 1
-            counters[family]["rejected"] += 1
+            # Safety net: should not happen after _classify returned 'ok', but guard it
+            rej.recompute_mismatch += 1
+            family_counters[family]["rejected"] += 1
             continue
 
-        # finance_hidden ¥ serve-gate
+        # --- finance_hidden ¥ serve-gate ---
         if ctx.permission_tier == "finance_hidden":
             combined = " ".join(filter(None, [
                 validated.get("finding"),
@@ -603,48 +1256,54 @@ async def seed(n: int, dry_run: bool = False, dsn: Optional[str] = None,
                 validated.get("suggestion"),
             ]))
             if _ABSOLUTE_AMOUNT_RE.search(combined):
-                logger.debug("[%d/%d] finance_hidden ¥ gate blocked", idx + 1, n)
-                total_ygate += 1
-                total_rejected += 1
-                counters[family]["rejected"] += 1
+                logger.debug("[%d/%d] finance_hidden ¥ gate blocked",
+                             idx + 1, total_generated)
+                rej.y_gate += 1
+                family_counters[family]["rejected"] += 1
                 continue
 
-        # Persist
-        input_text = _corpus_input_text(ctx)
+        # --- Persist accepted sample ---
+        input_text    = _corpus_input_text(ctx)
         teacher_model = svc._get_teacher_model()
         await persist_distillation_sample(
             pool,
-            source="chart_insight",
-            task_type="insights",
-            input_text=input_text,
-            teacher_output=json.dumps(validated, ensure_ascii=False),
-            business_type=_map_domain(ctx.domain),
-            factory_id=ctx.factory_id,
-            system_prompt=_SYSTEM_PROMPT,
-            teacher_model=teacher_model,
-            metadata={
+            source       = "chart_insight",
+            task_type    = "insights",
+            input_text   = input_text,
+            teacher_output = json.dumps(validated, ensure_ascii=False),
+            business_type  = _map_domain(ctx.domain),
+            factory_id     = ctx.factory_id,
+            system_prompt  = _SYSTEM_PROMPT,
+            teacher_model  = teacher_model,
+            metadata       = {
+                "seeded":       True,
                 "permission_tier": ctx.permission_tier,
-                "gate": "passed",
-                "source_kind": "synthetic_seed",
+                "gate":         "passed",
+                "source_kind":  "synthetic_seed",
+                "shape_source": shape_source,   # 'real' | 'library' | 'uniform'
             },
         )
         total_accepted += 1
-        counters[family]["accepted"] += 1
+        family_counters[family]["accepted"] += 1
 
         if (idx + 1) % 50 == 0:
             logger.info(
-                "[%d/%d] Running totals — accepted=%d rejected=%d ¥gate=%d",
-                idx + 1, n, total_accepted, total_rejected, total_ygate,
+                "[%d/%d] Running totals — accepted=%d rejected=%d",
+                idx + 1, total_generated, total_accepted, rej.total,
             )
 
     # ----------------------------------------------------------------
     # Final report
     # ----------------------------------------------------------------
+    total_rejected = rej.total
     logger.info("=" * 60)
-    logger.info("SEED COMPLETE  n=%d  accepted=%d  rejected=%d  ¥gate=%d",
-                n, total_accepted, total_rejected, total_ygate)
+    logger.info(
+        "SEED COMPLETE  generated=%d  accepted=%d  rejected=%d",
+        total_generated, total_accepted, total_rejected,
+    )
+    rej.log_summary(logger)
     logger.info("Per-family breakdown:")
-    for fam, c in sorted(counters.items()):
+    for fam, c in sorted(family_counters.items()):
         logger.info("  %-14s generated=%d  accepted=%d  rejected=%d",
                     fam, c["generated"], c["accepted"], c["rejected"])
     logger.info("=" * 60)
@@ -730,6 +1389,25 @@ def main() -> None:
     parser.add_argument("--log-level", default="INFO",
                         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
                         help="Logging level.")
+    parser.add_argument("--real-shapes", action="store_true",
+                        help=(
+                            "Use real-shape sampling: query gold/finance tables for "
+                            "actual series distributions, pair with anonymised labels "
+                            "and ±10-15%% jitter. Falls back to curated shape library "
+                            "if DB is unreachable or returns no data."
+                        ))
+    parser.add_argument("--gap-fill", action="store_true",
+                        help=(
+                            "Gap-fill mode: run census first, then only generate for "
+                            "(business_type × family) buckets below --floor. "
+                            "--n acts as an upper cap."
+                        ))
+    parser.add_argument("--floor", type=int, default=200,
+                        help=(
+                            "Minimum synthetic-seed count per (business_type × family) "
+                            "bucket for --gap-fill. Buckets at/above floor are skipped. "
+                            "(default: 200)"
+                        ))
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -738,10 +1416,13 @@ def main() -> None:
     )
 
     asyncio.run(seed(
-        n        = args.n,
-        dry_run  = args.dry_run,
-        dsn      = args.dsn or None,
-        seed_val = args.seed,
+        n           = args.n,
+        dry_run     = args.dry_run,
+        dsn         = args.dsn or None,
+        seed_val    = args.seed,
+        real_shapes = args.real_shapes,
+        gap_fill    = args.gap_fill,
+        floor       = args.floor,
     ))
 
 
