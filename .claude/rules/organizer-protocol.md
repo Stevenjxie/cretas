@@ -96,13 +96,44 @@ Out-of-harness (Codex/Composer 卡 + Steve courier):
 
 ---
 
+## 代码执行层路由（2026-06-11 Steve 修订：速度+质量 > token 经济）
+
+> **触发**：本 session Sonnet 写判断密集/红线代码反复栽——getRecipe LazyInit 回归 / G4 把已知密码账号 seed 进 prod 真客户租户 / Flyway 乱序号 / PaymentRequestController 误报。全靠 Opus 终审兜住，但代价是返工 + 救回被关 PR + 迭代，拖慢节奏。Steve：质疑 Sonnet 写代码能力，**别太省 token，速度质量优先**（但机械活仍 Sonnet）。
+
+### 第一层：按「判断密度」选模型（不再一刀切「执行=Sonnet」）
+
+| 代码性质 | 执行层 | 例 |
+|---|---|---|
+| **机械 / 低判断 / 规则重** | **Sonnet** | 脚手架、按 spec CRUD、parity port、文档/测试样板、按设计 UI、规则感知机械 review |
+| **判断密集 / 微妙语义 / 🔒红线** | **Opus 自做**（不再「派 Sonnet 再终审兜」） | DB 事务&并发、Hibernate/JPA 语义、影响 prod 的迁移、权限/RLS/多租户、成本/财务口径、撤回回退、报工模型 |
+| **最难 / Opus 卡住 / 微妙红线 keystone 速度质量都关键** | **Fable**（earned 闸照旧） | 见 Fable 门槛 |
+
+**token 经济降为次要**：原「默认 Sonnet 省周额度」偏好下调 —— 机械/规则重活该 Sonnet 还 Sonnet，但**判断密集/红线代码别为省额度下压到 Sonnet**（兜底迭代比直接 Opus 写更慢更险）。
+
+### 第二层：Opus-tier 代码 → 二次评估 inline vs Opus subagent（orchestration 轴）
+
+决定「Opus 写」后，**再评估本体 inline 写 vs 开 Opus subagent 并行**（Steve 2026-06-11）：
+
+| 选 | 条件 |
+|---|---|
+| **inline（organizer 本体）** | 小 + 已在我 context + 需判断连续性（keystone）。我已持上下文，handoff 无收益 |
+| **Opus subagent（可并行/隔离）** | 多个独立红线块可并行 / 单块大且需隔离探索（否则 bloat 本体 context，破 thin-organizer）。每个 subagent 仍 Opus tier |
+
+**thin-organizer 不变**：红线代码即便 Opus tier，**大块/可并行也开 Opus subagent**，别把实现细节塞满本体（本体留给分诊+判断+终审+台账）。延伸 brief-vs-do：小+连续性→inline；大/并行→Opus subagent。
+
+---
+
 ## 预算现实（绑定约束）
 
-Claude Max 20x（**Opus 按周限额，纯 Opus 一周绝对不够**）+ GPT 10x（Codex，较小桶）+ Cursor（Composer）。三个都是 flat → **铺开用三个、别撑爆更小的 GPT 10x、Claude 侧执行降到 Sonnet 拉长 20x**。
+Claude Max 20x（**Opus 按周限额**）+ GPT 10x（Codex，较小桶）+ Cursor（Composer）。三个都是 flat。
 
 ```text
-最大 Opus 杠杆 = Claude 侧执行全走 Sonnet（便宜 20x）+ 把 Opus 省给需求框架/🔒终审/难架构
-错误用法 = 把 Opus 当执行层（写脚手架/批量文档）→ 几天就撑爆周限额
+2026-06-11 修订: 速度+质量 > token 经济。
+  机械/规则重执行 → Sonnet (该省的省)
+  判断密集/🔒红线代码 → Opus 自做 (别为省额度下压 Sonnet, 兜底迭代更慢更险)
+  最大杠杆 ≠ 全压 Sonnet, 而是 = 按判断密度分层 (上表)
+错误用法 = 把 Opus 当机械执行层(写脚手架/批量文档) → 撑爆周限额
+  (注: Opus 写红线代码 ≠ 错误用法, 那正是它该干的)
 ```
 
 ---
@@ -147,16 +178,19 @@ Opus 直接做（典型 pattern）:
 按文件切 or 先写 keystone 再交棒 → 避免同文件撞
 ```
 
-### Opus 稀缺额度优先级
+### Opus 稀缺额度优先级（2026-06-11 修订：加入红线代码自做）
 
 ```
 ① 模糊高风险需求框架（最高价值，防建错东西）
 ② 🔒 Risky 终审（权限/迁移/业态/上线前 diff）
 ③ 难架构（真有判断模糊的选型）
 ④ 卡死调试（fleet 修 2 轮没好 → Opus root-cause）
-⑤ 小而关键 keystone（20 行，已在 context）
-⑥ （所有执行全甩 fleet）
+⑤ 🆕 判断密集/🔒红线代码自做（事务/并发/迁移/权限/成本口径/报工模型）— 别下压 Sonnet 兜底
+⑥ 小而关键 keystone（已在 context）
+⑦ （机械/规则重执行甩 fleet=Sonnet）
 ```
+
+⚠️ 注意 ⑤ 与「Opus 不当执行层」不冲突：**机械执行**(脚手架/批量doc)甩 fleet 是对的；**红线代码**自做也是对的。区别在判断密度，不在"是不是写代码"。
 
 ### Fable 5 门槛（在 Opus 之上加一档，2026-06-10 增补）
 

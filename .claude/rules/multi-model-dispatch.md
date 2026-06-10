@@ -117,6 +117,7 @@ brief 卡要**自包含** —— 别的 chat 看不到本 chat 的上下文, 卡
 | **规则重 in-harness 执行**（新 Java Tool / Flyway 编号检查 / rule-aware code review / Python parity port 机械修复） | **Sonnet in-harness** | `.claude/rules/*` 自动可见 → 不会因缺上下文翻 12 条 Java port 规则；比 Opus 省 20x 额度 |
 | **Java AI Tool-Skill 意图路由 · Python↔Java parity port（首次判断/架构）** | **Opus**（或 Opus 写死严格 brief 后给 Sonnet/Codex） | 有 `.claude/rules/ai-intent-tool-skill-architecture.md` / `python-java-port.md` 硬规则(Decimal/Map.of order/Lombok null/HALF_UP 等 12 条), 易踩; 首次需判断力 |
 | 🔒 Flyway/migration/schema · 权限/RLS/多租户/业态隔离 · 架构/跨模块重构/新实体 · 上线前 diff 终审 | **Opus 把关** | 见下方⛔红线 |
+| 🆕 **判断密集/微妙语义/🔒红线 代码自写**(DB事务&并发/Hibernate语义/影响prod迁移/权限RLS/成本财务口径/撤回回退/报工模型) | **Opus 自做**(不派Sonnet再终审兜) | 2026-06-11 Steve修订: Sonnet写这类反复栽(getRecipe回归/prod已知密码seed/Flyway乱序), 兜底迭代更慢更险; 速度质量>token经济. 详见 organizer-protocol §代码执行层路由. **Opus写后二次评估 inline(小+在context) vs Opus subagent(大/可并行, 保thin-organizer)** |
 | 同一问题某模型修 2 轮还没好 | 切 **Opus** 做 root-cause review | 不让一个模型一直撞墙; 别盲改 |
 | 某模型改乱了 / 你不放心 | **Opus** root-cause review (先停下判断, 不继续盲改) | |
 
