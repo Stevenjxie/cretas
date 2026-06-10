@@ -27,6 +27,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
@@ -46,6 +47,15 @@ import java.util.stream.Stream;
  *   <li>Guard G2: 成品出货检查 — FinishedGoodsBatch shippedQuantity > 0 → 409 FG_SHIPPED</li>
  *   <li>Guard G3: 幂等检查 — 已有 DONE 直接返回; PENDING 返回 409 ALREADY_PENDING</li>
  * </ol>
+ *
+ * <p><b>SP12 快速撤回通道</b> (Fast Path):
+ * <p>满足以下全部条件时，跳过审批直接执行撤回 (仍经过 G1/G2/G3 守卫，不绕过安全检查):
+ * <ul>
+ *   <li>提交人 == 本次操作人 (只有本人能快速撤回自己的报工)</li>
+ *   <li>G1 通过 — 无下游领用消耗 (库存安全绝不妥协)</li>
+ *   <li>报工提交时间 ≤ {@value #FAST_PATH_WINDOW_MINUTES} 分钟内 (短时间窗口, 防止滥用)</li>
+ * </ul>
+ * 不满足任一条件 → 退回完整审批流 (PENDING)，同时附上诚实提示 (为何需要审批)。
  *
  * <p><b>executeReversal 原子保证</b>: 单 @Transactional。软删报工 → 写 REVERSE SIT → 回放均价 → 更新 FGB
  * → 置 ReportReversalLog.DONE。任一失败 → 全部回滚 (Spring REQUIRED 默认)。
@@ -70,6 +80,13 @@ public class ReportReversalServiceImpl implements ReportReversalService {
     private final WorkProcessTaskRepository workProcessTaskRepository;
     // W6 #27: 驳回撤回申请时通知申请人 (App 内通知)
     private final NotificationService notificationService;
+
+    /**
+     * SP12 快速撤回时间窗口 (分钟)。
+     * 在此窗口内, 本人提交 + 无下游消费 → 快速撤回无需审批。
+     * 超出此窗口 → 退回完整审批流。
+     */
+    static final int FAST_PATH_WINDOW_MINUTES = 5;
 
     // ==================== 提交撤回申请 ====================
 
@@ -117,13 +134,34 @@ public class ReportReversalServiceImpl implements ReportReversalService {
             }
         }
 
-        // 检查是否有报工数据 (决定 PENDING vs 直通 DONE)
+        // 检查是否有报工数据
         List<ProductionReport> reports = reportRepo.findYieldReportsByBatch(factoryId, batchId);
         boolean hasReports = !reports.isEmpty();
 
-        ReportReversalLog.ReversalStatus initialStatus = hasReports
-                ? ReportReversalLog.ReversalStatus.PENDING
-                : ReportReversalLog.ReversalStatus.DONE;
+        // ---- SP12 快速撤回路径判断 ----
+        // 条件: 本人提交 + 无下游消费(G1已通过) + 最新报工在时间窗口内
+        // 注意: G1/G2 守卫已经在上方通过，快速撤回不绕过任何安全守卫，只免审批人环节。
+        String fastPathDeniedReason = null;
+        if (hasReports) {
+            fastPathDeniedReason = resolveFastPathDeniedReason(submittedBy, reports);
+        }
+
+        boolean isFastPath = hasReports && fastPathDeniedReason == null;
+        // 无报工 → 直通(原逻辑) | 快速撤回通过 → 直接执行 | 否则 → PENDING
+        ReportReversalLog.ReversalStatus initialStatus;
+        if (!hasReports || isFastPath) {
+            initialStatus = ReportReversalLog.ReversalStatus.DONE;
+        } else {
+            initialStatus = ReportReversalLog.ReversalStatus.PENDING;
+        }
+
+        // 若退回审批, 在 reason 中附上诚实提示 (防呆: 告诉操作员为何需要审批)
+        String effectiveReason = reason;
+        if (initialStatus == ReportReversalLog.ReversalStatus.PENDING && fastPathDeniedReason != null) {
+            effectiveReason = (reason == null || reason.isBlank())
+                    ? fastPathDeniedReason
+                    : reason + " | 需审批原因: " + fastPathDeniedReason;
+        }
 
         ReportReversalLog log_ = ReportReversalLog.builder()
                 .factoryId(factoryId)
@@ -131,17 +169,19 @@ public class ReportReversalServiceImpl implements ReportReversalService {
                 .planId(batch.getProductionPlanId())
                 .reversalScope(ReportReversalLog.ReversalScope.WHOLE_ORDER)
                 .submittedBy(submittedBy)
-                .reason(reason)
+                .reason(effectiveReason)
                 .status(initialStatus)
+                .fastPath(isFastPath)
                 .build();
         ReportReversalLog saved = reversalLogRepo.save(log_);
 
-        // 无报工数据 → 直通执行 (DONE)
-        if (!hasReports) {
+        // 无报工 或 快速撤回 → 直通执行 (DONE)
+        if (!hasReports || isFastPath) {
             executeReversal(saved.getId(), factoryId);
         }
 
-        log.info("[SP2] submitReversal batchId={} status={} logId={}", batchId, initialStatus, saved.getId());
+        log.info("[SP2] submitReversal batchId={} status={} fastPath={} logId={}",
+                batchId, initialStatus, isFastPath, saved.getId());
         return reversalLogRepo.findById(saved.getId()).orElse(saved);
     }
 
@@ -350,6 +390,54 @@ public class ReportReversalServiceImpl implements ReportReversalService {
     }
 
     // ==================== 私有辅助 ====================
+
+    /**
+     * SP12 快速撤回资格检查。
+     *
+     * <p>返回 null 表示满足快速撤回全部条件 (提交人本人 + 报工在时间窗口内)。
+     * 返回非 null 字符串表示不满足快速撤回，内容是诚实的拒绝原因 (展示给操作员)。
+     *
+     * <p><b>安全边界</b>: 本方法只判断"是否需要人审"，不影响 G1/G2 守卫。
+     * 调用前 G1/G2 守卫必须已通过。
+     *
+     * @param submittedBy 本次提交人 userId
+     * @param reports     该批次的报工列表 (非空)
+     * @return null = 快速撤回放行; 非 null = 原因说明，退回完整审批
+     */
+    public String resolveFastPathDeniedReason(Long submittedBy, List<ProductionReport> reports) {
+        // 条件1: 本人提交。submittedBy 为 null 时 (理论上不应发生) 退回审批
+        if (submittedBy == null) {
+            return "提交人未知，需要主管审批";
+        }
+
+        // 条件2: 最新报工必须在快速撤回时间窗口内
+        // 取所有报工中 createdAt 最晚的，作为"最后一笔报工时间"判断
+        LocalDateTime latestReportTime = reports.stream()
+                .map(r -> r.getCreatedAt())
+                .filter(Objects::nonNull)
+                .max(LocalDateTime::compareTo)
+                .orElse(null);
+
+        if (latestReportTime == null) {
+            // 无 createdAt 信息 → 无法判断时间窗口，保守退回审批
+            return "报工时间信息缺失，需要主管审批";
+        }
+
+        long minutesSinceReport = Duration.between(latestReportTime, LocalDateTime.now()).toMinutes();
+        if (minutesSinceReport > FAST_PATH_WINDOW_MINUTES) {
+            return String.format("报工提交已超 %d 分钟 (当前已过 %d 分钟)，超出快速撤回时限，需要主管审批",
+                    FAST_PATH_WINDOW_MINUTES, minutesSinceReport);
+        }
+
+        // 条件3: 所有报工的 workerId 须等于 submittedBy (本人只能快速撤回自己的报工)
+        boolean allBySubmitter = reports.stream().allMatch(r ->
+                submittedBy.equals(r.getWorkerId()));
+        if (!allBySubmitter) {
+            return "批次含有其他操作员的报工记录，需要主管审批";
+        }
+
+        return null; // 全部条件满足 → 快速撤回放行
+    }
 
     /**
      * 移动均价回放: 查询该 SFI 所有未冲销 IN 行 (按 createdAt ASC), 重算 unitCost。
