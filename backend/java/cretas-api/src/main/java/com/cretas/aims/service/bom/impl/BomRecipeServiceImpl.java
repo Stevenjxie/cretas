@@ -125,7 +125,9 @@ public class BomRecipeServiceImpl implements BomRecipeService {
                 newItems.add(buildItem(factoryId, recipe.getId(), dto));
             }
             itemRepo.saveAll(newItems);
-            recipe.setItems(newItems);
+            // IMPORTANT: keep same Hibernate PersistentBag reference (clear+addAll, not setItems).
+            recipe.getItems().clear();
+            recipe.getItems().addAll(newItems);
         }
 
         recomputeMaterialCost(recipe);
@@ -202,7 +204,9 @@ public class BomRecipeServiceImpl implements BomRecipeService {
             clonedItems.add(item);
         }
         itemRepo.saveAll(clonedItems);
-        clone.setItems(clonedItems);
+        // IMPORTANT: keep same Hibernate PersistentBag reference (clear+addAll, not setItems).
+        clone.getItems().clear();
+        clone.getItems().addAll(clonedItems);
         recomputeMaterialCost(clone);
         return recipeRepo.save(clone);
     }
@@ -236,7 +240,8 @@ public class BomRecipeServiceImpl implements BomRecipeService {
     public BomRecipe getRecipe(String factoryId, String recipeId) {
         BomRecipe recipe = loadRecipe(factoryId, recipeId);
         // Touch items to trigger LAZY load.
-        recipe.setItems(itemRepo.findByRecipeIdOrderBySortOrderAsc(recipe.getId()));
+        // IMPORTANT: use refreshItemsInPlace to keep Hibernate PersistentBag reference intact.
+        refreshItemsInPlace(recipe);
         return recipe;
     }
 
@@ -263,7 +268,8 @@ public class BomRecipeServiceImpl implements BomRecipeService {
     @Transactional
     public BomRecipe calculateCost(String factoryId, String recipeId) {
         BomRecipe recipe = loadRecipe(factoryId, recipeId);
-        recipe.setItems(itemRepo.findByRecipeIdOrderBySortOrderAsc(recipe.getId()));
+        // IMPORTANT: use refreshItemsInPlace to keep Hibernate PersistentBag reference intact.
+        refreshItemsInPlace(recipe);
         recomputeMaterialCost(recipe);
         // labor/overhead 留 Day 5 BomCostCalculationService 接入.
         return recipeRepo.save(recipe);
