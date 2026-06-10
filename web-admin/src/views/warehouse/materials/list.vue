@@ -4,7 +4,7 @@ import { useRouter } from 'vue-router';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { get, post, put } from '@/api/request';
-import { ElMessage } from 'element-plus';
+import { ElMessage, ElMessageBox } from 'element-plus';
 import CanvasAwareWrapper from '@/components/canvas/CanvasAwareWrapper.vue';
 import ConceptDisambiguationAlert from '@/components/common/ConceptDisambiguationAlert.vue';
 import { Plus, Search, Refresh } from '@element-plus/icons-vue';
@@ -146,7 +146,40 @@ const formData = reactive({
   totalValue: null as number | null,
   expireDate: '',
   notes: '',
+  factoryNumber: '',
+  originPlace: '',
 });
+
+// ==================== 扫码查询 ====================
+const scanCode = ref('');
+const scanLoading = ref(false);
+const scanResult = ref<Record<string, unknown> | null>(null);
+const scanResultVisible = computed({
+  get: () => scanResult.value !== null,
+  set: (v: boolean) => { if (!v) scanResult.value = null; },
+});
+
+async function handleScanQuery() {
+  const code = scanCode.value.trim();
+  if (!code) {
+    ElMessage.warning('请输入或扫描条码');
+    return;
+  }
+  scanLoading.value = true;
+  scanResult.value = null;
+  try {
+    const res = await get(`/${factoryId.value}/labels/scan/${encodeURIComponent(code)}`);
+    if (res.success && res.data) {
+      scanResult.value = res.data as Record<string, unknown>;
+    } else {
+      ElMessage({ message: res.message || '未找到对应批次', type: 'warning', duration: 0, showClose: true });
+    }
+  } catch {
+    ElMessage({ message: '扫码查询失败，请重试', type: 'error', duration: 0, showClose: true });
+  } finally {
+    scanLoading.value = false;
+  }
+}
 
 // Track the selected material's canonical unit for the UI hint
 const selectedMaterialUnit = ref<string | null>(null);
@@ -206,7 +239,7 @@ function handleCreate() {
   formDialogTitle.value = '入库登记';
   w02HintShown = false;
   selectedMaterialUnit.value = null;
-  Object.assign(formData, { batchNumber: '', materialTypeId: '', supplierId: '', receiptDate: new Date().toISOString().slice(0, 10), receiptQuantity: null, quantityUnit: 'kg', boxCount: null, totalWeight: null, totalValue: null, expireDate: '', notes: '' });
+  Object.assign(formData, { batchNumber: '', materialTypeId: '', supplierId: '', receiptDate: new Date().toISOString().slice(0, 10), receiptQuantity: null, quantityUnit: 'kg', boxCount: null, totalWeight: null, totalValue: null, expireDate: '', notes: '', factoryNumber: '', originPlace: '' });
   formDialogVisible.value = true;
 }
 
@@ -227,6 +260,8 @@ function handleEdit(row: TableRow) {
     totalValue: row.totalValue ?? null,
     expireDate: row.expireDate || row.expiryDate || '',
     notes: row.notes || '',
+    factoryNumber: row.factoryNumber || '',
+    originPlace: row.originPlace || '',
   });
   formDialogVisible.value = true;
 }
@@ -282,6 +317,14 @@ async function handleFormSubmit() {
             <span class="data-count">共 {{ pagination.total }} 条记录</span>
           </div>
           <div class="header-right">
+            <el-input
+              v-model="scanCode"
+              placeholder="扫码/输入条码查询"
+              clearable
+              style="width: 200px"
+              @keyup.enter="handleScanQuery"
+            />
+            <el-button :loading="scanLoading" @click="handleScanQuery">扫码查询</el-button>
             <el-button v-if="canWrite" @click="router.push('/warehouse/material-types')">
               管理原料类型字典
             </el-button>
@@ -332,6 +375,12 @@ async function handleFormSubmit() {
         </el-table-column>
         <el-table-column prop="expiryDate" label="过期日期" width="120" />
         <el-table-column prop="createdAt" label="入库时间" width="180" :formatter="formatDateTimeCell" />
+        <el-table-column prop="factoryNumber" label="厂号" width="110" show-overflow-tooltip>
+          <template #default="{ row }">{{ row.factoryNumber || '-' }}</template>
+        </el-table-column>
+        <el-table-column prop="originPlace" label="产地" width="110" show-overflow-tooltip>
+          <template #default="{ row }">{{ row.originPlace || '-' }}</template>
+        </el-table-column>
         <el-table-column label="操作" width="120" fixed="right" align="center">
           <template #default="{ row }">
             <el-button type="primary" link size="small" @click="handleView(row)">查看</el-button>
@@ -370,7 +419,21 @@ async function handleFormSubmit() {
         <el-descriptions-item label="过期日期">{{ viewRecord.expiryDate || '-' }}</el-descriptions-item>
         <el-descriptions-item label="入库时间">{{ viewRecord.createdAt || '-' }}</el-descriptions-item>
         <el-descriptions-item label="备注">{{ viewRecord.notes || '-' }}</el-descriptions-item>
+        <el-descriptions-item label="厂号">{{ viewRecord.factoryNumber || '-' }}</el-descriptions-item>
+        <el-descriptions-item label="产地">{{ viewRecord.originPlace || '-' }}</el-descriptions-item>
       </el-descriptions>
+    </el-dialog>
+
+    <!-- 扫码查询结果 Dialog -->
+    <el-dialog v-model="scanResultVisible" title="扫码查询结果" width="480px" destroy-on-close>
+      <el-descriptions v-if="scanResult" :column="1" border>
+        <el-descriptions-item v-for="(val, key) in scanResult" :key="String(key)" :label="String(key)">
+          {{ val ?? '-' }}
+        </el-descriptions-item>
+      </el-descriptions>
+      <template #footer>
+        <el-button @click="scanResult = null">关闭</el-button>
+      </template>
     </el-dialog>
 
     <!-- Create / Edit Dialog -->
@@ -431,6 +494,12 @@ async function handleFormSubmit() {
         </el-form-item>
         <el-form-item label="备注">
           <el-input v-model="formData.notes" type="textarea" :rows="2" />
+        </el-form-item>
+        <el-form-item label="厂号">
+          <el-input v-model="formData.factoryNumber" placeholder="生产厂家编号（可选）" />
+        </el-form-item>
+        <el-form-item label="产地">
+          <el-input v-model="formData.originPlace" placeholder="原料产地（如：山东寿光，可选）" />
         </el-form-item>
       </el-form>
       <template #footer>

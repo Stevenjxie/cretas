@@ -143,6 +143,9 @@ const form = ref({
   storageType: '',
   shelfLifeDays: null as number | null,
   notes: '',
+  // SP4: 税率 + 含税单价
+  taxRate: '' as string,
+  taxIncludedUnitPrice: null as number | null,
 });
 const packaging = ref({
   level1PerLevel2: '' as number | string,
@@ -151,6 +154,107 @@ const packaging = ref({
   level3Unit: '',
 });
 const dialogTitle = computed(() => (editingId.value ? '编辑原料类型' : '新建原料类型'));
+
+// SP4: 含税单价 → 未税联动
+const preTaxUnitPrice = computed(() => {
+  const price = form.value.taxIncludedUnitPrice;
+  const rate = form.value.taxRate;
+  if (price == null || !rate) return null;
+  const rateNum = rate === 'TAX_9' ? 0.09 : rate === 'TAX_13' ? 0.13 : null;
+  if (rateNum == null) return null;
+  return Math.round((price / (1 + rateNum)) * 100) / 100;
+});
+
+// SP8: 16位编码级联下拉 (MaterialCodeSegmentController)
+interface SegmentNode {
+  id: string;
+  segmentCode: string;
+  segmentLabel: string;
+  level: number;
+  parentCode: string | null;
+  children?: SegmentNode[];
+}
+const segmentTree = ref<SegmentNode[]>([]);
+const segmentL1 = ref(''); // L1 类型
+const segmentL2 = ref(''); // L2 部位
+const segmentL3 = ref(''); // L3 品类
+const segmentLoading = ref(false);
+const segmentCodePreview = ref(''); // SP8 生成的编码预览
+const sp8PreviewLoading = ref(false);
+
+async function loadSegmentTree() {
+  if (!factoryId.value) return;
+  segmentLoading.value = true;
+  try {
+    const res = await get<SegmentNode[]>(`/${factoryId.value}/material-segments/tree`);
+    if (res.success && Array.isArray(res.data)) {
+      segmentTree.value = res.data;
+    } else {
+      segmentTree.value = [];
+    }
+  } catch {
+    segmentTree.value = [];
+  } finally {
+    segmentLoading.value = false;
+  }
+}
+
+// L1 options = top-level nodes
+const segmentL1Options = computed(() =>
+  segmentTree.value.filter((n) => n.level === 1),
+);
+// L2 options = children of selected L1
+const segmentL2Options = computed(() => {
+  if (!segmentL1.value) return [];
+  const l1Node = segmentTree.value.find((n) => n.segmentCode === segmentL1.value);
+  return l1Node?.children?.filter((c) => c.level === 2) ?? [];
+});
+// L3 options = children of selected L2
+const segmentL3Options = computed(() => {
+  if (!segmentL2.value) return [];
+  for (const l1 of segmentTree.value) {
+    const l2Node = l1.children?.find((c) => c.segmentCode === segmentL2.value);
+    if (l2Node) return l2Node.children?.filter((c) => c.level === 3) ?? [];
+  }
+  return [];
+});
+
+// When L1 changes, reset L2/L3
+watch(segmentL1, () => {
+  segmentL2.value = '';
+  segmentL3.value = '';
+  segmentCodePreview.value = '';
+});
+watch(segmentL2, () => {
+  segmentL3.value = '';
+  segmentCodePreview.value = '';
+});
+
+async function generateSP8Code() {
+  if (!segmentL1.value || !segmentL2.value || !segmentL3.value) {
+    ElMessage.warning('请先选择 L1类型、L2部位、L3品类后再生成编码');
+    return;
+  }
+  if (!factoryId.value) return;
+  sp8PreviewLoading.value = true;
+  try {
+    const res = await get<{ code: string }>(
+      `/${factoryId.value}/material-segments/generate-code`,
+      { params: { l1: segmentL1.value, l2: segmentL2.value, l3: segmentL3.value } },
+    );
+    if (res.success && res.data?.code) {
+      segmentCodePreview.value = res.data.code;
+    } else {
+      // fallback: show a placeholder hint
+      segmentCodePreview.value = `${segmentL1.value}${segmentL2.value}${segmentL3.value}...`;
+    }
+  } catch {
+    // API not yet available — graceful degrade
+    segmentCodePreview.value = `${segmentL1.value}-${segmentL2.value}-${segmentL3.value}`;
+  } finally {
+    sp8PreviewLoading.value = false;
+  }
+}
 
 // ==================== T159-A: Code Preview ====================
 // Create mode only: when category changes → fetch preview code.
@@ -331,10 +435,18 @@ function openCreate() {
     storageType: storageTypeOptions.value[0]?.enumLabel || '',
     shelfLifeDays: null,
     notes: '',
+    taxRate: '',
+    taxIncludedUnitPrice: null,
   };
   resetPackaging();
   resetManuallyEditedFlags();
   codePreview.value = '';
+  // SP8: reset cascade
+  segmentL1.value = '';
+  segmentL2.value = '';
+  segmentL3.value = '';
+  segmentCodePreview.value = '';
+  if (segmentTree.value.length === 0) loadSegmentTree();
   dialogVisible.value = true;
 }
 
@@ -348,10 +460,18 @@ async function openEdit(row: TableRow) {
     storageType: String(row.storageType || ''),
     shelfLifeDays: row.shelfLifeDays as number | null ?? null,
     notes: String(row.notes || ''),
+    taxRate: String(row.taxRate || ''),
+    taxIncludedUnitPrice: (row.taxIncludedUnitPrice as number | null) ?? null,
   };
   resetPackaging();
   resetManuallyEditedFlags();
   codePreview.value = '';
+  // SP8: reset cascade (edit mode — code already exists, cascade is create-only)
+  segmentL1.value = '';
+  segmentL2.value = '';
+  segmentL3.value = '';
+  segmentCodePreview.value = '';
+  if (segmentTree.value.length === 0) loadSegmentTree();
   // 加载现有包装层级
   try {
     const res = await get<{ level1PerLevel2: number | null; level2Unit: string | null; level2PerLevel3: number | null; level3Unit: string | null }>(
@@ -673,6 +793,111 @@ function handleSizeChange(size: number) {
         <el-form-item label="备注">
           <el-input v-model="form.notes" type="textarea" :rows="2" />
         </el-form-item>
+
+        <!-- SP4: 税率 + 含税/未税单价 (canViewPrice 门控) -->
+        <template v-if="canViewPrice">
+          <el-form-item label="税率">
+            <el-select v-model="form.taxRate" placeholder="未配置" clearable style="width: 100%">
+              <el-option label="未配置" value="" />
+              <el-option label="9% (农产品等)" value="TAX_9" />
+              <el-option label="13% (标准税率)" value="TAX_13" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="含税单价 (元)">
+            <el-input-number
+              v-model="form.taxIncludedUnitPrice"
+              :min="0"
+              :precision="4"
+              :controls="false"
+              placeholder="含税单价（可选）"
+              style="width: 100%"
+            />
+          </el-form-item>
+          <el-form-item v-if="form.taxIncludedUnitPrice != null && form.taxRate" label="未税单价 (元)">
+            <el-input
+              :model-value="preTaxUnitPrice != null ? preTaxUnitPrice.toFixed(4) : '—'"
+              disabled
+              style="width: 100%"
+            />
+            <div class="field-hint">= 含税单价 ÷ (1 + 税率)，自动计算</div>
+          </el-form-item>
+        </template>
+
+        <!-- SP8: 16位编码级联 (创建模式下显示, 编辑模式只读) -->
+        <el-divider v-if="!editingId">
+          <span class="divider-title">16位编码级联（可选）</span>
+        </el-divider>
+        <template v-if="!editingId">
+          <el-form-item label="L1 类型">
+            <el-select
+              v-model="segmentL1"
+              placeholder="请选择类型分类"
+              clearable
+              filterable
+              style="width: 100%"
+              :loading="segmentLoading"
+            >
+              <el-option
+                v-for="opt in segmentL1Options"
+                :key="opt.segmentCode"
+                :label="`${opt.segmentCode} — ${opt.segmentLabel}`"
+                :value="opt.segmentCode"
+              />
+            </el-select>
+            <div v-if="segmentL1Options.length === 0 && !segmentLoading" class="field-hint">
+              暂无L1编码配置 — 可在「系统设置→编码管理」维护后使用，或留空使用旧自动编码
+            </div>
+          </el-form-item>
+          <el-form-item label="L2 部位">
+            <el-select
+              v-model="segmentL2"
+              placeholder="请先选择 L1 类型"
+              clearable
+              filterable
+              style="width: 100%"
+              :disabled="!segmentL1"
+            >
+              <el-option
+                v-for="opt in segmentL2Options"
+                :key="opt.segmentCode"
+                :label="`${opt.segmentCode} — ${opt.segmentLabel}`"
+                :value="opt.segmentCode"
+              />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="L3 品类">
+            <el-select
+              v-model="segmentL3"
+              placeholder="请先选择 L2 部位"
+              clearable
+              filterable
+              style="width: 100%"
+              :disabled="!segmentL2"
+            >
+              <el-option
+                v-for="opt in segmentL3Options"
+                :key="opt.segmentCode"
+                :label="`${opt.segmentCode} — ${opt.segmentLabel}`"
+                :value="opt.segmentCode"
+              />
+            </el-select>
+          </el-form-item>
+          <el-form-item v-if="segmentL1 && segmentL2 && segmentL3" label="编码预览">
+            <div class="code-preview-row">
+              <el-tag v-if="segmentCodePreview" type="success" class="code-preview-tag">
+                {{ segmentCodePreview }}
+              </el-tag>
+              <el-button
+                size="small"
+                :loading="sp8PreviewLoading"
+                @click="generateSP8Code"
+              >
+                生成预览
+              </el-button>
+            </div>
+            <div class="field-hint">点击「生成预览」查看将生成的16位编码</div>
+          </el-form-item>
+        </template>
 
         <!-- ==================== T159-A: 包装层级 内联换算行 (SKU-style) ==================== -->
         <el-divider>
