@@ -29,6 +29,8 @@ import RestaurantPhaseIIPlaceholder from '@/components/smartbi/RestaurantPhaseII
 import RestaurantSalesContent from '@/components/smartbi/RestaurantSalesContent.vue';
 import ChartSkeleton from '@/components/smartbi/ChartSkeleton.vue';
 import type { ChartConfig as SmartBIChartConfig } from '@/types/smartbi';
+import ChartInsightProvider from './components/ChartInsightProvider.vue';
+import type { ChartWithMeta } from './components/chartInsight';
 import {
   getUploadHistory,
   getUploadTableData,
@@ -314,6 +316,106 @@ interface ExplorationChart {
 }
 const explorationCharts = ref<ExplorationChart[]>([]);
 const explorationLoading = ref(false);
+
+// ==================== ChartInsightProvider: runtime type→meta mapping ====================
+
+const EXOTIC_CHART_TYPES_SALES = new Set(['scatter', 'waterfall', 'radar', 'heatmap', 'gauge', 'funnel', 'sankey']);
+
+/**
+ * trendDynamicConfig is set to chartType:'line' by updateTrendChart().
+ * User can switch it to 'bar' via handleChartTypeSwitch. Never exotic.
+ * LegacyChartConfig format: { chartType, data[], xAxisField, yAxisField }
+ */
+const trendChartInsightMeta = computed<ChartWithMeta | null>(() => {
+  const cfg = trendDynamicConfig.value;
+  if (!cfg) return null;
+  const ct = ((cfg as Record<string, unknown>)['chartType'] as string ?? 'line').toLowerCase();
+  if (EXOTIC_CHART_TYPES_SALES.has(ct)) return null;
+  if (ct !== 'bar' && ct !== 'line' && ct !== 'pie') return null;
+
+  const c = cfg as Record<string, unknown>;
+  let xData: string[] = [];
+  let seriesData: Array<{ type?: string; data?: unknown[] }> = [];
+
+  if (Array.isArray(c['data']) && typeof c['xAxisField'] === 'string') {
+    xData = (c['data'] as Record<string, unknown>[]).map(r => String(r[c['xAxisField'] as string] ?? ''));
+  } else if (c['xAxis'] && Array.isArray((c['xAxis'] as Record<string, unknown>)['data'])) {
+    xData = ((c['xAxis'] as Record<string, unknown>)['data']) as string[];
+  }
+
+  if (Array.isArray(c['series'])) {
+    seriesData = c['series'] as Array<{ type?: string; data?: unknown[] }>;
+  } else if (Array.isArray(c['data']) && typeof c['yAxisField'] === 'string') {
+    seriesData = [{ type: ct, data: (c['data'] as Record<string, unknown>[]).map(r => Number(r[c['yAxisField'] as string] ?? 0)) }];
+  }
+
+  return {
+    chartType: ct,
+    title: typeof c['title'] === 'string' ? c['title'] : '销售趋势',
+    meta: { xDim: 'time', yMetric: 'revenue', aggregation: 'sum', domain: 'factory' },
+    config: { xAxis: { data: xData }, series: seriesData },
+  };
+});
+
+/**
+ * pieDynamicConfig is always set to chartType:'pie' by updatePieChart().
+ * LegacyChartConfig format: { chartType:'pie', data[], xAxisField (label), yAxisField (value) }
+ */
+const pieChartInsightMeta = computed<ChartWithMeta | null>(() => {
+  const cfg = pieDynamicConfig.value;
+  if (!cfg) return null;
+  const c = cfg as Record<string, unknown>;
+  const xf = typeof c['xAxisField'] === 'string' ? c['xAxisField'] : 'name';
+  const yf = typeof c['yAxisField'] === 'string' ? c['yAxisField'] : 'value';
+
+  const rows = Array.isArray(c['data']) ? (c['data'] as Record<string, unknown>[]) : [];
+  const labels = rows.map(r => String(r[xf] ?? ''));
+  const values = rows.map(r => Number(r[yf] ?? 0));
+
+  return {
+    chartType: 'pie',
+    title: typeof c['title'] === 'string' ? c['title'] : '产品类别销售占比',
+    meta: { xDim: 'category', yMetric: 'quantity', aggregation: 'sum', domain: 'factory' },
+    config: { xAxis: { data: labels }, series: [{ type: 'pie', data: values }] },
+  };
+});
+
+/**
+ * Build ChartWithMeta for a single Sales exploration chart item.
+ */
+function salesExplorationChartMeta(chart: ExplorationChart): ChartWithMeta | null {
+  const ct = (chart.chartType ?? '').toLowerCase();
+  if (EXOTIC_CHART_TYPES_SALES.has(ct)) return null;
+  if (ct !== 'bar' && ct !== 'line' && ct !== 'pie') return null;
+
+  const c = chart.config as Record<string, unknown>;
+  let xData: string[] = [];
+  let seriesData: Array<{ type?: string; data?: unknown[] }> = [];
+
+  if (c['xAxis'] && Array.isArray((c['xAxis'] as Record<string, unknown>)['data'])) {
+    xData = ((c['xAxis'] as Record<string, unknown>)['data']) as string[];
+  } else if (Array.isArray(c['data']) && chart.xField) {
+    xData = (c['data'] as Record<string, unknown>[]).map(r => String(r[chart.xField as string] ?? ''));
+  }
+
+  if (Array.isArray(c['series'])) {
+    seriesData = c['series'] as Array<{ type?: string; data?: unknown[] }>;
+  } else if (Array.isArray(c['data']) && chart.yFields?.length) {
+    const yf = chart.yFields[0];
+    seriesData = [{ type: ct, data: (c['data'] as Record<string, unknown>[]).map(r => Number(r[yf] ?? 0)) }];
+  }
+
+  const meta = ct === 'line'
+    ? { xDim: 'time' as const, yMetric: 'revenue' as const, aggregation: 'sum' as const, domain: 'factory' as const }
+    : { xDim: 'category' as const, yMetric: 'revenue' as const, aggregation: 'sum' as const, domain: 'factory' as const };
+
+  return {
+    chartType: ct,
+    title: chart.title,
+    meta,
+    config: { xAxis: { data: xData }, series: seriesData },
+  };
+}
 
 // Data info for ChartTypeSelector
 const dataInfo = ref<{
@@ -1684,6 +1786,14 @@ onUnmounted(() => {
             :config="trendDynamicConfig"
             :height="320"
           />
+          <!-- Chart Insight: line→TREND; bar switch stays wired (exotic types → null) -->
+          <ChartInsightProvider
+            v-if="useDynamicTrend && trendDynamicConfig"
+            :chart="trendChartInsightMeta"
+            :perms="{ canViewFinance: canViewPrice }"
+            :factory-id="factoryId ?? ''"
+            depth="detailed"
+          />
           <!-- Empty state for dynamic mode with no charts -->
           <el-empty
             v-else-if="isDynamicMode && !trendLoading"
@@ -1711,6 +1821,14 @@ onUnmounted(() => {
             v-if="useDynamicPie && pieDynamicConfig && pieLegacyData.length > 1"
             :config="pieDynamicConfig"
             :height="350"
+          />
+          <!-- Chart Insight: pie→PROPORTION (always wired) -->
+          <ChartInsightProvider
+            v-if="useDynamicPie && pieDynamicConfig && pieLegacyData.length > 1"
+            :chart="pieChartInsightMeta"
+            :perms="{ canViewFinance: canViewPrice }"
+            :factory-id="factoryId ?? ''"
+            depth="detailed"
           />
           <!-- Single category: show stat instead of useless full-circle pie -->
           <div v-else-if="useDynamicPie && pieDynamicConfig && pieLegacyData.length === 1" class="single-category-stat">
@@ -1784,6 +1902,13 @@ onUnmounted(() => {
           <DynamicChartRenderer
             :config="chart.config"
             :height="280"
+          />
+          <!-- Chart Insight per exploration chart: each instance has its own setup() → v-for safe -->
+          <ChartInsightProvider
+            :chart="salesExplorationChartMeta(chart)"
+            :perms="{ canViewFinance: canViewPrice }"
+            :factory-id="factoryId ?? ''"
+            depth="detailed"
           />
         </div>
         <SmartBIEmptyState v-if="!explorationLoading && explorationCharts.length === 0" type="no-charts" :show-action="false" />

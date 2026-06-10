@@ -55,6 +55,8 @@ import RestaurantFinanceContent from '@/components/smartbi/RestaurantFinanceCont
 import RestaurantKitchenCostContent from '@/components/smartbi/RestaurantKitchenCostContent.vue';
 import TemplateGrid from './components/TemplateGrid.vue';
 import type { ChartConfig } from '@/types/smartbi';
+import ChartInsightProvider from './components/ChartInsightProvider.vue';
+import type { ChartWithMeta } from './components/chartInsight';
 // Day 9 数据织网 Sub-Project A: capability-driven card visibility
 import { useCapability } from '@/composables/useCapability';
 import CapabilityGate from '@/components/CapabilityGate.vue';
@@ -440,6 +442,95 @@ interface ExplorationChart {
 }
 const explorationCharts = ref<ExplorationChart[]>([]);
 const explorationLoading = ref(false);
+
+// ==================== ChartInsightProvider: runtime type→meta mapping ====================
+
+/** EXOTIC types we refuse to guess insight for (no insight = no fabrication). */
+const EXOTIC_CHART_TYPES = new Set(['scatter', 'waterfall', 'radar', 'heatmap', 'gauge', 'funnel', 'sankey']);
+
+/**
+ * Build ChartWithMeta for the main dynamic chart.
+ * Runtime chart type is only known from mainDynamicConfig.value?.chartType.
+ * BAR/LINE/PIE → infer meta + extract config.
+ * EXOTIC → null (renders nothing, honest).
+ */
+const mainChartInsightMeta = computed<ChartWithMeta | null>(() => {
+  const cfg = mainDynamicConfig.value;
+  if (!cfg) return null;
+  const ct = (cfg.chartType ?? '').toLowerCase();
+  if (EXOTIC_CHART_TYPES.has(ct)) return null;
+  if (ct !== 'bar' && ct !== 'line' && ct !== 'pie') return null;
+
+  // Infer meta from runtime chart type
+  const meta = ct === 'line'
+    ? { xDim: 'time' as const, yMetric: 'revenue' as const, aggregation: 'sum' as const, domain: 'finance' as const }
+    : ct === 'pie'
+      ? { xDim: 'category' as const, yMetric: 'revenue' as const, aggregation: 'sum' as const, domain: 'finance' as const }
+      : /* bar */ { xDim: 'category' as const, yMetric: 'revenue' as const, aggregation: 'sum' as const, domain: 'finance' as const };
+
+  // Normalize config: ChartConfig may be legacy (data/xAxisField) or ECharts-style (xAxis.data/series)
+  const c = cfg as Record<string, unknown>;
+  let xData: string[] = [];
+  let seriesData: Array<{ type?: string; data?: unknown[] }> = [];
+
+  if (Array.isArray(c['xAxis'] && (c['xAxis'] as Record<string, unknown>)['data'])) {
+    xData = ((c['xAxis'] as Record<string, unknown>)['data']) as string[];
+  } else if (Array.isArray(c['data']) && typeof c['xAxisField'] === 'string') {
+    xData = (c['data'] as Record<string, unknown>[]).map(r => String(r[c['xAxisField'] as string] ?? ''));
+  }
+
+  if (Array.isArray(c['series'])) {
+    seriesData = c['series'] as Array<{ type?: string; data?: unknown[] }>;
+  } else if (Array.isArray(c['data']) && typeof c['yAxisField'] === 'string') {
+    seriesData = [{ type: ct, data: (c['data'] as Record<string, unknown>[]).map(r => Number(r[c['yAxisField'] as string] ?? 0)) }];
+  }
+
+  return {
+    chartType: ct,
+    title: typeof cfg.title === 'string' ? cfg.title : undefined,
+    meta,
+    config: { xAxis: { data: xData }, series: seriesData },
+  };
+});
+
+/**
+ * Build ChartWithMeta for a single exploration chart item.
+ * Called per-chart in the v-for exploration loop.
+ * chart.chartType is set at build time (could be bar/line/pie/scatter/etc.)
+ */
+function explorationChartInsightMeta(chart: ExplorationChart): ChartWithMeta | null {
+  const ct = (chart.chartType ?? '').toLowerCase();
+  if (EXOTIC_CHART_TYPES.has(ct)) return null;
+  if (ct !== 'bar' && ct !== 'line' && ct !== 'pie') return null;
+
+  const meta = ct === 'line'
+    ? { xDim: 'time' as const, yMetric: 'revenue' as const, aggregation: 'sum' as const, domain: 'finance' as const }
+    : { xDim: 'category' as const, yMetric: 'revenue' as const, aggregation: 'sum' as const, domain: 'finance' as const };
+
+  const c = chart.config as Record<string, unknown>;
+  let xData: string[] = [];
+  let seriesData: Array<{ type?: string; data?: unknown[] }> = [];
+
+  if (c['xAxis'] && Array.isArray((c['xAxis'] as Record<string, unknown>)['data'])) {
+    xData = ((c['xAxis'] as Record<string, unknown>)['data']) as string[];
+  } else if (Array.isArray(c['data']) && chart.xField) {
+    xData = (c['data'] as Record<string, unknown>[]).map(r => String(r[chart.xField as string] ?? ''));
+  }
+
+  if (Array.isArray(c['series'])) {
+    seriesData = c['series'] as Array<{ type?: string; data?: unknown[] }>;
+  } else if (Array.isArray(c['data']) && chart.yFields?.length) {
+    const yf = chart.yFields[0];
+    seriesData = [{ type: ct, data: (c['data'] as Record<string, unknown>[]).map(r => Number(r[yf] ?? 0)) }];
+  }
+
+  return {
+    chartType: ct,
+    title: chart.title,
+    meta,
+    config: { xAxis: { data: xData }, series: seriesData },
+  };
+}
 
 // Data info for ChartTypeSelector
 const dataInfo = ref<{
@@ -2320,6 +2411,14 @@ onUnmounted(() => {
             :config="mainDynamicConfig"
             :height="360"
           />
+          <!-- Chart Insight: runtime type mapped to meta (exotic types → null → renders nothing) -->
+          <ChartInsightProvider
+            v-if="useDynamicRenderer && mainDynamicConfig"
+            :chart="mainChartInsightMeta"
+            :perms="{ canViewFinance: canViewPrice }"
+            :factory-id="factoryId ?? ''"
+            depth="detailed"
+          />
           <!-- No chart data for this tab -->
           <div v-else-if="noChartForTab" class="chart-empty-hint">
             <el-icon style="font-size: 40px; color: #C0C4CC;"><TrendCharts /></el-icon>
@@ -2451,6 +2550,13 @@ onUnmounted(() => {
           <DynamicChartRenderer
             :config="chart.config"
             :height="280"
+          />
+          <!-- Chart Insight per exploration chart: each instance has its own setup() → v-for safe -->
+          <ChartInsightProvider
+            :chart="explorationChartInsightMeta(chart)"
+            :perms="{ canViewFinance: canViewPrice }"
+            :factory-id="factoryId ?? ''"
+            depth="detailed"
           />
         </div>
         <SmartBIEmptyState v-if="!explorationLoading && explorationCharts.length === 0" type="no-charts" :show-action="false" />

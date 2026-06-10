@@ -47,6 +47,8 @@ import { processEChartsOptions } from '@/utils/echarts-fmt';
 import { AIInsightPanel } from '@/components/smartbi';
 import SmartBIEmptyState from '@/components/smartbi/SmartBIEmptyState.vue';
 import MaterializedAnalysisPanel from '@/components/smart-bi/MaterializedAnalysisPanel.vue';
+import ChartInsightProvider from './components/ChartInsightProvider.vue';
+import type { ChartWithMeta } from './components/chartInsight';
 
 // Render markdown content safely
 function renderMarkdown(text: string): string {
@@ -123,6 +125,86 @@ interface ChatMessage {
   chartGuide?: string;
   // UI local state for the expandable 字段说明/怎么看图 block.
   depthExpanded?: boolean;
+}
+
+// ==================== ChartInsightProvider: runtime type→meta mapping ====================
+
+const EXOTIC_CHART_TYPES_AIQUERY = new Set(['scatter', 'waterfall', 'radar', 'heatmap', 'gauge', 'funnel', 'sankey']);
+
+/**
+ * Build ChartWithMeta from a ChatMessage's chartConfig (single-chart case).
+ * message.chartConfig.type: 'line'|'bar'|'pie'
+ * message.chartConfig.option: ECharts option with xAxis.data and series[].data
+ * Context: AI chat may serve factory or restaurant tenants — use 'factory' as safe domain default.
+ */
+function messageChartWithMeta(msg: ChatMessage): ChartWithMeta | null {
+  const cfg = msg.chartConfig;
+  if (!cfg || !cfg.option) return null;
+  const ct = (cfg.type ?? '').toLowerCase();
+  if (EXOTIC_CHART_TYPES_AIQUERY.has(ct)) return null;
+  if (ct !== 'bar' && ct !== 'line' && ct !== 'pie') return null;
+
+  const opt = cfg.option as Record<string, unknown>;
+  let xData: string[] = [];
+  if (opt['xAxis'] && Array.isArray((opt['xAxis'] as Record<string, unknown>)['data'])) {
+    xData = ((opt['xAxis'] as Record<string, unknown>)['data']) as string[];
+  }
+
+  let seriesData: Array<{ type?: string; data?: unknown[] }> = [];
+  if (Array.isArray(opt['series'])) {
+    seriesData = (opt['series'] as Array<Record<string, unknown>>).map(s => ({
+      type: typeof s['type'] === 'string' ? s['type'] : ct,
+      data: Array.isArray(s['data']) ? s['data'] : [],
+    }));
+  }
+
+  const meta = ct === 'line'
+    ? { xDim: 'time' as const, yMetric: 'revenue' as const, aggregation: 'sum' as const, domain: 'factory' as const }
+    : { xDim: 'category' as const, yMetric: 'revenue' as const, aggregation: 'sum' as const, domain: 'factory' as const };
+
+  return {
+    chartType: ct,
+    title: typeof opt['title'] === 'object' && opt['title'] !== null
+      ? String((opt['title'] as Record<string, unknown>)['text'] ?? '')
+      : undefined,
+    meta,
+    config: { xAxis: { data: xData }, series: seriesData },
+  };
+}
+
+/**
+ * Build ChartWithMeta for a single chart in a multi-chart message (P2 charts[] array).
+ * Same logic as messageChartWithMeta but operates on ChartConfig directly.
+ */
+function multiChartWithMeta(cfg: ChartConfig): ChartWithMeta | null {
+  if (!cfg || !cfg.option) return null;
+  const ct = (cfg.type ?? '').toLowerCase();
+  if (EXOTIC_CHART_TYPES_AIQUERY.has(ct)) return null;
+  if (ct !== 'bar' && ct !== 'line' && ct !== 'pie') return null;
+
+  const opt = cfg.option;
+  let xData: string[] = [];
+  if (opt['xAxis'] && Array.isArray((opt['xAxis'] as Record<string, unknown>)['data'])) {
+    xData = ((opt['xAxis'] as Record<string, unknown>)['data']) as string[];
+  }
+
+  let seriesData: Array<{ type?: string; data?: unknown[] }> = [];
+  if (Array.isArray(opt['series'])) {
+    seriesData = (opt['series'] as Array<Record<string, unknown>>).map(s => ({
+      type: typeof s['type'] === 'string' ? s['type'] : ct,
+      data: Array.isArray(s['data']) ? s['data'] : [],
+    }));
+  }
+
+  const meta = ct === 'line'
+    ? { xDim: 'time' as const, yMetric: 'revenue' as const, aggregation: 'sum' as const, domain: 'factory' as const }
+    : { xDim: 'category' as const, yMetric: 'revenue' as const, aggregation: 'sum' as const, domain: 'factory' as const };
+
+  return {
+    chartType: ct,
+    meta,
+    config: { xAxis: { data: xData }, series: seriesData },
+  };
 }
 
 // 当前分析上下文 (用于连续对话)
@@ -2034,6 +2116,14 @@ function handleKeydown(event: KeyboardEvent) {
                 <div v-if="(message.chartConfig && message.chartConfig.option) || message.chart" class="message-chart">
                   <div :id="`chart-${message.id}`" class="chart-container"></div>
                 </div>
+                <!-- Chart Insight for single-chart message (bar/line/pie wired; exotic→null→renders nothing) -->
+                <ChartInsightProvider
+                  v-if="message.chartConfig && message.chartConfig.option"
+                  :chart="messageChartWithMeta(message)"
+                  :perms="{ canViewFinance: false }"
+                  :factory-id="factoryId ?? ''"
+                  depth="detailed"
+                />
                 <!-- P2 综合分析: multi-chart stack (评价/门店/VIP/时段 …) -->
                 <div v-if="message.charts && message.charts.length" class="message-chart">
                   <div
@@ -2043,6 +2133,17 @@ function handleKeydown(event: KeyboardEvent) {
                     class="chart-container"
                   ></div>
                 </div>
+                <!-- Chart Insight for P2 multi-chart: each ChartInsightProvider has its own setup() → v-for safe -->
+                <template v-if="message.charts && message.charts.length">
+                  <ChartInsightProvider
+                    v-for="(c, ci) in message.charts"
+                    :key="`insight-${message.id}__${ci}`"
+                    :chart="multiChartWithMeta(c)"
+                    :perms="{ canViewFinance: false }"
+                    :factory-id="factoryId ?? ''"
+                    depth="detailed"
+                  />
+                </template>
 
                 <!-- P1 (2026-06-02): expandable 字段说明 / 怎么看这张图 (zero extra call). -->
                 <div
