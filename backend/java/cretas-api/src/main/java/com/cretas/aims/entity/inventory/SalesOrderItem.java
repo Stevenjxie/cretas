@@ -206,6 +206,37 @@ public class SalesOrderItem extends BaseEntity {
         return amount;
     }
 
+    /**
+     * 含税行金额 = lineAmount × (1 + taxRate/100).
+     *
+     * <p>Mirrors {@code PurchaseOrderItem.getLineAmountWithTax()} (D-11) exactly:
+     * <ul>
+     *   <li>{@code @PriceSensitive} — stripped to {@code null} for roles without
+     *       {@code procurement:price:view}, consistent with PO side.
+     *   <li>Null-propagation: returns {@code null} when {@code getLineAmount()} is
+     *       {@code null} (i.e., {@code unitPrice} stripped or {@code quantity} null).
+     *   <li>Zero/null-tax short-circuit: returns {@code lineAmount} unchanged.
+     *   <li>Scale-6 HALF_UP in {@code divide} → scale-2 HALF_UP final, same precision
+     *       as PO side.
+     *   <li>SO-specific: {@code getLineAmount()} already applies {@code discountRate}
+     *       so tax is levied on the discounted base (含税价 = 折后价 × (1 + tax%)).
+     * </ul>
+     *
+     * <p>E-4 (六扇门需求矩阵): SO 行项目需在 API 响应中同时返回 {@code lineAmount}
+     * (未税) 和 {@code lineAmountWithTax} (含税) 双值, 对标 PO D-11 已实现的功能.
+     */
+    @Transient
+    @PriceSensitive
+    public BigDecimal getLineAmountWithTax() {
+        BigDecimal amount = getLineAmount();
+        // Defensive: getLineAmount() returns null when unitPrice stripped.
+        if (amount == null) return null;
+        if (taxRate == null || taxRate.compareTo(BigDecimal.ZERO) == 0) return amount;
+        BigDecimal taxMultiplier = BigDecimal.ONE.add(
+                taxRate.divide(new BigDecimal("100"), 6, BigDecimal.ROUND_HALF_UP));
+        return amount.multiply(taxMultiplier).setScale(2, BigDecimal.ROUND_HALF_UP);
+    }
+
     /** 未发货数量 */
     @Transient
     public BigDecimal getPendingQuantity() {
