@@ -22,6 +22,10 @@ import WHBatchTraceScreen from "../../screens/warehouse/shared/WHBatchTraceScree
 import InventoryAlertScreen from "../../screens/warehouse/alerts/InventoryAlertScreen";
 import AlertDetailScreen from "../../screens/warehouse/alerts/AlertDetailScreen";
 import InventoryWarningsScreen from "../../screens/warehouse/inventory/InventoryWarningsScreen";
+// SP7: 盘点录入 / 报损提交 / 调拨接收 (R-C)
+import StocktakeEntryScreen from "../../screens/warehouse/inventory/StocktakeEntryScreen";
+import WastageReportScreen from "../../screens/warehouse/inventory/WastageReportScreen";
+import TransferReceiveScreen from "../../screens/warehouse/inventory/TransferReceiveScreen";
 
 const Stack = createNativeStackNavigator<WHInventoryStackParamList>();
 
@@ -117,6 +121,27 @@ export function WHInventoryStackNavigator() {
         name="WHInventoryWarnings"
         component={InventoryWarningsScreen}
         options={{ title: "库存预警管理" }}
+      />
+
+      {/* SP7: 盘点录入（每屏一品，F4 防呆）*/}
+      <Stack.Screen
+        name="StocktakeEntry"
+        component={StocktakeEntryScreen}
+        options={{ title: "盘点录入" }}
+      />
+
+      {/* SP7: 报损提交（必须照片，双轨审批）*/}
+      <Stack.Screen
+        name="WastageReport"
+        component={WastageReportScreen}
+        options={{ title: "报损单" }}
+      />
+
+      {/* SP7: 调拨接收（差异自动记录）*/}
+      <Stack.Screen
+        name="TransferReceive"
+        component={TransferReceiveScreen}
+        options={{ title: "调拨接收" }}
       />
     </Stack.Navigator>
   );
