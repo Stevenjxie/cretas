@@ -103,8 +103,8 @@ class BomRecipeServiceImplAddItemTest {
         when(materialTypeRepo.findById("MT-001")).thenReturn(Optional.of(mt));
         when(materialTypeRepo.findById("MT-002")).thenReturn(Optional.of(newMt("MT-002", "包材A", "g")));
 
-        // uom converter: allow kg and g (same dimension)
-        when(materialUomConverter.isSameDimension(anyString(), anyString())).thenReturn(true);
+        // uom converter: allow write unit (service calls isWriteUnitCompatible)
+        when(materialUomConverter.isWriteUnitCompatible(anyString(), anyString())).thenReturn(true);
     }
 
     @Test
