@@ -726,7 +726,7 @@ class ChartInsightService:
             logger.warning("[chart-insight] llm_router not available, skipping Tier2b")
             return None
 
-        prompt = _build_insight_prompt(ctx)
+        prompt = _build_insight_prompt(ctx, ctx.permission_tier)
 
         payload = {
             "messages": [
@@ -943,23 +943,93 @@ class ChartInsightService:
 
 
 # ---------------------------------------------------------------------------
-# LLM prompt builder
+# C1.3 — finance_hidden stat whitelist (MF5)
 # ---------------------------------------------------------------------------
 
-def _build_insight_prompt(ctx: ChartInsightContext) -> str:
-    """Build the structured prompt for Tier2b LLM call.
+# Keys that are safe for finance_hidden callers (relative / non-absolute stats only).
+# changeAmt = last - first is an absolute ¥ delta; must be excluded for finance_hidden.
+# Raw series_values are also absolute — they are never put in the prompt stats dict directly,
+# but _stats_for_tier enforces the whitelist at the slot-dict level.
+_FINANCE_HIDDEN_STAT_WHITELIST: frozenset[str] = frozenset({
+    "topName",
+    "botName",
+    "topShare",
+    "ratio",
+    "concLevel",
+    "growthRate",
+})
 
-    U1.1: Prompt explicitly enumerates the ONLY allowed slot names and forbids
-    any placeholders outside this whitelist. This prevents the LLM from inventing
-    names like {topChannel}, {storeName}, {brandX} which would survive as literal
-    {slot} markers in the output (caught by _safe_fill safety net).
+
+def _stats_for_tier(slots: Dict[str, Any], permission_tier: str) -> Dict[str, Any]:
+    """Filter computed slot values for the given permission tier (MF5 RBAC).
+
+    finance_hidden callers must NOT be fed absolute ¥ amounts.
+    - 'changeAmt' (= last - first in series, an absolute amount) is excluded.
+    - 'changeDir' is excluded when changeAmt is (it references the direction of the absolute move).
+    - Raw series values are never in 'slots', so no special handling needed there.
+    - All other tiers (finance_visible, price_hidden, …) receive the full slot dict unchanged.
+
+    Args:
+        slots: dict returned by _compute_slot_values(ctx).
+        permission_tier: server-derived permission tier string.
+
+    Returns:
+        Filtered dict safe to feed into the LLM prompt for this tier.
     """
-    return f"""请为以下图表生成一个**可复用的结构化洞察模板**（JSON格式）。
+    if permission_tier != "finance_hidden":
+        return slots  # finance_visible and any other tier: no filtering
 
-⚠️ 你**不知道也不需要知道**任何具体数值或名称——系统会在使用时自动把占位符替换成真实值。
-你的唯一任务是产出**模板句式**，句中**所有**数值和名称**必须**写成 {{占位符}}。
+    # finance_hidden: return only the whitelisted relative stats
+    return {k: v for k, v in slots.items() if k in _FINANCE_HIDDEN_STAT_WHITELIST}
 
-图表信息（仅用于决定模板句式，不含真实数据）：
+
+# ---------------------------------------------------------------------------
+# LLM prompt builder (C1.3 — structured-claims contract)
+# ---------------------------------------------------------------------------
+
+def _build_insight_prompt(ctx: ChartInsightContext, permission_tier: str) -> str:
+    """Build the structured-claims prompt for Tier2b LLM call (C1.3).
+
+    Key changes vs the old slot-template prompt:
+    - Instructs the LLM to return *structured claims* in a JSON envelope:
+        {"claims":[{"entity":..,"stat_type":..,"value":..}],
+         "finding":.., "implication":.., "suggestion":..}
+      where stat_type ∈ {value,share,top2_share,complement,ratio,diff,growth,count}.
+    - Provides the server-computed stats (tier-filtered via _stats_for_tier) as reference
+      so the LLM can choose which claims to make — but number values must come from the
+      stats dict, not be invented.
+    - finance_hidden: raw series_values are NOT embedded; only relative stats are provided
+      (MF5 — no absolute ¥ leak to the LLM which would echo them into prose).
+    - finance_visible: may receive changeAmt and the full stats dict.
+
+    Args:
+        ctx: ChartInsightContext (series_values and series_labels used to compute stats).
+        permission_tier: server-derived permission tier (NOT from request body).
+
+    Returns:
+        Prompt string ready to pass to the LLM.
+    """
+    raw_slots = _compute_slot_values(ctx)
+    safe_stats = _stats_for_tier(raw_slots, permission_tier)
+
+    # Build a human-readable stats summary from the filtered safe stats
+    stats_lines = []
+    for k, v in safe_stats.items():
+        stats_lines.append(f"  {k}: {v}")
+    stats_summary = "\n".join(stats_lines) if stats_lines else "  (无可用统计数据)"
+
+    # For finance_visible, also provide context about value scale — but NOT for finance_hidden
+    series_info = ""
+    if permission_tier != "finance_hidden" and ctx.series_values:
+        series_info = (
+            f"\n数据规模参考（仅供理解量级，禁止直接引用原始数值到声明中）：\n"
+            f"  数据点数量: {len(ctx.series_values)}\n"
+            f"  维度标签: {', '.join(ctx.series_labels[:5]) if ctx.series_labels else '(无)'}\n"
+        )
+
+    return f"""请为以下图表生成结构化洞察（JSON格式）。
+
+图表信息：
 - 图表类型: {ctx.chart_type}
 - X轴维度: {ctx.x_dim}
 - Y轴指标: {ctx.y_metric}
@@ -967,23 +1037,28 @@ def _build_insight_prompt(ctx: ChartInsightContext) -> str:
 - 业务域: {ctx.domain}
 - 数据模式: {ctx.data_pattern}
 
-输出格式（严格JSON，禁止代码块）：
+服务端已计算的统计摘要（你的声明数值必须来自这里，不得编造其他数字）：
+{stats_summary}{series_info}
+
+**输出格式**（严格JSON，禁止代码块）：
 {{
-  "finding_tpl": "发现句，所有数值/名称用占位符，如：{{topName}}占{{topShare}}，是末位{{botName}}的{{ratio}}倍",
-  "implication_tpl": "含义句（可选，可为null）",
-  "suggestion_tpl": "建议句（可选，可为null；只用观察动词：关注/排查/分析/了解）",
-  "slots": ["topName", "topShare", "botName", "ratio"]
+  "claims": [
+    {{"entity": "实体名或null（如"堂食"）", "stat_type": "share", "value": 62.0}},
+    {{"entity": null, "stat_type": "top2_share", "value": 80.0}}
+  ],
+  "finding": "观察发现句（散文，数值必须来自上面 claims，不得引入未声明的数字）",
+  "implication": "含义句（可选，可为null）",
+  "suggestion": "建议句（可选，可为null；只用观察动词：关注/排查/分析/了解）"
 }}
 
-❌ 错误示例（含字面量，将被系统拒绝）：
-   {{"finding_tpl": "堂食占62.0%，是外卖的1.6倍"}}
-✅ 正确示例（全占位符）：
-   {{"finding_tpl": "{{topName}}占{{topShare}}，是末位{{botName}}的{{ratio}}倍"}}
+stat_type 取值范围（必须是以下之一）：
+  value（绝对值）、share（占比%）、top2_share（前两名合计占比%）、
+  complement（1-topShare，尾部占比%）、ratio（倍数）、diff（差值）、
+  growth（增长率%）、count（数量）
 
 重要规则：
-1. finding_tpl 中**严禁**出现任何具体数字（如 62、1.6）或具体名称（如 堂食、蜀三味）——全部用占位符。注意 {{topShare}} 已自带 % 号，模板里不要再加 %。
-2. 如果数据不足以得出有意义的业务观察，finding_tpl 返回 null。
+1. claims 中的每个 value 必须来自上方"服务端已计算的统计摘要"，不得编造。
+2. finding/implication/suggestion 中出现的**每个阿拉伯数字**必须在 claims 中有对应条目。
 3. 建议只用观察动词（关注/排查/分析/了解），严禁因果归因（复制/引流/加大/扩张/推广）。
-4. 只返回 JSON，不要任何解释或代码块。
-5. 【占位符白名单】只能用以下占位符，严禁白名单外（如 {{storeName}}, {{topChannel}}, {{brandX}} 均非法）：
-   {{topName}} {{botName}} {{topShare}} {{ratio}} {{concLevel}} {{growthRate}} {{changeAmt}} {{changeDir}}"""
+4. 如果数据不足以得出有意义的业务观察，claims 返回空数组 []，finding 返回 null。
+5. 只返回 JSON，不要任何解释或代码块。"""

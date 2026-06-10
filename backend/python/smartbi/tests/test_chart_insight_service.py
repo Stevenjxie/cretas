@@ -931,7 +931,11 @@ class TestU1Hardening:
 # Task 2: _validate_claims  (C1.2 — MF1 hallucination-kill)
 # ---------------------------------------------------------------------------
 
-from smartbi.services.insights.chart_insight_service import _validate_claims  # noqa: E402
+from smartbi.services.insights.chart_insight_service import (  # noqa: E402
+    _validate_claims,
+    _stats_for_tier,
+    _build_insight_prompt,
+)
 
 
 def _ctx(values: List[float], labels: List[str], domain: str = "restaurant") -> ChartInsightContext:
@@ -1039,3 +1043,101 @@ class TestValidateClaims:
         }
         result = _validate_claims(llm_obj, ctx)
         assert result is None, "Empty claims list must return None"
+
+
+# ---------------------------------------------------------------------------
+# Task 3: _stats_for_tier + _build_insight_prompt (C1.3 — MF5 finance_hidden)
+# ---------------------------------------------------------------------------
+
+
+class TestPromptAndTierStats:
+    """C1.3: _stats_for_tier whitelist + _build_insight_prompt structured-claims contract."""
+
+    def _make_slots(self) -> dict:
+        """Slots dict representative of what _compute_slot_values returns for a trend chart.
+
+        Includes both relative-safe keys (topName, topShare, ratio, growthRate, concLevel,
+        botName) and the absolute-amount key (changeAmt) that must be stripped for
+        finance_hidden callers.  Values are intentionally recognisable so we can assert
+        their presence / absence in the prompt.
+        """
+        return {
+            "topName": "堂食",
+            "botName": "外卖",
+            "topShare": "62.0",
+            "ratio": "1.6",
+            "concLevel": "偏高",
+            "growthRate": "5.2",
+            "changeAmt": "62000",   # absolute ¥-equivalent — must be hidden from finance_hidden
+        }
+
+    # ------------------------------------------------------------------
+    # test 1: finance_hidden must exclude changeAmt (and raw absolute slots)
+    # ------------------------------------------------------------------
+
+    def test_finance_hidden_excludes_absolute(self):
+        """finance_hidden tier: _stats_for_tier must drop changeAmt; keep topShare / ratio."""
+        slots = self._make_slots()
+        result = _stats_for_tier(slots, "finance_hidden")
+
+        # changeAmt is an absolute last-first delta — must be excluded
+        assert "changeAmt" not in result, (
+            "finance_hidden must exclude changeAmt (absolute ¥ delta)"
+        )
+        # Relative stats must survive
+        assert "topShare" in result, "topShare (relative %) must be kept for finance_hidden"
+        assert "ratio" in result, "ratio must be kept for finance_hidden"
+        assert "growthRate" in result, "growthRate (relative %) must be kept for finance_hidden"
+        assert "concLevel" in result, "concLevel must be kept for finance_hidden"
+        assert "topName" in result, "topName (label, not amount) must be kept for finance_hidden"
+        assert "botName" in result, "botName (label, not amount) must be kept for finance_hidden"
+
+    # ------------------------------------------------------------------
+    # test 2: finance_visible keeps all slots including changeAmt
+    # ------------------------------------------------------------------
+
+    def test_finance_visible_keeps_absolute(self):
+        """finance_visible tier: _stats_for_tier must return all slots unchanged."""
+        slots = self._make_slots()
+        result = _stats_for_tier(slots, "finance_visible")
+
+        assert "changeAmt" in result, (
+            "finance_visible must keep changeAmt (caller has full finance permission)"
+        )
+        assert result == slots, (
+            "finance_visible should return all slots unchanged"
+        )
+
+    # ------------------------------------------------------------------
+    # test 3: prompt uses structured-claims JSON contract + no raw ¥ for finance_hidden
+    # ------------------------------------------------------------------
+
+    def test_prompt_asks_for_structured_claims(self):
+        """_build_insight_prompt(ctx, 'finance_hidden') must:
+        - request JSON with 'claims' array and 'stat_type' field
+        - NOT embed the literal '62000' (absolute changeAmt value) in the prompt
+        - NOT embed raw series absolute values for finance_hidden callers
+        """
+        ctx = _ctx(
+            values=[62000.0, 38000.0],
+            labels=["堂食", "外卖"],
+        )
+        # Override permission_tier on ctx for the test
+        ctx.permission_tier = "finance_hidden"
+
+        prompt = _build_insight_prompt(ctx, "finance_hidden")
+
+        # Prompt must instruct LLM to return a structured-claims JSON
+        assert "claims" in prompt, (
+            "Prompt must instruct LLM to return 'claims' array"
+        )
+        assert "stat_type" in prompt, (
+            "Prompt must reference 'stat_type' field in the claims contract"
+        )
+
+        # For finance_hidden, the literal absolute value '62000' must NOT appear in the prompt
+        # (the raw series_values are absolute ¥ — feeding them to the prompt leaks ¥ to the LLM
+        # which then echoes them in the prose)
+        assert "62000" not in prompt, (
+            "finance_hidden prompt must NOT contain the raw absolute series value '62000'"
+        )
