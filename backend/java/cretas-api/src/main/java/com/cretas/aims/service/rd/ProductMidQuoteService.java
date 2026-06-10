@@ -1,6 +1,7 @@
 package com.cretas.aims.service.rd;
 
 import com.cretas.aims.dto.rd.MidQuoteCalculationResultDTO;
+import com.cretas.aims.entity.rd.ProductMidQuote;
 
 import java.math.BigDecimal;
 
@@ -34,4 +35,29 @@ public interface ProductMidQuoteService {
             BigDecimal overheadCostPerKg,
             BigDecimal varianceThresholdPct
     );
+
+    /**
+     * 确认中报价 (CALCULATED → CONFIRMED).
+     *
+     * <p>操作人写入 confirmedBy, 状态置 CONFIRMED, 可附加备注.</p>
+     *
+     * @param factoryId    工厂 ID (隔离鉴权)
+     * @param midQuoteId   ProductMidQuote.id
+     * @param notes        可选确认备注
+     * @param confirmedBy  操作人 userId
+     * @return 已确认的中报价实体
+     * @throws jakarta.persistence.EntityNotFoundException 中报价不存在或不属于该工厂
+     * @throws IllegalStateException 状态非 CALCULATED (不能重复确认或确认草稿)
+     */
+    ProductMidQuote confirmMidQuote(String factoryId, String midQuoteId, String notes, Long confirmedBy);
+
+    /**
+     * 按 id 查询中报价详情.
+     *
+     * @param factoryId   工厂 ID (隔离鉴权)
+     * @param midQuoteId  ProductMidQuote.id
+     * @return 中报价实体
+     * @throws jakarta.persistence.EntityNotFoundException 不存在或不属于该工厂
+     */
+    ProductMidQuote getMidQuoteById(String factoryId, String midQuoteId);
 }

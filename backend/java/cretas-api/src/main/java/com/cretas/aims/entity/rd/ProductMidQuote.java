@@ -7,6 +7,7 @@ import jakarta.persistence.*;
 import org.hibernate.annotations.Where;
 
 import java.math.BigDecimal;
+import java.time.LocalDateTime;
 import java.util.UUID;
 
 /**
@@ -124,4 +125,12 @@ public class ProductMidQuote extends BaseEntity {
 
     @Column(name = "notes", columnDefinition = "TEXT")
     private String notes;
+
+    /** 确认操作人 userId (confirm-mid-quote 时写入) */
+    @Column(name = "confirmed_by")
+    private Long confirmedBy;
+
+    /** 确认时间 */
+    @Column(name = "confirmed_at")
+    private LocalDateTime confirmedAt;
 }

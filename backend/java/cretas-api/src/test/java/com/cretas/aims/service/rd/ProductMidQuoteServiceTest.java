@@ -15,6 +15,8 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import jakarta.persistence.EntityNotFoundException;
+
 import java.math.BigDecimal;
 import java.util.Optional;
 
@@ -208,5 +210,129 @@ class ProductMidQuoteServiceTest {
         );
 
         assertTrue(result.getMidQuote().isVarianceAlert(), "超支应触发 varianceAlert=true");
+    }
+
+    // ==================== confirmMidQuote 测试 ====================
+
+    @Test
+    @DisplayName("confirmMidQuote() — 正常路径: CALCULATED → CONFIRMED, confirmedBy 写入")
+    void confirmMidQuote_calculatedToConfirmed() {
+        String midQuoteId = "mq-001";
+        ProductMidQuote mq = new ProductMidQuote();
+        mq.setId(midQuoteId);
+        mq.setFactoryId("F006");
+        mq.setStatus("CALCULATED");
+        mq.setTotalCostPerKg(new BigDecimal("47.5000"));
+
+        when(midQuoteRepository.findById(midQuoteId)).thenReturn(Optional.of(mq));
+        when(midQuoteRepository.save(any(ProductMidQuote.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        ProductMidQuote confirmed = service.confirmMidQuote("F006", midQuoteId, "价格合理，确认", 42L);
+
+        assertEquals("CONFIRMED", confirmed.getStatus());
+        assertEquals(42L, confirmed.getConfirmedBy());
+        assertNotNull(confirmed.getConfirmedAt());
+        assertEquals("价格合理，确认", confirmed.getNotes());
+        verify(midQuoteRepository).save(confirmed);
+    }
+
+    @Test
+    @DisplayName("confirmMidQuote() — 状态非 CALCULATED → IllegalStateException")
+    void confirmMidQuote_wrongStatus_throwsIllegalState() {
+        String midQuoteId = "mq-002";
+        ProductMidQuote mq = new ProductMidQuote();
+        mq.setId(midQuoteId);
+        mq.setFactoryId("F006");
+        mq.setStatus("CONFIRMED"); // 已确认
+
+        when(midQuoteRepository.findById(midQuoteId)).thenReturn(Optional.of(mq));
+
+        assertThrows(IllegalStateException.class,
+                () -> service.confirmMidQuote("F006", midQuoteId, null, 42L),
+                "已确认状态应抛出 IllegalStateException");
+    }
+
+    @Test
+    @DisplayName("confirmMidQuote() — factoryId 不匹配 → EntityNotFoundException")
+    void confirmMidQuote_wrongFactory_throwsNotFound() {
+        String midQuoteId = "mq-003";
+        ProductMidQuote mq = new ProductMidQuote();
+        mq.setId(midQuoteId);
+        mq.setFactoryId("F999"); // 不同工厂
+        mq.setStatus("CALCULATED");
+
+        when(midQuoteRepository.findById(midQuoteId)).thenReturn(Optional.of(mq));
+
+        assertThrows(EntityNotFoundException.class,
+                () -> service.confirmMidQuote("F006", midQuoteId, null, 42L),
+                "工厂 ID 不匹配应抛出 EntityNotFoundException");
+    }
+
+    @Test
+    @DisplayName("confirmMidQuote() — 中报价不存在 → EntityNotFoundException")
+    void confirmMidQuote_notFound_throwsEntityNotFound() {
+        when(midQuoteRepository.findById("no-such")).thenReturn(Optional.empty());
+
+        assertThrows(EntityNotFoundException.class,
+                () -> service.confirmMidQuote("F006", "no-such", null, 42L));
+    }
+
+    @Test
+    @DisplayName("confirmMidQuote() — notes 为 null 时不覆盖 notes 字段")
+    void confirmMidQuote_nullNotes_doesNotOverwriteExistingNotes() {
+        String midQuoteId = "mq-004";
+        ProductMidQuote mq = new ProductMidQuote();
+        mq.setId(midQuoteId);
+        mq.setFactoryId("F006");
+        mq.setStatus("CALCULATED");
+        mq.setNotes("原有备注");
+
+        when(midQuoteRepository.findById(midQuoteId)).thenReturn(Optional.of(mq));
+        when(midQuoteRepository.save(any(ProductMidQuote.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        ProductMidQuote confirmed = service.confirmMidQuote("F006", midQuoteId, null, 1L);
+
+        // notes 传 null 时保持原有值
+        assertEquals("原有备注", confirmed.getNotes(), "null notes 不应覆盖已有备注");
+    }
+
+    // ==================== getMidQuoteById 测试 ====================
+
+    @Test
+    @DisplayName("getMidQuoteById() — 真实数据返回, 非 stub")
+    void getMidQuoteById_returnsRealData() {
+        String midQuoteId = "mq-real-001";
+        ProductMidQuote mq = new ProductMidQuote();
+        mq.setId(midQuoteId);
+        mq.setFactoryId("F006");
+        mq.setStatus("CALCULATED");
+        mq.setTotalCostPerKg(new BigDecimal("55.1200"));
+        mq.setMaterialCostPerKg(new BigDecimal("38.0000"));
+
+        when(midQuoteRepository.findById(midQuoteId)).thenReturn(Optional.of(mq));
+
+        ProductMidQuote result = service.getMidQuoteById("F006", midQuoteId);
+
+        assertNotNull(result);
+        assertEquals(midQuoteId, result.getId());
+        // 关键: 返回真实 totalCostPerKg, 不是 stub message
+        assertEquals(0, new BigDecimal("55.1200").compareTo(result.getTotalCostPerKg()),
+                "应返回真实 totalCostPerKg, 不是 stub 假数据");
+        assertEquals(0, new BigDecimal("38.0000").compareTo(result.getMaterialCostPerKg()));
+    }
+
+    @Test
+    @DisplayName("getMidQuoteById() — factoryId 不匹配 → EntityNotFoundException (工厂隔离)")
+    void getMidQuoteById_wrongFactory_throwsNotFound() {
+        String midQuoteId = "mq-other";
+        ProductMidQuote mq = new ProductMidQuote();
+        mq.setId(midQuoteId);
+        mq.setFactoryId("F999");
+
+        when(midQuoteRepository.findById(midQuoteId)).thenReturn(Optional.of(mq));
+
+        assertThrows(EntityNotFoundException.class,
+                () -> service.getMidQuoteById("F006", midQuoteId),
+                "跨工厂访问应被拒绝");
     }
 }
