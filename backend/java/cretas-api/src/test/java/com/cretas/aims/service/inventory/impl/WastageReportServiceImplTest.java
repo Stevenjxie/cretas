@@ -327,7 +327,7 @@ class WastageReportServiceImplTest {
     void listPending_financeManager_queriesWarehouseOnly() {
         Pageable pageable = PageRequest.of(0, 20);
         when(wastageReportRepo.findByFactoryIdAndStatusAndTrackTypeInOrderBySubmittedAtAsc(
-                eq(FACTORY_ID), eq(WastageReport.Status.PENDING_APPROVAL),
+                eq(FACTORY_ID),
                 eq(List.of(WastageReport.TrackType.WAREHOUSE)),
                 eq(pageable)))
                 .thenReturn(new PageImpl<>(Collections.emptyList()));
@@ -335,7 +335,7 @@ class WastageReportServiceImplTest {
         service.listPending(FACTORY_ID, "finance_manager", pageable);
 
         verify(wastageReportRepo).findByFactoryIdAndStatusAndTrackTypeInOrderBySubmittedAtAsc(
-                eq(FACTORY_ID), eq(WastageReport.Status.PENDING_APPROVAL),
+                eq(FACTORY_ID),
                 eq(List.of(WastageReport.TrackType.WAREHOUSE)),
                 eq(pageable));
     }
@@ -348,7 +348,7 @@ class WastageReportServiceImplTest {
     void listPending_productionManager_queriesFactoryOnly() {
         Pageable pageable = PageRequest.of(0, 20);
         when(wastageReportRepo.findByFactoryIdAndStatusAndTrackTypeInOrderBySubmittedAtAsc(
-                eq(FACTORY_ID), eq(WastageReport.Status.PENDING_APPROVAL),
+                eq(FACTORY_ID),
                 eq(List.of(WastageReport.TrackType.FACTORY)),
                 eq(pageable)))
                 .thenReturn(new PageImpl<>(Collections.emptyList()));
@@ -356,7 +356,7 @@ class WastageReportServiceImplTest {
         service.listPending(FACTORY_ID, "production_manager", pageable);
 
         verify(wastageReportRepo).findByFactoryIdAndStatusAndTrackTypeInOrderBySubmittedAtAsc(
-                eq(FACTORY_ID), eq(WastageReport.Status.PENDING_APPROVAL),
+                eq(FACTORY_ID),
                 eq(List.of(WastageReport.TrackType.FACTORY)),
                 eq(pageable));
     }
