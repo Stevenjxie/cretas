@@ -6,6 +6,7 @@ import com.cretas.aims.entity.SemiFinishedInventory;
 import com.cretas.aims.entity.SemiFinishedInventoryTransaction;
 import com.cretas.aims.entity.WorkProcess;
 import com.cretas.aims.entity.workprocess.WorkProcessTask;
+import com.cretas.aims.event.ProductionCostUpdatedEvent;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.ProductionReportRepository;
 import com.cretas.aims.repository.SemiFinishedInventoryRepository;
@@ -254,6 +255,78 @@ class WipInventoryServiceImplTest {
         assertEquals(new BigDecimal("120.00"), saved.getAccumulatedCost());
         assertEquals(new BigDecimal("1.6000"), saved.getUnitCost());
         assertEquals(Boolean.TRUE, output.getCustomFields().get("wipPosted"));
+    }
+
+    // ==================== W4 cost-chain: FINISHED-path SP3 event ====================
+
+    @Test
+    @DisplayName("W4: FINISHED/legacy path publishes ProductionCostUpdatedEvent when unitCost computed")
+    void postApprovedOutput_finishedPath_publishesCostEvent() {
+        WorkProcessTask task = WorkProcessTask.builder()
+                .id(7101L)
+                .factoryId(FACTORY_ID)
+                .productionBatchId(9101L)
+                .workProcessId("WP-002")
+                .productTypeId("PROD-010")
+                .processOrder(2)
+                .plannedUnit("kg")
+                .build();
+        // outputKind = null → legacy FINISHED path (upsertProducedWip); report carries direct costs
+        ProductionReport output = ProductionReport.builder()
+                .factoryId(FACTORY_ID)
+                .id(701L)
+                .batchId(9101L)
+                .workProcessTaskId(7101L)
+                .outputQuantity(new BigDecimal("50"))
+                .outputUnit("kg")
+                .laborCost(new BigDecimal("80.00"))
+                .materialCost(new BigDecimal("120.00"))
+                .build();
+        when(wipRepo.findByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(FACTORY_ID, "PROD-010-B9101-S2-7101"))
+                .thenReturn(Optional.empty());
+        when(wipRepo.save(any(SemiFinishedInventory.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        service.postApprovedOutput(FACTORY_ID, output, task, 11L);
+
+        // unitCost = (80+120)/50 = 4.0000 → event must fire with batch/product/unitCost
+        ArgumentCaptor<ProductionCostUpdatedEvent> evtCaptor =
+                ArgumentCaptor.forClass(ProductionCostUpdatedEvent.class);
+        verify(eventPublisher).publishEvent(evtCaptor.capture());
+        ProductionCostUpdatedEvent evt = evtCaptor.getValue();
+        assertEquals(9101L, evt.getProductionBatchId());
+        assertEquals("PROD-010", evt.getProductTypeId());
+        assertEquals(new BigDecimal("4.0000"), evt.getActualUnitCost());
+        assertEquals(new BigDecimal("200.00"), evt.getActualTotalCost());
+    }
+
+    @Test
+    @DisplayName("W4: FINISHED path does NOT publish cost event when unitCost null (honest null propagation)")
+    void postApprovedOutput_finishedPath_noEventWhenUnitCostNull() {
+        WorkProcessTask task = WorkProcessTask.builder()
+                .id(7102L)
+                .factoryId(FACTORY_ID)
+                .productionBatchId(9102L)
+                .workProcessId("WP-003")
+                .productTypeId("PROD-011")
+                .processOrder(1)
+                .plannedUnit("kg")
+                .build();
+        // No labor/material cost → accumulatedCost null → unitCost null → no event (nothing to backfill)
+        ProductionReport output = ProductionReport.builder()
+                .factoryId(FACTORY_ID)
+                .id(702L)
+                .batchId(9102L)
+                .workProcessTaskId(7102L)
+                .outputQuantity(new BigDecimal("40"))
+                .outputUnit("kg")
+                .build();
+        when(wipRepo.findByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(FACTORY_ID, "PROD-011-B9102-S1-7102"))
+                .thenReturn(Optional.empty());
+        when(wipRepo.save(any(SemiFinishedInventory.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        service.postApprovedOutput(FACTORY_ID, output, task, 11L);
+
+        verify(eventPublisher, never()).publishEvent(any(ProductionCostUpdatedEvent.class));
     }
 
     // ==================== SP1 tests (T3) ====================
