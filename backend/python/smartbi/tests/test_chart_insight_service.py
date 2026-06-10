@@ -58,8 +58,33 @@ from smartbi.services.insights.chart_insight_service import (
     validate_template_parameterization,
     _POISON_VERB_RE,
     _safe_fill,
+    _extract_json_object,
     FINANCE_METRICS,
 )
+
+
+class TestExtractJsonObject:
+    """Hotfix: LLM response parse robustness (markdown fences / leading text)."""
+
+    def test_bare_json(self):
+        assert _extract_json_object('{"finding_tpl":"x"}') == {"finding_tpl": "x"}
+
+    def test_markdown_fenced(self):
+        assert _extract_json_object('```json\n{"a":1}\n```') == {"a": 1}
+
+    def test_leading_reasoning_text(self):
+        # glm-5.x often prepends text before the JSON object
+        assert _extract_json_object('好的，分析如下：\n{"a":1,"b":2}') == {"a": 1, "b": 2}
+
+    def test_garbage_returns_none(self):
+        assert _extract_json_object("no json here") is None
+
+    def test_empty_returns_none(self):
+        assert _extract_json_object("") is None
+        assert _extract_json_object("   ") is None
+
+    def test_non_dict_returns_none(self):
+        assert _extract_json_object("[1,2,3]") is None
 
 
 # ---------------------------------------------------------------------------

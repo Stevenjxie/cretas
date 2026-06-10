@@ -188,6 +188,47 @@ def _fill_slots(template: str, slot_values: Dict[str, Any]) -> str:
     return result
 
 
+def _extract_json_object(text: str) -> Optional[Dict[str, Any]]:
+    """Robustly extract a JSON object from an LLM response.
+
+    LLMs (e.g. glm-5.x) often wrap JSON in ```json fences or prepend reasoning
+    text, so a bare json.loads(content) raises 'Expecting value: line 1 column 1'
+    and the whole Tier2 distillation silently never captures. Strip markdown
+    fences, try direct parse, then fall back to the first balanced {...} block.
+    Returns None (honest) when nothing parseable is found.
+    """
+    if not text or not text.strip():
+        return None
+    s = text.strip()
+    # Strip markdown code fences: ```json ... ``` or ``` ... ```
+    if s.startswith("```"):
+        s = re.sub(r"^```[a-zA-Z]*\s*", "", s)
+        s = re.sub(r"\s*```\s*$", "", s).strip()
+    # Direct parse
+    try:
+        obj = json.loads(s)
+        return obj if isinstance(obj, dict) else None
+    except json.JSONDecodeError:
+        pass
+    # Fallback: first balanced {...} block
+    start = s.find("{")
+    if start == -1:
+        return None
+    depth = 0
+    for i in range(start, len(s)):
+        if s[i] == "{":
+            depth += 1
+        elif s[i] == "}":
+            depth -= 1
+            if depth == 0:
+                try:
+                    obj = json.loads(s[start:i + 1])
+                    return obj if isinstance(obj, dict) else None
+                except json.JSONDecodeError:
+                    return None
+    return None
+
+
 def _safe_fill(template: str, slot_values: Dict[str, Any]) -> Optional[str]:
     """Fill slots and return None if any {slot} placeholder remains unfilled.
 
@@ -425,15 +466,16 @@ class ChartInsightService:
         try:
             async with self._pool.acquire() as conn:
                 # U1.8: lookup is NOT factory-scoped (cross-tenant template sharing).
-                # U1.9: gate on (suggestion_tpl IS NULL OR is_verified) to prevent
-                #        unverified suggestion templates from being surfaced.
+                # U1.9 (fixed): gate on (suggestion missing OR is_verified). suggestion_tpl
+                #        is a KEY inside the insight_template JSONB, NOT a column — must use
+                #        insight_template->>'suggestion_tpl' (bare column ref errored every lookup).
                 row = await conn.fetchrow(
                     """
                     SELECT insight_template, required_permission, hit_count
                     FROM ai_insight_templates
                     WHERE signature_hash = $1
                       AND is_active = true
-                      AND (suggestion_tpl IS NULL OR is_verified = true)
+                      AND ((insight_template->>'suggestion_tpl') IS NULL OR is_verified = true)
                     ORDER BY confidence DESC NULLS LAST
                     LIMIT 1
                     """,
@@ -558,9 +600,14 @@ class ChartInsightService:
             if not choices:
                 return None
             content = choices[0].get("message", {}).get("content", "")
-            parsed = json.loads(content)
+            parsed = _extract_json_object(content)
+            if parsed is None:
+                logger.warning(
+                    "[chart-insight] LLM response had no parseable JSON object (len=%d)",
+                    len(content or ""),
+                )
             return parsed
-        except (json.JSONDecodeError, KeyError, IndexError, TypeError) as exc:
+        except (KeyError, IndexError, TypeError) as exc:
             logger.warning("[chart-insight] LLM response parse failed: %s", exc)
             return None
 
