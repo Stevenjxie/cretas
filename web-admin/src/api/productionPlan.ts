@@ -44,7 +44,7 @@ export function getSupervisors(factoryId: string) {
   })
 }
 
-/** SP2: WIP 半成品可用库存列表 (GET /processing/wip/available) */
+/** SP2: WIP 半成品可用库存列表 (GET /wip/available) */
 export interface WipInventoryItem {
   id: number
   intermediateBatchNo: string
@@ -61,7 +61,7 @@ export interface WipInventoryItem {
 }
 
 export function listAvailableWip(factoryId: string) {
-  return get<WipInventoryItem[]>(`/${factoryId}/processing/wip/available`)
+  return get<WipInventoryItem[]>(`/${factoryId}/wip/available`)
 }
 
 /** SP2: 创建二次加工计划 (POST /processing/secondary-plan) */

@@ -15,6 +15,7 @@ import WHOperationLogScreen from "../../screens/warehouse/profile/WHOperationLog
 import WHIOStatisticsScreen from "../../screens/warehouse/inventory/WHIOStatisticsScreen";
 import WHInventoryCheckScreen from "../../screens/warehouse/inventory/WHInventoryCheckScreen";
 import WHExpireHandleScreen from "../../screens/warehouse/inventory/WHExpireHandleScreen";
+import WastageReportScreen from "../../screens/warehouse/inventory/WastageReportScreen";
 import WHAlertListScreen from "../../screens/warehouse/shared/WHAlertListScreen";
 import WHAlertHandleScreen from "../../screens/warehouse/shared/WHAlertHandleScreen";
 import WHRecallManageScreen from "../../screens/warehouse/shared/WHRecallManageScreen";
@@ -76,6 +77,13 @@ export function WHProfileStackNavigator() {
         name="WHExpireHandle"
         component={WHExpireHandleScreen}
         options={{ title: "过期处理" }}
+      />
+
+      {/* 报损提交 */}
+      <Stack.Screen
+        name="WastageReport"
+        component={WastageReportScreen}
+        options={{ title: "报损提交" }}
       />
 
       {/* 预警列表 */}

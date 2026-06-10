@@ -702,6 +702,7 @@ export type WHProfileStackParamList = {
   WHIOStatistics: undefined;
   WHInventoryCheck: undefined;
   WHExpireHandle: { batchId?: string; batchNumber?: string };
+  WastageReport: { batchId?: string };
   WHAlertList: undefined;
   WHAlertHandle: { alertId: string };
   WHRecallManage: undefined;
