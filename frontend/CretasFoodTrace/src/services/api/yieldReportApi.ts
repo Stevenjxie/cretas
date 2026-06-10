@@ -129,6 +129,31 @@ export interface BatchYieldDTO {
   asOfYieldRate?: number | null;           // 进行中参考数 (候选 B); 当前与 A 口径同源
 }
 
+// ============ SP1 OutputOptionsResponse (mirror backend dto/yield/OutputOptionsResponse.java) ============
+// GET /processing/batches/{batchId}/output-options — 本工序是否允许产出半成品
+export interface OutputOptionItem {
+  taskId: number;
+  processName: string;
+  semiCode: string;       // 半成品编码; 非空时前端显示"剩余转半成品"栏
+  processOrder: number;
+}
+export interface OutputOptionsResponse {
+  items: OutputOptionItem[];
+}
+
+// ============ SP2 SemiFinishedInventory (mirror backend entity/SemiFinishedInventory.java) ============
+// GET /wip/available — 可用于二次加工领料的半成品库存列表
+export interface SemiFinishedInventoryItem {
+  id: number;
+  factoryId: string;
+  intermediateBatchNo: string;
+  productTypeId: string | null;
+  productTypeName: string | null;   // join; 用于显示品名
+  availableQuantity: number;
+  unit: string | null;
+  status: 'AVAILABLE' | 'DEPLETED' | 'RETURNED' | string;
+}
+
 // ============ WipRowDTO (mirror backend dto/yield/WipRowDTO.java) ============
 // GET /wip — 该批次每道工序半成品库存 (产出/已领/余额/状态)
 export interface WipRowDTO {
@@ -199,6 +224,17 @@ export interface YieldReportRequest {
   wasteQuantity?: number;
   /** 留样数量 (盒/份, 末道装盒); 选填. 后端字段名 sampleRetainQuantity (Integer). */
   sampleRetainQuantity?: number;
+
+  // ==================== SP1 双产出 (mirror backend YieldReportRequest.java:42-59) ====================
+  /**
+   * SP1 产出种类: FINISHED / SEMI / BOTH / null(旧式兼容).
+   * null → 旧路径 (普通 WIP 产出); SEMI/BOTH → 同时写 SemiFinishedInventory 台账。
+   */
+  outputKind?: 'FINISHED' | 'SEMI' | 'BOTH';
+  /** SP1 半成品产出量 (outputKind=SEMI/BOTH 时填写) */
+  semiOutputQuantity?: number;
+  /** SP1 半成品编码 (来自 output-options 接口返回; 不许前端自由输入, F7 防呆) */
+  semiCode?: string;
 }
 
 // mirror backend dto/yield/MaterialInputRequest.java:9-14
@@ -365,6 +401,53 @@ class YieldReportApi {
   async listWip(batchId: number, factoryId?: string): Promise<ApiResponse<WipRowDTO[]>> {
     return apiClient.get<ApiResponse<WipRowDTO[]>>(
       `${this.getBase(batchId, factoryId)}/wip`,
+    );
+  }
+
+  // ==================== SP1 双产出 ====================
+
+  /**
+   * SP1: GET /processing/batches/{batchId}/output-options
+   * 查询本工序允许的产出选项 (是否有半成品 semiCode)。
+   * 切换到 OUTPUT 阶段时调用; items 为空或无 semiCode 则只显示成品栏。
+   */
+  async getOutputOptions(
+    batchId: number,
+    factoryId?: string,
+  ): Promise<ApiResponse<OutputOptionsResponse>> {
+    const fid = requireFactoryId(factoryId);
+    return apiClient.get<ApiResponse<OutputOptionsResponse>>(
+      `/api/mobile/${fid}/processing/batches/${batchId}/output-options`,
+    );
+  }
+
+  // ==================== SP2 撤回 + 二次加工 ====================
+
+  /**
+   * SP2: POST /processing/batches/{batchId}/reversal
+   * 提交整批次报工撤回申请。body = { reason: string }。
+   * 409 DOWNSTREAM_CONSUMED → 下游已领用, 不可撤回; 前端显示 sticky 双句错误。
+   */
+  async postBatchReversal(
+    batchId: number,
+    reason: string,
+    factoryId?: string,
+  ): Promise<ApiResponse<unknown>> {
+    const fid = requireFactoryId(factoryId);
+    return apiClient.post<ApiResponse<unknown>>(
+      `/api/mobile/${fid}/processing/batches/${batchId}/reversal`,
+      { reason },
+    );
+  }
+
+  /**
+   * SP2: GET /wip/available
+   * 查询工厂可用于二次加工领料的半成品库存列表 (status=AVAILABLE, availableQuantity > 0)。
+   */
+  async listAvailableWip(factoryId?: string): Promise<ApiResponse<SemiFinishedInventoryItem[]>> {
+    const fid = requireFactoryId(factoryId);
+    return apiClient.get<ApiResponse<SemiFinishedInventoryItem[]>>(
+      `/api/mobile/${fid}/wip/available`,
     );
   }
 

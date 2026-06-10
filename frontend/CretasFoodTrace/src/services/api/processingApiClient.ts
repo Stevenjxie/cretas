@@ -89,6 +89,8 @@ export interface ProcessingBatch {
   goodQuantity?: number;
   defectQuantity?: number;
   qualityStatus?: 'PENDING' | 'PASSED' | 'FAILED' | 'CONDITIONAL';
+  /** SP3: 二次加工批次类型标识 — SEMI_FINISHED → 首道领厂内半成品库存 */
+  batchSourceType?: string;
 }
 
 // Type alias for backward compatibility

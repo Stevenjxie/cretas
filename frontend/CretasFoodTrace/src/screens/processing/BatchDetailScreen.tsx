@@ -3,13 +3,17 @@ import { View, StyleSheet, ScrollView, RefreshControl, TouchableOpacity, FlatLis
 import { Text, Appbar, Divider, ActivityIndicator, IconButton, Menu, SegmentedButtons, Surface } from 'react-native-paper';
 import { useNavigation, useRoute, useFocusEffect } from '@react-navigation/native';
 import { useTranslation } from 'react-i18next';
+import { isAxiosError } from 'axios';
 import { ProcessingScreenProps } from '../../types/navigation';
 import { BatchStatusBadge, BatchStatus } from '../../components/processing';
 import { processingApiClient, ProcessingBatch } from '../../services/api/processingApiClient';
 import { materialConsumptionApiClient, MaterialConsumption, BatchConsumptionSummary } from '../../services/api/materialConsumptionApiClient';
+import { yieldReportApi } from '../../services/api/yieldReportApi';
 import { handleError } from '../../utils/errorHandler';
 import { displayProductName } from '../../utils/formatters';
 import { NeoCard, NeoButton, ScreenWrapper, StatusBadge } from '../../components/ui';
+import { appAlert } from '../../components/ui/AppDialog';
+import { useAuthStore } from '../../store/authStore';
 import { theme } from '../../theme';
 
 type BatchDetailScreenProps = ProcessingScreenProps<'BatchDetail'>;
@@ -35,6 +39,22 @@ export default function BatchDetailScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [qualityMenuVisible, setQualityMenuVisible] = useState(false);
   const [error, setError] = useState<ErrorState | null>(null);
+
+  // 角色判断
+  const currentRole = useAuthStore(state => state.getUserRole());
+  const isOperator = currentRole === 'operator';
+
+  // 撤回状态
+  const REVERSAL_REASONS = [
+    { label: '客户取消订单', value: '客户取消订单' },
+    { label: '原材料质量问题', value: '原材料质量问题' },
+    { label: '工艺/配方变更', value: '工艺/配方变更' },
+    { label: '生产排程冲突', value: '生产排程冲突' },
+    { label: '其他原因', value: '其他原因' },
+  ] as const;
+  const [reversalReason, setReversalReason] = useState('');
+  const [reversalMenuVisible, setReversalMenuVisible] = useState(false);
+  const [reversalSubmitting, setReversalSubmitting] = useState(false);
 
   // Tab 状态
   const [activeTab, setActiveTab] = useState<'detail' | 'consumption'>('detail');
@@ -115,6 +135,52 @@ export default function BatchDetailScreen() {
     } finally {
       setSummaryLoading(false);
     }
+  };
+
+  const handleReversal = async () => {
+    if (!reversalReason) {
+      appAlert('请先选择撤回原因', '选择后点击确认撤回');
+      return;
+    }
+    appAlert(
+      `确认撤回批次 ${batch?.batchNumber ?? ''}？`,
+      `原因：${reversalReason}\n\n撤回后此批次将回到草稿状态，已报工记录会保留。`,
+      [
+        { text: '取消', style: 'cancel' },
+        {
+          text: '确认撤回',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              setReversalSubmitting(true);
+              await yieldReportApi.postBatchReversal(Number(batchId), reversalReason);
+              appAlert('撤回成功', '批次已回到草稿状态');
+              setReversalReason('');
+              await fetchBatchDetail();
+            } catch (err) {
+              const status = isAxiosError(err) ? err.response?.status : undefined;
+              const msg = isAxiosError(err)
+                ? ((err.response?.data as { message?: string })?.message ?? err.message)
+                : (err instanceof Error ? err.message : '撤回失败');
+              if (status === 409) {
+                appAlert(
+                  '无法撤回',
+                  `${msg}\n\n请先处理相关依赖后重试。`,
+                  [
+                    { text: '查看详情', onPress: () => fetchBatchDetail() },
+                    { text: '关闭', style: 'cancel' },
+                  ],
+                );
+              } else {
+                appAlert('撤回失败', msg);
+              }
+            } finally {
+              setReversalSubmitting(false);
+            }
+          },
+        },
+      ],
+    );
   };
 
   const getAchievementColor = (rate: number): string => {
@@ -472,6 +538,51 @@ export default function BatchDetailScreen() {
             </NeoButton>
           </View>
         </NeoCard>
+
+        {/* SP2 撤回整单 — 仅主管/组长可见 */}
+        {!isOperator && (
+          <NeoCard style={styles.card} padding="m">
+            <Text variant="titleMedium" style={styles.sectionTitle}>撤回整单</Text>
+            <Text style={styles.reversalDesc}>
+              批次号：{batch.batchNumber}　撤回后批次回草稿，已报工记录保留。
+            </Text>
+            <Menu
+              visible={reversalMenuVisible}
+              onDismiss={() => setReversalMenuVisible(false)}
+              anchor={
+                <NeoButton
+                  variant="outline"
+                  style={[styles.actionButton, styles.reversalPickerBtn]}
+                  onPress={() => setReversalMenuVisible(true)}
+                  icon="chevron-down"
+                  disabled={reversalSubmitting}
+                >
+                  {reversalReason || '选择撤回原因（必填）'}
+                </NeoButton>
+              }
+            >
+              {REVERSAL_REASONS.map((r) => (
+                <Menu.Item
+                  key={r.value}
+                  title={r.label}
+                  onPress={() => {
+                    setReversalReason(r.value);
+                    setReversalMenuVisible(false);
+                  }}
+                />
+              ))}
+            </Menu>
+            <NeoButton
+              variant="primary"
+              style={[styles.actionButton, styles.reversalBtn]}
+              onPress={() => { void handleReversal(); }}
+              disabled={!reversalReason || reversalSubmitting}
+              loading={reversalSubmitting}
+            >
+              确认撤回
+            </NeoButton>
+          </NeoCard>
+        )}
           </>
         )}
 
@@ -760,4 +871,8 @@ const styles = StyleSheet.create({
       fontSize: 12,
       color: theme.colors.onSurfaceVariant,
   },
+  // SP2 撤回整单
+  reversalDesc: { fontSize: 13, color: '#606266', marginBottom: 12, lineHeight: 18 },
+  reversalPickerBtn: { marginBottom: 12 },
+  reversalBtn: { marginTop: 4 },
 });
