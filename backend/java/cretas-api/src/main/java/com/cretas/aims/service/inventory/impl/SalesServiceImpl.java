@@ -467,7 +467,11 @@ public class SalesServiceImpl implements SalesService {
             item.setRequiredArrivalDate(itemDTO.getRequiredArrivalDate());
             items.add(item);
 
-            totalAmount = totalAmount.add(calculateLineAmount(factoryId, item));
+            // E-2 空价草稿: unitPrice 为 null 时 calculateLineAmount 返 null,
+            // 该行对 totalAmount 贡献 0 (FIX-E2 已允许 totalAmount=0 草稿; 提审时强制有价).
+            // 不 null-coalesce 会在此 NPE (BigDecimal.add(null)).
+            BigDecimal lineAmount = calculateLineAmount(factoryId, item);
+            totalAmount = totalAmount.add(lineAmount != null ? lineAmount : BigDecimal.ZERO);
         }
 
         salesOrderItemRepository.saveAll(items);
@@ -1056,7 +1060,9 @@ public class SalesServiceImpl implements SalesService {
                 item.setSpecification(itemDTO.getSpecification());
                 item.setBoxQuantity(itemDTO.getBoxQuantity());
                 newItems.add(item);
-                totalAmount = totalAmount.add(item.getLineAmount());
+                // E-2 空价草稿: unitPrice null → getLineAmount() null, 该行贡献 0 (同 createSalesOrder 防 NPE)
+                BigDecimal lineAmount = item.getLineAmount();
+                totalAmount = totalAmount.add(lineAmount != null ? lineAmount : BigDecimal.ZERO);
             }
             salesOrderItemRepository.saveAll(newItems);
             order.setTotalAmount(totalAmount);
