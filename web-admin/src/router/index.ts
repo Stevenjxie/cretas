@@ -1047,6 +1047,13 @@ const businessRoutes: RouteRecordRaw[] = [
           },
           // SP10: 报价详情 + 三价对比
           {
+            // 防呆: 无 ID 直接访问 /rd/quotations/three-price 会被 :taskId 吃掉
+            // (taskId='three-price' → 详情页"报价任务未找到"空态)。静态路由优先级
+            // 高于动态参数, 显式 redirect 到报价列表让用户选任务。
+            path: 'quotations/three-price',
+            redirect: '/rd/samples'
+          },
+          {
             path: 'quotations/:taskId',
             name: 'RdQuotationDetail',
             component: () => import('@/views/rd/quotations/detail.vue'),
