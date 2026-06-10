@@ -41,7 +41,7 @@ import static org.mockito.Mockito.when;
  *
  * <p>Mirrors SALES_RETURN with-goods test scope (Phase C, issue #571). Verifies:
  * <ol>
- *   <li>PURCHASE_RETURN + withGoods=true + APPROVED → completeReturnOrder creates
+ *   <li>PURCHASE_RETURN + withGoods=true + FINANCE_APPROVED → completeReturnOrder creates
  *       a {@link MaterialBatch} with status=DEFECTIVE for each item that has
  *       materialTypeId + quantity&gt;0.</li>
  *   <li>PURCHASE_RETURN + withGoods=false → no MaterialBatch created (refund-only
@@ -135,7 +135,7 @@ class ReturnOrderPurchaseReturnDefectiveTest {
         List<ReturnOrderItem> items = new ArrayList<>();
         items.add(item(MATERIAL_TYPE, new BigDecimal("10.0000"), "包装破损"));
         items.add(item("MT-002", new BigDecimal("5.0000"), null));  // null reason → fall back to order.reason
-        ReturnOrder order = buildOrder(ReturnType.PURCHASE_RETURN, true, ReturnOrderStatus.APPROVED, items);
+        ReturnOrder order = buildOrder(ReturnType.PURCHASE_RETURN, true, ReturnOrderStatus.FINANCE_APPROVED, items);
         stubFindAndSave(order);
 
         ReturnOrder result = service.completeReturnOrder(FACTORY, order.getId());
@@ -185,7 +185,7 @@ class ReturnOrderPurchaseReturnDefectiveTest {
     @DisplayName("PURCHASE_RETURN + withGoods=false: 不创建 MaterialBatch (refund-only path)")
     void purchaseReturnWithoutGoods_noMaterialBatch() {
         List<ReturnOrderItem> items = List.of(item(MATERIAL_TYPE, new BigDecimal("10.0000"), "x"));
-        ReturnOrder order = buildOrder(ReturnType.PURCHASE_RETURN, false, ReturnOrderStatus.APPROVED, items);
+        ReturnOrder order = buildOrder(ReturnType.PURCHASE_RETURN, false, ReturnOrderStatus.FINANCE_APPROVED, items);
         stubFindAndSave(order);
 
         ReturnOrder result = service.completeReturnOrder(FACTORY, order.getId());
@@ -212,7 +212,7 @@ class ReturnOrderPurchaseReturnDefectiveTest {
         items.add(item("MT-009", BigDecimal.ZERO, "zero qty"));              // zero qty → skip
         items.add(item("MT-010", null, "null qty"));                          // null qty → skip
         items.add(item("MT-011", new BigDecimal("7.0000"), "valid 2"));      // valid → save
-        ReturnOrder order = buildOrder(ReturnType.PURCHASE_RETURN, true, ReturnOrderStatus.APPROVED, items);
+        ReturnOrder order = buildOrder(ReturnType.PURCHASE_RETURN, true, ReturnOrderStatus.FINANCE_APPROVED, items);
         stubFindAndSave(order);
 
         ReturnOrder result = service.completeReturnOrder(FACTORY, order.getId());
@@ -237,7 +237,7 @@ class ReturnOrderPurchaseReturnDefectiveTest {
         it.setQuantity(new BigDecimal("2.0000"));
         it.setUnitPrice(new BigDecimal("100.00"));
         List<ReturnOrderItem> items = List.of(it);
-        ReturnOrder order = buildOrder(ReturnType.SALES_RETURN, true, ReturnOrderStatus.APPROVED, items);
+        ReturnOrder order = buildOrder(ReturnType.SALES_RETURN, true, ReturnOrderStatus.FINANCE_APPROVED, items);
         order.setCounterpartyId("CUST-001");  // SALES_RETURN counterparty is customer
         stubFindAndSave(order);
 
@@ -255,7 +255,7 @@ class ReturnOrderPurchaseReturnDefectiveTest {
     void materialBatchRepositoryNull_completionStillSucceeds() {
         ReflectionTestUtils.setField(service, "materialBatchRepository", null);
         List<ReturnOrderItem> items = List.of(item(MATERIAL_TYPE, new BigDecimal("4.0000"), "x"));
-        ReturnOrder order = buildOrder(ReturnType.PURCHASE_RETURN, true, ReturnOrderStatus.APPROVED, items);
+        ReturnOrder order = buildOrder(ReturnType.PURCHASE_RETURN, true, ReturnOrderStatus.FINANCE_APPROVED, items);
         stubFindAndSave(order);
 
         ReturnOrder result = service.completeReturnOrder(FACTORY, order.getId());

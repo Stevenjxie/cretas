@@ -21,6 +21,15 @@ public interface ReturnOrderService {
 
     ReturnOrder approveReturnOrder(String factoryId, String returnOrderId, Long approverId);
 
+    /**
+     * 六扇门 Tier0 #16 (catalog 行2399-2416): 退货财务审批门。
+     * 退货跟钱有关，业务审批 (APPROVED) 后必须先经财务审批 (FINANCE_APPROVED)
+     * 才能交仓管完成/出货。只有 finance 角色 (finance:read_write) 可调用。
+     *
+     * @param financeUserId 财务审批人用户 ID
+     */
+    ReturnOrder financeApproveReturnOrder(String factoryId, String returnOrderId, Long financeUserId);
+
     ReturnOrder rejectReturnOrder(String factoryId, String returnOrderId);
 
     ReturnOrder completeReturnOrder(String factoryId, String returnOrderId);
