@@ -1,0 +1,1249 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=1280">
+<title>白垩纪食品AI平台 · 海聚英才路演</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@700;900&display=swap');
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  font-family: "微软雅黑", "Microsoft YaHei", "PingFang SC", sans-serif;
+  background: #0A0A0A;
+  color: #F0ECE4;
+}
+
+/* ── Base: each slide = exactly 1280×720 ── */
+.slide {
+  width: 1280px;
+  height: 720px;
+  position: relative;
+  overflow: hidden;
+  background: #111111;
+  display: flex;
+  flex-direction: column;
+}
+.slide + .slide { margin-top: 2px; }
+
+/* #6 (2026-06-10 audit): fill sparse vertical space on s1/s2/s5 —
+   header pinned top, bottom strip pinned bottom, middle content distributed. */
+#s1, #s5 { justify-content: space-between; }
+#s1 .stat-banner, #s5 .vc-strip { margin-bottom: 22px; }
+#s2 .cols { align-content: center; }
+
+/* ── Color system (no gradients, no glass) ──
+   --red:    #D94F1E  brand / factory
+   --gold:   #EFBC3A  restaurant / highlight
+   --green:  #3CB178  success / done
+   --bg:     #111111
+   --surf:   #1A1A1A
+   --surf2:  #161616
+   --border: #2C2C2C
+   --text:   #F0ECE4
+   --muted:  #787878
+   --dim:    #505050
+*/
+
+/* ── Shared: slide header strip ── */
+.slide-head {
+  padding: 24px 64px 18px;
+  border-bottom: 1px solid #2C2C2C;
+  display: flex;
+  align-items: baseline;
+  gap: 20px;
+  flex-shrink: 0;
+}
+.sh-tag {
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 2.5px;
+  text-transform: uppercase;
+  color: #D94F1E;
+  white-space: nowrap;
+  padding-right: 20px;
+  border-right: 1px solid #2C2C2C;
+}
+.sh-title {
+  font-size: 26px;
+  font-weight: 900;
+  font-family: "Noto Serif SC", "SimSun", "宋体", serif;
+  color: #F0ECE4;
+  letter-spacing: -0.5px;
+  line-height: 1.2;
+}
+.page-num {
+  position: absolute;
+  bottom: 16px; right: 26px;
+  font-size: 11px; color: #333333;
+  letter-spacing: 1px; font-weight: 600;
+}
+
+
+/* ═══════════════════════════════════════════════
+   SLIDE 0 · 封面
+═══════════════════════════════════════════════ */
+#s0 { flex-direction: row; background: #111111; }
+
+#s0 .left {
+  width: 640px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 52px 64px;
+  position: relative;
+}
+
+#s0 .contest-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 12px;
+  background: #1A1A1A;
+  border: 1px solid #2C2C2C;
+  width: fit-content;
+  margin-bottom: 36px;
+}
+#s0 .contest-badge .dot {
+  width: 6px; height: 6px;
+  background: #D94F1E;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+#s0 .contest-badge span {
+  font-size: 11px; color: #787878; letter-spacing: 1px;
+}
+
+#s0 .brand-cn {
+  font-size: 96px;
+  font-weight: 900;
+  font-family: "Noto Serif SC", "SimSun", "宋体", serif;
+  line-height: 0.92;
+  color: #F0ECE4;
+  letter-spacing: -4px;
+  margin-bottom: 8px;
+}
+#s0 .brand-en {
+  font-size: 13px;
+  color: #D94F1E;
+  font-weight: 700;
+  letter-spacing: 4px;
+  text-transform: uppercase;
+  margin-bottom: 28px;
+}
+
+#s0 .rule { width: 48px; height: 2px; background: #D94F1E; margin-bottom: 20px; }
+
+#s0 .tagline {
+  font-size: 17px;
+  color: #787878;
+  line-height: 1.65;
+  max-width: 400px;
+  margin-bottom: 40px;
+}
+
+#s0 .kpi-row {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  background: #161616;
+  border: 1px solid #2C2C2C;
+  overflow: hidden;
+  max-width: 520px;
+}
+#s0 .kpi-cell {
+  padding: 12px 14px;
+  border-right: 1px solid #2C2C2C;
+}
+#s0 .kpi-cell:last-child { border-right: none; }
+#s0 .kv { font-size: 28px; font-weight: 900; color: #D94F1E; line-height: 1; font-family: "Noto Serif SC", "SimSun", serif; }
+#s0 .kl { font-size: 11px; color: #505050; margin-top: 4px; }
+
+#s0 .footer-meta {
+  position: absolute;
+  bottom: 24px; left: 64px;
+  font-size: 12px; color: #333333;
+  display: flex; gap: 16px; align-items: center;
+}
+#s0 .footer-meta span { color: #2C2C2C; }
+
+#s0 .right {
+  flex: 1;
+  position: relative;
+  background: #0D0D0D;
+  overflow: hidden;
+}
+#s0 .right-photo {
+  width: 100%; height: 100%;
+  object-fit: cover;
+  object-position: left center;
+  opacity: 0.55;
+}
+#s0 .right-fade {
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  width: 100px;
+  background: linear-gradient(to right, #111111, transparent);
+}
+#s0 .right-top-bar {
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 3px;
+  background: #D94F1E;
+}
+#s0 .right-label {
+  position: absolute;
+  bottom: 24px; right: 24px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 2px;
+  color: #333333;
+  text-transform: uppercase;
+}
+#s0 .right-data {
+  position: absolute;
+  bottom: 56px; left: 40px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+#s0 .rd-num {
+  font-size: 64px;
+  font-weight: 900;
+  font-family: "Noto Serif SC", "SimSun", serif;
+  color: #D94F1E;
+  line-height: 1;
+  opacity: 0.9;
+}
+#s0 .rd-lbl {
+  font-size: 12px;
+  color: #787878;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  font-weight: 700;
+}
+
+
+/* ═══════════════════════════════════════════════
+   SLIDE 1 · 数据黑箱
+═══════════════════════════════════════════════ */
+#s1 { background: #111111; }
+
+#s1 .flow {
+  display: flex;
+  align-items: stretch;
+  padding: 18px 64px 0;
+  flex-shrink: 0;
+}
+#s1 .flow-node {
+  flex: 1;
+  padding: 13px 14px;
+  background: #1A1A1A;
+  border: 1px solid #2C2C2C;
+  border-right: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
+#s1 .flow-node:last-child { border-right: 1px solid #2C2C2C; }
+#s1 .flow-node.bad {
+  background: #1E0E08;
+  border-color: #D94F1E;
+  color: #D94F1E;
+}
+#s1 .fn-main { font-size: 14px; font-weight: 700; color: #C0C0C0; }
+#s1 .flow-node.bad .fn-main { color: #D94F1E; }
+#s1 .fn-sub  { font-size: 11px; color: #444444; margin-top: 4px; }
+
+#s1 .flow-sep {
+  display: flex; align-items: center; justify-content: center;
+  width: 20px; flex-shrink: 0;
+  font-size: 14px; font-weight: 700; color: #333333;
+  background: #111111;
+  margin: 0 -1px; z-index: 1;
+}
+
+#s1 .pains {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+  padding: 16px 64px 0;
+}
+#s1 .pain-card {
+  background: #161616;
+  border: 1px solid #2C2C2C;
+  border-left: 3px solid #D94F1E;
+  padding: 15px 18px;
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+}
+#s1 .pain-card.rest { border-left-color: #EFBC3A; }
+#s1 .pain-icon { font-size: 20px; flex-shrink: 0; line-height: 1; padding-top: 3px; }
+#s1 .pain-title { font-size: 15px; font-weight: 700; color: #F0ECE4; margin-bottom: 5px; }
+#s1 .pain-desc  { font-size: 13px; color: #646464; line-height: 1.6; }
+
+#s1 .stat-banner {
+  margin: 16px 64px 0;
+  background: #161616;
+  border: 1px solid #2C2C2C;
+  border-left: 4px solid #EFBC3A;
+  padding: 14px 24px;
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  flex-shrink: 0;
+}
+#s1 .stat-big  { font-size: 56px; font-weight: 900; color: #EFBC3A; line-height: 1; flex-shrink: 0; }
+#s1 .stat-text { font-size: 16px; color: #787878; line-height: 1.6; }
+#s1 .stat-text strong { color: #F0ECE4; font-weight: 700; }
+
+
+/* ═══════════════════════════════════════════════
+   SLIDE 2 · 双轨问题
+═══════════════════════════════════════════════ */
+#s2 { background: #111111; }
+
+#s2 .cols {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  flex: 1;
+  overflow: hidden;
+  padding: 0 64px;
+}
+#s2 .col { padding: 16px 28px 0 0; }
+#s2 .col:last-child {
+  padding: 16px 0 0 28px;
+  border-left: 1px solid #2C2C2C;
+}
+#s2 .col-head {
+  display: flex; align-items: center; gap: 10px;
+  padding: 9px 14px; margin-bottom: 14px;
+  border: 1px solid;
+  font-size: 15px; font-weight: 800;
+}
+#s2 .col-head.factory { background: #1E0E08; border-color: rgba(217,79,30,0.45); color: #D94F1E; }
+#s2 .col-head.rest    { background: #151200; border-color: rgba(239,188,58,0.45); color: #EFBC3A; }
+
+#s2 .pain-row {
+  display: flex; gap: 12px; margin-bottom: 15px; align-items: flex-start;
+}
+#s2 .p-num {
+  width: 22px; height: 22px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 11px; font-weight: 800;
+  flex-shrink: 0; margin-top: 2px;
+  border: 1px solid;
+}
+#s2 .p-num.factory { border-color: #D94F1E; color: #D94F1E; background: #1E0E08; }
+#s2 .p-num.rest    { border-color: #EFBC3A; color: #EFBC3A; background: #151200; }
+#s2 .p-body strong { display: block; font-size: 14px; font-weight: 700; color: #F0ECE4; margin-bottom: 3px; }
+#s2 .p-body span   { font-size: 13px; color: #606060; line-height: 1.55; display: block; }
+
+#s2 .root-strip {
+  padding: 11px 64px;
+  background: #160808;
+  border-top: 1px solid rgba(217,79,30,0.25);
+  font-size: 13.5px; color: #646464;
+  text-align: center; line-height: 1.55;
+  flex-shrink: 0;
+}
+#s2 .root-strip strong { color: #D0D0D0; }
+
+
+/* ═══════════════════════════════════════════════
+   SLIDE 3 · 解决方案
+═══════════════════════════════════════════════ */
+#s3 { background: #111111; }
+
+#s3 .arch-strip {
+  margin: 10px 64px 0;
+  padding: 9px 20px;
+  background: #161616;
+  border: 1px solid #2C2C2C;
+  border-top: 2px solid #D94F1E;
+  font-size: 13px; color: #646464;
+  text-align: center;
+  flex-shrink: 0;
+}
+#s3 .arch-strip strong { color: #F0ECE4; }
+
+#s3 .engines {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+  padding: 12px 64px 0;
+  flex: 1;
+  overflow: hidden;
+}
+#s3 .engine {
+  background: #161616;
+  border: 1px solid #2C2C2C;
+  display: flex; flex-direction: column;
+  overflow: hidden;
+}
+#s3 .eng-head {
+  padding: 10px 18px; font-size: 15px; font-weight: 800;
+  display: flex; align-items: center; gap: 8px;
+  flex-shrink: 0;
+}
+#s3 .eng-head.factory {
+  background: #1E0E08;
+  border-bottom: 1px solid rgba(217,79,30,0.4);
+  color: #D94F1E;
+}
+#s3 .eng-head.rest {
+  background: #151200;
+  border-bottom: 1px solid rgba(239,188,58,0.4);
+  color: #EFBC3A;
+}
+#s3 .eng-body {
+  flex: 1; display: flex; padding: 12px; gap: 12px; overflow: hidden;
+}
+#s3 .eng-text { flex: 1; }
+#s3 .feat { margin-bottom: 11px; }
+#s3 .feat-t { font-size: 13.5px; font-weight: 700; color: #C8C8C8; margin-bottom: 3px; }
+#s3 .feat-d { font-size: 12.5px; color: #606060; line-height: 1.5; }
+#s3 .eng-shots {
+  width: 182px; flex-shrink: 0;
+  display: flex; flex-direction: column; gap: 8px;
+}
+#s3 .eng-shots img { width: 100%; border: 1px solid #2C2C2C; display: block; }
+#s3 .eng-foot {
+  padding: 8px 18px; font-size: 12.5px; font-weight: 700; color: #3CB178;
+  background: #0D1A0D; border-top: 1px solid rgba(60,177,120,0.2);
+  flex-shrink: 0;
+}
+
+
+/* ═══════════════════════════════════════════════
+   SLIDE 4 · Demo
+═══════════════════════════════════════════════ */
+#s4 { background: #111111; }
+
+#s4 .panels {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  flex: 1;
+  overflow: hidden;
+}
+#s4 .panel { display: flex; flex-direction: column; overflow: hidden; }
+#s4 .panel:first-child { border-right: 1px solid #2C2C2C; }
+#s4 .pan-head {
+  padding: 10px 20px; font-size: 13.5px; font-weight: 700;
+  display: flex; align-items: center; gap: 9px;
+  flex-shrink: 0;
+}
+#s4 .pan-head.factory {
+  background: #1E0E08;
+  border-bottom: 1px solid rgba(217,79,30,0.3);
+  color: #D94F1E;
+}
+#s4 .pan-head.rest {
+  background: #151200;
+  border-bottom: 1px solid rgba(239,188,58,0.3);
+  color: #EFBC3A;
+}
+#s4 .pan-content {
+  flex: 1; padding: 12px 18px;
+  display: flex; flex-direction: column; gap: 10px;
+  overflow: hidden;
+}
+#s4 .shots { display: flex; gap: 8px; }
+#s4 .shot  { flex: 1; display: flex; flex-direction: column; gap: 5px; }
+#s4 .shot img {
+  width: 100%; height: 255px;
+  object-fit: cover; object-position: top;
+  border: 1px solid #2C2C2C; display: block;
+}
+#s4 .shot-lbl { font-size: 11px; color: #444; text-align: center; font-weight: 500; }
+#s4 .quote {
+  background: #161616;
+  border-left: 3px solid;
+  padding: 9px 14px;
+  font-size: 12.5px; color: #646464;
+  font-style: italic; line-height: 1.55; flex-shrink: 0;
+}
+#s4 .quote.factory { border-color: #D94F1E; }
+#s4 .quote.rest    { border-color: #EFBC3A; }
+
+#s4 .kpi-bar {
+  display: flex;
+  background: #161616;
+  border-top: 1px solid #2C2C2C;
+  flex-shrink: 0;
+}
+#s4 .kpi { flex: 1; padding: 8px 12px; text-align: center; border-right: 1px solid #2C2C2C; }
+#s4 .kpi:last-child { border-right: none; }
+#s4 .kpi-before { font-size: 11px; color: #3A3A3A; text-decoration: line-through; }
+#s4 .kpi-after  { font-size: 17px; font-weight: 800; color: #D94F1E; line-height: 1.2; }
+#s4 .kpi-label  { font-size: 11px; color: #444; margin-top: 2px; }
+
+
+/* ═══════════════════════════════════════════════
+   SLIDE 5 · 商业模式
+═══════════════════════════════════════════════ */
+#s5 { background: #111111; }
+
+#s5 .models {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 14px;
+  padding: 14px 64px 0;
+  flex: 1; overflow: hidden;
+}
+#s5 .model {
+  background: #161616;
+  border: 1px solid #2C2C2C;
+  display: flex; flex-direction: column;
+  overflow: hidden;
+}
+#s5 .mod-head { padding: 13px 18px; border-bottom: 1px solid #2C2C2C; }
+#s5 .mod-name { font-size: 17px; font-weight: 800; margin-bottom: 4px; }
+#s5 .mod-name.green  { color: #3CB178; }
+#s5 .mod-name.red    { color: #D94F1E; }
+#s5 .mod-name.gold   { color: #EFBC3A; }
+#s5 .mod-sub  { font-size: 12px; color: #505050; }
+#s5 .mod-items { padding: 13px 18px; flex: 1; display: flex; flex-direction: column; gap: 10px; }
+#s5 .mod-item {
+  font-size: 13px; color: #646464; line-height: 1.5;
+  display: flex; gap: 8px;
+}
+#s5 .mod-item::before { content: '—'; color: #333; flex-shrink: 0; }
+#s5 .mod-item.hl { color: #F0ECE4; font-weight: 700; }
+#s5 .mod-item.hl::before { color: #D94F1E; }
+
+#s5 .vc-strip {
+  margin: 12px 64px 0;
+  padding: 11px 20px;
+  background: #161616;
+  border: 1px solid #2C2C2C;
+  display: flex; align-items: center; gap: 7px; flex-wrap: wrap;
+  flex-shrink: 0;
+}
+#s5 .vc-node {
+  font-size: 12.5px; color: #787878;
+  padding: 4px 12px;
+  background: #1A1A1A;
+  border: 1px solid #2C2C2C;
+  white-space: nowrap;
+}
+#s5 .vc-node.hot { border-color: #D94F1E; color: #D94F1E; background: #1E0E08; }
+#s5 .vc-sep { color: #2C2C2C; font-size: 14px; }
+#s5 .vc-inf { font-size: 18px; font-weight: 900; color: #D94F1E; }
+
+
+/* ═══════════════════════════════════════════════
+   SLIDE 6 · 团队
+═══════════════════════════════════════════════ */
+#s6 { background: #111111; }
+
+#s6 .team-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  flex: 1; overflow: hidden;
+  padding: 0 64px;
+}
+#s6 .t-col { padding: 14px 26px 0 0; }
+#s6 .t-col:last-child {
+  padding: 14px 0 0 26px;
+  border-left: 1px solid #2C2C2C;
+}
+#s6 .t-col-label {
+  font-size: 10px; font-weight: 800;
+  letter-spacing: 2px; text-transform: uppercase;
+  color: #444; margin-bottom: 11px;
+}
+#s6 .school-list { display: flex; flex-direction: column; gap: 7px; }
+#s6 .school-row {
+  display: flex; align-items: center; gap: 11px;
+  padding: 9px 13px;
+  background: #161616;
+  border: 1px solid #2C2C2C;
+  border-left: 2px solid #D94F1E;
+}
+#s6 .sch-icon { font-size: 17px; flex-shrink: 0; }
+#s6 .sch-name { font-size: 13.5px; font-weight: 700; color: #C8C8C8; flex: 1; }
+#s6 .sch-role { font-size: 11.5px; color: #444; margin-right: 9px; }
+#s6 .sch-badge {
+  font-size: 10px; font-weight: 800; letter-spacing: 0.5px;
+  color: #D94F1E;
+  padding: 2px 8px;
+  border: 1px solid rgba(217,79,30,0.35);
+  background: #1E0E08;
+  white-space: nowrap;
+}
+
+#s6 .res-list { display: flex; flex-direction: column; gap: 9px; }
+#s6 .res-row {
+  display: flex; gap: 12px; padding: 11px 13px;
+  background: #161616; border: 1px solid #2C2C2C;
+  align-items: flex-start;
+}
+#s6 .res-icon  { font-size: 17px; flex-shrink: 0; line-height: 1.2; }
+#s6 .res-title { font-size: 14px; font-weight: 700; color: #F0ECE4; margin-bottom: 3px; }
+#s6 .res-desc  { font-size: 12.5px; color: #606060; line-height: 1.45; }
+#s6 .res-desc strong { color: #EFBC3A; font-weight: 700; }
+
+#s6 .bottom-area {
+  margin: 8px 64px 0; flex-shrink: 0;
+  display: flex; flex-direction: column; gap: 7px;
+}
+#s6 .tech-row {
+  display: flex; gap: 7px; align-items: center; flex-wrap: wrap;
+  padding: 7px 12px; background: #161616; border: 1px solid #2C2C2C;
+}
+#s6 .tech-label {
+  font-size: 10px; font-weight: 700; letter-spacing: 1.5px;
+  text-transform: uppercase; color: #444;
+  margin-right: 4px; white-space: nowrap;
+}
+#s6 .tech-chip {
+  font-size: 11px; color: #646464;
+  padding: 2px 9px; border: 1px solid #2C2C2C; background: #1A1A1A;
+  white-space: nowrap;
+}
+#s6 .proof-row { display: flex; gap: 7px; }
+#s6 .proof-item {
+  flex: 1; display: flex; align-items: center; gap: 9px;
+  padding: 8px 13px; background: #161616; border: 1px solid #2C2C2C;
+}
+#s6 .p-icon { font-size: 17px; flex-shrink: 0; }
+#s6 .p-title { font-size: 12.5px; font-weight: 700; color: #F0ECE4; }
+#s6 .p-sub   { font-size: 11px; color: #444; }
+
+
+/* ═══════════════════════════════════════════════
+   SLIDE 7 · 里程碑
+═══════════════════════════════════════════════ */
+#s7 { background: #111111; }
+
+#s7 .ms-cols {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 14px;
+  padding: 12px 64px 0;
+  flex: 1; overflow: hidden;
+}
+#s7 .ms-card {
+  background: #161616;
+  border: 1px solid #2C2C2C;
+  display: flex; flex-direction: column; overflow: hidden;
+}
+#s7 .ms-head {
+  padding: 10px 18px;
+  display: flex; align-items: center; justify-content: space-between;
+  border-bottom: 1px solid #2C2C2C; flex-shrink: 0;
+}
+#s7 .ms-head.done   { background: #0C150C; border-bottom-color: rgba(60,177,120,0.35); }
+#s7 .ms-head.six    { background: #1A1A1A; border-bottom-color: rgba(217,79,30,0.3); }
+#s7 .ms-head.twelve { background: #151200; border-bottom-color: rgba(239,188,58,0.35); }
+#s7 .ms-label { font-size: 13.5px; font-weight: 800; }
+#s7 .ms-label.done   { color: #3CB178; }
+#s7 .ms-label.six    { color: #D94F1E; }
+#s7 .ms-label.twelve { color: #EFBC3A; }
+#s7 .ms-period { font-size: 12px; color: #444; }
+
+#s7 .ms-body {
+  padding: 11px 18px; flex: 1;
+  display: flex; flex-direction: column; gap: 8px;
+}
+#s7 .ms-item {
+  font-size: 13px; color: #646464; line-height: 1.4;
+  display: flex; gap: 7px;
+}
+#s7 .ms-item.hl { color: #F0ECE4; font-weight: 700; }
+#s7 .ms-item .ic { flex-shrink: 0; }
+
+#s7 .nums-row {
+  margin: 11px 64px 0;
+  display: flex;
+  background: #161616; border: 1px solid #2C2C2C;
+  overflow: hidden; flex-shrink: 0;
+}
+#s7 .bn { flex: 1; padding: 11px 14px; text-align: center; border-right: 1px solid #2C2C2C; }
+#s7 .bn:last-child { border-right: none; }
+#s7 .bn-val { font-size: 44px; font-weight: 900; color: #D94F1E; line-height: 1; font-family: "Noto Serif SC", "SimSun", serif; }
+#s7 .bn-lbl { font-size: 11px; color: #444; margin-top: 4px; }
+
+
+/* ═══════════════════════════════════════════════
+   SLIDE END · 封底
+═══════════════════════════════════════════════ */
+#send {
+  background: #111111;
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+}
+#send .top-bar {
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 3px;
+  background: #D94F1E;
+}
+#send .end-big {
+  font-size: 100px;
+  font-weight: 900;
+  color: #F0ECE4;
+  letter-spacing: -4px;
+  line-height: 1;
+  margin-bottom: 14px;
+  position: relative; z-index: 1;
+}
+#send .end-brand {
+  font-size: 14px;
+  color: #444;
+  letter-spacing: 4px;
+  text-transform: uppercase;
+  margin-bottom: 44px;
+  position: relative; z-index: 1;
+}
+#send .end-brand b { color: #D94F1E; }
+#send .end-nums {
+  display: flex; gap: 0;
+  border: 1px solid #2C2C2C;
+  background: #161616;
+  overflow: hidden;
+  margin-bottom: 40px;
+  position: relative; z-index: 1;
+}
+#send .en-box {
+  padding: 16px 40px; text-align: center;
+  border-right: 1px solid #2C2C2C;
+}
+#send .en-box:last-child { border-right: none; }
+#send .en-val { font-size: 38px; font-weight: 900; color: #D94F1E; line-height: 1; }
+#send .en-lbl { font-size: 12px; color: #444; margin-top: 6px; }
+#send .end-url { font-size: 13px; color: #333; letter-spacing: 2.5px; position: relative; z-index: 1; }
+</style>
+</head>
+<body>
+
+<!-- ═══ SLIDE 0 · 封面 ═══════════════════════════════════════════════ -->
+<div class="slide" id="s0">
+  <div class="left">
+    <div class="contest-badge">
+      <div class="dot"></div>
+      <span>第六届 海聚英才 全球创新创业大赛 · 人工智能赛道</span>
+    </div>
+    <div class="brand-cn">白垩纪<br>食品AI平台</div>
+    <div class="brand-en">Cretas Food AI Platform</div>
+    <div class="rule"></div>
+    <div class="tagline">中国中小食品工厂与餐饮连锁<br>的 AI 经营大脑</div>
+    <div class="kpi-row">
+      <div class="kpi-cell"><div class="kv">310</div><div class="kl">AI 业务工具</div></div>
+      <div class="kpi-cell"><div class="kv">2</div><div class="kl">种子客户</div></div>
+      <div class="kpi-cell"><div class="kv">3万家</div><div class="kl">渠道触达</div></div>
+      <div class="kpi-cell"><div class="kv">30秒</div><div class="kl">出 P&amp;L</div></div>
+    </div>
+    <div class="footer-meta">
+      <span style="color:#333">2026 年 6 月</span>
+      <span>·</span>
+      <span style="color:#333">www.cretaceousfuture.com</span>
+    </div>
+  </div>
+  <div class="right">
+    <div class="right-top-bar"></div>
+    <img class="right-photo" src="assets/screenshots/restaurant-03-dashboard.png" alt="驾驶舱" onerror="this.style.display='none'">
+    <div class="right-fade"></div>
+    <div class="right-data">
+      <div class="rd-num">310</div>
+      <div class="rd-lbl">AI工具已注册</div>
+    </div>
+    <div class="right-label">产品实际运行截图</div>
+  </div>
+</div>
+
+<!-- ═══ SLIDE 1 · 数据黑箱 ══════════════════════════════════════════ -->
+<div class="slide" id="s1">
+  <div class="slide-head">
+    <div class="sh-tag">问题</div>
+    <div class="sh-title">数据黑箱 —— 中国食品业最大的隐形成本</div>
+  </div>
+
+  <div class="flow">
+    <div class="flow-node"><div class="fn-main">调数据</div><div class="fn-sub">半天工作量</div></div>
+    <div class="flow-sep">→</div>
+    <div class="flow-node"><div class="fn-main">制作图表</div></div>
+    <div class="flow-sep">→</div>
+    <div class="flow-node"><div class="fn-main">召开会议</div></div>
+    <div class="flow-sep">→</div>
+    <div class="flow-node bad"><div class="fn-main">"这图什么意思"</div><div class="fn-sub">反复解释</div></div>
+    <div class="flow-sep">→</div>
+    <div class="flow-node bad"><div class="fn-main">下月重复</div><div class="fn-sub">永远滞后</div></div>
+  </div>
+
+  <div class="pains">
+    <div class="pain-card">
+      <div class="pain-icon">🏭</div>
+      <div>
+        <div class="pain-title">工厂困境</div>
+        <div class="pain-desc">工人年纪大、学历低——数字系统对他们是障碍。ERP 假设标准化产品，食品是非标品，买来也用不上。SKU 变化比软件更新快，定制还没做完产品已经换了。</div>
+      </div>
+    </div>
+    <div class="pain-card rest">
+      <div class="pain-icon">🍜</div>
+      <div>
+        <div class="pain-title">餐饮困境</div>
+        <div class="pain-desc">POS / 美团 / 金蝶各自孤立，没人整合。分析会要等到月底才开，等分析完，这个月已经结束了。大众点评每天有真实反馈，无人分析转化为行动。</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="stat-banner">
+    <div class="stat-big">90%</div>
+    <div class="stat-text">的中小食品企业 <strong>没有数据分析部门</strong>，经营完全靠感觉 ——<br>不是不想看数据，是<strong>看数据的成本太高</strong></div>
+  </div>
+
+  <div class="page-num">1 / 7</div>
+</div>
+
+<!-- ═══ SLIDE 2 · 双轨问题 ════════════════════════════════════════ -->
+<div class="slide" id="s2">
+  <div class="slide-head">
+    <div class="sh-tag">问题</div>
+    <div class="sh-title">两个战场，各自的困境</div>
+  </div>
+
+  <div class="cols">
+    <div class="col">
+      <div class="col-head factory">🏭 &nbsp;工厂端</div>
+      <div class="pain-row">
+        <div class="p-num factory">1</div>
+        <div class="p-body">
+          <strong>工人录不了数</strong>
+          <span>年纪大、学历低。六扇门真实案例：仓管不会打字，只能扫条码，手机表单也摸不清楚。</span>
+        </div>
+      </div>
+      <div class="pain-row">
+        <div class="p-num factory">2</div>
+        <div class="p-body">
+          <strong>通用 ERP 水土不服</strong>
+          <span>食品加工是非标品——假设"可标准化产品"就错了。不是太贵，是设计逻辑不对。</span>
+        </div>
+      </div>
+      <div class="pain-row">
+        <div class="p-num factory">3</div>
+        <div class="p-body">
+          <strong>SKU 变化比软件更新快</strong>
+          <span>定制还没做完，产品已经换了。买的自动化机器，三个月就废。</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="col">
+      <div class="col-head rest">🍜 &nbsp;餐饮端</div>
+      <div class="pain-row">
+        <div class="p-num rest">1</div>
+        <div class="p-body">
+          <strong>数据孤岛</strong>
+          <span>POS / 美团 / 金蝶 / 财务各自独立。没人整合，决策靠直觉，错误无法归因。</span>
+        </div>
+      </div>
+      <div class="pain-row">
+        <div class="p-num rest">2</div>
+        <div class="p-body">
+          <strong>决策严重滞后</strong>
+          <span>调数据→图表→开会→解读：等分析完，这个月已经过了，建议永远来不及。</span>
+        </div>
+      </div>
+      <div class="pain-row">
+        <div class="p-num rest">3</div>
+        <div class="p-body">
+          <strong>口碑数据白白浪费</strong>
+          <span>大众点评每天有真实用户反馈。没有人分析，没有人转化为改进行动。</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="root-strip">
+    共同根因：<strong>预设固定流程的工具，建立在"产品可标准化"的假设上。</strong> 食品行业偏偏是中国制造业非标程度最高的赛道。
+  </div>
+  <div class="page-num">2 / 7</div>
+</div>
+
+<!-- ═══ SLIDE 3 · 解决方案 ════════════════════════════════════════ -->
+<div class="slide" id="s3">
+  <div class="slide-head">
+    <div class="sh-tag">解决方案</div>
+    <div class="sh-title">白垩纪：同一套 AI 大脑，两套行业引擎</div>
+  </div>
+
+  <div class="arch-strip">
+    底层：<strong>同一套 AI 意图引擎</strong>（310 个工具 · 7 层识别：Exact → 短语 → 正则 → 关键词 → 语义 → BERT → LLM）
+  </div>
+
+  <div class="engines">
+    <div class="engine">
+      <div class="eng-head factory">🏭 &nbsp;工厂引擎</div>
+      <div class="eng-body">
+        <div class="eng-text">
+          <div class="feat">
+            <div class="feat-t">▸ AI Agent（310 个工具）</div>
+            <div class="feat-d">说话就能报工 / 盘库 / 质检，无需预设流程。老工人也会用，零培训门槛。</div>
+          </div>
+          <div class="feat">
+            <div class="feat-t">▸ 视觉 AI（Qwen VL）</div>
+            <div class="feat-d">不改变工人任何行为，自动识别在岗人数 / 工序进度 / 合规状态。</div>
+          </div>
+          <div class="feat">
+            <div class="feat-t">▸ 防呆设计</div>
+            <div class="feat-d">标准出成率范围提示，超限拒绝提交，成本自动核算。</div>
+          </div>
+        </div>
+        <div class="eng-shots">
+          <img src="assets/screenshots/factory-01-task-list.png" alt="任务列表">
+          <img src="assets/screenshots/factory-02-report-input.png" alt="报工输入">
+        </div>
+      </div>
+      <div class="eng-foot">→ 生产黑箱变透明，成本每道工序实时可见</div>
+    </div>
+
+    <div class="engine">
+      <div class="eng-head rest">🍜 &nbsp;餐饮引擎</div>
+      <div class="eng-body">
+        <div class="eng-text">
+          <div class="feat">
+            <div class="feat-t">▸ SmartBI（AI 数据整合）</div>
+            <div class="feat-d">POS / 美团 / 金蝶自动整合，图表化呈现。无需手动调数据。</div>
+          </div>
+          <div class="feat">
+            <div class="feat-t">▸ AI 经营问答</div>
+            <div class="feat-d">"上个月哪个菜最亏？" → 30 秒出完整 P&amp;L。决策延迟：几天 → 30 秒。</div>
+          </div>
+          <div class="feat">
+            <div class="feat-t">▸ 经营驾驶舱</div>
+            <div class="feat-d">门店营收 / 客单价 / 损耗趋势一屏掌握，AI 自动生成改进建议。</div>
+          </div>
+        </div>
+        <div class="eng-shots">
+          <img src="assets/screenshots/restaurant-01-ai-chat.png" alt="AI对话">
+          <img src="assets/screenshots/restaurant-03-dashboard.png" alt="驾驶舱">
+        </div>
+      </div>
+      <div class="eng-foot">→ 数据分析从半天，变成一个问题的时间</div>
+    </div>
+  </div>
+
+  <div class="page-num">3 / 7</div>
+</div>
+
+<!-- ═══ SLIDE 4 · Demo ══════════════════════════════════════════════ -->
+<div class="slide" id="s4">
+  <div class="slide-head">
+    <div class="sh-tag">产品演示</div>
+    <div class="sh-title">工厂端 × 餐饮端 · 全链路跑通</div>
+  </div>
+
+  <div class="panels">
+    <div class="panel">
+      <div class="pan-head factory">🏭 &nbsp;工厂端演示 · 川卤源食品加工厂</div>
+      <div class="pan-content">
+        <div class="shots">
+          <div class="shot">
+            <img src="assets/screenshots/factory-01-task-list.png" alt="">
+            <div class="shot-lbl">① 选择报工批次</div>
+          </div>
+          <div class="shot">
+            <img src="assets/screenshots/factory-02-report-input.png" alt="">
+            <div class="shot-lbl">② 防呆数量录入</div>
+          </div>
+          <div class="shot">
+            <img src="assets/screenshots/factory-03-yield-result.png" alt="">
+            <div class="shot-lbl">③ AI 出成率·工时成本</div>
+          </div>
+        </div>
+        <div class="quote factory">"仓管只需点两下，AI 实时算出出成率和人工成本。再也不用开结算会议了。"</div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="pan-head rest">🍜 &nbsp;餐饮端演示 · 蜀三味川味连锁</div>
+      <div class="pan-content">
+        <div class="shots">
+          <div class="shot">
+            <img src="assets/screenshots/restaurant-01-ai-chat.png" alt="">
+            <div class="shot-lbl">① 自然语言提问</div>
+          </div>
+          <div class="shot">
+            <img src="assets/screenshots/restaurant-02-ai-result.png" alt="">
+            <div class="shot-lbl">② AI 分析结果</div>
+          </div>
+          <div class="shot">
+            <img src="assets/screenshots/restaurant-03-dashboard.png" alt="">
+            <div class="shot-lbl">③ 经营驾驶舱</div>
+          </div>
+        </div>
+        <div class="quote rest">"老板语音提问，30 秒出 P&amp;L。营收 / 损耗 / 毛利全量历史，实时可查。"</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="kpi-bar">
+    <div class="kpi"><div class="kpi-before">30分钟录入</div><div class="kpi-after">2分钟</div><div class="kpi-label">报工时间</div></div>
+    <div class="kpi"><div class="kpi-before">无法追溯</div><div class="kpi-after">实时</div><div class="kpi-label">出成率可见</div></div>
+    <div class="kpi"><div class="kpi-before">月底算账</div><div class="kpi-after">每道工序</div><div class="kpi-label">成本核算</div></div>
+    <div class="kpi" style="border-left:2px solid rgba(217,79,30,0.3)"><div class="kpi-before">半天调数据</div><div class="kpi-after">30秒</div><div class="kpi-label">出 P&L</div></div>
+    <div class="kpi"><div class="kpi-before">19家门店各自孤立</div><div class="kpi-after">一屏</div><div class="kpi-label">经营驾驶舱</div></div>
+    <div class="kpi"><div class="kpi-before">无人分析</div><div class="kpi-after">AI 实时</div><div class="kpi-label">口碑洞察</div></div>
+  </div>
+
+  <div class="page-num" style="bottom:44px">4 / 7</div>
+</div>
+
+<!-- ═══ SLIDE 5 · 商业模式 ══════════════════════════════════════════ -->
+<div class="slide" id="s5">
+  <div class="slide-head">
+    <div class="sh-tag">商业模式</div>
+    <div class="sh-title">Token + RaaS：AI 帮你多赚，我们才多收</div>
+  </div>
+
+  <div class="models">
+    <div class="model">
+      <div class="mod-head">
+        <div class="mod-name green">Token 模型</div>
+        <div class="mod-sub">按 AI 调用量计费 · 轻资产 SaaS</div>
+      </div>
+      <div class="mod-items">
+        <div class="mod-item">进入门槛低，先用后付</div>
+        <div class="mod-item">用得越多，交叉销售越多</div>
+        <div class="mod-item hl">低成本规模化扩张</div>
+      </div>
+    </div>
+    <div class="model">
+      <div class="mod-head">
+        <div class="mod-name red">RaaS 收入共享</div>
+        <div class="mod-sub">Revenue as a Service · 利益完全对齐</div>
+      </div>
+      <div class="mod-items">
+        <div class="mod-item">从客户营收增量中抽成</div>
+        <div class="mod-item">AI 帮你多赚，我们才多收</div>
+        <div class="mod-item hl">客户越赚越绑定，流失率极低</div>
+      </div>
+    </div>
+    <div class="model">
+      <div class="mod-head">
+        <div class="mod-name gold">渠道壁垒</div>
+        <div class="mod-sub">POS 合作 → 3 万家现货渠道</div>
+      </div>
+      <div class="mod-items">
+        <div class="mod-item">POS 合作方直接触达</div>
+        <div class="mod-item hl">★ 3 万家工厂 + 餐饮</div>
+        <div class="mod-item">从渠道切入，不是从零获客</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="vc-strip">
+    <div class="vc-node">供应链合作伙伴</div>
+    <div class="vc-sep">→</div>
+    <div class="vc-node">采购数据闭环</div>
+    <div class="vc-sep">→</div>
+    <div class="vc-node">数据资产反哺 AI</div>
+    <div class="vc-sep">→</div>
+    <div class="vc-node">更精准进货建议</div>
+    <div class="vc-sep">→</div>
+    <div class="vc-node">供应链溢价分成</div>
+    <div class="vc-inf">∞</div>
+    <div class="vc-node hot">飞轮闭环</div>
+  </div>
+
+  <div class="page-num">5 / 7</div>
+</div>
+
+<!-- ═══ SLIDE 6 · 团队 ════════════════════════════════════════════ -->
+<div class="slide" id="s6">
+  <div class="slide-head">
+    <div class="sh-tag">团队</div>
+    <div class="sh-title">顶尖高校 × 20 年产业资源 × 已有真实客户</div>
+  </div>
+
+  <div class="team-grid">
+    <div class="t-col">
+      <div class="t-col-label">🎓 技术纵深</div>
+      <div class="school-list">
+        <div class="school-row">
+          <span class="sch-icon">🐻</span>
+          <div class="sch-name">UC Berkeley EECS ×2</div>
+          <div class="sch-role">AI / 系统</div>
+          <div class="sch-badge">CEO · CTO</div>
+        </div>
+        <div class="school-row">
+          <span class="sch-icon">🌿</span>
+          <div class="sch-name">Cornell IS ×3</div>
+          <div class="sch-role">产品 / 数据 / 前端</div>
+          <div class="sch-badge">Product · Data</div>
+        </div>
+        <div class="school-row">
+          <span class="sch-icon">🇭🇰</span>
+          <div class="sch-name">HKU EECS ×1</div>
+          <div class="sch-role">AI 引擎</div>
+          <div class="sch-badge">AI Lead</div>
+        </div>
+        <div class="school-row">
+          <span class="sch-icon">🌾</span>
+          <div class="sch-name">UC Davis 食品专业 ×1</div>
+          <div class="sch-role">行业 Know-How</div>
+          <div class="sch-badge">Domain</div>
+        </div>
+        <div class="school-row">
+          <span class="sch-icon">🏫</span>
+          <div class="sch-name">ECNU CS ×2</div>
+          <div class="sch-role">工程 / 运维</div>
+          <div class="sch-badge">Engineering</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="t-col">
+      <div class="t-col-label">🏗 产业资源</div>
+      <div class="res-list">
+        <div class="res-row">
+          <div class="res-icon">⏳</div>
+          <div>
+            <div class="res-title">食品行业 20 年积累</div>
+            <div class="res-desc">供应链、原料、分销全链路人脉与客户信任</div>
+          </div>
+        </div>
+        <div class="res-row">
+          <div class="res-icon">🔗</div>
+          <div>
+            <div class="res-title">POS 系统战略合作</div>
+            <div class="res-desc">直接触达 <strong>3 万家</strong> 工厂 + 餐饮潜在客户</div>
+          </div>
+        </div>
+        <div class="res-row">
+          <div class="res-icon">✅</div>
+          <div>
+            <div class="res-title">种子客户验证（2 家）</div>
+            <div class="res-desc">
+              六扇门食品加工厂（生产报工 + 成本核算 · 真实数据运行中）<br>
+              青花椒餐饮连锁（AI 经营分析 + 口碑分析 · 真实数据运行中）
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="bottom-area">
+    <div class="tech-row">
+      <span class="tech-label">核心技术栈</span>
+      <span class="tech-chip">Java 21 + Spring Boot 3</span>
+      <span class="tech-chip">React Native / Expo 53</span>
+      <span class="tech-chip">Python FastAPI</span>
+      <span class="tech-chip">Qwen VL / DashScope</span>
+      <span class="tech-chip">PostgreSQL + pgvector</span>
+      <span class="tech-chip">ONNX BERT</span>
+      <span class="tech-chip">ECharts · SmartBI</span>
+    </div>
+    <div class="proof-row">
+      <div class="proof-item">
+        <div class="p-icon">📱</div>
+        <div><div class="p-title">Android v1.0.1 已上线</div><div class="p-sub">六扇门操作员真实在用</div></div>
+      </div>
+      <div class="proof-item">
+        <div class="p-icon">🖥️</div>
+        <div><div class="p-title">Web Admin 全面上线</div><div class="p-sub">青花椒连锁每日使用</div></div>
+      </div>
+      <div class="proof-item">
+        <div class="p-icon">🤖</div>
+        <div><div class="p-title">310 个 AI 工具在线</div><div class="p-sub">7 层意图识别引擎</div></div>
+      </div>
+      <div class="proof-item">
+        <div class="p-icon">📊</div>
+        <div><div class="p-title">千万级营收数据</div><div class="p-sub">青花椒全量历史可查</div></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="page-num">6 / 7</div>
+</div>
+
+<!-- ═══ SLIDE 7 · 里程碑 ═══════════════════════════════════════════ -->
+<div class="slide" id="s7">
+  <div class="slide-head">
+    <div class="sh-tag">里程碑</div>
+    <div class="sh-title">从 0 到 1 已完成，从 1 到 N 的路已铺好</div>
+  </div>
+
+  <div class="ms-cols">
+    <div class="ms-card">
+      <div class="ms-head done">
+        <span class="ms-label done">✅ 已完成</span>
+        <span class="ms-period">截至 2026-06</span>
+      </div>
+      <div class="ms-body">
+        <div class="ms-item hl"><span class="ic">✅</span> 产品全面上线</div>
+        <div class="ms-item"><span class="ic">✅</span> 310 个 AI 工具注册</div>
+        <div class="ms-item"><span class="ic">✅</span> 视觉 AI 人效识别</div>
+        <div class="ms-item"><span class="ic">✅</span> Android v1.0.1 上架</div>
+        <div class="ms-item hl"><span class="ic">✅</span> 2 个种子客户</div>
+        <div class="ms-item"><span class="ic">✅</span> 真实数据运行中</div>
+        <div class="ms-item"><span class="ic">✅</span> SmartBI 餐饮引擎</div>
+      </div>
+    </div>
+
+    <div class="ms-card">
+      <div class="ms-head six">
+        <span class="ms-label six">→ 6 个月</span>
+        <span class="ms-period">2026 Q4</span>
+      </div>
+      <div class="ms-body">
+        <div class="ms-item"><span class="ic">→</span> 接入 POS 渠道分发</div>
+        <div class="ms-item hl"><span class="ic">→</span> 首批 100 家付费客户</div>
+        <div class="ms-item"><span class="ic">→</span> RaaS 模型验证</div>
+        <div class="ms-item"><span class="ic">→</span> 供应链数据打通</div>
+        <div class="ms-item"><span class="ic">→</span> iOS App 上线</div>
+        <div class="ms-item"><span class="ic">→</span> 餐饮扩展至 20 城</div>
+        <div class="ms-item"><span class="ic">→</span> Pre-A 轮融资</div>
+      </div>
+    </div>
+
+    <div class="ms-card">
+      <div class="ms-head twelve">
+        <span class="ms-label twelve">⭐ 12 个月</span>
+        <span class="ms-period">2027 Q2</span>
+      </div>
+      <div class="ms-body">
+        <div class="ms-item hl"><span class="ic">⭐</span> 1,000 家付费客户</div>
+        <div class="ms-item"><span class="ic">⭐</span> RaaS 规模化</div>
+        <div class="ms-item"><span class="ic">⭐</span> 供应链数据生态</div>
+        <div class="ms-item"><span class="ic">⭐</span> AI 自适应工序库</div>
+        <div class="ms-item"><span class="ic">⭐</span> 出海试点（东南亚）</div>
+        <div class="ms-item hl"><span class="ic">⭐</span> A 轮融资</div>
+        <div class="ms-item"><span class="ic">⭐</span> 行业数据资产变现</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="nums-row">
+    <div class="bn"><div class="bn-val">310</div><div class="bn-lbl">AI 工具</div></div>
+    <div class="bn"><div class="bn-val">3万家</div><div class="bn-lbl">渠道管道</div></div>
+    <div class="bn"><div class="bn-val">30秒</div><div class="bn-lbl">出 P&L</div></div>
+    <div class="bn"><div class="bn-val">v1.0.1</div><div class="bn-lbl">已上线</div></div>
+    <div class="bn"><div class="bn-val">2</div><div class="bn-lbl">种子客户</div></div>
+  </div>
+
+  <div class="page-num">7 / 7</div>
+</div>
+
+<!-- ═══ SLIDE END · 封底 ══════════════════════════════════════════ -->
+<div class="slide" id="send">
+  <div class="top-bar"></div>
+  <div class="end-big">感谢聆听</div>
+  <div class="end-brand"><b>白垩纪食品 AI 平台</b> &nbsp;·&nbsp; Cretas Food AI Platform</div>
+  <div class="end-nums">
+    <div class="en-box"><div class="en-val">310</div><div class="en-lbl">AI 工具</div></div>
+    <div class="en-box"><div class="en-val">3万家</div><div class="en-lbl">渠道管道</div></div>
+    <div class="en-box"><div class="en-val">30秒</div><div class="en-lbl">出 P&L</div></div>
+  </div>
+  <div class="end-url">www.cretaceousfuture.com</div>
+</div>
+
+</body>
+</html>
