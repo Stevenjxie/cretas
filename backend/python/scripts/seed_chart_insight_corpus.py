@@ -1273,6 +1273,7 @@ async def seed(
             teacher_output = json.dumps(validated, ensure_ascii=False),
             business_type  = _map_domain(ctx.domain),
             factory_id     = ctx.factory_id,
+            quality        = 5,  # accepted = claims-pinning validated = highest tier (P0-1 G1)
             system_prompt  = _SYSTEM_PROMPT,
             teacher_model  = teacher_model,
             metadata       = {
