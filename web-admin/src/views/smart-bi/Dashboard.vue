@@ -295,6 +295,34 @@ const regionRanking = computed<RegionRank[]>(() => {
   }));
 });
 
+// Normalize LLM insight markdown → clean prose for the plain-text (pre-line) panel.
+// Applied BOTH to streamed deltas AND to cached/server insights at display time
+// (the dashboard often loads aiInsights from cache, bypassing the stream handler).
+// - strips **bold**/##/`code`/> quotes/[CJK entity] brackets (keeps [1][2] citations)
+// - breaks inline "· " bullets + trailing 注: clause onto their own lines
+// - store-name middle-dots (蜀三味·IFS, no trailing space) are NOT split
+function cleanInsightText(s: string): string {
+  if (!s) return s;
+  let t = s;
+  t = t.replace(/[\[【]([^\[\]【】]*[一-鿿][^\[\]【】]*)[\]】]/g, '$1');
+  t = t.replace(/\*\*([^*]+)\*\*/g, '$1');
+  t = t.replace(/__([^_]+)__/g, '$1');
+  t = t.replace(/\*([^*]+)\*/g, '$1');
+  t = t.replace(/_([^_]+)_/g, '$1');
+  t = t.replace(/^#{1,6}\s+/gm, '');
+  t = t.replace(/^[-*+]\s+/gm, '· ');
+  t = t.replace(/^\d+\.\s+/gm, '· ');
+  t = t.replace(/^>\s*/gm, '');
+  t = t.replace(/```[\s\S]*?```/g, '');
+  t = t.replace(/`([^`]+)`/g, '$1');
+  t = t.replace(/([^\n \t])[ \t]*·[ \t]+/g, '$1\n· ');
+  t = t.replace(/([。！？])[ \t]*(注\s*[:：])/g, '$1\n$2');
+  t = t.replace(/\n{3,}/g, '\n\n');
+  t = t.split('\n').map((l) => l.trim()).join('\n');
+  t = t.replace(/^\n+/, '').replace(/\n+$/, '');
+  return t;
+}
+
 // AI 洞察 (从 aiInsights 提取, 去重 — 精确去重 + 相似内容去重)
 const aiInsights = computed<AIInsight[]>(() => {
   if (!dashboardData.value?.aiInsights) return [];
@@ -310,7 +338,7 @@ const aiInsights = computed<AIInsight[]>(() => {
 
   return dashboardData.value.aiInsights
     .filter(insight => {
-      const key = insight.message;
+      const key = cleanInsightText(insight.message);
       if (seen.has(key)) return false;
       seen.add(key);
 
@@ -328,7 +356,7 @@ const aiInsights = computed<AIInsight[]>(() => {
     .map(insight => ({
       type: mapInsightLevel(insight.level),
       title: insight.category || getCategoryTitle(insight.level),
-      content: insight.message,
+      content: cleanInsightText(insight.message),
       suggestion: insight.actionSuggestion
     }));
 });
@@ -948,44 +976,8 @@ async function loadLLMInsightsStream(
   signal: AbortSignal | undefined,
 ): Promise<boolean> {
   if (!factoryId.value) return false;
-  // Deterministic guard (2026-06-03 + 2026-06-10 markdown clean):
-  // 1) Strip [ ]/【】 wrapping any CJK entity name (no [1]/[2] numeric citations stripped).
-  // 2) Normalize LLM markdown to clean prose so the plain-text insight panel doesn't
-  //    show raw **bold** / ## headings / - bullets / backticks / > blockquotes.
-  const cleanInsightText = (s: string): string => {
-    if (!s) return s;
-    let t = s;
-    // Strip CJK entity brackets: [美团套餐券] → 美团套餐券; preserve [1]/[2] citations.
-    t = t.replace(/[\[【]([^\[\]【】]*[一-鿿][^\[\]【】]*)[\]】]/g, '$1');
-    // Remove markdown emphasis markers: **x** / __x__ / *x* / _x_
-    t = t.replace(/\*\*([^*]+)\*\*/g, '$1');
-    t = t.replace(/__([^_]+)__/g, '$1');
-    t = t.replace(/\*([^*]+)\*/g, '$1');
-    t = t.replace(/_([^_]+)_/g, '$1');
-    // Remove heading markers at line start: # / ## / ###
-    t = t.replace(/^#{1,6}\s+/gm, '');
-    // Convert list markers to bullet dot: - / * / + / 1. 2. etc. at line start
-    t = t.replace(/^[-*+]\s+/gm, '· ');
-    t = t.replace(/^\d+\.\s+/gm, '· ');
-    // Remove blockquote markers: > at line start
-    t = t.replace(/^>\s*/gm, '');
-    // Strip fenced code blocks FIRST (before inline backtick, else ``` gets eaten one ` at a time)
-    t = t.replace(/```[\s\S]*?```/g, '');
-    // Strip inline backtick code: `code`
-    t = t.replace(/`([^`]+)`/g, '$1');
-    // Break each INLINE bullet onto its own line so the pre-line panel reads cleanly.
-    // Match only a "· " preceded by a non-newline, non-space char (so bullets already
-    // at line start are not doubled). Store-name middle-dots (蜀三味·IFS, no trailing
-    // space) are untouched because a trailing space is required.
-    t = t.replace(/([^\n \t])[ \t]*·[ \t]+/g, '$1\n· ');
-    // Trailing note clause "执行。注：…" → its own line.
-    t = t.replace(/([。！？])[ \t]*(注\s*[:：])/g, '$1\n$2');
-    // Normalize: collapse 3+ consecutive newlines → 2; trim each line; strip leading/trailing blank lines
-    t = t.replace(/\n{3,}/g, '\n\n');
-    t = t.split('\n').map((l) => l.trim()).join('\n');
-    t = t.replace(/^\n+/, '').replace(/\n+$/, '');
-    return t;
-  };
+  // cleanInsightText hoisted to component scope (used here for streamed deltas
+  // AND in the aiInsights computed for cached/server insights).
   // Use the same key that request.ts interceptor reads
   const authHeader = localStorage.getItem('cretas_access_token') || '';
   const url = `/api/mobile/${factoryId.value}/smart-bi/dashboard/executive/insights/custom/stream?startDate=${startDate}&endDate=${endDate}`;
