@@ -35,6 +35,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
@@ -84,6 +85,8 @@ class ReportReversalServiceTest {
     private com.cretas.aims.repository.UserRepository userRepository;
     @Mock
     private com.cretas.aims.repository.workprocess.WorkProcessTaskRepository workProcessTaskRepository;
+    @Mock
+    private com.cretas.aims.service.NotificationService notificationService;
 
     // ==================== submitReversal ====================
 
@@ -334,6 +337,119 @@ class ReportReversalServiceTest {
             when(reversalLogRepo.save(any())).thenReturn(pending);
 
             service.rejectReversal(LOG_ID, 99L, "不符合要求");
+
+            ArgumentCaptor<ReportReversalLog> captor = ArgumentCaptor.forClass(ReportReversalLog.class);
+            verify(reversalLogRepo).save(captor.capture());
+            assertThat(captor.getValue().getStatus())
+                    .isEqualTo(ReportReversalLog.ReversalStatus.REJECTED);
+        }
+
+        // ==================== W6 #27: 4 眼原则 (防自批) + 驳回通知 ====================
+
+        @Test
+        @DisplayName("W6 #27: 提交人自批 → 403 SELF_APPROVAL_FORBIDDEN (4 眼原则)")
+        void approve_selfApproval_throws403() {
+            ReportReversalLog pending = ReportReversalLog.builder()
+                    .id(LOG_ID).factoryId(FACTORY_ID).batchId(BATCH_ID)
+                    .submittedBy(SUBMITTED_BY)
+                    .status(ReportReversalLog.ReversalStatus.PENDING)
+                    .reversalScope(ReportReversalLog.ReversalScope.WHOLE_ORDER)
+                    .build();
+            when(reversalLogRepo.findById(LOG_ID)).thenReturn(Optional.of(pending));
+
+            // 提交人 == 审批人 → 拒绝
+            assertThatThrownBy(() -> service.approveReversal(LOG_ID, SUBMITTED_BY))
+                    .isInstanceOf(BusinessException.class)
+                    .hasMessageContaining("审批人不能与提交人相同");
+
+            // 自批被拦 → 不应改状态/不执行撤回
+            verify(reversalLogRepo, never()).save(any());
+            verify(reportRepo, never()).findYieldReportsByBatch(anyString(), anyLong());
+        }
+
+        @Test
+        @DisplayName("W6 #27: 他人审批 (审批人 ≠ 提交人) → 放行执行撤回")
+        void approve_byOtherUser_succeeds() {
+            ReportReversalLog pending = ReportReversalLog.builder()
+                    .id(LOG_ID).factoryId(FACTORY_ID).batchId(BATCH_ID)
+                    .submittedBy(SUBMITTED_BY)
+                    .status(ReportReversalLog.ReversalStatus.PENDING)
+                    .reversalScope(ReportReversalLog.ReversalScope.WHOLE_ORDER)
+                    .build();
+            when(reversalLogRepo.findById(LOG_ID)).thenReturn(Optional.of(pending));
+            when(reportRepo.findYieldReportsByBatch(FACTORY_ID, BATCH_ID))
+                    .thenReturn(Collections.emptyList());
+            when(reversalLogRepo.save(any())).thenReturn(pending);
+
+            // 主管 (id=99) ≠ 提交人 (id=7) → 放行
+            service.approveReversal(LOG_ID, 99L);
+
+            verify(reversalLogRepo, atLeastOnce()).save(any());
+            // executeReversal 被触发 (查询报工)
+            verify(reportRepo).findYieldReportsByBatch(FACTORY_ID, BATCH_ID);
+        }
+
+        @Test
+        @DisplayName("W6 #27: 驳回 (审批人 ≠ 申请人) → 通知申请人")
+        void reject_byOtherUser_notifiesApplicant() {
+            ReportReversalLog pending = ReportReversalLog.builder()
+                    .id(LOG_ID).factoryId(FACTORY_ID).batchId(BATCH_ID)
+                    .submittedBy(SUBMITTED_BY)
+                    .status(ReportReversalLog.ReversalStatus.PENDING)
+                    .reversalScope(ReportReversalLog.ReversalScope.WHOLE_ORDER)
+                    .build();
+            when(reversalLogRepo.findById(LOG_ID)).thenReturn(Optional.of(pending));
+            when(reversalLogRepo.save(any())).thenReturn(pending);
+
+            service.rejectReversal(LOG_ID, 99L, "成品已部分出库, 无法撤回");
+
+            // 申请人 (SUBMITTED_BY=7) 收到通知, 内容含驳回原因
+            verify(notificationService).sendNotification(
+                    eq(FACTORY_ID),
+                    eq(SUBMITTED_BY),
+                    contains("驳回"),
+                    contains("成品已部分出库"),
+                    eq(com.cretas.aims.entity.enums.NotificationType.WARNING),
+                    eq("REVERSAL"),
+                    eq(String.valueOf(LOG_ID)));
+        }
+
+        @Test
+        @DisplayName("W6 #27: 驳回 (审批人 == 申请人, 自撤) → 不发通知 (避免自噪声)")
+        void reject_selfReject_skipsNotification() {
+            ReportReversalLog pending = ReportReversalLog.builder()
+                    .id(LOG_ID).factoryId(FACTORY_ID).batchId(BATCH_ID)
+                    .submittedBy(SUBMITTED_BY)
+                    .status(ReportReversalLog.ReversalStatus.PENDING)
+                    .reversalScope(ReportReversalLog.ReversalScope.WHOLE_ORDER)
+                    .build();
+            when(reversalLogRepo.findById(LOG_ID)).thenReturn(Optional.of(pending));
+            when(reversalLogRepo.save(any())).thenReturn(pending);
+
+            // 申请人自己驳回 (approvedBy == submittedBy)
+            service.rejectReversal(LOG_ID, SUBMITTED_BY, "自行撤销申请");
+
+            verify(notificationService, never()).sendNotification(
+                    anyString(), anyLong(), anyString(), anyString(), any(), anyString(), anyString());
+        }
+
+        @Test
+        @DisplayName("W6 #27: 驳回通知发送失败 → fail-soft, 不影响驳回结果")
+        void reject_notificationFails_stillRejects() {
+            ReportReversalLog pending = ReportReversalLog.builder()
+                    .id(LOG_ID).factoryId(FACTORY_ID).batchId(BATCH_ID)
+                    .submittedBy(SUBMITTED_BY)
+                    .status(ReportReversalLog.ReversalStatus.PENDING)
+                    .reversalScope(ReportReversalLog.ReversalScope.WHOLE_ORDER)
+                    .build();
+            when(reversalLogRepo.findById(LOG_ID)).thenReturn(Optional.of(pending));
+            when(reversalLogRepo.save(any())).thenReturn(pending);
+            when(notificationService.sendNotification(
+                    anyString(), anyLong(), anyString(), anyString(), any(), anyString(), anyString()))
+                    .thenThrow(new RuntimeException("通知渠道不可用"));
+
+            // 通知抛异常不应冒泡 → 驳回成功
+            service.rejectReversal(LOG_ID, 99L, "测试");
 
             ArgumentCaptor<ReportReversalLog> captor = ArgumentCaptor.forClass(ReportReversalLog.class);
             verify(reversalLogRepo).save(captor.capture());
