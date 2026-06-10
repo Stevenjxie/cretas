@@ -29,6 +29,7 @@ import {
   RadioButton,
   Divider,
 } from 'react-native-paper';
+import { BatchSelectorModal, BatchSelection } from '../../../components/warehouse/BatchSelectorModal';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
@@ -75,12 +76,21 @@ export function WastageReportScreen(): React.JSX.Element {
   // ── 表单状态 ──────────────────────────────────
   const [trackType, setTrackType] = useState<WastageTrackType>('WAREHOUSE');
   const [materialBatchId, setMaterialBatchId] = useState('');
+  // 已选批次的展示信息 (物料名 + 剩余量), 仅用于 UI 回显, 提交时只用 materialBatchId
+  const [selectedBatch, setSelectedBatch] = useState<BatchSelection | null>(null);
+  const [batchSelectorVisible, setBatchSelectorVisible] = useState(false);
   const [wastageQty, setWastageQty] = useState('');
   const [wastageReason, setWastageReason] = useState<WastageReason>('DAMAGED');
   const [reasonDetail, setReasonDetail] = useState('');
   const [notes, setNotes] = useState('');
   const [photos, setPhotos] = useState<PhotoItem[]>([]);
   const [submitting, setSubmitting] = useState(false);
+
+  const handleBatchSelect = useCallback((sel: BatchSelection) => {
+    setSelectedBatch(sel);
+    setMaterialBatchId(sel.materialBatchId);
+    setBatchSelectorVisible(false);
+  }, []);
 
   // ── 审批路由说明 ──────────────────────────────
   const approvalNote =
@@ -286,19 +296,73 @@ export function WastageReportScreen(): React.JSX.Element {
             </View>
           </NeoCard>
 
-          {/* 被报损物料 */}
+          {/* 被报损物料 — 批次选择器 (fool-proof Rule 2: 展示身份信息防盲填) */}
           <NeoCard style={styles.card}>
             <Text style={styles.sectionTitle}>被报损物料</Text>
-            <Text style={styles.fieldLabel}>批次编号 <Text style={{ color: RED }}>*</Text></Text>
-            <RNTextInput
-              style={styles.textInput}
-              value={materialBatchId}
-              onChangeText={setMaterialBatchId}
-              placeholder="请输入批次编号"
-              placeholderTextColor="#bbb"
-              autoCapitalize="none"
-            />
+            <Text style={styles.fieldLabel}>
+              报损批次 <Text style={{ color: RED }}>*</Text>
+            </Text>
+            {/* 主要路径: 点击选择器 */}
+            <TouchableOpacity
+              style={[
+                styles.batchSelector,
+                !selectedBatch && styles.batchSelectorEmpty,
+                !!selectedBatch && styles.batchSelectorFilled,
+              ]}
+              onPress={() => setBatchSelectorVisible(true)}
+              disabled={submitting}
+              accessibilityLabel="选择报损批次"
+            >
+              {selectedBatch ? (
+                <View style={styles.batchSelectorContent}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.batchSelectedName} numberOfLines={1}>
+                      {selectedBatch.materialName}
+                    </Text>
+                    <Text style={styles.batchSelectedNumber}>
+                      {selectedBatch.batchNumber}
+                    </Text>
+                    <Text style={styles.batchSelectedRemain}>
+                      可用: {selectedBatch.remainingQuantity}
+                    </Text>
+                  </View>
+                  <Text style={styles.batchSelectorChange}>更换</Text>
+                </View>
+              ) : (
+                <View style={styles.batchSelectorContent}>
+                  <Text style={styles.batchSelectorPlaceholder}>
+                    点击选择批次（物料名/批次号/可用量）
+                  </Text>
+                  <Text style={styles.batchSelectorArrow}>›</Text>
+                </View>
+              )}
+            </TouchableOpacity>
+            {/* 降级入口: 手输批次 ID（非主路径，仅用于批次不在列表时兜底） */}
+            {!selectedBatch && (
+              <View style={styles.manualFallback}>
+                <Text style={styles.manualFallbackLabel}>批次号不在列表？手动输入：</Text>
+                <RNTextInput
+                  style={styles.textInputSmall}
+                  value={materialBatchId}
+                  onChangeText={(v) => {
+                    setMaterialBatchId(v);
+                    // 手输时清除已选 selection (显示摘要会与手输 ID 不一致)
+                    if (selectedBatch) setSelectedBatch(null);
+                  }}
+                  placeholder="批次 ID"
+                  placeholderTextColor="#bbb"
+                  autoCapitalize="none"
+                />
+              </View>
+            )}
           </NeoCard>
+
+          {/* 批次选择 Modal */}
+          <BatchSelectorModal
+            visible={batchSelectorVisible}
+            onSelect={handleBatchSelect}
+            onDismiss={() => setBatchSelectorVisible(false)}
+          />
 
           {/* 报损数量 */}
           <NeoCard style={styles.card}>
@@ -566,6 +630,87 @@ const styles = StyleSheet.create({
   submitBtn: { width: '100%' },
   uploadingHint: { fontSize: 13, color: '#FA8C16', textAlign: 'center', fontWeight: '500' },
   disabledHint: { fontSize: 12, color: '#aaa', textAlign: 'center' },
+
+  // ── 批次选择器样式 ─────────────────────────────
+  batchSelector: {
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    minHeight: 52,
+    justifyContent: 'center',
+  },
+  batchSelectorEmpty: {
+    borderColor: '#d9d9d9',
+    backgroundColor: '#fafafa',
+    borderStyle: 'dashed',
+  },
+  batchSelectorFilled: {
+    borderColor: PRIMARY,
+    backgroundColor: '#E6F0FF',
+  },
+  batchSelectorContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  batchSelectorPlaceholder: {
+    flex: 1,
+    fontSize: 15,
+    color: '#bbb',
+  },
+  batchSelectorArrow: {
+    fontSize: 22,
+    color: '#aaa',
+    marginLeft: 4,
+  },
+  batchSelectedName: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#111',
+  },
+  batchSelectedNumber: {
+    fontSize: 13,
+    color: '#555',
+    marginTop: 2,
+  },
+  batchSelectedRemain: {
+    fontSize: 12,
+    color: PRIMARY,
+    marginTop: 2,
+    fontWeight: '500',
+  },
+  batchSelectorChange: {
+    fontSize: 14,
+    color: PRIMARY,
+    fontWeight: '600',
+    marginLeft: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderWidth: 1,
+    borderColor: PRIMARY,
+    borderRadius: 8,
+  },
+  manualFallback: {
+    marginTop: 10,
+    paddingTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: '#f0f0f0',
+    gap: 6,
+  },
+  manualFallbackLabel: {
+    fontSize: 12,
+    color: '#999',
+  },
+  textInputSmall: {
+    borderWidth: 1,
+    borderColor: '#d9d9d9',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    fontSize: 14,
+    color: '#111',
+    backgroundColor: '#fafafa',
+  },
 });
 
 export default WastageReportScreen;

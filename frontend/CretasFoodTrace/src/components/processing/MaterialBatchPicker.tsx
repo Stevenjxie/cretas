@@ -350,20 +350,27 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
             <Text style={styles.emptyText}>暂无可用原料批次</Text>
           ) : (
             // B2: removed scrollEnabled={false} — the 320dp clip was preventing scroll to lower batches
+            // BUG-3 fix: wrap each row in TouchableOpacity so the full row is tappable (≥44pt).
+            // The inner checkbox View is now visual-only (pointerEvents="none") — row press handles toggle.
+            // When multi-batch qty TextInput is rendered, it stops propagation naturally (TextInput handles its own touches).
             <ScrollView style={styles.listScroll} nestedScrollEnabled>
               {rows.map((row: RowState, idx: number) => (
-                <View
+                <TouchableOpacity
                   key={row.batch.id}
                   style={[styles.row, row.selected && styles.rowSelected]}
+                  onPress={() => !disabled && toggleRow(idx)}
+                  activeOpacity={0.7}
+                  accessibilityLabel={`${row.selected ? '取消选择' : '选择'}批次 ${row.batch.batchNumber}`}
+                  accessibilityRole="checkbox"
+                  accessibilityState={{ checked: row.selected, disabled }}
                 >
-                  {/* 复选框 */}
-                  <TouchableOpacity
+                  {/* 复选框 — 纯视觉, 触摸由外层 TouchableOpacity 行处理 */}
+                  <View
                     style={[styles.checkbox, row.selected && styles.checkboxChecked]}
-                    onPress={() => !disabled && toggleRow(idx)}
-                    accessibilityLabel={`选择批次 ${row.batch.batchNumber}`}
+                    pointerEvents="none"
                   >
                     {row.selected ? <Text style={styles.checkmark}>✓</Text> : null}
-                  </TouchableOpacity>
+                  </View>
 
                   {/* 批次信息 */}
                   <View style={styles.batchInfo}>
@@ -383,6 +390,7 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
                    * Q1 单一数据源:
                    * 单批次已选 → 不显示 per-batch 用量输入，qty 由屏幕「投入量」驱动
                    * 多批次已选 → 显示各自用量输入
+                   * Note: TextInput inside TouchableOpacity captures its own touches correctly.
                    */}
                   {row.selected && isMultiBatch ? (
                     <View style={styles.qtyBox}>
@@ -404,7 +412,7 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
                       <Text style={styles.singleQtyHintText}>用量 = 投入量</Text>
                     </View>
                   ) : null}
-                </View>
+                </TouchableOpacity>
               ))}
             </ScrollView>
           )}
@@ -494,7 +502,8 @@ const styles = StyleSheet.create({
   listScroll: { maxHeight: 320 },
   row: {
     flexDirection: 'row', alignItems: 'center',
-    paddingVertical: 10, paddingHorizontal: 4,
+    paddingVertical: 12, paddingHorizontal: 4,
+    minHeight: 48, // BUG-3: 整行触摸目标 ≥ 44pt (WCAG 2.5.5 / Apple HIG)
     borderBottomWidth: 1, borderBottomColor: '#F2F6FC',
   },
   rowSelected: { backgroundColor: '#FFF7F0' },
