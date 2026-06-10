@@ -581,7 +581,10 @@ class ChartInsightService:
             ],
             "response_format": {"type": "json_object"},
             "temperature": 0.1,  # U1.9: lowered from 0.3 for consistency
-            "max_tokens": 500,
+            # Hotfix: SLOT.CHART can fall through the provider chain to a reasoning
+            # model (e.g. glm-5.1) that spends tokens on internal reasoning; 500 was
+            # entirely consumed → empty content. Give room for reasoning + the JSON.
+            "max_tokens": 2000,
         }
 
         try:
