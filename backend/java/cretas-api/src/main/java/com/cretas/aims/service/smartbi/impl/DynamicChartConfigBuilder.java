@@ -733,6 +733,52 @@ public class DynamicChartConfigBuilder implements DynamicChartConfigBuilderServi
     // ==================== 扩展构建方法 ====================
 
     /**
+     * 使用指定的字段构建图表配置，并附加语义元数据。
+     *
+     * <p>在 {@link #buildConfigWithFields} 基础上加 businessType 传入，完成 meta.domain 派生。
+     *
+     * @param fields            字段映射列表
+     * @param aggregatedData    聚合数据
+     * @param xAxisFieldName    指定的 X 轴字段名
+     * @param seriesFieldName   指定的 Series 字段名（可为 null）
+     * @param measureFieldNames 指定的度量字段名列表
+     * @param businessType      工厂业态字符串（"RESTAURANT"/"FACTORY"/null）
+     * @return 图表配置（含 meta）
+     */
+    @Override
+    public DynamicChartConfig buildConfigWithFieldsAndMeta(List<FieldMappingWithChartRole> fields,
+                                                            Map<String, Object> aggregatedData,
+                                                            String xAxisFieldName,
+                                                            String seriesFieldName,
+                                                            List<String> measureFieldNames,
+                                                            String businessType) {
+        DynamicChartConfig config = buildConfigWithFields(
+                fields, aggregatedData, xAxisFieldName, seriesFieldName, measureFieldNames);
+        // Re-derive meta from the adjusted-fields perspective.
+        // buildConfigWithFields adjusts chartAxis roles then calls buildConfig internally;
+        // we need the *adjusted* fields to derive correct xDim, so derive from them here.
+        List<FieldMappingWithChartRole> adjustedFields = fields.stream()
+                .map(f -> {
+                    FieldMappingWithChartRole adjusted = copyField(f);
+                    String fieldName = f.getStandardField();
+                    if (fieldName.equals(xAxisFieldName)) {
+                        adjusted.setChartAxis(ChartAxisRole.X_AXIS);
+                        adjusted.setAxisPriority(1);
+                    } else if (fieldName.equals(seriesFieldName)) {
+                        adjusted.setChartAxis(ChartAxisRole.SERIES);
+                        adjusted.setAxisPriority(1);
+                    } else if (measureFieldNames != null && measureFieldNames.contains(fieldName)) {
+                        adjusted.setChartAxis(ChartAxisRole.Y_AXIS);
+                        adjusted.setAxisPriority(measureFieldNames.indexOf(fieldName) + 1);
+                    }
+                    return adjusted;
+                })
+                .collect(Collectors.toList());
+        config.setMeta(deriveChartMeta(adjustedFields, businessType));
+        return config;
+    }
+
+    /**
      * 使用指定的字段构建图表配置
      *
      * @param fields         字段映射列表
