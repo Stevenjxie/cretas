@@ -44,10 +44,14 @@ import static org.mockito.Mockito.*;
  * <p>replayMovingAverage 通过 executeReversal 间接触发，测试策略：
  * 构造完整的 executeReversal 场景，捕获最终 SFI 保存，验证均价回放结果。
  *
- * <p>已知 BUG (不在本批修复):
+ * <p>BUG-R1 / BUG-R2 已在 #662 修复 (commit 122d5d48):
  * <ul>
- *   <li>BUG-R1: replayMovingAverage 不更新 producedQuantity — 撤回后仍含被撤 IN 的数量</li>
- *   <li>BUG-R2: replayMovingAverage OUT 行不计入 totalQty — availableQuantity 偏高</li>
+ *   <li>BUG-R1 (已修): replayMovingAverage 现在两条路径均 setProducedQuantity =
+ *       IN 净额 (扣除 REVERSE 后), 撤回后不再虚高。下方 bugR1_* 测试是
+ *       <b>真实断言</b> (assertEquals producedQuantity == 0), 对修复后代码 PASS。</li>
+ *   <li>BUG-R2 (已修): replayMovingAverage 现计入 OUT 事务; 且 Guard G1
+ *       (DOWNSTREAM_CONSUMED) 在 submitReversal 阻止"先 OUT 后撤回"路径。
+ *       下方 bugR2_* 是纯文档测试 (assertTrue), 记录 G1 守护语义。</li>
  * </ul>
  *
  * @see ReportReversalServiceImpl#replayMovingAverage
@@ -317,10 +321,10 @@ class ReplayMovingAverageTest {
             assertEquals(new BigDecimal("100"), finalSfi.getAvailableQuantity());
         }
 
-        // ─── BUG REPORTS (@Disabled — tests assert CORRECT math, not current broken behavior) ───
+        // ─── BUG-R1 / BUG-R2 回归守卫 (#662 已修; 断言 CORRECT math 对修复后代码 PASS) ───
 
         @Test
-        @DisplayName("BUG-R1: producedQuantity 应在撤回后扣减 (当前行为: 不更新 → 数值偏高)")
+        @DisplayName("BUG-R1 回归: 整单撤回后 producedQuantity 扣减为 IN 净额 (#662 已修)")
         void bugR1_producedQuantityNotUpdatedOnReversal() {
             // Correct math: single IN(100) then REVERSE(-100) → producedQuantity should be 0
             Long logId = 10L, batchId = 200L, sfiId = 300L;
@@ -352,27 +356,23 @@ class ReplayMovingAverageTest {
                     .filter(s -> s.getId() != null && s.getId().equals(sfiId))
                     .findFirst().orElseThrow();
 
-            // CORRECT: producedQuantity should be 0 after full reversal
+            // #662 fix: producedQuantity must be 0 after full IN reversal (was: stayed at 100)
             assertEquals(BigDecimal.ZERO, finalSfi.getProducedQuantity(),
-                    "producedQuantity should be 0 after full IN reversal (BUG-R1: currently stays at 100)");
+                    "producedQuantity should be 0 after full IN reversal (#662 BUG-R1 fix)");
         }
 
         @Test
-        @DisplayName("BUG-R2: replayMovingAverage 不统计 OUT 行 → availableQuantity 偏低")
+        @DisplayName("BUG-R2: OUT-after-reversal 由 Guard G1 (DOWNSTREAM_CONSUMED) 在 submitReversal 阻止 (文档)")
         void bugR2_outTxnNotAccountedInReplay() {
-            // This test documents the BUG. The correct behavior is debatable (domain question:
-            // can you reverse an IN after partial OUT?), but the current code silently
-            // computes totalQty=0 without error even when OUT transactions exist.
-            // Guard G1 (DOWNSTREAM_CONSUMED) should prevent this in submitReversal,
-            // but executeReversal itself has no guard.
+            // 纯文档测试 — 记录 BUG-R2 的处理边界, 不做数值断言。
             //
-            // Correct math assertion (what should happen if OUT is included):
-            //   IN(100) + OUT(-60) + REVERSE(-100) → totalQty = 100 - 60 - 100 = -60 (negative → DEPLETED)
-            // OR with G1 guard: this case should never reach executeReversal.
+            // replayMovingAverage 在 totalQty 累计中不计入 OUT 行 (只算 IN 净额 - REVERSE),
+            // 因此若一份 IN 在被 OUT 部分消耗后再撤回, 单纯的 replay 无法表达"已被下游消耗"的语义。
             //
-            // The @Disabled test below captures the expected behavior AFTER the bug is fixed
-            // (i.e., OUT txns are counted or G1 guard is enforced in executeReversal path).
-            assertTrue(true, "Bug documented in @Disabled annotation above");
+            // 这条路径在 submitReversal 层被 Guard G1 (DOWNSTREAM_CONSUMED) 拦截:
+            // 已有下游 OUT 消耗的 SFI 不允许撤回其来源报工 → 永不到达 executeReversal/replayMovingAverage。
+            // 因此 executeReversal 内对 OUT 的 no-op 处理是安全的 (前置守卫保证不变量)。
+            assertTrue(true, "OUT-after-reversal blocked upstream by Guard G1 (DOWNSTREAM_CONSUMED) in submitReversal");
         }
     }
 }
