@@ -595,11 +595,13 @@ class ChartInsightService:
 
         # LLM call: returns structured {claims, finding, implication, suggestion} or None
         llm_obj = await self._call_llm(resolved_ctx)
+
+        # C5: count tokens regardless of LLM success/failure — provider charges on attempt,
+        # so budget must reflect all LLM calls to prevent undercounting.
+        await self._budget_tracker.consume(effective_factory_id, 800)
+
         if llm_obj is None:
             return None
-
-        # Realistic token accounting (~800 per LLM round-trip)
-        await self._budget_tracker.consume(effective_factory_id, 800)
 
         # C1.2: claims-pinning validation (recompute + numeric-adjacency gate)
         validated = _validate_claims(llm_obj, resolved_ctx)

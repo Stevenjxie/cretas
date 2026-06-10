@@ -1104,3 +1104,93 @@ class TestCorpus:
         assert len(h) == 64
         import re
         assert re.match(r'^[0-9a-f]{64}$', h), f"input_hash must be hex sha256, got {h!r}"
+
+
+# ---------------------------------------------------------------------------
+# Task 7: C5 — budget consume on LLM failure path (防低估)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+class TestBudgetOnFailure:
+    """C5: get_insight must call consume() even when _call_llm returns None.
+
+    Spec §2 C5: LLM 失败路径 tokens 也必须计入 budget，防止 budget 低估。
+    """
+
+    def _make_service_with_capturing_budget(self, llm_response=None):
+        """Create a ChartInsightService whose budget tracker records consume() calls.
+
+        The tracker is non-blocked (check_budget returns blocked=False) so the LLM
+        call is actually reached. _call_llm is monkeypatched to return llm_response.
+        """
+        consume_calls = []
+
+        class CapturingBudget:
+            async def check_budget(self, factory_id, today=None):
+                from smartbi.agent.budget_tracker import BudgetCheckResult
+                return BudgetCheckResult(blocked=False, tokens_used=0, tokens_cap=50000)
+
+            async def consume(self, factory_id, tokens, today=None):
+                consume_calls.append({"factory_id": factory_id, "tokens": tokens})
+                from smartbi.agent.budget_tracker import BudgetCheckResult
+                return BudgetCheckResult(blocked=False, tokens_used=tokens, tokens_cap=50000)
+
+        pool = MagicMock()
+        conn = AsyncMock()
+        pool.acquire.return_value.__aenter__ = AsyncMock(return_value=conn)
+        pool.acquire.return_value.__aexit__ = AsyncMock(return_value=None)
+        conn.fetchrow = AsyncMock(return_value=None)
+        conn.execute = AsyncMock(return_value=None)
+        conn.fetchval = AsyncMock(return_value=None)  # cache miss → proceeds to LLM
+
+        svc = ChartInsightService(
+            pool=pool,
+            budget_tracker=CapturingBudget(),
+            promote_threshold=DEFAULT_PROMOTE_THRESHOLD,
+        )
+        svc._call_llm = AsyncMock(return_value=llm_response)
+        return svc, consume_calls
+
+    async def test_consume_called_on_llm_failure(self):
+        """_call_llm returns None (LLM failure) → consume() must still be called with >0 tokens."""
+        svc, consume_calls = self._make_service_with_capturing_budget(llm_response=None)
+        ctx = _make_context(factory_id="F001")
+
+        result = await svc.get_insight(ctx, caller_role="restaurant_manager", jwt_factory_id="F001")
+
+        # Service must return None (LLM failed)
+        assert result is None, f"LLM failure must produce None result, got {result}"
+
+        # consume() must have been called at least once
+        assert len(consume_calls) > 0, (
+            "consume() must be called even when _call_llm returns None "
+            "(C5: LLM tokens are consumed regardless of parse success)"
+        )
+
+        # consume() must have been called with >0 tokens
+        total_tokens = sum(c["tokens"] for c in consume_calls)
+        assert total_tokens > 0, (
+            f"consume() must be called with >0 tokens on LLM failure, got calls={consume_calls}"
+        )
+
+    async def test_consume_called_on_llm_success_still_works(self):
+        """Regression: valid LLM response still triggers consume() (success path unchanged)."""
+        valid_resp = {
+            "claims": [{"entity": "堂食", "stat_type": "share", "value": 62.0}],
+            "finding": "堂食占62%，是主要渠道。",
+            "implication": None,
+            "suggestion": None,
+        }
+        svc, consume_calls = self._make_service_with_capturing_budget(llm_response=valid_resp)
+        ctx = _make_context(
+            factory_id="F001",
+            series_values=[62.0, 38.0],
+            series_labels=["堂食", "外卖"],
+        )
+
+        result = await svc.get_insight(ctx, caller_role="restaurant_manager", jwt_factory_id="F001")
+
+        assert result is not None, "Valid LLM response must produce an InsightResult"
+        assert len(consume_calls) > 0, "consume() must be called on success path too"
+        assert sum(c["tokens"] for c in consume_calls) > 0
