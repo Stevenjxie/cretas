@@ -20,6 +20,8 @@ import {
   StepYieldDTO,
   YieldReportRequest,
   YieldLimitsDTO,
+  OutputOptionItem,
+  SemiFinishedInventoryItem,
 } from '../../services/api/yieldReportApi';
 import { processingApiClient } from '../../services/api/processingApiClient';
 import { handleError } from '../../utils/errorHandler';
@@ -27,6 +29,7 @@ import { useAuthStore } from '../../store/authStore';
 import { appAlert, AppDialogHost } from '../../components/ui/AppDialog';
 import { isAxiosError } from 'axios';
 import { useCanViewPrice } from '../../store/canViewPriceStore';
+import { TouchableRipple } from 'react-native-paper';
 
 type YieldStepReportParams = {
   batchId: number;
@@ -466,6 +469,28 @@ const YieldStepReportScreen: React.FC = () => {
 
   const [lastAlert, setLastAlert] = useState<'BELOW_MIN' | 'ABOVE_MAX' | null>(null);
 
+  // ── SP1 双产出 ──
+  // 切到 OUTPUT 阶段时从 output-options 加载; items 为空或无 semiCode → 只显成品栏
+  const [outputOptions, setOutputOptions] = useState<OutputOptionItem[]>([]);
+  const [outputOptionsLoading, setOutputOptionsLoading] = useState(false);
+  // 选中的半成品产出量 (操作工填写)
+  const [semiOutputQty, setSemiOutputQty] = useState('');
+
+  // ── SP3 二次加工领半成品 ──
+  // 批次类型 (SEMI_FINISHED → 首道领厂内半成品库存而非原料)
+  const [batchSourceType, setBatchSourceType] = useState<string | undefined>(undefined);
+  const isSecondaryProcessing = batchSourceType === 'SEMI_FINISHED';
+  // 可用半成品库存列表 (仅二次加工首道加载)
+  const [availableWipList, setAvailableWipList] = useState<SemiFinishedInventoryItem[]>([]);
+  const [availableWipLoading, setAvailableWipLoading] = useState(false);
+  // 选中的半成品库存项 + 领用量
+  const [selectedWipItem, setSelectedWipItem] = useState<SemiFinishedInventoryItem | null>(null);
+  const [wipPickQty, setWipPickQty] = useState('');
+  // 是否超出可领量 (防呆: 红框 + 禁提交)
+  const wipPickOverLimit = selectedWipItem != null
+    && wipPickQty !== ''
+    && parseFloat(wipPickQty) > (selectedWipItem.availableQuantity ?? 0);
+
   const currentTask = tasks[currentStepIndex] ?? null;
   const totalSteps = tasks.length;
 
@@ -519,6 +544,8 @@ const YieldStepReportScreen: React.FC = () => {
         if (batchRes.data.productTypeId) setProductTypeId(batchRes.data.productTypeId);
         if (batchRes.data.batchNumber) setBatchNumber(batchRes.data.batchNumber);
         setBatchStatus(batchRes.data.status ?? '');  // P1-1: 完工幂等判断
+        // SP3: 二次加工批次类型 (SEMI_FINISHED → 首道领半成品库存)
+        setBatchSourceType(batchRes.data.batchSourceType);
       }
       const yd = yieldRes.success ? yieldRes.data : null;
       if (yd) setYieldData(yd);
@@ -580,6 +607,13 @@ const YieldStepReportScreen: React.FC = () => {
     setSegNote('');
     setSegByproducts([]);
     setProductionStepMode('SEGMENT');
+    // SP1: 切道时清空半成品产出状态和 options (下道独立加载)
+    setOutputOptions([]);
+    setSemiOutputQty('');
+    // SP3: 切道时清空半成品领用状态
+    setSelectedWipItem(null);
+    setWipPickQty('');
+    setAvailableWipList([]);
   }, [prevOutput]);
 
   useEffect(() => {
@@ -632,6 +666,28 @@ const YieldStepReportScreen: React.FC = () => {
       }
     })();
   }, [currentTask, currentPhase, currentStepYield, batchId]);
+
+  // SP3: 二次加工首道 → 进入 AWAITING_INPUT 时加载工厂可用半成品库存 (wip/available)
+  useEffect(() => {
+    if (!isSecondaryProcessing || currentStepIndex !== 0 || currentPhase !== 'AWAITING_INPUT') return;
+    setAvailableWipLoading(true);
+    setAvailableWipList([]);
+    setSelectedWipItem(null);
+    setWipPickQty('');
+    (async () => {
+      try {
+        const res = await yieldReportApi.listAvailableWip();
+        if (res.success && Array.isArray(res.data)) {
+          setAvailableWipList(res.data.filter((item) => item.status === 'AVAILABLE' && item.availableQuantity > 0));
+        }
+      } catch {
+        // 静默忽略; 操作工可以手动重试
+      } finally {
+        setAvailableWipLoading(false);
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isSecondaryProcessing, currentStepIndex, currentPhase]);
 
   const unit = currentTask?.plannedUnit ?? 'kg';
   // P0-2: 本道产出单位 — 工序配了 outputUnit (如末道 kg→份/盒) 则用它, 否则沿用投入单位
@@ -819,9 +875,25 @@ const YieldStepReportScreen: React.FC = () => {
       return;
     }
 
-    const applySwitch = () => {
+    const applySwitch = async () => {
       setEvidencePhotos([]);
       setProductionStepMode(nextMode);
+      // SP1: 切到 OUTPUT 阶段时拉 output-options (判断是否有半成品产出选项)
+      if (nextMode === 'OUTPUT') {
+        setOutputOptionsLoading(true);
+        setSemiOutputQty('');
+        setOutputOptions([]);
+        try {
+          const res = await yieldReportApi.getOutputOptions(batchId);
+          if (res.success && res.data?.items) {
+            setOutputOptions(res.data.items);
+          }
+        } catch {
+          // 静默失败: 无 semiCode 时仍只显成品栏, 不阻断完工流程
+        } finally {
+          setOutputOptionsLoading(false);
+        }
+      }
     };
 
     if (evidencePhotos.length > 0) {
@@ -830,14 +902,14 @@ const YieldStepReportScreen: React.FC = () => {
         '这些照片/视频只属于当前步骤。请先提交当前步骤，或放弃这些证据后再切换。',
         [
           { text: '先不切换', style: 'cancel' },
-          { text: '放弃证据并切换', style: 'destructive', onPress: applySwitch },
+          { text: '放弃证据并切换', style: 'destructive', onPress: () => { void applySwitch(); } },
         ],
       );
       return;
     }
 
-    applySwitch();
-  }, [productionStepMode, evidenceUploading, evidencePhotos.length]);
+    void applySwitch();
+  }, [productionStepMode, evidenceUploading, evidencePhotos.length, batchId]);
 
   // ========================= 阶段 1: 提交投入 (reportKind=INPUT) =========================
   const handleSubmitInput = useCallback(async () => {
@@ -846,6 +918,64 @@ const YieldStepReportScreen: React.FC = () => {
       appAlert('请选择半成品批次', '上道有多笔半成品, 请先选择本道要领用的那一笔再提交');
       return;
     }
+
+    // SP3: 二次加工首道 — 必须先选半成品 WIP 并填领用量
+    if (isFirstStep && isSecondaryProcessing) {
+      if (selectedWipItem == null) {
+        appAlert('请选择半成品', '二次加工首道需从可用半成品库存中选择一笔领用');
+        return;
+      }
+      const pickQty = parseFloat(wipPickQty);
+      if (Number.isNaN(pickQty) || pickQty <= 0) {
+        appAlert('请填写领用数量', '领用数量必须大于 0');
+        return;
+      }
+      if (wipPickOverLimit) {
+        appAlert('领用数量超限', `最多可领 ${selectedWipItem.availableQuantity} ${selectedWipItem.unit ?? 'kg'}, 请调整数量`);
+        return;
+      }
+      if (evidenceUploading) {
+        appAlert('证据上传中', '请等照片或视频上传完成再提交');
+        return;
+      }
+      const req: YieldReportRequest = {
+        workProcessTaskId: currentTask.id,
+        reportKind: 'INPUT',
+        inputQuantity: pickQty,
+        inputUnit: selectedWipItem.unit ?? unit,
+        outputQuantity: 0,
+        // SP3: sourceWipNo 传 intermediateBatchNo 供后端扣减 WIP 余量
+        sourceWipNo: selectedWipItem.intermediateBatchNo,
+        ...(uploadedEvidenceUrls.length > 0 ? { evidenceImages: uploadedEvidenceUrls } : {}),
+        ...(buildPhotoAnnotations() ? { photoAnnotations: buildPhotoAnnotations() } : {}),
+      };
+      setSubmitting(true);
+      try {
+        const res = await yieldReportApi.submitReport(batchId, req);
+        if (!res.success) {
+          appAlert('提交失败', res.message || '请重试');
+          return;
+        }
+        await refetchYield();
+        setEvidencePhotos([]);
+        appAlert('投入已提交', '本道进入生产阶段, 可分多段报工时, 完工时录产出');
+      } catch (error) {
+        handleError(error, { showAlert: false, logError: true });
+        const { title, msg } = friendlySubmitError(error);
+        if (isAxiosError(error) && !error.response) {
+          appAlert(title, msg, [
+            { text: '关闭', style: 'cancel' },
+            { text: '重试', onPress: () => handleSubmitInput() },
+          ]);
+        } else {
+          appAlert(title, msg);
+        }
+      } finally {
+        setSubmitting(false);
+      }
+      return;
+    }
+
     // B1: first-step (投入) requires at least one material batch to be selected.
     if (isFirstStep && materialBatchRefs.length === 0) {
       appAlert('请先选择领料批次', '首道投入需要指定领用的原料批次，请展开"领料批次 *"并选择至少一批');
@@ -911,6 +1041,7 @@ const YieldStepReportScreen: React.FC = () => {
       setSubmitting(false);
     }
   }, [currentTask, submitBlockedNoWip, evidenceUploading, inputQty, unit, isFirstStep,
+      isSecondaryProcessing, selectedWipItem, wipPickQty, wipPickOverLimit,
       materialBatchRefs, effectiveSourceWipNo, uploadedEvidenceUrls, batchId, refetchYield]);
 
   // ========================= 阶段 2a: 提交本段工时 (reportKind=SEGMENT) =========================
@@ -1021,6 +1152,17 @@ const YieldStepReportScreen: React.FC = () => {
       appAlert('请填写本道产出量', '产出量必须大于 0');
       return;
     }
+    // SP1: 半成品产出选项 — 只有本道有 semiCode 时才有效 (F7: 只能是 API 返回的唯一 code)
+    const semiOption = outputOptions.length > 0 ? outputOptions[0] : null;
+    const hasSemiOption = semiOption != null && !!semiOption.semiCode;
+    const semiNum = hasSemiOption ? parseFloat(semiOutputQty) : NaN;
+    const hasSemiQty = !Number.isNaN(semiNum) && semiNum > 0;
+    // SP1: 确定 outputKind
+    const outputKind: YieldReportRequest['outputKind'] = hasSemiOption
+      ? hasSemiQty
+        ? 'BOTH'   // 成品 + 半成品
+        : 'FINISHED' // 只成品 (半成品量为空/0 则忽略)
+      : undefined; // 旧路径 (无半成品选项)
     const validByproducts = byproducts
       .filter((b) => b.name.trim() && parseFloat(b.quantity) > 0)
       .map((b) => ({
@@ -1036,6 +1178,10 @@ const YieldStepReportScreen: React.FC = () => {
       inputQuantity: 0,  // 后端按 reportKind=OUTPUT 强制忽略 input
       outputQuantity: output,
       outputUnit: outUnit,
+      // SP1 双产出字段 (无 semiCode 时全部 undefined → 旧路径兼容)
+      ...(outputKind ? { outputKind } : {}),
+      ...(hasSemiOption && hasSemiQty ? { semiOutputQuantity: semiNum } : {}),
+      ...(hasSemiOption && semiOption.semiCode ? { semiCode: semiOption.semiCode } : {}),
       ...(validByproducts.length > 0 ? { byproducts: validByproducts } : {}),
       ...(Number.isNaN(wasteNum) || wasteNum < 0 ? {} : { wasteQuantity: wasteNum }),
       ...(Number.isNaN(sampleNum) || sampleNum <= 0 ? {} : { sampleRetainQuantity: sampleNum }),
@@ -1053,6 +1199,10 @@ const YieldStepReportScreen: React.FC = () => {
       setLastAlert(res.data.alert ?? null);
       await refetchYield();
       setEvidencePhotos([]);
+      // SP1: 半成品产出成功提示
+      if (hasSemiQty && hasSemiOption) {
+        appAlert('完工出成已提交', `已入半成品库 ${semiNum} ${outUnit}`);
+      }
     } catch (error) {
       // A4: OVER_RECEIPT (HTTP 409) → 弹超收确认框 (优先于通用错误处理)
       const e = error as { response?: { data?: { success?: boolean; message?: string; errorCode?: string; actionHint?: string; hint?: string } } };
@@ -1081,7 +1231,8 @@ const YieldStepReportScreen: React.FC = () => {
       setSubmitting(false);
     }
   }, [currentTask, evidenceUploading, outputQty, byproducts, wasteQty, sampleRetainQty,
-      outUnit, uploadedEvidenceUrls, batchId, refetchYield, submitOutputWithForce]);
+      outUnit, uploadedEvidenceUrls, batchId, refetchYield, submitOutputWithForce,
+      outputOptions, semiOutputQty]);
 
   // 完工二次确认 (Rule: 出成率锁定)
   const handleSubmitOutput = useCallback(() => {
@@ -1456,11 +1607,75 @@ const YieldStepReportScreen: React.FC = () => {
             <NeoCard variant="elevated" style={styles.card}>
               <Text style={styles.phaseHint}>第一步: 录入本道投入量, 领料/选半成品, 拍投料照</Text>
 
-              {/* A2b: 首道领料批次选择 (仅首道) — B1: required prop signals red asterisk
+              {/* SP3 二次加工首道 — 选领厂内半成品 WIP (替代原料批次领料) */}
+              {isFirstStep && isSecondaryProcessing ? (
+                <NeoCard variant="outlined" style={styles.sp3Card}>
+                  <Text style={styles.sp3Title}>领用半成品库存</Text>
+                  <Text style={styles.sp3Desc}>
+                    该批次为二次加工批次, 首道请从可用半成品库存中领用, 无需领原料批次
+                  </Text>
+                  {availableWipLoading ? (
+                    <ActivityIndicator size="small" color="#E8732E" style={styles.sp3Loader} />
+                  ) : availableWipList.length === 0 ? (
+                    <Text style={styles.sp3Empty}>暂无可用半成品库存 (状态 AVAILABLE + 余量 &gt; 0)</Text>
+                  ) : (
+                    availableWipList.map((item) => {
+                      const isSelected = selectedWipItem?.id === item.id;
+                      return (
+                        <TouchableRipple
+                          key={item.id}
+                          style={[styles.sp3Item, isSelected && styles.sp3ItemSelected]}
+                          onPress={() => {
+                            setSelectedWipItem(isSelected ? null : item);
+                            setWipPickQty('');
+                          }}
+                        >
+                          <>
+                            <Text style={styles.sp3ItemName}>
+                              {item.productTypeName ?? '—'} · {item.intermediateBatchNo}
+                            </Text>
+                            <Text style={styles.sp3ItemAvail}>
+                              可用 {item.availableQuantity} {item.unit ?? 'kg'}
+                            </Text>
+                          </>
+                        </TouchableRipple>
+                      );
+                    })
+                  )}
+
+                  {selectedWipItem != null ? (
+                    <View style={styles.sp3PickWrap}>
+                      <Text style={styles.sp3PickHint}>
+                        已选: {selectedWipItem.productTypeName} · {selectedWipItem.intermediateBatchNo}
+                        {'\n'}可领余额 {selectedWipItem.availableQuantity} {selectedWipItem.unit ?? 'kg'}
+                      </Text>
+                      <YieldQuantityInput
+                        label="领用数量"
+                        value={wipPickQty}
+                        onChangeText={setWipPickQty}
+                        unit={selectedWipItem.unit ?? 'kg'}
+                        max={selectedWipItem.availableQuantity}
+                        maxHint={`最多可领 ${selectedWipItem.availableQuantity} ${selectedWipItem.unit ?? 'kg'}`}
+                        disabled={submitting}
+                        calculatorMode
+                        defaultTrayWeighing={false}
+                        testID="sp3-wip-pick-qty"
+                      />
+                      {wipPickOverLimit ? (
+                        <Text style={styles.sp3OverLimit}>
+                          超出可领余额 {selectedWipItem.availableQuantity} {selectedWipItem.unit ?? 'kg'}, 请调整数量
+                        </Text>
+                      ) : null}
+                    </View>
+                  ) : null}
+                </NeoCard>
+              ) : null}
+
+              {/* A2b: 首道领料批次选择 (仅首道且非二次加工) — B1: required prop signals red asterisk
                * Q1 单一数据源: singleBatchQty 把屏幕的 inputQty 传进 picker, 单批次模式下
                * picker 不显示独立用量输入框, 该批次 quantity = inputQty (投入量 IS 用量).
                * 多批次模式下 picker 显示各批独立输入, inputQty 由 Σ 自动算只读展示. */}
-              {isFirstStep ? (
+              {isFirstStep && !isSecondaryProcessing ? (
                 <MaterialBatchPicker
                   unit={unit}
                   productTypeId={productTypeId}
@@ -1544,7 +1759,7 @@ const YieldStepReportScreen: React.FC = () => {
               variant="primary"
               size="large"
               onPress={handleSubmitInput}
-              disabled={submitting || submitBlockedNoWip || evidenceUploading}
+              disabled={submitting || submitBlockedNoWip || evidenceUploading || wipPickOverLimit}
               loading={submitting}
               style={styles.fullBtn}
               testID="yield-submit-input-btn"
@@ -1815,6 +2030,40 @@ const YieldStepReportScreen: React.FC = () => {
                 disabled={submitting}
                 testID="yield-sample-retain"
               />
+
+              {/* SP1: 双产出 — 仅当 output-options 返回 semiCode 时显示 (F7: 单选项自动选中, 不让改) */}
+              {outputOptionsLoading ? (
+                <View style={styles.semiOutputLoadingRow} testID="semi-output-loading">
+                  <ActivityIndicator size="small" color="#409EFF" />
+                  <Text style={styles.semiOutputLoadingText}>查询半成品产出选项…</Text>
+                </View>
+              ) : null}
+              {!outputOptionsLoading && outputOptions.length > 0 && outputOptions[0]?.semiCode ? (
+                <View style={styles.semiOutputSection} testID="semi-output-section">
+                  <View style={styles.divider} />
+                  <Text style={styles.semiOutputTitle}>
+                    剩余转半成品 — {outputOptions[0].processName}
+                  </Text>
+                  <View style={styles.semiOutputCodeRow}>
+                    <Text style={styles.semiOutputCodeLabel}>半成品编码</Text>
+                    <Text style={styles.semiOutputCodeValue} testID="semi-code-display">
+                      {outputOptions[0].semiCode}
+                    </Text>
+                    <Text style={styles.semiOutputCodeFixed}>(自动)</Text>
+                  </View>
+                  <YieldQuantityInput
+                    label="半成品产出量 (选填)"
+                    value={semiOutputQty}
+                    onChangeText={setSemiOutputQty}
+                    unit={outUnit}
+                    disabled={submitting}
+                    testID="semi-output-qty"
+                  />
+                  <Text style={styles.semiOutputHint}>
+                    填写后, 该数量将同步入半成品库存台账, 可用于二次加工
+                  </Text>
+                </View>
+              ) : null}
 
               {alertText ? (
                 <View style={styles.alertBanner} testID="yield-alert-banner">
@@ -2230,6 +2479,32 @@ const styles = StyleSheet.create({
   multiQtyLabel: { fontSize: 14, color: '#67C23A', fontWeight: '600', marginBottom: 4 },
   multiQtyValue: { fontSize: 26, fontWeight: '700', color: '#303133' },
   multiQtyHint: { fontSize: 12, color: '#909399', marginTop: 4 },
+  // SP1 双产出
+  semiOutputLoadingRow: { flexDirection: 'row', alignItems: 'center', padding: 12, marginTop: 8 },
+  semiOutputLoadingText: { fontSize: 14, color: '#909399', marginLeft: 8 },
+  semiOutputSection: { marginTop: 4 },
+  semiOutputTitle: { fontSize: 16, fontWeight: '600', color: '#303133', marginBottom: 12 },
+  semiOutputCodeRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 12 },
+  semiOutputCodeLabel: { fontSize: 14, color: '#606266', marginRight: 8 },
+  semiOutputCodeValue: { fontSize: 15, fontWeight: '600', color: '#1A1A1A', marginRight: 4 },
+  semiOutputCodeFixed: { fontSize: 13, color: '#909399' },
+  semiOutputHint: { fontSize: 13, color: '#909399', marginTop: 8, lineHeight: 18 },
+  // SP3 二次加工领半成品
+  sp3Card: { marginBottom: 16 },
+  sp3Title: { fontSize: 16, fontWeight: '600', color: '#303133', marginBottom: 6 },
+  sp3Desc: { fontSize: 13, color: '#909399', marginBottom: 10, lineHeight: 18 },
+  sp3Loader: { marginVertical: 12 },
+  sp3Empty: { fontSize: 14, color: '#909399', fontStyle: 'italic', paddingVertical: 8 },
+  sp3Item: {
+    borderRadius: 8, borderWidth: 1, borderColor: '#DCDFE6', backgroundColor: '#FFFFFF',
+    padding: 12, marginBottom: 8, minHeight: 56,
+  },
+  sp3ItemSelected: { borderColor: '#E8732E', backgroundColor: '#FFF3EC' },
+  sp3ItemName: { fontSize: 15, fontWeight: '600', color: '#303133' },
+  sp3ItemAvail: { fontSize: 13, color: '#67C23A', marginTop: 4 },
+  sp3PickWrap: { marginTop: 8 },
+  sp3PickHint: { fontSize: 13, color: '#606266', lineHeight: 18, marginBottom: 8 },
+  sp3OverLimit: { fontSize: 13, color: '#F56C6C', marginTop: 6, fontWeight: '600' },
 });
 
 export default YieldStepReportScreen;
