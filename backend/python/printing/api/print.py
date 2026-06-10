@@ -114,6 +114,35 @@ def print_packing_list(payload: dict[str, Any] = Body(...)) -> Response:
     return _pdf_response(pdf, f"packing-list-{payload.get('packingNumber', 'na')}")
 
 
+# ==================== SP12 T8 — 2 新端点: 生产工单 + 汇总领料单 ====================
+
+@router.post("/production-work-order")
+def print_production_work_order(payload: dict[str, Any] = Body(...)) -> Response:
+    """生产工单 (公单) PDF (SP12 T8).
+
+    Java PrintController.printProductionWorkOrder → here.
+    payload: { factoryName, planId, planNumber, productName, productUnit,
+               plannedQuantity, status, plannedDate, expectedCompletionDate,
+               processes: [...], remark }
+    """
+    pdf = _render_pdf("production-work-order", payload)
+    plan_id = payload.get("planId") or payload.get("planNumber", "na")
+    return _pdf_response(pdf, f"work-order-{plan_id}")
+
+
+@router.post("/consolidated-material-requisition")
+def print_consolidated_material_requisition(payload: dict[str, Any] = Body(...)) -> Response:
+    """汇总领料单 PDF (SP12 T8).
+
+    Java PrintController.printConsolidatedMaterialRequisition → here.
+    payload: { factoryName, planId, planNumber, productName, printDate,
+               requisitionCount, items: [...], remark }
+    """
+    pdf = _render_pdf("consolidated-material-requisition", payload)
+    plan_id = payload.get("planId") or payload.get("planNumber", "na")
+    return _pdf_response(pdf, f"consolidated-req-{plan_id}")
+
+
 @router.post("/preview-template")
 async def preview_template(payload: dict[str, Any] = Body(...)) -> Response:
     """C-PRT-EDITOR-1 — schema-driven print template preview.

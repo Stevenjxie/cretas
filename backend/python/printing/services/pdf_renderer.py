@@ -601,6 +601,105 @@ def render_packing_list(data: dict) -> bytes:
     return buffer.getvalue()
 
 
+def render_production_work_order(data: dict) -> bytes:
+    """生产工单 (公单) PDF — SP12 T8.
+
+    expected data: {
+      factoryName, planId, planNumber, productName, productUnit,
+      plannedQuantity, status, plannedDate, expectedCompletionDate,
+      processes: [{seq, name, standardHours, operator}],
+      remark
+    }
+    """
+    from reportlab.lib.units import cm
+    from reportlab.platypus import Paragraph, Spacer
+
+    s = _get_styles()
+    buffer = io.BytesIO()
+    doc = _make_doc(buffer)
+
+    story: list[Any] = [
+        Paragraph(data.get("factoryName") or "白垩纪食品", s["small"]),
+        Paragraph("生产工单 · Production Work Order", s["title"]),
+        _kv_table([
+            ("计划编号", data.get("planNumber") or data.get("planId", "-")),
+            ("产品名称", data.get("productName", "-")),
+            ("计划数量", f'{_fmt_qty(data.get("plannedQuantity"))} {data.get("productUnit", "kg")}'),
+            ("状态", data.get("status", "-")),
+            ("计划日期", data.get("plannedDate", "-")),
+            ("预计完成", data.get("expectedCompletionDate", "-")),
+        ], s["font"]),
+        Spacer(1, 0.5 * cm),
+        Paragraph("工序列表", s["h2"]),
+        _render_items_table(
+            data.get("processes") or [],
+            [("序号", "seq", "CENTER"), ("工序名称", "name", "LEFT"),
+             ("标准工时(h)", "standardHours", "RIGHT"), ("负责人", "operator", "LEFT")],
+            s["font"],
+        ),
+    ]
+    if data.get("remark"):
+        story.extend([Spacer(1, 0.5 * cm), Paragraph("备注", s["h2"]),
+                      Paragraph(str(data["remark"]), s["body"])])
+    story.extend([
+        Spacer(1, 1.0 * cm),
+        Paragraph("生产主管签名: ____________________________", s["body"]),
+        Paragraph("领班签名: ________________________________", s["body"]),
+    ])
+    doc.build(story)
+    return buffer.getvalue()
+
+
+def render_consolidated_material_requisition(data: dict) -> bytes:
+    """汇总领料单 PDF — SP12 T8.
+
+    跨批次汇总同一计划下所有领料需求.
+
+    expected data: {
+      factoryName, planId, planNumber, productName, printDate,
+      requisitionCount,
+      items: [{materialName, spec, unit, totalQty, batchRefs}],
+      remark
+    }
+    """
+    from reportlab.lib.units import cm
+    from reportlab.platypus import Paragraph, Spacer
+
+    s = _get_styles()
+    buffer = io.BytesIO()
+    doc = _make_doc(buffer)
+
+    story: list[Any] = [
+        Paragraph(data.get("factoryName") or "白垩纪食品", s["small"]),
+        Paragraph("汇总领料单 · Consolidated Material Requisition", s["title"]),
+        _kv_table([
+            ("计划编号", data.get("planNumber") or data.get("planId", "-")),
+            ("生产产品", data.get("productName", "-")),
+            ("打印日期", data.get("printDate", "-")),
+            ("涉及批次数", str(data.get("requisitionCount", 0))),
+        ], s["font"]),
+        Spacer(1, 0.5 * cm),
+        Paragraph("汇总领料明细", s["h2"]),
+        _render_items_table(
+            data.get("items") or [],
+            [("原料名称", "materialName", "LEFT"), ("规格", "spec", "LEFT"),
+             ("单位", "unit", "CENTER"), ("汇总数量", "totalQty", "RIGHT"),
+             ("批次关联", "batchRefs", "LEFT")],
+            s["font"],
+        ),
+    ]
+    if data.get("remark"):
+        story.extend([Spacer(1, 0.5 * cm), Paragraph("备注", s["h2"]),
+                      Paragraph(str(data["remark"]), s["body"])])
+    story.extend([
+        Spacer(1, 1.0 * cm),
+        Paragraph("仓管员签名: ____________________________", s["body"]),
+        Paragraph("生产计划员签名: __________________________", s["body"]),
+    ])
+    doc.build(story)
+    return buffer.getvalue()
+
+
 RENDERERS: dict[str, Any] = {
     "sales-order": render_sales_order,
     "purchase-order": render_purchase_order,
@@ -611,4 +710,7 @@ RENDERERS: dict[str, Any] = {
     "stock-movement": render_stock_movement,
     "financial-invoice": render_financial_invoice,
     "packing-list": render_packing_list,
+    # SP12 T8 — 2 new templates: 生产工单 + 汇总领料单
+    "production-work-order": render_production_work_order,
+    "consolidated-material-requisition": render_consolidated_material_requisition,
 }
