@@ -282,7 +282,7 @@
                         :y-fields="extractYFieldsFromConfig(chart.config)"
                         :row-count="sheet.flowResult?.kpiSummary?.rowCount || 0"
                         :switching="switchingChart?.sheetIndex === sheet.sheetIndex && switchingChart?.chartIndex === originalIndex"
-                        :mini-insight="getChartMiniInsight(chart)"
+                        :mini-insight="getChartInsightText(chart)"
                         :displayed-count="getDisplayedCount(chart)"
                         @switch-type="(type) => handleSwitchChartType(sheet, originalIndex, type)"
                         @apply-config="(config) => handleApplyChartConfig(sheet, originalIndex, config)"
@@ -306,7 +306,7 @@
                     :y-fields="extractYFieldsFromConfig(chart.config)"
                     :row-count="sheet.flowResult?.kpiSummary?.rowCount || 0"
                     :switching="switchingChart?.sheetIndex === sheet.sheetIndex && switchingChart?.chartIndex === idx"
-                    :mini-insight="getChartMiniInsight(chart)"
+                    :mini-insight="getChartInsightText(chart)"
                     :displayed-count="getDisplayedCount(chart)"
                     @switch-type="(type) => handleSwitchChartType(sheet, idx, type)"
                     @apply-config="(config) => handleApplyChartConfig(sheet, idx, config)"
@@ -509,6 +509,10 @@ import RestaurantGoldGrid from './components/RestaurantGoldGrid.vue';
 import { getGoldDataRange } from '@/api/smartbi/dataRange';
 import { resolveAllHistoryRange } from './analysisDefaults';
 import { shouldDefaultToGold, pickDefaultBatchIndex } from './analysisGoldMode';
+// U2 — Chart Auto-Insight Tier 1 (replaces getChartMiniInsight)
+import { buildChartInsight } from './components/chartInsight';
+import type { ChartWithMeta, UserPermissions } from './components/chartInsight';
+import ChartInsight from './components/ChartInsight.vue';
 
 const authStore = useAuthStore();
 const factoryId = computed(() => authStore.factoryId);
@@ -564,6 +568,22 @@ const echartsThemeName = computed(() => appStore.theme === 'dark' ? 'cretas-dark
 const permissionStore = usePermissionStore();
 const canUpload = computed(() => permissionStore.canWrite('analytics'));
 const canViewPrice = computed(() => permissionStore.canViewPrice);
+
+// U2 — Tier 1 insight permissions (gates absolute ¥ in chart insights per §2.6)
+// finance:read_write ↔ canWrite('finance') in permissionStore
+const userPermissions = computed((): UserPermissions => ({
+  canViewFinance: permissionStore.canWrite('finance'),
+}));
+
+/**
+ * Tier 1 insight text for ChartGridItem's mini-insight prop.
+ * Replaces the old getChartMiniInsight() — uses buildChartInsight() rules-first engine.
+ * Returns '' when data insufficient (honest-null → ChartGridItem hides the insight bar).
+ */
+const getChartInsightText = (chart: ChartWithMeta): string => {
+  const result = buildChartInsight(chart, userPermissions.value);
+  return result?.finding ?? '';
+};
 
 // Defense-in-depth: drop money-shape KPIs from list when role lacks canViewPrice.
 // Backend @PriceSensitive already strips values, but ghost cards (empty value
@@ -2659,69 +2679,8 @@ const buildBasicOptions = (chartType: string, data: Record<string, unknown>): Re
   return null;
 };
 
-// === Per-chart mini insight (data-driven, no LLM) ===
-const getChartMiniInsight = (chart: { chartType: string; title: string; config: Record<string, unknown> }): string => {
-  const config = chart.config;
-  if (!config) return '';
-
-  try {
-    const series = config.series as Array<{ data?: unknown[]; type?: string; name?: string }> | undefined;
-    if (!series?.length) return '';
-
-    const chartType = (chart.chartType || series[0]?.type || '').toLowerCase();
-
-    // Pie chart: top categories
-    if (chartType === 'pie') {
-      const data = series[0]?.data as Array<{ name: string; value: number }> | undefined;
-      if (!data?.length) return '';
-      const sorted = [...data].sort((a, b) => (b.value || 0) - (a.value || 0));
-      const total = sorted.reduce((s, d) => s + (d.value || 0), 0);
-      if (total === 0) return '';
-      const top = sorted[0];
-      const pct = ((top.value / total) * 100).toFixed(1);
-      if (sorted.length <= 3) {
-        return sorted.map(d => `${d.name}: ${((d.value / total) * 100).toFixed(1)}%`).join('，');
-      }
-      return `最大占比: ${top.name} (${pct}%)，共 ${sorted.length} 项`;
-    }
-
-    // Bar/Line/Area: extract numeric values
-    const allValues: number[] = [];
-    const xData = (config.xAxis as { data?: string[] })?.data;
-
-    for (const s of series) {
-      if (!Array.isArray(s.data)) continue;
-      for (const d of s.data) {
-        const v = typeof d === 'number' ? d : (typeof d === 'object' && d !== null ? (d as { value?: number }).value : undefined);
-        if (typeof v === 'number' && isFinite(v)) allValues.push(v);
-      }
-    }
-
-    if (allValues.length < 2) return '';
-
-    const max = Math.max(...allValues);
-    const min = Math.min(...allValues);
-    const avg = allValues.reduce((a, b) => a + b, 0) / allValues.length;
-    const fmt = (n: number) => n >= 10000 ? (n / 10000).toFixed(1) + '万' : n >= 1000 ? n.toLocaleString('zh-CN', { maximumFractionDigits: 1 }) : String(Math.round(n * 100) / 100);
-
-    // Find max label from xAxis
-    if (xData?.length && series.length === 1 && Array.isArray(series[0].data)) {
-      const data = series[0].data;
-      let maxIdx = 0;
-      for (let i = 1; i < data.length; i++) {
-        const v = typeof data[i] === 'number' ? data[i] as number : (data[i] as { value?: number })?.value || 0;
-        const mv = typeof data[maxIdx] === 'number' ? data[maxIdx] as number : (data[maxIdx] as { value?: number })?.value || 0;
-        if (v > mv) maxIdx = i;
-      }
-      const maxLabel = xData[maxIdx] || '';
-      return `最高: ${maxLabel} (${fmt(max)})，均值: ${fmt(avg)}，极差: ${fmt(max - min)}`;
-    }
-
-    return `最高: ${fmt(max)}，最低: ${fmt(min)}，均值: ${fmt(avg)}`;
-  } catch {
-    return '';
-  }
-};
+// === Per-chart mini insight — replaced by Tier 1 getChartInsightText (U2, 2026-06-10) ===
+// getChartMiniInsight() removed; ChartInsight is registered above near imports.
 
 // 获取 AI 分析
 const getAIAnalysis = (sheet: SheetResult): string => {
