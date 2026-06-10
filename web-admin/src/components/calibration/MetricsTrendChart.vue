@@ -7,6 +7,8 @@ import { ref, watch, onMounted, onUnmounted, computed } from 'vue';
 import echarts from '@/utils/echarts';
 import type { EChartsOption, ECharts } from 'echarts';
 import type { TrendDataPoint, TimeGranularity } from '@/types/calibration';
+import { useChartInsight } from '@/composables/useChartInsight';
+import ChartInsight from '@/views/smart-bi/components/ChartInsight.vue';
 
 interface Props {
   title?: string;
@@ -215,6 +217,32 @@ onUnmounted(() => {
 watch(() => props.data, updateChart, { deep: true });
 watch(chartOptions, updateChart, { deep: true });
 
+// ==================== Chart Insight ====================
+// Multi-series LINE over time (4 AI calibration metrics).
+// Normalise to a single TREND chart: xAxis=dates, series[0]=compositeScore (综合得分)
+// used as the representative series for the insight engine.
+// Null when <4 data points (TREND_MIN_POINTS guard handled internally by composable).
+const metricsInsightSource = () => {
+  const dates = props.data.map((d) => d.date);
+  if (dates.length < 2) return null;
+  return {
+    chart: {
+      chartType: 'LINE',
+      meta: { xDim: 'time' as const, yMetric: 'quantity' as const, aggregation: 'avg' as const, domain: 'factory' as const },
+      config: {
+        xAxis: { data: dates },
+        series: [{ type: 'line', data: props.data.map((d) => d.compositeScore as number) }],
+      },
+    },
+  };
+};
+
+const { insight: metricsInsight, loading: metricsInsightLoading } = useChartInsight(
+  metricsInsightSource,
+  () => ({ canViewFinance: false }),
+  { factoryId: () => '', autoTier2: true },
+);
+
 // Expose methods
 defineExpose({
   resize: handleResize,
@@ -247,6 +275,7 @@ defineExpose({
         <el-empty description="暂无数据" :image-size="80" />
       </div>
     </div>
+    <ChartInsight :insight="metricsInsight" :loading="metricsInsightLoading" depth="detailed" />
   </div>
 </template>
 

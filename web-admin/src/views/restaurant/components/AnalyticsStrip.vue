@@ -10,6 +10,8 @@
           </div>
           <div class="chart-body" :id="`chart-trend-${uid}`" v-if="chartData.trend.length > 0"></div>
           <div v-else class="chart-empty">暂无足够数据绘制趋势</div>
+          <!-- U6: useChartInsight — TREND insight -->
+          <ChartInsight :insight="trendInsight" :loading="trendInsightLoading" depth="detailed" />
         </div>
       </el-col>
       <el-col :xs="24" :sm="12">
@@ -21,6 +23,8 @@
           </div>
           <div class="chart-body" :id="`chart-ranking-${uid}`" v-if="chartData.ranking.length > 0"></div>
           <div v-else class="chart-empty">暂无排行数据</div>
+          <!-- U6: useChartInsight — RANKING insight -->
+          <ChartInsight :insight="rankingInsight" :loading="rankingInsightLoading" depth="detailed" />
         </div>
       </el-col>
     </el-row>
@@ -31,6 +35,8 @@
 import { ref, computed, watch, nextTick, onBeforeUnmount } from 'vue';
 import { TrendCharts, DataAnalysis } from '@element-plus/icons-vue';
 import echarts from '@/utils/echarts';
+import { useChartInsight } from '@/composables/useChartInsight';
+import ChartInsight from '@/views/smart-bi/components/ChartInsight.vue';
 
 interface TrendPoint { date: string; value: number }
 interface RankingItem { name: string; value: number }
@@ -201,6 +207,51 @@ function renderRanking() {
     }],
   });
 }
+
+// ==================== Chart Insight ====================
+// Call 1 — TREND (LINE): trend points over time, domain='restaurant'.
+const trendInsightSource = () => {
+  const t = chartData.value.trend;
+  if (t.length < 2) return null;
+  return {
+    chart: {
+      chartType: 'LINE',
+      meta: { xDim: 'time' as const, yMetric: 'revenue' as const, aggregation: 'sum' as const, domain: 'restaurant' as const },
+      config: {
+        xAxis: { data: t.map((p) => p.date) },
+        series: [{ type: 'line', data: t.map((p) => p.value) }],
+      },
+    },
+  };
+};
+
+// Call 2 — RANKING (BAR): category ranking by value, domain='restaurant'.
+const rankingInsightSource = () => {
+  const r = chartData.value.ranking;
+  if (r.length < 2) return null;
+  return {
+    chart: {
+      chartType: 'BAR',
+      meta: { xDim: 'store' as const, yMetric: 'revenue' as const, aggregation: 'sum' as const, domain: 'restaurant' as const },
+      config: {
+        xAxis: { data: r.map((i) => i.name) },
+        series: [{ type: 'bar', data: r.map((i) => i.value) }],
+      },
+    },
+  };
+};
+
+const { insight: trendInsight, loading: trendInsightLoading } = useChartInsight(
+  trendInsightSource,
+  () => ({ canViewFinance: false }),
+  { factoryId: () => '', autoTier2: true },
+);
+
+const { insight: rankingInsight, loading: rankingInsightLoading } = useChartInsight(
+  rankingInsightSource,
+  () => ({ canViewFinance: false }),
+  { factoryId: () => '', autoTier2: true },
+);
 
 watch(chartData, () => { nextTick(() => { renderTrend(); renderRanking(); }); }, { deep: true, immediate: true });
 

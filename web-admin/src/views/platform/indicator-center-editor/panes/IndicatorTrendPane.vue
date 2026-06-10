@@ -25,6 +25,7 @@
     />
 
     <div v-show="measurements.length > 0" ref="chartRef" class="chart-container" />
+    <ChartInsight :insight="indicatorTrendInsight" :loading="indicatorTrendInsightLoading" depth="detailed" />
 
     <el-table
       v-if="measurements.length > 0"
@@ -78,6 +79,8 @@ import {
   type IndicatorVersion,
   type AlertLevel,
 } from '@/api/canvasIndicators'
+import { useChartInsight } from '@/composables/useChartInsight'
+import ChartInsight from '@/views/smart-bi/components/ChartInsight.vue'
 
 echarts.use([
   LineChart,
@@ -219,6 +222,32 @@ function formatTs(ts: string): string {
     return ts
   }
 }
+
+// ==================== Chart Insight ====================
+// LINE over time: measurements sorted by computedAt → TREND family.
+// Null when <2 points (engine handles TREND_MIN_POINTS=4 guard internally).
+const indicatorTrendSource = () => {
+  if (measurements.value.length < 2) return null;
+  const sorted = [...measurements.value].sort(
+    (a, b) => new Date((a as IndicatorVersion).computedAt).getTime() - new Date((b as IndicatorVersion).computedAt).getTime(),
+  );
+  return {
+    chart: {
+      chartType: 'LINE',
+      meta: { xDim: 'time' as const, yMetric: 'quantity' as const, aggregation: 'avg' as const, domain: 'factory' as const },
+      config: {
+        xAxis: { data: sorted.map((v) => (v as IndicatorVersion).computedAt.slice(0, 10)) },
+        series: [{ type: 'line', data: sorted.map((v) => Number((v as IndicatorVersion).value)) }],
+      },
+    },
+  };
+};
+
+const { insight: indicatorTrendInsight, loading: indicatorTrendInsightLoading } = useChartInsight(
+  indicatorTrendSource,
+  () => ({ canViewFinance: false }),
+  { factoryId: () => props.factoryId, autoTier2: true },
+);
 
 watch(() => props.detail.id, () => loadData())
 

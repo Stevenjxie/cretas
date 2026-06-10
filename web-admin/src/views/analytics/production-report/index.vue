@@ -5,6 +5,8 @@ import { get } from '@/api/request';
 import echarts from '@/utils/echarts';
 import { ElMessage } from 'element-plus';
 import { FullScreen, Refresh } from '@element-plus/icons-vue';
+import { useChartInsight } from '@/composables/useChartInsight';
+import ChartInsight from '@/views/smart-bi/components/ChartInsight.vue';
 
 interface ProductionData {
   productTypeId: string;
@@ -240,6 +242,29 @@ function updateChart() {
   });
 }
 
+// ==================== Chart Insight ====================
+// BAR chart: products ranked by production quantity → RANKING family.
+// Source uses productionData sorted desc (already sorted on load).
+const productionInsightSource = () => {
+  if (productionData.value.length < 2) return null;
+  return {
+    chart: {
+      chartType: 'BAR',
+      meta: { xDim: 'category' as const, yMetric: 'quantity' as const, aggregation: 'sum' as const, domain: 'factory' as const },
+      config: {
+        xAxis: { data: productionData.value.map((d) => d.productName) },
+        series: [{ type: 'bar', data: productionData.value.map((d) => d.totalQuantity) }],
+      },
+    },
+  };
+};
+
+const { insight: productionInsight, loading: productionInsightLoading } = useChartInsight(
+  productionInsightSource,
+  () => ({ canViewFinance: false }),
+  { factoryId: () => factoryId.value ?? '', autoTier2: true },
+);
+
 let resizeRaf = 0;
 function handleResize() {
   if (resizeRaf) return;
@@ -323,6 +348,8 @@ function handleRefresh() {
           <el-empty description="暂无生产数据" />
         </div>
         <div v-else id="production-bar-chart" class="chart"></div>
+        <!-- U6: useChartInsight — RANKING insight on production quantities -->
+        <ChartInsight :insight="productionInsight" :loading="productionInsightLoading" depth="detailed" />
       </el-card>
 
       <!-- 数据汇总卡片 -->

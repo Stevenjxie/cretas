@@ -109,6 +109,8 @@
             ref="chartRef"
             class="history-chart"
           />
+          <!-- U6: useChartInsight — TREND insight on historical versions -->
+          <ChartInsight :insight="versionsInsight" :loading="versionsInsightLoading" depth="detailed" />
 
           <!-- 表格视图 (始终可切换, 数据少时默认显示) -->
           <el-table
@@ -182,6 +184,8 @@ import { ElMessage } from 'element-plus';
 import { Refresh } from '@element-plus/icons-vue';
 import echarts from '@/utils/echarts';
 import { usePermissionStore } from '@/store/modules/permission';
+import { useChartInsight } from '@/composables/useChartInsight';
+import ChartInsight from '@/views/smart-bi/components/ChartInsight.vue';
 import {
   getIndicatorDetail,
   getIndicatorValue,
@@ -401,6 +405,32 @@ function renderChart() {
 
   chartInst.setOption(option);
 }
+
+// ==================== Chart Insight ====================
+// LINE over time: versions (sorted asc by computedAt) → TREND family.
+// Driven off the same `versions` ref used by renderChart().
+const indicatorVersionsSource = () => {
+  if (versions.value.length < 2) return null;
+  const sorted = [...versions.value].sort(
+    (a, b) => new Date(a.computedAt).getTime() - new Date(b.computedAt).getTime(),
+  );
+  return {
+    chart: {
+      chartType: 'LINE',
+      meta: { xDim: 'time' as const, yMetric: 'quantity' as const, aggregation: 'avg' as const, domain: 'factory' as const },
+      config: {
+        xAxis: { data: sorted.map((v) => v.computedAt.slice(0, 10)) },
+        series: [{ type: 'line', data: sorted.map((v) => Number(v.value)) }],
+      },
+    },
+  };
+};
+
+const { insight: versionsInsight, loading: versionsInsightLoading } = useChartInsight(
+  indicatorVersionsSource,
+  () => ({ canViewFinance: false }),
+  { factoryId: () => props.factoryId, autoTier2: true },
+);
 
 watch(historyView, () => {
   nextTick(() => renderChart());
