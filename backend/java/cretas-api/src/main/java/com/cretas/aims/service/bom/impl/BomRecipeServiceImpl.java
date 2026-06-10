@@ -239,9 +239,11 @@ public class BomRecipeServiceImpl implements BomRecipeService {
     @Override
     public BomRecipe getRecipe(String factoryId, String recipeId) {
         BomRecipe recipe = loadRecipe(factoryId, recipeId);
-        // Touch items to trigger LAZY load.
-        // IMPORTANT: use refreshItemsInPlace to keep Hibernate PersistentBag reference intact.
-        refreshItemsInPlace(recipe);
+        // 非 @Transactional 读路径: recipe 已 detached, items 是未初始化懒代理.
+        // 必须用 setItems 替换字段引用 (而非 clear()+addAll) —— 后者会强制初始化
+        // detached 懒代理 → LazyInitializationException (no Session).
+        // orphanRemoval 异常只在 @Transactional 写方法 flush 时触发, 此处无 flush 无风险.
+        recipe.setItems(itemRepo.findByRecipeIdOrderBySortOrderAsc(recipe.getId()));
         return recipe;
     }
 
