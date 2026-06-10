@@ -63,9 +63,15 @@ public class MaterialBatchDeleteTool extends AbstractBusinessTool {
     protected Map<String, Object> doExecute(String factoryId, Map<String, Object> params, Map<String, Object> context) throws Exception {
         String batchId = getString(params, "batchId");
 
-        log.info("删除原材料批次: factoryId={}, batchId={}", factoryId, batchId);
+        // W5 红线 (AI-RBAC): 传入调用者真实角色 (来自 JWT, 经 context.userRole 透传),
+        // 走 service 带角色守卫的重载 — 否则 callerRole=null 被 service 当"内部调用"放行,
+        // 仓管/操作员经 AI 对话即可绕过 HTTP 面 @RequirePermission 删批次 (无单据移除库存)。
+        // W0 WriteGuard 只是确认门, 不做鉴权; 鉴权由 service isPrivilegedInventoryRole 收口。
+        String callerRole = getUserRole(context);
 
-        materialBatchService.deleteMaterialBatch(factoryId, batchId);
+        log.info("删除原材料批次: factoryId={}, batchId={}, callerRole={}", factoryId, batchId, callerRole);
+
+        materialBatchService.deleteMaterialBatch(factoryId, batchId, callerRole);
 
         Map<String, Object> result = new HashMap<>();
         result.put("batchId", batchId);

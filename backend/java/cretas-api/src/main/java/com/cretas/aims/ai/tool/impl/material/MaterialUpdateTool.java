@@ -77,8 +77,13 @@ public class MaterialUpdateTool extends AbstractBusinessTool {
         String storageLocation = getString(params, "storageLocation");
         String notes = getString(params, "notes");
 
-        log.info("更新原材料批次信息: factoryId={}, batchId={}, storageLocation={}, notes={}",
-                factoryId, batchId, storageLocation, notes);
+        // W5 红线 (AI-RBAC): 透传调用者真实角色, 走 service 带角色守卫的重载。
+        // 本工具仅暴露 storageLocation/notes (非库存字段), 但 service 守卫是字段级 (requestChangesInventoryFields),
+        // 传真实角色保证与 HTTP 面 @RequirePermission 一致, 防御未来扩字段时回归。
+        String callerRole = getUserRole(context);
+
+        log.info("更新原材料批次信息: factoryId={}, batchId={}, storageLocation={}, notes={}, callerRole={}",
+                factoryId, batchId, storageLocation, notes, callerRole);
 
         UpdateMaterialBatchRequest updateReq = new UpdateMaterialBatchRequest();
         if (storageLocation != null) {
@@ -88,7 +93,7 @@ public class MaterialUpdateTool extends AbstractBusinessTool {
             updateReq.setNotes(notes);
         }
 
-        MaterialBatchDTO updated = materialBatchService.updateMaterialBatch(factoryId, batchId, updateReq);
+        MaterialBatchDTO updated = materialBatchService.updateMaterialBatch(factoryId, batchId, updateReq, callerRole);
 
         Map<String, Object> result = new HashMap<>();
         result.put("batchId", batchId);
