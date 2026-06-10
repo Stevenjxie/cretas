@@ -950,6 +950,20 @@ const businessRoutes: RouteRecordRaw[] = [
             name: 'FinanceThreeStatements',
             component: () => import('@/views/finance/report/index.vue'),
             meta: { requiresAuth: true, title: '财务三表', module: 'finance' }
+          },
+          // SP11 U-SP11: 进销存台账报表 (期初/期中/期末 + 数量/金额, @PriceSensitive 脱敏)
+          {
+            path: 'inventory-ledger',
+            name: 'FinanceInventoryLedger',
+            component: () => import('@/views/finance/inventory-ledger/index.vue'),
+            meta: { requiresAuth: true, title: '进销存台账', module: 'finance' }
+          },
+          // SP11 U-SP11: 凭证导出配置 + 科目映射 + 序时账/余额表导出
+          {
+            path: 'voucher-export',
+            name: 'FinanceVoucherExport',
+            component: () => import('@/views/finance/voucher-export/index.vue'),
+            meta: { requiresAuth: true, title: '凭证导出', module: 'finance' }
           }
         ]
       },
