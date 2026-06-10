@@ -28,6 +28,21 @@ public interface DynamicChartConfigBuilderService {
                                     Map<String, Object> aggregatedData);
 
     /**
+     * 根据字段映射和聚合数据构建图表配置，并附加语义元数据 {@link com.cretas.aims.dto.smartbi.ChartMeta}。
+     *
+     * <p>在 {@link #buildConfig} 基础上从字段和工厂业态推导 xDim/yMetric/aggregation/domain，
+     * 供前端 Tier1 chartInsight.ts 识别图表族。{@link #buildConfig} 保持 meta=null，向后兼容。
+     *
+     * @param fields         带图表角色的字段映射列表
+     * @param aggregatedData 聚合数据
+     * @param businessType   工厂业态字符串（"RESTAURANT"/"FACTORY"/null）
+     * @return 图表配置（含 meta）
+     */
+    DynamicChartConfig buildConfigWithMeta(List<FieldMappingWithChartRole> fields,
+                                            Map<String, Object> aggregatedData,
+                                            String businessType);
+
+    /**
      * 使用指定的字段构建图表配置
      *
      * @param fields          字段映射列表
@@ -42,6 +57,26 @@ public interface DynamicChartConfigBuilderService {
                                               String xAxisFieldName,
                                               String seriesFieldName,
                                               List<String> measureFieldNames);
+
+    /**
+     * 使用指定的字段构建图表配置，并附加语义元数据。
+     *
+     * <p>在 {@link #buildConfigWithFields} 基础上加 businessType 传入，调整 meta.domain。
+     *
+     * @param fields            字段映射列表
+     * @param aggregatedData    聚合数据
+     * @param xAxisFieldName    指定的 X 轴字段名
+     * @param seriesFieldName   指定的 Series 字段名（可为 null）
+     * @param measureFieldNames 指定的度量字段名列表
+     * @param businessType      工厂业态字符串（"RESTAURANT"/"FACTORY"/null）
+     * @return 图表配置（含 meta）
+     */
+    DynamicChartConfig buildConfigWithFieldsAndMeta(List<FieldMappingWithChartRole> fields,
+                                                     Map<String, Object> aggregatedData,
+                                                     String xAxisFieldName,
+                                                     String seriesFieldName,
+                                                     List<String> measureFieldNames,
+                                                     String businessType);
 
     /**
      * 指定图表类型构建配置

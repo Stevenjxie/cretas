@@ -1,6 +1,7 @@
 package com.cretas.aims.service.smartbi.impl;
 
 import com.cretas.aims.dto.smartbi.AlternativeDimension;
+import com.cretas.aims.dto.smartbi.ChartMeta;
 import com.cretas.aims.dto.smartbi.DynamicChartConfig;
 import com.cretas.aims.dto.smartbi.DynamicChartConfig.*;
 import com.cretas.aims.dto.smartbi.FieldMappingWithChartRole;
@@ -732,6 +733,52 @@ public class DynamicChartConfigBuilder implements DynamicChartConfigBuilderServi
     // ==================== 扩展构建方法 ====================
 
     /**
+     * 使用指定的字段构建图表配置，并附加语义元数据。
+     *
+     * <p>在 {@link #buildConfigWithFields} 基础上加 businessType 传入，完成 meta.domain 派生。
+     *
+     * @param fields            字段映射列表
+     * @param aggregatedData    聚合数据
+     * @param xAxisFieldName    指定的 X 轴字段名
+     * @param seriesFieldName   指定的 Series 字段名（可为 null）
+     * @param measureFieldNames 指定的度量字段名列表
+     * @param businessType      工厂业态字符串（"RESTAURANT"/"FACTORY"/null）
+     * @return 图表配置（含 meta）
+     */
+    @Override
+    public DynamicChartConfig buildConfigWithFieldsAndMeta(List<FieldMappingWithChartRole> fields,
+                                                            Map<String, Object> aggregatedData,
+                                                            String xAxisFieldName,
+                                                            String seriesFieldName,
+                                                            List<String> measureFieldNames,
+                                                            String businessType) {
+        DynamicChartConfig config = buildConfigWithFields(
+                fields, aggregatedData, xAxisFieldName, seriesFieldName, measureFieldNames);
+        // Re-derive meta from the adjusted-fields perspective.
+        // buildConfigWithFields adjusts chartAxis roles then calls buildConfig internally;
+        // we need the *adjusted* fields to derive correct xDim, so derive from them here.
+        List<FieldMappingWithChartRole> adjustedFields = fields.stream()
+                .map(f -> {
+                    FieldMappingWithChartRole adjusted = copyField(f);
+                    String fieldName = f.getStandardField();
+                    if (fieldName.equals(xAxisFieldName)) {
+                        adjusted.setChartAxis(ChartAxisRole.X_AXIS);
+                        adjusted.setAxisPriority(1);
+                    } else if (fieldName.equals(seriesFieldName)) {
+                        adjusted.setChartAxis(ChartAxisRole.SERIES);
+                        adjusted.setAxisPriority(1);
+                    } else if (measureFieldNames != null && measureFieldNames.contains(fieldName)) {
+                        adjusted.setChartAxis(ChartAxisRole.Y_AXIS);
+                        adjusted.setAxisPriority(measureFieldNames.indexOf(fieldName) + 1);
+                    }
+                    return adjusted;
+                })
+                .collect(Collectors.toList());
+        config.setMeta(deriveChartMeta(adjustedFields, businessType));
+        return config;
+    }
+
+    /**
      * 使用指定的字段构建图表配置
      *
      * @param fields         字段映射列表
@@ -815,5 +862,180 @@ public class DynamicChartConfigBuilder implements DynamicChartConfigBuilderServi
         }
 
         return config;
+    }
+
+    // ==================== U1: ChartMeta 下发 (spec §2.5, B1 root-fix) ====================
+
+    /**
+     * 构建图表配置并附加语义元数据 {@link ChartMeta}。
+     *
+     * <p>在现有 {@link #buildConfig} 基础上，从 {@code fields} 中推导出
+     * {@code xDim / yMetric / aggregation / domain} 四个语义字段，附到结果
+     * {@link DynamicChartConfig#getMeta()} 中，供前端 Tier1 chartInsight.ts 识别图表族。
+     *
+     * <p>现有调用方无需修改（{@code buildConfig} 保持 meta=null，向后兼容）。
+     * 新调用方（SmartBI 分析路径）改用此方法并传入工厂 businessType。
+     *
+     * @param fields          带图表角色的字段映射列表
+     * @param aggregatedData  聚合数据（可以是 List 或包含 data 的 Map）
+     * @param businessType    工厂业态字符串（"RESTAURANT"/"FACTORY"/"FINANCE"/null）
+     * @return 图表配置（含 meta）
+     */
+    public DynamicChartConfig buildConfigWithMeta(List<FieldMappingWithChartRole> fields,
+                                                   Map<String, Object> aggregatedData,
+                                                   String businessType) {
+        DynamicChartConfig config = buildConfig(fields, aggregatedData);
+        config.setMeta(deriveChartMeta(fields, businessType));
+        return config;
+    }
+
+    /**
+     * 从 fieldMappings 派生 {@link ChartMeta}。
+     *
+     * <p>派生规则（与前端 ChartMeta 契约一一对应）：
+     * <ul>
+     *   <li>xDim: X_AXIS 字段 role=TIME → "time"; 否则按 standardField/alias 关键词映射</li>
+     *   <li>yMetric: 第一个 Y_AXIS/METRIC 字段 standardField/alias 关键词映射</li>
+     *   <li>aggregation: Y 度量字段 aggregationType 规范化</li>
+     *   <li>domain: businessType 规范化（RESTAURANT→restaurant, 其他→factory）</li>
+     * </ul>
+     *
+     * <p>包访问级别（package-private），便于单元测试直接调用；生产代码通过
+     * {@link #buildConfigWithMeta} 触达。
+     *
+     * @param fields       字段映射列表（来自 DynamicChartConfig.fieldMappings）
+     * @param businessType 工厂业态字符串（可为 null）
+     * @return 派生的 ChartMeta（字段均不为 null，缺失时返回 "other"/"factory"/"sum"）
+     */
+    ChartMeta deriveChartMeta(List<FieldMappingWithChartRole> fields, String businessType) {
+        if (fields == null || fields.isEmpty()) {
+            return ChartMeta.builder()
+                    .xDim("other")
+                    .yMetric("other")
+                    .aggregation("sum")
+                    .domain(deriveDomain(businessType))
+                    .build();
+        }
+
+        // ── xDim ─────────────────────────────────────────────────────────────
+        FieldMappingWithChartRole xField = findXAxisField(fields);
+        String xDim = deriveXDim(xField);
+
+        // ── yMetric + aggregation ─────────────────────────────────────────────
+        FieldMappingWithChartRole yField = findFirstYMetricField(fields);
+        String yMetric = deriveYMetric(yField);
+        String aggregation = deriveAggregation(yField);
+
+        // ── domain ────────────────────────────────────────────────────────────
+        String domain = deriveDomain(businessType);
+
+        return ChartMeta.builder()
+                .xDim(xDim)
+                .yMetric(yMetric)
+                .aggregation(aggregation)
+                .domain(domain)
+                .build();
+    }
+
+    /**
+     * 派生 xDim: TIME role 优先, 其次按 standardField/alias 关键词匹配。
+     */
+    private String deriveXDim(FieldMappingWithChartRole xField) {
+        if (xField == null) {
+            return "other";
+        }
+        // TIME role → "time"
+        if (xField.getRole() == FieldRole.TIME || xField.isDateType()) {
+            return "time";
+        }
+        // 关键词匹配（检查 standardField 和 alias，不区分大小写）
+        String combined = combineFieldNames(xField);
+        if (containsAny(combined, "store", "门店")) return "store";
+        if (containsAny(combined, "product", "产品", "菜品")) return "product";
+        if (containsAny(combined, "channel", "渠道", "平台")) return "channel";
+        if (containsAny(combined, "category", "分类")) return "category";
+        return "other";
+    }
+
+    /**
+     * 找第一个 Y_AXIS 或 METRIC 字段（用于 yMetric + aggregation 派生）。
+     */
+    private FieldMappingWithChartRole findFirstYMetricField(List<FieldMappingWithChartRole> fields) {
+        return fields.stream()
+                .filter(f -> f.getChartAxis() == ChartAxisRole.Y_AXIS
+                          || f.getRole() == FieldRole.METRIC)
+                .sorted(Comparator.comparingInt(f -> f.getAxisPriority() != null ? f.getAxisPriority() : 100))
+                .findFirst()
+                .orElse(null);
+    }
+
+    /**
+     * 派生 yMetric: 按 standardField/alias 关键词匹配语义。
+     */
+    private String deriveYMetric(FieldMappingWithChartRole yField) {
+        if (yField == null) {
+            return "other";
+        }
+        String combined = combineFieldNames(yField);
+        if (containsAny(combined, "revenue", "营收", "销售额", "sales_amount", "总营收")) return "revenue";
+        if (containsAny(combined, "quantity", "数量", "销量")) return "quantity";
+        if (containsAny(combined, "margin", "毛利")) return "margin";
+        if (containsAny(combined, "cost", "成本")) return "cost";
+        if (containsAny(combined, "count", "单数", "order_count")) return "count";
+        if (containsAny(combined, "rate", "率", "pct", "percentage", "completion_rate")) return "pct";
+        return "other";
+    }
+
+    /**
+     * 派生 aggregation: 规范化 Y 字段的 aggregationType 字符串。
+     * 未知值回退到 "sum"（最常见的度量聚合）。
+     */
+    private String deriveAggregation(FieldMappingWithChartRole yField) {
+        if (yField == null || yField.getAggregationType() == null) {
+            return "sum";
+        }
+        return switch (yField.getAggregationType().toUpperCase()) {
+            case "SUM" -> "sum";
+            case "AVG" -> "avg";
+            case "MAX" -> "max";
+            case "COUNT", "COUNT_DISTINCT" -> "count";
+            default -> "sum";
+        };
+    }
+
+    /**
+     * 派生 domain: 工厂业态字符串规范化。
+     * RESTAURANT → "restaurant"; FINANCE → "finance"; 其他（FACTORY/null/unknown）→ "factory"。
+     */
+    private String deriveDomain(String businessType) {
+        if (businessType == null) {
+            return "factory";
+        }
+        return switch (businessType.toUpperCase()) {
+            case "RESTAURANT" -> "restaurant";
+            case "FINANCE" -> "finance";
+            default -> "factory";
+        };
+    }
+
+    /**
+     * 合并字段的 standardField + alias 为一个小写字符串（用于关键词匹配）。
+     */
+    private String combineFieldNames(FieldMappingWithChartRole field) {
+        String sf = field.getStandardField() != null ? field.getStandardField().toLowerCase() : "";
+        String alias = field.getAlias() != null ? field.getAlias().toLowerCase() : "";
+        return sf + " " + alias;
+    }
+
+    /**
+     * 判断字符串是否包含给定关键词中的任意一个（大小写不敏感已由调用方保证）。
+     */
+    private boolean containsAny(String source, String... keywords) {
+        for (String keyword : keywords) {
+            if (source.contains(keyword.toLowerCase())) {
+                return true;
+            }
+        }
+        return false;
     }
 }

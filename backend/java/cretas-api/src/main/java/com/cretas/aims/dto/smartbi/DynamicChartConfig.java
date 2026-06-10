@@ -114,6 +114,14 @@ public class DynamicChartConfig {
      */
     private Map<String, Object> options;
 
+    /**
+     * 图表语义元数据 (spec §2.5, B1 root-fix)。
+     * 由后端从 fieldMappings 派生，使前端 chartInsight.ts 能识别图表族并生成洞察。
+     * 仅 {@link com.cretas.aims.service.smartbi.impl.DynamicChartConfigBuilder#buildConfigWithMeta}
+     * 调用时附加；现有 {@code buildConfig} 调用保持 null（向后兼容）。
+     */
+    private ChartMeta meta;
+
     // ==================== 内部类 ====================
 
     /**

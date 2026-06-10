@@ -106,6 +106,12 @@ public class SmartBIUploadFlowServiceImpl implements SmartBIUploadFlowService {
     @Autowired(required = false)
     private com.cretas.aims.service.smartbi.DataSourceRegistryService dataSourceRegistryService;
 
+    // Business-domain resolver — used to attach ChartMeta.domain at dynamic-chart build sites (U1)
+    // @Lazy: IntentConfigManagementService transitively reaches many beans; @Lazy breaks any cycle.
+    @Autowired(required = false)
+    @org.springframework.context.annotation.Lazy
+    private com.cretas.aims.service.intent.IntentConfigManagementService intentConfigService;
+
     @org.springframework.beans.factory.annotation.Value("${smartbi.postgres.enabled:false}")
     private boolean postgresEnabled;
 
@@ -1064,11 +1070,14 @@ public class SmartBIUploadFlowServiceImpl implements SmartBIUploadFlowService {
         aggregatedData.put("data", convertToDataList(rawData, dataType));
         aggregatedData.put("totalRows", rawData.get("recordCount"));
 
-        // 3. 使用 DynamicChartConfigBuilder 构建配置
+        // 3. 使用 DynamicChartConfigBuilder 构建配置（附加 ChartMeta — U1 wiring）
         try {
-            DynamicChartConfig config = dynamicChartConfigBuilder.buildConfig(fieldMappings, aggregatedData);
-            log.info("成功构建动态图表配置: chartType={}, totalRows={}",
-                    config.getChartType(), config.getTotalRows());
+            String businessType = resolveBusinessType(factoryId);
+            DynamicChartConfig config = dynamicChartConfigBuilder.buildConfigWithMeta(
+                    fieldMappings, aggregatedData, businessType);
+            log.info("成功构建动态图表配置: chartType={}, totalRows={}, meta.domain={}",
+                    config.getChartType(), config.getTotalRows(),
+                    config.getMeta() != null ? config.getMeta().getDomain() : "null");
             return config;
         } catch (Exception e) {
             log.error("构建动态图表配置失败: {}", e.getMessage(), e);
@@ -1111,16 +1120,42 @@ public class SmartBIUploadFlowServiceImpl implements SmartBIUploadFlowService {
         aggregatedData.put("data", convertToDataList(rawData, dataType));
         aggregatedData.put("totalRows", rawData.get("recordCount"));
 
-        // 3. 使用指定字段构建配置
+        // 3. 使用指定字段构建配置（附加 ChartMeta — U1 wiring）
         try {
-            DynamicChartConfig config = dynamicChartConfigBuilder.buildConfigWithFields(
-                    fieldMappings, aggregatedData, xAxisFieldName, seriesFieldName, measureFieldNames);
-            log.info("成功构建动态图表配置（指定字段）: chartType={}, xAxis={}, series={}",
-                    config.getChartType(), xAxisFieldName, seriesFieldName);
+            String businessType = resolveBusinessType(factoryId);
+            DynamicChartConfig config = dynamicChartConfigBuilder.buildConfigWithFieldsAndMeta(
+                    fieldMappings, aggregatedData, xAxisFieldName, seriesFieldName,
+                    measureFieldNames, businessType);
+            log.info("成功构建动态图表配置（指定字段）: chartType={}, xAxis={}, series={}, meta.domain={}",
+                    config.getChartType(), xAxisFieldName, seriesFieldName,
+                    config.getMeta() != null ? config.getMeta().getDomain() : "null");
             return config;
         } catch (Exception e) {
             log.error("构建动态图表配置失败: {}", e.getMessage(), e);
             return null;
+        }
+    }
+
+    /**
+     * 解析工厂业态字符串，用于 ChartMeta.domain 派生（U1 wiring）。
+     *
+     * <p>委托给 {@link com.cretas.aims.service.intent.IntentConfigManagementService#resolveBusinessDomain}
+     * — 它已被 BusinessTypeGate / AIIntentService 等使用，有内部缓存，O(1) 热路径。
+     * 若服务未注入（集成测试环境）或解析异常，回退到 "FACTORY"（安全默认值）。
+     *
+     * @param factoryId 工厂 ID
+     * @return "RESTAURANT" | "FACTORY"（从不返回 null）
+     */
+    private String resolveBusinessType(String factoryId) {
+        if (intentConfigService == null) {
+            return "FACTORY";
+        }
+        try {
+            String domain = intentConfigService.resolveBusinessDomain(factoryId);
+            return domain != null ? domain : "FACTORY";
+        } catch (Exception e) {
+            log.warn("[ChartMeta] resolveBusinessDomain 失败 factoryId={}, 回退 FACTORY: {}", factoryId, e.getMessage());
+            return "FACTORY";
         }
     }
 
