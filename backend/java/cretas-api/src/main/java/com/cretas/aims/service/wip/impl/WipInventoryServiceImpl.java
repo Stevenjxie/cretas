@@ -106,7 +106,22 @@ public class WipInventoryServiceImpl implements WipInventoryService {
                 rollLabor = rollup.laborCost();
                 rollMaterial = rollup.materialCost();
             }
-            upsertProducedWip(factoryId, report, task, rollLabor, rollMaterial);
+            SemiFinishedInventory producedWip = upsertProducedWip(factoryId, report, task, rollLabor, rollMaterial);
+            // W4 成本链修复: FINISHED/legacy 路径也发 SP3 成本事件 → 回填 SalesOrderItem.costUnitPrice.
+            // 此前仅 SEMI 路径 (postSemiOutputLedger) 发事件, 导致整合/旧式报工 (output_kind=null,
+            // F006 实际数据全走此路径) 即使算出 WIP unitCost 也永不回填 costUnitPrice → 财审 actualCost 永远 null。
+            // 诚实 null 传播: unitCost 为 null (无工价/无料价) 时不发事件 (无成本可回填)。
+            if (producedWip != null && producedWip.getUnitCost() != null
+                    && task.getProductionBatchId() != null) {
+                eventPublisher.publishEvent(new ProductionCostUpdatedEvent(
+                        this,
+                        factoryId,
+                        task.getProductionBatchId(),
+                        task.getProductTypeId(),
+                        producedWip.getUnitCost(),
+                        producedWip.getAccumulatedCost()
+                ));
+            }
         }
         markWipPosted(report);
     }
@@ -256,7 +271,7 @@ public class WipInventoryServiceImpl implements WipInventoryService {
         report.setCustomFields(fields);
     }
 
-    private void upsertProducedWip(String factoryId, ProductionReport report, WorkProcessTask task,
+    private SemiFinishedInventory upsertProducedWip(String factoryId, ProductionReport report, WorkProcessTask task,
                                    BigDecimal rollLaborCost, BigDecimal rollMaterialCost) {
         String wipNo = generateBatchNo(task);
         BigDecimal out = nz(report.getOutputQuantity());
@@ -301,7 +316,7 @@ public class WipInventoryServiceImpl implements WipInventoryService {
         } else {
             wip.setUnitCost(null);
         }
-        wipRepo.save(wip);
+        return wipRepo.save(wip);
     }
 
     private CostRollup calculateTaskCostRollup(String factoryId, Long workProcessTaskId) {
