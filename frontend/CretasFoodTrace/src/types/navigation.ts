@@ -660,6 +660,8 @@ export type WHInboundStackParamList = {
   WHScanOperation: { type: 'inbound' | 'outbound'; orderId?: string; mode?: string };
   // W-ABA-1 Day 5: PDF 扫码 → 2-字段收货页 (扫 QR 跳本路由, purchaseOrderId 必传)
   WHReceiptCreate: { purchaseOrderId: string; orderNumber?: string };
+  // SP6 Tier1 #25: 无扫码直接选单收货列表页
+  WHPurchaseReceiveList: undefined;
 };
 
 export type WHOutboundStackParamList = {
