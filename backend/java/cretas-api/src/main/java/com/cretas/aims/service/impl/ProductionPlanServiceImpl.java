@@ -25,6 +25,7 @@ import com.cretas.aims.repository.inventory.SalesOrderItemRepository;
 import com.cretas.aims.entity.bom.BomItem;
 import com.cretas.aims.entity.inventory.SalesOrder;
 import com.cretas.aims.entity.inventory.SalesOrderItem;
+import com.cretas.aims.entity.enums.SalesOrderStatus;
 import com.cretas.aims.service.BomService;
 import com.cretas.aims.service.LinkArrayService;
 import com.cretas.aims.service.ProductionPlanService;
@@ -382,6 +383,8 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                     throw new BusinessException(403, "无权关联其他工厂的销售订单")
                             .withHint("销售订单不属于该工厂, 请选择本工厂的订单").withHintTarget("sourceOrderId");
                 }
+                // 财审闸门: 客户订单必须先通过财务审核才能流转车间排产
+                assertSalesOrderFinanceApproved(so, "sourceOrderId");
                 if ((request.getSourceCustomerName() == null || request.getSourceCustomerName().isBlank())
                         && so.getCustomerName() != null) {
                     request.setSourceCustomerName(so.getCustomerName());
@@ -409,6 +412,8 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             throw new BusinessException(404, "销售订单行不存在或不属于本工厂")
                     .withHint("请刷新销售订单列表后重新选择").withHintTarget("sourceOrderItemId");
         }
+        // 财审闸门: 客户订单必须先通过财务审核才能流转车间排产
+        assertSalesOrderFinanceApproved(so, "sourceOrderItemId");
 
         // 自动回填: 订单ID/客户名/产品类型
         request.setSourceOrderId(so.getId());
@@ -418,6 +423,36 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         if ((request.getProductTypeId() == null || request.getProductTypeId().isBlank())
                 && item.getProductTypeId() != null) {
             request.setProductTypeId(item.getProductTypeId());
+        }
+    }
+
+    /**
+     * 财审闸门 — 客户订单(CUSTOMER_ORDER 源)必须先通过财务审核, 才能流转车间排产建生产计划.
+     *
+     * <p>对应需求 (转录 C-1): "销售计划→下单→财务审批→流转车间→排产闭环, 财务审批完流到张权按订单排产".
+     * 在此之前任何 production:read_write 角色可对未审订单排产, 绕过财务. 此校验堵住该缺口.
+     *
+     * <p>放行条件: SO 状态为 FINANCE_APPROVED 或其后续态 (PROCESSING / PARTIAL_DELIVERED / COMPLETED),
+     * 即已通过财审且尚未取消的订单. 拒绝条件: 审批前态 (DRAFT / CONFIRMED / PENDING_FINANCE_REVIEW /
+     * FINANCE_REJECTED) 或 CANCELLED. 仅对 CUSTOMER_ORDER 源生效; SAFETY_STOCK 等非客户订单源无 SO, 不经过此校验.
+     *
+     * <p>仅约束新建计划, 不回溯历史数据 (无 DB 约束).
+     *
+     * @param so         已校验属于本工厂的销售订单
+     * @param hintTarget 防呆提示定位字段 (sourceOrderId 或 sourceOrderItemId)
+     */
+    private void assertSalesOrderFinanceApproved(SalesOrder so, String hintTarget) {
+        SalesOrderStatus status = so.getStatus();
+        boolean approved = status == SalesOrderStatus.FINANCE_APPROVED
+                || status == SalesOrderStatus.PROCESSING
+                || status == SalesOrderStatus.PARTIAL_DELIVERED
+                || status == SalesOrderStatus.COMPLETED;
+        if (!approved) {
+            String statusLabel = status != null ? status.getDisplayName() : "未知";
+            throw new BusinessException(409,
+                    "该销售订单未通过财务审核 (当前状态: " + statusLabel + "), 无法排产")
+                    .withHint("请先提交财审, 待财务审核通过后再创建生产计划")
+                    .withHintTarget(hintTarget);
         }
     }
 
