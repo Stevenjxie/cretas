@@ -2,24 +2,43 @@
  * U2 — chartInsight.ts TDD spec (2026-06-10).
  *
  * Phase 1 covers TREND + RANKING families.
+ * Phase 2 (U2 task) adds PROPORTION + COMPARISON + KPI families.
+ * U3 task adds deriveChartMeta.
+ *
  * Contracts (from spec §2.3 + plan U2):
  *   - TREND (xDim='time', LINE): ≥4 points; finding = direction + 涨跌幅
  *   - RANKING (xDim ∈ store/product/category, BAR): ≥2 with measurable diff;
  *       finding = 头尾倍差 + 头部占比
+ *   - PROPORTION (PIE): ≥2 slices → "X 占 N%, 前二占 M%"; no absolute ¥
+ *   - COMPARISON: 2 series → "A 较 B 高 N%"; no absolute ¥
+ *   - KPI: actual+target → "达成 N%"; finance guard: no absolute ¥ when !canViewFinance
  *   - Data insufficient → null (no fabrication per "禁止降级")
  *   - RBAC: yMetric ∈ {revenue,margin,cost} + !canViewFinance → only ratios/%,
  *       NEVER absolute ¥ values
  *   - Suggestion verbs: observation only; NO causal-prescriptive verbs
  *   - meta absent → null (graceful, no crash)
  *
+ * U3 contracts:
+ *   - deriveChartMeta: returns ChartMeta | null from plan/columns/dataInfo heuristics
+ *   - Expanded xDim word table: 供应商|客户|批次|部门|工序|原材料|科目|渠道|平台
+ *   - Expanded yMetric word table: 损耗|领料|采购|费用|应收|应付
+ *   - Insufficient clues → null (never throws)
+ *
  * Gold-wire additions (2026-06-10):
- *   - PIE chartType → buildChartInsight returns null (PROPORTION Phase2)
+ *   - PIE chartType → buildChartInsight now routes to PROPORTION (not null)
  *   - computeDataPattern: ranking/proportion buckets + trend monotonicity
  *   - fetchTier2Insight: HTTP mock tests (success, data:null, error → null)
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { buildChartInsight, computeDataPattern } from '../chartInsight';
+import {
+  buildChartInsight,
+  buildProportionInsight,
+  buildComparisonInsight,
+  buildKpiInsight,
+  computeDataPattern,
+  deriveChartMeta,
+} from '../chartInsight';
 import type { ChartWithMeta, UserPermissions } from '../chartInsight';
 
 // ---------------------------------------------------------------------------
@@ -68,8 +87,76 @@ function makeRanking(
   };
 }
 
+/** Build a PIE chart (PROPORTION family) */
+function makePie(
+  slices: Array<{ name: string; value: number }>,
+  yMetric: ChartWithMeta['meta']['yMetric'] = 'revenue',
+): ChartWithMeta {
+  return {
+    chartType: 'pie',
+    title: 'Test Pie',
+    meta: {
+      xDim: 'channel',
+      yMetric,
+      aggregation: 'sum',
+      domain: 'restaurant',
+    },
+    config: {
+      series: [{ type: 'pie', data: slices }],
+    },
+  };
+}
+
+/** Build a COMPARISON chart (2 named series) */
+function makeComparison(
+  serA: { name: string; values: number[] },
+  serB: { name: string; values: number[] },
+  yMetric: ChartWithMeta['meta']['yMetric'] = 'revenue',
+): ChartWithMeta {
+  return {
+    chartType: 'comparison',
+    title: 'Test Comparison',
+    meta: {
+      xDim: 'time',
+      yMetric,
+      aggregation: 'sum',
+      domain: 'restaurant',
+    },
+    config: {
+      series: [
+        { type: 'line', name: serA.name, data: serA.values } as unknown as { type?: string; data?: unknown[] },
+        { type: 'line', name: serB.name, data: serB.values } as unknown as { type?: string; data?: unknown[] },
+      ],
+    },
+  };
+}
+
+/** Build a KPI chart (actual + target as 2-series) */
+function makeKpi(
+  actual: number,
+  target: number,
+  yMetric: ChartWithMeta['meta']['yMetric'] = 'revenue',
+): ChartWithMeta {
+  return {
+    chartType: 'kpi',
+    title: 'Test KPI',
+    meta: {
+      xDim: 'other',
+      yMetric,
+      aggregation: 'sum',
+      domain: 'factory',
+    },
+    config: {
+      series: [
+        { type: 'bar', data: [actual] },
+        { type: 'bar', data: [target] },
+      ],
+    },
+  };
+}
+
 // ---------------------------------------------------------------------------
-// TREND tests
+// TREND tests (existing — must not regress)
 // ---------------------------------------------------------------------------
 
 describe('TREND family', () => {
@@ -128,7 +215,7 @@ describe('TREND family', () => {
 });
 
 // ---------------------------------------------------------------------------
-// RANKING tests
+// RANKING tests (existing — must not regress)
 // ---------------------------------------------------------------------------
 
 describe('RANKING family', () => {
@@ -214,6 +301,367 @@ describe('RANKING family', () => {
     };
     const result = buildChartInsight(chart, financePerms);
     expect(result).not.toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PROPORTION family (U2 — PIE charts)
+// ---------------------------------------------------------------------------
+
+describe('PROPORTION family (U2 — PIE)', () => {
+  it('PIE ≥2 slices → insight with % (not null)', () => {
+    const result = buildChartInsight(
+      makePie([
+        { name: '堂食', value: 600_000 },
+        { name: '外卖', value: 400_000 },
+      ]),
+      financePerms,
+    );
+    expect(result).not.toBeNull();
+    expect(result!.tier).toBe(1);
+    expect(result!.source).toBe('rules');
+    // Finding must contain top label name + %
+    expect(result!.finding).toMatch(/堂食/);
+    expect(result!.finding).toMatch(/\d+(\.\d+)?%/);
+  });
+
+  it('PROPORTION finding format: "X 占 N%, 前二占 M%"', () => {
+    const result = buildProportionInsight(
+      makePie([
+        { name: '堂食', value: 600_000 },
+        { name: '外卖', value: 300_000 },
+        { name: '自取', value: 100_000 },
+      ]),
+      financePerms,
+    );
+    expect(result).not.toBeNull();
+    // Must mention top share and front-2 share
+    expect(result!.finding).toMatch(/占/);
+    expect(result!.finding).toMatch(/前二占/);
+    // Both percentages present
+    const pctMatches = result!.finding.match(/\d+(\.\d+)?%/g);
+    expect(pctMatches).not.toBeNull();
+    expect(pctMatches!.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('PIE <2 slices → null (data insufficient)', () => {
+    const result = buildChartInsight(
+      makePie([{ name: '唯一', value: 1000 }]),
+      financePerms,
+    );
+    expect(result).toBeNull();
+  });
+
+  it('PIE with zero-value slices — only counts positive slices', () => {
+    // Only 1 positive slice → null
+    const result = buildChartInsight(
+      makePie([
+        { name: '堂食', value: 600_000 },
+        { name: '外卖', value: 0 },
+      ]),
+      financePerms,
+    );
+    expect(result).toBeNull();
+  });
+
+  it('PIE chartType uppercase → routes to PROPORTION (not null)', () => {
+    const chart: ChartWithMeta = {
+      chartType: 'PIE',
+      meta: { xDim: 'channel', yMetric: 'revenue', aggregation: 'sum', domain: 'restaurant' },
+      config: {
+        series: [{ type: 'pie', data: [{ name: '堂食', value: 600_000 }, { name: '外卖', value: 400_000 }] }],
+      },
+    };
+    // PIE with 2 valid slices → PROPORTION insight (NOT null)
+    const result = buildChartInsight(chart, financePerms);
+    expect(result).not.toBeNull();
+    expect(result!.tier).toBe(1);
+  });
+
+  it('pie lowercase → routes to PROPORTION insight', () => {
+    const chart: ChartWithMeta = {
+      chartType: 'pie',
+      meta: { xDim: 'channel', yMetric: 'revenue', aggregation: 'sum', domain: 'restaurant' },
+      config: {
+        series: [{ type: 'pie', data: [{ name: '堂食', value: 600_000 }, { name: '外卖', value: 400_000 }] }],
+      },
+    };
+    expect(buildChartInsight(chart, financePerms)).not.toBeNull();
+  });
+
+  it('Pie mixed-case → routes to PROPORTION insight', () => {
+    const chart: ChartWithMeta = {
+      chartType: 'Pie',
+      meta: { xDim: 'channel', yMetric: 'revenue', aggregation: 'sum', domain: 'restaurant' },
+      config: {
+        series: [{ type: 'pie', data: [{ name: 'A', value: 700 }, { name: 'B', value: 300 }] }],
+      },
+    };
+    expect(buildChartInsight(chart, financePerms)).not.toBeNull();
+  });
+
+  it('PROPORTION: no absolute ¥ in finding (always % only)', () => {
+    const ABS_YUAN_RE = /¥[\d,.]+万?亿?|[\d,.]+万?亿?元/;
+    for (const perms of [financePerms, noFinancePerms]) {
+      const result = buildProportionInsight(
+        makePie([
+          { name: '堂食', value: 600_000 },
+          { name: '外卖', value: 400_000 },
+        ]),
+        perms,
+      );
+      expect(result).not.toBeNull();
+      const allText = [result!.finding, result!.implication ?? '', result!.suggestion ?? ''].join(' ');
+      expect(allText).not.toMatch(ABS_YUAN_RE);
+    }
+  });
+
+  it('PROPORTION: no causal-prescriptive verbs', () => {
+    const CAUSAL_RE = /复制|引流|加大|扩张|推广/;
+    const result = buildProportionInsight(
+      makePie([
+        { name: '堂食', value: 600_000 },
+        { name: '外卖', value: 400_000 },
+      ]),
+      financePerms,
+    );
+    expect(result).not.toBeNull();
+    const allText = [result!.finding, result!.implication ?? '', result!.suggestion ?? ''].join(' ');
+    expect(allText).not.toMatch(CAUSAL_RE);
+  });
+
+  it('PROPORTION null contract: meta absent → null', () => {
+    const chart = {
+      chartType: 'pie',
+      config: { series: [{ type: 'pie', data: [{ name: 'A', value: 600 }, { name: 'B', value: 400 }] }] },
+    } as unknown as ChartWithMeta;
+    expect(buildProportionInsight(chart, financePerms)).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// COMPARISON family (U2)
+// ---------------------------------------------------------------------------
+
+describe('COMPARISON family (U2)', () => {
+  it('2 series → finding with % diff "A 较 B 高 N%"', () => {
+    const result = buildComparisonInsight(
+      makeComparison(
+        { name: '本月', values: [150_000, 180_000, 200_000] },
+        { name: '上月', values: [120_000, 130_000, 140_000] },
+      ),
+      financePerms,
+    );
+    expect(result).not.toBeNull();
+    expect(result!.tier).toBe(1);
+    expect(result!.source).toBe('rules');
+    // Finding must mention % diff
+    expect(result!.finding).toMatch(/\d+(\.\d+)?%/);
+    // Must use 较 pattern
+    expect(result!.finding).toMatch(/较/);
+  });
+
+  it('COMPARISON via buildChartInsight (chartType=comparison)', () => {
+    const chart = makeComparison(
+      { name: '今年', values: [500_000] },
+      { name: '去年', values: [400_000] },
+    );
+    const result = buildChartInsight(chart, financePerms);
+    expect(result).not.toBeNull();
+    expect(result!.finding).toMatch(/\d+(\.\d+)?%/);
+  });
+
+  it('COMPARISON: <2 series → null', () => {
+    const chart: ChartWithMeta = {
+      chartType: 'comparison',
+      meta: { xDim: 'time', yMetric: 'revenue', aggregation: 'sum', domain: 'restaurant' },
+      config: {
+        series: [{ type: 'line', data: [100, 200] }],
+      },
+    };
+    expect(buildComparisonInsight(chart, financePerms)).toBeNull();
+  });
+
+  it('COMPARISON: zero base series B → null (no fabrication)', () => {
+    const result = buildComparisonInsight(
+      makeComparison(
+        { name: '本月', values: [100] },
+        { name: '上月', values: [0] },
+      ),
+      financePerms,
+    );
+    expect(result).toBeNull();
+  });
+
+  it('COMPARISON: no absolute ¥ even for finance metrics', () => {
+    const ABS_YUAN_RE = /¥[\d,.]+万?亿?|[\d,.]+万?亿?元/;
+    for (const perms of [financePerms, noFinancePerms]) {
+      const result = buildComparisonInsight(
+        makeComparison(
+          { name: '本月', values: [1_500_000] },
+          { name: '上月', values: [1_200_000] },
+        ),
+        perms,
+      );
+      if (result !== null) {
+        const allText = [result.finding, result.implication ?? '', result.suggestion ?? ''].join(' ');
+        expect(allText).not.toMatch(ABS_YUAN_RE);
+      }
+    }
+  });
+
+  it('COMPARISON: no causal-prescriptive verbs', () => {
+    const CAUSAL_RE = /复制|引流|加大|扩张|推广/;
+    const result = buildComparisonInsight(
+      makeComparison(
+        { name: '今年', values: [500_000] },
+        { name: '去年', values: [400_000] },
+      ),
+      financePerms,
+    );
+    if (result !== null) {
+      const allText = [result.finding, result.implication ?? '', result.suggestion ?? ''].join(' ');
+      expect(allText).not.toMatch(CAUSAL_RE);
+    }
+  });
+
+  it('COMPARISON null contract: meta absent → null', () => {
+    const chart = {
+      chartType: 'comparison',
+      config: { series: [{ data: [100] }, { data: [80] }] },
+    } as unknown as ChartWithMeta;
+    expect(buildComparisonInsight(chart, financePerms)).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// KPI family (U2 — 🔴 ¥守卫 critical)
+// ---------------------------------------------------------------------------
+
+describe('KPI family (U2 — 🔴 finance ¥ guard)', () => {
+  it('KPI: "达成 N%" finding format', () => {
+    const result = buildKpiInsight(makeKpi(85_000, 100_000), financePerms);
+    expect(result).not.toBeNull();
+    expect(result!.tier).toBe(1);
+    expect(result!.source).toBe('rules');
+    expect(result!.finding).toMatch(/达成/);
+    expect(result!.finding).toMatch(/\d+(\.\d+)?%/);
+  });
+
+  it('KPI via buildChartInsight (chartType=kpi)', () => {
+    const result = buildChartInsight(makeKpi(85_000, 100_000), financePerms);
+    expect(result).not.toBeNull();
+    expect(result!.finding).toMatch(/达成/);
+    expect(result!.finding).toMatch(/\d+(\.\d+)?%/);
+  });
+
+  it('KPI 100%+ achievement → ≥100% wording', () => {
+    const result = buildKpiInsight(makeKpi(120_000, 100_000), financePerms);
+    expect(result).not.toBeNull();
+    // 120% achievement
+    expect(result!.finding).toMatch(/120\.0%|达成 1[2-9]/);
+  });
+
+  it('KPI <2 series → null (data insufficient)', () => {
+    const chart: ChartWithMeta = {
+      chartType: 'kpi',
+      meta: { xDim: 'other', yMetric: 'revenue', aggregation: 'sum', domain: 'factory' },
+      config: { series: [{ type: 'bar', data: [80_000] }] },
+    };
+    expect(buildKpiInsight(chart, financePerms)).toBeNull();
+  });
+
+  it('KPI zero target → null (no fabrication)', () => {
+    expect(buildKpiInsight(makeKpi(50_000, 0), financePerms)).toBeNull();
+  });
+
+  it('KPI finance metric + !canViewFinance → ONLY % — NO absolute ¥', () => {
+    const ABS_YUAN_RE = /¥[\d,.]+万?亿?|[\d,.]+万?亿?元/;
+    const result = buildKpiInsight(makeKpi(850_000, 1_000_000, 'revenue'), noFinancePerms);
+    expect(result).not.toBeNull();
+    const allText = [result!.finding, result!.implication ?? '', result!.suggestion ?? ''].join(' ');
+    expect(allText).not.toMatch(ABS_YUAN_RE);
+    // Must still show % (not blank/null finding)
+    expect(result!.finding).toMatch(/\d+(\.\d+)?%/);
+  });
+
+  it('KPI margin + !canViewFinance → only % no ¥', () => {
+    const ABS_YUAN_RE = /¥[\d,.]+万?亿?|[\d,.]+万?亿?元/;
+    const result = buildKpiInsight(makeKpi(350_000, 500_000, 'margin'), noFinancePerms);
+    if (result !== null) {
+      const allText = [result.finding, result.implication ?? '', result.suggestion ?? ''].join(' ');
+      expect(allText).not.toMatch(ABS_YUAN_RE);
+    }
+  });
+
+  it('KPI cost + !canViewFinance → only % no ¥', () => {
+    const ABS_YUAN_RE = /¥[\d,.]+万?亿?|[\d,.]+万?亿?元/;
+    const result = buildKpiInsight(makeKpi(45_000, 50_000, 'cost'), noFinancePerms);
+    if (result !== null) {
+      const allText = [result.finding, result.implication ?? '', result.suggestion ?? ''].join(' ');
+      expect(allText).not.toMatch(ABS_YUAN_RE);
+    }
+  });
+
+  it('KPI quantity metric + !canViewFinance → valid insight (non-finance metric, no ¥ restriction)', () => {
+    const result = buildKpiInsight(makeKpi(800, 1000, 'quantity'), noFinancePerms);
+    expect(result).not.toBeNull();
+    expect(result!.finding).toMatch(/\d+(\.\d+)?%/);
+  });
+
+  it('KPI: no causal-prescriptive verbs', () => {
+    const CAUSAL_RE = /复制|引流|加大|扩张|推广/;
+    const result = buildKpiInsight(makeKpi(85_000, 100_000), financePerms);
+    if (result !== null) {
+      const allText = [result.finding, result.implication ?? '', result.suggestion ?? ''].join(' ');
+      expect(allText).not.toMatch(CAUSAL_RE);
+    }
+  });
+
+  it('KPI null contract: meta absent → null', () => {
+    const chart = {
+      chartType: 'kpi',
+      config: { series: [{ data: [80_000] }, { data: [100_000] }] },
+    } as unknown as ChartWithMeta;
+    expect(buildKpiInsight(chart, financePerms)).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// showAbsolute dead code regression (U2 fix)
+// ---------------------------------------------------------------------------
+
+describe('showAbsolute dead code removed — RANKING output consistent', () => {
+  it('RANKING finance user: finding uses ratio + % (no absolute ¥ was ever output)', () => {
+    const ABS_YUAN_RE = /¥[\d,.]+万?亿?|[\d,.]+万?亿?元/;
+    const result = buildChartInsight(
+      makeRanking([
+        { label: '大融城店', value: 1_200_000 },
+        { label: '万象城店', value: 400_000 },
+      ], 'revenue'),
+      financePerms,
+    );
+    expect(result).not.toBeNull();
+    // Both finance and non-finance should have identical structure (ratio/%)
+    expect(result!.finding).toMatch(/\d+(\.\d+)?倍/);
+    expect(result!.finding).toMatch(/\d+(\.\d+)?%/);
+    // No absolute ¥
+    expect(result!.finding).not.toMatch(ABS_YUAN_RE);
+  });
+
+  it('RANKING non-finance user: same finding structure as finance user (showAbsolute gone)', () => {
+    const resultFin = buildChartInsight(
+      makeRanking([{ label: 'A', value: 300 }, { label: 'B', value: 100 }], 'revenue'),
+      financePerms,
+    );
+    const resultNoFin = buildChartInsight(
+      makeRanking([{ label: 'A', value: 300 }, { label: 'B', value: 100 }], 'revenue'),
+      noFinancePerms,
+    );
+    expect(resultFin).not.toBeNull();
+    expect(resultNoFin).not.toBeNull();
+    // Both produce same ratio/% output (showAbsolute was dead code — both branches were identical)
+    expect(resultFin!.finding).toBe(resultNoFin!.finding);
   });
 });
 
@@ -309,6 +757,9 @@ describe('RBAC — finance metric gating (§2.6 red line)', () => {
         { label: '大店', value: 900_000 },
         { label: '小店', value: 300_000 },
       ]),
+      makePie([{ name: '堂食', value: 600_000 }, { name: '外卖', value: 400_000 }]),
+      makeComparison({ name: '今年', values: [500_000] }, { name: '去年', values: [400_000] }),
+      makeKpi(85_000, 100_000),
     ];
     for (const chart of cases) {
       for (const perms of [financePerms, noFinancePerms]) {
@@ -414,11 +865,11 @@ describe('InsightResult shape', () => {
 });
 
 // ---------------------------------------------------------------------------
-// PIE chartType → PROPORTION Phase2 → buildChartInsight returns null
+// PIE chartType → now routes to PROPORTION (changed from Phase1 null contract)
 // ---------------------------------------------------------------------------
 
-describe('PIE chartType → PROPORTION Phase2 (null, not yet implemented)', () => {
-  it('PIE uppercase → null', () => {
+describe('PIE chartType → PROPORTION (U2: not null when ≥2 slices)', () => {
+  it('PIE uppercase with 2 valid slices → insight (not null)', () => {
     const chart: ChartWithMeta = {
       chartType: 'PIE',
       meta: { xDim: 'channel', yMetric: 'revenue', aggregation: 'sum', domain: 'restaurant' },
@@ -426,10 +877,10 @@ describe('PIE chartType → PROPORTION Phase2 (null, not yet implemented)', () =
         series: [{ type: 'pie', data: [{ name: '堂食', value: 600000 }, { name: '外卖', value: 400000 }] }],
       },
     };
-    expect(buildChartInsight(chart, financePerms)).toBeNull();
+    expect(buildChartInsight(chart, financePerms)).not.toBeNull();
   });
 
-  it('pie lowercase → null', () => {
+  it('pie lowercase with 2 valid slices → insight (not null)', () => {
     const chart: ChartWithMeta = {
       chartType: 'pie',
       meta: { xDim: 'channel', yMetric: 'revenue', aggregation: 'sum', domain: 'restaurant' },
@@ -437,15 +888,27 @@ describe('PIE chartType → PROPORTION Phase2 (null, not yet implemented)', () =
         series: [{ type: 'pie', data: [{ name: '堂食', value: 600000 }, { name: '外卖', value: 400000 }] }],
       },
     };
-    expect(buildChartInsight(chart, financePerms)).toBeNull();
+    expect(buildChartInsight(chart, financePerms)).not.toBeNull();
   });
 
-  it('Pie mixed-case → null', () => {
+  it('Pie mixed-case with 2 valid slices → insight (not null)', () => {
     const chart: ChartWithMeta = {
       chartType: 'Pie',
       meta: { xDim: 'channel', yMetric: 'revenue', aggregation: 'sum', domain: 'restaurant' },
+      config: {
+        series: [{ type: 'pie', data: [{ name: 'A', value: 700 }, { name: 'B', value: 300 }] }],
+      },
+    };
+    expect(buildChartInsight(chart, financePerms)).not.toBeNull();
+  });
+
+  it('PIE with empty config → null (insufficient data)', () => {
+    const chart: ChartWithMeta = {
+      chartType: 'PIE',
+      meta: { xDim: 'channel', yMetric: 'revenue', aggregation: 'sum', domain: 'restaurant' },
       config: { series: [] },
     };
+    // No slices → null (data insufficient, not fabricated)
     expect(buildChartInsight(chart, financePerms)).toBeNull();
   });
 });
@@ -504,9 +967,7 @@ describe('computeDataPattern', () => {
     // proportionMeta xDim='channel' — non-time. computeDataPattern doesn't know chartType
     // so we use a convention: proportion prefix if meta.xDim is 'channel'.
     // Spec: "proportion: for PIE meta" — we detect via xDim='channel' in proportion context
-    // Actually the spec says prefix 'proportion:' for PIE meta — we'll pass chartType separately.
-    // The function signature is computeDataPattern(meta, values, labels) — let's check:
-    // The task spec says "Prefix proportion: for PIE meta" — we detect that the
+    // Actually the spec says prefix 'proportion:' for PIE meta — we detect that the
     // calling context for channel PIE uses proportion prefix. This is implemented by
     // checking meta internally. Let's verify implementation handles this.
     const pattern = computeDataPattern(proportionMeta!, [60, 40], ['堂食', '外卖']);
@@ -550,6 +1011,255 @@ describe('computeDataPattern', () => {
     expect(() => computeDataPattern(rankingMeta!, [], [])).not.toThrow();
     const pattern = computeDataPattern(rankingMeta!, [], []);
     expect(pattern).toMatch(/^other/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// U3 — deriveChartMeta: heuristic inference with expanded word tables
+// ---------------------------------------------------------------------------
+
+describe('U3 — deriveChartMeta', () => {
+  // -------- xDim: time --------
+  it('xField = "月份" → xDim=time', () => {
+    const meta = deriveChartMeta({ xField: '月份', yFields: ['营收'], chartType: 'line' }, [], '');
+    expect(meta).not.toBeNull();
+    expect(meta!.xDim).toBe('time');
+  });
+
+  it('xField = "日期" → xDim=time', () => {
+    const meta = deriveChartMeta({ xField: '日期', yFields: ['营收'] }, [], '');
+    expect(meta).not.toBeNull();
+    expect(meta!.xDim).toBe('time');
+  });
+
+  it('monthly columns (YYYY-MM format) → xDim=time', () => {
+    const meta = deriveChartMeta({ yFields: ['营收'] }, ['2026-01', '2026-02', '2026-03'], '');
+    expect(meta?.xDim).toBe('time');
+  });
+
+  // -------- xDim: store --------
+  it('xField = "门店" → xDim=store', () => {
+    const meta = deriveChartMeta({ xField: '门店', yFields: ['营收'] }, [], '');
+    expect(meta?.xDim).toBe('store');
+  });
+
+  // -------- xDim: product --------
+  it('xField = "品名" → xDim=product', () => {
+    const meta = deriveChartMeta({ xField: '品名', yFields: ['数量'] }, [], '');
+    expect(meta?.xDim).toBe('product');
+  });
+
+  it('xField = "原材料" → xDim=product (U3 expanded)', () => {
+    const meta = deriveChartMeta({ xField: '原材料', yFields: ['领料'] }, [], '');
+    expect(meta?.xDim).toBe('product');
+  });
+
+  it('xField = "物料" → xDim=product (U3 expanded)', () => {
+    const meta = deriveChartMeta({ xField: '物料', yFields: ['采购金额'] }, [], '');
+    expect(meta?.xDim).toBe('product');
+  });
+
+  // -------- xDim: channel (渠道/平台) --------
+  it('xField = "渠道" → xDim=channel (U3 expanded)', () => {
+    const meta = deriveChartMeta({ xField: '渠道', yFields: ['营收'] }, [], '');
+    expect(meta?.xDim).toBe('channel');
+  });
+
+  it('xField = "平台" → xDim=channel (U3 expanded)', () => {
+    const meta = deriveChartMeta({ xField: '平台', yFields: ['销售额'] }, [], '');
+    expect(meta?.xDim).toBe('channel');
+  });
+
+  // -------- xDim: category (供应商/客户/批次/部门/工序/科目) --------
+  it('xField = "供应商" → xDim=category (U3 expanded)', () => {
+    const meta = deriveChartMeta({ xField: '供应商', yFields: ['采购金额'] }, [], '');
+    expect(meta?.xDim).toBe('category');
+  });
+
+  it('xField = "客户" → xDim=category (U3 expanded)', () => {
+    const meta = deriveChartMeta({ xField: '客户', yFields: ['销售额'] }, [], '');
+    expect(meta?.xDim).toBe('category');
+  });
+
+  it('xField = "批次" → xDim=category (U3 expanded)', () => {
+    const meta = deriveChartMeta({ xField: '批次', yFields: ['产量'] }, [], '');
+    expect(meta?.xDim).toBe('category');
+  });
+
+  it('xField = "部门" → xDim=category (U3 expanded)', () => {
+    const meta = deriveChartMeta({ xField: '部门', yFields: ['费用金额'] }, [], '');
+    expect(meta?.xDim).toBe('category');
+  });
+
+  it('xField = "工序" → xDim=category (U3 expanded)', () => {
+    // '件数' → quantity; 工序 → category
+    const meta = deriveChartMeta({ xField: '工序', yFields: ['件数'] }, [], '');
+    expect(meta?.xDim).toBe('category');
+  });
+
+  it('xField = "科目" → xDim=category (U3 expanded)', () => {
+    const meta = deriveChartMeta({ xField: '科目', yFields: ['金额'] }, [], '');
+    expect(meta?.xDim).toBe('category');
+  });
+
+  // -------- yMetric: revenue --------
+  it('yFields includes "营收" → yMetric=revenue', () => {
+    const meta = deriveChartMeta({ xField: '月份', yFields: ['营收'] }, [], '');
+    expect(meta?.yMetric).toBe('revenue');
+  });
+
+  it('yFields includes "销售额" → yMetric=revenue', () => {
+    const meta = deriveChartMeta({ xField: '门店', yFields: ['销售额'] }, [], '');
+    expect(meta?.yMetric).toBe('revenue');
+  });
+
+  // -------- yMetric: margin --------
+  it('yFields includes "毛利" → yMetric=margin', () => {
+    const meta = deriveChartMeta({ xField: '月份', yFields: ['毛利'] }, [], '');
+    expect(meta?.yMetric).toBe('margin');
+  });
+
+  it('yFields includes "利润" → yMetric=margin', () => {
+    const meta = deriveChartMeta({ xField: '月份', yFields: ['利润'] }, [], '');
+    expect(meta?.yMetric).toBe('margin');
+  });
+
+  // -------- yMetric: cost (U3 expanded: 损耗/领料/采购/费用/应收/应付) --------
+  it('yFields includes "成本" → yMetric=cost', () => {
+    const meta = deriveChartMeta({ xField: '月份', yFields: ['成本'] }, [], '');
+    expect(meta?.yMetric).toBe('cost');
+  });
+
+  it('yFields includes "损耗" → yMetric=cost (U3 expanded)', () => {
+    const meta = deriveChartMeta({ xField: '工序', yFields: ['损耗量'] }, [], '');
+    expect(meta?.yMetric).toBe('cost');
+  });
+
+  it('yFields includes "领料" → yMetric=cost (U3 expanded)', () => {
+    const meta = deriveChartMeta({ xField: '批次', yFields: ['领料金额'] }, [], '');
+    expect(meta?.yMetric).toBe('cost');
+  });
+
+  it('yFields includes "采购" → yMetric=cost (U3 expanded)', () => {
+    const meta = deriveChartMeta({ xField: '供应商', yFields: ['采购金额'] }, [], '');
+    expect(meta?.yMetric).toBe('cost');
+  });
+
+  it('yFields includes "费用" → yMetric=cost (U3 expanded)', () => {
+    const meta = deriveChartMeta({ xField: '部门', yFields: ['费用金额'] }, [], '');
+    expect(meta?.yMetric).toBe('cost');
+  });
+
+  it('yFields includes "应付" → yMetric=cost (U3 expanded)', () => {
+    const meta = deriveChartMeta({ xField: '供应商', yFields: ['应付金额'] }, [], '');
+    expect(meta?.yMetric).toBe('cost');
+  });
+
+  // -------- yMetric: quantity --------
+  it('yFields includes "数量" → yMetric=quantity', () => {
+    const meta = deriveChartMeta({ xField: '品名', yFields: ['数量'] }, [], '');
+    expect(meta?.yMetric).toBe('quantity');
+  });
+
+  it('yFields includes "件数" → yMetric=quantity', () => {
+    const meta = deriveChartMeta({ xField: '工序', yFields: ['件数'] }, [], '');
+    expect(meta?.yMetric).toBe('quantity');
+  });
+
+  // -------- yMetric: pct --------
+  it('yFields includes "占比" → yMetric=pct', () => {
+    const meta = deriveChartMeta({ xField: '渠道', yFields: ['占比'] }, [], '');
+    expect(meta?.yMetric).toBe('pct');
+  });
+
+  it('yFields includes "完成率" → yMetric=pct', () => {
+    const meta = deriveChartMeta({ xField: '工序', yFields: ['完成率'] }, [], '');
+    expect(meta?.yMetric).toBe('pct');
+  });
+
+  // -------- dataInfo fallback --------
+  it('dataInfo contains "渠道营收" without explicit xField → infer from dataInfo', () => {
+    const meta = deriveChartMeta({}, [], '渠道营收分析');
+    expect(meta).not.toBeNull();
+    // "渠道" → channel, "营收" → revenue
+    expect(meta?.xDim).toBe('channel');
+    expect(meta?.yMetric).toBe('revenue');
+  });
+
+  it('dataInfo contains "供应商采购成本" → infer category + cost', () => {
+    const meta = deriveChartMeta({}, [], '供应商采购成本分析');
+    expect(meta).not.toBeNull();
+    expect(meta?.xDim).toBe('category');
+    expect(meta?.yMetric).toBe('cost');
+  });
+
+  // -------- aggregation inference --------
+  it('yField with 平均 → aggregation=avg', () => {
+    const meta = deriveChartMeta({ xField: '月份', yFields: ['平均营收'] }, [], '');
+    expect(meta?.aggregation).toBe('avg');
+  });
+
+  it('default aggregation → sum', () => {
+    const meta = deriveChartMeta({ xField: '月份', yFields: ['营收'] }, [], '');
+    expect(meta?.aggregation).toBe('sum');
+  });
+
+  // -------- domain inference --------
+  it('dataInfo "门店" → domain=restaurant', () => {
+    const meta = deriveChartMeta({ xField: '门店', yFields: ['营收'] }, [], '门店营收分析');
+    expect(meta?.domain).toBe('restaurant');
+  });
+
+  it('dataInfo "应收" → domain=finance', () => {
+    const meta = deriveChartMeta({ xField: '科目', yFields: ['应收金额'] }, [], '财务应收分析');
+    expect(meta?.domain).toBe('finance');
+  });
+
+  it('no domain clue → domain=factory (default)', () => {
+    const meta = deriveChartMeta({ xField: '月份', yFields: ['产量'] }, [], '');
+    expect(meta?.domain).toBe('factory');
+  });
+
+  // -------- null contracts --------
+  it('no clues at all → null (insufficient)', () => {
+    const meta = deriveChartMeta({}, [], '');
+    expect(meta).toBeNull();
+  });
+
+  it('null plan → null (insufficient)', () => {
+    const meta = deriveChartMeta(null, [], '');
+    expect(meta).toBeNull();
+  });
+
+  it('undefined plan → null (no throw)', () => {
+    expect(() => deriveChartMeta(undefined, [], '')).not.toThrow();
+    const meta = deriveChartMeta(undefined, [], '');
+    expect(meta).toBeNull();
+  });
+
+  it('only xDim clue, no yMetric → null (insufficient)', () => {
+    const meta = deriveChartMeta({ xField: '月份' }, [], '');
+    expect(meta).toBeNull();
+  });
+
+  it('only yMetric clue, no xDim → null (insufficient)', () => {
+    const meta = deriveChartMeta({ yFields: ['营收'] }, [], '');
+    expect(meta).toBeNull();
+  });
+
+  it('function never throws on malformed input', () => {
+    expect(() => deriveChartMeta(null, [], '')).not.toThrow();
+    expect(() => deriveChartMeta({}, [], '')).not.toThrow();
+    expect(() => deriveChartMeta({ xField: '月份', yFields: ['营收'] }, [], '')).not.toThrow();
+  });
+
+  it('return value satisfies ChartMeta shape when non-null', () => {
+    const meta = deriveChartMeta({ xField: '月份', yFields: ['营收'] }, [], '');
+    expect(meta).not.toBeNull();
+    expect(['time', 'store', 'product', 'channel', 'category', 'other']).toContain(meta!.xDim);
+    expect(['revenue', 'quantity', 'margin', 'cost', 'count', 'pct', 'other']).toContain(meta!.yMetric);
+    expect(['sum', 'avg', 'max', 'count']).toContain(meta!.aggregation);
+    expect(['restaurant', 'factory', 'finance']).toContain(meta!.domain);
   });
 });
 

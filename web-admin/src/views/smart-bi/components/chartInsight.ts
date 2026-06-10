@@ -2,7 +2,7 @@
  * U2 — Chart Auto-Insight Tier 1 (rules-first, 0 LLM token) + Tier 2 gateway.
  *
  * Phase 1: TREND + RANKING families (Tier 1).
- * Phase 2 (partial): PIE/PROPORTION → Tier 1 returns null → callers invoke fetchTier2Insight.
+ * Phase 2 (U2 task): PROPORTION + COMPARISON + KPI families added.
  *
  * Reads chart._meta (ChartMeta, supplied by backend U1) + userPermissions,
  * produces a structured InsightResult or null (data insufficient → no display).
@@ -14,8 +14,17 @@
  *   NEVER causal-prescriptive (复制/引流/加大/扩张/推广)
  * - Replaces getChartMiniInsight() in SmartBIAnalysis.vue (single Tier 1 source)
  *
+ * U2 additions (2026-06-10):
+ * - PROPORTION family (PIE chartType): ≥2 slices → "X 占 N%, 前二占 M%"
+ * - COMPARISON family: 2 comparable series → "A 较 B 高 N%"
+ * - KPI family: actual+target → "达成 N%"; finance guard: only %, NEVER absolute ¥
+ * - Removed showAbsolute dead code in RANKING (both branches were identical)
+ * - PIE chartType now routes to PROPORTION (no longer always null)
+ *
+ * U3 addition (2026-06-10):
+ * - deriveChartMeta: heuristic ChartMeta inference from plan/column names with expanded word tables
+ *
  * Gold-wire additions (2026-06-10):
- * - PIE chartType → Tier 1 returns null (PROPORTION Phase 2, not yet implemented)
  * - computeDataPattern: deterministic canonical bucket string for Tier 2 request
  * - fetchTier2Insight: async POST to /api/smartbi/chart-insight; honest-null on failure
  */
@@ -108,6 +117,9 @@ function extractLabels(config: ChartWithMeta['config']): string[] {
 /**
  * Format a percentage to 1 decimal place (e.g. 0.235 → "23.5%").
  * Used for ratio-only display when finance gated.
+ *
+ * Note: slot values like {topShare} already include the '%' character.
+ * Templates must not add a second '%' after these slots.
  */
 function fmtPct(ratio: number): string {
   return (ratio * 100).toFixed(1) + '%';
@@ -150,7 +162,6 @@ function buildTrendInsight(
   const mono = monotonicity(values);
 
   const isFinanceMetric = FINANCE_METRICS.has(chart.meta!.yMetric);
-  const showAbsolute = isFinanceMetric ? permissions.canViewFinance : true;
 
   let direction: '上升' | '下降' | '平稳';
   if (absChangePct <= TREND_FLAT_THRESHOLD) {
@@ -161,7 +172,7 @@ function buildTrendInsight(
     direction = '下降';
   }
 
-  // Build finding sentence
+  // Build finding sentence — always uses % ratios, never absolute ¥
   let finding: string;
   if (direction === '平稳') {
     finding = `趋势平稳，区间波动 ${fmtPct(absChangePct)} 以内`;
@@ -193,17 +204,13 @@ function buildTrendInsight(
     suggestion = '排查下降时段的异常，了解环境因素变化。';
   }
 
-  // RBAC: finance metric without permission → remove any possible absolute value leakage
-  // (Our finding uses only %, so this is already safe, but guard explicitly)
+  // RBAC: finance metric without permission → strip any possible absolute value leakage
+  // Finding uses only % ratios so already safe; belt-and-suspenders regex guard below
   if (isFinanceMetric && !permissions.canViewFinance) {
-    // Strip any absolute values pattern defensively (belt-and-suspenders)
     const absPattern = /¥[\d,.]+万?亿?|[\d,.]+万?亿?元/g;
     finding = finding.replace(absPattern, '(已脱敏)');
     if (implication) implication = implication.replace(absPattern, '(已脱敏)');
   }
-
-  // Suppress unused showAbsolute variable (used as guard; values here are %-only anyway)
-  void showAbsolute;
 
   return {
     finding,
@@ -245,21 +252,13 @@ function buildRankingInsight(
 
   const topSharePct = (top.value / total) * 100;
   const isFinanceMetric = FINANCE_METRICS.has(chart.meta!.yMetric);
-  const showAbsolute = isFinanceMetric ? permissions.canViewFinance : true;
 
-  // Build finding — always includes ratio (dimensionless, safe) + top-share %
+  // Build finding — always uses ratio (dimensionless, safe) + top-share % — no absolute ¥
+  // Both finance and non-finance users get ratio/% output; this is always safe
   const ratioStr = ratio.toFixed(1) + '倍';
   const topShareStr = topSharePct.toFixed(1) + '%';
 
-  let finding: string;
-  if (showAbsolute) {
-    // Finance users (or non-finance metrics): can mention absolute values
-    // But for simplicity and safety, we still use ratios/% which is always valid
-    finding = `${top.label} 排名最高，是末位 ${bottom.label} 的 ${ratioStr}；占合计 ${topShareStr}`;
-  } else {
-    // Non-finance users: only ratios and percentages — no absolute ¥
-    finding = `${top.label} 排名最高，是末位 ${bottom.label} 的 ${ratioStr}；占合计 ${topShareStr}`;
-  }
+  const finding = `${top.label} 排名最高，是末位 ${bottom.label} 的 ${ratioStr}；占合计 ${topShareStr}`;
 
   // Implication
   const implication =
@@ -273,6 +272,304 @@ function buildRankingInsight(
     suggestion = `关注 ${top.label} 与末位差距原因，分析各项目结构差异。`;
   } else {
     suggestion = `了解各项目间的差异因素，分析是否存在改进空间。`;
+  }
+
+  // RBAC belt-and-suspenders: strip any absolute ¥ if finance-gated
+  // (finding already only uses ratios/% so this is defensive only)
+  if (isFinanceMetric && !permissions.canViewFinance) {
+    const absPattern = /¥[\d,.]+万?亿?|[\d,.]+万?亿?元/g;
+    return {
+      finding: finding.replace(absPattern, '(已脱敏)'),
+      implication: implication.replace(absPattern, '(已脱敏)'),
+      suggestion: suggestion?.replace(absPattern, '(已脱敏)'),
+      source: 'rules',
+      tier: 1,
+    };
+  }
+
+  return {
+    finding,
+    implication,
+    suggestion,
+    source: 'rules',
+    tier: 1,
+  };
+}
+
+// ============================================================
+// PROPORTION family generator (U2 — PIE charts)
+// ============================================================
+
+/**
+ * Extract PIE series slices: [{label, value}] from config.series[0].data[].
+ * Each item may be {name, value} object or bare number.
+ */
+function extractPieSlices(config: ChartWithMeta['config']): Array<{ label: string; value: number }> {
+  const series = config?.series;
+  if (!series?.length) return [];
+  const s = series[0];
+  if (!Array.isArray(s.data)) return [];
+  const result: Array<{ label: string; value: number }> = [];
+  let idx = 0;
+  for (const d of s.data) {
+    if (typeof d === 'number' && isFinite(d)) {
+      result.push({ label: `项目${idx + 1}`, value: d });
+    } else if (d !== null && typeof d === 'object') {
+      const obj = d as { name?: unknown; value?: unknown };
+      const v = obj.value;
+      const n = obj.name;
+      if (typeof v === 'number' && isFinite(v)) {
+        result.push({ label: String(n ?? `项目${idx + 1}`), value: v });
+      }
+    }
+    idx++;
+  }
+  return result;
+}
+
+/**
+ * Build a Tier 1 insight for PROPORTION (PIE) charts.
+ *
+ * Contract:
+ * - ≥2 positive slices required; otherwise null
+ * - Finding: "X 占 {topShare}, 前二占 {top2Share}" (always % — no absolute ¥)
+ * - Observation verbs only in suggestion; no causal prescriptions
+ * - RBAC: finance yMetric + !canViewFinance → output only %, NEVER ¥
+ */
+export function buildProportionInsight(
+  chart: ChartWithMeta,
+  permissions: UserPermissions,
+): InsightResult | null {
+  if (!chart?.meta) return null;
+
+  const slices = extractPieSlices(chart.config).filter((s) => s.value > 0);
+  if (slices.length < 2) return null;
+
+  const sorted = [...slices].sort((a, b) => b.value - a.value);
+  const total = sorted.reduce((s, p) => s + p.value, 0);
+  if (total <= 0) return null;
+
+  const top = sorted[0];
+  const topShare = (top.value / total) * 100;
+  const top2Share = ((sorted[0].value + sorted[1].value) / total) * 100;
+
+  const topShareStr = topShare.toFixed(1) + '%';
+  const top2ShareStr = top2Share.toFixed(1) + '%';
+
+  // Finding: always % — no absolute ¥ at all (safe for all permission levels)
+  const finding = `${top.label} 占 ${topShareStr}，前二占 ${top2ShareStr}`;
+
+  // Implication
+  const implication =
+    topShare >= 50
+      ? `头部集中，${top.label} 占比超过一半。`
+      : `各组成部分分布相对均衡，最大项占比 ${topShareStr}。`;
+
+  // Suggestion — observation verbs only; no causal prescriptions
+  let suggestion: string | undefined;
+  if (topShare >= 70) {
+    suggestion = `关注 ${top.label} 的占比变化趋势，了解各类别构成是否稳定。`;
+  } else {
+    suggestion = `分析各组成部分的变动，了解结构变化的驱动因素。`;
+  }
+
+  // RBAC belt-and-suspenders (finding already has no ¥, defensive only)
+  const isFinanceMetric = FINANCE_METRICS.has(chart.meta.yMetric);
+  if (isFinanceMetric && !permissions.canViewFinance) {
+    const absPattern = /¥[\d,.]+万?亿?|[\d,.]+万?亿?元/g;
+    return {
+      finding: finding.replace(absPattern, '(已脱敏)'),
+      implication: implication.replace(absPattern, '(已脱敏)'),
+      suggestion: suggestion?.replace(absPattern, '(已脱敏)'),
+      source: 'rules',
+      tier: 1,
+    };
+  }
+
+  return {
+    finding,
+    implication,
+    suggestion,
+    source: 'rules',
+    tier: 1,
+  };
+}
+
+// ============================================================
+// COMPARISON family generator (U2 — 2 comparable series)
+// ============================================================
+
+/**
+ * Build a Tier 1 insight for COMPARISON charts (2 comparable series).
+ *
+ * Contract:
+ * - Exactly 2 series with at least 1 value each; otherwise null
+ * - Finding: "A 较 B 高 N%" (uses only %, NEVER ¥ even for finance metrics)
+ * - Observation verbs only; no causal prescriptions
+ * - RBAC: finance yMetric + !canViewFinance → only % — NEVER absolute ¥
+ */
+export function buildComparisonInsight(
+  chart: ChartWithMeta,
+  permissions: UserPermissions,
+): InsightResult | null {
+  if (!chart?.meta) return null;
+
+  const series = chart.config?.series;
+  if (!series || series.length < 2) return null;
+
+  // Extract aggregate (sum) per series
+  const seriesValues: Array<{ name: string; total: number }> = [];
+  for (let i = 0; i < Math.min(series.length, 2); i++) {
+    const s = series[i];
+    if (!Array.isArray(s.data)) continue;
+    let total = 0;
+    for (const d of s.data) {
+      if (typeof d === 'number' && isFinite(d)) {
+        total += d;
+      } else if (d !== null && typeof d === 'object' && 'value' in d) {
+        const v = (d as { value?: unknown }).value;
+        if (typeof v === 'number' && isFinite(v)) total += v;
+      }
+    }
+    // Series name from config — often stored as series[i].name in ECharts
+    const sName = (s as { name?: unknown }).name;
+    seriesValues.push({ name: String(sName ?? `系列${i + 1}`), total });
+  }
+
+  if (seriesValues.length < 2) return null;
+
+  const [serA, serB] = seriesValues;
+
+  // Need non-zero base to compute meaningful % difference
+  if (serB.total === 0 && serA.total === 0) return null;
+  if (serB.total === 0) {
+    // Can't compute ratio from zero base — return null (no fabrication)
+    return null;
+  }
+
+  const diffPct = (serA.total - serB.total) / Math.abs(serB.total);
+  const absDiffPct = Math.abs(diffPct);
+
+  // Always use % — NEVER absolute ¥ regardless of permissions
+  const diffStr = fmtPct(absDiffPct);
+  const isHigher = serA.total >= serB.total;
+  const higherName = isHigher ? serA.name : serB.name;
+  const lowerName = isHigher ? serB.name : serA.name;
+
+  const finding = `${higherName} 较 ${lowerName} 高 ${diffStr}`;
+
+  // Implication
+  const implication =
+    absDiffPct >= 0.2
+      ? `两者差距明显（${diffStr}），了解差异成因有助于优化决策。`
+      : `两者差距较小（${diffStr}），指标表现接近。`;
+
+  // Suggestion — observation verbs only
+  const suggestion = `分析两者差距的来源，了解各自影响因素是否存在结构差异。`;
+
+  // RBAC belt-and-suspenders
+  const isFinanceMetric = FINANCE_METRICS.has(chart.meta.yMetric);
+  if (isFinanceMetric && !permissions.canViewFinance) {
+    const absPattern = /¥[\d,.]+万?亿?|[\d,.]+万?亿?元/g;
+    return {
+      finding: finding.replace(absPattern, '(已脱敏)'),
+      implication: implication.replace(absPattern, '(已脱敏)'),
+      suggestion: suggestion.replace(absPattern, '(已脱敏)'),
+      source: 'rules',
+      tier: 1,
+    };
+  }
+
+  return {
+    finding,
+    implication,
+    suggestion,
+    source: 'rules',
+    tier: 1,
+  };
+}
+
+// ============================================================
+// KPI family generator (U2 — actual + target)
+// ============================================================
+
+/**
+ * Build a Tier 1 insight for KPI charts (actual + target or vs last period).
+ *
+ * Contract:
+ * - Requires exactly 2 series: [actual-series, target-series] or [current, prior]
+ * - Finding: "达成 N%" — ONLY %, NEVER absolute ¥ when isFinanceMetric && !canViewFinance
+ * - For finance metrics + no finance permission: strip ALL absolute ¥, output only %
+ * - Observation verbs only; no causal prescriptions
+ *
+ * KPI detection: chart.config.series has exactly 2 entries and meta is provided.
+ * The caller routes to this family by setting chartType='kpi' or via explicit dispatch.
+ */
+export function buildKpiInsight(
+  chart: ChartWithMeta,
+  permissions: UserPermissions,
+): InsightResult | null {
+  if (!chart?.meta) return null;
+
+  const series = chart.config?.series;
+  if (!series || series.length < 2) return null;
+
+  // Extract first numeric value from each series (KPI: single-value series)
+  function firstValue(s: { type?: string; data?: unknown[] }): number | null {
+    if (!Array.isArray(s.data) || s.data.length === 0) return null;
+    const d = s.data[0];
+    if (typeof d === 'number' && isFinite(d)) return d;
+    if (d !== null && typeof d === 'object' && 'value' in d) {
+      const v = (d as { value?: unknown }).value;
+      if (typeof v === 'number' && isFinite(v)) return v;
+    }
+    return null;
+  }
+
+  const actual = firstValue(series[0]);
+  const target = firstValue(series[1]);
+
+  if (actual === null || target === null) return null;
+  if (target === 0) return null; // can't compute achievement % from zero target
+
+  const achievementPct = (actual / target) * 100;
+  const achievementStr = achievementPct.toFixed(1) + '%';
+
+  const isFinanceMetric = FINANCE_METRICS.has(chart.meta.yMetric);
+
+  // KPI ¥ guard: finance metric + no finance permission → ONLY % output, NEVER ¥
+  // The finding itself only uses %, which is always safe
+  const finding = `达成 ${achievementStr}`;
+
+  // Implication
+  let implication: string;
+  if (achievementPct >= 100) {
+    implication = `已完成目标（达成率 ${achievementStr}）。`;
+  } else if (achievementPct >= 80) {
+    implication = `目标完成进度较好（达成率 ${achievementStr}），关注后续趋势。`;
+  } else {
+    implication = `目标完成率偏低（${achievementStr}），建议排查差距原因。`;
+  }
+
+  // Suggestion — observation verbs only
+  let suggestion: string | undefined;
+  if (achievementPct < 80) {
+    suggestion = `排查目标与实际的差距，了解影响达成的关键因素。`;
+  } else if (achievementPct >= 100) {
+    suggestion = `关注超额完成的持续性，分析是否存在系统性有利因素。`;
+  }
+
+  // RBAC: for finance metrics, ensure no absolute ¥ leaks through
+  // (our templates already use only %, but apply belt-and-suspenders)
+  if (isFinanceMetric && !permissions.canViewFinance) {
+    const absPattern = /¥[\d,.]+万?亿?|[\d,.]+万?亿?元/g;
+    return {
+      finding: finding.replace(absPattern, '(已脱敏)'),
+      implication: implication.replace(absPattern, '(已脱敏)'),
+      suggestion: suggestion?.replace(absPattern, '(已脱敏)'),
+      source: 'rules',
+      tier: 1,
+    };
   }
 
   return {
@@ -297,7 +594,14 @@ function buildRankingInsight(
  * @returns  Structured InsightResult, or null when data is insufficient
  *           (caller should render nothing — no fallback fabrication).
  *
- * PIE / PROPORTION family → always null in Phase 1 (Phase 2 not yet implemented).
+ * Family routing:
+ * - PIE / PROPORTION: buildProportionInsight (≥2 slices → insight; <2 → null)
+ * - time xDim: TREND family
+ * - store/product/channel/category xDim: RANKING family
+ * - 'kpi' chartType (explicit): KPI family
+ * - 'comparison' chartType (explicit): COMPARISON family
+ * - otherwise: null (Phase 2+ will add more families)
+ *
  * Callers should fall back to fetchTier2Insight when null is returned.
  */
 export function buildChartInsight(
@@ -307,9 +611,22 @@ export function buildChartInsight(
   // Guard: meta must exist
   if (!chart?.meta) return null;
 
-  // PIE = PROPORTION family → Phase 2, not yet implemented → always null
-  // Callers (e.g. RestaurantGoldGrid) should invoke fetchTier2Insight instead.
-  if (chart.chartType && chart.chartType.toLowerCase() === 'pie') return null;
+  const ct = chart.chartType?.toLowerCase() ?? '';
+
+  // PIE = PROPORTION family (U2: now implemented, not null)
+  if (ct === 'pie') {
+    return buildProportionInsight(chart, permissions);
+  }
+
+  // KPI family: explicit chartType dispatch
+  if (ct === 'kpi') {
+    return buildKpiInsight(chart, permissions);
+  }
+
+  // COMPARISON family: explicit chartType dispatch
+  if (ct === 'comparison') {
+    return buildComparisonInsight(chart, permissions);
+  }
 
   const meta = chart.meta;
 
@@ -323,8 +640,177 @@ export function buildChartInsight(
     return buildRankingInsight(chart, permissions);
   }
 
-  // Unrecognized family in Phase 1 → null (Phase 2 will add PROPORTION/COMPARISON/KPI)
+  // Unrecognized family → null (no fabrication)
   return null;
+}
+
+// ============================================================
+// U3 — deriveChartMeta: heuristic ChartMeta inference
+// ============================================================
+
+/**
+ * Expanded xDim keyword tables (U3).
+ * Each entry: [keyword_pattern, xDim value]
+ * Checked in order — first match wins.
+ */
+const X_DIM_KEYWORDS: Array<[RegExp, ChartMeta['xDim']]> = [
+  // Time dimension
+  [/月|日期|时间|周|季度|年|date|time|week|month|year/i, 'time'],
+  // Store dimension
+  [/门店|店|store/i, 'store'],
+  // Product dimension
+  [/产品|品名|物料|原材料|sku|product/i, 'product'],
+  // Channel dimension — 渠道/平台 map to channel
+  [/渠道|平台|channel|platform/i, 'channel'],
+  // Category dimension — 科目/部门/工序/供应商/客户/批次 map to category
+  [/分类|类别|科目|部门|工序|供应商|客户|批次|category|dept|process/i, 'category'],
+];
+
+/**
+ * Expanded yMetric keyword tables (U3).
+ * Each entry: [keyword_pattern, yMetric value]
+ * Checked in order — first match wins.
+ *
+ * ORDERING NOTE: Cost-specific compound terms (领料/采购/损耗/费用/应付/应收) must
+ * appear BEFORE the generic revenue check because those compound field names like
+ * "领料金额" contain the substring 金额 which would otherwise match revenue first.
+ */
+const Y_METRIC_KEYWORDS: Array<[RegExp, ChartMeta['yMetric']]> = [
+  // Percentage / ratio — check first (占比/完成率 are unambiguous)
+  [/占比|比率|比例|完成率|达成率|pct|percent|rate/i, 'pct'],
+  // Margin / profit — before revenue to avoid "毛利率" matching rate above
+  [/毛利|利润|profit|margin/i, 'margin'],
+  // Cost-specific terms BEFORE generic 金额 revenue check
+  // 损耗/领料/采购/费用/应付/应收 are cost/payable/receivable domain
+  [/成本|损耗|领料|采购|费用|应付|应收|cost|waste|purchase|expense|receivable/i, 'cost'],
+  // Revenue / income — 金额 here is generic fallback (after cost-specific terms above)
+  [/营收|收入|销售额|金额|revenue|income|sales/i, 'revenue'],
+  // Quantity — 产量/件数/单数/次数/人次
+  [/数量|产量|件数|单数|次数|人次|耗时|count|qty|quantity|num/i, 'quantity'],
+];
+
+/**
+ * Infer aggregation from column/metric names (heuristic).
+ */
+function inferAggregation(name: string): ChartMeta['aggregation'] {
+  if (/平均|avg|average|mean/i.test(name)) return 'avg';
+  if (/最大|最高|max/i.test(name)) return 'max';
+  if (/计数|count|数量/i.test(name)) return 'count';
+  return 'sum'; // default
+}
+
+/**
+ * Infer domain from column/context strings.
+ */
+function inferDomain(text: string): ChartMeta['domain'] {
+  if (/餐饮|门店|堂食|外卖|菜品|桌/i.test(text)) return 'restaurant';
+  if (/财务|应收|应付|结账|报表|科目/i.test(text)) return 'finance';
+  return 'factory'; // default
+}
+
+/**
+ * Derive a ChartMeta heuristically from plan/column context.
+ *
+ * @param plan            Plan object — expects {xField?, yFields?, chartType?, title?}
+ * @param monthlyColumns  Column names (array of strings) for time-dimension detection
+ * @param dataInfo        Free-form context string (title, description, domain hints)
+ * @returns ChartMeta when sufficient clues exist, null when clues are insufficient.
+ *          Never throws.
+ *
+ * Word tables (U3 expanded):
+ * - xDim: 时间/月/日期 + 门店/产品/品名/物料/原材料 + 渠道/平台 + 科目/部门/工序/供应商/客户/批次
+ * - yMetric: 营收/收入 + 毛利/利润 + 成本/损耗/领料/采购/费用/应收/应付 + 数量/件数 + 占比/比率
+ *
+ * Phase A consumers: U5 only. The 6 explicit gold/dashboard metas are NOT affected
+ * (they use hand-filled explicit meta; this function is for unmatched charts).
+ */
+export function deriveChartMeta(
+  plan: {
+    xField?: string;
+    yFields?: string[];
+    chartType?: string;
+    title?: string;
+  } | null | undefined,
+  monthlyColumns: string[],
+  dataInfo: string,
+): ChartMeta | null {
+  try {
+    // Collect all text clues
+    const xFieldStr = plan?.xField ?? '';
+    const yFieldsStr = (plan?.yFields ?? []).join(' ');
+    const titleStr = plan?.title ?? '';
+    const allText = [xFieldStr, yFieldsStr, titleStr, dataInfo, ...monthlyColumns].join(' ');
+
+    // ------- infer xDim -------
+    let xDim: ChartMeta['xDim'] | null = null;
+
+    // Check monthly columns first — common pattern for time series
+    if (monthlyColumns.length >= 3) {
+      const monthPattern = /^\d{4}[-年]\d{1,2}月?$|^(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)/i;
+      const hasMonthly = monthlyColumns.some((c) => monthPattern.test(c.trim()));
+      if (hasMonthly) xDim = 'time';
+    }
+
+    // Check xField keywords
+    if (!xDim && xFieldStr) {
+      for (const [re, dim] of X_DIM_KEYWORDS) {
+        if (re.test(xFieldStr)) {
+          xDim = dim;
+          break;
+        }
+      }
+    }
+
+    // Fallback: scan allText for xDim clues
+    if (!xDim) {
+      for (const [re, dim] of X_DIM_KEYWORDS) {
+        if (re.test(allText)) {
+          xDim = dim;
+          break;
+        }
+      }
+    }
+
+    // ------- infer yMetric -------
+    let yMetric: ChartMeta['yMetric'] | null = null;
+
+    // Check yFields first (most specific)
+    if (yFieldsStr) {
+      for (const [re, metric] of Y_METRIC_KEYWORDS) {
+        if (re.test(yFieldsStr)) {
+          yMetric = metric;
+          break;
+        }
+      }
+    }
+
+    // Fallback: scan titleStr + dataInfo
+    if (!yMetric) {
+      const titleAndInfo = `${titleStr} ${dataInfo}`;
+      for (const [re, metric] of Y_METRIC_KEYWORDS) {
+        if (re.test(titleAndInfo)) {
+          yMetric = metric;
+          break;
+        }
+      }
+    }
+
+    // If we can't determine either dimension, return null (insufficient clues)
+    if (!xDim || !yMetric) return null;
+
+    // ------- infer aggregation + domain -------
+    const aggregation = inferAggregation(yFieldsStr || dataInfo);
+    const domain = inferDomain(allText);
+
+    return {
+      xDim,
+      yMetric,
+      aggregation,
+      domain,
+    };
+  } catch {
+    return null;
+  }
 }
 
 // ============================================================
@@ -450,34 +936,11 @@ interface Tier2Response {
  * For PIE: values are in series[0].data[i].value; labels in .name.
  */
 function extractPieValues(config: ChartWithMeta['config']): number[] {
-  const series = config?.series;
-  if (!series?.length) return [];
-  const s = series[0];
-  if (!Array.isArray(s.data)) return [];
-  const result: number[] = [];
-  for (const d of s.data) {
-    if (typeof d === 'number' && isFinite(d)) {
-      result.push(d);
-    } else if (d !== null && typeof d === 'object' && 'value' in d) {
-      const v = (d as { value?: unknown }).value;
-      if (typeof v === 'number' && isFinite(v)) result.push(v);
-    }
-  }
-  return result;
+  return extractPieSlices(config).map((s) => s.value);
 }
 
 function extractPieLabels(config: ChartWithMeta['config']): string[] {
-  const series = config?.series;
-  if (!series?.length) return [];
-  const s = series[0];
-  if (!Array.isArray(s.data)) return [];
-  const result: string[] = [];
-  for (const d of s.data) {
-    if (d !== null && typeof d === 'object' && 'name' in d) {
-      result.push(String((d as { name?: unknown }).name ?? ''));
-    }
-  }
-  return result;
+  return extractPieSlices(config).map((s) => s.label);
 }
 
 /**
