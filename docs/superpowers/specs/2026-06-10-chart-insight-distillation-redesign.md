@@ -1,90 +1,87 @@
-# Chart-Insight 蒸馏/收敛 重设计 (Phase A.5 v2 — Fable 深审后定稿)
+# Chart-Insight 蒸馏/收敛 重设计 (Phase A.5 v3 — Fable 深审 + 3-critic 审计后定稿)
 
 **日期**: 2026-06-10
-**状态**: 设计定稿（Fable 5 破玻璃深审 → Opus 裁定采纳 → Steve 批准换架构）。待 spec self-review → 对抗审计 → writing-plans。
-**触发**: chart-insight 飞轮"生成 clean 但不收敛"。原"受约束蒸馏(反向模板化+3闸)"设计经 Fable 深审被判**根本性有问题**, 换架构。
+**状态**: 设计定稿（Fable 破玻璃深审 → 换架构 → 3-critic 对抗审计 → Opus 裁定收口 → Steve 定调"活 LLM 现用 + corpus 渐进替代"）。待 Steve spec-review → writing-plans。
+**核心定调（Steve）**: **保留活 LLM 实时智能(现在就用), corpus 随使用积累 → 未来自有模型渐进替代 LLM**。不是"不用 LLM"，是"用着用着被自有模型接管"。
 
 ---
 
-## 0. 为什么换架构（Fable 定理 + 核验的 shipped bug）
+## 0. 设计经过（两轮否决，留下的才可靠）
 
-**Fable 定理（Opus 核验成立）**：能通过严格 slot-only validate 的模板 = 8 slot 的确定性函数 = **Tier1 本身**。所以在线反向模板化飞轮缓存的是 Tier1 等价残渣，而 slot 白名单**恰好把 LLM 真正智能的部分拒掉**。Goal1(LLM 智能) 与 Goal2(缓存) 经 slot 白名单 **formal 互斥**。Steve "分析与数据挂钩" 的直觉 = 这条定理。
+**第一版"受约束蒸馏(反向模板化+3闸)"——Fable 否决**：定理 = 能通过严格 slot-only validate 的模板 = 8 slot 的确定性函数 = **Tier1 本身**。在线模板飞轮缓存 Tier1 等价残渣，slot 白名单恰好拒掉 LLM 真智能。Goal1×Goal2 formal 互斥。Steve "分析与数据挂钩"直觉 = 这条定理。
 
-**核验的 shipped 真 bug（prod 实证）**：
-- 🔴 **U1.8 跨租户 RLS 失效**：`ai_insight_templates` FORCE RLS + policy `factory_id=current_setting('app.factory_id')`，但 U1.8 签名去 factoryId 做跨租户共享**没改 RLS policy** → 租户 A 写的模板对租户 B 的 lookup RLS 不可见 → 跨租户共享 dead-on-arrival(静默)。
-- 🔴 **serve 路径幻觉**：`get_insight` 对零-slot 字面 finding 直接 source=llm 返回(`_safe_fill` 无 `{slot}` 残留→原样返回, chart_insight_service.py:433-448)。no-data prompt 下这些数值是 LLM 臆造(违反 no-fake-data)。
-- corpus 零熵(no-data 输入→input_hash 去重塌成几百行, 没法训练分析模型) + 没接线; consensus 投票没实现(U1.7 first-capture-wins); 在线缓存仅省个位数 ¥/天(不值红线面)。
+**第二版"serve+数值校验 / memo缓存"——3-critic 否决两个在线机制**：
+- **memo(降成本) illusory**(critic#2)：全部历史默认 maxDate 每天前移 → data_hash 每天变 → 跨天永不命中；且重造 `narrative_cache`。→ **砍**。
+- **serve 数值校验(保智能+修幻觉) 不干净**(critic#1)：误拒派生 stat(前二合计/补集/n家/约2倍 都不在 8 slot)=**Fable 张力在 stat 边界复现**；误收实体错位幻觉(真数字说错话)；CJK 数词抽取是真 NLP 难题。**自由 prose 既不能安全模板化也不能可靠校验**。
+
+**核验的 shipped 真 bug**：U1.8 跨租户 RLS dead-on-arrival(FORCE RLS factory_id policy 未随签名去 factoryId 而改, prod 实证) / serve 路径可返零-slot 字面(no-data prompt 下=臆造) / `_lookup_template` 没 set `app.factory_id` GUC / 在线 consensus 未实现。
+
+**留下的可靠核**：①Tier1 确定性=安全主力 ②corpus=渐进替代的桥 ③活 LLM serve **靠数据丰富 prompt(让它引用真值而非臆造)+硬 RBAC ¥闸**，残留实体错位风险 Steve 接受("可以用的")，靠 ④未来自有模型逐步接管消化。
 
 ---
 
-## 1. 新架构 — 4 机制, 一目标一机制（一目标一机制, 避免一机制硬扛三目标全砸）
+## 1. 架构 — 4 机制（砍 memo, 活 LLM 保留, corpus 是替代桥）
 
-| 机制 | 服务的目标 | 设计 |
+| 机制 | 目标 | 设计 |
 |---|---|---|
-| **M1 Tier1 = 唯一跨数据复用** | 大多数图 0-token 正确 | 确定性五族(已建) + 人/Opus 审过的 `FIXED_TEMPLATE` 行(离线策展产出, M4)。"重复案例免费"合法住这。 |
-| **M2 Tier2 serve = 数据给 LLM + 数值校验** | 保留实时智能 + 修幻觉 | prompt **附真实 series + 算好的 stats**(让 LLM 引用而非瞎算); serve 前**数值一致性校验**(从 LLM 输出抽数字, 每个须 ≈ 某 computed stat, 容差内; 不符→落 Tier1 或 null, 不返幻觉)。 |
-| **M3 精确数据 memo 缓存** | 降成本(精确, 零跨数据风险) | 新表/缓存 key = `signature_hash + sha256(series_values|series_labels)`, 存**填充后成品**, TTL 小时级, factory-scoped(RLS 一致)。lookup 在 LLM 前; 命中→0-token 返成品。**只对完全相同数据复用** → 精确满足 Steve 质疑。 |
-| **M4 离线策展飞轮** | 收敛(安全) + FIXED_TEMPLATE | 夜间批量 job(本期**仅设计+占位, 不实现**): 聚类 corpus → 离线反向模板化 → 人/Opus 审 → 升 `FIXED_TEMPLATE/is_verified`。poison/validate 机器搬离线(假阳性先见人)。**需 corpus 先积累, 故 M4 实现 defer 到 corpus 有量**。 |
-| **M5 数据丰富语料** | 为未来自有模型 | 每次 LLM 调用→`persist_distillation_sample(source="chart_insight", domain="smartbi")`, input=**数据丰富上下文(series+stats)**, teacher_output=LLM 散文; metadata 存离线反推模板(M4 时)。接入既有统一语料管道。 |
+| **M1 Tier1 = 安全主力 + 唯一跨数据复用** | 多数图 0-token 正确 | 确定性五族(已建) + 离线策展(M4)产 `FIXED_TEMPLATE`。0-token/无幻觉/无¥泄露。**成本控制主力**(配合 budget cap)。 |
+| **M2 活 LLM serve（数据丰富 + RBAC ¥闸）** | 保留实时智能(现用) | Tier1 未命中→LLM。**prompt 喂算好的 stats**(让它引用真值不臆造)；**finance_hidden 只喂 %/stats 不喂原始 ¥**；**硬 ¥ serve-gate**(finance_hidden 输出含绝对¥→拒/落 Tier1)。best-effort 数值 sanity(宽容差 + 扩展 stats, 只拒 egregious 臆造, 不拒派生 stat)。残留实体错位风险 Steve 接受, 靠 M4/M5 渐替消化。 |
+| **M3 corpus = 渐进替代桥** | 攒语料 → 未来模型接管 | 每次 M2 LLM 调用→`persist_distillation_sample`(正确签名)。input=**数据丰富(stats)**, teacher_output=**LLM 散文**。未来模型 shadow→canary→primary 逐步替 LLM(语法约束解码)，LLM 留 fallback。**这是"渐进替代"落点**。 |
+| **M4 离线策展（设计, 本期不实现）** | 收敛(安全) | 夜间 job：聚类 corpus → 离线反向模板化(false-positive 先见人) → 人/Opus 审 → 升 `FIXED_TEMPLATE`/graduate Tier1。需 corpus 有量, defer。 |
 
-**核心转变**：在线**不再**做反向模板化/auto-promote 到 active(那是 M4 离线的事)。在线路径 = M2 serve(智能+校验) + M3 memo(降成本) + M5 corpus(攒语料)。M1 Tier1 + M4 离线 FIXED_TEMPLATE 是跨数据复用的唯二安全途径。
+**砍掉**：在线 memo 缓存(illusory)、在线 `ai_insight_templates` auto-promote/lookup(转 M4 离线)。
 
 ---
 
 ## 2. 具体改动
 
-### C1 — 修 serve 幻觉 + 数据给 LLM（M2, 🔒 no-fake-data）
-**文件**: `chart_insight_service.py` (`_build_insight_prompt` + `get_insight` + `_call_llm`)。
-- prompt **恢复喂真实数据**: series_labels + series_values + 把 `_compute_slot_values` 算好的 stats(topName/topShare/ratio/concLevel…) 一并给 LLM, 指示"基于这些**已算好的真值**写洞察, 引用它们, 不要自己重算/臆造"。
-- **数值一致性校验**(serve 前): 从 LLM finding 抽所有数字(含 CJK 数词归一: 六成→60%, 三分之二→66.7%), 每个须匹配某 computed stat(容差 ±0.5pp / 比率 ±0.1)。**任一数字无匹配 → 判定幻觉 → 不返 LLM 输出**, 落 Tier1(若有) 或 null(诚实空)。
-- 删除"零-slot 字面直接返回"隐患: serve 的洞察要么来自数值校验通过的 LLM 输出, 要么 Tier1, 要么 null。
-- **验收**: 单测 — LLM 输出含 stats 外的数字(臆造)→校验拒→落 Tier1/null; 含 CJK 数词→归一后校验; 数值全匹配→正常返回。
+### C1 — 活 LLM serve：数据丰富 prompt + RBAC ¥闸 + 修幻觉（M2, 🔒 no-fake-data + RBAC）
+**文件**: `chart_insight_service.py`(`_build_insight_prompt`/`get_insight`/`_call_llm`)。
+- **prompt 喂算好的 stats**: `_compute_slot_values` 的 topName/topShare/ratio/concLevel… 给 LLM, 指示"基于这些**已算好的真值**写洞察, 引用它们, 不要自己重算/臆造数字/名称"。**这是主幻觉防线**(LLM 引用真值≠no-data prompt 逼它臆造)。
+- **finance_hidden 不喂原始 ¥**: prompt 注入 permission_tier；finance_hidden 只给 %/ratio/stats(无绝对金额); finance_visible 可给。
+- **硬 ¥ serve-gate**: serve 前对 finance_hidden, `_ABSOLUTE_AMOUNT_RE` 扫输出三字段, 命中绝对¥→该洞察拒(落 Tier1 或 null)。**这是 serve 层 RBAC 硬闸**(不只 capture 层)。
+- **best-effort 数值 sanity(非强校验)**: 扩展 computed stats 加 `top2Share`(前二合计) `complement`(100-topShare) `n`(series 长度)，宽容差(%±1pp, 比率 floor 接受"约N倍")。**只拒 egregious 臆造**(数字离所有 stat 都远), **不拒派生 stat**(避免 critic#1 的智能误杀)。诚实: 挡不住实体错位(真数字说错话), Steve 接受, 靠 M3/M4 渐替。
+- **删零-slot 字面隐患**: 走数据丰富 prompt 后不再有 no-data 臆造路径。
+- **验收**: 单测 — finance_hidden 输出含¥→拒(serve-gate); 数据丰富 prompt 喂 stats; egregious 臆造数字→拒; 派生 stat(前二/补集/n家/约2倍)→**不**误拒(智能保留); finance_visible 可含¥。
 
-### C2 — 精确数据 memo 缓存（M3, 降成本）
-**文件**: `chart_insight_service.py` + 新迁移 `V<新号>__chart_insight_memo.sql`。
-- 新表 `chart_insight_memo`: `(id, factory_id, signature_hash, data_hash, insight JSONB{finding,implication,suggestion,source,tier}, permission_tier, hit_count, created_at, expires_at)`, UNIQUE(signature_hash, data_hash, factory_id, permission_tier), **factory-scoped RLS(与现有一致, 不踩 U1.8 坑)**, TTL(expires_at, 过期 lookup 忽略 + 定期清)。
-- `get_insight`: 算 `data_hash=sha256(series_values|series_labels)`, **LLM 前先查 memo**(同 sig+data+factory+tier 且未过期)→命中返成品(0-token, source 标 'memo')。未命中→M2 serve→**写 memo**。
-- **验收**: 同数据二次调用→memo 命中 0-token; 数据变(data_hash 变)→miss→重生成; 过期→miss。
+### C2 — 接 corpus（M3, 渐进替代桥, 🔒 corpus 安全）
+**文件**: `chart_insight_service.py`(调 `persist_distillation_sample`, distillation_capture.py:69)。
+- **正确签名**(critic#3 B1, 否则静默零 corpus): `await persist_distillation_sample(pool, source="chart_insight", task_type="insights", input_text=<数据丰富上下文>, teacher_output=<LLM 散文 JSON>, business_type=ctx.domain, factory_id=ctx.factory_id, system_prompt=...)`。**`domain` 不是参数, 用 `business_type`; `task_type` 必填**。
+- **input_text 含真实 series(绝对值)** → 避免 critic#3 MAJOR2 的"同分布跨租户 input_hash 撞 → ON CONFLICT 覆盖"(绝对值不同 → hash 不同)。同时给未来模型真实数据(否则零熵)。
+- **corpus 跨租户安全策略**(critic#3 MAJOR1): export/训练时**按 business_type 桶**(restaurant/factory)训, **不按 factory_id**; 训练前**数值分桶/脱敏**(¥区间非精确值)防跨租户记忆; export 文件 ACL(非 /tmp 共享)。**写进 §5 + M4/训练 pipeline 约束**。
+- teacher_output = **LLM 填充后散文**(非模板 JSON), 对齐"训生成模型"(critic#3 MINOR5)。
+- **验收**: 一次 LLM 调用→`smart_bi_distillation_samples` 多一行, input 含真实 series, teacher_output 散文; 调用签名不抛 TypeError(实证多行非静默吞)。
 
-### C3 — 接 corpus（M5, 为自有模型）
-**文件**: `chart_insight_service.py` (调 `persist_distillation_sample`, distillation_capture.py:69)。
-- 每次 M2 LLM 调用(非 memo 命中)后: `await persist_distillation_sample(source="chart_insight", domain="smartbi", business_type=domain, factory_id=…, system_prompt=…, input_text=<数据丰富上下文: series+stats>, teacher_output=<LLM 原始 finding+implication+suggestion JSON>, quality=None)`。
-- input 必须**数据丰富**(含真实 series+stats), 否则零熵(Fable §6)。input_hash 去重天然按数据变化区分(不再塌成几百行)。
-- **验收**: 一次 LLM 调用→`smart_bi_distillation_samples` 多一行, input 含真实数据, teacher_output 是 LLM 散文。
-
-### C4 — 停在线 auto-promote + revert U1.8 跨租户（M4 转离线, 修 RLS 坑）
+### C3 — 停在线 ai_insight_templates 读写 + revert U1.8（M4 转离线, 修 RLS 坑, 🔒迁移）
 **文件**: `chart_insight_service.py` + 迁移。
-- `get_insight` 在线路径**移除** `_capture_template`/`_maybe_promote` 到 `ai_insight_templates(is_active)` 的 auto 写入(那是 M4 离线的事)。`ai_insight_templates` 保留(给 M4 离线 + 未来 FIXED_TEMPLATE)。
-- **revert U1.8 跨租户**: `compute_signature` 加回 factory_id(或 memo 已 factory-scoped, ai_insight_templates 既然在线不写, 跨租户键暂无害——但为干净, 迁移把 `uk_ait_sig` 恢复为 `uk_ait_sig_factory(signature_hash,factory_id)` 与 RLS 一致)。**Opus 终审迁移 + RLS 一致性**。
-- M4 离线 job 设计写进 spec §3, **实现 defer**(需 corpus 积累; 占位文档 + 不写代码)。
-- **验收**: 在线不再写 ai_insight_templates active; RLS 与唯一键一致; 迁移号 > origin/main 最高。
+- `get_insight` 在线路径**移除** Tier2a lookup(`_lookup_template`) + `_capture_template`/`_maybe_promote`。`ai_insight_templates` 在线**不读不写**(M4 离线 owns)。→ 顺带让 RLS/GUC 坑(critic#2 F6)在线休眠。
+- **revert U1.8**: 迁移把 `uk_ait_sig(signature_hash)` 恢复 `uk_ait_sig_factory(signature_hash,factory_id)` 与 RLS 一致。**安全**(表当前近空, 无 dup; critic#2 F3 的 dup 风险不存在——核实 row count=0/极少再迁)。迁移号 > origin/main 最高(Python 独立编号空间, 核 `V20260928_01` 后)。
+- **验收**: 在线不读写 ai_insight_templates(grep get_insight 无 _lookup_template/_capture_template 调用); 迁移 RLS 与唯一键一致; row count 核实后再 revert。
 
-### C5 — 前端 source 徽章（小, 配合 M3/M2）
-**文件**: `ChartInsight.vue`。
-- source='memo' → 徽章"数据驱动·已缓存"(或复用"已学习"); source='llm' → "AI生成"; source='rules' → "数据驱动"。loading 同现。
-- **验收**: 三态徽章正确。
+### C4 — 前端 source 徽章（小）
+**文件**: `ChartInsight.vue`。source='llm'→"AI生成" / 'rules'(Tier1)→"数据驱动" / null→不显。**无 memo 态**(已砍)。loading 同现。
 
 ---
 
-## 3. M4 离线策展飞轮（设计, 本期不实现）
-夜间 job(future, 待 corpus 有量): 读 `smart_bi_distillation_samples`(source=chart_insight) → 按 signature 聚类 → 离线反向模板化(数值+定性→slot, 严格 validate, **此处 false-positive 先见人**) → 候选交人/Opus 审 → 升 `ai_insight_templates(source_type='FIXED_TEMPLATE', is_verified=true)` 或 graduate 进 Tier1 code。**未来自有模型用语法约束解码保证产模板后**, 在线模板飞轮才安全(届时是我们掌控模型的属性)。
+## 3. M4 离线策展（设计, 本期不实现, 待 corpus 有量）
+夜间 job: 读 `smart_bi_distillation_samples`(source=chart_insight) → 按 signature 聚类 → 离线反向模板化(数值+定性→slot, 严格 validate, **false-positive 先见人**) → 人/Opus 审 → 升 `ai_insight_templates(FIXED_TEMPLATE,is_verified)` 或 graduate Tier1。**未来自有模型(语法约束解码保证产模板)上线后**在线模板飞轮才安全。M4 也是"渐进替代"的策展侧。
 
 ---
 
 ## 4. 保留有效的 Phase A 成果（不动）
-Tier1 五族(U2) / deriveChartMeta(U3) / useChartInsight composable(U4) / 上传 meta(U5) / U6 6图迁移 / safe_fill+permission_tier 服务端推+budget fail-closed(U1) / 2 hotfix。**这些全保留**。本重设计只改"在线蒸馏/收敛"那部分 + 修 serve 幻觉 + 修 U1.8 RLS。
+Tier1 五族(U2)/deriveChartMeta(U3)/useChartInsight composable(U4)/上传 meta(U5)/U6 6图迁移/permission_tier 服务端推+budget fail-closed(U1)/2 hotfix。**全保留**。本重设计改"在线蒸馏/收敛"+修 serve 幻觉/RBAC+修 U1.8 RLS。⚠️ U6 的 `autoTier2=true` 保留(活 LLM serve), 但 LLM 路径换成 C1 的数据丰富+RBAC 版。
 
-## 5. RBAC / 诚实（🔒 红线）
-- serve 数值校验 = no-fake-data 的硬执行(幻觉数字不返)。
-- memo factory-scoped(RLS 一致); corpus 内部训练表(含真实营收=可, 非用户面, 但**访问控制**: corpus 表权限审计, 不经任何用户 API 暴露)。
-- permission_tier 服务端推(C1 保留 U1.4); finance 洞察只 %/倍 by construction。
+## 5. RBAC / 诚实 / corpus 安全（🔒 红线）
+- **finance_hidden RBAC 硬闸**: prompt 不喂原始¥ + serve 层 `_ABSOLUTE_AMOUNT_RE` 拒¥(不只 capture 层)。permission_tier 服务端推(U1.4 保留)。
+- **no-fake-data**: 数据丰富 prompt(引用真值) + egregious-臆造数值 sanity 拒。**诚实声明残留**: 实体错位(真数字说错话)挡不住, Steve 接受, M3/M4 渐替消化。
+- **corpus 安全**: 内部表(无 RLS, GRANT smartbi_user, 无用户 API); **训练按 business_type 桶非 factory_id + 数值脱敏/分桶防跨租户记忆**; export 文件 ACL。
 
 ## 6. 测试
-- C1: 数值校验(臆造拒/CJK 数词归一/匹配通过); C2: memo 命中/miss/过期; C3: corpus 写入数据丰富; C4: 在线不写 active + RLS 一致。
-- headed real-path: 驾驶舱 Tier1 不回归; 同数据二次 memo 命中(0 token); corpus 表实证多行(数据丰富)。
+- C1: finance_hidden¥拒(serve-gate)/数据丰富prompt/egregious臆造拒/派生stat不误拒/finance_visible含¥OK。C2: corpus 写入(正确签名不吞/数据丰富/散文)。C3: 在线不读写templates/RLS一致/迁移号。
+- headed real-path: 驾驶舱 Tier1 不回归; Tier1-null 图走 C1 活 LLM(引用真值非臆造); finance_hidden 角色无¥泄露; corpus 表实证多行(数据丰富, 非零熵)。
 
 ## 7. 🚦 分发（待 plan 细化）
-C1(serve+校验, 🔒) ‖ C2(memo+迁移, 🔒) → C3(corpus) ‖ C4(停 auto-promote+revert RLS, 🔒迁移) → C5(前端徽章)。各 worktree off origin/main; 红线 Opus gate + headed real-path 验真。M4 离线 defer。
+C1(serve 数据丰富+RBAC¥闸+sanity, 🔒) → C2(corpus 正确签名, 🔒) ‖ C3(停在线templates+revert U1.8, 🔒迁移) → C4(徽章)。各 worktree off origin/main; 🔒 Opus gate + headed real-path 验真。M4 离线 defer。
 
 ## 8. 🔒 红线（Opus 终审）
-C1 serve 幻觉(no-fake-data) / C2 memo 迁移+RLS / C4 revert U1.8 RLS 一致性 / corpus 访问控制 / prod 部署。
+C1 RBAC¥闸+no-fake-data / C2 corpus 跨租户安全 / C3 revert U1.8 RLS 一致+迁移 / prod 部署。
