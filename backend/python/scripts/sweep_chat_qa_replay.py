@@ -62,6 +62,11 @@ _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 _PYTHON_ROOT = os.path.normpath(os.path.join(_SCRIPT_DIR, ".."))
 if _PYTHON_ROOT not in sys.path:
     sys.path.insert(0, _PYTHON_ROOT)
+# main.py adds smartbi/ to sys.path so bare `from services.X import ...` resolves to
+# smartbi/services/X (the real pipeline modules use that bare import). Mirror it here.
+_SMARTBI_DIR = os.path.join(_PYTHON_ROOT, "smartbi")
+if _SMARTBI_DIR not in sys.path:
+    sys.path.insert(0, _SMARTBI_DIR)
 
 logging.basicConfig(
     level=logging.INFO,
