@@ -58,7 +58,7 @@
 | 编号 | 摘要 | 模块/SP | 优先级 | 实现 | 验证 | 证据 | 建议方法 |
 |------|------|---------|--------|------|------|------|---------|
 | E-1 | 销售订单 CRUD + 确认/取消/复制/状态机 | SalesController SP2 | P0 | ✅已建 | V2 | E2E run-20260610_124749: SO-20260610-0003 id 040e8396 12:47:52 | headed web /sales/orders 列表+详情 |
-| E-2 | 创建 SO 时单价可空 + SKU 关联专属客户 | SalesOrder entity SP2 | P0 | ✅已建 | 🔧修复中 | 2026-06-10 服务层+DB迁移修复完成(fix/so-empty-price-draft): 禁用全局 POSITIVE_AMOUNT CREATE 规则(V20261013_02); submitForFinanceReview 加行级单价守卫(行717); 8测试绿; 待部署 test env curl 验证 → B阻塞消除 | 部署后 curl POST /orders 无单价 → 200 |
+| E-2 | 创建 SO 时单价可空 + SKU 关联专属客户 | SalesOrder entity SP2 | P0 | ✅已建 | 🔧修复中 | 2026-06-10 服务层+DB迁移修复完成(fix/so-empty-price-draft): 禁用全局 POSITIVE_AMOUNT CREATE 规则(V20261014_03); submitForFinanceReview 加行级单价守卫(行717); 8测试绿; 待部署 test env curl 验证 → B阻塞消除 | 部署后 curl POST /orders 无单价 → 200 |
 | E-3 | 财务审核流程 (含税/未税/税率口径) | SalesController 财审 SP2 | P0 | ✅已建 | V1 | 2026-06-10: SO-20260610-0001 完整链 DRAFT→CONFIRMED→PENDING_FINANCE_REVIEW→FINANCE_APPROVED; financeReviewedAt 非null | audit: 2026-06-10-e-flow-sales-verification.md E-3 |
 | E-4 | 销售单价含税+不含税双值显示 | SO 税率字段 SP2 | P1 | 🟡部分 | V1 | 2026-06-10: SalesOrderItem 无 lineAmountWithTax @Transient (只有 PurchaseOrderItem 有); taxRate 字段存在但 SO 侧含税双值未实现 — 发现 gap | audit: 2026-06-10-e-flow-sales-verification.md E-4 |
 | E-5 | 底价/毛利率红线预警 (低于底价红色禁提交) | PricingEngine SP2 | P0 | 🟡部分 | B | 阻塞: PricingEngine.checkWarnings 基础在但 costEstimate(null) 静默禁用 — SalesServiceImpl:362 F3 gap 注释; ProductType 无 standardCost 字段 | 需先补 ProductType.standardCost 或 BOM 卷积成本 |

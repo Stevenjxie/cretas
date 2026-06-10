@@ -163,7 +163,7 @@
   - 提审阶段: 所有行必须有正数单价（行717）
 
 ### DB 迁移
-- `V20261013_02__so_draft_allow_empty_price.sql`: 禁用全局 `POSITIVE_AMOUNT CREATE` 规则 (`enabled=false`)，草稿创建不再因 totalAmount=0 被阻断
+- `V20261014_03__so_draft_allow_empty_price.sql`: 禁用全局 `POSITIVE_AMOUNT CREATE` 规则 (`enabled=false`)，草稿创建不再因 totalAmount=0 被阻断
 
 ### 测试
 - 8 单元测试全绿 (`SalesServiceImplEmptyPriceE2Test`)

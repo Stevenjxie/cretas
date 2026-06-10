@@ -1,4 +1,4 @@
--- V20261013_02__so_draft_allow_empty_price.sql
+-- V20261014_03__so_draft_allow_empty_price.sql
 --
 -- E-2 空价销售订单草稿支持 (六扇门追溯矩阵 E-2, 2026-06-10)
 --
