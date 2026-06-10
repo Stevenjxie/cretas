@@ -147,6 +147,9 @@ interface BomItemRow {
   taxRate?: number;
   sortOrder?: number;
   notes?: string;
+  // SP4-8: 按份数投料 + 半成品引用
+  perPortion?: boolean;
+  semiFinishedRefCode?: string;
   [k: string]: unknown;
 }
 interface LaborCostRow {
@@ -190,8 +193,14 @@ const bomForm = ref({
   unitPrice: 0,
   taxRate: 13,
   sortOrder: 0,
-  notes: ''
+  notes: '',
+  // SP4-8: 按份数投料 + 半成品引用
+  perPortion: false as boolean,
+  semiFinishedRefCode: '' as string,
 });
+
+// SP8: 半成品产品类型列表 (用于 semiFinishedRefCode 下拉)
+const semiFinishedTypes = ref<TableRow[]>([]);
 
 // Phase B: 弹窗评估按钮状态
 const estimateLoading = ref(false);
@@ -433,8 +442,13 @@ async function loadProductTypes() {
     const response = await get(`/${factoryId.value}/product-types/active`);
     if (response.success && response.data) {
       // Issue 7: Only show finished products in BOM dropdown
-      productTypes.value = (response.data as TableRow[]).filter(
+      const allProducts = response.data as TableRow[];
+      productTypes.value = allProducts.filter(
         (p: TableRow) => p.productCategory === 'FINISHED_PRODUCT' || p.category === '成品' || !p.productCategory
+      );
+      // SP8: 半成品列表 (用于 semiFinishedRefCode 下拉)
+      semiFinishedTypes.value = allProducts.filter(
+        (p: TableRow) => p.productCategory === 'SEMI_FINISHED' || p.category === '半成品'
       );
       // Select first product if available
       if (productTypes.value.length > 0 && !selectedProductTypeId.value) {
@@ -514,7 +528,9 @@ function handleAddBomItem() {
     unitPrice: 0,
     taxRate: 13,
     sortOrder: bomItems.value.length,
-    notes: ''
+    notes: '',
+    perPortion: false,
+    semiFinishedRefCode: '',
   };
   bomDialogVisible.value = true;
 }
@@ -535,7 +551,9 @@ function handleEditBomItem(row: TableRow) {
     unitPrice: row.unitPrice || 0,
     taxRate: row.taxRate || 13,
     sortOrder: row.sortOrder || 0,
-    notes: row.notes || ''
+    notes: row.notes || '',
+    perPortion: (row.perPortion as boolean) ?? false,
+    semiFinishedRefCode: String(row.semiFinishedRefCode || ''),
   };
   bomDialogVisible.value = true;
 }
@@ -1535,6 +1553,34 @@ function refreshData() {
         </el-form-item>
         <el-form-item label="备注">
           <el-input v-model="bomForm.notes" type="textarea" :rows="2" />
+        </el-form-item>
+        <!-- SP4-8: 按份数投料 -->
+        <el-form-item label="按份数投料">
+          <el-tooltip
+            content="勾选后按成品份数投料，不随出成率折算（适用于调味料、添加剂等固定添加量的物料）"
+            placement="top"
+          >
+            <el-checkbox v-model="bomForm.perPortion">
+              按成品份数投料，不随出成率折算
+            </el-checkbox>
+          </el-tooltip>
+        </el-form-item>
+        <!-- SP8: 组合装半成品引用 -->
+        <el-form-item label="半成品引用">
+          <el-select
+            v-model="bomForm.semiFinishedRefCode"
+            placeholder="组合装引用半成品（可选）"
+            clearable
+            style="width: 100%"
+          >
+            <el-option
+              v-for="item in semiFinishedTypes"
+              :key="item.id"
+              :label="item.name"
+              :value="item.code || item.id"
+            />
+          </el-select>
+          <div class="form-tip">仅组合装产品需填写，引用半成品作为配方原料</div>
         </el-form-item>
       </el-form>
       <template #footer>
