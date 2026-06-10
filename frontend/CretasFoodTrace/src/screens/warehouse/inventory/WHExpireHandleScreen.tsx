@@ -136,29 +136,13 @@ export function WHExpireHandleScreen() {
     (b) => b.status === "warning" || b.status === "normal"
   ).length;
 
-  // 报损处理
-  const handleReportDamage = async (batch: ExpireBatch) => {
-    Alert.alert("确认报损", `确定将批次 ${batch.batchNumber} 进行报损处理吗？`, [
-      { text: "取消", style: "cancel" },
-      {
-        text: "确定",
-        onPress: async () => {
-          setProcessing(true);
-          try {
-            await materialBatchApiClient.updateBatch(batch.id, {
-              status: 'depleted',
-              notes: `报损处理: 过期处理 ${new Date().toISOString().split('T')[0]}`,
-            });
-            Alert.alert("成功", "报损处理已提交");
-            loadExpireBatches(); // 刷新列表
-          } catch (error) {
-            handleError(error, { title: '报损处理失败' });
-          } finally {
-            setProcessing(false);
-          }
-        },
-      },
-    ]);
+  // 报损处理 — 导航到报损单填报页（WastageReport），由仓管填照片+数量后走审批流
+  // ⚠️ 原实现调用 materialBatchApiClient.updateBatch({status:'depleted'})，
+  //    但 UpdateMaterialBatchRequest 无 status 字段，后端静默丢弃，弹"成功"却没实际变更
+  //    （lying UI，违反"禁止降级处理"铁律）。
+  //    正确路径：POST /wastage-reports → 财务/厂长审批 → APPLIED 后由后端原子扣减库存。
+  const handleReportDamage = (batch: ExpireBatch) => {
+    navigation.navigate("WastageReport", { batchId: batch.id });
   };
 
   // 转冻品处理
