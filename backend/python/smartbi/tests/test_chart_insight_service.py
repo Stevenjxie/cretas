@@ -844,3 +844,263 @@ class TestGetInsightClaimsPinning:
             "Entity-swap (外卖=62 when real is 堂食=62) must be rejected by _validate_claims "
             f"and get_insight must return None; got result={result}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Task 5: corpus gated persist (MF2) + 当日 input_hash 读回缓存 (MF4)
+# ---------------------------------------------------------------------------
+
+from smartbi.services.insights.chart_insight_service import (  # noqa: E402
+    _corpus_input_text,
+    _map_domain,
+)
+from smartbi.services.distillation_capture import compute_input_hash  # noqa: E402
+
+
+@pytest.mark.asyncio
+class TestCorpus:
+    """Task 5 — corpus gated persist (MF2) + 当日 input_hash 读回缓存 (MF4).
+
+    Two tests:
+      1. test_persist_called_after_gate_with_correct_signature:
+         Valid LLM response that passes all gates → persist_distillation_sample called once
+         with correct positional+keyword args.
+      2. test_rejected_output_not_persisted:
+         Entity-swap LLM response → _validate_claims returns None → persist NOT called.
+    """
+
+    def _make_service_for_corpus(
+        self,
+        permission_tier: str = "finance_visible",
+        factory_id: str = "F001",
+        conn_fetchval=None,
+    ):
+        """Create ChartInsightService with a mocked pool.
+
+        conn.fetchval is used for the read-back cache query (SELECT teacher_output ...).
+        Default: None (cache miss → proceeds to LLM).
+        _call_llm is NOT set here — callers monkeypatch it.
+        """
+        pool = MagicMock()
+        conn = AsyncMock()
+        pool.acquire.return_value.__aenter__ = AsyncMock(return_value=conn)
+        pool.acquire.return_value.__aexit__ = AsyncMock(return_value=None)
+        conn.fetchrow = AsyncMock(return_value=None)
+        conn.execute = AsyncMock(return_value=None)
+        # fetchval used for corpus read-back cache: None = cache miss
+        conn.fetchval = AsyncMock(return_value=conn_fetchval)
+
+        svc = ChartInsightService(
+            pool=pool,
+            budget_tracker=FakeBudgetOk(),
+            promote_threshold=DEFAULT_PROMOTE_THRESHOLD,
+        )
+        return svc, pool, conn
+
+    def _make_ctx(
+        self,
+        permission_tier: str = "finance_visible",
+        domain: str = "restaurant",
+        factory_id: str = "F001",
+    ) -> ChartInsightContext:
+        return ChartInsightContext(
+            chart_type="PIE",
+            x_dim="channel",
+            y_metric="revenue",
+            aggregation="sum",
+            domain=domain,
+            data_pattern="ranking:top-share:65-80:n4-8",
+            permission_tier=permission_tier,
+            factory_id=factory_id,
+            series_values=[62.0, 38.0],
+            series_labels=["堂食", "外卖"],
+        )
+
+    # ------------------------------------------------------------------
+    # Test 1: gate-passed output → persist called with correct signature
+    # ------------------------------------------------------------------
+
+    async def test_persist_called_after_gate_with_correct_signature(self):
+        """Valid structured LLM response that passes all gates → persist_distillation_sample
+        called exactly once with:
+          - source="chart_insight"
+          - task_type="insights"
+          - business_type in {"restaurant", "factory"} (mapped from domain)
+          - teacher_model present (non-None string)
+          - factory_id matches ctx.factory_id
+          - metadata contains permission_tier
+        """
+        svc, pool, conn = self._make_service_for_corpus()
+        ctx = self._make_ctx(domain="restaurant")
+
+        valid_llm_response = {
+            "claims": [{"entity": "堂食", "stat_type": "share", "value": 62.0}],
+            "finding": "堂食占62%，是主要渠道。",
+            "implication": None,
+            "suggestion": None,
+        }
+        svc._call_llm = AsyncMock(return_value=valid_llm_response)
+
+        persist_calls = []
+
+        async def fake_persist(pool_arg, source, task_type, input_text, teacher_output, **kwargs):
+            persist_calls.append({
+                "source": source,
+                "task_type": task_type,
+                "input_text": input_text,
+                "teacher_output": teacher_output,
+                **kwargs,
+            })
+
+        with patch(
+            "smartbi.services.insights.chart_insight_service.persist_distillation_sample",
+            side_effect=fake_persist,
+        ):
+            result = await svc.get_insight(ctx, caller_role="restaurant_manager", jwt_factory_id="F001")
+
+        # Must succeed (return an InsightResult)
+        assert result is not None, (
+            f"Valid gate-passing response should produce InsightResult, got None"
+        )
+
+        # persist must be called exactly once
+        assert len(persist_calls) == 1, (
+            f"persist_distillation_sample must be called exactly once after gate pass, "
+            f"got {len(persist_calls)} calls"
+        )
+
+        call = persist_calls[0]
+
+        # source and task_type (positional signature)
+        assert call["source"] == "chart_insight", (
+            f"source must be 'chart_insight', got {call['source']!r}"
+        )
+        assert call["task_type"] == "insights", (
+            f"task_type must be 'insights', got {call['task_type']!r}"
+        )
+
+        # business_type must be mapped from domain (restaurant → "restaurant")
+        assert call["business_type"] in {"restaurant", "factory"}, (
+            f"business_type must be 'restaurant' or 'factory', got {call['business_type']!r}"
+        )
+        assert call["business_type"] == "restaurant", (
+            f"domain='restaurant' must map to business_type='restaurant', got {call['business_type']!r}"
+        )
+
+        # teacher_model must be present (non-None)
+        assert call.get("teacher_model") is not None, (
+            "teacher_model must be passed (non-None) to corpus persist"
+        )
+
+        # factory_id must match ctx
+        assert call.get("factory_id") == "F001", (
+            f"factory_id must be ctx.factory_id='F001', got {call.get('factory_id')!r}"
+        )
+
+        # metadata must contain permission_tier
+        metadata = call.get("metadata")
+        assert metadata is not None, "metadata must be passed to corpus persist"
+        assert "permission_tier" in metadata, (
+            f"metadata must contain 'permission_tier', got {metadata!r}"
+        )
+
+        # input_text must be non-empty and stable (data-rich: includes series values)
+        assert call["input_text"], "input_text must be non-empty"
+        # Series absolute values must bake in (so different tenants don't collide)
+        assert "62" in call["input_text"] or "38" in call["input_text"], (
+            "input_text must contain series absolute values to avoid cross-tenant input_hash collision"
+        )
+
+        # teacher_output must be a JSON string of the validated output
+        teacher_out = json.loads(call["teacher_output"])
+        assert "finding" in teacher_out, (
+            f"teacher_output must be JSON with 'finding', got {call['teacher_output']!r}"
+        )
+
+    # ------------------------------------------------------------------
+    # Test 2: rejected output must NOT be persisted
+    # ------------------------------------------------------------------
+
+    async def test_rejected_output_not_persisted(self):
+        """Entity-swap LLM response → _validate_claims returns None → get_insight returns None
+        → persist_distillation_sample must NOT be called (rejected outputs never enter corpus).
+        """
+        svc, pool, conn = self._make_service_for_corpus()
+        ctx = self._make_ctx(domain="restaurant")
+
+        # Entity-swap: LLM claims 外卖=62% but real 外卖=38% → recompute fails → claim dropped
+        # → no valid claims → _validate_claims returns None → rejected path
+        entity_swap_response = {
+            "claims": [{"entity": "外卖", "stat_type": "share", "value": 62.0}],
+            "finding": "外卖占62%，超过堂食。",
+            "implication": None,
+            "suggestion": None,
+        }
+        svc._call_llm = AsyncMock(return_value=entity_swap_response)
+
+        persist_calls = []
+
+        async def fake_persist(pool_arg, source, task_type, input_text, teacher_output, **kwargs):
+            persist_calls.append({"source": source, "task_type": task_type})
+
+        with patch(
+            "smartbi.services.insights.chart_insight_service.persist_distillation_sample",
+            side_effect=fake_persist,
+        ):
+            result = await svc.get_insight(ctx, caller_role="restaurant_manager", jwt_factory_id="F001")
+
+        # Must return None (entity-swap rejected by _validate_claims)
+        assert result is None, (
+            f"Entity-swap response must be rejected (None), got {result}"
+        )
+
+        # Persist must NOT be called for rejected outputs
+        assert len(persist_calls) == 0, (
+            f"persist_distillation_sample must NOT be called for rejected outputs, "
+            f"got {len(persist_calls)} calls: {persist_calls}"
+        )
+
+    # ------------------------------------------------------------------
+    # Test 3: _map_domain maps domains correctly
+    # ------------------------------------------------------------------
+
+    def test_map_domain(self):
+        """_map_domain should map: restaurant→restaurant, finance→factory, factory→factory, else→unknown."""
+        assert _map_domain("restaurant") == "restaurant"
+        assert _map_domain("finance") == "factory"
+        assert _map_domain("factory") == "factory"
+        assert _map_domain("unknown_x") == "unknown"
+        assert _map_domain("") == "unknown"
+        assert _map_domain(None) == "unknown"
+
+    # ------------------------------------------------------------------
+    # Test 4: _corpus_input_text is data-rich and input_hash matches distillation_capture
+    # ------------------------------------------------------------------
+
+    def test_corpus_input_text_contains_series_and_hash_matches(self):
+        """_corpus_input_text must:
+        - include chart_type, domain, y_metric in the text
+        - include absolute series values (so cross-tenant collision is avoided)
+        - produce an input_hash (via compute_input_hash) that is a 64-char hex string
+        """
+        ctx = self._make_ctx(domain="restaurant")
+        text = _corpus_input_text(ctx)
+
+        assert text, "input_text must be non-empty"
+        # Must contain chart_type
+        assert "PIE" in text or "pie" in text.lower(), (
+            f"input_text must contain chart_type, got: {text[:200]}"
+        )
+        # Must contain series values (absolute: 62.0 or 38.0)
+        assert "62" in text, (
+            f"input_text must contain series absolute value 62.x for cross-tenant safety, got: {text[:300]}"
+        )
+        # Must be stable: same ctx → same text → same hash
+        text2 = _corpus_input_text(ctx)
+        assert text == text2, "input_text must be deterministic"
+
+        # Hash must be 64-char hex (sha256)
+        h = compute_input_hash(text)
+        assert len(h) == 64
+        import re
+        assert re.match(r'^[0-9a-f]{64}$', h), f"input_hash must be hex sha256, got {h!r}"

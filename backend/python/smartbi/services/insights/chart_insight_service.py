@@ -36,6 +36,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence
 
 from .claim_recompute import recompute_claim
+from ..distillation_capture import persist_distillation_sample, compute_input_hash
 
 logger = logging.getLogger(__name__)
 
@@ -390,6 +391,76 @@ def _nearest_label_in_prose(prose: str, target_pos: int, labels: List[str]) -> O
 
 
 # ---------------------------------------------------------------------------
+# C2 — corpus helpers: domain mapping + stable data-rich input_text (MF2/MF4)
+# ---------------------------------------------------------------------------
+
+_DOMAIN_TO_BUSINESS_TYPE: dict = {
+    "restaurant": "restaurant",
+    "finance":    "factory",
+    "factory":    "factory",
+}
+
+
+def _map_domain(domain: Optional[str]) -> str:
+    """Map chart domain to corpus business_type bucket.
+
+    restaurant → "restaurant"
+    finance    → "factory"   (finance charts are factory-side)
+    factory    → "factory"
+    anything else / None → "unknown"
+    """
+    if not domain:
+        return "unknown"
+    return _DOMAIN_TO_BUSINESS_TYPE.get(domain, "unknown")
+
+
+def _corpus_input_text(ctx: "ChartInsightContext") -> str:
+    """Build a stable, data-rich string that is used as corpus input_text and read-back cache key.
+
+    Spec §2 C2 (MF4): "input_text 含真实 series 绝对值: 避免同分布跨租户 input_hash 撞覆盖 + 给模型真数据".
+
+    Includes:
+    - chart structural features (chart_type, x_dim, y_metric, aggregation, domain, data_pattern)
+    - permission_tier (different tiers get different corpus rows)
+    - factory_id (tenant-specific: different factories → different hash → no cross-tenant collision)
+    - ABSOLUTE series_values and series_labels (key: prevents same-distribution different-tenant collision)
+
+    The resulting sha256 hash (compute_input_hash(text)) is used both:
+    - As the dedup key for INSERT ON CONFLICT in smart_bi_distillation_samples
+    - As the read-back cache lookup: SELECT WHERE input_hash=$1 AND created_at::date=CURRENT_DATE
+    """
+    labels_str = ",".join(ctx.series_labels) if ctx.series_labels else ""
+    values_str = ",".join(str(v) for v in ctx.series_values) if ctx.series_values else ""
+    return (
+        f"chart_insight|{ctx.chart_type}|{ctx.x_dim}|{ctx.y_metric}|{ctx.aggregation}"
+        f"|{ctx.domain}|{ctx.data_pattern}|{ctx.permission_tier}"
+        f"|factory:{ctx.factory_id}"
+        f"|labels:[{labels_str}]"
+        f"|values:[{values_str}]"
+    )
+
+
+# SQL for reading back a today's corpus row by input_hash (MF4).
+# smart_bi_distillation_samples has NO RLS (per audit) — plain query is safe.
+# Filter by factory-baked input_hash so cross-tenant collision is impossible.
+_CORPUS_READ_SQL = """
+    SELECT teacher_output
+    FROM smart_bi_distillation_samples
+    WHERE input_hash = $1
+      AND created_at::date = CURRENT_DATE
+    LIMIT 1
+"""
+
+# System prompt used in _call_llm — duplicated here so corpus persist can store it.
+_SYSTEM_PROMPT = (
+    "你是一名数据分析师，专门为ERP系统的图表生成结构化洞察。"
+    "你的输出必须是严格的JSON格式（不含代码块）。"
+    "使用观察动词（关注/排查/分析/了解），禁止因果归因动词（复制/引流/加大/扩张/推广）。"
+    "如果数据不足以得出有意义的业务观察，则将claims返回空数组[]，finding返回null，不要编造。"
+)
+
+
+# ---------------------------------------------------------------------------
 # Main service class
 # ---------------------------------------------------------------------------
 
@@ -478,6 +549,50 @@ class ChartInsightService:
             logger.info("[chart-insight] budget blocked for factory=%s", effective_factory_id)
             return None
 
+        # C2 MF4: compute stable data-rich input_text (used as corpus key + read-back cache key)
+        input_text = _corpus_input_text(resolved_ctx)
+        input_hash = compute_input_hash(input_text)
+
+        # C2 MF4: read-back cache — check if today's corpus already has an accepted output
+        # for this exact (factory-baked) input. If yes, re-run the ¥ serve-gate for the
+        # CURRENT caller's tier and return from cache (0 LLM).
+        cached_teacher_output = await self._read_corpus_cache(input_hash)
+        if cached_teacher_output is not None:
+            cached_obj = _extract_json_object(cached_teacher_output)
+            if cached_obj is not None:
+                # Re-run ¥ serve-gate for current caller's tier
+                permission_tier = resolved_ctx.permission_tier
+                if permission_tier == "finance_hidden":
+                    combined_text = " ".join(filter(None, [
+                        cached_obj.get("finding"),
+                        cached_obj.get("implication"),
+                        cached_obj.get("suggestion"),
+                    ]))
+                    if _ABSOLUTE_AMOUNT_RE.search(combined_text):
+                        # Cached output fails gate for this tier — fall through to LLM
+                        logger.info(
+                            "[chart-insight] corpus cache hit but ¥ gate fails for tier=%s, "
+                            "falling through to LLM", permission_tier
+                        )
+                    else:
+                        logger.debug("[chart-insight] corpus cache hit (input_hash=%s...)", input_hash[:12])
+                        return InsightResult(
+                            finding=cached_obj.get("finding"),
+                            implication=cached_obj.get("implication"),
+                            suggestion=cached_obj.get("suggestion"),
+                            source="cache",
+                            tier=2,
+                        )
+                else:
+                    logger.debug("[chart-insight] corpus cache hit (input_hash=%s...)", input_hash[:12])
+                    return InsightResult(
+                        finding=cached_obj.get("finding"),
+                        implication=cached_obj.get("implication"),
+                        suggestion=cached_obj.get("suggestion"),
+                        source="cache",
+                        tier=2,
+                    )
+
         # LLM call: returns structured {claims, finding, implication, suggestion} or None
         llm_obj = await self._call_llm(resolved_ctx)
         if llm_obj is None:
@@ -508,6 +623,27 @@ class ChartInsightService:
                 )
                 return None
 
+        # C2 MF2: gate-passed → persist accepted output into corpus (fire-and-forget).
+        # Only accepted outputs are stored. Rejected paths (validate None / ¥-gate None)
+        # return before this point and never reach here.
+        # persist_distillation_sample never raises (swallows all exceptions internally),
+        # so awaiting it directly is safe and does not risk the user-facing response.
+        await persist_distillation_sample(
+            self._pool,
+            source="chart_insight",
+            task_type="insights",
+            input_text=input_text,
+            teacher_output=json.dumps(validated, ensure_ascii=False),
+            business_type=_map_domain(resolved_ctx.domain),
+            factory_id=resolved_ctx.factory_id,
+            system_prompt=_SYSTEM_PROMPT,
+            teacher_model=self._get_teacher_model(),
+            metadata={
+                "permission_tier": resolved_ctx.permission_tier,
+                "gate": "passed",
+            },
+        )
+
         return InsightResult(
             finding=validated["finding"],
             implication=validated.get("implication"),
@@ -515,6 +651,45 @@ class ChartInsightService:
             source="llm",
             tier=2,
         )
+
+    # ------------------------------------------------------------------
+    # C2 MF4 helpers: corpus read-back cache + teacher model name
+    # ------------------------------------------------------------------
+
+    async def _read_corpus_cache(self, input_hash: str) -> Optional[str]:
+        """Read back today's corpus row by input_hash. Returns teacher_output string or None.
+
+        On any error (pool None, DB error, non-string result, etc.) → returns None and logs.
+        Never raises — cache miss gracefully falls through to LLM.
+        """
+        if self._pool is None:
+            return None
+        try:
+            async with self._pool.acquire() as conn:
+                row = await conn.fetchval(_CORPUS_READ_SQL, input_hash)
+                if row is None:
+                    return None
+                if not isinstance(row, str):
+                    # Unexpected type (e.g. mock returning int in tests) — treat as miss
+                    return None
+                return row
+        except Exception as exc:
+            logger.warning("[chart-insight] corpus cache read failed (non-blocking): %s", exc)
+            return None
+
+    def _get_teacher_model(self) -> str:
+        """Return the teacher model name for corpus metadata. Falls back to 'unknown' if unavailable."""
+        try:
+            from common.llm_router import SLOT
+            # Attempt to get the model name for the CHART slot
+            slot_model = getattr(SLOT, "CHART", None)
+            if slot_model is not None and hasattr(slot_model, "value"):
+                return str(slot_model.value)
+            elif slot_model is not None:
+                return str(slot_model)
+        except Exception:
+            pass
+        return "unknown"
 
     # ------------------------------------------------------------------
     # LLM call — returns structured claims dict (overridable for testing)
@@ -544,12 +719,7 @@ class ChartInsightService:
             "messages": [
                 {
                     "role": "system",
-                    "content": (
-                        "你是一名数据分析师，专门为ERP系统的图表生成结构化洞察。"
-                        "你的输出必须是严格的JSON格式（不含代码块）。"
-                        "使用观察动词（关注/排查/分析/了解），禁止因果归因动词（复制/引流/加大/扩张/推广）。"
-                        "如果数据不足以得出有意义的业务观察，则将claims返回空数组[]，finding返回null，不要编造。"
-                    ),
+                    "content": _SYSTEM_PROMPT,
                 },
                 {"role": "user", "content": prompt},
             ],
