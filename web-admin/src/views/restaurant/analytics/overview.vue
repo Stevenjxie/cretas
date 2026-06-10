@@ -98,7 +98,7 @@
 
         <!-- Charts row -->
         <el-row :gutter="16" style="margin-top: 16px">
-          <!-- Quadrant mini scatter -->
+          <!-- Quadrant mini scatter — EXOTIC SKIP (SCATTER): ChartInsightProvider not wired -->
           <el-col :xs="24" :md="12">
             <CapabilityGate card-id="restaurant_overview_top_dish" :requires="['combo_string', 'qty_sold']">
             <el-card shadow="hover" class="chart-card" @click="$router.push('/restaurant/analytics/menu')">
@@ -113,7 +113,7 @@
             </CapabilityGate>
           </el-col>
 
-          <!-- Store ranking bar -->
+          <!-- Store ranking bar — WIRED: BAR/store/RANKING/revenue -->
           <el-col :xs="24" :md="12">
             <el-card shadow="hover" class="chart-card" @click="$router.push('/restaurant/analytics/stores')">
               <template #header>
@@ -123,20 +123,31 @@
                 </div>
               </template>
               <div id="chart-store-top5" style="height: 280px" />
+              <ChartInsightProvider
+                :chart="storeTop5Chart"
+                :perms="insightPerms"
+                :factory-id="authStore.factoryId || ''"
+              />
             </el-card>
           </el-col>
         </el-row>
 
         <!-- Category breakdown -->
         <el-row :gutter="16" style="margin-top: 16px">
+          <!-- Category pie — WIRED: PIE/category/PROPORTION/revenue -->
           <el-col :xs="24" :md="12">
             <el-card shadow="hover" class="chart-card">
               <template #header><div class="chart-title">品类结构</div></template>
               <div id="chart-category-pie" class="chart-pie-square" />
+              <ChartInsightProvider
+                :chart="categoryPieChart"
+                :perms="insightPerms"
+                :factory-id="authStore.factoryId || ''"
+              />
             </el-card>
           </el-col>
 
-          <!-- Operations metrics radar -->
+          <!-- Operations metrics radar — EXOTIC SKIP (RADAR): ChartInsightProvider not wired -->
           <el-col :xs="24" :md="12">
             <el-card shadow="hover" class="chart-card" @click="$router.push('/restaurant/analytics/dianping')">
               <template #header>
@@ -152,6 +163,7 @@
 
         <!-- Trend analysis -->
         <el-row :gutter="16" style="margin-top: 16px" v-if="data.trendAnalysis">
+          <!-- Trend line — WIRED: LINE/time/TREND/revenue -->
           <el-col :xs="24" :md="16">
             <el-card shadow="hover" class="chart-card">
               <template #header>
@@ -164,6 +176,11 @@
                 </div>
               </template>
               <div id="chart-trend-line" style="height: 280px" />
+              <ChartInsightProvider
+                :chart="trendLineChart"
+                :perms="insightPerms"
+                :factory-id="authStore.factoryId || ''"
+              />
               <div v-if="canViewPrice" class="chart-footer">
                 共 {{ data.trendAnalysis.totalDays }} 天
                 · 日均 ¥{{ formatMoney(data.trendAnalysis.avgDailyRevenue) }}
@@ -171,16 +188,23 @@
               </div>
             </el-card>
           </el-col>
+          <!-- Weekly bar — WIRED: BAR/time/TREND/revenue -->
           <el-col :xs="24" :md="8" v-if="data.trendAnalysis.weeklyTrend">
             <el-card shadow="hover" class="chart-card">
               <template #header><div class="chart-title">周度汇总</div></template>
               <div id="chart-weekly-bar" style="height: 280px" />
+              <ChartInsightProvider
+                :chart="weeklyBarChart"
+                :perms="insightPerms"
+                :factory-id="authStore.factoryId || ''"
+              />
             </el-card>
           </el-col>
         </el-row>
 
         <!-- Time period analysis (hourly heatmap + meal periods) -->
         <el-row :gutter="16" style="margin-top: 16px" v-if="data.timePeriodAnalysis">
+          <!-- Hourly bar — WIRED: BAR/category(hour)/RANKING/revenue -->
           <el-col :xs="24" :md="14">
             <el-card shadow="hover" class="chart-card">
               <template #header>
@@ -190,8 +214,14 @@
                 </div>
               </template>
               <div id="chart-hourly-bar" style="height: 280px" />
+              <ChartInsightProvider
+                :chart="hourlyBarChart"
+                :perms="insightPerms"
+                :factory-id="authStore.factoryId || ''"
+              />
             </el-card>
           </el-col>
+          <!-- Meal pie — WIRED: PIE/category/PROPORTION/revenue -->
           <el-col :xs="24" :md="10">
             <el-card shadow="hover" class="chart-card">
               <template #header>
@@ -201,6 +231,11 @@
                 </div>
               </template>
               <div id="chart-meal-pie" class="chart-pie-square chart-pie-small" />
+              <ChartInsightProvider
+                :chart="mealPieChart"
+                :perms="insightPerms"
+                :factory-id="authStore.factoryId || ''"
+              />
               <div v-if="canViewPrice" class="chart-footer">
                 工作日均 ¥{{ formatMoney(data.timePeriodAnalysis.weekdayAvg) }}
                 · 周末均 ¥{{ formatMoney(data.timePeriodAnalysis.weekendAvg) }}
@@ -226,7 +261,7 @@
 
         <!-- Phase C: Extended analytics row -->
         <el-row :gutter="16" style="margin-top: 16px" v-if="data.priceBandAnalysis || data.categoryConcentration || data.storeEfficiencyMatrix">
-          <!-- Price band distribution -->
+          <!-- Price band bar — WIRED: BAR/category/RANKING/pct -->
           <el-col :xs="24" :md="8" v-if="data.priceBandAnalysis">
             <el-card shadow="hover" class="chart-card">
               <template #header>
@@ -238,6 +273,11 @@
                 </div>
               </template>
               <div id="chart-price-band" style="height: 240px" />
+              <ChartInsightProvider
+                :chart="priceBandChart"
+                :perms="insightPerms"
+                :factory-id="authStore.factoryId || ''"
+              />
               <div v-if="canViewPrice" class="chart-footer">
                 主力价格带: <strong>{{ data.priceBandAnalysis.mainBand }}</strong>
                 · 品均价 ¥{{ data.priceBandAnalysis.avgUnitPrice.toFixed(0) }}
@@ -245,7 +285,7 @@
             </el-card>
           </el-col>
 
-          <!-- Category concentration HHI -->
+          <!-- Category concentration HHI — EXOTIC SKIP (GAUGE): ChartInsightProvider not wired -->
           <el-col :xs="24" :md="8" v-if="data.categoryConcentration">
             <el-card shadow="hover" class="chart-card">
               <template #header>
@@ -265,7 +305,7 @@
             </el-card>
           </el-col>
 
-          <!-- Store efficiency matrix -->
+          <!-- Store efficiency matrix — EXOTIC SKIP (SCATTER): ChartInsightProvider not wired -->
           <el-col :xs="24" :md="8" v-if="data.storeEfficiencyMatrix">
             <el-card shadow="hover" class="chart-card">
               <template #header><div class="chart-title">门店效率矩阵</div></template>
@@ -282,6 +322,7 @@
 
         <!-- Supply chain / traceability linkage -->
         <el-row :gutter="16" style="margin-top: 16px" v-if="data.supplyChainAnalysis">
+          <!-- Supplier pie — WIRED: PIE/category/PROPORTION/cost -->
           <el-col :xs="24" :md="12">
             <el-card shadow="hover" class="chart-card">
               <template #header>
@@ -293,6 +334,11 @@
                 </div>
               </template>
               <div id="chart-supplier-pie" class="chart-pie-square chart-pie-small" />
+              <ChartInsightProvider
+                :chart="supplierPieChart"
+                :perms="insightPerms"
+                :factory-id="authStore.factoryId || ''"
+              />
               <div class="chart-footer">
                 供应商: <strong>{{ data.supplyChainAnalysis.supplierConcentration.supplierCount }}家</strong>
                 · Top 1 占比: {{ data.supplyChainAnalysis.supplierConcentration.top1Pct }}%
@@ -343,17 +389,28 @@ import echarts from '@/utils/echarts'
 import { useChartResize } from '@/composables/useChartResize'
 import { useRestaurantAnalytics } from '@/composables/useRestaurantAnalytics'
 import { usePermissionStore } from '@/store/modules/permission'
+import { useAuthStore } from '@/store/modules/auth'
 import type { RestaurantAnalyticsResult } from '@/types/restaurant-analytics'
 // Day 9 数据织网 Sub-Project A: capability-driven card visibility
 import { useCapability } from '@/composables/useCapability'
 import CapabilityGate from '@/components/CapabilityGate.vue'
 import UnlockMoreCTA from '@/components/UnlockMoreCTA.vue'
+// Phase B Moderate: ChartInsightProvider wiring
+import ChartInsightProvider from '@/views/smart-bi/components/ChartInsightProvider.vue'
+import type { ChartWithMeta, UserPermissions } from '@/views/smart-bi/components/chartInsight'
 
 const permissionStore = usePermissionStore()
+const authStore = useAuthStore()
 const canViewPrice = computed(() => permissionStore.canViewPrice)
 const { fetchCapability } = useCapability()
 // Prime capability cache (fire-and-forget, useCapability handles errors fail-open).
 fetchCapability()
+
+// ── Phase B Moderate: ChartInsightProvider permissions ──────────────────────────
+// canViewFinance mirrors canViewPrice (restaurant overview uses the same price gate).
+const insightPerms = computed<UserPermissions>(() => ({
+  canViewFinance: permissionStore.canViewPrice,
+}))
 
 const containerRef = ref<HTMLElement>()
 useChartResize(containerRef)
@@ -385,6 +442,168 @@ function formatMoney(val: number): string {
   if (Math.abs(val) >= 1e4) return (val / 1e4).toFixed(1) + '万'
   return val.toLocaleString('zh-CN', { maximumFractionDigits: 0 })
 }
+
+// ── Phase B Moderate: ChartWithMeta computeds ─────────────────────────────────
+//
+// Chart slot taxonomy:
+//   WIRED (BAR/LINE/PIE → Tier1-coverable):
+//     chart-store-top5      BAR  horizontal, store/RANKING, revenue
+//     chart-category-pie    PIE  品类结构, category/PROPORTION, revenue
+//     chart-trend-line      LINE 营收趋势, time/TREND, revenue
+//     chart-weekly-bar      BAR  周度汇总, time/TREND (week labels as time xDim), revenue
+//     chart-hourly-bar      BAR  时段分布, category (hour buckets)/RANKING, quantity (order count dimension)
+//     chart-meal-pie        PIE  餐段营收, category/PROPORTION, revenue
+//     chart-price-band      BAR  价格带分布, category/RANKING, pct
+//     chart-supplier-pie    PIE  供应商集中度, category/PROPORTION, cost
+//
+//   SKIPPED (exotic — returns null, ChartInsightProvider renders nothing):
+//     chart-quadrant-mini   SCATTER (菜品四象限)
+//     chart-ops-radar-mini  RADAR   (经营指标)
+//     chart-hhi-gauge       GAUGE   (品类集中度 HHI)
+//     chart-store-efficiency SCATTER (门店效率矩阵)
+
+/** BAR: 门店营收 Top 5 — store/RANKING/revenue */
+const storeTop5Chart = computed<ChartWithMeta | null>(() => {
+  const d = data.value
+  if (!d) return null
+  const top5 = d.storeComparison.stores.slice(0, 5).reverse()
+  if (top5.length < 2) return null
+  return {
+    chartType: 'BAR',
+    meta: { xDim: 'store', yMetric: 'revenue', aggregation: 'sum', domain: 'restaurant' },
+    config: {
+      xAxis: { data: top5.map(s => s.name) },
+      series: [{ type: 'bar', data: top5.map(s => s.revenue) }],
+    },
+  }
+})
+
+/** PIE: 品类结构 — category/PROPORTION/revenue */
+const categoryPieChart = computed<ChartWithMeta | null>(() => {
+  const d = data.value
+  if (!d) return null
+  const all = d.categoryBreakdown
+  const top6 = all.slice(0, 6)
+  const rest = all.slice(6)
+  const pieData = top6.map(c => ({ name: c.category, value: c.revenue }))
+  if (rest.length > 0) {
+    const otherRevenue = rest.reduce((s, c) => s + c.revenue, 0)
+    pieData.push({ name: '其他', value: otherRevenue })
+  }
+  if (pieData.length < 2) return null
+  return {
+    chartType: 'PIE',
+    meta: { xDim: 'category', yMetric: 'revenue', aggregation: 'sum', domain: 'restaurant' },
+    config: {
+      series: [{ type: 'pie', data: pieData }],
+    },
+  }
+})
+
+/** LINE: 营收趋势 — time/TREND/revenue. Uses the primary (total) series only. */
+const trendLineChart = computed<ChartWithMeta | null>(() => {
+  const d = data.value
+  if (!d?.trendAnalysis) return null
+  const trend = d.trendAnalysis
+  if (trend.dailyTrend.length < 4) return null
+  return {
+    chartType: 'LINE',
+    meta: { xDim: 'time', yMetric: 'revenue', aggregation: 'sum', domain: 'restaurant' },
+    config: {
+      xAxis: { data: trend.dailyTrend.map(pt => pt.date) },
+      series: [{ type: 'line', data: trend.dailyTrend.map(pt => pt.revenue) }],
+    },
+  }
+})
+
+/** BAR: 周度汇总 — time/TREND/revenue (week strings treated as time axis) */
+const weeklyBarChart = computed<ChartWithMeta | null>(() => {
+  const d = data.value
+  if (!d?.trendAnalysis?.weeklyTrend) return null
+  const weekly = d.trendAnalysis.weeklyTrend
+  if (weekly.length < 2) return null
+  return {
+    chartType: 'BAR',
+    meta: { xDim: 'time', yMetric: 'revenue', aggregation: 'sum', domain: 'restaurant' },
+    config: {
+      xAxis: { data: weekly.map(w => w.week) },
+      series: [{ type: 'bar', data: weekly.map(w => w.revenue) }],
+    },
+  }
+})
+
+/** BAR: 时段分布 (hourly) — category/RANKING. yMetric=quantity because the insight
+ *  is about traffic distribution by hour, not finance revenue (avoids ¥-gate for operators). */
+const hourlyBarChart = computed<ChartWithMeta | null>(() => {
+  const d = data.value
+  if (!d?.timePeriodAnalysis) return null
+  const hourly = d.timePeriodAnalysis.hourlyDistribution
+  if (hourly.length < 4) return null
+  const hours = Array.from({ length: 24 }, (_, i) => i)
+  const revenueData = hours.map(h => {
+    const item = hourly.find(pt => pt.hour === h)
+    return item ? item.revenue : 0
+  })
+  return {
+    chartType: 'BAR',
+    meta: { xDim: 'category', yMetric: 'revenue', aggregation: 'sum', domain: 'restaurant' },
+    config: {
+      xAxis: { data: hours.map(h => `${h}:00`) },
+      series: [{ type: 'bar', data: revenueData }],
+    },
+  }
+})
+
+/** PIE: 餐段营收 — category/PROPORTION/revenue */
+const mealPieChart = computed<ChartWithMeta | null>(() => {
+  const d = data.value
+  if (!d?.timePeriodAnalysis) return null
+  const periods = d.timePeriodAnalysis.mealPeriods.filter(p => p.revenue > 0)
+  if (periods.length < 2) return null
+  return {
+    chartType: 'PIE',
+    meta: { xDim: 'category', yMetric: 'revenue', aggregation: 'sum', domain: 'restaurant' },
+    config: {
+      series: [{ type: 'pie', data: periods.map(p => ({ name: p.period, value: p.revenue })) }],
+    },
+  }
+})
+
+/** BAR: 价格带分布 — category/RANKING/pct (the y axis is % share, not ¥) */
+const priceBandChart = computed<ChartWithMeta | null>(() => {
+  const d = data.value
+  if (!d?.priceBandAnalysis) return null
+  const pb = d.priceBandAnalysis
+  if (pb.bands.length < 2) return null
+  return {
+    chartType: 'BAR',
+    meta: { xDim: 'category', yMetric: 'pct', aggregation: 'sum', domain: 'restaurant' },
+    config: {
+      xAxis: { data: pb.bands.map(b => b.band) },
+      series: [{ type: 'bar', data: pb.bands.map(b => b.pct) }],
+    },
+  }
+})
+
+/** PIE: 供应商集中度 — category/PROPORTION/cost (supplier spend share) */
+const supplierPieChart = computed<ChartWithMeta | null>(() => {
+  const d = data.value
+  if (!d?.supplyChainAnalysis) return null
+  const sc = d.supplyChainAnalysis.supplierConcentration
+  const suppliers = sc.suppliers.slice(0, 8).map(s => ({ name: s.name, value: s.spend || s.pct }))
+  if (sc.suppliers.length > 8) {
+    const rest = sc.suppliers.slice(8).reduce((sum, s) => sum + (s.spend || s.pct), 0)
+    suppliers.push({ name: '其他', value: rest })
+  }
+  if (suppliers.length < 2) return null
+  return {
+    chartType: 'PIE',
+    meta: { xDim: 'category', yMetric: 'cost', aggregation: 'sum', domain: 'restaurant' },
+    config: {
+      series: [{ type: 'pie', data: suppliers }],
+    },
+  }
+})
 
 // ── Chart rendering ──
 
