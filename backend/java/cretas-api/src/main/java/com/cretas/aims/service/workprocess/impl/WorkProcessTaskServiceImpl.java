@@ -153,6 +153,9 @@ public class WorkProcessTaskServiceImpl implements WorkProcessTaskService {
         LocalDateTime now = LocalDateTime.now();
         List<WorkProcessTask> spawned = templates.stream()
                 .filter(t -> Boolean.TRUE.equals(t.getIsActive()))
+                // Wave2 可配置报工粒度: 跳过免报工序 (reportingRequired=false), 不生成报工任务。
+                // null 视为 true (向后兼容: 老配置行无此字段时仍逐道报)。
+                .filter(t -> !Boolean.FALSE.equals(t.getReportingRequired()))
                 .map(template -> {
                     WorkProcess def = definitions.get(template.getWorkProcessId());
                     String unit = template.getUnitOverride() != null
@@ -182,8 +185,8 @@ public class WorkProcessTaskServiceImpl implements WorkProcessTaskService {
         if (spawned.isEmpty()) {
             throw new BusinessException(
                     422,
-                    "产品 " + productTypeId + " 工序配置全部禁用, 无可 spawn 任务")
-                    .withHint("请到'产品工序配置'启用至少一道工序");
+                    "产品 " + productTypeId + " 工序配置全部禁用或全部免报, 无可 spawn 任务")
+                    .withHint("请到'产品工序配置'启用并标记至少一道工序需报工 (建议至少保留领料 + 产出两道)");
         }
 
         List<WorkProcessTask> saved = taskRepository.saveAll(spawned);

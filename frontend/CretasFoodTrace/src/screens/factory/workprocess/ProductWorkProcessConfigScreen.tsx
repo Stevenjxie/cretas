@@ -32,6 +32,7 @@ import {
   IconButton,
   List,
   Searchbar,
+  Switch,
   Text,
 } from 'react-native-paper';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -229,6 +230,29 @@ export default function ProductWorkProcessConfigScreen() {
     reorderAndPersist(next);
   };
 
+  // Wave2 可配置报工粒度: 切换某道工序是否需报工 (true=逐道报默认; false=免报跳过 spawn)。
+  const handleToggleReporting = async (binding: ProductWorkProcess, value: boolean) => {
+    if (!selectedProduct || actioning) return;
+    const factoryId = getFactoryId(user) ?? undefined;
+    // 乐观更新本地, 失败回滚 + 重新拉取
+    setBindings((prev) =>
+      prev.map((b) => (b.id === binding.id ? { ...b, reportingRequired: value } : b)),
+    );
+    setActioning(true);
+    try {
+      await workProcessApiClient.updateProductWorkProcess(
+        binding.id,
+        { reportingRequired: value },
+        factoryId,
+      );
+    } catch (e) {
+      logger.error('切换报工粒度失败', e);
+      await loadBindings(selectedProduct.id, true);
+    } finally {
+      setActioning(false);
+    }
+  };
+
   const boundIds = useMemo(
     () => new Set(bindings.map((b) => b.workProcessId)),
     [bindings],
@@ -352,6 +376,17 @@ export default function ProductWorkProcessConfigScreen() {
                             ? `${item.defaultEstimatedMinutes} 分`
                             : '-'}
                       </Chip>
+                    </View>
+                    {/* Wave2 可配置报工粒度: 该工序是否需报工 (开=逐道报默认; 关=免报, 仅留配置不生成报工任务) */}
+                    <View style={styles.reportingRow}>
+                      <Text variant="bodySmall" style={styles.reportingLabel}>
+                        {item.reportingRequired === false ? '免报 (不生成报工任务)' : '需报工'}
+                      </Text>
+                      <Switch
+                        value={item.reportingRequired !== false}
+                        disabled={actioning}
+                        onValueChange={(val) => handleToggleReporting(item, val)}
+                      />
                     </View>
                   </View>
                   <View style={styles.bindingActions}>
@@ -550,6 +585,15 @@ const styles = StyleSheet.create({
   chipText: {
     fontSize: 10,
     lineHeight: 12,
+  },
+  reportingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: 6,
+  },
+  reportingLabel: {
+    color: '#666',
   },
   bindingActions: {
     flexDirection: 'row',

@@ -208,6 +208,100 @@ class ProductWorkProcessServiceImplTest {
             assertEquals(0, entityCaptor.getValue().getProcessOrder(),
                     "processOrder 为 null 时应默认为 0");
         }
+
+        // ===== Wave2: reportingRequired DTO 往返 =====
+
+        @Test
+        @DisplayName("UT-PWP-01e: create() reportingRequired 省略 (null) → 默认 true (逐道报, 向后兼容)")
+        void testCreateReportingRequiredDefaultsTrue() {
+            ProductWorkProcessDTO dto = ProductWorkProcessDTO.builder()
+                    .productTypeId(PRODUCT_TYPE_ID)
+                    .workProcessId(WORK_PROCESS_ID)
+                    .processOrder(1)
+                    .build();   // reportingRequired omitted
+
+            when(repository.existsByFactoryIdAndProductTypeIdAndWorkProcessId(
+                    FACTORY_ID, PRODUCT_TYPE_ID, WORK_PROCESS_ID)).thenReturn(false);
+            when(workProcessRepository.findByFactoryIdAndId(FACTORY_ID, WORK_PROCESS_ID))
+                    .thenReturn(Optional.of(buildDefaultWorkProcess()));
+            when(repository.save(any(ProductWorkProcess.class))).thenAnswer(inv -> inv.getArgument(0));
+
+            ProductWorkProcessDTO result = service.create(FACTORY_ID, dto);
+
+            verify(repository).save(entityCaptor.capture());
+            assertEquals(Boolean.TRUE, entityCaptor.getValue().getReportingRequired(),
+                    "省略 reportingRequired → 持久化 true");
+            assertEquals(Boolean.TRUE, result.getReportingRequired(),
+                    "toDTO 应回填 reportingRequired=true");
+        }
+
+        @Test
+        @DisplayName("UT-PWP-01f: create() reportingRequired=false → 免报工序持久化 false + toDTO 回填")
+        void testCreateReportingRequiredFalse() {
+            ProductWorkProcessDTO dto = ProductWorkProcessDTO.builder()
+                    .productTypeId(PRODUCT_TYPE_ID)
+                    .workProcessId(WORK_PROCESS_ID)
+                    .processOrder(2)
+                    .reportingRequired(false)
+                    .build();
+
+            when(repository.existsByFactoryIdAndProductTypeIdAndWorkProcessId(
+                    FACTORY_ID, PRODUCT_TYPE_ID, WORK_PROCESS_ID)).thenReturn(false);
+            when(workProcessRepository.findByFactoryIdAndId(FACTORY_ID, WORK_PROCESS_ID))
+                    .thenReturn(Optional.of(buildDefaultWorkProcess()));
+            when(repository.save(any(ProductWorkProcess.class))).thenAnswer(inv -> inv.getArgument(0));
+
+            ProductWorkProcessDTO result = service.create(FACTORY_ID, dto);
+
+            verify(repository).save(entityCaptor.capture());
+            assertEquals(Boolean.FALSE, entityCaptor.getValue().getReportingRequired(),
+                    "显式 false → 持久化 false (免报)");
+            assertEquals(Boolean.FALSE, result.getReportingRequired());
+        }
+    }
+
+    @Nested
+    @DisplayName("Wave2 reportingRequired update no-change/set")
+    class ReportingRequiredUpdateTests {
+
+        @Test
+        @DisplayName("UT-PWP-03e: update() reportingRequired=null → no-change (保留现有 true)")
+        void testUpdateReportingRequiredNullNoChange() {
+            ProductWorkProcess existing = buildDefaultAssociation();
+            existing.setReportingRequired(true);
+            when(repository.findByFactoryIdAndId(FACTORY_ID, 1L)).thenReturn(Optional.of(existing));
+            when(repository.save(any(ProductWorkProcess.class))).thenAnswer(inv -> inv.getArgument(0));
+
+            ProductWorkProcessDTO dto = ProductWorkProcessDTO.builder()
+                    .processOrder(5)
+                    .build();   // reportingRequired omitted
+
+            service.update(FACTORY_ID, 1L, dto);
+
+            verify(repository).save(entityCaptor.capture());
+            assertEquals(Boolean.TRUE, entityCaptor.getValue().getReportingRequired(),
+                    "reportingRequired 省略 → 不动现有值 (partial update no-change)");
+        }
+
+        @Test
+        @DisplayName("UT-PWP-03f: update() reportingRequired=false → 把现有 true 改为 false (六扇门标免报)")
+        void testUpdateReportingRequiredToFalse() {
+            ProductWorkProcess existing = buildDefaultAssociation();
+            existing.setReportingRequired(true);
+            when(repository.findByFactoryIdAndId(FACTORY_ID, 1L)).thenReturn(Optional.of(existing));
+            when(repository.save(any(ProductWorkProcess.class))).thenAnswer(inv -> inv.getArgument(0));
+
+            ProductWorkProcessDTO dto = ProductWorkProcessDTO.builder()
+                    .reportingRequired(false)
+                    .build();
+
+            ProductWorkProcessDTO result = service.update(FACTORY_ID, 1L, dto);
+
+            verify(repository).save(entityCaptor.capture());
+            assertEquals(Boolean.FALSE, entityCaptor.getValue().getReportingRequired(),
+                    "显式 false → 设为免报");
+            assertEquals(Boolean.FALSE, result.getReportingRequired());
+        }
     }
 
     // ==================== 按产品查询工序列表测试 ====================

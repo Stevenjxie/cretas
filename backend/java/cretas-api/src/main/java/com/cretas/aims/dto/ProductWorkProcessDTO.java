@@ -53,6 +53,16 @@ public class ProductWorkProcessDTO {
 
     private Boolean isActive;
 
+    /**
+     * 是否需要报工 (六扇门 Wave2 — 可配置报工粒度)。
+     * <ul>
+     *   <li>null (omitted) — create 取默认 true; update 不修改现有值 (no-change 语义)</li>
+     *   <li>true — 逐道报 (默认)</li>
+     *   <li>false — 该工序免报 (spawn 跳过, 不生成报工任务; 配置保留供溯源)</li>
+     * </ul>
+     */
+    private Boolean reportingRequired;
+
     // Read-only fields populated from joined WorkProcess
     private String processName;
     private String processCategory;

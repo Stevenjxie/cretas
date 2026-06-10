@@ -47,6 +47,17 @@ public class ProductWorkProcess {
     @Builder.Default
     private Boolean isActive = true;
 
+    /**
+     * 是否需要报工 (六扇门 Wave2 — 可配置报工粒度)。
+     *
+     * <p>DEFAULT true = 逐道报 (现有所有工厂/产品行为不变, 向后兼容)。
+     * false = 该工序保留配置但 spawn 时跳过, 不生成 {@code work_process_task}
+     * (六扇门只在领料/产出两点报工, 中间工序免报但工序记录仍在供溯源)。</p>
+     */
+    @Column(name = "reporting_required", nullable = false)
+    @Builder.Default
+    private Boolean reportingRequired = true;
+
     @Column(name = "created_at")
     private LocalDateTime createdAt;
 
