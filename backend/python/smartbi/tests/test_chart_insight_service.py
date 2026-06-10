@@ -559,6 +559,12 @@ class TestValidateClaims:
     # -----------------------------------------------------------------------
     # Test 3: derived stat (top2_share) not false-rejected
     # -----------------------------------------------------------------------
+    def test_relational_prose_not_false_rejected(self):  # "堂食占62%,是外卖的1.6倍" must PASS
+        obj = {"claims":[{"entity":"堂食","stat_type":"share","value":62.0},
+                          {"entity":"堂食","stat_type":"ratio","value":1.6}],
+               "finding":"堂食占比62.0%，是外卖的1.6倍","implication":None,"suggestion":None}
+        assert _validate_claims(obj, _ctx([62000.0,38000.0],["堂食","外卖"])) is not None
+
     def test_derived_stat_not_false_rejected(self):
         """top2_share = (62+38)/100 * 100 = 100% but with [62,38,0] total=100 top2=(62+38)=100 → 100%.
         Use [50, 30, 20]: top2=(50+30)/100=80%, LLM claims top2_share=80 → must PASS (not mis-reject)."""

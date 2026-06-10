@@ -242,6 +242,11 @@ _PCT_STAT_TYPES: frozenset[str] = frozenset({
     "value", "share", "top2_share", "complement", "diff", "growth", "count",
 })
 
+# Single-entity stats: prose attributes the number to ONE entity ("{entity}占{number}").
+# Entity-adjacency is enforced only for these (entity-swap is the clear danger here).
+# ratio/diff are relational (two entities); top2_share/growth/count are entity-agnostic.
+_SINGLE_ENTITY_STATS: frozenset[str] = frozenset({"value", "share", "complement"})
+
 # Regex to find Arabic numbers (integers and decimals) in prose
 _ARABIC_NUMBER_RE = re.compile(r"\d+\.?\d*")
 
@@ -381,20 +386,23 @@ def _validate_claims(
                         num_str)
             return None
 
-        # For entity-bearing claims (entity is not None), check entity adjacency
-        # At least one matching claim must have its entity as the nearest label in the prose
-        entity_bearing = [mc for mc in matching_claims if mc.get("entity") is not None]
-        if entity_bearing:
-            # Find which label is nearest to this number in the prose (by char distance)
-            nearest_label = _nearest_label_in_prose(full_prose, char_pos, ctx.series_labels)
-            # Check if nearest label matches at least one entity-bearing matching claim
-            has_entity_match = any(
-                mc["entity"] == nearest_label for mc in entity_bearing
-            )
-            if not has_entity_match:
-                # The nearest entity in prose doesn't match the claim's entity → reject
-                logger.info("[chart-insight] validate: number %s nearest-entity=%r ≠ claim entities %s → reject",
-                            num_str, nearest_label, [mc.get("entity") for mc in entity_bearing])
+        # Entity-adjacency gate — only for SINGLE-ENTITY stats (value/share/complement),
+        # where Chinese prose says "{entity}占{number}" so entity-swap is the clear danger.
+        # Relational stats (ratio/diff) inherently reference two entities and entity-agnostic
+        # stats (top2_share/growth/count) have no single owner → numeric anchor alone suffices.
+        single_entity = [mc for mc in matching_claims
+                         if mc.get("entity") is not None and mc.get("stat_type") in _SINGLE_ENTITY_STATS]
+        relational_or_agnostic = [mc for mc in matching_claims
+                                  if mc.get("stat_type") not in _SINGLE_ENTITY_STATS]
+        if single_entity and not relational_or_agnostic:
+            # The entity the prose attributes this number to = nearest entity at-or-before the
+            # number's position (Chinese entity-precedes-number); fall back to nearest overall.
+            attributed = _nearest_preceding_label(full_prose, char_pos, ctx.series_labels)
+            if attributed is None:
+                attributed = _nearest_label_in_prose(full_prose, char_pos, ctx.series_labels)
+            if not any(mc["entity"] == attributed for mc in single_entity):
+                logger.info("[chart-insight] validate: number %s attributed-entity=%r ≠ claim entities %s → reject",
+                            num_str, attributed, [mc.get("entity") for mc in single_entity])
                 return None
         # else: entity-agnostic claims (growth/count/top2_share) — no entity check needed
 
@@ -404,6 +412,30 @@ def _validate_claims(
         "implication": llm_obj.get("implication"),
         "suggestion": llm_obj.get("suggestion"),
     }
+
+
+def _nearest_preceding_label(prose: str, target_pos: int, labels: List[str]) -> Optional[str]:
+    """Find the series label whose occurrence is nearest to target_pos but at-or-before it.
+
+    Chinese BI prose attributes a number to the entity stated just before it
+    ("{entity}占{number}%"). So the entity that owns a number is the closest label
+    occurrence starting at index <= target_pos. Returns None if no label precedes.
+    """
+    best_label: Optional[str] = None
+    best_start: int = -1
+    for label in labels:
+        if not label:
+            continue
+        start = 0
+        while True:
+            idx = prose.find(label, start)
+            if idx == -1 or idx > target_pos:
+                break
+            if idx > best_start:  # latest-starting occurrence at-or-before target
+                best_start = idx
+                best_label = label
+            start = idx + 1
+    return best_label
 
 
 def _nearest_label_in_prose(prose: str, target_pos: int, labels: List[str]) -> Optional[str]:
