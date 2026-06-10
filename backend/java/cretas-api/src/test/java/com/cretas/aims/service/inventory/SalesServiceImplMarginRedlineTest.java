@@ -6,7 +6,6 @@ import com.cretas.aims.entity.Customer;
 import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.inventory.SalesOrder;
 import com.cretas.aims.entity.inventory.SalesOrderItem;
-import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.CustomerRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.UserRepository;
@@ -37,20 +36,25 @@ import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 /**
- * E-5 毛利红线守卫单元测试 (W1 六扇门追溯矩阵 E-5, 2026-06-10).
+ * E-5 毛利红线预警单元测试 (W1 六扇门追溯矩阵 E-5; 非阻断决策修正 2026-06-10).
  *
- * <p>验证 {@code SalesServiceImpl.createSalesOrder} 中毛利红线守卫的三条路径:
+ * <p><strong>决策修正</strong>: 低于红线由"409 硬阻断"改为"200 + 预警字段"
+ * (SP3 spec §6.3 / SP5 spec §8 本就规定非阻断; 客户原话"低于底线提示红色, 不是不允许")。
+ *
+ * <p>验证 {@code SalesServiceImpl.createSalesOrder} 中毛利红线预警的各条路径:
  * <ol>
- *   <li>报价低于红线 → 409 BusinessException，订单不创建</li>
- *   <li>报价满足红线 → 正常创建订单</li>
- *   <li>成本数据缺失 (belowRedline=null，skipped) → warn-and-allow，订单正常创建</li>
+ *   <li>报价低于红线 → 订单正常创建 + {@code marginWarnings} 含预警文案 (不抛异常)</li>
+ *   <li>报价满足红线 → 正常创建订单, {@code marginWarnings} 为空</li>
+ *   <li>成本数据缺失 (belowRedline=null，skipped) → warn-and-allow，订单正常创建, 无预警</li>
  *   <li>grossMarginRedlineService 未注入 (null) → 不影响订单创建</li>
  * </ol>
+ *
+ * <p><strong>脱敏</strong>: 预警文案来自 {@link GrossMarginCheckResult#getWarningMessage()},
+ * 不含 minPrice / standardCost / targetGrossMargin 等价格敏感数值 (由 DTO 保证)。
  *
  * <p>红线阈值来源：通过 {@link GrossMarginRedlineService} mock 注入，阈值配置本身由
  * {@code GrossMarginRedlineServiceTest} 覆盖（不重复）。
@@ -138,43 +142,48 @@ class SalesServiceImplMarginRedlineTest {
     }
 
     // =========================================================================
-    // 路径 1: belowRedline=true → 409 拦截
+    // 路径 1: belowRedline=true → 非阻断, 订单创建 + marginWarnings 含预警
     // =========================================================================
 
     @Test
-    @DisplayName("E5-01: 报价低于毛利红线 → BusinessException 409，含产品名和 actionHint")
-    void createOrder_priceBelowRedline_throws409() {
+    @DisplayName("E5-01: 报价低于毛利红线 → 订单仍创建 (不抛异常) + marginWarnings 含产品名预警")
+    void createOrder_priceBelowRedline_createsWithWarning() {
         when(grossMarginRedlineService.checkMargin(
                 eq(FACTORY_ID), eq(PRODUCT_TYPE_ID), any(BigDecimal.class)))
                 .thenReturn(GrossMarginCheckResult.warn());
 
         CreateSalesOrderRequest req = buildRequest("80.00");   // 低价
 
-        assertThatThrownBy(() -> salesService.createSalesOrder(FACTORY_ID, req, USER_ID))
-                .isInstanceOf(BusinessException.class)
-                .satisfies(ex -> {
-                    BusinessException be = (BusinessException) ex;
-                    assertThat(be.getCode()).isEqualTo(409);
-                    assertThat(be.getMessage()).contains("低于毛利红线");
-                    assertThat(be.getMessage()).contains("猪舌");   // 产品名在 message
-                    assertThat(be.getActionHint()).isNotBlank();    // fool-proof Rule 1: 含 next action
-                });
+        SalesOrder created = salesService.createSalesOrder(FACTORY_ID, req, USER_ID);
 
-        // 订单不应被持久化（salesOrderItemRepository.saveAll 不应调用）
-        verify(salesOrderItemRepository, never()).saveAll(anyList());
+        // 非阻断: 订单正常创建
+        assertThat(created).isNotNull();
+        assertThat(created.getFactoryId()).isEqualTo(FACTORY_ID);
+        // 订单仍被持久化 (saveAll 被调用) — 不再 short-circuit
+        verify(salesOrderItemRepository).saveAll(anyList());
+        // marginWarnings 含本行预警, 含产品名, 含 next-action 提示
+        assertThat(created.getMarginWarnings()).hasSize(1);
+        assertThat(created.getMarginWarnings().get(0)).contains("猪舌");
+        assertThat(created.getMarginWarnings().get(0)).contains("毛利红线");
+        assertThat(created.getMarginWarnings().get(0)).contains("销售经理"); // fool-proof Rule 4位一体 d
     }
 
     @Test
-    @DisplayName("E5-02: 报价低于红线 → warningMessage 传递到 BusinessException message")
-    void createOrder_priceBelowRedline_messageContainsWarning() {
+    @DisplayName("E5-02: 报价低于红线 → warningMessage 传递到 marginWarnings (不含成本数值)")
+    void createOrder_priceBelowRedline_warningFromBackendMessage() {
         GrossMarginCheckResult warn = new GrossMarginCheckResult(true, "报价低于毛利红线，建议调整");
         when(grossMarginRedlineService.checkMargin(
                 eq(FACTORY_ID), eq(PRODUCT_TYPE_ID), any(BigDecimal.class)))
                 .thenReturn(warn);
 
-        assertThatThrownBy(() -> salesService.createSalesOrder(FACTORY_ID, buildRequest("90.00"), USER_ID))
-                .isInstanceOf(BusinessException.class)
-                .hasMessageContaining("报价低于毛利红线");
+        SalesOrder created = salesService.createSalesOrder(FACTORY_ID, buildRequest("90.00"), USER_ID);
+
+        assertThat(created).isNotNull();
+        assertThat(created.getMarginWarnings()).hasSize(1);
+        assertThat(created.getMarginWarnings().get(0)).contains("报价低于毛利红线");
+        // 脱敏: 文案不含任何成本数值 (¥成本/minPrice/毛利率%) — DTO 层保证, 此处复核无 "成本¥" 类泄露
+        assertThat(created.getMarginWarnings().get(0)).doesNotContain("成本");
+        assertThat(created.getMarginWarnings().get(0)).doesNotContain("标准成本");
     }
 
     // =========================================================================
@@ -192,6 +201,8 @@ class SalesServiceImplMarginRedlineTest {
 
         assertThat(created).isNotNull();
         assertThat(created.getFactoryId()).isEqualTo(FACTORY_ID);
+        // 合规报价 → 无预警
+        assertThat(created.getMarginWarnings()).isEmpty();
     }
 
     // =========================================================================
@@ -209,6 +220,8 @@ class SalesServiceImplMarginRedlineTest {
 
         assertThat(created).isNotNull();
         // skipped → 不抛异常 (warn-and-allow, 禁止降级原则: 明确 WARN log 而非静默放行)
+        // skipped 不算"低于红线"预警 → marginWarnings 为空 (配置缺口仅 WARN log, 不污染用户面预警)
+        assertThat(created.getMarginWarnings()).isEmpty();
     }
 
     // =========================================================================

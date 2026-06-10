@@ -33,7 +33,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.*;
 
 import com.cretas.aims.annotation.RequirePermission;
-import com.cretas.aims.config.RequireRole;
 import com.cretas.aims.dto.pricing.GrossMarginCheckResult;
 import com.cretas.aims.service.pricing.GrossMarginRedlineService;
 
@@ -632,14 +631,20 @@ public class SalesController {
     // ==================== SP5: 毛利红线校验 ====================
 
     /**
-     * SP5: 报价毛利红线校验.
+     * SP5: 报价毛利红线校验 (下单前预警, 非阻断).
      *
      * <p>校验给定品类报价是否低于毛利红线，仅返回 {@code belowRedline} + {@code warningMessage}，
      * 不暴露 minPrice / standardCost / targetGrossMargin 等价格敏感数据。
+     *
+     * <p><strong>权限 (2026-06-10 修正)</strong>: 改用 {@code @RequirePermission("sales:read_write")}
+     * 与"创建订单"端点同一闸门 —— 任何能下单的角色 (含销售/录单员) 都能在提交前调本接口预览毛利预警
+     * (fool-proof Rule 1: 提交前看到边界, 而非提交后被拒)。原先 {@code @RequireRole} 仅放
+     * super_admin/sales_manager/finance_manager, 把一线录单员排除在外 = "既拦又瞒", 已废弃。
+     * 返回 DTO 已脱敏 (只 boolean + 文案, 无成本数值), 给销售看预警不泄露成本结构。
      */
     @PostMapping("/check-margin")
-    @Operation(summary = "报价毛利红线校验（SP5）")
-    @RequireRole({"factory_super_admin", "sales_manager", "finance_manager"})
+    @Operation(summary = "报价毛利红线校验（SP5，下单前非阻断预警）")
+    @RequirePermission("sales:read_write")
     public ApiResponse<GrossMarginCheckResult> checkMargin(
             @PathVariable @NotBlank String factoryId,
             @RequestBody @Valid CheckMarginRequest request) {

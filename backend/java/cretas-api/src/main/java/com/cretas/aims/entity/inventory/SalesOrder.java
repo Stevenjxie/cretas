@@ -301,6 +301,22 @@ public class SalesOrder extends BaseEntity {
     @OneToMany(mappedBy = "salesOrder", cascade = CascadeType.PERSIST, fetch = FetchType.LAZY)
     private List<SalesDeliveryRecord> deliveryRecords = new ArrayList<>();
 
+    /**
+     * SP5 E-5 毛利红线预警 (非阻断, 2026-06-10 决策修正).
+     *
+     * <p>下单时若某行报价低于毛利红线, 后端不再 409 阻断 (客户明确"低于底线提示红色, 不是不允许"),
+     * 而是把红线预警文案 (来自 {@code GrossMarginCheckResult.warningMessage}) 收集到此 @Transient
+     * 列表, 随创建成功的订单返回. 前端展示 sticky warning, 不阻止提交 (fool-proof Rule 1: 预先显示边界).
+     *
+     * <p><strong>安全约束</strong>: 文案仅含"低于毛利红线"语义, 不含 minPrice / standardCost /
+     * targetGrossMargin 等价格敏感数值 (由 {@code GrossMarginCheckResult} 保证)。
+     *
+     * <p>不持久化 (@Transient); 仅在 createSalesOrder 返回值上有意义。
+     */
+    @Transient
+    @JsonProperty("marginWarnings")
+    private List<String> marginWarnings = new ArrayList<>();
+
     // ==================== 计算属性 ====================
 
     @Transient
