@@ -1,30 +1,21 @@
-"""Unit tests for ChartInsightService (U4 + U1 硬化) — TDD first.
+"""Unit tests for ChartInsightService (v4 — claims-pinning architecture).
 
-Tests:
- 1. signature_determinism — same input → same hash; different permissionTier → different hash
- 2. tier2a_hit — fills slots + permission gate blocks absolute ¥
- 3. tier2b_miss — LLM mock returns structured JSON → captured, proposal_count=1, is_active=False
- 4. promote_threshold_1 — threshold=1 → is_active=True after one LLM capture (finding-only auto)
- 5. validate_template_parameterization — rejects literal store/product names and absolute numbers
- 6. poison_guard — rejects causal-prescriptive verbs (复制/引流/加大/扩张/推广)
- 7. rbac_low_perm_no_absolute_yen — low-perm caller gets no absolute ¥ values
- 8. rbac_jwt_wins_over_body — request-body factoryId is ignored; JWT factoryId wins
- 9. rbac_cross_tenant_blocked — cross-tenant read blocked
-10. budget_blocked — budget blocked → service returns null
-11. suggestion_needs_is_verified — suggestion-bearing template requires is_verified=True for auto-promote
+Active test classes:
+ 1. TestExtractJsonObject — LLM response parse robustness
+ 2. TestSignatureDeterminism — signature determinism + cross-tenant sharing
+ 3. TestPoisonGuard — causal-prescriptive verb detection
+ 4. TestChartInsightService — service integration (budget/cross-tenant/LLM path)
+ 5. TestRBACGuarantees — JWT-wins + cross-tenant blocked
+ 6. TestEndpointRBAC — endpoint structural RBAC
+ 7. TestU1Hardening — budget-None fail-closed + token consume + cross-factory sig
+ 8. TestValidateClaims — C1.2 claims-pinning recompute + numeric-adjacency gate
+ 9. TestPromptAndTierStats — C1.3 _stats_for_tier + _build_insight_prompt
+10. TestGetInsightClaimsPinning — Task 4 end-to-end: claims-pinning serve + ¥ gate
 
-U1 硬化新增:
-12. safe_fill_illegal_slot_returns_none — unknown {slot} left after fill → result None
-13. safe_fill_finding_none_yields_insight_none — finding filled to None → InsightResult None
-14. safe_fill_implication_none_keeps_result — only implication/suggestion cleared, result survives
-15. budget_tracker_none_fail_closed — budget_tracker=None → get_insight returns None without AttributeError
-16. permission_tier_from_role_not_body — endpoint ignores body.permission_tier; derives from caller_role
-17. poison_in_implication_rejected — _contains_poison on implication_tpl stops capture
-18. yen_in_suggestion_rejected — absolute ¥ in suggestion_tpl stops capture
-19. token_consume_realistic — consume called with ≥600 tokens per LLM call
-20. template_not_overwritten_on_second_capture — ON CONFLICT does NOT update insight_template
-21. cross_factory_same_signature — two factories same chart params → same signature_hash (no factoryId)
-22. data_pattern_fixture_n4_8 — canonical data_pattern uses n4-8 not cat-count:4-8
+Removed (C3 — dead template machinery):
+ - TestValidateTemplateParameterization (validate_template_parameterization deleted)
+ - TestSafeFill (_safe_fill deleted)
+ - Tests that exercised _lookup_template / _capture_template / _maybe_promote paths
 """
 from __future__ import annotations
 
@@ -55,9 +46,8 @@ from smartbi.services.insights.chart_insight_service import (
     ChartInsightContext,
     InsightResult,
     compute_signature,
-    validate_template_parameterization,
+    DEFAULT_PROMOTE_THRESHOLD,
     _POISON_VERB_RE,
-    _safe_fill,
     _extract_json_object,
     FINANCE_METRICS,
 )
@@ -117,38 +107,6 @@ def _make_context(
     )
 
 
-def _make_template_row(
-    *,
-    factory_id: str = "F001",
-    signature_hash: str = "abc123",
-    finding_tpl: str = "{topName}占{topShare}%，是末位{botName}的{ratio}倍",
-    implication_tpl: Optional[str] = "头部集中度{concLevel}",
-    suggestion_tpl: Optional[str] = None,
-    required_permission: Optional[str] = None,
-    source_type: str = "LLM_FALLBACK",
-    hit_count: int = 5,
-    proposal_count: int = 1,
-    is_active: bool = True,
-    is_verified: bool = False,
-) -> dict:
-    return {
-        "factory_id": factory_id,
-        "signature_hash": signature_hash,
-        "insight_template": json.dumps({
-            "finding_tpl": finding_tpl,
-            "implication_tpl": implication_tpl,
-            "suggestion_tpl": suggestion_tpl,
-            "slots": ["topName", "topShare", "botName", "ratio", "concLevel"],
-        }),
-        "required_permission": required_permission,
-        "source_type": source_type,
-        "hit_count": hit_count,
-        "proposal_count": proposal_count,
-        "is_active": is_active,
-        "is_verified": is_verified,
-    }
-
-
 class FakeBudgetBlocked:
     async def check_budget(self, factory_id, today=None):
         from smartbi.agent.budget_tracker import BudgetCheckResult
@@ -167,15 +125,6 @@ class FakeBudgetOk:
     async def consume(self, factory_id, tokens, today=None):
         from smartbi.agent.budget_tracker import BudgetCheckResult
         return BudgetCheckResult(blocked=False, tokens_used=100 + tokens, tokens_cap=50000)
-
-
-# LLM structured response mock
-GOOD_LLM_RESPONSE = {
-    "finding_tpl": "{topName}占{topShare}%，是末位{botName}的{ratio}倍",
-    "implication_tpl": "头部集中度{concLevel}",
-    "suggestion_tpl": None,
-    "slots": ["topName", "topShare", "botName", "ratio", "concLevel"],
-}
 
 
 # ---------------------------------------------------------------------------
@@ -227,50 +176,7 @@ class TestSignatureDeterminism:
 
 
 # ---------------------------------------------------------------------------
-# 2. Template parameterization validation
-# ---------------------------------------------------------------------------
-
-class TestValidateTemplateParameterization:
-    def test_valid_template_passes(self):
-        ok = validate_template_parameterization(
-            "{topName}占{topShare}%，是末位{botName}的{ratio}倍"
-        )
-        assert ok is True
-
-    def test_literal_store_name_rejected(self):
-        bad = validate_template_parameterization(
-            "A店占65%，是末位B店的3倍"
-        )
-        assert bad is False
-
-    def test_absolute_number_rejected(self):
-        # Template containing absolute RMB figure
-        bad = validate_template_parameterization(
-            "营收最高达¥12345，增长明显"
-        )
-        assert bad is False
-
-    def test_literal_rmb_symbol_rejected(self):
-        bad = validate_template_parameterization("总营收¥500万")
-        assert bad is False
-
-    def test_ratio_and_percentage_allowed(self):
-        ok = validate_template_parameterization(
-            "{topName}的增长率为{growthRate}%，高于行业均值"
-        )
-        assert ok is True
-
-    def test_empty_finding_rejected(self):
-        assert validate_template_parameterization("") is False
-
-    def test_no_slots_with_literal_content_rejected(self):
-        # No {placeholders} at all, just literal text — suspicious if it contains numbers
-        bad = validate_template_parameterization("营收增长了25%")
-        assert bad is False
-
-
-# ---------------------------------------------------------------------------
-# 3. Poison guard
+# 2. Poison guard
 # ---------------------------------------------------------------------------
 
 class TestPoisonGuard:
@@ -295,229 +201,39 @@ class TestPoisonGuard:
 
 @pytest.mark.asyncio
 class TestChartInsightService:
-    """Integration tests — all DB + LLM calls are mocked."""
+    """Integration tests — budget + cross-tenant guards + LLM path (v4 claims-pinning)."""
 
     def _make_service(
         self,
-        db_row: Optional[dict] = None,
         llm_response: Optional[dict] = None,
         budget=None,
-        promote_threshold: int = 3,
     ) -> ChartInsightService:
-        """Create a ChartInsightService with mocked pool and optional LLM."""
+        """Create a ChartInsightService with mocked pool + optional LLM response."""
         pool = MagicMock()
-        # Mock async context manager for pool.acquire()
         conn = AsyncMock()
         pool.acquire = MagicMock()
         pool.acquire.return_value.__aenter__ = AsyncMock(return_value=conn)
         pool.acquire.return_value.__aexit__ = AsyncMock(return_value=None)
-
-        if db_row is not None:
-            # fetchrow returns the row (simulating template hit)
-            conn.fetchrow = AsyncMock(return_value=db_row)
-        else:
-            # fetchrow returns None (cache miss)
-            conn.fetchrow = AsyncMock(return_value=None)
-
-        # execute for upsert/update
+        conn.fetchrow = AsyncMock(return_value=None)
         conn.execute = AsyncMock(return_value=None)
-        # fetchval for proposal_count
         conn.fetchval = AsyncMock(return_value=1)
 
         svc = ChartInsightService(
             pool=pool,
             budget_tracker=budget or FakeBudgetOk(),
-            promote_threshold=promote_threshold,
+            promote_threshold=DEFAULT_PROMOTE_THRESHOLD,
         )
-        if llm_response is not None:
-            svc._call_llm = AsyncMock(return_value=llm_response)
-        else:
-            svc._call_llm = AsyncMock(return_value=None)
+        svc._call_llm = AsyncMock(return_value=llm_response)
         return svc
 
-    async def test_tier2a_hit_fills_slots(self):
-        """Template found → slots filled from context data."""
-        ctx = _make_context(
-            x_dim="store", y_metric="revenue",
-            series_values=[300.0, 200.0, 100.0, 50.0],
-            series_labels=["旗舰店", "A店", "B店", "C店"],
-        )
-        row = _make_template_row(
-            signature_hash=compute_signature(ctx),
-            finding_tpl="{topName}占{topShare}%，是末位{botName}的{ratio}倍",
-            implication_tpl=None,
-            suggestion_tpl=None,
-        )
-        svc = self._make_service(db_row=row)
-
-        result = await svc.get_insight(ctx, caller_role="restaurant_manager")
-        assert result is not None
-        assert result.source == "template"
-        assert result.tier == 2
-        # The finding should have placeholders filled
-        assert "{topName}" not in result.finding
-        assert "旗舰店" in result.finding
-
-    async def test_tier2a_finance_metric_with_finance_role_passes(self):
-        """finance:read_write role → template with valid slots returned."""
-        ctx = _make_context(y_metric="revenue", permission_tier="finance_visible")
-        row = _make_template_row(
-            signature_hash=compute_signature(ctx),
-            # Use valid whitelist slots only ({topName}, {topShare}, {ratio})
-            finding_tpl="{topName}占{topShare}%，是末位{botName}的{ratio}倍",
-            required_permission="finance:read_write",
-            is_active=True,
-        )
-        svc = self._make_service(db_row=row)
-
-        result = await svc.get_insight(ctx, caller_role="restaurant_manager")
-        assert result is not None
-        assert result.source == "template"
-
-    async def test_tier2a_finance_metric_without_finance_role_blocked(self):
-        """Non-finance role → template requiring finance:read_write returns None."""
-        ctx = _make_context(y_metric="revenue", permission_tier="finance_hidden")
-        row = _make_template_row(
-            signature_hash=compute_signature(ctx),
-            finding_tpl="{topName}占{topShare}%，是末位{botName}的{ratio}倍",
-            required_permission="finance:read_write",
-            is_active=True,
-        )
-        svc = self._make_service(db_row=row)
-
-        result = await svc.get_insight(ctx, caller_role="warehouse_worker")
-        # warehouse_worker is not in FINANCE_ROLES → template blocked
-        assert result is None
-
-    async def test_tier2b_miss_calls_llm_and_captures(self):
-        """No template hit → LLM called → result captured with proposal_count=1, is_active=False."""
-        ctx = _make_context(factory_id="F001")
-        svc = self._make_service(db_row=None, llm_response=GOOD_LLM_RESPONSE)
-
-        result = await svc.get_insight(ctx, caller_role="restaurant_manager")
-        # LLM was called
-        svc._call_llm.assert_called_once()
-        # Capture (upsert) was executed
-        svc._pool.acquire.return_value.__aenter__.return_value.execute.assert_called()
-        # Result has source='llm'
-        assert result is not None
-        assert result.source == "llm"
-        assert result.tier == 2
-
-    async def test_tier2b_llm_null_finding_returns_none(self):
-        """LLM returns null finding → no fabrication → service returns None."""
-        ctx = _make_context()
-        null_response = {"finding_tpl": None, "implication_tpl": None, "suggestion_tpl": None, "slots": []}
-        svc = self._make_service(db_row=None, llm_response=null_response)
-
-        result = await svc.get_insight(ctx, caller_role="restaurant_manager")
-        assert result is None
-
-    async def test_promote_threshold_1_finding_only_auto_promotes(self):
-        """proposal_count >= threshold=1 AND finding-only → is_active set True automatically."""
-        ctx = _make_context(factory_id="F001")
-        # Service with threshold=1
-        svc = self._make_service(
-            db_row=None,
-            llm_response=GOOD_LLM_RESPONSE,  # no suggestion_tpl → finding-only
-            promote_threshold=1,
-        )
-        # Mock fetchval to return proposal_count=1 after upsert
-        svc._pool.acquire.return_value.__aenter__.return_value.fetchval = AsyncMock(return_value=1)
-
-        await svc.get_insight(ctx, caller_role="restaurant_manager")
-
-        # execute should have been called at least twice (upsert + promote)
-        execute_calls = svc._pool.acquire.return_value.__aenter__.return_value.execute.call_args_list
-        # At least one call should contain 'is_active = true' logic
-        call_sql_texts = [str(c) for c in execute_calls]
-        assert any("is_active" in sql for sql in call_sql_texts), (
-            "Expected an is_active=true UPDATE call, but none found. Execute calls: " + str(execute_calls)
-        )
-
-    async def test_promote_suggestion_template_needs_is_verified(self):
-        """suggestion-bearing template should NOT auto-promote unless is_verified=True (not our call here,
-        but the service should NOT set is_active for suggestion template without is_verified)."""
-        ctx = _make_context(factory_id="F001")
-        response_with_suggestion = {
-            "finding_tpl": "{topName}占{topShare}%",
-            "implication_tpl": None,
-            "suggestion_tpl": "建议关注{topName}与末位的差异",  # has suggestion
-            "slots": ["topName", "topShare"],
-        }
-        svc = self._make_service(
-            db_row=None,
-            llm_response=response_with_suggestion,
-            promote_threshold=1,
-        )
-        svc._pool.acquire.return_value.__aenter__.return_value.fetchval = AsyncMock(return_value=1)
-
-        await svc.get_insight(ctx, caller_role="restaurant_manager")
-
-        # Check: no execute call with 'is_active = true' for suggestion template without is_verified
-        execute_calls = svc._pool.acquire.return_value.__aenter__.return_value.execute.call_args_list
-        # There should be NO promote call (suggestion needs is_verified which is false)
-        active_promote_calls = [
-            c for c in execute_calls
-            if "is_active" in str(c) and "true" in str(c).lower()
-        ]
-        assert len(active_promote_calls) == 0, (
-            "Suggestion-bearing template should NOT auto-promote without is_verified. "
-            f"Found promote calls: {active_promote_calls}"
-        )
-
     async def test_budget_blocked_returns_none(self):
-        """Budget blocked → service returns None (no fabrication, no LLM call)."""
+        """Budget blocked → service returns None (no LLM call)."""
         ctx = _make_context()
-        svc = self._make_service(db_row=None, budget=FakeBudgetBlocked())
+        svc = self._make_service(budget=FakeBudgetBlocked())
 
         result = await svc.get_insight(ctx, caller_role="restaurant_manager")
         assert result is None
         svc._call_llm.assert_not_called()
-
-    async def test_poison_template_not_promoted(self):
-        """LLM returns template with poison verb → validate_template_parameterization returns False → not promoted."""
-        ctx = _make_context(factory_id="F001")
-        poison_response = {
-            "finding_tpl": "{topName}占{topShare}%",
-            "implication_tpl": None,
-            "suggestion_tpl": "建议复制{topName}门店的成功模式",  # POISON: 复制
-            "slots": ["topName", "topShare"],
-        }
-        svc = self._make_service(
-            db_row=None,
-            llm_response=poison_response,
-            promote_threshold=1,
-        )
-        svc._pool.acquire.return_value.__aenter__.return_value.fetchval = AsyncMock(return_value=1)
-
-        await svc.get_insight(ctx, caller_role="restaurant_manager")
-
-        execute_calls = svc._pool.acquire.return_value.__aenter__.return_value.execute.call_args_list
-        active_promote_calls = [
-            c for c in execute_calls
-            if "is_active" in str(c) and "true" in str(c).lower()
-        ]
-        assert len(active_promote_calls) == 0, "Poison verb template should NOT be promoted"
-
-    async def test_validate_template_literal_not_captured(self):
-        """LLM returns template with literal store name → not valid → not captured."""
-        ctx = _make_context(factory_id="F001")
-        bad_response = {
-            "finding_tpl": "A店占65%，是B店的3倍",  # literal store names
-            "implication_tpl": None,
-            "suggestion_tpl": None,
-            "slots": [],
-        }
-        svc = self._make_service(db_row=None, llm_response=bad_response, promote_threshold=1)
-
-        result = await svc.get_insight(ctx, caller_role="restaurant_manager")
-        # Template invalid → still returns LLM result but does NOT upsert
-        # (upsert should not happen for invalid template)
-        execute_calls = svc._pool.acquire.return_value.__aenter__.return_value.execute.call_args_list
-        assert len(execute_calls) == 0 or all(
-            "ai_insight_templates" not in str(c) for c in execute_calls
-        ), "Invalid template should NOT be written to ai_insight_templates"
 
 
 # ---------------------------------------------------------------------------
@@ -589,33 +305,6 @@ class TestRBACGuarantees:
         # DB must not be queried with the attacker's factory_id
         conn.fetchrow.assert_not_called()
 
-    async def test_finance_metric_low_perm_no_absolute_yen(self):
-        """Finance yMetric + low-perm role (warehouse_worker) → template blocked → result None."""
-        ctx = _make_context(y_metric="revenue", permission_tier="finance_visible")
-        row = _make_template_row(
-            signature_hash=compute_signature(ctx),
-            finding_tpl="{topName}占{topShare}%，是末位{botName}的{ratio}倍",
-            required_permission="finance:read_write",
-            is_active=True,
-        )
-
-        pool = MagicMock()
-        conn = AsyncMock()
-        pool.acquire.return_value.__aenter__ = AsyncMock(return_value=conn)
-        pool.acquire.return_value.__aexit__ = AsyncMock(return_value=None)
-        conn.fetchrow = AsyncMock(return_value=row)
-        conn.execute = AsyncMock(return_value=None)
-
-        svc = ChartInsightService(pool=pool, budget_tracker=FakeBudgetOk(), promote_threshold=3)
-        svc._call_llm = AsyncMock(return_value=None)
-
-        # Low-privilege role: warehouse_worker is not in FINANCE_ROLES → template blocked
-        result = await svc.get_insight(ctx, caller_role="warehouse_worker")
-        # finance:read_write template blocked for non-finance role → None
-        assert result is None, (
-            "Low-perm role (warehouse_worker) should receive None for finance:read_write template"
-        )
-
 
 # ---------------------------------------------------------------------------
 # Endpoint-level RBAC tests (test the FastAPI endpoint layer)
@@ -681,70 +370,34 @@ class TestEndpointRBAC:
         assert "warehouse_worker" not in FINANCE_ROLES, "warehouse_worker must NOT be in FINANCE_ROLES"
 
 
-# ---------------------------------------------------------------------------
-# U1 hardening tests (new — must fail before implementation, pass after)
-# ---------------------------------------------------------------------------
-
-class TestSafeFill:
-    """U1.2: _safe_fill must return None if any {slot} remains after filling."""
-
-    def test_legal_slots_filled_normally(self):
-        """All known slots provided → no {slot} remains → string returned."""
-        tpl = "{topName}占{topShare}%，是末位{botName}的{ratio}倍"
-        slot_values = {"topName": "旗舰店", "topShare": "45.0", "botName": "C店", "ratio": "3.0"}
-        result = _safe_fill(tpl, slot_values)
-        assert result is not None
-        assert "{topName}" not in result
-        assert "旗舰店" in result
-
-    def test_unknown_slot_returns_none(self):
-        """Template contains {topChannel} (not in whitelist/values) → None returned."""
-        tpl = "{topName}占{topShare}%，{topChannel}渠道最高"
-        slot_values = {"topName": "旗舰店", "topShare": "45.0"}
-        result = _safe_fill(tpl, slot_values)
-        assert result is None, f"Expected None for unfilled {{topChannel}}, got: {result!r}"
-
-    def test_empty_template_returns_empty_string(self):
-        """Empty template string with no slots → safe_fill returns empty string (not None)."""
-        result = _safe_fill("", {})
-        assert result is not None  # empty string is fine, not a broken slot
-        assert result == ""
-
-    def test_no_slots_in_template_returns_template(self):
-        """Template with no {slots} at all → returned as-is."""
-        tpl = "整体趋势平稳"
-        result = _safe_fill(tpl, {})
-        assert result == tpl
-
-
 @pytest.mark.asyncio
 class TestU1Hardening:
-    """U1 items 2-9: comprehensive new tests that must fail before implementation."""
+    """U1 hardening: budget-None fail-closed + token consume + cross-factory sig."""
 
-    def _make_service_with_none_tracker(self, db_row=None, llm_response=None):
+    def _make_service_with_none_tracker(self, llm_response=None):
         """Create service where budget_tracker=None (simulates pool init failure)."""
         pool = MagicMock()
         conn = AsyncMock()
         pool.acquire.return_value.__aenter__ = AsyncMock(return_value=conn)
         pool.acquire.return_value.__aexit__ = AsyncMock(return_value=None)
-        conn.fetchrow = AsyncMock(return_value=db_row)
+        conn.fetchrow = AsyncMock(return_value=None)
         conn.execute = AsyncMock(return_value=None)
         conn.fetchval = AsyncMock(return_value=1)
 
         svc = ChartInsightService(
             pool=pool,
-            budget_tracker=None,  # <-- None budget tracker
+            budget_tracker=None,
             promote_threshold=3,
         )
         svc._call_llm = AsyncMock(return_value=llm_response)
         return svc
 
-    def _make_service(self, db_row=None, llm_response=None, budget=None, promote_threshold=3):
+    def _make_service(self, llm_response=None, budget=None, promote_threshold=3):
         pool = MagicMock()
         conn = AsyncMock()
         pool.acquire.return_value.__aenter__ = AsyncMock(return_value=conn)
         pool.acquire.return_value.__aexit__ = AsyncMock(return_value=None)
-        conn.fetchrow = AsyncMock(return_value=db_row)
+        conn.fetchrow = AsyncMock(return_value=None)
         conn.execute = AsyncMock(return_value=None)
         conn.fetchval = AsyncMock(return_value=1)
         svc = ChartInsightService(
@@ -753,105 +406,33 @@ class TestU1Hardening:
         svc._call_llm = AsyncMock(return_value=llm_response)
         return svc
 
-    # ---- U1.2: safe fill + finding None → InsightResult None ----
-
-    async def test_finding_with_unknown_slot_yields_insight_none(self):
-        """U1.2: LLM returns template with {topChannel} (not in slot values) →
-        _safe_fill returns None → InsightResult must be None (no raw {slot} to user)."""
-        ctx = _make_context()
-        bad_llm = {
-            "finding_tpl": "{topName}占{topShare}%，{topChannel}渠道贡献最多",
-            "implication_tpl": None,
-            "suggestion_tpl": None,
-            "slots": ["topName", "topShare", "topChannel"],
-        }
-        svc = self._make_service(db_row=None, llm_response=bad_llm)
-        result = await svc.get_insight(ctx, caller_role="restaurant_manager")
-        assert result is None, (
-            f"Expected None when finding contains unfilled {{topChannel}}, got: {result}"
-        )
-
-    async def test_implication_with_unknown_slot_cleared_to_none(self):
-        """U1.2: unknown slot only in implication → implication=None, result survives."""
-        ctx = _make_context()
-        llm_with_bad_impl = {
-            "finding_tpl": "{topName}占{topShare}%，是末位{botName}的{ratio}倍",
-            "implication_tpl": "渠道{unknownSlot}显著",
-            "suggestion_tpl": None,
-            "slots": ["topName", "topShare", "botName", "ratio"],
-        }
-        svc = self._make_service(db_row=None, llm_response=llm_with_bad_impl)
-        result = await svc.get_insight(ctx, caller_role="restaurant_manager")
-        # finding is valid so result should NOT be None
-        assert result is not None, "Result should survive if only implication has unknown slot"
-        assert result.implication is None, (
-            f"implication with unknown slot must be None, got: {result.implication!r}"
-        )
-        # finding must be filled
-        assert "{topName}" not in result.finding
-
-    # ---- U1.3: budget tracker None → fail-closed ----
+    # ---- budget tracker None → fail-closed ----
 
     async def test_budget_tracker_none_fail_closed(self):
-        """U1.3: budget_tracker=None → get_insight returns None without AttributeError."""
+        """budget_tracker=None → get_insight returns None without AttributeError."""
         ctx = _make_context()
-        svc = self._make_service_with_none_tracker(db_row=None, llm_response=GOOD_LLM_RESPONSE)
+        # Use a valid claims-pinning response so failure is exclusively from budget=None
+        valid_claims_response = {
+            "claims": [{"entity": "A店", "stat_type": "share", "value": 35.7}],
+            "finding": "A店占35.7%。",
+            "implication": None,
+            "suggestion": None,
+        }
+        svc = self._make_service_with_none_tracker(llm_response=valid_claims_response)
         result = await svc.get_insight(ctx, caller_role="restaurant_manager")
-        # Must return None without raising AttributeError/NoneType error
         assert result is None, (
             f"budget_tracker=None must return None (fail-closed), got: {result}"
         )
-        # LLM must NOT have been called (fail-closed before LLM)
         svc._call_llm.assert_not_called()
 
-    # ---- U1.5: poison + ¥ on all 3 fields ----
-
-    async def test_poison_in_implication_rejected(self):
-        """U1.5: poison verb in implication_tpl → capture NOT written to DB."""
-        ctx = _make_context()
-        poisoned_impl = {
-            "finding_tpl": "{topName}占{topShare}%",
-            "implication_tpl": "应扩张{topName}的市场份额",  # POISON: 扩张
-            "suggestion_tpl": None,
-            "slots": ["topName", "topShare"],
-        }
-        svc = self._make_service(db_row=None, llm_response=poisoned_impl, promote_threshold=1)
-        svc._pool.acquire.return_value.__aenter__.return_value.fetchval = AsyncMock(return_value=1)
-
-        await svc.get_insight(ctx, caller_role="restaurant_manager")
-
-        execute_calls = svc._pool.acquire.return_value.__aenter__.return_value.execute.call_args_list
-        # No INSERT to ai_insight_templates should have been made
-        template_inserts = [c for c in execute_calls if "ai_insight_templates" in str(c)]
-        assert len(template_inserts) == 0, (
-            f"Poison in implication_tpl should prevent capture. Inserts found: {template_inserts}"
-        )
-
-    async def test_yen_in_suggestion_rejected(self):
-        """U1.5: absolute ¥ in suggestion_tpl → capture NOT written to DB."""
-        ctx = _make_context()
-        yen_suggestion = {
-            "finding_tpl": "{topName}占{topShare}%",
-            "implication_tpl": None,
-            "suggestion_tpl": "建议关注¥1234万的差距",  # absolute ¥
-            "slots": ["topName", "topShare"],
-        }
-        svc = self._make_service(db_row=None, llm_response=yen_suggestion, promote_threshold=1)
-        svc._pool.acquire.return_value.__aenter__.return_value.fetchval = AsyncMock(return_value=1)
-
-        await svc.get_insight(ctx, caller_role="restaurant_manager")
-
-        execute_calls = svc._pool.acquire.return_value.__aenter__.return_value.execute.call_args_list
-        template_inserts = [c for c in execute_calls if "ai_insight_templates" in str(c)]
-        assert len(template_inserts) == 0, (
-            f"Absolute ¥ in suggestion_tpl should prevent capture. Inserts: {template_inserts}"
-        )
-
-    # ---- U1.6: token realistic count ----
+    # ---- token realistic count ----
 
     async def test_token_consume_at_least_600(self):
-        """U1.6: after a successful LLM call, consume() must be called with tokens ≥ 600."""
-        ctx = _make_context()
+        """After a successful LLM call, consume() must be called with tokens ≥ 600."""
+        ctx = _make_context(
+            series_values=[62.0, 38.0],
+            series_labels=["堂食", "外卖"],
+        )
         consumed_tokens = []
 
         class CapturingBudget:
@@ -864,7 +445,14 @@ class TestU1Hardening:
                 from smartbi.agent.budget_tracker import BudgetCheckResult
                 return BudgetCheckResult(blocked=False, tokens_used=tokens, tokens_cap=50000)
 
-        svc = self._make_service(db_row=None, llm_response=GOOD_LLM_RESPONSE, budget=CapturingBudget())
+        # Valid claims-pinning response so LLM path runs to completion
+        valid_resp = {
+            "claims": [{"entity": "堂食", "stat_type": "share", "value": 62.0}],
+            "finding": "堂食占62%，是主要渠道。",
+            "implication": None,
+            "suggestion": None,
+        }
+        svc = self._make_service(llm_response=valid_resp, budget=CapturingBudget())
         await svc.get_insight(ctx, caller_role="restaurant_manager")
 
         assert len(consumed_tokens) > 0, "consume() should have been called after LLM response"
@@ -872,33 +460,7 @@ class TestU1Hardening:
             f"Token consumption must be ≥600 for realistic LLM accounting, got {consumed_tokens[0]}"
         )
 
-    # ---- U1.7: template not overwritten on second capture ----
-
-    async def test_template_not_overwritten_on_second_capture(self):
-        """U1.7: ON CONFLICT update must NOT include insight_template=EXCLUDED.insight_template."""
-        ctx = _make_context()
-        svc = self._make_service(db_row=None, llm_response=GOOD_LLM_RESPONSE, promote_threshold=10)
-        svc._pool.acquire.return_value.__aenter__.return_value.fetchval = AsyncMock(return_value=2)
-
-        await svc.get_insight(ctx, caller_role="restaurant_manager")
-
-        execute_calls = svc._pool.acquire.return_value.__aenter__.return_value.execute.call_args_list
-        for call in execute_calls:
-            call_str = str(call)
-            if "ai_insight_templates" in call_str and "ON CONFLICT" in call_str:
-                assert "insight_template = EXCLUDED" not in call_str, (
-                    "ON CONFLICT must NOT update insight_template (template lock after first capture)"
-                )
-            elif "ai_insight_templates" in call_str and "INSERT INTO" in call_str:
-                # Find the SQL in the actual args
-                args = call[0]  # positional args tuple
-                if args:
-                    sql = str(args[0])
-                    assert "insight_template = EXCLUDED" not in sql, (
-                        "INSERT ON CONFLICT must NOT overwrite insight_template"
-                    )
-
-    # ---- U1.8: cross-factory same signature ----
+    # ---- cross-factory same signature ----
 
     def test_cross_factory_same_signature(self):
         """U1.8: two factories with same chart params → same signature_hash (factoryId excluded)."""
@@ -1140,4 +702,145 @@ class TestPromptAndTierStats:
         # which then echoes them in the prose)
         assert "62000" not in prompt, (
             "finance_hidden prompt must NOT contain the raw absolute series value '62000'"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Task 4: get_insight claims-pinning serve + ¥ serve-gate (C1+C3)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+class TestGetInsightClaimsPinning:
+    """Task 4 — wire _validate_claims into the serve path + finance_hidden ¥ serve-gate.
+
+    All three tests monkeypatch ChartInsightService._call_llm to return a pre-built
+    structured dict (claims+finding+implication+suggestion) bypassing the real LLM.
+    The service must:
+      1. Call _validate_claims on the returned dict.
+      2. Enforce the finance_hidden ¥ serve-gate post-validation.
+      3. Return InsightResult(source="llm", tier=2) on success, None on rejection.
+    """
+
+    def _make_service(
+        self,
+        permission_tier: str = "finance_visible",
+        factory_id: str = "F001",
+    ):
+        """Create a ChartInsightService with mocked pool and non-blocked budget.
+
+        pool.acquire() returns a conn mock with:
+          - fetchrow → None (no template in DB; Tier2a miss → proceeds to LLM)
+          - execute → None (capture writes are no-ops in Task 4 scope)
+        _call_llm is NOT set here — caller must monkeypatch it.
+        """
+        pool = MagicMock()
+        conn = AsyncMock()
+        pool.acquire.return_value.__aenter__ = AsyncMock(return_value=conn)
+        pool.acquire.return_value.__aexit__ = AsyncMock(return_value=None)
+        conn.fetchrow = AsyncMock(return_value=None)   # Tier2a miss
+        conn.execute = AsyncMock(return_value=None)
+        conn.fetchval = AsyncMock(return_value=1)
+
+        svc = ChartInsightService(
+            pool=pool,
+            budget_tracker=FakeBudgetOk(),
+            promote_threshold=DEFAULT_PROMOTE_THRESHOLD,
+        )
+        return svc
+
+    def _make_ctx(self, permission_tier: str = "finance_visible") -> ChartInsightContext:
+        return ChartInsightContext(
+            chart_type="PIE",
+            x_dim="channel",
+            y_metric="revenue",
+            aggregation="sum",
+            domain="restaurant",
+            data_pattern="ranking:top-share:65-80:n4-8",
+            permission_tier=permission_tier,
+            factory_id="F001",
+            series_values=[62.0, 38.0],
+            series_labels=["堂食", "外卖"],
+        )
+
+    # ------------------------------------------------------------------
+    # Test 1: valid LLM response is served (claims pass validation)
+    # ------------------------------------------------------------------
+
+    async def test_valid_llm_served(self):
+        """Valid structured LLM response with correct claim anchors → InsightResult returned."""
+        svc = self._make_service(permission_tier="finance_visible")
+        ctx = self._make_ctx(permission_tier="finance_visible")
+
+        # Structured LLM response: claim is correct (堂食=62%), prose number 62 is present,
+        # nearest label to 62 in prose is 堂食 → passes _validate_claims
+        structured_response = {
+            "claims": [{"entity": "堂食", "stat_type": "share", "value": 62.0}],
+            "finding": "堂食占62%，是主要渠道。",
+            "implication": "堂食渠道占据主导地位。",
+            "suggestion": "关注堂食表现。",
+        }
+        svc._call_llm = AsyncMock(return_value=structured_response)
+
+        result = await svc.get_insight(ctx, caller_role="restaurant_manager", jwt_factory_id="F001")
+
+        assert result is not None, (
+            "Valid structured LLM response should produce an InsightResult, got None"
+        )
+        assert result.source == "llm", f"Expected source='llm', got {result.source!r}"
+        assert result.tier == 2, f"Expected tier=2, got {result.tier}"
+        assert result.finding is not None
+        assert "堂食" in result.finding
+
+    # ------------------------------------------------------------------
+    # Test 2: finance_hidden + ¥ in validated finding → gate rejects (return None)
+    # ------------------------------------------------------------------
+
+    async def test_finance_hidden_yuan_rejected(self):
+        """finance_hidden caller + ¥ literal in LLM finding → serve-gate returns None."""
+        svc = self._make_service(permission_tier="finance_hidden")
+        ctx = self._make_ctx(permission_tier="finance_hidden")
+
+        # Claims are technically valid (62 is correct for 堂食 share), but finding contains ¥
+        # The ¥ serve-gate must fire and return None for finance_hidden callers.
+        structured_response_with_yuan = {
+            "claims": [{"entity": "堂食", "stat_type": "share", "value": 62.0}],
+            "finding": "堂食占62%，绝对营收¥12345万。",   # ← ¥ literal
+            "implication": "堂食渠道强劲。",
+            "suggestion": "关注堂食表现。",
+        }
+        svc._call_llm = AsyncMock(return_value=structured_response_with_yuan)
+
+        result = await svc.get_insight(ctx, caller_role="warehouse_worker", jwt_factory_id="F001")
+
+        assert result is None, (
+            "finance_hidden + ¥ in finding must return None (serve-gate must fire), "
+            f"got result={result}"
+        )
+
+    # ------------------------------------------------------------------
+    # Test 3: entity-swap claim → _validate_claims rejects → get_insight returns None
+    # ------------------------------------------------------------------
+
+    async def test_entity_swap_llm_falls_to_none(self):
+        """LLM claims 外卖=62% (entity wrong; real is 堂食=62%) → _validate_claims rejects → None."""
+        svc = self._make_service(permission_tier="finance_visible")
+        ctx = self._make_ctx(permission_tier="finance_visible")
+
+        # Entity-swap: 外卖's real share is 38%, but LLM claims 62%.
+        # recompute_claim("外卖", "share", [62,38], ["堂食","外卖"]) = 38 ≠ 62 → claim dropped.
+        # Prose still contains '62' but no valid claim anchors it → numeric-adjacency gate rejects.
+        entity_swap_response = {
+            "claims": [{"entity": "外卖", "stat_type": "share", "value": 62.0}],
+            "finding": "外卖占62%，超过堂食。",
+            "implication": "外卖渠道强劲。",
+            "suggestion": "关注外卖增长。",
+        }
+        svc._call_llm = AsyncMock(return_value=entity_swap_response)
+
+        result = await svc.get_insight(ctx, caller_role="restaurant_manager", jwt_factory_id="F001")
+
+        assert result is None, (
+            "Entity-swap (外卖=62 when real is 堂食=62) must be rejected by _validate_claims "
+            f"and get_insight must return None; got result={result}"
         )

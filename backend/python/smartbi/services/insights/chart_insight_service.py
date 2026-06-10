@@ -1,27 +1,30 @@
-"""Chart Auto-Insight — Tier 2 backend service (U4 + U1 hardening).
+"""Chart Auto-Insight — Tier 2 backend service (v4 — claims-pinning architecture).
 
-Design: docs/superpowers/specs/2026-06-10-chart-auto-insight-design.md §2.1/§2.2/§2.6
+Design: docs/superpowers/specs/2026-06-10-chart-insight-distillation-redesign.md §2 C1+C3
 
-Architecture:
+Architecture (v4):
   signature = SHA256(chartType|xDim|yMetric|agg|domain|dataPattern|permissionTier)
-              NOTE: factoryId is NOT in the signature (U1.8 — cross-tenant template sharing).
-              Security: templates contain ONLY parameterized {slots} — zero tenant data.
-              Required_permission + permission_tier double-gate ensure RBAC by construction.
-  Tier2a: lookup ai_insight_templates (is_active=true, sig-only, no factory_id scope) → fill
-  Tier2b: budget check → LLM structured JSON → capture upsert → maybe_promote
-  Distillation: proposal_count >= PROMOTE_THRESHOLD AND validate + poison_guard (ALL 3 fields)
-                AND (finding-only → auto; suggestion → needs is_verified)
+              NOTE: factoryId is NOT in the signature (cross-tenant signature sharing).
+
+  get_insight serve flow:
+    1. Cross-tenant guard: jwt_factory_id != ctx.factory_id → None
+    2. budget_tracker is None → fail-closed (None + WARN)
+    3. budget.check_budget blocked → None
+    4. _call_llm(ctx) → structured dict {claims, finding, implication, suggestion} or None
+    5. _validate_claims(llm_obj, ctx) — server-side recompute + numeric-adjacency gate → None rejects
+    6. finance_hidden ¥ serve-gate: scan validated text with _ABSOLUTE_AMOUNT_RE → None if any match
+    7. Return InsightResult(source="llm", tier=2)
+
+  In-database template table (ai_insight_templates) is preserved for offline M4 curation;
+  this service no longer reads from or writes to it at serve time.
 
 🔒 RBAC (red-line):
   - factoryId ALWAYS from JWT (jwt_factory_id param), NOT from context.factory_id
   - Cross-tenant (jwt_factory_id != ctx.factory_id) → blocked immediately
-  - finance yMetric + required_permission='finance:read_write' →
-    only roles in FINANCE_ROLES get the template; others → null
-  - permissionTier BAKED into signature → templates never cross permission tiers
-  - permissionTier ALWAYS server-derived (from caller_role via API endpoint) — body ignored
-  - _safe_fill: any unfilled {slot} in result → field returns None (never show raw {slot})
-  - poison + absolute ¥ checked on ALL THREE fields (finding+implication+suggestion)
+  - permission_tier ALWAYS server-derived (from caller_role via API endpoint) — body ignored
+  - finance_hidden callers: prompt excludes changeAmt + raw series; ¥ serve-gate hard-blocks
   - budget_tracker=None → fail-closed (no LLM, return None + WARN)
+  - _validate_claims rejects hallucinated entity swaps and invented numbers (no-fake-data)
 """
 from __future__ import annotations
 
@@ -71,14 +74,7 @@ _ABSOLUTE_AMOUNT_RE = re.compile(
     re.UNICODE,
 )
 
-# Detect unparameterized numeric literals (raw numbers outside {} placeholders)
-# Heuristic: 2+ digit standalone number not inside a {slot}
-_UNSLOTTED_NUMBER_RE = re.compile(r"(?<!\{)\b\d{2,}\b(?!\})")
-
-# Detect slot placeholders — any {word} markers
-_SLOT_RE = re.compile(r"\{[^}]+\}")
-
-# Default promote threshold (configurable per-factory; demo=1, prod=3)
+# Default promote threshold (retained for test import compatibility)
 DEFAULT_PROMOTE_THRESHOLD = 3
 
 
@@ -135,59 +131,11 @@ def compute_signature(ctx: ChartInsightContext) -> str:
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
-# ---------------------------------------------------------------------------
-# Template validation helpers (spec §2.2)
-# ---------------------------------------------------------------------------
-
-def validate_template_parameterization(finding_tpl: str) -> bool:
-    """Return True iff the template is fully parameterized.
-
-    Rules:
-    - Must not be empty.
-    - Must contain at least one {slot} placeholder (otherwise it's a literal sentence).
-    - Must not contain absolute ¥ amounts (e.g. ¥12345 or 500万元).
-    - Must not contain unslotted 2+ digit standalone numbers (literal data baked in).
-
-    Only the finding_tpl is required to have slots; implication/suggestion can be
-    prose with observation verbs as long as they don't bake in literal numbers.
-    """
-    if not finding_tpl or not finding_tpl.strip():
-        return False
-
-    # Must have at least one {placeholder}
-    if not _SLOT_RE.search(finding_tpl):
-        return False
-
-    # Must not contain absolute ¥ amounts
-    if _ABSOLUTE_AMOUNT_RE.search(finding_tpl):
-        return False
-
-    # Must not contain standalone 2+ digit numbers outside slots
-    # (strip out slot contents first to avoid false positives on {slot123})
-    stripped = _SLOT_RE.sub("", finding_tpl)
-    if _UNSLOTTED_NUMBER_RE.search(stripped):
-        return False
-
-    return True
-
-
 def _contains_poison(text: Optional[str]) -> bool:
     """Return True iff text contains a causal-prescriptive (banned) verb."""
     if not text:
         return False
     return bool(_POISON_VERB_RE.search(text))
-
-
-# ---------------------------------------------------------------------------
-# Slot filling (spec §2.2 — apply template to concrete series data)
-# ---------------------------------------------------------------------------
-
-def _fill_slots(template: str, slot_values: Dict[str, Any]) -> str:
-    """Replace {placeholder} markers with computed values."""
-    result = template
-    for k, v in slot_values.items():
-        result = result.replace("{" + k + "}", str(v))
-    return result
 
 
 def _extract_json_object(text: str) -> Optional[Dict[str, Any]]:
@@ -229,28 +177,6 @@ def _extract_json_object(text: str) -> Optional[Dict[str, Any]]:
                 except json.JSONDecodeError:
                     return None
     return None
-
-
-def _safe_fill(template: str, slot_values: Dict[str, Any]) -> Optional[str]:
-    """Fill slots and return None if any {slot} placeholder remains unfilled.
-
-    U1.2 safety net: after filling all known slot values, scan the result with
-    _SLOT_RE. Any remaining {word} means an unknown/illegal slot was in the
-    template (LLM hallucinated a slot name not in the whitelist). Return None
-    instead of returning a string containing raw {placeholder} markers to the user.
-
-    Returns:
-        Filled string if all placeholders resolved.
-        None if any {slot} marker remains after filling.
-    """
-    filled = _fill_slots(template, slot_values)
-    if _SLOT_RE.search(filled):
-        logger.warning(
-            "[chart-insight] _safe_fill: unfilled slot(s) remain in template: %r",
-            filled,
-        )
-        return None
-    return filled
 
 
 def _compute_slot_values(ctx: ChartInsightContext) -> Dict[str, Any]:
@@ -468,18 +394,20 @@ def _nearest_label_in_prose(prose: str, target_pos: int, labels: List[str]) -> O
 # ---------------------------------------------------------------------------
 
 class ChartInsightService:
-    """Tier 2 insight service: library lookup → LLM structured fallback → distillation.
+    """Tier 2 insight service: LLM claims-pinning serve (v4).
 
     🔒 RBAC contract (enforced here, not only at endpoint):
     - jwt_factory_id MUST be passed and used as the authoritative tenant identifier.
-    - If jwt_factory_id != ctx.factory_id → blocked (cross-tenant guard).
-    - Templates with required_permission='finance:read_write' →
-      only caller_role in FINANCE_ROLES may receive them.
+    - If jwt_factory_id != ctx.factory_id → blocked immediately (cross-tenant guard).
+    - permission_tier ALWAYS server-derived (from caller_role via API endpoint) — body ignored.
+    - finance_hidden: prompt excludes changeAmt + raw series; ¥ serve-gate hard-blocks output.
+    - budget_tracker=None → fail-closed (return None + WARN, no LLM call).
+    - _validate_claims rejects hallucinated entity swaps and invented numbers (no-fake-data).
     """
 
     def __init__(
         self,
-        pool,  # asyncpg Pool
+        pool,  # asyncpg Pool (retained for future Task 5 corpus persist)
         budget_tracker,  # AgentBudgetTracker or compatible
         promote_threshold: int = DEFAULT_PROMOTE_THRESHOLD,
     ):
@@ -498,27 +426,32 @@ class ChartInsightService:
         caller_role: Optional[str] = None,
         jwt_factory_id: Optional[str] = None,
     ) -> Optional[InsightResult]:
-        """Return an InsightResult or None (data insufficient or blocked).
+        """Return an InsightResult or None (data insufficient, hallucination, or blocked).
 
-        jwt_factory_id: the factory_id extracted from the verified JWT.
-                        If provided, it OVERRIDES ctx.factory_id for all DB ops.
-                        If omitted (None) — use ctx.factory_id directly
-                        (only for internal/test calls where JWT is not present).
+        Serve flow (v4 claims-pinning):
+          1. Cross-tenant guard: jwt_factory_id != ctx.factory_id → None
+          2. budget_tracker None → fail-closed (None + WARN)
+          3. budget.check_budget blocked → None
+          4. _call_llm(ctx) → structured {claims, finding, implication, suggestion} or None
+          5. _validate_claims(llm_obj, ctx) → None rejects hallucinated values
+          6. finance_hidden ¥ serve-gate: _ABSOLUTE_AMOUNT_RE scan validated text → None if match
+          7. Return InsightResult(source="llm", tier=2)
 
+        jwt_factory_id: factory_id from verified JWT; if provided, OVERRIDES ctx.factory_id.
         caller_role: role string from JWT for RBAC permission gating.
         """
         # 🔒 RBAC: JWT factory_id overrides body factory_id
         effective_factory_id = jwt_factory_id if jwt_factory_id is not None else ctx.factory_id
 
-        # 🔒 Cross-tenant guard: if JWT says F001 but body says F002, block it
+        # 🔒 Cross-tenant guard
         if jwt_factory_id is not None and ctx.factory_id != jwt_factory_id:
             logger.warning(
                 "[chart-insight] cross-tenant blocked: jwt=%s body=%s",
-                jwt_factory_id, ctx.factory_id
+                jwt_factory_id, ctx.factory_id,
             )
             return None
 
-        # Build a resolved context with the authoritative factory_id
+        # Build resolved context with authoritative factory_id
         resolved_ctx = ChartInsightContext(
             chart_type=ctx.chart_type,
             x_dim=ctx.x_dim,
@@ -532,198 +465,77 @@ class ChartInsightService:
             series_labels=ctx.series_labels,
         )
 
-        sig = compute_signature(resolved_ctx)
-
-        # Tier 2a: library lookup
-        result = await self._lookup_template(sig, resolved_ctx, caller_role)
-        if result is not None:
-            return result
-
-        # U1.3: budget None guard — fail-closed (no LLM, return None + WARN)
+        # budget_tracker None → fail-closed
         if self._budget_tracker is None:
             logger.warning(
-                "[chart-insight] budget_tracker is None (pool not initialized) — "
-                "fail-closed: returning None without calling LLM"
+                "[chart-insight] budget_tracker is None — fail-closed: returning None without calling LLM"
             )
             return None
 
-        # Tier 2b: budget check → LLM
+        # Budget check
         budget = await self._budget_tracker.check_budget(effective_factory_id)
         if budget.blocked:
             logger.info("[chart-insight] budget blocked for factory=%s", effective_factory_id)
             return None
 
-        llm_resp = await self._call_llm(resolved_ctx)
-        if llm_resp is None:
+        # LLM call: returns structured {claims, finding, implication, suggestion} or None
+        llm_obj = await self._call_llm(resolved_ctx)
+        if llm_obj is None:
             return None
 
-        finding_tpl = llm_resp.get("finding_tpl")
-        if not finding_tpl:
-            # LLM reported data insufficient — no fabrication
-            return None
-
-        implication_tpl = llm_resp.get("implication_tpl")
-        suggestion_tpl = llm_resp.get("suggestion_tpl")
-
-        # U1.6: realistic token accounting (~800 per LLM round-trip; flat estimate when no
-        # precise usage info available — better than the previous flat 100 which was 7x off)
+        # Realistic token accounting (~800 per LLM round-trip)
         await self._budget_tracker.consume(effective_factory_id, 800)
 
-        # U1.5: poison + absolute ¥ checked on ALL THREE fields before capture
-        has_poison = (
-            _contains_poison(finding_tpl)
-            or _contains_poison(implication_tpl)
-            or _contains_poison(suggestion_tpl)
-        )
-        has_absolute_yen = (
-            bool(_ABSOLUTE_AMOUNT_RE.search(finding_tpl))
-            or bool(_ABSOLUTE_AMOUNT_RE.search(implication_tpl or ""))
-            or bool(_ABSOLUTE_AMOUNT_RE.search(suggestion_tpl or ""))
-        )
-
-        # Capture if template is valid and clean
-        valid = validate_template_parameterization(finding_tpl)
-
-        if valid and not has_poison and not has_absolute_yen:
-            await self._capture_template(sig, resolved_ctx, llm_resp)
-        elif has_poison or has_absolute_yen:
+        # C1.2: claims-pinning validation (recompute + numeric-adjacency gate)
+        validated = _validate_claims(llm_obj, resolved_ctx)
+        if validated is None:
             logger.info(
-                "[chart-insight] LLM response rejected (poison=%s, abs_yen=%s) — not captured",
-                has_poison, has_absolute_yen,
+                "[chart-insight] _validate_claims rejected LLM response (hallucination or no claims)"
             )
-
-        # U1.2: Fill using _safe_fill — unfilled {slot} → field None
-        slot_values = _compute_slot_values(resolved_ctx)
-        finding = _safe_fill(finding_tpl, slot_values)
-        if finding is None:
-            # finding is the primary field — None finding → discard entire result
             return None
-        implication = _safe_fill(implication_tpl, slot_values) if implication_tpl else None
-        suggestion = _safe_fill(suggestion_tpl, slot_values) if suggestion_tpl else None
+
+        # C1.3 / MF5: finance_hidden ¥ serve-gate — hard-block any ¥ literal in output
+        permission_tier = resolved_ctx.permission_tier
+        if permission_tier == "finance_hidden":
+            combined_text = " ".join(filter(None, [
+                validated.get("finding"),
+                validated.get("implication"),
+                validated.get("suggestion"),
+            ]))
+            if _ABSOLUTE_AMOUNT_RE.search(combined_text):
+                logger.info(
+                    "[chart-insight] finance_hidden ¥ serve-gate: rejected absolute ¥ in output"
+                )
+                return None
 
         return InsightResult(
-            finding=finding,
-            implication=implication,
-            suggestion=suggestion,
+            finding=validated["finding"],
+            implication=validated.get("implication"),
+            suggestion=validated.get("suggestion"),
             source="llm",
             tier=2,
         )
 
     # ------------------------------------------------------------------
-    # Tier 2a: library lookup
-    # ------------------------------------------------------------------
-
-    async def _lookup_template(
-        self,
-        signature_hash: str,
-        ctx: ChartInsightContext,
-        caller_role: Optional[str],
-    ) -> Optional[InsightResult]:
-        """Query ai_insight_templates for an active template matching this signature.
-
-        🔒 RBAC: Templates tagged required_permission='finance:read_write' are only
-        returned to callers whose role is in FINANCE_ROLES. Others get null (no fallback
-        prose — the caller must wait for Tier2b or get nothing).
-        """
-        try:
-            async with self._pool.acquire() as conn:
-                # U1.8: lookup is NOT factory-scoped (cross-tenant template sharing).
-                # U1.9 (fixed): gate on (suggestion missing OR is_verified). suggestion_tpl
-                #        is a KEY inside the insight_template JSONB, NOT a column — must use
-                #        insight_template->>'suggestion_tpl' (bare column ref errored every lookup).
-                row = await conn.fetchrow(
-                    """
-                    SELECT insight_template, required_permission, hit_count
-                    FROM ai_insight_templates
-                    WHERE signature_hash = $1
-                      AND is_active = true
-                      AND ((insight_template->>'suggestion_tpl') IS NULL OR is_verified = true)
-                    ORDER BY confidence DESC NULLS LAST
-                    LIMIT 1
-                    """,
-                    signature_hash,
-                )
-        except Exception as exc:
-            logger.warning("[chart-insight] template lookup failed: %s", exc)
-            return None
-
-        if row is None:
-            return None
-
-        required_perm = row["required_permission"]
-        template_json = row["insight_template"]
-
-        # 🔒 Permission gate: finance templates need the right role
-        if required_perm == "finance:read_write":
-            has_finance = caller_role in FINANCE_ROLES
-            if not has_finance:
-                logger.info(
-                    "[chart-insight] RBAC: template requires finance:read_write; role=%s → blocked",
-                    caller_role
-                )
-                return None
-
-        # Parse template
-        try:
-            tmpl = json.loads(template_json) if isinstance(template_json, str) else template_json
-        except (json.JSONDecodeError, TypeError) as exc:
-            logger.warning("[chart-insight] template JSON parse failed: %s", exc)
-            return None
-
-        finding_tpl = tmpl.get("finding_tpl", "")
-        implication_tpl = tmpl.get("implication_tpl")
-        suggestion_tpl = tmpl.get("suggestion_tpl")
-
-        # Pre-application assertion: validate template still makes sense (spec §2.7)
-        if not finding_tpl:
-            return None
-
-        # U1.2: Fill slots via _safe_fill — unfilled {slot} → field None
-        slot_values = _compute_slot_values(ctx)
-        finding = _safe_fill(finding_tpl, slot_values)
-        if finding is None:
-            # finding is primary — broken template → discard
-            return None
-        implication = _safe_fill(implication_tpl, slot_values) if implication_tpl else None
-        suggestion = _safe_fill(suggestion_tpl, slot_values) if suggestion_tpl else None
-
-        # Async hit_count increment (best-effort)
-        try:
-            async with self._pool.acquire() as conn:
-                await conn.execute(
-                    "UPDATE ai_insight_templates SET hit_count = hit_count + 1, updated_at = NOW() "
-                    "WHERE signature_hash = $1",
-                    signature_hash,
-                )
-        except Exception as exc:
-            logger.debug("[chart-insight] hit_count increment failed (non-fatal): %s", exc)
-
-        return InsightResult(
-            finding=finding,
-            implication=implication,
-            suggestion=suggestion,
-            source="template",
-            tier=2,
-        )
-
-    # ------------------------------------------------------------------
-    # Tier 2b: LLM call (overridable for testing)
+    # LLM call — returns structured claims dict (overridable for testing)
     # ------------------------------------------------------------------
 
     async def _call_llm(self, ctx: ChartInsightContext) -> Optional[Dict[str, Any]]:
-        """Call the LLM and return a structured template JSON, or None on failure.
+        """Call the LLM and return structured {claims, finding, implication, suggestion}, or None.
 
-        Prompt instructs: return structured JSON with finding_tpl/implication_tpl/
-        suggestion_tpl/slots using {placeholder} syntax.
-        If data is insufficient for a meaningful business observation → return all-null.
-        Suggestions MUST use observation verbs only (关注/排查/分析/了解).
-        Suggestions MUST NOT use causal-prescriptive verbs (复制/引流/加大/扩张/推广).
+        Prompt (built by _build_insight_prompt) instructs the LLM to return a structured
+        claims-pinning JSON:
+          {"claims":[{"entity":..,"stat_type":..,"value":..}],
+           "finding":.., "implication":.., "suggestion":..}
+
+        If data is insufficient for a meaningful observation → LLM should return claims=[] and
+        finding=null (no fabrication). Returns None on LLM failure or unparseable response.
         """
         try:
             from common.llm_router import call_chain, SLOT
             from common.llm_metrics import llm_caller_context
         except ImportError:
-            logger.warning("[chart-insight] llm_router not available, skipping Tier2b")
+            logger.warning("[chart-insight] llm_router not available, skipping LLM call")
             return None
 
         prompt = _build_insight_prompt(ctx, ctx.permission_tier)
@@ -733,19 +545,16 @@ class ChartInsightService:
                 {
                     "role": "system",
                     "content": (
-                        "你是一名数据分析师，专门为ERP系统的图表生成结构化洞察模板。"
+                        "你是一名数据分析师，专门为ERP系统的图表生成结构化洞察。"
                         "你的输出必须是严格的JSON格式（不含代码块）。"
                         "使用观察动词（关注/排查/分析/了解），禁止因果归因动词（复制/引流/加大/扩张/推广）。"
-                        "如果数据不足以得出有意义的业务观察，则将finding_tpl返回null，不要编造。"
+                        "如果数据不足以得出有意义的业务观察，则将claims返回空数组[]，finding返回null，不要编造。"
                     ),
                 },
                 {"role": "user", "content": prompt},
             ],
             "response_format": {"type": "json_object"},
-            "temperature": 0.1,  # U1.9: lowered from 0.3 for consistency
-            # Hotfix: SLOT.CHART can fall through the provider chain to a reasoning
-            # model (e.g. glm-5.1) that spends tokens on internal reasoning; 500 was
-            # entirely consumed → empty content. Give room for reasoning + the JSON.
+            "temperature": 0.1,
             "max_tokens": 2000,
         }
 
@@ -759,7 +568,6 @@ class ChartInsightService:
         if resp is None:
             return None
 
-        # Parse response
         try:
             choices = resp.get("choices", [])
             if not choices:
@@ -775,171 +583,6 @@ class ChartInsightService:
         except (KeyError, IndexError, TypeError) as exc:
             logger.warning("[chart-insight] LLM response parse failed: %s", exc)
             return None
-
-    # ------------------------------------------------------------------
-    # Capture + promote (spec §2.2 distillation)
-    # ------------------------------------------------------------------
-
-    async def _capture_template(
-        self,
-        signature_hash: str,
-        ctx: ChartInsightContext,
-        llm_resp: Dict[str, Any],
-    ) -> None:
-        """Upsert the LLM response into ai_insight_templates.
-
-        Uses ON CONFLICT (signature_hash, factory_id) DO UPDATE to increment
-        proposal_count and store the latest template. After upsert, check if
-        promotion criteria are met.
-
-        Promotion rules (spec §2.2):
-        - proposal_count >= PROMOTE_THRESHOLD
-        - AND validate_template_parameterization (finding_tpl must be fully parameterized)
-        - AND NOT _contains_poison (no causal-prescriptive verbs in any field)
-        - AND (has suggestion → requires is_verified=True before promote; finding-only → auto OK)
-        """
-        finding_tpl = llm_resp.get("finding_tpl") or ""
-        implication_tpl = llm_resp.get("implication_tpl")
-        suggestion_tpl = llm_resp.get("suggestion_tpl")
-        slots = llm_resp.get("slots", [])
-
-        # Compute chart_signature for storage
-        chart_sig = {
-            "chart_type": ctx.chart_type,
-            "x_dim": ctx.x_dim,
-            "y_metric": ctx.y_metric,
-            "aggregation": ctx.aggregation,
-            "domain": ctx.domain,
-            "data_pattern": ctx.data_pattern,
-            "permission_tier": ctx.permission_tier,
-        }
-
-        template_obj = {
-            "finding_tpl": finding_tpl,
-            "implication_tpl": implication_tpl,
-            "suggestion_tpl": suggestion_tpl,
-            "slots": slots,
-        }
-
-        # Determine required_permission based on y_metric
-        required_perm = "finance:read_write" if ctx.y_metric in FINANCE_METRICS else None
-
-        try:
-            async with self._pool.acquire() as conn:
-                # U1.7: ON CONFLICT does NOT overwrite insight_template — first capture wins.
-                # Only proposal_count and updated_at are bumped on subsequent proposals.
-                # U1.8: UNIQUE constraint is now (signature_hash) — no factory_id in conflict key.
-                await conn.execute(
-                    """
-                    INSERT INTO ai_insight_templates
-                        (factory_id, signature_hash, chart_signature, insight_template,
-                         required_permission, source_type, confidence,
-                         hit_count, proposal_count, is_active, is_verified,
-                         created_at, updated_at)
-                    VALUES
-                        ($1, $2, $3::jsonb, $4::jsonb,
-                         $5, 'LLM_FALLBACK', 0.5,
-                         0, 1, false, false,
-                         NOW(), NOW())
-                    ON CONFLICT (signature_hash) DO UPDATE
-                        SET proposal_count = ai_insight_templates.proposal_count + 1,
-                            updated_at     = NOW()
-                    """,
-                    ctx.factory_id,
-                    signature_hash,
-                    json.dumps(chart_sig),
-                    json.dumps(template_obj),
-                    required_perm,
-                )
-
-                # Read back proposal_count for promotion check
-                # U1.8: lookup by signature_hash only (no factory_id scope)
-                proposal_count = await conn.fetchval(
-                    "SELECT proposal_count FROM ai_insight_templates "
-                    "WHERE signature_hash = $1",
-                    signature_hash,
-                )
-        except Exception as exc:
-            logger.warning("[chart-insight] template capture failed (non-fatal): %s", exc)
-            return
-
-        await self._maybe_promote(
-            signature_hash=signature_hash,
-            factory_id=ctx.factory_id,
-            finding_tpl=finding_tpl,
-            suggestion_tpl=suggestion_tpl,
-            proposal_count=proposal_count or 0,
-        )
-
-    async def _maybe_promote(
-        self,
-        *,
-        signature_hash: str,
-        factory_id: str,
-        finding_tpl: str,
-        suggestion_tpl: Optional[str],
-        proposal_count: int,
-        implication_tpl: Optional[str] = None,
-    ) -> None:
-        """Promote template to is_active=True if all conditions are met.
-
-        Conditions (spec §2.2):
-        1. proposal_count >= PROMOTE_THRESHOLD
-        2. validate_template_parameterization(finding_tpl) → True
-        3. U1.5: NOT _contains_poison on ANY of finding/implication/suggestion
-        4. U1.5: NOT _ABSOLUTE_AMOUNT_RE match on ANY of finding/implication/suggestion
-        5. If suggestion_tpl is non-null → requires is_verified=True (not auto-promoted here)
-           If finding-only (suggestion_tpl is None) → auto-promote OK
-        """
-        if proposal_count < self._promote_threshold:
-            return
-
-        if not validate_template_parameterization(finding_tpl):
-            logger.info("[chart-insight] template not promoted: failed parameterization check")
-            return
-
-        # U1.5: poison check on ALL THREE fields
-        if (
-            _contains_poison(finding_tpl)
-            or _contains_poison(implication_tpl)
-            or _contains_poison(suggestion_tpl)
-        ):
-            logger.info("[chart-insight] template not promoted: poison verb detected in any field")
-            return
-
-        # U1.5: absolute ¥ check on ALL THREE fields
-        if (
-            _ABSOLUTE_AMOUNT_RE.search(finding_tpl)
-            or _ABSOLUTE_AMOUNT_RE.search(implication_tpl or "")
-            or _ABSOLUTE_AMOUNT_RE.search(suggestion_tpl or "")
-        ):
-            logger.info("[chart-insight] template not promoted: absolute ¥ amount in any field")
-            return
-
-        has_suggestion = bool(suggestion_tpl and suggestion_tpl.strip())
-        if has_suggestion:
-            # Suggestion-bearing templates require manual verification (is_verified=True)
-            # Do NOT auto-promote — requires human review
-            logger.info(
-                "[chart-insight] template not auto-promoted: suggestion present, needs is_verified=True"
-            )
-            return
-
-        # U1.8: promote by signature_hash only (cross-tenant template)
-        try:
-            async with self._pool.acquire() as conn:
-                await conn.execute(
-                    "UPDATE ai_insight_templates "
-                    "SET is_active = true, updated_at = NOW() "
-                    "WHERE signature_hash = $1 AND is_verified = false",
-                    signature_hash,
-                )
-            logger.info(
-                "[chart-insight] template promoted to is_active=true (sig=%s)",
-                signature_hash[:12],
-            )
-        except Exception as exc:
-            logger.warning("[chart-insight] template promotion failed (non-fatal): %s", exc)
 
 
 # ---------------------------------------------------------------------------
