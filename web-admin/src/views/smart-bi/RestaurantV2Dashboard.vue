@@ -57,11 +57,83 @@ import {
 } from '@/api/smartbi/restaurant-v2';
 import BomIngestDialog from './BomIngestDialog.vue';
 import TemplateGrid from './components/TemplateGrid.vue';
+import ChartInsightProvider from './components/ChartInsightProvider.vue';
+import type { ChartWithMeta, UserPermissions } from './components/chartInsight';
 
 const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
 const factoryId = computed(() => authStore.factoryId);
 const canViewPrice = computed(() => permissionStore.canViewPrice);
+
+// ── ChartInsightProvider perms (Phase B Moderate) ──────────────
+// canViewPrice gates finance absolute ¥ display in insight provider
+const insightPerms = computed<UserPermissions>(() => ({
+  canViewFinance: canViewPrice.value,
+}));
+
+/**
+ * RFM Pie chart — ChartWithMeta for ChartInsightProvider.
+ * Slot: rfmPieChartRef (PIE, member segment distribution).
+ * meta: xDim 'category' (segment names), yMetric 'count', domain 'restaurant'.
+ * Data sourced from memberRfm.value.segmentCounts after renderRfmPieChart() builds pieData.
+ *
+ * SKIP: HEATMAP (heatmapChartRef) — exotic, not Tier1-coverable.
+ */
+const rfmPieChartWithMeta = computed<ChartWithMeta | null>(() => {
+  const rfm = memberRfm.value;
+  if (!rfm?.analyzedMembers) return null;
+  const segCounts = rfm.segmentCounts;
+  const pieData = Object.entries(segCounts)
+    .filter(([, count]) => count > 0)
+    .map(([seg, count]) => ({ name: seg, value: count }));
+  if (pieData.length < 2) return null;
+  return {
+    chartType: 'pie',
+    title: '会员客群分布',
+    meta: {
+      xDim: 'category',
+      yMetric: 'count',
+      aggregation: 'sum',
+      domain: 'restaurant',
+    },
+    config: {
+      series: [{ type: 'pie', data: pieData }],
+    },
+  };
+});
+
+/**
+ * Calibration line chart — ChartWithMeta for ChartInsightProvider.
+ * Slot: calibrationChartRef (LINE×2: 校准因子 + 食材率).
+ * chartType 'comparison' (2 comparable series over time).
+ * meta: xDim 'time' (period labels), yMetric 'pct', domain 'restaurant'.
+ * Data sourced from calibrationHistory.value.factorTrend.
+ */
+const calibrationChartWithMeta = computed<ChartWithMeta | null>(() => {
+  const cal = calibrationHistory.value;
+  if (!cal?.factorTrend?.length || cal.factorTrend.length < 2) return null;
+  const trend = cal.factorTrend;
+  const periods = trend.map((t) => t.period);
+  const factors = trend.map((t) => t.factor);
+  const ratios = trend.map((t) => t.ratio);
+  return {
+    chartType: 'comparison',
+    title: '月度校准历史对比',
+    meta: {
+      xDim: 'time',
+      yMetric: 'pct',
+      aggregation: 'avg',
+      domain: 'restaurant',
+    },
+    config: {
+      xAxis: { data: periods },
+      series: [
+        { type: 'line', name: '校准因子', data: factors },
+        { type: 'line', name: '食材率', data: ratios },
+      ],
+    },
+  };
+});
 
 // ── State ──────────────────────────────────────────
 const uploads = ref<UploadHistoryItem[]>([]);
@@ -1517,6 +1589,14 @@ function formatCurrency(v?: number): string {
           ref="rfmPieChartRef"
           style="width: 100%; height: 300px; margin-top: 12px"
         />
+        <!-- Phase B Moderate: PIE → PROPORTION insight (segment distribution) -->
+        <ChartInsightProvider
+          v-if="rfmPieChartWithMeta"
+          :chart="rfmPieChartWithMeta"
+          :perms="insightPerms"
+          :factory-id="factoryId || ''"
+          depth="detailed"
+        />
 
         <el-row :gutter="16" style="margin-top: 16px">
           <el-col :span="12">
@@ -1773,6 +1853,15 @@ function formatCurrency(v?: number): string {
           v-if="calibrationHistory.factorTrend && calibrationHistory.factorTrend.length > 0"
           ref="calibrationChartRef"
           style="width: 100%; height: 300px; margin-bottom: 16px"
+        />
+        <!-- Phase B Moderate: LINE×2 → COMPARISON insight (校准因子 vs 食材率) -->
+        <!-- SKIP: HEATMAP (heatmapChartRef) — exotic 7×24 grid, not Tier1-coverable -->
+        <ChartInsightProvider
+          v-if="calibrationChartWithMeta"
+          :chart="calibrationChartWithMeta"
+          :perms="insightPerms"
+          :factory-id="factoryId || ''"
+          depth="detailed"
         />
 
         <!-- Category Volatility (Top 5) -->

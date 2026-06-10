@@ -7,6 +7,7 @@ import { ref, reactive, computed, watch, nextTick, onMounted, onBeforeUnmount } 
 import { useRoute } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import { useAuthStore } from '@/store/modules/auth';
+import { usePermissionStore } from '@/store/modules/permission';
 import FinanceAnalysis from './FinanceAnalysis.vue';
 import FinancePbiGoldView from './components/FinancePbiGoldView.vue';
 import { resolveFinanceSection, shouldRenderGoldFinanceView } from './financeDashboardSection';
@@ -41,6 +42,8 @@ import ConditionalFormatPanel from '@/components/smartbi/ConditionalFormatPanel.
 import SmartBIEmptyState from '@/components/smartbi/SmartBIEmptyState.vue';
 import type { BookmarkState } from '@/views/smart-bi/composables/useBookmarks';
 import type { SmallMultiplesConfig } from '@/components/smartbi/SmallMultiplesChart.vue';
+import ChartInsightProvider from './components/ChartInsightProvider.vue';
+import type { ChartWithMeta, ChartMeta, UserPermissions } from './components/chartInsight';
 
 // API
 import {
@@ -75,6 +78,7 @@ const isInDemoMode = ref(false); // Track demo mode for slicer re-generation
 // 显式 ?section= 永远优先 (保书签 / 工厂用户主动选看板)。
 const route = useRoute();
 const authStore = useAuthStore();
+const permissionStore = usePermissionStore();
 const sectionTab = ref(resolveFinanceSection(route.query, authStore.factoryType));
 watch(() => route.query.section, () => { sectionTab.value = resolveFinanceSection(route.query, authStore.factoryType); });
 
@@ -314,6 +318,100 @@ const anomalyMap = computed(() => {
 
 function getAnomalies(chartType: string): string[] {
   return anomalyMap.value.get(chartType) ?? [];
+}
+
+// ── Phase B Moderate: ChartInsightProvider wiring ─────────────────────────────
+// Finance domain; canViewPrice gates absolute ¥ display in insight text.
+const insightPerms = computed<UserPermissions>(() => ({
+  canViewFinance: permissionStore.canViewPrice,
+}));
+
+/**
+ * Chart-type → (chartType, meta) mapping for Tier1-coverable slots.
+ *
+ * Wired (bar/line/pie): LINE→TREND, BAR(ranking)→RANKING, BAR(2-series)→COMPARISON, PIE→PROPORTION.
+ * Skipped (exotic): pnl_waterfall, cash_flow_waterfall, cost_flow_sankey, small_multiples, bullet_chart.
+ *
+ * meta inference: all keys have domain:'finance'. xDim and yMetric are inferred from the chart key.
+ */
+const FINANCE_CHART_META: Record<string, { chartType: string; meta: ChartMeta }> = {
+  // BAR 2-series COMPARISON: actual vs budget
+  budget_achievement: {
+    chartType: 'comparison',
+    meta: { xDim: 'time', yMetric: 'revenue', aggregation: 'sum', domain: 'finance' },
+  },
+  // LINE×2 COMPARISON: current year vs last year
+  yoy_mom_comparison: {
+    chartType: 'comparison',
+    meta: { xDim: 'time', yMetric: 'revenue', aggregation: 'sum', domain: 'finance' },
+  },
+  // BAR(2-series) COMPARISON: category this year vs last year
+  category_yoy_comparison: {
+    chartType: 'comparison',
+    meta: { xDim: 'category', yMetric: 'revenue', aggregation: 'sum', domain: 'finance' },
+  },
+  // PIE/donut PROPORTION: product structure
+  category_structure_donut: {
+    chartType: 'pie',
+    meta: { xDim: 'product', yMetric: 'revenue', aggregation: 'sum', domain: 'finance' },
+  },
+  // BAR RANKING: channel revenue ranking
+  channel_analysis: {
+    chartType: 'bar',
+    meta: { xDim: 'channel', yMetric: 'revenue', aggregation: 'sum', domain: 'finance' },
+  },
+  // LINE TREND: cashflow over time
+  cashflow_trend: {
+    chartType: 'line',
+    meta: { xDim: 'time', yMetric: 'cost', aggregation: 'sum', domain: 'finance' },
+  },
+  // BAR COMPARISON: hr cost analysis (budget vs actual or period vs period)
+  hr_cost_analysis: {
+    chartType: 'comparison',
+    meta: { xDim: 'time', yMetric: 'cost', aggregation: 'sum', domain: 'finance' },
+  },
+  // SKIPPED: pnl_waterfall → exotic WATERFALL
+  // SKIPPED: cash_flow_waterfall → exotic WATERFALL
+  // SKIPPED: cost_flow_sankey → exotic SANKEY
+  // SKIPPED: small_multiples → exotic small-multiples
+  // SKIPPED: bullet_chart → exotic gauge-like, not 1-D series
+};
+
+/**
+ * Build ChartWithMeta from a ChartResult by extracting series/xAxis from echartsOption.
+ * Returns null when:
+ *  - chartType is not in FINANCE_CHART_META (exotic or skipped)
+ *  - ChartResult is null / has no echartsOption
+ */
+function buildFinanceChartWithMeta(chartType: string): ChartWithMeta | null {
+  const mapping = FINANCE_CHART_META[chartType];
+  if (!mapping) return null; // exotic or not wired
+  const result = getChart(chartType);
+  if (!result?.echartsOption) return null;
+
+  const opt = result.echartsOption as {
+    xAxis?: { data?: string[] };
+    series?: Array<{ type?: string; name?: string; data?: unknown[] }>;
+    [key: string]: unknown;
+  };
+
+  // Extract xAxis labels + series from echartsOption
+  const xAxis = opt.xAxis as { data?: string[] } | undefined;
+  const series = Array.isArray(opt.series) ? opt.series : [];
+
+  return {
+    chartType: mapping.chartType,
+    title: result.title,
+    meta: mapping.meta,
+    config: {
+      xAxis: xAxis ? { data: xAxis.data ?? [] } : undefined,
+      series: series.map((s) => ({
+        type: (s as { type?: string }).type,
+        name: (s as { name?: string }).name,
+        data: Array.isArray((s as { data?: unknown[] }).data) ? (s as { data?: unknown[] }).data : [],
+      })),
+    },
+  };
 }
 
 // 去掉与其他页面重复的图表:
@@ -1804,6 +1902,18 @@ onBeforeUnmount(() => {
           role="img"
           :aria-label="`${ct.label}图表`"
           title="单击: 交叉过滤 | 双击: 添加标注"
+        />
+
+        <!-- Phase B Moderate: ChartInsightProvider for bar/line/pie slots (exotic slots render nothing) -->
+        <!-- Wired: budget_achievement(comparison) yoy_mom_comparison(comparison) category_yoy_comparison(comparison)
+                   category_structure_donut(pie) channel_analysis(bar/ranking) cashflow_trend(line/trend) hr_cost_analysis(comparison)
+             Skipped exotic: pnl_waterfall(WATERFALL) cash_flow_waterfall(WATERFALL) bullet_chart(gauge-like) small_multiples(exotic) -->
+        <ChartInsightProvider
+          v-if="buildFinanceChartWithMeta(ct.key)"
+          :chart="buildFinanceChartWithMeta(ct.key)"
+          :perms="insightPerms"
+          :factory-id="authStore.factoryId || ''"
+          depth="detailed"
         />
 
         <!-- Monthly data rows (yoy_mom_comparison) -->
