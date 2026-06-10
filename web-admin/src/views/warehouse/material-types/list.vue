@@ -824,78 +824,96 @@ function handleSizeChange(size: number) {
         </template>
 
         <!-- SP8: 16位编码级联 (创建模式下显示, 编辑模式只读) -->
+        <!-- SP8 兜底 (Tier0 #15 minimal): 字典未配置时隐藏级联入口防 dead-end (fool-proof Rule 5).
+             generate-code 端点 P1 上线; 当前 tree 为空时显示诚实空态而非空下拉组合. -->
         <el-divider v-if="!editingId">
           <span class="divider-title">16位编码级联（可选）</span>
         </el-divider>
         <template v-if="!editingId">
-          <el-form-item label="L1 类型">
-            <el-select
-              v-model="segmentL1"
-              placeholder="请选择类型分类"
-              clearable
-              filterable
-              style="width: 100%"
-              :loading="segmentLoading"
-            >
-              <el-option
-                v-for="opt in segmentL1Options"
-                :key="opt.segmentCode"
-                :label="`${opt.segmentCode} — ${opt.segmentLabel}`"
-                :value="opt.segmentCode"
-              />
-            </el-select>
-            <div v-if="segmentL1Options.length === 0 && !segmentLoading" class="field-hint">
-              暂无L1编码配置 — 可在「系统设置→编码管理」维护后使用，或留空使用旧自动编码
-            </div>
-          </el-form-item>
-          <el-form-item label="L2 部位">
-            <el-select
-              v-model="segmentL2"
-              placeholder="请先选择 L1 类型"
-              clearable
-              filterable
-              style="width: 100%"
-              :disabled="!segmentL1"
-            >
-              <el-option
-                v-for="opt in segmentL2Options"
-                :key="opt.segmentCode"
-                :label="`${opt.segmentCode} — ${opt.segmentLabel}`"
-                :value="opt.segmentCode"
-              />
-            </el-select>
-          </el-form-item>
-          <el-form-item label="L3 品类">
-            <el-select
-              v-model="segmentL3"
-              placeholder="请先选择 L2 部位"
-              clearable
-              filterable
-              style="width: 100%"
-              :disabled="!segmentL2"
-            >
-              <el-option
-                v-for="opt in segmentL3Options"
-                :key="opt.segmentCode"
-                :label="`${opt.segmentCode} — ${opt.segmentLabel}`"
-                :value="opt.segmentCode"
-              />
-            </el-select>
-          </el-form-item>
-          <el-form-item v-if="segmentL1 && segmentL2 && segmentL3" label="编码预览">
-            <div class="code-preview-row">
-              <el-tag v-if="segmentCodePreview" type="success" class="code-preview-tag">
-                {{ segmentCodePreview }}
-              </el-tag>
-              <el-button
-                size="small"
-                :loading="sp8PreviewLoading"
-                @click="generateSP8Code"
+          <!-- 字典已配置: 展示完整级联 -->
+          <template v-if="segmentL1Options.length > 0 || segmentLoading">
+            <el-form-item label="L1 类型">
+              <el-select
+                v-model="segmentL1"
+                placeholder="请选择类型分类"
+                clearable
+                filterable
+                style="width: 100%"
+                :loading="segmentLoading"
               >
-                生成预览
-              </el-button>
-            </div>
-            <div class="field-hint">点击「生成预览」查看将生成的16位编码</div>
+                <el-option
+                  v-for="opt in segmentL1Options"
+                  :key="opt.segmentCode"
+                  :label="`${opt.segmentCode} — ${opt.segmentLabel}`"
+                  :value="opt.segmentCode"
+                />
+              </el-select>
+            </el-form-item>
+            <el-form-item label="L2 部位">
+              <el-select
+                v-model="segmentL2"
+                placeholder="请先选择 L1 类型"
+                clearable
+                filterable
+                style="width: 100%"
+                :disabled="!segmentL1"
+              >
+                <el-option
+                  v-for="opt in segmentL2Options"
+                  :key="opt.segmentCode"
+                  :label="`${opt.segmentCode} — ${opt.segmentLabel}`"
+                  :value="opt.segmentCode"
+                />
+              </el-select>
+            </el-form-item>
+            <el-form-item label="L3 品类">
+              <el-select
+                v-model="segmentL3"
+                placeholder="请先选择 L2 部位"
+                clearable
+                filterable
+                style="width: 100%"
+                :disabled="!segmentL2"
+              >
+                <el-option
+                  v-for="opt in segmentL3Options"
+                  :key="opt.segmentCode"
+                  :label="`${opt.segmentCode} — ${opt.segmentLabel}`"
+                  :value="opt.segmentCode"
+                />
+              </el-select>
+            </el-form-item>
+            <el-form-item v-if="segmentL1 && segmentL2 && segmentL3" label="编码预览">
+              <div class="code-preview-row">
+                <el-tag v-if="segmentCodePreview" type="success" class="code-preview-tag">
+                  {{ segmentCodePreview }}
+                </el-tag>
+                <el-button
+                  size="small"
+                  :loading="sp8PreviewLoading"
+                  @click="generateSP8Code"
+                >
+                  生成预览
+                </el-button>
+              </div>
+              <div class="field-hint">点击「生成预览」查看将生成的16位编码</div>
+            </el-form-item>
+          </template>
+          <!-- 字典未配置: 诚实空态 + 跳转配置引导 (fool-proof Rule 5: dead-end 改导航) -->
+          <el-form-item v-else label="">
+            <el-alert
+              title="16位编码字典尚未配置，暂不可用"
+              type="info"
+              :closable="false"
+              show-icon
+              style="width: 100%"
+            >
+              <template #default>
+                <div style="font-size:12px;margin-top:4px;color:#606266">
+                  留空将使用系统自动编码。16位分段编码计划 P1 阶段上线。
+                </div>
+              </template>
+            </el-alert>
           </el-form-item>
         </template>
 

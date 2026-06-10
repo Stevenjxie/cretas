@@ -62,6 +62,11 @@ public class YieldCalculationServiceImpl implements YieldCalculationService {
             // T161 per-photo annotation 与照片并行分组 (保序; null = 无标注)
             List<Map<String, Object>> stepInputPhotoAnnotations = null;
             List<Map<String, Object>> stepOutputPhotoAnnotations = null;
+            // SP1 双产出聚合 (本道各次报工: outputKind 取首个非 null; semiOutputQuantity Σ)
+            String stepOutputKind = null;
+            BigDecimal stepSemiOutputQuantity = null;
+            String stepSemiOutputUnit = null;
+            String stepSemiCode = null;
             // 三阶段 phase 推断信号: 是否有 INPUT 报工 / 有 OUTPUT 报工 (或 legacy: 有投入 / 有产出)
             boolean hasInputSignal = false;
             boolean hasOutputSignal = false;
@@ -159,6 +164,20 @@ public class YieldCalculationServiceImpl implements YieldCalculationService {
                 if (r.getSampleRetainQuantity() != null) {
                     stepSampleRetain = (stepSampleRetain == null ? 0 : stepSampleRetain) + r.getSampleRetainQuantity();
                 }
+                // SP1 双产出: outputKind 取首个非 null; semiOutputQuantity Σ; semiCode/semiOutputUnit 取首个非 null
+                if (stepOutputKind == null && r.getOutputKind() != null) {
+                    stepOutputKind = r.getOutputKind();
+                }
+                if (r.getSemiOutputQuantity() != null) {
+                    stepSemiOutputQuantity = (stepSemiOutputQuantity == null ? BigDecimal.ZERO : stepSemiOutputQuantity)
+                            .add(r.getSemiOutputQuantity());
+                }
+                if (stepSemiOutputUnit == null && r.getSemiOutputUnit() != null) {
+                    stepSemiOutputUnit = r.getSemiOutputUnit();
+                }
+                if (stepSemiCode == null && r.getSemiCode() != null) {
+                    stepSemiCode = r.getSemiCode();
+                }
             }
             stepWorkers = stepWorkersMax;
             // 本道总成本 = labor + material (两者全 null → null; 任一非 null → 该项视为 0 参与求和)
@@ -215,6 +234,11 @@ public class YieldCalculationServiceImpl implements YieldCalculationService {
                     // T161 per-photo annotation (并行分组结果)
                     .inputPhotoAnnotations(stepInputPhotoAnnotations)
                     .outputPhotoAnnotations(stepOutputPhotoAnnotations)
+                    // SP1 双产出
+                    .outputKind(stepOutputKind)
+                    .semiOutputQuantity(stepSemiOutputQuantity)
+                    .semiOutputUnit(stepSemiOutputUnit)
+                    .semiCode(stepSemiCode)
                     .build());
             prevOutput = totalOutput;
         }
