@@ -1,0 +1,684 @@
+"""Chart Auto-Insight — Tier 2 backend service (U4).
+
+Design: docs/superpowers/specs/2026-06-10-chart-auto-insight-design.md §2.1/§2.2/§2.6
+
+Architecture:
+  signature = SHA256(chartType|xDim|yMetric|agg|domain|dataPattern|permissionTier|factoryId)
+  Tier2a: lookup ai_insight_templates (is_active=true) → permission-gated fill
+  Tier2b: budget check → LLM structured JSON → capture upsert → maybe_promote
+  Distillation: proposal_count >= PROMOTE_THRESHOLD AND validate + poison_guard
+                AND (finding-only → auto; suggestion → needs is_verified)
+
+🔒 RBAC (red-line):
+  - factoryId ALWAYS from JWT (jwt_factory_id param), NOT from context.factory_id
+  - Cross-tenant (jwt_factory_id != ctx.factory_id) → blocked immediately
+  - finance yMetric + required_permission='finance:read_write' →
+    only roles in FINANCE_ROLES get the template; others → null
+  - permissionTier is baked into the signature so templates never cross permission tiers
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+import logging
+import re
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional, Sequence
+
+logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
+
+# Finance-sensitive yMetrics (spec §2.6)
+FINANCE_METRICS: frozenset[str] = frozenset({
+    "revenue", "margin", "profit", "cost",
+})
+
+# Roles allowed to see absolute ¥ values in insights (mirrors Java PRICE_VIEW_ROLES)
+FINANCE_ROLES: frozenset[str] = frozenset({
+    "factory_super_admin",
+    "platform_admin",
+    "procurement_manager",
+    "finance_manager",
+    "sales_manager",
+    "dispatcher",
+    "production_manager",
+    "restaurant_manager",
+    "restaurant_owner",
+    "restaurant_purchaser",
+    "permission_admin",
+    "department_admin",
+})
+
+# Observation verbs are allowed; causal-prescriptive verbs are BANNED (spec §2.3)
+_POISON_VERB_RE = re.compile(r"复制|引流|加大|扩张|推广")
+
+# Regex to detect literal absolute ¥ amounts (e.g. "¥12345", "500万元")
+_ABSOLUTE_AMOUNT_RE = re.compile(
+    r"¥\s*\d|"           # ¥ followed by digit
+    r"\d+\s*[万亿]?\s*元(?!\d)",  # numeric + 元 (not slot suffix)
+    re.UNICODE,
+)
+
+# Detect unparameterized numeric literals (raw numbers outside {} placeholders)
+# Heuristic: 2+ digit standalone number not inside a {slot}
+_UNSLOTTED_NUMBER_RE = re.compile(r"(?<!\{)\b\d{2,}\b(?!\})")
+
+# Detect slot placeholders — any {word} markers
+_SLOT_RE = re.compile(r"\{[^}]+\}")
+
+# Default promote threshold (configurable per-factory; demo=1, prod=3)
+DEFAULT_PROMOTE_THRESHOLD = 3
+
+
+# ---------------------------------------------------------------------------
+# Data models
+# ---------------------------------------------------------------------------
+
+@dataclass
+class ChartInsightContext:
+    """All inputs needed to compute a signature and generate/fill an insight."""
+    chart_type: str          # e.g. "BAR", "LINE", "PIE"
+    x_dim: str               # "time"|"store"|"product"|"channel"|"category"|"other"
+    y_metric: str            # "revenue"|"quantity"|"margin"|"cost"|"count"|"pct"|"other"
+    aggregation: str         # "sum"|"avg"|"max"|"count"
+    domain: str              # "restaurant"|"factory"|"finance"
+    data_pattern: str        # canonical bucket string e.g. "ranking:top-share:65-80:cat-count:4-8"
+    permission_tier: str     # "finance_visible"|"price_hidden"|"finance_hidden"
+    factory_id: str          # tenant identifier (from request body — OVERRIDDEN by JWT)
+    series_values: List[float] = field(default_factory=list)
+    series_labels: List[str] = field(default_factory=list)
+
+
+@dataclass
+class InsightResult:
+    """Structured insight output — mirrors the frontend InsightResult interface."""
+    finding: str
+    implication: Optional[str] = None
+    suggestion: Optional[str] = None
+    source: str = "template"   # "template" | "llm"
+    tier: int = 2
+
+
+# ---------------------------------------------------------------------------
+# Signature computation (spec §2.1)
+# ---------------------------------------------------------------------------
+
+def compute_signature(ctx: ChartInsightContext) -> str:
+    """SHA256 of the canonical pipe-delimited feature string.
+
+    Format: chartType|xDim|yMetric|aggregation|domain|dataPattern|permissionTier|factoryId
+    All fields are lowercased except factoryId (factory IDs are case-sensitive IDs).
+    """
+    raw = "|".join([
+        ctx.chart_type,
+        ctx.x_dim,
+        ctx.y_metric,
+        ctx.aggregation,
+        ctx.domain,
+        ctx.data_pattern,
+        ctx.permission_tier,
+        ctx.factory_id,
+    ])
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+# ---------------------------------------------------------------------------
+# Template validation helpers (spec §2.2)
+# ---------------------------------------------------------------------------
+
+def validate_template_parameterization(finding_tpl: str) -> bool:
+    """Return True iff the template is fully parameterized.
+
+    Rules:
+    - Must not be empty.
+    - Must contain at least one {slot} placeholder (otherwise it's a literal sentence).
+    - Must not contain absolute ¥ amounts (e.g. ¥12345 or 500万元).
+    - Must not contain unslotted 2+ digit standalone numbers (literal data baked in).
+
+    Only the finding_tpl is required to have slots; implication/suggestion can be
+    prose with observation verbs as long as they don't bake in literal numbers.
+    """
+    if not finding_tpl or not finding_tpl.strip():
+        return False
+
+    # Must have at least one {placeholder}
+    if not _SLOT_RE.search(finding_tpl):
+        return False
+
+    # Must not contain absolute ¥ amounts
+    if _ABSOLUTE_AMOUNT_RE.search(finding_tpl):
+        return False
+
+    # Must not contain standalone 2+ digit numbers outside slots
+    # (strip out slot contents first to avoid false positives on {slot123})
+    stripped = _SLOT_RE.sub("", finding_tpl)
+    if _UNSLOTTED_NUMBER_RE.search(stripped):
+        return False
+
+    return True
+
+
+def _contains_poison(text: Optional[str]) -> bool:
+    """Return True iff text contains a causal-prescriptive (banned) verb."""
+    if not text:
+        return False
+    return bool(_POISON_VERB_RE.search(text))
+
+
+# ---------------------------------------------------------------------------
+# Slot filling (spec §2.2 — apply template to concrete series data)
+# ---------------------------------------------------------------------------
+
+def _fill_slots(template: str, slot_values: Dict[str, Any]) -> str:
+    """Replace {placeholder} markers with computed values."""
+    result = template
+    for k, v in slot_values.items():
+        result = result.replace("{" + k + "}", str(v))
+    return result
+
+
+def _compute_slot_values(ctx: ChartInsightContext) -> Dict[str, Any]:
+    """Derive concrete slot values from ctx.series_values + series_labels.
+
+    Computes:
+      topName, botName: highest/lowest-value label
+      topShare: top value as % of total
+      ratio: top/bottom ratio (1 decimal)
+      concLevel: concentration tier label
+      growthRate, changeAmt, changeDir: trend-oriented slots
+    """
+    values = ctx.series_values
+    labels = ctx.series_labels
+    slots: Dict[str, Any] = {}
+
+    if not values:
+        return slots
+
+    total = sum(values)
+    if len(values) >= 2 and labels:
+        max_idx = values.index(max(values))
+        min_idx = values.index(min(values))
+        top_val = values[max_idx]
+        bot_val = values[min_idx]
+        slots["topName"] = labels[max_idx] if max_idx < len(labels) else f"第{max_idx+1}项"
+        slots["botName"] = labels[min_idx] if min_idx < len(labels) else f"第{min_idx+1}项"
+        slots["topShare"] = f"{round(top_val / total * 100, 1)}" if total > 0 else "0"
+        if bot_val and bot_val != 0:
+            slots["ratio"] = f"{round(top_val / bot_val, 1)}"
+        else:
+            slots["ratio"] = "—"
+        top_pct = (top_val / total * 100) if total > 0 else 0
+        if top_pct >= 80:
+            slots["concLevel"] = "极高"
+        elif top_pct >= 65:
+            slots["concLevel"] = "偏高"
+        else:
+            slots["concLevel"] = "适中"
+
+    # Trend slots
+    if len(values) >= 2:
+        first, last = values[0], values[-1]
+        if first and first != 0:
+            change_pct = round((last - first) / abs(first) * 100, 1)
+            slots["growthRate"] = f"{change_pct}"
+            slots["changeAmt"] = f"{round(last - first, 1)}"
+            slots["changeDir"] = "上升" if last > first else "下降" if last < first else "持平"
+
+    return slots
+
+
+# ---------------------------------------------------------------------------
+# Main service class
+# ---------------------------------------------------------------------------
+
+class ChartInsightService:
+    """Tier 2 insight service: library lookup → LLM structured fallback → distillation.
+
+    🔒 RBAC contract (enforced here, not only at endpoint):
+    - jwt_factory_id MUST be passed and used as the authoritative tenant identifier.
+    - If jwt_factory_id != ctx.factory_id → blocked (cross-tenant guard).
+    - Templates with required_permission='finance:read_write' →
+      only caller_role in FINANCE_ROLES may receive them.
+    """
+
+    def __init__(
+        self,
+        pool,  # asyncpg Pool
+        budget_tracker,  # AgentBudgetTracker or compatible
+        promote_threshold: int = DEFAULT_PROMOTE_THRESHOLD,
+    ):
+        self._pool = pool
+        self._budget_tracker = budget_tracker
+        self._promote_threshold = promote_threshold
+
+    # ------------------------------------------------------------------
+    # Public entry point
+    # ------------------------------------------------------------------
+
+    async def get_insight(
+        self,
+        ctx: ChartInsightContext,
+        *,
+        caller_role: Optional[str] = None,
+        jwt_factory_id: Optional[str] = None,
+    ) -> Optional[InsightResult]:
+        """Return an InsightResult or None (data insufficient or blocked).
+
+        jwt_factory_id: the factory_id extracted from the verified JWT.
+                        If provided, it OVERRIDES ctx.factory_id for all DB ops.
+                        If omitted (None) — use ctx.factory_id directly
+                        (only for internal/test calls where JWT is not present).
+
+        caller_role: role string from JWT for RBAC permission gating.
+        """
+        # 🔒 RBAC: JWT factory_id overrides body factory_id
+        effective_factory_id = jwt_factory_id if jwt_factory_id is not None else ctx.factory_id
+
+        # 🔒 Cross-tenant guard: if JWT says F001 but body says F002, block it
+        if jwt_factory_id is not None and ctx.factory_id != jwt_factory_id:
+            logger.warning(
+                "[chart-insight] cross-tenant blocked: jwt=%s body=%s",
+                jwt_factory_id, ctx.factory_id
+            )
+            return None
+
+        # Build a resolved context with the authoritative factory_id
+        resolved_ctx = ChartInsightContext(
+            chart_type=ctx.chart_type,
+            x_dim=ctx.x_dim,
+            y_metric=ctx.y_metric,
+            aggregation=ctx.aggregation,
+            domain=ctx.domain,
+            data_pattern=ctx.data_pattern,
+            permission_tier=ctx.permission_tier,
+            factory_id=effective_factory_id,
+            series_values=ctx.series_values,
+            series_labels=ctx.series_labels,
+        )
+
+        sig = compute_signature(resolved_ctx)
+
+        # Tier 2a: library lookup
+        result = await self._lookup_template(sig, resolved_ctx, caller_role)
+        if result is not None:
+            return result
+
+        # Tier 2b: budget check → LLM
+        budget = await self._budget_tracker.check_budget(effective_factory_id)
+        if budget.blocked:
+            logger.info("[chart-insight] budget blocked for factory=%s", effective_factory_id)
+            return None
+
+        llm_resp = await self._call_llm(resolved_ctx)
+        if llm_resp is None:
+            return None
+
+        finding_tpl = llm_resp.get("finding_tpl")
+        if not finding_tpl:
+            # LLM reported data insufficient — no fabrication
+            return None
+
+        implication_tpl = llm_resp.get("implication_tpl")
+        suggestion_tpl = llm_resp.get("suggestion_tpl")
+
+        # Estimate token cost (rough: 100 tokens per LLM call for accounting)
+        await self._budget_tracker.consume(effective_factory_id, 100)
+
+        # Capture if template is valid
+        valid = validate_template_parameterization(finding_tpl)
+        has_poison = _contains_poison(finding_tpl) or _contains_poison(suggestion_tpl)
+
+        if valid and not has_poison:
+            await self._capture_template(sig, resolved_ctx, llm_resp)
+
+        # Fill and return
+        slot_values = _compute_slot_values(resolved_ctx)
+        finding = _fill_slots(finding_tpl, slot_values)
+        implication = _fill_slots(implication_tpl, slot_values) if implication_tpl else None
+        suggestion = _fill_slots(suggestion_tpl, slot_values) if suggestion_tpl else None
+
+        return InsightResult(
+            finding=finding,
+            implication=implication,
+            suggestion=suggestion,
+            source="llm",
+            tier=2,
+        )
+
+    # ------------------------------------------------------------------
+    # Tier 2a: library lookup
+    # ------------------------------------------------------------------
+
+    async def _lookup_template(
+        self,
+        signature_hash: str,
+        ctx: ChartInsightContext,
+        caller_role: Optional[str],
+    ) -> Optional[InsightResult]:
+        """Query ai_insight_templates for an active template matching this signature.
+
+        🔒 RBAC: Templates tagged required_permission='finance:read_write' are only
+        returned to callers whose role is in FINANCE_ROLES. Others get null (no fallback
+        prose — the caller must wait for Tier2b or get nothing).
+        """
+        try:
+            async with self._pool.acquire() as conn:
+                row = await conn.fetchrow(
+                    """
+                    SELECT insight_template, required_permission, hit_count
+                    FROM ai_insight_templates
+                    WHERE signature_hash = $1
+                      AND factory_id = $2
+                      AND is_active = true
+                    ORDER BY confidence DESC NULLS LAST
+                    LIMIT 1
+                    """,
+                    signature_hash,
+                    ctx.factory_id,
+                )
+        except Exception as exc:
+            logger.warning("[chart-insight] template lookup failed: %s", exc)
+            return None
+
+        if row is None:
+            return None
+
+        required_perm = row["required_permission"]
+        template_json = row["insight_template"]
+
+        # 🔒 Permission gate: finance templates need the right role
+        if required_perm == "finance:read_write":
+            has_finance = caller_role in FINANCE_ROLES
+            if not has_finance:
+                logger.info(
+                    "[chart-insight] RBAC: template requires finance:read_write; role=%s → blocked",
+                    caller_role
+                )
+                return None
+
+        # Parse template
+        try:
+            tmpl = json.loads(template_json) if isinstance(template_json, str) else template_json
+        except (json.JSONDecodeError, TypeError) as exc:
+            logger.warning("[chart-insight] template JSON parse failed: %s", exc)
+            return None
+
+        finding_tpl = tmpl.get("finding_tpl", "")
+        implication_tpl = tmpl.get("implication_tpl")
+        suggestion_tpl = tmpl.get("suggestion_tpl")
+
+        # Pre-application assertion: validate template still makes sense (spec §2.7)
+        if not finding_tpl:
+            return None
+
+        # Fill slots
+        slot_values = _compute_slot_values(ctx)
+        finding = _fill_slots(finding_tpl, slot_values)
+        implication = _fill_slots(implication_tpl, slot_values) if implication_tpl else None
+        suggestion = _fill_slots(suggestion_tpl, slot_values) if suggestion_tpl else None
+
+        # Async hit_count increment (best-effort)
+        try:
+            async with self._pool.acquire() as conn:
+                await conn.execute(
+                    "UPDATE ai_insight_templates SET hit_count = hit_count + 1, updated_at = NOW() "
+                    "WHERE signature_hash = $1 AND factory_id = $2",
+                    signature_hash, ctx.factory_id,
+                )
+        except Exception as exc:
+            logger.debug("[chart-insight] hit_count increment failed (non-fatal): %s", exc)
+
+        return InsightResult(
+            finding=finding,
+            implication=implication,
+            suggestion=suggestion,
+            source="template",
+            tier=2,
+        )
+
+    # ------------------------------------------------------------------
+    # Tier 2b: LLM call (overridable for testing)
+    # ------------------------------------------------------------------
+
+    async def _call_llm(self, ctx: ChartInsightContext) -> Optional[Dict[str, Any]]:
+        """Call the LLM and return a structured template JSON, or None on failure.
+
+        Prompt instructs: return structured JSON with finding_tpl/implication_tpl/
+        suggestion_tpl/slots using {placeholder} syntax.
+        If data is insufficient for a meaningful business observation → return all-null.
+        Suggestions MUST use observation verbs only (关注/排查/分析/了解).
+        Suggestions MUST NOT use causal-prescriptive verbs (复制/引流/加大/扩张/推广).
+        """
+        try:
+            from common.llm_router import call_chain, SLOT
+            from common.llm_metrics import llm_caller_context
+        except ImportError:
+            logger.warning("[chart-insight] llm_router not available, skipping Tier2b")
+            return None
+
+        prompt = _build_insight_prompt(ctx)
+
+        payload = {
+            "messages": [
+                {
+                    "role": "system",
+                    "content": (
+                        "你是一名数据分析师，专门为ERP系统的图表生成结构化洞察模板。"
+                        "你的输出必须是严格的JSON格式（不含代码块）。"
+                        "使用观察动词（关注/排查/分析/了解），禁止因果归因动词（复制/引流/加大/扩张/推广）。"
+                        "如果数据不足以得出有意义的业务观察，则将finding_tpl返回null，不要编造。"
+                    ),
+                },
+                {"role": "user", "content": prompt},
+            ],
+            "response_format": {"type": "json_object"},
+            "temperature": 0.3,
+            "max_tokens": 500,
+        }
+
+        try:
+            with llm_caller_context("chart_insight", factory_id=ctx.factory_id):
+                resp = await call_chain(SLOT.CHART, payload)
+        except Exception as exc:
+            logger.warning("[chart-insight] LLM call failed: %s", exc)
+            return None
+
+        if resp is None:
+            return None
+
+        # Parse response
+        try:
+            choices = resp.get("choices", [])
+            if not choices:
+                return None
+            content = choices[0].get("message", {}).get("content", "")
+            parsed = json.loads(content)
+            return parsed
+        except (json.JSONDecodeError, KeyError, IndexError, TypeError) as exc:
+            logger.warning("[chart-insight] LLM response parse failed: %s", exc)
+            return None
+
+    # ------------------------------------------------------------------
+    # Capture + promote (spec §2.2 distillation)
+    # ------------------------------------------------------------------
+
+    async def _capture_template(
+        self,
+        signature_hash: str,
+        ctx: ChartInsightContext,
+        llm_resp: Dict[str, Any],
+    ) -> None:
+        """Upsert the LLM response into ai_insight_templates.
+
+        Uses ON CONFLICT (signature_hash, factory_id) DO UPDATE to increment
+        proposal_count and store the latest template. After upsert, check if
+        promotion criteria are met.
+
+        Promotion rules (spec §2.2):
+        - proposal_count >= PROMOTE_THRESHOLD
+        - AND validate_template_parameterization (finding_tpl must be fully parameterized)
+        - AND NOT _contains_poison (no causal-prescriptive verbs in any field)
+        - AND (has suggestion → requires is_verified=True before promote; finding-only → auto OK)
+        """
+        finding_tpl = llm_resp.get("finding_tpl") or ""
+        implication_tpl = llm_resp.get("implication_tpl")
+        suggestion_tpl = llm_resp.get("suggestion_tpl")
+        slots = llm_resp.get("slots", [])
+
+        # Compute chart_signature for storage
+        chart_sig = {
+            "chart_type": ctx.chart_type,
+            "x_dim": ctx.x_dim,
+            "y_metric": ctx.y_metric,
+            "aggregation": ctx.aggregation,
+            "domain": ctx.domain,
+            "data_pattern": ctx.data_pattern,
+            "permission_tier": ctx.permission_tier,
+        }
+
+        template_obj = {
+            "finding_tpl": finding_tpl,
+            "implication_tpl": implication_tpl,
+            "suggestion_tpl": suggestion_tpl,
+            "slots": slots,
+        }
+
+        # Determine required_permission based on y_metric
+        required_perm = "finance:read_write" if ctx.y_metric in FINANCE_METRICS else None
+
+        try:
+            async with self._pool.acquire() as conn:
+                await conn.execute(
+                    """
+                    INSERT INTO ai_insight_templates
+                        (factory_id, signature_hash, chart_signature, insight_template,
+                         required_permission, source_type, confidence,
+                         hit_count, proposal_count, is_active, is_verified,
+                         created_at, updated_at)
+                    VALUES
+                        ($1, $2, $3::jsonb, $4::jsonb,
+                         $5, 'LLM_FALLBACK', 0.5,
+                         0, 1, false, false,
+                         NOW(), NOW())
+                    ON CONFLICT (signature_hash, factory_id) DO UPDATE
+                        SET insight_template = EXCLUDED.insight_template,
+                            proposal_count   = ai_insight_templates.proposal_count + 1,
+                            updated_at       = NOW()
+                    """,
+                    ctx.factory_id,
+                    signature_hash,
+                    json.dumps(chart_sig),
+                    json.dumps(template_obj),
+                    required_perm,
+                )
+
+                # Read back proposal_count for promotion check
+                proposal_count = await conn.fetchval(
+                    "SELECT proposal_count FROM ai_insight_templates "
+                    "WHERE signature_hash = $1 AND factory_id = $2",
+                    signature_hash, ctx.factory_id,
+                )
+        except Exception as exc:
+            logger.warning("[chart-insight] template capture failed (non-fatal): %s", exc)
+            return
+
+        await self._maybe_promote(
+            signature_hash=signature_hash,
+            factory_id=ctx.factory_id,
+            finding_tpl=finding_tpl,
+            suggestion_tpl=suggestion_tpl,
+            proposal_count=proposal_count or 0,
+        )
+
+    async def _maybe_promote(
+        self,
+        *,
+        signature_hash: str,
+        factory_id: str,
+        finding_tpl: str,
+        suggestion_tpl: Optional[str],
+        proposal_count: int,
+    ) -> None:
+        """Promote template to is_active=True if all conditions are met.
+
+        Conditions (spec §2.2):
+        1. proposal_count >= PROMOTE_THRESHOLD
+        2. validate_template_parameterization(finding_tpl) → True
+        3. NOT _contains_poison(finding_tpl or suggestion_tpl)
+        4. If suggestion_tpl is non-null → requires is_verified=True (not auto-promoted here)
+           If finding-only (suggestion_tpl is None) → auto-promote OK
+        """
+        if proposal_count < self._promote_threshold:
+            return
+
+        if not validate_template_parameterization(finding_tpl):
+            logger.info("[chart-insight] template not promoted: failed parameterization check")
+            return
+
+        if _contains_poison(finding_tpl) or _contains_poison(suggestion_tpl):
+            logger.info("[chart-insight] template not promoted: poison verb detected")
+            return
+
+        has_suggestion = bool(suggestion_tpl and suggestion_tpl.strip())
+        if has_suggestion:
+            # Suggestion-bearing templates require manual verification (is_verified=True)
+            # Do NOT auto-promote — requires human review
+            logger.info(
+                "[chart-insight] template not auto-promoted: suggestion present, needs is_verified=True"
+            )
+            return
+
+        # Auto-promote finding-only template
+        try:
+            async with self._pool.acquire() as conn:
+                await conn.execute(
+                    "UPDATE ai_insight_templates "
+                    "SET is_active = true, updated_at = NOW() "
+                    "WHERE signature_hash = $1 AND factory_id = $2 AND is_verified = false",
+                    signature_hash, factory_id,
+                )
+            logger.info(
+                "[chart-insight] template promoted to is_active=true (sig=%s, factory=%s)",
+                signature_hash[:12], factory_id,
+            )
+        except Exception as exc:
+            logger.warning("[chart-insight] template promotion failed (non-fatal): %s", exc)
+
+
+# ---------------------------------------------------------------------------
+# LLM prompt builder
+# ---------------------------------------------------------------------------
+
+def _build_insight_prompt(ctx: ChartInsightContext) -> str:
+    """Build the structured prompt for Tier2b LLM call."""
+    values_preview = ", ".join(
+        f"{l}={v}" for l, v in zip(ctx.series_labels[:5], ctx.series_values[:5])
+    ) if ctx.series_labels else str(ctx.series_values[:5])
+
+    return f"""请为以下图表生成一个**结构化洞察模板**（JSON格式），要求：
+
+图表信息：
+- 图表类型: {ctx.chart_type}
+- X轴维度: {ctx.x_dim}
+- Y轴指标: {ctx.y_metric}
+- 聚合方式: {ctx.aggregation}
+- 业务域: {ctx.domain}
+- 数据模式: {ctx.data_pattern}
+- 数据样例: {values_preview}
+
+输出格式（严格JSON，禁止代码块）：
+{{
+  "finding_tpl": "用{{placeholder}}表示的发现句，如：{{topName}}占{{topShare}}%，是末位{{botName}}的{{ratio}}倍",
+  "implication_tpl": "含义句（可选，可为null）",
+  "suggestion_tpl": "建议句（可选，可为null；只用观察动词：关注/排查/分析/了解）",
+  "slots": ["placeholder1", "placeholder2"]
+}}
+
+重要规则：
+1. 所有数值、名称必须用{{placeholder}}占位符表示，不得写入字面量
+2. 如果数据不足以得出有意义的业务观察，finding_tpl返回null
+3. 建议只使用观察动词（关注/排查/分析/了解），严禁因果归因（复制/引流/加大/扩张/推广）
+4. 只返回JSON，不要任何解释或代码块"""

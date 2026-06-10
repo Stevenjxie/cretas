@@ -131,6 +131,11 @@ app.include_router(completeness_router, prefix="/api/public/client-requirement",
 from smartbi.api.revenue_report import router as revenue_report_router  # noqa: E402
 app.include_router(revenue_report_router, tags=["收入管理报表"])
 
+# Chart Auto-Insight (U4 — POST /api/smartbi/chart-insight, JWT required)
+# 🔒 RBAC: factoryId + role from JWT via JWTAuthMiddleware, never from request body.
+from smartbi.api.chart_insight import router as chart_insight_router  # noqa: E402
+app.include_router(chart_insight_router, prefix="/api/smartbi", tags=["Chart Auto-Insight"])
+
 
 @app.get("/health")
 async def health_check():
