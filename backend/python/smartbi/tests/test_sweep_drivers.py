@@ -495,6 +495,130 @@ class TestChatQaReplay:
             "set_factory_id was not called before pool.acquire()"
         )
 
+    def test_load_factory_data_dynamic_data_query_uses_row_index(self) -> None:
+        """_load_factory_data must query smart_bi_dynamic_data with ORDER BY row_index.
+
+        Root cause of FOOD_3101_048 data_rows=0 (the SECOND bug after the RLS fix):
+        The data fetch query used ``ORDER BY row_number`` but the column is ``row_index``.
+        ``row_number`` is a PostgreSQL reserved window-function keyword — using it
+        bare in ORDER BY raises:
+            ERROR: window function row_number requires an OVER clause
+        The outer except swallowed the error and returned (None, []) — so even after
+        the RLS/ContextVar fix the upload was found but data loading always returned [].
+
+        This test verifies that:
+          1. The data query (conn.fetch) is called when an upload IS found.
+          2. The SQL sent to conn.fetch does NOT contain ``row_number`` (bare).
+          3. The SQL sent to conn.fetch DOES contain ``row_index``.
+        """
+        mod = self._import()
+
+        fetch_sqls: List[str] = []
+
+        async def capture_fetch(sql: str, *args, **kwargs):
+            fetch_sqls.append(sql)
+            # Return two mock rows with row_data as dicts (JSONB path)
+            r1 = MagicMock()
+            r1.__getitem__ = lambda self, key: {"金额": 1000.0, "门店": "A店"} if key == "row_data" else None
+            r2 = MagicMock()
+            r2.__getitem__ = lambda self, key: {"金额": 2000.0, "门店": "B店"} if key == "row_data" else None
+            return [r1, r2]
+
+        # Upload-selection fetchrow returns one upload
+        upload_row = MagicMock()
+        upload_row.__getitem__ = lambda self, key: (4720 if key == "id" else 3500000)
+        upload_row.__bool__ = lambda self: True
+
+        async def capture_fetchrow(sql: str, *args, **kwargs):
+            return upload_row
+
+        mock_conn = AsyncMock()
+        mock_conn.fetchrow = AsyncMock(side_effect=capture_fetchrow)
+        mock_conn.fetch = AsyncMock(side_effect=capture_fetch)
+
+        mock_pool = MagicMock()
+        mock_pool.acquire = MagicMock()
+        mock_pool.acquire.return_value.__aenter__ = AsyncMock(return_value=mock_conn)
+        mock_pool.acquire.return_value.__aexit__ = AsyncMock(return_value=False)
+
+        async def _test():
+            return await mod._load_factory_data(mock_pool, "FOOD_3101_048", limit_rows=100)
+
+        upload_id, rows = _run(_test())
+
+        # conn.fetch must have been called (data query was issued)
+        assert len(fetch_sqls) >= 1, (
+            "conn.fetch was never called — data query not issued after upload found"
+        )
+        data_sql = fetch_sqls[0]
+        # Must NOT contain bare row_number (PostgreSQL window function keyword)
+        assert "row_number" not in data_sql.lower(), (
+            f"Data query contains 'row_number' (PostgreSQL window function keyword, "
+            f"requires OVER clause → raises error → data_rows=0). "
+            f"SQL: {data_sql!r}"
+        )
+        # Must contain row_index (the actual column name in smart_bi_dynamic_data)
+        assert "row_index" in data_sql.lower(), (
+            f"Data query must ORDER BY row_index (actual column name). SQL: {data_sql!r}"
+        )
+        # Rows must be returned (not silently swallowed)
+        assert len(rows) > 0, (
+            f"Expected rows to be loaded but got {len(rows)} — data query may still be failing"
+        )
+
+    def test_load_factory_data_single_connection_for_both_queries(self) -> None:
+        """Upload lookup and dynamic_data fetch share ONE pool.acquire() block.
+
+        Both smart_bi_pg_excel_uploads and smart_bi_dynamic_data are RLS-protected
+        (V20260502_03 / V20260502_04).  set_pg_connection_tenant applies the
+        app.factory_id GUC once per acquire.  Using a single connection for both
+        queries guarantees both queries see the same GUC — no risk of a second
+        acquire getting a stale connection from another tenant.
+
+        This test counts pool.acquire() calls and asserts exactly ONE connection
+        is borrowed for both the fetchrow (upload) and fetch (data).
+        """
+        mod = self._import()
+
+        acquire_count = [0]
+
+        async def fake_fetchrow(sql: str, *args, **kwargs):
+            row = MagicMock()
+            row.__getitem__ = lambda self, key: (9999 if key == "id" else 100)
+            row.__bool__ = lambda self: True
+            return row
+
+        async def fake_fetch(sql: str, *args, **kwargs):
+            r = MagicMock()
+            r.__getitem__ = lambda self, key: {"val": 1} if key == "row_data" else None
+            return [r]
+
+        mock_conn = AsyncMock()
+        mock_conn.fetchrow = AsyncMock(side_effect=fake_fetchrow)
+        mock_conn.fetch = AsyncMock(side_effect=fake_fetch)
+
+        class _AcquireCtx:
+            async def __aenter__(self_inner):
+                acquire_count[0] += 1
+                return mock_conn
+            async def __aexit__(self_inner, *args):
+                return False
+
+        mock_pool = MagicMock()
+        mock_pool.acquire = MagicMock(return_value=_AcquireCtx())
+
+        async def _test():
+            return await mod._load_factory_data(mock_pool, "FOOD_3101_048", limit_rows=50)
+
+        upload_id, rows = _run(_test())
+
+        assert acquire_count[0] == 1, (
+            f"Expected exactly 1 pool.acquire() call (single connection for both queries), "
+            f"got {acquire_count[0]}. Using 2 separate acquires can cause RLS GUC mismatch."
+        )
+        assert upload_id == 9999
+        assert len(rows) > 0
+
     def test_dry_run_process_one(self) -> None:
         """Dry-run _process_one returns True without calling InsightGenerator."""
         mod = self._import()

@@ -210,21 +210,31 @@ async def _load_factory_data(
 
     Returns (upload_id, rows).  Rows are sampled to ``limit_rows`` if set.
 
-    RLS note (V20260502_03): smart_bi_pg_excel_uploads has FORCE ROW LEVEL
-    SECURITY with SELECT policy:
+    RLS notes:
+    - smart_bi_pg_excel_uploads has FORCE ROW LEVEL SECURITY (V20260502_03):
         factory_id = app.factory_id  OR  app.factory_id = ''  OR  app.factory_id IS NULL
-    The asyncpg pool setup callback sets app.factory_id to '__internal__' sentinel
-    when no ContextVar is in scope, which does NOT match any of the permissive
-    paths → query returns 0 rows → no upload found → data_rows=0 for every factory.
-    Fix: set the ContextVar to `factory_id` before pool.acquire() so the pool
-    setup callback applies the correct tenant GUC.
-    Mirrors hooks._trigger_materialization which does the same thing.
+      Fix: set the ContextVar to `factory_id` before pool.acquire() so the pool
+      setup callback applies the correct tenant GUC.
+    - smart_bi_dynamic_data also has FORCE ROW LEVEL SECURITY (V20260502_04)
+      with the same factory_id = app.factory_id policy.  Both tables must be
+      queried on the same connection (same acquire block) so both get the RLS GUC
+      applied by set_pg_connection_tenant.
+
+    Column note: smart_bi_dynamic_data uses ``row_index`` (not ``row_number``).
+    ``row_number`` is a PostgreSQL reserved function keyword that requires an
+    OVER clause; using it bare in ORDER BY raises:
+        ERROR: window function row_number requires an OVER clause
+    which the outer except swallowed → data_rows=0 for every factory.
+    Production (chat.py:994) uses no ORDER BY at all, just LIMIT.
     """
     from smartbi.tenant_ctx import set_factory_id, reset_factory_id
 
     tenant_token = None
     try:
         tenant_token = set_factory_id(factory_id)
+        # Use a single connection for both queries so both inherit the same
+        # app.factory_id GUC applied by set_pg_connection_tenant.
+        # Mirrors production chat.py:956-995 (single acquire block).
         async with pool.acquire() as conn:
             row = await conn.fetchrow(
                 """SELECT id, row_count FROM smart_bi_pg_excel_uploads
@@ -235,19 +245,21 @@ async def _load_factory_data(
                    LIMIT 1""",
                 factory_id,
             )
-        if not row:
-            logger.warning(f"[data] {factory_id}: no completed uploads found")
-            return None, []
-        upload_id = row["id"]
-        row_count = row["row_count"] or 0
-        logger.info(f"[data] {factory_id}: using upload_id={upload_id} rows={row_count}")
+            if not row:
+                logger.warning(f"[data] {factory_id}: no completed uploads found")
+                return None, []
+            upload_id = row["id"]
+            row_count = row["row_count"] or 0
+            logger.info(f"[data] {factory_id}: using upload_id={upload_id} rows={row_count}")
 
-        limit_clause = f"LIMIT {limit_rows}" if limit_rows > 0 else ""
-        async with pool.acquire() as conn:
+            # Bug fix: column is row_index (not row_number).  row_number is a
+            # PostgreSQL reserved window-function keyword and raises without OVER.
+            # Production (chat.py:994) uses no ORDER BY — mirror that.
+            limit_clause = f"LIMIT {limit_rows}" if limit_rows > 0 else ""
             fetched = await conn.fetch(
                 f"""SELECT row_data FROM smart_bi_dynamic_data
                     WHERE upload_id = $1
-                    ORDER BY row_number
+                    ORDER BY row_index
                     {limit_clause}""",
                 upload_id,
             )
