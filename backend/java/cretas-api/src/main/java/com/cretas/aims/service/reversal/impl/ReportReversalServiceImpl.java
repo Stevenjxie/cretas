@@ -7,11 +7,15 @@ import com.cretas.aims.entity.SemiFinishedInventory;
 import com.cretas.aims.entity.SemiFinishedInventoryTransaction;
 import com.cretas.aims.entity.inventory.FinishedGoodsBatch;
 import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.entity.User;
 import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.ProductionReportRepository;
 import com.cretas.aims.repository.ReportReversalLogRepository;
 import com.cretas.aims.repository.SemiFinishedInventoryRepository;
 import com.cretas.aims.repository.SemiFinishedInventoryTransactionRepository;
+import com.cretas.aims.repository.UserRepository;
+import com.cretas.aims.entity.workprocess.WorkProcessTask;
+import com.cretas.aims.repository.workprocess.WorkProcessTaskRepository;
 import com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository;
 import com.cretas.aims.service.reversal.ReportReversalService;
 import lombok.RequiredArgsConstructor;
@@ -24,7 +28,12 @@ import java.math.RoundingMode;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
+import java.util.function.Function;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 /**
  * SP2 整单撤回实现。
@@ -53,6 +62,10 @@ public class ReportReversalServiceImpl implements ReportReversalService {
     private final SemiFinishedInventoryRepository wipRepo;
     private final SemiFinishedInventoryTransactionRepository txnRepo;
     private final FinishedGoodsBatchRepository fgbRepo;
+    // BUG-4 修复: 批次加载用户姓名 (单次 IN query, 无 N+1)
+    private final UserRepository userRepository;
+    // BUG-1 联动: 整单撤回需复位 WorkProcessTask (COMPLETED → PENDING), 否则任务卡终态无法重报
+    private final WorkProcessTaskRepository workProcessTaskRepository;
 
     // ==================== 提交撤回申请 ====================
 
@@ -155,6 +168,25 @@ public class ReportReversalServiceImpl implements ReportReversalService {
             reportRepo.save(r);
         }
 
+        // ①.5 复位该批次工序任务 (BUG-1 联动修复的撤回路径):
+        // OUTPUT 报工提交现在会把 WorkProcessTask 置 COMPLETED(终态) — 整单撤回软删了全部
+        // YIELD 报工后, 若任务留在 COMPLETED, RN 任务列表不再显示该道 → 无法重报, 撤回流程被打断。
+        // 故: COMPLETED → PENDING + 清 completedBy/completedAt; 所有任务 actualQuantity 复位 null
+        // (其派生源 YIELD 报工已全部软删)。SKIPPED/CANCELLED 是独立决策, 不动。
+        List<WorkProcessTask> batchTasks = workProcessTaskRepository
+                .findByFactoryIdAndProductionBatchIdOrderByProcessOrderAsc(factoryId, batchId);
+        for (WorkProcessTask t : batchTasks) {
+            if (WorkProcessTask.Status.COMPLETED == t.getStatus()) {
+                t.setStatus(WorkProcessTask.Status.PENDING);
+                t.setCompletedBy(null);
+                t.setCompletedAt(null);
+            }
+            t.setActualQuantity(null);
+        }
+        if (!batchTasks.isEmpty()) {
+            workProcessTaskRepository.saveAll(batchTasks);
+        }
+
         // ② 每份报工: 找到对应 IN SIT 行 → 写 REVERSE 行 → 回放移动均价
         for (ProductionReport r : reports) {
             List<SemiFinishedInventoryTransaction> inTxns =
@@ -244,18 +276,44 @@ public class ReportReversalServiceImpl implements ReportReversalService {
 
     @Override
     public List<ReportReversalLog> listReversals(String factoryId, String status) {
+        List<ReportReversalLog> logs;
         if (status == null || status.isBlank()) {
             // 返回所有状态 — 使用 no-status 方法, 避免传 null 给 enum 参数
-            return reversalLogRepo.findByFactoryIdAndDeletedAtIsNullOrderByCreatedAtDesc(factoryId);
+            logs = reversalLogRepo.findByFactoryIdAndDeletedAtIsNullOrderByCreatedAtDesc(factoryId);
+        } else {
+            ReportReversalLog.ReversalStatus statusEnum;
+            try {
+                statusEnum = ReportReversalLog.ReversalStatus.valueOf(status.toUpperCase());
+            } catch (IllegalArgumentException e) {
+                throw new BusinessException(400, "无效的状态值: " + status + "，合法值: PENDING/APPROVED/DONE/REJECTED");
+            }
+            logs = reversalLogRepo
+                    .findByFactoryIdAndStatusAndDeletedAtIsNullOrderByCreatedAtDesc(factoryId, statusEnum);
         }
-        ReportReversalLog.ReversalStatus statusEnum;
-        try {
-            statusEnum = ReportReversalLog.ReversalStatus.valueOf(status.toUpperCase());
-        } catch (IllegalArgumentException e) {
-            throw new BusinessException(400, "无效的状态值: " + status + "，合法值: PENDING/APPROVED/DONE/REJECTED");
+        // BUG-4 修复: 批量加载用户姓名 (一次 IN query, 禁止 N+1)。
+        // 收集所有非 null userId，去重后一次性 findAllById，构建 id→User map 填充 @Transient 姓名字段。
+        if (!logs.isEmpty()) {
+            List<Long> userIds = logs.stream()
+                    .flatMap(l -> Stream.of(l.getSubmittedBy(), l.getApprovedBy()))
+                    .filter(Objects::nonNull)
+                    .distinct()
+                    .collect(Collectors.toList());
+            if (!userIds.isEmpty()) {
+                Map<Long, User> userMap = userRepository.findAllById(userIds).stream()
+                        .collect(Collectors.toMap(User::getId, Function.identity()));
+                for (ReportReversalLog l : logs) {
+                    if (l.getSubmittedBy() != null) {
+                        User u = userMap.get(l.getSubmittedBy());
+                        l.setSubmittedByName(u != null ? u.getFullName() : null);
+                    }
+                    if (l.getApprovedBy() != null) {
+                        User u = userMap.get(l.getApprovedBy());
+                        l.setApprovedByName(u != null ? u.getFullName() : null);
+                    }
+                }
+            }
         }
-        return reversalLogRepo
-                .findByFactoryIdAndStatusAndDeletedAtIsNullOrderByCreatedAtDesc(factoryId, statusEnum);
+        return logs;
     }
 
     // ==================== 私有辅助 ====================

@@ -426,4 +426,16 @@ public class ProductionBatch extends BaseEntity {
     @Type(JsonBinaryType.class)
     @Column(name = "ai_invocation_metadata", columnDefinition = "jsonb")
     private Map<String, Object> aiInvocationMetadata;
+
+    // ==================== BUG-2 修复: 批次来源类型 (计算字段, 非持久化) ====================
+
+    /**
+     * 批次来源类型 (非持久化 @Transient, 从关联 ProductionPlan.planSourceType 派生)。
+     *
+     * <p>在 ProcessingServiceImpl.getBatchById() 中按需填充。
+     * "SECONDARY" 表示半成品/二次加工; "NORMAL" 表示正常生产计划。
+     * null 表示无关联计划或计划已删除。</p>
+     */
+    @Transient
+    private String batchSourceType;
 }

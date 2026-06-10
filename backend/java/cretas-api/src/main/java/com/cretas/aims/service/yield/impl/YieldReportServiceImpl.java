@@ -304,6 +304,13 @@ public class YieldReportServiceImpl implements YieldReportService {
             taskTotal = taskTotal.add(saved.getOutputQuantity());
         }
         t.setActualQuantity(taskTotal);
+        // BUG-1 修复: OUTPUT/Legacy 报工完成后，在同事务内置任务状态 COMPLETED + completedBy。
+        // 注意: 不引入内层 @Transactional, 直接 set 后 save, 与上面 actualQuantity 同一 save 合并。
+        if (isOutput || isLegacy) {
+            t.setStatus(WorkProcessTask.Status.COMPLETED);
+            t.setCompletedBy(effectiveWorker);
+            t.setCompletedAt(LocalDateTime.now());
+        }
         taskRepo.save(t);
 
         // WIP 正式消耗/产出统一在 Web 审批通过后由 WipInventoryService.postApprovedOutput 过账。

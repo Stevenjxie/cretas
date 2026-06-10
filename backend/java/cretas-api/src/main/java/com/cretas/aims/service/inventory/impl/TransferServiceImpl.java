@@ -317,12 +317,31 @@ public class TransferServiceImpl implements TransferService {
     @Override
     @Transactional
     public InternalTransfer receiveTransfer(String factoryId, String transferId, Long userId) {
+        return receiveTransfer(factoryId, transferId, userId, null);
+    }
+
+    @Override
+    @Transactional
+    public InternalTransfer receiveTransfer(String factoryId, String transferId, Long userId,
+                                             Map<Long, BigDecimal> itemActualQuantities) {
         InternalTransfer transfer = loadForStateChange(factoryId, transferId);
         // 只有调入方可以签收
         assertTargetFactory(factoryId, transfer, "签收");
         assertStatus(transfer, TransferStatus.SHIPPED, "签收");
         transfer.setStatus(TransferStatus.RECEIVED);
         transfer.setReceivedAt(LocalDateTime.now());
+        // BUG-3 修复: 每个 item 写入 receivedQuantity = map.getOrDefault(id, shippedQty)。
+        // itemActualQuantities=null 或 item 不在 map 中时回退为 item.quantity (向后兼容)。
+        // 批量 saveAll 避免 N+1。
+        for (InternalTransferItem item : transfer.getItems()) {
+            BigDecimal actual = (itemActualQuantities != null && item.getId() != null)
+                    ? itemActualQuantities.getOrDefault(item.getId(), item.getQuantity())
+                    : item.getQuantity();
+            item.setReceivedQuantity(actual);
+        }
+        if (!transfer.getItems().isEmpty()) {
+            transferItemRepository.saveAll(transfer.getItems());
+        }
         log.info("调拨签收: transferId={}, targetFactory={}", transferId, transfer.getTargetFactoryId());
         return transferRepository.save(transfer);
     }
