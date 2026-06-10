@@ -3,7 +3,7 @@ import { ref, onMounted, computed } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
-import { get } from '@/api/request';
+import { get, post } from '@/api/request';
 import { getBatchWip, getOrderYieldSummary, getBatchWorkProcessTasks, type WipRowItem, type OrderYieldSummary, type WorkProcessTaskItem } from '@/api/processProduction';
 import { ElMessage } from 'element-plus';
 import { ArrowLeft, Refresh, User } from '@element-plus/icons-vue';
@@ -565,6 +565,72 @@ function getTimelineIcon(type: string) {
   };
   return map[type?.toUpperCase()] || 'primary';
 }
+
+// ===== SP2: 整单撤回 =====
+const reversalDialogVisible = ref(false);
+const reversalSubmitting = ref(false);
+const reversalError = ref<{ message: string; actionHint?: string } | null>(null);
+
+const REVERSAL_REASONS = [
+  '录入错误',
+  '产品变更',
+  '质量问题',
+  '计划调整',
+  '其他',
+] as const;
+const reversalReasonSelected = ref('录入错误');
+const reversalReasonOther = ref('');
+
+function openReversalDialog() {
+  reversalError.value = null;
+  reversalReasonSelected.value = '录入错误';
+  reversalReasonOther.value = '';
+  reversalDialogVisible.value = true;
+}
+
+async function submitReversal() {
+  if (!factoryId.value || !batchId.value) return;
+
+  const selected = reversalReasonSelected.value;
+  const other = reversalReasonOther.value.trim();
+  const reason = selected === '其他'
+    ? (other || '其他')
+    : (other ? `${selected}: ${other}` : selected);
+
+  reversalSubmitting.value = true;
+  reversalError.value = null;
+
+  try {
+    const res = await post(`/${factoryId.value}/processing/batches/${batchId.value}/reversal`, { reason });
+    reversalDialogVisible.value = false;
+
+    if (res.data && (res.data as { status?: string }).status === 'DONE') {
+      ElMessage.success('整单已直接撤回（无报工数据），批次已取消');
+    } else {
+      ElMessage.success('撤回申请已提交，请等待主管审批');
+    }
+    // 刷新详情页数据
+    loadData();
+  } catch (e: unknown) {
+    // 409: 守卫拦截 — 显示后端真实 message + next action (fool-proof Rule 5)
+    const err = e as { status?: number; message?: string; actionHint?: string };
+    if (err?.status === 409) {
+      const msg = err.message || '无法提交撤回申请';
+      reversalError.value = {
+        message: msg,
+        actionHint: err.actionHint || undefined,
+      };
+      // sticky toast (duration:0 已由 request.ts interceptor 处理)
+    }
+    // 其他错误由 interceptor 已 toast，无需重复
+  } finally {
+    reversalSubmitting.value = false;
+  }
+}
+
+function goToReversalList() {
+  router.push('/production/reversals');
+}
 </script>
 
 <template>
@@ -598,6 +664,13 @@ function getTimelineIcon(type: string) {
             plain
             @click="goBackToListWithEdit"
           >在列表编辑</el-button>
+          <!-- SP2: 整单撤回入口 — 仅对未取消批次显示 -->
+          <el-button
+            v-if="batch && batch.status !== 'CANCELLED' && canWrite"
+            type="danger"
+            plain
+            @click="openReversalDialog"
+          >撤回整单</el-button>
           <el-button :icon="Refresh" @click="loadData">刷新</el-button>
         </div>
       </div>
@@ -1390,6 +1463,106 @@ function getTimelineIcon(type: string) {
           </template>
         </template>
       </div>
+    </el-dialog>
+
+    <!-- ===== SP2: 整单撤回 Dialog ===== -->
+    <el-dialog
+      v-model="reversalDialogVisible"
+      title="申请撤回整单"
+      width="520px"
+      :close-on-click-modal="false"
+      destroy-on-close
+    >
+      <!-- 批次上下文（fool-proof Rule 2） -->
+      <el-alert
+        :title="`撤回批次: ${batch?.batchNumber || '#' + batchId}`"
+        type="warning"
+        :closable="false"
+        show-icon
+        style="margin-bottom:16px"
+      >
+        <template #default>
+          <div style="font-size:13px;color:#606266;line-height:1.6;margin-top:4px">
+            产品: <strong>{{ batch?.productName || batch?.productType || '—' }}</strong><br>
+            计划数量: <strong>{{ batch?.plannedQuantity != null ? batch.plannedQuantity + ' ' + (batch.unit || '') : '—' }}</strong><br>
+            当前状态: <strong>{{ batch ? getStatusText(batch.status) : '—' }}</strong>
+          </div>
+        </template>
+      </el-alert>
+
+      <!-- 409 守卫拦截错误（fool-proof Rule 5: 显示后端 message + 跳转） -->
+      <el-alert
+        v-if="reversalError"
+        :title="reversalError.message"
+        type="error"
+        :closable="false"
+        show-icon
+        style="margin-bottom:16px"
+      >
+        <template v-if="reversalError.actionHint" #default>
+          <el-button
+            type="danger"
+            link
+            style="margin-top:4px;font-size:12px"
+            @click="goToReversalList"
+          >查看撤回申请列表</el-button>
+        </template>
+      </el-alert>
+
+      <!-- 撤回原因（fool-proof Rule 3: dropdown + 其他才显 textarea） -->
+      <div style="margin-bottom:8px">
+        <span style="font-size:13px;font-weight:500;color:#303133">撤回原因</span>
+        <span style="color:#F56C6C;margin-left:2px">*</span>
+      </div>
+      <el-select
+        v-model="reversalReasonSelected"
+        placeholder="选择撤回原因"
+        style="width:100%;margin-bottom:10px"
+      >
+        <el-option label="录入错误" value="录入错误" />
+        <el-option label="产品变更" value="产品变更" />
+        <el-option label="质量问题" value="质量问题" />
+        <el-option label="计划调整" value="计划调整" />
+        <el-option label="其他" value="其他" />
+      </el-select>
+      <el-input
+        v-if="reversalReasonSelected === '其他'"
+        v-model="reversalReasonOther"
+        type="textarea"
+        :rows="3"
+        placeholder="请补充说明撤回原因"
+        maxlength="300"
+        show-word-limit
+        style="margin-bottom:10px"
+      />
+      <el-input
+        v-else
+        v-model="reversalReasonOther"
+        type="textarea"
+        :rows="2"
+        :placeholder="`可选: 补充说明（已选: ${reversalReasonSelected}）`"
+        maxlength="200"
+        show-word-limit
+      />
+
+      <el-alert
+        title="提交后将通知主管审批。若该批次无报工数据，将直接撤回。下游已领用或成品已出库时会被系统拦截。"
+        type="info"
+        :closable="false"
+        show-icon
+        style="margin-top:12px"
+      />
+
+      <template #footer>
+        <div style="display:flex;justify-content:flex-end;gap:8px">
+          <el-button @click="reversalDialogVisible = false">取消</el-button>
+          <el-button
+            type="danger"
+            :loading="reversalSubmitting"
+            @click="submitReversal"
+          >确认提交撤回申请</el-button>
+        </div>
+      </template>
     </el-dialog>
   </div>
 </template>
