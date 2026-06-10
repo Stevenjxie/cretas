@@ -107,8 +107,8 @@
 | C-071 | 生产报损单(WastageReport FACTORY track) | SP7 | P1 | ✅已建 | V1强 | WASTAGE_REPORT id:d9d59a86 E2E造; entity/inventory/WastageReport.java; WastageReportServiceImpl | 查 wastage_reports id=d9d59a86 |
 | C-072 | 报损审批流(PENDING_APPROVAL→APPROVED) | SP7 | P1 | ✅已建 | V2弱 | WastageReportServiceImpl PENDING_APPROVAL→APPROVED状态机; WastageReportController.approve | POST /{id}/approve 验状态变化 |
 | C-073 | 报损后可重新领料(走调拨) | 核心 | P1 | ✅已建 | V2弱 | 调拨与报损不强关联; TransferController 独立 | 报损后创建新领料单不报错 |
-| C-074 | 补录时效约束: T/T-1可补, T-2极限, T-3锁死 | BackdateWindowValidator SP12 | P1 | ✅已建 | V1 | 2026-06-10 矩阵纠正(Batch B): BackdateWindowValidator.java (cretas.backdate.max-days=2); 报工路径 YieldReportServiceImpl + 入库路径 MaterialBatchServiceImpl 均已注入; API T-3(2026-06-07) → 409 BACKDATE_WINDOW_EXCEEDED ✅ | audit: 2026-06-10-h-x-flow-verification.md C-074 |
-| C-075 | T-3时效锁死硬规则(防审计漏洞) | BackdateWindowValidator SP12 | P1 | ✅已建 | V1 | 2026-06-10 矩阵纠正(Batch B): 同C-074; 入库路径独立 API 断言: T-3 → 409 errorCode:BACKDATE_WINDOW_EXCEEDED "原料入库业务日期...超出补录窗口"; T-1 → 200 ✅ | audit: 2026-06-10-h-x-flow-verification.md C-075 |
+| C-074 | 补录时效约束: T/T-1可补, T-2极限, T-3锁死 | 核心 | P1 | 🔴缺 | N/A | git grep reportWindow/backfillWindow/yieldWindow 无结果; 无时效约束字段 | 实现后: 尝试 T-3 补录→应400拒绝 |
+| C-075 | T-3时效锁死硬规则(防审计漏洞) | 核心 | P1 | 🔴缺 | N/A | 同C-074; 无 reportDeadline/timeLimit字段 | 同C-074 |
 | C-076 | 出成率随报工迭代自学习(下批用上批基准) | SP2 | P1 | ✅已建 | V2弱 | YieldStandardCalculationServiceImpl; ProductionReportRepository.findYieldStandardSamples | 批次完成后查 standard_yield_min/max 更新 |
 | C-077 | 每天产量对应实际出成率统计 | SP9 | P1 | ✅已建 | V2弱 | YieldReportServiceImpl OUTPUT 出成率字段; 每批记录 | 查 production_reports.actual_yield_rate 按日聚合 |
 | C-078 | 多销售单汇总成一张生产单(同品合并) | 核心 | P1 | ✅已建 | V2弱 | ProductionPlanServiceImpl 合并; plan.sourceOrderIds[] | 两个SO→合并建计划→查 source_order_ids包含两个 |
