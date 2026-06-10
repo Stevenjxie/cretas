@@ -32,6 +32,7 @@ ExecStart=/usr/bin/java \
   --smartbi.postgres.enabled=true \
   --cretas.ai.fusion.timeout-ms=2000 \
   --cretas.ai.service.url=http://localhost:8084 \
+  --cretas.python.base-url=http://localhost:8084 \
   --python-smartbi.url=http://localhost:8084 \
   --python-error-analysis.url=http://localhost:8084 \
   --python-classifier.url=http://localhost:8084 \
