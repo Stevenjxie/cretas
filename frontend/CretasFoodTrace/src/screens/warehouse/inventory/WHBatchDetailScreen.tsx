@@ -101,6 +101,8 @@ interface BatchDetail {
   unitPrice: number;
   movingAvgPrice: number | null;
   batchValue: number;
+  factoryNumber?: string | null;  // SP4: 厂号
+  originPlace?: string | null;    // SP4: 产地
   qualityScore: number;
   qualityDetails: { name: string; value: number }[];
   correlationFactors: { icon: string; name: string; score: string; desc: string; type: string }[];
@@ -165,6 +167,8 @@ export function WHBatchDetailScreen() {
           unitPrice,
           movingAvgPrice: batch.movingAvgPrice ?? null,
           batchValue: currentQty * unitPrice,
+          factoryNumber: batch.factoryNumber ?? null,
+          originPlace: batch.originPlace ?? null,
           qualityScore: 94, // 质量评分需要从质检API获取，暂用默认值
           qualityDetails: [
             { name: "新鲜度", value: 92 },
@@ -393,6 +397,18 @@ export function WHBatchDetailScreen() {
               ¥{formatNumberWithCommas(batchDetail.batchValue)}
             </Text>
           </View>
+          {batchDetail.factoryNumber ? (
+            <View style={styles.infoRow}>
+              <Text style={styles.infoLabel}>厂号</Text>
+              <Text style={styles.infoValue}>{batchDetail.factoryNumber}</Text>
+            </View>
+          ) : null}
+          {batchDetail.originPlace ? (
+            <View style={styles.infoRow}>
+              <Text style={styles.infoLabel}>产地</Text>
+              <Text style={styles.infoValue}>{batchDetail.originPlace}</Text>
+            </View>
+          ) : null}
         </View>
 
         {/* AI 质量关联分析 */}
