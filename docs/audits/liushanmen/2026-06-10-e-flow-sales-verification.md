@@ -149,15 +149,27 @@
 
 ---
 
-## E-2: 空价 SO 创建 → B (test env 阻塞)
+## E-2: 空价 SO 创建 → 修复 (fix/so-empty-price-draft, PR 待合并)
 
-**阻塞原因**: test DB `cretas_db` 有 86+ 条 scope='ORDER' 业务规则包括:
-- `BFV_E_SCOPE_ORDER`: `#input.totalAmount > 1000` → totalAmount=0 的空价 SO 被规则引擎拒绝
-- `BFV_E_NO_SPEL`: 无条件触发
+**原阻塞原因 (2026-06-10 B)**: test DB `cretas_db` 有 86+ 条 scope='ORDER' 业务规则污染 + 全局 `factory_validation_rules.POSITIVE_AMOUNT (CREATE)` 规则在 totalAmount=0 时阻断草稿创建。
 
-E-2 要验证"单价可空"的功能在规则污染下无法隔离测试。
+**修复摘要 (E-2, fix/so-empty-price-draft)**:
 
-**B阻塞**: test DB 业务规则污染阻止空价 SO 创建验证。需先清理 ORDER scope 测试规则，或在 prod 测试 (DEMO- 前缀)。
+### 服务层修改
+- `SalesServiceImpl.validatePriceBeforeFinanceReview()` 新增: 在 `submitForFinanceReview` 前做行级单价守卫
+  - 空价行: 报错含行名称（fool-proof Rule 2: 上下文必带身份信息）
+  - 错误信息含 actionHint "请先补全单价再提审"（4位一体 d）
+  - 草稿/确认阶段: 不触发（下单时可空 — 行485）
+  - 提审阶段: 所有行必须有正数单价（行717）
+
+### DB 迁移
+- `V20261014_03__so_draft_allow_empty_price.sql`: 禁用全局 `POSITIVE_AMOUNT CREATE` 规则 (`enabled=false`)，草稿创建不再因 totalAmount=0 被阻断
+
+### 测试
+- 8 单元测试全绿 (`SalesServiceImplEmptyPriceE2Test`)
+- 红线行为不回归 (E2-08: null 价格不调用 GrossMarginRedlineService)
+
+**待 deploy test env 后 curl 验证**: `POST /api/mobile/F006/sales/orders` 不带 unitPrice → 200（而非 400）
 
 ---
 
