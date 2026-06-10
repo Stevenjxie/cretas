@@ -121,6 +121,42 @@ class FactoryUserRoleTest {
         assertThat(FactoryUserRole.cashier.canManage(FactoryUserRole.finance_manager)).isFalse();
     }
 
+    // ==================== yield_operator (X-6 gap fix) ====================
+
+    @Test
+    void yieldOperator_displayName() {
+        assertThat(FactoryUserRole.yield_operator.getDisplayName()).isEqualTo("报工操作员");
+    }
+
+    @Test
+    void yieldOperator_department_isProduction() {
+        assertThat(FactoryUserRole.yield_operator.getDepartment()).isEqualTo("production");
+    }
+
+    @Test
+    void yieldOperator_level_is30() {
+        assertThat(FactoryUserRole.yield_operator.getLevel()).isEqualTo(30);
+    }
+
+    @Test
+    void yieldOperator_permissionPrefix_isProduction() {
+        // V20261011_02 seeds 'yield_operator' → production:w
+        // Without this enum value, fromRoleCode("yield_operator") silently returns unactivated
+        assertThat(FactoryUserRole.yield_operator.getPermissionPrefix()).isEqualTo("production");
+    }
+
+    @Test
+    void yieldOperator_isWorker_true() {
+        assertThat(FactoryUserRole.yield_operator.isWorker()).isTrue();
+    }
+
+    @Test
+    void yieldOperator_fromRoleCode_roundtrip() {
+        // Critical: ensures V20261011_02 'yield_operator' string resolves correctly
+        assertThat(FactoryUserRole.fromRoleCode("yield_operator"))
+                .isEqualTo(FactoryUserRole.yield_operator);
+    }
+
     // ==================== enum completeness ====================
 
     @Test
