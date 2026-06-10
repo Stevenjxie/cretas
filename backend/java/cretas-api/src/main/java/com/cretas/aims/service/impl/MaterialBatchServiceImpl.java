@@ -413,9 +413,90 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
         }
     }
 
+    /**
+     * W4 红线: 有库存自主权的角色 (可经 PUT 改入库量/单价/重量, 可删批次)。
+     *
+     * <p>张权 (F006 仓管员) 转录铁律: 纯操作员 (warehouse_worker / operator) 无库存自主权,
+     * 库存变动必须走单据 + 审批。本集合是 allowlist (fail-closed): 不在集合内的角色一律拦截
+     * 库存量变更与批次删除。库存量调整应走盘点 (Stocktake) / 调整 (MaterialBatchAdjustment) 审批流。
+     *
+     * <p>平台管理员单独 bypass (见 isPrivilegedInventoryRole), 与 RequireRoleInterceptor 策略一致。
+     */
+    private static final java.util.Set<String> INVENTORY_MUTATION_ROLES = java.util.Set.of(
+            "factory_super_admin", "warehouse_manager");
+
+    /** 平台级管理员角色, 始终放行 (与 JwtAuthInterceptor / RequireRoleInterceptor 一致)。 */
+    private static final java.util.Set<String> PLATFORM_ADMIN_ROLES = java.util.Set.of(
+            "platform_admin", "super_admin", "developer", "platform_super_admin");
+
+    /**
+     * 判断角色是否有库存自主权 (可改入库量 / 删批次)。
+     * null 角色 = 内部/AI-tool 调用 (写操作另由 W0 WriteGuard 把关) → 放行。
+     */
+    private boolean isPrivilegedInventoryRole(String callerRole) {
+        if (callerRole == null) {
+            return true; // 内部调用路径, 跳过角色守卫
+        }
+        String normalized = callerRole.toLowerCase();
+        return PLATFORM_ADMIN_ROLES.contains(normalized)
+                || INVENTORY_MUTATION_ROLES.contains(normalized);
+    }
+
+    /**
+     * W4 红线: 判断本次 PUT 是否试图改动"影响库存账/成本"的字段。
+     *
+     * <p>这些字段直接进库存台账、出成率分母 (receiptQuantity)、成本核算 (unitPrice/totalValue)
+     * 或重量换算 (weightPerUnit/totalWeight)。只要请求带了与现值不同的值就算"库存变更"。
+     * 非库存字段 (storageLocation/notes/expireDate/qualityCertificate/factoryNumber/originPlace 等)
+     * 不在此列, 任何仓管角色都可改。
+     */
+    private boolean requestChangesInventoryFields(MaterialBatch batch, UpdateMaterialBatchRequest request) {
+        if (request.getReceiptQuantity() != null
+                && !numericEquals(request.getReceiptQuantity(), batch.getReceiptQuantity())) {
+            return true;
+        }
+        if (request.getUnitPrice() != null
+                && !numericEquals(request.getUnitPrice(), batch.getUnitPrice())) {
+            return true;
+        }
+        if (request.getWeightPerUnit() != null
+                && !numericEquals(request.getWeightPerUnit(), batch.getWeightPerUnit())) {
+            return true;
+        }
+        // totalWeight / totalValue 是计算属性 (mapper 借它们反推 weightPerUnit / unitPrice),
+        // 仓管发这两个 = 间接改重量/成本 → 同样视为库存变更。
+        if (request.getTotalWeight() != null
+                && !numericEquals(request.getTotalWeight(), batch.getTotalWeight())) {
+            return true;
+        }
+        if (request.getTotalValue() != null
+                && !numericEquals(request.getTotalValue(), batch.getTotalValue())) {
+            return true;
+        }
+        return false;
+    }
+
+    /** BigDecimal 值相等比较 (忽略 scale, null 安全)。 */
+    private boolean numericEquals(BigDecimal a, BigDecimal b) {
+        if (a == null && b == null) {
+            return true;
+        }
+        if (a == null || b == null) {
+            return false;
+        }
+        return a.compareTo(b) == 0;
+    }
+
     @Override
     @Transactional
     public MaterialBatchDTO updateMaterialBatch(String factoryId, String batchId, UpdateMaterialBatchRequest request) {
+        return updateMaterialBatch(factoryId, batchId, request, null);
+    }
+
+    @Override
+    @Transactional
+    public MaterialBatchDTO updateMaterialBatch(String factoryId, String batchId,
+                                                UpdateMaterialBatchRequest request, String callerRole) {
         runConfiguredValidation(factoryId, "UPDATE", java.util.Map.of(
             "batchId", batchId,
             "quantity", request.getReceiptQuantity() != null ? request.getReceiptQuantity() : java.math.BigDecimal.ZERO,
@@ -429,6 +510,15 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
                     .withHint("请联系管理员确认批次归属或切换工厂账号");
         }
 
+        // W4 红线: 纯操作员不能经 PUT 改"影响库存账/成本"的字段 (入库量/单价/重量/总价值)。
+        // 非库存字段 (storageLocation/notes/expireDate 等) 仍放行。库存量变更走盘点/调整审批流。
+        if (!isPrivilegedInventoryRole(callerRole)
+                && requestChangesInventoryFields(batch, request)) {
+            throw new BusinessException(403,
+                    "仓管员无权直接修改入库量/单价/重量/总价值等库存字段")
+                    .withHint("库存量变更请走盘点或库存调整审批流; 存储位置/备注/效期等可直接修改");
+        }
+
         // 只能更新可用状态的批次
         if (batch.getStatus() != MaterialBatchStatus.AVAILABLE) {
             throw new BusinessException(409, "只能修改可用状态的批次")
@@ -438,13 +528,19 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
         // 更新批次信息
         materialBatchMapper.updateEntity(batch, request);
         batch = materialBatchRepository.save(batch);
-        log.info("更新原材料批次成功: batchId={}", batchId);
+        log.info("更新原材料批次成功: batchId={}, callerRole={}", batchId, callerRole);
         return materialBatchMapper.toDTO(batch);
     }
 
     @Override
     @Transactional
     public void deleteMaterialBatch(String factoryId, String batchId) {
+        deleteMaterialBatch(factoryId, batchId, null);
+    }
+
+    @Override
+    @Transactional
+    public void deleteMaterialBatch(String factoryId, String batchId, String callerRole) {
         MaterialBatch batch = materialBatchRepository.findById(batchId)
                 .orElseThrow(() -> new ResourceNotFoundException("原材料批次", "id", batchId));
 
@@ -454,6 +550,13 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
                     .withHint("请联系管理员确认批次归属或切换工厂账号");
         }
 
+        // W4 红线: 删除批次 = 无单据移除库存。纯操作员不可删, 需管理员。
+        if (!isPrivilegedInventoryRole(callerRole)) {
+            throw new BusinessException(403,
+                    "仓管员无权删除批次 (无单据移除库存)")
+                    .withHint("误录入批次请联系工厂管理员或仓储主管删除; 库存差异请走盘亏处理");
+        }
+
         // 只能删除未使用的批次
         if (!batch.getCurrentQuantity().equals(batch.getReceiptQuantity())) {
             throw new BusinessException(409, "已使用的批次不能删除")
@@ -461,7 +564,7 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
         }
 
         materialBatchRepository.delete(batch);
-        log.info("删除原材料批次成功: batchId={}", batchId);
+        log.info("删除原材料批次成功: batchId={}, callerRole={}", batchId, callerRole);
     }
 
     @Override
