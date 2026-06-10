@@ -56,7 +56,7 @@ public class WastageReport extends BaseEntity {
     }
 
     public enum WastageReason {
-        EXPIRED, DAMAGED, CONTAMINATED, THEFT, OTHER
+        EXPIRED, DAMAGED, CONTAMINATED, THEFT, PRODUCTION_WASTE, OTHER
     }
 
     @Id
