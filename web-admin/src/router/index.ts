@@ -263,6 +263,12 @@ const businessRoutes: RouteRecordRaw[] = [
             name: 'FactoryMaterialRequisitions',
             component: () => import('@/views/factory/material-requisitions/list.vue'),
             meta: { requiresAuth: true, title: '物料需求单', module: 'production' }
+          },
+          {
+            path: 'labor-efficiency',
+            name: 'LaborEfficiency',
+            component: () => import('@/views/production/labor-efficiency/index.vue'),
+            meta: { requiresAuth: true, title: '人效对比', module: 'production' }
           }
         ]
       },
@@ -1246,6 +1252,12 @@ const businessRoutes: RouteRecordRaw[] = [
             name: 'BadgeGenerator',
             component: () => import('@/views/system/employees/BadgeGenerator.vue'),
             meta: { requiresAuth: true, title: '员工工牌生成', module: 'system' }
+          },
+          {
+            path: 'cost-variance',
+            name: 'CostVarianceConfig',
+            component: () => import('@/views/system/cost-variance/index.vue'),
+            meta: { requiresAuth: true, title: '方差阈值配置', module: 'system' }
           }
         ]
       },
