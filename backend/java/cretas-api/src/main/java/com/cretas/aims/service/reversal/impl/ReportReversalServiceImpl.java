@@ -365,11 +365,13 @@ public class ReportReversalServiceImpl implements ReportReversalService {
 
         if (totalQty.compareTo(BigDecimal.ZERO) <= 0) {
             // 无剩余有效库存
+            sfi.setProducedQuantity(BigDecimal.ZERO);  // BUG-R1 fix: IN 净额归零
             sfi.setAvailableQuantity(BigDecimal.ZERO);
             sfi.setUnitCost(null);
             sfi.setAccumulatedCost(null);
             sfi.setStatus(SemiFinishedInventory.Status.DEPLETED);
         } else {
+            sfi.setProducedQuantity(totalQty);  // BUG-R1 fix: 更新 IN 净额
             sfi.setAvailableQuantity(totalQty.max(BigDecimal.ZERO));
             if (weightedCost.compareTo(BigDecimal.ZERO) > 0) {
                 BigDecimal newUnitCost = weightedCost.divide(totalQty, 4, RoundingMode.HALF_UP);

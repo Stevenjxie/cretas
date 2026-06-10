@@ -16,7 +16,6 @@ import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository;
 import com.cretas.aims.repository.workprocess.WorkProcessTaskRepository;
 import com.cretas.aims.service.reversal.impl.ReportReversalServiceImpl;
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -321,10 +320,6 @@ class ReplayMovingAverageTest {
         // ─── BUG REPORTS (@Disabled — tests assert CORRECT math, not current broken behavior) ───
 
         @Test
-        @Disabled("BUG-R1: replayMovingAverage does not update producedQuantity after reversal. " +
-                  "After reversing IN(100kg), producedQuantity remains 100 instead of 0. " +
-                  "Fix: replayMovingAverage should set sfi.setProducedQuantity(totalQty.max(ZERO)). " +
-                  "This causes: FG yield calculation sees inflated producedQty after reversal.")
         @DisplayName("BUG-R1: producedQuantity 应在撤回后扣减 (当前行为: 不更新 → 数值偏高)")
         void bugR1_producedQuantityNotUpdatedOnReversal() {
             // Correct math: single IN(100) then REVERSE(-100) → producedQuantity should be 0
@@ -363,15 +358,6 @@ class ReplayMovingAverageTest {
         }
 
         @Test
-        @Disabled("BUG-R2: replayMovingAverage does not count OUT txns in totalQty. " +
-                  "Scenario: IN(100) then OUT(-60) then REVERSE(-100). " +
-                  "Current: totalQty = 100 - 100 = 0, so available=0. " +
-                  "Correct: totalQty should account for OUT consumption before the REVERSE. " +
-                  "After REVERSE of IN(100) when 60 was already consumed: " +
-                  "the IN never happened, so consumed qty can't exceed producedQty → state is invalid. " +
-                  "Actual correct behavior: consumed should also be rolled back. " +
-                  "Root: replayMovingAverage ignores OUT rows entirely in qty accounting. " +
-                  "This manifests as availableQuantity = ZERO when it should reflect out-consumed state.")
         @DisplayName("BUG-R2: replayMovingAverage 不统计 OUT 行 → availableQuantity 偏低")
         void bugR2_outTxnNotAccountedInReplay() {
             // This test documents the BUG. The correct behavior is debatable (domain question:
