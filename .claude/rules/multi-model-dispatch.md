@@ -30,7 +30,7 @@ Composer 2.5   = 独立 UI / 样式 / lint / 补测试 (Cursor 内便宜耐用)
 
 #### 防滥用闸 + 防荒废闸 (闸要自我执行, 不靠 organizer 自律)
 
-**四落点, 按性价比排序(不是"终审最强"——见下纠错):**
+**五落点, 按性价比排序(不是"终审最强"——见下纠错):**
 
 | 落点 | 触发(客观优先) | 注意 |
 |---|---|---|
@@ -38,6 +38,7 @@ Composer 2.5   = 独立 UI / 样式 / lint / 补测试 (Cursor 内便宜耐用)
 | ② **真有判断模糊的难架构选型** | Opus **xhigh 已试且两版结论打架/拿不准** 才升 | 没试过 Opus 不许直接 Fable 5 |
 | ③ **模糊高风险需求框架** | 同②: Opus 先框, 框不清且 stakes 高才升 | ⚠️ 框架常 token 量大, 2x 贵; Opus 够就别升 |
 | ④ **🔒 终审里"不可逆/高爆炸半径"窄子集** | prod 迁移 / RBAC·RLS·多租户数据泄露 / 资金路径, **且 diff 小** | ⚠️ **不是每个终审**。大 diff 终审用 Opus + 对抗 fan-out 更划算(见纠错) |
+| ⑤ **战略纠偏审计**(course-correction; 2026-06-10 Steve 加, 前瞻型) | 多线程程序在**投入大 effort 前**的战略拐点: 重心疑似飘了 / 即将投大 effort 但 ROI 不确定 / 需 reconcile 历史决策。**Steve 直接点名"审一下接下来怎么做"亦属此**(用户请求即客观触发) | read-only **战略** review(非 code-review): "下一步什么顺序 / 方向稳不稳 / 该砍什么"。Opus 自己能规划, 但 Fable 独立顶层视角专抓 **①优先级反转 ②找回被遗忘的历史决策 ③剪 over-engineering / 沉没成本惯性**。给全程序状态 + 历史决策指针, 让它 reconcile。**仍 earned**: 真拐点(投大 effort 前)非例行 planning; 仍频次闸 |
 
 **⛔ 纠错(第一稿的错)**: "🔒 终审 = 最强候选" **站不住**。organizer 本体(Opus)做终审时已持有 diff context; 交给全新 `fable` subagent = **2x 费率 + 从头 rediscovery context** 双重惩罚。终审是 Fable 5 性价比**最差**的落点之一(尤其大 diff)。真正最强是 ① 卡死升级(客观触发 + 想要异模型视角)。
 
@@ -52,7 +53,10 @@ Composer 2.5   = 独立 UI / 样式 / lint / 补测试 (Cursor 内便宜耐用)
 
 **防荒废(别变死信)**: 上面 ① 是 **affirmative "应当升"** —— Opus 修 2 轮没好时**别为省额度硬留 Opus**, 那是 Fable 5 存在的意义。worked examples:
 - ✅ **会点**: 5/30 RBAC 角色转发那种"改对一处 / prod 营收归零"的 permission 判断, Opus xhigh 给了两版互相矛盾的结论 → 派 1 个 `fable` subagent 单点定夺。
-- ❌ **不点**: 例行 risky review(逻辑直白的带迁移 PR)、token 量大的需求框架、任何执行/批量 —— 全留 Opus/fleet。
+- ✅ **会点(⑤ 战略纠偏)**: 6/10 chart-insight 程序多线(铺开/seeding/M4/自有模型)将投大 effort 前, Steve 点"审一下接下来怎么做" → `fable` 战略 review 抓出**资源分配反转**(重心飘向 flywheel/自有模型, 而最高价值"铺到36面"没开工) + **找回被遗忘的 May-31 vertical-model verdict**(自训模型早已 trigger-gated) + **砍 exotic-6/seeder 扩量/模型工作流**。比 Opus 自己规划多了"独立顶层视角戳穿沉没成本惯性"。
+- ❌ **不点**: 例行 risky review(逻辑直白的带迁移 PR)、token 量大的需求框架、任何执行/批量 —— 全留 Opus/fleet。**⑤ 也不是每次出计划都点** —— 只在真战略拐点(投大 effort 前 / 重心疑似飘 / 需 reconcile 历史)；日常 planning Opus 自己做。
+
+**①-④ 是反应型(Opus 试过/卡住/风险), ⑤ 是前瞻型(投大 effort 前先验方向)** —— 两者都 earned(非预测式滥用), 都频次闸。⑤ 的"earned"= 真拐点而非例行规划; 它独有的价值是**纠偏**(catch drift + reconcile 历史决策 + 剪 over-engineering), 不是解难题。
 
 **两派发通道**:
 - **In-harness**（Sonnet subagent）：organizer 直接 spawn，`.claude/rules/*` 自动可见 → 适合 rule-heavy 任务（Java Tool-Skill / Python parity port / rule-aware review）
@@ -187,6 +191,9 @@ Opus 从 main 部署 prod → 核对运行中 jar/代码确含修复
 否则 Opus 先试 **1 轮认真尝试**(v2, 原 2 轮):
   → 没收敛且能说清卡在哪: ✅ 升 `fable`(不撞第 2 轮; Opus 轮产物回收进 brief)
   → 难架构/模糊框架 Opus xhigh 已试且两版结论打架, 且 stakes 高: ✅ 派 `fable` subagent 单点
+前瞻型(⑤ 战略纠偏, 投大 effort 前):
+  → 多线程程序将投大 effort 且(重心疑似飘 / ROI 不确定 / 需 reconcile 历史决策), 或 Steve 点名"审接下来怎么做": ✅ 派 `fable` read-only 战略 review(给全程序状态+历史决策指针)
+  → ⛔ 例行出计划不点(Opus 自己规划); 只在真拐点
   → ⛔ 其余一律 Opus; Fable 5 不进执行/分诊/批量/fan-out/大 diff 终审
   → 频次闸: session 内个位数次; 想点第 2 次 → 先自检是不是 brief/需求没框清(回去修 brief, 别升模型)
 ```

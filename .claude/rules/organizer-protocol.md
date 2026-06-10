@@ -166,7 +166,8 @@ Fable 5 = **2x Opus 消耗 → 比 Opus 还稀缺**。它不是"更好的 Opus o
 
 - 🚀 **预授权直通（v2，可跳过 Opus 直接 `fable`）**: ⓐ **prod 事故计时中**（真客户被 block，失败轮代价=小时不是 token）；ⓑ **同族前科**（同类问题有台账/memory 记录实证 Opus 打不动）；ⓒ 🔒 不可逆+小 diff 终审（prod 迁移 / RBAC·RLS·多租户数据泄露 / 资金路径）。
 - ✅ **应当升（affirmative，防荒废）**: ① 卡死调试 Opus 1 轮认真尝试没收敛 → 派 `fable` subagent 拿异模型视角（最干净的落点），**Opus 轮产物（问题框架/repro/已排除假设）必须回收进 fable brief**（抵消 2x rediscovery）。② 难架构 / 模糊高风险框架：Opus xhigh 已试且两版结论打架且 stakes 高。③ = 预授权 ⓒ。
-- ⛔ **不升**: 预授权之外没观察到 Opus 卡住；任何执行 / 分诊 / 批量 / fan-out；**大 diff 终审**（organizer 本体已持 context，交全新 `fable` subagent = 2x 费率 + rediscovery 双重惩罚 → 用 Opus + 对抗 fan-out 更划算）。
+- ✅ **⑤ 战略纠偏审计（前瞻型，2026-06-10 Steve 加）**: 多线程程序**投入大 effort 前**的战略拐点（重心疑似飘 / ROI 不确定 / 需 reconcile 历史决策），或 **Steve 点名"审一下接下来怎么做"** → 派 `fable` **read-only 战略 review**（给全程序状态+历史决策指针让它 reconcile）。专抓 **优先级反转 + 找回被遗忘的历史决策 + 剪 over-engineering**（实证 6/10：抓 chart-insight 重心飘向 seeding/自有模型 + 找回 May-31 vertical-model verdict + 砍 exotic-6）。**①-④ 反应型（Opus 试过/卡住/风险），⑤ 前瞻型（投大 effort 前先验方向纠偏）**。仍 earned（真拐点非例行 planning）+ 频次闸。
+- ⛔ **不升**: 预授权之外没观察到 Opus 卡住；任何执行 / 分诊 / 批量 / fan-out；**大 diff 终审**（organizer 本体已持 context，交全新 `fable` subagent = 2x 费率 + rediscovery 双重惩罚 → 用 Opus + 对抗 fan-out 更划算）；**⑤ 也不是每次出计划都点**（例行 planning Opus 自己做，只在真拐点）。
 - **频次闸**: Fable 5 是 session 内**个位数次**破玻璃；想点第 2 次先自检是不是 brief / 需求没框清（回去修 brief，不是升模型）。
 - **经济学根据**: 设 Opus 轮=1、Fable 轮=2，p=Opus 1-2 轮解掉的概率 → earned 期望成本 ≈ p×1+(1-p)×4，p>~50% 时 earned 更省；本项目实证 base rate 高（绝大多数"看着难"的问题 Opus 一轮即倒）。预授权三类 = p 已知很低、或失败代价不在 token 维度。
 
@@ -260,6 +261,9 @@ Opus 从 main 部署 prod → 核对运行中 jar 含修复
   → 否则 Opus 先试 1 轮认真尝试:
       → 没收敛且能说清卡在哪: ✅ 升 `fable`(不撞第 2 轮; Opus 轮产物回收进 brief)
       → 难架构/模糊框架 Opus xhigh 已 wobble 且 stakes 高: ✅ 派 `fable` 单点
+  → ⑤ 前瞻战略纠偏(投大 effort 前)?
+      → 多线程程序将投大 effort 且(重心疑似飘/ROI 不确定/需 reconcile 历史), 或 Steve 点"审接下来怎么做": ✅ 派 `fable` read-only 战略 review(抓优先级反转+找回历史决策+剪 over-engineering)
+      → ⛔ 例行出计划不点(Opus 自己规划), 只在真拐点
   → 其余 → Opus; ⛔ 不进执行/分诊/批量/fan-out/大 diff 终审; ⛔ body 不换 Fable 5
   → 频次闸: session 个位数次; 想点第 2 次 → 先疑 brief 没写清
 
