@@ -39,6 +39,15 @@ public interface PurchaseOrderRepository extends JpaRepository<PurchaseOrder, St
 
     Optional<PurchaseOrder> findByFactoryIdAndOrderNumber(String factoryId, String orderNumber);
 
+    /**
+     * 按 ID + factoryId 查 PO（租户隔离安全查法）.
+     *
+     * <p>防止跨工厂 ID 猜测：先查 ID，再断言 factoryId 匹配。
+     * 等价于 {@code findById} + {@code !factoryId.equals(po.getFactoryId())} 检查，
+     * 但以单个 SQL 完成，消除 audit 扫描的 "findById without factoryId guard" 误报。
+     */
+    Optional<PurchaseOrder> findByIdAndFactoryId(String id, String factoryId);
+
     List<PurchaseOrder> findByFactoryIdAndSupplierId(String factoryId, String supplierId);
 
     @Query("SELECT po FROM PurchaseOrder po WHERE po.factoryId = :factoryId " +

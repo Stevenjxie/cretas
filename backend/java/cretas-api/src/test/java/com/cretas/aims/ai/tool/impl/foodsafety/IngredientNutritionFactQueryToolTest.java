@@ -112,6 +112,30 @@ class IngredientNutritionFactQueryToolTest {
         assertTrue(message.contains("未收录"));
     }
 
+    // ── factoryId 隔离豁免验证 (EXEMPT: 全局参考数据) ──────────────────────
+
+    @Test
+    @DisplayName("UT-INFQ-ISO-01: EXEMPT — global reference data, same result regardless of factoryId")
+    @SuppressWarnings("unchecked")
+    void exemptGlobalDataSameForAllFactories() throws Exception {
+        IngredientNutritionFact f = buildFact("猪蹄", "08-1-001");
+        when(ingredientNutritionFactRepository.findByIngredientCodeAndActiveTrue("08-1-001"))
+                .thenReturn(Optional.of(f));
+
+        Map<String, Object> params = Map.of("ingredientCode", "08-1-001");
+
+        // Factory A result
+        Map<String, Object> resultA = invoke("doExecute", "F001", params, ctxFor("F001"));
+        // Factory B result — same global data, must return identical count
+        Map<String, Object> resultB = invoke("doExecute", "F999", params, ctxFor("F999"));
+
+        Map<String, Object> dataA = (Map<String, Object>) resultA.get("data");
+        Map<String, Object> dataB = (Map<String, Object>) resultB.get("data");
+        assertEquals(dataA.get("totalCount"), dataB.get("totalCount"),
+                "Global reference data must return same result for all factories (EXEMPT)");
+        assertEquals(1, dataA.get("totalCount"));
+    }
+
     // ── helpers ──
     private IngredientNutritionFact buildFact(String name, String code) {
         return IngredientNutritionFact.builder()
@@ -127,8 +151,12 @@ class IngredientNutritionFactQueryToolTest {
     }
 
     private Map<String, Object> ctx() {
+        return ctxFor(FACTORY_ID);
+    }
+
+    private Map<String, Object> ctxFor(String factoryId) {
         Map<String, Object> ctx = new HashMap<>();
-        ctx.put("factoryId", FACTORY_ID);
+        ctx.put("factoryId", factoryId);
         ctx.put("userId", 1L);
         return ctx;
     }

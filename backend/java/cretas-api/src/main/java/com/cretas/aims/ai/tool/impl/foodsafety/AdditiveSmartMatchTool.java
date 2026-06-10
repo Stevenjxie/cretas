@@ -35,6 +35,11 @@ import java.util.Set;
  *
  * <p>read-only.
  *
+ * <p><b>factoryId 隔离豁免说明</b>: 本 Tool 查询的是 GB 2760-2014 国家标准添加剂数据库
+ * ({@code additive_limits} 表)。该表是全局参考数据，无 {@code factory_id} 列，天然不存在
+ * 租户归属。所有工厂共享同一份国标数据，无需按工厂过滤。
+ * {@code @FactoryIsolationExempt}
+ *
  * <p>LLM 触发场景:
  * <ul>
  *   <li>"亚硝酸钠是什么 INS code"</li>

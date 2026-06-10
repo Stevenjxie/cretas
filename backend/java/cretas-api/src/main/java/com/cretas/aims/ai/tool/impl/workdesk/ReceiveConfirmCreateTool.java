@@ -177,16 +177,18 @@ public class ReceiveConfirmCreateTool extends AbstractBusinessTool {
         validateBasic(poId, lineId, proposed);
         validateReceiveStatus(receiveStatus);
 
-        // 1. 取 PO + line
-        Optional<PurchaseOrder> poOpt = purchaseOrderRepository.findById(poId);
-        if (poOpt.isEmpty() || !factoryId.equals(poOpt.get().getFactoryId())) {
+        // 1. 取 PO + line（使用 factory-scoped finder — 防跨租户 ID 猜测）
+        Optional<PurchaseOrder> poOpt = purchaseOrderRepository.findByIdAndFactoryId(poId, factoryId);
+        if (poOpt.isEmpty()) {
             return buildInvalid("PO_NOT_FOUND",
                     String.format("⚠️ 采购单 %s 不存在或非本工厂", poId));
         }
         PurchaseOrder po = poOpt.get();
 
-        Optional<PurchaseOrderItem> itemOpt = purchaseOrderItemRepository.findById(lineId);
-        if (itemOpt.isEmpty() || !poId.equals(itemOpt.get().getPurchaseOrderId())) {
+        // item 通过 poId (已 factoryId 验证) + lineId 双键查，防跨 PO 行访问
+        Optional<PurchaseOrderItem> itemOpt = purchaseOrderItemRepository
+                .findByIdAndPurchaseOrderId(lineId, poId);
+        if (itemOpt.isEmpty()) {
             return buildInvalid("LINE_NOT_FOUND",
                     String.format("⚠️ PO %s 下不存在行项目 %d", po.getOrderNumber(), lineId));
         }
@@ -292,16 +294,18 @@ public class ReceiveConfirmCreateTool extends AbstractBusinessTool {
         validateReceiveStatus(receiveStatus);
         Long userId = getUserId(context);
 
-        // 1. 重做 R1 校验 (防止 client 绕 preview 直接 execute)
-        Optional<PurchaseOrder> poOpt = purchaseOrderRepository.findById(poId);
-        if (poOpt.isEmpty() || !factoryId.equals(poOpt.get().getFactoryId())) {
+        // 1. 重做 R1 校验 (防止 client 绕 preview 直接 execute)（使用 factory-scoped finder）
+        Optional<PurchaseOrder> poOpt = purchaseOrderRepository.findByIdAndFactoryId(poId, factoryId);
+        if (poOpt.isEmpty()) {
             throw new IllegalArgumentException(
                     String.format("采购单 %s 不存在或非本工厂", poId));
         }
         PurchaseOrder po = poOpt.get();
 
-        Optional<PurchaseOrderItem> itemOpt = purchaseOrderItemRepository.findById(lineId);
-        if (itemOpt.isEmpty() || !poId.equals(itemOpt.get().getPurchaseOrderId())) {
+        // item 通过 poId (已 factoryId 验证) + lineId 双键查，防跨 PO 行访问
+        Optional<PurchaseOrderItem> itemOpt = purchaseOrderItemRepository
+                .findByIdAndPurchaseOrderId(lineId, poId);
+        if (itemOpt.isEmpty()) {
             throw new IllegalArgumentException(
                     String.format("PO %s 下不存在行项目 %d", po.getOrderNumber(), lineId));
         }
@@ -413,13 +417,18 @@ public class ReceiveConfirmCreateTool extends AbstractBusinessTool {
     /**
      * R4 dedup helper — 查 5min 窗口内同 factory+poId 是否已有 DRAFT/PENDING_QC/CONFIRMED 记录.
      * CONFIRMED 也算 duplicate, 避免 1 PO 多次重复"收货"创建多个入库单.
+     *
+     * <p>使用 factory-scoped finder {@code findByFactoryIdAndPurchaseOrderIdOrderByCreatedAtAsc}
+     * 而非跨工厂的 {@code findByPurchaseOrderId}，确保幂等检查本身也严格隔离租户。
      */
     private DuplicateCheckResult checkDuplicate(String factoryId, String poId) {
         LocalDateTime cutoff = LocalDateTime.now(ZoneId.systemDefault())
                 .minusMinutes(DEDUP_WINDOW_MINUTES);
-        List<PurchaseReceiveRecord> existing = receiveRecordRepository.findByPurchaseOrderId(poId);
+        // factory-scoped: 只查本工厂下该 PO 的收货记录，不跨租户
+        List<PurchaseReceiveRecord> existing =
+                receiveRecordRepository.findByFactoryIdAndPurchaseOrderIdOrderByCreatedAtAsc(
+                        factoryId, poId);
         for (PurchaseReceiveRecord r : existing) {
-            if (!factoryId.equals(r.getFactoryId())) continue;
             if (r.getCreatedAt() == null) continue;
             // Only consider live, non-rejected records as dedup signals.
             PurchaseReceiveStatus s = r.getStatus();
