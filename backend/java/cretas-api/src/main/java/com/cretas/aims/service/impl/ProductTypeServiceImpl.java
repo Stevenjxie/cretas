@@ -195,13 +195,12 @@ public class ProductTypeServiceImpl implements ProductTypeService {
                     .withHint("当前产品类型不属于该工厂, 无法操作");
         }
 
-        // 检查产品编码是否重复
+        // A-24: 产品编码建立后不可修改（ERP 稳定标识，改了破坏历史单据引用）
+        // dto.code 为 null（前端省略字段）或与现值相同（无变更）→ 放行；否则 409
         if (dto.getCode() != null && !dto.getCode().equals(productType.getCode())) {
-            if (productTypeRepository.existsByFactoryIdAndCode(factoryId, dto.getCode())) {
-                throw new BusinessException(409, "产品编码已存在: " + dto.getCode())
-                    .withHint("请使用其他产品编码").withHintTarget("code");
-            }
-            productType.setCode(dto.getCode());
+            throw new BusinessException(409, "产品编码建立后不可修改: 当前编码为 " + productType.getCode())
+                    .withHint("产品编码是系统稳定标识，建立后不允许修改，以防止历史订单/批次数据引用断裂")
+                    .withHintTarget("code");
         }
 
         // 更新其他字段
