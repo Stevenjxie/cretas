@@ -290,6 +290,10 @@ public class SalesServiceImpl implements SalesService {
         BigDecimal totalAmount = BigDecimal.ZERO;
         List<SalesOrderItem> items = new ArrayList<>();
 
+        // E-5 毛利红线: 收集低于红线的预警文案 (非阻断 — 决策修正 2026-06-10).
+        // 仅含"低于毛利红线"语义文案 (GrossMarginCheckResult 保证不含成本数值), 随订单返回前端展示.
+        List<String> marginWarnings = new ArrayList<>();
+
         for (CreateSalesOrderRequest.SalesOrderItemDTO itemDTO : request.getItems()) {
             SalesOrderItem item = new SalesOrderItem();
             item.setSalesOrderId(order.getId());
@@ -417,8 +421,9 @@ public class SalesServiceImpl implements SalesService {
             }
             item.setUnitPrice(resolvedUnitPrice);
 
-            // ── E-5 毛利红线守卫 (W1 追溯矩阵 E-5, 2026-06-10) ──────────────────────────
-            // 决策②: 不要"建议价", 用毛利红线硬性拦截低价单.
+            // ── E-5 毛利红线预警 (W1 追溯矩阵 E-5; 非阻断决策修正 2026-06-10) ──────────────
+            // 决策 (SP3 spec §6.3 / SP5 spec §8): 低于红线只"预警"不"卡死"
+            //   客户原话: "低于底线提示红色, 不是不允许" → HTTP 200 + 警告字段, 不返回 4xx.
             // 在 unitPrice 最终确定后 (含策略引擎折扣) 才做红线检查, 保证检查的是真实报价.
             // resolvedUnitPrice=null 表示未填价格 → 跳过 (BOM/价格缺失不是红线语义).
             if (grossMarginRedlineService != null && resolvedUnitPrice != null
@@ -428,13 +433,14 @@ public class SalesServiceImpl implements SalesService {
                         grossMarginRedlineService.checkMargin(
                                 factoryId, itemDTO.getProductTypeId(), resolvedUnitPrice);
                 if (Boolean.TRUE.equals(marginResult.getBelowRedline())) {
-                    // 低于毛利红线 → 409 (fool-proof Rule 1: 预先显示边界, 不让用户提交后才报错)
+                    // 低于毛利红线 → 收集预警 (不阻断). 文案不含成本数值 (GrossMarginCheckResult 保证).
                     String displayName = item.getProductName() != null
                             ? item.getProductName() : itemDTO.getProductTypeId();
-                    throw new BusinessException(409,
-                            "行项目「" + displayName + "」报价 ¥" + resolvedUnitPrice.toPlainString()
-                            + " 低于毛利红线 — " + marginResult.getWarningMessage())
-                            .withHint("请调整报价至毛利红线以上，或联系销售经理审核");
+                    String warn = "行项目「" + displayName + "」" + marginResult.getWarningMessage()
+                            + " — 如需继续, 请向销售经理确认";
+                    marginWarnings.add(warn);
+                    log.info("E-5 毛利红线预警 (非阻断): SO 行 productTypeId={} 低于红线 — {} (订单仍创建)",
+                            itemDTO.getProductTypeId(), marginResult.getWarningMessage());
                 } else if (marginResult.getBelowRedline() == null) {
                     // 成本数据缺失 / 未配置毛利红线 → WARN log + 放行
                     // 按"禁止降级"原则: 不静默放行也不假装拦截; 明确 WARN 让运营可见配置缺口
@@ -444,7 +450,7 @@ public class SalesServiceImpl implements SalesService {
                 }
                 // belowRedline=false → 报价合规, 静默
             }
-            // ── end E-5 毛利红线守卫 ────────────────────────────────────────────────────
+            // ── end E-5 毛利红线预警 ────────────────────────────────────────────────────
 
             // Sprint 4 W2 S-INVOICE-CLIENT-1 Option 3 三层 default 链 — 第 2→3 层 prefill:
             // Item 显式 > SO defaultTaxRate (已 prefill 自客户) > 0. 用户改 SO 级 default 触发批量重算
@@ -490,6 +496,13 @@ public class SalesServiceImpl implements SalesService {
                 // Non-blocking: log but don't rollback the order
                 log.warn("Failed to persist custom fields for sales order {}: {}", order.getId(), e.getMessage());
             }
+        }
+
+        // E-5: 把收集到的毛利红线预警附到返回订单上 (非阻断, 随 HTTP 200 返回, 前端展示 sticky warning).
+        order.setMarginWarnings(marginWarnings);
+        if (!marginWarnings.isEmpty()) {
+            log.info("创建销售订单: factoryId={}, orderNumber={}, 含 {} 条毛利红线预警 (非阻断)",
+                    factoryId, orderNumber, marginWarnings.size());
         }
 
         log.info("创建销售订单: factoryId={}, orderNumber={}, items={}", factoryId, orderNumber, items.size());
