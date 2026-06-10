@@ -100,4 +100,20 @@ public class ReportReversalLog extends BaseEntity {
 
     @Column(name = "approved_at")
     private LocalDateTime approvedAt;
+
+    // ==================== BUG-4 修复: 显示姓名字段 (非持久化, 由 Service 层填充) ====================
+
+    /**
+     * submittedBy (userId) 对应的姓名 (@Transient, 由 listReversals 按批次加载填充)。
+     * null 表示用户不存在或未填充。
+     */
+    @Transient
+    private String submittedByName;
+
+    /**
+     * approvedBy (userId) 对应的姓名 (@Transient, 由 listReversals 按批次加载填充)。
+     * null 表示 approvedBy 为 null 或用户不存在。
+     */
+    @Transient
+    private String approvedByName;
 }
