@@ -484,6 +484,7 @@ import ChartSectionHeader from './analysis/ChartSectionHeader.vue';
 import ExplorePanelToggle from './analysis/ExplorePanelToggle.vue';
 import ChartGridItem from './analysis/ChartGridItem.vue';
 import ChartGroupHeader from './analysis/ChartGroupHeader.vue';
+import type { ChartMeta } from './components/chartInsight';
 import DashboardBuilderWrapper from './analysis/DashboardBuilderWrapper.vue';
 import AIInsightPanel from '@/components/smartbi/AIInsightPanel.vue';
 import ChartSkeleton from '@/components/smartbi/ChartSkeleton.vue';
@@ -684,7 +685,7 @@ interface SheetResult {
     chartConfig?: Record<string, unknown>;
     aiAnalysis?: string;
     recommendedTemplates?: Record<string, unknown>[];
-    charts?: Array<{ chartType: string; title: string; config: Record<string, unknown>; xField?: string; totalItems?: number }>;
+    charts?: Array<{ chartType: string; title: string; config: Record<string, unknown>; xField?: string; totalItems?: number; meta?: ChartMeta | null }>;
     kpiSummary?: { rowCount: number; columnCount: number; columns: ColumnSummary[] };
     structuredAI?: StructuredAIData;
     displayNameMap?: Record<string, string>;

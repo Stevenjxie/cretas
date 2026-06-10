@@ -51,9 +51,56 @@ import {
   getCachedAnalysis,
   saveAnalysisToCache,
 } from './python-service';
+import { deriveChartMeta, type ChartMeta } from '../../views/smart-bi/components/chartInsight';
 
 // Re-export renameMeaninglessColumns so existing imports work
 export { renameMeaninglessColumns } from './data-utils';
+
+// ============================================================
+// U5 — attachMetaToCharts: single-pass meta post-processor
+// ============================================================
+
+/**
+ * Attach ChartMeta to each chart after chartsLane completes (U5).
+ *
+ * Runs as a single post-processing pass AFTER onProgress has fired — this
+ * avoids the onProgress ordering problem where inline meta injection at the
+ * 3 build sites would send meta-less charts to the progress callback.
+ *
+ * Index alignment: charts may be a subset of plans (filtered by config
+ * presence + retry replacements).  We match each chart back to the most
+ * specific plan by title first, then by xField.  If no plan matches,
+ * deriveChartMeta is called with a minimal plan derived from the chart's
+ * own xField (best-effort).  When deriveChartMeta returns null the chart
+ * gets meta=null — no fabrication.
+ *
+ * Exported for unit testing.
+ */
+export function attachMetaToCharts(
+  charts: Array<{ chartType: string; title: string; xField?: string; meta?: ChartMeta | null }>,
+  plans: Array<{ xField?: string; yFields?: string[]; chartType?: string; title?: string }>,
+  monthlyColumns: string[],
+  dataInfo: string,
+): void {
+  // Build lookup maps for efficient matching
+  const planByTitle = new Map<string, typeof plans[number]>();
+  const planByXField = new Map<string, typeof plans[number]>();
+  for (const plan of plans) {
+    if (plan.title) planByTitle.set(plan.title, plan);
+    if (plan.xField) planByXField.set(plan.xField, plan);
+  }
+
+  for (const chart of charts) {
+    // Find matching plan: title match first (most specific), xField fallback
+    const plan =
+      (chart.title ? planByTitle.get(chart.title) : undefined) ??
+      (chart.xField ? planByXField.get(chart.xField) : undefined) ??
+      // Minimal synthetic plan from the chart itself (retry-replaced charts)
+      { xField: chart.xField, yFields: [], chartType: chart.chartType, title: chart.title };
+
+    chart.meta = deriveChartMeta(plan, monthlyColumns, dataInfo);
+  }
+}
 
 // ==================== Trend / Comparison / Export ====================
 
@@ -1565,8 +1612,8 @@ async function _doEnrichSheetAnalysis(
     t0 = performance.now();
 
     // ---------- Left lane: charts + forecast ----------
-    const chartsLane = (async (): Promise<Array<{ chartType: string; title: string; config: Record<string, unknown>; xField?: string; anomalies?: Record<string, unknown> }>> => {
-      let charts: Array<{ chartType: string; title: string; config: Record<string, unknown>; xField?: string; anomalies?: Record<string, unknown> }> = [];
+    const chartsLane = (async (): Promise<Array<{ chartType: string; title: string; config: Record<string, unknown>; xField?: string; anomalies?: Record<string, unknown>; meta?: ChartMeta | null }>> => {
+      let charts: Array<{ chartType: string; title: string; config: Record<string, unknown>; xField?: string; anomalies?: Record<string, unknown>; meta?: ChartMeta | null }> = [];
       if (plans.length > 0) {
         const batchRes = await batchBuildCharts(plans, abortController.signal);
         if (batchRes.success && batchRes.charts?.length) {
@@ -1712,6 +1759,11 @@ async function _doEnrichSheetAnalysis(
           // Forecast is optional
         }
       }
+
+      // U5: single-pass meta post-processing — runs AFTER onProgress (line ~1648)
+      // so the progress callback always fires before meta is attached (charts
+      // were already sent to the UI without meta; this enriches the final result).
+      attachMetaToCharts(charts, plans, monthlyColumns, dataInfo);
 
       return charts;
     })();
