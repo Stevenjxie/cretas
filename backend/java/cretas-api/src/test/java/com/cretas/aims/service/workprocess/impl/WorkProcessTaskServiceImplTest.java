@@ -29,6 +29,7 @@ import java.util.Optional;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.when;
 
 /**
@@ -324,6 +325,122 @@ class WorkProcessTaskServiceImplTest {
                 "template1 responsibleWorkerId=1615 → task1.assignedTo 应为 1615");
         assertNull(task2.getAssignedTo(),
                 "template2 responsibleWorkerId=null → task2.assignedTo 应为 null");
+    }
+
+    // ==================== Wave2: 可配置报工粒度 (reportingRequired) ====================
+
+    @Test
+    @DisplayName("spawnTasks: reportingRequired 默认 (null/true) → 逐道全 spawn (向后兼容回归)")
+    void spawnTasks_reportingRequiredDefault_spawnsAll() {
+        String productTypeId = "PT-REQ";
+        Long batchId = 5001L;
+
+        // template1 reportingRequired=true (显式), template2 null (老配置行, 视为 true)
+        ProductWorkProcess t1 = ProductWorkProcess.builder()
+                .id(20L).factoryId(FACTORY_ID).productTypeId(productTypeId)
+                .workProcessId("wp-r1").processOrder(1).isActive(true)
+                .reportingRequired(true).build();
+        ProductWorkProcess t2 = ProductWorkProcess.builder()
+                .id(21L).factoryId(FACTORY_ID).productTypeId(productTypeId)
+                .workProcessId("wp-r2").processOrder(2).isActive(true)
+                .reportingRequired(null).build();   // 老行无字段 → 视为 true
+
+        when(taskRepository.existsByFactoryIdAndProductionBatchId(FACTORY_ID, batchId)).thenReturn(false);
+        when(productWorkProcessRepository
+                .findByFactoryIdAndProductTypeIdOrderByProcessOrderAsc(FACTORY_ID, productTypeId))
+                .thenReturn(List.of(t1, t2));
+        when(workProcessRepository.findByFactoryIdAndIdIn(eq(FACTORY_ID), any())).thenReturn(List.of());
+        lenient().when(userRepository.findByIdIn(any())).thenReturn(List.of());
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<WorkProcessTask>> captor = ArgumentCaptor.forClass(List.class);
+        when(taskRepository.saveAll(captor.capture())).thenAnswer(inv -> inv.getArgument(0));
+
+        service.spawnTasks(FACTORY_ID, batchId, productTypeId);
+
+        List<WorkProcessTask> saved = captor.getValue();
+        assertEquals(2, saved.size(), "默认/true 全部 spawn (逐道报, 向后兼容)");
+    }
+
+    @Test
+    @DisplayName("spawnTasks: 六扇门式中间免报 → 只 spawn 领料(首) + 产出(末), 中间 reportingRequired=false 跳过")
+    void spawnTasks_middleNotRequired_skipsMiddle() {
+        String productTypeId = "PT-LSM";
+        Long batchId = 5002L;
+
+        // 5 道: 领料(报) → 分切(免) → 焯水(免) → 气调(免) → 产出(报)
+        ProductWorkProcess pickup = ProductWorkProcess.builder()
+                .id(30L).factoryId(FACTORY_ID).productTypeId(productTypeId)
+                .workProcessId("wp-pickup").processOrder(1).isActive(true)
+                .reportingRequired(true).build();
+        ProductWorkProcess cut = ProductWorkProcess.builder()
+                .id(31L).factoryId(FACTORY_ID).productTypeId(productTypeId)
+                .workProcessId("wp-cut").processOrder(2).isActive(true)
+                .reportingRequired(false).build();
+        ProductWorkProcess blanch = ProductWorkProcess.builder()
+                .id(32L).factoryId(FACTORY_ID).productTypeId(productTypeId)
+                .workProcessId("wp-blanch").processOrder(3).isActive(true)
+                .reportingRequired(false).build();
+        ProductWorkProcess pack = ProductWorkProcess.builder()
+                .id(33L).factoryId(FACTORY_ID).productTypeId(productTypeId)
+                .workProcessId("wp-pack").processOrder(4).isActive(true)
+                .reportingRequired(false).build();
+        ProductWorkProcess output = ProductWorkProcess.builder()
+                .id(34L).factoryId(FACTORY_ID).productTypeId(productTypeId)
+                .workProcessId("wp-output").processOrder(5).isActive(true)
+                .reportingRequired(true).build();
+
+        when(taskRepository.existsByFactoryIdAndProductionBatchId(FACTORY_ID, batchId)).thenReturn(false);
+        when(productWorkProcessRepository
+                .findByFactoryIdAndProductTypeIdOrderByProcessOrderAsc(FACTORY_ID, productTypeId))
+                .thenReturn(List.of(pickup, cut, blanch, pack, output));
+        when(workProcessRepository.findByFactoryIdAndIdIn(eq(FACTORY_ID), any())).thenReturn(List.of());
+        lenient().when(userRepository.findByIdIn(any())).thenReturn(List.of());
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<WorkProcessTask>> captor = ArgumentCaptor.forClass(List.class);
+        when(taskRepository.saveAll(captor.capture())).thenAnswer(inv -> inv.getArgument(0));
+
+        service.spawnTasks(FACTORY_ID, batchId, productTypeId);
+
+        List<WorkProcessTask> saved = captor.getValue();
+        assertEquals(2, saved.size(), "只 spawn 领料 + 产出两道 (中间 3 道免报跳过)");
+        assertTrue(saved.stream().anyMatch(t -> "wp-pickup".equals(t.getWorkProcessId())),
+                "领料(首道)必须 spawn — 报投入两点之一");
+        assertTrue(saved.stream().anyMatch(t -> "wp-output".equals(t.getWorkProcessId())),
+                "产出(末道)必须 spawn — 报产出两点之一");
+        assertTrue(saved.stream().noneMatch(t ->
+                "wp-cut".equals(t.getWorkProcessId())
+                        || "wp-blanch".equals(t.getWorkProcessId())
+                        || "wp-pack".equals(t.getWorkProcessId())),
+                "中间 3 道工序免报 → 不生成报工任务 (配置行仍在, 仅 spawn 跳过)");
+    }
+
+    @Test
+    @DisplayName("spawnTasks: 全部工序免报 → 422 (诚实拒绝, 提示至少保留领料+产出)")
+    void spawnTasks_allNotRequired_throws422() {
+        String productTypeId = "PT-ALLOFF";
+        Long batchId = 5003L;
+
+        ProductWorkProcess a = ProductWorkProcess.builder()
+                .id(40L).factoryId(FACTORY_ID).productTypeId(productTypeId)
+                .workProcessId("wp-x").processOrder(1).isActive(true)
+                .reportingRequired(false).build();
+        ProductWorkProcess b = ProductWorkProcess.builder()
+                .id(41L).factoryId(FACTORY_ID).productTypeId(productTypeId)
+                .workProcessId("wp-y").processOrder(2).isActive(true)
+                .reportingRequired(false).build();
+
+        when(taskRepository.existsByFactoryIdAndProductionBatchId(FACTORY_ID, batchId)).thenReturn(false);
+        when(productWorkProcessRepository
+                .findByFactoryIdAndProductTypeIdOrderByProcessOrderAsc(FACTORY_ID, productTypeId))
+                .thenReturn(List.of(a, b));
+        when(workProcessRepository.findByFactoryIdAndIdIn(eq(FACTORY_ID), any())).thenReturn(List.of());
+
+        com.cretas.aims.exception.BusinessException ex = assertThrows(
+                com.cretas.aims.exception.BusinessException.class,
+                () -> service.spawnTasks(FACTORY_ID, batchId, productTypeId));
+        assertEquals(Integer.valueOf(422), ex.getCode(), "全免报应 422 拒绝, 不静默产出空批次");
     }
 
     // ==================== Task 5: listByBatch 按小组长过滤 (M1/M2) ====================

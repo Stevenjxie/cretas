@@ -88,6 +88,11 @@ export interface ProductWorkProcess {
   /** 预估工时覆写 (分钟) */
   estimatedMinutesOverride?: number;
   isActive: boolean;
+  /**
+   * Wave2 可配置报工粒度: 是否需报工。
+   * true (默认) = 逐道报; false = 该工序免报 (spawn 跳过, 不生成报工任务, 配置保留供溯源)。
+   */
+  reportingRequired?: boolean;
   /** 后端 join 提供的只读字段 */
   processName?: string;
   processCategory?: string;
@@ -105,6 +110,8 @@ export interface CreateProductWorkProcessRequest {
   processOrder?: number;
   unitOverride?: string;
   estimatedMinutesOverride?: number;
+  /** Wave2: 是否需报工 (省略 → 后端默认 true 逐道报; false → 免报)。 */
+  reportingRequired?: boolean;
 }
 
 /**

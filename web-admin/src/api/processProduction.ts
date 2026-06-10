@@ -217,6 +217,12 @@ export interface ProductWorkProcessItem {
    * null / 空数组 → 回退到 responsibleWorkerId 单值语义。
    */
   assigneeWorkerIds?: number[] | null;
+  /**
+   * Wave2 可配置报工粒度: 是否需要报工。
+   * true (默认) = 逐道报; false = 该工序免报 (spawn 跳过, 不生成报工任务, 配置保留供溯源)。
+   * 六扇门只在领料/产出两点报工, 中间工序标 false。
+   */
+  reportingRequired?: boolean;
 }
 
 export interface RecommendedWorkProcess {

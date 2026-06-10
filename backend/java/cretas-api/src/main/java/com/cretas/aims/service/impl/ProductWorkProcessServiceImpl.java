@@ -74,6 +74,8 @@ public class ProductWorkProcessServiceImpl implements ProductWorkProcessService 
                 .unitOverride(dto.getUnitOverride())
                 .estimatedMinutesOverride(dto.getEstimatedMinutesOverride())
                 .responsibleWorkerId(normalizedRw)
+                // Wave2 可配置报工粒度: null → 默认 true (逐道报, 向后兼容); 显式 false → 免报。
+                .reportingRequired(dto.getReportingRequired() == null ? Boolean.TRUE : dto.getReportingRequired())
                 .build();
 
         ProductWorkProcess saved = repository.save(entity);
@@ -138,6 +140,8 @@ public class ProductWorkProcessServiceImpl implements ProductWorkProcessService 
         if (dto.getProcessOrder() != null) entity.setProcessOrder(dto.getProcessOrder());
         if (dto.getUnitOverride() != null) entity.setUnitOverride(dto.getUnitOverride());
         if (dto.getEstimatedMinutesOverride() != null) entity.setEstimatedMinutesOverride(dto.getEstimatedMinutesOverride());
+        // Wave2 可配置报工粒度: null → no-change (partial update 不动现有值); 非 null → set (true/false 均可显式设)。
+        if (dto.getReportingRequired() != null) entity.setReportingRequired(dto.getReportingRequired());
 
         // T121: if assigneeWorkerIds provided, they govern responsible_worker_id + join table.
         List<Long> assignees = dto.getAssigneeWorkerIds();
@@ -210,6 +214,7 @@ public class ProductWorkProcessServiceImpl implements ProductWorkProcessService 
                 .responsibleWorkerId(entity.getResponsibleWorkerId())
                 .assigneeWorkerIds(assigneeIds.isEmpty() ? null : assigneeIds)
                 .isActive(entity.getIsActive())
+                .reportingRequired(entity.getReportingRequired())
                 .createdAt(entity.getCreatedAt());
 
         if (wp != null) {

@@ -4,7 +4,7 @@ import { useRoute } from 'vue-router';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { Plus, Delete, Rank, Refresh } from '@element-plus/icons-vue';
+import { Plus, Delete, Rank, Refresh, QuestionFilled } from '@element-plus/icons-vue';
 import { handleCatchError } from '@/utils/errorToast';
 import {
   getActiveWorkProcesses,
@@ -72,7 +72,9 @@ interface PendingRemove { type: 'remove'; serverId: number }
 interface PendingSort { type: 'sort' }
 /** T121: multi-assignee pending op replaces single-workerId op */
 interface PendingResponsible { type: 'responsible'; serverId: number; assigneeWorkerIds: number[]; productTypeId: string; workProcessId: string }
-type PendingOp = PendingAdd | PendingRemove | PendingSort | PendingResponsible;
+/** Wave2: 报工粒度切换 pending op (server item only; draft-only items send reportingRequired on POST) */
+interface PendingReporting { type: 'reporting'; serverId: number; reportingRequired: boolean; productTypeId: string; workProcessId: string }
+type PendingOp = PendingAdd | PendingRemove | PendingSort | PendingResponsible | PendingReporting;
 const pendingOps = ref<PendingOp[]>([]);
 const recommendationNotice = ref('');
 
@@ -127,6 +129,7 @@ async function handleSave() {
     const toRemove = pendingOps.value.filter((o): o is PendingRemove => o.type === 'remove');
     const toAdd = pendingOps.value.filter((o): o is PendingAdd => o.type === 'add');
     const toResponsible = pendingOps.value.filter((o): o is PendingResponsible => o.type === 'responsible');
+    const toReporting = pendingOps.value.filter((o): o is PendingReporting => o.type === 'reporting');
     const needsSort = pendingOps.value.some(o =>
       o.type === 'sort' || o.type === 'add' || o.type === 'remove'
     );
@@ -141,10 +144,13 @@ async function handleSave() {
       const draftItem = draftLinked.value.find(d => d.workProcessId === op.wp.id && d.isPending);
       const assigneeWorkerIds = draftItem?.assigneeWorkerIds ?? null;
       const responsibleWorkerId = draftItem?.responsibleWorkerId ?? undefined;
+      // Wave2: 草稿态工序若标了免报, 随 create 一起发 (省略 → 后端默认 true 逐道报)
+      const reportingRequired = draftItem?.reportingRequired;
       await createProductWorkProcess(factoryId.value, {
         productTypeId: selectedProductId.value,
         workProcessId: op.wp.id,
         processOrder: 999, // corrected by sort step below
+        ...(reportingRequired === false ? { reportingRequired: false } : {}),
         ...(assigneeWorkerIds && assigneeWorkerIds.length > 0
           ? { assigneeWorkerIds }
           : responsibleWorkerId != null ? { responsibleWorkerId } : {}),
@@ -168,6 +174,17 @@ async function handleSave() {
         productTypeId: freshItem.productTypeId,
         workProcessId: freshItem.workProcessId,
         assigneeWorkerIds: op.assigneeWorkerIds,
+      });
+    }
+
+    // 4b. Wave2 报工粒度变更 (server items): partial update reportingRequired
+    for (const op of toReporting) {
+      const freshItem = freshByWpId.get(op.workProcessId);
+      if (!freshItem) continue;
+      await updateProductWorkProcess(factoryId.value, freshItem.id, {
+        productTypeId: freshItem.productTypeId,
+        workProcessId: freshItem.workProcessId,
+        reportingRequired: op.reportingRequired,
       });
     }
 
@@ -615,6 +632,34 @@ function handleAssigneesChange(item: DraftItem, values: number[]) {
   }
 }
 
+/**
+ * Wave2 可配置报工粒度: 切换某道工序是否需报工。
+ * @param item - 被编辑的 DraftItem
+ * @param value - true=逐道报(默认); false=免报(spawn 跳过)
+ */
+function handleReportingRequiredChange(item: DraftItem, value: boolean) {
+  const idx = draftLinked.value.findIndex(d => d.draftKey === item.draftKey);
+  if (idx !== -1) {
+    draftLinked.value[idx] = { ...draftLinked.value[idx], reportingRequired: value };
+  }
+  if (!item.isPending) {
+    // 服务端已存在的工序 — 去重后排队 update op
+    pendingOps.value = pendingOps.value.filter(
+      o => !(o.type === 'reporting' && o.serverId === item.id)
+    );
+    markDirty({
+      type: 'reporting',
+      serverId: item.id,
+      reportingRequired: value,
+      productTypeId: item.productTypeId,
+      workProcessId: item.workProcessId,
+    });
+  } else {
+    // 草稿态工序 — 值已记在本地草稿, POST 时随 create 一起发
+    if (!dirty.value) dirty.value = true;
+  }
+}
+
 // ─────────────────────────────────────────────
 // Move up/down (fallback buttons, C1)
 // ─────────────────────────────────────────────
@@ -812,6 +857,24 @@ async function handleRefresh() {
                 <div class="step-meta">
                   <el-tag v-if="item.processCategory" size="small" type="info">{{ item.processCategory }}</el-tag>
                   <span class="step-unit">单位: {{ item.unitOverride || item.defaultUnit || '-' }}</span>
+                  <!-- Wave2 可配置报工粒度: 是否需报工 (默认勾选=逐道报; 取消=该工序免报) -->
+                  <span class="step-reporting" v-if="canWrite">
+                    <el-switch
+                      :model-value="item.reportingRequired !== false"
+                      size="small"
+                      inline-prompt
+                      active-text="报工"
+                      inactive-text="免报"
+                      @change="(val: boolean) => handleReportingRequiredChange(item, val)"
+                    />
+                    <el-tooltip
+                      content="开启=该工序需报工(逐道); 关闭=免报, 仅保留工序配置不生成报工任务 (适合中间工序, 只在领料/产出两点报工)"
+                      placement="top"
+                    >
+                      <el-icon class="reporting-hint"><QuestionFilled /></el-icon>
+                    </el-tooltip>
+                  </span>
+                  <el-tag v-else-if="item.reportingRequired === false" size="small" type="warning">免报</el-tag>
                 </div>
 
                 <!-- C3 / T121 — 多人负责多选下拉 (filterable, multiple) -->
