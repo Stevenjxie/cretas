@@ -246,4 +246,41 @@ class ProductionPlanReversalApprovalTest {
                 () -> service.requestCancelWithApproval(FACTORY_ID, PLAN_ID, REASON, USER_ID));
         assertEquals(409, ex.getCode());
     }
+
+    // -----------------------------------------------------------------------
+    // UT-PP-RCA-07 (审计 Tier0 #01: 旧 cancel 绕过审批红线)
+
+    @Test
+    @DisplayName("UT-PP-RCA-07: cancelProductionPlan — PENDING_APPROVAL (审批流中) → 409, 不允许旧接口直接取消绕过审批")
+    void cancelProductionPlan_pendingApproval_throws409_noBypass() {
+        ProductionPlan plan = completedPlan();
+        plan.setStatus(ProductionPlanStatus.PENDING_APPROVAL);
+        when(productionPlanRepository.findById(PLAN_ID)).thenReturn(Optional.of(plan));
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> service.cancelProductionPlan(FACTORY_ID, PLAN_ID, REASON));
+        assertEquals(409, ex.getCode());
+        // 计划不应被改成 CANCELLED — 状态必须保持 PENDING_APPROVAL, 等审批流处理
+        assertEquals(ProductionPlanStatus.PENDING_APPROVAL, plan.getStatus());
+        verify(productionPlanRepository, never()).save(any());
+    }
+
+    // -----------------------------------------------------------------------
+    // UT-PP-RCA-08: 合法直接取消 (非 COMPLETED / 非 PENDING_APPROVAL / 未锁定) 仍可走旧接口
+
+    @Test
+    @DisplayName("UT-PP-RCA-08: cancelProductionPlan — IN_PROGRESS 计划仍可直接取消 (合法操作员路径不被破坏)")
+    void cancelProductionPlan_inProgress_allowedDirectCancel() {
+        ProductionPlan plan = completedPlan();
+        plan.setStatus(ProductionPlanStatus.IN_PROGRESS);
+        plan.setIsLocked(false);
+        when(productionPlanRepository.findById(PLAN_ID)).thenReturn(Optional.of(plan));
+        when(productionPlanRepository.save(any(ProductionPlan.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(processTaskRepository.findByFactoryIdAndProductTypeId(FACTORY_ID, PRODUCT_TYPE_ID))
+                .thenReturn(Collections.emptyList());
+
+        assertDoesNotThrow(() -> service.cancelProductionPlan(FACTORY_ID, PLAN_ID, REASON));
+        assertEquals(ProductionPlanStatus.CANCELLED, plan.getStatus());
+        verify(productionPlanRepository).save(any(ProductionPlan.class));
+    }
 }

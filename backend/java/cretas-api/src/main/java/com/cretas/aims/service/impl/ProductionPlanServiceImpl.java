@@ -995,6 +995,14 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                     .withHint("请刷新生产计划列表查看最新状态");
         }
 
+        // 六扇门红线 (审计 Tier0 #01): 待审批 (PENDING_APPROVAL) 的计划已进入
+        // PRODUCTION_REVERSAL 审批流, 不允许通过本接口直接取消绕过主管审批.
+        // 防止: COMPLETED → request-cancel (PENDING_APPROVAL) → 旧 cancel 直接 CANCELLED 绕审批 + 留下悬挂工作流实例.
+        if (plan.getStatus() == ProductionPlanStatus.PENDING_APPROVAL) {
+            throw new BusinessException(409, "该计划正在撤回审批流程中, 不能直接取消")
+                    .withHint("请在「撤回审批」列表中处理, 或等待主管审批");
+        }
+
         // Issue #759: 锁定的计划不可取消
         if (Boolean.TRUE.equals(plan.getIsLocked())) {
             throw new BusinessException(409, "生产计划已锁定, 不可取消")
