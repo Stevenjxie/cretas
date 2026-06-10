@@ -30,7 +30,8 @@ import java.util.stream.Collectors;
  * SP9: 人工双口径对比服务实现.
  *
  * <p>M3 compare: 研发预估(quotedLaborCostPerKg) vs 实际(laborCost / goodQuantityKg) 对比.</p>
- * <p>M2 rollup: BLOCKED — 依赖 SP1 YieldReportServiceImpl scope-lock; 单独 PR 后续做.</p>
+ * <p>M2 rollup: 已实现 — YieldReportServiceImpl.rollupLaborCostToBatch 在 submitReport/settleDay 写回
+ * ProductionBatch.laborCost = Σ YIELD 报工人工成本; actualLaborCostPerKg = laborCost / goodQuantityKg.</p>
  */
 @Service
 @RequiredArgsConstructor

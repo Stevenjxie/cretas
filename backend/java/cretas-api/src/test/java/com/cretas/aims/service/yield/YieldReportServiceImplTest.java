@@ -3021,4 +3021,187 @@ class YieldReportServiceImplTest {
 
         assertThat(cap.getValue().getWorkerId()).isEqualTo(1615L);
     }
+
+    // ═══════════════════════════════════════════════════════════════════════════════
+    // M2 SP9: actualLaborCost 回写 (rollupLaborCostToBatch)
+    // ═══════════════════════════════════════════════════════════════════════════════
+
+    /** 基础 helper: 构造含 laborCost 的 ProductionReport stub. */
+    private ProductionReport reportWithLaborCost(BigDecimal laborCost) {
+        return ProductionReport.builder()
+                .outputQuantity(new BigDecimal("10"))
+                .laborCost(laborCost)
+                .build();
+    }
+
+    /** 构造 submitReport 调用所需的最小 mock 环境 (任务 id=50L, 批次 id=50L). */
+    private WorkProcessTask taskForM2(long taskId, long batchId) {
+        WorkProcessTask t = new WorkProcessTask();
+        t.setId(taskId); t.setFactoryId("F006"); t.setProductionBatchId(batchId);
+        t.setProcessOrder(1); t.setWorkProcessId("WP-M2");
+        t.setStatus(WorkProcessTask.Status.IN_PROGRESS);
+        return t;
+    }
+
+    @Test
+    @org.junit.jupiter.api.DisplayName("M2: submitReport — 多条报工有 laborCost → 批次 laborCost = 累加值")
+    void m2_submitReport_multipleLaborCostReports_writesSum() {
+        long batchId = 50L;
+        WorkProcessTask t = taskForM2(50L, batchId);
+        when(taskRepo.findByFactoryIdAndId("F006", 50L)).thenReturn(Optional.of(t));
+        when(processRepo.findById("WP-M2")).thenReturn(Optional.empty());
+
+        // 两条已有 YIELD 报工, laborCost = 120 + 80 = 200
+        ProductionReport r1 = reportWithLaborCost(new BigDecimal("120.00"));
+        ProductionReport r2 = reportWithLaborCost(new BigDecimal("80.00"));
+        when(reportRepo.findYieldReportsByBatch("F006", batchId)).thenReturn(List.of(r1, r2));
+        when(reportRepo.findYieldReportsByTask("F006", 50L)).thenReturn(List.of());
+        when(reportRepo.save(any(ProductionReport.class))).thenAnswer(i -> {
+            ProductionReport r = i.getArgument(0); r.setId(500L); return r;
+        });
+
+        ProductionBatch pb = new ProductionBatch();
+        pb.setId(batchId); pb.setFactoryId("F006");
+        pb.setGoodQuantity(new BigDecimal("100"));
+        when(productionBatchRepo.findByIdAndFactoryId(batchId, "F006")).thenReturn(Optional.of(pb));
+        when(productionBatchRepo.save(any(ProductionBatch.class))).thenAnswer(i -> i.getArgument(0));
+
+        YieldReportRequest req = new YieldReportRequest();
+        req.setWorkProcessTaskId(50L);
+        req.setOutputQuantity(new BigDecimal("10"));
+
+        svc.submitReport("F006", batchId, 5L, req);
+
+        ArgumentCaptor<ProductionBatch> pbCap = ArgumentCaptor.forClass(ProductionBatch.class);
+        verify(productionBatchRepo).save(pbCap.capture());
+        assertThat(pbCap.getValue().getLaborCost()).isEqualByComparingTo(new BigDecimal("200.00"));
+    }
+
+    @Test
+    @org.junit.jupiter.api.DisplayName("M2: submitReport — 所有报工 laborCost=null (工价未配) → 批次 laborCost 不被覆盖")
+    void m2_submitReport_allNullLaborCost_doesNotOverwriteBatch() {
+        long batchId = 51L;
+        WorkProcessTask t = taskForM2(51L, batchId);
+        when(taskRepo.findByFactoryIdAndId("F006", 51L)).thenReturn(Optional.of(t));
+        when(processRepo.findById("WP-M2")).thenReturn(Optional.empty());
+
+        // 报工均无 laborCost (standard_hourly_rate 未配)
+        ProductionReport r1 = reportWithLaborCost(null);
+        ProductionReport r2 = reportWithLaborCost(null);
+        when(reportRepo.findYieldReportsByBatch("F006", batchId)).thenReturn(List.of(r1, r2));
+        when(reportRepo.findYieldReportsByTask("F006", 51L)).thenReturn(List.of());
+        when(reportRepo.save(any(ProductionReport.class))).thenAnswer(i -> {
+            ProductionReport r = i.getArgument(0); r.setId(501L); return r;
+        });
+
+        YieldReportRequest req = new YieldReportRequest();
+        req.setWorkProcessTaskId(51L);
+        req.setOutputQuantity(new BigDecimal("10"));
+
+        svc.submitReport("F006", batchId, 5L, req);
+
+        // rollup 早返回 → 不调用 productionBatchRepo.findByIdAndFactoryId 也不 save
+        verify(productionBatchRepo, never()).findByIdAndFactoryId(eq(batchId), eq("F006"));
+        verify(productionBatchRepo, never()).save(any(ProductionBatch.class));
+    }
+
+    @Test
+    @org.junit.jupiter.api.DisplayName("M2: submitReport — rollup 异常 fail-soft, 不向调用方抛出")
+    void m2_submitReport_rollupException_isSoftFail() {
+        long batchId = 52L;
+        WorkProcessTask t = taskForM2(52L, batchId);
+        when(taskRepo.findByFactoryIdAndId("F006", 52L)).thenReturn(Optional.of(t));
+        when(processRepo.findById("WP-M2")).thenReturn(Optional.empty());
+
+        // rollup 内 findYieldReportsByBatch 成功返回有值报工
+        ProductionReport r1 = reportWithLaborCost(new BigDecimal("50.00"));
+        when(reportRepo.findYieldReportsByBatch("F006", batchId)).thenReturn(List.of(r1));
+        when(reportRepo.findYieldReportsByTask("F006", 52L)).thenReturn(List.of());
+        when(reportRepo.save(any(ProductionReport.class))).thenAnswer(i -> {
+            ProductionReport r = i.getArgument(0); r.setId(502L); return r;
+        });
+
+        // 模拟 productionBatchRepo.findByIdAndFactoryId 抛出运行时异常
+        when(productionBatchRepo.findByIdAndFactoryId(batchId, "F006"))
+                .thenThrow(new RuntimeException("DB connection lost"));
+
+        YieldReportRequest req = new YieldReportRequest();
+        req.setWorkProcessTaskId(52L);
+        req.setOutputQuantity(new BigDecimal("10"));
+
+        // rollup fail-soft → submitReport 不抛异常, 正常返回
+        assertThatCode(() -> svc.submitReport("F006", batchId, 5L, req))
+                .doesNotThrowAnyException();
+    }
+
+    @Test
+    @org.junit.jupiter.api.DisplayName("M2: settleDay — 结清时也触发 laborCost 回写")
+    void m2_settleDay_triggersRollup() {
+        long batchId = 53L;
+        java.time.LocalDate today = java.time.LocalDate.now();
+
+        // 构造一条 unsettled YIELD 报工 (settleDay 需要 reportType=YIELD 的未结清报工)
+        ProductionReport unsettled = ProductionReport.builder()
+                .id(600L)
+                .factoryId("F006")
+                .outputQuantity(new BigDecimal("20"))
+                .laborCost(new BigDecimal("150.00"))
+                .build();
+        // settleDay 先查 unsettled (3参: factoryId, batchId, date), 后 saveAll, 再调 rollup
+        when(reportRepo.findUnsettledYieldReports("F006", batchId, today)).thenReturn(List.of(unsettled));
+        when(reportRepo.saveAll(anyList())).thenAnswer(i -> i.getArgument(0));
+
+        // rollup: 查全量 YIELD 报工 (含刚结清的)
+        when(reportRepo.findYieldReportsByBatch("F006", batchId))
+                .thenReturn(List.of(reportWithLaborCost(new BigDecimal("150.00"))));
+
+        ProductionBatch pb = new ProductionBatch();
+        pb.setId(batchId); pb.setFactoryId("F006");
+        pb.setGoodQuantity(new BigDecimal("20"));
+        pb.setStatus(ProductionBatchStatus.IN_PROGRESS);
+        when(productionBatchRepo.findByIdAndFactoryId(batchId, "F006")).thenReturn(Optional.of(pb));
+        when(productionBatchRepo.save(any(ProductionBatch.class))).thenAnswer(i -> i.getArgument(0));
+
+        // settleDay(factoryId, batchId, workerId, date, triggerComplete)
+        svc.settleDay("F006", batchId, 5L, today, false);
+
+        ArgumentCaptor<ProductionBatch> pbCap = ArgumentCaptor.forClass(ProductionBatch.class);
+        verify(productionBatchRepo).save(pbCap.capture());
+        assertThat(pbCap.getValue().getLaborCost()).isEqualByComparingTo(new BigDecimal("150.00"));
+    }
+
+    @Test
+    @org.junit.jupiter.api.DisplayName("M2: 混合 null/non-null laborCost → 仅累加非 null 值")
+    void m2_mixedNullAndNonNull_sumsOnlyNonNull() {
+        long batchId = 54L;
+        WorkProcessTask t = taskForM2(54L, batchId);
+        when(taskRepo.findByFactoryIdAndId("F006", 54L)).thenReturn(Optional.of(t));
+        when(processRepo.findById("WP-M2")).thenReturn(Optional.empty());
+
+        // r1=60, r2=null, r3=40 → sum=100
+        ProductionReport r1 = reportWithLaborCost(new BigDecimal("60.00"));
+        ProductionReport r2 = reportWithLaborCost(null);
+        ProductionReport r3 = reportWithLaborCost(new BigDecimal("40.00"));
+        when(reportRepo.findYieldReportsByBatch("F006", batchId)).thenReturn(List.of(r1, r2, r3));
+        when(reportRepo.findYieldReportsByTask("F006", 54L)).thenReturn(List.of());
+        when(reportRepo.save(any(ProductionReport.class))).thenAnswer(i -> {
+            ProductionReport r = i.getArgument(0); r.setId(504L); return r;
+        });
+
+        ProductionBatch pb = new ProductionBatch();
+        pb.setId(batchId); pb.setFactoryId("F006");
+        pb.setGoodQuantity(new BigDecimal("50"));
+        when(productionBatchRepo.findByIdAndFactoryId(batchId, "F006")).thenReturn(Optional.of(pb));
+        when(productionBatchRepo.save(any(ProductionBatch.class))).thenAnswer(i -> i.getArgument(0));
+
+        YieldReportRequest req = new YieldReportRequest();
+        req.setWorkProcessTaskId(54L);
+        req.setOutputQuantity(new BigDecimal("10"));
+
+        svc.submitReport("F006", batchId, 5L, req);
+
+        ArgumentCaptor<ProductionBatch> pbCap = ArgumentCaptor.forClass(ProductionBatch.class);
+        verify(productionBatchRepo).save(pbCap.capture());
+        assertThat(pbCap.getValue().getLaborCost()).isEqualByComparingTo(new BigDecimal("100.00"));
+    }
 }
