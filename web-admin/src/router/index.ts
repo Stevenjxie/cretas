@@ -269,6 +269,13 @@ const businessRoutes: RouteRecordRaw[] = [
             name: 'LaborEfficiency',
             component: () => import('@/views/production/labor-efficiency/index.vue'),
             meta: { requiresAuth: true, title: '人效对比', module: 'production' }
+          },
+          {
+            // SP2: 报工整单撤回申请列表 + 审批
+            path: 'reversals',
+            name: 'ProductionReversals',
+            component: () => import('@/views/production/reversals/list.vue'),
+            meta: { requiresAuth: true, title: '撤回审批', module: 'production' }
           }
         ]
       },
