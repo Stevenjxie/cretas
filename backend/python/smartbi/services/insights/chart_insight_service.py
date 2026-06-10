@@ -218,8 +218,11 @@ def _compute_slot_values(ctx: ChartInsightContext) -> Dict[str, Any]:
         else:
             slots["concLevel"] = "适中"
 
-    # Trend slots
-    if len(values) >= 2:
+    # Trend slots — ONLY meaningful for a time-ordered series. For proportion/ranking charts
+    # (x_dim=channel/category/store/...), first→last is not a trend; computing growthRate there
+    # produces a meaningless number the LLM then reports (and which coincidentally collides with
+    # other entities' shares). Gate on x_dim == "time".
+    if ctx.x_dim == "time" and len(values) >= 2:
         first, last = values[0], values[-1]
         if first and first != 0:
             change_pct = round((last - first) / abs(first) * 100, 1)
@@ -391,7 +394,10 @@ def _truth_candidates(
             # also accept a fraction form (LLM wrote 0.62 for 62%) for pct stats
             elif tv is not None and stat not in _RATIO_STAT_TYPES and abs(num_val * 100 - tv) <= tol:
                 cands.append((ent, stat))
-    for stat in ("top2_share", "growth", "count"):
+    agnostic = ("top2_share", "count")
+    if ctx.x_dim == "time":
+        agnostic = ("top2_share", "growth", "count")  # growth only meaningful for time series
+    for stat in agnostic:
         tol = tol_ratio if stat in _RATIO_STAT_TYPES else tol_pct
         tv = recompute_claim(None, stat, ctx.series_values, labels)
         if tv is not None and abs(num_val - tv) <= tol:
