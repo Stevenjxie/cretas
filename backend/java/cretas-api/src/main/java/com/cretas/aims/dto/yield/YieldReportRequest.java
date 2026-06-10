@@ -1,8 +1,10 @@
 package com.cretas.aims.dto.yield;
 
+import com.fasterxml.jackson.annotation.JsonFormat;
 import lombok.Data;
 
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
 
@@ -78,6 +80,18 @@ public class YieldReportRequest {
 
     /** 留样(盒/份, 末道装盒) */
     private Integer sampleRetainQuantity;
+
+    /**
+     * C-074/C-075/X-10 补录时效锁: 报工业务日期 (可选)。
+     * <ul>
+     *   <li>null / 不传 = 服务层取今天 (正常实时报工, 不拦)</li>
+     *   <li>今天或未来 = 不拦</li>
+     *   <li>T-1 / T-2 = 补录窗口内, 允许</li>
+     *   <li>T-3 及更早 = 超窗口, 拒绝 409 BACKDATE_WINDOW_EXCEEDED</li>
+     * </ul>
+     */
+    @JsonFormat(pattern = "yyyy-MM-dd")
+    private LocalDate businessDate;
 
     /** T161: per-photo annotation attached to each evidence image. */
     @Data
