@@ -38,7 +38,7 @@ import static org.mockito.Mockito.*;
 /**
  * FactoryStocktakeServiceImpl 单元测试 (SP7 T2).
  *
- * <p>覆盖 10 个关键场景:
+ * <p>覆盖 13 个关键场景:
  * <ol>
  *   <li>月底约束 threshold=29: 6-10 (day=10) → 409，error message 含下次可发起日期</li>
  *   <li>月底约束 threshold=1: 6-10 (day=10) → 放行，不抛异常</li>
@@ -49,7 +49,10 @@ import static org.mockito.Mockito.*;
  *   <li>apply 幂等: 已 APPLIED → 409</li>
  *   <li>apply 正常: APPROVED → 每 item 生成 adjustment + 更新 batch 数量</li>
  *   <li>approve 角色校验: 错误角色 → 403</li>
- *   <li>approve 正确角色 FINANCE → 状态变 APPROVED</li>
+ *   <li>approve 正确角色 finance_manager (小写) → 状态变 APPROVED</li>
+ *   <li>approve 正确角色 factory_super_admin (小写) → 状态变 APPROVED</li>
+ *   <li>approve 大写兜底 "FINANCE_MANAGER" → 状态变 APPROVED (大小写不敏感)</li>
+ *   <li>approve "operator" → 403</li>
  * </ol>
  */
 @DisplayName("FactoryStocktakeServiceImpl 单元测试 (SP7)")
@@ -335,20 +338,66 @@ class FactoryStocktakeServiceImplTest {
     }
 
     // -------------------------------------------------------
-    // 8. approve 正确角色 FINANCE: 通过
+    // 8. approve 正确角色 finance_manager (小写): 通过
     // -------------------------------------------------------
     @Test
-    @DisplayName("T8: approve FINANCE 角色 → 状态变 APPROVED")
-    void approve_finance_role_succeeds() {
+    @DisplayName("T8: approve finance_manager 角色 (小写) → 状态变 APPROVED")
+    void approve_finance_manager_role_succeeds() {
         FactoryStocktake stocktake = buildStocktake(FactoryStocktake.Status.PENDING_APPROVAL);
         when(stocktakeRepo.findById(any())).thenReturn(Optional.of(stocktake));
         when(stocktakeRepo.save(any())).thenReturn(stocktake);
 
-        service.approve(stocktake.getId(), FACTORY_ID, USER_ID, "FINANCE");
+        service.approve(stocktake.getId(), FACTORY_ID, USER_ID, "finance_manager");
 
         ArgumentCaptor<FactoryStocktake> captor = ArgumentCaptor.forClass(FactoryStocktake.class);
         verify(stocktakeRepo).save(captor.capture());
         assertThat(captor.getValue().getStatus()).isEqualTo(FactoryStocktake.Status.APPROVED);
+    }
+
+    // -------------------------------------------------------
+    // 9. approve 正确角色 factory_super_admin (小写): 通过
+    // -------------------------------------------------------
+    @Test
+    @DisplayName("T9: approve factory_super_admin 角色 (小写) → 状态变 APPROVED")
+    void approve_factory_super_admin_role_succeeds() {
+        FactoryStocktake stocktake = buildStocktake(FactoryStocktake.Status.PENDING_APPROVAL);
+        when(stocktakeRepo.findById(any())).thenReturn(Optional.of(stocktake));
+        when(stocktakeRepo.save(any())).thenReturn(stocktake);
+
+        service.approve(stocktake.getId(), FACTORY_ID, USER_ID, "factory_super_admin");
+
+        ArgumentCaptor<FactoryStocktake> captor = ArgumentCaptor.forClass(FactoryStocktake.class);
+        verify(stocktakeRepo).save(captor.capture());
+        assertThat(captor.getValue().getStatus()).isEqualTo(FactoryStocktake.Status.APPROVED);
+    }
+
+    // -------------------------------------------------------
+    // 10. approve 大小写兜底: "FINANCE_MANAGER" → 通过
+    // -------------------------------------------------------
+    @Test
+    @DisplayName("T10: approve FINANCE_MANAGER 大写兜底 → 状态变 APPROVED (大小写不敏感)")
+    void approve_finance_manager_uppercase_succeeds() {
+        FactoryStocktake stocktake = buildStocktake(FactoryStocktake.Status.PENDING_APPROVAL);
+        when(stocktakeRepo.findById(any())).thenReturn(Optional.of(stocktake));
+        when(stocktakeRepo.save(any())).thenReturn(stocktake);
+
+        service.approve(stocktake.getId(), FACTORY_ID, USER_ID, "FINANCE_MANAGER");
+
+        ArgumentCaptor<FactoryStocktake> captor = ArgumentCaptor.forClass(FactoryStocktake.class);
+        verify(stocktakeRepo).save(captor.capture());
+        assertThat(captor.getValue().getStatus()).isEqualTo(FactoryStocktake.Status.APPROVED);
+    }
+
+    // -------------------------------------------------------
+    // 11. approve "operator" → 403
+    // -------------------------------------------------------
+    @Test
+    @DisplayName("T11: approve operator 角色 → 403")
+    void approve_operator_role_throws403() {
+        assertThatThrownBy(() -> service.approve("any-id", FACTORY_ID, USER_ID, "operator"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(ex -> ((BusinessException) ex).getCode())
+                .isEqualTo(403);
     }
 
     // -------------------------------------------------------

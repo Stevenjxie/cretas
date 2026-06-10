@@ -8,6 +8,8 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
+import java.util.List;
+
 /**
  * 报损单 Repository (SP7 T3).
  */
@@ -27,17 +29,18 @@ public interface WastageReportRepository extends JpaRepository<WastageReport, St
             Pageable pageable);
 
     /**
-     * 按审批角色查询待审批的报损单:
-     * - FINANCE → WAREHOUSE 轨 PENDING_APPROVAL
-     * - FACTORY_MANAGER → FACTORY 轨 PENDING_APPROVAL
+     * 按可见轨道集合查询待审批报损单 (W2 修, 2026-06-10)。
+     *
+     * <p>service 层按角色推导 visibleTracks 后调用此方法，
+     * 避免在 SQL 中硬编码大写虚构角色码。
+     * trackType IN + status = PENDING_APPROVAL + deletedAt IS NULL（@Where 已处理）。
      */
     @Query("SELECT w FROM WastageReport w WHERE w.factoryId = :factoryId " +
-           "AND w.status = 'PENDING_APPROVAL' " +
-           "AND ((:role = 'FINANCE' AND w.trackType = 'WAREHOUSE') " +
-           "  OR (:role = 'FACTORY_MANAGER' AND w.trackType = 'FACTORY')) " +
+           "AND w.status = com.cretas.aims.entity.inventory.WastageReport.Status.PENDING_APPROVAL " +
+           "AND w.trackType IN :trackTypes " +
            "ORDER BY w.submittedAt ASC")
-    Page<WastageReport> findPendingByApproverRole(
+    Page<WastageReport> findPendingByTrackTypes(
             @Param("factoryId") String factoryId,
-            @Param("role") String role,
+            @Param("trackTypes") List<WastageReport.TrackType> trackTypes,
             Pageable pageable);
 }

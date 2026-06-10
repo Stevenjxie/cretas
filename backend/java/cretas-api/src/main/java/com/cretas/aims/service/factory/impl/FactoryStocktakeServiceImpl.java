@@ -186,12 +186,7 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
     @Transactional
     public void approve(String stocktakeId, String factoryId, Long approverId, String requestRole) {
         // 角色检查（C1 孪生坑：不用 SecurityContext）
-        if (!"FINANCE".equals(requestRole) && !"FACTORY_SUPER_ADMIN".equals(requestRole)
-                && !"PLATFORM_SUPER_ADMIN".equals(requestRole)) {
-            throw new BusinessException(403,
-                    "盘点审批需要财务角色，当前角色：" + requestRole)
-                    .withHint("请联系财务审批");
-        }
+        assertApprovalRole(requestRole);
         FactoryStocktake stocktake = findAndValidate(stocktakeId, factoryId);
         assertStatus(stocktake, FactoryStocktake.Status.PENDING_APPROVAL, "审批");
         stocktake.setStatus(FactoryStocktake.Status.APPROVED);
@@ -204,10 +199,7 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
     @Override
     @Transactional
     public void reject(String stocktakeId, String factoryId, String reason, Long userId, String requestRole) {
-        if (!"FINANCE".equals(requestRole) && !"FACTORY_SUPER_ADMIN".equals(requestRole)
-                && !"PLATFORM_SUPER_ADMIN".equals(requestRole)) {
-            throw new BusinessException(403, "盘点审批需要财务角色，当前角色：" + requestRole);
-        }
+        assertApprovalRole(requestRole);
         FactoryStocktake stocktake = findAndValidate(stocktakeId, factoryId);
         assertStatus(stocktake, FactoryStocktake.Status.PENDING_APPROVAL, "驳回");
         stocktake.setStatus(FactoryStocktake.Status.REJECTED);
@@ -216,6 +208,27 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
         stocktake.setApprovedAt(LocalDateTime.now());
         stocktakeRepo.save(stocktake);
         log.info("SP7: 盘点任务已驳回 stocktakeId={} reason={}", stocktakeId, reason);
+    }
+
+    /**
+     * 盘点审批角色守卫 (W2 验证战役修复, 2026-06-10)。
+     *
+     * <p>原实现比对大写常量 "FINANCE"/"FACTORY_SUPER_ADMIN"/"PLATFORM_SUPER_ADMIN"，
+     * 而 JWT/request attribute "role" 携带的是小写角色码 (factory_super_admin 等,
+     * 见 FactoryUserRole 枚举)，且 "FINANCE"/"PLATFORM_SUPER_ADMIN" 根本不是合法角色码
+     * → 三个条件永远不匹配，盘点审批/驳回对所有人 403 (审批环节整体死路, test env
+     * 盘点链 E2E 解锁后首跑即暴露)。修: 按真实角色码集合判断, 大小写不敏感兜底。
+     */
+    private static final java.util.Set<String> STOCKTAKE_APPROVAL_ROLES = java.util.Set.of(
+            "finance_manager", "factory_super_admin", "platform_admin");
+
+    private void assertApprovalRole(String requestRole) {
+        String normalized = requestRole == null ? "" : requestRole.toLowerCase();
+        if (!STOCKTAKE_APPROVAL_ROLES.contains(normalized)) {
+            throw new BusinessException(403,
+                    "盘点审批需要财务经理或工厂管理员角色，当前角色：" + requestRole)
+                    .withHint("请联系财务经理 (finance_manager) 或工厂超管审批");
+        }
     }
 
     /**
