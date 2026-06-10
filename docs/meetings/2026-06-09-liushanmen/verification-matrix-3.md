@@ -33,7 +33,7 @@
 | D-16 | 采购退货 (发起→财务审批→仓管出货) | ReturnOrder PURCHASE_RETURN SP6 | P1 | 🟡部分 | V1 | 2026-06-10: 路径纠正→ /return-orders (NOT /purchase/returns); GET 200 count=0; create+approve 端点存在; 创建全链未做完整断言 | audit: 2026-06-10-d-flow-purchase-verification.md D-16 |
 | D-17 | 合同号挂采购 + 历史价格/批次永久追溯 | PO 合同号字段 SP3 | P2 | 🟡部分 | V1 | 2026-06-10: git show PurchaseOrder.java:192 contractNumber 字段存在; API 返回 "contractNumber":null ✅ | audit: 2026-06-10-d-flow-purchase-verification.md D-17 |
 | D-18 | 原料来源标记 (国内/国外) | PurchaseOrder.isImported SP3 | P2 | ✅已建 | V1 | 2026-06-10: git show PurchaseOrder.java:97-98 isImported Boolean 字段; API 返回 "isImported":null ✅ | audit: 2026-06-10-d-flow-purchase-verification.md D-18 |
-| D-19 | 采购界面单据打印/PDF/发送供应商 | PrintController SP3 | P1 | ✅已建 | B | 2026-06-10 B阻塞: 端点可达 200 但 502 "打印服务暂时不可用"; Python test (8084) print 路由未注册 | 修复 Python print 模块在 test env |
+| D-19 | 采购界面单据打印/PDF/发送供应商 | PrintController SP3 | P1 | ✅已建 | V1 | 2026-06-10 修复+实证: 502 根因≠路由缺失, 是 test Java 缺 cretas.python.base-url 配置→代理打到 prod 8083 跨环境 JWT 验签 401 (#674 已修+服务器已 apply); 重打 200 + 真 PDF; **中文字体修复**: 服务器无 CJK 字体→□, ReportLab 读不了 Noto CFF-TTC, 装 wqy-zenhei.ttc(阿里云debian镜像)→log "Registered Chinese font"+PDF 2KB→17KB 内嵌子集. 证据: audit d-flow doc 附录 | - |
 | D-20 | 研发试样票务字段 (有票/无票→科目影响) | 票务属性 SP11 | P2 | 🔴缺 | N/A | 试样采购票务字段无独立建模 | 需先实现 |
 
 **D 流小结**
@@ -68,7 +68,7 @@
 | E-10 | 收款→自动触发开票事件联动 | 收款→开票链 SP2 | P1 | 🟡部分 | V1 | 2026-06-10: GET /finance/invoices?salesOrderId=xxx 可按SO筛选发票 ✅; record→invoice 自动联动仍未实现; by-sales-order path变体400 | audit: 2026-06-10-e-flow-sales-verification.md E-10 |
 | E-11 | 销售凭证财审自动传票 (非手动批量) | SalesReceiptVoucherGenerator SP11 | P1 | ✅已建 | V1 | 2026-06-10: 矩阵描述有误 — SalesFinanceApproveVoucherListener **已自动触发**; 日志: V-2026-0019 auto-generated on finance-approve; by-business API 确认 ✅ | audit: 2026-06-10-e-flow-sales-verification.md E-11 |
 | E-12 | 多销售单合并为一张供单 | SO 合并聚合 SP2 | P1 | 🔴缺 | N/A | CreateSalesOrderRequest 无 salesOrderIds 数组; ProductionPlanServiceImpl 无 merge 逻辑 | 需先实现 |
-| E-13 | 销售订单单据打印 (按 SKU 单位) | PrintController SP2 | P2 | ✅已建 | B | 2026-06-10 B阻塞: 端点 200 但 "打印服务暂时不可用"; Python test (8084) print 路由未注册 (同 D-19) | 修复 Python print 模块 |
+| E-13 | 销售订单单据打印 (按 SKU 单位) | PrintController SP2 | P2 | ✅已建 | V1 | 2026-06-10 修复+实证(同 D-19 根因 #674): test env 实打 SO 15fad6b7 → HTTP 200 真 PDF(17KB 含 wqy-zenhei 内嵌中文); 证据: audit e-flow doc 附录 | - |
 | E-14 | 盐化独立销售单元 (谁建谁用+独立报表) | 盐化供单 SP11 | P2 | 🔴缺 | N/A | grep 盐化/saltcure = 0 命中; F流 WarehouseType 无盐化类型 | 需先实现 |
 | E-15 | 三价对比视图 (研发预估/BOM标准/实际核算同屏) | three-price SP11 | P1 | 🟡部分 | B | 阻塞: /rd/quotations/three-price 路由被当 ID 解析(E2E 发现 BUG; FIXB 组2-7 修复中); 三层散在报价/财审/profit-detail 三处未同屏对比 | FIXB 修复后重测 three-price 入口 |
 | E-16 | 销售提成与毛利联动 | 提成规则 SP12 | P2 | 🟡部分 | V1 | 2026-06-10: GET /commission 200; 路径 /api/mobile/{factoryId}/commission; content 空(无测试数据); 毛利联动逻辑验证 defer | audit: 2026-06-10-e-flow-sales-verification.md E-16 |

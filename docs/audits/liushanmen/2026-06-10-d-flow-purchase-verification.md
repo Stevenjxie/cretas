@@ -220,3 +220,13 @@ test DB `cretas_db` 存在 86+ 条 `scope='ORDER'` 的 `business_rules`，包括
 - 多条测试用规则 (`BFV_E_TIER_*`, `BBR1_*`)
 
 这些是历史测试残留，会干扰 E-2 (空价 SO 创建) 等验证。不影响 D 流验证但需记录。
+
+---
+
+## 附录 (organizer 2026-06-10 晚): D-19 打印 B阻塞 → V1
+
+- **根因反转**: 502 不是 Python print 路由缺失（路由在 main.py 已注册，8083/8084 都可达）。真因 = `cretas-backend-test.service` 缺 `--cretas.python.base-url=http://localhost:8084` → test Java 代理打到 **prod Python 8083**，test JWT 在 prod secret 下验签失败 401 → Java 包装 502。日志证据: cretas-test.log 2026-06-10 20:07 `PDF 代理失败 ... url=http://localhost:8083 ... 401 Invalid or expired token`。
+- **修复**: PR #674（systemd 文件加 flag + 路由注册测试）已 merge；服务器已 scp + daemon-reload + restart cretas-backend-test。
+- **实证**: 重打 `GET /api/mobile/F006/print/sales-order/{id}` → HTTP 200 真 PDF；python-test.log `POST /api/printing/sales-order 200 OK`。
+- **衍生发现+修复（中文字体）**: 首打 PDF 仅 2KB 且 log 警告"无中文字体可用, 中文将显示为 □"。ReportLab 实测**读不了 Noto CJK TTC**（CFF/PostScript 轮廓: `TTFError: postscript outlines are not supported`）→ 不改代码，安装 renderer 候选列表第一位的 wqy-zenhei.ttc（阿里云 debian 镜像 fonts-wqy-zenhei_0.9.45-8 解包 → /usr/share/fonts/truetype/wqy/）。重启 prod+test Python（lazy 字体扫描有进程级缓存）后实证: log `Registered Chinese font: /usr/share/fonts/truetype/wqy/wqy-zenhei.ttc`，PDF 2146B → 17374B（内嵌字体子集），二进制含字体标记。
+- **服务器状态变更记录**: ① /etc/systemd/system/cretas-backend-test.service 更新（源=repo scripts/systemd/）② 新增 /usr/share/fonts/truetype/wqy/wqy-zenhei.ttc + google-noto-sans-cjk-ttc-fonts 包（Noto 对 ReportLab 无效但系统层有益）。
