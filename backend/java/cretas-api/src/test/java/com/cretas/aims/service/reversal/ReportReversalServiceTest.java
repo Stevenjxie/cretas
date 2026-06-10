@@ -80,6 +80,10 @@ class ReportReversalServiceTest {
     private SemiFinishedInventoryTransactionRepository txnRepo;
     @Mock
     private FinishedGoodsBatchRepository fgbRepo;
+    @Mock
+    private com.cretas.aims.repository.UserRepository userRepository;
+    @Mock
+    private com.cretas.aims.repository.workprocess.WorkProcessTaskRepository workProcessTaskRepository;
 
     // ==================== submitReversal ====================
 
@@ -252,6 +256,55 @@ class ReportReversalServiceTest {
             ArgumentCaptor<ReportReversalLog> captor = ArgumentCaptor.forClass(ReportReversalLog.class);
             verify(reversalLogRepo, atLeastOnce()).save(captor.capture());
             // At minimum the save from executeReversal marking DONE
+        }
+
+        @Test
+        @DisplayName("executeReversal → COMPLETED 任务复位 PENDING + 清 completedBy/completedAt + actualQuantity=null (撤回后可重报)")
+        void executeReversal_resetsCompletedTasks() {
+            ReportReversalLog pending = ReportReversalLog.builder()
+                    .id(LOG_ID).factoryId(FACTORY_ID).batchId(BATCH_ID)
+                    .status(ReportReversalLog.ReversalStatus.PENDING)
+                    .reversalScope(ReportReversalLog.ReversalScope.WHOLE_ORDER)
+                    .build();
+            when(reversalLogRepo.findById(LOG_ID)).thenReturn(Optional.of(pending));
+            when(reportRepo.findYieldReportsByBatch(FACTORY_ID, BATCH_ID))
+                    .thenReturn(Collections.emptyList());
+            when(reversalLogRepo.save(any())).thenReturn(pending);
+
+            com.cretas.aims.entity.workprocess.WorkProcessTask completedTask =
+                    new com.cretas.aims.entity.workprocess.WorkProcessTask();
+            completedTask.setId(335L);
+            completedTask.setFactoryId(FACTORY_ID);
+            completedTask.setProductionBatchId(BATCH_ID);
+            completedTask.setStatus(com.cretas.aims.entity.workprocess.WorkProcessTask.Status.COMPLETED);
+            completedTask.setCompletedBy(7L);
+            completedTask.setCompletedAt(java.time.LocalDateTime.now());
+            completedTask.setActualQuantity(new BigDecimal("540"));
+
+            com.cretas.aims.entity.workprocess.WorkProcessTask skippedTask =
+                    new com.cretas.aims.entity.workprocess.WorkProcessTask();
+            skippedTask.setId(336L);
+            skippedTask.setFactoryId(FACTORY_ID);
+            skippedTask.setProductionBatchId(BATCH_ID);
+            skippedTask.setStatus(com.cretas.aims.entity.workprocess.WorkProcessTask.Status.SKIPPED);
+            skippedTask.setActualQuantity(new BigDecimal("10"));
+            when(workProcessTaskRepository
+                    .findByFactoryIdAndProductionBatchIdOrderByProcessOrderAsc(FACTORY_ID, BATCH_ID))
+                    .thenReturn(List.of(completedTask, skippedTask));
+
+            service.executeReversal(LOG_ID, FACTORY_ID);
+
+            // COMPLETED → PENDING, completedBy/completedAt 清空, actualQuantity 复位
+            assertThat(completedTask.getStatus())
+                    .isEqualTo(com.cretas.aims.entity.workprocess.WorkProcessTask.Status.PENDING);
+            assertThat(completedTask.getCompletedBy()).isNull();
+            assertThat(completedTask.getCompletedAt()).isNull();
+            assertThat(completedTask.getActualQuantity()).isNull();
+            // SKIPPED 独立决策不动状态, 但 actualQuantity 仍复位 (派生源已删)
+            assertThat(skippedTask.getStatus())
+                    .isEqualTo(com.cretas.aims.entity.workprocess.WorkProcessTask.Status.SKIPPED);
+            assertThat(skippedTask.getActualQuantity()).isNull();
+            verify(workProcessTaskRepository).saveAll(List.of(completedTask, skippedTask));
         }
 
         @Test

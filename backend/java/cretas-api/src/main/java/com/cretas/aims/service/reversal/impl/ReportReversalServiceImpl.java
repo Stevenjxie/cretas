@@ -14,6 +14,8 @@ import com.cretas.aims.repository.ReportReversalLogRepository;
 import com.cretas.aims.repository.SemiFinishedInventoryRepository;
 import com.cretas.aims.repository.SemiFinishedInventoryTransactionRepository;
 import com.cretas.aims.repository.UserRepository;
+import com.cretas.aims.entity.workprocess.WorkProcessTask;
+import com.cretas.aims.repository.workprocess.WorkProcessTaskRepository;
 import com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository;
 import com.cretas.aims.service.reversal.ReportReversalService;
 import lombok.RequiredArgsConstructor;
@@ -62,6 +64,8 @@ public class ReportReversalServiceImpl implements ReportReversalService {
     private final FinishedGoodsBatchRepository fgbRepo;
     // BUG-4 修复: 批次加载用户姓名 (单次 IN query, 无 N+1)
     private final UserRepository userRepository;
+    // BUG-1 联动: 整单撤回需复位 WorkProcessTask (COMPLETED → PENDING), 否则任务卡终态无法重报
+    private final WorkProcessTaskRepository workProcessTaskRepository;
 
     // ==================== 提交撤回申请 ====================
 
@@ -162,6 +166,25 @@ public class ReportReversalServiceImpl implements ReportReversalService {
         for (ProductionReport r : reports) {
             r.setDeletedAt(now);
             reportRepo.save(r);
+        }
+
+        // ①.5 复位该批次工序任务 (BUG-1 联动修复的撤回路径):
+        // OUTPUT 报工提交现在会把 WorkProcessTask 置 COMPLETED(终态) — 整单撤回软删了全部
+        // YIELD 报工后, 若任务留在 COMPLETED, RN 任务列表不再显示该道 → 无法重报, 撤回流程被打断。
+        // 故: COMPLETED → PENDING + 清 completedBy/completedAt; 所有任务 actualQuantity 复位 null
+        // (其派生源 YIELD 报工已全部软删)。SKIPPED/CANCELLED 是独立决策, 不动。
+        List<WorkProcessTask> batchTasks = workProcessTaskRepository
+                .findByFactoryIdAndProductionBatchIdOrderByProcessOrderAsc(factoryId, batchId);
+        for (WorkProcessTask t : batchTasks) {
+            if (WorkProcessTask.Status.COMPLETED == t.getStatus()) {
+                t.setStatus(WorkProcessTask.Status.PENDING);
+                t.setCompletedBy(null);
+                t.setCompletedAt(null);
+            }
+            t.setActualQuantity(null);
+        }
+        if (!batchTasks.isEmpty()) {
+            workProcessTaskRepository.saveAll(batchTasks);
         }
 
         // ② 每份报工: 找到对应 IN SIT 行 → 写 REVERSE 行 → 回放移动均价
