@@ -280,7 +280,9 @@ public class BomRecipeServiceImpl implements BomRecipeService {
         BomRecipeItem item = buildItem(factoryId, recipe.getId(), dto);
         item = itemRepo.save(item);
         // Touch recipe to mark updated + recompute cost.
-        recipe.setItems(itemRepo.findByRecipeIdOrderBySortOrderAsc(recipe.getId()));
+        // IMPORTANT: must NOT replace the Hibernate-managed collection reference (orphanRemoval=true).
+        // Using clear+addAll keeps the same List instance so Hibernate's orphan tracking stays intact.
+        refreshItemsInPlace(recipe);
         recomputeMaterialCost(recipe);
         recipeRepo.save(recipe);
         return item;
@@ -309,7 +311,7 @@ public class BomRecipeServiceImpl implements BomRecipeService {
         }
         applyDtoToItem(dto, item);
         item = itemRepo.save(item);
-        recipe.setItems(itemRepo.findByRecipeIdOrderBySortOrderAsc(recipe.getId()));
+        refreshItemsInPlace(recipe);
         recomputeMaterialCost(recipe);
         recipeRepo.save(recipe);
         return item;
@@ -330,9 +332,26 @@ public class BomRecipeServiceImpl implements BomRecipeService {
         }
         item.softDelete();
         itemRepo.save(item);
-        recipe.setItems(itemRepo.findByRecipeIdOrderBySortOrderAsc(recipe.getId()));
+        refreshItemsInPlace(recipe);
         recomputeMaterialCost(recipe);
         recipeRepo.save(recipe);
+    }
+
+    /**
+     * Refresh the recipe's Hibernate-managed items collection in-place.
+     *
+     * <p>Calling {@code recipe.setItems(newList)} after an addItem/updateItem/deleteItem
+     * replaces the Hibernate PersistentBag reference, which triggers:
+     * {@code HibernateException: A collection with cascade="all-delete-orphan" was no longer
+     * referenced by the owning entity instance}.
+     *
+     * <p>Using {@code clear()} + {@code addAll()} keeps the same collection instance so
+     * Hibernate's orphan-removal tracking remains intact.
+     */
+    private void refreshItemsInPlace(BomRecipe recipe) {
+        List<BomRecipeItem> fresh = itemRepo.findByRecipeIdOrderBySortOrderAsc(recipe.getId());
+        recipe.getItems().clear();
+        recipe.getItems().addAll(fresh);
     }
 
     // ========== Helpers ==========
