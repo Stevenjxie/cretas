@@ -47,7 +47,8 @@ class ReportReversalListNamesTest {
                 mock(SemiFinishedInventoryTransactionRepository.class),
                 mock(FinishedGoodsBatchRepository.class),
                 userRepository,
-                mock(com.cretas.aims.repository.workprocess.WorkProcessTaskRepository.class)
+                mock(com.cretas.aims.repository.workprocess.WorkProcessTaskRepository.class),
+                mock(com.cretas.aims.service.NotificationService.class)
         );
     }
 

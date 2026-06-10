@@ -17,6 +17,8 @@ import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.entity.workprocess.WorkProcessTask;
 import com.cretas.aims.repository.workprocess.WorkProcessTaskRepository;
 import com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository;
+import com.cretas.aims.entity.enums.NotificationType;
+import com.cretas.aims.service.NotificationService;
 import com.cretas.aims.service.reversal.ReportReversalService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -66,6 +68,8 @@ public class ReportReversalServiceImpl implements ReportReversalService {
     private final UserRepository userRepository;
     // BUG-1 联动: 整单撤回需复位 WorkProcessTask (COMPLETED → PENDING), 否则任务卡终态无法重报
     private final WorkProcessTaskRepository workProcessTaskRepository;
+    // W6 #27: 驳回撤回申请时通知申请人 (App 内通知)
+    private final NotificationService notificationService;
 
     // ==================== 提交撤回申请 ====================
 
@@ -245,6 +249,15 @@ public class ReportReversalServiceImpl implements ReportReversalService {
                     "只有待审批状态的撤回申请可审批，当前状态: %s (logId=%d)", log_.getStatus(), logId))
                     .withCode("INVALID_STATUS");
         }
+        // W6 #27: 4 眼原则 — 审批人不能与提交人相同 (防自批漏洞)。
+        // 撤回是高风险写操作 (软删报工 + 回滚库存均价), 提交人自己批准 = 无监督。
+        // 参考 ArApServiceImpl 4-eyes 范式 (审批人 ≠ 提交人)。
+        if (log_.getSubmittedBy() != null && log_.getSubmittedBy().equals(approvedBy)) {
+            throw new BusinessException(403, "审批人不能与提交人相同 (4 眼原则)")
+                    .withCode("SELF_APPROVAL_FORBIDDEN")
+                    .withHint("请使用其他主管账号审批此撤回申请")
+                    .withHintTarget("审批人");
+        }
         log_.setApprovedBy(approvedBy);
         log_.setApprovedAt(LocalDateTime.now());
         log_.setStatus(ReportReversalLog.ReversalStatus.APPROVED);
@@ -264,6 +277,7 @@ public class ReportReversalServiceImpl implements ReportReversalService {
                     "撤回申请 %d 当前状态为 %s，无法拒绝", logId, log_.getStatus()))
                     .withCode("INVALID_STATUS");
         }
+        Long submitter = log_.getSubmittedBy();
         log_.setApprovedBy(approvedBy);
         log_.setApprovedAt(LocalDateTime.now());
         log_.setStatus(ReportReversalLog.ReversalStatus.REJECTED);
@@ -272,6 +286,25 @@ public class ReportReversalServiceImpl implements ReportReversalService {
         }
         reversalLogRepo.save(log_);
         log.info("[SP2] rejectReversal logId={} approvedBy={}", logId, approvedBy);
+
+        // W6 #27: 驳回后通知申请人 (App 内通知)。fail-soft — 通知失败不回滚驳回事务
+        // (reversal-log 已置 REJECTED 是核心结果, 通知只是 side-effect)。审批人自己驳回则不通知。
+        if (submitter != null && !submitter.equals(approvedBy)) {
+            try {
+                String reasonText = (reason != null && !reason.isBlank()) ? reason : "未填写";
+                notificationService.sendNotification(
+                        log_.getFactoryId(),
+                        submitter,
+                        "报工撤回申请被驳回",
+                        String.format("您对批次 %d 提交的报工撤回申请已被驳回。驳回原因: %s",
+                                log_.getBatchId(), reasonText),
+                        NotificationType.WARNING,
+                        "REVERSAL",
+                        String.valueOf(logId));
+            } catch (Exception e) {
+                log.warn("[SP2] rejectReversal 通知申请人失败 logId={} submitter={}", logId, submitter, e);
+            }
+        }
     }
 
     @Override
