@@ -179,7 +179,11 @@ public class PaymentRequestServiceImpl implements PaymentRequestService {
 
         // Step 2: 计算 balanceAfter 并保存 ArApTransaction
         BigDecimal amount = pr.getAmount();
-        BigDecimal newBalance = supplier.getCurrentBalance().subtract(amount);
+        // null-safe: supplier.currentBalance 为 null 时视为 0（未初始化账户，付款后余额为负 amount）
+        BigDecimal currentBalance = supplier.getCurrentBalance() != null
+                ? supplier.getCurrentBalance()
+                : BigDecimal.ZERO;
+        BigDecimal newBalance = currentBalance.subtract(amount);
 
         ArApTransaction tx = new ArApTransaction();
         tx.setFactoryId(pr.getFactoryId());
