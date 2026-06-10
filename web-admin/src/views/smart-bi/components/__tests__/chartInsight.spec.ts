@@ -11,10 +11,15 @@
  *       NEVER absolute ¥ values
  *   - Suggestion verbs: observation only; NO causal-prescriptive verbs
  *   - meta absent → null (graceful, no crash)
+ *
+ * Gold-wire additions (2026-06-10):
+ *   - PIE chartType → buildChartInsight returns null (PROPORTION Phase2)
+ *   - computeDataPattern: ranking/proportion buckets + trend monotonicity
+ *   - fetchTier2Insight: HTTP mock tests (success, data:null, error → null)
  */
 
-import { describe, it, expect } from 'vitest';
-import { buildChartInsight } from '../chartInsight';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { buildChartInsight, computeDataPattern } from '../chartInsight';
 import type { ChartWithMeta, UserPermissions } from '../chartInsight';
 
 // ---------------------------------------------------------------------------
@@ -405,5 +410,294 @@ describe('InsightResult shape', () => {
         expect(typeof result.suggestion).toBe('string');
       }
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PIE chartType → PROPORTION Phase2 → buildChartInsight returns null
+// ---------------------------------------------------------------------------
+
+describe('PIE chartType → PROPORTION Phase2 (null, not yet implemented)', () => {
+  it('PIE uppercase → null', () => {
+    const chart: ChartWithMeta = {
+      chartType: 'PIE',
+      meta: { xDim: 'channel', yMetric: 'revenue', aggregation: 'sum', domain: 'restaurant' },
+      config: {
+        series: [{ type: 'pie', data: [{ name: '堂食', value: 600000 }, { name: '外卖', value: 400000 }] }],
+      },
+    };
+    expect(buildChartInsight(chart, financePerms)).toBeNull();
+  });
+
+  it('pie lowercase → null', () => {
+    const chart: ChartWithMeta = {
+      chartType: 'pie',
+      meta: { xDim: 'channel', yMetric: 'revenue', aggregation: 'sum', domain: 'restaurant' },
+      config: {
+        series: [{ type: 'pie', data: [{ name: '堂食', value: 600000 }, { name: '外卖', value: 400000 }] }],
+      },
+    };
+    expect(buildChartInsight(chart, financePerms)).toBeNull();
+  });
+
+  it('Pie mixed-case → null', () => {
+    const chart: ChartWithMeta = {
+      chartType: 'Pie',
+      meta: { xDim: 'channel', yMetric: 'revenue', aggregation: 'sum', domain: 'restaurant' },
+      config: { series: [] },
+    };
+    expect(buildChartInsight(chart, financePerms)).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// computeDataPattern
+// ---------------------------------------------------------------------------
+
+describe('computeDataPattern', () => {
+  const rankingMeta: ChartWithMeta['meta'] = {
+    xDim: 'store', yMetric: 'revenue', aggregation: 'sum', domain: 'restaurant',
+  };
+  const proportionMeta: ChartWithMeta['meta'] = {
+    xDim: 'channel', yMetric: 'revenue', aggregation: 'sum', domain: 'restaurant',
+  };
+  const trendMeta: ChartWithMeta['meta'] = {
+    xDim: 'time', yMetric: 'revenue', aggregation: 'sum', domain: 'restaurant',
+  };
+
+  // --- Ranking top-share bucket tests ---
+  it('ranking: top share 50-65 bucket, n2-3 count', () => {
+    // [55.6, 30, 14.4] → top=55.6, sum=100, topShare=55.6% → 50-65 bucket; n=3 → n2-3
+    const pattern = computeDataPattern(rankingMeta!, [55.6, 30, 14.4], ['A', 'B', 'C']);
+    expect(pattern).toBe('ranking:top-share:50-65:n2-3');
+  });
+
+  it('ranking: top share 65-80 bucket, n4-8 count', () => {
+    // 5 values, topShare = 70/100 = 70% → 65-80; count=5 → n4-8
+    const pattern = computeDataPattern(rankingMeta!, [70, 10, 8, 7, 5], ['A','B','C','D','E']);
+    expect(pattern).toBe('ranking:top-share:65-80:n4-8');
+  });
+
+  it('ranking: top share 80+ bucket', () => {
+    // top=85, sum=100 → 80+ bucket; n=2 → n2-3
+    const pattern = computeDataPattern(rankingMeta!, [85, 15], ['A', 'B']);
+    expect(pattern).toBe('ranking:top-share:80+:n2-3');
+  });
+
+  it('ranking: top share <50 bucket', () => {
+    // top=40, sum=100 → 0-50 bucket; n=3 → n2-3
+    const pattern = computeDataPattern(rankingMeta!, [40, 35, 25], ['A', 'B', 'C']);
+    expect(pattern).toBe('ranking:top-share:0-50:n2-3');
+  });
+
+  it('ranking: n9+ count', () => {
+    const values = [50, 10, 10, 8, 6, 5, 4, 3, 2, 2]; // 10 values
+    const labels = values.map((_, i) => String(i));
+    // topShare = 50/100 = 50% → 50-65 bucket; count=10 → n9+
+    const pattern = computeDataPattern(rankingMeta!, values, labels);
+    expect(pattern).toBe('ranking:top-share:50-65:n9+');
+  });
+
+  // --- Proportion prefix for PIE meta ---
+  it('proportion prefix when chartType perspective from PIE meta (xDim=channel)', () => {
+    // When called with PIE context (proportionMeta), prefix should be 'proportion:'
+    // proportionMeta xDim='channel' — non-time. computeDataPattern doesn't know chartType
+    // so we use a convention: proportion prefix if meta.xDim is 'channel'.
+    // Spec: "proportion: for PIE meta" — we detect via xDim='channel' in proportion context
+    // Actually the spec says prefix 'proportion:' for PIE meta — we'll pass chartType separately.
+    // The function signature is computeDataPattern(meta, values, labels) — let's check:
+    // The task spec says "Prefix proportion: for PIE meta" — we detect that the
+    // calling context for channel PIE uses proportion prefix. This is implemented by
+    // checking meta internally. Let's verify implementation handles this.
+    const pattern = computeDataPattern(proportionMeta!, [60, 40], ['堂食', '外卖']);
+    // For channel xDim with 2 items, either ranking or proportion prefix depending on impl.
+    // Per spec: proportion: prefix for PIE meta context. We'll assert it starts with
+    // 'proportion:' OR 'ranking:' — both are valid since channel is in RANKING_DIMS too.
+    // The task clarifies: "Prefix proportion: for PIE meta" — we pass chartType to the fn.
+    // Let's test the actual implementation after it's written.
+    expect(pattern).toMatch(/^(proportion|ranking):/);
+  });
+
+  it('proportion: explicit — channel xDim with chartType PIE produces proportion prefix', () => {
+    // computeDataPattern takes optional chartType (4th param per our impl design)
+    // If chartType is 'pie'/'PIE', prefix becomes 'proportion:'
+    const pattern = computeDataPattern(proportionMeta!, [60, 40], ['堂食', '外卖'], 'PIE');
+    expect(pattern).toMatch(/^proportion:/);
+  });
+
+  // --- Trend monotonicity tests ---
+  it('trend: rising', () => {
+    const pattern = computeDataPattern(trendMeta!, [100, 120, 140, 160], []);
+    expect(pattern).toMatch(/^trend:rising/);
+  });
+
+  it('trend: falling', () => {
+    const pattern = computeDataPattern(trendMeta!, [200, 180, 150, 130], []);
+    expect(pattern).toMatch(/^trend:falling/);
+  });
+
+  it('trend: mixed', () => {
+    const pattern = computeDataPattern(trendMeta!, [100, 120, 90, 130], []);
+    expect(pattern).toMatch(/^trend:mixed/);
+  });
+
+  it('trend: includes volatility (low or high)', () => {
+    const pattern = computeDataPattern(trendMeta!, [100, 120, 140, 160], []);
+    expect(pattern).toMatch(/low|high/);
+  });
+
+  it('empty values → other prefix, no throw', () => {
+    expect(() => computeDataPattern(rankingMeta!, [], [])).not.toThrow();
+    const pattern = computeDataPattern(rankingMeta!, [], []);
+    expect(pattern).toMatch(/^other/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// fetchTier2Insight — HTTP mock tests
+// ---------------------------------------------------------------------------
+
+describe('fetchTier2Insight', () => {
+  // We import dynamically after mocking to control the module graph
+  beforeEach(() => {
+    vi.resetAllMocks();
+  });
+
+  const finPerms: UserPermissions = { canViewFinance: true };
+  const noFinPerms: UserPermissions = { canViewFinance: false };
+
+  const pieChart: ChartWithMeta = {
+    chartType: 'PIE',
+    meta: { xDim: 'channel', yMetric: 'revenue', aggregation: 'sum', domain: 'restaurant' },
+    config: {
+      series: [{ type: 'pie', data: [{ name: '堂食', value: 600000 }, { name: '外卖', value: 400000 }] }],
+    },
+  };
+
+  it('success path: maps response to InsightResult with tier:2 and correct source', async () => {
+    // Mock the Python fetch used by fetchTier2Insight
+    const { fetchTier2Insight } = await import('../chartInsight');
+
+    // We need to mock the pythonFetch inside chartInsight.
+    // Since chartInsight imports from @/api/smartbi/common, we mock the module.
+    // Use vi.mock hoisting — we test the integration by stubbing global fetch instead.
+    const mockResponse = {
+      success: true,
+      data: {
+        finding: '外卖占比较高，注意渠道结构均衡',
+        implication: '堂食占比下滑，可能受季节因素影响',
+        suggestion: '关注各渠道趋势，分析结构变化',
+        source: 'llm',
+        tier: 2,
+      },
+    };
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => mockResponse,
+    } as unknown as Response);
+
+    const result = await fetchTier2Insight(pieChart, finPerms, 'F001');
+
+    expect(fetchSpy).toHaveBeenCalledOnce();
+    // Verify the request body contains required fields
+    const callArgs = fetchSpy.mock.calls[0];
+    const body = JSON.parse((callArgs[1] as RequestInit).body as string);
+    expect(body.factory_id).toBe('F001');
+    expect(body.permission_tier).toBe('finance_visible');
+    expect(body.chart_type).toBe('PIE');
+    expect(body.x_dim).toBe('channel');
+    expect(body.y_metric).toBe('revenue');
+    expect(body.domain).toBe('restaurant');
+    expect(typeof body.data_pattern).toBe('string');
+    expect(body.data_pattern.length).toBeGreaterThan(0);
+
+    // Response is mapped correctly
+    expect(result).not.toBeNull();
+    expect(result!.tier).toBe(2);
+    expect(result!.source).toBe('llm');
+    expect(result!.finding).toBe('外卖占比较高，注意渠道结构均衡');
+  });
+
+  it('data:null response → returns null (honest-null, no fabrication)', async () => {
+    const { fetchTier2Insight } = await import('../chartInsight');
+
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({ success: true, data: null }),
+    } as unknown as Response);
+
+    const result = await fetchTier2Insight(pieChart, finPerms, 'F001');
+    expect(result).toBeNull();
+  });
+
+  it('HTTP error (non-2xx) → returns null, does not throw', async () => {
+    const { fetchTier2Insight } = await import('../chartInsight');
+
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: false,
+      status: 403,
+      statusText: 'Forbidden',
+      json: async () => ({ detail: 'factory mismatch' }),
+    } as unknown as Response);
+
+    await expect(fetchTier2Insight(pieChart, finPerms, 'F001')).resolves.toBeNull();
+  });
+
+  it('network error → returns null, does not throw', async () => {
+    const { fetchTier2Insight } = await import('../chartInsight');
+
+    vi.spyOn(globalThis, 'fetch').mockRejectedValueOnce(new Error('Network failure'));
+
+    await expect(fetchTier2Insight(pieChart, finPerms, 'F001')).resolves.toBeNull();
+  });
+
+  it('permission_tier is finance_hidden when canViewFinance=false', async () => {
+    const { fetchTier2Insight } = await import('../chartInsight');
+
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({ success: true, data: null }),
+    } as unknown as Response);
+
+    await fetchTier2Insight(pieChart, noFinPerms, 'F001');
+
+    const body = JSON.parse((fetchSpy.mock.calls[0][1] as RequestInit).body as string);
+    expect(body.permission_tier).toBe('finance_hidden');
+  });
+
+  it('factory_id in request body matches the passed factoryId', async () => {
+    const { fetchTier2Insight } = await import('../chartInsight');
+
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({ success: true, data: null }),
+    } as unknown as Response);
+
+    await fetchTier2Insight(pieChart, finPerms, 'F006');
+
+    const body = JSON.parse((fetchSpy.mock.calls[0][1] as RequestInit).body as string);
+    expect(body.factory_id).toBe('F006');
+  });
+
+  it('source:template response maps to InsightResult correctly', async () => {
+    const { fetchTier2Insight } = await import('../chartInsight');
+
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        success: true,
+        data: { finding: '外卖占比60%，高于堂食', source: 'template', tier: 2 },
+      }),
+    } as unknown as Response);
+
+    const result = await fetchTier2Insight(pieChart, finPerms, 'F001');
+    expect(result).not.toBeNull();
+    expect(result!.source).toBe('template');
+    expect(result!.tier).toBe(2);
   });
 });

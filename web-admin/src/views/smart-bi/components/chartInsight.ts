@@ -1,7 +1,9 @@
 /**
- * U2 — Chart Auto-Insight Tier 1 (rules-first, 0 LLM token).
+ * U2 — Chart Auto-Insight Tier 1 (rules-first, 0 LLM token) + Tier 2 gateway.
  *
- * Phase 1: TREND + RANKING families.
+ * Phase 1: TREND + RANKING families (Tier 1).
+ * Phase 2 (partial): PIE/PROPORTION → Tier 1 returns null → callers invoke fetchTier2Insight.
+ *
  * Reads chart._meta (ChartMeta, supplied by backend U1) + userPermissions,
  * produces a structured InsightResult or null (data insufficient → no display).
  *
@@ -11,6 +13,11 @@
  * - Suggestion verbs: observation only (关注/排查/分析/了解)
  *   NEVER causal-prescriptive (复制/引流/加大/扩张/推广)
  * - Replaces getChartMiniInsight() in SmartBIAnalysis.vue (single Tier 1 source)
+ *
+ * Gold-wire additions (2026-06-10):
+ * - PIE chartType → Tier 1 returns null (PROPORTION Phase 2, not yet implemented)
+ * - computeDataPattern: deterministic canonical bucket string for Tier 2 request
+ * - fetchTier2Insight: async POST to /api/smartbi/chart-insight; honest-null on failure
  */
 
 // ============================================================
@@ -289,6 +296,9 @@ function buildRankingInsight(
  * @param permissions  Current user's permission context.
  * @returns  Structured InsightResult, or null when data is insufficient
  *           (caller should render nothing — no fallback fabrication).
+ *
+ * PIE / PROPORTION family → always null in Phase 1 (Phase 2 not yet implemented).
+ * Callers should fall back to fetchTier2Insight when null is returned.
  */
 export function buildChartInsight(
   chart: ChartWithMeta,
@@ -296,6 +306,10 @@ export function buildChartInsight(
 ): InsightResult | null {
   // Guard: meta must exist
   if (!chart?.meta) return null;
+
+  // PIE = PROPORTION family → Phase 2, not yet implemented → always null
+  // Callers (e.g. RestaurantGoldGrid) should invoke fetchTier2Insight instead.
+  if (chart.chartType && chart.chartType.toLowerCase() === 'pie') return null;
 
   const meta = chart.meta;
 
@@ -311,4 +325,259 @@ export function buildChartInsight(
 
   // Unrecognized family in Phase 1 → null (Phase 2 will add PROPORTION/COMPARISON/KPI)
   return null;
+}
+
+// ============================================================
+// computeDataPattern — deterministic canonical bucket string (spec §2.1)
+// ============================================================
+
+/**
+ * Compute a deterministic canonical data-pattern string for Tier 2 requests.
+ *
+ * - RANKING / PROPORTION: topShare bucketed + count bucket
+ *   e.g. `ranking:top-share:50-65:n4-8` or `proportion:top-share:65-80:n2-3`
+ * - TREND (xDim=time): monotonicity + volatility
+ *   e.g. `trend:rising:low`
+ * - Empty values → `other` (never throws)
+ *
+ * @param meta        ChartMeta (for routing to correct family)
+ * @param values      Numeric series values
+ * @param labels      Parallel string labels (may be empty for TREND)
+ * @param chartType   Optional: 'pie'/'PIE' triggers 'proportion:' prefix instead of 'ranking:'
+ */
+export function computeDataPattern(
+  meta: ChartMeta,
+  values: number[],
+  labels: string[],
+  chartType?: string,
+): string {
+  try {
+    if (!values.length) return 'other:empty';
+
+    // TREND family
+    if (meta.xDim === 'time') {
+      if (values.length < 2) return 'trend:insufficient';
+      const mono = monotonicity(values);
+
+      // Volatility: σ/μ at threshold 0.3
+      const mean = values.reduce((s, v) => s + v, 0) / values.length;
+      let volatility: 'low' | 'high' = 'low';
+      if (mean !== 0) {
+        const variance = values.reduce((s, v) => s + (v - mean) ** 2, 0) / values.length;
+        const cv = Math.sqrt(variance) / Math.abs(mean);
+        volatility = cv >= 0.3 ? 'high' : 'low';
+      }
+      return `trend:${mono}:${volatility}`;
+    }
+
+    // RANKING / PROPORTION family
+    const isPie = chartType ? chartType.toLowerCase() === 'pie' : false;
+    const prefix = isPie ? 'proportion' : 'ranking';
+
+    const positiveValues = values.filter((v) => v > 0);
+    if (!positiveValues.length) return `${prefix}:no-data`;
+
+    const total = positiveValues.reduce((s, v) => s + v, 0);
+    if (total === 0) return `${prefix}:zero-total`;
+
+    const maxVal = Math.max(...positiveValues);
+    const topSharePct = (maxVal / total) * 100;
+
+    // Top-share bucket
+    let shareBucket: string;
+    if (topSharePct >= 80) {
+      shareBucket = '80+';
+    } else if (topSharePct >= 65) {
+      shareBucket = '65-80';
+    } else if (topSharePct >= 50) {
+      shareBucket = '50-65';
+    } else {
+      shareBucket = '0-50';
+    }
+
+    // Count bucket
+    const n = positiveValues.length;
+    let countBucket: string;
+    if (n >= 9) {
+      countBucket = 'n9+';
+    } else if (n >= 4) {
+      countBucket = 'n4-8';
+    } else {
+      countBucket = 'n2-3';
+    }
+
+    // Suppress unused labels (may be used for richer patterns in future phases)
+    void labels;
+
+    return `${prefix}:top-share:${shareBucket}:${countBucket}`;
+  } catch {
+    return 'other:error';
+  }
+}
+
+// ============================================================
+// Tier 2 request/response types (mirrors Python ChartInsightRequest)
+// ============================================================
+
+interface Tier2Request {
+  chart_type: string;
+  x_dim: string;
+  y_metric: string;
+  aggregation: string;
+  domain: string;
+  data_pattern: string;
+  permission_tier: 'finance_visible' | 'finance_hidden';
+  factory_id: string;
+  series_values: number[];
+  series_labels: string[];
+}
+
+interface Tier2ResponseData {
+  finding: string;
+  implication?: string;
+  suggestion?: string;
+  source: 'rules' | 'template' | 'llm';
+  tier: number;
+}
+
+interface Tier2Response {
+  success: boolean;
+  data: Tier2ResponseData | null;
+}
+
+/**
+ * Extract PIE series values from a pie chart config.
+ * For PIE: values are in series[0].data[i].value; labels in .name.
+ */
+function extractPieValues(config: ChartWithMeta['config']): number[] {
+  const series = config?.series;
+  if (!series?.length) return [];
+  const s = series[0];
+  if (!Array.isArray(s.data)) return [];
+  const result: number[] = [];
+  for (const d of s.data) {
+    if (typeof d === 'number' && isFinite(d)) {
+      result.push(d);
+    } else if (d !== null && typeof d === 'object' && 'value' in d) {
+      const v = (d as { value?: unknown }).value;
+      if (typeof v === 'number' && isFinite(v)) result.push(v);
+    }
+  }
+  return result;
+}
+
+function extractPieLabels(config: ChartWithMeta['config']): string[] {
+  const series = config?.series;
+  if (!series?.length) return [];
+  const s = series[0];
+  if (!Array.isArray(s.data)) return [];
+  const result: string[] = [];
+  for (const d of s.data) {
+    if (d !== null && typeof d === 'object' && 'name' in d) {
+      result.push(String((d as { name?: unknown }).name ?? ''));
+    }
+  }
+  return result;
+}
+
+/**
+ * The Python SmartBI service URL — mirrors how pythonFetch resolves it.
+ * Uses the same env var as common.ts so auth headers and baseURL are consistent.
+ */
+const PYTHON_SMARTBI_URL =
+  typeof import.meta !== 'undefined' && import.meta.env
+    ? (import.meta.env.VITE_SMARTBI_URL as string | undefined) ?? '/smartbi-api'
+    : '/smartbi-api';
+
+/**
+ * Fetch a Tier 2 LLM/template insight from the backend.
+ *
+ * Posts to POST /api/smartbi/chart-insight (JWT-authenticated via auth header
+ * from localStorage, same mechanism as pythonFetch in common.ts).
+ *
+ * - `factory_id` MUST equal the JWT factoryId — pass the component's prop factoryId.
+ * - On success: returns mapped InsightResult (tier:2, source from response).
+ * - On data:null / non-2xx / any error: returns null (honest-null, no fabrication).
+ * - Never throws to the caller.
+ *
+ * @param chart      ChartWithMeta (provides meta, config, chartType for request body)
+ * @param perms      User permissions (gates permission_tier field)
+ * @param factoryId  JWT-matching factory ID (from component prop, NOT derived internally)
+ */
+export async function fetchTier2Insight(
+  chart: ChartWithMeta,
+  perms: UserPermissions,
+  factoryId: string,
+): Promise<InsightResult | null> {
+  if (!chart.meta) return null;
+
+  try {
+    const meta = chart.meta;
+    const chartType = (chart.chartType ?? 'bar').toUpperCase();
+    const isPie = chartType === 'PIE';
+
+    // Extract series data — PIE uses .data[i].value/.name; others use xAxis + series[i].data
+    const seriesValues = isPie ? extractPieValues(chart.config) : extractValues(chart.config);
+    const seriesLabels = isPie ? extractPieLabels(chart.config) : extractLabels(chart.config);
+
+    const dataPattern = computeDataPattern(meta, seriesValues, seriesLabels, chart.chartType);
+    const permissionTier: 'finance_visible' | 'finance_hidden' = perms.canViewFinance
+      ? 'finance_visible'
+      : 'finance_hidden';
+
+    const body: Tier2Request = {
+      chart_type: chartType,
+      x_dim: meta.xDim,
+      y_metric: meta.yMetric,
+      aggregation: meta.aggregation,
+      domain: meta.domain,
+      data_pattern: dataPattern,
+      permission_tier: permissionTier,
+      factory_id: factoryId,
+      series_values: seriesValues,
+      series_labels: seriesLabels,
+    };
+
+    // Auth header — same pattern as getPythonAuthHeaders() in common.ts
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+    // Prefer localStorage token (same as common.ts getPythonAuthHeaders)
+    if (typeof localStorage !== 'undefined') {
+      const token = localStorage.getItem('cretas_access_token');
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+      const secret = typeof import.meta !== 'undefined' && import.meta.env
+        ? (import.meta.env.VITE_PYTHON_SECRET as string | undefined) ?? ''
+        : '';
+      if (secret) headers['X-Internal-Secret'] = secret;
+    }
+
+    const response = await fetch(`${PYTHON_SMARTBI_URL}/api/smartbi/chart-insight`, {
+      method: 'POST',
+      headers,
+      credentials: 'include',
+      body: JSON.stringify(body),
+    });
+
+    if (!response.ok) {
+      console.warn(`[chart-insight] Tier2 HTTP ${response.status} for factory ${factoryId}`);
+      return null;
+    }
+
+    const json = (await response.json()) as Tier2Response;
+
+    if (!json.success || !json.data) return null;
+
+    const d = json.data;
+    return {
+      finding: d.finding,
+      implication: d.implication,
+      suggestion: d.suggestion,
+      source: d.source,
+      tier: 2,
+    };
+  } catch (err) {
+    console.warn('[chart-insight] Tier2 fetch failed (honest-null):', err);
+    return null;
+  }
 }

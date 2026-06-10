@@ -44,6 +44,12 @@
             </span>
             <span class="rgg-rank-val">{{ formatMoney(s.revenue) }}</span>
           </div>
+          <!-- Tier 1 RANKING insight — fires instantly, no LLM, badge: "数据驱动" -->
+          <ChartInsight
+            v-if="storeInsight"
+            :insight="storeInsight"
+            depth="detailed"
+          />
         </div>
         <el-empty v-else description="暂无门店营收数据" :image-size="60" />
       </el-card>
@@ -63,6 +69,15 @@
             <span class="rgg-rank-pct">{{ c.sharePct.toFixed(1) }}%</span>
             <span class="rgg-rank-val">{{ formatMoney(c.amount) }}</span>
           </div>
+          <!--
+            PIE = PROPORTION Phase2: Tier1 always null → Tier2 (live LLM) call.
+            Shows loading placeholder while fetchTier2Insight is in flight.
+          -->
+          <ChartInsight
+            :insight="channelInsight"
+            :loading="channelInsightLoading"
+            depth="detailed"
+          />
         </div>
         <el-empty v-else description="暂无渠道数据" :image-size="60" />
       </el-card>
@@ -76,6 +91,12 @@ import { Refresh, Sell, PieChart, MagicStick } from '@element-plus/icons-vue';
 import { getFinanceSummary, getChannelBreakdown } from '@/api/smartbi/gold';
 import { formatNumber } from '@/utils/format-number';
 import { buildRevenueInsight } from './revenueInsight';
+import { buildChartInsight, fetchTier2Insight } from './chartInsight';
+import type { InsightResult, ChartWithMeta } from './chartInsight';
+import { usePermissionStore } from '@/store/modules/permission';
+import ChartInsight from './ChartInsight.vue';
+
+const permissionStore = usePermissionStore();
 
 const props = defineProps<{
   factoryId: string;
@@ -88,11 +109,17 @@ const loadError = ref('');
 const topStores = ref<Array<{ storeId: number; storeName: string; revenue: number; billCount: number }>>([]);
 const channels = ref<Array<{ channelId: number; channelName: string; amount: number; billCount: number; sharePct: number }>>([]);
 
+// Per-card insight refs
+const storeInsight = ref<InsightResult | null>(null);
+const channelInsight = ref<InsightResult | null>(null);
+const channelInsightLoading = ref(false);
+
 const dateLabel = computed(() =>
   props.dateRange ? `${props.dateRange[0]} 至 ${props.dateRange[1]}` : '全部数据',
 );
 
 // WS2 #7: 规则洞察 (0 LLM) — 从已 fetch 的门店营收 + 渠道占比算一句话; 数据不足返 null。
+// UNTOUCHED — leave the top combined insight bar as-is.
 const revenueInsight = computed<string | null>(() =>
   buildRevenueInsight(topStores.value, channels.value),
 );
@@ -109,18 +136,78 @@ function formatMoney(v: number | null | undefined): string {
   return '¥' + formatNumber(v);
 }
 
+/**
+ * Build and fire per-card insights after data loads.
+ * Captures `factoryId` at call time to guard against stale updates on re-load.
+ */
+async function computeInsights(capturedFactoryId: string): Promise<void> {
+  const perms = { canViewFinance: permissionStore.canWrite('finance') };
+
+  // --- Store ranking card: Tier 1 RANKING (xDim=store) — instant, no LLM ---
+  const storeChart: ChartWithMeta = {
+    chartType: 'BAR',
+    meta: { xDim: 'store', yMetric: 'revenue', aggregation: 'sum', domain: 'restaurant' },
+    config: {
+      xAxis: { data: topStores.value.map((s) => s.storeName) },
+      series: [{ type: 'bar', data: topStores.value.map((s) => s.revenue) }],
+    },
+  };
+  storeInsight.value = buildChartInsight(storeChart, perms);
+  // If Tier 1 returns null (< 2 stores), storeInsight stays null → renders nothing (honest).
+
+  // --- Channel card: PIE → Tier 1 returns null → Tier 2 (live LLM) ---
+  const channelChart: ChartWithMeta = {
+    chartType: 'PIE',
+    meta: { xDim: 'channel', yMetric: 'revenue', aggregation: 'sum', domain: 'restaurant' },
+    config: {
+      series: [{
+        type: 'pie',
+        data: channels.value.map((c) => ({ name: c.channelName, value: c.amount })),
+      }],
+    },
+  };
+
+  // buildChartInsight returns null for PIE (PROPORTION Phase2) — falls through to Tier 2
+  const tier1Channel = buildChartInsight(channelChart, perms);
+  if (tier1Channel !== null) {
+    // Unexpected non-null (future Phase 2 would hit here) — use it directly
+    channelInsight.value = tier1Channel;
+  } else {
+    // Fire Tier 2 async — guard against stale factoryId on re-load
+    channelInsight.value = null;
+    channelInsightLoading.value = true;
+    try {
+      const result = await fetchTier2Insight(channelChart, perms, capturedFactoryId);
+      // Only apply if factoryId hasn't changed while we were awaiting
+      if (capturedFactoryId === props.factoryId) {
+        channelInsight.value = result;
+      }
+    } finally {
+      if (capturedFactoryId === props.factoryId) {
+        channelInsightLoading.value = false;
+      }
+    }
+  }
+}
+
 async function load() {
   if (!props.factoryId || !props.dateRange) return;
   loading.value = true;
   loadError.value = '';
+  storeInsight.value = null;
+  channelInsight.value = null;
+  channelInsightLoading.value = false;
   const [startDate, endDate] = props.dateRange;
+  const capturedFactoryId = props.factoryId;
   try {
     const [fin, chan] = await Promise.all([
-      getFinanceSummary({ factoryId: props.factoryId, startDate, endDate, topNStores: 10 }),
-      getChannelBreakdown({ factoryId: props.factoryId, startDate, endDate }),
+      getFinanceSummary({ factoryId: capturedFactoryId, startDate, endDate, topNStores: 10 }),
+      getChannelBreakdown({ factoryId: capturedFactoryId, startDate, endDate }),
     ]);
     topStores.value = fin.topStores ?? [];
     channels.value = chan.channels ?? [];
+    // Compute insights after data is available; fire async Tier 2 in parallel
+    void computeInsights(capturedFactoryId);
   } catch (e) {
     // 禁降级假数据: 失败显式报错, 不伪造
     loadError.value = e instanceof Error ? e.message : '请求失败';
