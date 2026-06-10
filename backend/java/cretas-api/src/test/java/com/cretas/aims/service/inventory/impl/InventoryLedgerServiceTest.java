@@ -277,4 +277,118 @@ class InventoryLedgerServiceTest {
                 () -> service.getLedger(null, START, END, null),
                 "factoryId = null 应抛 NPE (Objects.requireNonNull)");
     }
+
+    // ============== 导出 xlsx 测试 (审计 Tier0 #04 货不对板修复) ==============
+
+    /** 读回 xlsx 全部行 (含表头), 每行是 cellIndex→value 的字符串 list. */
+    private List<List<String>> readXlsx(byte[] bytes) {
+        List<List<String>> all = new java.util.ArrayList<>();
+        com.alibaba.excel.EasyExcel.read(new java.io.ByteArrayInputStream(bytes),
+                new com.alibaba.excel.event.AnalysisEventListener<java.util.Map<Integer, String>>() {
+                    @Override
+                    public void invokeHeadMap(java.util.Map<Integer, String> headMap,
+                                              com.alibaba.excel.context.AnalysisContext context) {
+                        all.add(orderedValues(headMap));
+                    }
+
+                    @Override
+                    public void invoke(java.util.Map<Integer, String> data,
+                                       com.alibaba.excel.context.AnalysisContext context) {
+                        all.add(orderedValues(data));
+                    }
+
+                    @Override
+                    public void doAfterAllAnalysed(com.alibaba.excel.context.AnalysisContext context) {
+                    }
+
+                    private List<String> orderedValues(java.util.Map<Integer, String> map) {
+                        return new java.util.TreeMap<>(map).values().stream()
+                                .map(v -> v == null ? "" : v)
+                                .collect(java.util.stream.Collectors.toList());
+                    }
+                }).sheet().doRead();
+        return all;
+    }
+
+    @Test
+    @DisplayName("T8: 导出含台账列(非凭证字段) — 货不对板修复核心断言")
+    void testExport_containsLedgerColumns_notVoucherFields() throws Exception {
+        InventoryLedgerSnapshot snap = buildSnapshot(MAT_ID,
+                new BigDecimal("50.000000"), new BigDecimal("3000.00"));
+        when(materialTypeRepo.findByFactoryId(FACTORY_ID))
+                .thenReturn(List.of(buildMaterial(MAT_ID, "猪舌", "kg")));
+        when(snapshotRepo.findLatestBeforePeriod(eq(FACTORY_ID), eq(MAT_ID),
+                eq(SnapshotType.PERIOD_CLOSE), anyInt()))
+                .thenReturn(List.of(snap));
+        stubQueryReturnsZero();
+
+        var out = new java.io.ByteArrayOutputStream();
+        String fileName = service.exportInventoryLedger(FACTORY_ID, START, END, null, true, out);
+
+        assertTrue(fileName.startsWith("inventory-ledger_"),
+                "文件名应标识进销存台账, 不是 voucher-ledger");
+        List<List<String>> rows = readXlsx(out.toByteArray());
+        assertFalse(rows.isEmpty(), "应至少含表头");
+
+        List<String> header = rows.get(0);
+        // 进销存台账列必须出现
+        assertTrue(header.contains("期初数量"), "表头应含进销存列 期初数量");
+        assertTrue(header.contains("期末数量"), "表头应含进销存列 期末数量");
+        assertTrue(header.contains("入库数量"), "表头应含进销存列 入库数量");
+        assertTrue(header.contains("销售出货数量"), "表头应含进销存列 销售出货数量");
+        // 凭证序时账字段不得出现 (货不对板防回归)
+        assertFalse(header.contains("凭证号"), "不应含凭证字段 凭证号");
+        assertFalse(header.contains("借方金额"), "不应含凭证字段 借方金额");
+        assertFalse(header.contains("贷方金额"), "不应含凭证字段 贷方金额");
+        assertFalse(header.contains("科目编码"), "不应含凭证字段 科目编码");
+
+        // 数据行含物料名 + 期初数量 50
+        List<String> dataRow = rows.get(1);
+        assertTrue(dataRow.contains("猪舌"), "数据行应含物料名");
+    }
+
+    @Test
+    @DisplayName("T9: includePrices=true → xlsx 含金额列")
+    void testExport_includePrices_hasAmountColumns() throws Exception {
+        InventoryLedgerSnapshot snap = buildSnapshot(MAT_ID,
+                new BigDecimal("50.000000"), new BigDecimal("3000.00"));
+        when(materialTypeRepo.findByFactoryId(FACTORY_ID))
+                .thenReturn(List.of(buildMaterial(MAT_ID, "猪舌", "kg")));
+        when(snapshotRepo.findLatestBeforePeriod(anyString(), anyString(), any(), anyInt()))
+                .thenReturn(List.of(snap));
+        stubQueryReturnsZero();
+
+        var out = new java.io.ByteArrayOutputStream();
+        service.exportInventoryLedger(FACTORY_ID, START, END, null, true, out);
+
+        List<String> header = readXlsx(out.toByteArray()).get(0);
+        assertTrue(header.contains("期初金额"), "财务角色导出应含 期初金额");
+        assertTrue(header.contains("期末金额"), "财务角色导出应含 期末金额");
+        assertTrue(header.contains("移动均价"), "财务角色导出应含 移动均价");
+    }
+
+    @Test
+    @DisplayName("T10: includePrices=false → xlsx 不含任何金额列 (非财务角色脱敏)")
+    void testExport_noPrices_amountColumnsMasked() throws Exception {
+        InventoryLedgerSnapshot snap = buildSnapshot(MAT_ID,
+                new BigDecimal("50.000000"), new BigDecimal("3000.00"));
+        when(materialTypeRepo.findByFactoryId(FACTORY_ID))
+                .thenReturn(List.of(buildMaterial(MAT_ID, "猪舌", "kg")));
+        when(snapshotRepo.findLatestBeforePeriod(anyString(), anyString(), any(), anyInt()))
+                .thenReturn(List.of(snap));
+        stubQueryReturnsZero();
+
+        var out = new java.io.ByteArrayOutputStream();
+        service.exportInventoryLedger(FACTORY_ID, START, END, null, false, out);
+
+        List<String> header = readXlsx(out.toByteArray()).get(0);
+        // 数量列仍在
+        assertTrue(header.contains("期初数量"), "仓管角色仍可见数量列");
+        assertTrue(header.contains("期末数量"), "仓管角色仍可见数量列");
+        // 金额列全部遮蔽
+        assertFalse(header.contains("期初金额"), "仓管角色不得见 期初金额");
+        assertFalse(header.contains("期末金额"), "仓管角色不得见 期末金额");
+        assertFalse(header.contains("入库金额"), "仓管角色不得见 入库金额");
+        assertFalse(header.contains("移动均价"), "仓管角色不得见 移动均价");
+    }
 }

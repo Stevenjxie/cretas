@@ -1,5 +1,8 @@
 package com.cretas.aims.service.inventory.impl;
 
+import com.alibaba.excel.EasyExcel;
+import com.alibaba.excel.ExcelWriter;
+import com.alibaba.excel.write.metadata.WriteSheet;
 import com.cretas.aims.dto.inventory.InventoryLedgerLineDTO;
 import com.cretas.aims.entity.RawMaterialType;
 import com.cretas.aims.entity.enums.SnapshotType;
@@ -17,9 +20,12 @@ import org.springframework.transaction.annotation.Transactional;
 
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
+import java.io.OutputStream;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -95,6 +101,114 @@ public class InventoryLedgerServiceImpl implements InventoryLedgerService {
         return materials.stream()
                 .map(mt -> buildLine(factoryId, mt, startDate, endDate, openingSnapshots.get(mt.getId())))
                 .collect(Collectors.toList());
+    }
+
+    @Override
+    public String exportInventoryLedger(String factoryId, LocalDate startDate, LocalDate endDate,
+                                        String materialTypeId, boolean includePrices,
+                                        OutputStream out) throws Exception {
+        // 同源数据: 复用 getLedger 的进销存台账聚合 (期初/入/出/调拨/盘盈损/期末)
+        List<InventoryLedgerLineDTO> lines = getLedger(factoryId, startDate, endDate, materialTypeId);
+
+        List<List<Object>> rows = new ArrayList<>();
+        rows.add(buildHeaderRow(includePrices));
+        for (InventoryLedgerLineDTO line : lines) {
+            rows.add(buildDataRow(line, includePrices));
+        }
+
+        writeRawRows(out, rows);
+
+        String fileName = String.format("inventory-ledger_%s_%s_%s_%s.xlsx",
+                factoryId,
+                startDate.toString().replace("-", ""),
+                endDate.toString().replace("-", ""),
+                LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss")));
+        log.info("[SP11] exportInventoryLedger: factoryId={} rows={} includePrices={} file={}",
+                factoryId, lines.size(), includePrices, fileName);
+        return fileName;
+    }
+
+    /**
+     * 进销存台账表头. 数量列全角色可见; 金额列仅 includePrices=true 写入.
+     */
+    private List<Object> buildHeaderRow(boolean includePrices) {
+        List<Object> header = new ArrayList<>(List.of(
+                "物料编码", "物料名称", "单位",
+                "期初数量",
+                "入库数量",
+                "生产领用数量",
+                "销售出货数量",
+                "调拨入数量",
+                "调拨出数量",
+                "盘盈损数量",
+                "期末数量"));
+        if (includePrices) {
+            header.addAll(List.of(
+                    "期初金额",
+                    "入库金额",
+                    "出库金额",
+                    "盘盈损金额",
+                    "期末金额",
+                    "移动均价"));
+        }
+        return header;
+    }
+
+    private List<Object> buildDataRow(InventoryLedgerLineDTO line, boolean includePrices) {
+        List<Object> row = new ArrayList<>(List.of(
+                nvlStr(line.getMaterialCode()),
+                nvlStr(line.getMaterialName()),
+                nvlStr(line.getUnit()),
+                qtyCell(line.getOpeningQty()),
+                qtyCell(line.getInboundQty()),
+                qtyCell(line.getOutboundProductionQty()),
+                qtyCell(line.getOutboundSalesQty()),
+                qtyCell(line.getTransferInQty()),
+                qtyCell(line.getTransferOutQty()),
+                qtyCell(line.getAdjustQty()),
+                qtyCell(line.getClosingQty())));
+        if (includePrices) {
+            row.addAll(List.of(
+                    amountCell(line.getOpeningAmount()),
+                    amountCell(line.getInboundAmount()),
+                    amountCell(line.getOutboundAmount()),
+                    amountCell(line.getAdjustAmount()),
+                    amountCell(line.getClosingAmount()),
+                    amountCell(line.getMovingAvgUnitPrice())));
+        }
+        return row;
+    }
+
+    /** 数量单元格: null → 0 (scale-6). */
+    private Object qtyCell(BigDecimal v) {
+        return (v == null ? ZERO : v).setScale(QTY_SCALE, RoundingMode.HALF_UP);
+    }
+
+    /** 金额单元格: 诚实显示 — 无单价时写空串 (不伪造 0). */
+    private Object amountCell(BigDecimal v) {
+        return v == null ? "" : v.setScale(AMOUNT_SCALE, RoundingMode.HALF_UP);
+    }
+
+    private String nvlStr(Object v) {
+        return v == null ? "" : v.toString();
+    }
+
+    private void writeRawRows(OutputStream out, List<List<Object>> rows) {
+        if (rows.isEmpty()) {
+            return;
+        }
+        List<Object> header = rows.get(0);
+        List<List<Object>> dataRows = rows.subList(1, rows.size());
+
+        List<List<String>> head = new ArrayList<>();
+        for (Object h : header) {
+            head.add(List.of(h.toString()));
+        }
+
+        ExcelWriter writer = EasyExcel.write(out).head(head).build();
+        WriteSheet sheet = EasyExcel.writerSheet("进销存台账").build();
+        writer.write(dataRows, sheet);
+        writer.finish();
     }
 
     private InventoryLedgerLineDTO buildLine(String factoryId, RawMaterialType mt,

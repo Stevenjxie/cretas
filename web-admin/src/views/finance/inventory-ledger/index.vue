@@ -17,8 +17,8 @@
  *     params: startDate, endDate, materialTypeId?
  *     returns: { data: { factoryId, startDate, endDate, lines: InventoryLedgerLineDTO[] } }
  *   GET /api/mobile/{factoryId}/inventory/ledger/export
- *     params: startDate, endDate, materialTypeId?, targetSystem?
- *     returns: xlsx attachment
+ *     params: startDate, endDate, materialTypeId?
+ *     returns: xlsx attachment (进销存台账, 金额列对非财务角色脱敏)
  */
 import { ref, computed, onMounted } from 'vue';
 import { useAuthStore } from '@/store/modules/auth';
@@ -61,8 +61,6 @@ interface InventoryLedgerDTO {
   lines: InventoryLedgerLineDTO[];
 }
 
-type VoucherTargetSystem = 'KINGDEE' | 'YONYOU' | 'CUSTOM';
-
 // ============================================================
 // Stores
 // ============================================================
@@ -82,7 +80,6 @@ const ledgerPeriod = ref({ startDate: '', endDate: '' });
 // Filters
 const dateRange = ref<[string, string] | null>(null);
 const materialTypeId = ref('');
-const targetSystem = ref<VoucherTargetSystem>('KINGDEE');
 
 // ============================================================
 // Computed
@@ -172,7 +169,6 @@ async function handleExport() {
     const params: Record<string, string> = {
       startDate,
       endDate,
-      targetSystem: targetSystem.value,
     };
     if (materialTypeId.value) params.materialTypeId = materialTypeId.value;
 
@@ -247,13 +243,6 @@ onMounted(() => {
             clearable
             style="width: 200px"
           />
-        </el-form-item>
-        <el-form-item label="导出格式">
-          <el-select v-model="targetSystem" style="width: 120px">
-            <el-option label="金蝶" value="KINGDEE" />
-            <el-option label="用友" value="YONYOU" />
-            <el-option label="通用" value="CUSTOM" />
-          </el-select>
         </el-form-item>
         <el-form-item>
           <el-button
