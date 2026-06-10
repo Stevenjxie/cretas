@@ -36,9 +36,11 @@ import com.cretas.aims.service.wip.WipInventoryService;
 import com.cretas.aims.service.yield.YieldCalculationService;
 import com.cretas.aims.service.yield.YieldReportService;
 import com.cretas.aims.utils.ReportAuthGuard;
+import com.cretas.aims.util.BackdateWindowValidator;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -89,9 +91,17 @@ public class YieldReportServiceImpl implements YieldReportService {
     private final WipInventoryService wipInventoryService;
     private final ProductWorkProcessAssigneeRepository pwpAssigneeRepository;
 
+    /** C-074/C-075/X-10: 补录时效锁 (optional, fail-open 向后兼容). */
+    @Autowired(required = false)
+    private BackdateWindowValidator backdateWindowValidator;
+
     @Override
     @Transactional
     public Map<String, Object> submitReport(String factoryId, Long batchId, Long workerId, YieldReportRequest req) {
+        // C-074/C-075/X-10: 补录时效锁 — 报工业务日期不得早于 T-maxDays (默认 T-2)
+        if (backdateWindowValidator != null) {
+            backdateWindowValidator.assertWithinWindow(req.getBusinessDate(), "报工");
+        }
         if (req.getWorkProcessTaskId() == null) {
             throw new BusinessException(400, "缺少必填字段: workProcessTaskId")
                     .withHint("请选择工序任务").withHintTarget("workProcessTaskId");
@@ -197,7 +207,8 @@ public class YieldReportServiceImpl implements YieldReportService {
                 .factoryId(factoryId).batchId(batchId).reportType(YIELD)
                 .reportKind(reportKind)                   // 三阶段 (单元1): INPUT/SEGMENT/OUTPUT; null=旧式整合
                 .workerId(effectiveWorker).reporterName(req.getReporterName())
-                .reportDate(LocalDate.now())
+                // C-074/C-075/X-10: 客户传 businessDate 时采用 (补录场景); null 则取今天 (正常实时)
+                .reportDate(req.getBusinessDate() != null ? req.getBusinessDate() : LocalDate.now())
                 .workProcessTaskId(t.getId()).processOrder(t.getProcessOrder())
                 .productTypeId(t.getProductTypeId())
                 .inputQuantity(effInput).inputUnit(effInputUnit)

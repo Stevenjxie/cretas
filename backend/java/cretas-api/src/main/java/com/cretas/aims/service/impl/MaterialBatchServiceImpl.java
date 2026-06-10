@@ -163,6 +163,10 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
     @Autowired(required = false)
     private DataScopeResolver dataScopeResolver;
 
+    /** C-074/C-075/X-10: 补录时效锁 — T-3 及更早拒绝 (optional, fail-open 向后兼容). */
+    @Autowired(required = false)
+    private com.cretas.aims.util.BackdateWindowValidator backdateWindowValidator;
+
     // Manual constructor (Lombok @RequiredArgsConstructor not working)
     public MaterialBatchServiceImpl(
             MaterialBatchRepository materialBatchRepository,
@@ -198,6 +202,10 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
     @RuleEvaluate(value = "INVENTORY", target = "request")
     @Transactional
     public MaterialBatchDTO createMaterialBatch(String factoryId, CreateMaterialBatchRequest request, Long userId) {
+        // C-074/C-075/X-10: 补录时效锁 — 入库日期不得早于 T-maxDays (默认 T-2)
+        if (backdateWindowValidator != null) {
+            backdateWindowValidator.assertWithinWindow(request.getReceiptDate(), "原料入库");
+        }
         runConfiguredValidation(factoryId, "CREATE", java.util.Map.of(
             "quantity", request.getReceiptQuantity() != null ? request.getReceiptQuantity() : java.math.BigDecimal.ZERO,
             "materialTypeId", request.getMaterialTypeId() != null ? request.getMaterialTypeId() : "",
