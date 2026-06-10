@@ -627,6 +627,12 @@ public class SalesServiceImpl implements SalesService {
             throw new BusinessException(409, "只有已确认或财务驳回状态的订单可以提交财务审核")
                     .withHint("请刷新订单列表查看最新状态");
         }
+
+        // E-2 空价草稿支持: 进入财审前强制所有行有单价且总额 > 0
+        // 需求依据: 行717 "后期审核时报价/单价应有数据不能空"
+        // (草稿/确认阶段允许空价，提审是第一个强制点)
+        validatePriceBeforeFinanceReview(factoryId, orderId, order);
+
         checkTransitionAllowed(factoryId, order.getStatus().name(), "PENDING_FINANCE_REVIEW");
         order.setStatus(SalesOrderStatus.PENDING_FINANCE_REVIEW);
         // 清除上一次审核记录，重新审核
@@ -636,6 +642,50 @@ public class SalesServiceImpl implements SalesService {
         SalesOrder saved = salesOrderRepository.save(order);
         log.info("销售订单已提交财务审核: orderId={}, orderNumber={}", orderId, saved.getOrderNumber());
         return saved;
+    }
+
+    /**
+     * E-2 提审价格守卫 (六扇门追溯矩阵 E-2, 2026-06-10).
+     *
+     * <p>草稿/确认阶段允许行项目单价为空（下单时可空）。
+     * 提交财务审核时，所有行必须有正数单价且订单总额 > 0。
+     *
+     * <p>fool-proof Rule 1+4位一体: 报错信息精确到行（哪几行缺价）+ actionHint 指导下一步操作。
+     */
+    private void validatePriceBeforeFinanceReview(String factoryId, String orderId, SalesOrder order) {
+        List<SalesOrderItem> items = salesOrderItemRepository.findBySalesOrderId(orderId);
+        if (items == null || items.isEmpty()) {
+            throw new BusinessException(409,
+                    "订单「" + order.getOrderNumber() + "」没有行项目，无法提交财务审核")
+                    .withHint("请先添加行项目再提审");
+        }
+
+        List<String> missingPriceLines = new ArrayList<>();
+        for (int i = 0; i < items.size(); i++) {
+            SalesOrderItem item = items.get(i);
+            BigDecimal price = item.getUnitPrice();
+            if (price == null || price.compareTo(BigDecimal.ZERO) <= 0) {
+                String lineLabel = (item.getProductName() != null && !item.getProductName().isBlank())
+                        ? "第" + (i + 1) + "行「" + item.getProductName() + "」"
+                        : "第" + (i + 1) + "行（产品ID: " + item.getProductTypeId() + "）";
+                missingPriceLines.add(lineLabel);
+            }
+        }
+
+        if (!missingPriceLines.isEmpty()) {
+            String lineDetail = String.join("、", missingPriceLines);
+            throw new BusinessException(409,
+                    "订单「" + order.getOrderNumber() + "」提审失败：" + lineDetail + " 单价为空——"
+                    + "审核时单价不能为空（需求行717）")
+                    .withHint("请先补全以上行项目的单价，再提交财务审核");
+        }
+
+        // 双重保险: 若所有行都有正价但总额仍为 0（极端边界），也拒绝
+        if (order.getTotalAmount() == null || order.getTotalAmount().compareTo(BigDecimal.ZERO) <= 0) {
+            throw new BusinessException(409,
+                    "订单「" + order.getOrderNumber() + "」总金额为 0，无法提交财务审核")
+                    .withHint("请检查行项目单价和数量是否正确填写");
+        }
     }
 
     @Override
