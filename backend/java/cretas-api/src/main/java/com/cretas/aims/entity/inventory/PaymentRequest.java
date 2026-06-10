@@ -3,6 +3,7 @@ package com.cretas.aims.entity.inventory;
 import com.cretas.aims.security.PriceSensitive;
 import com.cretas.aims.entity.BaseEntity;
 import com.cretas.aims.entity.enums.PaymentRequestStatus;
+import com.cretas.aims.entity.enums.SettlementType;
 import lombok.*;
 import org.hibernate.annotations.Where;
 
@@ -187,4 +188,15 @@ public class PaymentRequest extends BaseEntity {
      */
     @Column(name = "submitted_by")
     private Long submittedBy;
+
+    // ─── D-9 G7 结算方式 ─────────────────────────────────────────────────────
+
+    /**
+     * D-9 G7: 创建时从 PurchaseOrder.settlementType 继承。
+     * PREPAID / CREDIT_FIRST / NO_INVOICE / MONTHLY / CREDIT_PERIOD / IMMEDIATE。
+     * nullable — 老数据无此字段，create() 查不到 PO 时降级为 null。
+     */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "settlement_type", length = 32)
+    private SettlementType settlementType;
 }
