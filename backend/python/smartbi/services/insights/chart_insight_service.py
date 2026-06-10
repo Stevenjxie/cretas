@@ -312,106 +312,91 @@ def _validate_claims(
         Dict with finding/implication/suggestion if all claims and prose numbers are valid.
         None otherwise.
     """
-    claims = llm_obj.get("claims")
-    if not claims:
-        logger.info("[chart-insight] validate: no claims array in LLM response (keys=%s)",
-                    list(llm_obj.keys()))
+    # Collect prose fields (finding is primary; require a non-empty finding).
+    finding = llm_obj.get("finding")
+    if not finding or not str(finding).strip():
+        logger.info("[chart-insight] validate: empty finding (keys=%s)", list(llm_obj.keys()))
         return None
-
-    # --- Step 1: validate each claim by recomputation ---
-    valid_claims: List[dict] = []
-    drop_reasons: List[str] = []  # diagnostic
-    for claim in claims:
-        entity = claim.get("entity")  # may be None for entity-agnostic stats
-        stat_type = claim.get("stat_type", "")
-        claimed_value = _coerce_number(claim.get("value"))
-
-        if claimed_value is None:
-            drop_reasons.append(f"{entity}/{stat_type}: uncoercible value {claim.get('value')!r}")
-            continue  # skip malformed
-
-        true_value = recompute_claim(entity, stat_type, ctx.series_values, ctx.series_labels)
-        if true_value is None:
-            drop_reasons.append(f"{entity}/{stat_type}: recompute None (unknown entity/stat)")
-            continue
-
-        # Normalize the claimed value to the same representation recompute returns:
-        # LLMs commonly emit share/growth as a fraction (0.62) instead of pct (62.0).
-        normalized = claimed_value
-        if stat_type in _RATIO_STAT_TYPES:
-            tol = tolerance_ratio
-        else:
-            tol = tolerance_pct
-            # If the claim looks like a fraction of a pct-true-value, scale ×100 once.
-            if abs(normalized - true_value) > tol and abs(normalized * 100 - true_value) <= tol:
-                normalized = normalized * 100
-        if abs(normalized - true_value) <= tol:
-            # store the normalized value back so the adjacency gate compares consistently
-            valid_claims.append({**claim, "value": normalized})
-        else:
-            drop_reasons.append(f"{entity}/{stat_type}: claimed {claimed_value} vs true {round(true_value,2)} (>tol {tol})")
-
-    # If no claims survived validation, reject
-    if not valid_claims:
-        logger.info("[chart-insight] validate: 0/%d claims survived; reasons=%s",
-                    len(claims), "; ".join(drop_reasons[:6]))
-        return None
-
-    # --- Step 2: numeric-adjacency gate ---
-    # Collect all prose fields
-    prose_fields = []
-    for key in ("finding", "implication", "suggestion"):
-        val = llm_obj.get(key)
-        if val:
-            prose_fields.append(str(val))
+    prose_fields = [str(llm_obj.get(k)) for k in ("finding", "implication", "suggestion") if llm_obj.get(k)]
     full_prose = " ".join(prose_fields)
 
-    # For each Arabic number in the prose, check it's anchored to a valid claim
-    for match in _ARABIC_NUMBER_RE.finditer(full_prose):
+    # --- Gate: every Arabic number in the prose must anchor to a TRUE recomputed stat ---
+    # (Fable MF1: validate against the full arithmetic closure of the series, not just the
+    # LLM's emitted claims — the closure is dense enough that checking doesn't throttle the
+    # LLM's intelligence; an invented number matches no true stat → reject.)
+    numbers = list(_ARABIC_NUMBER_RE.finditer(full_prose))
+    if not numbers:
+        # A data insight must cite at least one (verifiable) number.
+        logger.info("[chart-insight] validate: finding has no numbers to verify → reject")
+        return None
+
+    for match in numbers:
         num_str = match.group()
-        num_val = float(num_str)
+        try:
+            num_val = float(num_str)
+        except ValueError:
+            continue
         char_pos = match.start()
 
-        # Find the valid claim(s) whose value matches this number within tolerance
-        matching_claims = []
-        for vc in valid_claims:
-            stat_type = vc.get("stat_type", "")
-            tol = tolerance_ratio if stat_type in _RATIO_STAT_TYPES else tolerance_pct
-            if abs(num_val - vc["value"]) <= tol:
-                matching_claims.append(vc)
-
-        if not matching_claims:
-            # This number has no valid claim anchor → reject
-            logger.info("[chart-insight] validate: prose number %s has no valid-claim anchor → reject",
+        candidates = _truth_candidates(num_val, ctx, tolerance_pct, tolerance_ratio)
+        if not candidates:
+            # The number matches no true stat of the series → invented/hallucinated → reject.
+            logger.info("[chart-insight] validate: prose number %s matches no true series stat → reject",
                         num_str)
             return None
 
-        # Entity-adjacency gate — only for SINGLE-ENTITY stats (value/share/complement),
-        # where Chinese prose says "{entity}占{number}" so entity-swap is the clear danger.
-        # Relational stats (ratio/diff) inherently reference two entities and entity-agnostic
-        # stats (top2_share/growth/count) have no single owner → numeric anchor alone suffices.
-        single_entity = [mc for mc in matching_claims
-                         if mc.get("entity") is not None and mc.get("stat_type") in _SINGLE_ENTITY_STATS]
-        relational_or_agnostic = [mc for mc in matching_claims
-                                  if mc.get("stat_type") not in _SINGLE_ENTITY_STATS]
-        if single_entity and not relational_or_agnostic:
-            # The entity the prose attributes this number to = nearest entity at-or-before the
-            # number's position (Chinese entity-precedes-number); fall back to nearest overall.
+        # Entity-adjacency — only when ALL candidates are single-entity stats (share/value/
+        # complement). Relational (ratio/diff) or agnostic (top2_share/growth/count) candidates
+        # mean the number legitimately has no single owner → numeric anchor suffices.
+        single_entity = [c for c in candidates if c[1] in _SINGLE_ENTITY_STATS and c[0] is not None]
+        other = [c for c in candidates if c[1] not in _SINGLE_ENTITY_STATS]
+        if single_entity and not other:
             attributed = _nearest_preceding_label(full_prose, char_pos, ctx.series_labels)
             if attributed is None:
                 attributed = _nearest_label_in_prose(full_prose, char_pos, ctx.series_labels)
-            if not any(mc["entity"] == attributed for mc in single_entity):
-                logger.info("[chart-insight] validate: number %s attributed-entity=%r ≠ claim entities %s → reject",
-                            num_str, attributed, [mc.get("entity") for mc in single_entity])
+            if not any(ent == attributed for ent, _ in single_entity):
+                logger.info("[chart-insight] validate: number %s attributed=%r ≠ true-stat entities %s → reject",
+                            num_str, attributed, [ent for ent, _ in single_entity])
                 return None
-        # else: entity-agnostic claims (growth/count/top2_share) — no entity check needed
 
-    # All checks passed
+    # All prose numbers anchored to true stats + correctly attributed.
     return {
         "finding": llm_obj.get("finding"),
         "implication": llm_obj.get("implication"),
         "suggestion": llm_obj.get("suggestion"),
     }
+
+
+def _truth_candidates(
+    num_val: float, ctx: "ChartInsightContext", tol_pct: float, tol_ratio: float
+) -> List[tuple]:
+    """Return [(entity, stat_type), ...] whose recomputed value ≈ num_val (within tolerance).
+
+    Scans the full recompute closure: single-entity stats over every label, plus
+    entity-agnostic stats. This is what makes the LLM's claims array advisory rather than
+    load-bearing — any number the LLM uses that is a TRUE stat of the series anchors here.
+    """
+    cands: List[tuple] = []
+    labels = ctx.series_labels or []
+    # NOTE: 'complement' is intentionally excluded from the closure. In a 2-element series
+    # complement(B) == share(A), so "B占{share(A)}%" (an entity-swap) would falsely anchor to
+    # B's complement and bypass swap detection. The LLM states each entity's own share directly,
+    # so excluding complement costs nothing while keeping the swap gate sound.
+    for stat in ("value", "share", "ratio", "diff"):
+        tol = tol_ratio if stat in _RATIO_STAT_TYPES else tol_pct
+        for ent in labels:
+            tv = recompute_claim(ent, stat, ctx.series_values, labels)
+            if tv is not None and abs(num_val - tv) <= tol:
+                cands.append((ent, stat))
+            # also accept a fraction form (LLM wrote 0.62 for 62%) for pct stats
+            elif tv is not None and stat not in _RATIO_STAT_TYPES and abs(num_val * 100 - tv) <= tol:
+                cands.append((ent, stat))
+    for stat in ("top2_share", "growth", "count"):
+        tol = tol_ratio if stat in _RATIO_STAT_TYPES else tol_pct
+        tv = recompute_claim(None, stat, ctx.series_values, labels)
+        if tv is not None and abs(num_val - tv) <= tol:
+            cands.append((None, stat))
+    return cands
 
 
 def _nearest_preceding_label(prose: str, target_pos: int, labels: List[str]) -> Optional[str]:
