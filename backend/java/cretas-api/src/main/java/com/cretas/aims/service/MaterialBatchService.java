@@ -25,13 +25,43 @@ public interface MaterialBatchService {
      */
     MaterialBatchDTO createMaterialBatch(String factoryId, CreateMaterialBatchRequest request, Long userId);
      /**
-     * 更新原材料批次
+     * 更新原材料批次 (无角色守卫重载 — 内部/AI-tool 调用路径, 写操作另由 W0 WriteGuard 把关).
       */
     MaterialBatchDTO updateMaterialBatch(String factoryId, String batchId, UpdateMaterialBatchRequest request);
      /**
-     * 删除原材料批次
+     * 更新原材料批次 (角色守卫重载 — HTTP 入口路径).
+     *
+     * <p>W4 红线 (张权 F006 仓管员): 纯操作员 (warehouse_worker / operator) 无库存自主权,
+     * 不能经 PUT 修改入库量 (receiptQuantity)、单价、重量、总价值 等影响台账/出成率分母/成本的字段。
+     * 这类库存量变更必须走盘点 (Stocktake) / 调整 (MaterialBatchAdjustment) 审批流。
+     * 非库存字段 (storageLocation/notes/expireDate/qualityCertificate 等) 仓管可改。
+     *
+     * <p>默认实现忽略 callerRole 委托无守卫重载 (向后兼容现有 implementors/测试桩);
+     * 生产 {@code MaterialBatchServiceImpl} override 本方法落地角色守卫。
+     *
+     * @param callerRole 调用者角色码 (小写, 见 FactoryUserRole)。null = 跳过角色守卫 (内部调用)。
+      */
+    default MaterialBatchDTO updateMaterialBatch(String factoryId, String batchId,
+                                                 UpdateMaterialBatchRequest request, String callerRole) {
+        return updateMaterialBatch(factoryId, batchId, request);
+    }
+     /**
+     * 删除原材料批次 (无角色守卫重载 — 内部/AI-tool 调用路径).
       */
     void deleteMaterialBatch(String factoryId, String batchId);
+     /**
+     * 删除原材料批次 (角色守卫重载 — HTTP 入口路径).
+     *
+     * <p>W4 红线: 删除批次 = 无单据移除库存。纯操作员不可直接删, 需管理员 (factory_super_admin /
+     * warehouse_manager / 平台管理员)。误录入批次的删除走管理员路径。
+     *
+     * <p>默认实现忽略 callerRole 委托无守卫重载; 生产 impl override 落地角色守卫。
+     *
+     * @param callerRole 调用者角色码 (小写)。null = 跳过角色守卫 (内部调用)。
+      */
+    default void deleteMaterialBatch(String factoryId, String batchId, String callerRole) {
+        deleteMaterialBatch(factoryId, batchId);
+    }
      /**
      * 获取原材料批次详情
       */

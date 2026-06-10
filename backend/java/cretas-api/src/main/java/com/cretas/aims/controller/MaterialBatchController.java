@@ -203,10 +203,14 @@ public class MaterialBatchController {
             @PathVariable @NotBlank String factoryId,
             @Parameter(description = "批次ID", required = true, example = "MB-2025-001")
             @PathVariable @NotBlank String batchId,
-            @Valid @RequestBody UpdateMaterialBatchRequest request) {
+            @Valid @RequestBody UpdateMaterialBatchRequest request,
+            jakarta.servlet.http.HttpServletRequest httpRequest) {
 
-        log.info("更新原材料批次: factoryId={}, batchId={}", factoryId, batchId);
-        MaterialBatchDTO batch = materialBatchService.updateMaterialBatch(factoryId, batchId, request);
+        // W4 红线: 取调用者角色 (JwtAuthInterceptor 设入 request attribute, C1 孪生坑 — 非 SecurityContext),
+        // 传入 service 拦截纯操作员经 PUT 改库存量/单价/重量等字段。
+        String callerRole = (String) httpRequest.getAttribute("role");
+        log.info("更新原材料批次: factoryId={}, batchId={}, role={}", factoryId, batchId, callerRole);
+        MaterialBatchDTO batch = materialBatchService.updateMaterialBatch(factoryId, batchId, request, callerRole);
         return ApiResponse.success("原材料批次更新成功", batch);
     }
 
@@ -223,10 +227,13 @@ public class MaterialBatchController {
             @Parameter(description = "工厂ID", required = true, example = "F001")
             @PathVariable @NotBlank String factoryId,
             @Parameter(description = "批次ID", required = true, example = "MB-2025-001")
-            @PathVariable @NotBlank String batchId) {
+            @PathVariable @NotBlank String batchId,
+            jakarta.servlet.http.HttpServletRequest httpRequest) {
 
-        log.info("删除原材料批次: factoryId={}, batchId={}", factoryId, batchId);
-        materialBatchService.deleteMaterialBatch(factoryId, batchId);
+        // W4 红线: 删批次 = 无单据移除库存, 仅管理员/仓储主管可删, 纯操作员拦截。
+        String callerRole = (String) httpRequest.getAttribute("role");
+        log.info("删除原材料批次: factoryId={}, batchId={}, role={}", factoryId, batchId, callerRole);
+        materialBatchService.deleteMaterialBatch(factoryId, batchId, callerRole);
         return ApiResponse.success("原材料批次删除成功", null);
     }
 
