@@ -238,7 +238,15 @@ public class LabelServiceImpl implements LabelService {
         label.setStatus("ACTIVE");
         label.setPrintCount(0);
         label.setCreatedBy(userId);
-        label.setLabelCode(generateLabelCode(factoryId, "MA"));        // MA = Material
+
+        // A3: 数字前缀复用 SP8 primaryCode (RawMaterialType.primaryCode 前三位),
+        // 避免双编码体系。无 primaryCode 时降级为 "MA" 兜底。
+        String sp8Prefix = (batch.getMaterialType() != null
+                && batch.getMaterialType().getPrimaryCode() != null
+                && !batch.getMaterialType().getPrimaryCode().isBlank())
+                ? batch.getMaterialType().getPrimaryCode()
+                : "MA";
+        label.setLabelCode(generateLabelCode(factoryId, sp8Prefix));
         label.setTraceCode(generateTraceCode(factoryId, batch.getBatchNumber()));
         // 物料名称从 materialType 关联实体获取 (lazy, but within transaction)
         if (batch.getMaterialType() != null) {

@@ -297,6 +297,37 @@ async function handleFormSubmit() {
     formSaving.value = false;
   }
 }
+
+// ==================== A5: 生成标签 ====================
+const labelGenerating = ref<string | null>(null); // batchId 正在生成中
+
+async function handleGenerateLabel(row: TableRow) {
+  const batchId = String(row.id || '');
+  if (!batchId) { ElMessage.warning('无效批次 ID'); return; }
+  try {
+    await ElMessageBox.confirm(
+      `确认为批次「${row.batchNumber || batchId}」生成物料标签？\n\n标签已存在则会提示先作废旧标签。`,
+      '生成物料标签',
+      { confirmButtonText: '生成', cancelButtonText: '取消', type: 'info' }
+    );
+  } catch { return; } // user cancelled
+
+  labelGenerating.value = batchId;
+  try {
+    const res = await post(`/${factoryId.value}/labels/material-batch/${batchId}`, {});
+    if (res.success && res.data) {
+      const code = (res.data as { labelCode?: string }).labelCode || '—';
+      ElMessage({ message: `标签已生成，编号：${code}`, type: 'success', duration: 5000, showClose: true });
+    } else {
+      ElMessage({ message: res.message || '生成失败', type: 'error', duration: 0, showClose: true });
+    }
+  } catch (err: unknown) {
+    const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message;
+    ElMessage({ message: msg || '生成标签失败，请重试', type: 'error', duration: 0, showClose: true });
+  } finally {
+    labelGenerating.value = null;
+  }
+}
 </script>
 
 <template>
@@ -381,10 +412,19 @@ async function handleFormSubmit() {
         <el-table-column prop="originPlace" label="产地" width="110" show-overflow-tooltip>
           <template #default="{ row }">{{ row.originPlace || '-' }}</template>
         </el-table-column>
-        <el-table-column label="操作" width="120" fixed="right" align="center">
+        <el-table-column label="操作" width="180" fixed="right" align="center">
           <template #default="{ row }">
             <el-button type="primary" link size="small" @click="handleView(row)">查看</el-button>
             <el-button v-if="canWrite" type="primary" link size="small" @click="handleEdit(row)">编辑</el-button>
+            <!-- A5: 生成物料批次标签 (SP4) -->
+            <el-button
+              v-if="canWrite"
+              type="success"
+              link
+              size="small"
+              :loading="labelGenerating === String(row.id)"
+              @click="handleGenerateLabel(row)"
+            >生成标签</el-button>
           </template>
         </el-table-column>
       </el-table>

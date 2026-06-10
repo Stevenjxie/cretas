@@ -89,7 +89,14 @@ const productExtendedFields = computed<FieldConfig[]>(() => [
   // ---- 商务信息 (成品隐藏, 原辅料显示) ----
   { key: 'brand', label: '品牌', type: 'text', group: '商务信息', order: 1 },
   { key: 'taxIncludedUnitPrice', label: '含税单价', type: 'decimal', group: '商务信息', precision: 4, suffix: '元', order: 2 },
-  { key: 'settlementMethod', label: '结算方式', type: 'select', group: '商务信息', order: 3,
+  // SP4-A8: 税率 select — 选定后服务端自动推导未税 unitPrice
+  { key: 'taxRate', label: '出货税率', type: 'select', group: '商务信息', order: 3,
+    placeholder: '选择后自动推导未税单价',
+    options: [
+      { label: '9% (农产品)', value: 'TAX_9' },
+      { label: '13% (一般货物)', value: 'TAX_13' },
+    ] },
+  { key: 'settlementMethod', label: '结算方式', type: 'select', group: '商务信息', order: 4,
     options: [
       { label: '月结', value: 'MONTHLY' },
       { label: '现结', value: 'CASH' },
@@ -152,6 +159,8 @@ interface ProductType {
   brand?: string;
   settlementMethod?: string;
   taxIncludedUnitPrice?: number;
+  /** SP4-A8: 税率 TAX_9 / TAX_13 / null=未配置 */
+  taxRate?: 'TAX_9' | 'TAX_13' | null;
   [key: string]: unknown;
 }
 
@@ -636,7 +645,8 @@ const visibleExtendedFields = computed<FieldConfig[]>(() => {
   const base = formData.productCategory === 'FINISHED_PRODUCT'
     ? all.filter(f => f.group !== '商务信息')
     : all;
-  return canViewPrice.value ? base : base.filter(f => f.key !== 'taxIncludedUnitPrice');
+  // SP4-A8: taxRate 与 taxIncludedUnitPrice 均属价格敏感信息, 无 canViewPrice 时隐藏
+  return canViewPrice.value ? base : base.filter(f => f.key !== 'taxIncludedUnitPrice' && f.key !== 'taxRate');
 });
 
 // 客户下拉列表

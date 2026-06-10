@@ -5,6 +5,7 @@ import com.cretas.aims.dto.common.PageResponse;
 import com.cretas.aims.dto.producttype.ProductTypeDTO;
 import com.cretas.aims.dto.producttype.ProductTypeSuggestionDTO;
 import com.cretas.aims.entity.ProductType;
+import com.cretas.aims.entity.enums.TaxRate;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.exception.ResourceNotFoundException;
 import com.cretas.aims.repository.CustomerRepository;
@@ -178,7 +179,48 @@ public class ProductTypeServiceImpl implements ProductTypeService {
         // Custom Form Schema Configuration
         productType.setCustomSchemaOverrides(dto.getCustomSchemaOverrides());
 
+        // SP4-A8: 税率换算 — 含税↔未税自动推导 unitPrice
+        applyTaxConversion(productType, dto);
+
         return productType;
+    }
+
+    /**
+     * SP4-A8: 税率换算辅助方法.
+     * <ul>
+     *   <li>若 taxRate + taxIncludedUnitPrice 均非 null → unitPrice = taxIncludedUnitPrice / (1 + rate),
+     *       scale=4, HALF_UP (与 TaxRate.preTaxPrice 一致).</li>
+     *   <li>若 taxRate + unitPrice 均非 null 且 taxIncludedUnitPrice 为 null → 反算含税价
+     *       taxIncludedUnitPrice = unitPrice * (1 + rate), scale=4, HALF_UP.</li>
+     *   <li>其余情况 (无税率 / 价格缺失) → 不修改.</li>
+     * </ul>
+     */
+    private void applyTaxConversion(ProductType entity, ProductTypeDTO dto) {
+        TaxRate rate = dto.getTaxRate();
+        entity.setTaxRate(rate);
+
+        if (rate == null) {
+            // 无税率 — taxIncludedUnitPrice 直接存, 不推导 unitPrice
+            if (dto.getTaxIncludedUnitPrice() != null) {
+                entity.setTaxIncludedUnitPrice(dto.getTaxIncludedUnitPrice());
+            }
+            return;
+        }
+
+        if (dto.getTaxIncludedUnitPrice() != null) {
+            // 含税单价已知 → 推导未税 unitPrice
+            entity.setTaxIncludedUnitPrice(dto.getTaxIncludedUnitPrice());
+            entity.setUnitPrice(rate.preTaxPrice(dto.getTaxIncludedUnitPrice()));
+            log.info("SP4-A8 税换算(含→未): taxIncluded={} rate={} → unitPrice={}",
+                    dto.getTaxIncludedUnitPrice(), rate, entity.getUnitPrice());
+        } else if (dto.getUnitPrice() != null) {
+            // 未税单价已知, 含税单价未传 → 反算含税价
+            entity.setUnitPrice(dto.getUnitPrice());
+            entity.setTaxIncludedUnitPrice(rate.withTaxPrice(dto.getUnitPrice()));
+            log.info("SP4-A8 税换算(未→含): unitPrice={} rate={} → taxIncluded={}",
+                    dto.getUnitPrice(), rate, entity.getTaxIncludedUnitPrice());
+        }
+        // 两者均 null → 只设税率, 价格保持原值
     }
 
     @Override
@@ -240,6 +282,17 @@ public class ProductTypeServiceImpl implements ProductTypeService {
 
         // Custom Form Schema Configuration
         if (dto.getCustomSchemaOverrides() != null) productType.setCustomSchemaOverrides(dto.getCustomSchemaOverrides());
+
+        // SP4-A8: 税率换算 — 更新时如传入 taxRate 或含税/未税价则重新推导
+        if (dto.getTaxRate() != null || dto.getTaxIncludedUnitPrice() != null) {
+            // 构建临时 DTO 用于换算 (以 entity 当前值兜底)
+            ProductTypeDTO taxDto = ProductTypeDTO.builder()
+                    .taxRate(dto.getTaxRate() != null ? dto.getTaxRate() : productType.getTaxRate())
+                    .taxIncludedUnitPrice(dto.getTaxIncludedUnitPrice())
+                    .unitPrice(dto.getUnitPrice() != null ? dto.getUnitPrice() : productType.getUnitPrice())
+                    .build();
+            applyTaxConversion(productType, taxDto);
+        }
 
         productType.setUpdatedAt(LocalDateTime.now());
         productType = productTypeRepository.save(productType);
@@ -818,6 +871,9 @@ public class ProductTypeServiceImpl implements ProductTypeService {
                 .qualityCheckIds(parseStringList(productType.getQualityCheckIds()))
                 // Custom Form Schema Configuration
                 .customSchemaOverrides(productType.getCustomSchemaOverrides())
+                // SP4-A8: 税率 + 含税单价
+                .taxRate(productType.getTaxRate())
+                .taxIncludedUnitPrice(productType.getTaxIncludedUnitPrice())
                 .build();
     }
 
