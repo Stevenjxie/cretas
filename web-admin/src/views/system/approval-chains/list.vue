@@ -136,6 +136,7 @@ const decisionTypeMap: Record<string, string> = {
   MATERIAL_DISPOSAL: '原料处置',
   PRODUCTION_PLAN_CHANGE: '生产计划变更',
   EQUIPMENT_STATUS_CHANGE: '设备状态变更',
+  PRODUCTION_REVERSAL_APPROVAL: '生产撤单审批', // SP12
   CUSTOM: '自定义',
 };
 </script>
