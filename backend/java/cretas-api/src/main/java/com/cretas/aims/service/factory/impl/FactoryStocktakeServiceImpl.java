@@ -19,6 +19,7 @@ import com.cretas.aims.service.workflow.WorkflowEngineService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
@@ -62,21 +63,23 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
     private WorkflowEngineService workflowEngine;
 
     // -------------------------------------------------------
-    // 月底约束：>=29 日才允许发起盘点（可提取为配置）
+    // 月底约束：>=threshold 日才允许发起盘点
+    // prod 默认 29（月底）；test env 可设 1 以跳过限制便于 E2E 验证
     // -------------------------------------------------------
-    private static final int MONTH_END_DAY_THRESHOLD = 29;
+    @Value("${cretas.stocktake.month-end-threshold:29}")
+    private int monthEndThreshold;
 
     @Override
     @Transactional
     public StocktakeDTO initiate(String factoryId, CreateStocktakeRequest req, Long userId) {
         // 月底约束
         LocalDate today = LocalDate.now();
-        if (today.getDayOfMonth() < MONTH_END_DAY_THRESHOLD) {
-            LocalDate nextAllowedDate = today.withDayOfMonth(MONTH_END_DAY_THRESHOLD);
+        if (today.getDayOfMonth() < monthEndThreshold) {
+            LocalDate nextAllowedDate = today.withDayOfMonth(monthEndThreshold);
             throw new BusinessException(409,
-                    "盘点任务只能在月底（" + MONTH_END_DAY_THRESHOLD + "日后）发起，当前是 " + today +
+                    "盘点任务只能在月底（" + monthEndThreshold + "日后）发起，当前是 " + today +
                     "，下次可发起日期: " + nextAllowedDate)
-                    .withHint("等到 " + MONTH_END_DAY_THRESHOLD + " 日再发起");
+                    .withHint("等到 " + monthEndThreshold + " 日再发起");
         }
 
         // 防重复发起（同仓库同月份已有未完成盘点）

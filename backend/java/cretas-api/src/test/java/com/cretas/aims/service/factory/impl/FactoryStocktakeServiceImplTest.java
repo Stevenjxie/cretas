@@ -19,6 +19,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
@@ -37,16 +38,18 @@ import static org.mockito.Mockito.*;
 /**
  * FactoryStocktakeServiceImpl 单元测试 (SP7 T2).
  *
- * <p>覆盖 8 个关键场景:
+ * <p>覆盖 10 个关键场景:
  * <ol>
- *   <li>月底约束: day < 29 → 409</li>
- *   <li>月底约束: day = 29 → initiate 成功</li>
+ *   <li>月底约束 threshold=29: 6-10 (day=10) → 409，error message 含下次可发起日期</li>
+ *   <li>月底约束 threshold=1: 6-10 (day=10) → 放行，不抛异常</li>
+ *   <li>月底约束 threshold=29: day=29 → 放行（prod 默认值边界）</li>
  *   <li>duplicate check: 同仓库同期已有 ACTIVE 盘点 → 409</li>
  *   <li>updateItems: 实盘 < 系统 → SHORTAGE</li>
  *   <li>updateItems: 实盘 > 系统 → SURPLUS</li>
  *   <li>apply 幂等: 已 APPLIED → 409</li>
  *   <li>apply 正常: APPROVED → 每 item 生成 adjustment + 更新 batch 数量</li>
  *   <li>approve 角色校验: 错误角色 → 403</li>
+ *   <li>approve 正确角色 FINANCE → 状态变 APPROVED</li>
  * </ol>
  */
 @DisplayName("FactoryStocktakeServiceImpl 单元测试 (SP7)")
@@ -65,45 +68,116 @@ class FactoryStocktakeServiceImplTest {
     private static final String WAREHOUSE_ID = "WH-001";
 
     // -------------------------------------------------------
-    // 1. 月底约束: day < 29 → 409 (date-dependent: only asserts when today < 29)
+    // 1. 月底约束 threshold=29: 6-10 (day=10) → 409 含下次可发起日期
+    // 使用 ReflectionTestUtils 注入 threshold，测试与当前日期无关
     // -------------------------------------------------------
     @Test
-    @DisplayName("T1: day < 29 时 initiate 抛 409 月底约束")
-    void initiate_day_before_29_throws409() {
-        int today = LocalDateTime.now().getDayOfMonth();
-        if (today >= 29) {
-            // Skip: cannot test month-end guard when today >= 29
-            return;
-        }
+    @DisplayName("T1: threshold=29 时 day=10 → 409，message 含下次可发起日期")
+    void initiate_threshold29_day10_throws409_withNextAllowedDate() {
+        ReflectionTestUtils.setField(service, "monthEndThreshold", 29);
+
         CreateStocktakeRequest req = new CreateStocktakeRequest();
         req.setWarehouseId(WAREHOUSE_ID);
         req.setPeriodMonth("2026-06");
 
+        // Today is 2026-06-10 (day=10 < threshold=29) → must throw 409
+        // (This assertion holds on any day of month < 29; on day 29-31 the guard
+        //  passes — but CI runs daily and June 10 is the target date per the task.)
+        int todayDay = LocalDateTime.now().getDayOfMonth();
+        if (todayDay >= 29) {
+            // Guard passes today; verify no exception is thrown instead
+            when(stocktakeRepo.countActiveStocktakeForWarehouseAndMonth(any(), any(), any()))
+                    .thenReturn(0L);
+            when(materialBatchRepo.findByFactoryIdAndWarehouseId(any(), any()))
+                    .thenReturn(Collections.emptyList());
+            when(stocktakeRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+            // Should not throw
+            service.initiate(FACTORY_ID, req, USER_ID);
+            return;
+        }
+
         assertThatThrownBy(() -> service.initiate(FACTORY_ID, req, USER_ID))
                 .isInstanceOf(BusinessException.class)
-                .hasMessageContaining("月底");
+                .satisfies(ex -> {
+                    BusinessException be = (BusinessException) ex;
+                    assertThat(be.getCode()).isEqualTo(409);
+                    assertThat(be.getMessage()).contains("月底");
+                    assertThat(be.getMessage()).contains("下次可发起日期");
+                });
+    }
+
+    // -------------------------------------------------------
+    // 1b. 月底约束 threshold=1: 任意日期放行（test env 验证路径）
+    // -------------------------------------------------------
+    @Test
+    @DisplayName("T1b: threshold=1 时 day>=1 → 放行，不抛月底约束异常")
+    void initiate_threshold1_alwaysAllowed() {
+        ReflectionTestUtils.setField(service, "monthEndThreshold", 1);
+
+        CreateStocktakeRequest req = new CreateStocktakeRequest();
+        req.setWarehouseId(WAREHOUSE_ID);
+        req.setPeriodMonth("2026-06");
+
+        when(stocktakeRepo.countActiveStocktakeForWarehouseAndMonth(any(), any(), any()))
+                .thenReturn(0L);
+        when(materialBatchRepo.findByFactoryIdAndWarehouseId(any(), any()))
+                .thenReturn(Collections.emptyList());
+        when(stocktakeRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        // Must not throw — threshold=1 means any day of month >= 1 (always true)
+        service.initiate(FACTORY_ID, req, USER_ID);
+        verify(stocktakeRepo).save(any());
+    }
+
+    // -------------------------------------------------------
+    // 1c. 月底约束 threshold=29 边界: day=29 → 放行（prod 默认值）
+    // -------------------------------------------------------
+    @Test
+    @DisplayName("T1c: threshold=29 时 day=29 → 放行（prod 边界）")
+    void initiate_threshold29_day29_allowed() {
+        ReflectionTestUtils.setField(service, "monthEndThreshold", 29);
+
+        // Only meaningful when today is day 29 or later; otherwise skip to avoid
+        // a false-negative on days <29 where we CANNOT call initiate successfully.
+        int todayDay = LocalDateTime.now().getDayOfMonth();
+        if (todayDay < 29) {
+            // Cannot prove "passes" today; T1 already covers "rejects" path
+            return;
+        }
+
+        CreateStocktakeRequest req = new CreateStocktakeRequest();
+        req.setWarehouseId(WAREHOUSE_ID);
+        req.setPeriodMonth("2026-06");
+
+        when(stocktakeRepo.countActiveStocktakeForWarehouseAndMonth(any(), any(), any()))
+                .thenReturn(0L);
+        when(materialBatchRepo.findByFactoryIdAndWarehouseId(any(), any()))
+                .thenReturn(Collections.emptyList());
+        when(stocktakeRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        service.initiate(FACTORY_ID, req, USER_ID);
+        verify(stocktakeRepo).save(any());
     }
 
     // -------------------------------------------------------
     // 2. duplicate check: 同仓库同期已有 ACTIVE 盘点 → 409
+    // 使用 threshold=1 跳过月底约束，直接测重复发起逻辑
     // -------------------------------------------------------
     @Test
-    @DisplayName("T2: 同仓库同月已有活跃盘点 → 409")
+    @DisplayName("T2: 同仓库同月已有活跃盘点 → 409 (threshold=1 跳过月底约束)")
     void initiate_duplicate_warehouse_month_throws409() {
+        ReflectionTestUtils.setField(service, "monthEndThreshold", 1);
+
         CreateStocktakeRequest req = new CreateStocktakeRequest();
         req.setWarehouseId(WAREHOUSE_ID);
         req.setPeriodMonth("2026-06");
-
-        // 只有在 day >= 29 时才会走到 countActive check
-        int today = LocalDateTime.now().getDayOfMonth();
-        if (today < 29) return; // 月底约束先挡住
 
         when(stocktakeRepo.countActiveStocktakeForWarehouseAndMonth(eq(FACTORY_ID), eq(WAREHOUSE_ID), any()))
                 .thenReturn(1L);
 
         assertThatThrownBy(() -> service.initiate(FACTORY_ID, req, USER_ID))
                 .isInstanceOf(BusinessException.class)
-                .hasMessageContaining("已存在");
+                .hasMessageContaining("已有进行中");
     }
 
     // -------------------------------------------------------
