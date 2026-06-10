@@ -969,6 +969,13 @@ const businessRoutes: RouteRecordRaw[] = [
             component: () => import('@/views/finance/sku-margin/index.vue'),
             meta: { requiresAuth: true, title: 'SKU毛利率分析', module: 'finance' }
           },
+          // SP5 W6: 毛利红线配置 (目标毛利率管理, 财务/超管可配, #693 报价红线读它)
+          {
+            path: 'gross-margin-redline',
+            name: 'FinanceGrossMarginRedline',
+            component: () => import('@/views/finance/gross-margin-redline/index.vue'),
+            meta: { requiresAuth: true, title: '毛利红线配置', module: 'finance' }
+          },
           {
             path: 'invoices',
             name: 'FinanceInvoices',
