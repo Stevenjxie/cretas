@@ -33,9 +33,9 @@ import static org.mockito.Mockito.*;
  * SP6 采购异常单 Service 单元测试
  *
  * <p>覆盖：
- * - generateExceptionsForReceive：超收/少收检测逻辑
+ * - generateExceptionsForReceive：超收/少收检测逻辑、责任人字段设置（D-6）
  * - decideException：ACCEPT_OVER / RETURN_OVER / ACCEPT_SHORT / REQUEST_RESUPPLY
- * - RETURN_OVER 的 REQUIRES_NEW 隔离（服务方法不污染父事务）
+ * - D-6 鉴权：责任人可决策 / 非责任人 403 / 主管角色可代为决策
  * - 边界：正常收货无异常单、异常单重复创建防卫
  */
 @ExtendWith(MockitoExtension.class)
@@ -59,6 +59,11 @@ class PurchaseExceptionServiceTest {
     private static final String RECEIVE_ID = "REC-001";
     private static final String PO_ID = "PO-001";
 
+    /** 责任人 userId (ownerUserId) */
+    private static final Long OWNER_USER_ID = 42L;
+    /** 非责任人 userId */
+    private static final Long OTHER_USER_ID = 99L;
+
     @BeforeEach
     void setup() {
         // Repository save: return the same entity with an id assigned
@@ -81,10 +86,9 @@ class PurchaseExceptionServiceTest {
         @Test
         @DisplayName("正常收货（实收 = PO 量）不生成异常单")
         void noException_whenReceivedEqualsOrdered() {
-            // po qty = 100, received qty = 100 → no exception
             List<PurchaseException> result = exceptionService.generateExceptionsForReceive(
                     FACTORY_ID, RECEIVE_ID, PO_ID, null, null, null,
-                    BigDecimal.valueOf(100), BigDecimal.valueOf(100), "kg", 1L);
+                    BigDecimal.valueOf(100), BigDecimal.valueOf(100), "kg", 1L, null, null);
             assertTrue(result.isEmpty(), "正常收货不应产生异常单");
             verify(exceptionRepository, never()).save(any());
         }
@@ -92,10 +96,9 @@ class PurchaseExceptionServiceTest {
         @Test
         @DisplayName("超收（实收 > PO 量）生成 OVER_RECEIVE 异常单")
         void overReceive_generatesOverException() {
-            // po qty = 100, received = 110
             List<PurchaseException> result = exceptionService.generateExceptionsForReceive(
                     FACTORY_ID, RECEIVE_ID, PO_ID, null, null, null,
-                    BigDecimal.valueOf(100), BigDecimal.valueOf(110), "kg", 1L);
+                    BigDecimal.valueOf(100), BigDecimal.valueOf(110), "kg", 1L, null, null);
 
             assertEquals(1, result.size());
             PurchaseException ex = result.get(0);
@@ -108,10 +111,9 @@ class PurchaseExceptionServiceTest {
         @Test
         @DisplayName("少收（实收 < PO 量）生成 UNDER_RECEIVE 异常单")
         void underReceive_generatesUnderException() {
-            // po qty = 100, received = 85
             List<PurchaseException> result = exceptionService.generateExceptionsForReceive(
                     FACTORY_ID, RECEIVE_ID, PO_ID, null, null, null,
-                    BigDecimal.valueOf(100), BigDecimal.valueOf(85), "kg", 1L);
+                    BigDecimal.valueOf(100), BigDecimal.valueOf(85), "kg", 1L, null, null);
 
             assertEquals(1, result.size());
             PurchaseException ex = result.get(0);
@@ -124,7 +126,7 @@ class PurchaseExceptionServiceTest {
         void factoryIdIsSetOnException() {
             List<PurchaseException> result = exceptionService.generateExceptionsForReceive(
                     FACTORY_ID, RECEIVE_ID, PO_ID, null, null, null,
-                    BigDecimal.valueOf(100), BigDecimal.valueOf(110), "kg", 1L);
+                    BigDecimal.valueOf(100), BigDecimal.valueOf(110), "kg", 1L, null, null);
             assertEquals(FACTORY_ID, result.get(0).getFactoryId());
         }
 
@@ -133,7 +135,7 @@ class PurchaseExceptionServiceTest {
         void receiveRecordIdIsSetOnException() {
             List<PurchaseException> result = exceptionService.generateExceptionsForReceive(
                     FACTORY_ID, RECEIVE_ID, PO_ID, null, null, null,
-                    BigDecimal.valueOf(100), BigDecimal.valueOf(110), "kg", 1L);
+                    BigDecimal.valueOf(100), BigDecimal.valueOf(110), "kg", 1L, null, null);
             assertEquals(RECEIVE_ID, result.get(0).getReceiveRecordId());
         }
 
@@ -142,8 +144,22 @@ class PurchaseExceptionServiceTest {
         void purchaseOrderIdIsSetOnException() {
             List<PurchaseException> result = exceptionService.generateExceptionsForReceive(
                     FACTORY_ID, RECEIVE_ID, PO_ID, null, null, null,
-                    BigDecimal.valueOf(100), BigDecimal.valueOf(110), "kg", 1L);
+                    BigDecimal.valueOf(100), BigDecimal.valueOf(110), "kg", 1L, null, null);
             assertEquals(PO_ID, result.get(0).getPurchaseOrderId());
+        }
+
+        @Test
+        @DisplayName("D-6：ownerUserId / ownerName 写入异常单")
+        void ownerBinding_setsOwnerFields() {
+            List<PurchaseException> result = exceptionService.generateExceptionsForReceive(
+                    FACTORY_ID, RECEIVE_ID, PO_ID, null, null, null,
+                    BigDecimal.valueOf(100), BigDecimal.valueOf(120), "kg",
+                    1L, OWNER_USER_ID, "张三");
+
+            assertEquals(1, result.size());
+            PurchaseException ex = result.get(0);
+            assertEquals(OWNER_USER_ID, ex.getOwnerUserId(), "ownerUserId 应写入异常单");
+            assertEquals("张三", ex.getOwnerName(), "ownerName 应写入异常单");
         }
     }
 
@@ -165,6 +181,8 @@ class PurchaseExceptionServiceTest {
             ex.setPurchaseOrderId(PO_ID);
             ex.setExceptionQty(BigDecimal.TEN);
             ex.setCreatedBy(1L);
+            ex.setOwnerUserId(OWNER_USER_ID);
+            ex.setOwnerName("张三");
             return ex;
         }
 
@@ -178,6 +196,8 @@ class PurchaseExceptionServiceTest {
             ex.setPurchaseOrderId(PO_ID);
             ex.setExceptionQty(BigDecimal.valueOf(15));
             ex.setCreatedBy(1L);
+            ex.setOwnerUserId(OWNER_USER_ID);
+            ex.setOwnerName("张三");
             return ex;
         }
 
@@ -187,7 +207,8 @@ class PurchaseExceptionServiceTest {
             PurchaseException ex = pendingOverException();
             when(exceptionRepository.findById("EXC-001")).thenReturn(Optional.of(ex));
 
-            exceptionService.decideException("EXC-001", FACTORY_ID, ExceptionDecision.ACCEPT_OVER, "接受超收", 1L);
+            exceptionService.decideException("EXC-001", FACTORY_ID, ExceptionDecision.ACCEPT_OVER,
+                    "接受超收", OWNER_USER_ID, null);
 
             ArgumentCaptor<PurchaseException> captor = ArgumentCaptor.forClass(PurchaseException.class);
             verify(exceptionRepository).save(captor.capture());
@@ -202,7 +223,8 @@ class PurchaseExceptionServiceTest {
             PurchaseException ex = pendingOverException();
             when(exceptionRepository.findById("EXC-001")).thenReturn(Optional.of(ex));
 
-            exceptionService.decideException("EXC-001", FACTORY_ID, ExceptionDecision.RETURN_OVER, "退回多余", 1L);
+            exceptionService.decideException("EXC-001", FACTORY_ID, ExceptionDecision.RETURN_OVER,
+                    "退回多余", OWNER_USER_ID, null);
 
             ArgumentCaptor<PurchaseException> captor = ArgumentCaptor.forClass(PurchaseException.class);
             verify(exceptionRepository).save(captor.capture());
@@ -215,7 +237,8 @@ class PurchaseExceptionServiceTest {
             PurchaseException ex = pendingUnderException();
             when(exceptionRepository.findById("EXC-002")).thenReturn(Optional.of(ex));
 
-            exceptionService.decideException("EXC-002", FACTORY_ID, ExceptionDecision.ACCEPT_SHORT, null, 1L);
+            exceptionService.decideException("EXC-002", FACTORY_ID, ExceptionDecision.ACCEPT_SHORT,
+                    null, OWNER_USER_ID, null);
 
             ArgumentCaptor<PurchaseException> captor = ArgumentCaptor.forClass(PurchaseException.class);
             verify(exceptionRepository).save(captor.capture());
@@ -228,7 +251,8 @@ class PurchaseExceptionServiceTest {
             PurchaseException ex = pendingUnderException();
             when(exceptionRepository.findById("EXC-002")).thenReturn(Optional.of(ex));
 
-            exceptionService.decideException("EXC-002", FACTORY_ID, ExceptionDecision.REQUEST_RESUPPLY, null, 1L);
+            exceptionService.decideException("EXC-002", FACTORY_ID, ExceptionDecision.REQUEST_RESUPPLY,
+                    null, OWNER_USER_ID, null);
 
             ArgumentCaptor<PurchaseException> captor = ArgumentCaptor.forClass(PurchaseException.class);
             verify(exceptionRepository).save(captor.capture());
@@ -241,7 +265,8 @@ class PurchaseExceptionServiceTest {
             when(exceptionRepository.findById("EXC-MISSING")).thenReturn(Optional.empty());
 
             assertThrows(BusinessException.class, () ->
-                    exceptionService.decideException("EXC-MISSING", FACTORY_ID, ExceptionDecision.ACCEPT_OVER, null, 1L));
+                    exceptionService.decideException("EXC-MISSING", FACTORY_ID,
+                            ExceptionDecision.ACCEPT_OVER, null, OWNER_USER_ID, null));
         }
 
         @Test
@@ -252,7 +277,8 @@ class PurchaseExceptionServiceTest {
             when(exceptionRepository.findById("EXC-001")).thenReturn(Optional.of(ex));
 
             assertThrows(BusinessException.class, () ->
-                    exceptionService.decideException("EXC-001", FACTORY_ID, ExceptionDecision.ACCEPT_OVER, null, 1L));
+                    exceptionService.decideException("EXC-001", FACTORY_ID,
+                            ExceptionDecision.ACCEPT_OVER, null, OWNER_USER_ID, null));
         }
 
         @Test
@@ -262,7 +288,53 @@ class PurchaseExceptionServiceTest {
             when(exceptionRepository.findById("EXC-001")).thenReturn(Optional.of(ex));
 
             assertThrows(BusinessException.class, () ->
-                    exceptionService.decideException("EXC-001", FACTORY_ID, ExceptionDecision.ACCEPT_SHORT, null, 1L));
+                    exceptionService.decideException("EXC-001", FACTORY_ID,
+                            ExceptionDecision.ACCEPT_SHORT, null, OWNER_USER_ID, null));
+        }
+
+        // ── D-6 鉴权测试 ────────────────────────────────────────────────────
+
+        @Test
+        @DisplayName("D-6：责任人本人（ownerUserId 匹配）可以决策")
+        void owner_canDecide() {
+            PurchaseException ex = pendingOverException();  // ownerUserId = OWNER_USER_ID
+            when(exceptionRepository.findById("EXC-001")).thenReturn(Optional.of(ex));
+
+            // 责任人本人（非主管角色）决策应成功
+            assertDoesNotThrow(() ->
+                    exceptionService.decideException("EXC-001", FACTORY_ID,
+                            ExceptionDecision.ACCEPT_OVER, null, OWNER_USER_ID, "procurement_staff"));
+
+            verify(exceptionRepository).save(any(PurchaseException.class));
+        }
+
+        @Test
+        @DisplayName("D-6：非责任人非主管 → BusinessException（403），message 包含责任人信息")
+        void nonOwnerNonSupervisor_throwsBusinessException_with_ownerInfo() {
+            PurchaseException ex = pendingOverException();  // ownerUserId = OWNER_USER_ID = 42
+            when(exceptionRepository.findById("EXC-001")).thenReturn(Optional.of(ex));
+
+            BusinessException ex2 = assertThrows(BusinessException.class, () ->
+                    exceptionService.decideException("EXC-001", FACTORY_ID,
+                            ExceptionDecision.ACCEPT_OVER, null, OTHER_USER_ID, "operator"));
+
+            // 错误信息必须指出责任人（Fool-proof Rule 2）
+            assertTrue(ex2.getMessage().contains("张三") || ex2.getMessage().contains("42"),
+                    "错误信息应包含责任人名称或 userId");
+        }
+
+        @Test
+        @DisplayName("D-6：主管角色（procurement_manager）可以代为决策")
+        void supervisorRole_canDecideForOthers() {
+            PurchaseException ex = pendingOverException();  // ownerUserId = OWNER_USER_ID
+            when(exceptionRepository.findById("EXC-001")).thenReturn(Optional.of(ex));
+
+            // OTHER_USER_ID 不是责任人，但有 procurement_manager 角色
+            assertDoesNotThrow(() ->
+                    exceptionService.decideException("EXC-001", FACTORY_ID,
+                            ExceptionDecision.ACCEPT_OVER, null, OTHER_USER_ID, "procurement_manager"));
+
+            verify(exceptionRepository).save(any(PurchaseException.class));
         }
     }
 }

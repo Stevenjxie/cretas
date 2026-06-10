@@ -40,18 +40,24 @@ public interface PurchaseExceptionService {
             BigDecimal poQuantity,
             BigDecimal receivedQuantity,
             String unit,
-            Long createdBy);
+            Long createdBy,
+            Long ownerUserId,
+            String ownerName);
 
     /**
      * 采购员对异常单做决策。
      *
+     * <p>D-6 责任绑定：仅 ownerUserId 本人，或主管角色（factory_super_admin /
+     * procurement_manager）可决策；他人收到 403 + 提示责任人是谁（Fool-proof Rule 2）。
+     *
      * <p>RETURN_OVER 分支：在独立事务（REQUIRES_NEW）中创建退货单，防止 doomed-tx 污染本事务。
      *
-     * @param exceptionId   异常单 ID
-     * @param factoryId     工厂 ID（隔离校验）
-     * @param decision      决策类型
-     * @param notes         备注说明
-     * @param decisionBy    决策人 userId
+     * @param exceptionId    异常单 ID
+     * @param factoryId      工厂 ID（隔离校验）
+     * @param decision       决策类型
+     * @param notes          备注说明
+     * @param decisionBy     决策人 userId
+     * @param callerRole     调用方角色（来自 request attribute "role"）
      * @return 更新后的异常单
      */
     PurchaseException decideException(
@@ -59,7 +65,8 @@ public interface PurchaseExceptionService {
             String factoryId,
             ExceptionDecision decision,
             String notes,
-            Long decisionBy);
+            Long decisionBy,
+            String callerRole);
 
     /**
      * 查询工厂异常单列表，可按 status 过滤。

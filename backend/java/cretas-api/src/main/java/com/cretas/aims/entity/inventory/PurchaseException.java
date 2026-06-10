@@ -122,4 +122,18 @@ public class PurchaseException extends BaseEntity {
     @NotNull
     @Column(name = "created_by", nullable = false)
     private Long createdBy;
+
+    /**
+     * D-6 责任绑定：该异常单的责任人（源采购单的创建人 userId）。
+     * 生成异常单时自动从 PurchaseOrder.createdBy 带入。
+     * 决策端点要求本人或主管角色（factory_super_admin / procurement_manager）才可决策。
+     */
+    @Column(name = "owner_user_id")
+    private Long ownerUserId;
+
+    /**
+     * 责任人用户名（展示用，冗余存储避免联表查询）。
+     */
+    @Column(name = "owner_name", length = 100)
+    private String ownerName;
 }

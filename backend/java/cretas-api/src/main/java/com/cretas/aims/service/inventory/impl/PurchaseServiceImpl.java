@@ -102,6 +102,10 @@ public class PurchaseServiceImpl implements PurchaseService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private SalesOrderRepository salesOrderRepository;
 
+    /** D-6: 责任绑定 — 查询 PO 创建人的用户名供异常单展示（required=false 兼容旧 context） */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.repository.UserRepository userRepository;
+
     /** Canvas V2: DB-driven validation rules */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.engine.ValidationRuleEvaluator validationRuleEvaluator;
@@ -1185,6 +1189,27 @@ public class PurchaseServiceImpl implements PurchaseService {
                     poItemMap.put(pi.getMaterialTypeId(), pi);
                 }
             }
+
+            // D-6 责任绑定：取 PO 创建人作为异常单责任人
+            Long ownerUserId = null;
+            String ownerName = null;
+            try {
+                PurchaseOrder po = purchaseOrderRepository.findById(record.getPurchaseOrderId()).orElse(null);
+                if (po != null && po.getCreatedBy() != null) {
+                    ownerUserId = po.getCreatedBy();
+                    if (userRepository != null) {
+                        ownerName = userRepository.findById(ownerUserId)
+                                .map(u -> u.getUsername())
+                                .orElse(null);
+                    }
+                }
+            } catch (Exception e) {
+                log.warn("[SP6] 查询 PO 责任人失败（不影响异常单生成）: poId={}, error={}",
+                        record.getPurchaseOrderId(), e.getMessage());
+            }
+
+            final Long finalOwnerUserId = ownerUserId;
+            final String finalOwnerName = ownerName;
             for (PurchaseReceiveItem item : record.getItems()) {
                 try {
                     PurchaseOrderItem poItem =
@@ -1200,7 +1225,9 @@ public class PurchaseServiceImpl implements PurchaseService {
                             poQty,
                             item.getReceivedQuantity(),
                             item.getUnit(),
-                            userId);
+                            userId,
+                            finalOwnerUserId,
+                            finalOwnerName);
                 } catch (Exception e) {
                     log.warn("[SP6] 生成采购异常单失败（不影响入库主流程）: receiveId={}, material={}, error={}",
                             receiveId, item.getMaterialTypeId(), e.getMessage());

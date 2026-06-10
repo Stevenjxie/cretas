@@ -13,6 +13,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.*;
 
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.constraints.NotBlank;
 import java.util.List;
 import java.util.Map;
@@ -47,14 +48,19 @@ public class PurchaseExceptionController {
     // ─── 异常单决策 ────────────────────────────────────────────────────────────
 
     @PostMapping("/{exceptionId}/decide")
-    @Operation(summary = "对采购异常单做决策", description = "decision: ACCEPT_OVER（接受超收）/ RETURN_OVER（退回超收）/ ACCEPT_UNDER（接受少收）/ REORDER（补采购）")
+    @Operation(summary = "对采购异常单做决策",
+            description = "decision: ACCEPT_OVER（接受超收）/ RETURN_OVER（退回超收）/ ACCEPT_SHORT（接受少收）/ REQUEST_RESUPPLY（补采购）。"
+                    + " D-6：仅责任采购人本人或主管角色（factory_super_admin / procurement_manager）可决策。")
     @RequirePermission({"procurement:read_write"})
     public ApiResponse<PurchaseException> decideException(
             @PathVariable @NotBlank String factoryId,
             @PathVariable @NotBlank String exceptionId,
             @RequestHeader("Authorization") String authorization,
+            HttpServletRequest request,
             @RequestBody Map<String, String> body) {
         Long userId = extractUserId(authorization);
+        // D-6 鉴权：callerRole 从 request attribute 读（JwtAuthInterceptor 设置；SecurityContext 永空）
+        String callerRole = (String) request.getAttribute("role");
         String decisionStr = body.get("decision");
         String notes = body.get("notes");
 
@@ -63,13 +69,13 @@ public class PurchaseExceptionController {
             decision = ExceptionDecision.valueOf(decisionStr);
         } catch (IllegalArgumentException | NullPointerException e) {
             throw new com.cretas.aims.exception.BusinessException(400,
-                    "无效的决策类型: " + decisionStr + "，可选值: ACCEPT_OVER / RETURN_OVER / ACCEPT_UNDER / REORDER");
+                    "无效的决策类型: " + decisionStr + "，可选值: ACCEPT_OVER / RETURN_OVER / ACCEPT_SHORT / REQUEST_RESUPPLY");
         }
 
-        log.info("[SP6] 异常单决策: factoryId={}, exceptionId={}, decision={}, userId={}",
-                factoryId, exceptionId, decision, userId);
+        log.info("[SP6] 异常单决策: factoryId={}, exceptionId={}, decision={}, userId={}, role={}",
+                factoryId, exceptionId, decision, userId, callerRole);
         PurchaseException updated = purchaseExceptionService.decideException(
-                exceptionId, factoryId, decision, notes, userId);
+                exceptionId, factoryId, decision, notes, userId, callerRole);
         return ApiResponse.success("决策已记录", updated);
     }
 
