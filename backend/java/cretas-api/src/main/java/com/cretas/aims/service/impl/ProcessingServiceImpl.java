@@ -331,8 +331,15 @@ public class ProcessingServiceImpl implements ProcessingService {
 
     public ProductionBatch getBatchById(String factoryId, String batchId) {
         Long id = parseBatchId(batchId);
-        return productionBatchRepository.findByIdAndFactoryId(id, factoryId)
+        ProductionBatch batch = productionBatchRepository.findByIdAndFactoryId(id, factoryId)
                 .orElseThrow(() -> new ResourceNotFoundException("批次不存在"));
+        // BUG-2 修复: 填充 batchSourceType (@Transient) 从关联计划的 planSourceType。
+        // null-safe: productionPlanId 为 null 或计划已删除时 batchSourceType 保持 null。
+        if (batch.getProductionPlanId() != null) {
+            productionPlanRepository.findById(batch.getProductionPlanId())
+                    .ifPresent(plan -> batch.setBatchSourceType(plan.getPlanSourceType()));
+        }
+        return batch;
     }
     public PageResponse<ProductionBatch> getBatches(String factoryId, String status, PageRequest pageRequest) {
         org.springframework.data.domain.PageRequest pageable = org.springframework.data.domain.PageRequest.of(
