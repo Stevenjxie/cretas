@@ -64,6 +64,12 @@
             {{ row.exceptionQty }} {{ row.unit }}
           </template>
         </el-table-column>
+        <el-table-column label="责任人" prop="ownerName" width="110">
+          <template #default="{ row }">
+            <span v-if="row.ownerName">{{ row.ownerName }}</span>
+            <span v-else class="text-muted">—</span>
+          </template>
+        </el-table-column>
         <el-table-column label="状态" prop="status" width="90">
           <template #default="{ row }">
             <el-tag :type="statusTag(row.status)" size="small">
@@ -82,10 +88,20 @@
             {{ formatDate(row.createdAt) }}
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="140" fixed="right">
+        <el-table-column label="操作" width="160" fixed="right">
           <template #default="{ row }">
+            <!-- D-6: 处理按钮仅责任人本人或主管角色可点（Fool-proof Rule 2 + Rule 5） -->
+            <el-tooltip
+              v-if="row.status === 'PENDING' && canWrite && !isOwnerOrSupervisor(row)"
+              :content="`仅责任人 ${row.ownerName || '（未知）'} 或主管可处理`"
+              placement="top"
+            >
+              <span>
+                <el-button type="primary" link size="small" disabled>处理</el-button>
+              </span>
+            </el-tooltip>
             <el-button
-              v-if="row.status === 'PENDING' && canWrite"
+              v-else-if="row.status === 'PENDING' && canWrite"
               type="primary"
               link
               size="small"
@@ -133,11 +149,12 @@
       <el-form ref="decisionFormRef" :model="decisionForm" :rules="decisionRules" label-width="100px">
         <el-form-item label="处理决定" prop="decision">
           <!-- Rule 3: 约束选择 dropdown 而非自由文本 -->
+          <!-- ExceptionDecision enum: ACCEPT_OVER / RETURN_OVER / ACCEPT_SHORT / REQUEST_RESUPPLY -->
           <el-select v-model="decisionForm.decision" placeholder="请选择处理方式" style="width: 100%">
             <el-option label="接收（数量偏差，全部入库）" value="ACCEPT_OVER" />
             <el-option label="退货（拒收，退回供应商）" value="RETURN_OVER" />
-            <el-option label="按实收（短少，按实际数量入库）" value="ACCEPT_UNDER" />
-            <el-option label="补货（缺货，要求供应商补发）" value="REORDER" />
+            <el-option label="按实收（短少，按实际数量入库）" value="ACCEPT_SHORT" />
+            <el-option label="补货（缺货，要求供应商补发）" value="REQUEST_RESUPPLY" />
           </el-select>
         </el-form-item>
         <el-form-item label="备注" prop="notes">
@@ -177,6 +194,9 @@
           <el-descriptions-item label="物料名称">{{ currentRow.materialName }}</el-descriptions-item>
           <el-descriptions-item label="异常类型">{{ exceptionTypeLabel(currentRow.exceptionType) }}</el-descriptions-item>
           <el-descriptions-item label="异常数量">{{ currentRow.exceptionQty }} {{ currentRow.unit }}</el-descriptions-item>
+          <el-descriptions-item label="责任人">
+            {{ currentRow.ownerName || '—' }}
+          </el-descriptions-item>
           <el-descriptions-item label="状态">
             <el-tag :type="statusTag(currentRow.status)" size="small">
               {{ statusLabel(currentRow.status) }}
@@ -210,6 +230,7 @@ import { usePermissionStore } from '@/store/modules/permission'
 // Entity fields: exceptionNumber, purchaseOrderId, supplierId, materialName,
 //                exceptionType (OVER_RECEIVE/UNDER_RECEIVE), exceptionQty, unit,
 //                decision, decisionNotes, decisionAt, status (PENDING/RESOLVED), createdAt
+//                ownerUserId, ownerName  — D-6 责任绑定
 interface ExceptionRow {
   id: string
   exceptionNumber: string
@@ -220,10 +241,13 @@ interface ExceptionRow {
   exceptionQty: number      // was 'quantity' — entity field is exceptionQty
   unit: string
   status: 'PENDING' | 'RESOLVED'
-  decision: 'ACCEPT_OVER' | 'RETURN_OVER' | 'ACCEPT_UNDER' | 'REORDER' | null
+  decision: 'ACCEPT_OVER' | 'RETURN_OVER' | 'ACCEPT_SHORT' | 'REQUEST_RESUPPLY' | null
   decisionNotes: string | null   // was 'notes' — entity field is decisionNotes
   decisionAt: string | null      // was 'resolvedAt' — entity field is decisionAt
   createdAt: string | null
+  // D-6 责任绑定字段
+  ownerUserId: number | null
+  ownerName: string | null
 }
 
 interface DecisionForm {
@@ -236,6 +260,24 @@ const authStore = useAuthStore()
 const permStore = usePermissionStore()
 const factoryId = computed(() => authStore.factoryId)
 const canWrite = computed(() => permStore.canWrite('procurement'))
+
+// D-6 鉴权：当前用户 ID 和角色（用于"处理"按钮禁用判断）
+const currentUserId = computed(() => authStore.user?.id ?? null)
+const currentRole = computed(() => authStore.currentRole)
+const SUPERVISOR_ROLES = ['factory_super_admin', 'procurement_manager']
+
+/**
+ * D-6: 当前用户是否可处理此异常单
+ * 条件：ownerUserId 本人，或主管角色（factory_super_admin / procurement_manager）
+ */
+function isOwnerOrSupervisor(row: ExceptionRow): boolean {
+  if (SUPERVISOR_ROLES.includes(currentRole.value)) return true
+  if (row.ownerUserId != null && currentUserId.value != null) {
+    return Number(row.ownerUserId) === Number(currentUserId.value)
+  }
+  // ownerUserId 未设置（旧数据兼容）：允许任何有 write 权限的用户处理
+  return row.ownerUserId == null
+}
 
 // ─── 状态 ────────────────────────────────────────────────────
 const loading = ref(false)
@@ -285,11 +327,12 @@ function statusTag(s: string): '' | 'success' | 'warning' {
 }
 
 function decisionLabel(d: string): string {
+  // Must match ExceptionDecision enum: ACCEPT_OVER / RETURN_OVER / ACCEPT_SHORT / REQUEST_RESUPPLY
   const map: Record<string, string> = {
     ACCEPT_OVER: '接收入库',
     RETURN_OVER: '退货',
-    ACCEPT_UNDER: '按实收',
-    REORDER: '补货'
+    ACCEPT_SHORT: '按实收',
+    REQUEST_RESUPPLY: '补货'
   }
   return map[d] ?? d
 }
