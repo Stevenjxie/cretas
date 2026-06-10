@@ -1,7 +1,7 @@
 # 多模型分发路由规范 (Multi-Model Dispatch)
 
 **最后更新**: 2026-06-10
-**触发**: Steve 要"Claude 出计划时直接产出可分发的 task 输出, 我去派给其他 chat, 并指定哪些给 GPT-5.5·Codex / 哪些给 Composer 2.5"。增补：Sonnet 执行层 + 三轴路由（模型/effort/orchestration）+ 预算均衡注记 + 两通道 + 审查分层。**2026-06-10**: Fable 5 上线(2x Opus 消耗)→ 加 model 轴破玻璃顶层 + Fable 5 定位铁律(organizer 本体不换 Fable 5, 只派 `fable` subagent 做四落点单点)。
+**触发**: Steve 要"Claude 出计划时直接产出可分发的 task 输出, 我去派给其他 chat, 并指定哪些给 GPT-5.5·Codex / 哪些给 Composer 2.5"。增补：Sonnet 执行层 + 三轴路由（模型/effort/orchestration）+ 预算均衡注记 + 两通道 + 审查分层。**2026-06-10**: Fable 5 上线(2x Opus 消耗)→ 加 model 轴破玻璃顶层 + Fable 5 定位铁律(organizer 本体不换 Fable 5, 只派 `fable` subagent 做四落点单点)。**2026-06-10 晚 v2(Steve 拍板)**: 升级闸修订 — 卡死阈值 2轮→**1轮认真尝试**; 新增**三类预授权直通**(prod 事故计时中/同族前科/不可逆小diff终审)可跳过 Opus 直接 Fable; Opus 失败轮产物必须回收进 fable brief。
 **关系**: 这是 [`parallel-work-analysis.md`](./parallel-work-analysis.md) 的**升级层** —— 老规则回答"能不能并行", 本规则在它之上回答"每块并行工作派给哪个模型 + 怎么物理隔离 + 怎么交接回 main"。隔离铁律继承 [`worktree-and-main-only-deploy.md`](./worktree-and-main-only-deploy.md) + [`concurrent-edit-safety.md`](./concurrent-edit-safety.md)。编排顶层入口 → [`organizer-protocol.md`](./organizer-protocol.md)。
 
 ---
@@ -9,7 +9,7 @@
 ## 核心理念
 
 ```text
-Fable 5        = 破玻璃判断顶层 (2x Opus 消耗, 比 Opus 还稀缺; earned-not-predicted: 只在 Opus 已实际试过且卡住后升, session 个位数次)
+Fable 5        = 破玻璃判断顶层 (2x Opus 消耗, 比 Opus 还稀缺; earned-not-predicted v2: Opus 1 轮认真尝试没收敛即升 + 三类预授权直通, session 个位数次)
 Opus 4.8       = 总工 / 架构师 / 高风险决策 / 上线前终审 (贵但稳, 负责判断对不对) — organizer 本体常驻这档
 Sonnet         = Claude 侧默认执行层 (便宜 20x, rule-heavy in-harness, 自动加载 .claude/rules)
 GPT-5.5·Codex  = 复杂执行 + CLI/E2E/构建 + 第二审查 (强执行, 复杂工程操作)
@@ -25,7 +25,7 @@ Composer 2.5   = 独立 UI / 样式 / lint / 补测试 (Cursor 内便宜耐用)
 | 必须 | 禁止 |
 |---|---|
 | **organizer 本体保持 Opus 4.8 + high** — Fable 5 由 organizer 通过 `fable` subagent (Agent tool model override 支持) 在**单点**派出, 自己 body 不动 | ❌ 把整个 organizer 换成 Fable 5 → 每轮廉价路由分诊 ×2 = `满载消费者` 反模式 ×2, 几天炸周限额 |
-| **earned-not-predicted**: Fable 5 只在 Opus **已经实际试过且明确卡住**之后升, 不靠"我觉得这超出 Opus 能力"的预测(那是不可证伪的, organizer 有升级偏好会滥用) | ❌ 预先"为了保险用最好的模型"。没观察到 Opus wobble 就不许升 |
+| **earned-not-predicted(v2)**: 默认仍是 Opus 先试 — 但阈值降为 **1 轮认真尝试**(打完没收敛 + 能说清卡在哪 → 升, 不撞第 2 轮); 例外 = 三类**预授权直通**(见下), 触发条件客观可证伪, 不是"我觉得难" | ❌ 预授权三类之外, 预先"为了保险用最好的模型"。没观察到 Opus 卡住就不许升 |
 | **model 轴新顶**: 难判断升级阶梯 = Sonnet 4.6 → Opus 4.8 → **Fable 5**(effort 在每档内作次级旋钮)。Opus 4.8 × xhigh 已试且 wobble → 升 Fable 5, 而不是停在 Opus 继续烧 effort | ❌ 任何执行(Sonnet/Codex/Composer)/路由分诊/批量机械/fan-out workers。`cost = tokens × 2x`, 体量工作进 Fable 5 是灾难 |
 
 #### 防滥用闸 + 防荒废闸 (闸要自我执行, 不靠 organizer 自律)
@@ -34,12 +34,19 @@ Composer 2.5   = 独立 UI / 样式 / lint / 补测试 (Cursor 内便宜耐用)
 
 | 落点 | 触发(客观优先) | 注意 |
 |---|---|---|
-| ① **卡死调试升级**(最干净) | Opus 已修 2 轮没好 → **客观触发, 应当升**(别让 Opus 第三次硬撞) | 你本就想要不同模型新视角, subagent rediscovery 在这里是 feature |
+| ① **卡死调试升级**(最干净) | Opus **1 轮认真尝试**没收敛且能说清卡在哪 → **客观触发, 应当升**(v2: 不撞第 2 轮 — 第 2 轮往往是不甘心的重复撞墙) | 升级时把 Opus 轮产物(问题框架/repro/已排除假设)**回收进 fable brief**, 抵消 2x rediscovery 惩罚 |
 | ② **真有判断模糊的难架构选型** | Opus **xhigh 已试且两版结论打架/拿不准** 才升 | 没试过 Opus 不许直接 Fable 5 |
 | ③ **模糊高风险需求框架** | 同②: Opus 先框, 框不清且 stakes 高才升 | ⚠️ 框架常 token 量大, 2x 贵; Opus 够就别升 |
 | ④ **🔒 终审里"不可逆/高爆炸半径"窄子集** | prod 迁移 / RBAC·RLS·多租户数据泄露 / 资金路径, **且 diff 小** | ⚠️ **不是每个终审**。大 diff 终审用 Opus + 对抗 fan-out 更划算(见纠错) |
 
 **⛔ 纠错(第一稿的错)**: "🔒 终审 = 最强候选" **站不住**。organizer 本体(Opus)做终审时已持有 diff context; 交给全新 `fable` subagent = **2x 费率 + 从头 rediscovery context** 双重惩罚。终审是 Fable 5 性价比**最差**的落点之一(尤其大 diff)。真正最强是 ① 卡死升级(客观触发 + 想要异模型视角)。
+
+**预授权直通 (2026-06-10 v2, Steve 拍板)**: 以下三类**不需要先跑 Opus**, 可直接派 `fable` —— 口子窄且触发条件可证伪:
+1. **prod 事故计时中**: 真客户被 block, 失败轮的代价是小时不是 token(期望成本算式翻转)。
+2. **同族前科**: 同类问题此前已实证 Opus 打不动、靠升级才解(有台账/memory 记录可引用, 不是"感觉像")。
+3. **不可逆 + 小 diff 终审**(即落点④: prod 迁移 / RBAC·RLS / 资金路径)。
+
+经济学根据(为什么默认仍 earned): 设 Opus 轮=1、Fable 轮=2, p=Opus 1-2 轮内解掉的概率 → earned 期望成本 ≈ p×1+(1-p)×4, p>~50% 时 earned 更省。本项目实证 base rate 高(绝大多数"看着难"的问题 Opus 一轮即倒), 且预测式升级不可证伪会类目蔓延。预授权三类 = p 已知很低、或失败代价不在 token 维度的情形。
 
 **频次闸(对标 max effort 的"几乎不用")**: Fable 5 应是 **session 内个位数次**的破玻璃动作, 不是每个 risky 任务都点。**想点第 2 次就停下自检**: 是不是在用 model 轴掩盖 brief 没写清 / 需求没框清 —— 那应该回去修 brief, 不是升模型。
 
@@ -173,11 +180,14 @@ Opus 从 main 部署 prod → 核对运行中 jar/代码确含修复
 某模型修 2 轮没好 / 改乱了?
   → 切 Opus 做 root-cause, 别盲改
 
-Opus 已经实际试过且明确卡住/wobble(不是"我预测它会失败")?
-  → 卡死调试 Opus 修 2 轮没好: ✅ 应当派 `fable` subagent 升级(别硬撞第 3 次)
+预授权直通(v2, 可跳过 Opus 直接 `fable`)?
+  → prod 事故计时中(客户被 block, 失败轮代价=小时): ✅ 直接派 `fable`
+  → 同族前科(同类问题有台账/memory 记录 Opus 打不动): ✅ 直接派 `fable`
+  → 🔒 不可逆+小 diff 终审(prod 迁移/RBAC/RLS/资金): ✅ 直接派 `fable`
+否则 Opus 先试 **1 轮认真尝试**(v2, 原 2 轮):
+  → 没收敛且能说清卡在哪: ✅ 升 `fable`(不撞第 2 轮; Opus 轮产物回收进 brief)
   → 难架构/模糊框架 Opus xhigh 已试且两版结论打架, 且 stakes 高: ✅ 派 `fable` subagent 单点
-  → 🔒 终审里"不可逆/高爆炸半径 + 小 diff"窄子集(prod 迁移/RBAC/RLS/资金): ✅ 派 `fable`
-  → ⛔ 否则一律 Opus; 没观察到 Opus wobble 不许预先升; Fable 5 不进执行/分诊/批量/fan-out/大 diff 终审
+  → ⛔ 其余一律 Opus; Fable 5 不进执行/分诊/批量/fan-out/大 diff 终审
   → 频次闸: session 内个位数次; 想点第 2 次 → 先自检是不是 brief/需求没框清(回去修 brief, 别升模型)
 ```
 
@@ -223,7 +233,7 @@ Opus 已经实际试过且明确卡住/wobble(不是"我预测它会失败")?
 | Opus 高风险门控 review | Opus | xhigh | 单 subagent(read-only 隔离) |
 | Opus 单个难点 | Opus | high + `ultrathink` 点该轮 | inline |
 | 广覆盖审计/迁移 | Opus 编排 + Sonnet workers | xhigh(Opus)/high(workers) | ultracode → workflow |
-| Opus 卡死升级(修 2 轮没好) / 难架构 Opus 已 wobble / 🔒 不可逆小-diff 终审 | Opus 编排 + **Fable 5** 单点 | Fable 5 走 model 轴(非 effort 档) | 单 `fable` subagent(read-only 隔离) |
+| Opus 卡死升级(1 轮认真尝试没收敛) / 难架构 Opus 已 wobble / 预授权直通(prod 事故计时/同族前科/🔒 不可逆小-diff 终审) | Opus 编排 + **Fable 5** 单点 | Fable 5 走 model 轴(非 effort 档) | 单 `fable` subagent(read-only 隔离) |
 
 > **Fable 5 不在 effort 表里**: effort 旋钮只对 Opus/Sonnet 有效; Fable 5 是 model 轴的破玻璃顶层, 由 organizer 通过 `fable` subagent 派出, 不是给 organizer 本体加的 effort 档。台账 `model` 列允许填 `fable`(仅四落点)。
 
