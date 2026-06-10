@@ -246,6 +246,35 @@ _PCT_STAT_TYPES: frozenset[str] = frozenset({
 _ARABIC_NUMBER_RE = re.compile(r"\d+\.?\d*")
 
 
+def _coerce_number(v: Any) -> Optional[float]:
+    """Coerce an LLM-emitted claim value to float. Handles int/float and strings like
+    '62', '62.0', '62%', '1.6倍', '￥38000', '3.8万', '约62'. Returns None if uncoercible."""
+    if v is None:
+        return None
+    if isinstance(v, bool):
+        return None
+    if isinstance(v, (int, float)):
+        return float(v)
+    if not isinstance(v, str):
+        return None
+    s = v.strip().replace(",", "").replace("约", "").replace("近", "").replace("超", "")
+    s = s.replace("¥", "").replace("￥", "").replace("%", "").replace("倍", "")
+    mult = 1.0
+    if s.endswith("万"):
+        mult = 10000.0
+        s = s[:-1]
+    elif s.endswith("亿"):
+        mult = 1e8
+        s = s[:-1]
+    m = re.search(r"-?\d+\.?\d*", s)
+    if not m:
+        return None
+    try:
+        return float(m.group()) * mult
+    except ValueError:
+        return None
+
+
 def _validate_claims(
     llm_obj: dict,
     ctx: "ChartInsightContext",
@@ -280,30 +309,47 @@ def _validate_claims(
     """
     claims = llm_obj.get("claims")
     if not claims:
+        logger.info("[chart-insight] validate: no claims array in LLM response (keys=%s)",
+                    list(llm_obj.keys()))
         return None
 
     # --- Step 1: validate each claim by recomputation ---
     valid_claims: List[dict] = []
+    drop_reasons: List[str] = []  # diagnostic
     for claim in claims:
         entity = claim.get("entity")  # may be None for entity-agnostic stats
         stat_type = claim.get("stat_type", "")
-        claimed_value = claim.get("value")
+        claimed_value = _coerce_number(claim.get("value"))
 
         if claimed_value is None:
+            drop_reasons.append(f"{entity}/{stat_type}: uncoercible value {claim.get('value')!r}")
             continue  # skip malformed
 
         true_value = recompute_claim(entity, stat_type, ctx.series_values, ctx.series_labels)
         if true_value is None:
-            # Cannot recompute (entity missing or stat unknown) → drop
+            drop_reasons.append(f"{entity}/{stat_type}: recompute None (unknown entity/stat)")
             continue
 
-        tol = tolerance_ratio if stat_type in _RATIO_STAT_TYPES else tolerance_pct
-        if abs(claimed_value - true_value) <= tol:
-            valid_claims.append(claim)
-        # else: drop (claimed value doesn't match recomputed true value)
+        # Normalize the claimed value to the same representation recompute returns:
+        # LLMs commonly emit share/growth as a fraction (0.62) instead of pct (62.0).
+        normalized = claimed_value
+        if stat_type in _RATIO_STAT_TYPES:
+            tol = tolerance_ratio
+        else:
+            tol = tolerance_pct
+            # If the claim looks like a fraction of a pct-true-value, scale ×100 once.
+            if abs(normalized - true_value) > tol and abs(normalized * 100 - true_value) <= tol:
+                normalized = normalized * 100
+        if abs(normalized - true_value) <= tol:
+            # store the normalized value back so the adjacency gate compares consistently
+            valid_claims.append({**claim, "value": normalized})
+        else:
+            drop_reasons.append(f"{entity}/{stat_type}: claimed {claimed_value} vs true {round(true_value,2)} (>tol {tol})")
 
     # If no claims survived validation, reject
     if not valid_claims:
+        logger.info("[chart-insight] validate: 0/%d claims survived; reasons=%s",
+                    len(claims), "; ".join(drop_reasons[:6]))
         return None
 
     # --- Step 2: numeric-adjacency gate ---
@@ -331,6 +377,8 @@ def _validate_claims(
 
         if not matching_claims:
             # This number has no valid claim anchor → reject
+            logger.info("[chart-insight] validate: prose number %s has no valid-claim anchor → reject",
+                        num_str)
             return None
 
         # For entity-bearing claims (entity is not None), check entity adjacency
@@ -345,6 +393,8 @@ def _validate_claims(
             )
             if not has_entity_match:
                 # The nearest entity in prose doesn't match the claim's entity → reject
+                logger.info("[chart-insight] validate: number %s nearest-entity=%r ≠ claim entities %s → reject",
+                            num_str, nearest_label, [mc.get("entity") for mc in entity_bearing])
                 return None
         # else: entity-agnostic claims (growth/count/top2_share) — no entity check needed
 
