@@ -1037,6 +1037,15 @@ app.include_router(restaurant_targets_api.router, prefix="/api/smartbi", tags=["
 from smartbi.api import restaurant_targets_p1 as restaurant_targets_p1_api  # noqa: E402
 app.include_router(restaurant_targets_p1_api.router, prefix="/api/smartbi", tags=["Restaurant Targets P1"])
 
+# Chart Auto-Insight (U4 — POST /api/smartbi/chart-insight, JWT required)
+# 🔒 RBAC: factoryId + role ALWAYS from JWT (request.state), never from request body.
+# Path: /api/smartbi/chart-insight — does NOT match PUBLIC_PREFIXES entry "/api/smartbi/chart/"
+# (that entry has a trailing slash; "chart-insight" contains a hyphen, not a slash), so
+# JWTAuthMiddleware (registered on this top-level app) will enforce auth on every request.
+# Registered here — on the LIVE uvicorn entrypoint — not in smartbi/main.py (dead module).
+from smartbi.api.chart_insight import router as chart_insight_router  # noqa: E402
+app.include_router(chart_insight_router, prefix="/api/smartbi", tags=["Chart Auto-Insight"])
+
 # P2 综合分析 (multi-dim synthesis) — review + finance/sales → FactBook → grounded
 # narrative + charts. Path A entrypoint for the Java COMPREHENSIVE_SYNTHESIS tool.
 from smartbi.api import synthesis as synthesis_api  # noqa: E402
