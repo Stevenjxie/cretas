@@ -506,8 +506,10 @@ function parseInsightCitations(content: string): Array<{ text: string; chartInde
     { keywords: /类别占比|产品.*占比|品类.*分布|分类.*比例|占比.*分布|产品结构/, chartIndex: 1 },
   ];
 
-  // Split by sentences (Chinese period, semicolon, or newline)
-  const sentences = content.split(/(?<=[。；;！!？?\n])/);
+  // Split by sentences (Chinese period, semicolon). NOT on \n — cleanInsightText
+  // inserts \n before bullets/注 for the pre-line panel; splitting on \n here would
+  // create whitespace-only segments that get dropped below, re-joining the lines.
+  const sentences = content.split(/(?<=[。；;！!？?])/);
   const result: Array<{ text: string; chartIndex?: number; chartTitle?: string }> = [];
   const usedCharts = new Set<number>();
 
