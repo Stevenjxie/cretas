@@ -132,30 +132,19 @@ class SalesServiceImplEmptyPriceE2Test {
     // =========================================================================
 
     @Test
-    @DisplayName("E2-01: 空单价创建草稿 → 不抛异常（validationRuleEvaluator 未注入 = 规则跳过）")
-    void createDraft_nullUnitPrice_noValidationRuleEvaluator_succeeds() {
-        // validationRuleEvaluator 未注入 (null) → runConfiguredValidation 直接返回
-        // 这模拟禁用了 POSITIVE_AMOUNT CREATE 规则后的状态
+    @DisplayName("E2-01: 空单价创建草稿 → 真正成功且 totalAmount=0（不再容忍 NPE）")
+    void createDraft_nullUnitPrice_succeedsWithZeroTotal() {
+        // 修订记录 (2026-06-11): 旧版此测试 catch(Exception) 吞掉 NPE 让其"通过",
+        // 掩盖了 createSalesOrder line 470 calculateLineAmount 返 null → BigDecimal.add(null) NPE
+        // (prod 实测 500 追踪码 444C443D). 现 Opus 修空价行贡献 0, 此测试改为真断言成功.
         com.cretas.aims.dto.inventory.CreateSalesOrderRequest req = buildCreateRequest(null);
 
-        // 因为 calculateLineAmount 在 unitPrice=null 时会 NPE，这里我们验证
-        // validationRuleEvaluator=null 路径不会在规则层面抛出 BusinessException
-        // 实际产品中：DB 规则禁用后，unitPrice=null 的行会以 lineAmount=0 处理
-        // 在本测试中: validationRuleEvaluator 未注入 → runConfiguredValidation 直接返回 → 无规则层拦截
-        // 后续流程因 calculateLineAmount NPE 而中止，但规则层本身正确放行。
-
-        // 注入一个空 validationRuleEvaluator (null) — 不会触发任何规则
-        // => 验证目标: 不抛 BusinessException("订单总金额必须大于0")
-        try {
-            salesService.createSalesOrder(FACTORY_ID, req, USER_ID);
-        } catch (BusinessException be) {
-            // 不允许有 BusinessException 说"总金额必须大于0"
-            assertThat(be.getMessage())
-                    .as("草稿创建时不应因空单价抛出 BusinessException")
-                    .doesNotContain("订单总金额必须大于0");
-        } catch (Exception other) {
-            // NPE 或其他非业务异常可接受 (unitPrice=null 的 lineAmount 计算问题, 不是规则拦截)
-        }
+        // 空价草稿: 不抛任何异常 (含 NPE), 成功创建, 总额为 0
+        SalesOrder order = salesService.createSalesOrder(FACTORY_ID, req, USER_ID);
+        assertThat(order).as("空单价草稿应成功创建, 不 NPE").isNotNull();
+        assertThat(order.getTotalAmount())
+                .as("空单价行对 totalAmount 贡献 0")
+                .isEqualByComparingTo(java.math.BigDecimal.ZERO);
     }
 
     @Test
