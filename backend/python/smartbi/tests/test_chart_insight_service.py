@@ -925,3 +925,117 @@ class TestU1Hardening:
         ctx_old = _make_context(data_pattern="ranking:top-share:65-80:cat-count:4-8")
         sig_old = compute_signature(ctx_old)
         assert sig != sig_old, "n4-8 and cat-count:4-8 data_patterns must yield different signatures"
+
+
+# ---------------------------------------------------------------------------
+# Task 2: _validate_claims  (C1.2 — MF1 hallucination-kill)
+# ---------------------------------------------------------------------------
+
+from smartbi.services.insights.chart_insight_service import _validate_claims  # noqa: E402
+
+
+def _ctx(values: List[float], labels: List[str], domain: str = "restaurant") -> ChartInsightContext:
+    """Minimal ChartInsightContext for _validate_claims tests."""
+    return ChartInsightContext(
+        chart_type="PIE",
+        x_dim="channel",
+        y_metric="revenue",
+        aggregation="sum",
+        domain=domain,
+        data_pattern="test",
+        permission_tier="finance_visible",
+        factory_id="F001",
+        series_values=values,
+        series_labels=labels,
+    )
+
+
+class TestValidateClaims:
+    """C1.2: _validate_claims 重算校验 + 数字邻接闸 — MF1 核心。"""
+
+    # -----------------------------------------------------------------------
+    # Test 1: valid claim passes (share type, entity present, value within tolerance)
+    # -----------------------------------------------------------------------
+    def test_valid_claim_passes(self):
+        """堂食=62, LLM says 堂食占62% → recompute 62/100=62% → valid; prose matches → pass."""
+        ctx = _ctx([62.0, 38.0], ["堂食", "外卖"])
+        llm_obj = {
+            "claims": [{"entity": "堂食", "stat_type": "share", "value": 62.0}],
+            "finding": "堂食占62%，是主要渠道。",
+            "implication": "堂食渠道占据主导。",
+            "suggestion": "持续关注堂食表现。",
+        }
+        result = _validate_claims(llm_obj, ctx)
+        assert result is not None, "Valid claim with matching prose should pass"
+        assert "finding" in result
+        assert "implication" in result
+        assert "suggestion" in result
+
+    # -----------------------------------------------------------------------
+    # Test 2: entity swap rejected — claim entity wrong, recompute gives different entity
+    # -----------------------------------------------------------------------
+    def test_entity_swap_rejected(self):
+        """堂食=62 is the real 62%, but LLM says 外卖占62% (entity wrong) → recompute 外卖=38% ≠ 62 → drop claim.
+        Prose has '62' adjacent to '外卖' but no valid claim with value≈62 → numeric-adjacency gate rejects."""
+        ctx = _ctx([62.0, 38.0], ["堂食", "外卖"])
+        llm_obj = {
+            "claims": [{"entity": "外卖", "stat_type": "share", "value": 62.0}],  # WRONG entity
+            "finding": "外卖占62%，超过堂食。",
+            "implication": "外卖渠道强劲。",
+            "suggestion": "关注外卖增长。",
+        }
+        result = _validate_claims(llm_obj, ctx)
+        assert result is None, (
+            "Entity-swap claim (外卖=62 when real is 堂食=62) must be rejected; "
+            "prose number 62 no longer has a valid claim anchor → return None"
+        )
+
+    # -----------------------------------------------------------------------
+    # Test 3: derived stat (top2_share) not false-rejected
+    # -----------------------------------------------------------------------
+    def test_derived_stat_not_false_rejected(self):
+        """top2_share = (62+38)/100 * 100 = 100% but with [62,38,0] total=100 top2=(62+38)=100 → 100%.
+        Use [50, 30, 20]: top2=(50+30)/100=80%, LLM claims top2_share=80 → must PASS (not mis-reject)."""
+        ctx = _ctx([50.0, 30.0, 20.0], ["A店", "B店", "C店"])
+        llm_obj = {
+            "claims": [{"entity": None, "stat_type": "top2_share", "value": 80.0}],
+            "finding": "前两名合计占80%。",
+            "implication": "头部集中度较高。",
+            "suggestion": "关注头部门店运营效率。",
+        }
+        result = _validate_claims(llm_obj, ctx)
+        assert result is not None, (
+            "top2_share=80% should be recomputed correctly and NOT false-rejected"
+        )
+
+    # -----------------------------------------------------------------------
+    # Test 4: invented number in prose rejected
+    # -----------------------------------------------------------------------
+    def test_invented_number_in_prose_rejected(self):
+        """Claim is valid (堂食=62%), but prose also mentions '15%' which is not in any claim → reject."""
+        ctx = _ctx([62.0, 38.0], ["堂食", "外卖"])
+        llm_obj = {
+            "claims": [{"entity": "堂食", "stat_type": "share", "value": 62.0}],
+            "finding": "堂食占62%，环比增长15%。",   # '15' is invented (not in claims)
+            "implication": "增长稳健。",
+            "suggestion": "保持现有策略。",
+        }
+        result = _validate_claims(llm_obj, ctx)
+        assert result is None, (
+            "Prose number '15' has no matching valid claim → numeric-adjacency gate must return None"
+        )
+
+    # -----------------------------------------------------------------------
+    # Test 5: no claims returns None
+    # -----------------------------------------------------------------------
+    def test_no_claims_returns_none(self):
+        """Empty claims list → no anchor for any number → return None immediately."""
+        ctx = _ctx([62.0, 38.0], ["堂食", "外卖"])
+        llm_obj = {
+            "claims": [],
+            "finding": "堂食表现良好。",
+            "implication": None,
+            "suggestion": None,
+        }
+        result = _validate_claims(llm_obj, ctx)
+        assert result is None, "Empty claims list must return None"

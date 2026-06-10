@@ -32,6 +32,8 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence
 
+from .claim_recompute import recompute_claim
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -299,6 +301,166 @@ def _compute_slot_values(ctx: ChartInsightContext) -> Dict[str, Any]:
             slots["changeDir"] = "上升" if last > first else "下降" if last < first else "持平"
 
     return slots
+
+
+# ---------------------------------------------------------------------------
+# C1.2 — claims-pinning: validate claims + numeric-adjacency gate (MF1)
+# ---------------------------------------------------------------------------
+
+# Stat types where the tolerance is applied as a ratio (not percentage-points)
+_RATIO_STAT_TYPES: frozenset[str] = frozenset({"ratio"})
+
+# Stat types that use pct-point tolerance (share/derived share types, growth)
+_PCT_STAT_TYPES: frozenset[str] = frozenset({
+    "value", "share", "top2_share", "complement", "diff", "growth", "count",
+})
+
+# Regex to find Arabic numbers (integers and decimals) in prose
+_ARABIC_NUMBER_RE = re.compile(r"\d+\.?\d*")
+
+
+def _validate_claims(
+    llm_obj: dict,
+    ctx: "ChartInsightContext",
+    tolerance_pct: float = 1.0,
+    tolerance_ratio: float = 0.3,
+) -> Optional[dict]:
+    """C1.2 — Validate LLM structured claims by server-side recomputation + numeric-adjacency gate.
+
+    Algorithm:
+      1. For each claim in llm_obj["claims"], recompute the true value from ctx.series_*.
+         If recompute returns None OR abs(claim.value - true) > tolerance → drop the claim.
+      2. Numeric-adjacency gate: scan finding+implication+suggestion prose for every Arabic
+         number. Each number must:
+           a) Match (within tolerance) at least one valid claim's value.
+           b) For entity-bearing claims (entity is not None), the nearest entity-label
+              occurrence in the prose to that number must equal the claim's entity.
+         Any prose number failing either check → return None (reject entire response).
+      3. Empty/missing claims → return None.
+      4. All checks pass → return {"finding":…, "implication":…, "suggestion":…}.
+
+    Args:
+        llm_obj: Parsed LLM response dict with keys "claims", "finding", "implication",
+                 "suggestion".
+        ctx: ChartInsightContext carrying series_values and series_labels.
+        tolerance_pct: Absolute tolerance (in same units as the stat, e.g. percentage points)
+                       for non-ratio stats.
+        tolerance_ratio: Absolute tolerance for ratio-type stats.
+
+    Returns:
+        Dict with finding/implication/suggestion if all claims and prose numbers are valid.
+        None otherwise.
+    """
+    claims = llm_obj.get("claims")
+    if not claims:
+        return None
+
+    # --- Step 1: validate each claim by recomputation ---
+    valid_claims: List[dict] = []
+    for claim in claims:
+        entity = claim.get("entity")  # may be None for entity-agnostic stats
+        stat_type = claim.get("stat_type", "")
+        claimed_value = claim.get("value")
+
+        if claimed_value is None:
+            continue  # skip malformed
+
+        true_value = recompute_claim(entity, stat_type, ctx.series_values, ctx.series_labels)
+        if true_value is None:
+            # Cannot recompute (entity missing or stat unknown) → drop
+            continue
+
+        tol = tolerance_ratio if stat_type in _RATIO_STAT_TYPES else tolerance_pct
+        if abs(claimed_value - true_value) <= tol:
+            valid_claims.append(claim)
+        # else: drop (claimed value doesn't match recomputed true value)
+
+    # If no claims survived validation, reject
+    if not valid_claims:
+        return None
+
+    # --- Step 2: numeric-adjacency gate ---
+    # Collect all prose fields
+    prose_fields = []
+    for key in ("finding", "implication", "suggestion"):
+        val = llm_obj.get(key)
+        if val:
+            prose_fields.append(str(val))
+    full_prose = " ".join(prose_fields)
+
+    # For each Arabic number in the prose, check it's anchored to a valid claim
+    for match in _ARABIC_NUMBER_RE.finditer(full_prose):
+        num_str = match.group()
+        num_val = float(num_str)
+        char_pos = match.start()
+
+        # Find the valid claim(s) whose value matches this number within tolerance
+        matching_claims = []
+        for vc in valid_claims:
+            stat_type = vc.get("stat_type", "")
+            tol = tolerance_ratio if stat_type in _RATIO_STAT_TYPES else tolerance_pct
+            if abs(num_val - vc["value"]) <= tol:
+                matching_claims.append(vc)
+
+        if not matching_claims:
+            # This number has no valid claim anchor → reject
+            return None
+
+        # For entity-bearing claims (entity is not None), check entity adjacency
+        # At least one matching claim must have its entity as the nearest label in the prose
+        entity_bearing = [mc for mc in matching_claims if mc.get("entity") is not None]
+        if entity_bearing:
+            # Find which label is nearest to this number in the prose (by char distance)
+            nearest_label = _nearest_label_in_prose(full_prose, char_pos, ctx.series_labels)
+            # Check if nearest label matches at least one entity-bearing matching claim
+            has_entity_match = any(
+                mc["entity"] == nearest_label for mc in entity_bearing
+            )
+            if not has_entity_match:
+                # The nearest entity in prose doesn't match the claim's entity → reject
+                return None
+        # else: entity-agnostic claims (growth/count/top2_share) — no entity check needed
+
+    # All checks passed
+    return {
+        "finding": llm_obj.get("finding"),
+        "implication": llm_obj.get("implication"),
+        "suggestion": llm_obj.get("suggestion"),
+    }
+
+
+def _nearest_label_in_prose(prose: str, target_pos: int, labels: List[str]) -> Optional[str]:
+    """Find the series label whose occurrence in the prose is nearest (by char distance) to target_pos.
+
+    For each label, find all occurrences in the prose. Compute the minimum char distance
+    from target_pos to any occurrence of that label. Return the label with the smallest
+    minimum distance.
+
+    If a label is a substring of another (e.g. "外卖" vs "外卖平台"), we still do simple
+    substring search; the shortest-distance match wins regardless of label length.
+
+    Returns None if no label appears in the prose at all.
+    """
+    best_label: Optional[str] = None
+    best_dist: int = len(prose) + 1  # sentinel: larger than any real distance
+
+    for label in labels:
+        if not label:
+            continue
+        start = 0
+        while True:
+            idx = prose.find(label, start)
+            if idx == -1:
+                break
+            # Distance from target_pos to the start of this occurrence
+            # (could also measure to end; start is fine for nearest-mention intent)
+            dist = abs(idx - target_pos)
+            if dist < best_dist:
+                best_dist = dist
+                best_label = label
+            start = idx + 1  # look for next occurrence
+
+    return best_label
 
 
 # ---------------------------------------------------------------------------
