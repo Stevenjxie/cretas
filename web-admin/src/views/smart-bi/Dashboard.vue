@@ -503,26 +503,20 @@ const trendInsight = computed<InsightResult | null>(() => {
   if (!charts) return null;
   const raw = charts['sales_trend'] || charts['销售趋势'];
   if (!raw) return null;
-  const cfg = raw as Record<string, unknown>;
-  // Determine if the x-axis contains time labels (mirror initTrendChart isTime regex ~line 1159)
-  const xAxisData: unknown[] = (
-    (cfg.xAxis as Record<string, unknown> | undefined)?.data as unknown[] | undefined
-  ) ?? [];
-  const firstX = xAxisData.length > 0 ? String(xAxisData[0]) : '';
+  // Backend sends legacy {chartType,data,xaxisField,yaxisField}; normalize → {xAxis,series} (same as initCharts)
+  const cfg = normalizeLegacyChart(raw as AnyChartConfig);
+  const labels = (((cfg.xAxis as { data?: unknown[] } | undefined)?.data) ?? []).map(String);
+  const firstX = labels.length > 0 ? labels[0] : '';
   const isTime =
     /^\d{4}[-/]\d{1,2}/.test(firstX) ||
     /\d{1,4}[年月日]/.test(firstX) ||
     /^Q[1-4]$/i.test(firstX) ||
     /^\d{4}$/.test(firstX);
-  // Extract first numeric series data (parallel to xAxis.data)
-  const series = cfg.series as Array<Record<string, unknown>> | undefined;
-  const firstSeries = series?.[0];
-  const rawData = Array.isArray(firstSeries?.data) ? (firstSeries!.data as unknown[]) : [];
+  const rawData = Array.isArray(cfg.series?.[0]?.data) ? (cfg.series![0].data as unknown[]) : [];
   const numericData = rawData
     .map((v) => (typeof v === 'number' && isFinite(v) ? v : null))
     .filter((v): v is number => v !== null);
   if (numericData.length === 0) return null;
-  const labels = xAxisData.map(String);
   const chart: ChartWithMeta = {
     chartType: isTime ? 'LINE' : 'BAR',
     meta: {
@@ -566,30 +560,29 @@ const categoryInsight = computed<InsightResult | null>(() => {
     }
   }
   if (!raw) return null;
-  const cfg = raw as Record<string, unknown>;
-  const series = cfg.series as Array<Record<string, unknown>> | undefined;
-  const firstSeries = series?.[0];
-  if (!firstSeries) return null;
-  const rawData = Array.isArray(firstSeries.data) ? (firstSeries.data as unknown[]) : [];
-  // Extract names + values — support both [{name, value}] and parallel xAxis.data + numeric array
+  // Normalize legacy {data,xaxisField,yaxisField} → {xAxis,series} parallel arrays (same as initCharts)
+  const cfg = normalizeLegacyChart(raw as AnyChartConfig);
+  const labels = (((cfg.xAxis as { data?: unknown[] } | undefined)?.data) ?? []).map(String);
+  const sData = Array.isArray(cfg.series?.[0]?.data) ? (cfg.series![0].data as unknown[]) : [];
   const categoryNames: string[] = [];
   const categoryValues: number[] = [];
-  for (let i = 0; i < rawData.length; i++) {
-    const d = rawData[i];
-    if (typeof d === 'number' && isFinite(d) && d > 0) {
-      // Parallel array format: names come from xAxis.data
-      const xData = (cfg.xAxis as Record<string, unknown> | undefined)?.data as unknown[] | undefined;
-      const name = xData?.[i] != null ? String(xData[i]) : `类别${i + 1}`;
-      categoryNames.push(name);
-      categoryValues.push(d);
+  for (let i = 0; i < sData.length; i++) {
+    const d = sData[i];
+    let name: string | null = null;
+    let val: number | null = null;
+    if (typeof d === 'number' && isFinite(d)) {
+      val = d;
+      name = labels[i] != null ? labels[i] : `类别${i + 1}`;
     } else if (d !== null && typeof d === 'object') {
       const obj = d as Record<string, unknown>;
-      const v = typeof obj.value === 'number' && isFinite(obj.value) ? obj.value : 0;
-      if (v > 0) {
-        const name = obj.name != null ? String(obj.name) : `类别${i + 1}`;
-        categoryNames.push(name);
-        categoryValues.push(v);
+      if (typeof obj.value === 'number' && isFinite(obj.value)) {
+        val = obj.value;
+        name = obj.name != null ? String(obj.name) : (labels[i] ?? `类别${i + 1}`);
       }
+    }
+    if (val != null && val > 0 && name != null) {
+      categoryNames.push(name);
+      categoryValues.push(val);
     }
   }
   if (categoryValues.length < 2) return null;
