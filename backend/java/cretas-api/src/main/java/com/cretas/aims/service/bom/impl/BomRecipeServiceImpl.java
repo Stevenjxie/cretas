@@ -125,7 +125,9 @@ public class BomRecipeServiceImpl implements BomRecipeService {
                 newItems.add(buildItem(factoryId, recipe.getId(), dto));
             }
             itemRepo.saveAll(newItems);
-            recipe.setItems(newItems);
+            // IMPORTANT: keep same Hibernate PersistentBag reference (clear+addAll, not setItems).
+            recipe.getItems().clear();
+            recipe.getItems().addAll(newItems);
         }
 
         recomputeMaterialCost(recipe);
@@ -202,7 +204,9 @@ public class BomRecipeServiceImpl implements BomRecipeService {
             clonedItems.add(item);
         }
         itemRepo.saveAll(clonedItems);
-        clone.setItems(clonedItems);
+        // IMPORTANT: keep same Hibernate PersistentBag reference (clear+addAll, not setItems).
+        clone.getItems().clear();
+        clone.getItems().addAll(clonedItems);
         recomputeMaterialCost(clone);
         return recipeRepo.save(clone);
     }
@@ -235,7 +239,10 @@ public class BomRecipeServiceImpl implements BomRecipeService {
     @Override
     public BomRecipe getRecipe(String factoryId, String recipeId) {
         BomRecipe recipe = loadRecipe(factoryId, recipeId);
-        // Touch items to trigger LAZY load.
+        // 非 @Transactional 读路径: recipe 已 detached, items 是未初始化懒代理.
+        // 必须用 setItems 替换字段引用 (而非 clear()+addAll) —— 后者会强制初始化
+        // detached 懒代理 → LazyInitializationException (no Session).
+        // orphanRemoval 异常只在 @Transactional 写方法 flush 时触发, 此处无 flush 无风险.
         recipe.setItems(itemRepo.findByRecipeIdOrderBySortOrderAsc(recipe.getId()));
         return recipe;
     }
@@ -263,7 +270,8 @@ public class BomRecipeServiceImpl implements BomRecipeService {
     @Transactional
     public BomRecipe calculateCost(String factoryId, String recipeId) {
         BomRecipe recipe = loadRecipe(factoryId, recipeId);
-        recipe.setItems(itemRepo.findByRecipeIdOrderBySortOrderAsc(recipe.getId()));
+        // IMPORTANT: use refreshItemsInPlace to keep Hibernate PersistentBag reference intact.
+        refreshItemsInPlace(recipe);
         recomputeMaterialCost(recipe);
         // labor/overhead 留 Day 5 BomCostCalculationService 接入.
         return recipeRepo.save(recipe);
@@ -280,7 +288,9 @@ public class BomRecipeServiceImpl implements BomRecipeService {
         BomRecipeItem item = buildItem(factoryId, recipe.getId(), dto);
         item = itemRepo.save(item);
         // Touch recipe to mark updated + recompute cost.
-        recipe.setItems(itemRepo.findByRecipeIdOrderBySortOrderAsc(recipe.getId()));
+        // IMPORTANT: must NOT replace the Hibernate-managed collection reference (orphanRemoval=true).
+        // Using clear+addAll keeps the same List instance so Hibernate's orphan tracking stays intact.
+        refreshItemsInPlace(recipe);
         recomputeMaterialCost(recipe);
         recipeRepo.save(recipe);
         return item;
@@ -309,7 +319,7 @@ public class BomRecipeServiceImpl implements BomRecipeService {
         }
         applyDtoToItem(dto, item);
         item = itemRepo.save(item);
-        recipe.setItems(itemRepo.findByRecipeIdOrderBySortOrderAsc(recipe.getId()));
+        refreshItemsInPlace(recipe);
         recomputeMaterialCost(recipe);
         recipeRepo.save(recipe);
         return item;
@@ -330,9 +340,26 @@ public class BomRecipeServiceImpl implements BomRecipeService {
         }
         item.softDelete();
         itemRepo.save(item);
-        recipe.setItems(itemRepo.findByRecipeIdOrderBySortOrderAsc(recipe.getId()));
+        refreshItemsInPlace(recipe);
         recomputeMaterialCost(recipe);
         recipeRepo.save(recipe);
+    }
+
+    /**
+     * Refresh the recipe's Hibernate-managed items collection in-place.
+     *
+     * <p>Calling {@code recipe.setItems(newList)} after an addItem/updateItem/deleteItem
+     * replaces the Hibernate PersistentBag reference, which triggers:
+     * {@code HibernateException: A collection with cascade="all-delete-orphan" was no longer
+     * referenced by the owning entity instance}.
+     *
+     * <p>Using {@code clear()} + {@code addAll()} keeps the same collection instance so
+     * Hibernate's orphan-removal tracking remains intact.
+     */
+    private void refreshItemsInPlace(BomRecipe recipe) {
+        List<BomRecipeItem> fresh = itemRepo.findByRecipeIdOrderBySortOrderAsc(recipe.getId());
+        recipe.getItems().clear();
+        recipe.getItems().addAll(fresh);
     }
 
     // ========== Helpers ==========
