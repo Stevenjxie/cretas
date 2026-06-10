@@ -93,6 +93,7 @@ const badgeText = computed<string>(() => {
   if (!props.insight) return '数据驱动';
   switch (props.insight.source) {
     case 'rules':    return '数据驱动';
+    case 'cache':    return '数据驱动·已缓存';
     case 'template': return '数据驱动·已学习';
     case 'llm':      return 'AI生成';
     default:         return '数据驱动';

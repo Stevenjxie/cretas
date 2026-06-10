@@ -44,7 +44,7 @@ export interface InsightResult {
   finding: string;
   implication?: string;
   suggestion?: string;
-  source: 'rules' | 'template' | 'llm';
+  source: 'rules' | 'template' | 'llm' | 'cache';
   tier: 1 | 2;
 }
 
