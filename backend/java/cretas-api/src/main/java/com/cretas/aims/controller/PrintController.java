@@ -1,13 +1,18 @@
 package com.cretas.aims.controller;
 
 import com.cretas.aims.annotation.RequirePermission;
+import com.cretas.aims.dto.WorkProcessTaskDTO;
 import com.cretas.aims.dto.production.ProductionPlanDTO;
 import com.cretas.aims.dto.template.PrintPreviewTemplateRequest;
+import com.cretas.aims.entity.ProductionBatch;
 import com.cretas.aims.entity.factory.FactoryMaterialRequisition;
+import com.cretas.aims.entity.factory.FactoryMaterialRequisitionItem;
 import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.security.PriceMaskResolver;
 import com.cretas.aims.service.ProductionPlanService;
 import com.cretas.aims.service.factory.FactoryMaterialRequisitionService;
+import com.cretas.aims.service.workprocess.WorkProcessTaskService;
 import jakarta.validation.Valid;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -21,8 +26,11 @@ import org.springframework.web.bind.annotation.*;
 import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestTemplate;
 
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -96,6 +104,14 @@ public class PrintController {
     /** Optional: 物料需求单服务 (SP12 T8 汇总领料单取数). */
     @Autowired(required = false)
     private FactoryMaterialRequisitionService factoryMaterialRequisitionService;
+
+    /** Optional: 工序任务服务 (SP12 T8 生产工单工序列表取数). */
+    @Autowired(required = false)
+    private WorkProcessTaskService workProcessTaskService;
+
+    /** Optional: 生产批次 repository (SP12 T8 通过 planId 找批次). */
+    @Autowired(required = false)
+    private ProductionBatchRepository productionBatchRepository;
 
     @Autowired
     public PrintController(
@@ -625,10 +641,67 @@ public class PrintController {
             fillProductionWorkOrderStub(p, planId, overrides);
         }
 
-        // 工序列表: 后续 PR 从 ProductionBatch WorkProcessTask 取
-        p.put("processes", java.util.List.of());
+        // 工序列表: 从该计划下所有批次的 WorkProcessTask 取 (去重, 按 processOrder 升序)
+        p.put("processes", buildProcessList(factoryId, planId));
         p.put("remark", or(overrides, "remark", null));
         return p;
+    }
+
+    /**
+     * 从计划下所有批次的工序任务汇总工序列表, 供生产工单 PDF 打印.
+     *
+     * <p>策略: 取第一个有工序任务的批次 (一般一个计划对应一个批次).
+     * 若多批次时以首批次工序结构为代表 (相同产品工序模板 spawn 的结构相同).
+     * Python renderer 期望字段: seq / name / standardHours / operator.
+     * estimatedMinutes → standardHours 转换: minutes / 60, scale 1.
+     *
+     * <p>service/repo 未注入或异常时静默返回空列表 (诚实空 > 伪造假数据).
+     */
+    private List<Map<String, Object>> buildProcessList(String factoryId, String planId) {
+        if (workProcessTaskService == null || productionBatchRepository == null) {
+            log.warn("buildProcessList: workProcessTaskService or productionBatchRepository not injected, "
+                    + "returning empty processes for plan {}", planId);
+            return List.of();
+        }
+        try {
+            List<ProductionBatch> batches =
+                    productionBatchRepository.findByFactoryIdAndProductionPlanId(factoryId, planId);
+            if (batches == null || batches.isEmpty()) {
+                log.debug("buildProcessList: no batches found for plan {} factory {}", planId, factoryId);
+                return List.of();
+            }
+            // Use the first batch with tasks; fall through if none have tasks yet
+            for (ProductionBatch batch : batches) {
+                List<WorkProcessTaskDTO> tasks =
+                        workProcessTaskService.listByBatch(factoryId, batch.getId());
+                if (tasks == null || tasks.isEmpty()) {
+                    continue;
+                }
+                List<Map<String, Object>> processes = new ArrayList<>();
+                for (WorkProcessTaskDTO t : tasks) {
+                    Map<String, Object> row = new LinkedHashMap<>();
+                    row.put("seq", t.getProcessOrder() != null ? t.getProcessOrder() : processes.size() + 1);
+                    row.put("name", t.getProcessName() != null ? t.getProcessName() : t.getWorkProcessId());
+                    // estimatedMinutes → hours (1 decimal place, e.g. 90 min → "1.5")
+                    if (t.getEstimatedMinutes() != null && t.getEstimatedMinutes() > 0) {
+                        BigDecimal hours = BigDecimal.valueOf(t.getEstimatedMinutes())
+                                .divide(BigDecimal.valueOf(60), 1, RoundingMode.HALF_UP);
+                        row.put("standardHours", hours.toPlainString());
+                    } else {
+                        row.put("standardHours", null);
+                    }
+                    row.put("operator", t.getAssignedToName());
+                    processes.add(row);
+                }
+                return processes;
+            }
+            log.debug("buildProcessList: batches found but none have tasks spawned yet for plan {}", planId);
+            return List.of();
+        } catch (Exception e) {
+            log.warn("buildProcessList: failed to load work process tasks for plan {} factory {}: {}",
+                    planId, factoryId, e.getMessage());
+            return List.of();
+        }
     }
 
     private void fillProductionWorkOrderStub(Map<String, Object> p, String planId,
@@ -672,7 +745,7 @@ public class PrintController {
             p.put("productName", or(overrides, "productName", "(产品)"));
         }
 
-        // 跨批次汇总领料单明细
+        // 跨批次汇总领料单明细: 展开 requisitions[].items, 按 materialTypeId 汇总 requiredQty
         List<Map<String, Object>> items = new ArrayList<>();
         if (factoryMaterialRequisitionService != null) {
             try {
@@ -680,8 +753,56 @@ public class PrintController {
                         factoryMaterialRequisitionService.listByPlan(factoryId, planId);
                 int requisitionCount = requisitions != null ? requisitions.size() : 0;
                 p.put("requisitionCount", requisitionCount);
-                // 后续 PR: 展开 requisitions[].items 按 materialTypeId 汇总, 消除重复行
-                // 当前 MVP: items 留空, Python 模板展示 requisitionCount + planId 即可
+                if (requisitions != null) {
+                    // Aggregate by materialTypeId: sum requiredQty, collect batchRefs
+                    Map<String, Map<String, Object>> aggregated = new LinkedHashMap<>();
+                    for (FactoryMaterialRequisition req : requisitions) {
+                        List<FactoryMaterialRequisitionItem> reqItems = req.getItems();
+                        if (reqItems == null) continue;
+                        for (FactoryMaterialRequisitionItem item : reqItems) {
+                            String key = item.getMaterialTypeId() != null
+                                    ? item.getMaterialTypeId() : "_unknown_";
+                            Map<String, Object> row = aggregated.computeIfAbsent(key, k -> {
+                                Map<String, Object> r = new LinkedHashMap<>();
+                                r.put("materialName",
+                                        item.getMaterialName() != null ? item.getMaterialName() : key);
+                                r.put("spec", item.getMaterialCategory() != null
+                                        ? item.getMaterialCategory().name() : null);
+                                r.put("unit", item.getUnit());
+                                r.put("totalQty", BigDecimal.ZERO);
+                                r.put("batchRefs", new ArrayList<String>());
+                                return r;
+                            });
+                            // Accumulate requiredQty
+                            BigDecimal existing = (BigDecimal) row.get("totalQty");
+                            BigDecimal addQty = item.getRequiredQty() != null
+                                    ? item.getRequiredQty() : BigDecimal.ZERO;
+                            row.put("totalQty", existing.add(addQty));
+                            // Collect batch ref labels from batchNumbers jsonb
+                            List<Map<String, Object>> batchNums = item.getBatchNumbers();
+                            if (batchNums != null) {
+                                @SuppressWarnings("unchecked")
+                                List<String> batchRefs = (List<String>) row.get("batchRefs");
+                                for (Map<String, Object> bn : batchNums) {
+                                    Object bno = bn.get("batchNo");
+                                    if (bno != null && !batchRefs.contains(bno.toString())) {
+                                        batchRefs.add(bno.toString());
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    // Convert totalQty to plain string for JSON serialization
+                    for (Map<String, Object> row : aggregated.values()) {
+                        BigDecimal qty = (BigDecimal) row.get("totalQty");
+                        row.put("totalQty", qty.stripTrailingZeros().toPlainString());
+                        // Join batchRefs list into comma-separated string for PDF cell
+                        @SuppressWarnings("unchecked")
+                        List<String> refs = (List<String>) row.get("batchRefs");
+                        row.put("batchRefs", refs.isEmpty() ? null : String.join(", ", refs));
+                        items.add(row);
+                    }
+                }
             } catch (Exception e) {
                 log.warn("printConsolidatedMaterialRequisition: failed to load requisitions for plan {}: {}",
                         planId, e.getMessage());
