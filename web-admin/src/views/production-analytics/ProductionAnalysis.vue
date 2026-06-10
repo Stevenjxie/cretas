@@ -4,6 +4,9 @@ import { ElMessage } from 'element-plus';
 import { Refresh } from '@element-plus/icons-vue';
 import echarts from '@/utils/echarts';
 import { getProductionDashboard, type KPIItem, type ProductionDashboard } from '@/api/productionAnalytics';
+import ChartInsight from '@/views/smart-bi/components/ChartInsight.vue';
+import { useChartInsight } from '@/composables/useChartInsight';
+import type { ChartWithMeta } from '@/views/smart-bi/components/chartInsight';
 
 // ==================== 状态 ====================
 
@@ -208,6 +211,103 @@ const hasProcessData = computed(() => {
   return data.some(d => Number(d.output) > 0);
 });
 
+// ==================== Chart Insight ====================
+// LINE 1: 日产出趋势 (trendChart) — multi-series 产出/良品/不良, xDim:'time', TREND
+//         Multi-series: use 总产量 (series[0]) as the primary metric for insight.
+// LINE 2: 良率趋势    (yieldChart) — xDim:'time', yMetric:'pct', TREND
+// BAR:    产品产出    (productChart) — xDim:'category', yMetric:'quantity', RANKING
+// PIE:    工序分布    (processChart) — wired as PIE PROPORTION family
+
+const prodInsightPerms = () => ({ canViewFinance: false }); // no finance metrics in production view
+
+const { insight: prodTrendInsight, loading: prodTrendInsightLoading } = useChartInsight(
+  (): { chart: ChartWithMeta } | null => {
+    const data = dashboard.value?.dailyTrend;
+    if (!data || data.length < 4) return null;
+    return {
+      chart: {
+        chartType: 'LINE',
+        title: '日产出趋势',
+        meta: { xDim: 'time', yMetric: 'quantity', aggregation: 'sum', domain: 'factory' },
+        config: {
+          xAxis: { data: data.map(d => String(d.date).slice(5)) },
+          // Feed primary series (总产量) only — TREND reads first series values
+          series: [{ type: 'line', data: data.map(d => d.output) }],
+        },
+      },
+    };
+  },
+  prodInsightPerms,
+  { factoryId: () => '', autoTier2: true },
+);
+
+const { insight: prodYieldInsight, loading: prodYieldInsightLoading } = useChartInsight(
+  (): { chart: ChartWithMeta } | null => {
+    const data = dashboard.value?.dailyTrend;
+    if (!data || data.length < 4) return null;
+    const yieldRates = data.map(d => {
+      const output = Number(d.output) || 0;
+      const good = Number(d.good) || 0;
+      return output > 0 ? Number(((good / output) * 100).toFixed(1)) : 0;
+    });
+    return {
+      chart: {
+        chartType: 'LINE',
+        title: '良率趋势',
+        meta: { xDim: 'time', yMetric: 'pct', aggregation: 'avg', domain: 'factory' },
+        config: {
+          xAxis: { data: data.map(d => String(d.date).slice(5)) },
+          series: [{ type: 'line', data: yieldRates }],
+        },
+      },
+    };
+  },
+  prodInsightPerms,
+  { factoryId: () => '', autoTier2: true },
+);
+
+const { insight: prodProductInsight, loading: prodProductInsightLoading } = useChartInsight(
+  (): { chart: ChartWithMeta } | null => {
+    const data = dashboard.value?.byProduct;
+    if (!data || data.length < 2) return null;
+    return {
+      chart: {
+        chartType: 'BAR',
+        title: '产品产出对比',
+        meta: { xDim: 'category', yMetric: 'quantity', aggregation: 'sum', domain: 'factory' },
+        config: {
+          xAxis: { data: data.map(d => d.product_name) },
+          series: [{ type: 'bar', data: data.map(d => d.output) }],
+        },
+      },
+    };
+  },
+  prodInsightPerms,
+  { factoryId: () => '', autoTier2: true },
+);
+
+const { insight: prodProcessInsight, loading: prodProcessInsightLoading } = useChartInsight(
+  (): { chart: ChartWithMeta } | null => {
+    const data = dashboard.value?.byProcess;
+    if (!data || data.length < 2) return null;
+    return {
+      chart: {
+        chartType: 'pie',
+        title: '工序产出分布',
+        meta: { xDim: 'category', yMetric: 'quantity', aggregation: 'sum', domain: 'factory' },
+        config: {
+          series: [{
+            type: 'pie',
+            data: data.map(d => ({ name: d.process_category, value: d.output })),
+          }],
+        },
+      },
+    };
+  },
+  prodInsightPerms,
+  { factoryId: () => '', autoTier2: true },
+);
+
 // ==================== 明细数据 ====================
 
 const detailData = computed(() => {
@@ -303,21 +403,29 @@ onBeforeUnmount(() => {
         <div class="chart-title">日产出趋势</div>
         <div v-show="hasTrendData" ref="trendChartRef" class="chart-body" />
         <el-empty v-if="!hasTrendData" description="该期暂无生产报工" :image-size="80" class="chart-empty" />
+        <!-- Insight: LINE TREND (factory, xDim:time, yMetric:quantity/总产量 primary series) -->
+        <ChartInsight :insight="prodTrendInsight" :loading="prodTrendInsightLoading" depth="detailed" />
       </div>
       <div class="chart-card">
         <div class="chart-title">良率趋势</div>
         <div v-show="hasYieldData" ref="yieldChartRef" class="chart-body" />
         <el-empty v-if="!hasYieldData" description="该期暂无良率数据" :image-size="80" class="chart-empty" />
+        <!-- Insight: LINE TREND (factory, xDim:time, yMetric:pct/良率) -->
+        <ChartInsight :insight="prodYieldInsight" :loading="prodYieldInsightLoading" depth="detailed" />
       </div>
       <div class="chart-card">
         <div class="chart-title">产品产出对比</div>
         <div v-show="hasProductData" ref="productChartRef" class="chart-body" />
         <el-empty v-if="!hasProductData" description="该期暂无产品产出" :image-size="80" class="chart-empty" />
+        <!-- Insight: BAR RANKING (factory, xDim:category, yMetric:quantity) -->
+        <ChartInsight :insight="prodProductInsight" :loading="prodProductInsightLoading" depth="detailed" />
       </div>
       <div class="chart-card">
         <div class="chart-title">工序产出分布</div>
         <div v-show="hasProcessData" ref="processChartRef" class="chart-body" />
         <el-empty v-if="!hasProcessData" description="该期暂无工序数据" :image-size="80" class="chart-empty" />
+        <!-- Insight: PIE PROPORTION (factory, xDim:category, yMetric:quantity) -->
+        <ChartInsight :insight="prodProcessInsight" :loading="prodProcessInsightLoading" depth="detailed" />
       </div>
     </div>
 

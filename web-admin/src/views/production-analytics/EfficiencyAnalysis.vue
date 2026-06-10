@@ -7,6 +7,9 @@ import { getEfficiencyDashboard, type KPIItem, type EfficiencyDashboard } from '
 import { useAuthStore } from '@/store/modules/auth';
 import { get } from '@/api/request';
 import type { TableRow } from '@/types/api';
+import ChartInsight from '@/views/smart-bi/components/ChartInsight.vue';
+import { useChartInsight } from '@/composables/useChartInsight';
+import type { ChartWithMeta } from '@/views/smart-bi/components/chartInsight';
 
 const authStore = useAuthStore();
 const factoryId = computed(() => authStore.factoryId);
@@ -297,6 +300,75 @@ const rankingTable = computed(() => {
   }));
 });
 
+// ==================== Chart Insight ====================
+// LINE: 人效趋势 (trendChart) — xDim:'time', yMetric:'quantity' (efficiency units/hour), TREND
+// BAR:  员工排名  (rankingChart) — xDim:'category', yMetric:'quantity', RANKING
+// BAR:  产品工时  (hoursChart)  — xDim:'category', yMetric:'quantity' (minutes), RANKING
+// HEATMAP (heatmapChart) — SKIP: exotic chart type, no insight family available.
+
+const effInsightPerms = () => ({ canViewFinance: false }); // no finance metrics in efficiency view
+
+const { insight: effTrendInsight, loading: effTrendInsightLoading } = useChartInsight(
+  (): { chart: ChartWithMeta } | null => {
+    const data = dashboard.value?.dailyTrend;
+    if (!data || data.length < 4) return null;
+    return {
+      chart: {
+        chartType: 'LINE',
+        title: '人效趋势',
+        meta: { xDim: 'time', yMetric: 'quantity', aggregation: 'avg', domain: 'factory' },
+        config: {
+          xAxis: { data: data.map(d => String(d.date).slice(5)) },
+          series: [{ type: 'line', data: data.map(d => d.efficiency) }],
+        },
+      },
+    };
+  },
+  effInsightPerms,
+  { factoryId: () => factoryId.value ?? '', autoTier2: true },
+);
+
+const { insight: effRankingInsight, loading: effRankingInsightLoading } = useChartInsight(
+  (): { chart: ChartWithMeta } | null => {
+    const data = dashboard.value?.workerRanking;
+    if (!data || data.length < 2) return null;
+    const top15 = data.slice(0, 15);
+    return {
+      chart: {
+        chartType: 'BAR',
+        title: '员工人效排名',
+        meta: { xDim: 'category', yMetric: 'quantity', aggregation: 'avg', domain: 'factory' },
+        config: {
+          xAxis: { data: top15.map(d => String(d.worker_name || '未知')) },
+          series: [{ type: 'bar', data: top15.map(d => Number(d.efficiency) || 0) }],
+        },
+      },
+    };
+  },
+  effInsightPerms,
+  { factoryId: () => factoryId.value ?? '', autoTier2: true },
+);
+
+const { insight: effHoursInsight, loading: effHoursInsightLoading } = useChartInsight(
+  (): { chart: ChartWithMeta } | null => {
+    const data = dashboard.value?.hoursByProduct;
+    if (!data || data.length < 2) return null;
+    return {
+      chart: {
+        chartType: 'BAR',
+        title: '产品工时分布',
+        meta: { xDim: 'category', yMetric: 'quantity', aggregation: 'sum', domain: 'factory' },
+        config: {
+          xAxis: { data: data.map(d => d.product_name) },
+          series: [{ type: 'bar', data: data.map(d => d.total_minutes) }],
+        },
+      },
+    };
+  },
+  effInsightPerms,
+  { factoryId: () => factoryId.value ?? '', autoTier2: true },
+);
+
 // ==================== 生命周期 ====================
 
 let resizeRaf = 0;
@@ -379,21 +451,28 @@ onBeforeUnmount(() => {
         <div class="chart-title">人效趋势</div>
         <div v-show="hasEffTrendData" ref="trendChartRef" class="chart-body" />
         <el-empty v-if="!hasEffTrendData" description="该期暂无人效数据" :image-size="80" class="chart-empty" />
+        <!-- Insight: LINE TREND (factory, xDim:time, yMetric:quantity/efficiency) -->
+        <ChartInsight :insight="effTrendInsight" :loading="effTrendInsightLoading" depth="detailed" />
       </div>
       <div class="chart-card">
         <div class="chart-title">员工人效排名 (Top 15)</div>
         <div v-show="hasRankingData" ref="rankingChartRef" class="chart-body" />
         <el-empty v-if="!hasRankingData" description="该期暂无员工排名数据" :image-size="80" class="chart-empty" />
+        <!-- Insight: BAR RANKING (factory, xDim:category, yMetric:quantity) -->
+        <ChartInsight :insight="effRankingInsight" :loading="effRankingInsightLoading" depth="detailed" />
       </div>
       <div class="chart-card">
         <div class="chart-title">产品工时分布</div>
         <div v-show="hasHoursData" ref="hoursChartRef" class="chart-body" />
         <el-empty v-if="!hasHoursData" description="该期暂无工时数据" :image-size="80" class="chart-empty" />
+        <!-- Insight: BAR RANKING (factory, xDim:category, yMetric:quantity/minutes) -->
+        <ChartInsight :insight="effHoursInsight" :loading="effHoursInsightLoading" depth="detailed" />
       </div>
       <div class="chart-card">
         <div class="chart-title">员工 × 工序 热力图</div>
         <div v-show="hasHeatmapData" ref="heatmapChartRef" class="chart-body" />
         <el-empty v-if="!hasHeatmapData" description="该期暂无员工×工序数据" :image-size="80" class="chart-empty" />
+        <!-- Insight: HEATMAP — SKIPPED (exotic chart type, no insight family) -->
       </div>
     </div>
 

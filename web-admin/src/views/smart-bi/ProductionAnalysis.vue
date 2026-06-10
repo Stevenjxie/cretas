@@ -14,6 +14,8 @@ import DOMPurify from 'dompurify'
 import { formatNumber } from '@/utils/format-number'
 import { ElMessage } from 'element-plus'
 import type { TableRow } from '@/types/api';
+import ChartInsightProvider from '@/views/smart-bi/components/ChartInsightProvider.vue';
+import type { ChartWithMeta } from '@/views/smart-bi/components/chartInsight';
 
 const authStore = useAuthStore()
 const permissionStore = usePermissionStore()
@@ -229,6 +231,84 @@ function buildCharts(data: TableRow) {
   })
 }
 
+// ==================== Chart Insight helpers ====================
+// v-for loop: use ChartInsightProvider per item (safe in v-for; each instance has own setup()).
+// Derive ChartWithMeta from each chart's ECharts option.
+
+/**
+ * Derive ChartWithMeta from a raw ECharts option for the SmartBI production charts.
+ *
+ * Heuristics:
+ *  - Has xAxis.type='category' with date-like data  → LINE/BAR time TREND
+ *  - Has yAxis.type='category' (horizontal bar)     → BAR RANKING by category
+ *  - Has xAxis.type='category' with product/equip   → BAR RANKING by category
+ *  - Default: quantity metric (no finance)
+ *
+ * Returns null for unrecognised shapes (ChartInsightProvider renders nothing on null).
+ */
+function buildChartWithMeta(title: string, option: TableRow): ChartWithMeta | null {
+  try {
+    const xAxis = option.xAxis as { type?: string; data?: unknown[] } | undefined;
+    const yAxis = option.yAxis as { type?: string } | undefined;
+    const seriesArr = option.series as Array<{ type?: string; data?: unknown[] }> | undefined;
+    if (!seriesArr || seriesArr.length === 0) return null;
+
+    // Determine primary chart type from first series
+    const firstSeriesType = (seriesArr[0]?.type ?? '').toLowerCase();
+    if (!['line', 'bar'].includes(firstSeriesType)) return null; // skip pie/unknown
+
+    // Horizontal bar: yAxis is category — RANKING by category
+    if (yAxis?.type === 'category') {
+      const yData = (yAxis as { type?: string; data?: unknown[] }).data;
+      if (!Array.isArray(yData) || yData.length < 2) return null;
+      const values = seriesArr[0]?.data as number[] | undefined;
+      if (!values || values.length < 2) return null;
+      return {
+        chartType: firstSeriesType.toUpperCase(),
+        title,
+        meta: { xDim: 'category', yMetric: 'quantity', aggregation: 'sum', domain: 'factory' },
+        config: {
+          xAxis: { data: yData.map(String) }, // use category labels as xAxis
+          series: [{ type: firstSeriesType, data: values }],
+        },
+      };
+    }
+
+    // Regular xAxis category
+    if (xAxis?.type === 'category' && Array.isArray(xAxis.data) && xAxis.data.length >= 2) {
+      const labels = xAxis.data.map(String);
+      // Date-like labels → TREND
+      const isTimeSeries = /^\d{4}[-年]|\d{2}[-\/]\d{2}|\d{2}$/.test(labels[0] ?? '');
+      const xDim: 'time' | 'category' = isTimeSeries ? 'time' : 'category';
+
+      // For multi-series (日产量趋势), use first series (总产量) for insight
+      const primaryData = seriesArr[0]?.data as number[] | undefined;
+      if (!primaryData || primaryData.length < 2) return null;
+
+      return {
+        chartType: firstSeriesType.toUpperCase(),
+        title,
+        meta: {
+          xDim,
+          yMetric: xDim === 'time' ? 'quantity' : 'quantity',
+          aggregation: xDim === 'time' ? 'sum' : 'sum',
+          domain: 'factory',
+        },
+        config: {
+          xAxis: { data: labels },
+          series: [{ type: firstSeriesType, data: primaryData }],
+        },
+      };
+    }
+
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+const sbProductionPerms = computed(() => ({ canViewFinance: canViewPrice.value === true }));
+
 let resizeObserver: ResizeObserver | null = null
 let resizeRaf = 0
 function handleResize() {
@@ -308,6 +388,18 @@ onUnmounted(() => {
       <div class="chart-card" v-for="(chart, idx) in charts" :key="idx">
         <h3 class="chart-title">{{ chart.title }}</h3>
         <div :ref="el => chartRefs[idx] = (el as HTMLDivElement)" class="chart-container"></div>
+        <!--
+          ChartInsightProvider: safe in v-for (each instance has its own setup()).
+          buildChartWithMeta derives ChartWithMeta from the ECharts option.
+          LINE → TREND family; BAR category → RANKING family.
+          Exotic types (pie/scatter/heatmap) → buildChartWithMeta returns null → no render.
+        -->
+        <ChartInsightProvider
+          :chart="buildChartWithMeta(chart.title, chart.option)"
+          :perms="sbProductionPerms"
+          :factory-id="factoryId ?? ''"
+          depth="detailed"
+        />
       </div>
     </div>
 

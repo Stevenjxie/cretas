@@ -12,6 +12,9 @@ import { ref, computed, onMounted, nextTick } from 'vue';
 import { useRouter } from 'vue-router';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
+import ChartInsight from '@/views/smart-bi/components/ChartInsight.vue';
+import { useChartInsight } from '@/composables/useChartInsight';
+import type { ChartWithMeta } from '@/views/smart-bi/components/chartInsight';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import echarts from '@/utils/echarts';
 import {
@@ -373,6 +376,36 @@ function onTabChange() {
   }
 }
 
+// ── Chart Insight: forecast LINE chart ──────────────────────────────────────
+// Single LINE chart: rolling revenue forecast + optional margin overlay.
+// xDim:'time' (dates), yMetric:'revenue', domain:'restaurant', TREND family.
+// Source builds ChartWithMeta from forecastData when the forecast tab is active
+// and data is available.  CI band series (_lower / 80%区间) are infrastructure;
+// only the 预测营收 series values are fed to the insight engine.
+const forecastChartSource = (): { chart: ChartWithMeta } | null => {
+  const data = forecastData.value;
+  if (!data || data.points.length < 4) return null;
+  return {
+    chart: {
+      chartType: 'LINE',
+      title: '滚动营收预测',
+      meta: { xDim: 'time', yMetric: 'revenue', aggregation: 'sum', domain: 'restaurant' },
+      config: {
+        xAxis: { data: data.points.map(p => p.date) },
+        series: [{ type: 'line', data: data.points.map(p => p.forecastAmount) }],
+      },
+    },
+  };
+};
+
+const forecastChartPerms = () => ({ canViewFinance: canViewPrice.value === true });
+
+const { insight: forecastInsight, loading: forecastInsightLoading } = useChartInsight(
+  forecastChartSource,
+  forecastChartPerms,
+  { factoryId: () => factoryId.value, autoTier2: true },
+);
+
 defineExpose({
   saving, yearTargetValue, selectedReason, monthlyTargets,
   activeTab, decomposeResult, forecastData, paceAlert,
@@ -690,6 +723,8 @@ defineExpose({
           <span class="anchor-note">锚定日期 {{ forecastData.anchorDate }} · 拟合窗口 {{ forecastData.windowDays }} 天</span>
         </div>
         <div id="chart-forecast" class="forecast-chart"></div>
+        <!-- Chart Insight: LINE forecast TREND (restaurant, xDim:time, yMetric:revenue) -->
+        <ChartInsight :insight="forecastInsight" :loading="forecastInsightLoading" depth="detailed" />
         <!-- 防呆 Rule 2 + Rule 5: 毛利成本数据不足 → 显数字 + 下一步动作 -->
         <el-alert
           v-if="marginInsufficient"
