@@ -1,6 +1,7 @@
 package com.cretas.aims.ai.tool.impl.dataop;
 
 import com.cretas.aims.ai.tool.AbstractBusinessTool;
+import com.cretas.aims.ai.tool.ToolRbacGuard;
 import com.cretas.aims.service.MaterialBatchService;
 import com.cretas.aims.service.ProcessingService;
 import lombok.extern.slf4j.Slf4j;
@@ -28,6 +29,9 @@ public class BatchDeleteConfirmTool extends AbstractBusinessTool {
 
     @Autowired
     private MaterialBatchService materialBatchService;
+
+    @Autowired
+    private ToolRbacGuard rbacGuard;
 
     @Override
     public String getToolName() {
@@ -112,6 +116,27 @@ public class BatchDeleteConfirmTool extends AbstractBusinessTool {
                     "entityType", entityType));
         }
 
+        // W5 红线 (AI-RBAC): 上游 controller @RequirePermission 被 AI 直调绕过 — 此处补鉴权,
+        // 口径与 HTTP 面一致: MATERIAL_BATCH→warehouse:read_write (DELETE /material-batches),
+        // PRODUCTION_BATCH→production:read_write (POST /batches/{id}/cancel)。fail-closed。
+        String requiredPerm = switch (entityType.toUpperCase()) {
+            case "MATERIAL_BATCH" -> "warehouse:read_write";
+            case "PRODUCTION_BATCH" -> "production:read_write";
+            default -> null;
+        };
+        if (requiredPerm != null && !rbacGuard.hasAnyPermission(context, requiredPerm, "inventory:read_write")) {
+            String action = "MATERIAL_BATCH".equalsIgnoreCase(entityType) ? "批量删除原材料批次" : "批量取消生产批次";
+            log.warn("W5 AI-RBAC: 批量删除被拒, entityType={}, userId={}, requiredPerm={}",
+                    entityType, context.get("userId"), requiredPerm);
+            return buildSimpleResult("权限不足", Map.of(
+                    "message", rbacGuard.denyMessage(context, action, requiredPerm),
+                    "entityType", entityType,
+                    "denied", true));
+        }
+
+        // 调用者真实角色 — 透传给 service 带角色守卫的重载 (MATERIAL_BATCH 路径), 防 callerRole=null 旁路。
+        String callerRole = getUserRole(context);
+
         try {
             int deletedCount = 0;
             List<String> errors = new ArrayList<>();
@@ -131,7 +156,7 @@ public class BatchDeleteConfirmTool extends AbstractBusinessTool {
                 case "MATERIAL_BATCH" -> {
                     for (String id : idList) {
                         try {
-                            materialBatchService.deleteMaterialBatch(factoryId, id);
+                            materialBatchService.deleteMaterialBatch(factoryId, id, callerRole);
                             deletedCount++;
                         } catch (Exception ex) {
                             errors.add("批次 " + id + " 删除失败: " + ex.getMessage());

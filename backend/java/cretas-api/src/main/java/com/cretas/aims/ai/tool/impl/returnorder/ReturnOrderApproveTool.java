@@ -1,6 +1,7 @@
 package com.cretas.aims.ai.tool.impl.returnorder;
 
 import com.cretas.aims.ai.tool.AbstractBusinessTool;
+import com.cretas.aims.ai.tool.ToolRbacGuard;
 import com.cretas.aims.entity.inventory.ReturnOrder;
 import com.cretas.aims.service.inventory.ReturnOrderService;
 import lombok.extern.slf4j.Slf4j;
@@ -21,6 +22,9 @@ public class ReturnOrderApproveTool extends AbstractBusinessTool {
 
     @Autowired
     private ReturnOrderService returnOrderService;
+
+    @Autowired
+    private ToolRbacGuard rbacGuard;
 
     @Override
     public String getToolName() {
@@ -76,6 +80,29 @@ public class ReturnOrderApproveTool extends AbstractBusinessTool {
         String returnOrderId = getString(params, "returnOrderId");
         String action = getString(params, "action");
         Long userId = getUserId(context);
+
+        // W5 红线 (AI-RBAC): ReturnOrderController @RequirePermission 被 AI 直调绕过 — 此处补鉴权,
+        // 口径与 HTTP 面一致 (ReturnOrderService 本身无角色守卫, 鉴权全在 controller 注解层):
+        //   - finance-approve → finance:read_write (退货财审, 跟钱有关, 仅财务角色)
+        //   - submit/approve/reject/complete → sales:read_write 或 procurement:read_write (类级注解)
+        // fail-closed: 无权 → 拒绝, 不静默执行。
+        String act = action.toLowerCase();
+        boolean isFinance = "finance-approve".equals(act) || "finance_approve".equals(act);
+        boolean permitted = isFinance
+                ? rbacGuard.hasAnyPermission(context, "finance:read_write")
+                : rbacGuard.hasAnyPermission(context, "sales:read_write", "procurement:read_write");
+        if (!permitted) {
+            String actionLabel = isFinance ? "退货单财务审批" : "退货单审批/状态推进";
+            log.warn("W5 AI-RBAC: 退货单操作被拒, action={}, userId={}, returnOrderId={}",
+                    action, userId, returnOrderId);
+            Map<String, Object> denied = new HashMap<>();
+            denied.put("denied", true);
+            denied.put("action", action);
+            denied.put("returnOrderId", returnOrderId);
+            denied.put("message", rbacGuard.denyMessage(context, actionLabel,
+                    isFinance ? "finance:read_write" : "sales:read_write"));
+            return denied;
+        }
 
         log.info("退货单操作 - factoryId={}, returnOrderId={}, action={}", factoryId, returnOrderId, action);
 
