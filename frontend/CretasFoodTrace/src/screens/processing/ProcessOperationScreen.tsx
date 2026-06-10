@@ -190,7 +190,40 @@ export default function ProcessOperationScreen() {
     }
   }, [scanMode, selectedTask, tasks, resolveEmployee, loadTaskWorkers]);
 
-  // Submit report
+  // R8: 主操作 — 导航到三阶段报工屏 (栈A: YieldStepReportScreen)
+  // D2: 若当前 ProcessTask 没有关联的 WorkProcessTask, 明确提示用户, 不静默降级
+  const handleNavigateToYieldReport = () => {
+    if (!selectedTask) return;
+
+    const wptId = selectedTask.workProcessTaskId;
+    const batchId = selectedTask.batchId;
+
+    if (!wptId || !batchId) {
+      // D2: 显式提示 + 允许用户选择回退到旧路径
+      Alert.alert(
+        '提示',
+        `该工序任务未关联工序实例 (workProcessTaskId=${wptId ?? '未知'})，无法进入三阶段报工。\n` +
+        '将使用旧版快速报工，只能提交产出数量（无 T-3 时效锁和超收防呆）。',
+        [
+          { text: '取消', style: 'cancel' },
+          { text: '使用旧版报工', onPress: () => setShowLegacyReportForm(true) },
+        ],
+      );
+      return;
+    }
+
+    navigation.navigate('YieldStepReport', {
+      batchId,
+      batchNumber: selectedTask.batchNumber,
+      assignedWorkProcessTaskId: wptId,
+      assignedProcessOrder: selectedTask.processOrder ?? undefined,
+    } as any);
+  };
+
+  // R8: 次级入口 — 旧版快速报工 (submitNormalReport, 保留向后兼容)
+  // 注: 后端端点已标注 @Deprecated, 此路径仅在 D2 明确提示后用户主动选择时触发
+  const [showLegacyReportForm, setShowLegacyReportForm] = useState(false);
+
   const handleSubmitReport = async () => {
     if (!selectedTask) return;
     const qty = parseFloat(quantity);
@@ -209,7 +242,7 @@ export default function ProcessOperationScreen() {
       }
       await processTaskApiClient.submitNormalReport(data);
       Alert.alert('报工成功', `${selectedTask.processName} — ${qty} ${selectedTask.unit || 'kg'}`, [
-        { text: '继续', onPress: () => { setQuantity(''); setNotes(''); setWorker(null); } },
+        { text: '继续', onPress: () => { setQuantity(''); setNotes(''); setWorker(null); setShowLegacyReportForm(false); } },
         { text: '返回', onPress: () => setSelectedTask(null) },
       ]);
     } catch (e) {
@@ -332,91 +365,128 @@ export default function ProcessOperationScreen() {
           <View ref={tgtReport.ref} onLayout={tgtReport.onLayout} style={styles.reportSection}>
             <Text style={styles.sectionTitle}>报产量</Text>
 
-            {worker ? (
-              <View style={styles.workerBadge}>
-                <MaterialCommunityIcons name="account-check" size={18} color="#1890ff" />
-                <Text style={styles.workerLabel}>报工员工:</Text>
-                <Text style={styles.workerName}>{worker.name}</Text>
-                <TouchableOpacity onPress={() => setWorker(null)}>
-                  <Text style={{ color: '#999', fontSize: 12 }}>更换</Text>
+            {/* R8 主操作: 三阶段报工 (栈A) */}
+            {!showLegacyReportForm ? (
+              <View>
+                <TouchableOpacity
+                  style={styles.submitBtn}
+                  onPress={handleNavigateToYieldReport}
+                >
+                  <MaterialCommunityIcons name="clipboard-check-outline" size={20} color="#fff" style={{ marginRight: 6 }} />
+                  <Text style={styles.submitBtnText}>进入三阶段报工</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.legacyReportBtn}
+                  onPress={() => {
+                    Alert.alert(
+                      '旧版快速报工',
+                      '旧版快速报工仅提交产出数量，无时效锁和超收防呆。建议使用三阶段报工确保数据完整。继续？',
+                      [
+                        { text: '取消', style: 'cancel' },
+                        { text: '使用旧版', onPress: () => setShowLegacyReportForm(true) },
+                      ],
+                    );
+                  }}
+                >
+                  <Text style={styles.legacyReportBtnText}>旧版快速报工</Text>
                 </TouchableOpacity>
               </View>
             ) : (
+              /* R8 次级入口: 旧版快速报工 (D4: 后端端点已标 @Deprecated, 永久保留) */
               <View>
-                {/* Worker picker — from active checkins */}
-                {workersLoading ? (
-                  <ActivityIndicator size="small" style={{ marginVertical: 8 }} />
-                ) : taskWorkers.length > 0 ? (
-                  <View style={styles.workerPickerWrap}>
-                    <Text style={styles.workerPickerLabel}>选择员工 (已签到)</Text>
-                    <View style={styles.workerPickerGrid}>
-                      {taskWorkers.map(w => (
-                        <TouchableOpacity key={w.id} style={styles.workerPickerBtn} onPress={() => setWorker(w)}>
-                          <MaterialCommunityIcons name="account" size={16} color="#1890ff" />
-                          <Text style={styles.workerPickerName} numberOfLines={1}>{w.name}</Text>
-                        </TouchableOpacity>
-                      ))}
-                    </View>
-                  </View>
-                ) : (
-                  <Text style={styles.noWorkerHint}>暂无已签到员工，可扫码或主管自己报工</Text>
-                )}
-                {/* Scan fallback + supervisor self */}
-                <View style={styles.workerActionsRow}>
-                  <TouchableOpacity
-                    style={styles.scanWorkerBtn}
-                    onPress={() => { setScanMode('report'); setScannerVisible(true); }}
-                  >
-                    <MaterialCommunityIcons name="qrcode-scan" size={16} color={theme.colors.primary} />
-                    <Text style={styles.scanWorkerText}>扫码工牌</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity style={styles.selfReportBtn} onPress={() => setWorker(SUPERVISOR_SELF)}>
-                    <Text style={styles.selfReportText}>主管自己报</Text>
+                <View style={styles.legacyWarning}>
+                  <MaterialCommunityIcons name="alert-outline" size={16} color="#faad14" />
+                  <Text style={styles.legacyWarningText}>旧版快速报工 — 无时效锁，无超收防呆</Text>
+                  <TouchableOpacity onPress={() => setShowLegacyReportForm(false)}>
+                    <Text style={{ color: theme.colors.primary, fontSize: 13 }}>切换回三阶段</Text>
                   </TouchableOpacity>
                 </View>
+
+                {worker ? (
+                  <View style={styles.workerBadge}>
+                    <MaterialCommunityIcons name="account-check" size={18} color="#1890ff" />
+                    <Text style={styles.workerLabel}>报工员工:</Text>
+                    <Text style={styles.workerName}>{worker.name}</Text>
+                    <TouchableOpacity onPress={() => setWorker(null)}>
+                      <Text style={{ color: '#999', fontSize: 12 }}>更换</Text>
+                    </TouchableOpacity>
+                  </View>
+                ) : (
+                  <View>
+                    {workersLoading ? (
+                      <ActivityIndicator size="small" style={{ marginVertical: 8 }} />
+                    ) : taskWorkers.length > 0 ? (
+                      <View style={styles.workerPickerWrap}>
+                        <Text style={styles.workerPickerLabel}>选择员工 (已签到)</Text>
+                        <View style={styles.workerPickerGrid}>
+                          {taskWorkers.map(w => (
+                            <TouchableOpacity key={w.id} style={styles.workerPickerBtn} onPress={() => setWorker(w)}>
+                              <MaterialCommunityIcons name="account" size={16} color="#1890ff" />
+                              <Text style={styles.workerPickerName} numberOfLines={1}>{w.name}</Text>
+                            </TouchableOpacity>
+                          ))}
+                        </View>
+                      </View>
+                    ) : (
+                      <Text style={styles.noWorkerHint}>暂无已签到员工，可扫码或主管自己报工</Text>
+                    )}
+                    <View style={styles.workerActionsRow}>
+                      <TouchableOpacity
+                        style={styles.scanWorkerBtn}
+                        onPress={() => { setScanMode('report'); setScannerVisible(true); }}
+                      >
+                        <MaterialCommunityIcons name="qrcode-scan" size={16} color={theme.colors.primary} />
+                        <Text style={styles.scanWorkerText}>扫码工牌</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity style={styles.selfReportBtn} onPress={() => setWorker(SUPERVISOR_SELF)}>
+                        <Text style={styles.selfReportText}>主管自己报</Text>
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                )}
+
+                <TextInput
+                  label={`产出数量 (${selectedTask.unit || 'kg'})`}
+                  value={quantity}
+                  onChangeText={setQuantity}
+                  keyboardType="decimal-pad"
+                  mode="outlined"
+                  style={styles.input}
+                  right={<TextInput.Affix text={selectedTask.unit || 'kg'} />}
+                />
+
+                {remaining > 0 && (
+                  <View style={styles.quickBtns}>
+                    <Text style={{ fontSize: 13, color: '#666' }}>快捷:</Text>
+                    {[remaining, Math.round(remaining / 2)].filter(v => v > 0).map(v => (
+                      <TouchableOpacity key={v} style={styles.quickBtn} onPress={() => setQuantity(String(v))}>
+                        <Text style={styles.quickBtnText}>{v}</Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                )}
+
+                <TextInput
+                  label="备注 (选填)"
+                  value={notes}
+                  onChangeText={setNotes}
+                  mode="outlined"
+                  multiline
+                  numberOfLines={2}
+                  style={[styles.input, { marginTop: 10 }]}
+                />
+
+                <TouchableOpacity
+                  style={[styles.submitBtn, (!quantity || submitting) && { opacity: 0.5 }]}
+                  onPress={handleSubmitReport}
+                  disabled={!quantity || submitting}
+                >
+                  {submitting ? <ActivityIndicator color="#fff" /> :
+                    <Text style={styles.submitBtnText}>提交报工</Text>
+                  }
+                </TouchableOpacity>
               </View>
             )}
-
-            <TextInput
-              label={`产出数量 (${selectedTask.unit || 'kg'})`}
-              value={quantity}
-              onChangeText={setQuantity}
-              keyboardType="decimal-pad"
-              mode="outlined"
-              style={styles.input}
-              right={<TextInput.Affix text={selectedTask.unit || 'kg'} />}
-            />
-
-            {remaining > 0 && (
-              <View style={styles.quickBtns}>
-                <Text style={{ fontSize: 13, color: '#666' }}>快捷:</Text>
-                {[remaining, Math.round(remaining / 2)].filter(v => v > 0).map(v => (
-                  <TouchableOpacity key={v} style={styles.quickBtn} onPress={() => setQuantity(String(v))}>
-                    <Text style={styles.quickBtnText}>{v}</Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-            )}
-
-            <TextInput
-              label="备注 (选填)"
-              value={notes}
-              onChangeText={setNotes}
-              mode="outlined"
-              multiline
-              numberOfLines={2}
-              style={[styles.input, { marginTop: 10 }]}
-            />
-
-            <TouchableOpacity
-              style={[styles.submitBtn, (!quantity || submitting) && { opacity: 0.5 }]}
-              onPress={handleSubmitReport}
-              disabled={!quantity || submitting}
-            >
-              {submitting ? <ActivityIndicator color="#fff" /> :
-                <Text style={styles.submitBtnText}>提交报工</Text>
-              }
-            </TouchableOpacity>
           </View>
         </ScrollView>
       </KeyboardAvoidingView>
@@ -491,6 +561,11 @@ const styles = StyleSheet.create({
   quickBtns: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 8 },
   quickBtn: { paddingHorizontal: 16, paddingVertical: 6, borderRadius: 16, borderWidth: 1, borderColor: theme.colors.primary },
   quickBtnText: { color: theme.colors.primary, fontSize: 14, fontWeight: '600' },
-  submitBtn: { backgroundColor: theme.colors.primary, paddingVertical: 14, borderRadius: 10, alignItems: 'center', marginTop: 16 },
+  submitBtn: { backgroundColor: theme.colors.primary, paddingVertical: 14, borderRadius: 10, alignItems: 'center', marginTop: 16, flexDirection: 'row', justifyContent: 'center' },
   submitBtnText: { color: '#fff', fontSize: 17, fontWeight: '600' },
+  // R8: 旧版快速报工次级入口
+  legacyReportBtn: { marginTop: 12, paddingVertical: 10, borderRadius: 8, borderWidth: 1, borderColor: '#d9d9d9', alignItems: 'center', backgroundColor: '#fafafa' },
+  legacyReportBtnText: { color: '#888', fontSize: 14 },
+  legacyWarning: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: '#fffbe6', borderWidth: 1, borderColor: '#ffe58f', borderRadius: 8, padding: 10, marginBottom: 12 },
+  legacyWarningText: { flex: 1, color: '#856404', fontSize: 13 },
 });

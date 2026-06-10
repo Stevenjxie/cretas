@@ -86,9 +86,17 @@ public class ProcessWorkReportingController {
         return ApiResponse.success(service.batchApprove(factoryId, reportIds, approvedBy));
     }
 
+    /**
+     * 提交旧式工序报工 (单步提交，无三阶段分离).
+     *
+     * @deprecated R8 双栈合并 (2026-06-10): RN 入口已切换到 YieldStepReportScreen (栈A，三阶段报工).
+     *     新报工请走 POST /api/mobile/{factoryId}/production/batches/{batchId}/reports.
+     *     本端点永久保留以支持已有历史数据查询和旧版客户端兼容，不下线，签名不变.
+     */
+    @Deprecated
     @RequirePermission({"production:read_write"})
     @PostMapping("/normal")
-    @Operation(summary = "Submit normal process work report")
+    @Operation(summary = "Submit normal process work report [DEPRECATED: use YieldReportController instead]")
     public ApiResponse<Map<String, Object>> submitNormalReport(
             @PathVariable String factoryId,
             @Valid @RequestBody ProcessWorkReportSubmitRequest body,

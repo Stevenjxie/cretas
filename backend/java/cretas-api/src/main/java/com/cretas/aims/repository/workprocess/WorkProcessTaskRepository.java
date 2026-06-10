@@ -45,6 +45,17 @@ public interface WorkProcessTaskRepository extends JpaRepository<WorkProcessTask
     List<WorkProcessTask> findByFactoryIdAndIdIn(String factoryId, Collection<Long> ids);
 
     /**
+     * R8 双栈合并: 按 factoryId + productionBatchId + workProcessId 查唯一工序任务.
+     *
+     * <p>用于 ProcessTaskServiceImpl.resolveWorkProcessTaskId 的 BATCH- 路径：
+     * 当 ProcessTask.productionRunId = "BATCH-{batchId}" 时, 通过
+     * (factoryId, productionBatchId, workProcessId) 关联键找对应的 WorkProcessTask.
+     * 一个批次内同一工序只有一个实例, 结果唯一.
+     */
+    Optional<WorkProcessTask> findByFactoryIdAndProductionBatchIdAndWorkProcessId(
+            String factoryId, Long productionBatchId, String workProcessId);
+
+    /**
      * 分页列表 — 按 factoryId + status 过滤.
      *
      * 用 CAST(:status AS string) 应对 PostgreSQL 严格类型推断

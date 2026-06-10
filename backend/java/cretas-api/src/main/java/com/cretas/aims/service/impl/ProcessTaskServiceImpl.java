@@ -10,12 +10,15 @@ import com.cretas.aims.exception.ResourceNotFoundException;
 import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.ProductWorkProcess;
 import com.cretas.aims.entity.WorkProcess;
+import com.cretas.aims.entity.workprocess.WorkProcessTask;
 import com.cretas.aims.repository.ProcessTaskRepository;
+import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.ProductionReportRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.ProductWorkProcessRepository;
 import com.cretas.aims.repository.StateMachineRepository;
 import com.cretas.aims.repository.WorkProcessRepository;
+import com.cretas.aims.repository.workprocess.WorkProcessTaskRepository;
 import com.cretas.aims.service.ProcessTaskService;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
@@ -43,6 +46,10 @@ public class ProcessTaskServiceImpl implements ProcessTaskService {
     private final ProductWorkProcessRepository productWorkProcessRepository;
     private final ProductTypeRepository productTypeRepository;
     private final ProductionReportRepository reportRepository;
+    /** R8: 用于解析 BATCH- 路径下的 WorkProcessTask 关联. */
+    private final WorkProcessTaskRepository workProcessTaskRepository;
+    /** R8: 用于解析批次号 (batchNumber) 填入 ProcessTaskDTO. */
+    private final ProductionBatchRepository productionBatchRepository;
 
     @Override
     @Transactional
@@ -403,6 +410,15 @@ public class ProcessTaskServiceImpl implements ProcessTaskService {
             log.warn("Failed to enrich names for task {}: {}", entity.getId(), e.getMessage());
         }
 
+        // R8: resolve batchId first, then look up WPT (single call, avoids redundant parse)
+        Long batchId = resolveBatchId(entity);
+        WorkProcessTask wpt = resolveWorkProcessTask(entity, batchId);
+        Long workProcessTaskId = wpt != null ? wpt.getId() : null;
+        Integer processOrder = wpt != null ? wpt.getProcessOrder() : null;
+
+        // R8: resolve batchNumber from ProductionBatch
+        String batchNumber = resolveBatchNumber(entity, batchId);
+
         return ProcessTaskDTO.builder()
                 .id(entity.getId())
                 .factoryId(entity.getFactoryId())
@@ -416,8 +432,10 @@ public class ProcessTaskServiceImpl implements ProcessTaskService {
                 .sourceDocType(entity.getSourceDocType())
                 .sourceDocId(entity.getSourceDocId())
                 .workflowVersionId(entity.getWorkflowVersionId())
-                .batchId(resolveBatchId(entity))
-                .workProcessTaskId(resolveWorkProcessTaskId(entity))
+                .batchId(batchId)
+                .batchNumber(batchNumber)
+                .workProcessTaskId(workProcessTaskId)
+                .processOrder(processOrder)
                 .plannedQuantity(entity.getPlannedQuantity())
                 .completedQuantity(entity.getCompletedQuantity())
                 .pendingQuantity(entity.getPendingQuantity())
@@ -454,14 +472,61 @@ public class ProcessTaskServiceImpl implements ProcessTaskService {
         }
     }
 
-    private Long resolveWorkProcessTaskId(ProcessTask entity) {
+    /**
+     * R8 双栈合并: 解析 ProcessTask 对应的 WorkProcessTask.
+     *
+     * <p>支持两种关联路径:
+     * <ol>
+     *   <li><b>WPT- 前缀路径</b>: ProcessTask.id = "WPT-{wptId}", 直接从 id 解析.
+     *       这是 {@code mirrorWorkProcessTasksForRn} 创建的镜像任务的标准路径.</li>
+     *   <li><b>BATCH- 路径 (fallback)</b>: ProcessTask.productionRunId = "BATCH-{batchId}",
+     *       通过 (factoryId, productionBatchId, workProcessId) 三键关联查找.
+     *       用于非标准创建路径下但确实有对应 WPT 的任务.</li>
+     * </ol>
+     *
+     * @param entity  ProcessTask 实体
+     * @param batchId 已解析的 batchId (null = 不走 BATCH- 路径)
+     * @return 对应的 WorkProcessTask, 未找到时返回 null (不抛异常)
+     */
+    private WorkProcessTask resolveWorkProcessTask(ProcessTask entity, Long batchId) {
         String id = entity.getId();
-        if (id == null || !id.startsWith("WPT-")) {
+        // Path 1: WPT-{id} prefix (standard mirror path)
+        if (id != null && id.startsWith("WPT-")) {
+            try {
+                Long wptId = Long.valueOf(id.substring(4));
+                return workProcessTaskRepository.findByFactoryIdAndId(entity.getFactoryId(), wptId)
+                        .orElse(null);
+            } catch (NumberFormatException ignored) {
+                // fall through to Path 2
+            }
+        }
+        // Path 2: BATCH- productionRunId + workProcessId (fallback for non-standard tasks)
+        if (batchId != null && entity.getWorkProcessId() != null) {
+            return workProcessTaskRepository
+                    .findByFactoryIdAndProductionBatchIdAndWorkProcessId(
+                            entity.getFactoryId(), batchId, entity.getWorkProcessId())
+                    .orElse(null);
+        }
+        return null;
+    }
+
+    /**
+     * R8 双栈合并: 解析批次号 (batchNumber) 用于 RN 导航到 YieldStepReportScreen.
+     *
+     * <p>只在 batchId 已解析时查询, 否则返回 null (快速路径).
+     * fail-soft: 查询失败不影响主流程.
+     */
+    private String resolveBatchNumber(ProcessTask entity, Long batchId) {
+        if (batchId == null) {
             return null;
         }
         try {
-            return Long.valueOf(id.substring(4));
-        } catch (NumberFormatException ignored) {
+            return productionBatchRepository.findById(batchId)
+                    .map(b -> b.getBatchNumber())
+                    .orElse(null);
+        } catch (Exception e) {
+            log.warn("R8: resolveBatchNumber failed for task {}, batchId={}: {}",
+                    entity.getId(), batchId, e.getMessage());
             return null;
         }
     }

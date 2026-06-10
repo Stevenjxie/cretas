@@ -35,7 +35,14 @@ public class ProcessTaskDTO {
     private String sourceDocId;
     private Integer workflowVersionId;
     private Long batchId;
+    /** 批次号 (如 "MB-F006-0012"), 用于 R8 双栈合并 — RN 导航到 YieldStepReportScreen 时传入. */
+    private String batchNumber;
     private Long workProcessTaskId;
+    /**
+     * 工序顺序号 (来自对应 WorkProcessTask.processOrder).
+     * R8 双栈合并 — RN 导航到 YieldStepReportScreen 时传入 assignedProcessOrder.
+     */
+    private Integer processOrder;
 
     @NotNull(message = "计划量不能为空")
     @DecimalMin(value = "0.01", message = "计划量必须大于0")
