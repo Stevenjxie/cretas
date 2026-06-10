@@ -58,6 +58,14 @@ import os
 import sys
 from typing import Any, Dict, List, Optional
 
+# Path bootstrap — main.py adds backend/python AND backend/python/smartbi to sys.path so
+# bare `from services.X import ...` (used transitively by distillation_capture) resolves to
+# smartbi/services/X. Standalone scripts must mirror it or persist fails "No module named services".
+_PYTHON_ROOT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+for _p in (_PYTHON_ROOT, os.path.join(_PYTHON_ROOT, "smartbi")):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("etl_intent_corpus")
 
