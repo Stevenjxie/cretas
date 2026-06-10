@@ -17,23 +17,23 @@
 |------|------|---------|--------|------|------|------|---------|
 | D-1 | 采购订单 CRUD + 提交/审批/取消/复制/PDF | PurchaseOrder SP3 | P0 | ✅已建 | V2 | E2E run-20260610_124749: PURCHASE_ORDER id f3812561 创建成功 12:47:55 | API 断言 PO status 状态机 |
 | D-2 | 采购关联销售订单 (两种模式: 自主/跟单) | PurchaseOrder.salesOrderId SP3 | P1 | 🟡部分 | V0 | salesOrderId 字段存在; 从 SO 一键弹窗带入原料明细未实现 | 检查 orders/list.vue loadSalesOrders 交互 |
-| D-3 | 采购供应商管理 (档案/准入/黑名单) | Supplier SP3 | P0 | ✅已建 | V0 | SupplierController + SupplierAdmissionController; paymentTerms 字段存在但为自由文本 | headed UI 供应商列表页 |
-| D-4 | 供应商结算属性结构化 (月结/现结/账期枚举) | Supplier.paymentTerms SP3 | P1 | 🟡部分 | V0 | paymentTerms 字段存在但自由文本非枚举; 结算类型枚举未落 | git grep paymentTerms entity |
+| D-3 | 采购供应商管理 (档案/准入/黑名单) | Supplier SP3 | P0 | ✅已建 | V1 | 2026-06-10: `GET /suppliers` 200, count=2, paymentTerms "货到30天/60天" 实证; SupplierController 端点可达 | headed UI 供应商列表页 |
+| D-4 | 供应商结算属性结构化 (月结/现结/账期枚举) | Supplier.paymentTerms SP3 | P1 | 🟡部分 | V1 | 2026-06-10: paymentTerms=自由文本 ✅; paymentTermsType(SettlementType枚举) 字段存在但 null; 两字段均已建 git show 确认 | 枚举字段补充填充 |
 | D-5 | 采购入库 + 实际入库值 + 超收 30% cap | PurchaseReceiveRecord SP3 | P0 | 🟡部分 | V2 | E2E: PURCHASE_RECEIVE id e5d325f3 + PURCHASE_EXCEPTION id 9a5c21a2 OVER_RECEIVE 已触发 12:47:57-58 | 验 validateOverReceiveCap 逻辑; 检查异常单分支 |
 | D-6 | 差值异常动单 → 退回采购人判断退/入 | PurchaseException 分支流 SP6 | P0 | 🟡部分 | V2 | PURCHASE_EXCEPTION 9a5c21a2 已创建(类型 OVER_RECEIVE); 但无独立异常单实体/责任绑定流 — cap 拦截非异常单模型 | E2E 异常已造数; headed 看 /procurement/exceptions 页 |
 | D-7 | 采购付款属性 6 类结算 (预付/赊销/未到票/月结/账期/现结) | PO 结算属性 SP11 | P1 | 🔴缺 | N/A | git grep settlementType PurchaseOrder = 0 命中; PO 无结算属性字段 | 需先实现: PO 加 settlementType 枚举 |
 | D-8 | 进项发票管理 (未到票催票 + 上传核销状态机) | 进项票实体 SP11 | P1 | 🔴缺 | N/A | InvoiceRecord 仅挂销售侧 (salesOrderId/customerId); 无采购进项票实体 | 需先实现 |
-| D-9 | 付款申请 + 双端审批流 + 出纳只读终端 (替代钉钉) | 付款申请工作流 SP12 | P0 | 🟡部分 | V2 | E2E: PAYMENT_REQUEST id b92708a4 12:47:59 已创建; 但完整审批链+出纳角色未完全验证 | headed web 付款申请列表; 审批节点走通 |
-| D-10 | 采购财务审批 (界面内提交 + 财务审批可见) | PurchaseController 财审 SP3 | P1 | ✅已建 | V0 | PurchaseController submit-for-finance-review/finance-approve 端点存在; V20260330_03 迁移 | headed 采购财审列表页 |
-| D-11 | 采购单价未税/含税双值显示 | PO item.taxRate SP3 | P1 | 🟡部分 | V0 | PurchaseOrderItem.taxRate + getAmountWithTax 已有; PO 级未税+含税双值头部展示未确认 | 检查 orders/detail.vue 是否双值渲染 |
-| D-12 | 从 SO 一键生成采购单 + "开始采购"入口 | PO 创建流程 SP3 | P1 | 🟡部分 | V0 | salesOrderId 关联已有; 从 SO 详情弹窗带入明细/开始采购按钮未见 | headed UI 销售订单→采购创建路径 |
-| D-13 | 采购需求/请购单 + BOM 反推领料 | PurchaseRequisition SP5 | P1 | 🟡部分 | V0 | entity/PurchaseRequisition 存在; 反推领料→库存不足双向报警未闭环 | API 请购单创建验证 |
+| D-9 | 付款申请 + 双端审批流 + 出纳只读终端 (替代钉钉) | 付款申请工作流 SP12 | P0 | 🟡部分 | B | 2026-06-10 B阻塞: payment_requests 表在 DB 存在(SP6/SP12 手工迁移), 但 PaymentRequestController **不在 origin/main** (git grep 0命中) — 付款申请 API 层未实现 | 实现 PaymentRequestController |
+| D-10 | 采购财务审批 (界面内提交 + 财务审批可见) | PurchaseController 财审 SP3 | P1 | ✅已建 | V1 | 2026-06-10: git show 确认 submit-for-finance-review/finance-approve 端点; 财审流程与 D-12 流程中验证 200 | — |
+| D-11 | 采购单价未税/含税双值显示 | PO item.taxRate SP3 | P1 | ✅已建 | V1 | 2026-06-10: taxRate=9, lineAmount=4000.0, lineAmountWithTax=4360.0 (=4000×1.09) API 断言精确验证; @PriceSensitive 脱敏路径已知 | audit: 2026-06-10-d-flow-purchase-verification.md D-11 |
+| D-12 | 从 SO 一键生成采购单 + "开始采购"入口 | PO 创建流程 SP3 | P1 | 🟡部分 | V1 | 2026-06-10: PO-20260610-0004 创建时传入 salesOrderId 存储验证 ✅; "从SO弹窗带入明细"UI入口仍缺 | audit: 2026-06-10-d-flow-purchase-verification.md D-12 |
+| D-13 | 采购需求/请购单 + BOM 反推领料 | PurchaseRequisition SP5 | P1 | 🟡部分 | V1 | 2026-06-10: PR-20260610-001 创建DRAFT→提交PENDING_APPROVAL; 路径 /purchase-requisitions, 字段 requestedItems; 反推领料未验 | audit: 2026-06-10-d-flow-purchase-verification.md D-13 |
 | D-14 | 多关联 SO 按供应商/品类合并采购单 | PO 合并逻辑 SP3 | P1 | 🔴缺 | N/A | PO 无 salesOrderIds 数组; 无合并聚合逻辑 | 需先实现 |
-| D-15 | 询价核价 + 价格趋势比较 | InquiryQuote SP3 | P1 | ✅已建 | V0 | InquiryQuoteController + PurchaseController.getOrderPriceComparison + price-lists/list.vue | headed 询价页 |
-| D-16 | 采购退货 (发起→财务审批→仓管出货) | ReturnOrder PURCHASE_RETURN SP6 | P1 | 🟡部分 | V0 | ReturnOrderController approve/submit 端点; withGoods=TRUE 库存回滚 Phase C 未做 | API 退货单创建+审批流 |
-| D-17 | 合同号挂采购 + 历史价格/批次永久追溯 | PO 合同号字段 SP3 | P2 | 🟡部分 | V0 | MaterialBatch 批次成本锁定永久; PO 合同号字段未加 | 检查批次历史查询 |
-| D-18 | 原料来源标记 (国内/国外) | PurchaseOrder.isImported SP3 | P2 | ✅已建 | V0 | PurchaseOrder.isImported 字段存在 | grep isImported entity |
-| D-19 | 采购界面单据打印/PDF/发送供应商 | PrintController SP3 | P1 | ✅已建 | V0 | PrintController /print/purchase-order 端点 | API PDF 端点返回 200 |
+| D-15 | 询价核价 + 价格趋势比较 | InquiryQuote SP3 | P1 | ✅已建 | V1 | 2026-06-10: INQ-20260610-0001 创建成功 DRAFT; inquiryDate/quantity/unit 必填; submit/supplier-prices/select-and-convert 端点存在 git grep | audit: 2026-06-10-d-flow-purchase-verification.md D-15 |
+| D-16 | 采购退货 (发起→财务审批→仓管出货) | ReturnOrder PURCHASE_RETURN SP6 | P1 | 🟡部分 | V1 | 2026-06-10: 路径纠正→ /return-orders (NOT /purchase/returns); GET 200 count=0; create+approve 端点存在; 创建全链未做完整断言 | audit: 2026-06-10-d-flow-purchase-verification.md D-16 |
+| D-17 | 合同号挂采购 + 历史价格/批次永久追溯 | PO 合同号字段 SP3 | P2 | 🟡部分 | V1 | 2026-06-10: git show PurchaseOrder.java:192 contractNumber 字段存在; API 返回 "contractNumber":null ✅ | audit: 2026-06-10-d-flow-purchase-verification.md D-17 |
+| D-18 | 原料来源标记 (国内/国外) | PurchaseOrder.isImported SP3 | P2 | ✅已建 | V1 | 2026-06-10: git show PurchaseOrder.java:97-98 isImported Boolean 字段; API 返回 "isImported":null ✅ | audit: 2026-06-10-d-flow-purchase-verification.md D-18 |
+| D-19 | 采购界面单据打印/PDF/发送供应商 | PrintController SP3 | P1 | ✅已建 | B | 2026-06-10 B阻塞: 端点可达 200 但 502 "打印服务暂时不可用"; Python test (8084) print 路由未注册 | 修复 Python print 模块在 test env |
 | D-20 | 研发试样票务字段 (有票/无票→科目影响) | 票务属性 SP11 | P2 | 🔴缺 | N/A | 试样采购票务字段无独立建模 | 需先实现 |
 
 **D 流小结**
@@ -45,8 +45,8 @@
 | 🔴缺 | 4 |
 
 关键缺口: D-7(结算属性6类) / D-8(进项票) / D-9(付款申请链完整度) — 客户 P0 替钉钉核心。  
-E2E 证据最强点: D-5/D-6(入库+超收异常) / D-9(付款申请创建) 已 V2。  
-验证覆盖率: V2=3 / V0=13 / N/A=4 — 大量 V0 待补充 headed 验证。
+**Batch A 验证升级 (2026-06-10)**: D-3/D-4/D-10/D-11/D-12/D-13/D-15/D-16/D-17/D-18 → V1; D-9/D-19 → B阻塞。  
+验证覆盖率(更新后): V1=10 / V2=2 / V0=0 / B=2 / N/A=4 (D流已完成Batch A扫荡)。
 
 ---
 
@@ -57,21 +57,21 @@ E2E 证据最强点: D-5/D-6(入库+超收异常) / D-9(付款申请创建) 已 
 | 编号 | 摘要 | 模块/SP | 优先级 | 实现 | 验证 | 证据 | 建议方法 |
 |------|------|---------|--------|------|------|------|---------|
 | E-1 | 销售订单 CRUD + 确认/取消/复制/状态机 | SalesController SP2 | P0 | ✅已建 | V2 | E2E run-20260610_124749: SO-20260610-0003 id 040e8396 12:47:52 | headed web /sales/orders 列表+详情 |
-| E-2 | 创建 SO 时单价可空 + SKU 关联专属客户 | SalesOrder entity SP2 | P0 | ✅已建 | V0 | SalesOrder 单价可空(下单时可空); SKU 可关联客户字段 | 检查 SO 创建表单空价提交 |
-| E-3 | 财务审核流程 (含税/未税/税率口径) | SalesController 财审 SP2 | P0 | ✅已建 | V0 | submit-for-review/finance-approve 端点; SalesOrderItem.taxRate; financeReviewedBy/At; finance-review/list.vue | headed 财审列表页 |
-| E-4 | 销售单价含税+不含税双值显示 | SO 税率字段 SP2 | P1 | 🟡部分 | V0 | SalesOrderItem.taxRate + costUnitPrice 含税; 前端是否同时双值显示待核实 | 检查 orders/detail.vue 双值渲染 |
+| E-2 | 创建 SO 时单价可空 + SKU 关联专属客户 | SalesOrder entity SP2 | P0 | ✅已建 | B | 2026-06-10 B阻塞: test DB 有 86+ 条 ORDER scope 业务规则 (BFV_E_SCOPE_ORDER: totalAmount>1000 等) 污染验证; 空价 SO 被规则引擎拒绝; 需清理测试规则后重验 | 清理 test DB ORDER scope 规则残留 |
+| E-3 | 财务审核流程 (含税/未税/税率口径) | SalesController 财审 SP2 | P0 | ✅已建 | V1 | 2026-06-10: SO-20260610-0001 完整链 DRAFT→CONFIRMED→PENDING_FINANCE_REVIEW→FINANCE_APPROVED; financeReviewedAt 非null | audit: 2026-06-10-e-flow-sales-verification.md E-3 |
+| E-4 | 销售单价含税+不含税双值显示 | SO 税率字段 SP2 | P1 | 🟡部分 | V1 | 2026-06-10: SalesOrderItem 无 lineAmountWithTax @Transient (只有 PurchaseOrderItem 有); taxRate 字段存在但 SO 侧含税双值未实现 — 发现 gap | audit: 2026-06-10-e-flow-sales-verification.md E-4 |
 | E-5 | 底价/毛利率红线预警 (低于底价红色禁提交) | PricingEngine SP2 | P0 | 🟡部分 | B | 阻塞: PricingEngine.checkWarnings 基础在但 costEstimate(null) 静默禁用 — SalesServiceImpl:362 F3 gap 注释; ProductType 无 standardCost 字段 | 需先补 ProductType.standardCost 或 BOM 卷积成本 |
 | E-6 | 三层价格参考 (研发预估/下单/实际核算) | OperationalQuote + SO 成本 SP2/SP11 | P1 | 🟡部分 | V0 | OperationalQuoteController; SO.estimatedCost(财审手填); cost-breakdown 预估vs实际; 三层同一视图对比未做 | headed rd/quotations + SO 成本详情 |
-| E-7 | 发货/出库/签收 + 照片上传 | SalesDeliveryRecord SP2 | P0 | ✅已建 | V0 | SalesController deliveries(create/ship/delivered/signature) + SalesDeliveryRecord | headed 发货单列表 |
-| E-8 | 开票管理 (申请/审批/开具/回传) | InvoiceController SP2 | P0 | ✅已建 | V0 | InvoiceController request/approve/issue + 按税率分组拆分(9%原料+13%加工费) + by-sales-order 端点 | headed /finance/invoices 列表 |
-| E-9 | 收款管理 (记录/核销/状态) | PaymentRecordController SP2 | P1 | ✅已建 | V0 | PaymentRecordController + SalesOrder.paidAmount/settlementFlag + ArApTransaction | headed /finance/payments |
-| E-10 | 收款→自动触发开票事件联动 | 收款→开票链 SP2 | P1 | 🟡部分 | V0 | record/verify 与 invoice request 独立; 客户要"看到钱已收→开票"半自动衔接未实现 | 测试收款后是否自动触发开票提示 |
-| E-11 | 销售凭证财审自动传票 (非手动批量) | SalesReceiptVoucherGenerator SP11 | P1 | 🟡部分 | V0 | SalesReceiptVoucherGenerator 存在; 但 financeApproveOrder 不自动触发凭证生成; 需加事件监听器 | grep financeApproveOrder 查 event listener |
+| E-7 | 发货/出库/签收 + 照片上传 | SalesDeliveryRecord SP2 | P0 | ✅已建 | V1 | 2026-06-10: DLV-20260610-4332 创建 PENDING_WAREHOUSE_CONFIRM; customerId+salesOrderId+items 必填 | audit: 2026-06-10-e-flow-sales-verification.md E-7 |
+| E-8 | 开票管理 (申请/审批/开具/回传) | InvoiceController SP2 | P0 | ✅已建 | V1 | 2026-06-10: INV-20260610-0013 申请REQUESTED→审批APPROVED; invoiceType 正确枚举值 SPECIAL (非VAT_SPECIAL) | audit: 2026-06-10-e-flow-sales-verification.md E-8 |
+| E-9 | 收款管理 (记录/核销/状态) | PaymentRecordController SP2 | P1 | ✅已建 | V1 | 2026-06-10: 收款记录创建 200 success, status=PENDING; 关联SO-20260610-0001, amount=2000 | audit: 2026-06-10-e-flow-sales-verification.md E-9 |
+| E-10 | 收款→自动触发开票事件联动 | 收款→开票链 SP2 | P1 | 🟡部分 | V1 | 2026-06-10: GET /finance/invoices?salesOrderId=xxx 可按SO筛选发票 ✅; record→invoice 自动联动仍未实现; by-sales-order path变体400 | audit: 2026-06-10-e-flow-sales-verification.md E-10 |
+| E-11 | 销售凭证财审自动传票 (非手动批量) | SalesReceiptVoucherGenerator SP11 | P1 | ✅已建 | V1 | 2026-06-10: 矩阵描述有误 — SalesFinanceApproveVoucherListener **已自动触发**; 日志: V-2026-0019 auto-generated on finance-approve; by-business API 确认 ✅ | audit: 2026-06-10-e-flow-sales-verification.md E-11 |
 | E-12 | 多销售单合并为一张供单 | SO 合并聚合 SP2 | P1 | 🔴缺 | N/A | CreateSalesOrderRequest 无 salesOrderIds 数组; ProductionPlanServiceImpl 无 merge 逻辑 | 需先实现 |
-| E-13 | 销售订单单据打印 (按 SKU 单位) | PrintController SP2 | P2 | ✅已建 | V0 | PrintController /sales-order/{id} + /packing-list 端点 | API /print/sales-order 返回 200 |
+| E-13 | 销售订单单据打印 (按 SKU 单位) | PrintController SP2 | P2 | ✅已建 | B | 2026-06-10 B阻塞: 端点 200 但 "打印服务暂时不可用"; Python test (8084) print 路由未注册 (同 D-19) | 修复 Python print 模块 |
 | E-14 | 盐化独立销售单元 (谁建谁用+独立报表) | 盐化供单 SP11 | P2 | 🔴缺 | N/A | grep 盐化/saltcure = 0 命中; F流 WarehouseType 无盐化类型 | 需先实现 |
 | E-15 | 三价对比视图 (研发预估/BOM标准/实际核算同屏) | three-price SP11 | P1 | 🟡部分 | B | 阻塞: /rd/quotations/three-price 路由被当 ID 解析(E2E 发现 BUG; FIXB 组2-7 修复中); 三层散在报价/财审/profit-detail 三处未同屏对比 | FIXB 修复后重测 three-price 入口 |
-| E-16 | 销售提成与毛利联动 | 提成规则 SP12 | P2 | 🟡部分 | V0 | CommissionRule.tierConfig 已存在(复用餐饮月结); 毛利联动逻辑未确认 | 检查 CommissionRule 是否挂毛利率字段 |
+| E-16 | 销售提成与毛利联动 | 提成规则 SP12 | P2 | 🟡部分 | V1 | 2026-06-10: GET /commission 200; 路径 /api/mobile/{factoryId}/commission; content 空(无测试数据); 毛利联动逻辑验证 defer | audit: 2026-06-10-e-flow-sales-verification.md E-16 |
 
 **E 流小结**
 
@@ -82,9 +82,10 @@ E2E 证据最强点: D-5/D-6(入库+超收异常) / D-9(付款申请创建) 已 
 | 🔴缺 | 2 |
 | B阻塞 | 1 |
 
-关键缺口: E-5(毛利红线 F3 gap 阻塞) / E-12(多 SO 合并) / E-11(凭证自动传票)。  
-E-15 three-price 路由 bug 在 FIXB 修复中，修复后需重验。  
-验证覆盖率: V2=1 / V0=11 / B=2 / N/A=2。
+关键缺口: E-5(毛利红线 F3 gap 阻塞) / E-12(多 SO 合并)。  
+**矩阵描述纠正**: E-11 矩阵原说"未自动传票"→**已自动传票** (SalesFinanceApproveVoucherListener 已有效触发)。  
+**Batch A 验证升级 (2026-06-10)**: E-3/E-4/E-7/E-8/E-9/E-10/E-11/E-16 → V1; E-2/E-13 → B阻塞。  
+验证覆盖率(更新后): V1=9 / V2=1 / V0=1(E-6) / B=2 / N/A=2。
 
 ---
 
