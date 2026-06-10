@@ -170,8 +170,20 @@ function profitClass(p: number | null | undefined): string {
   return '';
 }
 
+/**
+ * SP3: 超支 → red, 正常 → green, null/不足数据 → 默认色
+ * belowThreshold: true=正常, false=超支, null=数据不足
+ */
+function varianceClass(belowThreshold: boolean | null | undefined): string {
+  if (belowThreshold === false) return 'profit-negative';
+  if (belowThreshold === true) return 'profit-positive';
+  return '';
+}
+
 function lineRowClassName({ row }: { row: LineCostBreakdown }): string {
-  // BOM 标准与实际偏差 > 15% 时标红 (财务关注偏差大的行)
+  // SP3: 后端已计算方差阈值，belowThreshold===false → 超支红标行
+  if (row.belowThreshold === false) return 'cost-overbudget-row';
+  // 旧逻辑兜底: BOM 标准与实际偏差 > 15% 时标黄 (财务关注偏差大的行)
   if (row.bomStandardLineCost != null && row.actualLineCost != null) {
     const std = row.bomStandardLineCost;
     if (std > 0) {
@@ -286,6 +298,16 @@ onMounted(load);
       />
     </el-card>
 
+    <!-- SP3: 超支告警横幅 (sticky error banner) -->
+    <el-alert
+      v-if="breakdown?.alarmMessage"
+      type="error"
+      :closable="false"
+      :title="breakdown.alarmMessage"
+      style="margin-bottom: 12px"
+      show-icon
+    />
+
     <!-- 成本核算汇总 -->
     <el-card v-if="breakdown" shadow="never" class="summary-card">
       <template #header>
@@ -313,6 +335,30 @@ onMounted(load);
         <div class="cost-cell">
           <div class="label">实际成本</div>
           <div class="value-lg">{{ formatAmount(breakdown.actualCost) }}</div>
+        </div>
+        <!-- SP3: 三价对比 — 成本偏差率 + 超支红标 -->
+        <div class="cost-cell">
+          <div class="label">成本偏差率 (实际 vs BOM)</div>
+          <div class="value-lg">
+            <span :class="varianceClass(breakdown.belowThreshold)">
+              {{ formatPercent(breakdown.variancePct) }}
+            </span>
+            <el-tag
+              v-if="breakdown.belowThreshold === false"
+              type="danger"
+              size="small"
+              style="margin-left: 8px"
+            >超支</el-tag>
+            <el-tag
+              v-else-if="breakdown.belowThreshold === true"
+              type="success"
+              size="small"
+              style="margin-left: 8px"
+            >正常</el-tag>
+          </div>
+          <div v-if="breakdown.varianceAbsolute != null" class="variance-abs">
+            绝对偏差: {{ formatAmount(breakdown.varianceAbsolute) }}
+          </div>
         </div>
         <div v-if="SHOW_PRE_ESTIMATED_COST" class="cost-cell">
           <div class="label">预估利润</div>
@@ -367,6 +413,20 @@ onMounted(load);
         </el-table-column>
         <el-table-column label="实际行成本" align="right" min-width="130">
           <template #default="{ row }">{{ formatAmount(row.actualLineCost) }}</template>
+        </el-table-column>
+        <!-- SP3: 行级成本偏差率 + 超支红标 -->
+        <el-table-column label="偏差率" align="right" min-width="120">
+          <template #default="{ row }">
+            <span :class="varianceClass(row.belowThreshold)">
+              {{ formatPercent(row.variancePct) }}
+            </span>
+            <el-tag
+              v-if="row.belowThreshold === false"
+              type="danger"
+              size="small"
+              style="margin-left: 4px"
+            >超</el-tag>
+          </template>
         </el-table-column>
       </el-table>
     </el-card>
@@ -632,6 +692,18 @@ onMounted(load);
 }
 :deep(.cost-deviation-row td) {
   background-color: #fff7e6 !important;
+}
+/* SP3: 超支行红色高亮 (优先级高于偏差黄) */
+:deep(.cost-overbudget-row) {
+  background-color: #fff0f0 !important;
+}
+:deep(.cost-overbudget-row td) {
+  background-color: #fff0f0 !important;
+}
+.variance-abs {
+  font-size: 12px;
+  color: #909399;
+  margin-top: 4px;
 }
 /* B3 trend summary bar */
 .trend-summary {

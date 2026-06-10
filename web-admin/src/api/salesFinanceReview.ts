@@ -61,6 +61,14 @@ export interface LineCostBreakdown {
   bomStandardUnitCost: number | null;
   bomStandardLineCost: number | null;
   actualLineCost: number | null;
+  /** SP3: 单位标准成本 (BOM 标准，@PriceSensitive — 非财务角色为 null) */
+  standardCostPerUnit: number | null;
+  /** SP3: 单位实际成本 (@PriceSensitive) */
+  actualCostPerUnit: number | null;
+  /** SP3: 行级成本偏差率 (实际 vs BOM 标准，正值=超支，@PriceSensitive) */
+  variancePct: number | null;
+  /** SP3: 是否在阈值内 (true=未超支，false=超支，null=数据不足) */
+  belowThreshold: boolean | null;
 }
 
 export interface FinanceCostBreakdown {
@@ -74,6 +82,14 @@ export interface FinanceCostBreakdown {
   profitMarginActual: number | null;
   dataSourceHint: string | null;
   lines: LineCostBreakdown[];
+  /** SP3: 整单成本偏差率 (实际 vs BOM 标准，@PriceSensitive) */
+  variancePct: number | null;
+  /** SP3: 整单成本偏差绝对值 (@PriceSensitive) */
+  varianceAbsolute: number | null;
+  /** SP3: 是否在工厂方差阈值内 (true=未超支，false=超支，null=数据不足) */
+  belowThreshold: boolean | null;
+  /** SP3: 超支时的告警信息 (null=未超支或数据不足) */
+  alarmMessage: string | null;
 }
 
 export interface PageResponse<T> {
