@@ -46,6 +46,10 @@ const MAX_EVIDENCE_VIDEO_BYTES = 100 * 1024 * 1024;
 const MAX_EVIDENCE_VIDEO_DURATION_MS = 60 * 1000;
 const VIDEO_EXTENSIONS = ['mp4', 'mov', 'm4v', 'webm'];
 
+// 两点报工哨兵 task 常量 (与后端 WorkProcessTaskService.SENTINEL_* 保持一致)
+const SENTINEL_MATERIAL_INPUT = '__MATERIAL_INPUT__';
+const SENTINEL_FINAL_OUTPUT = '__FINAL_OUTPUT__';
+
 // 三阶段报工 (单元2): 该道当前所处阶段 (从 getYield 的 step.phase 推断)
 type StepPhase = 'AWAITING_INPUT' | 'IN_PRODUCTION' | 'COMPLETED';
 type ProductionStepMode = 'SEGMENT' | 'OUTPUT';
@@ -493,6 +497,11 @@ const YieldStepReportScreen: React.FC = () => {
 
   const currentTask = tasks[currentStepIndex] ?? null;
   const totalSteps = tasks.length;
+
+  // 两点报工: 哨兵 task 检测 (workProcessId 为特殊常量时走简化屏)
+  const isSentinelMaterial = currentTask?.workProcessId === SENTINEL_MATERIAL_INPUT;
+  const isSentinelOutput = currentTask?.workProcessId === SENTINEL_FINAL_OUTPUT;
+  const isSentinelBatch = isSentinelMaterial || isSentinelOutput;
 
   // 当前道的 yield step (从 getYield 取; 无报工时不存在 → undefined → AWAITING_INPUT)
   const currentStepYield = useMemo<StepYieldDTO | undefined>(() => {
@@ -1337,6 +1346,393 @@ const YieldStepReportScreen: React.FC = () => {
     navigation.goBack();
   }, [autoAssigned, navigation]);
 
+  // ========================= 两点报工: 哨兵屏提交 =========================
+  // 领料报工: 使用 submitReport(reportKind=INPUT) 以支持 evidenceImages
+  const handleSentinelMaterialSubmit = useCallback(async () => {
+    if (!currentTask) return;
+    if (materialBatchRefs.length === 0) {
+      appAlert('请先选择领料批次', '领料报工需要指定领用的原料批次，请点击"选择批次"');
+      return;
+    }
+    if (evidenceUploading) {
+      appAlert('照片上传中', '请等照片上传完成再提交');
+      return;
+    }
+    const totalQty = materialBatchRefs.reduce((s, r) => s + r.quantity, 0);
+    if (totalQty <= 0) {
+      appAlert('请填写领料量', '各批次领用量之和必须大于 0');
+      return;
+    }
+    const req: YieldReportRequest = {
+      workProcessTaskId: currentTask.id,
+      reportKind: 'INPUT',
+      inputQuantity: totalQty,
+      inputUnit: unit,
+      outputQuantity: 0,
+      materialBatchRefs: materialBatchRefs.map((r: MaterialBatchRef) => ({
+        materialBatchId: r.materialBatchId,
+        quantity: r.quantity,
+        unit: r.unit ?? unit,
+      })),
+      ...(uploadedEvidenceUrls.length > 0 ? { evidenceImages: uploadedEvidenceUrls } : {}),
+      ...(buildPhotoAnnotations() ? { photoAnnotations: buildPhotoAnnotations() } : {}),
+    };
+    setSubmitting(true);
+    try {
+      const res = await yieldReportApi.submitReport(batchId, req);
+      if (!res.success) {
+        appAlert('提交失败', res.message || '请重试');
+        return;
+      }
+      await refetchYield();
+      setEvidencePhotos([]);
+      appAlert('领料已记录', '可继续报工，完成后请提交产出', [
+        { text: '好的', style: 'default' },
+      ]);
+    } catch (error) {
+      handleError(error, { showAlert: false, logError: true });
+      const { title, msg } = friendlySubmitError(error);
+      if (isAxiosError(error) && !error.response) {
+        appAlert(title, msg, [
+          { text: '关闭', style: 'cancel' },
+          { text: '重试', onPress: () => handleSentinelMaterialSubmit() },
+        ]);
+      } else {
+        appAlert(title, msg);
+      }
+    } finally {
+      setSubmitting(false);
+    }
+  }, [currentTask, materialBatchRefs, evidenceUploading, unit, uploadedEvidenceUrls,
+      batchId, refetchYield, buildPhotoAnnotations]);
+
+  // 产出报工: 使用 submitReport(reportKind=OUTPUT)
+  const handleSentinelOutputSubmit = useCallback(async () => {
+    if (!currentTask) return;
+    if (evidenceUploading) {
+      appAlert('照片上传中', '请等照片上传完成再提交');
+      return;
+    }
+    const outVal = parseFloat(outputQty);
+    if (Number.isNaN(outVal) || outVal <= 0) {
+      appAlert('请填写产出量', '产出量必须大于 0');
+      return;
+    }
+    const validByproducts = byproducts
+      .filter((bp) => bp.name.trim() || bp.quantity.trim())
+      .map((bp) => ({
+        name: bp.name.trim(),
+        quantity: parseFloat(bp.quantity),
+        ...(bp.unit.trim() ? { unit: bp.unit.trim() } : { unit: outUnit }),
+      }));
+    if (validByproducts.some((bp) => !bp.name || Number.isNaN(bp.quantity) || bp.quantity <= 0)) {
+      appAlert('请核对副产物', '副产物需要同时填写名称和大于 0 的数量');
+      return;
+    }
+    const req: YieldReportRequest = {
+      workProcessTaskId: currentTask.id,
+      reportKind: 'OUTPUT',
+      inputQuantity: 0,
+      outputQuantity: outVal,
+      outputUnit: outUnit,
+      ...(validByproducts.length > 0 ? { byproducts: validByproducts } : {}),
+      ...(sampleRetainQty !== '' && parseFloat(sampleRetainQty) > 0
+        ? { sampleRetainQuantity: parseFloat(sampleRetainQty) } : {}),
+      ...(uploadedEvidenceUrls.length > 0 ? { evidenceImages: uploadedEvidenceUrls } : {}),
+      ...(buildPhotoAnnotations() ? { photoAnnotations: buildPhotoAnnotations() } : {}),
+    };
+    setSubmitting(true);
+    try {
+      const res = await yieldReportApi.submitReport(batchId, req);
+      if (!res.success) {
+        appAlert('提交失败', res.message || '请重试');
+        return;
+      }
+      await refetchYield();
+      setEvidencePhotos([]);
+    } catch (error) {
+      handleError(error, { showAlert: false, logError: true });
+      const { title, msg } = friendlySubmitError(error);
+      if (isAxiosError(error) && !error.response) {
+        appAlert(title, msg, [
+          { text: '关闭', style: 'cancel' },
+          { text: '重试', onPress: () => handleSentinelOutputSubmit() },
+        ]);
+      } else {
+        appAlert(title, msg);
+      }
+    } finally {
+      setSubmitting(false);
+    }
+  }, [currentTask, evidenceUploading, outputQty, outUnit, byproducts, sampleRetainQty,
+      uploadedEvidenceUrls, batchId, refetchYield, buildPhotoAnnotations]);
+
+  // ========================= 两点报工: 哨兵屏渲染 =========================
+  const renderSentinelMaterialInputScreen = () => {
+    const alreadySubmitted = currentPhase === 'IN_PRODUCTION' || currentPhase === 'COMPLETED';
+    const totalQty = materialBatchRefs.reduce((s, r) => s + r.quantity, 0);
+    return (
+      <ScreenWrapper>
+        <AppDialogHost />
+        <ScrollView contentContainerStyle={styles.content}>
+          {/* 防呆 Rule 2: 顶部品名 + 批次号 */}
+          <NeoCard variant="elevated" style={styles.headerCard}>
+            <Text style={styles.product}>{productType || '—'}</Text>
+            <Text style={styles.batchProcess}>
+              {batchNumber}  ·  领料报工
+            </Text>
+            {planned != null ? (
+              <Text style={styles.planned}>计划数量  {planned} {unit}</Text>
+            ) : null}
+          </NeoCard>
+
+          {alreadySubmitted ? (
+            <NeoCard variant="elevated" style={[styles.card, styles.summaryCard]}>
+              <Text style={styles.completedTitle}>✓ 领料已提交</Text>
+              <View style={styles.summaryRow}>
+                <Text style={styles.summaryKey}>领料总量</Text>
+                <Text style={styles.summaryVal}>
+                  {currentStepYield?.totalInput != null
+                    ? `${currentStepYield.totalInput} ${currentStepYield.inputUnit ?? unit}`
+                    : '—'}
+                </Text>
+              </View>
+            </NeoCard>
+          ) : (
+            <NeoCard variant="elevated" style={styles.card}>
+              <Text style={styles.phaseHint}>📦 请选择领料批次并记录领料量</Text>
+
+              {/* 防呆 Rule 1: 显示计划量边界 */}
+              {planned != null ? (
+                <View style={styles.limitsHint}>
+                  <Text style={styles.limitsHintText}>
+                    计划领料  {planned} {unit}
+                  </Text>
+                </View>
+              ) : null}
+
+              {/* 领料批次选择器 */}
+              <MaterialBatchPicker
+                unit={unit}
+                productTypeId={productTypeId}
+                value={materialBatchRefs}
+                onChange={setMaterialBatchRefs}
+                disabled={submitting}
+                required
+              />
+
+              {/* 合计领量只读显示 (多批次时) */}
+              {materialBatchRefs.length > 1 ? (
+                <View style={[styles.multiQtyReadonly, { marginTop: 12 }]}>
+                  <Text style={styles.multiQtyLabel}>领料合计</Text>
+                  <Text style={styles.multiQtyValue}>{totalQty.toFixed(2)} {unit}</Text>
+                  <Text style={styles.multiQtyHint}>= 各批次用量之和</Text>
+                </View>
+              ) : null}
+
+              <View style={styles.divider} />
+              {renderEvidenceBlock('投入照片 (可选)', 'sentinel-mat-take-photo', 'sentinel-mat-pick-photo')}
+            </NeoCard>
+          )}
+
+          <NeoButton
+            variant="primary"
+            size="large"
+            onPress={alreadySubmitted ? returnOrRefreshAssignedTask : handleSentinelMaterialSubmit}
+            disabled={submitting || evidenceUploading || (!alreadySubmitted && materialBatchRefs.length === 0)}
+            loading={submitting}
+            style={styles.fullBtn}
+            testID="sentinel-mat-submit-btn"
+          >
+            {alreadySubmitted ? (autoAssigned ? '返回我的任务' : '返回选批次') : '提交领料  ▶'}
+          </NeoButton>
+
+          {!alreadySubmitted ? (
+            <NeoButton
+              variant="outline"
+              size="large"
+              onPress={returnOrRefreshAssignedTask}
+              disabled={submitting}
+              style={styles.fullBtn}
+              testID="sentinel-mat-back-btn"
+            >
+              {autoAssigned ? '返回我的任务' : '返回选批次'}
+            </NeoButton>
+          ) : null}
+        </ScrollView>
+      </ScreenWrapper>
+    );
+  };
+
+  const renderSentinelFinalOutputScreen = () => {
+    const alreadyCompleted = currentPhase === 'COMPLETED';
+    // 防呆: 从 yieldData 获取已领料量 (领料道的 totalInput)
+    const matTask = tasks.find((t) => t.workProcessId === SENTINEL_MATERIAL_INPUT);
+    const matStep = matTask
+      ? yieldData?.steps.find((s: StepYieldDTO) => s.processOrder === matTask.processOrder)
+      : undefined;
+    const alreadyInputQty = matStep?.totalInput;
+    const alreadyInputUnit = matStep?.inputUnit ?? unit;
+
+    // 实时出成率
+    const outVal = parseFloat(outputQty);
+    const yieldRateDisplay = alreadyInputQty != null && alreadyInputQty > 0 && !Number.isNaN(outVal) && outVal > 0
+      ? `${((outVal / alreadyInputQty) * 100).toFixed(1)}%`
+      : null;
+
+    return (
+      <ScreenWrapper>
+        <AppDialogHost />
+        <ScrollView contentContainerStyle={styles.content}>
+          {/* 防呆 Rule 2: 顶部品名 + 批次号 + 已领料量 */}
+          <NeoCard variant="elevated" style={styles.headerCard}>
+            <Text style={styles.product}>{productType || '—'}</Text>
+            <Text style={styles.batchProcess}>
+              {batchNumber}  ·  产出报工
+            </Text>
+            {alreadyInputQty != null ? (
+              <View style={[styles.limitsHint, { marginTop: 8 }]}>
+                <Text style={styles.limitsHintText}>
+                  已领料  {alreadyInputQty} {alreadyInputUnit}
+                </Text>
+              </View>
+            ) : null}
+          </NeoCard>
+
+          {alreadyCompleted ? (
+            <NeoCard variant="elevated" style={[styles.card, styles.summaryCard]}>
+              <Text style={styles.completedTitle}>✓ 产出已完成</Text>
+              <View style={styles.summaryRow}>
+                <Text style={styles.summaryKey}>产出量</Text>
+                <Text style={styles.summaryVal}>
+                  {currentStepYield?.totalOutput != null
+                    ? `${currentStepYield.totalOutput} ${currentStepYield.outputUnit ?? outUnit}`
+                    : '—'}
+                </Text>
+              </View>
+              {yieldData?.cumulativeYieldRate != null ? (
+                <View style={styles.summaryRow}>
+                  <Text style={styles.summaryKey}>整批出成率</Text>
+                  <Text style={styles.summaryValHi}>
+                    {(yieldData.cumulativeYieldRate * 100).toFixed(2)}%
+                  </Text>
+                </View>
+              ) : null}
+            </NeoCard>
+          ) : (
+            <NeoCard variant="elevated" style={styles.card}>
+              <Text style={styles.phaseHint}>📋 请填写最终产出量</Text>
+
+              {/* 产出量输入 */}
+              <YieldQuantityInput
+                label="产出量"
+                value={outputQty}
+                onChangeText={setOutputQty}
+                unit={outUnit}
+                disabled={submitting}
+                calculatorMode
+                defaultTrayWeighing={false}
+                testID="sentinel-output-qty"
+              />
+
+              {/* 实时出成率显示 */}
+              {yieldRateDisplay != null ? (
+                <View style={styles.limitsHint}>
+                  <Text style={styles.limitsHintText}>
+                    出成率  {yieldRateDisplay}  ({outputQty} {outUnit} ÷ {alreadyInputQty} {alreadyInputUnit})
+                  </Text>
+                </View>
+              ) : null}
+
+              {/* 副产物 */}
+              <View style={[styles.section, { marginTop: 16 }]}>
+                <Text style={styles.sectionTitle}>副产物 (可选)</Text>
+                {byproducts.map((bp, idx) => (
+                  <View key={idx} style={styles.segRow}>
+                    <TextInput
+                      style={[styles.bpNameInput, { flex: 2 }]}
+                      placeholder="副产物名称"
+                      value={bp.name}
+                      onChangeText={(v) => updateByproduct(idx, 'name', v)}
+                      editable={!submitting}
+                    />
+                    <TextInput
+                      style={styles.segNumInput}
+                      placeholder="数量"
+                      keyboardType="numeric"
+                      value={bp.quantity}
+                      onChangeText={(v) => updateByproduct(idx, 'quantity', v)}
+                      editable={!submitting}
+                    />
+                    <TextInput
+                      style={styles.bpUnitInput}
+                      placeholder={outUnit || 'kg'}
+                      value={bp.unit}
+                      onChangeText={(v) => updateByproduct(idx, 'unit', v)}
+                      editable={!submitting}
+                    />
+                    <TouchableOpacity
+                      style={styles.rowRemoveBtn}
+                      onPress={() => removeByproduct(idx)}
+                      accessibilityLabel="删除副产物"
+                    >
+                      <Text style={styles.rowRemoveText}>×</Text>
+                    </TouchableOpacity>
+                  </View>
+                ))}
+                <TouchableOpacity style={styles.addRowBtn} onPress={addByproduct} disabled={submitting}>
+                  <Text style={styles.addRowText}>+ 添加副产物</Text>
+                </TouchableOpacity>
+              </View>
+
+              {/* 留样 */}
+              <View style={{ marginTop: 8, marginBottom: 8 }}>
+                <Text style={styles.sectionTitle}>留样数量 (可选)</Text>
+                <TextInput
+                  style={[styles.segNumInput, { width: '100%', textAlign: 'left', paddingLeft: 12 }]}
+                  placeholder={`留样量 (${outUnit || 'kg'})`}
+                  keyboardType="numeric"
+                  value={sampleRetainQty}
+                  onChangeText={setSampleRetainQty}
+                  editable={!submitting}
+                  testID="sentinel-sample-retain"
+                />
+              </View>
+
+              <View style={styles.divider} />
+              {renderEvidenceBlock('产出照片 (可选)', 'sentinel-out-take-photo', 'sentinel-out-pick-photo')}
+            </NeoCard>
+          )}
+
+          <NeoButton
+            variant="primary"
+            size="large"
+            onPress={alreadyCompleted ? returnOrRefreshAssignedTask : handleSentinelOutputSubmit}
+            disabled={submitting || evidenceUploading}
+            loading={submitting}
+            style={styles.fullBtn}
+            testID="sentinel-output-submit-btn"
+          >
+            {alreadyCompleted ? (autoAssigned ? '返回我的任务' : '返回选批次') : '提交产出  ✓'}
+          </NeoButton>
+
+          {!alreadyCompleted ? (
+            <NeoButton
+              variant="outline"
+              size="large"
+              onPress={returnOrRefreshAssignedTask}
+              disabled={submitting}
+              style={styles.fullBtn}
+              testID="sentinel-output-back-btn"
+            >
+              {autoAssigned ? '返回我的任务' : '返回选批次'}
+            </NeoButton>
+          ) : null}
+        </ScrollView>
+      </ScreenWrapper>
+    );
+  };
+
   if (loading) {
     return (
       <ScreenWrapper>
@@ -1360,6 +1756,13 @@ const YieldStepReportScreen: React.FC = () => {
         </View>
       </ScreenWrapper>
     );
+  }
+
+  // ========================= 两点报工: 哨兵屏分支 =========================
+  // 检测到哨兵 task 时走简化屏 (无时段/工时, 仅领料 or 产出)
+  if (isSentinelBatch) {
+    if (isSentinelMaterial) return renderSentinelMaterialInputScreen();
+    if (isSentinelOutput) return renderSentinelFinalOutputScreen();
   }
 
   // ========================= done 卡: 整批汇总 + 完工入库 =========================
