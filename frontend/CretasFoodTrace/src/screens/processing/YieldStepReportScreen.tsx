@@ -1150,7 +1150,8 @@ const YieldStepReportScreen: React.FC = () => {
     }
   }, [batchId, refetchYield]);
 
-  const doSubmitOutput = useCallback(async () => {
+  // 同单未完结续报: markComplete 控制本次 OUTPUT 是否完工 (true=标记完工锁出成率; false=保存留单继续产出)。
+  const doSubmitOutput = useCallback(async (markComplete: boolean) => {
     if (!currentTask) return;
     if (evidenceUploading) {
       appAlert('证据上传中', '请等照片或视频上传完成再提交');
@@ -1184,6 +1185,7 @@ const YieldStepReportScreen: React.FC = () => {
     const req: YieldReportRequest = {
       workProcessTaskId: currentTask.id,
       reportKind: 'OUTPUT',
+      markComplete,  // 同单未完结续报: true=完工锁出成率; false=留单继续
       inputQuantity: 0,  // 后端按 reportKind=OUTPUT 强制忽略 input
       outputQuantity: output,
       outputUnit: outUnit,
@@ -1208,8 +1210,14 @@ const YieldStepReportScreen: React.FC = () => {
       setLastAlert(res.data.alert ?? null);
       await refetchYield();
       setEvidencePhotos([]);
-      // SP1: 半成品产出成功提示
-      if (hasSemiQty && hasSemiOption) {
+      // 同单未完结续报: 留单继续 (markComplete=false) → 清空产出输入, 提示累计已产出 + 可继续。
+      const cumulative = res.data.cumulativeOutput ?? null;
+      if (!markComplete) {
+        setOutputQty('');
+        const cumText = cumulative != null ? `已累计产出 ${cumulative} ${outUnit}。` : '';
+        appAlert('产出已保存 (未完工)', `${cumText}本道仍可继续产出, 完成后点"标记完工"锁定出成率。`);
+      } else if (hasSemiQty && hasSemiOption) {
+        // SP1: 半成品产出成功提示
         appAlert('完工出成已提交', `已入半成品库 ${semiNum} ${outUnit}`);
       }
     } catch (error) {
@@ -1231,7 +1239,7 @@ const YieldStepReportScreen: React.FC = () => {
       if (isAxiosError(error) && !error.response) {
         appAlert(title, msg, [
           { text: '关闭', style: 'cancel' },
-          { text: '重试', onPress: () => doSubmitOutput() },
+          { text: '重试', onPress: () => doSubmitOutput(markComplete) },
         ]);
       } else {
         appAlert(title, msg);
@@ -1243,7 +1251,16 @@ const YieldStepReportScreen: React.FC = () => {
       outUnit, uploadedEvidenceUrls, batchId, refetchYield, submitOutputWithForce,
       outputOptions, semiOutputQty]);
 
-  // 完工二次确认 (Rule: 出成率锁定)
+  // 同单未完结续报: 保存本次产出但不完工 (留单继续) — 无二次确认 (可改, 低门槛)。
+  const handleSavePartialOutput = useCallback(() => {
+    if (outputOverHardCap) {
+      appAlert('产出量异常', '产出量超过物理上限, 请核对 (疑似单位/数量错误)');
+      return;
+    }
+    doSubmitOutput(false);
+  }, [outputOverHardCap, doSubmitOutput]);
+
+  // 完工二次确认 (Rule: 出成率锁定) — markComplete=true。
   const handleSubmitOutput = useCallback(() => {
     if (outputOverHardCap) {
       appAlert('产出量异常', '产出量超过物理上限, 请核对 (疑似单位/数量错误)');
@@ -1251,10 +1268,10 @@ const YieldStepReportScreen: React.FC = () => {
     }
     appAlert(
       '完工出成确认',
-      `${productType || ''} ${currentTask?.processName ?? ''}\n完工后本道出成率锁定, 确认要完工出成吗?`,
+      `${productType || ''} ${currentTask?.processName ?? ''}\n完工后本道出成率锁定, 确认要完工出成吗? (若还要继续产出, 请改用"保存, 稍后继续")`,
       [
         { text: '取消', style: 'cancel' },
-        { text: '确认完工出成', style: 'default', onPress: () => doSubmitOutput() },
+        { text: '确认完工出成', style: 'default', onPress: () => doSubmitOutput(true) },
       ],
     );
   }, [outputOverHardCap, productType, currentTask, doSubmitOutput]);
@@ -2341,6 +2358,17 @@ const YieldStepReportScreen: React.FC = () => {
             <NeoCard variant="elevated" style={styles.card}>
               <Text style={styles.sectionTitle} testID="yield-output-block">完工出成 (本道做完才填)</Text>
 
+              {/* 同单未完结续报: 显示本道已累计产出 (防呆 — 操作员清楚还能继续) */}
+              {(yieldLimits?.alreadyReported ?? 0) > 0 ? (
+                <View style={styles.autoWasteBanner} testID="yield-already-reported-banner">
+                  <Text style={styles.autoWasteText}>
+                    本道已累计产出 {yieldLimits?.alreadyReported} {outUnit}
+                    {yieldLimits?.remaining != null ? ` · 含超收容差还可报 ${yieldLimits.remaining} ${outUnit}` : ''}
+                    , 本次填写新增产出量。
+                  </Text>
+                </View>
+              ) : null}
+
               <YieldQuantityInput
                 label="产出量"
                 value={outputQty}
@@ -2491,6 +2519,19 @@ const YieldStepReportScreen: React.FC = () => {
                 </View>
               ) : null}
 
+              {/* 同单未完结续报: 留单继续 (保存本次产出, 不锁出成率) — 灰底次按钮 */}
+              <NeoButton
+                variant="outline"
+                size="large"
+                onPress={handleSavePartialOutput}
+                disabled={submitting || outputOverHardCap || evidenceUploading}
+                loading={submitting}
+                style={styles.blockBtn}
+                testID="yield-save-partial-output-btn"
+              >
+                保存, 稍后继续产出
+              </NeoButton>
+
               <NeoButton
                 variant="primary"
                 size="large"
@@ -2500,7 +2541,7 @@ const YieldStepReportScreen: React.FC = () => {
                 style={styles.blockBtn}
                 testID="yield-submit-output-btn"
               >
-                完工出成  ✓
+                标记完工 (锁定出成率)  ✓
               </NeoButton>
             </NeoCard>
             <NeoButton

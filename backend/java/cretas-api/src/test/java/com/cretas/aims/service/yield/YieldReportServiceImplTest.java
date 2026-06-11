@@ -972,6 +972,144 @@ class YieldReportServiceImplTest {
         // WIP 成本滚动用整道汇总 (Σ INPUT materialCost 1000 + Σ SEGMENT laborCost 180 = 1180), 非本 OUTPUT 报工(null)
     }
 
+    // ==================== 同单未完结续报 (部分产出/继续产出) ====================
+
+    @Test
+    void submitReport_outputMarkCompleteNull_completesTask_backwardCompat() {
+        // 回归守卫: markComplete 不传 (null) → OUTPUT 报工后任务立即 COMPLETED (历史行为零回归)。
+        setupPhaseTask(new BigDecimal("1.5000"));
+        ArgumentCaptor<WorkProcessTask> taskCap = ArgumentCaptor.forClass(WorkProcessTask.class);
+        when(taskRepo.save(taskCap.capture())).thenAnswer(i -> i.getArgument(0));
+        when(reportRepo.save(any(ProductionReport.class))).thenAnswer(i -> {
+            ProductionReport r = i.getArgument(0); r.setId(700L); return r;
+        });
+
+        YieldReportRequest req = new YieldReportRequest();
+        req.setWorkProcessTaskId(60L);
+        req.setReportKind("OUTPUT");
+        req.setOutputQuantity(new BigDecimal("300"));
+        req.setOutputUnit("kg");
+        // markComplete not set → null
+
+        Map<String, Object> out = svc.submitReport("F006", 1L, 5L, req);
+
+        WorkProcessTask savedTask = taskCap.getValue();
+        assertThat(savedTask.getStatus()).isEqualTo(WorkProcessTask.Status.COMPLETED);  // 默认完工
+        assertThat(savedTask.getCompletedBy()).isEqualTo(5L);
+        assertThat(savedTask.getCompletedAt()).isNotNull();
+        assertThat(out.get("taskCompleted")).isEqualTo(true);
+        assertThat((BigDecimal) out.get("cumulativeOutput")).isEqualByComparingTo("300");
+    }
+
+    @Test
+    void submitReport_outputMarkCompleteFalse_keepsInProgress_partialOutput() {
+        // 部分产出: markComplete=false → 累加产出但任务保持 IN_PROGRESS, 可续报。
+        setupPhaseTask(new BigDecimal("1.5000"));
+        ArgumentCaptor<WorkProcessTask> taskCap = ArgumentCaptor.forClass(WorkProcessTask.class);
+        when(taskRepo.save(taskCap.capture())).thenAnswer(i -> i.getArgument(0));
+        when(reportRepo.save(any(ProductionReport.class))).thenAnswer(i -> {
+            ProductionReport r = i.getArgument(0); r.setId(701L); return r;
+        });
+
+        YieldReportRequest req = new YieldReportRequest();
+        req.setWorkProcessTaskId(60L);
+        req.setReportKind("OUTPUT");
+        req.setOutputQuantity(new BigDecimal("300"));  // 先出 300 盒, 单子留着
+        req.setOutputUnit("kg");
+        req.setMarkComplete(false);
+
+        Map<String, Object> out = svc.submitReport("F006", 1L, 5L, req);
+
+        WorkProcessTask savedTask = taskCap.getValue();
+        assertThat(savedTask.getStatus()).isEqualTo(WorkProcessTask.Status.IN_PROGRESS);  // 未完工, 可续报
+        assertThat(savedTask.getCompletedBy()).isNull();
+        assertThat(savedTask.getCompletedAt()).isNull();
+        assertThat(savedTask.getActualQuantity()).isEqualByComparingTo("300");
+        assertThat(out.get("taskCompleted")).isEqualTo(false);
+        assertThat((BigDecimal) out.get("cumulativeOutput")).isEqualByComparingTo("300");
+    }
+
+    @Test
+    void submitReport_secondPartialOutput_accumulates_thenMarkComplete() {
+        // 续报场景: 首次出 300 (markComplete=false) 已存; 次日再出 200 (markComplete=true) → 累计 500 + COMPLETED。
+        setupPhaseTask(new BigDecimal("1.5000"));
+        // 已有首次 OUTPUT 报工 300 (markComplete=false 留下的)
+        when(reportRepo.findYieldReportsByTask("F006", 60L)).thenReturn(List.of(
+                ProductionReport.builder().reportKind("OUTPUT").outputQuantity(new BigDecimal("300")).build()
+        ));
+        ArgumentCaptor<WorkProcessTask> taskCap = ArgumentCaptor.forClass(WorkProcessTask.class);
+        when(taskRepo.save(taskCap.capture())).thenAnswer(i -> i.getArgument(0));
+        when(reportRepo.save(any(ProductionReport.class))).thenAnswer(i -> {
+            ProductionReport r = i.getArgument(0); r.setId(702L); return r;
+        });
+
+        YieldReportRequest req = new YieldReportRequest();
+        req.setWorkProcessTaskId(60L);
+        req.setReportKind("OUTPUT");
+        req.setOutputQuantity(new BigDecimal("200"));  // 明天再出 200 盒
+        req.setOutputUnit("kg");
+        req.setMarkComplete(true);  // 这次标记完工
+
+        Map<String, Object> out = svc.submitReport("F006", 1L, 5L, req);
+
+        WorkProcessTask savedTask = taskCap.getValue();
+        assertThat(savedTask.getStatus()).isEqualTo(WorkProcessTask.Status.COMPLETED);
+        assertThat(savedTask.getActualQuantity()).isEqualByComparingTo("500");  // 300 + 200 累计
+        assertThat(out.get("taskCompleted")).isEqualTo(true);
+        assertThat((BigDecimal) out.get("cumulativeOutput")).isEqualByComparingTo("500");
+    }
+
+    @Test
+    void submitReport_partialOutput_pendingTask_bumpsToInProgress() {
+        // 兜底: 初始 PENDING 任务直接报部分产出 → 推进到 IN_PROGRESS (报了产出说明已在生产), 不停在 PENDING。
+        setupPhaseTask(new BigDecimal("1.5000"));
+        WorkProcessTask t = task(60L, 1, "WP-PHASE");
+        t.setProductTypeId("PT-PH");
+        t.setStatus(WorkProcessTask.Status.PENDING);   // 初始未开始
+        when(taskRepo.findByFactoryIdAndId("F006", 60L)).thenReturn(Optional.of(t));
+        ArgumentCaptor<WorkProcessTask> taskCap = ArgumentCaptor.forClass(WorkProcessTask.class);
+        when(taskRepo.save(taskCap.capture())).thenAnswer(i -> i.getArgument(0));
+        when(reportRepo.save(any(ProductionReport.class))).thenAnswer(i -> {
+            ProductionReport r = i.getArgument(0); r.setId(703L); return r;
+        });
+
+        YieldReportRequest req = new YieldReportRequest();
+        req.setWorkProcessTaskId(60L);
+        req.setReportKind("OUTPUT");
+        req.setOutputQuantity(new BigDecimal("100"));
+        req.setOutputUnit("kg");
+        req.setMarkComplete(false);
+
+        svc.submitReport("F006", 1L, 5L, req);
+
+        assertThat(taskCap.getValue().getStatus()).isEqualTo(WorkProcessTask.Status.IN_PROGRESS);
+    }
+
+    @Test
+    void submitReport_legacyMarkCompleteFalse_keepsInProgress() {
+        // legacy 整合报工也支持续报: markComplete=false → 保持 IN_PROGRESS。
+        setupPhaseTask(new BigDecimal("1.5000"));
+        ArgumentCaptor<WorkProcessTask> taskCap = ArgumentCaptor.forClass(WorkProcessTask.class);
+        when(taskRepo.save(taskCap.capture())).thenAnswer(i -> i.getArgument(0));
+        when(reportRepo.save(any(ProductionReport.class))).thenAnswer(i -> {
+            ProductionReport r = i.getArgument(0); r.setId(704L); return r;
+        });
+
+        YieldReportRequest req = new YieldReportRequest();
+        req.setWorkProcessTaskId(60L);
+        // reportKind not set → legacy
+        req.setInputQuantity(new BigDecimal("500"));
+        req.setInputUnit("kg");
+        req.setOutputQuantity(new BigDecimal("300"));
+        req.setOutputUnit("kg");
+        req.setMarkComplete(false);
+
+        Map<String, Object> out = svc.submitReport("F006", 1L, 5L, req);
+
+        assertThat(taskCap.getValue().getStatus()).isEqualTo(WorkProcessTask.Status.IN_PROGRESS);
+        assertThat(out.get("taskCompleted")).isEqualTo(false);
+    }
+
     @Test
     void submitReport_nullKind_legacyFullFieldsPersisted_butWipWaitsForApproval() {
         // 回归守卫: reportKind=null → 旧式整合, 投入+产出全保留, 成本全算, WIP upsert
