@@ -1072,8 +1072,10 @@ public class PurchaseServiceImpl implements PurchaseService {
         // R23 audit C3: was inline {APPROVED, FINANCE_APPROVED, PARTIAL_RECEIVED}
         // — distinct from PO_RECEIVABLE because this stricter ops-side variant
         // excludes PENDING_FINANCE_REVIEW (only operational receive). Centralized as PO_OPS_RECEIVABLE.
+        // BUG-RCV (2026-06-11): hoist order 到方法作用域, 供下方收货行从 PO 行价继承复用 (避免二次加载).
+        PurchaseOrder order = null;
         if (request.getPurchaseOrderId() != null && !request.getPurchaseOrderId().isEmpty()) {
-            PurchaseOrder order = getPurchaseOrderById(factoryId, request.getPurchaseOrderId());
+            order = getPurchaseOrderById(factoryId, request.getPurchaseOrderId());
             if (order.getStatus() == null
                     || !com.cretas.aims.domain.OrderUsageWhitelists.PO_OPS_RECEIVABLE.contains(order.getStatus())) {
                 throw new BusinessException(409, "只有已审批、财务已审核或部分到货状态的订单可以入库")
@@ -1107,6 +1109,24 @@ public class PurchaseServiceImpl implements PurchaseService {
 
         record = receiveRecordRepository.save(record);
 
+        // BUG-RCV 修复 (2026-06-11): 收货行单价为空时从 PO 行价继承.
+        // 防呆 (客户原话"告诉仓管收多少就行"): 仓管收货不必懂/不必填价, 系统按采购合同自动带价.
+        // 否则批次 unit_price=null → 移动加权均价算不出 → 材料成本静默丢失 (财务红线).
+        // 单点修在收货行创建处: 批次 (createMaterialBatchFromReceiveItem 读 item.getUnitPrice())
+        // + 入库总额自然继承, 无需在多处重复.
+        // 注: 用 purchaseOrderItemRepository (与 validateOverReceiveCap 一致), 不用 order.getItems()
+        // (@OneToMany LAZY, 跨查询可能未加载).
+        Map<String, BigDecimal> poLinePrices = Collections.emptyMap();
+        if (order != null) {
+            poLinePrices = new HashMap<>();
+            for (var poItem : purchaseOrderItemRepository.findByPurchaseOrderId(order.getId())) {
+                // PO 行价是合同价, 收货未填价时的权威来源. 同物料多行取首个非空价.
+                if (poItem.getMaterialTypeId() != null && poItem.getUnitPrice() != null) {
+                    poLinePrices.putIfAbsent(poItem.getMaterialTypeId(), poItem.getUnitPrice());
+                }
+            }
+        }
+
         // 创建入库行项目
         BigDecimal totalAmount = BigDecimal.ZERO;
         for (CreateReceiveRecordRequest.ReceiveItemDTO itemDTO : request.getItems()) {
@@ -1116,13 +1136,17 @@ public class PurchaseServiceImpl implements PurchaseService {
             item.setMaterialName(itemDTO.getMaterialName());
             item.setReceivedQuantity(itemDTO.getReceivedQuantity());
             item.setUnit(itemDTO.getUnit());
-            item.setUnitPrice(itemDTO.getUnitPrice());
+            // BUG-RCV: 行价为空 → 继承 PO 行价 (合同价); 无 PO / PO 无此物料价 → 保持 null (诚实, 不伪造 0).
+            BigDecimal resolvedPrice = itemDTO.getUnitPrice() != null
+                    ? itemDTO.getUnitPrice()
+                    : poLinePrices.get(itemDTO.getMaterialTypeId());
+            item.setUnitPrice(resolvedPrice);
             item.setQcResult(itemDTO.getQcResult());
             item.setRemark(itemDTO.getRemark());
             record.getItems().add(item);
 
-            if (itemDTO.getUnitPrice() != null) {
-                totalAmount = totalAmount.add(itemDTO.getReceivedQuantity().multiply(itemDTO.getUnitPrice()));
+            if (resolvedPrice != null && itemDTO.getReceivedQuantity() != null) {
+                totalAmount = totalAmount.add(itemDTO.getReceivedQuantity().multiply(resolvedPrice));
             }
         }
 
