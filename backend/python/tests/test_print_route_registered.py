@@ -68,6 +68,10 @@ def test_print_router_can_be_imported():
     assert "/consolidated-material-requisition" in route_paths, (
         f"consolidated-material-requisition route missing; got {route_paths}"
     )
+    # P1 #37 — multi-SO work order route must be registered
+    assert "/production-work-order-multi" in route_paths, (
+        f"production-work-order-multi route missing; got {route_paths}"
+    )
 
 
 def test_print_health_route_exists():
@@ -100,6 +104,8 @@ def test_print_health_route_exists():
     # SP12 T8 — must not return 404
     "production-work-order",
     "consolidated-material-requisition",
+    # P1 #37 — multi-SO work order must not return 404
+    "production-work-order-multi",
 ])
 def test_print_post_routes_registered(doc_type: str):
     """POST /api/printing/{doc_type} returns non-404 (route exists).

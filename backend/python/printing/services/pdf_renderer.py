@@ -700,6 +700,110 @@ def render_consolidated_material_requisition(data: dict) -> bytes:
     return buffer.getvalue()
 
 
+def render_production_work_order_multi(data: dict) -> bytes:
+    """多 SO 合并生产工单 PDF — P1 #37.
+
+    expected data: {
+      factoryName, printDate,
+      orders: [{planId, planNumber, sourceOrderId, productName, productUnit,
+                plannedQuantity, customerName, plannedDate, expectedCompletionDate}],
+      processes: [{seq, name, standardHours, operator}],
+      totalOrders: int,
+      totalQuantityByProduct: [{productName, unit, totalQty}],
+      remark
+    }
+
+    渲染逻辑:
+      1. 页眉: 工厂名 + 标题 "多订单合并生产工单"
+      2. 汇总信息: 打印日期 + 订单数 + 合计数量明细表
+      3. 订单明细表: 每行一个 SO/计划
+      4. 工序列表 (去重合并)
+      5. 签名区
+    """
+    from reportlab.lib.units import cm
+    from reportlab.platypus import Paragraph, Spacer
+
+    s = _get_styles()
+    buffer = io.BytesIO()
+    doc = _make_doc(buffer)
+
+    orders = data.get("orders") or []
+    total_orders = data.get("totalOrders") or len(orders)
+    print_date = data.get("printDate") or "-"
+    total_qty_by_product = data.get("totalQuantityByProduct") or []
+
+    # ── 1. 页眉 ────────────────────────────────────────────────────────────────
+    story: list[Any] = [
+        Paragraph(data.get("factoryName") or "白垩纪食品", s["small"]),
+        Paragraph("多订单合并生产工单 · Multi-SO Production Work Order", s["title"]),
+        _kv_table([
+            ("打印日期", print_date),
+            ("订单总数", str(total_orders)),
+        ], s["font"]),
+        Spacer(1, 0.3 * cm),
+    ]
+
+    # ── 2. 合计数量汇总 (按产品) ───────────────────────────────────────────────
+    if total_qty_by_product:
+        story.append(Paragraph("合计数量 (按产品)", s["h2"]))
+        story.append(
+            _render_items_table(
+                total_qty_by_product,
+                [("产品名称", "productName", "LEFT"),
+                 ("单位", "unit", "CENTER"),
+                 ("合计计划量", "totalQty", "RIGHT")],
+                s["font"],
+            )
+        )
+        story.append(Spacer(1, 0.4 * cm))
+
+    # ── 3. 订单明细 ────────────────────────────────────────────────────────────
+    story.append(Paragraph("订单明细", s["h2"]))
+    story.append(
+        _render_items_table(
+            orders,
+            [
+                ("计划编号", "planNumber", "LEFT"),
+                ("关联销售单", "sourceOrderId", "LEFT"),
+                ("产品", "productName", "LEFT"),
+                ("计划数量", "plannedQuantity", "RIGHT"),
+                ("单位", "productUnit", "CENTER"),
+                ("客户", "customerName", "LEFT"),
+                ("预计完成", "expectedCompletionDate", "LEFT"),
+            ],
+            s["font"],
+        )
+    )
+    story.append(Spacer(1, 0.5 * cm))
+
+    # ── 4. 工序列表 (去重合并) ─────────────────────────────────────────────────
+    processes = data.get("processes") or []
+    story.append(Paragraph("工序列表 (合并去重)", s["h2"]))
+    if processes:
+        story.append(
+            _render_items_table(
+                processes,
+                [("序号", "seq", "CENTER"), ("工序名称", "name", "LEFT"),
+                 ("标准工时(h)", "standardHours", "RIGHT"), ("负责人", "operator", "LEFT")],
+                s["font"],
+            )
+        )
+    else:
+        story.append(Paragraph("(工序任务尚未分配)", s["body"]))
+
+    # ── 5. 备注 + 签名 ─────────────────────────────────────────────────────────
+    if data.get("remark"):
+        story.extend([Spacer(1, 0.5 * cm), Paragraph("备注", s["h2"]),
+                      Paragraph(str(data["remark"]), s["body"])])
+    story.extend([
+        Spacer(1, 1.0 * cm),
+        Paragraph("生产主管签名: ____________________________", s["body"]),
+        Paragraph("领班签名: ________________________________", s["body"]),
+    ])
+    doc.build(story)
+    return buffer.getvalue()
+
+
 RENDERERS: dict[str, Any] = {
     "sales-order": render_sales_order,
     "purchase-order": render_purchase_order,
@@ -713,4 +817,6 @@ RENDERERS: dict[str, Any] = {
     # SP12 T8 — 2 new templates: 生产工单 + 汇总领料单
     "production-work-order": render_production_work_order,
     "consolidated-material-requisition": render_consolidated_material_requisition,
+    # P1 #37 — 多 SO 合并公单
+    "production-work-order-multi": render_production_work_order_multi,
 }

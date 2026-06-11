@@ -130,6 +130,27 @@ def print_production_work_order(payload: dict[str, Any] = Body(...)) -> Response
     return _pdf_response(pdf, f"work-order-{plan_id}")
 
 
+@router.post("/production-work-order-multi")
+def print_production_work_order_multi(payload: dict[str, Any] = Body(...)) -> Response:
+    """多 SO 合并生产工单 PDF (P1 #37).
+
+    Java PrintController.printProductionWorkOrderMulti → here.
+    payload: {
+      factoryName, printDate,
+      orders: [{planId, planNumber, sourceOrderId, productName, productUnit,
+                plannedQuantity, customerName, plannedDate, expectedCompletionDate}],
+      processes: [{seq, name, standardHours, operator}],
+      totalOrders: int,
+      totalQuantityByProduct: [{productName, unit, totalQty}],
+      remark
+    }
+    """
+    pdf = _render_pdf("production-work-order-multi", payload)
+    total = payload.get("totalOrders") or len(payload.get("orders") or [])
+    factory_id = payload.get("factoryId", "na")
+    return _pdf_response(pdf, f"work-order-multi-{factory_id}-{total}plans")
+
+
 @router.post("/consolidated-material-requisition")
 def print_consolidated_material_requisition(payload: dict[str, Any] = Body(...)) -> Response:
     """汇总领料单 PDF (SP12 T8).
