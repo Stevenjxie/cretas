@@ -11,6 +11,8 @@ import { usePermissionStore } from '@/store/modules/permission';
 import FinanceAnalysis from './FinanceAnalysis.vue';
 import FinancePbiGoldView from './components/FinancePbiGoldView.vue';
 import { resolveFinanceSection, shouldRenderGoldFinanceView } from './financeDashboardSection';
+// A3: 工厂成本卡 — 仅工厂租户 (FACTORY) 显示此 tab
+import FactoryCostAnalysis from '@/views/production-analytics/FactoryCostAnalysis.vue';
 import { DataAnalysis, VideoPlay, Download, Collection, SetUp, ArrowDown, ArrowRight, Delete } from '@element-plus/icons-vue';
 import echarts from '@/utils/echarts';
 import { processEChartsOptions } from '@/utils/echarts-fmt';
@@ -2315,6 +2317,15 @@ onBeforeUnmount(() => {
     <!-- P4: 财务数据分析 (embed FinanceAnalysis, 原 /smart-bi/finance) -->
     <el-tab-pane label="财务数据分析" name="analysis">
       <FinanceAnalysis />
+    </el-tab-pane>
+
+    <!-- A3: 生产成本 — 工厂租户专属 tab (gold production cost, 复用 useProductionGold composable) -->
+    <el-tab-pane
+      v-if="authStore.factoryType !== 'RESTAURANT'"
+      label="生产成本"
+      name="production-cost"
+    >
+      <FactoryCostAnalysis />
     </el-tab-pane>
     </el-tabs>
 
