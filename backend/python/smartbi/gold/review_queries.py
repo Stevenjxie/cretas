@@ -96,12 +96,45 @@ def _f(v: Any) -> Optional[float]:
     return float(v)
 
 
+# ---------------------------------------------------------------------------
+# Source-existence probe
+# ---------------------------------------------------------------------------
+
+_EXISTENCE_SQL = """
+    SELECT count(*) AS n
+      FROM smart_bi_dynamic_data
+     WHERE factory_id = $1
+       AND row_data ? '星级分'
+       AND row_data->>'评价ID' IS NOT NULL
+     LIMIT 1
+"""
+
+
+async def check_review_data_exists(pool: asyncpg.Pool, factory_id: str) -> bool:
+    """Return True if the review source table has ANY rows for this tenant.
+
+    Used by every query function to populate the ``connected`` flag:
+    - connected=False  → source table empty for this tenant (未接入, upload needed)
+    - connected=True   → data present; individual arrays may still be empty
+                         when filters produce no results (正常空, not 未接入).
+    """
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(_EXISTENCE_SQL, factory_id)
+    return row is not None and int(row["n"]) > 0
+
+
 async def review_summary(pool: asyncpg.Pool, factory_id: str) -> Dict[str, Any]:
     """Overall review KPIs: average 星级/服务/环境/口味 scores, totals,
     VIP count, low/high-star counts, distinct store/city counts.
 
     Feeds the "客户评价怎么样" question. ``dimension_scores`` is a ready-made
-    list for a 4-bar comparison chart (all on the same 5-point scale)."""
+    list for a 4-bar comparison chart (all on the same 5-point scale).
+
+    ``connected`` flag:
+      False → no review source rows for this tenant (未接入，需上传点评数据)
+      True  → source data present (total_reviews may still be 0 if all rows
+               were filtered out, but that is "正常空" not "未接入").
+    """
     sql = _DEDUP_CTE + """
         SELECT
             count(*)                                                       AS total_reviews,
@@ -118,8 +151,15 @@ async def review_summary(pool: asyncpg.Pool, factory_id: str) -> Dict[str, Any]:
     """
     async with pool.acquire() as conn:
         row = await conn.fetchrow(sql, factory_id)
-    if row is None or int(row["total_reviews"]) == 0:
-        return {"factory_id": factory_id, "total_reviews": 0, "dimension_scores": []}
+    total = int(row["total_reviews"]) if row is not None else 0
+    connected = total > 0
+    if not connected:
+        return {
+            "factory_id": factory_id,
+            "connected": False,
+            "total_reviews": 0,
+            "dimension_scores": [],
+        }
     dims = []
     for name, key in (("星级", "avg_star"), ("服务", "avg_service"),
                       ("环境", "avg_env"), ("口味", "avg_taste")):
@@ -128,7 +168,8 @@ async def review_summary(pool: asyncpg.Pool, factory_id: str) -> Dict[str, Any]:
             dims.append({"name": name, "value": val})
     return {
         "factory_id": factory_id,
-        "total_reviews": int(row["total_reviews"]),
+        "connected": True,
+        "total_reviews": total,
         "avg_star": _f(row["avg_star"]),
         "avg_service": _f(row["avg_service"]),
         "avg_env": _f(row["avg_env"]),
@@ -177,6 +218,15 @@ async def review_store_ranking(
          ORDER BY {metric} {direction}
          LIMIT $3
     """
+    connected = await check_review_data_exists(pool, factory_id)
+    if not connected:
+        return {
+            "factory_id": factory_id,
+            "connected": False,
+            "dim": dim,
+            "order": direction.lower(),
+            "stores": [],
+        }
     async with pool.acquire() as conn:
         rows = await conn.fetch(sql, factory_id, int(min_reviews), int(top_n))
     stores = [
@@ -193,6 +243,7 @@ async def review_store_ranking(
     ]
     return {
         "factory_id": factory_id,
+        "connected": True,
         "dim": dim,
         "order": direction.lower(),
         "stores": stores,
@@ -213,6 +264,9 @@ async def review_city_ranking(pool: asyncpg.Pool, factory_id: str) -> Dict[str, 
         HAVING count(*) >= 10
          ORDER BY avg_star ASC
     """
+    connected = await check_review_data_exists(pool, factory_id)
+    if not connected:
+        return {"factory_id": factory_id, "connected": False, "cities": []}
     async with pool.acquire() as conn:
         rows = await conn.fetch(sql, factory_id)
     cities = [
@@ -225,7 +279,7 @@ async def review_city_ranking(pool: asyncpg.Pool, factory_id: str) -> Dict[str, 
         }
         for row in rows
     ]
-    return {"factory_id": factory_id, "cities": cities}
+    return {"factory_id": factory_id, "connected": True, "cities": cities}
 
 
 async def review_vip(pool: asyncpg.Pool, factory_id: str) -> Dict[str, Any]:
@@ -239,6 +293,9 @@ async def review_vip(pool: asyncpg.Pool, factory_id: str) -> Dict[str, Any]:
           FROM r
          GROUP BY grp
     """
+    connected = await check_review_data_exists(pool, factory_id)
+    if not connected:
+        return {"factory_id": factory_id, "connected": False, "groups": []}
     async with pool.acquire() as conn:
         rows = await conn.fetch(sql, factory_id)
     groups = [
@@ -253,7 +310,7 @@ async def review_vip(pool: asyncpg.Pool, factory_id: str) -> Dict[str, Any]:
     ]
     # VIP first for a stable presentation order.
     groups.sort(key=lambda g: 0 if g["group"] == "VIP" else 1)
-    return {"factory_id": factory_id, "groups": groups}
+    return {"factory_id": factory_id, "connected": True, "groups": groups}
 
 
 async def review_complaints(
@@ -282,12 +339,22 @@ async def review_complaints(
                count(*) FILTER (WHERE NULLIF(row_data->>'投诉类型', '') IS NOT NULL) AS dispute_count
           FROM r
     """
+    connected = await check_review_data_exists(pool, factory_id)
+    if not connected:
+        return {
+            "factory_id": factory_id,
+            "connected": False,
+            "categories": [],
+            "dispute_count": 0,
+            "low_star_count": 0,
+        }
     async with pool.acquire() as conn:
         rows = await conn.fetch(cat_sql, factory_id, int(top_n))
         summ = await conn.fetchrow(summ_sql, factory_id)
     categories = [{"category": row["category"], "count": int(row["n"])} for row in rows]
     return {
         "factory_id": factory_id,
+        "connected": True,
         "categories": categories,
         "dispute_count": int(summ["dispute_count"]) if summ else 0,
         "low_star_count": int(summ["low_star_count"]) if summ else 0,
@@ -331,12 +398,23 @@ async def review_dish_issues(
                                 AND NULLIF(row_data->>'菜品标签', '') IS NOT NULL) AS low_with_tag
           FROM r
     """
+    connected = await check_review_data_exists(pool, factory_id)
+    if not connected:
+        return {
+            "factory_id": factory_id,
+            "connected": False,
+            "star_threshold": int(star_threshold),
+            "low_star_count": 0,
+            "low_with_tag": 0,
+            "tags": [],
+        }
     async with pool.acquire() as conn:
         rows = await conn.fetch(tag_sql, factory_id, int(star_threshold), int(top_n))
         cnt = await conn.fetchrow(cnt_sql, factory_id, int(star_threshold))
     tags = [{"tag": row["tag"], "count": int(row["n"])} for row in rows]
     return {
         "factory_id": factory_id,
+        "connected": True,
         "star_threshold": int(star_threshold),
         "low_star_count": int(cnt["low_star_count"]) if cnt else 0,
         "low_with_tag": int(cnt["low_with_tag"]) if cnt else 0,
@@ -375,6 +453,16 @@ async def review_vip_tags(
          WHERE trim(tag) <> '' AND sentiment IN ('good', 'bad')
          GROUP BY grp, sentiment, tag
     """
+    connected = await check_review_data_exists(pool, factory_id)
+    if not connected:
+        return {
+            "factory_id": factory_id,
+            "connected": False,
+            "vip_good_tags": [],
+            "vip_bad_tags": [],
+            "normal_good_tags": [],
+            "normal_bad_tags": [],
+        }
     async with pool.acquire() as conn:
         rows = await conn.fetch(sql, factory_id)
 
@@ -391,6 +479,7 @@ async def review_vip_tags(
 
     return {
         "factory_id": factory_id,
+        "connected": True,
         "vip_good_tags": buckets["VIP_good"],
         "vip_bad_tags": buckets["VIP_bad"],
         "normal_good_tags": buckets["非VIP_good"],
@@ -420,6 +509,15 @@ async def review_time_period(pool: asyncpg.Pool, factory_id: str) -> Dict[str, A
                count(*)                                    AS total
           FROM p
     """
+    connected = await check_review_data_exists(pool, factory_id)
+    if not connected:
+        return {
+            "factory_id": factory_id,
+            "connected": False,
+            "periods": [],
+            "null_period_count": 0,
+            "total_reviews": 0,
+        }
     async with pool.acquire() as conn:
         rows = await conn.fetch(sql, factory_id)
         cnt = await conn.fetchrow(null_sql, factory_id)
@@ -437,6 +535,7 @@ async def review_time_period(pool: asyncpg.Pool, factory_id: str) -> Dict[str, A
         })
     return {
         "factory_id": factory_id,
+        "connected": True,
         "periods": periods,
         "null_period_count": int(cnt["null_count"]) if cnt else 0,
         "total_reviews": int(cnt["total"]) if cnt else 0,
@@ -470,13 +569,28 @@ async def review_score_tags(
          ORDER BY n DESC
          LIMIT $2
     """
+    connected = await check_review_data_exists(pool, factory_id)
+    if not connected:
+        return {
+            "factory_id": factory_id,
+            "connected": False,
+            "dim": dim,
+            "score_col": score_col,
+            "tags": [],
+        }
     async with pool.acquire() as conn:
         rows = await conn.fetch(sql, factory_id, int(top_n))
     tags = [
         {"tag": row["tag"], "count": int(row["n"]), "avg_score": _f(row["avg_score"])}
         for row in rows
     ]
-    return {"factory_id": factory_id, "dim": dim, "score_col": score_col, "tags": tags}
+    return {
+        "factory_id": factory_id,
+        "connected": True,
+        "dim": dim,
+        "score_col": score_col,
+        "tags": tags,
+    }
 
 
 async def review_good_tags(
@@ -509,12 +623,21 @@ async def review_good_tags(
         SELECT count(*) FILTER (WHERE (row_data->>'星级分')::numeric >= 4.5) AS high_star_count
           FROM r
     """
+    connected = await check_review_data_exists(pool, factory_id)
+    if not connected:
+        return {
+            "factory_id": factory_id,
+            "connected": False,
+            "high_star_count": 0,
+            "tags": [],
+        }
     async with pool.acquire() as conn:
         rows = await conn.fetch(tag_sql, factory_id, int(top_n))
         cnt = await conn.fetchrow(cnt_sql, factory_id)
     tags = [{"tag": row["tag"], "count": int(row["n"])} for row in rows]
     return {
         "factory_id": factory_id,
+        "connected": True,
         "high_star_count": int(cnt["high_star_count"]) if cnt else 0,
         "tags": tags,
     }
@@ -533,6 +656,9 @@ async def review_platform(pool: asyncpg.Pool, factory_id: str) -> Dict[str, Any]
          GROUP BY platform
          ORDER BY n DESC
     """
+    connected = await check_review_data_exists(pool, factory_id)
+    if not connected:
+        return {"factory_id": factory_id, "connected": False, "platforms": []}
     async with pool.acquire() as conn:
         rows = await conn.fetch(sql, factory_id)
     platforms = [
@@ -545,7 +671,7 @@ async def review_platform(pool: asyncpg.Pool, factory_id: str) -> Dict[str, Any]
         }
         for row in rows
     ]
-    return {"factory_id": factory_id, "platforms": platforms}
+    return {"factory_id": factory_id, "connected": True, "platforms": platforms}
 
 
 async def review_trend(pool: asyncpg.Pool, factory_id: str) -> Dict[str, Any]:
@@ -577,6 +703,14 @@ async def review_trend(pool: asyncpg.Pool, factory_id: str) -> Dict[str, Any]:
                ) AS null_count
           FROM r
     """
+    connected = await check_review_data_exists(pool, factory_id)
+    if not connected:
+        return {
+            "factory_id": factory_id,
+            "connected": False,
+            "months": [],
+            "null_period_count": 0,
+        }
     async with pool.acquire() as conn:
         rows = await conn.fetch(sql, factory_id)
         cnt = await conn.fetchrow(null_sql, factory_id)
@@ -586,6 +720,7 @@ async def review_trend(pool: asyncpg.Pool, factory_id: str) -> Dict[str, Any]:
     ]
     return {
         "factory_id": factory_id,
+        "connected": True,
         "months": months,
         "null_period_count": int(cnt["null_count"]) if cnt else 0,
     }
@@ -605,16 +740,35 @@ async def review_reply_rate(pool: asyncpg.Pool, factory_id: str) -> Dict[str, An
             count(*) FILTER (WHERE NULLIF(row_data->>'回复状态', '') IS NOT NULL)          AS total_with_status
           FROM r
     """
+    connected = await check_review_data_exists(pool, factory_id)
+    if not connected:
+        return {
+            "factory_id": factory_id,
+            "connected": False,
+            "replied": 0,
+            "not_replied": 0,
+            "not_replied_low_star": 0,
+            "total_with_status": 0,
+            "reply_rate": None,
+        }
     async with pool.acquire() as conn:
         row = await conn.fetchrow(sql, factory_id)
     if row is None or int(row["total_with_status"]) == 0:
-        return {"factory_id": factory_id, "total_with_status": 0,
-                "replied": 0, "not_replied": 0, "not_replied_low_star": 0, "reply_rate": None}
+        return {
+            "factory_id": factory_id,
+            "connected": True,
+            "total_with_status": 0,
+            "replied": 0,
+            "not_replied": 0,
+            "not_replied_low_star": 0,
+            "reply_rate": None,
+        }
     replied = int(row["replied"])
     total = int(row["total_with_status"])
     reply_rate = round(replied / total * 100, 1) if total > 0 else None
     return {
         "factory_id": factory_id,
+        "connected": True,
         "replied": replied,
         "not_replied": int(row["not_replied"]),
         "not_replied_low_star": int(row["not_replied_low_star"]),
