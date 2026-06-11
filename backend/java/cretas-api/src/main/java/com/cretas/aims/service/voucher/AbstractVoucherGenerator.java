@@ -49,7 +49,9 @@ public abstract class AbstractVoucherGenerator<T> implements VoucherGenerator<T>
         if (tplOpt.isPresent()) {
             entries = voucherTemplateService.renderEntries(tplOpt.get(), businessEntity);
         } else {
-            entries = buildEntries(businessEntity);
+            // SP11 settlement→subject mapping (#754): 子类可覆盖 factoryId-aware 重载
+            // 以按结算方式/业态映射科目; 默认委托回无 factoryId 的 buildEntries (向后兼容).
+            entries = buildEntries(factoryId, businessEntity);
         }
         BigDecimal totalDebit = entries.stream()
                 .map(e -> Objects.requireNonNullElse(e.getDebit(), BigDecimal.ZERO))
@@ -78,6 +80,20 @@ public abstract class AbstractVoucherGenerator<T> implements VoucherGenerator<T>
 
         voucher.validateBalanced();
         return voucher;
+    }
+
+    /**
+     * SP11 settlement→subject mapping (#754): factoryId-aware entries 构建钩子.
+     *
+     * <p>默认委托给无 factoryId 的 {@link #buildEntries(Object)} (向后兼容 — 现有
+     * generator 行为完全不变). 需按结算方式/业态查 {@code voucher_subject_mappings}
+     * 覆盖科目的 generator (如 {@link impl.PurchasePaymentVoucherGenerator}) 覆盖此方法.
+     *
+     * <p>无论是否覆盖, 实现都必须保证 sum(debit) == sum(credit) — generate() 末尾的
+     * validateBalanced() 会强制校验.
+     */
+    protected List<VoucherEntry> buildEntries(String factoryId, T businessEntity) {
+        return buildEntries(businessEntity);
     }
 
     protected abstract String extractSourceBusinessType();

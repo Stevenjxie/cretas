@@ -12,16 +12,23 @@ import com.cretas.aims.entity.inventory.PurchaseOrder;
 import com.cretas.aims.entity.inventory.ReturnOrder;
 import com.cretas.aims.entity.inventory.SalesOrder;
 import com.cretas.aims.entity.restaurant.WastageRecord;
+import com.cretas.aims.dto.finance.VoucherSubjectMappingDTO;
+import com.cretas.aims.entity.enums.SettlementType;
+import com.cretas.aims.service.finance.VoucherSubjectMappingService;
 import com.cretas.aims.service.voucher.impl.*;
 import org.junit.jupiter.api.Test;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.*;
+import static org.mockito.Mockito.*;
 
 /**
  * 7 VoucherGenerator 单测. 每 generator 验证:
@@ -269,6 +276,114 @@ class VoucherGeneratorsTest {
         assertEquals(2, v.getEntries().size());
         assertEquals(HUNDRED, v.getTotalDebit());
         assertEquals(HUNDRED, v.getTotalCredit());
+    }
+
+    // ==================== #754: settlement→subject mapping ====================
+
+    private PurchaseOrder purchaseOrder(SettlementType settlement, BigDecimal net, BigDecimal tax) {
+        PurchaseOrder order = new PurchaseOrder();
+        order.setId("po-settle");
+        order.setOrderNumber("PO-SETTLE-1");
+        order.setOrderDate(LocalDate.of(2026, 6, 11));
+        order.setTotalAmount(net);
+        order.setTaxAmount(tax);
+        order.setSupplierId("sup-1");
+        order.setSettlementType(settlement);
+        return order;
+    }
+
+    @Test
+    void purchasePaymentPrepaidMapsCreditToBankDeposit() {
+        // #754: 预付结算 → 贷方科目从 2202 应付账款 映射为 1002 银行存款 (款已付)
+        PurchasePaymentVoucherGenerator gen = new PurchasePaymentVoucherGenerator();
+        VoucherSubjectMappingService mappingSvc = mock(VoucherSubjectMappingService.class);
+        when(mappingSvc.findMapping("F001", SettlementType.PREPAID, "PURCHASE"))
+                .thenReturn(Optional.of(VoucherSubjectMappingDTO.builder()
+                        .debitSubjectCode("1405").debitSubjectName("原材料")
+                        .creditSubjectCode("1002").creditSubjectName("银行存款")
+                        .build()));
+        ReflectionTestUtils.setField(gen, "subjectMappingService", mappingSvc);
+
+        Voucher v = gen.generate("F001", purchaseOrder(SettlementType.PREPAID, HUNDRED, BigDecimal.ZERO));
+
+        assertEquals("1405", v.getEntries().get(0).getSubjectCode());
+        assertEquals("1002", v.getEntries().get(1).getSubjectCode());  // 银行存款, 不再是 2202
+        assertEquals("银行存款", v.getEntries().get(1).getSubjectName());
+        // 借贷恒平不受科目映射影响
+        assertEquals(0, HUNDRED.compareTo(v.getTotalDebit()));
+        assertEquals(0, HUNDRED.compareTo(v.getTotalCredit()));
+        assertDoesNotThrow(v::validateBalanced);
+        // 供应商辅助核算保留
+        assertEquals(AuxiliaryType.SUPPLIER, v.getEntries().get(1).getAuxiliaryType());
+    }
+
+    @Test
+    void purchasePaymentNoInvoiceMapsCreditToAccrued() {
+        // #754: 未到票 → 贷 2241 暂估应付款
+        PurchasePaymentVoucherGenerator gen = new PurchasePaymentVoucherGenerator();
+        VoucherSubjectMappingService mappingSvc = mock(VoucherSubjectMappingService.class);
+        when(mappingSvc.findMapping("F001", SettlementType.NO_INVOICE, "PURCHASE"))
+                .thenReturn(Optional.of(VoucherSubjectMappingDTO.builder()
+                        .debitSubjectCode("1405").debitSubjectName("原材料")
+                        .creditSubjectCode("2241").creditSubjectName("暂估应付款")
+                        .build()));
+        ReflectionTestUtils.setField(gen, "subjectMappingService", mappingSvc);
+
+        // 含税也走映射: 借库存(未税)/借进项税/贷暂估应付(含税)
+        Voucher v = gen.generate("F001", purchaseOrder(SettlementType.NO_INVOICE,
+                new BigDecimal("1000.00"), new BigDecimal("90.00")));
+
+        assertEquals(3, v.getEntries().size());
+        assertEquals("1405", v.getEntries().get(0).getSubjectCode());
+        assertEquals("2241", v.getEntries().get(1).getSubjectCode());   // 暂估应付款
+        assertEquals(0, new BigDecimal("1090.00").compareTo(v.getEntries().get(1).getCredit()));
+        assertEquals("2221.02", v.getEntries().get(2).getSubjectCode()); // 进项税仍硬编码
+        assertEquals(0, new BigDecimal("1090.00").compareTo(v.getTotalDebit()));
+        assertEquals(0, new BigDecimal("1090.00").compareTo(v.getTotalCredit()));
+        assertDoesNotThrow(v::validateBalanced);
+    }
+
+    @Test
+    void purchasePaymentNoMappingServiceFallsBackToDefault() {
+        // #754 向后兼容: mappingService 未注入 (null) → 硬编码 1405/2202, 字节不变
+        PurchasePaymentVoucherGenerator gen = new PurchasePaymentVoucherGenerator();
+        // 不设 subjectMappingService → null
+
+        Voucher v = gen.generate("F001", purchaseOrder(SettlementType.MONTHLY, HUNDRED, BigDecimal.ZERO));
+
+        assertEquals("1405", v.getEntries().get(0).getSubjectCode());
+        assertEquals("2202", v.getEntries().get(1).getSubjectCode());  // 默认应付账款
+        assertEquals(0, HUNDRED.compareTo(v.getTotalDebit()));
+        assertEquals(0, HUNDRED.compareTo(v.getTotalCredit()));
+    }
+
+    @Test
+    void purchasePaymentNullSettlementFallsBackToDefault() {
+        // #754: settlementType 为 null → 不查映射, fall back 默认科目 (映射服务在场也不调)
+        PurchasePaymentVoucherGenerator gen = new PurchasePaymentVoucherGenerator();
+        VoucherSubjectMappingService mappingSvc = mock(VoucherSubjectMappingService.class);
+        ReflectionTestUtils.setField(gen, "subjectMappingService", mappingSvc);
+
+        Voucher v = gen.generate("F001", purchaseOrder(null, HUNDRED, BigDecimal.ZERO));
+
+        assertEquals("1405", v.getEntries().get(0).getSubjectCode());
+        assertEquals("2202", v.getEntries().get(1).getSubjectCode());
+        verify(mappingSvc, never()).findMapping(anyString(), any(), anyString());
+    }
+
+    @Test
+    void purchasePaymentMappingMissReturnsDefault() {
+        // #754: 映射服务返回 empty (工厂未配该结算方式) → fall back 默认科目
+        PurchasePaymentVoucherGenerator gen = new PurchasePaymentVoucherGenerator();
+        VoucherSubjectMappingService mappingSvc = mock(VoucherSubjectMappingService.class);
+        when(mappingSvc.findMapping(anyString(), any(), anyString())).thenReturn(Optional.empty());
+        ReflectionTestUtils.setField(gen, "subjectMappingService", mappingSvc);
+
+        Voucher v = gen.generate("F001", purchaseOrder(SettlementType.CREDIT_PERIOD, HUNDRED, BigDecimal.ZERO));
+
+        assertEquals("1405", v.getEntries().get(0).getSubjectCode());
+        assertEquals("2202", v.getEntries().get(1).getSubjectCode());
+        assertEquals(0, HUNDRED.compareTo(v.getTotalCredit()));
     }
 
     // ==================== Sprint 5 F-2: Auxiliary type 7 类 contract ====================
