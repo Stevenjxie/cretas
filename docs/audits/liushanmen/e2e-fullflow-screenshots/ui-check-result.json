@@ -1,0 +1,256 @@
+{
+  "base": "http://139.196.165.140:8086",
+  "headed": true,
+  "viewport": "1920x1080",
+  "lang": "zh-CN",
+  "fontRenderHinting": "none",
+  "routes": [
+    {
+      "name": "01-dashboard",
+      "route": "/dashboard",
+      "finalUrl": "http://139.196.165.140:8086/dashboard",
+      "title": "首页 - 白垩纪AI Agent",
+      "found": {
+        "关联客户": false,
+        "包材规格": false,
+        "价位选料": false,
+        "最低价": false,
+        "最高价": false,
+        "packQtyPerProduct": false,
+        "付款申请": false,
+        "撤回": false,
+        "BOM": false
+      },
+      "textSample": "白垩纪AI Agent 首页 销售老板工作台 财务主管工作台 质量主管工作台 仓管员工作台 采购员工作台 质量主管工作台 生产经理工作台 生产管理 仓储管理 质量管理 采购管理 销售管理 人事管理 设备管理 财务管理 系统管理 智能调度 数据与分析 首页 f006_admin 工厂总监 欢迎回来，f006_admin 超级管理员 工厂: F006 AI 成本分析 快速开始 3 步, 激活您的 AI 工厂 当前工厂暂无数据。跟着这 3 步上手, 几分钟见 AI 分析效果. 1 上传 Excel 数据 财务/销售/采购报表导入 AI 分析 → 2 ️ 配置工厂模块 按业务启用/禁用功能模块 → 3 添加员工账号 邀请团队成员登录协作 → 今日产量 0 kg 完成批次 0 个 设备运行 0 台 设备告警 0 条 快捷操作 生产管理 仓储管理 人员管理 财务报表 系统设置 车间看板 人效分析 今日生产概览 计划产量 - kg 实际产量 - kg 完成率 -% 质量统计 今日检验 - 批 合格率 0% 不合格批次 - 批"
+    },
+    {
+      "name": "02-sales-orders",
+      "route": "/sales/orders",
+      "finalUrl": "http://139.196.165.140:8086/sales/orders",
+      "title": "销售订单 - 白垩纪AI Agent",
+      "found": {
+        "关联客户": false,
+        "包材规格": false,
+        "价位选料": false,
+        "最低价": false,
+        "最高价": false,
+        "packQtyPerProduct": false,
+        "付款申请": true,
+        "撤回": false,
+        "BOM": false
+      },
+      "textSample": "白垩纪AI Agent 首页 销售老板工作台 财务主管工作台 质量主管工作台 仓管员工作台 采购员工作台 质量主管工作台 生产经理工作台 生产管理 仓储管理 质量管理 采购管理 销售管理 销售订单 成品库存 客户管理 出货记录 销售退货 车辆字典 财务待审销售单 销售付款申请 人事管理 设备管理 财务管理 系统管理 智能调度 数据与分析 销售管理 / 销售订单 f006_admin 工厂总监 销售工作流 跟 AI 说 12 待审 → 16 进行中 → 0 已完成 这里是「销售订单」管理 — 客户向我们下的订单（出货方向、应收账款） ️ 如果你想录入的是我们向供应商下的订单（进货方向、应付账款），请到 采购管理 → 采购订单 创建。 销售订单管理 共 29 条记录 AI录入 新建销售订单 全部订单 10 未出库订单 10 部分出库订单 未收款订单 9 部分收款订单 1 已完成订单 按状态筛选 搜索 重置 表格 卡片 看板 时间线 日历 订单编号 客户 业务员 下单日期 总金额 运费 折扣 开票状态 提成(预估) 提成率 锁/备/缺 状态 附件 操作 SO-20260611-0001 叮咚"
+    },
+    {
+      "name": "03-sales-order-detail",
+      "route": "/sales/orders/d2eab1c6-c29c-4f23-8b4b-6378b19c0334",
+      "finalUrl": "http://139.196.165.140:8086/sales/orders/d2eab1c6-c29c-4f23-8b4b-6378b19c0334",
+      "title": "销售订单详情 - 白垩纪AI Agent",
+      "found": {
+        "关联客户": false,
+        "包材规格": false,
+        "价位选料": false,
+        "最低价": false,
+        "最高价": false,
+        "packQtyPerProduct": false,
+        "付款申请": true,
+        "撤回": false,
+        "BOM": false
+      },
+      "textSample": "白垩纪AI Agent 首页 销售老板工作台 财务主管工作台 质量主管工作台 仓管员工作台 采购员工作台 质量主管工作台 生产经理工作台 生产管理 仓储管理 质量管理 采购管理 销售管理 销售订单 成品库存 客户管理 出货记录 销售退货 车辆字典 财务待审销售单 销售付款申请 人事管理 设备管理 财务管理 系统管理 智能调度 数据与分析 销售管理 / 销售订单详情 f006_admin 工厂总监 返回 销售订单详情 财务已批准 收款: 部分收款 开票: 待开票 运输: 待出厂 开始生产 发货 产品级利润分析 订单编号 SO-20260611-0001 客户 叮咚 下单日期 2026-06-11 业务员 - 订单总额 ¥4,000.00 已发货金额 0.00 已开票 0.00 已收款 ¥2,000.00 订单详情 开票申请 发货记录 收款记录 关联采购 交货日期 - 下单箱数 - 折扣 - 含运费 否 运费 - 预估利润 - 交货地址 - 备注 DEMO-tax-voucher-Friday demo (taxRate13) 成品明细 成品 规格 订单数量 单位 箱数 销售单价 税率 已"
+    },
+    {
+      "name": "04-procurement-payment-requests",
+      "route": "/procurement/payment-requests",
+      "finalUrl": "http://139.196.165.140:8086/procurement/payment-requests",
+      "title": "付款申请 - 白垩纪AI Agent",
+      "found": {
+        "关联客户": false,
+        "包材规格": false,
+        "价位选料": false,
+        "最低价": false,
+        "最高价": false,
+        "packQtyPerProduct": false,
+        "付款申请": true,
+        "撤回": false,
+        "BOM": false
+      },
+      "textSample": "白垩纪AI Agent 首页 销售老板工作台 财务主管工作台 质量主管工作台 仓管员工作台 采购员工作台 质量主管工作台 生产经理工作台 生产管理 仓储管理 质量管理 采购管理 销售管理 人事管理 设备管理 财务管理 系统管理 智能调度 数据与分析 采购管理 / 付款申请 f006_admin 工厂总监 付款申请 管理采购付款申请的审批与付款流程 状态 结算方式 查询 重置 申请单号 采购单号 供应商 结算方式 申请金额 付款方式 状态 创建时间 操作 PR-F006-20260610-9619 ¥7,040.00 BANK_TRANSFER 已付款 2026/06/10 12:47 详情 PR-F006-20260610-5162 ¥7,040.00 BANK_TRANSFER 已付款 2026/06/10 12:45 详情 PR-F006-20260610-3879 ¥7,040.00 BANK_TRANSFER 已付款 2026/06/10 12:21 详情 共 3 条 20条/页 1"
+    },
+    {
+      "name": "05-sales-payment-requests-old-path",
+      "route": "/sales/payment-requests",
+      "finalUrl": "http://139.196.165.140:8086/sales/payment-requests",
+      "title": "销售付款申请 - 白垩纪AI Agent",
+      "found": {
+        "关联客户": false,
+        "包材规格": false,
+        "价位选料": false,
+        "最低价": false,
+        "最高价": false,
+        "packQtyPerProduct": false,
+        "付款申请": true,
+        "撤回": false,
+        "BOM": false
+      },
+      "textSample": "白垩纪AI Agent 首页 销售老板工作台 财务主管工作台 质量主管工作台 仓管员工作台 采购员工作台 质量主管工作台 生产经理工作台 生产管理 仓储管理 质量管理 采购管理 销售管理 销售订单 成品库存 客户管理 出货记录 销售退货 车辆字典 财务待审销售单 销售付款申请 人事管理 设备管理 财务管理 系统管理 智能调度 数据与分析 销售管理 / 销售付款申请 f006_admin 工厂总监 销售付款申请 对客户的 outbound 付款（退款/返利/销售费用） — 销售方向 状态 查询 重置 + 新建销售付款申请 申请单号 销售订单 客户 付款类型 申请金额 付款方式 状态 创建时间 操作 暂无数据 共 0 条 20条/页 1"
+    },
+    {
+      "name": "06-production-plans",
+      "route": "/production/plans",
+      "finalUrl": "http://139.196.165.140:8086/production/plans",
+      "title": "生产计划 - 白垩纪AI Agent",
+      "found": {
+        "关联客户": false,
+        "包材规格": false,
+        "价位选料": false,
+        "最低价": false,
+        "最高价": false,
+        "packQtyPerProduct": false,
+        "付款申请": false,
+        "撤回": false,
+        "BOM": true
+      },
+      "textSample": "白垩纪AI Agent 首页 销售老板工作台 财务主管工作台 质量主管工作台 仓管员工作台 采购员工作台 质量主管工作台 生产经理工作台 生产管理 生产批次 生产计划 备货看板 BOM成本管理 报工审批 BOM达成率分析 工序投入产出对比 物料需求单 研发样品 人效双口径对比 仓储管理 质量管理 采购管理 销售管理 人事管理 设备管理 财务管理 系统管理 智能调度 数据与分析 生产管理 / 生产计划 f006_admin 工厂总监 生产工作流 跟 AI 说 7 待生产 → 9 进行中 → 7 已完成 这里是「生产计划」管理 — 未来要做什么的「计划」（PENDING / 待开工状态，可调整数量、日期） ️ 如果你想录入的是已开工的实际「批次」（IN_PROGRESS / COMPLETED，记录实际产量、消耗），请到 生产管理 → 生产批次 创建。计划批准后才会转为批次。 生产计划操作指引 计划确认后，根据 BOM 配方和库存情况选择以下路径之一： 生成调拨单：根据 BOM 自动计算所需原辅料/包材，发申请给仓库审批。库存不足或需要从其他仓库调料时使用。 开工（转为批次）：主操作。将计"
+    },
+    {
+      "name": "07-production-batches",
+      "route": "/production/batches",
+      "finalUrl": "http://139.196.165.140:8086/production/batches",
+      "title": "生产批次 - 白垩纪AI Agent",
+      "found": {
+        "关联客户": false,
+        "包材规格": false,
+        "价位选料": false,
+        "最低价": false,
+        "最高价": false,
+        "packQtyPerProduct": false,
+        "付款申请": false,
+        "撤回": false,
+        "BOM": true
+      },
+      "textSample": "白垩纪AI Agent 首页 销售老板工作台 财务主管工作台 质量主管工作台 仓管员工作台 采购员工作台 质量主管工作台 生产经理工作台 生产管理 生产批次 生产计划 备货看板 BOM成本管理 报工审批 BOM达成率分析 工序投入产出对比 物料需求单 研发样品 人效双口径对比 仓储管理 质量管理 采购管理 销售管理 人事管理 设备管理 财务管理 系统管理 智能调度 数据与分析 生产管理 / 生产批次 f006_admin 工厂总监 这里是「生产批次」管理 — 已开工的实际「批次」（IN_PROGRESS / COMPLETED，记录实际产量、消耗、报工） ️ 如果你想录入的是未来要做什么的「计划」（PENDING / 待开工状态，可调整数量、日期），请到 生产管理 → 生产计划 创建。 生产批次列表 共 36 条记录 AI 创建批次 创建批次 全部状态 搜索 重置 批次号 产品类型 计划数量 实际数量 状态 负责人 创建时间 操作 PB-DEMO-TRIAL-ZHUSHE-20260611 4e345886-52e4-494a-bcb3-3f0ee9e126b2 80 82 已完成 2"
+    },
+    {
+      "name": "08-production-reversals",
+      "route": "/production/reversals",
+      "finalUrl": "http://139.196.165.140:8086/production/reversals",
+      "title": "撤回审批 - 白垩纪AI Agent",
+      "found": {
+        "关联客户": false,
+        "包材规格": false,
+        "价位选料": false,
+        "最低价": false,
+        "最高价": false,
+        "packQtyPerProduct": false,
+        "付款申请": false,
+        "撤回": true,
+        "BOM": false
+      },
+      "textSample": "白垩纪AI Agent 首页 销售老板工作台 财务主管工作台 质量主管工作台 仓管员工作台 采购员工作台 质量主管工作台 生产经理工作台 生产管理 仓储管理 质量管理 采购管理 销售管理 人事管理 设备管理 财务管理 系统管理 智能调度 数据与分析 生产管理 / 撤回审批 f006_admin 工厂总监 报工撤回申请 管理生产批次的整单撤回申请与审批 状态筛选 刷新 批次 ID 撤回范围 状态 申请原因 已回退流水 提交人 ID 审批人 ID 审批时间 申请时间 操作 #1974 整单撤回 已撤回 DEMO_TEST — 1309 1309 2026-06-10 12:48:05 2026-06-10 12:48:05 查看批次 #1972 整单撤回 已撤回 DEMO_TEST — 1309 1309 2026-06-10 12:45:51 2026-06-10 12:45:50 查看批次 #1970 整单撤回 已撤回 DEMO_TEST — 1309 — — 2026-06-10 12:21:09 查看批次"
+    },
+    {
+      "name": "09-warehouse-material-types",
+      "route": "/warehouse/material-types",
+      "finalUrl": "http://139.196.165.140:8086/warehouse/material-types",
+      "title": "原料类型字典 - 白垩纪AI Agent",
+      "found": {
+        "关联客户": false,
+        "包材规格": false,
+        "价位选料": false,
+        "最低价": false,
+        "最高价": false,
+        "packQtyPerProduct": false,
+        "付款申请": false,
+        "撤回": false,
+        "BOM": true
+      },
+      "textSample": "白垩纪AI Agent 首页 销售老板工作台 财务主管工作台 质量主管工作台 仓管员工作台 采购员工作台 质量主管工作台 生产经理工作台 生产管理 仓储管理 原料类型字典 (新建原料) 原料入库登记 (具体批次) 出货管理 盘点管理 分仓库存查询 报损管理 物料均价趋势 调拨单 质量管理 采购管理 销售管理 人事管理 设备管理 财务管理 系统管理 智能调度 数据与分析 仓储管理 / 原料类型字典 f006_admin 工厂总监 这里是「原料类型字典」管理 — 原料的「分类抽象」（如「冻猪蹄」「吸塑盒2014-3.5」），定义后才能在采购订单 / 入库登记 / BOM 里被选择 ️ 如果你想录入的是原料的「具体批次」，记录某次入库的数量、价格、保质期，请到 仓储管理 → 原料 / 物料 (采购入库) 创建。先在这里建原料类型, 再去入库登记里给它建批次。 原料类型字典 共 6 条记录 新建原料类型 全部大类 搜索 重置 原料编码 原料名称 类别 单位 储存类型 保质期 (天) 移动均价 操作 DDY002 牛肉前腱子 原料 g 冷冻 - ¥0.04 供应商 编辑 删除 DDY004 冷冻"
+    },
+    {
+      "name": "10-rd-samples",
+      "route": "/rd/samples",
+      "finalUrl": "http://139.196.165.140:8086/rd/samples",
+      "title": "研发样品管理 - 白垩纪AI Agent",
+      "found": {
+        "关联客户": false,
+        "包材规格": false,
+        "价位选料": true,
+        "最低价": false,
+        "最高价": false,
+        "packQtyPerProduct": false,
+        "付款申请": false,
+        "撤回": false,
+        "BOM": true
+      },
+      "textSample": "白垩纪AI Agent 首页 销售老板工作台 财务主管工作台 质量主管工作台 仓管员工作台 采购员工作台 质量主管工作台 生产经理工作台 生产管理 生产批次 生产计划 备货看板 BOM成本管理 报工审批 BOM达成率分析 工序投入产出对比 物料需求单 研发样品 人效双口径对比 仓储管理 质量管理 采购管理 销售管理 人事管理 设备管理 财务管理 系统管理 智能调度 数据与分析 研发管理 / 研发样品管理 f006_admin 工厂总监 研发管理 研发需求 样品管理 报价任务 新建样品 产品状态 搜索 重置 价位选料 样品编码 样品名称 客户名称 成品规格 产品级别 业务员 储存方式 产品状态 操作 暂无数据"
+    },
+    {
+      "name": "11-production-bom",
+      "route": "/production/bom",
+      "finalUrl": "http://139.196.165.140:8086/production/bom",
+      "title": "BOM配方管理 - 白垩纪AI Agent",
+      "found": {
+        "关联客户": false,
+        "包材规格": false,
+        "价位选料": false,
+        "最低价": false,
+        "最高价": false,
+        "packQtyPerProduct": false,
+        "付款申请": false,
+        "撤回": false,
+        "BOM": true
+      },
+      "textSample": "白垩纪AI Agent 首页 销售老板工作台 财务主管工作台 质量主管工作台 仓管员工作台 采购员工作台 质量主管工作台 生产经理工作台 生产管理 生产批次 生产计划 备货看板 BOM成本管理 报工审批 BOM达成率分析 工序投入产出对比 物料需求单 研发样品 人效双口径对比 仓储管理 质量管理 采购管理 销售管理 人事管理 设备管理 财务管理 系统管理 智能调度 数据与分析 生产管理 / BOM配方管理 f006_admin 工厂总监 BOM 配方管理 原辅料配方 转换率 BOM 已对接生产计划, 录入即生效 本页录入的 BOM 配方 (含成品含量 + 出成率% + 单位) 保存后立即被生产计划自动展开使用, 无需再同步「转换率配置」(RPF)。RPF 表保留作为老工厂数据的 fallback。 这里是「BOM 成本管理」管理 — 一个成品需要哪些原料、各多少量、成本如何拆分（多对多结构 + 成本核算） ️ 如果你想录入的是单一原料 → 单一成品的「出成率」（如 1kg 冻猪蹄 → 600g 卤猪蹄，60%），请到 生产管理 → 转换率配置 创建。复杂配方用 BOM，简单出成率用转换"
+    },
+    {
+      "name": "12-finance-inventory-ledger",
+      "route": "/finance/inventory-ledger",
+      "finalUrl": "http://139.196.165.140:8086/finance/inventory-ledger",
+      "title": "进销存台账 - 白垩纪AI Agent",
+      "found": {
+        "关联客户": false,
+        "包材规格": false,
+        "价位选料": false,
+        "最低价": false,
+        "最高价": false,
+        "packQtyPerProduct": false,
+        "付款申请": false,
+        "撤回": false,
+        "BOM": false
+      },
+      "textSample": "白垩纪AI Agent 首页 销售老板工作台 财务主管工作台 质量主管工作台 仓管员工作台 采购员工作台 质量主管工作台 生产经理工作台 生产管理 仓储管理 质量管理 采购管理 销售管理 人事管理 设备管理 财务管理 系统管理 智能调度 数据与分析 财务管理 / 进销存台账 f006_admin 工厂总监 进销存台账 日期范围 至 物料代码/名称 查询 重置 导出 Excel 物料代码 物料名称 单位 期初数量 期初金额 入库数量 入库金额 领用数量 出货数量 出库金额 调入数量 调出数量 盘点调整 调整金额 移动均价 期末数量 期末金额 请选择日期范围后点击查询"
+    }
+  ],
+  "dialogs": {
+    "materialTypesCreate": {
+      "关联客户": false,
+      "包材规格": false,
+      "价位选料": false,
+      "最低价": false,
+      "最高价": false,
+      "packQtyPerProduct": false,
+      "付款申请": false,
+      "撤回": false,
+      "BOM": true
+    },
+    "bomPage": {
+      "关联客户": false,
+      "包材规格": false,
+      "价位选料": false,
+      "最低价": false,
+      "最高价": false,
+      "packQtyPerProduct": false,
+      "付款申请": false,
+      "撤回": false,
+      "BOM": true
+    }
+  },
+  "consoleMessages": [],
+  "networkFailures": [
+    "GET http://139.196.165.140:8086/api/admin/role-permissions :: net::ERR_ABORTED",
+    "GET http://139.196.165.140:8086/assets/DashboardAdmin-Dew9QsT2.js :: net::ERR_ABORTED",
+    "GET http://139.196.165.140:8086/api/mobile/F006/workflow/instances/pending?page=1&size=20 :: net::ERR_ABORTED",
+    "GET http://139.196.165.140:8086/api/mobile/F006/config/disabled-modules :: net::ERR_ABORTED"
+  ]
+}
