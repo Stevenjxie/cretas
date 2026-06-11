@@ -50,7 +50,13 @@ async function loadTransfer() {
   loading.value = true;
   try {
     const res = await get(`/${factoryId.value}/transfers/${transferId.value}`);
-    if (res.success) transfer.value = res.data;
+    if (res.success) {
+      transfer.value = res.data;
+      // 签收后加载差异单（RECEIVED / CONFIRMED）
+      if (res.data?.status === 'RECEIVED' || res.data?.status === 'CONFIRMED') {
+        loadDiffs();
+      }
+    }
   } catch (err: any) {
     // axios interceptor wraps as ApiError(message, code, status)
     const status = err?.status ?? err?.response?.status;
@@ -198,6 +204,85 @@ function formatBatchLabel(b: BatchOption): string {
   if (b.expireDate) parts.push(`到期 ${b.expireDate}`);
   return parts.join(' · ');
 }
+
+// ==================== 调拨差异找单（TDIFF）====================
+
+interface DiffRecord {
+  id: string;
+  diffNumber: string;
+  itemName: string | null;
+  shippedQuantity: number;
+  receivedQuantity: number;
+  diffQuantity: number;
+  unit: string | null;
+  status: string;
+  decision: string | null;
+  decisionAt: string | null;
+  decisionNotes: string | null;
+}
+
+const diffs = ref<DiffRecord[]>([]);
+const diffsLoading = ref(false);
+const decideDialogVisible = ref(false);
+const decidingDiff = ref<DiffRecord | null>(null);
+const decideForm = ref({ decision: '', notes: '' });
+const decideSubmitting = ref(false);
+
+const diffStatusMap: Record<string, { text: string; type: string }> = {
+  PENDING: { text: '待处理', type: 'warning' },
+  RESOLVED: { text: '已处理', type: 'success' },
+};
+
+const diffDecisionMap: Record<string, string> = {
+  FOUND_BACK: '找回货物',
+  WRITE_OFF_LOSS: '核销损耗',
+  TRANSFER_DAMAGE: '转报损',
+};
+
+async function loadDiffs() {
+  if (!factoryId.value || !transferId.value) return;
+  diffsLoading.value = true;
+  try {
+    const res = await get<DiffRecord[]>(
+      `/${factoryId.value}/transfer-diffs/by-transfer/${transferId.value}`,
+    );
+    if (res.success) diffs.value = res.data || [];
+  } catch {
+    // 非核心：静默失败，不影响主界面
+  } finally {
+    diffsLoading.value = false;
+  }
+}
+
+function openDecideDialog(diff: DiffRecord) {
+  decidingDiff.value = diff;
+  decideForm.value = { decision: '', notes: '' };
+  decideDialogVisible.value = true;
+}
+
+async function submitDecide() {
+  if (!decidingDiff.value || !decideForm.value.decision) {
+    ElMessage.error('请选择处理方式');
+    return;
+  }
+  decideSubmitting.value = true;
+  try {
+    const res = await post(
+      `/${factoryId.value}/transfer-diffs/${decidingDiff.value.id}/decide`,
+      { decision: decideForm.value.decision, notes: decideForm.value.notes || null },
+    );
+    if (res.success) {
+      ElMessage.success('差异单已处理');
+      decideDialogVisible.value = false;
+      loadDiffs();
+    } else {
+      ElMessage({ message: res.message || '操作失败', type: 'error', duration: 0, showClose: true });
+    }
+  } catch (e) { handleCatchError(e, '提交失败，请检查网络'); }
+  finally { decideSubmitting.value = false; }
+}
+
+// watch 备用：handleAction('receive') 后 loadTransfer 刷新会触发 loadDiffs（在 loadTransfer 内已处理）
 </script>
 
 <template>
@@ -338,9 +423,110 @@ function formatBatchLabel(b: BatchOption): string {
             </template>
           </el-table-column>
         </el-table>
+
+        <!-- ════ 调拨差异找单（签收后自动出现） ════ -->
+        <template v-if="['RECEIVED','CONFIRMED'].includes(transfer.status)">
+          <div style="display:flex; align-items:center; gap:8px; margin: 28px 0 12px">
+            <h3 style="margin:0">调拨差异找单</h3>
+            <el-tag v-if="diffs.filter(d => d.status === 'PENDING').length > 0" type="danger" size="small">
+              {{ diffs.filter(d => d.status === 'PENDING').length }} 条待处理
+            </el-tag>
+            <el-tag v-else-if="diffs.length > 0" type="success" size="small">全部已处理</el-tag>
+            <el-tag v-else type="info" size="small">无差异</el-tag>
+            <el-button size="small" :loading="diffsLoading" @click="loadDiffs()">刷新</el-button>
+          </div>
+
+          <el-alert
+            v-if="diffs.filter(d => d.status === 'PENDING').length > 0"
+            type="warning" show-icon :closable="false" style="margin-bottom: 12px"
+            title="存在未处理的调拨差异"
+            description="发出量与实收量不符，请核实差异原因后选择处理方式（找回 / 核销损耗 / 转报损）" />
+
+          <el-table v-loading="diffsLoading" :data="diffs" border stripe empty-text="签收量与发货量一致，无差异">
+            <el-table-column prop="diffNumber" label="差异单号" width="220" />
+            <el-table-column label="品名" min-width="140">
+              <template #default="{ row }">{{ row.itemName || '-' }}</template>
+            </el-table-column>
+            <el-table-column label="发货量" width="110" align="right">
+              <template #default="{ row }">{{ row.shippedQuantity }} {{ row.unit }}</template>
+            </el-table-column>
+            <el-table-column label="实收量" width="110" align="right">
+              <template #default="{ row }">{{ row.receivedQuantity }} {{ row.unit }}</template>
+            </el-table-column>
+            <el-table-column label="差异量" width="110" align="right">
+              <template #default="{ row }">
+                <span class="diff-qty">-{{ row.diffQuantity }} {{ row.unit }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="状态" width="100" align="center">
+              <template #default="{ row }">
+                <el-tag :type="(diffStatusMap[row.status]?.type) || 'info'" size="small">
+                  {{ diffStatusMap[row.status]?.text || row.status }}
+                </el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="处理结果" min-width="120">
+              <template #default="{ row }">
+                <span v-if="row.decision">{{ diffDecisionMap[row.decision] || row.decision }}</span>
+                <span v-else class="text-muted">未处理</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="备注" min-width="140">
+              <template #default="{ row }">{{ row.decisionNotes || '-' }}</template>
+            </el-table-column>
+            <el-table-column v-if="canWrite" label="操作" width="100" align="center" fixed="right">
+              <template #default="{ row }">
+                <el-button
+                  v-if="row.status === 'PENDING'"
+                  type="primary" size="small" link
+                  @click="openDecideDialog(row)">处理</el-button>
+                <span v-else class="text-muted">已完成</span>
+              </template>
+            </el-table-column>
+          </el-table>
+        </template>
       </template>
     </el-card>
   </div>
+
+  <!-- 差异处理 Dialog -->
+  <el-dialog
+    v-model="decideDialogVisible"
+    title="调拨差异处理"
+    width="480px"
+    :close-on-click-modal="false">
+    <template v-if="decidingDiff">
+      <el-descriptions :column="1" border size="small" style="margin-bottom:16px">
+        <el-descriptions-item label="差异单号">{{ decidingDiff.diffNumber }}</el-descriptions-item>
+        <el-descriptions-item label="品名">{{ decidingDiff.itemName || '-' }}</el-descriptions-item>
+        <el-descriptions-item label="发货量">{{ decidingDiff.shippedQuantity }} {{ decidingDiff.unit }}</el-descriptions-item>
+        <el-descriptions-item label="实收量">{{ decidingDiff.receivedQuantity }} {{ decidingDiff.unit }}</el-descriptions-item>
+        <el-descriptions-item label="差异量">
+          <span class="diff-qty">-{{ decidingDiff.diffQuantity }} {{ decidingDiff.unit }}</span>
+        </el-descriptions-item>
+        <el-descriptions-item label="调拨单">{{ transfer?.transferNumber }}</el-descriptions-item>
+      </el-descriptions>
+      <el-form label-width="90px">
+        <el-form-item label="处理方式" required>
+          <el-radio-group v-model="decideForm.decision" style="display:flex; flex-direction:column; gap:8px">
+            <el-radio value="FOUND_BACK">找回货物（差异货物已找回/补发）</el-radio>
+            <el-radio value="WRITE_OFF_LOSS">核销损耗（记为运输/储存损耗）</el-radio>
+            <el-radio value="TRANSFER_DAMAGE">转报损（货物破损，转入库存报损）</el-radio>
+          </el-radio-group>
+        </el-form-item>
+        <el-form-item label="备注">
+          <el-input
+            v-model="decideForm.notes"
+            type="textarea" :rows="2"
+            placeholder="可填写差异原因或处理说明" />
+        </el-form-item>
+      </el-form>
+    </template>
+    <template #footer>
+      <el-button @click="decideDialogVisible = false">取消</el-button>
+      <el-button type="primary" :loading="decideSubmitting" @click="submitDecide">确认处理</el-button>
+    </template>
+  </el-dialog>
 </template>
 
 <style lang="scss" scoped>
@@ -357,4 +543,7 @@ function formatBatchLabel(b: BatchOption): string {
 }
 // PR #289 §B4 — stock shortage marker for "现有库存" column
 .stock-shortage { color: #f56c6c; font-weight: 600; }
+// 调拨差异量红色高亮（少收警示）
+.diff-qty { color: #f56c6c; font-weight: 600; }
+.text-muted { color: #909399; font-size: 12px; }
 </style>
