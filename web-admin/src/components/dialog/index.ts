@@ -1,3 +1,5 @@
+// 开始采购弹窗 — 从 SO 一键生成 PO 明细 (t2b 行1867-1902 Friday 请求).
+export { default as StartPurchaseDialog } from './StartPurchaseDialog.vue';
 // U-NEW-1 Sprint 4 Wave 2 Chat L — create-mode selector + batch-create dialog.
 // P1 #58 (U-NEW-1) — add QuickCreate (一维) + BomExpansion (BOM 展开) to finish the 4-mode set.
 export { default as CreateModeSelector } from './CreateModeSelector.vue';

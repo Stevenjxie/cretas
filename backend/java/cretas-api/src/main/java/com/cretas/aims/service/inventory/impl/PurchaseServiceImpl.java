@@ -5,6 +5,10 @@ import com.cretas.aims.dto.inventory.CreatePurchaseOrderRequest;
 import com.cretas.aims.dto.inventory.CreateReceiveRecordRequest;
 import com.cretas.aims.dto.inventory.UpdatePurchaseOrderRequest;
 import com.cretas.aims.dto.inventory.MaterialPriceComparisonDTO;
+import com.cretas.aims.dto.inventory.PurchaseSuggestionResponse;
+import com.cretas.aims.entity.inventory.SalesOrder;
+import com.cretas.aims.entity.inventory.SalesOrderItem;
+import com.cretas.aims.repository.inventory.SalesOrderItemRepository;
 import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.RawMaterialType;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
@@ -101,6 +105,10 @@ public class PurchaseServiceImpl implements PurchaseService {
     /** Rule 2 hydration: lookup SO orderNumber for PO.salesOrderNumber @Transient. */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private SalesOrderRepository salesOrderRepository;
+
+    /** 开始采购: 从 SO 展开原料需求. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private SalesOrderItemRepository salesOrderItemRepository;
 
     /** D-6: 责任绑定 — 查询 PO 创建人的用户名供异常单展示（required=false 兼容旧 context） */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
@@ -1376,6 +1384,111 @@ public class PurchaseServiceImpl implements PurchaseService {
         stats.put("monthlyPurchaseAmount", monthlyAmount);
 
         return stats;
+    }
+
+    // ==================== 开始采购 — 从 SO 生成采购建议 ====================
+
+    @Override
+    @Transactional(readOnly = true)
+    public PurchaseSuggestionResponse generatePurchaseSuggestion(String factoryId, String salesOrderId) {
+        // 1. 加载 SO（多租户隔离）
+        if (salesOrderRepository == null) {
+            throw new BusinessException("销售订单服务不可用");
+        }
+        SalesOrder so = salesOrderRepository.findById(salesOrderId)
+                .orElseThrow(() -> new ResourceNotFoundException("SalesOrder", "id", salesOrderId));
+        if (!factoryId.equals(so.getFactoryId())) {
+            throw new BusinessException("403: 无权访问此销售订单");
+        }
+
+        // 2. 加载 SO 行项目
+        List<SalesOrderItem> soItems = salesOrderItemRepository != null
+                ? salesOrderItemRepository.findBySalesOrderId(salesOrderId)
+                : List.of();
+        if (soItems.isEmpty()) {
+            return PurchaseSuggestionResponse.builder()
+                    .salesOrderId(salesOrderId)
+                    .salesOrderNumber(so.getOrderNumber())
+                    .customerName(so.getCustomerName())
+                    .hasBom(false)
+                    .items(List.of())
+                    .build();
+        }
+
+        // 3. BOM 展开：每个 SO 行 × BOM 原料用量，按 materialTypeId 合并
+        // key = materialTypeId, value = 累加的需求量
+        Map<String, BigDecimal> aggregatedQty = new LinkedHashMap<>();
+        // 保留第一次看到该 materialTypeId 时的 BomItem 信息（名称/分类/单位/参考价）
+        Map<String, PurchaseSuggestionResponse.SuggestionItem> itemTemplate = new LinkedHashMap<>();
+        boolean hasBom = false;
+
+        for (SalesOrderItem soItem : soItems) {
+            if (soItem.getProductTypeId() == null) continue;
+            List<BomItem> bomItems = bomItemRepository
+                    .findByFactoryIdAndProductTypeIdAndDeletedAtIsNullOrderBySortOrderAsc(
+                            factoryId, soItem.getProductTypeId());
+            if (bomItems.isEmpty()) continue;
+
+            hasBom = true;
+            BigDecimal soQty = soItem.getQuantity() != null ? soItem.getQuantity() : BigDecimal.ONE;
+
+            for (BomItem bom : bomItems) {
+                if (bom.getMaterialTypeId() == null) continue;
+                // actualQuantity 已按出成率折算，是"每单位产品需要的原料量"
+                BigDecimal actualQtyPerUnit = bom.getActualQuantity();
+                if (actualQtyPerUnit == null || actualQtyPerUnit.compareTo(BigDecimal.ZERO) <= 0) continue;
+
+                BigDecimal required = actualQtyPerUnit.multiply(soQty).setScale(4, BigDecimal.ROUND_HALF_UP);
+                String matId = bom.getMaterialTypeId();
+
+                aggregatedQty.merge(matId, required, BigDecimal::add);
+                itemTemplate.putIfAbsent(matId, PurchaseSuggestionResponse.SuggestionItem.builder()
+                        .materialTypeId(matId)
+                        .materialName(bom.getMaterialName() != null ? bom.getMaterialName() : "未知原料")
+                        .materialCategory(bom.getMaterialCategory() != null ? bom.getMaterialCategory() : "RAW")
+                        .sourceProductName(soItem.getProductName() != null ? soItem.getProductName() : "")
+                        .unit(bom.getUnit())
+                        .referenceUnitPrice(bom.getUnitPrice())
+                        .build());
+            }
+        }
+
+        // 4. 查每种原料当前库存，计算净需求
+        List<PurchaseSuggestionResponse.SuggestionItem> resultItems = new ArrayList<>();
+        for (Map.Entry<String, BigDecimal> entry : aggregatedQty.entrySet()) {
+            String matId = entry.getKey();
+            BigDecimal totalRequired = entry.getValue().setScale(4, BigDecimal.ROUND_HALF_UP);
+            BigDecimal currentStock = materialBatchRepository != null
+                    ? materialBatchRepository.sumAvailableQuantityByMaterialType(factoryId, matId)
+                    : BigDecimal.ZERO;
+            if (currentStock == null) currentStock = BigDecimal.ZERO;
+
+            BigDecimal netRequired = totalRequired.subtract(currentStock);
+            if (netRequired.compareTo(BigDecimal.ZERO) < 0) netRequired = BigDecimal.ZERO;
+            netRequired = netRequired.setScale(4, BigDecimal.ROUND_HALF_UP);
+
+            PurchaseSuggestionResponse.SuggestionItem template = itemTemplate.get(matId);
+            resultItems.add(PurchaseSuggestionResponse.SuggestionItem.builder()
+                    .materialTypeId(matId)
+                    .materialName(template.getMaterialName())
+                    .materialCategory(template.getMaterialCategory())
+                    .sourceProductName(template.getSourceProductName())
+                    .requiredQuantity(totalRequired)
+                    .unit(template.getUnit())
+                    .currentStock(currentStock)
+                    .netRequired(netRequired)
+                    .stockSufficient(netRequired.compareTo(BigDecimal.ZERO) == 0)
+                    .referenceUnitPrice(template.getReferenceUnitPrice())
+                    .build());
+        }
+
+        return PurchaseSuggestionResponse.builder()
+                .salesOrderId(salesOrderId)
+                .salesOrderNumber(so.getOrderNumber())
+                .customerName(so.getCustomerName())
+                .hasBom(hasBom)
+                .items(resultItems)
+                .build();
     }
 
     // ==================== 三价对比 ====================

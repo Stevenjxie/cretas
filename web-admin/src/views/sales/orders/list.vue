@@ -18,7 +18,7 @@ import { RowActionMenu, ViewModeSwitcher, GridView, KanbanView, TimelinePlacehol
 // Sprint 6 W3-A — inline 3-chip link counter (文件 / 图片 / 合同).
 import LinkChipCell from '@/components/list/LinkChipCell.vue';
 import { useLinkChipCounts } from '@/composables/useLinkChipCounts';
-import { CreateModeSelector, BatchCreateDialog, QuickCreateDialog, BomExpansionDialog } from '@/components/dialog';
+import { CreateModeSelector, BatchCreateDialog, QuickCreateDialog, BomExpansionDialog, StartPurchaseDialog } from '@/components/dialog';
 // PR #872 (#860 follow-up) — 转发 / 分享链接 dialog.
 import ForwardShareDialog from '@/components/dialog/ForwardShareDialog.vue';
 import request from '@/api/request';
@@ -72,6 +72,12 @@ const invoiceForm = ref({ orderId: '', counterpartyId: '', amount: 0, notes: '' 
 
 const paymentDialogVisible = ref(false);
 const paymentForm = ref({ orderId: '', counterpartyId: '', amount: 0, paymentMethod: 'BANK_TRANSFER', notes: '' });
+
+// 开始采购弹窗 state (t2b 行1867-1902 — Friday 采购负责人请求)
+const startPurchaseVisible = ref(false);
+const startPurchaseSoId = ref('');
+const startPurchaseSoNumber = ref('');
+const startPurchaseCustomer = ref('');
 
 const router = useRouter();
 const route = useRoute();
@@ -1572,6 +1578,14 @@ async function submitQuickPayment() {
     }
   } catch { /* axios interceptor already displayed error toast */ }
 }
+
+/** 开始采购 — 从 SO 一键弹窗带入 PO 明细 (t2b 行1867-1902). */
+function handleStartPurchase(row: TableRow) {
+  startPurchaseSoId.value = row.id;
+  startPurchaseSoNumber.value = row.orderNumber ?? '';
+  startPurchaseCustomer.value = row.customerName ?? row.customer?.name ?? '';
+  startPurchaseVisible.value = true;
+}
 </script>
 
 <template>
@@ -1959,6 +1973,14 @@ async function submitQuickPayment() {
               size="small"
               @click="handleQuickPayment(row)"
             >收款</el-button>
+            <!-- 开始采购 — 从 SO 一键带入 PO 明细 (t2b 行1867-1902, Friday 采购负责人) -->
+            <el-button
+              v-if="['CONFIRMED', 'FINANCE_APPROVED', 'PROCESSING'].includes(row.status) && canWrite"
+              type="warning"
+              link
+              size="small"
+              @click="handleStartPurchase(row)"
+            >开始采购</el-button>
             <!-- U-ICON-1 (Sprint 4 Wave 2 Chat L) inline 7-icon hover toolbar -->
             <InlineRowIcons
               :row-actions="rowActionsFor(row)"
@@ -2344,6 +2366,16 @@ async function submitQuickPayment() {
         <el-input-number v-model="row.unitPrice" :min="0" :step="0.01" :precision="2" size="small" style="width: 100%" />
       </template>
     </BomExpansionDialog>
+
+    <!-- 开始采购弹窗 — 从 SO BOM 展开一键预填 PO (t2b 行1867-1902 Friday) -->
+    <StartPurchaseDialog
+      v-model="startPurchaseVisible"
+      :factory-id="factoryId"
+      :sales-order-id="startPurchaseSoId"
+      :sales-order-number="startPurchaseSoNumber"
+      :customer-name="startPurchaseCustomer"
+      @created="(poId: string) => { ElMessage.success(`采购单已创建 — 可在采购管理查看 (ID: ${poId})`); loadData(); }"
+    />
 
     <!-- PR #861: per-row operation log timeline (replaces the disabled "审计" chip). -->
     <AuditLogDrawer
