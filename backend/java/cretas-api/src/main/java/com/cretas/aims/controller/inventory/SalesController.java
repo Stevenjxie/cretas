@@ -34,7 +34,9 @@ import org.springframework.web.bind.annotation.*;
 
 import com.cretas.aims.annotation.RequirePermission;
 import com.cretas.aims.dto.pricing.GrossMarginCheckResult;
+import com.cretas.aims.dto.pricing.EstimatePriceCheckResult;
 import com.cretas.aims.service.pricing.GrossMarginRedlineService;
+import com.cretas.aims.service.pricing.EstimatePriceCheckService;
 
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
@@ -64,6 +66,8 @@ public class SalesController {
     private final FinishedGoodsBatchRepository finishedGoodsBatchRepository;
     // SP5: 毛利红线校验
     private final GrossMarginRedlineService grossMarginRedlineService;
+    // P1 #33: 销售价 ≥ 研发预估价 跨流校验
+    private final EstimatePriceCheckService estimatePriceCheckService;
 
     /** Sprint 5 Track C-2 — owner_type / target_type literal pinned to SalesOrder. */
     private static final String SO_ENTITY_TYPE = "SALES_ORDER";
@@ -657,6 +661,38 @@ public class SalesController {
     public record CheckMarginRequest(
             @NotBlank String productTypeId,
             @NotNull @Positive BigDecimal quotedPrice) {
+    }
+
+    // ==================== P1 #33: 销售价 ≥ 研发预估价 校验 ====================
+
+    /**
+     * P1 #33: 销售报价 ≥ 研发预估价 跨流校验 (G流 SP10 → E流, 下单前预警, 非阻断).
+     *
+     * <p>校验给定产品的销售报价是否低于研发预估价 (SP10 QuotationTask 建议售价), 仅返回
+     * {@code belowEstimate} + {@code warningMessage}, 不暴露 estimatePrice / suggestedPrice /
+     * finalPrice 等价格敏感数据 (脱敏: 只给"是否低于"+文案, 不给绝对值)。
+     *
+     * <p><strong>权限</strong>: 与 check-margin 同闸 {@code @RequirePermission("sales:read_write")}
+     * —— 任何能下单的角色 (含销售/录单员) 都能在提交前调本接口预览估价预警 (fool-proof Rule 1:
+     * 提交前看到边界, 而非提交后被拒)。返回 DTO 已脱敏, 给销售看预警不泄露研发预估价/成本结构。
+     *
+     * <p>研发未报价 (无 QuotationTask 或预估价为空) → {@code belowEstimate=null} (诚实跳过, 不警告)。
+     */
+    @PostMapping("/check-estimate-price")
+    @Operation(summary = "销售价 ≥ 研发预估价 校验（#33，下单前非阻断预警）")
+    @RequirePermission("sales:read_write")
+    public ApiResponse<EstimatePriceCheckResult> checkEstimatePrice(
+            @PathVariable @NotBlank String factoryId,
+            @RequestBody @Valid CheckEstimatePriceRequest request) {
+        EstimatePriceCheckResult result = estimatePriceCheckService.checkAgainstEstimate(
+                factoryId, request.productTypeId(), request.sellingPrice());
+        return ApiResponse.success("校验完成", result);
+    }
+
+    /** #33 check-estimate-price 请求体。 */
+    public record CheckEstimatePriceRequest(
+            @NotBlank String productTypeId,
+            @NotNull @Positive BigDecimal sellingPrice) {
     }
 
     // ==================== 内部方法 ====================
