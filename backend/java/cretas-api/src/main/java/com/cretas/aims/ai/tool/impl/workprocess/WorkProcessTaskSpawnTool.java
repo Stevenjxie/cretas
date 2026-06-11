@@ -63,7 +63,9 @@ public class WorkProcessTaskSpawnTool extends AbstractBusinessTool {
             String factoryId, Map<String, Object> params, Map<String, Object> context) {
         Long productionBatchId = getLong(params, "productionBatchId");
         String productTypeId = getString(params, "productTypeId");
-        List<WorkProcessTaskDTO> spawned = workProcessTaskService.spawnTasks(
+        // Fable 审计修复 (问题2): 走计划模式感知的 spawn — 与计划转批次主路径一致。
+        // skip=true 计划经 AI 补 spawn 时生成两点哨兵任务 (而非旧的恒逐道), 不与计划模式矛盾。
+        List<WorkProcessTaskDTO> spawned = workProcessTaskService.spawnTasksForBatch(
                 factoryId, productionBatchId, productTypeId);
         log.info("AI 工具 spawn 工序: batch={}, productType={}, count={}",
                 productionBatchId, productTypeId, spawned.size());

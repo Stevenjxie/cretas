@@ -91,6 +91,20 @@ public class ProductionPlanController {
     }
 
     /**
+     * 获取工厂级"免工序报工默认值" (Fable 审计修复 2026-06-11 — 问题1).
+     *
+     * <p>web 新建计划对话框据此初始化"免工序报工"开关: F006 返 true (默认两点), 其他工厂返 false (默认逐道)。
+     */
+    @RequireModule("production_plan")
+    @GetMapping("/report-mode-default")
+    @Operation(summary = "获取工厂免工序报工默认值")
+    public ApiResponse<Boolean> getReportModeDefault(
+            @Parameter(description = "工厂ID", required = true, example = "F001")
+            @PathVariable @NotBlank String factoryId) {
+        return ApiResponse.success(productionPlanService.getSkipProcessReportingDefault(factoryId));
+    }
+
+    /**
      * 创建草稿态生产计划 (M-PREP-1, Sprint 4 W2) — status = PREPARED.
      *
      * <p>与 POST `/api/mobile/{factoryId}/production-plans` 区别: 初始状态为 PREPARED 而非 PENDING,

@@ -199,6 +199,20 @@ public class FactorySettings extends BaseEntity {
     @Builder.Default
     private Boolean enableAttendance = true;
 
+    /**
+     * 工厂级"免工序报工默认值" (Fable 审计修复 — 多租户安全红线, V20261018_02).
+     *
+     * <p>createProductionPlan 对 skipProcessReporting=null 的新建计划取此工厂级默认值:
+     * <ul>
+     *   <li>true  → 新建计划默认两点报工 (领料入+产出出)。仅六扇门类要两点的工厂 (F006) 置 true。</li>
+     *   <li>false → 新建计划默认逐道报工 (保留溯源/成本/出成率/自学习/人效)。其他工厂默认。</li>
+     * </ul>
+     * 列 DEFAULT FALSE → 未显式 seed 的工厂 (现有 + 未来) 默认逐道, 零回归。
+     */
+    @Column(name = "skip_process_reporting_default")
+    @Builder.Default
+    private Boolean skipProcessReportingDefault = false;
+
     // ==================== 审计字段 ====================
     /**
      * 创建人ID

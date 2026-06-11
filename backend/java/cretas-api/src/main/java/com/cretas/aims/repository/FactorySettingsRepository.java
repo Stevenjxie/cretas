@@ -49,6 +49,12 @@ public interface FactorySettingsRepository extends JpaRepository<FactorySettings
     @Query("SELECT f.workTimeSettings FROM FactorySettings f WHERE f.factoryId = :factoryId")
     String findWorkTimeSettingsByFactoryId(@Param("factoryId") String factoryId);
      /**
+     * 获取工厂级"免工序报工默认值" (Fable 审计修复 — 多租户安全, V20261018_02).
+     * 无 settings 行时返回 null (调用方兜底为 false = 逐道, 安全默认).
+      */
+    @Query("SELECT f.skipProcessReportingDefault FROM FactorySettings f WHERE f.factoryId = :factoryId")
+    Boolean findSkipProcessReportingDefaultByFactoryId(@Param("factoryId") String factoryId);
+     /**
      * 更新AI每周配额（仅平台管理员可用）
       */
     @Query("UPDATE FactorySettings f SET f.aiWeeklyQuota = :quota WHERE f.factoryId = :factoryId")

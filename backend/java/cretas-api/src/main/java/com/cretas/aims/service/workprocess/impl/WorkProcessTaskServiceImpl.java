@@ -51,6 +51,14 @@ public class WorkProcessTaskServiceImpl implements WorkProcessTaskService {
     private final ProductionBatchRepository productionBatchRepository;
     private final ProductTypeRepository productTypeRepository;
 
+    /**
+     * Fable 审计修复 (2026-06-11 — 问题2): retry spawn 路径 (HTTP / AI) 需读计划的 skipProcessReporting,
+     * 才能与计划模式一致地 spawn (两点 or 逐道)。field 注入 (required=false) 避免改动构造器与既有单测 @InjectMocks 装配;
+     * 不注入 / 查不到计划 → 兜底 false (逐道, 安全默认)。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.repository.ProductionPlanRepository productionPlanRepository;
+
     // ==================== T142: batch assignedToName helper ====================
 
     /**
@@ -119,6 +127,42 @@ public class WorkProcessTaskServiceImpl implements WorkProcessTaskService {
         // 向后兼容: 旧 3-arg 入口委托新方法, skip=false (逐道). 现有 controller / Tool / 计划转批次
         // 调用方在未感知免工序报工时走原逐道路径, 行为完全不变。
         return spawnTasks(factoryId, productionBatchId, productTypeId, Boolean.FALSE, null, null);
+    }
+
+    @Override
+    @Transactional
+    public List<WorkProcessTaskDTO> spawnTasksForBatch(
+            String factoryId,
+            Long productionBatchId,
+            String productTypeId) {
+        // Fable 审计修复 (问题2): retry spawn 路径尊重计划模式。
+        // 从批次解析其生产计划, 读 skipProcessReporting + 头尾责任人 (= assignedSupervisorId, 一人兼,
+        // 与 createBatchFromPlan 主路径一致)。解析不到 → 兜底逐道 (false, 安全默认)。
+        Boolean skip = Boolean.FALSE;
+        Long responsibleId = null;
+        try {
+            if (productionBatchId != null && productionPlanRepository != null) {
+                com.cretas.aims.entity.ProductionBatch batch =
+                        productionBatchRepository.findById(productionBatchId).orElse(null);
+                if (batch != null && batch.getProductionPlanId() != null
+                        && !batch.getProductionPlanId().isBlank()) {
+                    com.cretas.aims.entity.ProductionPlan plan =
+                            productionPlanRepository.findById(batch.getProductionPlanId()).orElse(null);
+                    if (plan != null) {
+                        skip = Boolean.TRUE.equals(plan.getSkipProcessReporting());
+                        responsibleId = plan.getAssignedSupervisorId();
+                    }
+                }
+            }
+        } catch (Exception e) {
+            log.warn("retry spawn 解析计划模式失败, 兜底逐道 (false): batchId={}, err={}",
+                    productionBatchId, e.getMessage());
+            skip = Boolean.FALSE;
+            responsibleId = null;
+        }
+        log.info("retry spawn (计划模式感知): batchId={}, productTypeId={}, skipProcessReporting={}",
+                productionBatchId, productTypeId, skip);
+        return spawnTasks(factoryId, productionBatchId, productTypeId, skip, responsibleId, responsibleId);
     }
 
     @Override
