@@ -51,6 +51,7 @@ _CENSUS_SQL = """
         business_type,
         task_type,
         quality,
+        factory_id,
         metadata
     FROM smart_bi_distillation_samples
     ORDER BY source, business_type, task_type
@@ -61,11 +62,22 @@ _CENSUS_SQL = """
 # Per-row helpers
 # ---------------------------------------------------------------------------
 
-def _is_synthetic(metadata: Any) -> bool:
+
+# Sentinel factory IDs used by the seeder (mirrors export_distillation_dataset._SENTINEL_FACTORIES).
+_SENTINEL_FACTORIES: frozenset = frozenset({"SEED_R", "SEED_F"})
+
+
+def _is_synthetic(metadata: Any, factory_id: Any = None) -> bool:
     """Return True if the row is synthetic / seeded (not organic).
 
-    Checks metadata.seeded (bool) or metadata.source_kind == 'synthetic'.
+    Detection mirrors export_distillation_dataset._is_synthetic — single source of truth:
+      1. factory_id IN ('SEED_R', 'SEED_F') sentinel factories
+      2. metadata.seeded == true
+      3. metadata.source_kind in ('synthetic', 'synthetic_seed')   ← extended from 'synthetic' only
     """
+    # Check sentinel factory IDs first (no metadata needed)
+    if factory_id and (factory_id or "") in _SENTINEL_FACTORIES:
+        return True
     if not metadata:
         return False
     if isinstance(metadata, str):
@@ -78,7 +90,7 @@ def _is_synthetic(metadata: Any) -> bool:
     if metadata.get("seeded") is True:
         return True
     sk = metadata.get("source_kind", "")
-    return isinstance(sk, str) and sk.lower() == "synthetic"
+    return isinstance(sk, str) and sk.lower() in ("synthetic", "synthetic_seed")
 
 
 # ---------------------------------------------------------------------------
@@ -142,7 +154,8 @@ def _aggregate(rows: List[Dict[str, Any]]) -> Dict[Tuple[str, str, str], BucketS
         )
         quality = row.get("quality")
         meta = row.get("metadata")
-        buckets[key].add(quality, _is_synthetic(meta))
+        fid = row.get("factory_id")
+        buckets[key].add(quality, _is_synthetic(meta, factory_id=fid))
     return dict(buckets)
 
 

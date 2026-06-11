@@ -272,7 +272,9 @@ async def main() -> None:
     ap.add_argument("--out", default="./distill_export", help="output directory")
     ap.add_argument("--source", default=None, help="filter by source (materialization|fallback|manual)")
     ap.add_argument("--business-type", default=None, help="filter by business_type")
-    ap.add_argument("--min-quality", type=int, default=None, help="keep rows with quality >= N (NULL kept)")
+    ap.add_argument("--min-quality", type=int, default=4,
+                    help="keep rows with quality >= N (default 4; NULL/below excluded). "
+                         "Pass --min-quality 1 to include lower-quality rows explicitly.")
     ap.add_argument("--factory", default=None,
                     help="PRIVATE mode: export ONLY this factory's RAW rows, "
                          "requires its consent_scope='private'")
@@ -334,9 +336,25 @@ async def main() -> None:
         total, len(buckets), n_synth, n_anon, excluded, args.out,
     )
     # Readiness hint vs the distillation threshold.
+    # GREEN criteria (mirrors corpus_census): ≥1000 quality≥4 rows AND synthetic ≤ 50%.
+    # If min_quality < 4, rows below 4 will be counted but they don't contribute to
+    # census-GREEN; report honestly.
     for bt, items in sorted(buckets.items()):
-        ready = "READY for LoRA" if len(items) >= 1000 else f"need {1000 - len(items)} more for 1k threshold"
-        logger.info(f"  threshold check [{bt}]: {len(items)}/1000 — {ready}")
+        total_bt = len(items)
+        n_synthetic = sum(1 for it in items if it["consent_class"] == "synthetic")
+        synthetic_pct = (n_synthetic / total_bt * 100) if total_bt else 0.0
+        if total_bt < 1000:
+            ready = f"NOT ready: need {1000 - total_bt} more rows for 1k threshold"
+        elif synthetic_pct > 50.0:
+            ready = (
+                f"NOT ready: synthetic {synthetic_pct:.0f}% > 50% cap — "
+                f"needs {n_synthetic - total_bt // 2} fewer synthetic or more organic"
+            )
+        else:
+            ready = "READY for LoRA"
+        logger.info(
+            f"  threshold check [{bt}]: {total_bt}/1000  synthetic={synthetic_pct:.0f}%  — {ready}"
+        )
 
 
 if __name__ == "__main__":

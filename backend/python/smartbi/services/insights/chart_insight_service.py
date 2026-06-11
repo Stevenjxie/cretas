@@ -755,18 +755,49 @@ class ChartInsightService:
             return None
 
     def _get_teacher_model(self) -> str:
-        """Return the teacher model name for corpus metadata. Falls back to 'unknown' if unavailable."""
+        """Return the teacher model name for corpus metadata.
+
+        Respects the CHART_INSIGHT_LLM_SLOT env override (e.g. REVIEW → qwen3-max)
+        the same way _call_llm does — so the recorded teacher_model reflects which
+        model actually generated the output, not always 'chart'.
+
+        Resolution order:
+          1. Resolve effective slot: CHART_INSIGHT_LLM_SLOT env → SLOT[name], else SLOT.CHART.
+          2. Ask the router for the actual model string for that slot (via get_model_for_slot
+             if available).
+          3. Fall back to the slot name (lower-case) if model string unavailable.
+          4. Fall back to 'unknown' on any import/attribute error.
+        """
         try:
-            from common.llm_router import SLOT
-            # Attempt to get the model name for the CHART slot
-            slot_model = getattr(SLOT, "CHART", None)
-            if slot_model is not None and hasattr(slot_model, "value"):
-                return str(slot_model.value)
-            elif slot_model is not None:
-                return str(slot_model)
+            from common.llm_router import SLOT  # noqa: PLC0415
+        except Exception:
+            return "unknown"
+
+        # Resolve the effective slot (mirrors _call_llm logic exactly)
+        effective_slot = SLOT.CHART
+        _slot_name_env = os.getenv("CHART_INSIGHT_LLM_SLOT")
+        if _slot_name_env:
+            try:
+                effective_slot = SLOT[_slot_name_env.strip().upper()]
+            except (KeyError, TypeError):
+                pass  # unknown env value → keep SLOT.CHART
+
+        # Attempt to get the actual resolved model name from the router
+        try:
+            from common.llm_router import get_model_for_slot  # noqa: PLC0415
+            model_name = get_model_for_slot(effective_slot)
+            if model_name and isinstance(model_name, str):
+                return model_name
         except Exception:
             pass
-        return "unknown"
+
+        # Fall back to the slot enum value (e.g. 'review', 'chart')
+        try:
+            if hasattr(effective_slot, "value"):
+                return str(effective_slot.value)
+            return str(effective_slot).lower()
+        except Exception:
+            return "unknown"
 
     # ------------------------------------------------------------------
     # LLM call — returns structured claims dict (overridable for testing)

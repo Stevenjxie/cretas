@@ -88,6 +88,7 @@ sys.modules["smartbi.config"].get_pg_pool = AsyncMock(return_value=None)  # type
 from scripts.corpus_eval_freeze import (  # noqa: E402
     _group_by_bucket,
     run_freeze,
+    run_rebalance,
 )
 
 
@@ -142,12 +143,38 @@ def _make_asyncpg_record(d: Dict) -> MagicMock:
 def _make_mock_pool_with_rows(
     candidate_rows: List[Dict],
     already_frozen: List[Dict],
+    total_quality_rows: Optional[List[Dict]] = None,
 ) -> tuple:
-    """Build a mock asyncpg pool returning two fetch() result sets."""
+    """Build a mock asyncpg pool returning three fetch() result sets.
+
+    run_freeze fetches three result sets in order:
+      1. _FETCH_SQL       → candidate_rows (quality>=4, not yet frozen)
+      2. _COUNT_FROZEN_SQL → already_frozen (per-bucket counts with 'cnt' field)
+      3. _TOTAL_QUALITY_SQL → total_quality_rows (per-bucket quality>=4 totals)
+
+    If total_quality_rows is None, a default is synthesised from candidate_rows
+    and already_frozen so existing callers don't need to change.
+    """
+    if total_quality_rows is None:
+        # Synthesise totals: for each bucket, total = candidates + already_frozen_cnt
+        from collections import defaultdict
+        bucket_totals: dict = defaultdict(int)
+        for r in candidate_rows:
+            key = (r.get("source", "unknown"), r.get("business_type", "unknown"))
+            bucket_totals[key] += 1
+        for r in already_frozen:
+            key = (r.get("source", "unknown"), r.get("business_type", "unknown"))
+            bucket_totals[key] += r.get("cnt", 0)
+        total_quality_rows = [
+            {"source": k[0], "business_type": k[1], "cnt": v}
+            for k, v in bucket_totals.items()
+        ]
+
     mock_conn = AsyncMock()
     mock_conn.fetch.side_effect = [
         [_make_asyncpg_record(r) for r in candidate_rows],
         [_make_asyncpg_record(r) for r in already_frozen],
+        [_make_asyncpg_record(r) for r in total_quality_rows],
     ]
     mock_conn.execute = AsyncMock()
     mock_pool = MagicMock()
@@ -168,9 +195,12 @@ class TestRunFreezeDryRun:
             for i in range(1, 41)  # 40 candidates
         ]
         already_frozen_rows: List[Dict] = []
+        # Provide a large total so proportional cap (30%) does not bind below n=30.
+        # total=200 → proportional_cap=floor(200*0.3)=60 ≥ 30 → effective_target=30
+        total_quality = [{"source": "chart_insight", "business_type": "RESTAURANT", "cnt": 200}]
 
         mock_pool, mock_conn = _make_mock_pool_with_rows(
-            candidate_rows, already_frozen_rows
+            candidate_rows, already_frozen_rows, total_quality
         )
 
         with patch("scripts.corpus_eval_freeze._make_pool", new=AsyncMock(return_value=mock_pool)):
@@ -190,9 +220,11 @@ class TestRunFreezeDryRun:
             for i in range(1, 11)
         ]
         already_frozen_rows: List[Dict] = []
+        # total=200 → proportional_cap=60 ≥ n=5 → not binding
+        total_quality = [{"source": "chart_insight", "business_type": "RESTAURANT", "cnt": 200}]
 
         mock_pool, mock_conn = _make_mock_pool_with_rows(
-            candidate_rows, already_frozen_rows
+            candidate_rows, already_frozen_rows, total_quality
         )
 
         with patch("scripts.corpus_eval_freeze._make_pool", new=AsyncMock(return_value=mock_pool)):
@@ -211,15 +243,20 @@ class TestRunFreezeIdempotency:
 
     @pytest.mark.asyncio
     async def test_bucket_at_cap_skipped(self):
-        """If already_frozen >= n, need=0 and nothing is frozen."""
-        # No candidates (or there are some but they shouldn't be touched)
+        """If already_frozen >= effective_target, need=0 and nothing is frozen."""
+        # No candidates (or there are some but they shouldn't be touched).
+        # Total quality = 200 → proportional_cap = floor(200*0.3)=60 ≥ n=30 → effective_target=30.
+        # already=30 ≥ 30 → need=0.
         candidate_rows: List[Dict] = []
         already_counts = [
             {"source": "chart_insight", "business_type": "RESTAURANT", "cnt": 30}
         ]
+        total_quality = [
+            {"source": "chart_insight", "business_type": "RESTAURANT", "cnt": 200}
+        ]
 
         mock_pool, mock_conn = _make_mock_pool_with_rows(
-            candidate_rows, already_counts
+            candidate_rows, already_counts, total_quality
         )
 
         with patch("scripts.corpus_eval_freeze._make_pool", new=AsyncMock(return_value=mock_pool)):
@@ -233,7 +270,11 @@ class TestRunFreezeIdempotency:
 
     @pytest.mark.asyncio
     async def test_partial_fill(self):
-        """If already_frozen=20, need=10, selects at most 10 candidates."""
+        """If already_frozen=20, need=10, selects at most 10 candidates.
+
+        Total quality = 200 → proportional_cap = floor(200*0.3)=60 ≥ n=30
+        → effective_target=30 → need = 30-20 = 10.
+        """
         candidate_rows = [
             {"id": i, "source": "chart_insight", "business_type": "RESTAURANT"}
             for i in range(100, 150)  # 50 candidates
@@ -241,9 +282,12 @@ class TestRunFreezeIdempotency:
         already_counts = [
             {"source": "chart_insight", "business_type": "RESTAURANT", "cnt": 20}
         ]
+        total_quality = [
+            {"source": "chart_insight", "business_type": "RESTAURANT", "cnt": 200}
+        ]
 
         mock_pool, mock_conn = _make_mock_pool_with_rows(
-            candidate_rows, already_counts
+            candidate_rows, already_counts, total_quality
         )
 
         with patch("scripts.corpus_eval_freeze._make_pool", new=AsyncMock(return_value=mock_pool)):
@@ -259,11 +303,15 @@ class TestRunFreezeIdempotency:
 
     @pytest.mark.asyncio
     async def test_two_buckets_independent(self):
-        """Two buckets: one at cap, one partial — each handled independently."""
+        """Two buckets: one at cap, one partial — each handled independently.
+
+        RESTAURANT: total=200, proportional_cap=60, already=30 → need=0.
+        FACTORY:    total=200, proportional_cap=60, already=0  → need=30, select 2.
+        """
         candidate_rows = [
-            # bucket A: RESTAURANT already at 30 → need=0, these should NOT be picked
+            # bucket A: RESTAURANT already at 30 → need=0, this should NOT be picked
             {"id": 1, "source": "chart_insight", "business_type": "RESTAURANT"},
-            # bucket B: FACTORY already at 0 → need=30, pick up to 2 here
+            # bucket B: FACTORY already at 0 → need up to proportional_cap, pick 2 available
             {"id": 2, "source": "chart_insight", "business_type": "FACTORY"},
             {"id": 3, "source": "chart_insight", "business_type": "FACTORY"},
         ]
@@ -271,15 +319,20 @@ class TestRunFreezeIdempotency:
             {"source": "chart_insight", "business_type": "RESTAURANT", "cnt": 30},
             # FACTORY has 0 → not in this list
         ]
+        total_quality = [
+            {"source": "chart_insight", "business_type": "RESTAURANT", "cnt": 200},
+            {"source": "chart_insight", "business_type": "FACTORY", "cnt": 200},
+        ]
 
         mock_pool, mock_conn = _make_mock_pool_with_rows(
-            candidate_rows, already_counts
+            candidate_rows, already_counts, total_quality
         )
 
         with patch("scripts.corpus_eval_freeze._make_pool", new=AsyncMock(return_value=mock_pool)):
             result = await run_freeze(n=30, dry_run=False, dsn="postgresql://test/db")
 
-        # RESTAURANT: 30 already, no new. FACTORY: 0 already, selects 2 (all available)
+        # RESTAURANT: 30 already, effective_target=30 → no new.
+        # FACTORY: 0 already, effective_target=30 but only 2 available → selects 2.
         assert result["n_new"] == 2
         assert result["n_already"] == 30
 
@@ -460,6 +513,193 @@ class TestRefreshLoopDryRun:
 
 
 # ===========================================================================
+# Fix 4 (S1): Proportional cap ≤ 30% + --rebalance mode
+# ===========================================================================
+
+def _make_mock_pool_with_four_rows(
+    candidate_rows: List[Dict],
+    already_frozen: List[Dict],
+    total_quality_rows: List[Dict],
+) -> tuple:
+    """Build a mock pool for the extended run_freeze that fetches 3 result sets."""
+    mock_conn = AsyncMock()
+    mock_conn.fetch.side_effect = [
+        [_make_asyncpg_record(r) for r in candidate_rows],
+        [_make_asyncpg_record(r) for r in already_frozen],
+        [_make_asyncpg_record(r) for r in total_quality_rows],
+    ]
+    mock_conn.execute = AsyncMock()
+    mock_pool = MagicMock()
+    mock_pool.acquire.return_value.__aenter__ = AsyncMock(return_value=mock_conn)
+    mock_pool.acquire.return_value.__aexit__ = AsyncMock(return_value=False)
+    mock_pool.close = AsyncMock()
+    return mock_pool, mock_conn
+
+
+class TestProportionalCap:
+    """Fix 4 (S1): run_freeze must never freeze more than max_frac of a bucket."""
+
+    @pytest.mark.asyncio
+    async def test_small_bucket_capped_at_max_frac(self):
+        """A 26-row bucket with max_frac=0.30 → cap=floor(26*0.30)=7, not 30."""
+        # 26 total quality≥4 rows; 26 candidates (none frozen yet)
+        candidate_rows = [
+            {"id": i, "source": "chat_qa", "business_type": "factory"}
+            for i in range(1, 27)
+        ]
+        total_quality = [{"source": "chat_qa", "business_type": "factory", "cnt": 26}]
+
+        mock_pool, mock_conn = _make_mock_pool_with_four_rows(
+            candidate_rows, [], total_quality
+        )
+
+        with patch("scripts.corpus_eval_freeze._make_pool", new=AsyncMock(return_value=mock_pool)):
+            result = await run_freeze(n=30, dry_run=False, dsn="postgresql://test/db", max_frac=0.30)
+
+        # cap = floor(26 * 0.30) = floor(7.8) = 7
+        assert result["n_new"] == 7, (
+            f"Small bucket (26 rows) must be capped at 7 (30%), not 30. Got: {result['n_new']}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_large_bucket_capped_at_n(self):
+        """A 200-row bucket with max_frac=0.30 → proportional cap=60 > n=30 → cap=30."""
+        candidate_rows = [
+            {"id": i, "source": "chart_insight", "business_type": "restaurant"}
+            for i in range(1, 201)
+        ]
+        total_quality = [{"source": "chart_insight", "business_type": "restaurant", "cnt": 200}]
+
+        mock_pool, mock_conn = _make_mock_pool_with_four_rows(
+            candidate_rows, [], total_quality
+        )
+
+        with patch("scripts.corpus_eval_freeze._make_pool", new=AsyncMock(return_value=mock_pool)):
+            result = await run_freeze(n=30, dry_run=False, dsn="postgresql://test/db", max_frac=0.30)
+
+        # floor(200 * 0.30) = 60, but min(30, 60) = 30
+        assert result["n_new"] == 30
+
+    @pytest.mark.asyncio
+    async def test_proportional_cap_dry_run(self):
+        """Dry-run includes max_frac in the result dict."""
+        candidate_rows = [
+            {"id": i, "source": "chat_qa", "business_type": "factory"}
+            for i in range(1, 27)
+        ]
+        total_quality = [{"source": "chat_qa", "business_type": "factory", "cnt": 26}]
+
+        mock_pool, _ = _make_mock_pool_with_four_rows(candidate_rows, [], total_quality)
+
+        with patch("scripts.corpus_eval_freeze._make_pool", new=AsyncMock(return_value=mock_pool)):
+            result = await run_freeze(n=30, dry_run=True, dsn="postgresql://test/db", max_frac=0.30)
+
+        assert result["dry_run"] is True
+        assert "max_frac" in result
+        assert result["max_frac"] == 0.30
+        # cap = 7, so n_new should be 7
+        assert result["n_new"] == 7
+
+
+class TestRebalance:
+    """Fix 4 (S1): run_rebalance must unfreeze over-cap rows, idempotently."""
+
+    @pytest.mark.asyncio
+    async def test_rebalance_unfreeze_overcapped_bucket(self):
+        """Bucket with 26 total and 26 frozen → cap=7 → unfreeze 19 (newest first)."""
+        from scripts.corpus_eval_freeze import run_rebalance
+
+        # All 26 frozen, ordered newest-first (id 26 down to 1)
+        frozen_rows = [
+            {"id": 26 - i, "source": "chat_qa", "business_type": "factory"}
+            for i in range(26)
+        ]
+        total_quality = [{"source": "chat_qa", "business_type": "factory", "cnt": 26}]
+
+        mock_conn = AsyncMock()
+        mock_conn.fetch.side_effect = [
+            [_make_asyncpg_record(r) for r in frozen_rows],
+            [_make_asyncpg_record(r) for r in total_quality],
+        ]
+        mock_conn.execute = AsyncMock()
+        mock_pool = MagicMock()
+        mock_pool.acquire.return_value.__aenter__ = AsyncMock(return_value=mock_conn)
+        mock_pool.acquire.return_value.__aexit__ = AsyncMock(return_value=False)
+        mock_pool.close = AsyncMock()
+
+        with patch("scripts.corpus_eval_freeze._make_pool", new=AsyncMock(return_value=mock_pool)):
+            result = await run_rebalance(dry_run=False, dsn="postgresql://test/db", max_frac=0.30)
+
+        # cap = floor(26 * 0.30) = 7 → excess = 26 - 7 = 19
+        assert result["n_unfrozen"] == 19, (
+            f"Expected 19 rows unfrozen (cap=7), got {result['n_unfrozen']}"
+        )
+        assert result["over_capped_buckets"] == 1
+
+        # execute called once with 19 IDs
+        mock_conn.execute.assert_called_once()
+        unfreeze_ids = mock_conn.execute.call_args[0][1]
+        assert len(unfreeze_ids) == 19
+
+    @pytest.mark.asyncio
+    async def test_rebalance_within_cap_no_action(self):
+        """Bucket at 7/26 frozen (26.9%) is within 30% cap — no unfreezing."""
+        from scripts.corpus_eval_freeze import run_rebalance
+
+        frozen_rows = [
+            {"id": i, "source": "chart_insight", "business_type": "restaurant"}
+            for i in range(1, 8)  # 7 rows frozen
+        ]
+        total_quality = [{"source": "chart_insight", "business_type": "restaurant", "cnt": 26}]
+
+        mock_conn = AsyncMock()
+        mock_conn.fetch.side_effect = [
+            [_make_asyncpg_record(r) for r in frozen_rows],
+            [_make_asyncpg_record(r) for r in total_quality],
+        ]
+        mock_conn.execute = AsyncMock()
+        mock_pool = MagicMock()
+        mock_pool.acquire.return_value.__aenter__ = AsyncMock(return_value=mock_conn)
+        mock_pool.acquire.return_value.__aexit__ = AsyncMock(return_value=False)
+        mock_pool.close = AsyncMock()
+
+        with patch("scripts.corpus_eval_freeze._make_pool", new=AsyncMock(return_value=mock_pool)):
+            result = await run_rebalance(dry_run=False, dsn="postgresql://test/db", max_frac=0.30)
+
+        assert result["n_unfrozen"] == 0
+        mock_conn.execute.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_rebalance_dry_run_no_db_write(self):
+        """Dry-run must not write to DB."""
+        from scripts.corpus_eval_freeze import run_rebalance
+
+        frozen_rows = [
+            {"id": i, "source": "chat_qa", "business_type": "factory"}
+            for i in range(1, 27)  # 26 frozen
+        ]
+        total_quality = [{"source": "chat_qa", "business_type": "factory", "cnt": 26}]
+
+        mock_conn = AsyncMock()
+        mock_conn.fetch.side_effect = [
+            [_make_asyncpg_record(r) for r in frozen_rows],
+            [_make_asyncpg_record(r) for r in total_quality],
+        ]
+        mock_conn.execute = AsyncMock()
+        mock_pool = MagicMock()
+        mock_pool.acquire.return_value.__aenter__ = AsyncMock(return_value=mock_conn)
+        mock_pool.acquire.return_value.__aexit__ = AsyncMock(return_value=False)
+        mock_pool.close = AsyncMock()
+
+        with patch("scripts.corpus_eval_freeze._make_pool", new=AsyncMock(return_value=mock_pool)):
+            result = await run_rebalance(dry_run=True, dsn="postgresql://test/db", max_frac=0.30)
+
+        assert result["dry_run"] is True
+        assert result["n_unfrozen"] == 19
+        mock_conn.execute.assert_not_called()
+
+
+# ===========================================================================
 # 6. Parse smoke — all three modified/new scripts are valid Python
 # ===========================================================================
 
@@ -484,3 +724,6 @@ class TestParseSmokeP2:
 
     def test_export_distillation_dataset_parses(self):
         self._parse("export_distillation_dataset")
+
+    def test_backfill_teacher_model_parses(self):
+        self._parse("backfill_teacher_model")

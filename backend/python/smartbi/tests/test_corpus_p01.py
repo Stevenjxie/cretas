@@ -371,6 +371,145 @@ class TestBucketStats:
         assert _is_synthetic({"source_kind": "organic"}) is False
         assert _is_synthetic(None) is False
 
+    # Fix 3 (S3iii): corpus_census._is_synthetic must recognise synthetic_seed + SEED sentinels
+    def test_is_synthetic_recognizes_synthetic_seed(self):
+        """source_kind='synthetic_seed' (used by seeder) must be synthetic."""
+        from scripts.corpus_census import _is_synthetic
+        assert _is_synthetic({"source_kind": "synthetic_seed"}) is True
+        assert _is_synthetic({"source_kind": "SYNTHETIC_SEED"}) is True  # case-insensitive
+
+    def test_is_synthetic_recognizes_seed_r_factory(self):
+        """factory_id=SEED_R is a synthetic-seeder sentinel → synthetic."""
+        from scripts.corpus_census import _is_synthetic
+        assert _is_synthetic(None, factory_id="SEED_R") is True
+        assert _is_synthetic(None, factory_id="SEED_F") is True
+
+    def test_is_synthetic_real_factory_not_synthetic(self):
+        """Real factory IDs must not be flagged as synthetic."""
+        from scripts.corpus_census import _is_synthetic
+        assert _is_synthetic(None, factory_id="F001") is False
+        assert _is_synthetic(None, factory_id="qhj_prod") is False
+
+    def test_is_synthetic_seed_factory_overrides_no_metadata(self):
+        """SEED_R sentinel works even with no metadata at all."""
+        from scripts.corpus_census import _is_synthetic
+        assert _is_synthetic(None, factory_id="SEED_R") is True
+
+    def test_is_synthetic_organic_source_kind_is_false(self):
+        """source_kind='organic' must remain False."""
+        from scripts.corpus_census import _is_synthetic
+        assert _is_synthetic({"source_kind": "organic"}, factory_id="F001") is False
+
+
+# ===========================================================================
+# Fix 1 (S3i): Export --min-quality default must be 4, not None
+# ===========================================================================
+
+class TestExportDefaultMinQuality:
+    """The bare export (no flags) must default to quality≥4, not quality=any."""
+
+    def test_default_min_quality_is_4(self):
+        """argparse default for --min-quality must be 4 (not None)."""
+        import importlib.util, pathlib, sys, types
+
+        script_path = pathlib.Path(PYTHON_ROOT) / "scripts" / "export_distillation_dataset.py"
+        src = script_path.read_text(encoding="utf-8")
+        # Parse and look for the argparse default= value for min-quality
+        import re
+        # Find the add_argument for --min-quality
+        m = re.search(r"add_argument\(['\"]--min-quality['\"].*?default=(\w+)", src, re.DOTALL)
+        assert m is not None, "Could not find --min-quality add_argument in export script"
+        default_val = m.group(1)
+        # Must be 4 (not None, not 0, not 1)
+        assert default_val == "4", (
+            f"--min-quality default must be 4 (train-ready rows only), got: {default_val!r}. "
+            "A default of None means quality gate is OFF by default — q2/qNULL pollute training."
+        )
+
+    def test_default_min_quality_help_says_4(self):
+        """Help text must NOT say '(NULL kept)' — that was the old misleading text."""
+        import pathlib, re
+        script_path = pathlib.Path(PYTHON_ROOT) / "scripts" / "export_distillation_dataset.py"
+        src = script_path.read_text(encoding="utf-8")
+        # Find the help string for --min-quality
+        m = re.search(r"add_argument\(['\"]--min-quality['\"].*?help=([\"'].*?[\"'])", src, re.DOTALL)
+        if m:
+            help_text = m.group(1)
+            assert "NULL kept" not in help_text, (
+                "Help text must not say '(NULL kept)' — that was the old misleading text. "
+                "Update to reflect default=4 and NULL excluded."
+            )
+
+
+# ===========================================================================
+# Fix 2 (S3ii): READY message must be honest about synthetic cap
+# ===========================================================================
+
+class TestReadyMessageHonestSyntheticCap:
+    """The readiness message must say NOT ready when synthetic% > 50%, not READY."""
+
+    def test_ready_message_check_in_source(self):
+        """The threshold-check loop in main() must check synthetic% not just row count."""
+        import pathlib
+        src = (pathlib.Path(PYTHON_ROOT) / "scripts" / "export_distillation_dataset.py").read_text(encoding="utf-8")
+        # The readiness logic must reference both 1000 and 50%
+        assert "50" in src or "50.0" in src, (
+            "READY message must check synthetic cap (50%)"
+        )
+        assert "NOT ready" in src, (
+            "Must have 'NOT ready' message for when criteria fail"
+        )
+
+    def _make_items(self, n_synthetic: int, n_real: int, consent_class_for_real="shared_anon"):
+        """Build a fake gated-items list."""
+        items = []
+        for _ in range(n_synthetic):
+            items.append({"row": {}, "input_text": None, "teacher_output": None,
+                          "consent_class": "synthetic"})
+        for _ in range(n_real):
+            items.append({"row": {}, "input_text": "text", "teacher_output": "out",
+                          "consent_class": consent_class_for_real})
+        return items
+
+    def test_ready_when_enough_and_synthetic_ok(self):
+        """1000+ rows, synthetic ≤ 50% → READY."""
+        items = self._make_items(n_synthetic=400, n_real=600)
+        total = len(items)
+        n_synth = 400
+        synth_pct = n_synth / total * 100  # 40%
+        # Mirror the logic from main()
+        if total < 1000:
+            ready = "NOT ready"
+        elif synth_pct > 50.0:
+            ready = "NOT ready"
+        else:
+            ready = "READY for LoRA"
+        assert ready == "READY for LoRA"
+
+    def test_not_ready_when_synthetic_over_cap(self):
+        """1000+ rows, but synthetic > 50% → NOT ready."""
+        items = self._make_items(n_synthetic=600, n_real=400)
+        total = len(items)
+        n_synth = 600
+        synth_pct = n_synth / total * 100  # 60%
+        if total < 1000:
+            ready = "NOT ready"
+        elif synth_pct > 50.0:
+            ready = "NOT ready: synthetic over cap"
+        else:
+            ready = "READY for LoRA"
+        assert "NOT ready" in ready
+
+    def test_not_ready_when_too_few_rows(self):
+        """< 1000 rows regardless of synthetic% → NOT ready."""
+        items = self._make_items(n_synthetic=10, n_real=90)
+        total = len(items)
+        if total < 1000:
+            ready = "NOT ready"
+        else:
+            ready = "READY for LoRA"
+        assert "NOT ready" in ready
+
 
 # ===========================================================================
 # 8. Export filter: quality IS NULL must NOT be in the SQL

@@ -1200,3 +1200,166 @@ class TestBudgetOnFailure:
         assert result is not None, "Valid LLM response must produce an InsightResult"
         assert len(consume_calls) > 0, "consume() must be called on success path too"
         assert sum(c["tokens"] for c in consume_calls) > 0
+
+
+# ---------------------------------------------------------------------------
+# Fix 5: _get_teacher_model respects CHART_INSIGHT_LLM_SLOT env override
+# (records real model name, not slot name)
+# ---------------------------------------------------------------------------
+
+import enum as _enum  # noqa: E402
+
+# Minimal SLOT stub — mirrors what common.llm_router.SLOT exposes.
+# Kept local to these tests so they don't depend on the real router.
+class _FakeSLOT(_enum.Enum):
+    CHAT = "chat"
+    INSIGHTS = "insights"
+    CHART = "chart"
+    MAPPER = "mapper"
+    REASONING = "reasoning"
+    VL = "vl"
+    REVIEW = "review"
+
+
+def _make_svc_for_teacher() -> ChartInsightService:
+    """Minimal ChartInsightService (no DB needed for _get_teacher_model tests)."""
+    pool = MagicMock()
+    conn = AsyncMock()
+    pool.acquire.return_value.__aenter__ = AsyncMock(return_value=conn)
+    pool.acquire.return_value.__aexit__ = AsyncMock(return_value=None)
+    conn.fetchrow = AsyncMock(return_value=None)
+    conn.execute = AsyncMock(return_value=None)
+    conn.fetchval = AsyncMock(return_value=None)
+    return ChartInsightService(
+        pool=pool,
+        budget_tracker=FakeBudgetOk(),
+        promote_threshold=DEFAULT_PROMOTE_THRESHOLD,
+    )
+
+
+class TestGetTeacherModel:
+    """Fix 5 — _get_teacher_model resolution:
+      1. No env var → returns SLOT.CHART value ('chart'), or real model if get_model_for_slot returns one.
+      2. CHART_INSIGHT_LLM_SLOT=REVIEW → resolves SLOT.REVIEW ('review') or 'qwen3-max'.
+      3. get_model_for_slot available → returns the actual model name, NOT the slot name.
+      4. Unknown env value → falls back to SLOT.CHART (not crash).
+      5. llm_router import fails entirely → returns 'unknown' (not crash).
+    """
+
+    # ------------------------------------------------------------------
+    # Test 1: no env override → returns SLOT.CHART fallback value
+    # ------------------------------------------------------------------
+
+    def test_no_env_returns_chart_slot_value(self):
+        """Without CHART_INSIGHT_LLM_SLOT, _get_teacher_model must return SLOT.CHART value
+        (or the router's resolved model for SLOT.CHART — either is acceptable).
+        Must NOT return 'unknown' when router is importable."""
+        svc = _make_svc_for_teacher()
+
+        # Patch common.llm_router to inject our fake SLOT (no get_model_for_slot → fallback path)
+        fake_router = MagicMock()
+        fake_router.SLOT = _FakeSLOT
+        del fake_router.get_model_for_slot  # ensure AttributeError path → fallback
+
+        os.environ.pop("CHART_INSIGHT_LLM_SLOT", None)
+        with patch.dict("sys.modules", {"common.llm_router": fake_router}):
+            result = svc._get_teacher_model()
+
+        # Without an env override, effective slot = SLOT.CHART, value = 'chart'
+        assert result == "chart", (
+            f"No env override → must return SLOT.CHART.value='chart', got {result!r}"
+        )
+
+    # ------------------------------------------------------------------
+    # Test 2: CHART_INSIGHT_LLM_SLOT=REVIEW → slot value 'review'
+    # ------------------------------------------------------------------
+
+    def test_review_env_returns_review_slot_value(self):
+        """CHART_INSIGHT_LLM_SLOT=REVIEW → effective slot = SLOT.REVIEW, value = 'review'."""
+        svc = _make_svc_for_teacher()
+
+        fake_router = MagicMock()
+        fake_router.SLOT = _FakeSLOT
+        del fake_router.get_model_for_slot  # no router resolution → fallback to slot value
+
+        os.environ["CHART_INSIGHT_LLM_SLOT"] = "REVIEW"
+        try:
+            with patch.dict("sys.modules", {"common.llm_router": fake_router}):
+                result = svc._get_teacher_model()
+        finally:
+            os.environ.pop("CHART_INSIGHT_LLM_SLOT", None)
+
+        assert result == "review", (
+            f"CHART_INSIGHT_LLM_SLOT=REVIEW → must return 'review' (slot value), got {result!r}"
+        )
+
+    # ------------------------------------------------------------------
+    # Test 3: get_model_for_slot returns real model name
+    # ------------------------------------------------------------------
+
+    def test_get_model_for_slot_returns_real_name(self):
+        """When get_model_for_slot is available and returns 'qwen3-max', _get_teacher_model
+        must return 'qwen3-max' — NOT the slot name 'review'."""
+        svc = _make_svc_for_teacher()
+
+        fake_router = MagicMock()
+        fake_router.SLOT = _FakeSLOT
+        fake_router.get_model_for_slot = MagicMock(return_value="qwen3-max")
+
+        os.environ["CHART_INSIGHT_LLM_SLOT"] = "REVIEW"
+        try:
+            with patch.dict("sys.modules", {"common.llm_router": fake_router}):
+                result = svc._get_teacher_model()
+        finally:
+            os.environ.pop("CHART_INSIGHT_LLM_SLOT", None)
+
+        assert result == "qwen3-max", (
+            f"get_model_for_slot returns 'qwen3-max' → must record 'qwen3-max', not slot name; "
+            f"got {result!r}"
+        )
+        # Verify get_model_for_slot was called with SLOT.REVIEW
+        fake_router.get_model_for_slot.assert_called_once_with(_FakeSLOT.REVIEW)
+
+    # ------------------------------------------------------------------
+    # Test 4: unknown env value → falls back to SLOT.CHART, not crash
+    # ------------------------------------------------------------------
+
+    def test_unknown_env_value_falls_back_to_chart(self):
+        """CHART_INSIGHT_LLM_SLOT=BOGUS_SLOT → KeyError in SLOT[name] → keep SLOT.CHART.
+        Must return 'chart' (SLOT.CHART value), not 'unknown' and not raise."""
+        svc = _make_svc_for_teacher()
+
+        fake_router = MagicMock()
+        fake_router.SLOT = _FakeSLOT
+        del fake_router.get_model_for_slot
+
+        os.environ["CHART_INSIGHT_LLM_SLOT"] = "BOGUS_SLOT_DOES_NOT_EXIST"
+        try:
+            with patch.dict("sys.modules", {"common.llm_router": fake_router}):
+                result = svc._get_teacher_model()
+        finally:
+            os.environ.pop("CHART_INSIGHT_LLM_SLOT", None)
+
+        assert result == "chart", (
+            f"Unknown env value → fallback to SLOT.CHART value 'chart', got {result!r}"
+        )
+
+    # ------------------------------------------------------------------
+    # Test 5: llm_router import fails entirely → returns 'unknown', not crash
+    # ------------------------------------------------------------------
+
+    def test_import_failure_returns_unknown(self):
+        """If common.llm_router cannot be imported, _get_teacher_model must return 'unknown'
+        gracefully (non-blocking, never raises)."""
+        svc = _make_svc_for_teacher()
+
+        os.environ.pop("CHART_INSIGHT_LLM_SLOT", None)
+        # Inject None as the module value → import succeeds syntactically but
+        # 'from common.llm_router import SLOT' raises AttributeError, which triggers the
+        # outer except → returns 'unknown'.
+        with patch.dict("sys.modules", {"common.llm_router": None}):
+            result = svc._get_teacher_model()
+
+        assert result == "unknown", (
+            f"Import failure must return 'unknown' safely, got {result!r}"
+        )
