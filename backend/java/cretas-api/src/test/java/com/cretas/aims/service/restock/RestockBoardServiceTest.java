@@ -62,7 +62,7 @@ class RestockBoardServiceTest {
         when(salesOrderItemRepository.sumDemandByProductForDeliveryDate(eq(FACTORY_ID), eq(JUNE_3), anyCollection()))
                 .thenReturn(List.of(demand("PT-BEEF", "beef shank", BOX_UNIT, BOX_UNIT, "1473")));
         when(productTypeRepository.findById("PT-BEEF")).thenReturn(Optional.of(productType("200", "1.0")));
-        when(finishedGoodsBatchRepository.sumAvailableQuantityByProductTypeAndUnit(FACTORY_ID, "PT-BEEF", BOX_UNIT))
+        when(finishedGoodsBatchRepository.sumSaleableQuantityByProductTypeAndUnitExcludeRd(FACTORY_ID, "PT-BEEF", BOX_UNIT, WarehouseCodes.WH_RD))
                 .thenReturn(new BigDecimal("1000"));
         when(semiFinishedInventoryRepository.sumAvailableByProduct(FACTORY_ID, "PT-BEEF")).thenReturn(BigDecimal.ZERO);
         when(productionPlanRepository.sumPlannedQuantityByProductAndStatuses(eq(FACTORY_ID), eq("PT-BEEF"), anyCollection()))
@@ -82,7 +82,7 @@ class RestockBoardServiceTest {
         when(salesOrderItemRepository.sumDemandByProductForDeliveryDate(eq(FACTORY_ID), eq(JUNE_3), anyCollection()))
                 .thenReturn(List.of(demand("PT-TONGUE", "pork tongue", BOX_UNIT, BOX_UNIT, "2000")));
         when(productTypeRepository.findById("PT-TONGUE")).thenReturn(Optional.of(productType("120", "0.9")));
-        when(finishedGoodsBatchRepository.sumAvailableQuantityByProductTypeAndUnit(FACTORY_ID, "PT-TONGUE", BOX_UNIT))
+        when(finishedGoodsBatchRepository.sumSaleableQuantityByProductTypeAndUnitExcludeRd(FACTORY_ID, "PT-TONGUE", BOX_UNIT, WarehouseCodes.WH_RD))
                 .thenReturn(BigDecimal.ZERO);
         when(semiFinishedInventoryRepository.sumAvailableByProduct(FACTORY_ID, "PT-TONGUE"))
                 .thenReturn(new BigDecimal("150"));
@@ -101,7 +101,7 @@ class RestockBoardServiceTest {
         when(salesOrderItemRepository.sumDemandByProductForDeliveryDate(eq(FACTORY_ID), eq(JUNE_3), anyCollection()))
                 .thenReturn(List.of(demand("PT-X", "x", BOX_UNIT, BOX_UNIT, "100")));
         when(productTypeRepository.findById("PT-X")).thenReturn(Optional.of(productType(null, null)));
-        when(finishedGoodsBatchRepository.sumAvailableQuantityByProductTypeAndUnit(FACTORY_ID, "PT-X", BOX_UNIT))
+        when(finishedGoodsBatchRepository.sumSaleableQuantityByProductTypeAndUnitExcludeRd(FACTORY_ID, "PT-X", BOX_UNIT, WarehouseCodes.WH_RD))
                 .thenReturn(BigDecimal.ZERO);
         when(semiFinishedInventoryRepository.sumAvailableByProduct(FACTORY_ID, "PT-X"))
                 .thenReturn(new BigDecimal("50"));
@@ -125,7 +125,7 @@ class RestockBoardServiceTest {
         when(salesOrderItemRepository.sumDemandByProductForDeliveryDate(eq(FACTORY_ID), eq(JUNE_3), anyCollection()))
                 .thenReturn(List.of(demand("PT-BEEF", "beef shank", BOX_UNIT, BOX_UNIT, "1473")));
         when(productTypeRepository.findById("PT-BEEF")).thenReturn(Optional.of(productType("200", "0.8")));
-        when(finishedGoodsBatchRepository.sumAvailableQuantityByProductTypeAndUnit(FACTORY_ID, "PT-BEEF", BOX_UNIT))
+        when(finishedGoodsBatchRepository.sumSaleableQuantityByProductTypeAndUnitExcludeRd(FACTORY_ID, "PT-BEEF", BOX_UNIT, WarehouseCodes.WH_RD))
                 .thenReturn(new BigDecimal("1000"));
         when(semiFinishedInventoryRepository.sumAvailableByProduct(FACTORY_ID, "PT-BEEF"))
                 .thenReturn(new BigDecimal("100"));
@@ -154,7 +154,7 @@ class RestockBoardServiceTest {
         when(salesOrderItemRepository.sumDemandByProductForDeliveryDate(eq(FACTORY_ID), eq(JUNE_1), anyCollection()))
                 .thenReturn(List.of(demand("PT-BEEF", "beef shank", BOX_UNIT, BOX_UNIT, "100")));
         when(productTypeRepository.findById("PT-BEEF")).thenReturn(Optional.of(productType("200", "0.8")));
-        when(finishedGoodsBatchRepository.sumAvailableQuantityByProductTypeAndUnit(FACTORY_ID, "PT-BEEF", BOX_UNIT))
+        when(finishedGoodsBatchRepository.sumSaleableQuantityByProductTypeAndUnitExcludeRd(FACTORY_ID, "PT-BEEF", BOX_UNIT, WarehouseCodes.WH_RD))
                 .thenReturn(BigDecimal.ZERO);
         when(semiFinishedInventoryRepository.sumAvailableByProduct(FACTORY_ID, "PT-BEEF"))
                 .thenReturn(BigDecimal.ZERO);
@@ -185,7 +185,7 @@ class RestockBoardServiceTest {
                 .thenReturn(List.of(demand("PT-BEEF", "beef shank", BOX_UNIT, BOX_UNIT, "0")));
         when(productTypeRepository.findById("PT-BEEF")).thenReturn(Optional.of(productType("200", "1.0")));
         // All-warehouse FG: 500 boxes (WH-LOG 200 + WH-WKS 300)
-        when(finishedGoodsBatchRepository.sumAvailableQuantityByProductTypeAndUnit(FACTORY_ID, "PT-BEEF", BOX_UNIT))
+        when(finishedGoodsBatchRepository.sumSaleableQuantityByProductTypeAndUnitExcludeRd(FACTORY_ID, "PT-BEEF", BOX_UNIT, WarehouseCodes.WH_RD))
                 .thenReturn(new BigDecimal("500"));
         // WH-LOG only: 200 boxes (WH-WKS 300 are NOT shippable)
         when(finishedGoodsBatchRepository.sumShippableQuantityByProductTypeAndWarehouseCodeAndUnit(

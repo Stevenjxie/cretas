@@ -53,4 +53,12 @@ public class WarehouseResolver {
     public String resolveWorkshopId(String factoryId) {
         return resolveId(factoryId, WarehouseCodes.WH_WKS);
     }
+
+    /**
+     * 研发/中试库 (WH-RD) id — 试制批次 (is_trial=true) 产出专属仓库。
+     * SP10 §RD-1, V20261023_01 seed。
+     */
+    public String resolveRdId(String factoryId) {
+        return resolveId(factoryId, WarehouseCodes.WH_RD);
+    }
 }

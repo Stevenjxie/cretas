@@ -106,6 +106,8 @@ public class FactoryWarehouse extends BaseEntity {
         /** 调拨在途仓 - 跨厂 / 跨仓库调拨中物料 */
         TRANSFER,
         /** 盐化仓 - 盐水/腌制工序专属仓库，独立出量记录 (SP7 §3.1) */
-        SALTED
+        SALTED,
+        /** 研发/中试库 - 试制批次 (is_trial=true) 产出专属仓库，不混入可售库存 (SP10 §RD-1) */
+        RD
     }
 }

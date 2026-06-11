@@ -3,6 +3,7 @@ package com.cretas.aims.service.restock;
 import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.enums.ProductionPlanStatus;
 import com.cretas.aims.entity.enums.SalesOrderStatus;
+import com.cretas.aims.entity.factory.WarehouseCodes;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.ProductionPlanRepository;
 import com.cretas.aims.repository.SemiFinishedInventoryRepository;
@@ -90,7 +91,7 @@ class WarehouseRestockBoardServiceTest {
                         demand("PT-ZS", "猪舌120g", "WH-PUDONG",  "浦东总仓",  "盒", "盒", "200")));
         when(productTypeRepository.findById("PT-ZS"))
                 .thenReturn(Optional.of(pt("PT-ZS", "120", "1.0")));
-        when(finishedGoodsBatchRepository.sumAvailableQuantityByProductTypeAndUnit(anyString(), anyString(), eq("盒")))
+        when(finishedGoodsBatchRepository.sumSaleableQuantityByProductTypeAndUnitExcludeRd(anyString(), anyString(), eq("盒"), eq(WarehouseCodes.WH_RD)))
                 .thenReturn(new BigDecimal("1000"));
         when(semiFinishedInventoryRepository.sumAvailableByProduct(anyString(), anyString()))
                 .thenReturn(BigDecimal.ZERO);
@@ -117,7 +118,7 @@ class WarehouseRestockBoardServiceTest {
                         demand("PT-ZS", "猪舌120g", "WH-BEILUN", "北仑", "盒", "盒", "2000")));
         when(productTypeRepository.findById("PT-ZS"))
                 .thenReturn(Optional.of(pt("PT-ZS", "120", null)));
-        when(finishedGoodsBatchRepository.sumAvailableQuantityByProductTypeAndUnit("F006", "PT-ZS", "盒"))
+        when(finishedGoodsBatchRepository.sumSaleableQuantityByProductTypeAndUnitExcludeRd("F006", "PT-ZS", "盒", WarehouseCodes.WH_RD))
                 .thenReturn(new BigDecimal("500"));
         when(semiFinishedInventoryRepository.sumAvailableByProduct("F006", "PT-ZS"))
                 .thenReturn(BigDecimal.ZERO);
@@ -141,7 +142,7 @@ class WarehouseRestockBoardServiceTest {
                         demand("PT-ZS", "猪舌120g", "WH-BEILUN", "北仑", "盒", "盒", "531")));
         when(productTypeRepository.findById("PT-ZS"))
                 .thenReturn(Optional.of(pt("PT-ZS", "120", "1.0")));
-        when(finishedGoodsBatchRepository.sumAvailableQuantityByProductTypeAndUnit("F006", "PT-ZS", "盒"))
+        when(finishedGoodsBatchRepository.sumSaleableQuantityByProductTypeAndUnitExcludeRd("F006", "PT-ZS", "盒", WarehouseCodes.WH_RD))
                 .thenReturn(new BigDecimal("800"));
         when(semiFinishedInventoryRepository.sumAvailableByProduct("F006", "PT-ZS"))
                 .thenReturn(BigDecimal.ZERO);
@@ -162,7 +163,7 @@ class WarehouseRestockBoardServiceTest {
                         demand("PT-ZS", "猪舌120g", "未分仓", null, "盒", "盒", "300")));
         when(productTypeRepository.findById("PT-ZS"))
                 .thenReturn(Optional.of(pt("PT-ZS", "120", null)));
-        when(finishedGoodsBatchRepository.sumAvailableQuantityByProductTypeAndUnit("F006", "PT-ZS", "盒"))
+        when(finishedGoodsBatchRepository.sumSaleableQuantityByProductTypeAndUnitExcludeRd("F006", "PT-ZS", "盒", WarehouseCodes.WH_RD))
                 .thenReturn(BigDecimal.ZERO);
         when(semiFinishedInventoryRepository.sumAvailableByProduct("F006", "PT-ZS"))
                 .thenReturn(BigDecimal.ZERO);
@@ -186,7 +187,7 @@ class WarehouseRestockBoardServiceTest {
                         demand("PT-ZS", "猪舌120g", "WH-C", "C仓", "盒", "盒", "300")));
         when(productTypeRepository.findById("PT-ZS"))
                 .thenReturn(Optional.of(pt("PT-ZS", "120", null)));
-        when(finishedGoodsBatchRepository.sumAvailableQuantityByProductTypeAndUnit(anyString(), anyString(), eq("盒")))
+        when(finishedGoodsBatchRepository.sumSaleableQuantityByProductTypeAndUnitExcludeRd(anyString(), anyString(), eq("盒"), eq(WarehouseCodes.WH_RD)))
                 .thenReturn(BigDecimal.ZERO);
         when(semiFinishedInventoryRepository.sumAvailableByProduct(anyString(), anyString()))
                 .thenReturn(BigDecimal.ZERO);

@@ -391,9 +391,13 @@ public class RestockBoardService {
                 .build();
     }
 
+    /**
+     * SP10 §RD-1: 备货看板可售成品库存（盒），排除研发/中试库 (WH-RD)。
+     * 试制批次产出进研发库，不计入生产计划决策依据。
+     */
     private BigDecimal finishedGoods(String factoryId, String productTypeId) {
-        return nz(finishedGoodsBatchRepository.sumAvailableQuantityByProductTypeAndUnit(
-                factoryId, productTypeId, BOX_UNIT));
+        return nz(finishedGoodsBatchRepository.sumSaleableQuantityByProductTypeAndUnitExcludeRd(
+                factoryId, productTypeId, BOX_UNIT, WarehouseCodes.WH_RD));
     }
 
     /**
