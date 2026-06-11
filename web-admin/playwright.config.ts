@@ -382,5 +382,36 @@ export default defineConfig({
         video: { mode: 'on', size: { width: 1920, height: 1080 } },
       },
     },
+    // P26 — 批次详情双产出 + 盘点全链 headed E2E (2026-06-11)
+    // Per .claude/rules/playwright-headed-mode.md: 强制 headed + zh-CN + 1920×1080
+    // PLAYWRIGHT_PORT=9223 PLAYWRIGHT_CHAT_ID=p26 (跟 #41 的 9222 错开)
+    // Run: PLAYWRIGHT_PORT=9223 PLAYWRIGHT_CHAT_ID=p26 npx playwright test --project p26-headed
+    // Note: --user-data-dir 在这个版本 Playwright 里需用 launchPersistentContext, 改 --remote-debugging-port only
+    {
+      name: 'p26-headed',
+      testMatch: 'p26-batch-stocktake-headed-e2e.spec.ts',
+      fullyParallel: false,
+      workers: 1,
+      use: {
+        // ⭐ HEADED — 强制 headed (中文字体/CSS/客户演示真实)
+        headless: false,
+        viewport: { width: 1920, height: 1080 },
+        locale: 'zh-CN',
+        timezoneId: 'Asia/Shanghai',
+        launchOptions: {
+          args: [
+            `--remote-debugging-port=${Number(process.env.PLAYWRIGHT_PORT) || 9223}`,
+            '--lang=zh-CN',
+            '--font-render-hinting=none',
+            '--disable-blink-features=AutomationControlled',
+            '--window-position=500,0',  // p26 中位 (9223 = chat B 中)
+            '--window-size=1920,1080',
+          ],
+          slowMo: 100,
+        },
+        screenshot: { mode: 'on', fullPage: true },
+        video: { mode: 'on', size: { width: 1920, height: 1080 } },
+      },
+    },
   ],
 });
