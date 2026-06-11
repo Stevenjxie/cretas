@@ -1821,16 +1821,16 @@ const YieldStepReportScreen: React.FC = () => {
     );
   }
 
-  // ========================= 两点报工: 哨兵屏分支 (必须在 totalSteps===0 之前) =========================
-  // 检测到哨兵 task 时走简化屏 (无时段/工时, 仅领料 or 产出)。
-  // ⚠️ 哨兵批次无真实工序 step → totalSteps 可能为 0; 若放在 totalSteps===0 之后会被"未生成工序任务"
-  //    空状态截断 → 操作员到不了简化报工屏 (空白). 故必须在 totalSteps===0 检查之前.
-  if (isSentinelBatch) {
-    if (isSentinelMaterial) return renderSentinelMaterialInputScreen();
-    if (isSentinelOutput) return renderSentinelFinalOutputScreen();
-  }
-
-  if (totalSteps === 0) {
+  // ========================= 两点报工: 哨兵屏分支已下移到主 return 之前 =========================
+  // ⚠️ TDZ class 根治 (#723/#724 残留): 哨兵屏渲染函数 (renderSentinelMaterialInputScreen /
+  //    renderSentinelFinalOutputScreen) 引用大量组件 body const (renderEvidenceBlock / 各 handler /
+  //    unit / outUnit / ...). 之前哨兵分支在此早返回处调用, 任何"声明在早返回之后的 const"都会触发
+  //    TDZ ReferenceError → Hermes OTA 下静默空白. 逐个上移 const 治标不治本 (易再漏).
+  //    根治: 把哨兵分支整体下移到主 return 正前方 (见文件底部), 此时所有 const 已初始化, 永不 TDZ.
+  //    代价: 下方 totalSteps===0 / screenPhase==='done' 早返回需 guard !isSentinelBatch, 让哨兵批次
+  //    不被这些早返回截断, 流到底部哨兵分支.
+  // 哨兵批次有 2 个真实 task (领料+产出) → totalSteps≥1, 正常不触发此空状态; guard 仅防御性兜底.
+  if (totalSteps === 0 && !isSentinelBatch) {
     return (
       <ScreenWrapper>
         <View style={styles.centered}>
@@ -1845,7 +1845,9 @@ const YieldStepReportScreen: React.FC = () => {
   }
 
   // ========================= done 卡: 整批汇总 + 完工入库 =========================
-  if (screenPhase === 'done') {
+  // guard !isSentinelBatch: 哨兵批次两点全完成时 loadAll 也会 setScreenPhase('done'), 但哨兵屏
+  // 自带 alreadyCompleted/alreadySubmitted 汇总, 应流到底部哨兵分支而非这张通用 done 卡.
+  if (screenPhase === 'done' && !isSentinelBatch) {
     const cum = yieldData?.cumulativeYieldRate;
     const inU = yieldData?.firstStepInputUnit;
     const outU = yieldData?.lastStepOutputUnit;
@@ -2002,6 +2004,16 @@ const YieldStepReportScreen: React.FC = () => {
       ) : null}
     </NeoCard>
   );
+
+  // ========================= 两点报工: 哨兵屏分支 (TDZ 根治 — 主 return 正前方) =========================
+  // 此处所有组件 body const (renderEvidenceBlock / 各 handler / renderHeader / unit / ... ) 均已初始化,
+  // 哨兵屏渲染函数引用任何 const 都不会 TDZ. 这是 #723/#724 逐个上移 const 的根治版.
+  // 上方 loading 早返回故意不 guard (哨兵屏依赖 yieldData/currentStepYield, loading 时应等加载完);
+  // totalSteps===0 / screenPhase==='done' 早返回已 guard !isSentinelBatch, 哨兵批次流到这里.
+  if (isSentinelBatch) {
+    if (isSentinelMaterial) return renderSentinelMaterialInputScreen();
+    if (isSentinelOutput) return renderSentinelFinalOutputScreen();
+  }
 
   return (
     <ScreenWrapper>
