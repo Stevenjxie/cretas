@@ -16,6 +16,7 @@ import {
   getSupervisors,
   listAvailableWip,
   createSecondaryPlan,
+  getReportModeDefault,
 } from '@/api/productionPlan';
 import type { WipInventoryItem } from '@/api/productionPlan';
 import { getProductWorkProcesses } from '@/api/processProduction';
@@ -330,11 +331,25 @@ const supervisors = ref<TableRow[]>([]);
 // AI Entry Drawer
 const aiEntryVisible = ref(false);
 
+// Fable 审计修复 (问题1 — 多租户安全): 工厂级免工序报工默认值。
+// F006=true (新建默认勾选两点); 其他工厂=false (默认不勾, 逐道)。取数失败兜底 false (安全=逐道)。
+const skipReportingFactoryDefault = ref(false);
+async function loadReportModeDefault() {
+  if (!factoryId.value) return;
+  try {
+    const res = await getReportModeDefault(factoryId.value);
+    skipReportingFactoryDefault.value = res.data === true;
+  } catch {
+    skipReportingFactoryDefault.value = false;
+  }
+}
+
 onMounted(() => {
   loadData();
   loadProductTypes();
   loadReferenceData();
   loadCustomers();
+  loadReportModeDefault();
 });
 
 async function loadData() {
@@ -486,8 +501,9 @@ function handleCreate() {
     sourceOrderId: '',
     sourceOrderItemId: '',
     customFields: {} as TableRow,
-    // Wave2: 新建默认 true (免工序报工); 产品加载后若 0 工序自动锁定为 true
-    skipProcessReporting: true,
+    // Fable 审计修复 (问题1 — 多租户安全): 默认值取工厂配置 (F006=true 两点 / 其他=false 逐道),
+    // 不再全系统硬编码 true。产品加载后若 0 工序仍自动锁定为 true (loadBomProcesses)。
+    skipProcessReporting: skipReportingFactoryDefault.value,
   };
   productWorkProcessList.value = [];
   // T135 ITEM #1: 默认 CUSTOMER_ORDER — 预加载可选销售订单列表

@@ -24,6 +24,14 @@ public interface ProductionPlanService {
      * 创建生产计划
      */
     ProductionPlanDTO createProductionPlan(String factoryId, CreateProductionPlanRequest request, Long userId);
+
+    /**
+     * 获取工厂级"免工序报工默认值" (Fable 审计修复 2026-06-11 — 问题1).
+     *
+     * <p>web 新建计划对话框初始化"免工序报工"开关时调用: F006 返 true (默认勾选两点),
+     * 其他工厂返 false (默认不勾, 逐道)。无 settings 行 → false (安全默认)。
+     */
+    boolean getSkipProcessReportingDefault(String factoryId);
      /**
      * 创建草稿态 (PREPARED) 生产计划 — M-PREP-1, Sprint 4 W2.
      * 与 createProductionPlan 相同, 但 status 初始化为 PREPARED 而非 PENDING。

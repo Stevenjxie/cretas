@@ -64,8 +64,10 @@ public class WorkProcessTaskController {
             @RequestBody @Valid SpawnTasksRequest request) {
         log.info("Spawn 工序任务: factoryId={}, batchId={}, productTypeId={}",
                 factoryId, batchId, request.getProductTypeId());
+        // Fable 审计修复 (问题2): 走计划模式感知的 spawn, 与计划转批次主路径一致 — skip=true 的计划补 spawn 时
+        // 生成两点哨兵任务 (而非旧的恒逐道), 避免补 spawn 与计划模式矛盾。
         return ApiResponse.success(
-                service.spawnTasks(factoryId, batchId, request.getProductTypeId()));
+                service.spawnTasksForBatch(factoryId, batchId, request.getProductTypeId()));
     }
 
     /**

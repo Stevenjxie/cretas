@@ -51,6 +51,25 @@ public interface WorkProcessTaskService {
             String factoryId, Long productionBatchId, String productTypeId,
             Boolean skipProcessReporting, Long materialResponsibleId, Long outputResponsibleId);
 
+    /**
+     * 计划模式感知的 retry spawn (Fable 审计修复 2026-06-11 — 问题2).
+     *
+     * <p>HTTP 手动端点 / AI 工具 在批次首次 spawn fail-soft 失败后补 spawn 时调用。
+     * 与计划转批次主路径 ({@code createBatchFromPlan}) 行为一致: 从批次解析其生产计划,
+     * 读 {@code plan.skipProcessReporting} 决定两点 or 逐道, 头尾责任人取 {@code plan.assignedSupervisorId}
+     * (一人兼, 与主路径相同)。
+     *
+     * <p>解析不到计划 (批次无 productionPlanId / 计划不存在) → 兜底 skip=false (逐道, 安全默认),
+     * 避免无计划上下文时误判两点。
+     *
+     * @param factoryId         工厂ID (租户隔离)
+     * @param productionBatchId 生产批次ID
+     * @param productTypeId     产品类型ID (该批次绑定的产品)
+     * @return 生成的任务 DTO 列表 (已 spawn 过则返回已有)
+     */
+    List<WorkProcessTaskDTO> spawnTasksForBatch(
+            String factoryId, Long productionBatchId, String productTypeId);
+
     /** 哨兵 work_process_id: 批次级领料报工任务 (免工序报工模式, 不对应真实 WorkProcess 定义). */
     String SENTINEL_MATERIAL_INPUT = "__MATERIAL_INPUT__";
 

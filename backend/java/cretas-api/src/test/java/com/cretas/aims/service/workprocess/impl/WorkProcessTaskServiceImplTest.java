@@ -61,8 +61,21 @@ class WorkProcessTaskServiceImplTest {
     @Mock
     private ProductTypeRepository productTypeRepository;
 
+    @Mock
+    private com.cretas.aims.repository.ProductionPlanRepository productionPlanRepository;
+
     @InjectMocks
     private WorkProcessTaskServiceImpl service;
+
+    /**
+     * productionPlanRepository 是 @Autowired(required=false) 字段 (非 @RequiredArgsConstructor 构造器参数),
+     * @InjectMocks 走构造器注入不会填充它 → 手动反射注入 (Fable 审计修复 问题2 的 retry 路径依赖它)。
+     */
+    @org.junit.jupiter.api.BeforeEach
+    void injectFieldDeps() {
+        org.springframework.test.util.ReflectionTestUtils.setField(
+                service, "productionPlanRepository", productionPlanRepository);
+    }
 
     private static final String FACTORY_ID = "F001";
     private static final String WP_ID = "wp-1";
@@ -887,5 +900,139 @@ class WorkProcessTaskServiceImplTest {
         assertEquals(2, result.size());
         assertTrue(result.stream().allMatch(d -> "掌中宝".equals(d.getProductTypeName())),
                 "PT-zzb 任务应解析为 '掌中宝', 不被 map 中其他产品干扰");
+    }
+
+    // ==================== Fable 审计修复 (问题2): spawnTasksForBatch 尊重计划模式 ====================
+
+    private ProductionBatch batchLinkedToPlan(Long batchId, String productTypeId, String planId) {
+        return ProductionBatch.builder()
+                .id(batchId)
+                .factoryId(FACTORY_ID)
+                .productTypeId(productTypeId)
+                .productionPlanId(planId)
+                .build();
+    }
+
+    private com.cretas.aims.entity.ProductionPlan plan(String planId, Boolean skip, Long supervisorId) {
+        com.cretas.aims.entity.ProductionPlan p = new com.cretas.aims.entity.ProductionPlan();
+        p.setId(planId);
+        p.setFactoryId(FACTORY_ID);
+        p.setSkipProcessReporting(skip);
+        p.setAssignedSupervisorId(supervisorId);
+        return p;
+    }
+
+    @Test
+    @DisplayName("spawnTasksForBatch: 计划 skip=true → retry spawn 走两点哨兵 (不退化为逐道)")
+    void spawnTasksForBatch_planSkipTrue_spawnsTwoPoint() {
+        String productTypeId = "PT-RETRY-SKIP";
+        Long batchId = 7001L;
+        String planId = "PLAN-RETRY-1";
+
+        // 产品配了工序, 但计划级 skip=true → retry spawn 必须仍走两点 (与计划模式一致)
+        ProductWorkProcess p1 = ProductWorkProcess.builder()
+                .id(70L).factoryId(FACTORY_ID).productTypeId(productTypeId)
+                .workProcessId("wp-x").processOrder(1).isActive(true).reportingRequired(true).build();
+
+        when(productionBatchRepository.findById(batchId))
+                .thenReturn(Optional.of(batchLinkedToPlan(batchId, productTypeId, planId)));
+        when(productionPlanRepository.findById(planId))
+                .thenReturn(Optional.of(plan(planId, Boolean.TRUE, 900L)));
+        when(taskRepository.existsByFactoryIdAndProductionBatchId(FACTORY_ID, batchId)).thenReturn(false);
+        lenient().when(productWorkProcessRepository
+                .findByFactoryIdAndProductTypeIdOrderByProcessOrderAsc(FACTORY_ID, productTypeId))
+                .thenReturn(List.of(p1));
+        lenient().when(userRepository.findByIdIn(any())).thenReturn(List.of());
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<WorkProcessTask>> captor = ArgumentCaptor.forClass(List.class);
+        when(taskRepository.saveAll(captor.capture())).thenAnswer(inv -> inv.getArgument(0));
+
+        service.spawnTasksForBatch(FACTORY_ID, batchId, productTypeId);
+
+        List<WorkProcessTask> saved = captor.getValue();
+        assertEquals(2, saved.size(), "skip=true 计划 retry spawn → 恰好 2 批次级哨兵任务 (领料+产出)");
+        WorkProcessTask material = saved.stream()
+                .filter(t -> "__MATERIAL_INPUT__".equals(t.getWorkProcessId())).findFirst().orElseThrow();
+        WorkProcessTask output = saved.stream()
+                .filter(t -> "__FINAL_OUTPUT__".equals(t.getWorkProcessId())).findFirst().orElseThrow();
+        // 头尾责任人 = 计划 assignedSupervisorId (一人兼)
+        assertEquals(900L, material.getAssignedTo(), "领料责任人 = 计划主管");
+        assertEquals(900L, output.getAssignedTo(), "产出责任人 = 计划主管 (一人兼)");
+        assertTrue(saved.stream().noneMatch(t -> "wp-x".equals(t.getWorkProcessId())),
+                "skip=true → 不 spawn 工序 task");
+    }
+
+    @Test
+    @DisplayName("spawnTasksForBatch: 计划 skip=false → retry spawn 走逐道 (其他工厂模式不被误伤)")
+    void spawnTasksForBatch_planSkipFalse_spawnsPerProcess() {
+        String productTypeId = "PT-RETRY-PERPROC";
+        Long batchId = 7002L;
+        String planId = "PLAN-RETRY-2";
+
+        ProductWorkProcess p1 = ProductWorkProcess.builder()
+                .id(71L).factoryId(FACTORY_ID).productTypeId(productTypeId)
+                .workProcessId("wp-y").processOrder(1).isActive(true).reportingRequired(true).build();
+        ProductWorkProcess p2 = ProductWorkProcess.builder()
+                .id(72L).factoryId(FACTORY_ID).productTypeId(productTypeId)
+                .workProcessId("wp-z").processOrder(2).isActive(true).reportingRequired(true).build();
+
+        when(productionBatchRepository.findById(batchId))
+                .thenReturn(Optional.of(batchLinkedToPlan(batchId, productTypeId, planId)));
+        when(productionPlanRepository.findById(planId))
+                .thenReturn(Optional.of(plan(planId, Boolean.FALSE, 901L)));
+        when(taskRepository.existsByFactoryIdAndProductionBatchId(FACTORY_ID, batchId)).thenReturn(false);
+        when(productWorkProcessRepository
+                .findByFactoryIdAndProductTypeIdOrderByProcessOrderAsc(FACTORY_ID, productTypeId))
+                .thenReturn(List.of(p1, p2));
+        when(workProcessRepository.findByFactoryIdAndIdIn(eq(FACTORY_ID), any())).thenReturn(List.of());
+        lenient().when(userRepository.findByIdIn(any())).thenReturn(List.of());
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<WorkProcessTask>> captor = ArgumentCaptor.forClass(List.class);
+        when(taskRepository.saveAll(captor.capture())).thenAnswer(inv -> inv.getArgument(0));
+
+        service.spawnTasksForBatch(FACTORY_ID, batchId, productTypeId);
+
+        List<WorkProcessTask> saved = captor.getValue();
+        assertTrue(saved.stream().noneMatch(t ->
+                        "__MATERIAL_INPUT__".equals(t.getWorkProcessId())
+                                || "__FINAL_OUTPUT__".equals(t.getWorkProcessId())),
+                "skip=false 计划 retry spawn → 逐道, 不出哨兵任务");
+        assertTrue(saved.stream().anyMatch(t -> "wp-y".equals(t.getWorkProcessId())), "逐道 spawn 工序 wp-y");
+        assertTrue(saved.stream().anyMatch(t -> "wp-z".equals(t.getWorkProcessId())), "逐道 spawn 工序 wp-z");
+    }
+
+    @Test
+    @DisplayName("spawnTasksForBatch: 批次无关联计划 → 兜底逐道 (安全默认, 不误判两点)")
+    void spawnTasksForBatch_noPlanLink_fallsBackPerProcess() {
+        String productTypeId = "PT-RETRY-NOPLAN";
+        Long batchId = 7003L;
+
+        ProductWorkProcess p1 = ProductWorkProcess.builder()
+                .id(73L).factoryId(FACTORY_ID).productTypeId(productTypeId)
+                .workProcessId("wp-q").processOrder(1).isActive(true).reportingRequired(true).build();
+
+        // 批次无 productionPlanId
+        when(productionBatchRepository.findById(batchId))
+                .thenReturn(Optional.of(batchLinkedToPlan(batchId, productTypeId, null)));
+        when(taskRepository.existsByFactoryIdAndProductionBatchId(FACTORY_ID, batchId)).thenReturn(false);
+        when(productWorkProcessRepository
+                .findByFactoryIdAndProductTypeIdOrderByProcessOrderAsc(FACTORY_ID, productTypeId))
+                .thenReturn(List.of(p1));
+        when(workProcessRepository.findByFactoryIdAndIdIn(eq(FACTORY_ID), any())).thenReturn(List.of());
+        lenient().when(userRepository.findByIdIn(any())).thenReturn(List.of());
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<WorkProcessTask>> captor = ArgumentCaptor.forClass(List.class);
+        when(taskRepository.saveAll(captor.capture())).thenAnswer(inv -> inv.getArgument(0));
+
+        service.spawnTasksForBatch(FACTORY_ID, batchId, productTypeId);
+
+        List<WorkProcessTask> saved = captor.getValue();
+        assertTrue(saved.stream().anyMatch(t -> "wp-q".equals(t.getWorkProcessId())),
+                "无计划关联 → 兜底逐道 spawn 工序");
+        assertTrue(saved.stream().noneMatch(t -> "__MATERIAL_INPUT__".equals(t.getWorkProcessId())),
+                "无计划关联不误判两点");
     }
 }

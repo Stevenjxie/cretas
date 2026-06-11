@@ -44,6 +44,14 @@ export function getSupervisors(factoryId: string) {
   })
 }
 
+/**
+ * 工厂级"免工序报工默认值" (Fable 审计修复 — 多租户安全, 问题1).
+ * 新建计划对话框据此初始化"免工序报工"开关: F006=true (默认两点), 其他工厂=false (默认逐道)。
+ */
+export function getReportModeDefault(factoryId: string) {
+  return get<boolean>(`/${factoryId}/production-plans/report-mode-default`)
+}
+
 /** SP2: WIP 半成品可用库存列表 (GET /wip/available) */
 export interface WipInventoryItem {
   id: number

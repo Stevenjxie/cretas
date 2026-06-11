@@ -190,12 +190,15 @@ public class ProductionPlanMapper {
         plan.setMixedBatchType(request.getMixedBatchType());
         plan.setRelatedOrders(serializeRelatedOrders(request.getRelatedOrders()));
 
-        // 免工序报工开关 (六扇门 Wave2 升级, V20261017_01):
-        //   request 显式给 → 采纳; null (未指定) → 新建计划默认 true (六扇门 want)。
-        //   注: 旧数据 / 迁移回填 = false (DB DEFAULT FALSE), 新建走这里默认 true; 两者独立不冲突。
+        // 免工序报工开关 (六扇门 Wave2; Fable 审计修复 2026-06-11 — 多租户安全红线, V20261018_02):
+        //   request 显式给 → 采纳; null → 安全默认 false (逐道)。
+        //   ⚠️ 工厂级默认值 (F006=true 两点 / 其他=false 逐道) 已在 ProductionPlanServiceImpl.createProductionPlan
+        //   里对 null 做了"解析为该工厂默认值"的前置处理 → 走到这里时该字段已非 null。
+        //   这里的 false 兜底仅防御"未经 service 解析直接调 mapper"的边缘路径 (过去是 null→true 全系统泛化,
+        //   会让其他工厂从 RN/AI 静默变两点 → 丢逐道溯源/成本/出成率/自学习/人效)。安全默认必须是逐道。
         plan.setSkipProcessReporting(request.getSkipProcessReporting() != null
                 ? request.getSkipProcessReporting()
-                : Boolean.TRUE);
+                : Boolean.FALSE);
 
         // 计算CR值
         if (request.getEstimatedWorkDays() != null && request.getExpectedCompletionDate() != null) {

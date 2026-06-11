@@ -161,6 +161,44 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.service.workprocess.WorkProcessTaskService workProcessTaskService;
 
+    /**
+     * Fable 审计修复 (2026-06-11 — 多租户安全红线): 工厂级"免工序报工默认值".
+     *
+     * <p>createProductionPlan 对 skipProcessReporting=null 的新建计划解析为"该工厂的默认值"
+     * (F006=true 两点, 其他工厂=false 逐道), 取代旧的"全系统 null→true"过度泛化。
+     * required=false 兼容单测 (反射注入或不注入); 不注入 / 查不到 → 兜底 false (安全=逐道)。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.repository.FactorySettingsRepository factorySettingsRepository;
+
+    /**
+     * 解析某工厂的"免工序报工默认值" (Fable 审计修复 — 多租户安全).
+     *
+     * <p>仅当 createProductionPlan 的 request.skipProcessReporting 为 null (调用方未显式指定,
+     * 如 RN/AI 客户端) 时使用。显式 true/false 一律尊重调用方。
+     *
+     * <p>多租户安全: 查询带 factoryId, 一个工厂的配置不影响另一个;
+     * 无 settings 行 / 列为 null → false (逐道, 安全默认, 保留溯源/成本/出成率/自学习/人效)。
+     */
+    private boolean resolveSkipProcessReportingDefault(String factoryId) {
+        if (factorySettingsRepository == null) {
+            return false; // 单测无注入 → 安全默认逐道
+        }
+        try {
+            Boolean def = factorySettingsRepository.findSkipProcessReportingDefaultByFactoryId(factoryId);
+            return Boolean.TRUE.equals(def);
+        } catch (Exception e) {
+            log.warn("解析工厂免工序报工默认值失败, 兜底逐道 (false): factoryId={}, err={}", factoryId, e.getMessage());
+            return false;
+        }
+    }
+
+    @Override
+    @org.springframework.transaction.annotation.Transactional(readOnly = true)
+    public boolean getSkipProcessReportingDefault(String factoryId) {
+        return resolveSkipProcessReportingDefault(factoryId);
+    }
+
     private void runConfiguredValidation(String factoryId, String operation, java.util.Map<String, Object> context) {
         if (validationRuleEvaluator == null) return;
         try {
@@ -490,6 +528,15 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                 throw new BusinessException(400, "客户订单来源的生产计划必须填写批次日期")
                         .withHint("请选择批次日期").withHintTarget("batchDate");
             }
+        }
+
+        // Fable 审计修复 (2026-06-11 — 多租户安全红线):
+        //   免工序报工开关 skipProcessReporting=null (调用方未显式指定, 如 RN/AI 客户端)
+        //   → 解析为"该工厂的默认值" (F006=true 两点, 其他工厂=false 逐道), 而非旧的"全系统 null→true"。
+        //   显式 true/false 一律尊重调用方 (web 开关传显式值)。
+        //   这样其他工厂 (逐道是其溯源/成本/出成率/自学习/人效价值) 不被静默改成两点。
+        if (request.getSkipProcessReporting() == null) {
+            request.setSkipProcessReporting(resolveSkipProcessReportingDefault(factoryId));
         }
 
         // 创建生产计划
@@ -1675,7 +1722,11 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         // GAP 3/4 (F006): 转批次时 spawn 报工任务 (报工需要任务实例).
         //   计划级免工序报工 (六扇门 Wave2, V20261017_01): plan.skipProcessReporting=true 或 产品 0 工序
         //   → spawn 2 个批次级哨兵任务 (领料+产出); 否则逐道从 product_work_processes 模板 spawn。
-        //   头尾责任人默认取计划的 assignedSupervisorId (一人兼); 操作员也可 start 时自分配, 或 web/RN updatePlan 改。
+        //   头尾责任人 = 计划的 assignedSupervisorId, 头尾同一人 (一人兼)。
+        //   Fable 审计修复 (问题3 — 撤回 claim): 计划当前无独立的 materialResponsibleId / outputResponsibleId
+        //   字段, 也无 spawn 后分设头尾责任人的代码。"web/RN 可 updatePlan 分设头尾责任人"不成立 (已删除该 claim)。
+        //   头尾分设是后续 (P2): 需 plan 加两字段 + web 头尾责任人选择 UI; 一人兼对六扇门首期够用。
+        //   任务级粒度: 操作员可在 WorkProcessTask.start 时自分配 / 主管经 WorkProcessTask.updatePlan 改单个任务的 assignedTo。
         // fail-soft: spawn 抛异常时不阻塞批次创建.
         if (workProcessTaskService != null) {
             try {
