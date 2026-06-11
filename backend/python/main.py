@@ -1124,6 +1124,14 @@ app.include_router(
     tags=["Factory Production ETL Admin"],
 )
 
+# Factory Production Gold read endpoints (2026-06-11): cost/yield/compare
+from smartbi.api import factory_production_gold  # noqa: E402
+app.include_router(
+    factory_production_gold.router,
+    prefix="/api/smartbi",
+    tags=["Factory Production Gold"],
+)
+
 # Restaurant POS dish-name resolution admin (#61 Phase 1, 2026-06-04)
 from smartbi.api import restaurant_name_resolution_admin  # noqa: E402
 app.include_router(
