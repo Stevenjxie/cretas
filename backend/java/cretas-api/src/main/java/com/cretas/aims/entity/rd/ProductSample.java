@@ -170,4 +170,60 @@ public class ProductSample extends BaseEntity {
     /** 主原料图片 URLs (JSON array, 例如: ["url1", "url2"]) */
     @Column(name = "main_material_images", columnDefinition = "TEXT")
     private String mainMaterialImages;
+
+    // ════════════════════════════════════════════════════════════════
+    // catalog 行31: 研发试样采购票务字段 — 有票/无票影响凭证科目映射
+    // ════════════════════════════════════════════════════════════════
+
+    /**
+     * 研发试样采购是否有票 (是否取得正规增值税发票).
+     * <ul>
+     *   <li>true  = 有票: 进项税可抵扣 → 科目 2221.02 (应交税费-应交增值税-进项税额)</li>
+     *   <li>false = 无票: 进项税不可抵扣 → 计入试样成本/费用 (默认科目 6602 管理费用)</li>
+     *   <li>null  = 未指定 (向后兼容: 历史样品数据默认不受影响)</li>
+     * </ul>
+     * 对应转录原话: "澳阳的可能有票，另一家试样的没票；票务字段在研发试样阶段就需带，影响科目映射与试样成本核算"
+     */
+    @Column(name = "has_invoice")
+    private Boolean hasInvoice;
+
+    /**
+     * 试样采购发票号码 (供应商开具).
+     * 当 hasInvoice=true 时填写，用于凭证生成时关联核销。
+     * null = 未填写 / 无票时不需要。
+     */
+    @Column(name = "invoice_number", length = 100)
+    private String invoiceNumber;
+
+    /**
+     * 根据有票/无票状态返回进项税凭证科目代码.
+     *
+     * <p>有票 (hasInvoice=true)  → 2221.02 (应交税费-应交增值税-进项税额, 可抵扣)
+     * <p>无票 (hasInvoice=false) → 6602    (管理费用, 不可抵扣进入费用)
+     * <p>未指定 (null)           → null    (调用方自行决定, 不强制)
+     *
+     * @return 科目代码字符串, 或 null (未指定时)
+     */
+    public String resolveVatSubjectCode() {
+        if (Boolean.TRUE.equals(hasInvoice)) {
+            return "2221.02"; // 应交税费-应交增值税-进项税额
+        } else if (Boolean.FALSE.equals(hasInvoice)) {
+            return "6602";    // 管理费用(无票不可抵扣)
+        }
+        return null; // 未指定
+    }
+
+    /**
+     * 返回进项税科目名称 (与 resolveVatSubjectCode 配套).
+     *
+     * @return 科目名称字符串, 或 null (未指定时)
+     */
+    public String resolveVatSubjectName() {
+        if (Boolean.TRUE.equals(hasInvoice)) {
+            return "应交税费-应交增值税-进项税额";
+        } else if (Boolean.FALSE.equals(hasInvoice)) {
+            return "管理费用";
+        }
+        return null;
+    }
 }
