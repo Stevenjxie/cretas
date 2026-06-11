@@ -153,8 +153,109 @@ public class FinanceCostBreakdown {
     @PriceSensitive
     private BigDecimal processingFee;
 
+    // ========== SP12 实际成本拆分 (材料/人工/制费三分 + 逐料明细) ==========
+
+    /**
+     * 实际成本拆分 — 把 {@link #actualCost} (单一总额) 拆解成 材料 / 人工 / 制费 三分,
+     * 材料部分进一步拆到逐原料/辅料/包材 (名称 + 用量 + 移动均价单价 + 金额).
+     *
+     * <p>客户原话 (六扇门 2026-06-09 [12:36]): "财务根据前面领料的批次去核算最终的实际成本"。
+     * 财务需要看到 "实际成本 = Σ各原料 + 人工 + 制费" 的拆分, 而不只是一个总数。
+     *
+     * <p><b>数据源</b> (真实生产数据, 非 BOM 标准):
+     * <ul>
+     *   <li>材料明细: {@code MaterialConsumption} 领料消耗记录 (订单 → ProductionPlan
+     *       → ProductionBatch → MaterialConsumption), 按 materialTypeId 聚合实际用量与金额。
+     *   <li>人工: {@code ProductionBatch.laborCost} (报工 BatchWorkSession 工时×时薪 rollup)。
+     *   <li>制费: {@code ProductionBatch.equipmentCost + otherCost}。
+     * </ul>
+     *
+     * <p><b>诚实 null</b>: 订单未关联生产计划 / 批次未领料 / 未报工时该对象为 null,
+     * 各组分 (materialCost/laborCost/overheadCost) 各自独立诚实 null —— 不伪造数字。
+     *
+     * <p>与现有聚合字段的关系 (不破坏): {@code actualCost} 仍按 SalesOrderItem.costUnitPrice
+     * 聚合 (口径不变); 本对象是**独立新增**的"按生产真实领料/报工"视角的拆分,
+     * 二者可能因口径不同而总额略有差异 (本对象给出 {@link ActualCostSplit#materialCost}
+     * 等真实组分, actualCost 给出销售行回填的成本)。
+     */
+    private ActualCostSplit actualCostSplit;
+
     /** 行级成本明细. */
     private List<LineCostBreakdown> lines;
+
+    /**
+     * 实际成本三分拆分 (材料 / 人工 / 制费) + 逐料明细.
+     *
+     * <p>所有金额字段 @PriceSensitive — 非财务/管理角色脱敏为 null。
+     */
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class ActualCostSplit {
+
+        /** 材料成本合计 (= Σ materials[].amount). 无领料记录时 null. */
+        @PriceSensitive
+        private BigDecimal materialCost;
+
+        /** 人工成本合计 (= Σ 关联批次 ProductionBatch.laborCost). 无报工记录时 null. */
+        @PriceSensitive
+        private BigDecimal laborCost;
+
+        /** 制费合计 (= Σ 关联批次 equipmentCost + otherCost). 无数据时 null. */
+        @PriceSensitive
+        private BigDecimal overheadCost;
+
+        /**
+         * 实际成本合计 (= 非 null 组分之和). 三者全 null 时为 null.
+         * 注: 与外层 {@link FinanceCostBreakdown#actualCost} 口径不同
+         * (此处来自生产真实领料/报工, 外层来自销售行回填)。
+         */
+        @PriceSensitive
+        private BigDecimal totalActualCost;
+
+        /** 关联到的生产批次数 (供财务判断数据完整度; 0 表示订单未投产). */
+        private Integer batchCount;
+
+        /** 逐原料/辅料/包材实际领料明细. 无领料时空列表. */
+        private List<MaterialCostLine> materials;
+
+        /** 提示: 数据缺失场景的友好说明 (无关联计划 / 未领料 / 未报工). null 表示数据完整. */
+        private String dataSourceHint;
+    }
+
+    /**
+     * 逐料实际领料明细 (mirror MaterialConsumption 按物料聚合).
+     */
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class MaterialCostLine {
+
+        /** 物料类型 ID. */
+        private String materialTypeId;
+
+        /** 物料名称 (原料/辅料/包材). materialTypeId 查不到时回退为 ID. */
+        private String materialName;
+
+        /** 物料分类 (原料 / 辅料 / 包材 / ...). RawMaterialType.category, 可能 null. */
+        private String category;
+
+        /** 实际领料用量合计 (Σ MaterialConsumption.quantity). */
+        private BigDecimal actualQuantity;
+
+        /** 计量单位 (RawMaterialType.unit), 可能 null. */
+        private String unit;
+
+        /** 移动均价单价 (= amount / actualQuantity, 加权平均). */
+        @PriceSensitive
+        private BigDecimal unitPrice;
+
+        /** 该物料实际金额合计 (Σ MaterialConsumption.totalCost). */
+        @PriceSensitive
+        private BigDecimal amount;
+    }
 
     /**
      * 销售订单行级成本明细 (mirror SalesOrderItem + 推导的 BOM 标准行成本).

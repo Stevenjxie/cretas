@@ -104,6 +104,15 @@ const laborVarianceStatus = computed(() => props.orderAggregate?.varianceStatus 
 
 /** 人工偏差率 (相对指标, 不脱敏) */
 const laborVarianceRate = computed(() => props.orderAggregate?.varianceRate ?? null);
+
+/** SP12: 实际成本拆分 (材料逐料 + 人工 + 制费). 来自生产真实领料/报工. */
+const actualCostSplit = computed(() => props.costBreakdown?.actualCostSplit ?? null);
+
+/** SP12: 逐料明细 (空数组兜底). */
+const splitMaterials = computed(() => actualCostSplit.value?.materials ?? []);
+
+/** SP12: 是否有可展示的拆分 (split 非 null 即展示, 内部各组分可诚实 null). */
+const hasActualCostSplit = computed(() => actualCostSplit.value != null);
 </script>
 
 <template>
@@ -171,6 +180,70 @@ const laborVarianceRate = computed(() => props.orderAggregate?.varianceRate ?? n
           {{ fmtMoney(costBreakdown?.processingFee) }}
         </el-descriptions-item>
       </el-descriptions>
+    </el-card>
+
+    <!-- ======================================================
+         1b. SP12: 实际成本拆分 (材料逐料 + 人工 + 制费)
+              来自生产真实领料 (MaterialConsumption) + 报工 (批次 laborCost/equipmentCost)
+         ====================================================== -->
+    <el-card
+      v-if="hasActualCostSplit"
+      shadow="never"
+      class="actual-split-card"
+      style="margin-top: 12px"
+    >
+      <template #header>
+        <span class="card-title">实际成本拆分（材料 / 人工 / 制费）</span>
+        <el-tag size="small" type="info" style="margin-left: 8px">
+          关联批次 {{ actualCostSplit?.batchCount ?? 0 }} 个
+        </el-tag>
+      </template>
+
+      <el-alert
+        v-if="actualCostSplit?.dataSourceHint"
+        type="warning"
+        :title="actualCostSplit.dataSourceHint"
+        :closable="false"
+        show-icon
+        style="margin-bottom: 12px"
+      />
+
+      <el-descriptions :column="4" border size="small">
+        <el-descriptions-item label="材料成本">
+          {{ fmtMoney(actualCostSplit?.materialCost) }}
+        </el-descriptions-item>
+        <el-descriptions-item label="人工成本">
+          {{ fmtMoney(actualCostSplit?.laborCost) }}
+        </el-descriptions-item>
+        <el-descriptions-item label="制费 (设备+其他)">
+          {{ fmtMoney(actualCostSplit?.overheadCost) }}
+        </el-descriptions-item>
+        <el-descriptions-item label="实际成本合计">
+          <strong>{{ fmtMoney(actualCostSplit?.totalActualCost) }}</strong>
+        </el-descriptions-item>
+      </el-descriptions>
+
+      <!-- 逐原料/辅料/包材领料明细 -->
+      <div v-if="splitMaterials.length > 0" style="margin-top: 12px">
+        <div class="sub-title">材料逐项明细（实际领料）</div>
+        <el-table :data="splitMaterials" size="small" border>
+          <el-table-column prop="materialName" label="物料名称" min-width="140" />
+          <el-table-column prop="category" label="分类" width="90">
+            <template #default="{ row }">{{ row.category ?? '—' }}</template>
+          </el-table-column>
+          <el-table-column label="实际用量" width="120" align="right">
+            <template #default="{ row }">
+              {{ fmtQty(row.actualQuantity, row.unit ?? '') }}
+            </template>
+          </el-table-column>
+          <el-table-column label="移动均价" width="110" align="right">
+            <template #default="{ row }">{{ fmtMoney(row.unitPrice) }}</template>
+          </el-table-column>
+          <el-table-column label="金额" width="120" align="right">
+            <template #default="{ row }">{{ fmtMoney(row.amount) }}</template>
+          </el-table-column>
+        </el-table>
+      </div>
     </el-card>
 
     <!-- ======================================================
@@ -367,6 +440,13 @@ const laborVarianceRate = computed(() => props.orderAggregate?.varianceRate ?? n
   font-size: 14px;
   font-weight: 600;
   color: #303133;
+}
+
+.sub-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #606266;
+  margin-bottom: 8px;
 }
 
 .summary-card,

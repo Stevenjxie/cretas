@@ -97,6 +97,47 @@ export interface FinanceCostBreakdown {
    * 待后端 WorkProcess 接入委外费用数据后自动填充.
    */
   processingFee: number | null;
+  /**
+   * SP12: 实际成本三分拆分 (材料逐料 + 人工 + 制费).
+   * 来自生产真实领料 (MaterialConsumption) + 报工 (批次 laborCost/equipmentCost).
+   * 诚实 null: 订单未投产 / 未领料 / 未报工时该对象为 null 或各组分 null.
+   */
+  actualCostSplit: ActualCostSplit | null;
+}
+
+/** SP12: 逐原料/辅料/包材实际领料明细 (来自 MaterialConsumption 按物料聚合). */
+export interface MaterialCostLine {
+  materialTypeId: string | null;
+  materialName: string | null;
+  category: string | null;
+  /** 实际领料用量合计 (Σ quantity). */
+  actualQuantity: number | null;
+  unit: string | null;
+  /** 移动均价单价 (= amount / actualQuantity, @PriceSensitive). */
+  unitPrice: number | null;
+  /** 该物料实际金额合计 (Σ totalCost, @PriceSensitive). */
+  amount: number | null;
+}
+
+/**
+ * SP12: 实际成本三分拆分 (材料 / 人工 / 制费).
+ * 金额字段 @PriceSensitive — 非财务/管理角色脱敏为 null.
+ */
+export interface ActualCostSplit {
+  /** 材料成本合计 (= Σ materials[].amount). 无领料时 null. */
+  materialCost: number | null;
+  /** 人工成本合计 (= Σ 关联批次 laborCost). 无报工时 null. */
+  laborCost: number | null;
+  /** 制费合计 (= Σ 关联批次 equipmentCost + otherCost). 无数据时 null. */
+  overheadCost: number | null;
+  /** 实际成本合计 (= 非 null 组分之和). 全 null 时 null. */
+  totalActualCost: number | null;
+  /** 关联到的生产批次数 (0=未投产). */
+  batchCount: number | null;
+  /** 逐料实际领料明细. */
+  materials: MaterialCostLine[];
+  /** 数据缺失提示 (null=数据完整). */
+  dataSourceHint: string | null;
 }
 
 export interface PageResponse<T> {
