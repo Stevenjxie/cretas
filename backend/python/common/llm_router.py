@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import datetime
 import logging
 import os
 import time
@@ -83,6 +84,43 @@ _ACCOUNT_FREE_ONLY: Dict[str, frozenset] = {
     # (付费) → 空集 = 守卫拒绝该账号上的所有模型 (强制走 tencent 免费 deepseek).
     "aliyun_a_deepseek": frozenset(),
 }
+
+# Expiry-aware account ordering (2026-06-11 console audit). Free quota is
+# "use-it-or-lose-it": spend the SOONEST-expiring account's quota first while it's
+# valid; an account auto-sinks below fresher ones once its bulk quota expires
+# (so the head SWITCHES automatically at the expiry date — no redeploy needed).
+#   aliyun_b (3177) bulk expires 2026-07-16 → use FIRST until then
+#   aliyun_c (a736) bulk expires 2026-08-13 → 2nd now, HEAD after 07/16
+#   aliyun_a (90bc) consumed                → always last
+# qwen3.7-* SKUs (08/20-09/08) are the long-runway backbone; re-audit before 08/13.
+_ALIYUN_B_EXPIRY = datetime.date(2026, 7, 16)
+_ALIYUN_C_EXPIRY = datetime.date(2026, 8, 13)
+
+
+def _account_rank(account: str) -> int:
+    """Lower = tried first. Expiry-aware so perishable free quota is spent first
+    and an expired account sinks below fresher ones (head auto-switches at expiry)."""
+    today = datetime.date.today()
+    if account == "aliyun_b":
+        return 0 if today < _ALIYUN_B_EXPIRY else 50      # B first → sink after 07/16
+    if account == "aliyun_c":
+        if today < _ALIYUN_B_EXPIRY:
+            return 10                                     # 2nd now (preserve C runway)
+        return 5 if today < _ALIYUN_C_EXPIRY else 50      # HEAD after 07/16 → sink after 08/13
+    if account == "tencent":
+        return 20
+    if account == "zhipu":
+        return 30
+    if account in ("aliyun_a", "aliyun_a_deepseek"):
+        return 60                                         # consumed account always last
+    return 40
+
+
+def _expiry_aware_sort(chain: List[Tuple[str, str]]) -> List[Tuple[str, str]]:
+    """Stable-sort a chain by expiry-aware account rank (preserves each account's
+    internal model order). Auto-switches B↔C head as their free quotas expire."""
+    return sorted(chain, key=lambda am: _account_rank(am[0]))
+
 
 
 def _log_cache_and_record_budget(slot_value: str, account: str, model: str, body: Dict[str, Any]) -> None:
@@ -545,6 +583,7 @@ async def call_chain(
     if chain is not None:
         # Optional account-filter override (legacy callers pass account names).
         slot_chain = [(ac, m) for (ac, m) in slot_chain if ac in chain]
+    slot_chain = _expiry_aware_sort(slot_chain)  # 过期感知: B 先(07/16前) → 自动切 C 头
     client = get_llm_http_client()
     errors: List[str] = []
 
@@ -704,6 +743,7 @@ async def call_chain_stream(
     slot_chain = SLOT_MODELS.get(slot, [])
     if chain is not None:
         slot_chain = [(ac, m) for (ac, m) in slot_chain if ac in chain]
+    slot_chain = _expiry_aware_sort(slot_chain)  # 过期感知: B 先(07/16前) → 自动切 C 头
     client = get_llm_http_client()
     errors: List[str] = []
     payload = {**payload, "stream": True}
