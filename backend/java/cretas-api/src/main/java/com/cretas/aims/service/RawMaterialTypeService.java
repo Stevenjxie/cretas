@@ -111,6 +111,17 @@ public interface RawMaterialTypeService {
     String previewMaterialCode(String factoryId, String category);
 
     /**
+     * 16位编码预览: 当工厂已配置分段字典且 segmentCode 为10位时走16位路径.
+     * 否则 fallback 到 SP4 扁平方案 (category 路径).
+     *
+     * @param factoryId   工厂ID
+     * @param category    物料类别 (fallback 路径用)
+     * @param segmentCode L3 cumulative segment code (10位纯数字), 可为 null
+     * @return 16位编码 (如 "0010010001000007") 或 SP4 扁平编码 (如 "RL001")
+     */
+    String previewMaterialCode(String factoryId, String category, String segmentCode);
+
+    /**
      * T159-B-codegen: 多字段智能建议 (扩展自 suggestUnit).
      * 按 name+category 找最相似历史原料, 返回 unit/category/storageType/shelfLifeDays/
      * level1PerLevel2/level2Unit 全量. 任何字段无匹配时返回 null.

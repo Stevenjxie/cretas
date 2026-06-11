@@ -5,6 +5,7 @@ import com.cretas.aims.dto.material.MaterialCodeSegmentDTO;
 import com.cretas.aims.entity.material.MaterialCodeSegment;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.exception.ResourceNotFoundException;
+import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.repository.material.MaterialCodeSegmentRepository;
 import com.cretas.aims.service.material.impl.MaterialCodeSegmentServiceImpl;
 import org.junit.jupiter.api.BeforeEach;
@@ -47,11 +48,14 @@ class MaterialCodeSegmentServiceTest {
     @Mock
     private MaterialCodeSegmentRepository repo;
 
+    @Mock
+    private RawMaterialTypeRepository materialTypeRepository;
+
     private MaterialCodeSegmentServiceImpl service;
 
     @BeforeEach
     void setUp() {
-        service = new MaterialCodeSegmentServiceImpl(repo);
+        service = new MaterialCodeSegmentServiceImpl(repo, materialTypeRepository);
     }
 
     // ─── helpers ────────────────────────────────────────────────
@@ -291,6 +295,88 @@ class MaterialCodeSegmentServiceTest {
         void noL1Nodes_returnsFalse() {
             when(repo.countByFactoryIdAndLevel(FACTORY_ID, (short) 1)).thenReturn(0L);
             assertFalse(service.hasSegmentDictionary(FACTORY_ID));
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // 7. generateCode (generate-code 端点)
+    // ─────────────────────────────────────────────────────────────
+
+    @Nested
+    @DisplayName("generateCode: 16位编码预览")
+    class GenerateCode {
+
+        @Test
+        @DisplayName("字典已配置 + 无已有16位码 → 返回 000001 序号")
+        void hasDictionary_noExisting_returns000001() {
+            when(repo.countByFactoryIdAndLevel(FACTORY_ID, (short) 1)).thenReturn(3L);
+            when(materialTypeRepository.findCodesByFactoryIdAndSegmentPrefix(FACTORY_ID, "0010010001"))
+                    .thenReturn(Collections.emptyList());
+
+            String code = service.generateCode(FACTORY_ID, "001", "001001", "0010010001");
+            assertEquals("0010010001000001", code);
+        }
+
+        @Test
+        @DisplayName("字典已配置 + 已有 000005 → 返回 000006")
+        void hasDictionary_existingCode000005_returns000006() {
+            when(repo.countByFactoryIdAndLevel(FACTORY_ID, (short) 1)).thenReturn(3L);
+            when(materialTypeRepository.findCodesByFactoryIdAndSegmentPrefix(FACTORY_ID, "0010010001"))
+                    .thenReturn(List.of("0010010001000001", "0010010001000003", "0010010001000005"));
+
+            String code = service.generateCode(FACTORY_ID, "001", "001001", "0010010001");
+            assertEquals("0010010001000006", code);
+        }
+
+        @Test
+        @DisplayName("字典未配置 → 返回 null")
+        void noDictionary_returnsNull() {
+            when(repo.countByFactoryIdAndLevel(FACTORY_ID, (short) 1)).thenReturn(0L);
+
+            String code = service.generateCode(FACTORY_ID, "001", "001001", "0010010001");
+            assertNull(code);
+            verifyNoInteractions(materialTypeRepository);
+        }
+
+        @Test
+        @DisplayName("l3 为 null → 返回 null (参数无效)")
+        void nullL3_returnsNull() {
+            when(repo.countByFactoryIdAndLevel(FACTORY_ID, (short) 1)).thenReturn(3L);
+
+            String code = service.generateCode(FACTORY_ID, "001", "001001", null);
+            assertNull(code);
+            verifyNoInteractions(materialTypeRepository);
+        }
+
+        @Test
+        @DisplayName("l3 非10位 → 返回 null (参数无效)")
+        void shortL3_returnsNull() {
+            when(repo.countByFactoryIdAndLevel(FACTORY_ID, (short) 1)).thenReturn(3L);
+
+            // 6-digit l3 — invalid
+            String code = service.generateCode(FACTORY_ID, "001", "001001", "001001");
+            assertNull(code);
+        }
+
+        @Test
+        @DisplayName("l3 含非数字 → 返回 null (参数无效)")
+        void nonNumericL3_returnsNull() {
+            when(repo.countByFactoryIdAndLevel(FACTORY_ID, (short) 1)).thenReturn(3L);
+
+            String code = service.generateCode(FACTORY_ID, "001", "001001", "001001AB01");
+            assertNull(code);
+        }
+
+        @Test
+        @DisplayName("不同前缀的16位码不影响当前前缀序号")
+        void differentPrefix_doesNotAffectSequence() {
+            when(repo.countByFactoryIdAndLevel(FACTORY_ID, (short) 1)).thenReturn(3L);
+            // Only codes with 0020020001 prefix present, querying 0010010001
+            when(materialTypeRepository.findCodesByFactoryIdAndSegmentPrefix(FACTORY_ID, "0010010001"))
+                    .thenReturn(Collections.emptyList());
+
+            String code = service.generateCode(FACTORY_ID, "001", "001001", "0010010001");
+            assertEquals("0010010001000001", code, "不同前缀不影响本前缀序号");
         }
     }
 }

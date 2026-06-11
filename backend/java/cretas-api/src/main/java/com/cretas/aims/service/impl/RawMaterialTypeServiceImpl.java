@@ -752,6 +752,11 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
     }
 
     @Override
+    public String previewMaterialCode(String factoryId, String category, String segmentCode) {
+        return generateNextCode(factoryId, category, segmentCode);
+    }
+
+    @Override
     public MaterialSuggestDTO suggestFields(String factoryId, String name, String category) {
         if (name == null || name.trim().isEmpty()) {
             return MaterialSuggestDTO.builder().build();
