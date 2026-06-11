@@ -359,19 +359,29 @@ class WipInventoryServiceImplTest {
         when(txnRepo.findByFactoryIdAndSourceRefAndTxnType(FACTORY_ID, "SEMI-BATCH-001",
                 SemiFinishedInventoryTransaction.TxnType.IN))
                 .thenReturn(Optional.empty());
-        // No existing SFI row (first IN)
+        // W8 BUG-SP1-NEW-ROW 修复后 first-IN: findForUpdate(empty) → ensureSemiRowExists 建 0 量占位行
+        // (saveAndFlush) → 再 findForUpdate 拿占位行 → applyMovingAverageIn 累加 → save。
+        final SemiFinishedInventory[] holder = new SemiFinishedInventory[1];
         when(wipRepo.findForUpdateByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(FACTORY_ID, "SEMI-BATCH-001"))
-                .thenReturn(Optional.empty());
-        when(wipRepo.save(any(SemiFinishedInventory.class))).thenAnswer(inv -> {
+                .thenAnswer(inv -> Optional.ofNullable(holder[0]));
+        when(wipRepo.saveAndFlush(any(SemiFinishedInventory.class))).thenAnswer(inv -> {
             SemiFinishedInventory sfi = inv.getArgument(0);
             sfi.setId(7777L); // simulate DB-assigned ID
+            holder[0] = sfi;
+            return sfi;
+        });
+        when(wipRepo.save(any(SemiFinishedInventory.class))).thenAnswer(inv -> {
+            SemiFinishedInventory sfi = inv.getArgument(0);
+            if (sfi.getId() == null) {
+                sfi.setId(7777L);
+            }
             return sfi;
         });
         when(txnRepo.save(any(SemiFinishedInventoryTransaction.class))).thenAnswer(inv -> inv.getArgument(0));
 
         service.postApprovedOutput(FACTORY_ID, report, task, 20L);
 
-        // SFI created
+        // SFI created (累加后全量值)
         verify(wipRepo).save(wipCaptor.capture());
         SemiFinishedInventory sfi = wipCaptor.getValue();
         assertEquals("SEMI-BATCH-001", sfi.getIntermediateBatchNo());
@@ -544,8 +554,16 @@ class WipInventoryServiceImplTest {
         when(txnRepo.findByFactoryIdAndSourceRefAndTxnType(FACTORY_ID, "SEMI-BATCH-004",
                 SemiFinishedInventoryTransaction.TxnType.IN))
                 .thenReturn(Optional.empty());
+        // W8 BUG-SP1-NEW-ROW: SEMI first-IN 走占位行 (saveAndFlush) → 再 findForUpdate 拿占位行 → save 累加
+        final SemiFinishedInventory[] holder = new SemiFinishedInventory[1];
         when(wipRepo.findForUpdateByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(FACTORY_ID, "SEMI-BATCH-004"))
-                .thenReturn(Optional.empty());
+                .thenAnswer(inv -> Optional.ofNullable(holder[0]));
+        when(wipRepo.saveAndFlush(any(SemiFinishedInventory.class))).thenAnswer(inv -> {
+            SemiFinishedInventory sfi = inv.getArgument(0);
+            if (sfi.getId() == null) sfi.setId(8887L);
+            holder[0] = sfi;
+            return sfi;
+        });
         when(wipRepo.findByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(FACTORY_ID, "PROD-006-B9104-S4-8005"))
                 .thenReturn(Optional.empty());
         when(wipRepo.save(any(SemiFinishedInventory.class))).thenAnswer(inv -> {
@@ -557,8 +575,10 @@ class WipInventoryServiceImplTest {
 
         service.postApprovedOutput(FACTORY_ID, report, task, 30L);
 
-        // wipRepo.save called TWICE: once for SEMI SFI, once for FINISHED WIP
+        // wipRepo.save called TWICE: 一次 SEMI SFI 累加, 一次 FINISHED WIP (占位行另走 saveAndFlush, 不计入 save)
         verify(wipRepo, times(2)).save(any(SemiFinishedInventory.class));
+        // SEMI 占位行经 saveAndFlush 建一次
+        verify(wipRepo, times(1)).saveAndFlush(any(SemiFinishedInventory.class));
         // txnRepo.save called ONCE: for SEMI IN ledger
         verify(txnRepo, times(1)).save(any(SemiFinishedInventoryTransaction.class));
     }

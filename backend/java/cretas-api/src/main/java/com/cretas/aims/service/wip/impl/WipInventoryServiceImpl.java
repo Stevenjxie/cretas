@@ -18,8 +18,12 @@ import com.cretas.aims.repository.workprocess.WorkProcessTaskRepository;
 import com.cretas.aims.service.wip.WipInventoryService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.context.annotation.Lazy;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
@@ -43,6 +47,15 @@ public class WipInventoryServiceImpl implements WipInventoryService {
     private final WorkProcessRepository workProcessRepo;
     /** SP3: 成本更新事件发布 — 异步回填+预警. */
     private final ApplicationEventPublisher eventPublisher;
+
+    /**
+     * W8 BUG-SP1-NEW-ROW 修复: 自引用代理, 用于在 {@code REQUIRES_NEW} 子事务中创建新行,
+     * 使 Spring 事务 AOP 代理生效 (同类内 this.method() 调用不走代理, 注解失效)。
+     * {@code @Lazy} 打破构造期自引用循环。
+     */
+    @Autowired
+    @Lazy
+    private WipInventoryServiceImpl self;
 
     @Override
     public SemiFinishedInventory validateSourceWip(
@@ -159,11 +172,6 @@ public class WipInventoryServiceImpl implements WipInventoryService {
             return;
         }
 
-        // R1 — pessimistic lock to prevent concurrent moving-average divergence
-        SemiFinishedInventory sfi = wipRepo
-                .findForUpdateByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(factoryId, semiCode)
-                .orElse(null);
-
         String outputUnit = firstNonBlank(report.getSemiOutputUnit(),
                 firstNonBlank(report.getOutputUnit(), task.getPlannedUnit()));
 
@@ -181,49 +189,32 @@ public class WipInventoryServiceImpl implements WipInventoryService {
             inUnitCost = totalCost.divide(inQty, 4, RoundingMode.HALF_UP);
         }
 
+        // R1 + W8 BUG-SP1-NEW-ROW 修复 — ensure-row-then-lock:
+        //
+        // postSemiOutputLedger 嵌在调用方 approval @Transactional 内 (propagation REQUIRED 加入同一事务)。
+        // 历史 bug: findForUpdate 返回 empty 时直接 build+save 新行无并发保护, 两线程同时进 new-row 分支:
+        //   - H2 (修复前无 unique) → 2 行重复 = WIP 库存翻倍;
+        //   - PG (Flyway partial unique) → 第二个 insert 撞约束 → 整个 approval 事务 doom → 500 + WIP 漏记。
+        //
+        // 修复: 不存在行时先在 REQUIRES_NEW 子事务里 insert 一条 **0 量空占位行** (ensureRowExists),
+        //   独立 commit 与调用方事务解耦。并发竞争撞 unique → 子事务隔离 → catch (对方已建好同行)。
+        //   之后主流程总能 findForUpdate 拿到锁 → 走 existing-row moving-average 累加 inQty (在调用方事务内)。
+        //
+        // 为何 0 量占位安全 (而非全量行): 若调用方 approval 事务事后回滚, 残留的是 0 量空行 (无量无成本),
+        //   且 IN ledger txn 也随之回滚 → 下次重试 idempotency guard 放行 → findForUpdate 命中 0 量行 →
+        //   累加 0+inQty=inQty → **不双计**。全量行残留则会被重试再次累加 = 双计 bug; 0 量占位天然幂等自愈。
+        SemiFinishedInventory sfi = wipRepo
+                .findForUpdateByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(factoryId, semiCode)
+                .orElse(null);
         if (sfi == null) {
-            // First IN — create new SemiFinishedInventory row
-            sfi = SemiFinishedInventory.builder()
-                    .factoryId(factoryId)
-                    .batchId(task.getProductionBatchId())
-                    .intermediateBatchNo(semiCode)
-                    .sourceWorkProcessTaskId(task.getId())
-                    .processOrder(task.getProcessOrder())
-                    .productTypeId(task.getProductTypeId())
-                    .producedQuantity(inQty)
-                    .consumedQuantity(BigDecimal.ZERO)
-                    .availableQuantity(inQty)
-                    .unit(outputUnit)
-                    .status(SemiFinishedInventory.Status.AVAILABLE)
-                    .accumulatedCost(totalCost)
-                    .unitCost(inUnitCost)
-                    .materialBatchRefs(report.getMaterialBatchRefs())
-                    .build();
-        } else {
-            // Moving-average cost update (R1 lock already held)
-            BigDecimal oldQty = nz(sfi.getProducedQuantity());
-            BigDecimal oldUnitCost = sfi.getUnitCost() == null ? BigDecimal.ZERO : sfi.getUnitCost();
-            BigDecimal newProduced = oldQty.add(inQty);
-            sfi.setProducedQuantity(newProduced);
-            BigDecimal consumed = nz(sfi.getConsumedQuantity());
-            sfi.setAvailableQuantity(newProduced.subtract(consumed));
-            if (sfi.getAvailableQuantity().compareTo(BigDecimal.ZERO) > 0
-                    && !SemiFinishedInventory.Status.RETURNED.equals(sfi.getStatus())) {
-                sfi.setStatus(SemiFinishedInventory.Status.AVAILABLE);
-            }
-            if (sfi.getUnit() == null) {
-                sfi.setUnit(outputUnit);
-            }
-            // Moving average: (oldQty×oldUnitCost + inQty×inUnitCost) / newProduced
-            BigDecimal newUnitCost = null;
-            if (newProduced.signum() > 0) {
-                BigDecimal oldComponent = oldQty.multiply(oldUnitCost);
-                BigDecimal inComponent = inUnitCost == null ? BigDecimal.ZERO : inQty.multiply(inUnitCost);
-                newUnitCost = oldComponent.add(inComponent).divide(newProduced, 4, RoundingMode.HALF_UP);
-            }
-            sfi.setUnitCost(newUnitCost);
-            sfi.setAccumulatedCost(nullSafeAdd(sfi.getAccumulatedCost(), totalCost));
+            ensureSemiRowExists(factoryId, semiCode, task, outputUnit);
+            sfi = wipRepo
+                    .findForUpdateByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(factoryId, semiCode)
+                    .orElseThrow(() -> new IllegalStateException(
+                            "[SP1-semi] row missing after ensureSemiRowExists, semiCode=" + semiCode));
         }
+        // 统一 moving-average 累加路径 (新建占位行 oldQty=0 → 累加结果与原全量新行字节一致; 既有行直接累加)
+        applyMovingAverageIn(sfi, inQty, inUnitCost, totalCost, outputUnit, report.getMaterialBatchRefs());
         wipRepo.save(sfi);
 
         // Write immutable ledger entry (R3 — no update ever, only REVERSE rows for cancellation)
@@ -257,6 +248,110 @@ public class WipInventoryServiceImpl implements WipInventoryService {
                     sfi.getAccumulatedCost()
             ));
         }
+    }
+
+    /**
+     * W8 BUG-SP1-NEW-ROW 修复 — moving-average IN 累加 (新建占位行 / 既有行统一走此路径)。
+     *
+     * <p>把本次 IN ({@code inQty} @ {@code inUnitCost}, totalCost) 累加进 {@code sfi}:
+     * <pre>newUnitCost = (oldQty×oldUnitCost + inQty×inUnitCost) / (oldQty + inQty)</pre>
+     * Scale-4 HALF_UP。同时更新 produced/available/status/unit/materialBatchRefs/accumulatedCost。
+     *
+     * <p>新建占位行 (oldQty=0, oldUnitCost=null) 累加: newProduced=inQty, newUnitCost=inUnitCost,
+     * accumulatedCost=totalCost → 与历史"全量新行"行为字节一致 (单一累加路径防分叉)。
+     *
+     * <p>调用前提: {@code sfi} 已持有 PESSIMISTIC_WRITE 行锁 (existing-row 直接拿锁 / 新建占位行重拿锁),
+     * 累加在锁保护下串行化。
+     */
+    private void applyMovingAverageIn(SemiFinishedInventory sfi, BigDecimal inQty, BigDecimal inUnitCost,
+                                      BigDecimal totalCost, String outputUnit,
+                                      java.util.List<java.util.Map<String, Object>> materialBatchRefs) {
+        BigDecimal oldQty = nz(sfi.getProducedQuantity());
+        BigDecimal oldUnitCost = sfi.getUnitCost() == null ? BigDecimal.ZERO : sfi.getUnitCost();
+        BigDecimal newProduced = oldQty.add(inQty);
+        sfi.setProducedQuantity(newProduced);
+        BigDecimal consumed = nz(sfi.getConsumedQuantity());
+        sfi.setAvailableQuantity(newProduced.subtract(consumed));
+        if (sfi.getAvailableQuantity().compareTo(BigDecimal.ZERO) > 0
+                && !SemiFinishedInventory.Status.RETURNED.equals(sfi.getStatus())) {
+            sfi.setStatus(SemiFinishedInventory.Status.AVAILABLE);
+        }
+        if (sfi.getUnit() == null) {
+            sfi.setUnit(outputUnit);
+        }
+        if (sfi.getMaterialBatchRefs() == null && materialBatchRefs != null) {
+            sfi.setMaterialBatchRefs(materialBatchRefs);
+        }
+        // 诚实 null: 老行无成本 (unitCost==null) 且本次也无成本 (inUnitCost==null) → newUnitCost 保持 null,
+        //   不退化成 0.0000 (与历史新行路径 unitCost=inUnitCost / existing-row 行为字节一致)。
+        BigDecimal newUnitCost = null;
+        boolean hasOldCost = sfi.getUnitCost() != null;   // 注意: 此时尚未 setUnitCost, 读到的是累加前的旧值
+        boolean hasInCost = inUnitCost != null;
+        if (newProduced.signum() > 0 && (hasOldCost || hasInCost)) {
+            BigDecimal oldComponent = oldQty.multiply(oldUnitCost);
+            BigDecimal inComponent = inUnitCost == null ? BigDecimal.ZERO : inQty.multiply(inUnitCost);
+            newUnitCost = oldComponent.add(inComponent).divide(newProduced, 4, RoundingMode.HALF_UP);
+        }
+        sfi.setUnitCost(newUnitCost);
+        sfi.setAccumulatedCost(nullSafeAdd(sfi.getAccumulatedCost(), totalCost));
+    }
+
+    /**
+     * W8 BUG-SP1-NEW-ROW 修复 — 确保 (factoryId, semiCode) 的 WIP 行存在 (并发安全, 幂等)。
+     *
+     * <p>在独立 {@code REQUIRES_NEW} 子事务里 insert 一条 **0 量空占位行** 并 commit:
+     * <ul>
+     *   <li>producedQuantity / consumedQuantity / availableQuantity = 0, accumulatedCost / unitCost = null。
+     *       真正的量+成本由调用方在外层事务的 moving-average 路径累加 (0+inQty=inQty)。</li>
+     *   <li>子事务独立 commit → 与调用方 approval 事务解耦 → 残留占位行天然幂等自愈 (见 postSemiOutputLedger 注释)。</li>
+     * </ul>
+     *
+     * <p>并发竞争: 另一线程先 insert 同 (factoryId, semiCode) → 撞 unique 约束 →
+     * {@link DataIntegrityViolationException}。子事务 REQUIRES_NEW 隔离 → 仅子事务 rollback-only,
+     * 不污染调用方事务 → 此处 catch (对方已建好同行, 目标"行存在"已达成) → 正常返回。
+     *
+     * <p>经 Spring 代理 ({@code self}) 调用使 REQUIRES_NEW 生效 (同类 this 调用绕过 AOP 代理)。
+     * 单测无 Spring 代理 (self == null) → fallback 直调 {@link #commitEmptySemiRow} (无真实事务, repo 已 mock)。
+     */
+    private void ensureSemiRowExists(String factoryId, String semiCode, WorkProcessTask task, String outputUnit) {
+        SemiFinishedInventory placeholder = SemiFinishedInventory.builder()
+                .factoryId(factoryId)
+                .batchId(task.getProductionBatchId())
+                .intermediateBatchNo(semiCode)
+                .sourceWorkProcessTaskId(task.getId())
+                .processOrder(task.getProcessOrder())
+                .productTypeId(task.getProductTypeId())
+                .producedQuantity(BigDecimal.ZERO)
+                .consumedQuantity(BigDecimal.ZERO)
+                .availableQuantity(BigDecimal.ZERO)
+                .unit(outputUnit)
+                .status(SemiFinishedInventory.Status.AVAILABLE)
+                .accumulatedCost(null)
+                .unitCost(null)
+                .build();
+        try {
+            if (self != null) {
+                self.commitEmptySemiRow(placeholder);
+            } else {
+                commitEmptySemiRow(placeholder);
+            }
+        } catch (DataIntegrityViolationException dup) {
+            // 并发竞争输掉 insert race → 对方已建好同行, 目标 (行存在) 已达成 → 安全继续
+            log.info("[SP1-semi] new-row race for semiCode={}: lost insert race (constraint hit), "
+                    + "row already created by concurrent tx", semiCode);
+        }
+    }
+
+    /**
+     * W8 BUG-SP1-NEW-ROW 修复 — 在 {@code REQUIRES_NEW} 子事务里 insert 占位行并独立 commit。
+     *
+     * <p>{@code saveAndFlush} 强制立即 flush → unique 约束冲突即时抛出 (而非延迟到子事务 commit 边界),
+     * 使 {@link #ensureSemiRowExists} catch 时机明确。{@code public} + 经 {@code self} 代理调用是
+     * REQUIRES_NEW 生效的硬性要求。
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void commitEmptySemiRow(SemiFinishedInventory placeholder) {
+        wipRepo.saveAndFlush(placeholder);
     }
 
     private void markWipPosted(ProductionReport report) {

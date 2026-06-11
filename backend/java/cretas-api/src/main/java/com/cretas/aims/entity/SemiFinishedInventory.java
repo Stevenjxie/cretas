@@ -35,6 +35,19 @@ import java.util.Map;
         @Index(name = "idx_sfi_factory_batch", columnList = "factory_id, batch_id"),
         @Index(name = "idx_sfi_intermediate_batch_no", columnList = "intermediate_batch_no"),
         @Index(name = "idx_sfi_factory_status", columnList = "factory_id, status")
+}, uniqueConstraints = {
+        // W8 BUG-SP1-NEW-ROW 修复: 工序批次号工厂内唯一 (幂等键防并发重复 insert)。
+        //
+        // 生产 PG 的权威约束是 Flyway 的 partial unique index
+        //   uq_sfi_intermediate_batch_no ON (factory_id, intermediate_batch_no) WHERE deleted_at IS NULL
+        // (允许软删除行 + 一条 live 行同 code)。JPA @UniqueConstraint 无法表达 partial WHERE,
+        // 这里声明的是 non-partial composite —— 仅在 H2 测试 (ddl-auto=create-drop) 下建表生效,
+        // 让 SP1 new-row 并发竞争触发 ConstraintViolation → 走 catch-retry-into-existing 路径。
+        //
+        // prod 不受此注解影响: pg-prod=ddl-auto:none (不建), prod=validate (Hibernate validate
+        // 不校验/不新增 unique 约束, 仅校验表+列)。prod 防护靠上述 Flyway partial index。
+        @UniqueConstraint(name = "uq_sfi_factory_intermediate_batch_no",
+                columnNames = {"factory_id", "intermediate_batch_no"})
 })
 @Data
 @Builder

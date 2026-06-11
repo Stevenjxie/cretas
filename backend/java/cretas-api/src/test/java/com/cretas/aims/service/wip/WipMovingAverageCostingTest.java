@@ -111,15 +111,33 @@ class WipMovingAverageCostingTest {
                 .build();
     }
 
+    /**
+     * W8 BUG-SP1-NEW-ROW 修复后 first-IN 流程: findForUpdate(empty) → ensureSemiRowExists 建 0 量占位行
+     * (saveAndFlush) → 再 findForUpdate 拿占位行 → applyMovingAverageIn 累加 → save。
+     *
+     * <p>mock 用一个可变占位 holder: saveAndFlush 捕获占位行+赋 id 存入 holder; 第二次 findForUpdate
+     * 返回同一占位对象 (后续被 applyMovingAverageIn 原地累加, 最终 save 捕获到全量累加值, 与历史断言一致)。
+     */
     private void stubFirstIn(String semiCode) {
         when(txnRepo.findByFactoryIdAndSourceRefAndTxnType(FACTORY_ID, semiCode,
                 SemiFinishedInventoryTransaction.TxnType.IN))
                 .thenReturn(Optional.empty());
+        final SemiFinishedInventory[] holder = new SemiFinishedInventory[1];
+        // 第一次 findForUpdate 返 empty (触发建占位行); 之后返回占位行 (holder 不为 null 时)
         when(wipRepo.findForUpdateByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(FACTORY_ID, semiCode))
-                .thenReturn(Optional.empty());
-        when(wipRepo.save(any(SemiFinishedInventory.class))).thenAnswer(inv -> {
+                .thenAnswer(inv -> Optional.ofNullable(holder[0]));
+        // ensureSemiRowExists 的子事务 insert: 捕获占位行, 赋 id, 存入 holder
+        when(wipRepo.saveAndFlush(any(SemiFinishedInventory.class))).thenAnswer(inv -> {
             SemiFinishedInventory s = inv.getArgument(0);
             s.setId(9999L);
+            holder[0] = s;
+            return s;
+        });
+        when(wipRepo.save(any(SemiFinishedInventory.class))).thenAnswer(inv -> {
+            SemiFinishedInventory s = inv.getArgument(0);
+            if (s.getId() == null) {
+                s.setId(9999L);
+            }
             return s;
         });
         when(txnRepo.save(any(SemiFinishedInventoryTransaction.class))).thenAnswer(inv -> inv.getArgument(0));
