@@ -53,6 +53,16 @@ public interface SalesService {
     com.cretas.aims.dto.inventory.FinanceCostBreakdown getOrderCostBreakdown(String factoryId, String orderId);
 
     /**
+     * 六扇门多段生产成本逐段分配 — 回溯成品←半成品←原料链, 逐段拆 料/人工/制费 +
+     * 半成品 unitCost 逐段累积 (#713 移动均价) + 每盒贡献。
+     *
+     * <p>契合六扇门两点报工 (#718): 没有逐道工序数据, 成本按"段"
+     * (原料→半1→半2→成品, 每段=一次两点报工转化=一行 SemiFinishedInventory) 分摊。
+     * 两点报工人工"登下一期"未结时该段人工诚实 null。
+     */
+    com.cretas.aims.dto.inventory.MultiStageCostBreakdown getOrderMultiStageCost(String factoryId, String orderId);
+
+    /**
      * B3 售价趋势 — 财审辅助决策.
      *
      * <p>返回该工厂该产品最近 N 笔成交销售订单的单价明细（非草稿/取消状态），

@@ -20,6 +20,7 @@ import { ArrowLeft } from '@element-plus/icons-vue';
 import {
   getOrderDetail,
   getOrderCostBreakdown,
+  getOrderMultiStageCost,
   financeApprove,
   financeReject,
   getProductPriceTrend,
@@ -29,6 +30,7 @@ import {
   type LineCostBreakdown,
   type SalesPriceTrendDTO,
   type OperationalQuoteSummary,
+  type MultiStageCostBreakdown,
 } from '@/api/salesFinanceReview';
 import {
   getLaborCostOrderAggregate,
@@ -49,6 +51,10 @@ const canFinanceWrite = computed(() => permissionStore.canWrite('finance'));
 
 const order = ref<SalesOrderSummary | null>(null);
 const breakdown = ref<FinanceCostBreakdown | null>(null);
+
+// 六扇门多段生产成本逐段分配 (两点报工成本拆分核心) — 非阻塞独立加载
+const multiStage = ref<MultiStageCostBreakdown | null>(null);
+const multiStageLoading = ref(false);
 const notes = ref('');
 const overrideEstimatedCost = ref<number | null>(null);
 const loading = ref(false);
@@ -118,8 +124,29 @@ async function load() {
     if (orderRes.success && orderRes.data?.orderDate) {
       void loadOrderAggregate(orderRes.data.orderDate);
     }
+    // 六扇门多段成本: 异步加载逐段成本链 (非阻塞)
+    void loadMultiStageCost();
   } finally {
     loading.value = false;
+  }
+}
+
+/**
+ * 六扇门多段生产成本逐段分配 — 回溯成品←半成品←原料链。
+ * 非阻塞 — 失败只 warn, 不影响财审主流程。
+ */
+async function loadMultiStageCost() {
+  if (!factoryId.value || !orderId.value) return;
+  multiStageLoading.value = true;
+  try {
+    const res = await getOrderMultiStageCost(factoryId.value, orderId.value);
+    if (res.success && res.data) {
+      multiStage.value = res.data;
+    }
+  } catch (e) {
+    console.warn('[多段成本] 加载失败 (非阻塞):', e);
+  } finally {
+    multiStageLoading.value = false;
   }
 }
 
@@ -528,6 +555,100 @@ onMounted(load);
       </el-table>
     </el-card>
 
+    <!-- 六扇门多段生产成本逐段分配 (两点报工成本拆分核心) ─────────────────
+         回溯成品←半成品←原料链, 每段=一次两点报工转化 (一行 SemiFinishedInventory)。
+         逐段拆 料/人工/制费 + 半成品 unitCost 逐段累积 (#713 移动均价) + 每盒贡献。
+         契合六扇门两点报工 (无逐道工序数据); 人工"登下一期"未结时该段诚实 null。
+         金额 @PriceSensitive — 非财务角色后端脱敏为 null 显示 "—"。
+    ────────────────────────────────────────────────────────────── -->
+    <el-card
+      v-if="multiStage && (multiStage.stageCount ?? 0) > 0"
+      v-loading="multiStageLoading"
+      shadow="never"
+      class="summary-card"
+      style="margin-bottom: 16px"
+    >
+      <template #header>
+        <div class="card-header">
+          <span class="card-title">多段成本链 (逐段分配)</span>
+          <span class="card-subtitle">
+            原料 → 半成品 → 成品 · 每段料/人工/制费 + 半成品移动均价逐段累积
+          </span>
+        </div>
+      </template>
+
+      <el-alert
+        v-if="multiStage.dataSourceHint"
+        :title="multiStage.dataSourceHint"
+        type="info"
+        :closable="false"
+        show-icon
+        style="margin-bottom: 12px"
+      />
+
+      <el-table :data="multiStage.stages" border stripe size="small" empty-text="无段记录">
+        <el-table-column label="段序" align="center" width="64">
+          <template #default="{ row }">{{ row.stageOrder ?? '—' }}</template>
+        </el-table-column>
+        <el-table-column label="段 / 半成品" min-width="180" show-overflow-tooltip>
+          <template #default="{ row }">
+            <div>{{ row.stageName || row.semiCode || '—' }}</div>
+            <div style="color: #909399; font-size: 12px">{{ row.semiCode }}</div>
+          </template>
+        </el-table-column>
+        <el-table-column label="产出量" align="right" min-width="110">
+          <template #default="{ row }">
+            {{ row.producedQuantity != null
+              ? `${row.producedQuantity} ${row.producedUnit ?? ''}`.trim()
+              : '—' }}
+          </template>
+        </el-table-column>
+        <el-table-column label="材料" align="right" min-width="110">
+          <template #default="{ row }">{{ formatAmount(row.materialCost) }}</template>
+        </el-table-column>
+        <el-table-column label="人工" align="right" min-width="130">
+          <template #default="{ row }">
+            <template v-if="row.laborCost != null">{{ formatAmount(row.laborCost) }}</template>
+            <el-tooltip v-else :content="row.laborHint || '人工登下一期'" placement="top">
+              <span style="color: #e6a23c">登下一期</span>
+            </el-tooltip>
+          </template>
+        </el-table-column>
+        <el-table-column label="制费" align="right" min-width="100">
+          <template #default="{ row }">{{ formatAmount(row.overheadCost) }}</template>
+        </el-table-column>
+        <el-table-column label="段小计" align="right" min-width="120">
+          <template #default="{ row }">
+            <strong>{{ formatAmount(row.stageSubtotal) }}</strong>
+          </template>
+        </el-table-column>
+        <el-table-column label="半成品移动均价" align="right" min-width="140">
+          <template #default="{ row }">{{ formatAmount(row.outputUnitCost) }}</template>
+        </el-table-column>
+        <el-table-column label="累积成本" align="right" min-width="120">
+          <template #default="{ row }">{{ formatAmount(row.accumulatedCost) }}</template>
+        </el-table-column>
+        <el-table-column label="折每盒贡献" align="right" min-width="120">
+          <template #default="{ row }">{{ formatAmount(row.contributionPerBox) }}</template>
+        </el-table-column>
+      </el-table>
+
+      <div class="multi-stage-summary">
+        <span>
+          全链段消耗合计:
+          <strong>{{ formatAmount(multiStage.totalChainCost) }}</strong>
+        </span>
+        <span v-if="multiStage.finalOutputBoxes != null">
+          成品产出:
+          <strong>{{ multiStage.finalOutputBoxes }} {{ multiStage.finalOutputUnit ?? '' }}</strong>
+        </span>
+        <span v-if="multiStage.totalCostPerBox != null">
+          折每盒成本合计:
+          <strong>{{ formatAmount(multiStage.totalCostPerBox) }}</strong>
+        </span>
+      </div>
+    </el-card>
+
     <!-- 三层价格同屏对比 (转录[15:51-16:08]) ─────────────────────────
          Layer ① 研发预估价  = OperationalQuote.unitPrice (运营报价审批后)
          Layer ② 下单价      = SalesOrderItem.unitPrice
@@ -851,6 +972,19 @@ onMounted(load);
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap: 16px;
+}
+.multi-stage-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 24px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px dashed #dcdfe6;
+  font-size: 14px;
+  color: #606266;
+}
+.multi-stage-summary strong {
+  color: #303133;
 }
 .cost-grid {
   display: grid;

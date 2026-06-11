@@ -117,6 +117,19 @@ public class SalesServiceImpl implements SalesService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.repository.RawMaterialTypeRepository rawMaterialTypeRepository;
 
+    /** 六扇门多段成本: 批次 → 半成品段 (SemiFinishedInventory 行, 每行=一次两点报工转化). Optional. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.repository.SemiFinishedInventoryRepository semiFinishedInventoryRepository;
+
+    /** 六扇门多段成本: 半成品段 → IN 流水 (取 reportId 反查 laborCost/materialCost 拆段成本). Optional. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.repository.SemiFinishedInventoryTransactionRepository semiFinishedInventoryTransactionRepository;
+
+    /** 六扇门多段成本: 反查报工 laborCost/materialCost (段内料/人工拆分). Optional. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.repository.ProductionReportRepository productionReportRepository;
+    // 注: 段名解析复用已有 final 字段 productTypeRepository (构造注入, line 56)。
+
     /**
      * Issue #793: 客户协议价 lookup — auto-applies customer-specific or global selling price
      * at SO creation when caller does not explicitly set {@code unitPrice}.
@@ -1242,6 +1255,294 @@ public class SalesServiceImpl implements SalesService {
                 .totalActualCost(total)
                 .batchCount(batchCount)
                 .materials(materials)
+                .dataSourceHint(hintStr)
+                .build();
+    }
+
+    // ==================== 六扇门多段成本逐段分配 (两点报工成本拆分核心) ====================
+
+    /**
+     * 六扇门多段生产成本逐段分配。
+     *
+     * <p>回溯链: 销售订单 → ProductionPlan(sourceOrderId) → ProductionBatch(planId)
+     * → SemiFinishedInventory(batchId, 每行=一段=一次两点报工转化)
+     * → SemiFinishedInventoryTransaction(IN, reportId) → ProductionReport(laborCost/materialCost)。
+     *
+     * <p><b>每段算法</b>:
+     * <ul>
+     *   <li>段排序: 按 SemiFinishedInventory.processOrder 升序 (第一段=最上游原料转化, 末段=成品);</li>
+     *   <li>段材料/人工: 取该段全部 IN 流水的 reportId, 反查 ProductionReport, Σ materialCost / Σ laborCost
+     *       (诚实 null: 全部 report 该字段为 null → 段该组分 null, 不伪造 0);</li>
+     *   <li>段制费: report 不分制费, 段级无来源 → 诚实 null (制费在批次级, 不强行摊到段);</li>
+     *   <li>段小计 = materialCost + laborCost + overheadCost (非 null 之和, 仅本段新增, 不含上游累积);</li>
+     *   <li>产出半成品 unitCost = SemiFinishedInventory.unitCost (#713 已逐段滚动累积的移动均价);</li>
+     *   <li>累积成本 = SemiFinishedInventory.accumulatedCost (上游 + 本段全部投入);</li>
+     *   <li>每盒贡献 = 段小计 / 最终成品盒数 (末段 producedQuantity, 未知则 null)。</li>
+     * </ul>
+     *
+     * <p><b>两点报工人工诚实 null</b>: 两点报工 (领料入 + 产出出) 时人工常"登下一期"按期间分摊,
+     * 报工当下 laborCost=null → 该段 laborCost 诚实 null + laborHint。绝不伪造。
+     */
+    @Override
+    @Transactional(readOnly = true)
+    public com.cretas.aims.dto.inventory.MultiStageCostBreakdown getOrderMultiStageCost(
+            String factoryId, String orderId) {
+        SalesOrder order = getSalesOrderById(factoryId, orderId);
+
+        String productName = null;
+        BigDecimal orderQty = null;
+        try {
+            order.getItems().size();  // 强制初始化 lazy
+            if (order.getItems() != null && !order.getItems().isEmpty()) {
+                SalesOrderItem first = order.getItems().get(0);
+                productName = first.getProductName();
+                orderQty = first.getQuantity();
+            }
+        } catch (Exception e) {
+            log.warn("多段成本: 读取订单行失败 (orderId={}): {}", orderId, e.getMessage());
+        }
+
+        // repos 未注册 → 诚实 hint (不伪造)
+        if (productionPlanRepository == null || productionBatchRepository == null
+                || semiFinishedInventoryRepository == null) {
+            return com.cretas.aims.dto.inventory.MultiStageCostBreakdown.builder()
+                    .orderId(orderId)
+                    .productName(productName)
+                    .stages(java.util.Collections.emptyList())
+                    .stageCount(0)
+                    .dataSourceHint("多段成本模块未部署。")
+                    .build();
+        }
+
+        java.util.List<com.cretas.aims.entity.ProductionPlan> plans;
+        try {
+            plans = productionPlanRepository.findByFactoryIdAndSourceOrderId(factoryId, orderId);
+        } catch (Exception e) {
+            log.warn("多段成本: 查询关联生产计划失败 (orderId={}): {}", orderId, e.getMessage());
+            plans = java.util.Collections.emptyList();
+        }
+
+        if (plans == null || plans.isEmpty()) {
+            return com.cretas.aims.dto.inventory.MultiStageCostBreakdown.builder()
+                    .orderId(orderId)
+                    .productName(productName)
+                    .stages(java.util.Collections.emptyList())
+                    .stageCount(0)
+                    .dataSourceHint("订单尚未关联生产计划 (未投产), 暂无多段成本可拆分。")
+                    .build();
+        }
+
+        java.util.Set<String> planIds = new java.util.HashSet<>();
+        for (com.cretas.aims.entity.ProductionPlan p : plans) {
+            if (p.getId() != null) {
+                planIds.add(p.getId());
+            }
+        }
+
+        java.util.List<com.cretas.aims.entity.ProductionBatch> batches =
+                planIds.isEmpty()
+                        ? java.util.Collections.emptyList()
+                        : productionBatchRepository.findByFactoryIdAndProductionPlanIdIn(factoryId, planIds);
+
+        // 收集所有批次下的半成品段 (每行=一段)
+        java.util.List<com.cretas.aims.entity.SemiFinishedInventory> allStages = new java.util.ArrayList<>();
+        for (com.cretas.aims.entity.ProductionBatch b : batches) {
+            if (b.getId() == null) {
+                continue;
+            }
+            try {
+                allStages.addAll(
+                        semiFinishedInventoryRepository.findByFactoryIdAndBatchIdAndDeletedAtIsNull(factoryId, b.getId()));
+            } catch (Exception e) {
+                log.warn("多段成本: 查询批次 {} 半成品段失败: {}", b.getId(), e.getMessage());
+            }
+        }
+
+        if (allStages.isEmpty()) {
+            return com.cretas.aims.dto.inventory.MultiStageCostBreakdown.builder()
+                    .orderId(orderId)
+                    .productName(productName)
+                    .finalOutputBoxes(orderQty)
+                    .stages(java.util.Collections.emptyList())
+                    .stageCount(0)
+                    .dataSourceHint("订单已投产但无半成品 WIP 段记录 (纯成品直产 / 未做两点报工)。"
+                            + "可在订单财审实际成本拆分查看总额。")
+                    .build();
+        }
+
+        // 段排序: processOrder 升序 (null 排末尾), 同序按 id 稳定
+        allStages.sort(java.util.Comparator
+                .comparing((com.cretas.aims.entity.SemiFinishedInventory s) ->
+                        s.getProcessOrder() == null ? Integer.MAX_VALUE : s.getProcessOrder())
+                .thenComparing(s -> s.getId() == null ? Long.MAX_VALUE : s.getId()));
+
+        // 最终成品盒数 = 末段 producedQuantity (回退订单行数量)
+        com.cretas.aims.entity.SemiFinishedInventory lastStage = allStages.get(allStages.size() - 1);
+        BigDecimal finalBoxes = lastStage.getProducedQuantity();
+        if (finalBoxes == null || finalBoxes.signum() <= 0) {
+            finalBoxes = orderQty;
+        }
+        String finalUnit = lastStage.getUnit();
+
+        // 产品名映射 (批量, 避免 N+1)
+        java.util.Map<String, String> ptNameMap = new java.util.HashMap<>();
+        if (productTypeRepository != null) {
+            java.util.Set<String> ptIds = allStages.stream()
+                    .map(com.cretas.aims.entity.SemiFinishedInventory::getProductTypeId)
+                    .filter(id -> id != null && !id.isBlank())
+                    .collect(java.util.stream.Collectors.toSet());
+            if (!ptIds.isEmpty()) {
+                try {
+                    productTypeRepository.findByIdIn(ptIds)
+                            .forEach(pt -> ptNameMap.put(pt.getId(), pt.getName()));
+                } catch (Exception e) {
+                    log.warn("多段成本: 查询产品名失败: {}", e.getMessage());
+                }
+            }
+        }
+
+        boolean anyLaborNull = false;
+        BigDecimal chainSum = null;
+        BigDecimal chainPerBox = null;
+        java.util.List<com.cretas.aims.dto.inventory.MultiStageCostBreakdown.StageCost> stageCosts =
+                new java.util.ArrayList<>();
+
+        for (com.cretas.aims.entity.SemiFinishedInventory stage : allStages) {
+            // 段内料/人工: 反查该段 IN 流水的 reportId → ProductionReport.materialCost/laborCost
+            BigDecimal stageMaterial = null;
+            BigDecimal stageLabor = null;
+            if (semiFinishedInventoryTransactionRepository != null
+                    && productionReportRepository != null && stage.getId() != null) {
+                java.util.List<com.cretas.aims.entity.SemiFinishedInventoryTransaction> txns;
+                try {
+                    txns = semiFinishedInventoryTransactionRepository
+                            .findBySemiFinishedIdOrderByCreatedAtAsc(stage.getId());
+                } catch (Exception e) {
+                    log.warn("多段成本: 查询段 {} 流水失败: {}", stage.getId(), e.getMessage());
+                    txns = java.util.Collections.emptyList();
+                }
+                java.util.Set<Long> reportIds = new java.util.LinkedHashSet<>();
+                for (com.cretas.aims.entity.SemiFinishedInventoryTransaction t : txns) {
+                    if (com.cretas.aims.entity.SemiFinishedInventoryTransaction.TxnType.IN.equals(t.getTxnType())
+                            && t.getReportId() != null) {
+                        reportIds.add(t.getReportId());
+                    }
+                }
+                if (!reportIds.isEmpty()) {
+                    java.util.List<com.cretas.aims.entity.ProductionReport> reports;
+                    try {
+                        reports = productionReportRepository.findAllById(reportIds);
+                    } catch (Exception e) {
+                        log.warn("多段成本: 反查段 {} 报工失败: {}", stage.getId(), e.getMessage());
+                        reports = java.util.Collections.emptyList();
+                    }
+                    BigDecimal matSum = BigDecimal.ZERO;
+                    boolean anyMat = false;
+                    BigDecimal labSum = BigDecimal.ZERO;
+                    boolean anyLab = false;
+                    for (com.cretas.aims.entity.ProductionReport r : reports) {
+                        if (r.getMaterialCost() != null) {
+                            matSum = matSum.add(r.getMaterialCost());
+                            anyMat = true;
+                        }
+                        if (r.getLaborCost() != null) {
+                            labSum = labSum.add(r.getLaborCost());
+                            anyLab = true;
+                        }
+                    }
+                    stageMaterial = anyMat ? matSum.setScale(2, java.math.RoundingMode.HALF_UP) : null;
+                    stageLabor = anyLab ? labSum.setScale(2, java.math.RoundingMode.HALF_UP) : null;
+                }
+            }
+
+            // 段制费: 报工不含制费, 段级无来源 → 诚实 null (不强行摊批次级 equipmentCost 到段)
+            BigDecimal stageOverhead = null;
+
+            // 段小计 = 本段新增 (料 + 人工 + 制费), 非 null 之和; 不含上游累积 (避免重复计数)
+            BigDecimal subtotal = null;
+            if (stageMaterial != null || stageLabor != null || stageOverhead != null) {
+                subtotal = BigDecimal.ZERO;
+                if (stageMaterial != null) subtotal = subtotal.add(stageMaterial);
+                if (stageLabor != null) subtotal = subtotal.add(stageLabor);
+                if (stageOverhead != null) subtotal = subtotal.add(stageOverhead);
+            }
+
+            // 上游领用累积: 累积成本 − 本段新增小计 (诚实, 仅当两者都有)
+            BigDecimal upstreamCarried = null;
+            if (stage.getAccumulatedCost() != null && subtotal != null) {
+                BigDecimal diff = stage.getAccumulatedCost().subtract(subtotal);
+                if (diff.signum() > 0) {
+                    upstreamCarried = diff.setScale(2, java.math.RoundingMode.HALF_UP);
+                }
+            }
+
+            // 每盒贡献 = 段小计 / 最终成品盒数
+            BigDecimal perBox = null;
+            if (subtotal != null && finalBoxes != null && finalBoxes.signum() > 0) {
+                perBox = subtotal.divide(finalBoxes, 2, java.math.RoundingMode.HALF_UP);
+            }
+
+            // 人工诚实 null → hint
+            String laborHint = null;
+            String stageHint = null;
+            if (stageLabor == null) {
+                anyLaborNull = true;
+                laborHint = "本段人工登下一期 (两点报工人工按期间统一分摊, 报工当下未结)。";
+                stageHint = "人工未结 (登下一期)。";
+            }
+            if (stageMaterial == null && stageHint == null) {
+                stageHint = "本段无领料消耗记录。";
+            }
+
+            // 链合计累加 (非 null 段)
+            if (subtotal != null) {
+                chainSum = (chainSum == null ? BigDecimal.ZERO : chainSum).add(subtotal);
+            }
+            if (perBox != null) {
+                chainPerBox = (chainPerBox == null ? BigDecimal.ZERO : chainPerBox).add(perBox);
+            }
+
+            String ptName = ptNameMap.get(stage.getProductTypeId());
+            stageCosts.add(com.cretas.aims.dto.inventory.MultiStageCostBreakdown.StageCost.builder()
+                    .stageOrder(stage.getProcessOrder())
+                    .semiCode(stage.getIntermediateBatchNo())
+                    .stageName(ptName != null ? ptName : stage.getIntermediateBatchNo())
+                    .productName(ptName)
+                    .producedQuantity(stage.getProducedQuantity())
+                    .producedUnit(stage.getUnit())
+                    .upstreamConsumedQuantity(null)  // 上游领用量需 lineage 边精确归因, 当前以累积成本表达
+                    .upstreamCarriedCost(upstreamCarried)
+                    .materialCost(stageMaterial)
+                    .laborCost(stageLabor)
+                    .laborHint(laborHint)
+                    .overheadCost(stageOverhead)
+                    .stageSubtotal(subtotal)
+                    .outputUnitCost(stage.getUnitCost())
+                    .accumulatedCost(stage.getAccumulatedCost())
+                    .contributionPerBox(perBox)
+                    .materials(java.util.Collections.emptyList())  // 逐料归因到段需 report.materialBatchRefs, 后续增强
+                    .stageHint(stageHint)
+                    .build());
+        }
+
+        StringBuilder hint = new StringBuilder();
+        if (anyLaborNull) {
+            hint.append("部分段人工登下一期 (两点报工按期间统一分摊), 段成本暂仅含料/制费, 人工待结后回填。 ");
+        }
+        if (finalBoxes == null) {
+            hint.append("末段未产出成品, 每盒口径暂不可算。 ");
+        }
+        String hintStr = hint.length() > 0 ? hint.toString().trim() : null;
+
+        return com.cretas.aims.dto.inventory.MultiStageCostBreakdown.builder()
+                .orderId(orderId)
+                .productName(productName)
+                .finalOutputBoxes(finalBoxes)
+                .finalOutputUnit(finalUnit)
+                .stages(stageCosts)
+                .totalChainCost(chainSum)
+                .totalCostPerBox(chainPerBox)
+                .stageCount(stageCosts.size())
                 .dataSourceHint(hintStr)
                 .build();
     }

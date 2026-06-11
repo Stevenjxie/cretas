@@ -490,6 +490,19 @@ public class SalesController {
         return ApiResponse.success("查询成功", breakdown);
     }
 
+    @GetMapping("/orders/{orderId}/multi-stage-cost")
+    @Operation(summary = "六扇门多段生产成本逐段分配",
+            description = "回溯成品←半成品←原料链, 逐段拆 料/人工/制费 + 半成品 unitCost 逐段累积 + 每盒贡献; "
+                    + "契合两点报工 (无逐道工序数据), 人工登下一期时诚实 null")
+    @RequirePermission({"finance:read_write", "finance:read", "sales:read_write"})
+    public ApiResponse<com.cretas.aims.dto.inventory.MultiStageCostBreakdown> getOrderMultiStageCost(
+            @PathVariable @NotBlank String factoryId,
+            @PathVariable @NotBlank String orderId) {
+        com.cretas.aims.dto.inventory.MultiStageCostBreakdown breakdown =
+                salesService.getOrderMultiStageCost(factoryId, orderId);
+        return ApiResponse.success("查询成功", breakdown);
+    }
+
     /**
      * B3 售价趋势 — 财审辅助决策.
      *
