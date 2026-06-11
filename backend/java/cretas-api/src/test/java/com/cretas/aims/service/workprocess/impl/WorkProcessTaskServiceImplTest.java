@@ -443,6 +443,208 @@ class WorkProcessTaskServiceImplTest {
         assertEquals(Integer.valueOf(422), ex.getCode(), "全免报应 422 拒绝, 不静默产出空批次");
     }
 
+    // ==================== 计划级免工序报工 (六扇门 Wave2 升级 V20261017_01) ====================
+
+    @Test
+    @DisplayName("spawnTasks(skip=true): 配了工序但计划选免工序报工 → spawn 2 批次级哨兵任务 (领料+产出), 不 spawn 工序 task")
+    void spawnTasks_skipTrue_spawnsTwoBatchLevelTasks() {
+        String productTypeId = "PT-SKIP";
+        Long batchId = 6001L;
+
+        // 产品配了 3 道工序, 但计划级 skipProcessReporting=true → 应忽略工序模板走两点
+        ProductWorkProcess p1 = ProductWorkProcess.builder()
+                .id(50L).factoryId(FACTORY_ID).productTypeId(productTypeId)
+                .workProcessId("wp-a").processOrder(1).isActive(true).reportingRequired(true).build();
+        ProductWorkProcess p2 = ProductWorkProcess.builder()
+                .id(51L).factoryId(FACTORY_ID).productTypeId(productTypeId)
+                .workProcessId("wp-b").processOrder(2).isActive(true).reportingRequired(true).build();
+        ProductWorkProcess p3 = ProductWorkProcess.builder()
+                .id(52L).factoryId(FACTORY_ID).productTypeId(productTypeId)
+                .workProcessId("wp-c").processOrder(3).isActive(true).reportingRequired(true).build();
+
+        when(taskRepository.existsByFactoryIdAndProductionBatchId(FACTORY_ID, batchId)).thenReturn(false);
+        when(productWorkProcessRepository
+                .findByFactoryIdAndProductTypeIdOrderByProcessOrderAsc(FACTORY_ID, productTypeId))
+                .thenReturn(List.of(p1, p2, p3));
+        lenient().when(userRepository.findByIdIn(any())).thenReturn(List.of());
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<WorkProcessTask>> captor = ArgumentCaptor.forClass(List.class);
+        when(taskRepository.saveAll(captor.capture())).thenAnswer(inv -> inv.getArgument(0));
+
+        service.spawnTasks(FACTORY_ID, batchId, productTypeId, Boolean.TRUE, 700L, 800L);
+
+        List<WorkProcessTask> saved = captor.getValue();
+        assertEquals(2, saved.size(), "免工序报工 → 恰好 2 批次级任务 (领料+产出), 工序模板被忽略");
+        WorkProcessTask material = saved.stream()
+                .filter(t -> "__MATERIAL_INPUT__".equals(t.getWorkProcessId())).findFirst().orElse(null);
+        WorkProcessTask output = saved.stream()
+                .filter(t -> "__FINAL_OUTPUT__".equals(t.getWorkProcessId())).findFirst().orElse(null);
+        assertNotNull(material, "必含领料报工哨兵任务");
+        assertNotNull(output, "必含产出报工哨兵任务");
+        assertEquals(0, material.getProcessOrder(), "领料 processOrder=0 (首)");
+        assertEquals(9999, output.getProcessOrder(), "产出 processOrder=9999 (末, 保证 lastStep)");
+        assertEquals(0L, material.getProductWorkProcessId(), "哨兵 PWP id = 0 (无模板, 列 NOT NULL 占位)");
+        assertEquals(0L, output.getProductWorkProcessId(), "哨兵 PWP id = 0");
+        // 不得 spawn 任何真实工序 task
+        assertTrue(saved.stream().noneMatch(t ->
+                        "wp-a".equals(t.getWorkProcessId()) || "wp-b".equals(t.getWorkProcessId())
+                                || "wp-c".equals(t.getWorkProcessId())),
+                "免工序报工模式不 spawn 工序 task (工序配置保留供溯源)");
+    }
+
+    @Test
+    @DisplayName("spawnTasks(skip=false) 但产品 0 工序 → 工序 optional, 强制两点 spawn (不再 422 阻塞)")
+    void spawnTasks_zeroProcesses_forcesTwoPoint() {
+        String productTypeId = "PT-NOPROC";
+        Long batchId = 6002L;
+
+        when(taskRepository.existsByFactoryIdAndProductionBatchId(FACTORY_ID, batchId)).thenReturn(false);
+        when(productWorkProcessRepository
+                .findByFactoryIdAndProductTypeIdOrderByProcessOrderAsc(FACTORY_ID, productTypeId))
+                .thenReturn(List.of());   // 产品没配任何工序
+        lenient().when(userRepository.findByIdIn(any())).thenReturn(List.of());
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<WorkProcessTask>> captor = ArgumentCaptor.forClass(List.class);
+        when(taskRepository.saveAll(captor.capture())).thenAnswer(inv -> inv.getArgument(0));
+
+        // skip=false, 但产品 0 工序 → 不抛 422, 自动走两点 (工序 optional)
+        List<WorkProcessTaskDTO> dtos = service.spawnTasks(
+                FACTORY_ID, batchId, productTypeId, Boolean.FALSE, null, null);
+
+        List<WorkProcessTask> saved = captor.getValue();
+        assertEquals(2, saved.size(), "0 工序产品强制两点 spawn (领料+产出), 不 422");
+        assertTrue(saved.stream().anyMatch(t -> "__MATERIAL_INPUT__".equals(t.getWorkProcessId())));
+        assertTrue(saved.stream().anyMatch(t -> "__FINAL_OUTPUT__".equals(t.getWorkProcessId())));
+        // DTO 友好 processName
+        assertTrue(dtos.stream().anyMatch(d -> "领料报工".equals(d.getProcessName())),
+                "领料任务 DTO 透出友好名 '领料报工'");
+        assertTrue(dtos.stream().anyMatch(d -> "产出报工".equals(d.getProcessName())),
+                "产出任务 DTO 透出友好名 '产出报工'");
+    }
+
+    @Test
+    @DisplayName("spawnTasks(skip=false) 且产品配了工序 → 逐道 spawn (向后兼容零回归, 不出哨兵任务)")
+    void spawnTasks_skipFalse_withProcesses_isPerProcess() {
+        String productTypeId = "PT-PERPROC";
+        Long batchId = 6003L;
+
+        ProductWorkProcess p1 = ProductWorkProcess.builder()
+                .id(60L).factoryId(FACTORY_ID).productTypeId(productTypeId)
+                .workProcessId("wp-1").processOrder(1).isActive(true).reportingRequired(true).build();
+        ProductWorkProcess p2 = ProductWorkProcess.builder()
+                .id(61L).factoryId(FACTORY_ID).productTypeId(productTypeId)
+                .workProcessId("wp-2").processOrder(2).isActive(true).reportingRequired(true).build();
+
+        when(taskRepository.existsByFactoryIdAndProductionBatchId(FACTORY_ID, batchId)).thenReturn(false);
+        when(productWorkProcessRepository
+                .findByFactoryIdAndProductTypeIdOrderByProcessOrderAsc(FACTORY_ID, productTypeId))
+                .thenReturn(List.of(p1, p2));
+        when(workProcessRepository.findByFactoryIdAndIdIn(eq(FACTORY_ID), any())).thenReturn(List.of());
+        lenient().when(userRepository.findByIdIn(any())).thenReturn(List.of());
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<WorkProcessTask>> captor = ArgumentCaptor.forClass(List.class);
+        when(taskRepository.saveAll(captor.capture())).thenAnswer(inv -> inv.getArgument(0));
+
+        service.spawnTasks(FACTORY_ID, batchId, productTypeId, Boolean.FALSE, null, null);
+
+        List<WorkProcessTask> saved = captor.getValue();
+        assertEquals(2, saved.size(), "逐道: 按工序模板 spawn (零回归)");
+        assertTrue(saved.stream().anyMatch(t -> "wp-1".equals(t.getWorkProcessId())));
+        assertTrue(saved.stream().anyMatch(t -> "wp-2".equals(t.getWorkProcessId())));
+        assertTrue(saved.stream().noneMatch(t ->
+                        "__MATERIAL_INPUT__".equals(t.getWorkProcessId())
+                                || "__FINAL_OUTPUT__".equals(t.getWorkProcessId())),
+                "逐道模式不得出现批次级哨兵任务");
+    }
+
+    @Test
+    @DisplayName("spawnTasks(3-arg legacy): 旧入口 → skip=false 逐道 (现有 controller/Tool 调用零回归)")
+    void spawnTasks_legacy3arg_isPerProcess() {
+        String productTypeId = "PT-LEGACY3";
+        Long batchId = 6004L;
+
+        ProductWorkProcess p1 = ProductWorkProcess.builder()
+                .id(70L).factoryId(FACTORY_ID).productTypeId(productTypeId)
+                .workProcessId("wp-l1").processOrder(1).isActive(true).reportingRequired(true).build();
+
+        when(taskRepository.existsByFactoryIdAndProductionBatchId(FACTORY_ID, batchId)).thenReturn(false);
+        when(productWorkProcessRepository
+                .findByFactoryIdAndProductTypeIdOrderByProcessOrderAsc(FACTORY_ID, productTypeId))
+                .thenReturn(List.of(p1));
+        when(workProcessRepository.findByFactoryIdAndIdIn(eq(FACTORY_ID), any())).thenReturn(List.of());
+        lenient().when(userRepository.findByIdIn(any())).thenReturn(List.of());
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<WorkProcessTask>> captor = ArgumentCaptor.forClass(List.class);
+        when(taskRepository.saveAll(captor.capture())).thenAnswer(inv -> inv.getArgument(0));
+
+        service.spawnTasks(FACTORY_ID, batchId, productTypeId);   // 旧 3-arg 入口
+
+        List<WorkProcessTask> saved = captor.getValue();
+        assertEquals(1, saved.size(), "旧 3-arg 委托 skip=false → 逐道");
+        assertEquals("wp-l1", saved.get(0).getWorkProcessId());
+    }
+
+    @Test
+    @DisplayName("spawnTasks(skip=true): 头尾责任人分别绑到领料/产出哨兵任务的 assignedTo")
+    void spawnTasks_skipTrue_headTailResponsibles() {
+        String productTypeId = "PT-RESP";
+        Long batchId = 6005L;
+        Long headId = 901L;   // 领料责任人
+        Long tailId = 902L;   // 产出责任人
+
+        when(taskRepository.existsByFactoryIdAndProductionBatchId(FACTORY_ID, batchId)).thenReturn(false);
+        when(productWorkProcessRepository
+                .findByFactoryIdAndProductTypeIdOrderByProcessOrderAsc(FACTORY_ID, productTypeId))
+                .thenReturn(List.of());
+        lenient().when(userRepository.findByIdIn(any())).thenReturn(List.of());
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<WorkProcessTask>> captor = ArgumentCaptor.forClass(List.class);
+        when(taskRepository.saveAll(captor.capture())).thenAnswer(inv -> inv.getArgument(0));
+
+        service.spawnTasks(FACTORY_ID, batchId, productTypeId, Boolean.TRUE, headId, tailId);
+
+        List<WorkProcessTask> saved = captor.getValue();
+        WorkProcessTask material = saved.stream()
+                .filter(t -> "__MATERIAL_INPUT__".equals(t.getWorkProcessId())).findFirst().orElseThrow();
+        WorkProcessTask output = saved.stream()
+                .filter(t -> "__FINAL_OUTPUT__".equals(t.getWorkProcessId())).findFirst().orElseThrow();
+        assertEquals(headId, material.getAssignedTo(), "领料报工绑头责任人");
+        assertEquals(tailId, output.getAssignedTo(), "产出报工绑尾责任人");
+    }
+
+    @Test
+    @DisplayName("spawnTasks(skip=null): null 视为 false → 逐道 (向后兼容)")
+    void spawnTasks_skipNull_treatedAsFalse() {
+        String productTypeId = "PT-NULLSKIP";
+        Long batchId = 6006L;
+
+        ProductWorkProcess p1 = ProductWorkProcess.builder()
+                .id(80L).factoryId(FACTORY_ID).productTypeId(productTypeId)
+                .workProcessId("wp-n1").processOrder(1).isActive(true).reportingRequired(true).build();
+
+        when(taskRepository.existsByFactoryIdAndProductionBatchId(FACTORY_ID, batchId)).thenReturn(false);
+        when(productWorkProcessRepository
+                .findByFactoryIdAndProductTypeIdOrderByProcessOrderAsc(FACTORY_ID, productTypeId))
+                .thenReturn(List.of(p1));
+        when(workProcessRepository.findByFactoryIdAndIdIn(eq(FACTORY_ID), any())).thenReturn(List.of());
+        lenient().when(userRepository.findByIdIn(any())).thenReturn(List.of());
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<WorkProcessTask>> captor = ArgumentCaptor.forClass(List.class);
+        when(taskRepository.saveAll(captor.capture())).thenAnswer(inv -> inv.getArgument(0));
+
+        service.spawnTasks(FACTORY_ID, batchId, productTypeId, null, null, null);
+
+        List<WorkProcessTask> saved = captor.getValue();
+        assertEquals(1, saved.size(), "skip=null 视为 false → 逐道");
+        assertEquals("wp-n1", saved.get(0).getWorkProcessId());
+    }
+
     // ==================== Task 5: listByBatch 按小组长过滤 (M1/M2) ====================
 
     /** 辅助: 构造一个 WorkProcessTask, 设定 assignedTo. */

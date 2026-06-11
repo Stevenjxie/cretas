@@ -160,8 +160,10 @@ class ProductionPlanBatchCompletionChainTest {
         assertNotNull(saved.getStartTime(), "转批次应设置 startTime");
         assertEquals(ProductionPlanStatus.IN_PROGRESS, plan.getStatus());
 
+        // V20261017_01: createBatchFromPlan 改调 6-arg overload (skip + 头尾责任人).
+        // pendingPlan 未设 skipProcessReporting → 实体默认 false; 无 supervisor → null/null.
         verify(workProcessTaskService, times(1))
-                .spawnTasks(FACTORY_ID, 777L, PRODUCT_TYPE_ID);
+                .spawnTasks(FACTORY_ID, 777L, PRODUCT_TYPE_ID, Boolean.FALSE, null, null);
     }
 
     @Test
@@ -180,15 +182,16 @@ class ProductionPlanBatchCompletionChainTest {
             b.setId(888L);
             return b;
         });
-        // 产品无 product_work_processes 配置 → spawnTasks 抛 BusinessException
+        // 产品无 product_work_processes 配置 → spawnTasks 抛 BusinessException (6-arg overload)
         doThrow(new com.cretas.aims.exception.BusinessException(404, "无工序模板"))
-                .when(workProcessTaskService).spawnTasks(any(), any(), any());
+                .when(workProcessTaskService).spawnTasks(any(), any(), any(), any(), any(), any());
 
         ProductionBatch saved = assertDoesNotThrow(() -> service.createBatchFromPlan(FACTORY_ID, PLAN_ID),
                 "spawnTasks 失败必须 fail-soft, 不阻塞批次创建");
         assertNotNull(saved);
         assertEquals(ProductionBatchStatus.IN_PROGRESS, saved.getStatus());
-        verify(workProcessTaskService, times(1)).spawnTasks(FACTORY_ID, 888L, PRODUCT_TYPE_ID);
+        verify(workProcessTaskService, times(1))
+                .spawnTasks(FACTORY_ID, 888L, PRODUCT_TYPE_ID, Boolean.FALSE, null, null);
     }
 
     // ==================== GAP 6: completeProduction 级联批次 ====================
