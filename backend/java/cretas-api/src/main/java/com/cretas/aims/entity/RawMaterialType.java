@@ -281,6 +281,30 @@ public class RawMaterialType extends BaseEntity {
     @Column(name = "primary_code", length = 3)
     private String primaryCode;
 
+    // ========== 包材规格 (packaging spec) ==========
+
+    /**
+     * 包材每个成品单位所需数量 (仅 category=PACKAGING 有意义).
+     *
+     * <p>语义: 生产 1 个最小成品单位 (outputQuantityPerUnit) 需要此包材多少个/袋/盒。
+     * 示例:
+     * <ul>
+     *   <li>吸塑盒 "每产品1个" → {@code packQtyPerProduct = 1.000000}</li>
+     *   <li>气调膜 "每产品1片" → {@code packQtyPerProduct = 1.000000}</li>
+     *   <li>外箱 "每箱20盒成品" → {@code packQtyPerProduct = 0.050000} (1/20)</li>
+     * </ul>
+     *
+     * <p>BOM 自动推算:
+     * {@code standardQuantity = packQtyPerProduct}
+     * (无需再乘 outputQuantityPerUnit — 因为 BOM standardQuantity 已经是"每成品单位"口径).
+     *
+     * <p>null = 未配置规格, 需手填 BOM standardQuantity.
+     *
+     * <p>DB: pack_qty_per_product NUMERIC(15,6) NULL
+     */
+    @Column(name = "pack_qty_per_product", precision = 15, scale = 6)
+    private java.math.BigDecimal packQtyPerProduct;
+
     // ========== 关联关系 ==========
 
     /**
