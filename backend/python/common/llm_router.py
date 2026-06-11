@@ -51,6 +51,23 @@ from common.llm_client import get_llm_http_client
 logger = logging.getLogger(__name__)
 
 
+# ─── Runtime PAID-model denylist guard (2026-06-11 key rotation incident) ───
+# Belt-and-suspenders: even if config drift sneaks a PAID (off-free-allowlist)
+# model back into a chain, the per-attempt call path REFUSES to call it and
+# skips to the next chain entry. These exact codes caused the 2026-06-11 bill
+# (keys rotated to new accounts → stale allowlists → these off-list models
+# silently billed when free heads exhausted). Aliyun's 免费额度用完即停 toggle
+# ONLY protects models ON each account's free allowlist; an off-list model has
+# no toggle and bills silently.
+_PAID_MODEL_DENYLIST: frozenset = frozenset({
+    "qwen3-max",              # bare — not on any rotated account's free list
+    "qwen3-max-2026-01-23",   # off-list on rotated accounts
+    "qwen-max",               # bare — not free
+    "qwen-plus",              # bare — use qwen-plus-latest (free) instead
+    "qwen3.5-122b-a10b",      # not on allowlist
+})
+
+
 def _log_cache_and_record_budget(slot_value: str, account: str, model: str, body: Dict[str, Any]) -> None:
     """Parse usage from a successful response: log cache-hit ratio. Mirrors
     the streaming path's [cache] log line so observability is uniform across
@@ -289,27 +306,43 @@ def _dedup_chain(pairs: List[Tuple[str, str]]) -> List[Tuple[str, str]]:
     return out
 
 
-# Universal free-text fallback tail (appended to every text slot). All entries
-# verified FREE + 已开启 on the console 2026-05-31.
+# Universal free-text fallback tail (appended to every text slot).
+# Rebuilt 2026-06-11 (key rotation incident): keys were rotated to new accounts
+# so the per-account free allowlists are stale. The OLD tail hit bare
+# `qwen3-max` / `qwen-max` / `qwen-plus` (NOT on the free allowlists = PAID) and
+# blew up the bill. EVERY entry below is now on the new free allowlist for its
+# account (see reference_dashscope_free_model_allowlist 2026-06-11 section).
+# Order: aliyun_c (a736, UNTOUCHED fresh) → aliyun_b (3177, huge free catalog) →
+# tencent (free 用完即停) → zhipu (free 用完即停) → aliyun_a (90bc, partially
+# consumed — LAST, only its tiny remaining-free list, no low-runway SKUs).
 _TEXT_TAIL: List[Tuple[str, str]] = [
-    ("aliyun_c", "qwen-plus"), ("aliyun_c", "qwen3-max"), ("aliyun_c", "qwen-max"),
+    # aliyun_c (a736) — fresh untouched account, full free catalog
+    ("aliyun_c", "qwen-plus-latest"), ("aliyun_c", "qwen3.7-max-2026-06-08"),
     ("aliyun_c", "qwen3-235b-a22b"), ("aliyun_c", "qwen3.5-397b-a17b"),
     ("aliyun_c", "qwen3.6-flash"), ("aliyun_c", "qwen3-32b"),
     ("aliyun_c", "deepseek-v3"), ("aliyun_c", "glm-5"), ("aliyun_c", "glm-4.6"),
-    ("aliyun_b", "qwen-flash"), ("aliyun_b", "qwen-plus-latest"), ("aliyun_b", "qwen3-max"),
+    # aliyun_b (3177) — huge free catalog
+    ("aliyun_b", "qwen-flash"), ("aliyun_b", "qwen-plus-latest"),
+    ("aliyun_b", "qwen3.7-max-2026-06-08"),
     ("aliyun_b", "qwen3-235b-a22b"), ("aliyun_b", "qwen3.5-397b-a17b"),
     ("aliyun_b", "deepseek-v3"), ("aliyun_b", "glm-4.6"),
-    ("aliyun_a", "qwen3.6-flash"), ("aliyun_a", "qwen3.6-plus"),
-    ("aliyun_a", "qwen3.5-plus-2026-04-20"), ("aliyun_a", "qwen3.7-max-2026-05-17"),
-    # tencent TokenHub free-trial tail (2026-06-01) — placed AFTER all aliyun
-    # free quota (drains first) and BEFORE zhipu. All FREE on the 90-day trial.
+    # tencent (m00t) TokenHub free-trial — FREE 用完即停 (no silent paid billing).
     ("tencent", "deepseek-v4-pro"), ("tencent", "glm-5.1"),
     ("tencent", "qwen3.5-flash"), ("tencent", "kimi-k2.6"),
     ("tencent", "deepseek-v4-flash"), ("tencent", "minimax-m2.7"),
+    # zhipu (uUgu) — independent GLM pool, free 用完即停
     ("zhipu", "glm-4.5-air"),
+    # aliyun_a (90bc) — partially consumed, LAST. Only its remaining-free SKUs.
+    # ⛔ EXCLUDE qwen3.6-plus on aliyun_a (only ~15K left, near-empty).
+    ("aliyun_a", "qwen3.6-flash"), ("aliyun_a", "qwen3.6-27b"),
+    ("aliyun_a", "qwen3.5-plus-2026-04-20"), ("aliyun_a", "qwen3.7-max-2026-05-17"),
 ]
 
 # VL-only chain (vision; text models can't serve images).
+# 2026-06-11: order aliyun_c (a736 fresh) → aliyun_b (3177) → zhipu. aliyun_a
+# (90bc) has NO VL model on its remaining-free allowlist → not included (a
+# VL call there would be off-allowlist = PAID). Every entry is on the
+# aliyun_c/b VL free allowlist.
 _VL_CHAIN: List[Tuple[str, str]] = _dedup_chain([
     ("aliyun_c", "qwen3-vl-plus-2025-12-19"), ("aliyun_c", "qwen-vl-max"),
     ("aliyun_c", "qwen3-vl-plus"), ("aliyun_c", "qwen3-vl-32b-instruct"),
@@ -320,45 +353,58 @@ _VL_CHAIN: List[Tuple[str, str]] = _dedup_chain([
 ])
 
 # SLOT_MODELS[slot] = ordered list of (account, model) — the deep fallback chain.
+# 2026-06-11 (key rotation incident): heads reordered aliyun_c (a736, fresh) →
+# aliyun_b (3177) → tencent → zhipu → aliyun_a (90bc) LAST. PURGED bare
+# qwen3-max / qwen-max / qwen-plus / qwen3-max-2026-01-23 / qwen3.5-122b-a10b
+# (all OFF the new free allowlists = PAID, caused the bill). Quality heads now
+# use qwen3.7-max-2026-06-08 (newest free, 1M ctx) instead of purged qwen3-max.
 SLOT_MODELS: Dict[SLOT, List[Tuple[str, str]]] = {
-    # CHAT — high-freq interactive → proven aliyun fast head (latency), tencent
-    # fast models 2nd, then full free tail.
+    # CHAT — high-freq interactive → aliyun_c fast head (latency), tencent fast
+    # 2nd, then full free tail.
     SLOT.CHAT: _dedup_chain([
         ("aliyun_c", "qwen-flash-2025-07-28"),
+        ("aliyun_b", "qwen-flash"),
         ("tencent", "qwen3.5-flash"), ("tencent", "deepseek-v4-flash"),
-        ("aliyun_b", "qwen-flash"), ("aliyun_a", "qwen3.6-flash"),
         ("aliyun_c", "qwen-turbo"),
     ] + _TEXT_TAIL),
     # INSIGHTS — quality slot (offline materialization Fix2 + upload analysis) →
-    # tencent deepseek-v4-pro flagship head (best free reasoner), aliyun max 2nd.
+    # aliyun_c newest-free max head, aliyun_b 2nd, tencent v4-pro 3rd.
     SLOT.INSIGHTS: _dedup_chain([
+        ("aliyun_c", "qwen3.7-max-2026-06-08"),
+        ("aliyun_b", "qwen3.7-max-2026-06-08"),
         ("tencent", "deepseek-v4-pro"),
-        ("aliyun_c", "qwen3-max"), ("aliyun_b", "qwen3-max"),
-        ("aliyun_a", "qwen3.7-max-2026-05-17"),
     ] + _TEXT_TAIL),
-    # CHART — needs valid compact JSON → JSON-reliable head, tencent glm-5.1 2nd.
+    # CHART — needs valid compact JSON → JSON-reliable NON-reasoning head
+    # (qwen-turbo; avoid glm reasoning models that empty `content`). glm-5 kept
+    # only as a later fallback in the tail.
     SLOT.CHART: _dedup_chain([
-        ("aliyun_c", "glm-5"), ("tencent", "glm-5.1"),
-        ("aliyun_c", "qwen-turbo"), ("aliyun_b", "glm-4.6"),
+        ("aliyun_c", "qwen-turbo"), ("aliyun_b", "qwen-flash"),
+        ("aliyun_c", "qwen3.6-flash"), ("aliyun_c", "glm-5"),
+        ("tencent", "glm-5.1"), ("aliyun_b", "glm-4.6"),
     ] + _TEXT_TAIL),
-    # MAPPER — field-mapping direction → aliyun fast head, tencent v4-flash 2nd.
+    # MAPPER — field-mapping direction → aliyun_c fast head, aliyun_b 2nd,
+    # tencent v4-flash 3rd. (purged qwen3.5-122b-a10b → free MoE alternatives)
     SLOT.MAPPER: _dedup_chain([
-        ("aliyun_c", "qwen-turbo"), ("tencent", "deepseek-v4-flash"),
-        ("aliyun_c", "qwen3.5-122b-a10b"), ("aliyun_b", "qwen3.5-122b-a10b"),
+        ("aliyun_c", "qwen-turbo"), ("aliyun_b", "qwen-flash"),
+        ("tencent", "deepseek-v4-flash"),
+        ("aliyun_c", "qwen3-235b-a22b"), ("aliyun_b", "qwen3-235b-a22b"),
     ] + _TEXT_TAIL),
-    # REASONING — depth → tencent deepseek-v4-pro quality head (best free reasoner,
-    # free on TokenHub; NOT free on aliyun), then aliyun free deepseek/MoE options.
+    # REASONING — depth → aliyun_c free deepseek/MoE head, aliyun_b 2nd, tencent
+    # v4-pro 3rd (best free reasoner, free on TokenHub; NOT free on aliyun).
     SLOT.REASONING: _dedup_chain([
+        ("aliyun_c", "deepseek-v3"),
+        ("aliyun_b", "qwen3.5-397b-a17b"),
         ("tencent", "deepseek-v4-pro"),
-        ("aliyun_c", "deepseek-v3"), ("aliyun_b", "qwen3.5-397b-a17b"),
         ("aliyun_c", "qwen3-235b-a22b"), ("aliyun_c", "deepseek-r1"),
     ] + _TEXT_TAIL),
     # VL — vision-only chain (tencent has no VL-understanding model).
     SLOT.VL: _VL_CHAIN,
-    # REVIEW — critique (Chinese-strong) → aliyun max head, tencent v4-pro 2nd.
+    # REVIEW — critique (Chinese-strong) → aliyun_c newest-free max head,
+    # aliyun_b 2nd, tencent v4-pro 3rd. (purged qwen3-max-2026-01-23 / qwen-max)
     SLOT.REVIEW: _dedup_chain([
-        ("aliyun_c", "qwen3-max-2026-01-23"), ("tencent", "deepseek-v4-pro"),
-        ("aliyun_b", "qwen3-max"), ("aliyun_c", "qwen-max"),
+        ("aliyun_c", "qwen3.7-max-2026-06-08"),
+        ("aliyun_b", "qwen3.7-max-2026-06-08"),
+        ("tencent", "deepseek-v4-pro"),
     ] + _TEXT_TAIL),
 }
 
@@ -500,6 +546,14 @@ async def call_chain(
 
     for account, model in slot_chain:
         if not model:
+            continue
+        # PAID-model denylist guard (2026-06-11): refuse to bill — skip to next.
+        if model in _PAID_MODEL_DENYLIST:
+            logger.error(
+                f"[llm_router] slot={slot.value} refusing PAID model {model} "
+                f"(account={account}) — skipping to protect billing"
+            )
+            errors.append(f"{account}/{model}: paid_denylist")
             continue
         cb_key = f"{account}/{model}"  # circuit-breaker per (account,model): one
         # model's free-quota 403 must NOT skip other free models on same account
@@ -647,6 +701,14 @@ async def call_chain_stream(
 
     for account, model in slot_chain:
         if not model:
+            continue
+        # PAID-model denylist guard (2026-06-11): refuse to bill — skip to next.
+        if model in _PAID_MODEL_DENYLIST:
+            logger.error(
+                f"[llm_router_stream] slot={slot.value} refusing PAID model {model} "
+                f"(account={account}) — skipping to protect billing"
+            )
+            errors.append(f"{account}/{model}: paid_denylist")
             continue
         cb_key = f"{account}/{model}"  # CB per (account,model), see call_chain
 
