@@ -14,6 +14,9 @@ import com.cretas.aims.entity.finance.ArApTransaction;
 import com.cretas.aims.entity.inventory.PaymentRequest;
 import com.cretas.aims.entity.inventory.PurchaseOrder;
 import com.cretas.aims.entity.inventory.PurchaseOrderItem;
+import com.cretas.aims.entity.workflow.ApprovalWorkflowInstance;
+import com.cretas.aims.entity.workflow.ApprovalWorkflowInstance.InstanceStatus;
+import com.cretas.aims.entity.workflow.ApprovalHistory.HistoryAction;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.CustomerRepository;
 import com.cretas.aims.repository.SupplierRepository;
@@ -22,8 +25,10 @@ import com.cretas.aims.repository.inventory.PaymentRequestRepository;
 import com.cretas.aims.repository.inventory.PurchaseOrderItemRepository;
 import com.cretas.aims.repository.inventory.PurchaseOrderRepository;
 import com.cretas.aims.service.inventory.PaymentRequestService;
+import com.cretas.aims.service.workflow.WorkflowEngineService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -32,8 +37,10 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.stream.Collectors;
 
 /**
@@ -50,15 +57,43 @@ import java.util.stream.Collectors;
  * status=COMPLETED 才可创建付款申请（防止货未到先付款）。PREPAID 按定义先付后货，豁免。
  * PO 查不到时跳过检查（降级，不阻塞创建）。
  *
- * <p>D-9 G6：{@code submitForApproval()} 已删除（死代码，无 Controller 端点暴露，
- * X-4 确认付款申请链走硬编码状态机而非 WorkflowEngine）。
+ * <p>D-9 G6（已被六扇门 #30 取代）：曾删除独立的 {@code submitForApproval()} 死代码并让
+ * 付款链走硬编码状态机。#30 重新接入 WorkflowEngine，但接入点改在 {@code financeApprove}
+ * （有 Controller 端点 {@code PUT /{requestId}/finance-approve} 暴露，非 SP12 的孤立死代码），
+ * 并补齐 SP12 缺失的「终态推进 + PR 状态翻译」，使工作流真正驱动 PR 状态。
  *
  * <p>D-9 G7：{@code create()} 继承 PO.settlementType → PR.settlementType。
+ *
+ * <p><b>六扇门 #30 可配置审批流接入（替代钉钉）</b>：{@code financeApprove()} 现在优先走
+ * Canvas-configured {@link WorkflowEngineService}（moduleCode={@code PURCHASE_PAYMENT}），
+ * 镜像 {@code PurchaseServiceImpl.approveOrder} 已验证的接入模式：
+ * <ul>
+ *   <li>无 workflow 引擎 bean / factory 无 active PURCHASE_PAYMENT workflow → 走 legacy 硬编码
+ *       状态机（直接 PR → APPROVED），保持 F001 等未配置工厂向后兼容。</li>
+ *   <li>有 active workflow → start / resume 工作流，按终态翻译 PR 状态：
+ *       <ul>
+ *         <li>{@code InstanceStatus.APPROVED} → {@code APPROVED}（解锁 markPaid）</li>
+ *         <li>{@code InstanceStatus.RUNNING} → 保留 {@code FINANCE_REVIEW}（多级审批中，
+ *             等待下一审批人；记录 workflowInstanceId）</li>
+ *         <li>{@code InstanceStatus.REJECTED} → {@code REJECTED}</li>
+ *         <li>{@code CANCELLED / TIMEOUT} → 回 {@code FINANCE_REVIEW} 等人工重审</li>
+ *       </ul></li>
+ * </ul>
+ *
+ * <p><b>⛔ 资金红线不变</b>：{@code markPaid} 仍要求 PR 处于 {@code APPROVED}。工作流 RUNNING
+ * 时 PR 停在 FINANCE_REVIEW → 无法付款；工作流 REJECTED → PR REJECTED → 无法付款。
+ * 「审批通过才能付款」语义在 legacy 与 workflow 两条路径下都成立。
+ *
+ * <p>Phase 1 hotfix 模式（2026-05-18 PurchaseService 踩过）：用 {@code hasActiveWorkflow}
+ * 预检避免 {@code startWorkflow} 的 orElseThrow 触发 Spring "rollback-only" 事务陷阱。
  */
 @Slf4j
 @Service
 @RequiredArgsConstructor
 public class PaymentRequestServiceImpl implements PaymentRequestService {
+
+    /** 六扇门 #30：付款审批工作流 moduleCode（DecisionTypeMetadataRegistry → PURCHASE_PAYMENT_APPROVAL）。 */
+    private static final String WORKFLOW_MODULE_CODE = "PURCHASE_PAYMENT";
 
     private final PaymentRequestRepository paymentRequestRepository;
     private final ArApTransactionRepository arApTransactionRepository;
@@ -66,6 +101,13 @@ public class PaymentRequestServiceImpl implements PaymentRequestService {
     private final PurchaseOrderRepository purchaseOrderRepository;
     private final PurchaseOrderItemRepository purchaseOrderItemRepository;
     private final CustomerRepository customerRepository;
+
+    /**
+     * 六扇门 #30：可选工作流引擎。
+     * {@code required = false} → 无配置工厂降级走硬编码状态机，不抛 NPE。
+     */
+    @Autowired(required = false)
+    private WorkflowEngineService workflowEngine;
 
     // ─── 活跃状态（幂等性检查用） ────────────────────────────────────────────
 
@@ -231,12 +273,91 @@ public class PaymentRequestServiceImpl implements PaymentRequestService {
 
     // ─── financeApprove ───────────────────────────────────────────────────────
 
+    /**
+     * 财务审批 — 六扇门 #30 优先走 Canvas-configured workflow，否则 legacy 硬编码状态机。
+     *
+     * <p>分支策略（镜像 {@code PurchaseServiceImpl.approveOrder}）:
+     * <ol>
+     *   <li>{@code workflowEngine} bean 不可用 → legacy（PR → APPROVED）</li>
+     *   <li>factory 无 active PURCHASE_PAYMENT workflow → legacy</li>
+     *   <li>有 active workflow → start / resume，按终态翻译 PR 状态</li>
+     * </ol>
+     */
     @Override
     @Transactional
     public PaymentRequest financeApprove(String requestId, Long userId, String note) {
         PaymentRequest pr = findAndValidate(requestId);
         requireStatus(pr, PaymentRequestStatus.FINANCE_REVIEW, "只有 FINANCE_REVIEW 状态的申请单可以财务审批");
 
+        // 六扇门 #30 — 引擎不可用直接 legacy
+        if (workflowEngine == null) {
+            return legacyFinanceApprove(pr, userId, note);
+        }
+
+        // Phase 1 hotfix 模式 — 预检 active workflow 存在，避免 startWorkflow 的 orElseThrow
+        // 触发 Spring "Transaction marked rollback-only" 陷阱（PurchaseService 2026-05-18 踩过）。
+        if (!workflowEngine.hasActiveWorkflow(pr.getFactoryId(), WORKFLOW_MODULE_CODE)) {
+            log.info("[#30] factory={} 无 active PURCHASE_PAYMENT 审批工作流，走 legacy 硬编码状态机",
+                    pr.getFactoryId());
+            return legacyFinanceApprove(pr, userId, note);
+        }
+
+        // 构建 workflow 评估上下文（edges 上 SpEL 读 #context.xxx）
+        Map<String, Object> context = new HashMap<>();
+        BigDecimal amount = pr.getAmount() != null ? pr.getAmount() : BigDecimal.ZERO;
+        context.put("amount", amount);
+        context.put("requestId", pr.getId());
+        context.put("supplierId", pr.getSupplierId() != null ? pr.getSupplierId() : "");
+        context.put("purchaseOrderId", pr.getPurchaseOrderId() != null ? pr.getPurchaseOrderId() : "");
+        context.put("settlementType", pr.getSettlementType() != null ? pr.getSettlementType().name() : "");
+        context.put("decision", "APPROVE");
+
+        // 已有 RUNNING 实例（多级审批中，resume）还是首次启动
+        Optional<ApprovalWorkflowInstance> existing = workflowEngine.getCurrentInstance(
+                pr.getFactoryId(), WORKFLOW_MODULE_CODE, pr.getId());
+
+        ApprovalWorkflowInstance instance;
+        if (existing.isPresent() && existing.get().getStatus() == InstanceStatus.RUNNING) {
+            instance = workflowEngine.transitionNode(
+                    existing.get().getId(), userId, "finance_manager",
+                    HistoryAction.APPROVE, note != null ? note : "付款申请财务审批");
+        } else {
+            // 预检已确认 hasActiveWorkflow=true，此处不应抛。若 race condition（workflow 刚被 disable）
+            // 仍 IllegalArgumentException，让异常上抛 → controller 4xx → 用户重试（届时 legacy）。
+            instance = workflowEngine.startWorkflow(
+                    pr.getFactoryId(), WORKFLOW_MODULE_CODE, pr.getId(), context, userId);
+        }
+
+        // 记录财务初审痕迹（无论 workflow 是否终态，本次审批人/意见都留痕）
+        pr.setWorkflowInstanceId(instance.getId());
+        pr.setFinanceReviewedBy(userId);
+        pr.setFinanceReviewedAt(LocalDateTime.now());
+        pr.setFinanceReviewNote(note);
+        pr.setSubmittedBy(userId);
+
+        // 按 workflow 终态翻译 PR 状态
+        PaymentRequestStatus translated = translateInstanceStatus(instance.getStatus());
+        pr.setStatus(translated);
+
+        if (translated == PaymentRequestStatus.APPROVED) {
+            // 工作流终态 APPROVED → 解锁付款，记录最终批准痕迹
+            pr.setApprovedBy(userId);
+            pr.setApprovedAt(LocalDateTime.now());
+        } else if (translated == PaymentRequestStatus.REJECTED) {
+            pr.setRejectReason(note != null && !note.isBlank() ? note : "工作流审批拒绝");
+        }
+
+        PaymentRequest saved = paymentRequestRepository.save(pr);
+        log.info("[#30] 付款申请单 {} 工作流审批: instanceId={}, instanceStatus={}, prStatus={}, by userId={}",
+                pr.getRequestNumber(), instance.getId(), instance.getStatus(), translated, userId);
+        return saved;
+    }
+
+    /**
+     * Legacy 硬编码财务审批 — 无 workflow 配置时调用，保持 F001 等工厂向后兼容。
+     * 直接 FINANCE_REVIEW → APPROVED（单级财务审批）。
+     */
+    private PaymentRequest legacyFinanceApprove(PaymentRequest pr, Long userId, String note) {
         pr.setStatus(PaymentRequestStatus.APPROVED);
         pr.setFinanceReviewedBy(userId);
         pr.setFinanceReviewedAt(LocalDateTime.now());
@@ -244,8 +365,29 @@ public class PaymentRequestServiceImpl implements PaymentRequestService {
         pr.setApprovedBy(userId);
         pr.setApprovedAt(LocalDateTime.now());
         PaymentRequest saved = paymentRequestRepository.save(pr);
-        log.info("[SP6] 付款申请单 {} 财务审批通过 by userId={}", pr.getRequestNumber(), userId);
+        log.info("[SP6] [legacy] 付款申请单 {} 财务审批通过 by userId={}", pr.getRequestNumber(), userId);
         return saved;
+    }
+
+    /**
+     * 六扇门 #30 — workflow 实例终态 → PaymentRequest 状态映射。
+     *
+     * <ul>
+     *   <li>{@code APPROVED} → {@code APPROVED}（解锁 markPaid 红线）</li>
+     *   <li>{@code RUNNING} → {@code FINANCE_REVIEW}（多级审批中，停在可继续审批的状态，
+     *       不解锁付款）</li>
+     *   <li>{@code REJECTED} → {@code REJECTED}</li>
+     *   <li>{@code CANCELLED / TIMEOUT} → {@code FINANCE_REVIEW}（实例结束，回可重审状态）</li>
+     * </ul>
+     */
+    private PaymentRequestStatus translateInstanceStatus(InstanceStatus status) {
+        if (status == null) return PaymentRequestStatus.FINANCE_REVIEW;
+        return switch (status) {
+            case APPROVED -> PaymentRequestStatus.APPROVED;
+            case RUNNING -> PaymentRequestStatus.FINANCE_REVIEW;
+            case REJECTED -> PaymentRequestStatus.REJECTED;
+            case CANCELLED, TIMEOUT -> PaymentRequestStatus.FINANCE_REVIEW;
+        };
     }
 
     // ─── reject ──────────────────────────────────────────────────────────────
