@@ -3,6 +3,7 @@ package com.cretas.aims.entity.inventory;
 import com.cretas.aims.security.PriceSensitive;
 import com.cretas.aims.entity.BaseEntity;
 import com.cretas.aims.entity.enums.PaymentRequestStatus;
+import com.cretas.aims.entity.enums.PaymentSourceType;
 import com.cretas.aims.entity.enums.SettlementType;
 import lombok.*;
 import org.hibernate.annotations.Where;
@@ -24,13 +25,24 @@ import java.util.UUID;
  *         ↘ (cancel by creator)              → CANCELLED
  * </pre>
  *
- * <p>幂等性：同一 purchaseOrderId 在 PENDING/FINANCE_REVIEW/APPROVED 状态下不允许重复创建（409）。
+ * <p>幂等性：同一 purchaseOrderId（采购）/ salesOrderId（销售）在 PENDING/FINANCE_REVIEW/APPROVED
+ * 状态下不允许重复创建（409）。
  *
- * <p>markPaid 三写原子：PaymentRequest.status=PAID + ArApTransaction(AP_PAYMENT) +
- * Supplier.currentBalance 在单一 {@code @Transactional} 中完成，任一失败全部回滚，
- * 禁止 fail-soft。
+ * <p>#29 双向付款：{@code sourceType} 区分采购方向（PURCHASE，对供应商应付）与销售方向
+ * （SALES，对客户 outbound 退款/返利/销售费用）。XOR 互斥：采购填 purchaseOrderId/supplierId，
+ * 销售填 salesOrderId/customerId，二选一。
+ *
+ * <p>markPaid 三写原子：
+ * <ul>
+ *   <li>PURCHASE：PaymentRequest.status=PAID + ArApTransaction(AP_PAYMENT, SUPPLIER) +
+ *       Supplier.currentBalance 扣减。（SP6/D-9 原有路径，字节不变）</li>
+ *   <li>SALES：PaymentRequest.status=PAID + ArApTransaction(AR_CREDIT_NOTE, CUSTOMER) +
+ *       Customer.currentBalance 扣减。</li>
+ * </ul>
+ * 均在单一 {@code @Transactional} 中完成，任一失败全部回滚，禁止 fail-soft。
  *
  * @see PaymentRequestStatus
+ * @see PaymentSourceType
  */
 @Data
 @EqualsAndHashCode(callSuper = true)
@@ -46,6 +58,8 @@ import java.util.UUID;
                 @Index(name = "idx_pr_factory_status", columnList = "factory_id,status"),
                 @Index(name = "idx_pr_po", columnList = "purchase_order_id"),
                 @Index(name = "idx_pr_supplier", columnList = "supplier_id"),
+                @Index(name = "idx_pr_so", columnList = "sales_order_id"),
+                @Index(name = "idx_pr_customer", columnList = "customer_id"),
                 @Index(name = "idx_pr_created_by", columnList = "created_by")
         }
 )
@@ -75,13 +89,40 @@ public class PaymentRequest extends BaseEntity {
     @Column(name = "request_number", nullable = false, length = 50)
     private String requestNumber;
 
-    @NotBlank
-    @Column(name = "purchase_order_id", nullable = false, length = 191)
+    /**
+     * #29: 付款方向。PURCHASE（对供应商应付，SP6/D-9 原有）/ SALES（对客户 outbound 退款/返利/销售费用）。
+     * 老数据迁移默认 PURCHASE（V20261018_03）。新建必填，create() 默认 PURCHASE 保证向后兼容。
+     */
+    @NotNull
+    @Enumerated(EnumType.STRING)
+    @Column(name = "source_type", nullable = false, length = 16)
+    private PaymentSourceType sourceType = PaymentSourceType.PURCHASE;
+
+    /**
+     * 采购方向关联 PO（PURCHASE 时必填，SALES 时为 null）。
+     * #29 起改为 nullable（原 @NotBlank NOT NULL），XOR 校验在 Service 层。
+     */
+    @Column(name = "purchase_order_id", length = 191)
     private String purchaseOrderId;
 
-    @NotBlank
-    @Column(name = "supplier_id", nullable = false, length = 191)
+    /**
+     * 采购方向交易对手供应商（PURCHASE 时必填，SALES 时为 null）。
+     * #29 起改为 nullable，XOR 校验在 Service 层。
+     */
+    @Column(name = "supplier_id", length = 191)
     private String supplierId;
+
+    /**
+     * 销售方向关联销售订单（SALES 时必填，PURCHASE 时为 null）。#29 新增。
+     */
+    @Column(name = "sales_order_id", length = 191)
+    private String salesOrderId;
+
+    /**
+     * 销售方向交易对手客户（SALES 时必填，PURCHASE 时为 null）。#29 新增。
+     */
+    @Column(name = "customer_id", length = 191)
+    private String customerId;
 
     @NotNull
     @Enumerated(EnumType.STRING)

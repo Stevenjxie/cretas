@@ -75,12 +75,17 @@ class PaymentRequestServiceTest {
     @Mock
     private PurchaseOrderItemRepository purchaseOrderItemRepository;
 
+    @Mock
+    private com.cretas.aims.repository.CustomerRepository customerRepository;
+
     @InjectMocks
     private PaymentRequestServiceImpl paymentRequestService;
 
     private static final String FACTORY_ID = "F006";
     private static final String PO_ID = "PO-001";
     private static final String SUPPLIER_ID = "SUP-001";
+    private static final String SO_ID = "SO-001";
+    private static final String CUSTOMER_ID = "CUST-001";
 
     @BeforeEach
     void setup() {
@@ -847,6 +852,279 @@ class PaymentRequestServiceTest {
             s.setId(id);
             s.setCurrentBalance(balance);
             return s;
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // #29 销售方向付款审批 — createSalesPayment + markPaid SALES 分流
+    // ═══════════════════════════════════════════════════════════════════
+
+    @Nested
+    @DisplayName("#29 createSalesPayment 销售方向创建")
+    class CreateSalesPaymentTests {
+
+        @Test
+        @DisplayName("正常创建：sourceType=SALES，salesOrderId/customerId 写入，PO/supplier 为 null")
+        void createSales_setsSalesDirection_noPurchaseFields() {
+            when(paymentRequestRepository.findActiveSalesByOrderId(eq(SO_ID), anyList()))
+                    .thenReturn(Collections.emptyList());
+
+            PaymentRequest pr = paymentRequestService.createSalesPayment(
+                    FACTORY_ID, SO_ID, CUSTOMER_ID, BigDecimal.valueOf(800),
+                    "transfer", 1L, "客户退款");
+
+            assertThat(pr.getSourceType())
+                    .isEqualTo(com.cretas.aims.entity.enums.PaymentSourceType.SALES);
+            assertThat(pr.getSalesOrderId()).isEqualTo(SO_ID);
+            assertThat(pr.getCustomerId()).isEqualTo(CUSTOMER_ID);
+            assertThat(pr.getPurchaseOrderId()).isNull();
+            assertThat(pr.getSupplierId()).isNull();
+            assertThat(pr.getSettlementType()).isNull();
+            assertThat(pr.getStatus()).isEqualTo(PaymentRequestStatus.PENDING);
+            // ⛔ 销售路径绝不查 PO（与采购 create 隔离）
+            verify(purchaseOrderRepository, never()).findById(anyString());
+        }
+
+        @Test
+        @DisplayName("customerId 为空 → BusinessException(422)")
+        void createSales_missingCustomer_throws422() {
+            assertThatThrownBy(() -> paymentRequestService.createSalesPayment(
+                    FACTORY_ID, SO_ID, null, BigDecimal.valueOf(800), "transfer", 1L, null))
+                    .isInstanceOf(BusinessException.class);
+            verify(paymentRequestRepository, never()).save(any());
+        }
+
+        @Test
+        @DisplayName("金额 <= 0 → BusinessException(422)")
+        void createSales_nonPositiveAmount_throws422() {
+            assertThatThrownBy(() -> paymentRequestService.createSalesPayment(
+                    FACTORY_ID, SO_ID, CUSTOMER_ID, BigDecimal.ZERO, "transfer", 1L, null))
+                    .isInstanceOf(BusinessException.class);
+            verify(paymentRequestRepository, never()).save(any());
+        }
+
+        @Test
+        @DisplayName("幂等：同一 SO 已有活跃销售付款申请 → BusinessException(409)")
+        void createSales_duplicateActiveSO_throws409() {
+            PaymentRequest existing = new PaymentRequest();
+            existing.setId("PR-SALES-EXIST");
+            existing.setStatus(PaymentRequestStatus.FINANCE_REVIEW);
+            when(paymentRequestRepository.findActiveSalesByOrderId(eq(SO_ID), anyList()))
+                    .thenReturn(List.of(existing));
+
+            assertThatThrownBy(() -> paymentRequestService.createSalesPayment(
+                    FACTORY_ID, SO_ID, CUSTOMER_ID, BigDecimal.valueOf(800), "transfer", 1L, null))
+                    .isInstanceOf(BusinessException.class);
+            verify(paymentRequestRepository, never()).save(any());
+        }
+
+        @Test
+        @DisplayName("无单退款（salesOrderId 为空但 customerId 非空）→ 创建成功，跳过 SO 幂等检查")
+        void createSales_nullSalesOrderId_ok_noIdempotencyQuery() {
+            PaymentRequest pr = paymentRequestService.createSalesPayment(
+                    FACTORY_ID, null, CUSTOMER_ID, BigDecimal.valueOf(300), "cash", 1L, "无单返利");
+
+            assertThat(pr.getSourceType())
+                    .isEqualTo(com.cretas.aims.entity.enums.PaymentSourceType.SALES);
+            assertThat(pr.getSalesOrderId()).isNull();
+            assertThat(pr.getCustomerId()).isEqualTo(CUSTOMER_ID);
+            // salesOrderId 为空时不做幂等查询
+            verify(paymentRequestRepository, never()).findActiveSalesByOrderId(any(), anyList());
+        }
+    }
+
+    @Nested
+    @DisplayName("#29 markPaid SALES 分流（AR_CREDIT_NOTE + CUSTOMER + Customer.balance）")
+    class MarkPaidSalesTests {
+
+        private PaymentRequest approvedSalesRequest() {
+            PaymentRequest pr = new PaymentRequest();
+            pr.setId("PR-SALES-001");
+            pr.setFactoryId(FACTORY_ID);
+            pr.setSourceType(com.cretas.aims.entity.enums.PaymentSourceType.SALES);
+            pr.setSalesOrderId(SO_ID);
+            pr.setCustomerId(CUSTOMER_ID);
+            pr.setStatus(PaymentRequestStatus.APPROVED);
+            pr.setAmount(BigDecimal.valueOf(800));
+            pr.setCreatedBy(1L);
+            return pr;
+        }
+
+        private com.cretas.aims.entity.Customer makeCustomer(String id, BigDecimal balance) {
+            com.cretas.aims.entity.Customer c = new com.cretas.aims.entity.Customer();
+            c.setId(id);
+            c.setName("测试客户");
+            c.setCurrentBalance(balance);
+            return c;
+        }
+
+        @Test
+        @DisplayName("markPaid SALES：ArApTransaction = AR_CREDIT_NOTE + CUSTOMER counterparty")
+        void markPaidSales_createsArCreditNote_customerCounterparty() {
+            PaymentRequest pr = approvedSalesRequest();
+            when(paymentRequestRepository.findById("PR-SALES-001")).thenReturn(Optional.of(pr));
+            when(customerRepository.findById(CUSTOMER_ID))
+                    .thenReturn(Optional.of(makeCustomer(CUSTOMER_ID, BigDecimal.valueOf(5000))));
+            when(arApTransactionRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+            paymentRequestService.markPaid("PR-SALES-001", 3L, "退款凭证");
+
+            ArgumentCaptor<com.cretas.aims.entity.finance.ArApTransaction> txCaptor =
+                    ArgumentCaptor.forClass(com.cretas.aims.entity.finance.ArApTransaction.class);
+            verify(arApTransactionRepository).save(txCaptor.capture());
+            var tx = txCaptor.getValue();
+            assertThat(tx.getTransactionType()).isEqualTo(ArApTransactionType.AR_CREDIT_NOTE);
+            assertThat(tx.getCounterpartyType())
+                    .isEqualTo(com.cretas.aims.entity.enums.CounterpartyType.CUSTOMER);
+            assertThat(tx.getCounterpartyId()).isEqualTo(CUSTOMER_ID);
+            assertThat(tx.getSalesOrderId()).isEqualTo(SO_ID);
+            assertThat(tx.getPurchaseOrderId()).isNull();
+            assertThat(tx.getAmount()).isEqualByComparingTo(BigDecimal.valueOf(800));
+            // ⛔ 销售路径绝不碰供应商
+            verify(supplierRepository, never()).findById(anyString());
+            verify(supplierRepository, never()).save(any());
+        }
+
+        @Test
+        @DisplayName("markPaid SALES：Customer.currentBalance 扣减（5000 - 800 = 4200）+ balanceAfter")
+        void markPaidSales_decreasesCustomerBalance() {
+            PaymentRequest pr = approvedSalesRequest();
+            when(paymentRequestRepository.findById("PR-SALES-001")).thenReturn(Optional.of(pr));
+            com.cretas.aims.entity.Customer customer = makeCustomer(CUSTOMER_ID, BigDecimal.valueOf(5000));
+            when(customerRepository.findById(CUSTOMER_ID)).thenReturn(Optional.of(customer));
+            when(arApTransactionRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+            paymentRequestService.markPaid("PR-SALES-001", 3L, null);
+
+            verify(customerRepository).save(argThat(c ->
+                    c.getCurrentBalance().compareTo(BigDecimal.valueOf(4200)) == 0));
+            verify(arApTransactionRepository).save(argThat(tx ->
+                    tx.getBalanceAfter().compareTo(BigDecimal.valueOf(4200)) == 0));
+        }
+
+        @Test
+        @DisplayName("markPaid SALES：状态变 PAID + arapTransactionId 关联")
+        void markPaidSales_statusPaid_linksTx() {
+            PaymentRequest pr = approvedSalesRequest();
+            when(paymentRequestRepository.findById("PR-SALES-001")).thenReturn(Optional.of(pr));
+            when(customerRepository.findById(CUSTOMER_ID))
+                    .thenReturn(Optional.of(makeCustomer(CUSTOMER_ID, BigDecimal.valueOf(5000))));
+            when(arApTransactionRepository.save(any())).thenAnswer(inv -> {
+                var t = (com.cretas.aims.entity.finance.ArApTransaction) inv.getArgument(0);
+                if (t.getId() == null) t.setId("TX-SALES-1");
+                return t;
+            });
+
+            PaymentRequest result = paymentRequestService.markPaid("PR-SALES-001", 3L, null);
+
+            assertThat(result.getStatus()).isEqualTo(PaymentRequestStatus.PAID);
+            assertThat(result.getArapTransactionId()).isEqualTo("TX-SALES-1");
+            assertThat(result.getPaidBy()).isEqualTo(3L);
+        }
+
+        @Test
+        @DisplayName("markPaid SALES：customer.currentBalance=null → 不抛 NPE，balanceAfter = -amount")
+        void markPaidSales_nullCustomerBalance_noNpe() {
+            PaymentRequest pr = approvedSalesRequest();
+            when(paymentRequestRepository.findById("PR-SALES-001")).thenReturn(Optional.of(pr));
+            com.cretas.aims.entity.Customer customer = makeCustomer(CUSTOMER_ID, null);
+            when(customerRepository.findById(CUSTOMER_ID)).thenReturn(Optional.of(customer));
+            when(arApTransactionRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+            assertDoesNotThrow(() -> paymentRequestService.markPaid("PR-SALES-001", 3L, null));
+
+            verify(arApTransactionRepository).save(argThat(tx ->
+                    tx.getBalanceAfter().compareTo(BigDecimal.valueOf(-800)) == 0));
+        }
+
+        @Test
+        @DisplayName("markPaid SALES：客户不存在 → BusinessException，无余额写入")
+        void markPaidSales_customerMissing_throws() {
+            PaymentRequest pr = approvedSalesRequest();
+            when(paymentRequestRepository.findById("PR-SALES-001")).thenReturn(Optional.of(pr));
+            when(customerRepository.findById(CUSTOMER_ID)).thenReturn(Optional.empty());
+
+            assertThrows(BusinessException.class, () ->
+                    paymentRequestService.markPaid("PR-SALES-001", 3L, null));
+            verify(customerRepository, never()).save(any());
+        }
+    }
+
+    @Nested
+    @DisplayName("#29 采购方向回归（sourceType=PURCHASE/null 走原路径，字节不变）")
+    class PurchaseRegressionTests {
+
+        private PaymentRequest approvedPurchaseRequest(com.cretas.aims.entity.enums.PaymentSourceType st) {
+            PaymentRequest pr = new PaymentRequest();
+            pr.setId("PR-REG-001");
+            pr.setFactoryId(FACTORY_ID);
+            pr.setSourceType(st);
+            pr.setSupplierId(SUPPLIER_ID);
+            pr.setPurchaseOrderId(PO_ID);
+            pr.setStatus(PaymentRequestStatus.APPROVED);
+            pr.setAmount(BigDecimal.valueOf(5000));
+            pr.setCreatedBy(1L);
+            return pr;
+        }
+
+        private Supplier makeSupplier(String id, BigDecimal balance) {
+            Supplier s = new Supplier();
+            s.setId(id);
+            s.setCurrentBalance(balance);
+            return s;
+        }
+
+        @Test
+        @DisplayName("sourceType=PURCHASE：markPaid 仍走 AP_PAYMENT + SUPPLIER + Supplier.balance（不碰 Customer）")
+        void purchaseSourceType_marksPaidViaSupplierPath() {
+            PaymentRequest pr = approvedPurchaseRequest(
+                    com.cretas.aims.entity.enums.PaymentSourceType.PURCHASE);
+            when(paymentRequestRepository.findById("PR-REG-001")).thenReturn(Optional.of(pr));
+            when(supplierRepository.findById(SUPPLIER_ID))
+                    .thenReturn(Optional.of(makeSupplier(SUPPLIER_ID, BigDecimal.valueOf(10000))));
+            when(arApTransactionRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+            paymentRequestService.markPaid("PR-REG-001", 3L, null);
+
+            verify(arApTransactionRepository).save(argThat(tx ->
+                    tx.getTransactionType() == ArApTransactionType.AP_PAYMENT
+                            && tx.getCounterpartyType()
+                                == com.cretas.aims.entity.enums.CounterpartyType.SUPPLIER));
+            verify(supplierRepository).save(argThat(s ->
+                    s.getCurrentBalance().compareTo(BigDecimal.valueOf(5000)) == 0));
+            verify(customerRepository, never()).findById(anyString());
+            verify(customerRepository, never()).save(any());
+        }
+
+        @Test
+        @DisplayName("sourceType=null（老数据兜底）：markPaid 走采购路径，不抛 NPE")
+        void nullSourceType_fallsBackToPurchasePath() {
+            PaymentRequest pr = approvedPurchaseRequest(null);
+            when(paymentRequestRepository.findById("PR-REG-001")).thenReturn(Optional.of(pr));
+            when(supplierRepository.findById(SUPPLIER_ID))
+                    .thenReturn(Optional.of(makeSupplier(SUPPLIER_ID, BigDecimal.valueOf(10000))));
+            when(arApTransactionRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+            assertDoesNotThrow(() -> paymentRequestService.markPaid("PR-REG-001", 3L, null));
+
+            verify(supplierRepository).save(any());
+            verify(customerRepository, never()).save(any());
+        }
+
+        @Test
+        @DisplayName("采购 create()：sourceType 显式设为 PURCHASE，销售列为 null")
+        void purchaseCreate_setsPurchaseSourceType() {
+            when(paymentRequestRepository.findActiveByPurchaseOrderId(eq(PO_ID), anyList()))
+                    .thenReturn(Collections.emptyList());
+
+            PaymentRequest pr = paymentRequestService.create(
+                    FACTORY_ID, PO_ID, SUPPLIER_ID, BigDecimal.valueOf(5000),
+                    "transfer", 1L, null);
+
+            assertThat(pr.getSourceType())
+                    .isEqualTo(com.cretas.aims.entity.enums.PaymentSourceType.PURCHASE);
+            assertThat(pr.getSalesOrderId()).isNull();
+            assertThat(pr.getCustomerId()).isNull();
         }
     }
 }
