@@ -23,6 +23,12 @@ const productionAnalyticsRoutes: RouteRecordRaw[] = [
         component: () => import('@/views/production-analytics/EfficiencyAnalysis.vue'),
         meta: { requiresAuth: true, title: '人效分析', icon: 'User', module: 'analytics' },
       },
+      {
+        path: 'cost',
+        name: 'PACost',
+        component: () => import('@/views/production-analytics/FactoryCostAnalysis.vue'),
+        meta: { requiresAuth: true, title: '成本分析', icon: 'Coin', module: 'analytics' },
+      },
     ],
   },
 ];
