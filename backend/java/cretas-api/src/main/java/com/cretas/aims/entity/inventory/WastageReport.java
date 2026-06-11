@@ -10,7 +10,11 @@ import java.time.LocalDateTime;
 import java.util.UUID;
 
 /**
- * 报损单实体 (SP7 §3.3).
+ * 报损单实体 (SP7 §3.3) — 报损 ≠ 报废。
+ *
+ * <p>⚠️ 与 {@link com.cretas.aims.entity.DisposalRecord}(报废记录) <b>不同领域, 不可合并</b>:
+ * WastageReport=对<b>原料批次</b>库存损耗的写减审批; DisposalRecord=对<b>不合格品</b>的报废处置
+ * (质检/返工后)。两者均 LIVE, 各自前后端全链路在用。PRODUCTION_WASTE 报损原因见 #687。
  *
  * <p>双轨审批:
  * <ul>

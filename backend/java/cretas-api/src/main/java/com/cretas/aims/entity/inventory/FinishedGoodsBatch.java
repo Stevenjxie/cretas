@@ -140,6 +140,39 @@ public class FinishedGoodsBatch extends BaseEntity {
     @Column(name = "remark", columnDefinition = "TEXT")
     private String remark;
 
+    /**
+     * 气调货标称数 (V20261024_01). 一托标 36 但实收 37 时, nominal_quantity=36,
+     * producedQuantity=37 (库存按实收计量). null = 非气调/无差异入库.
+     * 差异 = producedQuantity - nominalQuantity (业务层派生).
+     */
+    @Column(name = "nominal_quantity", precision = 15, scale = 4)
+    private BigDecimal nominalQuantity;
+
+    /**
+     * 对方划单确认 (V20261024_01). 气调货标称≠实收时需对方签字确认. null = 不适用.
+     */
+    @Column(name = "counterparty_confirmed")
+    private Boolean counterpartyConfirmed;
+
+    /**
+     * 入库差异/划单备注 (V20261024_01). 留痕气调差异原因 + 对方划单情况.
+     */
+    @Column(name = "inbound_remark", columnDefinition = "TEXT")
+    private String inboundRemark;
+
+    /**
+     * 入库差异 (实收 − 标称). 派生字段, 仅序列化不持久化.
+     * nominalQuantity 为 null 时返 null (非气调入库无差异概念).
+     */
+    @Transient
+    @com.fasterxml.jackson.annotation.JsonProperty("inboundDiscrepancy")
+    public BigDecimal getInboundDiscrepancy() {
+        if (nominalQuantity == null || producedQuantity == null) {
+            return null;
+        }
+        return producedQuantity.subtract(nominalQuantity);
+    }
+
     @Version
     @Column(name = "version")
     private Long version;

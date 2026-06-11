@@ -120,15 +120,34 @@ public class SalesController {
                 .orElseThrow(() -> new BusinessException(404, "产品类型不存在或不属于该工厂")
                         .withHint("productTypeId=" + request.productTypeId() + " 在工厂 " + factoryId + " 中未找到"));
 
+        // 气调货入库防呆 (六扇门 "一托36放37, 对方划单"):
+        // 标称数(nominalQuantity)与实收数(producedQuantity)不一致时, 必须对方划单确认,
+        // 否则拒绝 — 防止仓管员凭印象记数 (fool-proof Rule 1 边界前置 + Rule 2 上下文).
+        boolean hasDiscrepancy = request.nominalQuantity() != null
+                && request.nominalQuantity().compareTo(request.producedQuantity()) != 0;
+        if (hasDiscrepancy && !Boolean.TRUE.equals(request.counterpartyConfirmed())) {
+            BigDecimal diff = request.producedQuantity().subtract(request.nominalQuantity());
+            throw new BusinessException(422,
+                    "气调货标称数 " + request.nominalQuantity().stripTrailingZeros().toPlainString()
+                            + " 与实收数 " + request.producedQuantity().stripTrailingZeros().toPlainString()
+                            + " 不一致 (差 " + diff.stripTrailingZeros().toPlainString() + "), 需对方划单确认后入库")
+                    .withHint("请勾选「对方划单已确认」(counterpartyConfirmed=true) 再提交; 库存按实收数入库");
+        }
+
         FinishedGoodsBatch batch = new FinishedGoodsBatch();
         batch.setProductTypeId(request.productTypeId());
         batch.setBatchNumber(request.batchNumber());
+        // 库存按实收数(producedQuantity)计量 — 气调货入库以实收为准 (一托实收37)
         batch.setProducedQuantity(request.producedQuantity());
         batch.setShippedQuantity(BigDecimal.ZERO);
         batch.setReservedQuantity(BigDecimal.ZERO);
         batch.setUnit(request.unit());
         batch.setProductionDate(request.productionDate());
         batch.setRemark(request.remark());
+        // 气调货标称/划单留痕 (null 时为普通入库, 不影响现有路径)
+        batch.setNominalQuantity(request.nominalQuantity());
+        batch.setCounterpartyConfirmed(request.counterpartyConfirmed());
+        batch.setInboundRemark(request.inboundRemark());
         // F8: sourceType = "OPENING" so event listeners can filter bulk opening entries
         batch.setCreatedBy(userId);
 
@@ -708,6 +727,11 @@ public class SalesController {
             @NotNull @Positive BigDecimal producedQuantity,
             @NotBlank String unit,
             @NotNull LocalDate productionDate,
-            String remark) {
+            String remark,
+            // 气调货入库 (六扇门: "一托36放37, 对方划单"). 以下三项全可选, 留 null = 普通入库.
+            // producedQuantity 即实收数 (37); nominalQuantity 为标称数 (36).
+            @Positive BigDecimal nominalQuantity,
+            Boolean counterpartyConfirmed,
+            String inboundRemark) {
     }
 }
