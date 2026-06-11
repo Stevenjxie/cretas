@@ -111,17 +111,19 @@ CREATE TABLE IF NOT EXISTS agg_factory_batch_daily (
     total_cost           NUMERIC(18,2),                  -- sum of total_cost across batches
     -- Gold versioning + freshness
     version              BIGINT        NOT NULL DEFAULT 1,
-    updated_at           TIMESTAMP     NOT NULL DEFAULT NOW(),
-    CONSTRAINT pk_agg_factory_batch_daily PRIMARY KEY (factory_id, stat_date, COALESCE(product_type_id, ''))
+    updated_at           TIMESTAMP     NOT NULL DEFAULT NOW()
+    -- 无声明 PRIMARY KEY: product_type_id 可空(NULL=全产品日汇总), PK 不能含可空列且不能用
+    -- COALESCE 函数。唯一性 + ON CONFLICT 目标 = 下方 COALESCE 函数唯一索引 uq_agg_factory_batch_daily。
 );
 
 -- Note: PostgreSQL PRIMARY KEY does not allow nullable columns directly; use a surrogate
 -- We use a unique index instead to handle the NULL product_type_id case.
 ALTER TABLE agg_factory_batch_daily DROP CONSTRAINT IF EXISTS pk_agg_factory_batch_daily;
-ALTER TABLE agg_factory_batch_daily ADD COLUMN IF NOT EXISTS _pk_helper VARCHAR(150)
-    GENERATED ALWAYS AS (factory_id || '|' || stat_date::text || '|' || COALESCE(product_type_id, '__ALL__')) STORED;
+-- 函数唯一索引处理可空 product_type_id (NULL=全产品日汇总)。表达式索引可以用 COALESCE
+-- (PRIMARY KEY 不行), 且不需要 stat_date::text 那种非 immutable 的生成列转换。
+-- 这也是 ETL ON CONFLICT 的目标(必须写完全一致的表达式)。
 CREATE UNIQUE INDEX IF NOT EXISTS uq_agg_factory_batch_daily
-    ON agg_factory_batch_daily (_pk_helper);
+    ON agg_factory_batch_daily (factory_id, stat_date, COALESCE(product_type_id, '__ALL__'));
 
 ALTER TABLE agg_factory_batch_daily ENABLE  ROW LEVEL SECURITY;
 ALTER TABLE agg_factory_batch_daily FORCE   ROW LEVEL SECURITY;

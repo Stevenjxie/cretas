@@ -294,7 +294,7 @@ WHERE factory_id     = $1::varchar
   AND stat_date      IS NOT NULL
   AND product_type_id IS NOT NULL
 GROUP BY factory_id, stat_date, product_type_id
-ON CONFLICT (_pk_helper) DO UPDATE SET
+ON CONFLICT (factory_id, stat_date, COALESCE(product_type_id, '__ALL__')) DO UPDATE SET
     batch_count          = EXCLUDED.batch_count,
     total_planned_qty    = EXCLUDED.total_planned_qty,
     total_actual_qty     = EXCLUDED.total_actual_qty,
@@ -309,7 +309,7 @@ ON CONFLICT (_pk_helper) DO UPDATE SET
     updated_at           = NOW()
 """
 
-# All-product daily rollup (product_type_id = NULL → __ALL__ sentinel in _pk_helper)
+# All-product daily rollup (product_type_id = NULL → COALESCE 索引里映射成 __ALL__)
 _AGG_ALL_DAILY_SQL = """
 INSERT INTO agg_factory_batch_daily (
     factory_id, stat_date, product_type_id,
@@ -340,7 +340,7 @@ FROM fact_production_batch
 WHERE factory_id = $1::varchar
   AND stat_date  IS NOT NULL
 GROUP BY factory_id, stat_date
-ON CONFLICT (_pk_helper) DO UPDATE SET
+ON CONFLICT (factory_id, stat_date, COALESCE(product_type_id, '__ALL__')) DO UPDATE SET
     batch_count          = EXCLUDED.batch_count,
     total_planned_qty    = EXCLUDED.total_planned_qty,
     total_actual_qty     = EXCLUDED.total_actual_qty,
