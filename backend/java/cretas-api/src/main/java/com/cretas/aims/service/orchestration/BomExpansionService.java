@@ -9,6 +9,8 @@ import com.cretas.aims.entity.MaterialProductConversion;
 import com.cretas.aims.entity.ProductionPlan;
 import com.cretas.aims.entity.RawMaterialType;
 import com.cretas.aims.entity.bom.BomItem;
+import com.cretas.aims.entity.bom.BomRecipe;
+import com.cretas.aims.entity.bom.BomRecipeItem;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.ConversionRepository;
 import com.cretas.aims.repository.MaterialBatchRepository;
@@ -69,6 +71,21 @@ public class BomExpansionService {
     private RawMaterialTypeRepository rawMaterialTypeRepository;
 
     /**
+     * 断点3 修复 (2026-06-11, Fable E2E, 同 #751): 自动级联展开优先读 bom_recipe_items (新表),
+     * 与手动"开始采购"按钮 ({@code PurchaseServiceImpl.generatePurchaseSuggestion}) +
+     * 财务成本拆分 ({@code BomRecipeService.getCurrentRecipe}) 同一 BOM 源,
+     * 消除"自动算净需求 ≠ 按钮算净需求"的口径不一致.
+     * 仅当产品无 ACTIVE+is_current recipe 时回退到 legacy BomItem / RPF (向后兼容旧品).
+     *
+     * <p>field-inject (required=false): 不破坏 @InjectMocks 既有单测 (未提供时为 null → 跳过 recipe 分支).
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.repository.bom.BomRecipeRepository bomRecipeRepository;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.repository.bom.BomRecipeItemRepository bomRecipeItemRepository;
+
+    /**
      * BOM展开：根据产品类型和生产数量，计算所有需要的原辅料（含损耗）。
      *
      * <p>查询优先级：</p>
@@ -91,7 +108,16 @@ public class BomExpansionService {
     public List<MaterialRequirement> expandBOM(String factoryId,
                                                String productTypeId,
                                                BigDecimal productionQuantity) {
-        // D4 Path B (2026-05-10): 优先读 BomItem (新配方表)
+        // 断点3 修复 (2026-06-11, 同 #751): 优先读 bom_recipe_items (新表, 同财务/手动采购源).
+        // recipe 存在即以它为准, 不再回退 — 避免自动算料口径与手动采购/财务成本拆分不一致.
+        List<BomRecipeItem> recipeItems = loadCurrentRecipeItems(factoryId, productTypeId);
+        if (recipeItems != null && !recipeItems.isEmpty()) {
+            log.info("[BOM-EXPANSION] using bom_recipe_items for factoryId={}, productTypeId={}, items={}",
+                    factoryId, productTypeId, recipeItems.size());
+            return expandFromRecipeItems(recipeItems, productionQuantity);
+        }
+
+        // Fallback 1: D4 Path B (2026-05-10) legacy BomItem (旧 BOM 多原料配方表)
         List<BomItem> bomItems = bomService.getBomItemsByProduct(factoryId, productTypeId);
 
         if (bomItems != null && !bomItems.isEmpty()) {
@@ -100,10 +126,72 @@ public class BomExpansionService {
             return expandFromBomItems(bomItems, productionQuantity);
         }
 
-        // Fallback: 旧出成率表 (MaterialProductConversion)
+        // Fallback 2: 旧出成率表 (MaterialProductConversion)
         log.info("[BOM-EXPANSION] using RPF (MaterialProductConversion) fallback for factoryId={}, productTypeId={}",
                 factoryId, productTypeId);
         return expandFromConversions(factoryId, productTypeId, productionQuantity);
+    }
+
+    /**
+     * 断点3 修复 (同 #751): 取产品当前 ACTIVE + is_current=TRUE recipe 的配方项.
+     *
+     * <p>与 {@code BomRecipeService.getCurrentRecipe} +
+     * {@code PurchaseServiceImpl.loadCurrentRecipeItems} 走同一查询
+     * ({@code findByFactoryIdAndProductTypeIdAndIsCurrentTrueAndStatus(ACTIVE)}),
+     * 保证自动级联净需求 = 手动采购建议净需求 = 财务成本拆分用料, 三者口径一致.
+     *
+     * <p>repo 未注入 (老 context / @InjectMocks 单测) 或无 recipe → 返 null (回退 legacy).
+     */
+    private List<BomRecipeItem> loadCurrentRecipeItems(String factoryId, String productTypeId) {
+        if (bomRecipeRepository == null || bomRecipeItemRepository == null) {
+            return null;
+        }
+        java.util.Optional<BomRecipe> recipeOpt =
+                bomRecipeRepository.findByFactoryIdAndProductTypeIdAndIsCurrentTrueAndStatus(
+                        factoryId, productTypeId, BomRecipe.Status.ACTIVE);
+        if (recipeOpt.isEmpty()) {
+            return null;
+        }
+        // 显式按 recipeId 查 items (LAZY 集合在事务外可能 detach; 直查 repo 稳妥).
+        return bomRecipeItemRepository.findByRecipeIdOrderBySortOrderAsc(recipeOpt.get().getId());
+    }
+
+    /**
+     * 断点3 修复: 从 BomRecipeItem (新配方表) 构建 MaterialRequirement 清单.
+     *
+     * <p>用 {@code actualQuantity} (已按出成率折算的每单位产品原料量; null 时
+     * {@code calculateActualQuantity()} 实时折算, 同 entity 公式) × productionQuantity 算需求.
+     * 与 PurchaseServiceImpl recipe 路径完全同源, 不双源重复计料.
+     *
+     * <p>{@code sourceUnit = recipeItem.getUnit()} 激活 D3 g↔kg 单位换算 (同 BomItem 路径).
+     */
+    private List<MaterialRequirement> expandFromRecipeItems(List<BomRecipeItem> recipeItems,
+                                                            BigDecimal productionQuantity) {
+        List<MaterialRequirement> requirements = new ArrayList<>();
+        for (BomRecipeItem ri : recipeItems) {
+            if (ri.getMaterialTypeId() == null) {
+                continue;
+            }
+            BigDecimal actualPerUnit = ri.getActualQuantity();
+            if (actualPerUnit == null) {
+                actualPerUnit = ri.calculateActualQuantity();
+            }
+            BigDecimal required = (actualPerUnit != null && productionQuantity != null)
+                    ? actualPerUnit.multiply(productionQuantity).setScale(6, RoundingMode.HALF_UP)
+                    : BigDecimal.ZERO;
+
+            MaterialRequirement req = new MaterialRequirement();
+            req.setMaterialTypeId(ri.getMaterialTypeId());
+            // 优先 live RawMaterialType.name, recipe 快照名作 fallback (同 BomItem 路径)
+            req.setMaterialTypeName(resolveLiveMaterialName(ri.getMaterialTypeId(), ri.getMaterialName()));
+            req.setRequiredQuantity(required);
+            // 出成率 → 损耗率展示 (100 - yieldRate), 不参与库存校验算术 (同 BomItem 路径)
+            req.setWastageRate(deriveWastageFromYield(ri.getYieldRate()));
+            // D3 激活点: sourceUnit 触发 ProductionWorkflowOrchestrator g↔kg 换算
+            req.setSourceUnit(ri.getUnit());
+            requirements.add(req);
+        }
+        return requirements;
     }
 
     /**

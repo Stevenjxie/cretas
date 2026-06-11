@@ -4,23 +4,31 @@ import com.cretas.aims.dto.orchestration.MaterialRequirement;
 import com.cretas.aims.entity.MaterialProductConversion;
 import com.cretas.aims.entity.RawMaterialType;
 import com.cretas.aims.entity.bom.BomItem;
+import com.cretas.aims.entity.bom.BomRecipe;
+import com.cretas.aims.entity.bom.BomRecipeItem;
 import com.cretas.aims.repository.ConversionRepository;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.ProductionPlanRepository;
+import com.cretas.aims.repository.bom.BomRecipeItemRepository;
+import com.cretas.aims.repository.bom.BomRecipeRepository;
 import com.cretas.aims.service.BomService;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.math.BigDecimal;
 import java.util.Collections;
 import java.util.List;
+import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.within;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -55,8 +63,22 @@ class BomExpansionServiceTest {
     @Mock
     private BomService bomService;
 
+    @Mock
+    private BomRecipeRepository bomRecipeRepository;
+
+    @Mock
+    private BomRecipeItemRepository bomRecipeItemRepository;
+
     @InjectMocks
     private BomExpansionService bomExpansionService;
+
+    @BeforeEach
+    void wireFieldInjectedDeps() {
+        // @InjectMocks 用构造器注入 (BomExpansionService 有 @RequiredArgsConstructor),
+        // 不会填 @Autowired(required=false) 字段注入的 recipe repos → 手动注入.
+        ReflectionTestUtils.setField(bomExpansionService, "bomRecipeRepository", bomRecipeRepository);
+        ReflectionTestUtils.setField(bomExpansionService, "bomRecipeItemRepository", bomRecipeItemRepository);
+    }
 
     private static final String FACTORY_ID = "F006";
     private static final String PRODUCT_TYPE_ID = "PT-LUWEI-001";
@@ -249,7 +271,146 @@ class BomExpansionServiceTest {
                 .containsExactly("g", "g");
     }
 
+    // ============ 7. 断点3: bom_recipe_items recipe-first (同 #751 口径统一) ============
+
+    @Test
+    @DisplayName("断点3: ACTIVE recipe 存在 → 优先用 bom_recipe_items, 不查 BomItem/RPF")
+    void recipePresent_usesRecipeFirst_noLegacyQuery() {
+        BomRecipe recipe = recipe("REC-1");
+        BomRecipeItem ri = recipeItem("MT-PORK-001", "猪后腿肉", 200, 58.00, "g");
+        when(bomRecipeRepository.findByFactoryIdAndProductTypeIdAndIsCurrentTrueAndStatus(
+                FACTORY_ID, PRODUCT_TYPE_ID, BomRecipe.Status.ACTIVE))
+                .thenReturn(Optional.of(recipe));
+        when(bomRecipeItemRepository.findByRecipeIdOrderBySortOrderAsc("REC-1"))
+                .thenReturn(List.of(ri));
+
+        List<MaterialRequirement> result =
+                bomExpansionService.expandBOM(FACTORY_ID, PRODUCT_TYPE_ID, new BigDecimal("100"));
+
+        assertThat(result).hasSize(1);
+        MaterialRequirement req = result.get(0);
+        assertThat(req.getMaterialTypeId()).isEqualTo("MT-PORK-001");
+        // actualQuantity per unit = 200 / 0.58 = 344.827586, × 100 = 34482.758600
+        assertThat(req.getRequiredQuantity())
+                .isCloseTo(new BigDecimal("34482.758600"), within(new BigDecimal("0.01")));
+        assertThat(req.getSourceUnit()).isEqualTo("g");          // D3 激活点
+        assertThat(req.getWastageRate()).isEqualByComparingTo(new BigDecimal("42.00"));
+
+        // recipe 命中即短路 — 不查 legacy BomItem / RPF (口径统一: 不双源)
+        verify(bomService, never()).getBomItemsByProduct(anyString(), anyString());
+        verify(conversionRepository, never()).findByFactoryIdAndProductTypeId(anyString(), anyString());
+    }
+
+    @Test
+    @DisplayName("断点3: 自动级联净需求 = 按钮净需求 (同 recipe 源, actualQuantity 一致)")
+    void recipeFirst_autoCascadeEqualsManualButtonNetRequirement() {
+        // PurchaseServiceImpl.loadCurrentRecipeItems 与本服务走完全相同的查询 + actualQuantity 公式.
+        // 同一 recipe item (123g @ 80%) → 两路净需求必须字节级一致.
+        BomRecipe recipe = recipe("REC-2");
+        BomRecipeItem ri = recipeItem("MT-PORK-001", "猪舌", 123, 80.00, "g");
+        when(bomRecipeRepository.findByFactoryIdAndProductTypeIdAndIsCurrentTrueAndStatus(
+                FACTORY_ID, PRODUCT_TYPE_ID, BomRecipe.Status.ACTIVE))
+                .thenReturn(Optional.of(recipe));
+        when(bomRecipeItemRepository.findByRecipeIdOrderBySortOrderAsc("REC-2"))
+                .thenReturn(List.of(ri));
+
+        BigDecimal soQty = new BigDecimal("50");
+        List<MaterialRequirement> result =
+                bomExpansionService.expandBOM(FACTORY_ID, PRODUCT_TYPE_ID, soQty);
+
+        // 手动按钮口径: actualQtyPerUnit × soQty (PurchaseServiceImpl 行).
+        BigDecimal actualPerUnit = ri.getActualQuantity() != null
+                ? ri.getActualQuantity() : ri.calculateActualQuantity();
+        BigDecimal expectedNet = actualPerUnit.multiply(soQty).setScale(6, java.math.RoundingMode.HALF_UP);
+
+        assertThat(result).hasSize(1);
+        assertThat(result.get(0).getRequiredQuantity())
+                .as("自动级联净需求必须 = 手动开始采购按钮净需求 (同 recipe 源)")
+                .isEqualByComparingTo(expectedNet);
+    }
+
+    @Test
+    @DisplayName("断点3: 无 ACTIVE recipe → fallback 到 legacy BomItem (向后兼容旧品)")
+    void noRecipe_fallsBackToBomItem() {
+        when(bomRecipeRepository.findByFactoryIdAndProductTypeIdAndIsCurrentTrueAndStatus(
+                FACTORY_ID, PRODUCT_TYPE_ID, BomRecipe.Status.ACTIVE))
+                .thenReturn(Optional.empty());
+        when(bomService.getBomItemsByProduct(FACTORY_ID, PRODUCT_TYPE_ID))
+                .thenReturn(List.of(bomItem(200, 58.00, "g")));
+
+        List<MaterialRequirement> result =
+                bomExpansionService.expandBOM(FACTORY_ID, PRODUCT_TYPE_ID, new BigDecimal("1"));
+
+        assertThat(result).hasSize(1);
+        assertThat(result.get(0).getMaterialTypeId()).isEqualTo(MATERIAL_TYPE_ID);
+        assertThat(result.get(0).getSourceUnit()).isEqualTo("g");
+        // recipe 查询走过但为空 → 回退 BomItem
+        verify(bomService).getBomItemsByProduct(FACTORY_ID, PRODUCT_TYPE_ID);
+    }
+
+    @Test
+    @DisplayName("断点3: recipe 存在但 items 为空 → fallback 到 legacy (空 recipe 不锁死)")
+    void recipeExistsButEmpty_fallsBackToLegacy() {
+        BomRecipe recipe = recipe("REC-3");
+        when(bomRecipeRepository.findByFactoryIdAndProductTypeIdAndIsCurrentTrueAndStatus(
+                FACTORY_ID, PRODUCT_TYPE_ID, BomRecipe.Status.ACTIVE))
+                .thenReturn(Optional.of(recipe));
+        when(bomRecipeItemRepository.findByRecipeIdOrderBySortOrderAsc("REC-3"))
+                .thenReturn(Collections.emptyList());
+        when(bomService.getBomItemsByProduct(FACTORY_ID, PRODUCT_TYPE_ID))
+                .thenReturn(List.of(bomItem(100, 100.00, "g")));
+
+        List<MaterialRequirement> result =
+                bomExpansionService.expandBOM(FACTORY_ID, PRODUCT_TYPE_ID, new BigDecimal("1"));
+
+        assertThat(result).hasSize(1);
+        verify(bomService).getBomItemsByProduct(FACTORY_ID, PRODUCT_TYPE_ID);
+    }
+
+    @Test
+    @DisplayName("断点3: recipeItem.actualQuantity null → calculateActualQuantity() 实时折算")
+    void recipeItem_nullActualQuantity_realtimeCalc() {
+        BomRecipe recipe = recipe("REC-4");
+        BomRecipeItem ri = recipeItem("MT-PORK-001", "猪后腿肉", 200, 58.00, "g");
+        ri.setActualQuantity(null); // 旧 recipe 未回填持久值
+        when(bomRecipeRepository.findByFactoryIdAndProductTypeIdAndIsCurrentTrueAndStatus(
+                FACTORY_ID, PRODUCT_TYPE_ID, BomRecipe.Status.ACTIVE))
+                .thenReturn(Optional.of(recipe));
+        when(bomRecipeItemRepository.findByRecipeIdOrderBySortOrderAsc("REC-4"))
+                .thenReturn(List.of(ri));
+
+        List<MaterialRequirement> result =
+                bomExpansionService.expandBOM(FACTORY_ID, PRODUCT_TYPE_ID, new BigDecimal("1"));
+
+        // calculateActualQuantity: 200 / 0.58 = 344.827586
+        assertThat(result.get(0).getRequiredQuantity())
+                .isCloseTo(new BigDecimal("344.83"), within(new BigDecimal("0.01")));
+    }
+
     // ============ Helpers ============
+
+    private BomRecipe recipe(String id) {
+        BomRecipe r = new BomRecipe();
+        r.setId(id);
+        r.setFactoryId(FACTORY_ID);
+        r.setProductTypeId(PRODUCT_TYPE_ID);
+        r.setStatus(BomRecipe.Status.ACTIVE);
+        r.setIsCurrent(true);
+        return r;
+    }
+
+    private BomRecipeItem recipeItem(String matId, String matName,
+                                     double standardGrams, double yieldRatePct, String unit) {
+        BomRecipeItem ri = new BomRecipeItem();
+        ri.setMaterialTypeId(matId);
+        ri.setMaterialName(matName);
+        ri.setStandardQuantity(new BigDecimal(String.valueOf(standardGrams)));
+        ri.setYieldRate(new BigDecimal(String.valueOf(yieldRatePct)));
+        ri.setUnit(unit);
+        // 持久 actualQuantity = standardQuantity / (yieldRate/100), 同 entity 公式
+        ri.setActualQuantity(ri.calculateActualQuantity());
+        return ri;
+    }
 
     private BomItem bomItem(double standardGrams, double yieldRatePct, String unit) {
         BomItem item = new BomItem();

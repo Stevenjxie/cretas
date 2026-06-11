@@ -1,19 +1,23 @@
 package com.cretas.aims.service.reversal.impl;
 
 import com.cretas.aims.entity.ProductionBatch;
+import com.cretas.aims.entity.ProductionPlan;
 import com.cretas.aims.entity.ProductionReport;
 import com.cretas.aims.entity.ReportReversalLog;
 import com.cretas.aims.entity.SemiFinishedInventory;
 import com.cretas.aims.entity.SemiFinishedInventoryTransaction;
 import com.cretas.aims.entity.inventory.FinishedGoodsBatch;
+import com.cretas.aims.entity.inventory.SalesOrderItem;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.entity.User;
 import com.cretas.aims.repository.ProductionBatchRepository;
+import com.cretas.aims.repository.ProductionPlanRepository;
 import com.cretas.aims.repository.ProductionReportRepository;
 import com.cretas.aims.repository.ReportReversalLogRepository;
 import com.cretas.aims.repository.SemiFinishedInventoryRepository;
 import com.cretas.aims.repository.SemiFinishedInventoryTransactionRepository;
 import com.cretas.aims.repository.UserRepository;
+import com.cretas.aims.repository.inventory.SalesOrderItemRepository;
 import com.cretas.aims.entity.workprocess.WorkProcessTask;
 import com.cretas.aims.repository.workprocess.WorkProcessTaskRepository;
 import com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository;
@@ -80,6 +84,21 @@ public class ReportReversalServiceImpl implements ReportReversalService {
     private final WorkProcessTaskRepository workProcessTaskRepository;
     // W6 #27: 驳回撤回申请时通知申请人 (App 内通知)
     private final NotificationService notificationService;
+
+    /**
+     * 断点2 修复 (2026-06-11, Fable E2E): 撤回时清 SalesOrderItem.costUnitPrice (置 null),
+     * 让重报新成本事件能重新回填 (OrderCostBackfillListener 是 write-once — 仅 null 时写).
+     * 否则撤回后 SO 挂着被撤回报工的成本, 重报因字段非 null 被跳过 → 永不刷新, 脏数据不可自愈.
+     *
+     * <p>field-inject (required=false): 不改 @RequiredArgsConstructor 生成的构造器,
+     * 不破坏既有 ReportReversalListNamesTest 的显式构造调用. 未注入 (老 context / 单测未提供)
+     * → 跳过清字段 (旧行为, 不抛异常).
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private ProductionPlanRepository productionPlanRepository;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private SalesOrderItemRepository salesOrderItemRepository;
 
     /**
      * SP12 快速撤回时间窗口 (分钟)。
@@ -269,6 +288,12 @@ public class ReportReversalServiceImpl implements ReportReversalService {
             }
         }
 
+        // ③.5 断点2 修复: 清回填的 SalesOrderItem.costUnitPrice (置 null), 让重报能重新回填.
+        // 范围: 本批次 productTypeId 在对应计划全部关联 SO (sourceOrderIds, 兼容遗留主 SO) 的行项目.
+        // 在同一 @Transactional 内执行 (禁 fail-soft — 撤回是已有事务, 清字段失败应整体回滚).
+        // repo 未注入 (老 context) → 跳过 (旧行为). 详见字段注释.
+        clearBackfilledCostUnitPrice(factoryId, batchId, log_.getPlanId());
+
         // ④ 更新 ReportReversalLog → DONE
         log_.setStatus(ReportReversalLog.ReversalStatus.DONE);
         log_.setRevertedTxnIds(revertedTxnIds);
@@ -390,6 +415,79 @@ public class ReportReversalServiceImpl implements ReportReversalService {
     }
 
     // ==================== 私有辅助 ====================
+
+    /**
+     * 断点2 修复 (2026-06-11): 撤回时清回填的 {@code SalesOrderItem.costUnitPrice}.
+     *
+     * <p><b>为什么必须清</b>: {@link com.cretas.aims.event.listener.OrderCostBackfillListener}
+     * 是 write-once (仅 costUnitPrice == null 时写). 撤回若不清此字段, 重报新成本事件
+     * 因字段非 null 被跳过 → SO 永远挂着被撤回报工的旧成本, 不可自愈. 清 null 后,
+     * 重报触发的 ProductionCostUpdatedEvent 会重新回填新成本 → 自愈链复活.
+     *
+     * <p><b>范围</b>: 仅清本批次 productTypeId 在对应计划全部关联 SO (sourceOrderIds,
+     * 与断点1 回填同源) 的行项目 — 不误伤同 SO 其他产品的成本.
+     *
+     * <p><b>事务/异常</b>: 在 {@link #executeReversal} 的单一 @Transactional 内执行,
+     * 不 try/catch 吞异常 (禁 fail-soft, 失败应整体回滚). repo 未注入 → 跳过 (向后兼容).
+     *
+     * @param factoryId 工厂ID
+     * @param batchId   被撤回的生产批次ID (取其 productTypeId)
+     * @param planId    撤回日志记录的计划ID (取其 sourceOrderIds)
+     */
+    private void clearBackfilledCostUnitPrice(String factoryId, Long batchId, String planId) {
+        if (productionPlanRepository == null || salesOrderItemRepository == null) {
+            log.debug("[SP2] clearBackfilledCostUnitPrice: repo 未注入, 跳过 batchId={}", batchId);
+            return;
+        }
+        if (planId == null) {
+            return;
+        }
+
+        // 批次 → productTypeId
+        ProductionBatch batch = batchRepo.findByIdAndFactoryId(batchId, factoryId).orElse(null);
+        if (batch == null || batch.getProductTypeId() == null) {
+            log.debug("[SP2] clearBackfilledCostUnitPrice: 批次或 productTypeId 缺失, 跳过 batchId={}", batchId);
+            return;
+        }
+        String productTypeId = batch.getProductTypeId();
+
+        // 计划 → 关联 SO 列表 (与断点1 回填同源: 优先 sourceOrderIds, 兼容遗留主 SO)
+        ProductionPlan plan = productionPlanRepository.findById(planId).orElse(null);
+        if (plan == null) {
+            return;
+        }
+        List<String> targetOrderIds = new ArrayList<>();
+        List<String> srcIds = plan.getSourceOrderIds();
+        if (srcIds != null && !srcIds.isEmpty()) {
+            for (String id : srcIds) {
+                if (id != null && !targetOrderIds.contains(id)) {
+                    targetOrderIds.add(id);
+                }
+            }
+        }
+        if (targetOrderIds.isEmpty() && plan.getSourceOrderId() != null) {
+            targetOrderIds.add(plan.getSourceOrderId());
+        }
+        if (targetOrderIds.isEmpty()) {
+            return;
+        }
+
+        int cleared = 0;
+        for (String orderId : targetOrderIds) {
+            List<SalesOrderItem> items = salesOrderItemRepository.findBySalesOrderId(orderId);
+            for (SalesOrderItem item : items) {
+                if (productTypeId.equals(item.getProductTypeId()) && item.getCostUnitPrice() != null) {
+                    item.setCostUnitPrice(null);
+                    salesOrderItemRepository.save(item);
+                    cleared++;
+                }
+            }
+        }
+        if (cleared > 0) {
+            log.info("[SP2] 撤回清 costUnitPrice → salesOrderIds={}, productTypeId={}, 共{}行 (自愈链待重报回填)",
+                    targetOrderIds, productTypeId, cleared);
+        }
+    }
 
     /**
      * SP12 快速撤回资格检查。
