@@ -1467,6 +1467,83 @@ const YieldStepReportScreen: React.FC = () => {
   }, [currentTask, evidenceUploading, outputQty, outUnit, byproducts, sampleRetainQty,
       uploadedEvidenceUrls, batchId, refetchYield, buildPhotoAnnotations]);
 
+  // 照片证据块 (三阶段共用; title 区分投入照 / 时段照 / 产出照)
+  // ⚠️ 必须声明在哨兵屏渲染函数 (renderSentinelMaterialInputScreen / renderSentinelFinalOutputScreen)
+  //    之前 — 这两个函数在早返回分支 (isSentinelBatch) 里被调用, 早于组件 body 后半段的 const 初始化.
+  //    若 renderEvidenceBlock 仍声明在早返回之后 → TDZ ReferenceError → 哨兵屏静默空白 (#723 残留根因).
+  const renderEvidenceBlock = (title: string, takeTestID: string, pickTestID: string) => (
+    <View style={styles.section} testID="yield-evidence-section">
+      <Text style={styles.sectionTitle}>{title}</Text>
+      {evidencePhotos.length > 0 ? (
+        <View>
+          {evidencePhotos.map((p) => (
+            <View key={p.uri} style={styles.photoAnnotItem}>
+              {/* 缩略图 + 删除按钮 */}
+              <View style={styles.thumbItem}>
+                {p.mediaKind === 'video' ? (
+                  <View style={[styles.thumb, styles.videoThumb]}>
+                    <Text style={styles.videoThumbIcon}>▶</Text>
+                    <Text style={styles.videoThumbText}>视频</Text>
+                  </View>
+                ) : (
+                  <Image source={{ uri: p.uri }} style={styles.thumb} />
+                )}
+                {p.uploading ? (
+                  <View style={styles.thumbOverlay}><ActivityIndicator color="#fff" /></View>
+                ) : (
+                  <TouchableOpacity
+                    style={styles.thumbRemove}
+                    onPress={() => removeEvidencePhoto(p.uri)}
+                    disabled={submitting}
+                    accessibilityLabel="删除证据"
+                  >
+                    <Text style={styles.thumbRemoveText}>✕</Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+              {/* T161: 标签 chip 行 + 备注输入 */}
+              {!p.uploading ? (
+                <View style={styles.photoAnnotRight}>
+                  <View style={styles.chipRow}>
+                    {PHOTO_LABEL_CHIPS.map((chip) => (
+                      <TouchableOpacity
+                        key={chip}
+                        style={[styles.chip, p.label === chip && styles.chipSelected]}
+                        onPress={() => setPhotoLabel(p.uri, p.label === chip ? null : chip)}
+                        disabled={submitting}
+                        accessibilityLabel={`标注 ${chip}`}
+                      >
+                        <Text style={[styles.chipText, p.label === chip && styles.chipTextSelected]}>
+                          {chip}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                  <TextInput
+                    style={styles.photoNoteInput}
+                    value={p.note ?? ''}
+                    onChangeText={(v) => setPhotoNote(p.uri, v)}
+                    placeholder="备注 (如: 猪舌第1车 320盒)"
+                    placeholderTextColor="#C0C4CC"
+                    editable={!submitting}
+                  />
+                </View>
+              ) : null}
+            </View>
+          ))}
+        </View>
+      ) : null}
+      <View style={styles.photoBtnRow}>
+        <TouchableOpacity style={styles.photoBtn} onPress={takeEvidencePhoto} disabled={submitting} testID={takeTestID}>
+          <Text style={styles.photoBtnText}>拍照/录像留证</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.photoBtnOutline} onPress={pickEvidencePhoto} disabled={submitting} testID={pickTestID}>
+          <Text style={styles.photoBtnOutlineText}>从相册选</Text>
+        </TouchableOpacity>
+      </View>
+    </View>
+  );
+
   // ========================= 两点报工: 哨兵屏渲染 =========================
   const renderSentinelMaterialInputScreen = () => {
     const alreadySubmitted = currentPhase === 'IN_PRODUCTION' || currentPhase === 'COMPLETED';
@@ -1900,80 +1977,6 @@ const YieldStepReportScreen: React.FC = () => {
         ) : null}
       </NeoCard>
     </>
-  );
-
-  // 照片证据块 (三阶段共用; title 区分投入照 / 时段照 / 产出照)
-  const renderEvidenceBlock = (title: string, takeTestID: string, pickTestID: string) => (
-    <View style={styles.section} testID="yield-evidence-section">
-      <Text style={styles.sectionTitle}>{title}</Text>
-      {evidencePhotos.length > 0 ? (
-        <View>
-          {evidencePhotos.map((p) => (
-            <View key={p.uri} style={styles.photoAnnotItem}>
-              {/* 缩略图 + 删除按钮 */}
-              <View style={styles.thumbItem}>
-                {p.mediaKind === 'video' ? (
-                  <View style={[styles.thumb, styles.videoThumb]}>
-                    <Text style={styles.videoThumbIcon}>▶</Text>
-                    <Text style={styles.videoThumbText}>视频</Text>
-                  </View>
-                ) : (
-                  <Image source={{ uri: p.uri }} style={styles.thumb} />
-                )}
-                {p.uploading ? (
-                  <View style={styles.thumbOverlay}><ActivityIndicator color="#fff" /></View>
-                ) : (
-                  <TouchableOpacity
-                    style={styles.thumbRemove}
-                    onPress={() => removeEvidencePhoto(p.uri)}
-                    disabled={submitting}
-                    accessibilityLabel="删除证据"
-                  >
-                    <Text style={styles.thumbRemoveText}>✕</Text>
-                  </TouchableOpacity>
-                )}
-              </View>
-              {/* T161: 标签 chip 行 + 备注输入 */}
-              {!p.uploading ? (
-                <View style={styles.photoAnnotRight}>
-                  <View style={styles.chipRow}>
-                    {PHOTO_LABEL_CHIPS.map((chip) => (
-                      <TouchableOpacity
-                        key={chip}
-                        style={[styles.chip, p.label === chip && styles.chipSelected]}
-                        onPress={() => setPhotoLabel(p.uri, p.label === chip ? null : chip)}
-                        disabled={submitting}
-                        accessibilityLabel={`标注 ${chip}`}
-                      >
-                        <Text style={[styles.chipText, p.label === chip && styles.chipTextSelected]}>
-                          {chip}
-                        </Text>
-                      </TouchableOpacity>
-                    ))}
-                  </View>
-                  <TextInput
-                    style={styles.photoNoteInput}
-                    value={p.note ?? ''}
-                    onChangeText={(v) => setPhotoNote(p.uri, v)}
-                    placeholder="备注 (如: 猪舌第1车 320盒)"
-                    placeholderTextColor="#C0C4CC"
-                    editable={!submitting}
-                  />
-                </View>
-              ) : null}
-            </View>
-          ))}
-        </View>
-      ) : null}
-      <View style={styles.photoBtnRow}>
-        <TouchableOpacity style={styles.photoBtn} onPress={takeEvidencePhoto} disabled={submitting} testID={takeTestID}>
-          <Text style={styles.photoBtnText}>拍照/录像留证</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.photoBtnOutline} onPress={pickEvidencePhoto} disabled={submitting} testID={pickTestID}>
-          <Text style={styles.photoBtnOutlineText}>从相册选</Text>
-        </TouchableOpacity>
-      </View>
-    </View>
   );
 
   // 投入摘要块 (生产/完成阶段只读)
