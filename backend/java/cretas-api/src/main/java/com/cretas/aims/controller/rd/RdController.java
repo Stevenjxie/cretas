@@ -111,6 +111,19 @@ public class RdController {
         if (body.get("sellingPoints") != null) { sample.setSellingPoints((String) body.get("sellingPoints")); needSave = true; }
         if (body.get("customerCode") != null) { sample.setCustomerCode((String) body.get("customerCode")); needSave = true; }
         if (body.get("customerLevel") != null) { sample.setCustomerLevel((String) body.get("customerLevel")); needSave = true; }
+        // catalog 行31: 研发试样票务字段 — 有票/无票 + 发票号
+        if (body.containsKey("hasInvoice")) {
+            Object raw = body.get("hasInvoice");
+            if (raw == null) {
+                sample.setHasInvoice(null);
+            } else if (raw instanceof Boolean) {
+                sample.setHasInvoice((Boolean) raw);
+            } else {
+                sample.setHasInvoice(Boolean.valueOf(raw.toString()));
+            }
+            needSave = true;
+        }
+        if (body.get("invoiceNumber") != null) { sample.setInvoiceNumber((String) body.get("invoiceNumber")); needSave = true; }
         return needSave;
     }
 
