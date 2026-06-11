@@ -141,6 +141,17 @@ public class SalesServiceImpl implements SalesService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.service.pricing.GrossMarginRedlineService grossMarginRedlineService;
 
+    /**
+     * P1 #33 销售价 ≥ 研发预估价 跨流校验守卫 (G流 SP10 → E流销售订单, 2026-06-11).
+     *
+     * <p>Optional injection — 未部署时跳过估价校验 (不影响现有逻辑).
+     * 注入存在时, createSalesOrder 在 resolve unitPrice 后对每行逐一检查,
+     * belowEstimate=true → 收集预警到 priceWarnings (非阻断, 200 + 警告, 决策对齐 #693 防呆).
+     * belowEstimate=null (研发未报价) → 诚实跳过 (不警告, 不伪造).
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.pricing.EstimatePriceCheckService estimatePriceCheckService;
+
     /** Sprint 6 W2-B: 数据权限解析器 (optional). */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private DataScopeResolver dataScopeResolver;
@@ -293,6 +304,10 @@ public class SalesServiceImpl implements SalesService {
         // E-5 毛利红线: 收集低于红线的预警文案 (非阻断 — 决策修正 2026-06-10).
         // 仅含"低于毛利红线"语义文案 (GrossMarginCheckResult 保证不含成本数值), 随订单返回前端展示.
         List<String> marginWarnings = new ArrayList<>();
+
+        // P1 #33 销售价 ≥ 研发预估价: 收集低于研发预估价的预警文案 (非阻断 — 决策对齐 #693).
+        // 仅含"低于研发预估价"语义文案 (EstimatePriceCheckResult 保证不含预估价数值), 随订单返回.
+        List<String> priceWarnings = new ArrayList<>();
 
         for (CreateSalesOrderRequest.SalesOrderItemDTO itemDTO : request.getItems()) {
             SalesOrderItem item = new SalesOrderItem();
@@ -452,6 +467,33 @@ public class SalesServiceImpl implements SalesService {
             }
             // ── end E-5 毛利红线预警 ────────────────────────────────────────────────────
 
+            // ── P1 #33 销售价 ≥ 研发预估价 跨流校验 (G流 SP10 → E流; 非阻断 2026-06-11) ──────
+            // 转录需求: 销售订单价不应低于研发预估价 (SP10 QuotationTask 建议售价).
+            // 决策对齐 #693: 低于预估价 = 警告放行 (200 + priceWarnings), 不 409 硬拦
+            //   (防呆 Rule 1: 提交前看到边界, 不提交后被拒).
+            // 在 unitPrice 最终确定后 (含策略引擎折扣) 才校验, 保证比较真实报价.
+            // resolvedUnitPrice=null/0 → 跳过 (未填价不是"低于预估价"语义, 与 E-5 守卫一致).
+            if (estimatePriceCheckService != null && resolvedUnitPrice != null
+                    && resolvedUnitPrice.signum() > 0
+                    && itemDTO.getProductTypeId() != null) {
+                com.cretas.aims.dto.pricing.EstimatePriceCheckResult estimateResult =
+                        estimatePriceCheckService.checkAgainstEstimate(
+                                factoryId, itemDTO.getProductTypeId(), resolvedUnitPrice);
+                if (Boolean.TRUE.equals(estimateResult.getBelowEstimate())) {
+                    // 低于研发预估价 → 收集预警 (不阻断). 文案不含预估价数值 (EstimatePriceCheckResult 保证).
+                    String displayName = item.getProductName() != null
+                            ? item.getProductName() : itemDTO.getProductTypeId();
+                    String warn = "行项目「" + displayName + "」" + estimateResult.getWarningMessage()
+                            + " — 如需继续, 请向销售经理确认";
+                    priceWarnings.add(warn);
+                    log.info("#33 估价预警 (非阻断): SO 行 productTypeId={} 低于研发预估价 — {} (订单仍创建)",
+                            itemDTO.getProductTypeId(), estimateResult.getWarningMessage());
+                }
+                // belowEstimate=null (研发未报价) → 诚实跳过, 不警告不伪造 (无 WARN log: 大量产品本就无 R&D 报价)
+                // belowEstimate=false → 报价合规, 静默
+            }
+            // ── end P1 #33 估价校验 ─────────────────────────────────────────────────────
+
             // Sprint 4 W2 S-INVOICE-CLIENT-1 Option 3 三层 default 链 — 第 2→3 层 prefill:
             // Item 显式 > SO defaultTaxRate (已 prefill 自客户) > 0. 用户改 SO 级 default 触发批量重算
             // 由前端 watch 处理, 后端只兜底防 NPE.
@@ -503,6 +545,13 @@ public class SalesServiceImpl implements SalesService {
         if (!marginWarnings.isEmpty()) {
             log.info("创建销售订单: factoryId={}, orderNumber={}, 含 {} 条毛利红线预警 (非阻断)",
                     factoryId, orderNumber, marginWarnings.size());
+        }
+
+        // P1 #33: 把收集到的研发预估价预警附到返回订单上 (非阻断, 随 HTTP 200 返回, 前端 sticky warning).
+        order.setPriceWarnings(priceWarnings);
+        if (!priceWarnings.isEmpty()) {
+            log.info("创建销售订单: factoryId={}, orderNumber={}, 含 {} 条研发预估价预警 (非阻断)",
+                    factoryId, orderNumber, priceWarnings.size());
         }
 
         log.info("创建销售订单: factoryId={}, orderNumber={}, items={}", factoryId, orderNumber, items.size());

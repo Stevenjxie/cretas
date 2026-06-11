@@ -317,6 +317,23 @@ public class SalesOrder extends BaseEntity {
     @JsonProperty("marginWarnings")
     private List<String> marginWarnings = new ArrayList<>();
 
+    /**
+     * P1 #33 销售价 ≥ 研发预估价 跨流校验预警 (非阻断, 2026-06-11).
+     *
+     * <p>下单时若某行销售报价低于研发预估价 (SP10 QuotationTask 建议售价), 后端不 409 阻断
+     * (决策对齐 #693 毛利红线: 低于阈值=警告放行, 防呆 Rule 1 提交前看到边界), 而是把预警文案
+     * (来自 {@code EstimatePriceCheckResult.warningMessage}) 收集到此 @Transient 列表,
+     * 随创建成功的订单返回。前端展示 sticky warning, 不阻止提交。
+     *
+     * <p><strong>安全约束</strong>: 文案仅含"低于研发预估价"语义, 不含 estimatePrice /
+     * suggestedPrice / finalPrice 等价格敏感数值 (由 {@code EstimatePriceCheckResult} 保证)。
+     *
+     * <p>不持久化 (@Transient); 仅在 createSalesOrder 返回值上有意义。
+     */
+    @Transient
+    @JsonProperty("priceWarnings")
+    private List<String> priceWarnings = new ArrayList<>();
+
     // ==================== 计算属性 ====================
 
     @Transient
