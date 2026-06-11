@@ -31,6 +31,25 @@ public interface PaymentRequestService {
             Long userId,
             String remark);
 
+    /**
+     * #29 创建销售方向付款申请（对客户 outbound 退款/返利/销售费用）。
+     *
+     * <p>sourceType=SALES，关联 salesOrderId/customerId（XOR：不得同时带 purchaseOrderId/supplierId）。
+     * 幂等：同一 salesOrderId 若已有 PENDING/FINANCE_REVIEW/APPROVED 的销售付款申请则抛 BusinessException(409)。
+     * customerId 必填（markPaid 时调整 Customer.currentBalance 需要）。salesOrderId 可空（无单退款/费用场景），
+     * 但 salesOrderId 与 customerId 至少其一非空。
+     *
+     * <p>与采购 create() 完全隔离：不查 PO，不做 G2 入库前置，不继承 settlementType。
+     */
+    PaymentRequest createSalesPayment(
+            String factoryId,
+            String salesOrderId,
+            String customerId,
+            BigDecimal amount,
+            String paymentMethod,
+            Long userId,
+            String remark);
+
     /** 提交初审（PENDING → FINANCE_REVIEW） */
     PaymentRequest submit(String requestId, Long userId);
 
@@ -41,12 +60,17 @@ public interface PaymentRequestService {
     PaymentRequest reject(String requestId, Long userId, String reason);
 
     /**
-     * 标记付款完成（APPROVED → PAID）。
+     * 标记付款完成（APPROVED → PAID）。按 sourceType 分流（#29）：
      *
-     * <p>三写原子（⛔红线）：
+     * <p>PURCHASE 三写原子（⛔红线，SP6/D-9 原有，字节不变）：
      * 1. PaymentRequest.status = PAID
-     * 2. 保存 ArApTransaction(AP_PAYMENT)
+     * 2. 保存 ArApTransaction(AP_PAYMENT, SUPPLIER)
      * 3. Supplier.currentBalance -= amount
+     *
+     * <p>SALES 三写原子（⛔红线，#29 新增）：
+     * 1. PaymentRequest.status = PAID
+     * 2. 保存 ArApTransaction(AR_CREDIT_NOTE, CUSTOMER)
+     * 3. Customer.currentBalance -= amount
      *
      * 全部在单一 @Transactional 中，任一失败全部回滚，禁止 fail-soft。
      */

@@ -1,11 +1,13 @@
 package com.cretas.aims.service.inventory.impl;
 
 import com.cretas.aims.dto.inventory.PaymentRequestApprovedDTO;
+import com.cretas.aims.entity.Customer;
 import com.cretas.aims.entity.Supplier;
 import com.cretas.aims.entity.enums.ArApApprovalStatus;
 import com.cretas.aims.entity.enums.ArApTransactionType;
 import com.cretas.aims.entity.enums.CounterpartyType;
 import com.cretas.aims.entity.enums.PaymentRequestStatus;
+import com.cretas.aims.entity.enums.PaymentSourceType;
 import com.cretas.aims.entity.enums.PurchaseOrderStatus;
 import com.cretas.aims.entity.enums.SettlementType;
 import com.cretas.aims.entity.finance.ArApTransaction;
@@ -13,6 +15,7 @@ import com.cretas.aims.entity.inventory.PaymentRequest;
 import com.cretas.aims.entity.inventory.PurchaseOrder;
 import com.cretas.aims.entity.inventory.PurchaseOrderItem;
 import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.repository.CustomerRepository;
 import com.cretas.aims.repository.SupplierRepository;
 import com.cretas.aims.repository.finance.ArApTransactionRepository;
 import com.cretas.aims.repository.inventory.PaymentRequestRepository;
@@ -62,6 +65,7 @@ public class PaymentRequestServiceImpl implements PaymentRequestService {
     private final SupplierRepository supplierRepository;
     private final PurchaseOrderRepository purchaseOrderRepository;
     private final PurchaseOrderItemRepository purchaseOrderItemRepository;
+    private final CustomerRepository customerRepository;
 
     // ─── 活跃状态（幂等性检查用） ────────────────────────────────────────────
 
@@ -137,6 +141,7 @@ public class PaymentRequestServiceImpl implements PaymentRequestService {
 
         PaymentRequest pr = new PaymentRequest();
         pr.setFactoryId(factoryId);
+        pr.setSourceType(PaymentSourceType.PURCHASE);   // #29: 采购方向，显式标注
         pr.setPurchaseOrderId(poId);
         pr.setSupplierId(supplierId);
         pr.setAmount(amount);
@@ -151,6 +156,62 @@ public class PaymentRequestServiceImpl implements PaymentRequestService {
         PaymentRequest saved = paymentRequestRepository.save(pr);
         log.info("[SP6] 创建付款申请单 {} 金额={} 供应商={} 结算方式={}",
                 saved.getRequestNumber(), amount, supplierId, inheritedSettlementType);
+        return saved;
+    }
+
+    // ─── createSalesPayment (#29 销售方向 outbound 付款) ──────────────────────────
+
+    /**
+     * #29 创建销售方向付款申请（对客户 outbound 退款/返利/销售费用）。
+     *
+     * <p>XOR 约束：sourceType=SALES，只填 salesOrderId/customerId，绝不带 PO/supplier。
+     * customerId 必填（markPaid 调整 Customer.currentBalance 需要）。salesOrderId 可空（无单退款/费用）。
+     * 幂等：同一 salesOrderId（非空）若已有活跃 SALES 申请 → 409。
+     *
+     * <p>⛔ 与采购 create() 完全隔离：不查 PO、不做 G2 入库前置、不继承 settlementType。
+     */
+    @Override
+    @Transactional
+    public PaymentRequest createSalesPayment(String factoryId, String salesOrderId, String customerId,
+                                             BigDecimal amount, String paymentMethod, Long userId, String remark) {
+
+        // XOR 校验：客户必填（balance 调整必需）
+        if (customerId == null || customerId.isBlank()) {
+            throw new BusinessException(422,
+                    "销售方向付款申请必须指定客户（customerId），以便记账冲减客户应收余额。");
+        }
+        // 金额校验（与采购一致由 @NotNull 列约束兜底，这里给友好 hint）
+        if (amount == null || amount.signum() <= 0) {
+            throw new BusinessException(422, "付款金额必须大于 0。");
+        }
+
+        // 幂等性检查：同一销售订单已有活跃 SALES 付款申请 → 409（salesOrderId 为空时跳过，无单退款不幂等去重）
+        if (salesOrderId != null && !salesOrderId.isBlank()) {
+            List<PaymentRequest> active = paymentRequestRepository.findActiveSalesByOrderId(
+                    salesOrderId, ACTIVE_STATUSES);
+            if (!active.isEmpty()) {
+                throw new BusinessException(409,
+                        "销售订单 " + salesOrderId + " 已有活跃销售付款申请单（ID=" + active.get(0).getId()
+                                + "，状态=" + active.get(0).getStatus() + "）");
+            }
+        }
+
+        PaymentRequest pr = new PaymentRequest();
+        pr.setFactoryId(factoryId);
+        pr.setSourceType(PaymentSourceType.SALES);      // #29: 销售方向
+        pr.setSalesOrderId((salesOrderId != null && salesOrderId.isBlank()) ? null : salesOrderId);
+        pr.setCustomerId(customerId);
+        // ⛔ purchaseOrderId / supplierId / settlementType 一律留 null（XOR）
+        pr.setAmount(amount);
+        pr.setPaymentMethod(paymentMethod);
+        pr.setCreatedBy(userId);
+        pr.setRemark(remark);
+        pr.setStatus(PaymentRequestStatus.PENDING);
+        pr.setRequestNumber(generateRequestNumber(factoryId));
+
+        PaymentRequest saved = paymentRequestRepository.save(pr);
+        log.info("[#29] 创建销售付款申请单 {} 金额={} 客户={} 销售订单={}",
+                saved.getRequestNumber(), amount, customerId, salesOrderId);
         return saved;
     }
 
@@ -207,13 +268,14 @@ public class PaymentRequestServiceImpl implements PaymentRequestService {
     // ─── markPaid 三写原子（⛔红线） ──────────────────────────────────────────
 
     /**
-     * 三写原子事务（单一 @Transactional，⛔禁 fail-soft 吞异常，⛔禁 REQUIRES_NEW）：
-     * 1. PaymentRequest.status = PAID + paidBy + paidAt
-     * 2. 保存 ArApTransaction(AP_PAYMENT, SUPPLIER, amount, balanceAfter)
-     * 3. Supplier.currentBalance -= amount
+     * #29 markPaid 按 sourceType 分流（单一 @Transactional，⛔禁 fail-soft，⛔禁 REQUIRES_NEW）：
      *
-     * <p>balanceAfter = supplier.currentBalance - amount（付款减少应付账款）。
-     * ArApTransaction.balanceAfter NOT NULL，必须在 save 前计算设置。
+     * <ul>
+     *   <li>PURCHASE（SP6/D-9 原有，字节不变）：AP_PAYMENT + SUPPLIER + Supplier.currentBalance -= amount。</li>
+     *   <li>SALES（#29 新增）：AR_CREDIT_NOTE + CUSTOMER + Customer.currentBalance -= amount。</li>
+     * </ul>
+     *
+     * <p>sourceType=null（理论上不会，列 NOT NULL + 迁移回填 PURCHASE）按 PURCHASE 兜底，保证老数据安全。
      */
     @Override
     @Transactional
@@ -222,6 +284,23 @@ public class PaymentRequestServiceImpl implements PaymentRequestService {
         PaymentRequest pr = findAndValidate(requestId);
         requireStatus(pr, PaymentRequestStatus.APPROVED, "只有 APPROVED 状态的申请单可以标记付款");
 
+        // #29: 销售方向单独分流；其余（含 null 老数据）走原采购路径
+        if (pr.getSourceType() == PaymentSourceType.SALES) {
+            return markPaidSales(pr, userId, evidence);
+        }
+        return markPaidPurchase(pr, userId, evidence);
+    }
+
+    /**
+     * 采购方向三写原子（SP6/D-9 原有逻辑，⛔字节不变）：
+     * 1. PaymentRequest.status = PAID + paidBy + paidAt
+     * 2. 保存 ArApTransaction(AP_PAYMENT, SUPPLIER, amount, balanceAfter)
+     * 3. Supplier.currentBalance -= amount
+     *
+     * <p>balanceAfter = supplier.currentBalance - amount（付款减少应付账款）。
+     * ArApTransaction.balanceAfter NOT NULL，必须在 save 前计算设置。
+     */
+    private PaymentRequest markPaidPurchase(PaymentRequest pr, Long userId, String evidence) {
         // Step 0b: 找供应商（null-safe 保护，异常直接 doom 整个事务）
         Supplier supplier = supplierRepository.findById(pr.getSupplierId())
                 .orElseThrow(() -> new BusinessException(
@@ -269,6 +348,66 @@ public class PaymentRequestServiceImpl implements PaymentRequestService {
         supplierRepository.save(supplier);
 
         log.info("[SP6] 付款申请单 {} 已标记付款 amount={} supplierBalance → {} tx={}",
+                pr.getRequestNumber(), amount, newBalance, savedTx.getId());
+        return savedPr;
+    }
+
+    /**
+     * #29 销售方向三写原子（对客户 outbound 付款，⛔禁 fail-soft，⛔禁 REQUIRES_NEW）：
+     * 1. PaymentRequest.status = PAID + paidBy + paidAt
+     * 2. 保存 ArApTransaction(AR_CREDIT_NOTE, CUSTOMER, amount, balanceAfter)
+     * 3. Customer.currentBalance -= amount
+     *
+     * <p>语义：对客户付出退款/返利/销售费用 → 冲减客户应收余额（AR_CREDIT_NOTE）。
+     * balanceAfter = customer.currentBalance - amount。null-safe 同采购路径。
+     */
+    private PaymentRequest markPaidSales(PaymentRequest pr, Long userId, String evidence) {
+        // Step 0b: 找客户（null-safe 保护，异常直接 doom 整个事务）
+        Customer customer = customerRepository.findById(pr.getCustomerId())
+                .orElseThrow(() -> new BusinessException(
+                        "客户不存在: " + pr.getCustomerId() + "，无法完成付款"));
+
+        // Step 1: PaymentRequest → PAID
+        pr.setStatus(PaymentRequestStatus.PAID);
+        pr.setPaidBy(userId);
+        pr.setPaidAt(LocalDateTime.now());
+        if (evidence != null && !evidence.isBlank()) {
+            pr.setRemark((pr.getRemark() == null ? "" : pr.getRemark() + " | ") + "凭证: " + evidence);
+        }
+
+        // Step 2: 计算 balanceAfter 并保存 ArApTransaction（AR_CREDIT_NOTE 冲减客户应收）
+        BigDecimal amount = pr.getAmount();
+        BigDecimal currentBalance = customer.getCurrentBalance() != null
+                ? customer.getCurrentBalance()
+                : BigDecimal.ZERO;
+        BigDecimal newBalance = currentBalance.subtract(amount);
+
+        ArApTransaction tx = new ArApTransaction();
+        tx.setFactoryId(pr.getFactoryId());
+        tx.setTransactionNumber(generateTxNumber());
+        tx.setTransactionType(ArApTransactionType.AR_CREDIT_NOTE);
+        tx.setCounterpartyType(CounterpartyType.CUSTOMER);
+        tx.setCounterpartyId(pr.getCustomerId());
+        tx.setCounterpartyName(customer.getName());
+        tx.setSalesOrderId(pr.getSalesOrderId());        // 可空（无单退款/费用）
+        tx.setAmount(amount);
+        tx.setBalanceAfter(newBalance);                  // ⛔ NOT NULL 必须设置
+        tx.setTransactionDate(LocalDate.now());
+        tx.setOperatedBy(userId);
+        tx.setApprovalStatus(ArApApprovalStatus.APPROVED);
+        tx.setRemark("销售付款申请单 " + pr.getRequestNumber() + " 标记付款（客户 outbound）");
+
+        ArApTransaction savedTx = arApTransactionRepository.save(tx);
+
+        // Step 3: 关联 ArApTransaction ID 到 PaymentRequest
+        pr.setArapTransactionId(savedTx.getId());
+        PaymentRequest savedPr = paymentRequestRepository.save(pr);
+
+        // Step 4: 扣减客户余额（同事务，任一失败全部回滚）
+        customer.setCurrentBalance(newBalance);
+        customerRepository.save(customer);
+
+        log.info("[#29] 销售付款申请单 {} 已标记付款 amount={} customerBalance → {} tx={}",
                 pr.getRequestNumber(), amount, newBalance, savedTx.getId());
         return savedPr;
     }

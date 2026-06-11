@@ -60,11 +60,44 @@ public class PaymentRequestController {
         return ApiResponse.success("付款申请已创建", pr);
     }
 
+    // ─── 创建销售方向付款申请（#29 对客户 outbound 退款/返利/销售费用）─────────────
+
+    /**
+     * #29 销售方向付款申请：sourceType=SALES，对客户的 outbound 付款。
+     *
+     * <p>入参：salesOrderId（可空，无单退款/费用场景）、customerId（必填）、amount、paymentMethod、remark。
+     * 同一 salesOrderId 已有活跃销售付款申请时返回 409。后续走同一审批/付款状态机。
+     *
+     * <p>权限：sales:read_write（销售侧发起）。后续 finance-approve / mark-paid 仍由 finance:read_write 把关。
+     */
+    @PostMapping("/sales")
+    @Operation(summary = "创建销售方向付款申请（#29，对客户退款/返利/销售费用）",
+            description = "sourceType=SALES，关联 salesOrderId/customerId；同一 SO 已有活跃销售付款申请返回 409")
+    @RequirePermission({"sales:read_write"})
+    public ApiResponse<PaymentRequest> createSalesPaymentRequest(
+            @PathVariable @NotBlank String factoryId,
+            @RequestHeader("Authorization") String authorization,
+            @RequestBody Map<String, Object> body) {
+        Long userId = extractUserId(authorization);
+        String salesOrderId = getString(body, "salesOrderId");
+        String customerId = getString(body, "customerId");
+        BigDecimal amount = getBigDecimal(body, "amount");
+        String paymentMethod = getString(body, "paymentMethod");
+        String remark = getString(body, "remark");
+
+        log.info("[#29] 创建销售付款申请: factoryId={}, soId={}, customerId={}, amount={}",
+                factoryId, salesOrderId, customerId, amount);
+        PaymentRequest pr = paymentRequestService.createSalesPayment(
+                factoryId, salesOrderId, customerId, amount,
+                paymentMethod, userId, remark);
+        return ApiResponse.success("销售付款申请已创建", pr);
+    }
+
     // ─── 提交（PENDING → FINANCE_REVIEW）──────────────────────────────────────
 
     @PutMapping("/{requestId}/submit")
     @Operation(summary = "提交付款申请至财务审核")
-    @RequirePermission({"procurement:read_write"})
+    @RequirePermission({"procurement:read_write", "sales:read_write"})
     public ApiResponse<PaymentRequest> submit(
             @PathVariable @NotBlank String factoryId,
             @PathVariable @NotBlank String requestId,
@@ -96,7 +129,7 @@ public class PaymentRequestController {
 
     @PutMapping("/{requestId}/reject")
     @Operation(summary = "驳回付款申请")
-    @RequirePermission({"finance:read_write", "procurement:read_write"})
+    @RequirePermission({"finance:read_write", "procurement:read_write", "sales:read_write"})
     public ApiResponse<PaymentRequest> reject(
             @PathVariable @NotBlank String factoryId,
             @PathVariable @NotBlank String requestId,
