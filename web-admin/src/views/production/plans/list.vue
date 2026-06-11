@@ -231,11 +231,15 @@ const planForm = ref({
   sourceOrderId: '' as string | undefined,
   sourceOrderItemId: '' as string | undefined,
   customFields: {} as TableRow,
+  // Wave2 六扇门: 免工序报工开关 (null→后端默认 true, 新建默认 true = 两点报工)
+  skipProcessReporting: true as boolean | null,
 });
 const productTypes = ref<TableRow[]>([]);
 const bomProcesses = ref<string[]>([]);
 // A3: full work-process objects for read-only display (ordered by processOrder)
 const productWorkProcessList = ref<TableRow[]>([]);
+// Wave2: 当前产品是否已配置工序 (0工序→强制两点, 开关 disabled 锁定勾选)
+const hasProcesses = computed(() => productWorkProcessList.value.length > 0);
 const customers = ref<TableRow[]>([]);
 
 // A5: today helper
@@ -405,15 +409,22 @@ async function loadBomProcesses(productTypeId: string) {
       // CUSTOMER_ORDER backend validation (processName required) passes.
       // Backend checks: request.getProcessName() != null && !isBlank().
       planForm.value.processName = names.join('、');
+      // Wave2 防呆: 0 工序产品 → 后端强制两点, 前端锁定开关为 true (Rule 5 no dead-end)
+      if (res.data.length === 0) {
+        planForm.value.skipProcessReporting = true;
+      }
     } else {
       bomProcesses.value = [];
       productWorkProcessList.value = [];
       planForm.value.processName = '';
+      // Wave2: 产品无工序 → 强制锁定为两点报工
+      planForm.value.skipProcessReporting = true;
     }
   } catch {
     bomProcesses.value = [];
     productWorkProcessList.value = [];
     planForm.value.processName = '';
+    planForm.value.skipProcessReporting = true;
   }
 }
 
@@ -475,6 +486,8 @@ function handleCreate() {
     sourceOrderId: '',
     sourceOrderItemId: '',
     customFields: {} as TableRow,
+    // Wave2: 新建默认 true (免工序报工); 产品加载后若 0 工序自动锁定为 true
+    skipProcessReporting: true,
   };
   productWorkProcessList.value = [];
   // T135 ITEM #1: 默认 CUSTOMER_ORDER — 预加载可选销售订单列表
@@ -1094,6 +1107,23 @@ function handleAiFill(params: TableRow) {
             <el-tag v-else size="small">手动</el-tag>
           </template>
         </el-table-column>
+        <!-- Wave2: 报工模式 badge -->
+        <el-table-column label="报工模式" width="100" align="center">
+          <template #default="{ row }">
+            <el-tag
+              v-if="row.skipProcessReporting === false"
+              type="warning"
+              size="small"
+              title="逐道工序报工"
+            >逐道</el-tag>
+            <el-tag
+              v-else
+              type="info"
+              size="small"
+              title="只报领料+产出两点（免工序报工）"
+            >免工序</el-tag>
+          </template>
+        </el-table-column>
         <el-table-column prop="createdAt" label="创建时间" width="180" :formatter="formatDateTimeCell" />
         <el-table-column label="操作" width="280" fixed="right" align="center">
           <template #default="{ row }">
@@ -1339,16 +1369,41 @@ function handleAiFill(params: TableRow) {
         <el-form-item label="客户名称">
           <el-input v-model="planForm.sourceCustomerName" placeholder="选择产品后自动填充，也可手动输入" />
         </el-form-item>
-        <!-- A3: 工序改为只读展示，不允许编辑；工序由产品工序配置决定 -->
-        <el-form-item label="工序">
+        <!-- Wave2 六扇门: 免工序报工开关 (Rule 1 防呆: 产品无工序时 disabled 锁定) -->
+        <el-form-item label="报工模式">
+          <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+            <el-switch
+              v-model="planForm.skipProcessReporting"
+              :disabled="!hasProcesses"
+              active-text="免工序报工"
+              inactive-text="逐道报工"
+              :active-value="true"
+              :inactive-value="false"
+              style="--el-switch-on-color: var(--el-color-info, #909399);"
+            />
+            <span style="font-size: 12px; color: var(--text-color-secondary, #909399);">
+              <template v-if="planForm.skipProcessReporting">
+                操作员只报「领料入」+「产出」两个节点
+              </template>
+              <template v-else>
+                操作员逐道工序报工
+              </template>
+              <template v-if="!hasProcesses && planForm.productTypeId">
+                （产品未配置工序，只能走免工序报工）
+              </template>
+            </span>
+          </div>
+        </el-form-item>
+        <!-- A3: 工序只读展示；免工序报工时隐藏，产品无工序时改提示 -->
+        <el-form-item v-if="!planForm.skipProcessReporting" label="工序">
           <template v-if="!planForm.productTypeId">
             <span style="color: var(--text-color-secondary, #909399); font-size: 13px;">请先选择产品类型</span>
           </template>
           <template v-else-if="productWorkProcessList.length === 0">
             <span style="color: var(--el-color-warning, #e6a23c); font-size: 13px;">
-              该产品未配置工序，请先到
+              该产品未配置工序，后端将自动走两点报工。如需逐道，请先到
               <el-link type="primary" @click="router.push('/system/product-processes')" style="font-size: 13px; vertical-align: baseline;">产品工序配置</el-link>
-              中配置
+              中配置工序。
             </span>
           </template>
           <template v-else>
@@ -1362,6 +1417,12 @@ function handleAiFill(params: TableRow) {
             </div>
           </template>
           <!-- processName is kept in sync via loadBomProcesses (T135 ITEM #4) -->
+        </el-form-item>
+        <!-- Wave2: 免工序报工模式下的工序提示（产品已配工序但选了免工序） -->
+        <el-form-item v-else-if="hasProcesses && planForm.productTypeId" label="工序">
+          <span style="color: var(--text-color-secondary, #909399); font-size: 13px;">
+            已跳过工序（共 {{ productWorkProcessList.length }} 道），操作员仅需报领料+产出
+          </span>
         </el-form-item>
         <!-- A5/E3: batchDate 已被后端消费 (ProductionProgressDashboard 按批次日期过滤)，保留；加说明区分两个日期 -->
         <el-form-item label="批次日期">
