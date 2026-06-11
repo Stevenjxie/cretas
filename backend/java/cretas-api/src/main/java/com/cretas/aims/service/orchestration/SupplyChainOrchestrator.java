@@ -233,8 +233,14 @@ public class SupplyChainOrchestrator {
      *   <li>PP来自SO → 发布 {@link FinishedGoodsCreatedEvent} 通知出库模块</li>
      * </ol>
      */
-    @EventListener
-    @Transactional
+    // doomed-tx 修复 (2026-06-12, 同 onMaterialReceived): 改 AFTER_COMMIT + REQUIRES_NEW.
+    // 旧 @EventListener @Transactional 同步加入报工(批次完成)事务. autoConsume 虽已 REQUIRES_NEW 隔离(#396),
+    // 但 createFinishedGoodsFromBatch / updateProductionPlanProgress / createQualityInspectionFromBatch 仍在
+    // 父事务内 —— 任一经嵌套 @Transactional 抛异常即 mark 报工事务 rollback-only, catch 吞掉但已 doom →
+    // 报工 commit 抛 UnexpectedRollbackException. FG入库/计划更新/质检建单是完工的下游副作用, 绝不应回滚物理报工.
+    // AFTER_COMMIT: 报工真提交后才跑(看到已落库批次); REQUIRES_NEW: 独立事务, 任何失败只回滚自身.
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void onBatchCompleted(BatchCompletedEvent event) {
         ProductionBatch batch = event.getBatch();
         // Bug #296 design fix: chains are additive, not replacements. See onSalesOrderConfirmed.
