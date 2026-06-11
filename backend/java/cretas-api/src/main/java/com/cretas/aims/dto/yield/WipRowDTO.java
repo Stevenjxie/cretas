@@ -51,4 +51,15 @@ public class WipRowDTO {
 
     /** 状态: AVAILABLE / DEPLETED / RETURNED。 */
     private String status;
+    // ==================== C3: 工厂级半成品重量库存视图扩展字段 ====================
+
+    /**
+     * C3: 产品类型名称 (join 回填; 工厂级视图用, 批次级视图留 null)。
+     */
+    private String productTypeName;
+
+    /**
+     * C3: 生产批次 ID (工厂级视图回填; 批次级视图留 null 因已在路径参数中)。
+     */
+    private Long batchId;
 }

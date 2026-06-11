@@ -1,6 +1,7 @@
 package com.cretas.aims.service.wip;
 
 import com.cretas.aims.dto.yield.OutputOptionsResponse;
+import com.cretas.aims.dto.yield.WipRowDTO;
 import com.cretas.aims.entity.ProductionReport;
 import com.cretas.aims.entity.SemiFinishedInventory;
 import com.cretas.aims.entity.workprocess.WorkProcessTask;
@@ -60,4 +61,16 @@ public interface WipInventoryService {
      * @return 可用 WIP 列表 (按 processOrder ASC, createdAt ASC 排序)
      */
     List<SemiFinishedInventory> listAvailableWip(String factoryId);
+
+    /**
+     * C3: 工厂级半成品重量库存视图 — 全状态快照 (AVAILABLE/DEPLETED/RETURNED)。
+     *
+     * <p>仅返回重量字段 (producedQuantity / consumedQuantity / availableQuantity / unit)，
+     * 不暴露成本字段 (accumulatedCost / unitCost)。流水账 SemiFinishedInventoryTransaction
+     * 内部保留，不通过本端点暴露。
+     *
+     * @param factoryId 工厂 ID
+     * @return WIP 重量视图 DTO 列表，含 productTypeName 回填 (批次级视图留 null)
+     */
+    List<WipRowDTO> listWipByFactory(String factoryId);
 }

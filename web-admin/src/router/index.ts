@@ -349,6 +349,13 @@ const businessRoutes: RouteRecordRaw[] = [
             name: 'MaterialPriceTrend',
             component: () => import('@/views/warehouse/MaterialPriceTrendView.vue'),
             meta: { requiresAuth: true, title: '物料均价趋势', module: 'warehouse' }
+          },
+          // C3: 半成品重量库存视图 (只读快照, 仅重量字段)
+          {
+            path: 'semi-finished',
+            name: 'WarehouseSemiFinished',
+            component: () => import('@/views/warehouse/semi-finished/list.vue'),
+            meta: { requiresAuth: true, title: '半成品重量库存', module: 'warehouse' }
           }
         ]
       },
