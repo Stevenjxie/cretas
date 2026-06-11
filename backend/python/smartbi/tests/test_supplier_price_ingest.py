@@ -8,7 +8,7 @@ Coverage:
 - delivery_date logic: purchase_date preferred over inbound_date; both None → skip
 - factory_id None raises ValueError
 - orchestrator stats accumulation
-- upsert_supplier_price_batch called with correct rows (mock verify)
+- _insert_ingest_rows called with correct rows (mock verify; idempotent ON CONFLICT path)
 
 All DB interactions mocked — no real DB needed.
 """
@@ -295,7 +295,7 @@ class TestRunSupplierPriceIngest:
             return len(rows)
 
         with patch(
-            "smartbi.gold.supplier_price_ingest_etl.upsert_supplier_price_batch",
+            "smartbi.gold.supplier_price_ingest_etl._insert_ingest_rows",
             side_effect=fake_upsert,
         ):
             stats = _run(run_supplier_price_ingest(
@@ -328,7 +328,7 @@ class TestRunSupplierPriceIngest:
             return len(rows)
 
         with patch(
-            "smartbi.gold.supplier_price_ingest_etl.upsert_supplier_price_batch",
+            "smartbi.gold.supplier_price_ingest_etl._insert_ingest_rows",
             side_effect=fake_upsert,
         ):
             stats = _run(run_supplier_price_ingest(
@@ -356,7 +356,7 @@ class TestRunSupplierPriceIngest:
             return len(rows)
 
         with patch(
-            "smartbi.gold.supplier_price_ingest_etl.upsert_supplier_price_batch",
+            "smartbi.gold.supplier_price_ingest_etl._insert_ingest_rows",
             side_effect=fake_upsert,
         ):
             stats = _run(run_supplier_price_ingest(
@@ -381,7 +381,7 @@ class TestRunSupplierPriceIngest:
             return len(rows)
 
         with patch(
-            "smartbi.gold.supplier_price_ingest_etl.upsert_supplier_price_batch",
+            "smartbi.gold.supplier_price_ingest_etl._insert_ingest_rows",
             side_effect=fake_upsert,
         ):
             stats = _run(run_supplier_price_ingest(
@@ -406,7 +406,7 @@ class TestRunSupplierPriceIngest:
             return len(rows)
 
         with patch(
-            "smartbi.gold.supplier_price_ingest_etl.upsert_supplier_price_batch",
+            "smartbi.gold.supplier_price_ingest_etl._insert_ingest_rows",
             side_effect=fake_upsert,
         ):
             _run(run_supplier_price_ingest(
@@ -430,7 +430,7 @@ class TestRunSupplierPriceIngest:
             return len(rows)
 
         with patch(
-            "smartbi.gold.supplier_price_ingest_etl.upsert_supplier_price_batch",
+            "smartbi.gold.supplier_price_ingest_etl._insert_ingest_rows",
             side_effect=fake_upsert,
         ):
             _run(run_supplier_price_ingest(
@@ -463,7 +463,7 @@ class TestRunSupplierPriceIngest:
             return len(rows)
 
         with patch(
-            "smartbi.gold.supplier_price_ingest_etl.upsert_supplier_price_batch",
+            "smartbi.gold.supplier_price_ingest_etl._insert_ingest_rows",
             side_effect=fake_upsert,
         ):
             _run(run_supplier_price_ingest(

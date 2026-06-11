@@ -37,7 +37,7 @@ _service_root = os.path.dirname(os.path.dirname(_here))  # .../backend/python
 if _service_root not in sys.path:
     sys.path.insert(0, _service_root)
 
-from smartbi.gold.supplier_price_etl import upsert_supplier_price_batch  # noqa: E402
+from smartbi.gold.supplier_price_etl import _normalize_name  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -112,21 +112,119 @@ async def _load_existing_source_ids(smartbi_pool, factory_id: str) -> Set[str]:
 
     Only loads ids that look like 'mb:*' to avoid false collisions with Java-pushed
     delivery-note rows (whose source_note_ids are note UUIDs).
+
+    ⚠️ RLS: set_config(..., is_local=true) is transaction-scoped. asyncpg runs each
+    statement in its own implicit transaction (autocommit), so a bare set_config +
+    separate fetch would reset app.factory_id BEFORE the fetch → RLS reads 0 rows →
+    every row treated as new → duplicate inserts (the prod 2x dedup-failure root cause).
+    Wrapping both in an explicit conn.transaction() keeps the local GUC alive for the
+    fetch so RLS USING(factory_id = current_setting('app.factory_id', true)) passes.
     """
     async with smartbi_pool.acquire() as conn:
-        await conn.execute(
-            "SELECT set_config('app.factory_id', $1, true)", factory_id
-        )
-        rows = await conn.fetch(
-            """
-            SELECT source_note_id
-              FROM agg_supplier_price
-             WHERE factory_id     = $1
-               AND source_note_id LIKE 'mb:%'
-            """,
-            factory_id,
-        )
+        async with conn.transaction():
+            await conn.execute(
+                "SELECT set_config('app.factory_id', $1, true)", factory_id
+            )
+            rows = await conn.fetch(
+                """
+                SELECT source_note_id
+                  FROM agg_supplier_price
+                 WHERE factory_id     = $1
+                   AND source_note_id LIKE 'mb:%'
+                """,
+                factory_id,
+            )
     return {r["source_note_id"] for r in rows}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Stage 2b: dedicated ingest insert (ON CONFLICT DO NOTHING via partial unique idx)
+# ─────────────────────────────────────────────────────────────────────────────
+
+async def _insert_ingest_rows(smartbi_pool, factory_id: str, rows: List[dict]) -> int:
+    """Insert material-batch ingest rows into agg_supplier_price (idempotent).
+
+    Unlike the shared append-only ``upsert_supplier_price_batch`` (used by Java
+    delivery-note confirms, which MUST append every confirmed line), the ingest path
+    keys on source_note_id = 'mb:{batch_id}' and is idempotent: re-running must NOT
+    duplicate. This uses ``ON CONFLICT ... DO NOTHING`` against the partial unique
+    index ``uq_agg_sp_mb_source`` (WHERE source_note_id LIKE 'mb:%') so that even if
+    the existing-id pre-check races / returns stale data, the DB is the final backstop.
+
+    The partial index only covers 'mb:%' rows, so delivery-note append rows are
+    unaffected (their ON CONFLICT target index does not exist → they keep appending).
+
+    RLS: set_config + INSERT wrapped in one explicit transaction (is_local=true GUC
+    must outlive the INSERT for the WITH CHECK policy to pass).
+
+    Returns count actually inserted (conflicts skipped are excluded from RETURNING).
+    """
+    if factory_id is None or factory_id == "":
+        raise ValueError(
+            f"_insert_ingest_rows: factory_id required (got {factory_id!r})"
+        )
+    if not rows:
+        return 0
+
+    source_note_ids = [r.get("source_note_id") for r in rows]
+    supplier_ids = [r.get("supplier_id") for r in rows]
+    supplier_names = [r.get("supplier_name") for r in rows]
+    ingredient_names = [r.get("ingredient_name") or "" for r in rows]
+    normalized_names = [
+        r.get("normalized_name") or _normalize_name(r.get("ingredient_name") or "")
+        for r in rows
+    ]
+    raw_material_type_ids = [r.get("raw_material_type_id") for r in rows]
+    delivery_dates = [r.get("delivery_date") for r in rows]
+    unit_prices = [r.get("unit_price") for r in rows]
+    quantities = [r.get("quantity") for r in rows]
+    units = [r.get("unit") for r in rows]
+    line_amounts = [r.get("line_amount") for r in rows]
+
+    async with smartbi_pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute(
+                "SELECT set_config('app.factory_id', $1, true)", factory_id
+            )
+            result = await conn.fetch(
+                """
+                INSERT INTO agg_supplier_price (
+                    factory_id, source_note_id, supplier_id, supplier_name,
+                    ingredient_name, normalized_name, raw_material_type_id,
+                    delivery_date, unit_price, quantity, unit, line_amount
+                )
+                SELECT $1, sni, sid, sname, iname, nname, rmt,
+                       ddate, uprice, qty, u, lamt
+                  FROM UNNEST(
+                    $2::text[], $3::text[], $4::text[], $5::text[], $6::text[],
+                    $7::text[], $8::date[], $9::numeric[], $10::numeric[],
+                    $11::text[], $12::numeric[]
+                  ) AS t(sni, sid, sname, iname, nname, rmt, ddate, uprice, qty, u, lamt)
+                ON CONFLICT (factory_id, source_note_id)
+                       WHERE source_note_id LIKE 'mb:%'
+                  DO NOTHING
+                RETURNING id
+                """,
+                factory_id,
+                source_note_ids,
+                supplier_ids,
+                supplier_names,
+                ingredient_names,
+                normalized_names,
+                raw_material_type_ids,
+                delivery_dates,
+                unit_prices,
+                quantities,
+                units,
+                line_amounts,
+            )
+    count = len(result) if result is not None else 0
+    logger.info(
+        "[supplier-ingest] inserted %d/%d rows for factory=%s "
+        "(conflicts skipped: %d)",
+        count, len(rows), factory_id, len(rows) - count,
+    )
+    return count
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -256,7 +354,7 @@ async def run_supplier_price_ingest(
         return stats
 
     try:
-        inserted = await upsert_supplier_price_batch(smartbi_pool, factory_id, upsert_rows)
+        inserted = await _insert_ingest_rows(smartbi_pool, factory_id, upsert_rows)
         stats["inserted"] = inserted
     except Exception as exc:
         stats["errors"].append(f"upsert: {exc}")
