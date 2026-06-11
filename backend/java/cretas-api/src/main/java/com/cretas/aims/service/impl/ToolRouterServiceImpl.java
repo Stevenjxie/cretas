@@ -68,6 +68,10 @@ public class ToolRouterServiceImpl implements ToolRouterService {
     @Autowired
     private com.cretas.aims.ai.tool.WriteGuardService writeGuardService;
 
+    // W9 红线 (AI-RBAC 系统性收口) — SITE E: central RBAC enforce alongside the W0 write-guard.
+    @Autowired
+    private com.cretas.aims.ai.tool.ToolRbacEnforcer toolRbacEnforcer;
+
     @Autowired(required = false)
     private ArenaRLTournamentService arenaRLTournamentService;
 
@@ -572,6 +576,14 @@ public class ToolRouterServiceImpl implements ToolRouterService {
         if (writeGuardService.isWriteTool(executor) && !writeGuardService.isConfirmed(context)) {
             log.info("W0 write-guard (tool-chain): blocked write tool {} (confirmed=false)", toolName);
             throw new IllegalStateException("W0 write-guard: tool '" + toolName + "' 需要显式确认后才能执行");
+        }
+
+        // W9 红线 (AI-RBAC 系统性收口) — SITE E: central RBAC enforce. This path calls executor.execute()
+        // directly, bypassing ToolDispatchService (Site B). Exception-based (mirrors W0 above); callers
+        // catch Exception → per-tool error + stop chain.
+        if (!toolRbacEnforcer.isAllowed(executor, context)) {
+            log.warn("W9 AI-RBAC (tool-chain): denied tool={}", toolName);
+            throw new IllegalStateException(toolRbacEnforcer.denyMessage(executor, context));
         }
 
         // 构建 ToolCall (简化版，实际参数需要从上下文提取)

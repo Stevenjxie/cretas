@@ -59,6 +59,10 @@ public class SkillExecutorImpl implements SkillExecutor {
     @Autowired
     private com.cretas.aims.ai.tool.WriteGuardService writeGuardService;
 
+    // W9 红线 (AI-RBAC 系统性收口) — SITE D: central RBAC enforce alongside the W0 write-guard.
+    @Autowired
+    private com.cretas.aims.ai.tool.ToolRbacEnforcer toolRbacEnforcer;
+
     // ==================== Configuration ====================
 
     @Value("${ai.skill_executor.parallel_execution_enabled:true}")
@@ -782,6 +786,24 @@ public class SkillExecutorImpl implements SkillExecutor {
         if (writeGuardService.isWriteTool(wgTool) && !wgConfirmed) {
             log.info("W0 write-guard (skill): blocked write tool {} (confirmed=false)", toolName);
             throw new IllegalStateException("W0 write-guard: tool '" + toolName + "' 需要显式确认后才能执行");
+        }
+
+        // W9 红线 (AI-RBAC 系统性收口) — SITE D: Skill orchestration bypasses Site B. Central RBAC enforce.
+        // skCtx/params may lack userId, so build an RBAC context from the SkillContext (userId source of
+        // truth). Fail-closed: if SkillContext carries no userId, the enforcer denies mapped write tools.
+        java.util.Map<String, Object> rbacCtx = new java.util.HashMap<>(
+                skCtx != null ? skCtx : java.util.Map.of());
+        if (context != null) {
+            if (context.getUserId() != null) {
+                rbacCtx.put("userId", context.getUserId());
+            }
+            if (context.getFactoryId() != null) {
+                rbacCtx.put("factoryId", context.getFactoryId());
+            }
+        }
+        if (!toolRbacEnforcer.isAllowed(wgTool, rbacCtx)) {
+            log.warn("W9 AI-RBAC (skill): denied tool={}", toolName);
+            throw new IllegalStateException(toolRbacEnforcer.denyMessage(wgTool, rbacCtx));
         }
 
         ToolExecutor executor = executorOpt.get();

@@ -50,6 +50,10 @@ public class DynamicToolSelectionService {
     @Autowired
     private com.cretas.aims.ai.tool.WriteGuardService writeGuardService;
 
+    // W9 红线 (AI-RBAC 系统性收口) — SITE C: central RBAC enforce alongside the W0 write-guard.
+    @Autowired
+    private com.cretas.aims.ai.tool.ToolRbacEnforcer toolRbacEnforcer;
+
     // Track B (restaurant-route-selfheal) — 用于动态候选业态过滤, 排除异业态工具。
     @Autowired
     private com.cretas.aims.service.intent.IntentConfigManagementService configService;
@@ -501,6 +505,16 @@ public class DynamicToolSelectionService {
                     hasError = true;
                     errorMessages.append(toolName).append(": W0 write-guard 阻止 (需确认); ");
                     log.info("W0 write-guard (auto-plan): blocked write tool {}", toolName);
+                    continue;
+                }
+
+                // W9 红线 (AI-RBAC 系统性收口) — SITE C: Auto-Planner bypasses Site B. Central RBAC enforce
+                // for sensitive write tools. stepParams inherits userId/userRole from planContext.
+                if (!toolRbacEnforcer.isAllowed(tool, stepParams)) {
+                    hasError = true;
+                    errorMessages.append(toolName).append(": ")
+                            .append(toolRbacEnforcer.denyMessage(tool, stepParams)).append("; ");
+                    log.warn("W9 AI-RBAC (auto-plan): denied tool={}", toolName);
                     continue;
                 }
 

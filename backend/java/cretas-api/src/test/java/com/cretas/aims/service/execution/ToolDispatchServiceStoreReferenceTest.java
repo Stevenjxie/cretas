@@ -59,6 +59,13 @@ class ToolDispatchServiceStoreReferenceTest {
                 service,
                 "writeGuardService",
                 mock(com.cretas.aims.ai.tool.WriteGuardService.class));
+        // W9: permissive RBAC enforcer (this test exercises reference injection, not RBAC).
+        com.cretas.aims.ai.tool.ToolRbacEnforcer rbacEnforcer =
+                mock(com.cretas.aims.ai.tool.ToolRbacEnforcer.class);
+        when(rbacEnforcer.check(any(), any()))
+                .thenReturn(com.cretas.aims.ai.tool.ToolRbacEnforcer.Decision.allow());
+        when(rbacEnforcer.isAllowed(any(), any())).thenReturn(true);
+        ReflectionTestUtils.setField(service, "toolRbacEnforcer", rbacEnforcer);
 
         PreprocessedQuery pq = PreprocessedQuery.builder()
                 .originalInput("那家店的客单价呢")
