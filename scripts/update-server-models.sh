@@ -1,6 +1,13 @@
 #!/bin/bash
 # 更新服务器上的模型配置到免费额度版本
 # 2026-03-05
+#
+# ⚠️  COST-SAFETY NOTICE (2026-06-11 billing incident):
+#   All model codes in this script MUST be on the respective account's free allowlist.
+#   See: reference_dashscope_free_model_allowlist in project memory / ACTIVE.md
+#   AK rotation: 2026-06-11 (A: LTAI5tH5D4iAWka5XAHN88bo, B: LTAI5t6VXdoVgEzSn3jVyRBo)
+#   FREE replacement for qwen3-max-*/qwen-max/qwen-plus: qwen3.7-max-2026-06-08
+#   FREE VL replacement: qwen3-vl-plus-2025-12-19
 
 SERVER="root@47.100.235.168"
 
@@ -8,7 +15,7 @@ ssh $SERVER 'bash -s' << 'REMOTE_SCRIPT'
 
 echo "=== 更新 cretas-backend.service ==="
 sed -i \
-  -e "s/--cretas.ai.dashscope.model=qwen3.5-plus/--cretas.ai.dashscope.model=qwen3-max-2026-01-23/" \
+  -e "s/--cretas.ai.dashscope.model=qwen3.5-plus/--cretas.ai.dashscope.model=qwen3.7-max-2026-06-08/" \
   -e "s/--cretas.ai.dashscope.correction-model=qwen3.5-35b-a3b/--cretas.ai.dashscope.correction-model=qwen3.5-27b/" \
   -e "s/--cretas.ai.dashscope.vision-model=qwen3.5-plus/--cretas.ai.dashscope.vision-model=qwen3-vl-plus-2025-12-19/" \
   -e "s/--cretas.ai.arena-rl.llm.model=qwen3.5-35b-a3b/--cretas.ai.arena-rl.llm.model=qwen3.5-27b/" \
@@ -16,7 +23,8 @@ sed -i \
 
 echo "=== 更新 cretas-python.service ==="
 sed -i \
-  -e "s/LLM_MODEL=qwen3.5-plus-2026-02-15/LLM_MODEL=qwen3-max-2026-01-23/" \
+  -e "s/LLM_MODEL=qwen3.5-plus-2026-02-15/LLM_MODEL=qwen3.7-max-2026-06-08/" \
+  -e "s/LLM_MODEL=qwen3-max-2026-01-23/LLM_MODEL=qwen3.7-max-2026-06-08/" \
   -e "s/LLM_VL_MODEL=qwen3.5-plus/LLM_VL_MODEL=qwen3-vl-plus-2025-12-19/" \
   /etc/systemd/system/cretas-python.service
 

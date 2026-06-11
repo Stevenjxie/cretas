@@ -72,7 +72,7 @@ for i, code in enumerate(new_labels):
 
     try:
         resp = client.chat.completions.create(
-            model='qwen3-max-2026-01-23',  # free quota (was: qwen3.5-plus)
+            model='qwen3.7-max-2026-06-08',  # free quota ⚠️ (qwen3-max-2026-01-23 was PAID — billing incident 2026-06-11)
             messages=[dict(role='user', content=prompt)],
             max_tokens=2000,
             temperature=0.9,

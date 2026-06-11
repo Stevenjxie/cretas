@@ -26,7 +26,7 @@ logger = logging.getLogger("eval_answer_quality")
 # Config
 # ---------------------------------------------------------------------------
 LLM_API_BASE = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-LLM_MODEL = "qwen-max"
+LLM_MODEL = "qwen3.7-max-2026-06-08"  # free quota ⚠️ (qwen-max is PAID — billing incident 2026-06-11)
 FALLBACK_API_KEY = "sk-da3b827e6a00404a8bc869296f8690bc"
 
 DIMENSION_WEIGHTS = {

@@ -13,7 +13,7 @@ DashScope outage.
 Slot routing (per A-inventory.md):
 - call_llm / call_llm_stream / generate_text_analysis → SLOT.INSIGHTS
   (qwen3.5-flash on aliyun_b/_a, glm-4.5-air on zhipu, deepseek-chat fallback)
-- call_llm_stream_text → SLOT.CHAT (used by AIQuery — qwen3-max-2026-01-23)
+- call_llm_stream_text → SLOT.CHAT (used by AIQuery — routed via llm_router SLOT.CHAT)
 """
 import asyncio
 import logging
