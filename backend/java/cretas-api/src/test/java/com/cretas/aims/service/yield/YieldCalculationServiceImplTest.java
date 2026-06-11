@@ -556,4 +556,58 @@ class YieldCalculationServiceImplTest {
         assertThat(steps.get(0).getTotalInput()).isEqualByComparingTo("150");
         assertThat(steps.get(0).getYieldRate()).isEqualByComparingTo("0.8000");
     }
+
+    // ==================== 计划级免工序报工 两点出成率口径 (六扇门 Wave2 V20261017_01) ====================
+
+    @Test
+    void twoPointYield_materialInputPlusFinalOutput_cumulativeIsOutputOverInput() {
+        // 免工序报工: 仅 2 个批次级哨兵任务报工
+        //   task1 (MATERIAL_INPUT, order=0): INPUT report, 领料 998kg (无产出)
+        //   task2 (FINAL_OUTPUT,  order=9999): OUTPUT report, 产出 382.08kg (无投入)
+        // 现有 report-driven 链按 workProcessTaskId 分组, cumulative = lastOutput/firstInput = 382.08/998 = 0.3828
+        // 无需改 calculateBatchYield —— 两点口径天然落在首步 input / 末步 output。
+        ProductionReport inputReport = ProductionReport.builder()
+                .factoryId("F006").batchId(1L).reportType("YIELD").reportKind("INPUT")
+                .workProcessTaskId(1L).processOrder(0)
+                .inputQuantity(new BigDecimal("998")).inputUnit("kg")
+                .build();   // outputQuantity null (领料阶段无产出)
+        ProductionReport outputReport = ProductionReport.builder()
+                .factoryId("F006").batchId(1L).reportType("YIELD").reportKind("OUTPUT")
+                .workProcessTaskId(2L).processOrder(9999)
+                .outputQuantity(new BigDecimal("382.08")).outputUnit("kg")
+                .build();   // inputQuantity null (产出阶段无投入)
+
+        BatchYieldDTO dto = svc.calculateBatchYield(List.of(inputReport, outputReport), null);
+
+        assertThat(dto.getSteps()).hasSize(2);
+        assertThat(dto.getFirstStepInput()).isEqualByComparingTo("998");
+        assertThat(dto.getLastStepOutput()).isEqualByComparingTo("382.08");
+        assertThat(dto.getCumulativeYieldRate()).isEqualByComparingTo("0.3828");
+        // 两点模式人工不报 → 全 step laborCost null → 整批 totalLaborCost null (诚实, 登下一期)
+        assertThat(dto.getTotalLaborCost()).isNull();
+    }
+
+    @Test
+    void twoPointYield_costOnlyMaterial_laborNullWhenNoSegmentReport() {
+        // 两点模式: INPUT report 带材料成本 (领料折价), 无 SEGMENT report → laborCost null。
+        // 整批成本 = 材料 only; 人工 null 诚实传播 (绝不默认 0)。
+        ProductionReport inputReport = ProductionReport.builder()
+                .factoryId("F006").batchId(2L).reportType("YIELD").reportKind("INPUT")
+                .workProcessTaskId(10L).processOrder(0)
+                .inputQuantity(new BigDecimal("500")).inputUnit("kg")
+                .materialCost(new BigDecimal("3200.00"))   // 领料折价
+                .build();
+        ProductionReport outputReport = ProductionReport.builder()
+                .factoryId("F006").batchId(2L).reportType("YIELD").reportKind("OUTPUT")
+                .workProcessTaskId(11L).processOrder(9999)
+                .outputQuantity(new BigDecimal("270")).outputUnit("kg")
+                .build();
+
+        BatchYieldDTO dto = svc.calculateBatchYield(List.of(inputReport, outputReport), null);
+
+        assertThat(dto.getTotalMaterialCost()).isEqualByComparingTo("3200.00");
+        assertThat(dto.getTotalLaborCost()).isNull();       // 人工两点不报
+        assertThat(dto.getTotalCost()).isEqualByComparingTo("3200.00");  // = 材料 only
+        assertThat(dto.getCumulativeYieldRate()).isEqualByComparingTo("0.5400");  // 270/500
+    }
 }

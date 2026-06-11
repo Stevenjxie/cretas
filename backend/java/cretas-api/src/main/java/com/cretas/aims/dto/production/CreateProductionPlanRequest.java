@@ -138,6 +138,15 @@ public class CreateProductionPlanRequest {
     private List<String> relatedOrders;
 
     /**
+     * 免工序报工开关 (六扇门 Wave2 升级, V20261017_01).
+     * <p>true = 批次级两点报工 (领料入+产出出, 人工不报登下一期, 成本只含料, 出成率=产出/领料);
+     * false = 逐道工序级报工 (现状)。
+     * <p>null (未指定) → 服务层对"新建计划"默认 true (六扇门 want); 产品 0 工序时 spawn 强制走两点。
+     */
+    @Schema(description = "免工序报工开关 (true=批次级两点报工 领料+产出; null=新建默认true)")
+    private Boolean skipProcessReporting;
+
+    /**
      * Round 9 Fix (R8-α Gap #3): Canvas V3 dynamic field values for production_plan.
      * Customer-configured fields (如: 客户订单号, QC 要求等级, 特殊工艺参数, 成品包装
      * 要求 etc.) get persisted via DynamicFieldService.setDynamicFields. Previously

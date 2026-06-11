@@ -116,6 +116,20 @@ public class WorkProcessTaskServiceImpl implements WorkProcessTaskService {
             String factoryId,
             Long productionBatchId,
             String productTypeId) {
+        // 向后兼容: 旧 3-arg 入口委托新方法, skip=false (逐道). 现有 controller / Tool / 计划转批次
+        // 调用方在未感知免工序报工时走原逐道路径, 行为完全不变。
+        return spawnTasks(factoryId, productionBatchId, productTypeId, Boolean.FALSE, null, null);
+    }
+
+    @Override
+    @Transactional
+    public List<WorkProcessTaskDTO> spawnTasks(
+            String factoryId,
+            Long productionBatchId,
+            String productTypeId,
+            Boolean skipProcessReporting,
+            Long materialResponsibleId,
+            Long outputResponsibleId) {
 
         if (productionBatchId == null) {
             throw new BusinessException(400, "productionBatchId 不能为空");
@@ -133,12 +147,14 @@ public class WorkProcessTaskServiceImpl implements WorkProcessTaskService {
         List<ProductWorkProcess> templates = productWorkProcessRepository
                 .findByFactoryIdAndProductTypeIdOrderByProcessOrderAsc(factoryId, productTypeId);
 
-        if (templates.isEmpty()) {
-            throw new BusinessException(
-                    422,
-                    "产品 " + productTypeId + " 未配置任何工序")
-                    .withHint("请先到'产品工序配置'页给该产品绑定工序")
-                    .withHintTarget("产品工序配置");
+        // 计划级免工序报工模式判定 (六扇门 Wave2 升级, V20261017_01):
+        //   skip=true 显式选择 OR 产品未配任何工序 (工序 optional) → 走批次级两点报工 spawn。
+        //   这两种情形都不再 422 阻塞 (旧逐道路径才在 0 工序时报 422)。
+        boolean skip = Boolean.TRUE.equals(skipProcessReporting);
+        if (skip || templates.isEmpty()) {
+            return spawnBatchLevelTwoPointTasks(
+                    factoryId, productionBatchId, productTypeId,
+                    materialResponsibleId, outputResponsibleId, templates.isEmpty());
         }
 
         // 一次性查所有 WorkProcess 定义, 用作 unit 默认值 fallback
@@ -199,6 +215,82 @@ public class WorkProcessTaskServiceImpl implements WorkProcessTaskService {
                 .map(t -> toDTO(t, definitions.get(t.getWorkProcessId()),
                         t.getAssignedTo() != null ? nameMap.get(t.getAssignedTo()) : null))
                 .collect(Collectors.toList());
+    }
+
+    /**
+     * 批次级两点报工 spawn (免工序报工模式, 六扇门 Wave2 升级 V20261017_01).
+     *
+     * <p>生成恰好 2 个批次级哨兵任务 (无 WorkProcess 定义, 无 PWP 模板):
+     * <ol>
+     *   <li>领料报工 task: work_process_id={@link WorkProcessTaskService#SENTINEL_MATERIAL_INPUT},
+     *       process_order=0, assigned_to=materialResponsibleId。供操作员 INPUT 报工 (领料量+投入照)。</li>
+     *   <li>产出报工 task: work_process_id={@link WorkProcessTaskService#SENTINEL_FINAL_OUTPUT},
+     *       process_order={@link WorkProcessTaskService#SENTINEL_OUTPUT_ORDER} (末位),
+     *       assigned_to=outputResponsibleId。供 OUTPUT 报工 (产出量+副产品+成品照)。</li>
+     * </ol>
+     *
+     * <p>两点出成率/成本由现有 report-driven 链算 (calculateBatchYield):
+     * cumulative=lastOutput(产出)/firstInput(领料); 人工不报 → laborCost null (诚实, 登下一期)。
+     *
+     * <p>product_work_process_id 用哨兵 {@link WorkProcessTaskService#SENTINEL_PWP_ID} (列 NOT NULL);
+     * submitReport 的 T121 归属鉴权对哨兵 PWP 查 join 表返空 → 回退 assigned_to 校验 (安全)。
+     *
+     * @param zeroProcessFallback true=因产品 0 工序强制走两点 (日志区分); false=显式 skip 选择
+     */
+    private List<WorkProcessTaskDTO> spawnBatchLevelTwoPointTasks(
+            String factoryId,
+            Long productionBatchId,
+            String productTypeId,
+            Long materialResponsibleId,
+            Long outputResponsibleId,
+            boolean zeroProcessFallback) {
+
+        LocalDateTime now = LocalDateTime.now();
+
+        WorkProcessTask materialTask = WorkProcessTask.builder()
+                .factoryId(factoryId)
+                .productionBatchId(productionBatchId)
+                .productWorkProcessId(WorkProcessTaskService.SENTINEL_PWP_ID)
+                .workProcessId(WorkProcessTaskService.SENTINEL_MATERIAL_INPUT)
+                .productTypeId(productTypeId)
+                .processOrder(0)
+                .status(Status.PENDING)
+                .plannedUnit("kg")          // 领料量默认 kg (原料称重口径); OUTPUT 单位报工时自定
+                .assignedTo(materialResponsibleId)
+                .createdAt(now)
+                .updatedAt(now)
+                .build();
+
+        WorkProcessTask outputTask = WorkProcessTask.builder()
+                .factoryId(factoryId)
+                .productionBatchId(productionBatchId)
+                .productWorkProcessId(WorkProcessTaskService.SENTINEL_PWP_ID)
+                .workProcessId(WorkProcessTaskService.SENTINEL_FINAL_OUTPUT)
+                .productTypeId(productTypeId)
+                .processOrder(WorkProcessTaskService.SENTINEL_OUTPUT_ORDER)
+                .status(Status.PENDING)
+                .assignedTo(outputResponsibleId)
+                .createdAt(now)
+                .updatedAt(now)
+                .build();
+
+        List<WorkProcessTask> saved = taskRepository.saveAll(List.of(materialTask, outputTask));
+        log.info("批次 {} 免工序报工 spawn 2 批次级任务 (领料+产出, productType={}, zeroProcessFallback={})",
+                productionBatchId, productTypeId, zeroProcessFallback);
+
+        // 哨兵任务无 WorkProcess 定义 → toDTO definition=null; 核心 toDTO 已注入友好 processName (领料/产出报工)。
+        Map<Long, String> nameMap = loadAssigneeNames(saved);
+        return saved.stream()
+                .map(t -> toDTO(t, null,
+                        t.getAssignedTo() != null ? nameMap.get(t.getAssignedTo()) : null))
+                .collect(Collectors.toList());
+    }
+
+    /** 哨兵 work_process_id → 友好报工名 (RN/web 展示); 非哨兵返 null。 */
+    private String sentinelProcessName(String workProcessId) {
+        if (WorkProcessTaskService.SENTINEL_MATERIAL_INPUT.equals(workProcessId)) return "领料报工";
+        if (WorkProcessTaskService.SENTINEL_FINAL_OUTPUT.equals(workProcessId)) return "产出报工";
+        return null;
     }
 
     @Override
@@ -503,6 +595,13 @@ public class WorkProcessTaskServiceImpl implements WorkProcessTaskService {
             dto.setStandardYieldMax(definition.getStandardYieldMax());
             dto.setOutputUnit(definition.getOutputUnit());  // P0-2: 末道折份/盒
             dto.setExpectedByproducts(definition.getExpectedByproducts());  // 防呆 Rule 3: OUTPUT 阶段预填
+        } else {
+            // 免工序报工模式哨兵任务无 WorkProcess 定义 → 用友好报工名 (list/getById 路径也生效);
+            // 标准出成/副产物预填留 null (诚实, 哨兵无标准)。非哨兵 workProcessId → null (不变)。
+            String sentinelName = sentinelProcessName(task.getWorkProcessId());
+            if (sentinelName != null) {
+                dto.setProcessName(sentinelName);
+            }
         }
         return dto;
     }

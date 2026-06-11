@@ -27,6 +27,43 @@ public interface WorkProcessTaskService {
             String factoryId, Long productionBatchId, String productTypeId);
 
     /**
+     * 计划级"免工序报工"感知的 spawn (六扇门 Wave2 升级, V20261017_01).
+     *
+     * <p>分支:
+     * <ul>
+     *   <li>{@code skipProcessReporting=true} 或 产品 0 工序 → spawn 2 个批次级哨兵任务:
+     *       领料报工 (work_process_id={@link #SENTINEL_MATERIAL_INPUT}, process_order=0) +
+     *       产出报工 (work_process_id={@link #SENTINEL_FINAL_OUTPUT}, process_order={@link #SENTINEL_OUTPUT_ORDER})。
+     *       各绑头尾责任人 (materialResponsibleId / outputResponsibleId, 可同一人或 null)。不 spawn 工序 task。</li>
+     *   <li>{@code skipProcessReporting=false} 且 产品已配工序 → 委托旧 {@link #spawnTasks(String, Long, String)}
+     *       逐道行为 (零回归, #690 reporting_required 过滤不变)。</li>
+     * </ul>
+     *
+     * <p>两点报工的 yield/cost 由现有 report-driven 链 (calculateBatchYield) 算:
+     * cumulative = lastOutput/firstInput = 产出/领料; 人工不报 → laborCost null (诚实)。
+     *
+     * @param skipProcessReporting   计划级免工序报工开关 (null 视为 false, 向后兼容)
+     * @param materialResponsibleId  领料报工责任人 (头, 可 null)
+     * @param outputResponsibleId    产出报工责任人 (尾, 可 null; 与头同一人=一人兼)
+     * @return 生成的任务 DTO 列表
+     */
+    List<WorkProcessTaskDTO> spawnTasks(
+            String factoryId, Long productionBatchId, String productTypeId,
+            Boolean skipProcessReporting, Long materialResponsibleId, Long outputResponsibleId);
+
+    /** 哨兵 work_process_id: 批次级领料报工任务 (免工序报工模式, 不对应真实 WorkProcess 定义). */
+    String SENTINEL_MATERIAL_INPUT = "__MATERIAL_INPUT__";
+
+    /** 哨兵 work_process_id: 批次级产出报工任务 (免工序报工模式). */
+    String SENTINEL_FINAL_OUTPUT = "__FINAL_OUTPUT__";
+
+    /** 哨兵 product_work_process_id: 批次级任务无 PWP 模板, 用 0L 占位 (列 NOT NULL). */
+    Long SENTINEL_PWP_ID = 0L;
+
+    /** 产出报工任务的 process_order (排末位, 保证 calculateSteps 取它作 lastStep). */
+    int SENTINEL_OUTPUT_ORDER = 9999;
+
+    /**
      * 列表 — 多过滤条件 + 分页.
      */
     PageResponse<WorkProcessTaskDTO> list(
