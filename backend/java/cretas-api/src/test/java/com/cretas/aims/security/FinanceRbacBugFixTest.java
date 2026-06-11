@@ -87,12 +87,22 @@ class FinanceRbacBugFixTest {
     // ───────── Shared helpers ─────────
 
     private void asUserWithPricePermission(Long userId, boolean canViewPrice) {
+        // canViewPrice=true implies the user also has finance read-write (finance_manager / restaurant_owner).
+        // PriceFieldResponseAdvice checks BOTH PRICE_VIEW_PERMISSION and FINANCE_READ_PERMISSION;
+        // only when both are true does it early-return (skip all stripping).
+        // When canViewPrice=false (sales_manager) finance permission is also false.
+        asUserWithPermissions(userId, canViewPrice, canViewPrice);
+    }
+
+    private void asUserWithPermissions(Long userId, boolean canViewPrice, boolean canViewFinance) {
         httpRequest.setAttribute("userId", userId);
         User user = new User();
         user.setId(userId);
         lenient().when(userRepository.findById(userId)).thenReturn(Optional.of(user));
         lenient().when(permissionService.hasPermission(eq(user),
                 eq(PriceFieldResponseAdvice.PRICE_VIEW_PERMISSION))).thenReturn(canViewPrice);
+        lenient().when(permissionService.hasPermission(eq(user),
+                eq(PriceFieldResponseAdvice.FINANCE_READ_PERMISSION))).thenReturn(canViewFinance);
     }
 
     private Object run(Object body) {

@@ -12,8 +12,21 @@ import static org.mockito.Mockito.*;
 class AutoLearnPoisonGuardTest {
 
     private AIIntentConfig intent(String code, String biz) {
+        return intent(code, biz, null);
+    }
+
+    /**
+     * Factory that also sets toolName.
+     * Guard B in tryAutoLearnExpression blocks learning when toolName is null/blank
+     * (dead-route poison guard). Tests that expect learning to proceed must supply
+     * a non-blank toolName so Guard B passes.
+     */
+    private AIIntentConfig intent(String code, String biz, String toolName) {
         AIIntentConfig i = new AIIntentConfig();
-        i.setIntentCode(code); i.setBusinessType(biz); return i;
+        i.setIntentCode(code);
+        i.setBusinessType(biz);
+        i.setToolName(toolName);
+        return i;
     }
 
     private IntentRecognitionPipelineServiceImpl irpWith(
@@ -39,10 +52,12 @@ class AutoLearnPoisonGuardTest {
 
     @Test
     void allows_compatibleIntent() {
+        // Guard B requires toolName non-blank; supply one so the compatible-intent path proceeds.
         IntentConfigManagementService cfg = mock(IntentConfigManagementService.class);
         ExpressionLearningService els = mock(ExpressionLearningService.class);
         when(cfg.resolveBusinessDomain("RES_1")).thenReturn("RESTAURANT");
-        when(cfg.getAllIntents("RES_1")).thenReturn(List.of(intent("RESTAURANT_ORDER_STATISTICS", "RESTAURANT")));
+        when(cfg.getAllIntents("RES_1")).thenReturn(
+            List.of(intent("RESTAURANT_ORDER_STATISTICS", "RESTAURANT", "restaurant_order_statistics")));
         IntentRecognitionPipelineServiceImpl irp = irpWith(cfg, els);
         ReflectionTestUtils.invokeMethod(irp, "tryAutoLearnExpression",
             "外送占比", "RESTAURANT_ORDER_STATISTICS", "RES_1", 0.9, LearnedExpression.SourceType.LLM_FALLBACK);
