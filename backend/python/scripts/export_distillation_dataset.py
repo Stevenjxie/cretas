@@ -48,7 +48,18 @@ async def _fetch_rows(
     if pool is None:
         raise RuntimeError("postgres pool unavailable (check DB env)")
 
-    where = ["teacher_output IS NOT NULL", "input_text IS NOT NULL"]
+    where = [
+        "teacher_output IS NOT NULL",
+        "input_text IS NOT NULL",
+        # P2 eval-freeze exclusion: rows marked eval_frozen=true are part of
+        # the held-out eval slice (G3 spot-check asset).  They must NEVER leak
+        # into the training set so the eval benchmark stays uncontaminated.
+        # We exclude them via: NOT (metadata ? 'eval_frozen') covers the case
+        # where the key is absent; the IS DISTINCT FROM 'true' arm covers rows
+        # where the key exists but the value is not true (defensive).
+        "(metadata IS NULL OR NOT (metadata ? 'eval_frozen')"
+        " OR (metadata->>'eval_frozen') IS DISTINCT FROM 'true')",
+    ]
     args: List[Any] = []
     if source:
         args.append(source)
