@@ -4,6 +4,7 @@ import com.cretas.aims.entity.alerts.AlertRule;
 import com.cretas.aims.entity.alerts.AlertType;
 import com.cretas.aims.repository.alerts.AlertRuleRepository;
 import com.cretas.aims.service.alerts.AlertEngineService;
+import com.cretas.aims.service.alerts.LowStockDualAlertService;
 import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
 import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
@@ -35,11 +36,14 @@ public class AlertInventoryLowScheduler {
     @Autowired
     private AlertEngineService alertEngineService;
 
+    /** F-034: 兜底双向报警 (仓库+采购). */
+    @Autowired
+    private LowStockDualAlertService lowStockDualAlertService;
+
     @PostConstruct
     void init() {
-        log.warn("{} registered — DB query impl pending Phase 2 B-3 "
-                + "(MaterialBatchRepository aggregate by material_type vs minStockLevel)",
-                getClass().getSimpleName());
+        log.info("{} registered — F-034 dual-alert sweep (warehouse_manager + procurement_manager) "
+                + "active, every 15 min via ShedLock.", getClass().getSimpleName());
     }
 
     /** 每 15 分钟. ShedLock 防多实例. */
@@ -66,10 +70,7 @@ public class AlertInventoryLowScheduler {
     }
 
     private void evaluateFactory(String factoryId) {
-        // Phase 2 follow-up: query material_batches aggregate by material_type_id,
-        // compare current stock vs minStockLevel; for each below-threshold material,
-        // call triggerAlert with full context.
-        log.trace("[AlertInventoryLowScheduler] 扫描工厂 {} (impl 待 Phase 2 B-3)",
-                factoryId);
+        // F-034: 双向报警 (仓库+采购) — 兜底扫描
+        lowStockDualAlertService.sweepFactory(factoryId);
     }
 }
