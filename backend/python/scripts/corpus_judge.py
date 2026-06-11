@@ -10,6 +10,22 @@ Promotion rule: overall >= 4 AND factuality >= 4 → quality=4 (training-ready).
 
 Idempotency: rows with metadata->'judge' already set are skipped.
 
+Cross-family judging (--cross-family):
+    Re-judges quality=4 rows whose source is NOT 'chart_insight' (i.e. chat_qa,
+    agent_insight, materialization — buckets without independent claims-pinning).
+    Uses a DIFFERENT model family from qwen (the original teacher/judge family) to
+    break the self-eval loop where teacher and judge share the same hallucination
+    blind spots.  Family resolution:
+        qwen    → uses SLOT.REVIEW chain filtered to accounts where the HEAD model
+                  family is qwen (aliyun_c/b/a)   ← default, original behaviour
+        glm     → filters chain to 'zhipu' account (GLM-family)
+        deepseek→ filters chain to 'tencent' or 'aliyun_a_deepseek' account
+    Demote rule: if cross-family overall < 4 OR cross-family factuality < 4
+                 → quality 4 → 3  (no longer training-ready)
+    Records metadata.judge_crossfamily = {model, family, scores, agreed: bool}.
+    Idempotent: rows already having metadata.judge_crossfamily are skipped.
+    Graceful on quota-exhausted: log warning, skip row (keeps current quality).
+
 Usage:
     # Dry-run — print counts, no LLM/DB writes:
     cd backend/python
@@ -20,6 +36,15 @@ Usage:
 
     # Scope to one source:
     python -m scripts.corpus_judge --source intent_llm --limit 200
+
+    # Cross-family re-judge of non-chart_insight quality=4 rows using GLM family:
+    python -m scripts.corpus_judge --cross-family --judge-family glm --limit 200
+
+    # Cross-family using DeepSeek family:
+    python -m scripts.corpus_judge --cross-family --judge-family deepseek --limit 200
+
+    # Override specific judge model (any family):
+    python -m scripts.corpus_judge --cross-family --judge-model glm-4.5-air --limit 100
 
 Environment variables (real run):
     SMARTBI_PROD_DSN   — asyncpg DSN e.g. postgresql://user:pass@host/smartbi_prod_db
@@ -220,6 +245,65 @@ def decide_quality(scores: Dict[str, int]) -> int:
 
 
 # ---------------------------------------------------------------------------
+# Cross-family judge helpers
+# ---------------------------------------------------------------------------
+
+# Sources that already have independent G1 claims-pinning (server-recompute).
+# These do NOT need cross-family judging — the self-eval loop is already broken
+# by the independent verification layer.
+_CLAIMS_PINNED_SOURCES: frozenset = frozenset({"chart_insight"})
+
+# Mapping from logical family name → list of account names to include in the
+# SLOT.REVIEW chain when calling the cross-family judge.
+# Each family maps to accounts whose lead model belongs to that family.
+#   qwen     → aliyun accounts (qwen3-max / qwen-max family)
+#   glm      → zhipu account (GLM family) — independent of aliyun
+#   deepseek → tencent (deepseek-v4-pro, free on TokenHub) +
+#              aliyun_a_deepseek (DashScope-hosted deepseek, own free pool)
+_FAMILY_ACCOUNTS: Dict[str, List[str]] = {
+    "qwen": ["aliyun_c", "aliyun_b", "aliyun_a"],
+    "glm": ["zhipu"],
+    "deepseek": ["tencent", "aliyun_a_deepseek"],
+}
+
+# Default cross-family to use when --cross-family is given without --judge-family.
+# GLM is first choice: completely separate vendor from Aliyun/qwen, independent
+# free pool on Zhipu open.bigmodel.cn.
+_DEFAULT_CROSS_FAMILY = "glm"
+
+
+def resolve_judge_chain(
+    judge_family: Optional[str] = None,
+    judge_model: Optional[str] = None,
+) -> Tuple[Optional[List[str]], Optional[str]]:
+    """Resolve the account chain and optional model override for the cross-family judge.
+
+    Args:
+        judge_family: One of 'qwen', 'glm', 'deepseek'.  None → use default chain.
+        judge_model:  Explicit model name override (e.g. 'glm-4.5-air').
+                      When given, the router still walks the resolved account chain
+                      but each attempt uses this model instead of its slot default.
+                      NOTE: the router overwrites ``payload["model"]`` per slot
+                      entry, so we cannot force a specific model via call_chain
+                      alone.  The model is passed back to the caller so it can be
+                      injected directly into the payload before calling call_chain
+                      with the appropriate account filter.
+
+    Returns:
+        (account_filter, model_override_or_None)
+    """
+    family = (judge_family or "").lower() or None
+    account_filter: Optional[List[str]] = None
+    if family:
+        account_filter = _FAMILY_ACCOUNTS.get(family)
+        if account_filter is None:
+            logger.warning(
+                "Unknown judge family %r — using default SLOT.REVIEW chain", family
+            )
+    return account_filter, judge_model or None
+
+
+# ---------------------------------------------------------------------------
 # DB helpers
 # ---------------------------------------------------------------------------
 
@@ -238,6 +322,18 @@ _UPDATE_SQL = """
     SET quality = $1,
         metadata = COALESCE(metadata, '{}'::jsonb) || $2::jsonb
     WHERE id = $3
+"""
+
+# Cross-family: fetch quality=4 rows that are NOT from claims-pinned sources
+# and do NOT yet have a 'judge_crossfamily' key in their metadata.
+_CROSSFAMILY_FETCH_SQL = """
+    SELECT id, input_text, teacher_output, metadata, source
+    FROM smart_bi_distillation_samples
+    WHERE quality = 4
+      AND source NOT IN ({sources_placeholder})
+      AND (metadata IS NULL OR NOT (metadata ? 'judge_crossfamily'))
+    ORDER BY id
+    LIMIT $1
 """
 
 
@@ -308,6 +404,81 @@ async def apply_judge_result(
         await conn.execute(_UPDATE_SQL, new_quality, judge_patch, row_id)
 
 
+async def fetch_crossfamily_rows(
+    pool,
+    limit: int,
+    source: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """Fetch quality=4 rows from non-claims-pinned sources without cross-family judgment.
+
+    Claims-pinned sources (e.g. chart_insight) have independent G1 verification,
+    so they are excluded — the self-eval loop is already broken for them.
+
+    Args:
+        pool: asyncpg pool.
+        limit: Max rows to return.
+        source: Optional source filter (in addition to the claims-pinned exclusion).
+    """
+    if pool is None:
+        return []
+
+    # Build the NOT IN list for claims-pinned sources
+    pinned = list(_CLAIMS_PINNED_SOURCES)
+    placeholders = ", ".join(f"${i + 2}" for i in range(len(pinned)))
+    sql = _CROSSFAMILY_FETCH_SQL.format(sources_placeholder=placeholders)
+
+    # Add optional source filter
+    source_clause_offset = len(pinned) + 2
+    if source:
+        sql = sql.rstrip() + f"\n      AND source = ${source_clause_offset}"
+
+    async with pool.acquire() as conn:
+        params: List[Any] = [limit] + pinned
+        if source:
+            params.append(source)
+        rows = await conn.fetch(sql, *params)
+
+    return [
+        {
+            "id": row["id"],
+            "input_text": row["input_text"] or "",
+            "teacher_output": row["teacher_output"] or "",
+            "metadata": row["metadata"],
+            "source": row["source"],
+        }
+        for row in rows
+    ]
+
+
+async def apply_crossfamily_result(
+    pool,
+    row_id: int,
+    new_quality: int,
+    cf_scores: Dict[str, int],
+    cf_model: str,
+    cf_family: str,
+    agreed: bool,
+) -> None:
+    """Persist cross-family judge outcome.
+
+    Records metadata.judge_crossfamily and updates quality if demoted.
+    The 'agreed' flag indicates whether the cross-family judge concurred with q4.
+    """
+    cf_patch = json.dumps(
+        {
+            "judge_crossfamily": {
+                "model": cf_model,
+                "family": cf_family,
+                "scores": cf_scores,
+                "agreed": agreed,
+            }
+        },
+        ensure_ascii=False,
+    )
+    async with pool.acquire() as conn:
+        await conn.execute(_UPDATE_SQL, new_quality, cf_patch, row_id)
+
+
 # ---------------------------------------------------------------------------
 # Core judging logic
 # ---------------------------------------------------------------------------
@@ -356,6 +527,85 @@ async def judge_row(
     if scores is None:
         logger.warning("Score parse failed. Raw response: %r", raw_text[:300])
     return scores
+
+
+async def judge_row_with_chain(
+    input_text: str,
+    teacher_output: str,
+    account_filter: Optional[List[str]] = None,
+    model_override: Optional[str] = None,
+    timeout: float = 60.0,
+) -> Tuple[Optional[Dict[str, int]], Optional[str]]:
+    """Call the SLOT.REVIEW chain filtered to a specific account family.
+
+    Used by the cross-family judge to route to a non-qwen provider.
+
+    Args:
+        input_text: The corpus input context.
+        teacher_output: The teacher answer to score.
+        account_filter: List of account names to restrict the chain to
+                        (e.g. ['zhipu'] for GLM family).  None → full chain.
+        model_override: If set, force this model name in the payload instead of
+                        the slot default.  Useful when calling a specific model
+                        directly (e.g. 'glm-4.5-air').
+        timeout: Per-provider timeout in seconds.
+
+    Returns:
+        (scores_dict_or_None, actual_model_used_or_None)
+        The actual_model is extracted from the response if available, otherwise
+        falls back to model_override or a best-guess from the account_filter.
+    """
+    system_prompt, user_prompt = build_judge_prompt(input_text, teacher_output)
+
+    payload: Dict[str, Any] = {
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+        "max_tokens": 128,
+        "temperature": 0.0,
+    }
+    if model_override:
+        payload["model"] = model_override
+
+    try:
+        response = await call_chain(
+            SLOT.REVIEW,
+            payload,
+            chain=account_filter,
+            timeout=timeout,
+        )
+    except RuntimeError as exc:
+        # Quota exhausted for this family — log and signal gracefully
+        logger.warning(
+            "Cross-family judge: all providers exhausted for family filter %r: %s",
+            account_filter,
+            exc,
+        )
+        return None, None
+    except Exception as exc:
+        logger.warning("Cross-family judge: unexpected LLM failure: %s", exc)
+        return None, None
+
+    # Extract content
+    try:
+        choices = response.get("choices") or []
+        if not choices:
+            logger.warning("Cross-family judge: empty choices in response")
+            return None, None
+        raw_text = choices[0].get("message", {}).get("content", "") or ""
+        # Try to capture the actual model used from the response
+        actual_model: Optional[str] = response.get("model") or model_override
+    except Exception as exc:
+        logger.warning("Cross-family judge: could not extract content: %s", exc)
+        return None, None
+
+    scores = parse_judge_scores(raw_text)
+    if scores is None:
+        logger.warning(
+            "Cross-family judge: score parse failed. Raw: %r", raw_text[:300]
+        )
+    return scores, actual_model
 
 
 # ---------------------------------------------------------------------------
@@ -442,6 +692,161 @@ async def run_judge(
             pass
 
 
+async def run_crossfamily_judge(
+    limit: int,
+    judge_family: str = _DEFAULT_CROSS_FAMILY,
+    judge_model: Optional[str] = None,
+    source: Optional[str] = None,
+    dry_run: bool = False,
+    dsn: Optional[str] = None,
+) -> None:
+    """Cross-family re-judge loop for non-claims-pinned quality=4 rows.
+
+    Fetches quality=4 rows from sources WITHOUT independent G1 claims-pinning
+    (i.e. NOT chart_insight) that have not yet been cross-family judged.
+
+    A DIFFERENT model family from qwen is used to break the self-eval loop
+    where teacher and G2 judge share the same family's hallucination blind spots.
+
+    Demote rule: cross-family overall < 4 OR factuality < 4 → quality 4 → 3.
+    Agreement:  cross-family overall >= 4 AND factuality >= 4 → keep quality=4.
+    Both outcomes record metadata.judge_crossfamily for audit + idempotency.
+
+    Graceful on quota exhaustion: logs "family X exhausted, skipping" and moves
+    on without crashing or changing the row's quality.
+
+    Args:
+        limit: Max rows to process.
+        judge_family: 'glm', 'deepseek', or 'qwen'. Default: 'glm'.
+        judge_model: Optional explicit model name (overrides slot default).
+        source: Optional source filter within the non-claims-pinned set.
+        dry_run: Count rows only, no LLM or DB writes.
+        dsn: Optional asyncpg DSN override.
+    """
+    account_filter, model_override = resolve_judge_chain(judge_family, judge_model)
+
+    # Describe the resolved family for logging
+    family_label = judge_family or _DEFAULT_CROSS_FAMILY
+    if account_filter:
+        logger.info(
+            "Cross-family judge: family=%r → accounts=%r model_override=%r",
+            family_label,
+            account_filter,
+            model_override,
+        )
+    else:
+        logger.warning(
+            "Cross-family judge: unknown family %r — using full SLOT.REVIEW chain. "
+            "This may re-use the same family as the teacher (self-eval loop not broken).",
+            judge_family,
+        )
+
+    pool = await _make_pool(dsn) if not dry_run else None
+    rows = await fetch_crossfamily_rows(pool or None, limit, source)
+
+    if dry_run:
+        pinned = ", ".join(sorted(_CLAIMS_PINNED_SOURCES))
+        print(
+            f"\nCROSS-FAMILY DRY-RUN: found {len(rows)} quality=4 non-claims-pinned rows "
+            f"without 'judge_crossfamily' metadata\n"
+            f"  (excluded sources with G1 claims-pinning: {pinned})\n"
+            f"  family={family_label!r}  accounts={account_filter!r}\n"
+            f"  limit={limit}\n"
+            "No LLM calls or DB writes performed."
+        )
+        return
+
+    n_judged = 0
+    n_agreed = 0    # cross-family also ≥4 → keep q4
+    n_demoted = 0   # cross-family < 4 → q4 → q3
+    n_skipped = 0   # quota exhausted for this family
+    n_failed = 0    # LLM/parse failure (not quota)
+
+    for idx, row in enumerate(rows):
+        row_id = row["id"]
+        logger.debug(
+            "[%d/%d] Cross-family judging row id=%d source=%s",
+            idx + 1, len(rows), row_id, row.get("source"),
+        )
+
+        cf_scores, actual_model = await judge_row_with_chain(
+            row["input_text"],
+            row["teacher_output"],
+            account_filter=account_filter,
+            model_override=model_override,
+        )
+
+        if cf_scores is None:
+            # Distinguish quota-exhausted (account_filter set + no result) from other failures
+            if account_filter is not None:
+                logger.warning(
+                    "[%d/%d] Cross-family judge: family %r quota exhausted or unavailable "
+                    "for row id=%d — skipping (row keeps current quality)",
+                    idx + 1, len(rows), family_label, row_id,
+                )
+                n_skipped += 1
+            else:
+                logger.warning(
+                    "[%d/%d] Cross-family judge: LLM failure for row id=%d — skipping",
+                    idx + 1, len(rows), row_id,
+                )
+                n_failed += 1
+            continue
+
+        # Determine agreement: both overall and factuality must be ≥4 to agree
+        agreed = cf_scores["overall"] >= 4 and cf_scores["factuality"] >= 4
+        new_quality = 4 if agreed else 3
+
+        used_model = actual_model or model_override or family_label
+        await apply_crossfamily_result(
+            pool,
+            row_id,
+            new_quality,
+            cf_scores,
+            cf_model=used_model,
+            cf_family=family_label,
+            agreed=agreed,
+        )
+        n_judged += 1
+
+        if agreed:
+            n_agreed += 1
+            logger.debug(
+                "Row id=%d: cross-family AGREED (q4 retained). scores=%s",
+                row_id, cf_scores,
+            )
+        else:
+            n_demoted += 1
+            logger.info(
+                "Row id=%d: cross-family DEMOTED q4→q3. scores=%s model=%s",
+                row_id, cf_scores, used_model,
+            )
+
+        if (idx + 1) % 20 == 0:
+            logger.info(
+                "[%d/%d] Cross-family running totals — judged=%d agreed=%d "
+                "demoted=%d skipped(quota)=%d failed=%d",
+                idx + 1, len(rows),
+                n_judged, n_agreed, n_demoted, n_skipped, n_failed,
+            )
+
+    # Final summary
+    print(
+        f"\nCROSS-FAMILY JUDGE COMPLETE  (family={family_label!r})\n"
+        f"  judged   : {n_judged}\n"
+        f"  agreed   : {n_agreed}  (cross-family ≥4 → q4 retained)\n"
+        f"  demoted  : {n_demoted}  (cross-family <4 → q4→q3)\n"
+        f"  skipped  : {n_skipped}  (family quota exhausted, row unchanged)\n"
+        f"  failed   : {n_failed}  (LLM/parse error, row unchanged)\n"
+    )
+
+    if pool is not None:
+        try:
+            await pool.close()
+        except Exception:
+            pass
+
+
 # ---------------------------------------------------------------------------
 # CLI entry-point
 # ---------------------------------------------------------------------------
@@ -472,6 +877,33 @@ def main() -> None:
         "--log-level", default="INFO",
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
     )
+    # Cross-family judge arguments
+    parser.add_argument(
+        "--cross-family", action="store_true",
+        help=(
+            "Run cross-family re-judge on quality=4 rows from non-claims-pinned "
+            "sources (chat_qa/agent_insight/materialization). Requires a different "
+            "model family to break the qwen self-eval loop."
+        ),
+    )
+    parser.add_argument(
+        "--judge-family",
+        default=_DEFAULT_CROSS_FAMILY,
+        choices=list(_FAMILY_ACCOUNTS.keys()),
+        help=(
+            f"Model family for the cross-family judge. "
+            f"Default: '{_DEFAULT_CROSS_FAMILY}'. "
+            f"Choices: {', '.join(_FAMILY_ACCOUNTS.keys())}."
+        ),
+    )
+    parser.add_argument(
+        "--judge-model", default=None,
+        help=(
+            "Explicit model name override for cross-family judging "
+            "(e.g. 'glm-4.5-air'). When given, forces this model in the "
+            "payload before calling the resolved family chain."
+        ),
+    )
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -479,12 +911,22 @@ def main() -> None:
         format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
     )
 
-    asyncio.run(run_judge(
-        limit=args.limit,
-        source=args.source or None,
-        dry_run=args.dry_run,
-        dsn=args.dsn or None,
-    ))
+    if args.cross_family:
+        asyncio.run(run_crossfamily_judge(
+            limit=args.limit,
+            judge_family=args.judge_family,
+            judge_model=args.judge_model or None,
+            source=args.source or None,
+            dry_run=args.dry_run,
+            dsn=args.dsn or None,
+        ))
+    else:
+        asyncio.run(run_judge(
+            limit=args.limit,
+            source=args.source or None,
+            dry_run=args.dry_run,
+            dsn=args.dsn or None,
+        ))
 
 
 if __name__ == "__main__":
