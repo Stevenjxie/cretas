@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { View, StyleSheet, FlatList, Alert, RefreshControl } from 'react-native';
-import { Text, Appbar, Card, Chip, FAB, Portal, Modal, TextInput, Button, ActivityIndicator, SegmentedButtons } from 'react-native-paper';
+import { View, StyleSheet, FlatList, Alert, RefreshControl, TouchableOpacity, ScrollView } from 'react-native';
+import { Text, Appbar, Card, Chip, FAB, Portal, Modal, TextInput, Button, ActivityIndicator, SegmentedButtons, Icon } from 'react-native-paper';
 import { useNavigation, CommonActions } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { FAManagementStackParamList } from '../../../types/navigation';
@@ -157,6 +157,38 @@ export default function PurchaseOrderListScreen() {
         <Appbar.Action icon="refresh" onPress={onRefresh} />
       </Appbar.Header>
 
+      {/* SP6 #36 — 出纳付款 + 采购异常 快捷入口 (防呆 Rule 5: 有入口不死循环) */}
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        style={styles.quickBar}
+        contentContainerStyle={styles.quickBarContent}
+      >
+        <TouchableOpacity
+          style={styles.quickCard}
+          onPress={() => (navigation as Nav & { navigate: (name: string) => void }).navigate('CashierPaymentList')}
+          activeOpacity={0.75}
+        >
+          <View style={[styles.quickIcon, { backgroundColor: '#1B65A820' }]}>
+            <Icon source="bank-transfer-out" size={22} color="#1B65A8" />
+          </View>
+          <Text style={styles.quickCardTitle}>出纳付款</Text>
+          <Text style={styles.quickCardDesc}>确认已审批付款</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={styles.quickCard}
+          onPress={() => (navigation as Nav & { navigate: (name: string) => void }).navigate('PurchaseExceptionList')}
+          activeOpacity={0.75}
+        >
+          <View style={[styles.quickIcon, { backgroundColor: '#C6282820' }]}>
+            <Icon source="alert-circle-outline" size={22} color="#C62828" />
+          </View>
+          <Text style={styles.quickCardTitle}>采购异常</Text>
+          <Text style={styles.quickCardDesc}>处理超收/少收</Text>
+        </TouchableOpacity>
+      </ScrollView>
+
       <View style={styles.filterRow}>
         <SegmentedButtons
           value={statusFilter}
@@ -227,6 +259,21 @@ export default function PurchaseOrderListScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#f5f5f5' },
+  // SP6 #36 — 快捷入口条
+  quickBar: { backgroundColor: '#fff', borderBottomWidth: 1, borderBottomColor: '#f0f0f0' },
+  quickBarContent: { paddingHorizontal: 12, paddingVertical: 10, gap: 10, flexDirection: 'row' },
+  quickCard: {
+    width: 120,
+    backgroundColor: '#F8FAFB',
+    borderRadius: 10,
+    padding: 10,
+    borderWidth: 1,
+    borderColor: '#E8ECF0',
+    alignItems: 'center',
+  },
+  quickIcon: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center', marginBottom: 6 },
+  quickCardTitle: { fontSize: 13, fontWeight: '600', color: '#333', textAlign: 'center' },
+  quickCardDesc: { fontSize: 11, color: '#888', textAlign: 'center', marginTop: 2 },
   filterRow: { paddingHorizontal: 12, paddingVertical: 8, backgroundColor: '#fff' },
   segmented: { },
   listWrap: { flex: 1 },

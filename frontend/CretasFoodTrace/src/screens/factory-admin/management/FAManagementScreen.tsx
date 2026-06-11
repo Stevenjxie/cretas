@@ -263,6 +263,19 @@ export function FAManagementScreen() {
               color="#722ed1"
               onPress={() => navigation.navigate('RdRequestCreate' as never)}
             />
+            {/* SP6 #36 — 出纳付款 + 采购异常 入口 */}
+            <GridItem
+              icon="bank-transfer-out"
+              title="出纳付款"
+              color="#1B65A8"
+              onPress={() => navigation.navigate('CashierPaymentList' as never)}
+            />
+            <GridItem
+              icon="alert-circle-outline"
+              title="采购异常"
+              color="#C62828"
+              onPress={() => navigation.navigate('PurchaseExceptionList' as never)}
+            />
           </View>
         </View>
 
