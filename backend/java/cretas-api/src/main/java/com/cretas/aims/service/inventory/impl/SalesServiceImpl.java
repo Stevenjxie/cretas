@@ -101,6 +101,22 @@ public class SalesServiceImpl implements SalesService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.service.bom.CostVarianceService costVarianceService;
 
+    /** SP12 实际成本拆分: 订单 → 生产计划. Optional — 未注册时 actualCostSplit 返 null. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.repository.ProductionPlanRepository productionPlanRepository;
+
+    /** SP12 实际成本拆分: 计划 → 生产批次 (取 laborCost/equipmentCost/otherCost). Optional. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.repository.ProductionBatchRepository productionBatchRepository;
+
+    /** SP12 实际成本拆分: 批次 → 领料消耗记录 (逐料 quantity/unitPrice/totalCost). Optional. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.repository.MaterialConsumptionRepository materialConsumptionRepository;
+
+    /** SP12 实际成本拆分: 物料名称/分类/单位查询. Optional. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.repository.RawMaterialTypeRepository rawMaterialTypeRepository;
+
     /**
      * Issue #793: 客户协议价 lookup — auto-applies customer-specific or global selling price
      * at SO creation when caller does not explicitly set {@code unitPrice}.
@@ -1024,7 +1040,209 @@ public class SalesServiceImpl implements SalesService {
                 // 委外加工费无生产记录来源 → 不伪造数字, 返 null.
                 // 待 WorkProcess 加 is_outsourced 列后接入真实数据.
                 .processingFee(null)
+                // SP12: 实际成本拆分 (材料逐料 + 人工 + 制费), 来自生产真实领料/报工.
+                // 诚实 null: 订单未投产 / 未领料 / 未报工时返 null. 不破坏上面聚合字段.
+                .actualCostSplit(buildActualCostSplit(factoryId, orderId))
                 .lines(lines)
+                .build();
+    }
+
+    /**
+     * SP12: 构建实际成本三分拆分 (材料逐料 / 人工 / 制费).
+     *
+     * <p>客户原话 (六扇门 [12:36]): "财务根据前面领料的批次去核算最终的实际成本"。
+     * 把单一 actualCost 总额拆解成可核算的组分。
+     *
+     * <p>数据链: 销售订单 → ProductionPlan(sourceOrderId) → ProductionBatch(planId)
+     * → MaterialConsumption(productionBatchId, 逐料) + 批次 laborCost / equipmentCost / otherCost。
+     *
+     * <p>诚实 null 策略:
+     * <ul>
+     *   <li>repos 未注册 (单测/模块未部署) → 整个 split 为 null;
+     *   <li>订单无关联生产计划 → split 非 null 但各组分 null, dataSourceHint 说明"未投产";
+     *   <li>批次无领料 → materialCost null + materials 空;
+     *   <li>批次无报工 → laborCost null。
+     * </ul>
+     * 任何组分缺数据都不伪造数字。
+     *
+     * @return ActualCostSplit, 或 null (repos 不可用)
+     */
+    private com.cretas.aims.dto.inventory.FinanceCostBreakdown.ActualCostSplit
+            buildActualCostSplit(String factoryId, String orderId) {
+        // repos 未注册 → 诚实 null (不伪造)
+        if (productionPlanRepository == null || productionBatchRepository == null
+                || materialConsumptionRepository == null) {
+            return null;
+        }
+
+        java.util.List<com.cretas.aims.entity.ProductionPlan> plans;
+        try {
+            plans = productionPlanRepository.findByFactoryIdAndSourceOrderId(factoryId, orderId);
+        } catch (Exception e) {
+            log.warn("SP12 实际成本拆分: 查询关联生产计划失败 (orderId={}): {}", orderId, e.getMessage());
+            return null;
+        }
+
+        if (plans == null || plans.isEmpty()) {
+            // 订单未关联生产计划 → 尚未投产, 无真实成本可拆
+            return com.cretas.aims.dto.inventory.FinanceCostBreakdown.ActualCostSplit.builder()
+                    .batchCount(0)
+                    .materials(java.util.Collections.emptyList())
+                    .dataSourceHint("订单尚未关联生产计划 (未投产), 暂无实际领料/报工成本可拆分.")
+                    .build();
+        }
+
+        // 取所有关联计划下的批次
+        java.util.Set<String> planIds = new java.util.HashSet<>();
+        for (com.cretas.aims.entity.ProductionPlan p : plans) {
+            if (p.getId() != null) {
+                planIds.add(p.getId());
+            }
+        }
+
+        java.util.List<com.cretas.aims.entity.ProductionBatch> batches =
+                planIds.isEmpty()
+                        ? java.util.Collections.emptyList()
+                        : productionBatchRepository.findByFactoryIdAndProductionPlanIdIn(factoryId, planIds);
+
+        int batchCount = batches.size();
+
+        // ---- 人工 + 制费: 批次级 laborCost / equipmentCost + otherCost rollup ----
+        BigDecimal laborSum = BigDecimal.ZERO;
+        boolean anyLabor = false;
+        BigDecimal overheadSum = BigDecimal.ZERO;
+        boolean anyOverhead = false;
+        java.util.List<Long> batchPkIds = new java.util.ArrayList<>();
+        for (com.cretas.aims.entity.ProductionBatch b : batches) {
+            if (b.getId() != null) {
+                batchPkIds.add(b.getId());
+            }
+            if (b.getLaborCost() != null) {
+                laborSum = laborSum.add(b.getLaborCost());
+                anyLabor = true;
+            }
+            // 制费 = 设备成本 + 其他成本
+            if (b.getEquipmentCost() != null) {
+                overheadSum = overheadSum.add(b.getEquipmentCost());
+                anyOverhead = true;
+            }
+            if (b.getOtherCost() != null) {
+                overheadSum = overheadSum.add(b.getOtherCost());
+                anyOverhead = true;
+            }
+        }
+        BigDecimal laborCost = anyLabor ? laborSum.setScale(2, java.math.RoundingMode.HALF_UP) : null;
+        BigDecimal overheadCost = anyOverhead ? overheadSum.setScale(2, java.math.RoundingMode.HALF_UP) : null;
+
+        // ---- 材料: 逐料聚合 MaterialConsumption (领料消耗记录) ----
+        // 按 materialTypeId 聚合: 实际用量 Σquantity, 金额 ΣtotalCost, 移动均价 = 金额/用量
+        java.util.Map<String, BigDecimal> qtyByType = new java.util.LinkedHashMap<>();
+        java.util.Map<String, BigDecimal> amtByType = new java.util.LinkedHashMap<>();
+        // 兜底单价 (用量为 0 时用首个 unitPrice)
+        java.util.Map<String, BigDecimal> fallbackUnitPrice = new java.util.HashMap<>();
+
+        for (Long pkId : batchPkIds) {
+            java.util.List<com.cretas.aims.entity.MaterialConsumption> cons;
+            try {
+                cons = materialConsumptionRepository.findByProductionBatchIdAndFactoryId(pkId, factoryId);
+            } catch (Exception e) {
+                log.warn("SP12 实际成本拆分: 查询批次 {} 领料失败: {}", pkId, e.getMessage());
+                continue;
+            }
+            for (com.cretas.aims.entity.MaterialConsumption c : cons) {
+                String typeId = c.getMaterialTypeId();
+                if (typeId == null) {
+                    // 无物料类型的消耗记录无法逐料归类, 跳过逐料 (但金额仍记到 "未分类")
+                    typeId = "__UNCLASSIFIED__";
+                }
+                BigDecimal q = c.getQuantity() != null ? c.getQuantity() : BigDecimal.ZERO;
+                BigDecimal amt = c.getTotalCost() != null ? c.getTotalCost() : BigDecimal.ZERO;
+                qtyByType.merge(typeId, q, BigDecimal::add);
+                amtByType.merge(typeId, amt, BigDecimal::add);
+                if (c.getUnitPrice() != null) {
+                    fallbackUnitPrice.putIfAbsent(typeId, c.getUnitPrice());
+                }
+            }
+        }
+
+        java.util.List<com.cretas.aims.dto.inventory.FinanceCostBreakdown.MaterialCostLine> materials =
+                new java.util.ArrayList<>();
+        BigDecimal materialSum = BigDecimal.ZERO;
+        boolean anyMaterial = !amtByType.isEmpty();
+
+        for (java.util.Map.Entry<String, BigDecimal> entry : amtByType.entrySet()) {
+            String typeId = entry.getKey();
+            BigDecimal amt = entry.getValue().setScale(2, java.math.RoundingMode.HALF_UP);
+            BigDecimal qty = qtyByType.getOrDefault(typeId, BigDecimal.ZERO);
+            materialSum = materialSum.add(amt);
+
+            // 移动均价 = 金额 / 用量 (用量 > 0); 否则用首个 unitPrice 兜底
+            BigDecimal unitPrice = qty.compareTo(BigDecimal.ZERO) > 0
+                    ? amt.divide(qty, 4, java.math.RoundingMode.HALF_UP)
+                    : fallbackUnitPrice.get(typeId);
+
+            String name = typeId;
+            String category = null;
+            String unit = null;
+            if (!"__UNCLASSIFIED__".equals(typeId) && rawMaterialTypeRepository != null) {
+                try {
+                    java.util.Optional<com.cretas.aims.entity.RawMaterialType> rt =
+                            rawMaterialTypeRepository.findById(typeId);
+                    if (rt.isPresent()) {
+                        name = rt.get().getName() != null ? rt.get().getName() : typeId;
+                        category = rt.get().getCategory();
+                        unit = rt.get().getUnit();
+                    }
+                } catch (Exception e) {
+                    log.warn("SP12 实际成本拆分: 查询物料 {} 失败: {}", typeId, e.getMessage());
+                }
+            } else if ("__UNCLASSIFIED__".equals(typeId)) {
+                name = "未分类领料";
+            }
+
+            materials.add(com.cretas.aims.dto.inventory.FinanceCostBreakdown.MaterialCostLine.builder()
+                    .materialTypeId("__UNCLASSIFIED__".equals(typeId) ? null : typeId)
+                    .materialName(name)
+                    .category(category)
+                    .actualQuantity(qty)
+                    .unit(unit)
+                    .unitPrice(unitPrice)
+                    .amount(amt)
+                    .build());
+        }
+
+        BigDecimal materialCost = anyMaterial ? materialSum.setScale(2, java.math.RoundingMode.HALF_UP) : null;
+
+        // ---- 合计 = 非 null 组分之和 ----
+        BigDecimal total = null;
+        if (materialCost != null || laborCost != null || overheadCost != null) {
+            total = BigDecimal.ZERO;
+            if (materialCost != null) total = total.add(materialCost);
+            if (laborCost != null) total = total.add(laborCost);
+            if (overheadCost != null) total = total.add(overheadCost);
+        }
+
+        // ---- 数据缺失提示 ----
+        StringBuilder hint = new StringBuilder();
+        if (batchCount == 0) {
+            hint.append("订单已关联生产计划但尚无生产批次 (未排批). ");
+        }
+        if (materialCost == null && batchCount > 0) {
+            hint.append("批次暂无领料消耗记录 (未领料或自动扣料未执行). ");
+        }
+        if (laborCost == null && batchCount > 0) {
+            hint.append("批次暂无人工成本 (未报工或工时×时薪未配置). ");
+        }
+        String hintStr = hint.length() > 0 ? hint.toString().trim() : null;
+
+        return com.cretas.aims.dto.inventory.FinanceCostBreakdown.ActualCostSplit.builder()
+                .materialCost(materialCost)
+                .laborCost(laborCost)
+                .overheadCost(overheadCost)
+                .totalActualCost(total)
+                .batchCount(batchCount)
+                .materials(materials)
+                .dataSourceHint(hintStr)
                 .build();
     }
 
