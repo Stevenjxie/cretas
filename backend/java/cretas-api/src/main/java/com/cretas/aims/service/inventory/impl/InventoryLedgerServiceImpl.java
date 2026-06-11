@@ -106,6 +106,72 @@ public class InventoryLedgerServiceImpl implements InventoryLedgerService {
                 .collect(Collectors.toList());
     }
 
+    // ==================== P11: 按物料大类(原料/辅料/包材)筛选 ====================
+
+    @Override
+    public List<InventoryLedgerLineDTO> getLedgerByKind(String factoryId, LocalDate startDate,
+                                                         LocalDate endDate, String materialKind) {
+        Objects.requireNonNull(factoryId, "factoryId required");
+        Objects.requireNonNull(startDate, "startDate required");
+        Objects.requireNonNull(endDate, "endDate required");
+
+        // 1. 按 category 字段过滤物料 (null/空 = 全部, 不区分大小写)
+        List<RawMaterialType> materials = materialTypeRepo.findByFactoryId(factoryId);
+        if (materialKind != null && !materialKind.isBlank()) {
+            final String kindFilter = materialKind.trim();
+            materials = materials.stream()
+                    .filter(m -> kindFilter.equalsIgnoreCase(m.getCategory()))
+                    .collect(Collectors.toList());
+        }
+
+        if (materials.isEmpty()) {
+            return Collections.emptyList();
+        }
+
+        // 2. 查找期初快照
+        int startYearMonth = startDate.getYear() * 100 + startDate.getMonthValue();
+        Map<String, InventoryLedgerSnapshot> openingSnapshots = new HashMap<>();
+        for (RawMaterialType mt : materials) {
+            List<InventoryLedgerSnapshot> snaps = snapshotRepo.findLatestBeforePeriod(
+                    factoryId, mt.getId(), SnapshotType.PERIOD_CLOSE, startYearMonth);
+            if (!snaps.isEmpty()) {
+                openingSnapshots.put(mt.getId(), snaps.get(0));
+            }
+        }
+
+        // 3. 聚合期间流水
+        return materials.stream()
+                .map(mt -> buildLine(factoryId, mt, startDate, endDate, openingSnapshots.get(mt.getId())))
+                .collect(Collectors.toList());
+    }
+
+    @Override
+    public String exportInventoryLedgerByKind(String factoryId, LocalDate startDate, LocalDate endDate,
+                                               String materialKind, boolean includePrices,
+                                               OutputStream out) throws Exception {
+        List<InventoryLedgerLineDTO> lines = getLedgerByKind(factoryId, startDate, endDate, materialKind);
+
+        List<List<Object>> rows = new ArrayList<>();
+        rows.add(buildHeaderRow(includePrices));
+        for (InventoryLedgerLineDTO line : lines) {
+            rows.add(buildDataRow(line, includePrices));
+        }
+
+        writeRawRows(out, rows);
+
+        String kindSuffix = (materialKind != null && !materialKind.isBlank()) ? "_" + materialKind : "";
+        String fileName = String.format("inventory-ledger%s_%s_%s_%s_%s.xlsx",
+                kindSuffix, factoryId,
+                startDate.toString().replace("-", ""),
+                endDate.toString().replace("-", ""),
+                LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss")));
+        log.info("[P11] exportInventoryLedgerByKind: factoryId={} materialKind={} rows={} file={}",
+                factoryId, materialKind, lines.size(), fileName);
+        return fileName;
+    }
+
+    // ==================== End P11 ====================
+
     @Override
     public String exportInventoryLedger(String factoryId, LocalDate startDate, LocalDate endDate,
                                         String materialTypeId, boolean includePrices,

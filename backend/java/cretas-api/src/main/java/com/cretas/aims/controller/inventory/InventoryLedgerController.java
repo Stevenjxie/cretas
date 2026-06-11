@@ -26,8 +26,10 @@ import java.util.List;
  * SP11: 进销存台账 REST API.
  *
  * <pre>
- * GET  /api/mobile/{factoryId}/inventory/ledger           — 查询台账
- * GET  /api/mobile/{factoryId}/inventory/ledger/export    — 导出台账 xlsx
+ * GET  /api/mobile/{factoryId}/inventory/ledger                        — 查询台账 (按单个物料类型过滤)
+ * GET  /api/mobile/{factoryId}/inventory/ledger/export                 — 导出台账 xlsx
+ * GET  /api/mobile/{factoryId}/inventory/ledger/by-kind                — P11: 按物料大类(原料/辅料/包材)查询
+ * GET  /api/mobile/{factoryId}/inventory/ledger/by-kind/export         — P11: 按物料大类导出 xlsx
  * </pre>
  *
  * <p>RBAC: 读取需 inventory:read; 金额字段由 PriceFieldResponseAdvice 对非财务角色自动遮蔽 (JSON 响应).
@@ -110,6 +112,69 @@ public class InventoryLedgerController {
         log.info("[SP11] InventoryLedger export: factoryId={} includePrices={} file={}",
                 factoryId, includePrices, fileName);
     }
+
+    // ==================== P11: 按物料大类(原料/辅料/包材)查询 ====================
+
+    /**
+     * P11: 查询进销存台账 — 按物料大类筛选.
+     *
+     * <p>materialKind = 对应 raw_material_types.category 字段的大类标签:
+     * "原料" / "辅料" / "包材". 不传 = 全部.
+     *
+     * <p>GET /api/mobile/{factoryId}/inventory/ledger/by-kind
+     *       ?startDate=2026-06-01&endDate=2026-06-30&materialKind=包材
+     */
+    @GetMapping("/by-kind")
+    public ResponseEntity<ApiResponse<InventoryLedgerDTO>> getLedgerByKind(
+            @PathVariable String factoryId,
+            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate startDate,
+            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate endDate,
+            @RequestParam(required = false) String materialKind) {
+
+        List<InventoryLedgerLineDTO> lines = ledgerService.getLedgerByKind(
+                factoryId, startDate, endDate, materialKind);
+
+        InventoryLedgerDTO dto = InventoryLedgerDTO.builder()
+                .factoryId(factoryId)
+                .startDate(startDate.toString())
+                .endDate(endDate.toString())
+                .lines(lines)
+                .build();
+
+        log.info("[P11] getLedgerByKind: factoryId={} kind={} lines={}", factoryId, materialKind, lines.size());
+        return ResponseEntity.ok(ApiResponse.success(dto));
+    }
+
+    /**
+     * P11: 导出进销存台账 xlsx — 按物料大类筛选.
+     *
+     * <p>GET /api/mobile/{factoryId}/inventory/ledger/by-kind/export
+     *       ?startDate=...&endDate=...&materialKind=包材
+     */
+    @GetMapping("/by-kind/export")
+    @RequirePermission({"inventory:read", "finance:read"})
+    public void exportLedgerByKind(
+            @PathVariable String factoryId,
+            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate startDate,
+            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate endDate,
+            @RequestParam(required = false) String materialKind,
+            HttpServletRequest request,
+            HttpServletResponse response) throws Exception {
+
+        boolean includePrices = resolveCanViewPrices(request);
+
+        response.setContentType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+        String fileName = ledgerService.exportInventoryLedgerByKind(
+                factoryId, startDate, endDate, materialKind, includePrices,
+                response.getOutputStream());
+        response.setHeader(HttpHeaders.CONTENT_DISPOSITION,
+                "attachment; filename*=UTF-8''" + URLEncoder.encode(fileName, StandardCharsets.UTF_8));
+        response.flushBuffer();
+        log.info("[P11] InventoryLedger by-kind export: factoryId={} kind={} includePrices={} file={}",
+                factoryId, materialKind, includePrices, fileName);
+    }
+
+    // ==================== End P11 ====================
 
     /**
      * 计算导出 xlsx 是否包含金额列 — 镜像 PriceFieldResponseAdvice 的双权限门.

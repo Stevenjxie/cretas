@@ -124,16 +124,24 @@ public class RawMaterialTypeController {
      * 获取原材料类型列表
      */
     @GetMapping
-    @Operation(summary = "获取原材料类型列表", description = "分页获取工厂的原材料类型列表，返回分页信息和类型详情")
+    @Operation(summary = "获取原材料类型列表",
+            description = "分页获取工厂的原材料类型列表；可选 materialKind 按物料大类筛选 (原料/辅料/包材)。P11：支持仓储视图按类别分 tab")
     public ApiResponse<PageResponse<RawMaterialTypeDTO>> getMaterialTypes(
             @PathVariable @Parameter(description = "工厂ID", example = "F001") String factoryId,
             @RequestParam(defaultValue = "1") @Parameter(description = "页码（1-based）", example = "1") Integer page,
-            @RequestParam(defaultValue = "20") @Parameter(description = "每页大小", example = "20") Integer size) {
-        log.info("获取原材料类型列表: factoryId={}, page={}, size={}", factoryId, page, size);
+            @RequestParam(defaultValue = "20") @Parameter(description = "每页大小", example = "20") Integer size,
+            @RequestParam(required = false) @Parameter(description = "P11: 物料大类筛选 (原料/辅料/包材); 不传=全部", example = "包材") String materialKind) {
+        log.info("获取原材料类型列表: factoryId={}, page={}, size={}, materialKind={}", factoryId, page, size, materialKind);
         PageRequest pageRequest = new PageRequest();
         pageRequest.setPage(page);
         pageRequest.setSize(size);
-        PageResponse<RawMaterialTypeDTO> result = materialTypeService.getMaterialTypes(factoryId, pageRequest);
+        PageResponse<RawMaterialTypeDTO> result;
+        if (materialKind != null && !materialKind.isBlank()) {
+            // P11: 按大类筛选 — 复用 getMaterialTypesByCategory (pageRequest 版本)
+            result = materialTypeService.getMaterialTypesByKind(factoryId, materialKind, pageRequest);
+        } else {
+            result = materialTypeService.getMaterialTypes(factoryId, pageRequest);
+        }
         return ApiResponse.success(result);
     }
 

@@ -39,6 +39,11 @@ public interface RawMaterialTypeRepository extends JpaRepository<RawMaterialType
       */
     List<RawMaterialType> findByFactoryIdAndCategory(String factoryId, String category);
      /**
+     * P11: 按物料大类(category)分页查询 — 大小写不敏感.
+      */
+    Page<RawMaterialType> findByFactoryIdAndCategoryIgnoreCase(String factoryId, String category, Pageable pageable);
+
+     /**
      * 根据存储类型查找
       */
     List<RawMaterialType> findByFactoryIdAndStorageType(String factoryId, String storageType);
@@ -134,4 +139,20 @@ public interface RawMaterialTypeRepository extends JpaRepository<RawMaterialType
     List<RawMaterialType> findByFactoryIdAndCodeStartingWith(@Param("factoryId") String factoryId,
                                                               @Param("codePrefix") String codePrefix,
                                                               Pageable pageable);
+
+    /**
+     * R14: 按单价范围筛选原材料 (研发试样选料辅助).
+     * unitPrice IS NOT NULL 且在 [minPrice, maxPrice] (两端 nullable, null = 无限).
+     * 最多返回 100 条, 按 unitPrice ASC.
+     * CAST(:min AS java.math.BigDecimal) 对 null 值 PG 类型推断安全 (per database-entity-sync.md).
+     */
+    @Query("SELECT r FROM RawMaterialType r WHERE r.factoryId = :factoryId " +
+           "AND r.unitPrice IS NOT NULL " +
+           "AND (CAST(:minPrice AS java.math.BigDecimal) IS NULL OR r.unitPrice >= :minPrice) " +
+           "AND (CAST(:maxPrice AS java.math.BigDecimal) IS NULL OR r.unitPrice <= :maxPrice) " +
+           "ORDER BY r.unitPrice ASC")
+    List<RawMaterialType> findByPriceRange(@Param("factoryId") String factoryId,
+                                           @Param("minPrice") java.math.BigDecimal minPrice,
+                                           @Param("maxPrice") java.math.BigDecimal maxPrice,
+                                           Pageable pageable);
 }

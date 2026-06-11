@@ -1,6 +1,7 @@
 package com.cretas.aims.controller.rd;
 
 import com.cretas.aims.annotation.RequirePermission;
+import com.cretas.aims.service.RawMaterialTypeService;
 import com.cretas.aims.service.rd.ProductMidQuoteService;
 import com.cretas.aims.service.rd.ProductSampleService;
 import com.cretas.aims.service.rd.ThreePriceComparisonService;
@@ -21,6 +22,7 @@ public class RdController {
     private final ProductSampleService sampleService;
     private final ProductMidQuoteService midQuoteService;
     private final ThreePriceComparisonService threePriceService;
+    private final RawMaterialTypeService materialTypeService;
 
     // ==================== 研发需求 ====================
 
@@ -319,4 +321,35 @@ public class RdController {
         var confirmed = midQuoteService.confirmMidQuote(factoryId, midQuoteId, notes, userId);
         return ResponseEntity.ok(Map.of("success", true, "data", confirmed, "message", "中报价已确认"));
     }
+
+    // ==================== R14: 研发试样选料 — 按价格区间推荐 ====================
+
+    /**
+     * R14: 按单价范围筛选候选原材料 (研发试样建单辅助).
+     *
+     * <pre>
+     * GET /api/mobile/{factoryId}/rd/materials/suggest-by-price
+     *     ?minPrice=1.00&maxPrice=50.00
+     * </pre>
+     *
+     * <p>返回 unitPrice 在 [minPrice, maxPrice] 范围内的物料, 按单价升序, 最多100条.
+     * minPrice / maxPrice 均可不传 (null = 无下/上限). 无报价的物料不参与候选.
+     *
+     * <p>RBAC: rd:read 可读; 价格字段由 PriceFieldResponseAdvice 对非财务角色自动遮蔽.
+     */
+    @RequirePermission({"rd:read"})
+    @GetMapping("/materials/suggest-by-price")
+    public ResponseEntity<?> suggestMaterialsByPrice(
+            @PathVariable String factoryId,
+            @RequestParam(required = false) BigDecimal minPrice,
+            @RequestParam(required = false) BigDecimal maxPrice) {
+
+        var materials = materialTypeService.suggestMaterialsByPriceRange(factoryId, minPrice, maxPrice);
+        return ResponseEntity.ok(Map.of(
+                "success", true,
+                "data", materials,
+                "message", "共找到 " + materials.size() + " 种原材料"));
+    }
+
+    // ==================== End R14 ====================
 }

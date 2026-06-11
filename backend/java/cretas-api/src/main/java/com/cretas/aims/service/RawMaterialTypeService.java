@@ -36,6 +36,12 @@ public interface RawMaterialTypeService {
      * 获取原材料类型列表（分页）
       */
     PageResponse<RawMaterialTypeDTO> getMaterialTypes(String factoryId, PageRequest pageRequest);
+
+    /**
+     * P11: 按物料大类(原料/辅料/包材)分页查询. materialKind 对应 category 字段.
+     */
+    PageResponse<RawMaterialTypeDTO> getMaterialTypesByKind(String factoryId, String materialKind, PageRequest pageRequest);
+
      /**
      * 获取所有激活的原材料类型
       */
@@ -139,4 +145,20 @@ public interface RawMaterialTypeService {
      * @return 最多50条匹配物料 DTO
      */
     List<RawMaterialTypeDTO> searchByCodePrefix(String factoryId, String codePrefix);
+
+    /**
+     * R14: 按单价范围筛选原材料 (研发试样选料辅助).
+     *
+     * <p>返回 unitPrice 在 [minPrice, maxPrice] 区间内的物料, 按单价升序.
+     * minPrice / maxPrice 均可 null (null = 无下/上限). 最多返回 100 条.
+     * unitPrice 为 null 的物料 (无报价) 不进候选列表.
+     *
+     * @param factoryId 工厂ID
+     * @param minPrice  单价下限 (含, nullable)
+     * @param maxPrice  单价上限 (含, nullable)
+     * @return 候选物料列表 (按 unitPrice ASC, 最多100条)
+     */
+    List<RawMaterialTypeDTO> suggestMaterialsByPriceRange(String factoryId,
+                                                          java.math.BigDecimal minPrice,
+                                                          java.math.BigDecimal maxPrice);
 }
