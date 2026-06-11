@@ -1,7 +1,11 @@
 package com.cretas.aims.service.impl;
 
+import com.cretas.aims.dto.laborefficiency.LaborAchievementSummaryDTO;
+import com.cretas.aims.dto.laborefficiency.LaborAchievementSummaryDTO.BatchAchievementItemDTO;
 import com.cretas.aims.dto.laborefficiency.LaborEfficiencyCompareDTO;
 import com.cretas.aims.dto.laborefficiency.LaborEfficiencyOrderAggregateDTO;
+import com.cretas.aims.dto.laborefficiency.LaborStepBreakdownDTO;
+import com.cretas.aims.dto.laborefficiency.LaborStepBreakdownDTO.StepBreakdownItem;
 import com.cretas.aims.dto.laborefficiency.LaborVarianceItemDTO;
 import com.cretas.aims.dto.yield.BatchYieldDTO;
 import com.cretas.aims.dto.yield.StepYieldDTO;
@@ -9,10 +13,12 @@ import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.ProductionBatch;
 import com.cretas.aims.entity.ProductionPlan;
 import com.cretas.aims.entity.inventory.SalesOrder;
+import com.cretas.aims.entity.workprocess.WorkProcessTask;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.ProductionPlanRepository;
 import com.cretas.aims.repository.inventory.SalesOrderRepository;
+import com.cretas.aims.repository.workprocess.WorkProcessTaskRepository;
 import com.cretas.aims.service.LaborEfficiencyService;
 import com.cretas.aims.service.yield.YieldReportService;
 import lombok.RequiredArgsConstructor;
@@ -62,6 +68,7 @@ public class LaborEfficiencyServiceImpl implements LaborEfficiencyService {
     private final ProductionPlanRepository productionPlanRepo;
     private final SalesOrderRepository salesOrderRepo;
     private final YieldReportService yieldReportService;
+    private final WorkProcessTaskRepository workProcessTaskRepo;
 
     @Override
     @Transactional(readOnly = true)
@@ -102,6 +109,220 @@ public class LaborEfficiencyServiceImpl implements LaborEfficiencyService {
             }
         }
         return result;
+    }
+
+    // ─────────────────────────────── M4: 达成率汇总 ────────────────────────────────
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<LaborAchievementSummaryDTO> getLaborAchievementSummary(
+            String factoryId,
+            LocalDate startDate,
+            LocalDate endDate,
+            String productTypeId) {
+
+        LocalDateTime startDt = startDate.atStartOfDay();
+        LocalDateTime endDt = endDate.atTime(LocalTime.MAX);
+
+        List<ProductionBatch> batches = batchRepo.findCompletedBatchesForLaborComparison(
+                factoryId, startDt, endDt, productTypeId);
+
+        if (batches.isEmpty()) {
+            return new ArrayList<>();
+        }
+
+        // Batch-load productTypes for names
+        List<String> ptIds = batches.stream()
+                .map(ProductionBatch::getProductTypeId)
+                .filter(id -> id != null)
+                .distinct()
+                .collect(Collectors.toList());
+        Map<String, ProductType> productTypeMap = productTypeRepo.findByIdIn(ptIds)
+                .stream()
+                .collect(Collectors.toMap(ProductType::getId, pt -> pt));
+
+        // Group batches by productTypeId; key = null → "全部" rollup
+        // We first build per-batch items, then aggregate per productType
+        Map<String, List<ProductionBatch>> byProduct = new LinkedHashMap<>();
+        for (ProductionBatch b : batches) {
+            String ptId = b.getProductTypeId() != null ? b.getProductTypeId() : "__UNKNOWN__";
+            byProduct.computeIfAbsent(ptId, k -> new ArrayList<>()).add(b);
+        }
+
+        List<LaborAchievementSummaryDTO> result = new ArrayList<>();
+
+        // Overall summary if no filter
+        if (productTypeId == null) {
+            result.add(buildAchievementSummary(factoryId, null, "全部产品", batches, productTypeMap));
+        }
+
+        // Per-product summaries
+        for (Map.Entry<String, List<ProductionBatch>> entry : byProduct.entrySet()) {
+            String ptId = entry.getKey();
+            String ptName = "__UNKNOWN__".equals(ptId) ? "未知产品"
+                    : (productTypeMap.containsKey(ptId) ? productTypeMap.get(ptId).getName() : ptId);
+            result.add(buildAchievementSummary(factoryId, ptId, ptName, entry.getValue(), productTypeMap));
+        }
+
+        return result;
+    }
+
+    private LaborAchievementSummaryDTO buildAchievementSummary(
+            String factoryId,
+            String ptId,
+            String ptName,
+            List<ProductionBatch> batches,
+            Map<String, ProductType> productTypeMap) {
+
+        List<BatchAchievementItemDTO> batchItems = new ArrayList<>();
+        int totalActual = 0;
+        int totalPlanned = 0;
+        boolean hasActual = false;
+        boolean hasPlanned = false;
+
+        for (ProductionBatch batch : batches) {
+            Integer actualMin = null;
+            Integer plannedMin = null;
+            try {
+                BatchYieldDTO yield = yieldReportService.getYield(factoryId, batch.getId());
+                if (yield != null) {
+                    actualMin = yield.getTotalWorkMinutes();
+                }
+                // plannedMinutes = Σ WorkProcessTask.estimatedMinutes for this batch
+                List<WorkProcessTask> tasks = workProcessTaskRepo
+                        .findByFactoryIdAndProductionBatchIdOrderByProcessOrderAsc(factoryId, batch.getId());
+                int batchPlanned = 0;
+                boolean hasPlan = false;
+                for (WorkProcessTask t : tasks) {
+                    if (t.getEstimatedMinutes() != null) {
+                        batchPlanned += t.getEstimatedMinutes();
+                        hasPlan = true;
+                    }
+                }
+                if (hasPlan) {
+                    plannedMin = batchPlanned;
+                }
+            } catch (Exception e) {
+                log.debug("SP9 M4 achievement: skip batch {} due to error: {}",
+                        batch.getBatchNumber(), e.getMessage());
+            }
+
+            if (actualMin != null) {
+                totalActual += actualMin;
+                hasActual = true;
+            }
+            if (plannedMin != null) {
+                totalPlanned += plannedMin;
+                hasPlanned = true;
+            }
+
+            BigDecimal batchRate = calcAchievementRatePct(actualMin, plannedMin);
+            batchItems.add(BatchAchievementItemDTO.builder()
+                    .batchNumber(batch.getBatchNumber())
+                    .productName(batch.getProductName())
+                    .actualWorkMinutes(actualMin)
+                    .plannedWorkMinutes(plannedMin)
+                    .achievementRatePct(batchRate)
+                    .achievementAlert(calcAchievementAlertPct(batchRate))
+                    .build());
+        }
+
+        Integer totalActualVal = hasActual ? totalActual : null;
+        Integer totalPlannedVal = hasPlanned ? totalPlanned : null;
+        BigDecimal overallRate = calcAchievementRatePct(totalActualVal, totalPlannedVal);
+
+        return LaborAchievementSummaryDTO.builder()
+                .productTypeId("__UNKNOWN__".equals(ptId) ? null : ptId)
+                .productName(ptName)
+                .totalActualWorkMinutes(totalActualVal)
+                .totalPlannedWorkMinutes(totalPlannedVal)
+                .achievementRatePct(overallRate)
+                .achievementAlert(calcAchievementAlertPct(overallRate))
+                .batchCount(batches.size())
+                .batchItems(batchItems)
+                .build();
+    }
+
+    // ─────────────────────────────── step-breakdown ────────────────────────────────
+
+    @Override
+    @Transactional(readOnly = true)
+    public LaborStepBreakdownDTO getStepBreakdown(String factoryId, Long batchId) {
+        Optional<ProductionBatch> batchOpt = batchRepo.findById(batchId);
+        if (batchOpt.isEmpty() || !factoryId.equals(batchOpt.get().getFactoryId())) {
+            return null;
+        }
+        ProductionBatch batch = batchOpt.get();
+
+        // Load product type for gramsPerUnit
+        BigDecimal gramsPerUnit = null;
+        if (batch.getProductTypeId() != null) {
+            gramsPerUnit = productTypeRepo.findById(batch.getProductTypeId())
+                    .map(ProductType::getGramsPerUnit)
+                    .orElse(null);
+        }
+
+        // Load yield for actual step data
+        BatchYieldDTO yield = null;
+        try {
+            yield = yieldReportService.getYield(factoryId, batchId);
+        } catch (Exception e) {
+            log.debug("SP9 step-breakdown: yield unavailable for batch {}: {}", batchId, e.getMessage());
+        }
+
+        // Load WorkProcessTasks for plannedMinutes per step
+        List<WorkProcessTask> tasks = workProcessTaskRepo
+                .findByFactoryIdAndProductionBatchIdOrderByProcessOrderAsc(factoryId, batchId);
+        Map<Integer, WorkProcessTask> tasksByOrder = tasks.stream()
+                .collect(Collectors.toMap(WorkProcessTask::getProcessOrder, t -> t, (a, b2) -> a));
+
+        // Build step items from yield steps
+        List<StepBreakdownItem> stepItems = new ArrayList<>();
+        int totalActual = 0;
+        int totalPlanned = 0;
+        boolean hasActual = false;
+        boolean hasPlanned = false;
+
+        if (yield != null && yield.getSteps() != null) {
+            for (StepYieldDTO step : yield.getSteps()) {
+                WorkProcessTask task = step.getProcessOrder() != null
+                        ? tasksByOrder.get(step.getProcessOrder()) : null;
+                Integer plannedMin = task != null ? task.getEstimatedMinutes() : null;
+                Integer actualMin = step.getTotalWorkMinutes();
+
+                if (actualMin != null) { totalActual += actualMin; hasActual = true; }
+                if (plannedMin != null) { totalPlanned += plannedMin; hasPlanned = true; }
+
+                BigDecimal rate = calcAchievementRatePct(actualMin, plannedMin);
+                final BigDecimal gramsPerUnitFinal = gramsPerUnit;
+                stepItems.add(StepBreakdownItem.builder()
+                        .processOrder(step.getProcessOrder())
+                        .processName(step.getProcessName())
+                        .actualWorkMinutes(actualMin)
+                        .actualWorkers(step.getTotalWorkers())
+                        .plannedWorkMinutes(plannedMin)
+                        .achievementRatePct(rate)
+                        .achievementAlert(calcAchievementAlertPct(rate))
+                        .laborCost(step.getLaborCost())
+                        .laborCostPerBox(calcStepLaborCostPerBox(step, gramsPerUnitFinal))
+                        .build());
+            }
+        }
+
+        Integer totalActualVal = hasActual ? totalActual : null;
+        Integer totalPlannedVal = hasPlanned ? totalPlanned : null;
+        BigDecimal overallRate = calcAchievementRatePct(totalActualVal, totalPlannedVal);
+
+        return LaborStepBreakdownDTO.builder()
+                .batchId(batchId)
+                .batchNumber(batch.getBatchNumber())
+                .productName(batch.getProductName())
+                .totalActualWorkMinutes(totalActualVal)
+                .totalPlannedWorkMinutes(totalPlannedVal)
+                .overallAchievementRatePct(overallRate)
+                .overallAchievementAlert(calcAchievementAlertPct(overallRate))
+                .steps(stepItems)
+                .build();
     }
 
     // ─────────────────────────────── private helpers ────────────────────────────────
@@ -255,6 +476,10 @@ public class LaborEfficiencyServiceImpl implements LaborEfficiencyService {
         return step.getLaborCost().divide(outputBoxes, 4, RoundingMode.HALF_UP);
     }
 
+    /**
+     * Legacy helper — used by M3 buildStepDetails where achievementRate is a 0-1 ratio.
+     * Kept for backward compat; M4/step-breakdown use calcAchievementAlertPct directly.
+     */
     private String calcAchievementAlert(BigDecimal achievementRate) {
         if (achievementRate == null) {
             return null;
@@ -268,7 +493,37 @@ public class LaborEfficiencyServiceImpl implements LaborEfficiencyService {
         return "OK";
     }
 
-    // ─────────────────────────── SP3 P1: M3b 订单级聚合 ────────────────────────────
+    /**
+     * 达成率 (%) 告警 — 直接比较百分比值.
+     * null → null; ≥ 150 → ABOVE_ALERT; < 75 → BELOW_ALERT; else OK.
+     */
+    private String calcAchievementAlertPct(BigDecimal ratePct) {
+        if (ratePct == null) {
+            return null;
+        }
+        if (ratePct.compareTo(ACHIEVEMENT_ABOVE) >= 0) {
+            return "ABOVE_ALERT";
+        } else if (ratePct.compareTo(ACHIEVEMENT_BELOW) < 0) {
+            return "BELOW_ALERT";
+        }
+        return "OK";
+    }
+
+    /**
+     * 达成率 (%) = actual / planned × 100; null-safe.
+     * <p>actual == null → null; planned == null or 0 → null.</p>
+     */
+    private BigDecimal calcAchievementRatePct(Integer actualMinutes, Integer plannedMinutes) {
+        if (actualMinutes == null || plannedMinutes == null || plannedMinutes == 0) {
+            return null;
+        }
+        return new BigDecimal(actualMinutes)
+                .divide(new BigDecimal(plannedMinutes), 4, RoundingMode.HALF_UP)
+                .multiply(new BigDecimal("100"))
+                .setScale(2, RoundingMode.HALF_UP);
+    }
+
+    // ─────────────────────── SP3 P1: M3b 订单级聚合 ────────────────────────────
 
     @Override
     @Transactional(readOnly = true)

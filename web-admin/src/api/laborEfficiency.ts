@@ -5,6 +5,8 @@
  * 端点:
  *   GET /compare?startDate=&endDate=&productTypeId=         (SP9-M3 批次级)
  *   GET /compare/order-aggregate?startDate=&endDate=&...    (SP3-M3b 订单级聚合)
+ *   GET /achievement-summary?startDate=&endDate=&...       (M4: 达成率汇总)
+ *   GET /batches/{batchId}/step-breakdown                  (step-breakdown)
  *
  * @PriceSensitive: 所有成本/金额字段对非财务角色为 null，前端必须展示 "—"，
  * 严禁在 JS 端重新计算成本。偏差率 % / 偏差状态 / 批次数量不脱敏。
@@ -17,7 +19,61 @@ import type { ApiResponse } from '@/types/api';
 // ============================================================================
 
 export type LaborVarianceStatus = 'NORMAL' | 'WARNING' | 'CRITICAL';
-export type LaborAchievementAlert = 'BELOW' | 'ABOVE';
+export type LaborAchievementAlert = 'BELOW_ALERT' | 'ABOVE_ALERT' | 'OK';
+
+// ─── M4: 达成率汇总 ──────────────────────────────────────────────────────────
+
+/** M4 批次级达成率明细 */
+export interface BatchAchievementItemDTO {
+  batchNumber: string;
+  productName: string;
+  actualWorkMinutes: number | null;
+  plannedWorkMinutes: number | null;
+  achievementRatePct: number | null;
+  achievementAlert: LaborAchievementAlert | null;
+}
+
+/** M4 产品维度达成率汇总 */
+export interface LaborAchievementSummaryDTO {
+  productTypeId: string | null;
+  productName: string;
+  totalActualWorkMinutes: number | null;
+  totalPlannedWorkMinutes: number | null;
+  /** 达成率 %; null=无计划工时配置 */
+  achievementRatePct: number | null;
+  achievementAlert: LaborAchievementAlert | null;
+  batchCount: number;
+  batchItems: BatchAchievementItemDTO[];
+}
+
+// ─── step-breakdown ──────────────────────────────────────────────────────────
+
+/** 逐工序拆分 — 单工序明细 */
+export interface StepBreakdownItem {
+  processOrder: number | null;
+  processName: string;
+  actualWorkMinutes: number | null;
+  actualWorkers: number | null;
+  plannedWorkMinutes: number | null;
+  achievementRatePct: number | null;
+  achievementAlert: LaborAchievementAlert | null;
+  /** 工序人工成本 (@PriceSensitive) */
+  laborCost: number | null;
+  /** 工序每箱人工成本 (@PriceSensitive) */
+  laborCostPerBox: number | null;
+}
+
+/** step-breakdown 批次结果 */
+export interface LaborStepBreakdownDTO {
+  batchId: number;
+  batchNumber: string;
+  productName: string;
+  totalActualWorkMinutes: number | null;
+  totalPlannedWorkMinutes: number | null;
+  overallAchievementRatePct: number | null;
+  overallAchievementAlert: LaborAchievementAlert | null;
+  steps: StepBreakdownItem[];
+}
 
 /** 工序级人效明细 */
 export interface LaborVarianceItemDTO {
@@ -155,5 +211,46 @@ export function getLaborCostOrderAggregate(
         ...(productTypeId ? { productTypeId } : {}),
       },
     },
+  );
+}
+
+/**
+ * M4: 人效达成率汇总.
+ *
+ * @param factoryId      工厂 ID
+ * @param startDate      开始日期 (ISO)，REQUIRED
+ * @param endDate        结束日期 (ISO)，REQUIRED
+ * @param productTypeId  可选产品类型过滤
+ */
+export function getLaborAchievementSummary(
+  factoryId: string,
+  startDate: string,
+  endDate: string,
+  productTypeId?: string | null,
+): Promise<ApiResponse<LaborAchievementSummaryDTO[]>> {
+  return get<LaborAchievementSummaryDTO[]>(
+    `/${factoryId}/labor-efficiency/achievement-summary`,
+    {
+      params: {
+        startDate,
+        endDate,
+        ...(productTypeId ? { productTypeId } : {}),
+      },
+    },
+  );
+}
+
+/**
+ * step-breakdown: 批次逐工序人效拆分.
+ *
+ * @param factoryId  工厂 ID
+ * @param batchId    批次 ID
+ */
+export function getLaborStepBreakdown(
+  factoryId: string,
+  batchId: number,
+): Promise<ApiResponse<LaborStepBreakdownDTO>> {
+  return get<LaborStepBreakdownDTO>(
+    `/${factoryId}/labor-efficiency/batches/${batchId}/step-breakdown`,
   );
 }

@@ -271,6 +271,13 @@ const businessRoutes: RouteRecordRaw[] = [
             meta: { requiresAuth: true, title: '人效对比', module: 'production' }
           },
           {
+            // SP9-M5: 人效看板 — 达成率趋势 + 工序对比图表
+            path: 'labor-efficiency/dashboard',
+            name: 'LaborEfficiencyDashboard',
+            component: () => import('@/views/production/labor-efficiency/dashboard.vue'),
+            meta: { requiresAuth: true, title: '人效看板', module: 'production' }
+          },
+          {
             // SP2: 报工整单撤回申请列表 + 审批
             path: 'reversals',
             name: 'ProductionReversals',

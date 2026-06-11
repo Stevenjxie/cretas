@@ -6,10 +6,10 @@
  * 参数: startDate (REQUIRED), endDate (REQUIRED), productTypeId? (optional)
  *
  * @PriceSensitive: 所有成本/金额字段对非财务角色为 null，严禁 JS 端重算，一律显示 "—"。
- * 注意: 后端只有 /compare 一个端点，spec 中的 step-breakdown / achievement-rate 端点
- * 目前未实现，本页仅实现对比表功能。
+ * 注意: 本页为 M3 双口径对比表。M4 达成率汇总 + step-breakdown 端点见人效看板 (dashboard.vue)。
  */
 import { ref, computed, onMounted } from 'vue';
+import { useRouter } from 'vue-router';
 import { useAuthStore } from '@/store/modules/auth';
 import { ElMessage } from 'element-plus';
 import { Search } from '@element-plus/icons-vue';
@@ -22,6 +22,7 @@ import {
 
 const authStore = useAuthStore();
 const factoryId = computed(() => authStore.factoryId);
+const router = useRouter();
 
 // ============================================================================
 // 产品类型选项
@@ -144,8 +145,8 @@ function varianceRateClass(varianceRate: number | null, status: string): string 
 }
 
 function achievementAlertLabel(alert: string | null): string {
-  if (alert === 'BELOW') return '低于标准';
-  if (alert === 'ABOVE') return '高于标准';
+  if (alert === 'BELOW_ALERT') return '低于标准';
+  if (alert === 'ABOVE_ALERT') return '高于标准';
   return '—';
 }
 
@@ -177,6 +178,15 @@ onMounted(async () => {
   <div class="labor-efficiency-page">
     <div class="page-header">
       <h2 class="title">人效对比分析</h2>
+      <el-button
+        type="primary"
+        plain
+        size="small"
+        style="margin-left: auto"
+        @click="router.push({ name: 'LaborEfficiencyDashboard' })"
+      >
+        查看达成率看板 →
+      </el-button>
     </div>
 
     <el-alert
@@ -320,9 +330,9 @@ onMounted(async () => {
                 <span
                   v-if="(step as LaborVarianceItemDTO).achievementRate != null"
                   :class="
-                    (step as LaborVarianceItemDTO).achievementAlert === 'BELOW'
+                    (step as LaborVarianceItemDTO).achievementAlert === 'BELOW_ALERT'
                       ? 'text-warning'
-                      : (step as LaborVarianceItemDTO).achievementAlert === 'ABOVE'
+                      : (step as LaborVarianceItemDTO).achievementAlert === 'ABOVE_ALERT'
                         ? 'text-critical'
                         : 'text-normal'
                   "

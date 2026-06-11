@@ -1,17 +1,21 @@
 package com.cretas.aims.service.impl;
 
+import com.cretas.aims.dto.laborefficiency.LaborAchievementSummaryDTO;
 import com.cretas.aims.dto.laborefficiency.LaborEfficiencyCompareDTO;
 import com.cretas.aims.dto.laborefficiency.LaborEfficiencyOrderAggregateDTO;
+import com.cretas.aims.dto.laborefficiency.LaborStepBreakdownDTO;
 import com.cretas.aims.dto.yield.BatchYieldDTO;
 import com.cretas.aims.dto.yield.StepYieldDTO;
 import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.ProductionBatch;
 import com.cretas.aims.entity.ProductionPlan;
 import com.cretas.aims.entity.inventory.SalesOrder;
+import com.cretas.aims.entity.workprocess.WorkProcessTask;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.ProductionPlanRepository;
 import com.cretas.aims.repository.inventory.SalesOrderRepository;
+import com.cretas.aims.repository.workprocess.WorkProcessTaskRepository;
 import com.cretas.aims.service.yield.YieldReportService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -26,13 +30,15 @@ import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.util.Collections;
 import java.util.List;
+import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 /**
- * SP9 M3 / SP3 M3b — 人工双口径对比 + 订单级聚合服务单元测试 (pure POJO, no Spring context).
+ * SP9 M3/M3b/M4/step-breakdown — 人工双口径对比 + 订单级聚合 + 达成率汇总 + 逐工序拆分服务单元测试
+ * (pure POJO, no Spring context).
  */
 @ExtendWith(MockitoExtension.class)
 class LaborEfficiencyServiceImplTest {
@@ -47,6 +53,8 @@ class LaborEfficiencyServiceImplTest {
     private SalesOrderRepository salesOrderRepo;
     @Mock
     private YieldReportService yieldReportService;
+    @Mock
+    private WorkProcessTaskRepository workProcessTaskRepo;
 
     @InjectMocks
     private LaborEfficiencyServiceImpl service;
@@ -109,6 +117,9 @@ class LaborEfficiencyServiceImplTest {
         BatchYieldDTO empty = new BatchYieldDTO();
         empty.setSteps(Collections.emptyList());
         lenient().when(yieldReportService.getYield(anyString(), anyLong())).thenReturn(empty);
+        // Default: no work process tasks
+        lenient().when(workProcessTaskRepo.findByFactoryIdAndProductionBatchIdOrderByProcessOrderAsc(anyString(), anyLong()))
+                .thenReturn(Collections.emptyList());
     }
 
     // ─── Test 1: empty batches returns empty list ─────────────────────────────
@@ -428,5 +439,303 @@ class LaborEfficiencyServiceImplTest {
         assertThat(agg.getVarianceRate()).isNull();               // 无法计算偏差率
         assertThat(agg.getVarianceStatus()).isNull();             // 状态也为null
         assertThat(agg.getTotalActualLaborCost()).isEqualByComparingTo(new BigDecimal("100"));
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    //  M4: 达成率汇总 tests
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /** Helper: build a WorkProcessTask with estimatedMinutes */
+    private WorkProcessTask task(Long id, Integer estimatedMinutes, Integer processOrder) {
+        WorkProcessTask t = new WorkProcessTask();
+        t.setId(id);
+        t.setEstimatedMinutes(estimatedMinutes);
+        t.setProcessOrder(processOrder);
+        return t;
+    }
+
+    @Test
+    void m4_emptyBatches_returnsEmptyList() {
+        when(batchRepo.findCompletedBatchesForLaborComparison(any(), any(), any(), any()))
+                .thenReturn(Collections.emptyList());
+
+        var result = service.getLaborAchievementSummary(FACTORY_ID, START, END, null);
+        assertThat(result).isEmpty();
+    }
+
+    @Test
+    void m4_noEstimatedMinutes_achievementRatePctNull() {
+        // A batch with actual work minutes but no planned minutes → rate = null
+        ProductionBatch b = batch(10L, "PT-010", null, new BigDecimal("1.00"));
+        when(batchRepo.findCompletedBatchesForLaborComparison(any(), any(), any(), any()))
+                .thenReturn(List.of(b));
+        when(productTypeRepo.findByIdIn(anyList())).thenReturn(Collections.emptyList());
+        // tasks with null estimatedMinutes
+        when(workProcessTaskRepo.findByFactoryIdAndProductionBatchIdOrderByProcessOrderAsc(
+                eq(FACTORY_ID), eq(10L)))
+                .thenReturn(List.of(task(1L, null, 1)));
+
+        BatchYieldDTO yield = new BatchYieldDTO();
+        yield.setTotalWorkMinutes(300);
+        yield.setSteps(Collections.emptyList());
+        when(yieldReportService.getYield(eq(FACTORY_ID), eq(10L))).thenReturn(yield);
+
+        List<LaborAchievementSummaryDTO> result = service.getLaborAchievementSummary(
+                FACTORY_ID, START, END, null);
+
+        // Overall + per-product summaries
+        assertThat(result).isNotEmpty();
+        // Overall summary (first item when productTypeId=null)
+        LaborAchievementSummaryDTO overall = result.get(0);
+        assertThat(overall.getTotalActualWorkMinutes()).isEqualTo(300);
+        assertThat(overall.getTotalPlannedWorkMinutes()).isNull(); // no estimatedMinutes
+        assertThat(overall.getAchievementRatePct()).isNull();
+        assertThat(overall.getAchievementAlert()).isNull();
+    }
+
+    @Test
+    void m4_achievementRate_calculatedCorrectly() {
+        // actual=120min planned=100min → rate=120% → BELOW threshold is 150, above is 75
+        // 120% is between 75 and 150 → OK
+        ProductionBatch b = batch(11L, "PT-011", null, new BigDecimal("1.00"));
+        when(batchRepo.findCompletedBatchesForLaborComparison(any(), any(), any(), any()))
+                .thenReturn(List.of(b));
+        when(productTypeRepo.findByIdIn(anyList())).thenReturn(Collections.emptyList());
+        when(workProcessTaskRepo.findByFactoryIdAndProductionBatchIdOrderByProcessOrderAsc(
+                eq(FACTORY_ID), eq(11L)))
+                .thenReturn(List.of(task(2L, 100, 1)));
+
+        BatchYieldDTO yield = new BatchYieldDTO();
+        yield.setTotalWorkMinutes(120);
+        yield.setSteps(Collections.emptyList());
+        when(yieldReportService.getYield(eq(FACTORY_ID), eq(11L))).thenReturn(yield);
+
+        List<LaborAchievementSummaryDTO> result = service.getLaborAchievementSummary(
+                FACTORY_ID, START, END, "PT-011");
+
+        // With productTypeId filter, no "overall" row, just per-product
+        assertThat(result).isNotEmpty();
+        LaborAchievementSummaryDTO dto = result.get(0);
+        assertThat(dto.getAchievementRatePct()).isEqualByComparingTo(new BigDecimal("120.00"));
+        assertThat(dto.getAchievementAlert()).isEqualTo("OK");
+    }
+
+    @Test
+    void m4_achievementRate_aboveAlert_at150orMore() {
+        // actual=200min planned=100min → rate=200% → ABOVE_ALERT
+        ProductionBatch b = batch(12L, "PT-012", null, new BigDecimal("1.00"));
+        when(batchRepo.findCompletedBatchesForLaborComparison(any(), any(), any(), any()))
+                .thenReturn(List.of(b));
+        when(productTypeRepo.findByIdIn(anyList())).thenReturn(Collections.emptyList());
+        when(workProcessTaskRepo.findByFactoryIdAndProductionBatchIdOrderByProcessOrderAsc(
+                eq(FACTORY_ID), eq(12L)))
+                .thenReturn(List.of(task(3L, 100, 1)));
+
+        BatchYieldDTO yield = new BatchYieldDTO();
+        yield.setTotalWorkMinutes(200);
+        yield.setSteps(Collections.emptyList());
+        when(yieldReportService.getYield(eq(FACTORY_ID), eq(12L))).thenReturn(yield);
+
+        List<LaborAchievementSummaryDTO> result = service.getLaborAchievementSummary(
+                FACTORY_ID, START, END, "PT-012");
+
+        assertThat(result).isNotEmpty();
+        assertThat(result.get(0).getAchievementAlert()).isEqualTo("ABOVE_ALERT");
+    }
+
+    @Test
+    void m4_achievementRate_belowAlert_atLessThan75() {
+        // actual=60min planned=100min → rate=60% → BELOW_ALERT
+        ProductionBatch b = batch(13L, "PT-013", null, new BigDecimal("1.00"));
+        when(batchRepo.findCompletedBatchesForLaborComparison(any(), any(), any(), any()))
+                .thenReturn(List.of(b));
+        when(productTypeRepo.findByIdIn(anyList())).thenReturn(Collections.emptyList());
+        when(workProcessTaskRepo.findByFactoryIdAndProductionBatchIdOrderByProcessOrderAsc(
+                eq(FACTORY_ID), eq(13L)))
+                .thenReturn(List.of(task(4L, 100, 1)));
+
+        BatchYieldDTO yield = new BatchYieldDTO();
+        yield.setTotalWorkMinutes(60);
+        yield.setSteps(Collections.emptyList());
+        when(yieldReportService.getYield(eq(FACTORY_ID), eq(13L))).thenReturn(yield);
+
+        List<LaborAchievementSummaryDTO> result = service.getLaborAchievementSummary(
+                FACTORY_ID, START, END, "PT-013");
+
+        assertThat(result).isNotEmpty();
+        assertThat(result.get(0).getAchievementAlert()).isEqualTo("BELOW_ALERT");
+    }
+
+    @Test
+    void m4_batchItems_perBatch_attached() {
+        ProductionBatch b1 = batch(14L, "PT-014", null, new BigDecimal("1.00"));
+        ProductionBatch b2 = batch(15L, "PT-014", null, new BigDecimal("2.00"));
+        b2.setBatchNumber("BATCH-15");
+        when(batchRepo.findCompletedBatchesForLaborComparison(any(), any(), any(), any()))
+                .thenReturn(List.of(b1, b2));
+        when(productTypeRepo.findByIdIn(anyList())).thenReturn(Collections.emptyList());
+
+        for (long id : new long[]{14L, 15L}) {
+            lenient().when(workProcessTaskRepo.findByFactoryIdAndProductionBatchIdOrderByProcessOrderAsc(
+                    eq(FACTORY_ID), eq(id)))
+                    .thenReturn(List.of(task(id, 120, 1)));
+            BatchYieldDTO y = new BatchYieldDTO();
+            y.setTotalWorkMinutes(90);
+            y.setSteps(Collections.emptyList());
+            lenient().when(yieldReportService.getYield(eq(FACTORY_ID), eq(id))).thenReturn(y);
+        }
+
+        List<LaborAchievementSummaryDTO> result = service.getLaborAchievementSummary(
+                FACTORY_ID, START, END, "PT-014");
+
+        assertThat(result).isNotEmpty();
+        LaborAchievementSummaryDTO dto = result.get(0);
+        assertThat(dto.getBatchCount()).isEqualTo(2);
+        assertThat(dto.getBatchItems()).hasSize(2);
+        // total actual = 90+90=180, total planned = 120+120=240 → rate = 75.00
+        assertThat(dto.getTotalActualWorkMinutes()).isEqualTo(180);
+        assertThat(dto.getTotalPlannedWorkMinutes()).isEqualTo(240);
+        assertThat(dto.getAchievementRatePct()).isEqualByComparingTo(new BigDecimal("75.00"));
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    //  step-breakdown tests
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    @Test
+    void stepBreakdown_batchNotFound_returnsNull() {
+        when(batchRepo.findById(anyLong())).thenReturn(Optional.empty());
+
+        LaborStepBreakdownDTO result = service.getStepBreakdown(FACTORY_ID, 999L);
+        assertThat(result).isNull();
+    }
+
+    @Test
+    void stepBreakdown_wrongFactory_returnsNull() {
+        ProductionBatch b = batch(20L, "PT-020", null, new BigDecimal("1.00"));
+        b.setFactoryId("OTHER_FACTORY"); // different factory
+        when(batchRepo.findById(20L)).thenReturn(Optional.of(b));
+
+        LaborStepBreakdownDTO result = service.getStepBreakdown(FACTORY_ID, 20L);
+        assertThat(result).isNull();
+    }
+
+    @Test
+    void stepBreakdown_noYield_returnsEmptySteps() {
+        ProductionBatch b = batch(21L, "PT-021", null, new BigDecimal("1.00"));
+        when(batchRepo.findById(21L)).thenReturn(Optional.of(b));
+        when(productTypeRepo.findById("PT-021")).thenReturn(Optional.empty());
+        when(workProcessTaskRepo.findByFactoryIdAndProductionBatchIdOrderByProcessOrderAsc(
+                eq(FACTORY_ID), eq(21L)))
+                .thenReturn(Collections.emptyList());
+        // yield with no steps
+        BatchYieldDTO yield = new BatchYieldDTO();
+        yield.setTotalWorkMinutes(null);
+        yield.setSteps(Collections.emptyList());
+        when(yieldReportService.getYield(eq(FACTORY_ID), eq(21L))).thenReturn(yield);
+
+        LaborStepBreakdownDTO result = service.getStepBreakdown(FACTORY_ID, 21L);
+
+        assertThat(result).isNotNull();
+        assertThat(result.getBatchId()).isEqualTo(21L);
+        assertThat(result.getBatchNumber()).isEqualTo("BATCH-21");
+        assertThat(result.getSteps()).isEmpty();
+        assertThat(result.getOverallAchievementRatePct()).isNull();
+    }
+
+    @Test
+    void stepBreakdown_withYieldAndTasks_mapsCorrectly() {
+        ProductionBatch b = batch(22L, "PT-022", null, new BigDecimal("1.00"));
+        ProductType pt = productType("PT-022", null, new BigDecimal("200")); // 200g/box
+        when(batchRepo.findById(22L)).thenReturn(Optional.of(b));
+        when(productTypeRepo.findById("PT-022")).thenReturn(Optional.of(pt));
+
+        // Two WorkProcessTasks with estimatedMinutes
+        WorkProcessTask t1 = task(101L, 60, 1);  // step 1: planned 60min
+        WorkProcessTask t2 = task(102L, 120, 2); // step 2: planned 120min
+        when(workProcessTaskRepo.findByFactoryIdAndProductionBatchIdOrderByProcessOrderAsc(
+                eq(FACTORY_ID), eq(22L)))
+                .thenReturn(List.of(t1, t2));
+
+        // Yield steps
+        StepYieldDTO s1 = new StepYieldDTO();
+        s1.setProcessOrder(1);
+        s1.setProcessName("领料");
+        s1.setTotalWorkMinutes(50);  // faster than planned
+        s1.setTotalWorkers(2);
+        s1.setLaborCost(new BigDecimal("30.00"));
+        s1.setTotalOutput(new BigDecimal("5.00")); // 5kg → 25 boxes
+
+        StepYieldDTO s2 = new StepYieldDTO();
+        s2.setProcessOrder(2);
+        s2.setProcessName("焯水");
+        s2.setTotalWorkMinutes(180); // over planned
+        s2.setTotalWorkers(4);
+        s2.setLaborCost(new BigDecimal("80.00"));
+        s2.setTotalOutput(new BigDecimal("4.00")); // 4kg → 20 boxes
+
+        BatchYieldDTO yield = new BatchYieldDTO();
+        yield.setTotalWorkMinutes(230);
+        yield.setSteps(List.of(s1, s2));
+        when(yieldReportService.getYield(eq(FACTORY_ID), eq(22L))).thenReturn(yield);
+
+        LaborStepBreakdownDTO result = service.getStepBreakdown(FACTORY_ID, 22L);
+
+        assertThat(result).isNotNull();
+        assertThat(result.getBatchId()).isEqualTo(22L);
+        assertThat(result.getTotalActualWorkMinutes()).isEqualTo(230);
+        assertThat(result.getTotalPlannedWorkMinutes()).isEqualTo(180); // 60+120
+        // overall rate = 230/180*100 = 127.78
+        assertThat(result.getOverallAchievementRatePct()).isNotNull();
+        assertThat(result.getOverallAchievementRatePct().doubleValue()).isGreaterThan(127.0).isLessThan(128.0);
+        assertThat(result.getOverallAchievementAlert()).isEqualTo("OK"); // 127.78 between 75-150
+
+        assertThat(result.getSteps()).hasSize(2);
+
+        var step1 = result.getSteps().get(0);
+        assertThat(step1.getProcessName()).isEqualTo("领料");
+        assertThat(step1.getActualWorkMinutes()).isEqualTo(50);
+        assertThat(step1.getPlannedWorkMinutes()).isEqualTo(60);
+        // rate = 50/60*100 = 83.33 → OK
+        assertThat(step1.getAchievementRatePct().doubleValue()).isGreaterThan(83.0).isLessThan(84.0);
+        assertThat(step1.getAchievementAlert()).isEqualTo("OK");
+        // laborCostPerBox = 30.00 / (5kg*1000/200g=25boxes) = 1.2000
+        assertThat(step1.getLaborCostPerBox()).isEqualByComparingTo(new BigDecimal("1.2000"));
+
+        var step2 = result.getSteps().get(1);
+        assertThat(step2.getProcessName()).isEqualTo("焯水");
+        assertThat(step2.getActualWorkMinutes()).isEqualTo(180);
+        assertThat(step2.getPlannedWorkMinutes()).isEqualTo(120);
+        // rate = 180/120*100 = 150% → boundary: ≥150 is ABOVE_ALERT
+        assertThat(step2.getAchievementAlert()).isEqualTo("ABOVE_ALERT");
+    }
+
+    @Test
+    void stepBreakdown_achievementRatePctNull_whenNoPlannedMinutes() {
+        ProductionBatch b = batch(23L, "PT-023", null, new BigDecimal("1.00"));
+        when(batchRepo.findById(23L)).thenReturn(Optional.of(b));
+        when(productTypeRepo.findById("PT-023")).thenReturn(Optional.empty());
+        // No planned minutes in tasks
+        when(workProcessTaskRepo.findByFactoryIdAndProductionBatchIdOrderByProcessOrderAsc(
+                eq(FACTORY_ID), eq(23L)))
+                .thenReturn(List.of(task(200L, null, 1)));
+
+        StepYieldDTO s = new StepYieldDTO();
+        s.setProcessOrder(1);
+        s.setProcessName("加工");
+        s.setTotalWorkMinutes(90);
+
+        BatchYieldDTO yield = new BatchYieldDTO();
+        yield.setTotalWorkMinutes(90);
+        yield.setSteps(List.of(s));
+        when(yieldReportService.getYield(eq(FACTORY_ID), eq(23L))).thenReturn(yield);
+
+        LaborStepBreakdownDTO result = service.getStepBreakdown(FACTORY_ID, 23L);
+
+        assertThat(result).isNotNull();
+        assertThat(result.getOverallAchievementRatePct()).isNull(); // no planned → null
+        assertThat(result.getSteps()).hasSize(1);
+        assertThat(result.getSteps().get(0).getAchievementRatePct()).isNull();
+        assertThat(result.getSteps().get(0).getAchievementAlert()).isNull();
     }
 }
