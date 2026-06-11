@@ -84,7 +84,22 @@ public class SalesOrderItem extends BaseEntity {
     @Column(name = "remark", length = 500)
     private String remark;
 
-    /** 成本单价 (含税) */
+    /**
+     * 成本单价 (未税, 净价) — SP3 口径统一。
+     *
+     * <p>内部存储口径 = 未税净价, 与 unit_price (销售未税单价) / SalesOrder.total_amount (未税净额) 保持一致。
+     * 毛利 = 未税收入 − 未税成本, 口径自洽。
+     *
+     * <p>写入约束:
+     * <ul>
+     *   <li>上游 (生产完工回填) 必须写入未税成本单价。若原始数据为含税, 应先调用
+     *       {@link com.cretas.aims.entity.enums.TaxRate#preTaxPrice(java.math.BigDecimal)} 转换后再写入。
+     *   <li>向后兼容: 历史无税率数据视为 0 税率 (含税=未税), 数值不变, 无需回填。
+     * </ul>
+     *
+     * <p>注释历史: 2026-06-11 前注释误写 "含税", SP3 口径统一修正为 "未税"。
+     * 对应 FinanceCostBreakdown.actualCost = Σ (costUnitPrice × qty), 口径与 totalAmount 对齐。
+     */
     @PriceSensitive
     @Column(name = "cost_unit_price", precision = 15, scale = 4)
     private BigDecimal costUnitPrice;
