@@ -96,6 +96,8 @@ public class ProductionPlanMapper {
         dto.setSourceType(plan.getSourceType());
         dto.setSourceTypeDisplayName(plan.getSourceTypeDisplayName());
         dto.setSourceOrderId(plan.getSourceOrderId());
+        // SP5 多 SO 合并: 输出 sourceOrderIds 列表 (null/空 → 遗留数据返空 list)
+        dto.setSourceOrderIds(plan.getSourceOrderIds() != null ? plan.getSourceOrderIds() : new java.util.ArrayList<>());
         dto.setSourceOrderItemId(plan.getSourceOrderItemId());
         dto.setSourceCustomerName(plan.getSourceCustomerName());
         dto.setProcessName(plan.getProcessName());
@@ -180,6 +182,12 @@ public class ProductionPlanMapper {
         // 设置调度员模块扩展字段
         plan.setSourceType(request.getSourceType() != null ? request.getSourceType() : PlanSourceType.MANUAL);
         plan.setSourceOrderId(request.getSourceOrderId());
+        // SP5 多 SO 合并: sourceOrderIds 在 mapper 里预设; 服务层后续可追加/规范化。
+        // 此时 sourceOrderId 可能还未回填 (service 层 validateAndEnrichSalesOrderSource 还没跑),
+        // 所以 mapper 只先存请求里传的 sourceOrderIds; 服务层负责最终 normalizeSourceOrderIds。
+        plan.setSourceOrderIds(request.getSourceOrderIds() != null
+                ? new java.util.ArrayList<>(request.getSourceOrderIds())
+                : new java.util.ArrayList<>());
         plan.setSourceOrderItemId(request.getSourceOrderItemId());
         plan.setSourceCustomerName(request.getSourceCustomerName());
         plan.setProcessName(request.getProcessName());
@@ -290,6 +298,10 @@ public class ProductionPlanMapper {
         }
         if (request.getSourceOrderId() != null) {
             plan.setSourceOrderId(request.getSourceOrderId());
+        }
+        // SP5 多 SO 合并: 显式传非空列表时才覆盖 (null = 保留原值; 空列表 = 清空)
+        if (request.getSourceOrderIds() != null) {
+            plan.setSourceOrderIds(new java.util.ArrayList<>(request.getSourceOrderIds()));
         }
         if (request.getSourceCustomerName() != null) {
             plan.setSourceCustomerName(request.getSourceCustomerName());

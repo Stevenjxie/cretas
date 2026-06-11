@@ -100,6 +100,15 @@ public class CreateProductionPlanRequest {
     @Size(max = 50, message = "关联订单ID不能超过50个字符")
     private String sourceOrderId;
 
+    /**
+     * SP5 多 SO 合并工单: 该计划覆盖的全部销售订单 ID 列表.
+     * <p>单 SO 场景: 传 [sourceOrderId] 或不传 (服务层自动从 sourceOrderId 回填).
+     * <p>多 SO 合并场景: 前端"加号追加"后传多个 SO ID; 服务层校验每个 SO 属于本工厂且已财审.
+     * <p>向后兼容: 不传时服务层从 sourceOrderId 补填, 不破坏现有单 SO 流程.
+     */
+    @Schema(description = "SP5 合并工单覆盖的全部销售订单ID列表 (多SO合并建单; 单SO场景可不传, 服务层自动回填)")
+    private List<String> sourceOrderIds;
+
     @Schema(description = "关联销售订单行ID (P0-12 字段粒度修正; CUSTOMER_ORDER 必填)")
     @Size(max = 50, message = "关联销售订单行ID不能超过50个字符")
     private String sourceOrderItemId;

@@ -494,6 +494,70 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         }
     }
 
+    /**
+     * SP5 多 SO 合并工单: 规范化并校验 sourceOrderIds.
+     *
+     * <p>规则:
+     * <ol>
+     *   <li>若 request.sourceOrderIds 为 null/空 → 用 plan.sourceOrderId (单 SO 场景向后兼容) 填充。</li>
+     *   <li>若 plan.sourceOrderId 不在列表中 → 自动追加 (保证列表包含主 SO)。</li>
+     *   <li>每个追加的 SO (超出主 sourceOrderId 的) 校验: 属于本工厂 + 已财审。</li>
+     *   <li>列表去重 (相同 ID 多次出现)。</li>
+     * </ol>
+     *
+     * <p>只对 CUSTOMER_ORDER 场景执行额外 SO 校验; MANUAL/AI_FORECAST 等源不传 sourceOrderIds.
+     * 此方法在 plan entity 已赋值但尚未 save 时调用 — 直接写 plan.sourceOrderIds。
+     *
+     * @param factoryId 工厂 ID (用于 SO 归属校验)
+     * @param plan      已由 mapper 赋值的 entity (未 save)
+     * @param request   原始请求 (用于读取 sourceOrderIds / sourceOrderId)
+     */
+    private void normalizeAndValidateSourceOrderIds(String factoryId, ProductionPlan plan,
+            com.cretas.aims.dto.production.CreateProductionPlanRequest request) {
+        java.util.List<String> ids = plan.getSourceOrderIds() != null
+                ? new java.util.ArrayList<>(plan.getSourceOrderIds())
+                : new java.util.ArrayList<>();
+
+        // 单 SO 向后兼容: 若列表为空, 用 sourceOrderId 初始化
+        String primarySoId = plan.getSourceOrderId();
+        if (ids.isEmpty() && primarySoId != null && !primarySoId.isBlank()) {
+            ids.add(primarySoId);
+        }
+
+        // 若 primarySoId 不在列表中, 补进去
+        if (primarySoId != null && !primarySoId.isBlank() && !ids.contains(primarySoId)) {
+            ids.add(0, primarySoId);  // 保持主 SO 在首位
+        }
+
+        // 去重保持顺序
+        java.util.List<String> deduped = ids.stream()
+                .distinct()
+                .collect(java.util.stream.Collectors.toList());
+
+        // 对超出主 SO 的额外 SO 做校验 (主 SO 在 validateAndEnrichSalesOrderSource 里已验过)
+        if (deduped.size() > 1) {
+            for (int i = 1; i < deduped.size(); i++) {
+                String extraSoId = deduped.get(i);
+                if (extraSoId == null || extraSoId.isBlank()) continue;
+                SalesOrder so = salesOrderRepository.findById(extraSoId)
+                        .orElseThrow(() -> new BusinessException(404,
+                                "追加的销售订单不存在: " + extraSoId)
+                                .withHint("请刷新销售订单列表后重新选择")
+                                .withHintTarget("sourceOrderIds"));
+                if (!factoryId.equals(so.getFactoryId())) {
+                    throw new BusinessException(403,
+                            "追加的销售订单不属于该工厂: " + extraSoId)
+                            .withHint("只能合并本工厂的销售订单")
+                            .withHintTarget("sourceOrderIds");
+                }
+                assertSalesOrderFinanceApproved(so, "sourceOrderIds");
+            }
+        }
+
+        plan.setSourceOrderIds(deduped);
+        log.debug("SP5 normalizeSourceOrderIds: planId={}, sourceOrderIds={}", plan.getId(), deduped);
+    }
+
     @Override
     @Transactional
     public ProductionPlanDTO createProductionPlan(String factoryId, CreateProductionPlanRequest request, Long userId) {
@@ -541,20 +605,33 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
 
         // 创建生产计划
         ProductionPlan plan = productionPlanMapper.toEntity(request, factoryId, userId.longValue());
+
+        // SP5 多 SO 合并: 规范化 sourceOrderIds — 确保 sourceOrderId 也在列表中,
+        // 并校验追加的每个 SO 属于本工厂且已财审 (向后兼容: 单 SO 场景 sourceOrderIds 为空时自动补填)。
+        normalizeAndValidateSourceOrderIds(factoryId, plan, request);
+
         plan = productionPlanRepository.save(plan);
 
         // Sprint 3 Track-F (C-LINKARRAY-1): unified BusinessLink double-write.
         // ProductionPlan.sourceOrderId stays for backward compat; new code reads via
         // LinkArrayService.getOutboundLinks(PRODUCTION_PLAN, id).
-        if (linkArrayService != null && plan.getSourceOrderId() != null && !plan.getSourceOrderId().isBlank()) {
-            try {
-                linkArrayService.link(factoryId,
-                        "PRODUCTION_PLAN", plan.getId(),
-                        "sale",
-                        "SALES_ORDER", plan.getSourceOrderId(),
-                        "生产源单", userId != null ? userId.toString() : null);
-            } catch (Exception e) {
-                log.warn("BusinessLink double-write failed for production plan {}: {}", plan.getId(), e.getMessage());
+        // SP5: 额外的 SO (合并场景) 也写入 LinkArray, 保证双向检索一致。
+        if (linkArrayService != null) {
+            final String planIdForLink = plan.getId();
+            final String userIdStr = userId != null ? userId.toString() : null;
+            java.util.List<String> allSourceOrderIds = plan.getSourceOrderIds() != null
+                    ? plan.getSourceOrderIds() : java.util.Collections.emptyList();
+            for (String soId : allSourceOrderIds) {
+                try {
+                    linkArrayService.link(factoryId,
+                            "PRODUCTION_PLAN", planIdForLink,
+                            "sale",
+                            "SALES_ORDER", soId,
+                            "生产源单", userIdStr);
+                } catch (Exception e) {
+                    log.warn("BusinessLink double-write failed for production plan {} → SO {}: {}",
+                            planIdForLink, soId, e.getMessage());
+                }
             }
         }
 
@@ -1903,6 +1980,14 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         log.info("SP2 创建二次加工计划: planId={}, wipId={}, quantity={}, factoryId={}",
                 plan.getId(), wipId, quantity, factoryId);
 
+        return toDTOWithConversionInfo(plan);
+    }
+
+    /**
+     * SP5 双向检索: 供 controller 将已加载 entity 转为 DTO，避免 controller 直接调用 private helper.
+     */
+    @Override
+    public ProductionPlanDTO toPlanDTO(com.cretas.aims.entity.ProductionPlan plan) {
         return toDTOWithConversionInfo(plan);
     }
 }

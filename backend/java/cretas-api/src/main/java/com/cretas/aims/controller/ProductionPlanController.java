@@ -797,6 +797,102 @@ public class ProductionPlanController {
         return ApiResponse.success(result);
     }
 
+    // ==================== SP5 双向检索端点 ====================
+
+    /**
+     * SP5 双向检索 — 销售订单 ID → 关联生产计划列表.
+     *
+     * <p>同时覆盖两条路径:
+     * <ol>
+     *   <li>旧数据: {@code source_order_id} 精确匹配 (单 SO 历史工单)。</li>
+     *   <li>新数据: {@code source_order_ids @> ["<soId>"] JSONB} 包含匹配 (多 SO 合并工单)。</li>
+     * </ol>
+     * 结果去重后按创建时间倒序返回。
+     *
+     * @param factoryId    工厂 ID
+     * @param salesOrderId 销售订单 ID
+     */
+    @GetMapping("/by-sales-order/{salesOrderId}")
+    @Operation(summary = "SP5 双向检索 — 销售单→生产计划列表",
+            description = "查询关联到指定销售订单 (单 SO 历史 + 多 SO 合并) 的全部生产计划")
+    public ApiResponse<List<ProductionPlanDTO>> getPlansBySalesOrder(
+            @Parameter(description = "工厂ID", required = true)
+            @PathVariable @NotBlank String factoryId,
+            @Parameter(description = "销售订单ID", required = true)
+            @PathVariable @NotBlank String salesOrderId) {
+
+        log.info("SP5 双向检索 SO→Plans: factoryId={}, salesOrderId={}", factoryId, salesOrderId);
+
+        // 路径1: source_order_id 精确匹配 (历史单 SO 数据)
+        java.util.Set<String> seenIds = new java.util.LinkedHashSet<>();
+        List<ProductionPlanDTO> results = new java.util.ArrayList<>();
+
+        planRepository.findByFactoryIdAndSourceOrderIdExact(factoryId, salesOrderId)
+                .forEach(p -> {
+                    if (seenIds.add(p.getId())) {
+                        results.add(productionPlanService.toPlanDTO(p));
+                    }
+                });
+
+        // 路径2: source_order_ids @> ["<soId>"] JSONB 包含 (多 SO 合并场景)
+        String soIdJson = "[\"" + salesOrderId.replace("\"", "\\\"") + "\"]";
+        planRepository.findByFactoryIdAndSourceOrderIdsContaining(factoryId, soIdJson)
+                .forEach(p -> {
+                    if (seenIds.add(p.getId())) {
+                        results.add(productionPlanService.toPlanDTO(p));
+                    }
+                });
+
+        // 按创建时间倒序 (两路合并后重排)
+        results.sort((a, b) -> {
+            if (a.getCreatedAt() == null && b.getCreatedAt() == null) return 0;
+            if (a.getCreatedAt() == null) return 1;
+            if (b.getCreatedAt() == null) return -1;
+            return b.getCreatedAt().compareTo(a.getCreatedAt());
+        });
+
+        return ApiResponse.success(results);
+    }
+
+    /**
+     * SP5 双向检索 — 生产计划 ID → 关联销售订单 ID 列表.
+     *
+     * <p>返回 {@code sourceOrderIds} 列表 (含主 {@code sourceOrderId}); 遗留数据若列表为空
+     * 但 {@code sourceOrderId} 有值则自动包装返回。
+     *
+     * @param factoryId 工厂 ID
+     * @param planId    生产计划 ID
+     */
+    @GetMapping("/{planId}/source-order-ids")
+    @Operation(summary = "SP5 双向检索 — 生产计划→关联销售订单ID列表",
+            description = "查询指定生产计划覆盖的全部销售订单 ID (多 SO 合并工单)")
+    public ApiResponse<Map<String, Object>> getSourceOrderIdsByPlan(
+            @Parameter(description = "工厂ID", required = true)
+            @PathVariable @NotBlank String factoryId,
+            @Parameter(description = "生产计划ID", required = true)
+            @PathVariable @NotBlank String planId) {
+
+        log.info("SP5 双向检索 Plan→SO IDs: factoryId={}, planId={}", factoryId, planId);
+
+        ProductionPlan plan = planRepository.findByIdAndFactoryId(planId, factoryId)
+                .orElseThrow(() -> new BusinessException(404, "生产计划不存在: " + planId));
+
+        java.util.List<String> ids = plan.getSourceOrderIds() != null && !plan.getSourceOrderIds().isEmpty()
+                ? plan.getSourceOrderIds()
+                : (plan.getSourceOrderId() != null && !plan.getSourceOrderId().isBlank()
+                        ? java.util.List.of(plan.getSourceOrderId())
+                        : java.util.List.of());
+
+        Map<String, Object> data = new HashMap<>();
+        data.put("planId", planId);
+        data.put("planNumber", plan.getPlanNumber());
+        data.put("sourceOrderIds", ids);
+        data.put("sourceOrderId", plan.getSourceOrderId());  // backward compat primary key
+        data.put("count", ids.size());
+
+        return ApiResponse.success(data);
+    }
+
     /** Issue #759: shared user-id extraction for lock/unlock endpoints. */
     private Long extractUserId(String authorization) {
         String token = TokenUtils.extractToken(authorization);

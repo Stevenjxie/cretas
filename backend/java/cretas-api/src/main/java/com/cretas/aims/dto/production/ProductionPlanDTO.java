@@ -176,6 +176,14 @@ public class ProductionPlanDTO {
     @Schema(description = "关联订单ID")
     private String sourceOrderId;
 
+    /**
+     * SP5 多 SO 合并工单: 本计划覆盖的全部销售订单 ID 列表.
+     * 单 SO 场景: [sourceOrderId]; 多 SO 合并: [id1, id2, ...].
+     * null / 空 = 遗留数据 (未迁移行).
+     */
+    @Schema(description = "SP5 合并工单覆盖的全部销售订单ID列表 (多SO合并; 单SO=[sourceOrderId])")
+    private List<String> sourceOrderIds;
+
     @Schema(description = "关联销售订单行ID (P0-12)")
     private String sourceOrderItemId;
 
