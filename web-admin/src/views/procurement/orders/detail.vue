@@ -338,6 +338,15 @@ async function confirmReceive(receiveId: string) {
           <el-descriptions-item v-if="canViewPrice" label="总金额">{{ formatAmount(order.totalAmount) }}</el-descriptions-item>
           <el-descriptions-item v-if="canViewPrice" label="税额">{{ formatAmount(order.taxAmount) }}</el-descriptions-item>
           <el-descriptions-item label="审批人">{{ order.approvedBy || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="合同号">{{ order.contractNumber || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="结算方式">
+            <span v-if="order.settlementType">{{ ({ PREPAID: '预付', CREDIT_FIRST: '赊销先入库', NO_INVOICE: '未到票', MONTHLY: '月结', CREDIT_PERIOD: '账期', IMMEDIATE: '现结' } as Record<string, string>)[order.settlementType] || order.settlementType }}</span>
+            <span v-else>-</span>
+          </el-descriptions-item>
+          <el-descriptions-item label="开票提醒">
+            <span v-if="order.invoiceReminderDays != null">{{ order.invoiceReminderDays === 0 ? '不提醒' : `${order.invoiceReminderDays} 天` }}</span>
+            <span v-else>使用工厂默认</span>
+          </el-descriptions-item>
           <el-descriptions-item label="备注" :span="3">{{ order.remark || '-' }}</el-descriptions-item>
         </el-descriptions>
 

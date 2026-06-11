@@ -47,6 +47,26 @@ public class CreatePurchaseOrderRequest {
     @NotEmpty(message = "采购行项目不能为空")
     private List<PurchaseOrderItemDTO> items;
 
+    /**
+     * SP6 — 合同编号（对应纸质合同 / 框架合同号）。选填，null 表示无合同号。
+     * 客户原话 [00:00]: "采购合同号"。
+     */
+    @Size(max = 100, message = "合同号长度不能超过100个字符")
+    private String contractNumber;
+
+    /**
+     * SP6 — 结算方式（预付/月结/账期等）。选填，null 表示使用默认结算方式。
+     * 合法值: PREPAID / CREDIT_FIRST / NO_INVOICE / MONTHLY / CREDIT_PERIOD / IMMEDIATE
+     */
+    @Size(max = 32, message = "结算方式长度不能超过32个字符")
+    private String settlementType;
+
+    /**
+     * SP6 — 开票提醒天数（收货后 N 天未收到发票则提醒）。
+     * null = 使用工厂默认；0 = 不提醒。
+     */
+    private Integer invoiceReminderDays;
+
     /** 乐观锁版本号 (编辑时必传, 来自 GET 响应); mismatch → 409 Conflict */
     private Long version;
 

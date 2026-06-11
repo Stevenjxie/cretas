@@ -267,6 +267,12 @@ public class PurchaseServiceImpl implements PurchaseService {
         order.setRemark(request.getRemark());
         // W-12 fix: persist salesOrderId for cross-module tracking (SO detail "关联采购" tab)
         order.setSalesOrderId(request.getSalesOrderId());
+        // SP6 — 合同号 / 结算方式 / 开票提醒天数（全 3 处 DTO-roundtrip 修复）
+        order.setContractNumber(request.getContractNumber());
+        if (request.getSettlementType() != null && !request.getSettlementType().isBlank()) {
+            order.setSettlementType(com.cretas.aims.entity.enums.SettlementType.valueOf(request.getSettlementType()));
+        }
+        order.setInvoiceReminderDays(request.getInvoiceReminderDays());
         order.setStatus(PurchaseOrderStatus.DRAFT);
         order.setCreatedBy(userId);
 
@@ -893,6 +899,18 @@ public class PurchaseServiceImpl implements PurchaseService {
         // W-12 fix: also update salesOrderId (null-safe — null means caller didn't send, not unlink)
         if (request.getSalesOrderId() != null) {
             order.setSalesOrderId(request.getSalesOrderId());
+        }
+        // SP6 — 合同号: null=不更新, ""=清除, 非空字符串=设新值
+        if (request.getContractNumber() != null) {
+            order.setContractNumber(request.getContractNumber().isBlank() ? null : request.getContractNumber());
+        }
+        // SP6 — 结算方式 null-guard
+        if (request.getSettlementType() != null && !request.getSettlementType().isBlank()) {
+            order.setSettlementType(com.cretas.aims.entity.enums.SettlementType.valueOf(request.getSettlementType()));
+        }
+        // SP6 — 开票提醒天数 null-guard
+        if (request.getInvoiceReminderDays() != null) {
+            order.setInvoiceReminderDays(request.getInvoiceReminderDays());
         }
 
         // Replace items only when request.items is provided (null = keep existing)
