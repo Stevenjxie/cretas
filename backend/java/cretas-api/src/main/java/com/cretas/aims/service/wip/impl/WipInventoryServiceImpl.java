@@ -9,6 +9,9 @@ import com.cretas.aims.entity.lineage.BatchLineageEdge;
 import com.cretas.aims.entity.workprocess.WorkProcessTask;
 import com.cretas.aims.event.ProductionCostUpdatedEvent;
 import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.dto.yield.WipRowDTO;
+import com.cretas.aims.entity.ProductType;
+import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.ProductionReportRepository;
 import com.cretas.aims.repository.SemiFinishedInventoryRepository;
 import com.cretas.aims.repository.SemiFinishedInventoryTransactionRepository;
@@ -33,6 +36,8 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 @Slf4j
 @Service
@@ -45,6 +50,7 @@ public class WipInventoryServiceImpl implements WipInventoryService {
     private final BatchLineageEdgeRepository lineageEdgeRepo;
     private final WorkProcessTaskRepository taskRepo;
     private final WorkProcessRepository workProcessRepo;
+    private final ProductTypeRepository productTypeRepo;
     /** SP3: 成本更新事件发布 — 异步回填+预警. */
     private final ApplicationEventPublisher eventPublisher;
 
@@ -609,6 +615,54 @@ public class WipInventoryServiceImpl implements WipInventoryService {
     @Override
     public List<SemiFinishedInventory> listAvailableWip(String factoryId) {
         return wipRepo.findAvailableByFactory(factoryId);
+    }
+
+    // ==================== C3: 工厂级半成品重量库存视图 ====================
+
+    /**
+     * C3 — 工厂级半成品重量库存快照 (全状态; 不暴露成本字段)。
+     *
+     * <p>实现策略:
+     * <ol>
+     *   <li>从 repo 取全状态 WIP 行 (findByFactoryIdForWeightView)。</li>
+     *   <li>批量回填 productTypeName: 先收集所有 productTypeId, 一次 findByIdIn,
+     *       构建 id→name Map, 避免 N+1 查询。</li>
+     * </ol>
+     * 成本字段 (accumulatedCost / unitCost) 故意不映射到 DTO — 不暴露给客户侧。
+     */
+    @Override
+    public List<WipRowDTO> listWipByFactory(String factoryId) {
+        List<SemiFinishedInventory> rows = wipRepo.findByFactoryIdForWeightView(factoryId);
+        if (rows.isEmpty()) {
+            return List.of();
+        }
+
+        // 批量取 productType 名称 — 避免 N+1
+        Set<String> ptIds = rows.stream()
+                .map(SemiFinishedInventory::getProductTypeId)
+                .filter(id -> id != null && !id.isBlank())
+                .collect(Collectors.toSet());
+        Map<String, String> ptNameMap = new HashMap<>();
+        if (!ptIds.isEmpty()) {
+            productTypeRepo.findByIdIn(ptIds).forEach(pt -> ptNameMap.put(pt.getId(), pt.getName()));
+        }
+
+        return rows.stream().map(w -> WipRowDTO.builder()
+                .intermediateBatchNo(w.getIntermediateBatchNo())
+                .sourceWorkProcessTaskId(w.getSourceWorkProcessTaskId())
+                .processOrder(w.getProcessOrder())
+                // processName not stored on entity; enrichment via WorkProcess join is N+1 heavy
+                // and not needed for factory-level weight view (client groups by productTypeName)
+                .productTypeId(w.getProductTypeId())
+                .producedQuantity(w.getProducedQuantity())
+                .consumedQuantity(w.getConsumedQuantity())
+                .availableQuantity(w.getAvailableQuantity())
+                .unit(w.getUnit())
+                .status(w.getStatus())
+                .productTypeName(ptNameMap.get(w.getProductTypeId()))   // null if no match
+                .batchId(w.getBatchId())
+                .build()
+        ).collect(Collectors.toList());
     }
 
     // ========== SP1 T4 — Output options endpoint ==========

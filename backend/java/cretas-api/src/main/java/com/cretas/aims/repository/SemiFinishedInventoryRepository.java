@@ -102,4 +102,13 @@ public interface SemiFinishedInventoryRepository extends JpaRepository<SemiFinis
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("SELECT w FROM SemiFinishedInventory w WHERE w.id = :id AND w.deletedAt IS NULL")
     Optional<SemiFinishedInventory> findByIdForUpdate(@Param("id") Long id);
+
+    /**
+     * C3: 工厂级半成品重量库存视图 — 所有未软删 WIP 行，含全状态 (AVAILABLE/DEPLETED/RETURNED)。
+     * 按工序序升序、创建时间降序排列。不过滤 status/availableQuantity，展示完整库存快照。
+     */
+    @Query("SELECT w FROM SemiFinishedInventory w WHERE w.factoryId = :factoryId " +
+           "AND w.deletedAt IS NULL " +
+           "ORDER BY w.processOrder ASC, w.createdAt DESC")
+    List<SemiFinishedInventory> findByFactoryIdForWeightView(@Param("factoryId") String factoryId);
 }
