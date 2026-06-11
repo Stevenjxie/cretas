@@ -93,8 +93,9 @@ public class PythonLLMClient {
      */
     public ChatCompletionResponse chatCompletion(ChatCompletionRequest request) {
         LlmRequest llmReq = buildLlmRequest(request, "chat");
+        String slot = Boolean.TRUE.equals(request.getEnableThinking()) ? "reasoning" : llmReq.slot;
         try {
-            return post("/api/llm/chat", llmReq, ChatCompletionResponse.class);
+            return post("/api/llm/chat", llmReq, ChatCompletionResponse.class, slot);
         } catch (Exception e) {
             log.error("PythonLLMClient chatCompletion 失败", e);
             return createErrorResponse("Python LLM 调用失败: " + e.getMessage());
@@ -141,6 +142,10 @@ public class PythonLLMClient {
 
             StringBuilder fullContent = new StringBuilder();
             String finishReason = "stop";
+            // Stream usage captured from Python {"type":"usage","tokens":N} SSE event.
+            // Python call_chain_stream emits this when upstream reports usage on final [DONE].
+            int streamTotalTokens = 0;
+            String streamModel = "unknown";
 
             try (BufferedReader reader = new BufferedReader(
                     new InputStreamReader(response.body().byteStream()))) {
@@ -155,7 +160,7 @@ public class PythonLLMClient {
                     }
                     try {
                         // SSE event shape from call_chain_stream:
-                        // {"type":"delta","text":"..."} or {"type":"done","usage":{...}}
+                        // {"type":"delta","text":"..."} or {"type":"usage","tokens":N} or {"type":"done",...}
                         var node = objectMapper.readTree(data);
                         String type = node.path("type").asText("");
                         if ("delta".equals(type)) {
@@ -164,6 +169,14 @@ public class PythonLLMClient {
                                 fullContent.append(text);
                                 onToken.accept(text);
                             }
+                            // Capture model from delta events if present
+                            String m = node.path("model").asText("");
+                            if (!m.isEmpty()) {
+                                streamModel = m;
+                            }
+                        } else if ("usage".equals(type)) {
+                            // Python call_chain_stream yields {"type":"usage","tokens":N}
+                            streamTotalTokens = node.path("tokens").asInt(0);
                         } else if ("done".equals(type) || "finish".equals(type)) {
                             finishReason = node.path("finish_reason").asText("stop");
                         } else if ("error".equals(type)) {
@@ -176,6 +189,9 @@ public class PythonLLMClient {
                     }
                 }
             }
+            // Log stream usage (total_tokens only; prompt/completion breakdown not available in stream path)
+            log.info("[LLM_USAGE] slot=chat path=/api/llm/chat-stream model={} prompt_tokens=0 completion_tokens=0 total_tokens={}",
+                    streamModel, streamTotalTokens);
 
             // 构建完整响应传给 onComplete
             ChatCompletionResponse result = new ChatCompletionResponse();
@@ -234,7 +250,7 @@ public class PythonLLMClient {
         llmReq.tool_choice = toolChoice;
 
         try {
-            return post("/api/llm/tool-call", llmReq, ChatCompletionResponse.class);
+            return post("/api/llm/tool-call", llmReq, ChatCompletionResponse.class, "tool-call");
         } catch (Exception e) {
             log.error("PythonLLMClient chatCompletionWithTools 失败", e);
             return createErrorResponse("Python LLM tool-call 失败: " + e.getMessage());
@@ -255,7 +271,7 @@ public class PythonLLMClient {
     public String chat(String systemPrompt, String userInput) {
         LlmRequest req = buildSimpleRequest(systemPrompt, userInput, "chat", null, null);
         try {
-            ChatCompletionResponse response = post("/api/llm/chat", req, ChatCompletionResponse.class);
+            ChatCompletionResponse response = post("/api/llm/chat", req, ChatCompletionResponse.class, "chat");
             if (response.hasError()) {
                 throw new RuntimeException("Python LLM 错误: " + response.getErrorMessage());
             }
@@ -290,7 +306,7 @@ public class PythonLLMClient {
     public String chatLowTemp(String systemPrompt, String userInput) {
         LlmRequest req = buildSimpleRequest(systemPrompt, userInput, "chat", 0.1, null);
         try {
-            ChatCompletionResponse response = post("/api/llm/chat", req, ChatCompletionResponse.class);
+            ChatCompletionResponse response = post("/api/llm/chat", req, ChatCompletionResponse.class, "chat");
             if (response.hasError()) {
                 throw new RuntimeException("Python LLM 错误: " + response.getErrorMessage());
             }
@@ -318,7 +334,7 @@ public class PythonLLMClient {
         req.extra_body = new ExtraBodyDto(true, thinkingBudget);
 
         try {
-            return post("/api/llm/chat", req, ChatCompletionResponse.class);
+            return post("/api/llm/chat", req, ChatCompletionResponse.class, "reasoning");
         } catch (Exception e) {
             log.error("PythonLLMClient chatWithThinking 失败", e);
             return createErrorResponse("Python LLM thinking 失败: " + e.getMessage());
@@ -336,7 +352,7 @@ public class PythonLLMClient {
     public String classifyIntent(String systemPrompt, String userInput) {
         LlmRequest req = buildSimpleRequest(systemPrompt, userInput, "chat", 0.1, null);
         try {
-            ChatCompletionResponse response = post("/api/llm/intent-classify", req, ChatCompletionResponse.class);
+            ChatCompletionResponse response = post("/api/llm/intent-classify", req, ChatCompletionResponse.class, "intent-classify");
             if (response.hasError()) {
                 throw new RuntimeException("Python LLM 错误: " + response.getErrorMessage());
             }
@@ -528,6 +544,7 @@ public class PythonLLMClient {
             }
             String responseBody = response.body() != null ? response.body().string() : "{}";
             ChatCompletionResponse resp = objectMapper.readValue(responseBody, ChatCompletionResponse.class);
+            logLlmUsage("vl", "/api/llm/vision", resp);
             if (resp.hasError()) {
                 throw new RuntimeException("Python LLM vision 错误: " + resp.getErrorMessage());
             }
@@ -547,8 +564,15 @@ public class PythonLLMClient {
 
     /**
      * 统一 POST 辅助：序列化 body → HTTP 调用 → 反序列化响应。
+     *
+     * <p>若响应类型为 {@link ChatCompletionResponse}，则自动记录 LLM usage 计量日志（stop 账单盲飞）。
+     *
+     * @param path         Python LLM 端点路径（如 "/api/llm/chat"）
+     * @param body         请求体（将被序列化为 JSON）
+     * @param responseType 响应反序列化类型
+     * @param slot         调用 slot 标签（用于 usage 日志，如 "chat", "reasoning", "vl"）
      */
-    private <T> T post(String path, Object body, Class<T> responseType) throws Exception {
+    private <T> T post(String path, Object body, Class<T> responseType, String slot) throws Exception {
         String jsonBody = objectMapper.writeValueAsString(body);
         log.debug("PythonLLMClient POST {}: {}", path, jsonBody);
 
@@ -567,11 +591,68 @@ public class PythonLLMClient {
             log.debug("PythonLLMClient response {}: {}", response.code(), responseBody);
 
             if (response.isSuccessful()) {
-                return objectMapper.readValue(responseBody, responseType);
+                T result = objectMapper.readValue(responseBody, responseType);
+                if (result instanceof ChatCompletionResponse ccr) {
+                    logLlmUsage(slot, path, ccr);
+                }
+                return result;
             }
 
             log.error("PythonLLMClient HTTP error: {} {} - {}", response.code(), path, responseBody);
             throw new IOException("HTTP " + response.code() + ": " + responseBody);
+        }
+    }
+
+    /**
+     * Backward-compat overload (no slot → inferred from path).
+     * @deprecated Prefer {@link #post(String, Object, Class, String)} with explicit slot.
+     */
+    private <T> T post(String path, Object body, Class<T> responseType) throws Exception {
+        // Infer a best-effort slot label from the path so legacy call sites still log usage.
+        String slot = path.contains("vision") ? "vl"
+                : path.contains("intent") ? "intent-classify"
+                : path.contains("tool") ? "tool-call"
+                : "chat";
+        return post(path, body, responseType, slot);
+    }
+
+    /**
+     * 记录 LLM usage 计量日志（INFO 级别，结构化，grep 友好）。
+     *
+     * <p>日志格式（单行）：
+     * <pre>
+     * [LLM_USAGE] slot=chat path=/api/llm/chat model=qwen3.5-plus
+     *             prompt_tokens=512 completion_tokens=128 total_tokens=640
+     * </pre>
+     *
+     * <p>设计原则：
+     * <ul>
+     *   <li>只记日志，不修改调用行为（task 约束：禁止更改 LLM 调用行为）。</li>
+     *   <li>usage 字段由 Python call_chain 从上游 provider 透传，null 表示 provider 未返回（如 stream）。</li>
+     *   <li>model 字段由 Python 透传实际 provider 模型名（如 "qwen3.5-plus"），非 Java 侧估算。</li>
+     * </ul>
+     *
+     * @param slot  调用 slot 标签（"chat" / "reasoning" / "vl" / "intent-classify" / "tool-call"）
+     * @param path  HTTP 路径（辅助 debug）
+     * @param resp  Python LLM 响应（含 model + usage）
+     */
+    void logLlmUsage(String slot, String path, ChatCompletionResponse resp) {
+        if (resp == null) {
+            return;
+        }
+        String model = resp.getModel() != null ? resp.getModel() : "unknown";
+        ChatCompletionResponse.Usage usage = resp.getUsage();
+        int promptTokens      = usage != null && usage.getPromptTokens()     != null ? usage.getPromptTokens()     : 0;
+        int completionTokens  = usage != null && usage.getCompletionTokens() != null ? usage.getCompletionTokens() : 0;
+        int totalTokens       = usage != null && usage.getTotalTokens()      != null ? usage.getTotalTokens()
+                                                                                     : promptTokens + completionTokens;
+        // Usage=0 with error response → log at WARN to surface billing gaps
+        if (resp.hasError()) {
+            log.warn("[LLM_USAGE] slot={} path={} model={} prompt_tokens={} completion_tokens={} total_tokens={} status=error error={}",
+                    slot, path, model, promptTokens, completionTokens, totalTokens, resp.getErrorMessage());
+        } else {
+            log.info("[LLM_USAGE] slot={} path={} model={} prompt_tokens={} completion_tokens={} total_tokens={}",
+                    slot, path, model, promptTokens, completionTokens, totalTokens);
         }
     }
 
