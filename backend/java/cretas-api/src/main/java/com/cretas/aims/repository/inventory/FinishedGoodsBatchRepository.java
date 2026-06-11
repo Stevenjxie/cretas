@@ -264,4 +264,33 @@ public interface FinishedGoodsBatchRepository extends JpaRepository<FinishedGood
             @Param("productTypeId") String productTypeId,
             @Param("warehouseCode") String warehouseCode,
             @Param("unit") String unit);
+
+    /**
+     * SP10 §RD-1: 汇总可售成品库存，排除研发/中试库 (warehouse code = WH-RD).
+     *
+     * <p>备货看板覆盖率计算用。仅统计非研发仓库的指定单位可用量，确保试制产出
+     * (进研发库) 不干扰生产计划决策。
+     *
+     * <p>注意: {@link #sumAvailableQuantityByProductTypeAndUnit} 不过滤研发库，
+     * 保留给研发查阅；此方法是备货看板入口的正确调用。
+     *
+     * @param factoryId      工厂 ID
+     * @param productTypeId  产品类型 ID
+     * @param unit           库存单位，传 {@code "盒"}
+     * @param rdWarehouseCode 研发库 code（传 {@link com.cretas.aims.entity.factory.WarehouseCodes#WH_RD}），用于 JOIN 排除
+     * @since SP10 §RD-1 (V20261023_01)
+     */
+    @Query("SELECT COALESCE(SUM(b.producedQuantity - b.shippedQuantity - b.reservedQuantity), 0) " +
+            "FROM FinishedGoodsBatch b, com.cretas.aims.entity.factory.FactoryWarehouse w " +
+            "WHERE b.warehouseId = w.id AND w.factoryId = :factoryId AND w.code <> :rdWarehouseCode " +
+            "AND b.factoryId = :factoryId " +
+            "AND b.productTypeId = :productTypeId " +
+            "AND b.unit = :unit " +
+            "AND b.status = 'AVAILABLE' " +
+            "AND (b.producedQuantity - b.shippedQuantity - b.reservedQuantity) > 0")
+    BigDecimal sumSaleableQuantityByProductTypeAndUnitExcludeRd(
+            @Param("factoryId") String factoryId,
+            @Param("productTypeId") String productTypeId,
+            @Param("unit") String unit,
+            @Param("rdWarehouseCode") String rdWarehouseCode);
 }

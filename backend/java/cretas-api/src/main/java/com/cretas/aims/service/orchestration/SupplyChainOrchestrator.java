@@ -419,9 +419,19 @@ public class SupplyChainOrchestrator {
         if (batch.getProductionPlanId() != null) {
             fg.setProductionPlanId(batch.getProductionPlanId());
         }
-        // D1: 生产产出默认 WH-WKS (车间仓). per PR #310 spec — finished goods born on workshop floor;
+        // SP10 §RD-1: 试制批次 (is_trial=true) 产出进研发/中试库 (WH-RD), 不进可售车间仓 (WH-WKS).
+        // 研发库成品不参与备货看板 / 销售出货，仅供研发查阅。
+        // D1: 常规批次产出默认 WH-WKS (车间仓). per PR #310 spec — finished goods born on workshop floor;
         // 反向调拨 (BRANCH_TO_HQ) 后才到 WH-LOG.
-        fg.setWarehouseId(warehouseResolver.resolveWorkshopId(batch.getFactoryId()));
+        boolean isTrial = Boolean.TRUE.equals(batch.getIsTrial());
+        if (isTrial) {
+            fg.setWarehouseId(warehouseResolver.resolveRdId(batch.getFactoryId()));
+            String trialRemark = "[RD-1] 试制批次 — 研发/中试库，不计入可售库存";
+            fg.setRemark(fg.getRemark() != null ? fg.getRemark() + "; " + trialRemark : trialRemark);
+            log.info("试制批次产出进研发库(WH-RD): batchId={}, qty={}", batch.getId(), producedQty);
+        } else {
+            fg.setWarehouseId(warehouseResolver.resolveWorkshopId(batch.getFactoryId()));
+        }
         return finishedGoodsBatchRepository.save(fg);
     }
 
