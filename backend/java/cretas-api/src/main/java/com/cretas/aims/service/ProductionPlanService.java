@@ -241,4 +241,12 @@ public interface ProductionPlanService {
     ProductionPlanDTO createSecondaryPlan(String factoryId, Long wipId, java.math.BigDecimal quantity,
                                           String productTypeId, java.time.LocalDate plannedDate,
                                           Long submittedBy);
+
+    /**
+     * SP5: 将 entity 转为 DTO (供 controller 双向检索端点使用, 避免循环依赖).
+     *
+     * @param plan entity (已加载)
+     * @return DTO with conversion info (含产品名称等关联字段)
+     */
+    ProductionPlanDTO toPlanDTO(com.cretas.aims.entity.ProductionPlan plan);
 }

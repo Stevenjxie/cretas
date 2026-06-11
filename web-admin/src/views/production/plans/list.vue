@@ -240,6 +240,8 @@ const planForm = ref({
   sourceType: 'CUSTOMER_ORDER' as 'MANUAL' | 'CUSTOMER_ORDER' | 'AI_FORECAST' | 'SAFETY_STOCK',
   sourceOrderId: '' as string | undefined,
   sourceOrderItemId: '' as string | undefined,
+  // SP5 多SO合并工单: 追加的额外销售订单ID列表 (不含 primarySourceOrderId, 提交前合并)
+  extraSourceOrderIds: [] as string[],
   customFields: {} as TableRow,
   // Wave2 六扇门: 免工序报工开关 (null→后端默认 true, 新建默认 true = 两点报工)
   skipProcessReporting: true as boolean | null,
@@ -509,6 +511,8 @@ function handleCreate() {
     sourceType: 'CUSTOMER_ORDER',
     sourceOrderId: '',
     sourceOrderItemId: '',
+    // SP5: 重置追加SO列表
+    extraSourceOrderIds: [],
     customFields: {} as TableRow,
     // Fable 审计修复 (问题1 — 多租户安全): 默认值取工厂配置 (F006=true 两点 / 其他=false 逐道),
     // 不再全系统硬编码 true。产品加载后若 0 工序仍自动锁定为 true (loadBomProcesses)。
@@ -533,7 +537,18 @@ async function submitPlan() {
   if (!factoryId.value) return;
   dialogLoading.value = true;
   try {
-    const response = await post(`/${factoryId.value}/production-plans`, planForm.value);
+    // SP5 多SO合并: 构建 sourceOrderIds (主SO + 追加SO, 去重)
+    const primarySoId = planForm.value.sourceOrderId;
+    const allSoIds: string[] = [];
+    if (primarySoId) allSoIds.push(primarySoId);
+    for (const id of planForm.value.extraSourceOrderIds) {
+      if (id && !allSoIds.includes(id)) allSoIds.push(id);
+    }
+    const payload = {
+      ...planForm.value,
+      sourceOrderIds: allSoIds.length > 1 ? allSoIds : undefined,
+    };
+    const response = await post(`/${factoryId.value}/production-plans`, payload);
     if (response.success) {
       ElMessage.success('创建成功');
       dialogVisible.value = false;
@@ -991,6 +1006,7 @@ function handleAiFill(params: TableRow) {
     sourceType: 'MANUAL',
     sourceOrderId: '',
     sourceOrderItemId: '',
+    extraSourceOrderIds: [],
     customFields: {} as TableRow,
   };
   dialogVisible.value = true;
@@ -1272,6 +1288,21 @@ function handleAiFill(params: TableRow) {
               <el-tag v-else-if="viewPlan.sourceType === 'AI_FORECAST'" type="success" size="small">AI预测</el-tag>
               <el-tag v-else size="small">手动</el-tag>
             </el-descriptions-item>
+            <!-- SP5 多SO合并: 显示合并的全部销售订单ID -->
+            <el-descriptions-item
+              v-if="Array.isArray((viewPlan as any).sourceOrderIds) && (viewPlan as any).sourceOrderIds.length > 1"
+              label="合并订单"
+              :span="2"
+            >
+              <div style="display: flex; flex-wrap: wrap; gap: 4px;">
+                <el-tag
+                  v-for="soId in (viewPlan as any).sourceOrderIds"
+                  :key="soId"
+                  size="small"
+                  type="warning"
+                >{{ soId }}</el-tag>
+              </div>
+            </el-descriptions-item>
           </el-descriptions>
         </div>
 
@@ -1357,6 +1388,49 @@ function handleAiFill(params: TableRow) {
               :value="String(so.id)"
             />
           </el-select>
+        </el-form-item>
+        <!-- SP5 多SO合并: 追加额外销售订单 -->
+        <el-form-item
+          v-if="planForm.sourceType === 'CUSTOMER_ORDER' && planForm.sourceOrderId"
+          label="合并订单"
+        >
+          <div style="width: 100%">
+            <div v-if="planForm.extraSourceOrderIds.length > 0" style="margin-bottom: 6px; display: flex; flex-wrap: wrap; gap: 4px;">
+              <el-tag
+                v-for="(eid, idx) in planForm.extraSourceOrderIds"
+                :key="eid"
+                closable
+                size="small"
+                type="warning"
+                @close="planForm.extraSourceOrderIds.splice(idx, 1)"
+              >
+                {{ selectableSalesOrders.find((o) => String(o.id) === eid)?.orderNo || eid }}
+              </el-tag>
+            </div>
+            <el-select
+              placeholder="+ 追加合并销售订单"
+              filterable
+              :loading="salesOrdersLoading"
+              style="width: 100%"
+              @change="(id: string) => {
+                if (id && id !== planForm.sourceOrderId && !planForm.extraSourceOrderIds.includes(id)) {
+                  planForm.extraSourceOrderIds.push(id);
+                }
+              }"
+            >
+              <el-option
+                v-for="so in selectableSalesOrders.filter(
+                  (o) => String(o.id) !== planForm.sourceOrderId && !planForm.extraSourceOrderIds.includes(String(o.id))
+                )"
+                :key="String(so.id)"
+                :label="canViewPrice ? `${so.orderNo} | ${so.customerName || ''} | ¥${so.totalAmount || 0} | ${so.statusLabel || ''}` : `${so.orderNo} | ${so.customerName || ''} | ${so.statusLabel || ''}`"
+                :value="String(so.id)"
+              />
+            </el-select>
+            <div style="font-size: 12px; color: var(--text-color-secondary, #909399); margin-top: 4px;">
+              可追加多个销售订单合并为一张生产工单。产品类型由主订单行确定，追加订单需已财务审核。
+            </div>
+          </div>
         </el-form-item>
         <el-form-item
           v-if="planForm.sourceType === 'CUSTOMER_ORDER' && planForm.sourceOrderId"

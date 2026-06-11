@@ -512,4 +512,45 @@ public interface ProductionPlanRepository extends JpaRepository<ProductionPlan, 
             @Param("factoryId") String factoryId,
             @Param("productTypeId") String productTypeId,
             @Param("statuses") Collection<ProductionPlanStatus> statuses);
+
+    // ==================== SP5 多 SO 合并工单双向检索 ====================
+
+    /**
+     * SP5 双向检索 — 销售单 → 生产单 (精确 sourceOrderId).
+     *
+     * <p>兼容旧数据 (sourceOrderIds 未迁移): 查 sourceOrderId 单列。
+     *
+     * @param factoryId   工厂 ID
+     * @param salesOrderId 销售订单 ID
+     * @return 关联的生产计划列表 (含历史单 SO 工单)
+     */
+    @Query("SELECT p FROM ProductionPlan p " +
+           "WHERE p.factoryId = :factoryId " +
+           "AND p.sourceOrderId = :salesOrderId " +
+           "AND p.deletedAt IS NULL " +
+           "ORDER BY p.createdAt DESC")
+    List<ProductionPlan> findByFactoryIdAndSourceOrderIdExact(
+            @Param("factoryId") String factoryId,
+            @Param("salesOrderId") String salesOrderId);
+
+    /**
+     * SP5 双向检索 — 销售单 → 合并生产单 (JSONB @> containment, 依赖 GIN 索引 V20261023_01).
+     *
+     * <p>此查询用原生 SQL 的 JSONB 包含运算符 {@code @>}; JPQL 不支持 JSONB 运算符,
+     * 因此使用 nativeQuery=true。工厂隔离通过 AND factory_id = :factoryId 保证。
+     * deleted_at IS NULL 对齐 @Where 过滤 (nativeQuery 不自动应用 @Where)。
+     *
+     * @param factoryId    工厂 ID
+     * @param salesOrderId 销售订单 ID
+     * @return 在 source_order_ids 列表中包含该 SO ID 的生产计划 (多 SO 合并场景)
+     */
+    @Query(value = "SELECT * FROM production_plans " +
+                   "WHERE factory_id = :factoryId " +
+                   "AND source_order_ids @> CAST(:soIdJson AS jsonb) " +
+                   "AND deleted_at IS NULL " +
+                   "ORDER BY created_at DESC",
+           nativeQuery = true)
+    List<ProductionPlan> findByFactoryIdAndSourceOrderIdsContaining(
+            @Param("factoryId") String factoryId,
+            @Param("soIdJson") String soIdJson);   // caller passes: "[\"<soId>\"]"
 }
