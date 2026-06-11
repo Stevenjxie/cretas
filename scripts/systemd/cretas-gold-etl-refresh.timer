@@ -1,0 +1,22 @@
+[Unit]
+Description=Trigger Cretas gold ETL daily refresh at 03:30 CST
+Documentation=https://github.com/Stevenjxie/cretas/blob/main/backend/python/scripts/gold_etl_daily_refresh.py
+
+[Timer]
+# 03:30 CST — server runs in Asia/Shanghai, systemd uses system local time.
+# Chosen to avoid:
+#   02:00 CST — M4 corpus_refresh_loop (Sunday weekly) + Java batch sync
+#   03:00 CST — other scheduled maintenance windows
+# Persistent=true: if the server rebooted through the scheduled time, run
+# once within the next boot (capped by RandomizedDelaySec).
+OnCalendar=*-*-* 03:30:00
+Persistent=true
+
+# Up to 5-minute random jitter to avoid load spikes if multiple timers
+# fire near the same wall-clock time.
+RandomizedDelaySec=300
+
+Unit=cretas-gold-etl-refresh.service
+
+[Install]
+WantedBy=timers.target

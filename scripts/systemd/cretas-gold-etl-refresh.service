@@ -1,0 +1,42 @@
+[Unit]
+Description=Cretas gold ETL daily refresh (restaurant_ops + factory_production + supplier_price, all tenants)
+Documentation=https://github.com/Stevenjxie/cretas/blob/main/backend/python/scripts/gold_etl_daily_refresh.py
+After=network-online.target cretas-python.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+
+# -------------------------------------------------------------------------
+# Environment — use .env.prod which contains BOTH:
+#   FOOD_KB_POSTGRES_HOST/PORT/DB/USER/PASSWORD  → cretas_pool (cretas_db)
+#   POSTGRES_HOST/PORT/DB/USER/PASSWORD          → smartbi_pool (smartbi_db)
+#   POSTGRES_ENABLED=true                        → required by get_pg_pool()
+#
+# ⚠️  .env.distill is the LLM-distillation env; these ETLs do NOT call LLM.
+#     Do not use .env.distill here — it may lack the FOOD_KB_POSTGRES_* block.
+#     Verify .env.prod has FOOD_KB_POSTGRES_PASSWORD=cretas123 (cretas_db DSN).
+# -------------------------------------------------------------------------
+EnvironmentFile=/www/wwwroot/cretas/.env.prod
+
+WorkingDirectory=/www/wwwroot/cretas/code/backend/python
+
+ExecStart=/www/wwwroot/cretas/code/backend/python/venv38/bin/python \
+    -m scripts.gold_etl_daily_refresh
+
+# Log to journal under tag cretas-gold-etl-refresh
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=cretas-gold-etl-refresh
+
+# ETL across all tenants should finish well within 1 hour.
+# Raise if you add many more tenants with large datasets.
+TimeoutStartSec=3600
+
+# Defensive resource caps — ETL is I/O-bound, not CPU-heavy
+MemoryHigh=512M
+MemoryMax=1G
+
+[Install]
+WantedBy=multi-user.target
