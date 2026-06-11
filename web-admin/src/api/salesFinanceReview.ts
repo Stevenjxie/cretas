@@ -140,6 +140,77 @@ export interface ActualCostSplit {
   dataSourceHint: string | null;
 }
 
+// ============================================================================
+// 六扇门多段生产成本逐段分配 (两点报工成本拆分核心)
+// ============================================================================
+
+/**
+ * 单段成本 (一次两点报工转化 = 一行 SemiFinishedInventory)。
+ * 金额字段 @PriceSensitive — 非财务/管理角色脱敏为 null。
+ */
+export interface MultiStageCost {
+  /** 段序 (processOrder; 升序展示)。 */
+  stageOrder: number | null;
+  /** 半成品编码 (intermediateBatchNo / semiCode)。 */
+  semiCode: string | null;
+  /** 段名 (工序名 / 半成品编码回退)。 */
+  stageName: string | null;
+  /** 本段产出半成品名。 */
+  productName: string | null;
+  /** 本段产出量。 */
+  producedQuantity: number | null;
+  /** 本段产出单位。 */
+  producedUnit: string | null;
+  /** 本段领用的上游半成品量 (首段无上游 → null)。 */
+  upstreamConsumedQuantity: number | null;
+  /** 本段领用的上游半成品累积成本 (@PriceSensitive)。 */
+  upstreamCarriedCost: number | null;
+  /** 本段材料消耗合计 (@PriceSensitive, 无领料 → null)。 */
+  materialCost: number | null;
+  /** 本段人工成本 (@PriceSensitive, 两点报工登下一期未结 → null)。 */
+  laborCost: number | null;
+  /** 人工为 null 时的说明 (登下一期)。null = 已结。 */
+  laborHint: string | null;
+  /** 本段制费 (@PriceSensitive, 无数据 → null)。 */
+  overheadCost: number | null;
+  /** 本段段小计 = 本段新增 (料+人工+制费), 不含上游累积 (@PriceSensitive)。 */
+  stageSubtotal: number | null;
+  /** 产出半成品移动均价 (#713 逐段滚动累积, @PriceSensitive)。 */
+  outputUnitCost: number | null;
+  /** 本段累积成本 (上游 + 本段全部投入, @PriceSensitive)。 */
+  accumulatedCost: number | null;
+  /** 本段折每盒成品贡献 (@PriceSensitive)。 */
+  contributionPerBox: number | null;
+  /** 逐料明细 (本段材料消耗)。 */
+  materials: MaterialCostLine[];
+  /** 本段数据缺失说明。null = 完整。 */
+  stageHint: string | null;
+}
+
+/**
+ * 六扇门多段生产成本逐段分配 — 回溯成品←半成品←原料链。
+ * 契合两点报工 (无逐道工序数据); 人工登下一期时该段诚实 null。
+ */
+export interface MultiStageCostBreakdown {
+  orderId: string | null;
+  /** 产品名称 (成品)。 */
+  productName: string | null;
+  /** 最终成品盒数 (每盒口径分母)。 */
+  finalOutputBoxes: number | null;
+  /** 最终成品产出单位。 */
+  finalOutputUnit: string | null;
+  /** 逐段成本明细 (按 processOrder 升序: 首段=最上游, 末段=成品)。 */
+  stages: MultiStageCost[];
+  /** 全链段消耗合计 (@PriceSensitive)。 */
+  totalChainCost: number | null;
+  /** 全链折每盒成本合计 (@PriceSensitive)。 */
+  totalCostPerBox: number | null;
+  /** 半成品段数 (0=无两点报工 WIP 记录)。 */
+  stageCount: number | null;
+  /** 数据缺失提示 (null=完整)。 */
+  dataSourceHint: string | null;
+}
+
 export interface PageResponse<T> {
   content: T[];
   totalElements: number;
@@ -208,6 +279,19 @@ export function getOrderCostBreakdown(
 ): Promise<ApiResponse<FinanceCostBreakdown>> {
   return get<FinanceCostBreakdown>(
     `/${factoryId}/sales/orders/${orderId}/cost-breakdown`,
+  );
+}
+
+/**
+ * 六扇门多段生产成本逐段分配 — 回溯成品←半成品←原料链, 逐段拆 料/人工/制费
+ * + 半成品 unitCost 逐段累积 + 每盒贡献 (两点报工成本拆分核心)。
+ */
+export function getOrderMultiStageCost(
+  factoryId: string,
+  orderId: string,
+): Promise<ApiResponse<MultiStageCostBreakdown>> {
+  return get<MultiStageCostBreakdown>(
+    `/${factoryId}/sales/orders/${orderId}/multi-stage-cost`,
   );
 }
 
