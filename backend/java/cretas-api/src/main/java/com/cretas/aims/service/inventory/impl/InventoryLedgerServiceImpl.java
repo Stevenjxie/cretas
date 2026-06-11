@@ -39,11 +39,14 @@ import java.util.stream.Collectors;
  *   <li>出库(生产): MaterialConsumption / MaterialBatch.usedQuantity 变化</li>
  *   <li>出库(销售): SalesDeliveryItem (via SalesDeliveryRecord.deliveryDate)</li>
  *   <li>调拨: InternalTransferItem</li>
- *   <li>盘盈/损: MaterialBatchAdjustment</li>
+ *   <li>盘盈/损: MaterialBatchAdjustment (W8: 分列展示盘盈/盘损)</li>
  *   <li>期末 = 期初 + 入库 - 出库 +/- 调拨 +/- 盘盈损</li>
  * </ol>
  *
  * <p>精度: qty scale-6, unitPrice scale-4, amount scale-2, ROUND_HALF_UP (对齐 CostRollupUtil).
+ *
+ * <p>W8 盘盈/盘损分列: {@code adjustQty} 保留向后兼容; 新增 {@code stocktakeProfitQty} +
+ * {@code stocktakeLossQty} 分列展示, 便于金蝶凭证导入区分借贷方向.
  */
 @Slf4j
 @Service
@@ -130,6 +133,8 @@ public class InventoryLedgerServiceImpl implements InventoryLedgerService {
 
     /**
      * 进销存台账表头. 数量列全角色可见; 金额列仅 includePrices=true 写入.
+     *
+     * <p>W8: 盘盈损数量拆分为独立两列(盘盈数量/盘损数量), 便于金蝶凭证区分借贷方向.
      */
     private List<Object> buildHeaderRow(boolean includePrices) {
         List<Object> header = new ArrayList<>(List.of(
@@ -140,14 +145,16 @@ public class InventoryLedgerServiceImpl implements InventoryLedgerService {
                 "销售出货数量",
                 "调拨入数量",
                 "调拨出数量",
-                "盘盈损数量",
+                "盘盈数量",
+                "盘损数量",
                 "期末数量"));
         if (includePrices) {
             header.addAll(List.of(
                     "期初金额",
                     "入库金额",
                     "出库金额",
-                    "盘盈损金额",
+                    "盘盈金额",
+                    "盘损金额",
                     "期末金额",
                     "移动均价"));
         }
@@ -165,14 +172,16 @@ public class InventoryLedgerServiceImpl implements InventoryLedgerService {
                 qtyCell(line.getOutboundSalesQty()),
                 qtyCell(line.getTransferInQty()),
                 qtyCell(line.getTransferOutQty()),
-                qtyCell(line.getAdjustQty()),
+                qtyCell(line.getStocktakeProfitQty()),
+                qtyCell(line.getStocktakeLossQty()),
                 qtyCell(line.getClosingQty())));
         if (includePrices) {
             row.addAll(List.of(
                     amountCell(line.getOpeningAmount()),
                     amountCell(line.getInboundAmount()),
                     amountCell(line.getOutboundAmount()),
-                    amountCell(line.getAdjustAmount()),
+                    amountCell(line.getStocktakeProfitAmount()),
+                    amountCell(line.getStocktakeLossAmount()),
                     amountCell(line.getClosingAmount()),
                     amountCell(line.getMovingAvgUnitPrice())));
         }
@@ -240,9 +249,18 @@ public class InventoryLedgerServiceImpl implements InventoryLedgerService {
         BigDecimal transferInQty = aggregateTransferQty(factoryId, mt.getId(), start, end, true);
         BigDecimal transferOutQty = aggregateTransferQty(factoryId, mt.getId(), start, end, false);
 
-        // === 盘盈/损 (MaterialBatchAdjustment) ===
-        BigDecimal adjustQty = aggregateAdjustQty(factoryId, mt.getId(), start, end);
-        BigDecimal adjustAmount = aggregateAdjustAmount(factoryId, mt.getId(), start, end);
+        // === 盘盈/损 (MaterialBatchAdjustment) — W8: 分列 ===
+        BigDecimal profitQty = aggregateStocktakeProfitQty(factoryId, mt.getId(), start, end);
+        BigDecimal lossQty = aggregateStocktakeLossQty(factoryId, mt.getId(), start, end);
+        // adjustQty 保留向后兼容: 净调整 = profitQty - lossQty
+        BigDecimal adjustQty = nvl(profitQty).subtract(nvl(lossQty))
+                .setScale(QTY_SCALE, RoundingMode.HALF_UP);
+        BigDecimal profitAmount = aggregateStocktakeProfitAmount(factoryId, mt.getId(), start, end);
+        BigDecimal lossAmount = aggregateStocktakeLossAmount(factoryId, mt.getId(), start, end);
+        // adjustAmount 保留向后兼容: 净金额 = profitAmount - lossAmount (诚实 null 当两者均 null)
+        BigDecimal adjustAmount = (profitAmount != null || lossAmount != null)
+                ? nvl(profitAmount).subtract(nvl(lossAmount)).setScale(AMOUNT_SCALE, RoundingMode.HALF_UP)
+                : null;
 
         // === 期末 ===
         BigDecimal totalOut = nvl(outboundProductionQty).add(nvl(outboundSalesQty)).add(nvl(transferOutQty));
@@ -302,6 +320,11 @@ public class InventoryLedgerServiceImpl implements InventoryLedgerService {
                 .transferOutQty(transferOutQty)
                 .adjustQty(adjustQty)
                 .adjustAmount(adjustAmount)
+                // W8: 盘盈/盘损分列
+                .stocktakeProfitQty(profitQty)
+                .stocktakeLossQty(lossQty)
+                .stocktakeProfitAmount(profitAmount)
+                .stocktakeLossAmount(lossAmount)
                 .closingQty(closingQty)
                 .closingAmount(closingAmount)
                 .outboundAmount(outboundAmount)
@@ -416,18 +439,21 @@ public class InventoryLedgerServiceImpl implements InventoryLedgerService {
         }
     }
 
+    // ========================= 盘盈/盘损分列查询 (W8) =========================
+
+    /**
+     * 盘盈数量: correction / return 类型 (正调整, ≥0).
+     * 诚实 ZERO 当期间无盘盈记录.
+     */
     @SuppressWarnings("unchecked")
-    private BigDecimal aggregateAdjustQty(String factoryId, String materialTypeId,
-                                           LocalDate start, LocalDate end) {
+    private BigDecimal aggregateStocktakeProfitQty(String factoryId, String materialTypeId,
+                                                    LocalDate start, LocalDate end) {
         try {
-            // MaterialBatchAdjustment: loss/damage 为负, correction 为正
             List<Object> result = em.createQuery(
-                    "SELECT COALESCE(SUM(" +
-                    "  CASE WHEN a.adjustmentType IN ('loss','damage') THEN -a.adjustmentQuantity " +
-                    "       ELSE a.adjustmentQuantity END" +
-                    "), 0) " +
+                    "SELECT COALESCE(SUM(a.adjustmentQuantity), 0) " +
                     "FROM MaterialBatchAdjustment a JOIN a.batch b " +
                     "WHERE b.factoryId = :fid AND b.materialTypeId = :mid " +
+                    "  AND a.adjustmentType NOT IN ('loss','damage') " +
                     "  AND a.adjustmentTime >= :start AND a.adjustmentTime < :endPlus1 " +
                     "  AND a.deletedAt IS NULL AND b.deletedAt IS NULL")
                     .setParameter("fid", factoryId)
@@ -435,26 +461,53 @@ public class InventoryLedgerServiceImpl implements InventoryLedgerService {
                     .setParameter("start", start.atStartOfDay())
                     .setParameter("endPlus1", end.plusDays(1).atStartOfDay())
                     .getResultList();
-            return result.isEmpty() ? ZERO : toBD(result.get(0));
+            return result.isEmpty() ? ZERO : toBD(result.get(0)).setScale(QTY_SCALE, RoundingMode.HALF_UP);
         } catch (Exception e) {
-            log.debug("[InventoryLedger] Adjustment qty query failed: {}", e.getMessage());
+            log.debug("[InventoryLedger] Stocktake profit qty query failed: {}", e.getMessage());
             return ZERO;
         }
     }
 
+    /**
+     * 盘损数量: loss / damage 类型 (取绝对值, ≥0).
+     * 诚实 ZERO 当期间无盘损记录.
+     */
     @SuppressWarnings("unchecked")
-    private BigDecimal aggregateAdjustAmount(String factoryId, String materialTypeId,
-                                              LocalDate start, LocalDate end) {
-        // 盘盈/损金额 = 调整数量 × 批次单价 (诚实 null 当无单价)
+    private BigDecimal aggregateStocktakeLossQty(String factoryId, String materialTypeId,
+                                                  LocalDate start, LocalDate end) {
         try {
             List<Object> result = em.createQuery(
-                    "SELECT SUM(" +
-                    "  CASE WHEN a.adjustmentType IN ('loss','damage') " +
-                    "       THEN -a.adjustmentQuantity * b.unitPrice " +
-                    "       ELSE a.adjustmentQuantity * b.unitPrice END" +
-                    ") " +
+                    "SELECT COALESCE(SUM(a.adjustmentQuantity), 0) " +
                     "FROM MaterialBatchAdjustment a JOIN a.batch b " +
                     "WHERE b.factoryId = :fid AND b.materialTypeId = :mid " +
+                    "  AND a.adjustmentType IN ('loss','damage') " +
+                    "  AND a.adjustmentTime >= :start AND a.adjustmentTime < :endPlus1 " +
+                    "  AND a.deletedAt IS NULL AND b.deletedAt IS NULL")
+                    .setParameter("fid", factoryId)
+                    .setParameter("mid", materialTypeId)
+                    .setParameter("start", start.atStartOfDay())
+                    .setParameter("endPlus1", end.plusDays(1).atStartOfDay())
+                    .getResultList();
+            // loss 存储为正值 (adjustmentQuantity > 0), 展示取绝对值
+            return result.isEmpty() ? ZERO : toBD(result.get(0)).abs().setScale(QTY_SCALE, RoundingMode.HALF_UP);
+        } catch (Exception e) {
+            log.debug("[InventoryLedger] Stocktake loss qty query failed: {}", e.getMessage());
+            return ZERO;
+        }
+    }
+
+    /**
+     * 盘盈金额: correction / return × 批次单价 (诚实 null 当无单价).
+     */
+    @SuppressWarnings("unchecked")
+    private BigDecimal aggregateStocktakeProfitAmount(String factoryId, String materialTypeId,
+                                                       LocalDate start, LocalDate end) {
+        try {
+            List<Object> result = em.createQuery(
+                    "SELECT SUM(a.adjustmentQuantity * b.unitPrice) " +
+                    "FROM MaterialBatchAdjustment a JOIN a.batch b " +
+                    "WHERE b.factoryId = :fid AND b.materialTypeId = :mid " +
+                    "  AND a.adjustmentType NOT IN ('loss','damage') " +
                     "  AND a.adjustmentTime >= :start AND a.adjustmentTime < :endPlus1 " +
                     "  AND b.unitPrice IS NOT NULL " +
                     "  AND a.deletedAt IS NULL AND b.deletedAt IS NULL")
@@ -466,9 +519,91 @@ public class InventoryLedgerServiceImpl implements InventoryLedgerService {
             Object val = result.isEmpty() ? null : result.get(0);
             return val == null ? null : toBD(val).setScale(AMOUNT_SCALE, RoundingMode.HALF_UP);
         } catch (Exception e) {
-            log.debug("[InventoryLedger] Adjustment amount query failed: {}", e.getMessage());
+            log.debug("[InventoryLedger] Stocktake profit amount query failed: {}", e.getMessage());
             return null;
         }
+    }
+
+    /**
+     * 盘损金额: loss/damage × 批次单价 (取绝对值, 诚实 null 当无单价).
+     */
+    @SuppressWarnings("unchecked")
+    private BigDecimal aggregateStocktakeLossAmount(String factoryId, String materialTypeId,
+                                                     LocalDate start, LocalDate end) {
+        try {
+            List<Object> result = em.createQuery(
+                    "SELECT SUM(a.adjustmentQuantity * b.unitPrice) " +
+                    "FROM MaterialBatchAdjustment a JOIN a.batch b " +
+                    "WHERE b.factoryId = :fid AND b.materialTypeId = :mid " +
+                    "  AND a.adjustmentType IN ('loss','damage') " +
+                    "  AND a.adjustmentTime >= :start AND a.adjustmentTime < :endPlus1 " +
+                    "  AND b.unitPrice IS NOT NULL " +
+                    "  AND a.deletedAt IS NULL AND b.deletedAt IS NULL")
+                    .setParameter("fid", factoryId)
+                    .setParameter("mid", materialTypeId)
+                    .setParameter("start", start.atStartOfDay())
+                    .setParameter("endPlus1", end.plusDays(1).atStartOfDay())
+                    .getResultList();
+            Object val = result.isEmpty() ? null : result.get(0);
+            // loss 量存储为正值 → 金额也是正值; 展示取绝对值 (≥0)
+            return val == null ? null : toBD(val).abs().setScale(AMOUNT_SCALE, RoundingMode.HALF_UP);
+        } catch (Exception e) {
+            log.debug("[InventoryLedger] Stocktake loss amount query failed: {}", e.getMessage());
+            return null;
+        }
+    }
+
+    // ========================= 金蝶 per-movement 摘要 (W8) =========================
+
+    /**
+     * 金蝶 per-movement 摘要: 为每笔库存变动生成金蝶凭证摘要字符串.
+     *
+     * <p>格式: {@code {movementType}[{docNo}] {materialName} {qty}{unit}}
+     * 例:
+     * <ul>
+     *   <li>入库: {@code 入库[PO-2026-001] 猪舌 100.000000kg}</li>
+     *   <li>盘盈: {@code 盘盈 猪舌 +5.000000kg}</li>
+     *   <li>盘损: {@code 盘损 猪舌 -3.000000kg}</li>
+     *   <li>生产领用: {@code 领用[BATCH-001] 猪舌 50.000000kg}</li>
+     *   <li>销售出货: {@code 出货[SO-001] 猪舌 30.000000kg}</li>
+     *   <li>调拨入: {@code 调拨入[TR-001] 猪舌 10.000000kg}</li>
+     *   <li>调拨出: {@code 调拨出[TR-001] 猪舌 10.000000kg}</li>
+     * </ul>
+     *
+     * @param movementType 变动类型 (inbound/stocktake_profit/stocktake_loss/production/sales/transfer_in/transfer_out)
+     * @param docNo        单据号 (null 时省略括号)
+     * @param materialName 物料名称
+     * @param qty          数量 (绝对值, 由 movementType 决定方向展示)
+     * @param unit         单位
+     * @return 金蝶凭证摘要字符串
+     */
+    public static String buildKingdeeMovementSummary(String movementType, String docNo,
+                                                      String materialName, BigDecimal qty,
+                                                      String unit) {
+        String typeLabel = switch (movementType == null ? "" : movementType.toLowerCase()) {
+            case "inbound"          -> "入库";
+            case "stocktake_profit" -> "盘盈";
+            case "stocktake_loss"   -> "盘损";
+            case "production"       -> "领用";
+            case "sales"            -> "出货";
+            case "transfer_in"      -> "调拨入";
+            case "transfer_out"     -> "调拨出";
+            default                 -> movementType != null ? movementType : "变动";
+        };
+
+        String docPart = (docNo != null && !docNo.isBlank()) ? "[" + docNo + "]" : "";
+        String unitStr = unit != null ? unit : "";
+
+        // 盘盈显示 +, 盘损显示 - (其他按实际数量, 通常为正)
+        String sign = switch (movementType == null ? "" : movementType.toLowerCase()) {
+            case "stocktake_profit" -> "+";
+            case "stocktake_loss"   -> "-";
+            default -> "";
+        };
+
+        String qtyStr = qty != null ? qty.toPlainString() : "0";
+        return typeLabel + docPart + " " + (materialName != null ? materialName : "") +
+               " " + sign + qtyStr + unitStr;
     }
 
     // ========================= 工具方法 =========================

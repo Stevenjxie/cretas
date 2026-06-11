@@ -12,6 +12,10 @@ import java.util.List;
  *
  * <p>提供按日期范围/物料类型的进销存聚合查询.
  * 金额字段通过 @PriceSensitive 对非财务角色自动遮蔽 (PriceFieldResponseAdvice 处理).
+ *
+ * <p>W8: 盘盈/盘损分列 — InventoryLedgerLineDTO 新增 stocktakeProfitQty / stocktakeLossQty
+ * 分列展示, 同时提供 {@link com.cretas.aims.service.inventory.impl.InventoryLedgerServiceImpl#buildKingdeeMovementSummary}
+ * 静态方法用于生成金蝶 per-movement 凭证摘要.
  */
 public interface InventoryLedgerService {
 
