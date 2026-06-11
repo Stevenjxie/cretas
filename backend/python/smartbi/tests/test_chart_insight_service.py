@@ -1363,3 +1363,123 @@ class TestGetTeacherModel:
         assert result == "unknown", (
             f"Import failure must return 'unknown' safely, got {result!r}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Task: Plain-language (白话) constraint in system prompts
+# Asserts plain-language instructions appear in:
+#   - chart_insight_service._SYSTEM_PROMPT
+#   - chart_insight_service._build_insight_prompt()
+#   - prompt_builder.build_cacheable_system_prompt()
+# Also asserts claims-pinning JSON contract is NOT broken.
+# ---------------------------------------------------------------------------
+
+
+class TestPlainLanguageConstraint:
+    """White-language (白话) style constraints must appear in insight prompts.
+
+    Rationale (fool-proof-design.md): store managers and warehouse workers often
+    have low literacy; the system must speak plainly — no unexplained jargon,
+    no English terms, short sentences, actionable suggestions.
+    """
+
+    # ------------------------------------------------------------------
+    # chart_insight: _SYSTEM_PROMPT constant
+    # ------------------------------------------------------------------
+
+    def test_system_prompt_contains_plain_language_marker(self):
+        """_SYSTEM_PROMPT must contain key plain-language instruction."""
+        from smartbi.services.insights.chart_insight_service import _SYSTEM_PROMPT
+
+        assert "大白话" in _SYSTEM_PROMPT, (
+            "_SYSTEM_PROMPT must instruct LLM to use plain language ('大白话')"
+        )
+
+    def test_system_prompt_forbids_jargon(self):
+        """_SYSTEM_PROMPT must explicitly prohibit unexplained jargon terms."""
+        from smartbi.services.insights.chart_insight_service import _SYSTEM_PROMPT
+
+        # At least one of the key jargon terms must be mentioned in the prohibition
+        jargon_terms = ["环比", "同比", "GMV", "客单价", "毛利率"]
+        found = any(term in _SYSTEM_PROMPT for term in jargon_terms)
+        assert found, (
+            "_SYSTEM_PROMPT must mention specific jargon terms that are prohibited "
+            f"without explanation. Checked: {jargon_terms}"
+        )
+
+    def test_system_prompt_no_english_rule(self):
+        """_SYSTEM_PROMPT must state rule against English terms."""
+        from smartbi.services.insights.chart_insight_service import _SYSTEM_PROMPT
+
+        assert "英文" in _SYSTEM_PROMPT, (
+            "_SYSTEM_PROMPT must forbid English terms ('不用英文')"
+        )
+
+    # ------------------------------------------------------------------
+    # chart_insight: _build_insight_prompt — claims contract must be intact
+    # ------------------------------------------------------------------
+
+    def test_build_insight_prompt_contains_plain_language(self):
+        """_build_insight_prompt() must include plain-language style block."""
+        ctx = _ctx(values=[62.0, 38.0], labels=["堂食", "外卖"])
+        prompt = _build_insight_prompt(ctx, "finance_visible")
+
+        assert "大白话" in prompt, (
+            "_build_insight_prompt() must contain plain-language instruction ('大白话')"
+        )
+
+    def test_build_insight_prompt_claims_contract_intact(self):
+        """Adding plain-language must NOT break the claims-pinning JSON contract."""
+        ctx = _ctx(values=[62.0, 38.0], labels=["堂食", "外卖"])
+        prompt = _build_insight_prompt(ctx, "finance_visible")
+
+        # JSON contract fields must still be present
+        assert "claims" in prompt, (
+            "claims-pinning JSON contract must still contain 'claims' field"
+        )
+        assert "stat_type" in prompt, (
+            "claims-pinning JSON contract must still contain 'stat_type' field"
+        )
+        assert "finding" in prompt, (
+            "claims-pinning JSON contract must still contain 'finding' field"
+        )
+        assert "suggestion" in prompt, (
+            "claims-pinning JSON contract must still contain 'suggestion' field"
+        )
+
+    # ------------------------------------------------------------------
+    # prompt_builder: build_cacheable_system_prompt
+    # ------------------------------------------------------------------
+
+    def test_prompt_builder_contains_plain_language(self):
+        """build_cacheable_system_prompt() must include plain-language block."""
+        from smartbi.services.insights.prompt_builder import build_cacheable_system_prompt
+
+        for scenario in ["restaurant_operations", "financial", "general"]:
+            for tier in ["small", "medium", "large"]:
+                prompt = build_cacheable_system_prompt(tier, scenario)
+                assert "大白话" in prompt, (
+                    f"build_cacheable_system_prompt(tier={tier!r}, scenario={scenario!r}) "
+                    "must contain plain-language instruction ('大白话')"
+                )
+
+    def test_prompt_builder_jargon_prohibition(self):
+        """build_cacheable_system_prompt() must mention key jargon to prohibit."""
+        from smartbi.services.insights.prompt_builder import build_cacheable_system_prompt
+
+        prompt = build_cacheable_system_prompt("large", "restaurant_operations")
+        jargon_terms = ["环比", "同比", "GMV", "客单价", "毛利率"]
+        found = any(term in prompt for term in jargon_terms)
+        assert found, (
+            "build_cacheable_system_prompt must list specific jargon terms to prohibit. "
+            f"Checked: {jargon_terms}"
+        )
+
+    def test_prompt_builder_no_english_rule(self):
+        """build_cacheable_system_prompt() must include no-English rule."""
+        from smartbi.services.insights.prompt_builder import build_cacheable_system_prompt
+
+        prompt = build_cacheable_system_prompt("large", "general")
+        assert "英文" in prompt, (
+            "build_cacheable_system_prompt must forbid English terms"
+        )

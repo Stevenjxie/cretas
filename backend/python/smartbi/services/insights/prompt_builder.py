@@ -252,6 +252,19 @@ _BENCHMARK_ORDERING = (
     "并注明这是外部参考、非本店基线。"
 )
 
+# 白话风格铁律 — 面向文化程度低的店长/仓管 (fool-proof-design.md 核心约束: 仓管年纪大文化低)
+# 改变散文语气，不改 claims/数字契约
+_PLAIN_LANGUAGE_REQUIREMENT = (
+    "**语气风格 — 最重要，违反即不合格**：用大白话，像跟店长或仓管聊天一样说话。\n"
+    "1. 禁止不解释就直接用：环比/同比/GMV/RFM/毛利率/ROI/客单价/坪效/动销率等行话。"
+    "要么换成大白话，要么用了立刻加括号解释。\n"
+    "   例：X '环比下降5.6%，客单价承压' -> O '比上个月少了5.6%，主要是客人花得少了'\n"
+    "   例：X '毛利率' -> O '卖出去的利润占收入的比例' 或 '毛利率（卖出去有多少是赚的）'\n"
+    "2. 不用英文术语或英文缩写。\n"
+    "3. 短句、口语化，直接说该干什么（可落地的建议），不只罗列数字。\n"
+    "4. 数字照样要准确——只是用人话把它包起来，不能因语气降低而省略或改动数字。"
+)
+
 # 推导链 few-shot — 教"推导方法"而非"编一个万元数", 与数字引用铁律一致 (防 few-shot 反诱导编造)。
 _DERIVATION_FEWSHOT = {
     "restaurant_operations": (
@@ -380,7 +393,8 @@ def build_cacheable_system_prompt(tier: str, scenario: str) -> str:
         f"{output_schema}\n\n"
         f"{rules}\n\n"
         f"{_NUMERIC_GROUNDING}\n\n"
-        f"{get_derivation_fewshot(scenario)}"
+        f"{get_derivation_fewshot(scenario)}\n\n"
+        f"{_PLAIN_LANGUAGE_REQUIREMENT}"
     )
 
 
