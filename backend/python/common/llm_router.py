@@ -96,6 +96,27 @@ _ACCOUNT_FREE_ONLY: Dict[str, frozenset] = {
 _ALIYUN_B_EXPIRY = datetime.date(2026, 7, 16)
 _ALIYUN_C_EXPIRY = datetime.date(2026, 8, 13)
 
+# Only the qwen3.7-* SKUs survive past each account's bulk expiry (their free quota
+# runs to 08/20-09/08). After bulk expiry, an account's OTHER models become "- -"
+# (no free quota = PAID) — exactly how A(90bc) got billed. _is_expired_paid date-gates
+# B (after 07/16) and C (after 08/13) to ONLY these survivors (Fable audit 2026-06-11 #4).
+_QWEN37_SURVIVORS = frozenset({
+    "qwen3.7-max-2026-06-08", "qwen3.7-plus", "qwen3.7-plus-2026-05-26",
+    "qwen3.7-max", "qwen3.7-max-2026-05-17", "qwen3.7-max-2026-05-20",
+    "qwen3.7-max-preview",
+})
+
+
+def _is_expired_paid(account: str, model: str) -> bool:
+    """True if a model's free quota has expired on its account (→ would bill).
+    After B's 07/16 / C's 08/13 bulk expiry, only qwen3.7-* SKUs still have free quota."""
+    today = datetime.date.today()
+    if account == "aliyun_b" and today >= _ALIYUN_B_EXPIRY:
+        return model not in _QWEN37_SURVIVORS
+    if account == "aliyun_c" and today >= _ALIYUN_C_EXPIRY:
+        return model not in _QWEN37_SURVIVORS
+    return False
+
 
 def _account_rank(account: str) -> int:
     """Lower = tried first. Expiry-aware so perishable free quota is spent first
@@ -607,6 +628,15 @@ async def call_chain(
                 f"(no free quota on this account) — skipping to protect billing"
             )
             errors.append(f"{account}/{model}: account_free_only")
+            continue
+        # Expiry date-gate (Fable #4): after B's 07/16 / C's 08/13 bulk expiry, all but
+        # the qwen3.7-* survivors become "- -" (paid). Refuse them (would bill).
+        if _is_expired_paid(account, model):
+            logger.error(
+                f"[llm_router] slot={slot.value} refusing {model} on {account} "
+                f"(free quota expired for this SKU) — skipping to protect billing"
+            )
+            errors.append(f"{account}/{model}: expired_paid")
             continue
         cb_key = f"{account}/{model}"  # circuit-breaker per (account,model): one
         # model's free-quota 403 must NOT skip other free models on same account
