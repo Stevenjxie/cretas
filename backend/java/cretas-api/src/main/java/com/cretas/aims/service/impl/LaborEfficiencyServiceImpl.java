@@ -1,13 +1,18 @@
 package com.cretas.aims.service.impl;
 
 import com.cretas.aims.dto.laborefficiency.LaborEfficiencyCompareDTO;
+import com.cretas.aims.dto.laborefficiency.LaborEfficiencyOrderAggregateDTO;
 import com.cretas.aims.dto.laborefficiency.LaborVarianceItemDTO;
 import com.cretas.aims.dto.yield.BatchYieldDTO;
 import com.cretas.aims.dto.yield.StepYieldDTO;
 import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.ProductionBatch;
+import com.cretas.aims.entity.ProductionPlan;
+import com.cretas.aims.entity.inventory.SalesOrder;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.ProductionBatchRepository;
+import com.cretas.aims.repository.ProductionPlanRepository;
+import com.cretas.aims.repository.inventory.SalesOrderRepository;
 import com.cretas.aims.service.LaborEfficiencyService;
 import com.cretas.aims.service.yield.YieldReportService;
 import lombok.RequiredArgsConstructor;
@@ -22,8 +27,12 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
+import java.util.Optional;
 import java.util.stream.Collectors;
 
 /**
@@ -50,6 +59,8 @@ public class LaborEfficiencyServiceImpl implements LaborEfficiencyService {
 
     private final ProductionBatchRepository batchRepo;
     private final ProductTypeRepository productTypeRepo;
+    private final ProductionPlanRepository productionPlanRepo;
+    private final SalesOrderRepository salesOrderRepo;
     private final YieldReportService yieldReportService;
 
     @Override
@@ -255,5 +266,210 @@ public class LaborEfficiencyServiceImpl implements LaborEfficiencyService {
             return "BELOW_ALERT";
         }
         return "OK";
+    }
+
+    // ─────────────────────────── SP3 P1: M3b 订单级聚合 ────────────────────────────
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<LaborEfficiencyOrderAggregateDTO> getLaborCostOrderAggregate(
+            String factoryId,
+            LocalDate startDate,
+            LocalDate endDate,
+            String productTypeId) {
+
+        LocalDateTime startDt = startDate.atStartOfDay();
+        LocalDateTime endDt = endDate.atTime(LocalTime.MAX);
+
+        List<ProductionBatch> batches = batchRepo.findCompletedBatchesForLaborComparison(
+                factoryId, startDt, endDt, productTypeId);
+        if (batches.isEmpty()) {
+            return new ArrayList<>();
+        }
+
+        // Batch-load ProductType map to avoid N+1
+        List<String> ptIds = batches.stream()
+                .map(ProductionBatch::getProductTypeId)
+                .filter(Objects::nonNull)
+                .distinct()
+                .collect(Collectors.toList());
+        Map<String, ProductType> productTypeMap = productTypeRepo.findByIdIn(ptIds)
+                .stream()
+                .collect(Collectors.toMap(ProductType::getId, pt -> pt));
+
+        // Batch-load ProductionPlan map (non-null planIds)
+        List<String> planIds = batches.stream()
+                .map(ProductionBatch::getProductionPlanId)
+                .filter(Objects::nonNull)
+                .distinct()
+                .collect(Collectors.toList());
+        Map<String, ProductionPlan> planMap = productionPlanRepo.findAllById(planIds)
+                .stream()
+                .collect(Collectors.toMap(ProductionPlan::getId, p -> p));
+
+        // Resolve salesOrderId per batch: plan.sourceOrderId → first element of sourceOrderIds → null
+        // Group by (salesOrderId or UNLINKED)
+        // LinkedHashMap preserves insertion order (stable output)
+        Map<String, List<ProductionBatch>> groupedBySo = new LinkedHashMap<>();
+        for (ProductionBatch batch : batches) {
+            String soId = resolveSalesOrderId(batch, planMap);
+            // Null/unlinked batches keyed by plan ID or batch ID so they still appear
+            String key = soId != null ? soId : "__UNLINKED__" + batch.getId();
+            groupedBySo.computeIfAbsent(key, k -> new ArrayList<>()).add(batch);
+        }
+
+        // Batch-load SalesOrder map for all real SO IDs
+        List<String> soIds = groupedBySo.keySet().stream()
+                .filter(k -> !k.startsWith("__UNLINKED__"))
+                .collect(Collectors.toList());
+        Map<String, SalesOrder> salesOrderMap = salesOrderRepo.findAllById(soIds)
+                .stream()
+                .collect(Collectors.toMap(so -> so.getId(), so -> so));
+
+        // Build batch-level compare DTOs (reusing existing logic) in a map for lookup
+        Map<Long, LaborEfficiencyCompareDTO> batchCompareDtoMap = batches.stream()
+                .collect(Collectors.toMap(
+                        ProductionBatch::getId,
+                        b -> {
+                            try {
+                                return buildCompareDTO(factoryId, b, productTypeMap);
+                            } catch (Exception e) {
+                                log.warn("SP3/M3b skip batch {} compare: {}", b.getBatchNumber(), e.getMessage());
+                                return null;
+                            }
+                        }
+                ));
+
+        // Aggregate per SO group
+        List<LaborEfficiencyOrderAggregateDTO> result = new ArrayList<>();
+        for (Map.Entry<String, List<ProductionBatch>> entry : groupedBySo.entrySet()) {
+            String key = entry.getKey();
+            List<ProductionBatch> groupBatches = entry.getValue();
+            boolean isUnlinked = key.startsWith("__UNLINKED__");
+            String soId = isUnlinked ? null : key;
+            SalesOrder salesOrder = soId != null ? salesOrderMap.get(soId) : null;
+
+            LaborEfficiencyOrderAggregateDTO agg = aggregateBatchGroup(
+                    soId, salesOrder, groupBatches, productTypeMap, batchCompareDtoMap);
+            result.add(agg);
+        }
+        return result;
+    }
+
+    /**
+     * Resolve the primary salesOrderId for a batch: plan.sourceOrderId > plan.sourceOrderIds[0] > null.
+     */
+    private String resolveSalesOrderId(ProductionBatch batch, Map<String, ProductionPlan> planMap) {
+        if (batch.getProductionPlanId() == null) return null;
+        ProductionPlan plan = planMap.get(batch.getProductionPlanId());
+        if (plan == null) return null;
+        if (plan.getSourceOrderId() != null && !plan.getSourceOrderId().isBlank()) {
+            return plan.getSourceOrderId();
+        }
+        if (plan.getSourceOrderIds() != null && !plan.getSourceOrderIds().isEmpty()) {
+            return plan.getSourceOrderIds().get(0);
+        }
+        return null;
+    }
+
+    /**
+     * Aggregate a group of batches belonging to the same sales order (or null).
+     */
+    private LaborEfficiencyOrderAggregateDTO aggregateBatchGroup(
+            String soId,
+            SalesOrder salesOrder,
+            List<ProductionBatch> groupBatches,
+            Map<String, ProductType> productTypeMap,
+            Map<Long, LaborEfficiencyCompareDTO> batchCompareDtoMap) {
+
+        // Product info — use single productTypeId if all batches share one
+        String singleProductTypeId = null;
+        String singleProductName = null;
+        BigDecimal singleGramsPerUnit = null;
+        boolean multiProduct = false;
+        for (ProductionBatch b : groupBatches) {
+            if (singleProductTypeId == null) {
+                singleProductTypeId = b.getProductTypeId();
+                singleProductName = b.getProductName();
+                ProductType pt = productTypeMap.get(b.getProductTypeId());
+                singleGramsPerUnit = pt != null ? pt.getGramsPerUnit() : null;
+            } else if (!Objects.equals(singleProductTypeId, b.getProductTypeId())) {
+                multiProduct = true;
+                singleProductTypeId = null; // mixed, set null
+                singleProductName = "混合产品";
+                singleGramsPerUnit = null;
+                break;
+            }
+        }
+
+        // Aggregate quantities and costs; honest null: all-null labor = null total
+        BigDecimal totalGoodQty = BigDecimal.ZERO;
+        boolean anyGoodQty = false;
+        BigDecimal totalActualLabor = BigDecimal.ZERO;
+        boolean anyActualLabor = false;
+        BigDecimal totalQuotedLabor = BigDecimal.ZERO;
+        boolean anyQuoted = false;
+
+        for (ProductionBatch b : groupBatches) {
+            BigDecimal goodQty = b.getGoodQuantity() != null ? b.getGoodQuantity() : b.getActualQuantity();
+            if (goodQty != null) {
+                totalGoodQty = totalGoodQty.add(goodQty);
+                anyGoodQty = true;
+            }
+            if (b.getLaborCost() != null) {
+                totalActualLabor = totalActualLabor.add(b.getLaborCost());
+                anyActualLabor = true;
+            }
+            // Quoted labor for this batch = quotedLaborCostPerKg × goodQuantityKg
+            ProductType pt = productTypeMap.get(b.getProductTypeId());
+            if (pt != null && pt.getQuotedLaborCostPerKg() != null && goodQty != null) {
+                totalQuotedLabor = totalQuotedLabor.add(
+                        pt.getQuotedLaborCostPerKg().multiply(goodQty).setScale(4, RoundingMode.HALF_UP));
+                anyQuoted = true;
+            }
+        }
+
+        BigDecimal finalGoodQty = anyGoodQty ? totalGoodQty : null;
+        BigDecimal finalActualLabor = anyActualLabor ? totalActualLabor : null;
+        BigDecimal finalQuotedLabor = anyQuoted ? totalQuotedLabor : null;
+        BigDecimal variance = (finalActualLabor != null && finalQuotedLabor != null)
+                ? finalActualLabor.subtract(finalQuotedLabor) : null;
+        BigDecimal varianceRate = calcVarianceRate(finalQuotedLabor, finalActualLabor);
+        String varianceStatus = calcVarianceStatus(varianceRate);
+
+        // Boxes = goodQty(kg) * 1000 / gramsPerUnit; only for single-product group
+        BigDecimal totalBoxes = null;
+        if (finalGoodQty != null && singleGramsPerUnit != null
+                && singleGramsPerUnit.compareTo(BigDecimal.ZERO) > 0) {
+            totalBoxes = finalGoodQty
+                    .multiply(new BigDecimal("1000"))
+                    .divide(singleGramsPerUnit, 2, RoundingMode.HALF_UP);
+        }
+
+        // Collect batch DTOs
+        String resolvedProductionPlanId = groupBatches.isEmpty() ? null
+                : groupBatches.get(0).getProductionPlanId();
+        List<LaborEfficiencyCompareDTO> batchDtos = groupBatches.stream()
+                .map(b -> batchCompareDtoMap.get(b.getId()))
+                .filter(Objects::nonNull)
+                .collect(Collectors.toList());
+
+        return LaborEfficiencyOrderAggregateDTO.builder()
+                .salesOrderId(soId)
+                .salesOrderNumber(salesOrder != null ? salesOrder.getOrderNumber() : null)
+                .productName(singleProductName)
+                .productTypeId(multiProduct ? null : singleProductTypeId)
+                .productionPlanId(resolvedProductionPlanId)
+                .batchCount(groupBatches.size())
+                .totalGoodQuantityKg(finalGoodQty)
+                .gramsPerUnit(singleGramsPerUnit)
+                .totalGoodQuantityBoxes(totalBoxes)
+                .totalQuotedLaborCost(finalQuotedLabor)
+                .totalActualLaborCost(finalActualLabor)
+                .laborCostVarianceAbsolute(variance)
+                .varianceRate(varianceRate)
+                .varianceStatus(varianceStatus)
+                .batches(batchDtos)
+                .build();
     }
 }
