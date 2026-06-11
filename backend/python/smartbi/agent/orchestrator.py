@@ -231,7 +231,7 @@ class AgentOrchestrator:
         try:
             with redaction_scope():
                 register_values_for_egress(_collect_sensitive_names(data))
-                answer, tokens = await self._call_llm(user_prompt, factory_id)
+                answer, tokens, resolved_model = await self._call_llm(user_prompt, factory_id)
                 answer = restore_in_scope(answer)
         except Exception as e:
             logger.exception("LLM call failed: %s", e)
@@ -257,7 +257,7 @@ class AgentOrchestrator:
         # 6. Distillation capture (training corpus). Fire-and-forget; only the
         # freshly-generated LLM answer (cache-hit returns above never reach here).
         await _capture_insight_distillation(
-            user_prompt, answer, factory_id, tokens,
+            user_prompt, answer, factory_id, tokens, teacher_model=resolved_model,
         )
 
         return InsightResponse(
@@ -361,8 +361,15 @@ class AgentOrchestrator:
 
     # ---------- LLM ----------
 
-    async def _call_llm(self, user_prompt: str, factory_id: Optional[str] = None) -> Tuple[str, int]:
-        """Call LLM via multi-provider router (INSIGHTS slot). Returns (text, total_tokens).
+    async def _call_llm(
+        self, user_prompt: str, factory_id: Optional[str] = None
+    ) -> Tuple[str, int, str]:
+        """Call LLM via multi-provider router (INSIGHTS slot).
+
+        Returns (text, total_tokens, resolved_model_name).
+        ``resolved_model_name`` is the model field from the API response (the
+        actual model the router resolved to — rotates by quota/date), falling
+        back to "router:INSIGHTS" if the response does not carry a model field.
 
         Chain: aliyun_b → aliyun_a → zhipu → deepseek with 403/429 fallback.
         Raises on upstream error (including all-providers exhausted).
@@ -390,9 +397,11 @@ class AgentOrchestrator:
         ).strip()
         usage = body.get("usage") or {}
         tokens = int(usage.get("total_tokens") or 0)
+        # Capture the actual model the router resolved to for distillation provenance.
+        resolved_model: str = body.get("model") or "router:INSIGHTS"
         if not text:
             raise ValueError("LLM returned empty content")
-        return text, tokens
+        return text, tokens, resolved_model
 
     # ---------- Streaming variant (SSE, Phase 9 Apr 24) ----------
 
@@ -496,8 +505,12 @@ class AgentOrchestrator:
             # Distillation capture (training corpus). Fire-and-forget; only a
             # freshly-streamed LLM answer (cache-hit / degraded paths return
             # above and never reach here).
+            # Streaming responses do not carry a top-level model field; record
+            # slot provenance so training data is not attributed to a hardcoded
+            # model name.
             await _capture_insight_distillation(
                 user_prompt, answer, factory_id, total_tokens,
+                teacher_model="router:INSIGHTS",
             )
         yield {"type": "done", "tokens": total_tokens,
                "elapsed_ms": int((time.monotonic() - t0) * 1000)}
@@ -590,15 +603,22 @@ async def _capture_insight_distillation(
     answer: str,
     factory_id: Optional[str],
     tokens: int,
+    teacher_model: str = "router:INSIGHTS",
 ) -> None:
     """Capture a 经营驾驶舱 report-insight teacher pair into the distillation
     corpus. Fire-and-forget — wrapped so it NEVER raises and never affects the
     insight response / streaming. Only called on freshly-generated LLM answers
     (cache-hit / degraded early-returns never reach the call sites).
 
-    The INSIGHTS slot's primary model is qwen3-max (aliyun chain), with rare
-    zhipu fallback — recorded in metadata, matching the materializer's
-    teacher_model convention.
+    Args:
+        user_prompt: The user-facing prompt sent to the LLM.
+        answer: The LLM-generated answer (restored to real entity names).
+        factory_id: Tenant factory ID for corpus attribution.
+        tokens: Total token count from the response's usage field.
+        teacher_model: The actual model name resolved by the router (from the
+            response's ``model`` field), or "router:INSIGHTS" when the response
+            does not carry a model field (e.g. streaming path).  This replaces
+            the former hardcoded "qwen3-max" to ensure correct provenance.
     """
     try:
         from smartbi.config import get_pg_pool
@@ -613,12 +633,11 @@ async def _capture_insight_distillation(
             business_type="restaurant",
             factory_id=factory_id,
             system_prompt=SYSTEM_PROMPT,
-            teacher_model="qwen3-max",
+            teacher_model=teacher_model,
             quality=4,  # structural-verified + served to user: high quality
             metadata={
                 "slot": "insights",
                 "tokens": tokens,
-                "teacher_model_note": "INSIGHTS-slot primary qwen3-max; rare zhipu fallback possible",
             },
         )
     except Exception as e:  # belt-and-suspenders; helper already swallows

@@ -5,8 +5,14 @@ Scores quality=3 rows in smart_bi_distillation_samples on three axes:
   - 可操作性 (actionability): is the answer actionable for a business user
   - 流畅 (fluency): is the answer clear and fluent Chinese
 
-Promotion rule: overall >= 4 AND factuality >= 4 → quality=4 (training-ready).
-            Otherwise stay at quality=3 (or demote to quality=2 if factuality<3).
+Per-task-type promotion rules:
+  Factual Q&A sources (chat_qa, intent_llm): actionability does NOT apply —
+    a correct factual answer like "1月客单价¥152.3" has no "action" to give,
+    so scoring it low on actionability would wrongly demote high-quality data.
+    Gate: factuality >= 4 AND fluency >= 4 → quality=4 (training-ready).
+  Analytical sources (chart_insight, agent_insight, materialization, ...):
+    original three-axis rule: overall >= 4 AND factuality >= 4 → quality=4.
+  Demotion (all sources): factuality < 3 → quality=2 (clearly bad).
 
 Idempotency: rows with metadata->'judge' already set are skipped.
 
@@ -78,6 +84,17 @@ for _p in (_PYTHON_ROOT, os.path.join(_PYTHON_ROOT, "smartbi")):
 from common.llm_router import call_chain, SLOT  # noqa: E402
 
 logger = logging.getLogger("corpus_judge")
+
+# ---------------------------------------------------------------------------
+# Per-task-type judge rubric
+# ---------------------------------------------------------------------------
+
+# Sources whose rows are pure factual Q&A — the expected answer is a direct
+# data retrieval (e.g. "1月客单价¥152.3，2月¥143.7"), NOT business advice.
+# For these, actionability is structurally N/A: a correct factual answer
+# should not be penalised for not giving advice.  Gate on factuality+fluency
+# only; ignore actionability for the promote/demote decision.
+_FACTUAL_QA_SOURCES: frozenset = frozenset({"chat_qa", "intent_llm"})
 
 # ---------------------------------------------------------------------------
 # Budget-bypass stub — identical pattern to seed_chart_insight_corpus.py.
@@ -152,8 +169,20 @@ _JUDGE_USER_TEMPLATE = """\
 """
 
 
-def build_judge_prompt(input_text: str, teacher_output: str) -> Tuple[str, str]:
+def build_judge_prompt(
+    input_text: str,
+    teacher_output: str,
+    source: Optional[str] = None,
+) -> Tuple[str, str]:
     """Build system + user messages for the LLM judge.
+
+    Args:
+        input_text: The corpus input context shown to the teacher model.
+        teacher_output: The teacher's answer to score.
+        source: The row's source value (e.g. 'chat_qa', 'chart_insight').
+                When the source is a factual Q&A source (_FACTUAL_QA_SOURCES),
+                the prompt instructs the judge that actionability is N/A and
+                should be scored 5 (so it does not drag down the gated metrics).
 
     Returns:
         (system_prompt, user_prompt) tuple ready to be passed to call_chain.
@@ -162,10 +191,21 @@ def build_judge_prompt(input_text: str, teacher_output: str) -> Tuple[str, str]:
     input_text_trimmed = input_text[:3000] if len(input_text) > 3000 else input_text
     output_trimmed = teacher_output[:2000] if len(teacher_output) > 2000 else teacher_output
 
+    # For factual Q&A rows, insert a note that actionability is N/A so the
+    # judge scores it 5 by convention (it will not be used in the gate anyway,
+    # but keeping it in the JSON output avoids schema changes).
+    factual_qa_note = ""
+    if source in _FACTUAL_QA_SOURCES:
+        factual_qa_note = (
+            "\n\n【特别说明】本题属于事实性问答（数据查询类），AI 回答的职责是"
+            "准确复述数据，而非给出行动建议。因此「可操作性」维度不适用："
+            "请将可操作性固定评为 5 分（N/A），评分决策仅依据事实性和流畅度。"
+        )
+
     user_prompt = _JUDGE_USER_TEMPLATE.format(
         input_text=input_text_trimmed,
         teacher_output=output_trimmed,
-    )
+    ) + factual_qa_note
     return _JUDGE_SYSTEM_PROMPT, user_prompt
 
 
@@ -226,21 +266,43 @@ def parse_judge_scores(raw_text: str) -> Optional[Dict[str, int]]:
     return scores
 
 
-def decide_quality(scores: Dict[str, int]) -> int:
+def decide_quality(scores: Dict[str, int], source: Optional[str] = None) -> int:
     """Determine the new quality value from judge scores.
 
-    Promotion rule:
+    Per-task-type promotion rules:
+
+    Factual Q&A sources (chat_qa, intent_llm):
+      - factuality >= 4 AND fluency >= 4 → quality=4 (training-ready)
+        (actionability is N/A for data-retrieval answers; excluding it prevents
+         correct factual answers from being wrongly demoted.)
+      - factuality < 3                   → quality=2 (clearly bad, demote)
+      - otherwise                        → quality=3 (stay)
+
+    Analytical sources (all other sources):
       - overall >= 4 AND factuality >= 4 → quality=4 (training-ready)
       - factuality < 3                   → quality=2 (clearly bad, demote)
-      - otherwise                        → quality=3 (stay, excluded from export)
+      - otherwise                        → quality=3 (stay)
+
+    Args:
+        scores: Dict with keys factuality, actionability, fluency, overall (int 1-5).
+        source: The row's source value.  Used to select the per-task rubric.
 
     Returns:
         New quality integer (2, 3, or 4).
     """
-    if scores["overall"] >= 4 and scores["factuality"] >= 4:
-        return 4
+    # Demotion is universal: bad factuality means bad data regardless of task type.
     if scores["factuality"] < 3:
         return 2
+
+    if source in _FACTUAL_QA_SOURCES:
+        # Factual Q&A: actionability irrelevant — gate on factuality + fluency only.
+        if scores["factuality"] >= 4 and scores["fluency"] >= 4:
+            return 4
+        return 3
+
+    # Analytical / all other sources: original three-axis gate.
+    if scores["overall"] >= 4 and scores["factuality"] >= 4:
+        return 4
     return 3
 
 
@@ -314,7 +376,7 @@ def resolve_judge_chain(
 # ---------------------------------------------------------------------------
 
 _FETCH_SQL = """
-    SELECT id, input_text, teacher_output, metadata
+    SELECT id, input_text, teacher_output, metadata, source
     FROM smart_bi_distillation_samples
     WHERE quality = 3
       AND (metadata IS NULL OR NOT (metadata ? 'judge'))
@@ -394,6 +456,7 @@ async def fetch_unjudged_rows(
             "input_text": row["input_text"] or "",
             "teacher_output": row["teacher_output"] or "",
             "metadata": row["metadata"],
+            "source": row["source"],
         })
     return result
 
@@ -492,13 +555,21 @@ async def apply_crossfamily_result(
 async def judge_row(
     input_text: str,
     teacher_output: str,
+    source: Optional[str] = None,
     timeout: float = 60.0,
 ) -> Optional[Dict[str, int]]:
     """Call qwen3-max (SLOT.REVIEW) to score one corpus row.
 
+    Args:
+        input_text: The corpus input context.
+        teacher_output: The teacher's answer to score.
+        source: The row's source value — used to select the per-task-type
+                rubric (factual Q&A vs analytical).  See _FACTUAL_QA_SOURCES.
+        timeout: LLM call timeout in seconds.
+
     Returns parsed scores dict, or None if the LLM call or parse fails.
     """
-    system_prompt, user_prompt = build_judge_prompt(input_text, teacher_output)
+    system_prompt, user_prompt = build_judge_prompt(input_text, teacher_output, source=source)
 
     payload = {
         "messages": [
@@ -540,6 +611,7 @@ async def judge_row_with_chain(
     teacher_output: str,
     account_filter: Optional[List[str]] = None,
     model_override: Optional[str] = None,
+    source: Optional[str] = None,
     timeout: float = 60.0,
 ) -> Tuple[Optional[Dict[str, int]], Optional[str]]:
     """Call the SLOT.REVIEW chain filtered to a specific account family.
@@ -554,6 +626,8 @@ async def judge_row_with_chain(
         model_override: If set, force this model name in the payload instead of
                         the slot default.  Useful when calling a specific model
                         directly (e.g. 'glm-4.5-air').
+        source: The row's source value — used to select the per-task-type rubric
+                (factual Q&A vs analytical).  See _FACTUAL_QA_SOURCES.
         timeout: Per-provider timeout in seconds.
 
     Returns:
@@ -561,7 +635,7 @@ async def judge_row_with_chain(
         The actual_model is extracted from the response if available, otherwise
         falls back to model_override or a best-guess from the account_filter.
     """
-    system_prompt, user_prompt = build_judge_prompt(input_text, teacher_output)
+    system_prompt, user_prompt = build_judge_prompt(input_text, teacher_output, source=source)
 
     payload: Dict[str, Any] = {
         "messages": [
@@ -653,14 +727,15 @@ async def run_judge(
         row_id = row["id"]
         logger.debug("[%d/%d] Judging row id=%d", idx + 1, len(rows), row_id)
 
-        scores = await judge_row(row["input_text"], row["teacher_output"])
+        row_source = row.get("source")
+        scores = await judge_row(row["input_text"], row["teacher_output"], source=row_source)
         if scores is None:
             n_failed += 1
             logger.warning("[%d/%d] Judge failed for row id=%d — skipping",
                            idx + 1, len(rows), row_id)
             continue
 
-        new_quality = decide_quality(scores)
+        new_quality = decide_quality(scores, source=row_source)
         await apply_judge_result(pool, row_id, new_quality, scores)
         n_judged += 1
 
@@ -775,11 +850,13 @@ async def run_crossfamily_judge(
             idx + 1, len(rows), row_id, row.get("source"),
         )
 
+        row_source = row.get("source")
         cf_scores, actual_model = await judge_row_with_chain(
             row["input_text"],
             row["teacher_output"],
             account_filter=account_filter,
             model_override=model_override,
+            source=row_source,
         )
 
         if cf_scores is None:
@@ -799,8 +876,9 @@ async def run_crossfamily_judge(
                 n_failed += 1
             continue
 
-        # Determine agreement: both overall and factuality must be ≥4 to agree
-        agreed = cf_scores["overall"] >= 4 and cf_scores["factuality"] >= 4
+        # Determine agreement using per-task rubric (mirrors decide_quality for the
+        # agree/disagree decision so factual Q&A rows aren't demoted on actionability).
+        agreed = (decide_quality(cf_scores, source=row_source) == 4)
         new_quality = 4 if agreed else 3
 
         used_model = actual_model or model_override or family_label

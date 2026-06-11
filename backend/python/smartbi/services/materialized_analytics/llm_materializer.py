@@ -229,6 +229,11 @@ async def generate_llm_insights(
     # pair for future vertical-model distillation. Only when the teacher produced
     # usable output (applied > 0). Fire-and-forget, fully swallowed — NEVER let
     # training-data capture affect insight generation or materialization.
+    #
+    # teacher_model provenance: llm_client.call_llm() returns only text (the
+    # router resolves the actual model internally).  We record "router:INSIGHTS"
+    # as honest provenance — the slot + routing fact — rather than hardcoding a
+    # specific model name that may not match the actual resolved provider.
     if applied > 0 and not from_cache:
         try:
             await _persist_distillation_sample(
@@ -240,6 +245,7 @@ async def generate_llm_insights(
                 template_codes=[r.code for r in applicable],
                 applied=applied,
                 total=len(applicable),
+                teacher_model="router:INSIGHTS",
             )
         except Exception as e:  # belt-and-suspenders; helper already swallows
             logger.debug(f"[llm-mat] distillation capture skipped: {e}")
@@ -258,6 +264,7 @@ async def _persist_distillation_sample(
     template_codes: List[str],
     applied: int,
     total: int,
+    teacher_model: str = "router:INSIGHTS",
 ) -> None:
     """Write one materialization distillation sample. Fire-and-forget.
 
@@ -269,16 +276,18 @@ async def _persist_distillation_sample(
     ``SMARTBI_DISTILL_CAPTURE``. Persists the (structured-input → strong-teacher
     -output) pair into ``smart_bi_distillation_samples`` so it can later be
     exported (bucketed by business_type) for vertical-model distillation.
+
+    Args:
+        teacher_model: The actual model name resolved by the router, passed in
+            by the caller.  Defaults to "router:INSIGHTS" as honest provenance
+            when the exact model cannot be determined (e.g. the llm_client
+            wrapper returns only text).  Do NOT hardcode a specific model name
+            here — the router rotates by quota/date.
     """
-    # INSIGHTS slot primary model is qwen3-max on all 3 aliyun accounts
-    # (post PR #331/#333); a small fraction may fall back to zhipu/glm-4.5-air
-    # — recorded in metadata, verifiable against llm_router logs by timestamp.
-    teacher_model = "qwen3-max"
     metadata = {
         "slot": "insights",
         "applied": applied,
         "total_applicable": total,
-        "teacher_model_note": "INSIGHTS-slot primary qwen3-max; rare zhipu fallback possible",
     }
     try:
         from smartbi.config import get_pg_pool

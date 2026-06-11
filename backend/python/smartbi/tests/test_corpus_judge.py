@@ -74,6 +74,7 @@ from scripts.corpus_judge import (  # noqa: E402
     apply_judge_result,
     judge_row,
     run_judge,
+    _FACTUAL_QA_SOURCES,
 )
 
 
@@ -313,6 +314,104 @@ class TestDecideQuality:
     def test_all_ones_downgrades(self):
         scores = {"factuality": 1, "actionability": 1, "fluency": 1, "overall": 1}
         assert decide_quality(scores) == 2
+
+
+class TestDecideQualityPerTaskRubric:
+    """Per-task-type rubric: factual Q&A sources gate on factuality+fluency only.
+
+    Core regression: a perfect factual answer like "1月客单价¥152.3，2月降至¥143.7，
+    环比下降5.6%" gets factuality=5, fluency=5, but actionability=2 (it's a data
+    retrieval, not advice).  With the old analytical rubric this scored overall≈3
+    and was wrongly demoted.  With the per-task rubric it correctly promotes.
+    """
+
+    # -- factual Q&A sources set --
+
+    def test_factual_qa_sources_contains_chat_qa(self):
+        assert "chat_qa" in _FACTUAL_QA_SOURCES
+
+    def test_factual_qa_sources_contains_intent_llm(self):
+        assert "intent_llm" in _FACTUAL_QA_SOURCES
+
+    # -- THE KEY REGRESSION TEST: correct factual answer not wrongly demoted --
+
+    def test_factual_qa_high_factuality_low_actionability_PROMOTES(self):
+        """chat_qa row: factuality=5, fluency=5, actionability=2, overall=4 → PROMOTED.
+
+        This was the bug: actionability=2 dragged overall to ≤3 causing demotion.
+        Under the per-task rubric, actionability is ignored for factual Q&A.
+        """
+        scores = {"factuality": 5, "actionability": 2, "fluency": 5, "overall": 4}
+        assert decide_quality(scores, source="chat_qa") == 4, (
+            "Factual Q&A with factuality=5+fluency=5 must PROMOTE even if actionability=2"
+        )
+
+    def test_intent_llm_high_factuality_low_actionability_PROMOTES(self):
+        """intent_llm row with same pattern must also promote."""
+        scores = {"factuality": 5, "actionability": 1, "fluency": 4, "overall": 3}
+        assert decide_quality(scores, source="intent_llm") == 4
+
+    def test_factual_qa_borderline_fact4_fluency4_PROMOTES(self):
+        """Exactly fact=4 + fluency=4 → promote (borderline)."""
+        scores = {"factuality": 4, "actionability": 2, "fluency": 4, "overall": 3}
+        assert decide_quality(scores, source="chat_qa") == 4
+
+    def test_factual_qa_fact4_fluency3_STAYS(self):
+        """fact=4 but fluency=3 (below threshold) → stays at quality=3."""
+        scores = {"factuality": 4, "actionability": 5, "fluency": 3, "overall": 4}
+        assert decide_quality(scores, source="chat_qa") == 3
+
+    def test_factual_qa_fact3_fluency5_STAYS(self):
+        """fact=3 (below threshold) → stays at quality=3, not promoted."""
+        scores = {"factuality": 3, "actionability": 5, "fluency": 5, "overall": 4}
+        assert decide_quality(scores, source="chat_qa") == 3
+
+    def test_factual_qa_bad_factuality_DEMOTES(self):
+        """Demotion rule is universal: fact<3 → quality=2 even for chat_qa."""
+        scores = {"factuality": 2, "actionability": 5, "fluency": 5, "overall": 4}
+        assert decide_quality(scores, source="chat_qa") == 2
+
+    # -- analytical sources still use old three-axis gate --
+
+    def test_analytical_high_overall_and_fact_PROMOTES(self):
+        """Non-factual-QA source keeps overall+factuality gate."""
+        scores = {"factuality": 4, "actionability": 4, "fluency": 4, "overall": 4}
+        assert decide_quality(scores, source="chart_insight") == 4
+
+    def test_analytical_low_actionability_low_overall_STAYS(self):
+        """Non-factual-QA source: low actionability dragging overall → stays at 3."""
+        scores = {"factuality": 5, "actionability": 2, "fluency": 5, "overall": 3}
+        assert decide_quality(scores, source="agent_insight") == 3
+
+    def test_analytical_no_source_uses_three_axis_gate(self):
+        """No source (None) falls through to analytical rubric."""
+        scores = {"factuality": 4, "actionability": 4, "fluency": 4, "overall": 4}
+        assert decide_quality(scores, source=None) == 4
+
+    def test_analytical_unknown_source_uses_three_axis_gate(self):
+        """Unknown source falls through to analytical rubric."""
+        scores = {"factuality": 4, "actionability": 4, "fluency": 4, "overall": 4}
+        assert decide_quality(scores, source="materialization") == 4
+
+    # -- build_judge_prompt carries per-task note for factual sources --
+
+    def test_build_judge_prompt_factual_qa_contains_na_note(self):
+        """For chat_qa source, prompt must contain the actionability N/A note."""
+        _, user_prompt = build_judge_prompt("Q: 客单价?", "¥152.3", source="chat_qa")
+        assert "事实性问答" in user_prompt or "N/A" in user_prompt or "不适用" in user_prompt, (
+            "Prompt for factual Q&A sources must include a note that actionability is N/A"
+        )
+
+    def test_build_judge_prompt_analytical_no_na_note(self):
+        """For analytical sources, the N/A note must not appear."""
+        _, user_prompt = build_judge_prompt("context", "answer", source="chart_insight")
+        # Should not have the special factual Q&A override note
+        assert "事实性问答" not in user_prompt
+
+    def test_build_judge_prompt_no_source_no_na_note(self):
+        """Without a source, no N/A note is added."""
+        _, user_prompt = build_judge_prompt("context", "answer")
+        assert "事实性问答" not in user_prompt
 
 
 # ---------------------------------------------------------------------------
@@ -687,3 +786,92 @@ class TestFullRunFlow:
                 await run_judge(limit=10, dry_run=False)
 
         mock_pool.close.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# TestRunJudgePassesSourceToDecideQuality (per-task rubric integration)
+# ---------------------------------------------------------------------------
+
+class TestRunJudgePerTaskRubricIntegration:
+    """Verify run_judge threads source from the DB row into decide_quality.
+
+    The key case: a chat_qa row with factuality=5/fluency=5/actionability=2
+    must be PROMOTED (quality=4), not wrongly demoted to quality=3.
+    """
+
+    @pytest.mark.asyncio
+    async def test_chat_qa_row_with_low_actionability_is_promoted(self):
+        """chat_qa: fact=5, action=2, fluency=5 → quality=4 (actionability ignored)."""
+        factual_qa_scores = {
+            "factuality": 5,
+            "actionability": 2,
+            "fluency": 5,
+            "overall": 4,
+        }
+        fake_rows = [
+            {
+                "id": 601,
+                "input_text": "1月客单价是多少?",
+                "teacher_output": "1月客单价¥152.3，2月降至¥143.7，环比下降5.6%",
+                "metadata": None,
+                "source": "chat_qa",  # ← factual Q&A source
+            }
+        ]
+        llm_response = {
+            "choices": [{"message": {"content": json.dumps(factual_qa_scores)}}]
+        }
+
+        mock_pool = MagicMock()
+        with patch("scripts.corpus_judge._make_pool", new=AsyncMock(return_value=mock_pool)):
+            with patch("scripts.corpus_judge.fetch_unjudged_rows",
+                       new=AsyncMock(return_value=fake_rows)):
+                with patch("scripts.corpus_judge.call_chain",
+                           new=AsyncMock(return_value=llm_response)):
+                    with patch("scripts.corpus_judge.apply_judge_result",
+                               new=AsyncMock()) as mock_apply:
+                        await run_judge(limit=10, dry_run=False)
+
+        mock_apply.assert_called_once()
+        new_quality = mock_apply.call_args.args[2]
+        assert new_quality == 4, (
+            f"chat_qa with factuality=5/fluency=5 must promote to quality=4, got {new_quality}. "
+            "This is the key regression test for the per-task rubric fix."
+        )
+
+    @pytest.mark.asyncio
+    async def test_analytical_row_with_low_actionability_stays_at_3(self):
+        """Non-factual-QA: fact=5, action=2, fluency=5, overall=3 → quality=3."""
+        analytical_scores = {
+            "factuality": 5,
+            "actionability": 2,
+            "fluency": 5,
+            "overall": 3,  # overall dragged down by actionability
+        }
+        fake_rows = [
+            {
+                "id": 602,
+                "input_text": "分析生产损耗原因",
+                "teacher_output": "损耗率25%",
+                "metadata": None,
+                "source": "agent_insight",  # ← analytical source
+            }
+        ]
+        llm_response = {
+            "choices": [{"message": {"content": json.dumps(analytical_scores)}}]
+        }
+
+        mock_pool = MagicMock()
+        with patch("scripts.corpus_judge._make_pool", new=AsyncMock(return_value=mock_pool)):
+            with patch("scripts.corpus_judge.fetch_unjudged_rows",
+                       new=AsyncMock(return_value=fake_rows)):
+                with patch("scripts.corpus_judge.call_chain",
+                           new=AsyncMock(return_value=llm_response)):
+                    with patch("scripts.corpus_judge.apply_judge_result",
+                               new=AsyncMock()) as mock_apply:
+                        await run_judge(limit=10, dry_run=False)
+
+        mock_apply.assert_called_once()
+        new_quality = mock_apply.call_args.args[2]
+        assert new_quality == 3, (
+            f"Analytical row with overall=3 must stay at quality=3, got {new_quality}"
+        )
