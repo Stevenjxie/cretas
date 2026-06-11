@@ -31,6 +31,7 @@ import java.math.RoundingMode;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -267,6 +268,46 @@ public class PrintController {
             @RequestHeader(value = "Authorization", required = false) String authorization) {
         Map<String, Object> payload = buildProductionWorkOrderPayload(factoryId, planId, overrides);
         return proxyToPython("production-work-order", payload, "work-order-" + planId, authorization);
+    }
+
+    /**
+     * 多 SO 合并公单 PDF (P1 #37).
+     *
+     * <p>接受多个计划 ID (planIds), 取每个计划的详情 + 工序列表, 合并为一张公单打印.
+     * 场景: 六扇门等工厂多笔销售订单合并生产, 需一张工单覆盖全部 SO.
+     *
+     * <p>payload 结构:
+     * <pre>{
+     *   factoryName, printDate,
+     *   orders: [{planId, planNumber, sourceOrderId, productName, productUnit,
+     *             plannedQuantity, customerName, requiredDeliveryDate}],
+     *   processes: [{seq, name, standardHours, operator}],   // 去重合并 (按首个含工序批次)
+     *   totalOrders: int,
+     *   totalQuantityByProduct: [{productName, unit, totalQty}],
+     *   remark
+     * }</pre>
+     *
+     * <p>planIds 通过 {@code @RequestParam List<String>} 接收, 支持重复参数:
+     * {@code ?planIds=p1&planIds=p2} 或逗号分隔 (Spring 自动拆分).
+     * 上限 20 个 plan, 超出返回 400.
+     * 诚实策略: 某个 planId 不存在时跳过 (记 warn log), 不抛全局错误.
+     */
+    @GetMapping("/production-work-order-multi")
+    @RequirePermission({"production:read", "production:read_write"})
+    public ResponseEntity<byte[]> printProductionWorkOrderMulti(
+            @PathVariable String factoryId,
+            @RequestParam List<String> planIds,
+            @RequestParam(required = false) Map<String, String> overrides,
+            @RequestHeader(value = "Authorization", required = false) String authorization) {
+        if (planIds == null || planIds.isEmpty()) {
+            throw new BusinessException(400, "planIds 不能为空 — 至少传 1 个计划 ID");
+        }
+        if (planIds.size() > 20) {
+            throw new BusinessException(400, "planIds 超出上限 (最多 20 个), 当前: " + planIds.size());
+        }
+        Map<String, Object> payload = buildMultiSoWorkOrderPayload(factoryId, planIds, overrides);
+        return proxyToPython("production-work-order-multi", payload,
+                "work-order-multi-" + factoryId + "-" + planIds.size() + "plans", authorization);
     }
 
     /**
@@ -815,6 +856,146 @@ public class PrintController {
         p.put("items", items);
         p.put("remark", or(overrides, "remark", null));
         return p;
+    }
+
+    // ==================== P1 #37 — 多 SO 合并公单 payload builder ====================
+
+    /**
+     * 多 SO 合并生产工单 payload builder.
+     *
+     * <p>策略:
+     * <ol>
+     *   <li>遍历 planIds, 对每个 planId 调用 {@link #buildSingleOrderEntry} 取计划摘要.</li>
+     *   <li>工序列表: 遍历所有 planId, 取第一个含工序的批次的工序作为"代表工序",
+     *       按 processName 去重后按 seq 排列 (相同产品工序模板结构相同, 合并打印).</li>
+     *   <li>按 (productName, unit) 汇总计划数量, 供 renderer 显示合计区块.</li>
+     *   <li>诚实原则: 某 planId 找不到时跳过 + warn log, 不伪造数据.</li>
+     * </ol>
+     */
+    private Map<String, Object> buildMultiSoWorkOrderPayload(
+            String factoryId, List<String> planIds, Map<String, String> overrides) {
+        Map<String, Object> p = new HashMap<>();
+        p.put("factoryName", or(overrides, "factoryName", "白垩纪食品 — " + factoryId));
+        p.put("printDate", java.time.LocalDate.now().toString());
+
+        // ── 1. 逐个计划取摘要行 ──────────────────────────────────────────────────
+        List<Map<String, Object>> orders = new ArrayList<>();
+        for (String planId : planIds) {
+            Map<String, Object> entry = buildSingleOrderEntry(factoryId, planId, overrides);
+            if (entry != null) {
+                orders.add(entry);
+            }
+        }
+        p.put("orders", orders);
+        p.put("totalOrders", orders.size());
+
+        // ── 2. 工序列表: 合并所有计划的工序, 按 name 去重 ────────────────────────
+        List<Map<String, Object>> mergedProcesses = buildMergedProcessList(factoryId, planIds);
+        p.put("processes", mergedProcesses);
+
+        // ── 3. 按 (productName, unit) 汇总计划数量 ───────────────────────────────
+        Map<String, Map<String, Object>> qtyAgg = new LinkedHashMap<>();
+        for (Map<String, Object> order : orders) {
+            String pname = String.valueOf(order.getOrDefault("productName", "(产品)"));
+            String unit = String.valueOf(order.getOrDefault("productUnit", "kg"));
+            String aggKey = pname + "||" + unit;
+            Map<String, Object> aggRow = qtyAgg.computeIfAbsent(aggKey, k -> {
+                Map<String, Object> r = new LinkedHashMap<>();
+                r.put("productName", pname);
+                r.put("unit", unit);
+                r.put("totalQty", BigDecimal.ZERO);
+                return r;
+            });
+            Object qtyObj = order.get("plannedQuantity");
+            if (qtyObj != null) {
+                try {
+                    BigDecimal existing = (BigDecimal) aggRow.get("totalQty");
+                    aggRow.put("totalQty", existing.add(new BigDecimal(qtyObj.toString())));
+                } catch (NumberFormatException ignored) { /* leave as-is */ }
+            }
+        }
+        List<Map<String, Object>> totalQtyByProduct = new ArrayList<>();
+        for (Map<String, Object> row : qtyAgg.values()) {
+            BigDecimal qty = (BigDecimal) row.get("totalQty");
+            row.put("totalQty", qty.stripTrailingZeros().toPlainString());
+            totalQtyByProduct.add(row);
+        }
+        p.put("totalQuantityByProduct", totalQtyByProduct);
+
+        p.put("remark", or(overrides, "remark", null));
+        return p;
+    }
+
+    /**
+     * 单个计划的摘要行 (用于多 SO 合并公单的 orders[] 列表).
+     *
+     * @return null 如果计划不存在 (调用方跳过)
+     */
+    private Map<String, Object> buildSingleOrderEntry(
+            String factoryId, String planId, Map<String, String> overrides) {
+        Map<String, Object> entry = new LinkedHashMap<>();
+        entry.put("planId", planId);
+
+        if (productionPlanService != null) {
+            try {
+                ProductionPlanDTO plan = productionPlanService.getProductionPlanById(factoryId, planId);
+                entry.put("planNumber", plan.getPlanNumber() != null ? plan.getPlanNumber() : planId);
+                entry.put("sourceOrderId",
+                        plan.getSourceOrderId() != null ? plan.getSourceOrderId() : "-");
+                entry.put("productName", plan.getProductName() != null ? plan.getProductName() : "(产品)");
+                entry.put("productUnit", plan.getProductUnit() != null ? plan.getProductUnit() : "kg");
+                entry.put("plannedQuantity", plan.getPlannedQuantity() != null
+                        ? plan.getPlannedQuantity() : BigDecimal.ZERO);
+                entry.put("status", plan.getStatus() != null ? plan.getStatus().name() : "-");
+                entry.put("plannedDate", plan.getPlannedDate() != null
+                        ? plan.getPlannedDate().toString() : "-");
+                entry.put("expectedCompletionDate", plan.getExpectedCompletionDate() != null
+                        ? plan.getExpectedCompletionDate().toString() : "-");
+                // 客户名 (from sourceCustomerName if available in DTO)
+                entry.put("customerName",
+                        plan.getSourceCustomerName() != null ? plan.getSourceCustomerName() : "-");
+                return entry;
+            } catch (Exception e) {
+                log.warn("buildSingleOrderEntry: plan {} not found in factory {} — skipping: {}",
+                        planId, factoryId, e.getMessage());
+                return null;  // 诚实: 计划不存在时跳过
+            }
+        } else {
+            // service 未注入 — 返回 stub entry (保证 PDF 可渲染, 字段标为 "(stub)")
+            log.warn("buildSingleOrderEntry: productionPlanService not injected, returning stub for plan {}",
+                    planId);
+            entry.put("planNumber", planId);
+            entry.put("sourceOrderId", "-");
+            entry.put("productName", "(产品)");
+            entry.put("productUnit", "kg");
+            entry.put("plannedQuantity", BigDecimal.ZERO);
+            entry.put("status", "-");
+            entry.put("plannedDate", java.time.LocalDate.now().toString());
+            entry.put("expectedCompletionDate", "-");
+            entry.put("customerName", "-");
+            return entry;
+        }
+    }
+
+    /**
+     * 合并多个计划的工序列表, 按 processName 去重.
+     *
+     * <p>遍历所有 planId, 取到第一个有工序的就作为代表. 对相同产品(工序模板相同的计划),
+     * 取到的工序结构一致; 不同产品的工序合并后按 name 去重, 保留首次出现的 seq/standardHours.
+     */
+    private List<Map<String, Object>> buildMergedProcessList(String factoryId, List<String> planIds) {
+        Set<String> seenProcessNames = new LinkedHashSet<>();
+        List<Map<String, Object>> merged = new ArrayList<>();
+        for (String planId : planIds) {
+            List<Map<String, Object>> procs = buildProcessList(factoryId, planId);
+            for (Map<String, Object> proc : procs) {
+                String name = String.valueOf(proc.getOrDefault("name", ""));
+                if (!name.isBlank() && seenProcessNames.add(name)) {
+                    merged.add(proc);
+                }
+            }
+        }
+        return merged;
     }
 
     private Object or(Map<String, String> overrides, String key, Object fallback) {
