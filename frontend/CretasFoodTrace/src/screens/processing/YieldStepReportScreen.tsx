@@ -1744,6 +1744,15 @@ const YieldStepReportScreen: React.FC = () => {
     );
   }
 
+  // ========================= 两点报工: 哨兵屏分支 (必须在 totalSteps===0 之前) =========================
+  // 检测到哨兵 task 时走简化屏 (无时段/工时, 仅领料 or 产出)。
+  // ⚠️ 哨兵批次无真实工序 step → totalSteps 可能为 0; 若放在 totalSteps===0 之后会被"未生成工序任务"
+  //    空状态截断 → 操作员到不了简化报工屏 (空白). 故必须在 totalSteps===0 检查之前.
+  if (isSentinelBatch) {
+    if (isSentinelMaterial) return renderSentinelMaterialInputScreen();
+    if (isSentinelOutput) return renderSentinelFinalOutputScreen();
+  }
+
   if (totalSteps === 0) {
     return (
       <ScreenWrapper>
@@ -1756,13 +1765,6 @@ const YieldStepReportScreen: React.FC = () => {
         </View>
       </ScreenWrapper>
     );
-  }
-
-  // ========================= 两点报工: 哨兵屏分支 =========================
-  // 检测到哨兵 task 时走简化屏 (无时段/工时, 仅领料 or 产出)
-  if (isSentinelBatch) {
-    if (isSentinelMaterial) return renderSentinelMaterialInputScreen();
-    if (isSentinelOutput) return renderSentinelFinalOutputScreen();
   }
 
   // ========================= done 卡: 整批汇总 + 完工入库 =========================
