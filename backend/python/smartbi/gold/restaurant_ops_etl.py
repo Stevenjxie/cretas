@@ -32,7 +32,7 @@ import logging
 import time
 import traceback
 from dataclasses import dataclass
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 import asyncpg
 
@@ -95,6 +95,13 @@ async def sync_dim_ingredient(
     if not rows:
         return 0
 
+    # Latest REAL purchase price per raw_material_type_id from agg_supplier_price
+    # (delivery-note / material-batch ingest). Prefer this over moving_avg/list price
+    # so food_cost uses true purchase cost where we actually have it. Sparse coverage
+    # is expected (prod RES_3101_009: ~5/53), hence the moving_avg fallback + honest
+    # cost_source marker — we never claim a fake real price.
+    real_price_map = await _get_latest_real_purchase_prices(smartbi_pool, factory_id)
+
     # Build bulk arrays for UNNEST upsert
     source_pks = [r["id"] for r in rows]
     names = [r["name"] or r["id"] for r in rows]
@@ -102,12 +109,25 @@ async def sync_dim_ingredient(
     categories = [r["category"] for r in rows]
     codes = [r["code"] for r in rows]
     units = [r["unit"] for r in rows]
-    # Prefer moving_avg_price (actual consumption cost) over unit_price (list price)
-    unit_prices = [
-        float(r["moving_avg_price"]) if r["moving_avg_price"] is not None
-        else (float(r["unit_price"]) if r["unit_price"] is not None else None)
-        for r in rows
-    ]
+
+    # Price priority (honest): real_purchase > moving_avg > list_price > none.
+    unit_prices: List[Optional[float]] = []
+    cost_sources: List[str] = []
+    for r in rows:
+        real = real_price_map.get(r["id"])
+        if real is not None:
+            unit_prices.append(real)
+            cost_sources.append("real_purchase")
+        elif r["moving_avg_price"] is not None:
+            unit_prices.append(float(r["moving_avg_price"]))
+            cost_sources.append("moving_avg")
+        elif r["unit_price"] is not None:
+            unit_prices.append(float(r["unit_price"]))
+            cost_sources.append("list_price")
+        else:
+            unit_prices.append(None)
+            cost_sources.append("none")
+
     shelf_lives = [r["shelf_life_days"] for r in rows]
     storage_types = [r["storage_type"] for r in rows]
     actives = [bool(r["is_active"]) for r in rows]
@@ -119,13 +139,13 @@ async def sync_dim_ingredient(
                 """
                 INSERT INTO dim_ingredient (
                     factory_id, source_pk, name, normalized_name, category, code,
-                    unit, unit_price, shelf_life_days, storage_type, is_active
+                    unit, unit_price, cost_source, shelf_life_days, storage_type, is_active
                 )
-                SELECT $1, pk, n, nn, cat, c, u, up, sl, st, act
+                SELECT $1, pk, n, nn, cat, c, u, up, cs, sl, st, act
                   FROM UNNEST(
                     $2::text[], $3::text[], $4::text[], $5::text[], $6::text[],
-                    $7::text[], $8::numeric[], $9::int[], $10::text[], $11::boolean[]
-                  ) AS t(pk, n, nn, cat, c, u, up, sl, st, act)
+                    $7::text[], $8::numeric[], $9::text[], $10::int[], $11::text[], $12::boolean[]
+                  ) AS t(pk, n, nn, cat, c, u, up, cs, sl, st, act)
                 ON CONFLICT (factory_id, source_pk) DO UPDATE SET
                     name = EXCLUDED.name,
                     normalized_name = EXCLUDED.normalized_name,
@@ -133,6 +153,7 @@ async def sync_dim_ingredient(
                     code = EXCLUDED.code,
                     unit = EXCLUDED.unit,
                     unit_price = EXCLUDED.unit_price,
+                    cost_source = EXCLUDED.cost_source,
                     shelf_life_days = EXCLUDED.shelf_life_days,
                     storage_type = EXCLUDED.storage_type,
                     is_active = EXCLUDED.is_active,
@@ -140,7 +161,7 @@ async def sync_dim_ingredient(
                 RETURNING ingredient_id
                 """,
                 factory_id, source_pks, names, normalized, categories, codes,
-                units, unit_prices, shelf_lives, storage_types, actives,
+                units, unit_prices, cost_sources, shelf_lives, storage_types, actives,
             )
     count = len(result)
     logger.info("[etl] dim_ingredient: upserted %d rows for factory=%s", count, factory_id)
@@ -150,14 +171,61 @@ async def sync_dim_ingredient(
 async def _get_ingredient_pk_map(
     smartbi_pool: asyncpg.Pool, factory_id: str,
 ) -> Dict[str, int]:
-    """Return {cretas source_pk → smartbi ingredient_id} for this factory."""
+    """Return {cretas source_pk → smartbi ingredient_id} for this factory.
+
+    ⚠️ RLS: _set_tenant uses set_config(..., is_local=true) which is transaction-scoped.
+    asyncpg runs each statement in its own implicit transaction (autocommit), so a bare
+    _set_tenant + separate fetch resets app.factory_id BEFORE the fetch → RLS reads 0 rows
+    → empty map → every recipe-line ingredient_id inserted as NULL → line_cost UPDATE
+    (which joins on ingredient_id) matches nothing → food_cost never uses real ingredient
+    prices. This was the prod root cause of fact_restaurant_recipe_line.ingredient_id being
+    100% NULL. Wrapping _set_tenant + fetch in one explicit transaction keeps the GUC alive.
+    """
     async with smartbi_pool.acquire() as conn:
-        await _set_tenant(conn, factory_id)
-        rows = await conn.fetch(
-            "SELECT source_pk, ingredient_id FROM dim_ingredient WHERE factory_id = $1::varchar",
-            factory_id,
-        )
+        async with conn.transaction():
+            await _set_tenant(conn, factory_id)
+            rows = await conn.fetch(
+                "SELECT source_pk, ingredient_id FROM dim_ingredient WHERE factory_id = $1::varchar",
+                factory_id,
+            )
     return {r["source_pk"]: r["ingredient_id"] for r in rows}
+
+
+async def _get_latest_real_purchase_prices(
+    smartbi_pool: asyncpg.Pool, factory_id: str,
+) -> Dict[str, float]:
+    """Return {raw_material_type_id → latest real purchase unit_price} from agg_supplier_price.
+
+    Picks the most recent confirmed purchase price per raw_material_type_id (delivery-note
+    OCR/manual confirms + material-batch ingest). Used to override dim_ingredient.unit_price
+    with TRUE purchase cost where coverage exists (sparse — many recipe ingredients have no
+    confirmed purchase yet, hence sync_dim_ingredient falls back to moving_avg/list price).
+
+    Only rows with a non-null raw_material_type_id are usable (that's the join key to recipes).
+
+    RLS: set_config + fetch wrapped in one explicit transaction (is_local=true GUC must
+    outlive the fetch — same asyncpg autocommit caveat as _get_ingredient_pk_map).
+    """
+    async with smartbi_pool.acquire() as conn:
+        async with conn.transaction():
+            await _set_tenant(conn, factory_id)
+            rows = await conn.fetch(
+                """
+                SELECT DISTINCT ON (raw_material_type_id)
+                       raw_material_type_id, unit_price
+                  FROM agg_supplier_price
+                 WHERE factory_id = $1::varchar
+                   AND raw_material_type_id IS NOT NULL
+                   AND unit_price IS NOT NULL
+                 ORDER BY raw_material_type_id, delivery_date DESC, id DESC
+                """,
+                factory_id,
+            )
+    return {
+        r["raw_material_type_id"]: float(r["unit_price"])
+        for r in rows
+        if r["raw_material_type_id"] is not None and r["unit_price"] is not None
+    }
 
 
 # ─────────────────────────────────────────────────────────────────────
