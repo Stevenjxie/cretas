@@ -201,6 +201,8 @@ const bomForm = ref({
   semiFinishedRefCode: '' as string,
   // SP12 #728: 组合装子产品/嵌套 BOM
   subProductTypeId: '' as string,
+  // #759: 包材每产品单位用量 (仅 PACKAGING 有意义; null=未配置需手填 standardQuantity)
+  packQtyPerProduct: null as number | null,
 });
 
 // SP8: 半成品产品类型列表 (用于 semiFinishedRefCode 下拉)
@@ -536,6 +538,7 @@ function handleAddBomItem() {
     perPortion: false,
     semiFinishedRefCode: '',
     subProductTypeId: '',
+    packQtyPerProduct: null,
   };
   bomDialogVisible.value = true;
 }
@@ -560,6 +563,7 @@ function handleEditBomItem(row: TableRow) {
     perPortion: (row.perPortion as boolean) ?? false,
     semiFinishedRefCode: String(row.semiFinishedRefCode || ''),
     subProductTypeId: String(row.subProductTypeId || ''),
+    packQtyPerProduct: row.packQtyPerProduct != null ? Number(row.packQtyPerProduct) : null,
   };
   bomDialogVisible.value = true;
 }
@@ -1550,6 +1554,23 @@ function refreshData() {
             </el-select>
             <div class="form-tip">包材单位按实际填写</div>
           </template>
+        </el-form-item>
+        <!-- #759: 包材每产品单位用量 (PACKAGING 专属, 配置后 BOM 标准用量可自动推算) -->
+        <el-form-item
+          v-if="bomForm.materialCategory === 'PACKAGING'"
+          label="每产品用量"
+        >
+          <el-input-number
+            v-model="bomForm.packQtyPerProduct"
+            :min="0"
+            :precision="6"
+            :step="0.1"
+            style="width: 100%"
+            placeholder="每个成品单位需要该包材多少个"
+          />
+          <div class="form-tip">
+            例：吸塑盒 1 个/成品填 1；外箱 20 盒/箱填 0.05。留空则手填成品含量
+          </div>
         </el-form-item>
         <el-form-item v-if="canViewPrice" label="单价（含税）">
           <el-input-number v-model="bomForm.unitPrice" :min="0" :precision="4" :step="0.1" style="width: 100%" />

@@ -143,7 +143,10 @@ export const menuConfig: MenuItem[] = [
       // Sprint4-H F-AR-1: 销售单财务审核 (镜像 /procurement/finance-review).
       // module:'finance' 让 finance_manager 在 /sales 组下也可见. 销售员可看但
       // 后端 @RequirePermission("finance:read_write") 限制操作权.
-      { path: '/sales/finance-review', title: '财务待审销售单', icon: '', module: 'finance' }
+      { path: '/sales/finance-review', title: '财务待审销售单', icon: '', module: 'finance' },
+      // #739/#746: 销售方向付款申请 (退款/返利/销售费用) — roles 镜像 router/index.ts SalesPaymentRequests
+      { path: '/sales/payment-requests', title: '销售付款申请', icon: '', module: 'sales',
+        roles: ['factory_super_admin', 'platform_admin', 'sales_manager', 'salesperson', 'finance_manager', 'cashier'] }
     ]
   },
   {

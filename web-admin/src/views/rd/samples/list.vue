@@ -4,7 +4,7 @@ import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { get, post } from '@/api/request';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { Search, Refresh } from '@element-plus/icons-vue';
+import { Search, Refresh, PriceTag } from '@element-plus/icons-vue';
 import { useRouter } from 'vue-router';
 import type { TableRow } from '@/types/api';
 
@@ -186,6 +186,32 @@ async function handleCreateSample() {
   finally { submitting.value = false; }
 }
 
+// ==================== R14: 价位选料 ====================
+// GET /rd/materials/suggest-by-price?minPrice=&maxPrice=
+const r14PanelVisible = ref(false);
+const r14MinPrice = ref<number | null>(null);
+const r14MaxPrice = ref<number | null>(null);
+const r14Loading = ref(false);
+const r14Results = ref<TableRow[]>([]);
+
+async function fetchR14Suggestions() {
+  if (!factoryId.value) return;
+  r14Loading.value = true;
+  r14Results.value = [];
+  try {
+    const params: Record<string, number> = {};
+    if (r14MinPrice.value != null) params.minPrice = r14MinPrice.value;
+    if (r14MaxPrice.value != null) params.maxPrice = r14MaxPrice.value;
+    const res = await get(`/${factoryId.value}/rd/materials/suggest-by-price`, { params });
+    if (res.success) {
+      r14Results.value = Array.isArray(res.data) ? res.data : [];
+    } else {
+      ElMessage.error(res.message || '推荐选料失败');
+    }
+  } catch { /* axios interceptor shows toast */ }
+  finally { r14Loading.value = false; }
+}
+
 // 追踪记录
 const trackingDialogVisible = ref(false);
 const trackingSampleId = ref('');
@@ -274,7 +300,59 @@ async function addTrackingRecord() {
         </el-select>
         <el-button type="primary" :icon="Search" @click="handleSearch">搜索</el-button>
         <el-button :icon="Refresh" @click="resetSearch">重置</el-button>
+        <!-- R14: 价位选料入口 -->
+        <el-button :icon="PriceTag" @click="r14PanelVisible = !r14PanelVisible" :type="r14PanelVisible ? 'primary' : ''" plain>
+          价位选料
+        </el-button>
       </div>
+
+      <!-- R14: 价位推荐选料面板 -->
+      <el-collapse-transition>
+        <div v-if="activeTab === 'samples' && r14PanelVisible" style="margin-bottom:16px">
+          <el-card shadow="never" style="background:#fafafa">
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+              <span style="font-size:13px;color:#606266">按单价区间推荐原料：</span>
+              <el-input-number
+                v-model="r14MinPrice"
+                :min="0"
+                :precision="2"
+                :step="1"
+                placeholder="最低价(元)"
+                style="width:150px"
+                controls-position="right"
+              />
+              <span style="color:#909399">—</span>
+              <el-input-number
+                v-model="r14MaxPrice"
+                :min="0"
+                :precision="2"
+                :step="1"
+                placeholder="最高价(元)"
+                style="width:150px"
+                controls-position="right"
+              />
+              <el-button type="primary" :loading="r14Loading" :icon="PriceTag" @click="fetchR14Suggestions">推荐选料</el-button>
+              <el-button @click="r14Results = []; r14MinPrice = null; r14MaxPrice = null">清空</el-button>
+            </div>
+            <div v-if="r14Results.length > 0" style="margin-top:12px">
+              <el-table :data="r14Results" border size="small" max-height="240">
+                <el-table-column prop="code" label="编码" width="120" />
+                <el-table-column prop="name" label="原料名称" min-width="140" />
+                <el-table-column prop="category" label="类别" width="80" align="center" />
+                <el-table-column prop="unit" label="单位" width="70" align="center" />
+                <el-table-column v-if="canViewPrice" prop="taxIncludedUnitPrice" label="含税单价(元)" width="120" align="right">
+                  <template #default="{ row }">{{ row.taxIncludedUnitPrice != null ? row.taxIncludedUnitPrice : '—' }}</template>
+                </el-table-column>
+                <el-table-column prop="storageType" label="储存" width="80" align="center">
+                  <template #default="{ row }">{{ row.storageType || '—' }}</template>
+                </el-table-column>
+              </el-table>
+              <div style="font-size:12px;color:#909399;margin-top:6px">共 {{ r14Results.length }} 种原料符合价位区间</div>
+            </div>
+            <el-empty v-else-if="!r14Loading && r14Results.length === 0 && (r14MinPrice != null || r14MaxPrice != null)" description="该价位区间暂无候选原料" :image-size="48" style="padding:12px 0" />
+          </el-card>
+        </div>
+      </el-collapse-transition>
 
       <!-- 研发需求列表 -->
       <el-table v-if="activeTab === 'requests'" :data="tableData" border stripe>

@@ -150,7 +150,28 @@ const form = ref({
   // SP4: 税率 + 含税单价
   taxRate: '' as string,
   taxIncludedUnitPrice: null as number | null,
+  // P8: 包材关联固定客户 (选填, 非 PACKAGING 类留空)
+  associatedCustomerId: null as string | null,
+  // #759: 包材每产品单位用量 (选填, 仅 PACKAGING 有意义)
+  packQtyPerProduct: null as number | null,
 });
+
+// P8: 客户列表 (用于 associatedCustomerId 下拉)
+interface CustomerItem { id: string; name: string }
+const customerOptions = ref<CustomerItem[]>([]);
+async function loadCustomers() {
+  if (!factoryId.value || customerOptions.value.length > 0) return;
+  try {
+    const res = await get<{ content?: CustomerItem[] } | CustomerItem[]>(
+      `/${factoryId.value}/customers`,
+      { params: { size: 200 } },
+    );
+    const data = res.data;
+    customerOptions.value = Array.isArray(data) ? data : (data as { content?: CustomerItem[] })?.content ?? [];
+  } catch {
+    customerOptions.value = [];
+  }
+}
 const packaging = ref({
   level1PerLevel2: '' as number | string,
   level2Unit: '',
@@ -441,6 +462,8 @@ function openCreate() {
     notes: '',
     taxRate: '',
     taxIncludedUnitPrice: null,
+    associatedCustomerId: null,
+    packQtyPerProduct: null,
   };
   resetPackaging();
   resetManuallyEditedFlags();
@@ -451,6 +474,7 @@ function openCreate() {
   segmentL3.value = '';
   segmentCodePreview.value = '';
   if (segmentTree.value.length === 0) loadSegmentTree();
+  loadCustomers();
   dialogVisible.value = true;
 }
 
@@ -466,7 +490,10 @@ async function openEdit(row: TableRow) {
     notes: String(row.notes || ''),
     taxRate: String(row.taxRate || ''),
     taxIncludedUnitPrice: (row.taxIncludedUnitPrice as number | null) ?? null,
+    associatedCustomerId: (row.associatedCustomerId as string | null) ?? null,
+    packQtyPerProduct: row.packQtyPerProduct != null ? Number(row.packQtyPerProduct) : null,
   };
+  loadCustomers();
   resetPackaging();
   resetManuallyEditedFlags();
   codePreview.value = '';
@@ -839,6 +866,45 @@ function handleSizeChange(size: number) {
             <div class="field-hint">= 含税单价 ÷ (1 + 税率)，自动计算</div>
           </el-form-item>
         </template>
+
+        <!-- P8: 关联固定客户 (仅 PACKAGING 有实际意义, 其他类别也允许填写) -->
+        <el-divider>
+          <span class="divider-title">包材专属字段（选填）</span>
+        </el-divider>
+        <el-form-item label="关联固定客户">
+          <el-select
+            v-model="form.associatedCustomerId"
+            placeholder="该包材专供某客户（可选）"
+            clearable
+            filterable
+            style="width: 100%"
+          >
+            <el-option
+              v-for="c in customerOptions"
+              :key="c.id"
+              :label="c.name"
+              :value="c.id"
+            />
+          </el-select>
+          <div class="field-hint">选填 — 如吸塑盒专供某客户，留空表示通用包材</div>
+        </el-form-item>
+        <!-- #759: 每成品单位用量 (仅 PACKAGING 类型显示，后端自动推 BOM standardQuantity) -->
+        <el-form-item
+          v-if="form.category === 'PACKAGING' || form.category === '包材'"
+          label="每产品用量"
+        >
+          <el-input-number
+            v-model="form.packQtyPerProduct"
+            :min="0"
+            :precision="6"
+            :step="0.1"
+            style="width: 100%"
+            placeholder="每个成品单位需要该包材多少个"
+          />
+          <div class="field-hint">
+            例：吸塑盒 1 个/成品填 1；外箱 20 盒/箱填 0.05（=1/20）。留空则 BOM 行需手填用量
+          </div>
+        </el-form-item>
 
         <!-- SP8: 16位编码级联 (创建模式下显示, 编辑模式只读) -->
         <!-- SP8 兜底 (Tier0 #15 minimal): 字典未配置时隐藏级联入口防 dead-end (fool-proof Rule 5).
