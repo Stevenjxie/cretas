@@ -7,6 +7,7 @@ import com.cretas.aims.entity.bom.BomRecipeItem;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.repository.bom.BomRecipeItemRepository;
 import com.cretas.aims.repository.bom.BomRecipeRepository;
+import com.cretas.aims.service.bom.NestedBomCostService;
 import com.cretas.aims.service.uom.MaterialUomConverter;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -61,6 +62,10 @@ class BomRecipeServiceImplAddItemTest {
 
     @Mock
     MaterialUomConverter materialUomConverter;
+
+    /** SP1: NestedBomCostService must be mocked so @InjectMocks can inject it. */
+    @Mock
+    NestedBomCostService nestedBomCostService;
 
     @InjectMocks
     BomRecipeServiceImpl service;

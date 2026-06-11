@@ -12,6 +12,7 @@ import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.repository.bom.BomRecipeItemRepository;
 import com.cretas.aims.repository.bom.BomRecipeRepository;
 import com.cretas.aims.service.bom.BomRecipeService;
+import com.cretas.aims.service.bom.NestedBomCostService;
 import com.cretas.aims.service.uom.MaterialUomConverter;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -57,6 +58,8 @@ public class BomRecipeServiceImpl implements BomRecipeService {
     private final BomRecipeItemRepository itemRepo;
     private final RawMaterialTypeRepository materialTypeRepo;
     private final MaterialUomConverter materialUomConverter;
+    /** SP1: 嵌套 BOM 成本聚合 (组合装/先做后用). */
+    private final NestedBomCostService nestedBomCostService;
 
     @Override
     @Transactional
@@ -422,16 +425,30 @@ public class BomRecipeServiceImpl implements BomRecipeService {
         // SP4-T3: 按份计量 + 半成品引用
         item.setPerPortion(dto.getPerPortion() != null ? dto.getPerPortion() : false);
         item.setSemiFinishedRefCode(dto.getSemiFinishedRefCode());
+        // SP1: 嵌套 BOM 子产品引用 (组合装/先做后用)
+        item.setSubProductTypeId(dto.getSubProductTypeId());
         // SP8: primaryCodeRef null-guard update (only update if DTO supplies it; auto-backfill done in buildItem)
         if (dto.getPrimaryCodeRef() != null) {
             item.setPrimaryCodeRef(dto.getPrimaryCodeRef());
         }
-        // Cache actual_quantity + item_cost (also computable @Transient, but cached for query speed).
+        // Cache actual_quantity (also computable @Transient, but cached for query speed).
+        // Note: item_cost for nested-component rows is resolved via NestedBomCostService at recipe-level;
+        // the cached itemCost here reflects only the local unitPrice (plain material rows).
+        // recomputeMaterialCost will use NestedBomCostService.resolveItemCost for subProductTypeId rows.
         item.setActualQuantity(item.calculateActualQuantity());
         item.setItemCost(item.computeItemCost());
     }
 
-    /** Recompute material cost from items (sum of itemCost). */
+    /**
+     * Recompute material cost from items (sum of itemCost).
+     *
+     * <p>SP1: 嵌套 BOM 聚合 — 若某行有 {@code subProductTypeId} (组合装子产品或先做后用半成品),
+     * 委托 {@link NestedBomCostService#resolveItemCost} 处理递归成本 + WIP 移动均价优先;
+     * 普通原材料行仍走 {@code item.computeItemCost()} (actualQuantity × unitPrice)，
+     * <b>不破坏单层 BOM 现有行为</b>。
+     *
+     * <p>诚实 null 传播: 任一行成本 null (未定价) → 整体 totalMaterialCost = null。
+     */
     private void recomputeMaterialCost(BomRecipe recipe) {
         List<BomRecipeItem> items = recipe.getItems();
         if (items == null || items.isEmpty()) {
@@ -445,7 +462,10 @@ public class BomRecipeServiceImpl implements BomRecipeService {
         BigDecimal materialCost = BigDecimal.ZERO;
         boolean hasNullPrice = false;
         for (BomRecipeItem item : items) {
-            BigDecimal cost = item.computeItemCost();
+            // SP1: 嵌套子产品行 → 委托 NestedBomCostService; 普通行 → item.computeItemCost()
+            BigDecimal cost = nestedBomCostService.isNestedComponent(item)
+                    ? nestedBomCostService.resolveItemCost(recipe.getFactoryId(), item)
+                    : item.computeItemCost();
             if (cost != null) {
                 materialCost = materialCost.add(cost);
             } else {

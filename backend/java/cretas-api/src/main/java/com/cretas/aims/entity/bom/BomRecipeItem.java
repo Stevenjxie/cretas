@@ -125,6 +125,24 @@ public class BomRecipeItem extends BaseEntity {
     @Column(name = "semi_finished_ref_code", length = 100)
     private String semiFinishedRefCode;
 
+    // ========== SP1: 嵌套 BOM — 组合装子产品引用 ==========
+
+    /**
+     * SP1: 若此 BOM 行是一个半成品/子产品组件（而非原材料），此列存储子产品的 product_type_id。
+     *
+     * <p>当此列非 null 时，成本聚合逻辑（{@link BomRecipeServiceImpl#recomputeMaterialCost}）
+     * 会递归查找子产品的当前有效 BOM（{@code status=ACTIVE, is_current=TRUE}），
+     * 取其 {@code totalCost / outputQuantityPerUnit} 作为单位成本，乘以本行 {@code actualQuantity}。
+     *
+     * <p>"先做后用"场景（先生产半成品入库，后续成品领用）：
+     * 当 {@code semiFinishedRefCode} 也设置时，运行时可从 {@link SemiFinishedInventory#unitCost}
+     * （移动均价）取值，优先级高于子 BOM 设计成本。
+     *
+     * <p>DB: sub_product_type_id VARCHAR(100) NULL
+     */
+    @Column(name = "sub_product_type_id", length = 100)
+    private String subProductTypeId;
+
     // ========== SP8: BOM 物料前三位主编码冗余列 ==========
 
     /**
