@@ -101,4 +101,18 @@ public class RawMaterialTypeDTO {
      * 不持久化到 DB — 仅用于建档请求中传递级联选择结果.
      */
     private String segmentCode;
+
+    // ========== 包材规格 (packaging spec) ==========
+
+    /**
+     * 包材每产品单位用量 (仅 category=PACKAGING 有意义).
+     *
+     * <p>生产 1 个最小成品单位 (outputQuantityPerUnit) 需要此包材多少个/袋/盒。
+     * null = 未配置, BOM 行需手填 standardQuantity.
+     *
+     * <p>DB: pack_qty_per_product NUMERIC(15,6) NULL
+     */
+    @io.swagger.v3.oas.annotations.media.Schema(
+            description = "包材每产品单位用量 (category=PACKAGING 专用); null=未配置需手填")
+    private java.math.BigDecimal packQtyPerProduct;
 }

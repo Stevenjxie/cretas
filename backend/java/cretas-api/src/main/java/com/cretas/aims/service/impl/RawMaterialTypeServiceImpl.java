@@ -146,6 +146,9 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
             materialType.setPrimaryCode(materialType.getCode().substring(0, 3));
         }
 
+        // 包材规格: 随 create 写入 (nullable, 仅 category=PACKAGING 有业务意义)
+        materialType.setPackQtyPerProduct(dto.getPackQtyPerProduct());
+
         materialType = materialTypeRepository.save(materialType);
 
         log.info("原材料类型创建成功: id={}", materialType.getId());
@@ -197,6 +200,12 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
         // SP8: primaryCode null-guard 更新
         if (dto.getPrimaryCode() != null) {
             materialType.setPrimaryCode(dto.getPrimaryCode());
+        }
+
+        // 包材规格: null-guard 更新 (传 null 视为"不修改"; 若要清除规格前端传 0 由服务端忽略负值即可)
+        // 设计选择: 使用 packQtyPerProduct != null 作为"有意更新"信号, 与 SP8 primaryCode 模式一致
+        if (dto.getPackQtyPerProduct() != null) {
+            materialType.setPackQtyPerProduct(dto.getPackQtyPerProduct());
         }
 
         materialType.setUpdatedAt(LocalDateTime.now());
@@ -468,6 +477,8 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
                 .taxIncludedUnitPrice(materialType.getTaxIncludedUnitPrice())
                 // SP8: 前三位主编码
                 .primaryCode(materialType.getPrimaryCode())
+                // 包材规格
+                .packQtyPerProduct(materialType.getPackQtyPerProduct())
                 .build();
     }
 

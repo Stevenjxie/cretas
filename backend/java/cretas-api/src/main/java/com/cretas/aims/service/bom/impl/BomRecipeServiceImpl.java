@@ -406,8 +406,61 @@ public class BomRecipeServiceImpl implements BomRecipeService {
             item.setPrimaryCodeRef(mt.get().getPrimaryCode());
         }
 
+        // 包材规格自动推算: PACKAGING 行若 DTO 未手填 standardQuantity 且物料有 packQtyPerProduct,
+        // 则自动写入 standardQuantity = packQtyPerProduct (每成品单位用量).
+        // 手填优先 (dto.standardQuantity != null) — 向后兼容, 不破坏已有手填包材 BOM.
+        applyPackagingSpecAutoInfer(dto, mt.get());
+
         applyDtoToItem(dto, item);
         return item;
+    }
+
+    /**
+     * 包材规格自动推算 (Packaging Spec Auto-Inference).
+     *
+     * <p>触发条件 (AND):
+     * <ol>
+     *   <li>{@code dto.materialCategory} 为 {@code PACKAGING}</li>
+     *   <li>{@code dto.standardQuantity} 为 {@code null} (未手填)</li>
+     *   <li>{@code mt.packQtyPerProduct} 不为 {@code null} (物料已配置规格)</li>
+     * </ol>
+     *
+     * <p>当条件满足时, 将 {@code dto.standardQuantity} 设为 {@code mt.packQtyPerProduct},
+     * 后续 {@link #applyDtoToItem} 正常按手填路径处理.
+     *
+     * <p>手填优先 — 若 {@code dto.standardQuantity != null} 直接跳过, 不覆盖用户明确输入.
+     * unit 为 null 时同步从物料主数据回填 (包材单位通常是"个/袋/盒").
+     *
+     * @param dto DTO (mutated in-place when auto-infer applies)
+     * @param mt  已查出的原料主数据
+     */
+    private void applyPackagingSpecAutoInfer(BomRecipeItemDTO dto, RawMaterialType mt) {
+        boolean isPackaging = "PACKAGING".equals(dto.getMaterialCategory());
+        if (!isPackaging) {
+            return;
+        }
+        if (dto.getStandardQuantity() != null) {
+            // 手填优先 — 用户已明确给了数量, 尊重用户
+            return;
+        }
+        BigDecimal packQty = mt.getPackQtyPerProduct();
+        if (packQty == null) {
+            // 物料未配置规格 — 维持诚实 null, 让上层 @NotNull 校验拒绝或用户手填
+            return;
+        }
+        // 自动推算: standardQuantity = packQtyPerProduct
+        dto.setStandardQuantity(packQty);
+        log.info("[PackagingSpecInfer] materialTypeId={} name={} packQtyPerProduct={} → BOM standardQuantity auto-set",
+                mt.getId(), mt.getName(), packQty);
+
+        // unit 回填: 若 DTO 未给单位, 从物料主数据取 (包材通常是"个"/"袋"/"盒")
+        if (dto.getUnit() == null || dto.getUnit().isBlank()) {
+            String matUnit = mt.getUnit();
+            if (matUnit != null && !matUnit.isBlank()) {
+                dto.setUnit(matUnit);
+                log.debug("[PackagingSpecInfer] unit auto-set from material: {}", matUnit);
+            }
+        }
     }
 
     /** Apply DTO fields to entity (used by add + update). */
