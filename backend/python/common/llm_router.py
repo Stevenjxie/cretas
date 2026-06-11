@@ -79,6 +79,9 @@ _ACCOUNT_FREE_ONLY: Dict[str, frozenset] = {
         "qwen3.7-max-preview", "qwen3.7-max-2026-05-17", "qwen3.7-max-2026-05-20",
         "qwen3.5-plus-2026-04-20", "kimi-k2.6", "qwen3.6-27b", "qwen3.6-flash",
     }),
+    # aliyun_a_deepseek = A 的 key 调 deepseek 类; A 上 deepseek-v4-pro/flash 全 "- -"
+    # (付费) → 空集 = 守卫拒绝该账号上的所有模型 (强制走 tencent 免费 deepseek).
+    "aliyun_a_deepseek": frozenset(),
 }
 
 
