@@ -19,6 +19,7 @@ import com.cretas.aims.entity.inventory.*;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.exception.ResourceNotFoundException;
 import com.cretas.aims.entity.bom.BomItem;
+import com.cretas.aims.entity.bom.BomRecipeItem;
 import com.cretas.aims.entity.config.ApprovalWorkflow;
 import com.cretas.aims.entity.config.ApprovalWorkflowNode;
 import com.cretas.aims.entity.workflow.ApprovalHistory.HistoryAction;
@@ -109,6 +110,18 @@ public class PurchaseServiceImpl implements PurchaseService {
     /** 开始采购: 从 SO 展开原料需求. */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private SalesOrderItemRepository salesOrderItemRepository;
+
+    /**
+     * #748 口径统一 (2026-06-11): 采购建议优先读 bom_recipe_items (新表), 与财务成本拆分
+     * ({@code SalesServiceImpl.getOrderCostBreakdown} 经 {@code BomRecipeService.getCurrentRecipe})
+     * 同一 BOM 源, 消除"财务算的料 vs 采购建议的料对不上"的口径不一致.
+     * 仅当产品无 ACTIVE recipe 时回退到 legacy bom_items (向后兼容旧品).
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.repository.bom.BomRecipeRepository bomRecipeRepository;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.repository.bom.BomRecipeItemRepository bomRecipeItemRepository;
 
     /** D-6: 责任绑定 — 查询 PO 创建人的用户名供异常单展示（required=false 兼容旧 context） */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
@@ -1442,13 +1455,48 @@ public class PurchaseServiceImpl implements PurchaseService {
 
         for (SalesOrderItem soItem : soItems) {
             if (soItem.getProductTypeId() == null) continue;
+            BigDecimal soQty = soItem.getQuantity() != null ? soItem.getQuantity() : BigDecimal.ONE;
+            String soProductName = soItem.getProductName() != null ? soItem.getProductName() : "";
+
+            // #748 口径统一: 优先读 bom_recipe_items (新表, 同财务成本拆分源).
+            // 取产品当前 ACTIVE + is_current=TRUE 的 recipe — 与 BomRecipeService.getCurrentRecipe 完全一致.
+            List<BomRecipeItem> recipeItems = loadCurrentRecipeItems(factoryId, soItem.getProductTypeId());
+            if (recipeItems != null && !recipeItems.isEmpty()) {
+                boolean expandedAny = false;
+                for (BomRecipeItem ri : recipeItems) {
+                    if (ri.getMaterialTypeId() == null) continue;
+                    // actualQuantity 已按出成率折算 (写库时算或运行时算), 是"每单位产品需要的原料量".
+                    // 若持久值为空 (旧 recipe 未回填), 用 calculateActualQuantity() 实时折算 (同 entity 公式).
+                    BigDecimal actualQtyPerUnit = ri.getActualQuantity();
+                    if (actualQtyPerUnit == null) actualQtyPerUnit = ri.calculateActualQuantity();
+                    if (actualQtyPerUnit == null || actualQtyPerUnit.compareTo(BigDecimal.ZERO) <= 0) continue;
+
+                    BigDecimal required = actualQtyPerUnit.multiply(soQty).setScale(4, BigDecimal.ROUND_HALF_UP);
+                    String matId = ri.getMaterialTypeId();
+
+                    aggregatedQty.merge(matId, required, BigDecimal::add);
+                    itemTemplate.putIfAbsent(matId, PurchaseSuggestionResponse.SuggestionItem.builder()
+                            .materialTypeId(matId)
+                            .materialName(ri.getMaterialName() != null ? ri.getMaterialName() : "未知原料")
+                            .materialCategory(ri.getMaterialCategory() != null ? ri.getMaterialCategory() : "RAW")
+                            .sourceProductName(soProductName)
+                            .unit(ri.getUnit())
+                            .referenceUnitPrice(ri.getUnitPrice())
+                            .build());
+                    expandedAny = true;
+                }
+                if (expandedAny) hasBom = true;
+                // recipe 存在即以它为准 — 不再回退 legacy (避免双源重复计料).
+                continue;
+            }
+
+            // 向后兼容: 该产品无 ACTIVE recipe → 回退 legacy bom_items.
             List<BomItem> bomItems = bomItemRepository
                     .findByFactoryIdAndProductTypeIdAndDeletedAtIsNullOrderBySortOrderAsc(
                             factoryId, soItem.getProductTypeId());
             if (bomItems.isEmpty()) continue;
 
             hasBom = true;
-            BigDecimal soQty = soItem.getQuantity() != null ? soItem.getQuantity() : BigDecimal.ONE;
 
             for (BomItem bom : bomItems) {
                 if (bom.getMaterialTypeId() == null) continue;
@@ -1464,7 +1512,7 @@ public class PurchaseServiceImpl implements PurchaseService {
                         .materialTypeId(matId)
                         .materialName(bom.getMaterialName() != null ? bom.getMaterialName() : "未知原料")
                         .materialCategory(bom.getMaterialCategory() != null ? bom.getMaterialCategory() : "RAW")
-                        .sourceProductName(soItem.getProductName() != null ? soItem.getProductName() : "")
+                        .sourceProductName(soProductName)
                         .unit(bom.getUnit())
                         .referenceUnitPrice(bom.getUnitPrice())
                         .build());
@@ -1507,6 +1555,29 @@ public class PurchaseServiceImpl implements PurchaseService {
                 .hasBom(hasBom)
                 .items(resultItems)
                 .build();
+    }
+
+    /**
+     * #748 口径统一: 取产品当前 ACTIVE + is_current=TRUE recipe 的配方项.
+     *
+     * <p>与 {@code BomRecipeService.getCurrentRecipe} 走同一查询
+     * ({@code findByFactoryIdAndProductTypeIdAndIsCurrentTrueAndStatus(ACTIVE)}),
+     * 保证采购建议净需求 = 财务成本拆分用料口径一致.
+     *
+     * <p>repo 未注入 (老 ApplicationContext) 或无 recipe → 返 null (调用方回退 legacy).
+     */
+    private List<BomRecipeItem> loadCurrentRecipeItems(String factoryId, String productTypeId) {
+        if (bomRecipeRepository == null || bomRecipeItemRepository == null) {
+            return null;
+        }
+        java.util.Optional<com.cretas.aims.entity.bom.BomRecipe> recipeOpt =
+                bomRecipeRepository.findByFactoryIdAndProductTypeIdAndIsCurrentTrueAndStatus(
+                        factoryId, productTypeId, com.cretas.aims.entity.bom.BomRecipe.Status.ACTIVE);
+        if (recipeOpt.isEmpty()) {
+            return null;
+        }
+        // 显式按 recipeId 查 items (LAZY 集合在事务外可能 detach; 直查 repo 稳妥).
+        return bomRecipeItemRepository.findByRecipeIdOrderBySortOrderAsc(recipeOpt.get().getId());
     }
 
     // ==================== 三价对比 ====================
