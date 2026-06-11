@@ -94,6 +94,27 @@ public class FinanceCostBreakdown {
     /** SP3: 超支告警文案. 未超支时 null. */
     private String alarmMessage;
 
+    // ========== P1 #32 委外加工费独立科目 ==========
+
+    /**
+     * 委外加工费 (processingFee) — 独立成本科目.
+     *
+     * <p>六扇门有委外工序 (部分产品的某道工序外包给第三方加工厂完成).
+     * 该字段用于单列委外加工成本, 区别于原料成本 (bomStandardCost) 和内部人工成本.
+     *
+     * <p><b>数据源现状 (诚实 null)</b>:
+     * WorkProcess / WorkProcessTask 实体及 production_batch 数据模型目前
+     * 尚无 "isOutsourced" 标记或 "outsourcedProcessingFee" 列.
+     * 委外加工费未写入任何生产记录 → 当前恒为 null.
+     *
+     * <p><b>未来数据源计划</b> (待 WorkProcess 加 is_outsourced + outsourced_fee 列时接入):
+     * {@code SUM(wpt.outsourcedFee) WHERE wpt.productionBatchId IN (批次关联订单)}.
+     *
+     * <p>标记 @PriceSensitive — 同其余成本科目, 非财务角色脱敏为 null.
+     */
+    @PriceSensitive
+    private BigDecimal processingFee;
+
     /** 行级成本明细. */
     private List<LineCostBreakdown> lines;
 
