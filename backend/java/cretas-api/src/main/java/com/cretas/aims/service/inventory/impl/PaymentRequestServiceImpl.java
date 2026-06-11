@@ -630,8 +630,13 @@ public class PaymentRequestServiceImpl implements PaymentRequestService {
                     .settlementType(st)
                     .settlementTypeDisplayName(st != null ? st.getDisplayName() : null)
                     .paymentMethod(pr.getPaymentMethod())
-                    .bankName(pr.getBankName())
-                    .bankAccount(pr.getBankAccount())
+                    // 出纳付款收款方银行信息: 权威来源是供应商(收款方)主数据, 不是付款单本身.
+                    // 旧代码读 pr.getBankName()/getBankAccount() (付款单从不存 bank → 永远 null,
+                    // 出纳不知打款到哪, 2026-06-12 Codex Gate2 实测). 改优先取 supplier, 付款单有覆盖值时兜底.
+                    .bankName(supplier != null && supplier.getBankName() != null
+                            ? supplier.getBankName() : pr.getBankName())
+                    .bankAccount(supplier != null && supplier.getBankAccount() != null
+                            ? supplier.getBankAccount() : pr.getBankAccount())
                     .approvedAt(pr.getApprovedAt())
                     .approvedBy(pr.getApprovedBy())
                     .remark(pr.getRemark())
