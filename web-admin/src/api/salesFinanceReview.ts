@@ -148,6 +148,30 @@ export interface PageResponse<T> {
   number: number;
 }
 
+/**
+ * 运营报价单摘要 — 三层价格链路: 研发预估价 (OperationalQuote.unitPrice).
+ *
+ * 数据来源: GET /quotes/active?customerId=&productTypeId=
+ * 状态 APPROVED + 未过期 + 同客户同产品的最新有效报价.
+ * unitPrice = @PriceSensitive, 仅财务/管理角色可见 (后端脱敏 null).
+ *
+ * 安全约束 (镜像 EstimatePriceCheckResult doc):
+ *   此接口只在财审页使用 (RBAC = finance:read_write / finance:read).
+ *   销售/仓管角色不应看到 unitPrice 绝对值, 因此该端点需要 finance 权限.
+ */
+export interface OperationalQuoteSummary {
+  id: string;
+  quoteNo: string;
+  productTypeId: string | null;
+  /** 运营报价建议售价 (@PriceSensitive — 非财务角色为 null). */
+  unitPrice: number | null;
+  unit: string | null;
+  status: string;
+  validUntil: string | null;
+  approvedAt: string | null;
+  approverName: string | null;
+}
+
 // ============================================================================
 // API 方法 — baseURL = /api/mobile (request.ts:109)
 // ============================================================================
@@ -244,5 +268,29 @@ export function getProductPriceTrend(
 ): Promise<ApiResponse<SalesPriceTrendDTO[]>> {
   return get<SalesPriceTrendDTO[]>(`/${factoryId}/sales/orders/price-trend`, {
     params: { productTypeId, limit },
+  });
+}
+
+// ============================================================================
+// 三层价格: 运营报价 (研发预估价)
+// ============================================================================
+
+/**
+ * 获取指定产品 + 客户的有效运营报价 (APPROVED + 未过期).
+ * 用于财审页三层价格同屏对比:
+ *   ① 研发预估价 (OperationalQuote.unitPrice) ← 本端点
+ *   ② 下单价     (SalesOrderItem.unitPrice)
+ *   ③ 实际成本价  (LineCostBreakdown.actualCostPerUnit)
+ *
+ * 端点: GET /quotes/active?customerId=&productTypeId=
+ * 权限: 财审页已有 finance:read_write / finance:read — 不额外要求.
+ */
+export function getActiveQuotes(
+  factoryId: string,
+  customerId: string,
+  productTypeId: string,
+): Promise<ApiResponse<OperationalQuoteSummary[]>> {
+  return get<OperationalQuoteSummary[]>(`/${factoryId}/quotes/active`, {
+    params: { customerId, productTypeId },
   });
 }
