@@ -7,11 +7,14 @@ import com.cretas.aims.dto.template.PrintPreviewTemplateRequest;
 import com.cretas.aims.entity.ProductionBatch;
 import com.cretas.aims.entity.factory.FactoryMaterialRequisition;
 import com.cretas.aims.entity.factory.FactoryMaterialRequisitionItem;
+import com.cretas.aims.entity.inventory.InternalTransfer;
+import com.cretas.aims.entity.inventory.InternalTransferItem;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.security.PriceMaskResolver;
 import com.cretas.aims.service.ProductionPlanService;
 import com.cretas.aims.service.factory.FactoryMaterialRequisitionService;
+import com.cretas.aims.service.inventory.TransferService;
 import com.cretas.aims.service.workprocess.WorkProcessTaskService;
 import jakarta.validation.Valid;
 import lombok.extern.slf4j.Slf4j;
@@ -113,6 +116,10 @@ public class PrintController {
     /** Optional: 生产批次 repository (SP12 T8 通过 planId 找批次). */
     @Autowired(required = false)
     private ProductionBatchRepository productionBatchRepository;
+
+    /** Optional: 调拨服务 (transfer-instruction 打印取数). */
+    @Autowired(required = false)
+    private TransferService transferService;
 
     @Autowired
     public PrintController(
@@ -329,6 +336,32 @@ public class PrintController {
         Map<String, Object> payload = buildConsolidatedMaterialRequisitionPayload(factoryId, planId, overrides);
         return proxyToPython("consolidated-material-requisition", payload,
                 "consolidated-req-" + planId, authorization);
+    }
+
+    // ==================== 调拨指示单 (transfer-instruction 打印) ====================
+
+    /**
+     * 调拨指示单 PDF — 客户[37:00] "无手机一天打一张纸质指示单".
+     *
+     * <p>打印内容: 调拨单号 + 调拨日期 + 调出仓/调入仓 + 申请人 + 物料明细 (物料名/批次/数量/单位)
+     * + 签名区 (仓管员发料 + 仓管员收料).
+     *
+     * <p>不含金额字段, 仅 RBAC 门禁即可.
+     * 允许 warehouse + inventory 双门 — 仓管员发起打印, 计划员复核都需能拉.
+     *
+     * <p>使用方式: GET /api/mobile/{factoryId}/print/transfer-instruction/{transferId}
+     * 真实数据优先从 {@link TransferService#getTransferById} 取; service 未注入时 fallback stub.
+     */
+    @GetMapping("/transfer-instruction/{transferId}")
+    @RequirePermission({"warehouse:read", "warehouse:read_write",
+            "inventory:read", "inventory:write"})
+    public ResponseEntity<byte[]> printTransferInstruction(
+            @PathVariable String factoryId,
+            @PathVariable String transferId,
+            @RequestParam(required = false) Map<String, String> overrides,
+            @RequestHeader(value = "Authorization", required = false) String authorization) {
+        Map<String, Object> payload = buildTransferInstructionPayload(factoryId, transferId, overrides);
+        return proxyToPython("transfer-instruction", payload, "transfer-instruction-" + transferId, authorization);
     }
 
     // ==================== C-PRT-EDITOR-1 (Sprint 3 Track-J) ====================
@@ -770,20 +803,36 @@ public class PrintController {
         p.put("planId", planId);
         p.put("printDate", java.time.LocalDate.now().toString());
 
-        // 尝试从生产计划取产品名
+        // 尝试从生产计划取产品名 + 双单号 (销售单号 + 生产计划单号) — C-051
         if (productionPlanService != null) {
             try {
                 ProductionPlanDTO plan = productionPlanService.getProductionPlanById(factoryId, planId);
                 p.put("planNumber", plan.getPlanNumber() != null ? plan.getPlanNumber() : planId);
                 p.put("productName", plan.getProductName() != null ? plan.getProductName() : "(产品)");
+                // C-051 双单号: sourceOrderId = 关联销售单号 (单 SO 场景); sourceOrderIds = 多 SO
+                p.put("sourceOrderId",
+                        plan.getSourceOrderId() != null ? plan.getSourceOrderId() : "-");
+                // 多 SO 合并场景: 展示全部关联销售单号 (逗号分隔), 仅单 SO 时等同 sourceOrderId
+                if (plan.getSourceOrderIds() != null && !plan.getSourceOrderIds().isEmpty()) {
+                    p.put("salesOrderNumbers",
+                            String.join(", ", plan.getSourceOrderIds()));
+                } else if (plan.getSourceOrderId() != null) {
+                    p.put("salesOrderNumbers", plan.getSourceOrderId());
+                } else {
+                    p.put("salesOrderNumbers", "-");
+                }
             } catch (Exception e) {
                 log.warn("printConsolidatedMaterialRequisition: plan {} not found: {}", planId, e.getMessage());
                 p.put("planNumber", or(overrides, "planNumber", planId));
                 p.put("productName", or(overrides, "productName", "(产品)"));
+                p.put("sourceOrderId", or(overrides, "sourceOrderId", "-"));
+                p.put("salesOrderNumbers", or(overrides, "salesOrderNumbers", "-"));
             }
         } else {
             p.put("planNumber", or(overrides, "planNumber", planId));
             p.put("productName", or(overrides, "productName", "(产品)"));
+            p.put("sourceOrderId", or(overrides, "sourceOrderId", "-"));
+            p.put("salesOrderNumbers", or(overrides, "salesOrderNumbers", "-"));
         }
 
         // 跨批次汇总领料单明细: 展开 requisitions[].items, 按 materialTypeId 汇总 requiredQty
@@ -1002,5 +1051,111 @@ public class PrintController {
         if (overrides == null) return fallback;
         String v = overrides.get(key);
         return (v == null || v.isBlank()) ? fallback : v;
+    }
+
+    // ==================== 调拨指示单 payload builder ====================
+
+    /**
+     * 调拨指示单 payload builder.
+     *
+     * <p>字段:
+     * <ul>
+     *   <li>factoryName — 工厂名</li>
+     *   <li>transferNumber — 调拨单号</li>
+     *   <li>transferDate — 调拨日期</li>
+     *   <li>sourceWarehouseId / targetWarehouseId — 调出仓 / 调入仓 ID</li>
+     *   <li>sourceWarehouseName / targetWarehouseName — 调出仓 / 调入仓 名称 (如能解析)</li>
+     *   <li>status — 调拨状态 (中文)</li>
+     *   <li>requestedBy — 申请人</li>
+     *   <li>expectedArrivalDate — 期望到货日</li>
+     *   <li>remark — 备注</li>
+     *   <li>items — [{itemName, spec, qty, unit, batchId}]</li>
+     * </ul>
+     *
+     * <p>诚实原则: service 未注入或 transfer 不存在时, fallback stub (PDF 仍可渲染).
+     */
+    private Map<String, Object> buildTransferInstructionPayload(
+            String factoryId, String transferId, Map<String, String> overrides) {
+        Map<String, Object> p = new HashMap<>();
+        p.put("factoryName", or(overrides, "factoryName", "白垩纪食品 — " + factoryId));
+        p.put("transferId", transferId);
+        p.put("printDate", java.time.LocalDate.now().toString());
+
+        if (transferService != null) {
+            try {
+                InternalTransfer transfer = transferService.getTransferById(factoryId, transferId);
+                p.put("transferNumber",
+                        transfer.getTransferNumber() != null ? transfer.getTransferNumber() : transferId);
+                p.put("transferDate",
+                        transfer.getTransferDate() != null ? transfer.getTransferDate().toString() : "-");
+                p.put("sourceWarehouseId",
+                        transfer.getSourceWarehouseId() != null ? transfer.getSourceWarehouseId() : "-");
+                p.put("targetWarehouseId",
+                        transfer.getTargetWarehouseId() != null ? transfer.getTargetWarehouseId() : "-");
+                // 中文状态映射
+                p.put("status", transfer.getStatus() != null
+                        ? translateTransferStatus(transfer.getStatus().name()) : "-");
+                p.put("requestedBy",
+                        transfer.getRequestedBy() != null ? transfer.getRequestedBy().toString() : "-");
+                p.put("expectedArrivalDate",
+                        transfer.getExpectedArrivalDate() != null
+                                ? transfer.getExpectedArrivalDate().toString() : "-");
+                p.put("remark", transfer.getRemark() != null ? transfer.getRemark()
+                        : or(overrides, "remark", null));
+                // 明细行
+                List<Map<String, Object>> items = new ArrayList<>();
+                if (transfer.getItems() != null) {
+                    for (InternalTransferItem item : transfer.getItems()) {
+                        Map<String, Object> row = new LinkedHashMap<>();
+                        row.put("itemName",
+                                item.getItemName() != null ? item.getItemName() : "-");
+                        row.put("spec", null);  // InternalTransferItem 无 spec 字段, 诚实空
+                        row.put("qty", item.getQuantity() != null
+                                ? item.getQuantity().stripTrailingZeros().toPlainString() : "0");
+                        row.put("unit", item.getUnit() != null ? item.getUnit() : "-");
+                        // 批次 ID (发货前为 null 则 "-")
+                        row.put("batchId",
+                                item.getSourceBatchId() != null ? item.getSourceBatchId() : "-");
+                        items.add(row);
+                    }
+                }
+                p.put("items", items);
+            } catch (Exception e) {
+                log.warn("printTransferInstruction: transfer {} not found in factory {} — using stub: {}",
+                        transferId, factoryId, e.getMessage());
+                fillTransferInstructionStub(p, transferId, overrides);
+            }
+        } else {
+            log.warn("printTransferInstruction: transferService not injected — using stub for transfer {}",
+                    transferId);
+            fillTransferInstructionStub(p, transferId, overrides);
+        }
+        return p;
+    }
+
+    private void fillTransferInstructionStub(Map<String, Object> p, String transferId,
+            Map<String, String> overrides) {
+        p.put("transferNumber", or(overrides, "transferNumber", transferId));
+        p.put("transferDate", or(overrides, "transferDate", java.time.LocalDate.now().toString()));
+        p.put("sourceWarehouseId", or(overrides, "sourceWarehouseId", "(调出仓)"));
+        p.put("targetWarehouseId", or(overrides, "targetWarehouseId", "(调入仓)"));
+        p.put("status", or(overrides, "status", "-"));
+        p.put("requestedBy", or(overrides, "requestedBy", "-"));
+        p.put("expectedArrivalDate", or(overrides, "expectedArrivalDate", "-"));
+        p.put("remark", or(overrides, "remark", null));
+        p.put("items", java.util.List.of());
+    }
+
+    private String translateTransferStatus(String status) {
+        return switch (status) {
+            case "DRAFT"     -> "草稿";
+            case "REQUESTED" -> "待审批";
+            case "APPROVED"  -> "已审批";
+            case "SHIPPED"   -> "已发货";
+            case "RECEIVED"  -> "已签收";
+            case "CONFIRMED" -> "已确认";
+            case "CANCELLED" -> "已取消";
+            default          -> status;
+        };
     }
 }
