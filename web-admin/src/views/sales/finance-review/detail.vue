@@ -23,10 +23,12 @@ import {
   financeApprove,
   financeReject,
   getProductPriceTrend,
+  getActiveQuotes,
   type SalesOrderSummary,
   type FinanceCostBreakdown,
   type LineCostBreakdown,
   type SalesPriceTrendDTO,
+  type OperationalQuoteSummary,
 } from '@/api/salesFinanceReview';
 import {
   getLaborCostOrderAggregate,
@@ -59,6 +61,12 @@ const priceTrendLoading = ref(false);
 // #734 SP3 M3b: 双口径人工对比聚合 (订单级)
 const orderAggregate = ref<LaborEfficiencyOrderAggregateDTO | null>(null);
 const orderAggregateLoading = ref(false);
+
+// 三层价格对比: 运营报价 (研发预估价), key=productTypeId
+// 数据来源: OperationalQuote (APPROVED + 未过期 + 同客户同产品)
+// 展示: 研发预估价(运营报价单价) vs 下单价(SO.unitPrice) vs 实际成本价(LineCostBreakdown.actualCostPerUnit)
+const operationalQuoteMap = ref<Record<string, OperationalQuoteSummary | null>>({});
+const operationalQuoteLoading = ref(false);
 
 const canReview = computed(
   () => order.value?.status === 'PENDING_FINANCE_REVIEW',
@@ -101,6 +109,10 @@ async function load() {
       }
       // B3: 异步加载各产品线的售价趋势 (非阻塞, 独立 loading)
       void loadPriceTrends(breakdownRes.data.lines);
+      // 三层价格: 异步加载各产品线的运营报价 (研发预估价), 非阻塞
+      if (orderRes.success && orderRes.data?.customerId) {
+        void loadOperationalQuotes(breakdownRes.data.lines, orderRes.data.customerId);
+      }
     }
     // #734 SP3 M3b: 订单确认后异步加载双口径人工聚合 (非阻塞)
     if (orderRes.success && orderRes.data?.orderDate) {
@@ -173,6 +185,41 @@ async function loadPriceTrends(lines: LineCostBreakdown[]) {
     console.warn('[B3 price-trend] load failed, non-critical:', e);
   } finally {
     priceTrendLoading.value = false;
+  }
+}
+
+/**
+ * 三层价格: 加载各产品线的有效运营报价 (研发预估价).
+ * 非阻塞 — 失败只 warn, 不影响主流程.
+ * 注意: OperationalQuote.unitPrice 是 @PriceSensitive, 非财务角色后端返回 null.
+ * 财审页访问者已具有 finance:read 权限, 所以可以看到绝对值.
+ */
+async function loadOperationalQuotes(lines: LineCostBreakdown[], customerId: string) {
+  if (!factoryId.value || !lines || lines.length === 0 || !customerId) return;
+  const productIds = [...new Set(lines.map((l) => l.productId).filter(Boolean) as string[])];
+  if (productIds.length === 0) return;
+  operationalQuoteLoading.value = true;
+  try {
+    const results = await Promise.allSettled(
+      productIds.map((pid) =>
+        getActiveQuotes(factoryId.value, customerId, pid).then((res) => ({
+          productId: pid,
+          // 取最新有效报价 (列表按 createdAt 降序, 第一条最新)
+          quote: res.success && res.data && res.data.length > 0 ? res.data[0] : null,
+        })),
+      ),
+    );
+    const map: Record<string, OperationalQuoteSummary | null> = {};
+    for (const r of results) {
+      if (r.status === 'fulfilled') {
+        map[r.value.productId] = r.value.quote;
+      }
+    }
+    operationalQuoteMap.value = map;
+  } catch (e) {
+    console.warn('[三层价格] loadOperationalQuotes failed, non-critical:', e);
+  } finally {
+    operationalQuoteLoading.value = false;
   }
 }
 
@@ -481,6 +528,133 @@ onMounted(load);
       </el-table>
     </el-card>
 
+    <!-- 三层价格同屏对比 (转录[15:51-16:08]) ─────────────────────────
+         Layer ① 研发预估价  = OperationalQuote.unitPrice (运营报价审批后)
+         Layer ② 下单价      = SalesOrderItem.unitPrice
+         Layer ③ 实际成本价  = LineCostBreakdown.actualCostPerUnit
+         数据均为 @PriceSensitive — 财审页财务角色可见, 非财务角色后端返回 null 显示 "—"
+         无运营报价则 Layer ① 显示"暂无报价"; 无实际成本则 Layer ③ 显示"待生产"诚实占位.
+    ────────────────────────────────────────────────────────────── -->
+    <el-card
+      v-if="breakdown && breakdown.lines.length > 0"
+      v-loading="operationalQuoteLoading"
+      shadow="never"
+      class="comparison-card"
+      style="margin-bottom: 16px"
+    >
+      <template #header>
+        <div class="card-header">
+          <span class="card-title">三层价格同屏对比</span>
+          <span class="card-subtitle">研发预估价 / 下单价 / 实际成本价</span>
+        </div>
+      </template>
+      <el-table :data="breakdown.lines" border stripe size="small" empty-text="无行项目">
+        <el-table-column prop="productName" label="产品" min-width="160">
+          <template #default="{ row }">{{ row.productName || row.productId || '—' }}</template>
+        </el-table-column>
+        <el-table-column label="数量" align="right" width="90">
+          <template #default="{ row }">{{ row.quantity ?? '—' }}</template>
+        </el-table-column>
+
+        <!-- ① 研发预估价 (OperationalQuote 运营报价审批价) -->
+        <el-table-column label="① 研发预估价" align="right" min-width="140">
+          <template #default="{ row }">
+            <template v-if="row.productId && operationalQuoteMap[row.productId] !== undefined">
+              <template v-if="operationalQuoteMap[row.productId]">
+                <span style="font-weight: 600">
+                  {{ operationalQuoteMap[row.productId]!.unitPrice != null
+                      ? formatAmount(operationalQuoteMap[row.productId]!.unitPrice)
+                      : '—' }}
+                </span>
+                <div style="font-size: 11px; color: #909399; margin-top: 2px">
+                  {{ operationalQuoteMap[row.productId]!.quoteNo }}
+                </div>
+              </template>
+              <el-tag v-else size="small" type="info">暂无报价</el-tag>
+            </template>
+            <span v-else style="color: #c0c4cc">加载中…</span>
+          </template>
+        </el-table-column>
+
+        <!-- ② 下单价 (SalesOrderItem.unitPrice) -->
+        <el-table-column label="② 下单价" align="right" min-width="130">
+          <template #default="{ row }">
+            <span v-if="row.unitPrice != null" style="font-weight: 600">{{ formatAmount(row.unitPrice) }}</span>
+            <span v-else>—</span>
+            <!-- 与研发预估价对比 -->
+            <template v-if="row.productId && operationalQuoteMap[row.productId]?.unitPrice != null && row.unitPrice != null">
+              <div style="font-size: 11px; margin-top: 2px">
+                <span :class="row.unitPrice < operationalQuoteMap[row.productId]!.unitPrice! ? 'price-below' : 'price-above'">
+                  {{ row.unitPrice < operationalQuoteMap[row.productId]!.unitPrice!
+                      ? '▼ 低于预估'
+                      : row.unitPrice > operationalQuoteMap[row.productId]!.unitPrice!
+                        ? '▲ 高于预估'
+                        : '= 等于预估' }}
+                  ({{ (((row.unitPrice - operationalQuoteMap[row.productId]!.unitPrice!) / operationalQuoteMap[row.productId]!.unitPrice!) * 100).toFixed(1) }}%)
+                </span>
+              </div>
+            </template>
+          </template>
+        </el-table-column>
+
+        <!-- ③ 实际成本价 (LineCostBreakdown.actualCostPerUnit) -->
+        <el-table-column label="③ 实际成本价" align="right" min-width="140">
+          <template #default="{ row }">
+            <span v-if="row.actualCostPerUnit != null" style="font-weight: 600">{{ formatAmount(row.actualCostPerUnit) }}</span>
+            <el-tag v-else size="small" type="warning">待生产</el-tag>
+            <!-- 毛利率 = (下单价 - 实际成本) / 下单价 -->
+            <template v-if="row.actualCostPerUnit != null && row.unitPrice != null && row.unitPrice > 0">
+              <div style="font-size: 11px; margin-top: 2px">
+                <span :class="((row.unitPrice - row.actualCostPerUnit) / row.unitPrice) > 0.1 ? 'price-above' : 'price-below'">
+                  毛利率 {{ (((row.unitPrice - row.actualCostPerUnit) / row.unitPrice) * 100).toFixed(1) }}%
+                </span>
+              </div>
+            </template>
+          </template>
+        </el-table-column>
+
+        <!-- 三价总评 -->
+        <el-table-column label="三价差异概览" min-width="180" show-overflow-tooltip>
+          <template #default="{ row }">
+            <template v-if="row.unitPrice != null">
+              <div class="price-diff-summary">
+                <span v-if="row.productId && operationalQuoteMap[row.productId]?.unitPrice != null">
+                  <el-tag
+                    size="small"
+                    :type="row.unitPrice < operationalQuoteMap[row.productId]!.unitPrice! ? 'danger' : 'success'"
+                  >
+                    下单{{ row.unitPrice < operationalQuoteMap[row.productId]!.unitPrice! ? '低' : '≥' }}预估
+                  </el-tag>
+                </span>
+                <span v-if="row.actualCostPerUnit != null" style="margin-left: 4px">
+                  <el-tag
+                    size="small"
+                    :type="row.unitPrice > row.actualCostPerUnit ? 'success' : 'danger'"
+                  >
+                    {{ row.unitPrice > row.actualCostPerUnit ? '有毛利' : '亏损' }}
+                  </el-tag>
+                </span>
+                <span v-if="row.actualCostPerUnit == null" style="margin-left: 4px">
+                  <el-tag size="small" type="info">未生产</el-tag>
+                </span>
+              </div>
+            </template>
+            <span v-else style="color: #c0c4cc">—</span>
+          </template>
+        </el-table-column>
+      </el-table>
+
+      <!-- 三层价格说明 -->
+      <div class="three-price-legend">
+        <span>① 研发预估价 = 运营报价单审批价 (OperationalQuote, 最新有效)</span>
+        <span>② 下单价 = 本单销售单价</span>
+        <span>③ 实际成本价 = 完工后回填的移动均价单位成本</span>
+        <span v-if="!Object.values(operationalQuoteMap).some(q => q?.unitPrice != null)" style="color: #e6a23c">
+          注: 若研发预估价显示 "—", 表示该产品运营报价未对财务角色开放或无有效报价数据。
+        </span>
+      </div>
+    </el-card>
+
     <!-- B3 售价趋势 / 价格对比 (每产品一卡) -->
     <template v-if="breakdown && breakdown.lines.length > 0">
       <el-card
@@ -781,5 +955,31 @@ onMounted(load);
 .trend-summary .value {
   font-weight: 600;
   color: #303133;
+}
+/* 三层价格同屏对比 */
+.price-above {
+  color: #67c23a;
+  font-weight: 500;
+}
+.price-below {
+  color: #c62828;
+  font-weight: 500;
+}
+.price-diff-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+}
+.three-price-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 24px;
+  margin-top: 12px;
+  padding: 8px 12px;
+  background: #f5f7fa;
+  border-radius: 6px;
+  font-size: 11px;
+  color: #909399;
 }
 </style>

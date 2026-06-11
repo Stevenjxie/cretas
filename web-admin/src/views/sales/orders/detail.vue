@@ -1084,10 +1084,63 @@ async function handleQuickPayFull() {
               <el-table-column label="来源仓库" width="120">
                 <template #default="{ row }">{{ warehouseDisplayLabel(row.sourceWarehouseCode) }}</template>
               </el-table-column>
-              <el-table-column v-if="canViewPrice" label="销售小计" width="130" align="right">
-                <template #default="{ row }">{{ formatAmount(row.quantity * row.unitPrice) }}</template>
+              <!-- E-4 (六扇门需求矩阵 / PR #737/#749): 同时显示未税净价 + 含税价双值.
+                   后端 SalesOrderItem.getLineAmount()       = 未税小计 (折后未税)
+                   后端 SalesOrderItem.getLineAmountWithTax() = 含税小计 = 未税 × (1 + taxRate/100)
+                   两者均为 @PriceSensitive — 无价格权限时后端返回 null → 显示 "—". -->
+              <el-table-column v-if="canViewPrice" label="未税小计" width="130" align="right">
+                <template #default="{ row }">
+                  <span :title="'未含税金额 (折后)'">
+                    {{ row.lineAmount != null ? formatAmount(row.lineAmount) : (row.unitPrice != null ? formatAmount(row.quantity * row.unitPrice) : '—') }}
+                  </span>
+                </template>
+              </el-table-column>
+              <el-table-column v-if="canViewPrice" label="含税小计" width="140" align="right">
+                <template #default="{ row }">
+                  <template v-if="row.lineAmountWithTax != null">
+                    <span style="font-weight: 600; color: #303133">{{ formatAmount(row.lineAmountWithTax) }}</span>
+                    <div v-if="row.taxRate && Number(row.taxRate) > 0" style="font-size: 11px; color: #909399; margin-top: 2px">
+                      税额 {{ formatAmount(row.lineAmountWithTax - (row.lineAmount ?? row.quantity * row.unitPrice)) }}
+                    </div>
+                  </template>
+                  <span v-else-if="row.unitPrice != null">
+                    <!-- 无 taxRate 时未税=含税 -->
+                    {{ formatAmount(row.quantity * row.unitPrice) }}
+                  </span>
+                  <span v-else>—</span>
+                </template>
               </el-table-column>
             </el-table>
+
+            <!-- E-4 含税/未税汇总条 (仅在有税率数据时展示) -->
+            <div v-if="canViewPrice && order.items && order.items.length > 0" class="tax-summary-bar">
+              <template v-if="order.items.some((item: TableRow) => item.taxRate != null && Number(item.taxRate) > 0)">
+                <span class="tax-summary-item">
+                  <span class="tax-summary-label">未税总额</span>
+                  <span class="tax-summary-value">
+                    {{ formatAmount(order.items.reduce((s: number, item: TableRow) => s + (item.lineAmount ?? (item.unitPrice != null ? item.quantity * item.unitPrice : 0)), 0)) }}
+                  </span>
+                </span>
+                <span class="tax-summary-sep">+</span>
+                <span class="tax-summary-item">
+                  <span class="tax-summary-label">税额合计</span>
+                  <span class="tax-summary-value tax-value">
+                    {{ formatAmount(order.items.reduce((s: number, item: TableRow) => {
+                      const exTax = item.lineAmount ?? (item.unitPrice != null ? item.quantity * item.unitPrice : 0);
+                      const withTax = item.lineAmountWithTax ?? exTax;
+                      return s + (withTax - exTax);
+                    }, 0)) }}
+                  </span>
+                </span>
+                <span class="tax-summary-sep">=</span>
+                <span class="tax-summary-item">
+                  <span class="tax-summary-label">含税总额</span>
+                  <span class="tax-summary-value tax-total">
+                    {{ formatAmount(order.items.reduce((s: number, item: TableRow) => s + (item.lineAmountWithTax ?? (item.lineAmount ?? (item.unitPrice != null ? item.quantity * item.unitPrice : 0))), 0)) }}
+                  </span>
+                </span>
+              </template>
+            </div>
 
             <!-- ─── R14: 税率分组汇总 (Canvas FormulaEngine 驱动) ─── -->
             <div v-if="canViewPrice && taxGroupData" class="tax-group-section">
@@ -1651,6 +1704,19 @@ async function handleQuickPayFull() {
 }
 .tab-badge { :deep(.el-badge__content) { transform: translateY(-2px) translateX(8px); } }
 .tax-breakdown { display: flex; flex-wrap: wrap; gap: 4px; }
+// E-4 含税/未税汇总条
+.tax-summary-bar {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  margin-top: 8px; padding: 10px 16px;
+  background: #f5f7fa; border-radius: 6px;
+  font-size: 13px;
+  .tax-summary-item { display: flex; flex-direction: column; align-items: flex-end; }
+  .tax-summary-label { font-size: 11px; color: #909399; margin-bottom: 2px; }
+  .tax-summary-value { font-weight: 600; color: #303133; }
+  .tax-value { color: #e6a23c; }
+  .tax-total { color: #409eff; font-size: 15px; }
+  .tax-summary-sep { color: #c0c4cc; font-size: 16px; font-weight: 300; align-self: center; }
+}
 
 // V3 P0-11 补强 — 审批 timeline
 .approval-timeline-section {
