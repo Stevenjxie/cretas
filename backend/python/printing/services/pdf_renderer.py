@@ -655,8 +655,12 @@ def render_consolidated_material_requisition(data: dict) -> bytes:
 
     跨批次汇总同一计划下所有领料需求.
 
+    C-051 双单号渲染: KV 头部同时显示 salesOrderNumbers (销售单号) 和 planNumber (生产计划单号).
+
     expected data: {
       factoryName, planId, planNumber, productName, printDate,
+      salesOrderNumbers,   # C-051 新增: 关联销售单号 (多 SO 逗号分隔)
+      sourceOrderId,       # C-051 新增: 单 SO 时的销售单 ID
       requisitionCount,
       items: [{materialName, spec, unit, totalQty, batchRefs}],
       remark
@@ -669,11 +673,16 @@ def render_consolidated_material_requisition(data: dict) -> bytes:
     buffer = io.BytesIO()
     doc = _make_doc(buffer)
 
+    # C-051: 双单号 — 销售单号 + 生产计划单号均展示
+    sales_order_numbers = data.get("salesOrderNumbers") or data.get("sourceOrderId") or "-"
+    plan_number = data.get("planNumber") or data.get("planId", "-")
+
     story: list[Any] = [
         Paragraph(data.get("factoryName") or "白垩纪食品", s["small"]),
         Paragraph("汇总领料单 · Consolidated Material Requisition", s["title"]),
         _kv_table([
-            ("计划编号", data.get("planNumber") or data.get("planId", "-")),
+            ("关联销售单号", sales_order_numbers),    # C-051 双单号第一行
+            ("生产计划单号", plan_number),            # C-051 双单号第二行
             ("生产产品", data.get("productName", "-")),
             ("打印日期", data.get("printDate", "-")),
             ("涉及批次数", str(data.get("requisitionCount", 0))),
@@ -804,6 +813,64 @@ def render_production_work_order_multi(data: dict) -> bytes:
     return buffer.getvalue()
 
 
+def render_transfer_instruction(data: dict) -> bytes:
+    """调拨指示单 PDF — 客户[37:00] "无手机一天打一张纸质指示单".
+
+    expected data: {
+      factoryName, transferId, transferNumber, transferDate,
+      sourceWarehouseId (调出仓),  targetWarehouseId (调入仓),
+      status (中文状态),  requestedBy,  expectedArrivalDate,
+      remark,
+      items: [{itemName, spec, qty, unit, batchId}]
+    }
+
+    纸质指示单设计 (仓管员导向, 防呆):
+      - 标题: "调拨指示单" 大字
+      - KV 头: 单号/日期/调出仓/调入仓/申请人/期望到货/状态
+      - 明细表: 物料 / 规格 / 数量 / 单位 / 批次
+      - 签名区: 发料仓管员 + 收料仓管员
+    """
+    from reportlab.lib.units import cm
+    from reportlab.platypus import Paragraph, Spacer
+
+    s = _get_styles()
+    buffer = io.BytesIO()
+    doc = _make_doc(buffer)
+
+    story: list[Any] = [
+        Paragraph(data.get("factoryName") or "白垩纪食品", s["small"]),
+        Paragraph("调拨指示单 · Transfer Instruction", s["title"]),
+        _kv_table([
+            ("调拨单号", data.get("transferNumber") or data.get("transferId", "-")),
+            ("调拨日期", data.get("transferDate", "-")),
+            ("调出仓", data.get("sourceWarehouseId", "-")),
+            ("调入仓", data.get("targetWarehouseId", "-")),
+            ("申请人", data.get("requestedBy", "-")),
+            ("期望到货", data.get("expectedArrivalDate", "-")),
+            ("状态", data.get("status", "-")),
+        ], s["font"]),
+        Spacer(1, 0.5 * cm),
+        Paragraph("调拨明细", s["h2"]),
+        _render_items_table(
+            data.get("items") or [],
+            [("物料名称", "itemName", "LEFT"), ("规格", "spec", "LEFT"),
+             ("数量", "qty", "RIGHT"), ("单位", "unit", "CENTER"),
+             ("批次", "batchId", "LEFT")],
+            s["font"],
+        ),
+    ]
+    if data.get("remark"):
+        story.extend([Spacer(1, 0.5 * cm), Paragraph("备注", s["h2"]),
+                      Paragraph(str(data["remark"]), s["body"])])
+    story.extend([
+        Spacer(1, 1.0 * cm),
+        Paragraph("发料仓管员签名: ____________________________ 日期: ______", s["body"]),
+        Paragraph("收料仓管员签名: ____________________________ 日期: ______", s["body"]),
+    ])
+    doc.build(story)
+    return buffer.getvalue()
+
+
 RENDERERS: dict[str, Any] = {
     "sales-order": render_sales_order,
     "purchase-order": render_purchase_order,
@@ -819,4 +886,6 @@ RENDERERS: dict[str, Any] = {
     "consolidated-material-requisition": render_consolidated_material_requisition,
     # P1 #37 — 多 SO 合并公单
     "production-work-order-multi": render_production_work_order_multi,
+    # 调拨指示单 (客户[37:00] 纸质指示单)
+    "transfer-instruction": render_transfer_instruction,
 }

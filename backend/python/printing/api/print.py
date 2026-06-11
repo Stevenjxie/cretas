@@ -156,12 +156,32 @@ def print_consolidated_material_requisition(payload: dict[str, Any] = Body(...))
     """汇总领料单 PDF (SP12 T8).
 
     Java PrintController.printConsolidatedMaterialRequisition → here.
+    C-051: payload 现包含 salesOrderNumbers + sourceOrderId (双单号), renderer 展示。
     payload: { factoryName, planId, planNumber, productName, printDate,
-               requisitionCount, items: [...], remark }
+               salesOrderNumbers, sourceOrderId, requisitionCount, items: [...], remark }
     """
     pdf = _render_pdf("consolidated-material-requisition", payload)
     plan_id = payload.get("planId") or payload.get("planNumber", "na")
     return _pdf_response(pdf, f"consolidated-req-{plan_id}")
+
+
+# ==================== 调拨指示单 (transfer-instruction) ====================
+
+@router.post("/transfer-instruction")
+def print_transfer_instruction(payload: dict[str, Any] = Body(...)) -> Response:
+    """调拨指示单 PDF — 客户[37:00] 纸质调拨指示单.
+
+    Java PrintController.printTransferInstruction → here.
+    payload: {
+      factoryName, transferId, transferNumber, transferDate,
+      sourceWarehouseId (调出仓), targetWarehouseId (调入仓),
+      status, requestedBy, expectedArrivalDate, remark,
+      items: [{itemName, spec, qty, unit, batchId}]
+    }
+    """
+    pdf = _render_pdf("transfer-instruction", payload)
+    transfer_number = payload.get("transferNumber") or payload.get("transferId", "na")
+    return _pdf_response(pdf, f"transfer-instruction-{transfer_number}")
 
 
 @router.post("/preview-template")
