@@ -31,6 +31,11 @@ import java.util.List;
  *
  * <p>Sprint 6 W4-A: 加 CUSTOMER/SUPPLIER 辅助核算到对应往来账款 line — 支持 R-HJ Round 11 §G.1
  * 客户应收/供应商应付明细账中正确反映退货冲销.
+ *
+ * <p><b>SP11 价税分离 — 退货退化两行 (向后兼容):</b> {@link ReturnOrder} <b>无 {@code tax_amount}
+ * 列</b> (只有 {@code total_amount}), 故退货凭证按 SP11 spec §5 "无税率数据视为 0 税 → 退化两行"
+ * 处理, 与历史字节一致, 借贷恒平。退货冲销的价税分离需待 ReturnOrder 补 tax_amount 列后才能拆
+ * (本 spec §6 defer: 历史含税精确回填脚本按需单独做)。现状两行已对齐原销售/采购凭证的总额冲销。
  */
 @Component
 public class ReturnVoucherGenerator extends AbstractVoucherGenerator<ReturnOrder> {

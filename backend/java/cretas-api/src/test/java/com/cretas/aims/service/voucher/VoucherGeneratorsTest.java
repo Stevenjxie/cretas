@@ -65,6 +65,107 @@ class VoucherGeneratorsTest {
         assertNull(v.getEntries().get(1).getAuxiliaryType());
     }
 
+    // ==================== SP11: SalesReceipt 价税分离 ====================
+
+    @Test
+    void salesReceipt13PercentTaxSplitsThreeLinesBalanced() {
+        // SP11: 含税销售 (13%) → 借应收(含税) / 贷收入(未税) / 贷销项税
+        SalesReceiptVoucherGenerator gen = new SalesReceiptVoucherGenerator();
+        SalesOrder order = new SalesOrder();
+        order.setId("so-tax-13");
+        order.setOrderNumber("SO-TAX-13");
+        order.setOrderDate(LocalDate.of(2026, 6, 11));
+        order.setTotalAmount(new BigDecimal("1000.00"));   // 未税净额
+        order.setTaxAmount(new BigDecimal("130.00"));      // 销项税 13%
+        order.setCustomerId("cust-13");
+
+        Voucher v = gen.generate("F001", order);
+        // 三行
+        assertEquals(3, v.getEntries().size());
+        // 借: 1122 应收账款 = 含税 1130.00
+        VoucherEntry ar = v.getEntries().get(0);
+        assertEquals("1122", ar.getSubjectCode());
+        assertEquals(0, new BigDecimal("1130.00").compareTo(ar.getDebit()));
+        // 贷: 6001 主营业务收入 = 未税 1000.00
+        VoucherEntry rev = v.getEntries().get(1);
+        assertEquals("6001", rev.getSubjectCode());
+        assertEquals(0, new BigDecimal("1000.00").compareTo(rev.getCredit()));
+        // 贷: 2221.01 销项税额 = 130.00
+        VoucherEntry vat = v.getEntries().get(2);
+        assertEquals("2221.01", vat.getSubjectCode());
+        assertTrue(vat.getSubjectName().contains("销项税"));
+        assertEquals(0, new BigDecimal("130.00").compareTo(vat.getCredit()));
+        // 借贷恒平: 借 1130 = 贷 (1000 + 130)
+        assertEquals(0, new BigDecimal("1130.00").compareTo(v.getTotalDebit()));
+        assertEquals(0, new BigDecimal("1130.00").compareTo(v.getTotalCredit()));
+        // 客户辅助核算保留在应收 line
+        assertEquals(AuxiliaryType.CUSTOMER, ar.getAuxiliaryType());
+        assertEquals("cust-13", ar.getAuxiliaryEntityId());
+        // validateBalanced 不抛 (generate 已内部调用, 再显式确认)
+        assertDoesNotThrow(v::validateBalanced);
+    }
+
+    @Test
+    void salesReceiptZeroTaxDegradesToTwoLines() {
+        // SP11 向后兼容: 零税 (tax_amount=0) → 退化两行, 字节与历史一致
+        SalesReceiptVoucherGenerator gen = new SalesReceiptVoucherGenerator();
+        SalesOrder order = new SalesOrder();
+        order.setId("so-zero");
+        order.setOrderNumber("SO-ZERO");
+        order.setOrderDate(LocalDate.of(2026, 6, 11));
+        order.setTotalAmount(HUNDRED);
+        order.setTaxAmount(BigDecimal.ZERO);
+        order.setCustomerId("cust-z");
+
+        Voucher v = gen.generate("F001", order);
+        assertEquals(2, v.getEntries().size());            // 退化两行
+        assertEquals("1122", v.getEntries().get(0).getSubjectCode());
+        assertEquals("6001", v.getEntries().get(1).getSubjectCode());
+        // 应收 = 未税 = 收入 = 100.00 (无税)
+        assertEquals(0, HUNDRED.compareTo(v.getEntries().get(0).getDebit()));
+        assertEquals(0, HUNDRED.compareTo(v.getEntries().get(1).getCredit()));
+        assertEquals(HUNDRED, v.getTotalDebit());
+        assertEquals(HUNDRED, v.getTotalCredit());
+    }
+
+    @Test
+    void salesReceiptNullTaxDegradesToTwoLines() {
+        // SP11 向后兼容: tax_amount=null (老数据未设) → nullToZero → 退化两行
+        SalesReceiptVoucherGenerator gen = new SalesReceiptVoucherGenerator();
+        SalesOrder order = new SalesOrder();
+        order.setId("so-null-tax");
+        order.setOrderNumber("SO-NULL-TAX");
+        order.setOrderDate(LocalDate.of(2026, 6, 11));
+        order.setTotalAmount(HUNDRED);
+        order.setTaxAmount(null);   // 显式 null
+
+        Voucher v = gen.generate("F001", order);
+        assertEquals(2, v.getEntries().size());
+        assertEquals(HUNDRED, v.getTotalDebit());
+        assertEquals(HUNDRED, v.getTotalCredit());
+    }
+
+    @Test
+    void salesReceiptTaxIsAdditionNotRateRecompute() {
+        // SP11 spec §3.4: 应收 = 未税 + 税 (加法), 不重算 net×rate, 无舍入裂缝.
+        // 用一个 net×rate 与 stored tax 不整除的值, 验证凭证严格用 stored tax_amount.
+        SalesReceiptVoucherGenerator gen = new SalesReceiptVoucherGenerator();
+        SalesOrder order = new SalesOrder();
+        order.setId("so-odd");
+        order.setOrderNumber("SO-ODD");
+        order.setOrderDate(LocalDate.of(2026, 6, 11));
+        order.setTotalAmount(new BigDecimal("333.33"));    // 未税
+        order.setTaxAmount(new BigDecimal("43.33"));       // stored 税 (≠ 333.33×0.13=43.3329)
+        order.setCustomerId("cust-odd");
+
+        Voucher v = gen.generate("F001", order);
+        // 应收 = 333.33 + 43.33 = 376.66 (严格加法)
+        assertEquals(0, new BigDecimal("376.66").compareTo(v.getEntries().get(0).getDebit()));
+        assertEquals(0, new BigDecimal("43.33").compareTo(v.getEntries().get(2).getCredit()));
+        // 借贷恒平 (加法保证)
+        assertEquals(0, v.getTotalDebit().compareTo(v.getTotalCredit()));
+    }
+
     // ==================== PurchasePaymentVoucherGenerator ====================
 
     @Test
@@ -91,6 +192,83 @@ class VoucherGeneratorsTest {
         assertEquals("sup-77", payableLine.getAuxiliaryEntityId());
         // 库存 line 不挂供应商 (库存科目可挂 INVENTORY 维度但本 generator 先不分)
         assertNull(v.getEntries().get(0).getAuxiliaryType());
+    }
+
+    // ==================== SP11: PurchasePayment 价税分离 ====================
+
+    @Test
+    void purchasePayment9PercentTaxSplitsThreeLinesBalanced() {
+        // SP11: 含税采购 (9%) → 借库存(未税) / 借进项税 / 贷应付(含税)
+        PurchasePaymentVoucherGenerator gen = new PurchasePaymentVoucherGenerator();
+        PurchaseOrder order = new PurchaseOrder();
+        order.setId("po-tax-9");
+        order.setOrderNumber("PO-TAX-9");
+        order.setOrderDate(LocalDate.of(2026, 6, 11));
+        order.setTotalAmount(new BigDecimal("1000.00"));   // 未税净额
+        order.setTaxAmount(new BigDecimal("90.00"));       // 进项税 9%
+        order.setSupplierId("sup-9");
+
+        Voucher v = gen.generate("F001", order);
+        assertEquals(3, v.getEntries().size());
+        // 借: 1405 库存商品 = 未税 1000.00 (进项税不进成本)
+        VoucherEntry inv = v.getEntries().get(0);
+        assertEquals("1405", inv.getSubjectCode());
+        assertEquals(0, new BigDecimal("1000.00").compareTo(inv.getDebit()));
+        // 贷: 2202 应付账款 = 含税 1090.00
+        VoucherEntry ap = v.getEntries().get(1);
+        assertEquals("2202", ap.getSubjectCode());
+        assertEquals(0, new BigDecimal("1090.00").compareTo(ap.getCredit()));
+        // 借: 2221.02 进项税额 = 90.00
+        VoucherEntry vat = v.getEntries().get(2);
+        assertEquals("2221.02", vat.getSubjectCode());
+        assertTrue(vat.getSubjectName().contains("进项税"));
+        assertEquals(0, new BigDecimal("90.00").compareTo(vat.getDebit()));
+        // 借贷恒平: 借 (1000 + 90) = 贷 1090
+        assertEquals(0, new BigDecimal("1090.00").compareTo(v.getTotalDebit()));
+        assertEquals(0, new BigDecimal("1090.00").compareTo(v.getTotalCredit()));
+        // 供应商辅助核算保留在应付 line
+        assertEquals(AuxiliaryType.SUPPLIER, ap.getAuxiliaryType());
+        assertEquals("sup-9", ap.getAuxiliaryEntityId());
+        assertDoesNotThrow(v::validateBalanced);
+    }
+
+    @Test
+    void purchasePaymentZeroTaxDegradesToTwoLines() {
+        // SP11 向后兼容: 零税采购 → 退化两行, 字节与历史一致
+        PurchasePaymentVoucherGenerator gen = new PurchasePaymentVoucherGenerator();
+        PurchaseOrder order = new PurchaseOrder();
+        order.setId("po-zero");
+        order.setOrderNumber("PO-ZERO");
+        order.setOrderDate(LocalDate.of(2026, 6, 11));
+        order.setTotalAmount(HUNDRED);
+        order.setTaxAmount(BigDecimal.ZERO);
+        order.setSupplierId("sup-z");
+
+        Voucher v = gen.generate("F001", order);
+        assertEquals(2, v.getEntries().size());
+        assertEquals("1405", v.getEntries().get(0).getSubjectCode());
+        assertEquals("2202", v.getEntries().get(1).getSubjectCode());
+        assertEquals(0, HUNDRED.compareTo(v.getEntries().get(0).getDebit()));
+        assertEquals(0, HUNDRED.compareTo(v.getEntries().get(1).getCredit()));
+        assertEquals(HUNDRED, v.getTotalDebit());
+        assertEquals(HUNDRED, v.getTotalCredit());
+    }
+
+    @Test
+    void purchasePaymentNullTaxDegradesToTwoLines() {
+        // SP11 向后兼容: tax_amount=null → 退化两行
+        PurchasePaymentVoucherGenerator gen = new PurchasePaymentVoucherGenerator();
+        PurchaseOrder order = new PurchaseOrder();
+        order.setId("po-null-tax");
+        order.setOrderNumber("PO-NULL-TAX");
+        order.setOrderDate(LocalDate.of(2026, 6, 11));
+        order.setTotalAmount(HUNDRED);
+        order.setTaxAmount(null);
+
+        Voucher v = gen.generate("F001", order);
+        assertEquals(2, v.getEntries().size());
+        assertEquals(HUNDRED, v.getTotalDebit());
+        assertEquals(HUNDRED, v.getTotalCredit());
     }
 
     // ==================== Sprint 5 F-2: Auxiliary type 7 类 contract ====================
