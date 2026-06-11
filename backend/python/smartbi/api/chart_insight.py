@@ -272,5 +272,197 @@ async def chart_insight(request: Request, body: ChartInsightRequest) -> Dict[str
             "suggestion": result.suggestion,
             "source": result.source,
             "tier": result.tier,
+            "input_hash": result.input_hash,  # G4: corpus row key for feedback endpoint
         },
     }
+
+
+# ---------------------------------------------------------------------------
+# G4 — User feedback endpoint
+# POST /api/smartbi/insight/feedback
+# ---------------------------------------------------------------------------
+
+class InsightFeedbackRequest(BaseModel):
+    """Request body for POST /api/smartbi/insight/feedback.
+
+    The frontend sends the input_hash it received in the chart-insight response
+    data (or re-computes it from the same context). The vote is "up" or "down".
+    factory_id must match the JWT (cross-tenant guard).
+    """
+    input_hash: str = Field(..., min_length=1, description="sha256 hex of corpus row input_text")
+    vote: str = Field(..., description='"up" or "down"')
+    factory_id: str = Field(..., description="Tenant ID — must match JWT factoryId")
+
+
+# SQL: fetch the row to verify existence + read current metadata
+_FEEDBACK_FETCH_SQL = """
+    SELECT id, quality, metadata
+    FROM smart_bi_distillation_samples
+    WHERE input_hash = $1
+    LIMIT 1
+"""
+
+# SQL: update metadata + optionally demote quality
+_FEEDBACK_UPDATE_SQL = """
+    UPDATE smart_bi_distillation_samples
+    SET metadata = $1::jsonb,
+        quality  = $2
+    WHERE input_hash = $3
+"""
+
+
+@router.post("/insight/feedback")
+async def insight_feedback(request: Request, body: InsightFeedbackRequest) -> Dict[str, Any]:
+    """Record 👍/👎 user feedback for a served corpus insight (G4).
+
+    🔒 Auth: requires valid JWT Bearer token. factory_id cross-check enforced.
+
+    Vote logic:
+      👎 down: increment metadata.feedback_down; if feedback_down >= 2 → demote
+               quality to min(current_quality, 2) so the row is excluded from
+               training export AND skipped by the serve-path.
+      👍 up:   increment metadata.feedback_up (positive signal; does NOT inflate
+               quality above the row's gate value — feedback records signal only).
+
+    Returns:
+        {success: true,  data: {feedback_recorded: true, new_quality: int, vote: str}}
+        {success: false, message: "..."} — explicit on row-not-found or bad vote
+    """
+    # ------------------------------------------------------------------
+    # 🔒 Auth: extract JWT identity
+    # ------------------------------------------------------------------
+    jwt_factory_id: Optional[str] = getattr(request.state, "factory_id", None)
+    if not jwt_factory_id:
+        return JSONResponse(
+            status_code=401,
+            content={
+                "success": False,
+                "message": "Missing authentication: no factory context found.",
+                "code": "UNAUTHORIZED",
+            },
+        )
+
+    # Cross-tenant guard
+    if body.factory_id != jwt_factory_id:
+        logger.warning(
+            "[insight-feedback] cross-tenant attempt: jwt=%s body=%s",
+            jwt_factory_id, body.factory_id,
+        )
+        return JSONResponse(
+            status_code=403,
+            content={
+                "success": False,
+                "message": (
+                    f"Access denied: your JWT identifies factory '{jwt_factory_id}', "
+                    f"but the request body specifies '{body.factory_id}'."
+                ),
+                "code": "FACTORY_MISMATCH",
+            },
+        )
+
+    # Validate vote
+    vote = body.vote.lower().strip()
+    if vote not in ("up", "down"):
+        return JSONResponse(
+            status_code=400,
+            content={
+                "success": False,
+                "message": f"Invalid vote '{body.vote}': must be 'up' or 'down'.",
+                "code": "INVALID_VOTE",
+            },
+        )
+
+    # ------------------------------------------------------------------
+    # DB update
+    # ------------------------------------------------------------------
+    svc = await _get_service()
+    if svc is None or svc._pool is None:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "success": False,
+                "message": "Feedback service unavailable (pool not initialized)",
+                "code": "SERVICE_UNAVAILABLE",
+            },
+        )
+
+    pool = svc._pool
+    try:
+        import json as _json
+
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(_FEEDBACK_FETCH_SQL, body.input_hash)
+            if row is None:
+                # No-fake-data: explicit not-found, never silently swallow
+                return {
+                    "success": False,
+                    "message": (
+                        f"Corpus row not found for input_hash '{body.input_hash[:16]}…'. "
+                        "The insight may have expired (corpus rows are date-partitioned) "
+                        "or the hash is incorrect."
+                    ),
+                    "code": "ROW_NOT_FOUND",
+                }
+
+            current_quality: int = int(row["quality"] or 5)
+            raw_meta = row["metadata"]
+            try:
+                meta_dict: Dict[str, Any] = (
+                    raw_meta if isinstance(raw_meta, dict) else (
+                        _json.loads(raw_meta) if raw_meta else {}
+                    )
+                )
+            except Exception:
+                meta_dict = {}
+
+            # Apply vote: increment counter, enforce idempotency via simple integer add
+            if vote == "down":
+                meta_dict["feedback_down"] = int(meta_dict.get("feedback_down", 0)) + 1
+            else:
+                meta_dict["feedback_up"] = int(meta_dict.get("feedback_up", 0)) + 1
+
+            # Demote logic (G4):
+            # If 👎 count reaches the threshold → set quality = min(quality, 2)
+            # quality 2 is below the training export gate (q>=4) AND below the
+            # census quality threshold, so this row stops polluting future training.
+            new_quality = current_quality
+            feedback_down = int(meta_dict.get("feedback_down", 0))
+            if vote == "down" and feedback_down >= 2:
+                new_quality = min(current_quality, 2)
+                meta_dict["demoted_by_feedback"] = True
+                logger.info(
+                    "[insight-feedback] demoting corpus row input_hash=%s... "
+                    "feedback_down=%d → quality %d→%d",
+                    body.input_hash[:12], feedback_down, current_quality, new_quality,
+                )
+
+            meta_json = _json.dumps(meta_dict, ensure_ascii=False)
+            await conn.execute(_FEEDBACK_UPDATE_SQL, meta_json, new_quality, body.input_hash)
+
+        logger.info(
+            "[insight-feedback] recorded vote=%s input_hash=%s... factory=%s "
+            "new_quality=%d feedback_down=%d feedback_up=%d",
+            vote, body.input_hash[:12], jwt_factory_id, new_quality,
+            int(meta_dict.get("feedback_down", 0)),
+            int(meta_dict.get("feedback_up", 0)),
+        )
+        return {
+            "success": True,
+            "data": {
+                "feedback_recorded": True,
+                "vote": vote,
+                "new_quality": new_quality,
+            },
+            "message": "感谢反馈",
+        }
+
+    except Exception as exc:
+        logger.exception("[insight-feedback] unexpected error for input_hash=%s", body.input_hash[:16])
+        return JSONResponse(
+            status_code=500,
+            content={
+                "success": False,
+                "message": f"Internal error recording feedback: {exc}",
+                "code": "INTERNAL_ERROR",
+            },
+        )

@@ -107,6 +107,7 @@ class InsightResult:
     suggestion: Optional[str] = None
     source: str = "template"   # "template" | "llm"
     tier: int = 2
+    input_hash: Optional[str] = None  # G4: corpus row key — exposed so frontend can send feedback
 
 
 # ---------------------------------------------------------------------------
@@ -517,13 +518,17 @@ def _corpus_input_text(ctx: "ChartInsightContext") -> str:
 # SQL for reading back a today's corpus row by input_hash (MF4).
 # smart_bi_distillation_samples has NO RLS (per audit) — plain query is safe.
 # Filter by factory-baked input_hash so cross-tenant collision is impossible.
+# G4: also fetch metadata to check feedback_down signal; skip rows already demoted.
 _CORPUS_READ_SQL = """
-    SELECT teacher_output
+    SELECT teacher_output, input_hash, metadata
     FROM smart_bi_distillation_samples
     WHERE input_hash = $1
       AND created_at::date = CURRENT_DATE
     LIMIT 1
 """
+
+# G4 feedback demote threshold: once a row accumulates this many downvotes, stop serving it.
+_FEEDBACK_DOWN_SERVE_THRESHOLD = 2
 
 # System prompt used in _call_llm — duplicated here so corpus persist can store it.
 _SYSTEM_PROMPT = (
@@ -630,8 +635,11 @@ class ChartInsightService:
         # C2 MF4: read-back cache — check if today's corpus already has an accepted output
         # for this exact (factory-baked) input. If yes, re-run the ¥ serve-gate for the
         # CURRENT caller's tier and return from cache (0 LLM).
-        cached_teacher_output = await self._read_corpus_cache(input_hash)
-        if cached_teacher_output is not None:
+        # G4: _read_corpus_cache returns (teacher_output, row_input_hash) or None.
+        #     None means cache miss OR serve-skip (👎 demoted row).
+        cache_result = await self._read_corpus_cache(input_hash)
+        if cache_result is not None:
+            cached_teacher_output, cached_row_hash = cache_result
             cached_obj = _extract_json_object(cached_teacher_output)
             if cached_obj is not None:
                 # Re-run ¥ serve-gate for current caller's tier
@@ -656,6 +664,7 @@ class ChartInsightService:
                             suggestion=cached_obj.get("suggestion"),
                             source="cache",
                             tier=2,
+                            input_hash=cached_row_hash,  # G4: expose for feedback
                         )
                 else:
                     logger.debug("[chart-insight] corpus cache hit (input_hash=%s...)", input_hash[:12])
@@ -665,6 +674,7 @@ class ChartInsightService:
                         suggestion=cached_obj.get("suggestion"),
                         source="cache",
                         tier=2,
+                        input_hash=cached_row_hash,  # G4: expose for feedback
                     )
 
         # LLM call: returns structured {claims, finding, implication, suggestion} or None
@@ -727,14 +737,21 @@ class ChartInsightService:
             suggestion=validated.get("suggestion"),
             source="llm",
             tier=2,
+            input_hash=input_hash,  # G4: expose for feedback
         )
 
     # ------------------------------------------------------------------
     # C2 MF4 helpers: corpus read-back cache + teacher model name
     # ------------------------------------------------------------------
 
-    async def _read_corpus_cache(self, input_hash: str) -> Optional[str]:
-        """Read back today's corpus row by input_hash. Returns teacher_output string or None.
+    async def _read_corpus_cache(self, input_hash: str) -> Optional[tuple]:
+        """Read back today's corpus row by input_hash.
+
+        Returns (teacher_output: str, row_input_hash: str) or None.
+
+        Serve-skip (G4): if the row's metadata.feedback_down >= _FEEDBACK_DOWN_SERVE_THRESHOLD,
+        the row has been 👎'd enough times to be excluded from serving — returns None so the
+        caller falls through to LLM for a fresh answer.
 
         On any error (pool None, DB error, non-string result, etc.) → returns None and logs.
         Never raises — cache miss gracefully falls through to LLM.
@@ -743,13 +760,34 @@ class ChartInsightService:
             return None
         try:
             async with self._pool.acquire() as conn:
-                row = await conn.fetchval(_CORPUS_READ_SQL, input_hash)
+                row = await conn.fetchrow(_CORPUS_READ_SQL, input_hash)
                 if row is None:
                     return None
-                if not isinstance(row, str):
+                teacher_output = row["teacher_output"]
+                row_hash = row["input_hash"]
+                if not isinstance(teacher_output, str):
                     # Unexpected type (e.g. mock returning int in tests) — treat as miss
                     return None
-                return row
+                # G4 serve-skip: check feedback_down in metadata
+                raw_meta = row["metadata"]
+                try:
+                    meta_dict = raw_meta if isinstance(raw_meta, dict) else (
+                        json.loads(raw_meta) if raw_meta else {}
+                    )
+                    feedback_down = int(meta_dict.get("feedback_down", 0))
+                    feedback_up = int(meta_dict.get("feedback_up", 0))
+                    if feedback_down >= _FEEDBACK_DOWN_SERVE_THRESHOLD or feedback_down > feedback_up:
+                        if feedback_down >= _FEEDBACK_DOWN_SERVE_THRESHOLD:
+                            logger.info(
+                                "[chart-insight] serve-skip: row input_hash=%s... has "
+                                "feedback_down=%d >= threshold=%d — falling through to LLM",
+                                input_hash[:12], feedback_down, _FEEDBACK_DOWN_SERVE_THRESHOLD,
+                            )
+                            return None
+                except Exception as meta_exc:
+                    # Metadata parse failure → treat as no-feedback (safe to serve)
+                    logger.debug("[chart-insight] metadata parse failed (non-blocking): %s", meta_exc)
+                return (teacher_output, row_hash)
         except Exception as exc:
             logger.warning("[chart-insight] corpus cache read failed (non-blocking): %s", exc)
             return None

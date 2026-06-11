@@ -46,6 +46,8 @@ export interface InsightResult {
   suggestion?: string;
   source: 'rules' | 'template' | 'llm' | 'cache';
   tier: 1 | 2;
+  /** G4: corpus row key returned by Tier 2 endpoint; null/undefined for Tier 1 rules-based insights */
+  input_hash?: string | null;
 }
 
 export interface UserPermissions {
@@ -924,6 +926,8 @@ interface Tier2ResponseData {
   suggestion?: string;
   source: 'rules' | 'template' | 'llm';
   tier: number;
+  /** G4: corpus row key for the feedback endpoint */
+  input_hash?: string | null;
 }
 
 interface Tier2Response {
@@ -1038,9 +1042,60 @@ export async function fetchTier2Insight(
       suggestion: d.suggestion,
       source: d.source,
       tier: 2,
+      input_hash: d.input_hash ?? null,  // G4: carry corpus key for feedback
     };
   } catch (err) {
     console.warn('[chart-insight] Tier2 fetch failed (honest-null):', err);
     return null;
+  }
+}
+
+// ============================================================
+// G4 — submitInsightFeedback: POST /api/smartbi/insight/feedback
+// ============================================================
+
+/**
+ * Submit a 👍/👎 vote for a served corpus insight.
+ *
+ * @param inputHash   The `input_hash` from the InsightResult (corpus row key)
+ * @param vote        'up' or 'down'
+ * @param factoryId   Must match the JWT factoryId (same as used in fetchTier2Insight)
+ * @returns           true on success, false on any error (never throws)
+ */
+export async function submitInsightFeedback(
+  inputHash: string,
+  vote: 'up' | 'down',
+  factoryId: string,
+): Promise<boolean> {
+  try {
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+    if (typeof localStorage !== 'undefined') {
+      const token = localStorage.getItem('cretas_access_token');
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+      const secret =
+        typeof import.meta !== 'undefined' && import.meta.env
+          ? (import.meta.env.VITE_PYTHON_SECRET as string | undefined) ?? ''
+          : '';
+      if (secret) headers['X-Internal-Secret'] = secret;
+    }
+
+    const response = await fetch(`${PYTHON_SMARTBI_URL}/api/smartbi/insight/feedback`, {
+      method: 'POST',
+      headers,
+      credentials: 'include',
+      body: JSON.stringify({ input_hash: inputHash, vote, factory_id: factoryId }),
+    });
+
+    if (!response.ok) {
+      console.warn(`[insight-feedback] HTTP ${response.status} for vote=${vote}`);
+      return false;
+    }
+    const json = await response.json();
+    return json?.success === true;
+  } catch (err) {
+    console.warn('[insight-feedback] submitFeedback failed:', err);
+    return false;
   }
 }
