@@ -382,5 +382,40 @@ export default defineConfig({
         video: { mode: 'on', size: { width: 1920, height: 1080 } },
       },
     },
+    // SP2 撤回流程 E2E — 4 场景 (P1 #41, 2026-06-11)
+    // 覆盖: 提交撤回申请 / 主管审批 / SP12 快速通道本人直撤 / 主管驳回
+    // Per .claude/rules/playwright-headed-mode.md: 强制 headed + zh-CN locale + 1920x1080
+    // Run via:
+    //   PLAYWRIGHT_PORT=9222 PLAYWRIGHT_CHAT_ID=sp2-reversal \
+    //   E2E_BASE_URL=http://139.196.165.140:8086 \
+    //   E2E_API_URL=http://47.100.235.168:10010/api/mobile \
+    //   npx playwright test --project sp2-reversal
+    {
+      name: 'sp2-reversal',
+      testMatch: 'sp2-reversal.spec.ts',
+      fullyParallel: false,
+      workers: 1,
+      use: {
+        // ⭐ HEADED — per .claude/rules/playwright-headed-mode.md 铁律 (中文字体/客户演示/CSS hover)
+        headless: false,
+        viewport: { width: 1920, height: 1080 },
+        locale: 'zh-CN',
+        timezoneId: 'Asia/Shanghai',
+        launchOptions: {
+          args: [
+            `--remote-debugging-port=${Number(process.env.PLAYWRIGHT_PORT) || 9222}`,
+            `--user-data-dir=./.pw-cache-${process.env.PLAYWRIGHT_CHAT_ID || 'sp2-reversal'}/`,
+            '--lang=zh-CN',
+            '--font-render-hinting=none',
+            '--disable-blink-features=AutomationControlled',
+            '--window-position=0,0',
+            '--window-size=1920,1080',
+          ],
+          slowMo: 80,
+        },
+        screenshot: { mode: 'on', fullPage: true },
+        video: { mode: 'on', size: { width: 1920, height: 1080 } },
+      },
+    },
   ],
 });

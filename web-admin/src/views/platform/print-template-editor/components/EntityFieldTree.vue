@@ -1,7 +1,11 @@
 <template>
   <div class="entity-tree">
     <div class="tree-title">实体字段 <span class="entity-tag">{{ entityType }}</span></div>
-    <div class="hint">拖到画布即创建字段绑定</div>
+    <div class="hint">
+      拖到画布即创建字段绑定
+      <span v-if="loadingSchema" class="loading-hint">（加载中…）</span>
+      <span v-else-if="dynamicSchema" class="live-hint">（实时）</span>
+    </div>
     <el-tree
       :data="treeData"
       :props="{ children: 'children', label: 'label' }"
@@ -21,7 +25,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref, watch } from 'vue'
 import type { PrintEntityType } from '../utils/printSchemaTypes'
 
 interface FieldNode {
@@ -33,15 +37,61 @@ interface FieldNode {
 
 const props = defineProps<{
   entityType: PrintEntityType | ''
+  factoryId?: string       // passed from parent editor; needed for backend fetch
 }>()
 
 /**
- * Day 2 stub: hard-coded entity field schema per entityType. Day 3-4 should
- * fetch these from /api/mobile/{factoryId}/entity-metadata/{entityType} once
- * the metadata endpoint exists. For now, the most-common fields per the 6
- * built-in entityTypes are enumerated locally — covers ~80% of templates.
+ * SP12 stub builder → backend-ready replacement (2026-06-11, P1 #41):
+ *
+ * Dynamic schema loaded from backend when available.
+ * When `GET /api/mobile/{factoryId}/entity-metadata/{entityType}` is implemented,
+ * `dynamicSchema` is populated and `FIELD_SCHEMA_FALLBACK` is bypassed.
+ * Until then the hardcoded fallback below ensures the editor remains usable.
+ *
+ * TODO(SP12 backend): implement EntityMetadataController returning FieldNode[] per PrintEntityType.
  */
-const FIELD_SCHEMA: Record<string, FieldNode[]> = {
+const dynamicSchema = ref<FieldNode[] | null>(null)
+const loadingSchema = ref(false)
+
+async function fetchFromBackend(entityType: string, factoryId: string) {
+  if (!entityType || !factoryId) return
+  loadingSchema.value = true
+  try {
+    const token = localStorage.getItem('access_token') || ''
+    const res = await fetch(
+      `/api/mobile/${factoryId}/entity-metadata/${entityType}`,
+      { headers: { Authorization: `Bearer ${token}` } }
+    )
+    if (res.ok) {
+      const json = await res.json()
+      // backend should return { success: true, data: FieldNode[] }
+      const nodes: FieldNode[] = json?.data ?? json
+      if (Array.isArray(nodes) && nodes.length > 0) {
+        dynamicSchema.value = nodes
+      }
+    }
+    // 404 / 501 = endpoint not implemented yet → fall through to FIELD_SCHEMA_FALLBACK
+  } catch {
+    // network error or JSON parse error → fall through to fallback
+  } finally {
+    loadingSchema.value = false
+  }
+}
+
+watch(
+  () => [props.entityType, props.factoryId] as [string, string | undefined],
+  ([et, fid]) => {
+    dynamicSchema.value = null
+    if (et && fid) fetchFromBackend(et, fid)
+  },
+  { immediate: true }
+)
+
+/**
+ * Fallback field schema (Sprint 6 hardcoded stub, covers ~80% of built-in entityTypes).
+ * Used when the backend metadata endpoint is unavailable.
+ */
+const FIELD_SCHEMA_FALLBACK: Record<string, FieldNode[]> = {
   PRINT_SALES_ORDER: [
     { label: '工厂名', path: 'factoryName', type: 'string' },
     { label: '订单号', path: 'order.orderNumber', type: 'string' },
@@ -131,7 +181,8 @@ const FIELD_SCHEMA: Record<string, FieldNode[]> = {
 
 const treeData = computed<FieldNode[]>(() => {
   if (!props.entityType) return []
-  return FIELD_SCHEMA[props.entityType] ?? []
+  // Prefer backend-fetched schema when available; fall back to hardcoded stub
+  return dynamicSchema.value ?? FIELD_SCHEMA_FALLBACK[props.entityType] ?? []
 })
 
 function onItemDragStart(node: FieldNode, e: DragEvent) {
@@ -195,5 +246,15 @@ function onDragStart() { /* noop */ }
   background: #f3f4f6;
   padding: 1px 6px;
   border-radius: 3px;
+}
+.loading-hint {
+  font-size: 10px;
+  color: #3b82f6;
+  margin-left: 4px;
+}
+.live-hint {
+  font-size: 10px;
+  color: #10b981;
+  margin-left: 4px;
 }
 </style>
