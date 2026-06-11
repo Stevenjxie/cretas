@@ -36,7 +36,8 @@ public class ThreePriceComparisonDTO {
     private BigDecimal midQuote;
 
     /**
-     * 最终实际成本 元/kg (来自生产批次实际成本均值, 可为 null = 尚未生产).
+     * 最终实际成本 元/kg (来自试制批次真实生产成本 totalCost/goodQuantity,
+     * 可为 null = 批次尚未报工完成 / 无成本数据).
      */
     @PriceSensitive
     private BigDecimal actualCost;

@@ -183,13 +183,14 @@ public class ProcessingController {
             @PathVariable @Parameter(description = "工厂ID", example = "F001") String factoryId,
             @RequestParam(required = false) @Parameter(description = "状态", example = "PROCESSING") String status,
             @RequestParam(required = false) @Parameter(description = "主管ID(车间主管过滤)") Long supervisorId,
+            @RequestParam(required = false) @Parameter(description = "仅试制批次(SP10中报价下拉)") Boolean isTrial,
             @RequestParam(defaultValue = "1") @Parameter(description = "页码", example = "1") Integer page,
             @RequestParam(defaultValue = "20") @Parameter(description = "每页大小", example = "20") Integer size) {
-        log.info("获取批次列表: factoryId={}, status={}, supervisorId={}", factoryId, status, supervisorId);
+        log.info("获取批次列表: factoryId={}, status={}, supervisorId={}, isTrial={}", factoryId, status, supervisorId, isTrial);
         PageRequest pageRequest = new PageRequest();
         pageRequest.setPage(page);
         pageRequest.setSize(size);
-        PageResponse<ProductionBatch> result = processingService.getBatches(factoryId, status, supervisorId, pageRequest);
+        PageResponse<ProductionBatch> result = processingService.getBatches(factoryId, status, supervisorId, isTrial, pageRequest);
         return ApiResponse.success(result);
     }
 

@@ -42,7 +42,7 @@ const trialBatches = ref<TableRow[]>([]);
 async function loadTrialBatches() {
   if (!factoryId.value) return;
   try {
-    const res = await get(`/${factoryId.value}/production/batches`, { params: { isTrial: true, size: 100 } });
+    const res = await get(`/${factoryId.value}/processing/batches`, { params: { isTrial: true, size: 100 } });
     if (res.success && res.data) {
       trialBatches.value = res.data.content || res.data || [];
     }

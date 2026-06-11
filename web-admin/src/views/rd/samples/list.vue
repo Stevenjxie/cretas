@@ -97,7 +97,7 @@ function resetSearch() {
 
 // 样品操作
 async function handleSampleAction(id: string, action: string) {
-  const labels: Record<string, string> = { submit: '提交审核', approve: '审核通过', reject: '驳回', quote: '提交报价申请' };
+  const labels: Record<string, string> = { submit: '提交审核', approve: '审核通过', reject: '驳回' };
   try {
     if (action === 'reject') {
       const { value: notes } = await ElMessageBox.prompt('请输入驳回原因', '驳回');
@@ -105,9 +105,6 @@ async function handleSampleAction(id: string, action: string) {
     } else if (action === 'approve') {
       const { value: notes } = await ElMessageBox.prompt('审核意见（可选）', '审核通过', { inputValue: '', inputValidator: () => true });
       await post(`/${factoryId.value}/rd/samples/${id}/approve`, { notes: notes || '' });
-    } else if (action === 'quote') {
-      await ElMessageBox.confirm('确认提交报价申请？样品将进入报价流程。', '提交报价申请');
-      await post(`/${factoryId.value}/rd/samples/${id}/request-quotation`);
     } else {
       await ElMessageBox.confirm(`确认${labels[action]}？`, '确认');
       await post(`/${factoryId.value}/rd/samples/${id}/${action}`);
@@ -322,7 +319,8 @@ async function addTrackingRecord() {
             <el-button type="primary" link size="small" @click="openTrackingDialog(row)">追踪记录</el-button>
             <template v-if="canWrite">
               <el-button v-if="['DRAFT','IN_PROGRESS','TESTING'].includes(row.status)" type="warning" link size="small" @click="handleSampleAction(row.id, 'submit')">提交审核</el-button>
-              <el-button v-if="['APPROVED'].includes(row.status)" type="primary" link size="small" @click="handleSampleAction(row.id, 'quote')">提交报价申请</el-button>
+              <!-- SP10: 审核通过后由 SampleApprovedEvent 自动创建 BOM + 报价任务, 无需手动"提交报价申请" (旧按钮调用的 /request-quotation 端点不存在) -->
+              <el-tag v-if="row.status === 'APPROVED'" type="success" size="small" effect="plain" style="margin:0 4px">已自动进入报价</el-tag>
               <el-button v-if="row.status === 'SUBMITTED'" type="success" link size="small" @click="handleSampleAction(row.id, 'approve')">通过</el-button>
               <el-button v-if="row.status === 'SUBMITTED'" type="danger" link size="small" @click="handleSampleAction(row.id, 'reject')">驳回</el-button>
             </template>

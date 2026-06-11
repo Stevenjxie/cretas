@@ -364,6 +364,33 @@ public class ProcessingServiceImpl implements ProcessingService {
     }
 
     @Override
+    public PageResponse<ProductionBatch> getBatches(String factoryId, String status, Long supervisorId, Boolean isTrial, PageRequest pageRequest) {
+        // 无试制过滤 → 走原有逻辑 (主管过滤 / 全量)
+        if (isTrial == null) {
+            return getBatches(factoryId, status, supervisorId, pageRequest);
+        }
+        // SP10: 试制批次过滤 (中报价下拉). 与主管过滤不叠加 (试制场景无主管语义).
+        org.springframework.data.domain.PageRequest pageable = org.springframework.data.domain.PageRequest.of(
+                pageRequest.getPage() - 1,
+                pageRequest.getSize(),
+                Sort.by(Sort.Direction.DESC, "createdAt")
+        );
+        Page<ProductionBatch> page;
+        if (status != null && !status.isEmpty()) {
+            ProductionBatchStatus statusEnum = ProductionBatchStatus.valueOf(status.toUpperCase());
+            page = productionBatchRepository.findByFactoryIdAndStatusAndIsTrial(factoryId, statusEnum, isTrial, pageable);
+        } else {
+            page = productionBatchRepository.findByFactoryIdAndIsTrial(factoryId, isTrial, pageable);
+        }
+        return PageResponse.of(
+                page.getContent(),
+                pageRequest.getPage(),
+                pageRequest.getSize(),
+                page.getTotalElements()
+        );
+    }
+
+    @Override
     public PageResponse<ProductionBatch> getBatches(String factoryId, String status, Long supervisorId, PageRequest pageRequest) {
         if (supervisorId == null) {
             return getBatches(factoryId, status, pageRequest);

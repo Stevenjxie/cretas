@@ -1,8 +1,10 @@
 package com.cretas.aims.service.rd;
 
 import com.cretas.aims.dto.rd.ThreePriceComparisonDTO;
+import com.cretas.aims.entity.ProductionBatch;
 import com.cretas.aims.entity.rd.ProductMidQuote;
 import com.cretas.aims.entity.rd.QuotationTask;
+import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.rd.ProductMidQuoteRepository;
 import com.cretas.aims.repository.rd.QuotationTaskRepository;
 import com.cretas.aims.service.rd.impl.ThreePriceComparisonServiceImpl;
@@ -36,13 +38,14 @@ class ThreePriceComparisonServiceTest {
 
     @Mock QuotationTaskRepository quotationTaskRepository;
     @Mock ProductMidQuoteRepository midQuoteRepository;
+    @Mock ProductionBatchRepository productionBatchRepository;
 
     private ThreePriceComparisonServiceImpl service;
 
     @BeforeEach
     void setUp() {
         service = new ThreePriceComparisonServiceImpl(
-                quotationTaskRepository, midQuoteRepository);
+                quotationTaskRepository, midQuoteRepository, productionBatchRepository);
     }
 
     private QuotationTask buildTask(String sampleId, BigDecimal totalCost) {
@@ -131,6 +134,57 @@ class ThreePriceComparisonServiceTest {
                 .findFirst();
         assertTrue(preToMid.isPresent(), "应有 PRE_TO_MID 条目");
         assertTrue(preToMid.get().isAlert(), "超阈值时 alert 应为 true");
+    }
+
+    @Test
+    @DisplayName("SP10: 试制批次有真实成本 → actualCost=batch.totalCost/goodQuantity + MID_TO_ACTUAL 告警")
+    void threePrice_actualCost_fromTrialBatch() {
+        when(quotationTaskRepository.findBySampleIdAndDeletedAtIsNull("sample-001"))
+                .thenReturn(buildTask("sample-001", new BigDecimal("2000.00")));
+        // mid: totalPerKg=47.5, trialOutputKg=50, threshold=10%, 关联试制批次 7
+        ProductMidQuote mid = buildMidQuote(new BigDecimal("47.5000"), new BigDecimal("50.0"),
+                new BigDecimal("10.00"));
+        mid.setTrialBatchId(7L);
+        when(midQuoteRepository.findFirstByFactoryIdAndSampleIdOrderByCreatedAtDesc("F006", "sample-001"))
+                .thenReturn(Optional.of(mid));
+        // 试制批次: totalCost=2750, goodQuantity=50 → actualCost = 55.0000/kg
+        ProductionBatch batch = new ProductionBatch();
+        batch.setTotalCost(new BigDecimal("2750.00"));
+        batch.setGoodQuantity(new BigDecimal("50.0"));
+        when(productionBatchRepository.findByIdAndFactoryId(7L, "F006"))
+                .thenReturn(Optional.of(batch));
+
+        ThreePriceComparisonDTO dto = service.getThreePriceComparison("F006", "sample-001");
+
+        assertNotNull(dto.getActualCost(), "试制批次有成本时 actualCost 应非 null");
+        assertEquals(0, new BigDecimal("55.0000").compareTo(dto.getActualCost()),
+                "actualCost = 2750/50 = 55.0000/kg");
+        // MID_TO_ACTUAL: (55-47.5)/47.5*100 = 15.79% > 10% → alert
+        var midToActual = dto.getVarianceAlerts().stream()
+                .filter(a -> "MID_TO_ACTUAL".equals(a.getStage()))
+                .findFirst();
+        assertTrue(midToActual.isPresent(), "应有 MID_TO_ACTUAL 条目");
+        assertTrue(midToActual.get().isAlert(), "实际超中报价阈值时 alert=true");
+    }
+
+    @Test
+    @DisplayName("SP10: 试制批次成本缺失 → actualCost=null (诚实留空)")
+    void threePrice_actualCost_nullWhenBatchCostMissing() {
+        when(quotationTaskRepository.findBySampleIdAndDeletedAtIsNull("sample-001"))
+                .thenReturn(buildTask("sample-001", new BigDecimal("2000.00")));
+        ProductMidQuote mid = buildMidQuote(new BigDecimal("47.5000"), new BigDecimal("50.0"), null);
+        mid.setTrialBatchId(7L);
+        when(midQuoteRepository.findFirstByFactoryIdAndSampleIdOrderByCreatedAtDesc("F006", "sample-001"))
+                .thenReturn(Optional.of(mid));
+        // 批次存在但 totalCost=null (尚未报工完成)
+        ProductionBatch batch = new ProductionBatch();
+        batch.setGoodQuantity(new BigDecimal("50.0"));
+        when(productionBatchRepository.findByIdAndFactoryId(7L, "F006"))
+                .thenReturn(Optional.of(batch));
+
+        ThreePriceComparisonDTO dto = service.getThreePriceComparison("F006", "sample-001");
+
+        assertNull(dto.getActualCost(), "批次无成本时 actualCost 应为 null");
     }
 
     @Test

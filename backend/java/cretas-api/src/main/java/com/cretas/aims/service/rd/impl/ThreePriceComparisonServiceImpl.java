@@ -2,8 +2,10 @@ package com.cretas.aims.service.rd.impl;
 
 import com.cretas.aims.dto.rd.ThreePriceComparisonDTO;
 import com.cretas.aims.dto.rd.ThreePriceComparisonDTO.VarianceAlertEntry;
+import com.cretas.aims.entity.ProductionBatch;
 import com.cretas.aims.entity.rd.ProductMidQuote;
 import com.cretas.aims.entity.rd.QuotationTask;
+import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.rd.ProductMidQuoteRepository;
 import com.cretas.aims.repository.rd.QuotationTaskRepository;
 import com.cretas.aims.service.rd.ThreePriceComparisonService;
@@ -31,6 +33,7 @@ public class ThreePriceComparisonServiceImpl implements ThreePriceComparisonServ
 
     private final QuotationTaskRepository quotationTaskRepository;
     private final ProductMidQuoteRepository midQuoteRepository;
+    private final ProductionBatchRepository productionBatchRepository;
 
     @Override
     @Transactional(readOnly = true)
@@ -62,8 +65,26 @@ public class ThreePriceComparisonServiceImpl implements ThreePriceComparisonServ
             }
         }
 
-        // ── 3. 实际成本: 暂无自动计算源 (Phase 2 由生产批次成本模块补全) ────
+        // ── 3. 实际成本: 试制批次的真实生产成本 per kg ──────────────────────
+        //   actualCost = 批次实际总成本(逐道人工+材料) / 良品产出(kg)
+        //   与预报价 per-kg 同 kg 基准 (goodQuantity), 三价同口径可比.
+        //   批次/成本/产出任一缺失 → null (诚实留空, 等批次报工完成).
         BigDecimal actualCost = null;
+        if (latestMidOpt.isPresent() && latestMidOpt.get().getTrialBatchId() != null) {
+            Long trialBatchId = latestMidOpt.get().getTrialBatchId();
+            Optional<ProductionBatch> batchOpt =
+                    productionBatchRepository.findByIdAndFactoryId(trialBatchId, factoryId);
+            if (batchOpt.isPresent()) {
+                ProductionBatch batch = batchOpt.get();
+                BigDecimal batchTotalCost = batch.getTotalCost();
+                BigDecimal goodQty = batch.getGoodQuantity();
+                if (batchTotalCost != null
+                        && goodQty != null
+                        && goodQty.compareTo(BigDecimal.ZERO) > 0) {
+                    actualCost = batchTotalCost.divide(goodQty, 4, RoundingMode.HALF_UP);
+                }
+            }
+        }
 
         // ── 4. 偏差预警列表 ─────────────────────────────────────────────────
         List<VarianceAlertEntry> alerts = new ArrayList<>();
@@ -85,17 +106,20 @@ public class ThreePriceComparisonServiceImpl implements ThreePriceComparisonServ
                     .build());
         }
 
-        // MID_TO_ACTUAL — skipped until actualCost is populated (Phase 2)
+        // MID_TO_ACTUAL — 实际成本 vs 中报价偏差 (actualCost 取自试制批次真实成本)
         if (midQuotePerKg != null && actualCost != null
                 && midQuotePerKg.compareTo(BigDecimal.ZERO) > 0) {
             BigDecimal pct = actualCost.subtract(midQuotePerKg)
                     .divide(midQuotePerKg, 4, RoundingMode.HALF_UP)
                     .multiply(BigDecimal.valueOf(100))
                     .setScale(4, RoundingMode.HALF_UP);
+            boolean alert = latestMidOpt.isPresent()
+                    && latestMidOpt.get().getVarianceThresholdPct() != null
+                    && pct.abs().compareTo(latestMidOpt.get().getVarianceThresholdPct()) > 0;
             alerts.add(VarianceAlertEntry.builder()
                     .stage("MID_TO_ACTUAL")
                     .variancePct(pct)
-                    .alert(false)
+                    .alert(alert)
                     .build());
         }
 
