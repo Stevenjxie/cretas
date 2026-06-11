@@ -208,6 +208,7 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
         // 设计选择: 使用 packQtyPerProduct != null 作为"有意更新"信号, 与 SP8 primaryCode 模式一致
         if (dto.getPackQtyPerProduct() != null) {
             materialType.setPackQtyPerProduct(dto.getPackQtyPerProduct());
+        }
         // P8: 包材关联客户 — 允许显式传 null 来解除关联; 传 undefined/不传则保持原值
         // 约定: 前端编辑包材时明确传 associatedCustomerId (null = 解除, "" = 视为 null)
         if (dto.getAssociatedCustomerId() != null && dto.getAssociatedCustomerId().isBlank()) {
