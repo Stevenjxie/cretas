@@ -29,7 +29,7 @@ public class OrderCostAlarmListener {
 
     @Async
     @EventListener
-    @Transactional(transactionManager = "transactionManager",
+    @Transactional(transactionManager = "primaryTransactionManager",
                    propagation = Propagation.REQUIRES_NEW,
                    readOnly = true)
     public void onProductionCostUpdated(ProductionCostUpdatedEvent event) {
