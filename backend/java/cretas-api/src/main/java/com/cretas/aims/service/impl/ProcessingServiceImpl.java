@@ -540,6 +540,13 @@ public class ProcessingServiceImpl implements ProcessingService {
                     .withHint("请填写原材料初始数量").withHintTarget("initialQuantity");
         }
 
+        // 防呆 (2026-06-12): warehouse_id 是 NOT NULL 列, 缺失会落到 DB 约束抛 generic 409"数据处理异常"
+        // (用户看不懂). 提前显式校验, 返回明确 400 + hintTarget 引导填仓库 (fool-proof Rule a/5).
+        if (materialBatch.getWarehouseId() == null || materialBatch.getWarehouseId().isEmpty()) {
+            throw new BusinessException(400, "请指定入库仓库")
+                    .withHint("原材料接收必须选择目标仓库").withHintTarget("warehouseId");
+        }
+
         // 从原材料类型获取单位
         if (materialBatch.getMaterialType() != null && materialBatch.getMaterialType().getId() != null) {
             RawMaterialType materialType = rawMaterialTypeRepository.findById(materialBatch.getMaterialType().getId())
