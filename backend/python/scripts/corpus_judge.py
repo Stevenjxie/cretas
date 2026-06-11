@@ -264,12 +264,18 @@ _FAMILY_ACCOUNTS: Dict[str, List[str]] = {
     "qwen": ["aliyun_c", "aliyun_b", "aliyun_a"],
     "glm": ["zhipu"],
     "deepseek": ["tencent", "aliyun_a_deepseek"],
+    # nonqwen = MULTI-account non-qwen chain so the router's deep fallback actually
+    # works for cross-family judging. Single-account (e.g. ["zhipu"]) short-circuits
+    # the fallback: one circuit-breaker-open/exhausted account → "all providers
+    # exhausted" with no fallback. zhipu(glm)→tencent(glm-5.1/kimi/minimax/deepseek
+    # free)→aliyun_a_deepseek(deepseek) — all different family from the qwen3-max teacher.
+    "nonqwen": ["zhipu", "tencent", "aliyun_a_deepseek"],
 }
 
 # Default cross-family to use when --cross-family is given without --judge-family.
 # GLM is first choice: completely separate vendor from Aliyun/qwen, independent
 # free pool on Zhipu open.bigmodel.cn.
-_DEFAULT_CROSS_FAMILY = "glm"
+_DEFAULT_CROSS_FAMILY = "nonqwen"  # multi-account non-qwen chain (fallback works); was "glm"(single zhipu=no fallback)
 
 
 def resolve_judge_chain(
