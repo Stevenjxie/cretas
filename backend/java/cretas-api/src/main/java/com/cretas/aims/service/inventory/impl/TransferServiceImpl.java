@@ -16,6 +16,7 @@ import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.repository.inventory.*;
 import com.cretas.aims.service.MaterialBatchService;
 import com.cretas.aims.service.factory.WarehouseResolver;
+import com.cretas.aims.service.inventory.TransferDiffService;
 import com.cretas.aims.service.inventory.TransferService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -56,6 +57,10 @@ public class TransferServiceImpl implements TransferService {
     /** Round 11 T4 — Canvas Integration Template hook 2: dynamic field persist. */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.engine.DynamicFieldService dynamicFieldService;
+
+    /** 调拨差异找单服务（可选注入，未配置时静默跳过不影响签收主流程） */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private TransferDiffService transferDiffService;
 
     /** Round 14: formula engine for LINE_AMOUNT etc. */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
@@ -342,8 +347,23 @@ public class TransferServiceImpl implements TransferService {
         if (!transfer.getItems().isEmpty()) {
             transferItemRepository.saveAll(transfer.getItems());
         }
+        InternalTransfer saved = transferRepository.save(transfer);
+
+        // 差异检测：实收 < 发货量时自动生成差异记录（失败不影响签收主流程）
+        if (transferDiffService != null) {
+            try {
+                var diffs = transferDiffService.detectAndGenerateDiffs(saved, userId);
+                if (!diffs.isEmpty()) {
+                    log.info("[TDIFF] 调拨 {} 签收后发现 {} 条差异，已生成差异单",
+                            transferId, diffs.size());
+                }
+            } catch (Exception ex) {
+                log.warn("[TDIFF] 差异检测失败（不影响签收）: transferId={}, error={}", transferId, ex.getMessage());
+            }
+        }
+
         log.info("调拨签收: transferId={}, targetFactory={}", transferId, transfer.getTargetFactoryId());
-        return transferRepository.save(transfer);
+        return saved;
     }
 
     @Override
