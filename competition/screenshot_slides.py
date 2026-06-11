@@ -12,7 +12,7 @@ HTML  = (BASE / "slides.html").as_uri()  # file:///...
 OUTD  = BASE / "assets" / "slide_pngs"
 PPTX  = BASE / "haijuying-cretas-pitch.pptx"
 
-SLIDE_IDS = ["s0", "s1", "s2", "s3", "s4", "s4b", "s4c", "s4d", "s5", "s6", "s7", "send"]
+SLIDE_IDS = ["s0", "s1", "s2", "s3", "s4", "s4b", "s4c", "s4d", "s4e", "s5", "s6", "s7", "send"]
 SLIDE_W = 1280
 SLIDE_H = 720
 
