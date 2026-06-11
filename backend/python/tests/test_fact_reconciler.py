@@ -4,10 +4,12 @@ from __future__ import annotations
 from decimal import Decimal
 
 import pandas as pd
+import pytest
 
 from smartbi.services.insights.fact_reconciler import (
     build_factbook_from_metrics,
     overall_ratio_facts,
+    overall_factory_facts,
     reconcile_insights,
 )
 
@@ -155,6 +157,80 @@ def test_factbook_build_distinguishes_missing():
     assert names["营收"] == Decimal("100")
     assert names["净利"] is None
     assert "x" not in names
+
+
+# ── A5: 工厂洞察 reconciler — overall_factory_facts ─────────────────────
+def test_factory_yield_rate_computed():
+    """出成率 = 产出/投入*100, 整体口径干净边界才纠正。"""
+    df = pd.DataFrame({"工序": ["原料投入", "实际产出"], "重量": [1000.0, 540.0]})
+    facts = overall_factory_facts(df)
+    d = {f["name"]: f["value"] for f in facts}
+    assert "出成率" in d
+    assert d["出成率"] == pytest.approx(54.0, abs=0.1)
+
+
+def test_factory_yield_rate_zero_input_returns_empty():
+    """投入为0 → 不算出成率 (除零防护)。"""
+    df = pd.DataFrame({"工序": ["原料投入", "实际产出"], "重量": [0.0, 100.0]})
+    facts = overall_factory_facts(df)
+    names = [f["name"] for f in facts]
+    assert "出成率" not in names
+
+
+def test_factory_cost_structure_material_ratio():
+    """材料成本占比 = 材料成本/总成本*100。"""
+    df = pd.DataFrame({"项目": ["总成本", "材料成本", "人工成本"], "金额": [10000.0, 6000.0, 2000.0]})
+    facts = overall_factory_facts(df)
+    d = {f["name"]: f["value"] for f in facts}
+    assert "材料成本占比" in d
+    assert d["材料成本占比"] == pytest.approx(60.0, abs=0.1)
+    assert "人工成本占比" in d
+    assert d["人工成本占比"] == pytest.approx(20.0, abs=0.1)
+
+
+def test_factory_facts_feeds_reconcile_corrects_yield():
+    """端到端: Python 算出出成率54%, LLM 误报70% (>5%偏差) → 纠正。"""
+    df = pd.DataFrame({"工序": ["原料投入", "实际产出"], "重量": [1000.0, 540.0]})
+    facts = overall_factory_facts(df)
+    out = reconcile_insights(_ins("出成率70%，高于预期"), facts)
+    assert "出成率54%" in out[0]["text"]
+    assert "70%" not in out[0]["text"]
+
+
+def test_factory_facts_within_tolerance_untouched():
+    """52% vs 54% 偏差<5% → 不改。"""
+    df = pd.DataFrame({"工序": ["原料投入", "实际产出"], "重量": [1000.0, 540.0]})
+    facts = overall_factory_facts(df)
+    out = reconcile_insights(_ins("出成率52%"), facts)
+    assert "出成率52%" in out[0]["text"]
+
+
+def test_factory_sentinel_flags_missing_yield():
+    """yield 指标无数据但 LLM 编了数字 → 加注 + 降confidence。"""
+    metrics = [{"name": "出成率", "value": None, "unit": "%", "success": False}]
+    out = reconcile_insights(_ins("出成率75.5%，产线高效", confidence=0.9), metrics)
+    assert "需核实" in out[0]["text"]
+    assert out[0]["confidence"] <= 0.5
+
+
+def test_factory_facts_empty_df_returns_empty():
+    """空 DataFrame → 空列表 (no-op)。"""
+    assert overall_factory_facts(None) == []
+    assert overall_factory_facts(pd.DataFrame()) == []
+
+
+def test_factory_facts_ambiguous_row_skips_that_metric():
+    """多行匹配投入 → 歧义 → 跳过出成率但不影响其他指标。"""
+    df = pd.DataFrame(
+        {"项目": ["原料投入", "辅料投入", "实际产出", "总成本", "材料成本"],
+         "值": [800.0, 200.0, 540.0, 5000.0, 3000.0]}
+    )
+    facts = overall_factory_facts(df)
+    names = [f["name"] for f in facts]
+    # "原料投入" 和 "辅料投入" 都包含"投入" → 歧义 → 出成率不算
+    assert "出成率" not in names
+    # 材料成本占比能算(总成本唯一, 材料成本唯一)
+    assert "材料成本占比" in names
 
 
 if __name__ == "__main__":

@@ -118,6 +118,86 @@ def overall_ratio_facts(df: Any) -> List[dict]:
         return []
 
 
+def overall_factory_facts(df: Any) -> List[dict]:
+    """从工厂生产数据 DataFrame 计算确定性指标 (出成率/成本结构/产量), 返回 metrics-shaped dicts。
+
+    供 reconcile_insights 使用 —— 防止 LLM 在工厂洞察中瞎编成本/出成率数字。
+
+    安全铁律 (与 overall_ratio_facts 一致): 只在能唯一识别对应行/列时算;
+    任一关键词匹配到 0 行或 >1 行 → 视为歧义, 跳过该指标 (不整体放弃)。
+    配合 _number_after 的干净边界 guard, 只纠正整体口径提及, 不动产品级局部值。
+
+    适用 DataFrame 形态:
+      - 工厂生产汇总表 (行=产品或批次, 数值列=投入产出/成本)
+      - 成本结构表 (行=成本项, 列=金额)
+    """
+    try:
+        import numpy as np
+        import pandas as pd
+    except Exception:
+        return []
+    if df is None or getattr(df, "empty", True):
+        return []
+    try:
+        text_cols = df.select_dtypes(include=["object"]).columns
+        numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+        if len(text_cols) == 0 or not numeric_cols:
+            return []
+        labels = df[text_cols[0]].astype(str).str.strip()
+        facts: List[dict] = []
+
+        def _row_total(keywords: List[str]) -> Optional[float]:
+            """按关键词找唯一行, 返回该行数值列之和。0行/多行→None(歧义)。"""
+            pat = "|".join(re.escape(k) for k in keywords)
+            mask = labels.str.contains(pat, regex=True, na=False)
+            idxs = mask[mask].index
+            if len(idxs) != 1:
+                return None
+            row = df.loc[idxs[0], numeric_cols]
+            vals = [float(v) for v in row if pd.notna(v) and isinstance(v, (int, float, np.number))]
+            return sum(vals) if vals else None
+
+        def _col_sum(keywords: List[str]) -> Optional[float]:
+            """按关键词找唯一列, 返回该列数值之和 (跳过 NaN)。0列/多列→None。"""
+            matched = [c for c in numeric_cols if any(k in str(c) for k in keywords)]
+            if len(matched) != 1:
+                return None
+            col_vals = pd.to_numeric(df[matched[0]], errors="coerce").dropna()
+            return float(col_vals.sum()) if not col_vals.empty else None
+
+        # ── 出成率 (yield rate): 产出 / 投入 * 100 ──────────────────────────
+        # 只在行标签同时含投入和产出时算; 否则尝试列名
+        input_total = _row_total(["投入", "原料投入", "领料"]) or _col_sum(["投入", "input"])
+        output_total = _row_total(["产出", "实际产出", "产量"]) or _col_sum(["产出", "output"])
+        if input_total is not None and input_total > 0 and output_total is not None and output_total >= 0:
+            yield_rate = round(output_total / input_total * 100, 2)
+            facts.append({"name": "出成率", "value": yield_rate, "unit": "%", "success": True})
+
+        # ── 材料成本占比 ────────────────────────────────────────────────────
+        total_cost = _row_total(["总成本", "生产成本", "合计成本"]) or _col_sum(["total_cost", "总成本"])
+        material_cost = _row_total(["材料成本", "物料成本", "原料成本"]) or _col_sum(["material_cost", "材料"])
+        if total_cost is not None and total_cost > 0 and material_cost is not None:
+            mat_ratio = round(material_cost / total_cost * 100, 2)
+            facts.append({"name": "材料成本占比", "value": mat_ratio, "unit": "%", "success": True})
+
+        # ── 人工成本占比 ────────────────────────────────────────────────────
+        labor_cost = _row_total(["人工成本", "劳动力成本", "工时成本"]) or _col_sum(["labor_cost", "人工"])
+        if total_cost is not None and total_cost > 0 and labor_cost is not None:
+            labor_ratio = round(labor_cost / total_cost * 100, 2)
+            facts.append({"name": "人工成本占比", "value": labor_ratio, "unit": "%", "success": True})
+
+        # ── 良品率 ──────────────────────────────────────────────────────────
+        good_qty = _row_total(["良品", "合格品", "合格数量"]) or _col_sum(["good_qty", "合格"])
+        total_qty = _row_total(["总产量", "生产数量", "产量合计"]) or _col_sum(["total_qty", "总产"])
+        if total_qty is not None and total_qty > 0 and good_qty is not None:
+            good_rate = round(good_qty / total_qty * 100, 2)
+            facts.append({"name": "良品率", "value": good_rate, "unit": "%", "success": True})
+
+        return facts
+    except Exception:
+        return []
+
+
 def _fmt(value: Decimal, unit: str) -> str:
     q = value.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
     # 整数去小数尾
