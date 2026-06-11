@@ -147,6 +147,27 @@ public class PaymentRequestController {
         return ApiResponse.success("查询成功", list);
     }
 
+    // ─── 查询全部付款申请列表（web 管理后台通用列表）───────────────────────────
+
+    /**
+     * 全量列表，支持 status 过滤和关键词搜索（供 web-admin 付款申请管理页使用）。
+     *
+     * <p>SP6 web list.vue 调用此端点。原控制器只有 /approved（出纳专用），
+     * 此端点补全 web 管理侧的全状态浏览 + 筛选能力。
+     */
+    @GetMapping
+    @Operation(summary = "查询付款申请列表（全状态，web 管理后台）",
+            description = "支持 status 过滤；keyword 模糊匹配供应商名称或申请单号")
+    @RequirePermission({"finance:read_write", "finance:read", "procurement:read_write", "procurement:read"})
+    public ApiResponse<List<PaymentRequest>> listAll(
+            @PathVariable @NotBlank String factoryId,
+            @RequestParam(required = false) String status,
+            @RequestParam(required = false) String keyword) {
+        log.info("[SP6] 查询付款申请列表: factoryId={}, status={}, keyword={}", factoryId, status, keyword);
+        List<PaymentRequest> list = paymentRequestService.listByFactory(factoryId, status, keyword);
+        return ApiResponse.success("查询成功", list);
+    }
+
     // ─── 私有工具 ────────────────────────────────────────────────────────────
 
     private Long extractUserId(String authorization) {

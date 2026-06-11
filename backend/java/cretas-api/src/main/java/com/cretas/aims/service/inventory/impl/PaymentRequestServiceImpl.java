@@ -370,6 +370,33 @@ public class PaymentRequestServiceImpl implements PaymentRequestService {
                 factoryId, PaymentRequestStatus.APPROVED);
     }
 
+    // ─── listByFactory (web 管理后台全量列表) ─────────────────────────────────
+
+    /**
+     * SP6 Tier1 #36 — 全量付款申请列表，供 web-admin list.vue 使用。
+     * status 为 null 时返回全部；keyword 模糊匹配 requestNumber 或 supplierId。
+     */
+    @Override
+    public List<PaymentRequest> listByFactory(String factoryId, String status, String keyword) {
+        List<PaymentRequest> list;
+        if (status != null && !status.isBlank()) {
+            PaymentRequestStatus s = PaymentRequestStatus.valueOf(status.toUpperCase());
+            list = paymentRequestRepository.findByFactoryIdAndStatus(factoryId, s);
+        } else {
+            list = paymentRequestRepository.findByFactoryIdOrderByCreatedAtDesc(factoryId);
+        }
+        if (keyword != null && !keyword.isBlank()) {
+            String kw = keyword.toLowerCase();
+            list = list.stream()
+                    .filter(pr -> (pr.getRequestNumber() != null
+                                    && pr.getRequestNumber().toLowerCase().contains(kw))
+                            || (pr.getSupplierId() != null
+                                    && pr.getSupplierId().toLowerCase().contains(kw)))
+                    .collect(Collectors.toList());
+        }
+        return list;
+    }
+
     // ─── 私有辅助 ─────────────────────────────────────────────────────────────
 
     private PaymentRequest findAndValidate(String requestId) {
