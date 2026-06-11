@@ -40,7 +40,15 @@ import asyncio
 import json
 import logging
 import os
+import sys
 from typing import Any, Dict, List, Optional
+
+# Path bootstrap — importing smartbi.services.corpus_anonymize triggers smartbi/services/__init__
+# which uses bare `from services.X import ...`; mirror main.py so it resolves to smartbi/services/X.
+_PYTHON_ROOT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+for _p in (_PYTHON_ROOT, os.path.join(_PYTHON_ROOT, "smartbi")):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 logger = logging.getLogger("export_distill")
