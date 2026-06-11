@@ -64,4 +64,14 @@ public interface PaymentRequestService {
      * 前端调用请使用 {@link #listApprovedForPaymentWithDetails(String)}。
      */
     List<PaymentRequest> listApprovedForPayment(String factoryId);
+
+    /**
+     * 全量列表（web 管理后台），支持 status 过滤和关键词搜索。
+     * status 为 null 时返回全部；keyword 模糊匹配供应商名或申请单号。
+     *
+     * @param factoryId 工厂 ID
+     * @param status    可选，PaymentRequestStatus 字符串
+     * @param keyword   可选，模糊搜索关键词
+     */
+    List<PaymentRequest> listByFactory(String factoryId, String status, String keyword);
 }

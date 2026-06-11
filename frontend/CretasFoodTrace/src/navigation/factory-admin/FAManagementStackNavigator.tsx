@@ -96,6 +96,8 @@ import TransferListScreen from "../../screens/factory-admin/inventory/TransferLi
 import TransferDetailScreen from "../../screens/factory-admin/inventory/TransferDetailScreen";
 import ArApOverviewScreen from "../../screens/factory-admin/inventory/ArApOverviewScreen";
 import PaymentRecordScreen from "../../screens/factory-admin/finance/PaymentRecordScreen";
+import CashierPaymentListScreen from "../../screens/factory-admin/finance/CashierPaymentListScreen";
+import PurchaseExceptionListScreen from "../../screens/factory-admin/inventory/PurchaseExceptionListScreen";
 import RdRequestCreateScreen from "../../screens/factory-admin/rd/RdRequestCreateScreen";
 import PriceListScreen from "../../screens/factory-admin/inventory/PriceListScreen";
 import ReturnOrderListScreen from "../../screens/factory-admin/inventory/ReturnOrderListScreen";
@@ -560,6 +562,18 @@ export function FAManagementStackNavigator() {
         name="PaymentRecord"
         component={PaymentRecordScreen}
         options={{ title: "录入收款" }}
+      />
+      {/* SP6 出纳付款屏 (Tier1 #36) */}
+      <Stack.Screen
+        name="CashierPaymentList"
+        component={CashierPaymentListScreen}
+        options={{ title: "出纳付款" }}
+      />
+      {/* SP6 采购异常决策屏 (Tier1 #36) */}
+      <Stack.Screen
+        name="PurchaseExceptionList"
+        component={PurchaseExceptionListScreen}
+        options={{ title: "采购异常处理" }}
       />
       <Stack.Screen
         name="RdRequestCreate"

@@ -433,6 +433,10 @@ export type FAManagementStackParamList = {
   ArApOverview: undefined;
   PriceList: undefined;
   PaymentRecord: undefined;
+  /** SP6 Tier1 #36 — 出纳付款列表（已审批待付款） */
+  CashierPaymentList: undefined;
+  /** SP6 Tier1 #36 — 采购异常决策列表 */
+  PurchaseExceptionList: undefined;
   RdRequestCreate: undefined;
   ReturnOrderList: undefined;
   ReturnOrderDetail: { returnId: string };
