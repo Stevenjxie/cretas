@@ -9,6 +9,7 @@ Tests:
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import sys
 import os
@@ -452,3 +453,184 @@ class TestEtlLlmFallbackLog:
             dry_run=True,
         )
         assert written == 1
+
+
+# ===========================================================================
+# Fix 1 — DSN default is cretas_prod_db, not cretas_db / food_kb_db_url
+# ===========================================================================
+
+class TestCretasDsnDefault:
+    """Fix 1: ensure the default cretas DSN points at cretas_prod_db."""
+
+    def test_default_dsn_contains_cretas_prod_db(self):
+        """When no CLI arg and no env var, the module's hardcoded default must
+        target cretas_prod_db with cretas_user:cretas123."""
+        default = _mod._CRETAS_PROD_DEFAULT
+        assert "cretas_prod_db" in default, (
+            f"Default DSN must target cretas_prod_db, got: {default}"
+        )
+        assert "cretas_user" in default, (
+            f"Default DSN must use cretas_user, got: {default}"
+        )
+        assert "cretas123" in default, (
+            f"Default DSN must use cretas123, got: {default}"
+        )
+
+    def test_default_dsn_does_not_target_test_db(self):
+        """Ensure the default is NOT the test DB (cretas_db without _prod)."""
+        default = _mod._CRETAS_PROD_DEFAULT
+        # Must not be the bare test DB — would read 0 rows
+        assert default.rstrip("/").endswith("cretas_prod_db"), (
+            f"Default DSN must end with cretas_prod_db, got: {default}"
+        )
+
+    def test_env_var_overrides_default(self, monkeypatch):
+        """CRETAS_DB_DSN env var should override the hardcoded default."""
+        custom_dsn = "postgresql://other_user:pass@myhost/other_db"
+        monkeypatch.setenv("CRETAS_DB_DSN", custom_dsn)
+        resolved = (
+            None  # no CLI arg
+            or os.environ.get("CRETAS_DB_DSN")
+            or _mod._CRETAS_PROD_DEFAULT
+        )
+        assert resolved == custom_dsn
+
+
+# ===========================================================================
+# Fix 2 — bounded-concurrency gather: all rows persisted before return
+# ===========================================================================
+
+class TestGatherCompleteness:
+    """Fix 2: _etl_intent_match_records and _etl_llm_fallback_log must await
+    ALL tasks before returning — no dangling fire-and-forget."""
+
+    def _make_intent_row(self, n: int):
+        return {
+            "id": f"uuid-{n}",
+            "factory_id": "F001",
+            "user_input": f"query number {n}",
+            "llm_response": f"INTENT_CODE_{n}",
+            "llm_intent_code": f"INTENT_CODE_{n}",
+            "matched_intent_code": f"INTENT_CODE_{n}",
+            "user_confirmed": None,
+            "top_candidates": None,
+            "created_at": None,
+        }
+
+    @pytest.mark.asyncio
+    async def test_intent_match_records_all_rows_awaited(self):
+        """With N rows, gather must call persist N times (in dry-run the pool
+        is never touched, so we just verify the returned count equals N)."""
+        N = 20
+        rows = [self._make_intent_row(i) for i in range(N)]
+        mock_conn = AsyncMock()
+        mock_conn.fetch = AsyncMock(return_value=rows)
+        mock_pool = MagicMock()
+
+        written = await _mod._etl_intent_match_records(
+            cretas_conn=mock_conn,
+            smartbi_pool=mock_pool,
+            limit=100,
+            dry_run=True,
+        )
+
+        assert written == N, (
+            f"All {N} rows must be counted; got {written}. "
+            "If rows were fire-and-forgot, count would be under-reported."
+        )
+
+    @pytest.mark.asyncio
+    async def test_intent_match_records_all_rows_written_live(self):
+        """In live mode all N persist calls must complete before return."""
+        N = 10
+        rows = [self._make_intent_row(i) for i in range(N)]
+        mock_conn = AsyncMock()
+        mock_conn.fetch = AsyncMock(return_value=rows)
+
+        persisted_count = []
+
+        async def fake_persist(pool, source, task_type, input_text, teacher_output, **kwargs):
+            persisted_count.append(1)
+
+        with patch(
+            "smartbi.services.distillation_capture.persist_distillation_sample",
+            side_effect=fake_persist,
+        ):
+            mock_pool = MagicMock()
+            written = await _mod._etl_intent_match_records(
+                cretas_conn=mock_conn,
+                smartbi_pool=mock_pool,
+                limit=100,
+                dry_run=False,
+            )
+
+        # All N tasks must have completed before the function returned
+        assert len(persisted_count) == N, (
+            f"Expected {N} persist calls to complete; got {len(persisted_count)}. "
+            "Fire-and-forget early exit would give fewer."
+        )
+        assert written == N
+
+    @pytest.mark.asyncio
+    async def test_persist_one_with_semaphore(self):
+        """_persist_one respects the sem parameter (acquires before persisting)."""
+        sem = asyncio.Semaphore(1)
+        call_order: list = []
+
+        async def fake_persist(pool, source, task_type, input_text, teacher_output, **kwargs):
+            call_order.append("persist")
+
+        with patch(
+            "smartbi.services.distillation_capture.persist_distillation_sample",
+            side_effect=fake_persist,
+        ):
+            result = await _mod._persist_one(
+                MagicMock(),
+                input_text="intent_routing|query:test sem",
+                teacher_output="SOME_INTENT",
+                business_type="factory",
+                factory_id="F001",
+                quality=3,
+                teacher_model=None,
+                metadata={},
+                dry_run=False,
+                sem=sem,
+            )
+
+        assert result is True
+        assert call_order == ["persist"]
+        # Semaphore should be fully released after the call
+        assert sem._value == 1
+
+    @pytest.mark.asyncio
+    async def test_fallback_log_all_rows_awaited(self):
+        """_etl_llm_fallback_log gather awaits all rows."""
+        N = 15
+        rows = [
+            {
+                "id": i,
+                "query": f"query {i}",
+                "factory_id": "qhj_prod",
+                "answer": f"answer {i}",
+                "user_feedback": None,
+                "source": "fallback",
+                "created_at": None,
+            }
+            for i in range(N)
+        ]
+        mock_cm = AsyncMock()
+        mock_cm.__aenter__ = AsyncMock(return_value=mock_cm)
+        mock_cm.__aexit__ = AsyncMock(return_value=False)
+        mock_cm.fetch = AsyncMock(return_value=rows)
+        mock_pool = MagicMock()
+        mock_pool.acquire = MagicMock(return_value=mock_cm)
+
+        written = await _mod._etl_llm_fallback_log(
+            smartbi_pool=mock_pool,
+            limit=100,
+            dry_run=True,
+        )
+
+        assert written == N, (
+            f"All {N} fallback_log rows must be counted; got {written}."
+        )

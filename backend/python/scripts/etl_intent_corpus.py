@@ -1,4 +1,4 @@
-"""ETL: cretas_db intent_match_records / smartbi_db smart_bi_llm_fallback_log
+"""ETL: cretas_prod_db intent_match_records / smartbi_prod_db smart_bi_llm_fallback_log
 → smart_bi_distillation_samples (source='intent_llm', task_type='intent').
 
 This is a one-time + re-runnable (idempotent via input_hash) admin ETL job that
@@ -7,12 +7,15 @@ LLM-answer) pairs that were written at intent-inference time.
 
 Sources
 -------
-1. cretas_db.intent_match_records
+1. cretas_prod_db.intent_match_records   ← HIGHER QUALITY SOURCE
    WHERE llm_called = TRUE AND llm_response IS NOT NULL
-   These are the LLM-fallback rows where the Java AIIntentService called the LLM
+   These are real LLM-fallback rows where the Java AIIntentService called the LLM
    to resolve ambiguous user queries. The llm_response is the raw teacher answer.
+   As of 2026-06-11 there are 45 confirmed rows in cretas_prod_db.
+   Quality: user_confirmed=true → 4 (verified), else → 3 (plausible-but-unverified).
+   These are strictly better than fallback_log because they are real routing decisions.
 
-2. smartbi_db.smart_bi_llm_fallback_log
+2. smartbi_prod_db.smart_bi_llm_fallback_log
    WHERE answer IS NOT NULL AND source IS NULL OR source = 'fallback'
    SmartBI chat queries that were escalated to the LLM. These are intent-adjacent
    (free-form data queries) and may not be strict intent-routing labels, so they
@@ -23,16 +26,20 @@ Cross-DB design
 ---------------
 Both databases live on the same PostgreSQL server (localhost:5432). The ETL
 opens two separate asyncpg connections:
-  - cretas_read_dsn  → cretas_db (source of intent_match_records)
-  - smartbi_write_dsn → smartbi_db / smartbi_prod_db (destination corpus +
+  - cretas_read_dsn  → cretas_prod_db (source of intent_match_records)
+  - smartbi_write_dsn → smartbi_prod_db (destination corpus +
                          source of smart_bi_llm_fallback_log)
 
 DSN resolution (priority order):
   1. CLI flags --cretas-dsn / --smartbi-dsn
-  2. Env vars CRETAS_DB_DSN / SMARTBI_DB_DSN
-  3. Derived from the app's existing Settings:
-       cretas  = food_kb_db_url  (points to cretas_db, same as get_cretas_pool)
-       smartbi = postgres_url    (points to smartbi_db / smartbi_prod_db)
+  2. Env vars CRETAS_DB_DSN / SMARTBI_PROD_DSN
+  3. Sensible server defaults:
+       cretas  = postgresql://cretas_user:cretas123@127.0.0.1:5432/cretas_prod_db
+                 NOTE: must be cretas_prod_db, NOT cretas_db — the 45 real
+                 intent_match_records live in prod.  food_kb_db_url from Settings
+                 defaults to cretas_db (test), which would return 0 rows.
+       smartbi = postgresql://smartbi_user:smartbi_secure_password_2025@127.0.0.1:5432/smartbi_prod_db
+                 Falls back to Settings.postgres_url only when it points to prod.
 
 RLS note
 --------
@@ -56,7 +63,7 @@ import json
 import logging
 import os
 import sys
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 # Path bootstrap — main.py adds backend/python AND backend/python/smartbi to sys.path so
 # bare `from services.X import ...` (used transitively by distillation_capture) resolves to
@@ -176,29 +183,42 @@ async def _persist_one(
     teacher_model: Optional[str],
     metadata: Dict[str, Any],
     dry_run: bool,
+    sem: Optional[asyncio.Semaphore] = None,
 ) -> bool:
-    """Persist one sample, returns True if written (or would be in dry-run)."""
+    """Persist one sample, returns True if written (or would be in dry-run).
+
+    When *sem* is provided the call acquires the semaphore first so that
+    callers can fan out many tasks via asyncio.gather while bounding the
+    number of concurrent DB connections used.
+    """
     if not input_text or not teacher_output:
         return False
     if dry_run:
         return True
     try:
         from smartbi.services.distillation_capture import persist_distillation_sample
-        await persist_distillation_sample(
-            pool,
-            source="intent_llm",
-            task_type="intent",
-            input_text=input_text,
-            teacher_output=teacher_output,
-            business_type=business_type,
-            factory_id=factory_id,
-            system_prompt=None,
-            teacher_model=teacher_model or "unknown",
-            template_codes=None,
-            quality=quality,
-            metadata=metadata,
-        )
-        return True
+
+        async def _do() -> bool:
+            await persist_distillation_sample(
+                pool,
+                source="intent_llm",
+                task_type="intent",
+                input_text=input_text,
+                teacher_output=teacher_output,
+                business_type=business_type,
+                factory_id=factory_id,
+                system_prompt=None,
+                teacher_model=teacher_model or "unknown",
+                template_codes=None,
+                quality=quality,
+                metadata=metadata,
+            )
+            return True
+
+        if sem is not None:
+            async with sem:
+                return await _do()
+        return await _do()
     except Exception as exc:
         logger.warning("persist failed for input_text[:80]=%r: %s", input_text[:80], exc)
         return False
@@ -214,8 +234,12 @@ async def _etl_intent_match_records(
     *,
     limit: int,
     dry_run: bool,
+    concurrency: int = 8,
 ) -> int:
-    """Read LLM-fallback rows from cretas_db and write to smartbi corpus.
+    """Read LLM-fallback rows from cretas_prod_db and write to smartbi corpus.
+
+    Uses bounded-concurrency gather (semaphore=*concurrency*) so all rows are
+    awaited before the function returns — no fire-and-forget early exit.
 
     Returns number of rows processed (written or would-be in dry-run).
     """
@@ -240,7 +264,9 @@ async def _etl_intent_match_records(
     rows = await cretas_conn.fetch(sql, limit)
     logger.info("[intent_match_records] fetched %d rows (limit=%d)", len(rows), limit)
 
-    written = 0
+    sem = asyncio.Semaphore(concurrency)
+    tasks: List[asyncio.Task] = []
+
     for row in rows:
         user_input = row["user_input"] or ""
         llm_response = row["llm_response"] or ""
@@ -263,7 +289,7 @@ async def _etl_intent_match_records(
             "record_id": str(row["id"]) if row["id"] else None,
         }
 
-        ok = await _persist_one(
+        tasks.append(asyncio.create_task(_persist_one(
             smartbi_pool,
             input_text=input_text,
             teacher_output=llm_response,
@@ -273,10 +299,12 @@ async def _etl_intent_match_records(
             teacher_model=None,  # not recorded in intent_match_records
             metadata=metadata,
             dry_run=dry_run,
-        )
-        if ok:
-            written += 1
+            sem=sem,
+        )))
 
+    # Await ALL tasks before returning — no row is left as a dangling fire-and-forget
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    written = sum(1 for r in results if r is True)
     return written
 
 
@@ -289,8 +317,12 @@ async def _etl_llm_fallback_log(
     *,
     limit: int,
     dry_run: bool,
+    concurrency: int = 8,
 ) -> int:
-    """Read LLM-fallback rows from smartbi_db.smart_bi_llm_fallback_log.
+    """Read LLM-fallback rows from smartbi_prod_db.smart_bi_llm_fallback_log.
+
+    Uses bounded-concurrency gather (semaphore=*concurrency*) so all rows are
+    awaited before the function returns — no fire-and-forget early exit.
 
     Returns number of rows processed.
     """
@@ -313,7 +345,9 @@ async def _etl_llm_fallback_log(
         rows = await conn.fetch(sql, limit)
     logger.info("[smart_bi_llm_fallback_log] fetched %d rows (limit=%d)", len(rows), limit)
 
-    written = 0
+    sem = asyncio.Semaphore(concurrency)
+    tasks: List[asyncio.Task] = []
+
     for row in rows:
         query = row["query"] or ""
         answer = row["answer"] or ""
@@ -331,7 +365,7 @@ async def _etl_llm_fallback_log(
             "user_feedback": row["user_feedback"],
         }
 
-        ok = await _persist_one(
+        tasks.append(asyncio.create_task(_persist_one(
             smartbi_pool,
             input_text=input_text,
             teacher_output=answer,
@@ -341,10 +375,12 @@ async def _etl_llm_fallback_log(
             teacher_model=None,
             metadata=metadata,
             dry_run=dry_run,
-        )
-        if ok:
-            written += 1
+            sem=sem,
+        )))
 
+    # Await ALL tasks before returning — no row is left as a dangling fire-and-forget
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    written = sum(1 for r in results if r is True)
     return written
 
 
@@ -359,6 +395,19 @@ async def _corpus_count(pool, source: str) -> int:
             source,
         )
         return int(row["n"]) if row else 0
+
+
+# ---------------------------------------------------------------------------
+# DSN constants
+# ---------------------------------------------------------------------------
+
+# Default cretas DSN must always target cretas_prod_db — NOT cretas_db (test).
+# The 45 real intent_match_records confirmed as of 2026-06-11 live only in prod.
+# Settings.food_kb_db_url defaults to cretas_db → would return 0 rows, so we
+# never fall back to it for this ETL.
+_CRETAS_PROD_DEFAULT = (
+    "postgresql://cretas_user:cretas123@127.0.0.1:5432/cretas_prod_db"
+)
 
 
 # ---------------------------------------------------------------------------
@@ -408,11 +457,19 @@ async def main() -> None:
     )
     ap.add_argument(
         "--cretas-dsn", default=None,
-        help="asyncpg DSN for cretas_db (overrides CRETAS_DB_DSN env + Settings)",
+        help=(
+            "asyncpg DSN for cretas_prod_db (overrides CRETAS_DB_DSN env). "
+            "Default: postgresql://cretas_user:cretas123@127.0.0.1:5432/cretas_prod_db. "
+            "Must point to cretas_prod_db — the 45 intent_match_records live there, "
+            "not in cretas_db (test)."
+        ),
     )
     ap.add_argument(
         "--smartbi-dsn", default=None,
-        help="asyncpg DSN for smartbi_db (overrides SMARTBI_DB_DSN env + Settings)",
+        help=(
+            "asyncpg DSN for smartbi_prod_db (overrides SMARTBI_PROD_DSN env + Settings). "
+            "Default: Settings.postgres_url (which points to smartbi_prod_db in prod env)."
+        ),
     )
     ap.add_argument(
         "--skip-fallback-log", action="store_true",
@@ -421,21 +478,35 @@ async def main() -> None:
     args = ap.parse_args()
 
     # -- Resolve DSNs ---------------------------------------------------------
-    cretas_dsn = _resolve_dsn(args.cretas_dsn, "CRETAS_DB_DSN", "food_kb_db_url")
-    smartbi_dsn = _resolve_dsn(args.smartbi_dsn, "SMARTBI_DB_DSN", "postgres_url")
+    # cretas_prod_db: CLI → CRETAS_DB_DSN env → hardcoded server default.
+    # IMPORTANT: do NOT fall back to Settings.food_kb_db_url — that defaults
+    # to cretas_db (test), which has 0 intent_match_records.  The 45 confirmed
+    # real routing pairs live only in cretas_prod_db (cretas_user:cretas123).
+    cretas_dsn = (
+        args.cretas_dsn
+        or os.getenv("CRETAS_DB_DSN")
+        or _CRETAS_PROD_DEFAULT
+    )
+
+    # smartbi_prod_db: CLI → SMARTBI_PROD_DSN env → Settings.postgres_url.
+    smartbi_dsn = _resolve_dsn(args.smartbi_dsn, "SMARTBI_PROD_DSN", "postgres_url")
 
     if not cretas_dsn:
+        # This branch is unreachable (hardcoded default always fills in),
+        # but kept as a safety net.
         logger.error(
-            "Cannot resolve cretas_db DSN. Set --cretas-dsn, CRETAS_DB_DSN env, "
-            "or configure food_kb_db_url in .env"
+            "Cannot resolve cretas_prod_db DSN. Set --cretas-dsn or CRETAS_DB_DSN env."
         )
         sys.exit(1)
     if not smartbi_dsn:
         logger.error(
-            "Cannot resolve smartbi_db DSN. Set --smartbi-dsn, SMARTBI_DB_DSN env, "
+            "Cannot resolve smartbi_prod_db DSN. Set --smartbi-dsn, SMARTBI_PROD_DSN env, "
             "or configure postgres_url in .env"
         )
         sys.exit(1)
+
+    logger.info("[dsn] cretas_prod_db → %s", cretas_dsn.split("@")[-1])  # hide password
+    logger.info("[dsn] smartbi_prod_db → %s", smartbi_dsn.split("@")[-1])
 
     if args.dry_run:
         logger.info("[DRY-RUN] No writes will occur.")
@@ -443,11 +514,11 @@ async def main() -> None:
     # -- Connect --------------------------------------------------------------
     import asyncpg
 
-    logger.info("Connecting to cretas_db …")
+    logger.info("Connecting to cretas_prod_db …")
     cretas_conn = await asyncpg.connect(cretas_dsn)
 
-    logger.info("Creating smartbi_db pool …")
-    smartbi_pool = await asyncpg.create_pool(smartbi_dsn, min_size=1, max_size=4)
+    logger.info("Creating smartbi_prod_db pool …")
+    smartbi_pool = await asyncpg.create_pool(smartbi_dsn, min_size=1, max_size=8)
 
     try:
         # Pre-count
@@ -485,8 +556,9 @@ async def main() -> None:
             count_after - count_before,
         )
         logger.info(
-            "ETL complete — intent_match_records: %d, fallback_log: %d, total: %d",
-            written1, written2, written1 + written2,
+            "ETL complete — intent_match_records: %d, fallback_log: %d, "
+            "total attempted: %d, net new corpus rows: %d",
+            written1, written2, written1 + written2, count_after - count_before,
         )
 
     finally:
