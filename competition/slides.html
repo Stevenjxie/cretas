@@ -507,10 +507,10 @@ body {
 #s5 .mod-name.red    { color: #D94F1E; }
 #s5 .mod-name.gold   { color: #EFBC3A; }
 #s5 .mod-sub  { font-size: 12px; color: #505050; }
-#s5 .mod-items { padding: 13px 18px; flex: 1; display: flex; flex-direction: column; gap: 10px; }
+#s5 .mod-items { padding: 22px 18px; flex: 1; display: flex; flex-direction: column; justify-content: center; gap: 20px; }
 #s5 .mod-item {
-  font-size: 13px; color: #646464; line-height: 1.5;
-  display: flex; gap: 8px;
+  font-size: 15px; color: #8C8C8C; line-height: 1.6;
+  display: flex; gap: 10px;
 }
 #s5 .mod-item::before { content: '—'; color: #333; flex-shrink: 0; }
 #s5 .mod-item.hl { color: #F0ECE4; font-weight: 700; }
@@ -1077,7 +1077,7 @@ body {
 
     <div style="background:#161616; border:1px solid #2C2C2C; display:flex; flex-direction:column; overflow:hidden;">
       <div style="padding:10px 16px; background:#1E0E08; border-bottom:1px solid rgba(217,79,30,0.4); color:#D94F1E; font-size:14px; font-weight:800;">① Claims-Pinning 消除幻觉</div>
-      <div style="padding:13px 16px; flex:1;">
+      <div style="padding:18px 16px; flex:1; display:flex; flex-direction:column; justify-content:center;">
         <div style="font-size:13px; color:#C8C8C8; font-weight:700; margin-bottom:6px;">每个数字声明 → 按真实业务数据<strong style="color:#EFBC3A;">重算</strong></div>
         <div style="font-size:12.5px; color:#646464; line-height:1.55;">服务端逐一校验 LLM 输出的每个数字 + 实体归属，对不上即拒绝。AI 洞察<strong style="color:#F0ECE4;">绝不瞎编数字</strong>——食品/制造业可信 AI 的关键。</div>
       </div>
@@ -1085,7 +1085,7 @@ body {
 
     <div style="background:#161616; border:1px solid #2C2C2C; display:flex; flex-direction:column; overflow:hidden;">
       <div style="padding:10px 16px; background:#151200; border-bottom:1px solid rgba(239,188,58,0.4); color:#EFBC3A; font-size:14px; font-weight:800;">② 双层质量门</div>
-      <div style="padding:13px 16px; flex:1;">
+      <div style="padding:18px 16px; flex:1; display:flex; flex-direction:column; justify-content:center;">
         <div style="font-size:13px; color:#C8C8C8; font-weight:700; margin-bottom:6px;">G1 确定性重算 + G2 LLM-Judge</div>
         <div style="font-size:12.5px; color:#646464; line-height:1.55;">G2 由 <strong style="color:#F0ECE4;">qwen3-max</strong> 评事实性 / 可操作 / 流畅，只有高质量数据被采用沉淀。<strong style="color:#EFBC3A;">census 就绪度仪表</strong>实时可见。</div>
       </div>
@@ -1093,7 +1093,7 @@ body {
 
     <div style="background:#161616; border:1px solid #2C2C2C; display:flex; flex-direction:column; overflow:hidden;">
       <div style="padding:10px 16px; background:#0C150C; border-bottom:1px solid rgba(60,177,120,0.4); color:#3CB178; font-size:14px; font-weight:800;">③ Serve-from-Corpus</div>
-      <div style="padding:13px 16px; flex:1;">
+      <div style="padding:18px 16px; flex:1; display:flex; flex-direction:column; justify-content:center;">
         <div style="font-size:13px; color:#C8C8C8; font-weight:700; margin-bottom:6px;">越用越便宜 · 成本随使用量<strong style="color:#3CB178;">下降</strong></div>
         <div style="font-size:12.5px; color:#646464; line-height:1.55;">重复场景直接从语料库回答（<strong style="color:#F0ECE4;">0 token</strong>）。语料质量 = 用户当下体验，无模型版自我蒸馏。</div>
       </div>
@@ -1160,7 +1160,7 @@ body {
 
     <div style="background:#161616; border:1px solid #2C2C2C; display:flex; flex-direction:column; overflow:hidden;">
       <div style="padding:9px 14px; background:#1E0E08; border-bottom:1px solid rgba(217,79,30,0.4); color:#D94F1E; font-size:13px; font-weight:800;">何时训练</div>
-      <div style="padding:11px 14px; flex:1;">
+      <div style="padding:16px 14px; flex:1; display:flex; flex-direction:column; justify-content:center;">
         <div style="font-size:12.5px; color:#C8C8C8; font-weight:700; margin-bottom:5px;">数据就绪 <span style="color:#505050;">+</span> 商业触发</div>
         <div style="font-size:11.5px; color:#646464; line-height:1.5;">某业态语料桶达 <strong style="color:#3CB178;">GREEN ~1000 条</strong>（restaurant 已 <strong style="color:#EFBC3A;">608/1000</strong>）；或客户私有化 / 离线 / 数据自主需求。系统已建到<strong style="color:#F0ECE4;">"训练只差一条命令"</strong>。</div>
       </div>
@@ -1168,7 +1168,7 @@ body {
 
     <div style="background:#161616; border:1px solid #2C2C2C; display:flex; flex-direction:column; overflow:hidden;">
       <div style="padding:9px 14px; background:#151200; border-bottom:1px solid rgba(239,188,58,0.4); color:#EFBC3A; font-size:13px; font-weight:800;">规模 · 方法</div>
-      <div style="padding:11px 14px; flex:1;">
+      <div style="padding:16px 14px; flex:1; display:flex; flex-direction:column; justify-content:center;">
         <div style="font-size:12.5px; color:#C8C8C8; font-weight:700; margin-bottom:5px;">LoRA / QLoRA 参数高效微调</div>
         <div style="font-size:11.5px; color:#646464; line-height:1.5;">非全量预训。<strong style="color:#F0ECE4;">~1–2k 高质量样本</strong> / 业态桶，几个 epoch 即可适配。</div>
       </div>
@@ -1176,7 +1176,7 @@ body {
 
     <div style="background:#161616; border:1px solid #2C2C2C; display:flex; flex-direction:column; overflow:hidden;">
       <div style="padding:9px 14px; background:#0C150C; border-bottom:1px solid rgba(60,177,120,0.4); color:#3CB178; font-size:13px; font-weight:800;">模型</div>
-      <div style="padding:11px 14px; flex:1;">
+      <div style="padding:16px 14px; flex:1; display:flex; flex-direction:column; justify-content:center;">
         <div style="font-size:12.5px; color:#C8C8C8; font-weight:700; margin-bottom:5px;">开源基座 <strong style="color:#3CB178;">Qwen2.5-7B/14B</strong></div>
         <div style="font-size:11.5px; color:#646464; line-height:1.5;">强中文，匹配 <strong style="color:#EFBC3A;">qwen3-max</strong> 蒸馏 teacher 分布 + <strong style="color:#F0ECE4;">LoRA 适配器</strong>。</div>
       </div>
@@ -1184,7 +1184,7 @@ body {
 
     <div style="background:#161616; border:1px solid #2C2C2C; display:flex; flex-direction:column; overflow:hidden;">
       <div style="padding:9px 14px; background:#1E0E08; border-bottom:1px solid rgba(217,79,30,0.4); color:#D94F1E; font-size:13px; font-weight:800;">GPU · 成本</div>
-      <div style="padding:11px 14px; flex:1;">
+      <div style="padding:16px 14px; flex:1; display:flex; flex-direction:column; justify-content:center;">
         <div style="font-size:12.5px; color:#C8C8C8; font-weight:700; margin-bottom:5px;">单张消费级 GPU 可训</div>
         <div style="font-size:11.5px; color:#646464; line-height:1.5;">24GB 理想 / <strong style="color:#F0ECE4;">RTX3060 12GB QLoRA 4-bit 可训 7B</strong>，几 GPU-小时成本极低。自托管 serving 仅在月用量过 <strong style="color:#EFBC3A;">break-even(~5–10M token)</strong> 才划算。</div>
       </div>
