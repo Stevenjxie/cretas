@@ -80,6 +80,11 @@ public class VoucherTemplateServiceImpl implements VoucherTemplateService {
         int lineNo = 1;
         for (TemplateEntry te : entries) {
             BigDecimal amount = evalAmount(te.getAmountExpression(), ctx, template, te);
+            // SP11 价税分离: omitWhenZero 行 (税行) 求值为 0 时省略 → 零税退化两行,
+            // 与 generator hardcoded buildEntries 的零税两行行为一致 (向后兼容)。
+            if (Boolean.TRUE.equals(te.getOmitWhenZero()) && amount.signum() == 0) {
+                continue;
+            }
             VoucherEntry entry = VoucherEntry.builder()
                     .lineNo(te.getSortOrder() != null ? te.getSortOrder() : lineNo)
                     .subjectCode(te.getSubjectCode())

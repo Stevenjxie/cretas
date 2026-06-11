@@ -103,6 +103,16 @@ public class VoucherTemplate extends BaseEntity {
         /** SpEL expression; 求值结果须可转 BigDecimal. */
         private String  amountExpression;
         private String  description;
+        /**
+         * SP11 价税分离: 当此分录 amountExpression 求值为 0 时省略该行 (不渲染进凭证).
+         *
+         * <p>用途: 含税默认模板 (SALES_RECEIPT/PURCHASE_PAYMENT) 的销项/进项税行
+         * 在零税订单 (taxAmount=0) 时省略, 退化为两行, 与 generator hardcoded buildEntries
+         * 的零税两行行为完全一致 (向后兼容, 不在客户金蝶账套留下 ¥0.00 税行)。
+         *
+         * <p>null/false → 不省略 (默认, 老模板行为不变)。仅税行标 true。
+         */
+        private Boolean omitWhenZero;
     }
 
     public enum Direction { DEBIT, CREDIT }
