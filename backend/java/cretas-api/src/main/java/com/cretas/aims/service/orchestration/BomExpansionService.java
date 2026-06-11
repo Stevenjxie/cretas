@@ -472,13 +472,25 @@ public class BomExpansionService {
      */
     @Transactional(readOnly = true)
     public boolean recheckAvailability(ProductionPlan plan) {
-        List<MaterialRequirement> requirements = expandBOM(
-                plan.getFactoryId(),
-                plan.getProductTypeId(),
-                plan.getPlannedQuantity()
-        );
-        MaterialCheckResult result = checkMaterialAvailability(plan.getFactoryId(), requirements);
-        log.info("生产计划复检: planId={}, allSatisfied={}", plan.getId(), result.isAllSatisfied());
-        return result.isAllSatisfied();
+        // doomed-tx 修复 Layer 2 (2026-06-12): recheckAvailability 是"就绪软探针"(收货后唤醒等待计划),
+        // 不是写路径校验. expandBOM 对单位不可换算的 BOM 行 (如吸塑盒2014-3.5 BOM单位 g vs 库存 件)
+        // 抛 BusinessException(409) —— 在软探针语境下应视为"该计划尚不就绪"(return false), 而非抛异常
+        // (抛会 mark 事务 rollback-only, 即便上层 catch 也 doom). 写路径 (ProductionPlanServiceImpl /
+        // FactoryMaterialRequisitionServiceImpl) 仍保留抛异常语义 (不能用坏 BOM 开工, 正确).
+        try {
+            List<MaterialRequirement> requirements = expandBOM(
+                    plan.getFactoryId(),
+                    plan.getProductTypeId(),
+                    plan.getPlannedQuantity()
+            );
+            MaterialCheckResult result = checkMaterialAvailability(plan.getFactoryId(), requirements);
+            log.info("生产计划复检: planId={}, allSatisfied={}", plan.getId(), result.isAllSatisfied());
+            return result.isAllSatisfied();
+        } catch (BusinessException e) {
+            // 单位不可换算 / BOM 配置问题 → 软探针判定"尚不就绪", 不抛 (避免 doom 事务).
+            log.warn("生产计划复检遇 BOM/单位问题, 视为尚不就绪: planId={}, reason={}",
+                    plan.getId(), e.getMessage());
+            return false;
+        }
     }
 }
