@@ -193,10 +193,11 @@ class LabelServiceSp4T5Test {
     }
 
     @Test
-    @DisplayName("T5-A3-2: materialType.primaryCode=null → fallback 前缀 'MA'")
-    void generateLabel_nullPrimaryCode_fallsBackToMA() {
+    @DisplayName("T5-A3-2: primaryCode=null + 类别'原料' → fallback 类别前缀 'YL' (非旧硬编码 MA)")
+    void generateLabel_nullPrimaryCode_fallsBackToCategoryPrefix() {
         RawMaterialType materialType = new RawMaterialType();
-        materialType.setPrimaryCode(null); // null → fallback
+        materialType.setPrimaryCode(null); // null → fallback 走类别前缀
+        materialType.setCategory("原料");   // 原料 → YL
         batch.setMaterialType(materialType);
 
         when(materialBatchRepository.findByIdAndFactoryId(BATCH_ID, FACTORY_ID))
@@ -208,15 +209,15 @@ class LabelServiceSp4T5Test {
         Label result = labelService.generateMaterialBatchLabel(FACTORY_ID, BATCH_ID, 1L);
 
         assertNotNull(result.getLabelCode(), "labelCode should be generated");
-        // "MA".substring(0,2) = "MA"
-        assertTrue(result.getLabelCode().startsWith("MA"),
-                "label code should start with 'MA' (fallback when primaryCode null), got: " + result.getLabelCode());
+        // 修(Gate2 靶6): primaryCode 空时用 SP4 类别前缀, 原料→YL, 不再硬编码 MA
+        assertTrue(result.getLabelCode().startsWith("YL"),
+                "label code should start with 'YL' (类别前缀 fallback), got: " + result.getLabelCode());
     }
 
     @Test
-    @DisplayName("T5-A3-3: materialType=null → fallback 前缀 'MA'")
-    void generateLabel_noMaterialType_fallsBackToMA() {
-        // batch has no materialType set (null)
+    @DisplayName("T5-A3-3: materialType=null → fallback 前缀 'WL' (其他/未知类别, 非旧 MA)")
+    void generateLabel_noMaterialType_fallsBackToWL() {
+        // batch has no materialType set (null) → 类别未知 → WL
         batch.setMaterialType(null);
 
         when(materialBatchRepository.findByIdAndFactoryId(BATCH_ID, FACTORY_ID))
@@ -228,8 +229,8 @@ class LabelServiceSp4T5Test {
         Label result = labelService.generateMaterialBatchLabel(FACTORY_ID, BATCH_ID, 1L);
 
         assertNotNull(result.getLabelCode());
-        assertTrue(result.getLabelCode().startsWith("MA"),
-                "label code should start with 'MA' (fallback when materialType null), got: " + result.getLabelCode());
+        assertTrue(result.getLabelCode().startsWith("WL"),
+                "label code should start with 'WL' (fallback when materialType null), got: " + result.getLabelCode());
     }
 
     @Test

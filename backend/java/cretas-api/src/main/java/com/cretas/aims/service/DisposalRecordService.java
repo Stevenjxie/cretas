@@ -64,7 +64,14 @@ public class DisposalRecordService implements IDisposalRecordService {
     @Transactional
     public DisposalRecord approveDisposal(Long id, Integer approverId, String approverName) {
         DisposalRecord record = disposalRecordRepository.findById(id)
-                .orElseThrow(() -> new RuntimeException("报废记录不存在: " + id));
+                .orElseThrow(() -> new BusinessException(404, "报废记录不存在: " + id));
+
+        // 幂等防重 (2026-06-12, Codex Gate2): 已审批不可重复审批. 审批触发库存扣减,
+        // 重复 approve 会重复扣库存 (旧代码无任何状态门, 任意次调用都成功). 返 409.
+        if (Boolean.TRUE.equals(record.getIsApproved())) {
+            throw new BusinessException(409, "报废记录已审批, 请勿重复操作")
+                    .withHint("查看已审批记录").withHintTarget("status");
+        }
 
         record.approve(approverId, approverName);
         log.info("审批报废记录: id={}, 审批人={}", id, approverName);

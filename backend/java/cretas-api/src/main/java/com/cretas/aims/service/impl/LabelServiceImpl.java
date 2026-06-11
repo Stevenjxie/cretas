@@ -239,13 +239,15 @@ public class LabelServiceImpl implements LabelService {
         label.setPrintCount(0);
         label.setCreatedBy(userId);
 
-        // A3: 数字前缀复用 SP8 primaryCode (RawMaterialType.primaryCode 前三位),
-        // 避免双编码体系。无 primaryCode 时降级为 "MA" 兜底。
+        // A3: 数字前缀复用 SP8 primaryCode (RawMaterialType.primaryCode 前三位), 避免双编码体系。
+        // 修 (2026-06-12, Codex Gate2 靶6): 无 primaryCode 时不再硬编码 "MA"(失真), 改用 SP4 类别业务前缀
+        // (原料→YL/肉类→RL/包材→BC/其他→WL), 与编码生成规则同源 (RawMaterialTypeServiceImpl 同包 static).
         String sp8Prefix = (batch.getMaterialType() != null
                 && batch.getMaterialType().getPrimaryCode() != null
                 && !batch.getMaterialType().getPrimaryCode().isBlank())
                 ? batch.getMaterialType().getPrimaryCode()
-                : "MA";
+                : RawMaterialTypeServiceImpl.getMaterialCategoryPrefix(
+                        batch.getMaterialType() != null ? batch.getMaterialType().getCategory() : null);
         label.setLabelCode(generateLabelCode(factoryId, sp8Prefix));
         label.setTraceCode(generateTraceCode(factoryId, batch.getBatchNumber()));
         // 物料名称从 materialType 关联实体获取 (lazy, but within transaction)
