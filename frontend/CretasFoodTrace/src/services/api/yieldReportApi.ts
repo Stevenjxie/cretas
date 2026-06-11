@@ -183,6 +183,14 @@ export interface YieldReportRequest {
    * null/缺省 = 旧式整合报工 (向后兼容, 全字段生效)。
    */
   reportKind?: 'INPUT' | 'SEGMENT' | 'OUTPUT';
+  /**
+   * 同单未完结续报 (部分产出/继续产出): 控制 OUTPUT 报工后是否把工序任务置完工。
+   * 客户场景 (六扇门): "先出 300 盒成品单子留着, 明天再出 200 盒"。
+   * - undefined/不传 = 向后兼容: OUTPUT/legacy 报工后立即完工 (历史行为, 零回归)。
+   * - false = 部分产出, 留单继续: 累加产出但任务保持进行中, 可后续再报。
+   * - true = 显式标记完工: 累加产出后完工 (出成率锁定)。
+   */
+  markComplete?: boolean;
   workMinutes?: number;             // 本道工时(分钟), 选填 (后端 Integer)
   workerCount?: number;             // P1-3 (G4): 本道人数, 选填 (后端 Integer)
   forceSubmit?: boolean;            // A4 超收软告警后强制提交
@@ -270,6 +278,10 @@ export interface YieldReportResult {
   reportId: number;
   yieldRate: number | null;
   alert?: 'BELOW_MIN' | 'ABOVE_MAX';   // null 时 key 不出现
+  /** 同单未完结续报: 任务是否已完工 (仅 OUTPUT/legacy 报工返回); markComplete=false 时为 false。 */
+  taskCompleted?: boolean;
+  /** 同单未完结续报: Σ该任务全部 OUTPUT 累计产出 (含本次, 仅 OUTPUT/legacy 报工返回)。 */
+  cumulativeOutput?: number | null;
 }
 
 // recordMaterialInput: 只 put reportId — :160-162

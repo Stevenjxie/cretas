@@ -41,6 +41,23 @@ public class YieldReportRequest {
      */
     private String reportKind;
 
+    /**
+     * 同单未完结续报 (部分产出/继续产出): 控制 OUTPUT 报工后是否把工序任务置 COMPLETED。
+     *
+     * <p>客户场景 (六扇门 t2b): "先出 300 盒成品单子留着, 明天再出 200 盒" —— 一道工序可以
+     * <b>多次产出</b>, 不是一次 OUTPUT 就完工。累计产出 = Σ 各次 OUTPUT, 出成率按累计算。</p>
+     *
+     * <ul>
+     *   <li>{@code null} / 不传 = <b>向后兼容</b>: OUTPUT/legacy 报工后任务立即 COMPLETED
+     *       (与历史行为完全一致, 零回归)。</li>
+     *   <li>{@code false} = 部分产出, 留单继续: 累加本次产出但任务保持 IN_PROGRESS, 可后续再报。</li>
+     *   <li>{@code true} = 显式标记完工: 累加本次产出后任务 COMPLETED (出成率锁定)。</li>
+     * </ul>
+     *
+     * <p>仅对 OUTPUT/legacy 报工 (有产出) 生效; INPUT/SEGMENT 报工不触碰任务状态 (本就不完工)。</p>
+     */
+    private Boolean markComplete;
+
     // ==================== SP1 双产出字段 ====================
     /**
      * SP1 产出种类: FINISHED / SEMI / BOTH / null(旧式兼容).

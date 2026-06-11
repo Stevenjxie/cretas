@@ -319,12 +319,25 @@ public class YieldReportServiceImpl implements YieldReportService {
             taskTotal = taskTotal.add(saved.getOutputQuantity());
         }
         t.setActualQuantity(taskTotal);
-        // BUG-1 修复: OUTPUT/Legacy 报工完成后，在同事务内置任务状态 COMPLETED + completedBy。
+        // 同单未完结续报 (部分产出/继续产出): OUTPUT/Legacy 报工后是否置任务 COMPLETED 由 markComplete 决定。
+        //   markComplete == null  → 向后兼容: 立即 COMPLETED (历史行为, 零回归)。
+        //   markComplete == TRUE  → 显式完工: 累加产出后 COMPLETED (出成率锁定)。
+        //   markComplete == FALSE → 部分产出留单继续: 累加产出, 任务保持 IN_PROGRESS, 可后续再报。
         // 注意: 不引入内层 @Transactional, 直接 set 后 save, 与上面 actualQuantity 同一 save 合并。
+        boolean markComplete = !Boolean.FALSE.equals(req.getMarkComplete());  // null/true → 完工; false → 续报
+        boolean taskCompleted = false;
         if (isOutput || isLegacy) {
-            t.setStatus(WorkProcessTask.Status.COMPLETED);
-            t.setCompletedBy(effectiveWorker);
-            t.setCompletedAt(LocalDateTime.now());
+            if (markComplete) {
+                t.setStatus(WorkProcessTask.Status.COMPLETED);
+                t.setCompletedBy(effectiveWorker);
+                t.setCompletedAt(LocalDateTime.now());
+                taskCompleted = true;
+            } else {
+                // 部分产出: 保持 IN_PROGRESS 可续报 (兜底: 若任务为初始 PENDING, 报了产出说明已在生产, 推进到 IN_PROGRESS)。
+                if (t.getStatus() == WorkProcessTask.Status.PENDING) {
+                    t.setStatus(WorkProcessTask.Status.IN_PROGRESS);
+                }
+            }
         }
         taskRepo.save(t);
 
@@ -333,6 +346,12 @@ public class YieldReportServiceImpl implements YieldReportService {
 
         Map<String, Object> out = new HashMap<>();
         out.put("reportId", saved.getId());
+        // 同单未完结续报: 回传任务是否已完工 + 累计产出 (供 RN "已产出 X, 可继续产出" 防呆提示)。
+        // 仅在有产出阶段 (OUTPUT/legacy) 附带; INPUT/SEGMENT 不涉及完工语义。
+        if (isOutput || isLegacy) {
+            out.put("taskCompleted", taskCompleted);
+            out.put("cumulativeOutput", taskTotal);  // Σ该任务全部 OUTPUT 产出 (含本次)
+        }
 
         // yieldRate: 单报工内即时出成率 (需同报工带可比 input+output → 仅 legacy 整合报工有意义)。
         // 三阶段 INPUT/SEGMENT/OUTPUT 各只带单边量, 单报工 yieldRate 为 null (整道出成率经 calculateSteps 跨阶段算)。
