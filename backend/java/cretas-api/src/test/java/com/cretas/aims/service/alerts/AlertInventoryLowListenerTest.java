@@ -21,6 +21,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.doNothing;
 
 /**
  * AlertInventoryLowListener 单元测试 — Phase 2 Canvas-Alerts.
@@ -33,6 +34,9 @@ class AlertInventoryLowListenerTest {
 
     @Mock
     private AlertEngineService alertEngineService;
+
+    @Mock
+    private com.cretas.aims.service.alerts.LowStockDualAlertService lowStockDualAlertService;
 
     @InjectMocks
     private AlertInventoryLowListener listener;
@@ -65,5 +69,21 @@ class AlertInventoryLowListenerTest {
         assertTrue(message.contains("冻猪蹄"));
         assertTrue(message.contains("25"));
         assertTrue(message.contains("30"));
+    }
+
+    @Test
+    @DisplayName("F-034: onInventoryStockChanged 调用 LowStockDualAlertService.checkAndNotify")
+    void callsLowStockDualAlertService() {
+        InventoryStockChangedEvent event = new InventoryStockChangedEvent(
+                this, "F006", "mat-2", "猪舌",
+                new BigDecimal("15"), new BigDecimal("40"), "kg", "OUT");
+        when(alertEngineService.triggerAlert(any(), any(), any(), any(), any()))
+                .thenReturn(java.util.List.of());
+
+        listener.onInventoryStockChanged(event);
+
+        verify(lowStockDualAlertService).checkAndNotify(
+                eq("F006"), eq("mat-2"),
+                eq(new BigDecimal("15")), eq(new BigDecimal("40")), eq("kg"));
     }
 }

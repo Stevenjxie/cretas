@@ -3,6 +3,7 @@ package com.cretas.aims.service.alerts.listener;
 import com.cretas.aims.entity.alerts.AlertType;
 import com.cretas.aims.event.InventoryStockChangedEvent;
 import com.cretas.aims.service.alerts.AlertEngineService;
+import com.cretas.aims.service.alerts.LowStockDualAlertService;
 import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -44,12 +45,15 @@ public class AlertInventoryLowListener {
     @Autowired
     private AlertEngineService alertEngineService;
 
+    /** F-034: 实时双向报警 (仓库+采购). */
+    @Autowired
+    private LowStockDualAlertService lowStockDualAlertService;
+
     @PostConstruct
     void init() {
-        log.warn("AlertInventoryLowListener registered — "
-                + "Phase 2 follow-up: WMS/MaterialBatchServiceImpl should publish "
-                + "InventoryStockChangedEvent on stock writes. Scheduler "
-                + "(AlertInventoryLowScheduler) provides fallback every 15min.");
+        log.info("AlertInventoryLowListener registered — "
+                + "F-034 dual alert (warehouse_manager + procurement_manager) active. "
+                + "Scheduler fallback every 15 min.");
     }
 
     @EventListener
@@ -85,6 +89,14 @@ public class AlertInventoryLowListener {
                     "MATERIAL",
                     event.getMaterialTypeId(),
                     context);
+
+            // F-034: 同步推双向通知 (仓库 + 采购)
+            lowStockDualAlertService.checkAndNotify(
+                    event.getFactoryId(),
+                    event.getMaterialTypeId(),
+                    event.getCurrentStock(),
+                    event.getMinStockLevel(),
+                    event.getUnit());
         } catch (Exception e) {
             log.error("AlertInventoryLowListener: failed to process event {}", event, e);
         }

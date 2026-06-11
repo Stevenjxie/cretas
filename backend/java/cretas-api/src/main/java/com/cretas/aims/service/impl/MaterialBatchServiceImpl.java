@@ -946,6 +946,9 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
 
         materialBatchRepository.save(batch);
         log.info("使用批次数量: batchId={}, quantity={}", batchId, quantity);
+
+        // F-034: 领料消耗后发布库存变更事件 → 触发低库存双向报警检测
+        publishStockChangedEventIfApplicable(factoryId, batch, "OUT");
     }
 
     @Override
@@ -1038,6 +1041,47 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
         if ("CRITICAL".equals(level)) return 0;
         if ("WARNING".equals(level)) return 1;
         return 2;
+    }
+
+    /**
+     * F-034: 领料/消耗后发布 InventoryStockChangedEvent, 触发低库存双向报警流水线.
+     *
+     * <p>fail-open: applicationEventPublisher 为 optional bean; 查 minStock 失败时
+     * 不阻断主流程 (catch-all).
+     */
+    private void publishStockChangedEventIfApplicable(String factoryId, MaterialBatch batch, String changeType) {
+        if (applicationEventPublisher == null || batch == null) return;
+        try {
+            // 取当前原料类型的 minStock (安全库存)
+            BigDecimal minStock = materialTypeRepository.findById(batch.getMaterialTypeId())
+                    .map(com.cretas.aims.entity.RawMaterialType::getMinStock)
+                    .orElse(null);
+
+            // 取变更后最新全量库存 (跨批次聚合)
+            BigDecimal currentStock = materialBatchRepository
+                    .sumAvailableQuantityByMaterialType(factoryId, batch.getMaterialTypeId());
+            if (currentStock == null) currentStock = BigDecimal.ZERO;
+
+            String materialName = materialTypeRepository.findById(batch.getMaterialTypeId())
+                    .map(com.cretas.aims.entity.RawMaterialType::getName)
+                    .orElse(batch.getMaterialTypeId());
+
+            String unit = materialTypeRepository.findById(batch.getMaterialTypeId())
+                    .map(com.cretas.aims.entity.RawMaterialType::getUnit)
+                    .orElse("kg");
+
+            applicationEventPublisher.publishEvent(
+                    new com.cretas.aims.event.InventoryStockChangedEvent(
+                            this, factoryId, batch.getMaterialTypeId(),
+                            materialName, currentStock, minStock, unit, changeType));
+
+            log.debug("F-034: 发布 InventoryStockChangedEvent factoryId={} materialTypeId={} "
+                    + "current={} minStock={} changeType={}",
+                    factoryId, batch.getMaterialTypeId(), currentStock, minStock, changeType);
+        } catch (Exception e) {
+            log.warn("F-034: publishStockChangedEvent 失败 (非阻断): factoryId={} batchId={} — {}",
+                    factoryId, batch.getId(), e.getMessage());
+        }
     }
 
     @Override
@@ -1249,7 +1293,12 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
             materialConsumptionRepository.save(consumption);
         }
 
-        return materialBatchMapper.toDTO(materialBatchRepository.save(batch));
+        MaterialBatchDTO result = materialBatchMapper.toDTO(materialBatchRepository.save(batch));
+
+        // F-034: 报工领料消耗后发布库存变更事件 → 触发低库存双向报警检测
+        publishStockChangedEventIfApplicable(factoryId, batch, "OUT");
+
+        return result;
     }
 
     @Override
