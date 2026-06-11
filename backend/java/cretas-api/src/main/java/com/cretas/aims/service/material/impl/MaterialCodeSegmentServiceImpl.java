@@ -6,6 +6,7 @@ import com.cretas.aims.entity.material.MaterialCodeSegment;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.exception.ResourceNotFoundException;
 import com.cretas.aims.repository.material.MaterialCodeSegmentRepository;
+import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.service.material.MaterialCodeSegmentService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -27,6 +28,7 @@ import java.util.stream.Collectors;
 public class MaterialCodeSegmentServiceImpl implements MaterialCodeSegmentService {
 
     private final MaterialCodeSegmentRepository repo;
+    private final RawMaterialTypeRepository materialTypeRepository;
 
     @Override
     public List<MaterialCodeSegmentDTO> listByLevel(String factoryId, short level) {
@@ -148,6 +150,48 @@ public class MaterialCodeSegmentServiceImpl implements MaterialCodeSegmentServic
     @Override
     public boolean hasSegmentDictionary(String factoryId) {
         return repo.countByFactoryIdAndLevel(factoryId, (short) 1) > 0;
+    }
+
+    /**
+     * generate-code 端点实现: 取 L3 segmentCode (10位) 作前缀, 扫已有编码序号, +1 返回16位预览.
+     * 若字典未配置则返回 null.
+     */
+    @Override
+    public String generateCode(String factoryId, String l1, String l2, String l3) {
+        // 字典未配置 — 诚实返回 null, 调用方降级
+        if (!hasSegmentDictionary(factoryId)) {
+            log.info("generate-code: 工厂 {} 尚未配置分段字典, 返回 null", factoryId);
+            return null;
+        }
+
+        // L3 segmentCode 是最终的10位累积编码 (l3 就是累积的10位)
+        // 但前端传的是各级独立 segmentCode, l3 本身应是10位 cumulative code.
+        // 规范: L3 cumulative = l3 (already 10-digit per schema).
+        // 若 l3 不是10位 → 视为参数无效, 直接返回 null.
+        if (l3 == null || !l3.matches("[0-9]{10}")) {
+            log.warn("generate-code: l3={} 不是10位数字, 参数无效", l3);
+            return null;
+        }
+
+        String segmentPrefix = l3; // 10-digit cumulative L3 code
+        List<String> existing = materialTypeRepository
+                .findCodesByFactoryIdAndSegmentPrefix(factoryId, segmentPrefix);
+
+        int maxSeq = 0;
+        for (String code : existing) {
+            if (code.length() == 16) {
+                String seqPart = code.substring(10);
+                try {
+                    int seq = Integer.parseInt(seqPart);
+                    if (seq > maxSeq) maxSeq = seq;
+                } catch (NumberFormatException ignored) {
+                    // skip non-numeric suffix
+                }
+            }
+        }
+        String generated = String.format("%s%06d", segmentPrefix, maxSeq + 1);
+        log.info("generate-code: factoryId={} l1={} l2={} l3={} → {}", factoryId, l1, l2, l3, generated);
+        return generated;
     }
 
     // ——— helpers ———

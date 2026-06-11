@@ -287,20 +287,26 @@ public class RawMaterialTypeController {
     // ==================== T159-B-codegen: 编码预览 + 多字段建议 ====================
 
     /**
-     * T159-B-codegen: 预览将为该 category 自动生成的原料编码 (只读, 不写库).
-     * 前缀规则: 原料→YL, 肉类→RL, 包材→BC, 其他→WL.
-     * 序号: 同前缀最大数字后缀 +1, 零填充3位. 无同前缀记录时从 001 开始.
+     * T159-B-codegen + SP8: 预览将为该 category 自动生成的原料编码 (只读, 不写库).
      *
-     * @return { "success": true, "data": { "code": "YL006" }, "message": ... }
+     * <p>当 segmentCode 为10位数字且工厂已配置分段字典时, 走16位路径:
+     *   返回 "{segmentCode}{6位序号}" (16位完整编码).
+     * 否则 fallback 到 SP4 扁平方案:
+     *   前缀 (原料→YL/肉类→RL/包材→BC/其他→WL) + 3位序号.
+     *
+     * @param category    原料类别 (SP4 fallback 用, 16位路径亦可为 null)
+     * @param segmentCode L3 cumulative segment code (10位纯数字, 可选)
+     * @return { "success": true, "data": { "code": "0010010001000007" } }
      */
     @GetMapping("/preview-code")
-    @Operation(summary = "预览原料编码 (T159-B)",
-            description = "根据类别预览将自动生成的原料编码, 不写库. 前缀: 原料→YL, 肉类→RL, 包材→BC, 其他→WL.")
+    @Operation(summary = "预览原料编码 (T159-B / SP8)",
+            description = "根据类别预览将自动生成的原料编码, 不写库. 传 segmentCode (10位) 时走16位路径, 否则 SP4 扁平 (YL/RL/BC/WL+3位).")
     public ApiResponse<Map<String, String>> previewMaterialCode(
             @PathVariable @Parameter(description = "工厂ID", example = "F001") String factoryId,
-            @RequestParam @Parameter(description = "原料类别", example = "原料") String category) {
-        log.info("预览原料编码: factoryId={}, category={}", factoryId, category);
-        String code = materialTypeService.previewMaterialCode(factoryId, category);
+            @RequestParam(required = false, defaultValue = "") @Parameter(description = "原料类别 (SP4 fallback 用)", example = "原料") String category,
+            @RequestParam(required = false) @Parameter(description = "L3 cumulative segment code (10位, 可选)", example = "0010010001") String segmentCode) {
+        log.info("预览原料编码: factoryId={}, category={}, segmentCode={}", factoryId, category, segmentCode);
+        String code = materialTypeService.previewMaterialCode(factoryId, category, segmentCode);
         return ApiResponse.success("编码预览成功", Map.of("code", code));
     }
 

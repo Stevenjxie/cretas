@@ -277,6 +277,47 @@ class RawMaterialTypeSp8Test {
     }
 
     // ─────────────────────────────────────────────────────────────
+    // 2b. previewMaterialCode (3-arg: category + segmentCode)
+    // ─────────────────────────────────────────────────────────────
+
+    @Nested
+    @DisplayName("previewMaterialCode(factoryId, category, segmentCode)")
+    class PreviewMaterialCodeWithSegment {
+
+        @Test
+        @DisplayName("segmentCode 10位 + 字典已配置 + 无已有码 → 16位 000001")
+        void segmentCode10Digit_hasDictionary_returns16Digit() {
+            when(materialCodeSegmentRepository.countByFactoryIdAndLevel(FACTORY_ID, (short) 1))
+                    .thenReturn(3L);
+            when(materialTypeRepository.findCodesByFactoryIdAndSegmentPrefix(FACTORY_ID, "0010010001"))
+                    .thenReturn(java.util.Collections.emptyList());
+
+            String code = service.previewMaterialCode(FACTORY_ID, "肉类", "0010010001");
+            assertEquals("0010010001000001", code);
+        }
+
+        @Test
+        @DisplayName("segmentCode null → fallback SP4 扁平")
+        void nullSegmentCode_fallbackFlat() {
+            when(materialTypeRepository.findCodesByFactoryIdAndCodePrefix(FACTORY_ID, "RL"))
+                    .thenReturn(java.util.Collections.emptyList());
+
+            String code = service.previewMaterialCode(FACTORY_ID, "肉类", null);
+            assertEquals("RL001", code);
+        }
+
+        @Test
+        @DisplayName("segmentCode 非10位 → fallback SP4 扁平")
+        void shortSegmentCode_fallbackFlat() {
+            when(materialTypeRepository.findCodesByFactoryIdAndCodePrefix(FACTORY_ID, "BC"))
+                    .thenReturn(java.util.Collections.emptyList());
+
+            String code = service.previewMaterialCode(FACTORY_ID, "包材", "001001");
+            assertEquals("BC001", code);
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────
     // 3. searchByCodePrefix
     // ─────────────────────────────────────────────────────────────
 
