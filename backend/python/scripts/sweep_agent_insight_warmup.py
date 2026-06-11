@@ -345,7 +345,7 @@ async def run_sweep(
             or ""
         )
         llm_base_url = getattr(settings, "llm_base_url", None) or "https://dashscope.aliyuncs.com/compatible-mode/v1"
-        llm_model = getattr(settings, "llm_model", None) or "qwen3-max"
+        llm_model = getattr(settings, "llm_model", None) or "qwen3.7-max-2026-06-08"
 
         from smartbi.agent.orchestrator import AgentOrchestrator
         from smartbi.agent.narrative_cache import NarrativeCacheService

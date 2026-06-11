@@ -18,6 +18,21 @@ from typing import Dict, Optional
 from dataclasses import dataclass
 from enum import Enum
 
+# Cost guard: this sync httpx lane bypasses call_chain (and thus its denylist
+# guard). Import the single source of truth so a PAID model can never be billed
+# from this direct path. Fall back to a local replica if the import path is
+# unavailable (defensive — both must stay in sync).
+try:
+    from common.llm_router import _PAID_MODEL_DENYLIST
+except Exception:  # pragma: no cover - defensive only
+    _PAID_MODEL_DENYLIST = frozenset({
+        "qwen3-max",
+        "qwen3-max-2026-01-23",
+        "qwen-max",
+        "qwen-plus",
+        "qwen3.5-122b-a10b",
+    })
+
 
 def load_env():
     """从 .env 文件加载环境变量"""
@@ -66,8 +81,8 @@ class ModelConfig:
     # 深度推理（场景理解、变化检测）— free quota (was: qwen-vl-max)
     DEEP_REASONING = os.getenv("VL_MODEL_DEEP_REASONING", "qwen3-vl-plus-2025-12-19")
 
-    # 文本生成（报告、摘要）— free quota (was: qwen3.5-plus-2026-02-15)
-    TEXT_GENERATION = os.getenv("TEXT_MODEL", "qwen3-max-2026-01-23")
+    # 文本生成（报告、摘要）— free (qwen3-max-2026-01-23 was PAID — caused 2026-06-11 bill)
+    TEXT_GENERATION = os.getenv("TEXT_MODEL", "qwen3.7-max-2026-06-08")
 
     @classmethod
     def get_model_for_task(cls, task_type: str) -> str:
@@ -152,6 +167,13 @@ class QwenVLClient:
         # making analyze()/analyze_with_context() async and awaiting them up the
         # whole chain — too risky to change here. Left direct for now; efficiency
         # VL (offline video analysis) can be migrated to call_chain separately.
+        #
+        # Cost guard (fail loud, never silently bill): this direct lane bypasses
+        # call_chain's denylist guard, so enforce it here too.
+        if use_model in _PAID_MODEL_DENYLIST:
+            raise RuntimeError(
+                f"vl_client refusing PAID model {use_model} — set TEXT_MODEL/LLM_VL_MODEL to a free model"
+            )
         try:
             response = self.client.post(
                 f"{self.base_url}/chat/completions",
@@ -243,6 +265,13 @@ class QwenVLClient:
         # analyze() above — QwenVLClient sync httpx.Client called by deep sync
         # chains outside this lane. Migrate to call_chain(SLOT.VL) when the
         # efficiency VL path is converted to async end-to-end.
+        #
+        # Cost guard (fail loud, never silently bill): this direct lane bypasses
+        # call_chain's denylist guard, so enforce it here too.
+        if use_model in _PAID_MODEL_DENYLIST:
+            raise RuntimeError(
+                f"vl_client refusing PAID model {use_model} — set TEXT_MODEL/LLM_VL_MODEL to a free model"
+            )
         try:
             response = self.client.post(
                 f"{self.base_url}/chat/completions",

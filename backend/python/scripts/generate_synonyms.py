@@ -115,7 +115,7 @@ def generate_synonyms(client, intent_code: str, seeds: list[str], count: int = 2
 
     try:
         response = client.chat.completions.create(
-            model="qwen-plus",
+            model="qwen3.7-max-2026-06-08",  # free (qwen-plus was PAID — caused 2026-06-11 bill)
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": user_prompt},

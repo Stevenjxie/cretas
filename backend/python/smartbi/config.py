@@ -18,7 +18,7 @@ class Settings(BaseSettings):
     # LLM Configuration - Text Models (all using free-quota models during testing)
     llm_api_key: str = ""
     llm_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-    llm_model: str = "qwen3-max-2026-01-23"  # Main text model — free quota (was: qwen3.5-plus-2026-02-15)
+    llm_model: str = "qwen3.7-max-2026-06-08"  # free (qwen3-max-2026-01-23 was PAID — caused 2026-06-11 bill)
 
     # LLM Configuration - Vision Model (for structure detection)
     llm_vl_model: str = "qwen3-vl-plus-2025-12-19"  # VL model — free quota (was: qwen-vl-max)
