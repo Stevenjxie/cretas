@@ -356,6 +356,13 @@ const businessRoutes: RouteRecordRaw[] = [
             name: 'WarehouseSemiFinished',
             component: () => import('@/views/warehouse/semi-finished/list.vue'),
             meta: { requiresAuth: true, title: '半成品重量库存', module: 'warehouse' }
+          },
+          // SP7 F11 #738 盐化仓独立扣量记录 + 独立报表 (对客户代加工)
+          {
+            path: 'salted-deductions',
+            name: 'WarehouseSaltedDeductions',
+            component: () => import('@/views/warehouse/salted-deductions/index.vue'),
+            meta: { requiresAuth: true, title: '盐化仓管理', module: 'warehouse' }
           }
         ]
       },
@@ -766,6 +773,18 @@ const businessRoutes: RouteRecordRaw[] = [
             name: 'SalesReportProductRank',
             component: () => import('@/views/sales/reports/product-rank.vue'),
             meta: { requiresAuth: true, title: '产品销售排行', module: 'sales', hidden: true }
+          },
+          // #739 销售方向付款申请 (对客户 outbound 退款/返利/销售费用)
+          {
+            path: 'payment-requests',
+            name: 'SalesPaymentRequests',
+            component: () => import('@/views/sales/payment-requests/list.vue'),
+            meta: {
+              requiresAuth: true,
+              title: '销售付款申请',
+              module: 'sales',
+              roles: ['factory_super_admin', 'platform_admin', 'sales_manager', 'salesperson', 'finance_manager', 'cashier']
+            }
           }
         ]
       },
