@@ -499,7 +499,7 @@ async def judge_row(
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ],
-        "max_tokens": 128,
+        "max_tokens": 2000,  # 给推理型judge(glm-4.5-air等)留够reasoning+JSON空间; 128会饿死reasoning致content空
         "temperature": 0.0,  # deterministic for scoring
     }
 
@@ -562,7 +562,7 @@ async def judge_row_with_chain(
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ],
-        "max_tokens": 128,
+        "max_tokens": 2000,  # 给推理型judge(glm-4.5-air等)留够reasoning+JSON空间; 128会饿死reasoning致content空
         "temperature": 0.0,
     }
     if model_override:
