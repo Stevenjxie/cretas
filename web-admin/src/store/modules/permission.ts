@@ -118,6 +118,14 @@ const PERMISSION_MATRIX: Record<string, ModulePermissions> = {
     finance: 'rw', system: '-', analytics: 'rw', scheduling: '-', restaurant: '-',
     rd: 'r'  // 定价参考 (analytics rw 对齐后端 SmartBI 完整权限)
   },
+  // 出纳 (D9 #675/#678): 付款申请 APPROVED→PAID 执行者。路由守卫先查 module 后查 roles,
+  // 此 fallback 缺席时 DB 异步加载未完成的窗口里 cashier 会被打成 unactivated 全 403 (2026-06-11 演示预跑实测)。
+  // procurement r = 采购付款申请页; sales r = 销售付款申请页(#739, 路由 roles 已含 cashier); 对齐 DB L1。
+  cashier: {
+    dashboard: 'r', production: '-', warehouse: '-', quality: '-',
+    procurement: 'r', sales: 'r', hr: '-', equipment: '-',
+    finance: 'rw', system: '-', analytics: '-', scheduling: '-', restaurant: '-', rd: '-'
+  },
 
   // 餐饮管理
   restaurant_manager: {
