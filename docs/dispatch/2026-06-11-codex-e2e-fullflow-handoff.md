@@ -70,7 +70,7 @@
 
 ### 阶段 6 — 财务
 14. SP3回填cost_unit_price → 财审 actualCost
-15. 成本拆分：材料逐料 + 人工 + 制费 + **多段成本链**(`/orders/{orderId}/multi-stage-cost`)
+15. 成本拆分：材料逐料 + 人工 + 制费 + **多段成本链**(`/sales/orders/{orderId}/multi-stage-cost`)
 16. 三层价格同屏对比 + 含税未税双值
 17. 含税凭证 → 金蝶导出
     - **期望**: actualCost非null(配了工价+审批报工后)；多段成本链每段(料+人工+制费)+半成品unitCost+每盒贡献；两点报工人工"登下一期"诚实显示null+hint
@@ -97,7 +97,7 @@
 4. 经**标准API**建含税订单(客户配13%税)→财审→凭证。**验：voucher_entries 真 3 行**(借应收含税/贷收入未税/贷销项税)，不是2行。注意：客户必须有 default_tax_rate=13(F006 7个客户已配)，否则 taxAmount=0 → 退化2行。
 
 ### C. 多段成本（#770，你的核心需求）
-5. 多段产品(原料→半成品→半成品→成品)→ `/orders/{orderId}/multi-stage-cost`。**验：每段 料+人工+制费分列 + 半成品unitCost逐段涨 + 每盒贡献**；两点报工人工null时诚实显示"登下一期"(不伪造0)。
+5. 多段产品(原料→半成品→半成品→成品)→ `/sales/orders/{orderId}/multi-stage-cost`。**验：每段 料+人工+制费分列 + 半成品unitCost逐段涨 + 每盒贡献**；两点报工人工null时诚实显示"登下一期"(不伪造0)。
 
 ### D. 两点报工 vs 逐道（#718/#729）
 6. **验：F006新建计划默认两点**(skip_process_reporting_default=true)；其他工厂(F001等)默认逐道。F006 报工只2点，中间免报。
@@ -188,7 +188,7 @@ WHERE v.source_business_id = '<含税SO>' ORDER BY ve.sort_order;
 
 ### C. 多段成本（#770）
 ```bash
-curl -s "http://localhost:10010/api/mobile/F006/orders/<orderId>/multi-stage-cost" \
+curl -s "http://localhost:10010/api/mobile/F006/sales/orders/<orderId>/multi-stage-cost" \
   -H "Authorization: Bearer <token>" | jq '.data.stages[] | {semiCode, materialCost, laborCost, overheadCost, stageSubtotal, unitCost, contributionPerBox, laborHint}'
 # 期望：每段 料+人工+制费分列；半成品unitCost逐段涨；两点报工人工null时 laborHint="人工登下一期"（不是0）
 ```
@@ -224,7 +224,7 @@ curl -s -X POST "http://localhost:10010/api/mobile/auth/unified-login" \
 ## 6. ⚠️⚠️ 关键补充（Codex 必读，否则会卡壳或误报）
 
 ### ① 多段成本需要"多段半成品链"—— F006 可能没有，需先建
-`/orders/{orderId}/multi-stage-cost` 只在产品**真有 原料→半成品→半成品→成品 多段** 时才出多行。F006 demo SKU（掌中宝/猪舌/牛腱）目前大概率是**单段**(原料→成品)或没配半成品链 → 端点会返**单段或空**，这**不是 bug**。
+`/sales/orders/{orderId}/multi-stage-cost` 只在产品**真有 原料→半成品→半成品→成品 多段** 时才出多行。F006 demo SKU（掌中宝/猪舌/牛腱）目前大概率是**单段**(原料→成品)或没配半成品链 → 端点会返**单段或空**，这**不是 bug**。
 - **要真验多段**：Codex 需先建一条多段链 —— 用**二次加工**(createSecondaryPlan + secondarySourceWipId)：原料→半成品A(批次1完工产半成品) → 半成品A→半成品B(批次2领半成品A产半成品B) → 半成品B→成品(批次3)。每步两点报工。然后查 multi-stage-cost 应出 3 段。
 - 没建多段链时端点返单段=**正确行为**，别报 bug。
 
