@@ -9,6 +9,7 @@ import com.cretas.aims.entity.inventory.PurchaseReceiveRecord;
 import com.cretas.aims.entity.enums.PurchaseOrderStatus;
 
 import com.cretas.aims.dto.inventory.MaterialPriceComparisonDTO;
+import com.cretas.aims.dto.inventory.PurchaseSuggestionResponse;
 
 import java.util.List;
 import java.util.Map;
@@ -128,6 +129,29 @@ public interface PurchaseService {
     // ==================== 统计 ====================
 
     Map<String, Object> getPurchaseStatistics(String factoryId);
+
+    // ==================== 开始采购 — 从 SO 生成采购建议 ====================
+
+    /**
+     * 从销售订单一键生成采购建议明细 (客户原话: "做个弹窗…我直接点开始采购").
+     *
+     * <p>逻辑:
+     * <ol>
+     *   <li>按 salesOrderId 加载 SO 及其行项目。</li>
+     *   <li>对每个行项目查 BomItem；若有 BOM，展开原辅料/包材需求量
+     *       (standardQuantity / (yieldRate/100) × SOItem.quantity)。</li>
+     *   <li>无 BOM 的产品原样放入列表（materialTypeId=null，作为提示）。</li>
+     *   <li>相同原料跨产品合并（materialTypeId 为 key，数量累加）。</li>
+     *   <li>从 MaterialBatch 查当前可用库存，计算净需求。</li>
+     * </ol>
+     *
+     * @param factoryId   工厂 ID（多租户隔离）
+     * @param salesOrderId 销售订单 ID
+     * @return 采购建议响应，含每种原料的需求量/库存/净需求
+     * @throws com.cretas.aims.exception.ResourceNotFoundException SO 不存在
+     * @throws com.cretas.aims.exception.BusinessException 403 跨工厂访问
+     */
+    PurchaseSuggestionResponse generatePurchaseSuggestion(String factoryId, String salesOrderId);
 
     // ==================== 三价对比 ====================
 

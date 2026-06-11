@@ -6,6 +6,7 @@ import com.cretas.aims.dto.inventory.CreatePurchaseOrderRequest;
 import com.cretas.aims.dto.inventory.CreateReceiveRecordRequest;
 import com.cretas.aims.dto.inventory.UpdatePurchaseOrderRequest;
 import com.cretas.aims.dto.inventory.MaterialPriceComparisonDTO;
+import com.cretas.aims.dto.inventory.PurchaseSuggestionResponse;
 import com.cretas.aims.entity.User;
 import com.cretas.aims.entity.enums.PurchaseOrderStatus;
 import com.cretas.aims.entity.inventory.PurchaseOrder;
@@ -499,6 +500,29 @@ public class PurchaseController {
             @RequestParam(required = false) BigDecimal currentPrice) {
         MaterialPriceComparisonDTO result = purchaseService.getMaterialPriceInfo(factoryId, materialTypeId, currentPrice);
         return ApiResponse.success("查询成功", result);
+    }
+
+    // ==================== 开始采购 — 从 SO 生成采购建议 ====================
+
+    /**
+     * 从销售订单一键生成采购建议明细.
+     *
+     * <p>客户原话 (t2b 行1867-1902 [61:17-62:02]):
+     * "做个弹窗…我直接点开始采购…不然新增有点麻烦，全部手写没意义"。
+     *
+     * <p>展开 BOM，扣减现有库存，返回预填 PO 明细（原辅料/包材 + 净需求数量）。
+     * 无 BOM 配置时 hasBom=false，items 为空，前端诚实提示。
+     *
+     * <p>路径: {@code GET /api/mobile/{factoryId}/purchase/orders/suggestions/from-so/{salesOrderId}}
+     */
+    @GetMapping("/orders/suggestions/from-so/{salesOrderId}")
+    @Operation(summary = "从销售订单生成采购建议", description = "展开BOM计算原辅料/包材需求量，扣减库存得净需求，返回预填PO明细")
+    @RequirePermission({"procurement:read_write", "procurement:read"})
+    public ApiResponse<PurchaseSuggestionResponse> generatePurchaseSuggestion(
+            @PathVariable @jakarta.validation.constraints.NotBlank String factoryId,
+            @PathVariable @jakarta.validation.constraints.NotBlank String salesOrderId) {
+        PurchaseSuggestionResponse result = purchaseService.generatePurchaseSuggestion(factoryId, salesOrderId);
+        return ApiResponse.success("采购建议生成成功", result);
     }
 
     // ==================== 内部方法 ====================
