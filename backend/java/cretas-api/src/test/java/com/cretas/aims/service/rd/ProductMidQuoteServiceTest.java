@@ -296,6 +296,34 @@ class ProductMidQuoteServiceTest {
         assertEquals("原有备注", confirmed.getNotes(), "null notes 不应覆盖已有备注");
     }
 
+    @Test
+    @DisplayName("SP10: confirmMidQuote() — 联动报价任务 quoteStage PRE → MID + 回填 midQuoteId")
+    void confirmMidQuote_advancesQuotationTaskStage() {
+        String midQuoteId = "mq-stage-001";
+        String taskId = "task-stage-001";
+        ProductMidQuote mq = new ProductMidQuote();
+        mq.setId(midQuoteId);
+        mq.setFactoryId("F006");
+        mq.setStatus("CALCULATED");
+        mq.setQuotationTaskId(taskId);
+
+        QuotationTask task = new QuotationTask();
+        task.setId(taskId);
+        task.setFactoryId("F006");
+        task.setQuoteStage("PRE");
+
+        when(midQuoteRepository.findById(midQuoteId)).thenReturn(Optional.of(mq));
+        when(midQuoteRepository.save(any(ProductMidQuote.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(quotationTaskRepository.findById(taskId)).thenReturn(Optional.of(task));
+        when(quotationTaskRepository.save(any(QuotationTask.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        service.confirmMidQuote("F006", midQuoteId, null, 7L);
+
+        assertEquals("MID", task.getQuoteStage(), "确认后报价任务 quoteStage 应推进到 MID");
+        assertEquals(midQuoteId, task.getMidQuoteId(), "应回填 midQuoteId");
+        verify(quotationTaskRepository).save(task);
+    }
+
     // ==================== getMidQuoteById 测试 ====================
 
     @Test

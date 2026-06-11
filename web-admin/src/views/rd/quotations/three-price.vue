@@ -23,18 +23,18 @@ const taskId = computed(() => route.params.taskId as string);
 
 const loading = ref(false);
 
+// 字段契约对齐后端 ThreePriceComparisonDTO (stage: PRE_TO_MID / MID_TO_ACTUAL, variancePct, alert)
 interface VarianceAlert {
   stage: string;
-  pct: number | null;
+  variancePct: number | null;
   alert: boolean;
 }
 
 interface ThreePriceData {
-  priceQuote: number | null;
+  preQuote: number | null;
   midQuote: number | null;
   actualCost: number | null;
   varianceAlerts: VarianceAlert[];
-  thresholdPct: number;
   [key: string]: unknown;
 }
 
@@ -99,7 +99,7 @@ function getVarianceAlert(stage: string): VarianceAlert | undefined {
           </template>
           <div style="text-align:center;padding:16px 0">
             <div style="font-size:28px;font-weight:700;color:#409eff">
-              {{ formatPrice(threePrice.priceQuote) }}
+              {{ formatPrice(threePrice.preQuote) }}
             </div>
             <div style="color:#909399;font-size:12px;margin-top:8px">研发经验估算</div>
           </div>
@@ -108,12 +108,12 @@ function getVarianceAlert(stage: string): VarianceAlert | undefined {
         <!-- 预→中 差异 -->
         <div style="display:flex;align-items:center;padding:0 8px">
           <div style="text-align:center">
-            <div v-if="getVarianceAlert('PRE_VS_MID')">
+            <div v-if="getVarianceAlert('PRE_TO_MID')">
               <el-tag
-                :type="getVarianceAlert('PRE_VS_MID')?.alert ? 'danger' : 'success'"
+                :type="getVarianceAlert('PRE_TO_MID')?.alert ? 'danger' : 'success'"
                 size="large"
               >
-                {{ getVarianceAlert('PRE_VS_MID')?.pct != null ? `${getVarianceAlert('PRE_VS_MID')!.pct!.toFixed(1)}%` : '—' }}
+                {{ getVarianceAlert('PRE_TO_MID')?.variancePct != null ? `${Number(getVarianceAlert('PRE_TO_MID')!.variancePct).toFixed(1)}%` : '—' }}
               </el-tag>
               <div style="font-size:11px;color:#909399;margin-top:4px">预→中</div>
             </div>
@@ -143,11 +143,11 @@ function getVarianceAlert(stage: string): VarianceAlert | undefined {
             </template>
             <!-- 超支预警 -->
             <el-alert
-              v-if="getVarianceAlert('PRE_VS_MID')?.alert"
+              v-if="getVarianceAlert('PRE_TO_MID')?.alert"
               type="error"
               :closable="false"
               style="margin-top:8px;text-align:left"
-              :title="`⚠️ 中试成本超出预报价 ${getVarianceAlert('PRE_VS_MID')?.pct?.toFixed(1)}%，超出阈值 ${threePrice.thresholdPct}%`"
+              :title="`⚠️ 中试成本超出预报价 ${Number(getVarianceAlert('PRE_TO_MID')?.variancePct ?? 0).toFixed(1)}%，已超出设定阈值`"
             />
           </div>
         </el-card>
@@ -155,12 +155,12 @@ function getVarianceAlert(stage: string): VarianceAlert | undefined {
         <!-- 中→实际 差异 -->
         <div style="display:flex;align-items:center;padding:0 8px">
           <div style="text-align:center">
-            <div v-if="getVarianceAlert('MID_VS_ACTUAL')">
+            <div v-if="getVarianceAlert('MID_TO_ACTUAL')">
               <el-tag
-                :type="getVarianceAlert('MID_VS_ACTUAL')?.alert ? 'danger' : 'success'"
+                :type="getVarianceAlert('MID_TO_ACTUAL')?.alert ? 'danger' : 'success'"
                 size="large"
               >
-                {{ getVarianceAlert('MID_VS_ACTUAL')?.pct != null ? `${getVarianceAlert('MID_VS_ACTUAL')!.pct!.toFixed(1)}%` : '—' }}
+                {{ getVarianceAlert('MID_TO_ACTUAL')?.variancePct != null ? `${Number(getVarianceAlert('MID_TO_ACTUAL')!.variancePct).toFixed(1)}%` : '—' }}
               </el-tag>
               <div style="font-size:11px;color:#909399;margin-top:4px">中→实际</div>
             </div>
@@ -190,11 +190,11 @@ function getVarianceAlert(stage: string): VarianceAlert | undefined {
             </template>
             <!-- 超支预警 -->
             <el-alert
-              v-if="getVarianceAlert('MID_VS_ACTUAL')?.alert"
+              v-if="getVarianceAlert('MID_TO_ACTUAL')?.alert"
               type="error"
               :closable="false"
               style="margin-top:8px;text-align:left"
-              :title="`⚠️ 实际成本超出中报价 ${getVarianceAlert('MID_VS_ACTUAL')?.pct?.toFixed(1)}%，超出阈值 ${threePrice.thresholdPct}%`"
+              :title="`⚠️ 实际成本超出中报价 ${Number(getVarianceAlert('MID_TO_ACTUAL')?.variancePct ?? 0).toFixed(1)}%，已超出设定阈值`"
             />
           </div>
         </el-card>
@@ -204,7 +204,7 @@ function getVarianceAlert(stage: string): VarianceAlert | undefined {
 
       <!-- 阈值说明 -->
       <div v-if="threePrice" style="margin-top:16px;color:#909399;font-size:12px">
-        超支阈值：{{ threePrice.thresholdPct }}%（超出此阈值则触发红色预警）
+        红色徽标表示该阶段偏差已超出中报价汇算时设定的超支阈值
       </div>
     </el-card>
   </div>

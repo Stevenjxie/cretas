@@ -19,6 +19,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
@@ -69,10 +70,15 @@ public class SampleApprovedEventListener {
         QuotationTask task = createQuotationTask(event, sample);
 
         // 2. Best-effort 自动建 BOM 草稿 (失败不阻塞后续通知)
-        String bomRecipeId = autoCreateBomDraft(sample);
+        BomRecipe bomRecipe = autoCreateBomDraft(sample);
+        String bomRecipeId = bomRecipe != null ? bomRecipe.getId() : null;
         if (bomRecipeId != null) {
             sample.setBomProductTypeId(bomRecipeId);
             productSampleRepository.save(sample);
+            // SP10: BOM 材料成本回写报价任务 (预报价"自动带入"的真实来源).
+            // 草稿 BOM 若主原料已定价则 totalMaterialCost 非 null → 归一化到 per-kg 写入.
+            // 主原料未定价 (totalMaterialCost=null) → 保持 task.bomMaterialCost=null (诚实留空).
+            writeBackBomMaterialCost(task, bomRecipe);
         }
 
         // 3. 通知销售主管 (失败不阻塞主流程)
@@ -105,7 +111,7 @@ public class SampleApprovedEventListener {
      * <p>设计意图: sample → BOM 是"种子草稿"语义, 不是完整配方. 仅保证 BomRecipe
      * 主表 + 1 个 placeholder item 建好, 用户在 BomConfigScreen 编辑 items 完成真正配方.
      */
-    private String autoCreateBomDraft(ProductSample sample) {
+    private BomRecipe autoCreateBomDraft(ProductSample sample) {
         if (sample.getProductTypeId() == null || sample.getProductTypeId().isBlank()) {
             log.warn("[BOM 自动建跳过] ProductSample 缺 productTypeId: sampleId={}", sample.getId());
             return null;
@@ -128,12 +134,65 @@ public class SampleApprovedEventListener {
             BomRecipe recipe = bomRecipeService.createRecipe(sample.getFactoryId(), req);
             log.info("样品审核通过 → 自动建 BOM 草稿: sampleId={}, recipeId={}, recipeCode={}",
                     sample.getId(), recipe.getId(), recipe.getRecipeCode());
-            return recipe.getId();
+            return recipe;
         } catch (Exception e) {
             // best-effort: BOM 失败不让 QuotationTask 通知失败
             log.error("[BOM 自动建失败 — best-effort, 不阻塞] sampleId={}: {}",
                     sample.getId(), e.getMessage(), e);
             return null;
+        }
+    }
+
+    /**
+     * SP10: 把 BOM 草稿的材料成本归一化到 per-kg 后回写报价任务 bomMaterialCost.
+     *
+     * <p>BomRecipe.totalMaterialCost 是"每 outputQuantityPerUnit (outputUnit)"的材料成本.
+     * 报价以 元/kg 为口径 → 换算: perKg = totalMaterialCost / (outputQuantityPerUnit 折 kg).
+     * 草稿默认 outputUnit=g, outputQuantityPerUnit=100 → 100g 成品的材料成本 ×10 = 每 kg.</p>
+     *
+     * <p>诚实留空: totalMaterialCost=null (主原料未定价) 或 outputQuantity 非法 → 不写 (保持 null).
+     * best-effort: 任何异常都不阻塞主流程.</p>
+     */
+    private void writeBackBomMaterialCost(QuotationTask task, BomRecipe recipe) {
+        try {
+            if (recipe.getTotalMaterialCost() == null
+                    || recipe.getOutputQuantityPerUnit() == null
+                    || recipe.getOutputQuantityPerUnit().compareTo(BigDecimal.ZERO) <= 0) {
+                return;
+            }
+            // outputQuantityPerUnit 折算到 kg
+            BigDecimal outputKg = toKilograms(
+                    recipe.getOutputQuantityPerUnit(), recipe.getOutputUnit());
+            if (outputKg == null || outputKg.compareTo(BigDecimal.ZERO) <= 0) {
+                return;
+            }
+            BigDecimal perKg = recipe.getTotalMaterialCost()
+                    .divide(outputKg, 4, RoundingMode.HALF_UP);
+            task.setBomMaterialCost(perKg);
+            quotationTaskRepository.save(task);
+            log.info("[SP10] BOM 材料成本回写报价任务: taskId={}, bomMaterialCost={}/kg (recipe={})",
+                    task.getId(), perKg, recipe.getId());
+        } catch (Exception e) {
+            log.error("[SP10] BOM 材料成本回写失败 — best-effort, 不阻塞: taskId={}: {}",
+                    task.getId(), e.getMessage(), e);
+        }
+    }
+
+    /** 输出量折算到 kg. 仅支持常见 g/kg, 其他单位返 null (不写, 诚实留空). */
+    private BigDecimal toKilograms(BigDecimal quantity, String unit) {
+        if (unit == null) {
+            return null;
+        }
+        switch (unit.trim().toLowerCase()) {
+            case "kg":
+            case "千克":
+            case "公斤":
+                return quantity;
+            case "g":
+            case "克":
+                return quantity.divide(BigDecimal.valueOf(1000), 6, RoundingMode.HALF_UP);
+            default:
+                return null;
         }
     }
 

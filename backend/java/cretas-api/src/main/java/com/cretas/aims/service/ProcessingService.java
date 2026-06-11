@@ -65,6 +65,11 @@ public interface ProcessingService {
     PageResponse<ProductionBatch> getBatches(String factoryId, String status, Long supervisorId, PageRequest pageRequest);
 
     /**
+     * 获取批次列表（带主管 + 试制标记过滤, SP10 中报价试制批次下拉）
+     */
+    PageResponse<ProductionBatch> getBatches(String factoryId, String status, Long supervisorId, Boolean isTrial, PageRequest pageRequest);
+
+    /**
      * 班组批量报工
      */
     Map<String, Object> submitTeamBatchReport(String factoryId, TeamBatchReportRequest request);

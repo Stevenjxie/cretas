@@ -149,9 +149,21 @@ public class ProductMidQuoteServiceImpl implements ProductMidQuoteService {
         midQuote.setConfirmedBy(confirmedBy);
         midQuote.setConfirmedAt(java.time.LocalDateTime.now());
 
-        midQuote = midQuoteRepository.save(midQuote);
+        final ProductMidQuote savedMidQuote = midQuoteRepository.save(midQuote);
+
+        // SP10: 中报价确认后, 联动推进报价任务 quoteStage PRE → MID + 回填 midQuoteId
+        if (savedMidQuote.getQuotationTaskId() != null) {
+            quotationTaskRepository.findById(savedMidQuote.getQuotationTaskId()).ifPresent(task -> {
+                task.setQuoteStage("MID");
+                task.setMidQuoteId(savedMidQuote.getId());
+                quotationTaskRepository.save(task);
+                log.info("[SP10] quotationTask {} quoteStage → MID (midQuoteId={})",
+                        task.getId(), savedMidQuote.getId());
+            });
+        }
+
         log.info("[SP10] midQuote CONFIRMED id={} confirmedBy={}", midQuoteId, confirmedBy);
-        return midQuote;
+        return savedMidQuote;
     }
 
     @Override
