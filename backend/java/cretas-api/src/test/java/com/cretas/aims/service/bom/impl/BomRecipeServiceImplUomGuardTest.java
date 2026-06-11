@@ -9,6 +9,7 @@ import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.repository.bom.BomRecipeItemRepository;
 import com.cretas.aims.repository.bom.BomRecipeRepository;
+import com.cretas.aims.service.bom.NestedBomCostService;
 import com.cretas.aims.service.uom.MaterialUomConverter;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -60,6 +61,10 @@ class BomRecipeServiceImplUomGuardTest {
     /** Placeholder mock so @InjectMocks constructor can inject; replaced in setUp with real converter. */
     @Mock
     private MaterialUomConverter mockUomConverter;
+
+    /** SP1: NestedBomCostService must be mocked so @InjectMocks can inject it. */
+    @Mock
+    private NestedBomCostService nestedBomCostService;
 
     private MaterialUomConverter realUomConverter;
 
