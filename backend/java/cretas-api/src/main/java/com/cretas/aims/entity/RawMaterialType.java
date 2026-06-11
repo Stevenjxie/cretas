@@ -222,6 +222,17 @@ public class RawMaterialType extends BaseEntity {
     @Column(name = "tax_included_unit_price", precision = 15, scale = 4)
     private BigDecimal taxIncludedUnitPrice;
 
+    // ========== P8: 包材关联固定客户 (catalog 行99-100, 非必填) ==========
+
+    /**
+     * P8: 包材可关联的固定客户ID (nullable).
+     * <p>包材专属字段 — 如"吸塑盒"专供某客户, 建档时可关联 customer.id.
+     * 非包材物料此字段留 null, 不报错.</p>
+     * <p>外键逻辑软引用 customers 表 id (不加 FK 约束, 避免级联删除).</p>
+     */
+    @Column(name = "associated_customer_id", length = 191)
+    private String associatedCustomerId;
+
     // ========== W-ABA-1 抄码品标记 (六扇门 F006 卤制品工厂刚需) ==========
 
     /**

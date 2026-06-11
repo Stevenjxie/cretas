@@ -49,6 +49,8 @@ const loading = ref(false);
 const tableData = ref<TableRow[]>([]);
 const pagination = ref({ page: 1, size: 20, total: 0 });
 const searchKeyword = ref('');
+// P11: 物料大类筛选 (原料/辅料/包材). 空串 = 全部.
+const filterKind = ref('');
 
 // 字典选项 (从后端 system_enums + unit_of_measurements 拉, Canvas 字典管理可改)
 interface DictItem { enumCode: string; enumLabel: string; sortOrder: number }
@@ -121,6 +123,8 @@ async function loadData() {
           page: pagination.value.page,
           size: pagination.value.size,
           keyword: searchKeyword.value || undefined,
+          // P11: 可选大类过滤 (原料/辅料/包材)
+          materialKind: filterKind.value || undefined,
         },
       },
     );
@@ -619,6 +623,7 @@ function handleSearch() {
 }
 function handleRefresh() {
   searchKeyword.value = '';
+  filterKind.value = '';
   pagination.value.page = 1;
   loadData();
 }
@@ -659,6 +664,18 @@ function handleSizeChange(size: number) {
       </template>
 
       <div class="search-bar">
+        <!-- P11: 物料大类快速筛选 -->
+        <el-select
+          v-model="filterKind"
+          placeholder="全部大类"
+          clearable
+          style="width: 130px"
+          @change="handleSearch"
+        >
+          <el-option label="原料" value="原料" />
+          <el-option label="辅料" value="辅料" />
+          <el-option label="包材" value="包材" />
+        </el-select>
         <el-input
           v-model="searchKeyword"
           placeholder="搜索原料名称 / 编码"

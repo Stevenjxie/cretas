@@ -148,6 +148,8 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
 
         // 包材规格: 随 create 写入 (nullable, 仅 category=PACKAGING 有业务意义)
         materialType.setPackQtyPerProduct(dto.getPackQtyPerProduct());
+        // P8: 包材关联客户 (nullable, 非包材物料传 null 即留空)
+        materialType.setAssociatedCustomerId(dto.getAssociatedCustomerId());
 
         materialType = materialTypeRepository.save(materialType);
 
@@ -206,6 +208,12 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
         // 设计选择: 使用 packQtyPerProduct != null 作为"有意更新"信号, 与 SP8 primaryCode 模式一致
         if (dto.getPackQtyPerProduct() != null) {
             materialType.setPackQtyPerProduct(dto.getPackQtyPerProduct());
+        // P8: 包材关联客户 — 允许显式传 null 来解除关联; 传 undefined/不传则保持原值
+        // 约定: 前端编辑包材时明确传 associatedCustomerId (null = 解除, "" = 视为 null)
+        if (dto.getAssociatedCustomerId() != null && dto.getAssociatedCustomerId().isBlank()) {
+            materialType.setAssociatedCustomerId(null);
+        } else {
+            materialType.setAssociatedCustomerId(dto.getAssociatedCustomerId());
         }
 
         materialType.setUpdatedAt(LocalDateTime.now());
@@ -337,6 +345,40 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
                 page.getTotalElements()
         );
     }
+
+    // ==================== P11: 按物料大类分页查询 ====================
+
+    @Override
+    public PageResponse<RawMaterialTypeDTO> getMaterialTypesByKind(
+            String factoryId, String materialKind, PageRequest pageRequest) {
+
+        if (materialKind == null || materialKind.isBlank()) {
+            // 退化到全量查询
+            return getMaterialTypes(factoryId, pageRequest);
+        }
+
+        log.info("[P11] getMaterialTypesByKind: factoryId={}, kind={}, page={}, size={}",
+                factoryId, materialKind, pageRequest.getPage(), pageRequest.getSize());
+
+        org.springframework.data.domain.PageRequest pageable = org.springframework.data.domain.PageRequest.of(
+                pageRequest.getPage() - 1,
+                pageRequest.getSize(),
+                Sort.by(Sort.Direction.DESC, "createdAt")
+        );
+
+        // category 字段是自由文本大类标签: 原料/辅料/包材.
+        // 使用大小写不敏感匹配, 与 getLedgerByKind 保持一致.
+        Page<RawMaterialType> page = materialTypeRepository.findByFactoryIdAndCategoryIgnoreCase(
+                factoryId, materialKind, pageable);
+
+        List<RawMaterialTypeDTO> dtos = page.getContent().stream()
+                .map(this::convertToDTO)
+                .collect(Collectors.toList());
+
+        return PageResponse.of(dtos, pageRequest.getPage(), pageRequest.getSize(), page.getTotalElements());
+    }
+
+    // ==================== End P11 ====================
 
     @Override
     @Cacheable(value = "materialTypes", key = "#factoryId")
@@ -479,6 +521,8 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
                 .primaryCode(materialType.getPrimaryCode())
                 // 包材规格
                 .packQtyPerProduct(materialType.getPackQtyPerProduct())
+                // P8: 包材关联客户 (id 直接映射; 名称留 null — 单点查询 getMaterialTypeById 可 JOIN 填充)
+                .associatedCustomerId(materialType.getAssociatedCustomerId())
                 .build();
     }
 
@@ -815,6 +859,24 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
                 .findByFactoryIdAndCodeStartingWith(factoryId, codePrefix.trim(), top50);
         return types.stream().map(this::convertToDTO).collect(Collectors.toList());
     }
+
+    // ==================== R14: 研发试样价格区间选料 ====================
+
+    @Override
+    public List<RawMaterialTypeDTO> suggestMaterialsByPriceRange(
+            String factoryId, java.math.BigDecimal minPrice, java.math.BigDecimal maxPrice) {
+
+        log.info("[R14] suggestMaterialsByPriceRange: factoryId={} min={} max={}",
+                factoryId, minPrice, maxPrice);
+
+        Pageable top100 = org.springframework.data.domain.PageRequest.of(0, 100);
+        List<RawMaterialType> candidates = materialTypeRepository
+                .findByPriceRange(factoryId, minPrice, maxPrice, top100);
+
+        return candidates.stream().map(this::convertToDTO).collect(Collectors.toList());
+    }
+
+    // ==================== End R14 ====================
 
     /**
      * 从MaterialTypeExportDTO转换为RawMaterialType实体

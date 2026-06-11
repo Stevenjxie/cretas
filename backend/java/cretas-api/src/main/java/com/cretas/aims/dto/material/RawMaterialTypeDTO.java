@@ -115,4 +115,16 @@ public class RawMaterialTypeDTO {
     @io.swagger.v3.oas.annotations.media.Schema(
             description = "包材每产品单位用量 (category=PACKAGING 专用); null=未配置需手填")
     private java.math.BigDecimal packQtyPerProduct;
+    // ========== P8: 包材关联固定客户 (catalog 行99-100) ==========
+
+    /**
+     * P8: 包材关联的固定客户ID (nullable).
+     * 包材专属 — 非包材物料此字段为 null, 创建/更新时不传即忽略.
+     */
+    private String associatedCustomerId;
+
+    /**
+     * P8: 关联客户名称 (read-only, 从 customers 表 JOIN 填充, 不写库).
+     */
+    private String associatedCustomerName;
 }

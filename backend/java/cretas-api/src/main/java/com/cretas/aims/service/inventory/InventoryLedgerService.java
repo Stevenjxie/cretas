@@ -25,11 +25,26 @@ public interface InventoryLedgerService {
      * @param factoryId      工厂 ID
      * @param startDate      期间开始日 (inclusive)
      * @param endDate        期间结束日 (inclusive)
-     * @param materialTypeId 可选: 按物料类型过滤; null = 全部
+     * @param materialTypeId 可选: 按物料类型ID过滤; null = 全部
      * @return 每种物料一行的台账 DTO 列表
      */
     List<InventoryLedgerLineDTO> getLedger(String factoryId, LocalDate startDate,
                                            LocalDate endDate, String materialTypeId);
+
+    /**
+     * P11: 查询进销存台账 — 按物料大类(原料/辅料/包材)筛选.
+     *
+     * <p>materialKind 对应 raw_material_types.category 字段中的大类标签.
+     * 常用值: "原料" / "辅料" / "包材". null 或空串 = 全部.
+     *
+     * @param factoryId    工厂 ID
+     * @param startDate    期间开始日 (inclusive)
+     * @param endDate      期间结束日 (inclusive)
+     * @param materialKind 可选: 按物料类别标签筛选 (对应 category 字段); null = 全部
+     * @return 每种物料一行的台账 DTO 列表 (仅含该类别的物料)
+     */
+    List<InventoryLedgerLineDTO> getLedgerByKind(String factoryId, LocalDate startDate,
+                                                  LocalDate endDate, String materialKind);
 
     /**
      * 导出进销存台账 xlsx (写入 out 流).
@@ -53,4 +68,13 @@ public interface InventoryLedgerService {
     String exportInventoryLedger(String factoryId, LocalDate startDate, LocalDate endDate,
                                  String materialTypeId, boolean includePrices,
                                  OutputStream out) throws Exception;
+
+    /**
+     * P11: 导出进销存台账 xlsx — 按物料大类筛选版本.
+     *
+     * @param materialKind 按物料类别标签过滤 (null = 全部)
+     */
+    String exportInventoryLedgerByKind(String factoryId, LocalDate startDate, LocalDate endDate,
+                                       String materialKind, boolean includePrices,
+                                       OutputStream out) throws Exception;
 }
