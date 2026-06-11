@@ -22,7 +22,10 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.event.TransactionPhase;
+import org.springframework.transaction.event.TransactionalEventListener;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -176,30 +179,45 @@ public class SupplyChainOrchestrator {
      * 重新做BOM物料可用性校验；如果全部到位则将 {@code isFullyMatched} 置为 true，
      * 通知调度员可以开始排产。
      */
-    @EventListener
-    @Transactional
+    /**
+     * doomed-tx 修复 (2026-06-12, 第4次复发): 改 AFTER_COMMIT + REQUIRES_NEW.
+     *
+     * <p>旧 {@code @EventListener @Transactional} 在 confirmReceive 的同一事务内同步执行,
+     * 内层 {@code recheckAvailability} (@Transactional readOnly) 抛 BOM 单位换算 BusinessException
+     * 时, Spring tx 拦截器 mark 共享事务 rollback-only —— 即使本方法 catch 吞掉异常, confirmReceive
+     * commit 时仍抛 UnexpectedRollbackException 500, 收货整体回滚 (实测吸塑盒2014-3.5 BOM单位 g vs
+     * 库存 件 触发). 供应链联动是收货的"下游通知"副作用, 绝不应回滚物理收货.
+     *
+     * <p>AFTER_COMMIT: 等 confirmReceive 真正提交后才跑, 看到已落库的批次. REQUIRES_NEW: 本联动
+     * 在独立事务执行, 它的任何失败 (BOM/乐观锁) 只回滚自身, 与收货物理隔离. 与 PurchaseOrderVoucherListener
+     * 既有 AFTER_COMMIT 模式一致.
+     */
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void onMaterialReceived(MaterialReceivedEvent event) {
         // Bug #296 design fix: chains are additive, not replacements. See onSalesOrderConfirmed.
         log.info("═══ 供应链联动: 物料入库 ═══ factoryId={}, material={}, qty={}",
                 event.getFactoryId(), event.getMaterialTypeId(), event.getReceivedQuantity());
 
-        try {
-            // 查找所有未完全匹配的 PENDING 生产计划
-            List<ProductionPlan> waitingPlans = productionPlanRepository
-                    .findByFactoryIdAndStatus(event.getFactoryId(), ProductionPlanStatus.PENDING);
+        // 查找所有未完全匹配的 PENDING 生产计划
+        List<ProductionPlan> waitingPlans = productionPlanRepository
+                .findByFactoryIdAndStatus(event.getFactoryId(), ProductionPlanStatus.PENDING);
 
-            for (ProductionPlan plan : waitingPlans) {
-                if (Boolean.TRUE.equals(plan.getIsFullyMatched())) continue;
-
+        for (ProductionPlan plan : waitingPlans) {
+            if (Boolean.TRUE.equals(plan.getIsFullyMatched())) continue;
+            // 注: recheckAvailability 现在对单位不可换算的 BOM 返回 false (软探针, 不抛),
+            // 故单个坏 BOM 的计划不会再 doom 本独立事务; 仍保留 per-plan catch 作纵深防御.
+            try {
                 boolean allReady = bomExpansionService.recheckAvailability(plan);
                 if (allReady) {
                     plan.setIsFullyMatched(true);
                     productionPlanRepository.save(plan);
                     log.info("原料到齐: PP={}, 可以开始生产", plan.getPlanNumber());
                 }
+            } catch (Exception e) {
+                log.error("物料入库联动单计划失败(跳过, 不影响收货): PP={}, material={}",
+                        plan.getId(), event.getMaterialTypeId(), e);
             }
-        } catch (Exception e) {
-            log.error("物料入库联动失败(不影响收货): material={}", event.getMaterialTypeId(), e);
         }
     }
 

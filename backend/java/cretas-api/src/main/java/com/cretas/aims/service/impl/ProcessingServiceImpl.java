@@ -526,6 +526,13 @@ public class ProcessingServiceImpl implements ProcessingService {
                     .withHint("请使用其他批次号").withHintTarget("batchNumber");
         }
 
+        // BUG-MR500 修复 (2026-06-12): MaterialBatch 主键非 @GeneratedValue, 必须显式赋值后才能 persist.
+        // 采购入库路径 (createMaterialBatchFromReceiveItem) 已 setId, 此直收路径漏了 →
+        // "Identifier must be manually assigned before calling persist()" 500. 镜像采购路径补 UUID.
+        if (materialBatch.getId() == null || materialBatch.getId().isEmpty()) {
+            materialBatch.setId(java.util.UUID.randomUUID().toString());
+        }
+
         // 获取初始数量（支持多种字段名）
         BigDecimal initialQty = materialBatch.getInitialQuantity();
         if (initialQty == null) {
