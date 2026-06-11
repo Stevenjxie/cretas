@@ -61,6 +61,7 @@ _MAX_ATTEMPTS = 3
 class FactoryEtlStats:
     """Per-stage row counts for observability."""
     silver_upserted: int = 0
+    silver_report_upserted: int = 0
     gold_product_rows: int = 0
     gold_daily_rollup_rows: int = 0
     errors: List[str] = field(default_factory=list)
@@ -259,6 +260,176 @@ async def sync_fact_production_batch(
     return count
 
 
+# ── Stage 1b: Silver — sync_fact_production_report ───────────────────────────
+
+async def sync_fact_production_report(
+    cretas_pool: asyncpg.Pool,
+    smartbi_pool: asyncpg.Pool,
+    factory_id: str,
+) -> int:
+    """Upsert production_reports (YIELD type) into fact_production_report (Silver).
+
+    Source filter:
+        report_type = 'YIELD'
+        AND deleted_at IS NULL
+
+    Cost honesty rules (critical — ~90% of prod rows have NULL costs):
+        - labor_cost / material_cost stay NULL when source is NULL.  Never coerce to 0.
+        - cost_source = 'reported' when EITHER labor_cost OR material_cost is non-null;
+          NULL otherwise.  Downstream aggregations MUST use SUM (NULL-safe) and MAY
+          filter cost_source = 'reported' when requiring cost-complete rows.
+
+    yield_rate is computed here as output_quantity / input_quantity * 100 (nullable
+    when either operand is NULL or input_quantity = 0).
+
+    Returns number of rows upserted.
+    """
+    if factory_id is None:
+        raise ValueError("sync_fact_production_report: factory_id is required")
+
+    async with cretas_pool.acquire() as src:
+        rows = await src.fetch(
+            """
+            SELECT
+                id,
+                batch_id,
+                process_order,
+                process_category,
+                report_date,
+                report_kind,
+                input_quantity,
+                output_quantity,
+                good_quantity,
+                total_work_minutes,
+                total_workers,
+                labor_cost,
+                material_cost
+            FROM production_reports
+            WHERE factory_id  = $1::varchar
+              AND report_type = 'YIELD'
+              AND deleted_at  IS NULL
+            ORDER BY id
+            """,
+            factory_id,
+        )
+
+    if not rows:
+        logger.info(
+            "[factory-etl] no YIELD reports for factory=%s", factory_id
+        )
+        return 0
+
+    # Build parallel arrays for UNNEST bulk upsert
+    source_pks         = [str(r["id"])                  for r in rows]
+    batch_ids          = [str(r["batch_id"]) if r["batch_id"] is not None else None for r in rows]
+    process_orders     = [r["process_order"]             for r in rows]
+    process_categories = [r["process_category"]          for r in rows]
+    report_dates       = [r["report_date"]               for r in rows]
+    report_kinds       = [r["report_kind"]               for r in rows]
+
+    input_qtys   = [_to_float_or_none(r["input_quantity"])  for r in rows]
+    output_qtys  = [_to_float_or_none(r["output_quantity"]) for r in rows]
+    good_qtys    = [_to_float_or_none(r["good_quantity"])   for r in rows]
+
+    # Compute yield_rate = output / input * 100 (null-safe)
+    yield_rates: List[Optional[float]] = []
+    for r in rows:
+        inp = _to_float_or_none(r["input_quantity"])
+        out = _to_float_or_none(r["output_quantity"])
+        if inp is not None and out is not None and inp > 0:
+            yield_rates.append(round(out / inp * 100, 4))
+        else:
+            yield_rates.append(None)
+
+    total_work_minutes = [r["total_work_minutes"]       for r in rows]
+    total_workers      = [r["total_workers"]            for r in rows]
+
+    # Cost fields: honest null preservation — do NOT coerce None to 0
+    labor_costs    = [_to_float_or_none(r["labor_cost"])    for r in rows]
+    material_costs = [_to_float_or_none(r["material_cost"]) for r in rows]
+
+    # cost_source: 'reported' if EITHER cost non-null; else NULL
+    cost_sources: List[Optional[str]] = [
+        "reported" if (lc is not None or mc is not None) else None
+        for lc, mc in zip(labor_costs, material_costs)
+    ]
+
+    async with smartbi_pool.acquire() as dst:
+        async with dst.transaction():
+            await _set_tenant(dst, factory_id)
+            result = await dst.fetch(
+                """
+                INSERT INTO fact_production_report (
+                    factory_id, source_pk,
+                    batch_id, process_order, process_category,
+                    report_date, report_kind,
+                    input_qty, output_qty, good_qty, yield_rate,
+                    total_work_minutes, total_workers,
+                    labor_cost, material_cost, cost_source
+                )
+                SELECT
+                    $1,   -- factory_id
+                    spk, bid, po, pc,
+                    rd, rk,
+                    iq, oq, gq, yr,
+                    twm, tw,
+                    lc, mc, cs
+                FROM UNNEST(
+                    $2::text[],       -- source_pk
+                    $3::text[],       -- batch_id  (nullable)
+                    $4::int[],        -- process_order
+                    $5::text[],       -- process_category
+                    $6::date[],       -- report_date
+                    $7::text[],       -- report_kind
+                    $8::numeric[],    -- input_qty
+                    $9::numeric[],    -- output_qty
+                    $10::numeric[],   -- good_qty
+                    $11::numeric[],   -- yield_rate
+                    $12::int[],       -- total_work_minutes
+                    $13::int[],       -- total_workers
+                    $14::numeric[],   -- labor_cost
+                    $15::numeric[],   -- material_cost
+                    $16::text[]       -- cost_source
+                ) AS t(
+                    spk, bid, po, pc,
+                    rd, rk,
+                    iq, oq, gq, yr,
+                    twm, tw,
+                    lc, mc, cs
+                )
+                ON CONFLICT (factory_id, source_pk) DO UPDATE SET
+                    batch_id           = EXCLUDED.batch_id,
+                    process_order      = EXCLUDED.process_order,
+                    process_category   = EXCLUDED.process_category,
+                    report_date        = EXCLUDED.report_date,
+                    report_kind        = EXCLUDED.report_kind,
+                    input_qty          = EXCLUDED.input_qty,
+                    output_qty         = EXCLUDED.output_qty,
+                    good_qty           = EXCLUDED.good_qty,
+                    yield_rate         = EXCLUDED.yield_rate,
+                    total_work_minutes = EXCLUDED.total_work_minutes,
+                    total_workers      = EXCLUDED.total_workers,
+                    labor_cost         = EXCLUDED.labor_cost,
+                    material_cost      = EXCLUDED.material_cost,
+                    cost_source        = EXCLUDED.cost_source,
+                    updated_at         = NOW()
+                RETURNING id
+                """,
+                factory_id,
+                source_pks, batch_ids, process_orders, process_categories,
+                report_dates, report_kinds,
+                input_qtys, output_qtys, good_qtys, yield_rates,
+                total_work_minutes, total_workers,
+                labor_costs, material_costs, cost_sources,
+            )
+
+    count = len(result)
+    logger.info(
+        "[factory-etl] Silver report: upserted %d rows for factory=%s", count, factory_id
+    )
+    return count
+
+
 # ── Stage 2: Gold materialization — agg_factory_batch_daily ──────────────────
 
 # Per-product per-day aggregation (product_type_id IS NOT NULL)
@@ -400,8 +571,17 @@ async def run_factory_etl(
     except Exception as exc:
         stats.errors.append(f"silver: {exc}")
         logger.exception("[factory-etl] Silver sync failed for %s", factory_id)
-        # If Silver fails, skip Gold (nothing new to materialize)
+        # If batch Silver fails, skip Gold (nothing new to materialize)
         return stats
+
+    # Stage 1b: sync process-level reports (independent — failure doesn't block Gold)
+    try:
+        stats.silver_report_upserted = await sync_fact_production_report(
+            cretas_pool, smartbi_pool, factory_id
+        )
+    except Exception as exc:
+        stats.errors.append(f"silver_report: {exc}")
+        logger.exception("[factory-etl] Silver report sync failed for %s", factory_id)
 
     try:
         gold = await materialize_factory_gold(smartbi_pool, factory_id)

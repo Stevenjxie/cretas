@@ -381,3 +381,144 @@ async def product_cost_compare(
     data = {"products": products}
     _apply_rbac(data, role)
     return {"success": True, "data": data, "message": ""}
+
+
+@router.get("/process-cost")
+async def process_cost(
+    request: Request,
+    batchId:   Optional[str]  = Query(None, description="生产批次 ID (不传=全厂所有批次)"),
+    startDate: Optional[date] = Query(None, description="起始日期 (默认: 全部历史)"),
+    endDate:   Optional[date] = Query(None, description="截止日期 (默认: 全部历史)"),
+    costOnly:  bool           = Query(False, description="仅返回有成本数据的工序 (cost_source='reported')"),
+):
+    """Process-level cost and yield for factory production reports.
+
+    Source: fact_production_report (Silver — grain: one row per production_reports YIELD).
+
+    Honesty: ~90% of prod reports have NULL labor_cost / material_cost.
+    - costOnly=false (default): returns all reports; cost fields are null when unreported.
+    - costOnly=true: filters cost_source = 'reported' rows only (the ~10% with real data).
+
+    Response:
+        {
+            success: bool,
+            data: {
+                reports: [
+                    {
+                        sourcePk, batchId, processOrder, processCategory,
+                        reportDate, reportKind,
+                        inputQty, outputQty, goodQty, yieldRate,
+                        totalWorkMinutes, totalWorkers,
+                        laborCost,    // null when not reported
+                        materialCost, // null when not reported
+                        costSource,   // 'reported' or null
+                    }
+                ],
+                meta: {
+                    totalReports, reportsWithCost, costCoverageRate
+                }
+            }
+        }
+
+    Cost fields are stripped to null for non-price roles.
+    """
+    factory_id = _get_factory_id(request)
+    if not factory_id:
+        return {"success": False, "data": None, "message": "missing factory context"}
+
+    role = _get_role(request)
+
+    from smartbi.config import get_pg_pool
+    pool = await get_pg_pool()
+    if pool is None:
+        return {"success": False, "data": None, "message": "db pool unavailable"}
+
+    conditions = ["factory_id = $1"]
+    params: list = [factory_id]
+    idx = 2
+
+    if batchId is not None:
+        conditions.append(f"batch_id = ${idx}")
+        params.append(batchId)
+        idx += 1
+
+    if startDate is not None:
+        conditions.append(f"report_date >= ${idx}")
+        params.append(startDate)
+        idx += 1
+
+    if endDate is not None:
+        conditions.append(f"report_date <= ${idx}")
+        params.append(endDate)
+        idx += 1
+
+    if costOnly:
+        conditions.append("cost_source = 'reported'")
+
+    where_clause = " AND ".join(conditions)
+
+    try:
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                await conn.execute(
+                    "SELECT set_config('app.factory_id', $1, true)", factory_id
+                )
+                rows = await conn.fetch(
+                    f"""
+                    SELECT
+                        source_pk, batch_id, process_order, process_category,
+                        report_date, report_kind,
+                        input_qty, output_qty, good_qty, yield_rate,
+                        total_work_minutes, total_workers,
+                        labor_cost, material_cost, cost_source
+                    FROM fact_production_report
+                    WHERE {where_clause}
+                    ORDER BY report_date, batch_id NULLS LAST, process_order NULLS LAST
+                    """,
+                    *params,
+                )
+    except Exception as exc:
+        logger.warning("[factory-gold] process-cost query failed for %s: %s", factory_id, exc)
+        return {"success": False, "data": None, "message": str(exc)}
+
+    if not rows:
+        return {
+            "success": True,
+            "data": {"reports": [], "meta": {"totalReports": 0, "reportsWithCost": 0, "costCoverageRate": None}},
+            "message": "暂无工序报工数据",
+        }
+
+    reports = []
+    for r in rows:
+        reports.append({
+            "sourcePk":          r["source_pk"],
+            "batchId":           r["batch_id"],
+            "processOrder":      r["process_order"],
+            "processCategory":   r["process_category"],
+            "reportDate":        r["report_date"].isoformat() if r["report_date"] else None,
+            "reportKind":        r["report_kind"],
+            "inputQty":          float(r["input_qty"])    if r["input_qty"]    is not None else None,
+            "outputQty":         float(r["output_qty"])   if r["output_qty"]   is not None else None,
+            "goodQty":           float(r["good_qty"])     if r["good_qty"]     is not None else None,
+            "yieldRate":         float(r["yield_rate"])   if r["yield_rate"]   is not None else None,
+            "totalWorkMinutes":  r["total_work_minutes"],
+            "totalWorkers":      r["total_workers"],
+            "laborCost":         float(r["labor_cost"])    if r["labor_cost"]    is not None else None,
+            "materialCost":      float(r["material_cost"]) if r["material_cost"] is not None else None,
+            "costSource":        r["cost_source"],
+        })
+
+    total = len(reports)
+    with_cost = sum(1 for rep in reports if rep["costSource"] == "reported")
+    coverage = round(with_cost / total * 100, 2) if total > 0 else None
+
+    data = {
+        "reports": reports,
+        "meta": {
+            "totalReports":      total,
+            "reportsWithCost":   with_cost,
+            "costCoverageRate":  coverage,
+        },
+    }
+    _apply_rbac(data, role)
+    return {"success": True, "data": data, "message": ""}
