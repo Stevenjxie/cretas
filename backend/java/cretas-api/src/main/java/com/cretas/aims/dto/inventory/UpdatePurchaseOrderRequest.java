@@ -44,6 +44,25 @@ public class UpdatePurchaseOrderRequest {
     @Valid
     private List<CreatePurchaseOrderRequest.PurchaseOrderItemDTO> items;
 
+    /**
+     * SP6 — 合同编号。null = 不更新（保留原值）。
+     * 传空字符串 "" 表示清除合同号。
+     */
+    @Size(max = 100, message = "合同号长度不能超过100个字符")
+    private String contractNumber;
+
+    /**
+     * SP6 — 结算方式。null = 不更新（保留原值）。
+     * 合法值: PREPAID / CREDIT_FIRST / NO_INVOICE / MONTHLY / CREDIT_PERIOD / IMMEDIATE
+     */
+    @Size(max = 32, message = "结算方式长度不能超过32个字符")
+    private String settlementType;
+
+    /**
+     * SP6 — 开票提醒天数。null = 不更新（保留原值）。
+     */
+    private Integer invoiceReminderDays;
+
     /** 乐观锁版本号 (编辑时必传, 来自 GET 响应); mismatch → 409 Conflict */
     private Long version;
 }

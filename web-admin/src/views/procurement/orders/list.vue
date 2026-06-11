@@ -366,6 +366,9 @@ const form = ref({
   expectedDeliveryDate: '',
   remark: '',
   relatedSalesOrderId: '',
+  contractNumber: '',       // SP6 合同号（选填，对应纸质/框架合同）
+  settlementType: '',       // SP6 结算方式
+  invoiceReminderDays: null as number | null,  // SP6 开票提醒天数
   items: [{ materialTypeId: '', quantity: 0, unit: 'kg', unitPrice: 0 }] as ProcurementOrderItem[],
   customFields: {} as TableRow,
 });
@@ -623,7 +626,7 @@ async function handleCreate() {
 }
 
 function resetForm() {
-  form.value = { supplierId: '', purchaseType: 'DIRECT', expectedDeliveryDate: '', remark: '', relatedSalesOrderId: '', items: [{ materialTypeId: '', quantity: 0, unit: 'kg', unitPrice: 0 }], customFields: {} as TableRow };
+  form.value = { supplierId: '', purchaseType: 'DIRECT', expectedDeliveryDate: '', remark: '', relatedSalesOrderId: '', contractNumber: '', settlementType: '', invoiceReminderDays: null, items: [{ materialTypeId: '', quantity: 0, unit: 'kg', unitPrice: 0 }], customFields: {} as TableRow };
 }
 
 // 张权 Apr 28 反馈: "基础数据已经新建了 但是采购订单 下拉没有选项"
@@ -982,6 +985,35 @@ function handleAiFill(params: TableRow) {
         </el-form-item>
         <el-form-item label="期望交货">
           <el-date-picker v-model="form.expectedDeliveryDate" type="date" value-format="YYYY-MM-DD" />
+        </el-form-item>
+        <el-form-item label="合同号">
+          <el-input
+            v-model="form.contractNumber"
+            placeholder="选填 — 纸质合同号或框架合同编号，如 HT-2026-001"
+            :maxlength="100"
+            clearable
+            style="width: 100%"
+          />
+        </el-form-item>
+        <el-form-item label="结算方式">
+          <el-select v-model="form.settlementType" placeholder="选填 — 选择结算方式" clearable style="width: 100%">
+            <el-option label="预付" value="PREPAID" />
+            <el-option label="赊销先入库" value="CREDIT_FIRST" />
+            <el-option label="未到票" value="NO_INVOICE" />
+            <el-option label="月结" value="MONTHLY" />
+            <el-option label="账期" value="CREDIT_PERIOD" />
+            <el-option label="现结" value="IMMEDIATE" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="开票提醒天数">
+          <el-input-number
+            v-model="form.invoiceReminderDays"
+            :min="0"
+            :max="365"
+            placeholder="选填 — 收货后 N 天未收票则提醒"
+            style="width: 200px"
+          />
+          <span style="margin-left: 8px; color: #909399; font-size: 13px">天（0 = 不提醒，空 = 使用工厂默认）</span>
         </el-form-item>
         <el-form-item label="备注">
           <el-input v-model="form.remark" type="textarea" :rows="2" />
