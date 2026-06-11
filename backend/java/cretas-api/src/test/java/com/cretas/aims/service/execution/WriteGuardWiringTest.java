@@ -2,6 +2,8 @@ package com.cretas.aims.service.execution;
 
 import com.cretas.aims.ai.client.DashScopeClient;
 import com.cretas.aims.ai.tool.ToolExecutor;
+import com.cretas.aims.ai.tool.ToolRbacEnforcer;
+import com.cretas.aims.ai.tool.ToolRbacGuard;
 import com.cretas.aims.ai.tool.ToolRegistry;
 import com.cretas.aims.ai.tool.WriteGuardService;
 import com.cretas.aims.config.DashScopeConfig;
@@ -273,6 +275,8 @@ class WriteGuardWiringTest {
                 mock(ToolResultValidatorService.class),
                 mock(ParameterExtractionLearningService.class));
         ReflectionTestUtils.setField(dispatch, "writeGuardService", writeGuard);
+        // W9: inject a permissive ToolRbacEnforcer (these tests exercise the W0 write-guard, not RBAC).
+        ReflectionTestUtils.setField(dispatch, "toolRbacEnforcer", permissiveRbacEnforcer());
 
         ToolExecutor writeTool = mock(ToolExecutor.class);
         when(writeTool.getToolName()).thenReturn("material_batch_delete");
@@ -309,6 +313,8 @@ class WriteGuardWiringTest {
                 mock(ToolResultValidatorService.class),
                 mock(ParameterExtractionLearningService.class));
         ReflectionTestUtils.setField(dispatch, "writeGuardService", writeGuard);
+        // W9: inject a permissive ToolRbacEnforcer (these tests exercise the W0 write-guard, not RBAC).
+        ReflectionTestUtils.setField(dispatch, "toolRbacEnforcer", permissiveRbacEnforcer());
 
         ToolExecutor writeTool = mock(ToolExecutor.class);
         when(writeTool.getToolName()).thenReturn("material_batch_delete");
@@ -380,5 +386,24 @@ class WriteGuardWiringTest {
                 && !writeGuard.isConfirmed(Map.of());
 
         assertThat(wouldBlock).as("READ tool must NOT be blocked by the LLM-fallback write-guard").isFalse();
+    }
+
+    /**
+     * A permissive {@link ToolRbacEnforcer} that allows every tool (its guard's PermissionService
+     * grants all). Used where the test exercises the W0 write-guard, not W9 RBAC.
+     */
+    private static ToolRbacEnforcer permissiveRbacEnforcer() {
+        com.cretas.aims.service.PermissionService perm = mock(com.cretas.aims.service.PermissionService.class);
+        when(perm.hasAnyPermission(any(), any(String[].class))).thenReturn(true);
+        com.cretas.aims.repository.UserRepository userRepo = mock(com.cretas.aims.repository.UserRepository.class);
+        com.cretas.aims.entity.User u = new com.cretas.aims.entity.User();
+        u.setId(USER_ID);
+        when(userRepo.findById(any())).thenReturn(Optional.of(u));
+        ToolRbacGuard guard = new ToolRbacGuard();
+        ReflectionTestUtils.setField(guard, "userRepository", userRepo);
+        ReflectionTestUtils.setField(guard, "permissionService", perm);
+        ToolRbacEnforcer enforcer = new ToolRbacEnforcer();
+        ReflectionTestUtils.setField(enforcer, "rbacGuard", guard);
+        return enforcer;
     }
 }

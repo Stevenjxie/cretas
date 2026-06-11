@@ -636,6 +636,10 @@ public class LlmIntentFallbackClientImpl implements LlmIntentFallbackClient {
     @org.springframework.beans.factory.annotation.Autowired
     private com.cretas.aims.ai.tool.WriteGuardService writeGuardService;
 
+    // W9 红线 (AI-RBAC 系统性收口) — SITE F: central RBAC enforce alongside the W0 write-guard.
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.cretas.aims.ai.tool.ToolRbacEnforcer toolRbacEnforcer;
+
     /**
      * 构建意图分类系统提示词
      *
@@ -2976,6 +2980,13 @@ public class LlmIntentFallbackClientImpl implements LlmIntentFallbackClient {
                         && !writeGuardService.isConfirmed(java.util.Map.of())) {
                     log.warn("W0 write-guard (llm-fallback): blocked write tool {} (no confirmation in LLM tool-calling path)", toolName);
                     throw new IllegalStateException("W0 write-guard: tool '" + toolName + "' 需要显式确认后才能执行");
+                }
+
+                // W9 红线 (AI-RBAC 系统性收口) — SITE F: LLM-fallback path bypasses Site B. Central RBAC
+                // enforce on the LLM-selected tool. context (buildToolExecutionContext) carries userId.
+                if (!toolRbacEnforcer.isAllowed(executor, context)) {
+                    log.warn("W9 AI-RBAC (llm-fallback): denied tool={}", toolName);
+                    throw new IllegalStateException(toolRbacEnforcer.denyMessage(executor, context));
                 }
 
                 // 执行工具

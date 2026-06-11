@@ -94,6 +94,30 @@ public interface ToolExecutor {
     }
 
     /**
+     * W9 红线 (AI-RBAC 系统性收口): 此工具在 AI 路径上要求的权限码 (module:action 格式,
+     * 与 controller {@code @RequirePermission} 同源)。返回任一权限即可执行 (requireAll=false 语义)。
+     *
+     * <p><b>背景</b> (Fable Wave5/6/7 系统性审计): #704 只给 4 个工具加了 AI 路径鉴权, 但整类敏感写工具
+     * (customer_delete / order_delete / finance_invoice_approve / transfer_approve / user_*  等 118 个)
+     * 在 AI 对话路径上 <b>完全无鉴权</b> —— 默认 {@link #requiresPermission()}=false +
+     * 默认 {@link #hasPermission(String)}=true, 而 {@code ToolExecutionManager} / W0 WriteGuard 只做
+     * 可见性过滤 / 写确认门, 都不做角色鉴权。低权角色经 AI 对话即可删客户/订单/发票、批转账。
+     *
+     * <p>本方法让工具声明所需权限, 由中央 {@link ToolRbacEnforcer} 在 <b>所有执行路径</b>
+     * (ToolDispatch / DynamicToolSelection-autoplan / SkillExecutor / ToolRouter / LlmIntentFallback /
+     * IntentExecutionOrchestrator) 统一用 {@link com.cretas.aims.service.PermissionService} 矩阵校验,
+     * 与 HTTP 面 RBAC 口径完全一致 (fail-closed)。
+     *
+     * <p>返回空集合 = 此工具不声明 AI 路径权限要求 (中央 enforcer 会回退到内置名称→权限映射;
+     * 若映射也未命中则放行, 保持原 W0 写确认行为不变, 避免误伤 118 个混合写工具中的良性生成类)。
+     *
+     * @return 所需权限码集合 (任一即可); 空集合表示不声明显式要求
+     */
+    default Set<String> getRequiredPermissions() {
+        return Set.of();
+    }
+
+    /**
      * 工具是否支持预览模式（TCC 确认流第一阶段）
      *
      * 支持预览的工具在 previewOnly=true 时返回操作预览而不执行，

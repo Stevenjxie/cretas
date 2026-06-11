@@ -5,6 +5,7 @@ import com.cretas.aims.ai.dto.ChatCompletionResponse;
 import com.cretas.aims.ai.dto.Tool;
 import com.cretas.aims.ai.dto.ToolCall;
 import com.cretas.aims.ai.tool.ToolExecutor;
+import com.cretas.aims.ai.tool.ToolRbacEnforcer;
 import com.cretas.aims.ai.tool.ToolRegistry;
 import com.cretas.aims.config.TimeNormalizationRules;
 import com.cretas.aims.dev.faultinjection.ToolExecutionFaultInjector;
@@ -68,6 +69,14 @@ public class ToolDispatchService {
     // explicit path) — a misroute to a write tool cannot silently execute here.
     @Autowired
     private com.cretas.aims.ai.tool.WriteGuardService writeGuardService;
+
+    // W9 红线 (AI-RBAC 系统性收口) — SITE B: central RBAC enforce for sensitive write tools whose
+    // controllers carry @RequirePermission. The legacy tool.requiresPermission()/hasPermission() check
+    // below only covers the ~47 tools that override those (default false → vast majority skipped),
+    // so customer_delete / order_delete / finance_invoice_approve / transfer_approve / user_* etc.
+    // had ZERO AI-path RBAC. This enforcer uses the same PermissionService matrix as HTTP (fail-closed).
+    @Autowired
+    private com.cretas.aims.ai.tool.ToolRbacEnforcer toolRbacEnforcer;
 
     /**
      * F5 fault-injection hook (optional). Bean exists only under
@@ -157,6 +166,28 @@ public class ToolDispatchService {
                         .formattedText(permDeniedMsg)
                         .executedAt(LocalDateTime.now())
                         .build();
+            }
+
+            // 1.4. W9 红线 (AI-RBAC) — SITE B: central enforce. Covers sensitive write tools that do NOT
+            // override requiresPermission() (the legacy check above misses them). Uses the same
+            // PermissionService matrix as controller @RequirePermission (fail-closed). previewOnly is
+            // allowed (it previews, not executes).
+            if (!Boolean.TRUE.equals(request.getPreviewOnly())) {
+                ToolRbacEnforcer.Decision rbac = toolRbacEnforcer.check(tool, wgCtx);
+                if (!rbac.isAllowed()) {
+                    log.warn("W9 AI-RBAC (tool-dispatch): denied tool={}, requiredAny={}",
+                            tool.getToolName(), rbac.getRequiredPermissions());
+                    return IntentExecuteResponse.builder()
+                            .intentRecognized(true)
+                            .intentCode(intent.getIntentCode())
+                            .intentName(intent.getIntentName())
+                            .intentCategory(intent.getIntentCategory())
+                            .status("PERMISSION_DENIED")
+                            .message(rbac.getMessage())
+                            .formattedText(rbac.getMessage())
+                            .executedAt(LocalDateTime.now())
+                            .build();
+                }
             }
 
             // 1.5. 预览模式
