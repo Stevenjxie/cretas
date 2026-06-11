@@ -19,9 +19,69 @@ stat_type semantics:
     growth       — (last - first) / abs(first) * 100  (entity ignored, time series)
     count        — len(series_values)  (entity ignored)
 
-No external imports beyond typing — pure function, no I/O, no LLM, no DB.
+Direction-word checking (A6):
+    infer_sign_from_prose(prose, num_pos, window) -> Optional[bool]
+
+    Scans a character window around a number in prose for direction words (涨/跌/升/降/增/减).
+    Returns True  if prose implies positive direction (涨/升/增/上升/上涨/增长/提升/改善/好转).
+    Returns False if prose implies negative direction (跌/降/减/下降/下跌/下滑/减少/萎缩/恶化).
+    Returns None  if no direction word found in the window.
+
+No external imports beyond typing and re — pure function, no I/O, no LLM, no DB.
 """
+import re
 from typing import Optional
+
+# ---------------------------------------------------------------------------
+# Direction-word sets (A6) — used for growth/diff claim direction validation
+# ---------------------------------------------------------------------------
+
+# Words that imply the associated number is POSITIVE (value > 0)
+_POSITIVE_WORDS = frozenset({
+    "涨", "升", "增", "增长", "增加", "上升", "上涨", "上调", "提升", "提高",
+    "好转", "改善", "回升", "走高", "攀升", "走强", "增幅", "涨幅",
+})
+# Words that imply the associated number is NEGATIVE (value < 0)
+_NEGATIVE_WORDS = frozenset({
+    "跌", "降", "减", "下降", "下跌", "下滑", "减少", "萎缩", "恶化",
+    "走低", "收窄", "缩减", "亏损", "减幅", "跌幅", "回落", "下调",
+})
+# Scan window (chars before and after the number position)
+_DIRECTION_WINDOW = 30
+
+
+def infer_sign_from_prose(prose: str, num_pos: int, window: int = _DIRECTION_WINDOW) -> Optional[bool]:
+    """Scan a character window around num_pos in prose for Chinese direction words.
+
+    Returns:
+        True   — window contains a positive-direction word (implies value > 0)
+        False  — window contains a negative-direction word (implies value < 0)
+        None   — no direction word found in the window (cannot infer sign)
+
+    When both positive and negative words appear in the window, no determination
+    is made (returns None) to avoid false positives from complex constructions.
+    """
+    start = max(0, num_pos - window)
+    end = min(len(prose), num_pos + window)
+    snippet = prose[start:end]
+
+    # Check multi-char words first (longer patterns take priority)
+    found_pos = any(w in snippet for w in _POSITIVE_WORDS if len(w) > 1)
+    found_neg = any(w in snippet for w in _NEGATIVE_WORDS if len(w) > 1)
+
+    # Fall back to single-char keywords only if no multi-char match yet
+    if not found_pos:
+        found_pos = any(w in snippet for w in _POSITIVE_WORDS if len(w) == 1)
+    if not found_neg:
+        found_neg = any(w in snippet for w in _NEGATIVE_WORDS if len(w) == 1)
+
+    if found_pos and found_neg:
+        return None  # ambiguous — don't flag
+    if found_pos:
+        return True
+    if found_neg:
+        return False
+    return None  # no direction word found
 
 
 def recompute_claim(

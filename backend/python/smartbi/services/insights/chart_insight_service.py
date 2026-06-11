@@ -36,7 +36,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence
 
-from .claim_recompute import recompute_claim
+from .claim_recompute import recompute_claim, infer_sign_from_prose
 from ..distillation_capture import persist_distillation_sample, compute_input_hash
 
 logger = logging.getLogger(__name__)
@@ -407,6 +407,100 @@ def _truth_candidates(
     return cands
 
 
+# Stat types where sign of the recomputed value carries directional meaning.
+# growth: (last-first)/|first|*100 — positive means went up, negative means went down.
+# diff:   entity_value - min_value  — always >= 0 (distance above minimum), no direction contrast.
+# We only check growth (diff is always non-negative; no prose direction word is expected).
+_DIRECTIONAL_STAT_TYPES: frozenset[str] = frozenset({"growth"})
+
+_VERIFY_MARK_DIRECTION = "需核实"  # reuses fact_reconciler sentinel text
+
+
+def _annotate_direction_mismatch(
+    validated: dict,
+    llm_obj: dict,
+    ctx: "ChartInsightContext",
+) -> dict:
+    """A6 — Direction-word validation for growth/diff claims.
+
+    After numeric values pass _validate_claims, scan prose direction words near each
+    growth-type number. If the LLM's prose says "上涨15%" but the recomputed growth
+    value is -15 (fell), the number-side passes (|15| ≈ |-15|) but the direction word
+    contradicts reality → annotate finding with '需核实' + lower confidence.
+
+    Mutates a shallow copy of validated and returns it. Never raises (all errors logged).
+    """
+    try:
+        prose_fields = ["finding", "implication", "suggestion"]
+        full_prose = " ".join(str(validated.get(k) or "") for k in prose_fields)
+        if not full_prose.strip():
+            return validated
+
+        claims = llm_obj.get("claims") or []
+        directional_claims = [
+            c for c in claims
+            if isinstance(c, dict) and c.get("stat_type") in _DIRECTIONAL_STAT_TYPES
+        ]
+        if not directional_claims:
+            return validated
+
+        # Recompute true sign for each directional claim
+        mismatch_found = False
+        for claim in directional_claims:
+            entity = claim.get("entity")
+            stat_type = claim.get("stat_type")
+            true_val = recompute_claim(entity, stat_type, ctx.series_values, ctx.series_labels)
+            if true_val is None:
+                continue  # cannot verify → skip
+
+            # Find where the absolute value of the claim appears as a number in the prose.
+            claim_val_raw = claim.get("value")
+            if claim_val_raw is None:
+                continue
+            try:
+                claim_abs = abs(float(claim_val_raw))
+            except (TypeError, ValueError):
+                continue
+
+            # Scan all numeric occurrences in prose; for each one close to claim_abs, check direction.
+            for m in _ARABIC_NUMBER_RE.finditer(full_prose):
+                try:
+                    prose_num = float(m.group())
+                except ValueError:
+                    continue
+                if abs(prose_num - claim_abs) > 1.0:  # tolerance: 1 pct-point
+                    continue
+                # Number matches the claim magnitude — check direction word in window
+                prose_dir = infer_sign_from_prose(full_prose, m.start())
+                if prose_dir is None:
+                    continue  # no direction word nearby → not a directional assertion
+                true_positive = true_val >= 0
+                if prose_dir != true_positive:
+                    logger.info(
+                        "[chart-insight] direction mismatch: stat=%s true_val=%.2f "
+                        "prose_dir=%s (positive=%s) at pos=%d",
+                        stat_type, true_val, prose_dir, true_positive, m.start(),
+                    )
+                    mismatch_found = True
+                    break  # one mismatch per claim is enough
+            if mismatch_found:
+                break
+
+        if mismatch_found:
+            result = dict(validated)
+            finding = result.get("finding") or ""
+            if _VERIFY_MARK_DIRECTION not in finding:
+                result["finding"] = f"{finding}（注：趋势方向{_VERIFY_MARK_DIRECTION}）"
+            # Lower confidence: add a low confidence hint in metadata (callers may use it)
+            result["direction_flag"] = True
+            return result
+
+    except Exception as exc:
+        logger.warning("[chart-insight] _annotate_direction_mismatch failed: %s", exc)
+
+    return validated
+
+
 def _nearest_preceding_label(prose: str, target_pos: int, labels: List[str]) -> Optional[str]:
     """Find the series label whose occurrence is nearest to target_pos but at-or-before it.
 
@@ -703,6 +797,9 @@ class ChartInsightService:
                 "[chart-insight] _validate_claims rejected LLM response (hallucination or no claims)"
             )
             return None
+
+        # A6: direction-word check — annotate growth claims where prose direction ≠ recomputed sign
+        validated = _annotate_direction_mismatch(validated, llm_obj, resolved_ctx)
 
         # C1.3 / MF5: finance_hidden ¥ serve-gate — hard-block any ¥ literal in output
         permission_tier = resolved_ctx.permission_tier

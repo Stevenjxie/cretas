@@ -1,9 +1,10 @@
 """
 Tests for claim_recompute.py — C1.1 pure function: recompute LLM claim from raw series.
 TDD: written before implementation. 11 tests covering all stat_type branches + guards.
+A6 direction-word tests added for infer_sign_from_prose.
 """
 import pytest
-from smartbi.services.insights.claim_recompute import recompute_claim
+from smartbi.services.insights.claim_recompute import recompute_claim, infer_sign_from_prose
 
 # Canonical test series: 堂食=62000, 外卖=38000, total=100000
 SERIES = [62000.0, 38000.0]
@@ -81,3 +82,56 @@ def test_empty_series_returns_none():
     # empty series → None
     result = recompute_claim("堂食", "share", [], [])
     assert result is None
+
+
+# ---------------------------------------------------------------------------
+# A6 — direction-word helper: infer_sign_from_prose
+# ---------------------------------------------------------------------------
+
+def test_direction_positive_word_returns_true():
+    # "上涨15%" — 上涨 is a positive direction word → True
+    prose = "营业额上涨15%，表现亮眼"
+    pos = prose.index("15")
+    assert infer_sign_from_prose(prose, pos) is True
+
+
+def test_direction_negative_word_returns_false():
+    # "下降15%" — 下降 is a negative direction word → False
+    prose = "营业额下降15%，令人担忧"
+    pos = prose.index("15")
+    assert infer_sign_from_prose(prose, pos) is False
+
+
+def test_direction_no_word_returns_none():
+    # No direction word anywhere → None
+    prose = "营业额为15万元，同期数据一致"
+    pos = prose.index("15")
+    assert infer_sign_from_prose(prose, pos) is None
+
+
+def test_direction_ambiguous_both_words_returns_none():
+    # Both positive and negative words in window → None (ambiguous)
+    prose = "既有上涨也有下降15%的区间"
+    pos = prose.index("15")
+    assert infer_sign_from_prose(prose, pos) is None
+
+
+def test_direction_word_outside_window_not_captured():
+    # Direction word exists but well outside the scan window → None
+    prose = "上涨" + "A" * 100 + "15%"
+    pos = prose.index("15")
+    assert infer_sign_from_prose(prose, pos, window=20) is None
+
+
+def test_direction_single_char_positive():
+    # Single-char "涨" close to number → True
+    prose = "指标涨15个百分点"
+    pos = prose.index("15")
+    assert infer_sign_from_prose(prose, pos) is True
+
+
+def test_direction_single_char_negative():
+    # Single-char "降" close to number → False
+    prose = "成本降8.3%"
+    pos = prose.index("8")
+    assert infer_sign_from_prose(prose, pos) is False
