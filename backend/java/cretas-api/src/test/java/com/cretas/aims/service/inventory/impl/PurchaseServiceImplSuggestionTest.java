@@ -2,6 +2,8 @@ package com.cretas.aims.service.inventory.impl;
 
 import com.cretas.aims.dto.inventory.PurchaseSuggestionResponse;
 import com.cretas.aims.entity.bom.BomItem;
+import com.cretas.aims.entity.bom.BomRecipe;
+import com.cretas.aims.entity.bom.BomRecipeItem;
 import com.cretas.aims.entity.inventory.SalesOrder;
 import com.cretas.aims.entity.inventory.SalesOrderItem;
 import com.cretas.aims.exception.BusinessException;
@@ -10,6 +12,8 @@ import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.repository.SupplierRepository;
 import com.cretas.aims.repository.bom.BomItemRepository;
+import com.cretas.aims.repository.bom.BomRecipeItemRepository;
+import com.cretas.aims.repository.bom.BomRecipeRepository;
 import com.cretas.aims.repository.inventory.PurchaseOrderItemRepository;
 import com.cretas.aims.repository.inventory.PurchaseOrderRepository;
 import com.cretas.aims.repository.inventory.SalesOrderItemRepository;
@@ -43,6 +47,8 @@ class PurchaseServiceImplSuggestionTest {
     @Mock private SupplierRepository supplierRepository;
     @Mock private RawMaterialTypeRepository materialTypeRepository;
     @Mock private BomItemRepository bomItemRepository;
+    @Mock private BomRecipeRepository bomRecipeRepository;
+    @Mock private BomRecipeItemRepository bomRecipeItemRepository;
     @Mock private SalesOrderRepository salesOrderRepository;
     @Mock private SalesOrderItemRepository salesOrderItemRepository;
 
@@ -73,6 +79,14 @@ class PurchaseServiceImplSuggestionTest {
             var soItemRepoField = PurchaseServiceImpl.class.getDeclaredField("salesOrderItemRepository");
             soItemRepoField.setAccessible(true);
             soItemRepoField.set(service, salesOrderItemRepository);
+
+            var recipeRepoField = PurchaseServiceImpl.class.getDeclaredField("bomRecipeRepository");
+            recipeRepoField.setAccessible(true);
+            recipeRepoField.set(service, bomRecipeRepository);
+
+            var recipeItemRepoField = PurchaseServiceImpl.class.getDeclaredField("bomRecipeItemRepository");
+            recipeItemRepoField.setAccessible(true);
+            recipeItemRepoField.set(service, bomRecipeItemRepository);
         } catch (Exception e) {
             throw new RuntimeException(e);
         }
@@ -110,6 +124,40 @@ class PurchaseServiceImplSuggestionTest {
         b.setMaterialCategory(category);
         b.setUnit("kg");
         return b;
+    }
+
+    private BomRecipe recipe(String recipeId, String productTypeId) {
+        BomRecipe r = new BomRecipe();
+        r.setId(recipeId);
+        r.setFactoryId(FACTORY);
+        r.setProductTypeId(productTypeId);
+        r.setStatus(BomRecipe.Status.ACTIVE);
+        r.setIsCurrent(true);
+        return r;
+    }
+
+    private BomRecipeItem recipeItem(String recipeId, String matId, String matName,
+                                     BigDecimal stdQty, BigDecimal yieldRate, String category,
+                                     BigDecimal actualQty) {
+        return BomRecipeItem.builder()
+                .recipeId(recipeId)
+                .factoryId(FACTORY)
+                .materialTypeId(matId)
+                .materialName(matName)
+                .standardQuantity(stdQty)
+                .yieldRate(yieldRate)
+                .actualQuantity(actualQty)
+                .materialCategory(category)
+                .unit("kg")
+                .unitPrice(new BigDecimal("12.50"))
+                .build();
+    }
+
+    /** Stub the current-ACTIVE recipe lookup + its items for a product. */
+    private void stubRecipe(String productTypeId, BomRecipe r, List<BomRecipeItem> items) {
+        when(bomRecipeRepository.findByFactoryIdAndProductTypeIdAndIsCurrentTrueAndStatus(
+                FACTORY, productTypeId, BomRecipe.Status.ACTIVE)).thenReturn(Optional.of(r));
+        when(bomRecipeItemRepository.findByRecipeIdOrderBySortOrderAsc(r.getId())).thenReturn(items);
     }
 
     // ─── tests ─────────────────────────────────────────────────────────────────
@@ -265,5 +313,130 @@ class PurchaseServiceImplSuggestionTest {
         // actual = 1.0 / 0.5 = 2.0; required = 2.0 × 1 = 2.0
         assertThat(result.getItems().get(0).getRequiredQuantity())
                 .isEqualByComparingTo(new BigDecimal("2.0000"));
+    }
+
+    // ─── bom_recipe_items source (口径统一: 同财务成本拆分) ──────────────────────
+
+    @Test
+    @DisplayName("Recipe source preferred: net required uses BomRecipeItem.actualQuantity")
+    void recipeSource_usesActualQuantity() {
+        when(salesOrderRepository.findById(SO_ID)).thenReturn(Optional.of(mockSo()));
+        when(salesOrderItemRepository.findBySalesOrderId(SO_ID))
+                .thenReturn(List.of(soItem("prod-001", "猪舌", new BigDecimal("100"))));
+
+        // recipe: 猪舌 123g @ 80% yield → actualQuantity persisted = 153.75g (≈recipe 实际用量)
+        BomRecipe r = recipe("recipe-001", "prod-001");
+        BomRecipeItem ri = recipeItem("recipe-001", "rm-001", "冷鲜猪舌",
+                new BigDecimal("123.0"), new BigDecimal("80.0"), "RAW", new BigDecimal("153.75"));
+        stubRecipe("prod-001", r, List.of(ri));
+        when(materialBatchRepository.sumAvailableQuantityByMaterialType(FACTORY, "rm-001"))
+                .thenReturn(new BigDecimal("3000.0"));
+
+        PurchaseSuggestionResponse result = service.generatePurchaseSuggestion(FACTORY, SO_ID);
+
+        assertThat(result.isHasBom()).isTrue();
+        assertThat(result.getItems()).hasSize(1);
+        PurchaseSuggestionResponse.SuggestionItem item = result.getItems().get(0);
+        // required = 153.75 × 100 = 15375
+        assertThat(item.getRequiredQuantity()).isEqualByComparingTo(new BigDecimal("15375.0000"));
+        // net = 15375 - 3000 = 12375
+        assertThat(item.getNetRequired()).isEqualByComparingTo(new BigDecimal("12375.0000"));
+        assertThat(item.getReferenceUnitPrice()).isEqualByComparingTo(new BigDecimal("12.50"));
+        // legacy bom_items must NOT be consulted when recipe exists
+        verify(bomItemRepository, never())
+                .findByFactoryIdAndProductTypeIdAndDeletedAtIsNullOrderBySortOrderAsc(FACTORY, "prod-001");
+    }
+
+    @Test
+    @DisplayName("Recipe item with null actualQuantity → falls back to calculateActualQuantity()")
+    void recipeSource_nullActualQuantity_computed() {
+        when(salesOrderRepository.findById(SO_ID)).thenReturn(Optional.of(mockSo()));
+        when(salesOrderItemRepository.findBySalesOrderId(SO_ID))
+                .thenReturn(List.of(soItem("prod-001", "掌中宝", new BigDecimal("1"))));
+
+        BomRecipe r = recipe("recipe-002", "prod-001");
+        // actualQuantity null → calculateActualQuantity() = 1.0 / (50/100) = 2.0
+        BomRecipeItem ri = recipeItem("recipe-002", "rm-001", "鸡掌",
+                new BigDecimal("1.0"), new BigDecimal("50.0"), "RAW", null);
+        stubRecipe("prod-001", r, List.of(ri));
+        when(materialBatchRepository.sumAvailableQuantityByMaterialType(FACTORY, "rm-001"))
+                .thenReturn(BigDecimal.ZERO);
+
+        PurchaseSuggestionResponse result = service.generatePurchaseSuggestion(FACTORY, SO_ID);
+
+        assertThat(result.getItems().get(0).getRequiredQuantity())
+                .isEqualByComparingTo(new BigDecimal("2.0000"));
+    }
+
+    @Test
+    @DisplayName("No recipe → falls back to legacy bom_items (向后兼容)")
+    void noRecipe_fallsBackToLegacyBomItems() {
+        when(salesOrderRepository.findById(SO_ID)).thenReturn(Optional.of(mockSo()));
+        when(salesOrderItemRepository.findBySalesOrderId(SO_ID))
+                .thenReturn(List.of(soItem("prod-009", "老品无配方", new BigDecimal("50"))));
+
+        // recipe lookup returns empty (default Mockito Optional) → legacy path
+        BomItem bom = bomItem("prod-009", "rm-009", "老原料",
+                new BigDecimal("2.0"), new BigDecimal("100.0"), "RAW");
+        when(bomItemRepository.findByFactoryIdAndProductTypeIdAndDeletedAtIsNullOrderBySortOrderAsc(FACTORY, "prod-009"))
+                .thenReturn(List.of(bom));
+        when(materialBatchRepository.sumAvailableQuantityByMaterialType(FACTORY, "rm-009"))
+                .thenReturn(new BigDecimal("30.0"));
+
+        PurchaseSuggestionResponse result = service.generatePurchaseSuggestion(FACTORY, SO_ID);
+
+        assertThat(result.isHasBom()).isTrue();
+        PurchaseSuggestionResponse.SuggestionItem item = result.getItems().get(0);
+        assertThat(item.getMaterialName()).isEqualTo("老原料");
+        assertThat(item.getRequiredQuantity()).isEqualByComparingTo(new BigDecimal("100.0000"));
+        assertThat(item.getNetRequired()).isEqualByComparingTo(new BigDecimal("70.0000"));
+    }
+
+    @Test
+    @DisplayName("Recipe exists but has no items → hasBom stays false for that product, no NPE")
+    void recipeWithNoItems_noNpe() {
+        when(salesOrderRepository.findById(SO_ID)).thenReturn(Optional.of(mockSo()));
+        when(salesOrderItemRepository.findBySalesOrderId(SO_ID))
+                .thenReturn(List.of(soItem("prod-001", "空配方", new BigDecimal("10"))));
+
+        BomRecipe r = recipe("recipe-empty", "prod-001");
+        stubRecipe("prod-001", r, List.of());
+
+        PurchaseSuggestionResponse result = service.generatePurchaseSuggestion(FACTORY, SO_ID);
+
+        assertThat(result.isHasBom()).isFalse();
+        assertThat(result.getItems()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("Mixed: one product has recipe, another only legacy → both expand, aggregate by matId")
+    void mixedRecipeAndLegacy_aggregate() {
+        when(salesOrderRepository.findById(SO_ID)).thenReturn(Optional.of(mockSo()));
+        when(salesOrderItemRepository.findBySalesOrderId(SO_ID))
+                .thenReturn(List.of(
+                        soItem("prod-001", "猪舌(有配方)", new BigDecimal("10")),
+                        soItem("prod-002", "牛腱(仅legacy)", new BigDecimal("10"))
+                ));
+
+        // prod-001 via recipe: 盐 actualQuantity=0.5 → 5
+        BomRecipe r = recipe("recipe-001", "prod-001");
+        BomRecipeItem ri = recipeItem("recipe-001", "rm-salt", "盐",
+                new BigDecimal("0.5"), new BigDecimal("100.0"), "AUXILIARY", new BigDecimal("0.5"));
+        stubRecipe("prod-001", r, List.of(ri));
+
+        // prod-002 no recipe (empty Optional default) → legacy: 盐 actual=0.3 → 3
+        BomItem bom = bomItem("prod-002", "rm-salt", "盐",
+                new BigDecimal("0.3"), new BigDecimal("100.0"), "AUXILIARY");
+        when(bomItemRepository.findByFactoryIdAndProductTypeIdAndDeletedAtIsNullOrderBySortOrderAsc(FACTORY, "prod-002"))
+                .thenReturn(List.of(bom));
+        when(materialBatchRepository.sumAvailableQuantityByMaterialType(FACTORY, "rm-salt"))
+                .thenReturn(BigDecimal.ZERO);
+
+        PurchaseSuggestionResponse result = service.generatePurchaseSuggestion(FACTORY, SO_ID);
+
+        assertThat(result.getItems()).hasSize(1);
+        // required = 0.5×10 + 0.3×10 = 5 + 3 = 8
+        assertThat(result.getItems().get(0).getRequiredQuantity())
+                .isEqualByComparingTo(new BigDecimal("8.0000"));
     }
 }
