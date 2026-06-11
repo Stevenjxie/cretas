@@ -9,8 +9,20 @@ import java.time.LocalDateTime;
 import org.hibernate.annotations.Where;
 
 /**
- * 报废记录实体类
- * 用于追踪不合格品的报废处理
+ * 报废记录实体类 (报废 ≠ 报损).
+ *
+ * <p>用于追踪<b>不合格品</b>的<b>报废</b>处理: 关联 QualityInspection / ReworkRecord /
+ * ProductionBatch / MaterialBatch, 处置类型 SCRAP/RECYCLE/RETURN/DONATE/DESTROY, 走 SP12
+ * 通用审批流 (workflowInstanceId)。LIVE — DisposalController (/disposal-records) + web-admin
+ * quality/disposals/list.vue + RN DisposalRecordManagementScreen 全链路在用, 非死代码。
+ *
+ * <p>⚠️ 与 {@link com.cretas.aims.entity.inventory.WastageReport}(报损单, SP7) <b>不同领域,
+ * 不可合并</b>:
+ * <ul>
+ *   <li>DisposalRecord = 报废: 质检/返工后对不合格品的处置 (销毁/回收/退供)。</li>
+ *   <li>WastageReport  = 报损: 仓库/工厂对<b>原料批次</b>库存损耗的双轨审批写减 (照片强制,
+ *       approve 写 MaterialBatchAdjustment 负数)。</li>
+ * </ul>
  *
  * @author Cretas Team
  * @version 2.0.0
