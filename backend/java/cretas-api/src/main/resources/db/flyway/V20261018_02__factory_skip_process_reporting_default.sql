@@ -36,9 +36,11 @@ UPDATE factory_settings
    SET skip_process_reporting_default = TRUE
  WHERE factory_id = 'F006';
 
--- 兜底: F006 若无 settings 行则插入一行 (仅含必要列 + 该 default), 其余列走表 DEFAULT。
--- factory_id 唯一约束 → ON CONFLICT DO UPDATE 保证幂等。
-INSERT INTO factory_settings (factory_id, skip_process_reporting_default)
-VALUES ('F006', TRUE)
-ON CONFLICT (factory_id) DO UPDATE
-    SET skip_process_reporting_default = TRUE;
+-- 兜底: F006 若无 settings 行则插入一行。
+-- ⚠️ factory_settings 有 NOT NULL 无默认列 (created_at/updated_at/working_hours) —— 原 INSERT 只给
+--   factory_id+该列, PG 在冲突检测前先校验 NOT NULL → 即使 ON CONFLICT 也先 NOT NULL violation
+--   → 迁移失败 (V20261018_02 首次部署即因此 prod blue 启动失败, 蓝绿保护未切)。
+-- 修: INSERT...SELECT...WHERE NOT EXISTS, 显式给全 NOT NULL 列 (working_hours=8 默认班次), 无 ON CONFLICT 依赖。
+INSERT INTO factory_settings (factory_id, working_hours, skip_process_reporting_default, created_at, updated_at)
+SELECT 'F006', 8, TRUE, NOW(), NOW()
+WHERE NOT EXISTS (SELECT 1 FROM factory_settings WHERE factory_id = 'F006');
