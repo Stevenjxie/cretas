@@ -85,4 +85,16 @@ public class CreateBomItemRequest {
     @Schema(description = "备注")
     @Size(max = 500, message = "备注长度不能超过500个字符")
     private String remark;
+
+    // #728 SP12: 组合装/嵌套 BOM 字段
+    @Schema(description = "SP4: 按份投料标志 — true = 每份成品用量固定，不随出成率折算", defaultValue = "false")
+    private Boolean perPortion;
+
+    @Schema(description = "SP8: 半成品引用编码 (组合装)")
+    @Size(max = 100)
+    private String semiFinishedRefCode;
+
+    @Schema(description = "SP12 #728: 子产品类型ID — 非 null 时触发嵌套 BOM 成本递归聚合")
+    @Size(max = 100)
+    private String subProductTypeId;
 }

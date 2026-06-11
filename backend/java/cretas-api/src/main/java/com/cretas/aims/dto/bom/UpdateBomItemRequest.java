@@ -74,4 +74,16 @@ public class UpdateBomItemRequest {
     @Schema(description = "备注")
     @Size(max = 500, message = "备注长度不能超过500个字符")
     private String remark;
+
+    // #728 SP12: 组合装/嵌套 BOM 字段
+    @Schema(description = "SP4: 按份投料标志")
+    private Boolean perPortion;
+
+    @Schema(description = "SP8: 半成品引用编码")
+    @Size(max = 100)
+    private String semiFinishedRefCode;
+
+    @Schema(description = "SP12 #728: 子产品类型ID — 嵌套 BOM")
+    @Size(max = 100)
+    private String subProductTypeId;
 }

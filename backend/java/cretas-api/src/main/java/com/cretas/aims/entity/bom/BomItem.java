@@ -122,6 +122,28 @@ public class BomItem extends BaseEntity {
     @Column(name = "remark", length = 500)
     private String remark;
 
+    // ===== SP12 #728: 组合装/嵌套 BOM 字段 (mirrors bom_recipe_items) =====
+
+    /**
+     * SP4: 按成品份数投料标志。true = 每份成品用量固定，不随出成率折算（调味料、添加剂等）。
+     */
+    @Column(name = "per_portion", nullable = false)
+    @Builder.Default
+    private Boolean perPortion = false;
+
+    /**
+     * SP8: 组合装半成品引用编码。非 null 时表示此 BOM 行为半成品引用。
+     */
+    @Column(name = "semi_finished_ref_code", length = 100)
+    private String semiFinishedRefCode;
+
+    /**
+     * SP12 #728: 组合装子产品/先做后用 嵌套 BOM 引用。
+     * 非 null 时触发 NestedBomCostService 递归聚合子 BOM 成本。
+     */
+    @Column(name = "sub_product_type_id", length = 100)
+    private String subProductTypeId;
+
     /**
      * 计算实际用量（考虑出成率）
      * 实际用量 = 标准用量 / (出成率/100)

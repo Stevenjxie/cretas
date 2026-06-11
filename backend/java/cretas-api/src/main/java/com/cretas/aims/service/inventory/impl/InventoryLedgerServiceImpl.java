@@ -135,6 +135,8 @@ public class InventoryLedgerServiceImpl implements InventoryLedgerService {
      * 进销存台账表头. 数量列全角色可见; 金额列仅 includePrices=true 写入.
      *
      * <p>W8: 盘盈损数量拆分为独立两列(盘盈数量/盘损数量), 便于金蝶凭证区分借贷方向.
+     * <p>#730 SP12: includePrices=true 时追加「金蝶凭证摘要参考」列,
+     *   由 {@link #buildKingdeeMovementSummary} 生成各变动类型的参考摘要字符串 (用于金蝶手工对账).
      */
     private List<Object> buildHeaderRow(boolean includePrices) {
         List<Object> header = new ArrayList<>(List.of(
@@ -156,9 +158,43 @@ public class InventoryLedgerServiceImpl implements InventoryLedgerService {
                     "盘盈金额",
                     "盘损金额",
                     "期末金额",
-                    "移动均价"));
+                    "移动均价",
+                    // #730 SP12: 金蝶凭证摘要参考列 (入库/领用/出货/调拨入/调拨出/盘盈/盘损)
+                    "金蝶凭证摘要参考"));
         }
         return header;
+    }
+
+    /**
+     * #730 SP12: 为进销存台账行生成金蝶凭证摘要参考字符串.
+     * 将本期各类变动汇总成一行可粘贴到金蝶摘要字段的文本, 方便财务手工对账.
+     */
+    private String buildKingdeeReferenceSummary(InventoryLedgerLineDTO line) {
+        List<String> parts = new ArrayList<>();
+        String name = nvlStr(line.getMaterialName());
+        String unit = nvlStr(line.getUnit());
+        if (line.getInboundQty() != null && line.getInboundQty().compareTo(java.math.BigDecimal.ZERO) != 0) {
+            parts.add(buildKingdeeMovementSummary("inbound", null, name, line.getInboundQty(), unit));
+        }
+        if (line.getOutboundProductionQty() != null && line.getOutboundProductionQty().compareTo(java.math.BigDecimal.ZERO) != 0) {
+            parts.add(buildKingdeeMovementSummary("production", null, name, line.getOutboundProductionQty(), unit));
+        }
+        if (line.getOutboundSalesQty() != null && line.getOutboundSalesQty().compareTo(java.math.BigDecimal.ZERO) != 0) {
+            parts.add(buildKingdeeMovementSummary("sales", null, name, line.getOutboundSalesQty(), unit));
+        }
+        if (line.getTransferInQty() != null && line.getTransferInQty().compareTo(java.math.BigDecimal.ZERO) != 0) {
+            parts.add(buildKingdeeMovementSummary("transfer_in", null, name, line.getTransferInQty(), unit));
+        }
+        if (line.getTransferOutQty() != null && line.getTransferOutQty().compareTo(java.math.BigDecimal.ZERO) != 0) {
+            parts.add(buildKingdeeMovementSummary("transfer_out", null, name, line.getTransferOutQty(), unit));
+        }
+        if (line.getStocktakeProfitQty() != null && line.getStocktakeProfitQty().compareTo(java.math.BigDecimal.ZERO) != 0) {
+            parts.add(buildKingdeeMovementSummary("stocktake_profit", null, name, line.getStocktakeProfitQty(), unit));
+        }
+        if (line.getStocktakeLossQty() != null && line.getStocktakeLossQty().compareTo(java.math.BigDecimal.ZERO) != 0) {
+            parts.add(buildKingdeeMovementSummary("stocktake_loss", null, name, line.getStocktakeLossQty(), unit));
+        }
+        return parts.isEmpty() ? "" : String.join("; ", parts);
     }
 
     private List<Object> buildDataRow(InventoryLedgerLineDTO line, boolean includePrices) {
@@ -183,7 +219,9 @@ public class InventoryLedgerServiceImpl implements InventoryLedgerService {
                     amountCell(line.getStocktakeProfitAmount()),
                     amountCell(line.getStocktakeLossAmount()),
                     amountCell(line.getClosingAmount()),
-                    amountCell(line.getMovingAvgUnitPrice())));
+                    amountCell(line.getMovingAvgUnitPrice()),
+                    // #730 SP12: 金蝶凭证摘要参考 (buildKingdeeMovementSummary 汇总)
+                    buildKingdeeReferenceSummary(line)));
         }
         return row;
     }

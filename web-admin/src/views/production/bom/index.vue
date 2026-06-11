@@ -150,6 +150,8 @@ interface BomItemRow {
   // SP4-8: 按份数投料 + 半成品引用
   perPortion?: boolean;
   semiFinishedRefCode?: string;
+  // SP12 #728: 组合装子产品/嵌套 BOM
+  subProductTypeId?: string;
   [k: string]: unknown;
 }
 interface LaborCostRow {
@@ -197,6 +199,8 @@ const bomForm = ref({
   // SP4-8: 按份数投料 + 半成品引用
   perPortion: false as boolean,
   semiFinishedRefCode: '' as string,
+  // SP12 #728: 组合装子产品/嵌套 BOM
+  subProductTypeId: '' as string,
 });
 
 // SP8: 半成品产品类型列表 (用于 semiFinishedRefCode 下拉)
@@ -531,6 +535,7 @@ function handleAddBomItem() {
     notes: '',
     perPortion: false,
     semiFinishedRefCode: '',
+    subProductTypeId: '',
   };
   bomDialogVisible.value = true;
 }
@@ -554,6 +559,7 @@ function handleEditBomItem(row: TableRow) {
     notes: row.notes || '',
     perPortion: (row.perPortion as boolean) ?? false,
     semiFinishedRefCode: String(row.semiFinishedRefCode || ''),
+    subProductTypeId: String(row.subProductTypeId || ''),
   };
   bomDialogVisible.value = true;
 }
@@ -1581,6 +1587,23 @@ function refreshData() {
             />
           </el-select>
           <div class="form-tip">仅组合装产品需填写，引用半成品作为配方原料</div>
+        </el-form-item>
+        <!-- SP12 #728: 组合装子产品 / 先做后用嵌套 BOM -->
+        <el-form-item label="嵌套子产品">
+          <el-select
+            v-model="bomForm.subProductTypeId"
+            placeholder="嵌套子产品（触发递归 BOM 成本）"
+            clearable
+            style="width: 100%"
+          >
+            <el-option
+              v-for="item in semiFinishedTypes"
+              :key="item.id"
+              :label="item.name"
+              :value="item.id"
+            />
+          </el-select>
+          <div class="form-tip">SP1 嵌套 BOM：非空时成本引用子产品 BOM 总成本，不用本行单价。配合"半成品引用"支持"先做后用"移动均价。</div>
         </el-form-item>
       </el-form>
       <template #footer>
