@@ -525,6 +525,19 @@ public class SalesServiceImpl implements SalesService {
         salesOrderItemRepository.saveAll(items);
 
         order.setTotalAmount(totalAmount);
+        // SP4: tax_amount = Σ (lineAmountWithTax − lineAmount) across items.
+        // 使用减法兜底防止 ×(1+rate) 舍入裂缝 (spec §2.4 "税额减法兜底").
+        // 向后兼容: item.taxRate=null/0 时 lineAmountWithTax==lineAmount, 贡献 0.
+        BigDecimal taxAmountSum = items.stream()
+                .map(it -> {
+                    BigDecimal la = it.getLineAmount();
+                    BigDecimal lawt = it.getLineAmountWithTax();
+                    if (la == null || lawt == null) return BigDecimal.ZERO;
+                    return lawt.subtract(la);
+                })
+                .reduce(BigDecimal.ZERO, BigDecimal::add)
+                .setScale(2, java.math.RoundingMode.HALF_UP);
+        order.setTaxAmount(taxAmountSum);
         order = salesOrderRepository.save(order);
 
         // Canvas V3: Persist dynamic custom fields via DynamicFieldService
@@ -983,8 +996,17 @@ public class SalesServiceImpl implements SalesService {
             }
         }
 
+        // SP4: 从订单头读 taxAmount (createSalesOrder/updateSalesOrder 已汇总写入)
+        // 向后兼容: 旧订单 taxAmount=null → 视为 0 (未配置税率 = 免税)
+        BigDecimal soTaxAmount = order.getTaxAmount() != null ? order.getTaxAmount() : BigDecimal.ZERO;
+        // SP4: totalAmountWithTax = 未税净额 + 税额 (不含运费 shippingFee / extraFees; 纯价税对)
+        BigDecimal totalAmountWithTax = totalAmount.add(soTaxAmount);
+
         return com.cretas.aims.dto.inventory.FinanceCostBreakdown.builder()
                 .totalAmount(totalAmount)
+                // SP4: 暴露税额 + 含税双值
+                .taxAmount(soTaxAmount)
+                .totalAmountWithTax(totalAmountWithTax)
                 .bomStandardCost(bomStandardCost)
                 .currentEstimatedCost(estimatedCost)
                 .currentEstimatedProfit(estimatedProfit)
@@ -1123,6 +1145,12 @@ public class SalesServiceImpl implements SalesService {
                 item.setUnit(itemDTO.getUnit());
                 item.setUnitPrice(itemDTO.getUnitPrice());
                 item.setDiscountRate(itemDTO.getDiscountRate() != null ? itemDTO.getDiscountRate() : BigDecimal.ZERO);
+                // SP4 updateSalesOrder: 同 createSalesOrder 三层 default 链 — item 显式 > SO.defaultTaxRate > 0
+                BigDecimal effectiveTaxRateUpdate = itemDTO.getTaxRate();
+                if (effectiveTaxRateUpdate == null) {
+                    effectiveTaxRateUpdate = order.getDefaultTaxRate() != null ? order.getDefaultTaxRate() : BigDecimal.ZERO;
+                }
+                item.setTaxRate(effectiveTaxRateUpdate);
                 item.setRemark(itemDTO.getRemark());
                 item.setSpecification(itemDTO.getSpecification());
                 item.setBoxQuantity(itemDTO.getBoxQuantity());
@@ -1133,6 +1161,17 @@ public class SalesServiceImpl implements SalesService {
             }
             salesOrderItemRepository.saveAll(newItems);
             order.setTotalAmount(totalAmount);
+            // SP4: 重算 tax_amount (与 createSalesOrder 逻辑对称, 减法兜底)
+            BigDecimal taxAmountSumUpdate = newItems.stream()
+                    .map(it -> {
+                        BigDecimal la = it.getLineAmount();
+                        BigDecimal lawt = it.getLineAmountWithTax();
+                        if (la == null || lawt == null) return BigDecimal.ZERO;
+                        return lawt.subtract(la);
+                    })
+                    .reduce(BigDecimal.ZERO, BigDecimal::add)
+                    .setScale(2, java.math.RoundingMode.HALF_UP);
+            order.setTaxAmount(taxAmountSumUpdate);
         }
 
         // Canvas V3: Update dynamic custom fields via DynamicFieldService

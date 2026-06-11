@@ -41,27 +41,65 @@ import java.util.List;
 @AllArgsConstructor
 public class FinanceCostBreakdown {
 
-    /** 订单总额 (销售方收入) */
+    /**
+     * 订单总额 — 未税净额 (SalesOrder.totalAmount).
+     *
+     * <p>SP3 口径注记: total_amount 按全系统未税存储约定存未税净额。
+     * 毛利口径 = 未税收入 − 未税成本 (actualCost), 口径自洽。
+     * 含税总额 = totalAmount + taxAmount (SP4 新增字段)。
+     */
     @PriceSensitive
     private BigDecimal totalAmount;
+
+    /**
+     * 订单税额 — SP4 补齐: SalesOrder.taxAmount (= Σ item 税额).
+     *
+     * <p>含税总额 = totalAmount + taxAmount。
+     * SP11 凭证使用此字段做价税分离 (贷 2221.01 销项税)。
+     * 无税率订单此字段为 0。
+     */
+    @PriceSensitive
+    private BigDecimal taxAmount;
+
+    /**
+     * 含税收入总额 — 派生值, 不落库 (= totalAmount + taxAmount).
+     *
+     * <p>SP4 双值暴露: UI/导出层需要含税总额时直接读此字段, 无需客户端自行加法。
+     * 对应 SalesOrder.getTotalWithTax() 语义 (含运费+税但不含折扣调整)。
+     * 此处为含税收入净额 = totalAmount + taxAmount (不含运费等 SO 头额外费用)。
+     * null 当 totalAmount 为 null。
+     */
+    @PriceSensitive
+    private BigDecimal totalAmountWithTax;
 
     /** BOM 标准成本聚合 (按 items 的 productId 查询 BomRecipe.totalCost). 产品无 ACTIVE BOM 时为 null. */
     @PriceSensitive
     private BigDecimal bomStandardCost;
 
-    /** SalesOrder.estimatedCost — 财务录入的预估成本 (可能 null). */
+    /** SalesOrder.estimatedCost — 财务录入的预估成本 (未税口径, 可能 null). */
     @PriceSensitive
     private BigDecimal currentEstimatedCost;
 
-    /** SalesOrder.estimatedProfit — 预估利润 (totalAmount - currentEstimatedCost). */
+    /** SalesOrder.estimatedProfit — 预估利润 (totalAmount[未税] - currentEstimatedCost[未税]). */
     @PriceSensitive
     private BigDecimal currentEstimatedProfit;
 
-    /** 实际成本 (按 SalesOrderItem.costUnitPrice * quantity 聚合, 订单未产生成本数据时 null). */
+    /**
+     * 实际成本 (未税) — Σ (SalesOrderItem.costUnitPrice[未税] × quantity).
+     *
+     * <p>SP3 口径注记: costUnitPrice 已统一为未税净价 (SP3 修正)。
+     * 此聚合与 totalAmount[未税] 口径一致 → actualProfit = 未税收入 − 未税成本 = 真实毛利。
+     * 订单未产生成本数据 (任一行 costUnitPrice=null/0) 时为 null。
+     */
     @PriceSensitive
     private BigDecimal actualCost;
 
-    /** 实际利润 (totalAmount - actualCost). */
+    /**
+     * 实际利润 (未税口径) — totalAmount[未税] − actualCost[未税].
+     *
+     * <p>SP3 口径注记: 收入未税、成本未税, 毛利口径自洽。
+     * 与金蝶 6001 主营业务收入 (未税净额) 口径一致。
+     */
     @PriceSensitive
     private BigDecimal actualProfit;
 
