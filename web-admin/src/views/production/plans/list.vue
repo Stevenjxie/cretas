@@ -5,7 +5,7 @@ import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { get, post } from '@/api/request';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { Plus, Search, Refresh, VideoPlay, VideoPause, CircleCheck, CircleClose, Download, Upload, ChatDotRound } from '@element-plus/icons-vue';
+import { Plus, Search, Refresh, VideoPlay, VideoPause, CircleCheck, CircleClose, Download, Upload, ChatDotRound, Printer } from '@element-plus/icons-vue';
 import { formatDateTimeCell } from '@/utils/tableFormatters';
 import { handleCatchError } from '@/utils/errorToast';
 import ConceptDisambiguationAlert from '@/components/common/ConceptDisambiguationAlert.vue';
@@ -35,7 +35,7 @@ import { computeRowActions } from '@/composables/useRowActions';
 import { useListSummary } from '@/composables/useListSummary';
 import { formatSummaryForAI } from '@/utils/aiSummaryContext';
 import type { ListSummaryRequest } from '@/types/listSummary';
-import { safePrint } from '@/api/printApi';
+import { safePrint, printWorkOrderMulti } from '@/api/printApi';
 
 const router = useRouter();
 const authStore = useAuthStore();
@@ -103,6 +103,15 @@ function handleWorkflowNodeClick(nodeId: string) {
 const loading = ref(false);
 const actionLoading = ref(false);
 const tableData = ref<TableRow[]>([]);
+// #726 SP12: 批量合并打印工单 — 多选状态
+const selectedPlans = ref<TableRow[]>([]);
+function handleSelectionChange(rows: TableRow[]) {
+  selectedPlans.value = rows;
+}
+async function handleMultiPrint() {
+  const ids = selectedPlans.value.map((r) => String(r.id));
+  await printWorkOrderMulti(factoryId.value, ids);
+}
 const pagination = ref({ page: 1, size: 10, total: 0 });
 const searchForm = ref({
   keyword: '',
@@ -1056,6 +1065,15 @@ function handleAiFill(params: TableRow) {
             <el-button type="info" :icon="Download" @click="handleExport" style="margin-left: 8px;">
               导出Excel
             </el-button>
+            <!-- #726 SP12: 合并打印公单 — 需先勾选计划, 多选 → 调 production-work-order-multi 端点 -->
+            <el-button
+              type="info"
+              :icon="Printer"
+              :disabled="selectedPlans.length === 0"
+              :title="selectedPlans.length === 0 ? '请先勾选要打印的计划' : `合并打印 ${selectedPlans.length} 份工单`"
+              @click="handleMultiPrint"
+              style="margin-left: 8px;"
+            >合并打印公单{{ selectedPlans.length > 0 ? ` (${selectedPlans.length})` : '' }}</el-button>
             <el-button v-if="canWrite" type="success" :icon="ChatDotRound" @click="aiEntryVisible = true" style="margin-left: 8px;">
               AI对话创建
             </el-button>
@@ -1091,7 +1109,9 @@ function handleAiFill(params: TableRow) {
         <el-button :icon="Refresh" @click="handleRefresh">重置</el-button>
       </div>
 
-      <el-table :data="tableData" v-loading="loading" empty-text="暂无数据" stripe border style="width: 100%">
+      <!-- #726 SP12: @selection-change 驱动合并打印 -->
+      <el-table :data="tableData" v-loading="loading" empty-text="暂无数据" stripe border style="width: 100%" @selection-change="handleSelectionChange">
+        <el-table-column type="selection" width="45" />
         <el-table-column prop="planNumber" label="计划编号" width="160" />
         <el-table-column label="产品类型" min-width="150" show-overflow-tooltip>
           <template #default="{ row }">{{ row.productTypeName || row.productName || row.productTypeId || '-' }}</template>

@@ -114,6 +114,72 @@ export const printApi = {
 };
 
 /**
+ * #726 SP12: 合并打印生产工单 (multi-plan batch)
+ * Backend: GET /api/mobile/{factoryId}/print/production-work-order-multi?planIds=id1&planIds=id2
+ * Max 20 planIds per request (validated server-side).
+ */
+export async function printWorkOrderMulti(
+  factoryId: string | null | undefined,
+  planIds: string[],
+  fileName?: string
+): Promise<void> {
+  if (!factoryId) {
+    ElMessage.warning('未识别工厂 — 请重新登录');
+    return;
+  }
+  if (!planIds.length) {
+    ElMessage.warning('请先勾选要打印的计划');
+    return;
+  }
+  if (planIds.length > 20) {
+    ElMessage.warning('单次最多合并打印 20 份，请缩减选择数量');
+    return;
+  }
+
+  const url = `/${factoryId}/print/production-work-order-multi`;
+  const config: BlobRequestConfig = {
+    responseType: 'blob',
+    params: { planIds },  // axios serializes array as planIds=x&planIds=y
+    _keepResponse: true,
+  };
+
+  let response: AxiosResponse<Blob>;
+  try {
+    response = await request.get(url, config) as unknown as AxiosResponse<Blob>;
+  } catch (err) {
+    const axErr = err as AxiosError;
+    const status = axErr?.response?.status;
+    if (status === 403) {
+      ElMessage.error('当前角色无批量打印权限');
+    } else if (status === 502) {
+      ElMessage.error('打印服务暂不可用 — 请稍后重试');
+    } else {
+      ElMessage.error(`批量 PDF 下载失败 (${status ?? '网络异常'})`);
+    }
+    console.error('[printApi] production-work-order-multi', planIds, err);
+    return;
+  }
+
+  const blob = response.data instanceof Blob
+    ? response.data
+    : new Blob([response.data], { type: 'application/pdf' });
+  if (blob.size === 0) {
+    ElMessage.error('打印服务返回空 PDF');
+    return;
+  }
+
+  const blobUrl = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = blobUrl;
+  link.download = `${fileName ?? `合并生产工单_${planIds.length}份`}.pdf`;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(blobUrl);
+  ElMessage.success(`已下载 ${planIds.length} 份合并工单 PDF`);
+}
+
+/**
  * Convenience wrapper for row-action handlers. Accepts a possibly-falsy factoryId
  * (the auth store may not have populated yet on first render) and surfaces a
  * gentle warning instead of crashing.

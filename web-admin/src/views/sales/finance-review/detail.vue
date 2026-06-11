@@ -28,6 +28,11 @@ import {
   type LineCostBreakdown,
   type SalesPriceTrendDTO,
 } from '@/api/salesFinanceReview';
+import {
+  getLaborCostOrderAggregate,
+  type LaborEfficiencyOrderAggregateDTO,
+} from '@/api/laborEfficiency';
+import ThreePriceCostBreakdown from '@/components/ThreePriceCostBreakdown.vue';
 
 const route = useRoute();
 const router = useRouter();
@@ -50,6 +55,10 @@ const submitting = ref(false);
 // B3 售价趋势 — 按产品类型分组，key=productTypeId
 const priceTrendMap = ref<Record<string, SalesPriceTrendDTO[]>>({});
 const priceTrendLoading = ref(false);
+
+// #734 SP3 M3b: 双口径人工对比聚合 (订单级)
+const orderAggregate = ref<LaborEfficiencyOrderAggregateDTO | null>(null);
+const orderAggregateLoading = ref(false);
 
 const canReview = computed(
   () => order.value?.status === 'PENDING_FINANCE_REVIEW',
@@ -93,8 +102,44 @@ async function load() {
       // B3: 异步加载各产品线的售价趋势 (非阻塞, 独立 loading)
       void loadPriceTrends(breakdownRes.data.lines);
     }
+    // #734 SP3 M3b: 订单确认后异步加载双口径人工聚合 (非阻塞)
+    if (orderRes.success && orderRes.data?.orderDate) {
+      void loadOrderAggregate(orderRes.data.orderDate);
+    }
   } finally {
     loading.value = false;
+  }
+}
+
+/**
+ * #734 SP3 M3b: 加载订单级人工双口径聚合 (报价 vs 实际).
+ * 以订单日期为中心取 ±90天窗口, 后端会按 source_order_id 分组返回本订单的批次.
+ * 非阻塞 — 失败只 warn, 不影响主流程.
+ */
+async function loadOrderAggregate(orderDate: string) {
+  if (!factoryId.value) return;
+  orderAggregateLoading.value = true;
+  try {
+    // 以订单日期为中心取 90 天窗口 (覆盖从下单到完工的周期)
+    const d = new Date(orderDate);
+    const start = new Date(d);
+    start.setDate(start.getDate() - 30);
+    const end = new Date(d);
+    end.setDate(end.getDate() + 90);
+    const fmt = (dt: Date) => dt.toISOString().slice(0, 10);
+
+    const res = await getLaborCostOrderAggregate(factoryId.value, fmt(start), fmt(end));
+    if (res.success && Array.isArray(res.data) && res.data.length > 0) {
+      // 取第一条 (该窗口内订单级聚合); 若有 orderId 字段可精确匹配
+      const match = res.data.find((a: LaborEfficiencyOrderAggregateDTO) =>
+        a.salesOrderId === orderId.value
+      ) ?? res.data[0];
+      orderAggregate.value = match ?? null;
+    }
+  } catch (e) {
+    console.warn('[#734 order-aggregate] load failed, non-critical:', e);
+  } finally {
+    orderAggregateLoading.value = false;
   }
 }
 
@@ -521,6 +566,15 @@ onMounted(load);
         <el-empty v-else description="暂无历史价格记录" :image-size="60" />
       </el-card>
     </template>
+
+    <!-- #734 SP3 M3b: 三价成本拆解 + 双口径人工对比 (转录[36:38]"报价vs实际人工是最重要的点") -->
+    <ThreePriceCostBreakdown
+      v-if="breakdown || orderAggregate"
+      :cost-breakdown="breakdown"
+      :order-aggregate="orderAggregate"
+      :loading="orderAggregateLoading"
+      style="margin-bottom: 16px"
+    />
 
     <!-- 审核操作 -->
     <el-card v-if="canReview && canFinanceWrite" shadow="never" class="action-card">

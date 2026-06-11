@@ -371,6 +371,10 @@ public class BomController {
         b.setMaterialCategory(r.getMaterialCategory() != null ? r.getMaterialCategory() : "RAW");
         b.setSortOrder(r.getSortOrder() != null ? r.getSortOrder() : 0);
         b.setRemark(r.getRemark());
+        // #728 SP12: 组合装/嵌套 BOM 字段 (mirrors bom_recipe_items, V20261019_01 migration)
+        b.setPerPortion(r.getPerPortion() != null ? r.getPerPortion() : Boolean.FALSE);
+        b.setSemiFinishedRefCode(r.getSemiFinishedRefCode());
+        b.setSubProductTypeId(r.getSubProductTypeId());
         return b;
     }
 
@@ -393,6 +397,10 @@ public class BomController {
         b.setMaterialCategory(r.getMaterialCategory() != null ? r.getMaterialCategory() : "RAW");
         b.setSortOrder(r.getSortOrder() != null ? r.getSortOrder() : 0);
         b.setRemark(r.getRemark());
+        // #728 SP12: 组合装/嵌套 BOM 字段
+        b.setPerPortion(r.getPerPortion() != null ? r.getPerPortion() : Boolean.FALSE);
+        b.setSemiFinishedRefCode(r.getSemiFinishedRefCode());
+        b.setSubProductTypeId(r.getSubProductTypeId());
         return b;
     }
 
