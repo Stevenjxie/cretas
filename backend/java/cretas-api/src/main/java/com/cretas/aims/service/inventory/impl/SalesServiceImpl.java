@@ -997,6 +997,11 @@ public class SalesServiceImpl implements SalesService {
                 .variancePct(orderVariancePct)
                 .belowThreshold(orderBelowThreshold)
                 .alarmMessage(orderAlarmMessage)
+                // P1 #32: 委外加工费独立科目 — 诚实 null.
+                // WorkProcess/WorkProcessTask 当前无 isOutsourced + outsourcedFee 列,
+                // 委外加工费无生产记录来源 → 不伪造数字, 返 null.
+                // 待 WorkProcess 加 is_outsourced 列后接入真实数据.
+                .processingFee(null)
                 .lines(lines)
                 .build();
     }

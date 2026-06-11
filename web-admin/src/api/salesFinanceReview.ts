@@ -90,6 +90,13 @@ export interface FinanceCostBreakdown {
   belowThreshold: boolean | null;
   /** SP3: 超支时的告警信息 (null=未超支或数据不足) */
   alarmMessage: string | null;
+  /**
+   * P1 #32: 委外加工费独立科目 (@PriceSensitive).
+   * 六扇门有委外工序时此字段单列委外加工成本.
+   * 当前 WorkProcess/WorkProcessTask 无 is_outsourced 列 → 恒为 null (诚实占位).
+   * 待后端 WorkProcess 接入委外费用数据后自动填充.
+   */
+  processingFee: number | null;
 }
 
 export interface PageResponse<T> {

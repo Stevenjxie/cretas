@@ -336,6 +336,11 @@ onMounted(load);
           <div class="label">实际成本</div>
           <div class="value-lg">{{ formatAmount(breakdown.actualCost) }}</div>
         </div>
+        <!-- P1 #32: 委外加工费独立科目 — 仅在有数据时显示 (当前 WorkProcess 无委外费用数据 → 不显示占位行) -->
+        <div v-if="breakdown.processingFee != null" class="cost-cell">
+          <div class="label">委外加工费</div>
+          <div class="value-lg">{{ formatAmount(breakdown.processingFee) }}</div>
+        </div>
         <!-- SP3: 三价对比 — 成本偏差率 + 超支红标 -->
         <div class="cost-cell">
           <div class="label">成本偏差率 (实际 vs BOM)</div>
