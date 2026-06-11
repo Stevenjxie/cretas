@@ -562,15 +562,28 @@ public class InventoryLedgerServiceImpl implements InventoryLedgerService {
      * 例:
      * <ul>
      *   <li>入库: {@code 入库[PO-2026-001] 猪舌 100.000000kg}</li>
+     *   <li>出库: {@code 出库[DO-2026-001] 猪舌 20.000000kg}</li>
      *   <li>盘盈: {@code 盘盈 猪舌 +5.000000kg}</li>
      *   <li>盘损: {@code 盘损 猪舌 -3.000000kg}</li>
      *   <li>生产领用: {@code 领用[BATCH-001] 猪舌 50.000000kg}</li>
      *   <li>销售出货: {@code 出货[SO-001] 猪舌 30.000000kg}</li>
      *   <li>调拨入: {@code 调拨入[TR-001] 猪舌 10.000000kg}</li>
      *   <li>调拨出: {@code 调拨出[TR-001] 猪舌 10.000000kg}</li>
+     *   <li>报损: {@code 报损[ADJ-001] 猪舌 -2.000000kg}</li>
+     *   <li>退料/退货: {@code 退料[PO-001] 猪舌 -5.000000kg}</li>
      * </ul>
      *
-     * @param movementType 变动类型 (inbound/stocktake_profit/stocktake_loss/production/sales/transfer_in/transfer_out)
+     * <p>金蝶凭证方向约定 (sign 列):
+     * <ul>
+     *   <li>入库 / 盘盈 → 借 (库存增加, 正方向)</li>
+     *   <li>出库 / 领用 / 出货 / 调拨出 / 盘损 / 报损 / 退料 → 贷 (库存减少, 负方向)</li>
+     *   <li>调拨入 → 借 (库存增加)</li>
+     * </ul>
+     *
+     * @param movementType 变动类型
+     *                     <b>支持值</b>: inbound / outbound / stocktake_profit / stocktake_loss /
+     *                     production / sales / transfer_in / transfer_out /
+     *                     write_off / damage / return / purchase_return
      * @param docNo        单据号 (null 时省略括号)
      * @param materialName 物料名称
      * @param qty          数量 (绝对值, 由 movementType 决定方向展示)
@@ -581,23 +594,29 @@ public class InventoryLedgerServiceImpl implements InventoryLedgerService {
                                                       String materialName, BigDecimal qty,
                                                       String unit) {
         String typeLabel = switch (movementType == null ? "" : movementType.toLowerCase()) {
-            case "inbound"          -> "入库";
-            case "stocktake_profit" -> "盘盈";
-            case "stocktake_loss"   -> "盘损";
-            case "production"       -> "领用";
-            case "sales"            -> "出货";
-            case "transfer_in"      -> "调拨入";
-            case "transfer_out"     -> "调拨出";
-            default                 -> movementType != null ? movementType : "变动";
+            case "inbound"                    -> "入库";
+            case "outbound"                   -> "出库";
+            case "stocktake_profit"           -> "盘盈";
+            case "stocktake_loss"             -> "盘损";
+            case "production"                 -> "领用";
+            case "sales"                      -> "出货";
+            case "transfer_in"                -> "调拨入";
+            case "transfer_out"               -> "调拨出";
+            case "write_off", "damage"        -> "报损";       // 库存报损 / 损坏核销
+            case "return", "purchase_return"  -> "退料";       // 生产退料 / 采购退货
+            default                           -> movementType != null ? movementType : "变动";
         };
 
         String docPart = (docNo != null && !docNo.isBlank()) ? "[" + docNo + "]" : "";
         String unitStr = unit != null ? unit : "";
 
-        // 盘盈显示 +, 盘损显示 - (其他按实际数量, 通常为正)
+        // 方向符号: 库存增加类型显示 +, 库存减少类型显示 -
+        // 盘盈/入库/调拨入 = 借 (+); 其余出库类型 = 贷 (-)
         String sign = switch (movementType == null ? "" : movementType.toLowerCase()) {
-            case "stocktake_profit" -> "+";
-            case "stocktake_loss"   -> "-";
+            case "stocktake_profit"           -> "+";
+            case "stocktake_loss",
+                 "write_off", "damage",
+                 "return", "purchase_return"  -> "-";
             default -> "";
         };
 

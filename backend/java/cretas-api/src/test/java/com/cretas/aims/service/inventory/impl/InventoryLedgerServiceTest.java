@@ -37,12 +37,13 @@ import static org.mockito.Mockito.*;
  *   <li>@PriceSensitive 字段对仓管角色为 null (字段已标注)</li>
  *   <li>W8: 盘盈/盘损分列 — profitQty ≥0, lossQty ≥0, adjustQty = profit - loss</li>
  *   <li>W8: 盘损盘盈同期 → 分列正确独立, 期末按净值计算</li>
- *   <li>W8: 金蝶 per-movement 摘要格式验证</li>
+ *   <li>W8: 金蝶 per-movement 摘要格式验证 (T14-T19)</li>
  *   <li>W8: 金蝶摘要 null/blank 防御</li>
  *   <li>W8: 导出表头含分列列名 (盘盈数量/盘损数量)</li>
+ *   <li>W8 残部: 金蝶摘要全类型覆盖 — outbound/sales/transfer/write_off/damage/return (T20-T25)</li>
  * </ol>
  *
- * @since SP11 2026-06-10; W8 2026-06-11
+ * @since SP11 2026-06-10; W8 2026-06-11; W8残部 2026-06-11
  */
 @DisplayName("InventoryLedgerServiceImpl 单元测试")
 @ExtendWith(MockitoExtension.class)
@@ -607,5 +608,79 @@ class InventoryLedgerServiceTest {
         assertTrue(header.contains("盘盈金额"), "W8: 表头应含分列 '盘盈金额'");
         assertTrue(header.contains("盘损金额"), "W8: 表头应含分列 '盘损金额'");
         assertFalse(header.contains("盘盈损金额"), "W8: 旧混合金额列 '盘盈损金额' 不应再出现");
+    }
+
+    // ========================= T20-T25: per-movement 摘要全类型覆盖 (W8 残部) =========================
+
+    @Test
+    @DisplayName("T20: 金蝶摘要 — 销售出货含单号括号, 无符号前缀")
+    void testKingdeeSummary_sales() {
+        String summary = InventoryLedgerServiceImpl.buildKingdeeMovementSummary(
+                "sales", "SO-2026-008", "猪舌", new BigDecimal("30.000000"), "kg");
+        assertTrue(summary.contains("出货"), "摘要应含 '出货'");
+        assertTrue(summary.contains("[SO-2026-008]"), "摘要应含单号括号");
+        assertTrue(summary.contains("猪舌"), "摘要应含物料名");
+        assertFalse(summary.startsWith("+") || summary.startsWith("-"),
+                "出货摘要不应有符号前缀");
+    }
+
+    @Test
+    @DisplayName("T21: 金蝶摘要 — 调拨入, 无方向符号前缀 (借方增库存; 数量前不加 + 或 -)")
+    void testKingdeeSummary_transferIn() {
+        // 用纯数字单号避免单号本身含 '-' 干扰断言
+        String summary = InventoryLedgerServiceImpl.buildKingdeeMovementSummary(
+                "transfer_in", "TR20260003", "牛腱", new BigDecimal("10.000000"), "kg");
+        assertTrue(summary.contains("调拨入"), "摘要应含 '调拨入'");
+        assertTrue(summary.contains("[TR20260003]"), "摘要应含单号括号");
+        assertTrue(summary.contains("10.000000"), "摘要应含数量");
+        // 数量前面紧接的字符不应是 '+' 或 '-' (不含方向前缀)
+        assertFalse(summary.contains("+10.000000"), "调拨入摘要数量前不应有 '+' 前缀");
+        assertFalse(summary.contains("-10.000000"), "调拨入摘要数量前不应有 '-' 前缀");
+    }
+
+    @Test
+    @DisplayName("T22: 金蝶摘要 — 调拨出, 无方向符号前缀 (贷方减库存; 数量前不加 + 或 -)")
+    void testKingdeeSummary_transferOut() {
+        String summary = InventoryLedgerServiceImpl.buildKingdeeMovementSummary(
+                "transfer_out", "TR20260003", "牛腱", new BigDecimal("10.000000"), "kg");
+        assertTrue(summary.contains("调拨出"), "摘要应含 '调拨出'");
+        assertTrue(summary.contains("[TR20260003]"), "摘要应含单号括号");
+        assertFalse(summary.contains("+10.000000"), "调拨出摘要数量前不应有 '+' 前缀");
+        assertFalse(summary.contains("-10.000000"), "调拨出摘要数量前不应有 '-' 前缀");
+    }
+
+    @Test
+    @DisplayName("T23: 金蝶摘要 — 报损 (write_off) 含 '-' 方向符号")
+    void testKingdeeSummary_writeOff() {
+        String summary = InventoryLedgerServiceImpl.buildKingdeeMovementSummary(
+                "write_off", "ADJ-2026-001", "猪舌", new BigDecimal("2.000000"), "kg");
+        assertTrue(summary.contains("报损"), "write_off 应映射为 '报损'");
+        assertTrue(summary.contains("[ADJ-2026-001]"), "摘要应含单号括号");
+        assertTrue(summary.contains("-"), "报损摘要应含 '-' 方向符号 (贷方)");
+    }
+
+    @Test
+    @DisplayName("T24: 金蝶摘要 — 报损 (damage) 与 write_off 映射一致")
+    void testKingdeeSummary_damage() {
+        String summaryWO = InventoryLedgerServiceImpl.buildKingdeeMovementSummary(
+                "write_off", "ADJ-001", "牛腱", new BigDecimal("1.000000"), "kg");
+        String summaryDmg = InventoryLedgerServiceImpl.buildKingdeeMovementSummary(
+                "damage", "ADJ-001", "牛腱", new BigDecimal("1.000000"), "kg");
+        assertEquals(summaryWO, summaryDmg, "damage 和 write_off 应生成完全相同的摘要");
+        assertTrue(summaryDmg.contains("报损"), "damage 应映射为 '报损'");
+    }
+
+    @Test
+    @DisplayName("T25: 金蝶摘要 — 退料 (return/purchase_return) 含 '-' 方向符号")
+    void testKingdeeSummary_return() {
+        String summaryReturn = InventoryLedgerServiceImpl.buildKingdeeMovementSummary(
+                "return", "PO-2026-005", "掌中宝", new BigDecimal("5.000000"), "kg");
+        assertTrue(summaryReturn.contains("退料"), "return 应映射为 '退料'");
+        assertTrue(summaryReturn.contains("[PO-2026-005]"), "摘要应含单号括号");
+        assertTrue(summaryReturn.contains("-"), "退料摘要应含 '-' 方向符号");
+
+        String summaryPR = InventoryLedgerServiceImpl.buildKingdeeMovementSummary(
+                "purchase_return", "PO-2026-005", "掌中宝", new BigDecimal("5.000000"), "kg");
+        assertEquals(summaryReturn, summaryPR, "purchase_return 和 return 应生成相同摘要");
     }
 }
