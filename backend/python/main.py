@@ -1116,6 +1116,14 @@ app.include_router(
     tags=["Restaurant ETL Admin"],
 )
 
+# Factory Production Gold ETL admin (2026-06-11): trigger + status endpoints
+from smartbi.api import factory_etl_admin  # noqa: E402
+app.include_router(
+    factory_etl_admin.router,
+    prefix="/api/smartbi/factory/etl",
+    tags=["Factory Production ETL Admin"],
+)
+
 # Restaurant POS dish-name resolution admin (#61 Phase 1, 2026-06-04)
 from smartbi.api import restaurant_name_resolution_admin  # noqa: E402
 app.include_router(
