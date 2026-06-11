@@ -30,7 +30,7 @@ public class OrderCostBackfillListener {
 
     @Async
     @EventListener
-    @Transactional(transactionManager = "transactionManager",
+    @Transactional(transactionManager = "primaryTransactionManager",
                    propagation = org.springframework.transaction.annotation.Propagation.REQUIRES_NEW)
     public void onProductionCostUpdated(ProductionCostUpdatedEvent event) {
         try {
