@@ -344,6 +344,57 @@ class VoucherGeneratorsTest {
     }
 
     @Test
+    void purchasePaymentImmediateMapsCreditToCash() {
+        // #754: 现结 (IMMEDIATE) → 贷方科目映射为 1001 库存现金 (当场付清, 不挂应付)
+        PurchasePaymentVoucherGenerator gen = new PurchasePaymentVoucherGenerator();
+        VoucherSubjectMappingService mappingSvc = mock(VoucherSubjectMappingService.class);
+        when(mappingSvc.findMapping("F001", SettlementType.IMMEDIATE, "PURCHASE"))
+                .thenReturn(Optional.of(VoucherSubjectMappingDTO.builder()
+                        .debitSubjectCode("1405").debitSubjectName("库存商品")
+                        .creditSubjectCode("1001").creditSubjectName("库存现金")
+                        .build()));
+        ReflectionTestUtils.setField(gen, "subjectMappingService", mappingSvc);
+
+        Voucher v = gen.generate("F001", purchaseOrder(SettlementType.IMMEDIATE, HUNDRED, BigDecimal.ZERO));
+
+        assertEquals(2, v.getEntries().size(), "现结零税应退化为两行");
+        assertEquals("1405", v.getEntries().get(0).getSubjectCode());
+        assertEquals("1001", v.getEntries().get(1).getSubjectCode());  // 库存现金, 不再是 2202
+        assertEquals("库存现金", v.getEntries().get(1).getSubjectName());
+        // 借贷恒平不受科目映射影响
+        assertEquals(0, HUNDRED.compareTo(v.getTotalDebit()));
+        assertEquals(0, HUNDRED.compareTo(v.getTotalCredit()));
+        assertDoesNotThrow(v::validateBalanced);
+        // 供应商辅助核算保留 (现结仍分供应商挂账)
+        assertEquals(AuxiliaryType.SUPPLIER, v.getEntries().get(1).getAuxiliaryType());
+        assertEquals("sup-1", v.getEntries().get(1).getAuxiliaryEntityId());
+    }
+
+    @Test
+    void purchasePaymentCreditFirstMapsCreditToPayable() {
+        // #754: 赊销先入库 (CREDIT_FIRST) → 贷 2202 应付账款 (同赊销语义, mapping 服务返回 2202)
+        // 验证在映射服务存在且返回标准应付科目时行为与 fallback 一致 (映射路径不破坏现有语义)
+        PurchasePaymentVoucherGenerator gen = new PurchasePaymentVoucherGenerator();
+        VoucherSubjectMappingService mappingSvc = mock(VoucherSubjectMappingService.class);
+        when(mappingSvc.findMapping("F001", SettlementType.CREDIT_FIRST, "PURCHASE"))
+                .thenReturn(Optional.of(VoucherSubjectMappingDTO.builder()
+                        .debitSubjectCode("1405").debitSubjectName("库存商品")
+                        .creditSubjectCode("2202").creditSubjectName("应付账款")
+                        .build()));
+        ReflectionTestUtils.setField(gen, "subjectMappingService", mappingSvc);
+
+        Voucher v = gen.generate("F001", purchaseOrder(SettlementType.CREDIT_FIRST, HUNDRED, BigDecimal.ZERO));
+
+        assertEquals(2, v.getEntries().size());
+        assertEquals("1405", v.getEntries().get(0).getSubjectCode());
+        assertEquals("2202", v.getEntries().get(1).getSubjectCode());  // 应付账款
+        assertEquals("应付账款", v.getEntries().get(1).getSubjectName());
+        assertEquals(0, HUNDRED.compareTo(v.getTotalDebit()));
+        assertEquals(0, HUNDRED.compareTo(v.getTotalCredit()));
+        assertDoesNotThrow(v::validateBalanced);
+    }
+
+    @Test
     void purchasePaymentNoMappingServiceFallsBackToDefault() {
         // #754 向后兼容: mappingService 未注入 (null) → 硬编码 1405/2202, 字节不变
         PurchasePaymentVoucherGenerator gen = new PurchasePaymentVoucherGenerator();
