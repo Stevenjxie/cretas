@@ -112,7 +112,7 @@ No `dblink`. Python is the bridge — read from cretas_pool, write to smartbi_po
 
 ### 4.1 Flyway Migration
 
-- File: `backend/python/smartbi/database/migrations/V20260930_01__factory_production_gold.sql`
+- File: `backend/python/smartbi/database/migrations/V20261002_01__factory_production_gold.sql`
 - Version: `V20260930_01` — strictly > frontier `V20260929_01` (verified via `git ls-tree origin/main`)
 - Includes: CREATE TABLE Silver, CREATE TABLE Gold, indexes, RLS policies, GRANT DML to smartbi_user, conditional trigger for `updated_at`
 
@@ -246,7 +246,7 @@ All tests use asyncpg-compatible fake pools/connections — no real DB required.
 
 | File | SHA (commit) |
 |------|-------------|
-| `backend/python/smartbi/database/migrations/V20260930_01__factory_production_gold.sql` | `7bd386928` |
+| `backend/python/smartbi/database/migrations/V20261002_01__factory_production_gold.sql` | `7bd386928` |
 | `backend/python/smartbi/gold/factory_production_etl.py` | `4510ddd64` |
 | `backend/python/smartbi/api/factory_etl_admin.py` | `5c56a3669` |
 | `backend/python/main.py` (2 router registrations) | `5c56a3669`, `cdc54a074` |
