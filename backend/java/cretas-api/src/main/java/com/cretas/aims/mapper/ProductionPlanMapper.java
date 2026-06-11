@@ -109,6 +109,7 @@ public class ProductionPlanMapper {
         dto.setMixedBatchType(plan.getMixedBatchType());
         dto.setMixedBatchTypeDisplayName(plan.getMixedBatchTypeDisplayName());
         dto.setRelatedOrders(parseRelatedOrders(plan.getRelatedOrders()));
+        dto.setSkipProcessReporting(plan.getSkipProcessReporting());
 
         // 设置强制插单审批字段
         dto.setIsForceInserted(plan.getIsForceInserted());
@@ -188,6 +189,13 @@ public class ProductionPlanMapper {
         plan.setIsMixedBatch(request.getIsMixedBatch() != null ? request.getIsMixedBatch() : false);
         plan.setMixedBatchType(request.getMixedBatchType());
         plan.setRelatedOrders(serializeRelatedOrders(request.getRelatedOrders()));
+
+        // 免工序报工开关 (六扇门 Wave2 升级, V20261017_01):
+        //   request 显式给 → 采纳; null (未指定) → 新建计划默认 true (六扇门 want)。
+        //   注: 旧数据 / 迁移回填 = false (DB DEFAULT FALSE), 新建走这里默认 true; 两者独立不冲突。
+        plan.setSkipProcessReporting(request.getSkipProcessReporting() != null
+                ? request.getSkipProcessReporting()
+                : Boolean.TRUE);
 
         // 计算CR值
         if (request.getEstimatedWorkDays() != null && request.getExpectedCompletionDate() != null) {
@@ -297,6 +305,11 @@ public class ProductionPlanMapper {
         }
         if (request.getRelatedOrders() != null) {
             plan.setRelatedOrders(serializeRelatedOrders(request.getRelatedOrders()));
+        }
+        // 免工序报工开关 (V20261017_01): 仅显式传值才改 (null = 保留原值, 不强转 true);
+        // 更新走 null-guard 区别于 create 的"默认 true", 避免编辑其他字段时意外翻转已选模式。
+        if (request.getSkipProcessReporting() != null) {
+            plan.setSkipProcessReporting(request.getSkipProcessReporting());
         }
         // 重新计算CR值
         if (request.getEstimatedWorkDays() != null) {

@@ -1672,16 +1672,22 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
 
         ProductionBatch saved = productionBatchRepository.save(batch);
 
-        // GAP 3/4 (F006): 转批次时从 product_work_processes 模板 spawn 工序任务 (逐道报工需要任务实例).
-        // fail-soft: 产品未配 product_work_processes 时 spawnTasks 抛异常, 不阻塞批次创建.
+        // GAP 3/4 (F006): 转批次时 spawn 报工任务 (报工需要任务实例).
+        //   计划级免工序报工 (六扇门 Wave2, V20261017_01): plan.skipProcessReporting=true 或 产品 0 工序
+        //   → spawn 2 个批次级哨兵任务 (领料+产出); 否则逐道从 product_work_processes 模板 spawn。
+        //   头尾责任人默认取计划的 assignedSupervisorId (一人兼); 操作员也可 start 时自分配, 或 web/RN updatePlan 改。
+        // fail-soft: spawn 抛异常时不阻塞批次创建.
         if (workProcessTaskService != null) {
             try {
+                Long responsibleId = plan.getAssignedSupervisorId();
                 List<WorkProcessTaskDTO> spawnedTasks =
-                        workProcessTaskService.spawnTasks(factoryId, saved.getId(), saved.getProductTypeId());
+                        workProcessTaskService.spawnTasks(factoryId, saved.getId(), saved.getProductTypeId(),
+                                plan.getSkipProcessReporting(), responsibleId, responsibleId);
                 mirrorWorkProcessTasksForRn(factoryId, saved, plan, spawnedTasks);
-                log.info("转批次已 spawn 工序任务: batchId={}, productTypeId={}", saved.getId(), saved.getProductTypeId());
+                log.info("转批次已 spawn 报工任务: batchId={}, productTypeId={}, skipProcessReporting={}, taskCount={}",
+                        saved.getId(), saved.getProductTypeId(), plan.getSkipProcessReporting(), spawnedTasks.size());
             } catch (Exception e) {
-                log.warn("转批次 spawn 工序任务失败 (fail-soft, 不阻塞批次创建): batchId={}, err={}", saved.getId(), e.getMessage());
+                log.warn("转批次 spawn 报工任务失败 (fail-soft, 不阻塞批次创建): batchId={}, err={}", saved.getId(), e.getMessage());
             }
         }
 

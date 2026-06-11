@@ -176,6 +176,19 @@ public class ProductionPlan extends BaseEntity {
     @Column(name = "secondary_source_wip_id")
     private Long secondarySourceWipId;
 
+    // ==================== 免工序报工开关 (六扇门 Wave2 升级, V20261017_01) ====================
+
+    /**
+     * 免工序报工开关 (Steve 2026-06-10 拍板, 取代 #690 per-工序属性做法).
+     * <p>false (默认/迁移回填) = 逐道: 现有工序级报工链, 行为完全不变 (向后兼容铁律)。
+     * <p>true = 批次级两点报工: 领料报工(入) + 产出报工(出); 人工两点不报 (登下一期, 期间级分摊);
+     * 成本只含料; 出成率 = 产出/领料。spawn 时生成 2 个批次级哨兵任务 (MATERIAL_INPUT/FINAL_OUTPUT),
+     * 不生成工序 task。
+     * <p>createProductionPlan API 对"新建计划"默认 true (六扇门 want); 产品 0 工序时强制 true。
+     */
+    @Column(name = "skip_process_reporting", nullable = false)
+    private Boolean skipProcessReporting = false;
+
     /**
      * 关联订单ID
      */

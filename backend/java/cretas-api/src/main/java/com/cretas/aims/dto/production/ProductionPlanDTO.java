@@ -215,6 +215,9 @@ public class ProductionPlanDTO {
     @Schema(description = "混批关联订单ID列表")
     private List<String> relatedOrders;
 
+    @Schema(description = "免工序报工开关 (true=批次级两点报工 领料+产出; false=逐道)")
+    private Boolean skipProcessReporting;
+
     // ======= 强制插单审批字段 =======
 
     @Schema(description = "是否为强制插单")
