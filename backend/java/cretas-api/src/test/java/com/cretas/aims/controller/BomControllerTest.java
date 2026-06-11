@@ -75,8 +75,9 @@ class BomControllerTest {
         assertEquals("PT-001", persisted.getProductTypeId());
         assertEquals("MT-001", persisted.getMaterialTypeId());
         assertEquals(new BigDecimal("10.5"), persisted.getStandardQuantity());
-        // Defaults applied at mapper level
-        assertEquals(new BigDecimal("100.00"), persisted.getYieldRate(), "yieldRate default");
+        // B1 (PR #370 / BomController.toBomItem): yieldRate=null is now passed through as-is
+        // (待评估 — old sentinel default 100.00 removed; BomServiceImpl may apply canvas default).
+        assertNull(persisted.getYieldRate(), "B1: yieldRate null passes through — service applies canvas default");
         assertEquals(BigDecimal.ZERO, persisted.getTaxRate(), "taxRate default");
         assertEquals("RAW", persisted.getMaterialCategory(), "materialCategory default");
         assertEquals(0, persisted.getSortOrder(), "sortOrder default");
