@@ -28,6 +28,9 @@
 
 ## In-flight 任务表
 
+> 🔴 **2026-06-12 部署管线阻塞 (新 organizer chat 必读)**: main 含 #778(OA待办后端) + #779(两点报工成本P0修复) **代码正确**(12+20测试绿, root-cause扎实) 但 **jar 启动 hang 无法部署**。现象: green 启动印 banner 后无 Spring logback 输出, metaspace 涨到~190M(类在加载), CPU 34-53%, 5min+ 不健康。**#777 jar 启动正常 → #778/#779 引入**。蓝绿健康闸正确拦截, **prod 安全跑 blue 旧码(10010=200)零影响**。但 **main 当前不可部署**(下次部署 main 撞同 hang)。**下一步聚焦诊断**: ①bisect #778 vs #779(revert #778 试 #779 单独能否起) ②verbose Spring debug 日志到独立文件找 hang bean ③疑 #778 MyTodoAggregator 注入5域service 某 eager init 卡。P0 cost 修复(#779)正确但 ship 受阻于此。test env 已恢复。
+
+
 | ID | 任务 | model | effort | orchestration | 分支 | scope 锁 | 状态 | PR | 阻塞 |
 |---|---|---|---|---|---|---|---|---|---|
 | CODEX-E2E | 六扇门全流程 headed E2E 第一轮 §1-6。brief: `docs/dispatch/2026-06-11-codex-e2e-fullflow-handoff.md` | Codex | out-of-harness | Steve courier | 不改代码(纯验证) | docs/audits/liushanmen/ | ✅ 第一轮 DONE+gated | - | **Organizer gate 判定(独立SQL/代码复核)**: ✅含税三行 V-2026-0054 真3行(4520/4000/520 SQL复核) ✅两点配置 F006=t/F001=f ✅BOM成本坐实(掌中宝2.5778等)。**2处纠偏**: ①Codex报的"P1 BOM packQtyPerProduct UI缺口"=**假阴性**(字段在origin/main bom/index.vue且部署bundle含「每产品用量」, `v-if=PACKAGING`条件渲染, Codex开dialog时物料类别停在默认"原料"没切包材) ②multi-stage-cost路径前后端**逐字匹配**`/sales/orders/...`(handoff doc把路径写错, 非#697族bug, doc已知错)。**真留下的P0缺口=#771三拐弯未坐实**→771-CLOSE。证据: audit doc+20截图 已commit main(cfbf30f73) |
