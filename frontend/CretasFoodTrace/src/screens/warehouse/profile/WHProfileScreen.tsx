@@ -219,13 +219,19 @@ export function WHProfileScreen() {
   ];
 
   const handleLogout = () => {
+    // Rule 2: 弹窗带账号上下文，仓管员文化素质较低，需明确告知退出哪个账号
+    const accountLabel = userInfo.name !== '陈仓管'
+      ? `${userInfo.name}（${userInfo.role}）`
+      : `@${user?.username ?? ''}（${userInfo.role}）`;
+    const confirmMessage = `确定退出 ${accountLabel} 吗？`;
+
     if (Platform.OS === 'web') {
-      if (window.confirm(t('profile.dialogs.logoutMessage'))) {
+      if (window.confirm(confirmMessage)) {
         logout();
       }
       return;
     }
-    Alert.alert(t('profile.dialogs.logoutTitle'), t('profile.dialogs.logoutMessage'), [
+    Alert.alert(t('profile.dialogs.logoutTitle'), confirmMessage, [
       { text: t('profile.dialogs.cancel'), style: "cancel" },
       {
         text: t('profile.dialogs.confirm'),

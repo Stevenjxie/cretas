@@ -278,37 +278,38 @@ export default function DSProfileScreen() {
     setRefreshing(false);
   }, [loadStats]);
 
-  // 退出登录
+  // 退出登录 (Rule 2: 弹窗带账号上下文)
   const handleLogout = () => {
+    const accountLabel = profile.name !== '调度员'
+      ? `${profile.name}（调度员）`
+      : `@${user?.username ?? ''}（调度员）`;
+    const confirmMessage = `确定退出 ${accountLabel} 吗？`;
+
+    const doLogout = () => {
+      logout();
+      navigation.dispatch(
+        CommonActions.reset({
+          index: 0,
+          routes: [{ name: 'Auth' }],
+        })
+      );
+    };
+
     if (Platform.OS === 'web') {
-      if (window.confirm('确定要退出登录吗？')) {
-        logout();
-        navigation.dispatch(
-          CommonActions.reset({
-            index: 0,
-            routes: [{ name: 'Auth' }],
-          })
-        );
+      if (window.confirm(confirmMessage)) {
+        doLogout();
       }
       return;
     }
     Alert.alert(
       '退出登录',
-      '确定要退出登录吗？',
+      confirmMessage,
       [
         { text: '取消', style: 'cancel' },
         {
           text: '确定',
           style: 'destructive',
-          onPress: () => {
-            logout();
-            navigation.dispatch(
-              CommonActions.reset({
-                index: 0,
-                routes: [{ name: 'Auth' }],
-              })
-            );
-          },
+          onPress: doLogout,
         },
       ]
     );

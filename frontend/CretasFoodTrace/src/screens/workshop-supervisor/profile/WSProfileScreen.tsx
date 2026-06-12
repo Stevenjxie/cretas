@@ -50,7 +50,20 @@ export function WSProfileScreen() {
   };
 
   const handleLogout = () => {
-    logout();
+    // Rule 2: 退出弹窗带账号上下文
+    const displayName = user?.fullName || user?.username || '';
+    const roleName = t('profile.role');
+    const accountLabel = displayName
+      ? `${displayName}（${roleName}）`
+      : `@${user?.username ?? ''}（${roleName}）`;
+    Alert.alert(
+      t('profile.menu.logout'),
+      `确定退出 ${accountLabel} 吗？`,
+      [
+        { text: '取消', style: 'cancel' },
+        { text: '退出', style: 'destructive', onPress: logout },
+      ]
+    );
   };
 
   return (
@@ -116,7 +129,9 @@ export function WSProfileScreen() {
           </View>
         </View>
 
-        {/* 系统设置 */}
+        {/* 系统设置 — Rule 2 "语言" 保留; Rule 5 "系统设置" 入口已移除:
+            该路由(Settings)指向 WSProfileScreen 自身，是死胡同，没有实际内容。
+            per fool-proof Rule 5: 无内容则不显示该入口，避免用户卡住。 */}
         <View style={styles.menuSection}>
           <Text style={styles.sectionTitle}>{t('profile.sections.systemSettings')}</Text>
           <View style={styles.menuGroup}>
@@ -126,11 +141,6 @@ export function WSProfileScreen() {
               onPress={toggleLanguage}
               rightText={LANGUAGE_NAMES[language]}
               showArrow={false}
-            />
-            <MenuItem
-              icon="cog-outline"
-              title={t('profile.menu.settings')}
-              onPress={() => navigation.navigate("Settings")}
             />
           </View>
         </View>

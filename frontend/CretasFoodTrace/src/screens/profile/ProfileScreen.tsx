@@ -124,13 +124,19 @@ export default function ProfileScreen() {
       );
     };
 
+    // Rule 2: 退出弹窗带账号上下文，让用户确认退出的是哪个账号
+    const accountLabel = displayName !== '未知用户'
+      ? `${displayName}（${getRoleName(roleCode)}）`
+      : `@${user?.username ?? ''}`;
+    const confirmMessage = `确定退出 ${accountLabel} 吗？`;
+
     if (Platform.OS === 'web') {
-      if (window.confirm('确定要退出吗？')) {
+      if (window.confirm(confirmMessage)) {
         doLogout();
       }
       return;
     }
-    Alert.alert('退出登录', '确定要退出吗？', [
+    Alert.alert('退出登录', confirmMessage, [
       { text: '取消', style: 'cancel' },
       { text: '退出', style: 'destructive', onPress: doLogout }
     ]);
