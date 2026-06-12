@@ -1076,7 +1076,26 @@ async function handleAction(orderId: string, action: string) {
 //   confirm OK + submit-for-review 失败 → 订单停在 CONFIRMED (可对"已确认"行重试提审, 可恢复).
 //   必须用 'confirmed_only' 桶 / sticky toast 与彻底失败区分.
 
-type SubmitOutcome = 'success' | 'confirmed_only' | 'failed';
+type SubmitOutcome = 'success' | 'pending_review' | 'auto_approved' | 'confirmed_only' | 'failed';
+
+type SalesOrderActionResponse = {
+  success?: boolean;
+  message?: string;
+  data?: {
+    status?: unknown;
+  };
+};
+
+function responseOrderStatus(response: unknown): string {
+  const res = response as SalesOrderActionResponse;
+  return typeof res.data?.status === 'string' ? res.data.status : '';
+}
+
+function outcomeMessage(orderNumber: string, outcome: SubmitOutcome): string {
+  if (outcome === 'auto_approved') return `订单 ${orderNumber} 未触发审批阈值，已免审通过`;
+  if (outcome === 'pending_review') return `订单 ${orderNumber} 已进入财务审核`;
+  return `订单 ${orderNumber} 已提交财务审核`;
+}
 
 /** 取后端错误信息 (api-response-handling: error.response.data.message). */
 function extractErrMessage(e: unknown, fallback: string): string {
@@ -1101,11 +1120,18 @@ async function submitOrderForFinanceReview(
       // confirm 失败 → 订单仍 DRAFT, 当彻底失败抛出.
       throw new Error(confirmRes?.message || '确认订单失败');
     }
+    const confirmedStatus = responseOrderStatus(confirmRes);
+    if (confirmedStatus === 'PENDING_FINANCE_REVIEW') return 'pending_review';
+    if (confirmedStatus === 'FINANCE_APPROVED') return 'auto_approved';
+    if (confirmedStatus && confirmedStatus !== 'CONFIRMED') return 'success';
     try {
       const submitRes = await post(`/${factoryId.value}/sales/orders/${orderId}/submit-for-review`);
       if (!submitRes?.success) {
         throw new Error(submitRes?.message || '提交审核失败');
       }
+      const submittedStatus = responseOrderStatus(submitRes);
+      if (submittedStatus === 'PENDING_FINANCE_REVIEW') return 'pending_review';
+      if (submittedStatus === 'FINANCE_APPROVED') return 'auto_approved';
       return 'success';
     } catch (e) {
       // confirm OK 但 submit 失败 → 订单现为 CONFIRMED, 可恢复. 标 confirmed_only.
@@ -1119,6 +1145,9 @@ async function submitOrderForFinanceReview(
   if (!res?.success) {
     throw new Error(res?.message || '提交审核失败');
   }
+  const submittedStatus = responseOrderStatus(res);
+  if (submittedStatus === 'PENDING_FINANCE_REVIEW') return 'pending_review';
+  if (submittedStatus === 'FINANCE_APPROVED') return 'auto_approved';
   return 'success';
 }
 
@@ -1144,8 +1173,8 @@ async function handleSubmitForReviewRow(row: TableRow): Promise<void> {
   }
   submittingIds.value.add(orderId);
   try {
-    await submitOrderForFinanceReview(orderId, { fromDraft });
-    ElMessage.success(`订单 ${orderNumber} 已提交财务审核`);
+    const outcome = await submitOrderForFinanceReview(orderId, { fromDraft });
+    ElMessage.success(outcomeMessage(orderNumber, outcome));
     await loadData();
   } catch (e) {
     const err = e as Error & { confirmedOnly?: boolean };
@@ -1204,6 +1233,8 @@ async function handleBatchSubmitForReview(): Promise<void> {
       )
     );
     let success = 0;
+    let pendingReview = 0;
+    let autoApproved = 0;
     let confirmedOnly = 0;
     let failed = 0;
     const failedList: string[] = [];
@@ -1212,6 +1243,8 @@ async function handleBatchSubmitForReview(): Promise<void> {
       const orderNumber = String(eligible[i].orderNumber || eligible[i].id || '');
       if (res.status === 'fulfilled') {
         if (res.value.outcome === 'confirmed_only') confirmedOnly++;
+        else if (res.value.outcome === 'pending_review') pendingReview++;
+        else if (res.value.outcome === 'auto_approved') autoApproved++;
         else success++;
       } else {
         const err = res.reason as Error & { confirmedOnly?: boolean };
@@ -1224,6 +1257,7 @@ async function handleBatchSubmitForReview(): Promise<void> {
       }
     }
     let msg = `已完成提审 ${success} 条；已确认待提审 ${confirmedOnly} 条（可对「已确认」行重试）；失败 ${failed} 条。`;
+    msg = `已提交 ${success} 条；进入财务审核 ${pendingReview} 条；免审通过 ${autoApproved} 条；已确认待重试 ${confirmedOnly} 条；失败 ${failed} 条。`;
     if (confirmedOnly > 0) {
       msg += '已确认订单可直接「提交财务审核」重试，无需重走确认。';
     }

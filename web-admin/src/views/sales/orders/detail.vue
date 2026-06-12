@@ -91,6 +91,30 @@ const paymentForm = ref<{ amount: number; paymentMethod: string; paymentDate: st
 const receiptFile = ref<File | null>(null);
 const receiptUploading = ref(false);
 
+type SalesOrderActionResponse = {
+  success?: boolean;
+  message?: string;
+  data?: {
+    status?: unknown;
+  };
+};
+
+function responseOrderStatus(response: unknown): string {
+  const res = response as SalesOrderActionResponse;
+  return typeof res.data?.status === 'string' ? res.data.status : '';
+}
+
+function actionSuccessMessage(action: string, labelText: string, response: unknown): string {
+  const status = responseOrderStatus(response);
+  if ((action === 'confirm' || action === 'submit-for-review') && status === 'FINANCE_APPROVED') {
+    return `${labelText}成功，未触发审批阈值，已免审通过`;
+  }
+  if ((action === 'confirm' || action === 'submit-for-review') && status === 'PENDING_FINANCE_REVIEW') {
+    return `${labelText}成功，已进入财务审核`;
+  }
+  return `${labelText}成功`;
+}
+
 const statusMap: Record<string, { text: string; type: string }> = {
   DRAFT: { text: '草稿', type: 'info' },
   CONFIRMED: { text: '已确认', type: '' },
@@ -249,7 +273,7 @@ async function handleAction(action: string) {
   submitting.value = true;
   try {
     const res = await post(a.url);
-    if (res.success) { ElMessage.success(`${a.label}成功`); loadOrder(); }
+    if (res.success) { ElMessage.success(actionSuccessMessage(action, a.label, res)); loadOrder(); }
     else { ElMessage.error(res.message || `${a.label}失败，请重试`); }
   } catch (e) { handleCatchError(e, `${a.label}失败，请检查网络`); }
   finally { submitting.value = false; }
