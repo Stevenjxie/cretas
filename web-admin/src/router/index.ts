@@ -121,7 +121,7 @@ const businessRoutes: RouteRecordRaw[] = [
           requiresAuth: true,
           title: '仓管员工作台',
           icon: 'Box',
-          module: 'inventory'
+          module: 'warehouse'
         }
       },
       // Sprint 8 P4b — 采购员工作台 (PurchaserWorkdesk)
@@ -136,7 +136,7 @@ const businessRoutes: RouteRecordRaw[] = [
           requiresAuth: true,
           title: '采购员工作台',
           icon: 'ShoppingCart',
-          module: 'inventory'
+          module: 'procurement'
         }
       },
       // Sprint 8 P4c — 质量主管工作台 (QualityChiefWorkdesk)
@@ -1360,31 +1360,31 @@ const businessRoutes: RouteRecordRaw[] = [
         path: 'workflow',
         name: 'Workflow',
         redirect: '/workflow/my-created',
-        meta: { requiresAuth: true, title: '工作流', icon: 'Connection', module: 'workflow' },
+        meta: { requiresAuth: true, title: '工作流', icon: 'Connection', module: 'system' },
         children: [
           {
             path: 'my-created',
             name: 'WorkflowMyCreated',
             component: () => import('@/views/workflow/my-created.vue'),
-            meta: { requiresAuth: true, title: '我创建的工作流', module: 'workflow' }
+            meta: { requiresAuth: true, title: '我创建的工作流', module: 'system' }
           },
           {
             path: 'my-participated',
             name: 'WorkflowMyParticipated',
             component: () => import('@/views/workflow/my-participated.vue'),
-            meta: { requiresAuth: true, title: '我参与的工作流', module: 'workflow' }
+            meta: { requiresAuth: true, title: '我参与的工作流', module: 'system' }
           },
           {
             path: 'admin-running',
             name: 'WorkflowAdminRunning',
             component: () => import('@/views/workflow/admin-running.vue'),
-            meta: { requiresAuth: true, title: '工作流处理', module: 'workflow' }
+            meta: { requiresAuth: true, title: '工作流处理', module: 'system' }
           },
           {
             path: 'rules',
             name: 'WorkflowRules',
             component: () => import('@/views/workflow/rules.vue'),
-            meta: { requiresAuth: true, title: '流转规则设置', module: 'workflow' }
+            meta: { requiresAuth: true, title: '流转规则设置', module: 'system' }
           }
         ]
       },

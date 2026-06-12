@@ -326,7 +326,13 @@ function handleRowActionClick(actionId: string, row: TableRow) {
     case 'print-pdf': void safePrint('sales-order', factoryId.value, String(row.id), { fileName: `销售订单_${row.orderNumber || row.id}` }); break;
     case 'copy': void handleCopyOrder(row); break;
     case 'delete': void handleDeleteOrder(row); break;
-    case 'convert-to-production': ElMessage.info('转生产任务 (待 Track E N31 集成)'); break;
+    case 'convert-to-production':
+      ElMessage.info(`请为订单 ${row.orderNumber || row.id} 创建生产计划`);
+      void router.push({
+        path: '/production/plans',
+        query: { salesOrderId: String(row.id), action: 'create' },
+      });
+      break;
     default: ElMessage.info(`Action: ${actionId}`);
   }
 }
