@@ -28,6 +28,14 @@
 
 ## In-flight 任务表
 
+> 🆕 **2026-06-12 六扇门下一迭代 intake (新录音3走查, 全权交 GPT/Codex 执行)** — 客户 live 系统走查(48min转录)框定 **10 项需求**, 4 read-only agent 核实 current main。**自包含 brief**: `docs/meetings/2026-06-12-xinluyin3/handoff-gpt.md` (+ transcript.txt + 需求分析-organizer.md)。**做**: N1开工无条件化🔒 / N2半成品双领 / N3采购PDF对外隐价🔒 / N4税率UI / N5生产工单PDF / N6销售报表含税列 / N7计划状态色 / N9可配置审批阈值 / N10中转仓完整挂账🔒。**不做**: N8叮咚导入(缺样本)/D1折旧分摊/D2进销存报表/D3物联网工时。**红线 N1/N3脱敏/N10 只到 PR→Opus gate+从 main 部署; N10 先 spec 不写码**。**DoD 铁律(N1 教训)**: 每项全栈闭环(后端+UI/列表+防呆预警 surfacing), 别只做后端半成品报"完成"。下面 3 行跟踪。
+>
+> | ID | 任务 | model | 分支 | scope 锁 | 状态 | PR | 阻塞 |
+> |---|---|---|---|---|---|---|---|
+> | **N1** | 开工无条件化(a砍料门✅/b待生产→未完成列表/c缺料预警surfacing) | GPT+Opus gate | feat/liushanmen-n1 | ProductionPlanServiceImpl + web计划列表 | 🟡 **N1a 过 gate 未合**(财审门保留/scope净), N1b+N1c 剩余 | #793 draft | 🔒 红线; N1≠完成(只a) |
+> | **N2-N7/N9** | 六扇门下一迭代执行批(半成品双领/采购PDF隐价🔒/税率UI/工单PDF/销售含税列/计划状态色/审批阈值) | GPT | feat/liushanmen-* | 见 handoff-gpt.md 各节 | ⬜ 派 GPT 执行 | - | N3🔒脱敏只到PR |
+> | **N10** | 中转仓完整挂账账本(收货确认掉锅+仓库/生产偏差+10kg容差) | GPT spec→Opus gate | - | 库存对账模型(新增) | ⬜ **先出 spec 不写码** | - | 🔒 需独立 spec+Opus 评审范围 |
+
 > ✅ **2026-06-12 部署阻塞已解决(Fable破玻璃)** [原🔴]**:  (新 organizer chat 必读)**: main 含 #778(OA待办后端) + #779(两点报工成本P0修复) **代码正确**(12+20测试绿, root-cause扎实) 但 **jar 启动 hang 无法部署**。现象: green 启动印 banner 后无 Spring logback 输出, metaspace 涨到~190M(类在加载), CPU 34-53%, 5min+ 不健康。**#777 jar 启动正常 → #778/#779 引入**。蓝绿健康闸正确拦截, **prod 安全跑 blue 旧码(10010=200)零影响**。但 **main 当前不可部署**(下次部署 main 撞同 hang)。**下一步聚焦诊断**: ①bisect #778 vs #779(revert #778 试 #779 单独能否起) ②verbose Spring debug 日志到独立文件找 hang bean ③疑 #778 MyTodoAggregator 注入5域service 某 eager init 卡。P0 cost 修复(#779)正确但 ship 受阻于此。test env 已恢复。
 
 > **✅ 2026-06-12 已稳住 (update)**: 服务器 disk jar **已回滚到 #777 known-good**(MD5 190ef868, `.bak.20260612_091038`)。**test 用 #777 78s 健康起来 → 确认 #777 启动正常, hang 定位隔离在 #778/#779**(jar 是 blue/green/test 共享, test 也加载坏jar佐证)。**prod blue(10010)+test(10011) 都 200, disk #777 → restart-safe**。坏 #779 jar 存 `/www/wwwroot/cretas/aims-0.0.1-SNAPSHOT.jar.HANG779` 留诊断。**下一聚焦任务: bisect #778(OA,新beans,疑凶) vs #779(纯逻辑改,不太可能), revert #778 试 #779 单独能否起 → 能则 ship P0成本修复(#779) + 单独修#778**。
