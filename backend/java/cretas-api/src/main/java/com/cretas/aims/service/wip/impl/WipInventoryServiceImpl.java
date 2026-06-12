@@ -18,6 +18,7 @@ import com.cretas.aims.repository.SemiFinishedInventoryTransactionRepository;
 import com.cretas.aims.repository.WorkProcessRepository;
 import com.cretas.aims.repository.lineage.BatchLineageEdgeRepository;
 import com.cretas.aims.repository.workprocess.WorkProcessTaskRepository;
+import com.cretas.aims.service.workprocess.WorkProcessTaskService;
 import com.cretas.aims.service.wip.WipInventoryService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -121,7 +122,7 @@ public class WipInventoryServiceImpl implements WipInventoryService {
             BigDecimal rollLabor = report.getLaborCost();
             BigDecimal rollMaterial = report.getMaterialCost();
             if ("OUTPUT".equals(report.getReportKind())) {
-                CostRollup rollup = calculateTaskCostRollup(factoryId, task.getId());
+                CostRollup rollup = outputRollupWithBatchInputMaterial(factoryId, task);
                 rollLabor = rollup.laborCost();
                 rollMaterial = rollup.materialCost();
             }
@@ -185,7 +186,7 @@ public class WipInventoryServiceImpl implements WipInventoryService {
         BigDecimal rollLabor = report.getLaborCost();
         BigDecimal rollMaterial = report.getMaterialCost();
         if ("OUTPUT".equals(report.getReportKind())) {
-            CostRollup rollup = calculateTaskCostRollup(factoryId, task.getId());
+            CostRollup rollup = outputRollupWithBatchInputMaterial(factoryId, task);
             rollLabor = rollup.laborCost();
             rollMaterial = rollup.materialCost();
         }
@@ -432,6 +433,47 @@ public class WipInventoryServiceImpl implements WipInventoryService {
             }
         }
         return new CostRollup(labor, material);
+    }
+
+    /**
+     * P0 修 (2026-06-12, Codex gold 深测): 两点报工 OUTPUT task 成本滚动 = 本 task per-task rollup
+     * + 同批次 {@code __MATERIAL_INPUT__} 哨兵 task 的料成本.
+     *
+     * <p>根因: 两点模式 (F006) 料成本记在 INPUT task ({@code __MATERIAL_INPUT__}), 最终产出在 OUTPUT task
+     * ({@code __FINAL_OUTPUT__}). 旧 {@code calculateTaskCostRollup(outputTaskId)} 只聚合 OUTPUT task 自身
+     * report (material 为 null) → 产出 WIP unitCost 永 null → ProductionCostUpdatedEvent 不发 →
+     * SalesOrderItem.costUnitPrice 永不回填 → 财审 actualCost null + 撤回自愈/多段链/混合计价全部 deep-close 受阻.
+     *
+     * <p>逐道模式 (F001): 每道工序 task 各自有料+产出, 无 {@code __MATERIAL_INPUT__} 哨兵 task →
+     * {@link #calculateBatchInputMaterialCost} 返 null → 本方法等价于原 per-task rollup. Mode-aware by construction,
+     * 不破坏逐道. 诚实 null: 无 INPUT 料且 OUTPUT 自身无料 → material 仍 null (不伪造 0).
+     */
+    private CostRollup outputRollupWithBatchInputMaterial(String factoryId, WorkProcessTask outputTask) {
+        CostRollup own = calculateTaskCostRollup(factoryId, outputTask.getId());
+        BigDecimal inputMaterial = calculateBatchInputMaterialCost(factoryId, outputTask.getProductionBatchId());
+        BigDecimal material = own.materialCost();
+        if (inputMaterial != null) {
+            material = (material == null ? BigDecimal.ZERO : material).add(inputMaterial);
+        }
+        return new CostRollup(own.laborCost(), material);
+    }
+
+    /** 同批次所有 {@code __MATERIAL_INPUT__} 哨兵 task 的料成本合计 (两点模式专用). 无哨兵 task → null. */
+    private BigDecimal calculateBatchInputMaterialCost(String factoryId, Long productionBatchId) {
+        if (productionBatchId == null) {
+            return null;
+        }
+        BigDecimal material = null;
+        for (WorkProcessTask t : taskRepo.findByFactoryIdAndProductionBatchIdOrderByProcessOrderAsc(
+                factoryId, productionBatchId)) {
+            if (WorkProcessTaskService.SENTINEL_MATERIAL_INPUT.equals(t.getWorkProcessId())) {
+                BigDecimal m = calculateTaskCostRollup(factoryId, t.getId()).materialCost();
+                if (m != null) {
+                    material = (material == null ? BigDecimal.ZERO : material).add(m);
+                }
+            }
+        }
+        return material;
     }
 
     private record CostRollup(BigDecimal laborCost, BigDecimal materialCost) {}

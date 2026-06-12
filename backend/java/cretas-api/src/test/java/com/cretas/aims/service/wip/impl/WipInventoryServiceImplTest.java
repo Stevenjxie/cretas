@@ -257,6 +257,43 @@ class WipInventoryServiceImplTest {
         assertEquals(Boolean.TRUE, output.getCustomFields().get("wipPosted"));
     }
 
+    @Test
+    @DisplayName("P0 两点模式: OUTPUT task 滚动补加同批次 __MATERIAL_INPUT__ 哨兵 task 料成本")
+    void postApprovedOutput_twoPoint_rollsInputSentinelMaterial() {
+        // 两点模式: 料在 INPUT 哨兵 task(8001), 产出在 OUTPUT 哨兵 task(8002), 同批次 8000
+        WorkProcessTask inputTask = WorkProcessTask.builder()
+                .id(8001L).factoryId(FACTORY_ID).productionBatchId(8000L)
+                .workProcessId("__MATERIAL_INPUT__").productTypeId("PROD-X")
+                .processOrder(0).plannedUnit("kg").build();
+        WorkProcessTask outputTask = WorkProcessTask.builder()
+                .id(8002L).factoryId(FACTORY_ID).productionBatchId(8000L)
+                .workProcessId("__FINAL_OUTPUT__").productTypeId("PROD-X")
+                .processOrder(9999).plannedUnit("kg").build();
+        ProductionReport output = ProductionReport.builder()
+                .factoryId(FACTORY_ID).id(602L).batchId(8000L).workProcessTaskId(8002L)
+                .reportKind("OUTPUT").outputQuantity(new BigDecimal("10")).outputUnit("kg").build();
+
+        // OUTPUT task 自身无料 report (空); INPUT 哨兵 task 有料 0.50
+        when(reportRepo.findYieldReportsByTask(FACTORY_ID, 8002L)).thenReturn(List.of());
+        when(reportRepo.findYieldReportsByTask(FACTORY_ID, 8001L)).thenReturn(List.of(
+                ProductionReport.builder().reportKind("INPUT").materialCost(new BigDecimal("0.50")).build()
+        ));
+        when(taskRepo.findByFactoryIdAndProductionBatchIdOrderByProcessOrderAsc(FACTORY_ID, 8000L))
+                .thenReturn(List.of(inputTask, outputTask));
+        when(wipRepo.findByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(FACTORY_ID, "PROD-X-B8000-S9999-8002"))
+                .thenReturn(Optional.empty());
+        when(wipRepo.save(any(SemiFinishedInventory.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        service.postApprovedOutput(FACTORY_ID, output, outputTask, 10L);
+
+        verify(wipRepo).save(wipCaptor.capture());
+        SemiFinishedInventory saved = wipCaptor.getValue();
+        // 修前: material=null → accumulatedCost=null → unitCost=null (Codex 实测阻断)
+        // 修后: 补加 INPUT 哨兵料 0.50 → accumulatedCost=0.50, unitCost=0.50/10=0.0500
+        assertEquals(new BigDecimal("0.50"), saved.getAccumulatedCost());
+        assertEquals(new BigDecimal("0.0500"), saved.getUnitCost());
+    }
+
     // ==================== W4 cost-chain: FINISHED-path SP3 event ====================
 
     @Test
