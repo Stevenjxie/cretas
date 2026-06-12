@@ -43,7 +43,7 @@ export default function QISettingsScreen() {
     pushNotification: true,
     autoSync: true,
     darkMode: false,
-    biometricLock: false,
+    // biometricLock removed — feature not yet implemented (Phase 4)
   });
 
   const handleToggle = (key: keyof typeof settings) => {
@@ -154,14 +154,9 @@ export default function QISettingsScreen() {
     {
       title: t('settings.securityPrivacy'),
       items: [
-        {
-          id: 'biometricLock',
-          icon: 'finger-print-outline',
-          label: t('settings.biometricLock'),
-          type: 'toggle',
-          value: settings.biometricLock,
-          onToggle: () => handleToggle('biometricLock'),
-        },
+        // Rule 1/5: 生物识别锁定功能尚未实现 (Phase 4 计划)。
+        // 隐藏该选项，防止用户勾选后发现没有实际效果。
+        // TODO Phase 4: 实现生物识别后重新开启此选项。
         {
           id: 'changePassword',
           icon: 'key-outline',
@@ -269,7 +264,6 @@ export default function QISettingsScreen() {
                   pushNotification: true,
                   autoSync: true,
                   darkMode: false,
-                  biometricLock: false,
                 });
                 Alert.alert(t('settings.success'), t('settings.settingsReset'));
               },

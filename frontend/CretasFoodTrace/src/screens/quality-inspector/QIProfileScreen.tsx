@@ -56,13 +56,20 @@ export default function QIProfileScreen() {
   });
 
   const handleLogout = () => {
+    // Rule 2: 弹窗带账号上下文
+    const displayName = user?.fullName || user?.username || '';
+    const accountLabel = displayName
+      ? `${displayName}（${t('profile.role')}）`
+      : `@${user?.username ?? ''}（${t('profile.role')}）`;
+    const confirmMessage = `确定退出 ${accountLabel} 吗？`;
+
     if (Platform.OS === 'web') {
-      if (window.confirm(t('profile.confirmLogoutMessage'))) {
+      if (window.confirm(confirmMessage)) {
         logout();
       }
       return;
     }
-    Alert.alert(t('profile.confirmLogout'), t('profile.confirmLogoutMessage'), [
+    Alert.alert(t('profile.confirmLogout'), confirmMessage, [
       { text: t('camera.cancel'), style: 'cancel' },
       {
         text: t('profile.logout'),
