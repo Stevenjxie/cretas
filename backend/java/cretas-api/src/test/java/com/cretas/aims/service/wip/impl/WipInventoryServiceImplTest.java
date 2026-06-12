@@ -260,13 +260,10 @@ class WipInventoryServiceImplTest {
     }
 
     @Test
-    @DisplayName("P0 两点模式: OUTPUT task 滚动补加同批次 __MATERIAL_INPUT__ 哨兵 task 料成本")
+    @DisplayName("P0 两点模式: OUTPUT 滚动补加同批次 INPUT-kind 报工料成本 (按 reportKind=INPUT 聚合)")
     void postApprovedOutput_twoPoint_rollsInputSentinelMaterial() {
-        // 两点模式: 料在 INPUT 哨兵 task(8001), 产出在 OUTPUT 哨兵 task(8002), 同批次 8000
-        WorkProcessTask inputTask = WorkProcessTask.builder()
-                .id(8001L).factoryId(FACTORY_ID).productionBatchId(8000L)
-                .workProcessId("__MATERIAL_INPUT__").productTypeId("PROD-X")
-                .processOrder(0).plannedUnit("kg").build();
+        // 两点模式: 料记在 INPUT-kind 报工 (两点为 __MATERIAL_INPUT__ 哨兵 task), 产出在 OUTPUT task(8002), 同批次 8000。
+        // 修后聚合按 reportKind=INPUT (不依赖 task 是否哨兵) → 同时覆盖两点哨兵 + 二次加工普通 task 的 INPUT 报工。
         WorkProcessTask outputTask = WorkProcessTask.builder()
                 .id(8002L).factoryId(FACTORY_ID).productionBatchId(8000L)
                 .workProcessId("__FINAL_OUTPUT__").productTypeId("PROD-X")
@@ -275,13 +272,12 @@ class WipInventoryServiceImplTest {
                 .factoryId(FACTORY_ID).id(602L).batchId(8000L).workProcessTaskId(8002L)
                 .reportKind("OUTPUT").outputQuantity(new BigDecimal("10")).outputUnit("kg").build();
 
-        // OUTPUT task 自身无料 report (空); INPUT 哨兵 task 有料 0.50
+        // OUTPUT task 自身无料 report (空); 同批次有一条 INPUT-kind 料报工 0.50 (+ OUTPUT 报工不计料)
         when(reportRepo.findYieldReportsByTask(FACTORY_ID, 8002L)).thenReturn(List.of());
-        when(reportRepo.findYieldReportsByTask(FACTORY_ID, 8001L)).thenReturn(List.of(
-                ProductionReport.builder().reportKind("INPUT").materialCost(new BigDecimal("0.50")).build()
+        when(reportRepo.findYieldReportsByBatch(FACTORY_ID, 8000L)).thenReturn(List.of(
+                ProductionReport.builder().reportKind("INPUT").materialCost(new BigDecimal("0.50")).build(),
+                output  // OUTPUT-kind, 料 null → 不计入 INPUT 聚合
         ));
-        when(taskRepo.findByFactoryIdAndProductionBatchIdOrderByProcessOrderAsc(FACTORY_ID, 8000L))
-                .thenReturn(List.of(inputTask, outputTask));
         when(wipRepo.findByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(FACTORY_ID, "PROD-X-B8000-S9999-8002"))
                 .thenReturn(Optional.empty());
         when(wipRepo.save(any(SemiFinishedInventory.class))).thenAnswer(inv -> inv.getArgument(0));
@@ -291,9 +287,52 @@ class WipInventoryServiceImplTest {
         verify(wipRepo).save(wipCaptor.capture());
         SemiFinishedInventory saved = wipCaptor.getValue();
         // 修前: material=null → accumulatedCost=null → unitCost=null (Codex 实测阻断)
-        // 修后: 补加 INPUT 哨兵料 0.50 → accumulatedCost=0.50, unitCost=0.50/10=0.0500
+        // 修后: 补加 INPUT-kind 料 0.50 → accumulatedCost=0.50, unitCost=0.50/10=0.0500
         assertEquals(new BigDecimal("0.50"), saved.getAccumulatedCost());
         assertEquals(new BigDecimal("0.0500"), saved.getUnitCost());
+    }
+
+    @Test
+    @DisplayName("Gap B 多段链: 二次加工 OUTPUT 滚动补加同批次普通 task 的 INPUT 报工料 (上游WIP消耗+本段原料)")
+    void postApprovedOutput_secondaryStage_rollsBatchInputMaterial() {
+        // 二次加工 semiB 批次 (7000): 两条 INPUT-kind 报工在普通 task 上 —— 545(消耗上游 semiA, 料 5.00) +
+        // 546(本段原料, 料 10.00); OUTPUT 报工产 semiB 5kg。期望 unitCost=(5+10)/5=3.0000 (Codex 多段 rerun 场景)。
+        WorkProcessTask outputTask = WorkProcessTask.builder()
+                .id(7002L).factoryId(FACTORY_ID).productionBatchId(7000L)
+                .workProcessId("WP-REGULAR").productTypeId("PROD-Y")
+                .processOrder(5).plannedUnit("kg").build();
+        ProductionReport semiBOutput = ProductionReport.builder()
+                .factoryId(FACTORY_ID).id(549L).batchId(7000L).workProcessTaskId(7002L)
+                .reportKind("OUTPUT").outputKind("SEMI").semiCode("DEMO-SEMI-B")
+                .semiOutputQuantity(new BigDecimal("5")).semiOutputUnit("kg")
+                .outputQuantity(new BigDecimal("5")).outputUnit("kg").build();
+
+        when(txnRepo.findByFactoryIdAndReportId(FACTORY_ID, 549L)).thenReturn(Collections.emptyList());
+        when(reportRepo.findYieldReportsByTask(FACTORY_ID, 7002L)).thenReturn(List.of());
+        when(reportRepo.findYieldReportsByBatch(FACTORY_ID, 7000L)).thenReturn(List.of(
+                ProductionReport.builder().reportKind("INPUT").materialCost(new BigDecimal("5.00")).build(),
+                ProductionReport.builder().reportKind("INPUT").materialCost(new BigDecimal("10.00")).build(),
+                semiBOutput
+        ));
+        // SEMI first-IN 占位行 holder 模式 (镜像 firstIn 测试): findForUpdate(empty) → saveAndFlush 建占位 → 再 findForUpdate 拿占位 → 累加
+        final SemiFinishedInventory[] holder = new SemiFinishedInventory[1];
+        when(wipRepo.findForUpdateByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(FACTORY_ID, "DEMO-SEMI-B"))
+                .thenAnswer(inv -> Optional.ofNullable(holder[0]));
+        when(wipRepo.saveAndFlush(any(SemiFinishedInventory.class))).thenAnswer(inv -> {
+            SemiFinishedInventory sfi = inv.getArgument(0);
+            sfi.setId(7777L);
+            holder[0] = sfi;
+            return sfi;
+        });
+        when(wipRepo.save(any(SemiFinishedInventory.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(txnRepo.save(any(SemiFinishedInventoryTransaction.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        service.postApprovedOutput(FACTORY_ID, semiBOutput, outputTask, 10L);
+
+        verify(wipRepo).save(wipCaptor.capture());
+        SemiFinishedInventory saved = wipCaptor.getValue();
+        // (5 + 10) / 5 = 3.0000 —— 上游 semiA 消耗料 (5) 已在 INPUT 报工 materialCost, + 本段原料 (10)
+        assertEquals(new BigDecimal("3.0000"), saved.getUnitCost());
     }
 
     // ==================== W4 cost-chain: FINISHED-path SP3 event ====================
