@@ -11,6 +11,9 @@ import type {
   RecalculateApplyStaleResponse,
   BomRecipeSummary,
   BomRecipeStatus,
+  BomRecipeItemPayload,
+  CreateBomRecipeRequest,
+  UpdateBomRecipeRequest,
 } from '@/api/bom';
 import { isAxiosError } from 'axios';
 import { ElMessage, ElMessageBox } from 'element-plus';
@@ -54,7 +57,7 @@ async function loadBomRecipes() {
   }
   bomRecipesLoading.value = true;
   try {
-    const res = await bomRecipeApi.listRecipes(factoryId.value);
+    const res = await bomRecipeApi.listRecipes(factoryId.value, { size: 200 });
     if (res.success && res.data) {
       // Filter to current product only; backend sorts by updatedAt desc
       const all: BomRecipeSummary[] = Array.isArray(res.data)
@@ -133,6 +136,28 @@ const changeLogVisible = ref(false)
 const selectedProductTypeId = ref<string>('');
 const productTypes = ref<TableRow[]>([]);
 const costSummary = ref<TableRow | null>(null);
+const selectedProductName = computed(() => {
+  const product = productTypes.value.find((item) => item.id === selectedProductTypeId.value);
+  return String(product?.name || '');
+});
+
+interface RecipeHeaderForm {
+  outputQuantityPerUnit: number | null;
+  outputUnit: string;
+  overallYieldRate: number | null;
+  notes: string;
+}
+
+const recipeDialogVisible = ref(false);
+const recipeDialogLoading = ref(false);
+const isRecipeEdit = ref(false);
+const editingRecipeId = ref<string | null>(null);
+const recipeForm = ref<RecipeHeaderForm>({
+  outputQuantityPerUnit: 1,
+  outputUnit: '份',
+  overallYieldRate: 100,
+  notes: '',
+});
 
 // BOM Items (原辅料)
 interface BomItemRow {
@@ -147,6 +172,8 @@ interface BomItemRow {
   taxRate?: number;
   sortOrder?: number;
   notes?: string;
+  isOptional?: boolean;
+  substituteGroup?: string;
   // SP4-8: 按份数投料 + 半成品引用
   perPortion?: boolean;
   semiFinishedRefCode?: string;
@@ -196,6 +223,8 @@ const bomForm = ref({
   taxRate: 13,
   sortOrder: 0,
   notes: '',
+  isOptional: false as boolean,
+  substituteGroup: '' as string,
   // SP4-8: 按份数投料 + 半成品引用
   perPortion: false as boolean,
   semiFinishedRefCode: '' as string,
@@ -222,6 +251,186 @@ const computedActualQuantity = computed<number | null>(() => {
   if (yr <= 0 || sq <= 0) return 0;
   return Number((sq / yr).toFixed(4));
 });
+
+function normalizeRecipeMaterialCategory(value: unknown): 'RAW' | 'AUXILIARY' | 'PACKAGING' {
+  const category = String(value || '').toUpperCase();
+  if (category === 'PACKAGING' || category === '包材') return 'PACKAGING';
+  if (category === 'AUXILIARY' || category === '辅料' || category === '调味料') return 'AUXILIARY';
+  return 'RAW';
+}
+
+function buildRecipeItemPayloads(): BomRecipeItemPayload[] | null {
+  if (bomItems.value.length === 0) {
+    ElMessage.warning('请先添加至少 1 行原辅料，再创建配方头');
+    return null;
+  }
+
+  const missingMaterialRows: string[] = [];
+  const invalidQuantityRows: string[] = [];
+  const items = bomItems.value.map((item, index) => {
+    const materialTypeId = String(item.materialTypeId || '').trim();
+    const materialName = String(item.materialName || `第 ${index + 1} 行`);
+    const standardQuantity = Number(item.standardQuantity);
+    if (!materialTypeId) missingMaterialRows.push(materialName);
+    if (!(standardQuantity > 0)) invalidQuantityRows.push(materialName);
+
+    const substituteGroup = String(item.substituteGroup || '').trim();
+    const remark = String(item.notes || item.remark || '').trim();
+    const unit = String(item.unit || 'g').trim();
+
+    return {
+      materialTypeId,
+      standardQuantity,
+      yieldRate: item.yieldRate == null ? undefined : Number(item.yieldRate),
+      unit,
+      unitPrice: item.unitPrice == null ? undefined : Number(item.unitPrice),
+      taxRate: item.taxRate == null ? undefined : Number(item.taxRate),
+      materialCategory: normalizeRecipeMaterialCategory(item.materialCategory || item.category),
+      sortOrder: item.sortOrder == null ? index : Number(item.sortOrder),
+      isOptional: Boolean(item.isOptional),
+      substituteGroup: substituteGroup || undefined,
+      remark: remark || undefined,
+      perPortion: Boolean(item.perPortion),
+      semiFinishedRefCode: item.semiFinishedRefCode || undefined,
+      subProductTypeId: item.subProductTypeId || undefined,
+    };
+  });
+
+  if (missingMaterialRows.length > 0) {
+    ElMessage({
+      message: `创建配方头前，请给这些行关联原料类型：${missingMaterialRows.join('、')}`,
+      type: 'warning',
+      duration: 0,
+      showClose: true,
+    });
+    return null;
+  }
+
+  if (invalidQuantityRows.length > 0) {
+    ElMessage({
+      message: `创建配方头前，请确认这些行的成品含量大于 0：${invalidQuantityRows.join('、')}`,
+      type: 'warning',
+      duration: 0,
+      showClose: true,
+    });
+    return null;
+  }
+
+  return items;
+}
+
+function resetRecipeForm(recipe?: BomRecipeSummary) {
+  recipeForm.value = {
+    outputQuantityPerUnit: recipe?.outputQuantityPerUnit != null
+      ? Number(recipe.outputQuantityPerUnit)
+      : 1,
+    outputUnit: recipe?.outputUnit || '份',
+    overallYieldRate: recipe?.overallYieldRate != null
+      ? Number(recipe.overallYieldRate)
+      : 100,
+    notes: recipe?.notes || '',
+  };
+}
+
+function handleAddRecipeHeader() {
+  if (!selectedProductTypeId.value) {
+    ElMessage.warning('请先选择产品，再创建配方头');
+    return;
+  }
+  isRecipeEdit.value = false;
+  editingRecipeId.value = null;
+  const currentRecipe = bomRecipes.value.find((recipe) => recipe.isCurrent) || bomRecipes.value[0];
+  resetRecipeForm(currentRecipe);
+  recipeDialogVisible.value = true;
+}
+
+function handleEditRecipeHeader(recipe: BomRecipeSummary) {
+  if (recipe.status !== 'DRAFT') {
+    ElMessage.warning('只有草稿配方可以编辑配方头');
+    return;
+  }
+  isRecipeEdit.value = true;
+  editingRecipeId.value = recipe.id;
+  resetRecipeForm(recipe);
+  recipeDialogVisible.value = true;
+}
+
+async function submitRecipeHeaderForm() {
+  if (!factoryId.value || !selectedProductTypeId.value) return;
+  const outputQuantityPerUnit = Number(recipeForm.value.outputQuantityPerUnit);
+  const outputUnit = recipeForm.value.outputUnit.trim();
+  const overallYieldRate = Number(recipeForm.value.overallYieldRate);
+
+  if (!(outputQuantityPerUnit > 0)) {
+    ElMessage.warning('每单位产出量必须大于 0');
+    return;
+  }
+  if (!outputUnit) {
+    ElMessage.warning('请填写产出单位，例如 g、kg、份、盒');
+    return;
+  }
+  if (!(overallYieldRate > 0 && overallYieldRate <= 100)) {
+    ElMessage.warning('整体出成率必须在 0.01 到 100 之间');
+    return;
+  }
+
+  recipeDialogLoading.value = true;
+  try {
+    let response;
+    const basePayload = {
+      productName: selectedProductName.value || null,
+      outputQuantityPerUnit,
+      outputUnit,
+      overallYieldRate,
+      notes: recipeForm.value.notes.trim() || null,
+    };
+
+    if (isRecipeEdit.value && editingRecipeId.value) {
+      const payload: UpdateBomRecipeRequest = basePayload;
+      response = await bomRecipeApi.update(factoryId.value, editingRecipeId.value, payload);
+    } else {
+      const items = buildRecipeItemPayloads();
+      if (!items) return;
+      const payload: CreateBomRecipeRequest = {
+        ...basePayload,
+        productTypeId: selectedProductTypeId.value,
+        sourceType: 'MANUAL',
+        items,
+      };
+      response = await bomRecipeApi.create(factoryId.value, payload);
+    }
+
+    if (response.success) {
+      ElMessage.success(
+        `${isRecipeEdit.value ? '配方头已更新' : '配方草稿已创建'}：每单位产出 ${outputQuantityPerUnit} ${outputUnit}，整体出成率 ${overallYieldRate}%`,
+      );
+      recipeDialogVisible.value = false;
+      await loadBomRecipes();
+      await loadCostSummary();
+    } else {
+      ElMessage({
+        message: response.message || (isRecipeEdit.value ? '配方头更新失败' : '配方创建失败'),
+        type: 'error',
+        duration: 0,
+        showClose: true,
+      });
+    }
+  } catch (error: unknown) {
+    const err = error as { actionHint?: string };
+    if (!err?.actionHint) {
+      const msg = (error as { response?: { data?: { message?: string } } })?.response?.data?.message
+        || (isRecipeEdit.value ? '配方头更新失败，请稍后重试' : '配方创建失败，请稍后重试');
+      ElMessage({
+        message: msg,
+        type: 'error',
+        duration: 0,
+        showClose: true,
+      });
+    }
+  } finally {
+    recipeDialogLoading.value = false;
+  }
+}
 
 // Phase B: 弹窗评估按钮 handler
 async function handleEstimate() {
@@ -535,6 +744,8 @@ function handleAddBomItem() {
     taxRate: 13,
     sortOrder: bomItems.value.length,
     notes: '',
+    isOptional: false,
+    substituteGroup: '',
     perPortion: false,
     semiFinishedRefCode: '',
     subProductTypeId: '',
@@ -560,12 +771,22 @@ function handleEditBomItem(row: TableRow) {
     taxRate: row.taxRate || 13,
     sortOrder: row.sortOrder || 0,
     notes: row.notes || '',
+    isOptional: Boolean(row.isOptional),
+    substituteGroup: String(row.substituteGroup || ''),
     perPortion: (row.perPortion as boolean) ?? false,
     semiFinishedRefCode: String(row.semiFinishedRefCode || ''),
     subProductTypeId: String(row.subProductTypeId || ''),
     packQtyPerProduct: row.packQtyPerProduct != null ? Number(row.packQtyPerProduct) : null,
   };
   bomDialogVisible.value = true;
+}
+
+function buildLegacyBomItemPayload() {
+  const payload = { ...bomForm.value };
+  delete payload.id;
+  delete payload.isOptional;
+  delete payload.substituteGroup;
+  return payload;
 }
 
 async function submitBomForm() {
@@ -576,14 +797,14 @@ async function submitBomForm() {
   bomDialogLoading.value = true;
   try {
     let response;
+    const bomItemPayload = buildLegacyBomItemPayload();
     if (isBomEdit.value && bomForm.value.id) {
-      response = await put(`/${factoryId.value}/bom/items/${bomForm.value.id}`, bomForm.value);
+      response = await put(`/${factoryId.value}/bom/items/${bomForm.value.id}`, bomItemPayload);
     } else {
       // BUG-4 fix (depth-e2e qa-v2.4, PR #370): strip phantom `id: null` from POST body.
       // handleAddBomItem 设 `id: null` 给 form 一致性, 但 POST 不应携带 id (Jackson 当前默默 drop,
       // 但在未来 FAIL_ON_UNKNOWN_PROPERTIES strict mode 会爆 400).
-      const { id, ...payload } = bomForm.value;
-      response = await post(`/${factoryId.value}/bom/items`, payload);
+      response = await post(`/${factoryId.value}/bom/items`, bomItemPayload);
     }
     if (response.success) {
       ElMessage.success(isBomEdit.value ? 'Updated successfully' : 'Added successfully');
@@ -1083,6 +1304,14 @@ function refreshData() {
           </el-select>
           <el-button :icon="Refresh" style="margin-left: 12px;" @click="refreshData">刷新</el-button>
           <el-button style="margin-left: 12px;" @click="changeLogVisible = true" :disabled="!selectedProductTypeId">变更记录</el-button>
+          <el-button
+            v-if="canWrite"
+            type="primary"
+            :icon="Plus"
+            style="margin-left: 12px;"
+            :disabled="!selectedProductTypeId"
+            @click="handleAddRecipeHeader"
+          >创建配方</el-button>
           <!-- Phase C: 一键重算出成率按钮 (gated on production:read_write) -->
           <el-button
             v-if="canWrite"
@@ -1129,7 +1358,7 @@ function refreshData() {
 
     <!-- BOM Recipe Status Card — shows DRAFT/ACTIVE/ARCHIVED status + 激活 button -->
     <el-card
-      v-if="selectedProductTypeId && (bomRecipesLoading || bomRecipes.length > 0)"
+      v-if="selectedProductTypeId"
       class="recipe-status-card table-card"
       shadow="never"
     >
@@ -1137,6 +1366,9 @@ function refreshData() {
         <div class="table-header">
           <span class="table-title">BOM 配方版本</span>
           <div class="table-actions">
+            <el-button v-if="canWrite" type="primary" size="small" :icon="Plus" @click="handleAddRecipeHeader">
+              创建配方
+            </el-button>
             <el-button size="small" :icon="Refresh" :loading="bomRecipesLoading" @click="loadBomRecipes">
               刷新
             </el-button>
@@ -1182,6 +1414,20 @@ function refreshData() {
             <span v-else class="text-secondary">—</span>
           </template>
         </el-table-column>
+        <el-table-column label="每单位产出" width="130" align="right">
+          <template #default="{ row }">
+            <span v-if="row.outputQuantityPerUnit != null">
+              {{ Number(row.outputQuantityPerUnit).toFixed(4) }} {{ row.outputUnit || '' }}
+            </span>
+            <span v-else class="text-secondary">—</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="整体出成率" width="110" align="right">
+          <template #default="{ row }">
+            <span v-if="row.overallYieldRate != null">{{ Number(row.overallYieldRate).toFixed(2) }}%</span>
+            <span v-else class="text-secondary">—</span>
+          </template>
+        </el-table-column>
         <el-table-column label="总成本" width="100" align="right">
           <template #default="{ row }">
             <span v-if="canViewPrice && row.totalCost != null">
@@ -1190,8 +1436,17 @@ function refreshData() {
             <span v-else class="text-secondary">—</span>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="100" fixed="right" align="center">
+        <el-table-column label="操作" width="150" fixed="right" align="center">
           <template #default="{ row }">
+            <el-button
+              v-if="canWrite && row.status === 'DRAFT'"
+              type="primary"
+              link
+              size="small"
+              @click="handleEditRecipeHeader(row)"
+            >
+              编辑
+            </el-button>
             <el-button
               v-if="canWrite && row.status === 'DRAFT'"
               type="success"
@@ -1243,6 +1498,18 @@ function refreshData() {
             </template>
           </el-table-column>
           <el-table-column prop="materialName" label="物料名称" min-width="120" show-overflow-tooltip />
+          <el-table-column label="可选" width="70" align="center">
+            <template #default="{ row }">
+              <el-tag v-if="row.isOptional" type="info" size="small" disable-transitions>可选</el-tag>
+              <span v-else class="text-secondary">—</span>
+            </template>
+          </el-table-column>
+          <el-table-column prop="substituteGroup" label="替代组" width="100" show-overflow-tooltip>
+            <template #default="{ row }">
+              <span v-if="row.substituteGroup">{{ row.substituteGroup }}</span>
+              <span v-else class="text-secondary">—</span>
+            </template>
+          </el-table-column>
           <el-table-column prop="standardQuantity" label="成品含量(g)" width="100" align="right">
             <template #default="{ row }">
               {{ (row.standardQuantity || 0).toFixed(4) }}
@@ -1397,6 +1664,84 @@ function refreshData() {
         </div>
       </el-card>
     </div>
+
+    <!-- BOM Recipe Header Dialog -->
+    <el-dialog
+      v-model="recipeDialogVisible"
+      :title="isRecipeEdit ? '编辑配方头' : '创建配方头'"
+      width="560px"
+    >
+      <el-alert
+        type="info"
+        :closable="false"
+        show-icon
+        style="margin-bottom: 12px;"
+      >
+        <template #title>
+          这里维护 BomRecipe 配方头，不是原辅料行项目
+        </template>
+        <template #default>
+          创建配方头会使用当前原辅料明细生成草稿配方；编辑配方头只修改每单位产出量、产出单位和整体出成率。
+        </template>
+      </el-alert>
+      <el-form :model="recipeForm" label-width="130px">
+        <el-form-item label="产品">
+          <el-input :model-value="selectedProductName || selectedProductTypeId" disabled />
+        </el-form-item>
+        <el-form-item label="每单位产出量" required>
+          <el-input-number
+            v-model="recipeForm.outputQuantityPerUnit"
+            :min="0.0001"
+            :precision="4"
+            :step="1"
+            placeholder="例：1 或 200"
+            style="width: 100%"
+          />
+          <div class="form-tip">BomRecipe.outputQuantityPerUnit，必须大于 0；例如 1 份、200 g、0.5 kg。</div>
+        </el-form-item>
+        <el-form-item label="产出单位" required>
+          <el-input
+            v-model="recipeForm.outputUnit"
+            maxlength="20"
+            show-word-limit
+            placeholder="例：份 / g / kg / 盒"
+          />
+          <div class="form-tip">BomRecipe.outputUnit，用于嵌套 BOM 成本、营养标签和添加剂合规换算。</div>
+        </el-form-item>
+        <el-form-item label="整体出成率%" required>
+          <el-input-number
+            v-model="recipeForm.overallYieldRate"
+            :min="0.01"
+            :max="100"
+            :precision="2"
+            :step="1"
+            placeholder="默认 100"
+            style="width: 100%"
+          />
+          <div class="form-tip">BomRecipe.overallYieldRate，范围 0.01–100；行项目出成率仍在原辅料弹窗维护。</div>
+        </el-form-item>
+        <el-form-item label="备注">
+          <el-input
+            v-model="recipeForm.notes"
+            type="textarea"
+            :rows="2"
+            maxlength="500"
+            show-word-limit
+            placeholder="可填写配方头说明，例如适用门店、口径或版本原因"
+          />
+        </el-form-item>
+      </el-form>
+      <div v-if="!isRecipeEdit" class="recipe-create-hint">
+        <el-icon><InfoFilled /></el-icon>
+        <span>创建时会把当前原辅料明细作为 CreateBomRecipeRequest.items；请先确认每行已关联原料类型且成品含量大于 0。</span>
+      </div>
+      <template #footer>
+        <el-button @click="recipeDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="recipeDialogLoading" @click="submitRecipeHeaderForm">
+          {{ isRecipeEdit ? '保存配方头' : '创建草稿配方' }}
+        </el-button>
+      </template>
+    </el-dialog>
 
     <!-- BOM Item Dialog -->
     <el-dialog v-model="bomDialogVisible" :title="isBomEdit ? '编辑原辅料' : '添加原辅料'" width="580px">
@@ -1580,6 +1925,21 @@ function refreshData() {
         </el-form-item>
         <el-form-item label="备注">
           <el-input v-model="bomForm.notes" type="textarea" :rows="2" />
+        </el-form-item>
+        <el-form-item label="可选料">
+          <el-checkbox v-model="bomForm.isOptional">
+            可选原辅料，不作为生产计划完整性硬要求
+          </el-checkbox>
+          <div class="form-tip">对应 BomRecipeItemDTO.isOptional，适用于装饰菜、可省略配料等。</div>
+        </el-form-item>
+        <el-form-item label="替代料分组">
+          <el-input
+            v-model="bomForm.substituteGroup"
+            maxlength="50"
+            show-word-limit
+            placeholder="例：MEAT_BASE / SAUCE_ALT，同组物料可互相替代"
+          />
+          <div class="form-tip">对应 BomRecipeItemDTO.substituteGroup；相同分组表示互为替代料。</div>
         </el-form-item>
         <!-- SP4-8: 按份数投料 -->
         <el-form-item label="按份数投料">
@@ -2088,6 +2448,25 @@ function refreshData() {
   .el-icon {
     color: #909399;
     flex-shrink: 0;
+  }
+}
+
+.recipe-create-hint {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 8px 12px;
+  margin-top: 4px;
+  border-radius: 6px;
+  background: #f4f8ff;
+  color: #606266;
+  font-size: 12px;
+  line-height: 1.5;
+
+  .el-icon {
+    flex-shrink: 0;
+    margin-top: 2px;
+    color: #409eff;
   }
 }
 
