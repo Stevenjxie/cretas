@@ -154,6 +154,8 @@ public class ProductTypeServiceImpl implements ProductTypeService {
         productType.setGramsPerUnit(dto.getGramsPerUnit());
         productType.setWipToFgYield(dto.getWipToFgYield());
         productType.setQuotedLaborCostPerKg(dto.getQuotedLaborCostPerKg()); // SP9-M1
+        productType.setStandardCost(dto.getStandardCost());
+        productType.setTargetGrossMargin(dto.getTargetGrossMargin());
         productType.setLevel1Unit(dto.getLevel1Unit());
         productType.setBoxConversionCoefficient(dto.getBoxConversionCoefficient());
         productType.setNotes(dto.getNotes());
@@ -263,6 +265,8 @@ public class ProductTypeServiceImpl implements ProductTypeService {
         if (dto.getGramsPerUnit() != null) productType.setGramsPerUnit(dto.getGramsPerUnit());
         if (dto.getWipToFgYield() != null) productType.setWipToFgYield(dto.getWipToFgYield());
         if (dto.getQuotedLaborCostPerKg() != null) productType.setQuotedLaborCostPerKg(dto.getQuotedLaborCostPerKg()); // SP9-M1
+        if (dto.isStandardCostPresent()) productType.setStandardCost(dto.getStandardCost());
+        if (dto.isTargetGrossMarginPresent()) productType.setTargetGrossMargin(dto.getTargetGrossMargin());
         if (dto.getLevel1Unit() != null) productType.setLevel1Unit(dto.getLevel1Unit());
         if (dto.getBoxConversionCoefficient() != null) productType.setBoxConversionCoefficient(dto.getBoxConversionCoefficient());
 
@@ -851,6 +855,8 @@ public class ProductTypeServiceImpl implements ProductTypeService {
                 .gramsPerUnit(productType.getGramsPerUnit())
                 .wipToFgYield(productType.getWipToFgYield())
                 .quotedLaborCostPerKg(productType.getQuotedLaborCostPerKg()) // SP9-M1
+                .standardCost(productType.getStandardCost())
+                .targetGrossMargin(productType.getTargetGrossMargin())
                 .level1Unit(productType.getLevel1Unit())
                 .boxConversionCoefficient(productType.getBoxConversionCoefficient())
                 .isActive(productType.getIsActive())

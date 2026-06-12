@@ -152,6 +152,9 @@ interface ProductType {
   gramsPerUnit?: number;   // P0-2: 标准克重(克/份), 报工末道份→kg折算用
   wipToFgYield?: number;   // T133: 半成品→成品出成率 (0~1), 备货看板 WIP 估算; null=按 1.0
   quotedLaborCostPerKg?: number; // SP9-M1: 研发预估人工成本(元/kg), 人效双口径对比报价侧
+  standardCost?: number | null; // SP5: standard unit cost for margin redline
+  targetGrossMargin?: number | null; // SP5: 0-1 decimal from backend
+  targetGrossMarginPercent?: number | null; // UI-only percent input
   level1Unit?: string;     // T123: 一级单位 (如 筐, 箱) 与 boxConversionCoefficient 联用
   baseProductName?: string; // T123: 产品基础名 (名称分离), RN 展示优先使用, 无则 fallback 到 name
   inventoryWarningThreshold?: number;
@@ -170,6 +173,7 @@ const permissionStore = usePermissionStore();
 const factoryId = computed(() => authStore.factoryId);
 const canWrite = computed(() => permissionStore.canWrite('system'));
 const canViewPrice = computed(() => permissionStore.canViewPrice);
+const canEditMarginRedline = computed(() => permissionStore.canWrite('finance'));
 
 // 状态
 const loading = ref(false);
@@ -756,6 +760,9 @@ function resetForm() {
   formData.temperatureZone = '';
   formData.imageUrl = '';
   formData.notes = '';
+  formData.standardCost = null;
+  formData.targetGrossMargin = null;
+  formData.targetGrossMarginPercent = null;
 }
 
 function handleAdd() {
@@ -785,6 +792,11 @@ function handleEdit(row: ProductType) {
   formData.temperatureZone = row.temperatureZone || '';
   formData.imageUrl = row.imageUrl || '';
   formData.notes = row.notes || '';
+  formData.standardCost = row.standardCost ?? null;
+  formData.targetGrossMargin = row.targetGrossMargin ?? null;
+  formData.targetGrossMarginPercent = row.targetGrossMargin != null
+    ? Number((Number(row.targetGrossMargin) * 100).toFixed(2))
+    : null;
   // T148: 装箱换算内联行字段 — 编辑时从 row 回填
   formData.level1Unit = row.level1Unit ?? undefined;
   formData.boxConversionCoefficient = row.boxConversionCoefficient ?? undefined;
@@ -821,6 +833,10 @@ async function handleDelete(row: ProductType) {
   }
 }
 
+function nullableNumber(value: unknown): number | null {
+  return value === '' || value == null ? null : Number(value);
+}
+
 async function handleSubmit() {
   if (!formRef.value) return;
 
@@ -849,6 +865,11 @@ async function handleSubmit() {
       level1Unit: formData.level1Unit ?? null,
       boxConversionCoefficient: formData.boxConversionCoefficient ?? null,
     };
+    if (canEditMarginRedline.value) {
+      const marginPercent = nullableNumber(formData.targetGrossMarginPercent);
+      payload.standardCost = nullableNumber(formData.standardCost);
+      payload.targetGrossMargin = marginPercent == null ? null : Number((marginPercent / 100).toFixed(4));
+    }
     if (!isEditing.value) {
       payload.isActive = true;
     }
@@ -858,7 +879,7 @@ async function handleSubmit() {
       : await post<ProductType>(`/${factoryId.value}/product-types`, payload);
 
     if (response.success) {
-      ElMessage.success(isEditing.value ? '编辑成功' : '新增成功');
+      ElMessage.success(isEditing.value ? '产品已保存，毛利红线配置已同步' : '产品已新增，毛利红线配置已同步');
       dialogVisible.value = false;
       await loadData();
       if (!isEditing.value && response.data?.id) {
@@ -1422,6 +1443,46 @@ function handleAiFill(params: TableRow) {
           <div class="form-tip">如 1 筐 = 20 盒；二级单位与上方「单位」字段同步</div>
         </el-form-item>
 
+        <template v-if="canEditMarginRedline">
+          <el-divider content-position="left">毛利红线</el-divider>
+          <el-alert
+            class="margin-redline-tip"
+            type="info"
+            :closable="false"
+            show-icon
+            title="用于销售低价拦截：最低售价 = 标准成本 ÷ (1 - 目标毛利率)。留空则产品级配置不生效。"
+          />
+          <el-row :gutter="16">
+            <el-col :xs="24" :sm="12">
+              <el-form-item label="标准成本">
+                <el-input-number
+                  v-model="formData.standardCost"
+                  :min="0"
+                  :precision="4"
+                  :controls="false"
+                  placeholder="例如 12.5000，留空跳过产品红线"
+                  style="width: 100%"
+                />
+                <div class="form-tip">单位成本，范围 ≥ 0；保存后会作为毛利红线成本基准。</div>
+              </el-form-item>
+            </el-col>
+            <el-col :xs="24" :sm="12">
+              <el-form-item label="目标毛利率">
+                <el-input-number
+                  v-model="formData.targetGrossMarginPercent"
+                  :min="0"
+                  :max="99.99"
+                  :precision="2"
+                  :controls="false"
+                  placeholder="例如 10 表示 10%"
+                  style="width: 100%"
+                />
+                <div class="form-tip">请输入百分比 0-99.99，提交后按小数存储，例如 10% 存为 0.10。</div>
+              </el-form-item>
+            </el-col>
+          </el-row>
+        </template>
+
         <!-- T150: @update 改用 handleExtendedFormUpdate 以追踪 gramsPerUnit/wipToFgYield 手动编辑标志 -->
         <DynamicEntityForm
           :fields="visibleExtendedFields"
@@ -1712,6 +1773,10 @@ function handleAiFill(params: TableRow) {
   color: #909399;
   margin-top: 4px;
   line-height: 1.4;
+}
+
+.margin-redline-tip {
+  margin-bottom: 16px;
 }
 
 /* T148: 装箱换算内联行 — 「1 [一级单位▼] ＝ [换算数] [二级单位▼]」始终显示 */
