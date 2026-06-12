@@ -15,6 +15,7 @@ import com.cretas.aims.service.inventory.PurchaseService;
 import com.cretas.aims.service.inventory.SalesService;
 import com.cretas.aims.service.restaurant.SupplierDeliveryNoteService;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
@@ -66,7 +67,13 @@ public class MyTodoAggregatorServiceImpl implements MyTodoAggregatorService {
      * 测试中通过 {@link #MyTodoAggregatorServiceImpl(PurchaseService, SalesService,
      * SupplierDeliveryNoteService, FactoryStocktakeRepository, PaymentRequestService, BigDecimal)}
      * 直接传入阈值，无需 Spring 上下文。
+     *
+     * <p>⚠️ 本类有两个构造器，Spring 隐式构造器注入只在「恰好一个构造器」时生效；
+     * 多构造器必须显式 {@code @Autowired} 标注主构造器，否则 Spring 回退找默认构造器 →
+     * {@code NoSuchMethodException: <init>()} → 启动失败（2026-06-12 prod 部署阻塞事故根因，
+     * 表象为"启动 hang"：context refresh 失败但已创建 bean 的非 daemon 线程把 JVM 钉死）。
      */
+    @Autowired
     public MyTodoAggregatorServiceImpl(
             PurchaseService purchaseService,
             SalesService salesService,
