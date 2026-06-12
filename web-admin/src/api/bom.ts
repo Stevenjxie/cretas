@@ -6,7 +6,7 @@
  * Base URL is /api/mobile (set in request.ts baseURL).
  * Endpoint prefix: /{factoryId}/bom/recipes/{recipeId}/...
  */
-import { get, post } from './request';
+import { get, post, put } from './request';
 
 // =========================================================================
 // BOM Recipe — status types + activate API
@@ -28,6 +28,10 @@ export interface BomRecipeSummary {
   version: number;
   isCurrent: boolean;
   status: BomRecipeStatus;
+  overallYieldRate?: number | null;
+  outputQuantityPerUnit?: number | null;
+  outputUnit?: string | null;
+  notes?: string | null;
   activatedAt?: string | null;
   activatedBy?: number | null;
   totalCost?: number | null;
@@ -36,6 +40,44 @@ export interface BomRecipeSummary {
   totalOverheadCost?: number | null;
   createdAt?: string | null;
   updatedAt?: string | null;
+}
+
+export interface BomRecipeItemPayload {
+  materialTypeId: string;
+  standardQuantity: number;
+  yieldRate?: number | null;
+  unit: string;
+  unitPrice?: number | null;
+  taxRate?: number | null;
+  materialCategory?: string | null;
+  sortOrder?: number | null;
+  isOptional?: boolean | null;
+  substituteGroup?: string | null;
+  remark?: string | null;
+  perPortion?: boolean | null;
+  semiFinishedRefCode?: string | null;
+  subProductTypeId?: string | null;
+}
+
+export interface CreateBomRecipeRequest {
+  productTypeId: string;
+  productName?: string | null;
+  overallYieldRate?: number | null;
+  outputQuantityPerUnit: number;
+  outputUnit: string;
+  sourceType?: 'MANUAL' | 'SAMPLE_AUTOGEN' | 'AI_GENERATED' | 'IMPORTED';
+  sourceSampleId?: string | null;
+  items: BomRecipeItemPayload[];
+  notes?: string | null;
+}
+
+export interface UpdateBomRecipeRequest {
+  productName?: string | null;
+  overallYieldRate?: number | null;
+  outputQuantityPerUnit?: number | null;
+  outputUnit?: string | null;
+  items?: BomRecipeItemPayload[];
+  notes?: string | null;
 }
 
 const recipeBase = (factoryId: string) => `/${factoryId}/bom/recipes`;
@@ -53,6 +95,20 @@ export const bomRecipeApi = {
       recipeBase(factoryId),
       { params: { ...options } },
     ),
+
+  /**
+   * 创建 BOM 配方草稿.
+   * 对应: POST /api/mobile/{factoryId}/bom/recipes
+   */
+  create: (factoryId: string, req: CreateBomRecipeRequest) =>
+    post<BomRecipeSummary>(recipeBase(factoryId), req),
+
+  /**
+   * 更新 BOM 配方草稿.
+   * 对应: PUT /api/mobile/{factoryId}/bom/recipes/{recipeId}
+   */
+  update: (factoryId: string, recipeId: string, req: UpdateBomRecipeRequest) =>
+    put<BomRecipeSummary>(`${recipeBase(factoryId)}/${recipeId}`, req),
 
   /**
    * 激活 BOM 配方 (DRAFT → ACTIVE).
