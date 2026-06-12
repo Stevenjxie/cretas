@@ -119,9 +119,11 @@ class WipMovingAverageCostingTest {
      * 返回同一占位对象 (后续被 applyMovingAverageIn 原地累加, 最终 save 捕获到全量累加值, 与历史断言一致)。
      */
     private void stubFirstIn(String semiCode) {
-        when(txnRepo.findByFactoryIdAndSourceRefAndTxnType(FACTORY_ID, semiCode,
-                SemiFinishedInventoryTransaction.TxnType.IN))
-                .thenReturn(Optional.empty());
+        // Idempotency keyed on report_id now (BUG-GOLD-RERUN-WEIGHTED-AVG-SKIP fix); each test posts one
+        // fresh report → no prior IN txn for it → proceed. anyLong() since helper is semiCode-scoped.
+        when(txnRepo.findByFactoryIdAndReportId(org.mockito.ArgumentMatchers.eq(FACTORY_ID),
+                org.mockito.ArgumentMatchers.anyLong()))
+                .thenReturn(java.util.Collections.emptyList());
         final SemiFinishedInventory[] holder = new SemiFinishedInventory[1];
         // 第一次 findForUpdate 返 empty (触发建占位行); 之后返回占位行 (holder 不为 null 时)
         when(wipRepo.findForUpdateByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(FACTORY_ID, semiCode))
@@ -196,9 +198,8 @@ class WipMovingAverageCostingTest {
                     new BigDecimal("600"),
                     new BigDecimal("200")); // totalCost=800, inUnitCost=16.0000
 
-            when(txnRepo.findByFactoryIdAndSourceRefAndTxnType(FACTORY_ID, "SEMI-A002",
-                    SemiFinishedInventoryTransaction.TxnType.IN))
-                    .thenReturn(Optional.empty());
+            when(txnRepo.findByFactoryIdAndReportId(FACTORY_ID, 3002L))
+                    .thenReturn(java.util.Collections.emptyList());
 
             // Existing SFI: batch-1 already posted: 100 kg @ 10.0000/kg
             SemiFinishedInventory existing = SemiFinishedInventory.builder()
@@ -249,9 +250,8 @@ class WipMovingAverageCostingTest {
                     new BigDecimal("450"),
                     new BigDecimal("200")); // totalCost=650, inUnitCost=13.0000
 
-            when(txnRepo.findByFactoryIdAndSourceRefAndTxnType(FACTORY_ID, "SEMI-A003",
-                    SemiFinishedInventoryTransaction.TxnType.IN))
-                    .thenReturn(Optional.empty());
+            when(txnRepo.findByFactoryIdAndReportId(FACTORY_ID, 3003L))
+                    .thenReturn(java.util.Collections.emptyList());
             SemiFinishedInventory existing = SemiFinishedInventory.builder()
                     .id(5002L).factoryId(FACTORY_ID).intermediateBatchNo("SEMI-A003")
                     .producedQuantity(new BigDecimal("100")).consumedQuantity(BigDecimal.ZERO)
@@ -307,9 +307,8 @@ class WipMovingAverageCostingTest {
                     new BigDecimal("20"),
                     new BigDecimal("20")); // totalCost=40, inUnitCost=40/3=13.3333
 
-            when(txnRepo.findByFactoryIdAndSourceRefAndTxnType(FACTORY_ID, "SEMI-A004",
-                    SemiFinishedInventoryTransaction.TxnType.IN))
-                    .thenReturn(Optional.empty());
+            when(txnRepo.findByFactoryIdAndReportId(FACTORY_ID, 3004L))
+                    .thenReturn(java.util.Collections.emptyList());
             SemiFinishedInventory existing = SemiFinishedInventory.builder()
                     .id(5003L).factoryId(FACTORY_ID).intermediateBatchNo("SEMI-A004")
                     .producedQuantity(new BigDecimal("10")).consumedQuantity(BigDecimal.ZERO)
@@ -349,9 +348,8 @@ class WipMovingAverageCostingTest {
                     new BigDecimal("500"),
                     new BigDecimal("250")); // totalCost=750, inUnitCost=15.0000
 
-            when(txnRepo.findByFactoryIdAndSourceRefAndTxnType(FACTORY_ID, "SEMI-A005",
-                    SemiFinishedInventoryTransaction.TxnType.IN))
-                    .thenReturn(Optional.empty());
+            when(txnRepo.findByFactoryIdAndReportId(FACTORY_ID, 3005L))
+                    .thenReturn(java.util.Collections.emptyList());
             SemiFinishedInventory existing = SemiFinishedInventory.builder()
                     .id(5004L).factoryId(FACTORY_ID).intermediateBatchNo("SEMI-A005")
                     .producedQuantity(new BigDecimal("100"))

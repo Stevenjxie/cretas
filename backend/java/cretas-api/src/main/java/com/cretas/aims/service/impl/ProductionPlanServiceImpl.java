@@ -1964,6 +1964,9 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
 
         // 4. 构建并保存计划
         ProductionPlan plan = new ProductionPlan();
+        // BUG-GOLD-RERUN-SECONDARY-PLAN-500: ProductionPlan @Id 是手动赋值 String, 漏 setId →
+        //   persist 抛 IdentifierGenerationException → 500。与常规 createPlan(line 878) 同模式补 UUID。
+        plan.setId(java.util.UUID.randomUUID().toString());
         plan.setFactoryId(factoryId);
         plan.setPlanNumber(planNumber);
         plan.setProductTypeId(productTypeId);

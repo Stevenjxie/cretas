@@ -25,6 +25,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.context.ApplicationEventPublisher;
 
 import java.math.BigDecimal;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -33,6 +34,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
@@ -392,10 +394,10 @@ class WipInventoryServiceImplTest {
                 .materialCost(new BigDecimal("150"))
                 .build();
 
-        // Idempotency guard: no existing IN txn
-        when(txnRepo.findByFactoryIdAndSourceRefAndTxnType(FACTORY_ID, "SEMI-BATCH-001",
-                SemiFinishedInventoryTransaction.TxnType.IN))
-                .thenReturn(Optional.empty());
+        // Idempotency guard (BUG-GOLD-RERUN-WEIGHTED-AVG-SKIP fix): keyed on report_id now.
+        // This report (600) has no prior IN txn → proceed.
+        when(txnRepo.findByFactoryIdAndReportId(FACTORY_ID, 600L))
+                .thenReturn(Collections.emptyList());
         // W8 BUG-SP1-NEW-ROW 修复后 first-IN: findForUpdate(empty) → ensureSemiRowExists 建 0 量占位行
         // (saveAndFlush) → 再 findForUpdate 拿占位行 → applyMovingAverageIn 累加 → save。
         final SemiFinishedInventory[] holder = new SemiFinishedInventory[1];
@@ -467,11 +469,12 @@ class WipInventoryServiceImplTest {
                 // totalCost=120, unitCost=120/40=3.0000
                 .build();
 
-        when(txnRepo.findByFactoryIdAndSourceRefAndTxnType(FACTORY_ID, "SEMI-BATCH-002",
-                SemiFinishedInventoryTransaction.TxnType.IN))
-                .thenReturn(Optional.empty());
+        // report 601 not yet posted → proceed (idempotency keyed on report_id)
+        when(txnRepo.findByFactoryIdAndReportId(FACTORY_ID, 601L))
+                .thenReturn(Collections.emptyList());
 
-        // Existing SFI: 60kg @4.0000/kg
+        // Existing SFI: 60kg @4.0000/kg — SAME semiCode SEMI-BATCH-002 as a prior batch,
+        // but a DIFFERENT report → must accumulate (this is the weighted-average scenario the bug broke).
         SemiFinishedInventory existing = SemiFinishedInventory.builder()
                 .id(555L)
                 .factoryId(FACTORY_ID)
@@ -503,7 +506,7 @@ class WipInventoryServiceImplTest {
     }
 
     @Test
-    @DisplayName("SP1-SEMI: idempotency guard skips duplicate IN without error")
+    @DisplayName("SP1-SEMI: idempotency guard skips when THIS report already posted (keyed on report_id, not semiCode)")
     void postApprovedOutput_semiOutputKind_idempotentSkip() {
         WorkProcessTask task = WorkProcessTask.builder()
                 .id(8003L)
@@ -522,10 +525,9 @@ class WipInventoryServiceImplTest {
                 .laborCost(new BigDecimal("60"))
                 .build();
 
-        // Existing IN txn → idempotent skip
-        when(txnRepo.findByFactoryIdAndSourceRefAndTxnType(FACTORY_ID, "SEMI-BATCH-003",
-                SemiFinishedInventoryTransaction.TxnType.IN))
-                .thenReturn(Optional.of(SemiFinishedInventoryTransaction.builder()
+        // THIS report (602) already has an IN txn → idempotent skip (re-approval / retry of same report)
+        when(txnRepo.findByFactoryIdAndReportId(FACTORY_ID, 602L))
+                .thenReturn(List.of(SemiFinishedInventoryTransaction.builder()
                         .txnType(SemiFinishedInventoryTransaction.TxnType.IN)
                         .build()));
 
@@ -557,7 +559,7 @@ class WipInventoryServiceImplTest {
 
         service.postApprovedOutput(FACTORY_ID, report, task, 20L);
 
-        verify(txnRepo, never()).findByFactoryIdAndSourceRefAndTxnType(anyString(), anyString(), anyString());
+        verify(txnRepo, never()).findByFactoryIdAndReportId(anyString(), anyLong());
         verify(wipRepo, never()).save(any());
         verify(txnRepo, never()).save(any());
     }
@@ -588,9 +590,8 @@ class WipInventoryServiceImplTest {
                 .materialCost(new BigDecimal("50"))
                 .build();
 
-        when(txnRepo.findByFactoryIdAndSourceRefAndTxnType(FACTORY_ID, "SEMI-BATCH-004",
-                SemiFinishedInventoryTransaction.TxnType.IN))
-                .thenReturn(Optional.empty());
+        when(txnRepo.findByFactoryIdAndReportId(FACTORY_ID, 604L))
+                .thenReturn(Collections.emptyList());
         // W8 BUG-SP1-NEW-ROW: SEMI first-IN 走占位行 (saveAndFlush) → 再 findForUpdate 拿占位行 → save 累加
         final SemiFinishedInventory[] holder = new SemiFinishedInventory[1];
         when(wipRepo.findForUpdateByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(FACTORY_ID, "SEMI-BATCH-004"))
@@ -649,7 +650,7 @@ class WipInventoryServiceImplTest {
         service.postApprovedOutput(FACTORY_ID, report, task, 10L);
 
         // No txnRepo interaction for legacy path
-        verify(txnRepo, never()).findByFactoryIdAndSourceRefAndTxnType(anyString(), anyString(), anyString());
+        verify(txnRepo, never()).findByFactoryIdAndReportId(anyString(), anyLong());
         verify(txnRepo, never()).save(any());
         // Regular WIP path runs
         verify(wipRepo).save(any(SemiFinishedInventory.class));

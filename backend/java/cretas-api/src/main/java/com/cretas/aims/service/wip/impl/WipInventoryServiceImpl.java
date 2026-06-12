@@ -172,10 +172,14 @@ public class WipInventoryServiceImpl implements WipInventoryService {
             return;
         }
 
-        // Fool-Proof Rule 4 — idempotency guard
-        if (txnRepo.findByFactoryIdAndSourceRefAndTxnType(
-                factoryId, semiCode, SemiFinishedInventoryTransaction.TxnType.IN).isPresent()) {
-            log.info("[SP1-semi] idempotent skip for report {} semiCode={}: IN txn already exists", report.getId(), semiCode);
+        // Fool-Proof Rule 4 — idempotency guard: 以 report_id 为幂等键 (同一份报工不重复入账)。
+        // ⚠️ BUG-GOLD-RERUN-WEIGHTED-AVG-SKIP: 旧实现用 (factoryId, semiCode, IN), 但 IN txn 的
+        //   sourceRef 也是 semiCode → 同一半成品码的合法第二批生产被误判"已存在"跳过, 移动均价不累加。
+        //   改用 report_id (每份报工唯一) → 第二批(不同 report)正常入账累加, 重复提交同一 report 仍幂等。
+        boolean alreadyPosted = txnRepo.findByFactoryIdAndReportId(factoryId, report.getId()).stream()
+                .anyMatch(t -> SemiFinishedInventoryTransaction.TxnType.IN.equals(t.getTxnType()));
+        if (alreadyPosted) {
+            log.info("[SP1-semi] idempotent skip for report {} semiCode={}: IN txn already exists for this report", report.getId(), semiCode);
             return;
         }
 
