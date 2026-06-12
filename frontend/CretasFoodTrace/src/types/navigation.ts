@@ -37,6 +37,22 @@ export type MainTabParamList = {
   // 物流 & 溯源模块
   LogisticsTab: NavigatorScreenParams<LogisticsStackParamList>;
   TraceTab: NavigatorScreenParams<TraceStackParamList>;
+  // OA 待办中心 (finance_manager / cashier 专用)
+  OATodoTab: NavigatorScreenParams<OATodoStackParamList>;
+};
+
+// ==================== OA 待办模块导航参数 ====================
+// 访问角色: finance_manager / cashier
+
+export type OATodoStackParamList = {
+  /** 待办列表（tab 入口） */
+  MyTodoList: undefined;
+  /** 大额单详情+审批（needDetail=true 跳转） */
+  TodoDetail: {
+    refId: string;
+    type: string;
+    title: string;
+  };
 };
 
 // ==================== 生产模块导航参数 ====================
