@@ -104,6 +104,27 @@ function responseOrderStatus(response: unknown): string {
   return typeof res.data?.status === 'string' ? res.data.status : '';
 }
 
+function orderAmountHint(row: TableRow | null): string {
+  const amount = Number(row?.totalAmount || 0);
+  return formatAmount(Number.isFinite(amount) ? amount : 0);
+}
+
+function isExternalChannelOrder(row: TableRow | null): boolean {
+  return Boolean(String(row?.externalOrderTitle || '').trim());
+}
+
+function approvalDecisionHint(row: TableRow | null): string {
+  const amount = Number(row?.totalAmount || 0);
+  const safeAmount = Number.isFinite(amount) ? amount : 0;
+  if (isExternalChannelOrder(row)) {
+    return `检测到外部渠道订单；是否免审由后台审批配置决定。订单金额：${formatAmount(safeAmount)}。`;
+  }
+  if (safeAmount > 5000) {
+    return `订单金额 ${formatAmount(safeAmount)} 超过 F006 默认 5000 元阈值，预计进入财务审核。`;
+  }
+  return `订单金额 ${formatAmount(safeAmount)} 未超过 F006 默认 5000 元阈值，预计免审通过。`;
+}
+
 function actionSuccessMessage(action: string, labelText: string, response: unknown): string {
   const status = responseOrderStatus(response);
   if ((action === 'confirm' || action === 'submit-for-review') && status === 'FINANCE_APPROVED') {
@@ -113,6 +134,17 @@ function actionSuccessMessage(action: string, labelText: string, response: unkno
     return `${labelText}成功，已进入财务审核`;
   }
   return `${labelText}成功`;
+}
+
+function actionConfirmMessage(action: string, labelText: string): string {
+  const orderNumber = String(order.value?.orderNumber || orderId.value);
+  if (action === 'confirm') {
+    return `确认销售订单 ${orderNumber} 并自动判定审批？\n\n${approvalDecisionHint(order.value)}\n系统会先确认订单，再按后台审批配置自动分流：超过阈值进入财务审核，未触发阈值或满足免审配置的订单自动通过。`;
+  }
+  if (action === 'submit-for-review') {
+    return `确认将销售订单 ${orderNumber} 提交审批判定？\n\n${approvalDecisionHint(order.value)}\n系统会按后台审批配置自动分流，最终结果以后端返回为准。`;
+  }
+  return `确认${labelText}销售订单 ${orderNumber}？订单金额：${orderAmountHint(order.value)}`;
 }
 
 const statusMap: Record<string, { text: string; type: string }> = {
@@ -261,14 +293,18 @@ async function loadPurchaseOrders() {
 async function handleAction(action: string) {
   if (submitting.value) return;
   const map: Record<string, { label: string; url: string }> = {
-    confirm: { label: '确认订单', url: `/${factoryId.value}/sales/orders/${orderId.value}/confirm` },
+    confirm: { label: '确认并判定审批', url: `/${factoryId.value}/sales/orders/${orderId.value}/confirm` },
     cancel: { label: '取消订单', url: `/${factoryId.value}/sales/orders/${orderId.value}/cancel` },
-    'submit-for-review': { label: '提交财务审核', url: `/${factoryId.value}/sales/orders/${orderId.value}/submit-for-review` },
+    'submit-for-review': { label: '提交审批判定', url: `/${factoryId.value}/sales/orders/${orderId.value}/submit-for-review` },
   };
   const a = map[action];
   if (!a) return;
   try {
-    await ElMessageBox.confirm(`确认${a.label}？`, '操作确认');
+    await ElMessageBox.confirm(actionConfirmMessage(action, a.label), '操作确认', {
+      confirmButtonText: action === 'cancel' ? '确认取消' : '提交并判定',
+      cancelButtonText: '返回',
+      type: action === 'cancel' ? 'warning' : 'info',
+    });
   } catch { return; }
   submitting.value = true;
   try {
@@ -1014,8 +1050,8 @@ async function handleQuickPayFull() {
             </el-tag>
           </div>
           <div class="header-right" v-if="order && canWrite">
-            <el-button v-if="order.status === 'DRAFT'" type="success" :loading="submitting" @click="handleAction('confirm')">确认订单</el-button>
-            <el-button v-if="order.status === 'CONFIRMED'" type="warning" :loading="submitting" @click="handleAction('submit-for-review')">提交财务审核</el-button>
+            <el-button v-if="order.status === 'DRAFT'" type="success" :loading="submitting" @click="handleAction('confirm')">确认并判定审批</el-button>
+            <el-button v-if="order.status === 'CONFIRMED'" type="warning" :loading="submitting" @click="handleAction('submit-for-review')">提交/判定审批</el-button>
             <el-button v-if="order.status === 'PENDING_FINANCE_REVIEW'" type="success" :loading="submitting" @click="openFinanceReview('approve')">审核通过</el-button>
             <el-button v-if="order.status === 'PENDING_FINANCE_REVIEW'" type="danger" :loading="submitting" @click="openFinanceReview('reject')">审核驳回</el-button>
             <el-button v-if="order.status === 'FINANCE_APPROVED'" type="primary" :loading="submitting" @click="handleStartProduction">开始生产</el-button>

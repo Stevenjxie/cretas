@@ -19,10 +19,10 @@ export const STATUS_ACTIONS_MAP: Readonly<Record<EntityType, Readonly<Record<str
   salesOrder: {
     // 详情(hardcoded) + 编辑(hardcoded) + 确认(hardcoded) are already inline buttons for DRAFT.
     // Remaining uncommon actions: copy, delete, edit-price.
-    DRAFT: ['copy', 'delete', 'edit-price'],
+    DRAFT: ['submit-for-review', 'copy', 'delete', 'edit-price'],
     PENDING_APPROVAL: ['approve', 'reject', 'view-price-history'],
     // 取消 is hardcoded for DRAFT+CONFIRMED; remove from CONFIRMED to avoid duplicate.
-    CONFIRMED: ['convert-to-production', 'convert-to-purchase', 'print-pdf'],
+    CONFIRMED: ['submit-for-review', 'convert-to-production', 'convert-to-purchase', 'print-pdf'],
     APPROVED: ['convert-to-production', 'convert-to-purchase', 'print-pdf', 'undo-approval', 'cancel'],
     PENDING_FINANCE_REVIEW: [],
     FINANCE_APPROVED: ['convert-to-production', 'convert-to-purchase', 'print-pdf', 'cancel'],
@@ -135,6 +135,7 @@ export function getActionIdsForStatus(entityType: EntityType, status: string): r
 export const WRITE_ACTION_IDS: ReadonlySet<string> = new Set([
   'edit',
   'submit',
+  'submit-for-review',
   'approve',
   'reject',
   'undo-approval',

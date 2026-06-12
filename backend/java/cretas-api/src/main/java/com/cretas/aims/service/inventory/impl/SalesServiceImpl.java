@@ -320,7 +320,7 @@ public class SalesServiceImpl implements SalesService {
         order.setExtraFees(request.getExtraFees());
         order.setQuoteId(request.getQuoteId()); // 报价→订单联动 (5016s 客户流程文档)
         order.setStatus(SalesOrderStatus.DRAFT);
-        // P3 多仓: 叮咚采购单标题 (如 "0601-熟食T+2"). Nullable.
+        // P3 多仓: 外部渠道采购单标题 (如 "0601-熟食T+2"). Nullable.
         order.setExternalOrderTitle(request.getExternalOrderTitle());
         order.setCreatedBy(userId);
 
@@ -825,9 +825,7 @@ public class SalesServiceImpl implements SalesService {
         validatePriceBeforeFinanceReview(factoryId, order.getId(), order);
 
         Map<String, Object> context = buildSalesApprovalContext(order);
-        boolean dingdongExempt = isDingdongOrder(order);
-        boolean requiresApproval = !dingdongExempt
-                && approvalChainService != null
+        boolean requiresApproval = approvalChainService != null
                 && approvalChainService.requiresApproval(factoryId, DecisionType.SALES_ORDER_APPROVAL, context);
 
         if (requiresApproval) {
@@ -843,10 +841,7 @@ public class SalesServiceImpl implements SalesService {
             return saved;
         }
 
-        String autoNotes = dingdongExempt
-                ? "叮咚外部订单免审自动通过"
-                : "未触发销售审批阈值，自动通过";
-        return approveFinanceForOrder(factoryId, order, autoNotes, null, reviewerId);
+        return approveFinanceForOrder(factoryId, order, "未触发销售审批阈值或满足免审配置，自动通过", null, reviewerId);
     }
 
     private boolean hasSalesApprovalPolicy(String factoryId) {
@@ -869,19 +864,8 @@ public class SalesServiceImpl implements SalesService {
         context.put("customerId", order.getCustomerId() != null ? order.getCustomerId() : "");
         context.put("customerName", order.getCustomerName() != null ? order.getCustomerName() : "");
         context.put("externalOrderTitle", order.getExternalOrderTitle() != null ? order.getExternalOrderTitle() : "");
-        context.put("dingdongOrder", isDingdongOrder(order));
+        context.put("externalOrder", order.getExternalOrderTitle() != null && !order.getExternalOrderTitle().isBlank());
         return context;
-    }
-
-    private boolean isDingdongOrder(SalesOrder order) {
-        return containsDingdong(order.getExternalOrderTitle()) || containsDingdong(order.getCustomerName());
-    }
-
-    private boolean containsDingdong(String value) {
-        if (value == null) {
-            return false;
-        }
-        return value.contains("叮咚") || value.toLowerCase(Locale.ROOT).contains("dingdong");
     }
 
     private void startSalesApprovalWorkflowIfConfigured(

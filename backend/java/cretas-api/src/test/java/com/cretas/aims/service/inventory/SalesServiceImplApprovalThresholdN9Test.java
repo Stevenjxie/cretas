@@ -102,22 +102,24 @@ class SalesServiceImplApprovalThresholdN9Test {
         SalesOrder result = salesService.confirmOrder(FACTORY, ORDER_ID);
 
         assertEquals(SalesOrderStatus.FINANCE_APPROVED, result.getStatus());
-        assertEquals("未触发销售审批阈值，自动通过", result.getFinanceReviewNotes());
+        assertEquals("未触发销售审批阈值或满足免审配置，自动通过", result.getFinanceReviewNotes());
         verify(eventPublisher).publishEvent(any(SalesOrderFinanceApprovedEvent.class));
     }
 
     @Test
-    void confirm_dingdong_external_order_auto_finance_approves_without_threshold_check() {
+    void confirm_external_channel_order_auto_finance_approves_by_config() {
         SalesOrder order = salesOrder(SalesOrderStatus.DRAFT, "6000.00");
-        order.setExternalOrderTitle("dingdong-0601-T2");
+        order.setExternalOrderTitle("external-channel-0601-T2");
         when(salesOrderRepository.findById(ORDER_ID)).thenReturn(Optional.of(order));
         when(salesOrderItemRepository.findBySalesOrderId(ORDER_ID)).thenReturn(List.of(item()));
+        when(approvalChainService.requiresApproval(eq(FACTORY), eq(DecisionType.SALES_ORDER_APPROVAL), anyMap()))
+                .thenReturn(false);
 
         SalesOrder result = salesService.confirmOrder(FACTORY, ORDER_ID);
 
         assertEquals(SalesOrderStatus.FINANCE_APPROVED, result.getStatus());
-        assertEquals("叮咚外部订单免审自动通过", result.getFinanceReviewNotes());
-        verify(approvalChainService, never())
+        assertEquals("未触发销售审批阈值或满足免审配置，自动通过", result.getFinanceReviewNotes());
+        verify(approvalChainService)
                 .requiresApproval(eq(FACTORY), eq(DecisionType.SALES_ORDER_APPROVAL), anyMap());
         verify(eventPublisher).publishEvent(any(SalesOrderFinanceApprovedEvent.class));
     }

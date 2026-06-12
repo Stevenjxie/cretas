@@ -61,7 +61,7 @@ public class CreateSalesOrderRequest {
     private com.cretas.aims.entity.enums.InvoiceType defaultInvoiceType;
 
     /**
-     * P3 多仓: 叮咚采购单标题 (如 "0601-熟食T+2").
+     * P3 多仓: 外部渠道采购单标题 (如 "0601-熟食T+2").
      * 对应 SalesOrder.externalOrderTitle. Nullable — 普通订单不传.
      */
     @Size(max = 100, message = "采购单标题长度不能超过100个字符")
@@ -114,7 +114,7 @@ public class CreateSalesOrderRequest {
         // ==================== P3 多仓字段 ====================
 
         /**
-         * 目的仓全名 (如 叮咚-北仑总仓). Nullable — 普通订单不传.
+         * 目的仓全名 (如 外部渠道-北仑总仓). Nullable — 普通订单不传.
          * 对应 SalesOrderItem.destWarehouseName.
          */
         @Size(max = 100, message = "目的仓名称长度不能超过100个字符")
@@ -124,11 +124,11 @@ public class CreateSalesOrderRequest {
         @Size(max = 32, message = "目的仓code长度不能超过32个字符")
         private String destWarehouseCode;
 
-        /** 叮咚外部采购单ID. Nullable. */
+        /** 外部渠道采购单ID. Nullable. */
         @Size(max = 64, message = "外部采购单ID长度不能超过64个字符")
         private String externalPoId;
 
-        /** 商品条码 (叮咚配送签收). Nullable. */
+        /** 商品条码 (外部渠道配送签收). Nullable. */
         @Size(max = 64, message = "条码长度不能超过64个字符")
         private String barcode;
 
