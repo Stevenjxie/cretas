@@ -1,6 +1,8 @@
 package com.cretas.aims.dto.producttype;
 
 import com.cretas.aims.entity.enums.TaxRate;
+import com.cretas.aims.security.PriceSensitive;
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.constraints.NotBlank;
@@ -61,6 +63,19 @@ public class ProductTypeDTO {
 
     @Schema(description = "SP9-M1 研发预估人工成本(元/kg成品); null=未填, 前端显示'-'; @PriceSensitive")
     private BigDecimal quotedLaborCostPerKg;
+
+    @PriceSensitive
+    @Schema(description = "SP5 standard unit cost; null means margin redline check is skipped")
+    private BigDecimal standardCost;
+
+    @Schema(description = "SP5 product-level target gross margin override, 0-1 decimal; e.g. 0.10 means 10%; null falls back to factory config")
+    private BigDecimal targetGrossMargin;
+
+    @JsonIgnore
+    private boolean standardCostPresent;
+
+    @JsonIgnore
+    private boolean targetGrossMarginPresent;
 
     @Schema(description = "T123 一级单位(大包装, 如 筐/框/箱), 与 boxConversionCoefficient 联用")
     private String level1Unit;
@@ -198,6 +213,26 @@ public class ProductTypeDTO {
     @Schema(description = "产品编码(前端别名)")
     public String getProductCode() {
         return code;
+    }
+
+    public void setStandardCost(BigDecimal standardCost) {
+        this.standardCost = standardCost;
+        this.standardCostPresent = true;
+    }
+
+    public void setTargetGrossMargin(BigDecimal targetGrossMargin) {
+        this.targetGrossMargin = targetGrossMargin;
+        this.targetGrossMarginPresent = true;
+    }
+
+    @JsonIgnore
+    public void markStandardCostPresent() {
+        this.standardCostPresent = true;
+    }
+
+    @JsonIgnore
+    public void markTargetGrossMarginPresent() {
+        this.targetGrossMarginPresent = true;
     }
 
     // ==================== Inner DTOs ====================
