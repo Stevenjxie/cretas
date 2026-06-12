@@ -173,7 +173,7 @@ public class PurchaseOrderPdfServiceImpl implements PurchaseOrderPdfService {
             itemsHeader.setSpacingAfter(4);
             document.add(itemsHeader);
 
-            PdfPTable itemsTable = new PdfPTable(externalVersion ? 5 : 7);
+            PdfPTable itemsTable = new PdfPTable(externalVersion ? 5 : 8);
             itemsTable.setWidthPercentage(100);
             if (externalVersion) {
                 itemsTable.setWidths(new float[]{1, 5, 2, 1.5f, 2});
@@ -181,9 +181,9 @@ public class PurchaseOrderPdfServiceImpl implements PurchaseOrderPdfService {
                         "序号", "原料名称 / 规格", "数量", "单位", "件数"
                 }, boldFont);
             } else {
-                itemsTable.setWidths(new float[]{1, 4, 2, 2, 1, 2, 2});
+                itemsTable.setWidths(new float[]{1, 3.6f, 1.6f, 1.2f, 1.1f, 1.2f, 1.8f, 1.8f});
                 addTableHeader(itemsTable, new String[]{
-                        "序号", "原料名称 / 规格", "数量", "单位", "件数", "单价", "小计"
+                        "序号", "原料名称 / 规格", "数量", "单位", "件数", "税率", "单价", "小计"
                 }, boldFont);
             }
 
@@ -204,6 +204,9 @@ public class PurchaseOrderPdfServiceImpl implements PurchaseOrderPdfService {
                             normalFont, Element.ALIGN_RIGHT);
                     BigDecimal lineAmount = item.getLineAmount();
                     if (!externalVersion) {
+                        addBodyCell(itemsTable,
+                                hidePrice ? PRICE_MASK_PLACEHOLDER : formatTaxRate(item.getTaxRate()),
+                                normalFont, Element.ALIGN_RIGHT);
                         // 单价 / 小计: maskPrice=true 时以 "—" 占位 (RBAC defense-in-depth, mirrors @PriceSensitive JSON strip)
                         addBodyCell(itemsTable,
                                 hidePrice ? PRICE_MASK_PLACEHOLDER : formatDecimal(item.getUnitPrice()),
@@ -221,7 +224,7 @@ public class PurchaseOrderPdfServiceImpl implements PurchaseOrderPdfService {
             if (!externalVersion) {
                 // 合计行 — label 保留 (布局一致性), 数值在 maskPrice=true 时同样以 "—" 占位
                 PdfPCell totalLabelCell = new PdfPCell(new Phrase("合计", boldFont));
-                totalLabelCell.setColspan(6);
+                totalLabelCell.setColspan(7);
                 totalLabelCell.setHorizontalAlignment(Element.ALIGN_RIGHT);
                 totalLabelCell.setPadding(5);
                 totalLabelCell.setBackgroundColor(new BaseColor(240, 240, 240));
@@ -308,6 +311,14 @@ public class PurchaseOrderPdfServiceImpl implements PurchaseOrderPdfService {
     private static String formatDecimal(BigDecimal value) {
         if (value == null) return "0.00";
         return value.setScale(2, RoundingMode.HALF_UP).stripTrailingZeros().toPlainString();
+    }
+
+    private static String formatTaxRate(BigDecimal value) {
+        if (value == null) return "-";
+        BigDecimal percent = value.compareTo(BigDecimal.ONE) <= 0
+                ? value.multiply(BigDecimal.valueOf(100))
+                : value;
+        return percent.stripTrailingZeros().toPlainString() + "%";
     }
 
     private static void addKVCell(PdfPTable table, String label, String value, Font labelFont, Font valueFont) {
