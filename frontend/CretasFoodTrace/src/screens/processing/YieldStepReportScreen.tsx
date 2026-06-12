@@ -437,6 +437,7 @@ const YieldStepReportScreen: React.FC = () => {
   /** 产品类型 ID (用于 BOM 过滤, 来自 ProductionBatch.productTypeId) */
   const [productTypeId, setProductTypeId] = useState<string | undefined>(undefined);
   const [batchNumber, setBatchNumber] = useState<string>(route.params.batchNumber ?? '');
+  const [batchPlannedQuantity, setBatchPlannedQuantity] = useState<number | null>(null);
   const [batchStatus, setBatchStatus] = useState<string>('');  // P1-1: 完工幂等判断
   const [tasks, setTasks] = useState<WorkProcessTask[]>([]);
   const [yieldData, setYieldData] = useState<BatchYieldDTO | null>(null);
@@ -552,6 +553,8 @@ const YieldStepReportScreen: React.FC = () => {
         // BOM 过滤: 存下 productTypeId 供 MaterialBatchPicker 防呆用
         if (batchRes.data.productTypeId) setProductTypeId(batchRes.data.productTypeId);
         if (batchRes.data.batchNumber) setBatchNumber(batchRes.data.batchNumber);
+        const plannedQty = Number(batchRes.data.targetQuantity);
+        setBatchPlannedQuantity(Number.isFinite(plannedQty) && plannedQty > 0 ? plannedQty : null);
         setBatchStatus(batchRes.data.status ?? '');  // P1-1: 完工幂等判断
         // SP3: 二次加工批次类型 (SEMI_FINISHED → 首道领半成品库存)
         setBatchSourceType(batchRes.data.batchSourceType);
@@ -701,7 +704,7 @@ const YieldStepReportScreen: React.FC = () => {
   const unit = currentTask?.plannedUnit ?? 'kg';
   // P0-2: 本道产出单位 — 工序配了 outputUnit (如末道 kg→份/盒) 则用它, 否则沿用投入单位
   const outUnit = currentTask?.outputUnit ?? unit;
-  const planned = currentTask?.plannedQuantity ?? null;
+  const planned = currentTask?.plannedQuantity ?? batchPlannedQuantity;
   const isFirstStep = currentStepIndex === 0;
   const isLastStep = currentStepIndex >= totalSteps - 1;
   // G7 Wave 4: 非首道可领的上道 WIP 余额 (来自 limits.wipAvailable); 首道为 null (领原料不受 WIP 约束)
@@ -1609,6 +1612,7 @@ const YieldStepReportScreen: React.FC = () => {
               <MaterialBatchPicker
                 unit={unit}
                 productTypeId={productTypeId}
+                singleBatchQty={planned != null ? String(planned) : ''}
                 value={materialBatchRefs}
                 onChange={setMaterialBatchRefs}
                 disabled={submitting}

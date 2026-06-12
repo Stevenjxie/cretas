@@ -80,13 +80,17 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
   const [loadError, setLoadError] = useState<string | null>(null);
   const [rows, setRows] = useState<RowState[]>([]);
   const [expanded, setExpanded] = useState(false);
+  const [loadedQueryKey, setLoadedQueryKey] = useState<string | null>(null);
   // Q2: picker 已通过「确定选择」按钮确认收起 → 显示 summary + 确认反馈
   const [confirmed, setConfirmed] = useState(false);
   const [confirmFeedback, setConfirmFeedback] = useState(false);
   const confirmTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const queryKeyRef = useRef<string>('');
 
   const selectedRows = rows.filter((r) => r.selected);
   const isMultiBatch = selectedRows.length > 1;
+  const queryKey = `${factoryId ?? ''}|${productTypeId ?? ''}`;
+  queryKeyRef.current = queryKey;
 
   // ── onChange 防抖机制 ────────────────────────────────────────────────────
   // Issue #3 fix: emit onChange in a useEffect keyed on rows, NOT inside setRows updater.
@@ -142,12 +146,15 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
 
   // 加载 AVAILABLE 批次 (传入 productTypeId 时后端按 BOM 过滤, 无 BOM 回退全部)
   const loadBatches = useCallback(async () => {
+    const requestQueryKey = queryKey;
     setLoading(true);
     setLoadError(null);
     try {
       const res = await materialBatchApiClient.getBatchesByStatus('AVAILABLE', factoryId, productTypeId);
+      if (queryKeyRef.current !== requestQueryKey) return;
       if (res.success && Array.isArray(res.data)) {
         syncRowsFromValue(res.data);
+        setLoadedQueryKey(requestQueryKey);
         // F6: 单批次自动选中 — 不让操作工还要多点一次复选框
         // 仅在 value 尚未选中（首次加载）且只有一批次时触发
         if (res.data.length === 1 && value.length === 0) {
@@ -161,22 +168,34 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
           setExpanded(false);
         }
       } else {
+        setLoadedQueryKey(requestQueryKey);
         setLoadError(res.message || '无法加载原料批次');
       }
     } catch (err) {
+      if (queryKeyRef.current !== requestQueryKey) return;
+      setLoadedQueryKey(requestQueryKey);
       const msg = err instanceof Error ? err.message : '加载批次失败';
       setLoadError(msg);
     } finally {
       setLoading(false);
     }
-  }, [factoryId, productTypeId, syncRowsFromValue, value.length, unit]);
+  }, [factoryId, productTypeId, queryKey, syncRowsFromValue, value.length, unit]);
+
+  // productTypeId comes from the batch detail request. If the operator opens the picker before
+  // that request resolves, the first load is unfiltered. Reload once the BOM-filter key changes.
+  useEffect(() => {
+    setRows([]);
+    setConfirmed(false);
+    setConfirmFeedback(false);
+    setLoadedQueryKey(null);
+  }, [queryKey]);
 
   // 展开时加载
   useEffect(() => {
-    if (expanded && rows.length === 0 && !loading) {
+    if (expanded && !loading && loadedQueryKey !== queryKey) {
       loadBatches();
     }
-  }, [expanded, rows.length, loading, loadBatches]);
+  }, [expanded, loading, loadedQueryKey, queryKey, loadBatches]);
 
   // Q2: 清理定时器
   useEffect(() => {
