@@ -1978,6 +1978,29 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         plan.setPlanSourceType("SECONDARY");
         plan.setSecondarySourceWipId(wipId);
 
+        // Gap A (2026-06-12 多段链): 回填源订单 — secondary plan 从 WIP 派生, 追溯 wip→batch→origin plan→sourceOrder。
+        //   否则 /multi-stage-cost 按 source_order_id 查计划时查不到 semi B 段 (stageCount 只见首段 normal plan)。
+        //   fail-soft: 追溯失败不阻塞建计划 (二次加工本身可独立于订单)。
+        try {
+            if (wip.getBatchId() != null) {
+                com.cretas.aims.entity.ProductionBatch srcBatch =
+                        productionBatchRepository.findById(wip.getBatchId()).orElse(null);
+                if (srcBatch != null && srcBatch.getProductionPlanId() != null) {
+                    ProductionPlan originPlan =
+                            productionPlanRepository.findById(srcBatch.getProductionPlanId()).orElse(null);
+                    if (originPlan != null) {
+                        plan.setSourceOrderId(originPlan.getSourceOrderId());
+                        if (originPlan.getSourceOrderIds() != null && !originPlan.getSourceOrderIds().isEmpty()) {
+                            plan.setSourceOrderIds(new java.util.ArrayList<>(originPlan.getSourceOrderIds()));
+                        }
+                    }
+                }
+            }
+        } catch (Exception e) {
+            log.warn("SP2 createSecondaryPlan 源订单回填失败 (fail-soft, 不阻塞建计划): wipId={} err={}",
+                    wipId, e.getMessage());
+        }
+
         plan = productionPlanRepository.save(plan);
 
         log.info("SP2 创建二次加工计划: planId={}, wipId={}, quantity={}, factoryId={}",
