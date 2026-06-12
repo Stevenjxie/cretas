@@ -78,6 +78,7 @@ public class WorkProcessServiceImpl implements WorkProcessService {
                 .standardYieldMax(dto.getStandardYieldMax())
                 .needsInput(dto.getNeedsInput() != null ? dto.getNeedsInput() : true)
                 .outputUnit(dto.getOutputUnit())
+                .semiFinishedOutputCode(blankToNull(dto.getSemiFinishedOutputCode()))
                 .standardHourlyRate(dto.getStandardHourlyRate())
                 .expectedByproducts(dto.getExpectedByproducts())
                 .build();
@@ -135,6 +136,9 @@ public class WorkProcessServiceImpl implements WorkProcessService {
         if (dto.getStandardYieldMax() != null) entity.setStandardYieldMax(dto.getStandardYieldMax());
         if (dto.getNeedsInput() != null) entity.setNeedsInput(dto.getNeedsInput());
         if (dto.getOutputUnit() != null) entity.setOutputUnit(dto.getOutputUnit());
+        if (dto.isSemiFinishedOutputCodeSpecified()) {
+            entity.setSemiFinishedOutputCode(blankToNull(dto.getSemiFinishedOutputCode()));
+        }
         if (dto.getStandardHourlyRate() != null) entity.setStandardHourlyRate(dto.getStandardHourlyRate());
         // expectedByproducts: null means "don't change"; explicit empty list means "clear"
         if (dto.getExpectedByproducts() != null) entity.setExpectedByproducts(dto.getExpectedByproducts());
@@ -234,10 +238,18 @@ public class WorkProcessServiceImpl implements WorkProcessService {
                 .standardYieldMax(entity.getStandardYieldMax())
                 .needsInput(entity.getNeedsInput())
                 .outputUnit(entity.getOutputUnit())
+                .semiFinishedOutputCode(entity.getSemiFinishedOutputCode())
                 .standardHourlyRate(entity.getStandardHourlyRate())
                 .expectedByproducts(entity.getExpectedByproducts())
                 .createdAt(entity.getCreatedAt())
                 .updatedAt(entity.getUpdatedAt())
                 .build();
+    }
+
+    private String blankToNull(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        return value.trim();
     }
 }

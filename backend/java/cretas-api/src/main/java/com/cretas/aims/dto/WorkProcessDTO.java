@@ -1,6 +1,7 @@
 package com.cretas.aims.dto;
 
 import com.fasterxml.jackson.annotation.JsonFormat;
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -58,6 +59,25 @@ public class WorkProcessDTO {
     /** 产出单位 (kg→盒/份; 为空沿用 unit). */
     @Size(max = 20, message = "产出单位不能超过20个字符")
     private String outputUnit;
+
+    /**
+     * 本工序产出的半成品编码。配置后, 报工产出阶段会出现"产半成品"选项,
+     * 产出的 WIP 可供二次加工领用。null = 本工序不产半成品。
+     */
+    @Size(max = 50, message = "半成品产出编码不能超过50个字符")
+    private String semiFinishedOutputCode;
+
+    /**
+     * Update payload presence marker. Distinguishes an explicit JSON null
+     * (clear the semi-finished output code) from an omitted field (leave as-is).
+     */
+    @JsonIgnore
+    private boolean semiFinishedOutputCodeSpecified;
+
+    public void setSemiFinishedOutputCode(String semiFinishedOutputCode) {
+        this.semiFinishedOutputCode = semiFinishedOutputCode;
+        this.semiFinishedOutputCodeSpecified = true;
+    }
 
     /** 标准时薪 (元/小时; null=未配置, 绝不默认 0; 用于逐道人工成本计算). NUMERIC(8,2) → 0..999999.99. */
     @DecimalMin(value = "0", message = "标准时薪不能为负")
