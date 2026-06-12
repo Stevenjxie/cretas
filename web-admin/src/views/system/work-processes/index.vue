@@ -33,7 +33,11 @@ const CATEGORIES = [
   '前处理', '加工', '包装', '灭菌', '质检', '存储', '配送', '其他'
 ];
 
-const formData = reactive<Partial<WorkProcessItem>>({
+type WorkProcessForm = Partial<WorkProcessItem> & {
+  semiFinishedOutputCode?: string | null;
+};
+
+const formData = reactive<WorkProcessForm>({
   id: '',
   processName: '',
   processCategory: '',
@@ -44,7 +48,15 @@ const formData = reactive<Partial<WorkProcessItem>>({
   standardYieldMax: null,
   needsInput: true,
   outputUnit: '',
+  semiFinishedOutputCode: null,
   standardHourlyRate: null
+});
+
+const semiOutputEnabled = computed<boolean>({
+  get: () => Boolean(formData.semiFinishedOutputCode?.trim()),
+  set: (enabled) => {
+    formData.semiFinishedOutputCode = enabled ? (formData.semiFinishedOutputCode || suggestSemiOutputCode()) : null;
+  }
 });
 
 // P0-3: 百分比 ↔ 小数转换 (表单按百分比录入, payload 存小数 0.0001..99.9999)
@@ -74,6 +86,22 @@ const formRules = {
         } else {
           cb();
         }
+      },
+      trigger: 'blur'
+    }
+  ],
+  semiFinishedOutputCode: [
+    {
+      validator: (_r: unknown, value: string | null, cb: (e?: Error) => void) => {
+        if (semiOutputEnabled.value && !value?.trim()) {
+          cb(new Error('请输入半成品产出编码'));
+          return;
+        }
+        if (value && value.length > 50) {
+          cb(new Error('不能超过50个字符'));
+          return;
+        }
+        cb();
       },
       trigger: 'blur'
     }
@@ -166,6 +194,7 @@ function handleAdd() {
     id: '', processName: '', processCategory: '',
     unit: 'kg', estimatedMinutes: null, sortOrder: 0,
     standardYieldMin: null, standardYieldMax: null, needsInput: true, outputUnit: '',
+    semiFinishedOutputCode: null,
     standardHourlyRate: null
   });
   dialogVisible.value = true;
@@ -174,7 +203,10 @@ function handleAdd() {
 function handleEdit(row: WorkProcessItem) {
   dialogTitle.value = '编辑工序';
   isEditing.value = true;
-  Object.assign(formData, { ...row });
+  Object.assign(formData, {
+    ...row,
+    semiFinishedOutputCode: semiOutputCodeOf(row)
+  });
   dialogVisible.value = true;
 }
 
@@ -184,13 +216,14 @@ async function handleSubmit() {
 
   submitting.value = true;
   try {
-    const payload = { ...formData };
+    const semiCode = semiOutputEnabled.value ? normalizeSemiOutputCode(formData.semiFinishedOutputCode) : null;
+    const payload = { ...formData, semiFinishedOutputCode: semiCode };
     if (isEditing.value && formData.id) {
       await updateWorkProcess(factoryId.value, formData.id, payload);
-      ElMessage.success('工序已更新');
+      ElMessage.success(semiCode ? `工序已更新，半成品产出编码：${semiCode}` : '工序已更新，未配置半成品产出');
     } else {
       await createWorkProcess(factoryId.value, payload);
-      ElMessage.success('工序已创建');
+      ElMessage.success(semiCode ? `工序已创建，半成品产出编码：${semiCode}` : '工序已创建，未配置半成品产出');
     }
     dialogVisible.value = false;
     loadData();
@@ -232,6 +265,25 @@ async function handleToggle(row: WorkProcessItem) {
 function handlePageChange(page: number) {
   pagination.value.page = page;
   loadData();
+}
+
+function semiOutputCodeOf(row: WorkProcessItem): string | null {
+  const value = (row as WorkProcessForm).semiFinishedOutputCode;
+  return normalizeSemiOutputCode(value);
+}
+
+function normalizeSemiOutputCode(value?: string | null): string | null {
+  const trimmed = value?.trim();
+  return trimmed || null;
+}
+
+function suggestSemiOutputCode(): string {
+  const source = formData.processName?.trim() || formData.processCategory?.trim() || 'WIP';
+  const normalized = source
+    .replace(/\s+/g, '-')
+    .replace(/[^\p{L}\p{N}-]/gu, '')
+    .toUpperCase();
+  return `${normalized || 'WIP'}-WIP`.slice(0, 50);
 }
 </script>
 
@@ -321,6 +373,14 @@ function handlePageChange(page: number) {
           </template>
         </el-table-column>
         <el-table-column prop="unit" label="单位" width="80" />
+        <el-table-column label="半成品产出" width="130">
+          <template #default="{ row }">
+            <el-tag v-if="semiOutputCodeOf(row)" type="success" size="small">
+              产半成品
+            </el-tag>
+            <span v-else class="text-muted">-</span>
+          </template>
+        </el-table-column>
         <el-table-column label="标准出成率" width="130">
           <template #default="{ row }">
             <span v-if="row.standardYieldMin != null && row.standardYieldMax != null">
@@ -365,8 +425,8 @@ function handlePageChange(page: number) {
     </el-card>
 
     <!-- Form Dialog -->
-    <el-dialog v-model="dialogVisible" :title="dialogTitle" width="500px">
-      <el-form ref="formRef" :model="formData" :rules="formRules" label-width="100px">
+    <el-dialog v-model="dialogVisible" :title="dialogTitle" width="560px">
+      <el-form ref="formRef" :model="formData" :rules="formRules" label-width="130px">
         <el-form-item label="工序名称" prop="processName">
           <el-input v-model="formData.processName" placeholder="如：拆箱、挂晒、卤制" />
         </el-form-item>
@@ -400,6 +460,19 @@ function handlePageChange(page: number) {
         </el-form-item>
         <el-form-item label="产出单位">
           <el-input v-model="formData.outputUnit" placeholder="与投入单位不同时填，如 盒/份；留空则同投入单位" />
+        </el-form-item>
+        <el-form-item label="本工序产出半成品">
+          <el-switch v-model="semiOutputEnabled" />
+          <span class="form-hint">开启后此工序产出可作半成品入生产库，供二次加工领用</span>
+        </el-form-item>
+        <el-form-item v-if="semiOutputEnabled" label="半成品产出编码" prop="semiFinishedOutputCode">
+          <el-input
+            v-model="formData.semiFinishedOutputCode"
+            maxlength="50"
+            show-word-limit
+            placeholder="如 LU-ZHI-ZHU-TI 或 熟制猪蹄-WIP"
+          />
+          <span class="form-hint">建议按产品/工序命名，保存后报工产出阶段会显示为半成品选项</span>
         </el-form-item>
         <el-form-item label="标准时薪(元/小时)" prop="standardHourlyRate">
           <el-input-number v-model="formData.standardHourlyRate" :min="0" :step="1" :precision="2"
