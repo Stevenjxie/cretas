@@ -30,6 +30,9 @@
 
 > 🔴 **2026-06-12 部署管线阻塞 (新 organizer chat 必读)**: main 含 #778(OA待办后端) + #779(两点报工成本P0修复) **代码正确**(12+20测试绿, root-cause扎实) 但 **jar 启动 hang 无法部署**。现象: green 启动印 banner 后无 Spring logback 输出, metaspace 涨到~190M(类在加载), CPU 34-53%, 5min+ 不健康。**#777 jar 启动正常 → #778/#779 引入**。蓝绿健康闸正确拦截, **prod 安全跑 blue 旧码(10010=200)零影响**。但 **main 当前不可部署**(下次部署 main 撞同 hang)。**下一步聚焦诊断**: ①bisect #778 vs #779(revert #778 试 #779 单独能否起) ②verbose Spring debug 日志到独立文件找 hang bean ③疑 #778 MyTodoAggregator 注入5域service 某 eager init 卡。P0 cost 修复(#779)正确但 ship 受阻于此。test env 已恢复。
 
+> **✅ 2026-06-12 已稳住 (update)**: 服务器 disk jar **已回滚到 #777 known-good**(MD5 190ef868, `.bak.20260612_091038`)。**test 用 #777 78s 健康起来 → 确认 #777 启动正常, hang 定位隔离在 #778/#779**(jar 是 blue/green/test 共享, test 也加载坏jar佐证)。**prod blue(10010)+test(10011) 都 200, disk #777 → restart-safe**。坏 #779 jar 存 `/www/wwwroot/cretas/aims-0.0.1-SNAPSHOT.jar.HANG779` 留诊断。**下一聚焦任务: bisect #778(OA,新beans,疑凶) vs #779(纯逻辑改,不太可能), revert #778 试 #779 单独能否起 → 能则 ship P0成本修复(#779) + 单独修#778**。
+
+
 
 | ID | 任务 | model | effort | orchestration | 分支 | scope 锁 | 状态 | PR | 阻塞 |
 |---|---|---|---|---|---|---|---|---|---|
