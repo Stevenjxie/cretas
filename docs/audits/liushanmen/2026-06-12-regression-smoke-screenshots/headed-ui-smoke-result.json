@@ -1,0 +1,97 @@
+{
+  "base": "http://139.196.165.140:8086",
+  "at": "2026-06-11T16:04:32.776Z",
+  "results": [
+    {
+      "username": "f006_admin",
+      "name": "after-login",
+      "route": "/login",
+      "finalUrl": "http://139.196.165.140:8086/dashboard",
+      "blocked": false,
+      "textLength": 0,
+      "textSample": ""
+    },
+    {
+      "username": "f006_admin",
+      "name": "dashboard",
+      "route": "/dashboard",
+      "finalUrl": "http://139.196.165.140:8086/dashboard",
+      "blocked": false,
+      "textLength": 466,
+      "textSample": "白垩纪AI Agent 首页 销售老板工作台 财务主管工作台 质量主管工作台 仓管员工作台 采购员工作台 质量主管工作台 生产经理工作台 生产管理 仓储管理 质量管理 采购管理 销售管理 人事管理 设备管理 财务管理 系统管理 智能调度 数据与分析 首页 f006_admin 工厂总监 欢迎回来，f006_admin 超级管理员 工厂: F006 AI 成本分析 快速开始 3 步, 激活您的 AI 工厂 当前工厂暂无数据。跟着这 3 步上手, 几分钟见 AI 分析效果. 1 上传 Excel 数据 财务/销售/采购"
+    },
+    {
+      "username": "f006_admin",
+      "name": "sales-orders",
+      "route": "/sales/orders",
+      "finalUrl": "http://139.196.165.140:8086/sales/orders",
+      "blocked": false,
+      "textLength": 2019,
+      "textSample": "白垩纪AI Agent 首页 销售老板工作台 财务主管工作台 质量主管工作台 仓管员工作台 采购员工作台 质量主管工作台 生产经理工作台 生产管理 仓储管理 质量管理 采购管理 销售管理 销售订单 成品库存 客户管理 出货记录 销售退货 车辆字典 财务待审销售单 销售付款申请 人事管理 设备管理 财务管理 系统管理 智能调度 数据与分析 销售管理 / 销售订单 f006_admin 工厂总监 销售工作流 跟 AI 说 16 待审 → 19 进行中 → 0 已完成 这里是「销售订单」管理 — 客户向我们下的订单（出货"
+    },
+    {
+      "username": "f006_admin",
+      "name": "production-batches",
+      "route": "/production/batches",
+      "finalUrl": "http://139.196.165.140:8086/production/batches",
+      "blocked": false,
+      "textLength": 1493,
+      "textSample": "白垩纪AI Agent 首页 销售老板工作台 财务主管工作台 质量主管工作台 仓管员工作台 采购员工作台 质量主管工作台 生产经理工作台 生产管理 生产批次 生产计划 备货看板 BOM成本管理 报工审批 BOM达成率分析 工序投入产出对比 物料需求单 研发样品 人效双口径对比 仓储管理 质量管理 采购管理 销售管理 人事管理 设备管理 财务管理 系统管理 智能调度 数据与分析 生产管理 / 生产批次 f006_admin 工厂总监 这里是「生产批次」管理 — 已开工的实际「批次」（IN_PROGRESS / COM"
+    },
+    {
+      "username": "f006_admin",
+      "name": "procurement-payment-requests",
+      "route": "/procurement/payment-requests",
+      "finalUrl": "http://139.196.165.140:8086/procurement/payment-requests",
+      "blocked": false,
+      "textLength": 698,
+      "textSample": "白垩纪AI Agent 首页 销售老板工作台 财务主管工作台 质量主管工作台 仓管员工作台 采购员工作台 质量主管工作台 生产经理工作台 生产管理 仓储管理 质量管理 采购管理 销售管理 人事管理 设备管理 财务管理 系统管理 智能调度 数据与分析 采购管理 / 付款申请 f006_admin 工厂总监 付款申请 管理采购付款申请的审批与付款流程 状态 结算方式 查询 重置 申请单号 采购单号 供应商 结算方式 申请金额 付款方式 状态 创建时间 操作 PR-F006-20260611-5424 ¥4,800.00"
+    },
+    {
+      "username": "f006_admin",
+      "name": "finance-voucher-detail",
+      "route": "/finance/voucher/7690e661-26e0-4c4d-8bfe-a0b27dd8018e",
+      "finalUrl": "http://139.196.165.140:8086/finance/voucher/7690e661-26e0-4c4d-8bfe-a0b27dd8018e",
+      "blocked": false,
+      "textLength": 568,
+      "textSample": "白垩纪AI Agent 首页 销售老板工作台 财务主管工作台 质量主管工作台 仓管员工作台 采购员工作台 质量主管工作台 生产经理工作台 生产管理 仓储管理 质量管理 采购管理 销售管理 人事管理 设备管理 财务管理 系统管理 智能调度 数据与分析 财务管理 / 凭证详情 f006_admin 工厂总监 返回 凭证 V-2026-0056 草稿 类型: 销售收款 日期: 2026-06-11 摘要: 销售订单 SO-20260611-0004 来源: SALES_ORDER / c379ceb6-33d0-4943"
+    },
+    {
+      "username": "f006_cashier",
+      "name": "after-login",
+      "route": "/login",
+      "finalUrl": "http://139.196.165.140:8086/dashboard",
+      "blocked": false,
+      "textLength": 0,
+      "textSample": ""
+    },
+    {
+      "username": "f006_cashier",
+      "name": "cashier-procurement-payment-requests",
+      "route": "/procurement/payment-requests",
+      "finalUrl": "http://139.196.165.140:8086/procurement/payment-requests",
+      "blocked": false,
+      "textLength": 659,
+      "textSample": "白垩纪AI Agent 首页 销售老板工作台 财务主管工作台 质量主管工作台 仓管员工作台 采购员工作台 质量主管工作台 生产经理工作台 生产管理 仓储管理 质量管理 采购管理 销售管理 人事管理 设备管理 财务管理 系统管理 智能调度 数据与分析 采购管理 / 付款申请 f006_cashier 查看者 付款申请 管理采购付款申请的审批与付款流程 状态 结算方式 查询 重置 申请单号 采购单号 供应商 结算方式 申请金额 付款方式 状态 创建时间 操作 PR-F006-20260611-5424 — BANK_T"
+    },
+    {
+      "username": "f006_cashier",
+      "name": "cashier-sales-payment-requests",
+      "route": "/sales/payment-requests",
+      "finalUrl": "http://139.196.165.140:8086/sales/payment-requests",
+      "blocked": false,
+      "textLength": 328,
+      "textSample": "白垩纪AI Agent 首页 销售老板工作台 财务主管工作台 质量主管工作台 仓管员工作台 采购员工作台 质量主管工作台 生产经理工作台 生产管理 仓储管理 质量管理 采购管理 销售管理 销售订单 成品库存 客户管理 出货记录 销售退货 车辆字典 财务待审销售单 销售付款申请 人事管理 设备管理 财务管理 系统管理 智能调度 数据与分析 销售管理 / 销售付款申请 f006_cashier 查看者 销售付款申请 对客户的 outbound 付款（退款/返利/销售费用） — 销售方向 状态 查询 重置 申请单号 销售"
+    },
+    {
+      "username": "f006_cashier",
+      "name": "cashier-finance-payments",
+      "route": "/finance/payments",
+      "finalUrl": "http://139.196.165.140:8086/finance/payments",
+      "blocked": false,
+      "textLength": 268,
+      "textSample": "白垩纪AI Agent 首页 销售老板工作台 财务主管工作台 质量主管工作台 仓管员工作台 采购员工作台 质量主管工作台 生产经理工作台 生产管理 仓储管理 质量管理 采购管理 销售管理 人事管理 设备管理 财务管理 财务概览 财务报表 应收应付 开票管理 收款管理 调整审批 SKU毛利率分析 毛利红线配置 系统管理 智能调度 数据与分析 财务管理 / 收款管理 f006_cashier 查看者 收款管理 全部状态 搜索 重置 收款编号 客户 方式 收款日期 流水号 凭证 状态 附件 操作 暂无数据"
+    }
+  ],
+  "browserErrors": []
+}

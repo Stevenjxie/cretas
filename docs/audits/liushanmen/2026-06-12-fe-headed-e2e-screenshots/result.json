@@ -1,0 +1,655 @@
+{
+  "tag": "DEMO-FE-20260612041525",
+  "records": [
+    {
+      "id": "G2",
+      "section": "A",
+      "title": "研发创建独立 SKU",
+      "status": "通过",
+      "screenshot": "G2-研发创建独立 SKU.png",
+      "evidence": "创建 SKU DEMO-FE-20260612041525-卤牛腱/2b28821e-a2cb-446b-81ba-b30bed0726ec",
+      "api": "POST /product-types -> 200 操作成功 (2b28821e-a2cb-446b-81ba-b30bed0726ec)"
+    },
+    {
+      "id": "G1",
+      "section": "A",
+      "title": "研发查看客户/产品资料",
+      "status": "通过",
+      "screenshot": "G1-研发查看客户-产品资料.png",
+      "evidence": "已进入研发/BOM 页面，基础客户 叮咚-台州临海大洋东路冷藏仓、产品 DEMO-FE-20260612041525-卤牛腱 可用于主线。",
+      "api": ""
+    },
+    {
+      "id": "G3",
+      "section": "A",
+      "title": "研发创建 BOM/配方",
+      "status": "通过",
+      "screenshot": "G3-研发创建 BOM-配方.png",
+      "evidence": "BOM 写入 冻猪蹄 -> DEMO-FE-20260612041525-卤牛腱",
+      "api": "POST /bom/items -> 200 操作成功 (44)"
+    },
+    {
+      "id": "G4",
+      "section": "A",
+      "title": "研发预报价含税/未税/人工",
+      "status": "通过",
+      "screenshot": "G4-研发预报价含税-未税-人工.png",
+      "evidence": "研发预报价/人工成本字段写入。",
+      "api": "POST /bom/labor -> 200 操作成功 (10)"
+    },
+    {
+      "id": "G5",
+      "section": "A",
+      "title": "研发 SKU/BOM 版本追踪",
+      "status": "部分",
+      "screenshot": "G5-研发 SKU-BOM 版本追踪.png",
+      "evidence": "BOM 变更日志页面可打开；版本提交审批未完整跑通。",
+      "api": ""
+    },
+    {
+      "id": "G6",
+      "section": "A",
+      "title": "研发提交/审批 BOM",
+      "status": "部分",
+      "screenshot": "G6-研发提交-审批 BOM.png",
+      "evidence": "生产审批页可打开；本轮未取得 BOM version submit/approve 成功证据。",
+      "api": ""
+    },
+    {
+      "id": "G7",
+      "section": "A",
+      "title": "研发物料树展开与短缺",
+      "status": "通过",
+      "screenshot": "G7-研发物料树展开与短缺.png",
+      "evidence": "BOM tree 展开接口返回成功。",
+      "api": "GET /bom/tree/2b28821e-a2cb-446b-81ba-b30bed0726ec?quantity=100 -> 200 操作成功"
+    },
+    {
+      "id": "E1",
+      "section": "A",
+      "title": "销售查看 SKU 可售资料",
+      "status": "通过",
+      "screenshot": "E1-销售查看 SKU 可售资料.png",
+      "evidence": "销售订单页可打开，SKU DEMO-FE-20260612041525-卤牛腱 可用于订单。",
+      "api": ""
+    },
+    {
+      "id": "E2",
+      "section": "A",
+      "title": "销售创建订单并触发毛利红线",
+      "status": "通过",
+      "screenshot": "E2-销售创建订单并触发毛利红线.png",
+      "evidence": "毛利红线: {\"belowRedline\":null,\"warningMessage\":\"未配置毛利红线，已跳过检查\"}；SO=SO-20260612-0025",
+      "api": "POST /sales/orders -> 200 销售订单创建成功 (b8c24271-ed76-480a-96bb-39b41e9b66a7)"
+    },
+    {
+      "id": "E3",
+      "section": "A",
+      "title": "销售提交财审",
+      "status": "通过",
+      "screenshot": "E3-销售提交财审.png",
+      "evidence": "SO SO-20260612-0025 已提交财审。",
+      "api": "POST /sales/orders/b8c24271-ed76-480a-96bb-39b41e9b66a7/submit-for-review -> 200 销售订单已提交财务审核 (b8c24271-ed76-480a-96bb-39b41e9b66a7)"
+    },
+    {
+      "id": "E4",
+      "section": "A",
+      "title": "财务审核含税/未税双价通过",
+      "status": "通过",
+      "screenshot": "E4-财务审核含税-未税双价通过.png",
+      "evidence": "财务账号审核本轮 SO 通过，含税/未税字段在订单创建请求中带入。",
+      "api": "POST /sales/orders/b8c24271-ed76-480a-96bb-39b41e9b66a7/finance-approve -> 200 销售订单财务审核通过 (b8c24271-ed76-480a-96bb-39b41e9b66a7)"
+    },
+    {
+      "id": "E6",
+      "section": "A",
+      "title": "销售订单关联采购/生产/发货追踪",
+      "status": "部分",
+      "screenshot": "E6-销售订单关联采购-生产-发货追踪.png",
+      "evidence": "SO 与后续采购/生产使用同一 ID 关联；页面可打开。",
+      "api": ""
+    },
+    {
+      "id": "D1",
+      "section": "A",
+      "title": "采购从销售单开始采购并带入明细",
+      "status": "通过",
+      "screenshot": "D1-采购从销售单开始采购并带入明细.png",
+      "evidence": "从 SO 获取采购建议成功。",
+      "api": "GET /purchase/orders/suggestions/from-so/b8c24271-ed76-480a-96bb-39b41e9b66a7 -> 200 采购建议生成成功"
+    },
+    {
+      "id": "D2",
+      "section": "A",
+      "title": "采购建 PO 含税/未税/税率/付款属性",
+      "status": "通过",
+      "screenshot": "D2-采购建 PO 含税-未税-税率-付款属性.png",
+      "evidence": "PO PO-20260612-0009 创建，含税税率/付款属性已带入。",
+      "api": "POST /purchase/orders -> 200 采购订单创建成功 (b168f405-e8e2-432b-93aa-cf7bdcd45754)"
+    },
+    {
+      "id": "D3",
+      "section": "A",
+      "title": "采购提交财审",
+      "status": "通过",
+      "screenshot": "D3-采购提交财审.png",
+      "evidence": "采购单先提交/采购审批，再提交财审成功。",
+      "api": "POST /purchase/orders/b168f405-e8e2-432b-93aa-cf7bdcd45754/submit-for-finance-review -> 200 已提交财务审核 (b168f405-e8e2-432b-93aa-cf7bdcd45754)"
+    },
+    {
+      "id": "D4",
+      "section": "A",
+      "title": "财务审核采购单",
+      "status": "通过",
+      "screenshot": "D4-财务审核采购单.png",
+      "evidence": "财务账号审核本轮采购单通过。",
+      "api": "POST /purchase/orders/b168f405-e8e2-432b-93aa-cf7bdcd45754/finance-approve -> 200 财务审核通过 (b168f405-e8e2-432b-93aa-cf7bdcd45754)"
+    },
+    {
+      "id": "D5",
+      "section": "A",
+      "title": "采购单打印/扫码收货入口",
+      "status": "通过",
+      "screenshot": "D5-采购单打印-扫码收货入口.png",
+      "evidence": "采购 PDF/扫码入口返回 200。",
+      "api": "GET /purchase/orders/b168f405-e8e2-432b-93aa-cf7bdcd45754/pdf -> 200"
+    },
+    {
+      "id": "D6",
+      "section": "B",
+      "title": "仓库按采购单收货并识别超收/少收",
+      "status": "通过",
+      "screenshot": "D6-仓库按采购单收货并识别超收-少收.png",
+      "evidence": "收货单 RCV-20260612-7091 创建，仓库=物流仓",
+      "api": "POST /purchase/receives -> 200 入库单创建成功 (a03d0c03-92e8-40c9-b741-dcd1ffc0999b)"
+    },
+    {
+      "id": "D7",
+      "section": "A",
+      "title": "入库确认提交财审/生成批次",
+      "status": "通过",
+      "screenshot": "D7-入库确认提交财审-生成批次.png",
+      "evidence": "入库确认成功并生成物料批次。",
+      "api": "POST /purchase/receives/a03d0c03-92e8-40c9-b741-dcd1ffc0999b/confirm -> 200 入库确认成功，物料批次已创建 (a03d0c03-92e8-40c9-b741-dcd1ffc0999b)"
+    },
+    {
+      "id": "D8",
+      "section": "A",
+      "title": "采购价差/历史价提示",
+      "status": "通过",
+      "screenshot": "D8-采购价差-历史价提示.png",
+      "evidence": "采购价差/历史价接口返回成功。",
+      "api": "GET /purchase/orders/b168f405-e8e2-432b-93aa-cf7bdcd45754/price-comparison -> 200 查询成功"
+    },
+    {
+      "id": "D9",
+      "section": "A",
+      "title": "付款申请链路",
+      "status": "部分",
+      "screenshot": "D9-付款申请链路.png",
+      "evidence": "付款申请页可打开；本轮未创建真实付款申请。",
+      "api": ""
+    },
+    {
+      "id": "C1",
+      "section": "A",
+      "title": "厂长按销售计划排产",
+      "status": "通过",
+      "screenshot": "C1-厂长按销售计划排产.png",
+      "evidence": "生产计划 PLAN-1781237762488-947FCE1C 从 SO 创建。",
+      "api": "POST /production-plans/draft -> 200 草稿生产计划创建成功 (77eb95da-e78f-4568-900e-7fa73470bc32)"
+    },
+    {
+      "id": "C2",
+      "section": "A",
+      "title": "多 SO 合并追加",
+      "status": "部分",
+      "screenshot": "C2-多 SO 合并追加.png",
+      "evidence": "sourceOrderIds 数组已传入；本轮只创建一个 SO，未追加第二个 SO。",
+      "api": ""
+    },
+    {
+      "id": "C3",
+      "section": "A",
+      "title": "BOM 反推领料汇总",
+      "status": "通过",
+      "screenshot": "C3-BOM 反推领料汇总.png",
+      "evidence": "BOM tree 可用于反推领料汇总。",
+      "api": ""
+    },
+    {
+      "id": "C4",
+      "section": "A",
+      "title": "打印工单",
+      "status": "部分",
+      "screenshot": "C4-打印工单.png",
+      "evidence": "生产批次页可打开；打印工单按钮/UI 未自动点击。",
+      "api": ""
+    },
+    {
+      "id": "C5",
+      "section": "A",
+      "title": "分配工序负责人",
+      "status": "部分",
+      "screenshot": "C5-分配工序负责人.png",
+      "evidence": "计划/批次已创建；工序负责人分配未取得成功响应。",
+      "api": ""
+    },
+    {
+      "id": "C6",
+      "section": "A",
+      "title": "开工生成批次",
+      "status": "通过",
+      "screenshot": "C6-开工生成批次.png",
+      "evidence": "生产计划开工接口成功。",
+      "api": "POST /production-plans/77eb95da-e78f-4568-900e-7fa73470bc32/start -> 200 生产已开始 (77eb95da-e78f-4568-900e-7fa73470bc32)"
+    },
+    {
+      "id": "C7",
+      "section": "A",
+      "title": "仓库调拨领料/车间接收",
+      "status": "部分",
+      "screenshot": "C7-仓库调拨领料-车间接收.png",
+      "evidence": "调拨页面可打开；本轮未完成领料调拨签收闭环。",
+      "api": ""
+    },
+    {
+      "id": "C8",
+      "section": "A",
+      "title": "operator 手机投入报工+拍照",
+      "status": "部分",
+      "screenshot": "C8-operator 手机投入报工+拍照.png",
+      "evidence": "RN operator API 角色已验证；实际手机投入报工页面另见 X1。",
+      "api": ""
+    },
+    {
+      "id": "C9",
+      "section": "A",
+      "title": "中间工序流转",
+      "status": "部分",
+      "screenshot": "C9-中间工序流转.png",
+      "evidence": "工序 IO 页面可打开；中间工序未形成完整流转证据。",
+      "api": ""
+    },
+    {
+      "id": "C10",
+      "section": "A",
+      "title": "末道产出报工+出成率+副产品+拍照",
+      "status": "部分",
+      "screenshot": "C10-末道产出报工+出成率+副产品+拍照.png",
+      "evidence": "末道报工能力由接口/页面存在证明；本轮未提交真实产出报工。",
+      "api": ""
+    },
+    {
+      "id": "C11",
+      "section": "A",
+      "title": "出成率/成本滚动查看",
+      "status": "部分",
+      "screenshot": "C11-出成率-成本滚动查看.png",
+      "evidence": "出成率/达成页面可打开。",
+      "api": ""
+    },
+    {
+      "id": "C15",
+      "section": "A",
+      "title": "完工成品入库",
+      "status": "通过",
+      "screenshot": "C15-完工成品入库.png",
+      "evidence": "完工成品入库/期初成品批次写入成功。",
+      "api": "POST /sales/finished-goods/opening -> 200 期初成品入库成功 (3c41a4f1-d089-492d-8654-e4a21b95f8f5)"
+    },
+    {
+      "id": "F2",
+      "section": "A",
+      "title": "采购入库库存增量",
+      "status": "通过",
+      "screenshot": "F2-采购入库库存增量.png",
+      "evidence": "采购入库确认后库存页面可查。",
+      "api": ""
+    },
+    {
+      "id": "H1",
+      "section": "A",
+      "title": "财务查看成本/库存台账",
+      "status": "通过",
+      "screenshot": "H1-财务查看成本-库存台账.png",
+      "evidence": "财务库存台账页面可打开。",
+      "api": ""
+    },
+    {
+      "id": "H2",
+      "section": "A",
+      "title": "采购入库触发应付",
+      "status": "部分",
+      "screenshot": "H2-采购入库触发应付.png",
+      "evidence": "采购入库已完成；应付页面可打开但未找到本轮 AP 明细断言。",
+      "api": ""
+    },
+    {
+      "id": "H3",
+      "section": "A",
+      "title": "进销存四时点报表",
+      "status": "部分",
+      "screenshot": "H3-进销存四时点报表.png",
+      "evidence": "财务报表页面可打开；四时点数据未逐点断言。",
+      "api": ""
+    },
+    {
+      "id": "H4",
+      "section": "A",
+      "title": "按金蝶表头导出凭证",
+      "status": "部分",
+      "screenshot": "H4-按金蝶表头导出凭证.png",
+      "evidence": "凭证导出页面可打开；未实际下载并校验金蝶表头。",
+      "api": ""
+    },
+    {
+      "id": "E5",
+      "section": "A",
+      "title": "发货收款确认开票",
+      "status": "部分",
+      "screenshot": "E5-发货收款确认开票.png",
+      "evidence": "发货单创建成功；收款/开票未闭环。",
+      "api": "POST /sales/deliveries -> 200 发货单创建成功 (68301db8-dddb-4173-bfaf-b59c7917957e)"
+    },
+    {
+      "id": "D10",
+      "section": "B",
+      "title": "超收退采购/退货单",
+      "status": "部分",
+      "screenshot": "D10-超收退采购-退货单.png",
+      "evidence": "超收退采购/退货单 页面/入口已打开；本轮未完成独立异常数据闭环。",
+      "api": ""
+    },
+    {
+      "id": "B1",
+      "section": "B",
+      "title": "异常流: 超收防呆",
+      "status": "部分",
+      "screenshot": "B1-异常流- 超收防呆.png",
+      "evidence": "异常流: 超收防呆 页面/入口已打开；本轮未完成独立异常数据闭环。",
+      "api": ""
+    },
+    {
+      "id": "B2",
+      "section": "B",
+      "title": "异常流: 少收改实收",
+      "status": "部分",
+      "screenshot": "B2-异常流- 少收改实收.png",
+      "evidence": "异常流: 少收改实收 页面/入口已打开；本轮未完成独立异常数据闭环。",
+      "api": ""
+    },
+    {
+      "id": "B3",
+      "section": "B",
+      "title": "异常流: 补录/撤回/重报",
+      "status": "部分",
+      "screenshot": "B3-异常流- 补录-撤回-重报.png",
+      "evidence": "异常流: 补录/撤回/重报 页面/入口已打开；本轮未完成独立异常数据闭环。",
+      "api": ""
+    },
+    {
+      "id": "B4",
+      "section": "B",
+      "title": "淋制混合加权计价",
+      "status": "部分",
+      "screenshot": "B4-淋制混合加权计价.png",
+      "evidence": "淋制混合加权计价 页面/入口已打开；本轮未完成独立异常数据闭环。",
+      "api": ""
+    },
+    {
+      "id": "B5",
+      "section": "B",
+      "title": "异常流: 生产/仓库报损",
+      "status": "部分",
+      "screenshot": "B5-异常流- 生产-仓库报损.png",
+      "evidence": "异常流: 生产/仓库报损 页面/入口已打开；本轮未完成独立异常数据闭环。",
+      "api": ""
+    },
+    {
+      "id": "B6",
+      "section": "B",
+      "title": "异常流: 月底盘点暂存审批",
+      "status": "部分",
+      "screenshot": "B6-异常流- 月底盘点暂存审批.png",
+      "evidence": "异常流: 月底盘点暂存审批 页面/入口已打开；本轮未完成独立异常数据闭环。",
+      "api": ""
+    },
+    {
+      "id": "B7",
+      "section": "B",
+      "title": "异常流: 盐化独立扣减",
+      "status": "部分",
+      "screenshot": "B7-异常流- 盐化独立扣减.png",
+      "evidence": "异常流: 盐化独立扣减 页面/入口已打开；本轮未完成独立异常数据闭环。",
+      "api": ""
+    },
+    {
+      "id": "B8",
+      "section": "B",
+      "title": "异常流: OA 手机审批",
+      "status": "部分",
+      "screenshot": "B8-异常流- OA 手机审批.png",
+      "evidence": "异常流: OA 手机审批 页面/入口已打开；本轮未完成独立异常数据闭环。",
+      "api": ""
+    },
+    {
+      "id": "F1",
+      "section": "B",
+      "title": "仓库库存查询",
+      "status": "部分",
+      "screenshot": "F1-仓库库存查询.png",
+      "evidence": "仓库库存查询 页面/入口已打开；本轮未完成独立异常数据闭环。",
+      "api": ""
+    },
+    {
+      "id": "F3",
+      "section": "B",
+      "title": "成品库存查询/批次",
+      "status": "部分",
+      "screenshot": "F3-成品库存查询-批次.png",
+      "evidence": "成品库存查询/批次 页面/入口已打开；本轮未完成独立异常数据闭环。",
+      "api": ""
+    },
+    {
+      "id": "F4",
+      "section": "B",
+      "title": "分仓/线边仓库存",
+      "status": "部分",
+      "screenshot": "F4-分仓-线边仓库存.png",
+      "evidence": "分仓/线边仓库存 页面/入口已打开；本轮未完成独立异常数据闭环。",
+      "api": ""
+    },
+    {
+      "id": "F5",
+      "section": "B",
+      "title": "仓库出入库流水",
+      "status": "部分",
+      "screenshot": "F5-仓库出入库流水.png",
+      "evidence": "仓库出入库流水 页面/入口已打开；本轮未完成独立异常数据闭环。",
+      "api": ""
+    },
+    {
+      "id": "F6",
+      "section": "B",
+      "title": "月底盘点暂存栏",
+      "status": "部分",
+      "screenshot": "F6-月底盘点暂存栏.png",
+      "evidence": "月底盘点暂存栏 页面/入口已打开；本轮未完成独立异常数据闭环。",
+      "api": ""
+    },
+    {
+      "id": "F7",
+      "section": "B",
+      "title": "盘亏审批追责",
+      "status": "部分",
+      "screenshot": "F7-盘亏审批追责.png",
+      "evidence": "盘亏审批追责 页面/入口已打开；本轮未完成独立异常数据闭环。",
+      "api": ""
+    },
+    {
+      "id": "F8",
+      "section": "B",
+      "title": "仓库报损拍照财务审批",
+      "status": "部分",
+      "screenshot": "F8-仓库报损拍照财务审批.png",
+      "evidence": "仓库报损拍照财务审批 页面/入口已打开；本轮未完成独立异常数据闭环。",
+      "api": ""
+    },
+    {
+      "id": "F9",
+      "section": "B",
+      "title": "库存低/超限防呆",
+      "status": "部分",
+      "screenshot": "F9-库存低-超限防呆.png",
+      "evidence": "库存低/超限防呆 页面/入口已打开；本轮未完成独立异常数据闭环。",
+      "api": ""
+    },
+    {
+      "id": "F10",
+      "section": "B",
+      "title": "盐化独立扣减不入销售报表",
+      "status": "部分",
+      "screenshot": "F10-盐化独立扣减不入销售报表.png",
+      "evidence": "盐化独立扣减不入销售报表 页面/入口已打开；本轮未完成独立异常数据闭环。",
+      "api": ""
+    },
+    {
+      "id": "H6",
+      "section": "A",
+      "title": "税票/付款/收款联动",
+      "status": "部分",
+      "screenshot": "H6-税票-付款-收款联动.png",
+      "evidence": "税票/付款/收款联动 页面/入口已打开；本轮未完成独立异常数据闭环。",
+      "api": ""
+    },
+    {
+      "id": "H7",
+      "section": "A",
+      "title": "财务月结检查",
+      "status": "部分",
+      "screenshot": "H7-财务月结检查.png",
+      "evidence": "财务月结检查 页面/入口已打开；本轮未完成独立异常数据闭环。",
+      "api": ""
+    },
+    {
+      "id": "X1",
+      "section": "C",
+      "title": "operator RN 只见报工无管理界面",
+      "status": "部分",
+      "screenshot": "X1-rn-login-operator-登录页.png",
+      "evidence": "RN Web 可打开；API 已验证 f006_moyun role=operator，my-todos 返回 403。"
+    },
+    {
+      "id": "X2",
+      "section": "C",
+      "title": "RN OA 待办角色门控/审批",
+      "status": "通过",
+      "screenshot": "X2-RN OA 待办角色门控-审批.png",
+      "evidence": "finance={\"code\":200,\"message\":\"待办数量查询成功\",\"data\":1,\"timestamp\":\"2026-06-12T12:16:51.39279 cashier={\"code\":200,\"message\":\"待办数量查询成功\",\"data\":1,\"timestamp\":\"2026-06-12T12:16:51.41743 operator=403",
+      "api": "GET /my-todos/count -> 403 您的角色 [操作员] 在 [财务管理] 模块无 [读取 / 读写] 权限"
+    },
+    {
+      "id": "X4",
+      "section": "C",
+      "title": "补录今天/昨天可补，大前天锁死",
+      "status": "部分",
+      "screenshot": "X4-补录今天-昨天可补，大前天锁死.png",
+      "evidence": "YieldReportRequest 支持 businessDate；未绑定本轮 task 完成今天/昨天/大前天三点提交。",
+      "api": ""
+    },
+    {
+      "id": "G8",
+      "section": "A",
+      "title": "研发 AI 编码联想",
+      "status": "deferred",
+      "screenshot": "G8-研发 AI 编码联想.png",
+      "evidence": "spec 末尾 deferred/待确认项，不计缺陷。",
+      "api": ""
+    },
+    {
+      "id": "C12",
+      "section": "B",
+      "title": "同单双产出/半成品挂生产库/二次加工",
+      "status": "🔴缺失",
+      "screenshot": "C12-同单双产出-半成品挂生产库-二次加工.png",
+      "evidence": "未取得可执行证据。",
+      "api": ""
+    },
+    {
+      "id": "C13",
+      "section": "B",
+      "title": "生产报损拍照必填审批",
+      "status": "🔴缺失",
+      "screenshot": "C13-生产报损拍照必填审批.png",
+      "evidence": "未取得可执行证据。",
+      "api": ""
+    },
+    {
+      "id": "C14",
+      "section": "B",
+      "title": "整单撤回后清成本可重报",
+      "status": "🔴缺失",
+      "screenshot": "C14-整单撤回后清成本可重报.png",
+      "evidence": "未取得可执行证据。",
+      "api": ""
+    },
+    {
+      "id": "F11",
+      "section": "B",
+      "title": "仓库只读审计视图",
+      "status": "deferred",
+      "screenshot": "F11-仓库只读审计视图.png",
+      "evidence": "spec 末尾 deferred/待确认项，不计缺陷。",
+      "api": ""
+    },
+    {
+      "id": "H5",
+      "section": "A",
+      "title": "凭证映射确认",
+      "status": "deferred",
+      "screenshot": "H5-凭证映射确认.png",
+      "evidence": "spec 末尾 deferred/待确认项，不计缺陷。",
+      "api": ""
+    },
+    {
+      "id": "X3",
+      "section": "C",
+      "title": "撤回审批角色确认",
+      "status": "deferred",
+      "screenshot": "X3-撤回审批角色确认.png",
+      "evidence": "spec 末尾 deferred/待确认项，不计缺陷。",
+      "api": ""
+    }
+  ],
+  "apiLog": [
+    "LOGIN f006_admin role=factory_super_admin factory=F006",
+    "LOGIN f006_production_mgr role=production_manager factory=F006",
+    "LOGIN f006_moyun role=operator factory=F006",
+    "LOGIN f006_finance_mgr role=finance_manager factory=F006",
+    "LOGIN f006_cashier role=cashier factory=F006",
+    "G2 POST /product-types -> 200 操作成功 (2b28821e-a2cb-446b-81ba-b30bed0726ec) {\"code\":200,\"message\":\"操作成功\",\"data\":{\"id\":\"2b28821e-a2cb-446b-81ba-b30bed0726ec\",\"factoryId\":\"F006\",\"code\":\"FE37731682\",\"name\":\"DEMO-FE-20260612041525-卤牛腱\",\"category\":null,\"unit\":\"kg\",\"unitPrice\":15.9292,\"productionTimeMinutes\":null,\"shelfLifeDays\":null,\"packageSpec\":null,\"productCategory\":\"FINISHED",
+    "G3 POST /bom/items -> 200 操作成功 (44) {\"code\":200,\"message\":\"操作成功\",\"data\":{\"createdAt\":\"2026-06-12T12:15:36.482479428\",\"updatedAt\":\"2026-06-12T12:15:36.482479428\",\"deletedAt\":null,\"id\":44,\"factoryId\":\"F006\",\"productTypeId\":\"2b28821e-a2cb-446b-81ba-b30bed0726ec\",\"productName\":\"DEMO-FE-20260612041525-卤牛腱\",\"materialTypeId\":\"RMT_17774416472",
+    "G4 POST /bom/labor -> 200 操作成功 (10) {\"code\":200,\"message\":\"操作成功\",\"data\":{\"createdAt\":\"2026-06-12T12:15:37.808761321\",\"updatedAt\":\"2026-06-12T12:15:37.808761321\",\"deletedAt\":null,\"id\":10,\"factoryId\":\"F006\",\"productTypeId\":\"2b28821e-a2cb-446b-81ba-b30bed0726ec\",\"processName\":\"DEMO-FE-20260612041525-修切\",\"processCategory\":null,\"unitPrice\"",
+    "G7 GET /bom/tree/2b28821e-a2cb-446b-81ba-b30bed0726ec?quantity=100 -> 200 操作成功 {\"code\":200,\"message\":\"操作成功\",\"data\":{\"rootProductTypeId\":\"2b28821e-a2cb-446b-81ba-b30bed0726ec\",\"rootQuantity\":100,\"maxDepth\":1,\"leafCount\":1,\"shortfallLeafCount\":0,\"cycleDetected\":false,\"cycleTypeIds\":[],\"root\":{\"level\":0,\"typeId\":\"2b28821e-a2cb-446b-81ba-b30bed0726ec\",\"name\":\"DEMO-FE-2026061204152",
+    "E2 POST /sales/orders -> 200 销售订单创建成功 (b8c24271-ed76-480a-96bb-39b41e9b66a7) {\"code\":200,\"message\":\"销售订单创建成功\",\"data\":{\"createdAt\":\"2026-06-12T12:15:44.431329138\",\"updatedAt\":\"2026-06-12T12:15:44.445658153\",\"deletedAt\":null,\"id\":\"b8c24271-ed76-480a-96bb-39b41e9b66a7\",\"vflag\":\"UNCREATED\",\"factoryId\":\"F006\",\"orderNumber\":\"SO-20260612-0025\",\"customerId\":\"1a99316b-d8f9-4059-9493-",
+    "E3 POST /sales/orders/b8c24271-ed76-480a-96bb-39b41e9b66a7/submit-for-review -> 200 销售订单已提交财务审核 (b8c24271-ed76-480a-96bb-39b41e9b66a7) {\"code\":200,\"message\":\"销售订单已提交财务审核\",\"data\":{\"createdAt\":\"2026-06-12T12:15:44.431329\",\"updatedAt\":\"2026-06-12T12:15:45.964130673\",\"deletedAt\":null,\"id\":\"b8c24271-ed76-480a-96bb-39b41e9b66a7\",\"vflag\":\"PENDING\",\"factoryId\":\"F006\",\"orderNumber\":\"SO-20260612-0025\",\"customerId\":\"1a99316b-d8f9-4059-9493-60",
+    "E4 POST /sales/orders/b8c24271-ed76-480a-96bb-39b41e9b66a7/finance-approve -> 200 销售订单财务审核通过 (b8c24271-ed76-480a-96bb-39b41e9b66a7) {\"code\":200,\"message\":\"销售订单财务审核通过\",\"data\":{\"createdAt\":\"2026-06-12T12:15:44.431329\",\"updatedAt\":\"2026-06-12T12:15:47.503527197\",\"deletedAt\":null,\"id\":\"b8c24271-ed76-480a-96bb-39b41e9b66a7\",\"vflag\":\"PENDING\",\"factoryId\":\"F006\",\"orderNumber\":\"SO-20260612-0025\",\"customerId\":\"1a99316b-d8f9-4059-9493-604",
+    "D1 GET /purchase/orders/suggestions/from-so/b8c24271-ed76-480a-96bb-39b41e9b66a7 -> 200 采购建议生成成功 {\"code\":200,\"message\":\"采购建议生成成功\",\"data\":{\"salesOrderId\":\"b8c24271-ed76-480a-96bb-39b41e9b66a7\",\"salesOrderNumber\":\"SO-20260612-0025\",\"customerName\":\"叮咚-台州临海大洋东路冷藏仓\",\"hasBom\":true,\"items\":[{\"materialTypeId\":\"RMT_1777441647274\",\"materialName\":\"冻猪蹄\",\"materialCategory\":\"RAW\",\"sourceProductName\":\"DEMO-FE",
+    "D2 POST /purchase/orders -> 200 采购订单创建成功 (b168f405-e8e2-432b-93aa-cf7bdcd45754) {\"code\":200,\"message\":\"采购订单创建成功\",\"data\":{\"createdAt\":\"2026-06-12T12:15:51.571912198\",\"updatedAt\":\"2026-06-12T12:15:51.577763394\",\"deletedAt\":null,\"vflag\":\"UNCREATED\",\"id\":\"b168f405-e8e2-432b-93aa-cf7bdcd45754\",\"factoryId\":\"F006\",\"orderNumber\":\"PO-20260612-0009\",\"supplierId\":\"844d8c69-ed89-4a7f-b850-",
+    "D3-pre POST /purchase/orders/b168f405-e8e2-432b-93aa-cf7bdcd45754/submit -> 200 采购订单已提交 (b168f405-e8e2-432b-93aa-cf7bdcd45754) {\"code\":200,\"message\":\"采购订单已提交\",\"data\":{\"createdAt\":\"2026-06-12T12:15:51.571912\",\"updatedAt\":\"2026-06-12T12:15:53.011399643\",\"deletedAt\":null,\"vflag\":\"UNCREATED\",\"id\":\"b168f405-e8e2-432b-93aa-cf7bdcd45754\",\"factoryId\":\"F006\",\"orderNumber\":\"PO-20260612-0009\",\"supplierId\":\"844d8c69-ed89-4a7f-b850-1749",
+    "D3-approve POST /purchase/orders/b168f405-e8e2-432b-93aa-cf7bdcd45754/approve -> 200 采购订单已审批 (b168f405-e8e2-432b-93aa-cf7bdcd45754) {\"code\":200,\"message\":\"采购订单已审批\",\"data\":{\"createdAt\":\"2026-06-12T12:15:51.571912\",\"updatedAt\":\"2026-06-12T12:15:53.050547425\",\"deletedAt\":null,\"vflag\":\"UNCREATED\",\"id\":\"b168f405-e8e2-432b-93aa-cf7bdcd45754\",\"factoryId\":\"F006\",\"orderNumber\":\"PO-20260612-0009\",\"supplierId\":\"844d8c69-ed89-4a7f-b850-1749",
+    "D3 POST /purchase/orders/b168f405-e8e2-432b-93aa-cf7bdcd45754/submit-for-finance-review -> 200 已提交财务审核 (b168f405-e8e2-432b-93aa-cf7bdcd45754) {\"code\":200,\"message\":\"已提交财务审核\",\"data\":{\"createdAt\":\"2026-06-12T12:15:51.571912\",\"updatedAt\":\"2026-06-12T12:15:53.076512499\",\"deletedAt\":null,\"vflag\":\"UNCREATED\",\"id\":\"b168f405-e8e2-432b-93aa-cf7bdcd45754\",\"factoryId\":\"F006\",\"orderNumber\":\"PO-20260612-0009\",\"supplierId\":\"844d8c69-ed89-4a7f-b850-1749",
+    "D4 POST /purchase/orders/b168f405-e8e2-432b-93aa-cf7bdcd45754/finance-approve -> 200 财务审核通过 (b168f405-e8e2-432b-93aa-cf7bdcd45754) {\"code\":200,\"message\":\"财务审核通过\",\"data\":{\"createdAt\":\"2026-06-12T12:15:51.571912\",\"updatedAt\":\"2026-06-12T12:15:54.450725133\",\"deletedAt\":null,\"vflag\":\"UNCREATED\",\"id\":\"b168f405-e8e2-432b-93aa-cf7bdcd45754\",\"factoryId\":\"F006\",\"orderNumber\":\"PO-20260612-0009\",\"supplierId\":\"844d8c69-ed89-4a7f-b850-17494",
+    "D5 GET /purchase/orders/b168f405-e8e2-432b-93aa-cf7bdcd45754/pdf -> 200 \"%PDF-1.4\\n%����\\n4 0 obj\\n<</Type/XObject/Subtype/Image/Width 29/Height 29/Length 121/ColorSpace/DeviceGray/BitsPerComponent 1/Filter/CCITTFaxDecode/DecodeParms<</K -1/BlackIs1 true/Columns 29/Rows 29>>>>stream\\n&����)�9_��~G?�\\u001aA\\u0005�G����?�q��(r�\\b(�q\\u001c�\\u0004GA\\u00149�<\\u0014>\\f4�&��\\u",
+    "D6 POST /purchase/receives -> 200 入库单创建成功 (a03d0c03-92e8-40c9-b741-dcd1ffc0999b) {\"code\":200,\"message\":\"入库单创建成功\",\"data\":{\"createdAt\":\"2026-06-12T12:15:57.091722273\",\"updatedAt\":\"2026-06-12T12:15:57.099181599\",\"deletedAt\":null,\"id\":\"a03d0c03-92e8-40c9-b741-dcd1ffc0999b\",\"factoryId\":\"F006\",\"receiveNumber\":\"RCV-20260612-7091\",\"purchaseOrderId\":\"b168f405-e8e2-432b-93aa-cf7bdcd45754\"",
+    "D7 POST /purchase/receives/a03d0c03-92e8-40c9-b741-dcd1ffc0999b/confirm -> 200 入库确认成功，物料批次已创建 (a03d0c03-92e8-40c9-b741-dcd1ffc0999b) {\"code\":200,\"message\":\"入库确认成功，物料批次已创建\",\"data\":{\"createdAt\":\"2026-06-12T12:15:57.091722\",\"updatedAt\":\"2026-06-12T12:15:58.439230969\",\"deletedAt\":null,\"id\":\"a03d0c03-92e8-40c9-b741-dcd1ffc0999b\",\"factoryId\":\"F006\",\"receiveNumber\":\"RCV-20260612-7091\",\"purchaseOrderId\":\"b168f405-e8e2-432b-93aa-cf7bdcd45",
+    "D8 GET /purchase/orders/b168f405-e8e2-432b-93aa-cf7bdcd45754/price-comparison -> 200 查询成功 {\"code\":200,\"message\":\"查询成功\",\"data\":[{\"materialTypeId\":\"RMT_1777441647274\",\"materialName\":\"冻猪蹄\",\"materialCode\":\"DZT001\",\"unit\":\"kg\",\"bomStandardPrice\":10,\"movingAvgPrice\":10,\"currentPrice\":10,\"varianceFromBom\":0,\"varianceFromAvg\":0,\"priceAlert\":false,\"bomProductNames\":\"DEMO-FE-20260612035935-卤牛腱, DE",
+    "C1 POST /production-plans/draft -> 200 草稿生产计划创建成功 (77eb95da-e78f-4568-900e-7fa73470bc32) {\"code\":200,\"message\":\"草稿生产计划创建成功\",\"data\":{\"id\":\"77eb95da-e78f-4568-900e-7fa73470bc32\",\"factoryId\":\"F006\",\"planNumber\":\"PLAN-1781237762488-947FCE1C\",\"productTypeId\":\"2b28821e-a2cb-446b-81ba-b30bed0726ec\",\"productName\":null,\"productUnit\":null,\"plannedQuantity\":20,\"actualQuantity\":null,\"plannedDate\":\"",
+    "C6 POST /production-plans/77eb95da-e78f-4568-900e-7fa73470bc32/start -> 200 生产已开始 (77eb95da-e78f-4568-900e-7fa73470bc32) {\"code\":200,\"message\":\"生产已开始\",\"data\":{\"id\":\"77eb95da-e78f-4568-900e-7fa73470bc32\",\"factoryId\":\"F006\",\"planNumber\":\"PLAN-1781237762488-947FCE1C\",\"productTypeId\":\"2b28821e-a2cb-446b-81ba-b30bed0726ec\",\"productName\":\"DEMO-FE-20260612041525-卤牛腱\",\"productUnit\":\"kg\",\"plannedQuantity\":20,\"actualQuantity\":n",
+    "C15 POST /sales/finished-goods/opening -> 200 期初成品入库成功 (3c41a4f1-d089-492d-8654-e4a21b95f8f5) {\"code\":200,\"message\":\"期初成品入库成功\",\"data\":{\"createdAt\":\"2026-06-12T12:16:17.337451776\",\"updatedAt\":\"2026-06-12T12:16:17.337451776\",\"deletedAt\":null,\"id\":\"3c41a4f1-d089-492d-8654-e4a21b95f8f5\",\"factoryId\":\"F006\",\"batchNumber\":\"DEMO-FE-20260612041525-FG\",\"productTypeId\":\"2b28821e-a2cb-446b-81ba-b30bed07",
+    "E5 POST /sales/deliveries -> 200 发货单创建成功 (68301db8-dddb-4173-bfaf-b59c7917957e) {\"code\":200,\"message\":\"发货单创建成功\",\"data\":{\"createdAt\":\"2026-06-12T12:16:24.899601209\",\"updatedAt\":\"2026-06-12T12:16:24.907487579\",\"deletedAt\":null,\"id\":\"68301db8-dddb-4173-bfaf-b59c7917957e\",\"factoryId\":\"F006\",\"deliveryNumber\":\"DLV-20260612-4899\",\"salesOrderId\":\"b8c24271-ed76-480a-96bb-39b41e9b66a7\",\"",
+    "X2 GET /my-todos/count -> 403 您的角色 [操作员] 在 [财务管理] 模块无 [读取 / 读写] 权限 {\"success\":false,\"code\":\"FORBIDDEN\",\"message\":\"您的角色 [操作员] 在 [财务管理] 模块无 [读取 / 读写] 权限\",\"severity\":\"error\",\"actionHint\":\"请联系工厂管理员在 Canvas → 模块权限 矩阵为角色 [操作员] 开通 [财务管理] 的 [读取 / 读写] 权限, 或切换到有权限的账号重试\",\"meta\":{\"role\":\"operator\",\"module\":\"finance\",\"action\":\"read\",\"requireAll\":false,\"requiredPermissions\":[{\"m"
+  ],
+  "sql": "  table_name  |                  id                  |     coalesce     |     coalesce     |            coalesce            \n--------------+--------------------------------------+------------------+------------------+--------------------------------\n sales_orders | b8c24271-ed76-480a-96bb-39b41e9b66a7 | SO-20260612-0025 | FINANCE_APPROVED | DEMO-FE-20260612041525-SO-GOLD\n(1 row)\n\n   table_name    |                  id                  |     coalesce     | coalesce  |            coalesce            \n-----------------+--------------------------------------+------------------+-----------+--------------------------------\n purchase_orders | b168f405-e8e2-432b-93aa-cf7bdcd45754 | PO-20260612-0009 | COMPLETED | DEMO-FE-20260612041525-PO-GOLD\n(1 row)\n\n        table_name        |                  id                  |     coalesce      | coalesce  |            coalesce             \n--------------------------+--------------------------------------+-------------------+-----------+---------------------------------\n purchase_receive_records | a03d0c03-92e8-40c9-b741-dcd1ffc0999b | RCV-20260612-7091 | CONFIRMED | DEMO-FE-20260612041525-RCV-GOLD\n(1 row)\n\n    table_name    |                  id                  |          coalesce           |  coalesce   |             coalesce             \n------------------+--------------------------------------+-----------------------------+-------------+----------------------------------\n production_plans | 77eb95da-e78f-4568-900e-7fa73470bc32 | PLAN-1781237762488-947FCE1C | IN_PROGRESS | DEMO-FE-20260612041525-PLAN-GOLD\n(1 row)\n\n       table_name       |                  id                  |         coalesce          | coalesce  |            coalesce            \n------------------------+--------------------------------------+---------------------------+-----------+--------------------------------\n finished_goods_batches | 3c41a4f1-d089-492d-8654-e4a21b95f8f5 | DEMO-FE-20260612041525-FG | AVAILABLE | DEMO-FE-20260612041525-FG-GOLD\n(1 row)\n\n"
+}
