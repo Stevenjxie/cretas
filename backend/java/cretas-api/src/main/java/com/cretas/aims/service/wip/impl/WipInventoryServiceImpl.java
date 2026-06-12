@@ -105,9 +105,10 @@ public class WipInventoryServiceImpl implements WipInventoryService {
         }
         if (report.getSourceWipNo() != null && !report.getSourceWipNo().isBlank()
                 && report.getInputQuantity() != null) {
+            BigDecimal sourceWipQuantity = sourceWipQuantity(report);
             SemiFinishedInventory sourceWip = validateSourceWip(
-                    factoryId, report.getSourceWipNo(), report.getInputQuantity(), report.getInputUnit(), report.getId());
-            consumeSourceWip(sourceWip, report.getInputQuantity(), report, task, operatorId);
+                    factoryId, report.getSourceWipNo(), sourceWipQuantity, report.getInputUnit(), report.getId());
+            consumeSourceWip(sourceWip, sourceWipQuantity, report, task, operatorId);
         }
         String outputKind = report.getOutputKind();
         // SP1: SEMI/BOTH → post semi-finished ledger; FINISHED/null(legacy) → existing WIP path
@@ -527,6 +528,22 @@ public class WipInventoryServiceImpl implements WipInventoryService {
         }
         BigDecimal pending = reportRepo.sumPendingInputBySourceWipNo(factoryId, sourceWipNo, excludeReportId);
         return pending == null ? BigDecimal.ZERO : pending;
+    }
+
+    private BigDecimal sourceWipQuantity(ProductionReport report) {
+        if (report.getCustomFields() != null) {
+            Object value = report.getCustomFields().get("sourceWipQuantity");
+            if (value instanceof BigDecimal bd) {
+                return bd;
+            }
+            if (value instanceof Number number) {
+                return BigDecimal.valueOf(number.doubleValue());
+            }
+            if (value instanceof String str && !str.isBlank()) {
+                return new BigDecimal(str);
+            }
+        }
+        return report.getInputQuantity();
     }
 
     private void validateAvailable(SemiFinishedInventory sourceWip, BigDecimal inputQuantity, BigDecimal pendingReserved) {

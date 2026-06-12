@@ -147,6 +147,7 @@ public class YieldReportServiceImpl implements YieldReportService {
         String effOutputUnit = (isInput || isSegment) ? null : req.getOutputUnit();
         List<YieldReportRequest.LaborSegment> effSegs = (isInput || isOutput) ? null : req.getLaborSegments();
         List<MaterialBatchRef> effMaterialRefs = (isSegment || isOutput) ? null : req.getMaterialBatchRefs();
+        BigDecimal effSourceWipQuantity = (isSegment || isOutput) ? null : sourceWipQuantity(req, effInput);
         List<YieldReportRequest.Byproduct> effByproducts = (isInput || isSegment) ? null : req.getByproducts();
         BigDecimal effWaste = (isInput || isSegment) ? null : req.getWasteQuantity();
         Integer effSampleRetain = (isInput || isSegment) ? null : req.getSampleRetainQuantity();
@@ -164,7 +165,7 @@ public class YieldReportServiceImpl implements YieldReportService {
         SemiFinishedInventory sourceWip = null;
         if ((isInput || isLegacy) && req.getSourceWipNo() != null && !req.getSourceWipNo().isBlank()) {
             sourceWip = wipInventoryService.validateSourceWip(
-                    factoryId, req.getSourceWipNo(), effInput, effInputUnit, null);
+                    factoryId, req.getSourceWipNo(), effSourceWipQuantity, effInputUnit, null);
         }
 
         // 前置查该 task 已有 YIELD 报工: 决定是否首条 + 作双写求和基数
@@ -181,7 +182,7 @@ public class YieldReportServiceImpl implements YieldReportService {
         List<YieldReportRequest.LaborSegment> segs = effSegs;
         BigDecimal laborCost = computeLaborCost(segs, effReqWorkerCount, effReqWorkMinutes, hourlyRate);
         BigDecimal materialCost = computeMaterialCost(effMaterialRefs,
-                sourceWip, effInput,
+                sourceWip, effSourceWipQuantity,
                 factoryId, t.getWorkProcessId(), effOutput);
 
         // 适配单元3: 多段工时时, totalWorkMinutes = Σ段时长, totalWorkers = MAX headcount (峰值, 修 M2);
@@ -227,7 +228,7 @@ public class YieldReportServiceImpl implements YieldReportService {
                 .byproducts(toByproductMaps(effByproducts))
                 .wasteQuantity(effWaste)
                 .sampleRetainQuantity(effSampleRetain)
-                .customFields(buildYieldCustomFields(reportKind))
+                .customFields(buildYieldCustomFields(reportKind, sourceWip == null ? null : effSourceWipQuantity))
                 // 工序批次号是任务级: 仅首条报工生成, 后续条 null (避免 uq_pr_intermediate_batch_no 冲突)
                 .intermediateBatchNo(isFirstReportForTask ? generateBatchNo(t, batchId) : null)
                 // G7: 本道领用的源 WIP 工序批次号 (向后兼容: null 走旧路径); 三阶段: 仅 INPUT/legacy 消耗
@@ -838,14 +839,21 @@ public class YieldReportServiceImpl implements YieldReportService {
         }).collect(Collectors.toList());
     }
 
-    private Map<String, Object> buildYieldCustomFields(String reportKind) {
+    private Map<String, Object> buildYieldCustomFields(String reportKind, BigDecimal sourceWipQuantity) {
         Map<String, Object> fields = new LinkedHashMap<>();
         fields.put("reportStack", "YIELD");
         fields.put("wipPostingMode", "APPROVAL");
         if (reportKind != null) {
             fields.put("reportKind", reportKind);
         }
+        if (sourceWipQuantity != null) {
+            fields.put("sourceWipQuantity", sourceWipQuantity);
+        }
         return fields;
+    }
+
+    private BigDecimal sourceWipQuantity(YieldReportRequest req, BigDecimal fallbackInputQuantity) {
+        return req.getSourceWipQuantity() != null ? req.getSourceWipQuantity() : fallbackInputQuantity;
     }
 
     /**

@@ -292,7 +292,7 @@ public interface ProductionReportRepository extends JpaRepository<ProductionRepo
     Map<String, Object> sumPendingQuantityByTaskId(@Param("taskId") String taskId);
 
     @Query(value = """
-        SELECT COALESCE(SUM(CAST(input_quantity AS DECIMAL(12,2))), 0)
+        SELECT COALESCE(SUM(CAST(COALESCE(custom_fields->>'sourceWipQuantity', input_quantity::text) AS DECIMAL(12,2))), 0)
         FROM production_reports
         WHERE factory_id = :factoryId
           AND source_wip_no = :sourceWipNo

@@ -950,14 +950,26 @@ const YieldStepReportScreen: React.FC = () => {
         appAlert('证据上传中', '请等照片或视频上传完成再提交');
         return;
       }
+      const rawMaterialQty = materialBatchRefs.reduce((sum, ref) => sum + ref.quantity, 0);
+      const totalInputQty = rawMaterialQty + pickQty;
       const req: YieldReportRequest = {
         workProcessTaskId: currentTask.id,
         reportKind: 'INPUT',
-        inputQuantity: pickQty,
+        inputQuantity: totalInputQty,
         inputUnit: selectedWipItem.unit ?? unit,
         outputQuantity: 0,
         // SP3: sourceWipNo 传 intermediateBatchNo 供后端扣减 WIP 余量
         sourceWipNo: selectedWipItem.intermediateBatchNo,
+        sourceWipQuantity: pickQty,
+        ...(materialBatchRefs.length > 0
+          ? {
+              materialBatchRefs: materialBatchRefs.map((r: MaterialBatchRef) => ({
+                materialBatchId: r.materialBatchId,
+                quantity: r.quantity,
+                unit: r.unit ?? unit,
+              })),
+            }
+          : {}),
         ...(uploadedEvidenceUrls.length > 0 ? { evidenceImages: uploadedEvidenceUrls } : {}),
         ...(buildPhotoAnnotations() ? { photoAnnotations: buildPhotoAnnotations() } : {}),
       };
@@ -2053,7 +2065,7 @@ const YieldStepReportScreen: React.FC = () => {
                 <NeoCard variant="outlined" style={styles.sp3Card}>
                   <Text style={styles.sp3Title}>领用半成品库存</Text>
                   <Text style={styles.sp3Desc}>
-                    该批次为二次加工批次, 首道请从可用半成品库存中领用, 无需领原料批次
+                    该批次可同时领用半成品和原料；半成品数量在此填写，原料实际量在下方批次中填写。
                   </Text>
                   {availableWipLoading ? (
                     <ActivityIndicator size="small" color="#E8732E" style={styles.sp3Loader} />
@@ -2112,11 +2124,11 @@ const YieldStepReportScreen: React.FC = () => {
                 </NeoCard>
               ) : null}
 
-              {/* A2b: 首道领料批次选择 (仅首道且非二次加工) — B1: required prop signals red asterisk
+              {/* A2b: 首道领料批次选择；二次加工可选填原料，与半成品双领 — B1: required prop signals red asterisk
                * Q1 单一数据源: singleBatchQty 把屏幕的 inputQty 传进 picker, 单批次模式下
                * picker 不显示独立用量输入框, 该批次 quantity = inputQty (投入量 IS 用量).
                * 多批次模式下 picker 显示各批独立输入, inputQty 由 Σ 自动算只读展示. */}
-              {isFirstStep && !isSecondaryProcessing ? (
+              {isFirstStep ? (
                 <MaterialBatchPicker
                   unit={unit}
                   productTypeId={productTypeId}
@@ -2124,7 +2136,7 @@ const YieldStepReportScreen: React.FC = () => {
                   onChange={setMaterialBatchRefs}
                   singleBatchQty={inputQty}
                   disabled={submitting}
-                  required
+                  required={!isSecondaryProcessing}
                 />
               ) : null}
 
@@ -2161,7 +2173,7 @@ const YieldStepReportScreen: React.FC = () => {
                 </View>
               ) : (
                 <YieldQuantityInput
-                  label="投入量"
+                  label={isSecondaryProcessing ? '原料投入量' : '投入量'}
                   value={inputQty}
                   onChangeText={setInputQty}
                   unit={unit}

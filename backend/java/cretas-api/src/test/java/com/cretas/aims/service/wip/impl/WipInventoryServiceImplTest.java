@@ -157,6 +157,50 @@ class WipInventoryServiceImplTest {
     }
 
     @Test
+    @DisplayName("N2 double picking consumes sourceWipQuantity instead of total inputQuantity")
+    void postApprovedOutput_sourceWipQuantity_consumesOnlySemiQuantity() {
+        WorkProcessTask task = WorkProcessTask.builder()
+                .id(7000L)
+                .factoryId(FACTORY_ID)
+                .productionBatchId(9000L)
+                .workProcessId("WP-000")
+                .productTypeId("PROD-000")
+                .processOrder(1)
+                .plannedUnit("kg")
+                .build();
+        ProductionReport report = ProductionReport.builder()
+                .factoryId(FACTORY_ID)
+                .id(499L)
+                .batchId(9000L)
+                .workProcessTaskId(7000L)
+                .sourceWipNo("WIP-S1")
+                .inputQuantity(new BigDecimal("130"))
+                .inputUnit("kg")
+                .customFields(Map.of("sourceWipQuantity", new BigDecimal("80")))
+                .build();
+        SemiFinishedInventory source = SemiFinishedInventory.builder()
+                .intermediateBatchNo("WIP-S1")
+                .availableQuantity(new BigDecimal("100"))
+                .producedQuantity(new BigDecimal("100"))
+                .consumedQuantity(BigDecimal.ZERO)
+                .unit("kg")
+                .status(SemiFinishedInventory.Status.AVAILABLE)
+                .build();
+        when(wipRepo.findForUpdateByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(FACTORY_ID, "WIP-S1"))
+                .thenReturn(Optional.of(source));
+        when(reportRepo.sumPendingInputBySourceWipNo(FACTORY_ID, "WIP-S1", 499L))
+                .thenReturn(BigDecimal.ZERO);
+        when(wipRepo.save(any(SemiFinishedInventory.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        service.postApprovedOutput(FACTORY_ID, report, task, 10L);
+
+        verify(wipRepo).save(wipCaptor.capture());
+        SemiFinishedInventory saved = wipCaptor.getValue();
+        assertEquals(new BigDecimal("80"), saved.getConsumedQuantity());
+        assertEquals(new BigDecimal("20"), saved.getAvailableQuantity());
+    }
+
+    @Test
     @DisplayName("postApprovedOutput creates a produced WIP row for approved output")
     void postApprovedOutput_createsProducedWip() {
         WorkProcessTask task = WorkProcessTask.builder()
