@@ -2196,17 +2196,20 @@ const YieldStepReportScreen: React.FC = () => {
               {renderEvidenceBlock('投入证据 (照片/视频)', 'evidence-take-photo', 'evidence-pick-photo')}
             </NeoCard>
 
-            <NeoButton
-              variant="primary"
-              size="large"
-              onPress={handleSubmitInput}
-              disabled={submitting || submitBlockedNoWip || evidenceUploading || wipPickOverLimit}
-              loading={submitting}
-              style={styles.fullBtn}
-              testID="yield-submit-input-btn"
-            >
-              提交投入  ▶
-            </NeoButton>
+            <View testID="c8-yield-submit-input-anchor">
+              <NeoButton
+                variant="primary"
+                size="large"
+                onPress={handleSubmitInput}
+                disabled={submitting || submitBlockedNoWip || evidenceUploading || wipPickOverLimit}
+                loading={submitting}
+                style={styles.fullBtn}
+                testID="yield-submit-input-btn"
+                accessibilityLabel="C8 提交投入"
+              >
+                提交投入  ▶
+              </NeoButton>
+            </View>
           </>
         ) : null}
 
@@ -2536,17 +2539,20 @@ const YieldStepReportScreen: React.FC = () => {
                 保存, 稍后继续产出
               </NeoButton>
 
-              <NeoButton
-                variant="primary"
-                size="large"
-                onPress={handleSubmitOutput}
-                disabled={submitting || outputOverHardCap || evidenceUploading}
-                loading={submitting}
-                style={styles.blockBtn}
-                testID="yield-submit-output-btn"
-              >
-                标记完工 (锁定出成率)  ✓
-              </NeoButton>
+              <View testID="c10-yield-submit-output-anchor">
+                <NeoButton
+                  variant="primary"
+                  size="large"
+                  onPress={handleSubmitOutput}
+                  disabled={submitting || outputOverHardCap || evidenceUploading}
+                  loading={submitting}
+                  style={styles.blockBtn}
+                  testID="yield-submit-output-btn"
+                  accessibilityLabel="C10 提交产出"
+                >
+                  标记完工 (锁定出成率)  ✓
+                </NeoButton>
+              </View>
             </NeoCard>
             <NeoButton
               variant="outline"
