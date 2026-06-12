@@ -393,6 +393,7 @@ class CanvasFactoryConfigControllerTest {
         assertTrue(resp.getSuccess());
         assertEquals("F006", resp.getData().get("factoryId"));
         assertEquals("zh-CN", resp.getData().get("language"));
+        assertEquals(false, resp.getData().get("skipProcessReportingDefault"));
     }
 
     @Test
@@ -408,14 +409,37 @@ class CanvasFactoryConfigControllerTest {
 
         Map<String, Object> body = new HashMap<>();
         body.put("factoryName", "测试工厂");
+        body.put("skipProcessReportingDefault", true);
 
         ApiResponse<Map<String, Object>> resp = controller.updateSettings("F006", body);
 
         assertTrue(resp.getSuccess());
+        assertEquals(true, resp.getData().get("skipProcessReportingDefault"));
     }
 
     @Test
     @DisplayName("updateSettings existing without version 返 400")
+    void updateSettings_skipProcessReportingDefaultExplicitNull_setsFalse() {
+        FactorySettings s = new FactorySettings();
+        s.setId(1);
+        s.setFactoryId("F006");
+        s.setVersion(2L);
+        s.setSkipProcessReportingDefault(true);
+        when(factorySettingsRepo.findByFactoryId("F006")).thenReturn(Optional.of(s));
+        when(factorySettingsRepo.saveAndFlush(any(FactorySettings.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        Map<String, Object> body = new HashMap<>();
+        body.put("version", 2L);
+        body.put("skipProcessReportingDefault", null);
+
+        ApiResponse<Map<String, Object>> resp = controller.updateSettings("F006", body);
+
+        assertTrue(resp.getSuccess());
+        assertEquals(false, resp.getData().get("skipProcessReportingDefault"));
+    }
+
+    @Test
+    @DisplayName("updateSettings existing without version returns 400")
     void updateSettings_existingWithoutVersion_returns400() {
         FactorySettings s = new FactorySettings();
         s.setId(1);

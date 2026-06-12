@@ -85,6 +85,14 @@
       <el-form-item label="启用考勤管理">
         <el-switch v-model="form.enableAttendance" />
       </el-form-item>
+      <el-form-item label="新建计划默认两点报工（仅头尾报）">
+        <div class="reporting-mode-setting">
+          <el-switch v-model="form.skipProcessReportingDefault" />
+          <el-text type="info" size="small">
+            开启=新计划默认只报领料投入+末道产出两点（适合六扇门类）；关闭=逐道报工（每工序都报）。单计划仍可单独覆盖。
+          </el-text>
+        </div>
+      </el-form-item>
 
       <el-form-item>
         <el-button type="primary" :loading="saving" @click="onSave">保存设置</el-button>
@@ -122,6 +130,7 @@ const form = reactive<FactorySettings>({
   enableCostCalculation: true,
   enableEquipmentManagement: true,
   enableAttendance: true,
+  skipProcessReportingDefault: false,
   allowSelfRegistration: false,
   requireAdminApproval: true,
   defaultUserRole: 'viewer',
@@ -147,7 +156,7 @@ async function onSave() {
     const res = await updateSettings(props.factoryId, { ...form })
     if (res.success && res.data) {
       Object.assign(form, res.data)
-      ElMessage.success('总设置已保存')
+      ElMessage.success('工厂设置已保存，新建计划默认报工模式已更新')
     }
   } catch (e: any) {
     const errorCode = e?.response?.data?.errorCode
@@ -172,5 +181,11 @@ onMounted(loadData)
 }
 .form {
   max-width: 700px;
+}
+.reporting-mode-setting {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  line-height: 1.5;
 }
 </style>

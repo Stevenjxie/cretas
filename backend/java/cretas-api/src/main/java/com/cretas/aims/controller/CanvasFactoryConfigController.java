@@ -572,6 +572,7 @@ public class CanvasFactoryConfigController {
                             "language", "zh-CN",
                             "timezone", "Asia/Shanghai",
                             "currency", "CNY",
+                            "skipProcessReportingDefault", false,
                             "version", 0));
         }
         return ApiResponse.success("操作成功", serializeFactorySettings(opt.get()));
@@ -624,6 +625,9 @@ public class CanvasFactoryConfigController {
         applyBooleanField(body, "enableAttendance", settings::setEnableAttendance);
         applyBooleanField(body, "allowSelfRegistration", settings::setAllowSelfRegistration);
         applyBooleanField(body, "requireAdminApproval", settings::setRequireAdminApproval);
+        if (body.containsKey("skipProcessReportingDefault")) {
+            settings.setSkipProcessReportingDefault(booleanField(body, "skipProcessReportingDefault", false));
+        }
         if (body.containsKey("defaultUserRole")) {
             settings.setDefaultUserRole(stringField(body, "defaultUserRole"));
         }
@@ -777,6 +781,7 @@ public class CanvasFactoryConfigController {
         m.put("enableAttendance", s.getEnableAttendance());
         m.put("allowSelfRegistration", s.getAllowSelfRegistration());
         m.put("requireAdminApproval", s.getRequireAdminApproval());
+        m.put("skipProcessReportingDefault", s.getSkipProcessReportingDefault());
         m.put("defaultUserRole", s.getDefaultUserRole());
         m.put("lastModifiedAt", s.getLastModifiedAt());
         m.put("version", s.getVersion());
