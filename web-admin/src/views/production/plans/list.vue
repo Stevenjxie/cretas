@@ -863,10 +863,32 @@ function isStartable(status: string) {
   return status === 'PENDING';
 }
 
+function normalizePlanStatus(status: string): string {
+  return String(status || '').toUpperCase();
+}
+
+function planRowClassName({ row }: { row: TableRow }): string {
+  const status = normalizePlanStatus(String(row.status || ''));
+  if (status === 'PLANNED' || status === 'PENDING') return 'plan-row-pending';
+  if (status === 'IN_PROGRESS') return 'plan-row-in-progress';
+  if (status === 'COMPLETED') return 'plan-row-completed';
+  if (status === 'CANCELLED') return 'plan-row-cancelled';
+  return '';
+}
+
+function planStatusClass(status: string): string {
+  const normalized = normalizePlanStatus(status);
+  if (normalized === 'PLANNED' || normalized === 'PENDING') return 'plan-status-pending';
+  if (normalized === 'IN_PROGRESS') return 'plan-status-in-progress';
+  if (normalized === 'COMPLETED') return 'plan-status-completed';
+  if (normalized === 'CANCELLED') return 'plan-status-cancelled';
+  return 'plan-status-default';
+}
+
 function getStatusType(status: string) {
   const map: Record<string, string> = {
-    PLANNED: 'info',
-    PENDING: 'info',
+    PLANNED: 'warning',
+    PENDING: 'warning',
     PREPARED: 'info',  // M-PREP-1: 草稿态
     IN_PROGRESS: 'warning',
     COMPLETED: 'success',
@@ -1189,7 +1211,16 @@ function handleAiFill(params: TableRow) {
       </div>
 
       <!-- #726 SP12: @selection-change 驱动合并打印 -->
-      <el-table :data="tableData" v-loading="loading" empty-text="暂无数据" stripe border style="width: 100%" @selection-change="handleSelectionChange">
+      <el-table
+        :data="tableData"
+        v-loading="loading"
+        empty-text="暂无数据"
+        stripe
+        border
+        style="width: 100%"
+        :row-class-name="planRowClassName"
+        @selection-change="handleSelectionChange"
+      >
         <el-table-column type="selection" width="45" />
         <el-table-column prop="planNumber" label="计划编号" width="160" />
         <el-table-column label="产品类型" min-width="150" show-overflow-tooltip>
@@ -1203,7 +1234,13 @@ function handleAiFill(params: TableRow) {
         <el-table-column prop="plannedDate" label="计划日期" width="120" />
         <el-table-column prop="status" label="状态" width="100" align="center">
           <template #default="{ row }">
-            <el-tag :type="getStatusType(row.status)" size="small">
+            <el-tag
+              :type="getStatusType(row.status)"
+              size="large"
+              effect="dark"
+              class="plan-status-tag"
+              :class="planStatusClass(row.status)"
+            >
               {{ getStatusText(row.status) }}
             </el-tag>
           </template>
@@ -1919,6 +1956,65 @@ function handleAiFill(params: TableRow) {
 
 .el-table {
   flex: 1;
+}
+
+:deep(.el-table__body tr.plan-row-pending > td.el-table__cell) {
+  background: #fff4cf !important;
+}
+
+:deep(.el-table__body tr.plan-row-in-progress > td.el-table__cell) {
+  background: #e8f3ff !important;
+}
+
+:deep(.el-table__body tr.plan-row-completed > td.el-table__cell) {
+  background: #e8f8df !important;
+}
+
+:deep(.el-table__body tr.plan-row-cancelled > td.el-table__cell) {
+  background: #f5f7fa !important;
+  color: var(--text-color-secondary, #909399);
+}
+
+:deep(.el-table__body tr.plan-row-pending:hover > td.el-table__cell) {
+  background: #ffe9a8 !important;
+}
+
+:deep(.el-table__body tr.plan-row-in-progress:hover > td.el-table__cell) {
+  background: #d8ebff !important;
+}
+
+:deep(.el-table__body tr.plan-row-completed:hover > td.el-table__cell) {
+  background: #dcf3d0 !important;
+}
+
+.plan-status-tag {
+  min-width: 76px;
+  height: 30px;
+  justify-content: center;
+  border-width: 0;
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 0;
+}
+
+.plan-status-pending {
+  --el-tag-bg-color: #e6a23c;
+  --el-tag-text-color: #ffffff;
+}
+
+.plan-status-in-progress {
+  --el-tag-bg-color: #409eff;
+  --el-tag-text-color: #ffffff;
+}
+
+.plan-status-completed {
+  --el-tag-bg-color: #67c23a;
+  --el-tag-text-color: #ffffff;
+}
+
+.plan-status-cancelled {
+  --el-tag-bg-color: #909399;
+  --el-tag-text-color: #ffffff;
 }
 
 .pagination-wrapper {
