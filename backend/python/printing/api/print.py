@@ -121,9 +121,10 @@ def print_production_work_order(payload: dict[str, Any] = Body(...)) -> Response
     """生产工单 (公单) PDF (SP12 T8).
 
     Java PrintController.printProductionWorkOrder → here.
-    payload: { factoryName, planId, planNumber, productName, productUnit,
-               plannedQuantity, status, plannedDate, expectedCompletionDate,
-               processes: [...], remark }
+    payload: { factoryName, planId, planNumber, salesOrderNumbers, productName,
+               productUnit, plannedQuantity, expectedOutput, status,
+               productionDate, printDate, printedBy, printedAccount,
+               materialItems: [...], processes: [...], remark }
     """
     pdf = _render_pdf("production-work-order", payload)
     plan_id = payload.get("planId") or payload.get("planNumber", "na")
@@ -158,7 +159,8 @@ def print_consolidated_material_requisition(payload: dict[str, Any] = Body(...))
     Java PrintController.printConsolidatedMaterialRequisition → here.
     C-051: payload 现包含 salesOrderNumbers + sourceOrderId (双单号), renderer 展示。
     payload: { factoryName, planId, planNumber, productName, printDate,
-               salesOrderNumbers, sourceOrderId, requisitionCount, items: [...], remark }
+               printedBy, printedAccount, salesOrderNumbers, sourceOrderId,
+               requisitionCount, items: [...], remark }
     """
     pdf = _render_pdf("consolidated-material-requisition", payload)
     plan_id = payload.get("planId") or payload.get("planNumber", "na")

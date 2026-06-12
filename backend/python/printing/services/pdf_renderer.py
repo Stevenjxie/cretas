@@ -605,8 +605,12 @@ def render_production_work_order(data: dict) -> bytes:
     """生产工单 (公单) PDF — SP12 T8.
 
     expected data: {
-      factoryName, planId, planNumber, productName, productUnit,
-      plannedQuantity, status, plannedDate, expectedCompletionDate,
+      factoryName, planId, planNumber, productionOrderNumber, salesOrderNumbers,
+      productName, productUnit, plannedQuantity, expectedOutput, status,
+      plannedDate, productionDate, expectedCompletionDate, printDate,
+      printedBy, printedAccount,
+      materialItems: [{materialName, category, unit, plannedRawQty,
+                      plannedAuxiliaryQty, plannedSemiFinishedQty, actualUsedQty}],
       processes: [{seq, name, standardHours, operator}],
       remark
     }
@@ -622,13 +626,29 @@ def render_production_work_order(data: dict) -> bytes:
         Paragraph(data.get("factoryName") or "白垩纪食品", s["small"]),
         Paragraph("生产工单 · Production Work Order", s["title"]),
         _kv_table([
-            ("计划编号", data.get("planNumber") or data.get("planId", "-")),
+            ("销售订单号", data.get("salesOrderNumbers") or data.get("sourceOrderId", "-")),
+            ("生产订单号", data.get("productionOrderNumber") or data.get("planNumber") or data.get("planId", "-")),
             ("产品名称", data.get("productName", "-")),
-            ("计划数量", f'{_fmt_qty(data.get("plannedQuantity"))} {data.get("productUnit", "kg")}'),
+            ("预计产量", f'{_fmt_qty(data.get("expectedOutput") or data.get("plannedQuantity"))} {data.get("productUnit", "kg")}'),
             ("状态", data.get("status", "-")),
-            ("计划日期", data.get("plannedDate", "-")),
+            ("生产日期", data.get("productionDate") or data.get("plannedDate", "-")),
+            ("打印日期", data.get("printDate", "-")),
+            ("打印人", data.get("printedBy", "-")),
+            ("打印账号", data.get("printedAccount", "-")),
             ("预计完成", data.get("expectedCompletionDate", "-")),
         ], s["font"]),
+        Spacer(1, 0.5 * cm),
+        Paragraph("投料 / 领用明细", s["h2"]),
+        _render_items_table(
+            data.get("materialItems") or [],
+            [("物料名称", "materialName", "LEFT"), ("分类", "category", "CENTER"),
+             ("单位", "unit", "CENTER"), ("原料报名值", "plannedRawQty", "RIGHT"),
+             ("辅料报名值", "plannedAuxiliaryQty", "RIGHT"),
+             ("半成品报名值", "plannedSemiFinishedQty", "RIGHT"),
+             ("实际领用(结单填)", "actualUsedQty", "RIGHT"),
+             ("批次", "batchRefs", "LEFT")],
+            s["font"],
+        ),
         Spacer(1, 0.5 * cm),
         Paragraph("工序列表", s["h2"]),
         _render_items_table(
@@ -644,6 +664,7 @@ def render_production_work_order(data: dict) -> bytes:
     story.extend([
         Spacer(1, 1.0 * cm),
         Paragraph("生产主管签名: ____________________________", s["body"]),
+        Paragraph("领料经手人签名: __________________________", s["body"]),
         Paragraph("领班签名: ________________________________", s["body"]),
     ])
     doc.build(story)
@@ -662,7 +683,9 @@ def render_consolidated_material_requisition(data: dict) -> bytes:
       salesOrderNumbers,   # C-051 新增: 关联销售单号 (多 SO 逗号分隔)
       sourceOrderId,       # C-051 新增: 单 SO 时的销售单 ID
       requisitionCount,
-      items: [{materialName, spec, unit, totalQty, batchRefs}],
+      printedBy, printedAccount,
+      items: [{materialName, category, unit, plannedRawQty, plannedAuxiliaryQty,
+               plannedSemiFinishedQty, totalQty, actualUsedQty, batchRefs}],
       remark
     }
     """
@@ -685,14 +708,19 @@ def render_consolidated_material_requisition(data: dict) -> bytes:
             ("生产计划单号", plan_number),            # C-051 双单号第二行
             ("生产产品", data.get("productName", "-")),
             ("打印日期", data.get("printDate", "-")),
+            ("打印人", data.get("printedBy", "-")),
+            ("打印账号", data.get("printedAccount", "-")),
             ("涉及批次数", str(data.get("requisitionCount", 0))),
         ], s["font"]),
         Spacer(1, 0.5 * cm),
         Paragraph("汇总领料明细", s["h2"]),
         _render_items_table(
             data.get("items") or [],
-            [("原料名称", "materialName", "LEFT"), ("规格", "spec", "LEFT"),
-             ("单位", "unit", "CENTER"), ("汇总数量", "totalQty", "RIGHT"),
+            [("物料名称", "materialName", "LEFT"), ("分类", "category", "CENTER"),
+             ("单位", "unit", "CENTER"), ("原料报名值", "plannedRawQty", "RIGHT"),
+             ("辅料报名值", "plannedAuxiliaryQty", "RIGHT"),
+             ("半成品报名值", "plannedSemiFinishedQty", "RIGHT"),
+             ("汇总数量", "totalQty", "RIGHT"), ("实际领用(结单填)", "actualUsedQty", "RIGHT"),
              ("批次关联", "batchRefs", "LEFT")],
             s["font"],
         ),
@@ -703,6 +731,7 @@ def render_consolidated_material_requisition(data: dict) -> bytes:
     story.extend([
         Spacer(1, 1.0 * cm),
         Paragraph("仓管员签名: ____________________________", s["body"]),
+        Paragraph("领料经手人签名: __________________________", s["body"]),
         Paragraph("生产计划员签名: __________________________", s["body"]),
     ])
     doc.build(story)

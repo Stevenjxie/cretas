@@ -83,6 +83,7 @@ class PrintControllerSp12T8Test {
         plan.setProductName("白卤猪舌");
         plan.setProductUnit("kg");
         plan.setPlannedQuantity(new BigDecimal("500.00"));
+        plan.setCustomerOrderNumber("SO-20260612-001");
         plan.setStatus(ProductionPlanStatus.IN_PROGRESS);
         plan.setPlannedDate(LocalDate.of(2026, 6, 10));
         plan.setExpectedCompletionDate(LocalDate.of(2026, 6, 12));
@@ -96,9 +97,16 @@ class PrintControllerSp12T8Test {
         assertThat(payload.get("planNumber")).isEqualTo("PLAN-2026-001");
         assertThat(payload.get("productName")).isEqualTo("白卤猪舌");
         assertThat(payload.get("productUnit")).isEqualTo("kg");
+        assertThat(payload.get("salesOrderNumbers")).isEqualTo("SO-20260612-001");
+        assertThat(payload.get("productionOrderNumber")).isEqualTo("PLAN-2026-001");
+        assertThat(payload.get("productionDate").toString()).isEqualTo("2026-06-10");
+        assertThat(payload.get("printDate")).isNotNull();
+        assertThat(payload.get("printedBy")).isEqualTo("-");
+        assertThat(payload.get("printedAccount")).isEqualTo("-");
         assertThat(payload.get("plannedDate").toString()).isEqualTo("2026-06-10");
         assertThat(payload.get("expectedCompletionDate").toString()).isEqualTo("2026-06-12");
         assertThat(payload).containsKey("processes");
+        assertThat(payload).containsKey("materialItems");
         assertThat(payload.get("factoryName").toString()).contains("F006");
     }
 
@@ -127,9 +135,10 @@ class PrintControllerSp12T8Test {
         Map<String, Object> payload = invokeBuildProductionWorkOrderPayload(
                 "F006", "plan-xyz", null);
 
-        assertThat(payload).containsKeys("planNumber", "productName", "productUnit",
+        assertThat(payload).containsKeys("planNumber", "productionOrderNumber", "salesOrderNumbers",
+                "productName", "productUnit",
                 "plannedQuantity", "status", "plannedDate", "expectedCompletionDate",
-                "processes", "factoryName");
+                "processes", "materialItems", "factoryName", "printDate", "printedBy", "printedAccount");
     }
 
     @Test
@@ -247,6 +256,64 @@ class PrintControllerSp12T8Test {
         assertThat(processes).isEmpty();
     }
 
+    @Test
+    @DisplayName("N5-PWO-8: 生产工单 payload 带原料/辅料/半成品报名值分列和实际领用列")
+    void buildProductionWorkOrderPayload_materialItems_splitByCategory() throws Exception {
+        ProductionPlanDTO plan = new ProductionPlanDTO();
+        plan.setPlanNumber("PLAN-MAT-001");
+        plan.setCustomerOrderNumber("SO-MAT-001");
+        plan.setProductName("白卤牛腱");
+        plan.setProductUnit("kg");
+        plan.setPlannedQuantity(new BigDecimal("100"));
+        plan.setStatus(ProductionPlanStatus.PENDING);
+        plan.setPlannedDate(LocalDate.of(2026, 6, 12));
+        when(productionPlanService.getProductionPlanById("F006", "plan-mat")).thenReturn(plan);
+
+        FactoryMaterialRequisitionItem raw = new FactoryMaterialRequisitionItem();
+        raw.setMaterialTypeId("mat-beef");
+        raw.setMaterialName("牛腱");
+        raw.setUnit("kg");
+        raw.setRequiredQty(new BigDecimal("80"));
+        raw.setMaterialCategory(FactoryMaterialRequisitionItem.MaterialCategory.RAW);
+
+        FactoryMaterialRequisitionItem aux = new FactoryMaterialRequisitionItem();
+        aux.setMaterialTypeId("mat-spice");
+        aux.setMaterialName("香辛料包");
+        aux.setUnit("袋");
+        aux.setRequiredQty(new BigDecimal("5"));
+        aux.setConsumedQty(new BigDecimal("4"));
+        aux.setMaterialCategory(FactoryMaterialRequisitionItem.MaterialCategory.AUXILIARY);
+
+        FactoryMaterialRequisition req = mock(FactoryMaterialRequisition.class);
+        when(req.getItems()).thenReturn(List.of(raw, aux));
+        when(factoryMaterialRequisitionService.listByPlan("F006", "plan-mat")).thenReturn(List.of(req));
+
+        Map<String, Object> payload = invokeBuildProductionWorkOrderPayload("F006", "plan-mat", null);
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> materialItems = (List<Map<String, Object>>) payload.get("materialItems");
+        assertThat(materialItems).hasSize(2);
+
+        Map<String, Object> rawRow = materialItems.stream()
+                .filter(r -> "牛腱".equals(r.get("materialName")))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("牛腱 row not found"));
+        assertThat(rawRow.get("category")).isEqualTo("原料");
+        assertThat(rawRow.get("plannedRawQty")).isEqualTo("80");
+        assertThat(rawRow.get("plannedAuxiliaryQty")).isEqualTo("");
+        assertThat(rawRow.get("plannedSemiFinishedQty")).isEqualTo("");
+        assertThat(rawRow.get("actualUsedQty")).isEqualTo("________");
+
+        Map<String, Object> auxRow = materialItems.stream()
+                .filter(r -> "香辛料包".equals(r.get("materialName")))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("香辛料包 row not found"));
+        assertThat(auxRow.get("category")).isEqualTo("辅料");
+        assertThat(auxRow.get("plannedRawQty")).isEqualTo("");
+        assertThat(auxRow.get("plannedAuxiliaryQty")).isEqualTo("5");
+        assertThat(auxRow.get("actualUsedQty")).isEqualTo("4");
+    }
+
     // ==================== buildConsolidatedMaterialRequisitionPayload ====================
 
     @Test
@@ -264,6 +331,7 @@ class PrintControllerSp12T8Test {
         item1.setMaterialName("食盐");
         item1.setUnit("kg");
         item1.setRequiredQty(new BigDecimal("10.500"));
+        item1.setConsumedQty(new BigDecimal("9.000"));
         item1.setMaterialCategory(FactoryMaterialRequisitionItem.MaterialCategory.AUXILIARY);
 
         FactoryMaterialRequisitionItem item2 = new FactoryMaterialRequisitionItem();
@@ -271,6 +339,7 @@ class PrintControllerSp12T8Test {
         item2.setMaterialName("猪舌");
         item2.setUnit("kg");
         item2.setRequiredQty(new BigDecimal("200.000"));
+        item2.setConsumedQty(new BigDecimal("198.000"));
         item2.setMaterialCategory(FactoryMaterialRequisitionItem.MaterialCategory.RAW);
 
         FactoryMaterialRequisition req1 = mock(FactoryMaterialRequisition.class);
@@ -282,6 +351,7 @@ class PrintControllerSp12T8Test {
         item3.setMaterialName("食盐");
         item3.setUnit("kg");
         item3.setRequiredQty(new BigDecimal("5.000"));
+        item3.setConsumedQty(new BigDecimal("4.500"));
         item3.setMaterialCategory(FactoryMaterialRequisitionItem.MaterialCategory.AUXILIARY);
 
         FactoryMaterialRequisition req2 = mock(FactoryMaterialRequisition.class);
@@ -310,6 +380,11 @@ class PrintControllerSp12T8Test {
                 .findFirst()
                 .orElseThrow(() -> new AssertionError("食盐 row not found"));
         assertThat(saltRow.get("totalQty")).isEqualTo("15.5");
+        assertThat(saltRow.get("category")).isEqualTo("辅料");
+        assertThat(saltRow.get("plannedRawQty")).isEqualTo("");
+        assertThat(saltRow.get("plannedAuxiliaryQty")).isEqualTo("15.5");
+        assertThat(saltRow.get("plannedSemiFinishedQty")).isEqualTo("");
+        assertThat(saltRow.get("actualUsedQty")).isEqualTo("13.5");
         assertThat(saltRow.get("unit")).isEqualTo("kg");
 
         // Find pork tongue row
@@ -318,6 +393,11 @@ class PrintControllerSp12T8Test {
                 .findFirst()
                 .orElseThrow(() -> new AssertionError("猪舌 row not found"));
         assertThat(tongueRow.get("totalQty")).isEqualTo("200");
+        assertThat(tongueRow.get("category")).isEqualTo("原料");
+        assertThat(tongueRow.get("plannedRawQty")).isEqualTo("200");
+        assertThat(tongueRow.get("plannedAuxiliaryQty")).isEqualTo("");
+        assertThat(tongueRow.get("plannedSemiFinishedQty")).isEqualTo("");
+        assertThat(tongueRow.get("actualUsedQty")).isEqualTo("198");
     }
 
     @Test

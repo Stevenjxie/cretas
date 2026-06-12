@@ -16,6 +16,8 @@ import com.cretas.aims.service.ProductionPlanService;
 import com.cretas.aims.service.factory.FactoryMaterialRequisitionService;
 import com.cretas.aims.service.inventory.TransferService;
 import com.cretas.aims.service.workprocess.WorkProcessTaskService;
+import com.cretas.aims.utils.JwtUtil;
+import com.cretas.aims.utils.TokenUtils;
 import jakarta.validation.Valid;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -120,6 +122,10 @@ public class PrintController {
     /** Optional: 调拨服务 (transfer-instruction 打印取数). */
     @Autowired(required = false)
     private TransferService transferService;
+
+    /** Optional: JWT helper used only for printed-by audit metadata. */
+    @Autowired(required = false)
+    private JwtUtil jwtUtil;
 
     @Autowired
     public PrintController(
@@ -274,6 +280,7 @@ public class PrintController {
             @RequestParam(required = false) Map<String, String> overrides,
             @RequestHeader(value = "Authorization", required = false) String authorization) {
         Map<String, Object> payload = buildProductionWorkOrderPayload(factoryId, planId, overrides);
+        applyPrintAudit(payload, authorization);
         return proxyToPython("production-work-order", payload, "work-order-" + planId, authorization);
     }
 
@@ -334,6 +341,7 @@ public class PrintController {
             @RequestParam(required = false) Map<String, String> overrides,
             @RequestHeader(value = "Authorization", required = false) String authorization) {
         Map<String, Object> payload = buildConsolidatedMaterialRequisitionPayload(factoryId, planId, overrides);
+        applyPrintAudit(payload, authorization);
         return proxyToPython("consolidated-material-requisition", payload,
                 "consolidated-req-" + planId, authorization);
     }
@@ -507,6 +515,31 @@ public class PrintController {
                 }
             }
         }
+    }
+
+    private void applyPrintAudit(Map<String, Object> payload, String authorization) {
+        payload.put("printDate", java.time.LocalDate.now().toString());
+        String printedBy = "-";
+        String printedAccount = "-";
+        if (jwtUtil != null && TokenUtils.isValidAuthorizationHeader(authorization)) {
+            try {
+                String token = TokenUtils.extractToken(authorization);
+                Long userId = jwtUtil.getUserIdFromToken(token);
+                String username = jwtUtil.getUsernameFromToken(token);
+                if (username != null && !username.isBlank()) {
+                    printedBy = username;
+                }
+                if (userId != null) {
+                    printedAccount = userId.toString();
+                } else if (username != null && !username.isBlank()) {
+                    printedAccount = username;
+                }
+            } catch (Exception e) {
+                log.debug("applyPrintAudit: failed to resolve printer from token: {}", e.getMessage());
+            }
+        }
+        payload.put("printedBy", printedBy);
+        payload.put("printedAccount", printedAccount);
     }
 
     // ==================== Internal proxy ====================
@@ -691,19 +724,31 @@ public class PrintController {
         Map<String, Object> p = new HashMap<>();
         p.put("factoryName", or(overrides, "factoryName", "白垩纪食品 — " + factoryId));
         p.put("planId", planId);
+        p.put("printDate", java.time.LocalDate.now().toString());
+        p.put("printedBy", or(overrides, "printedBy", "-"));
+        p.put("printedAccount", or(overrides, "printedAccount", "-"));
+        p.put("printedBy", or(overrides, "printedBy", "-"));
+        p.put("printedAccount", or(overrides, "printedAccount", "-"));
 
         if (productionPlanService != null) {
             try {
                 ProductionPlanDTO plan = productionPlanService.getProductionPlanById(factoryId, planId);
-                p.put("planNumber", plan.getPlanNumber() != null ? plan.getPlanNumber() : planId);
+                String planNumber = plan.getPlanNumber() != null ? plan.getPlanNumber() : planId;
+                p.put("planNumber", planNumber);
+                p.put("productionOrderNumber", planNumber);
+                p.put("salesOrderNumbers", salesOrderNumbers(plan));
+                p.put("sourceOrderId", plan.getSourceOrderId() != null ? plan.getSourceOrderId() : "-");
                 p.put("productName", plan.getProductName() != null ? plan.getProductName() : "(产品)");
                 p.put("productUnit", plan.getProductUnit() != null ? plan.getProductUnit() : "kg");
                 p.put("plannedQuantity", plan.getPlannedQuantity() != null
+                        ? plan.getPlannedQuantity().toPlainString() : "0");
+                p.put("expectedOutput", plan.getPlannedQuantity() != null
                         ? plan.getPlannedQuantity().toPlainString() : "0");
                 p.put("status", plan.getStatus() != null ? plan.getStatus().name() : "-");
                 p.put("plannedDate", plan.getPlannedDate() != null
                         ? plan.getPlannedDate().toString()
                         : java.time.LocalDate.now().toString());
+                p.put("productionDate", p.get("plannedDate"));
                 p.put("expectedCompletionDate", plan.getExpectedCompletionDate() != null
                         ? plan.getExpectedCompletionDate().toString() : "-");
             } catch (Exception e) {
@@ -717,6 +762,7 @@ public class PrintController {
 
         // 工序列表: 从该计划下所有批次的 WorkProcessTask 取 (去重, 按 processOrder 升序)
         p.put("processes", buildProcessList(factoryId, planId));
+        p.put("materialItems", buildMaterialRequirementRows(factoryId, planId));
         p.put("remark", or(overrides, "remark", null));
         return p;
     }
@@ -778,15 +824,160 @@ public class PrintController {
         }
     }
 
+    private List<Map<String, Object>> buildMaterialRequirementRows(String factoryId, String planId) {
+        if (factoryMaterialRequisitionService == null) {
+            log.warn("buildMaterialRequirementRows: factoryMaterialRequisitionService not injected, "
+                    + "returning empty materials for plan {}", planId);
+            return List.of();
+        }
+        try {
+            List<FactoryMaterialRequisition> requisitions =
+                    factoryMaterialRequisitionService.listByPlan(factoryId, planId);
+            return aggregateMaterialRequirementRows(requisitions);
+        } catch (Exception e) {
+            log.warn("buildMaterialRequirementRows: failed to load requisitions for plan {} factory {}: {}",
+                    planId, factoryId, e.getMessage());
+            return List.of();
+        }
+    }
+
+    private List<Map<String, Object>> aggregateMaterialRequirementRows(
+            List<FactoryMaterialRequisition> requisitions) {
+        if (requisitions == null || requisitions.isEmpty()) {
+            return List.of();
+        }
+        Map<String, Map<String, Object>> aggregated = new LinkedHashMap<>();
+        for (FactoryMaterialRequisition req : requisitions) {
+            List<FactoryMaterialRequisitionItem> reqItems = req.getItems();
+            if (reqItems == null) continue;
+            for (FactoryMaterialRequisitionItem item : reqItems) {
+                String bucket = materialBucket(item);
+                String materialKey = item.getMaterialTypeId() != null ? item.getMaterialTypeId() : "_unknown_";
+                String key = materialKey + "|" + bucket;
+                Map<String, Object> row = aggregated.computeIfAbsent(key, k -> {
+                    Map<String, Object> r = new LinkedHashMap<>();
+                    r.put("materialName", item.getMaterialName() != null ? item.getMaterialName() : materialKey);
+                    r.put("category", materialCategoryLabel(bucket));
+                    r.put("unit", item.getUnit());
+                    r.put("plannedRawQtyValue", BigDecimal.ZERO);
+                    r.put("plannedAuxiliaryQtyValue", BigDecimal.ZERO);
+                    r.put("plannedSemiFinishedQtyValue", BigDecimal.ZERO);
+                    r.put("totalQtyValue", BigDecimal.ZERO);
+                    r.put("actualUsedQtyValue", null);
+                    r.put("batchRefsList", new ArrayList<String>());
+                    return r;
+                });
+
+                BigDecimal requiredQty = item.getRequiredQty() != null ? item.getRequiredQty() : BigDecimal.ZERO;
+                addQty(row, "totalQtyValue", requiredQty);
+                if ("RAW".equals(bucket)) {
+                    addQty(row, "plannedRawQtyValue", requiredQty);
+                } else if ("SEMI_FINISHED".equals(bucket)) {
+                    addQty(row, "plannedSemiFinishedQtyValue", requiredQty);
+                } else {
+                    addQty(row, "plannedAuxiliaryQtyValue", requiredQty);
+                }
+
+                if (item.getConsumedQty() != null) {
+                    BigDecimal existing = (BigDecimal) row.get("actualUsedQtyValue");
+                    row.put("actualUsedQtyValue",
+                            existing == null ? item.getConsumedQty() : existing.add(item.getConsumedQty()));
+                }
+
+                List<Map<String, Object>> batchNums = item.getBatchNumbers();
+                if (batchNums != null) {
+                    @SuppressWarnings("unchecked")
+                    List<String> batchRefs = (List<String>) row.get("batchRefsList");
+                    for (Map<String, Object> bn : batchNums) {
+                        Object bno = bn.get("batchNo");
+                        if (bno != null && !batchRefs.contains(bno.toString())) {
+                            batchRefs.add(bno.toString());
+                        }
+                    }
+                }
+            }
+        }
+
+        List<Map<String, Object>> rows = new ArrayList<>();
+        for (Map<String, Object> row : aggregated.values()) {
+            BigDecimal plannedRaw = (BigDecimal) row.remove("plannedRawQtyValue");
+            BigDecimal plannedAux = (BigDecimal) row.remove("plannedAuxiliaryQtyValue");
+            BigDecimal plannedSemi = (BigDecimal) row.remove("plannedSemiFinishedQtyValue");
+            BigDecimal totalQty = (BigDecimal) row.remove("totalQtyValue");
+            BigDecimal actualUsed = (BigDecimal) row.remove("actualUsedQtyValue");
+            @SuppressWarnings("unchecked")
+            List<String> batchRefs = (List<String>) row.remove("batchRefsList");
+
+            row.put("plannedRawQty", positiveQtyOrBlank(plannedRaw));
+            row.put("plannedAuxiliaryQty", positiveQtyOrBlank(plannedAux));
+            row.put("plannedSemiFinishedQty", positiveQtyOrBlank(plannedSemi));
+            row.put("totalQty", formatQty(totalQty));
+            row.put("actualUsedQty", actualUsed != null ? formatQty(actualUsed) : "________");
+            row.put("batchRefs", batchRefs.isEmpty() ? null : String.join(", ", batchRefs));
+            rows.add(row);
+        }
+        return rows;
+    }
+
+    private void addQty(Map<String, Object> row, String key, BigDecimal qty) {
+        BigDecimal existing = (BigDecimal) row.get(key);
+        row.put(key, existing.add(qty));
+    }
+
+    private String positiveQtyOrBlank(BigDecimal qty) {
+        return qty != null && qty.compareTo(BigDecimal.ZERO) > 0 ? formatQty(qty) : "";
+    }
+
+    private String formatQty(BigDecimal qty) {
+        if (qty == null) return "0";
+        return qty.stripTrailingZeros().toPlainString();
+    }
+
+    private String materialBucket(FactoryMaterialRequisitionItem item) {
+        if (item.getMaterialCategory() == null) return "RAW";
+        String category = item.getMaterialCategory().name();
+        if (category.contains("SEMI") || category.contains("WIP")) {
+            return "SEMI_FINISHED";
+        }
+        if ("RAW".equals(category)) {
+            return "RAW";
+        }
+        return "AUXILIARY";
+    }
+
+    private String materialCategoryLabel(String bucket) {
+        return switch (bucket) {
+            case "RAW" -> "原料";
+            case "SEMI_FINISHED" -> "半成品";
+            default -> "辅料";
+        };
+    }
+
+    private String salesOrderNumbers(ProductionPlanDTO plan) {
+        if (plan.getCustomerOrderNumber() != null && !plan.getCustomerOrderNumber().isBlank()) {
+            return plan.getCustomerOrderNumber();
+        }
+        if (plan.getSourceOrderIds() != null && !plan.getSourceOrderIds().isEmpty()) {
+            return String.join(", ", plan.getSourceOrderIds());
+        }
+        return plan.getSourceOrderId() != null && !plan.getSourceOrderId().isBlank()
+                ? plan.getSourceOrderId() : "-";
+    }
+
     private void fillProductionWorkOrderStub(Map<String, Object> p, String planId,
             Map<String, String> overrides) {
         p.put("planNumber", or(overrides, "planNumber", planId));
+        p.put("productionOrderNumber", or(overrides, "productionOrderNumber", p.get("planNumber")));
+        p.put("salesOrderNumbers", or(overrides, "salesOrderNumbers", "-"));
+        p.put("sourceOrderId", or(overrides, "sourceOrderId", "-"));
         p.put("productName", or(overrides, "productName", "(产品)"));
         p.put("productUnit", or(overrides, "productUnit", "kg"));
         p.put("plannedQuantity", or(overrides, "plannedQuantity", "0"));
+        p.put("expectedOutput", or(overrides, "expectedOutput", p.get("plannedQuantity")));
         p.put("status", or(overrides, "status", "-"));
         p.put("plannedDate", or(overrides, "plannedDate",
                 java.time.LocalDate.now().toString()));
+        p.put("productionDate", or(overrides, "productionDate", p.get("plannedDate")));
         p.put("expectedCompletionDate", or(overrides, "expectedCompletionDate", "-"));
     }
 
@@ -813,14 +1004,7 @@ public class PrintController {
                 p.put("sourceOrderId",
                         plan.getSourceOrderId() != null ? plan.getSourceOrderId() : "-");
                 // 多 SO 合并场景: 展示全部关联销售单号 (逗号分隔), 仅单 SO 时等同 sourceOrderId
-                if (plan.getSourceOrderIds() != null && !plan.getSourceOrderIds().isEmpty()) {
-                    p.put("salesOrderNumbers",
-                            String.join(", ", plan.getSourceOrderIds()));
-                } else if (plan.getSourceOrderId() != null) {
-                    p.put("salesOrderNumbers", plan.getSourceOrderId());
-                } else {
-                    p.put("salesOrderNumbers", "-");
-                }
+                p.put("salesOrderNumbers", salesOrderNumbers(plan));
             } catch (Exception e) {
                 log.warn("printConsolidatedMaterialRequisition: plan {} not found: {}", planId, e.getMessage());
                 p.put("planNumber", or(overrides, "planNumber", planId));
@@ -835,7 +1019,7 @@ public class PrintController {
             p.put("salesOrderNumbers", or(overrides, "salesOrderNumbers", "-"));
         }
 
-        // 跨批次汇总领料单明细: 展开 requisitions[].items, 按 materialTypeId 汇总 requiredQty
+        // 跨批次汇总领料单明细: 展开 requisitions[].items, 按 materialTypeId + 分类汇总 requiredQty
         List<Map<String, Object>> items = new ArrayList<>();
         if (factoryMaterialRequisitionService != null) {
             try {
@@ -843,56 +1027,7 @@ public class PrintController {
                         factoryMaterialRequisitionService.listByPlan(factoryId, planId);
                 int requisitionCount = requisitions != null ? requisitions.size() : 0;
                 p.put("requisitionCount", requisitionCount);
-                if (requisitions != null) {
-                    // Aggregate by materialTypeId: sum requiredQty, collect batchRefs
-                    Map<String, Map<String, Object>> aggregated = new LinkedHashMap<>();
-                    for (FactoryMaterialRequisition req : requisitions) {
-                        List<FactoryMaterialRequisitionItem> reqItems = req.getItems();
-                        if (reqItems == null) continue;
-                        for (FactoryMaterialRequisitionItem item : reqItems) {
-                            String key = item.getMaterialTypeId() != null
-                                    ? item.getMaterialTypeId() : "_unknown_";
-                            Map<String, Object> row = aggregated.computeIfAbsent(key, k -> {
-                                Map<String, Object> r = new LinkedHashMap<>();
-                                r.put("materialName",
-                                        item.getMaterialName() != null ? item.getMaterialName() : key);
-                                r.put("spec", item.getMaterialCategory() != null
-                                        ? item.getMaterialCategory().name() : null);
-                                r.put("unit", item.getUnit());
-                                r.put("totalQty", BigDecimal.ZERO);
-                                r.put("batchRefs", new ArrayList<String>());
-                                return r;
-                            });
-                            // Accumulate requiredQty
-                            BigDecimal existing = (BigDecimal) row.get("totalQty");
-                            BigDecimal addQty = item.getRequiredQty() != null
-                                    ? item.getRequiredQty() : BigDecimal.ZERO;
-                            row.put("totalQty", existing.add(addQty));
-                            // Collect batch ref labels from batchNumbers jsonb
-                            List<Map<String, Object>> batchNums = item.getBatchNumbers();
-                            if (batchNums != null) {
-                                @SuppressWarnings("unchecked")
-                                List<String> batchRefs = (List<String>) row.get("batchRefs");
-                                for (Map<String, Object> bn : batchNums) {
-                                    Object bno = bn.get("batchNo");
-                                    if (bno != null && !batchRefs.contains(bno.toString())) {
-                                        batchRefs.add(bno.toString());
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    // Convert totalQty to plain string for JSON serialization
-                    for (Map<String, Object> row : aggregated.values()) {
-                        BigDecimal qty = (BigDecimal) row.get("totalQty");
-                        row.put("totalQty", qty.stripTrailingZeros().toPlainString());
-                        // Join batchRefs list into comma-separated string for PDF cell
-                        @SuppressWarnings("unchecked")
-                        List<String> refs = (List<String>) row.get("batchRefs");
-                        row.put("batchRefs", refs.isEmpty() ? null : String.join(", ", refs));
-                        items.add(row);
-                    }
-                }
+                items.addAll(aggregateMaterialRequirementRows(requisitions));
             } catch (Exception e) {
                 log.warn("printConsolidatedMaterialRequisition: failed to load requisitions for plan {}: {}",
                         planId, e.getMessage());
