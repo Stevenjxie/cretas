@@ -166,10 +166,14 @@ public class ReportReversalServiceImpl implements ReportReversalService {
         }
 
         boolean isFastPath = hasReports && fastPathDeniedReason == null;
-        // 无报工 → 直通(原逻辑) | 快速撤回通过 → 直接执行 | 否则 → PENDING
+        // 无报工 → 真 no-op 直接 DONE | 快速撤回通过 → APPROVED(自动批准,待 executeReversal 执行后置 DONE) | 否则 → PENDING
+        // ⚠️ BUG-GOLD-RERUN-FASTPATH-REVERSAL: 快速撤回不能预置 DONE —— executeReversal 对 DONE 幂等跳过
+        //   (软删报工/冲销库存/清成本全不执行)。必须存非 DONE 状态让 executeReversal 真正跑完再由它置 DONE。
         ReportReversalLog.ReversalStatus initialStatus;
-        if (!hasReports || isFastPath) {
+        if (!hasReports) {
             initialStatus = ReportReversalLog.ReversalStatus.DONE;
+        } else if (isFastPath) {
+            initialStatus = ReportReversalLog.ReversalStatus.APPROVED;
         } else {
             initialStatus = ReportReversalLog.ReversalStatus.PENDING;
         }
@@ -194,8 +198,9 @@ public class ReportReversalServiceImpl implements ReportReversalService {
                 .build();
         ReportReversalLog saved = reversalLogRepo.save(log_);
 
-        // 无报工 或 快速撤回 → 直通执行 (DONE)
-        if (!hasReports || isFastPath) {
+        // 快速撤回 → 直通执行 (executeReversal 内部走完软删/冲销/清成本后置 DONE)。
+        // 无报工 → 已是 DONE 的 no-op, 无需调 executeReversal (调了也会被 DONE 幂等跳过)。
+        if (isFastPath) {
             executeReversal(saved.getId(), factoryId);
         }
 

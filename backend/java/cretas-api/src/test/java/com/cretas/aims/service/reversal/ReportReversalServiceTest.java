@@ -232,6 +232,45 @@ class ReportReversalServiceTest {
             ReportReversalLog result = service.submitReversal(FACTORY_ID, BATCH_ID, SUBMITTED_BY, "with data");
             assertThat(result.getStatus()).isEqualTo(ReportReversalLog.ReversalStatus.PENDING);
         }
+
+        @Test
+        @DisplayName("BUG-GOLD-RERUN-FASTPATH: 快速撤回(本人+时间窗内有报工) → 真正执行撤回(软删报工), 不只置 DONE")
+        void fastPathWithReports_actuallyExecutesReversal() {
+            // 回归: 旧实现 fastPath 预置 status=DONE → executeReversal 幂等跳过 → 报工没软删/成本没清。
+            // 此前测试只覆盖 noReports→DONE 和 hasReports→PENDING, 从未覆盖 fastPath-with-reports → bug 漏网。
+            ProductionBatch batch = new ProductionBatch();
+            setupPassingGuards(batch);
+
+            // fast-path 资格: 本人提交 (workerId==submitter) + createdAt 在时间窗内 (now)
+            ProductionReport report = ProductionReport.builder()
+                    .id(900L)
+                    .workerId(SUBMITTED_BY)
+                    .createdAt(LocalDateTime.now())
+                    .build();
+            when(reportRepo.findYieldReportsByBatch(FACTORY_ID, BATCH_ID)).thenReturn(List.of(report));
+
+            // saved log 携带 APPROVED (自动批准) + id → executeReversal findById 命中且 status!=DONE → 真正执行
+            ReportReversalLog saved = ReportReversalLog.builder()
+                    .id(LOG_ID).factoryId(FACTORY_ID).batchId(BATCH_ID)
+                    .status(ReportReversalLog.ReversalStatus.APPROVED)
+                    .reversalScope(ReportReversalLog.ReversalScope.WHOLE_ORDER)
+                    .submittedBy(SUBMITTED_BY)
+                    .build();
+            when(reversalLogRepo.save(any())).thenReturn(saved);
+            when(reversalLogRepo.findById(LOG_ID)).thenReturn(Optional.of(saved));
+            when(workProcessTaskRepository
+                    .findByFactoryIdAndProductionBatchIdOrderByProcessOrderAsc(FACTORY_ID, BATCH_ID))
+                    .thenReturn(Collections.emptyList());
+            when(txnRepo.findByFactoryIdAndReportId(FACTORY_ID, 900L)).thenReturn(Collections.emptyList());
+
+            service.submitReversal(FACTORY_ID, BATCH_ID, SUBMITTED_BY, "fast withdraw");
+
+            // BUG 修复证明: executeReversal 真的跑了 → 报工被软删 (setDeletedAt + save)。
+            // 旧 bug 下 reportRepo.save 永不被调用 (executeReversal 见 DONE 直接 return)。
+            ArgumentCaptor<ProductionReport> repCaptor = ArgumentCaptor.forClass(ProductionReport.class);
+            verify(reportRepo, atLeastOnce()).save(repCaptor.capture());
+            assertThat(repCaptor.getValue().getDeletedAt()).isNotNull();
+        }
     }
 
     // ==================== approveReversal / rejectReversal ====================
@@ -655,7 +694,7 @@ class ReportReversalServiceTest {
         }
 
         @Test
-        @DisplayName("SP12: 本人+无消费+窗口内 → status=DONE + fastPath=true (快速撤回成功)")
+        @DisplayName("SP12: 本人+无消费+窗口内 → fastPath=true 自动批准(首存 APPROVED) + 真正执行撤回(软删报工)")
         void fastPath_selfWithinWindow_createsDone() {
             ProductionBatch batch = new ProductionBatch();
             setupPassingGuards(batch);
@@ -667,23 +706,27 @@ class ReportReversalServiceTest {
             when(reportRepo.findYieldReportsByBatch(FACTORY_ID, BATCH_ID))
                     .thenReturn(List.of(report));
 
+            // BUG-GOLD-RERUN-FASTPATH 修复: 首存 APPROVED (非 DONE), 让 executeReversal 真正执行后再置 DONE。
             ReportReversalLog saved = ReportReversalLog.builder()
                     .id(LOG_ID).factoryId(FACTORY_ID).batchId(BATCH_ID)
-                    .status(ReportReversalLog.ReversalStatus.DONE)
+                    .status(ReportReversalLog.ReversalStatus.APPROVED)
                     .fastPath(true)
+                    .submittedBy(SUBMITTED_BY)
                     .reversalScope(ReportReversalLog.ReversalScope.WHOLE_ORDER)
                     .build();
             when(reversalLogRepo.save(any())).thenReturn(saved);
             when(reversalLogRepo.findById(LOG_ID)).thenReturn(Optional.of(saved));
 
-            ReportReversalLog result = service.submitReversal(FACTORY_ID, BATCH_ID, SUBMITTED_BY, "误填");
+            service.submitReversal(FACTORY_ID, BATCH_ID, SUBMITTED_BY, "误填");
 
-            // 验证保存时 fastPath=true, status=DONE
+            // 首存: fastPath=true + status=APPROVED (自动批准, 待 executeReversal 执行)
             ArgumentCaptor<ReportReversalLog> captor = ArgumentCaptor.forClass(ReportReversalLog.class);
             verify(reversalLogRepo, atLeastOnce()).save(captor.capture());
-            ReportReversalLog capturedLog = captor.getAllValues().get(0);
-            assertThat(capturedLog.getFastPath()).isTrue();
-            assertThat(capturedLog.getStatus()).isEqualTo(ReportReversalLog.ReversalStatus.DONE);
+            ReportReversalLog firstSave = captor.getAllValues().get(0);
+            assertThat(firstSave.getFastPath()).isTrue();
+            assertThat(firstSave.getStatus()).isEqualTo(ReportReversalLog.ReversalStatus.APPROVED);
+            // 执行证明: executeReversal 真跑了 → 报工被软删 (旧 bug 预置 DONE → executeReversal 跳过, 报工不会 save)
+            verify(reportRepo, atLeastOnce()).save(any(ProductionReport.class));
         }
 
         @Test
