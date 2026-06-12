@@ -102,6 +102,24 @@ export interface ProductionPlan {
 /**
  * 查询参数
  */
+export interface MaterialAdvisoryItem {
+  materialTypeId: string;
+  materialName: string;
+  requiredQuantity: number | null;
+  availableQuantity: number | null;
+  shortageQuantity: number | null;
+  unit: string | null;
+  message: string;
+}
+
+export interface ProductionPlanMaterialAdvisory {
+  planId: string;
+  planNumber: string;
+  hasWarning: boolean;
+  message: string;
+  warnings: MaterialAdvisoryItem[];
+}
+
 export interface ProductionPlanQueryParams {
   status?: string;
   startDate?: string;
@@ -286,6 +304,10 @@ class ProductionPlanApiClient {
   // 11. 获取待执行的计划
   async getPendingExecutionPlans(factoryId?: string): Promise<ApiResponse<ProductionPlan[]>> {
     return await apiClient.get(`${this.getPath(factoryId)}/pending-execution`);
+  }
+
+  async getMaterialAdvisory(planId: string, factoryId?: string): Promise<ApiResponse<ProductionPlanMaterialAdvisory>> {
+    return await apiClient.get(`${this.getPath(factoryId)}/${planId}/material-advisory`);
   }
 
   // ===== Excel导入导出 (3个API) =====

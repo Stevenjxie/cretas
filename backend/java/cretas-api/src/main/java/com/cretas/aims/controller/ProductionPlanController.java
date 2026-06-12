@@ -8,6 +8,7 @@ import com.cretas.aims.dto.common.PageResponse;
 import com.cretas.aims.dto.production.CreateProductionPlanRequest;
 import com.cretas.aims.dto.production.DeliveryWarnDTO;
 import com.cretas.aims.dto.production.ProductionPlanDTO;
+import com.cretas.aims.dto.production.ProductionPlanMaterialAdvisoryDTO;
 import com.cretas.aims.entity.ProductionPlan;
 import com.cretas.aims.entity.enums.ProductionPlanStatus;
 import com.cretas.aims.entity.inventory.SalesOrder;
@@ -201,6 +202,18 @@ public class ProductionPlanController {
 
         ProductionPlanDTO plan = productionPlanService.getProductionPlanById(factoryId, planId);
         return ApiResponse.success(plan);
+    }
+
+    @GetMapping("/{planId}/material-advisory")
+    @Operation(summary = "获取生产计划原料库存预警", description = "只读参考值: 展示缺料/单位配置预警, 不阻断生产计划流转")
+    public ApiResponse<ProductionPlanMaterialAdvisoryDTO> getMaterialAdvisory(
+            @Parameter(description = "工厂ID", required = true, example = "F001")
+            @PathVariable @NotBlank String factoryId,
+            @Parameter(description = "计划ID", required = true, example = "PP-2025-001")
+            @PathVariable @NotNull String planId) {
+
+        ProductionPlanMaterialAdvisoryDTO advisory = productionPlanService.getMaterialAdvisory(factoryId, planId);
+        return ApiResponse.success(advisory);
     }
 
     /**

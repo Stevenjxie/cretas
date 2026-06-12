@@ -63,6 +63,10 @@ public interface ProductionPlanRepository extends JpaRepository<ProductionPlan, 
      */
     Page<ProductionPlan> findByFactoryIdAndStatus(String factoryId, ProductionPlanStatus status, Pageable pageable);
 
+    List<ProductionPlan> findByFactoryIdAndStatusIn(String factoryId, Collection<ProductionPlanStatus> statuses);
+
+    Page<ProductionPlan> findByFactoryIdAndStatusIn(String factoryId, Collection<ProductionPlanStatus> statuses, Pageable pageable);
+
     /**
      * 查找指定日期范围内的生产计划
      * 暂时注释 - 数据库表中没有planned_date字段

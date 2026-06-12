@@ -5,6 +5,7 @@ import com.cretas.aims.dto.common.PageRequest;
 import com.cretas.aims.dto.common.PageResponse;
 import com.cretas.aims.dto.production.CreateProductionPlanRequest;
 import com.cretas.aims.dto.production.ProductionPlanDTO;
+import com.cretas.aims.dto.production.ProductionPlanMaterialAdvisoryDTO;
 import com.cretas.aims.entity.ProductionBatch;
 import com.cretas.aims.entity.enums.ProductionPlanStatus;
 import java.io.InputStream;
@@ -100,9 +101,15 @@ public interface ProductionPlanService {
      * 获取今日生产计划
       */
     List<ProductionPlanDTO> getTodayProductionPlans(String factoryId);
+
+    /**
+     * 获取生产计划的原料库存预警。只读 advisory, 不阻断生产流转。
+     */
+    ProductionPlanMaterialAdvisoryDTO getMaterialAdvisory(String factoryId, String planId);
+
      /**
-     * 开始生产
-      */
+    * 开始生产
+     */
     ProductionPlanDTO startProduction(String factoryId, String planId);
      /**
      * 完成生产

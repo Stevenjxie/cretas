@@ -52,6 +52,28 @@ export function getReportModeDefault(factoryId: string) {
   return get<boolean>(`/${factoryId}/production-plans/report-mode-default`)
 }
 
+export interface MaterialAdvisoryItem {
+  materialTypeId: string
+  materialName: string
+  requiredQuantity: number | null
+  availableQuantity: number | null
+  shortageQuantity: number | null
+  unit: string | null
+  message: string
+}
+
+export interface ProductionPlanMaterialAdvisory {
+  planId: string
+  planNumber: string
+  hasWarning: boolean
+  message: string
+  warnings: MaterialAdvisoryItem[]
+}
+
+export function getMaterialAdvisory(factoryId: string, planId: string) {
+  return get<ProductionPlanMaterialAdvisory>(`/${factoryId}/production-plans/${planId}/material-advisory`)
+}
+
 /** SP2: WIP 半成品可用库存列表 (GET /wip/available) */
 export interface WipInventoryItem {
   id: number

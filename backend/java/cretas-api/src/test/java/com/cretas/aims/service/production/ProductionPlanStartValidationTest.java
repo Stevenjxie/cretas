@@ -17,6 +17,7 @@ import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.repository.inventory.SalesOrderItemRepository;
 import com.cretas.aims.repository.inventory.SalesOrderRepository;
 import com.cretas.aims.dto.production.ProductionPlanDTO;
+import com.cretas.aims.dto.production.ProductionPlanMaterialAdvisoryDTO;
 import com.cretas.aims.mapper.ProductionPlanMapper;
 import com.cretas.aims.service.BomService;
 import com.cretas.aims.service.SchedulingService;
@@ -301,5 +302,28 @@ class ProductionPlanStartValidationTest {
                 () -> service.startProduction(FACTORY_ID, PLAN_ID));
         String msg = ex.getMessage();
         assertTrue(msg.contains("400"), "yieldRate 50% 把 standardQuantity 2 放大到 actualQuantity 4, 需求 400: " + msg);
+    }
+    @Test
+    @DisplayName("N1c: material advisory reports shortage without changing plan status")
+    void materialAdvisory_shortage_returnsWarningWithoutBlocking() {
+        ProductionPlan plan = pendingPlan(new BigDecimal("100"));
+        when(productionPlanRepository.findById(PLAN_ID)).thenReturn(Optional.of(plan));
+
+        when(bomService.getBomItemsByProduct(FACTORY_ID, PRODUCT_TYPE_ID))
+                .thenReturn(List.of(bomItem("MT-A", "flour", new BigDecimal("2"), "kg")));
+        when(materialBatchRepository.sumAvailableQuantityByMaterialType(FACTORY_ID, "MT-A"))
+                .thenReturn(new BigDecimal("50"));
+
+        ProductionPlanMaterialAdvisoryDTO advisory = service.getMaterialAdvisory(FACTORY_ID, PLAN_ID);
+
+        assertTrue(advisory.isHasWarning());
+        assertEquals(1, advisory.getWarnings().size());
+        ProductionPlanMaterialAdvisoryDTO.Item warning = advisory.getWarnings().get(0);
+        assertEquals("MT-A", warning.getMaterialTypeId());
+        assertTrue(new BigDecimal("200").compareTo(warning.getRequiredQuantity()) == 0);
+        assertTrue(new BigDecimal("50").compareTo(warning.getAvailableQuantity()) == 0);
+        assertTrue(new BigDecimal("150").compareTo(warning.getShortageQuantity()) == 0);
+        assertTrue(advisory.getMessage().contains("flour"));
+        assertEquals(ProductionPlanStatus.PENDING, plan.getStatus());
     }
 }

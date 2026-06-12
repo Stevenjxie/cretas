@@ -8,6 +8,7 @@ import com.cretas.aims.dto.production.CreateProductionPlanRequest;
 import com.cretas.aims.dto.production.DeliveryWarnDTO;
 import com.cretas.aims.dto.production.ProductionPlanDTO;
 import com.cretas.aims.dto.production.ProductionPlanImportDTO;
+import com.cretas.aims.dto.production.ProductionPlanMaterialAdvisoryDTO;
 import com.cretas.aims.entity.*;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
 import com.cretas.aims.entity.enums.PlanSourceType;
@@ -331,6 +332,90 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
 
         log.debug("B3 库存校验通过: planId={}, productTypeId={}, plannedQuantity={}, bomItems={}",
                 plan.getId(), plan.getProductTypeId(), plannedQty, bomItems.size());
+    }
+
+    private List<ProductionPlanMaterialAdvisoryDTO.Item> buildMaterialAdvisoryItems(String factoryId, ProductionPlan plan) {
+        if (bomService == null
+                || plan.getProductTypeId() == null || plan.getProductTypeId().isBlank()
+                || plan.getPlannedQuantity() == null
+                || plan.getPlannedQuantity().compareTo(BigDecimal.ZERO) <= 0) {
+            return Collections.emptyList();
+        }
+
+        List<BomItem> bomItems;
+        try {
+            bomItems = bomService.getBomItemsByProduct(factoryId, plan.getProductTypeId());
+        } catch (Exception e) {
+            log.warn("Material advisory failed to load BOM: planId={}, err={}", plan.getId(), e.getMessage());
+            return Collections.emptyList();
+        }
+        if (bomItems == null || bomItems.isEmpty()) {
+            return Collections.emptyList();
+        }
+
+        BigDecimal plannedQty = plan.getPlannedQuantity();
+        List<ProductionPlanMaterialAdvisoryDTO.Item> warnings = new ArrayList<>();
+        for (BomItem item : bomItems) {
+            if (item.getMaterialTypeId() == null || item.getStandardQuantity() == null) {
+                continue;
+            }
+            String materialName = resolveLiveMaterialName(item.getMaterialTypeId(), item.getMaterialName());
+            BigDecimal perUnitRequired = item.getActualQuantity();
+            BigDecimal totalRequiredBom = perUnitRequired.multiply(plannedQty);
+
+            BigDecimal available = materialBatchRepository.sumAvailableQuantityByMaterialType(
+                    factoryId, item.getMaterialTypeId());
+            if (available == null) {
+                available = BigDecimal.ZERO;
+            }
+
+            String stockUnit = resolveMaterialStockUnit(factoryId, item.getMaterialTypeId());
+            String bomUnit = item.getUnit();
+            String unit = stockUnit != null ? stockUnit : (bomUnit != null ? bomUnit : "");
+            BigDecimal totalRequired = totalRequiredBom;
+            if (materialUomConverter != null && bomUnit != null && stockUnit != null
+                    && !bomUnit.trim().equalsIgnoreCase(stockUnit.trim())) {
+                com.cretas.aims.service.uom.MaterialUomConverter.ConversionResult conv =
+                        materialUomConverter.toComparableQuantity(
+                                item.getMaterialTypeId(), totalRequiredBom, bomUnit, stockUnit);
+                if (conv.isAbacaSkip()) {
+                    continue;
+                }
+                if (conv.isUnconvertible()) {
+                    warnings.add(ProductionPlanMaterialAdvisoryDTO.Item.builder()
+                            .materialTypeId(item.getMaterialTypeId())
+                            .materialName(materialName)
+                            .requiredQuantity(totalRequiredBom)
+                            .availableQuantity(available)
+                            .shortageQuantity(null)
+                            .unit(bomUnit)
+                            .message(String.format("原料「%s」BOM单位(%s)与库存单位(%s)无法换算, 请核对单位配置",
+                                    materialName, bomUnit, stockUnit))
+                            .build());
+                    continue;
+                }
+                totalRequired = conv.getQuantity();
+                unit = stockUnit;
+            }
+
+            if (available.compareTo(totalRequired) < 0) {
+                BigDecimal shortageQty = totalRequired.subtract(available);
+                warnings.add(ProductionPlanMaterialAdvisoryDTO.Item.builder()
+                        .materialTypeId(item.getMaterialTypeId())
+                        .materialName(materialName)
+                        .requiredQuantity(totalRequired)
+                        .availableQuantity(available)
+                        .shortageQuantity(shortageQty)
+                        .unit(unit)
+                        .message(String.format("%s: 需要 %s%s, 可用 %s%s, 缺口 %s%s",
+                                materialName,
+                                totalRequired.stripTrailingZeros().toPlainString(), unit,
+                                available.stripTrailingZeros().toPlainString(), unit,
+                                shortageQty.stripTrailingZeros().toPlainString(), unit))
+                        .build());
+            }
+        }
+        return warnings;
     }
 
     /**
@@ -961,13 +1046,22 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
 
         // 如果指定了状态过滤
         if (pageRequest.getStatus() != null && !pageRequest.getStatus().isEmpty()) {
-            try {
-                ProductionPlanStatus status = ProductionPlanStatus.valueOf(pageRequest.getStatus().toUpperCase());
-                planPage = productionPlanRepository.findByFactoryIdAndStatus(factoryId, status, pageable);
-                log.info("按状态过滤生产计划: factoryId={}, status={}", factoryId, status);
-            } catch (IllegalArgumentException e) {
-                log.warn("无效的状态值: {}, 返回全部数据", pageRequest.getStatus());
-                planPage = productionPlanRepository.findByFactoryId(factoryId, pageable);
+            String statusFilter = pageRequest.getStatus().toUpperCase();
+            if ("UNFINISHED".equals(statusFilter) || "ACTIVE".equals(statusFilter)) {
+                planPage = productionPlanRepository.findByFactoryIdAndStatusIn(
+                        factoryId,
+                        List.of(ProductionPlanStatus.PENDING, ProductionPlanStatus.IN_PROGRESS),
+                        pageable);
+                log.info("按未完成状态过滤生产计划: factoryId={}, status={}", factoryId, statusFilter);
+            } else {
+                try {
+                    ProductionPlanStatus status = ProductionPlanStatus.valueOf(statusFilter);
+                    planPage = productionPlanRepository.findByFactoryIdAndStatus(factoryId, status, pageable);
+                    log.info("按状态过滤生产计划: factoryId={}, status={}", factoryId, status);
+                } catch (IllegalArgumentException e) {
+                    log.warn("无效的状态值: {}, 返回全部数据", pageRequest.getStatus());
+                    planPage = productionPlanRepository.findByFactoryId(factoryId, pageable);
+                }
             }
         } else {
             planPage = productionPlanRepository.findByFactoryId(factoryId, pageable);
@@ -1014,6 +1108,31 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         //         .map(productionPlanMapper::toDTO)
         //         .collect(Collectors.toList());
         return new ArrayList<>();
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public ProductionPlanMaterialAdvisoryDTO getMaterialAdvisory(String factoryId, String planId) {
+        ProductionPlan plan = productionPlanRepository.findById(planId)
+                .orElseThrow(() -> new ResourceNotFoundException("生产计划", "id", planId));
+        if (!plan.getFactoryId().equals(factoryId)) {
+            throw new BusinessException(403, "无权查看该生产计划")
+                    .withHint("当前生产计划不属于该工厂, 无法查看");
+        }
+
+        List<ProductionPlanMaterialAdvisoryDTO.Item> warnings = buildMaterialAdvisoryItems(factoryId, plan);
+        String message = warnings.isEmpty()
+                ? "原料库存参考: 暂无缺料预警"
+                : "原料库存参考: " + warnings.stream()
+                        .map(ProductionPlanMaterialAdvisoryDTO.Item::getMessage)
+                        .collect(Collectors.joining("; "));
+        return ProductionPlanMaterialAdvisoryDTO.builder()
+                .planId(plan.getId())
+                .planNumber(plan.getPlanNumber())
+                .hasWarning(!warnings.isEmpty())
+                .message(message)
+                .warnings(warnings)
+                .build();
     }
 
     @Override
@@ -1080,8 +1199,9 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             throw new BusinessException(403, "无权操作该生产计划")
                     .withHint("当前生产计划不属于该工厂, 无法操作");
         }
-        if (plan.getStatus() != ProductionPlanStatus.IN_PROGRESS) {
-            throw new BusinessException(409, "只能完成进行中的生产计划")
+        if (plan.getStatus() != ProductionPlanStatus.IN_PROGRESS
+                && plan.getStatus() != ProductionPlanStatus.PENDING) {
+            throw new BusinessException(409, "只能完成未完成的生产计划")
                     .withHint("请刷新生产计划列表查看最新状态");
         }
 
@@ -1090,6 +1210,9 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             "actualQuantity", actualQuantity != null ? actualQuantity : java.math.BigDecimal.ZERO));
 
         plan.setStatus(ProductionPlanStatus.COMPLETED);
+        if (plan.getStartTime() == null) {
+            plan.setStartTime(LocalDateTime.now());
+        }
         plan.setEndTime(LocalDateTime.now());
         plan.setActualQuantity(actualQuantity);
         plan = productionPlanRepository.save(plan);
@@ -1513,10 +1636,10 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
 
     @Override
     public List<ProductionPlanDTO> getPendingPlansToExecute(String factoryId) {
-        // 查询 PENDING 状态的生产计划
-        List<ProductionPlan> plans = productionPlanRepository.findByFactoryIdAndStatus(
+        // N1b: 待执行列表即车间未完成列表, 包含已下达未开工(PENDING)和进行中(IN_PROGRESS)。
+        List<ProductionPlan> plans = productionPlanRepository.findByFactoryIdAndStatusIn(
             factoryId,
-            ProductionPlanStatus.PENDING
+            List.of(ProductionPlanStatus.PENDING, ProductionPlanStatus.IN_PROGRESS)
         );
         return plans.stream()
             .filter(plan -> plan.getDeletedAt() == null)

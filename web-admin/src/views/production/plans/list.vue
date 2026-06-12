@@ -5,7 +5,7 @@ import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { get, post } from '@/api/request';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { Plus, Search, Refresh, VideoPlay, VideoPause, CircleCheck, CircleClose, Download, Upload, ChatDotRound, Printer } from '@element-plus/icons-vue';
+import { Plus, Search, Refresh, VideoPlay, VideoPause, CircleCheck, CircleClose, Download, Upload, ChatDotRound, Printer, Warning } from '@element-plus/icons-vue';
 import { formatDateTimeCell } from '@/utils/tableFormatters';
 import { handleCatchError } from '@/utils/errorToast';
 import ConceptDisambiguationAlert from '@/components/common/ConceptDisambiguationAlert.vue';
@@ -17,8 +17,9 @@ import {
   listAvailableWip,
   createSecondaryPlan,
   getReportModeDefault,
+  getMaterialAdvisory,
 } from '@/api/productionPlan';
-import type { WipInventoryItem } from '@/api/productionPlan';
+import type { ProductionPlanMaterialAdvisory, WipInventoryItem } from '@/api/productionPlan';
 import { getProductWorkProcesses } from '@/api/processProduction';
 import type { ProductWorkProcessItem } from '@/api/processProduction';
 import { copyProductionPlan } from '@/api/orderCopy';
@@ -103,6 +104,7 @@ function handleWorkflowNodeClick(nodeId: string) {
 const loading = ref(false);
 const actionLoading = ref(false);
 const tableData = ref<TableRow[]>([]);
+const materialAdvisoryMap = ref<Record<string, ProductionPlanMaterialAdvisory>>({});
 // #726 SP12: 批量合并打印工单 — 多选状态
 const selectedPlans = ref<TableRow[]>([]);
 function handleSelectionChange(rows: TableRow[]) {
@@ -115,7 +117,7 @@ async function handleMultiPrint() {
 const pagination = ref({ page: 1, size: 10, total: 0 });
 const searchForm = ref({
   keyword: '',
-  status: ''
+  status: 'UNFINISHED'
 });
 
 // U-FOOTER-1
@@ -379,6 +381,7 @@ async function loadData() {
     if (response.success && response.data) {
       tableData.value = response.data.content || [];
       pagination.value.total = response.data.totalElements || 0;
+      void loadMaterialAdvisories(tableData.value);
     } else if (response.success === false) {
       ElMessage.error(response.message || '加载生产计划失败');
     }
@@ -387,6 +390,40 @@ async function loadData() {
     console.error('加载失败:', error);
   } finally {
     loading.value = false;
+  }
+}
+
+async function loadMaterialAdvisories(rows: TableRow[]) {
+  if (!factoryId.value) return;
+  const unfinishedRows = rows.filter((row) =>
+    ['PENDING', 'IN_PROGRESS'].includes(String(row.status || '').toUpperCase())
+  );
+  if (unfinishedRows.length === 0) {
+    materialAdvisoryMap.value = {};
+    return;
+  }
+  const entries = await Promise.allSettled(
+    unfinishedRows.map(async (row) => {
+      const planId = String(row.id);
+      const res = await getMaterialAdvisory(factoryId.value, planId);
+      if (!res.success || !res.data) {
+        throw new Error(res.message || '加载原料预警失败');
+      }
+      return [planId, res.data] as const;
+    })
+  );
+  const next: Record<string, ProductionPlanMaterialAdvisory> = {};
+  let failed = false;
+  entries.forEach((entry) => {
+    if (entry.status === 'fulfilled') {
+      next[entry.value[0]] = entry.value[1];
+    } else {
+      failed = true;
+    }
+  });
+  materialAdvisoryMap.value = next;
+  if (failed) {
+    ElMessage({ message: '部分生产计划原料预警加载失败，请刷新后重试', type: 'error', duration: 0, showClose: true });
   }
 }
 
@@ -478,7 +515,7 @@ function handleSearch() {
 }
 
 function handleRefresh() {
-  searchForm.value = { keyword: '', status: '' };
+  searchForm.value = { keyword: '', status: 'UNFINISHED' };
   pagination.value.page = 1;
   loadData();
 }
@@ -594,6 +631,16 @@ const completeProductName = computed(() => {
   const r = completeRow.value;
   if (!r) return '';
   return String(r.productTypeName || r.productName || r.productTypeId || '');
+});
+const completePlanNumber = computed(() => {
+  const r = completeRow.value;
+  if (!r) return '';
+  return String(r.planNumber || r.id || '');
+});
+const completeAdvisory = computed(() => {
+  const r = completeRow.value;
+  if (!r) return null;
+  return getPlanAdvisory(r) || null;
 });
 const completePlannedQuantity = computed(() => {
   const r = completeRow.value;
@@ -793,6 +840,21 @@ function isPendingStatus(status: string) {
   return status === 'PLANNED' || status === 'PENDING';
 }
 
+function isUnfinishedStatus(status: string) {
+  return ['PENDING', 'IN_PROGRESS'].includes(String(status || '').toUpperCase());
+}
+
+function getPlanAdvisory(row: TableRow) {
+  return materialAdvisoryMap.value[String(row.id || '')];
+}
+
+function getPlanAdvisorySummary(row: TableRow) {
+  const advisory = getPlanAdvisory(row);
+  if (!advisory) return '';
+  if (!advisory.hasWarning) return '原料库存参考: 暂无缺料预警';
+  return advisory.message;
+}
+
 // T138 方案A: 开工/开始/生成调拨单 的可操作 gate.
 // 后端 startProduction / createBatchFromPlan 严格只接受 PENDING (PLANNED → 409),
 // 所以这三个动作只在 PENDING 时展示, 避免对 PLANNED 计划点了直接报错.
@@ -817,7 +879,7 @@ function getStatusType(status: string) {
 function getStatusText(status: string) {
   const map: Record<string, string> = {
     PLANNED: '待执行',
-    PENDING: '待执行',
+    PENDING: '未完成',
     PREPARED: '草稿',  // M-PREP-1: 草稿态
     IN_PROGRESS: '进行中',
     COMPLETED: '已完成',
@@ -1027,11 +1089,11 @@ function handleAiFill(params: TableRow) {
     />
     <ConceptDisambiguationAlert
       here-name="生产计划"
-      here="未来要做什么的「计划」（PENDING / 待开工状态，可调整数量、日期）"
+      here="未完成生产任务（PENDING / IN_PROGRESS，可直接录入实际产量完成）"
       other-name="生产管理 → 生产批次"
       other="已开工的实际「批次」（IN_PROGRESS / COMPLETED，记录实际产量、消耗）"
       other-path="/production/batches"
-      consequence="计划批准后才会转为批次"
+      consequence="需要 APP 逐道报工时再转批次；PC 文员可在未完成列表直接完成"
     />
     <!-- #747 + #748: 生产/锁定/调拨 业务流程引导 banner (基于 May10 六扇门会议) -->
     <el-alert
@@ -1113,6 +1175,7 @@ function handleAiFill(params: TableRow) {
           @keyup.enter="handleSearch"
         />
         <el-select v-model="searchForm.status" placeholder="全部状态" clearable style="width: 150px">
+          <el-option label="未完成" value="UNFINISHED" />
           <el-option label="草稿" value="PREPARED" />
           <el-option label="待执行" value="PLANNED" />
           <el-option label="待执行 (PENDING)" value="PENDING" />
@@ -1143,6 +1206,26 @@ function handleAiFill(params: TableRow) {
             <el-tag :type="getStatusType(row.status)" size="small">
               {{ getStatusText(row.status) }}
             </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="原料参考" width="130" align="center">
+          <template #default="{ row }">
+            <el-tooltip
+              v-if="getPlanAdvisory(row)?.hasWarning"
+              :content="getPlanAdvisorySummary(row)"
+              placement="top"
+            >
+              <el-tag type="danger" size="small" :icon="Warning">缺料预警</el-tag>
+            </el-tooltip>
+            <el-tooltip
+              v-else-if="getPlanAdvisory(row)"
+              :content="getPlanAdvisorySummary(row)"
+              placement="top"
+            >
+              <el-tag type="success" size="small">库存参考</el-tag>
+            </el-tooltip>
+            <el-tag v-else-if="isUnfinishedStatus(row.status)" type="info" size="small">加载中</el-tag>
+            <span v-else>-</span>
           </template>
         </el-table-column>
         <el-table-column prop="estimatedWorkers" label="预计工人" width="90" align="center" />
@@ -1199,7 +1282,7 @@ function handleAiFill(params: TableRow) {
               @click="handleGenerateTransfer(row)"
             >生成调拨单</el-button>
             <el-button
-              v-if="canWrite && row.status === 'IN_PROGRESS'"
+              v-if="canWrite && isUnfinishedStatus(row.status)"
               type="primary"
               link
               size="small"
@@ -1588,6 +1671,17 @@ function handleAiFill(params: TableRow) {
       append-to-body
     >
       <el-form label-width="100px">
+        <el-alert
+          v-if="completeAdvisory?.hasWarning"
+          :title="completeAdvisory.message"
+          type="warning"
+          show-icon
+          :closable="false"
+          style="margin-bottom: 12px"
+        />
+        <el-form-item label="计划单号">
+          <span>{{ completePlanNumber || '-' }}</span>
+        </el-form-item>
         <el-form-item label="品名">
           <span>{{ completeProductName || '-' }}</span>
         </el-form-item>
