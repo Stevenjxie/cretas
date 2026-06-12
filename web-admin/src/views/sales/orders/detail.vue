@@ -196,6 +196,18 @@ const taxGroupData = computed(() => {
   })).sort((a: { taxRate: number }, b: { taxRate: number }) => a.taxRate - b.taxRate);
 });
 
+function taxIncludedUnitPrice(row: TableRow): number | null {
+  if (row.unitPrice == null) return null;
+  const unitPrice = Number(row.unitPrice);
+  const taxRate = Number(row.taxRate || 0);
+  return unitPrice * (1 + taxRate / 100);
+}
+
+function formatTaxIncludedUnitPrice(row: TableRow): string {
+  const amount = taxIncludedUnitPrice(row);
+  return amount == null ? '—' : formatAmount(amount);
+}
+
 async function loadDeliveries() {
   if (!factoryId.value || !orderId.value) return;
   try {
@@ -1029,7 +1041,7 @@ async function handleQuickPayFull() {
           <el-descriptions-item :label="label('customer')">{{ order.customerName || order.customer?.name || order.customerId }}</el-descriptions-item>
           <el-descriptions-item label="下单日期">{{ order.orderDate }}</el-descriptions-item>
           <el-descriptions-item label="业务员">{{ order.salesperson || '-' }}</el-descriptions-item>
-          <el-descriptions-item v-if="canViewPrice" label="订单总额">{{ formatAmount(order.totalAmount) }}</el-descriptions-item>
+          <el-descriptions-item v-if="canViewPrice" label="未税总额">{{ formatAmount(order.totalAmount) }}</el-descriptions-item>
           <el-descriptions-item v-if="canViewPrice" label="已发货金额">{{ order.actualShippedAmount ? formatAmount(order.actualShippedAmount) : '0.00' }}</el-descriptions-item>
           <el-descriptions-item v-if="canViewPrice" label="已开票">{{ order.invoicedAmount ? formatAmount(order.invoicedAmount) : '0.00' }}</el-descriptions-item>
           <el-descriptions-item v-if="canViewPrice" label="已收款">{{ order.paidAmount ? formatAmount(order.paidAmount) : '0.00' }}</el-descriptions-item>
@@ -1063,8 +1075,13 @@ async function handleQuickPayFull() {
               <el-table-column prop="boxQuantity" label="箱数" width="80" align="right">
                 <template #default="{ row }">{{ row.boxQuantity || '-' }}</template>
               </el-table-column>
-              <el-table-column v-if="canViewPrice" prop="unitPrice" label="销售单价" width="120" align="right">
+              <el-table-column v-if="canViewPrice" prop="unitPrice" label="未税单价" width="120" align="right">
                 <template #default="{ row }">{{ formatAmount(row.unitPrice) }}</template>
+              </el-table-column>
+              <el-table-column v-if="canViewPrice" label="含税单价" width="120" align="right">
+                <template #default="{ row }">
+                  {{ formatTaxIncludedUnitPrice(row) }}
+                </template>
               </el-table-column>
               <el-table-column prop="taxRate" label="税率" width="80" align="center">
                 <template #default="{ row }">

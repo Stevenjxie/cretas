@@ -8,6 +8,16 @@ const loading = ref(false);
 const dateRange = ref<[string, string] | null>(null);
 const limit = ref(20);
 
+function money(value: number | null | undefined): string {
+  return `¥ ${Number(value ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+function averageAmount(row: ProductRankRow, key: 'taxableAmount' | 'totalAmountWithTax'): number {
+  const qty = Number(row.totalQty || 0);
+  if (qty <= 0) return 0;
+  return Number(row[key] || 0) / qty;
+}
+
 async function load(): Promise<void> {
   loading.value = true;
   try {
@@ -51,8 +61,20 @@ onMounted(load);
       <el-table-column label="总数量" width="140">
         <template #default="{ row }">{{ row.totalQty.toLocaleString() }} {{ row.unit ?? '' }}</template>
       </el-table-column>
-      <el-table-column label="销售额" width="160">
-        <template #default="{ row }">¥ {{ row.revenue.toLocaleString() }}</template>
+      <el-table-column label="未税单价" width="140">
+        <template #default="{ row }">{{ money(averageAmount(row, 'taxableAmount')) }}</template>
+      </el-table-column>
+      <el-table-column label="含税单价" width="140">
+        <template #default="{ row }">{{ money(averageAmount(row, 'totalAmountWithTax')) }}</template>
+      </el-table-column>
+      <el-table-column label="含税销售额" width="160">
+        <template #default="{ row }">{{ money(row.totalAmountWithTax) }}</template>
+      </el-table-column>
+      <el-table-column label="未税金额" width="160">
+        <template #default="{ row }">{{ money(row.taxableAmount) }}</template>
+      </el-table-column>
+      <el-table-column label="税额" width="140">
+        <template #default="{ row }">{{ money(row.taxAmount) }}</template>
       </el-table-column>
       <el-table-column prop="orderCount" label="订单数" width="100" />
     </el-table>

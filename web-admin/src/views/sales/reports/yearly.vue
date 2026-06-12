@@ -7,6 +7,10 @@ const data = ref<YearlyReport | null>(null);
 const loading = ref(false);
 const selectedYear = ref<number>(new Date().getFullYear());
 
+function money(value: number | null | undefined): string {
+  return `¥ ${Number(value ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
 async function load(): Promise<void> {
   loading.value = true;
   try {
@@ -36,8 +40,10 @@ onMounted(load);
     <div v-loading="loading" v-if="data" class="kpi-grid">
       <el-card><div class="label">年份</div><div class="value">{{ data.year }}</div></el-card>
       <el-card><div class="label">订单数</div><div class="value">{{ data.orderCount }}</div></el-card>
-      <el-card><div class="label">销售额</div><div class="value primary">¥ {{ data.revenue.toLocaleString() }}</div></el-card>
-      <el-card><div class="label">已收款</div><div class="value success">¥ {{ data.paid.toLocaleString() }}</div></el-card>
+      <el-card><div class="label">含税销售额</div><div class="value primary">{{ money(data.totalAmountWithTax) }}</div></el-card>
+      <el-card><div class="label">未税金额</div><div class="value">{{ money(data.taxableAmount) }}</div></el-card>
+      <el-card><div class="label">税额</div><div class="value">{{ money(data.taxAmount) }}</div></el-card>
+      <el-card><div class="label">已收款</div><div class="value success">{{ money(data.paid) }}</div></el-card>
     </div>
 
     <el-card v-if="monthlyTable.length" class="monthly-table">
@@ -45,8 +51,14 @@ onMounted(load);
       <el-table :data="monthlyTable" stripe size="small">
         <el-table-column prop="month" label="月份" />
         <el-table-column prop="orderCount" label="订单数" />
-        <el-table-column label="销售额">
-          <template #default="{ row }">¥ {{ row.revenue.toLocaleString() }}</template>
+        <el-table-column label="含税销售额">
+          <template #default="{ row }">{{ money(row.totalAmountWithTax) }}</template>
+        </el-table-column>
+        <el-table-column label="未税金额">
+          <template #default="{ row }">{{ money(row.taxableAmount) }}</template>
+        </el-table-column>
+        <el-table-column label="税额">
+          <template #default="{ row }">{{ money(row.taxAmount) }}</template>
         </el-table-column>
       </el-table>
     </el-card>
