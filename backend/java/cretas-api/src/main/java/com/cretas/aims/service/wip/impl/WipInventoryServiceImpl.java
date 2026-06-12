@@ -122,7 +122,7 @@ public class WipInventoryServiceImpl implements WipInventoryService {
             BigDecimal rollLabor = report.getLaborCost();
             BigDecimal rollMaterial = report.getMaterialCost();
             if ("OUTPUT".equals(report.getReportKind())) {
-                CostRollup rollup = outputRollupWithBatchInputMaterial(factoryId, report, task);
+                CostRollup rollup = outputRollupWithBatchInputMaterial(factoryId, task);
                 rollLabor = rollup.laborCost();
                 rollMaterial = rollup.materialCost();
             }
@@ -190,7 +190,7 @@ public class WipInventoryServiceImpl implements WipInventoryService {
         BigDecimal rollLabor = report.getLaborCost();
         BigDecimal rollMaterial = report.getMaterialCost();
         if ("OUTPUT".equals(report.getReportKind())) {
-            CostRollup rollup = outputRollupWithBatchInputMaterial(factoryId, report, task);
+            CostRollup rollup = outputRollupWithBatchInputMaterial(factoryId, task);
             rollLabor = rollup.laborCost();
             rollMaterial = rollup.materialCost();
         }
@@ -452,52 +452,41 @@ public class WipInventoryServiceImpl implements WipInventoryService {
      * {@link #calculateBatchInputMaterialCost} 返 null → 本方法等价于原 per-task rollup. Mode-aware by construction,
      * 不破坏逐道. 诚实 null: 无 INPUT 料且 OUTPUT 自身无料 → material 仍 null (不伪造 0).
      */
-    private CostRollup outputRollupWithBatchInputMaterial(String factoryId, ProductionReport report,
-                                                          WorkProcessTask outputTask) {
+    private CostRollup outputRollupWithBatchInputMaterial(String factoryId, WorkProcessTask outputTask) {
         CostRollup own = calculateTaskCostRollup(factoryId, outputTask.getId());
         BigDecimal material = own.materialCost();
         BigDecimal inputMaterial = calculateBatchInputMaterialCost(factoryId, outputTask.getProductionBatchId());
         if (inputMaterial != null) {
             material = (material == null ? BigDecimal.ZERO : material).add(inputMaterial);
         }
-        // Gap B (2026-06-12 多段链): 二次加工消耗的上游半成品 (sourceWipNo) 成本 = sourceWip.unitCost × inputQty,
-        //   也是本段产出的料投入。否则 semi B 的 unitCost 永 null —— consumeSourceWip 只扣量不带成本,
-        //   真多段链 raw→semiA→semiB→FG 在 semiB 段断成本。诚实 null: 上游 WIP 无成本则不计 (不伪造 0)。
-        BigDecimal consumedWipCost = calculateConsumedSourceWipCost(factoryId, report);
-        if (consumedWipCost != null) {
-            material = (material == null ? BigDecimal.ZERO : material).add(consumedWipCost);
-        }
         return new CostRollup(own.laborCost(), material);
     }
 
-    /** Gap B: 本段消耗的上游半成品 (sourceWipNo) 成本 = sourceWip.unitCost × inputQty. 无 sourceWip 或无成本 → null. */
-    private BigDecimal calculateConsumedSourceWipCost(String factoryId, ProductionReport report) {
-        if (report == null || report.getSourceWipNo() == null || report.getSourceWipNo().isBlank()
-                || report.getInputQuantity() == null) {
-            return null;
-        }
-        SemiFinishedInventory sourceWip = wipRepo
-                .findByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(factoryId, report.getSourceWipNo())
-                .orElse(null);
-        if (sourceWip == null || sourceWip.getUnitCost() == null) {
-            return null;
-        }
-        return sourceWip.getUnitCost().multiply(report.getInputQuantity());
-    }
-
-    /** 同批次所有 {@code __MATERIAL_INPUT__} 哨兵 task 的料成本合计 (两点模式专用). 无哨兵 task → null. */
+    /**
+     * 同批次所有 INPUT-kind YIELD 报工的料成本合计.
+     *
+     * <p>覆盖两类 INPUT 料: (a) 两点模式 {@code __MATERIAL_INPUT__} 哨兵 task 的领料 INPUT 报工;
+     * (b) 二次加工/多段链"领用上道半成品 + 本段原料"的 INPUT 报工 —— 消耗上游 WIP 的成本
+     * (sourceWip.unitCost × inputQty) 在报工时已算入该 INPUT report 的 {@code materialCost}.
+     * OUTPUT 报工的 {@code sourceWipNo} 在三阶段落库时被置空, 故必须从 batch 的 INPUT-kind 报工聚合,
+     * 不能依赖 OUTPUT report 自身。
+     *
+     * <p>Mode-aware by construction: 逐道模式用 legacy null-kind 整合报工 (料+产出同 report, reportKind=null,
+     * 非 INPUT) → 本方法返 null, OUTPUT rollup 退回 per-task own 成本, 逐道行为不变。纯成品直产无 INPUT 报工 → null。
+     * 诚实 null: 无 INPUT 料则返 null (不伪造 0)。
+     *
+     * <p>修复历史: 2026-06-12 P0 两点桥首版只聚合哨兵 task 的料; Codex 多段 rerun 暴露二次加工的 INPUT 报工落在
+     * 普通 task 上 (非哨兵) → 旧逻辑漏聚合 → semiB unitCost 永 null。改为按 {@code reportKind=INPUT} 聚合,
+     * 统一覆盖两点 (哨兵 INPUT 报工也是 INPUT-kind, 结果不变) + 二次加工两类, 不破坏逐道。
+     */
     private BigDecimal calculateBatchInputMaterialCost(String factoryId, Long productionBatchId) {
         if (productionBatchId == null) {
             return null;
         }
         BigDecimal material = null;
-        for (WorkProcessTask t : taskRepo.findByFactoryIdAndProductionBatchIdOrderByProcessOrderAsc(
-                factoryId, productionBatchId)) {
-            if (WorkProcessTaskService.SENTINEL_MATERIAL_INPUT.equals(t.getWorkProcessId())) {
-                BigDecimal m = calculateTaskCostRollup(factoryId, t.getId()).materialCost();
-                if (m != null) {
-                    material = (material == null ? BigDecimal.ZERO : material).add(m);
-                }
+        for (ProductionReport r : reportRepo.findYieldReportsByBatch(factoryId, productionBatchId)) {
+            if ("INPUT".equals(r.getReportKind()) && r.getMaterialCost() != null) {
+                material = (material == null ? BigDecimal.ZERO : material).add(r.getMaterialCost());
             }
         }
         return material;
