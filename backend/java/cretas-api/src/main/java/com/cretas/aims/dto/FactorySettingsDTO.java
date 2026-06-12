@@ -1,6 +1,7 @@
 package com.cretas.aims.dto;
 
 import io.swagger.v3.oas.annotations.media.Schema;
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import lombok.*;
 
 import jakarta.validation.constraints.NotBlank;
@@ -101,6 +102,21 @@ public class FactorySettingsDTO {
 
     @Schema(description = "启用考勤管理", example = "true")
     private Boolean enableAttendance;
+
+    @Schema(description = "新建计划默认两点报工(true=仅头尾报, false=逐道报工)", example = "false")
+    private Boolean skipProcessReportingDefault;
+
+    /**
+     * Update payload presence marker. Distinguishes an explicit JSON null
+     * (reset to the DB default false) from an omitted field (leave as-is).
+     */
+    @JsonIgnore
+    private boolean skipProcessReportingDefaultSpecified;
+
+    public void setSkipProcessReportingDefault(Boolean skipProcessReportingDefault) {
+        this.skipProcessReportingDefault = skipProcessReportingDefault;
+        this.skipProcessReportingDefaultSpecified = true;
+    }
 
     @Schema(description = "最后修改时间")
     private LocalDateTime lastModifiedAt;

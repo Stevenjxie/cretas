@@ -166,6 +166,7 @@ export interface FactorySettings {
   enableCostCalculation?: boolean
   enableEquipmentManagement?: boolean
   enableAttendance?: boolean
+  skipProcessReportingDefault?: boolean
   allowSelfRegistration?: boolean
   requireAdminApproval?: boolean
   defaultUserRole?: string
