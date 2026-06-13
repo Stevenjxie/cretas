@@ -8,6 +8,7 @@ import com.cretas.aims.dto.production.CreateProductionPlanRequest;
 import com.cretas.aims.dto.production.DeliveryWarnDTO;
 import com.cretas.aims.dto.production.ProductionPlanDTO;
 import com.cretas.aims.dto.production.ProductionPlanImportDTO;
+import com.cretas.aims.dto.production.ProductionPlanMaterialAdvisoryDTO;
 import com.cretas.aims.entity.*;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
 import com.cretas.aims.entity.enums.PlanSourceType;
@@ -296,15 +297,9 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                     continue;
                 }
                 if (conv.isUnconvertible()) {
-                    // T144 安全网: BOM 单位与库存批次单位维度不可换算 (e.g. 个 vs kg, 无 g↔kg 桥)
-                    // → 真实配置错误, fail-loud 引导核对单位.
-                    throw new BusinessException(409,
-                            String.format("原料「%s」BOM单位(%s)与库存单位(%s)无法换算，请核对单位配置",
-                                    materialName, bomUnit, stockUnit))
-                            .withCode("MATERIAL_UOM_UNCONFIGURED")
-                            .withHint("请核对该原料 BOM 配方单位与入库称重单位是否同一计量维度")
-                            .withHintTarget(item.getMaterialTypeId())
-                            .withSeverity("BLOCKING");
+                    log.warn("N1 开工无条件化: 原料单位无法换算, 仅记录预警不阻塞开工: planId={}, materialTypeId={}, materialName={}, bomUnit={}, stockUnit={}",
+                            plan.getId(), item.getMaterialTypeId(), materialName, bomUnit, stockUnit);
+                    continue;
                 }
                 totalRequired = conv.getQuantity();  // 已换算到称重批次单位 (kg)
             }
@@ -322,15 +317,96 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         }
 
         if (!shortages.isEmpty()) {
-            String message = "原料库存不足, 无法开始生产: " + String.join("; ", shortages);
-            log.warn("B3 库存校验失败: planId={}, shortages={}", plan.getId(), shortages);
-            throw new BusinessException(409, message)
-                    .withHint("请先采购或调拨原料后再开始生产")
-                    .withSeverity("BLOCKING");
+            log.warn("N1 开工无条件化: 原料库存不足仅预警, 不阻塞开工: planId={}, shortages={}", plan.getId(), shortages);
+            return;
         }
 
         log.debug("B3 库存校验通过: planId={}, productTypeId={}, plannedQuantity={}, bomItems={}",
                 plan.getId(), plan.getProductTypeId(), plannedQty, bomItems.size());
+    }
+
+    private List<ProductionPlanMaterialAdvisoryDTO.Item> buildMaterialAdvisoryItems(String factoryId, ProductionPlan plan) {
+        if (bomService == null
+                || plan.getProductTypeId() == null || plan.getProductTypeId().isBlank()
+                || plan.getPlannedQuantity() == null
+                || plan.getPlannedQuantity().compareTo(BigDecimal.ZERO) <= 0) {
+            return Collections.emptyList();
+        }
+
+        List<BomItem> bomItems;
+        try {
+            bomItems = bomService.getBomItemsByProduct(factoryId, plan.getProductTypeId());
+        } catch (Exception e) {
+            log.warn("Material advisory failed to load BOM: planId={}, err={}", plan.getId(), e.getMessage());
+            return Collections.emptyList();
+        }
+        if (bomItems == null || bomItems.isEmpty()) {
+            return Collections.emptyList();
+        }
+
+        BigDecimal plannedQty = plan.getPlannedQuantity();
+        List<ProductionPlanMaterialAdvisoryDTO.Item> warnings = new ArrayList<>();
+        for (BomItem item : bomItems) {
+            if (item.getMaterialTypeId() == null || item.getStandardQuantity() == null) {
+                continue;
+            }
+            String materialName = resolveLiveMaterialName(item.getMaterialTypeId(), item.getMaterialName());
+            BigDecimal perUnitRequired = item.getActualQuantity();
+            BigDecimal totalRequiredBom = perUnitRequired.multiply(plannedQty);
+
+            BigDecimal available = materialBatchRepository.sumAvailableQuantityByMaterialType(
+                    factoryId, item.getMaterialTypeId());
+            if (available == null) {
+                available = BigDecimal.ZERO;
+            }
+
+            String stockUnit = resolveMaterialStockUnit(factoryId, item.getMaterialTypeId());
+            String bomUnit = item.getUnit();
+            String unit = stockUnit != null ? stockUnit : (bomUnit != null ? bomUnit : "");
+            BigDecimal totalRequired = totalRequiredBom;
+            if (materialUomConverter != null && bomUnit != null && stockUnit != null
+                    && !bomUnit.trim().equalsIgnoreCase(stockUnit.trim())) {
+                com.cretas.aims.service.uom.MaterialUomConverter.ConversionResult conv =
+                        materialUomConverter.toComparableQuantity(
+                                item.getMaterialTypeId(), totalRequiredBom, bomUnit, stockUnit);
+                if (conv.isAbacaSkip()) {
+                    continue;
+                }
+                if (conv.isUnconvertible()) {
+                    warnings.add(ProductionPlanMaterialAdvisoryDTO.Item.builder()
+                            .materialTypeId(item.getMaterialTypeId())
+                            .materialName(materialName)
+                            .requiredQuantity(totalRequiredBom)
+                            .availableQuantity(available)
+                            .shortageQuantity(null)
+                            .unit(bomUnit)
+                            .message(String.format("原料「%s」BOM单位(%s)与库存单位(%s)无法换算, 请核对单位配置",
+                                    materialName, bomUnit, stockUnit))
+                            .build());
+                    continue;
+                }
+                totalRequired = conv.getQuantity();
+                unit = stockUnit;
+            }
+
+            if (available.compareTo(totalRequired) < 0) {
+                BigDecimal shortageQty = totalRequired.subtract(available);
+                warnings.add(ProductionPlanMaterialAdvisoryDTO.Item.builder()
+                        .materialTypeId(item.getMaterialTypeId())
+                        .materialName(materialName)
+                        .requiredQuantity(totalRequired)
+                        .availableQuantity(available)
+                        .shortageQuantity(shortageQty)
+                        .unit(unit)
+                        .message(String.format("%s: 需要 %s%s, 可用 %s%s, 缺口 %s%s",
+                                materialName,
+                                totalRequired.stripTrailingZeros().toPlainString(), unit,
+                                available.stripTrailingZeros().toPlainString(), unit,
+                                shortageQty.stripTrailingZeros().toPlainString(), unit))
+                        .build());
+            }
+        }
+        return warnings;
     }
 
     /**
@@ -961,13 +1037,22 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
 
         // 如果指定了状态过滤
         if (pageRequest.getStatus() != null && !pageRequest.getStatus().isEmpty()) {
-            try {
-                ProductionPlanStatus status = ProductionPlanStatus.valueOf(pageRequest.getStatus().toUpperCase());
-                planPage = productionPlanRepository.findByFactoryIdAndStatus(factoryId, status, pageable);
-                log.info("按状态过滤生产计划: factoryId={}, status={}", factoryId, status);
-            } catch (IllegalArgumentException e) {
-                log.warn("无效的状态值: {}, 返回全部数据", pageRequest.getStatus());
-                planPage = productionPlanRepository.findByFactoryId(factoryId, pageable);
+            String statusFilter = pageRequest.getStatus().toUpperCase();
+            if ("UNFINISHED".equals(statusFilter) || "ACTIVE".equals(statusFilter)) {
+                planPage = productionPlanRepository.findByFactoryIdAndStatusIn(
+                        factoryId,
+                        List.of(ProductionPlanStatus.PENDING, ProductionPlanStatus.IN_PROGRESS),
+                        pageable);
+                log.info("按未完成状态过滤生产计划: factoryId={}, status={}", factoryId, statusFilter);
+            } else {
+                try {
+                    ProductionPlanStatus status = ProductionPlanStatus.valueOf(statusFilter);
+                    planPage = productionPlanRepository.findByFactoryIdAndStatus(factoryId, status, pageable);
+                    log.info("按状态过滤生产计划: factoryId={}, status={}", factoryId, status);
+                } catch (IllegalArgumentException e) {
+                    log.warn("无效的状态值: {}, 返回全部数据", pageRequest.getStatus());
+                    planPage = productionPlanRepository.findByFactoryId(factoryId, pageable);
+                }
             }
         } else {
             planPage = productionPlanRepository.findByFactoryId(factoryId, pageable);
@@ -1017,6 +1102,31 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
     }
 
     @Override
+    @Transactional(readOnly = true)
+    public ProductionPlanMaterialAdvisoryDTO getMaterialAdvisory(String factoryId, String planId) {
+        ProductionPlan plan = productionPlanRepository.findById(planId)
+                .orElseThrow(() -> new ResourceNotFoundException("生产计划", "id", planId));
+        if (!plan.getFactoryId().equals(factoryId)) {
+            throw new BusinessException(403, "无权查看该生产计划")
+                    .withHint("当前生产计划不属于该工厂, 无法查看");
+        }
+
+        List<ProductionPlanMaterialAdvisoryDTO.Item> warnings = buildMaterialAdvisoryItems(factoryId, plan);
+        String message = warnings.isEmpty()
+                ? "原料库存参考: 暂无缺料预警"
+                : "原料库存参考: " + warnings.stream()
+                        .map(ProductionPlanMaterialAdvisoryDTO.Item::getMessage)
+                        .collect(Collectors.joining("; "));
+        return ProductionPlanMaterialAdvisoryDTO.builder()
+                .planId(plan.getId())
+                .planNumber(plan.getPlanNumber())
+                .hasWarning(!warnings.isEmpty())
+                .message(message)
+                .warnings(warnings)
+                .build();
+    }
+
+    @Override
     @Transactional
     public ProductionPlanDTO startProduction(String factoryId, String planId) {
         ProductionPlan plan = productionPlanRepository.findById(planId)
@@ -1036,9 +1146,8 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
 
         runConfiguredValidation(factoryId, "START", java.util.Map.of("planId", planId));
 
-        // PR #289 §B3 (2026-05-10 客户对接): 开始生产前硬校验原料库存
-        // 客户原话: "那这个开始的话点的时候会有一个判断吗就是我的库存够不够"
-        // 不足时阻断开始, 提示具体原料/需求/可用/缺口, 客户去采购或调拨.
+        // N1 (2026-06-12): 开工无条件化。原料不足只记录预警, 不再阻断开工;
+        // 领料/实际消耗在报工或结单时按现场填写。
         validateMaterialStockSufficient(factoryId, plan);
 
         // SP2 二次加工: 开始生产时扣减 WIP 半成品库存
@@ -1080,8 +1189,9 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             throw new BusinessException(403, "无权操作该生产计划")
                     .withHint("当前生产计划不属于该工厂, 无法操作");
         }
-        if (plan.getStatus() != ProductionPlanStatus.IN_PROGRESS) {
-            throw new BusinessException(409, "只能完成进行中的生产计划")
+        if (plan.getStatus() != ProductionPlanStatus.IN_PROGRESS
+                && plan.getStatus() != ProductionPlanStatus.PENDING) {
+            throw new BusinessException(409, "只能完成未完成的生产计划")
                     .withHint("请刷新生产计划列表查看最新状态");
         }
 
@@ -1090,6 +1200,9 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             "actualQuantity", actualQuantity != null ? actualQuantity : java.math.BigDecimal.ZERO));
 
         plan.setStatus(ProductionPlanStatus.COMPLETED);
+        if (plan.getStartTime() == null) {
+            plan.setStartTime(LocalDateTime.now());
+        }
         plan.setEndTime(LocalDateTime.now());
         plan.setActualQuantity(actualQuantity);
         plan = productionPlanRepository.save(plan);
@@ -1513,10 +1626,10 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
 
     @Override
     public List<ProductionPlanDTO> getPendingPlansToExecute(String factoryId) {
-        // 查询 PENDING 状态的生产计划
-        List<ProductionPlan> plans = productionPlanRepository.findByFactoryIdAndStatus(
+        // N1b: 待执行列表即车间未完成列表, 包含已下达未开工(PENDING)和进行中(IN_PROGRESS)。
+        List<ProductionPlan> plans = productionPlanRepository.findByFactoryIdAndStatusIn(
             factoryId,
-            ProductionPlanStatus.PENDING
+            List.of(ProductionPlanStatus.PENDING, ProductionPlanStatus.IN_PROGRESS)
         );
         return plans.stream()
             .filter(plan -> plan.getDeletedAt() == null)
@@ -1741,10 +1854,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                     .withHint("请刷新生产计划列表查看最新状态");
         }
 
-        // T138 方案A: 转为批次(开工)继承 startProduction 的开工前校验.
-        // 转批次=开工主路径(F006 逐道报工), 之前漏跑库存校验直接建批次,
-        // 现与"开始"一致: 先跑配置化校验 + 硬校验原料库存是否充足.
-        // 在任何 DB 写入前调用; 抛异常则批次不创建(同 @Transactional 回滚).
+        // N1 (2026-06-12): 转批次=开工不再受原料库存预检阻断; 缺料只记录预警。
         runConfiguredValidation(factoryId, "START", java.util.Map.of("planId", planId));
         validateMaterialStockSufficient(factoryId, plan);
 

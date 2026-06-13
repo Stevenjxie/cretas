@@ -36,6 +36,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -48,21 +49,21 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * T138 方案A — createBatchFromPlan(转为批次=开工) 继承 startProduction 的开工前库存校验.
+ * N1 (2026-06-12) — createBatchFromPlan(转为批次=开工) 不再被原料库存预检阻塞.
  *
- * <p>行为变更: 转为批次之前会跑 {@code validateMaterialStockSufficient}, 原料不足时
- * 阻断, 批次<b>不创建</b>(之前直接建批次, 跳过库存校验). 与"开始"路径一致.
+ * <p>行为变更: 转为批次之前仍会跑 {@code validateMaterialStockSufficient} 记录预警,
+ * 但原料不足不再阻断批次创建, 与"开始"路径一致.
  *
  * <p>验证:
  * <ul>
  *   <li>库存充足 → 批次创建, 计划→IN_PROGRESS</li>
- *   <li>库存不足 → 抛 409 库存不足, 批次<b>未</b>保存, 计划状态未推进</li>
+ *   <li>库存不足 → 仍创建批次, 计划状态推进</li>
  *   <li>无 BOM 配置 → skip 校验, 仍可建批次</li>
  * </ul>
  *
  * @since 2026-06-08
  */
-@DisplayName("T138: createBatchFromPlan 继承开工前库存校验")
+@DisplayName("N1: createBatchFromPlan 库存预警不阻塞")
 @ExtendWith(MockitoExtension.class)
 @MockitoSettings(strictness = Strictness.LENIENT)
 class ProductionPlanCreateBatchValidationTest {
@@ -129,10 +130,19 @@ class ProductionPlanCreateBatchValidationTest {
     }
 
     @Test
-    @DisplayName("库存不足 → 抛 409 库存不足, 批次未创建, 计划状态未推进 (行为变更核心)")
-    void createBatch_stockShort_blocksAndDoesNotCreateBatch() {
+    @DisplayName("N1: 库存不足 → 仅预警, 仍创建批次并推进计划")
+    void createBatch_stockShort_stillCreatesBatch() {
         ProductionPlan plan = pendingPlan(new BigDecimal("100"));
         when(productionPlanRepository.findById(PLAN_ID)).thenReturn(Optional.of(plan));
+        when(productionPlanRepository.save(any(ProductionPlan.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(productionBatchRepository.save(any(ProductionBatch.class)))
+                .thenAnswer(inv -> {
+                    ProductionBatch b = inv.getArgument(0);
+                    if (b.getId() == null) {
+                        b.setId(10L);
+                    }
+                    return b;
+                });
 
         // 需求 200, 可用 50 → 缺口 150
         when(bomService.getBomItemsByProduct(FACTORY_ID, PRODUCT_TYPE_ID))
@@ -140,16 +150,11 @@ class ProductionPlanCreateBatchValidationTest {
         when(materialBatchRepository.sumAvailableQuantityByMaterialType(FACTORY_ID, "MT-A"))
                 .thenReturn(new BigDecimal("50"));
 
-        BusinessException ex = assertThrows(BusinessException.class,
-                () -> service.createBatchFromPlan(FACTORY_ID, PLAN_ID));
-        assertEquals(409, ex.getCode());
-        assertTrue(ex.getMessage().contains("库存不足"), "应提示库存不足: " + ex.getMessage());
-        assertTrue(ex.getMessage().contains("面粉"), "应包含原料名: " + ex.getMessage());
-
-        // 批次未保存 — 校验在任何 DB 写入前阻断
-        verify(productionBatchRepository, never()).save(any(ProductionBatch.class));
-        // 计划状态未推进 (仍 PENDING)
-        assertEquals(ProductionPlanStatus.PENDING, plan.getStatus());
+        ProductionBatch batch = assertDoesNotThrow(() -> service.createBatchFromPlan(FACTORY_ID, PLAN_ID));
+        assertNotNull(batch);
+        verify(productionBatchRepository, times(1)).save(any(ProductionBatch.class));
+        assertEquals(ProductionPlanStatus.IN_PROGRESS, plan.getStatus());
+        assertNotNull(plan.getStartTime());
     }
 
     @Test

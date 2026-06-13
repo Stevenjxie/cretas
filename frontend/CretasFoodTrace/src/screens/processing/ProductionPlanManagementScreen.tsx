@@ -21,7 +21,7 @@ import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { Picker } from '@react-native-picker/picker';
 import { useTranslation } from 'react-i18next';
 import * as DocumentPicker from 'expo-document-picker';
-import { productionPlanApiClient, ProductionPlan as ApiProductionPlan, StockWithConversion } from '../../services/api/productionPlanApiClient';
+import { productionPlanApiClient, ProductionPlan as ApiProductionPlan, StockWithConversion, ProductionPlanMaterialAdvisory } from '../../services/api/productionPlanApiClient';
 import { productTypeApiClient } from '../../services/api/productTypeApiClient';
 import { customerApiClient } from '../../services/api/customerApiClient';
 import { conversionApiClient } from '../../services/api/conversionApiClient';
@@ -70,7 +70,7 @@ export default function ProductionPlanManagementScreen() {
   const [plans, setPlans] = useState<ProductionPlan[]>([]);
   const [loading, setLoading] = useState(true);
   const [modalVisible, setModalVisible] = useState(false);
-  const [filterStatus, setFilterStatus] = useState('all');
+  const [filterStatus, setFilterStatus] = useState('UNFINISHED');
 
   // 权限控制
   const userType = user?.userType || 'factory';
@@ -142,6 +142,7 @@ export default function ProductionPlanManagementScreen() {
   const [completingPlan, setCompletingPlan] = useState<ProductionPlan | null>(null);
   const [actualQuantity, setActualQuantity] = useState('');
   const [completeLoading, setCompleteLoading] = useState(false);
+  const [materialAdvisories, setMaterialAdvisories] = useState<Record<string, ProductionPlanMaterialAdvisory>>({});
 
   useEffect(() => {
     loadPlans();
@@ -213,16 +214,53 @@ export default function ProductionPlanManagementScreen() {
         // 后端返回分页格式: { content: [...], totalElements, ... }
         const pageData = response.data as { content?: ProductionPlan[] };
         const plansData = pageData.content || [];
-        setPlans(Array.isArray(plansData) ? plansData : []);
+        const nextPlans = Array.isArray(plansData) ? plansData : [];
+        setPlans(nextPlans);
+        await loadMaterialAdvisories(nextPlans);
       } else {
         setPlans([]);
+        setMaterialAdvisories({});
       }
     } catch (error) {
       productionPlanLogger.error('加载生产计划失败', error, { filterStatus });
       Alert.alert(t('common.error', { defaultValue: '错误' }), getErrorMsg(error) || t('productionPlan.messages.loadFailed'));
       setPlans([]);
+      setMaterialAdvisories({});
     } finally {
       setLoading(false);
+    }
+  };
+
+  const loadMaterialAdvisories = async (rows: ProductionPlan[]) => {
+    const unfinishedRows = rows.filter((plan) =>
+      ['pending', 'in_progress'].includes(plan.status?.toLowerCase() || '')
+    );
+    if (unfinishedRows.length === 0) {
+      setMaterialAdvisories({});
+      return;
+    }
+
+    const results = await Promise.allSettled(
+      unfinishedRows.map(async (plan) => {
+        const response = await productionPlanApiClient.getMaterialAdvisory(plan.id);
+        if (!response.success || !response.data) {
+          throw new Error(response.message || '加载原料预警失败');
+        }
+        return [plan.id, response.data] as const;
+      })
+    );
+    const next: Record<string, ProductionPlanMaterialAdvisory> = {};
+    let failed = false;
+    results.forEach((result) => {
+      if (result.status === 'fulfilled') {
+        next[result.value[0]] = result.value[1];
+      } else {
+        failed = true;
+      }
+    });
+    setMaterialAdvisories(next);
+    if (failed) {
+      Alert.alert('原料预警加载失败', '部分生产计划的原料参考值加载失败，请刷新后重试');
     }
   };
 
@@ -651,6 +689,7 @@ export default function ProductionPlanManagementScreen() {
               value={filterStatus}
               onValueChange={setFilterStatus}
               buttons={[
+                { value: 'UNFINISHED', label: '未完成' },
                 { value: 'all', label: t('productionPlan.filter.all') },
                 { value: 'pending', label: t('productionPlan.filter.pending') },
                 { value: 'in_progress', label: t('productionPlan.filter.inProgress') },
@@ -699,7 +738,10 @@ export default function ProductionPlanManagementScreen() {
             </Card.Content>
           </Card>
         ) : (
-          filteredPlans.map((plan) => (
+          filteredPlans.map((plan) => {
+            const materialAdvisory = materialAdvisories[plan.id];
+
+            return (
             <Card key={plan.id} style={styles.planCard}>
               <Card.Content>
                 {/* Header */}
@@ -869,15 +911,40 @@ export default function ProductionPlanManagementScreen() {
                   </Card>
                 )}
 
+                {materialAdvisory && (
+                  <Card style={[
+                    styles.matchingProgressCard,
+                    materialAdvisory.hasWarning && styles.materialWarningCard,
+                  ]}>
+                    <Card.Content>
+                      <View style={styles.matchingProgressHeader}>
+                        <List.Icon
+                          icon={materialAdvisory.hasWarning ? 'alert-circle' : 'check-circle'}
+                          color={materialAdvisory.hasWarning ? '#F44336' : '#4CAF50'}
+                        />
+                        <Text style={[
+                          styles.matchingProgressTitle,
+                          { color: materialAdvisory.hasWarning ? '#F44336' : '#4CAF50' },
+                        ]}>
+                          {materialAdvisory.hasWarning ? '\u539f\u6599\u7f3a\u6599\u9884\u8b66' : '\u539f\u6599\u5e93\u5b58\u53c2\u8003'}
+                        </Text>
+                      </View>
+                      <Text style={styles.batchWarningHint}>
+                        {materialAdvisory.message}
+                      </Text>
+                    </Card.Content>
+                  </Card>
+                )}
+
                 {/* Actions */}
                 {!isReadOnly && plan.status?.toLowerCase() === 'pending' && (
                   <Button
                     mode="contained"
-                    icon="play"
-                    onPress={() => handleStartProduction(plan.id)}
+                    icon="check"
+                    onPress={() => openCompleteDialog(plan)}
                     style={styles.actionButton}
                   >
-                    开始生产
+                    完成生产
                   </Button>
                 )}
 
@@ -917,7 +984,8 @@ export default function ProductionPlanManagementScreen() {
                 )}
               </Card.Content>
             </Card>
-          ))
+          );
+          })
         )}
 
         <View style={styles.bottomPadding} />
@@ -1267,6 +1335,20 @@ export default function ProductionPlanManagementScreen() {
 
           {completingPlan && (
             <View style={styles.completeInfo}>
+              {(() => {
+                const completeAdvisory = materialAdvisories[completingPlan.id];
+                return completeAdvisory?.hasWarning ? (
+                  <Text style={styles.batchWarningHint}>
+                    {completeAdvisory.message}
+                  </Text>
+                ) : null;
+              })()}
+
+              <Text style={styles.completeInfoLabel}>计划单号:</Text>
+              <Text style={styles.completeInfoValue}>
+                {completingPlan.planNumber || completingPlan.id}
+              </Text>
+
               <Text style={styles.completeInfoLabel}>产品类型:</Text>
               <Text style={styles.completeInfoValue}>
                 {completingPlan.productType?.name || completingPlan.productTypeId}
@@ -1857,6 +1939,10 @@ const styles = StyleSheet.create({
     backgroundColor: '#F3E5F5',
     borderWidth: 1,
     borderColor: '#CE93D8',
+  },
+  materialWarningCard: {
+    backgroundColor: '#FFEBEE',
+    borderColor: '#EF9A9A',
   },
   matchingProgressHeader: {
     flexDirection: 'row',

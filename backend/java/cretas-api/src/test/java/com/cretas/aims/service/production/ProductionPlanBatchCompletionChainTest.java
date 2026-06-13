@@ -258,4 +258,21 @@ class ProductionPlanBatchCompletionChainTest {
         org.junit.jupiter.api.Assertions.assertFalse(anyBatchEvent,
                 "无关联批次不应发 BatchCompletedEvent");
     }
+    @Test
+    @DisplayName("N1b: PENDING plan can be completed directly from unfinished list")
+    void completeProduction_pendingPlan_directCompletesAndSetsStartTime() {
+        ProductionPlan plan = pendingPlan();
+        when(productionPlanRepository.findById(PLAN_ID)).thenReturn(Optional.of(plan));
+        when(productionPlanRepository.save(any(ProductionPlan.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(productionBatchRepository.findByFactoryIdAndProductionPlanId(FACTORY_ID, PLAN_ID))
+                .thenReturn(Collections.emptyList());
+
+        BigDecimal actual = new BigDecimal("180");
+        assertDoesNotThrow(() -> service.completeProduction(FACTORY_ID, PLAN_ID, actual));
+
+        assertEquals(ProductionPlanStatus.COMPLETED, plan.getStatus());
+        assertEquals(actual, plan.getActualQuantity());
+        assertNotNull(plan.getStartTime(), "Direct completion should set startTime when a PENDING plan was never started");
+        assertNotNull(plan.getEndTime());
+    }
 }
