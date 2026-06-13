@@ -11,7 +11,10 @@ import { ScreenWrapper } from '../../components/ui/ScreenWrapper';
 import { NeoCard } from '../../components/ui/NeoCard';
 import { NeoButton } from '../../components/ui/NeoButton';
 import YieldQuantityInput from '../../components/processing/YieldQuantityInput';
-import MaterialBatchPicker, { MaterialBatchRef } from '../../components/processing/MaterialBatchPicker';
+import MaterialBatchPicker, {
+  MaterialBatchPickerValidation,
+  MaterialBatchRef,
+} from '../../components/processing/MaterialBatchPicker';
 import WipBatchPicker, { WipSelection } from '../../components/processing/WipBatchPicker';
 import {
   yieldReportApi,
@@ -450,6 +453,9 @@ const YieldStepReportScreen: React.FC = () => {
   const limitsDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // A2b: 首道领料批次引用
   const [materialBatchRefs, setMaterialBatchRefs] = useState<MaterialBatchRef[]>([]);
+  const [materialBatchValidation, setMaterialBatchValidation] = useState<MaterialBatchPickerValidation>({
+    hasOverLimit: false,
+  });
   // 单元D (F006 #5): 上道多笔 WIP 时操作工选中的领用批次 (单选; null = 未选或不适用)
   const [selectedWip, setSelectedWip] = useState<WipSelection | null>(null);
 
@@ -608,6 +614,7 @@ const YieldStepReportScreen: React.FC = () => {
     setLastAlert(null);
     setYieldLimits(null);
     setMaterialBatchRefs([]);
+    setMaterialBatchValidation({ hasOverLimit: false });
     setSelectedWip(null);
     setEvidencePhotos([]);
     setByproducts([]);
@@ -946,18 +953,34 @@ const YieldStepReportScreen: React.FC = () => {
         appAlert('领用数量超限', `最多可领 ${selectedWipItem.availableQuantity} ${selectedWipItem.unit ?? 'kg'}, 请调整数量`);
         return;
       }
+      if (materialBatchValidation.hasOverLimit) {
+        appAlert('原料领用数量超限', materialBatchValidation.message || '请调整原料批次领用数量后再提交');
+        return;
+      }
       if (evidenceUploading) {
         appAlert('证据上传中', '请等照片或视频上传完成再提交');
         return;
       }
+      const rawMaterialQty = materialBatchRefs.reduce((sum, ref) => sum + ref.quantity, 0);
+      const totalInputQty = rawMaterialQty + pickQty;
       const req: YieldReportRequest = {
         workProcessTaskId: currentTask.id,
         reportKind: 'INPUT',
-        inputQuantity: pickQty,
+        inputQuantity: totalInputQty,
         inputUnit: selectedWipItem.unit ?? unit,
         outputQuantity: 0,
         // SP3: sourceWipNo 传 intermediateBatchNo 供后端扣减 WIP 余量
         sourceWipNo: selectedWipItem.intermediateBatchNo,
+        sourceWipQuantity: pickQty,
+        ...(materialBatchRefs.length > 0
+          ? {
+              materialBatchRefs: materialBatchRefs.map((r: MaterialBatchRef) => ({
+                materialBatchId: r.materialBatchId,
+                quantity: r.quantity,
+                unit: r.unit ?? unit,
+              })),
+            }
+          : {}),
         ...(uploadedEvidenceUrls.length > 0 ? { evidenceImages: uploadedEvidenceUrls } : {}),
         ...(buildPhotoAnnotations() ? { photoAnnotations: buildPhotoAnnotations() } : {}),
       };
@@ -991,6 +1014,10 @@ const YieldStepReportScreen: React.FC = () => {
     // B1: first-step (投入) requires at least one material batch to be selected.
     if (isFirstStep && materialBatchRefs.length === 0) {
       appAlert('请先选择领料批次', '首道投入需要指定领用的原料批次，请展开"领料批次 *"并选择至少一批');
+      return;
+    }
+    if (materialBatchValidation.hasOverLimit) {
+      appAlert('原料领用数量超限', materialBatchValidation.message || '请调整原料批次领用数量后再提交');
       return;
     }
     if (evidenceUploading) {
@@ -1054,7 +1081,7 @@ const YieldStepReportScreen: React.FC = () => {
     }
   }, [currentTask, submitBlockedNoWip, evidenceUploading, inputQty, unit, isFirstStep,
       isSecondaryProcessing, selectedWipItem, wipPickQty, wipPickOverLimit,
-      materialBatchRefs, effectiveSourceWipNo, uploadedEvidenceUrls, batchId, refetchYield]);
+      materialBatchRefs, materialBatchValidation, effectiveSourceWipNo, uploadedEvidenceUrls, batchId, refetchYield]);
 
   // ========================= 阶段 2a: 提交本段工时 (reportKind=SEGMENT) =========================
   const handleSubmitSegment = useCallback(async () => {
@@ -2053,7 +2080,7 @@ const YieldStepReportScreen: React.FC = () => {
                 <NeoCard variant="outlined" style={styles.sp3Card}>
                   <Text style={styles.sp3Title}>领用半成品库存</Text>
                   <Text style={styles.sp3Desc}>
-                    该批次为二次加工批次, 首道请从可用半成品库存中领用, 无需领原料批次
+                    该批次可同时领用半成品和原料；半成品数量在此填写，原料实际量在下方批次中填写。
                   </Text>
                   {availableWipLoading ? (
                     <ActivityIndicator size="small" color="#E8732E" style={styles.sp3Loader} />
@@ -2112,19 +2139,20 @@ const YieldStepReportScreen: React.FC = () => {
                 </NeoCard>
               ) : null}
 
-              {/* A2b: 首道领料批次选择 (仅首道且非二次加工) — B1: required prop signals red asterisk
+              {/* A2b: 首道领料批次选择；二次加工可选填原料，与半成品双领 — B1: required prop signals red asterisk
                * Q1 单一数据源: singleBatchQty 把屏幕的 inputQty 传进 picker, 单批次模式下
                * picker 不显示独立用量输入框, 该批次 quantity = inputQty (投入量 IS 用量).
                * 多批次模式下 picker 显示各批独立输入, inputQty 由 Σ 自动算只读展示. */}
-              {isFirstStep && !isSecondaryProcessing ? (
+              {isFirstStep ? (
                 <MaterialBatchPicker
                   unit={unit}
                   productTypeId={productTypeId}
                   value={materialBatchRefs}
                   onChange={setMaterialBatchRefs}
+                  onValidationChange={setMaterialBatchValidation}
                   singleBatchQty={inputQty}
                   disabled={submitting}
-                  required
+                  required={!isSecondaryProcessing}
                 />
               ) : null}
 
@@ -2161,7 +2189,7 @@ const YieldStepReportScreen: React.FC = () => {
                 </View>
               ) : (
                 <YieldQuantityInput
-                  label="投入量"
+                  label={isSecondaryProcessing ? '原料投入量' : '投入量'}
                   value={inputQty}
                   onChangeText={setInputQty}
                   unit={unit}
@@ -2200,7 +2228,7 @@ const YieldStepReportScreen: React.FC = () => {
               variant="primary"
               size="large"
               onPress={handleSubmitInput}
-              disabled={submitting || submitBlockedNoWip || evidenceUploading || wipPickOverLimit}
+              disabled={submitting || submitBlockedNoWip || evidenceUploading || wipPickOverLimit || materialBatchValidation.hasOverLimit}
               loading={submitting}
               style={styles.fullBtn}
               testID="yield-submit-input-btn"

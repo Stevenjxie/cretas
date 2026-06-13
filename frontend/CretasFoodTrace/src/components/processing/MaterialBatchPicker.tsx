@@ -29,6 +29,11 @@ export interface MaterialBatchRef {
   unit?: string;
 }
 
+export interface MaterialBatchPickerValidation {
+  hasOverLimit: boolean;
+  message?: string;
+}
+
 interface MaterialBatchPickerProps {
   /** 当前工序单位 (e.g. 'kg'), 作为 ref.unit 默认值 */
   unit: string;
@@ -57,6 +62,8 @@ interface MaterialBatchPickerProps {
    * is required. Caller (YieldStepReportScreen first-step) passes required={true}.
    */
   required?: boolean;
+  /** Emits client-side stock limit state so parent forms can disable submit before backend 409. */
+  onValidationChange?: (validation: MaterialBatchPickerValidation) => void;
 }
 
 /** 组件内部行状态 */
@@ -75,6 +82,7 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
   singleBatchQty = '',
   disabled = false,
   required = false,
+  onValidationChange,
 }) => {
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -86,11 +94,29 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
   const [confirmFeedback, setConfirmFeedback] = useState(false);
   const confirmTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const queryKeyRef = useRef<string>('');
+  const validationRef = useRef(onValidationChange);
+  validationRef.current = onValidationChange;
 
   const selectedRows = rows.filter((r) => r.selected);
   const isMultiBatch = selectedRows.length > 1;
   const queryKey = `${factoryId ?? ''}|${productTypeId ?? ''}`;
   queryKeyRef.current = queryKey;
+
+  const rowQuantity = useCallback(
+    (row: RowState, isSingle: boolean): number | null => {
+      const qty = parseFloat(isSingle ? singleBatchQty : row.qtyStr);
+      return Number.isNaN(qty) || qty <= 0 ? null : qty;
+    },
+    [singleBatchQty],
+  );
+
+  const rowOverLimit = useCallback(
+    (row: RowState, isSingle: boolean): boolean => {
+      const qty = rowQuantity(row, isSingle);
+      return qty != null && qty > (row.batch.remainingQuantity ?? 0);
+    },
+    [rowQuantity],
+  );
 
   // ── onChange 防抖机制 ────────────────────────────────────────────────────
   // Issue #3 fix: emit onChange in a useEffect keyed on rows, NOT inside setRows updater.
@@ -125,6 +151,22 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
     onChangeRef.current(refs);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rows, singleBatchQty, unit]);
+
+  useEffect(() => {
+    const selected = rows.filter((r) => r.selected);
+    const isSingle = selected.length === 1;
+    const over = selected.find((row) => rowOverLimit(row, isSingle));
+    if (over == null) {
+      validationRef.current?.({ hasOverLimit: false });
+      return;
+    }
+    const qty = rowQuantity(over, isSingle);
+    const name = over.batch.materialName ?? over.batch.batchNumber;
+    validationRef.current?.({
+      hasOverLimit: true,
+      message: `${name} 最多可领 ${over.batch.remainingQuantity} ${unit}，当前填写 ${qty ?? 0} ${unit}`,
+    });
+  }, [rows, rowOverLimit, rowQuantity, unit]);
 
   // 从 value prop 初始化/同步 rows (仅在 batches 加载完成后)
   const syncRowsFromValue = useCallback(
@@ -273,14 +315,15 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
     if (selected.length === 0) return false;
     const isSingle = selected.length === 1;
     if (isSingle) {
+      const first = selected[0];
       const qty = parseFloat(singleBatchQty);
-      return !Number.isNaN(qty) && qty > 0;
+      return first != null && !Number.isNaN(qty) && qty > 0 && !rowOverLimit(first, true);
     }
     return selected.every((r) => {
       const q = parseFloat(r.qtyStr);
-      return !Number.isNaN(q) && q > 0;
+      return !Number.isNaN(q) && q > 0 && !rowOverLimit(r, false);
     });
-  }, [rows, singleBatchQty]);
+  }, [rows, singleBatchQty, rowOverLimit]);
 
   const selectedCount = value.length;
 
@@ -403,6 +446,11 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
                     <Text style={styles.remaining}>
                       剩余 {row.batch.remainingQuantity} {unit}
                     </Text>
+                    {row.selected && rowOverLimit(row, !isMultiBatch) ? (
+                      <Text style={styles.rowLimitText}>
+                        最多可领 {row.batch.remainingQuantity} {unit}
+                      </Text>
+                    ) : null}
                   </View>
 
                   {/*
@@ -544,6 +592,7 @@ const styles = StyleSheet.create({
   },
   qtyInputDisabled: { opacity: 0.5 },
   qtyUnit: { fontSize: 13, color: '#909399', marginLeft: 4 },
+  rowLimitText: { fontSize: 12, color: '#F56C6C', marginTop: 2 },
 
   // Q1: 单批次时 per-row 提示
   singleQtyHint: {

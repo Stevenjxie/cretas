@@ -112,6 +112,7 @@ public class YieldReportServiceImpl implements YieldReportService {
         boolean isSegment = "SEGMENT".equals(reportKind);
         boolean isOutput = "OUTPUT".equals(reportKind);
         boolean isLegacy = reportKind == null;
+        boolean hasSourceWip = req.getSourceWipNo() != null && !req.getSourceWipNo().isBlank();
         // outputQuantity 必填仅在产出阶段 (OUTPUT) 或旧式整合报工 (legacy); INPUT/SEGMENT 阶段无产出。
         if ((isLegacy || isOutput) && req.getOutputQuantity() == null) {
             throw new BusinessException(400, "缺少必填字段: outputQuantity")
@@ -147,6 +148,7 @@ public class YieldReportServiceImpl implements YieldReportService {
         String effOutputUnit = (isInput || isSegment) ? null : req.getOutputUnit();
         List<YieldReportRequest.LaborSegment> effSegs = (isInput || isOutput) ? null : req.getLaborSegments();
         List<MaterialBatchRef> effMaterialRefs = (isSegment || isOutput) ? null : req.getMaterialBatchRefs();
+        BigDecimal effSourceWipQuantity = (isSegment || isOutput || !hasSourceWip) ? null : sourceWipQuantity(req, effInput);
         List<YieldReportRequest.Byproduct> effByproducts = (isInput || isSegment) ? null : req.getByproducts();
         BigDecimal effWaste = (isInput || isSegment) ? null : req.getWasteQuantity();
         Integer effSampleRetain = (isInput || isSegment) ? null : req.getSampleRetainQuantity();
@@ -162,9 +164,9 @@ public class YieldReportServiceImpl implements YieldReportService {
         // sourceWipNo=null → 走旧路径 (首道领原料 / 老批次, 向后兼容, 不查 WIP)。
         // 三阶段 (单元1): 领料发生在 INPUT 阶段 (或 legacy); SEGMENT/OUTPUT 阶段不消耗源 WIP (input 已被隔离为 null)。
         SemiFinishedInventory sourceWip = null;
-        if ((isInput || isLegacy) && req.getSourceWipNo() != null && !req.getSourceWipNo().isBlank()) {
+        if ((isInput || isLegacy) && hasSourceWip) {
             sourceWip = wipInventoryService.validateSourceWip(
-                    factoryId, req.getSourceWipNo(), effInput, effInputUnit, null);
+                    factoryId, req.getSourceWipNo(), effSourceWipQuantity, effInputUnit, null);
         }
 
         // 前置查该 task 已有 YIELD 报工: 决定是否首条 + 作双写求和基数
@@ -181,7 +183,7 @@ public class YieldReportServiceImpl implements YieldReportService {
         List<YieldReportRequest.LaborSegment> segs = effSegs;
         BigDecimal laborCost = computeLaborCost(segs, effReqWorkerCount, effReqWorkMinutes, hourlyRate);
         BigDecimal materialCost = computeMaterialCost(effMaterialRefs,
-                sourceWip, effInput,
+                sourceWip, effSourceWipQuantity,
                 factoryId, t.getWorkProcessId(), effOutput);
 
         // 适配单元3: 多段工时时, totalWorkMinutes = Σ段时长, totalWorkers = MAX headcount (峰值, 修 M2);
@@ -227,7 +229,7 @@ public class YieldReportServiceImpl implements YieldReportService {
                 .byproducts(toByproductMaps(effByproducts))
                 .wasteQuantity(effWaste)
                 .sampleRetainQuantity(effSampleRetain)
-                .customFields(buildYieldCustomFields(reportKind))
+                .customFields(buildYieldCustomFields(reportKind, sourceWip == null ? null : effSourceWipQuantity))
                 // 工序批次号是任务级: 仅首条报工生成, 后续条 null (避免 uq_pr_intermediate_batch_no 冲突)
                 .intermediateBatchNo(isFirstReportForTask ? generateBatchNo(t, batchId) : null)
                 // G7: 本道领用的源 WIP 工序批次号 (向后兼容: null 走旧路径); 三阶段: 仅 INPUT/legacy 消耗
@@ -838,14 +840,36 @@ public class YieldReportServiceImpl implements YieldReportService {
         }).collect(Collectors.toList());
     }
 
-    private Map<String, Object> buildYieldCustomFields(String reportKind) {
+    private Map<String, Object> buildYieldCustomFields(String reportKind, BigDecimal sourceWipQuantity) {
         Map<String, Object> fields = new LinkedHashMap<>();
         fields.put("reportStack", "YIELD");
         fields.put("wipPostingMode", "APPROVAL");
         if (reportKind != null) {
             fields.put("reportKind", reportKind);
         }
+        if (sourceWipQuantity != null) {
+            fields.put("sourceWipQuantity", sourceWipQuantity);
+        }
         return fields;
+    }
+
+    private BigDecimal sourceWipQuantity(YieldReportRequest req, BigDecimal fallbackInputQuantity) {
+        BigDecimal qty = req.getSourceWipQuantity() != null ? req.getSourceWipQuantity() : fallbackInputQuantity;
+        if (qty != null && qty.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new BusinessException(409, "半成品领用数量必须大于 0")
+                    .withCode("WIP_INPUT_REQUIRED")
+                    .withHint("请填写实际领用的半成品数量")
+                    .withSeverity("BLOCKING")
+                    .withHintTarget("sourceWipQuantity");
+        }
+        if (qty != null && fallbackInputQuantity != null && qty.compareTo(fallbackInputQuantity) > 0) {
+            throw new BusinessException(409, "半成品领用数量不能超过本次总投入量")
+                    .withCode("WIP_INPUT_EXCEEDS_TOTAL")
+                    .withHint("请核对原料领用量和半成品领用量；总投入量必须等于两者合计")
+                    .withSeverity("BLOCKING")
+                    .withHintTarget("sourceWipQuantity");
+        }
+        return qty;
     }
 
     /**

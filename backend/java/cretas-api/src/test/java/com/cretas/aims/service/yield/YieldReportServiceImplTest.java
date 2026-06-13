@@ -2407,6 +2407,81 @@ class YieldReportServiceImplTest {
     // ── WIP 成本滚动 (test 6, 7) ───────────────────────────────────────────────────
 
     @Test
+    void submitReport_materialCost_rawAndWip_usesSeparateWipQuantity() {
+        WorkProcess wp = WorkProcess.builder().id("WP-COST2").factoryId("F006").unit("kg").build();
+        WorkProcessTask t = task(71L, 2, "WP-COST2");
+        t.setProductTypeId("PT-C");
+        when(taskRepo.findByFactoryIdAndId("F006", 71L)).thenReturn(Optional.of(t));
+        when(processRepo.findById("WP-COST2")).thenReturn(Optional.of(wp));
+        when(factorySettingsRepo.findProductionSettingsByFactoryId("F006")).thenReturn(null);
+        when(reportRepo.findYieldReportsByBatch(anyString(), eq(1L))).thenReturn(List.of());
+        when(reportRepo.findYieldReportsByTask("F006", 71L)).thenReturn(List.of());
+        ArgumentCaptor<ProductionReport> cap = ArgumentCaptor.forClass(ProductionReport.class);
+        when(reportRepo.save(cap.capture())).thenAnswer(i -> {
+            ProductionReport r = i.getArgument(0);
+            r.setId(711L);
+            return r;
+        });
+
+        MaterialBatch raw = new MaterialBatch();
+        raw.setId("mb-raw-1");
+        raw.setStatus(MaterialBatchStatus.AVAILABLE);
+        raw.setUnitPrice(new BigDecimal("10"));
+        when(materialBatchRepo.findById("mb-raw-1")).thenReturn(Optional.of(raw));
+
+        SemiFinishedInventory sourceWip = SemiFinishedInventory.builder()
+                .intermediateBatchNo("WIP-SRC-1").batchId(1L).factoryId("F006")
+                .processOrder(1).producedQuantity(new BigDecimal("100"))
+                .consumedQuantity(new BigDecimal("0")).availableQuantity(new BigDecimal("100"))
+                .unitCost(new BigDecimal("10.6000")).unit("kg")
+                .status(SemiFinishedInventory.Status.AVAILABLE).build();
+        when(wipInventoryService.validateSourceWip("F006", "WIP-SRC-1", new BigDecimal("80"), "kg", null))
+                .thenReturn(sourceWip);
+
+        YieldReportRequest req = new YieldReportRequest();
+        req.setWorkProcessTaskId(71L);
+        req.setInputQuantity(new BigDecimal("130"));
+        req.setInputUnit("kg");
+        req.setSourceWipNo("WIP-SRC-1");
+        req.setSourceWipQuantity(new BigDecimal("80"));
+        req.setOutputQuantity(new BigDecimal("120"));
+        req.setOutputUnit("kg");
+        req.setMaterialBatchRefs(List.of(new MaterialBatchRef("mb-raw-1", new BigDecimal("50"), "kg")));
+
+        svc.submitReport("F006", 1L, 5L, req);
+
+        ProductionReport saved = cap.getValue();
+        assertThat(saved.getInputQuantity()).isEqualByComparingTo("130");
+        assertThat(saved.getMaterialBatchRefs()).hasSize(1);
+        assertThat(saved.getSourceWipNo()).isEqualTo("WIP-SRC-1");
+        assertThat(saved.getCustomFields()).containsEntry("sourceWipQuantity", new BigDecimal("80"));
+        assertThat(saved.getMaterialCost()).isEqualByComparingTo("1348.00");
+        verify(wipInventoryService).validateSourceWip("F006", "WIP-SRC-1", new BigDecimal("80"), "kg", null);
+    }
+
+    @Test
+    void submitReport_doublePicking_rejectsSourceWipQuantityAboveTotalInput() {
+        WorkProcessTask t = task(71L, 1, "WP-COST");
+        t.setProductTypeId("PT-C");
+        when(taskRepo.findByFactoryIdAndId("F006", 71L)).thenReturn(Optional.of(t));
+
+        YieldReportRequest req = new YieldReportRequest();
+        req.setWorkProcessTaskId(71L);
+        req.setInputQuantity(new BigDecimal("50"));
+        req.setInputUnit("kg");
+        req.setSourceWipNo("WIP-SRC-1");
+        req.setSourceWipQuantity(new BigDecimal("80"));
+        req.setReportKind("INPUT");
+
+        assertThatThrownBy(() -> svc.submitReport("F006", 1L, 5L, req))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("半成品领用数量不能超过本次总投入量");
+
+        verify(wipInventoryService, never()).validateSourceWip(anyString(), anyString(), any(), anyString(), any());
+        verify(reportRepo, never()).save(any(ProductionReport.class));
+    }
+
+    @Test
     void submitReport_wipRollup_accumulatedCostAndUnitCost() {
         WorkProcess wp = WorkProcess.builder().id("WP-COST").factoryId("F006")
                 .unit("kg").standardHourlyRate(new BigDecimal("20.00")).build();

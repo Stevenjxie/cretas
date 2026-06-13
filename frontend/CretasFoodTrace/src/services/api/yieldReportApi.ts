@@ -205,6 +205,7 @@ export interface YieldReportRequest {
    * null 走旧路径 (首道领原料 / 老批次, 向后兼容)。
    */
   sourceWipNo?: string;
+  sourceWipQuantity?: number;
 
   // ==================== 传统报工适配 (适配单元4; mirror backend YieldReportRequest.java:34-49) ====================
   /** 图片证据 URL 列表 (先传 OSS 拿 URL, 存入 ProductionReport.photos). 六扇门: 产品+电子秤+盒数照. */

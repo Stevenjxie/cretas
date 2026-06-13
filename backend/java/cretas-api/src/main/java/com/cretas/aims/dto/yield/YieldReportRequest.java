@@ -32,6 +32,11 @@ public class YieldReportRequest {
      * null 走旧路径 (首道领原料 / 老批次, 向后兼容零回归)。
      */
     private String sourceWipNo;
+    /**
+     * N2 双领: 当一次投入同时包含原料批次和半成品时, inputQuantity 表示本次总投入,
+     * sourceWipQuantity 表示其中实际领用的半成品数量。为空时沿用 inputQuantity, 保持旧行为。
+     */
+    private BigDecimal sourceWipQuantity;
 
     /**
      * 三阶段报工 (单元1): 本次报工的阶段 INPUT/SEGMENT/OUTPUT。
