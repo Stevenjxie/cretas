@@ -716,13 +716,18 @@ const YieldStepReportScreen: React.FC = () => {
   const isLastStep = currentStepIndex >= totalSteps - 1;
   // G7 Wave 4: 非首道可领的上道 WIP 余额 (来自 limits.wipAvailable); 首道为 null (领原料不受 WIP 约束)
   const wipAvailable = yieldLimits?.wipAvailable ?? null;
-  // 单元D (F006 #5): 上道多笔 WIP — sourceWipNo 歧义 (null) 但 wipAvailable>0 → 需操作工单选;
-  const needsWipPicker = !isFirstStep && yieldLimits != null && yieldLimits.sourceWipNo == null && (wipAvailable ?? 0) > 0;
-  const effectiveSourceWipNo = needsWipPicker ? (selectedWip?.sourceWipNo ?? null) : (yieldLimits?.sourceWipNo ?? null);
+  // N2: 正常生产 WIP/原料双领必须由操作员显式确认, 不自动优先领唯一 WIP。
+  const needsWipPicker = !isFirstStep && yieldLimits != null && (wipAvailable ?? 0) > 0;
+  const effectiveSourceWipNo = needsWipPicker ? (selectedWip?.sourceWipNo ?? null) : null;
   const effectiveWipAvailable = needsWipPicker
     ? (selectedWip?.availableQuantity ?? null)
     : wipAvailable;
   const wipUnit = (needsWipPicker ? selectedWip?.unit : yieldLimits?.wipAvailableUnit) ?? unit;
+  const hasSourceWipInput = !isFirstStep && effectiveSourceWipNo != null;
+  const materialInputTotal = useMemo(
+    () => materialBatchRefs.reduce((sum, ref) => sum + ref.quantity, 0),
+    [materialBatchRefs],
+  );
   const plannedMax = planned != null ? planned * OVER_RECEIVE_TOLERANCE : null;
   const inputMax =
     effectiveWipAvailable != null
@@ -736,6 +741,16 @@ const YieldStepReportScreen: React.FC = () => {
       : planned != null
         ? `计划 ${planned} ${unit}, 可投上限约 ${Math.round(planned * OVER_RECEIVE_TOLERANCE)} (含 30% 超收)`
         : null;
+  const inputNumeric = parseFloat(inputQty);
+  const inputOverLimit =
+    inputMax != null &&
+    !Number.isNaN(inputNumeric) &&
+    inputNumeric > inputMax &&
+    (hasSourceWipInput || isFirstStep || materialBatchRefs.length === 0);
+  const showMaterialOnlyReadonlyInput =
+    !isFirstStep && materialBatchRefs.length > 0 && !hasSourceWipInput;
+  const showReadonlyMaterialInput =
+    (isFirstStep && materialBatchRefs.length > 1) || showMaterialOnlyReadonlyInput;
   const prefillNote =
     prevOutput != null
       ? `← 上道产出 ${prevOutput} ${unit}, 请确认实际投了多少`
@@ -753,7 +768,7 @@ const YieldStepReportScreen: React.FC = () => {
   }, [outputQty, outputHardCap]);
 
   // 单元D: 上道多笔 WIP 但未选领用批次 → 阻塞投入提交.
-  const submitBlockedNoWip = needsWipPicker && selectedWip == null;
+  const submitBlockedNoWip = needsWipPicker && selectedWip == null && materialBatchRefs.length === 0;
   // 上传中 (任一证据) → 阻塞提交, 避免 evidenceImages 丢 URL
   const evidenceUploading = evidencePhotos.some((p) => p.uploading);
 
@@ -934,7 +949,7 @@ const YieldStepReportScreen: React.FC = () => {
   const handleSubmitInput = useCallback(async () => {
     if (!currentTask) return;
     if (submitBlockedNoWip) {
-      appAlert('请选择半成品批次', '上道有多笔半成品, 请先选择本道要领用的那一笔再提交');
+      appAlert('请选择领用来源', '请先选择本道要领用的半成品批次, 或在原料批次中填写本次实际领用');
       return;
     }
 
@@ -1024,11 +1039,22 @@ const YieldStepReportScreen: React.FC = () => {
       appAlert('证据上传中', '请等照片或视频上传完成再提交');
       return;
     }
-    // Q1 单一数据源: 多批次时投入量 = Σ 各批次用量 (materialBatchRefs 已含各 qty), 不用 inputQty
-    const isMultiBatchSubmit = isFirstStep && materialBatchRefs.length > 1;
-    const input = isMultiBatchSubmit
-      ? materialBatchRefs.reduce((s, r) => s + r.quantity, 0)
-      : parseFloat(inputQty);
+    const sourceWipInput = hasSourceWipInput ? parseFloat(inputQty) : null;
+    if (hasSourceWipInput && (sourceWipInput == null || Number.isNaN(sourceWipInput) || sourceWipInput <= 0)) {
+      appAlert('请填写半成品领用量', '半成品领用量必须大于 0');
+      return;
+    }
+    // Q1 单一数据源: 首道多批次或非首道额外原料时, 原料投入量 = Σ 各批次用量.
+    if (inputOverLimit) {
+      appAlert('投入数量超限', inputMaxHint || `最大可填 ${inputMax} ${unit}`);
+      return;
+    }
+    const isMaterialDrivenSubmit = materialBatchRefs.length > 1 || (!isFirstStep && materialBatchRefs.length > 0);
+    const input = hasSourceWipInput
+      ? (sourceWipInput ?? 0) + materialInputTotal
+      : isMaterialDrivenSubmit
+        ? materialInputTotal
+        : parseFloat(inputQty);
     if (Number.isNaN(input) || input <= 0) {
       appAlert('请填写本道投入量', '投入量必须大于 0');
       return;
@@ -1039,7 +1065,7 @@ const YieldStepReportScreen: React.FC = () => {
       inputQuantity: input,
       inputUnit: unit,
       outputQuantity: 0,  // 后端按 reportKind=INPUT 强制忽略 output
-      ...(isFirstStep && materialBatchRefs.length > 0
+      ...(materialBatchRefs.length > 0
         ? {
             materialBatchRefs: materialBatchRefs.map((r: MaterialBatchRef) => ({
               materialBatchId: r.materialBatchId,
@@ -1049,6 +1075,7 @@ const YieldStepReportScreen: React.FC = () => {
           }
         : {}),
       ...(!isFirstStep && effectiveSourceWipNo ? { sourceWipNo: effectiveSourceWipNo } : {}),
+      ...(hasSourceWipInput && sourceWipInput != null ? { sourceWipQuantity: sourceWipInput } : {}),
       ...(uploadedEvidenceUrls.length > 0 ? { evidenceImages: uploadedEvidenceUrls } : {}),
       // T161: per-photo annotation (仅含已标注的照片)
       ...(buildPhotoAnnotations() ? { photoAnnotations: buildPhotoAnnotations() } : {}),
@@ -1081,7 +1108,8 @@ const YieldStepReportScreen: React.FC = () => {
     }
   }, [currentTask, submitBlockedNoWip, evidenceUploading, inputQty, unit, isFirstStep,
       isSecondaryProcessing, selectedWipItem, wipPickQty, wipPickOverLimit,
-      materialBatchRefs, materialBatchValidation, effectiveSourceWipNo, uploadedEvidenceUrls, batchId, refetchYield]);
+      materialBatchRefs, materialBatchValidation, effectiveSourceWipNo, hasSourceWipInput,
+      inputOverLimit, inputMaxHint, inputMax, materialInputTotal, uploadedEvidenceUrls, batchId, refetchYield]);
 
   // ========================= 阶段 2a: 提交本段工时 (reportKind=SEGMENT) =========================
   const handleSubmitSegment = useCallback(async () => {
@@ -2143,16 +2171,17 @@ const YieldStepReportScreen: React.FC = () => {
                * Q1 单一数据源: singleBatchQty 把屏幕的 inputQty 传进 picker, 单批次模式下
                * picker 不显示独立用量输入框, 该批次 quantity = inputQty (投入量 IS 用量).
                * 多批次模式下 picker 显示各批独立输入, inputQty 由 Σ 自动算只读展示. */}
-              {isFirstStep ? (
+              {isFirstStep || (!isFirstStep && !isSecondaryProcessing) ? (
                 <MaterialBatchPicker
                   unit={unit}
                   productTypeId={productTypeId}
                   value={materialBatchRefs}
                   onChange={setMaterialBatchRefs}
                   onValidationChange={setMaterialBatchValidation}
-                  singleBatchQty={inputQty}
+                  singleBatchQty={isFirstStep ? inputQty : ''}
+                  forceIndependentQuantity={!isFirstStep}
                   disabled={submitting}
-                  required={!isSecondaryProcessing}
+                  required={isFirstStep && !isSecondaryProcessing}
                 />
               ) : null}
 
@@ -2163,6 +2192,7 @@ const YieldStepReportScreen: React.FC = () => {
                   selectedSourceWipNo={selectedWip?.sourceWipNo ?? null}
                   onChange={setSelectedWip}
                   disabled={submitting}
+                  required={materialBatchRefs.length === 0}
                 />
               ) : !isFirstStep && wipAvailable != null ? (
                 <View style={styles.wipBanner} testID="yield-wip-available">
@@ -2178,18 +2208,30 @@ const YieldStepReportScreen: React.FC = () => {
 
               {/* Q1 单一数据源: 多批次时投入量 = Σ(各批次用量), 只读自动算; 单批次时正常可编辑
                * B4: 按托称重默认收起 (Steve 2026-06-08), 操作员需要时点全宽按钮展开, 面板在按钮下方向下展开 */}
-              {isFirstStep && materialBatchRefs.length > 1 ? (
+              {showReadonlyMaterialInput ? (
                 // 多批次选中: 投入量 = Σ 各批次用量, 显示只读汇总
                 <View style={styles.multiQtyReadonly} testID="yield-input-qty-multi-readonly">
-                  <Text style={styles.multiQtyLabel}>投入量 (多批次合计)</Text>
-                  <Text style={styles.multiQtyValue}>
-                    {materialBatchRefs.reduce((s, r) => s + r.quantity, 0).toFixed(2)} {unit}
+                  <Text style={styles.multiQtyLabel}>
+                    {showMaterialOnlyReadonlyInput ? '原料投入量(按批次合计)' : '投入量(多批次合计)'}
                   </Text>
-                  <Text style={styles.multiQtyHint}>投入量 = 各批次用量之和 (在上方各批次分别填写)</Text>
+                  <Text style={styles.multiQtyValue}>
+                    {materialInputTotal.toFixed(2)} {unit}
+                  </Text>
+                  <Text style={styles.multiQtyHint}>
+                    {showMaterialOnlyReadonlyInput
+                      ? '原料投入量 = 已选原料批次用量之和；未选择半成品时按原料合计提交'
+                      : '投入量 = 各批次用量之和(在上方各批次分别填写)'}
+                  </Text>
                 </View>
               ) : (
                 <YieldQuantityInput
-                  label={isSecondaryProcessing ? '原料投入量' : '投入量'}
+                  label={
+                    isSecondaryProcessing
+                      ? '原料投入量'
+                      : hasSourceWipInput
+                        ? '半成品领用量'
+                        : '投入量'
+                  }
                   value={inputQty}
                   onChangeText={setInputQty}
                   unit={unit}
@@ -2228,7 +2270,7 @@ const YieldStepReportScreen: React.FC = () => {
               variant="primary"
               size="large"
               onPress={handleSubmitInput}
-              disabled={submitting || submitBlockedNoWip || evidenceUploading || wipPickOverLimit || materialBatchValidation.hasOverLimit}
+              disabled={submitting || submitBlockedNoWip || evidenceUploading || wipPickOverLimit || materialBatchValidation.hasOverLimit || inputOverLimit}
               loading={submitting}
               style={styles.fullBtn}
               testID="yield-submit-input-btn"
