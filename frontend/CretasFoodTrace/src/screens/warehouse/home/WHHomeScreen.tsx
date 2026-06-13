@@ -514,13 +514,13 @@ export default function WHHomeScreen() {
             factoryId={user?.factoryId}
             aiTriggerEnabled
             onNodePress={(module, nodeId) =>
-              navigation.navigate('WHInventoryList' as never, { statusFilter: getBucketPrimaryStatus(module, nodeId) } as never)
+              navigation.navigate('WHInventoryList', { statusFilter: getBucketPrimaryStatus(module, nodeId) })
             }
             onNodeLongPress={(_module, ctx) =>
-              navigation.navigate('AIChat' as never, { entryContext: ctx } as never)
+              navigation.navigate('AIChat', { entryContext: ctx })
             }
             onAITrigger={(_module, ctx) =>
-              navigation.navigate('AIChat' as never, { entryContext: ctx } as never)
+              navigation.navigate('AIChat', { entryContext: ctx })
             }
           />
         </View>

@@ -94,7 +94,13 @@ const ScanReportScreen: React.FC = () => {
     }
 
     const inputQty = parseFloat(form.inputQuantity);
-    const reportPayload: Record<string, unknown> = {
+    const reportPayload: {
+      actualQuantity: number;
+      goodQuantity?: number;
+      defectQuantity?: number;
+      notes?: string;
+      inputQuantity?: number;
+    } = {
       actualQuantity: output,
       goodQuantity: isNaN(good) ? output : good,
       defectQuantity: parseInt(form.defectQuantity, 10) || 0,

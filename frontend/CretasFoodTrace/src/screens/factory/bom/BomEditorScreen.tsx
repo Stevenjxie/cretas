@@ -209,6 +209,7 @@ export function BomEditorScreen() {
     if (items.length === 0) return '至少需要 1 个配方项';
     for (let i = 0; i < items.length; i++) {
       const r = items[i];
+      if (!r) return `第 ${i + 1} 项配方数据缺失`;
       if (!r.materialTypeId) return `第 ${i + 1} 项: 请从字典选择原料`;
       const sq = parseFloat(r.standardQuantity);
       if (isNaN(sq) || sq <= 0) return `第 ${i + 1} 项: 标准用量必须 > 0`;

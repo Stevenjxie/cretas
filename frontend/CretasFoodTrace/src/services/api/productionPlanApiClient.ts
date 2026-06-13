@@ -50,6 +50,7 @@ export interface ProductionPlan {
   productUnit?: string;           // 产品单位 (后端 Mapper 映射)
   customerId: string;
   customerName?: string;
+  sourceCustomerName?: string;
   customerOrderNumber?: string;   // 客户订单号 (后端字段)
   plannedQuantity: number;
   actualQuantity?: number;

@@ -45,6 +45,8 @@ const ENTITY_TYPE_LABELS: Record<EntityType, { zh: string; en: string; icon: str
   SCALE_DEVICE: { zh: '电子秤设备', en: 'Scale Device', icon: 'scale', color: '#607d8b' },
   SCALE_PROTOCOL: { zh: '电子秤协议', en: 'Scale Protocol', icon: 'file-document-outline', color: '#795548' },
   ISAPI_DEVICE: { zh: 'ISAPI设备', en: 'ISAPI Device', icon: 'video', color: '#9c27b0' },
+  RAW_MATERIAL_TYPE: { zh: '原料类型', en: 'Raw Material Type', icon: 'package-variant-closed', color: '#00897b' },
+  PURCHASE_ORDER: { zh: '采购订单', en: 'Purchase Order', icon: 'file-document-edit', color: '#5c6bc0' },
 };
 
 type TabType = 'fields' | 'preview' | 'history';

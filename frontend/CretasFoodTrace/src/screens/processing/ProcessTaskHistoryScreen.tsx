@@ -112,7 +112,6 @@ export default function ProcessTaskHistoryScreen() {
 
       <View style={styles.filterRow}>
         <SegmentedButtons
-          testID="task-history-filter"
           value={filter}
           onValueChange={v => setFilter(v as FilterValue)}
           buttons={[

@@ -74,6 +74,7 @@ export function WSBatchesScreen() {
       }, 800);
       return () => clearTimeout(timer);
     }
+    return undefined;
   }, [completedBatches]);
 
   useEffect(() => {

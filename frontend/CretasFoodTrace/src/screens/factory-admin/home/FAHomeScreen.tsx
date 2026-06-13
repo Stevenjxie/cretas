@@ -70,19 +70,19 @@ function navigateToModuleList(
   const params = { statusFilter };
   switch (module) {
     case 'sales':
-      navigation.navigate('SalesOrderList' as never, params as never);
+      navigation.navigate('SalesOrderList', params);
       return;
     case 'purchase':
-      navigation.navigate('PurchaseOrderList' as never, params as never);
+      navigation.navigate('PurchaseOrderList', params);
       return;
     case 'production':
-      navigation.navigate('ProductionPlanManagement' as never, params as never);
+      navigation.navigate('ProductionPlanManagement', params);
       return;
     case 'inventory':
-      navigation.navigate('MaterialBatch' as never, params as never);
+      navigation.navigate('MaterialBatch', params);
       return;
     case 'finance':
-      navigation.navigate('FinanceAnalysis' as never, params as never);
+      navigation.navigate('FinanceAnalysis', params);
       return;
   }
 }
@@ -91,7 +91,7 @@ function navigateToAIChat(
   navigation: NavigationProp,
   entryContext: WorkflowAIEntryContext,
 ) {
-  navigation.navigate('AIChat' as never, { entryContext } as never);
+  navigation.navigate('AIChat', { entryContext });
 }
 
 export function FAHomeScreen() {

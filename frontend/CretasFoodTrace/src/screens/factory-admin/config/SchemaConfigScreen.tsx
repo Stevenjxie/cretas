@@ -52,6 +52,8 @@ const ENTITY_TYPE_CODES: EntityType[] = [
   'SHIPMENT',
   'EQUIPMENT',
   'DISPOSAL_RECORD',
+  'RAW_MATERIAL_TYPE',
+  'PURCHASE_ORDER',
 ];
 
 // 实体类型图标映射
@@ -67,6 +69,8 @@ const ENTITY_TYPE_ICONS: Record<EntityType, string> = {
   SCALE_DEVICE: 'scale',
   SCALE_PROTOCOL: 'file-document-outline',
   ISAPI_DEVICE: 'video',
+  RAW_MATERIAL_TYPE: 'package-variant-closed',
+  PURCHASE_ORDER: 'file-document-edit',
 };
 
 // 实体类型颜色映射
@@ -82,6 +86,8 @@ const ENTITY_TYPE_COLORS: Record<EntityType, string> = {
   SCALE_DEVICE: '#607d8b',
   SCALE_PROTOCOL: '#795548',
   ISAPI_DEVICE: '#9c27b0',
+  RAW_MATERIAL_TYPE: '#00897b',
+  PURCHASE_ORDER: '#5c6bc0',
 };
 
 interface FieldPreviewProps {
@@ -121,6 +127,8 @@ const getEntityTypeKey = (entityType: EntityType): string => {
     SCALE_DEVICE: 'schemaConfig.entityTypes.scaleDevice',
     SCALE_PROTOCOL: 'schemaConfig.entityTypes.scaleProtocol',
     ISAPI_DEVICE: 'schemaConfig.entityTypes.isapiDevice',
+    RAW_MATERIAL_TYPE: 'schemaConfig.entityTypes.rawMaterialType',
+    PURCHASE_ORDER: 'schemaConfig.entityTypes.purchaseOrder',
   };
   return keys[entityType] || 'schemaConfig.entityTypes.unknown';
 };

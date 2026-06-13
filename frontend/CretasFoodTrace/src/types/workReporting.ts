@@ -86,10 +86,12 @@ export interface BatchWorkSessionResponse {
   id: number;
   batchId: number;
   employeeId: number;
+  employeeName?: string;
   workMinutes?: number;
   checkInTime?: string;
   checkOutTime?: string;
   status: string;
+  processName?: string;
   checkinMethod?: string;
   notes?: string;
 }

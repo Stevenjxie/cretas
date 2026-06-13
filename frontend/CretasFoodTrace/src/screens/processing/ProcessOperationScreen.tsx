@@ -12,6 +12,7 @@ import {
 } from 'react-native';
 import { Appbar, TextInput, Chip } from 'react-native-paper';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
+import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { TutorialOverlay } from '../../components/common/TutorialOverlay';
 import { useTutorialStore, TUTORIAL_PROCESS_OPERATION, TUTORIAL_ENABLED, useTutorialTarget } from '../../store/tutorialStore';
@@ -21,12 +22,22 @@ import { ScreenWrapper } from '../../components/ui';
 import { theme } from '../../theme';
 import { apiClient } from '../../services/api/apiClient';
 import { requireFactoryId } from '../../utils/factoryIdHelper';
+import type { ProcessingStackParamList } from '../../types/navigation';
 
 interface ScannedWorker { id: number; name: string; }
+type NavigationProp = NativeStackNavigationProp<ProcessingStackParamList>;
+interface EmployeeLookupResponse {
+  success: boolean;
+  data?: {
+    id: number;
+    fullName?: string;
+    username?: string;
+  };
+}
 const SUPERVISOR_SELF: ScannedWorker = { id: -1, name: '主管自己' };
 
 export default function ProcessOperationScreen() {
-  const navigation = useNavigation<any>();
+  const navigation = useNavigation<NavigationProp>();
 
   const [tasks, setTasks] = useState<ProcessTaskItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -53,6 +64,7 @@ export default function ProcessOperationScreen() {
       }, 800);
       return () => clearTimeout(timer);
     }
+    return undefined;
   }, [loading, completedOp]);
 
   // Re-measure when tutorial starts
@@ -83,8 +95,9 @@ export default function ProcessOperationScreen() {
   const loadTasks = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await processTaskApiClient.getActiveTasks() as any;
-      const list = Array.isArray(res?.data) ? res.data : res?.data?.content || [];
+      const res = await processTaskApiClient.getActiveTasks();
+      const data = res.data;
+      const list = Array.isArray(data) ? data : data?.content || [];
       setTasks(list.filter((t: ProcessTaskItem) => t.status === 'IN_PROGRESS' || t.status === 'SUPPLEMENTING' || t.status === 'PENDING'));
     } catch { /* silent */ }
     finally { setLoading(false); }
@@ -98,9 +111,9 @@ export default function ProcessOperationScreen() {
     setTaskWorkers([]);
     try {
       // Try getActiveCheckins first — these are workers actually on the floor
-      const checkinsRes = await processTaskApiClient.getActiveCheckins() as any;
+      const checkinsRes = await processTaskApiClient.getActiveCheckins();
       const checkins = Array.isArray(checkinsRes?.data) ? checkinsRes.data : [];
-      const taskCheckins = checkins.filter((c: any) => String(c.processTaskId) === String(taskId));
+      const taskCheckins = checkins.filter((c) => String(c.processTaskId) === String(taskId));
       if (taskCheckins.length > 0) {
         const seen = new Set<number>();
         const workers: ScannedWorker[] = [];
@@ -113,7 +126,7 @@ export default function ProcessOperationScreen() {
         setTaskWorkers(workers);
       } else {
         // Fallback: try getWorkersByTask
-        const res = await processTaskApiClient.getWorkersByTask(taskId) as any;
+        const res = await processTaskApiClient.getWorkersByTask(taskId);
         const list = Array.isArray(res?.data) ? res.data : [];
         setTaskWorkers(list.map((w: any) => ({ id: w.id || w.employeeId, name: w.name || w.fullName || `员工#${w.id}` })));
       }
@@ -133,7 +146,7 @@ export default function ProcessOperationScreen() {
     if (nfcMatch?.[1]) {
       return { id: parseInt(nfcMatch[1], 10), name: `员工#${nfcMatch[1]}` };
     }
-    const res = await apiClient.get(`/api/mobile/${factoryId}/users/by-employee-code/${encodeURIComponent(raw.trim())}`) as any;
+    const res = await apiClient.get<EmployeeLookupResponse>(`/api/mobile/${factoryId}/users/by-employee-code/${encodeURIComponent(raw.trim())}`);
     if (res?.success && res.data) {
       return { id: res.data.id, name: res.data.fullName || res.data.username || `员工#${res.data.id}` };
     }
@@ -150,9 +163,9 @@ export default function ProcessOperationScreen() {
 
       if (scanMode === 'locate') {
         // Scan-to-locate: find which task this employee is checked into
-        const checkinsRes = await processTaskApiClient.getActiveCheckins() as any;
+        const checkinsRes = await processTaskApiClient.getActiveCheckins();
         const checkins = Array.isArray(checkinsRes?.data) ? checkinsRes.data : [];
-        const match = checkins.find((c: any) => c.employeeId === emp.id);
+        const match = checkins.find((c) => c.employeeId === emp.id);
         if (match) {
           const task = tasks.find(t => String(t.id) === String(match.processTaskId));
           if (task) {
@@ -173,9 +186,9 @@ export default function ProcessOperationScreen() {
         Alert.alert('签到成功', `${emp.name} 已签到「${selectedTask?.processName || '工序'}」`);
         if (selectedTask) loadTaskWorkers(String(selectedTask.id)); // refresh worker list
       } else if (scanMode === 'checkout') {
-        const checkinsRes = await processTaskApiClient.getActiveCheckins() as any;
+        const checkinsRes = await processTaskApiClient.getActiveCheckins();
         const checkins = Array.isArray(checkinsRes?.data) ? checkinsRes.data : [];
-        const match = checkins.find((c: any) => c.employeeId === emp.id && String(c.processTaskId) === String(selectedTask?.id));
+        const match = checkins.find((c) => c.employeeId === emp.id && String(c.processTaskId) === String(selectedTask?.id));
         if (match) {
           await processTaskApiClient.processCheckout(match.id);
           Alert.alert('签退成功', `${emp.name} 已签退「${selectedTask?.processName || '工序'}」`);
@@ -214,10 +227,10 @@ export default function ProcessOperationScreen() {
 
     navigation.navigate('YieldStepReport', {
       batchId,
-      batchNumber: selectedTask.batchNumber,
+      batchNumber: selectedTask.batchNumber ?? String(batchId),
       assignedWorkProcessTaskId: wptId,
       assignedProcessOrder: selectedTask.processOrder ?? undefined,
-    } as any);
+    });
   };
 
   // R8: 次级入口 — 旧版快速报工 (submitNormalReport, 保留向后兼容)
