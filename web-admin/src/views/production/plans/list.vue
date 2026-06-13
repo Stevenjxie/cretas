@@ -1767,7 +1767,7 @@ function handleAiFill(params: TableRow) {
             <li><strong>生成调拨单</strong>：根据 BOM 自动计算所需原辅料/包材，发申请给仓库审批。库存不足或需要从其他仓库调料时使用。</li>
             <li><strong>核对结单</strong>：PC 文员逐单核对实际产量、原料/半成品领用和工时；缺料信息会在列表和弹窗里作为参考值显示。</li>
             <li><strong>APP 报工 / 转批次</strong>：需要 APP 逐道报工时使用，系统会自动建批次 + 工序任务；原料不足只提示缺口，不阻断转批次。</li>
-            <li><strong>仅标进行中（不建批次）</strong>：在「更多」菜单中。只把计划标成进行中、不建批次，适用于不需逐道报工、直接在 PC 端录产量的场景。</li>
+            <li><strong>PC 结单</strong>：不需要逐道报工的计划，也必须由文员在「核对结单」里录入实际产量、实际领用和人效后，才算完成。</li>
           </ul>
           <strong>下一步</strong>：现场用 APP 逐工序上报；文员用「核对结单」把实际数量、领用和工时闭环。
           <span style="color: var(--text-color-secondary, #909399);">
