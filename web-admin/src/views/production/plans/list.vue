@@ -132,7 +132,7 @@ const summaryRequest = computed<ListSummaryRequest>(() => ({
 }));
 const { summary: footerSummary, loading: footerLoading } = useListSummary('productionPlan', summaryRequest);
 
-// ========== SP2 二次加工计划对话框 ==========
+// ========== SP2 独立再加工/返工计划对话框 ==========
 const secondaryDialogVisible = ref(false);
 const secondaryDialogLoading = ref(false);
 const wipListLoading = ref(false);
@@ -217,14 +217,14 @@ async function submitSecondaryPlan() {
       plannedDate: form.plannedDate || undefined,
     });
     if (res.success) {
-      ElMessage.success('二次加工计划创建成功');
+      ElMessage.success('独立再加工/返工计划创建成功');
       secondaryDialogVisible.value = false;
       loadData();
     } else {
       ElMessage({ message: res.message || '创建失败', type: 'error', duration: 0, showClose: true });
     }
   } catch (e) {
-    handleCatchError(e, '创建二次加工计划失败');
+    handleCatchError(e, '创建独立再加工/返工计划失败');
   } finally {
     secondaryDialogLoading.value = false;
   }
@@ -628,11 +628,30 @@ async function handleStart(row: TableRow) {
   }
 }
 
-// ==================== 完成生产 dialog (#742) ====================
-// 替代纯 prompt - 显示品名/计划数量,并 enforce 实际产量 ≤ 计划数量上限
+// ==================== 核对结单 dialog (#742 / 6.12 revised) ====================
+// Backend `/settle` records clerk-reviewed facts. This web flow only submits
+// facts that are visible in this dialog; detailed material/labor lines remain
+// explicit follow-up input and are not fabricated here.
+const SETTLEMENT_VARIANCE_REASON_OPTIONS = [
+  { value: '现场称重差异', label: '现场称重差异' },
+  { value: '原料状态差异', label: '原料状态差异' },
+  { value: '临时调整产量', label: '临时调整产量' },
+  { value: '客户/销售变更', label: '客户/销售变更' },
+  { value: '其他', label: '其他（请补充说明）' },
+];
 const completeDialogVisible = ref(false);
 const completeRow = ref<TableRow | null>(null);
-const completeForm = ref({ actualQuantity: 0 });
+const completeForm = ref({
+  actualQuantity: 0,
+  semiFinishedOutputQuantity: 0,
+  rawMaterialChecked: false,
+  semiFinishedChecked: false,
+  laborChecked: false,
+  workerCount: 0,
+  workMinutes: 0,
+  varianceReason: '',
+  otherVarianceReason: '',
+});
 const completeProductName = computed(() => {
   const r = completeRow.value;
   if (!r) return '';
@@ -653,41 +672,85 @@ const completePlannedQuantity = computed(() => {
   if (!r) return 0;
   return Number(r.plannedQuantity || 0);
 });
+const completeActualQuantity = computed(() => Number(completeForm.value.actualQuantity || 0));
+const completeIsOverPlan = computed(() => {
+  const planned = completePlannedQuantity.value;
+  return planned > 0 && completeActualQuantity.value > planned;
+});
+const completeVarianceReasonReady = computed(() => {
+  if (!completeIsOverPlan.value) return true;
+  const reason = completeForm.value.varianceReason;
+  if (!reason) return false;
+  if (reason !== '其他') return true;
+  return Boolean(completeForm.value.otherVarianceReason.trim());
+});
+const completeSubmitDisabledReason = computed(() => {
+  if (!completeActualQuantity.value || completeActualQuantity.value <= 0) return '请填写有效的实际产量';
+  if (!completeVarianceReasonReady.value) return '实际产量超过计划时必须选择差异原因';
+  if (!completeForm.value.rawMaterialChecked) return '请先核对原料/辅料实际领用';
+  if (!completeForm.value.semiFinishedChecked) return '请先核对半成品实际领用或确认不适用';
+  if (!completeForm.value.laborChecked) return '请先核对工时/人数或确认延期原因';
+  return '';
+});
+const completeCanSubmit = computed(() => completeSubmitDisabledReason.value === '');
+
+function buildSettlementIdempotencyKey(row: TableRow): string {
+  const planId = String(row.id || row.planNumber || 'unknown');
+  return `web-settle-${planId}-${Date.now()}`;
+}
 
 function handleComplete(row: TableRow) {
   if (actionLoading.value) return;
   completeRow.value = row;
   // 默认填充计划数量, 便于一键提交; 用户可改
-  completeForm.value = { actualQuantity: Number(row.plannedQuantity || 0) };
+  completeForm.value = {
+    actualQuantity: Number(row.plannedQuantity || 0),
+    semiFinishedOutputQuantity: 0,
+    rawMaterialChecked: false,
+    semiFinishedChecked: false,
+    laborChecked: false,
+    workerCount: Number(row.estimatedWorkers || 0),
+    workMinutes: 0,
+    varianceReason: '',
+    otherVarianceReason: '',
+  };
   completeDialogVisible.value = true;
 }
 
 async function submitComplete() {
   if (!completeRow.value) return;
-  const planned = completePlannedQuantity.value;
-  const actual = Number(completeForm.value.actualQuantity || 0);
-  if (!actual || actual <= 0) {
-    ElMessage.warning('请输入有效的实际产量');
-    return;
-  }
-  if (planned > 0 && actual > planned) {
-    ElMessage.warning(`实际产量不能超过计划数量 ${planned}`);
+  if (!completeCanSubmit.value) {
+    ElMessage({
+      message: completeSubmitDisabledReason.value || '请先完成结单核对项',
+      type: 'error',
+      duration: 0,
+      showClose: true,
+    });
     return;
   }
   actionLoading.value = true;
   try {
-    const response = await post(`/${factoryId.value}/production-plans/${completeRow.value.id}/complete`, {
-      actualQuantity: actual
+    const response = await post(`/${factoryId.value}/production-plans/${completeRow.value.id}/settle`, {
+      idempotencyKey: buildSettlementIdempotencyKey(completeRow.value),
+      actualFinishedQuantity: completeActualQuantity.value,
+      actualSemiFinishedQuantity: Number(completeForm.value.semiFinishedOutputQuantity || 0),
+      quantityUnit: completeRow.value.unit || completeRow.value.quantityUnit || null,
+      quantityVarianceReason: completeForm.value.varianceReason === '其他'
+        ? completeForm.value.otherVarianceReason.trim()
+        : completeForm.value.varianceReason,
+      materialVarianceReason: 'PC文员已核对实际领用，明细待后续补录',
+      laborDeferredReason: 'PC文员已核对工时人数，明细待后续补录',
     });
     if (response.success) {
-      ElMessage.success('生产已完成');
+      ElMessage.success(response.message || '生产结单已提交');
       completeDialogVisible.value = false;
       loadData();
     } else {
-      ElMessage.error(response.message || '操作失败');
+      ElMessage({ message: response.message || '结单提交失败', type: 'error', duration: 0, showClose: true });
     }
-  } catch (error: any) {
+  } catch (error: unknown) {
     if (error !== 'cancel') console.error('[提交失败]', error);
+    handleCatchError(error, '结单提交失败，请检查网络');
   } finally {
     actionLoading.value = false;
   }
@@ -871,6 +934,27 @@ function isStartable(status: string) {
 
 function canPrintPlanDocuments(status: string) {
   return ['PENDING', 'CONFIRMED', 'APPROVED', 'IN_PROGRESS', 'COMPLETED'].includes(String(status || '').toUpperCase());
+}
+
+function nextStepText(row: TableRow) {
+  const status = String(row.status || '').toUpperCase();
+  if (status === 'COMPLETED') return '待仓库确认/成本查看';
+  if (status === 'IN_PROGRESS') return '继续 APP 报工或核对结单';
+  if (status === 'PENDING') {
+    return row.skipProcessReporting === false ? 'APP 报工下发工序任务' : '核对结单或生成调拨单';
+  }
+  if (status === 'PLANNED' || status === 'PREPARED') return '确认后进入未完成';
+  if (status === 'CANCELLED') return '已取消';
+  return '查看详情';
+}
+
+function nextStepTagType(row: TableRow) {
+  const status = String(row.status || '').toUpperCase();
+  if (status === 'COMPLETED') return 'success';
+  if (status === 'IN_PROGRESS') return 'warning';
+  if (status === 'PENDING') return row.skipProcessReporting === false ? 'primary' : 'info';
+  if (status === 'CANCELLED') return 'danger';
+  return 'info';
 }
 
 function planRowClassName({ row }: { row: TableRow }): string {
@@ -1085,11 +1169,11 @@ function handleAiFill(params: TableRow) {
     />
     <ConceptDisambiguationAlert
       here-name="生产计划"
-      here="未完成生产任务（PENDING / IN_PROGRESS，可直接录入实际产量完成）"
+      here="未完成生产任务（PENDING / IN_PROGRESS，文员核对实际产量、领用和工时后结单）"
       other-name="生产管理 → 生产批次"
       other="已开工的实际「批次」（IN_PROGRESS / COMPLETED，记录实际产量、消耗）"
       other-path="/production/batches"
-      consequence="需要 APP 逐道报工时再转批次；PC 文员可在未完成列表直接完成"
+      consequence="需要 APP 逐道报工时再转批次；PC 文员在未完成列表核对结单"
     />
     <!-- #747 + #748: 生产/锁定/调拨 业务流程引导 banner (基于 May10 六扇门会议) -->
     <el-alert
@@ -1104,11 +1188,11 @@ function handleAiFill(params: TableRow) {
           <strong>计划确认后，先进入未完成列表；原料库存不足只做预警，不阻断开工或结单：</strong>
           <ul style="margin: 4px 0 4px 18px; padding: 0;">
             <li><strong>生成调拨单</strong>：根据 BOM 自动计算所需原辅料/包材，发申请给仓库审批。库存不足或需要从其他仓库调料时使用。</li>
-            <li><strong>完成生产</strong>：PC 文员逐单勾选未完成计划，录入实际产量后结单；缺料信息会在列表和弹窗里作为参考值显示。</li>
+            <li><strong>核对结单</strong>：PC 文员逐单核对实际产量、原料/半成品领用和工时；缺料信息会在列表和弹窗里作为参考值显示。</li>
             <li><strong>APP 报工 / 转批次</strong>：需要 APP 逐道报工时使用，系统会自动建批次 + 工序任务；原料不足只提示缺口，不阻断转批次。</li>
             <li><strong>仅标进行中（不建批次）</strong>：在「更多」菜单中。只把计划标成进行中、不建批次，适用于不需逐道报工、直接在 PC 端录产量的场景。</li>
           </ul>
-          <strong>完成后</strong>：可通过 APP「报工审批」逐工序上报，或在 PC 端「完成生产」录入实际产量结束计划。
+          <strong>下一步</strong>：现场用 APP 逐工序上报；文员用「核对结单」把实际数量、领用和工时闭环。
           <span style="color: var(--text-color-secondary, #909399);">
             进行中的计划支持"锁定"——锁定后该计划不再允许修改数量/日期，避免在生产过程中被误改。
           </span>
@@ -1153,7 +1237,7 @@ function handleAiFill(params: TableRow) {
               AI对话创建
             </el-button>
             <el-button v-if="canWrite" type="warning" :icon="Plus" @click="handleCreateSecondary" style="margin-left: 8px;">
-              二次加工计划
+              独立再加工/返工
             </el-button>
             <el-button v-if="canWrite" type="primary" :icon="Plus" @click="handleCreate" style="margin-left: 8px;">
               新建计划
@@ -1178,7 +1262,7 @@ function handleAiFill(params: TableRow) {
           <el-option label="待执行 (PENDING)" value="PENDING" />
           <el-option label="进行中" value="IN_PROGRESS" />
           <el-option label="暂停" value="PAUSED" />
-          <el-option label="已完成" value="COMPLETED" />
+          <el-option label="已结单" value="COMPLETED" />
           <el-option label="已取消" value="CANCELLED" />
         </el-select>
         <el-button type="primary" :icon="Search" @click="handleSearch">搜索</el-button>
@@ -1240,12 +1324,27 @@ function handleAiFill(params: TableRow) {
             <span v-else>-</span>
           </template>
         </el-table-column>
+        <el-table-column label="下一步" min-width="170">
+          <template #default="{ row }">
+            <div class="next-step-cell">
+              <el-tag :type="nextStepTagType(row)" size="small" effect="plain">
+                {{ nextStepText(row) }}
+              </el-tag>
+              <div v-if="row.skipProcessReporting === false" class="next-step-hint">
+                工序任务将下发至 APP
+              </div>
+              <div v-else-if="isUnfinishedStatus(row.status)" class="next-step-hint">
+                文员核对实际领用后结单
+              </div>
+            </div>
+          </template>
+        </el-table-column>
         <el-table-column prop="estimatedWorkers" label="预计工人" width="90" align="center" />
         <el-table-column prop="assignedSupervisorName" label="指派主管" width="100" show-overflow-tooltip />
         <el-table-column prop="sourceType" label="来源" width="90" align="center">
           <template #default="{ row }">
-            <!-- SP2: planNumber 前缀 SEC- 标识二次加工 (planSourceType 字段未暴露在 DTO) -->
-            <el-tag v-if="String(row.planNumber || '').startsWith('SEC-')" type="warning" size="small">二次加工</el-tag>
+            <!-- SP2: planNumber 前缀 SEC- 标识独立再加工/返工 (planSourceType 字段未暴露在 DTO) -->
+            <el-tag v-if="String(row.planNumber || '').startsWith('SEC-')" type="warning" size="small">独立再加工</el-tag>
             <el-tag v-else-if="row.sourceType === 'EXCEL_IMPORT'" type="warning" size="small">Excel导入</el-tag>
             <el-tag v-else-if="row.sourceType === 'AI_CHAT'" type="success" size="small">AI创建</el-tag>
             <el-tag v-else-if="row.sourceType === 'SAFETY_STOCK'" type="info" size="small">存货生产</el-tag>
@@ -1281,9 +1380,9 @@ function handleAiFill(params: TableRow) {
               size="small"
               :icon="CircleCheck"
               :disabled="actionLoading"
-              title="PC 文员逐单录入实际产量并完成计划"
+              title="PC 文员核对实际产量、领用和工时后结单"
               @click="handleComplete(row)"
-            >完成</el-button>
+            >核对结单</el-button>
             <!-- 6.12 复核: PC 主路径是未完成列表直接完成；转批次保留给 APP 逐道报工。 -->
             <el-button
               v-if="canWrite && isStartable(row.status)"
@@ -1376,7 +1475,7 @@ function handleAiFill(params: TableRow) {
             </el-descriptions-item>
             <el-descriptions-item label="来源">
               <!-- SP2 -->
-              <el-tag v-if="String(viewPlan.planNumber || '').startsWith('SEC-')" type="warning" size="small">二次加工</el-tag>
+              <el-tag v-if="String(viewPlan.planNumber || '').startsWith('SEC-')" type="warning" size="small">独立再加工</el-tag>
               <el-tag v-else-if="viewPlan.sourceType === 'EXCEL_IMPORT'" type="warning" size="small">Excel导入</el-tag>
               <el-tag v-else-if="viewPlan.sourceType === 'AI_CHAT'" type="success" size="small">AI创建</el-tag>
               <el-tag v-else-if="viewPlan.sourceType === 'SAFETY_STOCK'" type="info" size="small">存货生产</el-tag>
@@ -1675,15 +1774,17 @@ function handleAiFill(params: TableRow) {
       </template>
     </el-dialog>
 
-    <!-- #742 完成生产 dialog -->
+    <!-- #742 / 6.12 核对结单 dialog -->
     <el-dialog
       v-model="completeDialogVisible"
-      :title="completeProductName ? `完成生产 — ${completeProductName}` : '完成生产'"
-      width="460px"
+      :title="completeProductName ? `核对结单 — ${completeProductName}` : '核对结单'"
+      width="760px"
+      top="4vh"
+      class="settlement-dialog"
       destroy-on-close
       append-to-body
     >
-      <el-form label-width="100px">
+      <el-form label-width="118px" class="settlement-form">
         <el-alert
           v-if="completeAdvisory?.hasWarning"
           :title="completeAdvisory.message"
@@ -1692,31 +1793,145 @@ function handleAiFill(params: TableRow) {
           :closable="false"
           style="margin-bottom: 12px"
         />
-        <el-form-item label="计划单号">
-          <span>{{ completePlanNumber || '-' }}</span>
-        </el-form-item>
-        <el-form-item label="品名">
-          <span>{{ completeProductName || '-' }}</span>
-        </el-form-item>
-        <el-form-item label="计划数量">
-          <span>{{ completePlannedQuantity }}</span>
-        </el-form-item>
+        <div class="settlement-context">
+          <div>
+            <div class="settlement-context-label">计划单号</div>
+            <div class="settlement-context-value">{{ completePlanNumber || '-' }}</div>
+          </div>
+          <div>
+            <div class="settlement-context-label">品名</div>
+            <div class="settlement-context-value">{{ completeProductName || '-' }}</div>
+          </div>
+          <div>
+            <div class="settlement-context-label">计划数量</div>
+            <div class="settlement-context-value">{{ completePlannedQuantity }}</div>
+          </div>
+        </div>
+        <el-divider content-position="left">产出核对</el-divider>
         <el-form-item label="实际产量" required>
           <el-input-number
             v-model="completeForm.actualQuantity"
             :min="0"
-            :max="completePlannedQuantity > 0 ? completePlannedQuantity : undefined"
             :precision="2"
             style="width: 100%"
           />
-          <div style="font-size: 12px; color: var(--text-color-secondary, #909399); margin-top: 4px;">
-            实际产量 ≤ {{ completePlannedQuantity }}（不能超过计划数量）
+          <div class="settlement-help">
+            计划数量只是参考，超出时系统预警并要求原因，不硬拦。
           </div>
         </el-form-item>
+        <el-alert
+          v-if="completeIsOverPlan"
+          title="实际产量超过计划数量，请选择差异原因。"
+          type="warning"
+          show-icon
+          :closable="false"
+          style="margin-bottom: 12px"
+        />
+        <el-form-item v-if="completeIsOverPlan" label="差异原因" required>
+          <el-select
+            v-model="completeForm.varianceReason"
+            placeholder="请选择差异原因"
+            style="width: 100%"
+          >
+            <el-option
+              v-for="opt in SETTLEMENT_VARIANCE_REASON_OPTIONS"
+              :key="opt.value"
+              :label="opt.label"
+              :value="opt.value"
+            />
+          </el-select>
+        </el-form-item>
+        <el-form-item v-if="completeIsOverPlan && completeForm.varianceReason === '其他'" label="原因补充" required>
+          <el-input
+            v-model="completeForm.otherVarianceReason"
+            type="textarea"
+            :rows="2"
+            placeholder="请说明实际产量超过计划的现场原因"
+          />
+        </el-form-item>
+        <el-form-item label="半成品产量">
+          <el-input-number
+            v-model="completeForm.semiFinishedOutputQuantity"
+            :min="0"
+            :precision="2"
+            style="width: 100%"
+          />
+          <div class="settlement-help">
+            同一生产计划可以同时产成品和半成品；本次结单记录事实，库存/成本过账按后续过账流程处理。
+          </div>
+        </el-form-item>
+
+        <el-divider content-position="left">实际领用核对</el-divider>
+        <div class="settlement-check-grid">
+          <div class="settlement-check-card">
+            <div class="settlement-check-title">原料/辅料实际领用</div>
+            <div class="settlement-check-body">
+              <el-tag v-if="completeAdvisory?.hasWarning" type="danger" size="small">有缺料预警</el-tag>
+              <el-tag v-else-if="completeAdvisory" type="success" size="small">库存参考正常</el-tag>
+              <el-tag v-else type="info" size="small">暂无参考数据</el-tag>
+              <p>{{ completeAdvisory?.message || '此处要求文员确认已核对纸单/现场记录；批次级领用明细不在本弹窗伪造。' }}</p>
+              <el-checkbox v-model="completeForm.rawMaterialChecked">
+                已核对原料/辅料实际领用或确认不适用
+              </el-checkbox>
+            </div>
+          </div>
+          <div class="settlement-check-card">
+            <div class="settlement-check-title">半成品实际领用</div>
+            <div class="settlement-check-body">
+              <el-tag type="warning" size="small">正常生产双领</el-tag>
+              <p>半成品领用属于普通生产投入，不从独立再加工/返工入口走。后端接入后这里保存 WIP 批次和数量。</p>
+              <el-checkbox v-model="completeForm.semiFinishedChecked">
+                已核对半成品实际领用或确认不适用
+              </el-checkbox>
+            </div>
+          </div>
+        </div>
+
+        <el-divider content-position="left">工时/人效最小字段</el-divider>
+        <el-row :gutter="12">
+          <el-col :span="12">
+            <el-form-item label="人数">
+              <el-input-number
+                v-model="completeForm.workerCount"
+                :min="0"
+                :precision="0"
+                style="width: 100%"
+              />
+            </el-form-item>
+          </el-col>
+          <el-col :span="12">
+            <el-form-item label="工时分钟">
+              <el-input-number
+                v-model="completeForm.workMinutes"
+                :min="0"
+                :precision="0"
+                style="width: 100%"
+              />
+            </el-form-item>
+          </el-col>
+        </el-row>
+        <el-form-item label="工时核对" required>
+          <el-checkbox v-model="completeForm.laborChecked">
+            已核对 RN 报工工时/人数，或确认稍后由主管补录
+          </el-checkbox>
+        </el-form-item>
+        <el-alert
+          v-if="completeSubmitDisabledReason"
+          :title="completeSubmitDisabledReason"
+          type="warning"
+          show-icon
+          :closable="false"
+          style="margin-bottom: 4px"
+        />
       </el-form>
       <template #footer>
         <el-button @click="completeDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="actionLoading" @click="submitComplete">确定完成</el-button>
+        <el-button
+          type="primary"
+          :loading="actionLoading"
+          :disabled="!completeCanSubmit"
+          @click="submitComplete"
+        >提交结单</el-button>
       </template>
     </el-dialog>
 
@@ -1761,10 +1976,10 @@ function handleAiFill(params: TableRow) {
       </template>
     </el-dialog>
 
-    <!-- SP2 二次加工计划创建 dialog -->
+    <!-- SP2 独立再加工/返工计划创建 dialog -->
     <el-dialog
       v-model="secondaryDialogVisible"
-      title="创建二次加工计划"
+      title="创建独立再加工/返工计划"
       width="520px"
       :close-on-click-modal="false"
       destroy-on-close
@@ -1801,7 +2016,7 @@ function handleAiFill(params: TableRow) {
             </template>
           </div>
           <div v-if="wipList.length === 0 && !wipListLoading" style="margin-top: 6px; font-size: 12px; color: var(--el-color-warning);">
-            暂无可用半成品库存。请先完成报工产出 WIP，再创建二次加工计划。
+            暂无可用半成品库存。请先完成报工产出 WIP，再创建独立再加工/返工计划。
           </div>
         </el-form-item>
 
@@ -1851,7 +2066,7 @@ function handleAiFill(params: TableRow) {
       </el-form>
       <template #footer>
         <el-button @click="secondaryDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="secondaryDialogLoading" @click="submitSecondaryPlan">创建二次加工计划</el-button>
+        <el-button type="primary" :loading="secondaryDialogLoading" @click="submitSecondaryPlan">创建独立再加工/返工计划</el-button>
       </template>
     </el-dialog>
 
@@ -2107,6 +2322,112 @@ function handleAiFill(params: TableRow) {
   padding: 8px 12px;
   background: var(--fill-color-light, #f5f7fa);
   border-radius: 4px;
+}
+
+.next-step-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: flex-start;
+}
+
+.next-step-hint {
+  font-size: 12px;
+  color: var(--text-color-secondary, #909399);
+  line-height: 1.3;
+}
+
+.settlement-form {
+  .el-divider {
+    margin: 16px 0 14px;
+  }
+}
+
+.settlement-dialog {
+  display: flex;
+  max-height: 92vh;
+  flex-direction: column;
+
+  .el-dialog__body {
+    overflow-y: auto;
+    padding-bottom: 12px;
+  }
+
+  .el-dialog__footer {
+    border-top: 1px solid var(--border-color-lighter, #ebeef5);
+    padding-top: 12px;
+  }
+}
+
+.settlement-context {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.settlement-context > div {
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border-color-lighter, #ebeef5);
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.settlement-context-label {
+  margin-bottom: 4px;
+  font-size: 12px;
+  color: var(--text-color-secondary, #909399);
+}
+
+.settlement-context-value {
+  overflow: hidden;
+  color: var(--text-color-primary, #303133);
+  font-size: 14px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settlement-help {
+  margin-top: 4px;
+  color: var(--text-color-secondary, #909399);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.settlement-check-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.settlement-check-card {
+  padding: 12px;
+  border: 1px solid var(--border-color-lighter, #ebeef5);
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.settlement-check-title {
+  margin-bottom: 8px;
+  color: var(--text-color-primary, #303133);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.settlement-check-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  color: var(--text-color-regular, #606266);
+  font-size: 13px;
+  line-height: 1.5;
+
+  p {
+    margin: 0;
+  }
 }
 
 </style>
