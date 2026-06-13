@@ -43,7 +43,7 @@ export function getPlanStatusText(status: string | null | undefined): string {
     PENDING: '未完成',
     PREPARED: '草稿',
     IN_PROGRESS: '进行中',
-    COMPLETED: '已完成',
+    COMPLETED: '已结单',
     CANCELLED: '已取消',
     EXCEPTION: '异常',
     ABNORMAL: '异常',
