@@ -2,6 +2,7 @@ package com.cretas.aims.service.production;
 
 import com.cretas.aims.dto.production.ProductionSettlementRequest;
 import com.cretas.aims.dto.production.ProductionSettlementResponse;
+import com.cretas.aims.dto.production.ProductionTransitClearingRequest;
 import com.cretas.aims.dto.production.ProductionWarehouseReceiptRequest;
 import com.cretas.aims.dto.production.ProductionWarehouseReceiptResponse;
 import com.cretas.aims.entity.MaterialBatch;
@@ -9,6 +10,8 @@ import com.cretas.aims.entity.ProductionPlan;
 import com.cretas.aims.entity.ProductionSettlement;
 import com.cretas.aims.entity.ProductionTransitLedger;
 import com.cretas.aims.entity.SemiFinishedInventory;
+import com.cretas.aims.entity.bom.BomRecipe;
+import com.cretas.aims.entity.bom.BomRecipeItem;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
 import com.cretas.aims.entity.enums.ProductionPlanStatus;
 import com.cretas.aims.entity.inventory.FinishedGoodsBatch;
@@ -29,6 +32,8 @@ import com.cretas.aims.repository.ProductionSettlementRepository;
 import com.cretas.aims.repository.ProductionTransitLedgerRepository;
 import com.cretas.aims.repository.SemiFinishedInventoryRepository;
 import com.cretas.aims.repository.UserRepository;
+import com.cretas.aims.repository.bom.BomRecipeItemRepository;
+import com.cretas.aims.repository.bom.BomRecipeRepository;
 import com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository;
 import com.cretas.aims.repository.inventory.SalesOrderItemRepository;
 import com.cretas.aims.repository.inventory.SalesOrderRepository;
@@ -93,6 +98,8 @@ class ProductionPlanSettlementTest {
     @Mock private ProductionTransitLedgerRepository productionTransitLedgerRepository;
     @Mock private FinishedGoodsBatchRepository finishedGoodsBatchRepository;
     @Mock private WarehouseResolver warehouseResolver;
+    @Mock private BomRecipeRepository bomRecipeRepository;
+    @Mock private BomRecipeItemRepository bomRecipeItemRepository;
 
     private ProductionPlanServiceImpl service;
 
@@ -111,6 +118,8 @@ class ProductionPlanSettlementTest {
         ReflectionTestUtils.setField(service, "productionTransitLedgerRepository", productionTransitLedgerRepository);
         ReflectionTestUtils.setField(service, "finishedGoodsBatchRepository", finishedGoodsBatchRepository);
         ReflectionTestUtils.setField(service, "warehouseResolver", warehouseResolver);
+        ReflectionTestUtils.setField(service, "bomRecipeRepository", bomRecipeRepository);
+        ReflectionTestUtils.setField(service, "bomRecipeItemRepository", bomRecipeItemRepository);
         lenient().when(conversionRepository.findAll()).thenReturn(Collections.emptyList());
     }
 
@@ -161,6 +170,8 @@ class ProductionPlanSettlementTest {
         when(materialBatchRepository.findByIdAndFactoryId("MB-1", FACTORY_ID)).thenReturn(Optional.of(batch));
         when(materialBatchRepository.findByIdAndFactoryIdForUpdate("MB-1", FACTORY_ID)).thenReturn(Optional.of(batch));
         when(semiFinishedInventoryRepository.findByIdForUpdate(7L)).thenReturn(Optional.of(wip));
+        when(warehouseResolver.resolveLogisticsId(FACTORY_ID)).thenReturn("WH-LOG-ID");
+        stubCurrentBom("RM-1");
         when(materialBatchRepository.save(any(MaterialBatch.class))).thenAnswer(inv -> inv.getArgument(0));
         when(semiFinishedInventoryRepository.save(any(SemiFinishedInventory.class))).thenAnswer(inv -> inv.getArgument(0));
         when(productionSettlementRepository.save(any(ProductionSettlement.class))).thenAnswer(inv -> inv.getArgument(0));
@@ -182,6 +193,50 @@ class ProductionPlanSettlementTest {
         verify(productionSettlementLaborRepository).saveAll(anyList());
         verify(materialBatchRepository).save(batch);
         verify(semiFinishedInventoryRepository).save(wip);
+    }
+
+    @Test
+    @DisplayName("结单原料批次不在原料仓时拒绝扣料")
+    void settleProduction_rawBatchOutsideLogisticsWarehouse_rejected() {
+        ProductionPlan plan = plan();
+        MaterialBatch batch = materialBatch();
+        batch.setWarehouseId("WH-WKS-ID");
+        when(productionPlanRepository.findByIdAndFactoryId(PLAN_ID, FACTORY_ID)).thenReturn(Optional.of(plan));
+        when(productionSettlementRepository.findByFactoryIdAndProductionPlanIdAndIdempotencyKeyAndDeletedAtIsNull(
+                FACTORY_ID, PLAN_ID, "idem-1")).thenReturn(Optional.empty());
+        when(productionSettlementRepository.findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(
+                FACTORY_ID, PLAN_ID)).thenReturn(Optional.empty());
+        when(materialBatchRepository.findByIdAndFactoryId("MB-1", FACTORY_ID)).thenReturn(Optional.of(batch));
+        when(warehouseResolver.resolveLogisticsId(FACTORY_ID)).thenReturn("WH-LOG-ID");
+        stubCurrentBom("RM-1");
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> service.settleProduction(FACTORY_ID, PLAN_ID, baseRequest(), 10L));
+
+        assertEquals("PRODUCTION_RAW_WAREHOUSE_REQUIRED", ex.getErrorCode());
+        verify(productionSettlementRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("结单原料批次不属于当前 BOM 时拒绝扣料")
+    void settleProduction_rawBatchNotInCurrentBom_rejected() {
+        ProductionPlan plan = plan();
+        MaterialBatch batch = materialBatch();
+        batch.setMaterialTypeId("RM-NOT-IN-BOM");
+        when(productionPlanRepository.findByIdAndFactoryId(PLAN_ID, FACTORY_ID)).thenReturn(Optional.of(plan));
+        when(productionSettlementRepository.findByFactoryIdAndProductionPlanIdAndIdempotencyKeyAndDeletedAtIsNull(
+                FACTORY_ID, PLAN_ID, "idem-1")).thenReturn(Optional.empty());
+        when(productionSettlementRepository.findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(
+                FACTORY_ID, PLAN_ID)).thenReturn(Optional.empty());
+        when(materialBatchRepository.findByIdAndFactoryId("MB-1", FACTORY_ID)).thenReturn(Optional.of(batch));
+        when(warehouseResolver.resolveLogisticsId(FACTORY_ID)).thenReturn("WH-LOG-ID");
+        stubCurrentBom("RM-1");
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> service.settleProduction(FACTORY_ID, PLAN_ID, baseRequest(), 10L));
+
+        assertEquals("PRODUCTION_CONSUMPTION_NOT_IN_BOM", ex.getErrorCode());
+        verify(productionSettlementRepository, never()).save(any());
     }
 
     @Test
@@ -219,7 +274,7 @@ class ProductionPlanSettlementTest {
         when(finishedGoodsBatchRepository.findByFactoryIdAndBatchNumber(FACTORY_ID, "FG-P-001"))
                 .thenReturn(Optional.empty());
         when(productTypeRepository.findById("PT-1")).thenReturn(Optional.empty());
-        when(warehouseResolver.resolveLogisticsId(FACTORY_ID)).thenReturn("WH-LOG-ID");
+        when(warehouseResolver.resolveWorkshopId(FACTORY_ID)).thenReturn("WH-WKS-ID");
         when(finishedGoodsBatchRepository.save(any(FinishedGoodsBatch.class))).thenAnswer(inv -> {
             FinishedGoodsBatch batch = inv.getArgument(0);
             batch.setId("fg-1");
@@ -248,7 +303,7 @@ class ProductionPlanSettlementTest {
         when(finishedGoodsBatchRepository.findByFactoryIdAndBatchNumber(FACTORY_ID, "FG-P-001"))
                 .thenReturn(Optional.empty());
         when(productTypeRepository.findById("PT-1")).thenReturn(Optional.empty());
-        when(warehouseResolver.resolveLogisticsId(FACTORY_ID)).thenReturn("WH-LOG-ID");
+        when(warehouseResolver.resolveWorkshopId(FACTORY_ID)).thenReturn("WH-WKS-ID");
         when(finishedGoodsBatchRepository.save(any(FinishedGoodsBatch.class))).thenAnswer(inv -> {
             FinishedGoodsBatch batch = inv.getArgument(0);
             batch.setId("fg-1");
@@ -289,6 +344,36 @@ class ProductionPlanSettlementTest {
         assertEquals("PRODUCTION_RECEIPT_RESPONSIBILITY_REQUIRED", ex.getErrorCode());
         verify(finishedGoodsBatchRepository, never()).save(any());
         verify(productionTransitLedgerRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("中转挂账清账后结单状态回到已过账")
+    void clearProductionTransitLedger_resolvesOpenLedgerAndPostsSettlement() {
+        ProductionPlan plan = plan();
+        ProductionSettlement settlement = settled();
+        settlement.setPostingStatus("PENDING_CLEARING");
+        ProductionTransitLedger ledger = new ProductionTransitLedger();
+        ledger.setId("ledger-1");
+        ledger.setFactoryId(FACTORY_ID);
+        ledger.setSettlementId("settlement-1");
+        ledger.setStatus("OPEN");
+        ledger.setNote("仓库实收短少");
+        when(productionPlanRepository.findByIdAndFactoryId(PLAN_ID, FACTORY_ID)).thenReturn(Optional.of(plan));
+        when(productionSettlementRepository.findByFactoryIdAndProductionPlanIdForUpdate(
+                FACTORY_ID, PLAN_ID)).thenReturn(Optional.of(settlement));
+        when(productionTransitLedgerRepository.findOpenByFactoryIdAndSettlementIdForUpdate(
+                FACTORY_ID, "settlement-1", "OPEN")).thenReturn(Optional.of(ledger));
+        when(productionTransitLedgerRepository.save(any(ProductionTransitLedger.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(productionSettlementRepository.save(any(ProductionSettlement.class))).thenAnswer(inv -> inv.getArgument(0));
+        ProductionTransitClearingRequest request = new ProductionTransitClearingRequest("仓库侧已处理", "盘点后确认");
+
+        ProductionWarehouseReceiptResponse response =
+                service.clearProductionTransitLedger(FACTORY_ID, PLAN_ID, request, 12L);
+
+        assertEquals("POSTED", response.getPostingStatus());
+        assertEquals("RESOLVED", ledger.getStatus());
+        assertEquals("POSTED", settlement.getPostingStatus());
+        assertTrue(ledger.getNote().contains("仓库侧已处理"));
     }
 
     @Test
@@ -385,9 +470,31 @@ class ProductionPlanSettlementTest {
         batch.setUsedQuantity(new BigDecimal("4"));
         batch.setReservedQuantity(new BigDecimal("1"));
         batch.setQuantityUnit("kg");
-        batch.setWarehouseId("WH-WKS");
+        batch.setWarehouseId("WH-LOG-ID");
         batch.setStatus(MaterialBatchStatus.AVAILABLE);
         return batch;
+    }
+
+    private void stubCurrentBom(String materialTypeId) {
+        BomRecipe recipe = BomRecipe.builder()
+                .id("bom-1")
+                .factoryId(FACTORY_ID)
+                .recipeCode("BOM-001")
+                .productTypeId("PT-1")
+                .productName("Product")
+                .outputQuantityPerUnit(BigDecimal.ONE)
+                .build();
+        BomRecipeItem item = BomRecipeItem.builder()
+                .recipeId("bom-1")
+                .factoryId(FACTORY_ID)
+                .materialTypeId(materialTypeId)
+                .standardQuantity(BigDecimal.ONE)
+                .unit("kg")
+                .build();
+        when(bomRecipeRepository.findByFactoryIdAndProductTypeIdAndIsCurrentTrue(FACTORY_ID, "PT-1"))
+                .thenReturn(Optional.of(recipe));
+        when(bomRecipeItemRepository.findByRecipeIdOrderBySortOrderAsc("bom-1"))
+                .thenReturn(List.of(item));
     }
 
     private SemiFinishedInventory wip() {

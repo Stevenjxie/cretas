@@ -8,6 +8,7 @@ import com.cretas.aims.dto.production.ProductionPlanDTO;
 import com.cretas.aims.dto.production.ProductionPlanMaterialAdvisoryDTO;
 import com.cretas.aims.dto.production.ProductionSettlementRequest;
 import com.cretas.aims.dto.production.ProductionSettlementResponse;
+import com.cretas.aims.dto.production.ProductionTransitClearingRequest;
 import com.cretas.aims.dto.production.ProductionWarehouseReceiptRequest;
 import com.cretas.aims.dto.production.ProductionWarehouseReceiptResponse;
 import com.cretas.aims.entity.ProductionBatch;
@@ -128,6 +129,10 @@ public interface ProductionPlanService {
     ProductionWarehouseReceiptResponse confirmWarehouseReceipt(String factoryId, String planId,
                                                                ProductionWarehouseReceiptRequest request,
                                                                Long receivedBy);
+
+    ProductionWarehouseReceiptResponse clearProductionTransitLedger(String factoryId, String planId,
+                                                                    ProductionTransitClearingRequest request,
+                                                                    Long clearedBy);
      /**
      * 取消生产计划
       */

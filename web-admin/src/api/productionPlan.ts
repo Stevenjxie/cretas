@@ -117,6 +117,11 @@ export interface ProductionWarehouseReceiptResponse {
   warnings?: string[]
 }
 
+export interface ProductionTransitClearingRequest {
+  clearingReason: string
+  clearingNote?: string | null
+}
+
 export function getProductionSettlement(factoryId: string, planId: string) {
   return get<ProductionSettlementStatus>(`/${factoryId}/production-plans/${planId}/settlement`)
 }
@@ -127,6 +132,14 @@ export function confirmProductionWarehouseReceipt(
   data: ProductionWarehouseReceiptRequest,
 ) {
   return post<ProductionWarehouseReceiptResponse>(`/${factoryId}/production-plans/${planId}/warehouse-receipt`, data)
+}
+
+export function clearProductionTransitLedger(
+  factoryId: string,
+  planId: string,
+  data: ProductionTransitClearingRequest,
+) {
+  return post<ProductionWarehouseReceiptResponse>(`/${factoryId}/production-plans/${planId}/transit-ledger/clear`, data)
 }
 
 /** SP2: WIP 半成品可用库存列表 (GET /wip/available) */

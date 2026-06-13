@@ -91,6 +91,11 @@ public interface MaterialBatchService {
     List<MaterialBatchDTO> getMaterialBatchesByStatus(String factoryId, MaterialBatchStatus status,
                                                       String productTypeId);
 
+    default List<MaterialBatchDTO> getMaterialBatchesByStatus(String factoryId, MaterialBatchStatus status,
+                                                              String productTypeId, String warehouseId) {
+        return getMaterialBatchesByStatus(factoryId, status, productTypeId);
+    }
+
      /**
      * 获取在制品 (WIP) 批次列表 — 状态 = PRODUCING_RESERVED, 当前工厂.
      * Sprint 4 Wave 2 M-WIP-1: 关联到进行中的生产批次的物料批次。

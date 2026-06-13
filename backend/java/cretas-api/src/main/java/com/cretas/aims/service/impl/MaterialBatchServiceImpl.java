@@ -682,9 +682,22 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
     @Override
     public List<MaterialBatchDTO> getMaterialBatchesByStatus(String factoryId, MaterialBatchStatus status,
                                                               String productTypeId) {
-        // 无 productTypeId → 直接走旧逻辑 (不过滤)
+        return getMaterialBatchesByStatus(factoryId, status, productTypeId, null);
+    }
+
+    @Override
+    public List<MaterialBatchDTO> getMaterialBatchesByStatus(String factoryId, MaterialBatchStatus status,
+                                                              String productTypeId, String warehouseId) {
+        List<MaterialBatch> statusBatches = materialBatchRepository.findByFactoryIdAndStatus(factoryId, status)
+                .stream()
+                .filter(batch -> warehouseId == null || warehouseId.isBlank() || warehouseId.equals(batch.getWarehouseId()))
+                .collect(Collectors.toList());
+
+        // 无 productTypeId → 只按状态/仓库过滤
         if (productTypeId == null || productTypeId.isBlank()) {
-            return getMaterialBatchesByStatus(factoryId, status);
+            return statusBatches.stream()
+                    .map(materialBatchMapper::toDTO)
+                    .collect(Collectors.toList());
         }
 
         // 1. 查产品的当前 BOM (is_current, 不论 DRAFT/ACTIVE — 定义即生效, 无需"激活"仪式)
@@ -692,11 +705,11 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
                 .findByFactoryIdAndProductTypeIdAndIsCurrentTrue(
                         factoryId, productTypeId);
 
-        // 2. FALLBACK: 无 ACTIVE BOM → 返回全部 (不阻断操作员)
+        // 2. 无当前 BOM → 返回空, 由前端明确提示先维护 BOM, 避免选错料仍可结单
         if (activeRecipe.isEmpty()) {
-            log.debug("BOM 过滤 fallback: 产品 {} 无 ACTIVE BOM, 返回全部 {} 批次",
+            log.debug("BOM 过滤: 产品 {} 无当前 BOM, 返回空 {} 批次",
                     productTypeId, status);
-            return getMaterialBatchesByStatus(factoryId, status);
+            return Collections.emptyList();
         }
 
         // 3. 取 BOM 明细原料类型集合
@@ -706,30 +719,22 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
                 .map(item -> item.getMaterialTypeId())
                 .collect(Collectors.toList());
 
-        // 4. FALLBACK: BOM 无明细行 → 返回全部 (不阻断操作员)
+        // 4. BOM 无明细行 → 返回空, 避免文员随意选非 BOM 原料
         if (materialTypeIds.isEmpty()) {
-            log.debug("BOM 过滤 fallback: 产品 {} 的 ACTIVE BOM {} 无明细行, 返回全部批次",
+            log.debug("BOM 过滤: 产品 {} 的当前 BOM {} 无明细行, 返回空批次",
                     productTypeId, activeRecipe.get().getId());
-            return getMaterialBatchesByStatus(factoryId, status);
+            return Collections.emptyList();
         }
 
-        // 5. 按状态查全部批次, 再按 BOM 原料类型过滤
+        // 5. 按状态/仓库结果, 再按 BOM 原料类型过滤
         Set<String> bomMaterialTypeIds = new HashSet<>(materialTypeIds);
-        List<MaterialBatchDTO> filtered = materialBatchRepository
-                .findByFactoryIdAndStatus(factoryId, status)
-                .stream()
+        List<MaterialBatchDTO> filtered = statusBatches.stream()
                 .filter(b -> bomMaterialTypeIds.contains(b.getMaterialTypeId()))
                 .map(materialBatchMapper::toDTO)
                 .collect(Collectors.toList());
 
         log.debug("BOM 过滤: 产品 {} BOM 含 {} 原料类型, 从全部 AVAILABLE 批次中筛出 {} 批",
                 productTypeId, bomMaterialTypeIds.size(), filtered.size());
-
-        // 6. FALLBACK: 过滤后为空 (BOM 与现有库存无交集) → 返回全部 (不阻断操作员)
-        if (filtered.isEmpty()) {
-            log.debug("BOM 过滤 fallback: 过滤后无匹配批次 (BOM 原料与库存无交集), 返回全部批次");
-            return getMaterialBatchesByStatus(factoryId, status);
-        }
 
         return filtered;
     }
