@@ -50,6 +50,14 @@ const baseRoutes: RouteRecordRaw[] = [
     name: 'PublicShare',
     component: () => import('@/views/share/SharePage.vue'),
     meta: { requiresAuth: false, title: '分享内容' }
+  },
+  // 免登录演示入口: 打开即以演示账号 (qhj_prod) 自动登录并跳转 /dashboard.
+  // requiresAuth=false → guards.ts 跳过认证检查 (见 whiteList)。
+  {
+    path: '/demo',
+    name: 'Demo',
+    component: () => import('@/views/demo/index.vue'),
+    meta: { requiresAuth: false, title: '演示' }
   }
 ];
 

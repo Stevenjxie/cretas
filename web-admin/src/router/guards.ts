@@ -6,7 +6,7 @@ import type { Router } from 'vue-router';
 import type { ModuleName } from '@/store/modules/permission';
 
 // 白名单路由 - 不需要登录
-const whiteList = ['/login', '/403', '/404', '/mobile-only'];
+const whiteList = ['/login', '/403', '/404', '/mobile-only', '/demo'];
 
 // Mobile 专属角色 - 不允许登录 Web 端
 // 参考原型文档: docs/prd/prototype/index.html - 14角色权限矩阵
