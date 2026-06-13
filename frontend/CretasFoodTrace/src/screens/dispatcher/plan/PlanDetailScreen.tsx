@@ -36,6 +36,7 @@ import { isAxiosError } from 'axios';
 import { schedulingApiClient } from '../../../services/api/schedulingApiClient';
 import { productionPlanApiClient } from '../../../services/api/productionPlanApiClient';
 import { processTaskApiClient } from '../../../services/api/processTaskApiClient';
+import { safePrint } from '../../../services/api/printApiClient';
 
 // 主题颜色
 const DISPATCHER_THEME = {
@@ -768,6 +769,15 @@ export default function PlanDetailScreen() {
               <Text style={[styles.rescheduleButtonText, { color: DISPATCHER_THEME.success }]}>生成工序任务</Text>
             </TouchableOpacity>
           )
+        ) : null}
+        {plan?.id ? (
+          <TouchableOpacity
+            style={styles.rescheduleButton}
+            onPress={() => { void safePrint('production-work-order', plan.id); }}
+          >
+            <Ionicons name="print-outline" size={16} color={DISPATCHER_THEME.primary} />
+            <Text style={[styles.rescheduleButtonText, { color: DISPATCHER_THEME.primary }]}>打印工单</Text>
+          </TouchableOpacity>
         ) : null}
         {canReschedule && (
           <TouchableOpacity

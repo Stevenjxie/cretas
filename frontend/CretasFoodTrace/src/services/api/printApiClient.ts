@@ -6,7 +6,8 @@
  *   GET /api/mobile/{factoryId}/print/sales-order/{id}        @RequirePermission(sales:read | sales:read_write)
  *   GET /api/mobile/{factoryId}/print/purchase-order/{id}     @RequirePermission(procurement:read | procurement:read_write)
  *   GET /api/mobile/{factoryId}/print/quotation/{id}          @RequirePermission(sales:read | sales:read_write)
- *   GET /api/mobile/{factoryId}/print/production-task/{id}    @RequirePermission(production:read | production:read_write)
+ *   GET /api/mobile/{factoryId}/print/production-work-order/{id}
+ *                                                             @RequirePermission(production:read | production:read_write)
  *   GET /api/mobile/{factoryId}/print/material-requisition/{id}
  *                                                             @RequirePermission(procurement:read | procurement:read_write |
  *                                                                                warehouse:read | warehouse:read_write)
@@ -35,7 +36,7 @@ export type PrintDocType =
   | 'sales-order'
   | 'purchase-order'
   | 'quotation'
-  | 'production-task'
+  | 'production-work-order'
   | 'material-requisition';
 
 /** Backend Day-6 MVP accepts query overrides as placeholder data. */
@@ -149,8 +150,8 @@ class PrintApiClient {
     return this.download(factoryId, 'quotation', id, options);
   }
 
-  printProductionTask(factoryId: string, id: string, options?: PrintOptions): Promise<PrintResult> {
-    return this.download(factoryId, 'production-task', id, options);
+  printProductionWorkOrder(factoryId: string, id: string, options?: PrintOptions): Promise<PrintResult> {
+    return this.download(factoryId, 'production-work-order', id, options);
   }
 
   printMaterialRequisition(factoryId: string, id: string, options?: PrintOptions): Promise<PrintResult> {
@@ -164,7 +165,7 @@ const PRINT_DISPATCH: Record<PrintDocType, (factoryId: string, id: string, optio
   'sales-order': (f, i, o) => printApiClient.printSalesOrder(f, i, o),
   'purchase-order': (f, i, o) => printApiClient.printPurchaseOrder(f, i, o),
   quotation: (f, i, o) => printApiClient.printQuotation(f, i, o),
-  'production-task': (f, i, o) => printApiClient.printProductionTask(f, i, o),
+  'production-work-order': (f, i, o) => printApiClient.printProductionWorkOrder(f, i, o),
   'material-requisition': (f, i, o) => printApiClient.printMaterialRequisition(f, i, o),
 };
 
