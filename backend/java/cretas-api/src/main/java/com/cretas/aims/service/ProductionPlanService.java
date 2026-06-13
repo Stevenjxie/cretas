@@ -6,6 +6,8 @@ import com.cretas.aims.dto.common.PageResponse;
 import com.cretas.aims.dto.production.CreateProductionPlanRequest;
 import com.cretas.aims.dto.production.ProductionPlanDTO;
 import com.cretas.aims.dto.production.ProductionPlanMaterialAdvisoryDTO;
+import com.cretas.aims.dto.production.ProductionSettlementRequest;
+import com.cretas.aims.dto.production.ProductionSettlementResponse;
 import com.cretas.aims.entity.ProductionBatch;
 import com.cretas.aims.entity.enums.ProductionPlanStatus;
 import java.io.InputStream;
@@ -115,6 +117,9 @@ public interface ProductionPlanService {
      * 完成生产
       */
     ProductionPlanDTO completeProduction(String factoryId, String planId, BigDecimal actualQuantity);
+
+    ProductionSettlementResponse settleProduction(String factoryId, String planId,
+                                                  ProductionSettlementRequest request, Long settledBy);
      /**
      * 取消生产计划
       */

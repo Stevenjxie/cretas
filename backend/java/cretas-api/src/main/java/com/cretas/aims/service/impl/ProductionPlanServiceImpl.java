@@ -9,6 +9,8 @@ import com.cretas.aims.dto.production.DeliveryWarnDTO;
 import com.cretas.aims.dto.production.ProductionPlanDTO;
 import com.cretas.aims.dto.production.ProductionPlanImportDTO;
 import com.cretas.aims.dto.production.ProductionPlanMaterialAdvisoryDTO;
+import com.cretas.aims.dto.production.ProductionSettlementRequest;
+import com.cretas.aims.dto.production.ProductionSettlementResponse;
 import com.cretas.aims.entity.*;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
 import com.cretas.aims.entity.enums.PlanSourceType;
@@ -171,6 +173,18 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
      */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.repository.FactorySettingsRepository factorySettingsRepository;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private ProductionSettlementRepository productionSettlementRepository;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private ProductionSettlementConsumptionRepository productionSettlementConsumptionRepository;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private ProductionSettlementLaborRepository productionSettlementLaborRepository;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private SemiFinishedInventoryRepository semiFinishedInventoryRepository;
 
     /**
      * 解析某工厂的"免工序报工默认值" (Fable 审计修复 — 多租户安全).
@@ -1189,6 +1203,12 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             throw new BusinessException(403, "无权操作该生产计划")
                     .withHint("当前生产计划不属于该工厂, 无法操作");
         }
+        if (isLiushanmenFactory(factoryId)) {
+            throw new BusinessException(409, "六扇门生产完成必须先核对结单")
+                    .withCode("PRODUCTION_SETTLEMENT_REQUIRED")
+                    .withHint("请使用“核对结单”录入实际产量、实际领用明细和人效后再完成")
+                    .withHintTarget("核对结单");
+        }
         if (plan.getStatus() != ProductionPlanStatus.IN_PROGRESS
                 && plan.getStatus() != ProductionPlanStatus.PENDING) {
             throw new BusinessException(409, "只能完成未完成的生产计划")
@@ -1247,6 +1267,326 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
 
         log.info("完成生产: planId={}, actualQuantity={}", planId, actualQuantity);
         return toDTOWithConversionInfo(plan);
+    }
+
+    @Override
+    @Transactional
+    public ProductionSettlementResponse settleProduction(String factoryId, String planId,
+                                                         ProductionSettlementRequest request, Long settledBy) {
+        if (request == null) {
+            throw new BusinessException(400, "结单内容不能为空").withHintTarget("核对结单");
+        }
+        if (isBlank(request.getIdempotencyKey())) {
+            throw new BusinessException(400, "缺少幂等键 idempotencyKey")
+                    .withHint("请刷新页面后重试, 系统会自动生成结单提交键")
+                    .withHintTarget("核对结单");
+        }
+
+        ProductionPlan plan = productionPlanRepository.findByIdAndFactoryId(planId, factoryId)
+                .orElseThrow(() -> new ResourceNotFoundException("生产计划", "id", planId));
+
+        Optional<ProductionSettlement> sameRequest = productionSettlementRepository
+                .findByFactoryIdAndProductionPlanIdAndIdempotencyKeyAndDeletedAtIsNull(
+                        factoryId, planId, request.getIdempotencyKey());
+        if (sameRequest.isPresent()) {
+            return toSettlementResponse(sameRequest.get(),
+                    List.of("该结单请求已提交过, 已返回原结单结果"));
+        }
+        productionSettlementRepository.findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(factoryId, planId)
+                .ifPresent(existing -> {
+                    throw new BusinessException(409, "该生产计划已结单, 不能重复完成")
+                            .withCode("PRODUCTION_ALREADY_SETTLED")
+                            .withHint("请刷新生产计划列表查看最新状态")
+                            .withHintTarget("核对结单");
+                });
+
+        validateSettlementRequest(plan, request);
+
+        List<ProductionSettlementConsumption> consumptionLines = new ArrayList<>();
+        appendConsumptionLines(factoryId, planId, "RAW_MATERIAL", request.getRawMaterialConsumptions(), consumptionLines);
+        appendConsumptionLines(factoryId, planId, "SEMI_FINISHED", request.getSemiFinishedConsumptions(), consumptionLines);
+        appendConsumptionLines(factoryId, planId, "AUXILIARY", request.getAuxiliaryConsumptions(), consumptionLines);
+
+        ProductionSettlement settlement = new ProductionSettlement();
+        settlement.setId(UUID.randomUUID().toString());
+        settlement.setFactoryId(factoryId);
+        settlement.setProductionPlanId(planId);
+        settlement.setPlanNumber(plan.getPlanNumber());
+        settlement.setIdempotencyKey(request.getIdempotencyKey());
+        settlement.setPlannedQuantity(zeroIfNull(plan.getPlannedQuantity()));
+        settlement.setActualFinishedQuantity(zeroIfNull(request.getActualFinishedQuantity()));
+        settlement.setActualSemiFinishedQuantity(zeroIfNull(request.getActualSemiFinishedQuantity()));
+        settlement.setQuantityUnit(trimToNull(request.getQuantityUnit()));
+        settlement.setQuantityVarianceReason(trimToNull(request.getQuantityVarianceReason()));
+        settlement.setQuantityVarianceNote(trimToNull(request.getQuantityVarianceNote()));
+        settlement.setMaterialVarianceReason(trimToNull(request.getMaterialVarianceReason()));
+        settlement.setMaterialVarianceNote(trimToNull(request.getMaterialVarianceNote()));
+        settlement.setLaborDeferredReason(trimToNull(request.getLaborDeferredReason()));
+        settlement.setPlanStatusAfter(ProductionPlanStatus.COMPLETED);
+        settlement.setPostingStatus("PENDING_WAREHOUSE_RECEIPT");
+        settlement.setPostingMessage("已完成结单和实际领用扣减, 等待仓库确认实收后入库");
+        settlement.setSettledBy(settledBy);
+        settlement.setSettledAt(LocalDateTime.now());
+        settlement = productionSettlementRepository.save(settlement);
+
+        for (ProductionSettlementConsumption line : consumptionLines) {
+            line.setSettlementId(settlement.getId());
+        }
+        postConsumptionToInventory(factoryId, consumptionLines);
+        productionSettlementConsumptionRepository.saveAll(consumptionLines);
+        productionSettlementLaborRepository.saveAll(toLaborLines(factoryId, planId, settlement.getId(), request.getLaborSegments()));
+
+        plan.setStatus(ProductionPlanStatus.COMPLETED);
+        if (plan.getStartTime() == null) {
+            plan.setStartTime(LocalDateTime.now());
+        }
+        plan.setEndTime(LocalDateTime.now());
+        plan.setActualQuantity(settlement.getActualFinishedQuantity());
+        productionPlanRepository.save(plan);
+
+        List<String> warnings = List.of("已按实际领用扣减原料/半成品库存; 成品需仓库确认实收后再入库");
+        log.info("六扇门生产结单完成: factoryId={}, planId={}, settlementId={}, finished={}, semiFinished={}",
+                factoryId, planId, settlement.getId(),
+                settlement.getActualFinishedQuantity(), settlement.getActualSemiFinishedQuantity());
+        return toSettlementResponse(settlement, warnings);
+    }
+
+    private void validateSettlementRequest(ProductionPlan plan, ProductionSettlementRequest request) {
+        if (plan.getStatus() != ProductionPlanStatus.IN_PROGRESS
+                && plan.getStatus() != ProductionPlanStatus.PENDING) {
+            throw new BusinessException(409, "只能结单未完成的生产计划")
+                    .withHint("请刷新生产计划列表查看最新状态")
+                    .withHintTarget("核对结单");
+        }
+
+        BigDecimal finished = zeroIfNull(request.getActualFinishedQuantity());
+        BigDecimal semiFinished = zeroIfNull(request.getActualSemiFinishedQuantity());
+        if (finished.add(semiFinished).compareTo(BigDecimal.ZERO) <= 0) {
+            throw new BusinessException(400, "实际产量必须大于 0")
+                    .withHint("请录入实际成品产量或半成品产量")
+                    .withHintTarget("实际产量");
+        }
+
+        BigDecimal planned = zeroIfNull(plan.getPlannedQuantity());
+        if (planned.compareTo(BigDecimal.ZERO) > 0
+                && finished.compareTo(planned) > 0
+                && isBlank(request.getQuantityVarianceReason())) {
+            throw new BusinessException(409, "实际产量超过计划产量, 必须选择超产原因")
+                    .withCode("PRODUCTION_OVER_PLAN_REASON_REQUIRED")
+                    .withHint("请选择超产原因后再提交; 计划产量: " + planned + ", 实际产量: " + finished)
+                    .withHintTarget("超产原因");
+        }
+
+        if (isEmpty(request.getRawMaterialConsumptions())
+                && isEmpty(request.getSemiFinishedConsumptions())
+                && isEmpty(request.getAuxiliaryConsumptions())
+                && isBlank(request.getMaterialVarianceReason())) {
+            throw new BusinessException(400, "必须录入实际领用明细")
+                    .withHint("请至少录入原料、半成品或辅料领用; 确无领用时请选择物料差异原因")
+                    .withHintTarget("实际领用");
+        }
+
+        if (isEmpty(request.getLaborSegments()) && isBlank(request.getLaborDeferredReason())) {
+            throw new BusinessException(400, "必须录入人效或选择工时延期原因")
+                    .withHint("请录入工时/人数, 或选择“工时稍后补录”等延期原因")
+                    .withHintTarget("人效");
+        }
+    }
+
+    private void appendConsumptionLines(String factoryId, String planId, String sourceType,
+                                        List<ProductionSettlementRequest.ConsumptionLine> requestLines,
+                                        List<ProductionSettlementConsumption> target) {
+        if (isEmpty(requestLines)) {
+            return;
+        }
+        for (ProductionSettlementRequest.ConsumptionLine requestLine : requestLines) {
+            ProductionSettlementConsumption line = new ProductionSettlementConsumption();
+            line.setFactoryId(factoryId);
+            line.setProductionPlanId(planId);
+            line.setSourceType(sourceType);
+            line.setMaterialBatchId(trimToNull(requestLine.getMaterialBatchId()));
+            line.setSemiFinishedInventoryId(requestLine.getSemiFinishedInventoryId());
+            line.setMaterialTypeId(trimToNull(requestLine.getMaterialTypeId()));
+            line.setBatchNumber(trimToNull(requestLine.getBatchNumber()));
+            line.setQuantity(requestLine.getQuantity());
+            line.setUnit(trimToNull(requestLine.getUnit()));
+            line.setWarehouseId(trimToNull(requestLine.getWarehouseId()));
+            line.setNote(trimToNull(requestLine.getNote()));
+            line.setAvailableBefore(resolveAvailableBefore(factoryId, sourceType, requestLine));
+            target.add(line);
+        }
+    }
+
+    private BigDecimal resolveAvailableBefore(String factoryId, String sourceType,
+                                              ProductionSettlementRequest.ConsumptionLine line) {
+        if ("SEMI_FINISHED".equals(sourceType)) {
+            if (line.getSemiFinishedInventoryId() == null) {
+                throw new BusinessException(400, "半成品领用必须选择半成品库存")
+                        .withHintTarget("半成品领用");
+            }
+            SemiFinishedInventory inventory = semiFinishedInventoryRepository.findByIdForUpdate(line.getSemiFinishedInventoryId())
+                    .orElseThrow(() -> new BusinessException(404, "半成品库存不存在: " + line.getSemiFinishedInventoryId())
+                            .withHintTarget("半成品领用"));
+            if (!factoryId.equals(inventory.getFactoryId())) {
+                throw new BusinessException(403, "无权领用其他工厂的半成品库存")
+                        .withHintTarget("半成品领用");
+            }
+            BigDecimal available = zeroIfNull(inventory.getAvailableQuantity());
+            ensureQuantityWithinAvailable("半成品库存 " + inventory.getIntermediateBatchNo(), line.getQuantity(), available, "半成品领用");
+            return available;
+        }
+
+        if (isBlank(line.getMaterialBatchId())) {
+            throw new BusinessException(400, "原料/辅料领用必须选择批次")
+                    .withHintTarget("实际领用");
+        }
+        MaterialBatch batch = materialBatchRepository.findByIdAndFactoryId(line.getMaterialBatchId(), factoryId)
+                .orElseThrow(() -> new BusinessException(404, "原料批次不存在: " + line.getMaterialBatchId())
+                        .withHintTarget("实际领用"));
+        BigDecimal available = zeroIfNull(batch.getCurrentQuantity());
+        ensureQuantityWithinAvailable("原料批次 " + batch.getBatchNumber(), line.getQuantity(), available, "实际领用");
+        if (line.getBatchNumber() == null) {
+            line.setBatchNumber(batch.getBatchNumber());
+        }
+        if (line.getMaterialTypeId() == null) {
+            line.setMaterialTypeId(batch.getMaterialTypeId());
+        }
+        if (line.getUnit() == null) {
+            line.setUnit(batch.getQuantityUnit());
+        }
+        if (line.getWarehouseId() == null) {
+            line.setWarehouseId(batch.getWarehouseId());
+        }
+        return available;
+    }
+
+    private void ensureQuantityWithinAvailable(String label, BigDecimal requested, BigDecimal available, String hintTarget) {
+        BigDecimal qty = zeroIfNull(requested);
+        if (qty.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new BusinessException(400, label + " 领用数量必须大于 0")
+                    .withHintTarget(hintTarget);
+        }
+        if (qty.compareTo(available) > 0) {
+            throw new BusinessException(409, label + " 领用超出可用量; 可用: " + available + ", 本次领用: " + qty)
+                    .withCode("PRODUCTION_CONSUMPTION_EXCEEDS_AVAILABLE")
+                    .withHint("请将领用数量调整到不超过 " + available)
+                    .withHintTarget(hintTarget);
+        }
+    }
+
+    private void postConsumptionToInventory(String factoryId, List<ProductionSettlementConsumption> lines) {
+        if (isEmpty(lines)) {
+            return;
+        }
+        for (ProductionSettlementConsumption line : lines) {
+            if ("SEMI_FINISHED".equals(line.getSourceType())) {
+                postSemiFinishedConsumption(factoryId, line);
+            } else {
+                postMaterialBatchConsumption(factoryId, line);
+            }
+        }
+    }
+
+    private void postMaterialBatchConsumption(String factoryId, ProductionSettlementConsumption line) {
+        MaterialBatch batch = materialBatchRepository
+                .findByIdAndFactoryIdForUpdate(line.getMaterialBatchId(), factoryId)
+                .orElseThrow(() -> new BusinessException(404, "原料批次不存在: " + line.getMaterialBatchId())
+                        .withHintTarget("实际领用"));
+        BigDecimal available = zeroIfNull(batch.getCurrentQuantity());
+        ensureQuantityWithinAvailable("原料批次 " + batch.getBatchNumber(), line.getQuantity(), available, "实际领用");
+
+        BigDecimal qty = zeroIfNull(line.getQuantity());
+        batch.setUsedQuantity(zeroIfNull(batch.getUsedQuantity()).add(qty));
+        batch.setLastUsedAt(LocalDateTime.now());
+        if (batch.getCurrentQuantity().compareTo(BigDecimal.ZERO) <= 0) {
+            batch.setStatus(MaterialBatchStatus.USED_UP);
+        }
+        materialBatchRepository.save(batch);
+    }
+
+    private void postSemiFinishedConsumption(String factoryId, ProductionSettlementConsumption line) {
+        SemiFinishedInventory inventory = semiFinishedInventoryRepository.findByIdForUpdate(line.getSemiFinishedInventoryId())
+                .orElseThrow(() -> new BusinessException(404, "半成品库存不存在: " + line.getSemiFinishedInventoryId())
+                        .withHintTarget("半成品领用"));
+        if (!factoryId.equals(inventory.getFactoryId())) {
+            throw new BusinessException(403, "无权领用其他工厂的半成品库存")
+                    .withHintTarget("半成品领用");
+        }
+        BigDecimal available = zeroIfNull(inventory.getAvailableQuantity());
+        ensureQuantityWithinAvailable("半成品库存 " + inventory.getIntermediateBatchNo(), line.getQuantity(), available, "半成品领用");
+
+        BigDecimal qty = zeroIfNull(line.getQuantity());
+        BigDecimal remaining = available.subtract(qty);
+        inventory.setConsumedQuantity(zeroIfNull(inventory.getConsumedQuantity()).add(qty));
+        inventory.setAvailableQuantity(remaining);
+        inventory.setStatus(remaining.compareTo(BigDecimal.ZERO) <= 0
+                ? SemiFinishedInventory.Status.DEPLETED
+                : SemiFinishedInventory.Status.AVAILABLE);
+        semiFinishedInventoryRepository.save(inventory);
+    }
+
+    private List<ProductionSettlementLabor> toLaborLines(String factoryId, String planId, String settlementId,
+                                                         List<ProductionSettlementRequest.LaborSegment> requestLines) {
+        if (isEmpty(requestLines)) {
+            return Collections.emptyList();
+        }
+        List<ProductionSettlementLabor> result = new ArrayList<>();
+        for (ProductionSettlementRequest.LaborSegment requestLine : requestLines) {
+            ProductionSettlementLabor line = new ProductionSettlementLabor();
+            line.setSettlementId(settlementId);
+            line.setFactoryId(factoryId);
+            line.setProductionPlanId(planId);
+            line.setWorkerId(requestLine.getWorkerId());
+            line.setWorkerName(trimToNull(requestLine.getWorkerName()));
+            line.setWorkType(trimToNull(requestLine.getWorkType()));
+            line.setMinutes(requestLine.getMinutes());
+            line.setHeadcount(requestLine.getHeadcount() != null ? requestLine.getHeadcount() : 1);
+            line.setHourlyRate(requestLine.getHourlyRate());
+            line.setLaborCost(requestLine.getLaborCost());
+            line.setNote(trimToNull(requestLine.getNote()));
+            result.add(line);
+        }
+        return result;
+    }
+
+    private ProductionSettlementResponse toSettlementResponse(ProductionSettlement settlement, List<String> warnings) {
+        return ProductionSettlementResponse.builder()
+                .settlementId(settlement.getId())
+                .productionPlanId(settlement.getProductionPlanId())
+                .planNumber(settlement.getPlanNumber())
+                .status(settlement.getPlanStatusAfter() != null ? settlement.getPlanStatusAfter().name() : null)
+                .plannedQuantity(settlement.getPlannedQuantity())
+                .actualFinishedQuantity(settlement.getActualFinishedQuantity())
+                .actualSemiFinishedQuantity(settlement.getActualSemiFinishedQuantity())
+                .postingStatus(settlement.getPostingStatus())
+                .warnings(warnings != null ? warnings : Collections.emptyList())
+                .createdClearingLedgerIds(Collections.emptyList())
+                .createdInventoryTxnIds(Collections.emptyList())
+                .build();
+    }
+
+    private boolean isLiushanmenFactory(String factoryId) {
+        return "F006".equalsIgnoreCase(factoryId);
+    }
+
+    private boolean isBlank(String value) {
+        return value == null || value.trim().isEmpty();
+    }
+
+    private String trimToNull(String value) {
+        if (value == null) {
+            return null;
+        }
+        String trimmed = value.trim();
+        return trimmed.isEmpty() ? null : trimmed;
+    }
+
+    private boolean isEmpty(Collection<?> values) {
+        return values == null || values.isEmpty();
+    }
+
+    private BigDecimal zeroIfNull(BigDecimal value) {
+        return value != null ? value : BigDecimal.ZERO;
     }
 
     @Override
