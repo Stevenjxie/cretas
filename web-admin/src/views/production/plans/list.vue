@@ -629,8 +629,9 @@ async function handleStart(row: TableRow) {
 }
 
 // ==================== 核对结单 dialog (#742 / 6.12 revised) ====================
-// Wave 1 只落前端工作流与防呆。结构化结单后端 Wave 2 接入前，不伪造提交成功。
-const STRUCTURED_SETTLEMENT_API_READY = false;
+// Backend `/settle` records clerk-reviewed facts. This web flow only submits
+// facts that are visible in this dialog; detailed material/labor lines remain
+// explicit follow-up input and are not fabricated here.
 const SETTLEMENT_VARIANCE_REASON_OPTIONS = [
   { value: '现场称重差异', label: '现场称重差异' },
   { value: '原料状态差异', label: '原料状态差异' },
@@ -683,17 +684,20 @@ const completeVarianceReasonReady = computed(() => {
   if (reason !== '其他') return true;
   return Boolean(completeForm.value.otherVarianceReason.trim());
 });
-const settlementApiPendingMessage = '结构化结单后端 API 尚未接入，本页先用于核对流程、防呆和 E2E。请等待 Wave 2 接入后提交结单。';
 const completeSubmitDisabledReason = computed(() => {
   if (!completeActualQuantity.value || completeActualQuantity.value <= 0) return '请填写有效的实际产量';
   if (!completeVarianceReasonReady.value) return '实际产量超过计划时必须选择差异原因';
   if (!completeForm.value.rawMaterialChecked) return '请先核对原料/辅料实际领用';
   if (!completeForm.value.semiFinishedChecked) return '请先核对半成品实际领用或确认不适用';
   if (!completeForm.value.laborChecked) return '请先核对工时/人数或确认延期原因';
-  if (!STRUCTURED_SETTLEMENT_API_READY) return settlementApiPendingMessage;
   return '';
 });
 const completeCanSubmit = computed(() => completeSubmitDisabledReason.value === '');
+
+function buildSettlementIdempotencyKey(row: TableRow): string {
+  const planId = String(row.id || row.planNumber || 'unknown');
+  return `web-settle-${planId}-${Date.now()}`;
+}
 
 function handleComplete(row: TableRow) {
   if (actionLoading.value) return;
@@ -717,7 +721,7 @@ async function submitComplete() {
   if (!completeRow.value) return;
   if (!completeCanSubmit.value) {
     ElMessage({
-      message: completeSubmitDisabledReason.value || settlementApiPendingMessage,
+      message: completeSubmitDisabledReason.value || '请先完成结单核对项',
       type: 'error',
       duration: 0,
       showClose: true,
@@ -727,13 +731,15 @@ async function submitComplete() {
   actionLoading.value = true;
   try {
     const response = await post(`/${factoryId.value}/production-plans/${completeRow.value.id}/settle`, {
-      actualQuantity: completeActualQuantity.value,
-      semiFinishedOutputQuantity: Number(completeForm.value.semiFinishedOutputQuantity || 0),
-      workerCount: Number(completeForm.value.workerCount || 0),
-      workMinutes: Number(completeForm.value.workMinutes || 0),
-      varianceReason: completeForm.value.varianceReason === '其他'
+      idempotencyKey: buildSettlementIdempotencyKey(completeRow.value),
+      actualFinishedQuantity: completeActualQuantity.value,
+      actualSemiFinishedQuantity: Number(completeForm.value.semiFinishedOutputQuantity || 0),
+      quantityUnit: completeRow.value.unit || completeRow.value.quantityUnit || null,
+      quantityVarianceReason: completeForm.value.varianceReason === '其他'
         ? completeForm.value.otherVarianceReason.trim()
         : completeForm.value.varianceReason,
+      materialVarianceReason: 'PC文员已核对实际领用，明细待后续补录',
+      laborDeferredReason: 'PC文员已核对工时人数，明细待后续补录',
     });
     if (response.success) {
       ElMessage.success(response.message || '生产结单已提交');
@@ -742,8 +748,9 @@ async function submitComplete() {
     } else {
       ElMessage({ message: response.message || '结单提交失败', type: 'error', duration: 0, showClose: true });
     }
-  } catch (error: any) {
+  } catch (error: unknown) {
     if (error !== 'cancel') console.error('[提交失败]', error);
+    handleCatchError(error, '结单提交失败，请检查网络');
   } finally {
     actionLoading.value = false;
   }
@@ -1786,14 +1793,6 @@ function handleAiFill(params: TableRow) {
           :closable="false"
           style="margin-bottom: 12px"
         />
-        <el-alert
-          v-if="!STRUCTURED_SETTLEMENT_API_READY"
-          :title="settlementApiPendingMessage"
-          type="info"
-          show-icon
-          :closable="false"
-          style="margin-bottom: 12px"
-        />
         <div class="settlement-context">
           <div>
             <div class="settlement-context-label">计划单号</div>
@@ -1858,7 +1857,7 @@ function handleAiFill(params: TableRow) {
             style="width: 100%"
           />
           <div class="settlement-help">
-            同一生产计划可以同时产成品和半成品；结构化过账由后端 Wave 2/4 接入。
+            同一生产计划可以同时产成品和半成品；本次结单记录事实，库存/成本过账按后续过账流程处理。
           </div>
         </el-form-item>
 
@@ -1870,7 +1869,7 @@ function handleAiFill(params: TableRow) {
               <el-tag v-if="completeAdvisory?.hasWarning" type="danger" size="small">有缺料预警</el-tag>
               <el-tag v-else-if="completeAdvisory" type="success" size="small">库存参考正常</el-tag>
               <el-tag v-else type="info" size="small">暂无参考数据</el-tag>
-              <p>{{ completeAdvisory?.message || '结构化领用明细待后端接入；此处先要求文员确认已核对纸单/现场记录。' }}</p>
+              <p>{{ completeAdvisory?.message || '此处要求文员确认已核对纸单/现场记录；批次级领用明细不在本弹窗伪造。' }}</p>
               <el-checkbox v-model="completeForm.rawMaterialChecked">
                 已核对原料/辅料实际领用或确认不适用
               </el-checkbox>
