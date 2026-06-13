@@ -239,6 +239,14 @@ function varianceClass(val: number | null): string {
   return val > 0 ? 'variance-up' : val < 0 ? 'variance-down' : '';
 }
 
+function formatTaxRate(rate: unknown): string {
+  if (rate == null || rate === '') return '-';
+  const numeric = Number(rate);
+  if (!Number.isFinite(numeric)) return '-';
+  const percent = numeric <= 1 ? numeric * 100 : numeric;
+  return `${percent.toFixed(2).replace(/\.?0+$/, '')}%`;
+}
+
 function priceRowClassName({ row }: { row: PriceComparison }): string {
   return row.priceAlert ? 'price-alert-row' : '';
 }
@@ -373,6 +381,9 @@ async function confirmReceive(receiveId: string) {
           <el-table-column prop="unit" label="单位" width="80" align="center" />
           <el-table-column v-if="canViewPrice" prop="unitPrice" label="单价" width="120" align="right">
             <template #default="{ row }">{{ formatAmount(row.unitPrice) }}</template>
+          </el-table-column>
+          <el-table-column v-if="canViewPrice" prop="taxRate" label="税率" width="90" align="right">
+            <template #default="{ row }">{{ formatTaxRate(row.taxRate) }}</template>
           </el-table-column>
           <el-table-column label="已收货" width="120" align="right">
             <template #default="{ row }">{{ row.receivedQuantity || 0 }}</template>

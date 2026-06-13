@@ -250,6 +250,54 @@ class PurchaseOrderPdfServiceImplTest {
     }
 
     @Test
+    @DisplayName("N4: internalVersion → admin PDF shows per-line tax rates")
+    void generatePdf_internalVersion_taxRatesVisibleForAdmin() throws Exception {
+        PurchaseOrder order = makeOrder("PO-N4-TAX", buildItems());
+        when(purchaseService.getPurchaseOrderById(FACTORY_ID, ORDER_ID)).thenReturn(order);
+        when(supplierRepository.findByIdAndFactoryId(anyString(), anyString())).thenReturn(Optional.empty());
+        when(factoryRepository.findById(FACTORY_ID)).thenReturn(Optional.empty());
+
+        byte[] pdfBytes = service.generatePurchaseOrderPdf(FACTORY_ID, ORDER_ID, false, false);
+
+        String text = extractPdfText(pdfBytes);
+        assertTrue(text.contains("税率"), "Internal PDF must show tax rate header; text=" + summarize(text));
+        assertTrue(text.contains("13%"), "Internal PDF must show 13% tax rate; text=" + summarize(text));
+        assertTrue(text.contains("9%"), "Internal PDF must show 9% tax rate; text=" + summarize(text));
+    }
+
+    @Test
+    @DisplayName("N4 RBAC: maskPrice=true → tax rates are masked with other price-sensitive fields")
+    void generatePdf_maskPriceTrue_taxRatesMasked() throws Exception {
+        PurchaseOrder order = makeOrder("PO-N4-TAX-MASK", buildItems());
+        when(purchaseService.getPurchaseOrderById(FACTORY_ID, ORDER_ID)).thenReturn(order);
+        when(supplierRepository.findByIdAndFactoryId(anyString(), anyString())).thenReturn(Optional.empty());
+        when(factoryRepository.findById(FACTORY_ID)).thenReturn(Optional.empty());
+
+        byte[] pdfBytes = service.generatePurchaseOrderPdf(FACTORY_ID, ORDER_ID, true, false);
+
+        String text = extractPdfText(pdfBytes);
+        assertTrue(text.contains("税率"), "Masked internal PDF keeps tax rate column for layout parity; text=" + summarize(text));
+        assertFalse(text.contains("13%"), "Masked internal PDF must not leak 13% tax rate; text=" + summarize(text));
+        assertFalse(text.contains("9%"), "Masked internal PDF must not leak 9% tax rate; text=" + summarize(text));
+    }
+
+    @Test
+    @DisplayName("N4/N3: externalVersion=true → external PDF removes tax rate with price columns")
+    void generatePdf_externalVersion_removesTaxRateColumn() throws Exception {
+        PurchaseOrder order = makeOrder("PO-N4-EXTERNAL", buildItems());
+        when(purchaseService.getPurchaseOrderById(FACTORY_ID, ORDER_ID)).thenReturn(order);
+        when(supplierRepository.findByIdAndFactoryId(anyString(), anyString())).thenReturn(Optional.empty());
+        when(factoryRepository.findById(FACTORY_ID)).thenReturn(Optional.empty());
+
+        byte[] pdfBytes = service.generatePurchaseOrderPdf(FACTORY_ID, ORDER_ID, false, true);
+
+        String text = extractPdfText(pdfBytes);
+        assertFalse(text.contains("税率"), "External PDF must remove tax rate column; text=" + summarize(text));
+        assertFalse(text.contains("13%"), "External PDF must not leak 13% tax rate; text=" + summarize(text));
+        assertFalse(text.contains("9%"), "External PDF must not leak 9% tax rate; text=" + summarize(text));
+    }
+
+    @Test
     @DisplayName("RBAC P0-C: 结构完整 — 即使 maskPrice=true, 货品名称 / 数量 / 单位 / 条码 / 签收区仍可见 (warehouse 仍能做收货 audit)")
     void generatePdf_maskPriceTrue_nonPriceFieldsStillVisible() throws Exception {
         PurchaseOrder order = makeOrder("PO-RBAC-STRUCT", buildItems());
@@ -326,12 +374,12 @@ class PurchaseOrderPdfServiceImplTest {
 
     private List<PurchaseOrderItem> buildItems() {
         List<PurchaseOrderItem> items = new ArrayList<>();
-        items.add(makeItem("牛腩", "100", "kg", "5.00", "10"));
-        items.add(makeItem("酱油", "20", "瓶", "8.50", "1"));
+        items.add(makeItem("牛腩", "100", "kg", "5.00", "10", "0.13"));
+        items.add(makeItem("酱油", "20", "瓶", "8.50", "1", "0.09"));
         return items;
     }
 
-    private PurchaseOrderItem makeItem(String name, String qty, String unit, String price, String box) {
+    private PurchaseOrderItem makeItem(String name, String qty, String unit, String price, String box, String taxRate) {
         PurchaseOrderItem item = new PurchaseOrderItem();
         item.setMaterialTypeId("MT-" + name);
         item.setMaterialName(name);
@@ -339,6 +387,7 @@ class PurchaseOrderPdfServiceImplTest {
         item.setUnit(unit);
         item.setUnitPrice(new BigDecimal(price));
         item.setBoxQuantity(new BigDecimal(box));
+        item.setTaxRate(new BigDecimal(taxRate));
         item.setSpecification("规格-" + name);
         return item;
     }
