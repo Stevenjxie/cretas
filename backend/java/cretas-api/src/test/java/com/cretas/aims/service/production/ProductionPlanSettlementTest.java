@@ -156,8 +156,13 @@ class ProductionPlanSettlementTest {
                 FACTORY_ID, PLAN_ID, "idem-1")).thenReturn(Optional.empty());
         when(productionSettlementRepository.findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(
                 FACTORY_ID, PLAN_ID)).thenReturn(Optional.empty());
-        when(materialBatchRepository.findByIdAndFactoryId("MB-1", FACTORY_ID)).thenReturn(Optional.of(materialBatch()));
-        when(semiFinishedInventoryRepository.findByIdForUpdate(7L)).thenReturn(Optional.of(wip()));
+        MaterialBatch batch = materialBatch();
+        SemiFinishedInventory wip = wip();
+        when(materialBatchRepository.findByIdAndFactoryId("MB-1", FACTORY_ID)).thenReturn(Optional.of(batch));
+        when(materialBatchRepository.findByIdAndFactoryIdForUpdate("MB-1", FACTORY_ID)).thenReturn(Optional.of(batch));
+        when(semiFinishedInventoryRepository.findByIdForUpdate(7L)).thenReturn(Optional.of(wip));
+        when(materialBatchRepository.save(any(MaterialBatch.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(semiFinishedInventoryRepository.save(any(SemiFinishedInventory.class))).thenAnswer(inv -> inv.getArgument(0));
         when(productionSettlementRepository.save(any(ProductionSettlement.class))).thenAnswer(inv -> inv.getArgument(0));
         when(productionPlanRepository.save(any(ProductionPlan.class))).thenAnswer(inv -> inv.getArgument(0));
         when(productionSettlementConsumptionRepository.saveAll(anyList())).thenAnswer(inv -> inv.getArgument(0));
@@ -170,8 +175,13 @@ class ProductionPlanSettlementTest {
         assertEquals("PENDING_WAREHOUSE_RECEIPT", response.getPostingStatus());
         assertEquals(new BigDecimal("90"), response.getActualFinishedQuantity());
         assertTrue(response.getWarnings().get(0).contains("仓库确认实收"));
+        assertEquals(new BigDecimal("16"), batch.getUsedQuantity());
+        assertEquals(new BigDecimal("5"), wip.getConsumedQuantity());
+        assertEquals(new BigDecimal("3"), wip.getAvailableQuantity());
         verify(productionSettlementConsumptionRepository).saveAll(anyList());
         verify(productionSettlementLaborRepository).saveAll(anyList());
+        verify(materialBatchRepository).save(batch);
+        verify(semiFinishedInventoryRepository).save(wip);
     }
 
     @Test
@@ -204,7 +214,7 @@ class ProductionPlanSettlementTest {
         ProductionPlan plan = plan();
         ProductionSettlement settlement = settled();
         when(productionPlanRepository.findByIdAndFactoryId(PLAN_ID, FACTORY_ID)).thenReturn(Optional.of(plan));
-        when(productionSettlementRepository.findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(
+        when(productionSettlementRepository.findByFactoryIdAndProductionPlanIdForUpdate(
                 FACTORY_ID, PLAN_ID)).thenReturn(Optional.of(settlement));
         when(finishedGoodsBatchRepository.findByFactoryIdAndBatchNumber(FACTORY_ID, "FG-P-001"))
                 .thenReturn(Optional.empty());
@@ -233,7 +243,7 @@ class ProductionPlanSettlementTest {
         ProductionPlan plan = plan();
         ProductionSettlement settlement = settled();
         when(productionPlanRepository.findByIdAndFactoryId(PLAN_ID, FACTORY_ID)).thenReturn(Optional.of(plan));
-        when(productionSettlementRepository.findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(
+        when(productionSettlementRepository.findByFactoryIdAndProductionPlanIdForUpdate(
                 FACTORY_ID, PLAN_ID)).thenReturn(Optional.of(settlement));
         when(finishedGoodsBatchRepository.findByFactoryIdAndBatchNumber(FACTORY_ID, "FG-P-001"))
                 .thenReturn(Optional.empty());
@@ -252,13 +262,57 @@ class ProductionPlanSettlementTest {
         when(productionSettlementRepository.save(any(ProductionSettlement.class))).thenAnswer(inv -> inv.getArgument(0));
 
         ProductionWarehouseReceiptResponse response = service.confirmWarehouseReceipt(
-                FACTORY_ID, PLAN_ID, receiptRequest("receipt-2", "70", "kg", "仓库实收短少", "PENDING"), 11L);
+                FACTORY_ID, PLAN_ID, receiptRequest("receipt-2", "70", "kg", "仓库实收短少", "WAREHOUSE"), 11L);
 
         assertEquals("PENDING_CLEARING", response.getPostingStatus());
         assertEquals("fg-1", response.getFinishedGoodsBatchId());
         assertEquals("ledger-1", response.getTransitLedgerId());
         assertEquals(new BigDecimal("20"), response.getVarianceQuantity());
         assertTrue(response.getWarnings().get(0).contains("中转挂账"));
+    }
+
+    @Test
+    @DisplayName("仓库实收短少超过容差但责任侧待核对时拒绝确认")
+    void confirmWarehouseReceipt_shortBeyondTolerancePendingResponsibility_rejected() {
+        ProductionPlan plan = plan();
+        ProductionSettlement settlement = settled();
+        when(productionPlanRepository.findByIdAndFactoryId(PLAN_ID, FACTORY_ID)).thenReturn(Optional.of(plan));
+        when(productionSettlementRepository.findByFactoryIdAndProductionPlanIdForUpdate(
+                FACTORY_ID, PLAN_ID)).thenReturn(Optional.of(settlement));
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> service.confirmWarehouseReceipt(
+                        FACTORY_ID, PLAN_ID,
+                        receiptRequest("receipt-3", "70", "kg", "仓库实收短少", "PENDING"),
+                        11L));
+
+        assertEquals("PRODUCTION_RECEIPT_RESPONSIBILITY_REQUIRED", ex.getErrorCode());
+        verify(finishedGoodsBatchRepository, never()).save(any());
+        verify(productionTransitLedgerRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("同一仓库确认幂等键重复提交返回原入库结果")
+    void confirmWarehouseReceipt_sameIdempotencyAfterReceipt_returnsExisting() {
+        ProductionPlan plan = plan();
+        ProductionSettlement settlement = settled();
+        settlement.setWarehouseReceivedAt(java.time.LocalDateTime.now());
+        settlement.setWarehouseReceiptIdempotencyKey("receipt-1");
+        settlement.setWarehouseReceivedQuantity(new BigDecimal("90"));
+        settlement.setWarehouseVarianceQuantity(BigDecimal.ZERO);
+        settlement.setPostingStatus("POSTED");
+        settlement.setFinishedGoodsBatchId("fg-1");
+        when(productionPlanRepository.findByIdAndFactoryId(PLAN_ID, FACTORY_ID)).thenReturn(Optional.of(plan));
+        when(productionSettlementRepository.findByFactoryIdAndProductionPlanIdForUpdate(
+                FACTORY_ID, PLAN_ID)).thenReturn(Optional.of(settlement));
+
+        ProductionWarehouseReceiptResponse response = service.confirmWarehouseReceipt(
+                FACTORY_ID, PLAN_ID, receiptRequest("receipt-1", "90", "kg", null, null), 11L);
+
+        assertEquals("POSTED", response.getPostingStatus());
+        assertEquals("fg-1", response.getFinishedGoodsBatchId());
+        verify(finishedGoodsBatchRepository, never()).save(any());
+        verify(productionTransitLedgerRepository, never()).save(any());
     }
 
     private ProductionPlan plan() {
@@ -341,6 +395,7 @@ class ProductionPlanSettlementTest {
                 .id(7L)
                 .factoryId(FACTORY_ID)
                 .intermediateBatchNo("WIP-001")
+                .consumedQuantity(BigDecimal.ZERO)
                 .availableQuantity(new BigDecimal("8"))
                 .status(SemiFinishedInventory.Status.AVAILABLE)
                 .build();

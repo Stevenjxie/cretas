@@ -382,7 +382,7 @@ public class ProductionPlanController {
         return ApiResponse.success("生产结单状态", response);
     }
 
-    @RequirePermission({"warehouse:read_write", "production:read_write", "scheduling:read_write"})
+    @RequirePermission({"warehouse:write", "warehouse:read_write", "production:read_write", "scheduling:read_write"})
     @RequireModule("production_plan")
     @PostMapping("/{planId}/warehouse-receipt")
     @Operation(summary = "仓库确认生产入库", description = "六扇门: 仓库确认实收后才生成成品库存; 差异超容差进入中转挂账")

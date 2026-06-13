@@ -676,9 +676,60 @@ async function handleStart(row: TableRow) {
 }
 
 // ==================== 核对结单 dialog (#742 / 6.12 revised) ====================
-// Backend `/settle` records clerk-reviewed facts. This web flow only submits
-// facts that are visible in this dialog; detailed material/labor lines remain
-// explicit follow-up input and are not fabricated here.
+interface SettlementRawConsumptionForm {
+  materialBatchId: string;
+  quantity: number;
+  note: string;
+}
+
+interface SettlementWipConsumptionForm {
+  semiFinishedInventoryId: number | null;
+  quantity: number;
+  note: string;
+}
+
+interface SettlementCompleteForm {
+  actualQuantity: number;
+  semiFinishedOutputQuantity: number;
+  rawMaterialConsumptions: SettlementRawConsumptionForm[];
+  semiFinishedConsumptions: SettlementWipConsumptionForm[];
+  workerCount: number;
+  workMinutes: number;
+  varianceReason: string;
+  otherVarianceReason: string;
+}
+
+interface MaterialBatchOption {
+  id: string;
+  materialTypeId?: string | null;
+  materialName?: string | null;
+  materialTypeName?: string | null;
+  batchNumber?: string | null;
+  currentQuantity?: number | string | null;
+  quantity?: number | string | null;
+  quantityUnit?: string | null;
+  unit?: string | null;
+  warehouseId?: string | null;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object';
+}
+
+function isMaterialBatchOption(value: unknown): value is MaterialBatchOption {
+  return isRecord(value) && typeof value.id === 'string';
+}
+
+function extractMaterialBatchRows(payload: unknown): MaterialBatchOption[] {
+  if (Array.isArray(payload)) {
+    return payload.filter(isMaterialBatchOption);
+  }
+  if (isRecord(payload) && Array.isArray(payload.content)) {
+    return payload.content.filter(isMaterialBatchOption);
+  }
+  return [];
+}
+
 const SETTLEMENT_VARIANCE_REASON_OPTIONS = [
   { value: '现场称重差异', label: '现场称重差异' },
   { value: '原料状态差异', label: '原料状态差异' },
@@ -688,12 +739,13 @@ const SETTLEMENT_VARIANCE_REASON_OPTIONS = [
 ];
 const completeDialogVisible = ref(false);
 const completeRow = ref<TableRow | null>(null);
-const completeForm = ref({
+const materialBatchListLoading = ref(false);
+const materialBatchOptions = ref<MaterialBatchOption[]>([]);
+const completeForm = ref<SettlementCompleteForm>({
   actualQuantity: 0,
   semiFinishedOutputQuantity: 0,
-  rawMaterialChecked: false,
-  semiFinishedChecked: false,
-  laborChecked: false,
+  rawMaterialConsumptions: [],
+  semiFinishedConsumptions: [],
   workerCount: 0,
   workMinutes: 0,
   varianceReason: '',
@@ -720,6 +772,7 @@ const completePlannedQuantity = computed(() => {
   return Number(r.plannedQuantity || 0);
 });
 const completeActualQuantity = computed(() => Number(completeForm.value.actualQuantity || 0));
+const completeSemiFinishedOutputQuantity = computed(() => Number(completeForm.value.semiFinishedOutputQuantity || 0));
 const completeIsOverPlan = computed(() => {
   const planned = completePlannedQuantity.value;
   return planned > 0 && completeActualQuantity.value > planned;
@@ -731,12 +784,74 @@ const completeVarianceReasonReady = computed(() => {
   if (reason !== '其他') return true;
   return Boolean(completeForm.value.otherVarianceReason.trim());
 });
+
+function selectedMaterialBatch(batchId: string): MaterialBatchOption | null {
+  return materialBatchOptions.value.find((b) => b.id === batchId) ?? null;
+}
+
+function selectedWipForSettlement(wipId: number | null): WipInventoryItem | null {
+  if (wipId == null) return null;
+  return wipList.value.find((w) => w.id === wipId) ?? null;
+}
+
+function materialBatchAvailable(batch: MaterialBatchOption | null): number {
+  if (!batch) return 0;
+  return Number(batch.currentQuantity ?? batch.quantity ?? 0) || 0;
+}
+
+function materialBatchUnit(batch: MaterialBatchOption | null): string {
+  return String(batch?.quantityUnit || batch?.unit || 'kg');
+}
+
+function materialBatchLabel(batch: MaterialBatchOption): string {
+  const name = batch.materialName || batch.materialTypeName || batch.materialTypeId || '原料';
+  return `${name} | ${batch.batchNumber || batch.id} | 可用 ${materialBatchAvailable(batch)}${materialBatchUnit(batch)}`;
+}
+
+function rawLineDisabledReason(line: SettlementRawConsumptionForm, index: number): string {
+  if (!line.materialBatchId) return `第 ${index + 1} 行原料领用必须选择批次`;
+  const batch = selectedMaterialBatch(line.materialBatchId);
+  if (!batch) return `第 ${index + 1} 行原料批次不存在或未加载`;
+  if (!line.quantity || line.quantity <= 0) return `第 ${index + 1} 行原料领用数量必须大于 0`;
+  const available = materialBatchAvailable(batch);
+  if (line.quantity > available) return `第 ${index + 1} 行原料领用超出可用量 ${available}${materialBatchUnit(batch)}`;
+  return '';
+}
+
+function wipLineDisabledReason(line: SettlementWipConsumptionForm, index: number): string {
+  if (line.semiFinishedInventoryId == null) return `第 ${index + 1} 行半成品领用必须选择 WIP`;
+  const wip = selectedWipForSettlement(line.semiFinishedInventoryId);
+  if (!wip) return `第 ${index + 1} 行半成品库存不存在或未加载`;
+  if (!line.quantity || line.quantity <= 0) return `第 ${index + 1} 行半成品领用数量必须大于 0`;
+  const available = Number(wip.availableQuantity || 0);
+  if (line.quantity > available) return `第 ${index + 1} 行半成品领用超出可用量 ${available}${wip.unit || ''}`;
+  return '';
+}
+
+const firstRawLineError = computed(() => {
+  for (let i = 0; i < completeForm.value.rawMaterialConsumptions.length; i += 1) {
+    const error = rawLineDisabledReason(completeForm.value.rawMaterialConsumptions[i], i);
+    if (error) return error;
+  }
+  return '';
+});
+const firstWipLineError = computed(() => {
+  for (let i = 0; i < completeForm.value.semiFinishedConsumptions.length; i += 1) {
+    const error = wipLineDisabledReason(completeForm.value.semiFinishedConsumptions[i], i);
+    if (error) return error;
+  }
+  return '';
+});
 const completeSubmitDisabledReason = computed(() => {
-  if (!completeActualQuantity.value || completeActualQuantity.value <= 0) return '请填写有效的实际产量';
+  if (completeActualQuantity.value + completeSemiFinishedOutputQuantity.value <= 0) return '请填写有效的成品或半成品实际产量';
   if (!completeVarianceReasonReady.value) return '实际产量超过计划时必须选择差异原因';
-  if (!completeForm.value.rawMaterialChecked) return '请先核对原料/辅料实际领用';
-  if (!completeForm.value.semiFinishedChecked) return '请先核对半成品实际领用或确认不适用';
-  if (!completeForm.value.laborChecked) return '请先核对工时/人数或确认延期原因';
+  const hasMaterialLines = completeForm.value.rawMaterialConsumptions.length > 0
+    || completeForm.value.semiFinishedConsumptions.length > 0;
+  if (!hasMaterialLines) return '请至少录入一条原料/半成品实际领用明细';
+  if (firstRawLineError.value) return firstRawLineError.value;
+  if (firstWipLineError.value) return firstWipLineError.value;
+  if (!completeForm.value.workerCount || completeForm.value.workerCount <= 0) return '请录入实际人数';
+  if (!completeForm.value.workMinutes || completeForm.value.workMinutes <= 0) return '请录入实际工时分钟';
   return '';
 });
 const completeCanSubmit = computed(() => completeSubmitDisabledReason.value === '');
@@ -746,22 +861,104 @@ function buildSettlementIdempotencyKey(row: TableRow): string {
   return `web-settle-${planId}-${Date.now()}`;
 }
 
-function handleComplete(row: TableRow) {
+function addRawConsumptionLine() {
+  completeForm.value.rawMaterialConsumptions.push({
+    materialBatchId: '',
+    quantity: 0,
+    note: '',
+  });
+}
+
+function removeRawConsumptionLine(index: number) {
+  completeForm.value.rawMaterialConsumptions.splice(index, 1);
+}
+
+function addWipConsumptionLine() {
+  completeForm.value.semiFinishedConsumptions.push({
+    semiFinishedInventoryId: null,
+    quantity: 0,
+    note: '',
+  });
+}
+
+function removeWipConsumptionLine(index: number) {
+  completeForm.value.semiFinishedConsumptions.splice(index, 1);
+}
+
+async function loadSettlementInventoryOptions(row: TableRow) {
+  if (!factoryId.value) return;
+  materialBatchListLoading.value = true;
+  wipListLoading.value = true;
+  try {
+    const [materialRes, wipRes] = await Promise.allSettled([
+      get<unknown>(`/${factoryId.value}/material-batches/status/AVAILABLE`, {
+        params: row.productTypeId ? { productTypeId: String(row.productTypeId) } : undefined,
+      }),
+      listAvailableWip(factoryId.value),
+    ]);
+    if (materialRes.status === 'fulfilled' && materialRes.value.success) {
+      materialBatchOptions.value = extractMaterialBatchRows(materialRes.value.data)
+        .filter((batch) => materialBatchAvailable(batch) > 0);
+    } else {
+      materialBatchOptions.value = [];
+      ElMessage({ message: '原料可用批次加载失败，请刷新后重试', type: 'error', duration: 0, showClose: true });
+    }
+    if (wipRes.status === 'fulfilled' && wipRes.value.success && Array.isArray(wipRes.value.data)) {
+      wipList.value = wipRes.value.data.filter((wip) => Number(wip.availableQuantity || 0) > 0);
+    } else {
+      wipList.value = [];
+      ElMessage({ message: '半成品可用库存加载失败，请刷新后重试', type: 'error', duration: 0, showClose: true });
+    }
+  } finally {
+    materialBatchListLoading.value = false;
+    wipListLoading.value = false;
+  }
+}
+
+function buildRawConsumptionPayload() {
+  return completeForm.value.rawMaterialConsumptions.map((line) => {
+    const batch = selectedMaterialBatch(line.materialBatchId);
+    return {
+      materialBatchId: line.materialBatchId,
+      materialTypeId: batch?.materialTypeId || null,
+      batchNumber: batch?.batchNumber || null,
+      quantity: line.quantity,
+      unit: materialBatchUnit(batch),
+      warehouseId: batch?.warehouseId || null,
+      note: line.note || null,
+    };
+  });
+}
+
+function buildWipConsumptionPayload() {
+  return completeForm.value.semiFinishedConsumptions.map((line) => {
+    const wip = selectedWipForSettlement(line.semiFinishedInventoryId);
+    return {
+      semiFinishedInventoryId: line.semiFinishedInventoryId,
+      batchNumber: wip?.intermediateBatchNo || null,
+      quantity: line.quantity,
+      unit: wip?.unit || null,
+      note: line.note || null,
+    };
+  });
+}
+
+async function handleComplete(row: TableRow) {
   if (actionLoading.value) return;
   completeRow.value = row;
   // 默认填充计划数量, 便于一键提交; 用户可改
   completeForm.value = {
     actualQuantity: Number(row.plannedQuantity || 0),
     semiFinishedOutputQuantity: 0,
-    rawMaterialChecked: false,
-    semiFinishedChecked: false,
-    laborChecked: false,
+    rawMaterialConsumptions: [],
+    semiFinishedConsumptions: [],
     workerCount: Number(row.estimatedWorkers || 0),
     workMinutes: 0,
     varianceReason: '',
     otherVarianceReason: '',
   };
   completeDialogVisible.value = true;
+  await loadSettlementInventoryOptions(row);
 }
 
 async function submitComplete() {
@@ -785,12 +982,20 @@ async function submitComplete() {
       quantityVarianceReason: completeForm.value.varianceReason === '其他'
         ? completeForm.value.otherVarianceReason.trim()
         : completeForm.value.varianceReason,
-      materialVarianceReason: 'PC文员已核对实际领用，明细待后续补录',
-      laborDeferredReason: 'PC文员已核对工时人数，明细待后续补录',
+      rawMaterialConsumptions: buildRawConsumptionPayload(),
+      semiFinishedConsumptions: buildWipConsumptionPayload(),
+      auxiliaryConsumptions: [],
+      laborSegments: [{
+        workerName: 'PC文员汇总',
+        workType: '生产结单',
+        minutes: Number(completeForm.value.workMinutes || 0),
+        headcount: Number(completeForm.value.workerCount || 1),
+      }],
     });
     if (response.success) {
-      ElMessage.success(response.message || '生产结单已提交');
+      ElMessage.success(response.message || '生产结单已提交，下一步请仓库确认入库');
       completeDialogVisible.value = false;
+      searchForm.value.status = 'COMPLETED';
       loadData();
     } else {
       ElMessage({ message: response.message || '结单提交失败', type: 'error', duration: 0, showClose: true });
@@ -812,7 +1017,6 @@ const RECEIPT_VARIANCE_REASON_OPTIONS = [
   { value: '其他', label: '其他（请补充说明）' },
 ];
 const RECEIPT_RESPONSIBILITY_OPTIONS = [
-  { value: 'PENDING', label: '待核对' },
   { value: 'PRODUCTION', label: '生产侧处理' },
   { value: 'WAREHOUSE', label: '仓库侧处理' },
   { value: 'WEIGHING_ERROR', label: '称重误差' },
@@ -826,7 +1030,7 @@ const receiptForm = ref({
   quantityUnit: '',
   varianceReason: '',
   otherVarianceReason: '',
-  responsibilitySide: 'PENDING',
+  responsibilitySide: '',
   varianceNote: '',
 });
 
@@ -900,6 +1104,8 @@ const receiptSubmitDisabledReason = computed(() => {
   if (!receiptReceivedQuantity.value || receiptReceivedQuantity.value <= 0) return '请输入仓库实际收到数量';
   if (receiptReceivedQuantity.value > receiptReportedQuantity.value) return '仓库实收不能超过生产报产，请先让生产修正结单';
   if (receiptNeedsReason.value && !receiptForm.value.varianceReason) return '超出容差的差异必须选择原因';
+  if (receiptNeedsReason.value && !receiptForm.value.responsibilitySide) return '超出容差的差异必须选择生产侧、仓库侧或称重误差';
+  if (receiptNeedsReason.value && receiptForm.value.responsibilitySide === 'PENDING') return '责任侧不能为待核对，请先明确归属';
   if (receiptNeedsReason.value && receiptForm.value.varianceReason === '其他' && !receiptForm.value.otherVarianceReason.trim()) {
     return '请选择“其他”时必须补充说明';
   }
@@ -930,7 +1136,7 @@ async function handleWarehouseReceipt(row: TableRow) {
       quantityUnit: String(row.unit || row.quantityUnit || ''),
       varianceReason: '',
       otherVarianceReason: '',
-      responsibilitySide: 'PENDING',
+      responsibilitySide: '',
       varianceNote: '',
     };
   } catch (error) {
@@ -2108,34 +2314,106 @@ function handleAiFill(params: TableRow) {
             style="width: 100%"
           />
           <div class="settlement-help">
-            同一生产计划可以同时产成品和半成品；本次结单记录事实，库存/成本过账按后续过账流程处理。
+            同一生产计划可以同时产成品和半成品；提交结单会按实际领用扣减原料/半成品，成品需仓库确认实收后才入库。
           </div>
         </el-form-item>
 
         <el-divider content-position="left">实际领用核对</el-divider>
-        <div class="settlement-check-grid">
-          <div class="settlement-check-card">
-            <div class="settlement-check-title">原料/辅料实际领用</div>
-            <div class="settlement-check-body">
-              <el-tag v-if="completeAdvisory?.hasWarning" type="danger" size="small">有缺料预警</el-tag>
-              <el-tag v-else-if="completeAdvisory" type="success" size="small">库存参考正常</el-tag>
-              <el-tag v-else type="info" size="small">暂无参考数据</el-tag>
-              <p>{{ completeAdvisory?.message || '此处要求文员确认已核对纸单/现场记录；批次级领用明细不在本弹窗伪造。' }}</p>
-              <el-checkbox v-model="completeForm.rawMaterialChecked">
-                已核对原料/辅料实际领用或确认不适用
-              </el-checkbox>
-            </div>
-          </div>
-          <div class="settlement-check-card">
-            <div class="settlement-check-title">半成品实际领用</div>
-            <div class="settlement-check-body">
-              <el-tag type="warning" size="small">正常生产双领</el-tag>
-              <p>半成品领用属于普通生产投入，不从独立再加工/返工入口走。后端接入后这里保存 WIP 批次和数量。</p>
-              <el-checkbox v-model="completeForm.semiFinishedChecked">
-                已核对半成品实际领用或确认不适用
-              </el-checkbox>
-            </div>
-          </div>
+        <el-alert
+          v-if="completeAdvisory?.hasWarning"
+          :title="completeAdvisory.message"
+          type="error"
+          show-icon
+          :closable="false"
+          style="margin-bottom: 12px"
+        />
+        <el-alert
+          v-else-if="completeAdvisory"
+          :title="completeAdvisory.message"
+          type="success"
+          show-icon
+          :closable="false"
+          style="margin-bottom: 12px"
+        />
+        <div class="settlement-line-header">
+          <span>原料/辅料实际领用</span>
+          <el-button size="small" :icon="Plus" @click="addRawConsumptionLine">增加原料行</el-button>
+        </div>
+        <div v-if="materialBatchOptions.length === 0 && !materialBatchListLoading" class="settlement-empty">
+          暂无可用原料批次；不能伪造领用，请先完成仓库入库或选择正确产品/BOM。
+        </div>
+        <div
+          v-for="(line, index) in completeForm.rawMaterialConsumptions"
+          :key="`raw-${index}`"
+          class="settlement-consumption-row"
+        >
+          <el-select
+            v-model="line.materialBatchId"
+            filterable
+            placeholder="选择原料批次"
+            :loading="materialBatchListLoading"
+            class="consumption-select"
+          >
+            <el-option
+              v-for="batch in materialBatchOptions"
+              :key="batch.id"
+              :label="materialBatchLabel(batch)"
+              :value="batch.id"
+            />
+          </el-select>
+          <el-input-number
+            v-model="line.quantity"
+            :min="0"
+            :max="materialBatchAvailable(selectedMaterialBatch(line.materialBatchId)) || undefined"
+            :precision="2"
+            class="consumption-qty"
+          />
+          <el-input
+            v-model="line.note"
+            placeholder="备注/称重单号"
+            class="consumption-note"
+          />
+          <el-button text type="danger" @click="removeRawConsumptionLine(index)">删除</el-button>
+        </div>
+        <div class="settlement-line-header">
+          <span>半成品实际领用</span>
+          <el-button size="small" :icon="Plus" @click="addWipConsumptionLine">增加半成品行</el-button>
+        </div>
+        <div v-if="wipList.length === 0 && !wipListLoading" class="settlement-empty">
+          暂无可用半成品库存；如果本计划无需半成品领用，可以不新增半成品行。
+        </div>
+        <div
+          v-for="(line, index) in completeForm.semiFinishedConsumptions"
+          :key="`wip-${index}`"
+          class="settlement-consumption-row"
+        >
+          <el-select
+            v-model="line.semiFinishedInventoryId"
+            filterable
+            placeholder="选择半成品 WIP"
+            :loading="wipListLoading"
+            class="consumption-select"
+          >
+            <el-option
+              v-for="wip in wipList"
+              :key="wip.id"
+              :label="`${wip.intermediateBatchNo} | 可用 ${wip.availableQuantity}${wip.unit || ''}`"
+              :value="wip.id"
+            />
+          </el-select>
+          <el-input-number
+            v-model="line.quantity"
+            :min="0"
+            :max="selectedWipForSettlement(line.semiFinishedInventoryId) ? Number(selectedWipForSettlement(line.semiFinishedInventoryId)?.availableQuantity || 0) : undefined"
+            :precision="2"
+            class="consumption-qty"
+          />
+          <el-input
+            v-model="line.note"
+            placeholder="备注/交接单号"
+            class="consumption-note"
+          />
+          <el-button text type="danger" @click="removeWipConsumptionLine(index)">删除</el-button>
         </div>
 
         <el-divider content-position="left">工时/人效最小字段</el-divider>
@@ -2161,11 +2439,6 @@ function handleAiFill(params: TableRow) {
             </el-form-item>
           </el-col>
         </el-row>
-        <el-form-item label="工时核对" required>
-          <el-checkbox v-model="completeForm.laborChecked">
-            已核对 RN 报工工时/人数，或确认稍后由主管补录
-          </el-checkbox>
-        </el-form-item>
         <el-alert
           v-if="completeSubmitDisabledReason"
           :title="completeSubmitDisabledReason"
@@ -2794,38 +3067,39 @@ function handleAiFill(params: TableRow) {
   line-height: 1.5;
 }
 
-.settlement-check-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+.settlement-line-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   gap: 12px;
-  margin-bottom: 12px;
-}
-
-.settlement-check-card {
-  padding: 12px;
-  border: 1px solid var(--border-color-lighter, #ebeef5);
-  border-radius: 8px;
-  background: #ffffff;
-}
-
-.settlement-check-title {
-  margin-bottom: 8px;
+  margin: 10px 0 8px;
   color: var(--text-color-primary, #303133);
   font-size: 14px;
   font-weight: 600;
 }
 
-.settlement-check-body {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  color: var(--text-color-regular, #606266);
+.settlement-empty {
+  margin-bottom: 10px;
+  padding: 10px 12px;
+  border: 1px dashed var(--border-color, #dcdfe6);
+  border-radius: 6px;
+  color: var(--text-color-secondary, #909399);
   font-size: 13px;
   line-height: 1.5;
+}
 
-  p {
-    margin: 0;
-  }
+.settlement-consumption-row {
+  display: grid;
+  grid-template-columns: minmax(220px, 1.2fr) minmax(120px, 0.5fr) minmax(150px, 0.8fr) auto;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.consumption-select,
+.consumption-qty,
+.consumption-note {
+  width: 100%;
 }
 
 .receipt-diff-panel {
@@ -2865,6 +3139,17 @@ function handleAiFill(params: TableRow) {
 
   strong {
     color: var(--color-danger, #f56c6c);
+  }
+}
+
+@media (max-width: 760px) {
+  .settlement-consumption-row,
+  .receipt-diff-panel {
+    grid-template-columns: 1fr;
+  }
+
+  .receipt-diff-panel {
+    margin-left: 0;
   }
 }
 

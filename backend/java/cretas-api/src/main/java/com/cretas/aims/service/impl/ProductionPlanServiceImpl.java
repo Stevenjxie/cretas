@@ -1338,7 +1338,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         settlement.setLaborDeferredReason(trimToNull(request.getLaborDeferredReason()));
         settlement.setPlanStatusAfter(ProductionPlanStatus.COMPLETED);
         settlement.setPostingStatus("PENDING_WAREHOUSE_RECEIPT");
-        settlement.setPostingMessage("已记录结单事实; 等待仓库确认实收后才生成成品库存, 差异进入中转挂账");
+        settlement.setPostingMessage("已完成结单和实际领用扣减; 等待仓库确认实收后才生成成品库存, 差异进入中转挂账");
         settlement.setSettledBy(settledBy);
         settlement.setSettledAt(LocalDateTime.now());
         settlement = productionSettlementRepository.save(settlement);
@@ -1346,6 +1346,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         for (ProductionSettlementConsumption line : consumptionLines) {
             line.setSettlementId(settlement.getId());
         }
+        postConsumptionToInventory(factoryId, consumptionLines);
         productionSettlementConsumptionRepository.saveAll(consumptionLines);
         productionSettlementLaborRepository.saveAll(toLaborLines(factoryId, planId, settlement.getId(), request.getLaborSegments()));
 
@@ -1357,7 +1358,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         plan.setActualQuantity(settlement.getActualFinishedQuantity());
         productionPlanRepository.save(plan);
 
-        List<String> warnings = List.of("本次仅完成文员结单事实记录; 成品库存不会增加, 需仓库确认实收后才入库");
+        List<String> warnings = List.of("已按实际领用扣减原料/半成品库存; 成品需仓库确认实收后再入库");
         log.info("六扇门生产结单完成: factoryId={}, planId={}, settlementId={}, finished={}, semiFinished={}",
                 factoryId, planId, settlement.getId(),
                 settlement.getActualFinishedQuantity(), settlement.getActualSemiFinishedQuantity());
@@ -1388,7 +1389,9 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
 
         ProductionPlan plan = productionPlanRepository.findByIdAndFactoryId(planId, factoryId)
                 .orElseThrow(() -> new ResourceNotFoundException("生产计划", "id", planId));
-        ProductionSettlement settlement = requireProductionSettlement(factoryId, planId);
+        ProductionSettlement settlement = productionSettlementRepository
+                .findByFactoryIdAndProductionPlanIdForUpdate(factoryId, planId)
+                .orElseThrow(() -> new ResourceNotFoundException("生产结单", "productionPlanId", planId));
 
         if (settlement.getWarehouseReceivedAt() != null) {
             if (request.getIdempotencyKey().equals(settlement.getWarehouseReceiptIdempotencyKey())) {
@@ -1431,6 +1434,12 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                     .withHint("生产报产: " + reported + unit + ", 仓库实收: " + received + unit + ", 差异: " + variance + unit)
                     .withHintTarget("差异原因");
         }
+        if (needsTransitLedger && isPendingResponsibilitySide(request.getResponsibilitySide())) {
+            throw new BusinessException(409, "仓库实收差异超出容差, 必须明确责任侧")
+                    .withCode("PRODUCTION_RECEIPT_RESPONSIBILITY_REQUIRED")
+                    .withHint("请选择生产侧处理、仓库侧处理或称重误差后再确认入库")
+                    .withHintTarget("责任侧");
+        }
 
         FinishedGoodsBatch fgBatch = createFinishedGoodsFromReceipt(plan, settlement, received, unit, receivedBy);
         ProductionTransitLedger ledger = needsTransitLedger
@@ -1443,7 +1452,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         settlement.setQuantityUnit(unit);
         settlement.setWarehouseVarianceReason(trimToNull(request.getVarianceReason()));
         settlement.setWarehouseResponsibilitySide(needsTransitLedger
-                ? firstNonBlank(request.getResponsibilitySide(), "PENDING")
+                ? trimToNull(request.getResponsibilitySide())
                 : (withinTolerance ? "WEIGHING_ERROR" : null));
         settlement.setWarehouseVarianceNote(trimToNull(request.getVarianceNote()));
         settlement.setFinishedGoodsBatchId(fgBatch.getId());
@@ -1594,6 +1603,57 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         }
     }
 
+    private void postConsumptionToInventory(String factoryId, List<ProductionSettlementConsumption> lines) {
+        if (isEmpty(lines)) {
+            return;
+        }
+        for (ProductionSettlementConsumption line : lines) {
+            if ("SEMI_FINISHED".equals(line.getSourceType())) {
+                postSemiFinishedConsumption(factoryId, line);
+            } else {
+                postMaterialBatchConsumption(factoryId, line);
+            }
+        }
+    }
+
+    private void postMaterialBatchConsumption(String factoryId, ProductionSettlementConsumption line) {
+        MaterialBatch batch = materialBatchRepository
+                .findByIdAndFactoryIdForUpdate(line.getMaterialBatchId(), factoryId)
+                .orElseThrow(() -> new BusinessException(404, "原料批次不存在: " + line.getMaterialBatchId())
+                        .withHintTarget("实际领用"));
+        BigDecimal available = zeroIfNull(batch.getCurrentQuantity());
+        ensureQuantityWithinAvailable("原料批次 " + batch.getBatchNumber(), line.getQuantity(), available, "实际领用");
+
+        BigDecimal qty = zeroIfNull(line.getQuantity());
+        batch.setUsedQuantity(zeroIfNull(batch.getUsedQuantity()).add(qty));
+        batch.setLastUsedAt(LocalDateTime.now());
+        if (batch.getCurrentQuantity().compareTo(BigDecimal.ZERO) <= 0) {
+            batch.setStatus(MaterialBatchStatus.USED_UP);
+        }
+        materialBatchRepository.save(batch);
+    }
+
+    private void postSemiFinishedConsumption(String factoryId, ProductionSettlementConsumption line) {
+        SemiFinishedInventory inventory = semiFinishedInventoryRepository.findByIdForUpdate(line.getSemiFinishedInventoryId())
+                .orElseThrow(() -> new BusinessException(404, "半成品库存不存在: " + line.getSemiFinishedInventoryId())
+                        .withHintTarget("半成品领用"));
+        if (!factoryId.equals(inventory.getFactoryId())) {
+            throw new BusinessException(403, "无权领用其他工厂的半成品库存")
+                    .withHintTarget("半成品领用");
+        }
+        BigDecimal available = zeroIfNull(inventory.getAvailableQuantity());
+        ensureQuantityWithinAvailable("半成品库存 " + inventory.getIntermediateBatchNo(), line.getQuantity(), available, "半成品领用");
+
+        BigDecimal qty = zeroIfNull(line.getQuantity());
+        BigDecimal remaining = available.subtract(qty);
+        inventory.setConsumedQuantity(zeroIfNull(inventory.getConsumedQuantity()).add(qty));
+        inventory.setAvailableQuantity(remaining);
+        inventory.setStatus(remaining.compareTo(BigDecimal.ZERO) <= 0
+                ? SemiFinishedInventory.Status.DEPLETED
+                : SemiFinishedInventory.Status.AVAILABLE);
+        semiFinishedInventoryRepository.save(inventory);
+    }
+
     private List<ProductionSettlementLabor> toLaborLines(String factoryId, String planId, String settlementId,
                                                          List<ProductionSettlementRequest.LaborSegment> requestLines) {
         if (isEmpty(requestLines)) {
@@ -1738,10 +1798,10 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                                                         String unit,
                                                         ProductionWarehouseReceiptRequest request,
                                                         Long receivedBy) {
-        String responsibility = firstNonBlank(request.getResponsibilitySide(), "PENDING");
-        if (!Set.of("PENDING", "PRODUCTION", "WAREHOUSE", "WEIGHING_ERROR").contains(responsibility)) {
+        String responsibility = trimToNull(request.getResponsibilitySide());
+        if (responsibility == null || !Set.of("PRODUCTION", "WAREHOUSE", "WEIGHING_ERROR").contains(responsibility)) {
             throw new BusinessException(400, "责任归属无效: " + responsibility)
-                    .withHint("请选择 PENDING、PRODUCTION、WAREHOUSE 或 WEIGHING_ERROR")
+                    .withHint("请选择 PRODUCTION、WAREHOUSE 或 WEIGHING_ERROR")
                     .withHintTarget("责任归属");
         }
 
@@ -1792,6 +1852,11 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
 
     private boolean isBlank(String value) {
         return value == null || value.trim().isEmpty();
+    }
+
+    private boolean isPendingResponsibilitySide(String value) {
+        String normalized = trimToNull(value);
+        return normalized == null || "PENDING".equals(normalized);
     }
 
     private String trimToNull(String value) {
