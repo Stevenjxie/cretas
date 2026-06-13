@@ -45,6 +45,8 @@ interface WipBatchPickerProps {
   onChange: (sel: WipSelection | null) => void;
   /** 是否禁用 (提交进行中) */
   disabled?: boolean;
+  /** 是否必须选择 WIP; false 时再次点击已选行会清空选择 */
+  required?: boolean;
 }
 
 export const WipBatchPicker: React.FC<WipBatchPickerProps> = ({
@@ -53,6 +55,7 @@ export const WipBatchPicker: React.FC<WipBatchPickerProps> = ({
   selectedSourceWipNo,
   onChange,
   disabled = false,
+  required = true,
 }) => {
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -88,21 +91,25 @@ export const WipBatchPicker: React.FC<WipBatchPickerProps> = ({
   const selectRow = useCallback(
     (row: WipRowDTO) => {
       if (disabled) return;
-      // 再次点击已选行 → 不取消 (本道必须领一笔, 取消无意义); 切换到另一行才有意义
+      if (!required && row.intermediateBatchNo === selectedSourceWipNo) {
+        onChange(null);
+        return;
+      }
+      // required=true 时再次点击不取消; optional 模式下上方已处理清空。
       onChange({
         sourceWipNo: row.intermediateBatchNo,
         unit: row.unit,
         availableQuantity: row.availableQuantity,
       });
     },
-    [disabled, onChange],
+    [disabled, onChange, required, selectedSourceWipNo],
   );
 
   return (
     <View style={styles.wrap}>
       <View style={styles.header}>
         <Text style={styles.headerTitle}>
-          上道半成品有 {rows.length} 笔, 请选择本道领用哪一笔
+          上道半成品有 {rows.length} 笔, {required ? '请选择本道领用哪一笔' : '可选择本道要领用的半成品'}
         </Text>
       </View>
 
@@ -156,7 +163,7 @@ export const WipBatchPicker: React.FC<WipBatchPickerProps> = ({
         )}
 
         {/* 未选提示 (防呆 Rule 1: 事前明确告知必须选) */}
-        {!loading && loadError == null && rows.length > 0 && selectedSourceWipNo == null ? (
+        {!loading && loadError == null && rows.length > 0 && required && selectedSourceWipNo == null ? (
           <View style={styles.hint}>
             <Text style={styles.hintText}>请选择要领用的半成品批次</Text>
           </View>

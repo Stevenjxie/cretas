@@ -55,6 +55,8 @@ interface MaterialBatchPickerProps {
    * 屏幕在 onChange 返回的 refs 里 quantity 若是 single-batch 会自动同步最新 singleBatchQty.
    */
   singleBatchQty?: string;
+  /** Force per-batch quantity input even when only one batch is selected. */
+  forceIndependentQuantity?: boolean;
   /** 是否禁用 (提交进行中) */
   disabled?: boolean;
   /**
@@ -80,6 +82,7 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
   value,
   onChange,
   singleBatchQty = '',
+  forceIndependentQuantity = false,
   disabled = false,
   required = false,
   onValidationChange,
@@ -104,10 +107,11 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
 
   const rowQuantity = useCallback(
     (row: RowState, isSingle: boolean): number | null => {
-      const qty = parseFloat(isSingle ? singleBatchQty : row.qtyStr);
+      const useParentQty = isSingle && !forceIndependentQuantity;
+      const qty = parseFloat(useParentQty ? singleBatchQty : row.qtyStr);
       return Number.isNaN(qty) || qty <= 0 ? null : qty;
     },
-    [singleBatchQty],
+    [forceIndependentQuantity, singleBatchQty],
   );
 
   const rowOverLimit = useCallback(
@@ -132,9 +136,10 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
     const refs: MaterialBatchRef[] = [];
     const selected = rows.filter((r) => r.selected);
     const isSingle = selected.length === 1;
+    const useParentQty = isSingle && !forceIndependentQuantity;
 
     for (const row of selected) {
-      if (isSingle) {
+      if (useParentQty) {
         // 单批次: qty 由屏幕 投入量 驱动
         const qty = parseFloat(singleBatchQty);
         if (!Number.isNaN(qty) && qty > 0) {
@@ -150,7 +155,7 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
     }
     onChangeRef.current(refs);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rows, singleBatchQty, unit]);
+  }, [forceIndependentQuantity, rows, singleBatchQty, unit]);
 
   useEffect(() => {
     const selected = rows.filter((r) => r.selected);
@@ -202,12 +207,17 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
         if (res.data.length === 1 && value.length === 0) {
           const batch = res.data[0] as MaterialBatch;
           setRows([{ batch, selected: true, qtyStr: '' }]);
-          // 单批次模式: qty 由父组件的 singleBatchQty / 投入量 驱动; 此处先 emit qty=0 占位,
-          // onChange useEffect 在 singleBatchQty 有效时会重新 emit 正确值
-          onChangeRef.current([{ materialBatchId: batch.id, quantity: 0, unit }]);
-          // 自动收起 + 标记已确认 (操作工无需手动按「确定选择」)
-          setConfirmed(true);
-          setExpanded(false);
+          if (forceIndependentQuantity) {
+            setConfirmed(false);
+            setExpanded(true);
+          } else {
+            // 单批次模式: qty 由父组件的 singleBatchQty / 投入量 驱动; 此处先 emit qty=0 占位,
+            // onChange useEffect 在 singleBatchQty 有效时会重新 emit 正确值
+            onChangeRef.current([{ materialBatchId: batch.id, quantity: 0, unit }]);
+            // 自动收起 + 标记已确认 (操作工无需手动按「确定选择」)
+            setConfirmed(true);
+            setExpanded(false);
+          }
         }
       } else {
         setLoadedQueryKey(requestQueryKey);
@@ -221,7 +231,7 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
     } finally {
       setLoading(false);
     }
-  }, [factoryId, productTypeId, queryKey, syncRowsFromValue, value.length, unit]);
+  }, [factoryId, forceIndependentQuantity, productTypeId, queryKey, syncRowsFromValue, value.length, unit]);
 
   // productTypeId comes from the batch detail request. If the operator opens the picker before
   // that request resolves, the first load is unfiltered. Reload once the BOM-filter key changes.
@@ -284,7 +294,7 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
       return;
     }
     const isSingle = selected.length === 1;
-    if (isSingle) {
+    if (isSingle && !forceIndependentQuantity) {
       const qty = parseFloat(singleBatchQty);
       if (Number.isNaN(qty) || qty <= 0) {
         // 单批次 qty 来自屏幕 投入量, 为空时提示先填投入量
@@ -307,14 +317,14 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
     confirmTimerRef.current = setTimeout(() => {
       setConfirmFeedback(false);
     }, 1500);
-  }, [rows, singleBatchQty]);
+  }, [forceIndependentQuantity, rows, singleBatchQty]);
 
   // Q2 验证按钮是否可以点击
   const canConfirm = useCallback((): boolean => {
     const selected = rows.filter((r) => r.selected);
     if (selected.length === 0) return false;
     const isSingle = selected.length === 1;
-    if (isSingle) {
+    if (isSingle && !forceIndependentQuantity) {
       const first = selected[0];
       const qty = parseFloat(singleBatchQty);
       return first != null && !Number.isNaN(qty) && qty > 0 && !rowOverLimit(first, true);
@@ -323,7 +333,7 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
       const q = parseFloat(r.qtyStr);
       return !Number.isNaN(q) && q > 0 && !rowOverLimit(r, false);
     });
-  }, [rows, singleBatchQty, rowOverLimit]);
+  }, [forceIndependentQuantity, rows, singleBatchQty, rowOverLimit]);
 
   const selectedCount = value.length;
 
@@ -459,7 +469,7 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
                    * 多批次已选 → 显示各自用量输入
                    * Note: TextInput inside TouchableOpacity captures its own touches correctly.
                    */}
-                  {row.selected && isMultiBatch ? (
+                  {row.selected && (isMultiBatch || forceIndependentQuantity) ? (
                     <View style={styles.qtyBox}>
                       <TextInput
                         style={[styles.qtyInput, disabled && styles.qtyInputDisabled]}
@@ -495,7 +505,7 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
           ) : null}
 
           {/* Q1: 单批次时提示投入量即用量 */}
-          {selectedCount === 1 && !isMultiBatch ? (
+          {selectedCount === 1 && !isMultiBatch && !forceIndependentQuantity ? (
             <View style={styles.singleBatchNote}>
               <Text style={styles.singleBatchNoteText}>
                 单批次: 投入量即该批次的领用量，请在下方「投入量」填写
@@ -514,6 +524,8 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
               <Text style={[styles.confirmBtnText, !canConfirm() && styles.confirmBtnTextDisabled]}>
                 {isMultiBatch
                   ? (canConfirm() ? '确定选择' : '请为每批次填写用量')
+                  : forceIndependentQuantity
+                    ? (canConfirm() ? '确定选择' : '请填写批次用量')
                   : (canConfirm() ? '确定选择' : '请先在下方填写投入量')}
               </Text>
             </TouchableOpacity>
