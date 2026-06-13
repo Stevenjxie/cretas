@@ -286,6 +286,10 @@ function handleReturnSuccess(): void {
 function handleRowActionClick(actionId: string, row: TableRow) {
   switch (actionId) {
     case 'view-detail': goDetail(String(row.id)); break;
+    case 'edit':
+      ElMessage.info(`请在采购单 ${row.orderNumber || row.id} 详情页编辑`);
+      router.push({ path: `/procurement/orders/${row.id}`, query: { action: 'edit' } });
+      break;
     case 'submit': handleAction(String(row.id), 'submit'); break;
     case 'approve': handleAction(String(row.id), 'approve'); break;
     case 'reject': handleAction(String(row.id), 'reject'); break;
@@ -293,6 +297,22 @@ function handleRowActionClick(actionId: string, row: TableRow) {
     case 'print-pdf': handleDownloadPdf(row); break;
     case 'copy': void handleCopyOrder(row); break;
     case 'return': openReturnDialog(row); break;
+    case 'edit-price':
+      ElMessage.info(`请在采购单 ${row.orderNumber || row.id} 详情页维护行项目单价`);
+      router.push({ path: `/procurement/orders/${row.id}`, query: { action: 'price' } });
+      break;
+    case 'view-price-history':
+      ElMessage.info(`请在采购单 ${row.orderNumber || row.id} 详情页查看价格上下文`);
+      router.push(`/procurement/orders/${row.id}`);
+      break;
+    case 'undo-approval':
+      ElMessage({
+        message: `采购单 ${row.orderNumber || row.id} 暂不支持列表撤销审批，请进入详情页按当前状态处理`,
+        type: 'warning',
+        duration: 0,
+        showClose: true,
+      });
+      break;
     default: ElMessage.info(`Action: ${actionId}`);
   }
 }
