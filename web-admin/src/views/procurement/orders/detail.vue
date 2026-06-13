@@ -4,7 +4,8 @@ import { useRoute, useRouter } from 'vue-router';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { useBusinessMode } from '@/composables/useBusinessMode';
-import request, { get, post } from '@/api/request';
+import { get, post } from '@/api/request';
+import { downloadPurchaseOrderPdf } from '@/api/purchaseOrderPdf';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { ArrowLeft, Download, InfoFilled } from '@element-plus/icons-vue';
 import { handleCatchError } from '@/utils/errorToast';
@@ -251,37 +252,33 @@ function priceRowClassName({ row }: { row: PriceComparison }): string {
   return row.priceAlert ? 'price-alert-row' : '';
 }
 
-// P0/N3 (六扇门): 下载 PDF — 对外供货单必须完全移除价格列,
-// 内部审批版才允许有价格列且继续受 procurement:price:view 保护。
+// N3: 外发供应商PDF必须完全移除价格列; 内部打印保留价格列并继续受 procurement:price:view 保护。
 const pdfDownloading = ref(false);
 async function handleDownloadPdf(externalVersion: boolean) {
   if (!factoryId.value || !orderId.value || pdfDownloading.value) return;
   pdfDownloading.value = true;
   try {
-    const response = await request.get(
-      `/${factoryId.value}/purchase/orders/${orderId.value}/pdf`,
-      {
-        params: { external: externalVersion },
-        responseType: 'blob',
-      }
-    );
-    const blob = new Blob([response.data], { type: 'application/pdf' });
+    const blob = await downloadPurchaseOrderPdf({
+      factoryId: factoryId.value,
+      orderId: orderId.value,
+      external: externalVersion,
+    });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
     const orderNum = order.value?.orderNumber || orderId.value;
-    link.download = externalVersion ? `供货单_对外_${orderNum}.pdf` : `采购订单_内部_${orderNum}.pdf`;
+    link.download = externalVersion ? `外发供应商PDF_${orderNum}.pdf` : `内部打印_${orderNum}.pdf`;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
-    ElMessage.success(externalVersion ? '对外供货单下载成功' : '内部审批版下载成功');
+    ElMessage.success(externalVersion ? '外发供应商PDF 下载成功' : '内部打印 PDF 下载成功');
   } catch (e) {
-    // axios interceptor 已经 toast — 但 blob 响应 error 跳过 interceptor json parse, 兜底
     console.error('[PDF 下载失败]', e);
+    const message = e instanceof Error ? e.message : 'PDF 下载失败';
     ElMessage({
       type: 'error',
-      message: 'PDF 下载失败,请稍后重试',
+      message,
       duration: 0,
       showClose: true,
     });
@@ -329,9 +326,9 @@ async function confirmReceive(receiveId: string) {
             </el-tag>
           </div>
           <div class="header-right" v-if="order">
-            <!-- N3: 对外供货单给供应商, 后端 external=true 会完全移除价格列. -->
-            <el-button type="primary" :icon="Download" :loading="pdfDownloading" @click="handleDownloadPdf(true)">对外供货单</el-button>
-            <el-button v-if="canViewPrice" :icon="Download" :loading="pdfDownloading" @click="handleDownloadPdf(false)">内部审批版</el-button>
+            <!-- N3: 外发供应商PDF uses external=true and removes price-sensitive columns. -->
+            <el-button type="primary" :icon="Download" :loading="pdfDownloading" @click="handleDownloadPdf(true)">外发供应商PDF</el-button>
+            <el-button v-if="canViewPrice" :icon="Download" :loading="pdfDownloading" @click="handleDownloadPdf(false)">内部打印</el-button>
             <template v-if="canWrite">
             <el-button v-if="order.status === 'DRAFT'" type="warning" :loading="submitting" @click="handleAction('submit')">提交审批</el-button>
             <el-button v-if="order.status === 'SUBMITTED'" type="success" :loading="submitting" @click="handleAction('approve')">审批通过</el-button>

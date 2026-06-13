@@ -26,6 +26,7 @@ import { useLinkChipCounts } from '@/composables/useLinkChipCounts';
 import { CreateModeSelector, BatchCreateDialog, QuickCreateDialog, BomExpansionDialog } from '@/components/dialog';
 import CreateReturnOrderDialog from '@/components/dialog/CreateReturnOrderDialog.vue';
 import { copyPurchaseOrder } from '@/api/orderCopy';
+import { downloadPurchaseOrderPdf } from '@/api/purchaseOrderPdf';
 // PR #878 (#860 follow-up) — 转发 / 分享链接 dialog.
 import ForwardShareDialog from '@/components/dialog/ForwardShareDialog.vue';
 import type { ViewMode } from '@/types/viewMode';
@@ -683,7 +684,7 @@ function goDetail(id: string) {
   router.push(`/procurement/orders/${id}`);
 }
 
-// P0 (六扇门 May 7 transcript): 列表行内直接下载 PDF 供货单
+// N3: list shortcut is always the supplier-facing PDF, so price columns never leave the company by accident.
 const pdfDownloadingIds = ref<Set<string>>(new Set());
 async function handleDownloadPdf(row: TableRow) {
   if (!factoryId.value || !row.id) return;
@@ -691,26 +692,24 @@ async function handleDownloadPdf(row: TableRow) {
   if (pdfDownloadingIds.value.has(id)) return;
   pdfDownloadingIds.value.add(id);
   try {
-    const response = await request.get(
-      `/${factoryId.value}/purchase/orders/${id}/pdf`,
-      {
-        params: { external: true },
-        responseType: 'blob',
-      }
-    );
-    const blob = new Blob([response.data], { type: 'application/pdf' });
+    const blob = await downloadPurchaseOrderPdf({
+      factoryId: factoryId.value,
+      orderId: id,
+      external: true,
+    });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = `供货单_${row.orderNumber || id}.pdf`;
+    link.download = `外发供应商PDF_${row.orderNumber || id}.pdf`;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
-    ElMessage.success('PDF 下载成功');
+    ElMessage.success('外发供应商PDF 下载成功');
   } catch (e) {
     console.error('[PDF 下载失败]', e);
-    ElMessage.error('PDF 下载失败,请稍后重试');
+    const message = e instanceof Error ? e.message : 'PDF 下载失败';
+    ElMessage.error(message);
   } finally {
     pdfDownloadingIds.value.delete(id);
   }
@@ -941,10 +940,10 @@ function handleAiFill(params: TableRow) {
         <el-table-column label="操作" width="260" fixed="right" align="center">
           <template #default="{ row }">
             <el-button type="primary" link size="small" @click="goDetail(row.id)">详情</el-button>
-            <!-- P0 (六扇门 May 7 transcript): 下载 PDF 供货单 (含 Code128 + QR 条码) -->
+            <!-- N3: 外发供应商PDF uses external=true and removes price-sensitive columns. -->
             <el-button type="info" link size="small" :icon="Download"
               :loading="pdfDownloadingIds.has(String(row.id))"
-              @click="handleDownloadPdf(row)">对外供货单</el-button>
+              @click="handleDownloadPdf(row)">外发供应商PDF</el-button>
             <el-button v-if="row.status === 'DRAFT' && canWrite" type="warning" link size="small" @click="handleAction(row.id, 'submit')">提交</el-button>
             <el-button v-if="row.status === 'SUBMITTED' && canWrite" type="success" link size="small" @click="handleAction(row.id, 'approve')">审批</el-button>
             <el-button v-if="['DRAFT','SUBMITTED'].includes(row.status) && canWrite" type="danger" link size="small" @click="handleAction(row.id, 'cancel')">取消</el-button>
