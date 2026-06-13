@@ -71,24 +71,13 @@ function rowActionsFor(row: TableRow) {
     { canViewPrice: canViewPrice.value }
   );
   const filtered = all.filter((a) => a.id !== 'view-detail');
-  // T138 方案A: "开始"(仅标进行中,不建批次)降级到"更多".
-  // 后端 startProduction 只标计划→进行中, 不建批次/不 spawn 工序任务,
-  // 用于不需逐道报工、直接 PC 录产量的轻量场景. 仅 PENDING 可见.
-  if (canWrite.value && isStartable(String(row.status || ''))) {
-    filtered.unshift({
-      id: 'start-only',
-      icon: '▶️',
-      label: '仅标进行中(不建批次)',
-      requiresConfirm: true,
-      aiHint: '只把计划标成进行中, 不建批次',
-    });
-  }
+  // 6.12 N1b: PC 主流程砍掉"待生产→点开工"中间态。
+  // PENDING 计划直接在未完成列表核对结单；需要逐道报工时使用行内 APP 报工按钮。
   return filtered;
 }
 function handleRowActionClick(actionId: string, row: TableRow) {
   switch (actionId) {
     case 'view-detail': handleViewPlan(row); break;
-    case 'start-only': void handleStart(row); break;
     case 'cancel': handleCancel(row); break;
     case 'print-pdf': void safePrint('production-task', factoryId.value, String(row.id), { fileName: `生产计划_${row.planNumber || row.id}` }); break;
     case 'copy': void handleCopyPlan(row); break;
@@ -1421,11 +1410,11 @@ async function handleCreateBatch(row: TableRow) {
     // #748: 加流程决策提示 (基于 May10 六扇门会议确认)
     await ElMessageBox.confirm(
       `确定将计划 "${row.planNumber}" 转为生产批次？\n\n` +
-      `转换后将自动创建批次并开始生产流程。\n\n` +
- `️ 流程提示：\n` +
-      `• 如果仓库尚未收到所需原料 → 请先点 "生成调拨单"，等仓库审批/出库后再转批次。\n` +
-      `• 如果原料已就位 → 直接转批次即可。\n` +
-      `• 转批次 = 开始生产；之后在 APP 报工审批，或在 PC 端"完成"录入实际产量。`,
+      `这是 APP 逐道报工的可选分支；PC 文员主流程可以直接点"核对结单"，不需要先转批次。\n\n` +
+      `流程提示：\n` +
+      `• 原料不足只做预警，不阻断转批次或结单。\n` +
+      `• 需要仓库备料时可先生成调拨单，但不是开工前置条件。\n` +
+      `• 转批次后会自动创建批次和工序任务，现场可在 APP 报工；最终仍由文员核对实际产量、领用和工时后结单。`,
       '转为批次',
       { type: 'warning', confirmButtonText: '确认转换', cancelButtonText: '取消' }
     );
@@ -1529,7 +1518,7 @@ function nextStepText(row: TableRow) {
   }
   if (status === 'IN_PROGRESS') return '继续 APP 报工或核对结单';
   if (status === 'PENDING') {
-    return row.skipProcessReporting === false ? 'APP 报工下发工序任务' : '核对结单或生成调拨单';
+    return row.skipProcessReporting === false ? '核对结单；需要逐道报工时下发 APP' : '核对结单；缺料只做预警';
   }
   if (status === 'PLANNED' || status === 'PREPARED') return '确认后进入未完成';
   if (status === 'CANCELLED') return '已取消';
