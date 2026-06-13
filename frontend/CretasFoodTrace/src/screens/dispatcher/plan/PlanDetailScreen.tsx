@@ -30,6 +30,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useNavigation, useRoute } from '@react-navigation/native';
+import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { Ionicons } from '@expo/vector-icons';
 import { useTranslation } from 'react-i18next';
 import { isAxiosError } from 'axios';
@@ -37,6 +38,9 @@ import { schedulingApiClient } from '../../../services/api/schedulingApiClient';
 import { productionPlanApiClient } from '../../../services/api/productionPlanApiClient';
 import { processTaskApiClient } from '../../../services/api/processTaskApiClient';
 import { safePrint } from '../../../services/api/printApiClient';
+import type { DispatcherStackParamList } from '../../../types/dispatcher';
+
+type NavigationProp = NativeStackNavigationProp<DispatcherStackParamList, 'PlanDetail'>;
 
 // 主题颜色
 const DISPATCHER_THEME = {
@@ -73,6 +77,7 @@ interface PlanDetail {
   processName: string;
   notes: string;
   createdAt: string;
+  createdBy: number | null;
   createdByName: string;
   assignedSupervisorName: string;
   suggestedProductionLineName: string;
@@ -135,7 +140,7 @@ const transformPlanToDetail = (apiPlan: Record<string, unknown> | object): PlanD
     processName: String(plan.processName || ''),
     notes: String(plan.notes || ''),
     createdAt: String(plan.createdAt || ''),
-    createdBy: plan.createdBy as any,
+    createdBy: plan.createdBy == null ? null : Number(plan.createdBy),
     createdByName: String(plan.createdByName || ''),
     assignedSupervisorName: String(plan.assignedSupervisorName || ''),
     suggestedProductionLineName: String(plan.suggestedProductionLineName || ''),
@@ -183,7 +188,7 @@ const transformBatches = (apiBatches: unknown[]): ProductionBatch[] => {
 };
 
 export default function PlanDetailScreen() {
-  const navigation = useNavigation();
+  const navigation = useNavigation<NavigationProp>();
   const route = useRoute();
   const { t } = useTranslation('dispatcher');
   const params = route.params as { planId?: string; planData?: Record<string, unknown> } | undefined;
@@ -338,9 +343,9 @@ export default function PlanDetailScreen() {
                 productTypeId: plan.productTypeId,
                 sourceCustomerName: plan.sourceCustomerName || plan.product,
               });
-              const data = res as { success?: boolean; data?: unknown[]; message?: string };
+              const data = res as { success?: boolean; data?: Array<{ productionRunId?: string }>; message?: string };
               if (data?.success && Array.isArray(data.data) && data.data.length > 0) {
-                const runId = (data.data[0] as any)?.productionRunId;
+                const runId = data.data[0]?.productionRunId;
                 setTasksGenerated(true);
                 setGeneratedRunId(runId || null);
                 Alert.alert('成功', `已生成 ${data.data.length} 个工序任务`);
@@ -657,7 +662,7 @@ export default function PlanDetailScreen() {
           ) : null}
           <View style={styles.detailRow}>
             <Text style={styles.detailLabel}>创建人</Text>
-            <Text style={styles.detailValue}>{plan.createdByName || `用户#${(plan as any).createdBy || '-'}`}</Text>
+            <Text style={styles.detailValue}>{plan.createdByName || `用户#${plan.createdBy ?? '-'}`}</Text>
           </View>
           {plan.assignedSupervisorName ? (
             <View style={styles.detailRow}>

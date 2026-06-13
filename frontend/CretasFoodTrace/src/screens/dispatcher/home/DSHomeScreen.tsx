@@ -34,12 +34,15 @@ import { productionPlanApiClient } from '../../../services/api/productionPlanApi
 import { useAuthStore } from '../../../store/authStore';
 import { useFactoryFeatureStore } from '../../../store/factoryFeatureStore';
 import { WorkflowVisualizer } from '../../../components/workflow';
-import type { WorkflowModule } from '../../../types/workflow';
+import { getBucketPrimaryStatus, type WorkflowModule } from '../../../types/workflow';
 
 const DS_WORKFLOW_MODULES: WorkflowModule[] = ['production', 'sales'];
+type FlexibleNavigation = {
+  navigate: (screen: string, params?: Record<string, unknown>) => void;
+};
 
 export default function DSHomeScreen() {
-  const navigation = useNavigation<any>();
+  const navigation = useNavigation<FlexibleNavigation>();
   const { user } = useAuthStore();
   const { isScreenEnabled } = useFactoryFeatureStore();
   const { t } = useTranslation('dispatcher');
@@ -59,7 +62,7 @@ export default function DSHomeScreen() {
       const [dashboardRes, linesRes, plansRes] = await Promise.all([
         schedulingApiClient.getDashboard().catch(() => ({ success: false, data: null })),
         schedulingApiClient.getProductionLines().catch(() => ({ success: false, data: [] })),
-        productionPlanApiClient.getProductionPlans({ page: 1, size: 200 } as any).catch(() => null),
+        productionPlanApiClient.getProductionPlans({ page: 1, size: 200 }).catch(() => null),
       ]);
 
       if (dashboardRes.success && dashboardRes.data) {
@@ -68,8 +71,7 @@ export default function DSHomeScreen() {
 
       // Calculate plan stats from production-plans
       if (plansRes?.success !== false) {
-        const dataObj = (plansRes?.data || plansRes) as any;
-        const plans = dataObj?.content || (Array.isArray(dataObj) ? dataObj : []);
+        const plans = plansRes?.data?.content || [];
         if (Array.isArray(plans)) {
           const counts = { pending: 0, inProgress: 0, completed: 0, total: plans.length };
           for (const p of plans) {
@@ -137,6 +139,7 @@ export default function DSHomeScreen() {
 
   const completionProbability = dashboard?.aiInsights?.completionProbability ?? 0;
   const riskLevel = dashboard?.aiInsights?.riskLevel ?? 'low';
+  const optimizationPotential = dashboard?.aiInsights?.optimizationPotential;
 
   // 错误状态
   if (error && !dashboard) {
@@ -263,7 +266,7 @@ export default function DSHomeScreen() {
                 </View>
                 <View style={styles.aiStatRow}>
                   <Text style={styles.aiStatLabel}>优化空间</Text>
-                  <Text style={styles.aiStatValue}>{dashboard?.aiInsights?.optimizationPotential ? `+${dashboard.aiInsights.optimizationPotential}%` : '-'}</Text>
+                  <Text style={styles.aiStatValue}>{optimizationPotential != null ? `+${optimizationPotential}%` : '-'}</Text>
                 </View>
               </View>
             </View>

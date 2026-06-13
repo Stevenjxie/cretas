@@ -116,6 +116,7 @@ interface BomPurchaseOrderChild {
   quantity: number | string;
   unit: string;
   unitPrice: number | string;
+  taxRate?: number | string | null;
 }
 function bomPurchaseOrderParentFactory(): BomPurchaseOrderParent {
   return { supplierId: '', purchaseType: 'NORMAL', expectedDate: '', remark: '' };
@@ -137,6 +138,7 @@ async function expandBomPurchaseTemplate(materialId: string): Promise<BomPurchas
       quantity: 1,
       unit: String((tpl as Record<string, unknown>).unit || 'kg'),
       unitPrice: Number((tpl as Record<string, unknown>).referencePrice ?? (tpl as Record<string, unknown>).price ?? 0) || 0,
+      taxRate: normalizeTaxRateForPayload(tpl.taxRate),
     },
   ];
 }
@@ -146,6 +148,10 @@ async function submitBomPurchaseOrder(parent: BomPurchaseOrderParent, children: 
   }
   if (!children.length) {
     throw new Error('请至少添加 1 项明细');
+  }
+  const invalidChildIndex = children.findIndex((c) => validateTaxRate(c.taxRate));
+  if (invalidChildIndex >= 0) {
+    throw new Error(`第 ${invalidChildIndex + 1} 行税率必须是 0-100 之间的数字`);
   }
   const payload = {
     supplierId: parent.supplierId,
@@ -158,6 +164,7 @@ async function submitBomPurchaseOrder(parent: BomPurchaseOrderParent, children: 
       quantity: Number(c.quantity) || 0,
       unit: c.unit || 'kg',
       unitPrice: Number(c.unitPrice) || 0,
+      taxRate: normalizeTaxRateForPayload(c.taxRate),
     })),
   };
   const res = await post(`/${factoryId.value}/purchase/orders`, payload);
@@ -376,8 +383,31 @@ interface ProcurementOrderItem {
   quantity: number;
   unit: string;
   unitPrice: number;
+  taxRate?: number | string | null;
   specification?: string;
   boxQuantity?: number;
+}
+
+const commonTaxRateOptions = [
+  { label: '0%', value: 0 },
+  { label: '9%', value: 9 },
+  { label: '13%', value: 13 },
+];
+
+function validateTaxRate(rate: unknown): string | null {
+  if (rate == null || rate === '') return null;
+  const numeric = Number(rate);
+  if (!Number.isFinite(numeric) || numeric < 0 || numeric > 100) {
+    return '税率必须是 0-100 之间的数字';
+  }
+  return null;
+}
+
+function normalizeTaxRateForPayload(rate: unknown): number | null {
+  const message = validateTaxRate(rate);
+  if (message) throw new Error(message);
+  if (rate == null || rate === '') return null;
+  return Number(rate);
 }
 
 const form = ref({
@@ -389,7 +419,7 @@ const form = ref({
   contractNumber: '',       // SP6 合同号（选填，对应纸质/框架合同）
   settlementType: '',       // SP6 结算方式
   invoiceReminderDays: null as number | null,  // SP6 开票提醒天数
-  items: [{ materialTypeId: '', quantity: 0, unit: 'kg', unitPrice: 0 }] as ProcurementOrderItem[],
+  items: [{ materialTypeId: '', quantity: 0, unit: 'kg', unitPrice: 0, taxRate: null }] as ProcurementOrderItem[],
   customFields: {} as TableRow,
 });
 const suppliers = ref<TableRow[]>([]);
@@ -448,6 +478,9 @@ function onItemMaterialChange(item: TableRow) {
     // 选原料后默认带入该原料的一级单位 (除非用户已经填了)
     const mat = materials.value.find((m) => m.id === matId);
     if (mat && mat.unit && !item.unit) item.unit = String(mat.unit);
+    if (mat && mat.taxRate != null && item.taxRate == null && !validateTaxRate(mat.taxRate)) {
+      item.taxRate = Number(mat.taxRate);
+    }
     recalcBoxQuantity(item);  // P1-2: packaging 拉到后立即算箱数
   });
 }
@@ -593,7 +626,7 @@ async function loadSalesOrders() {
 }
 
 function addItem() {
-  form.value.items.push({ materialTypeId: '', quantity: 0, unit: 'kg', unitPrice: 0 });
+  form.value.items.push({ materialTypeId: '', quantity: 0, unit: 'kg', unitPrice: 0, taxRate: null });
 }
 
 function removeItem(index: number) {
@@ -607,6 +640,10 @@ async function handleCreate() {
   if (!form.value.supplierId) return ElMessage.warning('请选择供应商');
   if (form.value.items.some(i => !i.materialTypeId)) return ElMessage.warning('请选择所有原料');
   if (form.value.items.some(i => !i.unit)) return ElMessage.warning('请填写所有明细的单位');
+  const invalidTaxRateIndex = form.value.items.findIndex((i) => validateTaxRate(i.taxRate));
+  if (invalidTaxRateIndex >= 0) {
+    return ElMessage.warning(`第 ${invalidTaxRateIndex + 1} 行税率必须是 0-100 之间的数字`);
+  }
   submitting.value = true;
   try {
     // W-12 fix (Round 15): previously relatedSalesOrderId was stripped from payload
@@ -621,9 +658,13 @@ async function handleCreate() {
       const soRef = so ? `[关联销售订单: ${so.orderNumber}]` : '';
       remark = soRef ? (remark ? `${soRef} ${remark}` : soRef) : remark;
     }
-    const { relatedSalesOrderId: _unused, ...formData } = form.value;
+    const { relatedSalesOrderId: _unused, items, ...formData } = form.value;
     const payload = {
       ...formData,
+      items: items.map((i) => ({
+        ...i,
+        taxRate: normalizeTaxRateForPayload(i.taxRate),
+      })),
       remark,
       salesOrderId,
       orderDate: new Date().toISOString().slice(0, 10), // backend requires @NotNull orderDate
@@ -646,7 +687,7 @@ async function handleCreate() {
 }
 
 function resetForm() {
-  form.value = { supplierId: '', purchaseType: 'DIRECT', expectedDeliveryDate: '', remark: '', relatedSalesOrderId: '', contractNumber: '', settlementType: '', invoiceReminderDays: null, items: [{ materialTypeId: '', quantity: 0, unit: 'kg', unitPrice: 0 }], customFields: {} as TableRow };
+  form.value = { supplierId: '', purchaseType: 'DIRECT', expectedDeliveryDate: '', remark: '', relatedSalesOrderId: '', contractNumber: '', settlementType: '', invoiceReminderDays: null, items: [{ materialTypeId: '', quantity: 0, unit: 'kg', unitPrice: 0, taxRate: null }], customFields: {} as TableRow };
 }
 
 // 张权 Apr 28 反馈: "基础数据已经新建了 但是采购订单 下拉没有选项"
@@ -767,6 +808,7 @@ function handleAiFill(params: TableRow) {
         quantity: Number(item.quantity || 0),
         unit: String(item.unit || 'kg'),
         unitPrice: Number(item.unitPrice || 0),
+        taxRate: validateTaxRate(item.taxRate) ? null : normalizeTaxRateForPayload(item.taxRate),
       };
     });
   }
@@ -1052,6 +1094,7 @@ function handleAiFill(params: TableRow) {
           <span style="width: 140px">数量</span>
           <span style="width: 130px">单位</span>
           <span style="width: 160px">单价</span>
+          <span style="width: 130px">税率</span>
           <span style="width: 140px">箱数</span>
           <span style="width: 70px">操作</span>
         </div>
@@ -1087,6 +1130,27 @@ function handleAiFill(params: TableRow) {
             />
           </el-select>
           <el-input-number v-model="item.unitPrice" :min="0" :precision="2" placeholder="单价" style="width: 160px" />
+          <div style="width: 130px">
+            <el-select
+              v-model="item.taxRate"
+              placeholder="未配置"
+              clearable
+              filterable
+              allow-create
+              default-first-option
+              style="width: 100%"
+            >
+              <el-option
+                v-for="opt in commonTaxRateOptions"
+                :key="opt.value"
+                :label="opt.label"
+                :value="opt.value"
+              />
+            </el-select>
+            <div v-if="validateTaxRate(item.taxRate)" class="field-error">
+              {{ validateTaxRate(item.taxRate) }}
+            </div>
+          </div>
           <!-- P1-2/3 R2 fix: el-tag 替换 inline-styled div, 跟随 Element Plus 主题 + 暗模式 -->
           <el-tag v-if="isAbacaItem(item)" type="warning" effect="light" size="default" style="width: 140px; text-align: center;">抄码品</el-tag>
           <el-input-number v-else v-model="item.boxQuantity" :min="0" :precision="2" placeholder="箱" style="width: 140px" />
@@ -1189,6 +1253,7 @@ function handleAiFill(params: TableRow) {
         { prop: 'quantity', label: '数量', width: 120, slotName: 'quantity' },
         { prop: 'unit', label: '单位', width: 100 },
         { prop: 'unitPrice', label: '单价', width: 140, slotName: 'price' },
+        { prop: 'taxRate', label: '税率', width: 140, slotName: 'taxRate' },
       ]"
       :max-children="50"
     >
@@ -1219,6 +1284,28 @@ function handleAiFill(params: TableRow) {
       </template>
       <template #price="{ row }">
         <el-input-number v-model="row.unitPrice" :min="0" :step="0.01" :precision="2" size="small" style="width: 100%" />
+      </template>
+      <template #taxRate="{ row }">
+        <el-select
+          v-model="row.taxRate"
+          placeholder="未配置"
+          clearable
+          filterable
+          allow-create
+          default-first-option
+          size="small"
+          style="width: 100%"
+        >
+          <el-option
+            v-for="opt in commonTaxRateOptions"
+            :key="opt.value"
+            :label="opt.label"
+            :value="opt.value"
+          />
+        </el-select>
+        <div v-if="validateTaxRate(row.taxRate)" class="field-error">
+          {{ validateTaxRate(row.taxRate) }}
+        </div>
       </template>
     </BomExpansionDialog>
 
@@ -1276,4 +1363,5 @@ function handleAiFill(params: TableRow) {
 .item-header { font-size: 13px; font-weight: 600; color: #606266; margin-bottom: 4px;
   span { text-align: center; display: inline-block; }
 }
+.field-error { color: #f56c6c; font-size: 12px; line-height: 16px; margin-top: 2px; }
 </style>

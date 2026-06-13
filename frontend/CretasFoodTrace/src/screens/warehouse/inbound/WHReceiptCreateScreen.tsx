@@ -140,7 +140,8 @@ export default function WHReceiptCreateScreen() {
         );
         const map: Record<string, MaterialType> = {};
         typesArr.forEach((t, idx) => {
-          if (t) map[uniqueTypeIds[idx]] = t;
+          const typeId = uniqueTypeIds[idx];
+          if (t && typeId) map[typeId] = t;
         });
         setMaterialsById(map);
       } catch (err) {
@@ -267,13 +268,17 @@ export default function WHReceiptCreateScreen() {
         supplierId: order.supplierId,
         receiveDate: todayStr(),
         remark: orderNumber ? `扫码入库: ${orderNumber}` : '扫码入库',
-        items: validItems.map((it) => ({
-          materialTypeId: it.materialTypeId,
-          materialName: it.materialTypeName,
-          receivedQuantity: Number(rows[it.id].receivedQuantity),
-          unit: unitFor(it),
-          unitPrice: it.unitPrice,
-        })),
+        items: validItems.map((it) => {
+          const row = rows[it.id];
+          if (!row) throw new Error(`收货行缺失: ${it.materialTypeName || it.materialTypeId}`);
+          return {
+            materialTypeId: it.materialTypeId,
+            materialName: it.materialTypeName,
+            receivedQuantity: Number(row.receivedQuantity),
+            unit: unitFor(it),
+            unitPrice: it.unitPrice,
+          };
+        }),
       };
       const createRes = await purchaseApiClient.createReceive(receivePayload, factoryId);
       const receive: PurchaseReceiveRecord = createRes.data;
@@ -319,15 +324,17 @@ export default function WHReceiptCreateScreen() {
           continue;
         }
         try {
+          const row = rows[it.id];
+          if (!row) throw new Error(`收货行缺失: ${it.materialTypeName || it.materialTypeId}`);
           await abacaApiClient.create(
             {
               batchNumber: confirmedItem.batchNumber,
               rawMaterialTypeId: it.materialTypeId,
-              actualWeight: Number(rows[it.id].receivedQuantity),
+              actualWeight: Number(row.receivedQuantity),
               unit: unitFor(it),
               weighingMethod: 'MANUAL',
               purchaseOrderItemId: it.id,
-              notes: `扫码入库自动落账; 商品日期 ${rows[it.id].productionDate}`,
+              notes: `扫码入库自动落账; 商品日期 ${row.productionDate}`,
             },
             factoryId,
           );

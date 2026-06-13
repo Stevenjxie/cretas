@@ -52,6 +52,10 @@ import type {
 const screenLogger = logger.createContextLogger('ProductWorkProcessConfig');
 
 type RoutePropType = RouteProp<ManagementStackParamList, 'ProductWorkProcessConfig'>;
+type WorkProcessNavigation = {
+  navigate: (screen: string) => void;
+  goBack: () => void;
+};
 
 interface SelectedProduct {
   id: string;
@@ -60,7 +64,7 @@ interface SelectedProduct {
 }
 
 export default function ProductWorkProcessConfigScreen() {
-  const navigation = useNavigation();
+  const navigation = useNavigation<WorkProcessNavigation>();
   const route = useRoute<RoutePropType>();
   const user = useAuthStore((state) => state.user);
   const factoryId = getFactoryId(user);
@@ -156,7 +160,7 @@ export default function ProductWorkProcessConfigScreen() {
         {
           text: '去新增',
           onPress: () => {
-            (navigation as any).navigate('WorkProcessList');
+            navigation.navigate('WorkProcessList');
           },
         },
       ]);
@@ -216,7 +220,9 @@ export default function ProductWorkProcessConfigScreen() {
     if (index <= 0) return;
     const next = [...bindings];
     const tmp = next[index - 1];
-    next[index - 1] = next[index];
+    const current = next[index];
+    if (!tmp || !current) return;
+    next[index - 1] = current;
     next[index] = tmp;
     reorderAndPersist(next);
   };
@@ -225,7 +231,9 @@ export default function ProductWorkProcessConfigScreen() {
     if (index >= bindings.length - 1) return;
     const next = [...bindings];
     const tmp = next[index + 1];
-    next[index + 1] = next[index];
+    const current = next[index];
+    if (!tmp || !current) return;
+    next[index + 1] = current;
     next[index] = tmp;
     reorderAndPersist(next);
   };

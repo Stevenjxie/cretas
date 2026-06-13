@@ -95,6 +95,9 @@ export function WSHomeScreen() {
   const { t } = useTranslation('workshop');
   const insets = useSafeAreaInsets();
   const draftCount = useDraftReportStore(s => s.drafts.length);
+  const [refreshing, setRefreshing] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   // Tutorial
   const activeTutorial = useTutorialStore(s => s.activeTutorial);
@@ -159,6 +162,34 @@ export function WSHomeScreen() {
     }
   }, [showTutorial]);
 
+  const navigateQuickAction = useCallback((screen: string) => {
+    switch (screen) {
+      case 'ProcessOperation':
+        navigation.navigate('ProcessOperation');
+        return;
+      case 'MyWorkReports':
+        navigation.navigate('MyWorkReports');
+        return;
+      case 'ProcessTaskList':
+        navigation.navigate('ProcessTaskList');
+        return;
+      case 'YieldBatchSelect':
+        navigation.navigate('YieldBatchSelect');
+        return;
+      case 'NfcCheckin':
+        navigation.navigate('NfcCheckin');
+        return;
+      case 'TeamBatchReport':
+        navigation.navigate('TeamBatchReport');
+        return;
+      case 'EquipmentMonitoring':
+        navigation.navigate('EquipmentMonitoring');
+        return;
+      default:
+        return;
+    }
+  }, [navigation]);
+
   // Auto-scroll if target off-screen (e.g. next-task card below fold)
   useEffect(() => {
     if (!showTutorial) return;
@@ -196,10 +227,6 @@ export function WSHomeScreen() {
   }, [navigation]);
 
   // 状态
-  const [refreshing, setRefreshing] = useState(false);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
   // 状态数据 - 从API加载
   const [nextTask, setNextTask] = useState<NextTask | null>(null);
   const [taskStats, setTaskStats] = useState<TaskStats>({
@@ -316,9 +343,9 @@ export function WSHomeScreen() {
       // 获取未读通知数
       try {
         const { notificationApiClient } = await import('../../../services/api/notificationApiClient');
-        const notifRes = await notificationApiClient.getUnreadCount() as any;
+        const notifRes = await notificationApiClient.getUnreadCount();
         if (notifRes?.success && notifRes.data) {
-          setUnreadCount(notifRes.data.count ?? notifRes.data ?? 0);
+          setUnreadCount(notifRes.data.count ?? 0);
         }
       } catch { /* silent */ }
 
@@ -441,13 +468,13 @@ export function WSHomeScreen() {
             factoryId={user?.factoryId}
             aiTriggerEnabled
             onNodePress={(module, nodeId) =>
-              navigation.navigate('ProductionPlanManagement' as never, { statusFilter: getBucketPrimaryStatus(module, nodeId) } as never)
+              navigation.navigate('ProductionPlanManagement', { statusFilter: getBucketPrimaryStatus(module, nodeId) })
             }
             onNodeLongPress={(_module, ctx) =>
-              navigation.navigate('AIChat' as never, { entryContext: ctx } as never)
+              navigation.navigate('AIChat', { entryContext: ctx })
             }
             onAITrigger={(_module, ctx) =>
-              navigation.navigate('AIChat' as never, { entryContext: ctx } as never)
+              navigation.navigate('AIChat', { entryContext: ctx })
             }
           />
         </View>
@@ -458,7 +485,7 @@ export function WSHomeScreen() {
             role="workshop_supervisor"
             allActions={WORKSHOP_SUP_ACTIONS}
             onActionPress={(action) => {
-              navigation.navigate(action.screen as never, action.params as never);
+              navigateQuickAction(action.screen);
             }}
             tutorialTargets={tutorialTargets}
           />

@@ -38,6 +38,21 @@ interface ScanOperationParams {
   orderId?: string;
 }
 
+interface PurchaseOrderLookup {
+  id?: string;
+  orderNumber?: string;
+}
+
+type AlertPrompt = (
+  title: string,
+  message?: string,
+  buttons?: Array<{ text: string; style?: "default" | "cancel" | "destructive"; onPress?: (text: string) => void }>,
+  type?: "plain-text" | "secure-text" | "login-password",
+  defaultValue?: string,
+  keyboardType?: string,
+) => void;
+type AlertWithPrompt = typeof Alert & { prompt?: AlertPrompt };
+
 const SCAN_COOLDOWN_MS = 2000; // 同一扫码冷却, 防 onBarcodeScanned 高频重复触发
 
 export function WHScanOperationScreen() {
@@ -83,15 +98,15 @@ export function WHScanOperationScreen() {
     setCameraActive(false);
     try {
       const res = await purchaseApiClient.getOrderByNumber(code);
-      const order: any = res?.data;
+      const order = res?.data as PurchaseOrderLookup | undefined;
       if (!order || !order.id) {
         Alert.alert("订单未找到", `订单号 ${code} 在当前工厂查不到. 请确认 PDF 是本工厂打印的供货单.`);
         return;
       }
-      navigation.navigate("WHReceiptCreate" as never, {
+      navigation.navigate("WHReceiptCreate", {
         purchaseOrderId: order.id,
         orderNumber: order.orderNumber ?? code,
-      } as never);
+      });
     } catch (err) {
       handleError(err, { title: "扫码识别失败" });
     } finally {
@@ -105,7 +120,7 @@ export function WHScanOperationScreen() {
   }, [resolveScan, resolving]);
 
   const handleManualInput = useCallback(() => {
-    const promptFn = (Alert as any).prompt;
+    const promptFn = (Alert as AlertWithPrompt).prompt;
     if (typeof promptFn === "function") {
       promptFn(
         mode === "inbound" ? "手动输入采购订单号" : "手动输入批次号",

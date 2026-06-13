@@ -6,6 +6,7 @@ import { requireFactoryId } from '../../utils/factoryIdHelper';
 export interface ProcessTaskItem {
   id: string;
   factoryId: string;
+  batchNumber?: string;
   productTypeId: string;
   productTypeName?: string;
   workProcessId: string;
@@ -26,12 +27,41 @@ export interface ProcessTaskItem {
   completedQuantity: number;
   pendingQuantity: number;
   inputQuantity?: number;
-  status: 'PENDING' | 'IN_PROGRESS' | 'COMPLETED' | 'CLOSED' | 'SUPPLEMENTING';
+  status: 'PENDING' | 'IN_PROGRESS' | 'COMPLETED' | 'CLOSED' | 'SUPPLEMENTING' | string;
   assignedWorkerIds?: string;
   workflowVersionId?: string;
   previousTerminalStatus?: string;
   createdAt?: string;
   updatedAt?: string;
+}
+
+interface ApiEnvelope<T> {
+  success: boolean;
+  data?: T;
+  message?: string;
+}
+
+interface ProcessCheckinResponseData {
+  employeeName?: string;
+}
+
+interface ProcessCheckinRecord {
+  id: number;
+  processTaskId?: string | number;
+  employeeId: number;
+  employeeName?: string;
+  workerName?: string;
+  checkInTime?: string;
+  checkOutTime?: string;
+  status?: string;
+  processName?: string;
+}
+
+interface TaskWorkerRecord {
+  id?: number;
+  employeeId?: number;
+  name?: string;
+  fullName?: string;
 }
 
 export interface ProcessTaskSummary {
@@ -171,9 +201,9 @@ class ProcessTaskApiClient {
 
   // --- Process Tasks ---
 
-  async getActiveTasks(factoryId?: string) {
+  async getActiveTasks(factoryId?: string): Promise<ApiEnvelope<ProcessTaskItem[] | { content: ProcessTaskItem[] }>> {
     const base = this.getBase(factoryId);
-    return apiClient.get(`${base}/process-tasks/active`);
+    return apiClient.get<ApiEnvelope<ProcessTaskItem[] | { content: ProcessTaskItem[] }>>(`${base}/process-tasks/active`);
   }
 
   async getTasks(params: { status?: string; productTypeId?: string; page?: number; size?: number }, factoryId?: string) {
@@ -238,26 +268,26 @@ class ProcessTaskApiClient {
     return apiClient.get(`${base}/process-work-reporting/by-task/${taskId}`);
   }
 
-  async getWorkersByTask(taskId: string, factoryId?: string) {
+  async getWorkersByTask(taskId: string, factoryId?: string): Promise<ApiEnvelope<TaskWorkerRecord[]>> {
     const base = this.getBase(factoryId);
-    return apiClient.get(`${base}/process-work-reporting/by-task/${taskId}/workers`);
+    return apiClient.get<ApiEnvelope<TaskWorkerRecord[]>>(`${base}/process-work-reporting/by-task/${taskId}/workers`);
   }
 
   // --- Process Checkin (工序模式签到) ---
 
-  async processCheckin(data: { employeeId: number; processName?: string; processCategory?: string; checkinMethod?: string; processTaskId?: string }, factoryId?: string) {
+  async processCheckin(data: { employeeId: number; processName?: string; processCategory?: string; checkinMethod?: string; processTaskId?: string }, factoryId?: string): Promise<ApiEnvelope<ProcessCheckinResponseData>> {
     const base = this.getBase(factoryId);
-    return apiClient.post(`${base}/process-checkin`, data);
+    return apiClient.post<ApiEnvelope<ProcessCheckinResponseData>>(`${base}/process-checkin`, data);
   }
 
-  async processCheckout(checkinRecordId: number, factoryId?: string) {
+  async processCheckout(checkinRecordId: number, factoryId?: string): Promise<ApiEnvelope<null>> {
     const base = this.getBase(factoryId);
-    return apiClient.post(`${base}/process-checkin/checkout/${checkinRecordId}`);
+    return apiClient.post<ApiEnvelope<null>>(`${base}/process-checkin/checkout/${checkinRecordId}`);
   }
 
-  async getActiveCheckins(factoryId?: string) {
+  async getActiveCheckins(factoryId?: string): Promise<ApiEnvelope<ProcessCheckinRecord[]>> {
     const base = this.getBase(factoryId);
-    return apiClient.get(`${base}/process-checkin/active`);
+    return apiClient.get<ApiEnvelope<ProcessCheckinRecord[]>>(`${base}/process-checkin/active`);
   }
 
   /** 根据产品关联的工序，一键生成工序任务 */

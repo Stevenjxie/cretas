@@ -72,19 +72,14 @@ def _stub(name: str) -> dict:
     }
 
 
-DEFAULT_SALES_TAX_RATE = 13.0
+def _money_fields(total_amount, tax_amount=None) -> dict[str, float]:
+    """Expose report money fields from persisted untaxed and tax totals.
 
-
-def _money_fields(total_amount_with_tax, tax_rate: float = DEFAULT_SALES_TAX_RATE) -> dict[str, float]:
-    """Expose report money fields from a tax-included amount.
-
-    六扇门口径: 销售报表按含税金额展示, 未税金额 = 含税金额 / 1.13,
-    税额 = 含税金额 - 未税金额。Keep ``revenue`` as the legacy untaxed alias.
+    Keep ``revenue`` as the legacy untaxed alias.
     """
-    gross = float(total_amount_with_tax or 0)
-    divisor = 1 + (float(tax_rate) / 100)
-    taxable = gross / divisor if divisor else gross
-    tax = gross - taxable
+    taxable = float(total_amount or 0)
+    tax = float(tax_amount or 0)
+    gross = taxable + tax
     return {
         "revenue": taxable,
         "taxableAmount": taxable,
@@ -111,7 +106,8 @@ async def daily_report(factory_id: str, request: Request, date_: str | None = Qu
         row = await conn.fetchrow(
             """
             SELECT COUNT(*) AS order_count,
-                   COALESCE(SUM(total_amount), 0) + COALESCE(SUM(tax_amount), 0) AS total_amount_with_tax,
+                   COALESCE(SUM(total_amount), 0) AS total_amount,
+                   COALESCE(SUM(tax_amount), 0) AS tax_amount,
                    COALESCE(SUM(paid_amount), 0) AS paid,
                    COALESCE(SUM(total_amount), 0) + COALESCE(SUM(tax_amount), 0) - COALESCE(SUM(paid_amount), 0) AS unpaid
             FROM sales_orders
@@ -126,7 +122,7 @@ async def daily_report(factory_id: str, request: Request, date_: str | None = Qu
         "data": {
             "date": d.isoformat(),
             "orderCount": row["order_count"],
-            **_money_fields(row["total_amount_with_tax"]),
+            **_money_fields(row["total_amount"], row["tax_amount"]),
             "paid": float(row["paid"]),
             "unpaid": float(row["unpaid"]),
         },
@@ -162,7 +158,8 @@ async def monthly_report(factory_id: str, request: Request, yearMonth: str | Non
         total = await conn.fetchrow(
             """
             SELECT COUNT(*) AS order_count,
-                   COALESCE(SUM(total_amount), 0) + COALESCE(SUM(tax_amount), 0) AS total_amount_with_tax,
+                   COALESCE(SUM(total_amount), 0) AS total_amount,
+                   COALESCE(SUM(tax_amount), 0) AS tax_amount,
                    COALESCE(SUM(paid_amount), 0) AS paid
             FROM sales_orders
             WHERE factory_id = $1 AND order_date BETWEEN $2 AND $3
@@ -175,7 +172,8 @@ async def monthly_report(factory_id: str, request: Request, yearMonth: str | Non
             """
             SELECT order_date,
                    COUNT(*) AS order_count,
-                   COALESCE(SUM(total_amount), 0) + COALESCE(SUM(tax_amount), 0) AS total_amount_with_tax
+                   COALESCE(SUM(total_amount), 0) AS total_amount,
+                   COALESCE(SUM(tax_amount), 0) AS tax_amount
             FROM sales_orders
             WHERE factory_id = $1 AND order_date BETWEEN $2 AND $3
               AND status NOT IN ('DRAFT', 'CANCELLED')
@@ -190,14 +188,14 @@ async def monthly_report(factory_id: str, request: Request, yearMonth: str | Non
         "data": {
             "yearMonth": f"{ym_year:04d}-{ym_month:02d}",
             "orderCount": total["order_count"],
-            **_money_fields(total["total_amount_with_tax"]),
+            **_money_fields(total["total_amount"], total["tax_amount"]),
             "paid": float(total["paid"]),
-            "unpaid": float(total["total_amount_with_tax"]) - float(total["paid"]),
+            "unpaid": float(total["total_amount"]) + float(total["tax_amount"]) - float(total["paid"]),
             "daily": [
                 {
                     "date": r["order_date"].isoformat(),
                     "orderCount": r["order_count"],
-                    **_money_fields(r["total_amount_with_tax"]),
+                    **_money_fields(r["total_amount"], r["tax_amount"]),
                 }
                 for r in daily
             ],
@@ -220,7 +218,8 @@ async def yearly_report(factory_id: str, request: Request, year: int | None = No
         total = await conn.fetchrow(
             """
             SELECT COUNT(*) AS order_count,
-                   COALESCE(SUM(total_amount), 0) + COALESCE(SUM(tax_amount), 0) AS total_amount_with_tax,
+                   COALESCE(SUM(total_amount), 0) AS total_amount,
+                   COALESCE(SUM(tax_amount), 0) AS tax_amount,
                    COALESCE(SUM(paid_amount), 0) AS paid
             FROM sales_orders
             WHERE factory_id = $1 AND order_date BETWEEN $2 AND $3
@@ -233,7 +232,8 @@ async def yearly_report(factory_id: str, request: Request, year: int | None = No
             """
             SELECT EXTRACT(MONTH FROM order_date)::int AS m,
                    COUNT(*) AS order_count,
-                   COALESCE(SUM(total_amount), 0) + COALESCE(SUM(tax_amount), 0) AS total_amount_with_tax
+                   COALESCE(SUM(total_amount), 0) AS total_amount,
+                   COALESCE(SUM(tax_amount), 0) AS tax_amount
             FROM sales_orders
             WHERE factory_id = $1 AND order_date BETWEEN $2 AND $3
               AND status NOT IN ('DRAFT', 'CANCELLED')
@@ -248,10 +248,10 @@ async def yearly_report(factory_id: str, request: Request, year: int | None = No
         "data": {
             "year": y,
             "orderCount": total["order_count"],
-            **_money_fields(total["total_amount_with_tax"]),
+            **_money_fields(total["total_amount"], total["tax_amount"]),
             "paid": float(total["paid"]),
             "monthly": [
-                {"month": r["m"], "orderCount": r["order_count"], **_money_fields(r["total_amount_with_tax"])}
+                {"month": r["m"], "orderCount": r["order_count"], **_money_fields(r["total_amount"], r["tax_amount"])}
                 for r in monthly
             ],
         },
@@ -281,6 +281,8 @@ async def customer_rank(
             SELECT so.customer_id,
                    COALESCE(c.name, so.customer_id) AS customer_name,
                    COUNT(*) AS order_count,
+                   COALESCE(SUM(so.total_amount), 0) AS total_amount,
+                   COALESCE(SUM(so.tax_amount), 0) AS tax_amount,
                    COALESCE(SUM(so.total_amount), 0) + COALESCE(SUM(so.tax_amount), 0) AS total_amount_with_tax,
                    COALESCE(SUM(so.paid_amount), 0) AS paid
             FROM sales_orders so
@@ -305,7 +307,7 @@ async def customer_rank(
                     "customerId": r["customer_id"],
                     "customerName": r["customer_name"],
                     "orderCount": r["order_count"],
-                    **_money_fields(r["total_amount_with_tax"]),
+                    **_money_fields(r["total_amount"], r["tax_amount"]),
                     "paid": float(r["paid"]),
                 }
                 for i, r in enumerate(rows)
@@ -338,6 +340,8 @@ async def product_rank(
                    MAX(soi.product_name) AS product_name,
                    SUM(soi.quantity) AS total_qty,
                    MAX(soi.unit) AS unit,
+                   SUM(COALESCE(soi.quantity, 0) * COALESCE(soi.unit_price, 0)) AS total_amount,
+                   SUM(COALESCE(soi.quantity, 0) * COALESCE(soi.unit_price, 0) * COALESCE(soi.tax_rate, 0) / 100) AS tax_amount,
                    SUM(COALESCE(soi.quantity, 0) * COALESCE(soi.unit_price, 0) * (1 + COALESCE(soi.tax_rate, 0) / 100)) AS total_amount_with_tax,
                    COUNT(DISTINCT soi.sales_order_id) AS order_count
             FROM sales_order_items soi
@@ -364,7 +368,7 @@ async def product_rank(
                     "productName": r["product_name"],
                     "totalQty": float(r["total_qty"]) if r["total_qty"] is not None else 0.0,
                     "unit": r["unit"],
-                    **_money_fields(r["total_amount_with_tax"]),
+                    **_money_fields(r["total_amount"], r["tax_amount"]),
                     "orderCount": r["order_count"],
                 }
                 for i, r in enumerate(rows)

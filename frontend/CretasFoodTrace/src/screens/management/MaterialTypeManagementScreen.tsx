@@ -288,6 +288,7 @@ export default function MaterialTypeManagementScreen() {
       }, 0);
       return () => clearTimeout(t);
     }
+    return undefined;
   }, [modalVisible, schemaReady]);
 
   // 编辑老数据时, 若历史值不在字典 enum 中 (例旧 category="海鲜"), 注入避免丢失
@@ -297,11 +298,14 @@ export default function MaterialTypeManagementScreen() {
         const properties = { ...prev.properties };
         const ensureEnum = (field: string, value?: string) => {
           if (!value || !value.trim()) return;
-          const current = properties[field]?.enum as Array<{ label: string; value: string }> | undefined;
+          const fieldSchema = properties[field];
+          if (!fieldSchema) return;
+          const current = fieldSchema.enum as Array<{ label: string; value: string }> | undefined;
           if (!current) return;
           if (!current.find((o) => o.value === value)) {
             properties[field] = {
-              ...properties[field],
+              ...fieldSchema,
+              type: fieldSchema.type || 'string',
               enum: [{ label: value, value }, ...current],
             };
           }

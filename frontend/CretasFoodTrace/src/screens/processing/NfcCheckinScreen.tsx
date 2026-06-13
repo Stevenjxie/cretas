@@ -49,7 +49,7 @@ export default function NfcCheckinScreen() {
   const factoryId = getFactoryId();
   const isProcessMode = useFactoryFeatureStore((s) => s.isProcessMode);
 
-  if (!factoryId) {
+  if (false && !factoryId) {
     return (
       <View style={[styles.container, { paddingTop: insets.top }]}>
         <View style={styles.emptyState}>
@@ -378,6 +378,17 @@ export default function NfcCheckinScreen() {
   }, []);
 
   // --- Render: Selection (Phase 1) ---
+
+  if (!factoryId) {
+    return (
+      <View style={[styles.container, { paddingTop: insets.top }]}>
+        <View style={styles.emptyState}>
+          <MaterialCommunityIcons name="alert-circle-outline" size={48} color="#999" />
+          <Text style={styles.emptyText}>请使用工厂账号登录后使用签到功能</Text>
+        </View>
+      </View>
+    );
+  }
 
   const noSelection = isProcessMode() ? !selectedTask : !selectedBatch;
 
