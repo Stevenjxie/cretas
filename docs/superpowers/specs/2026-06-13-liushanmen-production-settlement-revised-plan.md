@@ -35,7 +35,32 @@
 按 6.12 重做生产主路径的 UI/API/结单行为
 ```
 
-### 1.2 二次加工最终边界
+### 1.2 6.9 仍然有效的生产大框架
+
+这次再核 6.9 后，需要明确：6.12 没重复说的，不等于不要。以下仍是生产实现的基础约束：
+
+- 主链路仍是销售/计划驱动生产，再串起领料、生产中、生产完结、成品/半成品库存、仓库确认和成本闭环。6.9 已经明确“工艺/车间细节全部省掉，只保留领料 -> 生产中 -> 生产完结主链”，6.12 只是把这个主链的结单口径补实。
+- 工序模板仍有效，但它是“积木”而不是硬流程。产品可以跳过不需要的工序；工序上有负责人、出成率、标准时长、人效/工价等字段，后续用于任务推送、报工和人效分析。
+- 人员绑定应在生产计划/批次层，而不是死绑 SKU 模板。6.9 讨论过生病、临时换岗，所以开工前看匹配工序和负责人，开工后把批次工序推到对应人手机 APP。
+- 分端原则仍有效：复杂/大数据量的结单、核对、审批、维护放 PC；现场单点动作如报工、领料确认、调拨接收放 RN/手机端。
+- 报工不是车间实时 MES，而是在线/批量补录闭环。至少要保留工序任务、实际数量、人数/工时、必要照片/证据、T/T-1/T-2 补录窗口和 T-3 锁死这类防呆规则。
+- 整单撤回仍有效，且是整单撤回，不是单工序撤回。有报工/库存/证据数据时走审批；无数据时可直撤；撤回必须保护半成品下游领用、成品状态和移动均价重放。
+- 半成品库存仍需要，且不是“每种半成品一个仓”。6.9 已明确一个半成品库下用不同半成品 code/SKU 区分焯水猪蹄、熟制猪蹄等不同成本对象。
+- 成本地基仍是实际批次和不含税成本。原料批次价、半成品移动均价、实际领用和工时是闭环依据；完整人效看板可以后置，但结单最小工时/人数数据不能缺。
+
+对应证据主要来自 `docs/meetings/2026-06-09-liushanmen/requirements-catalog.md:243`, `:255`, `:288-295`, `:327`, `:330`, `:778-791`, `:838-839`，以及 `docs/superpowers/specs/2026-06-09-liushanmen/SP1-production-loop-dual-output-spec.md:16-36`, `SP2-secondary-processing-and-reversal-spec.md:13-15`, `R8-dual-stack-merge-design.md:24-32`, `SP9-labor-cost-efficiency-spec.md:20-23`。
+
+### 1.3 6.12 对 6.9 的修正/收窄
+
+6.12 主要修正的是“如何让真实现场好用”，不是推翻 6.9：
+
+- 6.9 的“三状态/同单双产出”口径有摇摆；6.12 后采用“弱计划 + 同单可双领双产出 + 文员结单核对”的主路径。
+- 6.9 的“二次加工”曾覆盖较宽；6.12 收窄为跨单、独立返工/再加工。普通同单半成品领用/产出属于正常生产。
+- 6.9 的 BOM/参考配方仍是参考；6.12 明确实际领用、实际产量、实际工时才是结单和成本依据。
+- 6.9 说完整人效模块可后置；6.12 澄清“系统完成计划”至少要录实际产量、实际领用、最小工时/人效基础数据，才算生产侧完成。
+- 6.9 里的 APP 工序任务仍保留；6.12 要求 PC 文员结单补账，两个端的职责要衔接，不要把 RN 报工当作唯一完成动作。
+
+### 1.4 二次加工最终边界
 
 普通半成品领用不是二次加工。
 
@@ -53,7 +78,7 @@
 - 不属于原生产计划自然继续。
 - 需要单独 lineage、成本继承、撤回守卫。
 
-### 1.3 当前代码主要缺口
+### 1.5 当前代码主要缺口
 
 | 缺口 | 当前证据 | 风险 |
 |---|---|---|
@@ -75,6 +100,10 @@
 | 6.9+6.12: 成品+半成品双产出 | RN 输出阶段支持 BOTH，Web 结单也能核对 | `YieldStepReportScreen.tsx`; settlement output fields | partial | medium | C/D |
 | 6.9: 半成品移动均价与流水 | 半成品 IN/OUT 有 Txn，成本按实际 | `WipInventoryServiceImpl`; `SemiFinishedInventoryTransaction` | partial | untested | D |
 | 6.9: 二次加工+撤回 | 独立再加工/返工保留，不承载普通双领 | `ProductionPlanService.createSecondaryPlan`; `ReportReversal*` | partial | untested | E |
+| 6.9: 工序模板/负责人/APP 任务推送 | 开工前核对工序和负责人，开工后任务进入对应人员 RN | `WorkProcess*`; `work_process_tasks`; RN task list/quick action | partial | smoke | A/C |
+| 6.9: 报工补录和证据 | RN/Web 保留业务日期窗口、T-3 锁、照片/证据字段和用户可见错误 | `BackdateWindowValidator`; `PhotoAnnotation`; `YieldStepReportScreen.tsx` | partial | untested | C |
+| 6.9: 半成品单仓多 code | 一个半成品库按 code/SKU 区分不同半成品成本对象 | `SemiFinishedInventory`; `WorkProcess.semiFinishedOutputCode`; WIP picker | partial | untested | C/D |
+| 6.9: 整单撤回审批 | 有报工/库存/证据时走审批，无数据直撤，撤回不能拆成单工序 | `ReportReversal*`; reversal approval UI/RN submit | partial | untested | E |
 | 6.12: 结单时填实际领用 | PC 核对结单保存实际原料/半成品/辅料 | 新 `production_settlement*` 表和 API | missing | untested | B |
 | 6.9/6.12: 工时/人效参与闭环 | RN segment 或 Web 最小工时字段 | `YieldStepReportScreen.tsx`; new labor table | partial | untested | B/C/D |
 | 6.12/N10: 仓库确认才算实物责任闭环 | 结单产生 clearing，仓库确认后可用 | N10 ledger spec/API | spec-only/partial | untested | F |
@@ -133,6 +162,8 @@ PR: `feat/liushanmen-production-settlement-web`
    - 查看缺料参考；
    - 查看销售单；
    - 仓库确认入口占位。
+8. 开工/下达入口显示工序模板和负责人摘要，不能断掉 6.9 的 APP 任务推送链。
+9. 已下发 RN 工序任务的计划，列表行显示“已下发 APP 任务/待报工/部分报工”，并提供查看任务入口。
 
 防呆：
 
@@ -145,6 +176,7 @@ PR: `feat/liushanmen-production-settlement-web`
 
 - Web build 通过。
 - Headed E2E 打开计划列表，验证按钮、状态、预警、超计划原因逻辑。
+- Headed E2E 验证有工序任务的计划能看到 APP 报工入口和下一步，而不是 dead-end。
 - 由于后端 API 尚未完成，此 PR 可用 UI skeleton + honest disabled submit/feature flag，但不能伪造提交成功。
 
 ### Wave 2: 后端结构化结单 API
@@ -224,6 +256,9 @@ PR: `feat/liushanmen-rn-normal-dual-issue`
 5. 无可用半成品时显示空态，不阻断纯原料路径。
 6. 原料和半成品都为空时禁止提交。
 7. 超可用量禁提交并显示 max。
+8. 保留业务日期补录窗口校验：T/T-1/T-2 按配置处理，T-3 起后端拒绝且 RN 原样显示阻断错误。
+9. 保留照片/证据入口；如果当前工序配置要求证据，提交前必须显示缺证据原因和下一步。
+10. 快捷操作入口不得绕过三阶段报工链；旧任务无法关联 `WorkProcessTask` 时显示“请联系主管重新创建任务/返回任务列表”，不能静默走旧栈。
 
 防呆：
 
@@ -237,6 +272,8 @@ PR: `feat/liushanmen-rn-normal-dual-issue`
 - RN/Expo headed E2E：
   - 正常生产任务内同时选原料+半成品；
   - 超量禁提交；
+  - T-3 补录返回明确后端 message；
+  - 缺必需照片/证据时提交禁用或后端 409 原样展示；
   - 提交后 readback 摘要显示两类投入。
 
 ### Wave 4: 结单过账和成本
@@ -259,9 +296,10 @@ PR: `feat/liushanmen-production-settlement-posting`
 1. 原料按结单实际领用写消耗。
 2. 半成品按结单实际领用写 OUT。
 3. 半成品产出按实际数量写 IN。
-4. 工时数据写 settlement labor，并在 SP9 字段存在时 rollup 实际人工。
-5. 若成本字段缺价格，诚实 null/pending，不写 0。
-6. 避免 `BatchCompletedEvent` 再对 F006 结构化结单走 BOM 自动消耗。
+4. 半成品成本按同一半成品库的 code/SKU 和移动均价流水计算，支持“旧半成品 + 新原料/新半成品”混合投入，不新建一堆半成品仓。
+5. 成本使用不含税批次价；缺价时成本字段诚实 pending/null，并在 UI 提示“待补价/待成本过账”，不能假算。
+6. 工时数据写 settlement labor，并在 SP9 字段存在时 rollup 实际人工。
+7. 避免 `BatchCompletedEvent` 再对 F006 结构化结单走 BOM 自动消耗。
 
 防呆：
 
@@ -274,6 +312,7 @@ PR: `feat/liushanmen-production-settlement-posting`
   - 原料消耗实际量；
   - 半成品 OUT；
   - 半成品 IN；
+  - 半成品混合投入移动均价；
   - 缺价 null；
   - 不重复过账；
   - 自动 BOM 消耗不污染结构化结单。
@@ -302,6 +341,9 @@ PR: `feat/liushanmen-secondary-rework-boundary`
    - reversal guard;
    - WIP insufficient guard。
 5. 撤回仍按整单撤回，不改成单工序撤回。
+6. 有报工/库存/证据的撤回必须进审批；无数据允许直撤。
+7. 审批页必须显示批次、品名、报工摘要、半成品下游使用情况。
+8. 下游已领用半成品时，撤回必须 409 并给“先处理下游单”的跳转/提示。
 
 验收：
 
@@ -309,7 +351,9 @@ PR: `feat/liushanmen-secondary-rework-boundary`
 - 单测/集成测试验证：
   - normal settlement 不创建 secondary plan；
   - independent rework 才写 `planSourceType=SECONDARY`；
-  - 下游已用半成品时撤回 409。
+  - 下游已用半成品时撤回 409；
+  - 有数据撤回进入审批，无数据直撤；
+  - 重复撤回请求幂等返回已有申请。
 
 ### Wave 6: N10 结单挂账集成
 
@@ -395,14 +439,17 @@ PR: `feat/liushanmen-production-print-navigation`
 1. 登录生产文员。
 2. 打开未完成生产列表。
 3. 验证缺料参考、计划数量、下一步按钮。
-4. 打开核对结单。
-5. 输入超计划实际产量，选择原因。
-6. 输入原料实际领用。
-7. 输入半成品实际领用。
-8. 输入工时。
-9. 提交。
-10. fresh readback 验证结单、领用、工时、状态。
-11. 进入仓库确认/挂账页面验证下游状态。
+4. 验证工序模板、负责人、APP 任务入口可见。
+5. 打开核对结单。
+6. 输入超计划实际产量，选择原因。
+7. 输入原料实际领用。
+8. 输入半成品实际领用。
+9. 输入工时。
+10. 提交。
+11. fresh readback 验证结单、领用、工时、状态。
+12. 进入仓库确认/挂账页面验证下游状态。
+13. 对有报工/库存数据的批次提交整单撤回，验证进入审批；无数据批次验证直撤。
+14. 对下游已领用半成品的批次撤回，验证 409 message 和下一步提示。
 
 ### 4.2 Deep RN E2E
 
@@ -417,6 +464,9 @@ PR: `feat/liushanmen-production-print-navigation`
 7. 提交工时段。
 8. 提交成品+半成品产出。
 9. 查看提交摘要和下一步。
+10. 选择 T-3 业务日期补录，验证被拒绝且错误具体。
+11. 缺必需照片/证据时验证提交禁用或后端 409 原样展示。
+12. 从快捷操作入口进入同一任务，验证不会绕过三阶段报工。
 
 ### 4.3 Regression
 
@@ -427,6 +477,7 @@ PR: `feat/liushanmen-production-print-navigation`
 - RN tsc。
 - 至少一条 headed smoke。
 - 生产主流程完成后跑 deep Web + deep RN + clearing deep。
+- 增加一条撤回 deep：有数据审批、无数据直撤、下游占用 409。
 
 ## 5. 文件和 scope-lock
 
@@ -485,7 +536,11 @@ PR: `feat/liushanmen-production-print-navigation`
 - 正常生产可一次录原料+半成品。
 - 正常生产可一次产成品+半成品。
 - 结单保存实际产量、实际领用、工时。
+- 工序模板、负责人、APP 下发任务链不断。
+- RN 报工保留补录时效、证据、max 边界和下一步提示。
 - 成本按实际数据进入 pending/posted 状态，不伪造。
+- 半成品库存按同一半成品库 + code/SKU + 移动均价处理，不新增一堆仓库。
+- 整单撤回保留审批/直撤/下游占用 409 三条路径。
 - 仓库确认/中转挂账可见。
 - 二次加工入口不再误导普通半成品领用。
 - Web/RN 都有 deep E2E 证据。
