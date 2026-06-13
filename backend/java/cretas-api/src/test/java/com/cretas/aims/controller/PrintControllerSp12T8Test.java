@@ -7,6 +7,7 @@ import com.cretas.aims.entity.ProductionBatch;
 import com.cretas.aims.entity.enums.ProductionPlanStatus;
 import com.cretas.aims.entity.factory.FactoryMaterialRequisition;
 import com.cretas.aims.entity.factory.FactoryMaterialRequisitionItem;
+import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.service.ProductionPlanService;
 import com.cretas.aims.service.factory.FactoryMaterialRequisitionService;
@@ -27,8 +28,8 @@ import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -83,6 +84,7 @@ class PrintControllerSp12T8Test {
         plan.setProductName("白卤猪舌");
         plan.setProductUnit("kg");
         plan.setPlannedQuantity(new BigDecimal("500.00"));
+        plan.setCustomerOrderNumber("SO-20260612-001");
         plan.setStatus(ProductionPlanStatus.IN_PROGRESS);
         plan.setPlannedDate(LocalDate.of(2026, 6, 10));
         plan.setExpectedCompletionDate(LocalDate.of(2026, 6, 12));
@@ -96,55 +98,58 @@ class PrintControllerSp12T8Test {
         assertThat(payload.get("planNumber")).isEqualTo("PLAN-2026-001");
         assertThat(payload.get("productName")).isEqualTo("白卤猪舌");
         assertThat(payload.get("productUnit")).isEqualTo("kg");
+        assertThat(payload.get("salesOrderNumbers")).isEqualTo("SO-20260612-001");
+        assertThat(payload.get("productionOrderNumber")).isEqualTo("PLAN-2026-001");
+        assertThat(payload.get("productionDate").toString()).isEqualTo("2026-06-10");
+        assertThat(payload.get("printDate")).isNotNull();
+        assertThat(payload.get("printedBy")).isEqualTo("-");
+        assertThat(payload.get("printedAccount")).isEqualTo("-");
         assertThat(payload.get("plannedDate").toString()).isEqualTo("2026-06-10");
         assertThat(payload.get("expectedCompletionDate").toString()).isEqualTo("2026-06-12");
         assertThat(payload).containsKey("processes");
+        assertThat(payload).containsKey("materialItems");
         assertThat(payload.get("factoryName").toString()).contains("F006");
     }
 
     @Test
-    @DisplayName("T8-PWO-2: service 抛异常时 payload fallback 到 stub")
-    void buildProductionWorkOrderPayload_serviceThrows_fallsBackToStub() throws Exception {
+    @DisplayName("T8-PWO-2: service 抛异常时不伪造 stub, 直接返回业务错误")
+    void buildProductionWorkOrderPayload_serviceThrows_throwsBusinessException() {
         when(productionPlanService.getProductionPlanById(eq("F006"), any()))
                 .thenThrow(new RuntimeException("plan not found"));
 
-        Map<String, Object> payload = invokeBuildProductionWorkOrderPayload(
-                "F006", "nonexistent-plan", null);
-
-        // stub 填了 planId 本身作为 planNumber
-        assertThat(payload).containsKey("planNumber");
-        assertThat(payload.get("planNumber").toString()).isEqualTo("nonexistent-plan");
-        assertThat(payload).containsKey("productName");
-        assertThat(payload).containsKey("processes");
+        assertThatThrownBy(() -> invokeBuildProductionWorkOrderPayload("F006", "nonexistent-plan", null))
+                .hasCauseInstanceOf(BusinessException.class)
+                .hasRootCauseMessage("生产计划不存在或不可访问 — 无法生成生产工单: nonexistent-plan");
     }
 
     @Test
-    @DisplayName("T8-PWO-3: service 为 null 时 payload fallback 到 stub")
-    void buildProductionWorkOrderPayload_noService_returnsStub() throws Exception {
+    @DisplayName("T8-PWO-3: service 为 null 时不伪造 stub, 直接返回服务不可用")
+    void buildProductionWorkOrderPayload_noService_throwsBusinessException() {
         // detach service
         ReflectionTestUtils.setField(controller, "productionPlanService", null);
 
-        Map<String, Object> payload = invokeBuildProductionWorkOrderPayload(
-                "F006", "plan-xyz", null);
-
-        assertThat(payload).containsKeys("planNumber", "productName", "productUnit",
-                "plannedQuantity", "status", "plannedDate", "expectedCompletionDate",
-                "processes", "factoryName");
+        assertThatThrownBy(() -> invokeBuildProductionWorkOrderPayload("F006", "plan-xyz", null))
+                .hasCauseInstanceOf(BusinessException.class)
+                .hasRootCauseMessage("生产计划服务不可用 — 无法生成真实生产工单");
     }
 
     @Test
-    @DisplayName("T8-PWO-4: overrides 参数覆盖 stub 中的默认值")
-    void buildProductionWorkOrderPayload_overridesApplied() throws Exception {
-        // No service injected → pure stub path, override is visible
-        ReflectionTestUtils.setField(controller, "productionPlanService", null);
-        // workProcessTaskService/productionBatchRepository still injected but planService null
-        // → stub fills plan fields; buildProcessList will get null batches → empty processes
+    @DisplayName("T8-PWO-4: overrides 仅允许补备注, 不覆盖真实计划字段")
+    void buildProductionWorkOrderPayload_overridesDoNotReplacePlanData() throws Exception {
+        ProductionPlanDTO plan = new ProductionPlanDTO();
+        plan.setPlanNumber("PLAN-REAL");
+        plan.setProductName("真实产品");
+        plan.setProductUnit("kg");
+        plan.setPlannedQuantity(BigDecimal.TEN);
+        plan.setStatus(ProductionPlanStatus.PENDING);
+        plan.setPlannedDate(LocalDate.of(2026, 6, 12));
+        when(productionPlanService.getProductionPlanById("F006", "plan-real")).thenReturn(plan);
 
         Map<String, Object> payload = invokeBuildProductionWorkOrderPayload(
-                "F006", "plan-xyz",
+                "F006", "plan-real",
                 Map.of("productName", "定制猪蹄", "remark", "备注内容"));
 
-        assertThat(payload.get("productName")).isEqualTo("定制猪蹄");
+        assertThat(payload.get("productName")).isEqualTo("真实产品");
         assertThat(payload.get("remark")).isEqualTo("备注内容");
     }
 
@@ -237,7 +242,14 @@ class PrintControllerSp12T8Test {
     void buildProductionWorkOrderPayload_noTaskService_emptyProcesses() throws Exception {
         ReflectionTestUtils.setField(controller, "workProcessTaskService", null);
         ReflectionTestUtils.setField(controller, "productionBatchRepository", null);
-        ReflectionTestUtils.setField(controller, "productionPlanService", null);
+        ProductionPlanDTO plan = new ProductionPlanDTO();
+        plan.setPlanNumber("PLAN-NO-TASK-SERVICE");
+        plan.setProductName("测试产品");
+        plan.setProductUnit("kg");
+        plan.setPlannedQuantity(BigDecimal.TEN);
+        plan.setStatus(ProductionPlanStatus.PENDING);
+        plan.setPlannedDate(LocalDate.of(2026, 6, 12));
+        when(productionPlanService.getProductionPlanById("F006", "plan-xyz")).thenReturn(plan);
 
         Map<String, Object> payload = invokeBuildProductionWorkOrderPayload(
                 "F006", "plan-xyz", null);
@@ -245,6 +257,64 @@ class PrintControllerSp12T8Test {
         @SuppressWarnings("unchecked")
         List<Map<String, Object>> processes = (List<Map<String, Object>>) payload.get("processes");
         assertThat(processes).isEmpty();
+    }
+
+    @Test
+    @DisplayName("N5-PWO-8: 生产工单 payload 带原料/辅料/半成品报名值分列和实际领用列")
+    void buildProductionWorkOrderPayload_materialItems_splitByCategory() throws Exception {
+        ProductionPlanDTO plan = new ProductionPlanDTO();
+        plan.setPlanNumber("PLAN-MAT-001");
+        plan.setCustomerOrderNumber("SO-MAT-001");
+        plan.setProductName("白卤牛腱");
+        plan.setProductUnit("kg");
+        plan.setPlannedQuantity(new BigDecimal("100"));
+        plan.setStatus(ProductionPlanStatus.PENDING);
+        plan.setPlannedDate(LocalDate.of(2026, 6, 12));
+        when(productionPlanService.getProductionPlanById("F006", "plan-mat")).thenReturn(plan);
+
+        FactoryMaterialRequisitionItem raw = new FactoryMaterialRequisitionItem();
+        raw.setMaterialTypeId("mat-beef");
+        raw.setMaterialName("牛腱");
+        raw.setUnit("kg");
+        raw.setRequiredQty(new BigDecimal("80"));
+        raw.setMaterialCategory(FactoryMaterialRequisitionItem.MaterialCategory.RAW);
+
+        FactoryMaterialRequisitionItem aux = new FactoryMaterialRequisitionItem();
+        aux.setMaterialTypeId("mat-spice");
+        aux.setMaterialName("香辛料包");
+        aux.setUnit("袋");
+        aux.setRequiredQty(new BigDecimal("5"));
+        aux.setConsumedQty(new BigDecimal("4"));
+        aux.setMaterialCategory(FactoryMaterialRequisitionItem.MaterialCategory.AUXILIARY);
+
+        FactoryMaterialRequisition req = mock(FactoryMaterialRequisition.class);
+        when(req.getItems()).thenReturn(List.of(raw, aux));
+        when(factoryMaterialRequisitionService.listByPlan("F006", "plan-mat")).thenReturn(List.of(req));
+
+        Map<String, Object> payload = invokeBuildProductionWorkOrderPayload("F006", "plan-mat", null);
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> materialItems = (List<Map<String, Object>>) payload.get("materialItems");
+        assertThat(materialItems).hasSize(2);
+
+        Map<String, Object> rawRow = materialItems.stream()
+                .filter(r -> "牛腱".equals(r.get("materialName")))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("牛腱 row not found"));
+        assertThat(rawRow.get("category")).isEqualTo("原料");
+        assertThat(rawRow.get("plannedRawQty")).isEqualTo("80");
+        assertThat(rawRow.get("plannedAuxiliaryQty")).isEqualTo("");
+        assertThat(rawRow.get("plannedSemiFinishedQty")).isEqualTo("");
+        assertThat(rawRow.get("actualUsedQty")).isEqualTo("________");
+
+        Map<String, Object> auxRow = materialItems.stream()
+                .filter(r -> "香辛料包".equals(r.get("materialName")))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("香辛料包 row not found"));
+        assertThat(auxRow.get("category")).isEqualTo("辅料");
+        assertThat(auxRow.get("plannedRawQty")).isEqualTo("");
+        assertThat(auxRow.get("plannedAuxiliaryQty")).isEqualTo("5");
+        assertThat(auxRow.get("actualUsedQty")).isEqualTo("4");
     }
 
     // ==================== buildConsolidatedMaterialRequisitionPayload ====================
@@ -264,6 +334,7 @@ class PrintControllerSp12T8Test {
         item1.setMaterialName("食盐");
         item1.setUnit("kg");
         item1.setRequiredQty(new BigDecimal("10.500"));
+        item1.setConsumedQty(new BigDecimal("9.000"));
         item1.setMaterialCategory(FactoryMaterialRequisitionItem.MaterialCategory.AUXILIARY);
 
         FactoryMaterialRequisitionItem item2 = new FactoryMaterialRequisitionItem();
@@ -271,6 +342,7 @@ class PrintControllerSp12T8Test {
         item2.setMaterialName("猪舌");
         item2.setUnit("kg");
         item2.setRequiredQty(new BigDecimal("200.000"));
+        item2.setConsumedQty(new BigDecimal("198.000"));
         item2.setMaterialCategory(FactoryMaterialRequisitionItem.MaterialCategory.RAW);
 
         FactoryMaterialRequisition req1 = mock(FactoryMaterialRequisition.class);
@@ -282,6 +354,7 @@ class PrintControllerSp12T8Test {
         item3.setMaterialName("食盐");
         item3.setUnit("kg");
         item3.setRequiredQty(new BigDecimal("5.000"));
+        item3.setConsumedQty(new BigDecimal("4.500"));
         item3.setMaterialCategory(FactoryMaterialRequisitionItem.MaterialCategory.AUXILIARY);
 
         FactoryMaterialRequisition req2 = mock(FactoryMaterialRequisition.class);
@@ -310,6 +383,11 @@ class PrintControllerSp12T8Test {
                 .findFirst()
                 .orElseThrow(() -> new AssertionError("食盐 row not found"));
         assertThat(saltRow.get("totalQty")).isEqualTo("15.5");
+        assertThat(saltRow.get("category")).isEqualTo("辅料");
+        assertThat(saltRow.get("plannedRawQty")).isEqualTo("");
+        assertThat(saltRow.get("plannedAuxiliaryQty")).isEqualTo("15.5");
+        assertThat(saltRow.get("plannedSemiFinishedQty")).isEqualTo("");
+        assertThat(saltRow.get("actualUsedQty")).isEqualTo("13.5");
         assertThat(saltRow.get("unit")).isEqualTo("kg");
 
         // Find pork tongue row
@@ -318,6 +396,11 @@ class PrintControllerSp12T8Test {
                 .findFirst()
                 .orElseThrow(() -> new AssertionError("猪舌 row not found"));
         assertThat(tongueRow.get("totalQty")).isEqualTo("200");
+        assertThat(tongueRow.get("category")).isEqualTo("原料");
+        assertThat(tongueRow.get("plannedRawQty")).isEqualTo("200");
+        assertThat(tongueRow.get("plannedAuxiliaryQty")).isEqualTo("");
+        assertThat(tongueRow.get("plannedSemiFinishedQty")).isEqualTo("");
+        assertThat(tongueRow.get("actualUsedQty")).isEqualTo("198");
     }
 
     @Test
