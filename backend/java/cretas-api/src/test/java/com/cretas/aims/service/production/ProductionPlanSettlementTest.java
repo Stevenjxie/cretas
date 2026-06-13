@@ -143,8 +143,13 @@ class ProductionPlanSettlementTest {
                 FACTORY_ID, PLAN_ID, "idem-1")).thenReturn(Optional.empty());
         when(productionSettlementRepository.findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(
                 FACTORY_ID, PLAN_ID)).thenReturn(Optional.empty());
-        when(materialBatchRepository.findByIdAndFactoryId("MB-1", FACTORY_ID)).thenReturn(Optional.of(materialBatch()));
-        when(semiFinishedInventoryRepository.findByIdForUpdate(7L)).thenReturn(Optional.of(wip()));
+        MaterialBatch batch = materialBatch();
+        SemiFinishedInventory wip = wip();
+        when(materialBatchRepository.findByIdAndFactoryId("MB-1", FACTORY_ID)).thenReturn(Optional.of(batch));
+        when(materialBatchRepository.findByIdAndFactoryIdForUpdate("MB-1", FACTORY_ID)).thenReturn(Optional.of(batch));
+        when(semiFinishedInventoryRepository.findByIdForUpdate(7L)).thenReturn(Optional.of(wip));
+        when(materialBatchRepository.save(any(MaterialBatch.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(semiFinishedInventoryRepository.save(any(SemiFinishedInventory.class))).thenAnswer(inv -> inv.getArgument(0));
         when(productionSettlementRepository.save(any(ProductionSettlement.class))).thenAnswer(inv -> inv.getArgument(0));
         when(productionPlanRepository.save(any(ProductionPlan.class))).thenAnswer(inv -> inv.getArgument(0));
         when(productionSettlementConsumptionRepository.saveAll(anyList())).thenAnswer(inv -> inv.getArgument(0));
@@ -154,11 +159,16 @@ class ProductionPlanSettlementTest {
 
         assertEquals(ProductionPlanStatus.COMPLETED, plan.getStatus());
         assertEquals(new BigDecimal("90"), plan.getActualQuantity());
-        assertEquals("PENDING_POSTING", response.getPostingStatus());
+        assertEquals("PENDING_WAREHOUSE_RECEIPT", response.getPostingStatus());
         assertEquals(new BigDecimal("90"), response.getActualFinishedQuantity());
-        assertTrue(response.getWarnings().get(0).contains("尚未过账"));
+        assertTrue(response.getWarnings().get(0).contains("仓库确认实收"));
+        assertEquals(new BigDecimal("16"), batch.getUsedQuantity());
+        assertEquals(new BigDecimal("5"), wip.getConsumedQuantity());
+        assertEquals(new BigDecimal("3"), wip.getAvailableQuantity());
         verify(productionSettlementConsumptionRepository).saveAll(anyList());
         verify(productionSettlementLaborRepository).saveAll(anyList());
+        verify(materialBatchRepository).save(batch);
+        verify(semiFinishedInventoryRepository).save(wip);
     }
 
     @Test
@@ -174,7 +184,7 @@ class ProductionPlanSettlementTest {
         existing.setActualFinishedQuantity(new BigDecimal("90"));
         existing.setActualSemiFinishedQuantity(BigDecimal.ZERO);
         existing.setPlanStatusAfter(ProductionPlanStatus.COMPLETED);
-        existing.setPostingStatus("PENDING_POSTING");
+        existing.setPostingStatus("PENDING_WAREHOUSE_RECEIPT");
         when(productionSettlementRepository.findByFactoryIdAndProductionPlanIdAndIdempotencyKeyAndDeletedAtIsNull(
                 FACTORY_ID, PLAN_ID, "idem-1")).thenReturn(Optional.of(existing));
 
@@ -239,6 +249,7 @@ class ProductionPlanSettlementTest {
                 .id(7L)
                 .factoryId(FACTORY_ID)
                 .intermediateBatchNo("WIP-001")
+                .consumedQuantity(BigDecimal.ZERO)
                 .availableQuantity(new BigDecimal("8"))
                 .status(SemiFinishedInventory.Status.AVAILABLE)
                 .build();

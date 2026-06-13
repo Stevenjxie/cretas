@@ -6,10 +6,12 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
+import jakarta.persistence.LockModeType;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
@@ -366,6 +368,11 @@ public interface MaterialBatchRepository extends JpaRepository<MaterialBatch, St
      * 根据ID和工厂ID查找
      */
     Optional<MaterialBatch> findByIdAndFactoryId(String id, String factoryId);
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT m FROM MaterialBatch m WHERE m.id = :id AND m.factoryId = :factoryId")
+    Optional<MaterialBatch> findByIdAndFactoryIdForUpdate(@Param("id") String id,
+                                                          @Param("factoryId") String factoryId);
 
     /**
      * 根据工厂ID和材料类型ID查找
