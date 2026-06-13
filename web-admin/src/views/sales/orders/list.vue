@@ -1076,7 +1076,46 @@ async function handleAction(orderId: string, action: string) {
 //   confirm OK + submit-for-review 失败 → 订单停在 CONFIRMED (可对"已确认"行重试提审, 可恢复).
 //   必须用 'confirmed_only' 桶 / sticky toast 与彻底失败区分.
 
-type SubmitOutcome = 'success' | 'confirmed_only' | 'failed';
+type SubmitOutcome = 'success' | 'pending_review' | 'auto_approved' | 'confirmed_only' | 'failed';
+
+type SalesOrderActionResponse = {
+  success?: boolean;
+  message?: string;
+  data?: {
+    status?: unknown;
+  };
+};
+
+function responseOrderStatus(response: unknown): string {
+  const res = response as SalesOrderActionResponse;
+  return typeof res.data?.status === 'string' ? res.data.status : '';
+}
+
+function outcomeMessage(orderNumber: string, outcome: SubmitOutcome): string {
+  if (outcome === 'auto_approved') return `订单 ${orderNumber} 未触发审批阈值，已免审通过`;
+  if (outcome === 'pending_review') return `订单 ${orderNumber} 已进入财务审核`;
+  return `订单 ${orderNumber} 已提交财务审核`;
+}
+
+function orderAmount(row: TableRow): number {
+  const value = Number(row.totalAmount || 0);
+  return Number.isFinite(value) ? value : 0;
+}
+
+function isExternalChannelOrder(row: TableRow): boolean {
+  return Boolean(String(row.externalOrderTitle || '').trim());
+}
+
+function approvalDecisionHint(row: TableRow): string {
+  const amount = orderAmount(row);
+  if (isExternalChannelOrder(row)) {
+    return `检测到外部渠道订单；是否免审由后台审批配置决定。订单金额：${formatAmount(amount)}。`;
+  }
+  if (amount > 5000) {
+    return `订单金额 ${formatAmount(amount)} 超过 F006 默认 5000 元阈值，预计进入财务审核。`;
+  }
+  return `订单金额 ${formatAmount(amount)} 未超过 F006 默认 5000 元阈值，预计免审通过。`;
+}
 
 /** 取后端错误信息 (api-response-handling: error.response.data.message). */
 function extractErrMessage(e: unknown, fallback: string): string {
@@ -1101,11 +1140,18 @@ async function submitOrderForFinanceReview(
       // confirm 失败 → 订单仍 DRAFT, 当彻底失败抛出.
       throw new Error(confirmRes?.message || '确认订单失败');
     }
+    const confirmedStatus = responseOrderStatus(confirmRes);
+    if (confirmedStatus === 'PENDING_FINANCE_REVIEW') return 'pending_review';
+    if (confirmedStatus === 'FINANCE_APPROVED') return 'auto_approved';
+    if (confirmedStatus && confirmedStatus !== 'CONFIRMED') return 'success';
     try {
       const submitRes = await post(`/${factoryId.value}/sales/orders/${orderId}/submit-for-review`);
       if (!submitRes?.success) {
         throw new Error(submitRes?.message || '提交审核失败');
       }
+      const submittedStatus = responseOrderStatus(submitRes);
+      if (submittedStatus === 'PENDING_FINANCE_REVIEW') return 'pending_review';
+      if (submittedStatus === 'FINANCE_APPROVED') return 'auto_approved';
       return 'success';
     } catch (e) {
       // confirm OK 但 submit 失败 → 订单现为 CONFIRMED, 可恢复. 标 confirmed_only.
@@ -1119,23 +1165,26 @@ async function submitOrderForFinanceReview(
   if (!res?.success) {
     throw new Error(res?.message || '提交审核失败');
   }
+  const submittedStatus = responseOrderStatus(res);
+  if (submittedStatus === 'PENDING_FINANCE_REVIEW') return 'pending_review';
+  if (submittedStatus === 'FINANCE_APPROVED') return 'auto_approved';
   return 'success';
 }
 
-/** 单行"提交财务审核"入口 (fool-proof Rule 2 带订单号确认 + Rule 4 per-row loading). */
+/** 单行"提交审批判定"入口 (fool-proof Rule 1/2 带订单号、金额、阈值预判 + Rule 4 per-row loading). */
 async function handleSubmitForReviewRow(row: TableRow): Promise<void> {
   const orderId = String(row.id || '');
   const orderNumber = String(row.orderNumber || row.id || '');
   const status = String(row.status || '');
   const fromDraft = status === 'DRAFT';
   if (submittingIds.value.has(orderId)) return; // 防重复点击
-  // fool-proof Rule 2: 确认 dialog 带订单号 + 链式说明.
+  // fool-proof Rule 1/2: 确认 dialog 带订单号 + 金额 + 阈值预判; 最终以后端可配置审批链为准.
   const confirmMsg = fromDraft
-    ? `确认将销售订单 ${orderNumber} 提交财务审核？(将先确认订单，再送交财务)`
-    : `确认将销售订单 ${orderNumber} 提交财务审核？`;
+    ? `确认提交销售订单 ${orderNumber} 并自动判定审批？\n\n${approvalDecisionHint(row)}\n将先确认订单，再按后台审批配置自动分流：超过阈值进入财务审核，未触发阈值或满足免审配置的订单自动通过。`
+    : `确认将销售订单 ${orderNumber} 重新提交审批判定？\n\n${approvalDecisionHint(row)}\n系统会按后台审批配置自动分流，最终结果以后端返回为准。`;
   try {
-    await ElMessageBox.confirm(confirmMsg, '提交财务审核', {
-      confirmButtonText: '提交',
+    await ElMessageBox.confirm(confirmMsg, '提交审批判定', {
+      confirmButtonText: '提交并判定',
       cancelButtonText: '取消',
       type: 'info',
     });
@@ -1144,8 +1193,8 @@ async function handleSubmitForReviewRow(row: TableRow): Promise<void> {
   }
   submittingIds.value.add(orderId);
   try {
-    await submitOrderForFinanceReview(orderId, { fromDraft });
-    ElMessage.success(`订单 ${orderNumber} 已提交财务审核`);
+    const outcome = await submitOrderForFinanceReview(orderId, { fromDraft });
+    ElMessage.success(outcomeMessage(orderNumber, outcome));
     await loadData();
   } catch (e) {
     const err = e as Error & { confirmedOnly?: boolean };
@@ -1175,9 +1224,16 @@ async function confirmBatch(actionLabel: string, rows: TableRow[]): Promise<bool
   const nums = rows.map((r) => String(r.orderNumber || r.id || ''));
   const preview = nums.slice(0, 5).join('、');
   const tail = nums.length > 5 ? ` 等共 ${nums.length} 条` : ` 共 ${nums.length} 条`;
+  const shouldShowApprovalPreview = actionLabel.includes('审批');
+  const externalChannelCount = rows.filter(isExternalChannelOrder).length;
+  const pendingReviewCount = rows.filter((r) => !isExternalChannelOrder(r) && orderAmount(r) > 5000).length;
+  const exemptCount = shouldShowApprovalPreview ? rows.length - pendingReviewCount : 0;
+  const approvalPreview = shouldShowApprovalPreview
+    ? `\n\n预计结果：${pendingReviewCount} 条进入财务审核，${exemptCount} 条可能免审或自动通过（其中外部渠道 ${externalChannelCount} 条）。最终以后端审批配置为准。`
+    : '';
   try {
-    await ElMessageBox.confirm(`确认对 ${preview}${tail} 执行「${actionLabel}」？`, `批量${actionLabel}`, {
-      confirmButtonText: '执行',
+    await ElMessageBox.confirm(`确认对 ${preview}${tail} 执行「${actionLabel}」？${approvalPreview}`, `批量${actionLabel}`, {
+      confirmButtonText: shouldShowApprovalPreview ? '提交并判定' : '执行',
       cancelButtonText: '取消',
       type: 'warning',
     });
@@ -1187,14 +1243,14 @@ async function confirmBatch(actionLabel: string, rows: TableRow[]): Promise<bool
   }
 }
 
-/** 批量提交财务审核 — three-bucket (success / confirmed_only / failed). */
+/** 批量提交审批判定 — three-bucket (success / confirmed_only / failed). */
 async function handleBatchSubmitForReview(): Promise<void> {
   const eligible = selectedRows.value.filter((r) => BATCH_SUBMIT_STATUSES.includes(String(r.status || '')));
   if (eligible.length === 0) {
-    ElMessage.warning('选中订单中没有可提交财务审核的 (需为草稿/已确认/已驳回)');
+    ElMessage.warning('选中订单中没有可提交审批判定的 (需为草稿/已确认/已驳回)');
     return;
   }
-  if (!(await confirmBatch('提交财务审核', eligible))) return;
+  if (!(await confirmBatch('提交审批判定', eligible))) return;
   batchLoading.value = true;
   try {
     const results = await Promise.allSettled(
@@ -1204,6 +1260,8 @@ async function handleBatchSubmitForReview(): Promise<void> {
       )
     );
     let success = 0;
+    let pendingReview = 0;
+    let autoApproved = 0;
     let confirmedOnly = 0;
     let failed = 0;
     const failedList: string[] = [];
@@ -1212,6 +1270,8 @@ async function handleBatchSubmitForReview(): Promise<void> {
       const orderNumber = String(eligible[i].orderNumber || eligible[i].id || '');
       if (res.status === 'fulfilled') {
         if (res.value.outcome === 'confirmed_only') confirmedOnly++;
+        else if (res.value.outcome === 'pending_review') pendingReview++;
+        else if (res.value.outcome === 'auto_approved') autoApproved++;
         else success++;
       } else {
         const err = res.reason as Error & { confirmedOnly?: boolean };
@@ -1224,6 +1284,7 @@ async function handleBatchSubmitForReview(): Promise<void> {
       }
     }
     let msg = `已完成提审 ${success} 条；已确认待提审 ${confirmedOnly} 条（可对「已确认」行重试）；失败 ${failed} 条。`;
+    msg = `已提交 ${success} 条；进入财务审核 ${pendingReview} 条；免审通过 ${autoApproved} 条；已确认待重试 ${confirmedOnly} 条；失败 ${failed} 条。`;
     if (confirmedOnly > 0) {
       msg += '已确认订单可直接「提交财务审核」重试，无需重走确认。';
     }
@@ -1700,7 +1761,7 @@ function handleStartPurchase(row: TableRow) {
           :disabled="!hasBatchSubmittable || batchLoading"
           :loading="batchLoading"
           @click="handleBatchSubmitForReview"
-        >批量提交财务审核</el-button>
+        >批量提交/判定审批</el-button>
         <el-button
           type="success" size="small"
           :disabled="!hasBatchConfirmable || batchLoading"
@@ -1922,11 +1983,11 @@ function handleStartPurchase(row: TableRow) {
             <LinkChipCell :counts="linkCountsFor(row.id)" />
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="380" fixed="right" align="center">
+        <el-table-column label="操作" width="480" fixed="right" align="center">
           <template #default="{ row }">
             <el-button type="primary" link size="small" @click="goDetail(row.id)">详情</el-button>
             <el-button v-if="row.status === 'DRAFT' && canWrite" type="warning" link size="small" @click="handleEdit(row)">编辑</el-button>
-            <!-- T131 — 提交财务审核 (primary). DRAFT 链式 (先确认再送财务); CONFIRMED 单次. per-row loading. -->
+            <!-- T131/N9 — 提交后按审批阈值自动分流. DRAFT 链式 (先确认再判定); CONFIRMED 单次. per-row loading. -->
             <el-button
               v-if="['DRAFT','CONFIRMED'].includes(row.status) && canWrite"
               type="primary"
@@ -1935,7 +1996,7 @@ function handleStartPurchase(row: TableRow) {
               :loading="submittingIds.has(row.id)"
               :disabled="submittingIds.has(row.id)"
               @click="handleSubmitForReviewRow(row)"
-            >提交财务审核</el-button>
+            >提交/判定审批</el-button>
             <!-- T131 — 「确认」保留为 DRAFT 的次要操作 (仅 DRAFT→CONFIRMED, 不送财务). -->
             <el-button v-if="row.status === 'DRAFT' && canWrite" type="success" link size="small" @click="handleAction(row.id, 'confirm')">确认</el-button>
             <el-button v-if="['DRAFT','CONFIRMED'].includes(row.status) && canWrite" type="danger" link size="small" @click="handleAction(row.id, 'cancel')">取消</el-button>

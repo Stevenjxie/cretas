@@ -17,6 +17,9 @@ type Nav = NativeStackNavigationProp<FAManagementStackParamList>;
 const STATUS_MAP: Record<string, { label: string; color: string }> = {
   DRAFT: { label: '草稿', color: '#909399' },
   CONFIRMED: { label: '已确认', color: '#409eff' },
+  PENDING_FINANCE_REVIEW: { label: '待财务审核', color: '#e6a23c' },
+  FINANCE_APPROVED: { label: '财务已批准', color: '#67c23a' },
+  FINANCE_REJECTED: { label: '财务已驳回', color: '#f56c6c' },
   PROCESSING: { label: '处理中', color: '#e6a23c' },
   PARTIAL_DELIVERED: { label: '部分发货', color: '#f56c6c' },
   COMPLETED: { label: '已完成', color: '#67c23a' },
@@ -60,7 +63,16 @@ export default function SalesOrderListScreen() {
       let res;
       if (action === 'confirm') res = await salesApiClient.confirmOrder(orderId);
       else if (action === 'cancel') res = await salesApiClient.cancelOrder(orderId);
-      if (res?.success) { Alert.alert('成功', '操作成功'); loadOrders(); }
+      if (res?.success) {
+        const status = res.data?.status;
+        const message = action === 'confirm' && status === 'FINANCE_APPROVED'
+          ? '订单未触发审批阈值，已免审通过'
+          : action === 'confirm' && status === 'PENDING_FINANCE_REVIEW'
+            ? '订单已进入财务审核'
+            : '操作成功';
+        Alert.alert('成功', message);
+        loadOrders();
+      }
     } catch { Alert.alert('错误', '操作失败'); }
   };
 

@@ -92,6 +92,7 @@ export const COMMON_ACTIONS = {
  UNLOCK: { id: 'unlock', icon: '', label: '解锁', aiHint: '解锁这单' },
  EDIT: { id: 'edit', icon: '️', label: '编辑', aiHint: '修改这单' },
  SUBMIT: { id: 'submit', icon: '', label: '提交审核', aiHint: '提交审核' },
+ SUBMIT_FOR_REVIEW: { id: 'submit-for-review', icon: '', label: '提交/判定审批', aiHint: '按审批配置自动判定这张销售单' },
  APPROVE: { id: 'approve', icon: '', label: '通过', aiHint: '审批通过' },
   REJECT: {
     id: 'reject',

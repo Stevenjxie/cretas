@@ -1,9 +1,12 @@
 package com.cretas.aims.service.inventory.impl;
 
 import com.cretas.aims.dto.common.PageResponse;
+import com.cretas.aims.dto.approval.ExecutionContext;
 import com.cretas.aims.dto.inventory.CreateDeliveryRequest;
 import com.cretas.aims.dto.inventory.CreateSalesOrderRequest;
 import com.cretas.aims.dto.inventory.UpdateSalesOrderRequest;
+import com.cretas.aims.entity.config.ApprovalChainConfig.DecisionType;
+import com.cretas.aims.entity.config.ApprovalWorkflow;
 import com.cretas.aims.entity.enums.ArApTransactionType;
 import com.cretas.aims.entity.enums.SalesDeliveryStatus;
 import com.cretas.aims.entity.enums.SalesOrderStatus;
@@ -24,9 +27,12 @@ import com.cretas.aims.security.DataScopeResolver;
 import com.cretas.aims.service.config.FactoryConfigService;
 import com.cretas.aims.annotation.DataScope;
 import com.cretas.aims.annotation.Loggable;
+import com.cretas.aims.service.ApprovalChainService;
+import com.cretas.aims.service.ApprovalWorkflowService;
 import com.cretas.aims.service.factory.WarehouseResolver;
 import com.cretas.aims.service.inventory.SalesService;
 import com.cretas.aims.service.rules.annotation.RuleEvaluate;
+import com.cretas.aims.service.workflow.ApprovalWorkflowExecutor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.ApplicationEventPublisher;
@@ -189,6 +195,18 @@ public class SalesServiceImpl implements SalesService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.repository.inventory.FinishedGoodsAdjustmentLogRepository finishedGoodsAdjustmentLogRepository;
 
+    /** N9: configurable sales approval threshold via legacy approval chain + graph workflow. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private ApprovalChainService approvalChainService;
+
+    /** N9: optional graph lookup; absence preserves legacy sales flow in tests/partial deployments. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private ApprovalWorkflowService approvalWorkflowService;
+
+    /** N9: optional graph executor for factories that published SALES_ORDER_APPROVAL workflows. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private ApprovalWorkflowExecutor approvalWorkflowExecutor;
+
     @jakarta.persistence.PersistenceContext
     private jakarta.persistence.EntityManager entityManager;
 
@@ -302,7 +320,7 @@ public class SalesServiceImpl implements SalesService {
         order.setExtraFees(request.getExtraFees());
         order.setQuoteId(request.getQuoteId()); // 报价→订单联动 (5016s 客户流程文档)
         order.setStatus(SalesOrderStatus.DRAFT);
-        // P3 多仓: 叮咚采购单标题 (如 "0601-熟食T+2"). Nullable.
+        // P3 多仓: 外部渠道采购单标题 (如 "0601-熟食T+2"). Nullable.
         order.setExternalOrderTitle(request.getExternalOrderTitle());
         order.setCreatedBy(userId);
 
@@ -719,7 +737,10 @@ public class SalesServiceImpl implements SalesService {
             log.error("发布SalesOrderConfirmedEvent失败: SO={}", saved.getId(), e);
         }
 
-        return saved;
+        if (!hasSalesApprovalPolicy(factoryId)) {
+            return saved;
+        }
+        return routeSalesOrderByApprovalPolicy(factoryId, saved, "订单确认后按销售审批阈值自动提交", null);
     }
 
     @Override
@@ -734,6 +755,10 @@ public class SalesServiceImpl implements SalesService {
                 && order.getStatus() != SalesOrderStatus.FINANCE_REJECTED) {
             throw new BusinessException(409, "只有已确认或财务驳回状态的订单可以提交财务审核")
                     .withHint("请刷新订单列表查看最新状态");
+        }
+
+        if (hasSalesApprovalPolicy(factoryId)) {
+            return routeSalesOrderByApprovalPolicy(factoryId, order, "按销售审批阈值提交", null);
         }
 
         // E-2 空价草稿支持: 进入财审前强制所有行有单价且总额 > 0
@@ -796,6 +821,76 @@ public class SalesServiceImpl implements SalesService {
         }
     }
 
+    private SalesOrder routeSalesOrderByApprovalPolicy(String factoryId, SalesOrder order, String notes, Long reviewerId) {
+        validatePriceBeforeFinanceReview(factoryId, order.getId(), order);
+
+        Map<String, Object> context = buildSalesApprovalContext(order);
+        boolean requiresApproval = approvalChainService != null
+                && approvalChainService.requiresApproval(factoryId, DecisionType.SALES_ORDER_APPROVAL, context);
+
+        if (requiresApproval) {
+            startSalesApprovalWorkflowIfConfigured(factoryId, order, context);
+            checkTransitionAllowed(factoryId, order.getStatus().name(), "PENDING_FINANCE_REVIEW");
+            order.setStatus(SalesOrderStatus.PENDING_FINANCE_REVIEW);
+            order.setFinanceReviewedBy(null);
+            order.setFinanceReviewedAt(null);
+            order.setFinanceReviewNotes(notes);
+            SalesOrder saved = salesOrderRepository.save(order);
+            log.info("销售订单触发阈值审批: orderId={}, orderNumber={}, amount={}",
+                    order.getId(), saved.getOrderNumber(), saved.getTotalAmount());
+            return saved;
+        }
+
+        return approveFinanceForOrder(factoryId, order, "未触发销售审批阈值或满足免审配置，自动通过", null, reviewerId);
+    }
+
+    private boolean hasSalesApprovalPolicy(String factoryId) {
+        boolean hasGraph = approvalWorkflowService != null
+                && approvalWorkflowService.getActiveByDecisionType(factoryId, DecisionType.SALES_ORDER_APPROVAL).isPresent();
+        if (hasGraph) {
+            return true;
+        }
+        return approvalChainService != null
+                && !approvalChainService.getConfigsByDecisionType(factoryId, DecisionType.SALES_ORDER_APPROVAL).isEmpty();
+    }
+
+    private Map<String, Object> buildSalesApprovalContext(SalesOrder order) {
+        BigDecimal amount = order.getTotalAmount() != null ? order.getTotalAmount() : BigDecimal.ZERO;
+        Map<String, Object> context = new HashMap<>();
+        context.put("amount", amount);
+        context.put("totalAmount", amount);
+        context.put("orderId", order.getId());
+        context.put("orderNumber", order.getOrderNumber() != null ? order.getOrderNumber() : "");
+        context.put("customerId", order.getCustomerId() != null ? order.getCustomerId() : "");
+        context.put("customerName", order.getCustomerName() != null ? order.getCustomerName() : "");
+        context.put("externalOrderTitle", order.getExternalOrderTitle() != null ? order.getExternalOrderTitle() : "");
+        context.put("externalOrder", order.getExternalOrderTitle() != null && !order.getExternalOrderTitle().isBlank());
+        return context;
+    }
+
+    private void startSalesApprovalWorkflowIfConfigured(
+            String factoryId, SalesOrder order, Map<String, Object> context) {
+        if (approvalWorkflowService == null || approvalWorkflowExecutor == null) {
+            return;
+        }
+        Optional<ApprovalWorkflow> workflow = approvalWorkflowService
+                .getActiveByDecisionType(factoryId, DecisionType.SALES_ORDER_APPROVAL);
+        if (workflow.isEmpty()) {
+            return;
+        }
+        try {
+            ExecutionContext execution = approvalWorkflowExecutor.start(
+                    workflow.get(), order.getId(), context, order.getCreatedBy());
+            log.info("已启动销售订单审批工作流: orderId={}, executionId={}, status={}",
+                    order.getId(), execution.getExecutionId(), execution.getStatus());
+        } catch (Exception e) {
+            throw new BusinessException(409,
+                    "销售订单 " + order.getOrderNumber() + " 启动审批流程失败：" + e.getMessage())
+                    .withHint("请检查销售订单审批工作流配置后重试")
+                    .withHintTarget("approvalWorkflow");
+        }
+    }
+
     @Override
     @Transactional
     public SalesOrder financeApproveOrder(String factoryId, String orderId, String notes, Long reviewerId) {
@@ -818,6 +913,12 @@ public class SalesServiceImpl implements SalesService {
             throw new BusinessException(409, "只有待财务审核状态的订单可以审批")
                     .withHint("请刷新订单列表查看最新状态");
         }
+        return approveFinanceForOrder(factoryId, order, notes, estimatedCost, reviewerId);
+    }
+
+    private SalesOrder approveFinanceForOrder(String factoryId, SalesOrder order, String notes,
+                                              java.math.BigDecimal estimatedCost, Long reviewerId) {
+        org.hibernate.Hibernate.initialize(order.getItems());
         checkTransitionAllowed(factoryId, order.getStatus().name(), "FINANCE_APPROVED");
         order.setStatus(SalesOrderStatus.FINANCE_APPROVED);
         order.setFinanceReviewedBy(reviewerId);
@@ -836,7 +937,7 @@ public class SalesServiceImpl implements SalesService {
 
         SalesOrder saved = salesOrderRepository.save(order);
         log.info("销售订单财务审核通过: orderId={}, orderNumber={}, reviewerId={}",
-                orderId, saved.getOrderNumber(), reviewerId);
+                saved.getId(), saved.getOrderNumber(), reviewerId);
 
         // 发布财务审核通过事件 → 触发供应链联动（库存检查+生产计划+采购建议）
         try {
