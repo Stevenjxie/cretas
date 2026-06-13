@@ -3,7 +3,6 @@ package com.cretas.aims.service.impl;
 import com.cretas.aims.entity.ProductionPlan;
 import com.cretas.aims.entity.RawMaterialType;
 import com.cretas.aims.entity.bom.BomItem;
-import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.MaterialPackagingHierarchyRepository;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
@@ -30,7 +29,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 /**
- * T144 — ProductionPlanServiceImpl.validateMaterialStockSufficient (B1) 称重单位库存校验.
+ * T144/N1 — ProductionPlanServiceImpl.validateMaterialStockSufficient (B1) 称重单位库存预警.
  *
  * <p><b>修正 T143 的箱因子模型:</b> 原料<b>称重入库</b> — 权威库存量是 kg (称重值),
  * 库存校验以 {@link com.cretas.aims.entity.MaterialBatch#getQuantityUnit()} (e.g. kg) 为比较口径,
@@ -41,10 +40,10 @@ import static org.mockito.Mockito.when;
  *   <li>猪舌 case (headline): BOM 217g, 库存 200 <b>kg</b> (批次单位 kg) → 0.217kg ≤ 200kg 充足 →
  *       不抛, 不 409 (验证称重材料的误报已消除)</li>
  *   <li>同单位 (个 vs 个) → 直接比较</li>
- *   <li>真正不可换算维度 (个 BOM vs kg 库存, 无 g↔kg 桥) → 409 fail-loud (安全网)</li>
+ *   <li>N1 后真正不可换算维度 (个 BOM vs kg 库存, 无 g↔kg 桥) → 仅预警, 不阻塞开工</li>
  * </ul>
  */
-@DisplayName("T144: ProductionPlanServiceImpl B1 — 称重批次单位(kg) g↔kg 库存校验 + 安全网 fail-loud")
+@DisplayName("T144/N1: ProductionPlanServiceImpl B1 — 称重批次单位(kg) g↔kg 库存预警")
 class ProductionPlanServiceImplUomTest {
 
     private static final String FACTORY = "F006";
@@ -146,8 +145,8 @@ class ProductionPlanServiceImplUomTest {
     }
 
     @Test
-    @DisplayName("称重原料 BOM-g vs 库存-kg: 永不返回 409 (即便短缺也是普通缺口 message, 非 UOM 未配置)")
-    void zhushe_weighedKgStock_shortageIsPlainNot409() throws Throwable {
+    @DisplayName("N1: 称重原料 BOM-g vs 库存-kg 短缺 → 仅预警, 不抛 409")
+    void zhushe_weighedKgStock_shortageWarnsOnly() throws Throwable {
         BomService bomService = mock(BomService.class);
         // 217g × 1000份 = 217kg > 200kg 库存 → 真实短缺 (但走普通缺口路径, 不是 UOM 409)
         when(bomService.getBomItemsByProduct(FACTORY, PRODUCT))
@@ -173,11 +172,7 @@ class ProductionPlanServiceImplUomTest {
         ProductionPlanServiceImpl svc = newService(batchRepo, bomService, conv, matRepo);
 
         Throwable t = catchThrowable(() -> callValidate(svc, plan(new BigDecimal("1000"))));
-        // 真实短缺 (217kg > 200kg) → 普通"原料库存不足"缺口, 不是 MATERIAL_UOM_UNCONFIGURED 409.
-        assertThat(t).isInstanceOf(BusinessException.class);
-        BusinessException be = (BusinessException) t;
-        assertThat(be.getErrorCode()).isNotEqualTo("MATERIAL_UOM_UNCONFIGURED");
-        assertThat(be.getMessage()).contains("库存不足");
+        assertThat(t).as("N1 开工无条件化: 真实短缺只记录预警, 不应抛异常").isNull();
     }
 
     @Test
@@ -212,8 +207,8 @@ class ProductionPlanServiceImplUomTest {
     }
 
     @Test
-    @DisplayName("安全网: BOM 个 vs 库存 kg (维度不可换算) → 409 fail-loud")
-    void incompatibleDimension_failsLoud() throws Throwable {
+    @DisplayName("N1: BOM 个 vs 库存 kg (维度不可换算) → 仅预警, 不抛 409")
+    void incompatibleDimension_warnsOnly() throws Throwable {
         BomService bomService = mock(BomService.class);
         // BOM 单位 = 个, 库存批次单位 = kg, 无 个↔kg 维度换算桥 → UNCONVERTIBLE
         when(bomService.getBomItemsByProduct(FACTORY, PRODUCT))
@@ -239,10 +234,6 @@ class ProductionPlanServiceImplUomTest {
         ProductionPlanServiceImpl svc = newService(batchRepo, bomService, conv, matRepo);
 
         Throwable t = catchThrowable(() -> callValidate(svc, plan(new BigDecimal("1000"))));
-        assertThat(t).isInstanceOf(BusinessException.class);
-        BusinessException be = (BusinessException) t;
-        assertThat(be.getErrorCode()).isEqualTo("MATERIAL_UOM_UNCONFIGURED");
-        assertThat(be.getCode()).isEqualTo(409);
-        assertThat(be.getMessage()).contains("冷冻猪舌").contains("无法换算");
+        assertThat(t).as("N1 开工无条件化: 单位不可换算只记录预警, 不应阻断开工").isNull();
     }
 }

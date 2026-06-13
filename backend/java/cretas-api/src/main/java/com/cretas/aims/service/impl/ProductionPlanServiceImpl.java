@@ -297,15 +297,9 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                     continue;
                 }
                 if (conv.isUnconvertible()) {
-                    // T144 安全网: BOM 单位与库存批次单位维度不可换算 (e.g. 个 vs kg, 无 g↔kg 桥)
-                    // → 真实配置错误, fail-loud 引导核对单位.
-                    throw new BusinessException(409,
-                            String.format("原料「%s」BOM单位(%s)与库存单位(%s)无法换算，请核对单位配置",
-                                    materialName, bomUnit, stockUnit))
-                            .withCode("MATERIAL_UOM_UNCONFIGURED")
-                            .withHint("请核对该原料 BOM 配方单位与入库称重单位是否同一计量维度")
-                            .withHintTarget(item.getMaterialTypeId())
-                            .withSeverity("BLOCKING");
+                    log.warn("N1 开工无条件化: 原料单位无法换算, 仅记录预警不阻塞开工: planId={}, materialTypeId={}, materialName={}, bomUnit={}, stockUnit={}",
+                            plan.getId(), item.getMaterialTypeId(), materialName, bomUnit, stockUnit);
+                    continue;
                 }
                 totalRequired = conv.getQuantity();  // 已换算到称重批次单位 (kg)
             }
@@ -323,11 +317,8 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         }
 
         if (!shortages.isEmpty()) {
-            String message = "原料库存不足, 无法开始生产: " + String.join("; ", shortages);
-            log.warn("B3 库存校验失败: planId={}, shortages={}", plan.getId(), shortages);
-            throw new BusinessException(409, message)
-                    .withHint("请先采购或调拨原料后再开始生产")
-                    .withSeverity("BLOCKING");
+            log.warn("N1 开工无条件化: 原料库存不足仅预警, 不阻塞开工: planId={}, shortages={}", plan.getId(), shortages);
+            return;
         }
 
         log.debug("B3 库存校验通过: planId={}, productTypeId={}, plannedQuantity={}, bomItems={}",
@@ -1155,9 +1146,8 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
 
         runConfiguredValidation(factoryId, "START", java.util.Map.of("planId", planId));
 
-        // PR #289 §B3 (2026-05-10 客户对接): 开始生产前硬校验原料库存
-        // 客户原话: "那这个开始的话点的时候会有一个判断吗就是我的库存够不够"
-        // 不足时阻断开始, 提示具体原料/需求/可用/缺口, 客户去采购或调拨.
+        // N1 (2026-06-12): 开工无条件化。原料不足只记录预警, 不再阻断开工;
+        // 领料/实际消耗在报工或结单时按现场填写。
         validateMaterialStockSufficient(factoryId, plan);
 
         // SP2 二次加工: 开始生产时扣减 WIP 半成品库存
@@ -1864,10 +1854,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                     .withHint("请刷新生产计划列表查看最新状态");
         }
 
-        // T138 方案A: 转为批次(开工)继承 startProduction 的开工前校验.
-        // 转批次=开工主路径(F006 逐道报工), 之前漏跑库存校验直接建批次,
-        // 现与"开始"一致: 先跑配置化校验 + 硬校验原料库存是否充足.
-        // 在任何 DB 写入前调用; 抛异常则批次不创建(同 @Transactional 回滚).
+        // N1 (2026-06-12): 转批次=开工不再受原料库存预检阻断; 缺料只记录预警。
         runConfiguredValidation(factoryId, "START", java.util.Map.of("planId", planId));
         validateMaterialStockSufficient(factoryId, plan);
 

@@ -50,14 +50,13 @@ import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.when;
 
 /**
- * PR #289 §B3 (2026-05-10 客户对接) — 开始生产前的原料库存校验单测.
+ * N1 (2026-06-12 客户走查) — 开工无条件化: 原料库存预检只记录预警, 不阻塞开工.
  *
  * <p>测试覆盖:
  * <ul>
  *   <li>库存充足 → 开始成功</li>
- *   <li>单原料库存不足 → BusinessException 列明缺口</li>
- *   <li>多原料缺口 → BusinessException 列出全部</li>
- *   <li>库存恰好等于需求 → 通过 (边界严格不阻断)</li>
+ *   <li>单原料/多原料库存不足 → 仍开始成功, 只记录预警</li>
+ *   <li>库存恰好等于需求 → 开始成功</li>
  *   <li>无 BOM 配置 → skip 校验, 允许开始</li>
  *   <li>plan.plannedQuantity 为空 → skip 校验, 允许开始</li>
  *   <li>已 IN_PROGRESS 状态 → 状态校验先报错 (库存校验未被触发)</li>
@@ -66,7 +65,7 @@ import static org.mockito.Mockito.when;
  * @author Cretas Team
  * @since 2026-05-10
  */
-@DisplayName("ProductionPlan B3 开始生产 — 库存校验单测")
+@DisplayName("ProductionPlan N1 开始生产 — 库存预警不阻塞")
 @ExtendWith(MockitoExtension.class)
 @MockitoSettings(strictness = Strictness.LENIENT)
 class ProductionPlanStartValidationTest {
@@ -172,10 +171,11 @@ class ProductionPlanStartValidationTest {
     }
 
     @Test
-    @DisplayName("单原料库存不足 → BusinessException 包含原料名 / 需求 / 可用 / 缺口")
-    void startProduction_oneMaterialShort_throws() {
+    @DisplayName("N1: 单原料库存不足 → 仅预警, 仍允许开始生产")
+    void startProduction_oneMaterialShort_stillStarts() {
         ProductionPlan plan = pendingPlan(new BigDecimal("100"));
         when(productionPlanRepository.findById(PLAN_ID)).thenReturn(Optional.of(plan));
+        when(productionPlanRepository.save(any(ProductionPlan.class))).thenAnswer(inv -> inv.getArgument(0));
 
         // 需求 200, 可用 50 → 缺口 150
         when(bomService.getBomItemsByProduct(FACTORY_ID, PRODUCT_TYPE_ID))
@@ -183,26 +183,17 @@ class ProductionPlanStartValidationTest {
         when(materialBatchRepository.sumAvailableQuantityByMaterialType(FACTORY_ID, "MT-A"))
                 .thenReturn(new BigDecimal("50"));
 
-        BusinessException ex = assertThrows(BusinessException.class,
-                () -> service.startProduction(FACTORY_ID, PLAN_ID));
-        assertEquals(409, ex.getCode());
-        String msg = ex.getMessage();
-        assertTrue(msg.contains("原料库存不足"), "应提示原料库存不足: " + msg);
-        assertTrue(msg.contains("面粉"), "应包含原料名: " + msg);
-        assertTrue(msg.contains("200"), "应包含需求量 200: " + msg);
-        assertTrue(msg.contains("50"), "应包含可用量 50: " + msg);
-        assertTrue(msg.contains("150"), "应包含缺口 150: " + msg);
-        assertTrue(msg.contains("kg"), "应包含单位 kg: " + msg);
-        assertEquals("请先采购或调拨原料后再开始生产", ex.getActionHint());
-        // 状态未推进
-        assertEquals(ProductionPlanStatus.PENDING, plan.getStatus());
+        assertDoesNotThrow(() -> service.startProduction(FACTORY_ID, PLAN_ID));
+        assertEquals(ProductionPlanStatus.IN_PROGRESS, plan.getStatus());
+        assertNotNull(plan.getStartTime());
     }
 
     @Test
-    @DisplayName("多原料缺口 → BusinessException 列出全部")
-    void startProduction_multipleShortages_listsAll() {
+    @DisplayName("N1: 多原料缺口 → 仅预警, 仍允许开始生产")
+    void startProduction_multipleShortages_stillStarts() {
         ProductionPlan plan = pendingPlan(new BigDecimal("100"));
         when(productionPlanRepository.findById(PLAN_ID)).thenReturn(Optional.of(plan));
+        when(productionPlanRepository.save(any(ProductionPlan.class))).thenAnswer(inv -> inv.getArgument(0));
 
         when(bomService.getBomItemsByProduct(FACTORY_ID, PRODUCT_TYPE_ID))
                 .thenReturn(Arrays.asList(
@@ -218,31 +209,24 @@ class ProductionPlanStartValidationTest {
         when(materialBatchRepository.sumAvailableQuantityByMaterialType(FACTORY_ID, "MT-C"))
                 .thenReturn(BigDecimal.ZERO);        // 缺口 100
 
-        BusinessException ex = assertThrows(BusinessException.class,
-                () -> service.startProduction(FACTORY_ID, PLAN_ID));
-        String msg = ex.getMessage();
-        assertTrue(msg.contains("盐"), "应包含盐: " + msg);
-        assertTrue(msg.contains("糖"), "应包含糖: " + msg);
-        // MT-A 充足不应出现在错误信息里
-        assertTrue(!msg.contains("面粉"), "不应包含充足的面粉: " + msg);
-        assertEquals(ProductionPlanStatus.PENDING, plan.getStatus());
+        assertDoesNotThrow(() -> service.startProduction(FACTORY_ID, PLAN_ID));
+        assertEquals(ProductionPlanStatus.IN_PROGRESS, plan.getStatus());
     }
 
     @Test
-    @DisplayName("可用库存 null → 视为 0, 触发缺口")
-    void startProduction_nullAvailable_treatedAsZero() {
+    @DisplayName("N1: 可用库存 null → 视为 0 且仅预警, 仍允许开始生产")
+    void startProduction_nullAvailable_treatedAsZeroAndStillStarts() {
         ProductionPlan plan = pendingPlan(new BigDecimal("100"));
         when(productionPlanRepository.findById(PLAN_ID)).thenReturn(Optional.of(plan));
+        when(productionPlanRepository.save(any(ProductionPlan.class))).thenAnswer(inv -> inv.getArgument(0));
 
         when(bomService.getBomItemsByProduct(FACTORY_ID, PRODUCT_TYPE_ID))
                 .thenReturn(List.of(bomItem("MT-A", "面粉", new BigDecimal("2"), "kg")));
         when(materialBatchRepository.sumAvailableQuantityByMaterialType(FACTORY_ID, "MT-A"))
                 .thenReturn(null);  // 仓库无任何批次
 
-        BusinessException ex = assertThrows(BusinessException.class,
-                () -> service.startProduction(FACTORY_ID, PLAN_ID));
-        assertTrue(ex.getMessage().contains("面粉"));
-        assertTrue(ex.getMessage().contains("200"));  // 全部需求成为缺口
+        assertDoesNotThrow(() -> service.startProduction(FACTORY_ID, PLAN_ID));
+        assertEquals(ProductionPlanStatus.IN_PROGRESS, plan.getStatus());
     }
 
     @Test
@@ -283,10 +267,11 @@ class ProductionPlanStartValidationTest {
     }
 
     @Test
-    @DisplayName("yieldRate 影响 actualQuantity → 需求量随之放大")
-    void startProduction_yieldRateScalesRequirement() {
+    @DisplayName("N1: yieldRate 放大需求后库存不足 → 仅预警, 仍允许开始生产")
+    void startProduction_yieldRateScalesRequirementStillStarts() {
         ProductionPlan plan = pendingPlan(new BigDecimal("100"));
         when(productionPlanRepository.findById(PLAN_ID)).thenReturn(Optional.of(plan));
+        when(productionPlanRepository.save(any(ProductionPlan.class))).thenAnswer(inv -> inv.getArgument(0));
 
         // 出成率 50% → actualQuantity = standardQuantity / 0.5 = 4
         // 计划数量 100 → 需求 400
@@ -298,10 +283,8 @@ class ProductionPlanStartValidationTest {
         when(materialBatchRepository.sumAvailableQuantityByMaterialType(FACTORY_ID, "MT-A"))
                 .thenReturn(new BigDecimal("300"));  // < 400 → 缺口 100
 
-        BusinessException ex = assertThrows(BusinessException.class,
-                () -> service.startProduction(FACTORY_ID, PLAN_ID));
-        String msg = ex.getMessage();
-        assertTrue(msg.contains("400"), "yieldRate 50% 把 standardQuantity 2 放大到 actualQuantity 4, 需求 400: " + msg);
+        assertDoesNotThrow(() -> service.startProduction(FACTORY_ID, PLAN_ID));
+        assertEquals(ProductionPlanStatus.IN_PROGRESS, plan.getStatus());
     }
     @Test
     @DisplayName("N1c: material advisory reports shortage without changing plan status")
