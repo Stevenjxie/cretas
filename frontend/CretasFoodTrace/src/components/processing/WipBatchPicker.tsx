@@ -129,7 +129,7 @@ export const WipBatchPicker: React.FC<WipBatchPickerProps> = ({
         ) : rows.length === 0 ? (
           <Text style={styles.emptyText}>暂无可领半成品批次</Text>
         ) : (
-          <ScrollView style={styles.listScroll} nestedScrollEnabled scrollEnabled={false}>
+          <ScrollView style={styles.listScroll} nestedScrollEnabled>
             {rows.map((row: WipRowDTO) => {
               const selected = row.intermediateBatchNo === selectedSourceWipNo;
               return (
